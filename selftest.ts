@@ -2333,6 +2333,101 @@ function runConfigSuite(): number {
       `radius 53 -> ${show75(radOkTop90)}; surface.radius 106.5 -> ${show75(radOkSurf90)}; head.radius 80 -> ${show75(radOkHead90)}; radius 0 -> ${show75(radZero90)}; surface.radius -10 -> ${show75(radNegSurf90)}; surface.extra -> ${show75(radUnkSurf90)}`,
       'issue #479: config.turn accepts positive radius, surface.radius and head.radius for the cylinder face projection and refuses non-positive values (CONFIG_FIELD_TYPE) or unknown surface keys (CONFIG_KEY_KNOWN)',
     );
+
+    // CF91 — issue #473: an attachment track key {"t": …, "set": "<name>" | null} in motion.animations_from loads when
+    // the named alternate set covers the track's slot (or is null on a declared slot), and is refused by
+    // CONFIG_SET_COVERS_SLOT when the set does not cover the slot, is undeclared, or sits on a non-attachment track.
+    const setMotionOkPath91 = join(bandDir87, 'set_ok.motion.json');
+    writeFileSync(
+      setMotionOkPath91,
+      JSON.stringify({
+        spec: 'rigc-motion/1',
+        animations: {
+          speak: {
+            duration: 1,
+            tracks: [{ slot: 'face', property: 'attachment', keys: [{ t: 0, set: 'a' }, { t: 0.5, set: null }, { t: 1, set: null }] }],
+          },
+        },
+      }),
+    );
+    const setCfg91 = (motionFile: string): string => {
+      const p = join(bandDir87, `${motionFile}.config.json`);
+      const cfg = minimalConfig() as Record<string, unknown>;
+      (cfg.assemble as Record<string, unknown>).alternates = [{ name: 'a', parts: ['face'] }];
+      (cfg.motion as Record<string, unknown>).animations_from = motionFile;
+      writeFileSync(p, JSON.stringify(cfg));
+      return p;
+    };
+    const setOk91 = refusals(() => loadConfigAndAnimations(setCfg91('set_ok.motion.json')));
+
+    const setUncoveredPath91 = join(bandDir87, 'set_uncovered.motion.json');
+    writeFileSync(
+      setUncoveredPath91,
+      JSON.stringify({
+        spec: 'rigc-motion/1',
+        animations: {
+          speak: {
+            duration: 1,
+            tracks: [{ slot: 'robe', property: 'attachment', keys: [{ t: 0, set: 'a' }, { t: 1, set: null }] }],
+          },
+        },
+      }),
+    );
+    const setUncovered91 = refusals(() => loadConfigAndAnimations(setCfg91('set_uncovered.motion.json')));
+
+    const setUndeclaredPath91 = join(bandDir87, 'set_undeclared.motion.json');
+    writeFileSync(
+      setUndeclaredPath91,
+      JSON.stringify({
+        spec: 'rigc-motion/1',
+        animations: {
+          speak: {
+            duration: 1,
+            tracks: [{ slot: 'face', property: 'attachment', keys: [{ t: 0, set: 'no_such' }, { t: 1, set: null }] }],
+          },
+        },
+      }),
+    );
+    const setUndeclared91 = refusals(() => loadConfigAndAnimations(setCfg91('set_undeclared.motion.json')));
+
+    const setWrongPropPath91 = join(bandDir87, 'set_wrong_prop.motion.json');
+    writeFileSync(
+      setWrongPropPath91,
+      JSON.stringify({
+        spec: 'rigc-motion/1',
+        animations: {
+          speak: {
+            duration: 1,
+            tracks: [{ bone: 'head', property: 'rotate', keys: [{ t: 0, set: 'a' }] }],
+          },
+        },
+      }),
+    );
+    const setWrongProp91 = refusals(() => loadConfigAndAnimations(setCfg91('set_wrong_prop.motion.json')));
+    say(
+      'CF91_ATTACHMENT_TRACK_SET_KEY_LOADS_ON_COVERED_SLOT_AND_REFUSES_UNCOVERED_OR_UNDECLARED_SET_WITH_CONFIG_SET_COVERS_SLOT',
+      setOk91 === null &&
+        one75(
+          setUncovered91,
+          'CONFIG_SET_COVERS_SLOT',
+          `config.motion.animations_from (${setUncoveredPath91}).animations.speak.tracks[0].keys[0].set`,
+          'names alternate set "a" on slot "robe", which set "a" does not cover (set "a" covers: "face"); add "robe" to that set\'s parts (or hides) in config.assemble.alternates, or key a slot the set covers',
+        ) &&
+        one75(
+          setUndeclared91,
+          'CONFIG_SET_COVERS_SLOT',
+          `config.motion.animations_from (${setUndeclaredPath91}).animations.speak.tracks[0].keys[0].set`,
+          'names alternate set "no_such" for slot "face", which config.assemble.alternates does not declare (declared sets: "a")',
+        ) &&
+        one75(
+          setWrongProp91,
+          'CONFIG_SET_COVERS_SLOT',
+          `config.motion.animations_from (${setWrongPropPath91}).animations.speak.tracks[0].keys[0].set`,
+          'is "a" on a "rotate" track; a "set" key belongs on a slot attachment track ({"slot": "<part>", "property": "attachment", "keys": [{"t": …, "set": "<name>" | null}]})',
+        ),
+      `covered slot -> ${show75(setOk91)}; uncovered slot "robe" -> ${show75(setUncovered91)}; undeclared set -> ${show75(setUndeclared91)}; non-attachment track -> ${show75(setWrongProp91)}`,
+      'issue #473: an attachment track key {"t": …, "set": "<name>" | null} in motion.animations_from resolves against config.assemble.alternates and fails with CONFIG_SET_COVERS_SLOT when the set does not cover the track\'s slot, is undeclared, or sits on a non-attachment track',
+    );
   } finally {
     rmSync(bandDir87, { recursive: true, force: true });
   }
@@ -19141,6 +19236,192 @@ function runBuildSuite(): number {
         uncompRun.out.includes('FAIL  CHECK_ANIMATIONS_DO_NOT_FOLD: animation "pose_set", mesh "posed_bottomwear"'),
       `compensated build --all-sets exit ${posedRun.status}, sets.json drawn ${JSON.stringify(posedSetDrawn ?? null)}; unknown --set exit ${badSetRun.status}; uncompensated mutant check --set posed exit ${uncompRun.status} (seam fail: ${uncompRun.out.includes('FAIL  CHECK_SEAM_WITHIN_BAR:')}, fold fail: ${uncompRun.out.includes('FAIL  CHECK_ANIMATIONS_DO_NOT_FOLD:')})`,
       'issue #465: an alternate set painted in a pose records its drawn bone angles in sets.json and emits its attachments in the posed bones\' local frame, so check --set / --all-sets and posed animations stay seam-clean and fold-free; dropping the compensation fails both CHECK_SEAM_WITHIN_BAR and CHECK_ANIMATIONS_DO_NOT_FOLD',
+    );
+
+    // BU171 — issue #473: subset sets covering one region (mouth visemes a, i, u with parts: ["mouth"]) cut only their
+    // covered part from each alternate run, emit slots: { mouth: "<set>_mouth" } in sets.json without drawn or hides,
+    // expand {"t": …, "set": "a" | "i" | "u" | null} track keys on the mouth attachment track into "<set>_mouth" / "mouth"
+    // so a 12-frame render switches the three mouth shapes while changing 0 pixels outside the mouth region, refuse an
+    // uncovered slot with CONFIG_SET_COVERS_SLOT or a missing covered layer with ASSEMBLE_ALT_INPUT_PRESENT, and filter
+    // ANIMATIONS_DO_NOT_FOLD under check --set <subset> to the subset set's own covered slots.
+    const visDir = join(dir, 'viseme-sets');
+    const visCfg = JSON.parse(JSON.stringify(moving)) as Record<string, unknown>;
+    const visAss = visCfg.assemble as Record<string, unknown>;
+    visAss.plan = [...(visAss.plan as Array<[string, string, string]>), ['mouth', 'head', 'mouth']];
+    (visCfg.regions as Record<string, string>).mouth = (visCfg.regions as Record<string, string>).face;
+    visAss.alternates = [
+      { name: 'a', source: 'painting.png', full: 'full', head: 'head_a', parts: ['mouth'] },
+      { name: 'i', source: 'painting.png', full: 'full', head: 'head_i', parts: ['mouth'] },
+      { name: 'u', source: 'painting.png', full: 'full', head: 'head_u', parts: ['mouth'] },
+    ];
+    (visCfg.motion as Record<string, unknown>).animations_from = 'speak.json';
+    const baseMouthHead: RunLayerSpec[] = [
+      ...HEAD_LAYERS.map((l) => (l.name === 'face' ? { ...l, rects: [{ x0: 0, y0: 16, x1: 24, y1: 28, colour: C }] } : l)),
+      { name: 'mouth', depth: 0.4, rects: [{ x0: 6, y0: 28, x1: 18, y1: 32, colour: C }] },
+    ];
+    writeAssembleFixture(visDir, visCfg, undefined, { full: FULL_LAYERS, head: baseMouthHead });
+    writeRun(join(visDir, 'head_a'), [{ name: 'mouth', depth: 0.4, rects: [{ x0: 0, y0: 28, x1: 24, y1: 40, colour: C }] }]);
+    writeRun(join(visDir, 'head_i'), [{ name: 'mouth', depth: 0.4, rects: [{ x0: 2, y0: 28, x1: 22, y1: 36, colour: C }] }]);
+    writeRun(join(visDir, 'head_u'), [{ name: 'mouth', depth: 0.4, rects: [{ x0: 4, y0: 28, x1: 20, y1: 38, colour: C }] }]);
+    writeFileSync(
+      join(visDir, 'speak.json'),
+      `${JSON.stringify(
+        {
+          spec: 'rigc-motion/1',
+          animations: {
+            speak: {
+              duration: 1,
+              tracks: [
+                {
+                  slot: 'mouth',
+                  property: 'attachment',
+                  keys: [
+                    { t: 0, set: 'a' },
+                    { t: 0.24, set: 'i' },
+                    { t: 0.49, set: 'u' },
+                    { t: 0.74, set: null },
+                    { t: 1, set: null },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const visOut = join(visDir, 'out');
+    const visRun = runCli([...buildArgs(visDir, visOut), '--all-sets', '--alt', `body_side=${join(visDir, 'painting.png')}:${join(visDir, 'full')}:${join(visDir, 'head')}`]);
+    const visRig = existsSync(join(visOut, 'rig', 'rig.json')) ? readJsonFile(join(visOut, 'rig', 'rig.json')) : null;
+    const visSets = existsSync(join(visOut, 'rig', 'sets.json')) ? readJsonFile(join(visOut, 'rig', 'sets.json')) : null;
+    const visSetsMap = (visSets?.sets ?? {}) as Record<string, unknown>;
+    const visMotion = existsSync(join(visOut, 'rig', 'motion.json')) ? readJsonFile(join(visOut, 'rig', 'motion.json')) : null;
+    const speakKeys = (((visMotion?.animations as Record<string, Record<string, unknown>> | undefined)?.speak?.tracks as Array<Record<string, unknown>> | undefined)?.[0]?.keys ?? null);
+    const speakRenderDir = join(visDir, 'speak_render');
+    const liveRigc = rigcRunnerAt(suiteRigc(), spawnRigc);
+    const speakRender = liveRigc(['render', '--candidate', join(visOut, 'check', 'build'), '--animation', 'speak', '--fps', '12', '--max', '64', '--out', speakRenderDir]);
+    const speakSet = speakRender.status === 0 ? readFrameSet(speakRenderDir) : null;
+    let mouthBoxDiffs = [0, 0, 0];
+    let outsideMouthDiffMax = -1;
+    if (speakSet !== null && speakSet.frames.length >= 12 && visRig !== null) {
+      outsideMouthDiffMax = 0;
+      const stageBox = visRig.skeleton as { x: number; y: number; width: number; height: number };
+      const toRig = frameToRigMap(stageBox, stageBox.height, speakSet.viewport);
+      const f0 = speakSet.frames[0].image;
+      const f3 = speakSet.frames[3].image;
+      const f6 = speakSet.frames[6].image;
+      const f9 = speakSet.frames[9].image;
+      // In rig space (64x64) the mouth visemes sit in [16, 28) x [14, 20); outside [15, 29] x [13, 21] no pixel may move across the 12 viseme frames.
+      const countDiffInMouth = (aImg: typeof f0, bImg: typeof f0): number => {
+        let diffPx = 0;
+        for (let y = 0; y < aImg.height; y++) {
+          const ry = toRig.sy * y + toRig.ty;
+          for (let x = 0; x < aImg.width; x++) {
+            const rx = toRig.sx * x + toRig.tx;
+            const idx = (y * aImg.width + x) * 4;
+            const d = Math.max(
+              Math.abs(aImg.data[idx] - bImg.data[idx]),
+              Math.abs(aImg.data[idx + 1] - bImg.data[idx + 1]),
+              Math.abs(aImg.data[idx + 2] - bImg.data[idx + 2]),
+            );
+            if (rx >= 15 && rx <= 29 && ry >= 13 && ry <= 21) {
+              if (d > 0) diffPx++;
+            } else if (d > outsideMouthDiffMax) {
+              outsideMouthDiffMax = d;
+            }
+          }
+        }
+        return diffPx;
+      };
+      mouthBoxDiffs = [countDiffInMouth(f0, f3), countDiffInMouth(f3, f6), countDiffInMouth(f6, f9)];
+      for (let fi = 1; fi < 12; fi++) countDiffInMouth(f0, speakSet.frames[fi].image);
+    }
+
+    // Bar 3: uncovered slot on a track "set" key fails with CONFIG_SET_COVERS_SLOT; missing covered layer in a subset set fails with ASSEMBLE_ALT_INPUT_PRESENT.
+    const uncovDir = join(dir, 'viseme-uncovered');
+    const uncovCfg = JSON.parse(JSON.stringify(visCfg)) as Record<string, unknown>;
+    (uncovCfg.motion as Record<string, unknown>).animations_from = 'uncov.json';
+    writeAssembleFixture(uncovDir, uncovCfg, undefined, { full: FULL_LAYERS, head: baseMouthHead });
+    writeFileSync(
+      join(uncovDir, 'uncov.json'),
+      JSON.stringify({
+        spec: 'rigc-motion/1',
+        animations: {
+          speak: {
+            duration: 1,
+            tracks: [{ slot: 'topwear', property: 'attachment', keys: [{ t: 0, set: 'a' }, { t: 1, set: null }] }],
+          },
+        },
+      }),
+    );
+    const uncovRun = runCli(buildArgs(uncovDir, join(uncovDir, 'out')));
+
+    const missLayerDir = join(dir, 'viseme-missing-layer');
+    const missLayerCfg = JSON.parse(JSON.stringify(visCfg)) as Record<string, unknown>;
+    delete (missLayerCfg.motion as Record<string, unknown>).animations_from;
+    (missLayerCfg.assemble as Record<string, unknown>).alternates = [
+      { name: 'e', source: 'painting.png', full: 'full', head: 'head_no_mouth', parts: ['mouth'] },
+    ];
+    writeAssembleFixture(missLayerDir, missLayerCfg, undefined, { full: FULL_LAYERS, head: baseMouthHead });
+    writeRun(join(missLayerDir, 'head_no_mouth'), HEAD_LAYERS);
+    const missLayerRun = runCli(buildArgs(missLayerDir, join(missLayerDir, 'out')));
+
+    // Bar 4: on the posed rig where bottomwear folds in pose_set, a subset set covering only ["face"] passes check --set
+    // because ANIMATIONS_DO_NOT_FOLD counts folds only on the subset set's own slots.
+    const posedPartsPath = join(posedOut, 'parts.json');
+    const posedPartsDoc = JSON.parse(readFileSync(posedPartsPath, 'utf8')) as {
+      parts: Array<Record<string, unknown>>;
+      alternates: Array<Record<string, unknown>>;
+      recomposite: Record<string, unknown>;
+    };
+    const faceRec = posedPartsDoc.parts.find((p) => p.name === 'face') as Record<string, unknown>;
+    copyFileSync(join(posedOut, 'parts', 'face.png'), join(posedOut, 'parts', 'a_face.png'));
+    copyFileSync(join(posedOut, 'rig', 'images', 'face.png'), join(posedOut, 'rig', 'images', 'a_face.png'));
+    posedPartsDoc.alternates.push({
+      name: 'a',
+      parts: ['face'],
+      slots: { face: 'a_face' },
+      records: [{ ...faceRec }],
+      ghost_px: {},
+      recomposite: posedPartsDoc.recomposite,
+    });
+    writeFileSync(posedPartsPath, `${JSON.stringify(posedPartsDoc, null, 2)}\n`);
+    posedRigDoc.skins.default.face.a_face = {
+      ...(posedRigDoc.skins.default.face.face as Record<string, unknown>),
+      image: 'a_face.png',
+    };
+    writeFileSync(posedRigPath, `${JSON.stringify(posedRigDoc, null, 2)}\n`);
+    const posedSetsPath = join(posedOut, 'rig', 'sets.json');
+    const posedSetsDoc = JSON.parse(readFileSync(posedSetsPath, 'utf8')) as { sets: Record<string, unknown> };
+    posedSetsDoc.sets.a = { slots: { face: 'a_face' } };
+    writeFileSync(posedSetsPath, `${JSON.stringify(posedSetsDoc, null, 2)}\n`);
+    const subsetFoldRun = runCli(['check', '--rig', join(posedOut, 'rig'), '--parts', posedOut, '--out', join(posedDir, 'subset-check'), '--set', 'a']);
+    say(
+      'BU171_SUBSET_SETS_COVER_ONE_REGION_AND_TRACK_SET_KEYS_SWITCH_IT_WITH_ZERO_OUTSIDE_DIFF_AND_REFUSE_UNCOVERED_OR_MISSING_LAYERS',
+      visRun.status === 0 &&
+        existsSync(join(visOut, 'parts', 'a_mouth.png')) &&
+        existsSync(join(visOut, 'parts', 'i_mouth.png')) &&
+        existsSync(join(visOut, 'parts', 'u_mouth.png')) &&
+        !existsSync(join(visOut, 'parts', 'a_face.png')) &&
+        JSON.stringify(visSetsMap.a) === '{"slots":{"mouth":"a_mouth"}}' &&
+        JSON.stringify(visSetsMap.i) === '{"slots":{"mouth":"i_mouth"}}' &&
+        JSON.stringify(visSetsMap.u) === '{"slots":{"mouth":"u_mouth"}}' &&
+        JSON.stringify(speakKeys) === '[{"t":0,"v":"a_mouth"},{"t":0.24,"v":"i_mouth"},{"t":0.49,"v":"u_mouth"},{"t":0.74,"v":"mouth"},{"t":1,"v":"mouth"}]' &&
+        speakRender.status === 0 &&
+        mouthBoxDiffs.every((d) => d > 0) &&
+        outsideMouthDiffMax === 0 &&
+        uncovRun.status === 1 &&
+        uncovRun.out.includes('FAIL  CONFIG_SET_COVERS_SLOT:') &&
+        uncovRun.out.includes('names alternate set "a" on slot "topwear", which set "a" does not cover (set "a" covers: "mouth")') &&
+        entries(join(uncovDir, 'out')).length === 0 &&
+        missLayerRun.status === 1 &&
+        missLayerRun.out.includes('FAIL  ASSEMBLE_ALT_INPUT_PRESENT:') &&
+        entries(join(missLayerDir, 'out')).length === 0 &&
+        subsetFoldRun.status === 0 &&
+        subsetFoldRun.out.includes('ANIMATIONS_DO_NOT_FOLD: PASS'),
+      `viseme build exit ${visRun.status}, sets a/i/u ${JSON.stringify([visSetsMap.a, visSetsMap.i, visSetsMap.u])}, speak keys ${JSON.stringify(speakKeys)}, mouth diffs [a->i, i->u, u->null]=${JSON.stringify(mouthBoxDiffs)}, outside diff max=${outsideMouthDiffMax}; uncovered slot exit ${uncovRun.status}; missing layer exit ${missLayerRun.status}; subset check --set a on folding rig exit ${subsetFoldRun.status}`,
+      'issue #473: subset sets in assemble.alternates cut only their covered parts, emit slots: {<part>: "<set>_<part>"} in sets.json, expand {"set": "<name>" | null} attachment track keys in motion.animations_from with 0 pixel diff outside the region, refuse uncovered slots (CONFIG_SET_COVERS_SLOT) and missing layers (ASSEMBLE_ALT_INPUT_PRESENT), and filter ANIMATIONS_DO_NOT_FOLD under check --set to the subset\'s own slots',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

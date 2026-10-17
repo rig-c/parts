@@ -2323,6 +2323,7 @@ export function buildRig(
   const partAreas: Record<string, number> = {};
   for (const p of parts.parts) partAreas[p.name] = p.opaque_px;
   bindFaceSurfaceDeform(motion, (merged) => {
+    expandSetAttachmentKeys(rig, sets, merged);
     applyFaceSurfaceDeform(rig, merged, {
       imageWidth: faceImg?.width,
       imageHeight: faceImg?.height,
@@ -2356,6 +2357,132 @@ export function buildRig(
     turn: turned?.rows ?? null,
     ...(sets === undefined ? {} : { sets }),
   };
+}
+
+/**
+ * Issue #473: expand `{"t": …, "set": "<name>" | null}` keys on slot attachment
+ * tracks in `merged.animations` into `{"t": …, "v": "<attachment>" | null}`
+ * keys against `rig.slots` and `sets.json`. When no key carries `"set"`, nothing
+ * is touched and no byte moves.
+ */
+function expandSetAttachmentKeys(rig: RigSpec, sets: AttachmentSetsFile | undefined, merged: MotionSpec): void {
+  let hasAnySetKey = false;
+  for (const [animName, anim] of Object.entries(merged.animations)) {
+    if (animName === 'idle' || typeof anim !== 'object' || anim === null || Array.isArray(anim)) continue;
+    const tracks = (anim as Record<string, unknown>).tracks;
+    if (!Array.isArray(tracks)) continue;
+    for (const tr of tracks) {
+      if (typeof tr !== 'object' || tr === null || Array.isArray(tr)) continue;
+      const keys = (tr as Record<string, unknown>).keys;
+      if (!Array.isArray(keys)) continue;
+      for (const k of keys) {
+        if (typeof k === 'object' && k !== null && !Array.isArray(k) && 'set' in k) {
+          hasAnySetKey = true;
+          break;
+        }
+      }
+      if (hasAnySetKey) break;
+    }
+    if (hasAnySetKey) break;
+  }
+  if (!hasAnySetKey) return;
+
+  const baseSlots = new Map<string, string | null>();
+  for (const sl of rig.slots) {
+    baseSlots.set(sl.name, sl.attachment ?? null);
+  }
+  const declaredSets =
+    sets === undefined || Object.keys(sets.sets).length === 0
+      ? 'none'
+      : Object.keys(sets.sets)
+          .map((n) => `"${n}"`)
+          .join(', ');
+  const problems: Problem[] = [];
+
+  for (const [animName, anim] of Object.entries(merged.animations)) {
+    if (animName === 'idle' || typeof anim !== 'object' || anim === null || Array.isArray(anim)) continue;
+    const tracks = (anim as Record<string, unknown>).tracks;
+    if (!Array.isArray(tracks)) continue;
+    tracks.forEach((tr, ti) => {
+      if (typeof tr !== 'object' || tr === null || Array.isArray(tr)) return;
+      const trRec = tr as Record<string, unknown>;
+      const keys = trRec.keys;
+      if (!Array.isArray(keys)) return;
+      const slot = typeof trRec.slot === 'string' && trRec.slot !== '' ? trRec.slot : null;
+      const isAttachmentTrack = trRec.property === 'attachment' && slot !== null;
+      keys.forEach((k, ki) => {
+        if (typeof k !== 'object' || k === null || Array.isArray(k) || !('set' in k)) return;
+        const kRec = k as Record<string, unknown>;
+        const keyAt = `animations.${animName}.tracks[${ti}].keys[${ki}].set`;
+        if (!isAttachmentTrack || slot === null) {
+          problems.push({
+            code: 'CONFIG_SET_COVERS_SLOT',
+            object: keyAt,
+            detail: `is ${JSON.stringify(kRec.set)} on a ${JSON.stringify(trRec.property)} track${slot === null ? '' : ` for slot "${slot}"`}; a "set" key belongs on a slot attachment track ({"slot": "<part>", "property": "attachment", "keys": [{"t": …, "set": "<name>" | null}]})`,
+          });
+          return;
+        }
+        if ('v' in kRec) {
+          problems.push({
+            code: 'CONFIG_FIELD_TYPE',
+            object: keyAt,
+            detail: `is declared beside v (${JSON.stringify(kRec.v)}); state either "set": "<name>" | null or "v": "<attachment>" | null on an attachment key, not both`,
+          });
+          return;
+        }
+        const setVal = kRec.set;
+        let resolvedV: string | null = null;
+        if (setVal === null) {
+          if (!baseSlots.has(slot)) {
+            problems.push({
+              code: 'CONFIG_SET_COVERS_SLOT',
+              object: keyAt,
+              detail: `restores the base attachment on slot "${slot}", which is not a declared slot of the rig (declared slots: ${[...baseSlots.keys()].map((s) => `"${s}"`).join(', ')})`,
+            });
+            return;
+          }
+          resolvedV = baseSlots.get(slot) ?? null;
+        } else if (typeof setVal !== 'string' || setVal === '') {
+          problems.push({
+            code: 'CONFIG_FIELD_TYPE',
+            object: keyAt,
+            detail: `is ${JSON.stringify(setVal)}; a non-empty alternate set name or null (the base pose) is required`,
+          });
+          return;
+        } else {
+          const entry = sets?.sets[setVal];
+          if (entry === undefined) {
+            problems.push({
+              code: 'CONFIG_SET_COVERS_SLOT',
+              object: keyAt,
+              detail: `names alternate set "${setVal}" for slot "${slot}", which config.assemble.alternates does not declare (declared sets: ${declaredSets})`,
+            });
+            return;
+          }
+          if (Object.hasOwn(entry.slots, slot)) {
+            resolvedV = entry.slots[slot];
+          } else if (entry.hides?.includes(slot) === true) {
+            resolvedV = null;
+          } else {
+            const covered = [...Object.keys(entry.slots), ...(entry.hides ?? [])].map((s) => `"${s}"`).join(', ') || 'none';
+            problems.push({
+              code: 'CONFIG_SET_COVERS_SLOT',
+              object: keyAt,
+              detail: `names alternate set "${setVal}" on slot "${slot}", which set "${setVal}" does not cover (set "${setVal}" covers: ${covered}); add "${slot}" to that set's parts (or hides) in config.assemble.alternates, or key a slot the set covers`,
+            });
+            return;
+          }
+        }
+        const expanded: Record<string, unknown> = {};
+        for (const [prop, val] of Object.entries(kRec)) {
+          if (prop === 'set') expanded.v = resolvedV;
+          else expanded[prop] = val;
+        }
+        keys[ki] = expanded;
+      });
+    });
+  }
+  refuseIfAny(problems);
 }
 
 /**
