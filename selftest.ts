@@ -252,7 +252,8 @@ import { buildHeaderProblem } from './tools/atlas_population.ts';
 import { ALIASES, AliasTarballError, compareTarballs, MANIFEST as ALIAS_MANIFEST, packAlias, packInto, renamed } from './scripts/alias_tarball.ts';
 import { blobId, checkExampleInputs, type Copier, FETCH_RECORD, recordText, runSync } from './scripts/example_inputs.ts';
 import { BLINK, blinkHoldMisses, CONTROL_SUFFIX, framesInside, IDLE_FPS, type MotionKey, type MotionSpec, sineTrack, TIME_SLACK } from './src/motion.ts';
-import { type BoneEntry, type CharacterConfig, CONFIG_REQUIRES, type Limb, loadClothConfig, type ContourRegionSpec, type Cut, type Extend, type PlanEntry, type Patch, type Point, type ConfigDoor, CONSTRAINT_BONE_FIELDS, type Generation, isDoorKey, loadConfig, loadConfigAndAnimations, loadEarlyConfig, loadPaintConfig, parseConfig, parseEarlyConfig, parseProposalSections, type SkeletonSections } from './src/config.ts';
+import { type BoneEntry, type CharacterConfig, CONFIG_REQUIRES, type ConfigDoor, CONSTRAINT_BONE_FIELDS, type ContourRegionSpec, contourRegionsOf, type Cut, DEFAULT_BUST_ALPHA, DEFAULT_BUST_CLEARANCE, deriveBustRegions, type Extend, type Generation, isDoorKey, type Limb, loadClothConfig, loadConfig, loadConfigAndAnimations, loadEarlyConfig, loadPaintConfig, type Patch, type PlanEntry, type Point, parseConfig, parseEarlyConfig, parseProposalSections, type SkeletonSections } from './src/config.ts';
+import { BUST_FIT_ALPHA, BUST_FIT_CLEARANCE, BUST_RESIDUAL_BOUND_PX, CALIBRATED_BUST_FIXTURES, midlineFallbackCleavage } from './fixtures/bust.ts';
 import { RIG_BONE_INHERIT, RIG_KEYS, RIG_SKIN_CONSTRAINT_KEYS } from 'rig-c/src/rig.ts';
 import { expandStops } from 'rig-c/src/stop.ts';
 import { applyFaceSurfaceDeform, cylinderYawDx, DEFAULT_HEAD_TURN_PARTS, EAR_DEPTH_RANGE, evalYawFaceSurface, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, FACE_RATED_BAND, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, headTurnFraction, headTurnPivot, resolveFaceDeformFractions, TURN_BONE, turnSurfaceRadius } from './src/turn.ts';
@@ -2613,7 +2614,74 @@ function runConfigSuite(): number {
   runStopConfigControls(say);
   runProposedRigScaleConfigControls(say);
   runArmSplitConfigControls(say);
+  runBustConfigControls(say);
   return bad();
+}
+
+/**
+ * Issue #475: `meshes.<part>.contour.bust`, deriving `bust_r` and `bust_l` from `apex_r`, `apex_l` and `cleavage` with
+ * `alpha` (default 0.22), `clearance` (default 3.8 px), `bone_r` (`boob_r`), `bone_l` (`boob_l`) and `spacing` (14 px),
+ * refusing non-positive or overlapping `clearance` (`CONFIG_BUST_CLEARANCE`), duplicate `bust_r`/`bust_l` in
+ * `contour.regions` (`CONFIG_REGION_NAME_UNIQUE`) and unresolved bones (`CONFIG_NAME_RESOLVES`).
+ */
+function runBustConfigControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const bustCfg = (bust: unknown, regions?: unknown, extraBones = true): Record<string, unknown> => {
+    const c = minimalConfig();
+    if (extraBones) {
+      (c.bones as Array<Record<string, unknown>>).push(
+        { name: 'boob_r', parent: 'chest', at: [295, 665] },
+        { name: 'boob_l', parent: 'chest', at: [496, 661] },
+      );
+    }
+    const robe = (c.meshes as Record<string, Record<string, unknown>>).robe;
+    delete robe.grid;
+    robe.contour = {
+      tolerance: 1,
+      margin: 2,
+      spacing: 28,
+      ...(regions === undefined ? {} : { regions }),
+      bust,
+    };
+    return c;
+  };
+  const defCfg = bustCfg({ apex_r: [295, 665], apex_l: [496, 661], cleavage: [402, 663] });
+  const customCfg = bustCfg({ apex_r: [318, 776], apex_l: [498, 780], cleavage: [412, 778], alpha: 0.27, clearance: 9, bone_r: 'chest', bone_l: 'hip', spacing: 12 }, undefined, false);
+  const loads = [refusals(() => parseConfig(defCfg)), refusals(() => parseConfig(customCfg))];
+  const robeMesh = parseConfig(defCfg).meshes.robe;
+  const parsedDef = 'contour' in robeMesh && robeMesh.contour !== undefined ? robeMesh.contour : (() => { throw new Error('expected contour mesh'); })();
+  const derivedDef = contourRegionsOf(parsedDef);
+  const BAT = 'config.meshes.robe.contour.bust';
+  const planted: Array<[string, Record<string, unknown>, string, string, string]> = [
+    ['bust not an object', bustCfg('auto'), 'CONFIG_FIELD_TYPE', BAT, 'is "auto"; an object is required'],
+    ['unknown key on bust', bustCfg({ apex_r: [295, 665], apex_l: [496, 661], cleavage: [402, 663], band: 80 }), 'CONFIG_KEY_KNOWN', `${BAT}.band`, 'is not a field here'],
+    ['missing cleavage', bustCfg({ apex_r: [295, 665], apex_l: [496, 661] }), 'CONFIG_FIELD_PRESENT', `${BAT}.cleavage`, 'is absent and required'],
+    ['apex_r off 1/256 grid', bustCfg({ apex_r: [295.001, 665], apex_l: [496, 661], cleavage: [402, 663] }), 'CONFIG_FIELD_TYPE', `${BAT}.apex_r[0]`, 'is 295.001; a multiple of 1/256 px within ±32768 px is required'],
+    ['alpha 0', bustCfg({ apex_r: [295, 665], apex_l: [496, 661], cleavage: [402, 663], alpha: 0 }), 'CONFIG_FIELD_TYPE', `${BAT}.alpha`, 'is 0; a number above 0 is required'],
+    ['alpha 1', bustCfg({ apex_r: [295, 665], apex_l: [496, 661], cleavage: [402, 663], alpha: 1 }), 'CONFIG_FIELD_TYPE', `${BAT}.alpha`, 'is 1; a core ratio in (0, 1) is required'],
+    ['spacing 0', bustCfg({ apex_r: [295, 665], apex_l: [496, 661], cleavage: [402, 663], spacing: 0 }), 'CONFIG_FIELD_TYPE', `${BAT}.spacing`, 'is 0; a number above 0 is required'],
+    ['unresolved default bone_r', bustCfg({ apex_r: [295, 665], apex_l: [496, 661], cleavage: [402, 663], bone_l: 'chest' }, undefined, false), 'CONFIG_NAME_RESOLVES', `${BAT}.bone_r`, 'is "boob_r"; a bone config.bones declares is required'],
+    ['unresolved custom bone_l', bustCfg({ apex_r: [295, 665], apex_l: [496, 661], cleavage: [402, 663], bone_r: 'chest', bone_l: 'nobody' }, undefined, false), 'CONFIG_NAME_RESOLVES', `${BAT}.bone_l`, 'is "nobody"; a bone config.bones declares is required'],
+    ['duplicate bust_r in regions', bustCfg({ apex_r: [295, 665], apex_l: [496, 661], cleavage: [402, 663] }, [{ name: 'bust_r', shape: 'circle', cx: 295, cy: 665, r: 21, spacing: 14, band: 83, bone: 'boob_r' }]), 'CONFIG_REGION_NAME_UNIQUE', BAT, '"bust_r" is declared in both config.meshes.robe.contour.regions and config.meshes.robe.contour.bust'],
+    ['clearance 0', bustCfg({ apex_r: [295, 665], apex_l: [496, 661], cleavage: [402, 663], clearance: 0 }), 'CONFIG_BUST_CLEARANCE', `${BAT}.clearance`, 'is 0 (giving R_r = 107, R_l = 94, R_r + R_l = 201 px against apex distance D = 201.04 px'],
+    ['clearance negative', bustCfg({ apex_r: [295, 665], apex_l: [496, 661], cleavage: [402, 663], clearance: -2 }), 'CONFIG_BUST_CLEARANCE', `${BAT}.clearance`, 'is -2 (giving R_r = 109, R_l = 96, R_r + R_l = 205 px against apex distance D = 201.04 px'],
+    ['off-axis cleavage where R_r + R_l >= D', bustCfg({ apex_r: [295, 665], apex_l: [496, 661], cleavage: [395, 600], clearance: 3.8 }), 'CONFIG_BUST_CLEARANCE', `${BAT}.clearance`, 'is 3.8 (giving R_r = 115, R_l = 114, R_r + R_l = 229 px against apex distance D = 201.04 px'],
+    ['clearance exceeding cleavage distance', bustCfg({ apex_r: [295, 665], apex_l: [496, 661], cleavage: [402, 663], clearance: 100 }), 'CONFIG_BUST_CLEARANCE', `${BAT}.clearance`, 'is 100 (giving R_r = 7, R_l = -6'],
+  ];
+  const outcomes = planted.map(([what, c, code, object, start]) => {
+    const e = refusals(() => parseConfig(c));
+    const ok = e !== null && e.problems.length === 1 && e.problems[0].code === code && e.problems[0].object === object && e.problems[0].detail.startsWith(start);
+    return { what, ok, got: `${codes(e)}: ${e?.problems[0]?.detail ?? ''}` };
+  });
+  say(
+    'CF497_CONTOUR_BUST_LOADS_DERIVES_BOTH_REGIONS_AND_REFUSES_OVERLAPPING_CLEARANCE_DUPLICATES_AND_BAD_FIELDS',
+    loads.every((e) => e === null) &&
+      derivedDef.length === 2 &&
+      JSON.stringify(derivedDef[0]) === '{"name":"bust_r","shape":"circle","cx":295,"cy":665,"r":23,"spacing":14,"band":80,"bone":"boob_r"}' &&
+      JSON.stringify(derivedDef[1]) === '{"name":"bust_l","shape":"circle","cx":496,"cy":661,"r":20,"spacing":14,"band":70,"bone":"boob_l"}' &&
+      outcomes.every((o) => o.ok),
+    `default and custom contour.bust load (${loads.map((e) => (e === null ? 'ok' : codes(e))).join(', ')}), derived ${JSON.stringify(derivedDef)}; planted: ${outcomes.map((o) => `${o.what} ${o.ok ? 'refused once' : `NOT: ${o.got}`}`).join('; ')}`,
+    'issue #475: meshes.<part>.contour.bust derives bust_r and bust_l from apex_r, apex_l and cleavage, refuses clearance <= 0 or R_r + R_l >= D with CONFIG_BUST_CLEARANCE, refuses duplicate bust_r/bust_l in contour.regions with CONFIG_REGION_NAME_UNIQUE, and resolves bone_r/bone_l against config.bones',
+  );
 }
 
 /**
@@ -28310,6 +28378,141 @@ function runContourWiringSuite(): number {
       bridgesRow90(without89) === undefined,
     `true: ${lines(bridges90(true))}; ${bad90.map(({ v, e }) => `${JSON.stringify(v)}: ${lines(e)}`).join(' | ')}; declared: params ${JSON.stringify(params89(with90))}, bridges ${JSON.stringify(bridgesRow90(with90))}, attachment as undeclared ${JSON.stringify(meshWith90) === JSON.stringify(meshWithout90)}`,
     "issue #326: bridges has one value, true, and no default; the fixture's cloth is one 16x8 island (128 art px), so declaring it writes the attachment it always wrote and only the row says it was read",
+  );
+
+  // CW91 — issue #475 (Bars 1 & 2): the 5 calibrated example characters (15 outfit configs) are reproduced within <= 6 px
+  // on outer radius R_s (max |dR| = 5 px) and <= 3 px on core radius r_s by alpha = 0.22 and clearance = 3.8 px, while
+  // the torso-midline fallback (projecting chest or intersecting neck->hip onto apex_r->apex_l) misses all 5 (0/5 within 6 px).
+  const fit91 = CALIBRATED_BUST_FIXTURES.map((f) => {
+    const [br, bl] = deriveBustRegions({
+      apex_r: f.landmarks.apex_r,
+      apex_l: f.landmarks.apex_l,
+      cleavage: f.landmarks.cleavage,
+    });
+    const Rr = (br.shape === 'circle' ? br.r : 0) + br.band;
+    const Rl = (bl.shape === 'circle' ? bl.r : 0) + bl.band;
+    const dR_r = Rr - f.calibrated.bust_r.R;
+    const dR_l = Rl - f.calibrated.bust_l.R;
+    const dr_r = (br.shape === 'circle' ? br.r : 0) - f.calibrated.bust_r.r;
+    const dr_l = (bl.shape === 'circle' ? bl.r : 0) - f.calibrated.bust_l.r;
+    const dband_r = br.band - f.calibrated.bust_r.band;
+    const dband_l = bl.band - f.calibrated.bust_l.band;
+    const fb = midlineFallbackCleavage(f);
+    return {
+      id: f.id,
+      outfits: f.outfits.length,
+      matchDerived:
+        br.shape === 'circle' &&
+        bl.shape === 'circle' &&
+        br.cx === f.calibrated.bust_r.cx &&
+        br.cy === f.calibrated.bust_r.cy &&
+        bl.cx === f.calibrated.bust_l.cx &&
+        bl.cy === f.calibrated.bust_l.cy &&
+        Rr === f.derived.bust_r.R &&
+        Rl === f.derived.bust_l.R &&
+        br.r === f.derived.bust_r.r &&
+        bl.r === f.derived.bust_l.r &&
+        br.band === f.derived.bust_r.band &&
+        bl.band === f.derived.bust_l.band &&
+        dR_r === f.residual.dR_r &&
+        dR_l === f.residual.dR_l &&
+        dr_r === f.residual.dr_r &&
+        dr_l === f.residual.dr_l &&
+        dband_r === f.residual.dband_r &&
+        dband_l === f.residual.dband_l,
+      withinBound: Math.abs(dR_r) <= BUST_RESIDUAL_BOUND_PX && Math.abs(dR_l) <= BUST_RESIDUAL_BOUND_PX && Math.abs(dr_r) <= 3 && Math.abs(dr_l) <= 3,
+      maxAbsDR: Math.max(Math.abs(dR_r), Math.abs(dR_l)),
+      maxAbsDr: Math.max(Math.abs(dr_r), Math.abs(dr_l)),
+      fbMatch:
+        fb.chestProjection.dR_r === f.midlineFallbackResidual.chestProjection[0] &&
+        fb.chestProjection.dR_l === f.midlineFallbackResidual.chestProjection[1] &&
+        fb.neckHipIntersection.dR_r === f.midlineFallbackResidual.neckHipIntersection[0] &&
+        fb.neckHipIntersection.dR_l === f.midlineFallbackResidual.neckHipIntersection[1],
+      fbWithin6:
+        (Math.abs(fb.chestProjection.dR_r) <= BUST_RESIDUAL_BOUND_PX && Math.abs(fb.chestProjection.dR_l) <= BUST_RESIDUAL_BOUND_PX) ||
+        (Math.abs(fb.neckHipIntersection.dR_r) <= BUST_RESIDUAL_BOUND_PX && Math.abs(fb.neckHipIntersection.dR_l) <= BUST_RESIDUAL_BOUND_PX),
+      summary: `${f.id}: dR=(${dR_r},${dR_l}) dr=(${dr_r},${dr_l}) fb=(${fb.chestProjection.dR_r},${fb.chestProjection.dR_l})`,
+    };
+  });
+  const maxDR91 = Math.max(...fit91.map((x) => x.maxAbsDR));
+  const maxDr91 = Math.max(...fit91.map((x) => x.maxAbsDr));
+  const outfits91 = fit91.reduce((s, x) => s + x.outfits, 0);
+  say(
+    'CW91_CALIBRATED_BUST_REGIONS_ARE_REPRODUCED_WITHIN_6_PX_BY_ALPHA_022_AND_CLEARANCE_38_AND_MIDLINE_FALLBACK_MISSES_ALL_5',
+    BUST_FIT_ALPHA === DEFAULT_BUST_ALPHA &&
+      BUST_FIT_CLEARANCE === DEFAULT_BUST_CLEARANCE &&
+      fit91.length === 5 &&
+      outfits91 === 15 &&
+      fit91.every((x) => x.matchDerived && x.withinBound && x.fbMatch && !x.fbWithin6) &&
+      maxDR91 === 5 &&
+      maxDr91 === 3,
+    `5 characters (${outfits91} outfit sets) at alpha=${BUST_FIT_ALPHA}, clearance=${BUST_FIT_CLEARANCE} px: max |dR|=${maxDR91} px (<= ${BUST_RESIDUAL_BOUND_PX}), max |dr|=${maxDr91} px, midline fallback 0/5 within 6 px (${fit91.map((x) => x.summary).join('; ')})`,
+    'issue #475: one alpha (0.22) and one clearance (3.8 px) reproduce all 5 calibrated characters within <= 6 px on outer radius R_s and <= 3 px on core radius r_s, whereas projecting the torso midline onto apex_r->apex_l misses cleavage by 14-93 px on 3/4-yaw characters (0/5), so all three landmarks are required',
+  );
+
+  // CW92 — issue #475 (Bars 3 & 4): hand-given regions stay byte-identical; contour.bust builds byte-identically to its
+  // derived regions and wires through configRoles; moving apex_r/apex_l by 20 px moves cx/cy by 20 px; clearance = 0 is
+  // refused by CONFIG_BUST_CLEARANCE across all 5 calibrated characters (and bypassing CONFIG_BUST_CLEARANCE lets an
+  // epsilon = 0 collinear build pass RIG_CONTOUR_REGIONS_OVERLAP); and an overlapping vertex names contour.bust.clearance.
+  const bustSpec92 = { apex_r: [14, 14] as Point, apex_l: [22, 14] as Point, cleavage: [18, 14] as Point, alpha: 0.5, clearance: 1, spacing: 2 };
+  const bustCfg92 = (bust: unknown, regions?: unknown): Record<string, unknown> =>
+    contourRigConfig((c) => {
+      (c.bones as Array<Record<string, unknown>>).push(
+        { name: 'boob_r', parent: 'body', at: [14, 14] },
+        { name: 'boob_l', parent: 'body', at: [22, 14] },
+      );
+      const cl = contourCloth(c);
+      if (regions === undefined) delete cl.regions;
+      else cl.regions = regions;
+      if (bust !== undefined) cl.bust = bust;
+    });
+  const builtBust92 = buildRig(parseConfig(bustCfg92(bustSpec92)), rigParts(), rigImages());
+  const builtEquiv92 = buildRig(parseConfig(bustCfg92(undefined, deriveBustRegions(bustSpec92))), rigParts(), rigImages());
+  const roles92 = configRoles(parseConfig(bustCfg92(bustSpec92)));
+  const moved20 = deriveBustRegions({
+    apex_r: [CALIBRATED_BUST_FIXTURES[0].landmarks.apex_r[0] + 20, CALIBRATED_BUST_FIXTURES[0].landmarks.apex_r[1] - 20],
+    apex_l: [CALIBRATED_BUST_FIXTURES[0].landmarks.apex_l[0] - 20, CALIBRATED_BUST_FIXTURES[0].landmarks.apex_l[1] + 20],
+    cleavage: CALIBRATED_BUST_FIXTURES[0].landmarks.cleavage,
+  });
+  const baseDerived92 = deriveBustRegions(CALIBRATED_BUST_FIXTURES[0].landmarks);
+  const shiftedBust92 = buildRig(parseConfig(bustCfg92({ ...bustSpec92, apex_r: [13, 14] as Point })), rigParts(), rigImages());
+  const zeroClearanceAll5 = CALIBRATED_BUST_FIXTURES.map((f) =>
+    load(bustCfg92({ apex_r: f.landmarks.apex_r, apex_l: f.landmarks.apex_l, cleavage: f.landmarks.cleavage, clearance: 0 })),
+  );
+  // Mutant: if CONFIG_BUST_CLEARANCE is bypassed by feeding deriveBustRegions({ ...bustSpec92, clearance: 0 }) directly
+  // as contour.regions, collinear touching circles (R_r + R_l = D) pass RIG_CONTOUR_REGIONS_OVERLAP because regionWeight
+  // is strictly > 0 only inside < R.
+  const bypassedZeroClearance92 = refusals(() =>
+    buildRig(parseConfig(bustCfg92(undefined, deriveBustRegions({ ...bustSpec92, clearance: 0 }))), rigParts(), rigImages()),
+  );
+  const overlapWithBustHint92 = refusals(() =>
+    buildRig(
+      parseConfig(bustCfg92(bustSpec92, [{ name: 'pinch', shape: 'circle', cx: 14, cy: 14, r: 2, spacing: 2, band: 2, bone: 'soft' }])),
+      rigParts(),
+      rigImages(),
+    ),
+  );
+  say(
+    'CW92_CONTOUR_BUST_WIRES_PROPOSE_ROLES_AND_RIG_MOVES_WITH_LANDMARKS_AND_GATES_ZERO_CLEARANCE',
+    rigJsonText(builtBust92.rig) === rigJsonText(builtEquiv92.rig) &&
+      rigJsonText(builtBust92.meshReport) === rigJsonText(builtEquiv92.meshReport) &&
+      rigJsonText(r13.rig) === rigJsonText(again20.rig) &&
+      roles92.get('boob_r')?.role === 'deforms' &&
+      roles92.get('boob_l')?.role === 'deforms' &&
+      moved20[0].shape === 'circle' &&
+      moved20[1].shape === 'circle' &&
+      baseDerived92[0].shape === 'circle' &&
+      baseDerived92[1].shape === 'circle' &&
+      moved20[0].cx - baseDerived92[0].cx === 20 &&
+      moved20[0].cy - baseDerived92[0].cy === -20 &&
+      moved20[1].cx - baseDerived92[1].cx === -20 &&
+      moved20[1].cy - baseDerived92[1].cy === 20 &&
+      rigJsonText(shiftedBust92.rig) !== rigJsonText(builtBust92.rig) &&
+      zeroClearanceAll5.every((e) => hasCode(e, 'CONFIG_BUST_CLEARANCE', 'config.meshes.cloth.contour.bust.clearance')) &&
+      bypassedZeroClearance92 === null &&
+      hasCode(overlapWithBustHint92, 'RIG_CONTOUR_REGIONS_OVERLAP', 'config.meshes.cloth.contour.regions', 'contour.bust.clearance >='),
+    `bust == derived regions: ${rigJsonText(builtBust92.rig) === rigJsonText(builtEquiv92.rig)}; roles boob_r=${roles92.get('boob_r')?.role}, boob_l=${roles92.get('boob_l')?.role}; +20 px shift -> d_cx=(${moved20[0].shape === 'circle' && baseDerived92[0].shape === 'circle' ? moved20[0].cx - baseDerived92[0].cx : 0},${moved20[1].shape === 'circle' && baseDerived92[1].shape === 'circle' ? moved20[1].cx - baseDerived92[1].cx : 0}); clearance=0 on all 5 sets -> ${zeroClearanceAll5.map((e) => e?.problems[0]?.code ?? 'none').join(',')}; mutant (CONFIG_BUST_CLEARANCE bypassed at clearance=0) -> ${lines(bypassedZeroClearance92)}; vertex overlap hint -> ${lines(overlapWithBustHint92)}`,
+    'issue #475: contour.bust is read by propose (configRoles) and rig through contourRegionsOf, moves cx/cy with apex_r/apex_l, refuses clearance <= 0 or R_r + R_l >= D with CONFIG_BUST_CLEARANCE (which vertex-level RIG_CONTOUR_REGIONS_OVERLAP alone would pass on collinear touching circles), and names contour.bust.clearance when a vertex overlaps',
   );
 
   return bad();

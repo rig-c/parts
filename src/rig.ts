@@ -132,7 +132,7 @@
  * touches the disk, and the same inputs give the same bytes (key order is the
  * order the objects are built in, and every number is rounded by `pyRound`).
  */
-import { type AutoSpec, type BoneEntry, type WeightRule, type CharacterConfig, type ConfigConstraint, type ConfigStop, CONSTRAINT_FOLLOWS, constraintForRig, type ContourSpec, type Point, type RibsSpec, ROOT_BONE, stopForRig, weightsABone } from './config.ts';
+import { type AutoSpec, type BoneEntry, type WeightRule, type CharacterConfig, type ConfigConstraint, type ConfigStop, CONSTRAINT_FOLLOWS, constraintForRig, contourRegionsOf, type ContourSpec, DEFAULT_BUST_BONE_L, DEFAULT_BUST_BONE_R, type Point, type RibsSpec, ROOT_BONE, stopForRig, weightsABone } from './config.ts';
 import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toBoneLocal, toWorld } from './coords.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
 import { eyeLineDegrees } from './headframe.ts';
@@ -164,6 +164,7 @@ import {
 } from './automesh.ts';
 import { type ContourChainRibs, type ContourReport, contourMesh, type ContourRegion, type ContourRib } from './contour.ts';
 import { type LocalInfluence, localInfluences } from './localweights.ts';
+import { edgeLength } from './length.ts';
 import { artCoverage, ART_ALPHA, latticeCells, latticeMesh, latticeStray, ONE_LOOP_PASSES } from './mesh.ts';
 import { bindFaceSurfaceDeform, BLINK, blinkHoldMisses, blinkSpan, CONTROL_SUFFIX, controlledBones, IDLE_FPS, idleMotion, type MotionSpec, moveKeysToControls } from './motion.ts';
 import { type AlternateSetMap, PAINTING_RUN, type PartsFile, readFrom, tagOf } from './parts.ts';
@@ -1161,6 +1162,14 @@ export function buildRig(
       (m.contour.regions ?? []).forEach((rg, i) => {
         if (!B.has(rg.bone)) fail('RIG_NAME_RESOLVES', `config.meshes.${part}.contour.regions[${i}].bone`, `names the bone "${rg.bone}", which config.bones does not declare`);
       });
+      if (m.contour.bust !== undefined) {
+        for (const [k, bone] of [
+          ['bone_r', m.contour.bust.bone_r ?? DEFAULT_BUST_BONE_R],
+          ['bone_l', m.contour.bust.bone_l ?? DEFAULT_BUST_BONE_L],
+        ] as const) {
+          if (!B.has(bone)) fail('RIG_NAME_RESOLVES', `config.meshes.${part}.contour.bust.${k}`, `names the bone "${bone}", which config.bones does not declare`);
+        }
+      }
     }
     if ('auto' in m) {
       (m.auto.regions ?? []).forEach((rg, i) => {
@@ -1274,7 +1283,7 @@ export function buildRig(
   for (const segs of meshSegments.values()) for (const s of segs) meshBones.add(s.bone);
   // A contour region's control bone is weighted to like a segment's bone (issue #84), so the idle's keys on it move
   // to its control under `ctl` as theirs do. A config with no contour region adds nothing here.
-  for (const m of Object.values(cfg.meshes)) if ('contour' in m) for (const rg of m.contour.regions ?? []) meshBones.add(rg.bone);
+  for (const m of Object.values(cfg.meshes)) if ('contour' in m) for (const rg of contourRegionsOf(m.contour)) meshBones.add(rg.bone);
   for (const m of Object.values(cfg.meshes)) if ('auto' in m) for (const rg of m.auto.regions ?? []) if (weightsABone(rg)) meshBones.add(rg.bone);
   const meshKeyed = controlledBones(motion, meshBones);
   const controls = idleKeys === 'ctl' ? meshKeyed : [];
@@ -1600,7 +1609,7 @@ export function buildRig(
     const h = img.height;
     const alpha = new Uint8Array(w * h);
     for (let i = 0; i < alpha.length; i++) alpha[i] = img.data[i * 4 + 3];
-    const regions = spec.regions ?? [];
+    const regions = contourRegionsOf(spec);
     const inPart: ContourRegion[] = regions.map((rg) =>
       rg.shape === 'circle'
         ? { name: rg.name, shape: 'circle', cx: rg.cx - ox, cy: rg.cy - oy, r: rg.r, spacing: rg.spacing, band: rg.band }
@@ -1635,10 +1644,25 @@ export function buildRig(
       const li = localInfluences([wx, wy], vSegs, r, regions, limits, exponent ?? DISTANCE_EXPONENT, heat === null ? undefined : heatInfluences(heat, [vx, vy], limits));
       if ('first' in li) {
         if (!overlapped) {
+          let bustHint = '';
+          if (spec.bust !== undefined) {
+            const need: number[] = [];
+            for (const rg of [regions[li.first], regions[li.second]]) {
+              if (rg.name === 'bust_r' || rg.name === 'bust_l') {
+                const apex = rg.name === 'bust_r' ? spec.bust.apex_r : spec.bust.apex_l;
+                const d = edgeLength(spec.bust.cleavage[0] - apex[0], spec.bust.cleavage[1] - apex[1]);
+                const dist = edgeLength(wx - apex[0], wy - apex[1]);
+                need.push(pyRound(d - dist, 2));
+              }
+            }
+            if (need.length > 0) {
+              bustHint = ` (contour.bust.clearance >= ${Math.min(...need)} clears vertex ${vi})`;
+            }
+          }
           out.push({
             code: 'RIG_CONTOUR_REGIONS_OVERLAP',
             object: `config.meshes.${p.name}.contour.regions`,
-            detail: `vertex ${vi} at rig (${wx}, ${wy}) takes weight ${pyRound(li.g1, 5)} from region "${regions[li.first].name}" and ${pyRound(li.g2, 5)} from region "${regions[li.second].name}"; each vertex may be reached by one region's falloff (its region and band) — move the regions apart or narrow a band`,
+            detail: `vertex ${vi} at rig (${wx}, ${wy}) takes weight ${pyRound(li.g1, 5)} from region "${regions[li.first].name}" and ${pyRound(li.g2, 5)} from region "${regions[li.second].name}"; each vertex may be reached by one region's falloff (its region and band) — move the regions apart or narrow a band${bustHint}`,
           });
         }
         overlapped = true;

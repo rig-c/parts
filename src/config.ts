@@ -91,6 +91,7 @@ import { pyRound } from './round.ts';
 import { CLOTH_TARGETS, type ClothRecipes, RECIPE_STRENGTH, RIGC_DEFAULT_DAMPING, springStable } from './cloth.ts';
 import { GRID, MAX_SIDE } from './contour.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
+import { edgeLength } from './length.ts';
 import { isSkeletonName, KEYPOINT_NAMES, type KeypointName, type PosePoints, SKELETON_NAMES, type SkeletonName } from './skeleton.ts';
 import { acceptedTagNames, AUTHOR_LABEL_RULE, AUTHOR_PREFIX, readLayerTag } from './tags.ts';
 import { EAR_DEPTH_RANGE, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, type FaceDeformKey, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, TURN_BONE, type TurnSpec, turnNearest } from './turn.ts';
@@ -392,6 +393,76 @@ export interface ContourSpec {
   bridges?: true;
   /** Local deformation regions; absent is none. */
   regions?: ContourRegionSpec[];
+  /**
+   * Issue #475: derives the `bust_r` and `bust_l` circle regions from three required landmarks (`apex_r`, `apex_l`,
+   * `cleavage`) and two constants (`alpha`, `clearance`). Mutually exclusive with hand-written `bust_r` or `bust_l`
+   * in `regions`.
+   */
+  bust?: ContourBustSpec;
+}
+
+/** Default solid-core ratio `α = r / (r + band)` fitted across the five calibrated example characters (issue #475). */
+export const DEFAULT_BUST_ALPHA = 0.22;
+/** Default cleavage clearance `ε` (rig px) fitted across the five calibrated example characters (issue #475). */
+export const DEFAULT_BUST_CLEARANCE = 3.8;
+/** Default interior refinement spacing (rig px) for derived `bust_r` and `bust_l` regions (issue #475). */
+export const DEFAULT_BUST_SPACING = 14;
+/** Default control bone names for derived `bust_r` and `bust_l` regions (issue #475). */
+export const DEFAULT_BUST_BONE_R = 'boob_r';
+export const DEFAULT_BUST_BONE_L = 'boob_l';
+
+/**
+ * Landmark shorthand for the `bust_r` and `bust_l` contour regions (issue #475):
+ * `R_s = round(|apex_s - cleavage| - clearance)`, `r_s = round(alpha * R_s)`, `band_s = R_s - r_s`.
+ */
+export interface ContourBustSpec {
+  apex_r: Point;
+  apex_l: Point;
+  cleavage: Point;
+  /** Core-to-outer radius ratio `r / (r + band)` in `(0, 1)`; absent is {@link DEFAULT_BUST_ALPHA} (`0.22`). */
+  alpha?: number;
+  /** Cleavage clearance `ε` in rig px (`> 0`, with `R_r + R_l < D`); absent is {@link DEFAULT_BUST_CLEARANCE} (`3.8`). */
+  clearance?: number;
+  /** Control bone for `bust_r`; absent is {@link DEFAULT_BUST_BONE_R} (`"boob_r"`). */
+  bone_r?: string;
+  /** Control bone for `bust_l`; absent is {@link DEFAULT_BUST_BONE_L} (`"boob_l"`). */
+  bone_l?: string;
+  /** Region refinement spacing in rig px (`> 0`); absent is {@link DEFAULT_BUST_SPACING} (`14`). */
+  spacing?: number;
+}
+
+/**
+ * Derive the `[bust_r, bust_l]` circle contour regions from {@link ContourBustSpec} (issue #475).
+ * Read by both `propose` and `rig` through {@link contourRegionsOf}.
+ */
+export function deriveBustRegions(bust: ContourBustSpec): [ContourRegionSpec, ContourRegionSpec] {
+  const alpha = bust.alpha ?? DEFAULT_BUST_ALPHA;
+  const clearance = bust.clearance ?? DEFAULT_BUST_CLEARANCE;
+  const spacing = bust.spacing ?? DEFAULT_BUST_SPACING;
+  const boneR = bust.bone_r ?? DEFAULT_BUST_BONE_R;
+  const boneL = bust.bone_l ?? DEFAULT_BUST_BONE_L;
+  const [rx, ry] = bust.apex_r;
+  const [lx, ly] = bust.apex_l;
+  const [kx, ky] = bust.cleavage;
+  const dR = edgeLength(kx - rx, ky - ry);
+  const dL = edgeLength(kx - lx, ky - ly);
+  const RR = Math.round(dR - clearance);
+  const RL = Math.round(dL - clearance);
+  const rR = Math.round(alpha * RR);
+  const rL = Math.round(alpha * RL);
+  return [
+    { name: 'bust_r', shape: 'circle', cx: rx, cy: ry, r: rR, spacing, band: RR - rR, bone: boneR },
+    { name: 'bust_l', shape: 'circle', cx: lx, cy: ly, r: rL, spacing, band: RL - rL, bone: boneL },
+  ];
+}
+
+/**
+ * Every contour region on `spec`: its hand-given `regions` (in declared order) followed by `deriveBustRegions(spec.bust)`
+ * when `spec.bust` is declared (issue #475). When `spec.bust` is absent, returns `spec.regions ?? []`.
+ */
+export function contourRegionsOf(spec: ContourSpec): ContourRegionSpec[] {
+  if (spec.bust === undefined) return spec.regions ?? [];
+  return [...(spec.regions ?? []), ...deriveBustRegions(spec.bust)];
 }
 
 /**
@@ -2199,7 +2270,7 @@ function checkRibs(c: Check, at: string, m: Record<string, Json>, chains: Map<st
  * the grid every region number must sit on.
  */
 function checkContour(c: Check, at: string, v: Json, bones: Set<string>): void {
-  const o = c.object(at, v, ['tolerance', 'margin', 'spacing'], ['maxEdge', 'budget', 'stray', 'bridges', 'regions']);
+  const o = c.object(at, v, ['tolerance', 'margin', 'spacing'], ['maxEdge', 'budget', 'stray', 'bridges', 'regions', 'bust']);
   if (o === null) return;
   if ('tolerance' in o) c.number(`${at}.tolerance`, o.tolerance, 'non-negative');
   if ('margin' in o && c.number(`${at}.margin`, o.margin, 'non-negative') && (o.margin as number) > 0 && (o.margin as number) < 1) {
@@ -2210,46 +2281,117 @@ function checkContour(c: Check, at: string, v: Json, bones: Set<string>): void {
   if ('budget' in o) c.int(`${at}.budget`, o.budget, 3);
   if ('stray' in o) c.int(`${at}.stray`, o.stray, 0);
   if ('bridges' in o && o.bridges !== true) c.fail('CONFIG_FIELD_TYPE', `${at}.bridges`, `is ${show(o.bridges)}; true is required (every island joined into one outline by bridges, issue #326) — remove the field for the one-island rule`);
-  if (!('regions' in o) || !c.array(`${at}.regions`, o.regions, false)) return;
+  const onGrid = (path: string, n: Json, rule: 'any' | 'positive' | 'non-negative'): void => {
+    if (!c.number(path, n, rule)) return;
+    const v2 = n as number;
+    if (!Number.isInteger(v2 * GRID) || Math.abs(v2) > MAX_SIDE) {
+      c.fail('CONFIG_FIELD_TYPE', path, `is ${v2}; a multiple of 1/${GRID} px within ±${MAX_SIDE} px is required — a region's weight is 1 inside it and 0 past its band, and those two are decided exactly on that grid`);
+    }
+  };
   const names = new Set<string>();
-  (o.regions as Json[]).forEach((rv, i) => {
-    const rat = `${at}.regions[${i}]`;
-    const shape = typeof rv === 'object' && rv !== null && !Array.isArray(rv) ? (rv as Record<string, Json>).shape : undefined;
-    const own = shape === 'circle' ? ['cx', 'cy', 'r'] : shape === 'polygon' ? ['points'] : [];
-    const r = c.object(rat, rv, ['name', 'shape', 'bone', 'spacing', 'band', ...own], []);
-    if (r === null) return;
-    if ('shape' in r && own.length === 0) c.fail('CONFIG_FIELD_TYPE', `${rat}.shape`, `is ${show(r.shape)}; "circle" (with cx, cy, r) or "polygon" (with points) is required`);
-    if ('name' in r && c.string(`${rat}.name`, r.name)) {
-      if (names.has(r.name)) c.fail('CONFIG_REGION_NAME_UNIQUE', `${rat}.name`, `"${r.name}" is declared twice in this mesh; each region needs its own name`);
-      names.add(r.name);
-    }
-    if ('bone' in r && (typeof r.bone !== 'string' || !bones.has(r.bone))) {
-      c.fail('CONFIG_NAME_RESOLVES', `${rat}.bone`, `is ${show(r.bone)}; a bone config.bones declares is required — the region's control bone`);
-    }
-    const onGrid = (path: string, n: Json, rule: 'any' | 'positive' | 'non-negative'): void => {
-      if (!c.number(path, n, rule)) return;
-      const v2 = n as number;
-      if (!Number.isInteger(v2 * GRID) || Math.abs(v2) > MAX_SIDE) {
-        c.fail('CONFIG_FIELD_TYPE', path, `is ${v2}; a multiple of 1/${GRID} px within ±${MAX_SIDE} px is required — a region's weight is 1 inside it and 0 past its band, and those two are decided exactly on that grid`);
+  if ('regions' in o && c.array(`${at}.regions`, o.regions, false)) {
+    (o.regions as Json[]).forEach((rv, i) => {
+      const rat = `${at}.regions[${i}]`;
+      const shape = typeof rv === 'object' && rv !== null && !Array.isArray(rv) ? (rv as Record<string, Json>).shape : undefined;
+      const own = shape === 'circle' ? ['cx', 'cy', 'r'] : shape === 'polygon' ? ['points'] : [];
+      const r = c.object(rat, rv, ['name', 'shape', 'bone', 'spacing', 'band', ...own], []);
+      if (r === null) return;
+      if ('shape' in r && own.length === 0) c.fail('CONFIG_FIELD_TYPE', `${rat}.shape`, `is ${show(r.shape)}; "circle" (with cx, cy, r) or "polygon" (with points) is required`);
+      if ('name' in r && c.string(`${rat}.name`, r.name)) {
+        if (names.has(r.name)) c.fail('CONFIG_REGION_NAME_UNIQUE', `${rat}.name`, `"${r.name}" is declared twice in this mesh; each region needs its own name`);
+        names.add(r.name);
       }
-    };
-    if ('spacing' in r) c.number(`${rat}.spacing`, r.spacing, 'positive');
-    if ('band' in r) onGrid(`${rat}.band`, r.band, 'non-negative');
-    if (shape === 'circle') {
-      if ('cx' in r) onGrid(`${rat}.cx`, r.cx, 'any');
-      if ('cy' in r) onGrid(`${rat}.cy`, r.cy, 'any');
-      if ('r' in r) onGrid(`${rat}.r`, r.r, 'positive');
+      if ('bone' in r && (typeof r.bone !== 'string' || !bones.has(r.bone))) {
+        c.fail('CONFIG_NAME_RESOLVES', `${rat}.bone`, `is ${show(r.bone)}; a bone config.bones declares is required — the region's control bone`);
+      }
+      if ('spacing' in r) c.number(`${rat}.spacing`, r.spacing, 'positive');
+      if ('band' in r) onGrid(`${rat}.band`, r.band, 'non-negative');
+      if (shape === 'circle') {
+        if ('cx' in r) onGrid(`${rat}.cx`, r.cx, 'any');
+        if ('cy' in r) onGrid(`${rat}.cy`, r.cy, 'any');
+        if ('r' in r) onGrid(`${rat}.r`, r.r, 'positive');
+      }
+      if (shape === 'polygon' && 'points' in r && c.array(`${rat}.points`, r.points, true)) {
+        const pts = r.points as Json[];
+        if (pts.length < 3) c.fail('CONFIG_FIELD_TYPE', `${rat}.points`, `has ${pts.length} point(s); 3 or more [x, y] in rig pixels are required`);
+        pts.forEach((p, k) => {
+          if (!c.point(`${rat}.points[${k}]`, p)) return;
+          onGrid(`${rat}.points[${k}][0]`, (p as Point)[0], 'any');
+          onGrid(`${rat}.points[${k}][1]`, (p as Point)[1], 'any');
+        });
+      }
+    });
+  }
+  if ('bust' in o) {
+    const bat = `${at}.bust`;
+    const b = c.object(bat, o.bust, ['apex_r', 'apex_l', 'cleavage'], ['alpha', 'clearance', 'bone_r', 'bone_l', 'spacing']);
+    if (b === null) return;
+    for (const dup of ['bust_r', 'bust_l'] as const) {
+      if (names.has(dup)) {
+        c.fail('CONFIG_REGION_NAME_UNIQUE', bat, `"${dup}" is declared in both ${at}.regions and ${bat}; give either ${bat} or hand-written bust_r/bust_l in ${at}.regions, not both`);
+      }
     }
-    if (shape === 'polygon' && 'points' in r && c.array(`${rat}.points`, r.points, true)) {
-      const pts = r.points as Json[];
-      if (pts.length < 3) c.fail('CONFIG_FIELD_TYPE', `${rat}.points`, `has ${pts.length} point(s); 3 or more [x, y] in rig pixels are required`);
-      pts.forEach((p, k) => {
-        if (!c.point(`${rat}.points[${k}]`, p)) return;
-        onGrid(`${rat}.points[${k}][0]`, (p as Point)[0], 'any');
-        onGrid(`${rat}.points[${k}][1]`, (p as Point)[1], 'any');
-      });
+    let ptsOk = true;
+    for (const k of ['apex_r', 'apex_l', 'cleavage'] as const) {
+      if (!(k in b)) {
+        ptsOk = false;
+        continue;
+      }
+      if (!c.point(`${bat}.${k}`, b[k])) {
+        ptsOk = false;
+        continue;
+      }
+      onGrid(`${bat}.${k}[0]`, (b[k] as Point)[0], 'any');
+      onGrid(`${bat}.${k}[1]`, (b[k] as Point)[1], 'any');
     }
-  });
+    let alpha = DEFAULT_BUST_ALPHA;
+    let alphaOk = true;
+    if ('alpha' in b) {
+      if (!c.number(`${bat}.alpha`, b.alpha, 'positive')) alphaOk = false;
+      else if ((b.alpha as number) >= 1) {
+        c.fail('CONFIG_FIELD_TYPE', `${bat}.alpha`, `is ${b.alpha as number}; a core ratio in (0, 1) is required (default ${DEFAULT_BUST_ALPHA})`);
+        alphaOk = false;
+      } else alpha = b.alpha as number;
+    }
+    let clearance = DEFAULT_BUST_CLEARANCE;
+    let clearanceOk = true;
+    if ('clearance' in b) {
+      if (!c.number(`${bat}.clearance`, b.clearance, 'any')) clearanceOk = false;
+      else clearance = b.clearance as number;
+    }
+    if ('spacing' in b) c.number(`${bat}.spacing`, b.spacing, 'positive');
+    for (const [k, def, regName] of [
+      ['bone_r', DEFAULT_BUST_BONE_R, 'bust_r'],
+      ['bone_l', DEFAULT_BUST_BONE_L, 'bust_l'],
+    ] as const) {
+      const bone = k in b ? b[k] : def;
+      if (typeof bone !== 'string' || !bones.has(bone)) {
+        c.fail('CONFIG_NAME_RESOLVES', `${bat}.${k}`, `is ${show(bone)}; a bone config.bones declares is required — ${regName}'s control bone`);
+      }
+    }
+    if (ptsOk && alphaOk && clearanceOk) {
+      const [rx, ry] = b.apex_r as Point;
+      const [lx, ly] = b.apex_l as Point;
+      const [kx, ky] = b.cleavage as Point;
+      const D = edgeLength(lx - rx, ly - ry);
+      const dR = edgeLength(kx - rx, ky - ry);
+      const dL = edgeLength(kx - lx, ky - ly);
+      const RR = Math.round(dR - clearance);
+      const RL = Math.round(dL - clearance);
+      const rR = Math.round(alpha * RR);
+      const rL = Math.round(alpha * RL);
+      const bandR = RR - rR;
+      const bandL = RL - rL;
+      if (clearance <= 0 || RR + RL >= D || rR <= 0 || rL <= 0 || bandR < 0 || bandL < 0) {
+        const minClearance = Math.max(0, (dR + dL - D) / 2);
+        c.fail(
+          'CONFIG_BUST_CLEARANCE',
+          `${bat}.clearance`,
+          `is ${clearance} (giving R_r = ${RR}, R_l = ${RL}, R_r + R_l = ${RR + RL} px against apex distance D = ${pyRound(D, 2)} px, r_r = ${rR}, band_r = ${bandR}, r_l = ${rL}, band_l = ${bandL}); a clearance > 0 with R_r + R_l < D (clearance > ${pyRound(minClearance, 2)} px) and positive radii is required`,
+        );
+      }
+    }
+  }
 }
 
 /**
