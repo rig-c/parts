@@ -127,7 +127,8 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { drawText, GLYPH_H } from 'rig-c/tools/font5x7.ts';
-import { type BoneEntry, type ConfigConstraint, type ConfigStop, type Limb, type MeshSpec, parseConfig, type Point, type Segment, type SkeletonSections } from './config.ts';
+import { type BoneEntry, type ConfigConstraint, type ConfigStop, contourRegionsOf, deriveBustRegions, type Limb, type MeshSpec, parseConfig, type Point, type Segment, type SkeletonSections } from './config.ts';
+export { contourRegionsOf, deriveBustRegions };
 import { computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toWorld } from './coords.ts';
 import { PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { eyeLineDegrees, type FrameFeature, headAxes, type HeadAxes, headFrame, type HeadFrame } from './headframe.ts';
