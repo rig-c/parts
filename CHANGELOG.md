@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.37.0](https://github.com/rig-c/parts/compare/v1.36.0...v1.37.0) (2026-10-18)
+
+
+### Features
+
+* **assemble:** refuse or underfill hollow See-through head-run face ([#492](https://github.com/rig-c/parts/issues/492)) ([#499](https://github.com/rig-c/parts/issues/499)) ([ee16046](https://github.com/rig-c/parts/commit/ee160464dc480ab3c1613b8d69807c50839cc053))
+* **assemble:** split or refuse merged See-through arm layers ([#490](https://github.com/rig-c/parts/issues/490)) ([#496](https://github.com/rig-c/parts/issues/496)) ([5e0789a](https://github.com/rig-c/parts/commit/5e0789a04dcb63612d358539526cdcc31ca49df4))
+* **propose:** place hanging arm elbow cut from limb chain when wrist lands off layer ([#491](https://github.com/rig-c/parts/issues/491)) ([#498](https://github.com/rig-c/parts/issues/498)) ([091f630](https://github.com/rig-c/parts/commit/091f6301b3da195898f5478f994949a4e5f7cd33))
+
 ## [1.36.0](https://github.com/rig-c/parts/compare/v1.35.0...v1.36.0) (2026-10-18)
 
 
