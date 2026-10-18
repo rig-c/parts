@@ -145,6 +145,11 @@ import {
   LIMB_BONES,
   LIMBS,
   limbConfig,
+  MERGED_ARM_EXPECTED_MUTANT_PARTS,
+  MERGED_ARM_EXPECTED_SPLIT_PARTS,
+  MERGED_ARM_KEY_SKELETON,
+  MERGED_ARM_REFUSED_FULL,
+  MERGED_ARM_SPLIT_FULL,
   type RunLayerSpec,
 } from './fixtures/assemble_fixture.ts';
 import { type AnimFrame, chunkTypes, encodeApng, encodeIndexedApng } from './src/apng.ts';
@@ -24801,48 +24806,13 @@ function authorLayerControls(say: (name: string, ok: boolean, detail: string, wh
     );
 
     // AS256 — issue #490: when generation.control.skeleton is present and a full-run handwear-<s> layer merges
-    // sleeve, bare hand (>= 50 skin px within 0.35 forearm lengths of <s>_wrist) and overgarment drape (non-skin
+    // sleeve, bare hand (>= 40 skin px within 0.35 forearm lengths of <s>_wrist) and overgarment drape (non-skin
     // reaching > 1.0x the forearm length below <s>_wrist), it splits into drape-<s>, handwear-<s> and hand-<s> when
     // the sleeve-to-drape Euclidean RGB distance is >= 80, or refuses with SEETHROUGH_ARM_RUN_MERGED when < 80;
-    // mutant without keySkeleton silently keeps the merged blob on one sleeves part.
-    const basePts = scaledPoints('stand_sides', SOURCE_SIDE, SOURCE_SIDE);
-    const keySkeleton = {
-      latent: [SOURCE_SIDE, SOURCE_SIDE] as const,
-      points: {
-        ...basePts,
-        r_shoulder: [30, 12] as [number, number],
-        r_elbow: [30, 24] as [number, number],
-        r_wrist: [30, 48] as [number, number],
-      },
-    };
-    const sleeveCol: [number, number, number] = [40, 60, 180];
-    const handCol: [number, number, number] = [220, 175, 145];
-    const distinctDrapeCol: [number, number, number] = [180, 50, 50];
-    const sameDrapeCol: [number, number, number] = [45, 65, 175];
-    const fullMergedSplit = runIn('full-merged-split', [
-      ...FULL_LAYERS,
-      {
-        name: 'handwear-r',
-        depth: 0.35,
-        rects: [
-          { x0: 8, y0: 4, x1: 22, y1: 20, colour: sleeveCol },
-          { x0: 10, y0: 20, x1: 20, y1: 26, colour: handCol },
-          { x0: 8, y0: 26, x1: 22, y1: 42, colour: distinctDrapeCol },
-        ],
-      },
-    ]);
-    const fullMergedRefused = runIn('full-merged-refused', [
-      ...FULL_LAYERS,
-      {
-        name: 'handwear-r',
-        depth: 0.35,
-        rects: [
-          { x0: 8, y0: 4, x1: 22, y1: 20, colour: sleeveCol },
-          { x0: 10, y0: 20, x1: 20, y1: 26, colour: handCol },
-          { x0: 8, y0: 26, x1: 22, y1: 42, colour: sameDrapeCol },
-        ],
-      },
-    ]);
+    // mutant without keySkeleton silently keeps the merged blob on one sleeves part (fixtures/assemble_fixture.ts).
+    const keySkeleton = MERGED_ARM_KEY_SKELETON;
+    const fullMergedSplit = runIn('full-merged-split', MERGED_ARM_SPLIT_FULL);
+    const fullMergedRefused = runIn('full-merged-refused', MERGED_ARM_REFUSED_FULL);
     const mergedSplitPlan = proposePlan(fullMergedSplit, headP, { ...geometry, keySkeleton });
     const mergedSplitOut = assemble({ ...baseAssemble, full: fullMergedSplit, keySkeleton, plan: mergedSplitPlan.plan, extend: mergedSplitPlan.extend_below_crop });
     const mergedSplitParts = mergedSplitOut.parts.parts.filter((p) => p.from.startsWith('full:drape-') || p.from.startsWith('full:handwear-') || p.from.startsWith('full:hand-'));
@@ -24861,11 +24831,10 @@ function authorLayerControls(say: (name: string, ok: boolean, detail: string, wh
       JSON.stringify(mergedSplitPlan.plan.filter((e) => e[2] === 'drape-r' || e[2] === 'handwear-r' || e[2] === 'hand-r')) ===
         '[["drape_r","full","drape-r"],["sleeves","full","handwear-r"],["hand_r","full","hand-r"]]' &&
         mergedSplitPlan.notes.some((n) => n.startsWith('handwear-r: merged arm layer (60 skin hand px at r_wrist y=20..25, non-skin reaching y=41, 1.42x forearm 12.0 px;') && n.includes('-> split into drape-r (224 px), handwear-r (224 px) and hand-r (60 px)')) &&
-        JSON.stringify(mergedSplitParts.map((p) => [p.name, p.from, p.opaque_px])) ===
-          '[["drape_r","full:drape-r",224],["sleeves","full:handwear-r",224],["hand_r","full:hand-r",60]]' &&
+        JSON.stringify(mergedSplitParts.map((p) => [p.name, p.from, p.opaque_px])) === JSON.stringify(MERGED_ARM_EXPECTED_SPLIT_PARTS) &&
         splitProp.regions.hand_r === 'sleeve_r2' &&
         splitProp.regions.drape_r === 'hip' &&
-        JSON.stringify(mergedMutantParts.map((p) => [p.name, p.from, p.opaque_px])) === '[["sleeves","full:handwear-r",508]]' &&
+        JSON.stringify(mergedMutantParts.map((p) => [p.name, p.from, p.opaque_px])) === JSON.stringify(MERGED_ARM_EXPECTED_MUTANT_PARTS) &&
         mergedRefusedPlan !== null &&
         mergedRefusedPlan.problems.length === 1 &&
         mergedRefusedPlan.problems[0].code === 'SEETHROUGH_ARM_RUN_MERGED' &&
@@ -24874,7 +24843,7 @@ function authorLayerControls(say: (name: string, ok: boolean, detail: string, wh
         mergedRefusedAssemble !== null &&
         mergedRefusedAssemble.problems.length === 1 &&
         mergedRefusedAssemble.problems[0].code === 'SEETHROUGH_ARM_RUN_MERGED',
-      `split plan: ${JSON.stringify(mergedSplitParts.map((p) => `${p.name}(${p.from}):${p.opaque_px}`))}, regions hand_r=${splitProp.regions.hand_r ?? '-'} drape_r=${splitProp.regions.drape_r ?? '-'}; mutant (no keySkeleton): ${JSON.stringify(mergedMutantParts.map((p) => `${p.name}:${p.opaque_px}`))}; same-colour drape refusal: ${codes(mergedRefusedPlan)} / ${codes(mergedRefusedAssemble)}`,
+      `split plan: ${JSON.stringify(mergedSplitParts.map((p) => `${p.name}(${p.from}):${p.opaque_px}`))}, regions hand_r=${splitProp.regions.hand_r ?? '-'} drape_r=${splitProp.regions.hand_r === undefined ? '-' : splitProp.regions.drape_r ?? '-'}; mutant (no keySkeleton): ${JSON.stringify(mergedMutantParts.map((p) => `${p.name}:${p.opaque_px}`))}; same-colour drape refusal: ${codes(mergedRefusedPlan)} / ${codes(mergedRefusedAssemble)}`,
       'issue #490: a hanging arm layer that merges sleeve, bare hand and overgarment past 1.0x the forearm length below the wrist is split into drape-<s>, handwear-<s> and hand-<s> when the sleeve-to-drape colour distance is >= 80, or refused with SEETHROUGH_ARM_RUN_MERGED when < 80; without the detector the 508-px merged blob lands silently on one sleeves part',
     );
   } finally {

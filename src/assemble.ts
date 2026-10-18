@@ -736,10 +736,15 @@ function armSplitPlan(plan: readonly PlanEntry[], armSplit: ArmSplit | undefined
  * `handwear-r` / `handwear-l` layer into `drape-<s>`, `handwear-<s>` and
  * `hand-<s>` instead of refusing with `SEETHROUGH_ARM_RUN_MERGED`.
  *
- * Measured across the 9 standee decompositions (issue #490): the two merged
- * standees with distinct sleeve and drape colours measure 99.9 / 101.4
- * (`standee-1`) and 198.8 / 223.6 (`standee-2`), while the merged standee
- * whose outer robe shares the sleeve's colour measures 25.1 / 28.3 (`standee-5`).
+ * Measured across the 9-standee corpus (issue #490, `forearm = 211.3` run px):
+ * the 6 clean standees hold `spanBelowWrist <= 94.9` px (`<= 0.45x` forearm) and
+ * the 3 merged standees hold `264.9..425.9` px (`1.25x..2.02x` forearm), placing
+ * the `1.0x` forearm threshold inside the `0.45x..1.25x` gap; on the 3 merged
+ * standees (`780..4,787` skin hand px vs the `GHOST_MIN_AREA = 40` px floor),
+ * the two with distinct sleeve and drape colours measure Euclidean RGB distance
+ * `103.6 / 106.9` (`standee-1`) and `215.7 / 236.0` (`standee-2`), while the
+ * one whose outer robe shares the sleeve's colour measures `20.8 / 28.2`
+ * (`standee-5`), placing `80` between `28.2` and `103.6`.
  */
 export const ARM_DRAPE_COLOR_DISTANCE = 80;
 
@@ -779,10 +784,10 @@ function faceMedianRgb(set: LayerSet, resolution: number): [number, number, numb
 /**
  * Issue #490: inspect `handwear-r` and `handwear-l` in the full run against the
  * pose keypoints (`generation.control.skeleton`). When an arm layer holds a
- * skin-coloured hand cluster at `<s>_wrist` (`>= GHOST_MIN_AREA` opaque px) and
- * its non-skin pixels reach more than 1.0x the forearm length (`|wrist - elbow|`)
- * below `<s>_wrist`, See-through merged the sleeve, the hand and the
- * overgarment drape into one arm layer.
+ * skin-coloured hand cluster at `<s>_wrist` (`>= GHOST_MIN_AREA` = `40` opaque
+ * run px) and its non-skin pixels reach more than `1.0x` the forearm length
+ * (`|wrist - elbow|`) below `<s>_wrist`, See-through merged the sleeve, the
+ * hand and the overgarment drape into one arm layer.
  *
  * - When the Euclidean RGB distance between the sleeve above the wrist and the
  *   drape below the wrist is at least {@link ARM_DRAPE_COLOR_DISTANCE} (`80`),
