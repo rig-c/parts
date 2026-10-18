@@ -19967,6 +19967,407 @@ function runBuildSuite(): number {
       `wave build exit ${waveRun.status}, sets.wave=${JSON.stringify(waveEntry)}, base->wave diff px=${baseToWaveDiffPx}, base->restored maxDiff=${baseToRestoredMaxDiff}, wave vs check --set wave maxDiff=${waveSetStillMatchMaxDiff}, baseRigIdentical=${baseRigIdentical}; +30° forearm mutant turn=${forearmTurnDeg.toFixed(4)}°, non-forearm/hand vertex maxDiff=${nonArmMaxVertexDiff}, forearm diff px=${forearmMutPixelDiffPx}, outside diff max=${outsideForearmHandPixelDiffMax}; refusals: CONFIG_SET_COVERS_BONE exit ${badBoneRun.status}, RIG_SET_COVERS_BONE=${rigSetCoversBoneRefusal?.problems[0]?.code ?? 'none'}, CONFIG_LIMB_SET_JOINTS exit ${badLimbPartsRun.status}, ASSEMBLE_LIMB_JOINT_ON_ART exit ${badJointArtRun.status}`,
       'issue #476: a gesture subset set over a limb chain cuts at the base\'s joints along its drawn bone angles, emits slots and drawn for the covered chain bones in sets.json, poses the chain on set activation and restores the base byte-identically on set: null, leaves the base rig byte-identical, moves only the forearm by 30° when forearm drawn moves 30°, and refuses uncovered drawn bones or off-joint cuts by name',
     );
+
+    // BU173 — issue #474: the outfit transaction in docs/OUTFITS.md — when a second painting changes only the clothes
+    // (`outfit_b` replacing `topwear`, `bottomwear`, `shoes`, `upperarm_r`, `forearm_r` and hiding `hairpin`, alongside
+    // viseme subset sets `a`, `i`, `u` on `mouth`), `.bones` (including base `drawn` rest rotations), `.invariants.axes`
+    // (`faceAxis`), `.animations.idle`, and the base `bottomwear` mesh stay byte-for-byte identical to the base-only
+    // build (`out_base`) with the exact sha256 digests recorded in docs/OUTFITS.md; `outfit_b_bottomwear` re-triangulates
+    // (`30` vertices, `40` triangles vs `24` vertices, `30` triangles) on the kept `skirt0`/`skirt1` bones; `outfit_b`
+    // composes with `a`/`i`/`u` and obeys later-set precedence on overlapping slots; and the wide-sleeve / overgarment
+    // traps (`CONFIG_LIMB_SET_JOINTS`, `ASSEMBLE_LIMB_JOINT_ON_ART`, `ASSEMBLE_ALT_INPUT_PRESENT`,
+    // `ASSEMBLE_ALT_CANVAS_SIZE`) are refused by name while hiding covered arms (`hides: ["upperarm_r", "forearm_r"]`)
+    // builds cleanly.
+    const outfitDir = join(dir, 'outfit-tx-474');
+    const outfitDocText = existsSync(join(ROOT, 'docs', 'OUTFITS.md'))
+      ? readFileSync(join(ROOT, 'docs', 'OUTFITS.md'), 'utf8')
+      : '';
+    const outfitCAlt: [number, number, number] = [70, 80, 60];
+    const makeFlatPainting = (w: number, h: number, rgb: [number, number, number]): Raster => {
+      const data = new Uint8ClampedArray(w * h * 4);
+      for (let i = 0; i < data.length; i += 4) {
+        data[i] = rgb[0];
+        data[i + 1] = rgb[1];
+        data[i + 2] = rgb[2];
+        data[i + 3] = 255;
+      }
+      return { width: w, height: h, data };
+    };
+    const outfitBaseFull: RunLayerSpec[] = [
+      ...FULL_LAYERS,
+      { name: 'handwear-r', depth: 0.15, rects: [{ x0: 12, y0: 22, x1: 18, y1: 46, colour: C }] },
+    ];
+    const outfitBaseHead: RunLayerSpec[] = [
+      ...HEAD_LAYERS.map((l) =>
+        l.name === 'face' ? { ...l, rects: [{ x0: 0, y0: 16, x1: 24, y1: 28, colour: C }] } : l,
+      ),
+      { name: 'eyewhite-r', depth: 0.45, rects: [{ x0: 2, y0: 18, x1: 10, y1: 24, colour: C }] },
+      { name: 'eyewhite-l', depth: 0.45, rects: [{ x0: 14, y0: 18, x1: 22, y1: 24, colour: C }] },
+      { name: 'mouth', depth: 0.4, rects: [{ x0: 6, y0: 28, x1: 18, y1: 32, colour: C }] },
+    ];
+    const outfitBFull: RunLayerSpec[] = [
+      ...FULL_LAYERS.filter((l) => l.name !== 'headwear').map((l) => {
+        if (l.name === 'topwear') return { ...l, rects: [{ x0: 10, y0: 20, x1: 30, y1: 50, colour: outfitCAlt }] };
+        if (l.name === 'bottomwear') return { ...l, rects: [{ x0: 46, y0: 30, x1: 62, y1: 54, colour: outfitCAlt }] };
+        if (l.name === 'footwear')
+          return {
+            ...l,
+            rects: [
+              { x0: 10, y0: 54, x1: 30, y1: 60, colour: outfitCAlt },
+              { x0: 60, y0: 60, x1: 62, y1: 62, colour: outfitCAlt },
+            ],
+          };
+        return l;
+      }),
+      { name: 'handwear-r', depth: 0.15, rects: [{ x0: 12, y0: 22, x1: 18, y1: 46, colour: outfitCAlt }] },
+    ];
+    const outfitBaseCfg: Record<string, unknown> = {
+      key: 'outfit-fixture',
+      seethrough: {
+        resolution: 64,
+        steps: 1,
+        seed: 0,
+        offload: false,
+        head_box: [32, 0, 96, 64],
+      },
+      assemble: {
+        rig_scale: 0.5,
+        plan: [
+          ['hair_back', 'head', 'back hair'],
+          ['hairpin', 'full', 'headwear'],
+          ['topwear', 'full', 'topwear'],
+          ['bottomwear', 'full', 'bottomwear'],
+          ['shoes', 'full', 'footwear'],
+          ['arm_r', 'full', 'handwear-r'],
+          ['face', 'head', 'face'],
+          ['eyewhite_r', 'head', 'eyewhite-r'],
+          ['eyewhite_l', 'head', 'eyewhite-l'],
+          ['mouth', 'head', 'mouth'],
+        ],
+        extend_below_crop: [{ part: 'hair_back', run: 'full', tag: 'back hair' }],
+      },
+      bones: [
+        { name: 'anchor', parent: 'root', at: [0, 0] },
+        { name: 'chest', parent: 'root', at: [20, 20] },
+        { name: 'head', parent: 'chest', at: [22, 16] },
+        { name: 'eye_r', parent: 'head', at: [19, 11] },
+        { name: 'eye_l', parent: 'head', at: [25, 11] },
+        { name: 'mouth', parent: 'head', at: [22, 15] },
+        { chain: 'arm_r', parent: 'chest', points: [[15, 24], [15, 34]], tip: [15, 44] },
+        { chain: 'skirt', parent: 'root', points: [[55, 30], [55, 42]], tip: [55, 54] },
+      ],
+      limbs: {
+        arm_r: {
+          segments: [
+            { part: 'upperarm_r', from: 'arm_r', bone: 'arm_r0' },
+            { part: 'forearm_r', from: 'arm_r', bone: 'arm_r1', joint: 'elbow' },
+          ],
+        },
+      },
+      meshes: {
+        bottomwear: {
+          grid: 6,
+          r: 1,
+          influences: { maxInfluences: 1 },
+          segments: ['skirt'],
+        },
+      },
+      regions: {
+        hair_back: 'head',
+        hairpin: 'head',
+        topwear: 'chest',
+        shoes: 'anchor',
+        upperarm_r: 'arm_r0',
+        forearm_r: 'arm_r1',
+        face: 'head',
+        eyewhite_r: 'eye_r',
+        eyewhite_l: 'eye_l',
+        mouth: 'mouth',
+      },
+      motion: {
+        duration: 1,
+        tracks: [
+          { bone: 'chest', prop: 'translatey', amp: 1, period: 1, phase: 0 },
+          { chain: 'arm_r', amps: [0.5, 1], period: 1, phase: 0, lag: 0.1 },
+          { chain: 'skirt', amps: [1, 2], period: 1, phase: 0, lag: 0.1 },
+        ],
+        blink: { t: 0.5, eyes: ['eye_r', 'eye_l'], squash: 0.1 },
+      },
+    };
+    writeAssembleFixture(outfitDir, outfitBaseCfg, undefined, { full: outfitBaseFull, head: outfitBaseHead });
+    writeFileSync(join(outfitDir, 'base_config.json'), `${JSON.stringify(outfitBaseCfg, null, 2)}\n`);
+    writeFileSync(join(outfitDir, 'painting_b.png'), encodePngBytes(makeFlatPainting(128, 128, outfitCAlt)));
+    writeRun(join(outfitDir, 'full_b'), outfitBFull);
+    writeRun(join(outfitDir, 'head_a'), [{ name: 'mouth', depth: 0.4, rects: [{ x0: 0, y0: 28, x1: 24, y1: 40, colour: C }] }]);
+    writeRun(join(outfitDir, 'head_i'), [{ name: 'mouth', depth: 0.4, rects: [{ x0: 2, y0: 28, x1: 22, y1: 36, colour: C }] }]);
+    writeRun(join(outfitDir, 'head_u'), [{ name: 'mouth', depth: 0.4, rects: [{ x0: 4, y0: 28, x1: 20, y1: 38, colour: C }] }]);
+    writeFileSync(
+      join(outfitDir, 'speak.json'),
+      `${JSON.stringify(
+        {
+          spec: 'rigc-motion/1',
+          animations: {
+            speak: {
+              duration: 1,
+              tracks: [
+                {
+                  slot: 'mouth',
+                  property: 'attachment',
+                  keys: [
+                    { t: 0, set: 'a' },
+                    { t: 0.24, set: 'i' },
+                    { t: 0.49, set: 'u' },
+                    { t: 0.74, set: null },
+                    { t: 1, set: null },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const outfitCombinedCfg = JSON.parse(JSON.stringify(outfitBaseCfg)) as Record<string, unknown>;
+    (outfitCombinedCfg.assemble as Record<string, unknown>).alternates = [
+      {
+        name: 'outfit_b',
+        source: 'painting_b.png',
+        full: 'full_b',
+        head: 'head',
+        parts: ['topwear', 'bottomwear', 'shoes', 'upperarm_r', 'forearm_r'],
+        hides: ['hairpin'],
+      },
+      { name: 'a', source: 'painting.png', full: 'full', head: 'head_a', parts: ['mouth'] },
+      { name: 'i', source: 'painting.png', full: 'full', head: 'head_i', parts: ['mouth'] },
+      { name: 'u', source: 'painting.png', full: 'full', head: 'head_u', parts: ['mouth'] },
+    ];
+    (outfitCombinedCfg.motion as Record<string, unknown>).animations_from = 'speak.json';
+    writeFileSync(join(outfitDir, 'config.json'), `${JSON.stringify(outfitCombinedCfg, null, 2)}\n`);
+
+    const outfitBaseOut = join(outfitDir, 'out_base');
+    const outfitBaseRun = runCli(buildArgs(outfitDir, outfitBaseOut, 'base_config.json'));
+    const outfitCombinedOut = join(outfitDir, 'out');
+    const outfitCombinedRun = runCli([...buildArgs(outfitDir, outfitCombinedOut), '--all-sets']);
+    const outfitCheckSetRun = runCli([
+      'check',
+      '--rig',
+      join(outfitCombinedOut, 'rig'),
+      '--parts',
+      outfitCombinedOut,
+      '--out',
+      join(outfitDir, 'check_outfit_b'),
+      '--set',
+      'outfit_b',
+    ]);
+    const shaJson = (v: unknown): string => createHash('sha256').update(JSON.stringify(v)).digest('hex');
+    const baseRigJson = existsSync(join(outfitBaseOut, 'rig', 'rig.json'))
+      ? (readJsonFile(join(outfitBaseOut, 'rig', 'rig.json')) as {
+          bones: unknown;
+          invariants?: { axes?: unknown };
+          skins: { default: Record<string, Record<string, { uvs?: number[]; triangles?: number[] }>> };
+        })
+      : null;
+    const combRigJson = existsSync(join(outfitCombinedOut, 'rig', 'rig.json'))
+      ? (readJsonFile(join(outfitCombinedOut, 'rig', 'rig.json')) as {
+          bones: unknown;
+          invariants?: { axes?: unknown };
+          skins: { default: Record<string, Record<string, { uvs?: number[]; triangles?: number[] }>> };
+        })
+      : null;
+    const baseMotJson = existsSync(join(outfitBaseOut, 'rig', 'motion.json'))
+      ? (readJsonFile(join(outfitBaseOut, 'rig', 'motion.json')) as { animations: { idle: unknown } })
+      : null;
+    const combMotJson = existsSync(join(outfitCombinedOut, 'rig', 'motion.json'))
+      ? (readJsonFile(join(outfitCombinedOut, 'rig', 'motion.json')) as {
+          animations: { idle: unknown; speak?: { tracks?: Array<{ slot?: string; keys?: unknown[] }> } };
+        })
+      : null;
+    const combSetsJson = existsSync(join(outfitCombinedOut, 'rig', 'sets.json'))
+      ? (readJsonFile(join(outfitCombinedOut, 'rig', 'sets.json')) as {
+          sets: Record<string, { slots: Record<string, string | null>; hides?: string[] }>;
+        })
+      : null;
+
+    const shaBonesBase = baseRigJson !== null ? shaJson(baseRigJson.bones) : '';
+    const shaBonesComb = combRigJson !== null ? shaJson(combRigJson.bones) : '';
+    const shaAxesBase = baseRigJson !== null ? shaJson(baseRigJson.invariants?.axes) : '';
+    const shaAxesComb = combRigJson !== null ? shaJson(combRigJson.invariants?.axes) : '';
+    const shaIdleBase = baseMotJson !== null ? shaJson(baseMotJson.animations.idle) : '';
+    const shaIdleComb = combMotJson !== null ? shaJson(combMotJson.animations.idle) : '';
+    const shaSkirtBase = baseRigJson !== null ? shaJson(baseRigJson.skins.default.bottomwear?.bottomwear) : '';
+    const shaSkirtComb = combRigJson !== null ? shaJson(combRigJson.skins.default.bottomwear?.bottomwear) : '';
+    const shaSkirtOutfitB = combRigJson !== null ? shaJson(combRigJson.skins.default.bottomwear?.outfit_b_bottomwear) : '';
+    const baseSkirtV = (baseRigJson?.skins.default.bottomwear?.bottomwear?.uvs?.length ?? 0) / 2;
+    const baseSkirtT = (baseRigJson?.skins.default.bottomwear?.bottomwear?.triangles?.length ?? 0) / 3;
+    const altSkirtV = (combRigJson?.skins.default.bottomwear?.outfit_b_bottomwear?.uvs?.length ?? 0) / 2;
+    const altSkirtT = (combRigJson?.skins.default.bottomwear?.outfit_b_bottomwear?.triangles?.length ?? 0) / 3;
+
+    // Composition & precedence: disjoint sets (outfit_b + a) commute; overlapping sets obey later-set precedence.
+    const outfitSlots: Record<string, string | null> = combSetsJson?.sets.outfit_b?.slots ?? {};
+    const outfitHides: string[] = combSetsJson?.sets.outfit_b?.hides ?? [];
+    const visASlots: Record<string, string | null> = combSetsJson?.sets.a?.slots ?? {};
+    const mergedOutfitThenA: Record<string, string | null> = { ...outfitSlots, ...visASlots };
+    const mergedAThenOutfit: Record<string, string | null> = { ...visASlots, ...outfitSlots };
+    const disjointCommutes =
+      mergedOutfitThenA.topwear === 'outfit_b_topwear' &&
+      JSON.stringify(outfitHides) === '["hairpin"]' &&
+      mergedOutfitThenA.mouth === 'a_mouth' &&
+      Object.keys(mergedOutfitThenA).every((k) => mergedOutfitThenA[k] === mergedAThenOutfit[k]);
+    const sleeveOverrideSlots: Record<string, string | null> = {
+      forearm_r: 'wave_forearm_r',
+      upperarm_r: 'wave_upperarm_r',
+    };
+    const mergedOutfitThenWave: Record<string, string | null> = { ...outfitSlots, ...sleeveOverrideSlots };
+    const mergedWaveThenOutfit: Record<string, string | null> = { ...sleeveOverrideSlots, ...outfitSlots };
+    const overlapPrecedenceHolds =
+      mergedOutfitThenWave.forearm_r === 'wave_forearm_r' &&
+      mergedWaveThenOutfit.forearm_r === 'outfit_b_forearm_r' &&
+      mergedOutfitThenWave.topwear === 'outfit_b_topwear';
+
+    // Trap 1: partial limb coverage or hiding limb segments (`CONFIG_LIMB_SET_JOINTS`).
+    const trap1Cfg = JSON.parse(JSON.stringify(outfitCombinedCfg)) as Record<string, unknown>;
+    ((trap1Cfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).parts = [
+      'topwear',
+      'bottomwear',
+      'shoes',
+      'upperarm_r',
+    ];
+    writeFileSync(join(outfitDir, 'trap_partial_limb.json'), `${JSON.stringify(trap1Cfg, null, 2)}\n`);
+    const trap1Run = runCli(buildArgs(outfitDir, join(outfitDir, 'out_t1'), 'trap_partial_limb.json'));
+
+    const trap1HidesCfg = JSON.parse(JSON.stringify(outfitCombinedCfg)) as Record<string, unknown>;
+    ((trap1HidesCfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).parts = [
+      'topwear',
+      'bottomwear',
+      'shoes',
+    ];
+    ((trap1HidesCfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).hides = [
+      'hairpin',
+      'upperarm_r',
+      'forearm_r',
+    ];
+    writeFileSync(join(outfitDir, 'trap_hides_limb.json'), `${JSON.stringify(trap1HidesCfg, null, 2)}\n`);
+    const trap1HidesRun = runCli(buildArgs(outfitDir, join(outfitDir, 'out_t1_hides'), 'trap_hides_limb.json'));
+
+    // Trap 2: wide sleeve swallowed into topwear (`ASSEMBLE_PART_OPAQUE`, `ASSEMBLE_LIMB_PIXELS`, `ASSEMBLE_LIMB_JOINT_ON_ART`).
+    writeRun(
+      join(outfitDir, 'full_b_speck'),
+      outfitBFull.map((l) => (l.name === 'handwear-r' ? { ...l, rects: [{ x0: 0, y0: 0, x1: 2, y1: 2, colour: outfitCAlt }] } : l)),
+    );
+    const trap2OpaqueCfg = JSON.parse(JSON.stringify(outfitCombinedCfg)) as Record<string, unknown>;
+    ((trap2OpaqueCfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).full = 'full_b_speck';
+    writeFileSync(join(outfitDir, 'trap_wide_opaque.json'), `${JSON.stringify(trap2OpaqueCfg, null, 2)}\n`);
+    const trap2OpaqueRun = runCli(buildArgs(outfitDir, join(outfitDir, 'out_t2_opaque'), 'trap_wide_opaque.json'));
+
+    writeRun(
+      join(outfitDir, 'full_b_wrist_only'),
+      outfitBFull.map((l) =>
+        l.name === 'handwear-r' ? { ...l, rects: [{ x0: 12, y0: 38, x1: 18, y1: 46, colour: outfitCAlt }] } : l,
+      ),
+    );
+    const trap2PixelsCfg = JSON.parse(JSON.stringify(outfitCombinedCfg)) as Record<string, unknown>;
+    ((trap2PixelsCfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).full = 'full_b_wrist_only';
+    writeFileSync(join(outfitDir, 'trap_wide_pixels.json'), `${JSON.stringify(trap2PixelsCfg, null, 2)}\n`);
+    const trap2PixelsRun = runCli(buildArgs(outfitDir, join(outfitDir, 'out_t2_pixels'), 'trap_wide_pixels.json'));
+
+    writeRun(
+      join(outfitDir, 'full_b_wide'),
+      outfitBFull.map((l) =>
+        l.name === 'handwear-r'
+          ? {
+              ...l,
+              rects: [
+                { x0: 12, y0: 22, x1: 18, y1: 30, colour: outfitCAlt },
+                { x0: 12, y0: 38, x1: 18, y1: 46, colour: outfitCAlt },
+              ],
+            }
+          : l,
+      ),
+    );
+    const trap2Cfg = JSON.parse(JSON.stringify(outfitCombinedCfg)) as Record<string, unknown>;
+    ((trap2Cfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).full = 'full_b_wide';
+    writeFileSync(join(outfitDir, 'trap_wide_sleeve.json'), `${JSON.stringify(trap2Cfg, null, 2)}\n`);
+    const trap2Run = runCli(buildArgs(outfitDir, join(outfitDir, 'out_t2'), 'trap_wide_sleeve.json'));
+
+    // Trap 2 resolution B: omitting unchanged arm segments from both `parts` and `hides` keeps the base arm and builds green.
+    const keepBaseArmCfg = JSON.parse(JSON.stringify(outfitCombinedCfg)) as Record<string, unknown>;
+    ((keepBaseArmCfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).full = 'full_b_wide';
+    ((keepBaseArmCfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).parts = [
+      'topwear',
+      'bottomwear',
+      'shoes',
+    ];
+    ((keepBaseArmCfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).hides = ['hairpin'];
+    writeFileSync(join(outfitDir, 'keep_base_arm_config.json'), `${JSON.stringify(keepBaseArmCfg, null, 2)}\n`);
+    const keepBaseArmRun = runCli(buildArgs(outfitDir, join(outfitDir, 'out_keep_arm'), 'keep_base_arm_config.json'));
+
+    // Trap 3: missing layer (`ASSEMBLE_ALT_INPUT_PRESENT`) and wrong canvas (`ASSEMBLE_ALT_CANVAS_SIZE`).
+    writeRun(
+      join(outfitDir, 'full_b_missing'),
+      outfitBFull.filter((l) => l.name !== 'footwear'),
+    );
+    const trap3Cfg = JSON.parse(JSON.stringify(outfitCombinedCfg)) as Record<string, unknown>;
+    ((trap3Cfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).full = 'full_b_missing';
+    writeFileSync(join(outfitDir, 'trap_missing_layer.json'), `${JSON.stringify(trap3Cfg, null, 2)}\n`);
+    const trap3Run = runCli(buildArgs(outfitDir, join(outfitDir, 'out_t3'), 'trap_missing_layer.json'));
+
+    writeFileSync(
+      join(outfitDir, 'painting_b_64.png'),
+      encodePngBytes(makeFlatPainting(64, 64, outfitCAlt)),
+    );
+    const trap4Cfg = JSON.parse(JSON.stringify(outfitCombinedCfg)) as Record<string, unknown>;
+    ((trap4Cfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).source = 'painting_b_64.png';
+    writeFileSync(join(outfitDir, 'trap_canvas_size.json'), `${JSON.stringify(trap4Cfg, null, 2)}\n`);
+    const trap4Run = runCli(buildArgs(outfitDir, join(outfitDir, 'out_t4'), 'trap_canvas_size.json'));
+
+    say(
+      'BU173_OUTFIT_TRANSACTION_KEEPS_BONES_DRAWN_FACE_AXIS_IDLE_RE_RUNS_CLOTHING_MESH_COMPOSES_VISEMES_AND_REFUSES_SLEEVE_TRAPS',
+      outfitBaseRun.status === 0 &&
+        outfitCombinedRun.status === 0 &&
+        outfitCheckSetRun.status === 0 &&
+        shaBonesBase.length === 64 &&
+        shaBonesBase === shaBonesComb &&
+        shaAxesBase === shaAxesComb &&
+        shaIdleBase === shaIdleComb &&
+        shaSkirtBase === shaSkirtComb &&
+        shaSkirtOutfitB !== shaSkirtBase &&
+        baseSkirtV === 24 &&
+        baseSkirtT === 30 &&
+        altSkirtV === 30 &&
+        altSkirtT === 40 &&
+        outfitDocText.includes(shaBonesBase) &&
+        outfitDocText.includes(shaAxesBase) &&
+        outfitDocText.includes(shaIdleBase) &&
+        outfitDocText.includes(shaSkirtBase) &&
+        outfitDocText.includes(shaSkirtOutfitB) &&
+        outfitDocText.includes('CONFIG_LIMB_SET_JOINTS') &&
+        outfitDocText.includes('ASSEMBLE_PART_OPAQUE') &&
+        outfitDocText.includes('ASSEMBLE_LIMB_PIXELS') &&
+        outfitDocText.includes('ASSEMBLE_LIMB_JOINT_ON_ART') &&
+        outfitDocText.includes('ASSEMBLE_ALT_INPUT_PRESENT') &&
+        outfitDocText.includes('ASSEMBLE_ALT_CANVAS_SIZE') &&
+        disjointCommutes &&
+        overlapPrecedenceHolds &&
+        trap1Run.status === 1 &&
+        trap1Run.out.includes('FAIL  CONFIG_LIMB_SET_JOINTS:') &&
+        trap1HidesRun.status === 1 &&
+        trap1HidesRun.out.includes('FAIL  CONFIG_LIMB_SET_JOINTS:') &&
+        trap2OpaqueRun.status === 1 &&
+        trap2OpaqueRun.out.includes('FAIL  ASSEMBLE_PART_OPAQUE:') &&
+        trap2PixelsRun.status === 1 &&
+        trap2PixelsRun.out.includes('FAIL  ASSEMBLE_LIMB_PIXELS:') &&
+        trap2Run.status === 1 &&
+        trap2Run.out.includes('FAIL  ASSEMBLE_LIMB_JOINT_ON_ART:') &&
+        keepBaseArmRun.status === 0 &&
+        trap3Run.status === 1 &&
+        trap3Run.out.includes('FAIL  ASSEMBLE_ALT_INPUT_PRESENT:') &&
+        trap4Run.status === 1 &&
+        trap4Run.out.includes('FAIL  ASSEMBLE_ALT_CANVAS_SIZE:'),
+      `base exit ${outfitBaseRun.status}, combined exit ${outfitCombinedRun.status}, check --set outfit_b exit ${outfitCheckSetRun.status}; kept sha256 match (bones=${shaBonesBase.slice(0, 12)}, axes=${shaAxesBase.slice(0, 12)}, idle=${shaIdleBase.slice(0, 12)}, baseSkirt=${shaSkirtBase.slice(0, 12)} ${baseSkirtV}v/${baseSkirtT}t vs outfit_b_bottomwear=${shaSkirtOutfitB.slice(0, 12)} ${altSkirtV}v/${altSkirtT}t); disjointCommutes=${disjointCommutes}, overlapPrecedence=${overlapPrecedenceHolds}; traps: partial limb exit ${trap1Run.status}, hides limb exit ${trap1HidesRun.status}, speck sleeve exit ${trap2OpaqueRun.status}, wrist-only sleeve exit ${trap2PixelsRun.status}, elbow-gap sleeve exit ${trap2Run.status} (keep base arm exit ${keepBaseArmRun.status}), missing layer exit ${trap3Run.status}, canvas size exit ${trap4Run.status}`,
+      'issue #474: docs/OUTFITS.md records the outfit transaction — base bones, drawn rest rotations, faceAxis, idle motion and base attachments stay byte-identical while clothing regions, limb cuts and skirt meshes re-run on the second painting, compose with viseme/gesture sets, and refuse partial/hidden limb coverage or swallowed wide sleeves by name',
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
