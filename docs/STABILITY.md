@@ -120,7 +120,7 @@ part name, `[i]` an entry of a list):
 - **generation.control.skeleton**, the pose file it names when it is no built-in — required: `width`, `height`, `points`
 - **seethrough** — required: `resolution`, `steps`, `seed`, `offload`; optional: `head_box`, `arm_split`
 - **seethrough.arm_split** — required: `order`, and one of `x` or `line` (issue #439)
-- **assemble** — required: `rig_scale`, `plan` (from plain `assemble` on); optional: `extend_below_crop`, `patches`, `cuts`, `alternates`
+- **assemble** — required: `rig_scale`, `plan` (from plain `assemble` on); optional: `extend_below_crop`, `patches`, `cuts`, `alternates`, `head_face_underfill`
 - **assemble.alternates[i]** — required: `name`; optional: `source`, `full`, `head`, `parts`, `hides`, `head_box`, `cuts`, `skeleton`, `drawn` (issues #454, #465)
 - **assemble.extend_below_crop[i]** — required: `part`, `run`, `tag`
 - **assemble.patches[i]** — required: `name`, `box`, `alpha`, `draw`

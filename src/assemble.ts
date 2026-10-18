@@ -236,7 +236,19 @@ export interface Geometry {
   armSplit?: ArmSplit;
   /** `generation.control.skeleton` (issue #490): the pose keypoints on the `latent` canvas, read for merged arm layers (`splitMergedArmRuns`). */
   keySkeleton?: ControlSkeleton;
+  /** `assemble.head_face_underfill` (issue #492): composite `full:face` under `head:face` on the head canvas to fill transparent bare-skin holes. */
+  headFaceUnderfill?: boolean;
 }
+
+/**
+ * Issue #492: minimum share of the full run's hole-filled `face` silhouette
+ * (mapped onto the head canvas) that the head run's `face` layer must cover
+ * (`alpha > OPAQUE_ALPHA_ABOVE = 8`). Across the 5 public examples the ratio is
+ * `0.804..0.986` and across the 6 non-hollow standees `0.816..0.974`, whereas
+ * the 3 hollow standee runs sit at `0.000..0.486` — a `0.486 ↔ 0.804` gap of
+ * `31.8` percentage points.
+ */
+export const HEAD_FACE_COVERAGE_FLOOR = 0.75;
 
 /**
  * The tags a single run must hold, each as a layer with an opaque pixel
@@ -331,6 +343,8 @@ export interface AssembleInput {
   armSplit?: ArmSplit;
   /** `generation.control.skeleton` (issue #490): the pose keypoints on the `latent` canvas, read for merged arm layers (`splitMergedArmRuns`). */
   keySkeleton?: ControlSkeleton;
+  /** `assemble.head_face_underfill` (issue #492): composite `full:face` under `head:face` on the head canvas to fill transparent bare-skin holes. */
+  headFaceUnderfill?: boolean;
 }
 
 /** The derived numbers of the two runs' geometry. */
@@ -1113,6 +1127,208 @@ export function layerToRig(canvas: Raster, frame: Frame, run: Run): Raster {
     out.data[i * 4 + 3] = Math.trunc(a);
   }
   return out;
+}
+
+/**
+ * Issue #492: warp a full-run layer (`resolution x resolution`) onto the head
+ * run's `resolution x resolution` canvas using the same premultiplied float32
+ * `warpAffine` round-trip as {@link layerToRig} (`head = (fullK / headK) * full
+ * - (headBox + fullPad) / headK`).
+ */
+export function fullLayerToHead(
+  canvas: Raster,
+  frame: Pick<Frame, 'fullK' | 'fullPad' | 'fullPadTop' | 'headBox' | 'headK'>,
+  resolution: number,
+): Raster {
+  const n = canvas.width * canvas.height;
+  let any = false;
+  for (let i = 0; i < n && !any; i++) if (canvas.data[i * 4 + 3] !== 0) any = true;
+  if (!any) return newRaster(resolution, resolution);
+  const pre = newFloatImage(canvas.width, canvas.height, 4);
+  for (let i = 0; i < n; i++) {
+    const a = canvas.data[i * 4 + 3];
+    const af = f32(a / 255);
+    for (let c = 0; c < 3; c++) pre.data[i * 4 + c] = f32(canvas.data[i * 4 + c] * af);
+    pre.data[i * 4 + 3] = a;
+  }
+  const k = frame.fullK / frame.headK;
+  const sx = f32(k);
+  const tx = f32(-(frame.headBox[0] + frame.fullPad) / frame.headK);
+  const ty = frame.fullPadTop === 0 && frame.headBox[1] === 0 ? 0 : f32(-(frame.headBox[1] + frame.fullPadTop) / frame.headK);
+  const wr = warpAffine(pre, { sx, sy: sx, tx, ty }, resolution, resolution, k < 1 ? 'bilinear' : 'bicubic');
+  const out = newRaster(resolution, resolution);
+  const eps = f32(1e-3);
+  const clip = (v: number): number => (v < 0 ? 0 : v > 255 ? 255 : v);
+  for (let i = 0; i < resolution * resolution; i++) {
+    const a = f32(clip(wr.data[i * 4 + 3]));
+    for (let c = 0; c < 3; c++) {
+      const v = f32(clip(wr.data[i * 4 + c]));
+      out.data[i * 4 + c] = a > 0 ? Math.trunc(clip(f32(f32(v * 255) / Math.max(a, eps)))) : 0;
+    }
+    out.data[i * 4 + 3] = Math.trunc(a);
+  }
+  return out;
+}
+
+/**
+ * Issue #492: compare the head run's `face` layer against the full run's
+ * hole-filled `face` silhouette on the head canvas (`resolution x resolution`),
+ * optionally compositing `full:face` under `head:face` when
+ * `config.assemble.head_face_underfill: true` is declared and the head run
+ * provides a `face` outline (`opaqueRunPx >= minPx`), and refusing with
+ * `SEETHROUGH_HEAD_RUN_HOLLOW` when the head run's `face` covers less than
+ * {@link HEAD_FACE_COVERAGE_FLOOR} (`0.75`) of the full run's face silhouette.
+ */
+function prepareHeadFace(
+  full: LayerSet,
+  head: LayerSet,
+  frame: Pick<Frame, 'fullK' | 'fullPad' | 'fullPadTop' | 'headBox' | 'headK'>,
+  resolution: number,
+  underfill: boolean,
+  minPx = PROPOSE_MIN_PX,
+): { head: LayerSet; underfillPx: number; underfillNote: string | null } {
+  if (full.source !== '' && full.source === head.source) return { head, underfillPx: 0, underfillNote: null };
+  const fullFaceLayer = full.layers.find((l) => l.name === 'face');
+  if (fullFaceLayer === undefined) return { head, underfillPx: 0, underfillNote: null };
+  const cleanedFull = cleanGhosts(placeLayer(fullFaceLayer, resolution));
+  let fullOpaqueRunPx = 0;
+  for (let i = 3; i < cleanedFull.canvas.data.length; i += 4) {
+    if (cleanedFull.canvas.data[i] > OPAQUE_ALPHA_ABOVE) fullOpaqueRunPx++;
+  }
+  if (fullOpaqueRunPx < minPx) return { head, underfillPx: 0, underfillNote: null };
+
+  const warpedFull = fullLayerToHead(cleanedFull.canvas, frame, resolution);
+  const rawFullMask = newMask(resolution, resolution);
+  for (let p = 0; p < resolution * resolution; p++) {
+    if (warpedFull.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) rawFullMask.data[p] = 1;
+  }
+  const fullSil = fillHoles(rawFullMask);
+  let fullPx = 0;
+  let minY = resolution;
+  let maxY = -1;
+  for (let y = 0; y < resolution; y++) {
+    for (let x = 0; x < resolution; x++) {
+      if (fullSil.data[y * resolution + x] === 1) {
+        fullPx++;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+  if (fullPx < minPx) return { head, underfillPx: 0, underfillNote: null };
+
+  const headFaceLayer = head.layers.find((l) => l.name === 'face');
+  const cleanedHead =
+    headFaceLayer === undefined
+      ? { canvas: newRaster(resolution, resolution), ghostPx: 0 }
+      : cleanGhosts(placeLayer(headFaceLayer, resolution));
+  let headRawOpaquePx = 0;
+  for (let i = 3; i < cleanedHead.canvas.data.length; i += 4) {
+    if (cleanedHead.canvas.data[i] > OPAQUE_ALPHA_ABOVE) headRawOpaquePx++;
+  }
+
+  const measureCoverage = (canvas: Raster): { headOv: number; cov: number; upCov: number; loCov: number } => {
+    const midY = (minY + maxY) / 2;
+    let fullUpPx = 0;
+    let fullLoPx = 0;
+    let headOv = 0;
+    let headUpOv = 0;
+    let headLoOv = 0;
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = 0; x < resolution; x++) {
+        const p = y * resolution + x;
+        if (fullSil.data[p] !== 1) continue;
+        if (y <= midY) fullUpPx++;
+        else fullLoPx++;
+        if (canvas.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) {
+          headOv++;
+          if (y <= midY) headUpOv++;
+          else headLoOv++;
+        }
+      }
+    }
+    return {
+      headOv,
+      cov: headOv / fullPx,
+      upCov: fullUpPx > 0 ? headUpOv / fullUpPx : 0,
+      loCov: fullLoPx > 0 ? headLoOv / fullLoPx : 0,
+    };
+  };
+
+  const rawStats = measureCoverage(cleanedHead.canvas);
+  let activeHead = head;
+  let activeCanvas = cleanedHead.canvas;
+  let underfillPx = 0;
+  let underfillNote: string | null = null;
+
+  if (underfill && headFaceLayer !== undefined && headRawOpaquePx >= minPx) {
+    const comp = newRaster(resolution, resolution);
+    let compOpaquePx = 0;
+    let x0 = resolution;
+    let y0 = resolution;
+    let x1 = -1;
+    let y1 = -1;
+    for (let y = 0; y < resolution; y++) {
+      for (let x = 0; x < resolution; x++) {
+        const p = y * resolution + x;
+        const i = p * 4;
+        const ta = cleanedHead.canvas.data[i + 3];
+        const ua = warpedFull.data[i + 3];
+        const a = Math.max(ta, ua);
+        if (a === 0) continue;
+        const tf = ta / 255;
+        for (let c = 0; c < 3; c++) {
+          comp.data[i + c] = Math.trunc(cleanedHead.canvas.data[i + c] * tf + warpedFull.data[i + c] * (1 - tf));
+        }
+        comp.data[i + 3] = a;
+        if (ta <= OPAQUE_ALPHA_ABOVE && a > OPAQUE_ALPHA_ABOVE) underfillPx++;
+        if (a > OPAQUE_ALPHA_ABOVE) compOpaquePx++;
+        if (x < x0) x0 = x;
+        if (y < y0) y0 = y;
+        if (x > x1) x1 = x;
+        if (y > y1) y1 = y;
+      }
+    }
+    if (x1 >= x0 && y1 >= y0) {
+      activeCanvas = comp;
+      const postStats = measureCoverage(comp);
+      const replacedLayer: Layer = {
+        ...headFaceLayer,
+        pixels: crop(comp, x0, y0, x1 - x0 + 1, y1 - y0 + 1),
+        left: x0,
+        top: y0,
+        right: x1 + 1,
+        bottom: y1 + 1,
+        opaquePx: compOpaquePx,
+      };
+      activeHead = {
+        ...head,
+        layers: head.layers.map((l) => (l.name === 'face' ? replacedLayer : l)),
+      };
+      if (underfillPx > 0) {
+        underfillNote = `face: head_face_underfill composited full:face under head:face on the head canvas, filling ${underfillPx} transparent px (${rawStats.headOv} / ${fullPx} px, ${(rawStats.cov * 100).toFixed(1)}% -> ${postStats.headOv} / ${fullPx} px, ${(postStats.cov * 100).toFixed(1)}%)`;
+      }
+    }
+  }
+
+  const finalStats = activeCanvas === cleanedHead.canvas ? rawStats : measureCoverage(activeCanvas);
+  if (finalStats.cov < HEAD_FACE_COVERAGE_FLOOR) {
+    const covStr = `${finalStats.headOv} / ${fullPx} px (${(finalStats.cov * 100).toFixed(1)}%, upper half ${(finalStats.upCov * 100).toFixed(1)}%, lower half ${(finalStats.loCov * 100).toFixed(1)}%)`;
+    const floorStr = `${(HEAD_FACE_COVERAGE_FLOOR * 100).toFixed(1)}% (HEAD_FACE_COVERAGE_FLOOR = ${HEAD_FACE_COVERAGE_FLOOR})`;
+    const detail =
+      headFaceLayer === undefined || headRawOpaquePx < minPx
+        ? `${headFaceLayer === undefined ? 'holds no layer "face"' : `holds ${headRawOpaquePx} opaque px (alpha > ${OPAQUE_ALPHA_ABOVE}, below PROPOSE_MIN_PX = ${minPx})`}, covering ${covStr} of the full run's "face" silhouette on the head canvas (${fullOpaqueRunPx} full-run px); at least ${floorStr} is required — the head run omitted the face layer (so config.assemble.head_face_underfill cannot supply a jawline); re-run See-through with a different config.seethrough.seed`
+        : `covers ${covStr} of the full run's "face" silhouette on the head canvas (${headRawOpaquePx} head-run px vs ${fullOpaqueRunPx} full-run px) — See-through left bare skin inside the face silhouette transparent; at least ${floorStr} is required — re-run See-through with a different config.seethrough.seed, or set "head_face_underfill": true in config.assemble to composite full:face under head:face on the head canvas`;
+    refuseIfAny([
+      {
+        code: 'SEETHROUGH_HEAD_RUN_HOLLOW',
+        object: `the head run (${head.source}) layer "face"`,
+        detail,
+      },
+    ]);
+  }
+
+  return { head: activeHead, underfillPx, underfillNote };
 }
 
 /**
@@ -2947,6 +3163,8 @@ export interface AssembleResult {
   hidden: HiddenArtUse[];
   seamRule: SeamRule;
   projectRule: ProjectRule;
+  /** Issue #492: head-canvas pixels filled by `config.assemble.head_face_underfill: true` when > 0. */
+  headFaceUnderfillPx?: number;
 }
 
 /** A hidden-art layer of a run (issue #359) and what read it: `cuts[i].under`, or a limb segment's cap; none is said. */
@@ -3105,8 +3323,16 @@ export function assemble(input: AssembleInput): AssembleResult {
   const fullArmSplit = input.armSplit === undefined ? fullPadded : applyArmSplit(fullPadded, input.resolution, input.armSplit);
   // Issue #490: when generation.control.skeleton is present, split merged arm layers (or refuse when sleeve and drape share one colour).
   const full = input.keySkeleton === undefined ? fullArmSplit : splitMergedArmRuns(fullArmSplit, input.resolution, frame, source.width, source.height, input.keySkeleton);
-  const head = single ? full : input.head;
   const plan = mergedArmSplitPlan(armSplitPlan(input.plan, input.armSplit), full);
+  // Issue #492: in two-run mode, check that head:face covers >= 75% of full:face's silhouette on the head canvas
+  // (after applying head_face_underfill when declared). Skip only on a single-run subset (a mouth-only or clothes-only alternate).
+  const checkHeadFace =
+    !single &&
+    (plan.some(([, r, t]) => r === 'head' && t === 'face') || (plan.some(([, r]) => r === 'full') && plan.some(([, r]) => r === 'head')));
+  const headFacePrep = checkHeadFace
+    ? prepareHeadFace(full, input.head, frame, input.resolution, input.headFaceUnderfill === true)
+    : { head: single ? full : input.head, underfillPx: 0, underfillNote: null };
+  const head = headFacePrep.head;
   const padRecord = singleRunPadRecord(single, source.width, source.height, input.resolution, frame);
   if (single) checkSingleRun(full, plan, extend);
   checkPlanAgainstRuns(plan, extend, full, head);
@@ -3603,6 +3829,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     hidden: [...hiddenUses].map(([layer, readBy]) => ({ layer, readBy })),
     seamRule,
     projectRule,
+    ...(headFacePrep.underfillPx > 0 ? { headFaceUnderfillPx: headFacePrep.underfillPx } : {}),
   };
 }
 
@@ -4100,7 +4327,12 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
   // Issue #490: when generation.control.skeleton is present, split merged arm layers (or refuse when sleeve and drape share one colour).
   const mergedSplit = g.keySkeleton === undefined ? { set: fullArmSplit, notes: [] as string[] } : splitMergedArmRunsWithNotes(fullArmSplit, g.resolution, frame, g.sourceW, g.sourceH, g.keySkeleton);
   const full = mergedSplit.set;
-  const head = g.single === true ? full : head0;
+  // Issue #492: check (and when head_face_underfill: true, repair) a hollow head-run face against full:face mapped into the head canvas.
+  const headFacePrep =
+    g.single === true
+      ? { head: full, underfillPx: 0, underfillNote: null as string | null }
+      : prepareHeadFace(full, head0, frame, g.resolution, g.headFaceUnderfill === true, minPx);
+  const head = headFacePrep.head;
   const runs = { full: runLayers(full, g.resolution), head: runLayers(head, g.resolution) };
   const find = (run: Run, tag: string): RunLayer | undefined => runs[run].find((l) => l.tag === tag);
   const figures: Record<Run, LayerFigures[]> = { full: layerFigures(full), head: layerFigures(head) };
@@ -4146,7 +4378,7 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
     }
     plan.push([t.startsWith('handwear') && hw.length === 1 ? 'sleeves' : aliasOf(t), 'full', t]);
   }
-  const notes: string[] = [...mergedSplit.notes];
+  const notes: string[] = [...mergedSplit.notes, ...(headFacePrep.underfillNote === null ? [] : [headFacePrep.underfillNote])];
   const headArea = (frame.headK * frame.S) ** 2;
   const fullArea = (frame.fullK * frame.S) ** 2;
   for (const t of ['headwear', 'earwear']) {
@@ -4353,6 +4585,7 @@ export function stageFields(
   single?: boolean;
   armSplit?: ArmSplit;
   keySkeleton?: ControlSkeleton;
+  headFaceUnderfill?: boolean;
 } {
   const problems: Problem[] = [];
   if (cfg.seethrough === undefined) {
@@ -4370,6 +4603,7 @@ export function stageFields(
     ...(single !== null ? { single: true } : {}),
     ...(st.arm_split === undefined ? {} : { armSplit: st.arm_split }),
     ...(keySkeleton === undefined ? {} : { keySkeleton }),
+    ...(cfg.assemble.head_face_underfill === undefined ? {} : { headFaceUnderfill: cfg.assemble.head_face_underfill }),
     rigScale: cfg.assemble.rig_scale,
     plan: cfg.assemble.plan,
     extend: cfg.assemble.extend_below_crop ?? [],
@@ -4390,18 +4624,19 @@ export function stageFields(
 export function proposeFields(
   cfg: EarlyConfig,
   single: { w: number; h: number } | null = null,
-): { resolution: number; headBox: [number, number, number, number]; rigScale: number; single?: boolean; armSplit?: ArmSplit; keySkeleton?: ControlSkeleton } {
+): { resolution: number; headBox: [number, number, number, number]; rigScale: number; single?: boolean; armSplit?: ArmSplit; keySkeleton?: ControlSkeleton; headFaceUnderfill?: boolean } {
   const armSplit = cfg.seethrough.arm_split === undefined ? {} : { armSplit: cfg.seethrough.arm_split };
   const keySkeleton = controlSkeletonOf(cfg);
   const skelField = keySkeleton === undefined ? {} : { keySkeleton };
+  const underfillField = cfg.assemble.head_face_underfill === undefined ? {} : { headFaceUnderfill: cfg.assemble.head_face_underfill };
   if (single !== null) {
     refuseIfAny(singleRunHeadBoxProblems(cfg.seethrough));
-    return { resolution: cfg.seethrough.resolution, headBox: singleRunHeadBox(single.w, single.h, cfg.seethrough.resolution), rigScale: cfg.assemble.rig_scale, single: true, ...armSplit, ...skelField };
+    return { resolution: cfg.seethrough.resolution, headBox: singleRunHeadBox(single.w, single.h, cfg.seethrough.resolution), rigScale: cfg.assemble.rig_scale, single: true, ...armSplit, ...skelField, ...underfillField };
   }
   if (cfg.seethrough.head_box === undefined) {
     refuseIfAny([{ code: 'ASSEMBLE_FIELD_PRESENT', object: 'config.seethrough.head_box', detail: 'is absent; the plan is proposed from both runs, and the head run cannot be placed on the painting without the box it was cropped from — run `propose --head-box` first' }]);
   }
-  return { resolution: cfg.seethrough.resolution, headBox: cfg.seethrough.head_box as [number, number, number, number], rigScale: cfg.assemble.rig_scale, ...armSplit, ...skelField };
+  return { resolution: cfg.seethrough.resolution, headBox: cfg.seethrough.head_box as [number, number, number, number], rigScale: cfg.assemble.rig_scale, ...armSplit, ...skelField, ...underfillField };
 }
 
 /**

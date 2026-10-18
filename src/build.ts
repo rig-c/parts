@@ -492,6 +492,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         ...(Object.keys(altLimbs).length > 0 ? { limbs: altLimbs, bones: altBones } : {}),
         ...(fields.scene === undefined ? {} : { scene: fields.scene }),
         ...(fields.armSplit !== undefined && altPlan.some((e) => e[1] === 'full' && (e[2] === 'handwear-r' || e[2] === 'handwear-l')) ? { armSplit: fields.armSplit } : {}),
+        ...(fields.headFaceUnderfill === undefined ? {} : { headFaceUnderfill: fields.headFaceUnderfill }),
         seamRule: input.seam,
         projectRule: input.project,
       });
@@ -569,10 +570,11 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const pad = result.parts.single_run_pad;
   if (pad !== undefined) log(singleRunPadLine(input.full, pad));
   for (const p of result.parts.parts) {
+    const underfillSuffix = p.from === 'head:face' && (result.headFaceUnderfillPx ?? 0) > 0 ? ` underfill=${result.headFaceUnderfillPx}px(full:face)` : '';
     log(
       `  ${p.name.padEnd(11)} ${p.from.padEnd(16)} ${`${p.w}x${p.h}`.padEnd(9)} @${String(p.x).padStart(4)},${String(p.y).padStart(4)} ` +
         `op=${String(p.opaque_px).padStart(6)} vis=${String(p.visible_px).padStart(6)} src=${String(p.source_px_taken).padStart(6)}/${String(p.projected_core_px).padStart(6)} ` +
-        `unproj=${String(p.visible_not_projected_px).padStart(5)} drift=${String(p.refused_drift_px).padStart(5)} ${driftShare(p.refused_drift_px, p.projected_core_px)} merged=${p.merged_px} seam=${p.seam_override_px}`,
+        `unproj=${String(p.visible_not_projected_px).padStart(5)} drift=${String(p.refused_drift_px).padStart(5)} ${driftShare(p.refused_drift_px, p.projected_core_px)} merged=${p.merged_px} seam=${p.seam_override_px}${underfillSuffix}`,
     );
   }
   // Issue #256: one line per part from an author-made layer, so it never reads as See-through's. None without one.
