@@ -78,6 +78,7 @@ import { encodeGif } from './gif.ts';
 import { CONTROL_SUFFIX, withAnimations } from './motion.ts';
 import type { PaletteError } from './palette.ts';
 import { type LayerSet, readLayers } from './layers.ts';
+import { poseBoneEntriesForDrawn } from './limbs.ts';
 import { type AlternatePartsRecord, type PartRecord, readParts, type RecompositeRecord, type SingleRunPad, tagOf, writeParts } from './parts.ts';
 import { encodePngBytes, readPng, writePng } from './raster/png.ts';
 import type { Raster } from './raster/types.ts';
@@ -444,24 +445,68 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     const altCuts: Cut[] = rawCuts.map((c) => ({ ...c, draw: remapDraw(c.draw) }));
     const altUnder = alt.cuts !== undefined ? readUnders(input.config, altCuts) : altCuts.map(() => null);
     const altHeadBox = alt.head_box ?? (altRuns.single ? singleRunHeadBox(altSrc.width, altSrc.height, fields.resolution) : fields.headBox);
-    const altRes = assemble({
-      source: altSrc,
-      full: altRuns.full,
-      head: altRuns.head,
-      resolution: fields.resolution,
-      headBox: altHeadBox,
-      rigScale: fields.rigScale,
-      plan: altPlan,
-      extend: altExtend,
-      patches: altPatches,
-      cuts: altCuts,
-      under: altUnder,
-      ...(Object.keys(altLimbs).length > 0 ? { limbs: altLimbs, bones: fields.bones } : {}),
-      ...(fields.scene === undefined ? {} : { scene: fields.scene }),
-      ...(fields.armSplit !== undefined && altPlan.some((e) => e[1] === 'full' && (e[2] === 'handwear-r' || e[2] === 'handwear-l')) ? { armSplit: fields.armSplit } : {}),
-      seamRule: input.seam,
-      projectRule: input.project,
-    });
+    let altBones = fields.bones;
+    if (Object.keys(altLimbs).length > 0 && fields.bones !== undefined && (altSkeleton !== undefined || alt.drawn !== undefined)) {
+      const coveredLimbBones = new Set(Object.values(altLimbs).flatMap((l) => l.segments.map((sg) => sg.bone)));
+      const limbDrawn: Record<string, number> = {};
+      if (altSkeleton !== undefined) {
+        const deg = (a: readonly [number, number], b: readonly [number, number]): number =>
+          (Math.atan2(-(b[1] - a[1]), b[0] - a[0]) * 180) / Math.PI;
+        const skPairs: ReadonlyArray<readonly [string, readonly [number, number], readonly [number, number]]> = [
+          ['sleeve_r0', altSkeleton.r_shoulder, altSkeleton.r_elbow],
+          ['sleeve_r1', altSkeleton.r_elbow, altSkeleton.r_wrist],
+          ['arm_r0', altSkeleton.r_shoulder, altSkeleton.r_elbow],
+          ['arm_r1', altSkeleton.r_elbow, altSkeleton.r_wrist],
+          ['sleeve_l0', altSkeleton.l_shoulder, altSkeleton.l_elbow],
+          ['sleeve_l1', altSkeleton.l_elbow, altSkeleton.l_wrist],
+          ['arm_l0', altSkeleton.l_shoulder, altSkeleton.l_elbow],
+          ['arm_l1', altSkeleton.l_elbow, altSkeleton.l_wrist],
+          ['leg_r0', altSkeleton.r_hip, altSkeleton.r_knee],
+          ['leg_r1', altSkeleton.r_knee, altSkeleton.r_ankle],
+          ['leg_l0', altSkeleton.l_hip, altSkeleton.l_knee],
+          ['leg_l1', altSkeleton.l_knee, altSkeleton.l_ankle],
+        ];
+        for (const [bName, a, b] of skPairs) {
+          if (alt.parts === undefined || coveredLimbBones.has(bName)) limbDrawn[bName] = deg(a, b);
+        }
+      }
+      if (alt.drawn !== undefined) {
+        for (const [bName, degVal] of Object.entries(alt.drawn)) limbDrawn[bName] = degVal;
+      }
+      altBones = poseBoneEntriesForDrawn(fields.bones, limbDrawn);
+    }
+    let altRes: ReturnType<typeof assemble>;
+    try {
+      altRes = assemble({
+        source: altSrc,
+        full: altRuns.full,
+        head: altRuns.head,
+        resolution: fields.resolution,
+        headBox: altHeadBox,
+        rigScale: fields.rigScale,
+        plan: altPlan,
+        extend: altExtend,
+        patches: altPatches,
+        cuts: altCuts,
+        under: altUnder,
+        ...(Object.keys(altLimbs).length > 0 ? { limbs: altLimbs, bones: altBones } : {}),
+        ...(fields.scene === undefined ? {} : { scene: fields.scene }),
+        ...(fields.armSplit !== undefined && altPlan.some((e) => e[1] === 'full' && (e[2] === 'handwear-r' || e[2] === 'handwear-l')) ? { armSplit: fields.armSplit } : {}),
+        seamRule: input.seam,
+        projectRule: input.project,
+      });
+    } catch (err) {
+      if (err instanceof PartsError) {
+        for (const p of err.problems) {
+          altProblems.push({
+            ...p,
+            object: `${p.object} (alternate set "${alt.name}")`,
+          });
+        }
+        continue;
+      }
+      throw err;
+    }
     const keptImages = altRes.images
       .filter(({ record }) => coveredSet.has(record.name))
       .map(({ record, image }) => ({ name: `${alt.name}_${record.name}`, image }));

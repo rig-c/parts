@@ -1007,8 +1007,12 @@ export function deriveAlternateDrawn(
   const limbPairs: ReadonlyArray<readonly [string, readonly [number, number], readonly [number, number]]> = [
     ['sleeve_r0', pts.r_shoulder, pts.r_elbow],
     ['sleeve_r1', pts.r_elbow, pts.r_wrist],
+    ['arm_r0', pts.r_shoulder, pts.r_elbow],
+    ['arm_r1', pts.r_elbow, pts.r_wrist],
     ['sleeve_l0', pts.l_shoulder, pts.l_elbow],
     ['sleeve_l1', pts.l_elbow, pts.l_wrist],
+    ['arm_l0', pts.l_shoulder, pts.l_elbow],
+    ['arm_l1', pts.l_elbow, pts.l_wrist],
     ['leg_r0', pts.r_hip, pts.r_knee],
     ['leg_r1', pts.r_knee, pts.r_ankle],
     ['leg_l0', pts.l_hip, pts.l_knee],
@@ -2109,17 +2113,44 @@ export function buildRig(
     for (const [altIdx, alt] of parts.alternates.entries()) {
       const cfgAlt = cfg.alternates?.find((a) => a.name === alt.name);
       const explicitDrawn = alt.drawn ?? cfgAlt?.drawn;
+      const isSubsetSet = alt.parts !== undefined || cfgAlt?.parts !== undefined;
+      let coveredBones: Set<string> | null = null;
+      if (isSubsetSet) {
+        coveredBones = new Set<string>();
+        for (const pName of Object.keys(alt.slots)) {
+          if (pName in cfg.regions) coveredBones.add(cfg.regions[pName]);
+          for (const s of meshSegments.get(pName) ?? []) coveredBones.add(s.bone);
+          const m = cfg.meshes[pName];
+          if (m !== undefined) {
+            if ('contour' in m) for (const rg of contourRegionsOf(m.contour)) coveredBones.add(rg.bone);
+            if ('auto' in m) for (const rg of m.auto.regions ?? []) if (weightsABone(rg)) coveredBones.add(rg.bone);
+          }
+        }
+      }
       if (explicitDrawn !== undefined) {
         for (const boneName of Object.keys(explicitDrawn)) {
           if (!B.has(boneName)) {
             fail('RIG_NAME_RESOLVES', `config.alternates[${altIdx}].drawn.${boneName}`, `names the bone "${boneName}", which config.bones does not declare`);
+          } else if (coveredBones !== null && !coveredBones.has(boneName)) {
+            const coveredList = [...coveredBones].map((b) => `"${b}"`).join(', ') || 'none';
+            fail(
+              'RIG_SET_COVERS_BONE',
+              `config.assemble.alternates[${altIdx}].drawn.${boneName}`,
+              `names "${boneName}", which alternate set "${alt.name}" does not cover (covered bones: ${coveredList}); a subset set may state drawn angles only for the bones its covered parts ride`,
+            );
           }
         }
       }
       refuseIfAny(problems);
-      const derived = alt.skeleton === undefined ? undefined : deriveAlternateDrawn(alt.skeleton, B, turn, CX, H);
+      const rawDerived = alt.skeleton === undefined ? undefined : deriveAlternateDrawn(alt.skeleton, B, turn, CX, H);
+      const derived =
+        rawDerived === undefined
+          ? undefined
+          : coveredBones === null
+            ? rawDerived
+            : Object.fromEntries(Object.entries(rawDerived).filter(([k]) => coveredBones.has(k)));
       const drawn: Record<string, number> | undefined =
-        derived === undefined && explicitDrawn === undefined
+        (derived === undefined || Object.keys(derived).length === 0) && explicitDrawn === undefined
           ? undefined
           : {
               ...(derived ?? {}),
@@ -2365,7 +2396,7 @@ export function buildRig(
  * keys against `rig.slots` and `sets.json`. When no key carries `"set"`, nothing
  * is touched and no byte moves.
  */
-function expandSetAttachmentKeys(rig: RigSpec, sets: AttachmentSetsFile | undefined, merged: MotionSpec): void {
+export function expandSetAttachmentKeys(rig: RigSpec, sets: AttachmentSetsFile | undefined, merged: MotionSpec): void {
   let hasAnySetKey = false;
   for (const [animName, anim] of Object.entries(merged.animations)) {
     if (animName === 'idle' || typeof anim !== 'object' || anim === null || Array.isArray(anim)) continue;
@@ -2388,8 +2419,28 @@ function expandSetAttachmentKeys(rig: RigSpec, sets: AttachmentSetsFile | undefi
   if (!hasAnySetKey) return;
 
   const baseSlots = new Map<string, string | null>();
+  const slotBoneMap = new Map<string, string>();
   for (const sl of rig.slots) {
     baseSlots.set(sl.name, sl.attachment ?? null);
+    const rawBone = sl.bone.startsWith(`${sl.name}__`) ? sl.bone.slice(`${sl.name}__`.length) : sl.bone;
+    slotBoneMap.set(sl.name, rawBone);
+  }
+  const setupRotByBone = new Map<string, number>();
+  for (const b of rig.bones) setupRotByBone.set(b.name, b.rotation ?? 0);
+  const setBoneDeltas = new Map<string, Map<string, number>>();
+  if (sets !== undefined) {
+    for (const [setName, entry] of Object.entries(sets.sets)) {
+      if (entry.drawn === undefined || Object.keys(entry.drawn).length === 0) continue;
+      const posed = poseRigBonesForDrawn(rig.bones, entry.drawn, rig.stops);
+      const deltas = new Map<string, number>();
+      for (const b of posed) {
+        if (Object.hasOwn(entry.drawn, b.name)) {
+          const d = places(normaliseDegrees((b.rotation ?? 0) - (setupRotByBone.get(b.name) ?? 0)));
+          deltas.set(b.name, d);
+        }
+      }
+      setBoneDeltas.set(setName, deltas);
+    }
   }
   const declaredSets =
     sets === undefined || Object.keys(sets.sets).length === 0
@@ -2403,6 +2454,14 @@ function expandSetAttachmentKeys(rig: RigSpec, sets: AttachmentSetsFile | undefi
     if (animName === 'idle' || typeof anim !== 'object' || anim === null || Array.isArray(anim)) continue;
     const tracks = (anim as Record<string, unknown>).tracks;
     if (!Array.isArray(tracks)) continue;
+    const existingRotateBones = new Set<string>();
+    for (const tr of tracks) {
+      if (typeof tr === 'object' && tr !== null && !Array.isArray(tr)) {
+        const r = tr as Record<string, unknown>;
+        if (r.property === 'rotate' && typeof r.bone === 'string') existingRotateBones.add(r.bone);
+      }
+    }
+    const synthesizedRotate = new Map<string, Array<Record<string, unknown>>>();
     tracks.forEach((tr, ti) => {
       if (typeof tr !== 'object' || tr === null || Array.isArray(tr)) return;
       const trRec = tr as Record<string, unknown>;
@@ -2410,6 +2469,9 @@ function expandSetAttachmentKeys(rig: RigSpec, sets: AttachmentSetsFile | undefi
       if (!Array.isArray(keys)) return;
       const slot = typeof trRec.slot === 'string' && trRec.slot !== '' ? trRec.slot : null;
       const isAttachmentTrack = trRec.property === 'attachment' && slot !== null;
+      const slotBone = slot === null ? undefined : slotBoneMap.get(slot);
+      let trackTouchesDrawnBone = false;
+      const rawSetKeysForBone: Array<{ t: unknown; setVal: string | null }> = [];
       keys.forEach((k, ki) => {
         if (typeof k !== 'object' || k === null || Array.isArray(k) || !('set' in k)) return;
         const kRec = k as Record<string, unknown>;
@@ -2442,6 +2504,7 @@ function expandSetAttachmentKeys(rig: RigSpec, sets: AttachmentSetsFile | undefi
             return;
           }
           resolvedV = baseSlots.get(slot) ?? null;
+          rawSetKeysForBone.push({ t: kRec.t, setVal: null });
         } else if (typeof setVal !== 'string' || setVal === '') {
           problems.push({
             code: 'CONFIG_FIELD_TYPE',
@@ -2472,6 +2535,10 @@ function expandSetAttachmentKeys(rig: RigSpec, sets: AttachmentSetsFile | undefi
             });
             return;
           }
+          if (slotBone !== undefined && setBoneDeltas.get(setVal)?.has(slotBone) === true) {
+            trackTouchesDrawnBone = true;
+          }
+          rawSetKeysForBone.push({ t: kRec.t, setVal });
         }
         const expanded: Record<string, unknown> = {};
         for (const [prop, val] of Object.entries(kRec)) {
@@ -2480,7 +2547,25 @@ function expandSetAttachmentKeys(rig: RigSpec, sets: AttachmentSetsFile | undefi
         }
         keys[ki] = expanded;
       });
+      if (
+        problems.length === 0 &&
+        trackTouchesDrawnBone &&
+        slotBone !== undefined &&
+        !existingRotateBones.has(slotBone) &&
+        !synthesizedRotate.has(slotBone)
+      ) {
+        const rotKeys = rawSetKeysForBone.map((rk, idx) => {
+          const d = rk.setVal === null ? 0 : (setBoneDeltas.get(rk.setVal)?.get(slotBone) ?? 0);
+          return idx + 1 < rawSetKeysForBone.length ? { t: rk.t, v: [d], curve: 'stepped' } : { t: rk.t, v: [d] };
+        });
+        synthesizedRotate.set(slotBone, rotKeys);
+      }
     });
+    if (problems.length === 0) {
+      for (const [boneName, rotKeys] of synthesizedRotate) {
+        tracks.push({ bone: boneName, property: 'rotate', keys: rotKeys });
+      }
+    }
   }
   refuseIfAny(problems);
 }

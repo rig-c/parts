@@ -1210,13 +1210,14 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
     if ('scene' in t) checkScene(c, t.scene);
     // Issue #349: the limbs' joints are their bones' origins, so the bones are read with them, and only then.
     let limbs: LimbNames | null = null;
+    let names: { bones: Set<string>; chains: Map<string, number>; parents: Map<string, string> } | null = null;
     if ('limbs' in t) {
       if (!('bones' in t)) c.fail('CONFIG_FIELD_PRESENT', 'config.bones', 'is absent; config.limbs names bones, and each joint is its bone\'s origin, so assemble reads the bones with the limbs');
-      const names = 'bones' in t ? checkBones(c, t.bones) : null;
+      names = 'bones' in t ? checkBones(c, t.bones) : null;
       limbs = checkLimbs(c, t.limbs, made, names);
     }
     if (isPlainObject(t.assemble) && 'alternates' in t.assemble) {
-      checkAlternates(c, t.assemble.alternates, made, limbs, null);
+      checkAlternates(c, t.assemble.alternates, made, limbs, names?.bones ?? null, names?.chains ?? null, t.regions, t.meshes);
     }
   }
   if ('cloth' in t) checkCloth(c, t.cloth);
@@ -1368,7 +1369,7 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
   const names = 'bones' in t ? checkBones(c, t.bones) : { bones: new Set<string>([ROOT_BONE]), chains: new Map<string, number>(), parents: new Map<string, string>() };
   const limbs = 'limbs' in t ? checkLimbs(c, t.limbs, { parts, patches, cuts }, 'bones' in t ? names : null) : null;
   if (isPlainObject(t.assemble) && 'alternates' in t.assemble) {
-    checkAlternates(c, t.assemble.alternates, { parts, patches, cuts }, limbs, names.bones);
+    checkAlternates(c, t.assemble.alternates, { parts, patches, cuts }, limbs, names.bones, names.chains, t.regions, t.meshes);
   }
   if ('meshes' in t) checkMeshes(c, t.meshes, names.bones, names.chains);
   if ('regions' in t) checkRegions(c, t.regions, names.bones);
@@ -1902,10 +1903,18 @@ function checkAlternates(
   made: { parts: string[]; patches: string[]; cuts: string[] },
   limbs: LimbNames | null,
   bones: Set<string> | null = null,
+  chains: Map<string, number> | null = null,
+  regions: Json = undefined,
+  meshes: Json = undefined,
 ): void {
   const p = 'config.assemble.alternates';
   if (!c.array(p, v, true)) return;
-  const allSlots = new Set<string>([...made.parts, ...made.patches, ...made.cuts, ...(limbs?.parts.keys() ?? [])]);
+  const allSlots = new Set<string>([
+    ...made.parts.filter((n) => !(limbs?.consumed.has(n) ?? false)),
+    ...made.patches,
+    ...made.cuts,
+    ...(limbs?.parts.keys() ?? []),
+  ]);
   const seenNames = new Map<string, number>();
   (v as Json[]).forEach((entry, i) => {
     const at = `${p}[${i}]`;
@@ -1934,28 +1943,134 @@ function checkAlternates(
     }
     if ('head_box' in e) checkHeadBox(c, `${at}.head_box`, e.head_box);
     const altCuts = 'cuts' in e ? checkCuts(c, e.cuts, made.parts, [], `${at}.cuts`) : [];
-    const validParts = new Set<string>([...allSlots, ...altCuts]);
-    if ('parts' in e && c.array(`${at}.parts`, e.parts, true)) {
-      const seen = new Set<string>();
-      (e.parts as Json[]).forEach((pn, k) => {
-        if (!c.string(`${at}.parts[${k}]`, pn)) return;
-        if (!validParts.has(pn)) {
-          c.fail('CONFIG_NAME_RESOLVES', `${at}.parts[${k}]`, `is ${show(pn)}; a slot of the base rig (or a part made by this alternate's cuts) is required`);
-        } else if (seen.has(pn)) {
-          c.fail('CONFIG_PART_UNIQUE', `${at}.parts[${k}]`, `repeats "${pn}"; each covered part is named once`);
-        } else seen.add(pn);
+    let cutsConsumedLimb = false;
+    if (limbs !== null && 'cuts' in e && Array.isArray(e.cuts)) {
+      e.cuts.forEach((ce, ci) => {
+        if (!isPlainObject(ce) || typeof ce.from !== 'string') return;
+        const byLimb = limbs.consumed.get(ce.from);
+        if (byLimb !== undefined) {
+          cutsConsumedLimb = true;
+          const segList = (limbs.chains.get(byLimb)?.parts ?? []).map((s) => `"${s}"`).join(', ');
+          c.fail(
+            'CONFIG_LIMB_SET_JOINTS',
+            `${at}.cuts[${ci}].from`,
+            `cuts "${ce.from}", which config.limbs.${byLimb} cuts at the base's joints into ${segList}; a gesture set over a limb chain is cut at the base's joints and may not declare its own polygon cuts for that layer`,
+          );
+        }
       });
     }
+    const validParts = new Set<string>([...allSlots, ...altCuts]);
+    const seenParts = new Set<string>();
+    if ('parts' in e && c.array(`${at}.parts`, e.parts, true)) {
+      (e.parts as Json[]).forEach((pn, k) => {
+        if (!c.string(`${at}.parts[${k}]`, pn)) return;
+        const byLimb = limbs?.consumed.get(pn);
+        if (byLimb !== undefined) {
+          const segList = (limbs?.chains.get(byLimb)?.parts ?? []).map((s) => `"${s}"`).join(', ');
+          c.fail(
+            'CONFIG_LIMB_SET_JOINTS',
+            `${at}.parts[${k}]`,
+            `names "${pn}", which config.limbs.${byLimb} cuts at the base's joints into ${segList}; a gesture set covers the limb chain's segment parts at the base's joints, not the unsplit layer`,
+          );
+        } else if (!validParts.has(pn)) {
+          c.fail('CONFIG_NAME_RESOLVES', `${at}.parts[${k}]`, `is ${show(pn)}; a slot of the base rig (or a part made by this alternate's cuts) is required`);
+        } else if (seenParts.has(pn)) {
+          c.fail('CONFIG_PART_UNIQUE', `${at}.parts[${k}]`, `repeats "${pn}"; each covered part is named once`);
+        } else seenParts.add(pn);
+      });
+    }
+    const seenHides = new Set<string>();
     if ('hides' in e && c.array(`${at}.hides`, e.hides, false)) {
-      const seen = new Set<string>();
       (e.hides as Json[]).forEach((hn, k) => {
         if (!c.string(`${at}.hides[${k}]`, hn)) return;
-        if (!allSlots.has(hn)) {
+        const byLimb = limbs?.consumed.get(hn);
+        if (byLimb !== undefined) {
+          const segList = (limbs?.chains.get(byLimb)?.parts ?? []).map((s) => `"${s}"`).join(', ');
+          c.fail(
+            'CONFIG_LIMB_SET_JOINTS',
+            `${at}.hides[${k}]`,
+            `names "${hn}", which config.limbs.${byLimb} cuts at the base's joints into ${segList}; a gesture set covers the limb chain's segment parts at the base's joints, not the unsplit layer`,
+          );
+        } else if (!allSlots.has(hn)) {
           c.fail('CONFIG_NAME_RESOLVES', `${at}.hides[${k}]`, `is ${show(hn)}; a slot of the base rig is required`);
-        } else if (seen.has(hn)) {
+        } else if (seenHides.has(hn)) {
           c.fail('CONFIG_PART_UNIQUE', `${at}.hides[${k}]`, `repeats "${hn}"; each hidden slot is named once`);
-        } else seen.add(hn);
+        } else seenHides.add(hn);
       });
+    }
+    if ('parts' in e && limbs !== null) {
+      for (const [limbName, chain] of limbs.chains) {
+        const coveredSegs = chain.parts.filter((sp) => seenParts.has(sp) && !seenHides.has(sp));
+        const hiddenSegs = chain.parts.filter((sp) => seenHides.has(sp));
+        if ((coveredSegs.length > 0 || hiddenSegs.length > 0) && coveredSegs.length !== chain.parts.length) {
+          c.fail(
+            'CONFIG_LIMB_SET_JOINTS',
+            `${at}.parts`,
+            `covers [${coveredSegs.map((s) => `"${s}"`).join(', ')}]${hiddenSegs.length > 0 ? ` (and hides [${hiddenSegs.map((s) => `"${s}"`).join(', ')}])` : ''} of config.limbs.${limbName}, which cuts at the base's joints into [${chain.parts.map((s) => `"${s}"`).join(', ')}]; a gesture set over a limb chain must cover all ${chain.parts.length} of its segment parts so it is cut at the base's joints`,
+          );
+        } else if (coveredSegs.length === chain.parts.length && !cutsConsumedLimb && 'cuts' in e && Array.isArray(e.cuts) && e.cuts.length > 0) {
+          c.fail(
+            'CONFIG_LIMB_SET_JOINTS',
+            `${at}.cuts`,
+            `declares custom polygon cuts on a gesture set covering config.limbs.${limbName}; a gesture set is cut at the base's joints and declares no cuts of its own`,
+          );
+        }
+      }
+    }
+    if ('parts' in e && 'drawn' in e && isPlainObject(e.drawn)) {
+      const activeParts = [...seenParts].filter((pn) => !seenHides.has(pn));
+      const coveredBones = new Set<string>();
+      let allPartsResolved = activeParts.length > 0;
+      for (const pn of activeParts) {
+        const limbSeg = limbs?.parts.get(pn);
+        if (limbSeg !== undefined) {
+          coveredBones.add(limbSeg.bone);
+        } else if (isPlainObject(regions) && typeof regions[pn] === 'string') {
+          coveredBones.add(regions[pn]);
+        } else if (isPlainObject(meshes) && isPlainObject(meshes[pn])) {
+          const m = meshes[pn] as Record<string, Json>;
+          if (Array.isArray(m.segments)) {
+            for (const s of m.segments) {
+              if (typeof s === 'string') {
+                const links = chains?.get(s);
+                if (links !== undefined) {
+                  for (let lk = 0; lk < links; lk++) coveredBones.add(`${s}${lk}`);
+                } else {
+                  coveredBones.add(s);
+                }
+              } else if (Array.isArray(s) && typeof s[0] === 'string') {
+                coveredBones.add(s[0]);
+              }
+            }
+          }
+          if (isPlainObject(m.contour)) {
+            if (Array.isArray(m.contour.regions)) {
+              for (const rg of m.contour.regions) if (isPlainObject(rg) && typeof rg.bone === 'string') coveredBones.add(rg.bone);
+            }
+            if (isPlainObject(m.contour.bust)) {
+              coveredBones.add(typeof m.contour.bust.bone_r === 'string' ? m.contour.bust.bone_r : DEFAULT_BUST_BONE_R);
+              coveredBones.add(typeof m.contour.bust.bone_l === 'string' ? m.contour.bust.bone_l : DEFAULT_BUST_BONE_L);
+            }
+          }
+          if (isPlainObject(m.auto) && Array.isArray(m.auto.regions)) {
+            for (const rg of m.auto.regions) if (isPlainObject(rg) && typeof rg.bone === 'string') coveredBones.add(rg.bone);
+          }
+        } else {
+          allPartsResolved = false;
+        }
+      }
+      if (allPartsResolved) {
+        const coveredList = [...coveredBones].map((b) => `"${b}"`).join(', ') || 'none';
+        for (const bName of Object.keys(e.drawn)) {
+          if ((bones === null || bones.has(bName)) && !coveredBones.has(bName)) {
+            c.fail(
+              'CONFIG_SET_COVERS_BONE',
+              `${at}.drawn.${bName}`,
+              `names "${bName}", which alternate set "${String(e.name ?? '')}" does not cover (covered bones: ${coveredList}); a subset set may state drawn angles only for the bones its covered parts ride`,
+            );
+          }
+        }
+      }
     }
   });
 }
@@ -2593,6 +2708,7 @@ function checkRegions(c: Check, v: Json, bones: Set<string>): void {
 interface LimbNames {
   parts: Map<string, { bone: string; at: string }>;
   consumed: Map<string, string>;
+  chains: Map<string, { parts: string[]; bones: string[]; froms: string[] }>;
 }
 
 /**
@@ -2618,7 +2734,7 @@ interface LimbNames {
  * resolved. Returns the limb parts and the parts the limbs take.
  */
 function checkLimbs(c: Check, v: Json, made: { parts: string[]; patches: string[]; cuts: string[] }, names: { bones: Set<string>; parents: Map<string, string> } | null): LimbNames {
-  const out: LimbNames = { parts: new Map(), consumed: new Map() };
+  const out: LimbNames = { parts: new Map(), consumed: new Map(), chains: new Map() };
   if (!isPlainObject(v)) {
     c.fail('CONFIG_FIELD_TYPE', 'config.limbs', `is ${show(v)}; an object of limb name -> {"segments": [...]} is required`);
     return out;
@@ -2663,11 +2779,13 @@ function checkLimbs(c: Check, v: Json, made: { parts: string[]; patches: string[
       continue;
     }
     const segs = o.segments as Json[];
+    const segParts: Array<string | null> = [];
     const froms: Array<string | null> = [];
     const bones: Array<string | null> = [];
     segs.forEach((entry, i) => {
       const sat = `${at}.segments[${i}]`;
       const e = c.object(sat, entry, ['part', 'from', 'bone'], ['joint', 'range', 'cap', 'edge', 'cap_shape', 'cut_band']);
+      segParts.push(null);
       froms.push(null);
       bones.push(null);
       if (e === null) return;
@@ -2683,6 +2801,7 @@ function checkLimbs(c: Check, v: Json, made: { parts: string[]; patches: string[
         } else if (firstAt.has(name)) c.fail('CONFIG_PART_UNIQUE', `${sat}.part`, `names the part "${name}" again (first at ${firstAt.get(name)})`);
         else {
           firstAt.set(name, sat);
+          segParts[i] = name;
           if ('bone' in e && typeof e.bone === 'string') out.parts.set(name, { bone: e.bone, at: `config.limbs.${limb} segment ${i}` });
         }
       }
@@ -2726,6 +2845,11 @@ function checkLimbs(c: Check, v: Json, made: { parts: string[]; patches: string[
           c.fail('CONFIG_KEY_KNOWN', `${sat}.cut_band`, `is not a field on a segment whose from ("${e.from}") is not the segment above's ("${String(froms[i - 1])}"); no line is cut between two layers — each segment takes its own part whole — so there is no cut to place`);
         }
       }
+    });
+    out.chains.set(limb, {
+      parts: segParts.filter((q): q is string => q !== null),
+      bones: bones.filter((q): q is string => q !== null),
+      froms: [...new Set(froms.filter((q): q is string => q !== null))],
     });
     limbFroms.set(limb, new Set(froms.filter((f): f is string => f !== null)));
     froms.forEach((f, i) => {

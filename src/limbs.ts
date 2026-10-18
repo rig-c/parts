@@ -125,6 +125,98 @@ export function bonePlaces(bones: readonly BoneEntry[]): Map<string, BonePlace> 
   return out;
 }
 
+/**
+ * Issue #476: pose `bones` (in rig pixels, y down) so every bone named in
+ * `drawn` takes that world angle (in Spine degrees, CCW, y up) while keeping
+ * its base length and parent-to-child joint offsets. Used by `assemble` when
+ * an alternate set covers a limb chain at its own `drawn` angles, so `cutLimbs`
+ * cuts the set's painting at the base's joints posed to `drawn`.
+ */
+export function poseBoneEntriesForDrawn(bones: readonly BoneEntry[], drawn: Readonly<Record<string, number>>): BoneEntry[] {
+  if (Object.keys(drawn).length === 0) return [...bones];
+  interface FlatNode {
+    name: string;
+    parent: string;
+    at0: Pt;
+    end0: Pt | null;
+    theta0: number;
+    length: number;
+    inherit?: string;
+  }
+  const flat = new Map<string, FlatNode>();
+  for (const b of bones) {
+    if ('chain' in b) {
+      b.points.forEach((p, k) => {
+        const name = `${b.chain}${k}`;
+        const parent = k === 0 ? b.parent : `${b.chain}${k - 1}`;
+        const at0: Pt = [p[0], p[1]];
+        const end0: Pt = k + 1 < b.points.length ? [b.points[k + 1][0], b.points[k + 1][1]] : [b.tip[0], b.tip[1]];
+        const dx = end0[0] - at0[0];
+        const dy = end0[1] - at0[1];
+        const theta0 = (Math.atan2(-dy, dx) * 180) / Math.PI;
+        const length = Math.sqrt(dx * dx + dy * dy);
+        flat.set(name, { name, parent, at0, end0, theta0, length, inherit: b.link_inherit?.[name] });
+      });
+    } else {
+      const at0: Pt = [b.at[0], b.at[1]];
+      const end0: Pt | null = b.tip === undefined ? null : [b.tip[0], b.tip[1]];
+      const dx = end0 === null ? 0 : end0[0] - at0[0];
+      const dy = end0 === null ? 0 : end0[1] - at0[1];
+      const theta0 = end0 === null ? 0 : (Math.atan2(-dy, dx) * 180) / Math.PI;
+      const length = end0 === null ? 0 : Math.sqrt(dx * dx + dy * dy);
+      flat.set(b.name, { name: b.name, parent: b.parent, at0, end0, theta0, length, inherit: b.inherit });
+    }
+  }
+  const posed = new Map<string, { at: Pt; end: Pt | null; theta: number }>();
+  const solve = (name: string): { at: Pt; end: Pt | null; theta: number } => {
+    const cached = posed.get(name);
+    if (cached !== undefined) return cached;
+    const node = flat.get(name);
+    if (node === undefined) return { at: [0, 0], end: null, theta: 0 };
+    let at: Pt = [node.at0[0], node.at0[1]];
+    let dParent = 0;
+    const pNode = flat.get(node.parent);
+    if (pNode !== undefined) {
+      const pPosed = solve(node.parent);
+      dParent = pPosed.theta - pNode.theta0;
+      const rad = (dParent * Math.PI) / 180;
+      const cos = Math.cos(rad);
+      const sin = Math.sin(rad);
+      const dx0 = node.at0[0] - pNode.at0[0];
+      const dy0 = node.at0[1] - pNode.at0[1];
+      at = [pPosed.at[0] + dx0 * cos + dy0 * sin, pPosed.at[1] - dx0 * sin + dy0 * cos];
+    }
+    const inheritsRot = node.inherit !== 'noRotationOrReflection' && node.inherit !== 'onlyTranslation';
+    const theta = drawn[name] !== undefined ? drawn[name] : node.theta0 + (inheritsRot ? dParent : 0);
+    let end: Pt | null = null;
+    if (node.end0 !== null) {
+      const rad = (theta * Math.PI) / 180;
+      end = [at[0] + node.length * Math.cos(rad), at[1] - node.length * Math.sin(rad)];
+    }
+    const res = { at, end, theta };
+    posed.set(name, res);
+    return res;
+  };
+  for (const name of flat.keys()) solve(name);
+  return bones.map((b): BoneEntry => {
+    if ('chain' in b) {
+      const points = b.points.map((_, k): Pt => {
+        const s = solve(`${b.chain}${k}`);
+        return [s.at[0], s.at[1]];
+      });
+      const last = solve(`${b.chain}${b.points.length - 1}`);
+      const tip: Pt = last.end === null ? [b.tip[0], b.tip[1]] : [last.end[0], last.end[1]];
+      return { ...b, points, tip };
+    }
+    const s = solve(b.name);
+    return {
+      ...b,
+      at: [s.at[0], s.at[1]],
+      ...(b.tip === undefined || s.end === null ? {} : { tip: [s.end[0], s.end[1]] }),
+    };
+  });
+}
+
 /** A limb's polyline: its segments' bone origins in order, then the last bone's end when it has one. */
 export function limbPolyline(limb: Limb, places: ReadonlyMap<string, BonePlace>): Pt[] {
   const pts = limb.segments.map((s) => (places.get(s.bone) as BonePlace).at);

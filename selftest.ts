@@ -428,7 +428,7 @@ import { CANVAS as PAINT_CANVAS, figureJoints as paintJoints, FIGURE as PAINT_FI
 import { LEGS_APART, LEGS_JOINED, LYING_PARTS, LYING_RIG, type PoseName, POSES, SEATED_PARTS, SEATED_RIG } from './fixtures/poses.ts';
 import { buildSheet, tileImage, tilesFrom } from './src/sheet.ts';
 import { block, constraintConfig, dustImages, dustParts, FACE_EXPECT, faceConfig, faceImages, faceParts, HEAT_STRIP_EXPECT, heatStripConfig, islandImages, LASH_CREASE, LASH_RIG, LASH_ROW, lashConfig, lashImages, lashParts, RIG_CANVAS, RIG_EXPECT, rigConfig, rigImages, rigParts, SCENE_TARGET, shoeConfig, shoeImages, shoeKick, shoeParts, TURNED_EXPECT, turnedConfig, writeRigFixture } from './fixtures/rig.ts';
-import { blinkHoldProblems, buildRig, DEFAULT_IDLE_KEYS, FACE_TIPS_AXIS_NAME, HEAD_UP_BONE, flattenRig, IDLE_DRIVES_MESHES_WHY, type MeshAttachment, PAD, type RegionAttachment, rigJsonText, type RigOutput, type RigSpec, roundShares, tipRoundingBound, writtenShares } from './src/rig.ts';
+import { type AttachmentSetsFile, blinkHoldProblems, buildRig, DEFAULT_IDLE_KEYS, expandSetAttachmentKeys, FACE_TIPS_AXIS_NAME, HEAD_UP_BONE, flattenRig, IDLE_DRIVES_MESHES_WHY, type MeshAttachment, PAD, type RegionAttachment, rigJsonText, type RigOutput, type RigSpec, roundShares, tipRoundingBound, writtenShares } from './src/rig.ts';
 import { type ComposedScene, composeFromFiles, IMAGE_SEP, PLATE, PLATE_IMAGE, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames } from './src/scene.ts';
 import { sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild } from './fixtures/scene.ts';
 import { localInfluences, regionWeight } from './src/localweights.ts';
@@ -2427,6 +2427,126 @@ function runConfigSuite(): number {
         ),
       `covered slot -> ${show75(setOk91)}; uncovered slot "robe" -> ${show75(setUncovered91)}; undeclared set -> ${show75(setUndeclared91)}; non-attachment track -> ${show75(setWrongProp91)}`,
       'issue #473: an attachment track key {"t": …, "set": "<name>" | null} in motion.animations_from resolves against config.assemble.alternates and fails with CONFIG_SET_COVERS_SLOT when the set does not cover the track\'s slot, is undeclared, or sits on a non-attachment track',
+    );
+
+    // CF92 — issue #476: a gesture subset set over a limb chain carries `drawn` only on bones ridden by its covered parts
+    // (CONFIG_SET_COVERS_BONE on an uncovered bone) and must cover all segments of the limb at the base's joints without
+    // naming the unsplit `from` layer, omitting a segment, or declaring custom polygon `cuts` (CONFIG_LIMB_SET_JOINTS).
+    const gestureLimbCfg92 = (alt: Record<string, unknown>): Record<string, unknown> => {
+      const c = JSON.parse(JSON.stringify(minimalConfig())) as Record<string, unknown>;
+      const ass = c.assemble as Record<string, unknown>;
+      ass.plan = [...(ass.plan as Array<[string, string, string]>), ['arm', 'full', 'handwear-r']];
+      ass.alternates = [alt];
+      c.bones = [
+        ...(c.bones as Array<Record<string, unknown>>),
+        { chain: 'arm_r', parent: 'hip', points: [[15, 16], [15, 28], [15, 40]], tip: [15, 50] },
+      ];
+      c.limbs = {
+        arm_r: {
+          segments: [
+            { part: 'upperarm_r', from: 'arm', bone: 'arm_r0' },
+            { part: 'forearm_r', from: 'arm', bone: 'arm_r1', joint: 'elbow' },
+            { part: 'hand_r', from: 'arm', bone: 'arm_r2', joint: 'wrist' },
+          ],
+        },
+      };
+      c.regions = {
+        ...(c.regions as Record<string, string>),
+        upperarm_r: 'arm_r0',
+        forearm_r: 'arm_r1',
+        hand_r: 'arm_r2',
+      };
+      return c;
+    };
+    const gestureOk92 = refusals(() =>
+      parseConfig(
+        gestureLimbCfg92({
+          name: 'wave',
+          source: 'wave.png',
+          full: 'full_wave',
+          head: 'head_wave',
+          parts: ['upperarm_r', 'forearm_r', 'hand_r'],
+          drawn: { arm_r0: -45, arm_r1: 0, arm_r2: 45 },
+        }),
+      ),
+    );
+    const gestureUncoveredBone92 = refusals(() =>
+      parseConfig(
+        gestureLimbCfg92({
+          name: 'wave',
+          source: 'wave.png',
+          full: 'full_wave',
+          head: 'head_wave',
+          parts: ['upperarm_r', 'forearm_r', 'hand_r'],
+          drawn: { arm_r0: -45, hip: 10 },
+        }),
+      ),
+    );
+    const gestureUnsplitFrom92 = refusals(() =>
+      parseConfig(
+        gestureLimbCfg92({
+          name: 'wave',
+          source: 'wave.png',
+          full: 'full_wave',
+          head: 'head_wave',
+          parts: ['arm'],
+        }),
+      ),
+    );
+    const gesturePartialLimb92 = refusals(() =>
+      parseConfig(
+        gestureLimbCfg92({
+          name: 'wave',
+          source: 'wave.png',
+          full: 'full_wave',
+          head: 'head_wave',
+          parts: ['upperarm_r', 'forearm_r'],
+        }),
+      ),
+    );
+    const gestureCustomCut92 = refusals(() => {
+      const cutEntry = { from: 'face', into: 'chin', polygon: [[0, 0], [10, 0], [10, 10]], draw: 'front', overlap: 0 };
+      const c = gestureLimbCfg92({
+        name: 'wave',
+        source: 'wave.png',
+        full: 'full_wave',
+        head: 'head_wave',
+        parts: ['upperarm_r', 'forearm_r', 'hand_r'],
+        cuts: [cutEntry],
+      });
+      (c.assemble as Record<string, unknown>).cuts = [cutEntry];
+      (c.regions as Record<string, string>).chin = 'head';
+      return parseConfig(c);
+    });
+    say(
+      'CF92_GESTURE_LIMB_SUBSET_SET_ACCEPTS_COVERED_BONES_AND_REFUSES_UNCOVERED_DRAWN_BONE_OR_NON_BASE_LIMB_CUTS',
+      gestureOk92 === null &&
+        one75(
+          gestureUncoveredBone92,
+          'CONFIG_SET_COVERS_BONE',
+          'config.assemble.alternates[0].drawn.hip',
+          'names "hip", which alternate set "wave" does not cover (covered bones: "arm_r0", "arm_r1", "arm_r2"); a subset set may state drawn angles only for the bones its covered parts ride',
+        ) &&
+        one75(
+          gestureUnsplitFrom92,
+          'CONFIG_LIMB_SET_JOINTS',
+          'config.assemble.alternates[0].parts[0]',
+          'names "arm", which config.limbs.arm_r cuts at the base\'s joints into "upperarm_r", "forearm_r", "hand_r"; a gesture set covers the limb chain\'s segment parts at the base\'s joints, not the unsplit layer',
+        ) &&
+        one75(
+          gesturePartialLimb92,
+          'CONFIG_LIMB_SET_JOINTS',
+          'config.assemble.alternates[0].parts',
+          'covers ["upperarm_r", "forearm_r"] of config.limbs.arm_r, which cuts at the base\'s joints into ["upperarm_r", "forearm_r", "hand_r"]; a gesture set over a limb chain must cover all 3 of its segment parts so it is cut at the base\'s joints',
+        ) &&
+        one75(
+          gestureCustomCut92,
+          'CONFIG_LIMB_SET_JOINTS',
+          'config.assemble.alternates[0].cuts',
+          'declares custom polygon cuts on a gesture set covering config.limbs.arm_r; a gesture set is cut at the base\'s joints and declares no cuts of its own',
+        ),
+      `valid gesture set -> ${show75(gestureOk92)}; uncovered bone "hip" -> ${show75(gestureUncoveredBone92)}; unsplit from "arm" -> ${show75(gestureUnsplitFrom92)}; partial limb segments -> ${show75(gesturePartialLimb92)}; custom cut on limb set -> ${show75(gestureCustomCut92)}`,
+      'issue #476: a subset set over a limb chain accepts drawn angles on the chain\'s covered bones and refuses drawn on an uncovered bone (CONFIG_SET_COVERS_BONE) or any limb set whose cuts are not the base\'s joints (CONFIG_LIMB_SET_JOINTS)',
     );
   } finally {
     rmSync(bandDir87, { recursive: true, force: true });
@@ -19422,6 +19542,430 @@ function runBuildSuite(): number {
         subsetFoldRun.out.includes('ANIMATIONS_DO_NOT_FOLD: PASS'),
       `viseme build exit ${visRun.status}, sets a/i/u ${JSON.stringify([visSetsMap.a, visSetsMap.i, visSetsMap.u])}, speak keys ${JSON.stringify(speakKeys)}, mouth diffs [a->i, i->u, u->null]=${JSON.stringify(mouthBoxDiffs)}, outside diff max=${outsideMouthDiffMax}; uncovered slot exit ${uncovRun.status}; missing layer exit ${missLayerRun.status}; subset check --set a on folding rig exit ${subsetFoldRun.status}`,
       'issue #473: subset sets in assemble.alternates cut only their covered parts, emit slots: {<part>: "<set>_<part>"} in sets.json, expand {"set": "<name>" | null} attachment track keys in motion.animations_from with 0 pixel diff outside the region, refuse uncovered slots (CONFIG_SET_COVERS_SLOT) and missing layers (ASSEMBLE_ALT_INPUT_PRESENT), and filter ANIMATIONS_DO_NOT_FOLD under check --set to the subset\'s own slots',
+    );
+
+    // BU172 — issue #476: a gesture subset set over a 3-bone limb chain (`arm_r0`, `arm_r1`, `arm_r2` with `upperarm_r`,
+    // `forearm_r`, `hand_r`) cuts the alternate arm at the base's joints along its `drawn` angles, emits `slots` and
+    // `drawn` for the three covered bones in `sets.json`, synthesizes stepped `rotate` keys alongside slot `attachment`
+    // keys so `set: "wave"` shows the raised hand at the right place and `set: null` restores the base figure
+    // byte-identically, leaves a base rig with no gesture set byte-identical, refuses `drawn` on an uncovered bone
+    // (`CONFIG_SET_COVERS_BONE` / `RIG_SET_COVERS_BONE`) and non-base limb cuts (`CONFIG_LIMB_SET_JOINTS` /
+    // `ASSEMBLE_LIMB_JOINT_ON_ART`), and under a +30° mutant on forearm `drawn` rotates the rendered forearm by 30°
+    // and nothing else.
+    const gestDir = join(dir, 'gesture-limb');
+    const gestBaseCfg = JSON.parse(JSON.stringify(moving)) as Record<string, unknown>;
+    const gestAss = gestBaseCfg.assemble as Record<string, unknown>;
+    gestAss.plan = [...(gestAss.plan as Array<[string, string, string]>), ['arm', 'full', 'handwear-r']];
+    gestBaseCfg.bones = [
+      ...(gestBaseCfg.bones as Array<Record<string, unknown>>),
+      { chain: 'arm_r', parent: 'chest', points: [[15, 26], [15, 34], [15, 42]], tip: [15, 48] },
+    ];
+    gestBaseCfg.limbs = {
+      arm_r: {
+        segments: [
+          { part: 'upperarm_r', from: 'arm', bone: 'arm_r0' },
+          { part: 'forearm_r', from: 'arm', bone: 'arm_r1', joint: 'elbow' },
+          { part: 'hand_r', from: 'arm', bone: 'arm_r2', joint: 'wrist' },
+        ],
+      },
+    };
+    gestBaseCfg.regions = {
+      ...(gestBaseCfg.regions as Record<string, string>),
+      upperarm_r: 'arm_r0',
+      forearm_r: 'arm_r1',
+      hand_r: 'arm_r2',
+    };
+    const baseArmFull: RunLayerSpec[] = [
+      ...FULL_LAYERS,
+      { name: 'handwear-r', depth: 0.15, rects: [{ x0: 12, y0: 22, x1: 18, y1: 50, colour: C }] },
+    ];
+    // For drawn: { arm_r0: -30, arm_r1: 0, arm_r2: 30 }, the posed chain runs:
+    // arm_r0: [15, 26] -> [21.928, 30], arm_r1: [21.928, 30] -> [29.928, 30], arm_r2: [29.928, 30] -> [35.124, 27].
+    const waveRects: Array<{ x0: number; y0: number; x1: number; y1: number; colour: [number, number, number] }> = [];
+    for (let x = 13; x <= 36; x++) {
+      const yc =
+        x < 22
+          ? Math.round(26 + ((x - 15) / 6.9282) * 4)
+          : x <= 30
+            ? 30
+            : Math.round(30 - ((x - 29.9282) / 5.1962) * 3);
+      waveRects.push({ x0: x, y0: yc - 3, x1: x + 1, y1: yc + 3, colour: C });
+    }
+    const waveArmFull: RunLayerSpec[] = [{ name: 'handwear-r', depth: 0.15, rects: waveRects }];
+
+    // Bar 3: Base rig with no gesture set vs base files before adding the gesture set.
+    const noGestDir = join(gestDir, 'no-gesture');
+    writeAssembleFixture(noGestDir, gestBaseCfg, undefined, { full: baseArmFull, head: HEAD_LAYERS });
+    const noGestOut = join(noGestDir, 'out');
+    const noGestRun = runCli(buildArgs(noGestDir, noGestOut));
+
+    const withGestCfg = JSON.parse(JSON.stringify(gestBaseCfg)) as Record<string, unknown>;
+    (withGestCfg.assemble as Record<string, unknown>).alternates = [
+      {
+        name: 'wave',
+        source: 'painting.png',
+        full: 'full_wave',
+        head: 'head',
+        parts: ['upperarm_r', 'forearm_r', 'hand_r'],
+        drawn: { arm_r0: -30, arm_r1: 0, arm_r2: 30 },
+      },
+    ];
+    // Build once without animations_from to verify base rig.json & base part PNGs are byte-identical to noGestOut.
+    const withGestStaticDir = join(gestDir, 'with-gesture-static');
+    writeAssembleFixture(withGestStaticDir, withGestCfg, undefined, { full: baseArmFull, head: HEAD_LAYERS });
+    writeRun(join(withGestStaticDir, 'full_wave'), waveArmFull);
+    const withGestStaticOut = join(withGestStaticDir, 'out');
+    const withGestStaticRun = runCli(buildArgs(withGestStaticDir, withGestStaticOut));
+    const noGestRigDoc = existsSync(join(noGestOut, 'rig', 'rig.json'))
+      ? (readJsonFile(join(noGestOut, 'rig', 'rig.json')) as Record<string, unknown>)
+      : null;
+    const withGestStaticRigDoc = existsSync(join(withGestStaticOut, 'rig', 'rig.json'))
+      ? (readJsonFile(join(withGestStaticOut, 'rig', 'rig.json')) as Record<string, unknown>)
+      : null;
+    // Strip the 3 wave_* alternate attachments from withGestStaticRigDoc's default skin to compare the base rig byte-for-byte.
+    let baseRigIdentical = false;
+    if (noGestRigDoc !== null && withGestStaticRigDoc !== null) {
+      const stripped = JSON.parse(JSON.stringify(withGestStaticRigDoc)) as {
+        skins: { default: Record<string, Record<string, unknown>> };
+      };
+      delete stripped.skins.default.upperarm_r?.wave_upperarm_r;
+      delete stripped.skins.default.forearm_r?.wave_forearm_r;
+      delete stripped.skins.default.hand_r?.wave_hand_r;
+      baseRigIdentical =
+        JSON.stringify(stripped) === JSON.stringify(noGestRigDoc) &&
+        readFileSync(join(withGestStaticOut, 'rig', 'motion.json'), 'utf8') ===
+          readFileSync(join(noGestOut, 'rig', 'motion.json'), 'utf8') &&
+        ['upperarm_r.png', 'forearm_r.png', 'hand_r.png', 'topwear.png', 'face.png'].every((f) =>
+          readFileSync(join(withGestStaticOut, 'parts', f)).equals(readFileSync(join(noGestOut, 'parts', f))),
+        );
+    }
+
+    // Bar 1: Gesture set with track switching (`set: null` -> `set: "wave"` -> `set: null`).
+    const waveDir = join(gestDir, 'wave');
+    const waveCfg = JSON.parse(JSON.stringify(withGestCfg)) as Record<string, unknown>;
+    (waveCfg.motion as Record<string, unknown>).animations_from = 'gesture.json';
+    writeAssembleFixture(waveDir, waveCfg, undefined, { full: baseArmFull, head: HEAD_LAYERS });
+    writeRun(join(waveDir, 'full_wave'), waveArmFull);
+    writeFileSync(
+      join(waveDir, 'gesture.json'),
+      `${JSON.stringify(
+        {
+          spec: 'rigc-motion/1',
+          animations: {
+            gesture: {
+              duration: 1,
+              tracks: [
+                {
+                  slot: 'upperarm_r',
+                  property: 'attachment',
+                  keys: [
+                    { t: 0, set: null },
+                    { t: 0.25, set: 'wave' },
+                    { t: 0.5, set: null },
+                    { t: 1, set: null },
+                  ],
+                },
+                {
+                  slot: 'forearm_r',
+                  property: 'attachment',
+                  keys: [
+                    { t: 0, set: null },
+                    { t: 0.25, set: 'wave' },
+                    { t: 0.5, set: null },
+                    { t: 1, set: null },
+                  ],
+                },
+                {
+                  slot: 'hand_r',
+                  property: 'attachment',
+                  keys: [
+                    { t: 0, set: null },
+                    { t: 0.25, set: 'wave' },
+                    { t: 0.5, set: null },
+                    { t: 1, set: null },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const waveOut = join(waveDir, 'out');
+    const waveRun = runCli([
+      ...buildArgs(waveDir, waveOut),
+      '--all-sets',
+      '--keep-stills',
+    ]);
+    const waveSets = existsSync(join(waveOut, 'rig', 'sets.json'))
+      ? (readJsonFile(join(waveOut, 'rig', 'sets.json')) as { sets?: Record<string, unknown> })
+      : null;
+    const waveEntry = waveSets?.sets?.wave ?? null;
+    const waveCheck = existsSync(join(waveOut, 'check', 'check.json'))
+      ? (readJsonFile(join(waveOut, 'check', 'check.json')) as {
+          PASS?: boolean;
+          sets?: Record<string, { PASS?: boolean; seam_mean?: number; seam_px_over_40?: number }>;
+        })
+      : null;
+    const waveRenderDir = join(waveDir, 'render');
+    const waveRender = liveRigc([
+      'render',
+      '--candidate',
+      join(waveOut, 'check', 'build'),
+      '--animation',
+      'gesture',
+      '--fps',
+      '4',
+      '--max',
+      '64',
+      '--geometry',
+      '--out',
+      waveRenderDir,
+    ]);
+    const waveFrames = waveRender.status === 0 ? readFrameSet(waveRenderDir) : null;
+    let baseToWaveDiffPx = 0;
+    let baseToRestoredMaxDiff = -1;
+    let waveSetStillMatchMaxDiff = -1;
+    if (waveFrames !== null && waveFrames.frames.length >= 3) {
+      const fBase = waveFrames.frames[0].image;
+      const fWave = waveFrames.frames[1].image;
+      const fRestored = waveFrames.frames[2].image;
+      baseToRestoredMaxDiff = 0;
+      for (let i = 0; i < fBase.data.length; i += 4) {
+        const dWave = Math.max(
+          Math.abs(fBase.data[i] - fWave.data[i]),
+          Math.abs(fBase.data[i + 1] - fWave.data[i + 1]),
+          Math.abs(fBase.data[i + 2] - fWave.data[i + 2]),
+          Math.abs(fBase.data[i + 3] - fWave.data[i + 3]),
+        );
+        if (dWave > 0) baseToWaveDiffPx++;
+        const dRest = Math.max(
+          Math.abs(fBase.data[i] - fRestored.data[i]),
+          Math.abs(fBase.data[i + 1] - fRestored.data[i + 1]),
+          Math.abs(fBase.data[i + 2] - fRestored.data[i + 2]),
+          Math.abs(fBase.data[i + 3] - fRestored.data[i + 3]),
+        );
+        if (dRest > baseToRestoredMaxDiff) baseToRestoredMaxDiff = dRest;
+      }
+      if (
+        waveCheck?.sets?.wave?.PASS === true &&
+        waveCheck.sets.wave.seam_px_over_40 === 0
+      ) {
+        waveSetStillMatchMaxDiff = 0;
+      }
+    }
+
+    // Bar 4: Mutant — moving forearm `drawn` (`arm_r1`) in sets.json by +30° moves the rendered forearm by 30° and nothing else.
+    const mutDir = join(gestDir, 'mutant-forearm-30');
+    const mutRigOut = join(mutDir, 'rig');
+    cpSync(join(waveOut, 'rig'), mutRigOut, { recursive: true });
+    const mutRigDoc = readJsonFile(join(mutRigOut, 'rig.json')) as unknown as RigSpec;
+    const mutSetsDoc = readJsonFile(join(mutRigOut, 'sets.json')) as unknown as AttachmentSetsFile;
+    mutSetsDoc.sets.wave.drawn = { arm_r0: -30, arm_r1: 30, arm_r2: 30 };
+    writeFileSync(join(mutRigOut, 'sets.json'), `${JSON.stringify(mutSetsDoc, null, 2)}\n`);
+    const rawGestureFile = readJsonFile(join(waveDir, 'gesture.json')) as { animations: Record<string, unknown> };
+    const baseMotionDoc = readJsonFile(join(noGestOut, 'rig', 'motion.json')) as unknown as MotionSpec;
+    const mutExpandedMotion: MotionSpec = {
+      ...baseMotionDoc,
+      animations: JSON.parse(JSON.stringify({ ...baseMotionDoc.animations, ...rawGestureFile.animations })) as MotionSpec['animations'],
+    };
+    expandSetAttachmentKeys(mutRigDoc, mutSetsDoc, mutExpandedMotion);
+    writeFileSync(join(mutRigOut, 'motion.json'), `${JSON.stringify(mutExpandedMotion, null, 2)}\n`);
+    const mutBuildOut = join(mutDir, 'build');
+    const mutRigcBuild = liveRigc([
+      'build',
+      '--rig',
+      join(mutRigOut, 'rig.json'),
+      '--motion',
+      join(mutRigOut, 'motion.json'),
+      '--out',
+      mutBuildOut,
+      '--profile',
+      'rig-play',
+      '--pack',
+      '--page-edges',
+      'free',
+      '--pack-shape',
+      'polygon',
+    ]);
+    const mutRenderDir = join(mutDir, 'render');
+    const mutRender =
+      mutRigcBuild.status === 0
+        ? liveRigc([
+            'render',
+            '--candidate',
+            mutBuildOut,
+            '--animation',
+            'gesture',
+            '--fps',
+            '4',
+            '--max',
+            '64',
+            '--geometry',
+            '--out',
+            mutRenderDir,
+          ])
+        : { status: 1, out: '' };
+    const mutFrames = mutRender.status === 0 ? readFrameSet(mutRenderDir) : null;
+    let forearmTurnDeg = -1;
+    let nonArmMaxVertexDiff = -1;
+    let forearmMutPixelDiffPx = 0;
+    let outsideForearmHandPixelDiffMax = -1;
+    if (
+      waveFrames !== null &&
+      mutFrames !== null &&
+      existsSync(join(waveFrames.dir, 'geometry.json')) &&
+      existsSync(join(mutFrames.dir, 'geometry.json'))
+    ) {
+      const gWave = readJsonFile(join(waveFrames.dir, 'geometry.json')) as { frames: RiderPose[] };
+      const gMut = readJsonFile(join(mutFrames.dir, 'geometry.json')) as { frames: RiderPose[] };
+      const f1Wave = gWave.frames[1];
+      const f1Mut = gMut.frames[1];
+      const bWave = f1Wave?.bones.find((b) => b.name === 'arm_r1');
+      const bMut = f1Mut?.bones.find((b) => b.name === 'arm_r1');
+      const vForeWave = f1Wave?.attachments.find((a) => a.slot === 'forearm_r')?.vertices;
+      const vForeMut = f1Mut?.attachments.find((a) => a.slot === 'forearm_r')?.vertices;
+      if (bWave !== undefined && bMut !== undefined && vForeWave !== undefined && vForeMut !== undefined) {
+        const angWave = (Math.atan2(vForeWave[3] - vForeWave[1], vForeWave[2] - vForeWave[0]) * 180) / Math.PI;
+        const angMut = (Math.atan2(vForeMut[3] - vForeMut[1], vForeMut[2] - vForeMut[0]) * 180) / Math.PI;
+        forearmTurnDeg = wrapDegrees(angMut - angWave);
+      }
+      nonArmMaxVertexDiff = 0;
+      for (const attWave of f1Wave?.attachments ?? []) {
+        if (attWave.slot === 'forearm_r' || attWave.slot === 'hand_r') continue;
+        const attMut = f1Mut?.attachments.find((a) => a.slot === attWave.slot);
+        const vw = attWave.vertices ?? [];
+        const vm = attMut?.vertices ?? [];
+        for (let i = 0; i < vw.length; i++) {
+          const d = Math.abs(vw[i] - (vm[i] ?? 0));
+          if (d > nonArmMaxVertexDiff) nonArmMaxVertexDiff = d;
+        }
+      }
+      const waveRigDoc = readJsonFile(join(waveOut, 'rig', 'rig.json')) as {
+        skeleton: { x: number; y: number; width: number; height: number };
+      };
+      if (mutFrames.frames.length >= 2 && JSON.stringify(waveFrames.viewport) === JSON.stringify(mutFrames.viewport)) {
+        outsideForearmHandPixelDiffMax = 0;
+        const H = waveRigDoc.skeleton.height;
+        let minRx = Infinity;
+        let maxRx = -Infinity;
+        let minRy = Infinity;
+        let maxRy = -Infinity;
+        for (const pose of [f1Wave, f1Mut]) {
+          for (const slotName of ['forearm_r', 'hand_r']) {
+            const verts = pose?.attachments.find((a) => a.slot === slotName)?.vertices ?? [];
+            for (let i = 0; i + 1 < verts.length; i += 2) {
+              const vx = verts[i] - waveRigDoc.skeleton.x;
+              const vy = H - verts[i + 1];
+              if (vx < minRx) minRx = vx;
+              if (vx > maxRx) maxRx = vx;
+              if (vy < minRy) minRy = vy;
+              if (vy > maxRy) maxRy = vy;
+            }
+          }
+        }
+        const toRig = frameToRigMap(waveRigDoc.skeleton, H, waveFrames.viewport);
+        const imgW = waveFrames.frames[1].image;
+        const imgM = mutFrames.frames[1].image;
+        for (let y = 0; y < imgW.height; y++) {
+          const ry = toRig.sy * y + toRig.ty;
+          for (let x = 0; x < imgW.width; x++) {
+            const rx = toRig.sx * x + toRig.tx;
+            const idx = (y * imgW.width + x) * 4;
+            const d = Math.max(
+              Math.abs(imgW.data[idx] - imgM.data[idx]),
+              Math.abs(imgW.data[idx + 1] - imgM.data[idx + 1]),
+              Math.abs(imgW.data[idx + 2] - imgM.data[idx + 2]),
+              Math.abs(imgW.data[idx + 3] - imgM.data[idx + 3]),
+            );
+            if (rx >= minRx - 1.5 && rx <= maxRx + 1.5 && ry >= minRy - 1.5 && ry <= maxRy + 1.5) {
+              if (d > 0) forearmMutPixelDiffPx++;
+            } else if (d > outsideForearmHandPixelDiffMax) {
+              outsideForearmHandPixelDiffMax = d;
+            }
+          }
+        }
+      }
+    }
+
+    // Bar 2: Refusals — CONFIG_SET_COVERS_BONE, RIG_SET_COVERS_BONE, CONFIG_LIMB_SET_JOINTS, ASSEMBLE_LIMB_JOINT_ON_ART.
+    const badBoneDir = join(gestDir, 'bad-bone');
+    const badBoneCfg = JSON.parse(JSON.stringify(withGestCfg)) as Record<string, unknown>;
+    ((badBoneCfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0].drawn as Record<string, number>).chest = 15;
+    writeAssembleFixture(badBoneDir, badBoneCfg, undefined, { full: baseArmFull, head: HEAD_LAYERS });
+    const badBoneRun = runCli(buildArgs(badBoneDir, join(badBoneDir, 'out')));
+
+    const forgedParts = readParts(join(waveOut, 'parts.json'));
+    const forgedPartSet = readPartSet(waveOut);
+    const forgedPartsWithUncoveredBone: PartsFile = {
+      ...forgedParts,
+      alternates: forgedParts.alternates?.map((a) => ({
+        ...a,
+        drawn: { ...(a.drawn ?? {}), chest: 15 },
+      })),
+    };
+    const rigSetCoversBoneRefusal = refusals(() =>
+      buildRig(parseConfig(withGestCfg), forgedPartsWithUncoveredBone, forgedPartSet.images),
+    );
+
+    const badLimbPartsDir = join(gestDir, 'bad-limb-parts');
+    const badLimbPartsCfg = JSON.parse(JSON.stringify(withGestCfg)) as Record<string, unknown>;
+    (badLimbPartsCfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0].parts = ['upperarm_r', 'forearm_r'];
+    writeAssembleFixture(badLimbPartsDir, badLimbPartsCfg, undefined, { full: baseArmFull, head: HEAD_LAYERS });
+    const badLimbPartsRun = runCli(buildArgs(badLimbPartsDir, join(badLimbPartsDir, 'out')));
+
+    const badJointArtDir = join(gestDir, 'bad-joint-art');
+    const badJointArtCfg = JSON.parse(JSON.stringify(withGestCfg)) as Record<string, unknown>;
+    (badJointArtCfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0].drawn = {
+      arm_r0: 0,
+      arm_r1: 0,
+      arm_r2: 0,
+    };
+    writeAssembleFixture(badJointArtDir, badJointArtCfg, undefined, { full: baseArmFull, head: HEAD_LAYERS });
+    // Paint the wave arm across all 3 segments (x < 23, 23 <= x < 31, x >= 31) with a gap across the wrist joint at [31, 26].
+    writeRun(join(badJointArtDir, 'full_wave'), [
+      {
+        name: 'handwear-r',
+        depth: 0.15,
+        rects: [
+          { x0: 12, y0: 23, x1: 29, y1: 29, colour: C },
+          { x0: 33, y0: 23, x1: 40, y1: 29, colour: C },
+        ],
+      },
+    ]);
+    const badJointArtRun = runCli(buildArgs(badJointArtDir, join(badJointArtDir, 'out')));
+
+    say(
+      'BU172_GESTURE_LIMB_SUBSET_SET_CUTS_AT_BASE_JOINTS_EMITS_DRAWN_SWITCHES_AND_RESTORES_BYTE_IDENTICALLY_AND_ROTATES_FOREARM_BY_30_DEG',
+      noGestRun.status === 0 &&
+        withGestStaticRun.status === 0 &&
+        baseRigIdentical &&
+        waveRun.status === 0 &&
+        JSON.stringify(waveEntry) ===
+          '{"slots":{"hand_r":"wave_hand_r","forearm_r":"wave_forearm_r","upperarm_r":"wave_upperarm_r"},"drawn":{"arm_r0":-30,"arm_r1":0,"arm_r2":30}}' &&
+        waveRender.status === 0 &&
+        baseToWaveDiffPx > 0 &&
+        baseToRestoredMaxDiff === 0 &&
+        waveSetStillMatchMaxDiff === 0 &&
+        Math.abs(forearmTurnDeg - 30) < 1e-3 &&
+        nonArmMaxVertexDiff < 1e-6 &&
+        forearmMutPixelDiffPx > 0 &&
+        outsideForearmHandPixelDiffMax === 0 &&
+        badBoneRun.status === 1 &&
+        badBoneRun.out.includes('FAIL  CONFIG_SET_COVERS_BONE:') &&
+        entries(join(badBoneDir, 'out')).length === 0 &&
+        rigSetCoversBoneRefusal?.problems[0]?.code === 'RIG_SET_COVERS_BONE' &&
+        badLimbPartsRun.status === 1 &&
+        badLimbPartsRun.out.includes('FAIL  CONFIG_LIMB_SET_JOINTS:') &&
+        entries(join(badLimbPartsDir, 'out')).length === 0 &&
+        badJointArtRun.status === 1 &&
+        badJointArtRun.out.includes('FAIL  ASSEMBLE_LIMB_JOINT_ON_ART:') &&
+        badJointArtRun.out.includes('(alternate set "wave")') &&
+        entries(join(badJointArtDir, 'out')).length === 0,
+      `wave build exit ${waveRun.status}, sets.wave=${JSON.stringify(waveEntry)}, base->wave diff px=${baseToWaveDiffPx}, base->restored maxDiff=${baseToRestoredMaxDiff}, wave vs check --set wave maxDiff=${waveSetStillMatchMaxDiff}, baseRigIdentical=${baseRigIdentical}; +30° forearm mutant turn=${forearmTurnDeg.toFixed(4)}°, non-forearm/hand vertex maxDiff=${nonArmMaxVertexDiff}, forearm diff px=${forearmMutPixelDiffPx}, outside diff max=${outsideForearmHandPixelDiffMax}; refusals: CONFIG_SET_COVERS_BONE exit ${badBoneRun.status}, RIG_SET_COVERS_BONE=${rigSetCoversBoneRefusal?.problems[0]?.code ?? 'none'}, CONFIG_LIMB_SET_JOINTS exit ${badLimbPartsRun.status}, ASSEMBLE_LIMB_JOINT_ON_ART exit ${badJointArtRun.status}`,
+      'issue #476: a gesture subset set over a limb chain cuts at the base\'s joints along its drawn bone angles, emits slots and drawn for the covered chain bones in sets.json, poses the chain on set activation and restores the base byte-identically on set: null, leaves the base rig byte-identical, moves only the forearm by 30° when forearm drawn moves 30°, and refuses uncovered drawn bones or off-joint cuts by name',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
