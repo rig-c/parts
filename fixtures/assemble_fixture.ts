@@ -230,8 +230,10 @@
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { ControlSkeleton } from '../src/config.ts';
 import { encodePngBytes } from '../src/raster/png.ts';
 import { newRaster, type Raster } from '../src/raster/types.ts';
+import { scaledPoints } from '../src/skeleton.ts';
 
 export type RGB = [number, number, number];
 
@@ -660,3 +662,72 @@ export function limbConfig(limbs: Record<string, unknown> = LIMBS, bones: Array<
   for (const l of Object.values(limbs) as Array<{ segments: Array<Record<string, unknown>> }>) for (const s of l.segments) regions[String(s.part)] = String(s.bone);
   return { ...cfg, limbs, bones, regions };
 }
+
+/**
+ * Issue #490: a hanging arm layer (`handwear-r`) that merges sleeve, bare hand
+ * and overgarment drape into one full-run layer on the 64x64 run canvas (latent
+ * 128x128, scale 1:1 to the 64x64 rig).
+ *
+ * - `MERGED_ARM_KEY_SKELETON` places `r_shoulder` at `(30, 12)`, `r_elbow` at
+ *   `(30, 24)` and `r_wrist` at `(30, 48)` in 128x128 latent px — `(15, 6)`,
+ *   `(15, 12)` and `(15, 24)` in run px, so `forearm = |r_wrist - r_elbow| = 12.0`
+ *   run px.
+ * - The sleeve is `[8, 22) x [4, 20)` (`14 x 16 = 224` px, `rgb(40, 60, 180)`),
+ *   the bare hand is `[10, 20) x [20, 26)` (`10 x 6 = 60` skin px >= `GHOST_MIN_AREA = 40`,
+ *   `rgb(220, 175, 145)`, rows `y = 20..25` at `r_wrist`), and the overgarment
+ *   drape is `[8, 22) x [26, 42)` (`14 x 16 = 224` px, rows `y = 26..41`, so
+ *   `spanBelowWrist = 41 - 24 = 17.0` px = `1.42x` the `12.0` px forearm,
+ *   above the `1.0x` forearm threshold).
+ * - In `MERGED_ARM_SPLIT_FULL`, the drape is `rgb(180, 50, 50)` (Euclidean RGB
+ *   distance `192.6 >= 80` from the sleeve), so `handwear-r` splits into
+ *   `drape_r` (`224` px), `sleeves` (`224` px) and `hand_r` (`60` px).
+ * - In `MERGED_ARM_REFUSED_FULL`, the drape is `rgb(45, 65, 175)` (Euclidean
+ *   RGB distance `8.7 < 80` from the sleeve), so both `proposePlan` and
+ *   `assemble` refuse with `SEETHROUGH_ARM_RUN_MERGED`.
+ * - Without `keySkeleton` (the detector-off mutant), all three rectangles stay
+ *   merged in one `sleeves` part of `224 + 60 + 224 = 508` px.
+ */
+export const MERGED_ARM_KEY_SKELETON: ControlSkeleton = {
+  latent: [SOURCE_SIDE, SOURCE_SIDE],
+  points: {
+    ...scaledPoints('stand_sides', SOURCE_SIDE, SOURCE_SIDE),
+    r_shoulder: [30, 12],
+    r_elbow: [30, 24],
+    r_wrist: [30, 48],
+  },
+};
+export const MERGED_ARM_SLEEVE_RGB: RGB = [40, 60, 180];
+export const MERGED_ARM_HAND_RGB: RGB = [220, 175, 145];
+export const MERGED_ARM_DISTINCT_DRAPE_RGB: RGB = [180, 50, 50];
+export const MERGED_ARM_SAME_DRAPE_RGB: RGB = [45, 65, 175];
+export const MERGED_ARM_SPLIT_FULL: RunLayerSpec[] = [
+  ...FULL_LAYERS,
+  {
+    name: 'handwear-r',
+    depth: 0.35,
+    rects: [
+      rect(8, 4, 22, 20, MERGED_ARM_SLEEVE_RGB),
+      rect(10, 20, 20, 26, MERGED_ARM_HAND_RGB),
+      rect(8, 26, 22, 42, MERGED_ARM_DISTINCT_DRAPE_RGB),
+    ],
+  },
+];
+export const MERGED_ARM_REFUSED_FULL: RunLayerSpec[] = [
+  ...FULL_LAYERS,
+  {
+    name: 'handwear-r',
+    depth: 0.35,
+    rects: [
+      rect(8, 4, 22, 20, MERGED_ARM_SLEEVE_RGB),
+      rect(10, 20, 20, 26, MERGED_ARM_HAND_RGB),
+      rect(8, 26, 22, 42, MERGED_ARM_SAME_DRAPE_RGB),
+    ],
+  },
+];
+export const MERGED_ARM_EXPECTED_SPLIT_PARTS: ReadonlyArray<readonly [string, string, number]> = [
+  ['drape_r', 'full:drape-r', 224],
+  ['sleeves', 'full:handwear-r', 224],
+  ['hand_r', 'full:hand-r', 60],
+];
+export const MERGED_ARM_EXPECTED_MUTANT_PARTS: ReadonlyArray<readonly [string, string, number]> = [['sleeves', 'full:handwear-r', 508]];
+

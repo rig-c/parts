@@ -145,6 +145,11 @@ import {
   LIMB_BONES,
   LIMBS,
   limbConfig,
+  MERGED_ARM_EXPECTED_MUTANT_PARTS,
+  MERGED_ARM_EXPECTED_SPLIT_PARTS,
+  MERGED_ARM_KEY_SKELETON,
+  MERGED_ARM_REFUSED_FULL,
+  MERGED_ARM_SPLIT_FULL,
   type RunLayerSpec,
 } from './fixtures/assemble_fixture.ts';
 import { type AnimFrame, chunkTypes, encodeApng, encodeIndexedApng } from './src/apng.ts';
@@ -24798,6 +24803,48 @@ function authorLayerControls(say: (name: string, ok: boolean, detail: string, wh
         emptySideRefusal.problems[0].code === 'ASSEMBLE_ARM_SPLIT_CUTS_ARM',
       `unsplit: ${JSON.stringify(unsplitArmParts.map((p) => `${p.name}:${p.opaque_px}`))}; x=22 order [l,r]: ${JSON.stringify(xArmParts.map((p) => `${p.name}(${p.from}):${p.opaque_px}`))}, errorPx ${splitXOut.figures.errorPx} vs ${unsplitOut.figures.errorPx}; line order [r,l]: ${JSON.stringify(lineArmParts.map((p) => `${p.name}(${p.from}):${p.opaque_px}`))}; planted x=14 cutting right forearm run -> ${codes(cutArmRefusal)}, zigzag -> ${codes(zigzagRefusal)}, empty side -> ${codes(emptySideRefusal)}`,
       'issue #439: without arm_split both overlapping arms land on one sleeves part; with arm_split (x or line) they separate into handwear_r and handwear_l in the declared draw order with every pixel assigned to one side, and a line that cuts one arm\'s pixel run into two parts is refused by ASSEMBLE_ARM_SPLIT_CUTS_ARM',
+    );
+
+    // AS256 — issue #490: when generation.control.skeleton is present and a full-run handwear-<s> layer merges
+    // sleeve, bare hand (>= 40 skin px within 0.35 forearm lengths of <s>_wrist) and overgarment drape (non-skin
+    // reaching > 1.0x the forearm length below <s>_wrist), it splits into drape-<s>, handwear-<s> and hand-<s> when
+    // the sleeve-to-drape Euclidean RGB distance is >= 80, or refuses with SEETHROUGH_ARM_RUN_MERGED when < 80;
+    // mutant without keySkeleton silently keeps the merged blob on one sleeves part (fixtures/assemble_fixture.ts).
+    const keySkeleton = MERGED_ARM_KEY_SKELETON;
+    const fullMergedSplit = runIn('full-merged-split', MERGED_ARM_SPLIT_FULL);
+    const fullMergedRefused = runIn('full-merged-refused', MERGED_ARM_REFUSED_FULL);
+    const mergedSplitPlan = proposePlan(fullMergedSplit, headP, { ...geometry, keySkeleton });
+    const mergedSplitOut = assemble({ ...baseAssemble, full: fullMergedSplit, keySkeleton, plan: mergedSplitPlan.plan, extend: mergedSplitPlan.extend_below_crop });
+    const mergedSplitParts = mergedSplitOut.parts.parts.filter((p) => p.from.startsWith('full:drape-') || p.from.startsWith('full:handwear-') || p.from.startsWith('full:hand-'));
+    const mergedMutantPlan = proposePlan(fullMergedSplit, headP, geometry);
+    const mergedMutantOut = assemble({ ...baseAssemble, full: fullMergedSplit, plan: mergedMutantPlan.plan, extend: mergedMutantPlan.extend_below_crop });
+    const mergedMutantParts = mergedMutantOut.parts.parts.filter((p) => p.from.startsWith('full:drape-') || p.from.startsWith('full:handwear-') || p.from.startsWith('full:hand-'));
+    const mergedRefusedPlan = refusals(() => proposePlan(fullMergedRefused, headP, { ...geometry, keySkeleton }));
+    const mergedRefusedAssemble = refusals(() => assemble({ ...baseAssemble, full: fullMergedRefused, keySkeleton, plan: mergedMutantPlan.plan, extend: mergedMutantPlan.extend_below_crop }));
+    const splitPartsForPropose = {
+      ...mergedSplitOut.parts,
+      parts: mergedSplitOut.parts.parts.map((p) => (p.name === 'sleeves' ? { ...p, opaque_px: 600 } : p)),
+    };
+    const splitProp = propose(new PartSet(splitPartsForPropose, new Map(mergedSplitOut.images.map((im) => [im.record.name, im.image]))));
+    say(
+      'AS256_SEETHROUGH_MERGED_ARM_RUN_SPLITS_INTO_DRAPE_SLEEVE_AND_HAND_BY_COLOUR_OR_REFUSES_WITH_SEETHROUGH_ARM_RUN_MERGED',
+      JSON.stringify(mergedSplitPlan.plan.filter((e) => e[2] === 'drape-r' || e[2] === 'handwear-r' || e[2] === 'hand-r')) ===
+        '[["drape_r","full","drape-r"],["sleeves","full","handwear-r"],["hand_r","full","hand-r"]]' &&
+        mergedSplitPlan.notes.some((n) => n.startsWith('handwear-r: merged arm layer (60 skin hand px at r_wrist y=20..25, non-skin reaching y=41, 1.42x forearm 12.0 px;') && n.includes('-> split into drape-r (224 px), handwear-r (224 px) and hand-r (60 px)')) &&
+        JSON.stringify(mergedSplitParts.map((p) => [p.name, p.from, p.opaque_px])) === JSON.stringify(MERGED_ARM_EXPECTED_SPLIT_PARTS) &&
+        splitProp.regions.hand_r === 'sleeve_r2' &&
+        splitProp.regions.drape_r === 'hip' &&
+        JSON.stringify(mergedMutantParts.map((p) => [p.name, p.from, p.opaque_px])) === JSON.stringify(MERGED_ARM_EXPECTED_MUTANT_PARTS) &&
+        mergedRefusedPlan !== null &&
+        mergedRefusedPlan.problems.length === 1 &&
+        mergedRefusedPlan.problems[0].code === 'SEETHROUGH_ARM_RUN_MERGED' &&
+        mergedRefusedPlan.problems[0].detail.includes('60 skin px around r_wrist at (15, 24), rows y=20..25') &&
+        mergedRefusedPlan.problems[0].detail.includes('17.0 px (1.42x the forearm length 12.0 px from r_elbow to r_wrist) below r_wrist') &&
+        mergedRefusedAssemble !== null &&
+        mergedRefusedAssemble.problems.length === 1 &&
+        mergedRefusedAssemble.problems[0].code === 'SEETHROUGH_ARM_RUN_MERGED',
+      `split plan: ${JSON.stringify(mergedSplitParts.map((p) => `${p.name}(${p.from}):${p.opaque_px}`))}, regions hand_r=${splitProp.regions.hand_r ?? '-'} drape_r=${splitProp.regions.hand_r === undefined ? '-' : splitProp.regions.drape_r ?? '-'}; mutant (no keySkeleton): ${JSON.stringify(mergedMutantParts.map((p) => `${p.name}:${p.opaque_px}`))}; same-colour drape refusal: ${codes(mergedRefusedPlan)} / ${codes(mergedRefusedAssemble)}`,
+      'issue #490: a hanging arm layer that merges sleeve, bare hand and overgarment past 1.0x the forearm length below the wrist is split into drape-<s>, handwear-<s> and hand-<s> when the sleeve-to-drape colour distance is >= 80, or refused with SEETHROUGH_ARM_RUN_MERGED when < 80; without the detector the 508-px merged blob lands silently on one sleeves part',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

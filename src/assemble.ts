@@ -99,7 +99,7 @@
  *
  * Pure: no clock, no randomness, no file access. The CLI reads and writes.
  */
-import type { ArmSplit, BoneEntry, CharacterConfig, Cut, EarlyConfig, Extend, Limb, Patch, PlanEntry, Run, SeeThrough } from './config.ts';
+import { type ArmSplit, type BoneEntry, type CharacterConfig, type ControlSkeleton, controlSkeletonOf, type Cut, type EarlyConfig, type Extend, type Limb, type Patch, type PlanEntry, type Run, type SeeThrough } from './config.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
 import { figuresPhrase, implausibleRules, type Layer, type LayerFigures, layerFigures, type LayerSet, NEAR_WHITE_MIN, OPAQUE_ALPHA_ABOVE, ruleSummary } from './layers.ts';
 import { padToSquare, squarePad } from './inputs.ts';
@@ -123,7 +123,7 @@ import {
   warpAffine,
 } from './raster/index.ts';
 import { pyRound } from './round.ts';
-import { AUTHOR_NO_ROLE, type LayerTagReading, readAuthorTag, readLayerTag } from './tags.ts';
+import { ARM_MERGED_SPLIT_TAGS, AUTHOR_NO_ROLE, type LayerTagReading, readAuthorTag, readLayerTag } from './tags.ts';
 
 const f32 = Math.fround;
 
@@ -234,6 +234,8 @@ export interface Geometry {
   single?: boolean;
   /** `seethrough.arm_split` (issue #439): separates overlapping arms on the full run into `handwear-r` and `handwear-l` in the declared order. */
   armSplit?: ArmSplit;
+  /** `generation.control.skeleton` (issue #490): the pose keypoints on the `latent` canvas, read for merged arm layers (`splitMergedArmRuns`). */
+  keySkeleton?: ControlSkeleton;
 }
 
 /**
@@ -327,6 +329,8 @@ export interface AssembleInput {
   single?: boolean;
   /** `seethrough.arm_split` (issue #439): separates overlapping arms on the full run into `handwear-r` and `handwear-l` in the declared order. */
   armSplit?: ArmSplit;
+  /** `generation.control.skeleton` (issue #490): the pose keypoints on the `latent` canvas, read for merged arm layers (`splitMergedArmRuns`). */
+  keySkeleton?: ControlSkeleton;
 }
 
 /** The derived numbers of the two runs' geometry. */
@@ -723,6 +727,335 @@ function armSplitPlan(plan: readonly PlanEntry[], armSplit: ArmSplit | undefined
     }
   }
   return [...plan];
+}
+
+/**
+ * Issue #490: the minimum Euclidean RGB distance between the sleeve above the
+ * wrist and the non-skin overgarment drape extending more than one forearm
+ * length below the wrist for `splitMergedArmRuns` to split the merged
+ * `handwear-r` / `handwear-l` layer into `drape-<s>`, `handwear-<s>` and
+ * `hand-<s>` instead of refusing with `SEETHROUGH_ARM_RUN_MERGED`.
+ *
+ * Measured across the 9-standee corpus (issue #490, `forearm = 211.3` run px):
+ * the 6 clean standees hold `spanBelowWrist <= 94.9` px (`<= 0.45x` forearm) and
+ * the 3 merged standees hold `264.9..425.9` px (`1.25x..2.02x` forearm), placing
+ * the `1.0x` forearm threshold inside the `0.45x..1.25x` gap; on the 3 merged
+ * standees (`780..4,787` skin hand px vs the `GHOST_MIN_AREA = 40` px floor),
+ * the two with distinct sleeve and drape colours measure Euclidean RGB distance
+ * `103.6 / 106.9` (`standee-1`) and `215.7 / 236.0` (`standee-2`), while the
+ * one whose outer robe shares the sleeve's colour measures `20.8 / 28.2`
+ * (`standee-5`), placing `80` between `28.2` and `103.6`.
+ */
+export const ARM_DRAPE_COLOR_DISTANCE = 80;
+
+function medianChannelRgb(pixels: ReadonlyArray<readonly [number, number, number]>): [number, number, number] | null {
+  if (pixels.length === 0) return null;
+  const rs = pixels.map((p) => p[0]).sort((a, b) => a - b);
+  const gs = pixels.map((p) => p[1]).sort((a, b) => a - b);
+  const bs = pixels.map((p) => p[2]).sort((a, b) => a - b);
+  const mid = Math.floor(pixels.length / 2);
+  return [rs[mid], gs[mid], bs[mid]];
+}
+
+function rgbDist(a: readonly [number, number, number], b: readonly [number, number, number]): number {
+  const dr = a[0] - b[0];
+  const dg = a[1] - b[1];
+  const db = a[2] - b[2];
+  return Math.sqrt(dr * dr + dg * dg + db * db);
+}
+
+function faceMedianRgb(set: LayerSet, resolution: number): [number, number, number] {
+  const face = set.layers.find((l) => l.name === 'face');
+  if (face === undefined) return [250, 225, 210];
+  const { canvas } = cleanGhosts(placeLayer(face, resolution));
+  const px: Array<[number, number, number]> = [];
+  for (let i = 0; i < resolution * resolution; i++) {
+    const a = canvas.data[i * 4 + 3];
+    if (a < CORE_ALPHA) continue;
+    const r = canvas.data[i * 4];
+    const g = canvas.data[i * 4 + 1];
+    const b = canvas.data[i * 4 + 2];
+    if (Math.min(r, g, b) > NEAR_WHITE_MIN) continue;
+    px.push([r, g, b]);
+  }
+  return medianChannelRgb(px) ?? [250, 225, 210];
+}
+
+/**
+ * Issue #490: inspect `handwear-r` and `handwear-l` in the full run against the
+ * pose keypoints (`generation.control.skeleton`). When an arm layer holds a
+ * skin-coloured hand cluster at `<s>_wrist` (`>= GHOST_MIN_AREA` = `40` opaque
+ * run px) and its non-skin pixels reach more than `1.0x` the forearm length
+ * (`|wrist - elbow|`) below `<s>_wrist`, See-through merged the sleeve, the
+ * hand and the overgarment drape into one arm layer.
+ *
+ * - When the Euclidean RGB distance between the sleeve above the wrist and the
+ *   drape below the wrist is at least {@link ARM_DRAPE_COLOR_DISTANCE} (`80`),
+ *   splits `handwear-<s>` into three layers in draw order (back to front):
+ *   `drape-<s>` (overgarment below the cut), `handwear-<s>` (the sleeve above
+ *   the cut) and `hand-<s>` (the skin hand cluster at the wrist).
+ * - When that distance is below {@link ARM_DRAPE_COLOR_DISTANCE}, refuses with
+ *   `SEETHROUGH_ARM_RUN_MERGED` naming the layer, the span below the wrist vs
+ *   the forearm length, the sleeve and drape RGBs and their Euclidean distance.
+ */
+export function splitMergedArmRunsWithNotes(
+  set: LayerSet,
+  resolution: number,
+  frame: Pick<Frame, 'fullPad' | 'fullPadTop' | 'fullK'>,
+  sourceW: number,
+  sourceH: number,
+  keySkeleton: ControlSkeleton,
+): { set: LayerSet; notes: string[] } {
+  const [latentW, latentH] = keySkeleton.latent;
+  const sx = sourceW / latentW;
+  const sy = sourceH / latentH;
+  const toRun = (pt: readonly [number, number]): { x: number; y: number } => ({
+    x: (pt[0] * sx + frame.fullPad) / frame.fullK,
+    y: (pt[1] * sy + frame.fullPadTop) / frame.fullK,
+  });
+  const fRGB = faceMedianRgb(set, resolution);
+  const problems: Problem[] = [];
+  const notes: string[] = [];
+  const replacements = new Map<'handwear-r' | 'handwear-l', Layer[]>();
+
+  for (const s of ['r', 'l'] as const) {
+    const tag = `handwear-${s}` as const;
+    const hwLayer = set.layers.find((l) => l.name === tag);
+    if (hwLayer === undefined) continue;
+    const { canvas: cleaned } = cleanGhosts(placeLayer(hwLayer, resolution));
+    const sh = toRun(keySkeleton.points[`${s}_shoulder`]);
+    const el = toRun(keySkeleton.points[`${s}_elbow`]);
+    const wr = toRun(keySkeleton.points[`${s}_wrist`]);
+    const fdx = wr.x - el.x;
+    const fdy = wr.y - el.y;
+    const forearm = Math.sqrt(fdx * fdx + fdy * fdy);
+    if (!(forearm > 0)) continue;
+
+    // 1. Skin-coloured hand cluster in the wrist window.
+    const skinRaw = newMask(resolution, resolution);
+    const winX0 = Math.max(0, Math.floor(wr.x - 0.45 * forearm));
+    const winX1 = Math.min(resolution - 1, Math.ceil(wr.x + 0.45 * forearm));
+    const winY0 = Math.max(0, Math.floor(wr.y - 0.65 * forearm));
+    const winY1 = Math.min(resolution - 1, Math.ceil(wr.y + 0.35 * forearm));
+    for (let y = winY0; y <= winY1; y++) {
+      for (let x = winX0; x <= winX1; x++) {
+        const idx = (y * resolution + x) * 4;
+        const a = cleaned.data[idx + 3];
+        if (a <= OPAQUE_ALPHA_ABOVE) continue;
+        const r = cleaned.data[idx];
+        const g = cleaned.data[idx + 1];
+        const b = cleaned.data[idx + 2];
+        if (Math.min(r, g, b) > NEAR_WHITE_MIN) continue;
+        const fDist = rgbDist([r, g, b], fRGB);
+        const warmOrder = r >= g && g >= b && r - b >= 12 && g - b <= 45;
+        if (warmOrder && (fDist < 65 || (r > 145 && g > 95 && b > 55 && r - b <= 95))) {
+          skinRaw.data[y * resolution + x] = 1;
+        }
+      }
+    }
+    const skinClosed = fillHoles(morphClose(skinRaw, CORE_KERNEL));
+    const cc = connectedComponents(skinClosed, 8);
+    const keepHand = new Uint8Array(cc.count);
+    for (let c = 1; c < cc.count; c++) {
+      const st = cc.stats[c];
+      if (st.area < GHOST_MIN_AREA) continue;
+      const dx = wr.x < st.left ? st.left - wr.x : wr.x > st.left + st.width - 1 ? wr.x - (st.left + st.width - 1) : 0;
+      const dy = wr.y < st.top ? st.top - wr.y : wr.y > st.top + st.height - 1 ? wr.y - (st.top + st.height - 1) : 0;
+      if (Math.sqrt(dx * dx + dy * dy) <= 0.35 * forearm) keepHand[c] = 1;
+    }
+    const handMask = newMask(resolution, resolution);
+    let handPx = 0;
+    let handMinY = resolution;
+    let handMaxY = -1;
+    for (let y = 0; y < resolution; y++) {
+      for (let x = 0; x < resolution; x++) {
+        const i = y * resolution + x;
+        if (keepHand[cc.labels[i]] === 1 && cleaned.data[i * 4 + 3] > OPAQUE_ALPHA_ABOVE) {
+          handMask.data[i] = 1;
+          handPx++;
+          if (y < handMinY) handMinY = y;
+          if (y > handMaxY) handMaxY = y;
+        }
+      }
+    }
+    if (handPx < GHOST_MIN_AREA) continue;
+
+    // 2. Non-skin span below the wrist vs forearm length.
+    let nonSkinMaxY = -1;
+    for (let y = 0; y < resolution; y++) {
+      for (let x = 0; x < resolution; x++) {
+        const i = y * resolution + x;
+        if (cleaned.data[i * 4 + 3] > OPAQUE_ALPHA_ABOVE && handMask.data[i] === 0) {
+          if (y > nonSkinMaxY) nonSkinMaxY = y;
+        }
+      }
+    }
+    const spanBelowWrist = nonSkinMaxY - wr.y;
+    if (!(spanBelowWrist > forearm)) continue;
+
+    // 3. Sleeve vs drape colour distance.
+    const midArmY = Math.round((sh.y + wr.y) / 2);
+    const band1Px: Array<[number, number, number]> = [];
+    const band2Px: Array<[number, number, number]> = [];
+    const drapePx: Array<[number, number, number]> = [];
+    const wrFloor = Math.floor(wr.y);
+    const drapeStart = Math.floor(wr.y + 0.15 * forearm);
+    for (let y = 0; y < resolution; y++) {
+      for (let x = 0; x < resolution; x++) {
+        const i = y * resolution + x;
+        if (handMask.data[i] === 1) continue;
+        const a = cleaned.data[i * 4 + 3];
+        if (a < CORE_ALPHA) continue;
+        const r = cleaned.data[i * 4];
+        const g = cleaned.data[i * 4 + 1];
+        const b = cleaned.data[i * 4 + 2];
+        if (Math.min(r, g, b) > NEAR_WHITE_MIN) continue;
+        if (y <= wrFloor) {
+          if (y < midArmY) band1Px.push([r, g, b]);
+          else band2Px.push([r, g, b]);
+        } else if (y >= drapeStart) {
+          drapePx.push([r, g, b]);
+        }
+      }
+    }
+    const c1 = medianChannelRgb(band1Px);
+    const c2 = medianChannelRgb(band2Px);
+    const drapeRGB = medianChannelRgb(drapePx);
+    const d1 = c1 !== null && drapeRGB !== null ? rgbDist(c1, drapeRGB) : 0;
+    const d2 = c2 !== null && drapeRGB !== null ? rgbDist(c2, drapeRGB) : 0;
+    const bestDist = Math.max(d1, d2);
+    const sleeveRGB = (d1 >= d2 ? c1 ?? c2 : c2 ?? c1) ?? [0, 0, 0];
+    const drapeShown = drapeRGB ?? [0, 0, 0];
+
+    if (drapeRGB === null || (c1 === null && c2 === null) || bestDist < ARM_DRAPE_COLOR_DISTANCE) {
+      problems.push({
+        code: 'SEETHROUGH_ARM_RUN_MERGED',
+        object: `the full run (${set.source}) layer "${tag}"`,
+        detail:
+          `merges the sleeve, the hand (${handPx} skin px around ${s}_wrist at (${Math.round(wr.x)}, ${Math.round(wr.y)}), rows y=${handMinY}..${handMaxY}) and the overgarment into one arm layer: non-skin pixels reach y=${nonSkinMaxY}, ${spanBelowWrist.toFixed(1)} px (${(spanBelowWrist / forearm).toFixed(2)}x the forearm length ${forearm.toFixed(1)} px from ${s}_elbow to ${s}_wrist) below ${s}_wrist, and the sleeve above ${s}_wrist (rgb(${sleeveRGB.join(', ')})) and the drape below ${s}_wrist (rgb(${drapeShown.join(', ')})) have Euclidean RGB distance ${bestDist.toFixed(1)} (< ${ARM_DRAPE_COLOR_DISTANCE}); ` +
+          `non-skin pixels reaching at most 1.0x the forearm length (${forearm.toFixed(1)} px) below ${s}_wrist, or a sleeve-to-drape Euclidean RGB distance of at least ${ARM_DRAPE_COLOR_DISTANCE} so the stage can split "${tag}" into "drape-${s}", "${tag}" and "hand-${s}", is required — re-seed config.seethrough.seed, split the merged layer into author: layers in the full run, or cut the overgarment from the sleeve in config.assemble.cuts`,
+      });
+      continue;
+    }
+
+    // 4. Split into drape-<s>, handwear-<s> and hand-<s> (back to front).
+    const cutY = Math.max(Math.round(wr.y), handMaxY);
+    const elY = Math.round(el.y);
+    const drapeCanvas = newRaster(resolution, resolution);
+    const sleeveCanvas = newRaster(resolution, resolution);
+    const handCanvas = newRaster(resolution, resolution);
+    for (let y = 0; y < resolution; y++) {
+      for (let x = 0; x < resolution; x++) {
+        const i = y * resolution + x;
+        const p = i * 4;
+        if (cleaned.data[p + 3] === 0) continue;
+        if (handMask.data[i] === 1) {
+          handCanvas.data.set(cleaned.data.subarray(p, p + 4), p);
+        } else if (y > cutY) {
+          drapeCanvas.data.set(cleaned.data.subarray(p, p + 4), p);
+        } else if (d2 < ARM_DRAPE_COLOR_DISTANCE && y > elY) {
+          const px: [number, number, number] = [cleaned.data[p], cleaned.data[p + 1], cleaned.data[p + 2]];
+          const dst = rgbDist(px, drapeRGB) < rgbDist(px, sleeveRGB) ? drapeCanvas.data : sleeveCanvas.data;
+          dst.set(cleaned.data.subarray(p, p + 4), p);
+        } else {
+          sleeveCanvas.data.set(cleaned.data.subarray(p, p + 4), p);
+        }
+      }
+    }
+    const buildSplitLayer = (name: string, canvas: Raster): Layer | null => {
+      let opaque = 0;
+      let x0 = resolution;
+      let y0 = resolution;
+      let x1 = -1;
+      let y1 = -1;
+      for (let y = 0; y < resolution; y++) {
+        for (let x = 0; x < resolution; x++) {
+          const a = canvas.data[(y * resolution + x) * 4 + 3];
+          if (a > OPAQUE_ALPHA_ABOVE) opaque++;
+          if (a > 0) {
+            if (x < x0) x0 = x;
+            if (x > x1) x1 = x;
+            if (y < y0) y0 = y;
+            if (y > y1) y1 = y;
+          }
+        }
+      }
+      if (opaque === 0 || x1 < x0) return null;
+      return {
+        name,
+        tag: readLayerTag(name) as LayerTagReading,
+        file: hwLayer.file,
+        pixels: crop(canvas, x0, y0, x1 - x0 + 1, y1 - y0 + 1),
+        left: x0,
+        top: y0,
+        right: x1 + 1,
+        bottom: y1 + 1,
+        depth: hwLayer.depth,
+        drawOrder: 0,
+        opaquePx: opaque,
+      };
+    };
+    const drapeLayer = buildSplitLayer(`drape-${s}`, drapeCanvas);
+    const sleeveLayer = buildSplitLayer(tag, sleeveCanvas);
+    const handLayer = buildSplitLayer(`hand-${s}`, handCanvas);
+    if (drapeLayer !== null && sleeveLayer !== null && handLayer !== null) {
+      replacements.set(tag, [drapeLayer, sleeveLayer, handLayer]);
+      notes.push(
+        `${tag}: merged arm layer (${handPx} skin hand px at ${s}_wrist y=${handMinY}..${handMaxY}, non-skin reaching y=${nonSkinMaxY}, ${(spanBelowWrist / forearm).toFixed(2)}x forearm ${forearm.toFixed(1)} px; sleeve rgb(${sleeveRGB.join(', ')}) vs drape rgb(${drapeRGB.join(', ')}) Euclidean distance ${bestDist.toFixed(1)} >= ${ARM_DRAPE_COLOR_DISTANCE}) -> split into drape-${s} (${drapeLayer.opaquePx} px), ${tag} (${sleeveLayer.opaquePx} px) and hand-${s} (${handLayer.opaquePx} px)`,
+      );
+    }
+  }
+
+  refuseIfAny(problems);
+  if (replacements.size === 0) return { set, notes };
+
+  const nextLayers: Layer[] = [];
+  for (const l of set.layers) {
+    const rep = (l.name === 'handwear-r' || l.name === 'handwear-l') ? replacements.get(l.name) : undefined;
+    if (rep !== undefined) nextLayers.push(...rep);
+    else nextLayers.push({ ...l });
+  }
+  nextLayers.forEach((l, i) => {
+    l.drawOrder = i;
+  });
+  return { set: { ...set, layers: nextLayers }, notes };
+}
+
+export function splitMergedArmRuns(
+  set: LayerSet,
+  resolution: number,
+  frame: Pick<Frame, 'fullPad' | 'fullPadTop' | 'fullK'>,
+  sourceW: number,
+  sourceH: number,
+  keySkeleton: ControlSkeleton,
+): LayerSet {
+  return splitMergedArmRunsWithNotes(set, resolution, frame, sourceW, sourceH, keySkeleton).set;
+}
+
+/**
+ * Issue #490: when `splitMergedArmRuns` split `full:handwear-<s>` into
+ * `drape-<s>`, `handwear-<s>` and `hand-<s>`, expand a lone `full:handwear-<s>`
+ * row in `assemble.plan` (when `drape-<s>` and `hand-<s>` are not already in
+ * `plan`) into `[["drape_<s>", "full", "drape-<s>"], [name, "full", "handwear-<s>"], ["hand_<s>", "full", "hand-<s>"]]`.
+ */
+export function mergedArmSplitPlan(plan: readonly PlanEntry[], full: LayerSet): PlanEntry[] {
+  const fullTags = new Set(full.layers.map((l) => l.name));
+  const plannedFullTags = new Set(plan.filter(([, run]) => run === 'full').map(([, , tag]) => tag));
+  const out: PlanEntry[] = [];
+  for (const entry of plan) {
+    const [name, run, tag] = entry;
+    if (run === 'full' && (tag === 'handwear-r' || tag === 'handwear-l')) {
+      const s = tag === 'handwear-r' ? 'r' : 'l';
+      const drapeTag = `drape-${s}`;
+      const handTag = `hand-${s}`;
+      if (fullTags.has(drapeTag) && fullTags.has(handTag) && !plannedFullTags.has(drapeTag) && !plannedFullTags.has(handTag)) {
+        out.push([aliasOf(drapeTag), 'full', drapeTag], [name, 'full', tag], [aliasOf(handTag), 'full', handTag]);
+        continue;
+      }
+    }
+    out.push(entry);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -2769,9 +3102,11 @@ export function assemble(input: AssembleInput): AssembleResult {
   // Issue #366: one run's file, padded to the resolution square; read as both runs, as before.
   const fullPadded = single ? padSingleRun(input.full, frame, input.resolution) : input.full;
   // Issue #439: when seethrough.arm_split is declared, split the full run's overlapping handwear into handwear-r and handwear-l.
-  const full = input.armSplit === undefined ? fullPadded : applyArmSplit(fullPadded, input.resolution, input.armSplit);
+  const fullArmSplit = input.armSplit === undefined ? fullPadded : applyArmSplit(fullPadded, input.resolution, input.armSplit);
+  // Issue #490: when generation.control.skeleton is present, split merged arm layers (or refuse when sleeve and drape share one colour).
+  const full = input.keySkeleton === undefined ? fullArmSplit : splitMergedArmRuns(fullArmSplit, input.resolution, frame, source.width, source.height, input.keySkeleton);
   const head = single ? full : input.head;
-  const plan = armSplitPlan(input.plan, input.armSplit);
+  const plan = mergedArmSplitPlan(armSplitPlan(input.plan, input.armSplit), full);
   const padRecord = singleRunPadRecord(single, source.width, source.height, input.resolution, frame);
   if (single) checkSingleRun(full, plan, extend);
   checkPlanAgainstRuns(plan, extend, full, head);
@@ -3761,7 +4096,10 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
   // Issue #366: one run's file, padded to the resolution square as the stage pads it.
   const fullPadded = g.single === true ? padSingleRun(full0, frame, g.resolution) : full0;
   // Issue #439: when seethrough.arm_split is declared, split the full run's overlapping handwear into handwear-r and handwear-l.
-  const full = g.armSplit === undefined ? fullPadded : applyArmSplit(fullPadded, g.resolution, g.armSplit);
+  const fullArmSplit = g.armSplit === undefined ? fullPadded : applyArmSplit(fullPadded, g.resolution, g.armSplit);
+  // Issue #490: when generation.control.skeleton is present, split merged arm layers (or refuse when sleeve and drape share one colour).
+  const mergedSplit = g.keySkeleton === undefined ? { set: fullArmSplit, notes: [] as string[] } : splitMergedArmRunsWithNotes(fullArmSplit, g.resolution, frame, g.sourceW, g.sourceH, g.keySkeleton);
+  const full = mergedSplit.set;
   const head = g.single === true ? full : head0;
   const runs = { full: runLayers(full, g.resolution), head: runLayers(head, g.resolution) };
   const find = (run: Run, tag: string): RunLayer | undefined => runs[run].find((l) => l.tag === tag);
@@ -3781,7 +4119,8 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
   };
   const ok = (run: Run, tag: string): boolean => {
     const l = find(run, tag);
-    return tag !== 'nose' && l !== undefined && l.opaqueRunPx >= minPx && !implausible(run, tag, 'not proposed');
+    const floor = ARM_MERGED_SPLIT_TAGS.some((p) => tag === `${p}-r` || tag === `${p}-l`) ? 1 : minPx;
+    return tag !== 'nose' && l !== undefined && l.opaqueRunPx >= floor && !implausible(run, tag, 'not proposed');
   };
   const body = runs.full.filter((l) => !PROPOSE_HEAD_TAGS.includes(l.tag) && ok('full', l.tag)).map((l) => l.tag);
   // Issue #256: an author-made layer is proposed from the run that holds it, at its place in that run's draw order,
@@ -3807,7 +4146,7 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
     }
     plan.push([t.startsWith('handwear') && hw.length === 1 ? 'sleeves' : aliasOf(t), 'full', t]);
   }
-  const notes: string[] = [];
+  const notes: string[] = [...mergedSplit.notes];
   const headArea = (frame.headK * frame.S) ** 2;
   const fullArea = (frame.fullK * frame.S) ** 2;
   for (const t of ['headwear', 'earwear']) {
@@ -4013,6 +4352,7 @@ export function stageFields(
   bones?: BoneEntry[];
   single?: boolean;
   armSplit?: ArmSplit;
+  keySkeleton?: ControlSkeleton;
 } {
   const problems: Problem[] = [];
   if (cfg.seethrough === undefined) {
@@ -4023,11 +4363,13 @@ export function stageFields(
   }
   refuseIfAny(problems);
   const st = cfg.seethrough as SeeThrough;
+  const keySkeleton = controlSkeletonOf(cfg);
   return {
     resolution: st.resolution,
     headBox: single !== null ? singleRunHeadBox(single.w, single.h, st.resolution) : (st.head_box as [number, number, number, number]),
     ...(single !== null ? { single: true } : {}),
     ...(st.arm_split === undefined ? {} : { armSplit: st.arm_split }),
+    ...(keySkeleton === undefined ? {} : { keySkeleton }),
     rigScale: cfg.assemble.rig_scale,
     plan: cfg.assemble.plan,
     extend: cfg.assemble.extend_below_crop ?? [],
@@ -4048,16 +4390,18 @@ export function stageFields(
 export function proposeFields(
   cfg: EarlyConfig,
   single: { w: number; h: number } | null = null,
-): { resolution: number; headBox: [number, number, number, number]; rigScale: number; single?: boolean; armSplit?: ArmSplit } {
+): { resolution: number; headBox: [number, number, number, number]; rigScale: number; single?: boolean; armSplit?: ArmSplit; keySkeleton?: ControlSkeleton } {
   const armSplit = cfg.seethrough.arm_split === undefined ? {} : { armSplit: cfg.seethrough.arm_split };
+  const keySkeleton = controlSkeletonOf(cfg);
+  const skelField = keySkeleton === undefined ? {} : { keySkeleton };
   if (single !== null) {
     refuseIfAny(singleRunHeadBoxProblems(cfg.seethrough));
-    return { resolution: cfg.seethrough.resolution, headBox: singleRunHeadBox(single.w, single.h, cfg.seethrough.resolution), rigScale: cfg.assemble.rig_scale, single: true, ...armSplit };
+    return { resolution: cfg.seethrough.resolution, headBox: singleRunHeadBox(single.w, single.h, cfg.seethrough.resolution), rigScale: cfg.assemble.rig_scale, single: true, ...armSplit, ...skelField };
   }
   if (cfg.seethrough.head_box === undefined) {
     refuseIfAny([{ code: 'ASSEMBLE_FIELD_PRESENT', object: 'config.seethrough.head_box', detail: 'is absent; the plan is proposed from both runs, and the head run cannot be placed on the painting without the box it was cropped from — run `propose --head-box` first' }]);
   }
-  return { resolution: cfg.seethrough.resolution, headBox: cfg.seethrough.head_box as [number, number, number, number], rigScale: cfg.assemble.rig_scale, ...armSplit };
+  return { resolution: cfg.seethrough.resolution, headBox: cfg.seethrough.head_box as [number, number, number, number], rigScale: cfg.assemble.rig_scale, ...armSplit, ...skelField };
 }
 
 /**
