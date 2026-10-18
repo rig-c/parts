@@ -3352,14 +3352,33 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     // the idle's rate whatever --requirements says, so a requirements file moves only what it declares (CK78), with physics on and off
     if (animationNames.length > 0) {
       const fps = IDLE_FPS;
+      const checkedAlt = set !== undefined && !allSets && inp.parts !== null ? (inp.parts.alternates ?? []).find((a) => a.name === set) : undefined;
+      const subsetFoldSlots =
+        checkedAlt !== undefined && checkedAlt.parts !== undefined
+          ? new Set<string>([...Object.keys(checkedAlt.slots), ...(checkedAlt.hides ?? [])])
+          : null;
+      const filterFolds = (map: Map<string, FoldingMesh[]>): Map<string, FoldingMesh[]> => {
+        if (subsetFoldSlots === null) return map;
+        const filtered = new Map<string, FoldingMesh[]>();
+        for (const [anim, list] of map.entries()) {
+          filtered.set(anim, list.filter((m) => subsetFoldSlots.has(m.slot)));
+        }
+        return filtered;
+      };
+      const mayFoldForRun =
+        reqFile === null
+          ? []
+          : subsetFoldSlots === null
+            ? reqFile.may_fold
+            : reqFile.may_fold.filter((e) => subsetFoldSlots.has(e.slot));
       try {
         // Issue #348: with a foot to read, the keyed render writes each animation's geometry as well.
         const geometry = feet.length > 0 ? ['--geometry'] : [];
         if (stripped === null) {
           const fr = rigc(['render', '--candidate', buildDir, '--folds', ...geometry, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', foldDir]);
           if (fr.status !== 0) refuseIfAny(rigcFailed(`render --folds${geometry.map((g) => ` ${g}`).join('')} --fps ${fps}`, fr, fr.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
-          const readings = readFoldSets(foldDir, animationNames, fps, fr.out);
-          folds = foldsLine(animationNames, fps, 0, readings, reqFile === null ? [] : reqFile.may_fold, reqFile === null ? null : reqFile.path, foldProblems, readings, inp.rig, []);
+          const readings = filterFolds(readFoldSets(foldDir, animationNames, fps, fr.out));
+          folds = foldsLine(animationNames, fps, 0, readings, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readings, inp.rig, []);
           if (feet.length > 0) {
             const sets = readJson(join(foldDir, 'frames.json'), []);
             const listed = sets !== null && Array.isArray(sets.sets) ? sets.sets.filter(isRecord) : [];
@@ -3376,9 +3395,9 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           if (frOn.status !== 0) refuseIfAny(rigcFailed(`render --folds --fps ${fps}`, frOn, frOn.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
           const frOff = rigc(['render', '--candidate', keyedBuild('the animations with their physics constraint(s) left out'), '--folds', ...geometry, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', offDir]);
           if (frOff.status !== 0) refuseIfAny(rigcFailed(`render --folds${geometry.map((g) => ` ${g}`).join('')} --fps ${fps} (physics constraint(s) left out)`, frOff, frOff.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
-          const readingsOn = readFoldSets(onDir, animationNames, fps, frOn.out);
-          const readingsOff = readFoldSets(offDir, animationNames, fps, frOff.out);
-          folds = foldsLine(animationNames, fps, stripped.physics.length, readingsOn, reqFile === null ? [] : reqFile.may_fold, reqFile === null ? null : reqFile.path, foldProblems, readingsOff, inp.rig, stripped.physics);
+          const readingsOn = filterFolds(readFoldSets(onDir, animationNames, fps, frOn.out));
+          const readingsOff = filterFolds(readFoldSets(offDir, animationNames, fps, frOff.out));
+          folds = foldsLine(animationNames, fps, stripped.physics.length, readingsOn, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readingsOff, inp.rig, stripped.physics);
           if (feet.length > 0) {
             const sets = readJson(join(offDir, 'frames.json'), []);
             const listed = sets !== null && Array.isArray(sets.sets) ? sets.sets.filter(isRecord) : [];

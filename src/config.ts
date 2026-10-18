@@ -1383,7 +1383,10 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
   if ('cloth' in t) checkCloth(c, t.cloth);
   const from = isPlainObject(t.motion) ? t.motion.animations_from : undefined;
   const animations = base !== null && typeof from === 'string' && from !== '' ? readAnimationsFrom(c, resolve(base, from)) : null;
-  if (animations !== null) checkFaceAnimationBand(c, animations, hasAltFace, t.turn, attached);
+  if (animations !== null) {
+    checkFaceAnimationBand(c, animations, hasAltFace, t.turn, attached);
+    checkAnimationSetKeys(c, animations, t.assemble, new Set<string>([...parts, ...patches, ...cuts, ...(limbs?.parts.keys() ?? [])]));
+  }
   if (base !== null) poseBeside(c, t.generation, base);
   refuseIfAny(c.problems);
   return { config: raw as CharacterConfig, animations };
@@ -3430,6 +3433,103 @@ function checkFaceAnimationBand(c: Check, animations: AnimationsFrom, hasAltFace
               );
             }
           }
+        }
+      });
+    });
+  }
+}
+
+/**
+ * Issue #473: an attachment track key in `motion.animations_from` may name an
+ * alternate set (`{"t": …, "set": "<name>" | null}`) instead of spelling out the
+ * `<set>_<slot>` attachment name. Refuses (`CONFIG_SET_COVERS_SLOT`) when `"set"`
+ * appears on a non-attachment track, names an undeclared alternate set, or keys a
+ * slot the set does not cover (`slots` or `hides`).
+ */
+function checkAnimationSetKeys(
+  c: Check,
+  animations: AnimationsFrom,
+  assemble: Json,
+  allSlots: Set<string>,
+): void {
+  const at = `config.motion.animations_from (${animations.file}).animations`;
+  const sets = new Map<string, { slots: Set<string>; hides: Set<string> }>();
+  if (isPlainObject(assemble) && Array.isArray(assemble.alternates)) {
+    for (const alt of assemble.alternates) {
+      if (!isPlainObject(alt) || typeof alt.name !== 'string' || alt.name === '') continue;
+      const hides = new Set<string>(
+        Array.isArray(alt.hides) ? alt.hides.filter((h): h is string => typeof h === 'string') : [],
+      );
+      const altCuts = Array.isArray(alt.cuts)
+        ? alt.cuts.filter(isPlainObject).map((cu) => cu.into).filter((s): s is string => typeof s === 'string')
+        : [];
+      const slots = Array.isArray(alt.parts)
+        ? new Set<string>(alt.parts.filter((p): p is string => typeof p === 'string' && !hides.has(p)))
+        : new Set<string>([...allSlots, ...altCuts].filter((p) => !hides.has(p)));
+      sets.set(alt.name, { slots, hides });
+    }
+  }
+  const declaredSets = sets.size === 0 ? 'none' : [...sets.keys()].map((n) => `"${n}"`).join(', ');
+  for (const [animName, anim] of Object.entries(animations.table)) {
+    if (!isPlainObject(anim) || !Array.isArray(anim.tracks)) continue;
+    anim.tracks.forEach((tr, ti) => {
+      if (!isPlainObject(tr) || !Array.isArray(tr.keys)) return;
+      const slot = typeof tr.slot === 'string' && tr.slot !== '' ? tr.slot : null;
+      const isAttachmentTrack = tr.property === 'attachment' && slot !== null;
+      tr.keys.forEach((k, ki) => {
+        if (!isPlainObject(k) || !('set' in k)) return;
+        const keyAt = `${at}.${animName}.tracks[${ti}].keys[${ki}].set`;
+        if (!isAttachmentTrack || slot === null) {
+          c.fail(
+            'CONFIG_SET_COVERS_SLOT',
+            keyAt,
+            `is ${show(k.set)} on a ${show(tr.property)} track${slot === null ? '' : ` for slot "${slot}"`}; a "set" key belongs on a slot attachment track ({"slot": "<part>", "property": "attachment", "keys": [{"t": …, "set": "<name>" | null}]})`,
+          );
+          return;
+        }
+        if ('v' in k) {
+          c.fail(
+            'CONFIG_FIELD_TYPE',
+            keyAt,
+            `is declared beside v (${show(k.v)}); state either "set": "<name>" | null or "v": "<attachment>" | null on an attachment key, not both`,
+          );
+          return;
+        }
+        const setVal = k.set;
+        if (setVal === null) {
+          if (!allSlots.has(slot)) {
+            c.fail(
+              'CONFIG_SET_COVERS_SLOT',
+              keyAt,
+              `restores the base attachment on slot "${slot}", which is not a declared slot of the rig (declared slots: ${[...allSlots].map((s) => `"${s}"`).join(', ')})`,
+            );
+          }
+          return;
+        }
+        if (typeof setVal !== 'string' || setVal === '') {
+          c.fail(
+            'CONFIG_FIELD_TYPE',
+            keyAt,
+            `is ${show(setVal)}; a non-empty alternate set name or null (the base pose) is required`,
+          );
+          return;
+        }
+        const entry = sets.get(setVal);
+        if (entry === undefined) {
+          c.fail(
+            'CONFIG_SET_COVERS_SLOT',
+            keyAt,
+            `names alternate set "${setVal}" for slot "${slot}", which config.assemble.alternates does not declare (declared sets: ${declaredSets})`,
+          );
+          return;
+        }
+        if (!entry.slots.has(slot) && !entry.hides.has(slot)) {
+          const covered = [...entry.slots, ...entry.hides].map((s) => `"${s}"`).join(', ') || 'none';
+          c.fail(
+            'CONFIG_SET_COVERS_SLOT',
+            keyAt,
+            `names alternate set "${setVal}" on slot "${slot}", which set "${setVal}" does not cover (set "${setVal}" covers: ${covered}); add "${slot}" to that set's parts (or hides) in config.assemble.alternates, or key a slot the set covers`,
+          );
         }
       });
     });
