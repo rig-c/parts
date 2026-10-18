@@ -731,3 +731,43 @@ export const MERGED_ARM_EXPECTED_SPLIT_PARTS: ReadonlyArray<readonly [string, st
 ];
 export const MERGED_ARM_EXPECTED_MUTANT_PARTS: ReadonlyArray<readonly [string, string, number]> = [['sleeves', 'full:handwear-r', 508]];
 
+/**
+ * Issue #492: a hollow head-run `face` layer on the 64x64 flat fixture
+ * (`SOURCE_SIDE = 128`, `RESOLUTION = 64`, `RIG_SCALE = 0.5`, `HEAD_BOX = [32, 0, 96, 64]`).
+ *
+ * - `HOLLOW_HEAD_FULL` gives `full:face` `[16, 28) x [8, 22)` (`12 x 14 = 168`
+ *   opaque full-run px >= `PROPOSE_MIN_PX = 150`). Mapped into the 64x64 head
+ *   canvas by `fullLayerToHead` (`S_full = 2`, `headK = 1`), its opaque area
+ *   (`alpha > 8`) is `[0, 24) x [15, 44)` (`24 x 29 = 696` head-run px,
+ *   midpoint row `midY = 29`: upper half `y = 15..29` has `360` px, lower half
+ *   `y = 30..43` has `336` px).
+ * - `HOLLOW_HEAD_LAYERS` keeps only the chin/lower jaw on `head:face`,
+ *   `[0, 24) x [32, 44)` (`24 x 12 = 288` head-run px): overlap with
+ *   `fullLayerToHead(full:face)` is `288 / 696` (`41.4 % < 75.0 %`, upper half
+ *   `0 / 360` = `0.0 %`, lower half `288 / 336` = `85.7 %`).
+ *   - Without `head_face_underfill: true`, both `proposePlan` and `assemble`
+ *     refuse with `SEETHROUGH_HEAD_RUN_HOLLOW`.
+ *   - With `head_face_underfill: true`, `696 - 288 = 408` transparent head-run
+ *     pixels are filled from `fullLayerToHead(full:face)`, restoring the rig-space
+ *     `face` part from `72` rig px (`12 x 6`, the un-underfilled mutant) to
+ *     `168` rig px (`12 x 14`) and reducing `uncovered_error_px` by `96` rig px.
+ * - `MISSING_FACE_HEAD_LAYERS` omits `face` from the head run altogether (`0 / 696`,
+ *   `0.0 %` coverage): both `proposePlan` and `assemble` refuse with
+ *   `SEETHROUGH_HEAD_RUN_HOLLOW`, even when `head_face_underfill: true` is set.
+ */
+export const HOLLOW_HEAD_FULL: RunLayerSpec[] = [
+  ...FULL_LAYERS,
+  { name: 'face', depth: 0.5, rects: [rect(16, 8, 28, 22, C)] },
+];
+export const HOLLOW_HEAD_LAYERS: RunLayerSpec[] = HEAD_LAYERS.map((l) =>
+  l.name === 'face' ? { ...l, rects: [rect(0, 32, 24, 44, C)] } : l,
+);
+export const MISSING_FACE_HEAD_LAYERS: RunLayerSpec[] = HEAD_LAYERS.filter((l) => l.name !== 'face');
+export const HOLLOW_HEAD_EXPECTED = {
+  fullMappedPx: 696,
+  hollowOverlapPx: 288,
+  underfillPx: 408,
+  repairedFaceRigPx: 168,
+  mutantFaceRigPx: 72,
+} as const;
+

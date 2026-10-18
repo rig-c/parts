@@ -150,6 +150,10 @@ import {
   MERGED_ARM_KEY_SKELETON,
   MERGED_ARM_REFUSED_FULL,
   MERGED_ARM_SPLIT_FULL,
+  HOLLOW_HEAD_EXPECTED,
+  HOLLOW_HEAD_FULL,
+  HOLLOW_HEAD_LAYERS,
+  MISSING_FACE_HEAD_LAYERS,
   type RunLayerSpec,
 } from './fixtures/assemble_fixture.ts';
 import { type AnimFrame, chunkTypes, encodeApng, encodeIndexedApng } from './src/apng.ts';
@@ -24889,6 +24893,103 @@ function authorLayerControls(say: (name: string, ok: boolean, detail: string, wh
         mergedRefusedAssemble.problems[0].code === 'SEETHROUGH_ARM_RUN_MERGED',
       `split plan: ${JSON.stringify(mergedSplitParts.map((p) => `${p.name}(${p.from}):${p.opaque_px}`))}, regions hand_r=${splitProp.regions.hand_r ?? '-'} drape_r=${splitProp.regions.hand_r === undefined ? '-' : splitProp.regions.drape_r ?? '-'}; mutant (no keySkeleton): ${JSON.stringify(mergedMutantParts.map((p) => `${p.name}:${p.opaque_px}`))}; same-colour drape refusal: ${codes(mergedRefusedPlan)} / ${codes(mergedRefusedAssemble)}`,
       'issue #490: a hanging arm layer that merges sleeve, bare hand and overgarment past 1.0x the forearm length below the wrist is split into drape-<s>, handwear-<s> and hand-<s> when the sleeve-to-drape colour distance is >= 80, or refused with SEETHROUGH_ARM_RUN_MERGED when < 80; without the detector the 508-px merged blob lands silently on one sleeves part',
+    );
+
+    // AS257 — issue #492: when full:face has >= 150 opaque run px and head:face covers < 75% of fullLayerToHead(full:face),
+    // both proposePlan and assemble refuse with SEETHROUGH_HEAD_RUN_HOLLOW unless headFaceUnderfill: true is set;
+    // with headFaceUnderfill: true and head:face present, transparent head:face pixels inside full:face's footprint are
+    // filled from fullLayerToHead(full:face), restoring the face part from 72 rig px (the un-underfilled mutant) to 168 rig px;
+    // when head:face is absent (0 px), SEETHROUGH_HEAD_RUN_HOLLOW fires even under headFaceUnderfill: true;
+    // config.assemble.head_face_underfill accepts booleans and refuses non-booleans with CONFIG_FIELD_TYPE.
+    const fullHollow = runIn('full-hollow-head', HOLLOW_HEAD_FULL);
+    const headHollow = runIn('head-hollow-face', HOLLOW_HEAD_LAYERS);
+    const headMissingFace = runIn('head-missing-face', MISSING_FACE_HEAD_LAYERS);
+    const hollowRefusedPlan = refusals(() => proposePlan(fullHollow, headHollow, geometry));
+    const hollowUnderfillPlan = proposePlan(fullHollow, headHollow, { ...geometry, headFaceUnderfill: true });
+    const hollowRefusedAssemble = refusals(() =>
+      assemble({ ...baseAssemble, full: fullHollow, head: headHollow, plan: hollowUnderfillPlan.plan, extend: hollowUnderfillPlan.extend_below_crop }),
+    );
+    const hollowUnderfillOut = assemble({
+      ...baseAssemble,
+      full: fullHollow,
+      head: headHollow,
+      headFaceUnderfill: true,
+      plan: hollowUnderfillPlan.plan,
+      extend: hollowUnderfillPlan.extend_below_crop,
+    });
+    const hollowFacePart = hollowUnderfillOut.parts.parts.find((p) => p.name === 'face');
+    // Mutant: bypass the hollow check and underfill by shrinking full:face below PROPOSE_MIN_PX (150 px) so head:face stays hollow.
+    const mutantSmallFull = runIn('full-hollow-mutant', [
+      ...FULL_LAYERS,
+      { name: 'face', depth: 0.5, rects: [{ x0: 16, y0: 8, x1: 28, y1: 20, colour: C }] },
+    ]);
+    const hollowMutantOut = assemble({
+      ...baseAssemble,
+      full: mutantSmallFull,
+      head: headHollow,
+      plan: hollowUnderfillPlan.plan,
+      extend: hollowUnderfillPlan.extend_below_crop,
+    });
+    const hollowMutantFacePart = hollowMutantOut.parts.parts.find((p) => p.name === 'face');
+    const missingRefusedPlan = refusals(() => proposePlan(fullHollow, headMissingFace, { ...geometry, headFaceUnderfill: true }));
+    const missingRefusedAssemble = refusals(() =>
+      assemble({ ...baseAssemble, full: fullHollow, head: headMissingFace, headFaceUnderfill: true, plan: hollowUnderfillPlan.plan, extend: hollowUnderfillPlan.extend_below_crop }),
+    );
+    const cfgUnderfillTrue = refusals(() => {
+      const c = assembleConfig();
+      (c.assemble as Record<string, unknown>).head_face_underfill = true;
+      parseConfig(c);
+      parseEarlyConfig(c, 'assemble');
+      parseEarlyConfig(c, 'layers');
+    });
+    const cfgUnderfillBad = refusals(() => {
+      const c = assembleConfig();
+      (c.assemble as Record<string, unknown>).head_face_underfill = 'yes';
+      parseConfig(c);
+    });
+    const cfgEarlyBad = refusals(() => {
+      const c = assembleConfig();
+      (c.assemble as Record<string, unknown>).head_face_underfill = 1;
+      parseEarlyConfig(c, 'layers');
+    });
+    say(
+      'AS257_SEETHROUGH_HOLLOW_HEAD_RUN_FACE_REFUSES_WITH_SEETHROUGH_HEAD_RUN_HOLLOW_OR_UNDERFILLS_FROM_FULL_FACE',
+      hollowRefusedPlan !== null &&
+        hollowRefusedPlan.problems.length === 1 &&
+        hollowRefusedPlan.problems[0].code === 'SEETHROUGH_HEAD_RUN_HOLLOW' &&
+        hollowRefusedPlan.problems[0].object.endsWith('layer "face"') &&
+        hollowRefusedPlan.problems[0].detail.includes(`covers ${HOLLOW_HEAD_EXPECTED.hollowOverlapPx} / ${HOLLOW_HEAD_EXPECTED.fullMappedPx} px (41.4%, upper half 0.0%, lower half 85.7%)`) &&
+        hollowRefusedAssemble !== null &&
+        hollowRefusedAssemble.problems.length === 1 &&
+        hollowRefusedAssemble.problems[0].code === 'SEETHROUGH_HEAD_RUN_HOLLOW' &&
+        hollowUnderfillPlan.notes.some(
+          (n) =>
+            n ===
+            `face: head_face_underfill composited full:face under head:face on the head canvas, filling ${HOLLOW_HEAD_EXPECTED.underfillPx} transparent px (${HOLLOW_HEAD_EXPECTED.hollowOverlapPx} / ${HOLLOW_HEAD_EXPECTED.fullMappedPx} px, 41.4% -> ${HOLLOW_HEAD_EXPECTED.fullMappedPx} / ${HOLLOW_HEAD_EXPECTED.fullMappedPx} px, 100.0%)`,
+        ) &&
+        hollowUnderfillOut.headFaceUnderfillPx === HOLLOW_HEAD_EXPECTED.underfillPx &&
+        hollowFacePart?.opaque_px === HOLLOW_HEAD_EXPECTED.repairedFaceRigPx &&
+        hollowMutantFacePart?.opaque_px === HOLLOW_HEAD_EXPECTED.mutantFaceRigPx &&
+        hollowUnderfillOut.figures.uncoveredErrorPx === 2563 &&
+        hollowMutantOut.figures.uncoveredErrorPx === 2635 &&
+        missingRefusedPlan !== null &&
+        missingRefusedPlan.problems.length === 1 &&
+        missingRefusedPlan.problems[0].code === 'SEETHROUGH_HEAD_RUN_HOLLOW' &&
+        missingRefusedPlan.problems[0].detail.includes(`holds no layer "face", covering 0 / ${HOLLOW_HEAD_EXPECTED.fullMappedPx} px (0.0%, upper half 0.0%, lower half 0.0%)`) &&
+        missingRefusedAssemble !== null &&
+        missingRefusedAssemble.problems.length === 1 &&
+        missingRefusedAssemble.problems[0].code === 'SEETHROUGH_HEAD_RUN_HOLLOW' &&
+        cfgUnderfillTrue === null &&
+        cfgUnderfillBad !== null &&
+        cfgUnderfillBad.problems.length === 1 &&
+        cfgUnderfillBad.problems[0].code === 'CONFIG_FIELD_TYPE' &&
+        cfgUnderfillBad.problems[0].object === 'config.assemble.head_face_underfill' &&
+        cfgEarlyBad !== null &&
+        cfgEarlyBad.problems.length === 1 &&
+        cfgEarlyBad.problems[0].code === 'CONFIG_FIELD_TYPE' &&
+        cfgEarlyBad.problems[0].object === 'config.assemble.head_face_underfill',
+      `hollow head:face (288/696 = 41.4%): default -> ${codes(hollowRefusedPlan)} / ${codes(hollowRefusedAssemble)}; head_face_underfill: true -> underfillPx=${hollowUnderfillOut.headFaceUnderfillPx ?? 0}, face=${hollowFacePart?.opaque_px ?? 0} rig px vs mutant ${hollowMutantFacePart?.opaque_px ?? 0} rig px (uncoveredErrorPx ${hollowUnderfillOut.figures.uncoveredErrorPx} vs ${hollowMutantOut.figures.uncoveredErrorPx}); 0-px head:face with underfill -> ${codes(missingRefusedPlan)} / ${codes(missingRefusedAssemble)}; config type check -> ${codes(cfgUnderfillBad)} / ${codes(cfgEarlyBad)}`,
+      'issue #492: a head run whose face covers under 75% of full:face mapped into the head canvas is refused by SEETHROUGH_HEAD_RUN_HOLLOW in both proposePlan and assemble unless head_face_underfill: true fills the missing head-run face pixels from full:face; a 0-px head:face still refuses even under head_face_underfill: true',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
