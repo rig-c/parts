@@ -12148,6 +12148,50 @@ function runWristSnapCases(dir: string, SE: string, Pe: PartSet, Je: RigJoints, 
     `opposite-side tags: limbs ${Object.keys(crossed.limbs ?? {}).join(',')}, ${crossedLint.length} LINT line(s), r_wrist -> ${JSON.stringify(jointNoteLines(crossed).find((n) => n.startsWith('r_wrist')))}; same-side tags: limbs ${String(sameSide.limbs)}, ${sameSideLint.length} LINT line(s) (${sameSideLint.join(' | ')})`,
     'issue #458: when pre-separated handwear-r and handwear-l parts overlap at a wrist (crossed arms), the wrist resolves to the part of its own side, proposing both arm limbs with 0 off-art LINT lines; two parts of the same side tag holding the wrist still refuse to guess and hand every sleeve to the rule',
   );
+
+  // Issue #491: when a hanging arm's wrist keypoint lands off its handwear layer onto a skin-coloured skirt below the
+  // hand, propose places the sleeve chain's tip at the bottom extent of the arm layer, proposes the elbow cut from the
+  // limb chain, and emits PROPOSE_WRIST_OFF_LAYER naming the wrist, the arm layer, the skirt layer it landed on, the
+  // chain tip and the chain-derived elbow cut; the mutant without the chain rule drops limbs and falls back to the
+  // sleeve mesh rule.
+  const sdir491 = join(dir, 'pose-standing-wrist-on-skirt');
+  const skirtParts491 = PROPOSE_PARTS.map((p) =>
+    p.name === 'skirt' ? { ...p, colour: [245, 220, 210] as [number, number, number] } : p,
+  );
+  writeProposeFixture(sdir491, skirtParts491, PROPOSE_RIG, true);
+  const Js491 = poseJoints('standing', (k) => {
+    k.people[0].joints.r_wrist = { state: 'observed', at: [75, 165] };
+  });
+  const Ps491 = readPartSet(sdir491);
+  const offSkirtOut = proposeWithBasis(Ps491, Js491);
+  const offSkirt = offSkirtOut.proposal;
+  const offSkirtLint = lint(Ps491, offSkirt, Js491).findings.map(lintLine);
+  const offSkirtMutant = propose(Ps491, Js491, null, DEFAULT_GRID_RULE, null, false);
+  const wantJointLine =
+    "r_wrist observed at [75.0, 165.0]: not used — r_wrist at [75.0, 165.0] lies outside sleeve_a (full:handwear-r)'s mask (36 px from its art by the larger of the x and y gaps, on skirt (full:bottomwear)); chain sleeve_r's tip is placed at sleeve_a's bottom extent [30, 156] instead";
+  const wantOffLayerNote =
+    "PROPOSE_WRIST_OFF_LAYER: r_wrist at [75.0, 165.0] lies outside sleeve_a (full:handwear-r)'s mask (36 px from its art by the larger of the x and y gaps, on skirt (full:bottomwear)); chain sleeve_r places its tip at sleeve_a's bottom extent [30, 156] instead of r_wrist, and limb arm_r places the elbow cut at [30, 130] ([30.0, 130.0]) from the limb chain (r_shoulder [30, 104] -> r_elbow [30, 130] -> [30, 156])";
+  say(
+    'PR524_HANGING_ARM_WRIST_ON_SKIRT_PLACES_ELBOW_CUT_FROM_LIMB_CHAIN_AND_REPORTS_PROPOSE_WRIST_OFF_LAYER',
+    boneAt(offSkirt.bones, 'sleeve_r') === '[[30,104],[30,130]]->[30,156]' &&
+      boneAt(offSkirt.bones, 'sleeve_l') === '[[170,104],[170,130]]->[170,152]' &&
+      `${limbText(offSkirt, 'arm_r')}; ${limbText(offSkirt, 'arm_l')}` ===
+        'upperarm_r sleeve_a sleeve_r0 | forearm_r sleeve_a sleeve_r1 elbow; upperarm_l sleeve_b sleeve_l0 | forearm_l sleeve_b sleeve_l1 elbow' &&
+      !('sleeve_a' in offSkirt.meshes) &&
+      !('sleeve_b' in offSkirt.meshes) &&
+      jointNoteLines(offSkirt).includes(wantJointLine) &&
+      offSkirt.notes.includes(wantOffLayerNote) &&
+      offSkirtLint.length === 0 &&
+      refusals(() => checkProposal(Ps491, offSkirt)) === null &&
+      refusals(() => checkBasis(Ps491, offSkirt, offSkirtOut.basis)) === null &&
+      offSkirtMutant.limbs === undefined &&
+      'sleeve_a' in offSkirtMutant.meshes &&
+      'sleeve_b' in offSkirtMutant.meshes &&
+      boneAt(offSkirtMutant.bones, 'sleeve_r') === '[[30,115],[30,128],[30,140]]->[30,156]' &&
+      !offSkirtMutant.notes.some((n) => n.startsWith('PROPOSE_WRIST_OFF_LAYER:')),
+    `chain rule: sleeve_r ${boneAt(offSkirt.bones, 'sleeve_r')}, limbs ${limbText(offSkirt, 'arm_r')}; ${limbText(offSkirt, 'arm_l')}, ${offSkirtLint.length} LINT line(s), note -> ${JSON.stringify(offSkirt.notes.find((n) => n.startsWith('PROPOSE_WRIST_OFF_LAYER:')))}; mutant (no chain rule): limbs ${String(offSkirtMutant.limbs)}, sleeve_r ${boneAt(offSkirtMutant.bones, 'sleeve_r')}, r_wrist note -> ${JSON.stringify(jointNoteLines(offSkirtMutant).find((n) => n.startsWith('r_wrist')))}`,
+    'issue #491: when a hanging arm\'s wrist keypoint drifts off its handwear layer onto a skin-coloured skirt below the hand, the elbow cut and forearm direction come from the limb chain (ending at the bottom extent of the arm layer) with PROPOSE_WRIST_OFF_LAYER reported, whereas requiring the wrist keypoint to sit on the arm layer drops limbs and falls back to the unsplit sleeve mesh rule',
+  );
 }
 
 // ---------------------------------------------------------------------------

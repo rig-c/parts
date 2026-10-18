@@ -1364,8 +1364,15 @@ const SIDES = [
  * which rule stood in; without it every value and note is the one this
  * function wrote before the parameter existed.
  */
-export function propose(P: PartSet, joints?: RigJoints, wristSnap: number | null = null, gridRule: GridRule = DEFAULT_GRID_RULE, cloth: ClothRecipes | null = null): Proposal {
-  return proposeWithBasis(P, joints, wristSnap, gridRule, cloth).proposal;
+export function propose(
+  P: PartSet,
+  joints?: RigJoints,
+  wristSnap: number | null = null,
+  gridRule: GridRule = DEFAULT_GRID_RULE,
+  cloth: ClothRecipes | null = null,
+  chainRule = true,
+): Proposal {
+  return proposeWithBasis(P, joints, wristSnap, gridRule, cloth, chainRule).proposal;
 }
 
 /**
@@ -1384,6 +1391,7 @@ export function proposeWithBasis(
   wristSnap: number | null = null,
   gridRule: GridRule = DEFAULT_GRID_RULE,
   cloth: ClothRecipes | null = null,
+  chainRule = true,
 ): { proposal: Proposal; basis: ProposalBasis } {
   // Issue #230: a piece is not given its base's rule a second time, which
   // needs to know which part is the piece. A file that cannot say is refused
@@ -2537,7 +2545,7 @@ export function proposeWithBasis(
   // Issue #75: arms from joints, when every handwear part carries the wrist of
   // an arm whose shoulder, elbow and wrist are all given; otherwise the rule
   // below places every sleeve chain, and the notes say why.
-  const armPlan = joints !== undefined && clasped === null && hw.length > 0 ? armsFromJoints(P, hw, joints, wristSnap) : null;
+  const armPlan = joints !== undefined && clasped === null && hw.length > 0 ? armsFromJoints(P, hw, joints, wristSnap, chainRule) : null;
   let sleeveRule = '';
   if (clasped !== null) {
     sleeveRule = 'the clasped-hands rule (the handwear is a region on hip, with no sleeve chain)';
@@ -2547,7 +2555,9 @@ export function proposeWithBasis(
     for (const p of hw) regions[p.name] = 'hip';
     notes.push(clasped);
   } else if (armPlan !== null && armPlan.arms !== null) {
-    // Each chain runs shoulder -> elbow with its tip at the wrist: two links,
+    // Each chain runs shoulder -> elbow with its tip at the wrist (or, when
+    // the wrist fell outside the arm layer onto a skirt or top layer, at the
+    // arm layer's bottom extent, issue #491): two links,
     // the upper arm and the forearm, each with the amplitude the two-blob rule
     // gives its link of the same index. Its part's mesh takes the chain alone,
     // as the two-blob rule's does since issue #347 (no chest stub: a stub on
@@ -2555,7 +2565,14 @@ export function proposeWithBasis(
     for (const a of armPlan.arms) {
       const sgn = a.side === 'r' ? 1 : -1;
       const used = (n: KeypointName): Placement => placement('joint', `the ${n} joint, ${usedAs((joints as RigJoints).joints[n])}`, { joints: [jointRef(n)] });
-      C(`sleeve_${a.side}`, 'chest', [a.shoulder, a.elbow], a.wrist, [used(`${a.side}_shoulder`), used(`${a.side}_elbow`)], used(`${a.side}_wrist`));
+      const tipWhy =
+        a.offLayer === null
+          ? used(`${a.side}_wrist`)
+          : placement('mask', `3 px above ${a.part.name}'s bottom row, at its centroid x in the band 6 px above that row`, {
+              parts: [a.part.name],
+              fallback: a.tipFallback,
+            });
+      C(`sleeve_${a.side}`, 'chest', [a.shoulder, a.elbow], a.tip, [used(`${a.side}_shoulder`), used(`${a.side}_elbow`)], tipWhy);
       tracks.push({ chain: `sleeve_${a.side}`, amps: [sgn * 0.2, sgn * 0.6], period: 4.0, phase: 0.22 + (a.side === 'l' ? 0.05 : 0), lag: 0.08 });
     }
     // Issue #349: each arm is a limb — the upper arm on link 0 and the forearm (with the hand) on link 1, each rigid on
@@ -3469,8 +3486,14 @@ interface JointArm {
   shoulder: [number, number];
   elbow: [number, number];
   wrist: [number, number];
+  tip: [number, number];
+  tipFallback: string | undefined;
   part: PartRecord;
   snap: number | null;
+  offLayer: {
+    distance: number;
+    landedOn: readonly PartRecord[];
+  } | null;
 }
 
 /**
@@ -3516,11 +3539,27 @@ function artDistance(m: Mask, at: readonly [number, number]): number {
  * `wristSnap` (an integer above {@link WRIST_ON_PART_PX}, the CLI's to hold)
  * it is bound to the one nearest part when that part is at most `wristSnap`
  * px away; two parts tied nearest bind neither, as a wrist on two parts
- * does not. Otherwise the why names the nearest part and its distance, the
- * tolerance that would have bound it.
+ * does not.
+ *
+ * Issue #491: when a hanging arm's wrist keypoint falls outside its handwear
+ * layer's mask (`elbow[1] > shoulder[1]`, `wrist[1] > elbow[1]`, the elbow lies
+ * within {@link WRIST_ON_PART_PX} of that side's handwear part, and the part's
+ * bottom extent `bot - 3` reaches at least {@link WRIST_ON_PART_PX} below the
+ * elbow — e.g. when a skin-coloured wrist read lands on a light skirt or top
+ * layer below a hanging sleeve), the arm binds its handwear part with its
+ * chain tip placed at the layer's bottom extent `[bandX(mask, bot - 6), bot - 3]`
+ * so `limbs.arm_<s>` cuts at the elbow from the limb chain (`PROPOSE_WRIST_OFF_LAYER`).
+ * Otherwise the why names the nearest part and its distance, the tolerance
+ * that would have bound it.
  */
-function armsFromJoints(P: PartSet, hw: readonly PartRecord[], joints: RigJoints, wristSnap: number | null): { arms: JointArm[] | null; why: string | null } {
-  const complete: Array<Omit<JointArm, 'part' | 'snap'>> = [];
+function armsFromJoints(
+  P: PartSet,
+  hw: readonly PartRecord[],
+  joints: RigJoints,
+  wristSnap: number | null,
+  chainRule = true,
+): { arms: JointArm[] | null; why: string | null } {
+  const complete: Array<Omit<JointArm, 'tip' | 'tipFallback' | 'part' | 'snap' | 'offLayer'>> = [];
   const gaps: string[] = [];
   for (const s of ['r', 'l'] as const) {
     const sh = joints.joints[`${s}_shoulder`].at;
@@ -3561,15 +3600,40 @@ function armsFromJoints(P: PartSet, hw: readonly PartRecord[], joints: RigJoints
     const on = own.length === 1 ? own : raw;
     if (on.length > 1) return { arms: null, why: `${a.side}_wrist at ${fmtAt(a.wrist)} lies on the art of ${on.length} handwear parts (${on.map((p) => p.name).join(', ')}), so it does not say which sleeve it ends` };
     if (on.length === 1) {
-      arms.push({ ...a, part: on[0], snap: null });
+      arms.push({ ...a, tip: a.wrist, tipFallback: undefined, part: on[0], snap: null, offLayer: null });
       continue;
     }
     const far = hw.map((p) => ({ p, d: artDistance(armAlpha.get(p) as Mask, a.wrist) }));
     const d = Math.min(...far.map((q) => q.d));
     const nearest = far.filter((q) => q.d === d).map((q) => q.p);
     if (wristSnap !== null && d <= wristSnap && nearest.length === 1) {
-      arms.push({ ...a, part: nearest[0], snap: d });
+      arms.push({ ...a, tip: a.wrist, tipFallback: undefined, part: nearest[0], snap: d, offLayer: null });
       continue;
+    }
+    if (chainRule) {
+      const byTag = hw.filter((p) => splitFrom(p.from)[1] === ownTag);
+      const byElbow = hw.filter((p) => isOn(near.get(p) as Mask, a.elbow[0], a.elbow[1]));
+      const sidePart =
+        byTag.length === 1 && isOn(near.get(byTag[0]) as Mask, a.elbow[0], a.elbow[1])
+          ? byTag[0]
+          : byElbow.length === 1
+            ? byElbow[0]
+            : null;
+      if (sidePart !== null) {
+        const m = armAlpha.get(sidePart) as Mask;
+        const ys = rowsAny(m);
+        const bot = ys[ys.length - 1];
+        if (bot !== undefined && a.elbow[1] > a.shoulder[1] && a.wrist[1] > a.elbow[1] && bot - 3 - a.elbow[1] >= WRIST_ON_PART_PX) {
+          const bx = bandX(m, bot - 6);
+          const tipX = or(bx, a.elbow[0]);
+          const tipFallback = bx === null || bx === 0 ? `no art in the band: the ${a.side}_elbow joint's x` : undefined;
+          const tip: [number, number] = [pyRound(tipX), bot - 3];
+          const landedOn = P.layered().filter((p) => p !== sidePart && isOn(P.alpha(p), a.wrist[0], a.wrist[1]));
+          const partDist = artDistance(m, a.wrist);
+          arms.push({ ...a, tip, tipFallback, part: sidePart, snap: null, offLayer: { distance: partDist, landedOn } });
+          continue;
+        }
+      }
     }
     const gap = 'by the larger of the x and y gaps';
     const reach = wristSnap === null ? `--wrist-snap ${Math.max(d, WRIST_ON_PART_PX + 1)} would bind it` : `beyond --wrist-snap ${wristSnap}`;
@@ -3747,7 +3811,25 @@ function jointNotes(joints: RigJoints, f: JointNoteFacts): string[] {
       [`${s}_wrist`, 'the tip'],
     ] as const) {
       const j = J[joint];
-      const on = arm === null ? '' : arm.snap === null ? `the wrist lies on ${arm.part.name}` : `the wrist is bound to ${arm.part.name} by --wrist-snap`;
+      if (arm !== null && arm.offLayer !== null && joint === `${s}_wrist`) {
+        const landed =
+          arm.offLayer.landedOn.length > 0
+            ? `, on ${arm.offLayer.landedOn.map((p) => `${p.name} (${p.from})`).join(', ')}`
+            : '';
+        tell(
+          joint,
+          `${said(joint, j)}: not used — ${s}_wrist at ${fmtAt(arm.wrist)} lies outside ${arm.part.name} (${arm.part.from})'s mask (${arm.offLayer.distance} px from its art by the larger of the x and y gaps${landed}); chain sleeve_${s}'s tip is placed at ${arm.part.name}'s bottom extent [${arm.tip[0]}, ${arm.tip[1]}] instead`,
+        );
+        continue;
+      }
+      const on =
+        arm === null
+          ? ''
+          : arm.offLayer !== null
+            ? `the elbow lies on ${arm.part.name}; ${s}_wrist lies outside ${arm.part.name}'s mask, so sleeve_${s}'s tip is ${arm.part.name}'s bottom extent [${arm.tip[0]}, ${arm.tip[1]}]`
+            : arm.snap === null
+              ? `the wrist lies on ${arm.part.name}`
+              : `the wrist is bound to ${arm.part.name} by --wrist-snap`;
       if (arm !== null) tell(joint, `${said(joint, j)}: ${usedAs(j)} for chain sleeve_${s}, ${role} (${on})`);
       else if (j.at !== null && f.armWhy !== null) tell(joint, `${said(joint, j)}: not used — ${f.armWhy}; ${standIn}`);
       else if (j.at !== null) tell(joint, `${said(joint, j)}: not used — ${standIn}`);
@@ -3757,6 +3839,17 @@ function jointNotes(joints: RigJoints, f: JointNoteFacts): string[] {
     if (arm !== null && arm.snap !== null) {
       out.push(
         `wrist snap: ${s}_wrist at ${fmtAt(arm.wrist)} lies on no handwear part within ${WRIST_ON_PART_PX} px; --wrist-snap ${f.wristSnap} bound it to ${arm.part.name}, the nearest, ${arm.snap} px from its art by the larger of the x and y gaps`,
+      );
+    }
+    // Issue #491: when the wrist keypoint lies outside the arm layer's mask, name the wrist, the arm layer, where it
+    // landed, the chain tip at the layer's bottom extent, and the chain-derived elbow cut position.
+    if (arm !== null && arm.offLayer !== null) {
+      const landed =
+        arm.offLayer.landedOn.length > 0
+          ? `, on ${arm.offLayer.landedOn.map((p) => `${p.name} (${p.from})`).join(', ')}`
+          : '';
+      out.push(
+        `PROPOSE_WRIST_OFF_LAYER: ${s}_wrist at ${fmtAt(arm.wrist)} lies outside ${arm.part.name} (${arm.part.from})'s mask (${arm.offLayer.distance} px from its art by the larger of the x and y gaps${landed}); chain sleeve_${s} places its tip at ${arm.part.name}'s bottom extent [${arm.tip[0]}, ${arm.tip[1]}] instead of ${s}_wrist, and limb arm_${s} places the elbow cut at [${pyRound(arm.elbow[0])}, ${pyRound(arm.elbow[1])}] (${fmtAt(arm.elbow)}) from the limb chain (${s}_shoulder [${pyRound(arm.shoulder[0])}, ${pyRound(arm.shoulder[1])}] -> ${s}_elbow [${pyRound(arm.elbow[0])}, ${pyRound(arm.elbow[1])}] -> [${arm.tip[0]}, ${arm.tip[1]}])`,
       );
     }
   }
