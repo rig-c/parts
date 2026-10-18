@@ -92,7 +92,7 @@ import { CLOTH_TARGETS, type ClothRecipes, RECIPE_STRENGTH, RIGC_DEFAULT_DAMPING
 import { GRID, MAX_SIDE } from './contour.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
 import { edgeLength } from './length.ts';
-import { isSkeletonName, KEYPOINT_NAMES, type KeypointName, type PosePoints, SKELETON_NAMES, type SkeletonName } from './skeleton.ts';
+import { isSkeletonName, KEYPOINT_NAMES, type KeypointName, type PosePoints, scaledPoints, SKELETON_NAMES, type SkeletonName } from './skeleton.ts';
 import { acceptedTagNames, AUTHOR_LABEL_RULE, AUTHOR_PREFIX, readLayerTag } from './tags.ts';
 import { EAR_DEPTH_RANGE, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, type FaceDeformKey, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, TURN_BONE, type TurnSpec, turnNearest } from './turn.ts';
 import { FLOOR_FORMS, type FloorForm, type MeshInfluences } from './weights.ts';
@@ -1223,7 +1223,10 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
   if ('cloth' in t) checkCloth(c, t.cloth);
   const pose = base === null ? null : poseBeside(c, t.generation, base);
   refuseIfAny(c.problems);
-  return { config: raw as PaintConfig | EarlyConfig | AssembleConfig, pose };
+  const config = raw as PaintConfig | EarlyConfig | AssembleConfig;
+  const controlSkel = resolveControlSkeleton(t.generation, pose);
+  if (controlSkel !== undefined) controlSkeletons.set(config, controlSkel);
+  return { config, pose };
 }
 
 export function loadEarlyConfig(path: string, door: 'paint'): PaintConfig;
@@ -1241,6 +1244,40 @@ export function loadEarlyConfig(path: string, door: EarlyDoor): PaintConfig | Ea
 export function loadPaintConfig(path: string): { config: PaintConfig; pose: ControlPose | null } {
   const { config, pose } = parseEarlyConfigFrom(readConfigFile(path), 'paint', dirname(resolve(path)));
   return { config: config as PaintConfig, pose };
+}
+
+/**
+ * Issue #490: the control skeleton `config.generation.control.skeleton` names,
+ * with its points on the `generation.latent` canvas (`[w, h]`, x right, y down).
+ */
+export interface ControlSkeleton {
+  latent: readonly [number, number];
+  points: PosePoints;
+}
+
+const controlSkeletons = new WeakMap<object, ControlSkeleton>();
+
+function resolveControlSkeleton(gen: Json, pose: ControlPose | null): ControlSkeleton | undefined {
+  if (!isPlainObject(gen) || !isPlainObject(gen.control)) return undefined;
+  const l = gen.latent;
+  if (!(Array.isArray(l) && l.length === 2 && typeof l[0] === 'number' && typeof l[1] === 'number' && l[0] > 0 && l[1] > 0)) return undefined;
+  const latent: readonly [number, number] = [l[0], l[1]];
+  if (pose !== null) return { latent, points: pose.points };
+  const skel = gen.control.skeleton;
+  if (isSkeletonName(skel)) return { latent, points: scaledPoints(skel, latent[0], latent[1]) };
+  return undefined;
+}
+
+/**
+ * Return the {@link ControlSkeleton} resolved for a loaded or parsed config
+ * (`loadEarlyConfig`, `loadConfig`, `parseEarlyConfig`, `parseConfig`), or
+ * computed from an inline `generation.control.skeleton` built-in when present.
+ */
+export function controlSkeletonOf(cfg: object): ControlSkeleton | undefined {
+  const cached = controlSkeletons.get(cfg);
+  if (cached !== undefined) return cached;
+  const gen = (cfg as { generation?: unknown }).generation;
+  return resolveControlSkeleton(gen, null);
 }
 
 /** The pose file a checked `generation` block's control names, read relative to `base`; null for a built-in, an absent control, or a block already refused. */
@@ -1388,9 +1425,12 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
     checkFaceAnimationBand(c, animations, hasAltFace, t.turn, attached);
     checkAnimationSetKeys(c, animations, t.assemble, new Set<string>([...parts, ...patches, ...cuts, ...(limbs?.parts.keys() ?? [])]));
   }
-  if (base !== null) poseBeside(c, t.generation, base);
+  const pose = base === null ? null : poseBeside(c, t.generation, base);
   refuseIfAny(c.problems);
-  return { config: raw as CharacterConfig, animations };
+  const config = raw as CharacterConfig;
+  const controlSkel = resolveControlSkeleton(t.generation, pose);
+  if (controlSkel !== undefined) controlSkeletons.set(config, controlSkel);
+  return { config, animations };
 }
 
 /**

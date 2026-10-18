@@ -74,7 +74,11 @@ export const HEAD_TAGS = [
   'mouth',
 ] as const;
 
-export type BaseTag = (typeof BODY_TAGS)[number] | (typeof HEAD_TAGS)[number];
+/** The tags `splitMergedArmRuns` (issue #490) splits out of a merged `handwear-r` / `handwear-l` layer: `<tag>-r` / `<tag>-l`. */
+export const ARM_MERGED_SPLIT_TAGS = ['hand', 'drape'] as const;
+export type ArmMergedSplitTag = (typeof ARM_MERGED_SPLIT_TAGS)[number];
+
+export type BaseTag = (typeof BODY_TAGS)[number] | (typeof HEAD_TAGS)[number] | ArmMergedSplitTag;
 
 /** The tags upstream splits into `-r` / `-l` halves. */
 export const SPLIT_TAGS = ['handwear', 'eyewhite', 'irides', 'eyelash', 'eyebrow', 'ears'] as const;
@@ -97,16 +101,21 @@ export interface TagReading {
 /**
  * Read a layer name as a v3 tag, or `null` when it is not one.
  *
- * Accepted: any of the 24 base tags, and `<tag>-r` / `<tag>-l` for the six
- * split tags. A suffix on a tag upstream never splits (`topwear-l`) is not a
- * tag — upstream cannot have produced it, so accepting it would be accepting a
- * layer somebody renamed.
+ * Accepted: any of the 24 base tags, `<tag>-r` / `<tag>-l` for the six
+ * split tags, and `<tag>-r` / `<tag>-l` for the merged-arm split tags
+ * (`hand-r`, `hand-l`, `drape-r`, `drape-l`, issue #490). A suffix on a tag
+ * upstream never splits (`topwear-l`) is not a tag — upstream cannot have
+ * produced it, so accepting it would be accepting a layer somebody renamed.
  */
 export function readTag(name: string): TagReading | null {
   const split = /^(.+)-([rl])$/.exec(name);
   if (split !== null && (SPLIT_TAGS as readonly string[]).includes(split[1])) {
     const base = split[1] as SplitTag;
     return { name, base, side: split[2] as Side, group: groupOf(base) };
+  }
+  if (split !== null && (ARM_MERGED_SPLIT_TAGS as readonly string[]).includes(split[1])) {
+    const base = split[1] as ArmMergedSplitTag;
+    return { name, base, side: split[2] as Side, group: 'body' };
   }
   if ((V3_TAGS as readonly string[]).includes(name)) {
     const base = name as BaseTag;
@@ -122,7 +131,7 @@ function groupOf(tag: BaseTag): 'body' | 'head' {
 /** Every name `readTag` accepts, sorted — what a refusal quotes as "required". */
 export function acceptedTagNames(): string[] {
   const names = new Set<string>(V3_TAGS);
-  for (const t of SPLIT_TAGS) {
+  for (const t of [...SPLIT_TAGS, ...ARM_MERGED_SPLIT_TAGS]) {
     names.add(`${t}-r`);
     names.add(`${t}-l`);
   }

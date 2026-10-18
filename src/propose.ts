@@ -2662,6 +2662,15 @@ export function proposeWithBasis(
     }
     if (hw.length === 1) notes.push(`handwear is one blob (${hw[0].name}): both sleeves in one mesh, split at the eye axis x=${pyFixed(axis, 0)}`);
   }
+  for (const [s] of SIDES) {
+    const sc = bones.find((b): b is Extract<BoneEntry, { chain: string }> => 'chain' in b && b.chain === `sleeve_${s}`);
+    if (sc === undefined) continue;
+    const bone = `sleeve_${s}${sc.points.length - 1}`;
+    for (const hp of P.byTag(`hand-${s}`)) {
+      regions[hp.name] = bone;
+      notes.push(`${hp.name} (${hp.from}): split hand -> region on ${bone}, the tip link of sleeve_${s}`);
+    }
+  }
 
   // Issue #402: the topwear part config.cloth.bottomwear.part names takes the skirt's rule and recipe below; every
   // other topwear shaped like a skirt is named in a note when a recipe is in play, never drafted on by its shape.
@@ -3524,7 +3533,18 @@ function armsFromJoints(P: PartSet, hw: readonly PartRecord[], joints: RigJoints
     else complete.push({ side: s, shoulder: sh, elbow: el, wrist: wr });
   }
   if (complete.length === 0) return { arms: null, why: `no arm has its shoulder, elbow and wrist all given (${gaps.join('; ')})` };
-  const near = new Map(hw.map((p) => [p, dilate(P.alpha(p), 2 * WRIST_ON_PART_PX + 1)]));
+  const armAlpha = new Map(
+    hw.map((p) => {
+      const tag = splitFrom(p.from)[1];
+      const side = tag === 'handwear-r' ? 'r' : tag === 'handwear-l' ? 'l' : null;
+      let m = P.alpha(p);
+      if (side !== null) {
+        for (const h of P.byTag(`hand-${side}`)) m = union(m, P.alpha(h));
+      }
+      return [p, m] as const;
+    }),
+  );
+  const near = new Map(hw.map((p) => [p, dilate(armAlpha.get(p) as Mask, 2 * WRIST_ON_PART_PX + 1)]));
   const arms: JointArm[] = [];
   for (const a of complete) {
     const raw = hw.filter((p) => isOn(near.get(p) as Mask, a.wrist[0], a.wrist[1]));
@@ -3536,7 +3556,7 @@ function armsFromJoints(P: PartSet, hw: readonly PartRecord[], joints: RigJoints
         const t = splitFrom(p.from)[1];
         return t === ownTag || t === oppTag;
       })
-        ? raw.filter((p) => splitFrom(p.from)[1] === ownTag && isOn(P.alpha(p), a.wrist[0], a.wrist[1]))
+        ? raw.filter((p) => splitFrom(p.from)[1] === ownTag && isOn(armAlpha.get(p) as Mask, a.wrist[0], a.wrist[1]))
         : [];
     const on = own.length === 1 ? own : raw;
     if (on.length > 1) return { arms: null, why: `${a.side}_wrist at ${fmtAt(a.wrist)} lies on the art of ${on.length} handwear parts (${on.map((p) => p.name).join(', ')}), so it does not say which sleeve it ends` };
@@ -3544,7 +3564,7 @@ function armsFromJoints(P: PartSet, hw: readonly PartRecord[], joints: RigJoints
       arms.push({ ...a, part: on[0], snap: null });
       continue;
     }
-    const far = hw.map((p) => ({ p, d: artDistance(P.alpha(p), a.wrist) }));
+    const far = hw.map((p) => ({ p, d: artDistance(armAlpha.get(p) as Mask, a.wrist) }));
     const d = Math.min(...far.map((q) => q.d));
     const nearest = far.filter((q) => q.d === d).map((q) => q.p);
     if (wristSnap !== null && d <= wristSnap && nearest.length === 1) {
