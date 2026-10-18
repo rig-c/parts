@@ -168,7 +168,11 @@ usage:
       the neck -> hips line and each sleeve chain along shoulder -> wrist
       instead of by screen y, and prints the rule set it used first. Without
       --keypoints nothing changes. A wrist holds a part when it lies within
-      ${WRIST_ON_PART_PX} px of its art (the larger of the x and y gaps);
+      ${WRIST_ON_PART_PX} px of its art (the larger of the x and y gaps); when a hanging
+      arm's wrist lands off its arm layer (e.g. on a skirt below the hand), the
+      sleeve chain's tip is placed at the bottom extent of the arm layer, the
+      elbow cut comes from the limb chain, and a PROPOSE_WRIST_OFF_LAYER note
+      names the layer it landed on (issue #491).
       --wrist-snap <px>, an integer above ${WRIST_ON_PART_PX}, binds a wrist on no
       part to the one nearest part within <px>, said in a "wrist snap:" note
       (with --keypoints, not with --from-config). Without it nothing changes.
