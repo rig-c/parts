@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.35.0](https://github.com/rig-c/parts/compare/v1.34.0...v1.35.0) (2026-10-18)
+
+
+### Features
+
+* **contour:** derive bust regions from apex_r, apex_l and cleavage ([#475](https://github.com/rig-c/parts/issues/475)) ([#486](https://github.com/rig-c/parts/issues/486)) ([9e86034](https://github.com/rig-c/parts/commit/9e86034fcad9092fbce2ffd28912e146e253d702))
+* **sets:** expand attachment track set keys and scope subset fold checks ([#473](https://github.com/rig-c/parts/issues/473)) ([#488](https://github.com/rig-c/parts/issues/488)) ([78bdc00](https://github.com/rig-c/parts/commit/78bdc00b54875d6eaf3b6c2ccea3ef1ce975adf3))
+
 ## [1.34.0](https://github.com/rig-c/parts/compare/v1.33.0...v1.34.0) (2026-10-17)
 
 
