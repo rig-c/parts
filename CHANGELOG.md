@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.36.0](https://github.com/rig-c/parts/compare/v1.35.0...v1.36.0) (2026-10-18)
+
+
+### Features
+
+* **sets:** support gesture subset sets over limb chains ([#476](https://github.com/rig-c/parts/issues/476)) ([5b52552](https://github.com/rig-c/parts/commit/5b525528eda28d5380d9880f3a980caac2024a0a))
+
 ## [1.35.0](https://github.com/rig-c/parts/compare/v1.34.0...v1.35.0) (2026-10-18)
 
 
