@@ -48,6 +48,9 @@ also holds the licence; `bun run fetch-examples` copies the inputs into `inputs/
   the ones parts-examples' `wind/generation.json` records); the pose file scaled to the
   painting is the control skeleton, not where the limbs were painted, and with it the
   loop's `--from-config` step prints a LINT line.
+- `breeze.json` — the environment schedule AUTHORING §3 (*What moves them*) quotes for
+  `rigc render --environment`: a breeze that changes every half second, under which
+  none of the skirt's chains settles on the idle (issue #502; selftest `CH21`).
 - `proposal.json` — what `rig-parts propose --parts <parts> --source painting.png
   --keypoints keypoints.json --cloth config.json` writes on the built parts (issue
   #440: `propose` reconstructs the pre-limb layers from the cut limb segments in the

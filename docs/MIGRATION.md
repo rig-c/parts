@@ -358,5 +358,7 @@ bar count moves (AUTHORING §6, `CLOTH_SETTLES`).
 | the public examples' `expected/check.json` | — | `demo`, `reference-sample`, `scarf` and `wind` gain the block: `wind`'s skirt (eight trees and the swing) and `reference-sample`'s `hip_jiggle` settle, every chain an idle key drives does not |
 
 What to do: nothing. A warning names the chain and the second it comes to rest; a chain
-that should keep moving wants an environment at render (`rigc render --environment`) or
-a hip motion in the idle (#502).
+that should keep moving wants an environment at render (`rigc render --environment`;
+AUTHORING §3, *What moves them*, has a worked schedule for `wind`) or a consumer's
+animation that moves the bone it hangs from. The drafted idle keys no hip: issue #502
+measured a hip sway at the idle's period on every public example, and each failed a bar.

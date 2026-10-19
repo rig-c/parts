@@ -1780,6 +1780,68 @@ by up to 10.396 and 10.188, `skirt` 3.390 and 3.382, and `hair_front` 2.131 and 
 px, either way alike; held three cycles each from a fresh track, 10.299 / 10.277,
 3.390 / 3.382 and 2.119 / 2.115.
 
+**A standing cloth is the consumer's to drive** (issue #502). The drafted idle keys no
+`hip`, and that is a measured decision, not an omission. A hip sway was tried on every
+public example: a `motion.tracks` entry `{ "bone": "hip", "prop": "rotate", "amp": a,
+"period": <the idle's>, "phase": 0 }` at the breathing period, a = 0.1°, 0.2° and 0.3°
+(this port's build of each, rig-c 2.60.0, `check`'s idle at 12 fps). Every sway keeps the
+chains it reaches above `CLOTH_SETTLES`'s floor, and every one turns a passing `check` red:
+
+| example | chains no idle key drives | 0.1° | 0.2° and 0.3° | idle frames changed by 0.1° |
+| --- | --- | --- | --- | --- |
+| `demo` | 0 | `CHAIN_LAG` | `CHAIN_LAG`, `TIP_OVER_ROOT` | 11.91 % of pixels, up to 148 levels |
+| `scarf` | 0 | `CHAIN_LAG`, `TIP_OVER_ROOT` | the same | the framing box changes, 201 to 202 px wide |
+| `wind` | 9, the skirt | `CHAIN_LAG`, `BREATH_VISIBLE`, `STILL_REGIONS_DARK` | those and `TIP_OVER_ROOT` | 17.42 %, up to 203 |
+| `reference-sample` | 1, `hip_jiggle` | `CHAIN_LAG` | the same | 29.42 %, up to 121 |
+| `reference-demo` | 0 (no physics) | `CHAIN_LAG` | the same | 47.63 %, up to 222 |
+
+Two of those are not the amplitude's to fix. `CHAIN_LAG` reads a lag modulo a quarter
+cycle, and the keyed chains under `hip` start at phases from the neck's 0.08 to the third
+skirt chain's 0.38: a span of 0.30 cycle on `demo`, `scarf`, `reference-sample` and
+`reference-demo`, so no phase of a hip turn at the idle's period has all of them lagging
+it. `wind`'s span, 0.08 to 0.29, admits phase 0.06, and there 0.1° still fails
+`BREATH_VISIBLE`, `STILL_REGIONS_DARK` and `TIP_OVER_ROOT`. And the legs hang from `hip`:
+a hip turn moves the feet (0.857 rig px at 0.1° on `wind`), which a standing character
+holds still. So a cloth that should move while the character stands is moved by the
+world, which the consumer sets when it plays the rig (rig-c's live track
+`setEnvironment`, rig-play's `environment()`). `rigc render --environment` reads the
+same world from a file, to look at the response before a player exists (rig-c's
+AUTHORING §8.4: each step holds from its `t`, x right and y down). A worked schedule for
+`wind`, tracked as `examples/wind/breeze.json`, is a breeze that changes every half
+second:
+
+```json
+{
+  "spec": "rigc-environment/1",
+  "steps": [
+    { "t": 0, "wind": [0.4, 0] },
+    { "t": 0.5, "wind": [1, 0] },
+    { "t": 1, "wind": [0.2, 0] },
+    { "t": 1.5, "wind": [0.8, 0] },
+    { "t": 2, "wind": [0.3, 0] },
+    { "t": 2.5, "wind": [1, 0] },
+    { "t": 3, "wind": [0.4, 0] }
+  ]
+}
+```
+
+```bash
+rigc render --candidate out/check/build --animation idle --fps 12 --max 640 --geometry \
+  --environment examples/wind/breeze.json --out out/breeze
+```
+
+Read by `CLOTH_SETTLES`'s own definition on the `geometry.json` that writes, none of the
+16 chains settles. The nine that settle under the default world keep moving to the last
+frame: the skirt's eight trees end at 7.66 to 23.79 rig px/s, and the swing at 2.778
+(selftest `CH21` holds this). `check` itself always reads the default world, so `wind`'s
+`check.json` keeps its WARN. The WARN states what the rig does with nothing driving it;
+it is not a fault (`CH20` holds that the idle keys no hip and that the chains which
+settle are exactly the ones no idle key drives). A soft region with no wind response,
+such as `reference-sample`'s `hip_jiggle`, is not reached by an environment at all:
+`rigc render --environment` refuses the schedule by name, since no physics constraint
+answers wind. It answers the body, so what moves it is a consumer's animation that
+moves `hip`, such as a walk or a turn, not the idle.
+
 **Not in this recipe.**
 
 - **Weights across neighbouring chains** (rig-c/core#1415's per-vertex weights, a vertex
@@ -2894,7 +2956,7 @@ documents do not ship). Each is an input this package built; none is an author's
 | <a id="CHECK_LIMB_ONE_BONE"></a>`CHECK_LIMB_ONE_BONE` | a part a `config.limbs` segment made is bound in `rig.json` to a bone besides its segment's — a mesh weighted to a second bone, or a slot on another bone — or to none (issue #349); the object names the part, its limb and its bone, the detail every other bone | `regions.<part>` the segment's bone, or a mesh whose `segments` name that bone alone: a bend is a rotation at the joint |
 | <a id="CHECK_SEAM_OVER_RANGE"></a>`CHECK_SEAM_OVER_RANGE` | a limb joint with a declared `range` (issue #360), bent to one of its range's ends or its middle, fails the rest-pose seam's bar against the same pose with the joint's own art drawn under the limb — the bend uncovers the joint; the object names the joint, its limb and segment, the part, the bone and the angle. Under `cap_shape: "disc"` (issue #360, unit B), also any pixel of the disc over 40 at a pose, under the seam's bar or not. Also a joint the line cannot read (its bone has no parent in `rig.json`, no slot shows its limb, or its cap's disc holds no opaque art), and, refused, two renders of the bent copy that rigc did not put on one grid | a cap that covers the turn: the layer's art within the cap's radius on the upper side of the joint line, or a `cap` image painting what the layer lacks (`limb cap:` names the missing pixels); or a narrower `range` |
 | <a id="SEAM_OVER_MOTION"></a>`SEAM_OVER_MOTION` | **a warning, never a refusal** (issue #493; the owner's ruling, 2026-10-18: a seam that opens in motion may be intended). Every declared neighbour pair — each limb's two segments at a joint, the upper and the one below (`parts.json`'s limb records, `config.limbs`), and under `--requirements` each `seam`'s `part` and `neighbour`, one pair however many declare it — read in every animation `motion.json` holds, the idle included, by rig-c's seam reading: one `rigc render --seam <a>:<b>,… --fps 12` over the packed build as played (physics on), whose `seam.json` (`rigc-seam/1`, rig-c's AUTHORING §8.8) names per pair and frame a **gap** (background inside the joint) or a **ghost** (one piece's overlap band swung clear of its partner), each frame's cells (`px`, one texel of the coarser drawing — a rig px on a build at scale 1), its cell size and its world box. Printed per pair and animation with a frame over the floor: `WARN seam "<a>\|<b>" opens on N frame(s) [<frames>] max <px> px in "<animation>" — over the one-cell floor`, then how many more frames rigc named that were under it. **The floor**: a frame's gap or ghost is reported when it holds more cells than its box is long (its longer side, in cells) — thicker than one cell. A cell is drawn when the renderer paints its centre at half opacity, so an outline that moves by less than a cell flips the cells along it: a line one cell deep, joined or scattered, holds at most as many cells as its box is long, and a hole of any area more. The rule types no number; measured on `examples/wind`'s idle, rigc names 43 openings over its six limb pairs (the two elbows, 1 to 5 cells, boxes up to 17 cells long), every one one cell thick, and on rig-c's `gallery/walk` 13 joint cracks of 1 to 3 cells, all one cell thick. `check.json`'s `SEAM_OVER_MOTION` holds `status` (`WARN`, `CLEAR`), `fps`, `floor`, `pairs`, `animations`, `warnings` and one row per pair and animation (`opens` and `px` over the floor, `max_px`, `under_floor`, rigc's `status`, `drawn` and `banded`); it moves no exit status, no `check: PASS` and no bar count — the summary ends `; N warning(s) (SEAM_OVER_MOTION, not a bar)`. **SKIP**, named: no pair declared (no limb segment, no `seam`; then `check.json` has no key), no `parts.json`, no animation, every pair naming a slot `rig.json` lacks (each printed `not read`), or rigc reading no band on any frame of any pair (rigc's own `skip`: the two drawings share no cell at rest) — nothing measured, never a pass | if the opening is not intended: a cap that covers the turn (`config.limbs`, *Limbs: cut at their joints*; `limb cap:` names the pixels the layer lacks), or a motion that bends that joint less; if it is intended, nothing |
-| <a id="CLOTH_SETTLES"></a>`CLOTH_SETTLES` | **a warning, never a refusal** (issue #501; the owner's ruling: cloth at rest while the character stands may be intended). Every physics chain, read by its tip on the idle `check` renders — `rigc render --animation idle --fps 12 --geometry`, physics on, rigc's default environment. A chain is a **physics leaf** — a bone a physics constraint names (`rig.json`'s `constraints` or `motion.json`'s `physics`) with no such bone under it — and the run of physics bones above it; its tip is the leaf's end (origin plus `length` along its world x axis), or its origin when the leaf has no length; its speed between frames is the tip's distance over their time, from the idle's `geometry.json`. A chain **settles** at the first frame from which every speed to the idle's last frame is under the floor, and each one that does — before the loop's length is out — prints `WARN chain "<root>" .. "<tip>" (N physics link(s)) settles at <t> s of the <d> s idle — its tip's end under 0.01694 rig px/s from there to the last frame (fastest on the idle <v> rig px/s)`. **The floor**, 0.01694 rig px/s, is derived, not chosen: half the slowest tip an idle key drives on the public examples (the repository's floor rule, half the weaker figure) — measured with this port's build of each (rig-c 2.60.0), over the 31 chains a keyed bone at or above the leaf drives (`demo` 12, `reference-sample` 1, `scarf` 11, `wind` 7) the slowest frame-to-frame tip speed is `scarf`'s `skirt_l2`, 0.03388 rig px/s; the ten no key drives — `wind`'s skirt, eight trees and the swing, hung from a `hip` its idle never keys, and `reference-sample`'s `hip_jiggle` — fall under it from 1.5 to 2.75 s on a 3.333 s idle (`hip_jiggle` at 0 s: it never moves) and end at 0.0025 rig px/s or less. `check.json`'s `CLOTH_SETTLES` holds `status` (`WARN`, `CLEAR`), `fps`, `frames`, `duration`, `floor_rig_px_per_s`, `floor`, `levers`, `warnings` and one row per chain (`tip`, `root`, `links`, `point` — `end` or `origin` — `settles_at`, null when it does not, `max_rig_px_per_s`, `min_rig_px_per_s`); it moves no exit status, no `check: PASS` and no bar count — the summary's warning clause names it, `; N warning(s) (CLOTH_SETTLES, not a bar)` (with `SEAM_OVER_MOTION` before it, and N their sum, where that read a pair). It reads the idle alone, one loop from rigc's physics reset at frame 0: a chain that settles later than the idle is long is not seen. **SKIP**, named: no physics constraint (then `check.json` has no key), or no idle — nothing measured, never a pass | if the chain should move while the character stands, one of the consumer's two levers: an environment at render (`rigc render --environment`, wind and gravity in time — rig-c's AUTHORING §8.4), or a hip motion in the idle (#502); a `cloth` recipe's skirt hangs from `hip`, which the drafted idle never keys (§3, *Recipe: cloth and hair that answer the world*, *What moves them*). If it is intended, nothing |
+| <a id="CLOTH_SETTLES"></a>`CLOTH_SETTLES` | **a warning, never a refusal** (issue #501; the owner's ruling: cloth at rest while the character stands may be intended). Every physics chain, read by its tip on the idle `check` renders — `rigc render --animation idle --fps 12 --geometry`, physics on, rigc's default environment. A chain is a **physics leaf** — a bone a physics constraint names (`rig.json`'s `constraints` or `motion.json`'s `physics`) with no such bone under it — and the run of physics bones above it; its tip is the leaf's end (origin plus `length` along its world x axis), or its origin when the leaf has no length; its speed between frames is the tip's distance over their time, from the idle's `geometry.json`. A chain **settles** at the first frame from which every speed to the idle's last frame is under the floor, and each one that does — before the loop's length is out — prints `WARN chain "<root>" .. "<tip>" (N physics link(s)) settles at <t> s of the <d> s idle — its tip's end under 0.01694 rig px/s from there to the last frame (fastest on the idle <v> rig px/s)`. **The floor**, 0.01694 rig px/s, is derived, not chosen: half the slowest tip an idle key drives on the public examples (the repository's floor rule, half the weaker figure) — measured with this port's build of each (rig-c 2.60.0), over the 31 chains a keyed bone at or above the leaf drives (`demo` 12, `reference-sample` 1, `scarf` 11, `wind` 7) the slowest frame-to-frame tip speed is `scarf`'s `skirt_l2`, 0.03388 rig px/s; the ten no key drives — `wind`'s skirt, eight trees and the swing, hung from a `hip` its idle never keys, and `reference-sample`'s `hip_jiggle` — fall under it from 1.5 to 2.75 s on a 3.333 s idle (`hip_jiggle` at 0 s: it never moves) and end at 0.0025 rig px/s or less. `check.json`'s `CLOTH_SETTLES` holds `status` (`WARN`, `CLEAR`), `fps`, `frames`, `duration`, `floor_rig_px_per_s`, `floor`, `levers`, `warnings` and one row per chain (`tip`, `root`, `links`, `point` — `end` or `origin` — `settles_at`, null when it does not, `max_rig_px_per_s`, `min_rig_px_per_s`); it moves no exit status, no `check: PASS` and no bar count — the summary's warning clause names it, `; N warning(s) (CLOTH_SETTLES, not a bar)` (with `SEAM_OVER_MOTION` before it, and N their sum, where that read a pair). It reads the idle alone, one loop from rigc's physics reset at frame 0: a chain that settles later than the idle is long is not seen. **SKIP**, named: no physics constraint (then `check.json` has no key), or no idle — nothing measured, never a pass | if the chain should move while the character stands, one of the consumer's two levers: an environment at render (`rigc render --environment`, wind and gravity in time — rig-c's AUTHORING §8.4), or a consumer's animation that moves the bone the chain hangs from. The drafted idle keys no hip, by measurement: a hip turn at the idle's period fails a bar on all five public examples (issue #502, §3 *What moves them*). A `cloth` recipe's skirt hangs from `hip`, which the drafted idle never keys (§3, *Recipe: cloth and hair that answer the world*, *What moves them*, which has a worked schedule for `wind`). If it is intended, nothing |
 | <a id="CHECK_FOLDS_READ"></a>`CHECK_FOLDS_READ` | the fold render's `frames.json` names no set for an animation, a `folds.json` is missing, not `rigc-folds/1`, another animation's or another rate's, or a folding mesh has no line rigc printed for it | a rigc problem; report it, with `rigc --version` |
 | <a id="CHECK_SEAM_FRAME_SIZE"></a><a id="FRAMES_SIDECAR"></a><a id="CHECK_GEOMETRY_FILE"></a>`CHECK_SEAM_FRAME_SIZE`, `FRAMES_SIDECAR`, `CHECK_GEOMETRY_FILE` | rigc's render is not what its `frames.json` says, or its `geometry.json` is not a whole `rigc-geometry/1` export of the frames beside it (a frame count, a mesh whose vertex count differs from its rest entry; for the face half, another viewport than `frames.json`'s, other frame indices, the head bone or a feature's bone missing from a frame, a non-finite transform or time) | a rigc problem; report it |
 | <a id="LOOP_ENCODE"></a>`LOOP_ENCODE` | the loop encoder refused a frame (translucent pixel in a GIF, a size change) | the frames; for a translucent frame write the lossless or the indexed APNG, which keep alpha |
