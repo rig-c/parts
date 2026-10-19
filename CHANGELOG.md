@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.41.1](https://github.com/rig-c/parts/compare/v1.41.0...v1.41.1) (2026-10-19)
+
+
+### Bug Fixes
+
+* **propose:** draft the legs without the ankle cut when an ankle lies off its leg's art, and say how far ([#519](https://github.com/rig-c/parts/issues/519)) ([ecf9a55](https://github.com/rig-c/parts/commit/ecf9a55be0460ad22eb6d92de9d9fdd8c41e19ed)), closes [#517](https://github.com/rig-c/parts/issues/517)
+
 ## [1.41.0](https://github.com/rig-c/parts/compare/v1.40.0...v1.41.0) (2026-10-19)
 
 
