@@ -3452,7 +3452,7 @@ export const CLOTH_SETTLE_FLOOR = 0.01694;
 export const CLOTH_FLOOR_TEXT = `a chain settles at the first frame from which its tip moves slower than ${CLOTH_SETTLE_FLOOR} rig px/s to the idle's last frame — half the slowest tip an idle key drives on the public examples (scarf's skirt_l2, 0.03388 rig px/s)`;
 
 /** The consumer's two levers, as the console and `check.json` state them. */
-export const CLOTH_LEVERS_TEXT = 'a chain at rest moves again when the world or the body does: an environment at render (rigc render --environment, wind and gravity in time) or a hip motion in the idle (rig-c/parts#502)';
+export const CLOTH_LEVERS_TEXT = "a chain at rest moves again when the world or the body does: an environment at render (rigc render --environment, wind and gravity in time; AUTHORING §3, What moves them, has a worked schedule) or a consumer's animation that moves the bone it hangs from; the drafted idle keys no hip (rig-c/parts#502)";
 
 /** One physics chain as the line reads it. */
 export interface ClothRow {

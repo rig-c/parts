@@ -232,7 +232,7 @@ import {
   padSingleRun,
   singleRunHeadBox,
 } from './src/assemble.ts';
-import { CLOTH_FLOOR_TEXT, CLOTH_LEVERS_TEXT, CLOTH_LINE, CLOTH_SETTLE_FLOOR, clothChains, type ClothLine, clothLine, clothRow, clothWarnText, frameRuns, MOTION_SEAM_FLOOR, MOTION_SEAM_LINE, type MotionSeamLine, motionSeamPairs, motionSeamWarnText, openingOverFloor, readMotionSeams } from './src/check.ts';
+import { boneTrackOf, CLOTH_FLOOR_TEXT, CLOTH_LEVERS_TEXT, CLOTH_LINE, CLOTH_SETTLE_FLOOR, clothChains, type ClothLine, clothLine, clothRow, clothWarnText, frameRuns, MOTION_SEAM_FLOOR, MOTION_SEAM_LINE, type MotionSeamLine, motionSeamPairs, motionSeamWarnText, openingOverFloor, readMotionSeams } from './src/check.ts';
 import { BREATH_ANIMATION, type BreathPair, breathPairProblem, breathTracks, chainDirection, sweepAngles, sweepJoints, type SweepJoint, sweepLine, type SweepLine, SWEEP_LINE, type SweepPose, type Viewport } from './src/check.ts';
 import { barsNotMet, flatComposite, frameToRigMap, maxRgbDiff, rigToFrameMap, SEAM_BOX, SEAM_PX_BAR, SEAM_PX_LEVEL, seamRigPx, seamRigPxText, SEAM_MEAN_BAR, SEAM_DIR, SEAM_MARK, SEAM_NO_ART, seamFigures, type SeamFigures, seamPairRows, seamPairText, STILL_DIR, withoutPhysics, BREATH_TORSO_MEAN_FLOOR } from './src/check.ts';
 import { ACCEPTABLE_BARS, BARS, besideIdleLine, blackRig, drawingTurn, FOLD_LINE, LEVEL_BAR_DEGREES, LEVEL_LINE, LIMB_LINE, limbLine, foldsLine, STRESS_LINE, STRESS_RIGID, STRESS_TURNS, stressPlan, readFoldSets, edgeBonesText, buildGateLines, holesLine, causeLines, chainLine, measuredRules, SOURCE_LINE, sourceFigures, sourceSizeProblem, packedBuildArgs, GATE_PROFILE, DEFAULT_PACK_MODE, DEFAULT_PAGE_EDGES, findRigc, packageRigc, rigcIdentity, rigcRunnerAt, type RigcSpawn, type PackMode, type PageEdges, type FrameSet, GEOMETRY_FILE, gateGreen, headBoneOf, IDLE_MAX_PX, type JudgementLine, JUDGEMENT_LINES, packEdgeProblems, PARTS_HOME_SENTENCE, parsePackLines, readBoneTrack, readCheckInputs, readFrameSet, readGeometry, readRigcEntry, REPORTED_LINES, requireRigcVersion, RIGC_ENTRY_VERSION, RIGC_GEOMETRY_VERSION, rigcFailed, type RigcRunner, runCheck, SPINEBOY_YARDSTICK, stretchLine, TEXTURE_STRETCH_CEILING, TIP_RATIO_FLOOR, TIP_REST_RATIO_CEILING, attachmentPoses, stillLine, STILL_INSTRUMENT } from './src/check.ts';
@@ -16634,7 +16634,7 @@ function runClothSettlesCases(say: (name: string, ok: boolean, detail: string, w
         !lines(hipped.check.out).some((l) => l.startsWith('WARN chain ')) &&
         hipMiss.length === 0,
       `exit ${hipped.check?.status ?? 'not run'}; ${hipLine === null ? 'no line' : `${hipLine.status}, ${hipLine.rows.length} chain(s), slowest tip ${Math.min(...hipLine.rows.map((r) => r.min_rig_px_per_s))} rig px/s`}; ${lines(hipped.check?.out ?? '').find((l) => l.startsWith('check: ')) ?? ''}`,
-      "issue #501's positive control and the second lever (#502): a hip turn of 0.2 degrees over the idle's period drives every tree, so no tip stays under the floor to the idle's end and nothing warns — a tip may pass under it on a frame where the sine turns (measured here at 0.001088 rig px/s on one frame), which is why settling is read to the last frame and not off the slowest one; the turn is that small because the bars hold it — a hip translate of 2 px fails TIP_OVER_ROOT (the root carried as far as the hem) and a turn of 1 degree CHAIN_LAG (neck's 0.35 under hip's 1)",
+      "issue #501's positive control: a hip turn of 0.2 degrees over the idle's period drives every tree, so no tip stays under the floor to the idle's end and nothing warns — a tip may pass under it on a frame where the sine turns (measured here at 0.001088 rig px/s on one frame), which is why settling is read to the last frame and not off the slowest one; the turn is that small because the bars hold it — a hip translate of 2 px fails TIP_OVER_ROOT (the root carried as far as the hem) and a turn of 1 degree CHAIN_LAG (neck's 0.35 under hip's 1); on the public examples no hip turn at the idle's period passes every bar, which is why the drafted idle keeps no hip key (issue #502, CH20)",
     );
     const silent = bareLine === null ? [] : clothLines(bareLine, { silent: true });
     const noFloor = bareLine === null ? null : clothLine(bareLine.rows.map((r) => ({ ...r, settles_at: null })), bareLine.fps, bareLine.frames, bareLine.duration);
@@ -21124,6 +21124,56 @@ function runFacelessExample(key: string, ex: string, out: string, dir: string, s
   );
 }
 
+/** The worked environment schedule AUTHORING quotes (issue #502), beside wind's config. */
+const BREEZE_FILE = 'breeze.json';
+
+function isDriveRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Issue #502's fact on a built rig: the bones the idle keys (a bone track, or a group track's members), whether one of
+ * them is `hip` or a bone above it, and the chains no keyed bone drives — no keyed bone at or above the leaf. The
+ * block is held to it: a chain settles exactly when it is undriven, and the status is WARN exactly when one is.
+ */
+function idleDriveFacts(rig: Record<string, unknown>, motion: Record<string, unknown>, block: ClothLine): { undriven: string[]; problems: string[] } {
+  const bones = (Array.isArray(rig.bones) ? rig.bones : []).filter(isDriveRecord);
+  const parent = new Map(bones.map((b) => [String(b.name), typeof b.parent === 'string' ? b.parent : null]));
+  const anims = isDriveRecord(motion.animations) ? motion.animations : {};
+  const idle = isDriveRecord(anims.idle) ? anims.idle : {};
+  const groups = isDriveRecord(motion.groups) ? motion.groups : {};
+  const keyed = new Set<string>();
+  for (const t of Array.isArray(idle.tracks) ? idle.tracks.filter(isDriveRecord) : []) {
+    if (typeof t.bone === 'string') keyed.add(t.bone);
+    else if (typeof t.group === 'string' && Array.isArray(groups[t.group])) for (const m of groups[t.group] as unknown[]) if (typeof m === 'string') keyed.add(m);
+  }
+  const upFrom = (b: string): string[] => {
+    const out: string[] = [];
+    for (let p: string | null = b; p !== null && !out.includes(p); p = parent.get(p) ?? null) out.push(p);
+    return out;
+  };
+  const problems: string[] = [];
+  const hipKeys = upFrom('hip').filter((b) => keyed.has(b));
+  if (!parent.has('hip')) problems.push('the rig has no bone "hip"');
+  if (hipKeys.length > 0) problems.push(`the idle keys ${hipKeys.map((b) => `"${b}"`).join(', ')}, at or above "hip"`);
+  const undriven = block.rows.filter((row) => !upFrom(row.tip).some((b) => keyed.has(b))).map((row) => row.tip);
+  for (const row of block.rows) {
+    const free = undriven.includes(row.tip);
+    if (free !== (row.settles_at !== null)) problems.push(`chain "${row.tip}" ${free ? 'has no idle-keyed bone at or above it' : 'hangs under an idle-keyed bone'} and ${row.settles_at === null ? 'does not settle' : `settles at ${String(row.settles_at)} s`}`);
+  }
+  const status = undriven.length > 0 ? 'WARN' : 'CLEAR';
+  if (block.status !== status) problems.push(`status ${block.status}; ${status} is what ${undriven.length} undriven chain(s) print`);
+  return { undriven, problems };
+}
+
+/** A copy of `motion` whose idle also turns `hip` (issue #502's plant): a rotate track of two keys. */
+function withIdleHipKey(motion: Record<string, unknown>): Record<string, unknown> {
+  const anims = isDriveRecord(motion.animations) ? motion.animations : {};
+  const idle = isDriveRecord(anims.idle) ? anims.idle : {};
+  const tracks = Array.isArray(idle.tracks) ? idle.tracks : [];
+  return { ...motion, animations: { ...anims, idle: { ...idle, tracks: [...tracks, { bone: 'hip', property: 'rotate', keys: [{ time: 0, value: 0 }, { time: 0.5, value: 0.2 }] }] } } };
+}
+
 function runChainSuite(): number | null {
   // Issue #395: split into one unit per example and a closing unit (SPLIT_SUITES); the first opens the section.
   const part = splitPart('chain');
@@ -21309,6 +21359,65 @@ function runChainSuite(): number | null {
           : `${clothBlock.status}, ${clothBlock.warnings} of ${clothBlock.rows.length} chain(s) settle on the ${clothBlock.duration} s idle${clothBlock.warnings === 0 ? '' : `: ${clothBlock.rows.filter((row) => row.settles_at !== null).map((row) => `${row.tip} at ${String(row.settles_at)} s`).join(', ')}`}; slowest tip that does not settle ${Math.min(...clothBlock.rows.filter((row) => row.settles_at === null).map((row) => row.min_rig_px_per_s))} rig px/s; printed ${clothPrinted.length} line(s)${JSON.stringify(clothPrinted) === JSON.stringify(clothLines(clothBlock)) ? ', the block as printed' : ', DIFFERENT from the block'}`,
         "issue #501 bar 1 on the public examples: a rig with physics prints the line from check.json's block, line for line, every chain with its figures (CH04 holds the block to expected/); one with none prints a SKIP naming why and writes no key — wind's skirt and reference-sample's hip_jiggle settle, every chain an idle key drives does not",
       );
+
+      // Issue #502, decided (b): the drafted idle keys no hip, so a chain no idle key drives comes to rest, and the line
+      // says so rather than staying silent. Read off the build's own rig.json and motion.json, with two plants on the
+      // same data: a hip key put into the idle, and the block with one chain's settling turned over.
+      const builtRigDoc = readJsonAt(join(out, 'rig', 'rig.json')) as Record<string, unknown>;
+      const builtMotion = readJsonAt(join(out, 'rig', 'motion.json')) as Record<string, unknown>;
+      if (clothBlock !== undefined && clothBlock.status !== 'SKIP') {
+        const truth = idleDriveFacts(builtRigDoc, builtMotion, clothBlock);
+        const hipKeyed = idleDriveFacts(builtRigDoc, withIdleHipKey(builtMotion), clothBlock);
+        const turned = idleDriveFacts(builtRigDoc, builtMotion, { ...clothBlock, rows: clothBlock.rows.map((row, i) => (i === 0 ? { ...row, settles_at: row.settles_at === null ? 0 : null } : row)) });
+        say(
+          `CH20_THE_IDLE_KEYS_NO_HIP_AND_EXACTLY_THE_CHAINS_NO_IDLE_KEY_DRIVES_SETTLE[${key}]`,
+          truth.problems.length === 0 && hipKeyed.problems.length > 0 && turned.problems.length > 0,
+          `${truth.undriven.length} of ${clothBlock.rows.length} chain(s) under no idle-keyed bone (${truth.undriven.join(', ') || 'none'}), status ${clothBlock.status}: ${truth.problems.join('; ') || 'as read'}; plants — a hip key in the idle: ${hipKeyed.problems[0] ?? 'accepted'}; the first chain's settling turned over: ${turned.problems[0] ?? 'accepted'}`,
+          "issue #502's decision on the public examples: the idle stays as drafted and a standing cloth is the consumer's environment to drive (AUTHORING §3, What moves them), so the fact stays visible — no idle track keys hip or a bone above it, a chain settles exactly when no keyed bone sits at or above its leaf, and a rig with such a chain prints WARN; a hip key in the idle, or a block that settles a driven chain or keeps an undriven one alive, is refused by the same predicate",
+        );
+      }
+
+      // Issue #502: AUTHORING's worked schedule, held on the build it names. wind's build rendered under
+      // examples/wind/breeze.json through rigc render --environment, and every chain read by CLOTH_SETTLES's own
+      // definition: the skirt that settles under rigc's default world settles under the schedule nowhere; the guide
+      // quotes the file as tracked.
+      if (key === 'wind' && clothBlock !== undefined && clothBlock.status !== 'SKIP') {
+        const breezeFile = join(ex, BREEZE_FILE);
+        const breezeDir = join(dir, `${key}-breeze`);
+        const er = rigcRunnerAt(suiteRigc(), spawnRigc)(['render', '--candidate', join(out, 'check', 'build'), '--animation', 'idle', '--fps', String(IDLE_FPS), '--max', String(IDLE_MAX_PX), '--geometry', '--environment', breezeFile, '--out', breezeDir]);
+        const physics = withoutPhysics(builtRigDoc, builtMotion);
+        let breezeRows: ReturnType<typeof clothRow>[] = [];
+        let unread = er.status === 0 ? '' : `render exit ${er.status}: ${lastLines(er.out, 2).join(' | ')}`;
+        if (unread === '' && physics !== null) {
+          const set = readFrameSet(breezeDir);
+          const geoPath = join(set.dir, GEOMETRY_FILE);
+          const geo = readGeometry(geoPath, set.written);
+          for (const c of clothChains(builtRigDoc, physics.physics)) {
+            const track = boneTrackOf(geo, geoPath, set, c.tip);
+            if (typeof track === 'string') {
+              unread = track;
+              break;
+            }
+            breezeRows.push(clothRow(c, track));
+          }
+        }
+        if (unread !== '') breezeRows = [];
+        const guide = readFileSync(join(ROOT, 'docs', 'AUTHORING.md'), 'utf8');
+        const quoted = existsSync(breezeFile) && guide.includes('```json\n' + readFileSync(breezeFile, 'utf8').trimEnd() + '\n```');
+        const stillSettling = breezeRows.filter((row) => row.settles_at !== null);
+        const settledCalm = clothBlock.rows.filter((row) => row.settles_at !== null);
+        // The plant: the same predicate over check.json's rows, the idle with no schedule, must refuse.
+        const keepsMoving = (rows: readonly ClothLine['rows'][number][]): boolean => rows.length === clothBlock.rows.length && settledCalm.length > 0 && rows.every((row) => row.settles_at === null);
+        const plantRefused = !keepsMoving(clothBlock.rows);
+        say(
+          `CH21_THE_GUIDES_BREEZE_KEEPS_EVERY_CHAIN_THE_DEFAULT_WORLD_LETS_SETTLE_MOVING[${key}]`,
+          unread === '' && keepsMoving(breezeRows) && plantRefused && quoted,
+          unread !== ''
+            ? unread
+            : `${settledCalm.length} of ${clothBlock.rows.length} chain(s) settle under rigc's default world (check.json); under ${BREEZE_FILE}, ${stillSettling.length} settle${stillSettling.length === 0 ? '' : ` (${stillSettling.map((row) => `${row.tip} at ${String(row.settles_at)} s`).join(', ')})`}, the least of those chains' peaks under it ${settledCalm.length === 0 ? '-' : Math.min(...breezeRows.filter((row) => settledCalm.some((c) => c.tip === row.tip)).map((row) => row.max_rig_px_per_s))} rig px/s; plant — the same predicate over check.json's rows (no schedule): ${plantRefused ? 'refused' : 'ACCEPTED'}; AUTHORING quotes the file ${quoted ? 'verbatim' : 'NOT verbatim'}`,
+          "issue #502 (b)'s worked example: what the consumer passes to rigc render --environment to keep a standing skirt alive, measured on the build it is written for and read by CLOTH_SETTLES's definition (clothChains, clothRow) — a guide example that no longer does what it says, or that drifts from the file, goes red",
+        );
+      }
 
       // Issue #118 on real art: TIP_OVER_ROOT reads the posed geometry, which no render size enters. One variant per
       // example that has the case: sample with its skirt amplitudes x0.1 (the card's reproduction, the hem under a
