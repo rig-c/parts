@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.38.0](https://github.com/rig-c/parts/compare/v1.37.0...v1.38.0) (2026-10-19)
+
+
+### Features
+
+* **check:** SEAM_OVER_MOTION — every declared neighbour pair read in every animation, a warning and never a bar ([#503](https://github.com/rig-c/parts/issues/503)) ([78bb633](https://github.com/rig-c/parts/commit/78bb633f6840b38feebb1086964863eb80117e5a))
+
 ## [1.37.0](https://github.com/rig-c/parts/compare/v1.36.0...v1.37.0) (2026-10-18)
 
 
