@@ -577,6 +577,178 @@
    }
   ]
  },
+ "SEAM_OVER_MOTION": {
+  "status": "CLEAR",
+  "fps": 12,
+  "floor": "a frame opens when its gap or its ghost holds more cells than its box is long (rig-c's cell, its box's longer side) — thicker than one cell; a crack one cell deep is the half-opacity cut moving by less than a cell, and is not reported",
+  "pairs": [
+   {
+    "pair": "thigh_r|shin_r",
+    "a": "thigh_r",
+    "b": "shin_r",
+    "declared": [
+     "config.limbs.leg_r segment 1, joint \"knee\""
+    ]
+   },
+   {
+    "pair": "shin_r|foot_r",
+    "a": "shin_r",
+    "b": "foot_r",
+    "declared": [
+     "config.limbs.leg_r segment 2, joint \"ankle\""
+    ]
+   },
+   {
+    "pair": "thigh_l|shin_l",
+    "a": "thigh_l",
+    "b": "shin_l",
+    "declared": [
+     "config.limbs.leg_l segment 1, joint \"knee\""
+    ]
+   },
+   {
+    "pair": "shin_l|foot_l",
+    "a": "shin_l",
+    "b": "foot_l",
+    "declared": [
+     "config.limbs.leg_l segment 2, joint \"ankle\""
+    ]
+   },
+   {
+    "pair": "upperarm_l|forearm_l",
+    "a": "upperarm_l",
+    "b": "forearm_l",
+    "declared": [
+     "config.limbs.arm_l segment 1, joint \"elbow\""
+    ]
+   },
+   {
+    "pair": "upperarm_r|forearm_r",
+    "a": "upperarm_r",
+    "b": "forearm_r",
+    "declared": [
+     "config.limbs.arm_r segment 1, joint \"elbow\""
+    ]
+   }
+  ],
+  "animations": [
+   "idle"
+  ],
+  "warnings": 0,
+  "rows": [
+   {
+    "pair": "thigh_r|shin_r",
+    "animation": "idle",
+    "status": "read",
+    "drawn": 41,
+    "banded": 41,
+    "opens": [],
+    "px": [],
+    "max_px": 0,
+    "under_floor": []
+   },
+   {
+    "pair": "shin_r|foot_r",
+    "animation": "idle",
+    "status": "read",
+    "drawn": 41,
+    "banded": 41,
+    "opens": [],
+    "px": [],
+    "max_px": 0,
+    "under_floor": []
+   },
+   {
+    "pair": "thigh_l|shin_l",
+    "animation": "idle",
+    "status": "read",
+    "drawn": 41,
+    "banded": 41,
+    "opens": [],
+    "px": [],
+    "max_px": 0,
+    "under_floor": []
+   },
+   {
+    "pair": "shin_l|foot_l",
+    "animation": "idle",
+    "status": "read",
+    "drawn": 41,
+    "banded": 41,
+    "opens": [],
+    "px": [],
+    "max_px": 0,
+    "under_floor": []
+   },
+   {
+    "pair": "upperarm_l|forearm_l",
+    "animation": "idle",
+    "status": "read",
+    "drawn": 41,
+    "banded": 41,
+    "opens": [],
+    "px": [],
+    "max_px": 0,
+    "under_floor": [
+     4,
+     5,
+     6,
+     8,
+     10,
+     16,
+     17,
+     20,
+     21,
+     22,
+     24,
+     26,
+     36,
+     37,
+     38
+    ]
+   },
+   {
+    "pair": "upperarm_r|forearm_r",
+    "animation": "idle",
+    "status": "read",
+    "drawn": 41,
+    "banded": 41,
+    "opens": [],
+    "px": [],
+    "max_px": 0,
+    "under_floor": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     8,
+     13,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     29,
+     30,
+     35,
+     37,
+     38,
+     39,
+     40
+    ]
+   }
+  ]
+ },
  "RECOMPOSITE_HOLES": {
   "status": "REPORTED",
   "error_px": 15129,

@@ -221,6 +221,7 @@ import {
   padSingleRun,
   singleRunHeadBox,
 } from './src/assemble.ts';
+import { frameRuns, MOTION_SEAM_FLOOR, MOTION_SEAM_LINE, type MotionSeamLine, motionSeamPairs, motionSeamWarnText, openingOverFloor, readMotionSeams } from './src/check.ts';
 import { BREATH_ANIMATION, type BreathPair, breathPairProblem, breathTracks, chainDirection, sweepAngles, sweepJoints, type SweepJoint, sweepLine, type SweepLine, SWEEP_LINE, type SweepPose, type Viewport } from './src/check.ts';
 import { barsNotMet, flatComposite, frameToRigMap, maxRgbDiff, rigToFrameMap, SEAM_BOX, SEAM_PX_BAR, SEAM_PX_LEVEL, seamRigPx, seamRigPxText, SEAM_MEAN_BAR, SEAM_DIR, SEAM_MARK, SEAM_NO_ART, seamFigures, type SeamFigures, seamPairRows, seamPairText, STILL_DIR, withoutPhysics, BREATH_TORSO_MEAN_FLOOR } from './src/check.ts';
 import { ACCEPTABLE_BARS, BARS, besideIdleLine, blackRig, drawingTurn, FOLD_LINE, LEVEL_BAR_DEGREES, LEVEL_LINE, LIMB_LINE, limbLine, foldsLine, STRESS_LINE, STRESS_RIGID, STRESS_TURNS, stressPlan, readFoldSets, edgeBonesText, buildGateLines, holesLine, causeLines, chainLine, measuredRules, SOURCE_LINE, sourceFigures, sourceSizeProblem, packedBuildArgs, GATE_PROFILE, DEFAULT_PACK_MODE, DEFAULT_PAGE_EDGES, findRigc, packageRigc, rigcIdentity, rigcRunnerAt, type RigcSpawn, type PackMode, type PageEdges, type FrameSet, GEOMETRY_FILE, gateGreen, headBoneOf, IDLE_MAX_PX, type JudgementLine, JUDGEMENT_LINES, packEdgeProblems, PARTS_HOME_SENTENCE, parsePackLines, readBoneTrack, readCheckInputs, readFrameSet, readGeometry, readRigcEntry, REPORTED_LINES, requireRigcVersion, RIGC_ENTRY_VERSION, RIGC_GEOMETRY_VERSION, rigcFailed, type RigcRunner, runCheck, SPINEBOY_YARDSTICK, stretchLine, TEXTURE_STRETCH_CEILING, TIP_RATIO_FLOOR, TIP_REST_RATIO_CEILING, attachmentPoses, stillLine, STILL_INSTRUMENT } from './src/check.ts';
@@ -277,7 +278,7 @@ import { BLOCKED_LABEL, barsOf, basisOf, cappedReducer, classify, costLine, coun
 import { withPolicyMotion } from './fixtures/automotion.ts';
 import { type BStar, bStar, type CellRow as ToolCellRow, nearestRank, parseArgs as parseBoundaryArgs, pendingRow, policyAt, render as renderBoundary, sagittas, sagittaSummary } from './tools/auto_boundary_survey.ts';
 import { type AutoMotionCase, explicitFrameId, idleSchedule, localRow, motionInput, motionStimulus, motionVerdict, runComparison, stimulusAnimations, withStimulus } from './src/automotion.ts';
-import { loopCheckLine, loopStage, motionGates, type MotionGateRun, replaySearch, stimulusTexts, strayClause } from './src/build.ts';
+import { loopCheckLine, loopStage, motionGates, motionSeamLines, type MotionGateRun, replaySearch, stimulusTexts, strayClause } from './src/build.ts';
 import {
   bisectAccepted,
   type CountedProbe,
@@ -13610,6 +13611,215 @@ function runSweepCheckCases(say: (name: string, ok: boolean, detail: string, why
 }
 
 /**
+ * Issue #493: SEAM_OVER_MOTION, every declared neighbour pair read in every animation by rig-c's seam reading — a
+ * warning, never a bar. One arm on the 64x64 flat painting at scale 1 (a run pixel is a rig pixel, rigc's cell one
+ * texel, one rig px), one layer `handwear-r` of colour C: the upper arm x 17..36, y 4..31 (20 px wide) over a forearm
+ * x 12..41, y 32..60 (30 px wide). Chain `sleeve_r` (27, 4) -> (27, 32), tip (27, 60): the elbow at (27, 32), the
+ * width across its line 30, so the cap is the disc of radius 15 about the elbow on the upper side — the layer's art
+ * there, x 17..36, y 17..31, the forearm's piece; the rest of that half-disc (past the upper arm's outline) is
+ * missing. The idle turns `hip`, which carries both pieces: a rigid turn, read closed by rigc's construction.
+ * `bend` turns the elbow (`sleeve_r1`) from 0 to 90 degrees over 1 s, linearly; at 12 fps frame k is 7.5 k degrees.
+ *
+ * By hand at frame 12 (90 degrees, counter-clockwise on screen, which maps a cell centre to a cell centre): a ghost
+ * cell is drawn by one piece and not the other, carried back into the band (the cap, the only art the two share at
+ * rest), and the other piece's carry-back finds no drawing there at rest ({@link soGhostAt90}). Both pieces'
+ * contributions are counted by that loop, from the definition, not by the code under test.
+ */
+const SO_FULL: RunLayerSpec[] = [{ name: 'handwear-r', depth: 0.5, rects: [{ x0: 17, y0: 4, x1: 37, y1: 32, colour: C }, { x0: 12, y0: 32, x1: 42, y1: 61, colour: C }] }];
+const SO_ELBOW: [number, number] = [27, 32];
+const SO_R = 15;
+const SO_BEND = { spec: 'rigc-motion/1', animations: { bend: { duration: 1, loop: false, tracks: [{ bone: 'sleeve_r1', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 1, v: [90] }] }] } } };
+
+/**
+ * The cut arm (`limbs`), or the same art uncut for SO03: one part on a `neckwear` layer, which no judgement line reads
+ * (an uncut `handwear` part is held to swing by TIP_OVER_ROOT), with an idle that turns a bone nothing rides.
+ */
+function soConfig(limbs: boolean): Record<string, unknown> {
+  const cfg = assembleConfig({ plan: [['arm', 'full', limbs ? 'handwear-r' : 'neckwear']], extend: [] });
+  return {
+    ...cfg,
+    ...(limbs
+      ? {
+          limbs: { arm_r: { segments: [{ part: 'upperarm_r', from: 'arm', bone: 'sleeve_r0' }, { part: 'forearm_r', from: 'arm', bone: 'sleeve_r1', joint: 'elbow' }] } },
+          regions: { upperarm_r: 'sleeve_r0', forearm_r: 'sleeve_r1' },
+        }
+      : { regions: { arm: 'sleeve_r1' } }),
+    bones: [
+      ...(limbs ? [] : [{ name: 'anchor', parent: 'root', at: [0, 0] }]),
+      { name: 'hip', parent: 'root', at: [27, 2] },
+      { chain: 'sleeve_r', parent: 'hip', points: [[27, 4], [27, 32]], tip: [27, 60] },
+    ],
+    motion: { duration: 1, tracks: [{ bone: limbs ? 'hip' : 'anchor', prop: 'rotate', amp: 2, period: 1, phase: 0 }], animations_from: 'animations.json' },
+  };
+}
+
+/** The ghost cells at frame 12 of `bend`, from the definition: both pieces' views, every cell centre of the 64x64 grid. */
+function soGhostAt90(): number {
+  const [ex, ey] = SO_ELBOW;
+  const upper = (x: number, y: number): boolean => x >= 17 && x < 37 && y >= 4 && y < 32;
+  const fore = (x: number, y: number): boolean => x >= 12 && x < 42 && y >= 32 && y < 61;
+  const cap = (x: number, y: number): boolean => upper(x, y) && y + 0.5 < ey && (x + 0.5 - ex) ** 2 + (y + 0.5 - ey) ** 2 <= SO_R * SO_R;
+  const atRest = (x: number, y: number): boolean => upper(x, y) || fore(x, y) || cap(x, y);
+  // Turned 90 degrees counter-clockwise on screen (y down) about the elbow: (dx, dy) -> (dy, -dx); back: (dx, dy) -> (-dy, dx).
+  const back = (x: number, y: number): [number, number] => {
+    const dx = x + 0.5 - ex;
+    const dy = y + 0.5 - ey;
+    return [ex - dy - 0.5, ey + dx - 0.5];
+  };
+  let n = 0;
+  for (let y = 0; y < 64; y++) {
+    for (let x = 0; x < 64; x++) {
+      const [bx, by] = back(x, y);
+      const foreDraws = fore(bx, by) || cap(bx, by);
+      const upperDraws = upper(x, y);
+      // the forearm draws it from the band, and the upper arm's view (it does not move) finds nothing there at rest
+      if (foreDraws && !upperDraws && cap(bx, by) && !atRest(x, y)) n++;
+      // the upper arm draws it from the band, and the forearm's view finds nothing there at rest
+      else if (upperDraws && !foreDraws && cap(x, y) && !atRest(bx, by)) n++;
+    }
+  }
+  return n;
+}
+
+function runMotionSeamCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const dir = temp('motion-seam');
+  try {
+    writeRun(join(dir, 'full'), SO_FULL);
+    writeRun(join(dir, 'full-uncut'), SO_FULL.map((l) => ({ ...l, name: 'neckwear' })));
+    writeRun(join(dir, 'head'), FRAMED_HEAD);
+    writeFileSync(join(dir, 'painting.png'), encodePngBytes(flatPainting()));
+    writeFileSync(join(dir, 'animations.json'), JSON.stringify(SO_BEND));
+    const built = (label: string, limbs: boolean): { status: number; out: string; fig: Record<string, unknown> | null } => {
+      const cfg = join(dir, `${label}.json`);
+      writeFileSync(cfg, JSON.stringify(soConfig(limbs)));
+      const r = runCli(['build', '--config', cfg, '--source', join(dir, 'painting.png'), '--full', join(dir, limbs ? 'full' : 'full-uncut'), '--head', join(dir, 'head'), '--out', join(dir, label)]);
+      return { ...r, fig: readJsonFile(join(dir, label, 'check', 'check.json')) };
+    };
+    const cut = built('cut', true);
+    const whole = built('whole', false);
+    const lines = (out: string): string[] => out.split('\n').map((l) => l.replace(/^\[check\] /, ''));
+    const line = (fig: Record<string, unknown> | null): MotionSeamLine | null => (fig?.[MOTION_SEAM_LINE] as MotionSeamLine | undefined) ?? null;
+    const ln = line(cut.fig);
+    const bendRow = ln?.rows.find((r) => r.animation === 'bend');
+    const idleRow = ln?.rows.find((r) => r.animation === 'idle');
+    const warns = (ls: readonly string[]): string[] => ls.filter((l) => l.trimStart().startsWith('WARN seam '));
+
+    // rigc's own reading of the same build, read again here with the floor's definition written out a second time.
+    const again = join(dir, 'again');
+    const r = spawnRigc(suiteRigc(), ['render', '--candidate', join(dir, 'cut', 'check', 'build'), '--seam', 'upperarm_r:forearm_r', '--fps', '12', '--max', '16', '--out', again]);
+    const seamOf = (anim: string): Record<string, unknown> | null => {
+      const fr = readJsonFile(join(again, 'frames.json'));
+      const set = (Array.isArray(fr?.sets) ? fr.sets : []).find((s: Record<string, unknown>) => s.animation === anim) as Record<string, unknown> | undefined;
+      return set === undefined ? null : readJsonFile(join(again, String(set.dir), 'seam.json'));
+    };
+    type Hit = { index: number; px: number; cell: number; box: number[] };
+    const hitsOf = (anim: string): Hit[] => {
+      const p = (seamOf(anim)?.pairs as Array<Record<string, { frames: Hit[] }>> | undefined)?.[0];
+      return p === undefined ? [] : [...p.gap.frames, ...p.ghost.frames];
+    };
+    const bendHits = hitsOf('bend');
+    const thick = (h: Hit): boolean => h.px > Math.round(Math.max(h.box[2] - h.box[0], h.box[3] - h.box[1]) / h.cell);
+    const byHand = [...new Set(bendHits.filter(thick).map((h) => h.index))].sort((a, b) => a - b);
+    const named = [...new Set(bendHits.map((h) => h.index))].sort((a, b) => a - b);
+    const at12 = Math.max(0, ...bendHits.filter((h) => h.index === 12).map((h) => h.px));
+    const ghost90 = soGhostAt90();
+    const wantWarn = bendRow === undefined ? '' : motionSeamWarnText(bendRow);
+    const cutWarns = warns(lines(cut.out));
+    say(
+      'SO01_A_LIMB_BENT_PAST_ITS_PAINTED_CAP_WARNS_WITH_ITS_FRAMES_AND_CELLS_AND_CHECK_STILL_PASSES',
+      r.status === 0 &&
+        cut.status === 0 &&
+        cut.fig?.PASS === true &&
+        ln !== null &&
+        ln.status === 'WARN' &&
+        ln.warnings === 1 &&
+        JSON.stringify(ln.pairs) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', a: 'upperarm_r', b: 'forearm_r', declared: ['config.limbs.arm_r segment 1, joint "elbow"'] }]) &&
+        JSON.stringify(ln.animations) === '["idle","bend"]' &&
+        idleRow !== undefined &&
+        idleRow.status === 'read' &&
+        idleRow.opens.length === 0 &&
+        idleRow.under_floor.length === 0 &&
+        bendRow !== undefined &&
+        byHand.length > 0 &&
+        !named.includes(0) &&
+        byHand.includes(12) &&
+        at12 === ghost90 &&
+        JSON.stringify(bendRow.opens) === JSON.stringify(byHand) &&
+        JSON.stringify(bendRow.under_floor) === JSON.stringify(named.filter((f) => !byHand.includes(f))) &&
+        bendRow.px[bendRow.opens.indexOf(12)] === ghost90 &&
+        bendRow.max_px === Math.max(...bendRow.px) &&
+        cutWarns.length === 1 &&
+        cutWarns[0].trim() === wantWarn &&
+        wantWarn.startsWith(`WARN seam "upperarm_r|forearm_r" opens on ${byHand.length} frame(s) [`) &&
+        wantWarn.includes(` max ${bendRow.max_px} px in "bend" — over the one-cell floor`) &&
+        lines(cut.out).some((l) => l.startsWith(`  ${MOTION_SEAM_LINE}: WARN — 1 declared pair(s) in 2 animation(s) (idle, bend)`) && l.includes('1 warning(s), never a bar') && l.includes(MOTION_SEAM_FLOOR)) &&
+        lines(cut.out).some((l) => l.startsWith('check: PASS; ') && l.endsWith('; 1 warning(s) (SEAM_OVER_MOTION, not a bar)')) &&
+        barsNotMet(cut.fig ?? {}).length === 0,
+      `check exit ${cut.status}, PASS ${String(cut.fig?.PASS)}; ${ln === null ? 'no line' : `${ln.status}, ${ln.warnings} warning(s)`}; idle ${idleRow === undefined ? 'absent' : `opens ${JSON.stringify(idleRow.opens)}, under ${JSON.stringify(idleRow.under_floor)}`}; bend rigc names ${JSON.stringify(named)}, over the floor by the definition ${JSON.stringify(byHand)}, the line ${JSON.stringify(bendRow?.opens)} px ${JSON.stringify(bendRow?.px)}; frame 12 rigc ${at12} cells, by hand ${ghost90}; ${cutWarns[0]?.trim() ?? 'no WARN line'}`,
+      "issue #493 bar 1: the cap the layer paints is the upper arm's 20 px of a 30 px half-disc, so a bend swings it clear of the upper arm's outline and the upper arm's band clear of the forearm — a ghost both ways, the warning names the frames and the cells, and check passes, since a seam opening in motion may be intended (the owner's ruling, 2026-10-18). The idle turns both pieces together, which reads closed",
+    );
+
+    // The two mutants: the line silenced (the warning suppressed), and the floor removed.
+    const silent = ln === null ? [] : motionSeamLines(ln, { silent: true });
+    const loud = ln === null ? [] : motionSeamLines(ln);
+    const floorless = r.status === 0 && ln !== null ? readMotionSeams(again, ['idle', 'bend'], 12, ln.pairs, { noFloor: true }) : [];
+    const floorlessBend = floorless.find((x) => x.animation === 'bend');
+    say(
+      'SO02_THE_WARNING_SUPPRESSED_PRINTS_NOTHING_AND_THE_FLOOR_REMOVED_REPORTS_EVERY_FRAME_RIGC_NAMES',
+      warns(loud).length === 1 &&
+        warns(loud)[0] === wantWarn &&
+        warns(silent).length === 0 &&
+        silent.length === loud.length - 1 &&
+        floorlessBend !== undefined &&
+        JSON.stringify(floorlessBend.opens) === JSON.stringify(named) &&
+        floorlessBend.under_floor.length === 0 &&
+        (bendRow?.under_floor.length ?? 0) === named.length - byHand.length,
+      `the line as printed: ${warns(loud).length} WARN line(s); silenced: ${warns(silent).length}; the floor removed: bend opens ${JSON.stringify(floorlessBend?.opens)} against rigc's ${JSON.stringify(named)} (the floor holds back ${bendRow?.under_floor.length ?? 'none'})`,
+      "issue #493 bar 2, the planted negatives of SO01: a line that prints its head and no WARN is what a dropped warning looks like, and SO01's predicate finds no WARN in it; with the floor removed every frame rigc names open is reported, which is what the floor exists to keep from the one-cell cracks — so the floor is seen to move something",
+    );
+
+    const wl = lines(whole.out).filter((l) => l.includes(MOTION_SEAM_LINE));
+    say(
+      'SO03_WITH_NO_NEIGHBOUR_PAIR_DECLARED_THE_LINE_IS_A_SKIP_NAMING_WHY_AND_CHECK_JSON_HAS_NO_KEY',
+      whole.status === 0 &&
+        whole.fig?.PASS === true &&
+        whole.fig !== null &&
+        !(MOTION_SEAM_LINE in whole.fig) &&
+        wl.length === 1 &&
+        wl[0] === `  ${MOTION_SEAM_LINE}: SKIP — no neighbour pair is declared: parts.json holds no limb segment below a joint (config.limbs) and no --requirements seam names two parts` &&
+        !lines(whole.out).some((l) => l.startsWith('check: ') && l.includes('warning(s)')),
+      `exit ${whole.status}; check.json ${whole.fig !== null && MOTION_SEAM_LINE in whole.fig ? 'HAS' : 'has no'} ${MOTION_SEAM_LINE}; printed ${JSON.stringify(wl)}`,
+      'issue #493 bar 3: the same art uncut, with no limbs and no requirements, declares no pair, so there is nothing to read — a SKIP by name, never a pass, with no key in check.json and no warning count in the summary',
+    );
+
+    // The pairs and the floor on their own, by hand.
+    const parts = readParts(join(dir, 'cut', 'parts.json'));
+    const both = motionSeamPairs(parts, [{ name: 'elbow seam', part: 'forearm_r', neighbour: 'upperarm_r' }, { name: 'other', part: 'upperarm_r', neighbour: 'hand' }]);
+    const box = (w: number, h: number): [number, number, number, number] => [0, 0, w, h];
+    say(
+      'SO04_THE_PAIRS_ARE_THE_DECLARED_ONES_ONCE_EACH_AND_THE_FLOOR_IS_ONE_CELL_OF_THICKNESS',
+      JSON.stringify(both) ===
+        JSON.stringify([
+          { pair: 'upperarm_r|forearm_r', a: 'upperarm_r', b: 'forearm_r', declared: ['config.limbs.arm_r segment 1, joint "elbow"', 'requirement "elbow seam" (seam)'] },
+          { pair: 'upperarm_r|hand', a: 'upperarm_r', b: 'hand', declared: ['requirement "other" (seam)'] },
+        ]) &&
+        !openingOverFloor({ px: 1, cell: 1, box: box(1, 1) }) &&
+        !openingOverFloor({ px: 5, cell: 1, box: box(5, 1) }) &&
+        !openingOverFloor({ px: 5, cell: 1, box: box(15, 15) }) &&
+        openingOverFloor({ px: 4, cell: 1, box: box(2, 2) }) &&
+        openingOverFloor({ px: 3, cell: 0.5, box: box(1, 0.5) }) &&
+        !openingOverFloor({ px: 2, cell: 0.5, box: box(1, 0.5) }) &&
+        frameRuns([0, 1, 2, 4, 6, 7]) === '[0-2, 4, 6-7]' &&
+        frameRuns([]) === '[]',
+      `pairs ${JSON.stringify(both.map((p) => `${p.pair} <- ${p.declared.join(' + ')}`))}; floor: 1 in 1 ${openingOverFloor({ px: 1, cell: 1, box: box(1, 1) })}, 5 in a line of 5 ${openingOverFloor({ px: 5, cell: 1, box: box(5, 1) })}, a 2x2 block ${openingOverFloor({ px: 4, cell: 1, box: box(2, 2) })}; runs ${frameRuns([0, 1, 2, 4, 6, 7])}`,
+      "a pair is a limb's two segments at a joint, or a seam requirement's two parts, and one pair however many declare it, in either order; the floor counts in rig-c's cells — a line one cell deep holds at most as many cells as its box is long, a 2x2 hole already more — so it reads the same at any cell size",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
  * Issue #360: the pieces of SEAM_OVER_RANGE that read no render. parts.json's limb `range` is read back as written and
  * refused by name where a config could not have written it; the angles are the range's ends and middle, each once; a
  * joint the line cannot read is a FAIL naming why, never a pass; and two renders not on one grid are refused, naming
@@ -13945,7 +14155,7 @@ function runLimbCheckCases(say: (name: string, ok: boolean, detail: string, why:
         pinned.status === 1 &&
         rows(pinned.fig) === `FAIL ${all.replace('forearm_r:PASS', 'forearm_r:FAIL+hip')}` &&
         failed.trim() === wantFail &&
-        summary(pinned.out) === 'check: FAIL — 1 bar(s) not met; 9 of 13 bar(s) measured, 4 skipped (BLINK_NO_HOLE, TIP_OVER_ROOT, FEET_STAY_LEVEL, STRESS_OFF_CHAIN)' &&
+        summary(pinned.out) === 'check: FAIL — 1 bar(s) not met; 9 of 13 bar(s) measured, 4 skipped (BLINK_NO_HOLE, TIP_OVER_ROOT, FEET_STAY_LEVEL, STRESS_OFF_CHAIN); 0 warning(s) (SEAM_OVER_MOTION, not a bar)' &&
         alone.status === 0 &&
         rows(alone.fig) === `PASS ${all}` &&
         barsNotMet(pinned.fig ?? {}).join(',') === LIMB_LINE &&
@@ -16071,6 +16281,7 @@ function runCheckSuite(): number {
   runStressCases(say);
   runLimbCheckCases(say);
   runSweepCheckCases(say);
+  runMotionSeamCases(say);
   runSweepUnitCases(say);
   runDiscCheckCases(say);
   runRigcIdentityCases(say);

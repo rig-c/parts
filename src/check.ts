@@ -125,7 +125,7 @@ import {
   type Toward,
   type WorldBox,
 } from './instruments.ts';
-import { type AlternatePartsRecord, type PartRecord, type PartsFile, readParts } from './parts.ts';
+import { type AlternatePartsRecord, type LimbRecord, type PartRecord, type PartsFile, readParts } from './parts.ts';
 import { poseRigBonesForDrawn, type RigBone, SETS_FILE } from './rig.ts';
 import { turnTwin } from './turn.ts';
 import {
@@ -1863,6 +1863,7 @@ export interface CheckFigures {
   [LIMB_LINE]?: LimbLine;
   /** Written only where parts.json holds a limb record with a `range` (issue #360): {@link SweepLine}. */
   [SWEEP_LINE]?: SweepLine;
+  [MOTION_SEAM_LINE]?: MotionSeamLine;
   RECOMPOSITE_HOLES: ReportedLine;
   /** Written only under `--source` (issue #77): the setup pose against the painting, REPORTED. */
   SETUP_POSE_VS_SOURCE?: ReportedLine;
@@ -2125,6 +2126,8 @@ export interface CheckReport {
    * reads the idle. Empty when the idle is alone.
    */
   besideIdle: string[];
+  /** `SEAM_OVER_MOTION` (issue #493): a warning, never a bar — in `check.json` only when a pair is declared; its SKIP is printed either way. */
+  motionSeam: MotionSeamLine;
 }
 
 /**
@@ -3154,6 +3157,249 @@ export function sweepLine(
   };
 }
 
+// ---------------------------------------------------------------------------
+// the seam over every animation (issue #493; the line is {@link MOTION_SEAM_LINE}'s)
+// ---------------------------------------------------------------------------
+
+/**
+ * `SEAM_OVER_MOTION` (issue #493): every declared neighbour pair read in every
+ * animation `motion.json` holds, the idle included, by rig-c's seam reading
+ * (`rigc render --seam`, rig-c 2.60.0) — a **warning, never a bar**. The
+ * owner's ruling (2026-10-18): a seam opening in motion may be intentional, so
+ * the line names the pair, the animation, the frames and the cells, and moves
+ * neither the exit status nor `check: PASS`; the summary counts it apart from
+ * the bars.
+ *
+ * The pairs are the ones the inputs declare and nothing else: each limb's
+ * consecutive segments in `parts.json` (`config.limbs`, the upper and the
+ * segment below each joint) and, under `--requirements`, each `seam`
+ * requirement's part and neighbour. None declared, the line is a SKIP naming
+ * why, never a pass, and `check.json` carries no key for it.
+ *
+ * **The floor** ({@link openingOverFloor}): a frame's gap or ghost is reported
+ * when it holds more cells than its box is long — when it is thicker than one
+ * cell. rigc counts a cell drawn when the renderer paints its centre at half
+ * opacity or more, so a boundary that moves by less than a cell flips the
+ * cells along it in or out: a line of cells one deep, scattered or joined,
+ * holds at most as many cells as its box's longer side. A hole of any area
+ * holds more. The rule types no number; it is read off rigc's own cell and
+ * box, and measured, not chosen: on `examples/wind`'s idle rigc names 43
+ * openings over its six limb pairs (28 and 15 frames of the two elbows, 1 to
+ * 5 cells, boxes up to 17 cells long) and every one is one cell thick; on
+ * rig-c's `gallery/walk` its 13 joint cracks of 1 to 3 cells are too; the
+ * ghost rig-c's own reading names on a skirt swung clear of a leg (1564 cells
+ * in a box 92 long) is far over it.
+ */
+export const MOTION_SEAM_LINE = 'SEAM_OVER_MOTION';
+
+/** The seam reading's scratch build and renders, under `--out`; removed before the stage returns. */
+const MOTION_SEAM_SCRATCH = '_seam_motion';
+
+/** rig-c's seam reading: the file it writes in each set's directory, and its format tag. */
+export const SEAM_READING_FILE = 'seam.json';
+export const SEAM_READING_SPEC = 'rigc-seam/1';
+
+/** The floor as the console and `check.json` state it. */
+export const MOTION_SEAM_FLOOR = "a frame opens when its gap or its ghost holds more cells than its box is long (rig-c's cell, its box's longer side) — thicker than one cell; a crack one cell deep is the half-opacity cut moving by less than a cell, and is not reported";
+
+/** One declared pair: the two slots, and every declaration that names it. */
+export interface MotionSeamPair {
+  /** `"<a>|<b>"`, the two slots in the order declared first. */
+  pair: string;
+  a: string;
+  b: string;
+  declared: string[];
+  /** Why the pair is not read: a slot `rig.json` does not have. */
+  unread?: string;
+}
+
+/** One pair in one animation, as the floor reads rigc's file. */
+export interface MotionSeamRow {
+  pair: string;
+  animation: string;
+  /** rigc's: `skip` when no frame has a band to read — nothing measured, not a seam that held. */
+  status: 'read' | 'skip';
+  /** Frames both slots draw, and of those the frames read (rigc's `drawn`, `banded`). */
+  drawn: number;
+  banded: number;
+  /** The frames over the floor, ascending: the warning's frames. */
+  opens: number[];
+  /** Beside `opens`, frame by frame: the most cells of either kind on that frame. */
+  px: number[];
+  /** The most cells of either kind on any frame over the floor; 0 when none is. */
+  max_px: number;
+  /** The frames rigc names open whose every opening is one cell thick: under the floor, not reported. */
+  under_floor: number[];
+}
+
+/** The line: `WARN` with at least one warning, `CLEAR` with none, `SKIP` with nothing declared or nothing to read. */
+export interface MotionSeamLine {
+  status: 'WARN' | 'CLEAR' | 'SKIP';
+  reason?: string;
+  fps: number;
+  floor: string;
+  pairs: MotionSeamPair[];
+  animations: string[];
+  /** Rows with a frame over the floor: the WARN lines. */
+  warnings: number;
+  rows: MotionSeamRow[];
+}
+
+/**
+ * The neighbour pairs the inputs declare, in their order: each limb's
+ * consecutive segments (`parts.json`'s limb records, by segment), then each
+ * `seam` requirement's part and neighbour. A pair named twice, in either
+ * order, is one pair with both declarations.
+ */
+export function motionSeamPairs(parts: PartsFile, seams: ReadonlyArray<{ name: string; part: string; neighbour: string }>): MotionSeamPair[] {
+  const out: MotionSeamPair[] = [];
+  const add = (a: string, b: string, declared: string): void => {
+    const hit = out.find((p) => (p.a === a && p.b === b) || (p.a === b && p.b === a));
+    if (hit !== undefined) hit.declared.push(declared);
+    else out.push({ pair: `${a}|${b}`, a, b, declared: [declared] });
+  };
+  const limbs: string[] = [];
+  for (const p of parts.parts) if (p.limb !== undefined && !limbs.includes(p.limb.name)) limbs.push(p.limb.name);
+  for (const limb of limbs) {
+    const segs = parts.parts.filter((p) => p.limb?.name === limb).sort((x, y) => (x.limb as LimbRecord).segment - (y.limb as LimbRecord).segment);
+    for (let i = 1; i < segs.length; i++) {
+      const lower = segs[i].limb as LimbRecord;
+      add(segs[i - 1].name, segs[i].name, `config.limbs.${limb} segment ${lower.segment}${lower.joint === undefined ? '' : `, joint "${lower.joint}"`}`);
+    }
+  }
+  for (const r of seams) add(r.part, r.neighbour, `requirement "${r.name}" (seam)`);
+  return out;
+}
+
+/** A frame's opening of one kind over the floor ({@link MOTION_SEAM_FLOOR}): more cells than its box, in cells, is long. */
+export function openingOverFloor(hit: { px: number; cell: number; box: readonly [number, number, number, number] }): boolean {
+  const long = Math.round(Math.max(hit.box[2] - hit.box[0], hit.box[3] - hit.box[1]) / hit.cell);
+  return hit.px > long;
+}
+
+/** Frame indices as runs, `[0-6, 8, 13]`: the form rigc prints a frame list in. */
+export function frameRuns(frames: readonly number[]): string {
+  const runs: string[] = [];
+  for (let i = 0; i < frames.length; ) {
+    let j = i;
+    while (j + 1 < frames.length && frames[j + 1] === frames[j] + 1) j++;
+    runs.push(i === j ? String(frames[i]) : `${frames[i]}-${frames[j]}`);
+    i = j + 1;
+  }
+  return `[${runs.join(', ')}]`;
+}
+
+/**
+ * A planted defect, for the suite's mutants only (`SO` controls in `selftest.ts`). Every caller in `src/` passes none.
+ */
+export interface MotionSeamPlant {
+  /** Report every frame rigc names open, the one-cell cracks included: the floor removed. */
+  noFloor?: true;
+  /** Print the line's head and none of its WARN lines: the warning suppressed. */
+  silent?: true;
+}
+
+type SeamHitRead = { index: number; px: number; cell: number; box: [number, number, number, number] };
+
+/**
+ * The rows of one `rigc render --seam` run over every animation: `frames.json`
+ * names each set's directory, each `seam.json` (`rigc-seam/1`) its pairs in
+ * the flag's order. Refuses (`FRAMES_SIDECAR`), every problem at once, a set or
+ * file that is missing, a file that is not the animation's or not at the rate
+ * asked, a pair out of the flag's order, and a field of the wrong shape.
+ */
+export function readMotionSeams(dir: string, animations: readonly string[], fps: number, pairs: readonly MotionSeamPair[], plant: MotionSeamPlant = {}): MotionSeamRow[] {
+  const problems: Problem[] = [];
+  const bad = (object: string, detail: string): void => {
+    problems.push({ code: 'FRAMES_SIDECAR', object, detail });
+  };
+  const rows: MotionSeamRow[] = [];
+  const sidecar = readJson(join(dir, 'frames.json'), problems);
+  const sets = sidecar !== null && Array.isArray(sidecar.sets) ? sidecar.sets.filter(isRecord) : [];
+  const nums = (v: unknown): v is number[] => Array.isArray(v) && v.every((x) => typeof x === 'number');
+  const hitOf = (h: unknown): SeamHitRead | null =>
+    isRecord(h) && typeof h.index === 'number' && typeof h.px === 'number' && typeof h.cell === 'number' && h.cell > 0 && nums(h.box) && h.box.length === 4 ? { index: h.index, px: h.px, cell: h.cell, box: [h.box[0], h.box[1], h.box[2], h.box[3]] } : null;
+  for (const animation of animations) {
+    const set = sets.find((x) => x.animation === animation);
+    if (set === undefined || typeof set.dir !== 'string') {
+      bad(join(dir, 'frames.json'), `names no frame set for animation ${JSON.stringify(animation)}; \`rigc render --seam\` over the build writes one per animation`);
+      continue;
+    }
+    const path = join(dir, set.dir, SEAM_READING_FILE);
+    const file = readJson(path, problems);
+    if (file === null) continue;
+    if (file.spec !== SEAM_READING_SPEC) bad(path, `spec is ${JSON.stringify(file.spec)}; "${SEAM_READING_SPEC}" is required`);
+    if (file.animation !== animation) bad(path, `animation is ${JSON.stringify(file.animation)}; ${JSON.stringify(animation)} is required`);
+    if (file.fps !== fps) bad(path, `fps is ${JSON.stringify(file.fps)}; ${fps}, the rate asked for, is required`);
+    const read = Array.isArray(file.pairs) ? file.pairs : [];
+    if (read.length !== pairs.length) bad(path, `holds ${read.length} pair(s); the ${pairs.length} asked for, in the flag's order, are required`);
+    pairs.forEach((want, i) => {
+      const p = read[i];
+      const at = `${path} pairs[${i}]`;
+      if (!isRecord(p) || p.a !== want.a || p.b !== want.b) {
+        bad(at, `is ${JSON.stringify(isRecord(p) ? `${String(p.a)}|${String(p.b)}` : p)}; "${want.pair}", the flag's entry ${i}, is required`);
+        return;
+      }
+      if ((p.status !== 'read' && p.status !== 'skip') || typeof p.drawn !== 'number' || typeof p.banded !== 'number' || !nums(p.opens)) {
+        bad(at, 'is not { a, b, drawn, banded, status, opens, maxPx, gap, ghost } as rigc-seam/1 writes it');
+        return;
+      }
+      const over = new Map<number, number>();
+      for (const kind of ['gap', 'ghost'] as const) {
+        const k = p[kind];
+        const frames = isRecord(k) && Array.isArray(k.frames) ? k.frames.map(hitOf) : null;
+        if (frames === null || frames.some((h) => h === null)) {
+          bad(`${at} ${kind}`, 'is not { frames: [{ index, px, cell, box }…], spans, worst } as rigc-seam/1 writes it');
+          return;
+        }
+        for (const h of frames as SeamHitRead[]) if (plant.noFloor === true || openingOverFloor(h)) over.set(h.index, Math.max(over.get(h.index) ?? 0, h.px));
+      }
+      const opens = [...over.keys()].sort((x, y) => x - y);
+      rows.push({
+        pair: want.pair,
+        animation,
+        status: p.status,
+        drawn: p.drawn,
+        banded: p.banded,
+        opens,
+        px: opens.map((f) => over.get(f) ?? 0),
+        max_px: opens.reduce((m, f) => Math.max(m, over.get(f) ?? 0), 0),
+        under_floor: p.opens.filter((f) => !over.has(f)),
+      });
+    });
+  }
+  refuseIfAny(problems);
+  return rows;
+}
+
+/** The line from its rows: WARN when a row has a frame over the floor, CLEAR when none has, SKIP when no row was read. */
+export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fps: number, rows: MotionSeamRow[], reason?: string): MotionSeamLine {
+  const warnings = rows.filter((r) => r.opens.length > 0).length;
+  const read = rows.some((r) => r.status === 'read');
+  const skipWhy =
+    reason ??
+    (read
+      ? undefined
+      : pairs.every((p) => p.unread !== undefined)
+        ? `no declared pair is read: ${pairs.map((p) => `"${p.pair}" ${String(p.unread)}`).join('; ')}`
+        : `rigc read no band on any frame of any declared pair in any animation — nothing measured, which is not a seam that held`);
+  return {
+    status: skipWhy !== undefined ? 'SKIP' : warnings > 0 ? 'WARN' : 'CLEAR',
+    ...(skipWhy === undefined ? {} : { reason: skipWhy }),
+    fps,
+    floor: MOTION_SEAM_FLOOR,
+    pairs,
+    animations,
+    warnings,
+    rows,
+  };
+}
+
+/** One warning as the console prints it (issue #493's form, the floor's clause after it). */
+export function motionSeamWarnText(r: MotionSeamRow): string {
+  return `WARN seam "${r.pair}" opens on ${r.opens.length} frame(s) ${frameRuns(r.opens)} max ${r.max_px} px in "${r.animation}" — over the one-cell floor${r.under_floor.length === 0 ? '' : `, ${r.under_floor.length} more frame(s) one cell thick not reported`}`;
+}
+
 /**
  * One `CHECK_RIGC_GREEN` per line that says why `rigc <what>` was not green:
  * its FAIL and compile-error lines, or, when there are none, {@link causeLines}.
@@ -3570,6 +3816,37 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     }
   }
 
+  // 3e. every declared neighbour pair read in every animation by rigc's seam reading (issue #493): a warning, never a
+  // bar — the build as played, at the idle's rate; SKIP, named, with no pair declared or no animation to read
+  let motionSeam: MotionSeamLine;
+  {
+    const fps = IDLE_FPS;
+    const seamReqs = reqFile === null || seams === null ? [] : reqFile.requirements.flatMap((r) => (r.kind === 'seam' && seams?.has(r.name) === true ? [{ name: r.name, part: r.part, neighbour: r.neighbour }] : []));
+    const pairs = inp.parts === null ? [] : motionSeamPairs(inp.parts, seamReqs);
+    const slotNames = new Set((Array.isArray(inp.rig.slots) ? inp.rig.slots : []).filter(isRecord).map((sl) => String(sl.name)));
+    for (const p of pairs) {
+      const missing = [p.a, p.b].filter((n) => !slotNames.has(n));
+      if (missing.length > 0) p.unread = `names ${missing.map((n) => `slot "${n}"`).join(' and ')}, which rig.json does not have`;
+    }
+    const read = pairs.filter((p) => p.unread === undefined);
+    if (inp.parts === null) motionSeam = motionSeamLine([], animationNames, fps, [], inp.noParts ?? 'no parts.json');
+    else if (pairs.length === 0) motionSeam = motionSeamLine([], animationNames, fps, [], 'no neighbour pair is declared: parts.json holds no limb segment below a joint (config.limbs) and no --requirements seam names two parts');
+    else if (animationNames.length === 0) motionSeam = motionSeamLine(pairs, [], fps, [], 'motion.json holds no animation to read the declared pairs in');
+    else if (read.length === 0) motionSeam = motionSeamLine(pairs, animationNames, fps, []);
+    else {
+      const seamMotionDir = join(out, MOTION_SEAM_SCRATCH);
+      rmSync(seamMotionDir, { recursive: true, force: true });
+      try {
+        const list = read.map((p) => `${p.a}:${p.b}`).join(',');
+        const r = rigc(['render', '--candidate', buildDir, '--seam', list, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', seamMotionDir]);
+        if (r.status !== 0) refuseIfAny(rigcFailed(`render --seam ${list} --fps ${fps}`, r, r.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
+        motionSeam = motionSeamLine(pairs, animationNames, fps, readMotionSeams(seamMotionDir, animationNames, fps, read));
+      } finally {
+        rmSync(seamMotionDir, { recursive: true, force: true });
+      }
+    }
+  }
+
   // 4. the setup pose as a one-key throwaway animation — the seam reads it against the parts, the source line against
   // the painting — and, beside it, the same pose with the eyes shut
   let seam: SeamFigures | null = null;
@@ -3749,6 +4026,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(stress === null ? {} : { [STRESS_LINE]: stress }),
     ...(limbs === null ? {} : { [LIMB_LINE]: limbs }),
     ...(sweep === null ? {} : { [SWEEP_LINE]: sweep }),
+    ...(motionSeam.pairs.length === 0 ? {} : { [MOTION_SEAM_LINE]: motionSeam }),
     RECOMPOSITE_HOLES: inp.parts === null ? { status: 'SKIP', reason: inp.noParts ?? '' } : holesLine(inp.parts),
     ...(sourceRead === null ? {} : { [SOURCE_LINE]: sourceRead }),
     ...(Object.keys(skipped).length === 0 ? {} : { skipped }),
@@ -3832,6 +4110,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     written,
     requirements: reqBlock,
     besideIdle: named,
+    motionSeam,
   };
 }
 

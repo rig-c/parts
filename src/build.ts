@@ -70,7 +70,7 @@ import {
   splitSchedule,
   untestedIntervals,
 } from './autoreplay.ts';
-import { besideIdleLine, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR } from './check.ts';
+import { besideIdleLine, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamWarnText, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR } from './check.ts';
 import { type Cut, type Extend, type Limb, loadConfig, loadConfigAndAnimations, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
 import { failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import type { MeshQualityReport, MotionSchedule } from 'rig-c/mesh';
@@ -1485,6 +1485,27 @@ export function sweepCheckLines(line: SweepLine): string[] {
   ];
 }
 
+/**
+ * The seam over every animation (issue #493) as the console prints it: the status, what was read, the floor and that
+ * it is not a bar, then one WARN line per pair and animation with a frame over the floor, and a line per pair rigc
+ * read nothing of (its SKIP) or the line could not read. A SKIP with nothing declared prints its reason alone.
+ */
+export function motionSeamLines(line: MotionSeamLine, plant: MotionSeamPlant = {}): string[] {
+  if (line.status === 'SKIP' && line.rows.length === 0 && line.pairs.every((p) => p.unread === undefined)) return [`${MOTION_SEAM_LINE}: SKIP — ${String(line.reason)}`];
+  const read = `${line.pairs.length} declared pair(s) in ${line.animations.length} animation(s) (${line.animations.join(', ')}), read by rigc render --seam at ${line.fps} fps on the build as played`;
+  const head =
+    line.status === 'SKIP'
+      ? `${MOTION_SEAM_LINE}: SKIP — ${String(line.reason)}; ${read}`
+      : `${MOTION_SEAM_LINE}: ${line.status} — ${read}: ${line.warnings} warning(s), never a bar; ${line.floor}`;
+  return [
+    head,
+    ...line.pairs.filter((p) => p.unread !== undefined).map((p) => `seam "${p.pair}" (${p.declared.join('; ')}): not read — ${String(p.unread)}`),
+    ...line.rows.filter((r) => r.status === 'skip').map((r) => `seam "${r.pair}" in "${r.animation}": SKIP — rigc read no band on any of the ${r.drawn} frame(s) both slots draw, so there is no seam to read`),
+    ...(plant.silent === true ? [] : line.rows.filter((r) => r.opens.length > 0).map(motionSeamWarnText)),
+    ...line.rows.filter((r) => r.opens.length === 0 && r.under_floor.length > 0).map((r) => `seam "${r.pair}" in "${r.animation}": under the floor — rigc names ${r.under_floor.length} frame(s) open ${frameRuns(r.under_floor)}, each opening one cell thick`),
+  ];
+}
+
 /** A requirement's line as the console prints it: its name and status, the reason first when NOT MEASURABLE, then its figures as check.json holds them. */
 export function requirementText(name: string, line: RequirementLine): string {
   const rest = Object.entries(line).filter(([k]) => k !== 'status' && k !== 'reason');
@@ -1543,6 +1564,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   if (limbs !== undefined) for (const [i, l] of limbCheckLines(limbs).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
   const sweep = fig[SWEEP_LINE];
   if (sweep !== undefined) for (const [i, l] of sweepCheckLines(sweep).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
+  for (const [i, l] of motionSeamLines(r.motionSeam).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
   for (const name of REPORTED_LINES) log(`  ${judgementLine(name, fig[name])}`);
   if (fig.sets !== undefined) {
     for (const [setName, setFig] of Object.entries(fig.sets)) {
@@ -1560,7 +1582,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   for (const p of r.problems) log(failLine(p));
   const reqNotPass = r.requirements === null ? 0 : r.requirements.summary.declared - r.requirements.summary.pass;
   const notMet = r.requirements === null ? `${r.problems.length} bar(s) not met` : `${r.problems.length - reqNotPass} bar(s) not met, ${reqNotPass} declared requirement(s) not PASS`;
-  log(`${fig.PASS ? 'check: PASS' : `check: FAIL — ${notMet}`}; ${barsSummary(r)}`);
+  log(`${fig.PASS ? 'check: PASS' : `check: FAIL — ${notMet}`}; ${barsSummary(r)}${r.motionSeam.status === 'SKIP' ? '' : `; ${r.motionSeam.warnings} warning(s) (${MOTION_SEAM_LINE}, not a bar)`}`);
   return r;
 }
 
