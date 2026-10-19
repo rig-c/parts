@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, extname, join } from 'node:path';
 import { DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE, HOLES_LISTED, PROJECT_RULES, type ProjectRule, proposeFields, proposePlan, proposeSinglePlan, SEAM_RULES, type SeamRule } from './src/assemble.ts';
 import { type AlternateCliInput, assembleStage, build, checkStage, ERROR_MAP_FILE, loopStage, readRuns, readSource, rigStage, suppliedCheckFlag } from './src/build.ts';
-import { ACCEPTABLE_BARS, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, findRigc, PACK_SHAPES, rigcRunnerAt, type PackShape, PAGE_EDGES, type PageEdges, PARTS_HOME_SENTENCE, RIGC_GEOMETRY_VERSION, type RigcRunner, NO_PARTS_SENTENCE, SEAM_MEAN_BAR, SOURCE_SENTENCE, SEAM_PX_BAR, SEAM_PX_LEVEL, SPINEBOY_YARDSTICK, TEXTURE_STRETCH_CEILING } from './src/check.ts';
+import { ACCEPTABLE_BARS, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, findRigc, PACK_SHAPES, rigcRunnerAt, type PackShape, PAGE_EDGES, type PageEdges, PARTS_HOME_SENTENCE, RIGC_GEOMETRY_VERSION, rigcRanClause, type RigcRunner, NO_PARTS_SENTENCE, SEAM_MEAN_BAR, SOURCE_SENTENCE, SEAM_PX_BAR, SEAM_PX_LEVEL, SPINEBOY_YARDSTICK, TEXTURE_STRETCH_CEILING } from './src/check.ts';
 import { ComfyClient, resolveHost, runPainting, runSeeThrough } from './src/comfy/index.ts';
 import { type CharacterConfig, loadClothConfig, loadConfig, loadEarlyConfig, loadPaintConfig } from './src/config.ts';
 import { failLine, guidePointer, PartsError } from './src/errors.ts';
@@ -30,6 +30,7 @@ import { checkImageSize, choosePerson, KEYPOINTS_SPEC, loadKeypoints, type RigJo
 import { basisLines, branchSqueezeLine, checkProposal, compare, compareLines, DEFAULT_GRID_RULE, draftTurn, drawLandmarks, FIGURE_GRID_DIVISOR, FRINGE_STEP_PX, GRID_RULES, type GridRule, HIP_MIN_FRACTION, lint, lintLine, type PartSet, proposeWithBasis, readPartSet, serializeProposal, withTurn, WRIST_ON_PART_PX } from './src/propose.ts';
 import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, coverageLines, serializeBasis } from './src/diagnostics.ts';
 import { BEND_DEGREES, BEND_WORST_SHARE, DUST_MAX_PX, DUST_MAX_SHARE, IDLE_BOUND_PX, MESH_DRAFT_REPORT, MESH_DRAFT_SPEC, meshDraftStage, MORE_TRIANGLES_FLAG, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
+import { PROVENANCE_FILE, REMESH_SPEC, remeshStage } from './src/remesh.ts';
 import { checkPainting } from './src/paintcheck.ts';
 import { readPng, writePng } from './src/raster/png.ts';
 import { REQUIREMENTS_SENTENCE } from './src/requirements.ts';
@@ -335,6 +336,35 @@ usage:
       and compare the rig stage's mesh lines (AUTHORING §3, issue #307).
       Written only when the drafted config's check is PASS. --requirements, --idle-keys,
       --page-edges and --pack-shape are as for rig and check.
+
+  rig-parts remesh --rig <dir> --config <config.json> --parts <dir> --part <name>
+                   --mesh <entry.json> --out <dir> [--requirements <file.json>]
+                   [--idle-keys ctl|direct] [--page-edges pot|free] [--pack-shape rect|polygon]
+      Re-fit one part's mesh of a gated rig (the directory rig writes) under
+      the mesh entry --mesh holds — what config.json would hold at
+      meshes.<name>: a grid, a contour or an auto entry, its bounds the
+      entry's own — and write a new revision into --out, which must not
+      exist (REMESH_OUT_FRESH); the input is never written. --config and
+      --parts are what the input was built from: the config as written must
+      reproduce the input's part (its attachment, image and mesh_report.json
+      row) and its bones, and for an auto entry its motion
+      (REMESH_BASELINE_MISMATCH); every other part is carried over as bytes,
+      whether or not the config reproduces it. The part must be a mesh nothing
+      else is bound to — no linked mesh, no deform timeline
+      (REMESH_TARGET_MESH, REMESH_TARGET_CLOSED). The entry is built through
+      the rig stage, its mode's own checks and an auto entry's motion gate
+      (REMESH_CANDIDATE_REFUSED, quoting each), and may not move a bone, a
+      motion key or the part's image (REMESH_REQUEST_HELD). Every file but
+      rig.json and mesh_report.json is the input's bytes, rig.json is the
+      input's outside the part's attachment, and every other report row is
+      the input's (REMESH_PRESERVED); rigc's build gate passes over the
+      revision (REMESH_RIGC_GREEN); check measures every bar on it that it
+      measures on the input and fails none the input meets
+      (REMESH_CHECK_HELD). --out receives the revision and ${PROVENANCE_FILE}
+      (spec "${REMESH_SPEC}": the request, both versions, every input file's
+      SHA-256, the part's counts before and after, both checks and their
+      scope) — no path and no clock, so the same request writes the same bytes.
+      Prints the part's counts and a hash table of every file.
 
   rig-parts check --rig <dir> --out <dir> [--parts <dir>] [--source <painting.png>]
                     [--page-edges pot|free] [--pack-shape rect|polygon]
@@ -799,6 +829,7 @@ const TAKES = {
   build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets'] },
   compose: { valued: ['--scene', '--out', '--requirements', '--accept'], switches: [] },
   'mesh-draft': { valued: ['--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: ['--more-triangles'] },
+  remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
   painting: { valued: ['--keypoints', '--person'], switches: [] },
 } as const satisfies Record<string, { valued: readonly string[]; switches: readonly string[] }>;
 
@@ -1611,6 +1642,45 @@ function cmdMeshDraft(args: string[]): number {
   }
 }
 
+/** `remesh` (issue #495): one part of a gated rig re-fitted under a requested mesh entry, into a new revision. */
+function cmdRemesh(args: string[]): number {
+  const f = flags(args, 'remesh', ['--rig', '--config', '--parts', '--part', '--mesh', '--out']);
+  if (typeof f === 'string') return usage(f);
+  const keys = idleKeysOf(f.get('--idle-keys'));
+  if (!isIdleKeys(keys)) return usage(keys);
+  const edges = pageEdgesOf(f.get('--page-edges'));
+  if (!isPageEdges(edges)) return usage(edges);
+  const shape = packShapeOf(f.get('--pack-shape'));
+  if (!isPackShape(shape)) return usage(shape);
+  let bin: string;
+  try {
+    bin = findRigc(import.meta.dir, process.env.PATH ?? '');
+  } catch (err) {
+    return printRefusal(err);
+  }
+  const runner = rigcRunner(bin);
+  const said = runner(['--version']);
+  const rigcVersion = said.status === 0 ? (said.out.trim().split('\n')[0] ?? '') : '';
+  if (rigcVersion === '') return printRefusal(new PartsError([{ code: 'REMESH_RIGC_GREEN', object: 'rigc --version', detail: `exited ${said.status}${rigcRanClause(said)}; the provenance names the rigc that gated the revision, so its version is required` }]));
+  const scratch = mkdtempSync(join(tmpdir(), 'rig-parts-remesh-'));
+  try {
+    const req = f.get('--requirements');
+    remeshStage(
+      { rig: f.get('--rig') as string, config: f.get('--config') as string, parts: f.get('--parts') as string, part: f.get('--part') as string, mesh: f.get('--mesh') as string, out: f.get('--out') as string, idleKeys: keys, pageEdges: edges, packShape: shape, ...(req === undefined ? {} : { requirements: req }) },
+      runner,
+      bin,
+      { parts: version(), rigc: rigcVersion },
+      scratch,
+      console.log,
+    );
+    return EXIT_OK;
+  } catch (err) {
+    return printRefusal(err);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 /**
  * `painting --keypoints <k.json> [--person <id>] <painting.png>` (issue #350): what the painting must be before
  * See-through runs on it, read off its pixels and the body-18 joints `propose --keypoints` reads. Writes nothing.
@@ -1680,6 +1750,7 @@ function main(argv: string[]): number | Promise<number> {
   if (command === 'build') return cmdBuild(rest);
   if (command === 'compose') return cmdCompose(rest);
   if (command === 'mesh-draft') return cmdMeshDraft(rest);
+  if (command === 'remesh') return cmdRemesh(rest);
   if (command === 'painting') return cmdPainting(rest);
   if (command === 'guide') return cmdGuide(rest);
   const later = LATER.find(([name]) => name === command);

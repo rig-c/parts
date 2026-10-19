@@ -2904,6 +2904,31 @@ says why each requirement exists and what breaks without it.
 A part that fails a reading is not a refusal: it keeps its lattice, the command
 exits 0, and `mesh_draft.json` and the console name the reading and the amount.
 
+### remesh
+
+| rule | means | change |
+| --- | --- | --- |
+| <a id="REMESH_OUT_FRESH"></a>`REMESH_OUT_FRESH` | `--out` exists, or lies inside `--rig`: a revision is a new directory beside the input, never written over it | name a directory that does not exist yet |
+| <a id="REMESH_INPUT_PRESENT"></a>`REMESH_INPUT_PRESENT` | `--rig` is not the directory `rig` writes: `rig.json`, `motion.json`, `mesh_report.json` or `images/` is missing | point `--rig` at a `rig` output (`build`'s `rig/`) |
+| <a id="REMESH_INPUT_WRITTEN"></a>`REMESH_INPUT_WRITTEN` | `rig.json` or `mesh_report.json` is not the text this package's writer prints for its value (reformatted, or written by something else); the revision is spliced as text, so it could not carry every other byte over | use the files as `rig` wrote them |
+| <a id="REMESH_MESH_JSON"></a>`REMESH_MESH_JSON` | `--mesh` is missing, does not parse, or is not one JSON object | write the entry `config.json` would hold at `meshes.<part>`; its fields are then the config loader's to judge (`CONFIG_*` at `meshes.<part>`) |
+| <a id="REMESH_TARGET_MESH"></a>`REMESH_TARGET_MESH` | `--part` is not a `mesh` attachment of the input rig (`skins.default.<part>.<part>`), or not an entry of the config's `meshes` | name a part the rig meshes and the config states |
+| <a id="REMESH_TARGET_CLOSED"></a>`REMESH_TARGET_CLOSED` | a `linkedmesh` borrows the part's geometry, or an animation keys a `deform` timeline on it: both index the vertex list the remesh replaces | remesh the source and its links together by rebuilding from the config |
+| <a id="REMESH_BASELINE_MISMATCH"></a>`REMESH_BASELINE_MISMATCH` | the config as written does not build, or does not reproduce the input's part (its attachment, image or `mesh_report.json` row) or its bones — or, for an `auto` entry, its motion; the first differing leaf is named. A part the producer cannot reproduce is not one it can re-fit with every other byte kept | pass the config and parts the input was built from |
+| <a id="REMESH_CANDIDATE_REFUSED"></a>`REMESH_CANDIDATE_REFUSED` | the rig stage refused the requested entry — its mode's own checks, an `auto` entry's bounds or its motion gate; each problem is quoted with its measured figure, and nothing was written | loosen the bound the quoted problem names, or ask for another mode |
+| <a id="REMESH_REQUEST_HELD"></a>`REMESH_REQUEST_HELD` | the requested entry moves a bone (a `<bone>_ctl` added or dropped), a motion key, or the part's image: no longer a remesh of one part | make it a config change and rebuild |
+| <a id="REMESH_PRESERVED"></a>`REMESH_PRESERVED` | the spliced revision differs from the input outside the part's attachment and its report row; the file and the part that moved are named | a defect in this package: report it with the line |
+| <a id="REMESH_RIGC_GREEN"></a>`REMESH_RIGC_GREEN` | rigc's build gate refused the revision (its lines quoted), or `rigc --version` named no version for the provenance | read rigc's line; nothing was written |
+| <a id="REMESH_CHECK_HELD"></a>`REMESH_CHECK_HELD` | `check` on the revision did not measure a bar it measured on the input, or failed a bar the input met; the revision's own FAIL line is quoted | ask for a finer entry, or a different mode, for the part the line names |
+
+A remesh changes one part's mesh and nothing else: every file of the input but
+`rig.json` and `mesh_report.json` is copied as bytes, `rig.json` keeps every byte
+outside the part's attachment, and the parts the config does not reproduce — repairs
+accepted after the config was written — are carried over as they are. `remesh.json`
+names the input's SHA-256 per file, the request, both versions, the part's counts
+before and after and both checks, and quotes `check`'s own physics line as the scope
+of the revision's check.
+
 ### rig-c's mesh refusals, quoted in a line
 
 rig-c's mesh library refuses a malformed input by throwing with a code of its own. This
