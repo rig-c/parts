@@ -575,6 +575,45 @@ export function splicedConfig(text: string, drafted: ReadonlyMap<string, unknown
   return out;
 }
 
+/** A path in a config the loader resolves against the config's directory, and how to set it. */
+export interface RelativeConfigPath {
+  at: string;
+  value: string;
+  set: (v: string) => void;
+}
+
+/**
+ * Each path in `o` (a parsed config) the loader resolves against the config's directory — `motion.animations_from`,
+ * `generation.control.skeleton` — where it is relative and names a file there.
+ */
+export function relativeConfigPaths(configDir: string, o: Json): RelativeConfigPath[] {
+  const out: RelativeConfigPath[] = [];
+  const motion = o.motion as Json | undefined;
+  if (motion !== undefined && typeof motion.animations_from === 'string' && !isAbsolute(motion.animations_from) && existsSync(resolve(configDir, motion.animations_from))) {
+    out.push({ at: 'motion.animations_from', value: motion.animations_from, set: (v) => (motion.animations_from = v) });
+  }
+  const control = (o.generation as Json | undefined)?.control as Json | undefined;
+  if (control !== undefined && typeof control.skeleton === 'string' && !isAbsolute(control.skeleton) && existsSync(resolve(configDir, control.skeleton))) {
+    out.push({ at: 'generation.control.skeleton', value: control.skeleton, set: (v) => (control.skeleton = v) });
+  }
+  return out;
+}
+
+/**
+ * A config the stage builds, written as `<dir>/config.json`: `text` (the author's config at `configPath`) with
+ * `meshes.<part>` replaced for every part in `meshes`, and each of its {@link relativeConfigPaths} made absolute, so
+ * it resolves to the file the author's config names. `remesh` (issue #495) builds through the same door.
+ */
+export function scratchConfig(configPath: string, text: string, dir: string, meshes: ReadonlyMap<string, unknown>): string {
+  const configDir = dirname(resolve(configPath));
+  const o = JSON.parse(text) as Json;
+  for (const r of relativeConfigPaths(configDir, o)) r.set(resolve(configDir, r.value));
+  o.meshes = { ...(o.meshes as Json), ...Object.fromEntries(meshes) };
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'config.json'), `${JSON.stringify(o, null, 2)}\n`);
+  return join(dir, 'config.json');
+}
+
 // ---------------------------------------------------------------------------
 // the stage
 // ---------------------------------------------------------------------------
@@ -691,34 +730,7 @@ export function meshDraftStage(input: MeshDraftInput, rigc: RigcRunner, checkBin
   }
   log(`rig-parts mesh-draft: ${cfg.key}, figure ${rules.height} px (rows ${rules.top}..${rules.bottom}): tolerance and margin T = max(1, round(${rules.height} / ${TOLERANCE_FIGURE_DIVISOR})) = ${rules.tolerance}, spacing and longest outline edge S = round(${rules.height} / ${FIGURE_GRID_DIVISOR}) = ${rules.spacing}`);
 
-  // The configs the stage builds are written in the scratch directory: each path the loader resolves against the
-  // config's directory (motion.animations_from, generation.control.skeleton) is made absolute where it names a file
-  // there, so it resolves to the file the author's config names.
-  const configDir = dirname(resolve(input.config));
-  const relativePaths = (o: Json): Array<{ at: string; value: string; set: (v: string) => void }> => {
-    const out: Array<{ at: string; value: string; set: (v: string) => void }> = [];
-    const motion = o.motion as Json | undefined;
-    if (motion !== undefined && typeof motion.animations_from === 'string' && !isAbsolute(motion.animations_from) && existsSync(resolve(configDir, motion.animations_from))) {
-      out.push({ at: 'motion.animations_from', value: motion.animations_from, set: (v) => (motion.animations_from = v) });
-    }
-    const control = (o.generation as Json | undefined)?.control as Json | undefined;
-    if (control !== undefined && typeof control.skeleton === 'string' && !isAbsolute(control.skeleton) && existsSync(resolve(configDir, control.skeleton))) {
-      out.push({ at: 'generation.control.skeleton', value: control.skeleton, set: (v) => (control.skeleton = v) });
-    }
-    return out;
-  };
-  const absolute = (o: Json): Json => {
-    for (const r of relativePaths(o)) r.set(resolve(configDir, r.value));
-    return o;
-  };
-  const configWith = (name: string, meshes: ReadonlyMap<string, unknown>): string => {
-    const o = absolute(JSON.parse(text) as Json);
-    o.meshes = { ...(o.meshes as Json), ...Object.fromEntries(meshes) };
-    const dir = join(scratch, name);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'config.json'), `${JSON.stringify(o, null, 2)}\n`);
-    return join(dir, 'config.json');
-  };
+  const configWith = (name: string, meshes: ReadonlyMap<string, unknown>): string => scratchConfig(input.config, text, join(scratch, name), meshes);
   function stage(name: string, meshes: ReadonlyMap<string, unknown>, check: false): { rigDir: string } | { refused: Problem[] };
   function stage(name: string, meshes: ReadonlyMap<string, unknown>, check: true): { rigDir: string; report: CheckReport } | { refused: Problem[] };
   function stage(name: string, meshes: ReadonlyMap<string, unknown>, check: boolean): { rigDir: string; report?: CheckReport } | { refused: Problem[] } {
@@ -1003,8 +1015,8 @@ export function meshDraftStage(input: MeshDraftInput, rigc: RigcRunner, checkBin
   const nDrafted = rowsOut.filter((r) => r.mode === 'contour').length;
   const tri = (pick: (r: PartRow) => number): number => rowsOut.reduce((a, r) => a + pick(r), 0);
   log(`rig-parts mesh-draft: ${nDrafted} of ${rowsOut.length} lattice part(s) drafted; their triangles ${tri((r) => r.lattice.triangles)} -> ${tri((r) => (r.mode === 'contour' && r.candidate !== null ? r.candidate.triangles : r.lattice.triangles))}, the figure's overdraw over them ${report.figure_overdraw.lattice} -> ${report.figure_overdraw.written}${input.moreTriangles === true ? ` (${MORE_TRIANGLES_FLAG}: triangles reported, not a line)` : ''}${others.length === 0 ? '' : `; ${others.length} part(s) not a lattice, not drafted and not compared: ${others.map((o) => `${o.part} (${o.mode})`).join(', ')}`}; the drafted config's check: ${final.report.figures.PASS ? 'PASS' : 'FAIL'}`);
-  if (resolve(configDir) !== resolve(input.out)) {
-    for (const r of relativePaths(raw)) log(`  note: ${r.at} is "${r.value}", relative to the config's directory; the written config keeps the text, so it resolves against ${input.out} — copy the file beside the written config, or the written config beside it`);
+  if (dirname(resolve(input.config)) !== resolve(input.out)) {
+    for (const r of relativeConfigPaths(dirname(resolve(input.config)), raw)) log(`  note: ${r.at} is "${r.value}", relative to the config's directory; the written config keeps the text, so it resolves against ${input.out} — copy the file beside the written config, or the written config beside it`);
   }
   log(`rig-parts mesh-draft: wrote ${written.join(' and ')}`);
   return { rules, rows: rowsOut, notCompared: others, written };
