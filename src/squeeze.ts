@@ -187,8 +187,8 @@ export function chainSqueezes(
     const pairs: Array<[string, string]> = [];
     for (let i = 0; i < keyed.length; i++) for (let j = i + 1; j < keyed.length; j++) pairs.push([keyed[i], keyed[j]]);
     const names = pairs.map(([a, b]) => `${a} and ${b}`).join(', ');
-    if ('contour' in m || 'auto' in m) {
-      unread.push(`mesh ${JSON.stringify(mname)} (${names}) is a ${'contour' in m ? 'contour' : 'automatic'} mesh; only a lattice is built here`);
+    if ('contour' in m || 'auto' in m || 'influence' in m) {
+      unread.push(`mesh ${JSON.stringify(mname)} (${names}) is a ${'contour' in m ? 'contour' : 'auto' in m ? 'automatic' : 'influence'} mesh; only a lattice is built here`);
       continue;
     }
     if (m.rule === 'heat') {
@@ -318,7 +318,7 @@ export function branchSqueezes(
   }
 
   for (const [mname, m] of Object.entries(spec.meshes)) {
-    if ('contour' in m || 'auto' in m || m.rule === 'heat' || m.r >= m.grid) continue;
+    if ('contour' in m || 'auto' in m || 'influence' in m || m.rule === 'heat' || m.r >= m.grid) continue;
     const byFork = new Map<string, string[]>();
     for (const sp of m.segments) {
       if (typeof sp !== 'string') continue;

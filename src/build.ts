@@ -1214,6 +1214,13 @@ export function rigStage(input: RigStageInput, rigc: RigcRunner, scratch: string
           ? ''
           : `; replayed to accepted step ${rp.chosen_step} of ${rp.accepted_steps} after ${rp.replays} replay(s); selection ${readingText(rp.selection, roleReadings(run.report).bound)}; held out ${readingText(rp.held_out, roleReadings(run.report).bound)}`;
       log(`${head}auto ${from} -> ${r.boundaryVertices}+${r.interiorVertices} (hull+interior) bindings ${r.bindings} ${infl} ${t.reason}${tried}; worst ${worst}${unboundedClause(m.residuals, m.settings.targets.artFit)}${allocationClause(m.residuals)}${stageBClause(m.settings, m.result)}${residualClause(m.skinning_residual)}${strayClause(m.stray_cleared)}; ${moved}${replayed}`);
+    } else if ('mode' in m && m.mode === 'influence') {
+      // issue #378: rig-c's segments lattice and pull, the figures its own build prints for the generator (AUTHORING §3.4.7).
+      const i = m.influence;
+      const l = m.lattice;
+      log(`${head}influence cell=${i.cell} radius=${i.radius} ${i.shape} ${i.across ? 'across entries' : 'within the nearest entry'} max ${i.max} ${infl}`);
+      log(`        reach      farthest vertex ${m.reach.farthest}px from its nearest link "${m.reach.nearest}" at (${m.reach.at.join(', ')}), radius ${i.radius}px: ${m.reach.capped} of ${m.vertices} vertices had more links in reach than max (widest ${m.reach.widest})`);
+      log(`        lattice    cell ${i.cell}px, ${l.cols}x${l.rows} cells, ${l.artCells} with art, ${l.keptCells} kept${l.islands > 1 ? ` (${l.islands} island(s) joined into one outline)` : ''}`);
     } else if ('mode' in m) {
       const c = m.contour;
       const stray = c.strayIslands === 0 ? '' : ` left out ${c.strayIslands} island(s), ${c.strayPixels} px`;
