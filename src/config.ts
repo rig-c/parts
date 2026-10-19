@@ -3414,7 +3414,7 @@ function checkCloth(c: Check, v: Json): void {
   for (const tag of CLOTH_TARGETS) {
     if (!(tag in v)) continue;
     const path = `${at}.${JSON.stringify(tag)}`;
-    const r = c.object(path, v[tag], ['links', 'wind', 'gravity'], ['chains', 'split', 'length_ratio', 'strength', 'damping', 'alternate_damping', 'translate', 'swing', 'part', 'parts']);
+    const r = c.object(path, v[tag], ['links', 'wind', 'gravity'], ['chains', 'split', 'length_ratio', 'strength', 'damping', 'alternate_damping', 'translate', 'swing', 'part', 'parts', 'influence']);
     if (r === null) continue;
     if (tag !== 'back hair' && !('chains' in r)) c.fail('CONFIG_FIELD_PRESENT', `${path}.chains`, 'is absent and required');
     const chains = 'chains' in r && c.int(`${path}.chains`, r.chains, 1) ? (r.chains as number) : null;
@@ -3431,6 +3431,17 @@ function checkCloth(c: Check, v: Json): void {
       }
     }
     if ('length_ratio' in r) c.number(`${path}.length_ratio`, r.length_ratio, 'positive');
+    // Issue #518: the influence mode for the parts this recipe meshes; the three fields #513 did not vary are the
+    // author's, each required, and radius, when stated, is kept as stated (the rig stage holds it to the reach).
+    if ('influence' in r) {
+      const o = c.object(`${path}.influence`, r.influence, ['across', 'max', 'shape'], ['radius']);
+      if (o !== null) {
+        if ('across' in o && typeof o.across !== 'boolean') c.fail('CONFIG_FIELD_TYPE', `${path}.influence.across`, `is ${show(o.across)}; true (every link within radius pulls, across the segments entries) or false (only the links of the entry nearest the vertex) is required`);
+        if ('max' in o) c.int(`${path}.influence.max`, o.max, 1);
+        if ('shape' in o && o.shape !== 'linear' && o.shape !== 'smooth') c.fail('CONFIG_FIELD_TYPE', `${path}.influence.shape`, `is ${show(o.shape)}; "linear" (1 - x) or "smooth" (1 - x²(3 - 2x)) is required`);
+        if ('radius' in o) c.number(`${path}.influence.radius`, o.radius, 'positive');
+      }
+    }
     if ('strength' in r) {
       const st = c.object(`${path}.strength`, r.strength, ['trunk', 'branch', 'edge'], []);
       if (st !== null) for (const k of ['trunk', 'branch', 'edge'] as const) if (k in st) c.number(`${path}.strength.${k}`, st[k], 'positive');

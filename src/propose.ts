@@ -142,6 +142,8 @@ import { type Mask, newMask, newRaster, type Raster } from './raster/types.ts';
 import { npMean, npMedian, npPercentile, pyFixed, pyInt, pyIntList, pyRepr, pyRound, pyStrList } from './pyfmt.ts';
 import type { JointState, RigJoint, RigJoints } from './keypoints.ts';
 import { IDLE_FPS } from './motion.ts';
+import { influenceFarthest } from './rig.ts';
+import { type Segment as WeightSegment } from './weights.ts';
 import { pyRound as roundTo } from './round.ts';
 import { KEYPOINT_NAMES, type KeypointName } from './skeleton.ts';
 import { configRoles, type RoleOf } from './structure.ts';
@@ -150,7 +152,7 @@ import { TURN_BONE, TURN_CARRIER_TAG, TURN_PLACES, TURN_RIDER_OFFSET, TURN_RIDER
 import { edgeLength } from './length.ts';
 import { bonePlaces, jointLine, limbCrossing, limbPolyline, limbRun, limbWidth, nearestLimb, nearestOnLine, offLineFigure, type Pt } from './limbs.ts';
 import { type BranchSqueezeFinding, branchSqueezes, chainSqueezes, type SqueezeFinding } from './squeeze.ts';
-import { backHairMasses, type BackHairMass, backHairMassTrees, RECIPE_BACK_HAIR_CHAINS, RECIPE_LENGTH_RATIO, chainConstraints, clothNote, type ClothRecipe, type ClothRecipes, type ClothTarget, CLOTH_TARGETS, draftTrees, spanCrosses, swingName, type Tail, tailOverlap, type TailOverlap, type TailSpan, treeConstraints, type TreeChain, type TreeInput, type TreeMassInput } from './cloth.ts';
+import { backHairMasses, type BackHairMass, backHairMassTrees, INFLUENCE_RADIUS_CELLS, RECIPE_BACK_HAIR_CHAINS, RECIPE_LENGTH_RATIO, chainConstraints, clothNote, type ClothRecipe, type ClothRecipes, type ClothTarget, CLOTH_TARGETS, draftTrees, spanCrosses, swingName, type Tail, tailOverlap, type TailOverlap, type TailSpan, treeConstraints, type TreeChain, type TreeInput, type TreeMassInput } from './cloth.ts';
 import { TEXTURE_STRETCH_CEILING } from './check.ts';
 
 // ---------------------------------------------------------------------------
@@ -1392,7 +1394,7 @@ export function proposeWithBasis(
   gridRule: GridRule = DEFAULT_GRID_RULE,
   cloth: ClothRecipes | null = null,
   chainRule = true,
-): { proposal: Proposal; basis: ProposalBasis; jointsOffArt: LimbJointOffArtFinding[] } {
+): { proposal: Proposal; basis: ProposalBasis; draftLint: DraftLintFinding[] } {
   // Issue #230: a piece is not given its base's rule a second time, which
   // needs to know which part is the piece. A file that cannot say is refused
   // here, and only here: every other reader of parts.json still takes it.
@@ -1559,6 +1561,8 @@ export function proposeWithBasis(
   // Issue #364: the trees a cloth recipe drafts, their constraints, and the tags it was used on.
   const clothConstraints: ConfigConstraint[] = [];
   const clothUsed = new Set<ClothTarget>();
+  /** Issue #518: each part a recipe meshes, by the target whose recipe drafted its mesh. */
+  const clothMeshed = new Map<string, ClothTarget>();
   const multiPartClaimed = new Set<string>();
   const recipeOf = (tag: ClothTarget): ClothRecipe | null => cloth?.[tag] ?? null;
   const declaredPartsOf = (tag: ClothTarget): { field: 'parts' | 'part'; list: PartRecord[] } | null => {
@@ -1954,6 +1958,7 @@ export function proposeWithBasis(
       linkSummary.push(`${q.name}: ${crossedDesc.join(', ')}`);
       delete regions[q.name];
       meshes[q.name] = { grid: gq, r: rcp.split?.hold_tip === true ? Math.max(rq, gq) : rq, segments: qSegs };
+      clothMeshed.set(q.name, 'back hair');
       multiPartClaimed.add(q.name);
     }
     notes.push(
@@ -2121,6 +2126,7 @@ export function proposeWithBasis(
         ),
       );
       meshes[p.name] = { grid: g, r: rawRcp.split?.hold_tip === true ? Math.max(r, g) : r, segments: segs };
+      clothMeshed.set(p.name, 'back hair');
       // Issue #391: the spans are this mesh's segments, the head's fixed one and every tree link, in segment order.
       const spans: TailSpan[] = [{ bone: 'head', a: rnd(head), b: rnd([axis, top + 13]), link: false }];
       for (const t of all) {
@@ -2297,6 +2303,7 @@ export function proposeWithBasis(
     }
     const frontRcp = recipeOf('front hair');
     meshes[p.name] = { grid: g, r: frontRcp?.split?.hold_tip === true && k > 0 ? Math.max(r, g) : r, segments: segs };
+    if (frontRcp !== null && clothUsed.has('front hair')) clothMeshed.set(p.name, 'front hair');
   }
 
   // ---- accessories: rigid body + pendant chain where the part narrows, or one pendulum chain per hanging strand
@@ -3102,6 +3109,7 @@ export function proposeWithBasis(
       linkSummary.push(`${q.name}: ${crossedDesc.join(', ')}`);
       delete regions[q.name];
       meshes[q.name] = { grid: gq, r: dressRecipe.split?.hold_tip === true ? Math.max(rq, gq) : rq, segments: qSegs };
+      clothMeshed.set(q.name, 'bottomwear');
       multiPartClaimed.add(q.name);
     }
     notes.push(
@@ -3172,6 +3180,7 @@ export function proposeWithBasis(
         ),
       );
       meshes[p.name] = { grid: g, r: skirtRecipe.split?.hold_tip === true ? Math.max(r, g) : r, segments: segs };
+      clothMeshed.set(p.name, 'bottomwear');
       continue;
     }
     for (const [tag, f, ph] of [
@@ -3365,11 +3374,34 @@ export function proposeWithBasis(
       );
     }
   }
+  // Issue #518: a recipe that declares `influence` has the parts it meshes drafted in the influence mode, each at the
+  // cell its lattice had, and — unless the recipe states the radius — at the radius INFLUENCE_RADIUS_CELLS cells past
+  // the farthest lattice vertex from its nearest link, measured as the rig stage measures it (influenceFarthest).
+  const radii: InfluenceRadiusFinding[] = [];
+  for (const [name, tag] of clothMeshed) {
+    const decl = recipeOf(tag)?.influence;
+    const m = meshes[name];
+    if (decl === undefined || m === undefined || !('grid' in m)) continue;
+    const segments = m.segments;
+    const cell = m.grid;
+    let radius = decl.radius;
+    if (radius === undefined) {
+      const rec = P.recs.find((q) => q.name === name) as PartRecord;
+      const farthest = influenceFarthest(P.images.get(name) as Raster, rec.x, rec.y, meshSegmentsOf(bones, segments), cell);
+      if (farthest === null) {
+        notes.push(`${name}: config.cloth.${JSON.stringify(tag)}.influence is declared, and rig-c's segments lattice refuses the part at cell ${cell}, so no radius is measured and it keeps its lattice mesh`);
+        continue;
+      }
+      radius = roundTo(farthest + INFLUENCE_RADIUS_CELLS * cell, 4);
+      radii.push({ kind: 'influence-radius', part: name, tag, radius, farthest: roundTo(farthest, 4), cells: INFLUENCE_RADIUS_CELLS, cell });
+    }
+    meshes[name] = { influence: { cell, radius, across: decl.across, max: decl.max, shape: decl.shape }, segments };
+  }
   const constrained = clothConstraints.length === 0 ? {} : { constraints: clothConstraints };
   return {
     proposal: { bones, meshes, regions, ...drafted, motion: blink === undefined ? { duration: IDLE_SECONDS, tracks: idleTracks } : { duration: IDLE_SECONDS, tracks: idleTracks, blink }, ...constrained, proposed_rig_scale: P.rigScale, notes },
     basis: { frame, bones: records },
-    jointsOffArt,
+    draftLint: [...jointsOffArt, ...radii],
   };
 }
 
@@ -3692,6 +3724,39 @@ function anklesOffArt(P: PartSet, legs: readonly LegChain[], feet: readonly Part
     if (limbRun(line, art, box) !== null) return;
     out.push({ kind: 'limb-joint-off-art', side: c.side, limb: `leg_${c.side}`, keypoint: `${c.side}_ankle`, part: `foot_${c.side}`, from: feet[i].name, link: `leg_${c.side}1`, at: rnd(c.ankle), nearest: nearestOnLine(line, art, box) });
   });
+  return out;
+}
+
+/**
+ * Issue #518: a mesh's `segments` resolved to lines on the bones `bones` declares, as the rig stage resolves them
+ * (`src/rig.ts`): a chain's name to each of its links, from the link's origin to the next link's or the tip; a single
+ * bone to its origin and tip; an explicit `[bone, from, to]` as written. A name with no line resolves to nothing — the
+ * rig stage names it (`RIG_SEGMENT_DEFINED`, `RIG_NAME_RESOLVES`).
+ */
+function meshSegmentsOf(bones: readonly BoneEntry[], segments: readonly Segment[]): WeightSegment[] {
+  const out: WeightSegment[] = [];
+  for (const sp of segments) {
+    if (typeof sp !== 'string') {
+      out.push({ bone: sp[0], a: [sp[1][0], sp[1][1]], b: [sp[2][0], sp[2][1]] });
+      continue;
+    }
+    const chain = bones.find((e) => 'chain' in e && e.chain === sp);
+    if (chain !== undefined && 'chain' in chain) {
+      chain.points.forEach((q, k) => {
+        const end = k + 1 < chain.points.length ? chain.points[k + 1] : chain.tip;
+        out.push({ bone: `${sp}${k}`, a: [q[0], q[1]], b: [end[0], end[1]] });
+      });
+      continue;
+    }
+    const link = bones.flatMap((e) => ('chain' in e ? e.points.map((q, k) => ({ name: `${e.chain}${k}`, a: q, b: k + 1 < e.points.length ? e.points[k + 1] : e.tip })) : []));
+    const l = link.find((x) => x.name === sp);
+    if (l !== undefined) {
+      out.push({ bone: sp, a: [l.a[0], l.a[1]], b: [l.b[0], l.b[1]] });
+      continue;
+    }
+    const single = bones.find((e) => !('chain' in e) && e.name === sp);
+    if (single !== undefined && !('chain' in single) && single.tip !== undefined) out.push({ bone: sp, a: [single.at[0], single.at[1]], b: [single.tip[0], single.tip[1]] });
+  }
   return out;
 }
 
@@ -4393,6 +4458,24 @@ export interface LimbJointOffArtFinding {
   nearest: { distance: number; at: Pt } | null;
 }
 
+/**
+ * Issue #518: an influence radius `propose --cloth` drafted (no radius stated in the recipe): the part, the recipe's
+ * target, and the rule's figures — `radius = farthest + cells × cell`, `farthest` the part's farthest lattice vertex
+ * from its nearest link as `RIG_INFLUENCE_REACH` measures it. A LINT so the author sees what was drawn and from what.
+ */
+export interface InfluenceRadiusFinding {
+  kind: 'influence-radius';
+  part: string;
+  tag: ClothTarget;
+  radius: number;
+  farthest: number;
+  cells: number;
+  cell: number;
+}
+
+/** What `propose` hands `lint` beside the proposal: findings of the draft itself, not of a check over the spec. */
+export type DraftLintFinding = LimbJointOffArtFinding | InfluenceRadiusFinding;
+
 export type LintFinding =
   | OffArtFinding
   | OffLockFinding
@@ -4408,7 +4491,8 @@ export type LintFinding =
   | OverlappingArmsFinding
   | CrossedLimbsFinding
   | StopTouchAboveRootFinding
-  | LimbJointOffArtFinding;
+  | LimbJointOffArtFinding
+  | InfluenceRadiusFinding;
 
 /** Which rule set read the torso and the sleeve chains, under `--keypoints`. */
 export interface LintBasis {
@@ -4510,7 +4594,7 @@ export function lint(
   P: PartSet,
   spec: { bones: readonly BoneEntry[]; meshes: Readonly<Record<string, MeshSpec>>; regions?: Readonly<Record<string, string>>; motion?: SkeletonSections['motion']; constraints?: readonly ConfigConstraint[]; limbs?: Readonly<Record<string, Limb>>; stops?: readonly ConfigStop[] },
   joints?: RigJoints,
-  drafted: readonly LimbJointOffArtFinding[] = [],
+  drafted: readonly DraftLintFinding[] = [],
 ): LintResult {
   const { byName } = expand(spec.bones);
   const parts = new Map(P.recs.map((p) => [p.name, p]));
@@ -4523,7 +4607,7 @@ export function lint(
     const list = read.get(n);
     if (list !== undefined && !list.includes(check)) list.push(check);
   };
-  for (const f of drafted) readBy(f.link, `limb-joint-off-art on ${f.limb}`);
+  for (const f of drafted) if (f.kind === 'limb-joint-off-art') readBy(f.link, `limb-joint-off-art on ${f.limb}`);
   for (const [mname, m] of Object.entries(spec.meshes)) {
     const part = parts.get(mname);
     if (part === undefined) {
@@ -4963,6 +5047,8 @@ function findingBones(f: LintFinding, bones: readonly BoneEntry[]): string[] {
       return [f.bone];
     case 'limb-joint-off-art':
       return [f.link];
+    case 'influence-radius':
+      return [];
     case 'hip-not-below-chest':
     case 'hip-not-past-chest':
       return ['hip', 'chest'];
@@ -5136,6 +5222,11 @@ export function basisLines(b: LintBasis): string[] {
  */
 export function lintLine(f: LintFinding): string {
   switch (f.kind) {
+    case 'influence-radius':
+      return (
+        `LINT ${f.part} on mesh ${pyRepr(f.part)}: influence radius ${f.radius} = farthest ${f.farthest} + ${f.cells} × cell ${f.cell} — drafted by config.cloth.${JSON.stringify(f.tag)}.influence, ` +
+        `the farthest lattice vertex from its nearest link (the figure RIG_INFLUENCE_REACH holds the radius above) plus ${f.cells} cells; a radius at the floor folds more than the lattice and a larger one is not safer (AUTHORING, influence.radius) — state influence.radius in the recipe to keep your own`
+      );
     case 'limb-joint-off-art':
       return (
         `LINT ${f.part} at ${pyIntList(f.at)}, the ${f.keypoint} joint and ${f.link}'s tip, lies on none of ${f.limb}'s art within 1 px along its joint line (${offLineFigure(f.nearest)}), ` +
