@@ -70,7 +70,7 @@ import {
   splitSchedule,
   untestedIntervals,
 } from './autoreplay.ts';
-import { besideIdleLine, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamWarnText, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR } from './check.ts';
+import { besideIdleLine, CLOTH_LINE, type ClothLine, clothWarnText, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamWarnText, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR } from './check.ts';
 import { type Cut, type Extend, type Limb, loadConfig, loadConfigAndAnimations, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
 import { failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import type { MeshQualityReport, MotionSchedule } from 'rig-c/mesh';
@@ -1506,6 +1506,28 @@ export function motionSeamLines(line: MotionSeamLine, plant: MotionSeamPlant = {
   ];
 }
 
+/**
+ * The cloth reading (issue #501) as the console prints it: the status, what was read, the floor, the levers and that it
+ * is not a bar, then one WARN line per chain that settles. A SKIP prints its reason alone. `silent` is the mutant that
+ * removes the reading's lines.
+ */
+export function clothLines(line: ClothLine, plant: { silent?: boolean } = {}): string[] {
+  if (plant.silent === true) return [];
+  if (line.status === 'SKIP') return [`${CLOTH_LINE}: SKIP — ${String(line.reason)}`];
+  const read = `${line.rows.length} physics chain(s) read by their tip on the idle as rendered (${line.frames} frame(s) at ${line.fps} fps over ${line.duration} s, physics on)`;
+  return [
+    `${CLOTH_LINE}: ${line.status} — ${read}: ${line.warnings} of them settle before the loop's length — ${line.warnings} warning(s), never a bar; ${line.floor}; ${line.levers}`,
+    ...line.rows.filter((r) => r.settles_at !== null).map((r) => clothWarnText(r, line.duration)),
+  ];
+}
+
+/** The summary's warning clause: each warning line that read something, named, with the warnings they printed together; empty when none read. */
+export function warningsClause(r: Pick<CheckReport, 'motionSeam' | 'cloth'>): string {
+  const read = [...(r.motionSeam.status === 'SKIP' ? [] : [{ name: MOTION_SEAM_LINE, n: r.motionSeam.warnings }]), ...(r.cloth.status === 'SKIP' ? [] : [{ name: CLOTH_LINE, n: r.cloth.warnings }])];
+  if (read.length === 0) return '';
+  return `; ${read.reduce((a, x) => a + x.n, 0)} warning(s) (${read.map((x) => x.name).join(', ')}, not a bar)`;
+}
+
 /** A requirement's line as the console prints it: its name and status, the reason first when NOT MEASURABLE, then its figures as check.json holds them. */
 export function requirementText(name: string, line: RequirementLine): string {
   const rest = Object.entries(line).filter(([k]) => k !== 'status' && k !== 'reason');
@@ -1565,6 +1587,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   const sweep = fig[SWEEP_LINE];
   if (sweep !== undefined) for (const [i, l] of sweepCheckLines(sweep).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
   for (const [i, l] of motionSeamLines(r.motionSeam).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
+  for (const [i, l] of clothLines(r.cloth).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
   for (const name of REPORTED_LINES) log(`  ${judgementLine(name, fig[name])}`);
   if (fig.sets !== undefined) {
     for (const [setName, setFig] of Object.entries(fig.sets)) {
@@ -1582,7 +1605,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   for (const p of r.problems) log(failLine(p));
   const reqNotPass = r.requirements === null ? 0 : r.requirements.summary.declared - r.requirements.summary.pass;
   const notMet = r.requirements === null ? `${r.problems.length} bar(s) not met` : `${r.problems.length - reqNotPass} bar(s) not met, ${reqNotPass} declared requirement(s) not PASS`;
-  log(`${fig.PASS ? 'check: PASS' : `check: FAIL — ${notMet}`}; ${barsSummary(r)}${r.motionSeam.status === 'SKIP' ? '' : `; ${r.motionSeam.warnings} warning(s) (${MOTION_SEAM_LINE}, not a bar)`}`);
+  log(`${fig.PASS ? 'check: PASS' : `check: FAIL — ${notMet}`}; ${barsSummary(r)}${warningsClause(r)}`);
   return r;
 }
 

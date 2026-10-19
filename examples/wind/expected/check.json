@@ -749,6 +749,162 @@
    }
   ]
  },
+ "CLOTH_SETTLES": {
+  "status": "WARN",
+  "fps": 12,
+  "frames": 41,
+  "duration": 3.333,
+  "floor_rig_px_per_s": 0.01694,
+  "floor": "a chain settles at the first frame from which its tip moves slower than 0.01694 rig px/s to the idle's last frame — half the slowest tip an idle key drives on the public examples (scarf's skirt_l2, 0.03388 rig px/s)",
+  "levers": "a chain at rest moves again when the world or the body does: an environment at render (rigc render --environment, wind and gravity in time) or a hip motion in the idle (rig-c/parts#502)",
+  "warnings": 9,
+  "rows": [
+   {
+    "tip": "hairback_r0a_1",
+    "root": "hairback_r0_0",
+    "links": 3,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 458.9,
+    "min_rig_px_per_s": 4.727
+   },
+   {
+    "tip": "hairback_r0b_1",
+    "root": "hairback_r0_0",
+    "links": 3,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 488.7,
+    "min_rig_px_per_s": 4.752
+   },
+   {
+    "tip": "hairback_l0a_1",
+    "root": "hairback_l0_0",
+    "links": 3,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 256.7,
+    "min_rig_px_per_s": 5.902
+   },
+   {
+    "tip": "hairback_l0b_1",
+    "root": "hairback_l0_0",
+    "links": 3,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 243.5,
+    "min_rig_px_per_s": 6.149
+   },
+   {
+    "tip": "bang_r1",
+    "root": "bang_r0",
+    "links": 2,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 14,
+    "min_rig_px_per_s": 2.899
+   },
+   {
+    "tip": "bang_c1",
+    "root": "bang_c0",
+    "links": 2,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 11.84,
+    "min_rig_px_per_s": 2.309
+   },
+   {
+    "tip": "bang_l1",
+    "root": "bang_l0",
+    "links": 2,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 11.1,
+    "min_rig_px_per_s": 1.844
+   },
+   {
+    "tip": "skirt0a_1",
+    "root": "skirt0a_0",
+    "links": 2,
+    "point": "end",
+    "settles_at": 2.25,
+    "max_rig_px_per_s": 129.7,
+    "min_rig_px_per_s": 3.731e-7
+   },
+   {
+    "tip": "skirt0b_1",
+    "root": "skirt0b_0",
+    "links": 2,
+    "point": "end",
+    "settles_at": 2.5,
+    "max_rig_px_per_s": 89.11,
+    "min_rig_px_per_s": 2.765e-7
+   },
+   {
+    "tip": "skirt1a_1",
+    "root": "skirt1a_0",
+    "links": 2,
+    "point": "end",
+    "settles_at": 1.833,
+    "max_rig_px_per_s": 13.93,
+    "min_rig_px_per_s": 5.197e-8
+   },
+   {
+    "tip": "skirt1b_1",
+    "root": "skirt1b_0",
+    "links": 2,
+    "point": "end",
+    "settles_at": 1.833,
+    "max_rig_px_per_s": 7.533,
+    "min_rig_px_per_s": 3.048e-8
+   },
+   {
+    "tip": "skirt2a_1",
+    "root": "skirt2a_0",
+    "links": 2,
+    "point": "end",
+    "settles_at": 2.25,
+    "max_rig_px_per_s": 54.6,
+    "min_rig_px_per_s": 1.489e-7
+   },
+   {
+    "tip": "skirt2b_1",
+    "root": "skirt2b_0",
+    "links": 2,
+    "point": "end",
+    "settles_at": 2,
+    "max_rig_px_per_s": 50.51,
+    "min_rig_px_per_s": 1.637e-7
+   },
+   {
+    "tip": "skirt3a_1",
+    "root": "skirt3a_0",
+    "links": 2,
+    "point": "end",
+    "settles_at": 1.833,
+    "max_rig_px_per_s": 120.1,
+    "min_rig_px_per_s": 4.347e-7
+   },
+   {
+    "tip": "skirt3b_1",
+    "root": "skirt3b_0",
+    "links": 2,
+    "point": "end",
+    "settles_at": 2.75,
+    "max_rig_px_per_s": 156.5,
+    "min_rig_px_per_s": 5.316e-7
+   },
+   {
+    "tip": "skirt_swing",
+    "root": "skirt_swing",
+    "links": 1,
+    "point": "end",
+    "settles_at": 1.5,
+    "max_rig_px_per_s": 6.566,
+    "min_rig_px_per_s": 1.809e-8
+   }
+  ]
+ },
  "RECOMPOSITE_HOLES": {
   "status": "REPORTED",
   "error_px": 15129,
