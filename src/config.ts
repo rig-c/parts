@@ -317,7 +317,19 @@ export type Segment = string | [string, Point, Point];
  *   locally refined by rig-c's `reduceMesh` under the author's declared
  *   bounds (`src/automesh.ts`).
  */
-export type MeshSpec = LatticeMeshSpec | ContourMeshSpec | AutoMeshSpec;
+export type MeshSpec = LatticeMeshSpec | ContourMeshSpec | AutoMeshSpec | InfluenceMeshSpec;
+
+/**
+ * One mesh in the influence mode (issue #378): rig-c's `segments` lattice over the part at `cell` px, every vertex
+ * pulled by every chain link within `radius` px of it, falling to zero there (`shape`), the strongest `max` kept —
+ * `buildSegmentsLattice` and `influenceShares` from `rig-c/mesh`, promised for this call (rig-c/core#1450), so the
+ * rule is core's and the mesh is written with explicit weights like every other mode (`src/rig.ts`). `segments`
+ * names the links as in every mode; each entry is one of rig-c's `bones` entries, which `across: false` keeps apart.
+ */
+export interface InfluenceMeshSpec {
+  influence: { cell: number; radius: number; across: boolean; max: number; shape: 'linear' | 'smooth' };
+  segments: Segment[];
+}
 
 /**
  * `meshes.<part>.rule` (issue #161): how a mesh's vertices are weighted. `"distance"` is `influences()`
@@ -2271,17 +2283,20 @@ function checkMeshes(c: Check, v: Json, bones: Set<string>, chains: Map<string, 
     const at = `config.meshes.${part}`;
     // The known keys keep their old order (grid, r, segments) with contour after them, and `r` and `segments` are
     // required in the place and words the object check uses, so a lattice mesh's refusals read as they did.
-    const m = c.object(at, spec, [], ['grid', 'r', 'segments', 'contour', 'auto', 'exponent', 'rule', 'ribs', 'influences', 'stray']);
+    const m = c.object(at, spec, [], ['grid', 'r', 'segments', 'contour', 'auto', 'exponent', 'rule', 'ribs', 'influences', 'stray', 'influence']);
     if (m === null) continue;
-    for (const key of ['r', 'segments']) if (!(key in m)) c.fail('CONFIG_FIELD_PRESENT', `${at}.${key}`, 'is absent and required');
-    const modes = ['grid', 'contour', 'auto'].filter((k) => k in m);
-    if (modes.length === 2 && !modes.includes('auto')) {
+    // issue #378: the influence mode weights by rig-c's own pull, so `r` (the distance rule's softening) is not one of its
+    // fields — it is refused there below, and required in every other mode as it always was.
+    for (const key of 'influence' in m ? ['segments'] : ['r', 'segments']) if (!(key in m)) c.fail('CONFIG_FIELD_PRESENT', `${at}.${key}`, 'is absent and required');
+    const modes = ['grid', 'contour', 'auto', 'influence'].filter((k) => k in m);
+    if (modes.length === 2 && !modes.includes('auto') && !modes.includes('influence')) {
       c.fail('CONFIG_MESH_MODE', at, 'has both grid (the lattice) and contour; exactly one is required — a mesh is one or the other');
     } else if (modes.length > 1) {
-      c.fail('CONFIG_MESH_MODE', at, `has ${modes.join(' and ')}; exactly one of grid (the lattice), contour (the outline mode) and auto (the automatic mode) is required — a mesh is one of them`);
+      c.fail('CONFIG_MESH_MODE', at, `has ${modes.join(' and ')}; exactly one of grid (the lattice), contour (the outline mode), auto (the automatic mode) and influence (rig-c's segments lattice and pull) is required — a mesh is one of them`);
     } else if (modes.length === 0) {
-      c.fail('CONFIG_MESH_MODE', at, 'has neither grid (the lattice cell size, px) nor contour (the outline mode) nor auto (the automatic mode); exactly one is required');
+      c.fail('CONFIG_MESH_MODE', at, 'has neither grid (the lattice cell size, px) nor contour (the outline mode) nor auto (the automatic mode) nor influence (rig-c\'s segments lattice and pull); exactly one is required');
     }
+    if ('influence' in m) checkInfluence(c, at, m);
     if ('grid' in m) c.int(`${at}.grid`, m.grid, 1);
     if ('contour' in m) checkContour(c, `${at}.contour`, m.contour, bones);
     if ('auto' in m) checkAuto(c, `${at}.auto`, m.auto, bones);
@@ -2318,6 +2333,29 @@ function checkMeshes(c: Check, v: Json, bones: Set<string>, chains: Map<string, 
       checkStimulus(c, `${at}.auto.stimulus`, (m.auto as Record<string, Json>).stimulus, m, chains);
     }
   }
+}
+
+/** The fields of the distance rule and of the other modes, which an influence mesh does not read (issue #378). */
+export const INFLUENCE_FOREIGN_FIELDS = ['r', 'exponent', 'rule', 'influences', 'stray', 'ribs'] as const;
+
+/**
+ * `meshes.<part>.influence` (issue #378): rig-c's `segments` lattice over the part (`cell`, px) and its `influence`
+ * pull (`radius` px, `across`, `max`, `shape`, AUTHORING §3.4.7 in rig-c), every field required and none defaulted.
+ * A field of the distance rule or of another mode beside it is refused by name (`CONFIG_INFLUENCE_MODE`) rather
+ * than read by nothing. Whether `radius` reaches the part's farthest vertex is the rig stage's to measure, against
+ * the lattice it builds (`RIG_INFLUENCE_REACH`, `src/rig.ts`).
+ */
+function checkInfluence(c: Check, at: string, m: Record<string, Json>): void {
+  for (const k of INFLUENCE_FOREIGN_FIELDS) {
+    if (k in m) c.fail('CONFIG_INFLUENCE_MODE', `${at}.${k}`, `is ${show(m[k])} on an influence mesh; it pulls each vertex by rig-c's influence (radius, across, max, shape), which reads no ${k} — remove ${k}`);
+  }
+  const o = c.object(`${at}.influence`, m.influence, ['cell', 'radius', 'across', 'max', 'shape'], []);
+  if (o === null) return;
+  if ('cell' in o) c.int(`${at}.influence.cell`, o.cell, 1);
+  if ('radius' in o) c.number(`${at}.influence.radius`, o.radius, 'positive');
+  if ('across' in o && typeof o.across !== 'boolean') c.fail('CONFIG_FIELD_TYPE', `${at}.influence.across`, `is ${show(o.across)}; true (every link within radius pulls, across the segments entries) or false (only the links of the entry nearest the vertex) is required`);
+  if ('max' in o) c.int(`${at}.influence.max`, o.max, 1);
+  if ('shape' in o && o.shape !== 'linear' && o.shape !== 'smooth') c.fail('CONFIG_FIELD_TYPE', `${at}.influence.shape`, `is ${show(o.shape)}; "linear" (1 - x) or "smooth" (1 - x²(3 - 2x)) is required`);
 }
 
 /**

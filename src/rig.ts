@@ -132,13 +132,14 @@
  * touches the disk, and the same inputs give the same bytes (key order is the
  * order the objects are built in, and every number is rounded by `pyRound`).
  */
-import { type AutoSpec, type BoneEntry, type WeightRule, type CharacterConfig, type ConfigConstraint, type ConfigStop, CONSTRAINT_FOLLOWS, constraintForRig, contourRegionsOf, type ContourSpec, DEFAULT_BUST_BONE_L, DEFAULT_BUST_BONE_R, type Point, type RibsSpec, ROOT_BONE, stopForRig, weightsABone } from './config.ts';
+import { type AutoSpec, type BoneEntry, type InfluenceMeshSpec, type WeightRule, type CharacterConfig, type ConfigConstraint, type ConfigStop, CONSTRAINT_FOLLOWS, constraintForRig, contourRegionsOf, type ContourSpec, DEFAULT_BUST_BONE_L, DEFAULT_BUST_BONE_R, type Point, type RibsSpec, ROOT_BONE, stopForRig, weightsABone } from './config.ts';
 import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toBoneLocal, toWorld } from './coords.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
 import { eyeLineDegrees } from './headframe.ts';
 import type { RigBoneInherit, RigStop } from 'rig-c/src/rig.ts';
 import { f32 } from 'rig-c/compile';
 import type { MeshCounts, MeshQualityReport, MeshReductionInput, MotionAmplitude, ReducedMesh, Termination } from 'rig-c/mesh';
+import { buildSegmentsLattice, type EntrySegment, influenceShares, segmentDistance as rigcSegmentDistance, type SegmentsLattice, type SegmentsLatticeReport } from 'rig-c/mesh';
 import { type AmplitudeRow, amplitudeRow, partAmplitude, withAmplitude } from './autoamplitude.ts';
 import { type ResidualRow, residualRow, slotEnvelope, withSkinning } from './autoenvelope.ts';
 import { type AutoMotionCase, type AutoSearch, DEFORM_MAY_FOLD_WHY, type MotionDeformation, type StimulusPose, stimulusAnimationNames } from './automotion.ts';
@@ -708,7 +709,70 @@ export type RigCommand = 'rig' | 'build';
 export const IDLE_DRIVES_MESHES_WHY = 'painting rig: the idle is meant to deform the meshes it keys (rig-parts rig --idle-keys direct)';
 
 /** One row of `mesh_report.json`: a lattice mesh's row is as it always was; a contour mesh's says so. */
-export type MeshReport = LatticeMeshReport | ContourMeshReport | AutoMeshReport;
+export type MeshReport = LatticeMeshReport | ContourMeshReport | AutoMeshReport | InfluenceMeshReport;
+
+/**
+ * An influence mesh's row (issue #378): the lattice's counts and coverage as every row has them, the block as declared,
+ * rig-c's lattice report, and the reach — the farthest vertex's distance to its nearest link and where, the vertices
+ * the cap dropped a link from (`capped`, more links in reach than `max`) and the most links in reach at one vertex
+ * (`widest`, the `max` that would drop none): the two figures rig-c's own `reach` line prints for its generator.
+ */
+export interface InfluenceMeshReport {
+  part: string;
+  vertices: number;
+  triangles: number;
+  hull: number;
+  bones: string[];
+  max_influences: number;
+  mean_influences: number;
+  art_coverage: number;
+  mode: 'influence';
+  influence: InfluenceMeshSpec['influence'];
+  reach: { farthest: number; at: [number, number]; nearest: string; capped: number; widest: number };
+  lattice: SegmentsLatticeReport;
+}
+
+/**
+ * The alpha a pixel must reach to hold a cell of an influence mesh's lattice: this package's art, alpha above
+ * {@link ART_ALPHA} (`src/mesh.ts`), which the lattice's own cells and every coverage figure read — so the two
+ * modes' coverage is measured over the same art (issue #378, bar 1).
+ */
+export const INFLUENCE_THRESHOLD = ART_ALPHA + 1;
+
+/** The farthest lattice vertex from its nearest link, part px (issue #378, bar 4): `segmentDistance`, rig-c's. */
+export function influenceReach(points: ReadonlyArray<readonly [number, number]>, segs: readonly EntrySegment[], names: readonly string[]): { distance: number; vertex: number; at: [number, number]; bone: string } {
+  let best = { distance: -1, vertex: -1, at: [0, 0] as [number, number], bone: '' };
+  points.forEach(([x, y], vi) => {
+    let d = Infinity;
+    let bone = 0;
+    for (const s of segs) {
+      const e = rigcSegmentDistance([x, y], s.a, s.b);
+      if (e < d) {
+        d = e;
+        bone = s.bone;
+      }
+    }
+    if (d > best.distance) best = { distance: d, vertex: vi, at: [x, y], bone: names[bone] };
+  });
+  return best;
+}
+
+/**
+ * Whether a declared radius reaches a vertex `distance` px from its nearest link: a link pulls only when it is NEARER
+ * than radius (rig-c's `d < radius`; the pull is 0 at d = radius), so a radius equal to the distance does not.
+ */
+export function influenceReachHolds(radius: number, distance: number): boolean {
+  return radius > distance;
+}
+
+/** `RIG_INFLUENCE_REACH`: the radius does not exceed the farthest vertex's distance to its nearest link. */
+export function influenceReachProblem(part: string, radius: number, reach: { distance: number; vertex: number; at: [number, number]; bone: string }, ox: number, oy: number): Problem {
+  return {
+    code: 'RIG_INFLUENCE_REACH',
+    object: `config.meshes.${part}.influence.radius`,
+    detail: `is ${radius}; vertex ${reach.vertex} of the part's lattice, at (${pyRound(reach.at[0] + ox, 4)}, ${pyRound(reach.at[1] + oy, 4)}) in rig px, is ${pyRound(reach.distance, 4)} px from its nearest link ("${reach.bone}"), and a link pulls a vertex only when it is nearer than radius — a radius above ${pyRound(reach.distance, 4)} is required, or a segment nearer that part of the art`,
+  };
+}
 
 export interface LatticeMeshReport {
   part: string;
@@ -1161,6 +1225,9 @@ export function buildRig(
     return { bone, a: [b.x, b.y], b: end };
   };
   const meshSegments = new Map<string, Segment[]>();
+  // issue #378: which `segments` entry each resolved segment came from — rig-c's `bones` entries, which an influence
+  // mesh's `across: false` keeps apart. Every mode resolves them; only the influence mode reads this.
+  const meshSegmentEntries = new Map<string, number[]>();
   for (const [part, m] of Object.entries(cfg.meshes)) {
     if ('contour' in m) {
       (m.contour.regions ?? []).forEach((rg, i) => {
@@ -1181,25 +1248,26 @@ export function buildRig(
       });
     }
     const out: Segment[] = [];
+    const entries: number[] = [];
     m.segments.forEach((sp, i) => {
       const at = `config.meshes.${part}.segments[${i}]`;
+      const push = (s: Segment | null): void => {
+        if (s === null) return;
+        out.push(s);
+        entries.push(i);
+      };
       if (typeof sp === 'string') {
         const links = chains.get(sp);
         if (links !== undefined) {
-          for (const l of links) {
-            const s = seg(l, `${at} (chain "${sp}" link "${l}")`);
-            if (s !== null) out.push(s);
-          }
-        } else {
-          const s = seg(sp, at);
-          if (s !== null) out.push(s);
-        }
+          for (const l of links) push(seg(l, `${at} (chain "${sp}" link "${l}")`));
+        } else push(seg(sp, at));
       } else {
         if (!B.has(sp[0])) fail('RIG_NAME_RESOLVES', `${at}[0]`, `names the bone "${sp[0]}", which config.bones does not declare`);
-        else out.push({ bone: sp[0], a: [sp[1][0], sp[1][1]], b: [sp[2][0], sp[2][1]] });
+        else push({ bone: sp[0], a: [sp[1][0], sp[1][1]], b: [sp[2][0], sp[2][1]] });
       }
     });
     meshSegments.set(part, out);
+    meshSegmentEntries.set(part, entries);
   }
 
   // ---- parts ↔ config ----------------------------------------------------
@@ -1723,6 +1791,87 @@ export function buildRig(
       },
     };
   };
+  // An influence mesh (issue #378): rig-c's segments lattice and its influence pull, both computed by rig-c's own
+  // promised functions (`buildSegmentsLattice`, `segmentDistance`, `influenceShares`, rig-c/core#1450) in the padded
+  // part's pixels — the frame the generator reads — and written as explicit weights, bound exactly as a lattice
+  // vertex is. Before any share is taken the radius is held to the farthest vertex's nearest link
+  // (`RIG_INFLUENCE_REACH`): a vertex no link reaches would be refused by rig-c's own rule, and the figure that
+  // fixes it is that distance.
+  const influenceAttachment = (
+    p: PartsFile['parts'][number],
+    img: Raster,
+    file: string,
+    spec: InfluenceMeshSpec,
+    segs: readonly Segment[],
+    entries: readonly number[],
+    out: Problem[],
+  ): { attachment: MeshAttachment; report: InfluenceMeshReport } | null => {
+    const ox = p.x - PAD;
+    const oy = p.y - PAD;
+    const w = img.width;
+    const h = img.height;
+    const at = `config.meshes.${p.name}.influence`;
+    const alpha = new Uint8Array(w * h);
+    for (let i = 0; i < alpha.length; i++) alpha[i] = img.data[i * 4 + 3];
+    let lattice: SegmentsLattice;
+    try {
+      lattice = buildSegmentsLattice({ mask: { width: w, height: h, alpha }, threshold: INFLUENCE_THRESHOLD, cell: spec.influence.cell });
+    } catch (err) {
+      out.push({ code: 'RIG_INFLUENCE_LATTICE', object: `${at}.cell`, detail: `rig-c's segments lattice refused part "${p.name}" at cell ${spec.influence.cell}: ${(err as Error).message}` });
+      return null;
+    }
+    const names = [...new Set(segs.map((s) => s.bone))];
+    const index = new Map(names.map((n, k) => [n, k]));
+    const local: EntrySegment[] = segs.map((s, k) => ({ bone: index.get(s.bone) as number, entry: entries[k], a: [s.a[0] - ox, s.a[1] - oy], b: [s.b[0] - ox, s.b[1] - oy] }));
+    const reach = influenceReach(lattice.points, local, names);
+    if (!influenceReachHolds(spec.influence.radius, reach.distance)) {
+      out.push(influenceReachProblem(p.name, spec.influence.radius, reach, ox, oy));
+      return null;
+    }
+    const weights: WeightEntry[][] = [];
+    let infl = 0;
+    let maxInfl = 0;
+    let capped = 0;
+    let widest = 0;
+    for (const [vi, [x, y]] of lattice.points.entries()) {
+      const r = influenceShares([x, y], local, spec.influence);
+      if ('nearest' in r) {
+        // Not reached after the reach check passed: a defect here, not an input to word.
+        throw new Error(`influenceAttachment: vertex ${vi} of "${p.name}" is reached by no link after the radius held`);
+      }
+      if (r.inReach > spec.influence.max) capped++;
+      widest = Math.max(widest, r.inReach);
+      const wx = x + ox;
+      const wy = y + oy;
+      const ent: WeightEntry[] = r.weights.map((e) => {
+        const bone = names[e.control ?? 0];
+        const [bx, by] = toBoneLocal(world.get(bone) as BoneTransform, spineX(wx), spineY(wy));
+        return { bone, x: places(bx), y: places(by), weight: e.weight };
+      });
+      weights.push(ent);
+      infl += ent.length;
+      maxInfl = Math.max(maxInfl, ent.length);
+    }
+    const vertices = lattice.points.map(([x, y]) => [x, y] as Point);
+    const n = vertices.length;
+    return {
+      attachment: { type: 'mesh', image: file, width: w, height: h, uvs: lattice.uvs, triangles: lattice.triangles, hull: lattice.hullVertices, weights },
+      report: {
+        part: p.name,
+        vertices: n,
+        triangles: lattice.triangles.length / 3,
+        hull: lattice.hullVertices,
+        bones: [...names].sort(),
+        max_influences: maxInfl,
+        mean_influences: pyRound(infl / n, 2),
+        art_coverage: pyRound(artCoverage({ vertices, triangles: lattice.triangles }, alphaAbove(img, ART_ALPHA)), 5),
+        mode: 'influence',
+        influence: { ...spec.influence },
+        reach: { farthest: pyRound(reach.distance, 4), at: [pyRound(reach.at[0] + ox, 4), pyRound(reach.at[1] + oy, 4)], nearest: reach.bone, capped, widest },
+        lattice: { ...lattice.report },
+      },
+    };
+  };
   // An automatic mesh (issue #126, item 2): the contour source at alpha 1 and above, rig-c's reduceMesh, and
   // the result used only when accepted (`src/automesh.ts`). Its weights are rig-c's by name — a survivor's are
   // the source's bit for bit, an inserted vertex's interpolated — rounded by roundShares (the author's minWeight
@@ -2005,6 +2154,14 @@ export function buildRig(
       meshReport.push(row.report);
       continue;
     }
+    if ('influence' in mesh) {
+      const row = influenceAttachment(p, img, file, mesh, segs, meshSegmentEntries.get(p.name) as number[], problems);
+      if (row === null) continue;
+      skin[p.name] = { [p.name]: row.attachment };
+      slots.push({ name: p.name, bone: segs[0].bone, attachment: p.name });
+      meshReport.push(row.report);
+      continue;
+    }
     const allArt = alphaAbove(img, ART_ALPHA);
     // issue #303: under a declared `stray`, the islands it leaves out are cleared from the art the lattice and its heat
     // silhouette are built over; absent, `art` is `allArt` itself and nothing downstream moves.
@@ -2221,7 +2378,7 @@ export function buildRig(
           segs = yOverlapping.length > 0 ? yOverlapping : [segs[0]];
         }
         const allArt = alphaAbove(img, ART_ALPHA);
-        const strayVal = 'auto' in mesh ? mesh.auto.source.stray : ('contour' in mesh ? mesh.contour.stray : mesh.stray);
+        const strayVal = 'auto' in mesh ? mesh.auto.source.stray : 'contour' in mesh ? mesh.contour.stray : 'influence' in mesh ? undefined : mesh.stray;
         const stray = strayVal === undefined ? null : latticeStray(allArt, strayVal);
         const art = stray === null ? allArt : stray.art;
         const grid = 'grid' in mesh ? mesh.grid : 28;
@@ -2237,7 +2394,7 @@ export function buildRig(
         const h = img.height;
         const limits: InfluenceLimits = meshLimits('influences' in mesh ? mesh.influences : undefined);
         const segsAt = dressSegsAt(p, segs);
-        const exponent = mesh.exponent ?? DISTANCE_EXPONENT;
+        const exponent = ('exponent' in mesh ? mesh.exponent : undefined) ?? DISTANCE_EXPONENT;
         let touchesArt: boolean[] | null = null;
         if (drawn !== undefined && limits.maxInfluences === 1) {
           const lc = latticeCells(art, grid);

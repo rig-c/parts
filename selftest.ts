@@ -449,7 +449,7 @@ import { CANVAS as PAINT_CANVAS, figureJoints as paintJoints, FIGURE as PAINT_FI
 import { LEGS_APART, LEGS_JOINED, LYING_PARTS, LYING_RIG, type PoseName, POSES, SEATED_PARTS, SEATED_RIG } from './fixtures/poses.ts';
 import { buildSheet, tileImage, tilesFrom } from './src/sheet.ts';
 import { block, constraintConfig, dustImages, dustParts, FACE_EXPECT, faceConfig, faceImages, faceParts, HEAT_STRIP_EXPECT, heatStripConfig, islandImages, LASH_CREASE, LASH_RIG, LASH_ROW, lashConfig, lashImages, lashParts, RIG_CANVAS, RIG_EXPECT, rigConfig, rigImages, rigParts, SCENE_TARGET, shoeConfig, shoeImages, shoeKick, shoeParts, TURNED_EXPECT, turnedConfig, writeRigFixture } from './fixtures/rig.ts';
-import { type AttachmentSetsFile, blinkHoldProblems, buildRig, DEFAULT_IDLE_KEYS, expandSetAttachmentKeys, FACE_TIPS_AXIS_NAME, HEAD_UP_BONE, flattenRig, IDLE_DRIVES_MESHES_WHY, type MeshAttachment, PAD, type RegionAttachment, rigJsonText, type RigOutput, type RigSpec, roundShares, tipRoundingBound, writtenShares } from './src/rig.ts';
+import { type AttachmentSetsFile, blinkHoldProblems, buildRig, influenceReachHolds, DEFAULT_IDLE_KEYS, expandSetAttachmentKeys, FACE_TIPS_AXIS_NAME, HEAD_UP_BONE, flattenRig, IDLE_DRIVES_MESHES_WHY, type MeshAttachment, PAD, type RegionAttachment, rigJsonText, type RigOutput, type RigSpec, roundShares, tipRoundingBound, writtenShares } from './src/rig.ts';
 import { type ComposedScene, composeFromFiles, IMAGE_SEP, PLATE, PLATE_IMAGE, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames } from './src/scene.ts';
 import { sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild } from './fixtures/scene.ts';
 import { localInfluences, regionWeight } from './src/localweights.ts';
@@ -8784,7 +8784,7 @@ function runProposeSuite(): number {
     // The chest's largest weight over the skirt's top rows (y 150..157, x 60..139), the waistband the breath carried.
     const chestOnTop = (segments: readonly (string | [string, [number, number], [number, number]])[]): number => {
       let most = 0;
-      for (let y = 150; y < 158; y++) for (let x = 60; x < 140; x++) for (const w of influences([x, y], linksOf(prop, segments), prop.meshes.skirt?.r ?? 0)) if (w.bone === 'chest') most = Math.max(most, w.weight);
+      for (let y = 150; y < 158; y++) for (let x = 60; x < 140; x++) for (const w of influences([x, y], linksOf(prop, segments), (prop.meshes.skirt as { r?: number } | undefined)?.r ?? 0)) if (w.bone === 'chest') most = Math.max(most, w.weight);
       return most;
     };
     const hangNote = prop.notes.find((n) => n.startsWith('skirt (full:bottomwear): its art starts '));
@@ -33491,6 +33491,227 @@ function runMeshDraftSuite(): number {
 }
 
 // ---------------------------------------------------------------------------
+// influence (issue #378)
+// ---------------------------------------------------------------------------
+
+/** The radii the influence suite declares on the cloth fixture: each above its part's farthest vertex (21.1043 and 53.4603 px, measured by the suite's IN02 refusals). */
+const INFLUENCE_RADII: Readonly<Record<string, number>> = { skirt: 30, hair_back: 60 };
+
+/** The influence block the suite declares beside each radius: rig-c's example cloth block (AUTHORING §3.4.7), the cell the lattice already had. */
+function influenceEntry(lattice: Record<string, unknown>, radius: number, shape: 'linear' | 'smooth' = 'smooth'): Record<string, unknown> {
+  return { influence: { cell: lattice.grid, radius, across: true, max: 6, shape }, segments: lattice.segments };
+}
+
+/**
+ * The cloth fixture proposed with its recipe and written twice under `root`: `lattice.json` as proposed, and
+ * `influence.json` with the parts of `radii` in the influence mode, every other byte the same. Returns the paths.
+ */
+function influenceConfigs(root: string, radii: Readonly<Record<string, number>>, shape: 'linear' | 'smooth' = 'smooth'): { parts: string; lattice: string; influence: string; proposed: Record<string, Record<string, unknown>> } {
+  const parts = join(root, 'parts');
+  if (!existsSync(join(parts, 'parts.json'))) writeProposeFixture(parts, CLOTH_PARTS, CLOTH_RIG);
+  const prop = propose(readPartSet(parts), undefined, null, DEFAULT_GRID_RULE, clothRecipe());
+  const base = { ...proposalConfig(CLOTH_PARTS, prop), constraints: prop.constraints ?? [] };
+  const proposed = prop.meshes as unknown as Record<string, Record<string, unknown>>;
+  const meshes = { ...proposed, ...Object.fromEntries(Object.entries(radii).map(([p, r]) => [p, influenceEntry(proposed[p], r, shape)])) };
+  writeFileSync(join(root, 'lattice.json'), JSON.stringify(base));
+  writeFileSync(join(root, 'influence.json'), JSON.stringify({ ...base, meshes }));
+  return { parts, lattice: join(root, 'lattice.json'), influence: join(root, 'influence.json'), proposed };
+}
+
+/** The folds rigc's render reads on `rigDir` (built here, unpacked) for one animation: per slot, frames folded and the worst frame's triangles. */
+function influenceFolds(rigDir: string, scratch: string, animation: string, environment: string | null): Map<string, { frames: number; worst: number }> {
+  const rigc = suiteRigc();
+  const build = join(scratch, 'build');
+  rmSync(build, { recursive: true, force: true });
+  const b = spawnSync(rigc, ['build', '--rig', join(rigDir, 'rig.json'), '--motion', join(rigDir, 'motion.json'), '--out', build, '--profile', 'rig-play', '--copy-images'], { encoding: 'utf8', maxBuffer: 1 << 28 });
+  if (b.status !== 0) throw new Error(`influenceFolds: rigc build exited ${b.status}: ${`${b.stdout}${b.stderr}`.slice(-400)}`);
+  const out = join(scratch, `render-${animation}`);
+  const r = spawnSync(rigc, ['render', '--candidate', build, '--animation', animation, '--fps', '30', '--max', '64', '--folds', '--out', out, ...(environment === null ? [] : ['--environment', environment])], { encoding: 'utf8', maxBuffer: 1 << 28 });
+  if (r.status !== 0) throw new Error(`influenceFolds: rigc render exited ${r.status}: ${`${r.stdout}${r.stderr}`.slice(-400)}`);
+  // A set drawn at any rate but rigc's default 12 is written to `<anim>@<fps>fps/` (rigc render --help).
+  const file = join(out, `${animation}@30fps`, 'folds.json');
+  const rows = (JSON.parse(readFileSync(file, 'utf8')) as { meshes: Array<{ slot: string; frames: unknown[]; worst: { triangles: unknown[] } | null }> }).meshes;
+  return new Map(rows.map((m) => [m.slot, { frames: m.frames.length, worst: m.worst === null ? 0 : m.worst.triangles.length }]));
+}
+
+function runInfluenceSuite(): number {
+  section('influence: cloth and hair weighted to every chain link near them, by rig-c\'s own segments rule (issue #378)');
+  const { say, bad } = counter();
+  const root = temp('influence');
+  type Row = { part: string; vertices: number; triangles: number; art_coverage: number; mode?: string; max_influences: number; reach?: { farthest: number; capped: number; widest: number }; lattice?: { keptCells: number } };
+  const rowsOf = (dir: string): Row[] => JSON.parse(readFileSync(join(dir, 'mesh_report.json'), 'utf8')) as Row[];
+  try {
+    const fx = influenceConfigs(root, INFLUENCE_RADII);
+    const lat = runCli(['rig', '--config', fx.lattice, '--parts', fx.parts, '--out', join(root, 'rig-lattice')]);
+    const inf = runCli(['rig', '--config', fx.influence, '--parts', fx.parts, '--out', join(root, 'rig-influence')]);
+    const latRows = lat.status === 0 ? rowsOf(join(root, 'rig-lattice')) : [];
+    const infRows = inf.status === 0 ? rowsOf(join(root, 'rig-influence')) : [];
+    const pair = (p: string): [Row | undefined, Row | undefined] => [latRows.find((r) => r.part === p), infRows.find((r) => r.part === p)];
+    const covered = Object.keys(INFLUENCE_RADII).map((p) => {
+      const [a, b] = pair(p);
+      return { p, a, b, ok: a !== undefined && b !== undefined && b.mode === 'influence' && b.art_coverage >= a.art_coverage };
+    });
+    const front = pair('hair_front');
+    const lines = inf.out.split('\n');
+
+    // IN01 — bars 1 and 2: the two parts in the influence mode, each covering no less art than its lattice, the triangles reported.
+    say(
+      'IN01_SKIRT_AND_BACK_HAIR_IN_THE_INFLUENCE_MODE_COVER_NO_LESS_ART_THAN_THEIR_LATTICE_AND_THE_MESH_LINE_REPORTS_THE_REACH',
+      lat.status === 0 &&
+        inf.status === 0 &&
+        covered.every((c) => c.ok) &&
+        JSON.stringify(front[0]) === JSON.stringify(front[1]) &&
+        Object.keys(INFLUENCE_RADII).every((p) => lines.some((l) => l.trim().startsWith(`mesh ${p}`) && l.includes(`influence cell=`) && l.includes(`radius=${INFLUENCE_RADII[p]}`))) &&
+        lines.filter((l) => l.trim().startsWith('reach      farthest vertex')).length === 2 &&
+        lines.filter((l) => l.trim().startsWith('lattice    cell')).length === 2,
+      `${covered.map((c) => `${c.p}: coverage ${c.a?.art_coverage} -> ${c.b?.art_coverage}, triangles ${c.a?.triangles} -> ${c.b?.triangles}, bones per vertex max ${c.a?.max_influences} -> ${c.b?.max_influences}, reach ${JSON.stringify(c.b?.reach ?? null)}`).join('; ')}; hair_front (a lattice in both) row unchanged: ${JSON.stringify(front[0]) === JSON.stringify(front[1])}; exit ${lat.status} / ${inf.status}`,
+      'issue #378 bars 1 and 2: per part the mode covers, art_coverage not below the lattice\'s and the triangle count beside it; the part left on its lattice writes the row it wrote, and the rig stage prints the influence, reach and lattice lines',
+    );
+
+    // IN02 — bar 4: a radius that does not reach the farthest vertex is refused by name with the figure, before rigc.
+    const shortRoot = join(root, 'short');
+    mkdirSync(shortRoot, { recursive: true });
+    const short = influenceConfigs(shortRoot, { skirt: 20, hair_back: 30 });
+    const shortRun = runCli(['rig', '--config', short.influence, '--parts', short.parts, '--out', join(shortRoot, 'rig')]);
+    const reachLines = shortRun.out.split('\n').filter((l) => l.includes('FAIL  RIG_INFLUENCE_REACH'));
+    const skirtLine = reachLines.find((l) => l.includes('config.meshes.skirt.influence.radius')) ?? '';
+    const hairLine = reachLines.find((l) => l.includes('config.meshes.hair_back.influence.radius')) ?? '';
+    say(
+      'IN02_A_RADIUS_THAT_DOES_NOT_REACH_THE_FARTHEST_VERTEX_IS_REFUSED_BY_NAME_WITH_THE_DISTANCE_AND_EQUAL_IS_NOT_ENOUGH',
+      shortRun.status === 1 &&
+        reachLines.length === 2 &&
+        /is 20; vertex \d+ .* is 21\.1043 px from its nearest link \("skirt0_0"\)/.test(skirtLine) &&
+        /is 30; vertex \d+ .* is 53\.4603 px from its nearest link \("hairback_r0_0"\)/.test(hairLine) &&
+        !shortRun.out.includes('rigc build') &&
+        !existsSync(join(shortRoot, 'rig')) &&
+        !influenceReachHolds(5, 5) &&
+        influenceReachHolds(5.000001, 5),
+      `exit ${shortRun.status}; ${reachLines.map((l) => l.trim().slice(6, 230)).join(' | ')}; radius 5 at a vertex 5 px out: ${influenceReachHolds(5, 5)}`,
+      'issue #378 bar 4, as ruled: the radius is declared per part, and the farthest lattice vertex\'s distance to its nearest link (rig-c\'s segmentDistance over its buildSegmentsLattice) is the figure it must exceed — one radius cannot fit both parts here (21.1 and 53.5 px), a pull is 0 at d = radius, so equal is refused, and nothing reaches rigc',
+    );
+
+    // IN03 — the one rule: the skirt as rig-c's own segments generator, compiled beside the explicit mesh, is the same mesh.
+    const rigc = suiteRigc();
+    const genDir = join(root, 'rig-generator');
+    cpSync(join(root, 'rig-influence'), genDir, { recursive: true });
+    const gen = JSON.parse(readFileSync(join(genDir, 'rig.json'), 'utf8')) as Record<string, unknown> & { bones: Array<{ name: string }>; skins: { default: Record<string, Record<string, Record<string, unknown>>> }; invariants?: Record<string, unknown> };
+    const skirtPart = CLOTH_PARTS.find((q) => q.name === 'skirt') as ProposeFixturePart;
+    const ox = skirtPart.x - PAD;
+    const oy = skirtPart.y - PAD;
+    const names = gen.bones.map((b) => b.name);
+    const entries = (fx.proposed.skirt.segments as Segment[]).map((s) =>
+      typeof s === 'string' ? names.filter((n) => n.startsWith(s) && /^\d+$/.test(n.slice(s.length))).sort((a, b) => Number(a.slice(s.length)) - Number(b.slice(s.length))) : { bone: s[0], from: [s[1][0] - ox, s[1][1] - oy], to: [s[2][0] - ox, s[2][1] - oy] },
+    );
+    const builtRig = JSON.parse(readFileSync(join(root, 'rig-influence', 'rig.json'), 'utf8')) as typeof gen;
+    const slotBone = (builtRig as unknown as { slots: Array<{ name: string; bone: string }> }).slots.find((s) => s.name === 'skirt')?.bone ?? '';
+    const world = (() => {
+      // The slot bone's origin in crop px, read off the rig as written: the root sits at the canvas's bottom centre, and the slot bone hangs off it untransformed (the fixture's hip).
+      const b = builtRig.bones.find((x) => x.name === slotBone) as unknown as { parent?: string; x: number; y: number };
+      if (b.parent !== 'root') throw new Error(`IN03: the skirt's slot bone "${slotBone}" does not hang off root, so its origin is not its x, y`);
+      return [CLOTH_RIG.w / 2 + b.x, CLOTH_RIG.h - b.y] as const;
+    })();
+    const skirtAtt = gen.skins.default.skirt.skirt;
+    gen.skins.default.skirt.skirt = { type: 'mesh', image: skirtAtt.image, generator: { kind: 'segments', cell: fx.proposed.skirt.grid, bones: entries, influence: { radius: INFLUENCE_RADII.skirt, across: true, max: 6, shape: 'smooth' }, anchor: [world[0] - ox, world[1] - oy] } };
+    gen.invariants = { ...(gen.invariants ?? {}), meshSlots: 3, meshTriangles: 300 };
+    writeFileSync(join(genDir, 'rig.json'), JSON.stringify(gen));
+    const compile = (dir: string, out: string): Record<string, unknown> | null => {
+      const r = spawnSync(rigc, ['build', '--rig', join(dir, 'rig.json'), '--motion', join(dir, 'motion.json'), '--out', out, '--profile', 'rig-play', '--copy-images'], { encoding: 'utf8', maxBuffer: 1 << 28 });
+      if (r.status !== 0) return null;
+      const s = JSON.parse(readFileSync(join(out, 'skeleton.json'), 'utf8')) as { skins: Array<{ attachments?: Record<string, Record<string, Record<string, unknown>>> }> };
+      return s.skins.map((k) => k.attachments?.skirt?.skirt).find((a) => a !== undefined) ?? null;
+    };
+    const ours = compile(join(root, 'rig-influence'), join(root, 'c-influence'));
+    const theirs = compile(genDir, join(root, 'c-generator'));
+    const sameKeys = ['uvs', 'triangles', 'hull', 'edges'].filter((k) => ours !== null && theirs !== null && JSON.stringify(ours[k]) === JSON.stringify(theirs[k]));
+    const diff = (a: unknown, b: unknown): { bones: number; xy: number; w: number } | null => {
+      if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return null;
+      let i = 0;
+      const out = { bones: 0, xy: 0, w: 0 };
+      while (i < a.length) {
+        const n = a[i] as number;
+        if (b[i] !== n) return null;
+        i++;
+        for (let k = 0; k < n; k++, i += 4) {
+          if (a[i] !== b[i]) out.bones++;
+          out.xy = Math.max(out.xy, Math.abs((a[i + 1] as number) - (b[i + 1] as number)), Math.abs((a[i + 2] as number) - (b[i + 2] as number)));
+          out.w = Math.max(out.w, Math.abs((a[i + 3] as number) - (b[i + 3] as number)));
+        }
+      }
+      return out;
+    };
+    const d3 = diff(ours?.vertices, theirs?.vertices);
+    // The mutant: the same comparison against the generator stated with the other shape must see the difference.
+    const linear = JSON.parse(JSON.stringify(gen)) as typeof gen;
+    (linear.skins.default.skirt.skirt.generator as { influence: { shape: string } }).influence.shape = 'linear';
+    const linDir = join(root, 'rig-linear');
+    cpSync(genDir, linDir, { recursive: true });
+    writeFileSync(join(linDir, 'rig.json'), JSON.stringify(linear));
+    const dLin = diff(ours?.vertices, compile(linDir, join(root, 'c-linear'))?.vertices);
+    say(
+      'IN03_THE_EXPLICIT_MESH_IS_THE_MESH_RIG_C_S_OWN_SEGMENTS_GENERATOR_COMPILES_AND_THE_OTHER_SHAPE_IS_SEEN_TO_DIFFER',
+      sameKeys.length === 4 && d3 !== null && d3.bones === 0 && d3.w <= 1e-5 && d3.xy <= 1e-4 && dLin !== null && dLin.w > 1e-3,
+      `identical: ${sameKeys.join(', ') || 'none'}; vertices: ${d3 === null ? 'not comparable' : `bone index mismatches ${d3.bones}, max weight difference ${d3.w}, max bind difference ${d3.xy} px`}; against the generator at shape "linear": max weight difference ${dLin === null ? 'not comparable' : dLin.w}`,
+      'the ruling on #378: the mesh is computed by rig-c\'s promised buildSegmentsLattice and influenceShares, so it is the mesh rig-c\'s own generator builds — the same lattice and the same bones per vertex, shares within the six-decimal grid\'s step (the segment ends are read off the config\'s landmarks here and off the posed bones there) — and a different pull is visibly different, so the comparison can fail',
+    );
+
+    // IN04 — bar 3: folds with physics on, the influence mesh no more than the lattice under the wind and under a hip sway.
+    const wind = join(root, 'wind.json');
+    writeFileSync(wind, JSON.stringify({ spec: 'rigc-environment/1', steps: [{ t: 0, wind: [1, 0] }, { t: 1.1, wind: [-1, 0] }, { t: 2.2, wind: [0, 0] }] }));
+    const swayed = (mode: string): string => {
+      const dir = join(root, `sway-${mode}`);
+      cpSync(join(root, `rig-${mode}`), dir, { recursive: true });
+      const m = JSON.parse(readFileSync(join(dir, 'motion.json'), 'utf8')) as { animations: Record<string, unknown> };
+      m.animations.sway = { duration: 4, tracks: [{ bone: 'hip', property: 'rotate', keys: Array.from({ length: 49 }, (_, i) => ({ t: pyRound(i / 12, 6), v: [pyRound(60 * Math.sin((2 * Math.PI * i) / 24), 4)] })) }] };
+      writeFileSync(join(dir, 'motion.json'), JSON.stringify(m));
+      return dir;
+    };
+    const folds = (mode: string) => ({ wind: influenceFolds(swayed(mode), join(root, `f-${mode}`), 'idle', wind), sway: influenceFolds(join(root, `sway-${mode}`), join(root, `f-${mode}`), 'sway', null) });
+    const fl = folds('lattice');
+    const fi = folds('influence');
+    const rows4 = ['wind', 'sway'].flatMap((k) => Object.keys(INFLUENCE_RADII).map((p) => ({ k, p, a: (fl as Record<string, Map<string, { frames: number; worst: number }>>)[k].get(p), b: (fi as Record<string, Map<string, { frames: number; worst: number }>>)[k].get(p) })));
+    const seen = rows4.some((r) => (r.a?.frames ?? 0) > 0);
+    const front4 = JSON.stringify(fl.sway.get('hair_front')) === JSON.stringify(fi.sway.get('hair_front'));
+    say(
+      'IN04_WITH_PHYSICS_ON_THE_INFLUENCE_MESH_FOLDS_NO_MORE_THAN_THE_LATTICE_UNDER_THE_WIND_AND_A_HIP_SWAY_THAT_FOLDS_THE_LATTICE',
+      rows4.every((r) => r.a !== undefined && r.b !== undefined && r.b.frames <= r.a.frames && r.b.worst <= r.a.worst) && seen && front4,
+      `${rows4.map((r) => `${r.k} ${r.p}: lattice ${r.a?.frames ?? '?'} frame(s), worst ${r.a?.worst ?? '?'} triangle(s) -> influence ${r.b?.frames ?? '?'}, worst ${r.b?.worst ?? '?'}`).join('; ')}; the stimulus folds the lattice: ${seen}; hair_front (a lattice in both) folds alike: ${front4}`,
+      'issue #378 bar 3: rigc render --folds with the physics left in, (i) the idle under wind +1, -1, then calm and (ii) a hip sway of 60 degrees added in a scratch copy only; the sway is one the lattice is seen to fold under, so the reading is not blind, and the part left on its lattice reads the same on both sides',
+    );
+
+    // IN05 — the loader: the block's fields, and a field of the distance rule or another mode beside it, each by name.
+    const robeAs = (entry: Record<string, unknown>): PartsError | null => refusals(() => {
+      const c = minimalConfig();
+      return parseConfig({ ...c, meshes: { ...(c.meshes as Record<string, unknown>), robe: entry } });
+    });
+    const good = robeAs({ influence: { cell: 8, radius: 20, across: true, max: 4, shape: 'linear' }, segments: ['chest', 'hem'] });
+    const planted: Array<[string, Record<string, unknown>, string, string]> = [
+      ['r beside it', { influence: { cell: 8, radius: 20, across: true, max: 4, shape: 'smooth' }, r: 6, segments: ['chest'] }, 'CONFIG_INFLUENCE_MODE', 'config.meshes.robe.r'],
+      ['a grid beside it', { grid: 8, influence: { cell: 8, radius: 20, across: true, max: 4, shape: 'smooth' }, segments: ['chest'] }, 'CONFIG_MESH_MODE', 'config.meshes.robe'],
+      ['no radius', { influence: { cell: 8, across: true, max: 4, shape: 'smooth' }, segments: ['chest'] }, 'CONFIG_FIELD_PRESENT', 'config.meshes.robe.influence.radius'],
+      ['a radius of 0', { influence: { cell: 8, radius: 0, across: true, max: 4, shape: 'smooth' }, segments: ['chest'] }, 'CONFIG_FIELD_TYPE', 'config.meshes.robe.influence.radius'],
+      ['across as a string', { influence: { cell: 8, radius: 20, across: 'yes', max: 4, shape: 'smooth' }, segments: ['chest'] }, 'CONFIG_FIELD_TYPE', 'config.meshes.robe.influence.across'],
+      ['max 0', { influence: { cell: 8, radius: 20, across: true, max: 0, shape: 'smooth' }, segments: ['chest'] }, 'CONFIG_FIELD_TYPE', 'config.meshes.robe.influence.max'],
+      ['a cubic shape', { influence: { cell: 8, radius: 20, across: true, max: 4, shape: 'cubic' }, segments: ['chest'] }, 'CONFIG_FIELD_TYPE', 'config.meshes.robe.influence.shape'],
+      ['a cell of 0', { influence: { cell: 0, radius: 20, across: true, max: 4, shape: 'smooth' }, segments: ['chest'] }, 'CONFIG_FIELD_TYPE', 'config.meshes.robe.influence.cell'],
+    ];
+    const outcomes = planted.map(([what, entry, code, object]) => {
+      const e = robeAs(entry);
+      return { what, ok: e !== null && e.problems.length === 1 && e.problems[0].code === code && e.problems[0].object === object, got: codes(e) };
+    });
+    const nc = notCompared({ robe: { influence: { cell: 8, radius: 20, across: true, max: 4, shape: 'smooth' }, segments: ['chest'] } });
+    say(
+      'IN05_THE_INFLUENCE_BLOCK_LOADS_AND_EACH_MISSING_OR_MALFORMED_FIELD_AND_EACH_FOREIGN_FIELD_IS_REFUSED_ONCE_BY_NAME',
+      good === null && outcomes.every((o) => o.ok) && nc.length === 1 && nc[0].mode === 'influence',
+      `the block: ${good === null ? 'loads' : codes(good)}; planted: ${outcomes.map((o) => `${o.what} ${o.ok ? 'refused once' : `NOT: ${o.got}`}`).join('; ')}; mesh-draft names it ${nc.map((n) => n.mode).join()}`,
+      'issue #378: cell, radius, across, max and shape are each required with no default (rig-c\'s own rule for its influence block), and r, exponent, rule, influences, stray and ribs belong to the distance rule or another mode — beside an influence mesh they would be read by nothing, so each is refused by name',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+  return bad();
+}
+
+// ---------------------------------------------------------------------------
 // remesh (issue #495)
 // ---------------------------------------------------------------------------
 
@@ -40081,6 +40302,7 @@ const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number 
   ['scene', runSceneSuite],
   ['chain', runChainSuite],
   ['mesh-draft', runMeshDraftSuite],
+  ['influence', runInfluenceSuite],
   ['remesh', runRemeshSuite],
   ['readme-loop', runReadmeLoopSuite],
   ['tree', runTreeSuite],
@@ -40148,7 +40370,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
  */
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['check']],
-  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'contour-wiring', 'config', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
+  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'contour-wiring', 'config', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
   ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'remesh', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
 ];
 

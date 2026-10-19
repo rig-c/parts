@@ -311,7 +311,7 @@ export function triangulate(lattice: Lattice, cells: Mask, passes: number): Latt
 }
 
 /** The fraction of art pixels the triangles cover, rasterised as `cv2.fillPoly` would. */
-export function artCoverage(mesh: LatticeMesh, art: Mask): number {
+export function artCoverage(mesh: Pick<LatticeMesh, 'vertices' | 'triangles'>, art: Mask): number {
   const ras = newMask(art.width, art.height);
   for (let t = 0; t < mesh.triangles.length; t += 3) {
     const corner = (k: number): [number, number] => {
