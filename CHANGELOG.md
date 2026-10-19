@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.39.0](https://github.com/rig-c/parts/compare/v1.38.0...v1.39.0) (2026-10-19)
+
+
+### Features
+
+* **check:** CLOTH_SETTLES — a physics chain that comes to rest on the idle is a warning, never a bar ([#501](https://github.com/rig-c/parts/issues/501)) ([#507](https://github.com/rig-c/parts/issues/507)) ([b5fae5b](https://github.com/rig-c/parts/commit/b5fae5b67e290174a29bf27fa6bb22f3bf8713db))
+
+
+### Bug Fixes
+
+* **cloth:** a standing cloth is the consumer's to drive; the idle keeps no hip key ([#502](https://github.com/rig-c/parts/issues/502)) ([#508](https://github.com/rig-c/parts/issues/508)) ([a2dac91](https://github.com/rig-c/parts/commit/a2dac912b8fd55881658de1abc1fa3e85faebae5))
+* **selftest:** refuse unknown flags by name and run --only partial runs ([#505](https://github.com/rig-c/parts/issues/505)) ([7b6b9b2](https://github.com/rig-c/parts/commit/7b6b9b2af23c8d752b39c8c838c94f3bc41d4d0b)), closes [#500](https://github.com/rig-c/parts/issues/500)
+
 ## [1.38.0](https://github.com/rig-c/parts/compare/v1.37.0...v1.38.0) (2026-10-19)
 
 
