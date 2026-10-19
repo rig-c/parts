@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.42.0](https://github.com/rig-c/parts/compare/v1.41.1...v1.42.0) (2026-10-19)
+
+
+### Features
+
+* **propose:** draft cloth parts in the influence mode when a recipe opts in, at farthest + 3 cells ([#522](https://github.com/rig-c/parts/issues/522)) ([93c7d3d](https://github.com/rig-c/parts/commit/93c7d3dc33db251c13513118599775adbfee485a)), closes [#518](https://github.com/rig-c/parts/issues/518)
+
+
+### Bug Fixes
+
+* **notice:** state the Spine terms' trigger as rig-c's NOTICE does — the integration of a Spine Runtime ([#524](https://github.com/rig-c/parts/issues/524)) ([d1e1c49](https://github.com/rig-c/parts/commit/d1e1c49943cd0ec5558d8b8f9f91614a1537be80)), closes [#520](https://github.com/rig-c/parts/issues/520)
+* **selftest:** refuse a case prefix two suites print, and give the five shared prefixes one suite each ([#523](https://github.com/rig-c/parts/issues/523)) ([786bacd](https://github.com/rig-c/parts/commit/786bacd405a4ef9c0bfd0767276e6c73114a2883))
+
 ## [1.41.1](https://github.com/rig-c/parts/compare/v1.41.0...v1.41.1) (2026-10-19)
 
 
