@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.40.0](https://github.com/rig-c/parts/compare/v1.39.0...v1.40.0) (2026-10-19)
+
+
+### Features
+
+* **remesh:** re-fit one part of a gated rig under a requested entry into a new revision ([#512](https://github.com/rig-c/parts/issues/512)) ([d35b958](https://github.com/rig-c/parts/commit/d35b958d95af4da6c7326e33fa8f9f07cfa6449a))
+
+
+### Bug Fixes
+
+* **docs:** write the command-post protocol into CLAUDE.md and delegate the cut ([#510](https://github.com/rig-c/parts/issues/510)) ([8401f78](https://github.com/rig-c/parts/commit/8401f78fc16fde652c4bc7ab4e6c2d8036456332)), closes [#509](https://github.com/rig-c/parts/issues/509)
+
 ## [1.39.0](https://github.com/rig-c/parts/compare/v1.38.0...v1.39.0) (2026-10-19)
 
 
