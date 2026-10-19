@@ -322,3 +322,22 @@ their `parts.json` and `check.json` to `expected/`).
 
 What to do: nothing. To have a joint read, declare its `range`; a joint that opens when
 bent wants a cap that covers the turn.
+
+## After 1.37.0: the seam in motion
+
+Issue #493 reads every declared neighbour pair — each limb's two segments at a joint
+(`config.limbs`), and each `--requirements` `seam`'s two parts — in every animation
+`motion.json` holds, the idle included, by rig-c's seam reading (`rigc render --seam`,
+rig-c 2.60.0, now the dependency's floor). It is a warning, never a bar: a seam that
+opens in motion may be intended, so no exit status, no `check: PASS` and no bar count
+moves (AUTHORING §6, `SEAM_OVER_MOTION`).
+
+| change | before | after |
+| --- | --- | --- |
+| the `rig-c` dependency | `^2.59.0` | `^2.60.0`, the first with `render --seam` |
+| `check` on a rig whose `parts.json` holds a limb segment, or under a `--requirements` with a `seam` | not read | `SEAM_OVER_MOTION` in `check.json` after `SEAM_OVER_RANGE`, its console lines after the range lines, one `WARN seam` line per pair and animation over the one-cell floor, and `; N warning(s) (SEAM_OVER_MOTION, not a bar)` at the end of the summary |
+| `check` on any other rig | — | one console line, `SEAM_OVER_MOTION: SKIP — …`, naming why; no key in `check.json`, nothing more rendered |
+
+What to do: nothing. A warning names the pair, the animation, the frames and the cells;
+an opening that is not intended wants a cap that covers the turn, or a motion that bends
+less.
