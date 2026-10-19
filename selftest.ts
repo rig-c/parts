@@ -12,6 +12,17 @@
  *   bun selftest.ts --corpus <dir>    plus an extra suite that reads real
  *   RIG_PARTS_CORPUS=<dir> bun selftest.ts     See-through output under <dir>
  *
+ *   bun selftest.ts --only <suite>[,<suite>…]   a PARTIAL run of the named suites
+ *
+ * `--only` (issue #500) runs the named suites as the whole run does; every other
+ * suite opens its section and prints `SKIP  <suite>: not run — --only`, and the
+ * run ends without the summary, on a line saying it was partial, exiting 2 when
+ * green and 1 when red. A partial green says nothing about the tree, so it never
+ * ends the way the whole run ends. `run-tally` reads the run it is part of, so
+ * it runs only when named beside a suite that printed a case. Any word on the
+ * command line that is not one of these flags is refused by name, exit 2,
+ * before a suite starts (`RT12`, `RT13`).
+ *
  * The same extra suite also reads the public examples' fetched inputs,
  * `examples/<key>/inputs` (`bun run fetch-examples`), whenever any are on
  * disk, and compares what the readers see there against each example's
@@ -31451,7 +31462,105 @@ function runTallySuite(live: RunTally): number {
     `two units -> ${joined.length} line(s) in unit order, count ${String(sum)}; both with nothing to read -> ${String(none)}; one null beside one count -> ${split ?? 'accepted'}; the closing unit's worker absent -> ${gone ?? 'accepted'}`,
     "issue #395: a split suite is one block of the tally, so its units' lines are put end to end in the order a whole run prints them and its count is theirs; a unit that did not run beside one that did is not a skipped suite",
   );
+
+  // Issue #500: the parent read the flags it knew and ignored every other word, so `--suite assemble` and `--only tree`
+  // each ran every suite. Each command line below is run in a child process, which must refuse it by name and exit 2
+  // before a single section opens; the judges are held to forged runs of the old behaviour, which they must refuse.
+  const child = (args: readonly string[], timeout: number): ChildRun => {
+    const c = spawnSync(process.execPath, [join(ROOT, 'selftest.ts'), ...args], { encoding: 'utf8', maxBuffer: 1 << 26, timeout, killSignal: 'SIGKILL' });
+    return { status: c.status, stdout: c.stdout ?? '', stderr: c.stderr ?? '' };
+  };
+  const refusedLines: Array<[readonly string[], string]> = [
+    [['--unknown-flag'], '"--unknown-flag" is no flag of this run'],
+    [['--suite', 'assemble'], '"--suite" is no flag of this run'],
+    [[ONLY_FLAG, 'no-such-suite'], '"no-such-suite", which is no suite of this run; the suites are '],
+    [[ONLY_FLAG, 'png', SHARD_FLAG, SHARDS[0][0], RECORD_FLAG, 'unused.json'], `${ONLY_FLAG} and ${SHARD_FLAG} or ${MERGE_FLAG} each choose which suites run`],
+  ];
+  const refusedRuns = refusedLines.map(([args, want]) => [args, want, refusalFaults(child(args, 30_000), want)] as const);
+  const pure = readRunArgs(['--suite', 'assemble'], RUN_FLAGS);
+  const pureWhole = readRunArgs([CORPUS_FLAG, 'c', ONLY_FLAG, 'png'], RUN_FLAGS);
+  const pureTwice = readRunArgs([ONLY_FLAG, 'png', ONLY_FLAG, 'tree'], RUN_FLAGS);
+  // The mutant that drops the refusal: the old parent, which ran every suite and printed green.
+  const oldWhole: ChildRun = { status: 0, stdout: '\n── png ──\n  PASS  PN01\n\nrig-parts selftest: green — 1 control(s) over 1 suite(s)\n', stderr: '' };
+  const oldRefused = refusalFaults(oldWhole, refusedLines[0][1]);
+  say(
+    'RT12_AN_UNKNOWN_FLAG_A_STRAY_WORD_AND_AN_UNKNOWN_SUITE_ARE_REFUSED_BY_NAME_BEFORE_ANY_SUITE_STARTS',
+    refusedRuns.every(([, , f]) => f.length === 0) &&
+      Array.isArray(pure) &&
+      pure.length === 2 &&
+      pure[0].includes('"--suite"') &&
+      pure[1].includes('"assemble" follows no flag') &&
+      !Array.isArray(pureWhole) &&
+      pureWhole.get(ONLY_FLAG) === 'png' &&
+      Array.isArray(pureTwice) &&
+      pureTwice.some((r) => r.includes('given twice')) &&
+      oldRefused.length > 0,
+    `${refusedRuns.map(([args, , f]) => `${args.join(' ')} -> ${f.length === 0 ? 'exit 2, named, no section opened' : f.join('; ')}`).join('; ')}; read: --suite assemble -> ${Array.isArray(pure) ? pure.join(' | ') : 'ACCEPTED'}; --only twice -> ${Array.isArray(pureTwice) ? pureTwice.join(' | ') : 'ACCEPTED'}; the old parent (every suite run, exit 0) -> ${oldRefused.join('; ') || 'NOT refused'}`,
+    'issue #500: a word the run does not read is a word the caller meant, and ignoring it ran the whole suite for every request of one — so it is refused by name, before a worker starts, rather than guessed at',
+  );
+
+  // Issue #500: `--only` is a PARTIAL run — the named suites run as they would in the whole run, every other suite opens
+  // its section and prints one SKIP, and the run ends without the summary, on a line saying it was partial, exiting 2.
+  const named = 'png';
+  const partialRun = child([ONLY_FLAG, named], 120_000);
+  const partialAt = partialFaults(partialRun, [named], [...keys, TALLY_SUITE]);
+  const oldPartial = partialFaults({ ...oldWhole, stdout: [...keys, TALLY_SUITE].map((k) => `\n── ${k} ──\n  PASS  ${k}01`).join('\n') + `\n\nrig-parts selftest: green — ${keys.length + 1} control(s)\n` }, [named], [...keys, TALLY_SUITE]);
+  const verdictGreen = partialVerdict([named], ['tree'], 3, 0);
+  const verdictRed = partialVerdict([named], ['tree'], 3, 1);
+  const verdictWhole = partialVerdict([...keys, TALLY_SUITE], [], 3, 0);
+  say(
+    'RT13_ONLY_RUNS_THE_NAMED_SUITE_SKIPS_EVERY_OTHER_BY_NAME_AND_EXITS_2_WHEN_GREEN_WITHOUT_THE_SUMMARY',
+    partialAt.length === 0 &&
+      oldPartial.length > 0 &&
+      verdictGreen?.code === 2 &&
+      verdictGreen.err === null &&
+      verdictRed?.code === 1 &&
+      verdictRed.err === 'rig-parts selftest: 1 control(s) failed' &&
+      verdictRed.out.includes('PARTIAL') &&
+      verdictWhole === null,
+    `${ONLY_FLAG} ${named} in a child process -> exit ${partialRun.status ?? 'on a signal'}, ${partialAt.length === 0 ? `every other suite skipped by name, the PARTIAL line last, no summary` : partialAt.join('; ')}; the old parent (every suite run, the summary, exit 0) -> ${oldPartial.join('; ') || 'NOT refused'}; a red partial -> exit ${verdictRed?.code ?? 'none'}; ${ONLY_FLAG} naming every suite -> ${verdictWhole === null ? 'the whole run' : 'PARTIAL'}`,
+    'issue #500: a partial green is a true statement about the suites it named and none about the tree, so it must never end the way the whole run ends — and a red found in part is still a red',
+  );
   return bad();
+}
+
+/** What a child run of this file left: its exit, and everything it printed. */
+interface ChildRun {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+/** Where a child run is not a refusal of its command line (issue #500): it exits 2, names `want` on stderr, and opens no section. Empty is a refusal. */
+function refusalFaults(run: ChildRun, want: string): string[] {
+  const faults: string[] = [];
+  if (run.status !== 2) faults.push(`exited ${run.status ?? 'on a signal'}, not 2`);
+  if (!run.stderr.includes(want)) faults.push(`did not print ${JSON.stringify(want)} on stderr`);
+  const opened = `${run.stdout}\n${run.stderr}`.split('\n').filter(isSectionHeader).length;
+  if (opened > 0) faults.push(`opened ${opened} suite section(s), so suites started`);
+  return faults;
+}
+
+/**
+ * Where a child run with `--only` is not a partial run of the suites `ran` among `suites` (issue #500): it exits 2, opens
+ * one section per suite, prints a case for what it ran and the SKIP line for every other, and ends on the PARTIAL line
+ * without the summary. Empty is agreement.
+ */
+function partialFaults(run: ChildRun, ran: readonly string[], suites: readonly string[]): string[] {
+  const faults: string[] = [];
+  const lines = run.stdout.split('\n');
+  if (run.status !== 2) faults.push(`exited ${run.status ?? 'on a signal'}, not 2`);
+  const opened = lines.filter(isSectionHeader).length;
+  if (opened !== suites.length) faults.push(`opened ${opened} section(s) for ${suites.length} suite(s)`);
+  const unskipped = suites.filter((k) => !ran.includes(k) && !lines.includes(`  SKIP  ${k}: not run — ${ONLY_FLAG}`));
+  if (unskipped.length > 0) faults.push(`printed no SKIP line for ${unskipped.length} suite(s) it did not name (${unskipped.slice(0, 3).join(', ')}${unskipped.length > 3 ? ', …' : ''})`);
+  const skippedNamed = ran.filter((k) => lines.includes(`  SKIP  ${k}: not run — ${ONLY_FLAG}`));
+  if (skippedNamed.length > 0) faults.push(`skipped the suite(s) it named: ${skippedNamed.join(', ')}`);
+  if (!lines.some((l) => VERDICT_GUTTER.includes(gutterWord(l) ?? ''))) faults.push('printed no case line, so nothing it named ran');
+  const last = lines.filter((l) => l.trim() !== '').at(-1) ?? '';
+  if (!last.startsWith('rig-parts selftest: PARTIAL run')) faults.push(`ended on ${JSON.stringify(last.slice(0, 80))}, not the PARTIAL line`);
+  if (lines.some((l) => l.startsWith('rig-parts selftest: green'))) faults.push('printed the summary of a whole run');
+  return faults;
 }
 
 // ---------------------------------------------------------------------------
@@ -39755,16 +39864,96 @@ const SHARD_FLAG = '--shard';
 const RECORD_FLAG = '--record';
 const MERGE_FLAG = '--merge';
 
-/** The value after `flag` on the command line, null when the flag is absent; the run exits 2 when the flag has no value. */
-function flagValue(argv: readonly string[], flag: string): string | null {
-  const at = argv.indexOf(flag);
-  if (at === -1) return null;
-  const value = argv[at + 1];
-  if (value === undefined || value.startsWith('--')) {
-    console.error(`selftest: ${flag} needs a value`);
-    process.exit(2);
+/** `--only <suite>[,<suite>…]` (issue #500): a PARTIAL run of the named suites, which exits 2 when green and is never a verdict. */
+const ONLY_FLAG = '--only';
+const CORPUS_FLAG = '--corpus';
+
+/**
+ * Every flag the parent run reads, and the value it takes (issue #500). Each takes exactly one value, and nothing else
+ * may stand on the command line: an unknown flag, a stray word, a flag given twice or one with no value is refused by
+ * name before any suite starts. Until then the parent read the flags it knew and ignored the rest, so `--suite
+ * assemble` and `--only tree` each ran every suite for the length of a whole run and said nothing about the word it had
+ * dropped. `--suite-worker` is not here: it is the worker's own command line, which {@link workerMain} reads.
+ */
+const RUN_FLAGS: ReadonlyArray<readonly [string, string]> = [
+  [CORPUS_FLAG, '<dir>'],
+  [SHARD_FLAG, '<name>'],
+  [RECORD_FLAG, '<file>'],
+  [MERGE_FLAG, '<dir>'],
+  [ONLY_FLAG, '<suite>[,<suite>…]'],
+];
+
+/** The flags, as the refusal lists them. */
+function runFlagsText(flags: ReadonlyArray<readonly [string, string]>): string {
+  return flags.map(([f, v]) => `${f} ${v}`).join(', ');
+}
+
+/**
+ * The parent run's command line read against `flags` (issue #500): each flag's value, or every refusal it holds — a
+ * flag that is not one of them, a word that follows no flag, a flag given twice, a flag with no value. Nothing is read
+ * generously, because whatever a guess decided would decide which suites a verdict covers.
+ */
+function readRunArgs(argv: readonly string[], flags: ReadonlyArray<readonly [string, string]>): Map<string, string> | string[] {
+  const values = new Map<string, string>();
+  const refusals: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i];
+    const known = flags.some(([f]) => f === token);
+    if (!known) {
+      refusals.push(token.startsWith('-') ? `${JSON.stringify(token)} is no flag of this run` : `${JSON.stringify(token)} follows no flag; this run takes no positional argument`);
+      continue;
+    }
+    const value = argv[i + 1];
+    if (value === undefined || value.startsWith('--')) {
+      refusals.push(`${token} needs a value`);
+      continue;
+    }
+    i++;
+    if (values.has(token)) refusals.push(`${token} was given twice`);
+    else values.set(token, value);
   }
-  return value;
+  return refusals.length > 0 ? refusals : values;
+}
+
+/**
+ * The suites `--only` names (issue #500), or every refusal it holds: an empty name between its commas, a name given
+ * twice, a name that is no suite of this run — which lists the suites, since the caller who misspelt one needs the
+ * spelling. `suites` is the run's registry, {@link SUITES} and the tally's own suite, so no second list of names is kept
+ * beside it.
+ */
+function readOnlyList(value: string, suites: readonly string[]): Set<string> | string[] {
+  const seen = new Set<string>();
+  const refusals: string[] = [];
+  const unknown: string[] = [];
+  for (const name of value.split(',')) {
+    if (name === '') refusals.push(`${ONLY_FLAG} ${value} holds an empty name between its commas`);
+    else if (seen.has(name)) refusals.push(`${ONLY_FLAG} ${value} names the suite "${name}" twice`);
+    else if (!suites.includes(name)) unknown.push(name);
+    seen.add(name);
+  }
+  if (unknown.length > 0) refusals.push(`${ONLY_FLAG} names ${unknown.map((n) => `"${n}"`).join(', ')}, which ${unknown.length === 1 ? 'is no suite' : 'are no suites'} of this run; the suites are ${suites.join(', ')}`);
+  return refusals.length > 0 ? refusals : seen;
+}
+
+/** Print every refusal and exit 2, before any suite has started. */
+function refuseArgs(refusals: readonly string[]): never {
+  for (const r of refusals) console.error(`selftest: ${r}`);
+  console.error(`selftest: the flags are ${runFlagsText(RUN_FLAGS)}; a run with none is the whole run`);
+  process.exit(2);
+}
+
+/**
+ * How a run with `--only` ends (issue #500), or null when it is not partial — no flag, or a flag naming every suite,
+ * which is the whole run spelled longhand and ends like one. A partial run never prints the summary: green, its last
+ * line says it was partial and names what it skipped, and it exits 2; red, it exits 1 as the whole run would, because
+ * a red found in part is a red in the whole.
+ */
+function partialVerdict(ran: readonly string[], skipped: readonly string[], cases: number, failures: number): { code: 1 | 2; err: string | null; out: string } | null {
+  if (skipped.length === 0) return null;
+  const out =
+    `rig-parts selftest: PARTIAL run (${ONLY_FLAG}) — not a verdict on the tree. ${ran.length} suite(s) ran [${ran.join(', ')}] over ${cases} case line(s); ` +
+    `${skipped.length} suite(s) were not run [${skipped.join(', ')}]. Run \`bun run selftest\` without ${ONLY_FLAG} before a pull request.`;
+  return failures > 0 ? { code: 1, err: `rig-parts selftest: ${failures} control(s) failed`, out } : { code: 2, err: null, out };
 }
 
 /**
@@ -39772,7 +39961,14 @@ function flagValue(argv: readonly string[], flag: string): string | null {
  * tally's own suite, the floor, and the summary. A whole run reads its live workers; a merge reads the shards' records.
  * Both print the same stdout for the same worker lines, because it is this one function.
  */
-async function reportRun(keys: readonly string[], unitsOf: (key: string) => readonly string[], runOf: (unit: string) => Promise<WorkerRun | undefined>, clockText: () => string, cleanup: () => void): Promise<void> {
+async function reportRun(
+  keys: readonly string[],
+  unitsOf: (key: string) => readonly string[],
+  runOf: (unit: string) => Promise<WorkerRun | undefined>,
+  clockText: () => string,
+  cleanup: () => void,
+  only: ReadonlySet<string> | null = null,
+): Promise<void> {
   const tally = new RunTally();
   const printLine = console.log;
   console.log = (...args: unknown[]): void => {
@@ -39782,8 +39978,23 @@ async function reportRun(keys: readonly string[], unitsOf: (key: string) => read
   const printErr = (text: string): void => {
     process.stderr.write(text);
   };
+  // Issue #500: a suite `--only` did not name opens its section and prints one SKIP, so the floor holds it as it holds
+  // any suite that did not run, and the run's suites are still every suite once and in order.
+  const skipped: string[] = [];
+  const skip = (key: string, why: string): void => {
+    skipped.push(key);
+    tally.of(key, () => {
+      section(key);
+      console.log(`  SKIP  ${key}: not run — ${why}`);
+      return null;
+    });
+  };
   try {
     for (const key of keys) {
+      if (only !== null && !only.has(key)) {
+        skip(key, ONLY_FLAG);
+        continue;
+      }
       const units = unitsOf(key);
       const runs: Array<WorkerRun | undefined> = [];
       for (const unit of units) runs.push(await runOf(unit));
@@ -39793,7 +40004,9 @@ async function reportRun(keys: readonly string[], unitsOf: (key: string) => read
     cleanup();
   }
   printErr(clockText());
-  tally.of(TALLY_SUITE, () => runTallySuite(tally));
+  if (only !== null && !only.has(TALLY_SUITE)) skip(TALLY_SUITE, ONLY_FLAG);
+  else if (only !== null && !tally.blocks.some((b) => b.controls > 0)) skip(TALLY_SUITE, `it measures the run it is part of, and no suite before it printed a case; name one beside it in ${ONLY_FLAG}`);
+  else tally.of(TALLY_SUITE, () => runTallySuite(tally));
   console.log = printLine;
 
   console.log('');
@@ -39804,6 +40017,17 @@ async function reportRun(keys: readonly string[], unitsOf: (key: string) => read
     process.exit(2);
   }
   const bad = tally.failures;
+  const partial = partialVerdict(
+    tally.blocks.map((b) => b.key).filter((k) => !skipped.includes(k)),
+    skipped,
+    tally.total,
+    bad,
+  );
+  if (partial !== null) {
+    if (partial.err !== null) console.error(partial.err);
+    console.log(partial.out);
+    process.exit(partial.code);
+  }
   if (bad > 0) {
     console.error(`rig-parts selftest: ${bad} control(s) failed`);
     process.exit(1);
@@ -39923,10 +40147,17 @@ async function main(): Promise<void> {
     return;
   }
   const keys = SUITES.map(([k]) => k);
-  const argv = process.argv.slice(2);
-  const shard = flagValue(argv, SHARD_FLAG);
-  const record = flagValue(argv, RECORD_FLAG);
-  const merge = flagValue(argv, MERGE_FLAG);
+  // Issue #500: the whole command line is read before anything starts, and a word this run does not take is refused.
+  const args = readRunArgs(process.argv.slice(2), RUN_FLAGS);
+  if (Array.isArray(args)) refuseArgs(args);
+  const shard = args.get(SHARD_FLAG) ?? null;
+  const record = args.get(RECORD_FLAG) ?? null;
+  const merge = args.get(MERGE_FLAG) ?? null;
+  const onlyValue = args.get(ONLY_FLAG) ?? null;
+  if (onlyValue !== null && (shard !== null || merge !== null)) refuseArgs([`${ONLY_FLAG} and ${SHARD_FLAG} or ${MERGE_FLAG} each choose which suites run; give one of them`]);
+  const onlyRead = onlyValue === null ? null : readOnlyList(onlyValue, [...keys, TALLY_SUITE]);
+  if (Array.isArray(onlyRead)) refuseArgs(onlyRead);
+  const only = onlyRead;
   if (shard !== null || record !== null || merge !== null) {
     if ((shard === null) !== (record === null) || (merge !== null && shard !== null)) {
       console.error(`selftest: ${SHARD_FLAG} <name> takes ${RECORD_FLAG} <file>, and ${MERGE_FLAG} <dir> stands alone`);
@@ -39951,11 +40182,14 @@ async function main(): Promise<void> {
     console.error(`selftest: ${order}`);
     process.exit(2);
   }
+  // Only the suites a partial run names get a worker; the rest are printed as skipped, in their place.
+  const started = only === null ? order : order.filter((k) => only.has(k));
+  const timed = only === null ? keys : keys.filter((k) => only.has(k));
   const jobs = workerCount();
   const results = temp('workers');
   const clock = new Map<string, readonly [number, number]>();
   const t0 = performance.now();
-  const runs = startWorkers(order, jobs, async (key) => {
+  const runs = startWorkers(started, jobs, async (key) => {
     const began = performance.now() - t0;
     const run = await launchWorker(key, corpus, results);
     clock.set(key, [began, performance.now() - t0]);
@@ -39965,8 +40199,9 @@ async function main(): Promise<void> {
     keys,
     (key) => [key],
     (key) => runs.get(key) ?? Promise.resolve(undefined),
-    () => workerClockText(keys, clock, jobs, performance.now() - t0),
+    () => workerClockText(timed, clock, jobs, performance.now() - t0),
     () => rmSync(results, { recursive: true, force: true }),
+    only,
   );
 }
 
