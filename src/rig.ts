@@ -758,6 +758,30 @@ export function influenceReach(points: ReadonlyArray<readonly [number, number]>,
 }
 
 /**
+ * Issue #518: the figure {@link influenceReach} holds an influence mesh's radius above, measured as the rig stage
+ * measures it — rig-c's segments lattice at `cell` over the part padded by {@link PAD} (alpha above
+ * {@link INFLUENCE_THRESHOLD}), and each vertex's distance to its nearest of `segs` (rig px, as the bones place them)
+ * — for `propose` to draft a radius from before any rig is built. Null when rig-c's lattice refuses the part, which
+ * the rig stage then names (`RIG_INFLUENCE_LATTICE`).
+ */
+export function influenceFarthest(img: Raster, x: number, y: number, segs: readonly Segment[], cell: number): number | null {
+  const padded = pad(img, PAD, PAD, PAD, PAD, [0, 0, 0, 0]);
+  const alpha = new Uint8Array(padded.width * padded.height);
+  for (let i = 0; i < alpha.length; i++) alpha[i] = padded.data[i * 4 + 3];
+  let lattice: SegmentsLattice;
+  try {
+    lattice = buildSegmentsLattice({ mask: { width: padded.width, height: padded.height, alpha }, threshold: INFLUENCE_THRESHOLD, cell });
+  } catch {
+    return null;
+  }
+  const ox = x - PAD;
+  const oy = y - PAD;
+  const names = [...new Set(segs.map((s) => s.bone))];
+  const local: EntrySegment[] = segs.map((s) => ({ bone: names.indexOf(s.bone), entry: 0, a: [s.a[0] - ox, s.a[1] - oy], b: [s.b[0] - ox, s.b[1] - oy] }));
+  return influenceReach(lattice.points, local, names).distance;
+}
+
+/**
  * Whether a declared radius reaches a vertex `distance` px from its nearest link: a link pulls only when it is NEARER
  * than radius (rig-c's `d < radius`; the pull is 0 at d = radius), so a radius equal to the distance does not.
  */

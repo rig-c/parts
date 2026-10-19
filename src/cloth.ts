@@ -101,7 +101,25 @@ export interface ClothRecipe {
   part?: string | string[];
   /** A list of parts the recipe's trees run through in order from root to tip, one chain across the union and each link weighted to the part whose pixels it crosses (issue #437; the single-part form is the one-element list). */
   parts?: string[];
+  /**
+   * Issue #518: draft the parts this recipe meshes in the influence mode (`meshes.<part>.influence`, issue #378) rather
+   * than on a lattice: `across`, `max` and `shape` as declared (no default — the reading that fixed the radius did not
+   * vary them), `cell` the lattice cell the part would have had, and `radius` as declared or, absent, drafted as
+   * {@link INFLUENCE_RADIUS_CELLS} cells past the part's farthest lattice vertex from its nearest link.
+   */
+  influence?: { across: boolean; max: number; shape: 'linear' | 'smooth'; radius?: number };
 }
+
+/**
+ * 📐 Issue #518: the drafted influence radius is the part's farthest lattice vertex from its nearest link (the figure
+ * `RIG_INFLUENCE_REACH` holds the radius above) plus this many of the part's lattice cells. Measured in #513 on the
+ * cloth fixture and the public `wind` example (8 covered parts, `render --folds` with the physics on under wind
+ * +1 -> -1 -> calm and a hip sway of 8 and 30 degrees, max 6, across, smooth): farthest + 2 to + 6 cells read 0
+ * folded frames on every part, + 2 at the window's edge on one front-hair part, and a fold returned at 8-11 cells on
+ * another. 3 is one cell inside that edge. [Hypothesis until a third subject: each edge rests on one part.] Past the
+ * floor alone the mesh folds more than its lattice, and a larger radius is not safer; no ceiling is drafted.
+ */
+export const INFLUENCE_RADIUS_CELLS = 3;
 
 export type ClothRecipes = Partial<Record<ClothTarget, ClothRecipe>>;
 

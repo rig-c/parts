@@ -174,7 +174,7 @@ import { CHECK_PARTS, CHECK_RIG, checkPartRaster, IDLE_PEAK, MERGED_STAGE, merge
 import { fakePainting } from './fixtures/fakecomfy.ts';
 import { BLOUSE, CLOTH_PARTS, CLOTH_RIG, clothRecipe, DRESS, DRESS_RIG, dressHipJoints, dressParts, FLOOR_SKIRT_EMPTY_COL_PARTS, FLOOR_SKIRT_PARTS, HEM, HEM_BELOW, SHIFT, SPLIT_TAIL_PARTS, SPLIT_TAIL_UNCROSSED, splitTailRecipe } from './fixtures/cloth.ts';
 import { RIDER_RIG, RIDER_STRIP, riderParts, riderRecipe } from './fixtures/rider.ts';
-import { type ClothRecipes, draftTrees, linkRows } from './src/cloth.ts';
+import { type ClothRecipes, draftTrees, INFLUENCE_RADIUS_CELLS, linkRows } from './src/cloth.ts';
 import { BARE_CROWN_PARTS, CUT_BASE_PARTS, CUT_PARTS, eyeParts, FACELESS_PARTS, IRIS_NO_EYEWHITE_PARTS, LEVEL_FRINGE_PARTS, LONG_ROBE_PARTS, LONG_ROBE_RIG, MIXED_STRAND_PARTS, NO_BROW_PARTS, NO_EYE_PARTS, ONE_EYEWHITE_PARTS, PROPOSE_PARTS, PROPOSE_RIG, type ProposeFixturePart, STRAND_PARTS, STRAND_RIG, TILTED_FRINGE_PARTS, TWO_LOCK_PARTS, writeProposeFixture } from './fixtures/propose.ts';
 // The runtime's own posing, for the one control that measures where a mesh's pixels go (PR14): a second opinion about a weighted vertex is what a measurement must not carry.
 import { type BoneSnapshot, type Frame, loadPosable, type Mesh, sampleAnimation, sampleSetupPose } from 'rig-c/src/render.ts';
@@ -11894,7 +11894,7 @@ function runLegChainCases(dir: string, Pe: PartSet, Je: RigJoints, se: Proposal,
     k.people[0].joints.l_ankle = { state: 'observed', at: [122, 285] };
   });
   const unshod = proposeWithBasis(Ps, offJ, null, 'part');
-  const offLint = lint(Ps, unshod.proposal, offJ, unshod.jointsOffArt).findings.filter((f) => f.kind === 'limb-joint-off-art').map(lintLine);
+  const offLint = lint(Ps, unshod.proposal, offJ, unshod.draftLint).findings.filter((f) => f.kind === 'limb-joint-off-art').map(lintLine);
   const wantLint =
     'LINT foot_l at [122, 285], the l_ankle joint and leg_l1\'s tip, lies on none of leg_l\'s art within 1 px along its joint line (the nearest of it on that line is the pixel [119, 284], 2.5 px from the joint), ' +
     'so assemble could not size the ankle\'s cap (ASSEMBLE_LIMB_JOINT_ON_ART): leg_l is drafted without its ankle cut and shoes stays one part — move the l_ankle keypoint onto the art of the leg or of shoes, then re-run propose';
@@ -11902,7 +11902,7 @@ function runLegChainCases(dir: string, Pe: PartSet, Je: RigJoints, se: Proposal,
     'PR525_AN_ANKLE_OFF_ITS_LEG_S_ART_ALONG_THE_JOINT_LINE_DRAFTS_THE_LEGS_WITHOUT_THE_FOOT_CUT_AND_A_LINT_NAMES_THE_DISTANCE',
     limbText(shod.proposal, 'leg_r') === 'thigh_r legs leg_r0 | shin_r legs leg_r1 knee | foot_r shoes foot_r ankle' &&
       limbText(shod.proposal, 'leg_l') === 'thigh_l legs leg_l0 | shin_l legs leg_l1 knee | foot_l shoes foot_l ankle' &&
-      shod.jointsOffArt.length === 0 &&
+      shod.draftLint.length === 0 &&
       limbText(unshod.proposal, 'leg_r') === 'thigh_r legs leg_r0 | shin_r legs leg_r1 knee' &&
       limbText(unshod.proposal, 'leg_l') === 'thigh_l legs leg_l0 | shin_l legs leg_l1 knee' &&
       !unshod.proposal.bones.some((b) => 'name' in b && b.name.startsWith('foot_')) &&
@@ -11910,7 +11910,7 @@ function runLegChainCases(dir: string, Pe: PartSet, Je: RigJoints, se: Proposal,
       offLint.length === 1 &&
       offLint[0] === wantLint &&
       refusals(() => checkProposal(Ps, unshod.proposal)) === null,
-    `on the shoes: ${limbText(shod.proposal, 'leg_r')}; ${limbText(shod.proposal, 'leg_l')}, ${shod.jointsOffArt.length} off; l_ankle at (122, 285): ${limbText(unshod.proposal, 'leg_r')}; ${limbText(unshod.proposal, 'leg_l')}; shoes rides ${unshod.proposal.regions.shoes ?? 'nothing'}; ${offLint.join(' / ') || 'no LINT'}; loads ${codes(refusals(() => checkProposal(Ps, unshod.proposal)))}`,
+    `on the shoes: ${limbText(shod.proposal, 'leg_r')}; ${limbText(shod.proposal, 'leg_l')}, ${shod.draftLint.length} off; l_ankle at (122, 285): ${limbText(unshod.proposal, 'leg_r')}; ${limbText(unshod.proposal, 'leg_l')}; shoes rides ${unshod.proposal.regions.shoes ?? 'nothing'}; ${offLint.join(' / ') || 'no LINT'}; loads ${codes(refusals(() => checkProposal(Ps, unshod.proposal)))}`,
     'issue #517: propose drafted a foot cut at an ankle keypoint off the leg\'s art, and assemble then refused the config it wrote (ASSEMBLE_LIMB_JOINT_ON_ART); the joint is read as the cap reads it, and an ankle off it drafts the legs without the cut and says how far off on that line, never a joint the keypoints did not give',
   );
 }
@@ -33770,6 +33770,89 @@ function runInfluenceSuite(): number {
       good === null && outcomes.every((o) => o.ok) && nc.length === 1 && nc[0].mode === 'influence',
       `the block: ${good === null ? 'loads' : codes(good)}; planted: ${outcomes.map((o) => `${o.what} ${o.ok ? 'refused once' : `NOT: ${o.got}`}`).join('; ')}; mesh-draft names it ${nc.map((n) => n.mode).join()}`,
       'issue #378: cell, radius, across, max and shape are each required with no default (rig-c\'s own rule for its influence block), and r, exponent, rule, influences, stray and ribs belong to the distance rule or another mode — beside an influence mesh they would be read by nothing, so each is refused by name',
+    );
+
+    // IF06 — issue #518: `influence` on every recipe target drafts each part the recipe meshes in the influence mode,
+    // at its lattice's cell and at farthest + 3 cells, where farthest is the figure the rig stage measures on the same
+    // part: its mesh_report `reach.farthest`, read back from a rig built off the proposal (21.1043, 53.4603 and 29.4109
+    // px on the skirt, back hair and front hair — IF02's figures for the first two). One LINT per part names both.
+    const decl = { across: true, max: 6, shape: 'smooth' as const };
+    const recipeWith = (edit: (t: string) => Record<string, unknown> | undefined): ReturnType<typeof clothRecipe> => {
+      const r = clothRecipe() as Record<string, Record<string, unknown>>;
+      for (const t of Object.keys(r)) {
+        const e = edit(t);
+        if (e !== undefined) r[t].influence = e;
+      }
+      return r as ReturnType<typeof clothRecipe>;
+    };
+    const P6 = readPartSet(fx.parts);
+    const drafted6 = proposeWithBasis(P6, undefined, null, DEFAULT_GRID_RULE, recipeWith(() => decl));
+    const again6 = proposeWithBasis(P6, undefined, null, DEFAULT_GRID_RULE, recipeWith(() => decl));
+    const cfg6 = join(root, 'drafted.json');
+    writeFileSync(cfg6, JSON.stringify({ ...proposalConfig(CLOTH_PARTS, drafted6.proposal), constraints: drafted6.proposal.constraints ?? [] }));
+    const rig6 = runCli(['rig', '--config', cfg6, '--parts', fx.parts, '--out', join(root, 'rig-drafted')]);
+    const rows6 = rig6.status === 0 ? rowsOf(join(root, 'rig-drafted')) : [];
+    const want6 = ['skirt', 'hair_back', 'hair_front'].map((p) => {
+      const m = drafted6.proposal.meshes[p] as unknown as { influence?: { cell: number; radius: number; across: boolean; max: number; shape: string } };
+      const row = rows6.find((r) => r.part === p);
+      const lattice = fx.proposed[p] as { grid: number };
+      const far = row?.reach?.farthest ?? NaN;
+      return { p, m, far, ok: m.influence !== undefined && m.influence.cell === lattice.grid && m.influence.radius === pyRound(far + INFLUENCE_RADIUS_CELLS * lattice.grid, 4) && m.influence.across && m.influence.max === 6 && m.influence.shape === 'smooth' };
+    });
+    const lint6 = drafted6.draftLint.filter((f) => f.kind === 'influence-radius').map(lintLine);
+    const skirtLint = `LINT skirt on mesh 'skirt': influence radius 51.1043 = farthest 21.1043 + 3 × cell 10 — drafted by config.cloth."bottomwear".influence,`;
+    say(
+      'IF06_PROPOSE_CLOTH_WITH_INFLUENCE_DRAFTS_EACH_RECIPE_PART_AT_FARTHEST_PLUS_THREE_CELLS_AS_THE_RIG_STAGE_MEASURES_IT_AND_LINTS_IT',
+      rig6.status === 0 &&
+        want6.every((w) => w.ok) &&
+        want6.find((w) => w.p === 'skirt')?.far === 21.1043 &&
+        want6.find((w) => w.p === 'hair_back')?.far === 53.4603 &&
+        lint6.length === 3 &&
+        lint6.some((l) => l.startsWith(skirtLint)) &&
+        serializeProposal(drafted6.proposal) === serializeProposal(again6.proposal),
+      `${want6.map((w) => `${w.p}: ${JSON.stringify(w.m.influence ?? null)} beside the rig stage's farthest ${w.far}`).join('; ')}; rig exit ${rig6.status}; ${lint6.length} LINT line(s): ${lint6.map((l) => l.slice(0, 120)).join(' | ')}; two runs ${serializeProposal(drafted6.proposal) === serializeProposal(again6.proposal) ? 'byte-identical' : 'differ'}`,
+      'issue #518: the radius is the reach floor (RIG_INFLUENCE_REACH\'s figure, measured here as the rig stage measures it) plus 3 of the part\'s cells — #513 read 0 folded frames from +2 to +6 cells on every covered part, +2 at the edge, and a radius at the floor folding more than the lattice; the author sees the rule and both figures, and the same inputs draft the same bytes',
+    );
+
+    // IF07 — a radius the recipe states is kept as stated and no LINT is printed for it; a recipe without `influence`
+    // drafts the lattice it did before (the proposal byte for byte).
+    const stated7 = proposeWithBasis(P6, undefined, null, DEFAULT_GRID_RULE, recipeWith((t) => (t === 'bottomwear' ? { ...decl, radius: 30 } : decl)));
+    const plain7 = proposeWithBasis(P6, undefined, null, DEFAULT_GRID_RULE, clothRecipe());
+    const skirt7 = stated7.proposal.meshes.skirt as unknown as { influence?: { radius: number } };
+    const lint7 = stated7.draftLint.filter((f) => f.kind === 'influence-radius').map((f) => (f.kind === 'influence-radius' ? f.part : ''));
+    const lattice7 = propose(P6, undefined, null, DEFAULT_GRID_RULE, clothRecipe());
+    say(
+      'IF07_A_RADIUS_THE_RECIPE_STATES_IS_KEPT_VERBATIM_WITH_NO_LINT_AND_A_RECIPE_WITHOUT_INFLUENCE_DRAFTS_THE_LATTICE_AS_BEFORE',
+      skirt7.influence?.radius === 30 &&
+        lint7.sort().join() === 'hair_back,hair_front' &&
+        plain7.draftLint.length === 0 &&
+        serializeProposal(plain7.proposal) === serializeProposal(lattice7) &&
+        ['skirt', 'hair_back', 'hair_front'].every((p) => JSON.stringify(plain7.proposal.meshes[p]) === JSON.stringify(fx.proposed[p])),
+      `stated 30: skirt ${JSON.stringify(skirt7.influence ?? null)}, LINT for ${lint7.join(', ') || 'none'}; without influence: ${plain7.draftLint.length} LINT, meshes ${['skirt', 'hair_back', 'hair_front'].map((p) => `${p} ${JSON.stringify(plain7.proposal.meshes[p]) === JSON.stringify(fx.proposed[p]) ? 'as before' : 'CHANGED'}`).join(', ')}`,
+      'issue #518 bar 2: the draft never overrides the author — a stated radius is the author\'s, held to the reach by the rig stage as any declared radius is — and a recipe that does not opt in drafts exactly what it drafted before the field existed',
+    );
+
+    // IF08 — the recipe's influence block: across, max and shape required, radius optional and positive, nothing else.
+    const clothAs = (infl: unknown): PartsError | null => refusals(() => parseConfig({ ...minimalConfig(), cloth: { bottomwear: { ...clothRecipe().bottomwear, influence: infl } } }));
+    const good8 = clothAs(decl);
+    const at8 = 'config.cloth."bottomwear".influence';
+    const planted8: Array<[string, unknown, string, string]> = [
+      ['no shape', { across: true, max: 6 }, 'CONFIG_FIELD_PRESENT', `${at8}.shape`],
+      ['across as a string', { ...decl, across: 'yes' }, 'CONFIG_FIELD_TYPE', `${at8}.across`],
+      ['max 0', { ...decl, max: 0 }, 'CONFIG_FIELD_TYPE', `${at8}.max`],
+      ['a cubic shape', { ...decl, shape: 'cubic' }, 'CONFIG_FIELD_TYPE', `${at8}.shape`],
+      ['a radius of 0', { ...decl, radius: 0 }, 'CONFIG_FIELD_TYPE', `${at8}.radius`],
+      ['a cell', { ...decl, cell: 8 }, 'CONFIG_KEY_KNOWN', `${at8}.cell`],
+    ];
+    const out8 = planted8.map(([what, infl, code, object]) => {
+      const e = clothAs(infl);
+      return { what, ok: e !== null && e.problems.length === 1 && e.problems[0].code === code && e.problems[0].object === object, got: codes(e) };
+    });
+    say(
+      'IF08_THE_RECIPE_S_INFLUENCE_BLOCK_LOADS_AND_EACH_MISSING_MALFORMED_OR_FOREIGN_FIELD_IS_REFUSED_ONCE_BY_NAME',
+      good8 === null && clothAs({ ...decl, radius: 40 }) === null && out8.every((o) => o.ok),
+      `the block: ${good8 === null ? 'loads' : codes(good8)}; with a radius: ${codes(clothAs({ ...decl, radius: 40 }))}; ${out8.map((o) => `${o.what} ${o.ok ? 'refused once' : `NOT: ${o.got}`}`).join('; ')}`,
+      'issue #518: across, max and shape are the author\'s — #513 did not vary them, so propose does not choose them — and the cell is the lattice\'s own, so a cell declared here would be read by nothing',
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
