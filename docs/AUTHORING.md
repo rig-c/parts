@@ -2698,7 +2698,7 @@ whites, an earring — antialiased strokes that are mostly rim, and the largest 
 because an opaque white garment has the page's colour and is a real part.
 
 No example layer crosses a rule, so their proposals are unchanged. For the haze the
-selftest plants (`PL03`, `PL06`: near-white, four pixels in five at alpha 40, 2.000x the
+selftest plants (`PU03`, `PU06`: near-white, four pixels in five at alpha 40, 2.000x the
 rest of the figure), the `WARN` line and the note say the same thing:
 
 ```

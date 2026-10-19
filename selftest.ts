@@ -493,6 +493,12 @@ function caseName(line: string): string | null {
   return match === null ? null : match[1].replace(/:$/, '');
 }
 
+/** A case name's prefix (issue #516): the capitals before its first digit, `IF` of `IF01_…`; null for a name with no number after its capitals (`SUITE_CRASHED[…]`). */
+function casePrefix(name: string): string | null {
+  const m = /^([A-Z]+)\d/.exec(name);
+  return m === null ? null : m[1];
+}
+
 function isSectionHeader(line: string): boolean {
   return /^── .+ ──$/.test(line);
 }
@@ -612,6 +618,22 @@ function tallyFaults(blocks: readonly SuiteBlock[], gutter: ReadonlyMap<string, 
     }
   }
   if (controls === 0) faults.push('not one PASS or FAIL line was recognised in this whole run, so the scan matched nothing');
+  // Issue #516: one case prefix, one suite. A prefix two suites print lets the same ID name two cases (#378's suite
+  // first printed IN01–IN05 beside inputs' IN01–IN10), and nothing else in the run sees it.
+  const owners = new Map<string, Map<string, string>>();
+  for (const b of blocks) {
+    for (const n of b.names) {
+      const p = casePrefix(n);
+      if (p === null) continue;
+      const by = owners.get(p) ?? new Map<string, string>();
+      if (!by.has(b.key)) by.set(b.key, n);
+      owners.set(p, by);
+    }
+  }
+  for (const [p, by] of owners) {
+    if (by.size < 2) continue;
+    faults.push(`the case prefix "${p}" is printed by ${by.size} suites — ${[...by].map(([k, n]) => `${k} (first ${n.split('_')[0]})`).join(', ')}; one prefix belongs to one suite, so rename the cases of every suite but one`);
+  }
   const summed = blocks.reduce((sum, b) => sum + b.controls, 0);
   if (summed !== controls) faults.push(`${controls - summed} case line(s) were printed outside every tallied suite`);
   return faults;
@@ -814,7 +836,7 @@ function runMorphSuite(): number {
   const d = dilate(dot, 3);
   const dc = dilate(corner, 3);
   say(
-    'MO01_DILATE_3X3_GROWS_A_DOT_TO_NINE_AND_A_CORNER_DOT_TO_FOUR',
+    'MP01_DILATE_3X3_GROWS_A_DOT_TO_NINE_AND_A_CORNER_DOT_TO_FOUR',
     sameRows(d, ['.....', '.###.', '.###.', '.###.', '.....']) && sameRows(dc, ['##...', '##...', '.....']),
     `dot -> ${rowsOf(d).join('/')}; corner dot -> ${rowsOf(dc).join('/')}`,
     "the corner case is cv2's border: outside the image is not in the window, so it neither adds pixels nor wraps",
@@ -825,7 +847,7 @@ function runMorphSuite(): number {
   const ef = erode(full, 3);
   const eh = erode(holed, 3);
   say(
-    'MO02_ERODE_KEEPS_A_FULL_IMAGE_AND_ONE_HOLE_CLEARS_ITS_WINDOW',
+    'MP02_ERODE_KEEPS_A_FULL_IMAGE_AND_ONE_HOLE_CLEARS_ITS_WINDOW',
     sameRows(ef, ['###', '###', '###']) && sameRows(eh, ['...', '...', '...']),
     `a full 3x3 eroded by 3x3 -> ${rowsOf(ef).join('/')}; the same with its centre cleared -> ${rowsOf(eh).join('/')}`,
     'the first half is the border rule again, on erosion: an eroder that treated outside as empty would clear the whole image',
@@ -834,7 +856,7 @@ function runMorphSuite(): number {
   const one = maskOf(['.....', '..#..']);
   const even = dilate(one, 2, 1);
   say(
-    'MO03_AN_EVEN_KERNEL_IS_ANCHORED_AT_HALF_ITS_WIDTH',
+    'MP03_AN_EVEN_KERNEL_IS_ANCHORED_AT_HALF_ITS_WIDTH',
     sameRows(even, ['.....', '..##.']),
     `a dot at x=2 dilated by a 2x1 kernel -> ${rowsOf(even).join('/')}; cv2 anchors at floor(k/2), so the window is [x-1, x] and x=2 and x=3 light`,
     'the reference uses odd kernels, but a centred-looking assumption on an even one shifts a mask by a pixel with nothing going red',
@@ -845,7 +867,7 @@ function runMorphSuite(): number {
   const block = maskOf(['.....', '.###.', '.###.', '.###.', '.....']);
   const grad = morphGradient(block, 3);
   say(
-    'MO04_CLOSE_BRIDGES_A_ONE_PIXEL_GAP_AND_GRADIENT_IS_THE_RING',
+    'MP04_CLOSE_BRIDGES_A_ONE_PIXEL_GAP_AND_GRADIENT_IS_THE_RING',
     sameRows(closed, ['.........', '.........', '..#####..', '.........', '.........']) && sameRows(grad, ['#####', '#####', '##.##', '#####', '#####']),
     `close -> ${rowsOf(closed).join('/')}; gradient of a 3x3 block -> ${rowsOf(grad).join('/')}`,
     'MORPH_CLOSE fills the isolated refusals inside an accepted area in the reference assembler, and MORPH_GRADIENT draws the outlines the proposer checks',
@@ -858,7 +880,7 @@ function runMorphSuite(): number {
   const fd = fillHoles(diag);
   const fo = fillHoles(open);
   say(
-    'MO05_FILL_HOLES_FILLS_A_RING_AND_A_DIAGONAL_POCKET_BUT_NOT_A_SIDE_GAP',
+    'MP05_FILL_HOLES_FILLS_A_RING_AND_A_DIAGONAL_POCKET_BUT_NOT_A_SIDE_GAP',
     sameRows(fr, ['#####', '#####', '#####', '#####', '#####']) && sameRows(fd, ['####.', '####.', '####.', '###..', '.....']) && sameRows(fo, rowsOf(open)),
     `ring -> ${rowsOf(fr).join('/')}; a pocket open only diagonally -> ${rowsOf(fd).join('/')}; a ring open on a side -> ${rowsOf(fo).join('/')}`,
     'scipy.ndimage.binary_fill_holes floods the background through 4-connected neighbours, so a diagonal leak is still a hole; the side gap is the negative control',
@@ -5502,7 +5524,7 @@ function runRigSuite(): number {
   const rgEyes = eyes?.keys ?? [];
   const rgClosed = rgEyes.length === 6 ? framesInside(rgEyes[2].t, rgEyes[3].t, IDLE_FPS, Math.round(rgEyes[5].t * IDLE_FPS) + 1) : [];
   say(
-    'MO20_THE_TREES_BLINK_HOLD_PUTS_A_FRAME_IN_THE_CLOSED_WINDOW_FOR_EVERY_T',
+    'RG493_THE_TREES_BLINK_HOLD_PUTS_A_FRAME_IN_THE_CLOSED_WINDOW_FOR_EVERY_T',
     treeHold.phases === 250000 && treeHold.misses === 0 && treeProblems.length === 0 && rgClosed.length > 0,
     `BLINK.hold ${BLINK.hold} s at IDLE_FPS ${IDLE_FPS}: ${treeHold.misses} of ${treeHold.phases} phase(s) miss, ${treeProblems.length} refusal(s); the rig fixture's emitted closed window ${rgEyes[2]?.t}..${rgEyes[3]?.t} s holds frame(s) ${JSON.stringify(rgClosed)}`,
     'the positive control: at 12 fps a frame falls every 10^6/12 us, a pattern that repeats every 250,000 us against the 6-decimal key grid, so trying every microsecond of one such period is every blink.t; a closed interval at least 1/12 s long holds a frame wherever it starts, and 0.084 >= 0.083334',
@@ -5510,7 +5532,7 @@ function runRigSuite(): number {
   const refHold = blinkHoldProblems(0.07, 0.04, 12);
   const refMiss = refHold[0]?.detail ?? '';
   say(
-    'MO21_THE_REFERENCES_HOLD_UNDER_ONE_FRAME_IS_REFUSED_NAMING_THE_HOLD_THE_RATE_AND_THE_MISSES',
+    'RG494_THE_REFERENCES_HOLD_UNDER_ONE_FRAME_IS_REFUSED_NAMING_THE_HOLD_THE_RATE_AND_THE_MISSES',
     refHold.length === 1 && refHold[0].code === 'RIG_BLINK_HOLD_SPANS_A_FRAME' && refHold[0].object === 'BLINK.hold (src/motion.ts)' && refMiss.startsWith('is 0.04 s; the idle is rendered at IDLE_FPS = 12') && refMiss.includes('for 129999 of the 250000 phases') && refMiss.includes('1/12 s, is required'),
     `hold 0.04 s at 12 fps (forged, the reference's pair) -> ${refHold.map((q) => `${q.code} ${q.object}: ${q.detail}`).join(' | ') || 'no refusal'}`,
     'by hand: a window of 40,000 us starting at an integer microsecond a misses exactly when a frame f lies just below a and the next one after a + 40,000, i.e. a in (f, f + 43,333.33); each of the three frames in a 250,000 us period (fractional parts .0, .333, .667) leaves 43,333 integers there, 129,999 in all',
@@ -5518,7 +5540,7 @@ function runRigSuite(): number {
   const under = blinkHoldProblems(0.07, 0.083332, 12);
   const exact = blinkHoldProblems(0.07, 0.083333, 12);
   say(
-    'MO22_A_HOLD_ONE_MICROSECOND_UNDER_THE_GRIDS_FLOOR_IS_REFUSED_AND_THE_FLOOR_IS_NOT',
+    'RG495_A_HOLD_ONE_MICROSECOND_UNDER_THE_GRIDS_FLOOR_IS_REFUSED_AND_THE_FLOOR_IS_NOT',
     under.length === 1 && under[0].code === 'RIG_BLINK_HOLD_SPANS_A_FRAME' && under[0].detail.includes('for 3 of the 250000 phases') && exact.length === 0,
     `hold 0.083332 s -> ${under.map((q) => `${q.code}: ${q.detail.split(';')[1]?.trim() ?? ''}`).join(' | ') || 'no refusal'}; hold 0.083333 s -> ${exact.length} refusal(s)`,
     'the two-sided edge, by the same count: a window of 83,332 us misses for a in (f, f + 1.33), one integer per frame, 3 per period; a window of 83,333 us misses for a in (f, f + 0.33), which holds no integer after any of the three fractional parts — so the refusal is the count, not a comparison with 1/12 typed in',
@@ -21537,7 +21559,7 @@ function runChainSuite(): number | null {
         `CK20_THE_IDLE_FRAMES_SHOW_THE_CLOSED_EYE_AND_EACH_ONE_LIES_IN_THE_HOLD[${key}]`,
         shownClosed.length > 0 && windows.length > 0 && windows.every((w) => w !== null && shownClosed.every((k) => k / IDLE_FPS >= w[0] - 1e-9 && k / IDLE_FPS <= w[1] + 1e-9)) && blinkFig?.hole_px === 0,
         `idle_frames_closed ${JSON.stringify(shownClosed)} at ${IDLE_FPS} fps (${shownClosed.map((k) => (k / IDLE_FPS).toFixed(6)).join(', ') || 'none'} s) against ${(blinkFig?.closed ?? []).join('; ') || 'no closed window'}; hole ${blinkFig?.hole_px} px`,
-        "issue #32: the loop is encoded from these frames, so a blink no frame lands in is a blink the idle frames, the contact sheet and the README's animation never show; with BLINK.hold at one frame or more (MO20) every example's blink.t has one",
+        "issue #32: the loop is encoded from these frames, so a blink no frame lands in is a blink the idle frames, the contact sheet and the README's animation never show; with BLINK.hold at one frame or more (RG493) every example's blink.t has one",
       );
 
       const gates = ['gate_spine-html.txt'].map((f) => [f, firstLineDiff(readFileSync(join(exp, f), 'utf8'), readFileSync(join(out, 'check', f), 'utf8'))] as const);
@@ -25661,7 +25683,7 @@ function runPlausibilitySuite(): number {
     };
     const [pt, pb] = layerFigures(probe);
     say(
-      'PL01_THE_THREE_FIGURES_COUNT_WHAT_THEIR_DEFINITIONS_SAY',
+      'PU01_THE_THREE_FIGURES_COUNT_WHAT_THEIR_DEFINITIONS_SAY',
       pb.opaquePx === 30 && pb.translucentPx === 10 && pb.backgroundPx === 10 && pb.restPx === 20 && pb.areaRatio === 1.5 && pt.restPx === 30 && pt.translucent === 0 && pt.areaRatio === 20 / 30,
       `bottomwear: opaque ${pb.opaquePx}, translucent ${pb.translucentPx}, background ${pb.backgroundPx}, rest ${pb.restPx}, area ${pb.areaRatio}; topwear: rest ${pt.restPx}, area ${pt.areaRatio?.toFixed(4)}`,
       'alpha 1..8 is not a pixel of the layer (See-through hazes whole canvases at that alpha), alpha below 128 is translucent, a min channel above 235 is the seam rule\'s near-white, and the rest of the figure is the OTHER layers\' union',
@@ -25697,7 +25719,7 @@ function runPlausibilitySuite(): number {
     ];
     const wrong = cases.filter(([, got, want]) => got.join(',') !== want.join(','));
     say(
-      'PL02_EACH_RULE_FIRES_ONE_STEP_PAST_ITS_BAR_AND_NOT_AT_IT',
+      'PU02_EACH_RULE_FIRES_ONE_STEP_PAST_ITS_BAR_AND_NOT_AT_IT',
       wrong.length === 0 && PLAUSIBLE_TRANSLUCENT_MAX === 0.5 && PLAUSIBLE_BACKGROUND_MAX === 0.5 && PLAUSIBLE_BACKGROUND_TRANSLUCENT_MIN === 0.25 && PLAUSIBLE_AREA_RATIO_MAX === 4 && PLAUSIBLE_JUDGED_AREA_RATIO === 0.05,
       wrong.length === 0 ? cases.map(([what, got]) => `${what} -> ${got.length === 0 ? 'kept' : got.join('+')}`).join('; ') : wrong.map(([what, got, want]) => `${what}: got ${got.join('+') || 'kept'}, wanted ${want.join('+') || 'kept'}`).join('; '),
       'a bar is a line: the control stands on it and one pixel past it, so a bar that moved, or a comparison that turned from > into >=, is named',
@@ -25717,7 +25739,7 @@ function runPlausibilitySuite(): number {
     const wantPrefix = 'wings: full run layer 80.0% translucent, 100.0% background-coloured, 2.000x the rest of the figure -> not proposed by ';
     const wantRules = `PLAN_LAYER_TRANSLUCENT (${ruleSummary('PLAN_LAYER_TRANSLUCENT')}), PLAN_LAYER_BACKGROUND (${ruleSummary('PLAN_LAYER_BACKGROUND')})`;
     say(
-      'PL03_THE_ISSUES_HAZE_IS_LEFT_OUT_BY_NAME_AND_THE_REST_OF_THE_PROPOSAL_IS_UNMOVED',
+      'PU03_THE_ISSUES_HAZE_IS_LEFT_OUT_BY_NAME_AND_THE_REST_OF_THE_PROPOSAL_IS_UNMOVED',
       JSON.stringify(clean) === JSON.stringify(EXPECTED_PROPOSAL) && samePlan(hazed) && hazed.notes.length === expectedNotes.length + 1 && hazed.notes.slice(0, -1).join('|') === expectedNotes.join('|') && hazeNote === wantPrefix + wantRules,
       `plan ${hazed.plan.map((p) => p[0]).join(', ')}; note "${hazeNote}"`,
       'See-through hallucinated a wings layer of mostly translucent grey on a character with none; proposed as an ordinary part it became an 832 x 1096 part and the recomposite error rose to mean |d| 15.01 (issue #21)',
@@ -25729,7 +25751,7 @@ function runPlausibilitySuite(): number {
     // The white garment: the fixture's own bottomwear is opaque Z (250, 250, 250), 100 % background-coloured and 0 % translucent.
     const bottom = layerFigures(base.full).find((f) => f.name === 'bottomwear');
     say(
-      'PL04_A_REAL_LAYER_COPY_AND_AN_OPAQUE_WHITE_GARMENT_ARE_PROPOSED',
+      'PU04_A_REAL_LAYER_COPY_AND_AN_OPAQUE_WHITE_GARMENT_ARE_PROPOSED',
       copied.plan.some((p) => p[2] === 'wings') && !copied.notes.some((n) => n.includes('PLAN_LAYER_')) && bottom !== undefined && bottom.background === 1 && bottom.translucent === 0 && clean.plan.some((p) => p[2] === 'bottomwear'),
       `a copy of topwear as wings -> plan ${copied.plan.map((p) => p[0]).join(', ')}, ${copied.notes.length} note(s); bottomwear ${bottom === undefined ? 'absent' : `${(bottom.background ?? 0) * 100}% background, ${(bottom.translucent ?? 0) * 100}% translucent`} -> proposed`,
       "the positive control: the rules read a haze, not a tag and not a colour — a white dress is the page's colour at full alpha",
@@ -25761,14 +25783,14 @@ function runPlausibilitySuite(): number {
     ];
     const missed = outcomes.filter(([, ok]) => !ok);
     say(
-      'PL05_EACH_RULE_LEAVES_ITS_MUTANT_OUT_THROUGH_EVERY_PATH_THAT_READS_A_LAYER',
+      'PU05_EACH_RULE_LEAVES_ITS_MUTANT_OUT_THROUGH_EVERY_PATH_THAT_READS_A_LAYER',
       missed.length === 0,
       missed.length === 0 ? `${outcomes.length} planted layers, each left out under its one rule; e.g. "${outcomes[2][2]}"` : missed.map(([what, , note]) => `${what}: "${note}"`).join('; '),
       'the body order, the head-run fallback and the extend below the crop each read a layer; a rule that guarded one of them would let the haze in through another',
     );
 
     // Issue #308: a tag left out by a plausibility rule in one run and empty in the other is named once in no row, the rule
-    // pointing at its own note; one only a plausibility note leaves out (PL03's, full run alone) gets no second note.
+    // pointing at its own note; one only a plausibility note leaves out (PU03's, full run alone) gets no second note.
     // The head run's wings: 8 x 8 = 64 px of C, one component (kept by the ghost rule); wings is no head tag, so the head run's reason is that rule.
     const headWings = withLayer(base.head, paintedLayer('wings', [0, 40, 8, 8], () => [100, 60, 40, 255]));
     const mixed = proposePlan(withLayer(base.full, hazeLayer('wings', RESOLUTION, 2780)), headWings, g);
@@ -25776,7 +25798,7 @@ function runPlausibilitySuite(): number {
       "wings: in no plan row — full run: 2780 px, crosses PLAN_LAYER_TRANSLUCENT, PLAN_LAYER_BACKGROUND (named with its figures in the note below); head run: 64 px, but the proposer takes wings from the full run only (it is not one of PROPOSE_HEAD_TAGS, src/assemble.ts) (px: run pixels of alpha above 8 after ghost clean-up)";
     const wingsNamed = (p: { notes: string[] }): string[] => p.notes.filter((n) => n.startsWith('wings: '));
     say(
-      'PL07_A_LAYER_A_RULE_LEFT_OUT_IS_NAMED_IN_NO_ROW_ONLY_WHERE_ANOTHER_RUN_HOLDS_IT_TOO',
+      'PU07_A_LAYER_A_RULE_LEFT_OUT_IS_NAMED_IN_NO_ROW_ONLY_WHERE_ANOTHER_RUN_HOLDS_IT_TOO',
       samePlan(mixed) && JSON.stringify(wingsNamed(mixed)) === JSON.stringify([mixedNote, hazeNote]) && mixed.notes.at(-1) === hazeNote && JSON.stringify(wingsNamed(hazed)) === JSON.stringify([hazeNote]),
       `haze in the full run, 64 px in the head run -> ${JSON.stringify(wingsNamed(mixed))}; haze in the full run alone -> ${wingsNamed(hazed).length} wings note(s)`,
       'a plausibility note names its layer with the figures and the rule, so a second note for the same layer would say it twice; where the other run holds the tag too, that run\'s reason has nowhere else to be said',
@@ -25793,7 +25815,7 @@ function runPlausibilitySuite(): number {
     const warnLines = warned.out.split('\n').filter((l) => l.startsWith('  WARN  '));
     const wingsRow = warned.out.split('\n').find((l) => /^ {2}0 +wings /.test(l)) ?? '';
     say(
-      'PL06_LAYERS_PRINTS_THE_FIGURES_AND_WARNS_WITHOUT_REFUSING',
+      'PU06_LAYERS_PRINTS_THE_FIGURES_AND_WARNS_WITHOUT_REFUSING',
       warned.status === 0 &&
         warnLines.length === 2 &&
         warnLines[0].startsWith('  WARN  PLAN_LAYER_TRANSLUCENT: layer "wings" — 80.0% translucent, 100.0% background-coloured, 2.000x the rest of the figure; ') &&
@@ -26356,7 +26378,7 @@ function runPromptSuite(): number {
   const { say, bad } = counter();
   const s = stripWords('a, Symmetry, , b ,character sheet, symmetrical composition, c');
   say(
-    'PR01_DUP_WORDS_ARE_STRIPPED_CASE_INSENSITIVELY_PER_TERM',
+    'PW01_DUP_WORDS_ARE_STRIPPED_CASE_INSENSITIVELY_PER_TERM',
     s.text === 'a, b, c' && s.dropped.join('|') === 'Symmetry|character sheet|symmetrical composition' && stripWords('asymmetry').text === 'asymmetry',
     `"${s.text}", dropped ${s.dropped.join(' | ')}; "asymmetry" kept ("${stripWords('asymmetry').text}")`,
     'prompt-only batches drew two figures side by side in 21 of 24 images with these terms in; the match is per term, so a word containing one is kept',
@@ -26388,7 +26410,7 @@ function runPromptSuite(): number {
   const cleanOk = p.positive === want && !p.positive.includes('long robe') && untraceable(p.positive, g).length === 0 && p.poseFrom === 'the stand_clasp skeleton';
   const plantCaught = planted.includes('long robe') && untraceable(planted, g).length > 0;
   say(
-    'PR02_WITHOUT_A_POSE_THE_POSE_WORDS_ARE_THE_SKELETONS_AND_NO_CAST_WORD_IS_EMITTED',
+    'PW02_WITHOUT_A_POSE_THE_POSE_WORDS_ARE_THE_SKELETONS_AND_NO_CAST_WORD_IS_EMITTED',
     cleanOk && plantCaught && exampleHits.length === 0,
     `positive = head, identity, costume, FRAMING, the stand_clasp words, style (${p.positive.length} chars, ${p.positive === want ? 'as assembled by hand' : `differs: ${p.positive}`}); ` +
       `no "long robe", 0 untraceable terms; the reference's default planted -> untraceable ${untraceable(planted, g).map((t) => `"${t}"`).join(', ')}; ` +
@@ -26398,7 +26420,7 @@ function runPromptSuite(): number {
 
   const posed = buildPrompts({ ...g, pose: 'standing, arms crossed' });
   say(
-    'PR03_A_POSE_IN_THE_CONFIG_IS_THE_WHOLE_OF_THE_POSE_WORDS',
+    'PW03_A_POSE_IN_THE_CONFIG_IS_THE_WHOLE_OF_THE_POSE_WORDS',
     posed.positive.includes('standing, arms crossed') && !posed.positive.includes(SKELETONS.stand_clasp.words) && !posed.positive.includes('head to toe') && posed.poseFrom === 'generation.pose',
     `pose "standing, arms crossed" with a stand_clasp control -> skeleton words ${posed.positive.includes(SKELETONS.stand_clasp.words) ? 'present' : 'absent'}, framing ${posed.positive.includes('head to toe') ? 'present' : 'absent'}`,
     'the skeleton is a fallback for the words and never an addition to what the config wrote',
@@ -26406,7 +26428,7 @@ function runPromptSuite(): number {
 
   const bare = buildPrompts({ ...g, negative_extra: '' });
   say(
-    'PR04_THE_NEGATIVE_IS_HEAD_EXTRA_POSE_AND_AN_EMPTY_EXTRA_LEAVES_NO_GAP',
+    'PW04_THE_NEGATIVE_IS_HEAD_EXTRA_POSE_AND_AN_EMPTY_EXTRA_LEAVES_NO_GAP',
     p.negative === `${NEGATIVE_HEAD}, 2girls, cropped` && bare.negative === `${NEGATIVE_HEAD}, cropped` && NEGATIVE_HEAD.includes('child, loli, shota') && NEGATIVE_HEAD.includes('nsfw, nude'),
     `"...${p.negative.slice(-24)}"; with negative_extra "" -> "...${bare.negative.slice(-24)}"; the safety terms of the head are present`,
     "the reference's negative is NEG_HEAD + extra + ', ' + pose; the head's nudity and minor terms are a guard, not a cast",
@@ -26425,7 +26447,7 @@ function runPromptSuite(): number {
     graph['14'].inputs.scale_by === 0.5;
   const noControl = paintingGraph({ ...g, control: undefined, pose: 'standing' }, 9, p, 'pfx', null);
   say(
-    'PR05_THE_PAINTING_GRAPH_CHAINS_LORAS_AND_CONTROL_INTO_THE_SAMPLER',
+    'PW05_THE_PAINTING_GRAPH_CHAINS_LORAS_AND_CONTROL_INTO_THE_SAMPLER',
     wired && !('32' in noControl) && JSON.stringify(noControl['3'].inputs.positive) === '["6",0]',
     `KSampler positive ${JSON.stringify(ks.positive)}, negative ${JSON.stringify(ks.negative)}, model ${JSON.stringify(ks.model)}, seed ${ks.seed}; LoRA strength_clip ${graph['20'].inputs.strength_clip} (= strength when absent); without control the sampler reads node 6 directly`,
     "checkpoint -> LoRAs -> encoders -> ControlNetApplyAdvanced -> KSampler -> 4x-AnimeSharp -> 0.5 is the reference's graph; a link to the wrong node is a valid graph that ignores the control",
@@ -26437,7 +26459,7 @@ function runPromptSuite(): number {
   const stray = threw(() => fillSeeThrough({ '1': { class_type: 'X', inputs: { a: '%NOBODY%' } } }, params));
   const filled = !JSON.stringify(st).includes('%') && !('_comment' in st) && st['3'].inputs.seed === 7 && st['3'].inputs.resolution === 512 && st['2'].inputs.group_offload === true && st['9'].inputs.filename_prefix === 'run1_preview_parts';
   say(
-    'PR06_THE_SEETHROUGH_TEMPLATE_IS_FILLED_TYPED_AND_A_STRAY_PLACEHOLDER_IS_REFUSED',
+    'PW06_THE_SEETHROUGH_TEMPLATE_IS_FILLED_TYPED_AND_A_STRAY_PLACEHOLDER_IS_REFUSED',
     filled && stray !== null && stray.includes('%NOBODY%'),
     `${Object.keys(st).length} nodes, no "%" left, seed ${String(st['3'].inputs.seed)} (a number), offload ${String(st['2'].inputs.group_offload)}; a template holding %NOBODY% -> ${stray ?? 'nothing thrown'}`,
     'a placeholder sent unfilled is a string where the node wants an integer, which the box refuses only after the upload',
@@ -26467,7 +26489,7 @@ function runPromptSuite(): number {
   );
   const got = red.map((q) => q.code).sort().join(',');
   say(
-    'PR07_A_GRAPH_IS_CHECKED_AGAINST_OBJECT_INFO_NODE_BY_NODE',
+    'PW07_A_GRAPH_IS_CHECKED_AGAINST_OBJECT_INFO_NODE_BY_NODE',
     green.length === 0 && got === 'COMFY_CHOICE_PRESENT,COMFY_CHOICE_PRESENT,COMFY_INPUT_KNOWN,COMFY_INPUT_SET,COMFY_NODE_PRESENT',
     `a matching graph -> ${green.length} problem(s); planted -> ${red.map((q) => `${q.code} ${q.object}`).join('; ')}`,
     'both enum spellings /object_info uses are read, hidden inputs are inputs, and a missing node class is named before anything is uploaded',
@@ -26580,7 +26602,7 @@ function runComfySuite(): number {
     const hostFree = written.every((t) => !t.includes('127.0.0.1'));
     const previews = existsSync(join(out, 'previews')) ? readdirSync(join(out, 'previews')).length : 0;
     say(
-      'CF01_A_GREEN_RUN_WRITES_THE_WRAPPER_FORM_THE_LAYER_READER_ACCEPTS',
+      'CY01_A_GREEN_RUN_WRITES_THE_WRAPPER_FORM_THE_LAYER_READER_ACCEPTS',
       ok.status === 0 && layersRight && graphRight && uploaded !== null && uploaded.equals(input) && hostFree && previews === 2 && meta?.seed === 7 && leftovers('st-ok').length === 1,
       `exit ${ok.status}; ${set === null ? 'the layer reader refused the output' : `${set.layers.length} layers read back, opaque counts ${layersRight ? 'equal to the fixture' : 'DIFFER'}`}; ` +
         `graph seed/resolution/steps/offload/lama/prefix ${graphRight ? 'as passed' : 'WRONG'}; upload ${uploaded === null ? 'absent' : uploaded.equals(input) ? 'byte-identical to the input' : 'differs'}; ${previews} preview(s); host in written files: ${hostFree ? 'no' : 'YES'}; routes ${[...new Set(ok.paths)].join(', ')}`,
@@ -26589,7 +26611,7 @@ function runComfySuite(): number {
 
     const busy = R['st-busy'];
     say(
-      'CF02_A_QUEUE_THAT_NEVER_EMPTIES_IS_REFUSED_BY_NAME_BEFORE_ANYTHING_IS_SENT',
+      'CY02_A_QUEUE_THAT_NEVER_EMPTIES_IS_REFUSED_BY_NAME_BEFORE_ANYTHING_IS_SENT',
       busy.status === 1 && fail(busy, 'COMFY_QUEUE_EMPTY') !== null && nothingSent(busy) && leftovers('st-busy').length === 0,
       `exit ${busy.status}; "${fail(busy, 'COMFY_QUEUE_EMPTY') ?? 'no COMFY_QUEUE_EMPTY line'}"; uploads ${busy.uploads.length}, prompts ${busy.prompts}`,
       "the adapter never queues behind someone else's job, and a wait that runs out says how long it waited for what",
@@ -26597,7 +26619,7 @@ function runComfySuite(): number {
 
     const empty = R['st-no-outputs'];
     say(
-      'CF03_A_HISTORY_ENTRY_WITH_NO_OUTPUTS_IS_REFUSED_AND_NOTHING_IS_WRITTEN',
+      'CY03_A_HISTORY_ENTRY_WITH_NO_OUTPUTS_IS_REFUSED_AND_NOTHING_IS_WRITTEN',
       empty.status === 1 && fail(empty, 'COMFY_HISTORY_OUTPUTS') !== null && leftovers('st-no-outputs').length === 0,
       `exit ${empty.status}; "${fail(empty, 'COMFY_HISTORY_OUTPUTS') ?? 'no COMFY_HISTORY_OUTPUTS line'}"; left on disk: ${leftovers('st-no-outputs').join(', ') || 'nothing'}`,
       'a job that finished and saved nothing is not a result, and an empty directory at --out would read as one',
@@ -26606,7 +26628,7 @@ function runComfySuite(): number {
     const bare = R['st-no-seethrough'];
     const missing = (bare.out.match(/COMFY_NODE_PRESENT: graph node \d+ — is a (SeeThrough_\w+)/g) ?? []).length;
     say(
-      'CF04_A_BOX_WITHOUT_THE_SEETHROUGH_NODES_IS_REFUSED_NAMING_EACH_CLASS_BEFORE_UPLOAD',
+      'CY04_A_BOX_WITHOUT_THE_SEETHROUGH_NODES_IS_REFUSED_NAMING_EACH_CLASS_BEFORE_UPLOAD',
       bare.status === 1 && missing === 6 && nothingSent(bare),
       `exit ${bare.status}; ${missing} SeeThrough_* class(es) named missing (6 in the workflow); uploads ${bare.uploads.length}, prompts ${bare.prompts}`,
       'the wrapper not installed is the likeliest failure on a fresh box, and /object_info answers it before a GPU is touched',
@@ -26614,7 +26636,7 @@ function runComfySuite(): number {
 
     const stale = R['st-stale'];
     say(
-      'CF05_A_MANIFEST_FROM_ANOTHER_RUN_IS_REFUSED',
+      'CY05_A_MANIFEST_FROM_ANOTHER_RUN_IS_REFUSED',
       stale.status === 1 && fail(stale, 'COMFY_MANIFEST_IS_THIS_RUN') !== null && leftovers('st-stale').length === 0,
       `exit ${stale.status}; "${fail(stale, 'COMFY_MANIFEST_IS_THIS_RUN') ?? 'no COMFY_MANIFEST_IS_THIS_RUN line'}"`,
       'seethrough_psd_info.log names the last manifest ANY run wrote; reading it without checking the prefix would hand back somebody else\'s layers',
@@ -26632,7 +26654,7 @@ function runComfySuite(): number {
     const positive = typeof pm?.positive === 'string' ? pm.positive : '';
     const seeds = pprompts.map((q) => q['3']?.inputs.seed);
     say(
-      'CF06_A_GREEN_PAINT_WRITES_EACH_SEED_WITH_ITS_VERBATIM_PROMPTS_AND_THE_SKELETON_IT_UPLOADED',
+      'CY06_A_GREEN_PAINT_WRITES_EACH_SEED_WITH_ITS_VERBATIM_PROMPTS_AND_THE_SKELETON_IT_UPLOADED',
       paint.status === 0 &&
         painted &&
         eq(control, skel) &&
@@ -26649,7 +26671,7 @@ function runComfySuite(): number {
 
     const ckpt = R['paint-missing-ckpt'];
     say(
-      'CF07_A_CHECKPOINT_THE_BOX_DOES_NOT_LIST_IS_REFUSED_BEFORE_UPLOAD',
+      'CY07_A_CHECKPOINT_THE_BOX_DOES_NOT_LIST_IS_REFUSED_BEFORE_UPLOAD',
       ckpt.status === 1 && (fail(ckpt, 'COMFY_CHOICE_PRESENT') ?? '').includes('not_on_the_box.safetensors') && nothingSent(ckpt) && !existsSync(join(dir, 'paint-missing-ckpt', 'painting_5.png')),
       `exit ${ckpt.status}; "${fail(ckpt, 'COMFY_CHOICE_PRESENT') ?? 'no COMFY_CHOICE_PRESENT line'}"; uploads ${ckpt.uploads.length}, prompts ${ckpt.prompts}`,
       'a model name the box does not have fails the job after the queue wait; /object_info names it before',
@@ -26657,7 +26679,7 @@ function runComfySuite(): number {
 
     const gone = R['st-unreachable'];
     say(
-      'CF08_A_BOX_THAT_DOES_NOT_ANSWER_IS_REFUSED_NAMING_THE_HOST',
+      'CY08_A_BOX_THAT_DOES_NOT_ANSWER_IS_REFUSED_NAMING_THE_HOST',
       gone.status === 1 && (fail(gone, 'COMFY_REACHABLE') ?? '').includes('127.0.0.1') && !existsSync(join(dir, 'st-unreachable')),
       `exit ${gone.status}; "${fail(gone, 'COMFY_REACHABLE') ?? 'no COMFY_REACHABLE line'}"`,
       'an unreachable host is the first thing an agent with a wrong address meets, and the line has to say which address',
@@ -26669,7 +26691,7 @@ function runComfySuite(): number {
     const nohostOut = `${nohost.stdout ?? ''}${nohost.stderr ?? ''}`;
     const emptyHost = spawnSync('bun', [join(ROOT, 'cli.ts'), 'comfy', 'paint', '--config', join(dir, 'paint.json'), '--out', join(dir, 'nohost2')], { cwd: ROOT, encoding: 'utf8', env: { ...env, COMFY_HOST: '' } });
     say(
-      'CF09_NO_HOST_IS_REFUSED_BY_NAME_AND_THERE_IS_NO_DEFAULT',
+      'CY09_NO_HOST_IS_REFUSED_BY_NAME_AND_THERE_IS_NO_DEFAULT',
       nohost.status === 1 && failLine(nohostOut, 'COMFY_HOST_GIVEN') !== null && emptyHost.status === 1 && failLine(`${emptyHost.stdout ?? ''}`, 'COMFY_HOST_GIVEN') !== null,
       `no --host, no COMFY_HOST -> exit ${nohost.status} "${failLine(nohostOut, 'COMFY_HOST_GIVEN') ?? nohostOut.slice(0, 200)}"; COMFY_HOST="" -> exit ${emptyHost.status}`,
       "the reference defaulted to one person's LAN address; a host is the user's, supplied at run time, and an empty one is not one",
@@ -26683,7 +26705,7 @@ function runComfySuite(): number {
     const sentText = onlySent[0]?.['6']?.inputs.text;
     const sentSeed = onlySent[0]?.['3']?.inputs.seed;
     say(
-      'CF10_A_CONFIG_OF_ONLY_KEY_AND_GENERATION_REACHES_THE_BOX_WITH_ITS_PROMPT_AND_SEED',
+      'CY10_A_CONFIG_OF_ONLY_KEY_AND_GENERATION_REACHES_THE_BOX_WITH_ITS_PROMPT_AND_SEED',
       only.status === 0 &&
         onlySent.length === 1 &&
         sentSeed === onlyGen.seed &&
@@ -26699,7 +26721,7 @@ function runComfySuite(): number {
     const rigSections = ['config.assemble', 'config.bones', 'config.meshes', 'config.regions', 'config.motion'];
     const rigNamed = rigSections.filter((f) => rigOnly.out.includes(`FAIL  CONFIG_FIELD_PRESENT: ${f} `));
     say(
-      'CF11_THE_SAME_CONFIG_IS_STILL_REFUSED_BY_RIG_NAMING_EACH_SECTION',
+      'CY11_THE_SAME_CONFIG_IS_STILL_REFUSED_BY_RIG_NAMING_EACH_SECTION',
       rigOnly.status === 1 && rigNamed.length === rigSections.length && !existsSync(join(dir, 'paint_only_rig')),
       `rig --config paint_only.json -> exit ${rigOnly.status}; CONFIG_FIELD_PRESENT for ${rigNamed.length}/${rigSections.length} of ${rigSections.join(', ')}`,
       'the early door narrows what one step requires; it does not open the full loader, which still stands in front of rig',
@@ -26709,7 +26731,7 @@ function runComfySuite(): number {
     const noGenLine = failLine(noGen.out, 'CONFIG_FIELD_PRESENT: config.generation');
     const noGenFails = noGen.out.split('\n').filter((l) => l.startsWith('  FAIL  ')).length;
     say(
-      'CF12_COMFY_PAINT_ON_A_CONFIG_WITHOUT_GENERATION_IS_REFUSED_NAMING_IT_BEFORE_THE_BOX_IS_ASKED',
+      'CY12_COMFY_PAINT_ON_A_CONFIG_WITHOUT_GENERATION_IS_REFUSED_NAMING_IT_BEFORE_THE_BOX_IS_ASKED',
       noGen.status === 1 &&
         noGenLine !== null &&
         noGenLine.includes('checkpoint') &&
@@ -26730,7 +26752,7 @@ function runComfySuite(): number {
     const metaPlant = pp.find((d) => d.startsWith('painting_11_meta.json'));
     const leaked = ['four steps', 'a remark on one field', 'x-tried', 'x-seeds_tried', 'x-why', 'x-source', 'x-status'].filter((w) => readOr(join(dir, 'paint-records', 'painting_11_meta.json')).includes(w));
     say(
-      'CF13_RECORDS_AND_ANNOTATIONS_IN_THE_CONFIG_LEAVE_THE_PAINTING_META_AND_GRAPH_BYTE_IDENTICAL_AND_ONE_SAMPLER_VALUE_DOES_NOT',
+      'CY13_RECORDS_AND_ANNOTATIONS_IN_THE_CONFIG_LEAVE_THE_PAINTING_META_AND_GRAPH_BYTE_IDENTICAL_AND_ONE_SAMPLER_VALUE_DOES_NOT',
       R['paint-records']?.status === 0 && R['paint-records-plant']?.status === 0 && pr.length === 0 && leaked.length === 0 && metaPlant !== undefined && pp.some((d) => d.startsWith('the graph sent')),
       `paint_records.json (a note, a steps_note and an x- record in generation.sampler; x- records in a LoRA, in generation.control and in generation; x- records at the top level holding an object, a number, null and an array) -> exit ${R['paint-records']?.status}, against paint-only: ${pr.length === 0 ? 'every file and the graph sent byte-identical (elapsed_s, the clock, set aside)' : pr.join(' | ')}; words of the records found in its meta: ${leaked.join(', ') || 'none'}; planted, generation.sampler.cfg 6 -> 6.5 -> ${pp.length === 0 ? 'IDENTICAL, so the comparison sees nothing' : pp.join(' | ')}`,
       'issue #70: an x- record and an annotation are read by nothing, and the painting meta is an output; it once wrote generation.sampler whole, so whatever its author wrote beside the four fields reached the meta. The plant is the witness that the comparison reads the meta and the graph at all',
@@ -26738,7 +26760,7 @@ function runComfySuite(): number {
 
     const po = paintRunDiff(dir, 'paint-only', 'paint-reordered');
     say(
-      'CF14_A_SAMPLER_WRITTEN_IN_ANOTHER_KEY_ORDER_WRITES_THE_SAME_META',
+      'CY14_A_SAMPLER_WRITTEN_IN_ANOTHER_KEY_ORDER_WRITES_THE_SAME_META',
       R['paint-reordered']?.status === 0 && po.length === 0,
       `generation.sampler written scheduler, sampler, cfg, steps -> exit ${R['paint-reordered']?.status}, against paint-only (steps, cfg, sampler, scheduler): ${po.length === 0 ? 'every file and the graph sent byte-identical (elapsed_s set aside)' : po.join(' | ')}`,
       'determinism is a contract: the meta names the sampler\'s fields in one order (resolvedSampler), not in the order its author happened to type them',
@@ -31883,6 +31905,22 @@ function runTallySuite(live: RunTally): number {
     `${ONLY_FLAG} ${named} in a child process -> exit ${partialRun.status ?? 'on a signal'}, ${partialAt.length === 0 ? `every other suite skipped by name, the PARTIAL line last, no summary` : partialAt.join('; ')}; the old parent (every suite run, the summary, exit 0) -> ${oldPartial.join('; ') || 'NOT refused'}; a red partial -> exit ${verdictRed?.code ?? 'none'}; ${ONLY_FLAG} naming every suite -> ${verdictWhole === null ? 'the whole run' : 'PARTIAL'}`,
     'issue #500: a partial green is a true statement about the suites it named and none about the tree, so it must never end the way the whole run ends — and a red found in part is still a red',
   );
+
+  // RT14 — issue #516: one case prefix, one suite. Planted: beta prints IN01 beside alpha's IN01 and IN02 (#378's
+  // collision). Clean: alpha prints IF01 and IF02, beta IN01, and a crash line with no number (SUITE_CRASHED[beta])
+  // has no prefix. RT05 holds the live tally of every suite run before this one to the same rule.
+  const shared = tallyFaults([block({ names: ['IN01_A', 'IN02_B'] }), block({ key: 'beta', controls: 1, names: ['IN01_C'] })], gutter('PASS', 'PASS', 'PASS', 'PASS'), 4);
+  const apart = tallyFaults([block({ names: ['IF01_A', 'IF02_B'] }), block({ key: 'beta', controls: 2, names: ['IN01_C', 'SUITE_CRASHED[beta]'] })], gutter('PASS', 'PASS', 'PASS', 'PASS', 'PASS'), 5);
+  say(
+    'RT14_A_CASE_PREFIX_TWO_SUITES_PRINT_FAULTS_NAMING_BOTH_AND_PREFIXES_EACH_SUITE_OWNS_DO_NOT',
+    shared.length === 1 &&
+      shared[0] === 'the case prefix "IN" is printed by 2 suites — alpha (first IN01), beta (first IN01); one prefix belongs to one suite, so rename the cases of every suite but one' &&
+      apart.length === 0 &&
+      casePrefix('PR525_X') === 'PR' &&
+      casePrefix('SUITE_CRASHED[x]') === null,
+    `planted: ${shared.join('; ') || 'no fault'}; clean: ${apart.length === 0 ? 'no fault' : apart.join('; ')}`,
+    'issue #516: #378\'s suite first printed IN01–IN05 beside the inputs suite\'s IN01–IN10, and only a rename after the full run found it; the tally is the one place that reads every suite\'s case lines, so it refuses a prefix two suites print, by name, with no exception kept by hand',
+  );
   return bad();
 }
 
@@ -36190,7 +36228,7 @@ function runAutoMeshSuite(): number {
 
   // ---------------------------------------------------------------------------
   // Issue #165 Stage B: the reference is the lowest common ancestor, in the package (src/autoenvelope.ts slotEnvelope;
-  // EB01-EB04 here on the EV fixture, EB05-EB06 at the rig stage in the auto-motion suite).
+  // EB01-EB04 here on the EV fixture, MO118-MO119 at the rig stage in the auto-motion suite).
   // ---------------------------------------------------------------------------
 
   // EB01 — where every bound bone hangs below the slot's bone the LCA is the slot's bone and slotEnvelope is the call
@@ -36262,7 +36300,7 @@ function runAutoMeshSuite(): number {
 
   // EB03 — the slot's bone the weights do not bind (no public part has it): bound {skirt_a, skirt_b}, slot chest — the
   // reference is still the LCA of all three, hip, and only skirt_a and skirt_b are sent (EV02's hand figures); chest is
-  // not, since rig-c refuses a bone neither mesh binds (EB05 measures that refusal). Planted: Stage A's tool derivation,
+  // not, since rig-c refuses a bone neither mesh binds (MO118 measures that refusal). Planted: Stage A's tool derivation,
   // which hands the slot's bone in always (tools/auto_envelope_survey.ts lcaEnvelope), sends chest as a fourth entry.
   const unbound03 = slotEnvelope(basisEv, 'chest', ['skirt_a', 'skirt_b'], [0, 0]);
   const stageA03 = lcaEnvelope(basisEv, 'chest', ['skirt_a', 'skirt_b'], [0, 0]);
@@ -39437,7 +39475,7 @@ function runAutoResidualCases(say: (name: string, ok: boolean, detail: string, w
     'issue #311: motion.animations_from resolves against the config\'s own directory (issue #183), so a survey that writes a switched config into a temporary directory carries the file beside it; written alone it refused reference-sample, and a broken instrument is found on the day it is needed',
   );
 
-  // EB05 (issue #165 Stage B item 2, at the rig stage) — the slot's bone the weights do not bind, its bound bones in a
+  // MO118 (issue #165 Stage B item 2, at the rig stage) — the slot's bone the weights do not bind, its bound bones in a
   // sibling subtree. The fixture's cloth hung on `eye` (root > body > eye) by a first segment far below the art
   // (y 39, at least 19 px from every source vertex, where hem's segments are within 8) and capped at two influences, so
   // every vertex keeps hem0 and hem1 and none keeps eye. The reference is the LCA of eye, hem0 and hem1: body. By hand
@@ -39470,7 +39508,7 @@ function runAutoResidualCases(say: (name: string, ok: boolean, detail: string, w
   // rig-c does not throw on it: the reduction ends `invalid-input` with the code, and returns no mesh.
   const plantEnd05 = refused05 === null || 'code' in refused05 ? null : (refused05.report.termination as { reason: string; code?: string; detail?: string });
   say(
-    'EB05_AT_THE_STAGE_AN_UNBOUND_SLOT_BONE_IS_NOT_SENT_THE_SIBLING_BONES_GO_AGAINST_THE_LCA_RIG_C_TAKES_IT_AND_THE_ROW_SAYS_SO',
+    'MO118_AT_THE_STAGE_AN_UNBOUND_SLOT_BONE_IS_NOT_SENT_THE_SIBLING_BONES_GO_AGAINST_THE_LCA_RIG_C_TAKES_IT_AND_THE_ROW_SAYS_SO',
     sib05.row !== undefined &&
       sibBound.join() === 'hem0,hem1' &&
       e0 > 0 &&
@@ -39495,7 +39533,7 @@ function runAutoResidualCases(say: (name: string, ok: boolean, detail: string, w
     "HQ's Stage B item 2: no public part has an unbound slot's bone, so the fixture is the evidence that the rule sends the envelope rig-c's contract accepts — every bone either mesh binds and no other",
   );
 
-  // EB06 (issue #165 Stage B item 1, at the rig stage) — where the LCA is the slot's bone (this fixture: hem0 binds with
+  // MO119 (issue #165 Stage B item 1, at the rig stage) — where the LCA is the slot's bone (this fixture: hem0 binds with
   // hem1 below it) the stage sends what the pre-#165 call derives and writes the row it always wrote: slotEnvelope ==
   // deriveEnvelope(basis, hem0, …), the input's targets.skinning that envelope, the row's reference hem0 and its rule
   // the slot's-bone rule, byte for byte. Planted: the same row built against another reference than the slot's bone
@@ -39505,7 +39543,7 @@ function runAutoResidualCases(say: (name: string, ok: boolean, detail: string, w
   const moved06 = stripped === null || !('envelope' in unit66) ? null : residualRow(1, 'body', unit66, stripped as MeshQualityReport, 'hem0');
   const same06 = stripped === null || !('envelope' in unit66) ? null : residualRow(1, 'hem0', unit66, stripped as MeshQualityReport, 'hem0');
   say(
-    'EB06_WHERE_THE_LCA_IS_THE_SLOT_BONE_THE_STAGE_SENDS_THE_PRE_165_ENVELOPE_AND_WRITES_THE_SLOT_BONE_RULE',
+    'MO119_WHERE_THE_LCA_IS_THE_SLOT_BONE_THE_STAGE_SENDS_THE_PRE_165_ENVELOPE_AND_WRITES_THE_SLOT_BONE_RULE',
     slot06.reference === 'hem0' &&
       JSON.stringify(slot06.derivation) === JSON.stringify(unit66) &&
       JSON.stringify(skinningOf(geo66.input)?.envelope) === JSON.stringify('envelope' in unit66 ? unit66.envelope : null) &&
