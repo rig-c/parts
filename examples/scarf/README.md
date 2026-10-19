@@ -56,7 +56,7 @@ here (gitignored).
   motion-spec shape, which `motion.animations_from` names; *Gestures, expressions and
   trailing strands* below.
 - `proposal.json` — what `rig-parts propose --parts <build> --source painting.png`
-  writes on the parts of the build in `expected/` (selftest `CH06`, `PR52`). #119
+  writes on the parts of the build in `expected/` (selftest `CH06`, `CH901`). #119
   moved the first two points of the `robe_l` chain by 1 and 2 px from what the
   proposer wrote on the parts assembled before it (`[503, 410]`, `[513, 541]` →
   `[502, 410]`, `[511, 541]`); the config followed the proposal in those two values.
@@ -257,8 +257,8 @@ gate.
 - **No neck part.** The scarf covers the neck and `assemble --propose-plan` proposes
   none, so the face-less fallback of issue #76 has nothing to derive a face from: with
   the face plan entries removed, `propose` refuses with `PROPOSE_FACE_PRESENT` naming
-  the missing neck (selftest `EX02`), where reference-demo and reference-sample get a fallback proposal
-  (`PR53`).
+  the missing neck (selftest `CH912`), where reference-demo and reference-sample get a fallback proposal
+  (`CH902`).
 
 ## Both mesh modes
 

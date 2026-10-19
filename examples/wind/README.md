@@ -54,7 +54,7 @@ also holds the licence; `bun run fetch-examples` copies the inputs into `inputs/
 - `proposal.json` — what `rig-parts propose --parts <parts> --source painting.png
   --keypoints keypoints.json --cloth config.json` writes on the built parts (issue
   #440: `propose` reconstructs the pre-limb layers from the cut limb segments in the
-  same run; selftest `CH06`, `CH18`, `PR52`).
+  same run; selftest `CH06`, `CH18`, `CH901`).
 - `sheets/` — `rig-parts sheet` contact sheets: the painting with the full run's
   layers, with the head run's layers, and with the 28 parts of the `expected/` build
   (the 22 the plan makes, the four limb layers cut into ten).

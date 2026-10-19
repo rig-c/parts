@@ -2698,7 +2698,7 @@ whites, an earring — antialiased strokes that are mostly rim, and the largest 
 because an opaque white garment has the page's colour and is a real part.
 
 No example layer crosses a rule, so their proposals are unchanged. For the haze the
-selftest plants (`PL03`, `PL06`: near-white, four pixels in five at alpha 40, 2.000x the
+selftest plants (`PU03`, `PU06`: near-white, four pixels in five at alpha 40, 2.000x the
 rest of the figure), the `WARN` line and the note say the same thing:
 
 ```
@@ -3620,7 +3620,7 @@ examples `rig.json`, `motion.json`, every image, the atlas, the packed page and
 every idle frame are byte-identical once `<id>:` and `<id>.` are taken off, and
 `skeleton.json` and `skeleton.model.json` equal as values but for Spine's `path`
 and the model's `spine.sha256`, which on each side is the sha256 of its own
-`skeleton.json` and so changes with the names (selftest `SC33`).
+`skeleton.json` and so changes with the names (selftest `CH910`).
 
 **Not offered.** Reconciling two `rig_scale`s (one is required; `scale` sizes a
 character, it does not resample its art); a non-uniform scale, a flip or a rotation

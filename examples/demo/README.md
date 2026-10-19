@@ -45,7 +45,7 @@ here (gitignored).
 - `pose.json` — the pose file `generation.control.skeleton` names, read beside the
   config by `comfy paint`; the copy in parts-examples is the same file.
 - `proposal.json` — what `rig-parts propose --parts <build> --source painting.png`
-  writes on the parts of the build in `expected/` (selftest `CH06`, `PR52`).
+  writes on the parts of the build in `expected/` (selftest `CH06`, `CH901`).
 - `sheets/` — `rig-parts sheet` contact sheets, PNG: the painting with the full
   run's layers, with the head run's layers, and with the 23 assembled parts of the
   `expected/` build (the last is also `assets/demo-parts.png`).
