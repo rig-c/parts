@@ -148,7 +148,7 @@ import { configRoles, type RoleOf } from './structure.ts';
 import { AUTHOR_NO_ROLE, isAuthorTag } from './tags.ts';
 import { TURN_BONE, TURN_CARRIER_TAG, TURN_PLACES, TURN_RIDER_OFFSET, TURN_RIDER_TAGS, turnFractions, turnNearest, turnPivot, turnRiderDepth, type TurnSpec } from './turn.ts';
 import { edgeLength } from './length.ts';
-import { bonePlaces, limbCrossing, limbPolyline, limbWidth } from './limbs.ts';
+import { bonePlaces, jointLine, limbCrossing, limbPolyline, limbRun, limbWidth, nearestLimb, nearestOnLine, offLineFigure, type Pt } from './limbs.ts';
 import { type BranchSqueezeFinding, branchSqueezes, chainSqueezes, type SqueezeFinding } from './squeeze.ts';
 import { backHairMasses, type BackHairMass, backHairMassTrees, RECIPE_BACK_HAIR_CHAINS, RECIPE_LENGTH_RATIO, chainConstraints, clothNote, type ClothRecipe, type ClothRecipes, type ClothTarget, CLOTH_TARGETS, draftTrees, spanCrosses, swingName, type Tail, tailOverlap, type TailOverlap, type TailSpan, treeConstraints, type TreeChain, type TreeInput, type TreeMassInput } from './cloth.ts';
 import { TEXTURE_STRETCH_CEILING } from './check.ts';
@@ -1392,7 +1392,7 @@ export function proposeWithBasis(
   gridRule: GridRule = DEFAULT_GRID_RULE,
   cloth: ClothRecipes | null = null,
   chainRule = true,
-): { proposal: Proposal; basis: ProposalBasis } {
+): { proposal: Proposal; basis: ProposalBasis; jointsOffArt: LimbJointOffArtFinding[] } {
   // Issue #230: a piece is not given its base's rule a second time, which
   // needs to know which part is the piece. A file that cannot say is refused
   // here, and only here: every other reader of parts.json still takes it.
@@ -1423,6 +1423,8 @@ export function proposeWithBasis(
   const records: BoneBasis[] = [];
   /** Issue #349: the limbs `--keypoints` drafts, and the parts they take (not made, so not given a mesh or a region). */
   const limbs: Record<string, Limb> = Object.create(null) as Record<string, Limb>;
+  /** Issue #517: the ankles left uncut because they lie off their leg's art — LINT lines, handed back beside the proposal. */
+  const jointsOffArt: LimbJointOffArtFinding[] = [];
   const consumed = new Set<string>();
   // No prototype: a part may be named anything file-safe, "__proto__" included.
   const meshes = Object.create(null) as Record<string, MeshSpec>;
@@ -3239,7 +3241,11 @@ export function proposeWithBasis(
     // shoes split between one leg's foot and no other would hand that leg the other shoe.
     const legChains = legPlan.chains;
     const feetOn = legChains.map((c) => fw.filter((q) => isOn(nearFoot.get(q) as Mask, c.ankle[0], c.ankle[1])));
-    const feetBound = fw.length > 0 && feetOn.every((on) => on.length === 1);
+    // Issue #517: and only when every ankle lies on its leg's art along its joint line, as assemble reads it — or the
+    // config drafted here is one assemble refuses by ASSEMBLE_LIMB_JOINT_ON_ART. An ankle off it is LINTed, not moved.
+    const offArt = fw.length > 0 && feetOn.every((on) => on.length === 1) ? anklesOffArt(P, legChains, feetOn.map((on) => on[0])) : [];
+    jointsOffArt.push(...offArt);
+    const feetBound = fw.length > 0 && feetOn.every((on) => on.length === 1) && offArt.length === 0;
     legChains.forEach((c, ci) => {
       const s = c.side as 'r' | 'l';
       const J = (joints as RigJoints).joints;
@@ -3259,6 +3265,8 @@ export function proposeWithBasis(
         regions[`foot_${s}`] = `foot_${s}`;
         consumed.add(on[0].name);
         foot = `, and foot_${s}, ${on[0].name}'s share below the ankle, on bone foot_${s} at the ${s}_ankle joint under leg_${s}1 with inherit "${FOOT_INHERIT}" — the shoe keeps its setup angle while the leg turns (FEET_STAY_LEVEL)`;
+      } else if (offArt.length > 0) {
+        foot = `; no foot segment: ${offArt.map((f) => `${f.keypoint} at ${fmtAt(f.at)} lies on none of leg_${f.side}'s art within 1 px along its joint line (${offLineFigure(f.nearest)})`).join('; ')}, so assemble could not size the ankle's cap — every leg's ankle must lie on its leg's art for the feet to be drafted, and ${offArt.length === 1 ? 'its' : 'their'} LINT line${offArt.length === 1 ? ' says' : 's say'} how far off; move the ankle keypoint onto the art and re-run propose`;
       } else if (fw.length > 0) {
         const where = (k: number): string => {
           const o = feetOn[k];
@@ -3361,6 +3369,7 @@ export function proposeWithBasis(
   return {
     proposal: { bones, meshes, regions, ...drafted, motion: blink === undefined ? { duration: IDLE_SECONDS, tracks: idleTracks } : { duration: IDLE_SECONDS, tracks: idleTracks, blink }, ...constrained, proposed_rig_scale: P.rigScale, notes },
     basis: { frame, bones: records },
+    jointsOffArt,
   };
 }
 
@@ -3656,6 +3665,36 @@ function armsFromJoints(
  * joints it runs through, its two links and tip in rig px, and the legwear
  * part its limb takes (issue #349).
  */
+/**
+ * Issue #517: the ankles of `legs` (each bound to the footwear part `feet[i]`) that lie on none of their leg's art
+ * within 1 px along the joint line, read as assemble's cap reads it (`cutLimbs` in `src/assemble.ts`): the line
+ * through the ankle across the shin bone's direction (knee -> ankle; the foot bone has no tip), the art each leg's
+ * polyline (hip, knee, ankle, as the bones round them) owns by {@link nearestLimb} among the legs taking the same part,
+ * in the legwear part and in its footwear part, alpha above {@link OPAQUE_ALPHA_ABOVE}. Empty when every ankle is on it.
+ */
+function anklesOffArt(P: PartSet, legs: readonly LegChain[], feet: readonly PartRecord[]): LimbJointOffArtFinding[] {
+  const polys = legs.map((c) => [rnd(c.hip), rnd(c.knee), rnd(c.ankle)] as Pt[]);
+  const box = [0, 0, P.W - 1, P.H - 1] as const;
+  const out: LimbJointOffArtFinding[] = [];
+  legs.forEach((c, i) => {
+    const line = jointLine(rnd(c.knee), rnd(c.ankle), null);
+    if (line === null) return;
+    const takers = (part: PartRecord, of: (k: number) => PartRecord): number[] => legs.map((_, k) => k).filter((k) => of(k).name === part.name);
+    const owned = (part: PartRecord, of: (k: number) => PartRecord): ((x: number, y: number) => boolean) => {
+      const m = P.alpha(part);
+      const ks = takers(part, of);
+      const lines = ks.map((k) => polys[k]);
+      return (x, y) => m.data[y * P.W + x] === 1 && ks[ks.length === 1 ? 0 : nearestLimb(lines, x, y)] === i;
+    };
+    const onLeg = owned(c.part, (k) => legs[k].part);
+    const onFoot = owned(feet[i], (k) => feet[k]);
+    const art = (x: number, y: number): boolean => x >= 0 && y >= 0 && x < P.W && y < P.H && (onLeg(x, y) || onFoot(x, y));
+    if (limbRun(line, art, box) !== null) return;
+    out.push({ kind: 'limb-joint-off-art', side: c.side, limb: `leg_${c.side}`, keypoint: `${c.side}_ankle`, part: `foot_${c.side}`, from: feet[i].name, link: `leg_${c.side}1`, at: rnd(c.ankle), nearest: nearestOnLine(line, art, box) });
+  });
+  return out;
+}
+
 interface LegChain {
   chain: string;
   side: 'r' | 'l';
@@ -4336,6 +4375,24 @@ export interface StopTouchAboveRootFinding {
   outward: number;
 }
 
+/**
+ * Issue #517: a leg's ankle keypoint lies on none of the leg's art within 1 px along its joint line, as assemble reads
+ * the joint, so `propose` drafted the leg without its ankle cut ({@link anklesOffArt}): `at` the ankle (rig px), `link`
+ * the chain link whose tip it is, and the nearest pixel of the leg's art on that line, or null when the line crosses
+ * none. Handed to {@link lint} by `propose`; the keypoint is not moved onto the art (no value the author did not state).
+ */
+export interface LimbJointOffArtFinding {
+  kind: 'limb-joint-off-art';
+  side: 'r' | 'l';
+  limb: string;
+  keypoint: KeypointName;
+  part: string;
+  from: string;
+  link: string;
+  at: Point;
+  nearest: { distance: number; at: Pt } | null;
+}
+
 export type LintFinding =
   | OffArtFinding
   | OffLockFinding
@@ -4350,7 +4407,8 @@ export type LintFinding =
   | BackHairMassesFinding
   | OverlappingArmsFinding
   | CrossedLimbsFinding
-  | StopTouchAboveRootFinding;
+  | StopTouchAboveRootFinding
+  | LimbJointOffArtFinding;
 
 /** Which rule set read the torso and the sleeve chains, under `--keypoints`. */
 export interface LintBasis {
@@ -4452,10 +4510,12 @@ export function lint(
   P: PartSet,
   spec: { bones: readonly BoneEntry[]; meshes: Readonly<Record<string, MeshSpec>>; regions?: Readonly<Record<string, string>>; motion?: SkeletonSections['motion']; constraints?: readonly ConfigConstraint[]; limbs?: Readonly<Record<string, Limb>>; stops?: readonly ConfigStop[] },
   joints?: RigJoints,
+  drafted: readonly LimbJointOffArtFinding[] = [],
 ): LintResult {
   const { byName } = expand(spec.bones);
   const parts = new Map(P.recs.map((p) => [p.name, p]));
-  const findings: LintFinding[] = [];
+  // Issue #517: what the proposer left uncut and why, first: the finding is the draft's, not a check's over the spec.
+  const findings: LintFinding[] = [...drafted];
   const unknownMeshes: string[] = [];
   // Issue #86: which check read which bone, recorded where each check reads it.
   const read = new Map<string, string[]>([...byName.keys()].map((n) => [n, []]));
@@ -4463,6 +4523,7 @@ export function lint(
     const list = read.get(n);
     if (list !== undefined && !list.includes(check)) list.push(check);
   };
+  for (const f of drafted) readBy(f.link, `limb-joint-off-art on ${f.limb}`);
   for (const [mname, m] of Object.entries(spec.meshes)) {
     const part = parts.get(mname);
     if (part === undefined) {
@@ -4900,6 +4961,8 @@ function findingBones(f: LintFinding, bones: readonly BoneEntry[]): string[] {
     case 'off-art':
     case 'off-lock':
       return [f.bone];
+    case 'limb-joint-off-art':
+      return [f.link];
     case 'hip-not-below-chest':
     case 'hip-not-past-chest':
       return ['hip', 'chest'];
@@ -5073,6 +5136,11 @@ export function basisLines(b: LintBasis): string[] {
  */
 export function lintLine(f: LintFinding): string {
   switch (f.kind) {
+    case 'limb-joint-off-art':
+      return (
+        `LINT ${f.part} at ${pyIntList(f.at)}, the ${f.keypoint} joint and ${f.link}'s tip, lies on none of ${f.limb}'s art within 1 px along its joint line (${offLineFigure(f.nearest)}), ` +
+        `so assemble could not size the ankle's cap (ASSEMBLE_LIMB_JOINT_ON_ART): ${f.limb} is drafted without its ankle cut and ${f.from} stays one part — move the ${f.keypoint} keypoint onto the art of the leg or of ${f.from}, then re-run propose`
+      );
     case 'off-art':
       return `LINT ${f.bone} at ${pyIntList(f.at)} is off the art of mesh ${pyRepr(f.mesh)}`;
     case 'off-lock':

@@ -27,7 +27,7 @@ import { makeInputs } from './src/inputs.ts';
 import { idleKeysOf, isIdleKeys } from './src/rig.ts';
 import { depthSkipLine, exportLayers, figuresPhrase, hiddenLayerLine, implausibleRules, layerFigures, type LayerSet, layerSetDiff, pct, readLayers, readWrapperLayers, ruleSummary, templateLayerNames, templatePsdBytes, times } from './src/layers.ts';
 import { checkImageSize, choosePerson, KEYPOINTS_SPEC, loadKeypoints, type RigJoints, toRigJoints } from './src/keypoints.ts';
-import { basisLines, branchSqueezeLine, checkProposal, compare, compareLines, DEFAULT_GRID_RULE, draftTurn, drawLandmarks, FIGURE_GRID_DIVISOR, FRINGE_STEP_PX, GRID_RULES, type GridRule, HIP_MIN_FRACTION, lint, lintLine, type PartSet, proposeWithBasis, readPartSet, serializeProposal, withTurn, WRIST_ON_PART_PX } from './src/propose.ts';
+import { basisLines, branchSqueezeLine, checkProposal, compare, compareLines, DEFAULT_GRID_RULE, draftTurn, drawLandmarks, FIGURE_GRID_DIVISOR, FRINGE_STEP_PX, GRID_RULES, type GridRule, HIP_MIN_FRACTION, type LimbJointOffArtFinding, lint, lintLine, type PartSet, proposeWithBasis, readPartSet, serializeProposal, withTurn, WRIST_ON_PART_PX } from './src/propose.ts';
 import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, coverageLines, serializeBasis } from './src/diagnostics.ts';
 import { BEND_DEGREES, BEND_WORST_SHARE, DUST_MAX_PX, DUST_MAX_SHARE, IDLE_BOUND_PX, MESH_DRAFT_REPORT, MESH_DRAFT_SPEC, meshDraftStage, MORE_TRIANGLES_FLAG, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
 import { PROVENANCE_FILE, REMESH_SPEC, remeshStage } from './src/remesh.ts';
@@ -1112,8 +1112,8 @@ function parseCanvas(v: string): { w: number; h: number } | null {
   return m === null ? null : { w: Number(m[1]), h: Number(m[2]) };
 }
 
-function printLint(P: PartSet, spec: { bones: CharacterConfig['bones']; meshes: CharacterConfig['meshes']; regions: CharacterConfig['regions']; motion: CharacterConfig['motion']; constraints?: CharacterConfig['constraints'] }, joints?: RigJoints): number {
-  const res = lint(P, spec, joints);
+function printLint(P: PartSet, spec: { bones: CharacterConfig['bones']; meshes: CharacterConfig['meshes']; regions: CharacterConfig['regions']; motion: CharacterConfig['motion']; constraints?: CharacterConfig['constraints'] }, joints?: RigJoints, drafted: readonly LimbJointOffArtFinding[] = []): number {
+  const res = lint(P, spec, joints, drafted);
   // Under --keypoints only: which rule set read the torso and the chains, and on what basis.
   if (res.basis !== undefined) for (const l of basisLines(res.basis)) console.log(l);
   for (const f of res.findings) console.log(lintLine(f));
@@ -1242,7 +1242,7 @@ function cmdPropose(args: string[]): number {
     }
     const cmpPath = flags.get('--compare');
     const cfg = cmpPath === undefined ? null : loadConfig(cmpPath);
-    const { proposal: drafted, basis } = proposeWithBasis(P, joints, wristSnap, gridRule, cloth);
+    const { proposal: drafted, basis, jointsOffArt } = proposeWithBasis(P, joints, wristSnap, gridRule, cloth);
     const fullRun = flags.get('--full');
     const headRun = flags.get('--head');
     const prop =
@@ -1260,7 +1260,7 @@ function cmdPropose(args: string[]): number {
     if (img.head !== null) writePng(join(render, 'landmarks_head.png'), img.head);
     console.log(`wrote proposal.json (${prop.bones.length} bone entries, ${Object.keys(prop.meshes).length} meshes) and render/landmarks.png (+_head) under ${out}`);
     for (const n of prop.notes) console.log(`note: ${n}`);
-    printLint(P, prop, joints);
+    printLint(P, prop, joints, jointsOffArt);
     console.log(basisLine(bfile, out));
     if (cfg !== null) for (const l of compareLines(compare(prop.bones, cfg.bones))) console.log(l);
     return EXIT_OK;
