@@ -33494,7 +33494,7 @@ function runMeshDraftSuite(): number {
 // influence (issue #378)
 // ---------------------------------------------------------------------------
 
-/** The radii the influence suite declares on the cloth fixture: each above its part's farthest vertex (21.1043 and 53.4603 px, measured by the suite's IN02 refusals). */
+/** The radii the influence suite declares on the cloth fixture: each above its part's farthest vertex (21.1043 and 53.4603 px, measured by the suite's IF02 refusals). */
 const INFLUENCE_RADII: Readonly<Record<string, number>> = { skirt: 30, hair_back: 60 };
 
 /** The influence block the suite declares beside each radius: rig-c's example cloth block (AUTHORING §3.4.7), the cell the lattice already had. */
@@ -33554,9 +33554,9 @@ function runInfluenceSuite(): number {
     const front = pair('hair_front');
     const lines = inf.out.split('\n');
 
-    // IN01 — bars 1 and 2: the two parts in the influence mode, each covering no less art than its lattice, the triangles reported.
+    // IF01 — bars 1 and 2: the two parts in the influence mode, each covering no less art than its lattice, the triangles reported.
     say(
-      'IN01_SKIRT_AND_BACK_HAIR_IN_THE_INFLUENCE_MODE_COVER_NO_LESS_ART_THAN_THEIR_LATTICE_AND_THE_MESH_LINE_REPORTS_THE_REACH',
+      'IF01_SKIRT_AND_BACK_HAIR_IN_THE_INFLUENCE_MODE_COVER_NO_LESS_ART_THAN_THEIR_LATTICE_AND_THE_MESH_LINE_REPORTS_THE_REACH',
       lat.status === 0 &&
         inf.status === 0 &&
         covered.every((c) => c.ok) &&
@@ -33568,7 +33568,7 @@ function runInfluenceSuite(): number {
       'issue #378 bars 1 and 2: per part the mode covers, art_coverage not below the lattice\'s and the triangle count beside it; the part left on its lattice writes the row it wrote, and the rig stage prints the influence, reach and lattice lines',
     );
 
-    // IN02 — bar 4: a radius that does not reach the farthest vertex is refused by name with the figure, before rigc.
+    // IF02 — bar 4: a radius that does not reach the farthest vertex is refused by name with the figure, before rigc.
     const shortRoot = join(root, 'short');
     mkdirSync(shortRoot, { recursive: true });
     const short = influenceConfigs(shortRoot, { skirt: 20, hair_back: 30 });
@@ -33577,7 +33577,7 @@ function runInfluenceSuite(): number {
     const skirtLine = reachLines.find((l) => l.includes('config.meshes.skirt.influence.radius')) ?? '';
     const hairLine = reachLines.find((l) => l.includes('config.meshes.hair_back.influence.radius')) ?? '';
     say(
-      'IN02_A_RADIUS_THAT_DOES_NOT_REACH_THE_FARTHEST_VERTEX_IS_REFUSED_BY_NAME_WITH_THE_DISTANCE_AND_EQUAL_IS_NOT_ENOUGH',
+      'IF02_A_RADIUS_THAT_DOES_NOT_REACH_THE_FARTHEST_VERTEX_IS_REFUSED_BY_NAME_WITH_THE_DISTANCE_AND_EQUAL_IS_NOT_ENOUGH',
       shortRun.status === 1 &&
         reachLines.length === 2 &&
         /is 20; vertex \d+ .* is 21\.1043 px from its nearest link \("skirt0_0"\)/.test(skirtLine) &&
@@ -33590,7 +33590,7 @@ function runInfluenceSuite(): number {
       'issue #378 bar 4, as ruled: the radius is declared per part, and the farthest lattice vertex\'s distance to its nearest link (rig-c\'s segmentDistance over its buildSegmentsLattice) is the figure it must exceed — one radius cannot fit both parts here (21.1 and 53.5 px), a pull is 0 at d = radius, so equal is refused, and nothing reaches rigc',
     );
 
-    // IN03 — the one rule: the skirt as rig-c's own segments generator, compiled beside the explicit mesh, is the same mesh.
+    // IF03 — the one rule: the skirt as rig-c's own segments generator, compiled beside the explicit mesh, is the same mesh.
     const rigc = suiteRigc();
     const genDir = join(root, 'rig-generator');
     cpSync(join(root, 'rig-influence'), genDir, { recursive: true });
@@ -33648,13 +33648,13 @@ function runInfluenceSuite(): number {
     writeFileSync(join(linDir, 'rig.json'), JSON.stringify(linear));
     const dLin = diff(ours?.vertices, compile(linDir, join(root, 'c-linear'))?.vertices);
     say(
-      'IN03_THE_EXPLICIT_MESH_IS_THE_MESH_RIG_C_S_OWN_SEGMENTS_GENERATOR_COMPILES_AND_THE_OTHER_SHAPE_IS_SEEN_TO_DIFFER',
+      'IF03_THE_EXPLICIT_MESH_IS_THE_MESH_RIG_C_S_OWN_SEGMENTS_GENERATOR_COMPILES_AND_THE_OTHER_SHAPE_IS_SEEN_TO_DIFFER',
       sameKeys.length === 4 && d3 !== null && d3.bones === 0 && d3.w <= 1e-5 && d3.xy <= 1e-4 && dLin !== null && dLin.w > 1e-3,
       `identical: ${sameKeys.join(', ') || 'none'}; vertices: ${d3 === null ? 'not comparable' : `bone index mismatches ${d3.bones}, max weight difference ${d3.w}, max bind difference ${d3.xy} px`}; against the generator at shape "linear": max weight difference ${dLin === null ? 'not comparable' : dLin.w}`,
       'the ruling on #378: the mesh is computed by rig-c\'s promised buildSegmentsLattice and influenceShares, so it is the mesh rig-c\'s own generator builds — the same lattice and the same bones per vertex, shares within the six-decimal grid\'s step (the segment ends are read off the config\'s landmarks here and off the posed bones there) — and a different pull is visibly different, so the comparison can fail',
     );
 
-    // IN04 — bar 3: folds with physics on, the influence mesh no more than the lattice under the wind and under a hip sway.
+    // IF04 — bar 3: folds with physics on, the influence mesh no more than the lattice under the wind and under a hip sway.
     const wind = join(root, 'wind.json');
     writeFileSync(wind, JSON.stringify({ spec: 'rigc-environment/1', steps: [{ t: 0, wind: [1, 0] }, { t: 1.1, wind: [-1, 0] }, { t: 2.2, wind: [0, 0] }] }));
     const swayed = (mode: string): string => {
@@ -33672,13 +33672,13 @@ function runInfluenceSuite(): number {
     const seen = rows4.some((r) => (r.a?.frames ?? 0) > 0);
     const front4 = JSON.stringify(fl.sway.get('hair_front')) === JSON.stringify(fi.sway.get('hair_front'));
     say(
-      'IN04_WITH_PHYSICS_ON_THE_INFLUENCE_MESH_FOLDS_NO_MORE_THAN_THE_LATTICE_UNDER_THE_WIND_AND_A_HIP_SWAY_THAT_FOLDS_THE_LATTICE',
+      'IF04_WITH_PHYSICS_ON_THE_INFLUENCE_MESH_FOLDS_NO_MORE_THAN_THE_LATTICE_UNDER_THE_WIND_AND_A_HIP_SWAY_THAT_FOLDS_THE_LATTICE',
       rows4.every((r) => r.a !== undefined && r.b !== undefined && r.b.frames <= r.a.frames && r.b.worst <= r.a.worst) && seen && front4,
       `${rows4.map((r) => `${r.k} ${r.p}: lattice ${r.a?.frames ?? '?'} frame(s), worst ${r.a?.worst ?? '?'} triangle(s) -> influence ${r.b?.frames ?? '?'}, worst ${r.b?.worst ?? '?'}`).join('; ')}; the stimulus folds the lattice: ${seen}; hair_front (a lattice in both) folds alike: ${front4}`,
       'issue #378 bar 3: rigc render --folds with the physics left in, (i) the idle under wind +1, -1, then calm and (ii) a hip sway of 60 degrees added in a scratch copy only; the sway is one the lattice is seen to fold under, so the reading is not blind, and the part left on its lattice reads the same on both sides',
     );
 
-    // IN05 — the loader: the block's fields, and a field of the distance rule or another mode beside it, each by name.
+    // IF05 — the loader: the block's fields, and a field of the distance rule or another mode beside it, each by name.
     const robeAs = (entry: Record<string, unknown>): PartsError | null => refusals(() => {
       const c = minimalConfig();
       return parseConfig({ ...c, meshes: { ...(c.meshes as Record<string, unknown>), robe: entry } });
@@ -33700,7 +33700,7 @@ function runInfluenceSuite(): number {
     });
     const nc = notCompared({ robe: { influence: { cell: 8, radius: 20, across: true, max: 4, shape: 'smooth' }, segments: ['chest'] } });
     say(
-      'IN05_THE_INFLUENCE_BLOCK_LOADS_AND_EACH_MISSING_OR_MALFORMED_FIELD_AND_EACH_FOREIGN_FIELD_IS_REFUSED_ONCE_BY_NAME',
+      'IF05_THE_INFLUENCE_BLOCK_LOADS_AND_EACH_MISSING_OR_MALFORMED_FIELD_AND_EACH_FOREIGN_FIELD_IS_REFUSED_ONCE_BY_NAME',
       good === null && outcomes.every((o) => o.ok) && nc.length === 1 && nc[0].mode === 'influence',
       `the block: ${good === null ? 'loads' : codes(good)}; planted: ${outcomes.map((o) => `${o.what} ${o.ok ? 'refused once' : `NOT: ${o.got}`}`).join('; ')}; mesh-draft names it ${nc.map((n) => n.mode).join()}`,
       'issue #378: cell, radius, across, max and shape are each required with no default (rig-c\'s own rule for its influence block), and r, exponent, rule, influences, stray and ribs belong to the distance rule or another mode — beside an influence mesh they would be read by nothing, so each is refused by name',
