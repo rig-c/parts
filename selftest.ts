@@ -459,6 +459,7 @@ import { apply as applyAffine, type ComparedMesh, contourAtBudget, cost, errors,
 import { FIELD_LATTICE_GRID, FIELD_POSES, fieldRegion, REGION_SPACINGS } from './fixtures/localfield.ts';
 import { BASE_SPACINGS, CONTROL, describeWorst, displacement, frameOpenings, kindOf, neighbours, pickAtBudget, type PlacedMask, POSE_PHASE, ranked, regionPoses, regionSpacings, resolveSegments, seamOpening, seamPairs, sineAt, SWEEP_TOLERANCES, testRegion, toWorldPx, variantConfig } from './tools/real_compare.ts';
 import { BEND_DEGREES, BEND_WORST_SHARE, bendAnimationNames, bendAnimations, type BendFigure, bendLinks, CALIBRATED_SENTENCE, candidateMesh, carriedBy, islandsJoin, MORE_TRIANGLES_FLAG, RELATIVE_SENTENCE, DUST_MAX_PX, DUST_MAX_SHARE, dustOf, figureRules, type GateLine, gateVerdict, IDLE_BOUND_PX, jsonValueSpan, MEASURED_SENTENCE, MESH_DRAFT_REPORT, meshDraftStage, NOT_COMPARED_SENTENCE, notCompared, partsNamed, type PartReadings, type Reading, READINGS, splicedConfig, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
+import { type Built, type CheckSide, checkHeldProblems, PROVENANCE_FILE, type RemeshInput, type RemeshPlant, type RemeshProvenance, type RemeshResult, remeshStage, requestHeldProblems, targetProblems } from './src/remesh.ts';
 import { DRAFT_COARSE_GRID, DRAFT_COSTLY_GRID, DRAFT_FIGURE, DRAFT_FINE_GRID, DRAFT_LINKS, DRAFT_SPECK_ALPHA, draftConfig, draftParts, writeDraftFixture, writeDraftFixtureWithContour, writeDraftIslandsFixture } from './fixtures/meshdraft.ts';
 import { pyRound } from './src/round.ts';
 import { COLORS, isSkeletonName, KEYPOINT_NAMES, renderSkeleton, scaledPoints, SKELETON_BASE, SKELETONS, stickScale } from './src/skeleton.ts';
@@ -4563,9 +4564,9 @@ function runCliSuite(): number {
     const helpText = runCli(['--help']).out;
     say(
       'CL20_THE_HELP_NAMES_REQUIREMENTS_UNDER_CHECK_AND_UNDER_BUILD',
-      helpText.split('\n').filter((l) => l.includes('[--requirements <file.json>]')).length === 4 && helpText.split('\n').some((l) => l.trim().startsWith('rig-parts compose') && l.includes('[--requirements <file.json>]')) && helpText.split('\n').some((l) => l.trim().startsWith('rig-parts mesh-draft') && l.includes('[--requirements <file.json>]')) && helpText.includes('--requirements is forwarded to check') && helpText.includes('CHECK_REQUIREMENT_MEASURABLE'),
+      helpText.split('\n').filter((l) => l.includes('[--requirements <file.json>]')).length === 5 && helpText.split('\n').some((l) => l.trim().startsWith('rig-parts compose') && l.includes('[--requirements <file.json>]')) && helpText.split('\n').some((l) => l.trim().startsWith('rig-parts mesh-draft') && l.includes('[--requirements <file.json>]')) && helpText.split('\n').some((l) => l.trim().startsWith('--mesh <entry.json>') && l.includes('[--requirements <file.json>]')) && helpText.includes('--requirements is forwarded to check') && helpText.includes('CHECK_REQUIREMENT_MEASURABLE'),
       `${helpText.split('\n').filter((l) => l.includes('[--requirements <file.json>]')).map((l) => l.trim()).join(' | ')}`,
-      'an agent learns a flag from --help: check, build, compose (issue #74) and mesh-draft (issue #265, which forwards it to its checks) each show it, and the check text names the two codes a requirement line can be refused with',
+      'an agent learns a flag from --help: check, build, compose (issue #74), mesh-draft (issue #265, which forwards it to its checks) and remesh (issue #495, likewise) each show it, and the check text names the two codes a requirement line can be refused with',
     );
     const bareReq = runCli(['check', '--rig', join(dir, 'nowhere'), '--out', join(dir, 'req-usage'), '--requirements']);
     const twiceReq = runCli(['build', '--config', 'c', '--source', 's', '--full', 'f', '--head', 'h', '--out', join(dir, 'req-usage-build'), '--requirements', 'a.json', '--requirements', 'b.json']);
@@ -33490,6 +33491,316 @@ function runMeshDraftSuite(): number {
 }
 
 // ---------------------------------------------------------------------------
+// remesh (issue #495)
+// ---------------------------------------------------------------------------
+
+/** The remesh suite's grid request: the strip's lattice at 12 instead of the fixture's 10 (fixtures/meshdraft.ts). */
+const REMESH_GRID_REQUEST = { grid: DRAFT_COSTLY_GRID, r: 8, segments: ['tail'] };
+
+/**
+ * The suite's own reading of what a revision moved, written apart from `src/remesh.ts` so the preserve assertion's
+ * mutant has a second reader (issue #495, bar 4): every file's SHA-256, every attachment of `rig.json` and every row of
+ * `mesh_report.json` compared, the target's attachment and row skipped. Returns what moved, by name.
+ */
+function remeshMoves(inDir: string, revDir: string, part: string): string[] {
+  const files = (root: string): Map<string, string> => {
+    const out = new Map<string, string>();
+    const walk = (d: string): void => {
+      for (const n of readdirSync(d)) {
+        const p = join(d, n);
+        if (statSync(p).isDirectory()) walk(p);
+        else out.set(p.slice(root.length + 1), createHash('sha256').update(readFileSync(p)).digest('hex'));
+      }
+    };
+    walk(root);
+    return out;
+  };
+  const a = files(inDir);
+  const b = files(revDir);
+  const moved: string[] = [];
+  for (const [k, h] of a) if (k !== 'rig.json' && k !== 'mesh_report.json' && b.get(k) !== h) moved.push(k);
+  for (const k of b.keys()) if (!a.has(k) && k !== PROVENANCE_FILE) moved.push(k);
+  if (!b.has('rig.json')) return [...moved, 'rig.json'];
+  type Skins = Record<string, Record<string, Record<string, unknown>>>;
+  const ra = JSON.parse(readFileSync(join(inDir, 'rig.json'), 'utf8')) as Record<string, unknown>;
+  const rb = JSON.parse(readFileSync(join(revDir, 'rig.json'), 'utf8')) as Record<string, unknown>;
+  for (const k of Object.keys(ra)) if (k !== 'skins' && JSON.stringify(ra[k]) !== JSON.stringify(rb[k])) moved.push(`rig.json ${k}`);
+  for (const [skin, slots] of Object.entries(ra.skins as Skins)) {
+    for (const [slot, atts] of Object.entries(slots)) {
+      for (const [name, att] of Object.entries(atts)) {
+        if (skin === 'default' && slot === part && name === part) continue;
+        if (JSON.stringify(att) !== JSON.stringify((rb.skins as Skins)[skin]?.[slot]?.[name])) moved.push(`skins.${skin}.${slot}.${name}`);
+      }
+    }
+  }
+  const rows = (d: string): Array<Record<string, unknown>> => JSON.parse(readFileSync(join(d, 'mesh_report.json'), 'utf8')) as Array<Record<string, unknown>>;
+  const rowsB = rows(revDir);
+  for (const r of rows(inDir)) if (r.part !== part && JSON.stringify(r) !== JSON.stringify(rowsB.find((x) => x.part === r.part))) moved.push(`row ${String(r.part)}`);
+  return moved;
+}
+
+/** Every file under `root` with its SHA-256, as one string: equal strings are equal trees. */
+function treeDigest(root: string): string {
+  if (!existsSync(root)) return 'absent';
+  const out: string[] = [];
+  const walk = (d: string): void => {
+    for (const n of readdirSync(d).sort()) {
+      const p = join(d, n);
+      if (statSync(p).isDirectory()) walk(p);
+      else out.push(`${p.slice(root.length + 1)} ${createHash('sha256').update(readFileSync(p)).digest('hex')}`);
+    }
+  };
+  walk(root);
+  return out.join('\n');
+}
+
+function runRemeshSuite(): number {
+  section('remesh: one part of a gated rig re-fitted under a requested entry, every other byte kept, a new revision (issue #495)');
+  const { say, bad } = counter();
+  const root = temp('remesh');
+  const rigc = suiteRigc();
+  const runner: RigcRunner = (args) => {
+    const r = spawnSync(rigc, [...args], { encoding: 'utf8', maxBuffer: 1 << 28 });
+    return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+  };
+  const versions = { parts: 'selftest', rigc: 'selftest' };
+  try {
+    // The input: the mesh-draft fixture with its mark meshed as an outline, so the rig holds two meshes — the strip, the
+    // target, and the mark, its neighbour — built by the rig stage as `rig` writes it.
+    const fx = writeDraftFixtureWithContour(join(root, 'fx'), DRAFT_COARSE_GRID);
+    const input = join(root, 'input');
+    rigStage({ config: fx.config, parts: fx.parts, out: input }, runner, join(root, 'input-gate'), () => {});
+    const request = (name: string, entry: unknown): string => {
+      const p = join(root, `${name}.json`);
+      writeFileSync(p, `${JSON.stringify(entry)}\n`);
+      return p;
+    };
+    const stage = (name: string, mesh: string, over: Partial<RemeshInput> = {}, plant: RemeshPlant = {}): { e: PartsError | null; out: string; log: string[]; r: RemeshResult | null } => {
+      const out = join(root, `out-${name}`);
+      const log: string[] = [];
+      let r: RemeshResult | null = null;
+      const e = refusals(() => (r = remeshStage({ rig: input, config: fx.config, parts: fx.parts, part: 'strip', mesh, out, ...over }, runner, rigc, versions, join(root, `scratch-${name}`), (l) => log.push(l), plant)));
+      return { e, out: over.out ?? out, log, r };
+    };
+    const inputDigest = treeDigest(input);
+    const strip = (dir: string): string => JSON.stringify((JSON.parse(readFileSync(join(dir, 'rig.json'), 'utf8')) as { skins: { default: Record<string, Record<string, unknown>> } }).skins.default.strip.strip);
+
+    // RM01 — the positive control, through the CLI: the strip re-fitted on a lattice of 12, everything else the input's.
+    const gridReq = request('grid', REMESH_GRID_REQUEST);
+    const out1 = join(root, 'cli-out');
+    const run1 = runCli(['remesh', '--rig', input, '--config', fx.config, '--parts', fx.parts, '--part', 'strip', '--mesh', gridReq, '--out', out1]);
+    const moves1 = existsSync(out1) ? remeshMoves(input, out1, 'strip') : ['nothing written'];
+    const prov1 = readJsonFile(join(out1, PROVENANCE_FILE)) as RemeshProvenance | null;
+    const hashLines1 = run1.out.split('\n').filter((l) => /^ {2}\S+ +[0-9a-f]{16} {3}[0-9a-f]{16}/.test(l));
+    say(
+      'RM01_A_GRID_REQUEST_REMESHES_THE_STRIP_AND_EVERY_OTHER_BYTE_IS_THE_INPUTS',
+      run1.status === 0 &&
+        moves1.length === 0 &&
+        strip(out1) !== strip(input) &&
+        prov1?.target.before.triangles !== prov1?.target.after.triangles &&
+        prov1?.check.revision.pass === true &&
+        prov1.check.input.measured.join() === prov1.check.revision.measured.join() &&
+        hashLines1.length === readdirSync(input).length - 1 + readdirSync(join(input, 'images')).length &&
+        hashLines1.filter((l) => l.endsWith('(spliced)')).length === 2 &&
+        run1.out.includes('the revision: exit 0') &&
+        treeDigest(input) === inputDigest,
+      `exit ${run1.status}; moved outside the strip: ${moves1.join(', ') || 'nothing'}; strip t ${prov1?.target.before.triangles} -> ${prov1?.target.after.triangles}; check ${prov1?.check.revision.pass} over ${prov1?.check.revision.measured.length} bar(s); ${hashLines1.length} hash line(s), ${hashLines1.filter((l) => l.endsWith('(spliced)')).length} spliced`,
+      'issue #495 bar 1: the target\'s mesh changes, every other file is byte-identical to the input (read here by the suite\'s own hashes, not the stage\'s), rigc\'s gate and check are green with the input\'s bars, the hash table is printed, and the input is untouched',
+    );
+
+    // RM02 — bounds that cannot be met: an auto entry whose smallest angle no triangle reaches.
+    const tight = syntheticPolicy(DRAFT_FIGURE.spacing);
+    const angleReq = request('angle', { auto: { ...withPolicyMotion(tight), targets: { ...tight.targets, minAngle: 59 } }, r: 8, segments: ['tail'] });
+    const s2 = stage('angle', angleReq);
+    const p2 = s2.e?.problems ?? [];
+    say(
+      'RM02_BOUNDS_THAT_CANNOT_BE_MET_ARE_REFUSED_BY_NAME_WITH_THE_MEASURED_FIGURE_AND_THE_INPUT_IS_UNTOUCHED',
+      p2.length >= 1 && p2.every((p) => p.code === 'REMESH_CANDIDATE_REFUSED') && /MQ_MIN_ANGLE[^0-9]*[0-9.]+ against >= 59/.test(p2[0].detail) && !existsSync(s2.out) && treeDigest(input) === inputDigest,
+      `${p2.map(problemLine).join(' | ').slice(0, 400)}; out written: ${existsSync(s2.out)}`,
+      'issue #495 bar 2: the producer\'s own refusal reaches the requester with its code and the figure it measured, nothing is written, and the input\'s bytes are as they were',
+    );
+
+    // RM03 — the provenance, and the same request twice.
+    const a3 = stage('twice-a', gridReq);
+    const b3 = stage('twice-b', gridReq);
+    const prov3 = a3.r === null ? null : (a3.r as RemeshResult).provenance;
+    const inHashes = treeDigest(input).split('\n').map((l) => l.split(' '));
+    const provHashes = prov3?.input.rig.map((r) => [r.path, r.sha256]) ?? [];
+    say(
+      'RM03_THE_PROVENANCE_NAMES_THE_INPUT_HASHES_AND_THE_REQUEST_AND_A_SECOND_REQUEST_WRITES_THE_SAME_BYTES',
+      a3.e === null &&
+        b3.e === null &&
+        treeDigest(a3.out) === treeDigest(b3.out) &&
+        JSON.stringify(provHashes) === JSON.stringify(inHashes) &&
+        JSON.stringify(prov3?.request.mesh) === JSON.stringify(REMESH_GRID_REQUEST) &&
+        prov3?.request.mesh_sha256 === createHash('sha256').update(readFileSync(gridReq)).digest('hex') &&
+        prov3.request.part === 'strip' &&
+        prov3.versions.parts === 'selftest' &&
+        prov3.input.config_sha256 === createHash('sha256').update(readFileSync(fx.config)).digest('hex') &&
+        !readFileSync(join(a3.out, PROVENANCE_FILE), 'utf8').includes(root),
+      `${codes(a3.e)} / ${codes(b3.e)}; trees equal: ${treeDigest(a3.out) === treeDigest(b3.out)}; ${provHashes.length} input hash(es) against the suite's ${inHashes.length}; a path in the provenance: ${existsSync(join(a3.out, PROVENANCE_FILE)) && readFileSync(join(a3.out, PROVENANCE_FILE), 'utf8').includes(root)}`,
+      'issue #495 bar 3: the provenance carries each input file\'s SHA-256 (held here to the suite\'s own), the request as read and its hash, and the versions; it holds no path and no clock, so two runs of one request into two directories write the same bytes',
+    );
+
+    // RM04 — the mutant: a neighbour perturbed after the splice, with the preserve assertion on, and with it taken out.
+    const on4 = stage('perturb-on', gridReq, {}, { perturb: 'mark' });
+    const off4 = stage('perturb-off', gridReq, {}, { perturb: 'mark', skipPreserve: true });
+    const moves4 = off4.e === null ? remeshMoves(input, off4.out, 'strip') : ['nothing written'];
+    say(
+      'RM04_A_PERTURBED_NEIGHBOUR_IS_NAMED_BY_THE_ASSERTION_AND_WITH_THE_ASSERTION_OFF_BY_THE_SUITES_OWN_READING',
+      on4.e !== null &&
+        on4.e.problems.length === 1 &&
+        on4.e.problems[0].code === 'REMESH_PRESERVED' &&
+        on4.e.problems[0].object === 'rig.json skins.default.mark.mark' &&
+        !existsSync(on4.out) &&
+        off4.e === null &&
+        moves4.join() === 'skins.default.mark.mark' &&
+        moves1.length === 0,
+      `assertion on: ${on4.e === null ? 'written' : on4.e.problems.map(problemLine).join(' | ').slice(0, 240)}; assertion off: ${codes(off4.e)}, the suite reads ${moves4.join(', ') || 'nothing'} moved (and nothing on RM01's revision)`,
+      'issue #495 bar 4: a neighbour moved inside the revision is refused by name before anything is written; with the assertion planted out, the suite\'s second reader still names that part, and it names nothing on the clean revision — so neither reader is the only gate',
+    );
+
+    // RM05 — an auto request: the producer's reduction and motion gate, the motion compared in the baseline.
+    const autoReq = request('auto', { auto: withPolicyMotion(syntheticPolicy(DRAFT_FIGURE.spacing)), r: 8, segments: ['tail'] });
+    const s5 = stage('auto', autoReq);
+    const row5 = s5.e === null ? (JSON.parse(readFileSync(join(s5.out, 'mesh_report.json'), 'utf8')) as Array<Record<string, unknown>>).find((r) => r.part === 'strip') : undefined;
+    say(
+      'RM05_AN_AUTO_REQUEST_GOES_THROUGH_THE_REDUCTION_AND_ITS_MOTION_GATE_WITH_THE_MOTION_REPRODUCED_FIRST',
+      s5.e === null && row5?.mode === 'auto' && 'motion_report' in row5 && (s5.r as RemeshResult | null)?.provenance.baseline.reproduced.includes('motion.json') === true && remeshMoves(input, s5.out, 'strip').length === 0,
+      `${codes(s5.e)}; strip row mode ${String(row5?.mode)}, motion report ${row5 !== undefined && 'motion_report' in row5}; baseline ${(s5.r as RemeshResult | null)?.provenance.baseline.reproduced.join(', ') ?? 'none'}`,
+      'an auto entry is built by the rig stage itself — rig-c\'s reduceMesh and the motion gate against its source — and since that gate reads the config\'s idle, the baseline must reproduce the input\'s motion first',
+    );
+
+    // RM06 — the baseline: the target the config does not reproduce is refused; a neighbour it does not reproduce is carried.
+    const nudged = (dir: string, part: string): string => {
+      cpSync(input, dir, { recursive: true });
+      const rig = JSON.parse(readFileSync(join(dir, 'rig.json'), 'utf8')) as { skins: { default: Record<string, Record<string, { uvs: number[] }>> } };
+      rig.skins.default[part][part].uvs[0] += 1 / 1024;
+      writeFileSync(join(dir, 'rig.json'), rigJsonText(rig));
+      return dir;
+    };
+    const target6 = nudged(join(root, 'in-target'), 'strip');
+    const t6 = stage('target-nudged', gridReq, { rig: target6 });
+    const repaired6 = nudged(join(root, 'in-repaired'), 'mark');
+    const r6 = stage('repair', gridReq, { rig: repaired6 });
+    say(
+      'RM06_A_TARGET_THE_CONFIG_DOES_NOT_REPRODUCE_IS_REFUSED_AND_A_NEIGHBOUR_IT_DOES_NOT_REPRODUCE_IS_CARRIED_OVER',
+      t6.e !== null &&
+        t6.e.problems.length === 1 &&
+        t6.e.problems[0].code === 'REMESH_BASELINE_MISMATCH' &&
+        t6.e.problems[0].object === 'rig.json skins.default.strip.strip' &&
+        t6.e.problems[0].detail.includes('uvs[0]') &&
+        !existsSync(t6.out) &&
+        r6.e === null &&
+        remeshMoves(repaired6, r6.out, 'strip').length === 0 &&
+        remeshMoves(input, r6.out, 'strip').join() === 'skins.default.mark.mark',
+      `target nudged: ${t6.e === null ? 'written' : t6.e.problems.map(problemLine).join(' | ').slice(0, 260)}; neighbour nudged: ${codes(r6.e)}, the revision holds the input's mark, which the config's own build does not`,
+      'issue #495\'s "Why": a whole rebuild loses a repair the config does not reproduce. The baseline is held only on the target and the bones; every other part is carried over as the input\'s bytes, the repair included',
+    );
+
+    // RM07 — the closure: a linked mesh borrowing the strip, a deform timeline on it, a target that is not a mesh.
+    const closed = (dir: string, edit: (rig: Record<string, unknown>, motion: Record<string, unknown>) => void): string => {
+      cpSync(input, dir, { recursive: true });
+      const rig = JSON.parse(readFileSync(join(dir, 'rig.json'), 'utf8')) as Record<string, unknown>;
+      const motion = JSON.parse(readFileSync(join(dir, 'motion.json'), 'utf8')) as Record<string, unknown>;
+      edit(rig, motion);
+      writeFileSync(join(dir, 'rig.json'), rigJsonText(rig));
+      writeFileSync(join(dir, 'motion.json'), rigJsonText(motion));
+      return dir;
+    };
+    const linked7 = stage('linked', gridReq, {
+      rig: closed(join(root, 'in-linked'), (rig) => {
+        ((rig.skins as Record<string, Record<string, Record<string, unknown>>>).default.mark as Record<string, unknown>).mark_link = { type: 'linkedmesh', source: 'strip', slot: 'strip' };
+      }),
+    });
+    const deform7 = stage('deform', gridReq, {
+      rig: closed(join(root, 'in-deform'), (_rig, motion) => {
+        (motion.animations as Record<string, Record<string, unknown>>).idle.deform = [{ slot: 'strip', attachment: 'strip', keys: [{ t: 0 }] }];
+      }),
+    });
+    const noMesh7 = stage('no-mesh', gridReq, { part: 'nowhere' });
+    const otherDeform = targetProblems({ skins: { default: { strip: { strip: { type: 'mesh' } } } } }, { animations: { idle: { deform: [{ slot: 'mark', attachment: 'mark', keys: [] }] } } }, { strip: {} }, 'strip');
+    const region7 = targetProblems({ skins: { default: { strip: { strip: { type: 'region' } } } } }, {}, { strip: {} }, 'strip');
+    say(
+      'RM07_A_LINKED_MESH_OR_A_DEFORM_TIMELINE_ON_THE_TARGET_AND_A_TARGET_THAT_IS_NO_MESH_ARE_REFUSED_BY_NAME',
+      linked7.e?.problems.map((p) => `${p.code} ${p.object}`).join() === 'REMESH_TARGET_CLOSED rig.json skins.default.mark.mark_link' &&
+        deform7.e?.problems.map((p) => `${p.code} ${p.object}`).join() === 'REMESH_TARGET_CLOSED motion.json animations.idle.deform[0]' &&
+        noMesh7.e?.problems.map((p) => p.code).join() === 'REMESH_TARGET_MESH,REMESH_TARGET_MESH' &&
+        otherDeform.length === 0 &&
+        region7.map((p) => p.code).join() === 'REMESH_TARGET_MESH' &&
+        region7[0].detail.startsWith('is a region attachment') &&
+        [linked7, deform7, noMesh7].every((s) => !existsSync(s.out)),
+      `linked: ${codes(linked7.e)}; deform: ${codes(deform7.e)}; no such part: ${codes(noMesh7.e)}; a deform on another part: ${otherDeform.length} problem(s); a region: ${region7.map(problemLine).join('')}`,
+      'rig-c/review #41\'s addendum: a linked mesh or a deform timeline is indexed into the vertex list the remesh replaces, so the request is refused rather than producing a partial revision; the same timeline on another part is no closure of this one',
+    );
+
+    // RM08 — the input, the out and the request, each refused before anything is built.
+    mkdirSync(join(root, 'taken'), { recursive: true });
+    const taken8 = stage('taken', gridReq, { out: join(root, 'taken') });
+    const inside8 = stage('inside', gridReq, { out: join(input, 'revision') });
+    const loose = join(root, 'in-loose');
+    cpSync(input, loose, { recursive: true });
+    writeFileSync(join(loose, 'rig.json'), `${JSON.stringify(JSON.parse(readFileSync(join(input, 'rig.json'), 'utf8')), null, 2)}\n`);
+    const loose8 = stage('loose', gridReq, { rig: loose });
+    const bare = join(root, 'in-bare');
+    cpSync(input, bare, { recursive: true });
+    rmSync(join(bare, 'motion.json'));
+    const bare8 = stage('bare', gridReq, { rig: bare });
+    const notJson8 = stage('not-json', request('not-json-src', 0).replace('not-json-src', 'missing'));
+    const array8 = stage('array', request('array', [REMESH_GRID_REQUEST]));
+    const twoModes8 = stage('two-modes', request('two-modes', { ...REMESH_GRID_REQUEST, contour: { tolerance: 1, margin: 1, spacing: 11 } }));
+    const quiet = [inside8, loose8, bare8, notJson8, array8, twoModes8].every((s) => !existsSync(s.out)) && readdirSync(join(root, 'taken')).length === 0 && treeDigest(input) === inputDigest;
+    say(
+      'RM08_A_TAKEN_OR_INSIDE_OUT_A_REFORMATTED_OR_PARTIAL_INPUT_AND_A_REQUEST_THAT_IS_NO_ENTRY_ARE_REFUSED_BY_NAME',
+      taken8.e?.problems[0]?.code === 'REMESH_OUT_FRESH' &&
+        inside8.e?.problems[0]?.code === 'REMESH_OUT_FRESH' &&
+        loose8.e?.problems.map((p) => p.code).join() === 'REMESH_INPUT_WRITTEN' &&
+        bare8.e?.problems.map((p) => p.code).join() === 'REMESH_INPUT_PRESENT' &&
+        notJson8.e?.problems.map((p) => p.code).join() === 'REMESH_MESH_JSON' &&
+        array8.e?.problems.map((p) => p.code).join() === 'REMESH_MESH_JSON' &&
+        (twoModes8.e?.problems ?? []).length > 0 &&
+        (twoModes8.e?.problems ?? []).every((p) => p.code.startsWith('CONFIG_') && p.object.startsWith('config.meshes.strip')) &&
+        quiet,
+      `taken ${codes(taken8.e)}; inside ${codes(inside8.e)}; reformatted ${codes(loose8.e)}; no motion ${codes(bare8.e)}; no file ${codes(notJson8.e)}; an array ${codes(array8.e)}; two modes ${codes(twoModes8.e)}; nothing written, the input untouched: ${quiet}`,
+      'a revision is a new directory, spliced as text from the files rig wrote, and the request is one meshes entry the config loader judges — each is refused by name before rigc runs, and nothing is written',
+    );
+
+    // RM09 — what a request may not move, and what check may not lose, read off the two functions.
+    const built = (bones: unknown, motionText: string, image: number): Built => ({ rig: { bones }, rigText: '', motionText, report: [], image: new Uint8Array([image]) });
+    const same9 = requestHeldProblems(built([{ name: 'a' }], '{"k":1}', 1), built([{ name: 'a' }], '{"k":1}', 1), 'strip');
+    const moved9 = requestHeldProblems(built([{ name: 'a' }], '{"k":1}', 1), built([{ name: 'a' }, { name: 'a_ctl' }], '{"k":2}', 2), 'strip');
+    const side = (measured: string[], notMet: string[]): CheckSide => ({ pass: notMet.length === 0, measured, not_met: notMet, skipped: [], physics: null });
+    const held9 = checkHeldProblems(side(['gate', 'loop'], []), side(['gate', 'loop'], []), []);
+    const lost9 = checkHeldProblems(side(['gate', 'loop'], []), side(['gate'], ['gate']), []);
+    const kept9 = checkHeldProblems(side(['gate', 'loop'], ['loop']), side(['gate', 'loop'], ['loop']), []);
+    say(
+      'RM09_A_REQUEST_THAT_MOVES_A_BONE_A_KEY_OR_THE_IMAGE_AND_A_CHECK_THAT_LOSES_A_BAR_ARE_REFUSED_BY_NAME',
+      same9.length === 0 &&
+        moved9.map((p) => p.object).join() === `rig.json bones,motion.json,images/strip.png` &&
+        moved9.every((p) => p.code === 'REMESH_REQUEST_HELD') &&
+        held9.length === 0 &&
+        lost9.map((p) => `${p.code} ${p.object}`).join() === 'REMESH_CHECK_HELD check bar loop,REMESH_CHECK_HELD check bar gate' &&
+        kept9.length === 0,
+      `request: unchanged ${same9.length}, moved ${moved9.map((p) => p.object).join(', ')}; check: held ${held9.length}, lost ${lost9.map((p) => p.object).join(', ')}, failing on both ${kept9.length}`,
+      'a remesh changes one part\'s mesh: a request that adds a control bone, moves a key or redraws the part is no remesh, and the revision is held to every bar its input measured and met — a bar the input already failed is the input\'s, not the request\'s',
+    );
+
+    // RM10 — the flags.
+    const noMesh = runCli(['remesh', '--rig', input, '--config', fx.config, '--parts', fx.parts, '--part', 'strip', '--out', join(root, 'usage')]);
+    const unknown = runCli(['remesh', '--rig', input, '--config', fx.config, '--parts', fx.parts, '--part', 'strip', '--mesh', gridReq, '--out', join(root, 'usage'), '--grid', '9']);
+    say(
+      'RM10_REMESH_WITHOUT_MESH_OR_WITH_A_FLAG_IT_DOES_NOT_TAKE_IS_A_USAGE_ERROR',
+      noMesh.status === 2 && noMesh.out.includes('USAGE: remesh needs --mesh <value>') && unknown.status === 2 && unknown.out.includes('remesh does not take "--grid"; it takes --rig, --config, --parts, --part, --mesh, --out, --requirements, --idle-keys, --page-edges, --pack-shape') && !existsSync(join(root, 'usage')),
+      `${noMesh.out.split('\n')[0].trim()} | ${unknown.out.split('\n')[0].trim()}`,
+      'the bounds are the entry\'s own fields, so the command takes no bound as a flag: a grid, a tolerance or a target is written in the --mesh file',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+  return bad();
+}
+
+// ---------------------------------------------------------------------------
 // the automatic mesh mode (issue #126, item 2)
 // ---------------------------------------------------------------------------
 
@@ -39770,6 +40081,7 @@ const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number 
   ['scene', runSceneSuite],
   ['chain', runChainSuite],
   ['mesh-draft', runMeshDraftSuite],
+  ['remesh', runRemeshSuite],
   ['readme-loop', runReadmeLoopSuite],
   ['tree', runTreeSuite],
   ['corpus', runCorpusSuite],
@@ -39837,7 +40149,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['check']],
   ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'contour-wiring', 'config', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
-  ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
+  ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'remesh', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
 ];
 
 /**
