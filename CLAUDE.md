@@ -182,6 +182,7 @@ paintings, their See-through runs, the parts and configs the reference produced
 | `bun run typecheck` | `tsc --noEmit` over the paths `tsconfig.json`'s `include` names |
 | `bun run lint` | one rule: `@typescript-eslint/no-explicit-any` as an error |
 | `bun run selftest` | every suite's positive and negative controls on generated fixtures, and the tree rules; `-- --corpus <dir>`, or fetched `examples/*/inputs` (`bun run fetch-examples`), adds the read-only corpus suite |
+| `bun run selftest -- --only <suite>[,<suite>…]` | one squad's own suite while iterating — a partial run exits 2 when green (1 when red), prints `SKIP` for every suite it did not run and never the summary; the full run is the only verdict on the tree. Any other word on the command line is refused by name, exit 2, before a suite starts |
 | `bun run smoke` | the **package** rather than the tree: pack, install into an empty directory, run `--version`, the installed `rigc --version` (the core entry), `layers` (wrapper and PSD), `sheet` and `check` on a generated rig from the install, with four planted broken packages that must go red. Needs a network |
 
 ## The selftest and its fixtures
