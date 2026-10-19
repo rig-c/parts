@@ -14428,7 +14428,7 @@ function runCheckSuite(): number {
     const opf = readJsonFile(join(dir, 'loop-phys-out', 'check.json'));
     const opl = failLine(op.out, 'CHECK_LOOP_CLOSES');
     say(
-      'CH14_A_KEYED_LOOP_THAT_DOES_NOT_CLOSE_STILL_FAILS_WITH_A_PHYSICS_CONSTRAINT_PRESENT',
+      'CK511_A_KEYED_LOOP_THAT_DOES_NOT_CLOSE_STILL_FAILS_WITH_A_PHYSICS_CONSTRAINT_PRESENT',
       op.status === 1 &&
         opl !== null &&
         opl.includes(', its physics constraint(s) left out') &&
@@ -14450,7 +14450,7 @@ function runCheckSuite(): number {
     const cpf = readJsonFile(join(dir, 'phys-out', 'check.json'));
     const withSim = idleEnds(join(dir, 'phys-out'));
     say(
-      'CH15_PHYSICS_ON_A_CLOSED_KEYED_LOOP_PASSES_AND_IS_REPORTED_ON_ITS_OWN_LINE',
+      'CK512_PHYSICS_ON_A_CLOSED_KEYED_LOOP_PASSES_AND_IS_REPORTED_ON_ITS_OWN_LINE',
       cp.status === 0 &&
         cp.out.includes('check: PASS') &&
         failLine(cp.out, 'CHECK_LOOP_CLOSES') === null &&
@@ -14476,7 +14476,7 @@ function runCheckSuite(): number {
       { physics: { p2: { bone: 'b' } }, animations: { idle: { duration: 1, tracks: [{ bone: 'a', property: 'rotate', keys: [] }, { physics: 'p2', property: 'mix', keys: [] }] } } },
     );
     say(
-      'CH16_A_RIG_WITHOUT_PHYSICS_IS_MEASURED_OFF_ITS_OWN_IDLE_RENDER_AND_EVERY_PHYSICS_DECLARATION_IS_LEFT_OUT_OF_A_RIG_WITH_ONE',
+      'CK513_A_RIG_WITHOUT_PHYSICS_IS_MEASURED_OFF_ITS_OWN_IDLE_RENDER_AND_EVERY_PHYSICS_DECLARATION_IS_LEFT_OUT_OF_A_RIG_WITH_ONE',
       plain === null &&
         fig !== null &&
         !('loop_physics' in fig) &&
@@ -19433,7 +19433,7 @@ function runBuildSuite(): number {
     // own: the pose does not move), carrying a record and a note; the same without them; and a field
     // rigc does not read. A physics constraint on the swinging link builds green too; check failed it on
     // CHECK_LOOP_CLOSES (75/255 at t = 1 s, measured) until issue #183, which reads the loop with every
-    // physics constraint left out (CH14-CH16): physics carries state from one frame to the next.
+    // physics constraint left out (CK511-CK513): physics carries state from one frame to the next.
     const sceneCfg = (constraint: Record<string, unknown>): Record<string, unknown> => {
       const c = JSON.parse(JSON.stringify(hang)) as Record<string, unknown>;
       c.bones = [...(c.bones as unknown[]), { name: 'tgt', parent: 'root', at: [skirtBox.x + skirtBox.w, skirtBox.y + skirtBox.h] }];
@@ -21083,7 +21083,7 @@ function runExampleDiagnostics(key: string, ex: string, out: string, say: (name:
     detail = `refused or crashed: ${(err as Error).message.split('\n')[0]}`;
   }
   say(
-    `PR73_EVERY_PROPOSED_BONE_ON_THE_EXAMPLE_HAS_ONE_BASIS_RECORD_AND_LINT_READS_EXACTLY_THE_BONES_ITS_DEFINITION_NAMES[${key}]`,
+    `CH903_EVERY_PROPOSED_BONE_ON_THE_EXAMPLE_HAS_ONE_BASIS_RECORD_AND_LINT_READS_EXACTLY_THE_BONES_ITS_DEFINITION_NAMES[${key}]`,
     ok,
     detail,
     'issue #86 on real art: the record is held to the proposal like the proposal to the loader, and the coverage reports what lint read, not what it might have — every other bone is said not checked, with why',
@@ -21113,7 +21113,7 @@ function runFacelessExample(key: string, ex: string, out: string, dir: string, s
   }
   const fallbackNoted = withFace !== null && withFace.notes.some((n) => n.startsWith('no face part'));
   say(
-    `PR52_THE_TRACKED_PROPOSAL_IS_WRITTEN_IN_KEY_ORDER_AND_VALUE_AND_THE_FALLBACK_STAYS_OFF[${key}]`,
+    `CH901_THE_TRACKED_PROPOSAL_IS_WRITTEN_IN_KEY_ORDER_AND_VALUE_AND_THE_FALLBACK_STAYS_OFF[${key}]`,
     exact.startsWith('identical') && withFace !== null && !fallbackNoted,
     `proposal.json re-serialized (two-space indent, its own key order) against serializeProposal on the built parts: ${exact}; fallback note ${fallbackNoted ? 'WRITTEN' : 'absent'}`,
     "CH06 compares parsed values, which a reordered key passes; the tracked file is the reference's Python output (one-space indent), so the exact comparison is the bytes once both are written the one way this package writes JSON — and the face-less fallback (issue #76) must not fire on an example that has a face",
@@ -21150,10 +21150,10 @@ function runFacelessExample(key: string, ex: string, out: string, dir: string, s
     const refused = asm.status === 0 ? refusals(() => propose(readPartSet(join(vdir, 'rig')))) : null;
     const named = refused?.problems.find((q) => q.code === 'PROPOSE_FACE_PRESENT') ?? null;
     say(
-      `EX02_AN_EXAMPLE_WITH_NO_NECK_PART_AND_ITS_FACE_PLAN_ENTRIES_REMOVED_IS_REFUSED_BY_NAME_NOT_GUESSED[${key}]`,
+      `CH912_AN_EXAMPLE_WITH_NO_NECK_PART_AND_ITS_FACE_PLAN_ENTRIES_REMOVED_IS_REFUSED_BY_NAME_NOT_GUESSED[${key}]`,
       asm.status === 0 && refused !== null && refused.problems.length === 1 && named !== null && named.detail.includes('but no "neck" part'),
       `${detail}; its plan takes no head-run "neck"; propose -> ${codes(refused)}${named === null ? '' : `: …${named.detail.slice(named.detail.indexOf('the face-less fallback'))}`}`,
-      "issue #76's fallback reads a face box off the head run's hair and neck; on an example with no neck part (PR53 is the same removal on the examples that have one) there is nothing to read it from, so the proposal must stop with the rule and the part it lacks, never place a head from the hair alone",
+      "issue #76's fallback reads a face box off the head run's hair and neck; on an example with no neck part (CH902 is the same removal on the examples that have one) there is nothing to read it from, so the proposal must stop with the rule and the part it lacks, never place a head from the hair alone",
     );
     return;
   }
@@ -21179,7 +21179,7 @@ function runFacelessExample(key: string, ex: string, out: string, dir: string, s
     }
   }
   say(
-    `PR53_THE_EXAMPLE_WITH_ITS_FACE_PLAN_ENTRIES_REMOVED_GETS_A_PROPOSAL_FROM_THE_FALLBACK[${key}]`,
+    `CH902_THE_EXAMPLE_WITH_ITS_FACE_PLAN_ENTRIES_REMOVED_GETS_A_PROPOSAL_FROM_THE_FALLBACK[${key}]`,
     ok,
     detail,
     "issue #76's figure on real art: the decomposer found hair and a neck and no face; the proposal is made, says first that its face box is a guess and from what, makes no eye, brow or mouth bone, and loads as a config — the distances are printed, not barred: two examples are the ratios' whole sample",
@@ -21525,7 +21525,7 @@ function runChainSuite(): number | null {
         const wantFail = key === 'scarf';
         const byBar = row?.ratio !== null && row?.ratio !== undefined && (wantFail ? row.ratio < TIP_RATIO_FLOOR : row.ratio >= TIP_RATIO_FLOOR);
         say(
-          `${wantFail ? 'CK91_A_TIP_THAT_TRULY_DOES_NOT_OUT_TRAVEL_ITS_ROOT_FAILS_TIP_OVER_ROOT_AT_EVERY_RENDER_SIZE' : 'CK90_A_HEM_UNDER_A_FIFTH_OF_A_FRAME_PIXEL_READS_ONE_TIP_OVER_ROOT_AT_EVERY_RENDER_SIZE_AND_PASSES_BY_THE_BAR'}[${key}]`,
+          `${wantFail ? 'CH906_A_TIP_THAT_TRULY_DOES_NOT_OUT_TRAVEL_ITS_ROOT_FAILS_TIP_OVER_ROOT_AT_EVERY_RENDER_SIZE' : 'CH905_A_HEM_UNDER_A_FIFTH_OF_A_FRAME_PIXEL_READS_ONE_TIP_OVER_ROOT_AT_EVERY_RENDER_SIZE_AND_PASSES_BY_THE_BAR'}[${key}]`,
           vRig.status === 0 &&
             vChk.status === (wantFail ? 1 : 0) &&
             vTip?.instrument === 'geometry' &&
@@ -21538,7 +21538,7 @@ function runChainSuite(): number | null {
             (!wantFail || ((failLine(vChk.out, 'CHECK_TIP_OVER_ROOT')?.includes('part "bottomwear"') ?? false) && (failLine(vChk.out, 'CHECK_TIP_OVER_ROOT')?.includes('the root travels with the breath (') ?? false) && (failLine(vChk.out, 'CHECK_TIP_OVER_ROOT')?.includes('it is carried by `chest`') ?? false))),
           `${variant}: rig exit ${vRig.status}, check exit ${vChk.status}, TIP_OVER_ROOT ${vTip?.status} (instrument ${vTip?.instrument}), bottomwear root ${row?.root_rig_px} tip ${row?.tip_rig_px} rig px, ratio ${row?.ratio} against ${TIP_RATIO_FLOOR}; from the geometry at --max 620 and 660: ${atMax.map((t, i) => `${[620, 660][i]}: root ${t?.root} tip ${t?.tip}`).join('; ')} (${atMax[0]?.root === atMax[1]?.root && atMax[0]?.tip === atMax[1]?.tip ? 'bit-identical' : 'DIFFERENT'})${wantFail ? `; ${failLine(vChk.out, 'CHECK_TIP_OVER_ROOT')?.trim().slice(-330) ?? 'no CHECK_TIP_OVER_ROOT line'}` : ''}`,
           wantFail
-            ? "the planted negative of CK90, on real art: scarf's short skirt on the proposal's lattice with the chest segment the proposer drafted before issue #262. Its art in the lower half truly travels less than 1.4725 times the upper half's — the part rendered alone at --max 8000 converged on about 1.27 from above at the breath of issue #118 — and the pixel reading had passed it at 640 (4.537) by the grid; the geometric one fails it at every size, naming the part and, since #262, the bone that carries its root (the line's planted positive on real art)"
+            ? "the planted negative of CH905, on real art: scarf's short skirt on the proposal's lattice with the chest segment the proposer drafted before issue #262. Its art in the lower half truly travels less than 1.4725 times the upper half's — the part rendered alone at --max 8000 converged on about 1.27 from above at the breath of issue #118 — and the pixel reading had passed it at 640 (4.537) by the grid; the geometric one fails it at every size, naming the part and, since #262, the bone that carries its root (the line's planted positive on real art)"
             : "issue #118's reproduction: the same rig the pixel reading failed at --max 620, 640 and 650 and passed elsewhere; from the geometry the figure is one number at every render size and the bar decides it, not the grid",
         );
       }
@@ -21556,7 +21556,7 @@ function runChainSuite(): number | null {
       const shownClosed = blinkFig?.idle_frames_closed ?? [];
       const windows = (blinkFig?.closed ?? []).map((c) => /from ([\d.]+)s to ([\d.]+)s$/.exec(c)).map((m) => (m === null ? null : [Number(m[1]), Number(m[2])] as const));
       say(
-        `CK20_THE_IDLE_FRAMES_SHOW_THE_CLOSED_EYE_AND_EACH_ONE_LIES_IN_THE_HOLD[${key}]`,
+        `CH904_THE_IDLE_FRAMES_SHOW_THE_CLOSED_EYE_AND_EACH_ONE_LIES_IN_THE_HOLD[${key}]`,
         shownClosed.length > 0 && windows.length > 0 && windows.every((w) => w !== null && shownClosed.every((k) => k / IDLE_FPS >= w[0] - 1e-9 && k / IDLE_FPS <= w[1] + 1e-9)) && blinkFig?.hole_px === 0,
         `idle_frames_closed ${JSON.stringify(shownClosed)} at ${IDLE_FPS} fps (${shownClosed.map((k) => (k / IDLE_FPS).toFixed(6)).join(', ') || 'none'} s) against ${(blinkFig?.closed ?? []).join('; ') || 'no closed window'}; hole ${blinkFig?.hole_px} px`,
         "issue #32: the loop is encoded from these frames, so a blink no frame lands in is a blink the idle frames, the contact sheet and the README's animation never show; with BLINK.hold at one frame or more (RG493) every example's blink.t has one",
@@ -33018,7 +33018,7 @@ function runPublicScenes(green: ReadonlyMap<string, string>, dir: string, say: (
   const demo = green.get(FOLDER.demo);
   const sample = green.get(FOLDER.sample);
   if (demo === undefined || sample === undefined) {
-    say('SC30_DEMO_AND_SAMPLE_SIDE_BY_SIDE_WITH_A_GENERATED_PLATE_GATE_GREEN_AND_CHECK', false, `green builds: ${Object.values(FOLDER).map((f) => `${f} ${green.has(f) ? 'green' : 'NOT green'}`).join(', ')}; reference-demo and reference-sample are both required`, 'the chain ran, so both public examples were fetched and must have built green');
+    say('CH907_DEMO_AND_SAMPLE_SIDE_BY_SIDE_WITH_A_GENERATED_PLATE_GATE_GREEN_AND_CHECK', false, `green builds: ${Object.values(FOLDER).map((f) => `${f} ${green.has(f) ? 'green' : 'NOT green'}`).join(', ')}; reference-demo and reference-sample are both required`, 'the chain ran, so both public examples were fetched and must have built green');
     return;
   }
   const sd = join(dir, 'scenes');
@@ -33069,14 +33069,14 @@ function runPublicScenes(green: ReadonlyMap<string, string>, dir: string, say: (
   const demoSlots = (readJsonAt(join(demo, 'rig', 'rig.json')) as RigSpec).slots.map((s) => `demo:${s.name}`);
   const sampleSlots = (readJsonAt(join(sample, 'rig', 'rig.json')) as RigSpec).slots.map((s) => `sample:${s.name}`);
   say(
-    'SC30_DEMO_AND_SAMPLE_SIDE_BY_SIDE_WITH_A_GENERATED_PLATE_GATE_GREEN_AND_CHECK',
+    'CH907_DEMO_AND_SAMPLE_SIDE_BY_SIDE_WITH_A_GENERATED_PLATE_GATE_GREEN_AND_CHECK',
     side.status === 0 && sideLeft.length === 0 && sideSlots.join(',') === [PLATE, ...demoSlots, ...sampleSlots].join(',') && rootMiss.length === 0 && rootRegions.length > 0,
     `canvas ${W + W2}x${Math.max(H, H2)}, sample at [${W}, 0]: exit ${side.status}; regions on root ${rootRegions.join(', ') || 'none'} moved by the hand shift ${rootMiss.length === 0 ? '(demo -W2/2 = ' + String(-W2 / 2) + ', sample W/2 = ' + String(W / 2) + ')' : rootMiss.join('; ')}; ${side.out.split('\n').filter((l) => /rigc build --profile|assertions: /.test(l) && l.startsWith('[compose]')).map((l) => l.replace('[compose]', '').trim()).join(' | ')}; ${sideSlots.length} slot(s), the plate first; unprefixed ${sideLeft.length === 0 ? 'none' : sideLeft.slice(0, 3).join('; ')}; ${sceneBarLines(side.out, join(sideOut, 'check'))}`,
     "issue #74 §4: two published characters bound into one rig on one canvas with a generated plate (provenance generated) — rigc's gate on both its runs, and check's every bar measured or named SKIP with its reason (without a parts.json the bars that read See-through tags have nothing to read)",
   );
   const reqLines = side.out.split('\n').filter((l) => /^\[check\] {3}(DEMO|SAMPLE)_SWAY: /.test(l)).map((l) => l.replace('[check]', '').trim().slice(0, 200));
   say(
-    'SC31_A_REQUIREMENTS_FILE_NAMING_BOTH_CHARACTERS_BONES_IS_MEASURED_THROUGH_THE_COMPOSED_RIG',
+    'CH908_A_REQUIREMENTS_FILE_NAMING_BOTH_CHARACTERS_BONES_IS_MEASURED_THROUGH_THE_COMPOSED_RIG',
     reqLines.length === 2 && reqLines.every((l) => / PASS — /.test(l)),
     `${reqs.map((r) => `${r.name} on ${r.bone} within [${r.lo_degrees}, ${r.hi_degrees}]`).join('; ')} -> ${reqLines.join(' | ') || 'no requirement lines'}`,
     "issue #74 §3 and §4: --requirements names a:bone and b:bone (#93); each bar is its config's first chain amplitude plus half a degree, read from the input, so the measurement and not a copied figure decides",
@@ -33093,7 +33093,7 @@ function runPublicScenes(green: ReadonlyMap<string, string>, dir: string, say: (
   const interSlots = compiledSlots(join(interOut, 'check', 'build'));
   const at = interSlots.indexOf(`sample:${firstMesh}`);
   say(
-    'SC32_SAMPLES_FIRST_MESH_SLOT_DRAWN_BETWEEN_DEMOS_FIRST_TWO_SLOTS_GATES_GREEN',
+    'CH909_SAMPLES_FIRST_MESH_SLOT_DRAWN_BETWEEN_DEMOS_FIRST_TWO_SLOTS_GATES_GREEN',
     inter.status === 0 && at === 1 && interSlots[0] === demoSlots[0] && interSlots[2] === demoSlots[1] && interSlots.length === demoSlots.length + sampleSlots.length,
     `the rule: sample's first mesh slot ("${firstMesh}") between demo's first two ("${demoSlots[0]}", "${demoSlots[1]}"), overlapping by ${W2 / 2} px; exit ${inter.status}; compiled slots 0..3: ${interSlots.slice(0, 4).join(', ')} (of ${interSlots.length}); ${sceneBarLines(inter.out, join(interOut, 'check'))}`,
     'issue #74 §4: one declared slot of one character drawn between the other\'s, read off the compiled skeleton by index; the slot is chosen by a stated rule, not by looking at the art',
@@ -33107,7 +33107,7 @@ function runPublicScenes(green: ReadonlyMap<string, string>, dir: string, say: (
     const diffs = r.status === 0 ? sceneIdentityDiffs(build, o, key) : [`exit ${r.status}: ${lastLines(r.out, 2).join(' | ')}`];
     identities.push([key, diffs]);
     say(
-      `SC33_ONE_EXAMPLE_AT_ITS_OWN_STAGE_COMPOSES_TO_ITS_BUILD_RENAMED_ONLY[${key}]`,
+      `CH910_ONE_EXAMPLE_AT_ITS_OWN_STAGE_COMPOSES_TO_ITS_BUILD_RENAMED_ONLY[${key}]`,
       r.status === 0 && diffs.length === 0,
       diffs.length === 0
         ? `exit 0; rig.json, motion.json, ${readdirSync(join(build, 'rig', 'images')).length} image(s), the atlas, the packed page and every idle frame byte-identical once ${key}: and ${key}. are taken off; skeleton.json and ${RIGC_MODEL_DOCUMENT} equal as values but for the "path" Spine writes where an attachment's name ("${key}:x") is not its region's ("${key}.x"), and the model's spine.sha256, each side's the sha256 of its own skeleton.json`
@@ -33132,10 +33132,10 @@ function runPublicScenes(green: ReadonlyMap<string, string>, dir: string, say: (
     crossDiffs = sceneIdentityDiffs(sample, demoAlone, 'demo');
   }
   say(
-    'SC34_THE_IDENTITY_COMPARATOR_NAMES_A_NUDGED_WEIGHT_A_FLIPPED_PAGE_BYTE_AND_ANOTHER_BUILD',
+    'CH911_THE_IDENTITY_COMPARATOR_NAMES_A_NUDGED_WEIGHT_A_FLIPPED_PAGE_BYTE_AND_ANOTHER_BUILD',
     plantedDiffs.some((d) => d.startsWith('rig/rig.json')) && plantedDiffs.some((d) => d.startsWith('page ')) && crossDiffs.length > 0,
     `nudged copy -> ${plantedDiffs.map((d) => d.slice(0, 60)).join(' | ') || 'nothing named'}; demo alone against sample's build -> ${crossDiffs.length} difference(s)`,
-    'SC33 passes when nothing differs; this is the half that shows a difference would be found',
+    'CH910 passes when nothing differs; this is the half that shows a difference would be found',
   );
   rmSync(sd, { recursive: true, force: true });
 }
@@ -37214,7 +37214,7 @@ function runAutoMeshExamplesSuite(): number | null {
     return null;
   }
   const { say, bad } = counter();
-  if (!exampleInputsAtPin(['reference-demo'], say, 'AM900_THE_FETCHED_EXAMPLE_INPUTS_MATCH_THE_PINNED_TREE')) return bad();
+  if (!exampleInputsAtPin(['reference-demo'], say, 'AX900_THE_FETCHED_EXAMPLE_INPUTS_MATCH_THE_PINNED_TREE')) return bad();
   const dir = temp('auto-demo');
   try {
     const out = join(dir, 'asm');
@@ -37238,7 +37238,7 @@ function runAutoMeshExamplesSuite(): number | null {
     const row = rows.find((r) => r.part === 'neck') as AutoMeshReport | undefined;
     const gate = log.filter((l) => l.includes('rigc ') && l.includes('exit'));
     say(
-      'AM29_THE_DEMOS_NECK_IN_AUTO_UNDER_THE_STATED_POLICY_IS_ACCEPTED_AND_GATED_GREEN_WITH_FEWER_VERTICES_THAN_ITS_SOURCE',
+      'AX01_THE_DEMOS_NECK_IN_AUTO_UNDER_THE_STATED_POLICY_IS_ACCEPTED_AND_GATED_GREEN_WITH_FEWER_VERTICES_THAN_ITS_SOURCE',
       e === null &&
         row?.mode === 'auto' &&
         gate.length > 0 &&

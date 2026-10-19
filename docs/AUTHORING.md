@@ -3620,7 +3620,7 @@ examples `rig.json`, `motion.json`, every image, the atlas, the packed page and
 every idle frame are byte-identical once `<id>:` and `<id>.` are taken off, and
 `skeleton.json` and `skeleton.model.json` equal as values but for Spine's `path`
 and the model's `spine.sha256`, which on each side is the sha256 of its own
-`skeleton.json` and so changes with the names (selftest `SC33`).
+`skeleton.json` and so changes with the names (selftest `CH910`).
 
 **Not offered.** Reconciling two `rig_scale`s (one is required; `scale` sizes a
 character, it does not resample its art); a non-uniform scale, a flip or a rotation
