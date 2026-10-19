@@ -442,10 +442,14 @@ selftest and CI do; `check.json`'s `rigc_entry` records which one gated a build.
 
 ## Licence posture
 
-rig-parts is MIT, and it depends on rig-c, whose output is Spine skeleton data:
-using what it produces in a product requires a Spine Editor licence, as any Spine data
-does. Neither package installs Esoteric Software's `spine-core` any more; this
-repository uses it in development, for the round trip in its selftest and CI. [NOTICE.md](NOTICE.md) records that chain and every other
+rig-parts is MIT. It writes rig-c's input, and rig-c writes Spine skeleton data. If a
+product integrates a Spine Runtime to play that data, the integration is under Esoteric
+Software's Spine Runtimes License: permitted under Section 2 of the Spine Editor License
+Agreement, or otherwise on the condition that each user of the product obtains their own
+Spine Editor license. What those terms turn on is the integration, as rig-c's
+[NOTICE.md](https://github.com/rig-c/core/blob/main/NOTICE.md) states it, not the data as
+a file. Neither package installs `spine-core`; this repository uses it in development,
+for the round trip in its selftest and CI. [NOTICE.md](NOTICE.md) records that chain and every other
 third-party term this package touches, See-through's included.
 
 ## Development

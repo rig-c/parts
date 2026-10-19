@@ -75,14 +75,16 @@ terms and not a term of this project:
 
 1. What rig-parts produces is input to rig-c, whose output **is Spine
    skeleton data**.
-2. Playing Spine skeleton data in a product requires a Spine Runtime, and the
-   Spine Runtimes License requires **each user of such a product to own a
-   Spine Editor license**.
-3. rig-c no longer installs `spine-core`, and rig-parts does not either;
-   the obligation in 2 attaches to the Spine skeleton data rig-c writes,
-   which the stages of rig-parts that call it produce, and to `spine-core`
-   wherever it is installed beside them — this repository's development
-   dependency included.
+2. A product that plays it with **a Spine Runtime** has integrated the Spine
+   Runtimes; what the terms turn on is **the integration**. Integrating a Spine
+   Runtime into a product is permitted **under Section 2 of the Spine Editor
+   License Agreement**, or otherwise on the condition that **each user of the
+   product obtains their own Spine Editor license** and the product carries the
+   Runtimes licence and copyright notice.
+3. rig-c does not install `spine-core`, and rig-parts does not either. The terms
+   in 2 apply where a Spine Runtime is integrated — a product that plays the data
+   with one, and this repository, whose development dependency it is — and
+   nothing in this chain attaches to the skeleton data as a file.
 
 rig-parts also imports rig-c's own modules directly, by deep path: its PNG codec
 (`tools/plate.ts`, `src/png.ts`), its 5x7 label font (`tools/font5x7.ts`) and
