@@ -3525,7 +3525,7 @@ export function clothRow(chain: { tip: string; root: string; links: number; leng
   const speeds: number[] = [];
   for (let i = 1; i < pts.length; i++) {
     const dt = track.times[i] - track.times[i - 1];
-    speeds.push(dt > 0 ? Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]) / dt : Infinity);
+    speeds.push(dt > 0 ? edgeLength(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]) / dt : Infinity);
   }
   let s = speeds.length;
   while (s > 0 && speeds[s - 1] < floor) s--;
