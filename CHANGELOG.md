@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.41.0](https://github.com/rig-c/parts/compare/v1.40.0...v1.41.0) (2026-10-19)
+
+
+### Features
+
+* **rig:** an influence mesh mode for cloth and hair, weighted by rig-c's own segments rule ([#514](https://github.com/rig-c/parts/issues/514)) ([c46083e](https://github.com/rig-c/parts/commit/c46083e47afcf2efcdb36f0025e35f50e0e84418))
+
 ## [1.40.0](https://github.com/rig-c/parts/compare/v1.39.0...v1.40.0) (2026-10-19)
 
 
