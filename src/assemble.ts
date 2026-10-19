@@ -104,7 +104,7 @@ import { type Problem, refuseIfAny } from './errors.ts';
 import { figuresPhrase, implausibleRules, type Layer, type LayerFigures, layerFigures, type LayerSet, NEAR_WHITE_MIN, OPAQUE_ALPHA_ABOVE, ruleSummary } from './layers.ts';
 import { padToSquare, squarePad } from './inputs.ts';
 import { type CapRecord, type LimbRecord, PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, type SceneRecord, type SingleRunPad } from './parts.ts';
-import { assignCrossedLimbs, assignOverlappingHands, type BonePlace, bonePlaces, capBox, coveredRadius, type CutPlacement, featherWeight, halfWidthAbout, inDisc, jointLine, type JointLine, jointOffsets, limbPolyline, limbRun, luma601, nearestLimb, pastJoint, placeCut, segmentOf } from './limbs.ts';
+import { assignCrossedLimbs, assignOverlappingHands, type BonePlace, bonePlaces, capBox, coveredRadius, type CutPlacement, featherWeight, halfWidthAbout, inDisc, jointLine, type JointLine, jointOffsets, limbPolyline, limbRun, luma601, nearestLimb, nearestOnLine, offLineFigure, pastJoint, placeCut, segmentOf } from './limbs.ts';
 import {
   alphaComposite,
   connectedComponents,
@@ -3000,7 +3000,7 @@ function cutLimbs(
         problems.push({
           code: 'ASSEMBLE_LIMB_JOINT_ON_ART',
           object,
-          detail: `the joint, "${sg.bone}"'s origin at [${line.at.join(', ')}], lies on none of the limb's art within 1 px along its joint line, so the limb has no width there to size the cap by; a bone origin on the limb's art (alpha above ${OPAQUE_ALPHA_ABOVE}) is required — move the bone onto the joint`,
+          detail: `the joint, "${sg.bone}"'s origin at [${line.at.join(', ')}], lies on none of the limb's art within 1 px along its joint line (${offLineFigure(nearestOnLine(line, art, [0, 0, W - 1, H - 1]))}), so the limb has no width there to size the cap by; a bone origin on the limb's art (alpha above ${OPAQUE_ALPHA_ABOVE}) is required — move the bone onto the joint`,
         });
         return;
       }

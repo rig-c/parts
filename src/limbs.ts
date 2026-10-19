@@ -105,6 +105,7 @@
  *   crossing.
  */
 import type { BoneEntry, Limb, LimbSplit } from './config.ts';
+import { pyRound } from './round.ts';
 
 export type Pt = [number, number];
 
@@ -315,6 +316,35 @@ export function limbRun(line: JointLine, art: (x: number, y: number) => boolean,
     }
   }
   return runOfOffsets(ts);
+}
+
+/**
+ * The pixel of the limb's art on a joint line nearest the joint (issue #517):
+ * among the pixels {@link limbRun} reads (centre within half a pixel of the
+ * line), the one whose offset along the line is smallest in size — that
+ * distance from the joint, and the pixel; the first in row order wins a tie.
+ * Null when the line crosses none of the art. Where {@link limbRun} is null
+ * this is how far off the art the joint sits along its own line, the figure
+ * `ASSEMBLE_LIMB_JOINT_ON_ART` and propose's `limb-joint-off-art` LINT print.
+ */
+export function nearestOnLine(line: JointLine, art: (x: number, y: number) => boolean, box: readonly [number, number, number, number]): { distance: number; at: Pt } | null {
+  const [ax, ay] = line.axis;
+  let best: { distance: number; at: Pt } | null = null;
+  for (let y = box[1]; y <= box[3]; y++) {
+    for (let x = box[0]; x <= box[2]; x++) {
+      const dx = x + 0.5 - line.at[0];
+      const dy = y + 0.5 - line.at[1];
+      if (Math.abs(dx * ax + dy * ay) > 0.5 || !art(x, y)) continue;
+      const d = Math.abs(-dx * ay + dy * ax);
+      if (best === null || d < best.distance) best = { distance: d, at: [x, y] };
+    }
+  }
+  return best;
+}
+
+/** {@link nearestOnLine}'s figure as the refusal and the LINT word it: the pixel and its distance to 3 places, or that the line crosses none of the art. */
+export function offLineFigure(n: { distance: number; at: Pt } | null): string {
+  return n === null ? 'the line crosses none of it' : `the nearest of it on that line is the pixel [${n.at.join(', ')}], ${pyRound(n.distance, 3)} px from the joint`;
 }
 
 /** The run through 0 of the offsets `ts` along a line ({@link limbRun}): sorted, the nearest within 1 px, grown while neighbours are at most 1.5 apart. Sorts `ts` in place. */

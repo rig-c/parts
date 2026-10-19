@@ -11874,6 +11874,45 @@ function runLegChainCases(dir: string, Pe: PartSet, Je: RigJoints, se: Proposal,
     `r_knee unlisted: ${legBones(oneLeg).map((c) => `${c} ${boneAt(oneLeg.bones, c)}`).join(', ')}, ${JSON.stringify(oneLeg.notes.find((n) => n.startsWith('legs (full:legwear): one')))}; r_ankle off the art: ${legBones(offAnkle).length} chain(s), ${JSON.stringify(offAnkle.notes.find((n) => n.startsWith('legs: ')))}`,
     'a leg is placed from its own three joints or not at all, as an arm is; where a complete leg ends on no legwear part the joints do not say which part it moves, so nothing is drafted and the note names the ankle and the tolerance it missed',
   );
+
+  // PR525 — issue #517: a shoe layer `shoes` (full:footwear) on the legs-apart figure, the right shoe x 80..95 and the
+  // left x 104..119, y 270..289 (2 x 16 x 20 = 640 px). Both ankles, (88, 285) and (112, 285), lie on it and on their
+  // leg's art, so the feet are drafted as before. The mutant moves l_knee to (122, 230) and l_ankle to (122, 285): the
+  // ankle is 5 px right of the left leg (x 106..117), so the leg is still bound to `legs`, and 3 px right of the left
+  // shoe, so it still binds `shoes`; but the shin bone is vertical, so the joint line is y = 285 (pixel rows 284 and
+  // 285), and the leg_l art on it ends at x 119 — the pixel centre 119.5, 2.5 px from the joint, over the 1 px the cap
+  // reads. Row 284 is read first, so the pixel is [119, 284]. No foot is drafted for either leg (one shoe layer), and
+  // the LINT names foot_l with that distance; nothing is moved onto the art.
+  const SHOES: ProposeFixturePart = { name: 'shoes', from: 'full:footwear', x: 80, y: 270, w: 40, h: 20, colour: [60, 40, 30], rects: [[80, 270, 16, 20], [104, 270, 16, 20]] };
+  const dShoes = join(dir, 'legs-shoes');
+  writeProposeFixture(dShoes, [...POSES.standing.parts, LEGS_APART, SHOES], POSES.standing.rig);
+  const Ps = readPartSet(dShoes);
+  const shod = proposeWithBasis(Ps, Ja, null, 'part');
+  const offJ = poseJoints('standing', (k) => {
+    ankles(k);
+    k.people[0].joints.l_knee = { state: 'observed', at: [122, 230] };
+    k.people[0].joints.l_ankle = { state: 'observed', at: [122, 285] };
+  });
+  const unshod = proposeWithBasis(Ps, offJ, null, 'part');
+  const offLint = lint(Ps, unshod.proposal, offJ, unshod.jointsOffArt).findings.filter((f) => f.kind === 'limb-joint-off-art').map(lintLine);
+  const wantLint =
+    'LINT foot_l at [122, 285], the l_ankle joint and leg_l1\'s tip, lies on none of leg_l\'s art within 1 px along its joint line (the nearest of it on that line is the pixel [119, 284], 2.5 px from the joint), ' +
+    'so assemble could not size the ankle\'s cap (ASSEMBLE_LIMB_JOINT_ON_ART): leg_l is drafted without its ankle cut and shoes stays one part — move the l_ankle keypoint onto the art of the leg or of shoes, then re-run propose';
+  say(
+    'PR525_AN_ANKLE_OFF_ITS_LEG_S_ART_ALONG_THE_JOINT_LINE_DRAFTS_THE_LEGS_WITHOUT_THE_FOOT_CUT_AND_A_LINT_NAMES_THE_DISTANCE',
+    limbText(shod.proposal, 'leg_r') === 'thigh_r legs leg_r0 | shin_r legs leg_r1 knee | foot_r shoes foot_r ankle' &&
+      limbText(shod.proposal, 'leg_l') === 'thigh_l legs leg_l0 | shin_l legs leg_l1 knee | foot_l shoes foot_l ankle' &&
+      shod.jointsOffArt.length === 0 &&
+      limbText(unshod.proposal, 'leg_r') === 'thigh_r legs leg_r0 | shin_r legs leg_r1 knee' &&
+      limbText(unshod.proposal, 'leg_l') === 'thigh_l legs leg_l0 | shin_l legs leg_l1 knee' &&
+      !unshod.proposal.bones.some((b) => 'name' in b && b.name.startsWith('foot_')) &&
+      'shoes' in unshod.proposal.regions &&
+      offLint.length === 1 &&
+      offLint[0] === wantLint &&
+      refusals(() => checkProposal(Ps, unshod.proposal)) === null,
+    `on the shoes: ${limbText(shod.proposal, 'leg_r')}; ${limbText(shod.proposal, 'leg_l')}, ${shod.jointsOffArt.length} off; l_ankle at (122, 285): ${limbText(unshod.proposal, 'leg_r')}; ${limbText(unshod.proposal, 'leg_l')}; shoes rides ${unshod.proposal.regions.shoes ?? 'nothing'}; ${offLint.join(' / ') || 'no LINT'}; loads ${codes(refusals(() => checkProposal(Ps, unshod.proposal)))}`,
+    'issue #517: propose drafted a foot cut at an ankle keypoint off the leg\'s art, and assemble then refused the config it wrote (ASSEMBLE_LIMB_JOINT_ON_ART); the joint is read as the cap reads it, and an ankle off it drafts the legs without the cut and says how far off on that line, never a joint the keypoints did not give',
+  );
 }
 
 /**
@@ -22304,6 +22343,33 @@ function runLimbCases(say: (name: string, ok: boolean, detail: string, why: stri
         flat.startsWith('ASSEMBLE_LIMB_JOINT config.limbs.arm_r.segments[1] (joint "elbow"): has no joint line: "sleeve_r0" at [15, 30] and "sleeve_r1" at [15, 30] ending at [15, 50] stand on one point'),
       `elbow at (30, 30): ${off.slice(0, 200)}; both links at (15, 30): ${flat.slice(0, 200)}`,
       'a cap sized by a width the limb does not have there, or a line with no direction, would be a value the tool made up; the joint is the bone\'s origin, so the bone is what moves',
+    );
+
+    // AS478 — issue #517: the refusal says how far off the joint is, on its own line. foot_l moved to (48, 60), 10 px
+    // straight below its knee (48, 30): the joint line is y = 60 (pixel rows 59 and 60), and the shoes end at row 54,
+    // so the line crosses none of the art. leg_l moved to x 56 instead (links (56, 10), (56, 30), foot_l at (56, 50)):
+    // the leg_r polyline is x 34, so leg_l owns the pixels whose centre is past x 45 (x 45 on). The knee's line y = 30
+    // (rows 29, 30) meets the legwear x 45..51, its nearest the pixel [51, 29], centre 51.5, 4.5 px from x 56; the
+    // ankle's y = 50 (rows 49, 50) meets the legwear to x 51 on row 49 and the shoe to x 52 on row 50: [52, 50], 3.5 px.
+    const below = refusedBy('ankle-below', limbConfig(LIMBS, LIMB_BONES.map((b) => (b.name === 'foot_l' ? { ...b, at: [48, 60] } : b))));
+    const aside = refusedBy(
+      'leg-aside',
+      limbConfig(
+        LIMBS,
+        LIMB_BONES.map((b) => (b.chain === 'leg_l' ? { chain: 'leg_l', parent: 'hip', points: [[56, 10], [56, 30]], tip: [56, 50] } : b.name === 'foot_l' ? { ...b, at: [56, 50] } : b)),
+      ),
+    );
+    const onLine = (code: string, seg: string, at: string, figure: string): string =>
+      `${code} config.limbs.leg_l.segments[${seg}: the joint, ${at}, lies on none of the limb's art within 1 px along its joint line (${figure}), so the limb has no width there`;
+    say(
+      'AS478_A_JOINT_OFF_THE_LIMB_S_ART_IS_REFUSED_WITH_THE_NEAREST_ART_ON_ITS_LINE_OR_THAT_THE_LINE_CROSSES_NONE',
+      below.startsWith(onLine('ASSEMBLE_LIMB_JOINT_ON_ART', '2] (joint "ankle", part "foot_l")', '"foot_l"\'s origin at [48, 60]', 'the line crosses none of it')) &&
+        !below.includes(' | ') &&
+        aside.split(' | ').length === 2 &&
+        aside.split(' | ')[0].startsWith(onLine('ASSEMBLE_LIMB_JOINT_ON_ART', '1] (joint "knee", part "shin_l")', '"leg_l1"\'s origin at [56, 30]', 'the nearest of it on that line is the pixel [51, 29], 4.5 px from the joint')) &&
+        aside.split(' | ')[1].startsWith(onLine('ASSEMBLE_LIMB_JOINT_ON_ART', '2] (joint "ankle", part "foot_l")', '"foot_l"\'s origin at [56, 50]', 'the nearest of it on that line is the pixel [52, 50], 3.5 px from the joint')),
+      `foot_l at (48, 60): ${below.slice(0, 260)}; leg_l at x 56: ${aside.slice(0, 600)}`,
+      'issue #517: "lies on none of the limb\'s art" names the rule, not how far; an author who wrote the bone by hand needs the distance to move it by, measured on the line the cap reads and in the pixels assemble owns to the limb',
     );
 
     // AS239 — issue #359: a hidden-art layer is the cap of a limb segment that names none. `handwear-r:hidden` is UB
