@@ -526,6 +526,117 @@
   ],
   "not_read": []
  },
+ "CLOTH_SETTLES": {
+  "status": "CLEAR",
+  "fps": 12,
+  "frames": 41,
+  "duration": 3.333,
+  "floor_rig_px_per_s": 0.01694,
+  "floor": "a chain settles at the first frame from which its tip moves slower than 0.01694 rig px/s to the idle's last frame — half the slowest tip an idle key drives on the public examples (scarf's skirt_l2, 0.03388 rig px/s)",
+  "levers": "a chain at rest moves again when the world or the body does: an environment at render (rigc render --environment, wind and gravity in time) or a hip motion in the idle (rig-c/parts#502)",
+  "warnings": 0,
+  "rows": [
+   {
+    "tip": "bun",
+    "root": "bun",
+    "links": 1,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 10.41,
+    "min_rig_px_per_s": 3.132
+   },
+   {
+    "tip": "bang_r1",
+    "root": "bang_r1",
+    "links": 1,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 9.36,
+    "min_rig_px_per_s": 2.899
+   },
+   {
+    "tip": "bang_c1",
+    "root": "bang_c1",
+    "links": 1,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 10.31,
+    "min_rig_px_per_s": 2.565
+   },
+   {
+    "tip": "bang_l1",
+    "root": "bang_l1",
+    "links": 1,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 11.87,
+    "min_rig_px_per_s": 3.674
+   },
+   {
+    "tip": "sleeve_r2",
+    "root": "sleeve_r2",
+    "links": 1,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 14.38,
+    "min_rig_px_per_s": 7.882
+   },
+   {
+    "tip": "sleeve_l2",
+    "root": "sleeve_l2",
+    "links": 1,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 15.57,
+    "min_rig_px_per_s": 5.867
+   },
+   {
+    "tip": "robe_r3",
+    "root": "robe_r3",
+    "links": 1,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 13.84,
+    "min_rig_px_per_s": 0.9938
+   },
+   {
+    "tip": "robe_l3",
+    "root": "robe_l3",
+    "links": 1,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 16.11,
+    "min_rig_px_per_s": 2.422
+   },
+   {
+    "tip": "skirt_r2",
+    "root": "skirt_r2",
+    "links": 1,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 1.494,
+    "min_rig_px_per_s": 0.05046
+   },
+   {
+    "tip": "skirt_c2",
+    "root": "skirt_c2",
+    "links": 1,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 1.489,
+    "min_rig_px_per_s": 0.09366
+   },
+   {
+    "tip": "skirt_l2",
+    "root": "skirt_l2",
+    "links": 1,
+    "point": "end",
+    "settles_at": null,
+    "max_rig_px_per_s": 1.518,
+    "min_rig_px_per_s": 0.03388
+   }
+  ]
+ },
  "RECOMPOSITE_HOLES": {
   "status": "REPORTED",
   "error_px": 7834,

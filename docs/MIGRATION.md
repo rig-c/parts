@@ -341,3 +341,22 @@ moves (AUTHORING §6, `SEAM_OVER_MOTION`).
 What to do: nothing. A warning names the pair, the animation, the frames and the cells;
 an opening that is not intended wants a cap that covers the turn, or a motion that bends
 less.
+
+## After 1.38.0: cloth that comes to rest on the idle
+
+Issue #501 reads every physics chain by its tip on the idle `check` renders (physics on,
+rigc's default environment): a chain settles at the first frame from which its tip moves
+slower than 0.01694 rig px/s to the idle's last frame, and the line warns when one
+settles before the loop's length is out. It is a warning, never a bar: cloth at rest
+while the character stands may be intended, so no exit status, no `check: PASS` and no
+bar count moves (AUTHORING §6, `CLOTH_SETTLES`).
+
+| change | before | after |
+| --- | --- | --- |
+| `check` on a rig with a physics constraint and an idle | not read | `CLOTH_SETTLES` in `check.json` after `SEAM_OVER_MOTION` (where that is written; else where it would be), its console lines after the `SEAM_OVER_MOTION` lines, one `WARN chain` line per chain that settles, and the summary's warning clause names it: `; N warning(s) (CLOTH_SETTLES, not a bar)`, or `(SEAM_OVER_MOTION, CLOTH_SETTLES, not a bar)` with N their sum where both read |
+| `check` on any other rig | — | one console line, `CLOTH_SETTLES: SKIP — …`, naming why; no key in `check.json` |
+| the public examples' `expected/check.json` | — | `demo`, `reference-sample`, `scarf` and `wind` gain the block: `wind`'s skirt (eight trees and the swing) and `reference-sample`'s `hip_jiggle` settle, every chain an idle key drives does not |
+
+What to do: nothing. A warning names the chain and the second it comes to rest; a chain
+that should keep moving wants an environment at render (`rigc render --environment`) or
+a hip motion in the idle (#502).

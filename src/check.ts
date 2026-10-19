@@ -1864,6 +1864,8 @@ export interface CheckFigures {
   /** Written only where parts.json holds a limb record with a `range` (issue #360): {@link SweepLine}. */
   [SWEEP_LINE]?: SweepLine;
   [MOTION_SEAM_LINE]?: MotionSeamLine;
+  /** Written only when the rig declares a physics constraint and has an idle (issue #501): {@link ClothLine}, a warning, never a bar. */
+  [CLOTH_LINE]?: ClothLine;
   RECOMPOSITE_HOLES: ReportedLine;
   /** Written only under `--source` (issue #77): the setup pose against the painting, REPORTED. */
   SETUP_POSE_VS_SOURCE?: ReportedLine;
@@ -2128,6 +2130,8 @@ export interface CheckReport {
   besideIdle: string[];
   /** `SEAM_OVER_MOTION` (issue #493): a warning, never a bar — in `check.json` only when a pair is declared; its SKIP is printed either way. */
   motionSeam: MotionSeamLine;
+  /** `CLOTH_SETTLES` (issue #501): a warning, never a bar — in `check.json` only when the rig declares a physics constraint and has an idle; its SKIP is printed either way. */
+  cloth: ClothLine;
 }
 
 /**
@@ -3400,6 +3404,165 @@ export function motionSeamWarnText(r: MotionSeamRow): string {
   return `WARN seam "${r.pair}" opens on ${r.opens.length} frame(s) ${frameRuns(r.opens)} max ${r.max_px} px in "${r.animation}" — over the one-cell floor${r.under_floor.length === 0 ? '' : `, ${r.under_floor.length} more frame(s) one cell thick not reported`}`;
 }
 
+// ---------------------------------------------------------------------------
+// cloth that comes to rest on the idle (issue #501; the line is {@link CLOTH_LINE}'s)
+// ---------------------------------------------------------------------------
+
+/**
+ * `CLOTH_SETTLES` (issue #501): every physics chain read by its tip on the
+ * idle as `check` renders it (physics on, rigc's default environment) — a
+ * **warning, never a bar**. The owner's ruling: cloth at rest while the
+ * character stands can be intended, so the line names the chain, the time its
+ * tip comes to rest and the floor, and moves neither the exit status nor
+ * `check: PASS`; the summary counts it apart from the bars.
+ *
+ * Why it exists: `CHAIN_LAG` reads the idle's keyed chains off `motion.json`
+ * and `TIP_OVER_ROOT` the idle's posed parts, and neither reads what a
+ * physics constraint does with a chain nothing above it moves. A skirt hung
+ * from `hip` under an idle that keys only the breath is pushed by rigc's
+ * reset at frame 0 and then comes to rest, and every bar passes.
+ *
+ * A chain is a physics leaf — a bone carrying a physics constraint (rig.json's
+ * `constraints` or motion.json's `physics`) with no such bone under it — and
+ * the physics bones above it, as far as the run of them goes. Its tip is the
+ * leaf's end (origin plus `length` along its world x axis), or its origin when
+ * the leaf has no length. Its speed between two frames is the tip's distance
+ * over their time; it **settles** at the first frame from which every speed
+ * to the idle's last frame is under {@link CLOTH_SETTLE_FLOOR}, and the line
+ * warns when one does — that is, before the loop's length is out.
+ */
+export const CLOTH_LINE = 'CLOTH_SETTLES';
+
+/**
+ * The floor, rig px per second — half the slowest tip a keyed bone drives on
+ * the public examples, the repository's floor rule (half the weaker figure).
+ * Measured for issue #501 with this port's build of each example (rig-c
+ * 2.60.0, `check`'s idle at 12 fps, physics on): over the 31 physics chains an
+ * idle key drives — a keyed bone at or above the leaf (`demo` 12,
+ * `reference-sample` 1, `scarf` 11, `wind` 7) — the slowest frame-to-frame tip
+ * speed is `scarf`'s `skirt_l2`, 0.03388; the ten no key drives (`wind`'s
+ * skirt, its eight trees and its swing, and `reference-sample`'s `hip_jiggle`)
+ * fall under half of it, from 0 s (`hip_jiggle`, which never moves) to 2.75 s
+ * on a 3.333 s idle, and end at 0.0025 rig px/s or less. `reference-demo`
+ * declares no physics constraint.
+ */
+export const CLOTH_SETTLE_FLOOR = 0.01694;
+
+/** The floor as the console and `check.json` state it. */
+export const CLOTH_FLOOR_TEXT = `a chain settles at the first frame from which its tip moves slower than ${CLOTH_SETTLE_FLOOR} rig px/s to the idle's last frame — half the slowest tip an idle key drives on the public examples (scarf's skirt_l2, 0.03388 rig px/s)`;
+
+/** The consumer's two levers, as the console and `check.json` state them. */
+export const CLOTH_LEVERS_TEXT = 'a chain at rest moves again when the world or the body does: an environment at render (rigc render --environment, wind and gravity in time) or a hip motion in the idle (rig-c/parts#502)';
+
+/** One physics chain as the line reads it. */
+export interface ClothRow {
+  /** The leaf: the physics bone with no physics bone under it. */
+  tip: string;
+  /** The topmost physics bone of the run the leaf ends. */
+  root: string;
+  /** Physics bones from root to tip. */
+  links: number;
+  /** What was tracked: the leaf's end, or its origin when it has no `length`. */
+  point: 'end' | 'origin';
+  /** The time of the frame from which the tip stays under the floor; null when it never does. */
+  settles_at: number | null;
+  /** The fastest and slowest frame-to-frame speeds of the point, rig px/s, four significant figures. */
+  max_rig_px_per_s: number;
+  min_rig_px_per_s: number;
+}
+
+/** The line: `WARN` with a chain that settles, `CLEAR` with none, `SKIP` with no chain or no idle. */
+export interface ClothLine {
+  status: 'WARN' | 'CLEAR' | 'SKIP';
+  reason?: string;
+  fps: number;
+  frames: number;
+  duration: number;
+  floor_rig_px_per_s: number;
+  floor: string;
+  levers: string;
+  /** Rows that settle: the WARN lines. */
+  warnings: number;
+  rows: ClothRow[];
+}
+
+/**
+ * The physics chains of a rig, leaf by leaf in rig.json's bone order: each
+ * bone a physics constraint names with no such bone under it, and how far up
+ * the run of physics bones above it goes.
+ */
+export function clothChains(rig: Record<string, unknown>, physics: readonly LoopPhysics[]): Array<{ tip: string; root: string; links: number; length: number }> {
+  const bones = (Array.isArray(rig.bones) ? rig.bones : []).filter(isRecord);
+  const parent = new Map(bones.map((b) => [String(b.name), typeof b.parent === 'string' ? b.parent : null]));
+  const length = new Map(bones.map((b) => [String(b.name), typeof b.length === 'number' && Number.isFinite(b.length) ? b.length : 0]));
+  const held = new Set(physics.map((p) => p.bone));
+  const above = (b: string, a: string): boolean => {
+    const seen = new Set<string>();
+    for (let p = parent.get(b) ?? null; p !== null && !seen.has(p); p = parent.get(p) ?? null) {
+      if (p === a) return true;
+      seen.add(p);
+    }
+    return false;
+  };
+  const out: Array<{ tip: string; root: string; links: number; length: number }> = [];
+  for (const b of bones.map((x) => String(x.name))) {
+    if (!held.has(b) || [...held].some((o) => o !== b && above(o, b))) continue;
+    let root = b;
+    let links = 1;
+    for (let p = parent.get(b) ?? null; p !== null && held.has(p); p = parent.get(p) ?? null) {
+      root = p;
+      links++;
+    }
+    out.push({ tip: b, root, links, length: length.get(b) ?? 0 });
+  }
+  return out;
+}
+
+/** One chain's row off its leaf's bone track: the point, the speeds, and when it settles under the floor. */
+export function clothRow(chain: { tip: string; root: string; links: number; length: number }, track: BoneTrack, floor: number = CLOTH_SETTLE_FLOOR): ClothRow {
+  const L = chain.length;
+  const pts = track.frames.map((w) => [w.worldX + L * w.a, w.worldY + L * w.c]);
+  const speeds: number[] = [];
+  for (let i = 1; i < pts.length; i++) {
+    const dt = track.times[i] - track.times[i - 1];
+    speeds.push(dt > 0 ? edgeLength(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]) / dt : Infinity);
+  }
+  let s = speeds.length;
+  while (s > 0 && speeds[s - 1] < floor) s--;
+  return {
+    tip: chain.tip,
+    root: chain.root,
+    links: chain.links,
+    point: L > 0 ? 'end' : 'origin',
+    settles_at: speeds.length > 0 && s < speeds.length ? round3(track.times[s]) : null,
+    max_rig_px_per_s: speeds.length === 0 ? 0 : sig4(Math.max(...speeds)),
+    min_rig_px_per_s: speeds.length === 0 ? 0 : sig4(Math.min(...speeds)),
+  };
+}
+
+/** The line from its rows: WARN when a chain settles, CLEAR when none does, SKIP with the reason when nothing was read. */
+export function clothLine(rows: ClothRow[], fps: number, frames: number, duration: number, reason?: string): ClothLine {
+  const warnings = rows.filter((r) => r.settles_at !== null).length;
+  return {
+    status: reason !== undefined ? 'SKIP' : warnings > 0 ? 'WARN' : 'CLEAR',
+    ...(reason === undefined ? {} : { reason }),
+    fps,
+    frames,
+    duration: round3(duration),
+    floor_rig_px_per_s: CLOTH_SETTLE_FLOOR,
+    floor: CLOTH_FLOOR_TEXT,
+    levers: CLOTH_LEVERS_TEXT,
+    warnings,
+    rows,
+  };
+}
+
+/** One warning as the console prints it. */
+export function clothWarnText(r: ClothRow, duration: number): string {
+  const chain = r.links === 1 ? `"${r.tip}"` : `"${r.root}" .. "${r.tip}"`;
+  return `WARN chain ${chain} (${r.links} physics link(s)) settles at ${r.settles_at ?? ''} s of the ${round3(duration)} s idle — its tip's ${r.point} under ${CLOTH_SETTLE_FLOOR} rig px/s from there to the last frame (fastest on the idle ${r.max_rig_px_per_s} rig px/s)`;
+}
+
 /**
  * One `CHECK_RIGC_GREEN` per line that says why `rigc <what>` was not green:
  * its FAIL and compile-error lines, or, when there are none, {@link causeLines}.
@@ -3711,11 +3874,13 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   let chain: JudgementLine = skip(inp.noIdle ?? '');
   let stretch: JudgementLine = skip(inp.noIdle ?? '');
   let still: JudgementLine = skip(lacking);
+  let idleGeometry: IdleGeometry | null = null;
   if (idle !== null) {
     chain = chainLine(inp, problems, reqFile === null ? NO_CHAIN_RESTS : { path: reqFile.path, rests: reqFile.rests });
     // One reader for the one geometry file: the stretch reads its meshes, the still regions every slot and the head bone.
     const geometryPath = join(idle.dir, GEOMETRY_FILE);
     const geometry = readGeometry(geometryPath, idle.written);
+    idleGeometry = geometry;
     stretch = stretchLine(geometry, geometryPath, problems, inp);
     if (full !== null) still = stillLine(full, idle, geometry, geometryPath, problems, notPlanted);
   }
@@ -3845,6 +4010,26 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         rmSync(seamMotionDir, { recursive: true, force: true });
       }
     }
+  }
+
+  // 3f. every physics chain read by its tip on the idle as rendered above, physics on (issue #501): a warning, never a
+  // bar; SKIP, named, with no idle or no physics constraint
+  let cloth: ClothLine;
+  if (idle === null) cloth = clothLine([], IDLE_FPS, 0, 0, inp.noIdle ?? 'no idle');
+  else if (stripped === null) cloth = clothLine([], idle.fps, idle.frames.length, idle.duration, "the rig declares no physics constraint (rig.json's constraints, motion.json's physics), so there is no chain to read");
+  else {
+    const geometryPath = join(idle.dir, GEOMETRY_FILE);
+    const rows: ClothRow[] = [];
+    let unread: string | undefined;
+    for (const c of clothChains(inp.rig, stripped.physics)) {
+      const track = boneTrackOf(idleGeometry, geometryPath, idle, c.tip);
+      if (typeof track === 'string') {
+        unread = track;
+        break;
+      }
+      rows.push(clothRow(c, track));
+    }
+    cloth = unread === undefined ? clothLine(rows, idle.fps, idle.frames.length, idle.duration) : clothLine([], idle.fps, idle.frames.length, idle.duration, unread);
   }
 
   // 4. the setup pose as a one-key throwaway animation — the seam reads it against the parts, the source line against
@@ -4027,6 +4212,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(limbs === null ? {} : { [LIMB_LINE]: limbs }),
     ...(sweep === null ? {} : { [SWEEP_LINE]: sweep }),
     ...(motionSeam.pairs.length === 0 ? {} : { [MOTION_SEAM_LINE]: motionSeam }),
+    ...(stripped === null || idle === null ? {} : { [CLOTH_LINE]: cloth }),
     RECOMPOSITE_HOLES: inp.parts === null ? { status: 'SKIP', reason: inp.noParts ?? '' } : holesLine(inp.parts),
     ...(sourceRead === null ? {} : { [SOURCE_LINE]: sourceRead }),
     ...(Object.keys(skipped).length === 0 ? {} : { skipped }),
@@ -4111,6 +4297,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     requirements: reqBlock,
     besideIdle: named,
     motionSeam,
+    cloth,
   };
 }
 

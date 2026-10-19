@@ -270,6 +270,36 @@
   "status": "SKIP",
   "reason": "\"sleeves\": its weights ride 2 chains (\"sleeve_r0_ctl\", \"sleeve_l0_ctl\"): turning one stretches the part toward the other by construction; a part riding one chain is read until a limbs block names each limb"
  },
+ "CLOTH_SETTLES": {
+  "status": "WARN",
+  "fps": 12,
+  "frames": 49,
+  "duration": 4,
+  "floor_rig_px_per_s": 0.01694,
+  "floor": "a chain settles at the first frame from which its tip moves slower than 0.01694 rig px/s to the idle's last frame — half the slowest tip an idle key drives on the public examples (scarf's skirt_l2, 0.03388 rig px/s)",
+  "levers": "a chain at rest moves again when the world or the body does: an environment at render (rigc render --environment, wind and gravity in time) or a hip motion in the idle (rig-c/parts#502)",
+  "warnings": 1,
+  "rows": [
+   {
+    "tip": "hip_jiggle",
+    "root": "hip_jiggle",
+    "links": 1,
+    "point": "origin",
+    "settles_at": 0,
+    "max_rig_px_per_s": 0,
+    "min_rig_px_per_s": 0
+   },
+   {
+    "tip": "chest_jiggle",
+    "root": "chest_jiggle",
+    "links": 1,
+    "point": "origin",
+    "settles_at": null,
+    "max_rig_px_per_s": 2.096,
+    "min_rig_px_per_s": 0.07208
+   }
+  ]
+ },
  "RECOMPOSITE_HOLES": {
   "status": "REPORTED",
   "error_px": 4359,

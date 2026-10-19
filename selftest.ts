@@ -232,11 +232,11 @@ import {
   padSingleRun,
   singleRunHeadBox,
 } from './src/assemble.ts';
-import { frameRuns, MOTION_SEAM_FLOOR, MOTION_SEAM_LINE, type MotionSeamLine, motionSeamPairs, motionSeamWarnText, openingOverFloor, readMotionSeams } from './src/check.ts';
+import { CLOTH_FLOOR_TEXT, CLOTH_LEVERS_TEXT, CLOTH_LINE, CLOTH_SETTLE_FLOOR, clothChains, type ClothLine, clothLine, clothRow, clothWarnText, frameRuns, MOTION_SEAM_FLOOR, MOTION_SEAM_LINE, type MotionSeamLine, motionSeamPairs, motionSeamWarnText, openingOverFloor, readMotionSeams } from './src/check.ts';
 import { BREATH_ANIMATION, type BreathPair, breathPairProblem, breathTracks, chainDirection, sweepAngles, sweepJoints, type SweepJoint, sweepLine, type SweepLine, SWEEP_LINE, type SweepPose, type Viewport } from './src/check.ts';
 import { barsNotMet, flatComposite, frameToRigMap, maxRgbDiff, rigToFrameMap, SEAM_BOX, SEAM_PX_BAR, SEAM_PX_LEVEL, seamRigPx, seamRigPxText, SEAM_MEAN_BAR, SEAM_DIR, SEAM_MARK, SEAM_NO_ART, seamFigures, type SeamFigures, seamPairRows, seamPairText, STILL_DIR, withoutPhysics, BREATH_TORSO_MEAN_FLOOR } from './src/check.ts';
 import { ACCEPTABLE_BARS, BARS, besideIdleLine, blackRig, drawingTurn, FOLD_LINE, LEVEL_BAR_DEGREES, LEVEL_LINE, LIMB_LINE, limbLine, foldsLine, STRESS_LINE, STRESS_RIGID, STRESS_TURNS, stressPlan, readFoldSets, edgeBonesText, buildGateLines, holesLine, causeLines, chainLine, measuredRules, SOURCE_LINE, sourceFigures, sourceSizeProblem, packedBuildArgs, GATE_PROFILE, DEFAULT_PACK_MODE, DEFAULT_PAGE_EDGES, findRigc, packageRigc, rigcIdentity, rigcRunnerAt, type RigcSpawn, type PackMode, type PageEdges, type FrameSet, GEOMETRY_FILE, gateGreen, headBoneOf, IDLE_MAX_PX, type JudgementLine, JUDGEMENT_LINES, packEdgeProblems, PARTS_HOME_SENTENCE, parsePackLines, readBoneTrack, readCheckInputs, readFrameSet, readGeometry, readRigcEntry, REPORTED_LINES, requireRigcVersion, RIGC_ENTRY_VERSION, RIGC_GEOMETRY_VERSION, rigcFailed, type RigcRunner, runCheck, SPINEBOY_YARDSTICK, stretchLine, TEXTURE_STRETCH_CEILING, TIP_RATIO_FLOOR, TIP_REST_RATIO_CEILING, attachmentPoses, stillLine, STILL_INSTRUMENT } from './src/check.ts';
-import { baseTagOf, blinkFigures, breathHeat, heatField, type BoneWorld, chainToward, edgeLength, frameBox, type GeometryPose, halfTravels, type MeshRest, stretchFigures, stretchSeverity, lagStep, readSine, setupToFrame, stillReading, stillTolerance, STILL_ROUNDINGS, SWING_TAGS, ulpOf } from './src/instruments.ts';
+import { baseTagOf, blinkFigures, breathHeat, heatField, type BoneTrack, type BoneWorld, chainToward, edgeLength, frameBox, type GeometryPose, halfTravels, type MeshRest, stretchFigures, stretchSeverity, lagStep, readSine, setupToFrame, stillReading, stillTolerance, STILL_ROUNDINGS, SWING_TAGS, ulpOf } from './src/instruments.ts';
 import {
   aimLine,
   contactLine,
@@ -289,7 +289,7 @@ import { BLOCKED_LABEL, barsOf, basisOf, cappedReducer, classify, costLine, coun
 import { withPolicyMotion } from './fixtures/automotion.ts';
 import { type BStar, bStar, type CellRow as ToolCellRow, nearestRank, parseArgs as parseBoundaryArgs, pendingRow, policyAt, render as renderBoundary, sagittas, sagittaSummary } from './tools/auto_boundary_survey.ts';
 import { type AutoMotionCase, explicitFrameId, idleSchedule, localRow, motionInput, motionStimulus, motionVerdict, runComparison, stimulusAnimations, withStimulus } from './src/automotion.ts';
-import { loopCheckLine, loopStage, motionGates, motionSeamLines, type MotionGateRun, replaySearch, stimulusTexts, strayClause } from './src/build.ts';
+import { clothLines, loopCheckLine, loopStage, motionGates, motionSeamLines, type MotionGateRun, replaySearch, stimulusTexts, strayClause } from './src/build.ts';
 import {
   bisectAccepted,
   type CountedProbe,
@@ -14395,7 +14395,7 @@ function runCheckSuite(): number {
         cpf !== null &&
         cpf.loop_max_diff === 0 &&
         JSON.stringify(cpf.loop_physics) === '[{"name":"bob_phys","bone":"bob","in":"rig.json"}]' &&
-        Object.keys(cpf).join(',') === [...CHECK_KEYS.slice(0, 4), 'loop_physics', ...CHECK_KEYS.slice(4)].join(',') &&
+        Object.keys(cpf).join(',') === [...CHECK_KEYS.slice(0, 4), 'loop_physics', ...CHECK_KEYS.slice(4, CHECK_KEYS.indexOf('RECOMPOSITE_HOLES')), CLOTH_LINE, ...CHECK_KEYS.slice(CHECK_KEYS.indexOf('RECOMPOSITE_HOLES'))].join(',') &&
         cp.out.split('\n').filter((l) => l.startsWith('  loop physics: ')).length === 1 &&
         cp.out.includes(physLine) &&
         withSim !== null &&
@@ -16297,6 +16297,7 @@ function runCheckSuite(): number {
   runDiscCheckCases(say);
   runRigcIdentityCases(say);
   runClothCheckCases(say);
+  runClothSettlesCases(say);
   runRiderCheckCases(say);
   runBreathAloneCases(say);
   runDressRiderCheckCases(say);
@@ -16513,6 +16514,169 @@ function clothBuild(root: string, label: string, edit: (cs: ConfigConstraint[]) 
 function barLine(out: string, bar: string, n = 160): string {
   const l = out.split('\n').find((x) => x.trim().startsWith(`${bar}:`));
   return l === undefined ? `${bar}: absent` : l.trim().slice(0, n);
+}
+
+/**
+ * Issue #501: CLOTH_SETTLES, every physics chain read by its tip on the idle as `check` renders it — a warning, never
+ * a bar. CS01 the reading by hand (a point that moves then stops, a speed at the floor, the chains of a small tree);
+ * CS02 the cloth fixture as drafted, whose idle keys no bone above the skirt, warns on the skirt with the times the
+ * definition gives off check's own geometry, and check still passes with exit 0; CS03 the same fixture with a hip
+ * turn in the idle keeps every chain alive (the positive control); CS04 the mutants: the reading's lines removed
+ * print nothing, which CS02's predicate refuses, and the floor at 0 never settles; CS05 the fixture with its physics
+ * constraints left out is a SKIP by name with no key in check.json.
+ */
+function runClothSettlesCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  // CS01 — by hand. A point at x 0, 1, 2, 3, 3, 3 at t 0 .. 2.5 every 0.5 s: speeds 2, 2, 2, 0, 0 rig px/s, so it
+  // settles at the frame at t 1.5. A point at 0, F, 2F (F the floor) at t 0, 1, 2 moves at exactly the floor and never
+  // settles (under is strict; 2F - F is F exactly).
+  const world = (x: number): BoneWorld => ({ a: 1, b: 0, c: 0, d: 1, worldX: x, worldY: 0 });
+  const steps: BoneTrack = { bone: 'p', setup: world(0), frames: [0, 1, 2, 3, 3, 3].map(world), times: [0, 0.5, 1, 1.5, 2, 2.5] };
+  const atFloor: BoneTrack = { bone: 'p', setup: world(0), frames: [0, CLOTH_SETTLE_FLOOR, 2 * CLOTH_SETTLE_FLOOR].map(world), times: [0, 1, 2] };
+  const one = { tip: 'p', root: 'p', links: 1, length: 0 };
+  const stops = clothRow(one, steps);
+  const ends = clothRow({ ...one, length: 10 }, steps);
+  const never = clothRow(one, atFloor);
+  const tree = {
+    bones: [
+      { name: 'root' },
+      { name: 'hip', parent: 'root' },
+      { name: 'a0', parent: 'hip', length: 10 },
+      { name: 'a1', parent: 'a0', length: 10 },
+      { name: 'b0', parent: 'a1', length: 5 },
+      { name: 'b1', parent: 'a1', length: 6 },
+      { name: 'c', parent: 'hip' },
+      { name: 'd', parent: 'c' },
+    ],
+  };
+  const held = ['a0', 'a1', 'b0', 'b1', 'b1', 'd'].map((bone, i) => ({ name: `k${i}`, bone, in: 'rig.json' as const }));
+  const chains = clothChains(tree, held);
+  say(
+    'CS01_A_TIP_SETTLES_AT_THE_FIRST_FRAME_FROM_WHICH_IT_STAYS_UNDER_THE_FLOOR_AND_A_CHAIN_IS_A_PHYSICS_LEAF_AND_THE_RUN_ABOVE_IT',
+    stops.settles_at === 1.5 &&
+      stops.point === 'origin' &&
+      stops.max_rig_px_per_s === 2 &&
+      stops.min_rig_px_per_s === 0 &&
+      ends.settles_at === 1.5 &&
+      ends.point === 'end' &&
+      never.settles_at === null &&
+      JSON.stringify(chains) === JSON.stringify([
+        { tip: 'b0', root: 'a0', links: 3, length: 5 },
+        { tip: 'b1', root: 'a0', links: 3, length: 6 },
+        { tip: 'd', root: 'd', links: 1, length: 0 },
+      ]) &&
+      clothLine([stops, never], 2, 6, 2.5).status === 'WARN' &&
+      clothLine([never], 2, 6, 2.5).status === 'CLEAR' &&
+      clothLine([], 2, 6, 2.5, 'why').status === 'SKIP',
+    `moves then stops: settles_at ${String(stops.settles_at)} (${stops.point}), speeds ${stops.max_rig_px_per_s}..${stops.min_rig_px_per_s}; its end at length 10: ${String(ends.settles_at)} (${ends.point}); one step at the floor ${CLOTH_SETTLE_FLOOR}: ${String(never.settles_at)}; chains ${JSON.stringify(chains)}`,
+    'issue #501: the definition, every figure by hand — speeds are distance over time between frames, a chain settles at the first frame from which every speed to the last is under the floor (strictly), a leaf is a physics bone with no physics bone under it, and its root is the top of the run of physics bones above it (c carries none, so d is a chain of one); a translate leaf of no length is tracked at its origin',
+  );
+
+  const root = temp('cloth-settles');
+  try {
+    const bare = clothBuild(root, 'bare');
+    const motion = bare.config.motion as { duration: number; tracks: unknown[] };
+    const hipped = clothBuild(root, 'hipped', (cs) => cs, { motion: { ...motion, tracks: [...motion.tracks, { bone: 'hip', prop: 'rotate', amp: 0.2, period: motion.duration, phase: 0 }] } });
+    const lines = (out: string): string[] => out.split('\n').map((l) => l.replace(/^\[check\] /, '').trim());
+    const clothOf = (checkOut: string): ClothLine | null => (readJsonFile(join(checkOut, 'check.json'))?.[CLOTH_LINE] as ClothLine | undefined) ?? null;
+    const bareLine = clothOf(bare.checkOut);
+    const hipLine = clothOf(hipped.checkOut);
+    const bareOut = bare.check?.out ?? bare.rig.out;
+    // The definition again, off check's own idle geometry and the built rig.json: each chain's leaf, its end, its speeds.
+    const byHand = (line: ClothLine | null, checkOut: string, rigDir: string): string[] => {
+      if (line === null) return ['no CLOTH_SETTLES in check.json'];
+      const geo = readJsonFile(join(checkOut, 'idle_frames', 'idle', GEOMETRY_FILE)) as { frames: Array<{ time: number; bones: Array<{ name: string; a: number; c: number; worldX: number; worldY: number }> }> } | null;
+      const rigBones = ((readJsonFile(join(rigDir, 'rig.json'))?.bones ?? []) as Array<{ name: string; length?: number }>);
+      if (geo === null) return ['no idle geometry.json'];
+      return line.rows.flatMap((row) => {
+        const L = rigBones.find((b) => b.name === row.tip)?.length ?? 0;
+        const p = geo.frames.map((f) => {
+          const b = f.bones.find((x) => x.name === row.tip);
+          return b === undefined ? [NaN, NaN] : [b.worldX + L * b.a, b.worldY + L * b.c];
+        });
+        let s = p.length - 1;
+        while (s > 0 && Math.hypot(p[s][0] - p[s - 1][0], p[s][1] - p[s - 1][1]) / (geo.frames[s].time - geo.frames[s - 1].time) < CLOTH_SETTLE_FLOOR) s--;
+        const want = s < p.length - 1 ? Math.round(geo.frames[s].time * 1000) / 1000 : null;
+        return want === row.settles_at ? [] : [`${row.tip}: check ${String(row.settles_at)}, by hand ${String(want)}`];
+      });
+    };
+    const bareMiss = byHand(bareLine, bare.checkOut, bare.out);
+    const warnLines = lines(bareOut).filter((l) => l.startsWith('WARN chain '));
+    const settled = bareLine?.rows.filter((r) => r.settles_at !== null) ?? [];
+    const summaryLine = lines(bareOut).find((l) => l.startsWith('check: ')) ?? '';
+    const sees = (out: string, line: ClothLine | null): boolean =>
+      line !== null && line.status === 'WARN' && lines(out).some((l) => l.startsWith(`${CLOTH_LINE}: WARN — `) && l.includes(CLOTH_FLOOR_TEXT) && l.includes(CLOTH_LEVERS_TEXT)) && lines(out).filter((l) => l.startsWith('WARN chain ')).length === line.warnings;
+    say(
+      'CS02_A_SKIRT_NO_IDLE_KEY_DRIVES_SETTLES_AND_WARNS_WITH_ITS_CHAIN_SECONDS_AND_FLOOR_AND_CHECK_STILL_PASSES',
+      bare.check !== null &&
+        bare.check.status === 0 &&
+        summaryLine.startsWith('check: PASS; ') &&
+        summaryLine.endsWith(`; ${(bareLine?.warnings ?? -1) + (((readJsonFile(join(bare.checkOut, 'check.json'))?.[MOTION_SEAM_LINE] as MotionSeamLine | undefined)?.warnings) ?? 0)} warning(s) (${MOTION_SEAM_LINE in (readJsonFile(join(bare.checkOut, 'check.json')) ?? {}) ? `${MOTION_SEAM_LINE}, ` : ''}${CLOTH_LINE}, not a bar)`) &&
+        readJsonFile(join(bare.checkOut, 'check.json'))?.PASS === true &&
+        sees(bareOut, bareLine) &&
+        settled.length > 0 &&
+        settled.some((r) => r.tip.startsWith('skirt')) &&
+        settled.every((r) => (r.settles_at as number) < (bareLine as ClothLine).duration) &&
+        warnLines.every((l, i) => l === clothWarnText(settled[i], (bareLine as ClothLine).duration)) &&
+        bareMiss.length === 0,
+      `exit ${bare.check?.status ?? 'not run'}; ${summaryLine}; ${lines(bareOut).find((l) => l.startsWith(`${CLOTH_LINE}:`))?.slice(0, 170) ?? 'no line'}…; ${warnLines.slice(0, 3).join(' | ')}; by hand: ${bareMiss.length === 0 ? `every one of ${bareLine?.rows.length ?? 0} chain(s) the same` : bareMiss.slice(0, 3).join('; ')}`,
+      "issue #501 bar 1 and 2, from the consumer's measurement: the drafted idle keys the breath and the head, never hip, so the skirt's trees move only by rigc's physics reset and come to rest inside the loop — every bar passes, and only this line says so. The times are the definition's, recomputed here from check's idle geometry.json; the exit status and check: PASS do not move, and the summary counts the warnings apart from the bars",
+    );
+    const hipMiss = byHand(hipLine, hipped.checkOut, hipped.out);
+    say(
+      'CS03_THE_SAME_SKIRT_UNDER_A_HIP_KEY_IN_THE_IDLE_STAYS_ALIVE_AND_THE_LINE_IS_CLEAR',
+      hipped.check !== null &&
+        hipped.check.status === 0 &&
+        hipLine !== null &&
+        hipLine.status === 'CLEAR' &&
+        hipLine.warnings === 0 &&
+        hipLine.rows.length === (bareLine?.rows.length ?? -1) &&
+        hipLine.rows.every((r) => r.settles_at === null) &&
+        !lines(hipped.check.out).some((l) => l.startsWith('WARN chain ')) &&
+        hipMiss.length === 0,
+      `exit ${hipped.check?.status ?? 'not run'}; ${hipLine === null ? 'no line' : `${hipLine.status}, ${hipLine.rows.length} chain(s), slowest tip ${Math.min(...hipLine.rows.map((r) => r.min_rig_px_per_s))} rig px/s`}; ${lines(hipped.check?.out ?? '').find((l) => l.startsWith('check: ')) ?? ''}`,
+      "issue #501's positive control and the second lever (#502): a hip turn of 0.2 degrees over the idle's period drives every tree, so no tip stays under the floor to the idle's end and nothing warns — a tip may pass under it on a frame where the sine turns (measured here at 0.001088 rig px/s on one frame), which is why settling is read to the last frame and not off the slowest one; the turn is that small because the bars hold it — a hip translate of 2 px fails TIP_OVER_ROOT (the root carried as far as the hem) and a turn of 1 degree CHAIN_LAG (neck's 0.35 under hip's 1)",
+    );
+    const silent = bareLine === null ? [] : clothLines(bareLine, { silent: true });
+    const noFloor = bareLine === null ? null : clothLine(bareLine.rows.map((r) => ({ ...r, settles_at: null })), bareLine.fps, bareLine.frames, bareLine.duration);
+    const geo = readJsonFile(join(bare.checkOut, 'idle_frames', 'idle', GEOMETRY_FILE));
+    const skirtTip = settled[0]?.tip ?? '';
+    const zeroFloor = (() => {
+      if (geo === null || skirtTip === '') return null;
+      const set = readFrameSet(join(bare.checkOut, 'idle_frames', 'idle'));
+      const track = readBoneTrack(set, skirtTip);
+      const c = clothChains(readJsonFile(join(bare.out, 'rig.json')) ?? {}, withoutPhysics(readJsonFile(join(bare.out, 'rig.json')) ?? {}, readJsonFile(join(bare.out, 'motion.json')) ?? {})?.physics ?? []).find((x) => x.tip === skirtTip);
+      return typeof track === 'string' || c === undefined ? null : clothRow(c, track, 0);
+    })();
+    say(
+      'CS04_THE_READING_REMOVED_PRINTS_NOTHING_AND_A_FLOOR_OF_ZERO_NEVER_SETTLES',
+      silent.length === 0 &&
+        !sees(silent.join('\n'), bareLine) &&
+        noFloor !== null &&
+        noFloor.status === 'CLEAR' &&
+        clothLines(noFloor).every((l) => !l.startsWith('WARN chain ')) &&
+        zeroFloor !== null &&
+        zeroFloor.settles_at === null &&
+        settled[0]?.settles_at !== null,
+      `the lines removed: ${silent.length} line(s), CS02's predicate ${sees(silent.join('\n'), bareLine) ? 'STILL SEES IT' : 'refuses it'}; no chain settling: ${noFloor?.status ?? 'none'}; "${skirtTip}" at floor 0: settles_at ${String(zeroFloor?.settles_at)} (at ${CLOTH_SETTLE_FLOOR}: ${String(settled[0]?.settles_at)})`,
+      "issue #501 bar 1's mutant: a reading that prints nothing is what a dropped warning looks like, and CS02 must refuse it; and the floor is seen to move something — the same tip that settles under it never settles under 0",
+    );
+    const bare0 = clothBuild(root, 'nophysics', (cs) => cs.filter((c) => c.type !== 'physics'));
+    const noPhysFig = readJsonFile(join(bare0.checkOut, 'check.json'));
+    const skipLine = lines(bare0.check?.out ?? '').filter((l) => l.startsWith(`${CLOTH_LINE}:`));
+    say(
+      'CS05_WITH_NO_PHYSICS_CONSTRAINT_THE_LINE_IS_A_SKIP_NAMING_WHY_AND_CHECK_JSON_HAS_NO_KEY',
+      bare0.check !== null &&
+        noPhysFig !== null &&
+        !(CLOTH_LINE in noPhysFig) &&
+        skipLine.length === 1 &&
+        skipLine[0] === `${CLOTH_LINE}: SKIP — the rig declares no physics constraint (rig.json's constraints, motion.json's physics), so there is no chain to read` &&
+        !lines(bare0.check.out).some((l) => l.startsWith('check: ') && l.includes(CLOTH_LINE)),
+      `exit ${bare0.check?.status ?? 'not run'}; check.json ${noPhysFig !== null && CLOTH_LINE in noPhysFig ? 'HAS' : 'has no'} ${CLOTH_LINE}; printed ${JSON.stringify(skipLine)}`,
+      'issue #501: a rig with nothing to read is unmeasured, not clear — SKIP by name, never a pass, and the summary does not count it (this copy fails TIP_OVER_ROOT, the skirt left with nothing to move it, which is that bar\'s and not this line\'s)',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -21122,6 +21286,28 @@ function runChainSuite(): number | null {
         check.over.length === 0,
         summarise(check),
         'gates, loop, both seam pixel counts and every judgement figure exact; seam_mean ±0.005, the measured size of the parts difference against the reference (see chainTolerance)',
+      );
+
+      // Issue #501: the cloth reading on real art — the console's lines are check.json's block as printed, with figures.
+      const clothBlock = (readJsonAt(join(out, 'check', 'check.json')) as Record<string, unknown>)[CLOTH_LINE] as ClothLine | undefined;
+      const clothPrinted = r.out
+        .split('\n')
+        .map((l) => l.replace(/^\[check\] /, '').trim())
+        .filter((l) => l.startsWith(`${CLOTH_LINE}:`) || l.startsWith('WARN chain '));
+      const hasPhysics = withoutPhysics(readJsonAt(join(out, 'rig', 'rig.json')) as Record<string, unknown>, readJsonAt(join(out, 'rig', 'motion.json')) as Record<string, unknown>) !== null;
+      say(
+        `CH19_CLOTH_SETTLES_PRINTS_ITS_BLOCK_WITH_REAL_FIGURES_OR_A_SKIP_NAMING_WHY[${key}]`,
+        hasPhysics
+          ? clothBlock !== undefined &&
+              clothBlock.status !== 'SKIP' &&
+              clothBlock.rows.length > 0 &&
+              clothBlock.rows.every((row) => Number.isFinite(row.max_rig_px_per_s) && Number.isFinite(row.min_rig_px_per_s) && row.min_rig_px_per_s >= 0 && row.max_rig_px_per_s >= row.min_rig_px_per_s) &&
+              JSON.stringify(clothPrinted) === JSON.stringify(clothLines(clothBlock))
+          : clothBlock === undefined && clothPrinted.length === 1 && clothPrinted[0].startsWith(`${CLOTH_LINE}: SKIP — the rig declares no physics constraint`),
+        clothBlock === undefined
+          ? `no physics constraint: ${clothPrinted.join(' | ')}`
+          : `${clothBlock.status}, ${clothBlock.warnings} of ${clothBlock.rows.length} chain(s) settle on the ${clothBlock.duration} s idle${clothBlock.warnings === 0 ? '' : `: ${clothBlock.rows.filter((row) => row.settles_at !== null).map((row) => `${row.tip} at ${String(row.settles_at)} s`).join(', ')}`}; slowest tip that does not settle ${Math.min(...clothBlock.rows.filter((row) => row.settles_at === null).map((row) => row.min_rig_px_per_s))} rig px/s; printed ${clothPrinted.length} line(s)${JSON.stringify(clothPrinted) === JSON.stringify(clothLines(clothBlock)) ? ', the block as printed' : ', DIFFERENT from the block'}`,
+        "issue #501 bar 1 on the public examples: a rig with physics prints the line from check.json's block, line for line, every chain with its figures (CH04 holds the block to expected/); one with none prints a SKIP naming why and writes no key — wind's skirt and reference-sample's hip_jiggle settle, every chain an idle key drives does not",
       );
 
       // Issue #118 on real art: TIP_OVER_ROOT reads the posed geometry, which no render size enters. One variant per
