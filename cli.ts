@@ -31,6 +31,7 @@ import { basisLines, branchSqueezeLine, checkProposal, compare, compareLines, DE
 import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, coverageLines, serializeBasis } from './src/diagnostics.ts';
 import { BEND_DEGREES, BEND_WORST_SHARE, DUST_MAX_PX, DUST_MAX_SHARE, IDLE_BOUND_PX, MESH_DRAFT_REPORT, MESH_DRAFT_SPEC, meshDraftStage, MORE_TRIANGLES_FLAG, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
 import { PROVENANCE_FILE, REMESH_SPEC, remeshStage } from './src/remesh.ts';
+import { RETUNE_FILE, RETUNE_SPEC, retuneStage } from './src/retune.ts';
 import { checkPainting } from './src/paintcheck.ts';
 import { readPng, writePng } from './src/raster/png.ts';
 import { REQUIREMENTS_SENTENCE } from './src/requirements.ts';
@@ -383,6 +384,30 @@ usage:
       REMESH_DELTA_BASIS, REMESH_DELTA_OPS, REMESH_DELTA_OP naming ops[i],
       REMESH_DELTA_TOPOLOGY). No config entry is built: the baseline is the
       input itself; the splice, the gate and check are as for --mesh.
+
+  rig-parts retune --rig <dir> --config <config.json> --parts <dir> --out <dir>
+                   [--requirements <file.json>] [--idle-keys ctl|direct]
+                   [--page-edges pot|free] [--pack-shape rect|polygon]
+      Splice the constraints and the idle a config states onto a gated rig
+      (the directory rig writes) and write a new revision into --out, which
+      must not exist (RETUNE_OUT_FRESH); the input is never written. The
+      config is built once through the rig stage (RETUNE_CONFIG_REFUSED,
+      quoting each problem), and that build must state the input's stops,
+      bones, slots, skeleton, images, every invariant but detached and every
+      byte of motion.json but animations.idle (RETUNE_REQUEST_HELD): a moved
+      bone, a redrawn image, a stops change or an animations_from change is
+      no retune. No attachment is compared — the input's meshes are carried
+      over as bytes, repairs included, and a meshes change in the config is
+      never read (remesh is a mesh's producer). rig.json takes the build's
+      constraints and invariants.detached, motion.json its animations.idle,
+      every other byte is the input's (RETUNE_PRESERVED); rigc's build gate
+      passes over the revision (RETUNE_RIGC_GREEN); check measures every bar
+      on it that it measures on the input and fails none the input meets
+      (RETUNE_CHECK_HELD). --out receives the revision and ${RETUNE_FILE}
+      (spec "${RETUNE_SPEC}": the request, both versions, every input file's
+      SHA-256, what was held, which constraint fields and idle tracks changed,
+      both checks and their scope) — no path and no clock, so the same request
+      writes the same bytes. Prints what changed and a hash table of every file.
 
   rig-parts check --rig <dir> --out <dir> [--parts <dir>] [--source <painting.png>]
                     [--page-edges pot|free] [--pack-shape rect|polygon]
@@ -848,6 +873,7 @@ const TAKES = {
   compose: { valued: ['--scene', '--out', '--requirements', '--accept'], switches: [] },
   'mesh-draft': { valued: ['--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: ['--more-triangles'] },
   remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--delta', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
+  retune: { valued: ['--rig', '--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
   painting: { valued: ['--keypoints', '--person'], switches: [] },
 } as const satisfies Record<string, { valued: readonly string[]; switches: readonly string[] }>;
 
@@ -1700,6 +1726,45 @@ function cmdRemesh(args: string[]): number {
   }
 }
 
+/** `retune` (issue #527): the constraints and the idle a config states, spliced onto a gated rig, into a new revision. */
+function cmdRetune(args: string[]): number {
+  const f = flags(args, 'retune', ['--rig', '--config', '--parts', '--out']);
+  if (typeof f === 'string') return usage(f);
+  const keys = idleKeysOf(f.get('--idle-keys'));
+  if (!isIdleKeys(keys)) return usage(keys);
+  const edges = pageEdgesOf(f.get('--page-edges'));
+  if (!isPageEdges(edges)) return usage(edges);
+  const shape = packShapeOf(f.get('--pack-shape'));
+  if (!isPackShape(shape)) return usage(shape);
+  let bin: string;
+  try {
+    bin = findRigc(import.meta.dir, process.env.PATH ?? '');
+  } catch (err) {
+    return printRefusal(err);
+  }
+  const runner = rigcRunner(bin);
+  const said = runner(['--version']);
+  const rigcVersion = said.status === 0 ? (said.out.trim().split('\n')[0] ?? '') : '';
+  if (rigcVersion === '') return printRefusal(new PartsError([{ code: 'RETUNE_RIGC_GREEN', object: 'rigc --version', detail: `exited ${said.status}${rigcRanClause(said)}; the provenance names the rigc that gated the revision, so its version is required` }]));
+  const scratch = mkdtempSync(join(tmpdir(), 'rig-parts-retune-'));
+  try {
+    const req = f.get('--requirements');
+    retuneStage(
+      { rig: f.get('--rig') as string, config: f.get('--config') as string, parts: f.get('--parts') as string, out: f.get('--out') as string, idleKeys: keys, pageEdges: edges, packShape: shape, ...(req === undefined ? {} : { requirements: req }) },
+      runner,
+      bin,
+      { parts: version(), rigc: rigcVersion },
+      scratch,
+      console.log,
+    );
+    return EXIT_OK;
+  } catch (err) {
+    return printRefusal(err);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 /**
  * `painting --keypoints <k.json> [--person <id>] <painting.png>` (issue #350): what the painting must be before
  * See-through runs on it, read off its pixels and the body-18 joints `propose --keypoints` reads. Writes nothing.
@@ -1770,6 +1835,7 @@ function main(argv: string[]): number | Promise<number> {
   if (command === 'compose') return cmdCompose(rest);
   if (command === 'mesh-draft') return cmdMeshDraft(rest);
   if (command === 'remesh') return cmdRemesh(rest);
+  if (command === 'retune') return cmdRetune(rest);
   if (command === 'painting') return cmdPainting(rest);
   if (command === 'guide') return cmdGuide(rest);
   const later = LATER.find(([name]) => name === command);

@@ -2979,6 +2979,38 @@ gate and `check` are the `--mesh` path's. A constraint is a statement about this
 revision's triangulation only: the rig spec has no field for it, so a later edit of the
 revision reads it as any other edge.
 
+### retune
+
+| rule | means | change |
+| --- | --- | --- |
+| <a id="RETUNE_OUT_FRESH"></a>`RETUNE_OUT_FRESH` | `--out` exists, or lies inside `--rig`: a revision is a new directory beside the input, never written over it | name a directory that does not exist yet |
+| <a id="RETUNE_INPUT_PRESENT"></a>`RETUNE_INPUT_PRESENT` | `--rig` is not the directory `rig` writes: `rig.json`, `motion.json`, `mesh_report.json` or `images/` is missing | point `--rig` at a `rig` output (`build`'s `rig/`, or a `remesh` or `retune` revision) |
+| <a id="RETUNE_INPUT_WRITTEN"></a>`RETUNE_INPUT_WRITTEN` | `rig.json` or `motion.json` is not the text this package's writer prints for its value (reformatted, or written by something else); the revision is spliced as text, so it could not carry every other byte over | use the files as `rig` wrote them |
+| <a id="RETUNE_CONFIG_REFUSED"></a>`RETUNE_CONFIG_REFUSED` | the rig stage refused the config as written — the loader, a mesh's own checks, an `auto` mesh's motion gate under the new idle, or rigc's gate; each problem is quoted, and nothing was written | change the field the quoted problem names |
+| <a id="RETUNE_REQUEST_HELD"></a>`RETUNE_REQUEST_HELD` | the config's build does not state the input's `stops`, `bones` (a bone moved, renamed, added, re-inherited, or a `<bone>_ctl` added or dropped), `slots`, `skeleton`, `images`, an image file, an `invariants` entry other than `detached`, or a byte of `motion.json` outside `animations.idle` (`animations_from`, the groups, the easings, the face deform); the first differing leaf is named | make it a config change and rebuild with `rig --config` |
+| <a id="RETUNE_PRESERVED"></a>`RETUNE_PRESERVED` | the spliced revision differs from the input outside `rig.json`'s `constraints` and `invariants.detached` and `motion.json`'s `animations.idle`; the file and the path that moved are named | a defect in this package: report it with the line |
+| <a id="RETUNE_RIGC_GREEN"></a>`RETUNE_RIGC_GREEN` | rigc's build gate refused the revision (its lines quoted), or `rigc --version` named no version for the provenance | read rigc's line; nothing was written |
+| <a id="RETUNE_CHECK_HELD"></a>`RETUNE_CHECK_HELD` | `check` on the revision did not measure a bar it measured on the input, or failed a bar the input met; the revision's own FAIL line is quoted | soften the constraint or the idle track the line names |
+
+A retune replaces a rig's physics and its idle and nothing else. The config is built
+once through the rig stage; from that build `rig.json` takes `constraints` and
+`invariants.detached` (which the rig stage derives from the constraints), and
+`motion.json` takes `animations.idle`. Every other byte is the input's: every
+attachment and image, every `mesh_report.json` row and every other animation, so a
+mesh the config does not reproduce — a `remesh` revision, or a repair accepted after
+the config was written — is carried over as it is. What the build must state as the
+input does is held, and a config that moves it is refused rather than half-applied:
+a `stops` change (it rewires bones, slots and weights onto the drawn links
+`<link>_d`, so it is outside what a retune holds byte for byte), a moved, renamed or
+re-`inherit`ed bone, a new control bone under `--idle-keys ctl`, a redrawn image, or a
+change to `animations_from`. No mesh is compared or written, so a `meshes` change in
+the config is left out of the revision — `retune.json`'s `held.not_compared` says so;
+`remesh` is the producer of a mesh. `retune.json` names the input's SHA-256 per file,
+what was held, which constraint fields changed (and which constraints were added or
+removed), how many idle tracks changed and the idle's duration before and after, both
+versions and both checks, and quotes `check`'s own physics line as the scope of the
+revision's check.
+
 ### rig-c's mesh refusals, quoted in a line
 
 rig-c's mesh library refuses a malformed input by throwing with a code of its own. This
