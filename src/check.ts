@@ -1905,8 +1905,9 @@ export interface SetCheckFigures {
   PASS: boolean;
 }
 
-/** `check.json`'s `requirements` block: the fps every named animation was sampled at, the summary, and each line by its name, in the file's order. */
+/** `check.json`'s `requirements` block: which file was read, the fps every named animation was sampled at, the summary, and each line by its name, in the file's order. */
 export interface RequirementsBlock {
+  file: RequirementsFileRecord;
   fps: number;
   summary: RequirementsSummary;
   lines: Record<string, RequirementLine>;
@@ -3834,9 +3835,10 @@ export function environmentLine(env: CheckEnvironment): string {
  * MEASURABLE is a problem. Without it nothing here reads, writes or prints
  * anything it did not before.
  */
-export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string): CheckReport {
+export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, requirementsAs: string | undefined = requirements): CheckReport {
   let inp: CheckInputs;
   let reqFile: RequirementsFile | null = null;
+  let reqRecord: RequirementsFileRecord | null = null;
   let seams: Map<string, SeamPair[]> | null = null;
   // Every reader collects every problem; one refusal names every set.
   const refused: Problem[] = [];
@@ -3859,6 +3861,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     const got = take(() => readCheckInputs(rigDir, partsHome, source, set, allSets));
     reqFile = take(() => readRequirements(requirements));
     refuseIfAny(refused);
+    reqRecord = requirementsFileRecord(requirements, requirementsAs ?? requirements);
     inp = got as CheckInputs;
     const file = reqFile as RequirementsFile;
     const ready = inp;
@@ -4450,7 +4453,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
 
   // 5. the scene's declared requirements (issue #93), only under --requirements
   const reqProblems: Problem[] = [];
-  const reqBlock = reqFile === null ? null : measureRequirements(inp, reqFile, buildDir, out, rigc, reqProblems, seams ?? new Map(), measured);
+  const reqBlock = reqFile === null || reqRecord === null ? null : { file: reqRecord, ...measureRequirements(inp, reqFile, buildDir, out, rigc, reqProblems, seams ?? new Map(), measured) };
 
   const skipped: { loop?: string; seam?: string } = {};
   if (inp.noIdle !== null) skipped.loop = inp.noIdle;
@@ -4577,6 +4580,27 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
 /** Where `check` writes the requirement renders, under `--out`: `as-declared/<animation>/`, `released/<name>/`, `full/<name>/`. */
 export const REQUIREMENTS_DIR = 'requirements';
 
+/**
+ * Issue #556: the requirements file a check read, first in `check.json`'s
+ * `requirements` block — the path as the caller wrote it (the `--requirements`
+ * flag as typed, or `config.requirements` as declared; never resolved, so the
+ * bytes do not move with the directory the build ran in), the sha256 of the
+ * bytes read, and the file's top-level keys in its order, so a reader sees
+ * what the file asked (a `not_swinging`, a `may_fold`) without opening it.
+ */
+export interface RequirementsFileRecord {
+  path: string;
+  sha256: string;
+  keys: string[];
+}
+
+/** The {@link RequirementsFileRecord} of a file {@link readRequirements} has passed, read at `path` and recorded as `recorded`. */
+export function requirementsFileRecord(path: string, recorded: string): RequirementsFileRecord {
+  const bytes = readFileSync(resolve(path));
+  const raw = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
+  return { path: recorded, sha256: createHash('sha256').update(bytes).digest('hex'), keys: Object.keys(raw) };
+}
+
 /** The throwaway copies' specs and builds, under `--out`; removed before the stage returns. */
 const REQUIREMENTS_SCRATCH = '_requirements';
 
@@ -4598,7 +4622,7 @@ const REQUIREMENTS_SCRATCH = '_requirements';
  * `CHECK_RIGC_GREEN`, quoting rigc. Lines go into the returned block; each
  * FAIL and NOT MEASURABLE into `problems`.
  */
-export function measureRequirements(inp: CheckInputs, file: RequirementsFile, buildDir: string, out: string, rigc: RigcRunner, problems: Problem[], seams: ReadonlyMap<string, readonly SeamPair[]> = new Map(), render: RigcRunner = rigc): RequirementsBlock {
+export function measureRequirements(inp: CheckInputs, file: RequirementsFile, buildDir: string, out: string, rigc: RigcRunner, problems: Problem[], seams: ReadonlyMap<string, readonly SeamPair[]> = new Map(), render: RigcRunner = rigc): Omit<RequirementsBlock, 'file'> {
   const reqDir = join(out, REQUIREMENTS_DIR);
   const scratch = join(out, REQUIREMENTS_SCRATCH);
   for (const d of [reqDir, scratch]) rmSync(d, { recursive: true, force: true });
