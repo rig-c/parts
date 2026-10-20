@@ -32021,6 +32021,7 @@ function runTreeSuite(): number {
     "issue #126 item 7: the config contract is the loader's, so the page's field names are read off it in both directions; a key list the reader cannot resolve is named rather than skipped, so a new object check cannot pass this unread. It holds the names, not their nesting or which are required: the config suite holds those, refusal by refusal",
   );
   runAliasControls(say);
+  runRepublishControls(say);
   return bad();
 }
 
@@ -32163,7 +32164,7 @@ function runAliasControls(say: (name: string, ok: boolean, detail: string, why: 
   const aliasStepAt = yml.indexOf('      - name: Publish the alias');
   const aliasStep = aliasStepAt === -1 ? '' : yml.slice(aliasStepAt, yml.indexOf('\n\n', aliasStepAt) + 2);
   const gatedStep = '      - name: Publish to npm\n';
-  const condition = "        if: ${{ steps.release.outputs.release_created == 'true' }}\n";
+  const condition = "        if: ${{ steps.target.outputs.publish == 'true' }}\n";
   const plants: Array<{ what: string; yml: string | null; doc?: string | null; quiet?: boolean }> = [
     { what: `the release run stops confirming ${lastAlias}`, yml: edit(yml, `"$version" --wait 15 --case clean${confirmed}`, `"$version" --wait 15 --case clean${confirmed.replace(` --alias ${lastAlias}`, '')}`) },
     { what: `the re-run stops confirming ${firstAlias}`, yml: edit(yml, `"$VERSION" --wait 15 --case clean${confirmed}`, `"$VERSION" --wait 15 --case clean${confirmed.replace(` --alias ${firstAlias}`, '')}`) },
@@ -32381,6 +32382,132 @@ function runAliasControls(say: (name: string, ok: boolean, detail: string, why: 
     `${tagFaults.length === 0 ? `every \`npm publish\` in release.yml sets tag="" and runs \`${PRERELEASE_TAG_CASE}\` before publishing with $tag last` : tagFaults.join('; ')}; RELEASING.md ${releasingSays ? 'says' : 'does NOT say'} prereleases go out under rc` +
       ` — planted: ${tagCases.map((c) => `${c.what} -> ${c.ok ? 'named' : 'NOT named'} (${c.said.slice(0, 160)})`).join('; ')}`,
     'a 0.16.0 user\'s plain install must not receive a release candidate: npm puts an untagged publish on latest (npm 12 refuses a prerelease without --tag; npm 10 publishes it there), so both names take rc exactly when the version holds a hyphen, and a stable cut passes no tag and publishes as it always did',
+  );
+}
+
+/** The refusals the dispatch's resolve step names, each as `::error::<CODE>:` (#555, ported from rig-c/review#153). */
+const REPUBLISH_REFUSALS = ['RELEASE_DISPATCH_INPUT', 'RELEASE_TAG_FORM', 'RELEASE_TAG_UNRELEASED', 'RELEASE_ALREADY_PUBLISHED', 'RELEASE_TAG_BELOW_LATEST'] as const;
+
+/** The condition every step after the resolve step runs under, in the release job. */
+const PUBLISH_CONDITION = "${{ steps.target.outputs.publish == 'true' }}";
+
+/** The line RELEASING.md carries for what a failure after the tag leaves, and the two ways out of it (#555). */
+const UNPUBLISHED_CUT_LINE = 'a release-please failure after the tag leaves a version unpublished; the next cut carries it, or the tag is republished by dispatch';
+
+interface ReleaseStep extends AliasStep {
+  id?: string;
+  uses?: string;
+  with?: Record<string, unknown>;
+  env?: Record<string, unknown>;
+}
+
+interface ReleaseWorkflow {
+  on?: { workflow_dispatch?: { inputs?: Record<string, { required?: boolean; type?: string }> } };
+  jobs?: Record<string, { if?: string; steps?: ReleaseStep[] }>;
+}
+
+/**
+ * What is wrong with how `release.yml` republishes a tag release-please cut whose publish did not land, and with how
+ * RELEASING.md says so, one sentence per fault; empty when the dispatch takes an optional `tag` beside an optional
+ * `version`, release-please runs on a push only, one `target` step resolves what to publish right after it and names
+ * each refusal in `REPUBLISH_REFUSALS`, every later step of the job runs under `PUBLISH_CONDITION` and reads the tag
+ * from `steps.target`, the `confirm` job runs on a `version` dispatch alone, and no `run:` block interpolates an input.
+ */
+function republishFaults(yml: string, doc: string, packageName: string): string[] {
+  let wf: ReleaseWorkflow;
+  try {
+    wf = Bun.YAML.parse(yml) as ReleaseWorkflow;
+  } catch (error) {
+    return [`release.yml does not parse as YAML: ${error instanceof Error ? error.message : String(error)}`];
+  }
+  const faults: string[] = [];
+  const inputs = wf.on?.workflow_dispatch?.inputs ?? {};
+  for (const name of ['tag', 'version']) {
+    const input = inputs[name];
+    if (input === undefined) faults.push(`release.yml: workflow_dispatch has no \`${name}\` input`);
+    else if (input.required !== false || input.type !== 'string') faults.push(`release.yml: the dispatch input \`${name}\` is ${JSON.stringify({ required: input.required ?? null, type: input.type ?? null })}, where an optional string is what lets a dispatch give the other input alone`);
+  }
+  const release = wf.jobs?.release;
+  const steps = release?.steps ?? [];
+  if (release === undefined) faults.push('release.yml has no `release` job');
+  const jobIf = release?.if ?? '';
+  if (!jobIf.includes("github.event_name == 'push'") || !jobIf.includes("inputs.tag != ''")) faults.push(`release.yml: the release job runs under ${JSON.stringify(release?.if ?? null)}, which does not admit both a push and a \`tag\` dispatch`);
+  const please = steps.findIndex((s) => (s.uses ?? '').startsWith('googleapis/release-please-action@'));
+  if (please === -1) faults.push('release.yml: the release job runs no release-please step');
+  else if (steps[please].if !== "${{ github.event_name == 'push' }}") faults.push(`release.yml: release-please runs under ${JSON.stringify(steps[please].if ?? null)}, so a dispatch could cut a tag or a release`);
+  const target = steps.findIndex((s) => s.id === 'target');
+  if (target === -1) faults.push('release.yml: the release job has no step with id `target` resolving the tag to publish');
+  else {
+    if (target !== please + 1) faults.push(`release.yml: the resolve step is step ${target + 1} of the release job, where it follows release-please directly`);
+    if (steps[target].if !== undefined) faults.push(`release.yml: the resolve step runs under ${JSON.stringify(steps[target].if)}, so a dispatch could skip its refusals`);
+    const run = steps[target].run ?? '';
+    for (const code of REPUBLISH_REFUSALS) if (!run.includes(`::error::${code}:`)) faults.push(`release.yml: the resolve step never prints \`::error::${code}:\`, so that refusal is not made by name`);
+    const already = run.indexOf('::error::RELEASE_ALREADY_PUBLISHED:');
+    const below = run.indexOf('::error::RELEASE_TAG_BELOW_LATEST:');
+    if (already !== -1 && below !== -1 && below < already) faults.push('release.yml: the resolve step refuses RELEASE_TAG_BELOW_LATEST before RELEASE_ALREADY_PUBLISHED, so a version already served is named as below latest');
+    if (!run.includes(`npm view "${packageName}" version`)) faults.push(`release.yml: the resolve step does not read \`npm view "${packageName}" version\`, so a tag below the registry's latest is not refused`);
+    if (!run.includes(`npm view "${packageName}@$version" version`)) faults.push(`release.yml: the resolve step does not read \`npm view "${packageName}@$version" version\`, so a version the registry serves is not refused under the package's name`);
+    for (const [variable, source] of [['INPUT_TAG', '${{ inputs.tag }}'], ['INPUT_VERSION', '${{ inputs.version }}']] as const) {
+      if (steps[target].env?.[variable] !== source) faults.push(`release.yml: the resolve step's env does not set ${variable} to ${source}`);
+    }
+  }
+  steps.forEach((step, at) => {
+    if (target === -1 || at <= target) return;
+    const label = step.name ?? step.uses ?? `step ${at + 1}`;
+    if (step.if !== PUBLISH_CONDITION) faults.push(`release.yml: "${label}" runs under ${JSON.stringify(step.if ?? null)}, where every step after the resolve step runs under ${PUBLISH_CONDITION}`);
+    const text = JSON.stringify(step);
+    if (text.includes('steps.release.outputs.')) faults.push(`release.yml: "${label}" reads steps.release.outputs, which a dispatch never sets; the tag comes from steps.target`);
+    if ((step.uses ?? '').startsWith('actions/checkout@') && step.with?.ref !== '${{ steps.target.outputs.tag }}') faults.push(`release.yml: the release job checks out ${JSON.stringify(step.with?.ref ?? null)}, not the resolved tag`);
+  });
+  const confirmIf = wf.jobs?.confirm?.if ?? '';
+  if (!confirmIf.includes("inputs.version != ''") || !confirmIf.includes("inputs.tag == ''")) faults.push(`release.yml: the confirm job runs under ${JSON.stringify(wf.jobs?.confirm?.if ?? null)}, so it can run on a \`tag\` dispatch or with no version`);
+  for (const [job, body] of Object.entries(wf.jobs ?? {})) {
+    for (const step of body.steps ?? []) {
+      if (/\$\{\{[^}]*\b(?:github\.event\.)?inputs\./.test(step.run ?? '')) faults.push(`release.yml: "${step.name ?? step.uses ?? '(unnamed)'}" in job "${job}" interpolates an input into its script; inputs reach a run block through env only`);
+    }
+  }
+  if (!doc.includes(UNPUBLISHED_CUT_LINE)) faults.push(`RELEASING.md does not carry "${UNPUBLISHED_CUT_LINE}"`);
+  if (!doc.includes('gh workflow run release.yml -f tag=')) faults.push('RELEASING.md does not give the dispatch `gh workflow run release.yml -f tag=`');
+  for (const code of REPUBLISH_REFUSALS) if (!doc.includes(code)) faults.push(`RELEASING.md does not name the refusal ${code}`);
+  return faults;
+}
+
+function runRepublishControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const packageName = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string }).name;
+  // AL08 — a cut tag whose publish did not land is published by dispatch, through the push path's own steps.
+  const yml = readFileSync(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  const doc = readFileSync(join(ROOT, 'RELEASING.md'), 'utf8');
+  const standing = republishFaults(yml, doc, packageName);
+  const edit = (text: string, from: string, to: string): string | null => (text.includes(from) ? text.split(from).join(to) : null);
+  const aliasCondition = `      - name: Publish the alias ${ALIASES[0]}\n        if: ${PUBLISH_CONDITION}\n`;
+  const plants: Array<{ what: string; yml: string | null; doc?: string | null; want: string }> = [
+    { what: 'the tag input dropped', yml: edit(yml, '      tag:\n        description:', '      tagged:\n        description:'), want: 'no `tag` input' },
+    { what: 'the version input required again', yml: edit(yml, '(leave tag empty)\n        required: false', '(leave tag empty)\n        required: true'), want: 'the dispatch input `version`' },
+    { what: 'release-please runs on a dispatch', yml: edit(yml, "        id: release\n        if: ${{ github.event_name == 'push' }}\n", '        id: release\n'), want: 'so a dispatch could cut' },
+    { what: 'an alias publish keyed on release-please again', yml: edit(yml, aliasCondition, aliasCondition.replace(PUBLISH_CONDITION, "${{ steps.release.outputs.release_created == 'true' }}")), want: `"Publish the alias ${ALIASES[0]}" runs under` },
+    { what: 'the confirmation reads the cut tag again', yml: edit(yml, 'TAG_NAME: ${{ steps.target.outputs.tag }}', 'TAG_NAME: ${{ steps.release.outputs.tag_name }}'), want: 'reads steps.release.outputs' },
+    { what: 'the checkout takes the cut tag again', yml: edit(yml, 'ref: ${{ steps.target.outputs.tag }}', 'ref: ${{ steps.release.outputs.tag_name }}'), want: 'not the resolved tag' },
+    { what: 'the form refusal dropped', yml: edit(yml, '::error::RELEASE_TAG_FORM:', '::error::'), want: 'RELEASE_TAG_FORM' },
+    { what: 'the below-latest refusal dropped', yml: edit(yml, '::error::RELEASE_TAG_BELOW_LATEST:', '::error::'), want: 'RELEASE_TAG_BELOW_LATEST' },
+    { what: "the latest read dropped", yml: edit(yml, `npm view "${packageName}" version`, `npm view "${packageName}" dist-tags`), want: "below the registry's latest is not refused" },
+    { what: 'the registry read under another name', yml: edit(yml, `npm view "${packageName}@$version" version`, 'npm view "other@$version" version'), want: "under the package's name" },
+    { what: 'an input interpolated into the script', yml: edit(yml, 'version="${INPUT_TAG#v}"', 'version="${{ inputs.tag }}"'), want: 'interpolates an input' },
+    { what: 'the confirm job runs on a tag dispatch', yml: edit(yml, " && inputs.version != '' && inputs.tag == '' }}", ' }}'), want: 'the confirm job runs under' },
+    { what: 'the release job runs on a push only', yml: edit(yml, "    if: ${{ github.event_name == 'push' || inputs.tag != '' || inputs.version == '' }}", "    if: ${{ github.event_name == 'push' }}"), want: 'the release job runs under' },
+    { what: "RELEASING.md drops HQ's line", yml, doc: edit(doc, UNPUBLISHED_CUT_LINE, 'a failure after the tag is somebody else\'s'), want: 'RELEASING.md does not carry' },
+  ];
+  const cases = plants.map((p) => {
+    const plantedDoc = p.doc === undefined ? doc : p.doc;
+    if (p.yml === null || plantedDoc === null) return { what: p.what, ok: false, said: 'the edit found nothing to change, so this plant was never made' };
+    const raised = republishFaults(p.yml, plantedDoc, packageName).filter((f) => !standing.includes(f));
+    return { what: p.what, ok: raised.some((f) => f.includes(p.want)), said: raised.join(' | ') || 'no fault' };
+  });
+  say(
+    'AL08_A_CUT_TAG_IS_REPUBLISHED_BY_DISPATCH_THROUGH_THE_SAME_STEPS_AND_EACH_REFUSAL_IS_NAMED',
+    standing.length === 0 && cases.every((c) => c.ok),
+    `${standing.length === 0 ? `release.yml takes an optional \`tag\` beside \`version\`, runs release-please on a push only, resolves the tag in one step naming ${REPUBLISH_REFUSALS.join(', ')} (below-latest after already-published), runs every later step under ${PUBLISH_CONDITION} from the resolved tag, interpolates no input into a script, and RELEASING.md says how to dispatch it` : standing.join('; ')}` +
+      ` — planted ${plants.length}: ${cases.map((c) => `${c.what} -> ${c.ok ? 'named' : `NOT named (${c.said.slice(0, 160)})`}`).join('; ')}`,
+    'issue #555: release-please cut v1.49.0 and its GitHub release, then failed before the publish, and a re-run skips every publish step because release-please no longer reports a release; the tag is published by a dispatch through the same gate and the same publish steps in this file, so the trusted publisher and provenance hold, and an input reaching a script through anything but env is an injection',
   );
 }
 
