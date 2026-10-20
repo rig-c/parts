@@ -231,16 +231,21 @@ usage:
       spliced in (issue #537), the way mesh-draft writes its config, so that
       rig --config <out.json> builds it. What is spliced is measured: the
       same parts drafted again without the recipe, and each config section
-      that differs — bones and constraints whole (a hand-added bone does not
-      survive), meshes.<part>, regions.<part> and motion.tracks entry by
-      entry; a section the input lacks is inserted; every other byte as
-      read. The text is written as stated, so a relative path in it
-      resolves against <out.json>'s directory (a note names each when that
-      is not the input's). Only with --cloth and not with --from-config
-      (usage errors); refused, before anything is written, when <out.json>
-      exists or is a file this run writes (PROPOSE_WRITE_CONFIG_FRESH), or
-      when the spliced text does not parse to the config with the sections
-      set, naming the first key that moved (PROPOSE_WRITE_CONFIG_SPLICE).
+      that differs, entry by entry: meshes.<part> and regions.<part>, and
+      bones, constraints and motion.tracks by each entry's name (issue
+      #552) — an entry the recipe drafts replaced or inserted, one it
+      replaces removed, and every other entry, a hand-added one among
+      them, kept in its place; a section the input lacks is inserted;
+      every other byte as read. The text is written as stated, so a
+      relative path in it resolves against <out.json>'s directory (a note
+      names each when that is not the input's). Only with --cloth and not
+      with --from-config (usage errors); refused, before anything is
+      written, when <out.json> exists or is a file this run writes
+      (PROPOSE_WRITE_CONFIG_FRESH), when an entry the recipe re-drafts or
+      removes was changed by hand, naming the entry and the field
+      (PROPOSE_WRITE_CONFIG_CONFLICT), or when the spliced text does not
+      parse to the config with the sections set, naming the first key
+      that moved (PROPOSE_WRITE_CONFIG_SPLICE).
 
   rig-parts propose --parts <dir> --source <painting.png> --out <dir> --from-config <config.json>
       Draw the config's CURRENT bones instead (<out>/render/landmarks_config.png
@@ -1354,8 +1359,9 @@ function cmdPropose(args: string[]): number {
       writeArg === undefined || clothArg === undefined
         ? null
         : (() => {
-            const edits = clothConfigEdits(drafted, proposeWithBasis(P, joints, wristSnap, gridRule, null).proposal);
             const text = readFileSync(clothArg, 'utf8');
+            // Issue #552: bones, constraints and motion.tracks entry by entry; a hand edit the recipe would drop is refused by name.
+            const edits = clothConfigEdits(drafted, proposeWithBasis(P, joints, wristSnap, gridRule, null).proposal, JSON.parse(text) as unknown);
             return { at: writeArg, text: writtenClothConfig(clothArg, text, edits), paths: editPaths(edits), relative: relativeConfigPaths(dirname(resolve(clothArg)), JSON.parse(text) as Record<string, unknown>) };
           })();
     const bfile = basisFile(P, prop, basis, cfg === null || cmpPath === undefined ? null : { where: cmpPath, config: cfg });
@@ -1374,7 +1380,11 @@ function cmdPropose(args: string[]): number {
     printLint(P, prop, joints, draftLint);
     console.log(basisLine(bfile, out));
     if (written !== null && clothArg !== undefined) {
-      console.log(`wrote ${written.at}: ${clothArg}'s text with ${written.paths.join(', ')} spliced in from the draft; every other byte as read`);
+      console.log(
+        written.paths.length > 0
+          ? `wrote ${written.at}: ${clothArg}'s text with ${written.paths.join(', ')} spliced in from the draft; every other byte as read`
+          : `wrote ${written.at}: ${clothArg}'s text byte for byte; every entry the recipe drafts is already as drafted`,
+      );
       if (written.relative.length > 0 && dirname(resolve(written.at)) !== dirname(resolve(clothArg))) {
         console.log(`note: ${written.relative.map((r) => `${r.at} "${r.value}"`).join(', ')} written as stated; the loader resolves each against the directory the config sits in, ${dirname(written.at)} for ${written.at}, not ${dirname(clothArg)}; put the config beside ${clothArg} or rewrite them`);
       }

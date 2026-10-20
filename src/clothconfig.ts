@@ -7,12 +7,15 @@
  * (`cloth: null`), and each config section of the proposal ({@link PROPOSAL_CONFIG_SECTIONS}) whose value differs
  * between the two is drafted ({@link clothConfigEdits}). An object section (`meshes`, `regions`, `motion`) is
  * spliced entry by entry — `meshes.<part>` and `regions.<part>` for each part the recipe moved, `motion.tracks` and
- * not the author's `animations_from` — and an array section (`bones`, `constraints`) whole: the drafted array
- * replaces the input's, so a bone the author added by hand does not survive a write. A section the recipe does not
+ * not the author's `animations_from` — and so, from issue #552, is an array section (`bones`, `constraints`,
+ * `motion.tracks`): its entries are named ({@link ARRAY_SECTIONS}), the entries the recipe produced or changed are
+ * replaced in place or inserted, the entries it replaced are removed, and every other entry of the input — one the
+ * author added by hand among them — keeps its bytes and its place. A hand edit to an entry the recipe re-drafts or
+ * removes is refused by name, `PROPOSE_WRITE_CONFIG_CONFLICT`, rather than dropped. A section the recipe does not
  * move keeps the input's bytes.
  */
 
-import { PartsError } from './errors.ts';
+import { PartsError, type Problem } from './errors.ts';
 import { type ConfigEdit, splicedEdits } from './meshdraft.ts';
 import { PROPOSAL_CONFIG_SECTIONS, type Proposal } from './propose.ts';
 
@@ -20,25 +23,182 @@ function isPlain(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/** Key-order-blind JSON text: two entries are the same value when this is the same string. */
+function canon(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canon).join(',')}]`;
+  if (isPlain(v)) {
+    return `{${Object.keys(v)
+      .filter((k) => v[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canon(v[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(v);
+}
+
+/** One edit `--write-config` makes, with the words the write line prints for it. */
+export interface ClothEdit extends ConfigEdit {
+  label: string;
+}
+
 /**
- * The edits that turn a config holding the draft without the recipe (`plain`) into one holding the draft with it
- * (`drafted`): for each config section whose value differs, an object section entry by entry (an entry the recipe
- * removed, such as a part it took from `regions` into `meshes`, is removed) and any other section whole.
+ * An array section spliced entry by entry (issue #552), and what names an entry in it: a bone by `name` (a single
+ * bone) or `chain` (a chain), one namespace, as a mesh segment resolves either; a constraint by `name`; a track by
+ * `chain`, or by `bone` and `prop` (the proposer writes two tracks on one bone, `translatey` and `scalex`). An entry
+ * with no such name has no identity: it is never the recipe's, so it is kept.
  */
-export function clothConfigEdits(drafted: Proposal, plain: Proposal): ConfigEdit[] {
-  const edits: ConfigEdit[] = [];
-  const d = drafted as unknown as Record<string, unknown>;
-  const p = plain as unknown as Record<string, unknown>;
+export const ARRAY_SECTIONS: ReadonlyArray<{ path: readonly string[]; identity: (e: unknown) => string | null }> = [
+  { path: ['bones'], identity: (e) => (isPlain(e) ? (typeof e.name === 'string' ? e.name : typeof e.chain === 'string' ? e.chain : null) : null) },
+  { path: ['constraints'], identity: (e) => (isPlain(e) && typeof e.name === 'string' ? e.name : null) },
+  {
+    path: ['motion', 'tracks'],
+    identity: (e) => (isPlain(e) ? (typeof e.chain === 'string' ? e.chain : typeof e.bone === 'string' && typeof e.prop === 'string' ? `${e.bone} ${e.prop}` : null) : null),
+  },
+];
+
+function valueAt(o: unknown, path: readonly string[]): unknown {
+  let v = o;
+  for (const k of path) v = isPlain(v) ? v[k] : undefined;
+  return v;
+}
+
+/** Each entry of a drafted array by its name; the proposer names every entry once, and anything else is this module's error. */
+function byName(arr: readonly unknown[], identity: (e: unknown) => string | null, which: string, section: string): Map<string, unknown> {
+  const m = new Map<string, unknown>();
+  for (const e of arr) {
+    const k = identity(e);
+    if (k === null) throw new Error(`clothConfigEdits: the ${which} ${section} holds an entry with no name: ${JSON.stringify(e)}`);
+    if (m.has(k)) throw new Error(`clothConfigEdits: the ${which} ${section} names "${k}" twice`);
+    m.set(k, e);
+  }
+  return m;
+}
+
+/** The first field, in the author's order, where the author's entry differs from `ref`; null when the two are not both objects. */
+function firstField(author: unknown, ref: unknown): string | null {
+  if (!isPlain(author) || !isPlain(ref)) return null;
+  for (const k of [...Object.keys(author), ...Object.keys(ref).filter((k) => !(k in author))]) if (canon(author[k]) !== canon(ref[k])) return k;
+  return null;
+}
+
+function shown(v: unknown): string {
+  const t = JSON.stringify(v);
+  return t.length > 60 ? `${t.slice(0, 57)}...` : t;
+}
+
+/**
+ * The edits on one array section, entry by entry (issue #552). With `I` the input's entry of a name, `P` the plain
+ * draft's and `D` the recipe's (equality is of the value, key order aside):
+ * - owned (D present, and P absent or different): `I` absent is inserted after the input's entry that precedes it in
+ *   the drafted array (the nearest earlier drafted entry the array holds, one inserted before it included), else at
+ *   the end; `I` equal to `P` is replaced in place; `I` equal to `D` is left as it is;
+ * - removed (P present, D absent — the recipe replaced a plain chain with its trees): `I` equal to `P` is removed;
+ * - every other input entry is kept, bytes and order;
+ * - an owned or removed `I` that is none of those — changed by hand — is a conflict, as is a name the input states twice.
+ */
+function entryEdits(path: readonly string[], identity: (e: unknown) => string | null, drafted: readonly unknown[], plain: readonly unknown[], input: readonly unknown[], conflicts: Problem[]): ClothEdit[] {
+  const section = path.join('.');
+  const D = byName(drafted, identity, 'drafted', section);
+  const P = byName(plain, identity, 'plain', section);
+  const keys = input.map(identity);
+  const where = new Map<string, number[]>();
+  keys.forEach((k, i) => {
+    if (k !== null) where.set(k, [...(where.get(k) ?? []), i]);
+  });
+  const owned = [...D.keys()].filter((k) => !P.has(k) || canon(P.get(k)) !== canon(D.get(k)));
+  const removed = [...P.keys()].filter((k) => !D.has(k));
+  const replace: string[] = [];
+  const remove: string[] = [];
+  const conflict = (k: string, i: number, drafts: boolean): void => {
+    const author = input[i];
+    const field = firstField(author, P.has(k) ? P.get(k) : D.get(k));
+    const fieldOf = (e: unknown, f: string): string => (isPlain(e) && e[f] !== undefined ? `${f} ${shown(e[f])}` : `no ${f}`);
+    const held = field === null ? `the entry ${shown(author)}` : fieldOf(author, field);
+    const draft = D.get(k);
+    const draftSays = !drafts ? 'the draft removes the entry (the recipe drafts that part afresh)' : field === null ? `the draft writes ${shown(draft)}` : `the draft writes ${fieldOf(draft, field)}`;
+    conflicts.push({
+      code: 'PROPOSE_WRITE_CONFIG_CONFLICT',
+      object: `config.${section}[${i}] "${k}"`,
+      detail: `${section} entry "${k}" is the recipe's, and it was changed by hand: it holds ${held} where ${draftSays}, so the write would drop the hand edit; take the draft by removing the hand edit (or the entry), or leave the recipe out for that part (its config.cloth block)`,
+    });
+  };
+  for (const k of [...owned, ...removed]) {
+    const at = where.get(k) ?? [];
+    if (at.length > 1) {
+      conflicts.push({
+        code: 'PROPOSE_WRITE_CONFIG_CONFLICT',
+        object: `config.${section}[${at[1]}] "${k}"`,
+        detail: `${section} names "${k}" ${at.length} times (entries ${at.join(', ')}), and the recipe drafts that name, so the write cannot tell which entry is the recipe's; state it once`,
+      });
+      continue;
+    }
+    if (at.length === 0) continue;
+    const I = canon(input[at[0]]);
+    if (D.has(k)) {
+      if (I === canon(D.get(k))) continue;
+      if (P.has(k) && I === canon(P.get(k))) replace.push(k);
+      else conflict(k, at[0], true);
+    } else if (I === canon(P.get(k))) remove.push(k);
+    else conflict(k, at[0], false);
+  }
+  const edits: ClothEdit[] = [];
+  const work = [...keys];
+  for (const k of replace) edits.push({ path: [...path, work.indexOf(k)], value: D.get(k), label: `${section}["${k}"] replaced` });
+  for (const k of remove) {
+    const i = work.indexOf(k);
+    edits.push({ path: [...path, i], value: undefined, label: `${section}["${k}"] removed` });
+    work.splice(i, 1);
+  }
+  const order = [...D.keys()];
+  for (const k of owned) {
+    if (work.includes(k)) continue;
+    let pos = work.length;
+    for (let j = order.indexOf(k) - 1; j >= 0; j--) {
+      const before = work.indexOf(order[j]);
+      if (before >= 0) {
+        pos = before + 1;
+        break;
+      }
+    }
+    edits.push({ path: [...path, pos], value: D.get(k), insert: true, label: `${section}["${k}"] inserted` });
+    work.splice(pos, 0, k);
+  }
+  return edits;
+}
+
+/**
+ * The edits that turn `input` (the `--cloth` config, parsed) into one holding what the recipe drafts, measured as the
+ * difference between the draft with the recipe (`drafted`) and without it (`plain`): for each config section whose
+ * value differs, an object section entry by entry (an entry the recipe removed, such as a part it took from `regions`
+ * into `meshes`, is removed), an array section of {@link ARRAY_SECTIONS} entry by entry ({@link entryEdits}) where
+ * the input holds it as an array, and any other section, or one the input lacks, whole. Every conflict is collected and
+ * refused in one throw, `PROPOSE_WRITE_CONFIG_CONFLICT`, before anything is written.
+ *
+ * `whole` is the selftest's mutant only (issue #552): `bones`, `constraints` and `motion.tracks` replaced whole, as
+ * the #537 writer did; no flag or environment reaches it.
+ */
+export function clothConfigEdits(drafted: Proposal, plain: Proposal, input: unknown, whole = false): ClothEdit[] {
+  const edits: ClothEdit[] = [];
+  const conflicts: Problem[] = [];
+  const d = JSON.parse(JSON.stringify(drafted)) as Record<string, unknown>;
+  const p = JSON.parse(JSON.stringify(plain)) as Record<string, unknown>;
+  const one = (path: readonly string[], a: unknown, b: unknown): void => {
+    const s = whole ? undefined : ARRAY_SECTIONS.find((x) => x.path.join('.') === path.join('.'));
+    const mine = valueAt(input, path);
+    if (s !== undefined && Array.isArray(b) && (a === undefined || Array.isArray(a)) && Array.isArray(mine)) edits.push(...entryEdits(path, s.identity, b, Array.isArray(a) ? a : [], mine, conflicts));
+    else edits.push({ path, value: b, label: path.join('.') });
+  };
   for (const section of PROPOSAL_CONFIG_SECTIONS) {
     const a = p[section];
     const b = d[section];
     if (JSON.stringify(a) === JSON.stringify(b)) continue;
     if (isPlain(a) && isPlain(b)) {
       for (const k of [...Object.keys(b), ...Object.keys(a).filter((k) => !(k in b))]) {
-        if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) edits.push({ path: [section, k], value: b[k] });
+        if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) one([section, k], a[k], b[k]);
       }
-    } else edits.push({ path: [section], value: b });
+    } else one([section], a, b);
   }
+  if (conflicts.length > 0) throw new PartsError(conflicts);
   return edits;
 }
 
@@ -61,7 +221,7 @@ export function writtenClothConfig(where: string, text: string, edits: readonly 
   return r.text;
 }
 
-/** The paths the edits name, dotted, in order: what the write line prints. */
-export function editPaths(edits: readonly ConfigEdit[]): string[] {
-  return edits.map((e) => e.path.join('.'));
+/** What each edit names, in order: what the write line prints. */
+export function editPaths(edits: readonly ClothEdit[]): string[] {
+  return edits.map((e) => e.label);
 }
