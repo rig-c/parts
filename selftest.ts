@@ -460,6 +460,7 @@ import { FIELD_LATTICE_GRID, FIELD_POSES, fieldRegion, REGION_SPACINGS } from '.
 import { BASE_SPACINGS, CONTROL, describeWorst, displacement, frameOpenings, kindOf, neighbours, pickAtBudget, type PlacedMask, POSE_PHASE, ranked, regionPoses, regionSpacings, resolveSegments, seamOpening, seamPairs, sineAt, SWEEP_TOLERANCES, testRegion, toWorldPx, variantConfig } from './tools/real_compare.ts';
 import { BEND_DEGREES, BEND_WORST_SHARE, bendAnimationNames, bendAnimations, type BendFigure, bendLinks, CALIBRATED_SENTENCE, candidateMesh, carriedBy, islandsJoin, MORE_TRIANGLES_FLAG, RELATIVE_SENTENCE, DUST_MAX_PX, DUST_MAX_SHARE, dustOf, figureRules, type GateLine, gateVerdict, IDLE_BOUND_PX, jsonValueSpan, MEASURED_SENTENCE, MESH_DRAFT_REPORT, meshDraftStage, NOT_COMPARED_SENTENCE, notCompared, partsNamed, type PartReadings, type Reading, READINGS, splicedConfig, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
 import { type Built, type CheckSide, checkHeldProblems, PROVENANCE_FILE, type RemeshInput, type RemeshPlant, type RemeshProvenance, type RemeshResult, remeshStage, requestHeldProblems, targetProblems } from './src/remesh.ts';
+import { RETUNE_FILE, RETUNE_SPEC, type RetuneInput, type RetunePlant, type RetuneProvenance, type RetuneResult, retuneStage } from './src/retune.ts';
 import { DRAFT_COARSE_GRID, DRAFT_COSTLY_GRID, DRAFT_FIGURE, DRAFT_FINE_GRID, DRAFT_LINKS, DRAFT_SPECK_ALPHA, draftConfig, draftParts, writeDraftFixture, writeDraftFixtureWithContour, writeDraftIslandsFixture } from './fixtures/meshdraft.ts';
 import { pyRound } from './src/round.ts';
 import { COLORS, isSkeletonName, KEYPOINT_NAMES, renderSkeleton, scaledPoints, SKELETON_BASE, SKELETONS, stickScale } from './src/skeleton.ts';
@@ -4586,9 +4587,9 @@ function runCliSuite(): number {
     const helpText = runCli(['--help']).out;
     say(
       'CL20_THE_HELP_NAMES_REQUIREMENTS_UNDER_CHECK_AND_UNDER_BUILD',
-      helpText.split('\n').filter((l) => l.includes('[--requirements <file.json>]')).length === 5 && helpText.split('\n').some((l) => l.trim().startsWith('rig-parts compose') && l.includes('[--requirements <file.json>]')) && helpText.split('\n').some((l) => l.trim().startsWith('rig-parts mesh-draft') && l.includes('[--requirements <file.json>]')) && helpText.split('\n').some((l) => l.trim().startsWith('--mesh <entry.json>') && l.includes('[--requirements <file.json>]')) && helpText.includes('--requirements is forwarded to check') && helpText.includes('CHECK_REQUIREMENT_MEASURABLE'),
+      helpText.split('\n').filter((l) => l.includes('[--requirements <file.json>]')).length === 6 && helpText.split('\n').some((l) => l.trim().startsWith('rig-parts compose') && l.includes('[--requirements <file.json>]')) && helpText.split('\n').some((l) => l.trim().startsWith('rig-parts mesh-draft') && l.includes('[--requirements <file.json>]')) && helpText.split('\n').some((l) => l.trim().startsWith('--mesh <entry.json>') && l.includes('[--requirements <file.json>]')) && helpText.split('\n').some((l, i, all) => l.trim().startsWith('rig-parts retune') && (all[i + 1] ?? '').trim().startsWith('[--requirements <file.json>]')) && helpText.includes('--requirements is forwarded to check') && helpText.includes('CHECK_REQUIREMENT_MEASURABLE'),
       `${helpText.split('\n').filter((l) => l.includes('[--requirements <file.json>]')).map((l) => l.trim()).join(' | ')}`,
-      'an agent learns a flag from --help: check, build, compose (issue #74), mesh-draft (issue #265, which forwards it to its checks) and remesh (issue #495, likewise) each show it, and the check text names the two codes a requirement line can be refused with',
+      'an agent learns a flag from --help: check, build, compose (issue #74), mesh-draft (issue #265, which forwards it to its checks), remesh (issue #495, likewise) and retune (issue #527, likewise) each show it, and the check text names the two codes a requirement line can be refused with',
     );
     const bareReq = runCli(['check', '--rig', join(dir, 'nowhere'), '--out', join(dir, 'req-usage'), '--requirements']);
     const twiceReq = runCli(['build', '--config', 'c', '--source', 's', '--full', 'f', '--head', 'h', '--out', join(dir, 'req-usage-build'), '--requirements', 'a.json', '--requirements', 'b.json']);
@@ -34400,6 +34401,300 @@ function runRemeshSuite(): number {
 }
 
 // ---------------------------------------------------------------------------
+// retune (issue #527)
+// ---------------------------------------------------------------------------
+
+/** The retune suite's physics constraint on the fixture's middle tail link: the fixture config declares none, so the input and every request carry it. */
+const RETUNE_PHYSICS = { name: 'tail1_physics', type: 'physics', bone: 'tail1', rotate: 1, inertia: 0.5, strength: 60, damping: 0.85, mass: 1, mix: 1 };
+
+/** The retune suite's second animation, read through `motion.animations_from`: a one-second nod of `body`, so the hold has an animation besides the idle to keep. */
+const RETUNE_NOD = { duration: 1, tracks: [{ bone: 'body', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 1, v: [5] }] }] };
+
+/**
+ * The suite's own reading of what a retune revision moved, written apart from `src/retune.ts` so the preserve
+ * assertion's mutant has a second reader: every file's SHA-256 but the two spliced, `rig.json` by top-level key and by
+ * attachment with `constraints` and `invariants.detached` left out, `motion.json` with `animations.idle` left out.
+ */
+function retuneMoves(inDir: string, revDir: string): string[] {
+  const a = new Map(treeDigest(inDir).split('\n').map((l) => l.split(' ') as [string, string]));
+  const b = new Map(treeDigest(revDir).split('\n').map((l) => l.split(' ') as [string, string]));
+  const moved: string[] = [];
+  for (const [k, h] of a) if (k !== 'rig.json' && k !== 'motion.json' && b.get(k) !== h) moved.push(k);
+  for (const k of b.keys()) if (!a.has(k) && k !== RETUNE_FILE) moved.push(k);
+  if (!b.has('rig.json') || !b.has('motion.json')) return [...moved, 'rig.json or motion.json'];
+  type Obj = Record<string, unknown>;
+  const read = (d: string, f: string): Obj => JSON.parse(readFileSync(join(d, f), 'utf8')) as Obj;
+  const ra = read(inDir, 'rig.json');
+  const rb = read(revDir, 'rig.json');
+  const inv = (r: Obj): string => JSON.stringify(Object.entries((r.invariants ?? {}) as Obj).filter(([k]) => k !== 'detached'));
+  if (inv(ra) !== inv(rb)) moved.push('rig.json invariants');
+  for (const k of new Set([...Object.keys(ra), ...Object.keys(rb)])) if (k !== 'skins' && k !== 'constraints' && k !== 'invariants' && JSON.stringify(ra[k]) !== JSON.stringify(rb[k])) moved.push(`rig.json ${k}`);
+  type Skins = Record<string, Record<string, Record<string, unknown>>>;
+  for (const [skin, slots] of Object.entries(ra.skins as Skins)) {
+    for (const [slot, atts] of Object.entries(slots)) {
+      for (const [name, att] of Object.entries(atts)) if (JSON.stringify(att) !== JSON.stringify((rb.skins as Skins)[skin]?.[slot]?.[name])) moved.push(`skins.${skin}.${slot}.${name}`);
+    }
+  }
+  const ma = read(inDir, 'motion.json');
+  const mb = read(revDir, 'motion.json');
+  for (const k of new Set([...Object.keys(ma), ...Object.keys(mb)])) {
+    if (k !== 'animations' && JSON.stringify(ma[k]) !== JSON.stringify(mb[k])) moved.push(`motion.json ${k}`);
+  }
+  const aa = ma.animations as Obj;
+  const ab = mb.animations as Obj;
+  if (Object.keys(aa).join() !== Object.keys(ab).join()) moved.push('motion.json animations (names)');
+  for (const k of Object.keys(aa)) if (k !== 'idle' && JSON.stringify(aa[k]) !== JSON.stringify(ab[k])) moved.push(`motion.json animations.${k}`);
+  return moved;
+}
+
+function runRetuneSuite(): number {
+  section('retune: constraints and the idle spliced onto a gated rig, every other byte kept, a new revision (issue #527)');
+  const { say, bad } = counter();
+  const root = temp('retune');
+  const rigc = suiteRigc();
+  const runner: RigcRunner = (args) => {
+    const r = spawnSync(rigc, [...args], { encoding: 'utf8', maxBuffer: 1 << 28 });
+    return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+  };
+  const versions = { parts: 'selftest', rigc: 'selftest' };
+  type Obj = Record<string, unknown>;
+  try {
+    // The input: the mesh-draft fixture with its mark meshed as an outline (two meshes: the strip and the mark), a
+    // physics constraint on tail1 and a second animation, built by the rig stage as `rig` writes it.
+    const fx = writeDraftFixtureWithContour(join(root, 'fx'), DRAFT_COARSE_GRID);
+    const fxDir = join(root, 'fx');
+    writeFileSync(join(fxDir, 'anims.json'), `${JSON.stringify({ spec: 'rigc-motion/1', animations: { nod: RETUNE_NOD } })}\n`);
+    writeFileSync(join(fxDir, 'anims-moved.json'), `${JSON.stringify({ spec: 'rigc-motion/1', animations: { nod: { ...RETUNE_NOD, tracks: [{ ...RETUNE_NOD.tracks[0], keys: [{ t: 0, v: [0] }, { t: 1, v: [7] }] }] } } })}\n`);
+    const base = JSON.parse(readFileSync(fx.config, 'utf8')) as Obj;
+    base.constraints = [RETUNE_PHYSICS];
+    (base.motion as Obj).animations_from = 'anims.json';
+    writeFileSync(fx.config, `${JSON.stringify(base, null, 2)}\n`);
+    // A request is a config beside the fixture's, so its animations_from resolves to the same file.
+    const variant = (name: string, edit: (c: Obj) => void): string => {
+      const c = JSON.parse(JSON.stringify(base)) as Obj;
+      edit(c);
+      const p = join(fxDir, `config-${name}.json`);
+      writeFileSync(p, `${JSON.stringify(c, null, 2)}\n`);
+      return p;
+    };
+    const physicsOf = (c: Obj): Obj => (c.constraints as Obj[])[0];
+    const input = join(root, 'input');
+    rigStage({ config: fx.config, parts: fx.parts, out: input }, runner, join(root, 'input-gate'), () => {});
+    const stage = (name: string, config: string, over: Partial<RetuneInput> = {}, plant: RetunePlant = {}): { e: PartsError | null; out: string; log: string[]; r: RetuneResult | null } => {
+      const out = join(root, `out-${name}`);
+      const log: string[] = [];
+      let r: RetuneResult | null = null;
+      const e = refusals(() => (r = retuneStage({ rig: input, config, parts: fx.parts, out, ...over }, runner, rigc, versions, join(root, `scratch-${name}`), (l) => log.push(l), plant)));
+      return { e, out: over.out ?? out, log, r };
+    };
+    const inputDigest = treeDigest(input);
+    const rigOf = (dir: string): Obj => JSON.parse(readFileSync(join(dir, 'rig.json'), 'utf8')) as Obj;
+    const skinsText = (dir: string): string => JSON.stringify(rigOf(dir).skins);
+    const strip = (dir: string): string => JSON.stringify((rigOf(dir).skins as Record<string, Record<string, Record<string, unknown>>>).default.strip.strip);
+    const digest = (s: string): string => createHash('sha256').update(s).digest('hex').slice(0, 16);
+    const damping = variant('damping', (c) => (physicsOf(c).damping = 0.7));
+
+    // RN01 — the positive control, through the CLI: one physics constraint's damping changed, every mesh the input's.
+    const out1 = join(root, 'cli-out');
+    const run1 = runCli(['retune', '--rig', input, '--config', damping, '--parts', fx.parts, '--out', out1]);
+    const moves1 = existsSync(out1) ? retuneMoves(input, out1) : ['nothing written'];
+    const prov1 = readJsonFile(join(out1, RETUNE_FILE)) as RetuneProvenance | null;
+    const con1 = existsSync(out1) ? (rigOf(out1).constraints as Obj[]) : [];
+    const hashLines1 = run1.out.split('\n').filter((l) => /^ {2}\S+ +[0-9a-f]{16} {3}[0-9a-f]{16}/.test(l));
+    say(
+      'RN01_A_DAMPING_CHANGE_IS_SPLICED_ONTO_THE_INPUT_WITH_EVERY_MESH_BYTE_IDENTICAL',
+      run1.status === 0 &&
+        moves1.length === 0 &&
+        skinsText(out1) === skinsText(input) &&
+        con1.length === 1 &&
+        con1[0].damping === 0.7 &&
+        JSON.stringify(prov1?.changed.constraints) === JSON.stringify([{ name: 'tail1_physics', type: 'physics', fields: ['damping'] }]) &&
+        prov1?.changed.added.length === 0 &&
+        prov1.changed.removed.length === 0 &&
+        prov1.changed.idle.tracks_changed === 0 &&
+        prov1.check.revision.pass === true &&
+        prov1.check.input.measured.join() === prov1.check.revision.measured.join() &&
+        hashLines1.filter((l) => l.endsWith('(spliced)')).length === 1 &&
+        run1.out.includes('the revision: exit 0') &&
+        treeDigest(input) === inputDigest,
+      `exit ${run1.status}; moved outside the constraints and the idle: ${moves1.join(', ') || 'nothing'}; skins ${digest(skinsText(input))} -> ${existsSync(out1) ? digest(skinsText(out1)) : 'absent'}; changed ${JSON.stringify(prov1?.changed ?? null)}; check ${prov1?.check.revision.pass} over ${prov1?.check.revision.measured.length} bar(s) (${prov1?.check.revision.measured.join(', ')}); ${hashLines1.length} hash line(s), ${hashLines1.filter((l) => l.endsWith('(spliced)')).length} spliced`,
+      'issue #527: a damping change reaches rig.json\'s constraints and nothing else moves — every attachment, every image and motion.json byte-identical (read here by the suite\'s own hashes), rigc\'s gate green and check holding the input\'s bars, the field that changed named, the input untouched',
+    );
+
+    // RN02 — bar 1 in miniature: the input is a remesh revision, whose strip the config does not reproduce.
+    const gridReq = join(root, 'grid.json');
+    writeFileSync(gridReq, `${JSON.stringify(REMESH_GRID_REQUEST)}\n`);
+    const remeshed = join(root, 'remeshed');
+    const rm = refusals(() => remeshStage({ rig: input, config: fx.config, parts: fx.parts, part: 'strip', mesh: gridReq, out: remeshed }, runner, rigc, versions, join(root, 'scratch-remesh'), () => {}));
+    const s2 = stage('on-remesh', damping, { rig: remeshed });
+    const rebuilt2 = join(root, 'rig-config');
+    const rb2 = refusals(() => rigStage({ config: damping, parts: fx.parts, out: rebuilt2 }, runner, join(root, 'rig-config-gate'), () => {}));
+    const [dIn, dRem, dRet, dRig] = [input, remeshed, s2.out, rebuilt2].map((d) => (existsSync(join(d, 'rig.json')) ? digest(strip(d)) : 'absent'));
+    say(
+      'RN02_ON_A_REMESH_REVISION_THE_RETUNE_KEEPS_THE_STRIP_THE_CONFIG_DOES_NOT_REPRODUCE_AND_RIG_CONFIG_LOSES_IT',
+      rm === null && s2.e === null && rb2 === null && dRem !== dIn && dRet === dRem && dRig !== dRem && dRig === dIn && retuneMoves(remeshed, s2.out).length === 0 && (rigOf(s2.out).constraints as Obj[])[0].damping === 0.7,
+      `remesh ${codes(rm)}, retune ${codes(s2.e)}, rig --config ${codes(rb2)}; strip sha256/16: input ${dIn}, remesh revision ${dRem}, retune of it ${dRet}, rig --config on the same request ${dRig}`,
+      'issue #527 bar 1: a rig whose config does not reproduce one mesh keeps that mesh byte for byte through a damping retune; the whole rebuild the same request has today rebuilds the mesh from the config and drops it',
+    );
+
+    // RN03 — what a request may not move, each refused by name before anything is written; a mesh entry is ignored.
+    // bones[0] is root; body (bones[1]) moved one pixel right is a local x of 0 -> 1.
+    const moved3 = stage('bone', variant('bone', (c) => ((c.bones as Obj[])[0].at = [21, 10])));
+    const mesh3 = stage('mesh', variant('mesh', (c) => ((c.meshes as Record<string, Obj>).strip.grid = DRAFT_COSTLY_GRID)));
+    const partsB = join(root, 'parts-redrawn');
+    cpSync(fx.parts, partsB, { recursive: true });
+    const redrawn = block(16, 400);
+    redrawn.data.set([10, 20, 30, 255], 0);
+    writeFileSync(join(partsB, 'parts', 'strip.png'), encodePngBytes(redrawn));
+    const image3 = stage('image', fx.config, { parts: partsB });
+    // A stop holds a link a constraint drives (rigc CE_STOP_LINK_UNDRIVEN), so it is on tail1, the physics link; `at` beside the
+    // hanging chain keeps both bounds inside ±180° (rigc refuses one past it), so the config builds and the hold is what refuses.
+    const stops3 = stage('stops', variant('stops', (c) => (c.stops = [{ chain: 'tail', links: ['tail1'], against: 'body', at: [30, 200], inward: -5, outward: 5 }])));
+    const anims3 = stage('anims', variant('anims', (c) => ((c.motion as Obj).animations_from = 'anims-moved.json')));
+    mkdirSync(join(root, 'taken'), { recursive: true });
+    const taken3 = stage('taken', damping, { out: join(root, 'taken') });
+    const loose = join(root, 'in-loose');
+    cpSync(input, loose, { recursive: true });
+    writeFileSync(join(loose, 'motion.json'), `${JSON.stringify(JSON.parse(readFileSync(join(input, 'motion.json'), 'utf8')), null, 2)}\n`);
+    const loose3 = stage('loose', damping, { rig: loose });
+    const first = (s: { e: PartsError | null }): string => (s.e === null ? 'written' : `${s.e.problems[0].code} ${s.e.problems[0].object}`);
+    const refused3 = [moved3, image3, stops3, anims3, loose3];
+    const quiet3 = refused3.every((s) => !existsSync(s.out)) && readdirSync(join(root, 'taken')).length === 0 && treeDigest(input) === inputDigest;
+    const prov3 = mesh3.r === null ? null : (mesh3.r as RetuneResult).provenance;
+    say(
+      'RN03_A_MOVED_BONE_A_REDRAWN_IMAGE_A_STOPS_OR_ANIMATIONS_CHANGE_A_TAKEN_OUT_AND_A_REFORMATTED_INPUT_ARE_REFUSED_AND_A_MESH_ENTRY_IS_IGNORED',
+      first(moved3) === 'RETUNE_REQUEST_HELD rig.json bones' &&
+        (moved3.e?.problems[0].detail.includes('bones[1].x: 0 vs 1') ?? false) &&
+        first(image3) === 'RETUNE_REQUEST_HELD images/strip.png' &&
+        first(stops3) === 'RETUNE_REQUEST_HELD rig.json stops' &&
+        first(anims3) === 'RETUNE_REQUEST_HELD motion.json' &&
+        (anims3.e?.problems[0].detail.includes('animations.nod') ?? false) &&
+        first(taken3) === 'RETUNE_OUT_FRESH ' + join(root, 'taken') &&
+        loose3.e?.problems.map((p) => p.code).join() === 'RETUNE_INPUT_WRITTEN' &&
+        mesh3.e === null &&
+        strip(mesh3.out) === strip(input) &&
+        skinsText(mesh3.out) === skinsText(input) &&
+        Object.keys(prov3?.changed ?? {}).join() === 'constraints,added,removed,idle' &&
+        prov3?.changed.constraints.length === 0 &&
+        prov3.held.not_compared.includes('a meshes change in the config is never read into the revision') &&
+        quiet3,
+      `bone ${first(moved3)} (${moved3.e?.problems.length ?? 0} problem(s): ${moved3.e?.problems.map(problemLine).join(' | ').slice(0, 200) ?? ''}); image ${first(image3)}; stops ${first(stops3)} (${stops3.e?.problems.map((p) => p.object).join(', ') ?? ''}); animations_from ${first(anims3)}; taken ${taken3.e?.problems[0]?.code ?? 'written'}; reformatted motion.json ${codes(loose3.e)}; mesh entry at grid ${DRAFT_COSTLY_GRID}: ${codes(mesh3.e)}, strip ${digest(strip(input))} -> ${mesh3.e === null ? digest(strip(mesh3.out)) : 'absent'}, changed constraints ${prov3?.changed.constraints.length ?? 'none'}; nothing written, the input untouched: ${quiet3}`,
+      'issue #527 bar 3, as the tree reads it: a bone, an image, a stops change (which rewires bones, slots and weights) or a change outside the idle is refused by name with nothing written; a mesh is never compared or written — the input carries no config to compare a meshes entry with — so a mesh change is left out and the provenance says so',
+    );
+
+    // RN04 — determinism: the same request twice, into two directories.
+    const a4 = stage('twice-a', damping);
+    const b4 = stage('twice-b', damping);
+    const prov4 = a4.r === null ? null : (a4.r as RetuneResult).provenance;
+    const inHashes = treeDigest(input).split('\n').map((l) => l.split(' '));
+    say(
+      'RN04_THE_SAME_REQUEST_TWICE_WRITES_THE_SAME_BYTES_AND_THE_PROVENANCE_NAMES_THE_INPUT_HASHES',
+      a4.e === null &&
+        b4.e === null &&
+        treeDigest(a4.out) === treeDigest(b4.out) &&
+        JSON.stringify(prov4?.input.rig.map((r) => [r.path, r.sha256])) === JSON.stringify(inHashes) &&
+        prov4?.input.config_sha256 === createHash('sha256').update(readFileSync(damping)).digest('hex') &&
+        prov4.spec === RETUNE_SPEC &&
+        !readFileSync(join(a4.out, RETUNE_FILE), 'utf8').includes(root),
+      `${codes(a4.e)} / ${codes(b4.e)}; trees equal: ${treeDigest(a4.out) === treeDigest(b4.out)} (${treeDigest(a4.out).split('\n').length} file(s)); ${prov4?.input.rig.length ?? 0} input hash(es) against the suite's ${inHashes.length}; a path in the provenance: ${existsSync(join(a4.out, RETUNE_FILE)) && readFileSync(join(a4.out, RETUNE_FILE), 'utf8').includes(root)}`,
+      'issue #527 bar 2: no path and no clock in what is written, so two runs of one request write the same bytes; the provenance holds each input file\'s SHA-256, held here to the suite\'s own',
+    );
+
+    // RN05 — the idle: a duration change replaces animations.idle and nothing else of motion.json.
+    const s5 = stage('duration', variant('duration', (c) => ((c.motion as Obj).duration = 8)));
+    const prov5 = s5.r === null ? null : (s5.r as RetuneResult).provenance;
+    const m5 = s5.e === null ? (JSON.parse(readFileSync(join(s5.out, 'motion.json'), 'utf8')) as Obj) : {};
+    const mIn = JSON.parse(readFileSync(join(input, 'motion.json'), 'utf8')) as Obj;
+    const anim5 = (m5.animations ?? {}) as Record<string, Obj>;
+    say(
+      'RN05_A_DURATION_CHANGE_REPLACES_THE_IDLE_AND_KEEPS_EVERY_OTHER_ANIMATION_AND_THE_GROUPS_AND_EASINGS',
+      s5.e === null &&
+        anim5.idle?.duration === 8 &&
+        JSON.stringify(anim5.nod) === JSON.stringify((mIn.animations as Obj).nod) &&
+        JSON.stringify(m5.groups) === JSON.stringify(mIn.groups) &&
+        JSON.stringify(m5.easings) === JSON.stringify(mIn.easings) &&
+        retuneMoves(input, s5.out).length === 0 &&
+        JSON.stringify(prov5?.changed.idle.duration) === '[4,8]' &&
+        prov5?.changed.idle.tracks_changed === 3 &&
+        prov5.changed.constraints.length === 0,
+      `${codes(s5.e)}; idle duration ${String(anim5.idle?.duration)}, ${prov5?.changed.idle.tracks_changed ?? 'no'} track(s) changed of the fixture's 3 chain links; nod, groups, easings the input's: ${JSON.stringify(anim5.nod) === JSON.stringify((mIn.animations as Obj).nod) && JSON.stringify(m5.groups) === JSON.stringify(mIn.groups) && JSON.stringify(m5.easings) === JSON.stringify(mIn.easings)}; changed.idle ${JSON.stringify(prov5?.changed.idle ?? null)}`,
+      'issue #527: the idle is the one animation a retune replaces; every other animation, the groups and the easings are held byte for byte, and the provenance names the duration before and after',
+    );
+
+    // RN06 — the mutants: a byte planted outside the constraints, and the hold taken out with a bone renamed.
+    const on6 = stage('perturb-on', damping, {}, { perturb: 'mark' });
+    const off6 = stage('perturb-off', damping, {}, { perturb: 'mark', skipPreserve: true });
+    const moves6 = off6.e === null ? retuneMoves(input, off6.out) : ['nothing written'];
+    const renamed = variant('renamed', (c) => {
+      (c.bones as Obj[])[1].chain = 'tale';
+      (c.meshes as Record<string, Obj>).strip.segments = ['tale'];
+      (c.motion as { tracks: Obj[] }).tracks[0].chain = 'tale';
+      physicsOf(c).bone = 'tale1';
+    });
+    const held6 = stage('renamed-held', renamed);
+    const loose6 = stage('renamed-unheld', renamed, {}, { skipHold: true });
+    const stopped6 = loose6.e?.problems[0]?.code ?? 'written';
+    say(
+      'RN06_A_PLANTED_BYTE_IS_NAMED_BY_THE_ASSERTION_AND_BY_THE_SUITE_AND_WITHOUT_THE_HOLD_A_RENAMED_BONE_IS_STOPPED_BY_THE_GATE',
+      on6.e !== null &&
+        on6.e.problems.length === 1 &&
+        on6.e.problems[0].code === 'RETUNE_PRESERVED' &&
+        on6.e.problems[0].object === 'rig.json skins.default.mark.mark' &&
+        !existsSync(on6.out) &&
+        off6.e === null &&
+        moves6.join() === 'skins.default.mark.mark' &&
+        first(held6) === 'RETUNE_REQUEST_HELD rig.json bones' &&
+        (stopped6 === 'RETUNE_RIGC_GREEN' || stopped6 === 'RETUNE_CHECK_HELD') &&
+        !existsSync(held6.out) &&
+        !existsSync(loose6.out),
+      `assertion on: ${on6.e === null ? 'written' : on6.e.problems.map(problemLine).join(' | ').slice(0, 200)}; assertion off: ${codes(off6.e)}, the suite reads ${moves6.join(', ') || 'nothing'} moved; chain renamed tail -> tale: held ${first(held6)}; hold off: ${stopped6} — ${loose6.e?.problems.map(problemLine).join(' | ').slice(0, 260) ?? 'written'}`,
+      'a gate nobody has seen fail is not a gate: the preserve assertion names the planted part and the suite\'s second reader names it with the assertion out; with the hold out, constraints and an idle naming bones the input does not hold reach rigc, which refuses the revision — the hold names it first, by the bones',
+    );
+
+    // RN07 — invariants.detached: a transform constraint that follows body is added, and the rule rig.ts derives from it
+    // (bone body, notUnder tail2) comes with it, in the place the rig stage writes it; nothing else of rig.json moves.
+    const follow = { name: 'follow', type: 'transform', bones: ['tail2'], source: 'body', localSource: true, localTarget: true, additive: true, properties: { rotate: { to: { rotate: {} } } } };
+    const s8 = stage('detached', variant('detached', (c) => (c.constraints = [RETUNE_PHYSICS, follow])));
+    // The same constraint reading body's world rotation instead (no localSource, localTarget, additive) sets tail2 to it:
+    // check's seam bar, met on the input, fails on the revision.
+    const full8 = stage('detached-world', variant('detached-world', (c) => (c.constraints = [RETUNE_PHYSICS, { name: follow.name, type: follow.type, bones: follow.bones, source: follow.source, properties: follow.properties }])));
+    const direct8 = join(root, 'rig-detached');
+    const rb8 = refusals(() => rigStage({ config: join(fxDir, 'config-detached.json'), parts: fx.parts, out: direct8 }, runner, join(root, 'rig-detached-gate'), () => {}));
+    const prov8 = s8.r === null ? null : (s8.r as RetuneResult).provenance;
+    const inv8 = s8.e === null ? rigOf(s8.out).invariants : undefined;
+    const keys8 = (d: string): string => (existsSync(join(d, 'rig.json')) ? Object.keys(rigOf(d)).join(',') : 'absent');
+    say(
+      'RN07_A_CONSTRAINT_THAT_FOLLOWS_A_BONE_BRINGS_ITS_DETACHED_RULE_AND_NOTHING_ELSE_OF_RIG_JSON_MOVES',
+      s8.e === null &&
+        rb8 === null &&
+        rigOf(input).invariants === undefined &&
+        JSON.stringify(inv8) === JSON.stringify(rigOf(direct8).invariants) &&
+        JSON.stringify((inv8 as { detached?: Array<{ bone: string; notUnder: string }> } | undefined)?.detached?.map((r) => [r.bone, r.notUnder])) === '[["body","tail2"]]' &&
+        readFileSync(join(s8.out, 'rig.json'), 'utf8') === readFileSync(join(direct8, 'rig.json'), 'utf8') &&
+        JSON.stringify(prov8?.changed.added) === '["follow"]' &&
+        retuneMoves(input, s8.out).length === 0 &&
+        first(full8) === 'RETUNE_CHECK_HELD check bar seam' &&
+        !existsSync(full8.out),
+      `${codes(s8.e)}; input invariants ${JSON.stringify(rigOf(input).invariants ?? null)}, revision ${JSON.stringify(inv8 ?? null).slice(0, 160)}; keys ${keys8(s8.out)} (rig --config: ${keys8(direct8)}); revision rig.json equals rig --config's: ${s8.e === null && rb8 === null && readFileSync(join(s8.out, 'rig.json'), 'utf8') === readFileSync(join(direct8, 'rig.json'), 'utf8')}; added ${JSON.stringify(prov8?.changed.added ?? null)}; reading the world rotation: ${full8.e?.problems.map(problemLine).join(' | ').slice(0, 220) ?? 'written'}`,
+      'invariants.detached is derived from the constraints (rig.ts detachedRules), so it is spliced with them; where the config reproduces every attachment, the spliced rig.json is the rebuild\'s byte for byte — the key order of a key the input did not have is the rig stage\'s; and a constraint that fails a bar the input met is refused by check, with nothing written',
+    );
+
+    // RN08 — the flags.
+    const unknown7 = runCli(['retune', '--rig', input, '--config', damping, '--parts', fx.parts, '--out', join(root, 'usage'), '--part', 'strip']);
+    const noOut7 = runCli(['retune', '--rig', input, '--config', damping, '--parts', fx.parts]);
+    say(
+      'RN08_RETUNE_WITHOUT_OUT_OR_WITH_A_FLAG_IT_DOES_NOT_TAKE_IS_A_USAGE_ERROR',
+      noOut7.status === 2 && noOut7.out.includes('USAGE: retune needs --out <value>') && unknown7.status === 2 && unknown7.out.includes('retune does not take "--part"; it takes --rig, --config, --parts, --out, --requirements, --idle-keys, --page-edges, --pack-shape') && !existsSync(join(root, 'usage')),
+      `${noOut7.out.split('\n')[0].trim()} | ${unknown7.out.split('\n')[0].trim()}`,
+      'a retune names no part: what it replaces is the config\'s constraints and idle, so --part (remesh\'s) is not a flag it takes',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+  return bad();
+}
+
+// ---------------------------------------------------------------------------
 // the automatic mesh mode (issue #126, item 2)
 // ---------------------------------------------------------------------------
 
@@ -40682,6 +40977,7 @@ const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number 
   ['mesh-draft', runMeshDraftSuite],
   ['influence', runInfluenceSuite],
   ['remesh', runRemeshSuite],
+  ['retune', runRetuneSuite],
   ['readme-loop', runReadmeLoopSuite],
   ['tree', runTreeSuite],
   ['corpus', runCorpusSuite],
@@ -40749,7 +41045,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['check']],
   ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'contour-wiring', 'config', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
-  ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'remesh', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
+  ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'remesh', 'retune', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
 ];
 
 /**

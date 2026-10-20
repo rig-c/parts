@@ -447,6 +447,12 @@ export function preservedProblems(input: FileTree, revision: FileTree, part: str
   return out;
 }
 
+/** The codes the shared readings below refuse with, by the revising command that runs them (`remesh`, `retune`). */
+export const REVISION_CODES = {
+  remesh: { inputPresent: 'REMESH_INPUT_PRESENT', inputWritten: 'REMESH_INPUT_WRITTEN', checkHeld: 'REMESH_CHECK_HELD' },
+  retune: { inputPresent: 'RETUNE_INPUT_PRESENT', inputWritten: 'RETUNE_INPUT_WRITTEN', checkHeld: 'RETUNE_CHECK_HELD' },
+} as const;
+
 /** One side of the check block, read off a check report. */
 export function checkSide(r: CheckReport): CheckSide {
   return {
@@ -458,19 +464,23 @@ export function checkSide(r: CheckReport): CheckSide {
   };
 }
 
-/** Step 7: every bar the input measured is measured on the revision, and no bar the input met is failed by it. */
-export function checkHeldProblems(input: CheckSide, revision: CheckSide, problems: readonly Problem[]): Problem[] {
+/**
+ * Step 7: every bar the input measured is measured on the revision, and no bar the input met is failed by it. `op`
+ * names the revising command (`retune` reuses this reading under its own code, `RETUNE_CHECK_HELD`).
+ */
+export function checkHeldProblems(input: CheckSide, revision: CheckSide, problems: readonly Problem[], op: 'remesh' | 'retune' = 'remesh'): Problem[] {
+  const code = REVISION_CODES[op].checkHeld;
   const out: Problem[] = [];
   for (const bar of input.measured) {
     if (!revision.measured.includes(bar)) {
       const why = revision.skipped.find((s) => s.bar === bar)?.reason ?? 'not measured';
-      out.push({ code: 'REMESH_CHECK_HELD', object: `check bar ${bar}`, detail: `measured on the input and not on the revision (${why}); the revision is held to every bar the input was` });
+      out.push({ code, object: `check bar ${bar}`, detail: `measured on the input and not on the revision (${why}); the revision is held to every bar the input was` });
     }
   }
   for (const bar of revision.not_met) {
     if (input.not_met.includes(bar)) continue;
     const quoted = problems.filter((p) => p.code.includes(bar) || p.object.includes(bar)).map(problemLine);
-    out.push({ code: 'REMESH_CHECK_HELD', object: `check bar ${bar}`, detail: `met on the input and not on the revision${quoted.length > 0 ? `: ${quoted.join(' | ')}` : ''}; a remesh may not fail a bar its input meets` });
+    out.push({ code, object: `check bar ${bar}`, detail: `met on the input and not on the revision${quoted.length > 0 ? `: ${quoted.join(' | ')}` : ''}; a ${op} may not fail a bar its input meets` });
   }
   return out;
 }
@@ -511,24 +521,29 @@ export function modelAttachmentHash(modelText: string, part: string): string | n
   return entry === undefined ? null : createHash('sha256').update(JSON.stringify(entry)).digest('hex');
 }
 
-/** Step 1's tree rules: the files `rig` writes are present, and the two the splice rewrites are this writer's bytes. */
-export function inputTreeProblems(tree: FileTree, root: string): Problem[] {
+/**
+ * Step 1's tree rules: the files `rig` writes are present, and the ones the splice rewrites (`spliced`) are this
+ * writer's bytes. `op` names the revising command, whose codes these are (`retune` splices `rig.json` and `motion.json`).
+ */
+export function inputTreeProblems(tree: FileTree, root: string, op: 'remesh' | 'retune' = 'remesh', spliced: readonly string[] = ['rig.json', 'mesh_report.json']): Problem[] {
+  const present = REVISION_CODES[op].inputPresent;
+  const writtenCode = REVISION_CODES[op].inputWritten;
   const out: Problem[] = [];
   for (const f of RIG_TREE_FILES) {
-    if (!tree.has(f)) out.push({ code: 'REMESH_INPUT_PRESENT', object: `${root}/${f}`, detail: 'is absent; the input revision is the directory rig writes — rig.json, motion.json, mesh_report.json and images/' });
+    if (!tree.has(f)) out.push({ code: present, object: `${root}/${f}`, detail: 'is absent; the input revision is the directory rig writes — rig.json, motion.json, mesh_report.json and images/' });
   }
-  if (![...tree.keys()].some((k) => k.startsWith('images/'))) out.push({ code: 'REMESH_INPUT_PRESENT', object: `${root}/images/`, detail: 'holds no image; the input revision is the directory rig writes' });
-  for (const f of ['rig.json', 'mesh_report.json']) {
+  if (![...tree.keys()].some((k) => k.startsWith('images/'))) out.push({ code: present, object: `${root}/images/`, detail: 'holds no image; the input revision is the directory rig writes' });
+  for (const f of spliced) {
     const b = tree.get(f);
     if (b === undefined) continue;
     let value: unknown;
     try {
       value = JSON.parse(text(b));
     } catch (err) {
-      out.push({ code: 'REMESH_INPUT_WRITTEN', object: `${root}/${f}`, detail: `does not parse as JSON: ${(err as Error).message}` });
+      out.push({ code: writtenCode, object: `${root}/${f}`, detail: `does not parse as JSON: ${(err as Error).message}` });
       continue;
     }
-    if (rigJsonText(value) !== text(b)) out.push({ code: 'REMESH_INPUT_WRITTEN', object: `${root}/${f}`, detail: 'is not the text this package\'s writer prints for its value; the revision is spliced as text, so an input reformatted by hand cannot be carried over byte for byte' });
+    if (rigJsonText(value) !== text(b)) out.push({ code: writtenCode, object: `${root}/${f}`, detail: 'is not the text this package\'s writer prints for its value; the revision is spliced as text, so an input reformatted by hand cannot be carried over byte for byte' });
   }
   return out;
 }
