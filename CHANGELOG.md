@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.52.0](https://github.com/rig-c/parts/compare/v1.51.0...v1.52.0) (2026-10-20)
+
+
+### Features
+
+* **assemble:** a cut from a layer a limb already takes is read against the limb's joint lines — past them it builds, inside a segment's band it is refused ASSEMBLE_CUT_CROSSES_LIMB ([#564](https://github.com/rig-c/parts/issues/564)) ([#583](https://github.com/rig-c/parts/issues/583)) ([ac7f2e5](https://github.com/rig-c/parts/commit/ac7f2e502a135e884b4b6ce3dd9ac1d5f6e827bc))
+* **cli:** mesh-stats prints each mesh's vertices and triangles and the total before a build, from the rig stage's own meshing ([#566](https://github.com/rig-c/parts/issues/566)) ([#584](https://github.com/rig-c/parts/issues/584)) ([264a8e7](https://github.com/rig-c/parts/commit/264a8e77d8174fd2da656af9618c9424eeb6d495))
+
+
+### Bug Fixes
+
+* **config:** an animations_from file missing its spec is told the line to write, a missing file names the directory it was resolved against, and AUTHORING shows a looping rigc-motion/1 file ([#569](https://github.com/rig-c/parts/issues/569)) ([#582](https://github.com/rig-c/parts/issues/582)) ([9ea1210](https://github.com/rig-c/parts/commit/9ea121082f4596c13cfb3432ba5807c3de4e8501))
+* **docs:** PAINTING names what DWPose does with a faceless figure — no person under the default detector, mirrored sides, hips on the pelvis ([#578](https://github.com/rig-c/parts/issues/578)) ([#585](https://github.com/rig-c/parts/issues/585)) ([bbbb00b](https://github.com/rig-c/parts/commit/bbbb00b6c65bf168f0aadb4fd0d94e505794d2ae))
+
 ## [1.51.0](https://github.com/rig-c/parts/compare/v1.50.0...v1.51.0) (2026-10-20)
 
 

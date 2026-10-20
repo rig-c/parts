@@ -1939,6 +1939,8 @@ function runConfigSuite(): number {
     const list = one('anims/list.json');
     const broken = one('anims/broken.json');
     const missing = one('anims/missing.json');
+    // Issue #569: the line names the path as typed, the directory it was resolved against and the result.
+    const missingDetail = refusals(() => loadConfig(withFile('anims/missing.json')))?.problems[0]?.detail ?? '';
     const empty = one('');
     // Without a path to resolve against, the field is a string and nothing is read: parseConfig loads it.
     const unread = refusals(() => parseConfig({ ...minimalConfig(), motion: { ...(minimalConfig().motion as Record<string, unknown>), animations_from: 'anims/missing.json' } }));
@@ -1948,6 +1950,7 @@ function runConfigSuite(): number {
         list === 'CONFIG_FIELD_TYPE config.motion.animations_from (<dir>/anims/list.json)' &&
         broken === 'CONFIG_IS_JSON config.motion.animations_from (<dir>/anims/broken.json)' &&
         missing === 'CONFIG_FILE_PRESENT config.motion.animations_from' &&
+        missingDetail.startsWith(`names "anims/missing.json", resolved against the config's directory ${af} (not the working directory) to ${join(af, 'anims', 'missing.json')}, which is no such file; `) &&
         empty === 'CONFIG_FIELD_TYPE config.motion.animations_from' &&
         unread === null,
       `anims/good.json -> ${goodAf.animations === null ? 'nothing read' : `${goodAf.animations.file.replace(af, '<dir>')}: ${Object.keys(goodAf.animations.table).join(', ')}; nod ${JSON.stringify(goodAf.animations.table.nod) === JSON.stringify(nod) ? 'as written' : 'CHANGED'}`}; anims/bad.json with motion.duration 0 -> ${badAf === null ? 'loads' : badAf.problems.map((q) => `${q.code} ${q.object.replace(af, '<dir>')}`).join('; ')} (by hand ${want.length}); [] -> ${list}; '{"spec": ' -> ${broken}; no such file -> ${missing}; "" -> ${empty}; parseConfig, no path -> ${unread === null ? 'loads, nothing read' : codes(unread)}`,
@@ -1956,6 +1959,7 @@ function runConfigSuite(): number {
   } finally {
     rmSync(af, { recursive: true, force: true });
   }
+  runAnimationsFromDocControls(say);
 
   // CF75 — issue #188: meshes.<part>.ribs.<chain>.stations is a whole number, 0 or more, and required; a contour or an
   // automatic mesh with ribs on a chain its segments name loads, and each malformed entry is refused at its field.
@@ -6891,6 +6895,170 @@ function runAnimationsFromCases(say: (name: string, ok: boolean, detail: string,
       near(plus, [-6, 34]) && near(minus, [-6, 18]) && near(up, [-3, 14]),
       `hem1 under hem0 rotate +90 -> ${shown(plus)} (by hand (-6, 34)); planted, -90 -> ${shown(minus)} (by hand (-6, 18)); eye under translatey +2 -> ${shown(up)} (by hand (-3, 14)); world units, y up, bar ${POSE_BAR}`,
       "issue #317: the named-animation recipe states that a rotate key turns a bone counter-clockwise in the rig's y-up space and that translatey is y up in the parent's axes; this holds the statement to rigc's own poser, and the opposite sign lands a link's length away",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Issue #569: the three refusals an author meets first in a `motion.animations_from` file print their
+ * remedy, and AUTHORING's example file is held to the tree. CF510–CF512 plant each refusal through the
+ * loader (`loadConfig`, which resolves the path); CF513 reads the example block out of AUTHORING's recipe
+ * and loads it; CF514 builds it through rigc's gate on the rig fixture and plants the boundary key twice,
+ * which is rigc's verdict, not the loader's; CF515 holds the recipe's quoted lines to what the tree prints.
+ */
+function runAnimationsFromDocControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const dir = temp('animations-from-doc');
+  try {
+    const SPEC = 'rigc-motion/1';
+    const FORM = `{"spec": "${SPEC}", "animations": {"<name>": {"duration": …, "tracks": [...]}}}`;
+    const asConfig = (sub: string, from: string): string => {
+      mkdirSync(join(dir, sub), { recursive: true });
+      const c = minimalConfig();
+      (c.motion as Record<string, unknown>).animations_from = from;
+      const at = join(dir, sub, 'config.json');
+      writeFileSync(at, JSON.stringify(c));
+      return at;
+    };
+    const fileAt = (sub: string, name: string, body: unknown): void => {
+      writeFileSync(join(dir, sub, name), typeof body === 'string' ? body : JSON.stringify(body));
+    };
+    const only = (e: PartsError | null): { code: string; object: string; detail: string } | null => (e !== null && e.problems.length === 1 ? e.problems[0] : null);
+    const shown = (e: PartsError | null): string => (e === null ? 'loads' : e.problems.map((q) => `${q.code} ${q.object.replace(dir, '<dir>')}: ${q.detail.replace(dir, '<dir>')}`).join('; '));
+    const nod = { duration: 1, tracks: [{ bone: 'body', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 1, v: [0] }] }] };
+
+    // CF510 — `spec` absent: the line names the line to write and the whole file's shape.
+    const noSpecCfg = asConfig('nospec', 'a.json');
+    fileAt('nospec', 'a.json', { animations: { nod } });
+    const noSpec = refusals(() => loadConfig(noSpecCfg));
+    const specAt = `config.motion.animations_from (${join(dir, 'nospec', 'a.json')}).spec`;
+    const namesSpec = (q: { code: string; object: string; detail: string } | null, object: string): boolean =>
+      q !== null && q.code === 'CONFIG_FIELD_PRESENT' && q.object === object && q.detail.startsWith(`is absent and required: write "spec": "${SPEC}" beside "animations"`) && q.detail.endsWith(`the whole file is ${FORM}`);
+    const oldLine = { code: 'CONFIG_FIELD_PRESENT', object: specAt, detail: 'is absent and required' };
+    say(
+      'CF510_AN_ANIMATIONS_FROM_FILE_WITH_NO_SPEC_IS_TOLD_THE_LINE_TO_WRITE_AND_THE_FILE_S_SHAPE',
+      namesSpec(only(noSpec), specAt) && !namesSpec(oldLine, specAt),
+      `{"animations": {"nod": …}} -> ${shown(noSpec)}; planted, the line before issue #569 ("is absent and required") -> ${namesSpec(oldLine, specAt) ? 'PASSES' : 'fails the bar'}`,
+      'issue #569: an author who had never seen a motion-spec file was refused with the field\'s name and nothing to write; the version line is a value only rig-c\'s spec defines, so the refusal states it, and the shape, rather than leaving it to be copied from another file',
+    );
+
+    // CF511 — `spec` another value: the value found and the one required.
+    const otherCfg = asConfig('otherspec', 'a.json');
+    fileAt('otherspec', 'a.json', { spec: 'rigc-motion/2', animations: { nod } });
+    const numCfg = asConfig('numspec', 'a.json');
+    fileAt('numspec', 'a.json', { spec: 1, animations: { nod } });
+    const other = only(refusals(() => loadConfig(otherCfg)));
+    const num = only(refusals(() => loadConfig(numCfg)));
+    const foundAndRequired = (q: { code: string; detail: string } | null, found: string): boolean =>
+      q !== null && q.code === 'CONFIG_FIELD_TYPE' && q.detail === `is ${found}; "${SPEC}" is required, the motion-spec version motion.json states`;
+    say(
+      'CF511_AN_ANIMATIONS_FROM_SPEC_OF_ANOTHER_VALUE_NAMES_THE_VALUE_FOUND_AND_THE_ONE_REQUIRED',
+      foundAndRequired(other, '"rigc-motion/2"') && other?.object === `config.motion.animations_from (${join(dir, 'otherspec', 'a.json')}).spec` && foundAndRequired(num, '1') &&
+        !foundAndRequired({ code: 'CONFIG_FIELD_TYPE', detail: `is a string; "${SPEC}" is required, the motion-spec version motion.json states` }, '"rigc-motion/2"'),
+      `"rigc-motion/2" -> ${other === null ? 'not one problem' : `${other.code}: ${other.detail}`}; 1 -> ${num === null ? 'not one problem' : `${num.code}: ${num.detail}`}; planted, a line without the value found -> fails the bar`,
+      'issue #569: the version an author wrote is the value found, and the one rig-c reads is the value required; both on the line is the remedy',
+    );
+
+    // CF512 — the path is resolved beside the config: the line names the path as typed, the directory and the result.
+    // The file sits where a reader resolving against the working directory of the run's parent would look: dir/anims.
+    mkdirSync(join(dir, 'anims'), { recursive: true });
+    fileAt('anims', 'a.json', { spec: SPEC, animations: { nod } });
+    const besideCfg = asConfig('cfg', 'anims/a.json');
+    const beside = only(refusals(() => loadConfig(besideCfg)));
+    const base = join(dir, 'cfg');
+    const resolvedTo = join(base, 'anims', 'a.json');
+    const statesWhere = (d: string): boolean => d.startsWith(`names "anims/a.json", resolved against the config's directory ${base} (not the working directory) to ${resolvedTo}, which is no such file; `);
+    const before569 = `names ${resolvedTo}, which is no such file; a file in rig-c's motion-spec shape, ${FORM}, its path relative to the config's directory is required`;
+    say(
+      'CF512_A_MISSING_ANIMATIONS_FROM_FILE_NAMES_THE_PATH_AS_TYPED_THE_CONFIG_S_DIRECTORY_AND_WHAT_THEY_RESOLVED_TO',
+      beside !== null && beside.code === 'CONFIG_FILE_PRESENT' && beside.object === 'config.motion.animations_from' && statesWhere(beside.detail) && !statesWhere(before569),
+      `config in <dir>/cfg naming "anims/a.json", the file at <dir>/anims/a.json -> ${beside === null ? 'not one problem' : `${beside.code}: ${beside.detail.split(dir).join('<dir>')}`}; planted, the line before issue #569 -> ${statesWhere(before569) ? 'PASSES' : 'fails the bar'}`,
+      'issue #569: an author who put the file beside the working directory read "no such file" and a path it had not typed; the path as typed, the directory it was resolved against and the result are value found and where it looked',
+    );
+
+    // CF513 — AUTHORING's example file, read out of the recipe, loads; with `spec` removed it is CF510's line.
+    const guide = readFileSync(join(ROOT, 'docs', 'AUTHORING.md'), 'utf8');
+    const recipeOf = (t: string): string => {
+      const at = t.indexOf('### Recipe: expressions and other named animations');
+      return at === -1 ? '' : t.slice(at, t.indexOf('\n**Which way a key moves a bone.**', at));
+    };
+    const recipe = recipeOf(guide);
+    const exampleOf = (r: string): string => {
+      const at = r.indexOf('```json\n');
+      return at === -1 ? '' : r.slice(at + '```json\n'.length, r.indexOf('\n```', at + 1));
+    };
+    const example = exampleOf(recipe);
+    let parsed: Record<string, unknown> | null = null;
+    try {
+      const v = JSON.parse(example) as unknown;
+      parsed = typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+    } catch {
+      parsed = null;
+    }
+    const docCfg = asConfig('doc', 'animations.json');
+    fileAt('doc', 'animations.json', example);
+    const docLoad = parsed === null ? null : loadConfigAndAnimations(docCfg);
+    const docNames = docLoad?.animations === null || docLoad === null ? '' : Object.keys(docLoad.animations.table).join();
+    const noSpecDocCfg = asConfig('doc-nospec', 'animations.json');
+    const { spec: _spec, ...withoutSpec } = parsed ?? {};
+    fileAt('doc-nospec', 'animations.json', withoutSpec);
+    const docNoSpec = only(refusals(() => loadConfig(noSpecDocCfg)));
+    const exampleSays = parsed !== null && parsed.spec === SPEC && docNames !== '';
+    say(
+      'CF513_AUTHORING_S_ANIMATIONS_FROM_EXAMPLE_LOADS_AS_WRITTEN_AND_WITHOUT_SPEC_IS_CF510_S_LINE',
+      exampleSays && namesSpec(docNoSpec, `config.motion.animations_from (${join(dir, 'doc-nospec', 'animations.json')}).spec`) && exampleOf(recipeOf('### Recipe: expressions and other named animations\n\nno block\n\n**Which way a key moves a bone.**')) === '',
+      `the recipe's json block, ${example.split('\n').length} lines -> ${parsed === null ? 'does not parse' : `spec ${JSON.stringify(parsed.spec)}, loads beside a config: ${docNames || 'NOTHING'}`}; with spec removed -> ${docNoSpec === null ? 'not one problem' : `${docNoSpec.code}: ${docNoSpec.detail.slice(0, 80)}…`}; planted, a recipe with no block -> no example read`,
+      'issue #569: the shape was found only by copying another file; the document now shows one, and a document example the loader would refuse is worse than none, so the tree reads it',
+    );
+
+    // CF514 — through rigc's gate on the rig fixture (chest and head added): the example builds; its boundary key
+    // written twice is rigc's refusal, naming the animation, the track and the time, beside the line naming the file.
+    const gateFixture = (name: string, file: unknown): { config: string; parts: string; out: string; file: string } => {
+      const c = rigConfig();
+      (c.bones as unknown[]).push({ name: 'chest', parent: 'body', at: [20, 24] }, { name: 'head', parent: 'chest', at: [20, 18] });
+      (c.motion as Record<string, unknown>).animations_from = 'animations.json';
+      const f = writeRigFixture(join(dir, name), c);
+      writeFileSync(join(dir, name, 'animations.json'), JSON.stringify(file));
+      return { ...f, out: join(dir, name, 'out'), file: join(dir, name, 'animations.json') };
+    };
+    const docGate = gateFixture('gate-doc', parsed);
+    const green = runCli(['rig', '--config', docGate.config, '--parts', docGate.parts, '--out', docGate.out]);
+    const twice = JSON.parse(JSON.stringify(parsed ?? {})) as { animations?: Record<string, { duration: number; tracks: Array<{ bone: string; property: string; keys: Array<{ t: number }> }> }> };
+    const sway = twice.animations?.sway;
+    const head = sway?.tracks.find((tr) => tr.bone === 'head');
+    if (sway !== undefined && head !== undefined) head.keys.push({ ...head.keys[head.keys.length - 1] });
+    const dupGate = gateFixture('gate-dup', twice);
+    const red = runCli(['rig', '--config', dupGate.config, '--parts', dupGate.parts, '--out', dupGate.out]);
+    const rigcSays = `animation "sway" bone "head" rotate: key times must strictly increase (at t=${sway?.duration ?? 'none'})`;
+    const redLines = red.out.split('\n');
+    const gateLine = redLines.find((l) => l.includes('FAIL') && l.includes('RIG_RIGC_GREEN')) ?? '';
+    const fromLine = redLines.find((l) => l.includes(`animations beside the idle, from ${dupGate.file} as written: sway`)) ?? '';
+    say(
+      'CF514_THE_EXAMPLE_GATES_GREEN_AND_ITS_BOUNDARY_KEY_WRITTEN_TWICE_IS_RIGC_S_REFUSAL_BESIDE_THE_LINE_NAMING_THE_FILE',
+      green.status === 0 && existsSync(join(docGate.out, 'motion.json')) &&
+        red.status !== 0 && gateLine.includes(`rigc compile error: `) && gateLine.includes(rigcSays) && gateLine.includes('CE_COMPILE_KEY_TIMES_NOT_INCREASING') && fromLine !== '' &&
+        !existsSync(join(dupGate.out, 'motion.json')),
+      `the example on the fixture -> rig exit ${green.status}; head's last key written twice -> exit ${red.status}; gate line ${gateLine.includes(rigcSays) ? `holds "${rigcSays}"` : `LACKS "${rigcSays}": ${gateLine.trim().slice(0, 200)}`}; the line naming the file: ${fromLine === '' ? 'ABSENT' : 'present'}; motion.json written: ${existsSync(join(dupGate.out, 'motion.json'))}`,
+      'issue #569: a duplicate key time is rigc\'s to refuse (this package does not re-implement rigc\'s validation); what the author needs is that the refusal reaches them naming the animation, the track and the time, and the file it came from, which the rig stage\'s line above it names',
+    );
+
+    // CF515 — the recipe quotes the three lines as the tree prints them; the recipe before issue #569 quotes none.
+    const flat = (t: string): string => t.replace(/\s+/g, ' ');
+    const quoted: Array<[string, string]> = [
+      ['spec', `is absent and required: write "spec": "${SPEC}" beside "animations"`],
+      ['path', `resolved against the config's directory`],
+      ['path', '(not the working directory) to'],
+      ['rigc', 'key times must strictly increase (at t='],
+    ];
+    const printed: Record<string, string> = { spec: noSpec?.problems[0]?.detail ?? '', path: beside?.detail ?? '', rigc: gateLine };
+    const held = (r: string): boolean => quoted.every(([k, q]) => flat(r).includes(q) && printed[k].includes(q));
+    const before = '### Recipe: expressions and other named animations\n\nWrite a file in rig-c\'s motion-spec shape beside the config and name it:\n';
+    say(
+      'CF515_THE_RECIPE_QUOTES_THE_THREE_REFUSALS_AS_THE_TREE_PRINTS_THEM',
+      held(recipe) && !held(before),
+      `${quoted.map(([k, q]) => `"${q}": recipe ${flat(recipe).includes(q) ? 'yes' : 'NO'}, printed ${printed[k].includes(q) ? 'yes' : 'NO'}`).join('; ')}; planted, the recipe before issue #569 -> ${held(before) ? 'PASSES' : 'fails the bar'}`,
+      'issue #569: the document is the interface for the author who meets the line; a quotation that drifts from what the tree prints sends that author looking for words no run shows',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -24321,9 +24489,261 @@ function runLimbCases(say: (name: string, ok: boolean, detail: string, why: stri
     runShortCapCases(say, root);
     runOverlappingHandsCases(say, root);
     runCrossedLimbFeatherCases(say, root);
+    runLimbLayerCutCases(say, root);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+/**
+ * Issue #564: a cut from a layer a limb takes. The leg on the 64x64 flat painting at scale 1: `legwear` the leg x
+ * 30..37, y 10..49 (320 px) and the top of a shoe painted into it, x 30..37, y 50..53 (32 px); `footwear` the shoe x
+ * 29..38, y 50..54 (50 px). Limb `leg_r`: `thigh_r` and `shin_r` from `legs` (chain `leg_r` (34, 10) -> (34, 30), tip
+ * (34, 50)), cut at the knee, line y = 30; `foot_r` from `shoes` on bone `foot_r` at (34, 50), below the ankle, whose
+ * line is y = 50 (axis (0, 1): the shin's own direction, `foot_r` having no end), a pixel past it when its centre
+ * y + 0.5 is above 50, rows 50 and on. By hand:
+ *
+ * - The cut `[[28, 50], [40, 50], [40, 56], [28, 56]]` holds rows 50..55, x 28..39 (centres strictly inside); of
+ *   `legs` it takes rows 50..53, x 30..37: 32 px, every one past the ankle line, so it lies outside the limb. The
+ *   shin then holds no pixel of rows 50..53 (it held all 32 without the cut), and `shoe_top` holds the 32.
+ * - The ankle cap: the width along y = 50 reads rows 49 (the shin's x 30..37) and 50 (the shoe's x 29..38): x 29..38,
+ *   10 px, radius 5. Its pixels are the disc's on rows 45..49 (centres not past the line); the shoe's layer has none
+ *   there, the shin gives x 30..37, and x 29 or 38 is missing — on both sides, as many each. None of those rows is cut,
+ *   so the figure is the same with the cut and without it.
+ * - Moved up to y = 46 the polygon takes rows 46..53: 64 px, rows 46..49's 32 between the knee and ankle lines, the
+ *   first (scan order) at 30,46, in the shin's band. Across the knee (rows 26..33) all 64 it takes are inside, the
+ *   first at 30,26, in the thigh's band.
+ */
+function runLimbLayerCutCases(say: (name: string, ok: boolean, detail: string, why: string) => void, root: string): void {
+  const leg = (label: string, polygon: Array<[number, number]> | null): { r: ReturnType<typeof assemble> | null; err: PartsError | null; lines: string[]; out: string; cfg: Record<string, unknown> } => {
+    const d = join(root, label);
+    writeRun(join(d, 'full'), [
+      { name: 'legwear', depth: 0.6, rects: [{ x0: 30, y0: 10, x1: 38, y1: 50, colour: C }, { x0: 30, y0: 50, x1: 38, y1: 54, colour: C }] },
+      { name: 'footwear', depth: 0.6, rects: [{ x0: 29, y0: 50, x1: 39, y1: 55, colour: C }] },
+    ]);
+    writeRun(join(d, 'head'), FRAMED_HEAD);
+    writeFileSync(join(d, 'painting.png'), encodePngBytes(flatPainting()));
+    const base = assembleConfig({ plan: [['legs', 'full', 'legwear'], ['shoes', 'full', 'footwear']], extend: [] });
+    const cfg: Record<string, unknown> = {
+      ...base,
+      assemble: { ...(base.assemble as Record<string, unknown>), ...(polygon === null ? {} : { cuts: [{ from: 'legs', into: 'shoe_top', polygon, draw: 'front', overlap: 0 }] }) },
+      limbs: {
+        leg_r: {
+          segments: [
+            { part: 'thigh_r', from: 'legs', bone: 'leg_r0' },
+            { part: 'shin_r', from: 'legs', bone: 'leg_r1', joint: 'knee' },
+            { part: 'foot_r', from: 'shoes', bone: 'foot_r', joint: 'ankle' },
+          ],
+        },
+      },
+      bones: [{ name: 'anchor', parent: 'root', at: [0, 0] }, ...LIMB_BONES.filter((b) => b.name === 'hip' || b.chain === 'leg_r' || b.name === 'foot_r')],
+      regions: { thigh_r: 'leg_r0', shin_r: 'leg_r1', foot_r: 'foot_r', ...(polygon === null ? {} : { shoe_top: 'foot_r' }) },
+      motion: { duration: 1, tracks: [{ bone: 'anchor', prop: 'rotate', amp: 2, period: 1, phase: 0 }] },
+    };
+    writeFileSync(join(d, 'config.json'), JSON.stringify(cfg));
+    const lines: string[] = [];
+    const out = join(d, 'out');
+    try {
+      const r = assembleStage(
+        { source: join(d, 'painting.png'), full: join(d, 'full'), head: join(d, 'head'), config: join(d, 'config.json'), seam: 'near-white', project: DEFAULT_PROJECT_RULE },
+        { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, 'recomposite_error_rig.png') },
+        (l) => lines.push(l),
+      );
+      return { r, err: null, lines, out, cfg };
+    } catch (err) {
+      if (err instanceof PartsError) return { r: null, err, lines, out, cfg };
+      throw err;
+    }
+  };
+  const guarded = (name: string, why: string, run: () => [boolean, string]): void => {
+    let got: [boolean, string];
+    try {
+      got = run();
+    } catch (err) {
+      got = [false, `the stage threw: ${(err as Error).message.split('\n')[0]}`];
+    }
+    say(name, got[0], got[1], why);
+  };
+  /** The opaque pixels of `parts/<name>.png` inside the rig box x 30..37, y 50..53 (the shoe's top), and over the whole PNG. */
+  const shoeBox = (out: string, name: string): { box: number; all: number } => {
+    const rec = readParts(join(out, 'parts.json')).parts.find((q) => q.name === name);
+    if (rec === undefined) return { box: -1, all: -1 };
+    const img = readPng(join(out, 'parts', `${name}.png`));
+    let box = 0;
+    let all = 0;
+    for (let j = 0; j < img.height; j++) {
+      for (let i = 0; i < img.width; i++) {
+        if (img.data[(j * img.width + i) * 4 + 3] <= 8) continue;
+        all++;
+        const x = rec.x + i;
+        const y = rec.y + j;
+        if (x >= 30 && x <= 37 && y >= 50 && y <= 53) box++;
+      }
+    }
+    return { box, all };
+  };
+  // The ankle cap's upper side by hand: the disc of radius 5 about (34, 50), rows 45..49; x 30..37 the shin's, the rest missing.
+  const ankle = { upper: 0, left: 0, right: 0 };
+  for (let y = 45; y <= 49; y++) {
+    for (let x = 29; x <= 38; x++) {
+      if ((x + 0.5 - 34) ** 2 + (y + 0.5 - 50) ** 2 > 25) continue;
+      if (x >= 30 && x <= 37) ankle.upper++;
+      else if (x + 0.5 - 34 <= 0) ankle.left++;
+      else ankle.right++;
+    }
+  }
+  const footCap = (b: { r: ReturnType<typeof assemble> | null }): Record<string, unknown> | undefined => b.r?.parts.parts.find((q) => q.name === 'foot_r')?.limb?.cap as Record<string, unknown> | undefined;
+  const below: Array<[number, number]> = [[28, 50], [40, 50], [40, 56], [28, 56]];
+
+  guarded(
+    'AS482_A_CUT_FROM_A_LIMB_S_LAYER_PAST_ITS_LAST_JOINT_TAKES_THE_PIXELS_FROM_THE_SEGMENT_AND_NAMES_THE_FOOT_S_BONE',
+    'issue #564 bar 1: See-through paints the top of the shoe into legwear, so the shin held it and drew it a second time over the foot, and a cut to take it off was refused (PARTS_CUT_FROM_KNOWN: the piece named a part the limb took, which parts.json does not hold). The cut lies past the ankle line, outside every segment of the limb: the 32 px leave the shin and make the piece, the cut line names the joint and the foot\'s bone, parts.json reads back, the rig puts the piece on foot_r, and the ankle cap — read from the parts after the cut — prints the figure it printed without it, since a cap is the disc\'s upper side; the planted negative is the same leg with no cut, whose shin holds all 32',
+    () => {
+      const cut = leg('limbcut-below', below);
+      const plain = leg('limbcut-none', null);
+      const want = '  cut: "legs" opaque 352 = "legs" 320 + "shoe_top" 32; band 0 px held by both; "shoe_top" lies past joint "ankle" of limb "leg_r", in the band of "foot_r" on bone "foot_r"';
+      const line = cut.lines.find((l) => l.startsWith('  cut: ')) ?? '';
+      if (cut.r === null) return [false, `the cut build is refused: ${cut.err?.problems.map((q) => `${q.code}: ${q.detail}`).join('; ')}`];
+      const back = readParts(join(cut.out, 'parts.json'));
+      const piece = back.parts.find((q) => q.name === 'shoe_top');
+      const shin = shoeBox(cut.out, 'shin_r');
+      const shinPlain = shoeBox(plain.out, 'shin_r');
+      const top = shoeBox(cut.out, 'shoe_top');
+      const P = readPartSet(cut.out);
+      const rig = buildRig(parseConfig(cut.cfg), back, P.images);
+      const slot = rig.rig.slots.find((q) => q.name === 'shoe_top');
+      const capCut = footCap(cut);
+      const capPlain = footCap(plain);
+      const wantCap = `{"at":[34,50],"width":10,"radius":5,"box":[29,45,10,10],"layer_px":0,"missing_px":${ankle.left + ankle.right},"short_px":{"left":${ankle.left},"right":${ankle.right}},"upper_px":${ankle.upper}}`;
+      const ok =
+        line === want &&
+        piece?.cut_from === 'legs' &&
+        piece.opaque_px === 32 &&
+        top.all === 32 &&
+        top.box === 32 &&
+        shin.box === 0 &&
+        shinPlain.box === 32 &&
+        slot?.bone === 'foot_r' &&
+        ankle.left === ankle.right &&
+        ankle.left > 0 &&
+        JSON.stringify(capCut) === wantCap &&
+        JSON.stringify(capPlain) === wantCap;
+      return [
+        ok,
+        `${line.trim()}; shoe_top cut_from ${String(piece?.cut_from)}, ${top.all} px (${top.box} in the shoe box), slot bone ${String(slot?.bone)}; shin_r in the shoe box ${shin.box} px with the cut, ${shinPlain.box} without; ankle cap with the cut ${JSON.stringify(capCut)}, without ${JSON.stringify(capPlain)} (by hand ${ankle.upper} from the shin, short left ${ankle.left}, right ${ankle.right})`,
+      ];
+    },
+  );
+
+  guarded(
+    'AS483_A_CUT_FROM_A_LIMB_S_LAYER_THAT_TAKES_A_SEGMENT_S_PIXELS_IS_REFUSED_BY_NAME_WITH_THE_BAND_IT_CROSSES_AND_WRITES_NOTHING',
+    'issue #564 bar 2: a cut that reaches into the limb would take pixels a segment holds, and the bend would open where the layer was cut. The polygon moved up to y = 46 crosses the ankle line into the shin\'s band, and across the knee it lies in the thigh\'s: each is refused once by name with the limb, the count, the first pixel, the band and the line it must lie past, and no parts.json is written; the planted positive is AS482\'s polygon, below the line',
+    () => {
+      const shin = leg('limbcut-shin', [[28, 46], [40, 46], [40, 56], [28, 56]]);
+      const knee = leg('limbcut-knee', [[28, 26], [40, 26], [40, 34], [28, 34]]);
+      const msg = (n: number, of: number, at: string, band: string): string =>
+        `ASSEMBLE_CUT_CROSSES_LIMB config.assemble.cuts[0] (part "shoe_top"): takes ${n} of its ${of} pixel(s) of "legs" inside limb "leg_r", the first at ${at}, in the band of ${band}; "legs" is the layer config.limbs.leg_r cuts at its joints, and a cut from it may lie only where no segment of the limb holds it — every pixel it takes past joint "ankle"'s line (through [34, 50], axis [0, 1]) is required: move the polygon, or give the pixels to a segment of the limb instead`;
+      const got = (b: { err: PartsError | null }): string => b.err?.problems.map((q) => `${q.code} ${q.object}: ${q.detail}`).join(' | ') ?? 'not refused';
+      const ok =
+        got(shin) === msg(32, 64, '30,46', '"shin_r" below joint "knee" and above joint "ankle"') &&
+        got(knee) === msg(64, 64, '30,26', '"thigh_r" above joint "knee"') &&
+        !existsSync(join(shin.out, 'parts.json')) &&
+        !existsSync(join(knee.out, 'parts.json'));
+      return [ok, `${got(shin)} || ${got(knee)}; parts.json written: ${existsSync(join(shin.out, 'parts.json'))}, ${existsSync(join(knee.out, 'parts.json'))}`];
+    },
+  );
+
+  // AS484 — the upper side. The thigh `legwear` x 30..37, y 10..29; the shin a boot, `footwear` x 30..37, y 30..49,
+  // reaching over the knee at x 30..33, rows 26..29 (AS479's boot), with a strap at x 30..37, rows 12..17 (48 px, over
+  // the ghost floor, 40, so the run keeps it). The boot's
+  // segments are the shin alone: before the knee line (y = 30) nothing of the limb holds the boot but the knee cap,
+  // radius 4 about (34, 30) (the width x 30..37 along rows 29 and 30), which the boot's own pixels fill first. The strap
+  // (rows 12..17, 48 px) lies before the line and far outside the disc: accepted, and its cut line names no joint (it
+  // lies past none). The reach (rows 26..29, x 30..33, 16 px) is before the line too, but the disc holds the centres
+  // with (x + 0.5 - 34)^2 + (y + 0.5 - 30)^2 <= 16 — by hand below — the first in scan order at 32,26. A cut past the
+  // knee (rows 30..33) is in the shin's band, which runs to the limb's end: no line bounds it below.
+  guarded(
+    'AS484_A_CUT_BEFORE_A_LIMB_S_FIRST_JOINT_IS_ACCEPTED_OUTSIDE_THE_CAP_AND_REFUSED_INSIDE_IT_OR_PAST_THE_LINE',
+    'issue #564 change: a cut may lie before the joint above a run of segments as well as past the one below it, but before that joint the run\'s own layer fills the cap — a cut there would take the overlap the bend needs. The strap far above the knee is accepted; the boot\'s reach over the knee is refused by the cap it lies in, read once the limbs are cut; a polygon past the knee is refused by the shin\'s band, the last segment\'s, which nothing bounds below',
+    () => {
+      const boot = (label: string, polygon: Array<[number, number]>): { err: PartsError | null; lines: string[] } => {
+        const d = join(root, label);
+        writeRun(join(d, 'full'), [
+          { name: 'legwear', depth: 0.6, rects: [{ x0: 30, y0: 10, x1: 38, y1: 30, colour: C }] },
+          { name: 'footwear', depth: 0.6, rects: [{ x0: 30, y0: 30, x1: 38, y1: 50, colour: C }, { x0: 30, y0: 26, x1: 34, y1: 30, colour: C }, { x0: 30, y0: 12, x1: 38, y1: 18, colour: C }] },
+        ]);
+        writeRun(join(d, 'head'), FRAMED_HEAD);
+        writeFileSync(join(d, 'painting.png'), encodePngBytes(flatPainting()));
+        const base = assembleConfig({ plan: [['legs', 'full', 'legwear'], ['boots', 'full', 'footwear']], extend: [] });
+        const cfg = {
+          ...base,
+          assemble: { ...(base.assemble as Record<string, unknown>), cuts: [{ from: 'boots', into: 'strap', polygon, draw: 'front', overlap: 0 }] },
+          limbs: { leg_r: { segments: [{ part: 'thigh_r', from: 'legs', bone: 'leg_r0' }, { part: 'shin_r', from: 'boots', bone: 'leg_r1', joint: 'knee' }] } },
+          bones: [{ name: 'hip', parent: 'root', at: [32, 8] }, { chain: 'leg_r', parent: 'hip', points: [[34, 10], [34, 30]], tip: [34, 50] }],
+          regions: { thigh_r: 'leg_r0', shin_r: 'leg_r1', strap: 'leg_r0' },
+        };
+        writeFileSync(join(d, 'config.json'), JSON.stringify(cfg));
+        const lines: string[] = [];
+        const out = join(d, 'out');
+        try {
+          assembleStage(
+            { source: join(d, 'painting.png'), full: join(d, 'full'), head: join(d, 'head'), config: join(d, 'config.json'), seam: 'near-white', project: DEFAULT_PROJECT_RULE },
+            { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, 'recomposite_error_rig.png') },
+            (l) => lines.push(l),
+          );
+          return { err: null, lines };
+        } catch (err) {
+          if (err instanceof PartsError) return { err, lines };
+          throw err;
+        }
+      };
+      let inCap = 0;
+      for (let y = 26; y <= 29; y++) for (let x = 30; x <= 33; x++) if ((x + 0.5 - 34) ** 2 + (y + 0.5 - 30) ** 2 <= 16) inCap++;
+      const strap = boot('limbcut-strap', [[29, 12], [39, 12], [39, 18], [29, 18]]);
+      const reach = boot('limbcut-reach', [[29, 26], [35, 26], [35, 30], [29, 30]]);
+      const past = boot('limbcut-past', [[29, 30], [39, 30], [39, 34], [29, 34]]);
+      const got = (b: { err: PartsError | null }): string => b.err?.problems.map((q) => `${q.code} ${q.object}: ${q.detail}`).join(' | ') ?? 'not refused';
+      const tail = (cap: string): string =>
+        `"boots" is the layer config.limbs.leg_r cuts at its joints, and a cut from it may lie only where no segment of the limb holds it — every pixel it takes before joint "knee"'s line (through [34, 30], axis [0, 1])${cap} is required: move the polygon, or give the pixels to a segment of the limb instead`;
+      const wantReach = `ASSEMBLE_CUT_CROSSES_LIMB config.assemble.cuts[0] (part "strap"): takes ${inCap} of its 16 pixel(s) of "boots" inside limb "leg_r", the first at 32,26, in the cap of joint "knee" on "shin_r" (radius 4 px about [34, 30]), which "boots"'s pixels fill there; ${tail(" and outside its cap's disc, radius 4 px about [34, 30]")}`;
+      const wantPast = `ASSEMBLE_CUT_CROSSES_LIMB config.assemble.cuts[0] (part "strap"): takes 32 of its 32 pixel(s) of "boots" inside limb "leg_r", the first at 30,30, in the band of "shin_r" below joint "knee" to the limb's end; ${tail('')}`;
+      const strapLine = strap.lines.find((l) => l.startsWith('  cut: ')) ?? '';
+      const ok =
+        strap.err === null &&
+        strapLine === '  cut: "boots" opaque 224 = "boots" 176 + "strap" 48; band 0 px held by both' &&
+        inCap > 0 &&
+        inCap < 16 &&
+        got(reach) === wantReach &&
+        got(past) === wantPast;
+      return [ok, `strap: ${strap.err === null ? strapLine.trim() : got(strap)}; reach (by hand ${inCap} of 16 in the disc): ${got(reach)}; past: ${got(past)}`];
+    },
+  );
+
+  guarded(
+    'AS485_PARTS_JSON_READS_A_PIECE_WHOSE_BASE_A_LIMB_TOOK_AND_REFUSES_ONE_NO_SEGMENT_OR_ANOTHER_LAYER_STANDS_FOR',
+    'issue #564: a part a limb takes is not written to parts.json, so the piece\'s cut_from names a part only its segments\' limb.of name — the reader takes those segments as the base, held to the base\'s rule: the same layer. AS482\'s file reads (the base found as "shin_r", the first segment record naming it in draw order); the piece moved to another layer and a cut_from no record nor segment names are each refused once',
+    () => {
+      const cut = leg('limbcut-reader', below);
+      if (cut.r === null) return [false, 'the build is refused'];
+      const file = JSON.parse(readFileSync(join(cut.out, 'parts.json'), 'utf8')) as { parts: Array<Record<string, unknown>> };
+      const planted = (what: string, edit: (q: Record<string, unknown>) => void): string => {
+        const f = structuredClone(file);
+        edit(f.parts.find((q) => q.name === 'shoe_top') as Record<string, unknown>);
+        const path = join(root, `limbcut-reader-${what}.json`);
+        writeFileSync(path, JSON.stringify(f));
+        const err = refusals(() => readParts(path));
+        return err === null ? 'read' : err.problems.map((q) => `${q.code} ${q.object}: ${q.detail}`).join(' | ');
+      };
+      const asIs = planted('as-is', () => {});
+      const layer = planted('layer', (q) => (q.from = 'full:footwear'));
+      const none = planted('none', (q) => (q.cut_from = 'hem'));
+      const ok =
+        asIs === 'read' &&
+        layer === 'PARTS_CUT_FROM_KNOWN part "shoe_top" field "cut_from": names "legs", which limb segment "shin_r" was cut from, with from "full:legwear"; this piece\'s is "full:footwear", and a piece shares its base\'s layer' &&
+        none === 'PARTS_CUT_FROM_KNOWN part "shoe_top" field "cut_from": names "hem", which is no part of this file and no limb segment\'s "of"; the plan part the cut took this piece from is required';
+      return [ok, `as written: ${asIs}; on another layer: ${layer}; a base nothing names: ${none}`];
+    },
+  );
 }
 
 /**
@@ -35728,6 +36148,153 @@ function runMeshDraftSuite(): number {
 }
 
 // ---------------------------------------------------------------------------
+// mesh-stats (issue #566)
+// ---------------------------------------------------------------------------
+
+/** One `mesh-stats:` mesh line read back: part, mode, vertices, triangles; null when the line is not one. */
+function meshStatsLineOf(line: string): { part: string; mode: string; vertices: number; triangles: number } | null {
+  const m = /^mesh-stats: (\S+) — (\S+) (\d+) vertices, (\d+) triangles/.exec(line.trim());
+  return m === null ? null : { part: m[1], mode: m[2], vertices: Number(m[3]), triangles: Number(m[4]) };
+}
+
+/** Where `mesh-stats`' printed lines and a mesh report disagree, field by field, in order; the total line too. Empty means they agree. */
+function meshStatsDiffs(out: string, report: ReadonlyArray<{ part: string; vertices: number; triangles: number; mode?: string }>): string[] {
+  const lines = out.trim().split('\n').filter((l) => l.startsWith('mesh-stats: '));
+  const rows = lines.map(meshStatsLineOf).filter((r) => r !== null);
+  const diffs: string[] = [];
+  if (rows.length !== report.length) diffs.push(`${rows.length} mesh line(s), the report holds ${report.length} row(s)`);
+  report.forEach((r, i) => {
+    const got = rows[i];
+    if (got === undefined) return;
+    for (const [k, want, have] of [
+      ['part', r.part, got.part],
+      ['mode', r.mode ?? 'lattice', got.mode],
+      ['vertices', r.vertices, got.vertices],
+      ['triangles', r.triangles, got.triangles],
+    ] as const) {
+      if (want !== have) diffs.push(`row ${i} ${k}: printed ${have}, report ${want}`);
+    }
+  });
+  const total = report.reduce((n, r) => n + r.triangles, 0);
+  const want = `mesh-stats: total ${total} triangles over ${report.length} mesh(es)`;
+  if (lines[lines.length - 1] !== want) diffs.push(`last line "${lines[lines.length - 1] ?? ''}", the report's total is "${want}"`);
+  return diffs;
+}
+
+/** The names under a directory, sorted, one level deep: what a command that writes nothing must leave as it found. */
+function topNames(dir: string): string {
+  return readdirSync(dir).sort().join(',');
+}
+
+function runMeshStatsSuite(): number | null {
+  section('mesh-stats: the configured meshes counted through the rig stage\'s own buildRig, without rigc (issue #566)');
+  const { say, bad } = counter();
+  const root = temp('mesh-stats');
+  try {
+    // MS01 — the positive control on the rig fixture: its one lattice, counted by hand in fixtures/rig.ts (RIG_EXPECT).
+    const fx = writeRigFixture(join(root, 'pos'));
+    const before = `${topNames(ROOT)}|${topNames(join(root, 'pos'))}|${topNames(fx.parts)}`;
+    const pos = runCli(['mesh-stats', '--config', fx.config, '--parts', fx.parts]);
+    const after = `${topNames(ROOT)}|${topNames(join(root, 'pos'))}|${topNames(fx.parts)}`;
+    const want = [`mesh-stats: cloth — lattice ${RIG_EXPECT.vertices} vertices, ${RIG_EXPECT.triangles} triangles`, `mesh-stats: total ${RIG_EXPECT.triangles} triangles over 1 mesh(es)`];
+    say(
+      'MS01_THE_RIG_FIXTURES_LATTICE_IS_COUNTED_AS_COUNTED_BY_HAND_AND_NOTHING_IS_WRITTEN',
+      pos.status === 0 && pos.out.trim() === want.join('\n') && before === after,
+      `exit ${pos.status}: ${pos.out.trim().split('\n').join(' | ')}; the worktree, the fixture and its parts dir listed before and after: ${before === after ? 'the same' : 'DIFFERENT'}`,
+      'issue #566: the count before a build; fixtures/rig.ts counts the 8 px lattice over the cloth block by hand (12 vertices, 12 triangles), and the command writes no file',
+    );
+
+    // MS02 — the flags: USAGE, exit 2, named, nothing written.
+    const usageRuns = [
+      ['no --config', ['mesh-stats', '--parts', fx.parts], 'USAGE: mesh-stats needs --config <value>'],
+      ['no --parts', ['mesh-stats', '--config', fx.config], 'USAGE: mesh-stats needs --parts <value>'],
+      ['an unknown flag', ['mesh-stats', '--config', fx.config, '--parts', fx.parts, '--out', join(root, 'usage')], 'mesh-stats does not take "--out"; it takes --config, --parts'],
+      ['a positional word', ['mesh-stats', 'config.json', '--config', fx.config, '--parts', fx.parts], 'mesh-stats does not take "config.json"; it takes --config, --parts'],
+    ] as const;
+    const beforeUsage = `${topNames(ROOT)}|${topNames(root)}`;
+    const usageGot = usageRuns.map(([label, args, line]) => {
+      const r = runCli([...args]);
+      return { label, ok: r.status === 2 && r.out.includes(line), text: `${label} -> exit ${r.status}, ${r.out.trim().split('\n')[0]}` };
+    });
+    const afterUsage = `${topNames(ROOT)}|${topNames(root)}`;
+    say(
+      'MS02_A_MISSING_CONFIG_OR_PARTS_AN_UNKNOWN_FLAG_OR_A_POSITIONAL_WORD_IS_A_USAGE_ERROR_NAMED_AND_NOTHING_IS_WRITTEN',
+      usageGot.every((u) => u.ok) && beforeUsage === afterUsage,
+      `${usageGot.map((u) => u.text).join(' | ')}; listings before and after: ${beforeUsage === afterUsage ? 'the same' : 'DIFFERENT'}`,
+      'CL26: the refusal of a flag is read off the TAKES row, and the row holds --config and --parts alone — no --out, because the command writes nothing',
+    );
+
+    // MS03 — a refusal from the mesh stage is the rig stage's own: the fixture with the cloth PNG taken away.
+    const gone = writeRigFixture(join(root, 'gone'));
+    rmSync(join(gone.parts, 'parts', 'cloth.png'));
+    const statsGone = runCli(['mesh-stats', '--config', gone.config, '--parts', gone.parts]);
+    const rigGone = runCli(['rig', '--config', gone.config, '--parts', gone.parts, '--out', join(root, 'gone', 'rig')]);
+    const failOf = (s: string): string => s.split('\n').find((l) => l.includes('FAIL')) ?? '';
+    say(
+      'MS03_A_PART_WITH_NO_PNG_IS_THE_RIG_STAGES_OWN_REFUSAL_BY_NAME_EXIT_1',
+      statsGone.status === 1 && failOf(statsGone.out).includes('RIG_PNG_PRESENT') && failOf(statsGone.out).includes('parts/cloth.png') && failOf(statsGone.out) === failOf(rigGone.out) && rigGone.status === 1 && !statsGone.out.includes('mesh-stats: total'),
+      `mesh-stats -> exit ${statsGone.status}, ${failOf(statsGone.out).trim()}; rig on the same input -> exit ${rigGone.status}, ${failOf(rigGone.out) === failOf(statsGone.out) ? 'the same line' : `a DIFFERENT line: ${failOf(rigGone.out).trim()}`}`,
+      'the design\'s point 3: what the mesh stage refuses is printed as the build prints it, because it is the same buildRig refusing',
+    );
+
+    // MS04–MS06 — the public examples: demo (lattices) and reference-sample (two contour meshes).
+    const keys = ['demo', 'reference-sample'];
+    const fetched = keys.filter((k) => existsSync(join(EXAMPLES_DIR, k, 'inputs', 'layers', 'head')));
+    if (fetched.length < keys.length) {
+      console.log(`  SKIP  examples/${keys.filter((k) => !fetched.includes(k)).join(', examples/')}/inputs not fetched; run bun run fetch-examples`);
+      console.log('          ⚠️ This is a HOLE in this run, not a pass — mesh-stats was held to no built mesh report.');
+      return bad();
+    }
+    if (!exampleInputsAtPin(keys, say, 'MS04_THE_FETCHED_EXAMPLE_INPUTS_MATCH_THE_PINNED_TREE')) return bad();
+    const asm = new Map<string, string>();
+    for (const k of keys) {
+      const d = join(EXAMPLES_DIR, k);
+      const out = join(root, k, 'asm');
+      assembleStage(
+        { source: join(d, 'inputs', 'painting.png'), full: join(d, 'inputs', 'layers', 'full'), head: join(d, 'inputs', 'layers', 'head'), config: join(d, 'config.json'), seam: DEFAULT_SEAM_RULE, project: DEFAULT_PROJECT_RULE },
+        { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, 'recomposite_error_rig.png') },
+        () => {},
+      );
+      asm.set(k, out);
+    }
+    const expected = (k: string): Array<{ part: string; vertices: number; triangles: number; mode?: string }> =>
+      JSON.parse(readFileSync(join(EXAMPLES_DIR, k, 'expected', 'mesh_report.json'), 'utf8')) as Array<{ part: string; vertices: number; triangles: number; mode?: string }>;
+    const runs = keys.map((k) => {
+      const t0 = performance.now();
+      const r = runCli(['mesh-stats', '--config', join(EXAMPLES_DIR, k, 'config.json'), '--parts', asm.get(k) as string]);
+      return { k, r, ms: performance.now() - t0, diffs: meshStatsDiffs(r.out, expected(k)) };
+    });
+    // Planted: reference-sample with its two contour meshes as lattices at the spacings it traced them at (AUTHORING's
+    // soft-region recipe: topwear 18, bottomwear 28) — a mesh-stats that counted a contour part's lattice.
+    const raw = JSON.parse(readFileSync(join(EXAMPLES_DIR, 'reference-sample', 'config.json'), 'utf8')) as { meshes: Record<string, Record<string, unknown>>; motion: Record<string, unknown> };
+    for (const [part, grid] of [['topwear', 18], ['bottomwear', 28]] as const) {
+      const { contour: _traced, ...rest } = raw.meshes[part];
+      raw.meshes[part] = { grid, ...rest };
+    }
+    raw.motion.animations_from = join(EXAMPLES_DIR, 'reference-sample', 'animations.json');
+    writeFileSync(join(root, 'lattice-config.json'), JSON.stringify(raw));
+    const planted = runCli(['mesh-stats', '--config', join(root, 'lattice-config.json'), '--parts', asm.get('reference-sample') as string]);
+    const plantedDiffs = meshStatsDiffs(planted.out, expected('reference-sample'));
+    say(
+      'MS05_ON_DEMO_AND_REFERENCE_SAMPLE_EVERY_MESHS_MODE_VERTICES_AND_TRIANGLES_AND_THE_TOTAL_ARE_THE_BUILT_MESH_REPORTS_AND_A_LATTICE_COUNT_FOR_A_CONTOUR_PART_IS_NOT',
+      runs.every((x) => x.r.status === 0 && x.diffs.length === 0) && planted.status === 0 && plantedDiffs.some((d) => d.includes('mode')) && plantedDiffs.some((d) => d.includes('triangles')),
+      `${runs.map((x) => `${x.k}: exit ${x.r.status}, ${x.diffs.length === 0 ? `every row and ${x.r.out.trim().split('\n').at(-1)?.replace('mesh-stats: ', '')} as expected/mesh_report.json` : x.diffs.join('; ')}`).join(' | ')}; planted, reference-sample's contour meshes counted as their lattices: exit ${planted.status}, ${plantedDiffs.length === 0 ? 'NOT told apart' : plantedDiffs.join('; ')}`,
+      'issue #566 bar 1: the dry-run count is the built count; expected/mesh_report.json is the build the chain suite holds this tree to, and reference-sample carries the contour mode',
+    );
+    const demo = runs.find((x) => x.k === 'demo');
+    say(
+      'MS06_MESH_STATS_ON_DEMO_RUNS_UNDER_5_S',
+      demo !== undefined && demo.r.status === 0 && demo.ms < 5000,
+      `demo: ${demo === undefined ? 'not run' : `${Math.round(demo.ms)} ms, the bun process included`} (bound 5000 ms); reference-sample: ${Math.round(runs.find((x) => x.k === 'reference-sample')?.ms ?? -1)} ms`,
+      'issue #566 bar 2: the count in seconds, before a build; no assemble, no rigc, no check in the command',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+  return bad();
+}
+
+// ---------------------------------------------------------------------------
 // influence (issue #378)
 // ---------------------------------------------------------------------------
 
@@ -43258,6 +43825,7 @@ const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number 
   ['scene', runSceneSuite],
   ['chain', runChainSuite],
   ['mesh-draft', runMeshDraftSuite],
+  ['mesh-stats', runMeshStatsSuite],
   ['influence', runInfluenceSuite],
   ['remesh', runRemeshSuite],
   ['retune', runRetuneSuite],
@@ -43328,7 +43896,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['check']],
   ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'contour-wiring', 'config', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
-  ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'remesh', 'retune', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
+  ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'mesh-stats', 'remesh', 'retune', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
 ];
 
 /**

@@ -2571,6 +2571,8 @@ export interface CutCount {
   underEmpty?: number;
   /** With `under_fill: "colour"` only (issue #360): the `under` pixels took the image's colour at the alpha the cut removed; absent without it. */
   underFill?: 'colour';
+  /** Issue #564, only on a cut from a part a limb takes, lying past the limb: the joint it lies past and the segment below it, with its bone. */
+  limb?: { limb: string; joint: string; part: string; bone: string };
 }
 
 /**
@@ -2588,7 +2590,8 @@ export function cutLines(cuts: readonly CutCount[]): string[] {
     const colour = cs.some((c) => c.underFill === 'colour') ? ` (${cs.reduce((a, c) => a + (c.underFill === 'colour' ? (c.under ?? 0) : 0), 0)} colour only, at the alpha the cut removed)` : '';
     return (
       `  cut: "${from}" opaque ${cs[0].before} = "${from}" ${cs[0].kept} + ${cs.map((c) => `"${c.into}" ${c.taken}`).join(' + ')}; band ${cs.reduce((a, c) => a + c.band, 0)} px held by both` +
-      (cs.some((c) => c.under !== undefined) ? `; under ${cs.reduce((a, c) => a + (c.under ?? 0), 0)} px filled${colour}, ${cs.reduce((a, c) => a + (c.underEmpty ?? 0), 0)} px left empty` : '')
+      (cs.some((c) => c.under !== undefined) ? `; under ${cs.reduce((a, c) => a + (c.under ?? 0), 0)} px filled${colour}, ${cs.reduce((a, c) => a + (c.underEmpty ?? 0), 0)} px left empty` : '') +
+      cs.map((c) => (c.limb === undefined ? '' : `; "${c.into}" lies past joint "${c.limb.joint}" of limb "${c.limb.limb}", in the band of "${c.limb.part}" on bone "${c.limb.bone}"`)).join('')
     );
   });
 }
@@ -2836,6 +2839,108 @@ export function limbOrder(order: readonly DrawSlot[], plan: readonly PlanEntry[]
 /** The point a joint line moved `offset` px along its axis passes through, to 3 places (issue #360, `cut_band`). */
 function shiftedAt(line: JointLine, offset: number): [number, number] {
   return [pyRound(line.at[0] + offset * line.axis[0], 3), pyRound(line.at[1] + offset * line.axis[1], 3)];
+}
+
+/**
+ * Issue #564: where an `assemble.cuts` entry from a part a limb takes lies
+ * against that limb. The segments of a limb that take the part are a run
+ * `k0 .. k1` (`CONFIG_LIMB_FROM_RUN` keeps them consecutive), and the run's
+ * pixels lie between two joint lines: the line of the joint above `k0` when
+ * `k0` sits below one (a joint between two layers), and the line of the joint
+ * below `k1` when a segment follows it (the ankle under a shin that takes the
+ * legwear). A pixel the cut takes (alpha above 0 in its piece) is outside the
+ * run when it lies past the lower line, or not past the upper line and — read
+ * after the limbs are cut, with `caps` — outside the disc of that joint's cap,
+ * which the run's own layer fills there first. Anything else lies in a
+ * segment's band, and the cut is refused: the pixels would leave a segment
+ * that holds them, and the bend would open where the layer was cut. Every
+ * limb taking the part is read. `past` is the segment a taken pixel lies in
+ * when every one lies past the lower line — the one below that joint, or
+ * below the deepest joint line all of them are past — and is what the `cut:`
+ * line names. Without `caps` the lines alone are read; with them only the
+ * discs, for the pixels the lines let through.
+ */
+function limbBands(
+  cuts: readonly Cut[],
+  pieces: ReadonlyArray<Built | null>,
+  limbs: Readonly<Record<string, Limb>>,
+  bones: readonly BoneEntry[],
+  W: number,
+  H: number,
+  caps: ((limb: string, segment: number) => CapRecord | undefined) | null,
+): { problems: Problem[]; past: Map<number, { limb: string; joint: string; part: string; bone: string }> } {
+  const problems: Problem[] = [];
+  const past = new Map<number, { limb: string; joint: string; part: string; bone: string }>();
+  const places = bonePlaces(bones);
+  const lineAbove = (l: string, k: number): JointLine | null => {
+    const segs = limbs[l].segments;
+    const up = places.get(segs[k - 1].bone);
+    const me = places.get(segs[k].bone);
+    if (up === undefined || me === undefined) return null;
+    const end = me.end ?? (k + 1 < segs.length ? (places.get(segs[k + 1].bone)?.at ?? null) : null);
+    return jointLine(up.at, me.at, end);
+  };
+  const fmt = (q: readonly number[]): string => `[${q.map((n) => pyRound(n, 3)).join(', ')}]`;
+  cuts.forEach((q, i) => {
+    const piece = pieces[i];
+    if (piece === null) return;
+    const taken: number[] = [];
+    for (let p = 0; p < W * H; p++) if (piece.r.data[p * 4 + 3] > 0) taken.push(p);
+    for (const l of Object.keys(limbs)) {
+      const segs = limbs[l].segments;
+      const k0 = segs.findIndex((sg) => sg.from === q.from);
+      if (k0 < 0) continue;
+      let k1 = k0;
+      while (k1 + 1 < segs.length && segs[k1 + 1].from === q.from) k1++;
+      const upper = k0 > 0 ? lineAbove(l, k0) : null;
+      const lower = k1 + 1 < segs.length ? lineAbove(l, k1 + 1) : null;
+      // A joint with no line is ASSEMBLE_LIMB_JOINT, refused by cutLimbs by name; nothing is read about it here.
+      if ((k0 > 0 && upper === null) || (k1 + 1 < segs.length && lower === null)) continue;
+      const cap = caps === null || upper === null ? undefined : caps(l, k0);
+      const inside: number[] = [];
+      let below = 0;
+      for (const p of taken) {
+        const x = p % W;
+        const y = Math.floor(p / W);
+        if (lower !== null && pastJoint(lower, x, y)) {
+          below++;
+          continue;
+        }
+        if (upper !== null && !pastJoint(upper, x, y)) {
+          if (caps === null || cap === undefined || !inDisc(cap.at, cap.radius, x, y)) continue;
+        } else if (caps !== null) continue;
+        inside.push(p);
+      }
+      const object = `config.assemble.cuts[${i}] (part "${q.into}")`;
+      const wanted = [
+        ...(lower === null ? [] : [`past joint "${String(segs[k1 + 1].joint)}"'s line (through ${fmt(lower.at)}, axis ${fmt(lower.axis)})`]),
+        ...(upper === null ? [] : [`before joint "${String(segs[k0].joint)}"'s line (through ${fmt(upper.at)}, axis ${fmt(upper.axis)})${cap === undefined ? '' : ` and outside its cap's disc, radius ${cap.radius} px about ${fmt(cap.at)}`}`]),
+      ];
+      if (inside.length > 0) {
+        const f = inside[0];
+        const fx = f % W;
+        const fy = Math.floor(f / W);
+        let k = k0;
+        if (caps === null) {
+          for (let ln = k < k1 ? lineAbove(l, k + 1) : null; ln !== null && pastJoint(ln, fx, fy); ln = k < k1 ? lineAbove(l, k + 1) : null) k++;
+        }
+        const band =
+          caps !== null
+            ? `the cap of joint "${String(segs[k0].joint)}" on "${segs[k0].part}" (radius ${(cap as CapRecord).radius} px about ${fmt((cap as CapRecord).at)}), which "${q.from}"'s pixels fill there`
+            : `the band of "${segs[k].part}"${k > 0 ? ` below joint "${String(segs[k].joint)}"` : ''}${k + 1 < segs.length ? `${k > 0 ? ' and' : ''} above joint "${String(segs[k + 1].joint)}"` : ' to the limb\'s end'}`;
+        problems.push({
+          code: 'ASSEMBLE_CUT_CROSSES_LIMB',
+          object,
+          detail: `takes ${inside.length} of its ${taken.length} pixel(s) of "${q.from}" inside limb "${l}", the first at ${fx},${fy}, in ${band}; "${q.from}" is the layer config.limbs.${l} cuts at its joints, and a cut from it may lie only where no segment of the limb holds it — every pixel it takes ${wanted.length === 0 ? `outside the limb, and the limb has no joint before or past its segments that take "${q.from}" (they are all of it), so no pixel is` : wanted.join(', or ')} is required: move the polygon, or give the pixels to a segment of the limb instead`,
+        });
+      } else if (caps === null && lower !== null && below === taken.length && taken.length > 0) {
+        let j = k1 + 1;
+        for (let ln = j + 1 < segs.length ? lineAbove(l, j + 1) : null; ln !== null && taken.every((p) => pastJoint(ln as JointLine, p % W, Math.floor(p / W))); ln = j + 1 < segs.length ? lineAbove(l, j + 1) : null) j++;
+        if (!past.has(i)) past.set(i, { limb: l, joint: String(segs[j].joint), part: segs[j].part, bone: segs[j].bone });
+      }
+    }
+  });
+  return { problems, past };
 }
 
 /**
@@ -3719,6 +3824,15 @@ export function assemble(input: AssembleInput): AssembleResult {
   // In cut order, as the config lists them.
   cutCounts.sort((a, b) => cuts.findIndex((q) => q.into === a.into) - cuts.findIndex((q) => q.into === b.into));
 
+  // Issue #564: a cut from a part a limb takes lies outside the limb's segments, read before the limbs are cut.
+  const bands = input.limbs === undefined || cuts.length === 0 ? null : limbBands(cuts, pieces, input.limbs, input.bones ?? [], W, H, null);
+  if (bands !== null) {
+    refuseIfAny(bands.problems);
+    for (const [i, at] of bands.past) {
+      const c = cutCounts.find((q) => q.into === cuts[i].into);
+      if (c !== undefined) c.limb = at;
+    }
+  }
   // Issue #349: the limbs, after the cuts (a limb may take a cut's piece, and a cut's under image fills its base first).
   const lim = cutLimbs(input.limbs ?? {}, input.bones ?? [], input.caps ?? new Map(), W, H, (name) => {
     const pi = plan.findIndex((e) => e[0] === name);
@@ -3726,6 +3840,8 @@ export function assemble(input: AssembleInput): AssembleResult {
     const ci = cuts.findIndex((q) => q.into === name);
     return ci >= 0 ? pieces[ci] : null;
   }, opaqueOf, mergedIn, count, (name) => hiddenArt.get(name) ?? null, (layer, by) => hiddenUses.get(layer)?.push(by));
+  // Issue #564: and the cap a run's own layer fills above its upper joint, read once the limbs are cut.
+  if (bands !== null) refuseIfAny(limbBands(cuts, pieces, input.limbs ?? {}, input.bones ?? [], W, H, (l, k) => lim.parts.find((q) => q.limb === l && q.segment === k)?.record.cap).problems);
   const limbPieces = lim.pieces;
   const order = limbOrder(order0, plan, cuts, lim.parts);
   const pieceAt = (d: { plan: number } | { cut: number } | { limb: number }): { name: string; b: Built } =>
