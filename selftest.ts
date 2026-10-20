@@ -238,7 +238,7 @@ import { EnvironmentError, readEnvironmentSchedule } from 'rig-c/src/environment
 import { boneTrackOf, CLOTH_FLOOR_TEXT, CLOTH_LEVERS_TEXT, CLOTH_LINE, CLOTH_SETTLE_FLOOR, clothChains, type ClothLine, clothLine, clothRow, clothWarnText, frameRuns, MOTION_SEAM_FLOOR, MOTION_SEAM_LINE, type MotionSeamLine, motionSeamPairs, motionSeamWarnText, openingOverFloor, readMotionSeams } from './src/check.ts';
 import { BREATH_ANIMATION, type BreathPair, breathPairProblem, breathTracks, chainDirection, sweepAngles, sweepJoints, type SweepJoint, sweepLine, type SweepLine, SWEEP_LINE, type SweepPose, type Viewport } from './src/check.ts';
 import { barsNotMet, flatComposite, frameToRigMap, maxRgbDiff, rigToFrameMap, SEAM_BOX, SEAM_PX_BAR, SEAM_PX_LEVEL, seamRigPx, seamRigPxText, SEAM_MEAN_BAR, SEAM_DIR, SEAM_MARK, SEAM_NO_ART, seamFigures, type SeamFigures, seamPairRows, seamPairText, STILL_DIR, withoutPhysics, BREATH_TORSO_MEAN_FLOOR } from './src/check.ts';
-import { ACCEPTABLE_BARS, BARS, besideIdleLine, blackRig, drawingTurn, FOLD_LINE, LEVEL_BAR_DEGREES, LEVEL_LINE, LIMB_LINE, limbLine, foldsLine, STRESS_LINE, STRESS_RIGID, STRESS_TURNS, stressPlan, readFoldSets, edgeBonesText, foldBonesText, FOLD_GROUPS_SHOWN, FOLD_TRIANGLES_SHOWN, buildGateLines, holesLine, causeLines, chainLine, measuredRules, SOURCE_LINE, sourceFigures, sourceSizeProblem, packedBuildArgs, GATE_PROFILE, DEFAULT_PACK_MODE, DEFAULT_PAGE_EDGES, findRigc, packageRigc, rigcIdentity, rigcRunnerAt, type RigcSpawn, type PackMode, type PageEdges, type FrameSet, GEOMETRY_FILE, gateGreen, headBoneOf, IDLE_MAX_PX, type JudgementLine, JUDGEMENT_LINES, packEdgeProblems, PARTS_HOME_SENTENCE, parsePackLines, readBoneTrack, readCheckInputs, readFrameSet, readGeometry, readRigcEntry, REPORTED_LINES, requireRigcVersion, RIGC_ENTRY_VERSION, RIGC_GEOMETRY_VERSION, rigcFailed, type RigcRunner, runCheck, SPINEBOY_YARDSTICK, stretchLine, TEXTURE_STRETCH_CEILING, TIP_RATIO_FLOOR, TIP_REST_RATIO_CEILING, attachmentPoses, stillLine, STILL_INSTRUMENT } from './src/check.ts';
+import { ACCEPTABLE_BARS, BARS, besideIdleLine, blackRig, drawingTurn, FOLD_LINE, type FoldsLine, LEVEL_BAR_DEGREES, LEVEL_LINE, LIMB_LINE, limbLine, foldsLine, STRESS_LINE, STRESS_RIGID, STRESS_TURNS, stressPlan, readFoldSets, edgeBonesText, buildGateLines, holesLine, causeLines, chainLine, measuredRules, SOURCE_LINE, sourceFigures, sourceSizeProblem, packedBuildArgs, GATE_PROFILE, DEFAULT_PACK_MODE, DEFAULT_PAGE_EDGES, findRigc, packageRigc, rigcIdentity, rigcRunnerAt, type RigcSpawn, type PackMode, type PageEdges, type FrameSet, GEOMETRY_FILE, gateGreen, headBoneOf, IDLE_MAX_PX, type JudgementLine, JUDGEMENT_LINES, packEdgeProblems, PARTS_HOME_SENTENCE, parsePackLines, readBoneTrack, readCheckInputs, readFrameSet, readGeometry, readRigcEntry, REPORTED_LINES, requireRigcVersion, RIGC_ENTRY_VERSION, RIGC_GEOMETRY_VERSION, rigcFailed, type RigcRunner, runCheck, SPINEBOY_YARDSTICK, stretchLine, TEXTURE_STRETCH_CEILING, TIP_RATIO_FLOOR, TIP_REST_RATIO_CEILING, attachmentPoses, stillLine, STILL_INSTRUMENT, foldBonesText, FOLD_GROUPS_SHOWN, FOLD_TRIANGLES_SHOWN } from './src/check.ts';
 import { baseTagOf, blinkFigures, breathHeat, heatField, type BoneTrack, type BoneWorld, chainToward, edgeLength, frameBox, type GeometryPose, halfTravels, type MeshRest, stretchFigures, stretchSeverity, lagStep, readSine, setupToFrame, stillReading, stillTolerance, STILL_ROUNDINGS, SWING_TAGS, ulpOf } from './src/instruments.ts';
 import {
   aimLine,
@@ -292,7 +292,7 @@ import { BLOCKED_LABEL, barsOf, basisOf, cappedReducer, classify, costLine, coun
 import { withPolicyMotion } from './fixtures/automotion.ts';
 import { type BStar, bStar, type CellRow as ToolCellRow, nearestRank, parseArgs as parseBoundaryArgs, pendingRow, policyAt, render as renderBoundary, sagittas, sagittaSummary } from './tools/auto_boundary_survey.ts';
 import { type AutoMotionCase, explicitFrameId, idleSchedule, localRow, motionInput, motionStimulus, motionVerdict, runComparison, stimulusAnimations, withStimulus } from './src/automotion.ts';
-import { clothLines, loopCheckLine, loopStage, motionGates, motionSeamLines, type MotionGateRun, replaySearch, stimulusTexts, strayClause } from './src/build.ts';
+import { clothLines, foldsLines, loopCheckLine, loopStage, motionGates, motionSeamLines, type MotionGateRun, replaySearch, stimulusTexts, strayClause } from './src/build.ts';
 import {
   bisectAccepted,
   type CountedProbe,
@@ -18970,6 +18970,51 @@ function runAnimationFoldCases(say: (name: string, ok: boolean, detail: string, 
       'issue #363: ANIMATIONS_DO_NOT_FOLD poses the animations with physics stepping on the render clock, reports physics_on and physics_off side by side, and fails a fold that appears only with physics on naming the mesh, the physics constraints on its bones and the worst frame',
     );
 
+    // CK560 — issue #568: the fold line a document quotes is the line the console prints. The console's head line is
+    // foldsLines over check.json's record (the demo skirt and the flip skirt above, 9 physics constraints each), and every
+    // head line tracked Markdown quotes is foldsLines over its own figures; planted: AUTHORING's line from before #568
+    // ("its 2 physics constraint(s) left out", the wording before #363) and the demo skirt's printed line reworded so.
+    const headOf = (out: string): string => foldPrinted(out)[0]?.trim() ?? '';
+    const demoHead = headOf(demoChk.out);
+    const flipHead = headOf(flipChk.out);
+    const asFolds = (fig: Record<string, unknown> | null): FoldsLine | null => {
+      const l = foldOf(fig);
+      return l === null ? null : (l as unknown as FoldsLine);
+    };
+    const demoRecord = asFolds(demoChk.fig);
+    const flipRecord = asFolds(flipChk.fig);
+    const docs560 = treeFiles()
+      .filter((f) => f.endsWith('.md'))
+      .map((f) => [f, readFileSync(join(ROOT, f), 'utf8')] as const);
+    const held560 = foldDocLineFaults(docs560);
+    const authoring560 = docs560.find(([f]) => f === 'docs/AUTHORING.md')?.[1] ?? '';
+    const current560 = OLD_FOLD_DOC_LINE.replace('its 2 physics constraint(s) left out', 'with its 2 physics constraint(s) on and off');
+    const plantOld560 = foldDocLineFaults(docs560.map(([f, t]) => [f, f === 'docs/AUTHORING.md' ? t.replace(current560, OLD_FOLD_DOC_LINE) : t] as const));
+    const demoAsDoc = foldDocLineFaults([['docs/plant.md', `[check]   ${demoHead}\n`]]);
+    const leftOut = demoHead.replace(', with its 9 physics constraint(s) on and off', ', its 9 physics constraint(s) left out');
+    const plantLeftOut560 = foldDocLineFaults([['docs/plant.md', `[check]   ${leftOut}\n`]]);
+    say(
+      'CK560_A_FOLD_LINE_A_DOCUMENT_QUOTES_IS_THE_LINE_THE_CONSOLE_PRINTS_WITH_ITS_PHYSICS_ON_AND_OFF',
+      demoRecord !== null &&
+        flipRecord !== null &&
+        demoHead !== '' &&
+        foldsLines(demoRecord)[0] === demoHead &&
+        foldsLines(flipRecord)[0] === flipHead &&
+        demoHead.includes(', with its 9 physics constraint(s) on and off (') &&
+        held560.read > 0 &&
+        held560.faults.length === 0 &&
+        authoring560.includes(current560) &&
+        plantOld560.faults.length === 1 &&
+        plantOld560.faults[0].startsWith('docs/AUTHORING.md:') &&
+        plantOld560.faults[0].includes('"its 2 physics constraint(s) left out"') &&
+        demoAsDoc.read === 1 &&
+        demoAsDoc.faults.length === 0 &&
+        leftOut !== demoHead &&
+        plantLeftOut560.faults.length === 1,
+      `console head = foldsLines(check.json): demo ${demoRecord !== null && foldsLines(demoRecord)[0] === demoHead}, flip ${flipRecord !== null && foldsLines(flipRecord)[0] === flipHead}; ${held560.read} quoted fold line(s) in tracked Markdown, ${held560.faults.length === 0 ? 'every one the console\'s' : held560.faults.join('; ')}; planted, AUTHORING's pre-#568 line -> ${plantOld560.faults.join('; ') || 'not caught'}; the demo skirt's printed line quoted -> ${demoAsDoc.faults.length === 0 ? 'held' : demoAsDoc.faults.join('; ')}; reworded "left out" -> ${plantLeftOut560.faults.join('; ') || 'not caught'}`,
+      'issue #568: an examinee read "physics constraint(s) left out" as the fold bar\'s and concluded it was silent where cloth folds; since #363 the bar reads physics on and off and the console says so, and a document that quotes the line in other words is the one that misleads, so every quoted line is rebuilt by the console\'s own formatter',
+    );
+
     // CK246 — the reader: a set rigc did not write, or a folding mesh rigc printed no line for, is refused by name.
     const setDir = join(dir, 'reading');
     mkdirSync(join(setDir, 'wave'), { recursive: true });
@@ -23898,6 +23943,53 @@ function readmePasteSections(readme: string): string[] | string {
 
 /** The README's paste line before issue #375, verbatim: four sections, no `limbs`. RL04 plants it. */
 const OLD_README_PASTE_LINE = '#       correct it, copy bones/meshes/regions/motion into config.json';
+
+/**
+ * Issue #568: every `ANIMATIONS_DO_NOT_FOLD` head line a tracked Markdown file
+ * quotes (CHANGELOG.md is history and is not read), against the line
+ * {@link foldsLines} — the console's own formatter — prints for the same
+ * figures: status, animations, rate, physics constraints, counts. A quoted
+ * line that names a folding mesh is not rebuilt (its rows are rigc's words) and
+ * is a fault, as is one this reader cannot take apart. Returns how many lines
+ * were read and one sentence per fault.
+ */
+function foldDocLineFaults(docs: ReadonlyArray<readonly [string, string]>): { read: number; faults: string[] } {
+  const head = new RegExp(`^${FOLD_LINE}: (PASS|FAIL) — (\\d+) animation\\(s\\) read by rigc render --folds at (\\d+) fps(.*?) \\(([^()]*)\\): (\\d+) folding mesh\\(es\\), (\\d+) not declared in may_fold \\(<= (\\d+)\\)$`);
+  const faults: string[] = [];
+  let read = 0;
+  for (const [f, t] of docs) {
+    if (!f.endsWith('.md') || f === 'CHANGELOG.md') continue;
+    t.split('\n').forEach((raw, i) => {
+      const at = raw.indexOf(`${FOLD_LINE}: `);
+      if (at === -1 || !/^(PASS|FAIL) — /.test(raw.slice(at + FOLD_LINE.length + 2))) return;
+      read += 1;
+      const quoted = raw.slice(at).trimEnd();
+      const m = head.exec(quoted);
+      if (m === null) {
+        faults.push(`${f}:${i + 1} quotes a ${FOLD_LINE} line this reader cannot take apart: ${quoted}`);
+        return;
+      }
+      const physics = /^, with its (\d+) physics constraint\(s\) on and off$/.exec(m[4]);
+      const line: FoldsLine = {
+        status: m[1] === 'PASS' ? 'PASS' : 'FAIL',
+        animations: m[5].split(', '),
+        fps: Number(m[3]),
+        physics_left_out: m[4] === '' ? 0 : physics === null ? -1 : Number(physics[1]),
+        folding: [],
+        folding_undeclared: Number(m[7]),
+        declared_not_folding: [],
+        bar: Number(m[8]),
+      };
+      if (Number(m[6]) !== 0) faults.push(`${f}:${i + 1} quotes ${m[6]} folding mesh(es); a quoted line with rows is not rebuilt`);
+      else if (line.physics_left_out === -1) faults.push(`${f}:${i + 1} says "${m[4].slice(2)}" where the line says how many physics constraints it read on and off: ${quoted}`);
+      else if (foldsLines(line)[0] !== quoted) faults.push(`${f}:${i + 1} quotes "${quoted}"; the console prints "${foldsLines(line)[0]}" for the same figures`);
+    });
+  }
+  return { read, faults };
+}
+
+/** AUTHORING's reference-sample fold line before issue #568, verbatim: the wording from before issue #363. CK560 plants it. */
+const OLD_FOLD_DOC_LINE = '[check]   ANIMATIONS_DO_NOT_FOLD: PASS — 2 animation(s) read by rigc render --folds at 12 fps, its 2 physics constraint(s) left out (idle, hop): 0 folding mesh(es), 0 not declared in may_fold (<= 0)';
 
 /**
  * A keypoint file for a fetched example, written into `work` from the
