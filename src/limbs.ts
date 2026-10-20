@@ -105,7 +105,9 @@
  *   crossing.
  */
 import type { BoneEntry, Limb, LimbSplit } from './config.ts';
+import { edgeLength } from './length.ts';
 import { pyRound } from './round.ts';
+import type { KeypointName, PosePoints } from './skeleton.ts';
 
 export type Pt = [number, number];
 
@@ -216,6 +218,248 @@ export function poseBoneEntriesForDrawn(bones: readonly BoneEntry[], drawn: Read
       ...(b.tip === undefined || s.end === null ? {} : { tip: [s.end[0], s.end[1]] }),
     };
   });
+}
+
+/**
+ * The limb bones a body-18 skeleton places (issues #465, #539): each bone's
+ * origin keypoint and end keypoint. The one table `assemble` cuts an
+ * alternate set at and the `rig` stage derives and weights from; a bone not
+ * named here (a hand link `arm_r2`, a single `foot_r`) is placed from its
+ * parent ({@link placeBoneEntriesForSkeleton}).
+ */
+export const SKELETON_LIMB_BONES: ReadonlyArray<readonly [string, KeypointName, KeypointName]> = [
+  ['sleeve_r0', 'r_shoulder', 'r_elbow'],
+  ['sleeve_r1', 'r_elbow', 'r_wrist'],
+  ['arm_r0', 'r_shoulder', 'r_elbow'],
+  ['arm_r1', 'r_elbow', 'r_wrist'],
+  ['sleeve_l0', 'l_shoulder', 'l_elbow'],
+  ['sleeve_l1', 'l_elbow', 'l_wrist'],
+  ['arm_l0', 'l_shoulder', 'l_elbow'],
+  ['arm_l1', 'l_elbow', 'l_wrist'],
+  ['leg_r0', 'r_hip', 'r_knee'],
+  ['leg_r1', 'r_knee', 'r_ankle'],
+  ['leg_l0', 'l_hip', 'l_knee'],
+  ['leg_l1', 'l_knee', 'l_ankle'],
+];
+
+/** {@link SKELETON_LIMB_BONES} read off `pts`: each bone's origin and end, in `pts`' space, in the table's order. */
+export function skeletonLimbJoints(pts: PosePoints): Array<readonly [string, Pt, Pt]> {
+  return SKELETON_LIMB_BONES.map(([bone, a, b]): readonly [string, Pt, Pt] => [bone, [pts[a][0], pts[a][1]], [pts[b][0], pts[b][1]]]);
+}
+
+/**
+ * Issue #539: the torso a set's skeleton is registered by — the keypoints at
+ * the root of the limbs, each paired with the base bones that root there in
+ * {@link SKELETON_LIMB_BONES} (the first the base declares is read). The
+ * shoulders are the torso's top, the hips its bottom.
+ */
+export const SKELETON_TORSO: ReadonlyArray<{ keypoint: KeypointName; end: 'top' | 'bottom'; bones: readonly string[] }> = [
+  { keypoint: 'r_shoulder', end: 'top', bones: ['sleeve_r0', 'arm_r0'] },
+  { keypoint: 'l_shoulder', end: 'top', bones: ['sleeve_l0', 'arm_l0'] },
+  { keypoint: 'r_hip', end: 'bottom', bones: ['leg_r0'] },
+  { keypoint: 'l_hip', end: 'bottom', bones: ['leg_l0'] },
+];
+
+/** Issue #539: the most a registered skeleton's torso may sit off the base's, in rig px (the offset's length). */
+export const REGISTER_OFFSET_BAR = 1;
+/** Issue #539: the most a registered skeleton's torso may differ from the base's in scale, as a share (`|s - 1|`). */
+export const REGISTER_SCALE_BAR = 0.01;
+
+/** Issue #539: how a set's skeleton sits on the base's torso, or which torso ends the base declares no bone for. */
+export type SkeletonRegistration =
+  | { ok: true; offset: Pt; scale: number; anchors: Array<{ keypoint: KeypointName; bone: string }> }
+  | { ok: false; missing: Array<'top' | 'bottom'>; anchors: Array<{ keypoint: KeypointName; bone: string }> };
+
+/**
+ * Issue #539: the similarity without rotation that maps a set's skeleton
+ * torso onto the base's, both in rig px — `p -> scale * p + offset`, about the
+ * canvas origin, the transform the set's painting would need to sit where the
+ * base figure sits. Each end of the torso is the mean of its
+ * {@link SKELETON_TORSO} keypoints whose base bone `bones` declares, the
+ * base's the mean of those bones' origins; `scale` is the base torso's length
+ * over the skeleton's, and `offset` takes the skeleton torso's midpoint, so
+ * scaled, onto the base's. Both to 6 places. Not ok when the base declares no
+ * bone at one end, or the skeleton's torso has no length.
+ */
+export function registerSkeleton(bones: readonly BoneEntry[], pts: PosePoints): SkeletonRegistration {
+  const places = bonePlaces(bones);
+  const anchors: Array<{ keypoint: KeypointName; bone: string; end: 'top' | 'bottom' }> = [];
+  for (const t of SKELETON_TORSO) {
+    const bone = t.bones.find((b) => places.has(b));
+    if (bone !== undefined) anchors.push({ keypoint: t.keypoint, bone, end: t.end });
+  }
+  const named = anchors.map((a) => ({ keypoint: a.keypoint, bone: a.bone }));
+  const missing = (['top', 'bottom'] as const).filter((e) => !anchors.some((a) => a.end === e));
+  const mean = (end: 'top' | 'bottom', of: (a: { keypoint: KeypointName; bone: string }) => Pt): Pt => {
+    const at = anchors.filter((a) => a.end === end).map(of);
+    return [at.reduce((s, p) => s + p[0], 0) / at.length, at.reduce((s, p) => s + p[1], 0) / at.length];
+  };
+  if (missing.length > 0) return { ok: false, missing, anchors: named };
+  const base = (a: { bone: string }): Pt => (places.get(a.bone) as BonePlace).at;
+  const skel = (a: { keypoint: KeypointName }): Pt => [pts[a.keypoint][0], pts[a.keypoint][1]];
+  const bTop = mean('top', base);
+  const bBot = mean('bottom', base);
+  const kTop = mean('top', skel);
+  const kBot = mean('bottom', skel);
+  const kLen = edgeLength(kTop[0] - kBot[0], kTop[1] - kBot[1]);
+  if (kLen === 0) return { ok: false, missing: [], anchors: named };
+  const scale = edgeLength(bTop[0] - bBot[0], bTop[1] - bBot[1]) / kLen;
+  const offset: Pt = [(bTop[0] + bBot[0]) / 2 - (scale * (kTop[0] + kBot[0])) / 2, (bTop[1] + bBot[1]) / 2 - (scale * (kTop[1] + kBot[1])) / 2];
+  const zero = (v: number): number => (v === 0 ? 0 : v);
+  return { ok: true, offset: [zero(pyRound(offset[0], 6)), zero(pyRound(offset[1], 6))], scale: pyRound(scale, 6), anchors: named };
+}
+
+/** Whether a registration is the identity within {@link REGISTER_OFFSET_BAR} and {@link REGISTER_SCALE_BAR}. */
+export function registeredWithinBar(r: { offset: Pt; scale: number }): boolean {
+  return edgeLength(r.offset[0], r.offset[1]) <= REGISTER_OFFSET_BAR && Math.abs(r.scale - 1) <= REGISTER_SCALE_BAR;
+}
+
+/**
+ * Issue #539: place `bones` (rig px, y down) where a set's skeleton draws
+ * them, so `cutLimbs` cuts the set's painting at the painting's own joints.
+ * Every bone in `covered` that `joints` names sits at its skeleton origin and
+ * takes the skeleton segment's own length and direction ({@link
+ * poseBoneEntriesForDrawn} keeps the base's length, which puts the next joint
+ * past a foreshortened segment's painted end); `drawn` overrides the
+ * direction of any bone it names, the length staying the skeleton's. Every
+ * other bone keeps its base entry unless an ancestor moved: then it is placed
+ * from its parent's new place — its base offset from the parent's origin,
+ * the part along the parent stretched by the parent's length change and the
+ * whole turned by the parent's turn (a chain's next link, or a `foot_r` at
+ * the ankle, lands on the parent's new end) — with its base length, and the
+ * parent's turn added to its direction unless it inherits no rotation, or
+ * `drawn`'s direction when named. With no length change this is
+ * {@link poseBoneEntriesForDrawn}'s rule for those bones.
+ */
+export function placeBoneEntriesForSkeleton(
+  bones: readonly BoneEntry[],
+  covered: ReadonlySet<string>,
+  joints: ReadonlyArray<readonly [string, Pt, Pt]>,
+  drawn: Readonly<Record<string, number>>,
+): BoneEntry[] {
+  const fromSkeleton = new Map<string, readonly [Pt, Pt]>();
+  for (const [bone, a, b] of joints) if (covered.has(bone) && !fromSkeleton.has(bone)) fromSkeleton.set(bone, [a, b]);
+  if (fromSkeleton.size === 0) return poseBoneEntriesForDrawn(bones, drawn);
+  const flat = flatBones(bones);
+  const deg = (dx: number, dy: number): number => (Math.atan2(-dy, dx) * 180) / Math.PI;
+  const posed = new Map<string, { at: Pt; end: Pt | null; theta: number; length: number }>();
+  const solve = (name: string): { at: Pt; end: Pt | null; theta: number; length: number } => {
+    const cached = posed.get(name);
+    if (cached !== undefined) return cached;
+    const node = flat.get(name);
+    if (node === undefined) return { at: [0, 0], end: null, theta: 0, length: 0 };
+    let at: Pt = [node.at0[0], node.at0[1]];
+    let theta = node.theta0;
+    let length = node.length;
+    const sk = fromSkeleton.get(name);
+    if (sk !== undefined) {
+      at = [sk[0][0], sk[0][1]];
+      length = edgeLength(sk[1][0] - sk[0][0], sk[1][1] - sk[0][1]);
+      theta = drawn[name] !== undefined ? drawn[name] : deg(sk[1][0] - sk[0][0], sk[1][1] - sk[0][1]);
+    } else {
+      let dParent = 0;
+      const pNode = flat.get(node.parent);
+      if (pNode !== undefined) {
+        const pPosed = solve(node.parent);
+        dParent = pPosed.theta - pNode.theta0;
+        const stretch = pNode.length > 0 ? pPosed.length / pNode.length : 1;
+        const t0 = (pNode.theta0 * Math.PI) / 180;
+        const ux = Math.cos(t0);
+        const uy = -Math.sin(t0);
+        const dx0 = node.at0[0] - pNode.at0[0];
+        const dy0 = node.at0[1] - pNode.at0[1];
+        const along = (dx0 * ux + dy0 * uy) * (stretch - 1);
+        const ox = dx0 + along * ux;
+        const oy = dy0 + along * uy;
+        const rad = (dParent * Math.PI) / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        at = [pPosed.at[0] + ox * cos + oy * sin, pPosed.at[1] - ox * sin + oy * cos];
+      }
+      const inheritsRot = node.inherit !== 'noRotationOrReflection' && node.inherit !== 'onlyTranslation';
+      theta = drawn[name] !== undefined ? drawn[name] : node.theta0 + (inheritsRot ? dParent : 0);
+    }
+    let end: Pt | null = null;
+    if (node.end0 !== null) {
+      const rad = (theta * Math.PI) / 180;
+      end = sk !== undefined && drawn[name] === undefined ? [sk[1][0], sk[1][1]] : [at[0] + length * Math.cos(rad), at[1] - length * Math.sin(rad)];
+    }
+    const res = { at, end, theta, length };
+    posed.set(name, res);
+    return res;
+  };
+  for (const name of flat.keys()) solve(name);
+  return bones.map((b): BoneEntry => {
+    if ('chain' in b) {
+      const points = b.points.map((_, k): Pt => {
+        const s = solve(`${b.chain}${k}`);
+        return [s.at[0], s.at[1]];
+      });
+      const last = solve(`${b.chain}${b.points.length - 1}`);
+      const tip: Pt = last.end === null ? [b.tip[0], b.tip[1]] : [last.end[0], last.end[1]];
+      return { ...b, points, tip };
+    }
+    const s = solve(b.name);
+    return {
+      ...b,
+      at: [s.at[0], s.at[1]],
+      ...(b.tip === undefined || s.end === null ? {} : { tip: [s.end[0], s.end[1]] }),
+    };
+  });
+}
+
+/**
+ * Issue #539: each covered bone's skeleton segment length over its base
+ * length (`sets.json` `drawnLength`), to 6 places, in {@link
+ * SKELETON_LIMB_BONES}' order; a bone the base gives no length is left out.
+ */
+export function skeletonDrawnLength(bones: readonly BoneEntry[], covered: ReadonlySet<string>, joints: ReadonlyArray<readonly [string, Pt, Pt]>): Record<string, number> {
+  const places = bonePlaces(bones);
+  const out: Record<string, number> = {};
+  for (const [bone, a, b] of joints) {
+    if (!covered.has(bone) || bone in out) continue;
+    const p = places.get(bone);
+    if (p === undefined || p.end === null) continue;
+    const base = edgeLength(p.end[0] - p.at[0], p.end[1] - p.at[1]);
+    if (base === 0) continue;
+    out[bone] = pyRound(edgeLength(b[0] - a[0], b[1] - a[1]) / base, 6);
+  }
+  return out;
+}
+
+interface FlatNode {
+  name: string;
+  parent: string;
+  at0: Pt;
+  end0: Pt | null;
+  theta0: number;
+  length: number;
+  inherit?: string;
+}
+
+/** Every bone `bones` declares, chains flattened to their links: origin, end, world direction (Spine degrees) and length. */
+function flatBones(bones: readonly BoneEntry[]): Map<string, FlatNode> {
+  const flat = new Map<string, FlatNode>();
+  for (const b of bones) {
+    if ('chain' in b) {
+      b.points.forEach((p, k) => {
+        const name = `${b.chain}${k}`;
+        const parent = k === 0 ? b.parent : `${b.chain}${k - 1}`;
+        const at0: Pt = [p[0], p[1]];
+        const end0: Pt = k + 1 < b.points.length ? [b.points[k + 1][0], b.points[k + 1][1]] : [b.tip[0], b.tip[1]];
+        const dx = end0[0] - at0[0];
+        const dy = end0[1] - at0[1];
+        flat.set(name, { name, parent, at0, end0, theta0: (Math.atan2(-dy, dx) * 180) / Math.PI, length: Math.sqrt(dx * dx + dy * dy), inherit: b.link_inherit?.[name] });
+      });
+    } else {
+      const at0: Pt = [b.at[0], b.at[1]];
+      const end0: Pt | null = b.tip === undefined ? null : [b.tip[0], b.tip[1]];
+      const dx = end0 === null ? 0 : end0[0] - at0[0];
+      const dy = end0 === null ? 0 : end0[1] - at0[1];
+      flat.set(b.name, { name: b.name, parent: b.parent, at0, end0, theta0: end0 === null ? 0 : (Math.atan2(-dy, dx) * 180) / Math.PI, length: end0 === null ? 0 : Math.sqrt(dx * dx + dy * dy), inherit: b.inherit });
+    }
+  }
+  return flat;
 }
 
 /** A limb's polyline: its segments' bone origins in order, then the last bone's end when it has one. */

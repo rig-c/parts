@@ -78,7 +78,7 @@ import { encodeGif } from './gif.ts';
 import { CONTROL_SUFFIX, withAnimations } from './motion.ts';
 import type { PaletteError } from './palette.ts';
 import { type LayerSet, readLayers } from './layers.ts';
-import { poseBoneEntriesForDrawn } from './limbs.ts';
+import { placeBoneEntriesForSkeleton, poseBoneEntriesForDrawn, REGISTER_OFFSET_BAR, REGISTER_SCALE_BAR, registeredWithinBar, registerSkeleton, SKELETON_LIMB_BONES, skeletonDrawnLength, skeletonLimbJoints } from './limbs.ts';
 import { type AlternatePartsRecord, type PartRecord, readParts, type RecompositeRecord, type SingleRunPad, tagOf, writeParts } from './parts.ts';
 import { encodePngBytes, readPng, writePng } from './raster/png.ts';
 import type { Raster } from './raster/types.ts';
@@ -150,6 +150,14 @@ export interface AssembleStageInput {
   project: ProjectRule;
   /** `--alt` entries, merged with `config.assemble.alternates` by set name (issue #454). */
   alts?: readonly AlternateCliInput[];
+  /**
+   * How an alternate set with a `skeleton` is cut (issue #539): `"skeleton"`
+   * (the default, the only one the CLI runs) at the skeleton's own joint
+   * positions, registered on the base's torso; `"angles"` at the base's joints
+   * posed to the skeleton's angles, the rule before #539 — kept for the
+   * selftest's control that shows a foreshortened segment refused under it.
+   */
+  altPlacement?: 'skeleton' | 'angles';
 }
 
 /** Where the assemble stage writes: `parts.json`, the directory of part PNGs, the recomposite, and its error map. */
@@ -446,34 +454,52 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     const altUnder = alt.cuts !== undefined ? readUnders(input.config, altCuts) : altCuts.map(() => null);
     const altHeadBox = alt.head_box ?? (altRuns.single ? singleRunHeadBox(altSrc.width, altSrc.height, fields.resolution) : fields.headBox);
     let altBones = fields.bones;
+    let altDrawnLength: Record<string, number> | undefined;
+    let altRegistration: { offset: [number, number]; scale: number } | undefined;
     if (Object.keys(altLimbs).length > 0 && fields.bones !== undefined && (altSkeleton !== undefined || alt.drawn !== undefined)) {
       const coveredLimbBones = new Set(Object.values(altLimbs).flatMap((l) => l.segments.map((sg) => sg.bone)));
       const limbDrawn: Record<string, number> = {};
+      const joints = altSkeleton === undefined ? [] : skeletonLimbJoints(altSkeleton);
       if (altSkeleton !== undefined) {
         const deg = (a: readonly [number, number], b: readonly [number, number]): number =>
           (Math.atan2(-(b[1] - a[1]), b[0] - a[0]) * 180) / Math.PI;
-        const skPairs: ReadonlyArray<readonly [string, readonly [number, number], readonly [number, number]]> = [
-          ['sleeve_r0', altSkeleton.r_shoulder, altSkeleton.r_elbow],
-          ['sleeve_r1', altSkeleton.r_elbow, altSkeleton.r_wrist],
-          ['arm_r0', altSkeleton.r_shoulder, altSkeleton.r_elbow],
-          ['arm_r1', altSkeleton.r_elbow, altSkeleton.r_wrist],
-          ['sleeve_l0', altSkeleton.l_shoulder, altSkeleton.l_elbow],
-          ['sleeve_l1', altSkeleton.l_elbow, altSkeleton.l_wrist],
-          ['arm_l0', altSkeleton.l_shoulder, altSkeleton.l_elbow],
-          ['arm_l1', altSkeleton.l_elbow, altSkeleton.l_wrist],
-          ['leg_r0', altSkeleton.r_hip, altSkeleton.r_knee],
-          ['leg_r1', altSkeleton.r_knee, altSkeleton.r_ankle],
-          ['leg_l0', altSkeleton.l_hip, altSkeleton.l_knee],
-          ['leg_l1', altSkeleton.l_knee, altSkeleton.l_ankle],
-        ];
-        for (const [bName, a, b] of skPairs) {
+        for (const [bName, a, b] of joints) {
           if (alt.parts === undefined || coveredLimbBones.has(bName)) limbDrawn[bName] = deg(a, b);
         }
       }
       if (alt.drawn !== undefined) {
         for (const [bName, degVal] of Object.entries(alt.drawn)) limbDrawn[bName] = degVal;
       }
-      altBones = poseBoneEntriesForDrawn(fields.bones, limbDrawn);
+      const placedBySkeleton = altSkeleton !== undefined && input.altPlacement !== 'angles' && SKELETON_LIMB_BONES.some(([b]) => coveredLimbBones.has(b));
+      if (placedBySkeleton && altSkeleton !== undefined) {
+        // Issue #539: the painting must sit where the base figure sits before its own joints are cut at.
+        const reg = registerSkeleton(fields.bones, altSkeleton);
+        if (!reg.ok) {
+          const read = reg.anchors.map((a) => `${a.keypoint} on "${a.bone}"`).join(', ') || 'none';
+          altProblems.push({
+            code: 'ASSEMBLE_ALT_SKELETON_REGISTERED',
+            object: `${alt.skeleton} (alternate set "${alt.name}")`,
+            detail:
+              reg.missing.length > 0
+                ? `cannot be registered on the base's torso: config.bones declares no bone rooted at the torso's ${reg.missing.join(' or ')} (the shoulders r_shoulder / l_shoulder root sleeve_r0, arm_r0, sleeve_l0, arm_l0; the hips r_hip / l_hip root leg_r0, leg_l0; read: ${read}); a base that declares a bone at each end of the torso is required, or drawn in place of skeleton`
+                : `cannot be registered on the base's torso: its torso keypoints (${read}) stand on one point, so the torso has no length; a skeleton whose shoulders and hips are apart is required`,
+          });
+          continue;
+        }
+        if (!registeredWithinBar(reg)) {
+          altProblems.push({
+            code: 'ASSEMBLE_ALT_SKELETON_REGISTERED',
+            object: `${alt.skeleton} (alternate set "${alt.name}")`,
+            detail: `puts the set's torso off the base's: the painting would need offset [${reg.offset.join(', ')}] rig px and scale ${reg.scale} (p -> scale * p + offset, about the canvas origin; read on ${reg.anchors.map((a) => `${a.keypoint} = "${a.bone}"`).join(', ')}), over the bar of ${REGISTER_OFFSET_BAR} rig px and ${REGISTER_SCALE_BAR * 100} % in scale; a registered painting is required — the set's figure at the base figure's torso place and scale on the same canvas`,
+          });
+          continue;
+        }
+        altRegistration = { offset: [reg.offset[0], reg.offset[1]], scale: reg.scale };
+        altDrawnLength = skeletonDrawnLength(fields.bones, coveredLimbBones, joints);
+        altBones = placeBoneEntriesForSkeleton(fields.bones, coveredLimbBones, joints, limbDrawn);
+      } else {
+        altBones = poseBoneEntriesForDrawn(fields.bones, limbDrawn);
+      }
     }
     let altRes: ReturnType<typeof assemble>;
     try {
@@ -538,6 +564,8 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         ...(altRes.parts.single_run_pad === undefined ? {} : { single_run_pad: altRes.parts.single_run_pad }),
         ...(altSkeleton === undefined ? {} : { skeleton: altSkeleton }),
         ...(alt.drawn === undefined ? {} : { drawn: { ...alt.drawn } }),
+        ...(altDrawnLength === undefined ? {} : { drawnLength: altDrawnLength }),
+        ...(altRegistration === undefined ? {} : { registration: altRegistration }),
       },
       images: keptImages,
     });

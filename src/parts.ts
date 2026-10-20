@@ -246,6 +246,10 @@ export interface AlternateSetMap {
   slots: Record<string, string>;
   hides?: string[];
   drawn?: Record<string, number>;
+  /** Issue #539: each covered limb bone's skeleton length over its base length, when the set gives `skeleton`. */
+  drawnLength?: Record<string, number>;
+  /** Issue #539: the measured transform onto the base's torso (within the bar), when the set gives `skeleton`. */
+  registration?: { offset: [number, number]; scale: number };
   threshold?: { yaw: number; pitch: number };
 }
 
@@ -261,6 +265,10 @@ export interface AlternatePartsRecord {
   single_run_pad?: SingleRunPad;
   skeleton?: PosePoints;
   drawn?: Record<string, number>;
+  /** Issue #539: as `sets.json`'s; written only when `skeleton` placed the set's limb bones. */
+  drawnLength?: Record<string, number>;
+  /** Issue #539: as `sets.json`'s; written only when `skeleton` placed the set's limb bones. */
+  registration?: { offset: [number, number]; scale: number };
 }
 
 export interface PartsFile {
@@ -407,6 +415,8 @@ export function serializeParts(file: PartsFile): string {
             ...(a.single_run_pad === undefined ? {} : { single_run_pad: Object.fromEntries(SINGLE_RUN_PAD_KEYS.map((k) => [k, (a.single_run_pad as SingleRunPad)[k]])) }),
             ...(a.skeleton === undefined ? {} : { skeleton: Object.fromEntries(KEYPOINT_NAMES.map((k) => [k, (a.skeleton as PosePoints)[k]])) }),
             ...(a.drawn === undefined ? {} : { drawn: a.drawn }),
+            ...(a.drawnLength === undefined ? {} : { drawnLength: a.drawnLength }),
+            ...(a.registration === undefined ? {} : { registration: { offset: a.registration.offset, scale: a.registration.scale } }),
           })),
         }),
   };

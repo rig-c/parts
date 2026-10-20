@@ -20870,6 +20870,181 @@ function runBuildSuite(): number {
       `base exit ${outfitBaseRun.status}, combined exit ${outfitCombinedRun.status}, check --set outfit_b exit ${outfitCheckSetRun.status}; kept sha256 match (bones=${shaBonesBase.slice(0, 12)}, axes=${shaAxesBase.slice(0, 12)}, idle=${shaIdleBase.slice(0, 12)}, baseSkirt=${shaSkirtBase.slice(0, 12)} ${baseSkirtV}v/${baseSkirtT}t vs outfit_b_bottomwear=${shaSkirtOutfitB.slice(0, 12)} ${altSkirtV}v/${altSkirtT}t); disjointCommutes=${disjointCommutes}, overlapPrecedence=${overlapPrecedenceHolds}; traps: partial limb exit ${trap1Run.status}, hides limb exit ${trap1HidesRun.status}, speck sleeve exit ${trap2OpaqueRun.status}, wrist-only sleeve exit ${trap2PixelsRun.status}, elbow-gap sleeve exit ${trap2Run.status} (keep base arm exit ${keepBaseArmRun.status}), missing layer exit ${trap3Run.status}, canvas size exit ${trap4Run.status}`,
       'issue #474: docs/OUTFITS.md records the outfit transaction — base bones, drawn rest rotations, faceAxis, idle motion and base attachments stay byte-identical while clothing regions, limb cuts and skirt meshes re-run on the second painting, compose with viseme/gesture sets, and refuse partial/hidden limb coverage or swallowed wide sleeves by name',
     );
+
+    // BU174–BU177 — issue #539: an alternate set that gives `skeleton` is cut at the skeleton's own joint positions, not at
+    // base-length joints posed to its angles. The fixture is BU172's base with a right leg added: chain `leg_r` (34, 28) ->
+    // (34, 40), tip (34, 52), a `foot_r` bone at the ankle (34, 52) under `leg_r1`, and limb `leg_r` = `thigh_r` / `shin_r`
+    // from `legwear` [31, 37) x [28, 52), `foot_r` from `author:shoe_r` [31, 41) x [52, 57). The set `run` repaints the
+    // leg with the shin at half its length: `legwear` [31, 37) x [28, 46), the foot [31, 42) x [46, 50), and a skeleton
+    // whose every point is the base's but the ankle, at (34, 46). The torso it is registered by is r_shoulder on `arm_r0`
+    // (15, 26) and r_hip on `leg_r0` (34, 28), both the base's — the identity, offset [0, 0] and scale 1.
+    const skDir = join(dir, 'skeleton-lengths-539');
+    const skBaseCfg = JSON.parse(JSON.stringify(gestBaseCfg)) as Record<string, unknown>;
+    const skAss = skBaseCfg.assemble as Record<string, unknown>;
+    skAss.plan = [...(skAss.plan as Array<[string, string, string]>), ['leg', 'full', 'legwear'], ['shoe_r', 'full', 'author:shoe_r']];
+    skBaseCfg.bones = [
+      ...(skBaseCfg.bones as Array<Record<string, unknown>>),
+      { chain: 'leg_r', parent: 'chest', points: [[34, 28], [34, 40]], tip: [34, 52] },
+      { name: 'foot_r', parent: 'leg_r1', at: [34, 52] },
+    ];
+    skBaseCfg.limbs = {
+      ...(skBaseCfg.limbs as Record<string, unknown>),
+      leg_r: {
+        segments: [
+          { part: 'thigh_r', from: 'leg', bone: 'leg_r0' },
+          { part: 'shin_r', from: 'leg', bone: 'leg_r1', joint: 'knee' },
+          { part: 'foot_r', from: 'shoe_r', bone: 'foot_r', joint: 'ankle' },
+        ],
+      },
+    };
+    skBaseCfg.regions = { ...(skBaseCfg.regions as Record<string, string>), thigh_r: 'leg_r0', shin_r: 'leg_r1', foot_r: 'foot_r' };
+    const skBaseFull: RunLayerSpec[] = [
+      ...baseArmFull,
+      { name: 'legwear', depth: 0.2, rects: [{ x0: 31, y0: 28, x1: 37, y1: 52, colour: C }] },
+      { name: 'author:shoe_r', depth: 0.2, rects: [{ x0: 31, y0: 52, x1: 41, y1: 57, colour: C }] },
+    ];
+    const runFull: RunLayerSpec[] = [
+      { name: 'legwear', depth: 0.2, rects: [{ x0: 31, y0: 28, x1: 37, y1: 46, colour: C }] },
+      { name: 'author:shoe_r', depth: 0.2, rects: [{ x0: 31, y0: 46, x1: 42, y1: 50, colour: C }] },
+    ];
+    // The base figure's body-18 points on the 64x64 rig (the skeleton file's canvas, so its scale to the rig is 1).
+    const basePose: Record<string, [number, number]> = {
+      nose: [20, 14], neck: [20, 24], r_shoulder: [15, 26], r_elbow: [15, 34], r_wrist: [15, 42], l_shoulder: [25, 26], l_elbow: [25, 34], l_wrist: [25, 42],
+      r_hip: [34, 28], r_knee: [34, 40], r_ankle: [34, 52], l_hip: [40, 28], l_knee: [40, 40], l_ankle: [40, 52], r_eye: [18, 12], l_eye: [22, 12], r_ear: [16, 13], l_ear: [24, 13],
+    };
+    const poseFile = (over: Record<string, [number, number]>, map: (p: [number, number]) => [number, number] = (p) => p): string =>
+      `${JSON.stringify({ width: 64, height: 64, points: Object.fromEntries(Object.entries({ ...basePose, ...over }).map(([k, p]) => [k, map(p)])) }, null, 2)}\n`;
+    const runSet = { name: 'run', source: 'painting.png', full: 'full_run', head: 'head', parts: ['thigh_r', 'shin_r', 'foot_r'], skeleton: 'run_pose.json' };
+    const writeSkFixture = (at: string, alternates: Array<Record<string, unknown>>, runs: Record<string, RunLayerSpec[]>, files: Record<string, string>): void => {
+      const c = JSON.parse(JSON.stringify(skBaseCfg)) as Record<string, unknown>;
+      (c.assemble as Record<string, unknown>).alternates = alternates;
+      writeAssembleFixture(at, c, undefined, { full: skBaseFull, head: HEAD_LAYERS });
+      for (const [name, layers] of Object.entries(runs)) writeRun(join(at, name), layers);
+      for (const [name, text] of Object.entries(files)) writeFileSync(join(at, name), text);
+    };
+
+    // Bar 1: the shin at half its base length builds green, and check --all-sets reads the set's seam at setup pose.
+    const shinDir = join(skDir, 'shin-half');
+    writeSkFixture(shinDir, [runSet], { full_run: runFull }, { 'run_pose.json': poseFile({ r_ankle: [34, 46] }) });
+    const shinOut = join(shinDir, 'out');
+    const shinRun = runCli([...buildArgs(shinDir, shinOut), '--all-sets']);
+    const shinSets = readJsonFile(join(shinOut, 'rig', 'sets.json')) as { sets?: Record<string, { drawnLength?: Record<string, number>; registration?: unknown }> } | null;
+    const shinEntry = shinSets?.sets?.run;
+    const shinParts = existsSync(join(shinOut, 'parts.json')) ? readParts(join(shinOut, 'parts.json')) : null;
+    const shinAlt = shinParts?.alternates?.find((a) => a.name === 'run');
+    const shinSeamLine = shinRun.out.split('\n').find((l) => l.startsWith('[check]   seam (run): setup pose at ')) ?? '';
+    const shinCheck = readJsonFile(join(shinOut, 'check', 'check.json')) as { sets?: Record<string, { PASS?: boolean; seam_px_over_40?: number; seam_mean?: number }> } | null;
+    const shinFoot = shinAlt?.records.find((r) => r.name === 'foot_r');
+    say(
+      'BU174_SKELETON_SET_WITH_A_HALF_LENGTH_SHIN_CUTS_AT_ITS_OWN_JOINTS_AND_HOLDS_THE_SEAM',
+      shinRun.status === 0 &&
+        JSON.stringify(shinEntry?.drawnLength) === '{"leg_r0":1,"leg_r1":0.5}' &&
+        JSON.stringify(shinEntry?.registration) === '{"offset":[0,0],"scale":1}' &&
+        JSON.stringify(shinAlt?.drawnLength) === '{"leg_r0":1,"leg_r1":0.5}' &&
+        JSON.stringify(shinAlt?.registration) === '{"offset":[0,0],"scale":1}' &&
+        shinSeamLine.includes(' 0 px over 40, 0.00 rig px') &&
+        shinCheck?.sets?.run?.PASS === true &&
+        shinFoot !== undefined &&
+        shinFoot.y === 46,
+      `build --all-sets exit ${shinRun.status}; sets.json run.drawnLength ${JSON.stringify(shinEntry?.drawnLength ?? null)}, registration ${JSON.stringify(shinEntry?.registration ?? null)}; parts.json run.drawnLength ${JSON.stringify(shinAlt?.drawnLength ?? null)}; run_foot_r box ${shinFoot === undefined ? 'absent' : `${shinFoot.w}x${shinFoot.h} @ ${shinFoot.x},${shinFoot.y}`}; ${shinSeamLine.trim() || 'no seam (run) line'}; check.json sets.run.PASS ${String(shinCheck?.sets?.run?.PASS ?? null)}`,
+      'issue #539, bar 1: a set whose skeleton draws the shin at 0.5 of its base length is cut at the skeleton\'s knee and ankle, records drawnLength and registration in sets.json and parts.json, and its setup pose matches its own painting within the seam bar',
+    );
+
+    // Bar 3: the same fixture through the rule before #539 (angles from the skeleton, lengths from the base) puts the ankle
+    // at (34, 52), 2 px below the painted foot's last row: ASSEMBLE_LIMB_JOINT_ON_ART on the foot, nothing written.
+    const angOut = join(shinDir, 'out-angles');
+    const angStage = (placement: 'skeleton' | 'angles', out: string): PartsError | null =>
+      refusals(() =>
+        assembleStage(
+          { source: join(shinDir, 'painting.png'), full: join(shinDir, 'full'), head: join(shinDir, 'head'), config: join(shinDir, 'config.json'), seam: 'near-white', project: DEFAULT_PROJECT_RULE, altPlacement: placement },
+          { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, 'recomposite_error_rig.png') },
+          () => undefined,
+        ),
+      );
+    const angRefusal = angStage('angles', angOut);
+    const skInProc = angStage('skeleton', join(shinDir, 'out-skeleton'));
+    const angFoot = angRefusal?.problems.find((q) => q.code === 'ASSEMBLE_LIMB_JOINT_ON_ART');
+    say(
+      'BU175_THE_ANGLE_ONLY_PLACEMENT_REFUSES_THE_HALF_LENGTH_SHIN_AT_THE_ANKLE',
+      angFoot !== undefined &&
+        angFoot.object.startsWith('config.limbs.leg_r.segments[2] (joint "ankle", part "foot_r")') &&
+        angFoot.object.endsWith('(alternate set "run")') &&
+        angFoot.detail.includes('origin at [34, 52]') &&
+        entries(angOut).length === 0 &&
+        skInProc === null &&
+        existsSync(join(shinDir, 'out-skeleton', 'parts', 'run_foot_r.png')),
+      `altPlacement "angles": ${angRefusal === null ? 'assembles' : angRefusal.problems.map((q) => `${q.code} ${q.object}: ${q.detail.slice(0, 120)}`).join(' | ')}; out entries ${entries(angOut).length}; altPlacement "skeleton" in-process: ${skInProc === null ? 'assembles' : skInProc.problems.map((q) => q.code).join(', ')}`,
+      'issue #539, bar 3: the mutant that drops the per-segment length (the placement before #539, a test-only parameter of assembleStage) refuses the same set again at the ankle by ASSEMBLE_LIMB_JOINT_ON_ART and writes nothing',
+    );
+
+    // Bar 4: the set's skeleton shifted +20 px in x and scaled 1.2 about the canvas origin (p -> 1.2 (p + [20, 0])) is
+    // refused by name before any joint, with what the painting would need: scale 1 / 1.2 = 0.833333 and, onto the base
+    // torso's midpoint (24.5, 27), offset [24.5, 27] - (1 / 1.2) * 1.2 * [44.5, 27] = [-20, 0].
+    const regDir = join(skDir, 'unregistered');
+    writeSkFixture(regDir, [runSet], { full_run: runFull }, { 'run_pose.json': poseFile({ r_ankle: [34, 46] }, (p) => [1.2 * (p[0] + 20), 1.2 * p[1]]) });
+    const regRun = runCli(buildArgs(regDir, join(regDir, 'out')));
+    const regLine = regRun.out.split('\n').find((l) => l.includes('FAIL  ASSEMBLE_ALT_SKELETON_REGISTERED:')) ?? '';
+    say(
+      'BU176_A_SKELETON_SET_FRAMED_OFF_THE_BASE_TORSO_IS_REFUSED_WITH_THE_OFFSET_AND_SCALE_IT_NEEDS',
+      regRun.status === 1 &&
+        regLine.includes('(alternate set "run")') &&
+        regLine.includes('offset [-20, 0] rig px and scale 0.833333') &&
+        !regRun.out.includes('ASSEMBLE_LIMB_JOINT_ON_ART') &&
+        entries(join(regDir, 'out')).length === 0 &&
+        shinRun.status === 0,
+      `shifted and scaled skeleton exit ${regRun.status}, out entries ${entries(join(regDir, 'out')).length}: ${regLine.replace(/^.*FAIL {2}/, '').replace(regDir, '<dir>').slice(0, 260)}; the registered set (bar 1) exit ${shinRun.status}`,
+      'issue #539, bar 4: a painting framed off the base figure is refused by ASSEMBLE_ALT_SKELETON_REGISTERED, naming the offset and scale it would need, before its first joint, writing nothing; the same set registered on the base torso builds green',
+    );
+
+    // Bar 2: BU172's wave as a skeleton set whose segment lengths equal the base's — r_elbow at (15 + 8 cos 30°, 30) and
+    // r_wrist 8 px on, the hand link (not in the skeleton table) at drawn 30 — cuts the same bytes as the drawn-only set.
+    // Measured as equality with the drawn path: the same art and the same joints write the same wave_* PNGs, rig.json
+    // and sets.json (less the two keys only a skeleton set writes). A second skeleton set gives drawn for arm_r2 alone:
+    // its PNGs are the same, its sets.json drawn reads arm_r0 at -30.000001, the skeleton's 6-place points read back.
+    const ex = 15 + 8 * Math.cos(Math.PI / 6);
+    const wavePose = poseFile({ r_elbow: [ex, 30], r_wrist: [ex + 8, 30] });
+    const waveSetBase = { name: 'wave', source: 'painting.png', full: 'full_wave', head: 'head', parts: ['upperarm_r', 'forearm_r', 'hand_r'] };
+    const eqBuild = (label: string, extra: Record<string, unknown>): { run: { status: number; out: string }; out: string } => {
+      const at = join(skDir, label);
+      writeSkFixture(at, [{ ...waveSetBase, ...extra }], { full_wave: waveArmFull }, { 'wave_pose.json': wavePose });
+      const out = join(at, 'out');
+      return { run: runCli(buildArgs(at, out)), out };
+    };
+    const eqDrawn = eqBuild('wave-drawn', { drawn: { arm_r0: -30, arm_r1: 0, arm_r2: 30 } });
+    const eqSkel = eqBuild('wave-skeleton', { skeleton: 'wave_pose.json', drawn: { arm_r0: -30, arm_r1: 0, arm_r2: 30 } });
+    const eqSkelHand = eqBuild('wave-skeleton-hand', { skeleton: 'wave_pose.json', drawn: { arm_r2: 30 } });
+    const digest = (path: string): string => (existsSync(path) ? createHash('sha256').update(readFileSync(path)).digest('hex').slice(0, 12) : 'absent');
+    const wavePngs = ['wave_upperarm_r.png', 'wave_forearm_r.png', 'wave_hand_r.png'];
+    const pngDigests = (out: string): string[] => wavePngs.map((f) => digest(join(out, 'parts', f)));
+    const setsLess = (out: string): string => {
+      const doc = readJsonFile(join(out, 'rig', 'sets.json')) as { sets?: Record<string, Record<string, unknown>> } | null;
+      for (const e of Object.values(doc?.sets ?? {})) {
+        delete e.drawnLength;
+        delete e.registration;
+      }
+      return JSON.stringify(doc);
+    };
+    const eqSkelEntry = (readJsonFile(join(eqSkel.out, 'rig', 'sets.json')) as { sets?: Record<string, Record<string, unknown>> } | null)?.sets?.wave;
+    const eqHandEntry = (readJsonFile(join(eqSkelHand.out, 'rig', 'sets.json')) as { sets?: Record<string, Record<string, unknown>> } | null)?.sets?.wave;
+    const dDrawn = pngDigests(eqDrawn.out);
+    const dSkel = pngDigests(eqSkel.out);
+    const dHand = pngDigests(eqSkelHand.out);
+    say(
+      'BU177_A_SKELETON_SET_AT_THE_BASE_LENGTHS_CUTS_THE_SAME_BYTES_AS_THE_DRAWN_SET',
+      eqDrawn.run.status === 0 &&
+        eqSkel.run.status === 0 &&
+        eqSkelHand.run.status === 0 &&
+        dDrawn.every((d) => d !== 'absent') &&
+        JSON.stringify(dSkel) === JSON.stringify(dDrawn) &&
+        JSON.stringify(dHand) === JSON.stringify(dDrawn) &&
+        digest(join(eqSkel.out, 'rig', 'rig.json')) === digest(join(eqDrawn.out, 'rig', 'rig.json')) &&
+        setsLess(eqSkel.out) === setsLess(eqDrawn.out) &&
+        JSON.stringify(eqSkelEntry?.drawnLength) === '{"arm_r0":1,"arm_r1":1}' &&
+        JSON.stringify(eqHandEntry?.drawnLength) === '{"arm_r0":1,"arm_r1":1}' &&
+        (eqHandEntry?.drawn as Record<string, number> | undefined)?.arm_r0 === -30.000001,
+      `exits drawn ${eqDrawn.run.status} / skeleton ${eqSkel.run.status} / skeleton+hand ${eqSkelHand.run.status}; wave PNG sha256[:12] drawn ${dDrawn.join(' ')} | skeleton ${dSkel.join(' ')} | skeleton+hand ${dHand.join(' ')}; rig.json drawn ${digest(join(eqDrawn.out, 'rig', 'rig.json'))} skeleton ${digest(join(eqSkel.out, 'rig', 'rig.json'))}; sets.json less drawnLength/registration equal ${setsLess(eqSkel.out) === setsLess(eqDrawn.out)}; drawnLength ${JSON.stringify(eqSkelEntry?.drawnLength ?? null)}; skeleton+hand drawn ${JSON.stringify(eqHandEntry?.drawn ?? null)}`,
+      'issue #539, bar 2: a skeleton set whose segment lengths are the base\'s writes the bytes the drawn-only set at the same angles writes — part PNGs, rig.json, and sets.json but for drawnLength (each 1) and registration',
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
