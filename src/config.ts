@@ -213,7 +213,9 @@ export interface Patch {
  * `draw` places a patch. What the config alone cannot know — whether the
  * polygon lies inside the rig, takes any of the layer's art, or overlaps
  * another cut of the same part — the assemble stage refuses
- * (`ASSEMBLE_CUT_INSIDE`, `ASSEMBLE_CUT_PIXELS`, `ASSEMBLE_CUT_OVERLAP`).
+ * (`ASSEMBLE_CUT_INSIDE`, `ASSEMBLE_CUT_PIXELS`, `ASSEMBLE_CUT_OVERLAP`), and,
+ * for a `from` a limb takes (issue #564), whether the polygon takes a pixel a
+ * segment of the limb holds (`ASSEMBLE_CUT_CROSSES_LIMB`).
  */
 export interface Cut {
   from: string;

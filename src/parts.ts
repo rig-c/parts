@@ -42,7 +42,9 @@
  * cut from, which shares its `from`. The record is in draw order, and a piece
  * drawn `"back"` comes before its base, so order cannot say which of two parts
  * sharing a layer is the piece; this field does. A `parts.json` written before
- * 1.6.0 has none, and still reads. `limb`, written only on a part a
+ * 1.6.0 has none, and still reads. A piece cut from a part a limb took
+ * (issue #564) names that part, which is not written itself: its base is the
+ * limb segments whose `limb.of` it is, with the same `from`. `limb`, written only on a part a
  * `config.limbs` segment made (issue #349), names the limb, the segment's
  * index (0 the upper), the part it was cut from (`of`), the one bone it rides
  * and, below a joint, the joint, its declared `range` when there is one
@@ -563,6 +565,14 @@ function checkParts(raw: unknown, path: string): PartsFile {
     // single plan part behind it; the config loader refuses one).
     const recs = o.parts.filter((p): p is Record<string, unknown> => typeof p === 'object' && p !== null && !Array.isArray(p));
     const byName = new Map<unknown, Record<string, unknown>>(recs.map((r) => [r.name, r]));
+    // Issue #564: a plan part a limb took is not written itself; its segments are, each naming it (`limb.of`) with its layer.
+    const limbOf = new Map<string, Record<string, unknown>>();
+    for (const r of recs) {
+      const l = r[LIMB_KEY];
+      if (typeof l !== 'object' || l === null || Array.isArray(l)) continue;
+      const of = (l as Record<string, unknown>).of;
+      if (typeof of === 'string' && !limbOf.has(of)) limbOf.set(of, r);
+    }
     for (const r of recs) {
       if (!(CUT_FROM_KEY in r)) continue;
       const object = `part "${String(r.name)}" field "${CUT_FROM_KEY}"`;
@@ -572,7 +582,10 @@ function checkParts(raw: unknown, path: string): PartsFile {
         continue;
       }
       const b = byName.get(base);
-      if (b === undefined) fail('PARTS_CUT_FROM_KNOWN', object, `names "${base}", which is no part of this file; the plan part the cut took this piece from is required`);
+      const seg = b === undefined ? limbOf.get(base) : undefined;
+      if (seg !== undefined) {
+        if (seg.from !== r.from) fail('PARTS_CUT_FROM_KNOWN', object, `names "${base}", which limb segment "${String(seg.name)}" was cut from, with from ${show(seg.from)}; this piece's is ${show(r.from)}, and a piece shares its base's layer`);
+      } else if (b === undefined) fail('PARTS_CUT_FROM_KNOWN', object, `names "${base}", which is no part of this file and no limb segment's "of"; the plan part the cut took this piece from is required`);
       else if (base === r.name) fail('PARTS_CUT_FROM_KNOWN', object, `names the piece itself; the plan part the cut took it from is required`);
       else if (CUT_FROM_KEY in b) fail('PARTS_CUT_FROM_KNOWN', object, `names "${base}", which is itself a piece (cut from ${show(b[CUT_FROM_KEY])}); a plan part is required, as a cut of a cut has no single layer behind it`);
       else if (b.from !== r.from) fail('PARTS_CUT_FROM_KNOWN', object, `names "${base}", whose from is ${show(b.from)}; this piece's is ${show(r.from)}, and a piece shares its base's layer`);
