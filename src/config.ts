@@ -88,6 +88,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { RIG_BONE_INHERIT, RIG_SKIN_CONSTRAINT_KEYS, type RigBoneInherit, type RigConstraint, type RigSkinConstraintKey, type RigStop } from 'rig-c/src/rig.ts';
 import { pyRound } from './round.ts';
+import { REQUIREMENTS_SPEC } from './requirements.ts';
 import { CLOTH_TARGETS, type ClothRecipes, RECIPE_STRENGTH, RIGC_DEFAULT_DAMPING, springStable } from './cloth.ts';
 import { GRID, MAX_SIDE } from './contour.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
@@ -951,6 +952,13 @@ export interface CharacterConfig {
   proposed_rig_scale?: number;
   /** Alternate painting sets (issue #454): absent, no alternate sets are assembled or emitted. */
   alternates?: AlternateSetConfig[];
+  /**
+   * The requirements file the build's check reads (issue #556), a path relative
+   * to the config's directory: `build` reads it when no `--requirements` is
+   * given, and refuses a flag naming a file with other bytes. Absent, nothing
+   * is read and no byte of any output moves.
+   */
+  requirements?: string;
 }
 
 /** `config.scene` (issue #242): the declaration that the painting is a scene. It holds no field today. */
@@ -1259,7 +1267,7 @@ export interface AssembleConfig {
   proposed_rig_scale?: number;
 }
 
-const TOP_KEYS = ['key', 'generation', 'seethrough', 'assemble', 'limbs', 'bones', 'meshes', 'regions', 'motion', 'constraints', 'stops', 'turn', 'scene', 'cloth', 'proposed_rig_scale'] as const;
+const TOP_KEYS = ['key', 'generation', 'seethrough', 'assemble', 'limbs', 'bones', 'meshes', 'regions', 'motion', 'constraints', 'stops', 'turn', 'scene', 'cloth', 'proposed_rig_scale', 'requirements'] as const;
 
 /**
  * The one partial entry point. It validates exactly what its door requires —
@@ -1527,6 +1535,7 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
   if ('turn' in t) checkTurn(c, t.turn, attached, names.bones, hasAltFace);
   if ('scene' in t) checkScene(c, t.scene);
   if ('cloth' in t) checkCloth(c, t.cloth);
+  if ('requirements' in t && c.string('config.requirements', t.requirements) && base !== null) checkRequirementsFile(c, resolve(base, t.requirements));
   const from = isPlainObject(t.motion) ? t.motion.animations_from : undefined;
   const animations = base !== null && typeof from === 'string' && from !== '' ? readAnimationsFrom(c, resolve(base, from)) : null;
   if (animations !== null) {
@@ -1566,6 +1575,17 @@ function checkProposedRigScale(c: Check, t: Record<string, Json>): void {
 
 function isPlainObject(v: Json): v is Record<string, Json> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Issue #556: the file `config.requirements` names is on disk —
+ * `CONFIG_FILE_PRESENT` otherwise, as `motion.animations_from`'s. Its shape is
+ * the requirements reader's (`src/requirements.ts`), which `build` runs on it
+ * before assemble, as on the flag's file.
+ */
+function checkRequirementsFile(c: Check, file: string): void {
+  if (existsSync(file) && statSync(file).isFile()) return;
+  c.fail('CONFIG_FILE_PRESENT', 'config.requirements', `names ${file}, which is no such file; a ${REQUIREMENTS_SPEC} file, its path relative to the config's directory, is required`);
 }
 
 /**
