@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.49.2](https://github.com/rig-c/parts/compare/v1.49.1...v1.49.2) (2026-10-20)
+
+
+### Bug Fixes
+
+* **ci:** a tag release-please cut whose npm publish did not land can be republished — workflow_dispatch(tag) ([#563](https://github.com/rig-c/parts/issues/563)) ([b502a07](https://github.com/rig-c/parts/commit/b502a07581349cb767f42a57dd225256fa0227ed))
+* **rig:** mesh_report names the bones the emitted model binds, in every mode — STABILITY names the cut ([#536](https://github.com/rig-c/parts/issues/536)) ([#562](https://github.com/rig-c/parts/issues/562)) ([89f1e0e](https://github.com/rig-c/parts/commit/89f1e0ee3e350e7b9d734414ed7b4842065e8095))
+
 ## [1.49.1](https://github.com/rig-c/parts/compare/v1.49.0...v1.49.1) (2026-10-20)
 
 
