@@ -14,6 +14,20 @@
 # files — rig-parts, its name from 1.0.0-rc.1 to 1.5.3,
 # and the alias spine-parts, the name the package first shipped as (RELEASING.md).
 #
+# A failure after the tag leaves a version unpublished: release-please has cut
+# the tag and the GitHub release, so a re-run no longer reports
+# `release_created` and skips every publish step. Such a tag is published by a
+# dispatch with the `tag` input (`gh workflow run release.yml -f tag=vX.Y.Z`),
+# which runs the same gate and the same publish steps in this same file, so the
+# trusted publisher and provenance are unchanged (RELEASING.md, "Republishing a
+# cut whose publish failed").
+#
+# The dispatch takes exactly one of two inputs, both optional, because GitHub
+# refuses a dispatch that omits a required input and an omitted string input
+# reads as the empty string: `tag` publishes a cut tag (the `release` job),
+# `version` re-runs a confirmation (the `confirm` job). Both, or neither, is
+# refused by name (RELEASE_DISPATCH_INPUT) and runs nothing else.
+#
 # Two constraints are load-bearing, do not "simplify" them away:
 #   - The publish must stay in THIS file. npm's trusted publisher for each
 #     name — one form per package on npmjs.com — is pinned to the workflow
@@ -25,15 +39,24 @@ name: release
 on:
   push:
     branches: [main]
-  # Re-run a confirmation that ran out of wait, without publishing anything.
-  # What makes that safe is structural rather than careful: the `release` job
-  # runs only on a push, so a dispatch cannot reach release-please, the tag, the
-  # GitHub release or the publish — it reaches the `confirm` job and nothing else.
+  # Two things on demand, one per dispatch:
+  #   - `version`: re-run a confirmation that ran out of wait, publishing
+  #     nothing. Such a dispatch reaches the `confirm` job and nothing else.
+  #   - `tag`: publish a tag release-please already cut whose publish did not
+  #     land. Release-please never runs on a dispatch, so a dispatch cannot cut
+  #     a tag or a GitHub release; it refuses a tag not of the form vX.Y.Z
+  #     (RELEASE_TAG_FORM), a tag with no GitHub release
+  #     (RELEASE_TAG_UNRELEASED) and a version the registry already serves
+  #     under @rig-c/parts (RELEASE_ALREADY_PUBLISHED).
   workflow_dispatch:
     inputs:
+      tag:
+        description: An existing release tag to publish, e.g. v1.49.0 (leave version empty)
+        required: false
+        type: string
       version:
-        description: The published version to confirm, without the leading v (e.g. 0.1.1)
-        required: true
+        description: The published version to confirm, without the leading v, e.g. 0.1.1 (leave tag empty)
+        required: false
         type: string
 
 permissions: {}
@@ -46,9 +69,12 @@ concurrency:
 
 jobs:
   release:
-    # 🔒 The publish, the tag and the GitHub release live in this job, and this
-    # job runs on a push to main only.
-    if: ${{ github.event_name == 'push' }}
+    # 🔒 The publish, the tag and the GitHub release live in this job. It runs
+    # on a push to main, and on a dispatch that is not a confirmation alone: a
+    # `tag` dispatch publishes after the refusals below, and a dispatch with
+    # both inputs or neither reaches the resolve step only to be refused there.
+    # Release-please, which makes tags and releases, runs on a push only.
+    if: ${{ github.event_name == 'push' || inputs.tag != '' || inputs.version == '' }}
     runs-on: ubuntu-latest
     # The confirmation waits up to 15 minutes for the registry, on top of the
     # gates `prepublishOnly` runs and the publish itself; a ceiling under the
@@ -62,6 +88,7 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
+        if: ${{ github.event_name == 'push' }}
         with:
           # GITHUB_TOKEN is the intended default. Its one limitation is that the
           # `pull_request` run its PR starts waits for a human approval — see
@@ -71,24 +98,53 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-      # Everything below runs only on the push that merged the release PR.
+      # What to publish: on a push, the tag release-please just cut, if it cut
+      # one; on a dispatch, the `tag` input once it is a cut tag the registry
+      # does not serve yet. Each refusal is one `::error::` line naming its rule.
+      # The inputs reach the script through the environment, never interpolated.
+      - name: Resolve the tag to publish
+        id: target
+        env:
+          EVENT: ${{ github.event_name }}
+          CREATED: ${{ steps.release.outputs.release_created }}
+          CUT_TAG: ${{ steps.release.outputs.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = push ]; then
+            if [ "$CREATED" = true ]; then echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$CUT_TAG" >> "$GITHUB_OUTPUT"; else echo "publish=false" >> "$GITHUB_OUTPUT"; fi
+            exit 0
+          fi
+          if [ -n "$INPUT_TAG" ] && [ -n "$INPUT_VERSION" ]; then echo "::error::RELEASE_DISPATCH_INPUT: both tag \"$INPUT_TAG\" and version \"$INPUT_VERSION\" were given; a dispatch takes tag (publish a cut tag) or version (re-run a confirmation), one of them"; exit 1; fi
+          if [ -z "$INPUT_TAG" ]; then echo "::error::RELEASE_DISPATCH_INPUT: neither tag nor version was given; a dispatch takes tag (publish a cut tag) or version (re-run a confirmation), one of them"; exit 1; fi
+          if ! printf '%s' "$INPUT_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then echo "::error::RELEASE_TAG_FORM: \"$INPUT_TAG\" is not vX.Y.Z (or vX.Y.Z-<prerelease>)"; exit 1; fi
+          if ! gh release view "$INPUT_TAG" --repo "$REPO" >/dev/null 2>&1; then echo "::error::RELEASE_TAG_UNRELEASED: $INPUT_TAG has no GitHub release in $REPO; only a tag release-please cut is published"; exit 1; fi
+          version="${INPUT_TAG#v}"
+          if served="$(npm view "@rig-c/parts@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves @rig-c/parts@$version; the aliases publish after it, so a version up under the package name is not dispatched again (RELEASING.md)"; exit 1; fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+
+      # Everything below runs only when a tag is to be published: the push that
+      # merged the release PR, or a dispatched tag the step above resolved.
       - uses: actions/checkout@v4
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         with:
-          ref: ${{ steps.release.outputs.tag_name }}
+          ref: ${{ steps.target.outputs.tag }}
 
       - uses: oven-sh/setup-bun@v2
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
 
       - uses: actions/setup-node@v4
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
       # Node 22 ships npm 10; the OIDC exchange landed in npm 11.5.1.
       - name: Use an npm that speaks OIDC
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         run: |
           npm install -g npm@latest
           npm --version
@@ -96,7 +152,7 @@ jobs:
       # The lockfile is bun.lock — there is no package-lock.json for `npm ci`.
       # Dependencies exist only to let prepublishOnly run its gates.
       - name: Install dependencies
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         run: bun install --frozen-lockfile
 
       # Nothing to build — the package ships TypeScript sources and bun runs
@@ -110,7 +166,7 @@ jobs:
       # `npm dist-tag add`, never this workflow's. Each alias step reads the
       # same clause.
       - name: Publish to npm
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         run: |
           set -euo pipefail
           tag=""
@@ -138,7 +194,7 @@ jobs:
       # 🔑 Each alias's own trusted publisher on npmjs.com is pinned to this
       # workflow filename, like the package's; the steps stay in this file.
       - name: Publish the alias rig-parts
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         run: |
           set -euo pipefail
           tag=""
@@ -147,7 +203,7 @@ jobs:
           npm publish "$alias_tgz" --provenance --access public $tag
 
       - name: Publish the alias spine-parts
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         run: |
           set -euo pipefail
           tag=""
@@ -173,10 +229,10 @@ jobs:
       # difference is exit 1; an alias still arriving is exit 3, re-run by the
       # dispatch below.
       - name: Confirm the published package installs and runs
-        if: ${{ steps.release.outputs.release_created == 'true' }}
+        if: ${{ steps.target.outputs.publish == 'true' }}
         # Through the environment rather than interpolated into the script.
         env:
-          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+          TAG_NAME: ${{ steps.target.outputs.tag }}
         run: |
           set -euo pipefail
           version="${TAG_NAME#v}"
@@ -184,9 +240,10 @@ jobs:
 
   # The same confirmation, on demand, for a cut whose wait ran out. It
   # publishes nothing and can publish nothing: `npm publish` exists only in the
-  # job above, which a dispatch skips.
+  # job above, which a `version` dispatch skips. A `tag` dispatch does not run
+  # this job; its own run ends in the confirmation step above.
   confirm:
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.version != '' && inputs.tag == '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:

@@ -206,6 +206,64 @@ publish. The workflow passes `--provenance` on the command line instead.
    names, and then confirms the published package installs and runs and that each
    alias carries its files, waiting up to 15 minutes for the registry.
 
+## Republishing a cut whose publish failed
+
+a release-please failure after the tag leaves a version unpublished; the next cut carries it, or the tag is republished by dispatch.
+
+It happens when the run that merged the release pull request gets as far as
+the tag and the GitHub release and then stops before the publish lands: once
+when release-please itself failed on a transient GitHub API error while
+updating the next pull request, after cutting the release; once, on another
+package of the toolchain, when `npm publish --provenance` failed on a transient
+signing-service error. Re-running that run cannot recover either: release-please
+no longer reports `release_created` for a tag it has already cut, so every step
+after it is skipped and the registry keeps serving the previous version. A
+publish by hand would lose provenance, and the trusted publisher names
+`release.yml`.
+
+The tag is published by a dispatch of the same workflow:
+
+```sh
+gh workflow run release.yml -f tag=vX.Y.Z
+```
+
+The `release` job then skips release-please — a dispatch never cuts a tag or a
+release — and its *Resolve the tag to publish* step checks the tag; every step
+after it is the push path's own (checkout of the tag, the gate in
+`prepublishOnly`, the publish under all three names, the registry
+confirmation), run under the same condition, from the same file. The resolve
+step refuses, each as one `::error::` line naming its rule:
+
+| refusal | when |
+| --- | --- |
+| `RELEASE_DISPATCH_INPUT` | the dispatch gave both `tag` and `version`, or neither |
+| `RELEASE_TAG_FORM` | the tag is not `vX.Y.Z` (or `vX.Y.Z-<prerelease>`) |
+| `RELEASE_TAG_UNRELEASED` | the tag has no GitHub release: only a tag release-please cut is published |
+| `RELEASE_ALREADY_PUBLISHED` | the registry already serves that version of `@rig-c/parts` |
+
+**Two inputs, one per dispatch.** `tag` publishes a cut tag; `version` re-runs
+a confirmation (*Whether the tarball runs*). Both are optional, because GitHub
+refuses a dispatch that omits a required input; an omitted string input reads
+as empty. The `confirm` job runs only on a dispatch with `version` and no `tag`;
+any other dispatch runs the `release` job, where the resolve step publishes a
+`tag` alone and refuses the rest.
+
+**Half-published.** The aliases are published after `@rig-c/parts`, in the same
+job, so a failure between those steps leaves the version up under the package
+name and missing under one alias or both. `RELEASE_ALREADY_PUBLISHED` reads the
+package name only, so such a version is refused rather than published again:
+a second `npm publish` of the package's version is refused by the registry
+anyway, and the alias steps run only after it. The missing alias version is
+published by hand from the tag with the tarball commands in *The first publish*
+(without provenance), or left for the next cut, which publishes every name.
+
+**Before the next cut.** `npm publish` refuses to put `latest` on a version
+lower than the highest one published unless a `--tag` is given (read in the
+publish command of npm 12.2.0, the version `npm@latest` installs at this
+writing), and the publish steps pass `--tag` only for a prerelease. So a stable
+tag is republished before a later version is cut; after that, the dispatch goes
+red at the gated publish and publishes nothing.
+
 ## Whether the tarball runs
 
 What the package *holds* and whether it *works* are two facts. **The gate is
@@ -238,5 +296,6 @@ exits:
 | `2` | no case ran | a broken invocation, not a verdict |
 | `3` | the registry did not serve the version, or an alias, inside `--wait` — the confirmation was NOT taken | re-run it: Actions → release → Run workflow, with the version |
 
-The dispatch runs the `confirm` job only; the job holding release-please, the
-tag and `npm publish` runs only on a push, so a re-run cannot re-cut anything.
+A dispatch with `version` runs the `confirm` job only, so a re-run cannot
+publish or re-cut anything; release-please, which makes the tag and the
+release, runs only on a push (`gh workflow run release.yml -f version=X.Y.Z`).
