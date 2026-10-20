@@ -59,6 +59,27 @@ nothing. It prints the figure, every joint and every gap with its count, then
 with `(see rig-parts guide <RULE>)`, which prints the rule's row in
 [AUTHORING §6](AUTHORING.md#6-refusals-the-rule-and-what-has-to-change).
 
+**DWPose on a faceless figure** (issue #578). Measured on eight seeds of one
+frontal, faceless wooden-mannequin painting (SDXL base 1.0, legs apart,
+1664x2432), DWPose `dw-ll_ucoco_384` through ComfyUI's DWPreprocessor at
+resolution 1024, it did three things a keypoint file must not keep:
+
+- **It may find no person.** With its default bbox detector (`yolox_l.onnx`) it
+  returned no person on 8 of the 8 seeds; with `bbox_detector` None it returned
+  one on 8 of 8. Run it with `bbox_detector` None.
+- **It may read the figure from behind.** With `bbox_detector` None the sides came
+  back mirrored on 7 of the 8: `r_shoulder` image-right of `l_shoulder` (on one
+  seed x 978 against 697) and `r_hip` image-right of `l_hip` (907 against 753).
+  The keypoint file's `r` / `l` are the subject's sides, so on a figure facing the
+  viewer `r_shoulder` is on the image's left (`src/keypoints.ts`, AUTHORING §3).
+  Check that `r_shoulder` lies image-left of `l_shoulder` and `r_hip` image-left of
+  `l_hip`, and swap each `r_` / `l_` pair of a file where they do not.
+- **Its hips may sit on the pelvis.** On that seed, after the swap, the hips were
+  at painting y 1117.0 and 1113.1 and the hip domes at y 1246 — 129 and 133
+  painting px lower (64.5 and 66.5 rig px at an `assemble.rig_scale` of 0.5). The shoulders
+  landed on the torso's edge (x 697.4 and 978.5) rather than on the balls (652 and
+  1010). Move the hips and the shoulders onto the joints before `propose`.
+
 What it reads, each a definition with no tuned number:
 
 - **Ground** — a pixel the package already calls background: alpha 8 or less
@@ -100,8 +121,12 @@ joints line counts occluded hips apart (`joints: 16 observed, 2 occluded with a
 position (r_hip, l_hip), 18 on the figure`), and an arm's gap line says when it was
 read from one.
 
-What it does not read: a front view, the feet, a prop that does not join the
-hands, anything on an elbow (a cape, a sleeve's frill, a bow), the hands' fingers,
+What it does not read: a front view (a file with every `r_` / `l_` pair swapped
+draws the same lines between the same points — the two arm lines trade names, the
+hands, knees and ankles lines run between the same two joints — so it reads as the
+unswapped file does: on the selftest's painting fixture both print the same counts
+and `PASS`), the feet, a prop that does not join the hands, anything on an elbow (a
+cape, a sleeve's frill, a bow), the hands' fingers,
 the face. A green `painting` says
 the joints and the silhouette hold the requirements it reads, not that the
 painting is good. A shadow or a floor enclosed by the background is figure to it;

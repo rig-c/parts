@@ -30,6 +30,7 @@ import { checkImageSize, choosePerson, KEYPOINTS_SPEC, loadKeypoints, type RigJo
 import { basisLines, branchSqueezeLine, checkProposal, compare, compareLines, DEFAULT_GRID_RULE, draftTurn, drawLandmarks, FIGURE_GRID_DIVISOR, FRINGE_STEP_PX, GRID_RULES, type GridRule, HIP_MIN_FRACTION, type DraftLintFinding, lint, lintLine, type PartSet, proposeWithBasis, readPartSet, serializeProposal, withTurn, WRIST_ON_PART_PX } from './src/propose.ts';
 import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, coverageLines, serializeBasis } from './src/diagnostics.ts';
 import { BEND_DEGREES, BEND_WORST_SHARE, DUST_MAX_PX, DUST_MAX_SHARE, IDLE_BOUND_PX, MESH_DRAFT_REPORT, MESH_DRAFT_SPEC, meshDraftStage, MORE_TRIANGLES_FLAG, relativeConfigPaths, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
+import { meshStatsStage } from './src/meshstats.ts';
 import { clothConfigEdits, editPaths, previousCount, writtenClothConfig } from './src/clothconfig.ts';
 import { PROVENANCE_FILE, REMESH_SPEC, remeshStage } from './src/remesh.ts';
 import { RETUNE_FILE, RETUNE_SPEC, retuneStage } from './src/retune.ts';
@@ -372,6 +373,21 @@ usage:
       and compare the rig stage's mesh lines (AUTHORING §3, issue #307).
       Written only when the drafted config's check is PASS. --requirements, --idle-keys,
       --page-edges and --pack-shape are as for rig and check.
+
+  rig-parts mesh-stats --config <config.json> --parts <dir>
+      Print the vertices and triangles of every mesh the config states, as the
+      rig stage would make them from the parts in --parts (the directory
+      holding parts.json and parts/<name>.png), and their total, in seconds:
+      the rig stage's own mesh construction, without rigc, without assemble
+      and without check (issue #566). One line per mesh in parts.json's order,
+      "mesh-stats: <part> — <mode> <V> vertices, <T> triangles" (mode lattice,
+      contour, auto or influence), then "mesh-stats: total <N> triangles over
+      <M> mesh(es)"; the counts are the ones the rig stage writes to
+      mesh_report.json, except an auto part's when rigc's motion gate refuses
+      its reduction and the rig stage replays an earlier accepted step, which
+      the auto line says. A problem the rig stage refuses (a missing part PNG,
+      an outline that does not close, a bone no config entry declares) is the
+      rig stage's own refusal, exit 1. Writes nothing.
 
   rig-parts remesh --rig <dir> --config <config.json> --parts <dir> --part <name>
                    --mesh <entry.json> --out <dir> [--requirements <file.json>]
@@ -934,6 +950,7 @@ const TAKES = {
   build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set', '--environment'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets'] },
   compose: { valued: ['--scene', '--out', '--requirements', '--accept'], switches: [] },
   'mesh-draft': { valued: ['--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: ['--more-triangles'] },
+  'mesh-stats': { valued: ['--config', '--parts'], switches: [] },
   remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--delta', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
   retune: { valued: ['--rig', '--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
   painting: { valued: ['--keypoints', '--person'], switches: [] },
@@ -1789,6 +1806,18 @@ function cmdMeshDraft(args: string[]): number {
   }
 }
 
+/** `mesh-stats --config <config.json> --parts <dir>` (issue #566): every configured mesh's counts, through the rig stage's own `buildRig`, without rigc. Writes nothing. */
+function cmdMeshStats(args: string[]): number {
+  const f = flags(args, 'mesh-stats', ['--config', '--parts']);
+  if (typeof f === 'string') return usage(f);
+  try {
+    meshStatsStage({ config: f.get('--config') as string, parts: f.get('--parts') as string }, console.log);
+    return EXIT_OK;
+  } catch (err) {
+    return printRefusal(err);
+  }
+}
+
 /** `remesh` (issue #495): one part of a gated rig re-fitted under a requested mesh entry, into a new revision. */
 function cmdRemesh(args: string[]): number {
   const f = flags(args, 'remesh', ['--rig', '--config', '--parts', '--part', '--out']);
@@ -1937,6 +1966,7 @@ function main(argv: string[]): number | Promise<number> {
   if (command === 'build') return cmdBuild(rest);
   if (command === 'compose') return cmdCompose(rest);
   if (command === 'mesh-draft') return cmdMeshDraft(rest);
+  if (command === 'mesh-stats') return cmdMeshStats(rest);
   if (command === 'remesh') return cmdRemesh(rest);
   if (command === 'retune') return cmdRetune(rest);
   if (command === 'painting') return cmdPainting(rest);
