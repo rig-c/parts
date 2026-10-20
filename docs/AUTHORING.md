@@ -1652,20 +1652,37 @@ are drafted again without the recipe, and each config section whose value differ
 the recipe's. An object section is spliced entry by entry — `meshes.<part>` and
 `regions.<part>` for each part the recipe moved (a part it takes from `regions` into
 `meshes` leaves `regions`), `motion.tracks` and nothing else under `motion`, so
-`duration`, `blink` and `animations_from` keep their bytes — and `bones` and
-`constraints` whole: **the drafted array replaces the input's**, so a bone or a
-constraint added by hand does not survive a `--write-config`, as a hand-edited lattice
-does not survive `mesh-draft`. Every other byte is the input's; a section the input
-lacks (a config holding only `key` and `cloth`) is inserted. On the selftest's cloth
-fixture (CL201 prints the figures) the recipe moves `bones`, `meshes.hair_back`,
-`meshes.hair_front`, `meshes.skirt`, `motion.tracks` and `constraints`; `limbs` is not
+`duration`, `blink` and `animations_from` keep their bytes — and so are `bones`,
+`constraints` and `motion.tracks` (issue #552), by each entry's name: a bone by `name`
+or `chain` (one namespace, as a mesh segment resolves either), a constraint by `name`,
+a track by `chain` or by `bone` and `prop` together. An entry the recipe drafts (one the
+draft with the recipe holds and the draft without it lacks or holds differently) is
+replaced in place, or, when the input lacks it, inserted after the input's entry that
+precedes it in the drafted array (the nearest earlier drafted entry the array holds),
+else at the end of the array; an entry the recipe replaces (a plain chain it drafts as
+trees) is removed; **every other entry is kept, its bytes and its place** — a bone, a
+chain, a constraint or a track added by hand survives a `--write-config`. An entry the
+recipe re-drafts or removes that the author changed by hand (it equals neither draft) is
+not dropped: the run is refused, `PROPOSE_WRITE_CONFIG_CONFLICT`, naming the entry
+(`config.constraints[40] "skirt0a_0_physics"` in CL207), the first field the hand edit holds and
+what the draft writes there, every conflict at once and nothing written; take the draft
+by removing the hand edit, or leave the recipe out for that part. A `meshes.<part>` the
+recipe drafts is still the draft's whole, as a hand-edited lattice does not survive
+`mesh-draft`, and a mesh it does not draft keeps its bytes. Every other byte is the
+input's; a section the input lacks (a config holding only `key` and `cloth`) is
+inserted whole. On the selftest's cloth fixture (CL201 prints the figures) the recipe
+removes six plain chains from `bones` and their nine tracks from `motion.tracks`,
+inserts its trees, moves `meshes.hair_back`, `meshes.hair_front` and `meshes.skirt`,
+and inserts `constraints`; with bones, constraints, a track and a mesh added by hand
+(CL205) the written config differs from the input only at those entries; `limbs` is not
 moved on the public `wind` example with its keypoints, whose tracked config the flag
 wrote back byte for byte (measured once, when the flag landed). The text is written as stated: a relative path in it
 (`motion.animations_from`, `generation.control.skeleton`) resolves against the directory
 the written config sits in, so the out path belongs beside the input, and when it is not
 a note names each such path. Refused before anything is written: `--write-config`
 without `--cloth` or beside `--from-config` (`USAGE`), an out path that exists or that
-the run writes itself (`PROPOSE_WRITE_CONFIG_FRESH`), and a text whose splice does not
+the run writes itself (`PROPOSE_WRITE_CONFIG_FRESH`), a hand edit to an entry the
+recipe owns (`PROPOSE_WRITE_CONFIG_CONFLICT`), and a text whose splice does not
 parse to the config with the sections set — a key stated twice
 (`PROPOSE_WRITE_CONFIG_SPLICE`); a recipe that drafts nothing is
 `PROPOSE_CLOTH_DRAFTED` as without the flag.
@@ -2879,6 +2896,7 @@ says why each requirement exists and what breaks without it.
 | <a id="PROPOSE_CLOTH_DRAFTED"></a>`PROPOSE_CLOTH_DRAFTED` | with `--cloth` (issue #364): the config's `cloth` block holds a recipe for a tag the proposer drafts no chain on — no part has that tag, or every `back hair` part ends above the shoulders (a bun bone, no chain). A `bottomwear` recipe with no `bottomwear` part names every `topwear` part shaped like a skirt (issue #402) | leave that recipe out, or assemble the layer it is for, or declare the named part in `cloth.bottomwear.part` |
 | <a id="PROPOSE_CLOTH_PART"></a>`PROPOSE_CLOTH_PART` | with `--cloth` (issues #402, #437): `cloth.bottomwear.part` (a string) names no part, a part or cut piece whose source is not `topwear` (a `bottomwear` part takes the recipe by its tag already), or a target whose box ends above the hip + 0.25 face heights, the topwear rule's waist line; or `cloth.<tag>.parts` (or `part` as a list, issue #437) names a part not in `parts.json`, a part no link of the drafted tree crosses (`spanCrosses == 0`), or parts out of root-to-tip depth order along the chain | name the `topwear` part or its cut skirt piece that holds the skirt (or leave `part` out), or list only parts in `parts.json` that the drafted tree links cross in root-to-tip order |
 | <a id="PROPOSE_WRITE_CONFIG_FRESH"></a>`PROPOSE_WRITE_CONFIG_FRESH` | with `--write-config` (issue #537): the out path exists, or is a file the run writes itself (`proposal.json`, `basis.json` under `--out`); the config is written to a new file, never over the `--cloth` config or an earlier one | name a file that does not exist yet, beside the `--cloth` config |
+| <a id="PROPOSE_WRITE_CONFIG_CONFLICT"></a>`PROPOSE_WRITE_CONFIG_CONFLICT` | with `--write-config` (issue #552): an entry of `bones`, `constraints` or `motion.tracks` the recipe re-drafts or removes was changed by hand in the `--cloth` config — it equals neither the draft with the recipe nor the draft without it — so the write would drop the hand edit; the object is the entry (`config.constraints[40] "skirt0a_0_physics"` in CL207), the detail names the first field the hand edit holds and what the draft writes there. Also a name the config states twice where the recipe drafts it. Every conflict is named at once and nothing is written | take the draft by removing the hand edit (or the entry), or leave the recipe out for that part (its `cloth` block); state a name once |
 | <a id="PROPOSE_WRITE_CONFIG_SPLICE"></a>`PROPOSE_WRITE_CONFIG_SPLICE` | with `--write-config` (issue #537): the `--cloth` config's text with the drafted sections spliced in does not parse to that config with them set, and the message names the first key that moved — the text states a key twice, so the splice lands on the first and the parse keeps the last | state each key once in the `--cloth` config |
 | <a id="PROPOSE_CLOTH_BACK_HAIR_CHAINS"></a>`PROPOSE_CLOTH_BACK_HAIR_CHAINS` | with `--cloth` (issues #390, #445, #461): `cloth."back hair".chains` exceeds what the narrower side's opaque width at the eye-line root row holds at the part's mesh grid (`max(1, min(floor(w_r / grid), floor(w_l / grid)))`), or places a tree root outside the 15 px dilated art mask of the `back hair` part (e.g. an inner twin-tail root over the face where the hair has no pixel); the message names the part, each side's root-row width, the grid spacing, and any off-art root with its pixel alpha | lower `cloth."back hair".chains` to at most the max fit named in the message, or omit `chains` so `propose --cloth` derives the tree count per visible hair mass on each side from its root-row width |
 | <a id="PROPOSE_ACCESSORY_BODY"></a>`PROPOSE_ACCESSORY_BODY` | an accessory has nothing above its pendant rows to hang its bone on | that part's plan entry, or author its bones by hand |

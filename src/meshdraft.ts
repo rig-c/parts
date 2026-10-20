@@ -484,10 +484,11 @@ export function partsNamed(p: Problem, among: readonly string[], seams: { draft:
 // ---------------------------------------------------------------------------
 
 /**
- * Where a JSON value starts and ends in a text, by a path of object keys, and (for a non-empty path) where the key
- * naming it starts (`key`, its opening quote). Throws when the path does not resolve.
+ * Where a JSON value starts and ends in a text, by a path of object keys and array indices (a number steps to that
+ * element of an array, issue #552), and (for a non-empty path) where the last step starts (`key`: a member's opening
+ * quote, or the element itself). Throws when the path does not resolve.
  */
-export function jsonValueSpan(text: string, path: readonly string[]): { start: number; end: number; key?: number } {
+export function jsonValueSpan(text: string, path: readonly (string | number)[]): { start: number; end: number; key?: number } {
   let i = 0;
   const ws = (): void => {
     while (i < text.length && /\s/.test(text[i])) i++;
@@ -541,6 +542,22 @@ export function jsonValueSpan(text: string, path: readonly string[]): { start: n
       skip();
       return keyAt === undefined ? { start, end: i } : { start, end: i, key: keyAt };
     }
+    const step = path[depth];
+    if (typeof step === 'number') {
+      if (text[i] !== '[') throw new Error(`jsonValueSpan: ${path.slice(0, depth).join('.') || 'the document'} is not an array`);
+      i++;
+      for (let n = 0; ; n++) {
+        ws();
+        if (text[i] === ']') throw new Error(`jsonValueSpan: no element ${step} at ${path.slice(0, depth).join('.') || 'the top'}`);
+        if (n === step) {
+          keyAt = i;
+          return find(depth + 1);
+        }
+        skip();
+        ws();
+        if (text[i] === ',') i++;
+      }
+    }
     if (text[i] !== '{') throw new Error(`jsonValueSpan: ${path.slice(0, depth).join('.') || 'the document'} is not an object`);
     i++;
     for (;;) {
@@ -562,14 +579,20 @@ export function jsonValueSpan(text: string, path: readonly string[]): { start: n
   return find(0);
 }
 
-/** One edit {@link splicedEdits} makes: the value at `path` set (replaced, or inserted when absent), or, `undefined`, removed. */
+/**
+ * One edit {@link splicedEdits} makes: the value at `path` set (replaced, or inserted when absent), or, `undefined`,
+ * removed. A path whose last step is an index (issue #552) addresses an array element: set replaces it, `undefined`
+ * removes it, and `insert` puts `value` before it (at the array's length: after its last element), every later
+ * element moving up one.
+ */
 export interface ConfigEdit {
-  path: readonly string[];
+  path: readonly (string | number)[];
   value: unknown;
+  insert?: boolean;
 }
 
 /** The span at `path`, or null where the path does not resolve (a key absent, or a step that is not an object). */
-function spanOrNull(text: string, path: readonly string[]): { start: number; end: number; key?: number } | null {
+function spanOrNull(text: string, path: readonly (string | number)[]): { start: number; end: number; key?: number } | null {
   try {
     return jsonValueSpan(text, path);
   } catch {
@@ -583,8 +606,32 @@ function indentAt(text: string, at: number): string {
   return /^[ \t]*/.exec(text.slice(lineStart))?.[0] ?? '';
 }
 
+/** An element inserted into the array at `arrayPath` before its element `index` (at its length: after the last). */
+function insertElement(text: string, arrayPath: readonly (string | number)[], index: number, value: unknown): string {
+  const arr = spanOrNull(text, arrayPath);
+  if (arr === null || text[arr.start] !== '[') throw new Error(`splicedEdits: ${arrayPath.join('.') || 'the document'} is not an array`);
+  const next = spanOrNull(text, [...arrayPath, index]);
+  if (next !== null) {
+    // Before the element: the new one takes its line, and the old one follows on a line of its own at the same indent.
+    const indent = indentAt(text, next.start);
+    const body = JSON.stringify(value, null, 2).split('\n').join(`\n${indent}`);
+    return `${text.slice(0, next.start)}${body},\n${indent}${text.slice(next.start)}`;
+  }
+  const prev = index > 0 ? spanOrNull(text, [...arrayPath, index - 1]) : null;
+  if (index > 0 && prev === null) throw new Error(`splicedEdits: ${arrayPath.join('.')} has no element ${index - 1}`);
+  const indent = prev !== null ? indentAt(text, prev.start) : `${indentAt(text, arr.start)}  `;
+  const body = JSON.stringify(value, null, 2).split('\n').join(`\n${indent}`);
+  if (prev === null) return `${text.slice(0, arr.start + 1)}\n${indent}${body}\n${indentAt(text, arr.start)}${text.slice(arr.end - 1)}`;
+  return `${text.slice(0, prev.end)},\n${indent}${body}${text.slice(prev.end)}`;
+}
+
 /** One edit on `text`; every byte it does not name is the input's. */
-function spliceOne(text: string, path: readonly string[], value: unknown): string {
+function spliceOne(text: string, path: readonly (string | number)[], value: unknown, insert = false): string {
+  const step = path[path.length - 1];
+  if (insert) {
+    if (typeof step !== 'number') throw new Error(`splicedEdits: an insert names an array index; ${path.join('.')} does not`);
+    return insertElement(text, path.slice(0, -1), step, value);
+  }
   const at = spanOrNull(text, path);
   if (value === undefined) {
     if (at === null || at.key === undefined) return text;
@@ -594,6 +641,8 @@ function spliceOne(text: string, path: readonly string[], value: unknown): strin
     if (text[before] === ',') return `${text.slice(0, before)}${text.slice(at.end)}`;
     let after = at.end;
     while (after < text.length && /\s/.test(text[after])) after++;
+    // An array's only element: the brackets close on each other.
+    if (typeof step === 'number' && text[before] === '[' && text[after] === ']') return `${text.slice(0, before + 1)}${text.slice(after)}`;
     if (text[after] === ',') {
       after++;
       while (after < text.length && /\s/.test(text[after])) after++;
@@ -605,13 +654,14 @@ function spliceOne(text: string, path: readonly string[], value: unknown): strin
     const body = JSON.stringify(value, null, 2).split('\n').join(`\n${indentAt(text, at.start)}`);
     return `${text.slice(0, at.start)}${body}${text.slice(at.end)}`;
   }
+  if (typeof step === 'number') throw new Error(`splicedEdits: ${path.join('.')} names no element; an element is added by an insert`);
   const parentPath = path.slice(0, -1);
   const parent = spanOrNull(text, parentPath);
   // A parent the text lacks is inserted whole, holding this one member.
-  if (parent === null) return spliceOne(text, parentPath, { [path[path.length - 1]]: value });
+  if (parent === null) return spliceOne(text, parentPath, { [step]: value });
   if (text[parent.start] !== '{') throw new Error(`splicedEdits: ${parentPath.join('.') || 'the document'} is not an object`);
   const indent = `${indentAt(text, parent.start)}  `;
-  const member = `"${path[path.length - 1]}": ${JSON.stringify(value, null, 2).split('\n').join(`\n${indent}`)}`;
+  const member = `"${step}": ${JSON.stringify(value, null, 2).split('\n').join(`\n${indent}`)}`;
   let last = parent.end - 2;
   while (last > parent.start && /\s/.test(text[last])) last--;
   if (last === parent.start) return `${text.slice(0, parent.start + 1)}\n${indent}${member}\n${indentAt(text, parent.start)}${text.slice(parent.end - 1)}`;
@@ -634,24 +684,35 @@ function firstMoved(got: unknown, want: unknown, path: readonly string[]): strin
 /**
  * The input's own text with each edit made in order: a value present is replaced, as `JSON.stringify(value, null, 2)`
  * indented to the line it starts on; one absent is inserted as the last member of its object (an absent parent
- * inserted with it); `undefined` removes the member. Every other byte is the input's. The result is parsed and held
+ * inserted with it); `undefined` removes the member. An index step addresses an array element (issue #552): replaced
+ * or removed in place, or, `insert`, put before that element on a line of its own at the neighbours' indent (after
+ * the last element at the array's length), and a removed element takes one comma beside it. Every other byte is the
+ * input's. The result is parsed and held
  * to the intended document — the input parsed with the same edits made on it — and `moved` names the first path
  * where it is not (a key the text states twice is the way it is not: the edit lands on the first, the parse keeps the
  * last); null when it is.
  */
 export function splicedEdits(text: string, edits: readonly ConfigEdit[]): { text: string; moved: string | null } {
   let out = text;
-  for (const e of edits) out = spliceOne(out, e.path, e.value);
+  for (const e of edits) out = spliceOne(out, e.path, e.value, e.insert === true);
   const want = JSON.parse(text) as Record<string, unknown>;
   for (const e of edits) {
-    let o = want;
+    let o: Record<string | number, unknown> | unknown[] = want;
     for (const k of e.path.slice(0, -1)) {
-      if (typeof o[k] !== 'object' || o[k] === null) o[k] = {};
-      o = o[k] as Record<string, unknown>;
+      const rec = o as Record<string | number, unknown>;
+      if (typeof rec[k] !== 'object' || rec[k] === null) rec[k] = {};
+      o = rec[k] as Record<string | number, unknown> | unknown[];
     }
     const last = e.path[e.path.length - 1];
-    if (e.value === undefined) delete o[last];
-    else o[last] = e.value;
+    if (Array.isArray(o) && typeof last === 'number') {
+      if (e.insert === true) o.splice(last, 0, e.value);
+      else if (e.value === undefined) o.splice(last, 1);
+      else o[last] = e.value;
+    } else {
+      const rec = o as Record<string | number, unknown>;
+      if (e.value === undefined) delete rec[last];
+      else rec[last] = e.value;
+    }
   }
   return { text: out, moved: firstMoved(JSON.parse(out), want, []) };
 }

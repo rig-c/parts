@@ -233,6 +233,7 @@ import {
   singleRunHeadBox,
 } from './src/assemble.ts';
 import { ENVIRONMENT_RULE, environmentLine, readCheckEnvironment } from './src/check.ts';
+import { clothConfigEdits, writtenClothConfig } from './src/clothconfig.ts';
 import { EnvironmentError, readEnvironmentSchedule } from 'rig-c/src/environment.ts';
 import { boneTrackOf, CLOTH_FLOOR_TEXT, CLOTH_LEVERS_TEXT, CLOTH_LINE, CLOTH_SETTLE_FLOOR, clothChains, type ClothLine, clothLine, clothRow, clothWarnText, frameRuns, MOTION_SEAM_FLOOR, MOTION_SEAM_LINE, type MotionSeamLine, motionSeamPairs, motionSeamWarnText, openingOverFloor, readMotionSeams } from './src/check.ts';
 import { BREATH_ANIMATION, type BreathPair, breathPairProblem, breathTracks, chainDirection, sweepAngles, sweepJoints, type SweepJoint, sweepLine, type SweepLine, SWEEP_LINE, type SweepPose, type Viewport } from './src/check.ts';
@@ -4974,7 +4975,7 @@ function runWriteConfigCases(say: (name: string, ok: boolean, detail: string, wh
   const inObj = JSON.parse(inputText) as Record<string, unknown>;
   const outObj = JSON.parse(outText) as Record<string, unknown>;
   const spliced = /spliced in from the draft/.test(one.r.out) ? (/text with (.+) spliced in from the draft/.exec(one.r.out)?.[1] ?? '').split(', ') : [];
-  const moved = [...new Set(spliced.map((p) => p.split('.')[0]))];
+  const moved = [...new Set(spliced.map((p) => p.split(/[.[]/)[0]))];
   const span = (text: string, k: string): string => {
     const sp = jsonValueSpan(text, [k]);
     return text.slice(sp.start, sp.end);
@@ -4987,6 +4988,18 @@ function runWriteConfigCases(say: (name: string, ok: boolean, detail: string, wh
   const keptOk = rows.filter((x) => !x.drafted).every((x) => x.a !== null && x.a === x.b);
   const draftedOk = rows.filter((x) => x.drafted).every((x) => x.b !== null && canonJson(outObj[x.k]) === canonJson(prop[x.k]));
   const table = rows.map((x) => `${x.k} ${x.a === null ? 'absent' : x.a.length}->${x.b === null ? 'absent' : x.b.length} B ${x.drafted ? 'drafted' : x.a === x.b ? 'same bytes' : 'MOVED'}`).join(', ');
+  // Issue #552: entry by entry. The recipe replaces six plain chains with its trees (and removes their nine chain
+  // tracks, the fringe's included); the input holds no constraints, so that section is inserted whole.
+  const plainNames = plain.bones.map((b) => ('chain' in b ? b.chain : b.name));
+  const wcExpected = [
+    ...['hairback_r', 'hairback_l', 'lock', 'skirt_r', 'skirt_c', 'skirt_l'].map((n) => `bones["${n}"] removed`),
+    ...((prop.bones ?? []) as Array<{ name?: string; chain?: string }>).map((b) => String(b.name ?? b.chain)).filter((n) => !plainNames.includes(n)).map((n) => `bones["${n}"] inserted`),
+    'meshes.hair_back',
+    'meshes.hair_front',
+    'meshes.skirt',
+    ...['hairback_r', 'hairback_l', 'bang_r', 'bang_c', 'bang_l', 'lock', 'skirt_r', 'skirt_c', 'skirt_l'].map((n) => `motion.tracks["${n}"] removed`),
+    'constraints',
+  ];
   const rigDir = join(dir, 'wc-rig');
   const rig = one.text === null ? { status: -1, out: '' } : runCli(['rig', '--config', join(dir, 'wc-one.json'), '--parts', parts, '--out', rigDir]);
   const chk = rig.status !== 0 ? { status: -1, out: '' } : runCli(['check', '--rig', rigDir, '--parts', parts, '--out', join(dir, 'wc-check')]);
@@ -4997,7 +5010,7 @@ function runWriteConfigCases(say: (name: string, ok: boolean, detail: string, wh
       two.r.status === 0 &&
       one.text !== null &&
       one.text === two.text &&
-      spliced.join(',') === 'bones,meshes.hair_back,meshes.hair_front,meshes.skirt,motion.tracks,constraints' &&
+      spliced.join(',') === wcExpected.join(',') &&
       !outText.includes(dir) &&
       keptOk &&
       draftedOk &&
@@ -5072,6 +5085,225 @@ function runWriteConfigCases(say: (name: string, ok: boolean, detail: string, wh
       cp.status === 1 && failed(cp, 'PROPOSE_CLOTH_PART') && !cp.written && noProposal('wc-r8'),
     `without --cloth: ${noCloth.out.trim().split('\n')[0].slice(0, 90)} (exit ${noCloth.status}); with --from-config: exit ${fromCfg.status}; over the input: ${line(fresh)}, input ${freshSame ? 'unchanged' : 'CHANGED'}; over its own proposal.json: ${line(ours)}; a bottomwear recipe on parts with no bottomwear: ${line(nothing)}; "bones" stated twice: ${line(dup)}; planted CF wind tip below root: ${line(cf)}; planted bottomwear.part "nowhere": ${line(cp)}`,
     'issue #537 bars 2 and 3: the flag draws its meaning from the recipe, a config is written to a new file, a recipe that drafts nothing and the existing cloth refusals stop the run before anything is written, and a text whose splice would not parse to the intended config is refused by the key that moved',
+  );
+  runEntrySpliceCases(say, dir);
+}
+
+/** The array sections `--write-config` splices entry by entry (issue #552), and what names an entry, as the selftest reads them. */
+const WC_ARRAYS: ReadonlyArray<{ path: string[]; id: (e: Record<string, unknown>) => string }> = [
+  { path: ['bones'], id: (e) => String(e.name ?? e.chain) },
+  { path: ['constraints'], id: (e) => String(e.name) },
+  { path: ['motion', 'tracks'], id: (e) => (e.chain !== undefined ? String(e.chain) : `${String(e.bone)} ${String(e.prop)}`) },
+];
+
+/**
+ * Every JSON path where `a` and `b` differ, key order aside: objects member by member, the arrays of
+ * {@link WC_ARRAYS} entry by entry by name (`/bones/{hip}`), any other array whole.
+ */
+function wcDiffPaths(a: unknown, b: unknown, path: string[] = []): string[] {
+  const named = WC_ARRAYS.find((s) => s.path.join('/') === path.join('/'));
+  if (named !== undefined && (Array.isArray(a) || a === undefined) && (Array.isArray(b) || b === undefined) && (Array.isArray(a) || Array.isArray(b))) {
+    const ka = new Map(((a ?? []) as Record<string, unknown>[]).map((e) => [named.id(e), e]));
+    const kb = new Map(((b ?? []) as Record<string, unknown>[]).map((e) => [named.id(e), e]));
+    return [...new Set([...ka.keys(), ...kb.keys()])].filter((k) => canonJson(ka.get(k)) !== canonJson(kb.get(k))).map((k) => `/${path.join('/')}/{${k}}`);
+  }
+  const obj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+  if (obj(a) && obj(b)) return [...new Set([...Object.keys(a), ...Object.keys(b)])].flatMap((k) => wcDiffPaths(a[k], b[k], [...path, k]));
+  return canonJson(a) === canonJson(b) ? [] : [`/${path.join('/')}`];
+}
+
+/** The text of the `section` element named `name` in a config's text, or null when the config holds none. */
+function wcEntryText(text: string, path: string[], id: (e: Record<string, unknown>) => string, name: string): string | null {
+  let arr: unknown = JSON.parse(text);
+  for (const k of path) arr = (arr as Record<string, unknown>)[k];
+  const i = (arr as Record<string, unknown>[]).findIndex((e) => id(e) === name);
+  if (i < 0) return null;
+  const sp = jsonValueSpan(text, [...path, i]);
+  return text.slice(sp.start, sp.end);
+}
+
+/**
+ * Issue #552, CL205–CL208: `--write-config` splices `bones`, `constraints` and `motion.tracks` entry by entry. The
+ * input is the cloth fixture's plain draft (as CL201's) tuned by hand: a single bone `ribbon` (between the plain
+ * back-hair chains `hairback_r` and `hairback_l`) and a chain `tassel_`, a physics constraint on each, an idle
+ * track on `ribbon`, and a `bow` part (the cloth fixture's parts and one neckwear block) moved from `regions` to a
+ * mesh the recipe does not draft, bound to both, whose author removed a segment from it. CL205 (the bar): the written config differs from the input only at
+ * the entries the recipe drafts — the structural diff, by entry name, equals the set the two drafts differ at — the
+ * hand-added entries and `meshes.bow` keep their bytes, two runs write the same bytes, and `rig` then `check` on it
+ * exit 0. CL206 (the mutant): the #537 writer (`clothConfigEdits`'s `whole`, the selftest's only door to it) drops
+ * the hand-added names, and `rig` refuses `CONFIG_NAME_RESOLVES` naming them. CL207: a recipe constraint's
+ * `damping` changed by hand in the written config, re-drafted, is `PROPOSE_WRITE_CONFIG_CONFLICT` naming the
+ * constraint and the field, exit 1, nothing written. CL208 (order): a bone added by hand between two recipe bones of
+ * the written config, and a recipe constraint removed by hand, re-drafted: the bone stays between them, the
+ * constraint is inserted back after its drafted neighbour, and nothing else moves.
+ */
+function runEntrySpliceCases(say: (name: string, ok: boolean, detail: string, why: string) => void, dir: string): void {
+  // The cloth fixture and a bow at the neck (a full:neckwear block, 24x12 px), which the plain draft binds to chest as a region.
+  const parts = join(dir, 'es-parts');
+  const painting = writeProposeFixture(parts, [...CLOTH_PARTS, { name: 'bow', from: 'full:neckwear', x: 108, y: 96, w: 24, h: 12, colour: [180, 40, 60] }], CLOTH_RIG);
+  const P = readPartSet(parts);
+  const plain = propose(P, undefined, null, DEFAULT_GRID_RULE, null);
+  const draft = propose(P, undefined, null, DEFAULT_GRID_RULE, clothRecipe());
+  const handBone = { name: 'ribbon', parent: 'chest', at: [126, 100], tip: [134, 110] };
+  const handChain = { chain: 'tassel_', parent: 'chest', points: [[114, 100], [112, 104]], tip: [111, 108] };
+  const handCons = [
+    { type: 'physics', name: 'ribbon_physics', bone: 'ribbon', rotate: 1, strength: 100, wind: 1, gravity: 4 },
+    { type: 'physics', name: 'tassel_0_physics', bone: 'tassel_0', rotate: 1, strength: 100, wind: 1, gravity: 4 },
+  ];
+  const headTrack = plain.motion.tracks.find((t) => 'bone' in t && t.bone === 'head');
+  const handTrack = { bone: 'ribbon', prop: 'rotate', amp: 3, period: headTrack === undefined ? 0 : headTrack.period, phase: 0.2 };
+  const at = plain.bones.findIndex((b) => 'chain' in b && b.chain === 'hairback_l');
+  const bones: unknown[] = [...plain.bones.slice(0, at), handBone, ...plain.bones.slice(at), handChain];
+  // The bow's mesh as its author left it: bound to the hand-added bones, a neck segment removed by hand.
+  const bowMesh = { grid: 4, r: 2, segments: [['chest', [120, 134], [120, 100]], 'ribbon', 'tassel_'] };
+  const regions = Object.fromEntries(Object.entries(plain.regions).filter(([k]) => k !== 'bow'));
+  const input = join(dir, 'es-config.json');
+  const inputText = `${JSON.stringify({ key: 'fixture', cloth: clothRecipe(), assemble: proposalAssemble(P), bones, meshes: { ...plain.meshes, bow: bowMesh }, regions, motion: { ...plain.motion, tracks: [...plain.motion.tracks, handTrack] }, constraints: handCons, proposed_rig_scale: plain.proposed_rig_scale }, null, 2)}\n`;
+  writeFileSync(input, inputText);
+  const base = ['propose', '--parts', parts, '--source', painting, '--cloth'];
+  const run = (cfg: string, name: string): { r: { status: number; out: string }; at: string; text: string | null } => {
+    const out = join(dir, `es-${name}.json`);
+    const r = runCli([...base, cfg, '--out', join(dir, `es-${name}`), '--write-config', out]);
+    return { r, at: out, text: existsSync(out) ? readFileSync(out, 'utf8') : null };
+  };
+  const one = run(input, 'one');
+  const two = run(input, 'two');
+  const outText = one.text ?? '{}';
+  const inObj = JSON.parse(inputText) as Record<string, unknown>;
+  const outObj = JSON.parse(outText) as Record<string, unknown>;
+  // What the recipe drafts, by the definition: each named entry the two drafts differ at, and each mesh they differ at.
+  const plainObj = JSON.parse(JSON.stringify(plain)) as Record<string, unknown>;
+  const draftObj = JSON.parse(JSON.stringify(draft)) as Record<string, unknown>;
+  const owned = new Set([...wcDiffPaths(plainObj, draftObj)].filter((p) => !p.startsWith('/notes')));
+  const diff = wcDiffPaths(inObj, outObj);
+  const hand: Array<{ path: string[]; name: string }> = [
+    { path: ['bones'], name: 'ribbon' },
+    { path: ['bones'], name: 'tassel_' },
+    { path: ['constraints'], name: 'ribbon_physics' },
+    { path: ['constraints'], name: 'tassel_0_physics' },
+    { path: ['motion', 'tracks'], name: 'ribbon rotate' },
+  ];
+  const idOf = (path: string[]): ((e: Record<string, unknown>) => string) => (WC_ARRAYS.find((s) => s.path.join('.') === path.join('.')) ?? WC_ARRAYS[0]).id;
+  const handRows = hand.map((h) => {
+    const a = wcEntryText(inputText, h.path, idOf(h.path), h.name);
+    const b = one.text === null ? null : wcEntryText(outText, h.path, idOf(h.path), h.name);
+    return { ...h, ok: a !== null && a === b, text: `${h.path.join('.')}["${h.name}"] ${b === null ? 'MISSING' : a === b ? 'byte-equal' : 'MOVED'}` };
+  });
+  const span = (text: string, path: string[]): string | null => {
+    try {
+      const sp = jsonValueSpan(text, path);
+      return text.slice(sp.start, sp.end);
+    } catch {
+      return null;
+    }
+  };
+  const bowKept = span(inputText, ['meshes', 'bow']) !== null && span(inputText, ['meshes', 'bow']) === span(outText, ['meshes', 'bow']);
+  const regionsKept = span(inputText, ['regions']) === span(outText, ['regions']);
+  const outBones = ((outObj.bones as Record<string, unknown>[] | undefined) ?? []).map((b) => String(b.name ?? b.chain));
+  const order = outBones.indexOf('head') < outBones.indexOf('ribbon') && outBones.indexOf('ribbon') === outBones.indexOf('bang_r') - 1;
+  const rigDir = join(dir, 'es-rig');
+  const rig = one.text === null ? { status: -1, out: '' } : runCli(['rig', '--config', one.at, '--parts', parts, '--out', rigDir]);
+  const chk = rig.status !== 0 ? { status: -1, out: '' } : runCli(['check', '--rig', rigDir, '--parts', parts, '--out', join(dir, 'es-check')]);
+  const summary = chk.out.split('\n').find((l) => l.startsWith('check: ')) ?? 'no check line';
+  const sameSet = diff.length === owned.size && diff.every((p) => owned.has(p));
+  say(
+    'CL205_PROPOSE_WRITE_CONFIG_SPLICES_BONES_CONSTRAINTS_AND_TRACKS_BY_ENTRY_AND_KEEPS_THE_HAND_ADDED_ONES',
+    one.r.status === 0 &&
+      two.r.status === 0 &&
+      one.text !== null &&
+      one.text === two.text &&
+      !outText.includes(dir) &&
+      sameSet &&
+      handRows.every((h) => h.ok) &&
+      bowKept &&
+      regionsKept &&
+      order &&
+      rig.status === 0 &&
+      chk.status === 0 &&
+      summary.startsWith('check: PASS'),
+    `propose exit ${one.r.status}/${two.r.status} (two runs ${one.text !== null && one.text === two.text ? 'byte-identical' : 'DIFFER'}, ${outText.length} B from ${inputText.length} B); structural diff ${diff.length} path(s), ${sameSet ? 'equal to' : 'NOT'} the ${owned.size} the two drafts differ at: ${diff.join(' ')}; hand-added: ${handRows.map((h) => h.text).join(', ')}; meshes.bow ${bowKept ? 'byte-equal' : 'MOVED'}, regions ${regionsKept ? 'byte-equal' : 'MOVED'}; ribbon ${order ? 'between head and bang_r' : `at ${outBones.indexOf('ribbon')} of ${outBones.join(' ')}`}; rig exit ${rig.status}, check exit ${chk.status}: "${summary}"`,
+    'issue #552 bar: an unchanged recipe re-drafted over a config tuned by hand writes only the entries the recipe drafts (measured as the entries the drafts with and without it differ at), keeps every hand-added entry and a mesh the recipe does not draft byte for byte, and the written config builds and checks green',
+  );
+
+  // CL206: the mutant, the #537 writer — bones, constraints and motion.tracks whole.
+  const mutantEdits = clothConfigEdits(propose(P, undefined, null, DEFAULT_GRID_RULE, loadClothConfig(input).cloth), plain, inObj, true);
+  const mutantAt = join(dir, 'es-mutant.json');
+  writeFileSync(mutantAt, writtenClothConfig(input, inputText, mutantEdits));
+  const mutantObj = JSON.parse(readFileSync(mutantAt, 'utf8')) as Record<string, unknown>;
+  const missing = hand.filter((h) => wcEntryText(readFileSync(mutantAt, 'utf8'), h.path, idOf(h.path), h.name) === null).map((h) => h.name);
+  const mrig = runCli(['rig', '--config', mutantAt, '--parts', parts, '--out', join(dir, 'es-mutant-rig')]);
+  const resolves = mrig.out.split('\n').filter((l) => l.includes('FAIL  CONFIG_NAME_RESOLVES: ')).map((l) => l.trim());
+  say(
+    'CL206_THE_WHOLE_ARRAY_WRITER_DROPS_THE_HAND_ADDED_NAMES_AND_THE_BUILD_REFUSES_THEM_BY_NAME',
+    Object.keys(mutantObj).length > 0 &&
+      missing.length === hand.length &&
+      mrig.status === 1 &&
+      resolves.some((l) => l.includes('"ribbon"')) &&
+      resolves.some((l) => l.includes('"tassel_"')),
+    `whole replacement: ${missing.length} of ${hand.length} hand-added entries missing (${missing.join(', ')}); rig exit ${mrig.status}: ${resolves.join(' | ') || 'no CONFIG_NAME_RESOLVES line'}`,
+    'issue #552 mutant: a gate nobody has seen fail is not a gate; the #537 writer, kept as a test-only parameter, loses what the author added and the build names each loss',
+  );
+
+  // CL207: a hand edit inside a recipe-owned constraint, re-drafted, is a conflict by name; nothing is written.
+  const physName = 'skirt0a_0_physics';
+  const tuned = JSON.parse(outText) as { constraints: Array<Record<string, unknown>> };
+  const tunedAt = join(dir, 'es-tuned.json');
+  const physIndex = tuned.constraints.findIndex((c) => c.name === physName);
+  const sp = physIndex < 0 ? null : jsonValueSpan(outText, ['constraints', physIndex]);
+  const tunedText = sp === null ? outText : `${outText.slice(0, sp.start)}${outText.slice(sp.start, sp.end).replace('"damping": 0.85', '"damping": 0.6')}${outText.slice(sp.end)}`;
+  writeFileSync(tunedAt, tunedText);
+  const cf = run(tunedAt, 'conflict');
+  const cfLines = cf.r.out.split('\n').filter((l) => l.includes('FAIL  ')).map((l) => l.trim());
+  say(
+    'CL207_A_HAND_EDIT_TO_A_RECIPE_ENTRY_IS_REFUSED_BY_NAME_AND_NOTHING_IS_WRITTEN',
+    tunedText !== outText &&
+      cf.r.status === 1 &&
+      cfLines.length === 1 &&
+      cfLines[0].startsWith(`FAIL  PROPOSE_WRITE_CONFIG_CONFLICT: config.constraints[${physIndex}] "${physName}" — `) &&
+      cfLines[0].includes('damping 0.6') &&
+      cfLines[0].includes('damping 0.85') &&
+      cf.text === null &&
+      !existsSync(join(dir, 'es-conflict', 'proposal.json')),
+    `damping 0.85 -> 0.6 by hand on ${physName}: exit ${cf.r.status}, ${cfLines.join(' | ') || 'no FAIL line'}; config ${cf.text === null ? 'not written' : 'WRITTEN'}, proposal ${existsSync(join(dir, 'es-conflict', 'proposal.json')) ? 'WRITTEN' : 'not written'}`,
+    'issue #552: a re-draft that would drop a hand edit to an entry the recipe owns refuses by the entry and the field instead, before anything is written',
+  );
+
+  // CL208: order — a hand bone between two recipe bones stays there; a recipe constraint removed by hand comes back after its drafted neighbour.
+  const gen2 = JSON.parse(outText) as { bones: Array<Record<string, unknown>>; constraints: Array<Record<string, unknown>> };
+  const b0 = gen2.bones.findIndex((b) => b.chain === 'skirt0_');
+  const c0 = gen2.constraints.findIndex((c) => c.name === physName);
+  let g2 = outText;
+  if (b0 >= 0 && c0 >= 0) {
+    const cs = jsonValueSpan(g2, ['constraints', c0]);
+    let cut = cs.start;
+    while (g2[cut - 1] !== ',') cut--;
+    g2 = `${g2.slice(0, cut - 1)}${g2.slice(cs.end)}`;
+    const bs = jsonValueSpan(g2, ['bones', b0]);
+    const indent = '    ';
+    g2 = `${g2.slice(0, bs.end)},\n${indent}${JSON.stringify({ name: 'ribbon2', parent: 'hip', at: [120, 175] }, null, 2).split('\n').join(`\n${indent}`)}${g2.slice(bs.end)}`;
+  }
+  const g2At = join(dir, 'es-gen2.json');
+  writeFileSync(g2At, g2);
+  const re = run(g2At, 're');
+  const reObj = re.text === null ? { bones: [] as Array<Record<string, unknown>>, constraints: [] as Array<Record<string, unknown>> } : (JSON.parse(re.text) as { bones: Array<Record<string, unknown>>; constraints: Array<Record<string, unknown>> });
+  const reBones = reObj.bones.map((b) => String(b.name ?? b.chain));
+  const reCons = reObj.constraints.map((c) => String(c.name));
+  const draftCons = (draft.constraints ?? []).map((c) => c.name);
+  const neighbour = draftCons[draftCons.indexOf(physName) - 1];
+  const reDiff = re.text === null ? ['not written'] : wcDiffPaths(JSON.parse(g2) as unknown, reObj);
+  const sameAsFirst = re.text !== null && wcDiffPaths(outObj, reObj).join(' ') === '/bones/{ribbon2}';
+  say(
+    'CL208_A_HAND_BONE_BETWEEN_RECIPE_BONES_KEEPS_ITS_PLACE_AND_A_REMOVED_RECIPE_ENTRY_RETURNS_BESIDE_ITS_DRAFTED_NEIGHBOUR',
+    g2 !== outText &&
+      re.r.status === 0 &&
+      reBones[reBones.indexOf('ribbon2') - 1] === 'skirt0_' &&
+      reBones[reBones.indexOf('ribbon2') + 1] === 'skirt0a_' &&
+      reCons[reCons.indexOf(physName) - 1] === neighbour &&
+      reDiff.join(' ') === `/constraints/{${physName}}` &&
+      sameAsFirst &&
+      re.r.out.includes(`constraints["${physName}"] inserted spliced in from the draft`),
+    `exit ${re.r.status}; ribbon2 between ${reBones[reBones.indexOf('ribbon2') - 1]} and ${reBones[reBones.indexOf('ribbon2') + 1]}; ${physName} after ${reCons[reCons.indexOf(physName) - 1]} (drafted neighbour ${neighbour}); diff from its input: ${reDiff.join(' ')}; from the first write: ${re.text === null ? 'none' : wcDiffPaths(outObj, reObj).join(' ')}`,
+    'issue #552: a kept entry keeps its place among the recipe\'s, and an owned entry the input lacks is inserted after the entry that precedes it in the draft',
   );
 }
 
