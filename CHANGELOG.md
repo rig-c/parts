@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.46.0](https://github.com/rig-c/parts/compare/v1.45.0...v1.46.0) (2026-10-20)
+
+
+### Features
+
+* **turn:** a part that rides another part's bone takes its host's depth, and an authored depth that leaves its host is refused ([#535](https://github.com/rig-c/parts/issues/535)) ([#545](https://github.com/rig-c/parts/issues/545)) ([ae446a2](https://github.com/rig-c/parts/commit/ae446a2759090d65db57ceb07515e61f17f8b0d1))
+
 ## [1.45.0](https://github.com/rig-c/parts/compare/v1.44.0...v1.45.0) (2026-10-20)
 
 
