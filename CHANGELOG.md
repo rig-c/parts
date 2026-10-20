@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.44.0](https://github.com/rig-c/parts/compare/v1.43.0...v1.44.0) (2026-10-20)
+
+
+### Features
+
+* **retune:** splice constraints and the idle onto a gated rig, every other byte held ([#530](https://github.com/rig-c/parts/issues/530)) ([e24fa64](https://github.com/rig-c/parts/commit/e24fa648bfd139b38f16730d8214b5d6c0ec3d0e)), closes [#527](https://github.com/rig-c/parts/issues/527)
+
 ## [1.43.0](https://github.com/rig-c/parts/compare/v1.42.0...v1.43.0) (2026-10-20)
 
 
