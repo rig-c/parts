@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.43.0](https://github.com/rig-c/parts/compare/v1.42.0...v1.43.0) (2026-10-20)
+
+
+### Features
+
+* **remesh:** --delta replays rig-c/review's mesh edit over one part's mesh ([#528](https://github.com/rig-c/parts/issues/528)) ([773cea8](https://github.com/rig-c/parts/commit/773cea8036018b2428fe9a76e878ad4802c4a65e)), closes [#526](https://github.com/rig-c/parts/issues/526)
+
 ## [1.42.0](https://github.com/rig-c/parts/compare/v1.41.1...v1.42.0) (2026-10-19)
 
 
