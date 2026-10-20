@@ -429,7 +429,7 @@ usage:
   rig-parts check --rig <dir> --out <dir> [--parts <dir>] [--source <painting.png>]
                     [--page-edges pot|free] [--pack-shape rect|polygon]
                     [--requirements <file.json>] [--seam-pairs] [--keep-stills]
-                    [--set <name> | --all-sets]
+                    [--set <name> | --all-sets] [--environment <schedule.json>]
       Build, gate, render and measure a rig through rig-c's CLI (the rigc at
       node_modules/.bin/rigc, or on PATH). --rig holds rig.json and motion.json:
       a rig spec, which rigc build compiles, not a compiled skeleton.json.
@@ -547,6 +547,29 @@ usage:
       follow no frame of which reaches its least drive) is
       CHECK_REQUIREMENT_MEASURABLE, and the run is not PASS. Without the flag
       nothing is read, written or printed for it.
+      --environment <schedule.json> takes the readings in the world a person
+      watched: a rigc-environment/1 schedule ({ "spec": "rigc-environment/1",
+      "steps": [{ "t": <seconds>, "wind"?: [x, y], "gravity"?: [x, y] }, ...] },
+      x right, y down — what rigc render --environment reads, and what the
+      review editor exports). It is read once, by rig-c's own reader, before
+      anything is built; a malformed one, or a path with nothing at it, is
+      refused, CHECK_ENVIRONMENT, rigc's sentence verbatim, and --out is not
+      written. Every render a bar or a warning reads with the physics on is
+      posed under it — the idle (TIP_OVER_ROOT, STILL_REGIONS_DARK,
+      TEXTURE_STRETCH, CLOTH_SETTLES), the physics-on half of
+      ANIMATIONS_DO_NOT_FOLD, the parts BREATH_VISIBLE renders alone,
+      SEAM_OVER_MOTION and the --requirements renders; the physics-off renders
+      (the loop's, the fold bar's other half, STRESS_OFF_CHAIN,
+      SEAM_OVER_RANGE), the setup-pose stills and build's loop take none. What
+      rigc render refuses of the schedule on this rig (no physics constraint,
+      a half no constraint answers, a step after the last frame) is
+      CHECK_ENVIRONMENT with rigc's line. The world before the first step is
+      the runtime's, wind [1, 0] and gravity [0, 1]: a schedule stating that
+      reads what a run without the flag reads, and wind [0, 0] is a calm, not
+      the default (AUTHORING §6, The world the readings are taken in). One
+      environment: line names the path, the step count and the sha256's first
+      16 hex; check.json's environment holds path (as given), sha256 and
+      steps. Without the flag no key and no render argument moves.
 
   rig-parts loop --frames <dir> --out <file.png | file.gif> [--palette]
       Encode a frame set rigc render wrote (its --out directory, or the set
@@ -663,6 +686,7 @@ usage:
                     [--pack-shape rect|polygon] [--loop] [--requirements <file.json>]
                     [--idle-keys ctl|direct] [--lead-in <periods>] [--seam-pairs] [--keep-stills]
                     [--alt <name>=<source>:<full>[:<head>]] [--set <name> | --all-sets]
+                    [--environment <schedule.json>]
       assemble, then rig, then check, in one process, each stage's own lines
       printed under [assemble], [rig] and [check]; the first stage that refuses
       stops the build with its own FAIL lines. The config must already carry
@@ -685,6 +709,9 @@ usage:
       and check's artifact, take them). --requirements is forwarded to check
       (as for check); the file's own shape is read before assemble runs, and
       its names resolve against the rig in the check, before it builds.
+      --environment is forwarded to check (as for check); the schedule is read
+      by rig-c's reader before assemble runs, so a malformed one is refused,
+      CHECK_ENVIRONMENT, under [assemble] before anything is assembled.
       --seam-pairs and --keep-stills are forwarded to check (as for check:
       the seam split by pair on a pass too, under check/seam/; the setup-pose
       still under check/setup_still/). check's --rig and --parts are refused:
@@ -880,13 +907,13 @@ const TAKES = {
   rig: { valued: ['--config', '--parts', '--out', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
   propose: { valued: ['--parts', '--source', '--out', '--from-config', '--compare', '--full', '--head', '--canvas', '--keypoints', '--person', '--wrist-snap', '--grid-rule', '--cloth', '--write-config'], switches: ['--head-box', '--no-back-hair'] },
   compare: { valued: ['--left', '--right', '--map'], switches: [] },
-  check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--requirements', '--set'], switches: ['--seam-pairs', '--keep-stills', '--all-sets'] },
+  check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--requirements', '--set', '--environment'], switches: ['--seam-pairs', '--keep-stills', '--all-sets'] },
   loop: { valued: ['--frames', '--out'], switches: ['--palette'] },
   assemble: { valued: ['--source', '--full', '--head', '--config', '--out', '--seam', '--project', '--alt'], switches: ['--propose-plan'] },
   'comfy seethrough': { valued: ['--image', '--out', '--resolution', '--steps', '--seed', '--prefix', '--host', '--wait', '--timeout', '--poll'], switches: ['--offload', '--lama', '--nf4'] },
   'comfy paint': { valued: ['--config', '--out', '--seeds', '--seed0', '--host', '--wait', '--timeout', '--poll'], switches: [] },
   inputs: { valued: ['--source', '--config', '--out'], switches: [] },
-  build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets'] },
+  build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set', '--environment'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets'] },
   compose: { valued: ['--scene', '--out', '--requirements', '--accept'], switches: [] },
   'mesh-draft': { valued: ['--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: ['--more-triangles'] },
   remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--delta', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
@@ -1157,7 +1184,7 @@ function cmdCheck(args: string[]): number {
   try {
     const bin = findRigc(import.meta.dir, process.env.PATH ?? '');
     const r = checkStage(
-      { rig, parts: f.get('--parts'), source: f.get('--source'), out, pageEdges: edges, packShape: shape, requirements: f.get('--requirements'), seamPairs: seamPairs === 1, keepStills: keepStills === 1, ...(f.has('--set') ? { set: f.get('--set') as string } : {}), allSets: allSets === 1 },
+      { rig, parts: f.get('--parts'), source: f.get('--source'), out, pageEdges: edges, packShape: shape, requirements: f.get('--requirements'), seamPairs: seamPairs === 1, keepStills: keepStills === 1, ...(f.has('--set') ? { set: f.get('--set') as string } : {}), allSets: allSets === 1, ...(f.has('--environment') ? { environment: f.get('--environment') as string } : {}) },
       rigcRunner(bin),
       bin,
       console.log,
@@ -1658,7 +1685,7 @@ function cmdBuild(args: string[]): number {
   const scratch = mkdtempSync(join(tmpdir(), 'rig-parts-build-'));
   try {
     const r = build(
-      { config, source, full, head, out, seam: seam as SeamRule, project: project as ProjectRule, loop, pageEdges: edges, packShape: shape, ...(flags.has('--requirements') ? { requirements: flags.get('--requirements') as string } : {}), idleKeys: keys, ...(leadText === undefined ? {} : { leadIn: Number(leadText) }), seamPairs: on.has('--seam-pairs'), keepStills: on.has('--keep-stills'), ...(alts.length === 0 ? {} : { alts }), ...(flags.has('--set') ? { set: flags.get('--set') as string } : {}), allSets: on.has('--all-sets') },
+      { config, source, full, head, out, seam: seam as SeamRule, project: project as ProjectRule, loop, pageEdges: edges, packShape: shape, ...(flags.has('--requirements') ? { requirements: flags.get('--requirements') as string } : {}), idleKeys: keys, ...(leadText === undefined ? {} : { leadIn: Number(leadText) }), seamPairs: on.has('--seam-pairs'), keepStills: on.has('--keep-stills'), ...(alts.length === 0 ? {} : { alts }), ...(flags.has('--set') ? { set: flags.get('--set') as string } : {}), allSets: on.has('--all-sets'), ...(flags.has('--environment') ? { environment: flags.get('--environment') as string } : {}) },
       { rig: rigcRunner(bin), check: rigcRunner(bin), checkBin: bin, scratch: join(scratch, 'rig-gate') },
       console.log,
     );

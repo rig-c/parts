@@ -77,6 +77,7 @@
  * the last idle frame is refused unless it sits at t = duration (within
  * `TIME_SLACK`, issue #244).
  */
+import { createHash } from 'node:crypto';
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig } from './assemble.ts';
@@ -158,6 +159,7 @@ import {
 } from './requirements.ts';
 import { RIG_BONE_INHERIT, type RigSpec as RigcRigSpec } from 'rig-c/src/rig.ts';
 import { expandStops } from 'rig-c/src/stop.ts';
+import { ENVIRONMENT_SPEC, EnvironmentError, readEnvironmentSchedule } from 'rig-c/src/environment.ts';
 import { alphaComposite } from './raster/composite.ts';
 import { readPng, writePng } from './raster/png.ts';
 import { newFloatImage, newRaster, type Raster } from './raster/types.ts';
@@ -1814,6 +1816,12 @@ export interface CheckFigures {
   rigc_entry: RigcEntryRecord;
   /** How the artifact's page was packed: the `--page-edges` and `--pack-shape` rigc was handed, which its pack line was read to agree with ({@link packEdgeProblems}). Provenance, not a bar. */
   pack_mode: { page_edges: PageEdges; pack_shape: PackShape };
+  /**
+   * Written only under `--environment` (issue #538): the `rigc-environment/1` schedule every measured render was posed
+   * under — the path as the command line gave it, the sha256 of the bytes read, and how many steps rigc's reader read
+   * off them ({@link readCheckEnvironment}). Provenance, not a bar; without the flag no key is written.
+   */
+  environment?: CheckEnvironment;
   /** Null when the rig has no idle (issue #77); `skipped.loop` then says why. */
   loop_max_diff: number | null;
   /**
@@ -3577,6 +3585,61 @@ export function rigcFailed(what: string, call: RigcCall, lines: readonly string[
   return quoted.map((l) => ({ code: 'CHECK_RIGC_GREEN', object, detail: `exit ${call.status}: ${l}${ran}` }));
 }
 
+// ---------------------------------------------------------------------------
+// the world the readings are taken in (issue #538)
+// ---------------------------------------------------------------------------
+
+/** The refusal of a schedule `check --environment` names: rigc's reader's sentence, or rigc render's, verbatim. */
+export const ENVIRONMENT_RULE = 'CHECK_ENVIRONMENT';
+
+/** What `check.json` records of the schedule under `--environment`: provenance, not a bar. */
+export interface CheckEnvironment {
+  /** The path as the command line gave it — never resolved, so the record holds no directory the caller did not type. */
+  path: string;
+  /** The sha256 of the file's bytes as read, the bytes rigc's reader read. */
+  sha256: string;
+  /** How many steps rigc's reader read off it. */
+  steps: number;
+}
+
+function environmentRefused(given: string, sentence: string): PartsError {
+  return new PartsError([{ code: ENVIRONMENT_RULE, object: given, detail: sentence }]);
+}
+
+/**
+ * `--environment <file>` read once, before anything is built (issue #538): the file's bytes hashed and handed to
+ * rig-c's own reader, `readEnvironmentSchedule` (`rig-c/src/environment.ts`), which refuses every malformed schedule
+ * — a `spec` other than {@link ENVIRONMENT_SPEC}, a key it does not read, no step, a `t` that is not finite, at or
+ * above 0 and after the step before, a `wind` or `gravity` that is not a pair of finite numbers, a step that changes
+ * nothing — by entry, field, the value found and the value required. Nothing here reads the schedule's meaning: its
+ * sentence is carried as {@link ENVIRONMENT_RULE}'s detail, verbatim, and a path with no file at it is worded as
+ * `rigc render --environment` words it. What a well-formed schedule cannot do to this rig — move a rig with no
+ * physics constraint, change a half no constraint answers, fall after the last frame drawn — is rigc render's to
+ * refuse, and {@link runCheck} carries that sentence the same way.
+ */
+export function readCheckEnvironment(given: string): CheckEnvironment {
+  const path = resolve(given);
+  if (!existsSync(path) || !statSync(path).isFile()) throw environmentRefused(given, `--environment ${given}: nothing at ${path} — it takes a schedule file { "spec": "${ENVIRONMENT_SPEC}", "steps": [...] }`);
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(path);
+  } catch (err) {
+    throw environmentRefused(given, `--environment ${given}: not readable — ${(err as Error).message}`);
+  }
+  try {
+    const steps = readEnvironmentSchedule(bytes.toString('utf8'), given);
+    return { path: given, sha256: createHash('sha256').update(bytes).digest('hex'), steps: steps.length };
+  } catch (err) {
+    if (err instanceof EnvironmentError) throw environmentRefused(given, err.message);
+    throw err;
+  }
+}
+
+/** The line `check` prints under `--environment`, beside rigc's identity: which schedule, by path and digest, and which renders it poses. */
+export function environmentLine(env: CheckEnvironment): string {
+  return `environment: ${env.path}, ${ENVIRONMENT_SPEC}, ${env.steps} step(s), sha256 ${env.sha256.slice(0, 16)} — every render a bar or a warning reads with the physics on is posed under it; the physics-off, setup-pose and loop renders are not`;
+}
+
 /**
  * Run the whole check. Refuses (throws a PartsError) when the inputs are
  * unreadable or a rigc step that everything after it depends on is red — the
@@ -3603,23 +3666,28 @@ export function rigcFailed(what: string, call: RigcCall, lines: readonly string[
  * MEASURABLE is a problem. Without it nothing here reads, writes or prints
  * anything it did not before.
  */
-export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false): CheckReport {
+export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string): CheckReport {
   let inp: CheckInputs;
   let reqFile: RequirementsFile | null = null;
   let seams: Map<string, SeamPair[]> | null = null;
-  if (requirements === undefined) inp = readCheckInputs(rigDir, partsHome, source, set, allSets);
-  else {
-    // Both readers collect every problem; one refusal names both sets.
-    const refused: Problem[] = [];
-    const take = <T>(read: () => T): T | null => {
-      try {
-        return read();
-      } catch (err) {
-        if (!(err instanceof PartsError)) throw err;
-        refused.push(...err.problems);
-        return null;
-      }
-    };
+  // Every reader collects every problem; one refusal names every set.
+  const refused: Problem[] = [];
+  const take = <T>(read: () => T): T | null => {
+    try {
+      return read();
+    } catch (err) {
+      if (!(err instanceof PartsError)) throw err;
+      refused.push(...err.problems);
+      return null;
+    }
+  };
+  // Issue #538: the schedule is read once, first, by rigc's own reader; refused, nothing is built or written.
+  const env = environment === undefined ? null : take(() => readCheckEnvironment(environment));
+  if (requirements === undefined) {
+    const got = take(() => readCheckInputs(rigDir, partsHome, source, set, allSets));
+    refuseIfAny(refused);
+    inp = got as CheckInputs;
+  } else {
     const got = take(() => readCheckInputs(rigDir, partsHome, source, set, allSets));
     reqFile = take(() => readRequirements(requirements));
     refuseIfAny(refused);
@@ -3638,7 +3706,29 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     }
     refuseIfAny(refused);
   }
+  // Issue #538: a motion with no animation gives check no render a schedule could pose — every frame it reads would be
+  // the setup still's — so the flag is refused rather than recorded over readings it did not move.
+  if (env !== null && !(isRecord(inp.motion.animations) && Object.keys(inp.motion.animations).length > 0)) {
+    throw environmentRefused(env.path, `${inp.motionPath} holds no animation, so check renders no frame a schedule could pose — the setup-pose stills take none; rigc render reads a schedule only over an animation's frames`);
+  }
   const rigcEntry = readRigcEntry(requireRigcVersion(rigc));
+  /**
+   * Issue #538: a render whose frames a bar or a warning reads, with the physics on — posed under the schedule when
+   * `--environment` names one (the path as given; rigc reads the file the same way). A refusal rigc render prints of
+   * the schedule against this rig (its `--environment <path>:` line) is carried as {@link ENVIRONMENT_RULE}, verbatim;
+   * any other failure is the call site's to name. Without the flag it is `rigc`, and no argument moves.
+   */
+  const measured: RigcRunner =
+    env === null
+      ? rigc
+      : (args) => {
+          const call = rigc([...args, '--environment', env.path]);
+          if (call.status !== 0) {
+            const said = call.out.split('\n').map((l) => l.trim()).find((l) => l.startsWith(`rigc: --environment ${env.path}: `));
+            if (said !== undefined) throw environmentRefused(env.path, `${said.slice('rigc: '.length)}${rigcRanClause(call)}`);
+          }
+          return call;
+        };
   const out = resolve(outDir);
   mkdirSync(out, { recursive: true });
   const buildDir = join(out, 'build');
@@ -3709,7 +3799,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const levelProblems: Problem[] = [];
   try {
     if (inp.idleDuration !== null) {
-      const render = rigc(['render', '--candidate', buildDir, '--animation', 'idle', '--fps', String(IDLE_FPS), '--max', String(IDLE_MAX_PX), '--geometry', '--out', idleDir]);
+      const render = measured(['render', '--candidate', buildDir, '--animation', 'idle', '--fps', String(IDLE_FPS), '--max', String(IDLE_MAX_PX), '--geometry', '--out', idleDir]);
       if (render.status !== 0) refuseIfAny(rigcFailed('render --animation idle --geometry', render, render.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
       idle = readFrameSet(idleDir);
       const last = idle.frames[idle.frames.length - 1];
@@ -3784,7 +3874,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         // Issue #348: with a foot to read, the keyed render writes each animation's geometry as well.
         const geometry = feet.length > 0 ? ['--geometry'] : [];
         if (stripped === null) {
-          const fr = rigc(['render', '--candidate', buildDir, '--folds', ...geometry, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', foldDir]);
+          const fr = measured(['render', '--candidate', buildDir, '--folds', ...geometry, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', foldDir]);
           if (fr.status !== 0) refuseIfAny(rigcFailed(`render --folds${geometry.map((g) => ` ${g}`).join('')} --fps ${fps}`, fr, fr.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
           const readings = filterFolds(readFoldSets(foldDir, animationNames, fps, fr.out));
           folds = foldsLine(animationNames, fps, 0, readings, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readings, inp.rig, []);
@@ -3800,8 +3890,10 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         } else {
           const onDir = join(foldDir, 'on');
           const offDir = join(foldDir, 'off');
-          const frOn = rigc(['render', '--candidate', buildDir, '--folds', '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', onDir]);
+          const frOn = measured(['render', '--candidate', buildDir, '--folds', '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', onDir]);
           if (frOn.status !== 0) refuseIfAny(rigcFailed(`render --folds --fps ${fps}`, frOn, frOn.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
+          // The physics-off half takes no schedule (issue #538): its candidate declares no physics constraint, so no
+          // world moves it, and rigc render refuses a schedule on it by name.
           const frOff = rigc(['render', '--candidate', keyedBuild('the animations with their physics constraint(s) left out'), '--folds', ...geometry, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', offDir]);
           if (frOff.status !== 0) refuseIfAny(rigcFailed(`render --folds${geometry.map((g) => ` ${g}`).join('')} --fps ${fps} (physics constraint(s) left out)`, frOff, frOff.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
           const readingsOn = filterFolds(readFoldSets(onDir, animationNames, fps, frOn.out));
@@ -3828,7 +3920,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   // 3b. the parts a judgement reads alone: each rendered by its own slots, on the whole rig's grid
   const isolated = (label: string, ps: readonly PartRecord[]): FrameSet => {
     const dir = join(isoDir, label);
-    const r = rigc(['render', '--candidate', buildDir, '--animation', 'idle', '--fps', String(IDLE_FPS), '--max', String(IDLE_MAX_PX), '--slot', ps.map((p) => p.name).join(','), '--out', dir]);
+    const r = measured(['render', '--candidate', buildDir, '--animation', 'idle', '--fps', String(IDLE_FPS), '--max', String(IDLE_MAX_PX), '--slot', ps.map((p) => p.name).join(','), '--out', dir]);
     if (r.status !== 0) refuseIfAny(rigcFailed(`render --animation idle --slot ${ps.map((p) => p.name).join(',')}`, r, r.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
     return readFrameSet(dir);
   };
@@ -3853,7 +3945,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     if (b.status !== 0) refuseIfAny(rigcFailed(`${packedBuildLabel(mode)} (BREATH_VISIBLE's copy, the idle beside it with its breath tracks held at rest)`, b, buildGateLines(b.out)));
     const slots = ps.map((p) => p.name).join(',');
     const render = (animation: string, label: string): FrameSet => {
-      const r = rigc(['render', '--candidate', join(dir, 'build'), '--animation', animation, '--fps', String(IDLE_FPS), '--max', String(IDLE_MAX_PX), '--slot', slots, '--out', join(dir, label)]);
+      const r = measured(['render', '--candidate', join(dir, 'build'), '--animation', animation, '--fps', String(IDLE_FPS), '--max', String(IDLE_MAX_PX), '--slot', slots, '--out', join(dir, label)]);
       if (r.status !== 0) refuseIfAny(rigcFailed(`render --animation ${animation} --slot ${slots} (BREATH_VISIBLE's copy)`, r, r.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
       return readFrameSet(join(dir, label));
     };
@@ -4003,7 +4095,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       rmSync(seamMotionDir, { recursive: true, force: true });
       try {
         const list = read.map((p) => `${p.a}:${p.b}`).join(',');
-        const r = rigc(['render', '--candidate', buildDir, '--seam', list, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', seamMotionDir]);
+        const r = measured(['render', '--candidate', buildDir, '--seam', list, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', seamMotionDir]);
         if (r.status !== 0) refuseIfAny(rigcFailed(`render --seam ${list} --fps ${fps}`, r, r.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
         motionSeam = motionSeamLine(pairs, animationNames, fps, readMotionSeams(seamMotionDir, animationNames, fps, read));
       } finally {
@@ -4183,7 +4275,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
 
   // 5. the scene's declared requirements (issue #93), only under --requirements
   const reqProblems: Problem[] = [];
-  const reqBlock = reqFile === null ? null : measureRequirements(inp, reqFile, buildDir, out, rigc, reqProblems, seams ?? new Map());
+  const reqBlock = reqFile === null ? null : measureRequirements(inp, reqFile, buildDir, out, rigc, reqProblems, seams ?? new Map(), measured);
 
   const skipped: { loop?: string; seam?: string } = {};
   if (inp.noIdle !== null) skipped.loop = inp.noIdle;
@@ -4192,6 +4284,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     gate_spine_html_green: htmlGreen,
     rigc_entry: rigcEntry,
     pack_mode: { page_edges: mode.pageEdges, pack_shape: mode.packShape },
+    ...(env === null ? {} : { environment: env }),
     loop_max_diff: loop === null ? null : loop.max,
     ...(loopPhysics === null ? {} : { loop_physics: loopPhysics }),
     seam_mean: seam === null ? null : round3(seam.mean),
@@ -4329,7 +4422,7 @@ const REQUIREMENTS_SCRATCH = '_requirements';
  * `CHECK_RIGC_GREEN`, quoting rigc. Lines go into the returned block; each
  * FAIL and NOT MEASURABLE into `problems`.
  */
-export function measureRequirements(inp: CheckInputs, file: RequirementsFile, buildDir: string, out: string, rigc: RigcRunner, problems: Problem[], seams: ReadonlyMap<string, readonly SeamPair[]> = new Map()): RequirementsBlock {
+export function measureRequirements(inp: CheckInputs, file: RequirementsFile, buildDir: string, out: string, rigc: RigcRunner, problems: Problem[], seams: ReadonlyMap<string, readonly SeamPair[]> = new Map(), render: RigcRunner = rigc): RequirementsBlock {
   const reqDir = join(out, REQUIREMENTS_DIR);
   const scratch = join(out, REQUIREMENTS_SCRATCH);
   for (const d of [reqDir, scratch]) rmSync(d, { recursive: true, force: true });
@@ -4350,7 +4443,7 @@ export function measureRequirements(inp: CheckInputs, file: RequirementsFile, bu
     return b.dir;
   };
   const posesOf = (candidate: string, animation: string, dir: string, label: string): { poses: Poses; geo: IdleGeometry; path: string } => {
-    const r = rigc(['render', '--candidate', candidate, '--animation', animation, '--fps', String(file.fps), '--max', String(IDLE_MAX_PX), '--geometry', '--out', dir]);
+    const r = render(['render', '--candidate', candidate, '--animation', animation, '--fps', String(file.fps), '--max', String(IDLE_MAX_PX), '--geometry', '--out', dir]);
     if (r.status !== 0) refuseIfAny(rigcFailed(`render --animation ${animation} --geometry (${label})`, r, r.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
     const set = readFrameSet(dir);
     if (set.written !== set.sampled || set.stride !== 1) {
