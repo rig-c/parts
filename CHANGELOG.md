@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.53.0](https://github.com/rig-c/parts/compare/v1.52.0...v1.53.0) (2026-10-20)
+
+
+### Features
+
+* **check:** the fold refusal names the bones the worst frame's folded triangles hang on ([#567](https://github.com/rig-c/parts/issues/567)) ([#589](https://github.com/rig-c/parts/issues/589)) ([cd2f0ec](https://github.com/rig-c/parts/commit/cd2f0ecd5962971846f4cbb608377c4b7a8b4651))
+* **limbs:** cap_shape "ball" puts the disc on both sides of the joint line, its lower half written only where the lower layer is transparent ([#579](https://github.com/rig-c/parts/issues/579)) ([#597](https://github.com/rig-c/parts/issues/597)) ([5811bd4](https://github.com/rig-c/parts/commit/5811bd466a0877c12935e1e3e7ea01acb61996f4))
+* **propose:** propose --cloth names a keyed sibling the recipe leaves alone under its parent whose amplitude now fails CHAIN_LAG, and changes no amplitude ([#572](https://github.com/rig-c/parts/issues/572)) ([#596](https://github.com/rig-c/parts/issues/596)) ([e965e9f](https://github.com/rig-c/parts/commit/e965e9fff07db9475d3eccdef35e56ddce945029))
+* **propose:** with --keypoints, a figure of one material drafts its trunk, arms and legs from the one layer that holds their joints ([#577](https://github.com/rig-c/parts/issues/577)) ([#601](https://github.com/rig-c/parts/issues/601)) ([60dc2b7](https://github.com/rig-c/parts/commit/60dc2b755280c1f4ee142e8c15ec005c502a54d2))
+
+
+### Bug Fixes
+
+* **check:** CHECK_CHAIN_LAG prints the raw phases, says the step is folded modulo half a cycle, and gives the child phases that pass ([#580](https://github.com/rig-c/parts/issues/580)) ([#595](https://github.com/rig-c/parts/issues/595)) ([2111904](https://github.com/rig-c/parts/commit/2111904d52be9cbb23a567beb9d8a7c105438dde))
+* **docs:** ANIMATIONS_DO_NOT_FOLD is judged with physics on and off since [#363](https://github.com/rig-c/parts/issues/363) — AUTHORING's stale example and sentence are corrected and held to the printed line ([#568](https://github.com/rig-c/parts/issues/568)) ([#594](https://github.com/rig-c/parts/issues/594)) ([3aec368](https://github.com/rig-c/parts/commit/3aec368783fc3fbde64fa02c9dcdc37a2be2240c))
+* **docs:** AUTHORING has a recipe for planted feet on a parts figure, and says which bones a contour bridge's vertices take ([#570](https://github.com/rig-c/parts/issues/570)) ([#592](https://github.com/rig-c/parts/issues/592)) ([98773d6](https://github.com/rig-c/parts/commit/98773d676a1e22b9873dc80214932e600a177887))
+
 ## [1.52.0](https://github.com/rig-c/parts/compare/v1.51.0...v1.52.0) (2026-10-20)
 
 
