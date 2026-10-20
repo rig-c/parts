@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.47.0](https://github.com/rig-c/parts/compare/v1.46.0...v1.47.0) (2026-10-20)
+
+
+### Features
+
+* **propose:** --cloth --write-config writes the drafted trees into the input config's own text, every other byte held ([#537](https://github.com/rig-c/parts/issues/537)) ([#547](https://github.com/rig-c/parts/issues/547)) ([d5f2518](https://github.com/rig-c/parts/commit/d5f2518f0f7dca520bb7115876e0e3d344609cc5))
+
 ## [1.46.0](https://github.com/rig-c/parts/compare/v1.45.0...v1.46.0) (2026-10-20)
 
 
