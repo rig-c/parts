@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.49.1](https://github.com/rig-c/parts/compare/v1.49.0...v1.49.1) (2026-10-20)
+
+
+### Bug Fixes
+
+* **propose:** --write-config splices bones, constraints and tracks entry by entry, keeps hand-added ones, refuses a conflict by name ([#552](https://github.com/rig-c/parts/issues/552)) ([#558](https://github.com/rig-c/parts/issues/558)) ([a279e33](https://github.com/rig-c/parts/commit/a279e33029ebc4e0da7850df9e2bb35f53a50be6))
+
 ## [1.49.0](https://github.com/rig-c/parts/compare/v1.48.0...v1.49.0) (2026-10-20)
 
 
