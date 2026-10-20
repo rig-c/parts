@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.50.0](https://github.com/rig-c/parts/compare/v1.49.2...v1.50.0) (2026-10-20)
+
+
+### Features
+
+* **build:** the requirements file a build needed is declared in the config and recorded in check.json, so a rebuild finds it ([#556](https://github.com/rig-c/parts/issues/556)) ([#574](https://github.com/rig-c/parts/issues/574)) ([62f70ea](https://github.com/rig-c/parts/commit/62f70eabc1bdb225f7b5c642138e869d1f3cf2a7))
+
 ## [1.49.2](https://github.com/rig-c/parts/compare/v1.49.1...v1.49.2) (2026-10-20)
 
 
