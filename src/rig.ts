@@ -766,6 +766,16 @@ export type RigCommand = 'rig' | 'build';
 /** The `why` of the `invariants.idleDrivesMeshes` that `idleKeys: 'direct'` declares. */
 export const IDLE_DRIVES_MESHES_WHY = 'painting rig: the idle is meant to deform the meshes it keys (rig-parts rig --idle-keys direct)';
 
+/**
+ * The bones a mesh attachment binds: the sorted set of bone names its weights name (issue #536). Every
+ * `mesh_report.json` row's `bones` is this reading of the attachment the written `rig.json` holds — after the turn's
+ * twins and the stops' drawn links have taken their bones' places — so the row names what the emitted model binds in
+ * every mode; `remesh --delta`'s row (`deltaRow`, `src/remesh.ts`) takes the same function.
+ */
+export function meshBoundBones(att: Pick<MeshAttachment, 'weights'>): string[] {
+  return [...new Set(att.weights.flatMap((w) => w.map((e) => e.bone)))].sort();
+}
+
 /** One row of `mesh_report.json`: a lattice mesh's row is as it always was; a contour mesh's says so. */
 export type MeshReport = LatticeMeshReport | ContourMeshReport | AutoMeshReport | InfluenceMeshReport;
 
@@ -2544,6 +2554,12 @@ export function buildRig(
   // Only when the config has `turn`: every other build adds nothing here, so no byte moves.
   if (cfg.turn !== undefined) refuseIfAny(turnRiderProblems(cfg.turn, cfg, parts.parts));
   const turned = cfg.turn === undefined ? null : applyTurn(cfg.turn, parts.parts.map((p) => p.name), bones, slots, skin, cfg.constraints ?? []);
+  // issue #536: every row names the bones the emitted attachment binds, read once the turn and the stops have
+  // rebound the weights; a rig with neither rebinds nothing, so this reads back the names each row already holds.
+  for (const row of meshReport) {
+    const att = skin[row.part]?.[row.part];
+    if (att !== undefined && 'type' in att) row.bones = meshBoundBones(att);
+  }
 
   const name = `${cfg.key}_painting`;
   const rig: RigSpec = {
