@@ -20,7 +20,9 @@
 # dispatch with the `tag` input (`gh workflow run release.yml -f tag=vX.Y.Z`),
 # which runs the same gate and the same publish steps in this same file, so the
 # trusted publisher and provenance are unchanged (RELEASING.md, "Republishing a
-# cut whose publish failed").
+# cut whose publish failed"). A tag below the registry's latest is refused
+# (RELEASE_TAG_BELOW_LATEST): npm will not move latest back to it implicitly,
+# and a dist-tag variant of the dispatch is a follow-up, never a silent attempt.
 #
 # The dispatch takes exactly one of two inputs, both optional, because GitHub
 # refuses a dispatch that omits a required input and an omitted string input
@@ -47,7 +49,9 @@ on:
   #     a tag or a GitHub release; it refuses a tag not of the form vX.Y.Z
   #     (RELEASE_TAG_FORM), a tag with no GitHub release
   #     (RELEASE_TAG_UNRELEASED) and a version the registry already serves
-  #     under @rig-c/parts (RELEASE_ALREADY_PUBLISHED).
+  #     under @rig-c/parts (RELEASE_ALREADY_PUBLISHED), and a version below
+  #     the registry's latest (RELEASE_TAG_BELOW_LATEST): npm refuses to put
+  #     latest on it implicitly, so it goes out under a dist-tag or not at all.
   workflow_dispatch:
     inputs:
       tag:
@@ -124,6 +128,13 @@ jobs:
           if ! gh release view "$INPUT_TAG" --repo "$REPO" >/dev/null 2>&1; then echo "::error::RELEASE_TAG_UNRELEASED: $INPUT_TAG has no GitHub release in $REPO; only a tag release-please cut is published"; exit 1; fi
           version="${INPUT_TAG#v}"
           if served="$(npm view "@rig-c/parts@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves @rig-c/parts@$version; the aliases publish after it, so a version up under the package name is not dispatched again (RELEASING.md)"; exit 1; fi
+          # Semver order with a prerelease below its release, in node rather than `sort -V`, which sorts 1.0.0-rc.1 after 1.0.0.
+          if latest="$(npm view "@rig-c/parts" version 2>/dev/null)" && [ -n "$latest" ] && [ "$(VERSION="$version" LATEST="$latest" node -e '
+            const parse = (v) => { const [core, pre] = v.split("-", 2); return { core: core.split(".").map(Number), pre: pre === undefined ? null : pre.split(".") }; };
+            const ids = (a, b) => { for (let i = 0; i < Math.max(a.length, b.length); i++) { if (a[i] === undefined) return -1; if (b[i] === undefined) return 1; const na = /^[0-9]+$/.test(a[i]), nb = /^[0-9]+$/.test(b[i]); if (na && nb && Number(a[i]) !== Number(b[i])) return Number(a[i]) - Number(b[i]); if (na !== nb) return na ? -1 : 1; if (!na && a[i] !== b[i]) return a[i] < b[i] ? -1 : 1; } return 0; };
+            const cmp = (x, y) => { const a = parse(x), b = parse(y); for (let i = 0; i < 3; i++) if (a.core[i] !== b.core[i]) return a.core[i] - b.core[i]; if (a.pre === null || b.pre === null) return a.pre === b.pre ? 0 : a.pre === null ? 1 : -1; return ids(a.pre, b.pre); };
+            process.stdout.write(cmp(process.env.VERSION, process.env.LATEST) < 0 ? "below" : "not-below");
+          ')" = below ]; then echo "::error::RELEASE_TAG_BELOW_LATEST: $INPUT_TAG is below the registry's latest @rig-c/parts@$latest; republish under a dist-tag with a \`--tag\` variant of this dispatch (a follow-up), not under latest; npm refuses that implicitly"; exit 1; fi
           echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
 
       # Everything below runs only when a tag is to be published: the push that

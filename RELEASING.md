@@ -240,6 +240,7 @@ step refuses, each as one `::error::` line naming its rule:
 | `RELEASE_TAG_FORM` | the tag is not `vX.Y.Z` (or `vX.Y.Z-<prerelease>`) |
 | `RELEASE_TAG_UNRELEASED` | the tag has no GitHub release: only a tag release-please cut is published |
 | `RELEASE_ALREADY_PUBLISHED` | the registry already serves that version of `@rig-c/parts` |
+| `RELEASE_TAG_BELOW_LATEST` | the version is below the registry's `latest` for `@rig-c/parts` (a prerelease is below its release) |
 
 **Two inputs, one per dispatch.** `tag` publishes a cut tag; `version` re-runs
 a confirmation (*Whether the tarball runs*). Both are optional, because GitHub
@@ -257,12 +258,17 @@ anyway, and the alias steps run only after it. The missing alias version is
 published by hand from the tag with the tarball commands in *The first publish*
 (without provenance), or left for the next cut, which publishes every name.
 
-**Before the next cut.** `npm publish` refuses to put `latest` on a version
-lower than the highest one published unless a `--tag` is given (read in the
-publish command of npm 12.2.0, the version `npm@latest` installs at this
-writing), and the publish steps pass `--tag` only for a prerelease. So a stable
-tag is republished before a later version is cut; after that, the dispatch goes
-red at the gated publish and publishes nothing.
+**Below latest.** `npm publish` refuses to put `latest` on a version lower than
+the highest one published unless a `--tag` is given (read in the publish
+command of npm 12.2.0, the version `npm@latest` installs at this writing), and
+the publish steps pass `--tag` only for a prerelease. So once a later version
+is cut, the dispatch refuses the older tag by name, `RELEASE_TAG_BELOW_LATEST`,
+naming the tag and the `latest` served, before anything is checked out or
+published; it is never attempted silently. Such a version goes out, if at all,
+under a dist-tag, with a `--tag` variant of this dispatch, which is a
+follow-up and not in this workflow. The comparison is semver order computed in
+`node` (a prerelease below its release), not `sort -V`, which sorts
+`1.0.0-rc.1` after `1.0.0`.
 
 ## Whether the tarball runs
 
