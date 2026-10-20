@@ -179,6 +179,7 @@ import { BARE_CROWN_PARTS, CUT_BASE_PARTS, CUT_PARTS, eyeParts, FACELESS_PARTS, 
 // The runtime's own posing, for the one control that measures where a mesh's pixels go (PR14): a second opinion about a weighted vertex is what a measurement must not carry.
 import { type BoneSnapshot, type Frame, loadPosable, type Mesh, sampleAnimation, sampleSetupPose } from 'rig-c/src/render.ts';
 import { CANVAS, flatName, layerRaster, minimalConfig, WRAPPER_LAYERS, writePsdFixture, writeWrapperFixture } from './fixtures/synthetic.ts';
+import { MANNEQUIN_BLOCKS, MANNEQUIN_FIGURE_PX, MANNEQUIN_KEYPOINTS, MANNEQUIN_PARTS, MANNEQUIN_PLAN, MANNEQUIN_SIDE, writeMannequinFixture } from './fixtures/mannequin.ts';
 import { ARTIST_PATCH, ARTIST_PLAN, ARTIST_PORTRAIT_SHIFT, ARTIST_PORTRAIT_W, ARTIST_SIDE, artistCanvas, artistConfig, artistLayers, EYE as ARTIST_EYE, writeArtistFixture } from './fixtures/artist.ts';
 import { arm, armRig, base, baseRenamed, baseWith, roleRig } from './fixtures/structure.ts';
 import {
@@ -12619,6 +12620,7 @@ function runKeypointPoseCases(dir: string, say: (name: string, ok: boolean, deta
 
   runWristSnapCases(dir, SE, Pe, Je, se, say);
   runLegChainCases(dir, Pe, Je, se, say);
+  runFigureLayerCases(dir, say);
   runTrunkSegmentCases(dir, say);
   runHeadFrameCases(say);
   runFringeFrameCases(dir, say);
@@ -13100,6 +13102,184 @@ function runLegChainCases(dir: string, Pe: PartSet, Je: RigJoints, se: Proposal,
       refusals(() => checkProposal(Ps, unshod.proposal)) === null,
     `on the shoes: ${limbText(shod.proposal, 'leg_r')}; ${limbText(shod.proposal, 'leg_l')}, ${shod.draftLint.length} off; l_ankle at (122, 285): ${limbText(unshod.proposal, 'leg_r')}; ${limbText(unshod.proposal, 'leg_l')}; shoes rides ${unshod.proposal.regions.shoes ?? 'nothing'}; ${offLint.join(' / ') || 'no LINT'}; loads ${codes(refusals(() => checkProposal(Ps, unshod.proposal)))}`,
     'issue #517: propose drafted a foot cut at an ankle keypoint off the leg\'s art, and assemble then refused the config it wrote (ASSEMBLE_LIMB_JOINT_ON_ART); the joint is read as the cap reads it, and an ankle off it drafts the legs without the cut and says how far off on that line, never a joint the keypoints did not give',
+  );
+}
+
+/**
+ * Issue #577: a figure of one material — the whole body in one `topwear` layer, no handwear or legwear part — gets its
+ * limbs from that layer. On the parts form of fixtures/mannequin.ts (`figure`, full:topwear, the five blocks; a face
+ * and two eyewhites) with its keypoint file, every expected value below is the fixture's own: the joints as written,
+ * hip their midpoint (128, 126), chest half way to the neck (128, 94).
+ */
+function runFigureLayerCases(dir: string, say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const joints = (edit: (k: KeypointJson) => void = () => {}): RigJoints => {
+    const raw = structuredClone(MANNEQUIN_KEYPOINTS) as KeypointJson;
+    edit(raw);
+    const f = parseKeypoints(raw, 'mannequin.json');
+    return toRigJoints(f, f.people[0], MANNEQUIN_SIDE, MANNEQUIN_SIDE);
+  };
+  const rig = { w: MANNEQUIN_SIDE, h: MANNEQUIN_SIDE };
+  const partSet = (name: string, parts: ProposeFixturePart[]): PartSet => {
+    const d = join(dir, `figure-${name}`);
+    writeProposeFixture(d, parts, rig);
+    return readPartSet(d);
+  };
+  const what = (limbs: string): string => `every joint of ${limbs} and the origins of hip, chest and neck`;
+  const trunkSplit = 'limbs trunk (trunk_hip on hip, trunk_chest on chest, trunk_neck on neck, cut at the chest\'s and the neck\'s origins)';
+  const tail = 'split it between them by the cut, each pixel to the limb whose bones pass nearest it — the rule one legwear part holding both legs is split by (issue #577)';
+  const figNote = (why: string, limbs: string, over = ''): string => `figure (full:topwear): the figure layer — ${why}, and its art holds within 15 px ${what(limbs)}${over}; ${trunkSplit} and ${limbs} ${tail}`;
+  const limbsOf = (p: Proposal): string => Object.keys(p.limbs ?? {}).map((l) => `${l}: ${limbText(p, l)}`).join('; ');
+  const chainNames = (p: Proposal): string => p.bones.filter((b) => 'chain' in b).map((b) => ('chain' in b ? b.chain : '')).join(',');
+
+  // PR550: both arms and both legs from the one figure layer, and the trunk as a limb of three segments on it.
+  const P = partSet('one', MANNEQUIN_PARTS);
+  const J = joints();
+  const one = propose(P, J);
+  const bare = propose(P);
+  const wantLimbs =
+    'trunk: trunk_hip figure hip | trunk_chest figure chest chest | trunk_neck figure neck neck; ' +
+    'arm_r: upperarm_r figure sleeve_r0 | forearm_r figure sleeve_r1 elbow; arm_l: upperarm_l figure sleeve_l0 | forearm_l figure sleeve_l1 elbow; ' +
+    'leg_r: thigh_r figure leg_r0 | shin_r figure leg_r1 knee; leg_l: thigh_l figure leg_l0 | shin_l figure leg_l1 knee';
+  const note1 = figNote('no handwear part and no legwear part are over 500 px', 'arm_r, arm_l, leg_r, leg_l');
+  const regionsOk = ['trunk_hip:hip', 'trunk_chest:chest', 'trunk_neck:neck', 'upperarm_r:sleeve_r0', 'forearm_r:sleeve_r1', 'thigh_l:leg_l0', 'shin_l:leg_l1'].every((kv) => {
+    const [k, v] = kv.split(':');
+    return one.regions[k] === v;
+  });
+  say(
+    'PR550_A_FIGURE_IN_ONE_TOPWEAR_LAYER_GETS_BOTH_ARMS_BOTH_LEGS_AND_THE_TRUNK_AS_LIMBS_ON_IT',
+    limbsOf(one) === wantLimbs &&
+      one.notes.includes(note1) &&
+      ['hip', 'chest', 'neck'].map((b) => boneAt(one.bones, b)).join(' ') === '[128,126] [128,94] [128,62]' &&
+      boneAt(one.bones, 'sleeve_r') === '[[100,78],[72,78]]->[46,78]' &&
+      boneAt(one.bones, 'sleeve_l') === '[[156,78],[184,78]]->[210,78]' &&
+      boneAt(one.bones, 'leg_r') === '[[116,126],[116,180]]->[116,224]' &&
+      boneAt(one.bones, 'leg_l') === '[[140,126],[140,180]]->[140,224]' &&
+      chainNames(one) === 'sleeve_r,sleeve_l,leg_r,leg_l' &&
+      regionsOk &&
+      !('figure' in one.meshes) &&
+      !('figure' in one.regions) &&
+      !one.notes.some((n) => n.startsWith('one handwear part holds both wrists') || n.startsWith('trunk segments (')) &&
+      refusals(() => checkProposal(P, one)) === null &&
+      bare.limbs === undefined &&
+      'figure' in bare.meshes &&
+      !bare.notes.some((n) => n.includes('figure layer')),
+    `limbs ${limbsOf(one)}; chains ${chainNames(one)}; hip ${boneAt(one.bones, 'hip')}, chest ${boneAt(one.bones, 'chest')}, neck ${boneAt(one.bones, 'neck')}; figure note ${one.notes.includes(note1) ? 'as written' : `ABSENT (${JSON.stringify(one.notes.find((n) => n.startsWith('figure ')) ?? null)})`}; figure attached ${'figure' in one.meshes || 'figure' in one.regions}; loads ${codes(refusals(() => checkProposal(P, one)))}; without joints: limbs ${bare.limbs === undefined ? 'none' : 'SOME'}, figure ${'figure' in bare.meshes ? 'meshed by the topwear rule' : 'NOT meshed'}`,
+    'issue #577: a mannequin reaches See-through as one garment, so no handwear or legwear part carries a limb and no limb was drafted until the layers were re-sorted by hand; the one topwear layer that holds every joint is split by the cut the legwear rule already uses, the trunk a limb of its own so that the torso and the neck keep their pixels (a limb takes every pixel of its part)',
+  );
+
+  // PR551: the route is per limb. With a handwear part over 500 px on each arm (the arm blocks, 64 x 12 = 768 px), the
+  // arms are the sleeve rule's and only the legs and the trunk come from the figure layer.
+  const sleeves: ProposeFixturePart[] = [
+    { name: 'sleeve_a', from: 'full:handwear-r', x: 40, y: 72, w: 64, h: 12, colour: [240, 240, 240] },
+    { name: 'sleeve_b', from: 'full:handwear-l', x: 152, y: 72, w: 64, h: 12, colour: [240, 240, 240] },
+  ];
+  const Ph = partSet('sleeved', [...MANNEQUIN_PARTS, ...sleeves]);
+  const sleeved = propose(Ph, J);
+  const note2 = figNote('no legwear part is over 500 px', 'leg_r, leg_l');
+  say(
+    'PR551_A_LIMB_WHOSE_TAGGED_ROUTE_HAS_A_PART_KEEPS_IT_AND_ONLY_THE_OTHERS_COME_FROM_THE_FIGURE_LAYER',
+    limbText(sleeved, 'arm_r') === 'upperarm_r sleeve_a sleeve_r0 | forearm_r sleeve_a sleeve_r1 elbow' &&
+      limbText(sleeved, 'arm_l') === 'upperarm_l sleeve_b sleeve_l0 | forearm_l sleeve_b sleeve_l1 elbow' &&
+      limbText(sleeved, 'leg_r') === 'thigh_r figure leg_r0 | shin_r figure leg_r1 knee' &&
+      limbText(sleeved, 'trunk') === 'trunk_hip figure hip | trunk_chest figure chest chest | trunk_neck figure neck neck' &&
+      sleeved.notes.includes(note2) &&
+      refusals(() => checkProposal(Ph, sleeved)) === null,
+    `arm_r ${limbText(sleeved, 'arm_r')}; leg_r ${limbText(sleeved, 'leg_r')}; trunk ${limbText(sleeved, 'trunk')}; note ${sleeved.notes.includes(note2) ? 'as written' : `ABSENT (${JSON.stringify(sleeved.notes.find((n) => n.startsWith('figure ')) ?? null)})`}`,
+    'the figure layer stands in for a route only where the route has no part: an arm with its own handwear layer keeps it, so a garment figure whose tags work is drafted as before',
+  );
+
+  // PR552: no figure layer. The legs as one column (x 108..147, y 130..229): the knees' line, (116, 180) to (140, 180),
+  // runs on art all the way, as a robe over both legs does. And r_wrist at (20, 78): the figure's nearest art is x 40,
+  // 20 px off by the larger gap, over 15. Either way no limb is drafted, the figure keeps the topwear rule, and one note
+  // names what the part misses.
+  const joined = MANNEQUIN_PARTS.map((q) =>
+    q.name !== 'figure' ? q : { ...q, rects: [MANNEQUIN_BLOCKS.neck, MANNEQUIN_BLOCKS.torso, MANNEQUIN_BLOCKS.arm_r, MANNEQUIN_BLOCKS.arm_l, [108, 130, 148, 230] as [number, number, number, number]].map(([x0, y0, x1, y1]): [number, number, number, number] => [x0, y0, x1 - x0, y1 - y0]) },
+  );
+  const Pj = partSet('joined', joined);
+  const col = propose(Pj, J);
+  const far = propose(P, joints((k) => {
+    k.people[0].joints.r_wrist = { state: 'observed', at: [20, 78] };
+  }));
+  const none = (miss: string): string =>
+    `figure layer: no handwear part and no legwear part are over 500 px, and no topwear part over 500 px holds within 15 px ${what('arm_r, arm_l, leg_r, leg_l')} (${miss}), so arm_r, arm_l, leg_r, leg_l are not drafted from one layer (issue #577)`;
+  const colNote = none("figure's art does not break on the line from r_knee to l_knee: the legs are one column there, as a garment over both legs is");
+  const farNote = none('figure holds no art within 15 px of r_wrist at [20.0, 78.0]');
+  say(
+    'PR552_A_TOPWEAR_WHOSE_LEGS_ARE_ONE_COLUMN_OR_THAT_MISSES_A_JOINT_IS_NO_FIGURE_LAYER_AND_A_NOTE_SAYS_WHAT_IT_MISSES',
+    [col, far].every((p) => p.limbs === undefined && 'figure' in p.meshes) && col.notes.includes(colNote) && far.notes.includes(farNote),
+    `legs one column: limbs ${col.limbs === undefined ? 'none' : limbsOf(col)}, ${JSON.stringify(col.notes.find((n) => n.startsWith('figure layer')) ?? null)}; r_wrist off: limbs ${far.limbs === undefined ? 'none' : limbsOf(far)}, ${JSON.stringify(far.notes.find((n) => n.startsWith('figure layer')) ?? null)}`,
+    'a topwear part is the figure only when it holds every joint it would be cut at, and a garment hung over both legs is one column at the knees: split, it would become legs it does not have; the note names the first thing missed, so a tolerance is never guessed',
+  );
+
+  // PR553: two topwear parts that both hold everything — one from each run, as a layer name is one per run. `twin`
+  // (head:topwear) is the figure with the 4 x 12 px at x 44..47, y 72..83
+  // left out (48 px), all inside the 31 x 31 square about r_wrist (46, 78) — x 31..61, y 63..93 — and inside no other
+  // point's square (the nearest, r_elbow's, starts at x 57), so it holds 48 px fewer there and the figure is chosen.
+  // The same twin with nothing left out ties, and is refused by name.
+  const holed = [[40, 72, 4, 12], [48, 72, 56, 12]] as Array<[number, number, number, number]>;
+  const figRects = (MANNEQUIN_PARTS[0].rects ?? []).filter(([x, y]) => !(x === 40 && y === 72));
+  const twin: ProposeFixturePart = { ...MANNEQUIN_PARTS[0], name: 'twin', from: 'head:topwear', rects: [...figRects, ...holed] };
+  const Pt = partSet('twin', [...MANNEQUIN_PARTS, twin]);
+  const two = propose(Pt, J);
+  const figLine = two.notes.find((n) => n.startsWith('figure (full:topwear): the figure layer')) ?? '';
+  const counts = /figure (\d+), twin (\d+)/.exec(figLine);
+  const Pe = partSet('tie', [...MANNEQUIN_PARTS, { ...MANNEQUIN_PARTS[0], name: 'twin', from: 'head:topwear' }]);
+  const tie = refusals(() => propose(Pe, J));
+  say(
+    'PR553_OF_TWO_TOPWEAR_PARTS_THAT_HOLD_THE_JOINTS_THE_ONE_WITH_MORE_ART_ABOUT_THEM_IS_THE_FIGURE_AND_A_TIE_IS_REFUSED',
+    limbText(two, 'arm_r') === 'upperarm_r figure sleeve_r0 | forearm_r figure sleeve_r1 elbow' &&
+      counts !== null &&
+      Number(counts[1]) - Number(counts[2]) === 48 &&
+      figLine.includes('; of the 2 topwear parts that hold them it has the most opaque px in the 31x31 squares about those points, figure ') &&
+      codes(tie) === 'PROPOSE_FIGURE_LAYER parts "figure", "twin" (topwear)',
+    `holed twin: arm_r ${limbText(two, 'arm_r')}, counts ${counts === null ? 'not printed' : `${counts[1]} against ${counts[2]}`}; identical twin: ${codes(tie)}`,
+    'two layers that both hold every joint are decided by the art about the joints, in the square the 15 px tolerance reads; where that is equal nothing says which is the figure, and a guess would cut the wrong layer',
+  );
+
+  // PR554 (bars 1 and 2): the PSD form from the command line. --propose-plan plans the topwear, the face and the eyes and
+  // names legwear (64 px) below the floor; assemble, propose --keypoints, and build on the drafted sections: the limb cut
+  // counts the figure's 7,856 px, with the shares the blocks fix by hand — the neck above its joint, rows 50..61 x 12
+  // columns = 144; each forearm past its elbow, columns 32 x 12 rows = 384; each shin past its knee, 50 rows x 16 = 800.
+  const md = join(dir, 'figure-cli');
+  writeMannequinFixture(md);
+  const plan = runCli(['assemble', '--propose-plan', '--source', join(md, 'painting.png'), '--full', join(md, 'art.psd'), '--config', join(md, 'config.json')]);
+  let rows = '';
+  let planNotes: string[] = [];
+  try {
+    const pj = JSON.parse(plan.out) as { plan: string[][]; notes: string[] };
+    rows = JSON.stringify(pj.plan);
+    planNotes = pj.notes;
+  } catch {
+    rows = 'not JSON';
+  }
+  const asm = runCli(['assemble', '--source', join(md, 'painting.png'), '--full', join(md, 'art.psd'), '--config', join(md, 'config.json'), '--out', join(md, 'asm')]);
+  const prop = runCli(['propose', '--parts', join(md, 'asm', 'rig'), '--source', join(md, 'painting.png'), '--out', join(md, 'prop'), '--keypoints', join(md, 'keypoints.json')]);
+  const drafted = existsSync(join(md, 'prop', 'proposal.json')) ? (JSON.parse(readFileSync(join(md, 'prop', 'proposal.json'), 'utf8')) as Record<string, unknown>) : {};
+  const cfg = { ...(JSON.parse(readFileSync(join(md, 'config.json'), 'utf8')) as Record<string, unknown>), ...Object.fromEntries(Object.entries(drafted).filter(([k]) => k !== 'notes')) };
+  writeFileSync(join(md, 'built.json'), `${JSON.stringify(cfg, null, 2)}\n`);
+  const built = prop.status === 0 ? runCli(['build', '--config', join(md, 'built.json'), '--source', join(md, 'painting.png'), '--full', join(md, 'art.psd'), '--out', join(md, 'build')]) : { status: -1, out: '' };
+  const cut = built.out.split('\n').find((l) => l.includes('limb cut: "topwear"')) ?? '';
+  const summary = built.out.split('\n').find((l) => /\bcheck: (PASS|FAIL)/.test(l)) ?? 'no check line';
+  const share = (n: string): number => Number(new RegExp(`"${n}" (\\d+)`).exec(cut)?.[1] ?? -1);
+  const shares = ['trunk_hip', 'trunk_chest', 'trunk_neck', 'upperarm_r', 'forearm_r', 'upperarm_l', 'forearm_l', 'thigh_r', 'shin_r', 'thigh_l', 'shin_l'].map(share);
+  const cliNote = 'note: topwear (full:topwear): the figure layer — no handwear part and no legwear part are over 500 px';
+  say(
+    'PR554_THE_ONE_LAYER_FIGURE_FROM_THE_COMMAND_LINE_DRAFTS_EVERY_LIMB_AND_BUILDS_GREEN',
+    plan.status === 0 &&
+      rows === JSON.stringify(MANNEQUIN_PLAN) &&
+      planNotes.some((n) => n.startsWith("legwear: in no plan row — full run: 64 px, empty: below the proposer's floor of 150")) &&
+      asm.status === 0 &&
+      prop.status === 0 &&
+      prop.out.includes(cliNote) &&
+      Object.keys((drafted.limbs ?? {}) as Record<string, unknown>).join(',') === 'trunk,arm_r,arm_l,leg_r,leg_l' &&
+      built.status === 0 &&
+      cut.includes(`"topwear" opaque ${MANNEQUIN_FIGURE_PX} = `) &&
+      shares.every((n) => n > 0) &&
+      shares.reduce((a, b) => a + b, 0) === MANNEQUIN_FIGURE_PX &&
+      [share('trunk_neck'), share('forearm_r'), share('forearm_l'), share('shin_r'), share('shin_l')].join(',') === '144,384,384,800,800' &&
+      summary.includes('check: PASS'),
+    `plan exit ${plan.status}, rows ${rows}; assemble exit ${asm.status}; propose exit ${prop.status}, figure note ${prop.out.includes(cliNote) ? 'printed' : 'ABSENT'}, limbs ${Object.keys((drafted.limbs ?? {}) as Record<string, unknown>).join(',')}; build exit ${built.status}: "${cut.trim()}"; "${summary.trim()}"`,
+    'issue #577 bars 1 and 2: a public fixture whose figure is one layer is drafted with every limb by propose --keypoints and no hand re-sort, and the draft builds green — the figure is grained (4-row bands) because a flat block barely shows a 1.6 px breath (BREATH_VISIBLE read 1.713 on the same figure in flat colour and 4.457 grained, against its floor 3.809: a property of the fixture, not of the rule)',
   );
 }
 

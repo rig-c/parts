@@ -358,6 +358,44 @@ one piece, not clasped at the midline — gets both arms' limbs on its one part,
 An `assemble.cuts` entry (§3; §5, *Cutting a piece out of a layer*) draws the split by hand;
 the proposer does not.
 
+**A figure of one material: limbs from one layer (issue #577).** A wooden mannequin,
+a statue or a robot of one finish reaches See-through as one garment: the whole body
+in `topwear`, `legwear` and `footwear` near-empty and left out of the plan below the
+floor of 150 px. No handwear or legwear part carries a limb, so the rules above
+draft none. With `--keypoints`, an arm whose shoulder, elbow and wrist are given
+when **no** handwear part is over 500 px, and a leg whose hip, knee and ankle are
+given when **no** legwear part is over 500 px, is drafted from the **figure layer**:
+the one `topwear` part over 500 px (no cut piece) whose art holds, within 15 px by
+the larger of the x and y gaps, every joint of those limbs and the origins of
+`hip`, `chest` and `neck` — and, when both legs are drafted, whose art breaks on the
+line from `r_knee` to `l_knee` and on the line from `r_ankle` to `l_ankle` (the
+reading `PAINTING_LEGS_APART` makes): a robe over both legs is one column there,
+and would be split into legs it does not have. The arms are the sleeve chains and
+`arm_<s>` limbs and the legs the `leg_<s>` chains and limbs above, on that part,
+and the trunk is a limb of its own, `trunk` — `trunk_hip` on `hip`, `trunk_chest`
+on `chest` below the joint at chest's origin, `trunk_neck` on `neck` past the
+neck's — because a limb takes every pixel of its part: without it the torso and
+the neck would go to the nearest arm or leg. Each pixel goes to the limb whose
+bones pass nearest it, the rule two legs on one legwear part are split by. A limb
+whose route has a part keeps it: with a handwear part on each arm, the arms are the
+sleeve rule's and only the legs and the trunk come from the figure (selftest
+`PR551`). A note names the layer and why:
+
+    <part> (<from>): the figure layer — no handwear part and no legwear part are over 500 px, and its art holds within 15 px every joint of arm_r, arm_l, leg_r, leg_l and the origins of hip, chest and neck; limbs trunk (trunk_hip on hip, trunk_chest on chest, trunk_neck on neck, cut at the chest's and the neck's origins) and arm_r, arm_l, leg_r, leg_l split it between them by the cut, each pixel to the limb whose bones pass nearest it — the rule one legwear part holding both legs is split by (issue #577)
+
+Two topwear parts that both hold everything are decided by their opaque px in the
+31x31 squares about those points (the square the 15 px tolerance reads), and the
+note adds both counts; a tie is refused, `PROPOSE_FIGURE_LAYER`. A topwear part that
+misses one gets no limb, keeps the topwear rule, and a `figure layer: …` note names
+the first point it misses or the line on which its legs are one column. With no
+topwear part over 500 px nothing is said and nothing moves. A garment figure whose
+tags carry its limbs is drafted byte for byte as before: the public examples'
+proposals are unchanged. The fixture is `fixtures/mannequin.ts`: one `topwear`
+layer of 7,856 px drafted into the trunk, both arms and both legs by `propose
+--keypoints` with no hand re-sort, and the draft built `check: PASS` (selftest
+`PR554`). Its feet stay in the shins: no footwear part is over 500 px, so no
+`foot_<s>` is drafted, and the note says so.
+
 Every other joint (`nose`, ears, the knees and ankles no leg chain used; the eyes
 with no eyewhite) is named with its state in one note: no bone is authored from it. Every joint the proposer
 could use gets its own note — `used as given for bone X`, `used as the producer's
@@ -3151,6 +3189,7 @@ says why each requirement exists and what breaks without it.
 | <a id="PROPOSE_FACE_PRESENT"></a>`PROPOSE_FACE_PRESENT` | no part comes from a `face` layer, and the face-less fallback cannot derive a face box either: it needs the head run's `neck` and at least one head-run `front hair`/`back hair` part whose top is above the neck's, and the message names the half that is missing. With both, `propose` does not refuse — it derives the box and says so in its first note (§5) | `assemble.plan`: take the face, or the head run's hair and neck |
 | <a id="PROPOSE_CUT_FROM_RECORDED"></a>`PROPOSE_CUT_FROM_RECORDED` | two parts share one layer and none of them records `cut_from`: a `parts.json` an `assemble` before 1.6.0 wrote with `assemble.cuts`. The records are in draw order, so which is the plan part and which the piece cannot be read off the file; the message names the parts and the layer. Every other reader still takes the file | `--parts`: re-run assemble (1.6.0+) to record `cut_from` |
 | <a id="PROPOSE_LIMB_PARTS"></a>`PROPOSE_LIMB_PARTS` | `parts.json` holds a standalone or incomplete limb part `config.limbs` cut at its joints (issues #349, #440) that cannot be reassembled into the source part `of` (a missing segment or `cap` record, or `of` still present beside the limb parts); a complete `assemble` output with `config.limbs` reconstructs its pre-limb parts in the same run | `--parts` a complete `assemble` output (every segment of each limb, with its `cap` record) or a build assembled with `config.limbs` left out; `propose --from-config` reads the config's bones on either build |
+| <a id="PROPOSE_FIGURE_LAYER"></a>`PROPOSE_FIGURE_LAYER` | with `--keypoints` (issue #577): a limb is drafted from the figure layer (no handwear or legwear part over 500 px for it), and two or more `topwear` parts each hold every joint and the trunk bones' origins within 15 px with the same opaque px in the 31x31 squares about them, so nothing says which is the figure (§3, *A figure of one material*) | leave the others out of `assemble.plan`, or give the arms and legs their own handwear and legwear layers |
 | <a id="PROPOSE_CLOTH_DRAFTED"></a>`PROPOSE_CLOTH_DRAFTED` | with `--cloth` (issue #364): the config's `cloth` block holds a recipe for a tag the proposer drafts no chain on — no part has that tag, or every `back hair` part ends above the shoulders (a bun bone, no chain). A `bottomwear` recipe with no `bottomwear` part names every `topwear` part shaped like a skirt (issue #402) | leave that recipe out, or assemble the layer it is for, or declare the named part in `cloth.bottomwear.part` |
 | <a id="PROPOSE_CLOTH_PART"></a>`PROPOSE_CLOTH_PART` | with `--cloth` (issues #402, #437): `cloth.bottomwear.part` (a string) names no part, a part or cut piece whose source is not `topwear` (a `bottomwear` part takes the recipe by its tag already), or a target whose box ends above the hip + 0.25 face heights, the topwear rule's waist line; or `cloth.<tag>.parts` (or `part` as a list, issue #437) names a part not in `parts.json`, a part no link of the drafted tree crosses (`spanCrosses == 0`), or parts out of root-to-tip depth order along the chain | name the `topwear` part or its cut skirt piece that holds the skirt (or leave `part` out), or list only parts in `parts.json` that the drafted tree links cross in root-to-tip order |
 | <a id="PROPOSE_WRITE_CONFIG_FRESH"></a>`PROPOSE_WRITE_CONFIG_FRESH` | with `--write-config` (issue #537): the out path exists, or is a file the run writes itself (`proposal.json`, `basis.json` under `--out`); the config is written to a new file, never over the `--cloth` config or an earlier one | name a file that does not exist yet, beside the `--cloth` config |
