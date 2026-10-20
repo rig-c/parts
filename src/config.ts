@@ -893,7 +893,9 @@ export interface ConfigStop {
  * the joint (issue #360, `src/limbs.ts`): `edge: "feather"` fades the upper
  * piece out across the cap, and `cap_shape: "disc"` sizes the cap by the
  * limb's half-width about the joint and fills it from the art, the upper
- * segment's included. Absent, the cut
+ * segment's included; `cap_shape: "ball"` (issue #579) is that disc on both
+ * sides of the joint line, its lower half written into the lower piece from
+ * the cap image where the piece's layer is transparent. Absent, the cut
  * is hard and the cap the layer's half-disc of half the limb's width. A third,
  * `cut_band: N` (issue #360, item 14), places the cut on the line within N px
  * of the joint line that crosses the fewest stroke pixels; absent, the cut is
@@ -907,7 +909,7 @@ export interface LimbSegment {
   range?: [number, number];
   cap?: string;
   edge?: 'feather';
-  cap_shape?: 'disc';
+  cap_shape?: 'disc' | 'ball';
   /** Issue #360 (item 14): the half-width, whole rig px, of the band about the joint line the cut is placed in (`placeCut` in `src/limbs.ts`). Absent, the cut is the joint line. */
   cut_band?: number;
 }
@@ -2938,9 +2940,9 @@ interface LimbNames {
  * one (`CONFIG_KEY_KNOWN`, `CONFIG_FIELD_PRESENT`); `range` two finite
  * degrees `[min, max]` with `min <= 0 <= max` (`CONFIG_LIMB_RANGE`: the range
  * is measured from rest, so rest is in it); `cap` a non-empty path; `edge`
- * `"feather"` and `cap_shape` `"disc"` (issue #360), each the one value its
- * field takes — absent is the hard cut and the layer's half-disc
- * (`CONFIG_FIELD_TYPE` on any other); `cut_band` a whole number of px, 1 or
+ * `"feather"` (issue #360), the one value its field takes, and `cap_shape`
+ * `"disc"` (issue #360) or `"ball"` (issue #579) — absent is the hard cut and
+ * the layer's half-disc (`CONFIG_FIELD_TYPE` on any other); `cut_band` a whole number of px, 1 or
  * more (`CONFIG_FIELD_TYPE`), on a segment that takes the segment above's
  * part (`CONFIG_KEY_KNOWN`: between two layers nothing is cut). A limb
  * has two segments or more. With `names` null (no `bones`), bones are not
@@ -3047,8 +3049,8 @@ function checkLimbs(c: Check, v: Json, made: { parts: string[]; patches: string[
       if ('edge' in e && e.edge !== 'feather') {
         c.fail('CONFIG_FIELD_TYPE', `${sat}.edge`, `is ${show(e.edge)}; "feather" is required — the upper piece fades out across the cap instead of stopping at the joint line; leave edge out for the hard cut`);
       }
-      if ('cap_shape' in e && e.cap_shape !== 'disc') {
-        c.fail('CONFIG_FIELD_TYPE', `${sat}.cap_shape`, `is ${show(e.cap_shape)}; "disc" is required — the cap a disc of the limb's half-width about the joint, filled from the art, the upper segment's included; leave cap_shape out for the layer's half-disc of half the limb's width`);
+      if ('cap_shape' in e && e.cap_shape !== 'disc' && e.cap_shape !== 'ball') {
+        c.fail('CONFIG_FIELD_TYPE', `${sat}.cap_shape`, `is ${show(e.cap_shape)}; "disc" or "ball" is required — "disc" the cap a disc of the limb's half-width about the joint, filled from the art, the upper segment's included; "ball" that disc on both sides of the joint line, its lower half written into the lower piece from the cap image where the piece's layer is transparent (issue #579); leave cap_shape out for the layer's half-disc of half the limb's width`);
       }
       // Issue #360 (item 14): the band the cut is placed in, whole px, on a joint whose two segments take one part.
       if ('cut_band' in e && i > 0) {

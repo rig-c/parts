@@ -2822,17 +2822,26 @@ export function shortCapLint(j: LimbCount['joints'][number]): string | null {
     ...(k.image_px === undefined ? [] : [`${k.image_px} px from ${k.image_layer === undefined ? 'the cap image' : `the hidden-art layer ${k.image_layer}`}`]),
     `${k.layer_px} px from "${j.part}"'s layer`,
     `${k.upper_px ?? 0} px from "${j.upper}"`,
+    // Issue #579: under cap_shape "ball", the lower half's written and kept pixels.
+    ...(k.shape === 'ball' ? [`on the lower side ${k.lower_px ?? 0} px written, ${k.lower_kept_px ?? 0} px left as painted`] : []),
   ].join(', ');
+  const lowerMiss = k.lower_missing_px ?? 0;
+  const which =
+    lowerMiss === 0
+      ? `${n} px of the disc on the upper side of the cut, where ${where}`
+      : lowerMiss === n
+        ? `${n} px of the disc on the lower side of the cut (cap_shape "ball"), where "${j.part}"'s layer is transparent and no cap image gives a pixel`
+        : `${n} px of the disc, ${n - lowerMiss} on the upper side of the cut, where ${where}, and ${lowerMiss} on the lower side (cap_shape "ball"), where "${j.part}"'s layer is transparent and no cap image gives a pixel`;
   const half = j.half ?? 0;
   const disc =
-    k.shape === 'disc' || j.shortInHalf === undefined
+    k.shape !== undefined || j.shortInHalf === undefined
       ? ''
       : j.shortInHalf === 0
         ? `; under cap_shape "disc" the disc is the half-width about the joint, ${half} px, and none of them lies within it`
         : `; under cap_shape "disc" the disc is the half-width about the joint, ${half} px, and ${j.shortInHalf} of them lie within it`;
   return (
     `  LINT "${j.part}" cap at [${k.at[0]}, ${k.at[1]}] (limb "${j.limb}", joint "${j.joint}", radius ${k.radius} px): short_px left ${k.short_px.left}, right ${k.short_px.right}: ` +
-    `no layer gives them — ${n} px of the disc on the upper side of the cut, where ${where}; the rest of the disc is filled, ${filled}${disc}`
+    `no layer gives them — ${which}; the rest of the disc is filled, ${filled}${disc}`
   );
 }
 
@@ -2854,15 +2863,21 @@ export function limbLines(counts: readonly LimbCount[]): string[] {
       const radius =
         k.shape === undefined
           ? `a disc of radius ${k.radius} px (the limb ${k.width} px across the joint line)`
-          : `a disc of radius ${k.radius} px (cap_shape "disc": the joint's distance to the nearer side of the limb, ${k.width} px across the joint line)`;
+          : `a disc of radius ${k.radius} px (cap_shape "${k.shape}": the joint's distance to the nearer side of the limb, ${k.width} px across the joint line)`;
+      // Issue #579: the ball's lower half, counted apart; the missing pixels the line names on the upper side are that side's.
+      const lowerMiss = k.lower_missing_px ?? 0;
+      const upperMiss = k.missing_px - lowerMiss;
+      const paintThem = `paint them into a ${k.box[2]}x${k.box[3]} image whose pixel (i, j) is rig pixel (${k.box[0]} + i, ${k.box[1]} + j), and name it in the segment's "cap"`;
       const shaped = [
+        ...(k.shape === 'ball'
+          ? [
+              `cap_shape "ball": on the lower side of the line ${k.lower_px ?? 0} px written into "${j.part}" from ${k.image_px === undefined ? 'a cap image (none is named)' : k.image_layer === undefined ? 'the cap image' : `the hidden-art layer ${k.image_layer}`} where its layer is transparent (alpha 0), ${k.lower_kept_px ?? 0} px left as painted, ${lowerMiss === 0 ? 'none missing' : `${lowerMiss} px missing — the layer is transparent there and no cap image gives a pixel, and the tool invents none: ${paintThem}`}`,
+            ]
+          : []),
         ...(k.edge === undefined ? [] : [`edge "feather": ${k.feathered_px ?? 0} px of "${j.upper}" faded across the ${k.feather_radius ?? 0} px about the joint that "${j.part}" covers at every turn`]),
         ...(k.cut_band === undefined ? [] : [cutPhrase(k, j.upper, j.part)]),
       ];
-      const miss =
-        k.missing_px === 0
-          ? 'none missing'
-          : `${k.missing_px} px missing — the layer has no pixel there (hidden in the painting, or past the limb's outline), and the tool invents none: paint them into a ${k.box[2]}x${k.box[3]} image whose pixel (i, j) is rig pixel (${k.box[0]} + i, ${k.box[1]} + j), and name it in the segment's "cap"`;
+      const miss = upperMiss === 0 ? 'none missing' : `${upperMiss} px missing — the layer has no pixel there (hidden in the painting, or past the limb's outline), and the tool invents none: ${paintThem}`;
       out.push(
         `  limb cap: "${j.limb}" joint "${j.joint}" at [${k.at[0]}, ${k.at[1]}], on "${j.part}": ${radius}, box [${k.box.join(', ')}] — on the upper side of the line ${from}, ${miss}${shaped.map((q) => `; ${q}`).join('')}`,
       );
@@ -3228,13 +3243,15 @@ function cutLimbs(
       // The width to 3 places (src/round.ts): a measured length, and a radius the line and the record print as read.
       const w3 = pyRound(run[1] - run[0] + 1, 3);
       // Issue #360: under cap_shape "disc" the radius is the half-width about the joint (src/limbs.ts), to 3 places as well.
-      const disc = sg.cap_shape === 'disc';
+      // Issue #579: cap_shape "ball" is that disc and its upper half, and its lower half too (below).
+      const ball = sg.cap_shape === 'ball';
+      const disc = sg.cap_shape === 'disc' || ball;
       const half = halfWidthAbout(run);
       if (disc && half <= 0) {
         problems.push({
           code: 'ASSEMBLE_LIMB_JOINT_ON_ART',
           object,
-          detail: `the joint, "${sg.bone}"'s origin at [${line.at.join(', ')}], lies on the edge of the limb's art along its joint line — the run of art reaches ${pyRound(run[1] + 0.5, 3)} px from it one way and ${pyRound(0.5 - run[0], 3)} px the other — so cap_shape "disc" has no half-width about it; a bone origin inside the limb's art is required — move the bone onto the joint`,
+          detail: `the joint, "${sg.bone}"'s origin at [${line.at.join(', ')}], lies on the edge of the limb's art along its joint line — the run of art reaches ${pyRound(run[1] + 0.5, 3)} px from it one way and ${pyRound(0.5 - run[0], 3)} px the other — so cap_shape "${String(sg.cap_shape)}" has no half-width about it; a bone origin inside the limb's art is required — move the bone onto the joint`,
         });
         return;
       }
@@ -3277,11 +3294,32 @@ function cutLimbs(
       let shortLeft = 0;
       let shortRight = 0;
       let shortInHalf = 0;
+      // Issue #579: the ball's lower half — written from the image where the lower piece's pixel is transparent, kept
+      // where the piece has a pixel, missing where neither gives one.
+      let lowerPx = 0;
+      let lowerKept = 0;
+      let lowerMissing = 0;
       for (let y = Math.max(0, box[1]); y < Math.min(H, box[1] + box[3]); y++) {
         for (let x = Math.max(0, box[0]); x < Math.min(W, box[0] + box[2]); x++) {
-          if (!inDisc(line.at, radius, x, y) || pastJoint(cut, x, y)) continue;
+          if (!inDisc(line.at, radius, x, y)) continue;
           const p = y * W + x;
           const u = img === null ? -1 : ((y - box[1]) * img.width + (x - box[0])) * 4;
+          if (pastJoint(cut, x, y)) {
+            if (!ball) continue;
+            // Transparent is alpha 0, the reading the upper half's fill gives a layer's and the image's pixel: no pixel the
+            // lower piece paints, however faint, changes.
+            if (lower.data[p * 4 + 3] > 0) lowerKept++;
+            else if (img !== null && img.data[u + 3] > 0) {
+              lower.data.set(img.data.subarray(u, u + 4), p * 4);
+              lowerPx++;
+            } else {
+              lowerMissing++;
+              missing++;
+              if (jointOffsets(line, x, y).across >= 0) shortLeft++;
+              else shortRight++;
+            }
+            continue;
+          }
           if (img !== null && img.data[u + 3] > 0) {
             lower.data.set(img.data.subarray(u, u + 4), p * 4);
             imagePx++;
@@ -3302,8 +3340,14 @@ function cutLimbs(
           }
         }
       }
-      if (img !== null && imagePx === 0 && hidden === null) {
-        problems.push({ code: 'ASSEMBLE_LIMB_CAP_EMPTY', object: `${object}.cap`, detail: `${String(sg.cap)} is transparent over every one of the cap's pixels; an image that gives at least one is required — to keep the layer's cap, drop cap` });
+      if (img !== null && imagePx + lowerPx === 0 && hidden === null) {
+        problems.push({
+          code: 'ASSEMBLE_LIMB_CAP_EMPTY',
+          object: `${object}.cap`,
+          detail: ball
+            ? `${String(sg.cap)} gives none of the cap's pixels: it is transparent over the disc's upper half and over every pixel of its lower half where "${sg.part}"'s layer is transparent (cap_shape "ball", issue #579); an image that gives at least one is required — to keep the layer's cap, drop cap`
+            : `${String(sg.cap)} is transparent over every one of the cap's pixels; an image that gives at least one is required — to keep the layer's cap, drop cap`,
+        });
         return;
       }
       // Issue #360: under edge "feather", the upper piece fades out across the cap, over the lower's opaque pixels only.
@@ -3345,7 +3389,13 @@ function cutLimbs(
         ...(hidden === null ? {} : { image_layer: hidden.layer }),
         missing_px: missing,
         ...(missing === 0 ? {} : { short_px: { left: shortLeft, right: shortRight } }),
-        ...(disc ? { shape: 'disc' as const, upper_px: upperPx } : upperPx === 0 ? {} : { upper_px: upperPx }),
+        ...(ball
+          ? { shape: 'ball' as const, upper_px: upperPx, lower_px: lowerPx, lower_kept_px: lowerKept, lower_missing_px: lowerMissing }
+          : disc
+            ? { shape: 'disc' as const, upper_px: upperPx }
+            : upperPx === 0
+              ? {}
+              : { upper_px: upperPx }),
         ...(sg.edge === 'feather' ? { edge: 'feather' as const, feather_radius: band, feathered_px: featheredPx } : {}),
         ...(placed === undefined
           ? {}

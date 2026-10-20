@@ -179,6 +179,7 @@ import { BARE_CROWN_PARTS, CUT_BASE_PARTS, CUT_PARTS, eyeParts, FACELESS_PARTS, 
 // The runtime's own posing, for the one control that measures where a mesh's pixels go (PR14): a second opinion about a weighted vertex is what a measurement must not carry.
 import { type BoneSnapshot, type Frame, loadPosable, type Mesh, sampleAnimation, sampleSetupPose } from 'rig-c/src/render.ts';
 import { CANVAS, flatName, layerRaster, minimalConfig, WRAPPER_LAYERS, writePsdFixture, writeWrapperFixture } from './fixtures/synthetic.ts';
+import { MANNEQUIN_BLOCKS, MANNEQUIN_FIGURE_PX, MANNEQUIN_KEYPOINTS, MANNEQUIN_PARTS, MANNEQUIN_PLAN, MANNEQUIN_SIDE, writeMannequinFixture } from './fixtures/mannequin.ts';
 import { ARTIST_PATCH, ARTIST_PLAN, ARTIST_PORTRAIT_SHIFT, ARTIST_PORTRAIT_W, ARTIST_SIDE, artistCanvas, artistConfig, artistLayers, EYE as ARTIST_EYE, writeArtistFixture } from './fixtures/artist.ts';
 import { arm, armRig, base, baseRenamed, baseWith, roleRig } from './fixtures/structure.ts';
 import {
@@ -2831,7 +2832,7 @@ function runConfigSuite(): number {
   const planted440: Array<[string, Record<string, unknown>, string, string, string]> = [
     ['edge "soft"', limbCfg((c) => (seg(c, 'arm_r', 1).edge = 'soft')), 'CONFIG_FIELD_TYPE', 'config.limbs.arm_r.segments[1].edge', 'is "soft"; "feather" is required'],
     ['edge true', limbCfg((c) => (seg(c, 'arm_r', 1).edge = true)), 'CONFIG_FIELD_TYPE', 'config.limbs.arm_r.segments[1].edge', 'is true; "feather" is required'],
-    ['cap_shape "round"', limbCfg((c) => (seg(c, 'arm_r', 1).cap_shape = 'round')), 'CONFIG_FIELD_TYPE', 'config.limbs.arm_r.segments[1].cap_shape', 'is "round"; "disc" is required'],
+    ['cap_shape "round"', limbCfg((c) => (seg(c, 'arm_r', 1).cap_shape = 'round')), 'CONFIG_FIELD_TYPE', 'config.limbs.arm_r.segments[1].cap_shape', 'is "round"; "disc" or "ball" is required'],
     ['edge on the upper segment', limbCfg((c) => (seg(c, 'arm_r', 0).edge = 'feather')), 'CONFIG_KEY_KNOWN', 'config.limbs.arm_r.segments[0].edge', 'is not a field on the upper segment'],
     ['cap_shape on the upper segment', limbCfg((c) => (seg(c, 'arm_r', 0).cap_shape = 'disc')), 'CONFIG_KEY_KNOWN', 'config.limbs.arm_r.segments[0].cap_shape', 'is not a field on the upper segment'],
   ];
@@ -2845,6 +2846,27 @@ function runConfigSuite(): number {
     loads440.every((e) => e === null) && read440?.edge === 'feather' && read440?.cap_shape === 'disc' && outcomes440.every((o) => o.ok),
     `edge "feather" and cap_shape "disc" on leg_r's knee: ${loads440.map((e) => (e === null ? 'loads' : codes(e))).join(', ')} (full, assemble door), read as ${JSON.stringify({ edge: read440?.edge, cap_shape: read440?.cap_shape })}; planted: ${outcomes440.map((o) => `${o.what} ${o.ok ? 'refused once at both doors' : `NOT: ${o.got}`}`).join('; ')}`,
     'issue #360 (unit B): the two fields are the joint\'s, so they sit on the segment below it, as joint, range and cap do; each takes the one value it names, absent being the hard cut and the layer\'s half-disc, so no spelling is read as a nearby one and a field on the upper segment, which sits below no joint, is refused rather than ignored',
+  );
+
+  // CF520 — issue #579: `cap_shape: "ball"` on the segment below a joint loads at both doors and is read as written; a
+  // spelling near it, and the value on the upper segment, are each refused once, by name, at both doors.
+  const ball520 = limbCfg((c) => (seg(c, 'arm_r', 1).cap_shape = 'ball'));
+  const loads520 = [refusals(() => parseConfig(ball520)), refusals(() => parseEarlyConfig(ball520, 'assemble'))];
+  const read520 = parseConfig(ball520).limbs?.arm_r.segments[1].cap_shape;
+  const planted520: Array<[string, Record<string, unknown>, string, string, string]> = [
+    ['cap_shape "Ball"', limbCfg((c) => (seg(c, 'arm_r', 1).cap_shape = 'Ball')), 'CONFIG_FIELD_TYPE', 'config.limbs.arm_r.segments[1].cap_shape', 'is "Ball"; "disc" or "ball" is required'],
+    ['cap_shape "ball" on the upper segment', limbCfg((c) => (seg(c, 'arm_r', 0).cap_shape = 'ball')), 'CONFIG_KEY_KNOWN', 'config.limbs.arm_r.segments[0].cap_shape', 'is not a field on the upper segment'],
+  ];
+  const outcomes520 = planted520.map(([what, c, code, object, start]) => {
+    const both = [refusals(() => parseConfig(c)), refusals(() => parseEarlyConfig(c, 'assemble'))];
+    const ok = both.every((e) => e !== null && e.problems.length === 1 && e.problems[0].code === code && e.problems[0].object === object && e.problems[0].detail.startsWith(start));
+    return { what, ok, got: both.map((e) => codes(e)).join(' / ') };
+  });
+  say(
+    'CF520_CAP_SHAPE_BALL_LOADS_BELOW_A_JOINT_AND_A_NEAR_SPELLING_OR_THE_UPPER_SEGMENT_IS_REFUSED_ONCE_BY_NAME_AT_BOTH_DOORS',
+    loads520.every((e) => e === null) && read520 === 'ball' && outcomes520.every((o) => o.ok),
+    `cap_shape "ball" on arm_r's elbow: ${loads520.map((e) => (e === null ? 'loads' : codes(e))).join(', ')} (full, assemble door), read as ${JSON.stringify(read520)}; planted: ${outcomes520.map((o) => `${o.what} ${o.ok ? 'refused once at both doors' : `NOT: ${o.got}`}`).join('; ')}`,
+    'issue #579: the ball is a second value of the field "disc" introduced, so it sits where that one does and is read exactly as written — a capitalised spelling is not mapped onto it, and the upper segment, which sits below no joint, still takes neither value',
   );
 
   // CF470 — issue #360 (unit D, item 14): `cut_band`, the band the cut is placed in, on the segment below a joint whose
@@ -4173,6 +4195,33 @@ function runPartsSuite(): number {
         limbSeen.every((o) => o.ok),
       `the two records ${limbOk === null ? 'read back' : codes(limbOk)}, the lower as ${JSON.stringify(limbBack)}; ${limbSeen.map((o) => `${o.what} -> ${o.got}`).join('; ')}`,
       'issue #349: check holds a limb part to its bone by this record, and HQ paints the missing cap pixels from its box, so the record is read as strictly as any count: the fields a segment has follow from its place below a joint or not, and the bytes are the same whatever order the stage built it in',
+    );
+
+    // PT130 — issue #579: a ball cap's record. Built in another order, it is written with its lower half's three counts
+    // right after upper_px and reads back; a ball without one of them, a disc carrying one, and more lower pixels
+    // missing than the cap's missing_px are each refused once.
+    const ballCap = { lower_missing_px: 4, lower_kept_px: 30, lower_px: 6, upper_px: 0, shape: 'ball', short_px: { left: 2, right: 2 }, missing_px: 4, layer_px: 40, box: [10, 25, 10, 10], radius: 5, width: 10, at: [15, 30] };
+    const ballLower = { ...lower, limb: { ...lower.limb, cap: ballCap } };
+    writeFileSync(path, serializeParts({ ...file, parts: [...file.parts, upper, ballLower] } as PartsFile));
+    const ballOk = refusals(() => readParts(path));
+    const ballBack = ballOk === null ? readParts(path).parts.find((q) => q.name === 'forearm_r')?.limb?.cap : undefined;
+    const ballFaults: Array<[string, Record<string, unknown>]> = [
+      ['a ball without lower_kept_px', { ...ballCap, lower_kept_px: undefined }],
+      ['a disc carrying lower_px', { ...ballCap, shape: 'disc', lower_kept_px: undefined, lower_missing_px: undefined }],
+      ['more lower pixels missing than missing_px', { ...ballCap, lower_missing_px: 5 }],
+    ];
+    const ballSeen = ballFaults.map(([what, c]) => {
+      writeFileSync(path, JSON.stringify({ ...file, parts: [...file.parts, upper, { ...lower, limb: { ...lower.limb, cap: c } }] }));
+      const err = refusals(() => readParts(path));
+      return { what, ok: err !== null && err.problems.length === 1 && err.problems[0].code === 'PARTS_FIELD_TYPE' && err.problems[0].detail.includes('"ball" with lower_px, lower_kept_px and lower_missing_px, at most missing_px'), got: codes(err) };
+    });
+    say(
+      'PT130_A_BALL_CAP_S_RECORD_READS_BACK_WITH_ITS_LOWER_HALF_AFTER_UPPER_PX_AND_A_MALFORMED_ONE_IS_REFUSED_BY_NAME',
+      ballOk === null &&
+        JSON.stringify(ballBack) === '{"at":[15,30],"width":10,"radius":5,"box":[10,25,10,10],"layer_px":40,"missing_px":4,"short_px":{"left":2,"right":2},"shape":"ball","upper_px":0,"lower_px":6,"lower_kept_px":30,"lower_missing_px":4}' &&
+        ballSeen.every((o) => o.ok),
+      `the ball record ${ballOk === null ? 'reads back' : codes(ballOk)} as ${JSON.stringify(ballBack)}; ${ballSeen.map((o) => `${o.what} -> ${o.got}`).join('; ')}`,
+      'issue #579: the lower half is counted apart, and its missing pixels are among the cap\'s — so a ball record carries all three counts, no other cap carries any, and the part cannot count more missing below the line than the whole cap',
     );
 
     // PT128 — issue #366: a single run's pad. The rig is 32x24 at 0.5, so the file is 64x48; on the 64 square it is
@@ -12718,6 +12767,7 @@ function runKeypointPoseCases(dir: string, say: (name: string, ok: boolean, deta
 
   runWristSnapCases(dir, SE, Pe, Je, se, say);
   runLegChainCases(dir, Pe, Je, se, say);
+  runFigureLayerCases(dir, say);
   runTrunkSegmentCases(dir, say);
   runHeadFrameCases(say);
   runFringeFrameCases(dir, say);
@@ -13199,6 +13249,184 @@ function runLegChainCases(dir: string, Pe: PartSet, Je: RigJoints, se: Proposal,
       refusals(() => checkProposal(Ps, unshod.proposal)) === null,
     `on the shoes: ${limbText(shod.proposal, 'leg_r')}; ${limbText(shod.proposal, 'leg_l')}, ${shod.draftLint.length} off; l_ankle at (122, 285): ${limbText(unshod.proposal, 'leg_r')}; ${limbText(unshod.proposal, 'leg_l')}; shoes rides ${unshod.proposal.regions.shoes ?? 'nothing'}; ${offLint.join(' / ') || 'no LINT'}; loads ${codes(refusals(() => checkProposal(Ps, unshod.proposal)))}`,
     'issue #517: propose drafted a foot cut at an ankle keypoint off the leg\'s art, and assemble then refused the config it wrote (ASSEMBLE_LIMB_JOINT_ON_ART); the joint is read as the cap reads it, and an ankle off it drafts the legs without the cut and says how far off on that line, never a joint the keypoints did not give',
+  );
+}
+
+/**
+ * Issue #577: a figure of one material — the whole body in one `topwear` layer, no handwear or legwear part — gets its
+ * limbs from that layer. On the parts form of fixtures/mannequin.ts (`figure`, full:topwear, the five blocks; a face
+ * and two eyewhites) with its keypoint file, every expected value below is the fixture's own: the joints as written,
+ * hip their midpoint (128, 126), chest half way to the neck (128, 94).
+ */
+function runFigureLayerCases(dir: string, say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const joints = (edit: (k: KeypointJson) => void = () => {}): RigJoints => {
+    const raw = structuredClone(MANNEQUIN_KEYPOINTS) as KeypointJson;
+    edit(raw);
+    const f = parseKeypoints(raw, 'mannequin.json');
+    return toRigJoints(f, f.people[0], MANNEQUIN_SIDE, MANNEQUIN_SIDE);
+  };
+  const rig = { w: MANNEQUIN_SIDE, h: MANNEQUIN_SIDE };
+  const partSet = (name: string, parts: ProposeFixturePart[]): PartSet => {
+    const d = join(dir, `figure-${name}`);
+    writeProposeFixture(d, parts, rig);
+    return readPartSet(d);
+  };
+  const what = (limbs: string): string => `every joint of ${limbs} and the origins of hip, chest and neck`;
+  const trunkSplit = 'limbs trunk (trunk_hip on hip, trunk_chest on chest, trunk_neck on neck, cut at the chest\'s and the neck\'s origins)';
+  const tail = 'split it between them by the cut, each pixel to the limb whose bones pass nearest it — the rule one legwear part holding both legs is split by (issue #577)';
+  const figNote = (why: string, limbs: string, over = ''): string => `figure (full:topwear): the figure layer — ${why}, and its art holds within 15 px ${what(limbs)}${over}; ${trunkSplit} and ${limbs} ${tail}`;
+  const limbsOf = (p: Proposal): string => Object.keys(p.limbs ?? {}).map((l) => `${l}: ${limbText(p, l)}`).join('; ');
+  const chainNames = (p: Proposal): string => p.bones.filter((b) => 'chain' in b).map((b) => ('chain' in b ? b.chain : '')).join(',');
+
+  // PR550: both arms and both legs from the one figure layer, and the trunk as a limb of three segments on it.
+  const P = partSet('one', MANNEQUIN_PARTS);
+  const J = joints();
+  const one = propose(P, J);
+  const bare = propose(P);
+  const wantLimbs =
+    'trunk: trunk_hip figure hip | trunk_chest figure chest chest | trunk_neck figure neck neck; ' +
+    'arm_r: upperarm_r figure sleeve_r0 | forearm_r figure sleeve_r1 elbow; arm_l: upperarm_l figure sleeve_l0 | forearm_l figure sleeve_l1 elbow; ' +
+    'leg_r: thigh_r figure leg_r0 | shin_r figure leg_r1 knee; leg_l: thigh_l figure leg_l0 | shin_l figure leg_l1 knee';
+  const note1 = figNote('no handwear part and no legwear part are over 500 px', 'arm_r, arm_l, leg_r, leg_l');
+  const regionsOk = ['trunk_hip:hip', 'trunk_chest:chest', 'trunk_neck:neck', 'upperarm_r:sleeve_r0', 'forearm_r:sleeve_r1', 'thigh_l:leg_l0', 'shin_l:leg_l1'].every((kv) => {
+    const [k, v] = kv.split(':');
+    return one.regions[k] === v;
+  });
+  say(
+    'PR550_A_FIGURE_IN_ONE_TOPWEAR_LAYER_GETS_BOTH_ARMS_BOTH_LEGS_AND_THE_TRUNK_AS_LIMBS_ON_IT',
+    limbsOf(one) === wantLimbs &&
+      one.notes.includes(note1) &&
+      ['hip', 'chest', 'neck'].map((b) => boneAt(one.bones, b)).join(' ') === '[128,126] [128,94] [128,62]' &&
+      boneAt(one.bones, 'sleeve_r') === '[[100,78],[72,78]]->[46,78]' &&
+      boneAt(one.bones, 'sleeve_l') === '[[156,78],[184,78]]->[210,78]' &&
+      boneAt(one.bones, 'leg_r') === '[[116,126],[116,180]]->[116,224]' &&
+      boneAt(one.bones, 'leg_l') === '[[140,126],[140,180]]->[140,224]' &&
+      chainNames(one) === 'sleeve_r,sleeve_l,leg_r,leg_l' &&
+      regionsOk &&
+      !('figure' in one.meshes) &&
+      !('figure' in one.regions) &&
+      !one.notes.some((n) => n.startsWith('one handwear part holds both wrists') || n.startsWith('trunk segments (')) &&
+      refusals(() => checkProposal(P, one)) === null &&
+      bare.limbs === undefined &&
+      'figure' in bare.meshes &&
+      !bare.notes.some((n) => n.includes('figure layer')),
+    `limbs ${limbsOf(one)}; chains ${chainNames(one)}; hip ${boneAt(one.bones, 'hip')}, chest ${boneAt(one.bones, 'chest')}, neck ${boneAt(one.bones, 'neck')}; figure note ${one.notes.includes(note1) ? 'as written' : `ABSENT (${JSON.stringify(one.notes.find((n) => n.startsWith('figure ')) ?? null)})`}; figure attached ${'figure' in one.meshes || 'figure' in one.regions}; loads ${codes(refusals(() => checkProposal(P, one)))}; without joints: limbs ${bare.limbs === undefined ? 'none' : 'SOME'}, figure ${'figure' in bare.meshes ? 'meshed by the topwear rule' : 'NOT meshed'}`,
+    'issue #577: a mannequin reaches See-through as one garment, so no handwear or legwear part carries a limb and no limb was drafted until the layers were re-sorted by hand; the one topwear layer that holds every joint is split by the cut the legwear rule already uses, the trunk a limb of its own so that the torso and the neck keep their pixels (a limb takes every pixel of its part)',
+  );
+
+  // PR551: the route is per limb. With a handwear part over 500 px on each arm (the arm blocks, 64 x 12 = 768 px), the
+  // arms are the sleeve rule's and only the legs and the trunk come from the figure layer.
+  const sleeves: ProposeFixturePart[] = [
+    { name: 'sleeve_a', from: 'full:handwear-r', x: 40, y: 72, w: 64, h: 12, colour: [240, 240, 240] },
+    { name: 'sleeve_b', from: 'full:handwear-l', x: 152, y: 72, w: 64, h: 12, colour: [240, 240, 240] },
+  ];
+  const Ph = partSet('sleeved', [...MANNEQUIN_PARTS, ...sleeves]);
+  const sleeved = propose(Ph, J);
+  const note2 = figNote('no legwear part is over 500 px', 'leg_r, leg_l');
+  say(
+    'PR551_A_LIMB_WHOSE_TAGGED_ROUTE_HAS_A_PART_KEEPS_IT_AND_ONLY_THE_OTHERS_COME_FROM_THE_FIGURE_LAYER',
+    limbText(sleeved, 'arm_r') === 'upperarm_r sleeve_a sleeve_r0 | forearm_r sleeve_a sleeve_r1 elbow' &&
+      limbText(sleeved, 'arm_l') === 'upperarm_l sleeve_b sleeve_l0 | forearm_l sleeve_b sleeve_l1 elbow' &&
+      limbText(sleeved, 'leg_r') === 'thigh_r figure leg_r0 | shin_r figure leg_r1 knee' &&
+      limbText(sleeved, 'trunk') === 'trunk_hip figure hip | trunk_chest figure chest chest | trunk_neck figure neck neck' &&
+      sleeved.notes.includes(note2) &&
+      refusals(() => checkProposal(Ph, sleeved)) === null,
+    `arm_r ${limbText(sleeved, 'arm_r')}; leg_r ${limbText(sleeved, 'leg_r')}; trunk ${limbText(sleeved, 'trunk')}; note ${sleeved.notes.includes(note2) ? 'as written' : `ABSENT (${JSON.stringify(sleeved.notes.find((n) => n.startsWith('figure ')) ?? null)})`}`,
+    'the figure layer stands in for a route only where the route has no part: an arm with its own handwear layer keeps it, so a garment figure whose tags work is drafted as before',
+  );
+
+  // PR552: no figure layer. The legs as one column (x 108..147, y 130..229): the knees' line, (116, 180) to (140, 180),
+  // runs on art all the way, as a robe over both legs does. And r_wrist at (20, 78): the figure's nearest art is x 40,
+  // 20 px off by the larger gap, over 15. Either way no limb is drafted, the figure keeps the topwear rule, and one note
+  // names what the part misses.
+  const joined = MANNEQUIN_PARTS.map((q) =>
+    q.name !== 'figure' ? q : { ...q, rects: [MANNEQUIN_BLOCKS.neck, MANNEQUIN_BLOCKS.torso, MANNEQUIN_BLOCKS.arm_r, MANNEQUIN_BLOCKS.arm_l, [108, 130, 148, 230] as [number, number, number, number]].map(([x0, y0, x1, y1]): [number, number, number, number] => [x0, y0, x1 - x0, y1 - y0]) },
+  );
+  const Pj = partSet('joined', joined);
+  const col = propose(Pj, J);
+  const far = propose(P, joints((k) => {
+    k.people[0].joints.r_wrist = { state: 'observed', at: [20, 78] };
+  }));
+  const none = (miss: string): string =>
+    `figure layer: no handwear part and no legwear part are over 500 px, and no topwear part over 500 px holds within 15 px ${what('arm_r, arm_l, leg_r, leg_l')} (${miss}), so arm_r, arm_l, leg_r, leg_l are not drafted from one layer (issue #577)`;
+  const colNote = none("figure's art does not break on the line from r_knee to l_knee: the legs are one column there, as a garment over both legs is");
+  const farNote = none('figure holds no art within 15 px of r_wrist at [20.0, 78.0]');
+  say(
+    'PR552_A_TOPWEAR_WHOSE_LEGS_ARE_ONE_COLUMN_OR_THAT_MISSES_A_JOINT_IS_NO_FIGURE_LAYER_AND_A_NOTE_SAYS_WHAT_IT_MISSES',
+    [col, far].every((p) => p.limbs === undefined && 'figure' in p.meshes) && col.notes.includes(colNote) && far.notes.includes(farNote),
+    `legs one column: limbs ${col.limbs === undefined ? 'none' : limbsOf(col)}, ${JSON.stringify(col.notes.find((n) => n.startsWith('figure layer')) ?? null)}; r_wrist off: limbs ${far.limbs === undefined ? 'none' : limbsOf(far)}, ${JSON.stringify(far.notes.find((n) => n.startsWith('figure layer')) ?? null)}`,
+    'a topwear part is the figure only when it holds every joint it would be cut at, and a garment hung over both legs is one column at the knees: split, it would become legs it does not have; the note names the first thing missed, so a tolerance is never guessed',
+  );
+
+  // PR553: two topwear parts that both hold everything — one from each run, as a layer name is one per run. `twin`
+  // (head:topwear) is the figure with the 4 x 12 px at x 44..47, y 72..83
+  // left out (48 px), all inside the 31 x 31 square about r_wrist (46, 78) — x 31..61, y 63..93 — and inside no other
+  // point's square (the nearest, r_elbow's, starts at x 57), so it holds 48 px fewer there and the figure is chosen.
+  // The same twin with nothing left out ties, and is refused by name.
+  const holed = [[40, 72, 4, 12], [48, 72, 56, 12]] as Array<[number, number, number, number]>;
+  const figRects = (MANNEQUIN_PARTS[0].rects ?? []).filter(([x, y]) => !(x === 40 && y === 72));
+  const twin: ProposeFixturePart = { ...MANNEQUIN_PARTS[0], name: 'twin', from: 'head:topwear', rects: [...figRects, ...holed] };
+  const Pt = partSet('twin', [...MANNEQUIN_PARTS, twin]);
+  const two = propose(Pt, J);
+  const figLine = two.notes.find((n) => n.startsWith('figure (full:topwear): the figure layer')) ?? '';
+  const counts = /figure (\d+), twin (\d+)/.exec(figLine);
+  const Pe = partSet('tie', [...MANNEQUIN_PARTS, { ...MANNEQUIN_PARTS[0], name: 'twin', from: 'head:topwear' }]);
+  const tie = refusals(() => propose(Pe, J));
+  say(
+    'PR553_OF_TWO_TOPWEAR_PARTS_THAT_HOLD_THE_JOINTS_THE_ONE_WITH_MORE_ART_ABOUT_THEM_IS_THE_FIGURE_AND_A_TIE_IS_REFUSED',
+    limbText(two, 'arm_r') === 'upperarm_r figure sleeve_r0 | forearm_r figure sleeve_r1 elbow' &&
+      counts !== null &&
+      Number(counts[1]) - Number(counts[2]) === 48 &&
+      figLine.includes('; of the 2 topwear parts that hold them it has the most opaque px in the 31x31 squares about those points, figure ') &&
+      codes(tie) === 'PROPOSE_FIGURE_LAYER parts "figure", "twin" (topwear)',
+    `holed twin: arm_r ${limbText(two, 'arm_r')}, counts ${counts === null ? 'not printed' : `${counts[1]} against ${counts[2]}`}; identical twin: ${codes(tie)}`,
+    'two layers that both hold every joint are decided by the art about the joints, in the square the 15 px tolerance reads; where that is equal nothing says which is the figure, and a guess would cut the wrong layer',
+  );
+
+  // PR554 (bars 1 and 2): the PSD form from the command line. --propose-plan plans the topwear, the face and the eyes and
+  // names legwear (64 px) below the floor; assemble, propose --keypoints, and build on the drafted sections: the limb cut
+  // counts the figure's 7,856 px, with the shares the blocks fix by hand — the neck above its joint, rows 50..61 x 12
+  // columns = 144; each forearm past its elbow, columns 32 x 12 rows = 384; each shin past its knee, 50 rows x 16 = 800.
+  const md = join(dir, 'figure-cli');
+  writeMannequinFixture(md);
+  const plan = runCli(['assemble', '--propose-plan', '--source', join(md, 'painting.png'), '--full', join(md, 'art.psd'), '--config', join(md, 'config.json')]);
+  let rows = '';
+  let planNotes: string[] = [];
+  try {
+    const pj = JSON.parse(plan.out) as { plan: string[][]; notes: string[] };
+    rows = JSON.stringify(pj.plan);
+    planNotes = pj.notes;
+  } catch {
+    rows = 'not JSON';
+  }
+  const asm = runCli(['assemble', '--source', join(md, 'painting.png'), '--full', join(md, 'art.psd'), '--config', join(md, 'config.json'), '--out', join(md, 'asm')]);
+  const prop = runCli(['propose', '--parts', join(md, 'asm', 'rig'), '--source', join(md, 'painting.png'), '--out', join(md, 'prop'), '--keypoints', join(md, 'keypoints.json')]);
+  const drafted = existsSync(join(md, 'prop', 'proposal.json')) ? (JSON.parse(readFileSync(join(md, 'prop', 'proposal.json'), 'utf8')) as Record<string, unknown>) : {};
+  const cfg = { ...(JSON.parse(readFileSync(join(md, 'config.json'), 'utf8')) as Record<string, unknown>), ...Object.fromEntries(Object.entries(drafted).filter(([k]) => k !== 'notes')) };
+  writeFileSync(join(md, 'built.json'), `${JSON.stringify(cfg, null, 2)}\n`);
+  const built = prop.status === 0 ? runCli(['build', '--config', join(md, 'built.json'), '--source', join(md, 'painting.png'), '--full', join(md, 'art.psd'), '--out', join(md, 'build')]) : { status: -1, out: '' };
+  const cut = built.out.split('\n').find((l) => l.includes('limb cut: "topwear"')) ?? '';
+  const summary = built.out.split('\n').find((l) => /\bcheck: (PASS|FAIL)/.test(l)) ?? 'no check line';
+  const share = (n: string): number => Number(new RegExp(`"${n}" (\\d+)`).exec(cut)?.[1] ?? -1);
+  const shares = ['trunk_hip', 'trunk_chest', 'trunk_neck', 'upperarm_r', 'forearm_r', 'upperarm_l', 'forearm_l', 'thigh_r', 'shin_r', 'thigh_l', 'shin_l'].map(share);
+  const cliNote = 'note: topwear (full:topwear): the figure layer — no handwear part and no legwear part are over 500 px';
+  say(
+    'PR554_THE_ONE_LAYER_FIGURE_FROM_THE_COMMAND_LINE_DRAFTS_EVERY_LIMB_AND_BUILDS_GREEN',
+    plan.status === 0 &&
+      rows === JSON.stringify(MANNEQUIN_PLAN) &&
+      planNotes.some((n) => n.startsWith("legwear: in no plan row — full run: 64 px, empty: below the proposer's floor of 150")) &&
+      asm.status === 0 &&
+      prop.status === 0 &&
+      prop.out.includes(cliNote) &&
+      Object.keys((drafted.limbs ?? {}) as Record<string, unknown>).join(',') === 'trunk,arm_r,arm_l,leg_r,leg_l' &&
+      built.status === 0 &&
+      cut.includes(`"topwear" opaque ${MANNEQUIN_FIGURE_PX} = `) &&
+      shares.every((n) => n > 0) &&
+      shares.reduce((a, b) => a + b, 0) === MANNEQUIN_FIGURE_PX &&
+      [share('trunk_neck'), share('forearm_r'), share('forearm_l'), share('shin_r'), share('shin_l')].join(',') === '144,384,384,800,800' &&
+      summary.includes('check: PASS'),
+    `plan exit ${plan.status}, rows ${rows}; assemble exit ${asm.status}; propose exit ${prop.status}, figure note ${prop.out.includes(cliNote) ? 'printed' : 'ABSENT'}, limbs ${Object.keys((drafted.limbs ?? {}) as Record<string, unknown>).join(',')}; build exit ${built.status}: "${cut.trim()}"; "${summary.trim()}"`,
+    'issue #577 bars 1 and 2: a public fixture whose figure is one layer is drafted with every limb by propose --keypoints and no hand re-sort, and the draft builds green — the figure is grained (4-row bands) because a flat block barely shows a 1.6 px breath (BREATH_VISIBLE read 1.713 on the same figure in flat colour and 4.457 grained, against its floor 3.809: a property of the fixture, not of the rule)',
   );
 }
 
@@ -15820,6 +16048,187 @@ function runLimbCheckCases(say: (name: string, ok: boolean, detail: string, why:
   }
 }
 
+/**
+ * Issue #579: `cap_shape: "ball"` on a notched hinge. The arm of SEAM_OVER_RANGE's controls (x 12..41, y 4..60,
+ * colour C) with its elbow at (27, 32), the middle of the arm, and a V-notch below the elbow line: on row 32 + d
+ * (d 0..7), 8 - d px cut from each edge, 72 px in all, transparent in the layer. By hand:
+ *
+ * - The run across the line is x 12..41, centres -14.5..14.5 about 27, so the half-width about the joint is 15 on
+ *   either side: the disc's radius, box [12, 17, 30, 30]. Its upper half (centre above the line, rows <= 31) lies on
+ *   the arm; its lower half (rows >= 32) is the arm's but for the notch's pixels inside the disc — counted below by
+ *   loops of their own over the definitions, not read off the code under test.
+ * - The cap image is the 30 x 30 box, the disc in colour BALL_RGB (80, 50, 30) and transparent outside it — the
+ *   author's ball, both halves. Under "disc" the image gives the upper half and the notch stays; under "ball" it
+ *   gives the upper half and the notch's pixels in the disc, and every pixel the layer paints below the line stays.
+ * - Bent about the joint, the forearm under "ball" carries a whole disc about the pivot, which a turn maps onto
+ *   itself, so no pixel of the joint's art is uncovered; under "disc" the turned notch uncovers it, and the disc's
+ *   own bar (no pixel over 40) names the angle.
+ * - Without the image, the ball's notch pixels are missing — left of the axis (x <= 26) and right of it alike.
+ */
+const BALL_AT: [number, number] = [27, 32];
+const BALL_RGB: [number, number, number] = [80, 50, 30];
+const notchCut = (x: number, y: number): boolean => y >= 32 && y <= 39 && (x < 12 + 8 - (y - 32) || x >= 42 - (8 - (y - 32)));
+const NOTCH_FULL: RunLayerSpec[] = [
+  {
+    name: 'handwear-r',
+    depth: 0.5,
+    rects: [
+      { x0: 12, y0: 4, x1: 42, y1: 32, colour: C },
+      ...Array.from({ length: 8 }, (_, d) => ({ x0: 12 + 8 - d, y0: 32 + d, x1: 42 - (8 - d), y1: 33 + d, colour: C })),
+      { x0: 12, y0: 40, x1: 42, y1: 61, colour: C },
+    ],
+  },
+];
+
+function ballConfig(extra: Record<string, unknown>): Record<string, unknown> {
+  const cfg = assembleConfig({ plan: [['arm', 'full', 'handwear-r']], extend: [] });
+  return {
+    ...cfg,
+    limbs: {
+      arm_r: {
+        segments: [
+          { part: 'upperarm_r', from: 'arm', bone: 'sleeve_r0' },
+          { part: 'forearm_r', from: 'arm', bone: 'sleeve_r1', joint: 'elbow', range: [-45, 45], ...extra },
+        ],
+      },
+    },
+    bones: [
+      { name: 'hip', parent: 'root', at: [27, 2] },
+      { chain: 'sleeve_r', parent: 'hip', points: [[27, 4], BALL_AT], tip: [27, 60] },
+    ],
+    regions: { upperarm_r: 'sleeve_r0', forearm_r: 'sleeve_r1' },
+    motion: { duration: 1, tracks: [{ chain: 'sleeve_r', amps: [2, 6], period: 1, phase: 0, lag: 0.08 }] },
+  };
+}
+
+function runBallCheckCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const dir = temp('ball-check');
+  try {
+    writeRun(join(dir, 'full'), NOTCH_FULL);
+    writeRun(join(dir, 'head'), FRAMED_HEAD);
+    writeFileSync(join(dir, 'painting.png'), encodePngBytes(flatPainting()));
+    const R = 15;
+    const inBall = (x: number, y: number): boolean => (x + 0.5 - BALL_AT[0]) ** 2 + (y + 0.5 - BALL_AT[1]) ** 2 <= R * R;
+    const img = newRaster(30, 30);
+    for (let j = 0; j < 30; j++) for (let i = 0; i < 30; i++) if (inBall(12 + i, 17 + j)) img.data.set([...BALL_RGB, 255], (j * 30 + i) * 4);
+    writeFileSync(join(dir, 'ball.png'), encodePngBytes(img));
+    const built = (label: string, extra: Record<string, unknown>, cmd: 'build' | 'assemble' = 'build'): { status: number; out: string; fig: Record<string, unknown> | null; parts: PartsFile | null } => {
+      const cfg = join(dir, `${label}.json`);
+      writeFileSync(cfg, JSON.stringify(ballConfig(extra)));
+      const r = runCli([cmd, '--config', cfg, '--source', join(dir, 'painting.png'), '--full', join(dir, 'full'), '--head', join(dir, 'head'), '--out', join(dir, label)]);
+      // assemble alone writes under <out>/rig; build writes parts.json at <out>.
+      const pj = cmd === 'build' ? join(dir, label, 'parts.json') : join(dir, label, 'rig', 'parts.json');
+      return { ...r, fig: readJsonFile(join(dir, label, 'check', 'check.json')), parts: existsSync(pj) ? readParts(pj) : null };
+    };
+    const disc = built('disc', { cap_shape: 'disc', cap: 'ball.png' });
+    const ball = built('ball', { cap_shape: 'ball', cap: 'ball.png' });
+    const bare = built('bare', { cap_shape: 'ball' }, 'assemble');
+    // By hand, from the definitions above.
+    let upperHalf = 0;
+    let lowerNotch = 0;
+    let lowerArt = 0;
+    let notchLeft = 0;
+    for (let y = 0; y < 64; y++) {
+      for (let x = 12; x <= 41; x++) {
+        if (!inBall(x, y)) continue;
+        if (y <= 31) upperHalf++;
+        else if (notchCut(x, y)) {
+          lowerNotch++;
+          if (x <= 26) notchLeft++;
+        } else lowerArt++;
+      }
+    }
+    const notchAll = Array.from({ length: 8 }, (_, d) => 2 * (8 - d)).reduce((a, b) => a + b, 0);
+    const cap = (b: { parts: PartsFile | null }): NonNullable<PartRecord["limb"]>["cap"] => b.parts?.parts.find((q) => q.name === 'forearm_r')?.limb?.cap;
+    const capLine = (b: { out: string }): string => b.out.split('\n').map((l) => l.replace(/^\[assemble\] /, '')).find((l) => l.startsWith('  limb cap: "arm_r"')) ?? '';
+    const head = `  limb cap: "arm_r" joint "elbow" at [27, 32], on "forearm_r": a disc of radius 15 px (cap_shape "ball": the joint's distance to the nearer side of the limb, 30 px across the joint line), box [12, 17, 30, 30] — on the upper side of the line`;
+    const wantBall = `${head} ${upperHalf} px from the cap image, 0 px from the layer, 0 px from "upperarm_r", none missing; cap_shape "ball": on the lower side of the line ${lowerNotch} px written into "forearm_r" from the cap image where its layer is transparent (alpha 0), ${lowerArt} px left as painted, none missing`;
+    const wantBare = `${head} ${upperHalf} px from the layer, 0 px from "upperarm_r", none missing; cap_shape "ball": on the lower side of the line 0 px written into "forearm_r" from a cap image (none is named) where its layer is transparent (alpha 0), ${lowerArt} px left as painted, ${lowerNotch} px missing — the layer is transparent there and no cap image gives a pixel, and the tool invents none: paint them into a 30x30 image whose pixel (i, j) is rig pixel (12 + i, 17 + j), and name it in the segment's "cap"`;
+    const bareLint = bare.out.split('\n').map((l) => l.replace(/^\[assemble\] /, '')).find((l) => l.startsWith('  LINT "forearm_r" cap')) ?? '';
+    // Bar 1: the lower part's PNG under "ball" against "disc", inside the art "disc" wrote (alpha above 0).
+    const png = (label: string): Raster => readPng(join(dir, label, 'parts', 'forearm_r.png'));
+    const pd = png('disc');
+    const pb = png('ball');
+    const rd = disc.parts?.parts.find((q) => q.name === 'forearm_r');
+    const rb = ball.parts?.parts.find((q) => q.name === 'forearm_r');
+    let artPx = 0;
+    let artChanged = 0;
+    let written = 0;
+    let writtenAsImage = 0;
+    let otherChanged = 0;
+    if (pd.width === pb.width && pd.height === pb.height && rd !== undefined) {
+      for (let y = 0; y < pd.height; y++) {
+        for (let x = 0; x < pd.width; x++) {
+          const o = (y * pd.width + x) * 4;
+          const same = [0, 1, 2, 3].every((c) => pd.data[o + c] === pb.data[o + c]);
+          if (pd.data[o + 3] > 0) {
+            artPx++;
+            if (!same) artChanged++;
+          } else if (pb.data[o + 3] > 0) {
+            written++;
+            const gx = rd.x + x;
+            const gy = rd.y + y;
+            if (notchCut(gx, gy) && inBall(gx, gy) && [0, 1, 2].every((c) => pb.data[o + c] === BALL_RGB[c]) && pb.data[o + 3] === 255) writtenAsImage++;
+          } else if (!same) otherChanged++;
+        }
+      }
+    }
+    const line = (fig: Record<string, unknown> | null): SweepLine | null => (fig?.[SWEEP_LINE] as SweepLine | undefined) ?? null;
+    const pose = (fig: Record<string, unknown> | null, a: number): SweepPose | undefined => line(fig)?.joints[0]?.poses.find((p) => p.degrees === a);
+    const poses = (fig: Record<string, unknown> | null): string => {
+      const l = line(fig);
+      return l === null ? 'absent' : `${l.status} ${l.joints.map((j) => `${j.shape ?? 'plain'} [${j.poses.map((p) => `${p.degrees}:${p.status}:${p.mean}:${p.px_over_40}`).join(' ')}]`).join('; ')}`;
+    };
+    const rows = (b: { out: string }): string[] => b.out.split('\n').map((l) => l.replace(/^\[check\] /, '')).filter((l) => l.startsWith('    joint "elbow" (arm_r, "forearm_r"'));
+    say(
+      'CK570_CAP_SHAPE_BALL_WRITES_THE_LOWER_HALF_ONLY_WHERE_THE_LOWER_LAYER_IS_TRANSPARENT_COUNTS_IT_APART_AND_CHANGES_NO_PAINTED_PIXEL',
+      ball.status === 0 &&
+        notchAll === 72 &&
+        JSON.stringify(cap(ball)) ===
+          `{"at":[27,32],"width":30,"radius":15,"box":[12,17,30,30],"layer_px":0,"image_px":${upperHalf},"missing_px":0,"shape":"ball","upper_px":0,"lower_px":${lowerNotch},"lower_kept_px":${lowerArt},"lower_missing_px":0}` &&
+        JSON.stringify(cap(disc)) === `{"at":[27,32],"width":30,"radius":15,"box":[12,17,30,30],"layer_px":0,"image_px":${upperHalf},"missing_px":0,"shape":"disc","upper_px":0}` &&
+        capLine(ball) === wantBall &&
+        rd !== undefined &&
+        rb !== undefined &&
+        [rd.x, rd.y, rd.w, rd.h].join() === [rb.x, rb.y, rb.w, rb.h].join() &&
+        rb.opaque_px === rd.opaque_px + lowerNotch &&
+        artPx === rd.opaque_px &&
+        artChanged === 0 &&
+        written === lowerNotch &&
+        writtenAsImage === lowerNotch &&
+        otherChanged === 0,
+      `ball cap ${JSON.stringify(cap(ball))} (by hand upper ${upperHalf}, lower written ${lowerNotch} of the notch's ${notchAll}, ${lowerArt} left as painted); line ${capLine(ball) === wantBall ? 'as derived' : `GOT ${capLine(ball)}`}; forearm PNG ${pb.width}x${pb.height} against disc's ${pd.width}x${pd.height}: ${artPx} px of disc's art (alpha > 0), ${artChanged} changed; ${written} px written where disc's is transparent, ${writtenAsImage} of them notch pixels in the disc in the image's colour; ${otherChanged} other differences`,
+      'issue #579 bars 1 and the line: the ball\'s lower half is the author\'s image, written only where the lower piece is transparent (alpha 0, the reading the upper half gives a layer\'s pixel), so the lower layer\'s painted pixels are the disc build\'s byte for byte and the only pixels that move are the notch\'s inside the disc; the line counts the lower half apart from the upper',
+    );
+    say(
+      'CK571_A_BALL_ON_A_NOTCHED_HINGE_PASSES_SEAM_OVER_RANGE_AT_ITS_RANGE_AND_THE_DISC_ON_THE_SAME_HINGE_FAILS_ITS_OWN_BAR',
+      ball.status === 0 &&
+        line(ball.fig)?.status === 'PASS' &&
+        [-45, 0, 45].every((a) => pose(ball.fig, a)?.status === 'PASS' && pose(ball.fig, a)?.px_over_40 === 0) &&
+        disc.status === 1 &&
+        line(disc.fig)?.status === 'FAIL' &&
+        pose(disc.fig, 0)?.status === 'PASS' &&
+        [-45, 45].every((a) => pose(disc.fig, a)?.status === 'FAIL' && (pose(disc.fig, a)?.px_over_40 ?? 0) > 0),
+      `SEAM_OVER_RANGE ball ${poses(ball.fig)}, disc ${poses(disc.fig)}; ball rows: ${rows(ball).map((r) => r.trim().slice(0, 160)).join(' | ')}; disc rows: ${rows(disc).map((r) => r.trim().slice(0, 160)).join(' | ')}`,
+      'issue #579 bar 2: the notch beside a hinge leaves the disc cap\'s turned forearm short where the notch turns into the joint, and the disc\'s own bar — no pixel over 40 — names both ends of the range; the ball fills the notch inside the disc, a whole disc about the pivot that a turn maps onto itself, so the same range reads no pixel over 40 with no hand edit of the layer',
+    );
+    say(
+      'CK572_A_BALL_WITHOUT_AN_IMAGE_COUNTS_ITS_TRANSPARENT_LOWER_HALF_MISSING_AS_THE_UPPER_HALF_S_ARE_AND_NAMES_THEM_IN_THE_LINT',
+      bare.status === 0 &&
+        lowerNotch === 2 * notchLeft &&
+        JSON.stringify(cap(bare)) ===
+          `{"at":[27,32],"width":30,"radius":15,"box":[12,17,30,30],"layer_px":${upperHalf},"missing_px":${lowerNotch},"short_px":{"left":${notchLeft},"right":${lowerNotch - notchLeft}},"shape":"ball","upper_px":0,"lower_px":0,"lower_kept_px":${lowerArt},"lower_missing_px":${lowerNotch}}` &&
+        capLine(bare) === wantBare &&
+        bareLint ===
+          `  LINT "forearm_r" cap at [27, 32] (limb "arm_r", joint "elbow", radius 15 px): short_px left ${notchLeft}, right ${lowerNotch - notchLeft}: no layer gives them — ${lowerNotch} px of the disc on the lower side of the cut (cap_shape "ball"), where "forearm_r"'s layer is transparent and no cap image gives a pixel; the rest of the disc is filled, ${upperHalf} px from "forearm_r"'s layer, 0 px from "upperarm_r", on the lower side 0 px written, ${lowerArt} px left as painted`,
+      `bare ball cap ${JSON.stringify(cap(bare))}; line ${capLine(bare) === wantBare ? 'as derived' : `GOT ${capLine(bare)}`}; LINT ${bareLint === '' ? 'absent' : bareLint}`,
+      'issue #579: the tool invents no pixel of the ball — where the lower piece is transparent and no image gives one, the pixel is missing, in missing_px and short_px by side and in the LINT, exactly as the upper half\'s missing pixels are counted; the planted mutant is the build without the image, so the notch is named rather than filled',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 function runCheckSuite(): number {
   section('check: build, gates, seam and loop through the installed rig-c');
   const { say, bad } = counter();
@@ -17982,6 +18391,7 @@ function runCheckSuite(): number {
   runMotionSeamCases(say);
   runSweepUnitCases(say);
   runDiscCheckCases(say);
+  runBallCheckCases(say);
   runRigcIdentityCases(say);
   runClothCheckCases(say);
   runClothSettlesCases(say);
@@ -24849,6 +25259,44 @@ function runLimbCases(say: (name: string, ok: boolean, detail: string, why: stri
         notPng.startsWith('ASSEMBLE_LIMB_CAP_DECODES config.limbs.arm_r.segments[1].cap (part "forearm_r"): '),
       `with a 10x10 UB image: ${cappedLine.slice(cappedLine.indexOf('box'))}; rig (12, 29) ${at(12, 29)} and (15, 25) ${at(15, 25)}, under the upper arm, (10, 25) ${at(10, 25)} (outside the disc); 9x10 -> ${small.slice(0, 160)}; transparent -> ${clear.slice(0, 140)}; no file -> ${none.slice(0, 110)}; not a PNG -> ${notPng.slice(0, 100)}`,
       'issue #349 (HQ\'s item 3): the cap is a primitive that takes supplied art — the missing pixels are painted outside the tool and named in the config, and an image painted over the whole cap replaces the layer\'s copy of the limb\'s outline with art that has none. The tool still invents nothing: an image of the wrong size, or one that gives nothing, is refused with the box it must be',
+    );
+
+    // AS490 — issue #579: cap_shape "ball" on the fully painted forearm. The UB image over the whole box gives the
+    // upper half's 40 pixels, as under "disc"; below the line the forearm paints every pixel of the disc (x 10..19), so
+    // the ball writes none and keeps them all, the layer's colour C where the image is UB. An image opaque on the lower
+    // rows only (y 30..34) gives no pixel the cap takes, and is refused by name with the ball's reading; the same image
+    // under "disc" is the existing refusal's mutant.
+    const withBall = (shape: string, cap: string): Record<string, unknown> => {
+      const limbs = structuredClone(LIMBS) as Record<string, { segments: Array<Record<string, unknown>> }>;
+      Object.assign(limbs.arm_r.segments[1], { cap, cap_shape: shape });
+      return limbConfig(limbs);
+    };
+    const lowerOnly = (): Uint8Array => {
+      const r = newRaster(10, 10);
+      for (let q = 50; q < 100; q++) r.data.set(UB, q * 4);
+      return encodePngBytes(r);
+    };
+    let ballLower = 0;
+    for (let y = 30; y < 35; y++) for (let x = 10; x < 20; x++) if ((x + 0.5 - 15) ** 2 + (y + 0.5 - 30) ** 2 <= 25) ballLower++;
+    const balled = stage('ball-full', withBall('ball', 'elbow.png'), { 'elbow.png': png(10, 10, 255) });
+    const balledRec = balled.r.parts.parts.find((q) => q.name === 'forearm_r');
+    const ballIm = (balled.r.images.find((q) => q.record.name === 'forearm_r') as PlacedPart).image;
+    const ballAt = (x: number, y: number): string => Array.from(ballIm.data.subarray(((y - 25) * ballIm.width + (x - 10)) * 4, ((y - 25) * ballIm.width + (x - 10)) * 4 + 4)).join(',');
+    const ballLine = balled.lines.find((l) => l.startsWith('  limb cap: "arm_r"')) ?? '';
+    const ballEmpty = refusedBy('ball-empty', withBall('ball', 'elbow.png'), { 'elbow.png': lowerOnly() });
+    const discEmpty = refusedBy('ball-empty-disc', withBall('disc', 'elbow.png'), { 'elbow.png': lowerOnly() });
+    say(
+      'AS490_A_BALL_KEEPS_EVERY_PIXEL_THE_LOWER_LAYER_PAINTS_AND_AN_IMAGE_THAT_GIVES_THE_CAP_NOTHING_IS_REFUSED_WITH_THE_BALL_S_READING',
+      JSON.stringify(balledRec?.limb?.cap) === `{"at":[15,30],"width":10,"radius":5,"box":[10,25,10,10],"layer_px":0,"image_px":40,"missing_px":0,"shape":"ball","upper_px":0,"lower_px":0,"lower_kept_px":${ballLower},"lower_missing_px":0}` &&
+        ballLower === 40 &&
+        ballLine.endsWith(`cap_shape "ball": on the lower side of the line 0 px written into "forearm_r" from the cap image where its layer is transparent (alpha 0), ${ballLower} px left as painted, none missing`) &&
+        ballAt(15, 29) === UB.join(',') &&
+        ballAt(15, 30) === [...C, 255].join(',') &&
+        ballAt(12, 33) === [...C, 255].join(',') &&
+        ballEmpty.startsWith('ASSEMBLE_LIMB_CAP_EMPTY config.limbs.arm_r.segments[1] (joint "elbow", part "forearm_r").cap: elbow.png gives none of the cap\'s pixels: it is transparent over the disc\'s upper half and over every pixel of its lower half where "forearm_r"\'s layer is transparent (cap_shape "ball", issue #579)') &&
+        discEmpty.startsWith('ASSEMBLE_LIMB_CAP_EMPTY config.limbs.arm_r.segments[1] (joint "elbow", part "forearm_r").cap: elbow.png is transparent over every one of the cap\'s pixels'),
+      `ball with the UB image: ${JSON.stringify(balledRec?.limb?.cap)} (by hand ${ballLower} lower-half px, all painted); ${ballLine.slice(ballLine.indexOf('cap_shape "ball": on'))}; rig (15, 29) ${ballAt(15, 29)}, (15, 30) ${ballAt(15, 30)}, (12, 33) ${ballAt(12, 33)}; lower rows only -> ${ballEmpty.slice(0, 220)}; the same under disc -> ${discEmpty.slice(0, 140)}`,
+      'issue #579: the ball\'s lower half takes the image only where the lower piece is transparent, so over a forearm painted to its outline it writes nothing and every painted pixel keeps the layer\'s colour though the image is opaque there; an image whose pixels all fall on painted pixels gives the cap nothing, and the refusal says why in the ball\'s terms',
     );
 
     // A joint off the limb's art has no width: the elbow moved to x 30, 10 px right of the forearm. An upper bone of no

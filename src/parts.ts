@@ -169,9 +169,18 @@ export interface CapRecord {
    * lower's layer had none (`upper_px`). `radius` is then the half-width about the
    * joint, at most half of `width`. Issue #557: without the shape the half-disc
    * takes them too, and `upper_px` is written there only when above 0.
+   * Issue #579: `"ball"` under the segment's `cap_shape: "ball"` — the same
+   * disc and upper half, and its half on the lower side of the cut too: the
+   * pixels written there into the lower piece from the cap image where the
+   * piece's own pixel was transparent (alpha 0, `lower_px`), those left as
+   * painted (`lower_kept_px`), and those the image gave none for
+   * (`lower_missing_px`), which `missing_px` and `short_px` count as well.
    */
-  shape?: 'disc';
+  shape?: 'disc' | 'ball';
   upper_px?: number;
+  lower_px?: number;
+  lower_kept_px?: number;
+  lower_missing_px?: number;
   /**
    * Issue #360, written only under the segment's `edge: "feather"`: the edge,
    * the radius of the band it fades over (the disc the lower piece covers at
@@ -212,6 +221,9 @@ const CAP_KEYS = [
   'short_px',
   'shape',
   'upper_px',
+  'lower_px',
+  'lower_kept_px',
+  'lower_missing_px',
   'edge',
   'feather_radius',
   'feathered_px',
@@ -223,6 +235,8 @@ const CAP_KEYS = [
   'band_px',
   'stroke_luma_max',
 ] as const;
+/** The cap keys only `cap_shape: "ball"` writes (issue #579). */
+const BALL_KEYS = ['lower_px', 'lower_kept_px', 'lower_missing_px'] as const;
 /** The cap keys only `cut_band` writes (issue #360, item 14). */
 const CUT_KEYS = ['cut_offset', 'cut_at', 'cut_crossed', 'joint_crossed', 'band_px', 'stroke_luma_max'] as const;
 
@@ -633,7 +647,11 @@ function checkParts(raw: unknown, path: string): PartsFile {
           (!('image_px' in co) || isCount(co.image_px)) &&
           (!('image_layer' in co) || ('image_px' in co && typeof co.image_layer === 'string' && co.image_layer !== '')) &&
           // Issue #360: a disc cap carries its count, a feathered edge its band and count, and neither carries them alone.
-          ('shape' in co ? co.shape === 'disc' && isCount(co.upper_px) : !('upper_px' in co) || (isCount(co.upper_px) && co.upper_px > 0)) &&
+          ('shape' in co ? (co.shape === 'disc' || co.shape === 'ball') && isCount(co.upper_px) : !('upper_px' in co) || (isCount(co.upper_px) && co.upper_px > 0)) &&
+          // Issue #579: a ball cap carries its lower half's three counts, its missing ones inside missing_px; no other cap carries them.
+          (co.shape === 'ball'
+            ? isCount(co.lower_px) && isCount(co.lower_kept_px) && isCount(co.lower_missing_px) && isCount(co.missing_px) && co.lower_missing_px <= co.missing_px
+            : BALL_KEYS.every((k) => !(k in co))) &&
           // Issue #557: the shortfall by side, when written, adds up to the missing pixels, and is never written for none.
           (!('short_px' in co) || shortSides(co.short_px, co.missing_px)) &&
           ('edge' in co ? co.edge === 'feather' && typeof co.feather_radius === 'number' && Number.isFinite(co.feather_radius) && co.feather_radius >= 0 && isCount(co.feathered_px) : !('feather_radius' in co) && !('feathered_px' in co)) &&
@@ -654,7 +672,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
           fail(
             'PARTS_FIELD_TYPE',
             `${object} "cap"`,
-            `is ${show(c)}; {at: [x, y], width, radius, box: [x, y, w, h], layer_px, image_px?, image_layer? (with image_px), missing_px, short_px? ({left, right}, adding up to missing_px, above 0), shape? ("disc", with upper_px; without it upper_px? above 0), edge? ("feather", with feather_radius and feathered_px), cut_band? (with cut_offset inside the band, cut_at, cut_crossed at most joint_crossed, band_px, stroke_luma_max? 0..255)} is required`,
+            `is ${show(c)}; {at: [x, y], width, radius, box: [x, y, w, h], layer_px, image_px?, image_layer? (with image_px), missing_px, short_px? ({left, right}, adding up to missing_px, above 0), shape? ("disc" or "ball", with upper_px; "ball" with lower_px, lower_kept_px and lower_missing_px, at most missing_px; without it upper_px? above 0), edge? ("feather", with feather_radius and feathered_px), cut_band? (with cut_offset inside the band, cut_at, cut_crossed at most joint_crossed, band_px, stroke_luma_max? 0..255)} is required`,
           );
         }
       }

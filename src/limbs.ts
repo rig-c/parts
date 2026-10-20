@@ -53,6 +53,16 @@
  *   off the limb's middle, a corner trimmed to the disc leaves a notch at
  *   rest when nothing takes it, or a stub out of the bent lower piece's
  *   outline when the lower takes it (issue #360, unit B's sheets).
+ * - **`cap_shape: "ball"`** (issue #579; opt-in on the segment below the
+ *   joint). The disc of `"disc"` — the same radius, its upper half filled as
+ *   `"disc"` fills it — and its half past the cut as well: a pixel there
+ *   whose centre lies within the radius is written into the lower piece from
+ *   the cap image only where the piece's own pixel is transparent (alpha 0,
+ *   the reading the upper half gives a layer's pixel and the image's), kept
+ *   where the piece paints one, and missing where the image gives none. A
+ *   hinge whose painting shows a notch beside the joint turns on a whole disc
+ *   about its pivot, which a turn maps onto itself; no pixel the lower layer
+ *   paints changes.
  * - **`edge: "feather"`** (issue #360, item 9; opt-in on the segment below the
  *   joint). The overlap band is the disc about the joint that the lower
  *   piece covers at every turn ({@link coveredRadius}: the cap's disc, less
