@@ -99,7 +99,11 @@
  * ankle of a leg whose hip, knee and ankle are given is meshed on a leg chain
  * (hip -> knee, tip at the ankle; one per leg, or one through the midpoints
  * when the part's art does not separate the legs — {@link legsFromJoints}),
- * where without them it rides `hip` as a region. And with a joint at either
+ * where without them it rides `hip` as a region. A limb whose tagged route has
+ * no part at all — no handwear or no legwear part over 500 px — is drafted from
+ * the one `topwear` part that holds its joints, the figure layer of a figure of
+ * one material, with the trunk a limb on it too (issue #577,
+ * {@link figureLayerOf}). And with a joint at either
  * end of the trunk (issue #243), the trunk parts' fixed segments run along
  * neck -> hip, the line the chest is placed on, instead of down the screen
  * ({@link trunkLineOf}).
@@ -154,6 +158,7 @@ import { bonePlaces, jointLine, limbCrossing, limbPolyline, limbRun, limbWidth, 
 import { type BranchSqueezeFinding, branchSqueezes, chainSqueezes, type SqueezeFinding } from './squeeze.ts';
 import { backHairMasses, type BackHairMass, backHairMassTrees, INFLUENCE_RADIUS_CELLS, RECIPE_BACK_HAIR_CHAINS, RECIPE_LENGTH_RATIO, chainConstraints, clothNote, type ClothRecipe, type ClothRecipes, type ClothTarget, CLOTH_TARGETS, draftTrees, spanCrosses, swingName, type Tail, tailOverlap, type TailOverlap, type TailSpan, treeConstraints, type TreeChain, type TreeInput, type TreeMassInput } from './cloth.ts';
 import { TEXTURE_STRETCH_CEILING } from './check.ts';
+import { linePixels } from './paintcheck.ts';
 
 // ---------------------------------------------------------------------------
 // the output shape — config-shaped, key order as the reference writes it
@@ -2579,6 +2584,29 @@ export function proposeWithBasis(
   // A cut's piece counts here (issue #230): the sleeve rule names its chains by side, not once per part, so a piece
   // never repeats one, and cutting one sleeve out of a both-arms part is how #199's note says to separate them.
   const hw = [...P.byTag('handwear-r', undefined, true), ...P.byTag('handwear-l', undefined, true)].filter((p) => p.opaque_px > 500);
+  // Issue #577: a figure of one material (a mannequin, a statue) reaches See-through as one garment, so no handwear or
+  // legwear part carries its limbs. With joints, when the tagged route has no part for a complete limb, the one topwear
+  // part that holds every such limb's joints is the figure layer: the trunk and those limbs split it by the cut.
+  const lwTagged = P.byTag('legwear', undefined, true).filter((p) => p.opaque_px > 500);
+  const figure = joints === undefined ? null : figureLayerOf(P, hw, lwTagged, joints, { hip, chest, neck: neckAt });
+  if (figure !== null && figure.part === null) notes.push(figure.note);
+  const figPart = figure === null ? null : figure.part;
+  if (figure !== null && figPart !== null) {
+    // The trunk is a limb too: a limb takes every pixel of its part, so without one the torso and the neck would go
+    // to the nearest arm or leg. Three segments on the three trunk bones, cut at the chest's and the neck's origins.
+    limbs.trunk = {
+      segments: [
+        { part: 'trunk_hip', from: figPart.name, bone: 'hip' },
+        { part: 'trunk_chest', from: figPart.name, bone: 'chest', joint: 'chest' },
+        { part: 'trunk_neck', from: figPart.name, bone: 'neck', joint: 'neck' },
+      ],
+    };
+    regions.trunk_hip = 'hip';
+    regions.trunk_chest = 'chest';
+    regions.trunk_neck = 'neck';
+    consumed.add(figPart.name);
+    notes.push(figure.note);
+  }
   const sides = new Map<'r' | 'l', PartRecord[]>();
   for (const p of hw) {
     const s = center(p)[0] < axis ? 'r' : 'l';
@@ -2589,7 +2617,12 @@ export function proposeWithBasis(
   // Issue #75: arms from joints, when every handwear part carries the wrist of
   // an arm whose shoulder, elbow and wrist are all given; otherwise the rule
   // below places every sleeve chain, and the notes say why.
-  const armPlan = joints !== undefined && clasped === null && hw.length > 0 ? armsFromJoints(P, hw, joints, wristSnap, chainRule) : null;
+  const armPlan =
+    joints !== undefined && clasped === null && hw.length > 0
+      ? armsFromJoints(P, hw, joints, wristSnap, chainRule)
+      : figPart !== null && figure !== null && figure.arms
+        ? armsFromJoints(P, [figPart], joints as RigJoints, null, false)
+        : null;
   let sleeveRule = '';
   if (clasped !== null) {
     sleeveRule = 'the clasped-hands rule (the handwear is a region on hip, with no sleeve chain)';
@@ -2801,7 +2834,7 @@ export function proposeWithBasis(
 
   // ---- outer robe (topwear)
   for (const p of tw) {
-    if (p === namedSkirt || multiPartClaimed.has(p.name)) continue;
+    if (p === namedSkirt || multiPartClaimed.has(p.name) || p === figPart) continue;
     const hint = skirtHints.get(p.name);
     if (hint !== undefined) notes.push(hint);
     const [g, r] = gridR(p);
@@ -3268,8 +3301,14 @@ export function proposeWithBasis(
   // meshed on a leg chain hip -> knee, tip at the ankle; without them no line below runs, and the part stays the
   // region the trunk rule gives it, its note unchanged. No idle track is written for a leg chain: the chain is
   // drafted whatever the pose, and a standing figure's legs are planted — whether they move is the scene's.
-  const lw = P.byTag('legwear', undefined, true).filter((p) => p.opaque_px > 500);
-  const legPlan = joints !== undefined && lw.length > 0 ? legsFromJoints(P, lw, joints) : null;
+  const lw = lwTagged;
+  // Issue #577: the figure layer's legs are the leg rule's, on that one part; its note is the figure note above.
+  const legPlan =
+    joints !== undefined && lw.length > 0
+      ? legsFromJoints(P, lw, joints)
+      : figPart !== null && figure !== null && figure.legs
+        ? { chains: legsFromJoints(P, [figPart], joints as RigJoints).chains, notes: [], why: null }
+        : null;
   if (legPlan !== null && legPlan.chains !== null) {
     for (const c of legPlan.chains) {
       const J = (joints as RigJoints).joints;
@@ -3353,7 +3392,7 @@ export function proposeWithBasis(
     }
   }
   if (trunk !== null) {
-    const laid = [...P.headFirst('neck'), ...tw, ...bw].map((p) => p.name);
+    const laid = [...P.headFirst('neck'), ...tw, ...bw].filter((p) => !consumed.has(p.name)).map((p) => p.name);
     if (laid.length > 0) {
       notes.push(
         `trunk segments (${laid.join(', ')}): laid along neck -> hip, the line the chest was placed on (${pyFixed((Math.atan2(trunk.u[0], trunk.u[1]) * 180) / Math.PI, 1)} degrees off the screen's downward vertical, positive towards +x): each [bone, from, to] segment the rule drafts down the screen runs along that line instead, and the waist segment across it`,
@@ -3374,6 +3413,7 @@ export function proposeWithBasis(
         armWhy: armPlan === null ? null : armPlan.why,
         legs: legPlan === null ? null : legPlan.chains,
         arms: armPlan === null ? null : armPlan.arms,
+        figure: figPart,
         wristSnap,
         eyes: (['r', 'l'] as const).map((s) => {
           const e = eyes.get(s);
@@ -3875,6 +3915,123 @@ function legsFromJoints(P: PartSet, lw: readonly PartRecord[], joints: RigJoints
   return { chains, notes, why: null };
 }
 
+/**
+ * The figure layer (issue #577): a figure of one material — a wooden
+ * mannequin, a statue, a robot of one finish — reaches See-through as one
+ * garment, so no `handwear-*` or `legwear` part carries its limbs and the
+ * sleeve and leg rules above draft none. With joints, a limb whose tagged
+ * route has **no part** (no handwear part over 500 px for an arm, no legwear
+ * part over 500 px for a leg — the floors those rules read) and whose three
+ * joints are all given (the completeness {@link armsFromJoints} and
+ * {@link legsFromJoints} read) is drafted from the figure layer when one
+ * exists:
+ *
+ * - **the candidates** are the `topwear` parts over 500 px (no cut piece)
+ *   whose art holds, within {@link WRIST_ON_PART_PX} px by the larger of the
+ *   x and y gaps (the tolerance the two rules bind a wrist or an ankle by),
+ *   the origins of `hip`, `chest` and `neck` — the trunk limb's bones — and
+ *   every joint of every limb to draft; and, when both legs are drafted, whose
+ *   art breaks on the line from `r_knee` to `l_knee` and on the line from
+ *   `r_ankle` to `l_ankle` (the reading `PAINTING_LEGS_APART` makes, sampled
+ *   by `linePixels`): a garment hung over both legs is one column there, and
+ *   would be split into legs it does not have. Only `topwear`: `bottomwear`
+ *   would split a skirt into legs, and the head run's tags carry the head;
+ * - **one candidate** is the figure layer;
+ * - **several**: the one with the most opaque px in the
+ *   `(2 x WRIST_ON_PART_PX + 1)`-square about each of those points, summed (the
+ *   square the tolerance reads), and two or more tied at the most are refused
+ *   by name, `PROPOSE_FIGURE_LAYER` — nothing says which is the figure;
+ * - **none**, with some topwear part over 500 px: `part` is null and the note
+ *   names, for each, the first point it misses; with no topwear part over
+ *   500 px, `null` — nothing is said, and the proposal is the one before the
+ *   rule existed.
+ *
+ * `null` too when no limb qualifies: then no line here runs.
+ */
+function figureLayerOf(
+  P: PartSet,
+  hw: readonly PartRecord[],
+  lw: readonly PartRecord[],
+  joints: RigJoints,
+  trunk: { hip: [number, number]; chest: [number, number]; neck: [number, number] },
+): { part: PartRecord | null; arms: boolean; legs: boolean; note: string } | null {
+  const J = joints.joints;
+  const given = (a: KeypointName, b: KeypointName, c: KeypointName): boolean => {
+    const p = J[a].at;
+    const q = J[b].at;
+    return p !== null && q !== null && J[c].at !== null && !(p[0] === q[0] && p[1] === q[1]);
+  };
+  const armSides = hw.length > 0 ? [] : (['r', 'l'] as const).filter((s) => given(`${s}_shoulder`, `${s}_elbow`, `${s}_wrist`));
+  const legSides = lw.length > 0 ? [] : (['r', 'l'] as const).filter((s) => given(`${s}_hip`, `${s}_knee`, `${s}_ankle`));
+  if (armSides.length === 0 && legSides.length === 0) return null;
+  const tw = P.byTag('topwear').filter((p) => p.opaque_px > 500);
+  if (tw.length === 0) return null;
+  const limbNames = [...armSides.map((s) => `arm_${s}`), ...legSides.map((s) => `leg_${s}`)];
+  const points: Array<[string, [number, number]]> = [
+    ['the hip bone', trunk.hip],
+    ['the chest bone', trunk.chest],
+    ['the neck bone', trunk.neck],
+    ...armSides.flatMap((s) => ([`${s}_shoulder`, `${s}_elbow`, `${s}_wrist`] as const).map((n): [string, [number, number]] => [n, J[n].at as [number, number]])),
+    ...legSides.flatMap((s) => ([`${s}_hip`, `${s}_knee`, `${s}_ankle`] as const).map((n): [string, [number, number]] => [n, J[n].at as [number, number]])),
+  ];
+  const lack = legSides.length > 0 ? [armSides.length > 0 ? 'no handwear part' : null, 'no legwear part'] : ['no handwear part'];
+  const why = `${lack.filter((x): x is string => x !== null).join(' and ')} ${lack.filter((x) => x !== null).length === 1 ? 'is' : 'are'} over 500 px`;
+  const pairs: Array<[KeypointName, KeypointName]> = legSides.length === 2 ? [['r_knee', 'l_knee'], ['r_ankle', 'l_ankle']] : [];
+  const misses = (p: PartRecord): string | null => {
+    const m = P.alpha(p);
+    const near = dilate(m, 2 * WRIST_ON_PART_PX + 1);
+    const off = points.find(([, q]) => !isOn(near, q[0], q[1]));
+    if (off !== undefined) return `${p.name} holds no art within ${WRIST_ON_PART_PX} px of ${off[0]} at ${fmtAt(off[1])}`;
+    for (const [a, b] of pairs) {
+      if (linePixels(J[a].at as [number, number], J[b].at as [number, number], P.W, P.H).every(([x, y]) => m.data[y * P.W + x] === 1)) {
+        return `${p.name}'s art does not break on the line from ${a} to ${b}: the legs are one column there, as a garment over both legs is`;
+      }
+    }
+    return null;
+  };
+  const read = tw.map((p) => ({ p, miss: misses(p) }));
+  const holds = read.filter((r) => r.miss === null).map((r) => r.p);
+  const what = `every joint of ${limbNames.join(', ')} and the origins of hip, chest and neck`;
+  if (holds.length === 0) {
+    return {
+      part: null,
+      arms: false,
+      legs: false,
+      note: `figure layer: ${why}, and no topwear part over 500 px holds within ${WRIST_ON_PART_PX} px ${what} (${read.map((r) => r.miss as string).join('; ')}), so ${limbNames.join(', ')} ${limbNames.length === 1 ? 'is' : 'are'} not drafted from one layer (issue #577)`,
+    };
+  }
+  const half = WRIST_ON_PART_PX;
+  const held = (p: PartRecord): number => {
+    const m = P.alpha(p);
+    let n = 0;
+    for (const [, q] of points) {
+      const cx = pyInt(q[0]);
+      const cy = pyInt(q[1]);
+      for (let y = Math.max(0, cy - half); y <= Math.min(P.H - 1, cy + half); y++) for (let x = Math.max(0, cx - half); x <= Math.min(P.W - 1, cx + half); x++) n += m.data[y * P.W + x];
+    }
+    return n;
+  };
+  const scored = holds.map((p) => ({ p, n: held(p) })).sort((a, b) => b.n - a.n);
+  const top = scored.filter((c) => c.n === scored[0].n);
+  if (top.length > 1) {
+    throw new PartsError([
+      {
+        code: 'PROPOSE_FIGURE_LAYER',
+        object: `parts ${top.map((c) => `"${c.p.name}"`).join(', ')} (topwear)`,
+        detail: `${why}, and each of these holds within ${WRIST_ON_PART_PX} px ${what}, with ${top[0].n} opaque px in the ${2 * half + 1}x${2 * half + 1} squares about those points; one figure layer is required — nothing says which of them is the figure, so leave the others out of assemble.plan, or give the arms and legs their own handwear and legwear layers`,
+      },
+    ]);
+  }
+  const fig = scored[0].p;
+  const over = scored.length > 1 ? `; of the ${scored.length} topwear parts that hold them it has the most opaque px in the ${2 * half + 1}x${2 * half + 1} squares about those points, ${scored.map((c) => `${c.p.name} ${c.n}`).join(', ')}` : '';
+  return {
+    part: fig,
+    arms: armSides.length > 0,
+    legs: legSides.length > 0,
+    note: `${fig.name} (${fig.from}): the figure layer — ${why}, and its art holds within ${WRIST_ON_PART_PX} px ${what}${over}; limbs trunk (trunk_hip on hip, trunk_chest on chest, trunk_neck on neck, cut at the chest's and the neck's origins) and ${limbNames.join(', ')} split it between them by the cut, each pixel to the limb whose bones pass nearest it — the rule one legwear part holding both legs is split by (issue #577)`,
+  };
+}
+
 /** A rig-px point as the notes and LINT lines print it: one decimal place. */
 function fmtAt(p: readonly [number, number]): string {
   return `[${pyFixed(p[0], 1)}, ${pyFixed(p[1], 1)}]`;
@@ -3900,6 +4057,8 @@ interface JointNoteFacts {
   sleeveRule: string;
   armWhy: string | null;
   arms: JointArm[] | null;
+  /** Issue #577: the figure layer the arms and legs were split from, or `null`: then every arm is on a handwear part. */
+  figure: PartRecord | null;
   /** The leg chains drafted (issue #241), or `null` when none was: then no line here names a leg joint. */
   legs: LegChain[] | null;
   /** `propose --wrist-snap`, or `null` without it. */
@@ -3993,7 +4152,7 @@ function jointNotes(joints: RigJoints, f: JointNoteFacts): string[] {
     }
   }
   // Issue #199: two chains on one part are said, not left to share its mesh unremarked.
-  const both = f.arms !== null && f.arms.length === 2 && f.arms[0].part === f.arms[1].part ? f.arms[0].part.name : null;
+  const both = f.arms !== null && f.arms.length === 2 && f.arms[0].part === f.arms[1].part && f.arms[0].part !== f.figure ? f.arms[0].part.name : null;
   if (both !== null) {
     out.push(
       `one handwear part holds both wrists: r_wrist and l_wrist both end on ${both}, so limbs arm_r and arm_l both take it, and the cut gives each pixel to the arm whose bones pass nearest it; ` +
