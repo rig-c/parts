@@ -232,6 +232,8 @@ import {
   padSingleRun,
   singleRunHeadBox,
 } from './src/assemble.ts';
+import { ENVIRONMENT_RULE, environmentLine, readCheckEnvironment } from './src/check.ts';
+import { EnvironmentError, readEnvironmentSchedule } from 'rig-c/src/environment.ts';
 import { boneTrackOf, CLOTH_FLOOR_TEXT, CLOTH_LEVERS_TEXT, CLOTH_LINE, CLOTH_SETTLE_FLOOR, clothChains, type ClothLine, clothLine, clothRow, clothWarnText, frameRuns, MOTION_SEAM_FLOOR, MOTION_SEAM_LINE, type MotionSeamLine, motionSeamPairs, motionSeamWarnText, openingOverFloor, readMotionSeams } from './src/check.ts';
 import { BREATH_ANIMATION, type BreathPair, breathPairProblem, breathTracks, chainDirection, sweepAngles, sweepJoints, type SweepJoint, sweepLine, type SweepLine, SWEEP_LINE, type SweepPose, type Viewport } from './src/check.ts';
 import { barsNotMet, flatComposite, frameToRigMap, maxRgbDiff, rigToFrameMap, SEAM_BOX, SEAM_PX_BAR, SEAM_PX_LEVEL, seamRigPx, seamRigPxText, SEAM_MEAN_BAR, SEAM_DIR, SEAM_MARK, SEAM_NO_ART, seamFigures, type SeamFigures, seamPairRows, seamPairText, STILL_DIR, withoutPhysics, BREATH_TORSO_MEAN_FLOOR } from './src/check.ts';
@@ -4359,6 +4361,30 @@ function runCliSuite(): number {
       twice.status === 2 && twice.out.includes('--source is given twice') && !existsSync(join(dir, 'src-twice')),
       `exit ${twice.status}; ${(twice.out.split('\n').find((l) => l.includes('FAIL')) ?? 'no FAIL line').trim()}`,
       'two paintings would be two measurements and the line has one; which one was meant is not this package\'s guess',
+    );
+
+    // Issue #538: --environment is a valued flag of check (and of build, forwarded); malformed calls are usage errors.
+    const envBare = runCli(['check', '--rig', dir, '--out', join(dir, 'env-bare'), '--environment']);
+    const envTwice = runCli(['check', '--rig', dir, '--out', join(dir, 'env-twice'), '--environment', 'a.json', '--environment', 'b.json']);
+    const envGuide = runCli(['guide', 'CHECK_ENVIRONMENT']);
+    const buildHelp = help.out.slice(help.out.indexOf('rig-parts build'), help.out.indexOf('rig-parts compose'));
+    const envTexts = ['[--environment <schedule.json>]', 'CHECK_ENVIRONMENT', 'rigc-environment/1', 'wind [1, 0] and gravity [0, 1]'];
+    say(
+      'CL204_CHECK_AND_BUILD_HELP_NAME_ENVIRONMENT_AND_ITS_REFUSAL_AND_A_MISSING_OR_TWICE_GIVEN_VALUE_IS_A_USAGE_ERROR',
+      envTexts.every((t) => checkHelp.includes(t)) &&
+        buildHelp.includes('[--environment <schedule.json>]') &&
+        buildHelp.includes('--environment is forwarded to check') &&
+        envBare.status === 2 &&
+        envBare.out.includes('--environment needs a value') &&
+        !existsSync(join(dir, 'env-bare')) &&
+        envTwice.status === 2 &&
+        envTwice.out.includes('--environment is given twice') &&
+        !existsSync(join(dir, 'env-twice')) &&
+        envGuide.status === 0 &&
+        envGuide.out.includes('CHECK_ENVIRONMENT') &&
+        envGuide.out.includes('readEnvironmentSchedule'),
+      `check help: ${envTexts.map((t) => `${t} ${checkHelp.includes(t)}`).join(', ')}; build help names it ${buildHelp.includes('[--environment <schedule.json>]')}; no value -> exit ${envBare.status}, ${(envBare.out.split('\n').find((l) => l.includes('FAIL')) ?? 'no FAIL line').trim()}; twice -> exit ${envTwice.status}, ${(envTwice.out.split('\n').find((l) => l.includes('FAIL')) ?? 'no FAIL line').trim()}; guide CHECK_ENVIRONMENT -> exit ${envGuide.status}, ${envGuide.out.split('\n').length} line(s)`,
+      'issue #538: the help is where an agent learns that the readings can be taken in a stated world, what a still schedule states and what refuses; one schedule per run, as one painting per --source',
     );
 
     // ---- issue #85: rig-parts compare ----
@@ -16757,6 +16783,7 @@ function runCheckSuite(): number {
   runRiderCheckCases(say);
   runBreathAloneCases(say);
   runDressRiderCheckCases(say);
+  runEnvironmentCheckCases(say);
   return bad();
 }
 
@@ -16941,6 +16968,156 @@ function runRiderCheckCases(say: (name: string, ok: boolean, detail: string, why
         ? old
         : `the planted own-chain strip: up to ${left === null ? 'n/a' : f(left.dev)} rig px from the bent link's carriage (the rider: ${rides === null ? 'n/a' : f(rides.dev)}), moving ${left === null ? 'n/a' : f(left.move)} rig px — left where the tail was; ${others.join(', ')} against the rider's build at every one of ${old.frames.length} frames: at most ${otherGap === null ? 'not comparable' : f(otherGap)} rig px apart; the strip at the setup pose: ${setupGap === null ? 'not comparable' : f(setupGap)} rig px apart (each want <= ${RIDER_SAME_PX})`,
       "the plant is the form #391 replaces, which must be seen to fail CK490's reading — it survives its own mutant by naming the distance, not by crashing; and the restated bar 2 (the card's still calm does not exist: the tails move under gravity and the old ribbon swung on its own keyed pendant): every slot but the ribbon is identical in every frame, and the ribbon is identical at the setup pose",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Issue #538: `check --environment <file>` on the cloth fixture (fixtures/cloth.ts, the CLOTH_SETTLES fixture).
+ * CK514 bar 1: a schedule stating rigc's initial world, wind [1, 0] and gravity [0, 1], reads the idle frames and
+ * `check.json` of a run without the flag, byte for byte, but for the `environment` key — and the run without the flag
+ * writes no such key; wind [0, 0] is a calm, not that world, and moves the readings; two runs under one schedule are
+ * byte-identical. CK515 bar 2: a gust changes the fold and stretch bars and the settle warnings, and the line and
+ * `check.json` name the schedule's digest. CK516 bar 3: every malformed schedule, and a path with nothing at it, is
+ * `CHECK_ENVIRONMENT` with rig-c's own sentence, exit 1, `--out` not written. CK517: what rigc render refuses of a
+ * well-formed schedule on this rig — no physics constraint, a step after the idle — is `CHECK_ENVIRONMENT` with rigc's
+ * line; `build --environment` refuses a malformed one under [assemble], before it assembles.
+ */
+function runEnvironmentCheckCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const root = temp('check-environment');
+  try {
+    const bare = clothBuild(root, 'bare');
+    const schedule = (name: string, text: string): string => {
+      const path = join(root, `${name}.json`);
+      writeFileSync(path, text);
+      return path;
+    };
+    const steps = (list: unknown[]): string => JSON.stringify({ spec: 'rigc-environment/1', steps: list });
+    const run = (label: string, env: string | null): { status: number; out: string; dir: string; text: string | null } => {
+      const dir = join(root, `check-${label}`);
+      const r = runCli(['check', '--rig', bare.out, '--parts', bare.parts, '--out', dir, ...(env === null ? [] : ['--environment', env])]);
+      return { ...r, dir, text: existsSync(join(dir, 'check.json')) ? readFileSync(join(dir, 'check.json'), 'utf8') : null };
+    };
+    const idleHashes = (dir: string): string[] => {
+      const d = join(dir, 'idle_frames', 'idle');
+      return existsSync(d) ? readdirSync(d).filter((f) => f.endsWith('.png')).sort().map((f) => createHash('sha256').update(readFileSync(join(d, f))).digest('hex')) : [];
+    };
+    const withoutEnv = (text: string | null): string | null => {
+      if (text === null) return null;
+      const parsed = JSON.parse(text) as Record<string, unknown>;
+      delete parsed.environment;
+      return `${JSON.stringify(parsed, null, 1)}\n`;
+    };
+    const fig = (text: string | null): Record<string, unknown> => (text === null ? {} : (JSON.parse(text) as Record<string, unknown>));
+    const none = { status: bare.check?.status ?? -1, out: bare.check?.out ?? '', dir: bare.checkOut, text: existsSync(join(bare.checkOut, 'check.json')) ? readFileSync(join(bare.checkOut, 'check.json'), 'utf8') : null };
+    const initialPath = schedule('initial', steps([{ t: 0, wind: [1, 0], gravity: [0, 1] }]));
+    const calmPath = schedule('calm', steps([{ t: 0, wind: [0, 0], gravity: [0, 1] }]));
+    const gustPath = schedule('gust', steps([{ t: 0, wind: [1, 0] }, { t: 0.5, wind: [40, 0] }]));
+    const initial = run('initial', initialPath);
+    const calm = run('calm', calmPath);
+    const gust = run('gust', gustPath);
+    const gust2 = run('gust-again', gustPath);
+    const sha = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex');
+    const stretchOf = (text: string | null): number => Number((fig(text).TEXTURE_STRETCH as Record<string, unknown> | undefined)?.severity);
+    const tipOf = (text: string | null): number => Number(((fig(text).TIP_OVER_ROOT as Record<string, unknown> | undefined)?.parts as Array<Record<string, unknown>> | undefined)?.[0]?.ratio);
+    const foldingOf = (text: string | null): number => (((fig(text)[FOLD_LINE] as Record<string, unknown> | undefined)?.folding as unknown[] | undefined) ?? []).length;
+    const warnOf = (text: string | null): number => Number((fig(text)[CLOTH_LINE] as Record<string, unknown> | undefined)?.warnings);
+    const envLine = (out: string): string => out.split('\n').map((l) => l.trim()).find((l) => l.startsWith('environment: ')) ?? '';
+    const initialRecord = fig(initial.text).environment as Record<string, unknown> | undefined;
+    const noneHashes = idleHashes(none.dir);
+    say(
+      'CK514_A_SCHEDULE_STATING_RIGCS_INITIAL_WORLD_READS_WHAT_NO_FLAG_READS_AND_A_CALM_DOES_NOT',
+      none.status === 0 &&
+        none.text !== null &&
+        !('environment' in fig(none.text)) &&
+        initial.status === 0 &&
+        withoutEnv(initial.text) === none.text &&
+        noneHashes.length > 0 &&
+        JSON.stringify(idleHashes(initial.dir)) === JSON.stringify(noneHashes) &&
+        JSON.stringify(Object.keys(fig(initial.text)).slice(0, 4)) === JSON.stringify(['gate_spine_html_green', 'rigc_entry', 'pack_mode', 'environment']) &&
+        JSON.stringify(initialRecord) === JSON.stringify({ path: initialPath, sha256: sha(initialPath), steps: 1 }) &&
+        calm.status === 0 &&
+        withoutEnv(calm.text) !== none.text &&
+        stretchOf(calm.text) !== stretchOf(none.text) &&
+        gust.text !== null &&
+        gust.text === gust2.text,
+      `no flag: exit ${none.status}, environment key ${'environment' in fig(none.text)}; initial world [1, 0] / [0, 1]: exit ${initial.status}, check.json minus environment ${withoutEnv(initial.text) === none.text ? 'byte-identical' : 'DIFFERS'}, ${idleHashes(initial.dir).length} idle PNG(s) ${JSON.stringify(idleHashes(initial.dir)) === JSON.stringify(noneHashes) ? 'identical' : 'DIFFER'}, record ${JSON.stringify(initialRecord === undefined ? null : { ...initialRecord, path: '<schedule>' })}; calm wind [0, 0]: TEXTURE_STRETCH ${stretchOf(none.text)} -> ${stretchOf(calm.text)}, TIP_OVER_ROOT ratio ${tipOf(none.text)} -> ${tipOf(calm.text)}; the gust twice: check.json ${gust.text !== null && gust.text === gust2.text ? 'byte-identical' : 'DIFFERS'}`,
+      "issue #538 bar 1, as the card's own world says it: rigc's initial world is wind [1, 0] and gravity [0, 1] (rig-c/src/environment.ts), so the still schedule is the one stating it — wind [0, 0] is a calm the chains answer; the schedule reaches the renders and moves no byte the readings did not read, and without the flag no key is written",
+    );
+    say(
+      'CK515_A_GUST_CHANGES_THE_FOLD_AND_STRETCH_READINGS_AND_THE_LINE_AND_CHECK_JSON_NAME_ITS_DIGEST',
+      gust.status === 1 &&
+        stretchOf(gust.text) !== stretchOf(none.text) &&
+        foldingOf(gust.text) !== foldingOf(none.text) &&
+        JSON.stringify(fig(gust.text).environment) === JSON.stringify({ path: gustPath, sha256: sha(gustPath), steps: 2 }) &&
+        envLine(gust.out) === environmentLine({ path: gustPath, sha256: sha(gustPath), steps: 2 }) &&
+        envLine(gust.out).includes(`sha256 ${sha(gustPath).slice(0, 16)}`),
+      `wind [1, 0] then [40, 0] from 0.5 s: exit ${none.status} -> ${gust.status}; TEXTURE_STRETCH severity ${stretchOf(none.text)} -> ${stretchOf(gust.text)} (${String((fig(none.text).TEXTURE_STRETCH as Record<string, unknown> | undefined)?.status)} -> ${String((fig(gust.text).TEXTURE_STRETCH as Record<string, unknown> | undefined)?.status)}); ${FOLD_LINE} folding meshes ${foldingOf(none.text)} -> ${foldingOf(gust.text)}; TIP_OVER_ROOT ratio ${tipOf(none.text)} -> ${tipOf(gust.text)}; ${CLOTH_LINE} warnings ${warnOf(none.text)} -> ${warnOf(gust.text)}; line: ${envLine(gust.out).replace(gustPath, '<schedule>').slice(0, 90)}…; check.json sha256 ${String((fig(gust.text).environment as Record<string, unknown> | undefined)?.sha256)}`,
+      "issue #538 bar 2 and the card's \"PR carries\": a schedule that moves a physics chain moves the readings taken under it, and the report names which schedule by its digest",
+    );
+
+    // CK516: the mutants, each read by rig-c's reader here too, so the detail is held to rigc's own sentence.
+    const mutants: Array<[string, string]> = [
+      ['spec', JSON.stringify({ spec: 'rigc-environment/2', steps: [{ t: 0, wind: [1, 0] }] })],
+      ['unordered', steps([{ t: 0.5, wind: [1, 0] }, { t: 0.25, wind: [2, 0] }])],
+      ['negative-t', steps([{ t: -1, wind: [1, 0] }])],
+      ['null-in-pair', steps([{ t: 0, wind: [1, null] }])],
+      ['not-finite', '{"spec":"rigc-environment/1","steps":[{"t":0,"wind":[1e999,0]}]}'],
+      ['changes-nothing', steps([{ t: 0 }])],
+      ['unknown-key', steps([{ t: 0, wind: [1, 0], gust: [2, 0] }])],
+    ];
+    const mutantRows = mutants.map(([label, text]) => {
+      const path = schedule(`m-${label}`, text);
+      let want = '';
+      try {
+        readEnvironmentSchedule(text, path);
+      } catch (err) {
+        if (err instanceof EnvironmentError) want = err.message;
+      }
+      return { label, path, want, r: run(`m-${label}`, path) };
+    });
+    const missingPath = join(root, 'no-such-schedule.json');
+    const missing = { label: 'missing', path: missingPath, want: `--environment ${missingPath}: nothing at ${missingPath} — it takes a schedule file { "spec": "rigc-environment/1", "steps": [...] }`, r: run('m-missing', missingPath) };
+    const failOf = (out: string): string => out.split('\n').map((l) => l.trim()).find((l) => l.startsWith('FAIL')) ?? '';
+    const refusedRight = (row: { path: string; want: string; r: { status: number; out: string; dir: string } }): boolean =>
+      row.want !== '' && row.r.status === 1 && !existsSync(row.r.dir) && failOf(row.r.out) === `FAIL  ${ENVIRONMENT_RULE}: ${row.path} — ${row.want} (see rig-parts guide ${ENVIRONMENT_RULE})`;
+    const all = [...mutantRows, missing];
+    let direct = '';
+    try {
+      readCheckEnvironment(missingPath);
+    } catch (err) {
+      direct = err instanceof PartsError ? err.problems.map((q) => q.code).join(',') : String(err);
+    }
+    say(
+      'CK516_EVERY_MALFORMED_SCHEDULE_AND_A_MISSING_FILE_IS_CHECK_ENVIRONMENT_WITH_RIGCS_SENTENCE_AND_NOTHING_WRITTEN',
+      all.every(refusedRight) && direct === ENVIRONMENT_RULE,
+      all.map((row) => `${row.label}: exit ${row.r.status}, --out ${existsSync(row.r.dir) ? 'WRITTEN' : 'absent'}, ${refusedRight(row) ? 'rigc\'s sentence' : `WRONG: ${failOf(row.r.out).slice(0, 160)}`}`).join('; ') + `; readCheckEnvironment on the missing path -> ${direct}`,
+      "issue #538 bar 3: the schedule is read once, by rig-c's own reader, before rigc --version or a build — a wrong spec, an unordered or negative t, a pair holding null or Infinity (JSON's 1e999), a step changing nothing, a key rigc does not read, and a path with nothing at it each refuse by name with rigc's words, and --out is never created",
+    );
+
+    // CK517: rigc render's own refusals of a well-formed schedule, and build's pre-read.
+    const nophysics = clothBuild(root, 'nophysics', (cs) => cs.filter((c) => c.type !== 'physics'));
+    const npDir = join(root, 'check-nophysics-env');
+    const np = nophysics.rig.status === 0 ? runCli(['check', '--rig', nophysics.out, '--parts', nophysics.parts, '--out', npDir, '--environment', gustPath]) : { status: -1, out: nophysics.rig.out };
+    const latePath = schedule('late', steps([{ t: 0, wind: [1, 0] }, { t: 9, wind: [2, 0] }]));
+    const late = run('late', latePath);
+    const rigcSaid = (out: string, path: string, sentence: string): boolean => failOf(out).startsWith(`FAIL  ${ENVIRONMENT_RULE}: ${path} — --environment ${path}: ${sentence}`);
+    const buildOut = join(root, 'build-env');
+    const built = runCli(['build', '--config', join(root, 'bare.json'), '--source', join(root, 'none.png'), '--full', join(root, 'none'), '--out', buildOut, '--environment', mutantRows[0].path]);
+    const builtFail = built.out.split('\n').find((l) => l.includes(`FAIL  ${ENVIRONMENT_RULE}`)) ?? '';
+    say(
+      'CK517_RIGC_RENDERS_REFUSAL_OF_A_SCHEDULE_ON_THIS_RIG_IS_CHECK_ENVIRONMENT_AND_BUILD_REFUSES_BEFORE_IT_ASSEMBLES',
+      np.status === 1 &&
+        rigcSaid(np.out, gustPath, 'the skeleton declares no physics constraint, so no environment moves anything in it') &&
+        late.status === 1 &&
+        rigcSaid(late.out, latePath, "entry 1's t 9 falls after the last frame of every set drawn") &&
+        built.status === 1 &&
+        builtFail.startsWith(`[assemble]   FAIL  ${ENVIRONMENT_RULE}: ${mutantRows[0].path} — ${mutantRows[0].want}`) &&
+        !existsSync(join(buildOut, 'parts.json')),
+      `no physics constraint: exit ${np.status}, ${failOf(np.out).replace(new RegExp(gustPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '<schedule>').slice(0, 170)}; a step at 9 s of a 3.333 s idle: exit ${late.status}, ${failOf(late.out).replace(new RegExp(latePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '<schedule>').slice(0, 170)}; build with a wrong spec: exit ${built.status}, ${builtFail.replace(mutantRows[0].path, '<schedule>').slice(0, 90)}…, parts.json ${existsSync(join(buildOut, 'parts.json')) ? 'WRITTEN' : 'absent'}`,
+      "issue #538: what a well-formed schedule cannot do to this rig is rigc render's to refuse, not this package's to re-derive — its --environment line is carried by name; build reads the schedule by the same reader before assemble, as it reads --requirements",
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

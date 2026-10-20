@@ -1861,8 +1861,9 @@ rigc render --candidate out/check/build --animation idle --fps 12 --max 640 --ge
 Read by `CLOTH_SETTLES`'s own definition on the `geometry.json` that writes, none of the
 16 chains settles. The nine that settle under the default world keep moving to the last
 frame: the skirt's eight trees end at 7.66 to 23.79 rig px/s, and the swing at 2.778
-(selftest `CH21` holds this). `check` itself always reads the default world, so `wind`'s
-`check.json` keeps its WARN. The WARN states what the rig does with nothing driving it;
+(selftest `CH21` holds this). `check` without `--environment` reads the default world, so
+`wind`'s tracked `check.json` keeps its WARN; `check --environment examples/wind/breeze.json`
+takes every reading under the breeze instead (§6, *The world the readings are taken in*). The WARN states what the rig does with nothing driving it;
 it is not a fault (`CH20` holds that the idle keys no hip and that the chains which
 settle are exactly the ones no idle key drives). A soft region with no wind response,
 such as `reference-sample`'s `hip_jiggle`, is not reached by an environment at all:
@@ -3115,7 +3116,40 @@ documents do not ship). Each is an input this package built; none is an author's
 | <a id="REQUIREMENTS_MAY_FOLD"></a>`REQUIREMENTS_MAY_FOLD` | a `may_fold` entry names a slot with no mesh attachment — a region is one quad and cannot fold (issue #320). Refused before anything is built. Before issue #333 an entry naming the idle was refused here too; the bar reads the idle now, and `idle` is an animation name like any other | a mesh slot |
 | <a id="REQUIREMENTS_NOT_PLANTED"></a>`REQUIREMENTS_NOT_PLANTED` | a `not_planted` name is a part `check` does not read as a planted foot — it does not come from a See-through `footwear` layer — or there is no `parts.json` to choose the feet by (issue #231). Refused before anything is built | a `footwear` part's name |
 | <a id="REQUIREMENTS_TIP_EXCEPTION"></a>`REQUIREMENTS_TIP_EXCEPTION` | a `not_swinging`, `rises` or `rests` name is a part `TIP_OVER_ROOT` does not read — not from a See-through `handwear` or `bottomwear` layer — or there is no `parts.json` (refused before anything is built); or a `rises` part is not carried by a chain that rises: the chain's **last link**, at the setup pose, runs other than up — from its origin along its `length` (the extent the rig stage turns a link to), or, a last link with no length, from the link before's origin to its own — the detail giving the link read and the direction measured (refused after the idle is rendered, before `check.json` is written) (issues #231, #322; until #322 it read the chain's first link's origin to its last's, which refused a folded arm — a link that hangs, then a forearm raised) | a swinging part's name; for `rises`, a part whose chain does rise |
+| <a id="CHECK_ENVIRONMENT"></a>`CHECK_ENVIRONMENT` | `check --environment` (or `build --environment`, forwarded): the schedule is refused, the detail rigc's own sentence verbatim. Read once by rig-c's reader (`readEnvironmentSchedule`, `rig-c/src/environment.ts`) before anything is built — nothing at the path, a file that is not JSON or not an object, a `spec` other than `rigc-environment/1`, a key besides `spec`, `steps` or a step's `t`, `wind`, `gravity`, no step, a `t` not finite, below 0 or not after the step before, a `wind` or `gravity` not a pair of finite numbers (JSON's `1e999` reads as `Infinity` and is refused), a step stating neither — and `--out` is not written (`build` refuses under `[assemble]`, before it assembles). After the build, what `rigc render --environment` refuses of a well-formed schedule on this rig, quoted from its `--environment <path>:` line: no physics constraint, a half no constraint answers, two steps on one frame at 12 fps, a step after the last frame of the animation rendered. Also refused before anything is built: a `motion.json` with no animation, where no render `check` makes could pose the schedule | the schedule — rigc's sentence names the entry, the field, the value found and the value required; for a rig with no physics constraint, drop the flag: no world moves it |
 | <a id="REQUIREMENTS_SEAM"></a>`REQUIREMENTS_SEAM` | a `seam` cannot be read against the rig: there is no `parts.json` (a merged rig, §7 *Measuring a rig rig-parts did not assemble*), or the two parts' art does not meet at the setup pose (no 4-adjacent pair). Refused before anything is built | two parts whose art touches, on a rig with its `parts.json` |
+
+**The world the readings are taken in** (`--environment`, issue #538). A physics chain
+answers the world as well as the bones above it, and `check` without the flag reads
+rigc's default world, wind (1, 0) and gravity (0, 1) — not the one a person watched in
+the review editor. `check --environment <schedule.json>` hands a `rigc-environment/1`
+schedule (§3, *What moves them*) to every render whose frames a bar or a warning reads,
+and to none that writes a product: the idle render (`TIP_OVER_ROOT`, `STILL_REGIONS_DARK`,
+`TEXTURE_STRETCH`, `CLOTH_SETTLES`), the physics-on half of `ANIMATIONS_DO_NOT_FOLD`, the
+parts `BREATH_VISIBLE` renders alone, `SEAM_OVER_MOTION` and the `--requirements`
+renders. The renders with the physics left out — the loop's keyed render, the fold
+bar's physics-off half, `STRESS_OFF_CHAIN`'s turned copy and `SEAM_OVER_RANGE`'s bent
+copy — take none: no world moves a skeleton with no physics constraint, and
+`rigc render` refuses a schedule on one (`the skeleton declares no physics constraint,
+so no environment moves anything in it`, rig-c 2.60.0, measured on the fold bar's off
+half). The setup-pose stills (the seam, `BLINK_NO_HOLE`, `SETUP_POSE_VS_SOURCE`) take
+none either: each is a 0.1 s animation read at its first frame, and rigc refuses a step
+after its last (`entry 1's t 0.5 falls after the last frame of every set drawn`,
+measured). `build --loop` encodes a product and takes none. One line,
+`environment: <path>, rigc-environment/1, <n> step(s), sha256 <16 hex>`, says which
+schedule, and `check.json` carries `environment` — `path` as the command line gave it,
+the `sha256` of the bytes read, `steps` — after `pack_mode`; without the flag neither
+is written and no render argument moves.
+
+The world before the first step is the runtime's, so a still schedule is the one that
+states it: `{ "t": 0, "wind": [1, 0], "gravity": [0, 1] }` reads what a run without the
+flag reads — on the cloth fixture (selftest `CK514`), the same idle frames and the same
+`check.json` but for its `environment` key. Wind `[0, 0]` is not that world but a calm,
+and it moves the readings: on the same fixture `TEXTURE_STRETCH` 1.382 → 1.214 and
+`TIP_OVER_ROOT`'s ratio 15.061 → 7.216. A gust that moves the chains moves the bars:
+wind (1, 0), then (40, 0) from 0.5 s, reads `TEXTURE_STRETCH` 32.181 (FAIL, `hair_back`
+triangle 258), two meshes folding under `ANIMATIONS_DO_NOT_FOLD` (FAIL; none without the
+flag) and 8 `CLOTH_SETTLES` warnings for 9 (selftest `CK515`).
 
 ### compose
 
