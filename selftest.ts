@@ -32409,7 +32409,7 @@ function republishFaults(yml: string, doc: string, packageName: string): string[
 
 function runRepublishControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
   const packageName = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string }).name;
-  // RL01 — a cut tag whose publish did not land is published by dispatch, through the push path's own steps.
+  // AL08 — a cut tag whose publish did not land is published by dispatch, through the push path's own steps.
   const yml = readFileSync(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
   const doc = readFileSync(join(ROOT, 'RELEASING.md'), 'utf8');
   const standing = republishFaults(yml, doc, packageName);
@@ -32438,7 +32438,7 @@ function runRepublishControls(say: (name: string, ok: boolean, detail: string, w
     return { what: p.what, ok: raised.some((f) => f.includes(p.want)), said: raised.join(' | ') || 'no fault' };
   });
   say(
-    'RL01_A_CUT_TAG_IS_REPUBLISHED_BY_DISPATCH_THROUGH_THE_SAME_STEPS_AND_EACH_REFUSAL_IS_NAMED',
+    'AL08_A_CUT_TAG_IS_REPUBLISHED_BY_DISPATCH_THROUGH_THE_SAME_STEPS_AND_EACH_REFUSAL_IS_NAMED',
     standing.length === 0 && cases.every((c) => c.ok),
     `${standing.length === 0 ? `release.yml takes an optional \`tag\` beside \`version\`, runs release-please on a push only, resolves the tag in one step naming ${REPUBLISH_REFUSALS.join(', ')} (below-latest after already-published), runs every later step under ${PUBLISH_CONDITION} from the resolved tag, interpolates no input into a script, and RELEASING.md says how to dispatch it` : standing.join('; ')}` +
       ` — planted ${plants.length}: ${cases.map((c) => `${c.what} -> ${c.ok ? 'named' : `NOT named (${c.said.slice(0, 160)})`}`).join('; ')}`,
