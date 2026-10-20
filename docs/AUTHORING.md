@@ -2969,7 +2969,16 @@ outside the part's attachment, and the parts the config does not reproduce — r
 accepted after the config was written — are carried over as they are. `remesh.json`
 names the input's SHA-256 per file, the request, both versions, the part's counts
 before and after and both checks, and quotes `check`'s own physics line as the scope
-of the revision's check.
+of the revision's check. Each check side carries what the hold reads (`pass`,
+`measured`, `not_met`, `skipped`, `physics`) and, from issue #541, what `check`
+itself reports on that tree: `line`, the last line it prints (`check: PASS; …`),
+byte for byte — one function composes it for both — and `status`, every block's
+status as that tree's `check.json` records it (`gate`, `loop` and `seam` from their
+figures, every other block its own `status`: `PASS`, `FAIL`, `SKIP`, `WARN`,
+`CLEAR`, `REPORTED`). A consumer need not run `check` again on the revision: it
+binds the block to the files by the `revision` hash rows. A warning's status is
+carried, never held: a revision whose `CLOTH_SETTLES` is a `WARN` where the input's
+is `CLEAR` is written.
 
 **`--delta <mesh-edit.json>`** (in place of `--mesh`, exactly one of the two; issue
 #526) reads rig-c/review's mesh edit, `rig-review-mesh-edit/1`: `slot`, `skin`,
@@ -3041,7 +3050,10 @@ the config is left out of the revision — `retune.json`'s `held.not_compared` s
 what was held, which constraint fields changed (and which constraints were added or
 removed), how many idle tracks changed and the idle's duration before and after, both
 versions and both checks, and quotes `check`'s own physics line as the scope of the
-revision's check.
+revision's check. The check sides are `remesh`'s, `line` and `status` included
+(issue #541): `check`'s own last line and every block's status on that tree, so a
+consumer binds them to the revision by the `revision` hash rows instead of running
+`check` a second time.
 
 ### rig-c's mesh refusals, quoted in a line
 

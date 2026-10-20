@@ -70,7 +70,7 @@ import {
   splitSchedule,
   untestedIntervals,
 } from './autoreplay.ts';
-import { besideIdleLine, CLOTH_LINE, type ClothLine, clothWarnText, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamWarnText, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, environmentLine, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, readCheckEnvironment, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR } from './check.ts';
+import { besideIdleLine, checkSummaryLine, CLOTH_LINE, type ClothLine, clothWarnText, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamWarnText, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, environmentLine, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, readCheckEnvironment, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR } from './check.ts';
 import { type Cut, type Extend, type Limb, loadConfig, loadConfigAndAnimations, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
 import { failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import type { MeshQualityReport, MotionSchedule } from 'rig-c/mesh';
@@ -1391,18 +1391,6 @@ function showFigure(v: unknown): string {
 }
 
 /**
- * How many of the bars measured and how many said SKIP, by name — the
- * summary's second half (issue #77): `PASS` reads only the bars that measured,
- * so a run that measured one bar says so on the line that says PASS. The
- * count is every bar `check` tallied: the `BARS` of `src/check.ts`, and
- * `ANIMATIONS_DO_NOT_FOLD` where it is written (issue #320).
- */
-export function barsSummary(r: CheckReport): string {
-  const { measured, skipped } = r.bars;
-  return `${measured.length} of ${measured.length + skipped.length} bar(s) measured, ${skipped.length} skipped${skipped.length === 0 ? '' : ` (${skipped.map((s) => s.bar).join(', ')})`}`;
-}
-
-/**
  * The rig stage's face-axis line (issue #239): the eye line's angle, the parts it runs between and the face bones
  * turned to it, or why there is no line and the face bones keep the page's axes — the note a one-eyed painting gets.
  * With a line it also names the `invariants.axes` entry written for rigc's A51, its tolerance, or why none was; and
@@ -1561,13 +1549,6 @@ export function clothLines(line: ClothLine, plant: { silent?: boolean } = {}): s
   ];
 }
 
-/** The summary's warning clause: each warning line that read something, named, with the warnings they printed together; empty when none read. */
-export function warningsClause(r: Pick<CheckReport, 'motionSeam' | 'cloth'>): string {
-  const read = [...(r.motionSeam.status === 'SKIP' ? [] : [{ name: MOTION_SEAM_LINE, n: r.motionSeam.warnings }]), ...(r.cloth.status === 'SKIP' ? [] : [{ name: CLOTH_LINE, n: r.cloth.warnings }])];
-  if (read.length === 0) return '';
-  return `; ${read.reduce((a, x) => a + x.n, 0)} warning(s) (${read.map((x) => x.name).join(', ')}, not a bar)`;
-}
-
 /** A requirement's line as the console prints it: its name and status, the reason first when NOT MEASURABLE, then its figures as check.json holds them. */
 export function requirementText(name: string, line: RequirementLine): string {
   const rest = Object.entries(line).filter(([k]) => k !== 'status' && k !== 'reason');
@@ -1644,9 +1625,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   log(`  gate: rig-play ${fig.gate_spine_html_green ? 'green' : 'RED'} (${fig.rigc_entry.entry}${fig.rigc_entry.spine_core === null ? ', rigc\'s own validator' : `, the spine-core ${fig.rigc_entry.spine_core} round trip`})`);
   log(`  wrote ${r.written.map((w) => join(input.out, w)).join(', ')}, ${join(input.out, 'build')}/${r.idle === null ? '' : `, ${join(input.out, 'idle_frames')}/`}${r.requirements === null ? '' : `, ${join(input.out, REQUIREMENTS_DIR)}/`}${fig.seam_pairs === undefined ? '' : `, ${join(input.out, SEAM_DIR)}/`}${existsSync(join(input.out, STILL_DIR)) ? `, ${join(input.out, STILL_DIR)}/` : ''}`);
   for (const p of r.problems) log(failLine(p));
-  const reqNotPass = r.requirements === null ? 0 : r.requirements.summary.declared - r.requirements.summary.pass;
-  const notMet = r.requirements === null ? `${r.problems.length} bar(s) not met` : `${r.problems.length - reqNotPass} bar(s) not met, ${reqNotPass} declared requirement(s) not PASS`;
-  log(`${fig.PASS ? 'check: PASS' : `check: FAIL — ${notMet}`}; ${barsSummary(r)}${warningsClause(r)}`);
+  log(checkSummaryLine(r));
   return r;
 }
 

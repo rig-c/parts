@@ -34708,6 +34708,41 @@ function treeDigest(root: string): string {
   return out.join('\n');
 }
 
+/**
+ * Issue #541, read from the far side: what one side of a provenance's check block carries against a separate `check`
+ * run on the same revision — the run's printed `check:` line, compared whole, and its `check.json` by the suite's own
+ * reading of the file, key by key in the file's order (a block with a `status` key gives that status; the three bars
+ * with figures and no status — `gate_spine_html_green`, `loop_max_diff`, `seam_mean` — are read as `barsNotMet` reads
+ * the file, a null figure being a SKIP). One sentence per difference: the first differing character of the line, then
+ * each key whose status or place differs.
+ */
+function checkSideDrift(side: Pick<CheckSide, 'line' | 'status'>, stdout: string, checkJson: unknown): string[] {
+  const out: string[] = [];
+  const printed = stdout.split('\n').filter((l) => l.startsWith('check: '));
+  if (printed.length !== 1) out.push(`the check run printed ${printed.length} "check: " line(s); one is required`);
+  else if (side.line !== printed[0]) {
+    let i = 0;
+    while (i < side.line.length && side.line[i] === printed[0][i]) i++;
+    out.push(`line: first difference at character ${i} — carried ${JSON.stringify(side.line.slice(i, i + 40))}, printed ${JSON.stringify(printed[0].slice(i, i + 40))}`);
+  }
+  if (typeof checkJson !== 'object' || checkJson === null || Array.isArray(checkJson)) return [...out, 'the check run wrote no check.json object'];
+  const fig = checkJson as Record<string, unknown>;
+  const notMet = barsNotMet(fig);
+  const read = (bar: string, v: unknown): string => (v === null ? 'SKIP' : notMet.includes(bar) ? 'FAIL' : 'PASS');
+  const want: Array<[string, string]> = [];
+  for (const [k, v] of Object.entries(fig)) {
+    if (k === 'gate_spine_html_green') want.push(['gate', v === true ? 'PASS' : 'FAIL']);
+    else if (k === 'loop_max_diff') want.push(['loop', read('loop', v)]);
+    else if (k === 'seam_mean') want.push(['seam', read('seam', v)]);
+    else if (typeof v === 'object' && v !== null && !Array.isArray(v) && typeof (v as { status?: unknown }).status === 'string') want.push([k, String((v as { status: string }).status)]);
+  }
+  const got = Object.entries(side.status);
+  for (const [k, s] of want) if (side.status[k] !== s) out.push(`status ${k}: carried ${side.status[k] ?? 'absent'}, check.json ${s}`);
+  for (const [k] of got) if (!want.some(([w]) => w === k)) out.push(`status ${k}: carried ${side.status[k]}, check.json has no such block`);
+  if (out.length === 0 && got.map(([k]) => k).join() !== want.map(([k]) => k).join()) out.push(`status order: carried ${got.map(([k]) => k).join(',')}, check.json ${want.map(([k]) => k).join(',')}`);
+  return out;
+}
+
 function runRemeshSuite(): number {
   section('remesh: one part of a gated rig re-fitted under a requested entry, every other byte kept, a new revision (issue #495)');
   const { say, bad } = counter();
@@ -34925,7 +34960,7 @@ function runRemeshSuite(): number {
     const built = (bones: unknown, motionText: string, image: number): Built => ({ rig: { bones }, rigText: '', motionText, report: [], image: new Uint8Array([image]) });
     const same9 = requestHeldProblems(built([{ name: 'a' }], '{"k":1}', 1), built([{ name: 'a' }], '{"k":1}', 1), 'strip');
     const moved9 = requestHeldProblems(built([{ name: 'a' }], '{"k":1}', 1), built([{ name: 'a' }, { name: 'a_ctl' }], '{"k":2}', 2), 'strip');
-    const side = (measured: string[], notMet: string[]): CheckSide => ({ pass: notMet.length === 0, measured, not_met: notMet, skipped: [], physics: null });
+    const side = (measured: string[], notMet: string[]): CheckSide => ({ pass: notMet.length === 0, measured, not_met: notMet, skipped: [], physics: null, line: '', status: {} });
     const held9 = checkHeldProblems(side(['gate', 'loop'], []), side(['gate', 'loop'], []), []);
     const lost9 = checkHeldProblems(side(['gate', 'loop'], []), side(['gate'], ['gate']), []);
     const kept9 = checkHeldProblems(side(['gate', 'loop'], ['loop']), side(['gate', 'loop'], ['loop']), []);
@@ -35138,6 +35173,32 @@ function runRemeshSuite(): number {
         (bare16.e !== null ? !existsSync(bare16.out) : bareRead !== 'simple loop'),
       `rebind skipped: written, vertex 100 binds ${bindRead} (RM11 requires ${MOVED_100}); hull order skipped: ${order16.e === null ? 'written' : order16.e.problems.map((p) => `${p.code} ${p.detail.slice(0, 140)}`).join(' | ')}; and with the topology gate out: ${bareRead}`,
       'a gate nobody has seen fail is not a gate: the rebind is held by RM11\'s hand figure (rigc cannot see a binding that is merely wrong), and the hull order by the replay\'s own topology gate — and behind it by the next reader',
+    );
+
+    // RM17 — issue #541 through the shared checkSide: RM01's remesh.json against a separate `check` on each tree, by CLI.
+    const check17 = (rig: string, name: string): { status: number; out: string; fig: unknown } => {
+      const o = join(root, `check-${name}`);
+      const run = runCli(['check', '--rig', rig, '--parts', fx.parts, '--out', o]);
+      return { ...run, fig: readJsonFile(join(o, 'check.json')) };
+    };
+    const rev17 = check17(out1, 'rm17-revision');
+    const in17 = check17(input, 'rm17-input');
+    const side17 = prov1?.check.revision;
+    const driftRev17 = side17 === undefined ? ['no remesh.json'] : checkSideDrift(side17, rev17.out, rev17.fig);
+    const driftIn17 = prov1 === null ? ['no remesh.json'] : checkSideDrift(prov1.check.input, in17.out, in17.fig);
+    const keys17 = existsSync(join(out1, PROVENANCE_FILE)) ? (JSON.parse(readFileSync(join(out1, PROVENANCE_FILE), 'utf8')) as { check: { input: Record<string, unknown>; revision: Record<string, unknown> } }).check : null;
+    const order17 = 'pass,measured,not_met,skipped,physics,line,status';
+    say(
+      'RM17_REMESH_JSON_CARRIES_THE_CHECK_LINE_AND_EVERY_BLOCKS_STATUS_A_SEPARATE_CHECK_ON_THE_SAME_TREE_REPORTS',
+      rev17.status === 0 &&
+        in17.status === 0 &&
+        driftRev17.length === 0 &&
+        driftIn17.length === 0 &&
+        side17?.line.startsWith('check: PASS; ') === true &&
+        Object.keys(keys17?.input ?? {}).join() === order17 &&
+        Object.keys(keys17?.revision ?? {}).join() === order17,
+      `revision: check exit ${rev17.status}, carried ${JSON.stringify(side17?.line ?? null)}, ${driftRev17.length} difference(s)${driftRev17.length === 0 ? '' : `: ${driftRev17.join(' | ')}`}; statuses ${side17 === undefined ? 'none' : Object.entries(side17.status).map(([k, st]) => `${k} ${st}`).join(', ')}; input: check exit ${in17.status}, ${driftIn17.length} difference(s)${driftIn17.length === 0 ? '' : `: ${driftIn17.join(' | ')}`}; key order ${Object.keys(keys17?.revision ?? {}).join(',')}`,
+      'issue #541: remesh carries check\'s last line and every block\'s status through the checkSide retune shares, on both sides, equal to a separate check of the same tree (the mutants are RN09\'s, on the same reader)',
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -35432,6 +35493,58 @@ function runRetuneSuite(): number {
       noOut7.status === 2 && noOut7.out.includes('USAGE: retune needs --out <value>') && unknown7.status === 2 && unknown7.out.includes('retune does not take "--part"; it takes --rig, --config, --parts, --out, --requirements, --idle-keys, --page-edges, --pack-shape') && !existsSync(join(root, 'usage')),
       `${noOut7.out.split('\n')[0].trim()} | ${unknown7.out.split('\n')[0].trim()}`,
       'a retune names no part: what it replaces is the config\'s constraints and idle, so --part (remesh\'s) is not a flag it takes',
+    );
+
+    // RN09 — issue #541's bar, two-sided: a retune's retune.json against a separate `check` on the same trees, by CLI —
+    // RN01's (its cloth line CLEAR on both sides), and one whose physics constraint moves from tail1 to body, which no
+    // idle key drives (on x and y: body has no length, so rigc's A23 refuses a rotate), so the revision's cloth line is a
+    // WARN where the input's is CLEAR.
+    const check9 = (rig: string, name: string): { status: number; out: string; fig: unknown } => {
+      const o = join(root, `check-${name}`);
+      const run = runCli(['check', '--rig', rig, '--parts', fx.parts, '--out', o]);
+      return { ...run, fig: readJsonFile(join(o, 'check.json')) };
+    };
+    const rev9 = check9(out1, 'rn09-revision');
+    const in9 = check9(input, 'rn09-input');
+    const side9 = prov1?.check.revision;
+    const driftRev9 = side9 === undefined ? ['no retune.json'] : checkSideDrift(side9, rev9.out, rev9.fig);
+    const driftIn9 = prov1 === null ? ['no retune.json'] : checkSideDrift(prov1.check.input, in9.out, in9.fig);
+    const warn9 = stage('warn', variant('warn', (c) => (c.constraints = [{ name: 'body_physics', type: 'physics', bone: 'body', x: 1, y: 1, inertia: 0.5, strength: 60, damping: 0.85, mass: 1, mix: 1 }])));
+    const warnProv9 = warn9.r === null ? null : (warn9.r as RetuneResult).provenance;
+    const warnRun9 = check9(warn9.out, 'rn09-warn');
+    const warnSide9 = warnProv9?.check.revision;
+    const driftWarn9 = warnSide9 === undefined ? ['no retune.json'] : checkSideDrift(warnSide9, warnRun9.out, warnRun9.fig);
+    const keys9 = existsSync(join(out1, RETUNE_FILE)) ? (JSON.parse(readFileSync(join(out1, RETUNE_FILE), 'utf8')) as { check: { input: Obj; revision: Obj } }).check : null;
+    const order9 = 'pass,measured,not_met,skipped,physics,line,status';
+    // The mutants, on the WARN revision: a side that leaves the warning lines out of its statuses, and one whose line is
+    // composed a second way, off the five fields the hold reads.
+    const warningLines: string[] = [MOTION_SEAM_LINE, CLOTH_LINE];
+    const dropped9 = warnSide9 === undefined ? [] : checkSideDrift({ ...warnSide9, status: Object.fromEntries(Object.entries(warnSide9.status).filter(([k]) => !warningLines.includes(k))) }, warnRun9.out, warnRun9.fig);
+    const twice9 = warnSide9 === undefined ? [] : checkSideDrift({ ...warnSide9, line: `check: ${warnSide9.pass ? 'PASS' : 'FAIL'}; ${warnSide9.measured.length} of ${warnSide9.measured.length + warnSide9.skipped.length} bar(s) measured, ${warnSide9.skipped.length} skipped` }, warnRun9.out, warnRun9.fig);
+    const statusText9 = (side: CheckSide | undefined): string => (side === undefined ? 'none' : Object.entries(side.status).map(([k, st]) => `${k} ${st}`).join(', '));
+    say(
+      'RN09_RETUNE_JSON_CARRIES_THE_CHECK_LINE_AND_EVERY_BLOCKS_STATUS_A_SEPARATE_CHECK_ON_THE_SAME_TREE_REPORTS',
+      rev9.status === 0 &&
+        in9.status === 0 &&
+        driftRev9.length === 0 &&
+        driftIn9.length === 0 &&
+        side9?.status[CLOTH_LINE] === 'CLEAR' &&
+        side9.status.RECOMPOSITE_HOLES === 'SKIP' &&
+        warn9.e === null &&
+        warnRun9.status === 0 &&
+        driftWarn9.length === 0 &&
+        warnProv9?.check.input.status[CLOTH_LINE] === 'CLEAR' &&
+        warnSide9?.status[CLOTH_LINE] === 'WARN' &&
+        warnSide9.line.endsWith(`warning(s) (${CLOTH_LINE}, not a bar)`) &&
+        !warnSide9.line.includes('; 0 warning(s)') &&
+        Object.keys(keys9?.input ?? {}).join() === order9 &&
+        Object.keys(keys9?.revision ?? {}).join() === order9 &&
+        dropped9.length === 1 &&
+        dropped9[0] === `status ${CLOTH_LINE}: carried absent, check.json WARN` &&
+        twice9.length === 1 &&
+        twice9[0].startsWith('line: first difference at character '),
+      `RN01's revision: check exit ${rev9.status}, carried ${JSON.stringify(side9?.line ?? null)}, ${driftRev9.length} difference(s)${driftRev9.length === 0 ? '' : `: ${driftRev9.join(' | ')}`}; statuses ${statusText9(side9)}; its input: check exit ${in9.status}, ${driftIn9.length} difference(s)${driftIn9.length === 0 ? '' : `: ${driftIn9.join(' | ')}`}; key order ${Object.keys(keys9?.revision ?? {}).join(',')}; physics moved to body: retune ${codes(warn9.e)} (input ${warnProv9?.check.input.status[CLOTH_LINE] ?? 'none'}, revision ${warnSide9?.status[CLOTH_LINE] ?? 'none'}), check exit ${warnRun9.status}, carried ${JSON.stringify(warnSide9?.line ?? null)}, ${driftWarn9.length} difference(s)${driftWarn9.length === 0 ? '' : `: ${driftWarn9.join(' | ')}`}; warning statuses dropped: ${dropped9.join(' | ') || 'not caught'}; line composed off the five fields: ${twice9.join(' | ') || 'not caught'}`,
+      'issue #541: the retune\'s check block carries check\'s last line as check prints it (one composer, src/check.ts checkSummaryLine) and every block\'s status as check.json writes it, on both sides, so a consumer binds them to the revision by its hash rows instead of running check again; a revision whose cloth line is a WARN against the input\'s CLEAR is written, a warning never being a hold; a side without the warning lines, or a line composed a second way, is named by the key or the character where it parts',
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
