@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.45.0](https://github.com/rig-c/parts/compare/v1.44.0...v1.45.0) (2026-10-20)
+
+
+### Features
+
+* **alternates:** cut a skeleton set at its own joint positions, registered on the base torso, and record drawnLength ([#539](https://github.com/rig-c/parts/issues/539)) ([#542](https://github.com/rig-c/parts/issues/542)) ([2a4ad44](https://github.com/rig-c/parts/commit/2a4ad443e60ed3ab87a26e5c750761752778ce98))
+
 ## [1.44.0](https://github.com/rig-c/parts/compare/v1.43.0...v1.44.0) (2026-10-20)
 
 
