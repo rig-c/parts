@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.49.0](https://github.com/rig-c/parts/compare/v1.48.0...v1.49.0) (2026-10-20)
+
+
+### Features
+
+* **remesh,retune:** the provenance carries check's final line and every block's status, as check itself reports ([#541](https://github.com/rig-c/parts/issues/541)) ([#551](https://github.com/rig-c/parts/issues/551)) ([7a15084](https://github.com/rig-c/parts/commit/7a1508420366a735b73cb56fa5283593c6e8a52a))
+
+
+### Bug Fixes
+
+* **requirements:** refuse a contact or aim whose target is the subject's own bone — a vacuous PASS ([#540](https://github.com/rig-c/parts/issues/540)) ([#553](https://github.com/rig-c/parts/issues/553)) ([add4115](https://github.com/rig-c/parts/commit/add4115d13b060b90c410ac8c0ea1484f3813c8a))
+
 ## [1.48.0](https://github.com/rig-c/parts/compare/v1.47.0...v1.48.0) (2026-10-20)
 
 
