@@ -61,7 +61,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { checkStage, gateThroughRigc, type Log, RIGC_MODEL_DOCUMENT, rigStage } from './build.ts';
-import { barsNotMet, type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackShape, type PageEdges, rigcRanClause, type RigcRunner } from './check.ts';
+import { barsNotMet, type CheckReport, checkStatuses, type CheckStatus, checkSummaryLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackShape, type PageEdges, rigcRanClause, type RigcRunner } from './check.ts';
 import { loadConfigAndAnimations } from './config.ts';
 import { PartsError, type Problem, problemLine, refuseIfAny } from './errors.ts';
 import { jsonValueSpan, scratchConfig } from './meshdraft.ts';
@@ -144,13 +144,21 @@ export interface MeshCounts {
   hull: number;
 }
 
-/** One side of the provenance's check block. */
+/**
+ * One side of the provenance's check block. The first five fields are what the hold ({@link checkHeldProblems})
+ * reads; `line` and `status` (issue #541) are what `check` itself reports on the same tree — its last line, whole,
+ * and every block's status as `check.json` records it — so a consumer need not run `check` a second time.
+ */
 export interface CheckSide {
   pass: boolean;
   measured: string[];
   not_met: string[];
   skipped: Array<{ bar: string; reason: string }>;
   physics: string | null;
+  /** The last line `check` prints ({@link checkSummaryLine}), byte for byte. */
+  line: string;
+  /** Every block's status as `check.json` records it, in the file's order ({@link checkStatuses}). */
+  status: Record<string, CheckStatus>;
 }
 
 /** `remesh.json` (spec {@link REMESH_SPEC}). */
@@ -461,6 +469,8 @@ export function checkSide(r: CheckReport): CheckSide {
     not_met: barsNotMet(r.figures as unknown as Record<string, unknown>),
     skipped: r.bars.skipped.map((s) => ({ bar: s.bar, reason: s.reason })),
     physics: r.loopPhysics,
+    line: checkSummaryLine(r),
+    status: checkStatuses(r.figures),
   };
 }
 

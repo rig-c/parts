@@ -18760,6 +18760,79 @@ function runRequirementsSuite(): number {
       "#87: in a rig composed of several characters a target can simply be another character's bone, named as the composed rig names it — so it resolves as any bone does, and the unprefixed name a single character would use is a miss named with the composed names",
     );
 
+    // Issue #540: a contact or an aim held against its own bone reads 0 by construction (or, an aim at its own origin, no
+    // line at all), so it is refused by the reader, beside the file's other refusals, before anything is built. The probe
+    // rig has no `hip`: `lower` (under `upper`, under the root) stands in for the issue's non-root bone, and `pointer`
+    // (length POINTER_LEN) for its aimed bone.
+    type SelfRun = { status: number; out: string; outDir: string };
+    const selfRun = (label: string, requirements: Array<Record<string, unknown>>): SelfRun => {
+      const root = join(dir, `self-${label}`);
+      writeReqRig(join(root, 'rig'));
+      writeRequirements(join(root, 'req.json'), { requirements });
+      const r = runCli(['check', '--rig', join(root, 'rig'), '--out', join(root, 'out'), '--requirements', join(root, 'req.json')]);
+      return { status: r.status, out: r.out, outDir: join(root, 'out') };
+    };
+    const nothingWritten = (r: SelfRun): boolean => !existsSync(r.outDir) || readdirSync(r.outDir).length === 0;
+    const failLines = (r: SelfRun): string[] => r.out.split('\n').filter((l) => l.startsWith('  FAIL  ')).map((l) => l.trim());
+    const selfRoot = { name: 'ROOT_SELF', kind: 'contact', animation: 'reach', bone: 'root', point: 'origin', target: { bone: 'root', point: 'origin' }, within_px: 0.01 };
+    const selfLower = { name: 'LOWER_SELF', kind: 'contact', animation: 'reach', bone: 'lower', point: 'origin', target: { bone: 'lower', point: 'origin' }, within_px: 0.01 };
+    const selfAim = { name: 'POINTER_SELF', kind: 'aim', animation: 'reach', bone: 'pointer', target: { bone: 'pointer', point: 'tip' }, within_degrees: 0.01 };
+    const singles = [selfRoot, selfLower, selfAim].map((r) => ({ name: r.name, run: selfRun(r.name.toLowerCase(), [r]) }));
+    const wantSelf = (n: string): string => `FAIL  REQUIREMENTS_SELF_TARGET: requirements[0] "${n}" field "target"`;
+    say(
+      'RQ57_A_CONTACT_ON_ITS_OWN_BONE_AND_POINT_AND_AN_AIM_AT_ITS_OWN_TIP_ARE_EACH_REFUSED_BY_NAME_AND_CHECK_WRITES_NOTHING',
+      singles.every(({ name, run }) => run.status === 1 && failLines(run).length === 1 && failLines(run)[0].startsWith(wantSelf(name)) && failLines(run)[0].includes('measures 0 by construction') && nothingWritten(run) && !run.out.includes('gate rig-play')),
+      singles.map(({ name, run }) => `${name}: exit ${run.status}; ${failLines(run).join(' | ') || 'no FAIL line'}; out ${nothingWritten(run) ? 'empty' : 'WRITTEN'}`).join(' || '),
+      "issue #540's three rows, each alone on the probe rig (contact root origin / root origin; lower origin / lower origin for the issue's hip; aim pointer / pointer tip): each read PASS at 0 before, a figure no rig could miss — now each is refused by name with exit 1 before rigc builds anything, and check's out directory has no entry",
+    );
+
+    const together = selfRun('together', [selfRoot, selfLower, selfAim]);
+    const tLines = failLines(together);
+    say(
+      'RQ58_THE_THREE_SELF_TARGETS_PLANTED_TOGETHER_ARE_NAMED_IN_ONE_THROW',
+      together.status === 1 &&
+        tLines.length === 3 &&
+        tLines[0].startsWith('FAIL  REQUIREMENTS_SELF_TARGET: requirements[0] "ROOT_SELF" field "target"') &&
+        tLines[1].startsWith('FAIL  REQUIREMENTS_SELF_TARGET: requirements[1] "LOWER_SELF" field "target"') &&
+        tLines[2].startsWith('FAIL  REQUIREMENTS_SELF_TARGET: requirements[2] "POINTER_SELF" field "target"') &&
+        together.out.includes('refused: 3 problem(s)') &&
+        nothingWritten(together),
+      `exit ${together.status}; ${tLines.length} FAIL line(s): ${tLines.map((l) => l.slice(0, 90)).join(' | ')}; out ${nothingWritten(together) ? 'empty' : 'WRITTEN'}`,
+      'readers collect every problem and throw once: the three rows in one file are three lines of one refusal, not the first of them',
+    );
+
+    // The positive controls' lines are the text check printed for the same two requirements before issue #540 (captured
+    // on the unpatched reader): 39.357337 px is the measured distance from the lower arm's tip to `far`'s origin at frame
+    // 0, and 10 px is LOWER_LEN, the lower arm's own length.
+    const kept = selfRun('kept', [
+      { name: 'HAND_ON_FAR', kind: 'contact', animation: 'reach', bone: 'lower', point: 'tip', target: { bone: 'far', point: 'origin' }, within_px: 100 },
+      { name: 'LOWER_SPAN', kind: 'contact', animation: 'reach', bone: 'lower', point: 'tip', target: { bone: 'lower', point: 'origin' }, within_px: LOWER_LEN + 0.01 },
+    ]);
+    const keptLine = (n: string): string => kept.out.split('\n').find((l) => l.startsWith(`  ${n}: `))?.trim() ?? `no ${n} line`;
+    const wantFar = 'HAND_ON_FAR: PASS — kind contact; animation reach; of bone "lower" tip; against bone "far" origin; frames 5; largest_px 39.357337; at frame 0 (t = 0s); within_px 100';
+    const wantSpan = `LOWER_SPAN: PASS — kind contact; animation reach; of bone "lower" tip; against bone "lower" origin; frames 5; largest_px ${LOWER_LEN}; at frame 0 (t = 0s); within_px ${LOWER_LEN + 0.01}`;
+    say(
+      'RQ59_A_CONTACT_BETWEEN_TWO_BONES_AND_A_TIP_AGAINST_ITS_OWN_ORIGIN_READ_AS_BEFORE',
+      keptLine('HAND_ON_FAR') === wantFar && keptLine('LOWER_SPAN') === wantSpan && !kept.out.includes('REQUIREMENTS_SELF_TARGET'),
+      `exit ${kept.status}; ${keptLine('HAND_ON_FAR')} | ${keptLine('LOWER_SPAN')}`,
+      "the positive control for RQ57-RQ60: the rule is the same bone AND the same point for a contact — two bones, or one bone's tip against its own origin (a reading of its length), are measured exactly as before",
+    );
+
+    const aimOrigin = selfRun('aim-origin', [{ ...selfAim, name: 'POINTER_ORIGIN', target: { bone: 'pointer', point: 'origin' } }]);
+    const aoLines = failLines(aimOrigin);
+    say(
+      'RQ60_AN_AIM_AT_ITS_OWN_ORIGIN_IS_REFUSED_AT_READ_TIME_WHERE_IT_WAS_NOT_MEASURABLE',
+      aimOrigin.status === 1 &&
+        aoLines.length === 1 &&
+        aoLines[0].startsWith('FAIL  REQUIREMENTS_SELF_TARGET: requirements[0] "POINTER_ORIGIN" field "target"') &&
+        aoLines[0].includes('no line to aim along') &&
+        !aimOrigin.out.includes('NOT MEASURABLE') &&
+        !aimOrigin.out.includes('CHECK_REQUIREMENT_MEASURABLE') &&
+        nothingWritten(aimOrigin),
+      `exit ${aimOrigin.status}; ${aoLines.join(' | ') || 'no FAIL line'}; NOT MEASURABLE printed: ${aimOrigin.out.includes('NOT MEASURABLE')}; out ${nothingWritten(aimOrigin) ? 'empty' : 'WRITTEN'}`,
+      "issue #540's fourth row: the same file read NOT MEASURABLE (CHECK_REQUIREMENT_MEASURABLE) after a build; an aim at a point of its own bone is one input, so it is refused once, by the reader, before anything is built",
+    );
+
     // Issue #111: the seam between two parts' art, held by the scene.
     const seamReq = { name: 'BANGS_ON_FACE', kind: 'seam', animation: 'idle', part: 'p', neighbour: 'n', within_px: 2 };
     const seamRead = readRequirements(file('seam', { spec, fps: REQ_FPS, requirements: [seamReq] }));
@@ -34773,6 +34846,41 @@ function treeDigest(root: string): string {
   return out.join('\n');
 }
 
+/**
+ * Issue #541, read from the far side: what one side of a provenance's check block carries against a separate `check`
+ * run on the same revision — the run's printed `check:` line, compared whole, and its `check.json` by the suite's own
+ * reading of the file, key by key in the file's order (a block with a `status` key gives that status; the three bars
+ * with figures and no status — `gate_spine_html_green`, `loop_max_diff`, `seam_mean` — are read as `barsNotMet` reads
+ * the file, a null figure being a SKIP). One sentence per difference: the first differing character of the line, then
+ * each key whose status or place differs.
+ */
+function checkSideDrift(side: Pick<CheckSide, 'line' | 'status'>, stdout: string, checkJson: unknown): string[] {
+  const out: string[] = [];
+  const printed = stdout.split('\n').filter((l) => l.startsWith('check: '));
+  if (printed.length !== 1) out.push(`the check run printed ${printed.length} "check: " line(s); one is required`);
+  else if (side.line !== printed[0]) {
+    let i = 0;
+    while (i < side.line.length && side.line[i] === printed[0][i]) i++;
+    out.push(`line: first difference at character ${i} — carried ${JSON.stringify(side.line.slice(i, i + 40))}, printed ${JSON.stringify(printed[0].slice(i, i + 40))}`);
+  }
+  if (typeof checkJson !== 'object' || checkJson === null || Array.isArray(checkJson)) return [...out, 'the check run wrote no check.json object'];
+  const fig = checkJson as Record<string, unknown>;
+  const notMet = barsNotMet(fig);
+  const read = (bar: string, v: unknown): string => (v === null ? 'SKIP' : notMet.includes(bar) ? 'FAIL' : 'PASS');
+  const want: Array<[string, string]> = [];
+  for (const [k, v] of Object.entries(fig)) {
+    if (k === 'gate_spine_html_green') want.push(['gate', v === true ? 'PASS' : 'FAIL']);
+    else if (k === 'loop_max_diff') want.push(['loop', read('loop', v)]);
+    else if (k === 'seam_mean') want.push(['seam', read('seam', v)]);
+    else if (typeof v === 'object' && v !== null && !Array.isArray(v) && typeof (v as { status?: unknown }).status === 'string') want.push([k, String((v as { status: string }).status)]);
+  }
+  const got = Object.entries(side.status);
+  for (const [k, s] of want) if (side.status[k] !== s) out.push(`status ${k}: carried ${side.status[k] ?? 'absent'}, check.json ${s}`);
+  for (const [k] of got) if (!want.some(([w]) => w === k)) out.push(`status ${k}: carried ${side.status[k]}, check.json has no such block`);
+  if (out.length === 0 && got.map(([k]) => k).join() !== want.map(([k]) => k).join()) out.push(`status order: carried ${got.map(([k]) => k).join(',')}, check.json ${want.map(([k]) => k).join(',')}`);
+  return out;
+}
+
 function runRemeshSuite(): number {
   section('remesh: one part of a gated rig re-fitted under a requested entry, every other byte kept, a new revision (issue #495)');
   const { say, bad } = counter();
@@ -34990,7 +35098,7 @@ function runRemeshSuite(): number {
     const built = (bones: unknown, motionText: string, image: number): Built => ({ rig: { bones }, rigText: '', motionText, report: [], image: new Uint8Array([image]) });
     const same9 = requestHeldProblems(built([{ name: 'a' }], '{"k":1}', 1), built([{ name: 'a' }], '{"k":1}', 1), 'strip');
     const moved9 = requestHeldProblems(built([{ name: 'a' }], '{"k":1}', 1), built([{ name: 'a' }, { name: 'a_ctl' }], '{"k":2}', 2), 'strip');
-    const side = (measured: string[], notMet: string[]): CheckSide => ({ pass: notMet.length === 0, measured, not_met: notMet, skipped: [], physics: null });
+    const side = (measured: string[], notMet: string[]): CheckSide => ({ pass: notMet.length === 0, measured, not_met: notMet, skipped: [], physics: null, line: '', status: {} });
     const held9 = checkHeldProblems(side(['gate', 'loop'], []), side(['gate', 'loop'], []), []);
     const lost9 = checkHeldProblems(side(['gate', 'loop'], []), side(['gate'], ['gate']), []);
     const kept9 = checkHeldProblems(side(['gate', 'loop'], ['loop']), side(['gate', 'loop'], ['loop']), []);
@@ -35205,7 +35313,33 @@ function runRemeshSuite(): number {
       'a gate nobody has seen fail is not a gate: the rebind is held by RM11\'s hand figure (rigc cannot see a binding that is merely wrong), and the hull order by the replay\'s own topology gate — and behind it by the next reader',
     );
 
-    // RM17 — issue #536's bar: one package with `turn` (the contour fixture, strip at depth 0.6 and mark at 0.2 under
+    // RM17 — issue #541 through the shared checkSide: RM01's remesh.json against a separate `check` on each tree, by CLI.
+    const check17 = (rig: string, name: string): { status: number; out: string; fig: unknown } => {
+      const o = join(root, `check-${name}`);
+      const run = runCli(['check', '--rig', rig, '--parts', fx.parts, '--out', o]);
+      return { ...run, fig: readJsonFile(join(o, 'check.json')) };
+    };
+    const rev17 = check17(out1, 'rm17-revision');
+    const in17 = check17(input, 'rm17-input');
+    const side17 = prov1?.check.revision;
+    const driftRev17 = side17 === undefined ? ['no remesh.json'] : checkSideDrift(side17, rev17.out, rev17.fig);
+    const driftIn17 = prov1 === null ? ['no remesh.json'] : checkSideDrift(prov1.check.input, in17.out, in17.fig);
+    const keys17 = existsSync(join(out1, PROVENANCE_FILE)) ? (JSON.parse(readFileSync(join(out1, PROVENANCE_FILE), 'utf8')) as { check: { input: Record<string, unknown>; revision: Record<string, unknown> } }).check : null;
+    const order17 = 'pass,measured,not_met,skipped,physics,line,status';
+    say(
+      'RM17_REMESH_JSON_CARRIES_THE_CHECK_LINE_AND_EVERY_BLOCKS_STATUS_A_SEPARATE_CHECK_ON_THE_SAME_TREE_REPORTS',
+      rev17.status === 0 &&
+        in17.status === 0 &&
+        driftRev17.length === 0 &&
+        driftIn17.length === 0 &&
+        side17?.line.startsWith('check: PASS; ') === true &&
+        Object.keys(keys17?.input ?? {}).join() === order17 &&
+        Object.keys(keys17?.revision ?? {}).join() === order17,
+      `revision: check exit ${rev17.status}, carried ${JSON.stringify(side17?.line ?? null)}, ${driftRev17.length} difference(s)${driftRev17.length === 0 ? '' : `: ${driftRev17.join(' | ')}`}; statuses ${side17 === undefined ? 'none' : Object.entries(side17.status).map(([k, st]) => `${k} ${st}`).join(', ')}; input: check exit ${in17.status}, ${driftIn17.length} difference(s)${driftIn17.length === 0 ? '' : `: ${driftIn17.join(' | ')}`}; key order ${Object.keys(keys17?.revision ?? {}).join(',')}`,
+      'issue #541: remesh carries check\'s last line and every block\'s status through the checkSide retune shares, on both sides, equal to a separate check of the same tree (the mutants are RN09\'s, on the same reader)',
+    );
+
+    // RM18 — issue #536's bar: one package with `turn` (the contour fixture, strip at depth 0.6 and mark at 0.2 under
     // pivot 0.5, so both parts are carried), its mark — a contour mesh — revised by a delta of no ops, so the part is
     // unchanged. The whole-rig build's row (mode contour), the delta row and the mark's bindings in rigc's compile of
     // the input (skeleton.model.json) name one list, turn_mark_body by hand (the mark's one segment is on body); before
@@ -35227,19 +35361,19 @@ function runRemeshSuite(): number {
       source: tMark === undefined ? {} : { vertexCount: tMark.uvs.length / 2, triangleCount: tMark.triangles.length / 3, hullLength: tMark.hull, hash: createHash('sha256').update(JSON.stringify(tMark)).digest('hex') },
     });
     const tOut = join(root, 'out-turn');
-    const e17 = refusals(() => remeshStage({ rig: tInput, config: tfx.config, parts: tfx.parts, part: 'mark', delta: tDelta, out: tOut }, runner, rigc, versions, join(root, 'scratch-turn'), () => {}));
+    const e18 = refusals(() => remeshStage({ rig: tInput, config: tfx.config, parts: tfx.parts, part: 'mark', delta: tDelta, out: tOut }, runner, rigc, versions, join(root, 'scratch-turn'), () => {}));
     const markRow = (d: string): { mode?: string; bones?: string[] } | undefined => ((readJsonFile(join(d, 'mesh_report.json')) as unknown as Array<{ part: string; mode?: string; bones?: string[] }> | null) ?? []).find((r) => r.part === 'mark');
     const wholeRow = markRow(tInput);
-    const deltaRow17 = existsSync(tOut) ? markRow(tOut) : undefined;
+    const deltaRow18 = existsSync(tOut) ? markRow(tOut) : undefined;
     say(
-      'RM17_UNDER_A_TURN_THE_CONTOUR_ROW_AND_THE_DELTA_ROW_OF_AN_UNCHANGED_PART_NAME_THE_BONES_THE_MODEL_BINDS',
-      e17 === null &&
+      'RM18_UNDER_A_TURN_THE_CONTOUR_ROW_AND_THE_DELTA_ROW_OF_AN_UNCHANGED_PART_NAME_THE_BONES_THE_MODEL_BINDS',
+      e18 === null &&
         wholeRow?.mode === 'contour' &&
-        deltaRow17?.mode === 'delta' &&
+        deltaRow18?.mode === 'delta' &&
         JSON.stringify(markBound) === JSON.stringify(['turn_mark_body']) &&
         JSON.stringify(wholeRow.bones) === JSON.stringify(markBound) &&
-        JSON.stringify(deltaRow17.bones) === JSON.stringify(markBound),
-      `${codes(e17)}; whole-rig row (mode ${wholeRow?.mode}) ${JSON.stringify(wholeRow?.bones)}; delta row (mode ${deltaRow17?.mode}) ${JSON.stringify(deltaRow17?.bones)}; skeleton.model.json bindings ${JSON.stringify(markBound)}`,
+        JSON.stringify(deltaRow18.bones) === JSON.stringify(markBound),
+      `${codes(e18)}; whole-rig row (mode ${wholeRow?.mode}) ${JSON.stringify(wholeRow?.bones)}; delta row (mode ${deltaRow18?.mode}) ${JSON.stringify(deltaRow18?.bones)}; skeleton.model.json bindings ${JSON.stringify(markBound)}`,
       'issue #536 bar: a consumer diffing two reports of one package sees a bone change only when the binding changed — the whole-rig build and remesh --delta name the same bones for an unchanged part, and they are the bones rigc compiles the binding to',
     );
   } finally {
@@ -35535,6 +35669,58 @@ function runRetuneSuite(): number {
       noOut7.status === 2 && noOut7.out.includes('USAGE: retune needs --out <value>') && unknown7.status === 2 && unknown7.out.includes('retune does not take "--part"; it takes --rig, --config, --parts, --out, --requirements, --idle-keys, --page-edges, --pack-shape') && !existsSync(join(root, 'usage')),
       `${noOut7.out.split('\n')[0].trim()} | ${unknown7.out.split('\n')[0].trim()}`,
       'a retune names no part: what it replaces is the config\'s constraints and idle, so --part (remesh\'s) is not a flag it takes',
+    );
+
+    // RN09 — issue #541's bar, two-sided: a retune's retune.json against a separate `check` on the same trees, by CLI —
+    // RN01's (its cloth line CLEAR on both sides), and one whose physics constraint moves from tail1 to body, which no
+    // idle key drives (on x and y: body has no length, so rigc's A23 refuses a rotate), so the revision's cloth line is a
+    // WARN where the input's is CLEAR.
+    const check9 = (rig: string, name: string): { status: number; out: string; fig: unknown } => {
+      const o = join(root, `check-${name}`);
+      const run = runCli(['check', '--rig', rig, '--parts', fx.parts, '--out', o]);
+      return { ...run, fig: readJsonFile(join(o, 'check.json')) };
+    };
+    const rev9 = check9(out1, 'rn09-revision');
+    const in9 = check9(input, 'rn09-input');
+    const side9 = prov1?.check.revision;
+    const driftRev9 = side9 === undefined ? ['no retune.json'] : checkSideDrift(side9, rev9.out, rev9.fig);
+    const driftIn9 = prov1 === null ? ['no retune.json'] : checkSideDrift(prov1.check.input, in9.out, in9.fig);
+    const warn9 = stage('warn', variant('warn', (c) => (c.constraints = [{ name: 'body_physics', type: 'physics', bone: 'body', x: 1, y: 1, inertia: 0.5, strength: 60, damping: 0.85, mass: 1, mix: 1 }])));
+    const warnProv9 = warn9.r === null ? null : (warn9.r as RetuneResult).provenance;
+    const warnRun9 = check9(warn9.out, 'rn09-warn');
+    const warnSide9 = warnProv9?.check.revision;
+    const driftWarn9 = warnSide9 === undefined ? ['no retune.json'] : checkSideDrift(warnSide9, warnRun9.out, warnRun9.fig);
+    const keys9 = existsSync(join(out1, RETUNE_FILE)) ? (JSON.parse(readFileSync(join(out1, RETUNE_FILE), 'utf8')) as { check: { input: Obj; revision: Obj } }).check : null;
+    const order9 = 'pass,measured,not_met,skipped,physics,line,status';
+    // The mutants, on the WARN revision: a side that leaves the warning lines out of its statuses, and one whose line is
+    // composed a second way, off the five fields the hold reads.
+    const warningLines: string[] = [MOTION_SEAM_LINE, CLOTH_LINE];
+    const dropped9 = warnSide9 === undefined ? [] : checkSideDrift({ ...warnSide9, status: Object.fromEntries(Object.entries(warnSide9.status).filter(([k]) => !warningLines.includes(k))) }, warnRun9.out, warnRun9.fig);
+    const twice9 = warnSide9 === undefined ? [] : checkSideDrift({ ...warnSide9, line: `check: ${warnSide9.pass ? 'PASS' : 'FAIL'}; ${warnSide9.measured.length} of ${warnSide9.measured.length + warnSide9.skipped.length} bar(s) measured, ${warnSide9.skipped.length} skipped` }, warnRun9.out, warnRun9.fig);
+    const statusText9 = (side: CheckSide | undefined): string => (side === undefined ? 'none' : Object.entries(side.status).map(([k, st]) => `${k} ${st}`).join(', '));
+    say(
+      'RN09_RETUNE_JSON_CARRIES_THE_CHECK_LINE_AND_EVERY_BLOCKS_STATUS_A_SEPARATE_CHECK_ON_THE_SAME_TREE_REPORTS',
+      rev9.status === 0 &&
+        in9.status === 0 &&
+        driftRev9.length === 0 &&
+        driftIn9.length === 0 &&
+        side9?.status[CLOTH_LINE] === 'CLEAR' &&
+        side9.status.RECOMPOSITE_HOLES === 'SKIP' &&
+        warn9.e === null &&
+        warnRun9.status === 0 &&
+        driftWarn9.length === 0 &&
+        warnProv9?.check.input.status[CLOTH_LINE] === 'CLEAR' &&
+        warnSide9?.status[CLOTH_LINE] === 'WARN' &&
+        warnSide9.line.endsWith(`warning(s) (${CLOTH_LINE}, not a bar)`) &&
+        !warnSide9.line.includes('; 0 warning(s)') &&
+        Object.keys(keys9?.input ?? {}).join() === order9 &&
+        Object.keys(keys9?.revision ?? {}).join() === order9 &&
+        dropped9.length === 1 &&
+        dropped9[0] === `status ${CLOTH_LINE}: carried absent, check.json WARN` &&
+        twice9.length === 1 &&
+        twice9[0].startsWith('line: first difference at character '),
+      `RN01's revision: check exit ${rev9.status}, carried ${JSON.stringify(side9?.line ?? null)}, ${driftRev9.length} difference(s)${driftRev9.length === 0 ? '' : `: ${driftRev9.join(' | ')}`}; statuses ${statusText9(side9)}; its input: check exit ${in9.status}, ${driftIn9.length} difference(s)${driftIn9.length === 0 ? '' : `: ${driftIn9.join(' | ')}`}; key order ${Object.keys(keys9?.revision ?? {}).join(',')}; physics moved to body: retune ${codes(warn9.e)} (input ${warnProv9?.check.input.status[CLOTH_LINE] ?? 'none'}, revision ${warnSide9?.status[CLOTH_LINE] ?? 'none'}), check exit ${warnRun9.status}, carried ${JSON.stringify(warnSide9?.line ?? null)}, ${driftWarn9.length} difference(s)${driftWarn9.length === 0 ? '' : `: ${driftWarn9.join(' | ')}`}; warning statuses dropped: ${dropped9.join(' | ') || 'not caught'}; line composed off the five fields: ${twice9.join(' | ') || 'not caught'}`,
+      'issue #541: the retune\'s check block carries check\'s last line as check prints it (one composer, src/check.ts checkSummaryLine) and every block\'s status as check.json writes it, on both sides, so a consumer binds them to the revision by its hash rows instead of running check again; a revision whose cloth line is a WARN against the input\'s CLEAR is written, a warning never being a hold; a side without the warning lines, or a line composed a second way, is named by the key or the character where it parts',
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
