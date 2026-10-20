@@ -722,6 +722,11 @@ usage:
       and check's artifact, take them). --requirements is forwarded to check
       (as for check); the file's own shape is read before assemble runs, and
       its names resolve against the rig in the check, before it builds.
+      Without the flag, config.requirements (a path beside the config) is
+      read in its place; a flag naming other bytes than the declaration is
+      BUILD_REQUIREMENTS_CONFLICT, before assemble. check.json's
+      requirements.file records the path as typed or declared, its sha256
+      and the file's keys.
       --environment is forwarded to check (as for check); the schedule is read
       by rig-c's reader before assemble runs, so a malformed one is refused,
       CHECK_ENVIRONMENT, under [assemble] before anything is assembled.

@@ -2701,7 +2701,18 @@ export interface LimbCount {
   before: number;
   shares: Array<{ part: string; px: number }>;
   /** The joints whose cap this part's segments carry, in `config.limbs` order. */
-  joints: Array<{ limb: string; joint: string; part: string; upper: string; cap: CapRecord }>;
+  joints: Array<{
+    limb: string;
+    joint: string;
+    part: string;
+    upper: string;
+    cap: CapRecord;
+    /** Issue #557: the parts the lower and the upper segment take, the half-width about the joint, and the short pixels within it. */
+    from?: string;
+    upperFrom?: string;
+    half?: number;
+    shortInHalf?: number;
+  }>;
 }
 
 /**
@@ -2721,6 +2732,41 @@ function cutPhrase(k: CapRecord, upper: string, lower: string): string {
 }
 
 /**
+ * Issue #557: the `LINT` line of a short cap — one whose disc, on the upper
+ * side of the cut, holds pixels no layer of the limb gives (`short_px`, by
+ * side of the limb's axis: `left` where a pixel centre's offset across the
+ * axis is 0 or above, the side toward smaller x when the limb hangs down the
+ * rig, `right` the other) — naming the limb, the joint, the part, both
+ * figures, the radius and what filled the rest; with the half-disc, how many
+ * of them `cap_shape: "disc"` would keep. Null for a cap that is not short.
+ */
+export function shortCapLint(j: LimbCount['joints'][number]): string | null {
+  const k = j.cap;
+  if (k.short_px === undefined) return null;
+  const n = k.short_px.left + k.short_px.right;
+  const where =
+    j.from === undefined || j.upperFrom === undefined || j.upperFrom === j.from
+      ? `the layer of "${j.from ?? j.part}" has no pixel of the limb`
+      : `neither the layer of "${j.from}" nor that of "${j.upperFrom}" has a pixel of the limb`;
+  const filled = [
+    ...(k.image_px === undefined ? [] : [`${k.image_px} px from ${k.image_layer === undefined ? 'the cap image' : `the hidden-art layer ${k.image_layer}`}`]),
+    `${k.layer_px} px from "${j.part}"'s layer`,
+    `${k.upper_px ?? 0} px from "${j.upper}"`,
+  ].join(', ');
+  const half = j.half ?? 0;
+  const disc =
+    k.shape === 'disc' || j.shortInHalf === undefined
+      ? ''
+      : j.shortInHalf === 0
+        ? `; under cap_shape "disc" the disc is the half-width about the joint, ${half} px, and none of them lies within it`
+        : `; under cap_shape "disc" the disc is the half-width about the joint, ${half} px, and ${j.shortInHalf} of them lie within it`;
+  return (
+    `  LINT "${j.part}" cap at [${k.at[0]}, ${k.at[1]}] (limb "${j.limb}", joint "${j.joint}", radius ${k.radius} px): short_px left ${k.short_px.left}, right ${k.short_px.right}: ` +
+    `no layer gives them — ${n} px of the disc on the upper side of the cut, where ${where}; the rest of the disc is filled, ${filled}${disc}`
+  );
+}
+
+/**
  * The lines `assemble` prints for the limbs (issue #349), one per part a limb
  * took — `  limb cut: "<of>" opaque <n> = "<part>" <px> + …` — and one per
  * joint, its cap's pixels by where they came from. Empty without limbs.
@@ -2733,7 +2779,8 @@ export function limbLines(counts: readonly LimbCount[]): string[] {
       const k = j.cap;
       const base = k.image_px === undefined ? `${k.layer_px} px from the layer` : `${k.image_px} px from ${k.image_layer === undefined ? 'the cap image' : `the hidden-art layer ${k.image_layer}`}, ${k.layer_px} px from the layer`;
       // Issue #360: what cap_shape "disc" and edge "feather" did, said only when declared, so a limb without them prints what it did.
-      const from = k.shape === undefined ? base : `${base}, ${k.upper_px ?? 0} px from "${j.upper}"`;
+      // Issue #557: the half-disc says it only when the neighbouring segment gave a pixel, so a full cap prints what it printed.
+      const from = k.upper_px === undefined ? base : `${base}, ${k.upper_px} px from "${j.upper}"`;
       const radius =
         k.shape === undefined
           ? `a disc of radius ${k.radius} px (the limb ${k.width} px across the joint line)`
@@ -2749,6 +2796,8 @@ export function limbLines(counts: readonly LimbCount[]): string[] {
       out.push(
         `  limb cap: "${j.limb}" joint "${j.joint}" at [${k.at[0]}, ${k.at[1]}], on "${j.part}": ${radius}, box [${k.box.join(', ')}] — on the upper side of the line ${from}, ${miss}${shaped.map((q) => `; ${q}`).join('')}`,
       );
+      const lint = shortCapLint(j);
+      if (lint !== null) out.push(lint);
     }
   }
   return out;
@@ -3051,6 +3100,11 @@ function cutLimbs(
       let imagePx = 0;
       let upperPx = 0;
       let missing = 0;
+      // Issue #557: the cap's shortfall by side of the limb's axis (left: across >= 0), and how much of it lies within
+      // the half-width about the joint, the disc cap_shape "disc" would keep.
+      let shortLeft = 0;
+      let shortRight = 0;
+      let shortInHalf = 0;
       for (let y = Math.max(0, box[1]); y < Math.min(H, box[1] + box[3]); y++) {
         for (let x = Math.max(0, box[0]); x < Math.min(W, box[0] + box[2]); x++) {
           if (!inDisc(line.at, radius, x, y) || pastJoint(cut, x, y)) continue;
@@ -3062,11 +3116,18 @@ function cutLimbs(
           } else if (ownLower[p] === li && lowerSrc.r.data[p * 4 + 3] > 0) {
             lower.data.set(lowerSrc.r.data.subarray(p * 4, p * 4 + 4), p * 4);
             layerPx++;
-          } else if (disc && upper.data[p * 4 + 3] > 0) {
+          } else if (upper.data[p * 4 + 3] > 0) {
             // Issue #360: the disc is filled from the art — the upper segment's, where the lower's layer has none.
+            // Issue #557: under either shape — the half-disc too takes the neighbouring segment's pixels, so a cap is
+            // short only where no layer of the limb gives a pixel.
             lower.data.set(upper.data.subarray(p * 4, p * 4 + 4), p * 4);
             upperPx++;
-          } else missing++;
+          } else {
+            missing++;
+            if (jointOffsets(line, x, y).across >= 0) shortLeft++;
+            else shortRight++;
+            if (inDisc(line.at, half, x, y)) shortInHalf++;
+          }
         }
       }
       if (img !== null && imagePx === 0 && hidden === null) {
@@ -3111,7 +3172,8 @@ function cutLimbs(
         ...(img === null ? {} : { image_px: imagePx }),
         ...(hidden === null ? {} : { image_layer: hidden.layer }),
         missing_px: missing,
-        ...(disc ? { shape: 'disc' as const, upper_px: upperPx } : {}),
+        ...(missing === 0 ? {} : { short_px: { left: shortLeft, right: shortRight } }),
+        ...(disc ? { shape: 'disc' as const, upper_px: upperPx } : upperPx === 0 ? {} : { upper_px: upperPx }),
         ...(sg.edge === 'feather' ? { edge: 'feather' as const, feather_radius: band, feathered_px: featheredPx } : {}),
         ...(placed === undefined
           ? {}
@@ -3128,7 +3190,7 @@ function cutLimbs(
       if (hidden !== null) readHidden(hidden.layer, `config.limbs.${l}.segments[${k}].cap (part "${sg.part}")`);
       parts[at].record.cap = cap;
       const c = counts.find((q) => q.of === sg.from);
-      if (c !== undefined) c.joints.push({ limb: l, joint: String(sg.joint), part: sg.part, upper: segs[k - 1].part, cap });
+      if (c !== undefined) c.joints.push({ limb: l, joint: String(sg.joint), part: sg.part, upper: segs[k - 1].part, cap, from: sg.from, upperFrom: upFrom, half: pyRound(half, 3), shortInHalf });
     });
   }
   refuseIfAny(problems);

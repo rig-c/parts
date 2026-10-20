@@ -2878,7 +2878,47 @@ function runConfigSuite(): number {
   runProposedRigScaleConfigControls(say);
   runArmSplitConfigControls(say);
   runBustConfigControls(say);
+  runRequirementsConfigControls(say);
   return bad();
+}
+
+/**
+ * Issue #556: `config.requirements` names the requirements file `build` reads when no `--requirements` is given, a path
+ * relative to the config's directory; the key is known to every loader, and the full loader reading from a path refuses
+ * a value that is not a non-empty string, or a file that is not there, at its field.
+ */
+function runRequirementsConfigControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const dir = temp('config-requirements');
+  try {
+    mkdirSync(join(dir, 'scene'));
+    writeFileSync(join(dir, 'scene', 'reqs.json'), `${JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 4, requirements: [] })}\n`);
+    const at = (name: string, value: unknown): string => {
+      const pth = join(dir, `${name}.json`);
+      writeFileSync(pth, JSON.stringify({ ...minimalConfig(), requirements: value }));
+      return pth;
+    };
+    const good = at('good', 'scene/reqs.json');
+    const read = loadConfig(good).requirements;
+    const loads = [refusals(() => loadConfig(good)), refusals(() => parseConfig({ ...minimalConfig(), requirements: 'not/read.json' })), refusals(() => parseEarlyConfig({ ...minimalConfig(), seethrough: { resolution: 64, steps: 1, seed: 1, offload: false, head_box: [0, 0, 8, 8] }, requirements: 'scene/reqs.json' }, 'assemble'))];
+    const planted: Array<[string, string, string, string]> = [
+      ['a number', at('number', 42), 'CONFIG_FIELD_TYPE', 'is 42; a non-empty string is required'],
+      ['an empty string', at('empty', ''), 'CONFIG_FIELD_TYPE', 'is ""; a non-empty string is required'],
+      ['a missing file', at('missing', 'scene/absent.json'), 'CONFIG_FILE_PRESENT', `names ${join(dir, 'scene', 'absent.json')}, which is no such file; a spine-parts-requirements/1 file`],
+    ];
+    const outcomes = planted.map(([what, pth, code, start]) => {
+      const e = refusals(() => loadConfig(pth));
+      const ok = e !== null && e.problems.length === 1 && e.problems[0].code === code && e.problems[0].object === 'config.requirements' && e.problems[0].detail.startsWith(start);
+      return { what, ok, got: `${codes(e)}: ${e?.problems[0]?.detail ?? ''}` };
+    });
+    say(
+      'CF498_CONFIG_REQUIREMENTS_LOADS_AS_DECLARED_AND_A_NON_STRING_EMPTY_OR_MISSING_FILE_IS_REFUSED_AT_ITS_FIELD',
+      loads.every((e) => e === null) && read === 'scene/reqs.json' && outcomes.every((o) => o.ok),
+      `full loader from a path, parseConfig, assemble door: ${loads.map((e) => (e === null ? 'loads' : codes(e))).join(', ')}; read back ${JSON.stringify(read)}; planted: ${outcomes.map((o) => `${o.what} ${o.ok ? 'refused once at config.requirements' : `NOT: ${o.got}`}`).join('; ')}`,
+      'issue #556: a rebuild finds the requirements file a build needed only if the config names it; the path is the author\'s, kept as declared and read beside the config, and a value that names no file is refused at the field, as motion.animations_from is, before any stage runs',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -14334,8 +14374,9 @@ function runRequirementCases(dir: string, say: (name: string, ok: boolean, detai
 
   const plain = run('plain', null);
   const empty = run('empty', { requirements: [] });
-  // Each run has its own directory, which the SKIP reasons name; both sides are read with it written <rig> and <out>.
-  const paths = (r: Run, t: string): string => t.split(r.outDir).join('<out>').split(r.rig).join('<rig>');
+  // Each run has its own directory, which the SKIP reasons name; both sides are read with it written <rig> and <out>,
+  // and the run's own root, where its req.json is — check.json's requirements.file records the path as typed (issue #556) — <run>.
+  const paths = (r: Run, t: string): string => t.split(r.outDir).join('<out>').split(r.rig).join('<rig>').split(dirname(r.rig)).join('<run>');
   const stripBlock = (r: Run): string => paths(r, `${JSON.stringify(Object.fromEntries(Object.entries(r.fig ?? {}).filter(([k]) => k !== 'requirements')), null, 1)}\n`);
   const plainCheck = existsSync(join(plain.outDir, 'check.json')) ? paths(plain, readFileSync(join(plain.outDir, 'check.json'), 'utf8')) : '';
   const norm = (r: Run): string[] => paths(r, r.text).split('\n');
@@ -14364,7 +14405,7 @@ function runRequirementCases(dir: string, say: (name: string, ok: boolean, detai
   say(
     'CK79_TWO_RUNS_WITH_REQUIREMENTS_WRITE_THE_SAME_BYTES',
     again.status === 0 && sameFiles.length === 2 && geoSame,
-    `${sameFiles.length} of 2 files (each run's own directory read as <rig>, <out>) and the as-declared geometry.json ${geoSame ? 'byte-identical' : 'DIFFER'}`,
+    `${sameFiles.length} of 2 files (each run's own directory read as <rig>, <out>, <run>) and the as-declared geometry.json ${geoSame ? 'byte-identical' : 'DIFFER'}`,
     'determinism is a contract: the copies, their renders and the lines are a function of the rig and the file',
   );
 
@@ -14642,6 +14683,136 @@ function runSweepCheckCases(say: (name: string, ok: boolean, detail: string, why
 }
 
 /**
+ * Issue #557: the contour step, read by SEAM_OVER_RANGE on each bent frame (`contourStep`, src/check.ts) — on each line
+ * across the upper segment, one frame pixel apart from one cap radius before the joint line to one past it, the
+ * silhouette's extent from the axis on each side; the step is the largest change between adjacent lines. Joints bent
+ * to their range [-15, 15]. By hand:
+ *
+ * - The floor N: a straight limb whose outline the bend keeps has no step of its own; a line's extent moves by whole
+ *   samples, one frame pixel, 1 / s rig px at the sweep's frame scale s. That is N, and the full caps read it: SWEEP_FULL
+ *   (one layer, the cap the whole upper half-disc) and a knee between two layers (`bottomwear` x 12..41 rows 4..31 over
+ *   `legwear` x 12..41 rows 32..60, chain `leg_r` (27, 4) -> (27, 32), tip (27, 60)), whose cap assemble now fills
+ *   from the thigh (issue #557; before it, the half-disc took the shin's layer alone, which has no pixel above the knee).
+ * - The planted cap: the knee build with every pixel of shin_r above its line cleared, in parts/ and rig/images/ —
+ *   the cap the rule before this issue wrote. Bent by 15 degrees, the shin's top edge leaves the joint at 15 degrees
+ *   on the opening side, so one sample past the line its extent there is at most d / tan 15 + d (d = 1 / s, below 6
+ *   px at s >= 0.8) where the thigh's, one sample before, is 15: a step above the radius's half, 7.5.
+ * - The short cap: the thigh narrowed to x 12..35, so the disc's right side past x 35 is in no layer — the record
+ *   carries short_px, and check.json then carries the step on each pose; a full cap's check.json carries none.
+ */
+function runContourStepCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const dir = temp('contour-step');
+  try {
+    const range: [number, number] = [-15, 15];
+    const legRun = (thighRight: number): RunLayerSpec[] => [
+      { name: 'bottomwear', depth: 0.6, rects: [{ x0: 12, y0: 4, x1: thighRight, y1: 32, colour: C }] },
+      { name: 'legwear', depth: 0.6, rects: [{ x0: 12, y0: 32, x1: 42, y1: 61, colour: C }] },
+    ];
+    const legConfig = (): Record<string, unknown> => ({
+      ...assembleConfig({ plan: [['legs', 'full', 'bottomwear'], ['boots', 'full', 'legwear']], extend: [] }),
+      limbs: { leg_r: { segments: [{ part: 'thigh_r', from: 'legs', bone: 'leg_r0' }, { part: 'shin_r', from: 'boots', bone: 'leg_r1', joint: 'knee', range }] } },
+      bones: [{ name: 'hip', parent: 'root', at: [27, 2] }, { chain: 'leg_r', parent: 'hip', points: [[27, 4], [27, 32]], tip: [27, 60] }],
+      regions: { thigh_r: 'leg_r0', shin_r: 'leg_r1' },
+      motion: { duration: 1, tracks: [{ chain: 'leg_r', amps: [2, 6], period: 1, phase: 0, lag: 0.08 }] },
+    });
+    const built = (label: string, full: RunLayerSpec[], cfg: Record<string, unknown>): { status: number; out: string; fig: Record<string, unknown> | null; text: string } => {
+      const d = join(dir, label);
+      writeRun(join(d, 'full'), full);
+      writeRun(join(d, 'head'), FRAMED_HEAD);
+      writeFileSync(join(d, 'painting.png'), encodePngBytes(flatPainting()));
+      writeFileSync(join(d, 'config.json'), JSON.stringify(cfg));
+      const r = runCli(['build', '--config', join(d, 'config.json'), '--source', join(d, 'painting.png'), '--full', join(d, 'full'), '--head', join(d, 'head'), '--out', join(d, 'out')]);
+      const p = join(d, 'out', 'check', 'check.json');
+      return { ...r, fig: readJsonFile(p), text: existsSync(p) ? readFileSync(p, 'utf8') : '' };
+    };
+    const line = (fig: Record<string, unknown> | null): SweepLine | null => (fig?.[SWEEP_LINE] as SweepLine | undefined) ?? null;
+    /** The step the row prints at each angle: `[left, right]` parsed off "contour step <l> px left, <r> px right". */
+    const printed = (out: string, joint: string, a: number): [number, number] | null => {
+      const row = out.split('\n').find((l) => l.includes(`joint "${joint}" (`) && l.includes(`) at ${a}°: `));
+      const m = row === undefined ? null : /contour step ([0-9.]+) px left, ([0-9.]+) px right \(a reading\)$/.exec(row);
+      return m === null ? null : [Number(m[1]), Number(m[2])];
+    };
+    const N = (fig: Record<string, unknown> | null): number => {
+      const s = line(fig)?.frame_scale;
+      return typeof s === 'number' && s > 0 ? Math.round(1000 / s) / 1000 : Number.NaN;
+    };
+    const atBends = (out: string, joint: string): Array<[number, number] | null> => [printed(out, joint, -15), printed(out, joint, 15)];
+    const within = (steps: Array<[number, number] | null>, n: number): boolean => steps.every((q) => q !== null && q[0] <= n && q[1] <= n);
+
+    const arm = built('arm', SWEEP_FULL, sweepConfig(range));
+    const fill = built('knee', legRun(42), legConfig());
+    const armN = N(arm.fig);
+    const fillN = N(fill.fig);
+    const noKey = (text: string): boolean => text !== '' && !text.includes('step_px');
+    say(
+      'CK518_A_FULL_CAP_READS_THE_FLOOR_ONE_FRAME_PIXEL_AT_PLUS_AND_MINUS_15_DEGREES_AND_CHECK_JSON_KEEPS_ITS_KEYS',
+      arm.status === 0 &&
+        fill.status === 0 &&
+        Number.isFinite(armN) &&
+        within(atBends(arm.out, 'elbow'), armN) &&
+        within(atBends(fill.out, 'knee'), fillN) &&
+        JSON.stringify(printed(arm.out, 'elbow', 0)) === '[0,0]' &&
+        noKey(arm.text) &&
+        noKey(fill.text) &&
+        line(fill.fig)?.status === 'PASS',
+      `N = 1 / frame scale = ${armN} rig px (frame scale ${line(arm.fig)?.frame_scale}); the arm (one layer) at -15/15: ${JSON.stringify(atBends(arm.out, 'elbow'))}, at 0: ${JSON.stringify(printed(arm.out, 'elbow', 0))}; the knee between two layers, its cap filled from the thigh: ${JSON.stringify(atBends(fill.out, 'knee'))} (N ${fillN}), ${SWEEP_LINE} ${line(fill.fig)?.status}; step_px in check.json: arm ${noKey(arm.text) ? 'none' : 'WRITTEN'}, knee ${noKey(fill.text) ? 'none' : 'WRITTEN'}`,
+      'issue #557 bar 2: the outline at the cut is read where the eye read it, at the bend — a limb whose cap covers the turn keeps its outline, so its step is the sampling\'s own, one frame pixel; that floor is N, derived from the frame scale and not typed. The step is a reading, not a bar: a full cap\'s check.json writes what it wrote',
+    );
+
+    // The planted cap: the knee build with shin_r's cap cleared — the rule before this issue's fill.
+    const planted = join(dir, 'planted');
+    cpSync(join(dir, 'knee', 'out'), planted, { recursive: true });
+    rmSync(join(planted, 'check'), { recursive: true, force: true });
+    const shin = readParts(join(planted, 'parts.json')).parts.find((p) => p.name === 'shin_r') as PartRecord;
+    const clearAbove = (file: string, top: number): number => {
+      const img = readPng(file);
+      let n = 0;
+      for (let y = 0; y < img.height && top + y < 32; y++) {
+        for (let x = 0; x < img.width; x++) {
+          if (img.data[(y * img.width + x) * 4 + 3] > 0) n++;
+          img.data.fill(0, (y * img.width + x) * 4, (y * img.width + x) * 4 + 4);
+        }
+      }
+      writeFileSync(file, encodePngBytes(img));
+      return n;
+    };
+    const clearedParts = clearAbove(join(planted, 'parts', 'shin_r.png'), shin.y);
+    const clearedRig = clearAbove(join(planted, 'rig', 'images', 'shin_r.png'), shin.y - PAD);
+    const plantedRun = runCli(['check', '--rig', join(planted, 'rig'), '--parts', planted, '--out', join(planted, 'check')]);
+    const before = atBends(plantedRun.out, 'knee');
+    const after = atBends(fill.out, 'knee');
+    const opens = (q: [number, number] | null): number => (q === null ? Number.NaN : Math.max(q[0], q[1]));
+    say(
+      'CK519_THE_CAP_FILLED_FROM_THE_THIGH_CLOSES_THE_STEP_THE_UNFILLED_CAP_OPENS_AT_PLUS_AND_MINUS_15_DEGREES',
+      clearedParts > 0 &&
+        clearedRig === clearedParts &&
+        before.every((q) => opens(q) > SWEEP_R / 2) &&
+        after.every((q) => opens(q) <= fillN) &&
+        JSON.stringify(printed(plantedRun.out, 'knee', 0)) === '[0,0]',
+      `cleared ${clearedParts} cap px in parts/ and ${clearedRig} in rig/images/; the step at -15/15, [left, right] rig px: before the fill ${JSON.stringify(before)} (by hand above ${SWEEP_R / 2} on the opening side), after it ${JSON.stringify(after)} (<= N ${fillN}); at rest before ${JSON.stringify(printed(plantedRun.out, 'knee', 0))}`,
+      'issue #557 bar 2, the proof: the knee\'s boot does not reach over the knee, so the cap the half-disc took from the shin\'s layer alone was empty, and at 15 degrees the outline shows the notch the shin\'s top edge leaves — the step the eye saw at the knees. Filled from the thigh, the cap turns with the shin over that notch and the step is the floor',
+    );
+
+    const short = built('short', legRun(36), legConfig());
+    const sl = line(short.fig);
+    const recorded = sl?.joints[0]?.poses.map((p) => p.step_px) ?? [];
+    const rows = [-15, 0, 15].map((a) => printed(short.out, 'knee', a));
+    say(
+      'CK520_A_SHORT_CAP_S_STEP_IS_WRITTEN_INTO_CHECK_JSON_AT_EVERY_POSE_AS_THE_ROW_PRINTS_IT',
+      short.status === 0 &&
+        short.out.includes('LINT "shin_r" cap at [27, 32]') &&
+        recorded.length === 3 &&
+        recorded.every((q, i) => q !== undefined && rows[i] !== null && q.left === (rows[i] as [number, number])[0] && q.right === (rows[i] as [number, number])[1]) &&
+        sl?.status === 'PASS',
+      `the narrow thigh's knee: check.json step_px ${JSON.stringify(recorded)}; the rows ${JSON.stringify(rows)}; ${SWEEP_LINE} ${sl?.status} (a reading moves no verdict)`,
+      'issue #557: where the cap is short the step is the figure a reader of check.json needs beside short_px — recorded at every pose the sweep read, and still never a bar',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
  * Issue #493: SEAM_OVER_MOTION, every declared neighbour pair read in every animation by rig-c's seam reading — a
  * warning, never a bar. One arm on the 64x64 flat painting at scale 1 (a run pixel is a rig pixel, rigc's cell one
  * texel, one rig px), one layer `handwear-r` of colour C: the upper arm x 17..36, y 4..31 (20 px wide) over a forearm
@@ -14878,7 +15049,7 @@ function runSweepUnitCases(say: (name: string, ok: boolean, detail: string, why:
       JSON.stringify(read.parts[0].limb?.range) === '[-30,120]' &&
         back.includes('"joint": "elbow",\n        "range": [\n          -30,\n          120\n        ],\n        "cap": {') &&
         read.parts[1].limb?.range === undefined &&
-        JSON.stringify(sweepJoints(read)) === JSON.stringify([{ part: 'forearm_r', limb: 'arm_r', segment: 1, joint: 'elbow', bone: 'sleeve_r1', range: [-30, 120], at: [27, 32], radius: 15 }]) &&
+        JSON.stringify(sweepJoints(read)) === JSON.stringify([{ part: 'forearm_r', limb: 'arm_r', segment: 1, joint: 'elbow', bone: 'sleeve_r1', range: [-30, 120], at: [27, 32], radius: 15, upperBone: 'sleeve_r0' }]) &&
         codes(onUpper).startsWith('PARTS_FIELD_PRESENT part "upperarm_r" field "limb" "range"') &&
         codes(noRest).startsWith('PARTS_FIELD_TYPE part "forearm_r" field "limb" "range"') &&
         codes(notPair).startsWith('PARTS_FIELD_TYPE part "forearm_r" field "limb" "range"'),
@@ -15015,7 +15186,7 @@ function runDiscCheckCases(say: (name: string, ok: boolean, detail: string, why:
       'CK440_CAP_SHAPE_DISC_SIZES_THE_CAP_BY_THE_HALF_WIDTH_ABOUT_THE_JOINT_KEEPS_THE_UPPER_S_CORNER_AND_LEAVES_NO_PIXEL_OF_THE_DISC_UNCOVERED_AT_ANY_ANGLE',
       hard.status === 0 &&
         disc.status === 0 &&
-        JSON.stringify(rec(hard, 'forearm_r')?.limb?.cap) === `{"at":[24,32],"width":30,"radius":15,"box":[9,17,30,30],"layer_px":${hardLayer},"missing_px":${hardMissing}}` &&
+        JSON.stringify(rec(hard, 'forearm_r')?.limb?.cap) === `{"at":[24,32],"width":30,"radius":15,"box":[9,17,30,30],"layer_px":${hardLayer},"missing_px":${hardMissing},"short_px":{"left":${halfDisc(15, (x) => x < 12)},"right":${halfDisc(15, (x) => x > 41)}}}` &&
         JSON.stringify(dc) === `{"at":[24,32],"width":30,"radius":12,"box":[12,20,24,24],"layer_px":${discLayer},"missing_px":0,"shape":"disc","upper_px":0}` &&
         rec(disc, 'upperarm_r')?.opaque_px === 840 &&
         rec(disc, 'forearm_r')?.opaque_px === 29 * 30 + discLayer &&
@@ -17312,6 +17483,7 @@ function runCheckSuite(): number {
   runStressCases(say);
   runLimbCheckCases(say);
   runSweepCheckCases(say);
+  runContourStepCases(say);
   runMotionSeamCases(say);
   runSweepUnitCases(say);
   runDiscCheckCases(say);
@@ -18353,6 +18525,27 @@ function runAnimationFoldCases(say: (name: string, ok: boolean, detail: string, 
         staleFail.includes('reads no folded triangle on slot "cloth" in animation "nod"'),
       `declared: exit ${declared.status}, ${String(foldOf(declared.fig)?.status)}, row declared ${JSON.stringify(declaredRows[0]?.declared ?? null)}; planted, nod declared too: exit ${stale.status}, ${staleFail?.trim().slice(0, 220) ?? 'no FAIL line'}`,
       "issue #320, HQ's reading: a fold the art means (a sleeve hidden behind the body) is the author's to accept, by slot and animation with a reason, as rig-c's invariants.deformMayFold is — and, as rig-c refuses an exemption that exempts nothing, an entry that matches no fold fails rather than sitting in the file after the fold it excused is gone",
+    );
+
+    // CK521 — issue #556: check --requirements, no config in play, records the file it read first in the requirements block —
+    // the path as typed, the sha256 of its bytes and its top-level keys; check without the flag writes no requirements block.
+    const declaredPath = join(dir, 'declared.json');
+    const reqBlock = (declared.fig?.requirements ?? null) as Record<string, unknown> | null;
+    const fileRecord = (reqBlock?.file ?? null) as Record<string, unknown> | null;
+    const declaredSha = createHash('sha256').update(readFileSync(declaredPath)).digest('hex');
+    say(
+      'CK521_CHECK_REQUIREMENTS_RECORDS_THE_FILE_AS_TYPED_WITH_ITS_SHA256_AND_KEYS_AND_NO_FLAG_WRITES_NO_REQUIREMENTS_BLOCK',
+      declared.status === 0 &&
+        reqBlock !== null &&
+        Object.keys(reqBlock)[0] === 'file' &&
+        JSON.stringify(fileRecord) === JSON.stringify({ path: declaredPath, sha256: declaredSha, keys: ['spec', 'fps', 'requirements', 'may_fold'] }) &&
+        ok.status === 0 &&
+        ok.fig !== null &&
+        !('requirements' in ok.fig) &&
+        red.fig !== null &&
+        !('requirements' in red.fig),
+      `with --requirements: requirements block keys [${reqBlock === null ? '' : Object.keys(reqBlock).join(', ')}], file ${JSON.stringify(fileRecord === null ? null : { ...fileRecord, path: String(fileRecord.path) === declaredPath ? '<as typed>' : fileRecord.path, sha256: String(fileRecord.sha256).slice(0, 16) })} (file sha256 ${declaredSha.slice(0, 16)}); without the flag: requirements ${ok.fig !== null && 'requirements' in ok.fig ? 'WRITTEN' : 'absent'} (calm), ${red.fig !== null && 'requirements' in red.fig ? 'WRITTEN' : 'absent'} (folded)`,
+      'issue #556: a check that measured against a requirements file says which, by the path its caller wrote and the digest of the bytes read, so a reader can tell a result that needed the file from one that did not; a check given none writes what it wrote before',
     );
 
     // CK245 — with a physics constraint the folds are read with physics on and off side by side, and the keys' fold still fails.
@@ -20703,6 +20896,76 @@ function runBuildSuite(): number {
       'names resolve against the rig the rig stage wrote, so a bone it does not hold is refused in the check, by name, before rigc builds there',
     );
 
+    // BU178–BU180 — issue #556: the requirements file a build needed is recorded where a rebuild finds it. The fixture is
+    // BU18's skirt range, written as reqs.json beside the config. A is built with the flag typed relative to the run's
+    // directory, which is the config's; B from a copy of the config that declares the same relative path, no flag.
+    const reqBody = { requirements: [{ name: 'SKIRT_RANGE', kind: 'range', animation: 'idle', bone: 'skirt', lo_degrees: -3, hi_degrees: 3 }] };
+    const reqsPath = reqFile('reqs', reqBody);
+    const reqsSha = createHash('sha256').update(readFileSync(reqsPath)).digest('hex');
+    const declaring = (name: string, declared: string): string => {
+      writeFileSync(join(dir, name), `${JSON.stringify({ ...moving, requirements: declared }, null, 2)}\n`);
+      return name;
+    };
+    const runIn = (args: string[]): { status: number; out: string } => {
+      const r = spawnSync('bun', [join(ROOT, 'cli.ts'), ...args], { cwd: dir, encoding: 'utf8' });
+      return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+    };
+    const flagOut = join(dir, 'req-flag');
+    const byFlag = runIn([...buildArgs(dir, flagOut), '--requirements', 'reqs.json']);
+    const configOut = join(dir, 'req-config');
+    const byConfig = runIn(buildArgs(dir, configOut, declaring('config-reqs.json', 'reqs.json')));
+    const recordOf = (out: string): Record<string, unknown> | null => ((readJsonFile(join(out, 'check', 'check.json'))?.requirements as Record<string, unknown> | undefined)?.file ?? null) as Record<string, unknown> | null;
+    const rebuildDiff = treeDiff(flagOut, configOut);
+    const flagRecord = recordOf(flagOut);
+    const showRecord = (r: Record<string, unknown> | null): string => (r === null ? 'none' : `{path ${JSON.stringify(r.path)}, sha256 ${String(r.sha256).slice(0, 16)}, keys ${JSON.stringify(r.keys)}}`);
+    say(
+      'BU178_A_BUILD_WITH_REQUIREMENTS_REBUILT_FROM_A_CONFIG_THAT_DECLARES_THEM_IS_BYTE_IDENTICAL_AND_RECORDS_THE_FILE',
+      byFlag.status === 0 &&
+        byConfig.status === 0 &&
+        byConfig.out.includes('[check]   SKIRT_RANGE: PASS — ') &&
+        rebuildDiff.length === 0 &&
+        filesUnder(flagOut).length > 0 &&
+        JSON.stringify(flagRecord) === JSON.stringify({ path: 'reqs.json', sha256: reqsSha, keys: ['spec', 'fps', 'requirements'] }),
+      `--requirements reqs.json: exit ${byFlag.status}; config.requirements "reqs.json", no flag: exit ${byConfig.status}; ${rebuildDiff.length === 0 ? `${filesUnder(flagOut).length} file(s) under out/, byte-identical` : rebuildDiff.slice(0, 3).join('; ')}; check.json requirements.file ${showRecord(flagRecord)} (file sha256 ${reqsSha.slice(0, 16)})`,
+      "issue #556, bar 1: a rig built with the flag rebuilds byte for byte from its config alone once the config names the file; the record is the path as the caller wrote it, never resolved, so the two writings of one relative path are the same bytes, and its digest and keys say what the file asked without opening it",
+    );
+
+    const otherPath = reqFile('reqs-other', { ...reqBody, not_swinging: ['bottomwear'] });
+    const conflictOut = join(dir, 'req-conflict');
+    const conflict = runIn([...buildArgs(dir, conflictOut, 'config-reqs.json'), '--requirements', otherPath]);
+    const conflictLine = conflict.out.split('\n').find((l) => l.startsWith('[assemble]   FAIL  BUILD_REQUIREMENTS_CONFLICT: ')) ?? null;
+    say(
+      'BU179_A_FLAG_NAMING_OTHER_BYTES_THAN_THE_CONFIG_S_REQUIREMENTS_IS_REFUSED_BY_NAME_BEFORE_ASSEMBLE_WRITES',
+      conflict.status === 1 &&
+        conflictLine !== null &&
+        conflictLine.includes(`--requirements ${otherPath} and config.requirements "reqs.json"`) &&
+        conflictLine.includes(`(sha256 ${createHash('sha256').update(readFileSync(otherPath)).digest('hex').slice(0, 16)})`) &&
+        conflictLine.includes(`${reqsPath} (sha256 ${reqsSha.slice(0, 16)})`) &&
+        conflict.out.includes('build: stopped at assemble; no later stage ran') &&
+        entries(conflictOut).length === 0,
+      `exit ${conflict.status}; ${conflictLine?.trim().slice(0, 240) ?? 'no BUILD_REQUIREMENTS_CONFLICT line'}; --out holds [${entries(conflictOut).join(', ')}]`,
+      'issue #556, bar 2: a build reads one requirements file and records it; a flag and a declaration that disagree leave no way to tell which the author meant, so both are named and nothing is built',
+    );
+
+    const copyPath = join(dir, 'reqs-copy.json');
+    writeFileSync(copyPath, readFileSync(reqsPath));
+    const sameOut = join(dir, 'req-same');
+    const same = runIn([...buildArgs(dir, sameOut, 'config-reqs.json'), '--requirements', reqsPath]);
+    const copyOut = join(dir, 'req-copy');
+    const copy = runIn([...buildArgs(dir, copyOut, 'config-reqs.json'), '--requirements', copyPath]);
+    const sameDiff = treeDiff(configOut, sameOut);
+    const copyDiff = treeDiff(configOut, copyOut);
+    say(
+      'BU180_THE_CONFIG_S_REQUIREMENTS_FILE_NAMED_BY_THE_FLAG_TOO_OR_ITS_BYTES_COPIED_BUILDS_THE_CONFIG_S_BYTES_WITH_ONE_RECORD',
+      same.status === 0 &&
+        copy.status === 0 &&
+        sameDiff.length === 0 &&
+        copyDiff.length === 0 &&
+        JSON.stringify(recordOf(sameOut)) === JSON.stringify(recordOf(configOut)),
+      `the same file by its absolute path: exit ${same.status}, ${sameDiff.length === 0 ? 'every file byte-identical to the config-only build' : sameDiff.slice(0, 2).join('; ')}; a copy of its bytes: exit ${copy.status}, ${copyDiff.length === 0 ? 'byte-identical' : copyDiff.slice(0, 2).join('; ')}; record ${showRecord(recordOf(sameOut))}`,
+      "issue #556, bar 2's other half: one file named twice is one input — the declaration is read and recorded, so a build given both writes what the config alone writes; the record names the file once",
+    );
+
     // Issue #95: build --idle-keys, on a two-bone ik over two keyed chain links. By hand, in rig px (y down):
     // the skirt chain starts at the top centre of the bottomwear box, (55, 30), bends to (49, 38) and ends at
     // (55, 46) — two links of 10 (6-8-10 triangles), so its reach is 20. A mesh over the box is weighted to
@@ -22126,7 +22389,10 @@ function runBuildSuite(): number {
         shinSeamLine.includes(' 0 px over 40, 0.00 rig px') &&
         shinCheck?.sets?.run?.PASS === true &&
         shinFoot !== undefined &&
-        shinFoot.y === 46,
+        // The painted foot runs rows 46–49 and the box's bottom holds there; since #557 the ankle cap is filled from the
+        // shin's layer above the cut, so the box starts 5 rows higher (41), where it started at 46 before.
+        shinFoot.y === 41 &&
+        shinFoot.y + shinFoot.h === 50,
       `build --all-sets exit ${shinRun.status}; sets.json run.drawnLength ${JSON.stringify(shinEntry?.drawnLength ?? null)}, registration ${JSON.stringify(shinEntry?.registration ?? null)}; parts.json run.drawnLength ${JSON.stringify(shinAlt?.drawnLength ?? null)}; run_foot_r box ${shinFoot === undefined ? 'absent' : `${shinFoot.w}x${shinFoot.h} @ ${shinFoot.x},${shinFoot.y}`}; ${shinSeamLine.trim() || 'no seam (run) line'}; check.json sets.run.PASS ${String(shinCheck?.sets?.run?.PASS ?? null)}`,
       'issue #539, bar 1: a set whose skeleton draws the shin at 0.5 of its base length is cut at the skeleton\'s knee and ankle, records drawnLength and registration in sets.json and parts.json, and its setup pose matches its own painting within the seam bar',
     );
@@ -23571,7 +23837,9 @@ function fixtureInput(dir: string, painting = 'painting.png'): Omit<AssembleInpu
  *   radius 5. The cap's box: x ceil(9.5) = 10 .. floor(19.5) = 19, y ceil(24.5) = 25 .. floor(34.5) = 34, 10x10 at
  *   10,25. Its pixels on the upper side (centre y <= 30, rows 25..29), within 5 of (15, 30): row 25 (dy -4.5) |dx| <=
  *   2.18, 4 px; row 26 (-3.5) |dx| <= 3.57, 8; row 27 (-2.5) <= 4.33, 8; rows 28 and 29 (-1.5, -0.5) <= 4.77 and 4.97,
- *   10 each: 40 px. On the upper arm's art (|dx| <= 2.5): 4 + 6 + 6 + 6 + 6 = 28 from the layer, 12 missing.
+ *   10 each: 40 px. On the upper arm's art (|dx| <= 2.5): 4 + 6 + 6 + 6 + 6 = 28 from the layer, 12 missing — x 10, 11
+ *   and 18, 19, past the upper arm's outline, 1 + 1 + 2 + 2 on each side (rows 26..29; issue #557: `short_px` left 6,
+ *   right 6, left being x below the joint's 15, across the downward axis at or above 0).
  * - The legs (`legs`, 640 px): each pixel goes to the nearer polyline (x 34 or x 48), so each leg is 320 px, split at
  *   y = 30: 160 + 160. The knee's width: 8 px, radius 4, box x ceil(29.5) = 30 .. 37, y 26..33: [30, 26, 8, 8]; its
  *   upper-side pixels within 4: rows 26..29 at dy -3.5, -2.5, -1.5, -0.5 hold |dx| <= 1.94, 3.12, 3.71, 3.97: 4 + 6 +
@@ -23579,8 +23847,10 @@ function fixtureInput(dir: string, painting = 'painting.png'): Omit<AssembleInpu
  * - The shoes (`shoes`, 100 px): each to the nearer leg, 50 + 50, not cut (a segment of another part than the one
  *   above). The ankle's width reads both parts: row 49 (legwear, -3.5 .. 3.5) and row 50 (footwear, -4.5 .. 4.5), so
  *   10 px, radius 5, box [29, 45, 10, 10] (right) and [43, 45, 10, 10] (left); the 40 upper-side pixels (as the
- *   elbow's) lie on rows 45..49, where the footwear has no pixel: 0 from the layer, 40 missing — the shoe starts below
- *   the ankle line, as on the exam-01 painting.
+ *   elbow's) lie on rows 45..49, where the footwear has no pixel: 0 from the layer — the shoe starts below the ankle
+ *   line, as on the exam-01 painting. Issue #557: the half-disc takes the upper segment's pixels where the lower's layer
+ *   has none, so the shin's art there (|dx| <= 3.5: rows 45..49 give 4 + 8 + 8 + 8 + 8) is 36 from "shin_r", and the 4
+ *   past the shin's outline (x 29 and 38 on rows 48, 49) stay missing, 2 on each side.
  * - Draw order: the plan is legs, shoes, arm; the legs' limbs stand at legs' place, lowest segment first (foot, shin,
  *   thigh; right leg then left), shoes leaves the order, and the arm's at arm's place: forearm, then upper arm.
  */
@@ -23649,8 +23919,8 @@ function runLimbCases(say: (name: string, ok: boolean, detail: string, why: stri
       '  limb cap: "leg_r" joint "knee" at [34, 30], on "shin_r": a disc of radius 4 px (the limb 8 px across the joint line), box [30, 26, 8, 8] — on the upper side of the line 26 px from the layer, none missing',
       '  limb cap: "leg_l" joint "knee" at [48, 30], on "shin_l": a disc of radius 4 px (the limb 8 px across the joint line), box [44, 26, 8, 8] — on the upper side of the line 26 px from the layer, none missing',
       '  limb cut: "shoes" opaque 100 = "foot_r" 50 + "foot_l" 50',
-      '  limb cap: "leg_r" joint "ankle" at [34, 50], on "foot_r": a disc of radius 5 px (the limb 10 px across the joint line), box [29, 45, 10, 10] — on the upper side of the line 0 px from the layer, 40 px missing — the layer has no pixel there (hidden in the painting, or past the limb\'s outline), and the tool invents none: paint them into a 10x10 image whose pixel (i, j) is rig pixel (29 + i, 45 + j), and name it in the segment\'s "cap"',
-      '  limb cap: "leg_l" joint "ankle" at [48, 50], on "foot_l": a disc of radius 5 px (the limb 10 px across the joint line), box [43, 45, 10, 10] — on the upper side of the line 0 px from the layer, 40 px missing — the layer has no pixel there (hidden in the painting, or past the limb\'s outline), and the tool invents none: paint them into a 10x10 image whose pixel (i, j) is rig pixel (43 + i, 45 + j), and name it in the segment\'s "cap"',
+      '  limb cap: "leg_r" joint "ankle" at [34, 50], on "foot_r": a disc of radius 5 px (the limb 10 px across the joint line), box [29, 45, 10, 10] — on the upper side of the line 0 px from the layer, 36 px from "shin_r", 4 px missing — the layer has no pixel there (hidden in the painting, or past the limb\'s outline), and the tool invents none: paint them into a 10x10 image whose pixel (i, j) is rig pixel (29 + i, 45 + j), and name it in the segment\'s "cap"',
+      '  limb cap: "leg_l" joint "ankle" at [48, 50], on "foot_l": a disc of radius 5 px (the limb 10 px across the joint line), box [43, 45, 10, 10] — on the upper side of the line 0 px from the layer, 36 px from "shin_l", 4 px missing — the layer has no pixel there (hidden in the painting, or past the limb\'s outline), and the tool invents none: paint them into a 10x10 image whose pixel (i, j) is rig pixel (43 + i, 45 + j), and name it in the segment\'s "cap"',
     ];
     const gotLines = green.lines.filter((l) => l.startsWith('  limb '));
     const order = green.r.parts.parts.map((q) => q.name).join(',');
@@ -23662,7 +23932,7 @@ function runLimbCases(say: (name: string, ok: boolean, detail: string, why: stri
         rec('upperarm_r')?.opaque_px === 120 &&
         fore?.opaque_px === 228 &&
         [fore?.x, fore?.y, fore?.w, fore?.h].join(',') === '10,25,10,25' &&
-        JSON.stringify(fore?.limb) === '{"name":"arm_r","segment":1,"of":"arm","bone":"sleeve_r1","joint":"elbow","cap":{"at":[15,30],"width":10,"radius":5,"box":[10,25,10,10],"layer_px":28,"missing_px":12}}' &&
+        JSON.stringify(fore?.limb) === '{"name":"arm_r","segment":1,"of":"arm","bone":"sleeve_r1","joint":"elbow","cap":{"at":[15,30],"width":10,"radius":5,"box":[10,25,10,10],"layer_px":28,"missing_px":12,"short_px":{"left":6,"right":6}}}' &&
         JSON.stringify(rec('upperarm_r')?.limb) === '{"name":"arm_r","segment":0,"of":"arm","bone":"sleeve_r0"}' &&
         rec('foot_r')?.from === 'full:footwear' &&
         rec('arm') === undefined &&
@@ -23820,10 +24090,10 @@ function runLimbCases(say: (name: string, ok: boolean, detail: string, why: stri
         `  limb cap: "leg_r" joint "ankle" at [34, 50], on "foot_r": a disc of radius 5 px (cap_shape "disc": the joint's distance to the nearer side of the limb, 10 px across the joint line), box [29, 45, 10, 10] — on the upper side of the line 0 px from the layer, ${shinPx} px from "shin_r", ${stillMissing} px missing — the layer has no pixel there (hidden in the painting, or past the limb's outline), and the tool invents none: paint them into a 10x10 image whose pixel (i, j) is rig pixel (29 + i, 45 + j), and name it in the segment's "cap"` &&
         shinPx + stillMissing === 40 &&
         sRec('foot_r')?.opaque_px === 50 + shinPx &&
-        sRec('foot_l')?.opaque_px === 50 &&
-        JSON.stringify(elbowRec) === '{"at":[15,30],"width":10,"radius":5,"box":[10,25,10,10],"layer_px":28,"missing_px":12,"shape":"disc","upper_px":0}' &&
+        sRec('foot_l')?.opaque_px === 50 + shinPx &&
+        JSON.stringify(elbowRec) === '{"at":[15,30],"width":10,"radius":5,"box":[10,25,10,10],"layer_px":28,"missing_px":12,"short_px":{"left":6,"right":6},"shape":"disc","upper_px":0}' &&
         serializeParts(readParts(join(root, 'disc', 'out', 'parts.json'))) === serializeParts(shaped.r.parts),
-      `${ankle.slice(ankle.indexOf('—'))}; by hand ${shinPx} from the shin, ${stillMissing} missing; foot_r ${sRec('foot_r')?.opaque_px} px (50 + ${shinPx}), foot_l ${sRec('foot_l')?.opaque_px}; the elbow ${JSON.stringify(elbowRec)}`,
+      `${ankle.slice(ankle.indexOf('—'))}; by hand ${shinPx} from the shin, ${stillMissing} missing; foot_r ${sRec('foot_r')?.opaque_px} px (50 + ${shinPx}), foot_l ${sRec('foot_l')?.opaque_px} (the half-disc fills from the shin too, issue #557); the elbow ${JSON.stringify(elbowRec)}`,
       'issue #360 item 12: the disc is derived and filled from the art — the shin painted down to the ankle is what the shoe\'s cap shows when the foot turns — and where neither segment has art the pixel stays missing and named, as #349\'s cap leaves it',
     );
 
@@ -23914,11 +24184,188 @@ function runLimbCases(say: (name: string, ok: boolean, detail: string, why: stri
     );
 
     runCutBandCases(say, root);
+    runShortCapCases(say, root);
     runOverlappingHandsCases(say, root);
     runCrossedLimbFeatherCases(say, root);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+/**
+ * Issue #557: a cap short of layer pixels — read, filled from the neighbouring segment, and named by side. A knee
+ * between two layers on the 64x64 flat painting at scale 1: the thigh `legwear` x 30..37 (or x 30..35, the narrow
+ * thigh), y 10..29; the shin a boot, `footwear` x 30..37, y 30..49, reaching over the knee on the left (x 30..33, rows
+ * 26..29) and one row on the right (x 34..37, row 29). Chain `leg_r` (34, 10) -> (34, 30), tip (34, 50): the knee at
+ * (34, 30), its line y = 30, axis (0, 1). By hand:
+ *
+ * - The width: rows 29 and 30 hold x 30..37 either way (the boot's row 29 reaches x 37), centres -3.5..3.5: 8 px,
+ *   radius 4, box [30, 26, 8, 8]. The disc's upper side: rows 26..29, |dx| <= 1.94, 3.12, 3.71, 3.97: 4 + 6 + 8 + 8 =
+ *   26 px. Left is x <= 33 (across = -dx >= 0 for the downward axis), right x >= 34.
+ * - The boot's layer gives the left half's 2 + 3 + 4 + 4 = 13 and row 29's right 4: 17 from the layer. The rule before
+ *   this issue (the half-disc takes the layer alone) leaves the right's rows 26..28 short: 2 + 3 + 4 = 9 px.
+ * - The full thigh has all 9: 9 from "thigh_r", none missing — no `short_px`, no LINT. The narrow thigh lacks x 36, 37:
+ *   of the 9, row 27's x 36 (dx 2.5) and row 28's x 36, 37 (2.5, 3.5) — 3 px, all on the right — no layer gives: 6 from
+ *   "thigh_r", `short_px` left 0, right 3, and a LINT naming them. The half-width about the knee is 4 (it is centred),
+ *   so cap_shape "disc" keeps all 3.
+ */
+function runShortCapCases(say: (name: string, ok: boolean, detail: string, why: string) => void, root: string): void {
+  const knee = (label: string, thighRight: number, cfgEdit: (segs: Array<Record<string, unknown>>) => void = () => {}): { r: ReturnType<typeof assemble>; lines: string[]; out: string } => {
+    const d = join(root, label);
+    writeRun(join(d, 'full'), [
+      { name: 'legwear', depth: 0.6, rects: [{ x0: 30, y0: 10, x1: thighRight, y1: 30, colour: C }] },
+      { name: 'footwear', depth: 0.6, rects: [{ x0: 30, y0: 30, x1: 38, y1: 50, colour: C }, { x0: 30, y0: 26, x1: 34, y1: 30, colour: C }, { x0: 34, y0: 29, x1: 38, y1: 30, colour: C }] },
+    ]);
+    writeRun(join(d, 'head'), FRAMED_HEAD);
+    writeFileSync(join(d, 'painting.png'), encodePngBytes(flatPainting()));
+    const segs: Array<Record<string, unknown>> = [
+      { part: 'thigh_r', from: 'legs', bone: 'leg_r0' },
+      { part: 'shin_r', from: 'boots', bone: 'leg_r1', joint: 'knee' },
+    ];
+    cfgEdit(segs);
+    const cfg = {
+      ...assembleConfig({ plan: [['legs', 'full', 'legwear'], ['boots', 'full', 'footwear']], extend: [] }),
+      limbs: { leg_r: { segments: segs } },
+      bones: [{ name: 'hip', parent: 'root', at: [32, 8] }, { chain: 'leg_r', parent: 'hip', points: [[34, 10], [34, 30]], tip: [34, 50] }],
+      regions: { thigh_r: 'leg_r0', shin_r: 'leg_r1' },
+    };
+    writeFileSync(join(d, 'config.json'), JSON.stringify(cfg));
+    const lines: string[] = [];
+    const out = join(d, 'out');
+    const r = assembleStage(
+      { source: join(d, 'painting.png'), full: join(d, 'full'), head: join(d, 'head'), config: join(d, 'config.json'), seam: 'near-white', project: DEFAULT_PROJECT_RULE },
+      { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, 'recomposite_error_rig.png') },
+      (l) => lines.push(l),
+    );
+    return { r, lines, out };
+  };
+  const guarded = (name: string, why: string, run: () => [boolean, string]): void => {
+    let got: [boolean, string];
+    try {
+      got = run();
+    } catch (err) {
+      got = [false, `the stage threw: ${(err as Error).message.split('\n')[0]}`];
+    }
+    say(name, got[0], got[1], why);
+  };
+  // The disc's upper-side pixels by hand, split by where each lies: in the boot's layer, in the thigh's, or in neither.
+  const byHand = (thighRight: number): { layer: number; upper: number; left: number; right: number } => {
+    const out = { layer: 0, upper: 0, left: 0, right: 0 };
+    for (let y = 26; y <= 29; y++) {
+      for (let x = 30; x <= 37; x++) {
+        if ((x + 0.5 - 34) ** 2 + (y + 0.5 - 30) ** 2 > 16) continue;
+        if (x <= 33 || y === 29) out.layer++;
+        else if (x < thighRight) out.upper++;
+        else out.right++;
+      }
+    }
+    return out;
+  };
+  const shinCap = (b: { r: ReturnType<typeof assemble> }): Record<string, unknown> | undefined => b.r.parts.parts.find((q) => q.name === 'shin_r')?.limb?.cap as Record<string, unknown> | undefined;
+  const lint = (b: { lines: string[] }): string[] => b.lines.filter((l) => l.startsWith('  LINT '));
+  const capPx = (out: string, rec: PartRecord | undefined): number => {
+    if (rec === undefined) return -1;
+    const img = readPng(join(out, 'parts', 'shin_r.png'));
+    let n = 0;
+    for (let j = 0; j < img.height; j++) for (let i = 0; i < img.width; i++) if (rec.y + j < 30 && img.data[(j * img.width + i) * 4 + 3] > 0) n++;
+    return n;
+  };
+
+  guarded(
+    'AS479_A_CAP_SHORT_OF_LAYER_PIXELS_IS_NAMED_BY_SIDE_IN_A_LINT_AND_IN_ITS_RECORD',
+    'issue #557 bar 1: a cap is short where no layer gives a pixel of its disc, and nothing named it — the limb cap line counted a total, and the eye found the step at the bend. The reading splits the shortfall by side of the limb\'s axis, records it on the cap, and prints one LINT per short cap with the limb, the joint, the part, both figures, the radius and what filled the rest; the planted negative is the full thigh, which gives every pixel and so prints and records nothing',
+    () => {
+      const narrow = knee('short-narrow', 36);
+      const h = byHand(36);
+      const c = shinCap(narrow);
+      const want = `  LINT "shin_r" cap at [34, 30] (limb "leg_r", joint "knee", radius 4 px): short_px left ${h.left}, right ${h.right}: no layer gives them — ${h.left + h.right} px of the disc on the upper side of the cut, where neither the layer of "boots" nor that of "legs" has a pixel of the limb; the rest of the disc is filled, ${h.layer} px from "shin_r"'s layer, ${h.upper} px from "thigh_r"; under cap_shape "disc" the disc is the half-width about the joint, 4 px, and ${h.left + h.right} of them lie within it`;
+      const full = knee('short-full', 38);
+      const back = readParts(join(narrow.out, 'parts.json')).parts.find((q) => q.name === 'shin_r')?.limb?.cap;
+      const ok =
+        h.right === 3 &&
+        h.layer === 17 &&
+        h.upper === 6 &&
+        lint(narrow).length === 1 &&
+        lint(narrow)[0] === want &&
+        JSON.stringify(c) === `{"at":[34,30],"width":8,"radius":4,"box":[30,26,8,8],"layer_px":${h.layer},"missing_px":${h.right},"short_px":{"left":0,"right":${h.right}},"upper_px":${h.upper}}` &&
+        JSON.stringify(back) === JSON.stringify(c) &&
+        lint(full).length === 0 &&
+        shinCap(full)?.short_px === undefined;
+      return [ok, `the narrow thigh: ${lint(narrow).join(' | ') || 'no LINT'}; record ${JSON.stringify(c)} (by hand left ${h.left}, right ${h.right}, ${h.layer} from the layer, ${h.upper} from the thigh), read back ${JSON.stringify(back) === JSON.stringify(c) ? 'the same' : 'DIFFERENT'}; the full thigh: ${lint(full).length} LINT line(s), short_px ${JSON.stringify(shinCap(full)?.short_px)}`];
+    },
+  );
+
+  guarded(
+    'AS480_A_CAP_IS_FILLED_FROM_THE_NEIGHBOURING_SEGMENT_S_LAYER_WHERE_ITS_OWN_LAYER_HAS_NO_PIXEL',
+    'issue #557 change (2): the half-disc took the lower layer alone, so a knee between two layers whose boot does not reach over it was short on that side though the thigh\'s layer has the pixels — the bend then opened a notch in the outline. The cap takes them from the thigh, as cap_shape "disc" already did; under the rule before this issue the same build reads the 9 right-side pixels as missing (the planted mutant of this control is that rule, run in the pull request against the same fixture)',
+    () => {
+      const full = knee('fill-full', 38);
+      const h = byHand(38);
+      const c = shinCap(full);
+      const rec = full.r.parts.parts.find((q) => q.name === 'shin_r');
+      const line = full.lines.find((l) => l.startsWith('  limb cap: "leg_r" joint "knee"')) ?? '';
+      const ok =
+        h.upper === 9 &&
+        h.left + h.right === 0 &&
+        JSON.stringify(c) === `{"at":[34,30],"width":8,"radius":4,"box":[30,26,8,8],"layer_px":${h.layer},"missing_px":0,"upper_px":${h.upper}}` &&
+        line.endsWith(`— on the upper side of the line ${h.layer} px from the layer, ${h.upper} px from "thigh_r", none missing`) &&
+        capPx(full.out, rec) === 4 * 4 + 4 + h.upper &&
+        rec?.opaque_px === 160 + 4 * 4 + 4 + h.upper;
+      return [ok, `${line.slice(line.indexOf('—'))}; record ${JSON.stringify(c)}; shin_r.png above the knee line ${capPx(full.out, rec)} px (by hand the boot's 16 + 4 and the thigh's ${h.upper}), opaque ${rec?.opaque_px}`];
+    },
+  );
+
+  guarded(
+    'AS481_A_FULL_CAP_WRITES_WHAT_IT_WROTE_AND_THE_READER_HOLDS_THE_SHORTFALL_TO_ITS_COUNT',
+    'issue #557 bar 3: a rig whose caps are full writes the bytes it wrote — no short_px, no upper_px where the neighbour gave none, no LINT — on the limb fixture\'s knees (one layer, centred, every disc pixel the thigh\'s); and parts.json holds the new keys to their meaning: a shortfall that does not add up to the missing pixels, a shortfall of none, and a half-disc\'s upper count of 0 are each refused',
+    () => {
+      const d = join(root, 'full-knees');
+      writeRun(join(d, 'full'), LIMB_FULL);
+      writeRun(join(d, 'head'), FRAMED_HEAD);
+      writeFileSync(join(d, 'painting.png'), encodePngBytes(flatPainting()));
+      writeFileSync(join(d, 'config.json'), JSON.stringify(limbConfig({ leg_r: { segments: LIMBS.leg_r.segments.slice(0, 2) }, leg_l: { segments: LIMBS.leg_l.segments.slice(0, 2) } })));
+      const lines: string[] = [];
+      const out = join(d, 'out');
+      assembleStage(
+        { source: join(d, 'painting.png'), full: join(d, 'full'), head: join(d, 'head'), config: join(d, 'config.json'), seam: 'near-white', project: DEFAULT_PROJECT_RULE },
+        { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, 'recomposite_error_rig.png') },
+        (l) => lines.push(l),
+      );
+      const text = readFileSync(join(out, 'parts.json'), 'utf8');
+      const caps = readParts(join(out, 'parts.json')).parts.flatMap((q) => (q.limb?.cap === undefined ? [] : [JSON.stringify(q.limb.cap)]));
+      const sha = createHash('sha256').update(text).digest('hex');
+      const narrow = knee('reader-narrow', 36);
+      const file = JSON.parse(readFileSync(join(narrow.out, 'parts.json'), 'utf8')) as { parts: Array<{ name: string; limb?: { cap?: Record<string, unknown> } }> };
+      const planted = (what: string, edit: (c: Record<string, unknown>) => void): string => {
+        const f = structuredClone(file);
+        edit(f.parts.find((q) => q.name === 'shin_r')?.limb?.cap as Record<string, unknown>);
+        const path = join(root, `reader-${what}.json`);
+        writeFileSync(path, JSON.stringify(f));
+        try {
+          readParts(path);
+          return `${what}: read`;
+        } catch (err) {
+          return `${what}: ${err instanceof PartsError ? err.problems.map((q) => q.code).join(',') : 'threw'}`;
+        }
+      };
+      const seen = [
+        planted('sum', (c) => (c.short_px = { left: 1, right: 3 })),
+        planted('none', (c) => {
+          c.missing_px = 0;
+          c.short_px = { left: 0, right: 0 };
+        }),
+        planted('keys', (c) => (c.short_px = { left: 0, right: 3, up: 0 })),
+        planted('upper0', (c) => (c.upper_px = 0)),
+      ];
+      const ok =
+        lines.filter((l) => l.startsWith('  LINT ')).length === 0 &&
+        caps.join(' ') === '{"at":[34,30],"width":8,"radius":4,"box":[30,26,8,8],"layer_px":26,"missing_px":0} {"at":[48,30],"width":8,"radius":4,"box":[44,26,8,8],"layer_px":26,"missing_px":0}' &&
+        !text.includes('short_px') &&
+        !text.includes('upper_px') &&
+        seen.every((q) => q.endsWith(': PARTS_FIELD_TYPE'));
+      return [ok, `the knees: ${lines.filter((l) => l.startsWith('  LINT ')).length} LINT line(s), caps ${caps.join(' ')}, parts.json sha256 ${sha}; planted records: ${seen.join('; ')}`];
+    },
+  );
 }
 
 /**

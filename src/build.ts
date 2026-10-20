@@ -40,6 +40,7 @@
  * no child process. rig-c runs as a process, but the process is injected
  * as a {@link RigcRunner}, exactly as `src/check.ts` takes it.
  */
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { type AnimFrame, EncodeError, encodeApng, encodeIndexedApng, INDEXED_DEFAULTS } from './apng.ts';
@@ -1347,6 +1348,8 @@ export interface CheckStageInput {
   packShape?: PackShape;
   /** The scene's declared requirements (`--requirements`, issue #93); absent, nothing is read, written or printed for them. */
   requirements?: string;
+  /** The path `check.json`'s `requirements.file` records (issue #556): `config.requirements` as declared when build read it from the config; absent, `requirements` as given. */
+  requirementsAs?: string;
   /**
    * `check --seam-pairs` (issue #202): split the seam's counted pixels by pair
    * and draw each pair's picture even when the bar passes. A failing seam is
@@ -1501,14 +1504,18 @@ export function limbCheckLines(line: LimbLine): string[] {
  * The seam over the range (issue #360) as the console prints it: the status, what was posed and the bar, then each
  * joint at each angle on a line of its own — its status and the seam figures there — or, not read, why.
  */
-export function sweepCheckLines(line: SweepLine): string[] {
+export function sweepCheckLines(line: SweepLine, steps: ReadonlyMap<string, { left: number; right: number }> = new Map()): string[] {
   const s = line.frame_scale;
   return [
     `${SWEEP_LINE}: ${line.status} — ${line.joints.length} joint(s) bent to their declared range's ends and middle${line.physics_left_out === 0 ? '' : `, ${line.physics_left_out} physics constraint(s) left out`}; at each, the pose against the same pose with the joint's own art drawn under the limb, on the rest-pose seam's bar (mean |d| <= ${line.bar.mean.toFixed(1)}, <= ${line.bar.rig_px_over_40} rig px over ${line.bar.level})${s === null ? '' : ` at frame scale ${s}`}`,
     ...line.joints.flatMap((j) => {
       const head = `joint "${j.joint}" (${j.limb}, "${j.part}" on "${j.bone}", range [${j.range.join(', ')}]${j.shape === 'disc' ? `, cap_shape "disc": no pixel over ${line.bar.level} in the disc` : ''})`;
       if (j.unread !== undefined) return [`${head}: FAIL — not read: ${j.unread}`];
-      return j.poses.map((p) => `${head} at ${p.degrees}°: ${p.status} — mean |d| ${p.mean}/255, ${p.px_over_40} frame px over ${line.bar.level} (${p.px_over_80} over ${SEAM_PX_LEVEL_HIGH}), ${p.rig_px_over_40.toFixed(2)} rig px`);
+      // Issue #557: the contour step, a reading on every row (check.json carries it only for a short cap).
+      return j.poses.map((p) => {
+        const st = p.step_px ?? steps.get(`${j.part} ${p.degrees}`);
+        return `${head} at ${p.degrees}°: ${p.status} — mean |d| ${p.mean}/255, ${p.px_over_40} frame px over ${line.bar.level} (${p.px_over_80} over ${SEAM_PX_LEVEL_HIGH}), ${p.rig_px_over_40.toFixed(2)} rig px${st === undefined ? '' : `; contour step ${st.left} px left, ${st.right} px right (a reading)`}`;
+      });
     }),
   ];
 }
@@ -1567,7 +1574,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   const entryLine = versionLines.find((l) => l.startsWith('entry:'));
   log(`  ${rigcIdentity(bin, v)}${entryLine === undefined ? '' : `; ${entryLine}`}`);
   const mode: PackMode = { pageEdges: input.pageEdges ?? DEFAULT_PAGE_EDGES, packShape: input.packShape ?? DEFAULT_PACK_SHAPE };
-  const r = runCheck(input.rig, input.out, rigc, input.parts, mode, input.source, input.requirements, input.seamPairs === true, input.keepStills === true, input.set, input.allSets === true, input.environment);
+  const r = runCheck(input.rig, input.out, rigc, input.parts, mode, input.source, input.requirements, input.seamPairs === true, input.keepStills === true, input.set, input.allSets === true, input.environment, input.requirementsAs);
   if (r.figures.environment !== undefined) log(`  ${environmentLine(r.figures.environment)}`);
   log(`  gate rig-play (rigc ${packedBuildLabel(mode)}), verbatim:`);
   for (const l of r.gateHtml) log(l);
@@ -1607,7 +1614,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   const limbs = fig[LIMB_LINE];
   if (limbs !== undefined) for (const [i, l] of limbCheckLines(limbs).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
   const sweep = fig[SWEEP_LINE];
-  if (sweep !== undefined) for (const [i, l] of sweepCheckLines(sweep).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
+  if (sweep !== undefined) for (const [i, l] of sweepCheckLines(sweep, r.sweepSteps).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
   for (const [i, l] of motionSeamLines(r.motionSeam).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
   for (const [i, l] of clothLines(r.cloth).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
   for (const name of REPORTED_LINES) log(`  ${judgementLine(name, fig[name])}`);
@@ -1885,7 +1892,7 @@ export interface BuildInput {
   pageEdges: PageEdges;
   /** `--pack-shape` for both packed builds, as `pageEdges`; {@link DEFAULT_PACK_SHAPE} when absent. */
   packShape?: PackShape;
-  /** `--requirements`, forwarded to the check (issue #93): read before assemble runs, so a file check would refuse is refused first; absent, nothing moves. */
+  /** `--requirements`, forwarded to the check (issue #93): read before assemble runs, so a file check would refuse is refused first; absent, `config.requirements` is read in its place (issue #556, {@link buildRequirements}), and with neither nothing moves. */
   requirements?: string;
   /** `--idle-keys`, forwarded to the rig stage as `rig` takes it (issue #95); {@link DEFAULT_IDLE_KEYS} when absent. */
   idleKeys?: IdleKeys;
@@ -1935,6 +1942,39 @@ export const CHECK_FLAGS_IN_BUILD: Readonly<Record<string, CheckFlagInBuild>> = 
   '--keep-stills': { as: 'forwarded' },
   '--environment': { as: 'forwarded' },
 };
+
+/** The requirements file build's check reads (issue #556): `read` is where it is opened, `recorded` what `check.json` names it by. */
+export interface BuildRequirements {
+  read: string;
+  recorded: string;
+}
+
+/**
+ * Which requirements file a build reads (issue #556): the `--requirements`
+ * flag as typed, else `config.requirements` resolved against the config's
+ * directory and recorded as declared, else none. Both given, they must name
+ * one file — the same path once resolved, or a file of the same bytes — and the
+ * declaration is the one read and recorded, so the build writes what a rebuild
+ * from the config alone writes; two files of different bytes are
+ * `BUILD_REQUIREMENTS_CONFLICT`, naming both.
+ */
+export function buildRequirements(flag: string | undefined, declared: string | undefined, configPath: string): BuildRequirements | null {
+  if (declared === undefined) return flag === undefined ? null : { read: flag, recorded: flag };
+  const fromConfig = resolve(dirname(resolve(configPath)), declared);
+  if (flag === undefined || resolve(flag) === fromConfig) return { read: fromConfig, recorded: declared };
+  const digestOf = (path: string): string | null => (existsSync(path) && statSync(path).isFile() ? createHash('sha256').update(readFileSync(path)).digest('hex') : null);
+  const flagDigest = digestOf(resolve(flag));
+  const configDigest = digestOf(fromConfig);
+  if (flagDigest !== null && flagDigest === configDigest) return { read: fromConfig, recorded: declared };
+  const shown = (d: string | null): string => (d === null ? 'no such file' : `sha256 ${d.slice(0, 16)}`);
+  throw new PartsError([
+    {
+      code: 'BUILD_REQUIREMENTS_CONFLICT',
+      object: `--requirements ${flag} and config.requirements "${declared}"`,
+      detail: `the flag names ${resolve(flag)} (${shown(flagDigest)}) and the config declares ${fromConfig} (${shown(configDigest)}); a build reads one requirements file and records it, so the two must name the same file or the same bytes — drop the flag to build from the config's file, or point config.requirements at the flag's`,
+    },
+  ]);
+}
 
 /** The `build` refusal of a `check` flag build supplies itself ({@link CHECK_FLAGS_IN_BUILD}), or null for any other flag. */
 export function suppliedCheckFlag(flag: string): string | null {
@@ -2019,14 +2059,16 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
   const idleKeys = input.idleKeys ?? DEFAULT_IDLE_KEYS;
   log(`rig-parts build: ${input.config} -> ${out}, seam rule ${input.seam}, projection rule ${input.project}, page edges ${input.pageEdges}, pack shape ${input.packShape ?? DEFAULT_PACK_SHAPE}${idleKeys === DEFAULT_IDLE_KEYS ? '' : `, idle keys ${idleKeys}`}${input.loop ? `, with the idle loop${input.leadIn === undefined ? '' : ` after a lead-in of ${input.leadIn} period(s)`}` : ''}`);
 
+  let req: BuildRequirements | null = null;
   try {
     // build runs rig next, which needs the whole config, so the full loader is
     // asked first: a config rig would refuse is refused before assemble writes
     // anything, and under [assemble], as it was before the stage had its own
     // narrower door.
-    loadConfig(input.config);
+    // Issue #556: the flag, or the config's declaration when there is none; both naming other bytes is refused here.
+    req = buildRequirements(input.requirements, loadConfig(input.config).requirements, input.config);
     // The same for the requirements file's own shape; its names resolve against the rig, in the check, before it builds.
-    if (input.requirements !== undefined) readRequirements(input.requirements);
+    if (req !== null) readRequirements(req.read);
     // And the schedule (issue #538), by rigc's own reader, as check reads it.
     if (input.environment !== undefined) readCheckEnvironment(input.environment);
     assembleStage(
@@ -2046,7 +2088,7 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
 
   let report: CheckReport;
   try {
-    report = checkStage({ rig: join(out, 'rig'), parts: out, out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(input.requirements === undefined ? {} : { requirements: input.requirements }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }) }, run.check, run.checkBin, prefixed('check'));
+    report = checkStage({ rig: join(out, 'rig'), parts: out, out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(req === null ? {} : { requirements: req.read, requirementsAs: req.recorded }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }) }, run.check, run.checkBin, prefixed('check'));
   } catch (err) {
     return refused('check', err);
   }
