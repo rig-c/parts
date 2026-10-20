@@ -124,6 +124,7 @@ import {
   halfTravels,
   chainToward,
   type Toward,
+  type ChainEdge,
   type WorldBox,
 } from './instruments.ts';
 import { type AlternatePartsRecord, type LimbRecord, type PartRecord, type PartsFile, readParts } from './parts.ts';
@@ -5799,6 +5800,46 @@ function fmt3(x: number): string {
   return x.toFixed(3);
 }
 
+/** A phase in cycles carried into [0, 1) at three decimals, so 0.9995 prints 0.000 and not 1.000. */
+function phase3(x: number): number {
+  const r = round3((((x % 1) + 1) % 1));
+  return r >= 1 ? 0 : r;
+}
+
+/**
+ * The child phases whose step from `parent` passes the floor: a step from {@link CHAIN_LAG_MIN_STEP} to 1/4 inclusive,
+ * which, the step being read modulo half a cycle, is two windows a half cycle apart. Each is carried into [0, 1) and
+ * split where it crosses the cycle's end, so every window printed is one an author can type.
+ */
+export function chainLagWindows(parent: number): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (const half of [0, 0.5]) {
+    const lo = phase3(parent + half + CHAIN_LAG_MIN_STEP);
+    const hi = phase3(parent + half + 0.25);
+    if (lo <= hi) out.push([lo, hi]);
+    else out.push([lo, 1], [0, hi]);
+  }
+  return out.sort((a, b) => a[0] - b[0]);
+}
+
+/**
+ * Issue #580: the detail of a step refusal. The step alone ("-0.230") read as advice to raise the phase or flip the
+ * amplitude's sign, neither of which moves it until the phase has gone half a cycle; so the line says the raw phases
+ * it read, that the step is their difference folded into (-1/4, 1/4] (a sine's sign is half a cycle, so a sign flip
+ * does not change it), and the child phases that would pass for this parent.
+ */
+export function chainStepDetail(e: Pick<ChainEdge, 'parent' | 'child' | 'step' | 'parentPhase' | 'childPhase'>): string {
+  const windows = chainLagWindows(e.parentPhase)
+    .map(([lo, hi]) => (hi === 1 ? `[${fmt3(lo)}, 1)` : `[${fmt3(lo)}, ${fmt3(hi)}]`))
+    .join(' or ');
+  return (
+    `phase step ${fmt3(e.step)} cycle(s); >= ${CHAIN_LAG_MIN_STEP} is required — a link must lag the one above it. ` +
+    `Phases read: "${e.parent}" ${fmt3(phase3(e.parentPhase))}, "${e.child}" ${fmt3(phase3(e.childPhase))} (a negative amplitude is read as amplitude > 0 at phase + 0.5); ` +
+    `the step is their difference, ${fmt3(phase3(e.childPhase - e.parentPhase))}, folded into (-1/4, 1/4] cycle, since a sine's sign is half a cycle — so flipping an amplitude's sign does not change it. ` +
+    `To pass, the child's phase is the parent's + ${CHAIN_LAG_MIN_STEP} to + 0.25, modulo 0.5: here a "${e.child}" phase in ${windows} (its "phase", or the "lag" on the chain track)`
+  );
+}
+
 /** The scene file's `rests` parts as `CHAIN_LAG` reads them (issue #245), and the file they were read from. */
 export interface ChainRests {
   path: string;
@@ -5835,7 +5876,7 @@ export function chainLine(inp: Pick<CheckInputs, 'rig' | 'motion'>, problems: Pr
     if (round3(e.step) < CHAIN_LAG_MIN_STEP) {
       const v = `"${e.child}" follows its keyed ancestor "${e.parent}" by ${fmt3(e.step)} cycle(s)`;
       violations.push(v);
-      problems.push({ code: 'CHECK_CHAIN_LAG', object: `bone "${e.child}" under "${e.parent}"`, detail: `phase step ${fmt3(e.step)} cycle(s); >= ${CHAIN_LAG_MIN_STEP} is required — a link must lag the one above it (a larger "phase", or a positive "lag" on the chain track)` });
+      problems.push({ code: 'CHECK_CHAIN_LAG', object: `bone "${e.child}" under "${e.parent}"`, detail: chainStepDetail(e) });
     }
   }
   for (const c of long) {
