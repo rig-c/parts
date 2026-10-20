@@ -1939,6 +1939,8 @@ function runConfigSuite(): number {
     const list = one('anims/list.json');
     const broken = one('anims/broken.json');
     const missing = one('anims/missing.json');
+    // Issue #569: the line names the path as typed, the directory it was resolved against and the result.
+    const missingDetail = refusals(() => loadConfig(withFile('anims/missing.json')))?.problems[0]?.detail ?? '';
     const empty = one('');
     // Without a path to resolve against, the field is a string and nothing is read: parseConfig loads it.
     const unread = refusals(() => parseConfig({ ...minimalConfig(), motion: { ...(minimalConfig().motion as Record<string, unknown>), animations_from: 'anims/missing.json' } }));
@@ -1948,6 +1950,7 @@ function runConfigSuite(): number {
         list === 'CONFIG_FIELD_TYPE config.motion.animations_from (<dir>/anims/list.json)' &&
         broken === 'CONFIG_IS_JSON config.motion.animations_from (<dir>/anims/broken.json)' &&
         missing === 'CONFIG_FILE_PRESENT config.motion.animations_from' &&
+        missingDetail.startsWith(`names "anims/missing.json", resolved against the config's directory ${af} (not the working directory) to ${join(af, 'anims', 'missing.json')}, which is no such file; `) &&
         empty === 'CONFIG_FIELD_TYPE config.motion.animations_from' &&
         unread === null,
       `anims/good.json -> ${goodAf.animations === null ? 'nothing read' : `${goodAf.animations.file.replace(af, '<dir>')}: ${Object.keys(goodAf.animations.table).join(', ')}; nod ${JSON.stringify(goodAf.animations.table.nod) === JSON.stringify(nod) ? 'as written' : 'CHANGED'}`}; anims/bad.json with motion.duration 0 -> ${badAf === null ? 'loads' : badAf.problems.map((q) => `${q.code} ${q.object.replace(af, '<dir>')}`).join('; ')} (by hand ${want.length}); [] -> ${list}; '{"spec": ' -> ${broken}; no such file -> ${missing}; "" -> ${empty}; parseConfig, no path -> ${unread === null ? 'loads, nothing read' : codes(unread)}`,
@@ -1956,6 +1959,7 @@ function runConfigSuite(): number {
   } finally {
     rmSync(af, { recursive: true, force: true });
   }
+  runAnimationsFromDocControls(say);
 
   // CF75 — issue #188: meshes.<part>.ribs.<chain>.stations is a whole number, 0 or more, and required; a contour or an
   // automatic mesh with ribs on a chain its segments name loads, and each malformed entry is refused at its field.
@@ -6650,6 +6654,170 @@ function runAnimationsFromCases(say: (name: string, ok: boolean, detail: string,
       near(plus, [-6, 34]) && near(minus, [-6, 18]) && near(up, [-3, 14]),
       `hem1 under hem0 rotate +90 -> ${shown(plus)} (by hand (-6, 34)); planted, -90 -> ${shown(minus)} (by hand (-6, 18)); eye under translatey +2 -> ${shown(up)} (by hand (-3, 14)); world units, y up, bar ${POSE_BAR}`,
       "issue #317: the named-animation recipe states that a rotate key turns a bone counter-clockwise in the rig's y-up space and that translatey is y up in the parent's axes; this holds the statement to rigc's own poser, and the opposite sign lands a link's length away",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Issue #569: the three refusals an author meets first in a `motion.animations_from` file print their
+ * remedy, and AUTHORING's example file is held to the tree. CF510–CF512 plant each refusal through the
+ * loader (`loadConfig`, which resolves the path); CF513 reads the example block out of AUTHORING's recipe
+ * and loads it; CF514 builds it through rigc's gate on the rig fixture and plants the boundary key twice,
+ * which is rigc's verdict, not the loader's; CF515 holds the recipe's quoted lines to what the tree prints.
+ */
+function runAnimationsFromDocControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const dir = temp('animations-from-doc');
+  try {
+    const SPEC = 'rigc-motion/1';
+    const FORM = `{"spec": "${SPEC}", "animations": {"<name>": {"duration": …, "tracks": [...]}}}`;
+    const asConfig = (sub: string, from: string): string => {
+      mkdirSync(join(dir, sub), { recursive: true });
+      const c = minimalConfig();
+      (c.motion as Record<string, unknown>).animations_from = from;
+      const at = join(dir, sub, 'config.json');
+      writeFileSync(at, JSON.stringify(c));
+      return at;
+    };
+    const fileAt = (sub: string, name: string, body: unknown): void => {
+      writeFileSync(join(dir, sub, name), typeof body === 'string' ? body : JSON.stringify(body));
+    };
+    const only = (e: PartsError | null): { code: string; object: string; detail: string } | null => (e !== null && e.problems.length === 1 ? e.problems[0] : null);
+    const shown = (e: PartsError | null): string => (e === null ? 'loads' : e.problems.map((q) => `${q.code} ${q.object.replace(dir, '<dir>')}: ${q.detail.replace(dir, '<dir>')}`).join('; '));
+    const nod = { duration: 1, tracks: [{ bone: 'body', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 1, v: [0] }] }] };
+
+    // CF510 — `spec` absent: the line names the line to write and the whole file's shape.
+    const noSpecCfg = asConfig('nospec', 'a.json');
+    fileAt('nospec', 'a.json', { animations: { nod } });
+    const noSpec = refusals(() => loadConfig(noSpecCfg));
+    const specAt = `config.motion.animations_from (${join(dir, 'nospec', 'a.json')}).spec`;
+    const namesSpec = (q: { code: string; object: string; detail: string } | null, object: string): boolean =>
+      q !== null && q.code === 'CONFIG_FIELD_PRESENT' && q.object === object && q.detail.startsWith(`is absent and required: write "spec": "${SPEC}" beside "animations"`) && q.detail.endsWith(`the whole file is ${FORM}`);
+    const oldLine = { code: 'CONFIG_FIELD_PRESENT', object: specAt, detail: 'is absent and required' };
+    say(
+      'CF510_AN_ANIMATIONS_FROM_FILE_WITH_NO_SPEC_IS_TOLD_THE_LINE_TO_WRITE_AND_THE_FILE_S_SHAPE',
+      namesSpec(only(noSpec), specAt) && !namesSpec(oldLine, specAt),
+      `{"animations": {"nod": …}} -> ${shown(noSpec)}; planted, the line before issue #569 ("is absent and required") -> ${namesSpec(oldLine, specAt) ? 'PASSES' : 'fails the bar'}`,
+      'issue #569: an author who had never seen a motion-spec file was refused with the field\'s name and nothing to write; the version line is a value only rig-c\'s spec defines, so the refusal states it, and the shape, rather than leaving it to be copied from another file',
+    );
+
+    // CF511 — `spec` another value: the value found and the one required.
+    const otherCfg = asConfig('otherspec', 'a.json');
+    fileAt('otherspec', 'a.json', { spec: 'rigc-motion/2', animations: { nod } });
+    const numCfg = asConfig('numspec', 'a.json');
+    fileAt('numspec', 'a.json', { spec: 1, animations: { nod } });
+    const other = only(refusals(() => loadConfig(otherCfg)));
+    const num = only(refusals(() => loadConfig(numCfg)));
+    const foundAndRequired = (q: { code: string; detail: string } | null, found: string): boolean =>
+      q !== null && q.code === 'CONFIG_FIELD_TYPE' && q.detail === `is ${found}; "${SPEC}" is required, the motion-spec version motion.json states`;
+    say(
+      'CF511_AN_ANIMATIONS_FROM_SPEC_OF_ANOTHER_VALUE_NAMES_THE_VALUE_FOUND_AND_THE_ONE_REQUIRED',
+      foundAndRequired(other, '"rigc-motion/2"') && other?.object === `config.motion.animations_from (${join(dir, 'otherspec', 'a.json')}).spec` && foundAndRequired(num, '1') &&
+        !foundAndRequired({ code: 'CONFIG_FIELD_TYPE', detail: `is a string; "${SPEC}" is required, the motion-spec version motion.json states` }, '"rigc-motion/2"'),
+      `"rigc-motion/2" -> ${other === null ? 'not one problem' : `${other.code}: ${other.detail}`}; 1 -> ${num === null ? 'not one problem' : `${num.code}: ${num.detail}`}; planted, a line without the value found -> fails the bar`,
+      'issue #569: the version an author wrote is the value found, and the one rig-c reads is the value required; both on the line is the remedy',
+    );
+
+    // CF512 — the path is resolved beside the config: the line names the path as typed, the directory and the result.
+    // The file sits where a reader resolving against the working directory of the run's parent would look: dir/anims.
+    mkdirSync(join(dir, 'anims'), { recursive: true });
+    fileAt('anims', 'a.json', { spec: SPEC, animations: { nod } });
+    const besideCfg = asConfig('cfg', 'anims/a.json');
+    const beside = only(refusals(() => loadConfig(besideCfg)));
+    const base = join(dir, 'cfg');
+    const resolvedTo = join(base, 'anims', 'a.json');
+    const statesWhere = (d: string): boolean => d.startsWith(`names "anims/a.json", resolved against the config's directory ${base} (not the working directory) to ${resolvedTo}, which is no such file; `);
+    const before569 = `names ${resolvedTo}, which is no such file; a file in rig-c's motion-spec shape, ${FORM}, its path relative to the config's directory is required`;
+    say(
+      'CF512_A_MISSING_ANIMATIONS_FROM_FILE_NAMES_THE_PATH_AS_TYPED_THE_CONFIG_S_DIRECTORY_AND_WHAT_THEY_RESOLVED_TO',
+      beside !== null && beside.code === 'CONFIG_FILE_PRESENT' && beside.object === 'config.motion.animations_from' && statesWhere(beside.detail) && !statesWhere(before569),
+      `config in <dir>/cfg naming "anims/a.json", the file at <dir>/anims/a.json -> ${beside === null ? 'not one problem' : `${beside.code}: ${beside.detail.split(dir).join('<dir>')}`}; planted, the line before issue #569 -> ${statesWhere(before569) ? 'PASSES' : 'fails the bar'}`,
+      'issue #569: an author who put the file beside the working directory read "no such file" and a path it had not typed; the path as typed, the directory it was resolved against and the result are value found and where it looked',
+    );
+
+    // CF513 — AUTHORING's example file, read out of the recipe, loads; with `spec` removed it is CF510's line.
+    const guide = readFileSync(join(ROOT, 'docs', 'AUTHORING.md'), 'utf8');
+    const recipeOf = (t: string): string => {
+      const at = t.indexOf('### Recipe: expressions and other named animations');
+      return at === -1 ? '' : t.slice(at, t.indexOf('\n**Which way a key moves a bone.**', at));
+    };
+    const recipe = recipeOf(guide);
+    const exampleOf = (r: string): string => {
+      const at = r.indexOf('```json\n');
+      return at === -1 ? '' : r.slice(at + '```json\n'.length, r.indexOf('\n```', at + 1));
+    };
+    const example = exampleOf(recipe);
+    let parsed: Record<string, unknown> | null = null;
+    try {
+      const v = JSON.parse(example) as unknown;
+      parsed = typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+    } catch {
+      parsed = null;
+    }
+    const docCfg = asConfig('doc', 'animations.json');
+    fileAt('doc', 'animations.json', example);
+    const docLoad = parsed === null ? null : loadConfigAndAnimations(docCfg);
+    const docNames = docLoad?.animations === null || docLoad === null ? '' : Object.keys(docLoad.animations.table).join();
+    const noSpecDocCfg = asConfig('doc-nospec', 'animations.json');
+    const { spec: _spec, ...withoutSpec } = parsed ?? {};
+    fileAt('doc-nospec', 'animations.json', withoutSpec);
+    const docNoSpec = only(refusals(() => loadConfig(noSpecDocCfg)));
+    const exampleSays = parsed !== null && parsed.spec === SPEC && docNames !== '';
+    say(
+      'CF513_AUTHORING_S_ANIMATIONS_FROM_EXAMPLE_LOADS_AS_WRITTEN_AND_WITHOUT_SPEC_IS_CF510_S_LINE',
+      exampleSays && namesSpec(docNoSpec, `config.motion.animations_from (${join(dir, 'doc-nospec', 'animations.json')}).spec`) && exampleOf(recipeOf('### Recipe: expressions and other named animations\n\nno block\n\n**Which way a key moves a bone.**')) === '',
+      `the recipe's json block, ${example.split('\n').length} lines -> ${parsed === null ? 'does not parse' : `spec ${JSON.stringify(parsed.spec)}, loads beside a config: ${docNames || 'NOTHING'}`}; with spec removed -> ${docNoSpec === null ? 'not one problem' : `${docNoSpec.code}: ${docNoSpec.detail.slice(0, 80)}…`}; planted, a recipe with no block -> no example read`,
+      'issue #569: the shape was found only by copying another file; the document now shows one, and a document example the loader would refuse is worse than none, so the tree reads it',
+    );
+
+    // CF514 — through rigc's gate on the rig fixture (chest and head added): the example builds; its boundary key
+    // written twice is rigc's refusal, naming the animation, the track and the time, beside the line naming the file.
+    const gateFixture = (name: string, file: unknown): { config: string; parts: string; out: string; file: string } => {
+      const c = rigConfig();
+      (c.bones as unknown[]).push({ name: 'chest', parent: 'body', at: [20, 24] }, { name: 'head', parent: 'chest', at: [20, 18] });
+      (c.motion as Record<string, unknown>).animations_from = 'animations.json';
+      const f = writeRigFixture(join(dir, name), c);
+      writeFileSync(join(dir, name, 'animations.json'), JSON.stringify(file));
+      return { ...f, out: join(dir, name, 'out'), file: join(dir, name, 'animations.json') };
+    };
+    const docGate = gateFixture('gate-doc', parsed);
+    const green = runCli(['rig', '--config', docGate.config, '--parts', docGate.parts, '--out', docGate.out]);
+    const twice = JSON.parse(JSON.stringify(parsed ?? {})) as { animations?: Record<string, { duration: number; tracks: Array<{ bone: string; property: string; keys: Array<{ t: number }> }> }> };
+    const sway = twice.animations?.sway;
+    const head = sway?.tracks.find((tr) => tr.bone === 'head');
+    if (sway !== undefined && head !== undefined) head.keys.push({ ...head.keys[head.keys.length - 1] });
+    const dupGate = gateFixture('gate-dup', twice);
+    const red = runCli(['rig', '--config', dupGate.config, '--parts', dupGate.parts, '--out', dupGate.out]);
+    const rigcSays = `animation "sway" bone "head" rotate: key times must strictly increase (at t=${sway?.duration ?? 'none'})`;
+    const redLines = red.out.split('\n');
+    const gateLine = redLines.find((l) => l.includes('FAIL') && l.includes('RIG_RIGC_GREEN')) ?? '';
+    const fromLine = redLines.find((l) => l.includes(`animations beside the idle, from ${dupGate.file} as written: sway`)) ?? '';
+    say(
+      'CF514_THE_EXAMPLE_GATES_GREEN_AND_ITS_BOUNDARY_KEY_WRITTEN_TWICE_IS_RIGC_S_REFUSAL_BESIDE_THE_LINE_NAMING_THE_FILE',
+      green.status === 0 && existsSync(join(docGate.out, 'motion.json')) &&
+        red.status !== 0 && gateLine.includes(`rigc compile error: `) && gateLine.includes(rigcSays) && gateLine.includes('CE_COMPILE_KEY_TIMES_NOT_INCREASING') && fromLine !== '' &&
+        !existsSync(join(dupGate.out, 'motion.json')),
+      `the example on the fixture -> rig exit ${green.status}; head's last key written twice -> exit ${red.status}; gate line ${gateLine.includes(rigcSays) ? `holds "${rigcSays}"` : `LACKS "${rigcSays}": ${gateLine.trim().slice(0, 200)}`}; the line naming the file: ${fromLine === '' ? 'ABSENT' : 'present'}; motion.json written: ${existsSync(join(dupGate.out, 'motion.json'))}`,
+      'issue #569: a duplicate key time is rigc\'s to refuse (this package does not re-implement rigc\'s validation); what the author needs is that the refusal reaches them naming the animation, the track and the time, and the file it came from, which the rig stage\'s line above it names',
+    );
+
+    // CF515 — the recipe quotes the three lines as the tree prints them; the recipe before issue #569 quotes none.
+    const flat = (t: string): string => t.replace(/\s+/g, ' ');
+    const quoted: Array<[string, string]> = [
+      ['spec', `is absent and required: write "spec": "${SPEC}" beside "animations"`],
+      ['path', `resolved against the config's directory`],
+      ['path', '(not the working directory) to'],
+      ['rigc', 'key times must strictly increase (at t='],
+    ];
+    const printed: Record<string, string> = { spec: noSpec?.problems[0]?.detail ?? '', path: beside?.detail ?? '', rigc: gateLine };
+    const held = (r: string): boolean => quoted.every(([k, q]) => flat(r).includes(q) && printed[k].includes(q));
+    const before = '### Recipe: expressions and other named animations\n\nWrite a file in rig-c\'s motion-spec shape beside the config and name it:\n';
+    say(
+      'CF515_THE_RECIPE_QUOTES_THE_THREE_REFUSALS_AS_THE_TREE_PRINTS_THEM',
+      held(recipe) && !held(before),
+      `${quoted.map(([k, q]) => `"${q}": recipe ${flat(recipe).includes(q) ? 'yes' : 'NO'}, printed ${printed[k].includes(q) ? 'yes' : 'NO'}`).join('; ')}; planted, the recipe before issue #569 -> ${held(before) ? 'PASSES' : 'fails the bar'}`,
+      'issue #569: the document is the interface for the author who meets the line; a quotation that drifts from what the tree prints sends that author looking for words no run shows',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

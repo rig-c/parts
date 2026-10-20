@@ -1325,22 +1325,50 @@ that crosses the region with no point of it inside to split at — is still stop
 
 The package proposes no expression and keys nothing but the idle; what it gives is a rig whose
 face is bones (`eye_r`, `eye_l`, `brow_r`, `brow_l`, `mouth` on `reference-sample`) and one door for
-animations you write over them, `motion.animations_from` (the row above, issue #183). Write a
-file in rig-c's motion-spec shape beside the config and name it:
+animations you write over them, `motion.animations_from` (the row above, issues #183 and #569).
+Name a file in rig-c's motion-spec shape, its path relative to the directory `config.json` sits
+in — not the working directory:
 
 ```jsonc
 // config.json
 "motion": { "duration": 4.0, "tracks": [ … ], "blink": { … },
-            "animations_from": "expressions.json" }
+            "animations_from": "animations.json" }
+```
 
-// expressions.json — the bones the config declares, keyed as rig-c keys them
+A whole file, one looping animation over two bones the config declares — an expression is the
+same shape over the face bones, and `examples/demo/animations.json` holds seven more:
+
+```json
 { "spec": "rigc-motion/1",
   "animations": {
-    "surprised": { "duration": 0.5, "tracks": [
-      { "bone": "brow_r", "property": "translatey", "keys": [ { "t": 0, "v": [0] }, { "t": 0.25, "v": [2] }, { "t": 0.5, "v": [0] } ] },
-      { "bone": "brow_l", "property": "translatey", "keys": [ { "t": 0, "v": [0] }, { "t": 0.25, "v": [2] }, { "t": 0.5, "v": [0] } ] },
-      { "bone": "mouth",  "property": "scaley",     "keys": [ { "t": 0, "v": [1] }, { "t": 0.25, "v": [1.4] }, { "t": 0.5, "v": [1] } ] } ] } } }
+    "sway": { "duration": 2, "loop": true, "tracks": [
+      { "bone": "chest", "property": "rotate", "keys": [
+        { "t": 0, "v": [0] }, { "t": 0.5, "v": [3] }, { "t": 1.5, "v": [-3] }, { "t": 2, "v": [0] } ] },
+      { "bone": "head", "property": "rotate", "keys": [
+        { "t": 0, "v": [0] }, { "t": 1, "v": [-2] }, { "t": 2, "v": [0] } ] } ] } } }
 ```
+
+- **`spec` is required.** Without it the loader refuses
+  `CONFIG_FIELD_PRESENT: config.motion.animations_from (<file>).spec — is absent and required:
+  write "spec": "rigc-motion/1" beside "animations", …`, and another value is `CONFIG_FIELD_TYPE`
+  naming the value found and `"rigc-motion/1"`.
+- **Key times strictly increase within a track, and the last is at `duration`** — rig-c's rule
+  (its AUTHORING §4.5, "`t` is in seconds and must strictly increase"; R7: no key past the
+  declared duration, and a duration more than a frame longer than the last key is refused).
+  `loop` is a player hint rigc does not emit (its §4.3).
+- **The cycle-boundary trap.** A looping animation's boundary is one key, at `t = duration`; to
+  close the loop without a jump give it the value of the key at `t = 0`, as both tracks above do.
+  Writing that boundary key twice (`t: 2` and `t: 2` here) is a duplicate time, and it is rigc's
+  verdict at the rig stage's gate, not this loader's: `RIG_RIGC_GREEN` quotes rigc's
+  `CE_COMPILE_KEY_TIMES_NOT_INCREASING` line, `animation "<name>" bone "<bone>" <property>: key
+  times must strictly increase (at t=<t>)`. That line names the animation, the track and the time,
+  and the file it came from is the one the rig stage's line just above it names
+  (`animations beside the idle, from <file> as written: …`) — rigc reads the merged `motion.json`
+  in a scratch directory, so its own path is not yours. Remove the second key.
+- **The path resolves beside the config.** A file that is not there is `CONFIG_FILE_PRESENT:
+  config.motion.animations_from — names "<as typed>", resolved against the config's directory
+  <dir> (not the working directory) to <file>, which is no such file; …`: move the file there, or
+  write the path from that directory.
 
 **Which way a key moves a bone.** A `rotate` value is degrees added to the bone's setup
 rotation, counter-clockwise positive in the rig's y-up space — rig-c's convention (its
@@ -2783,8 +2811,8 @@ See-through with another seed.
 
 | rule | means | change |
 | --- | --- | --- |
-| <a id="CONFIG_FILE_PRESENT"></a><a id="CONFIG_IS_JSON"></a>`CONFIG_FILE_PRESENT`, `CONFIG_IS_JSON` | no such file, or not JSON | `--config` |
-| <a id="CONFIG_KEY_KNOWN"></a><a id="CONFIG_KEY_RETIRED"></a><a id="CONFIG_FIELD_PRESENT"></a><a id="CONFIG_FIELD_TYPE"></a>`CONFIG_KEY_KNOWN`, `CONFIG_KEY_RETIRED`, `CONFIG_FIELD_PRESENT`, `CONFIG_FIELD_TYPE` | an unknown key (a retired one says what replaces it), a missing one, a wrong type (`bones[i].link_inherit` must be an object whose values are strings); a project's own record under a plain key, or an annotation (`note`, `<name>_note`) holding something other than a string; in `meshes.<part>.auto` (§3, *An automatic mesh*), a missing or out-of-range number, a Stage B opt-in that is not exactly a value rig-c accepts, or a field the mode does not have — a bound on one of the five allocation rows, or an authored `motionAmplitude` (it is derived, never written); under `comfy paint`, `CONFIG_FIELD_PRESENT` on `config.generation`: a config with no `generation` block (the line names the fields it holds) | the named field; a record goes under a key beginning `x-` (any JSON, read by nothing), a remark under `note` or `<name>_note` (a string) — §3; under `comfy paint`, `config.generation` |
+| <a id="CONFIG_FILE_PRESENT"></a><a id="CONFIG_IS_JSON"></a>`CONFIG_FILE_PRESENT`, `CONFIG_IS_JSON` | no such file, or not JSON; for a file the config names (`motion.animations_from`, `requirements`), the path is read relative to the config's directory, and the `motion.animations_from` line names the path as typed, that directory and what the two resolved to (issue #569) | `--config`; a file the config names: put it at the resolved path, or write the path from the config's directory |
+| <a id="CONFIG_KEY_KNOWN"></a><a id="CONFIG_KEY_RETIRED"></a><a id="CONFIG_FIELD_PRESENT"></a><a id="CONFIG_FIELD_TYPE"></a>`CONFIG_KEY_KNOWN`, `CONFIG_KEY_RETIRED`, `CONFIG_FIELD_PRESENT`, `CONFIG_FIELD_TYPE` | an unknown key (a retired one says what replaces it), a missing one (a `motion.animations_from` file with no `spec` is told to write `"spec": "rigc-motion/1"` and the whole file's shape, issue #569), a wrong type (`bones[i].link_inherit` must be an object whose values are strings); a project's own record under a plain key, or an annotation (`note`, `<name>_note`) holding something other than a string; in `meshes.<part>.auto` (§3, *An automatic mesh*), a missing or out-of-range number, a Stage B opt-in that is not exactly a value rig-c accepts, or a field the mode does not have — a bound on one of the five allocation rows, or an authored `motionAmplitude` (it is derived, never written); under `comfy paint`, `CONFIG_FIELD_PRESENT` on `config.generation`: a config with no `generation` block (the line names the fields it holds) | the named field; a record goes under a key beginning `x-` (any JSON, read by nothing), a remark under `note` or `<name>_note` (a string) — §3; under `comfy paint`, `config.generation` |
 | <a id="CONFIG_KEY_UNIQUE"></a>`CONFIG_KEY_UNIQUE` | a key written twice in one object of a file the config names — the pose file `generation.control.skeleton` names, or the `motion.animations_from` file; JSON keeps only the last value, so every other would be dropped without a word | that file: each key once |
 | <a id="CONFIG_ANIMATION_NAME_FREE"></a>`CONFIG_ANIMATION_NAME_FREE` | the `motion.animations_from` file holds an animation named `idle`, the animation `config.motion` writes | rename that animation |
 | <a id="CONFIG_HEAD_BOX_SQUARE"></a>`CONFIG_HEAD_BOX_SQUARE` | `seethrough.head_box` is not a non-empty square | `head_box` — take `propose --head-box`'s |
