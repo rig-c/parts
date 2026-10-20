@@ -58,8 +58,8 @@
  * setup pose with the flat stack of parts, and a pixel no part holds is
  * missing from both. When `motion.json` holds an animation, one more bar,
  * `ANIMATIONS_DO_NOT_FOLD` (issues #320, #333): rigc's own `render --folds`
- * over every animation, the idle included, physics constraints left out
- * ({@link FOLD_LINE}). Beside it, where a `footwear` part rides a bone that
+ * over every animation, the idle included, posed with physics stepping and
+ * again with the physics constraints left out (issue #363; {@link FOLD_LINE}). Beside it, where a `footwear` part rides a bone that
  * hangs from another, `FEET_STAY_LEVEL` (issue #348): the same render, with
  * `--geometry`, read for how far each such part's drawing turns while a bone
  * above it is turned ({@link LEVEL_LINE}). The part-alone renders, the shut-eye still, the keyed
@@ -1922,8 +1922,9 @@ export interface RequirementsBlock {
  * requirements file's `may_fold`, by slot and animation with its why, and is
  * named and not held to the bar.
  *
- * ⭐ **Read with the physics constraints left out**, as the loop is, from the
- * same build ({@link withoutPhysics}). rig-c's render steps physics by 1/fps
+ * ⭐ **Judged with physics on, and read again with the physics constraints left
+ * out** (issue #363; before it, only the latter, from the same build as the loop,
+ * {@link withoutPhysics}). rig-c's render steps physics by 1/fps
  * from frame 0, so a fold a physics constraint makes is the sampling rate's:
  * on the public `scarf` example `hop` folds `bottomwear` (3 of 308 triangles,
  * frames 7-8) at 12 fps, and at none of 10, 15, 24, 30, 36, 48 and 60 fps;
