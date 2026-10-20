@@ -2878,7 +2878,47 @@ function runConfigSuite(): number {
   runProposedRigScaleConfigControls(say);
   runArmSplitConfigControls(say);
   runBustConfigControls(say);
+  runRequirementsConfigControls(say);
   return bad();
+}
+
+/**
+ * Issue #556: `config.requirements` names the requirements file `build` reads when no `--requirements` is given, a path
+ * relative to the config's directory; the key is known to every loader, and the full loader reading from a path refuses
+ * a value that is not a non-empty string, or a file that is not there, at its field.
+ */
+function runRequirementsConfigControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const dir = temp('config-requirements');
+  try {
+    mkdirSync(join(dir, 'scene'));
+    writeFileSync(join(dir, 'scene', 'reqs.json'), `${JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 4, requirements: [] })}\n`);
+    const at = (name: string, value: unknown): string => {
+      const pth = join(dir, `${name}.json`);
+      writeFileSync(pth, JSON.stringify({ ...minimalConfig(), requirements: value }));
+      return pth;
+    };
+    const good = at('good', 'scene/reqs.json');
+    const read = loadConfig(good).requirements;
+    const loads = [refusals(() => loadConfig(good)), refusals(() => parseConfig({ ...minimalConfig(), requirements: 'not/read.json' })), refusals(() => parseEarlyConfig({ ...minimalConfig(), seethrough: { resolution: 64, steps: 1, seed: 1, offload: false, head_box: [0, 0, 8, 8] }, requirements: 'scene/reqs.json' }, 'assemble'))];
+    const planted: Array<[string, string, string, string]> = [
+      ['a number', at('number', 42), 'CONFIG_FIELD_TYPE', 'is 42; a non-empty string is required'],
+      ['an empty string', at('empty', ''), 'CONFIG_FIELD_TYPE', 'is ""; a non-empty string is required'],
+      ['a missing file', at('missing', 'scene/absent.json'), 'CONFIG_FILE_PRESENT', `names ${join(dir, 'scene', 'absent.json')}, which is no such file; a spine-parts-requirements/1 file`],
+    ];
+    const outcomes = planted.map(([what, pth, code, start]) => {
+      const e = refusals(() => loadConfig(pth));
+      const ok = e !== null && e.problems.length === 1 && e.problems[0].code === code && e.problems[0].object === 'config.requirements' && e.problems[0].detail.startsWith(start);
+      return { what, ok, got: `${codes(e)}: ${e?.problems[0]?.detail ?? ''}` };
+    });
+    say(
+      'CF498_CONFIG_REQUIREMENTS_LOADS_AS_DECLARED_AND_A_NON_STRING_EMPTY_OR_MISSING_FILE_IS_REFUSED_AT_ITS_FIELD',
+      loads.every((e) => e === null) && read === 'scene/reqs.json' && outcomes.every((o) => o.ok),
+      `full loader from a path, parseConfig, assemble door: ${loads.map((e) => (e === null ? 'loads' : codes(e))).join(', ')}; read back ${JSON.stringify(read)}; planted: ${outcomes.map((o) => `${o.what} ${o.ok ? 'refused once at config.requirements' : `NOT: ${o.got}`}`).join('; ')}`,
+      'issue #556: a rebuild finds the requirements file a build needed only if the config names it; the path is the author\'s, kept as declared and read beside the config, and a value that names no file is refused at the field, as motion.animations_from is, before any stage runs',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -14093,8 +14133,9 @@ function runRequirementCases(dir: string, say: (name: string, ok: boolean, detai
 
   const plain = run('plain', null);
   const empty = run('empty', { requirements: [] });
-  // Each run has its own directory, which the SKIP reasons name; both sides are read with it written <rig> and <out>.
-  const paths = (r: Run, t: string): string => t.split(r.outDir).join('<out>').split(r.rig).join('<rig>');
+  // Each run has its own directory, which the SKIP reasons name; both sides are read with it written <rig> and <out>,
+  // and the run's own root, where its req.json is — check.json's requirements.file records the path as typed (issue #556) — <run>.
+  const paths = (r: Run, t: string): string => t.split(r.outDir).join('<out>').split(r.rig).join('<rig>').split(dirname(r.rig)).join('<run>');
   const stripBlock = (r: Run): string => paths(r, `${JSON.stringify(Object.fromEntries(Object.entries(r.fig ?? {}).filter(([k]) => k !== 'requirements')), null, 1)}\n`);
   const plainCheck = existsSync(join(plain.outDir, 'check.json')) ? paths(plain, readFileSync(join(plain.outDir, 'check.json'), 'utf8')) : '';
   const norm = (r: Run): string[] => paths(r, r.text).split('\n');
@@ -14123,7 +14164,7 @@ function runRequirementCases(dir: string, say: (name: string, ok: boolean, detai
   say(
     'CK79_TWO_RUNS_WITH_REQUIREMENTS_WRITE_THE_SAME_BYTES',
     again.status === 0 && sameFiles.length === 2 && geoSame,
-    `${sameFiles.length} of 2 files (each run's own directory read as <rig>, <out>) and the as-declared geometry.json ${geoSame ? 'byte-identical' : 'DIFFER'}`,
+    `${sameFiles.length} of 2 files (each run's own directory read as <rig>, <out>, <run>) and the as-declared geometry.json ${geoSame ? 'byte-identical' : 'DIFFER'}`,
     'determinism is a contract: the copies, their renders and the lines are a function of the rig and the file',
   );
 
@@ -18114,6 +18155,27 @@ function runAnimationFoldCases(say: (name: string, ok: boolean, detail: string, 
       "issue #320, HQ's reading: a fold the art means (a sleeve hidden behind the body) is the author's to accept, by slot and animation with a reason, as rig-c's invariants.deformMayFold is — and, as rig-c refuses an exemption that exempts nothing, an entry that matches no fold fails rather than sitting in the file after the fold it excused is gone",
     );
 
+    // CK521 — issue #556: check --requirements, no config in play, records the file it read first in the requirements block —
+    // the path as typed, the sha256 of its bytes and its top-level keys; check without the flag writes no requirements block.
+    const declaredPath = join(dir, 'declared.json');
+    const reqBlock = (declared.fig?.requirements ?? null) as Record<string, unknown> | null;
+    const fileRecord = (reqBlock?.file ?? null) as Record<string, unknown> | null;
+    const declaredSha = createHash('sha256').update(readFileSync(declaredPath)).digest('hex');
+    say(
+      'CK521_CHECK_REQUIREMENTS_RECORDS_THE_FILE_AS_TYPED_WITH_ITS_SHA256_AND_KEYS_AND_NO_FLAG_WRITES_NO_REQUIREMENTS_BLOCK',
+      declared.status === 0 &&
+        reqBlock !== null &&
+        Object.keys(reqBlock)[0] === 'file' &&
+        JSON.stringify(fileRecord) === JSON.stringify({ path: declaredPath, sha256: declaredSha, keys: ['spec', 'fps', 'requirements', 'may_fold'] }) &&
+        ok.status === 0 &&
+        ok.fig !== null &&
+        !('requirements' in ok.fig) &&
+        red.fig !== null &&
+        !('requirements' in red.fig),
+      `with --requirements: requirements block keys [${reqBlock === null ? '' : Object.keys(reqBlock).join(', ')}], file ${JSON.stringify(fileRecord === null ? null : { ...fileRecord, path: String(fileRecord.path) === declaredPath ? '<as typed>' : fileRecord.path, sha256: String(fileRecord.sha256).slice(0, 16) })} (file sha256 ${declaredSha.slice(0, 16)}); without the flag: requirements ${ok.fig !== null && 'requirements' in ok.fig ? 'WRITTEN' : 'absent'} (calm), ${red.fig !== null && 'requirements' in red.fig ? 'WRITTEN' : 'absent'} (folded)`,
+      'issue #556: a check that measured against a requirements file says which, by the path its caller wrote and the digest of the bytes read, so a reader can tell a result that needed the file from one that did not; a check given none writes what it wrote before',
+    );
+
     // CK245 — with a physics constraint the folds are read with physics on and off side by side, and the keys' fold still fails.
     const physical = join(dir, 'folded', 'rig');
     const rigText = readFileSync(join(physical, 'rig.json'), 'utf8');
@@ -20460,6 +20522,76 @@ function runBuildSuite(): number {
       unknownReq.status === 1 && unknownReq.out.includes('[check]   FAIL  REQUIREMENTS_RESOLVES: requirement "TAIL_RANGE" (range)') && unknownReq.out.includes('build: stopped at check; no later stage ran') && !existsSync(join(unknownOut, 'check', 'build')) && existsSync(join(unknownOut, 'rig', 'rig.json')),
       `exit ${unknownReq.status}; ${(unknownReq.out.split('\n').find((l) => l.includes('REQUIREMENTS_RESOLVES')) ?? 'no REQUIREMENTS_RESOLVES line').trim().slice(0, 160)}; check/build ${existsSync(join(unknownOut, 'check', 'build')) ? 'WRITTEN' : 'not written'}`,
       'names resolve against the rig the rig stage wrote, so a bone it does not hold is refused in the check, by name, before rigc builds there',
+    );
+
+    // BU178–BU180 — issue #556: the requirements file a build needed is recorded where a rebuild finds it. The fixture is
+    // BU18's skirt range, written as reqs.json beside the config. A is built with the flag typed relative to the run's
+    // directory, which is the config's; B from a copy of the config that declares the same relative path, no flag.
+    const reqBody = { requirements: [{ name: 'SKIRT_RANGE', kind: 'range', animation: 'idle', bone: 'skirt', lo_degrees: -3, hi_degrees: 3 }] };
+    const reqsPath = reqFile('reqs', reqBody);
+    const reqsSha = createHash('sha256').update(readFileSync(reqsPath)).digest('hex');
+    const declaring = (name: string, declared: string): string => {
+      writeFileSync(join(dir, name), `${JSON.stringify({ ...moving, requirements: declared }, null, 2)}\n`);
+      return name;
+    };
+    const runIn = (args: string[]): { status: number; out: string } => {
+      const r = spawnSync('bun', [join(ROOT, 'cli.ts'), ...args], { cwd: dir, encoding: 'utf8' });
+      return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+    };
+    const flagOut = join(dir, 'req-flag');
+    const byFlag = runIn([...buildArgs(dir, flagOut), '--requirements', 'reqs.json']);
+    const configOut = join(dir, 'req-config');
+    const byConfig = runIn(buildArgs(dir, configOut, declaring('config-reqs.json', 'reqs.json')));
+    const recordOf = (out: string): Record<string, unknown> | null => ((readJsonFile(join(out, 'check', 'check.json'))?.requirements as Record<string, unknown> | undefined)?.file ?? null) as Record<string, unknown> | null;
+    const rebuildDiff = treeDiff(flagOut, configOut);
+    const flagRecord = recordOf(flagOut);
+    const showRecord = (r: Record<string, unknown> | null): string => (r === null ? 'none' : `{path ${JSON.stringify(r.path)}, sha256 ${String(r.sha256).slice(0, 16)}, keys ${JSON.stringify(r.keys)}}`);
+    say(
+      'BU178_A_BUILD_WITH_REQUIREMENTS_REBUILT_FROM_A_CONFIG_THAT_DECLARES_THEM_IS_BYTE_IDENTICAL_AND_RECORDS_THE_FILE',
+      byFlag.status === 0 &&
+        byConfig.status === 0 &&
+        byConfig.out.includes('[check]   SKIRT_RANGE: PASS — ') &&
+        rebuildDiff.length === 0 &&
+        filesUnder(flagOut).length > 0 &&
+        JSON.stringify(flagRecord) === JSON.stringify({ path: 'reqs.json', sha256: reqsSha, keys: ['spec', 'fps', 'requirements'] }),
+      `--requirements reqs.json: exit ${byFlag.status}; config.requirements "reqs.json", no flag: exit ${byConfig.status}; ${rebuildDiff.length === 0 ? `${filesUnder(flagOut).length} file(s) under out/, byte-identical` : rebuildDiff.slice(0, 3).join('; ')}; check.json requirements.file ${showRecord(flagRecord)} (file sha256 ${reqsSha.slice(0, 16)})`,
+      "issue #556, bar 1: a rig built with the flag rebuilds byte for byte from its config alone once the config names the file; the record is the path as the caller wrote it, never resolved, so the two writings of one relative path are the same bytes, and its digest and keys say what the file asked without opening it",
+    );
+
+    const otherPath = reqFile('reqs-other', { ...reqBody, not_swinging: ['bottomwear'] });
+    const conflictOut = join(dir, 'req-conflict');
+    const conflict = runIn([...buildArgs(dir, conflictOut, 'config-reqs.json'), '--requirements', otherPath]);
+    const conflictLine = conflict.out.split('\n').find((l) => l.startsWith('[assemble]   FAIL  BUILD_REQUIREMENTS_CONFLICT: ')) ?? null;
+    say(
+      'BU179_A_FLAG_NAMING_OTHER_BYTES_THAN_THE_CONFIG_S_REQUIREMENTS_IS_REFUSED_BY_NAME_BEFORE_ASSEMBLE_WRITES',
+      conflict.status === 1 &&
+        conflictLine !== null &&
+        conflictLine.includes(`--requirements ${otherPath} and config.requirements "reqs.json"`) &&
+        conflictLine.includes(`(sha256 ${createHash('sha256').update(readFileSync(otherPath)).digest('hex').slice(0, 16)})`) &&
+        conflictLine.includes(`${reqsPath} (sha256 ${reqsSha.slice(0, 16)})`) &&
+        conflict.out.includes('build: stopped at assemble; no later stage ran') &&
+        entries(conflictOut).length === 0,
+      `exit ${conflict.status}; ${conflictLine?.trim().slice(0, 240) ?? 'no BUILD_REQUIREMENTS_CONFLICT line'}; --out holds [${entries(conflictOut).join(', ')}]`,
+      'issue #556, bar 2: a build reads one requirements file and records it; a flag and a declaration that disagree leave no way to tell which the author meant, so both are named and nothing is built',
+    );
+
+    const copyPath = join(dir, 'reqs-copy.json');
+    writeFileSync(copyPath, readFileSync(reqsPath));
+    const sameOut = join(dir, 'req-same');
+    const same = runIn([...buildArgs(dir, sameOut, 'config-reqs.json'), '--requirements', reqsPath]);
+    const copyOut = join(dir, 'req-copy');
+    const copy = runIn([...buildArgs(dir, copyOut, 'config-reqs.json'), '--requirements', copyPath]);
+    const sameDiff = treeDiff(configOut, sameOut);
+    const copyDiff = treeDiff(configOut, copyOut);
+    say(
+      'BU180_THE_CONFIG_S_REQUIREMENTS_FILE_NAMED_BY_THE_FLAG_TOO_OR_ITS_BYTES_COPIED_BUILDS_THE_CONFIG_S_BYTES_WITH_ONE_RECORD',
+      same.status === 0 &&
+        copy.status === 0 &&
+        sameDiff.length === 0 &&
+        copyDiff.length === 0 &&
+        JSON.stringify(recordOf(sameOut)) === JSON.stringify(recordOf(configOut)),
+      `the same file by its absolute path: exit ${same.status}, ${sameDiff.length === 0 ? 'every file byte-identical to the config-only build' : sameDiff.slice(0, 2).join('; ')}; a copy of its bytes: exit ${copy.status}, ${copyDiff.length === 0 ? 'byte-identical' : copyDiff.slice(0, 2).join('; ')}; record ${showRecord(recordOf(sameOut))}`,
+      "issue #556, bar 2's other half: one file named twice is one input — the declaration is read and recorded, so a build given both writes what the config alone writes; the record names the file once",
     );
 
     // Issue #95: build --idle-keys, on a two-bone ik over two keyed chain links. By hand, in rig px (y down):
