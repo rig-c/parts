@@ -1501,14 +1501,18 @@ export function limbCheckLines(line: LimbLine): string[] {
  * The seam over the range (issue #360) as the console prints it: the status, what was posed and the bar, then each
  * joint at each angle on a line of its own — its status and the seam figures there — or, not read, why.
  */
-export function sweepCheckLines(line: SweepLine): string[] {
+export function sweepCheckLines(line: SweepLine, steps: ReadonlyMap<string, { left: number; right: number }> = new Map()): string[] {
   const s = line.frame_scale;
   return [
     `${SWEEP_LINE}: ${line.status} — ${line.joints.length} joint(s) bent to their declared range's ends and middle${line.physics_left_out === 0 ? '' : `, ${line.physics_left_out} physics constraint(s) left out`}; at each, the pose against the same pose with the joint's own art drawn under the limb, on the rest-pose seam's bar (mean |d| <= ${line.bar.mean.toFixed(1)}, <= ${line.bar.rig_px_over_40} rig px over ${line.bar.level})${s === null ? '' : ` at frame scale ${s}`}`,
     ...line.joints.flatMap((j) => {
       const head = `joint "${j.joint}" (${j.limb}, "${j.part}" on "${j.bone}", range [${j.range.join(', ')}]${j.shape === 'disc' ? `, cap_shape "disc": no pixel over ${line.bar.level} in the disc` : ''})`;
       if (j.unread !== undefined) return [`${head}: FAIL — not read: ${j.unread}`];
-      return j.poses.map((p) => `${head} at ${p.degrees}°: ${p.status} — mean |d| ${p.mean}/255, ${p.px_over_40} frame px over ${line.bar.level} (${p.px_over_80} over ${SEAM_PX_LEVEL_HIGH}), ${p.rig_px_over_40.toFixed(2)} rig px`);
+      // Issue #557: the contour step, a reading on every row (check.json carries it only for a short cap).
+      return j.poses.map((p) => {
+        const st = p.step_px ?? steps.get(`${j.part} ${p.degrees}`);
+        return `${head} at ${p.degrees}°: ${p.status} — mean |d| ${p.mean}/255, ${p.px_over_40} frame px over ${line.bar.level} (${p.px_over_80} over ${SEAM_PX_LEVEL_HIGH}), ${p.rig_px_over_40.toFixed(2)} rig px${st === undefined ? '' : `; contour step ${st.left} px left, ${st.right} px right (a reading)`}`;
+      });
     }),
   ];
 }
@@ -1607,7 +1611,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   const limbs = fig[LIMB_LINE];
   if (limbs !== undefined) for (const [i, l] of limbCheckLines(limbs).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
   const sweep = fig[SWEEP_LINE];
-  if (sweep !== undefined) for (const [i, l] of sweepCheckLines(sweep).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
+  if (sweep !== undefined) for (const [i, l] of sweepCheckLines(sweep, r.sweepSteps).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
   for (const [i, l] of motionSeamLines(r.motionSeam).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
   for (const [i, l] of clothLines(r.cloth).entries()) log(`  ${i === 0 ? '' : '  '}${l}`);
   for (const name of REPORTED_LINES) log(`  ${judgementLine(name, fig[name])}`);

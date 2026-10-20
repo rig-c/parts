@@ -153,10 +153,20 @@ export interface CapRecord {
   image_layer?: string;
   missing_px: number;
   /**
+   * Issue #557, written only when `missing_px` is above 0: the missing pixels
+   * — the disc's on the upper side of the cut that no layer of the limb gives
+   * — by side of the limb's axis at the joint line, `left` where a pixel
+   * centre's offset across the axis (`jointOffsets` in `src/limbs.ts`) is 0 or
+   * above (the side toward smaller x when the limb hangs down the rig) and
+   * `right` the other; the two add up to `missing_px`. A full cap writes no key.
+   */
+  short_px?: { left: number; right: number };
+  /**
    * Issue #360, written only under the segment's `cap_shape: "disc"`: the
    * shape; the cap's pixels taken from the upper segment's art where the
    * lower's layer had none (`upper_px`). `radius` is then the half-width about the
-   * joint, at most half of `width`.
+   * joint, at most half of `width`. Issue #557: without the shape the half-disc
+   * takes them too, and `upper_px` is written there only when above 0.
    */
   shape?: 'disc';
   upper_px?: number;
@@ -197,6 +207,7 @@ const CAP_KEYS = [
   'image_px',
   'image_layer',
   'missing_px',
+  'short_px',
   'shape',
   'upper_px',
   'edge',
@@ -609,7 +620,9 @@ function checkParts(raw: unknown, path: string): PartsFile {
           (!('image_px' in co) || isCount(co.image_px)) &&
           (!('image_layer' in co) || ('image_px' in co && typeof co.image_layer === 'string' && co.image_layer !== '')) &&
           // Issue #360: a disc cap carries its count, a feathered edge its band and count, and neither carries them alone.
-          ('shape' in co ? co.shape === 'disc' && isCount(co.upper_px) : !('upper_px' in co)) &&
+          ('shape' in co ? co.shape === 'disc' && isCount(co.upper_px) : !('upper_px' in co) || (isCount(co.upper_px) && co.upper_px > 0)) &&
+          // Issue #557: the shortfall by side, when written, adds up to the missing pixels, and is never written for none.
+          (!('short_px' in co) || shortSides(co.short_px, co.missing_px)) &&
           ('edge' in co ? co.edge === 'feather' && typeof co.feather_radius === 'number' && Number.isFinite(co.feather_radius) && co.feather_radius >= 0 && isCount(co.feathered_px) : !('feather_radius' in co) && !('feathered_px' in co)) &&
           // Issue #360 (item 14): a placed cut carries its band, line and counts, the line inside the band; none of them rides alone.
           ('cut_band' in co
@@ -628,7 +641,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
           fail(
             'PARTS_FIELD_TYPE',
             `${object} "cap"`,
-            `is ${show(c)}; {at: [x, y], width, radius, box: [x, y, w, h], layer_px, image_px?, image_layer? (with image_px), missing_px, shape? ("disc", with upper_px), edge? ("feather", with feather_radius and feathered_px), cut_band? (with cut_offset inside the band, cut_at, cut_crossed at most joint_crossed, band_px, stroke_luma_max? 0..255)} is required`,
+            `is ${show(c)}; {at: [x, y], width, radius, box: [x, y, w, h], layer_px, image_px?, image_layer? (with image_px), missing_px, short_px? ({left, right}, adding up to missing_px, above 0), shape? ("disc", with upper_px; without it upper_px? above 0), edge? ("feather", with feather_radius and feathered_px), cut_band? (with cut_offset inside the band, cut_at, cut_crossed at most joint_crossed, band_px, stroke_luma_max? 0..255)} is required`,
           );
         }
       }
@@ -659,6 +672,12 @@ function checkParts(raw: unknown, path: string): PartsFile {
 }
 
 const isCount = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0;
+/** Issue #557: a cap's `short_px` — `{left, right}`, two counts and no other key, adding up to `missing`, above 0. */
+function shortSides(v: unknown, missing: unknown): boolean {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  return Object.keys(o).sort().join(',') === 'left,right' && isCount(o.left) && isCount(o.right) && o.left + o.right === missing && o.left + o.right > 0;
+}
 
 /**
  * The `single_run_pad` block (issue #366): every key known and present, each
