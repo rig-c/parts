@@ -2294,6 +2294,8 @@ export interface FoldingMesh {
   frames: number;
   worstFrame: number;
   worstTriangles: number;
+  /** The worst frame's folded triangles, by index into the mesh's triangle table, as rigc lists them (issue #567). */
+  worstTriangleList: number[];
   line: string;
 }
 
@@ -2347,13 +2349,19 @@ export function readFoldSets(dir: string, named: readonly string[], fps: number,
         bad(at, `worst is ${JSON.stringify(m.worst)?.slice(0, 40)}; null or { index, triangles, … } is required`);
         return;
       }
+      const list = worst.triangles;
+      const notIndex = list.findIndex((t) => typeof t !== 'number' || !Number.isInteger(t) || t < 0);
+      if (notIndex >= 0) {
+        bad(at, `worst.triangles[${notIndex}] is ${JSON.stringify(list[notIndex])}; a triangle index, a whole number from 0, is required`);
+        return;
+      }
       const prefix = `${JSON.stringify(name)}: mesh "${m.attachment}" (slot "${m.slot}") folds on `;
       const line = lines.find((l) => l.startsWith(prefix));
       if (line === undefined) {
         bad(at, `folds on ${m.frames.length} frame(s), and rigc printed no line beginning ${prefix.trim()}`);
         return;
       }
-      rows.push({ slot: m.slot, attachment: m.attachment, triangleCount: m.triangleCount, frames: m.frames.length, worstFrame: worst.index, worstTriangles: worst.triangles.length, line });
+      rows.push({ slot: m.slot, attachment: m.attachment, triangleCount: m.triangleCount, frames: m.frames.length, worstFrame: worst.index, worstTriangles: list.length, worstTriangleList: list as number[], line });
     });
     out.set(name, rows);
   }
@@ -2395,6 +2403,76 @@ export function meshPhysicsConstraints(rig: Record<string, unknown>, slot: strin
   return (direct.length > 0 ? direct : physics).map((p) => `${p.name} on ${p.bone}`);
 }
 
+/** How many groups of folded triangles {@link foldBonesText} spells out before it counts the rest (issue #567). */
+export const FOLD_GROUPS_SHOWN = 3;
+/** How many triangle indices one group lists before it counts the rest (issue #567). */
+export const FOLD_TRIANGLES_SHOWN = 6;
+
+/**
+ * Issue #567: what the folded triangles of a mesh's worst frame hang on, read off rig.json and motion.json, in the
+ * stretch line's shape ({@link edgeBonesText}, issue #314) — so the cause reads off the line rather than off a hand
+ * decoding of the weight runs. Each folded triangle's vertices are its three entries in the attachment's `triangles`
+ * (rigc names a triangle by that index); each vertex's dominant bone is its largest weight (equal weights in rig.json's
+ * order, as {@link edgeBonesText} ranks them); the triangles whose vertices share one set of dominant bones are one
+ * group, in the order of their first triangle, the set written in rig.json's bone order. Each group lists its first
+ * {@link FOLD_TRIANGLES_SHOWN} triangles and counts the rest, and spells out its first triangle's vertices with
+ * {@link edgeBonesText}; the first {@link FOLD_GROUPS_SHOWN} groups are written and the rest counted. An attachment
+ * the skin does not hold, a mesh with no triangle table, or a triangle the table does not reach is said rather than
+ * guessed.
+ */
+export function foldBonesText(rig: Record<string, unknown>, motion: Record<string, unknown>, slot: string, attachment: string, frame: number, triangles: readonly number[]): string {
+  const head = `at worst frame ${frame}`;
+  if (triangles.length === 0) return `${head} rigc lists no folded triangle`;
+  const skins = isRecord(rig.skins) ? rig.skins : {};
+  const skin = isRecord(skins.default) ? skins.default : {};
+  const onSlot = isRecord(skin[slot]) ? skin[slot] : {};
+  const att = onSlot[attachment];
+  if (!isRecord(att)) return `${head} the folded triangles' bones are not read: rig.json's default skin holds no attachment "${attachment}" on slot "${slot}"`;
+  const table = att.triangles;
+  if (!Array.isArray(table) || !table.every((x) => typeof x === 'number' && Number.isInteger(x) && x >= 0)) return `${head} the folded triangles' bones are not read: rig.json's mesh "${attachment}" holds no triangle table of vertex indices`;
+  const count = Math.floor(table.length / 3);
+  const outside = triangles.filter((t) => t >= count);
+  if (outside.length > 0) return `${head} the folded triangles' bones are not read: rig.json's mesh "${attachment}" lists ${count} triangle(s), and rigc names triangle ${outside.join(', ')}`;
+  const verticesOf = (t: number): number[] => [table[3 * t] as number, table[3 * t + 1] as number, table[3 * t + 2] as number];
+  const weights = Array.isArray(att.weights) ? att.weights : null;
+  if (weights === null || verticesOf(triangles[0]).some((v) => !Array.isArray(weights[v]))) return `${head}, triangle ${triangles[0]} (vertices ${verticesOf(triangles[0]).join(' ')}): ${edgeBonesText(rig, motion, slot, attachment, verticesOf(triangles[0]))}`;
+  const order = new Map((Array.isArray(rig.bones) ? rig.bones : []).filter(isRecord).map((b, i) => [String(b.name), i]));
+  const dominant = (v: number): string | null => {
+    const raw = weights[v];
+    if (!Array.isArray(raw)) return null;
+    const list = raw.filter(isRecord).filter((w) => typeof w.bone === 'string' && typeof w.weight === 'number') as Array<{ bone: string; weight: number }>;
+    const top = [...list].sort((a, b) => b.weight - a.weight)[0];
+    return top === undefined ? null : top.bone;
+  };
+  const groups: Array<{ key: string; bones: string[]; triangles: number[] }> = [];
+  for (const t of triangles) {
+    const vs = verticesOf(t);
+    const doms = vs.map(dominant);
+    if (doms.some((d) => d === null)) {
+      groups.push({ key: `\u0000${t}`, bones: [], triangles: [t] });
+      continue;
+    }
+    const bones = [...new Set(doms as string[])].sort((a, b) => (order.get(a) ?? Infinity) - (order.get(b) ?? Infinity) || (a < b ? -1 : a > b ? 1 : 0));
+    const key = bones.join('\u0000');
+    const g = groups.find((x) => x.key === key);
+    if (g === undefined) groups.push({ key, bones, triangles: [t] });
+    else g.triangles.push(t);
+  }
+  const quoted = (l: readonly string[]): string => l.map((n) => `"${n}"`).join(', ');
+  const shown = groups.slice(0, FOLD_GROUPS_SHOWN).map((g) => {
+    const first = g.triangles[0];
+    const vs = verticesOf(first);
+    const more = g.triangles.length - FOLD_TRIANGLES_SHOWN;
+    const which = g.triangles.length === 1 ? `triangle ${first}` : `triangles ${g.triangles.slice(0, FOLD_TRIANGLES_SHOWN).join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
+    const by = g.bones.length === 0 ? '' : ` dominated by ${quoted(g.bones)}`;
+    const spelled = g.triangles.length === 1 ? `vertices ${vs.join(' ')}` : `triangle ${first}, vertices ${vs.join(' ')}`;
+    return `${which}${by} (${spelled}: ${edgeBonesText(rig, motion, slot, attachment, vs)})`;
+  });
+  const rest = groups.slice(FOLD_GROUPS_SHOWN);
+  const restText = rest.length === 0 ? '' : `; … and ${rest.length} more group(s), ${rest.reduce((n, g) => n + g.triangles.length, 0)} triangle(s)`;
+  return `${head} the ${triangles.length} folded triangle(s) hang on, by the bone each vertex weighs most: ${shown.join('; ')}${restText}`;
+}
+
 /**
  * The fold line (issues #320, #333, #363) from the reading: posed with physics
  * stepping on the render clock (`readings`, and `readingsWithoutPhysics`
@@ -2404,7 +2482,9 @@ export function meshPhysicsConstraints(rig: Record<string, unknown>, slot: strin
  * animation, the slot, the physics constraint(s) on its bones and the worst
  * frame when the fold appears only with physics on, and rigc's line, and an
  * entry no row matches a problem of its own — a declaration that excepts
- * nothing.
+ * nothing. Since issue #567 the problem also names, for the worst frame's
+ * folded triangles, the bones their vertices weigh most ({@link foldBonesText},
+ * read off `rig` and `motion`).
  */
 export function foldsLine(
   named: readonly string[],
@@ -2417,10 +2497,13 @@ export function foldsLine(
   readingsWithoutPhysics: ReadonlyMap<string, readonly FoldingMesh[]> = readings,
   rig: Record<string, unknown> = {},
   physicsList: readonly LoopPhysics[] = [],
+  motion: Record<string, unknown> = {},
 ): FoldsLine {
   const toSide = (m: FoldingMesh | undefined): FoldSide | null =>
     m === undefined ? null : { frames: m.frames, worst_frame: m.worstFrame, worst_triangles: m.worstTriangles, line: m.line };
   const folding: FoldRow[] = [];
+  // Issue #567: each row's worst triangles, kept beside the row rather than in it, so check.json's row is unchanged.
+  const worstOf = new Map<FoldRow, readonly number[]>();
   for (const name of named) {
     const onList = readings.get(name) ?? [];
     const offList = readingsWithoutPhysics.get(name) ?? [];
@@ -2440,7 +2523,7 @@ export function foldsLine(
       const entry = mayFold.find((e) => e.slot === slot && e.animation === name);
       const onlyPhysicsOn = on !== undefined && off === undefined;
       const constraints = onlyPhysicsOn ? meshPhysicsConstraints(rig, slot, attachment, physicsList) : [];
-      folding.push({
+      const row: FoldRow = {
         animation: name,
         slot,
         attachment,
@@ -2453,7 +2536,9 @@ export function foldsLine(
         physics_constraints: constraints,
         declared: entry === undefined ? null : entry.why,
         line: primary.line,
-      });
+      };
+      folding.push(row);
+      worstOf.set(row, primary.worstTriangleList);
     }
   }
   const physics =
@@ -2473,7 +2558,7 @@ export function foldsLine(
     problems.push({
       code: `CHECK_${FOLD_LINE}`,
       object: `animation "${r.animation}", mesh "${r.attachment}" (slot "${r.slot}")`,
-      detail: `rigc render --folds at ${fps} fps${physics}${sideClause}: ${r.line}; no triangle turned over against the setup pose is required — a fold the art means is declared in the --requirements file's may_fold, { "slot": "${r.slot}", "animation": "${r.animation}", "why": … }`,
+      detail: `rigc render --folds at ${fps} fps${physics}${sideClause}: ${r.line}; ${foldBonesText(rig, motion, r.slot, r.attachment, r.worst_frame, worstOf.get(r) ?? [])}; no triangle turned over against the setup pose is required — a fold the art means is declared in the --requirements file's may_fold, { "slot": "${r.slot}", "animation": "${r.animation}", "why": … }`,
     });
   }
   const declaredNotFolding = mayFold.filter((e) => !folding.some((r) => r.slot === e.slot && r.animation === e.animation)).map((e) => ({ slot: e.slot, animation: e.animation }));
@@ -4048,7 +4133,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           const fr = measured(['render', '--candidate', buildDir, '--folds', ...geometry, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', foldDir]);
           if (fr.status !== 0) refuseIfAny(rigcFailed(`render --folds${geometry.map((g) => ` ${g}`).join('')} --fps ${fps}`, fr, fr.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
           const readings = filterFolds(readFoldSets(foldDir, animationNames, fps, fr.out));
-          folds = foldsLine(animationNames, fps, 0, readings, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readings, inp.rig, []);
+          folds = foldsLine(animationNames, fps, 0, readings, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readings, inp.rig, [], inp.motion);
           if (feet.length > 0) {
             const sets = readJson(join(foldDir, 'frames.json'), []);
             const listed = sets !== null && Array.isArray(sets.sets) ? sets.sets.filter(isRecord) : [];
@@ -4069,7 +4154,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           if (frOff.status !== 0) refuseIfAny(rigcFailed(`render --folds${geometry.map((g) => ` ${g}`).join('')} --fps ${fps} (physics constraint(s) left out)`, frOff, frOff.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
           const readingsOn = filterFolds(readFoldSets(onDir, animationNames, fps, frOn.out));
           const readingsOff = filterFolds(readFoldSets(offDir, animationNames, fps, frOff.out));
-          folds = foldsLine(animationNames, fps, stripped.physics.length, readingsOn, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readingsOff, inp.rig, stripped.physics);
+          folds = foldsLine(animationNames, fps, stripped.physics.length, readingsOn, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readingsOff, inp.rig, stripped.physics, inp.motion);
           if (feet.length > 0) {
             const sets = readJson(join(offDir, 'frames.json'), []);
             const listed = sets !== null && Array.isArray(sets.sets) ? sets.sets.filter(isRecord) : [];
