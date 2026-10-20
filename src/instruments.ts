@@ -567,7 +567,11 @@ export interface ChainLink {
 export interface ChainEdge {
   parent: string;
   child: string;
+  /** {@link lagStep} of the two phases below. */
   step: number;
+  /** The phases the step was folded from, as {@link readSine} returns them (issue #580): a negative amplitude already read as amplitude > 0 at phase + 0.5. */
+  parentPhase: number;
+  childPhase: number;
 }
 
 export interface ChainFigures {
@@ -634,8 +638,11 @@ export function chainFigures(rig: Record<string, unknown>, motion: Record<string
   for (const b of keyed) {
     const p = keyedParent.get(b) ?? null;
     if (p === null) continue;
-    if (samePeriod(p, b)) edges.push({ parent: p, child: b, step: lagStep((reading.get(p) as SineReading).phase, (reading.get(b) as SineReading).phase) });
-    else otherPeriod.push({ parent: p, child: b });
+    if (samePeriod(p, b)) {
+      const from = (reading.get(p) as SineReading).phase;
+      const to = (reading.get(b) as SineReading).phase;
+      edges.push({ parent: p, child: b, step: lagStep(from, to), parentPhase: from, childPhase: to });
+    } else otherPeriod.push({ parent: p, child: b });
   }
   const continues = (b: string): string | null => {
     const k = kids.get(b) ?? [];

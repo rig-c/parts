@@ -238,7 +238,7 @@ import { EnvironmentError, readEnvironmentSchedule } from 'rig-c/src/environment
 import { boneTrackOf, CLOTH_FLOOR_TEXT, CLOTH_LEVERS_TEXT, CLOTH_LINE, CLOTH_SETTLE_FLOOR, clothChains, type ClothLine, clothLine, clothRow, clothWarnText, frameRuns, MOTION_SEAM_FLOOR, MOTION_SEAM_LINE, type MotionSeamLine, motionSeamPairs, motionSeamWarnText, openingOverFloor, readMotionSeams } from './src/check.ts';
 import { BREATH_ANIMATION, type BreathPair, breathPairProblem, breathTracks, chainDirection, sweepAngles, sweepJoints, type SweepJoint, sweepLine, type SweepLine, SWEEP_LINE, type SweepPose, type Viewport } from './src/check.ts';
 import { barsNotMet, flatComposite, frameToRigMap, maxRgbDiff, rigToFrameMap, SEAM_BOX, SEAM_PX_BAR, SEAM_PX_LEVEL, seamRigPx, seamRigPxText, SEAM_MEAN_BAR, SEAM_DIR, SEAM_MARK, SEAM_NO_ART, seamFigures, type SeamFigures, seamPairRows, seamPairText, STILL_DIR, withoutPhysics, BREATH_TORSO_MEAN_FLOOR } from './src/check.ts';
-import { ACCEPTABLE_BARS, BARS, besideIdleLine, blackRig, drawingTurn, FOLD_LINE, type FoldsLine, LEVEL_BAR_DEGREES, LEVEL_LINE, LIMB_LINE, limbLine, foldsLine, STRESS_LINE, STRESS_RIGID, STRESS_TURNS, stressPlan, readFoldSets, edgeBonesText, buildGateLines, holesLine, causeLines, chainLine, measuredRules, SOURCE_LINE, sourceFigures, sourceSizeProblem, packedBuildArgs, GATE_PROFILE, DEFAULT_PACK_MODE, DEFAULT_PAGE_EDGES, findRigc, packageRigc, rigcIdentity, rigcRunnerAt, type RigcSpawn, type PackMode, type PageEdges, type FrameSet, GEOMETRY_FILE, gateGreen, headBoneOf, IDLE_MAX_PX, type JudgementLine, JUDGEMENT_LINES, packEdgeProblems, PARTS_HOME_SENTENCE, parsePackLines, readBoneTrack, readCheckInputs, readFrameSet, readGeometry, readRigcEntry, REPORTED_LINES, requireRigcVersion, RIGC_ENTRY_VERSION, RIGC_GEOMETRY_VERSION, rigcFailed, type RigcRunner, runCheck, SPINEBOY_YARDSTICK, stretchLine, TEXTURE_STRETCH_CEILING, TIP_RATIO_FLOOR, TIP_REST_RATIO_CEILING, attachmentPoses, stillLine, STILL_INSTRUMENT, foldBonesText, FOLD_GROUPS_SHOWN, FOLD_TRIANGLES_SHOWN } from './src/check.ts';
+import { ACCEPTABLE_BARS, BARS, besideIdleLine, blackRig, drawingTurn, FOLD_LINE, LEVEL_BAR_DEGREES, LEVEL_LINE, LIMB_LINE, limbLine, foldsLine, STRESS_LINE, STRESS_RIGID, STRESS_TURNS, stressPlan, readFoldSets, edgeBonesText, buildGateLines, holesLine, causeLines, chainLine, chainLagWindows, measuredRules, SOURCE_LINE, sourceFigures, sourceSizeProblem, packedBuildArgs, GATE_PROFILE, DEFAULT_PACK_MODE, DEFAULT_PAGE_EDGES, findRigc, packageRigc, rigcIdentity, rigcRunnerAt, type RigcSpawn, type PackMode, type PageEdges, type FrameSet, GEOMETRY_FILE, gateGreen, headBoneOf, IDLE_MAX_PX, type JudgementLine, JUDGEMENT_LINES, packEdgeProblems, PARTS_HOME_SENTENCE, parsePackLines, readBoneTrack, readCheckInputs, readFrameSet, readGeometry, readRigcEntry, REPORTED_LINES, requireRigcVersion, RIGC_ENTRY_VERSION, RIGC_GEOMETRY_VERSION, rigcFailed, type RigcRunner, runCheck, SPINEBOY_YARDSTICK, stretchLine, TEXTURE_STRETCH_CEILING, TIP_RATIO_FLOOR, TIP_REST_RATIO_CEILING, attachmentPoses, stillLine, STILL_INSTRUMENT, foldBonesText, FOLD_GROUPS_SHOWN, FOLD_TRIANGLES_SHOWN, type FoldsLine } from './src/check.ts';
 import { baseTagOf, blinkFigures, breathHeat, heatField, type BoneTrack, type BoneWorld, chainToward, edgeLength, frameBox, type GeometryPose, halfTravels, type MeshRest, stretchFigures, stretchSeverity, lagStep, readSine, setupToFrame, stillReading, stillTolerance, STILL_ROUNDINGS, SWING_TAGS, ulpOf } from './src/instruments.ts';
 import {
   aimLine,
@@ -18106,6 +18106,100 @@ function runCheckSuite(): number {
       String(restLoose.line.first_violation) === String(shrink.line.first_violation),
     `declared, shrinking: ${String(restShrink.line.status)}, resting ${JSON.stringify(restShrink.line.resting_chains)} (undeclared ${String(shrink.line.status)}); declared, growing: ${String(restGrow.line.first_violation)} — ${growDetail?.object ?? 'no problem'}: ${growDetail?.detail.slice(0, 120) ?? ''}; declared, leading: ${String(restBack.line.first_violation)}; declared on a part no chain carries: ${String(restLoose.line.first_violation)}`,
     "issue #245, from the consumer's lying figure: CHAIN_LAG asked a leg chain for amplitudes growing toward the foot, the end that rests. A chain carrying a part declared rests (its bound bone walked up to the chain, as rises finds its chain) is read the opposite way — non-increasing, the planted growing chain refused at its first link that grows — while the lag is kept, since the declaration says how far the tip moves and not when; a declared part no chain carries relaxes nothing",
+  );
+
+  // Issue #580: the step refusal says the raw phases it read, the fold, and the passing range. The step is read modulo
+  // half a cycle, so a child at 0.27 under a parent at 0 (0.27 past a quarter) reads -0.230, and negating the child's
+  // amplitude (read as amplitude 1 at 0.77) reads the same step. Every expected figure below is computed by hand from
+  // the definition: 0.27 - 0 = 0.270; 0.77 - 0 = 0.770; both fold (mod 0.5 = 0.27, past 1/4) to 0.27 - 0.5 = -0.230; the
+  // passing child phases are 0 + 0.001 .. 0 + 0.25 and the same half a cycle on: [0.001, 0.250], [0.501, 0.750].
+  const stepRig = { bones: [{ name: 'root' }, { name: 'chest', parent: 'root' }, { name: 'sleeve_l0', parent: 'chest' }] };
+  const stepMotion = (parentPhase: number, childPhase: number, childAmp: number): Record<string, unknown> => ({
+    groups: {},
+    animations: { idle: { duration: 4, tracks: [sineTrack('chest', 'rotate', 1, 4, parentPhase, 0, 4), sineTrack('sleeve_l0', 'rotate', childAmp, 4, childPhase, 0, 4)] } },
+  });
+  const stepJudge = (parentPhase: number, childPhase: number, childAmp: number): { status: string; problems: Problem[] } => {
+    const ps: Problem[] = [];
+    const line = chainLine({ rig: stepRig, motion: stepMotion(parentPhase, childPhase, childAmp) }, ps) as Record<string, unknown>;
+    return { status: String(line.status), problems: ps };
+  };
+  const expectedStep = (child: string, diff: string): string =>
+    'phase step -0.230 cycle(s); >= 0.001 is required — a link must lag the one above it. ' +
+    `Phases read: "chest" 0.000, "sleeve_l0" ${child} (a negative amplitude is read as amplitude > 0 at phase + 0.5); ` +
+    `the step is their difference, ${diff}, folded into (-1/4, 1/4] cycle, since a sine's sign is half a cycle — so flipping an amplitude's sign does not change it. ` +
+    'To pass, the child\'s phase is the parent\'s + 0.001 to + 0.25, modulo 0.5: here a "sleeve_l0" phase in [0.001, 0.250] or [0.501, 0.750] (its "phase", or the "lag" on the chain track)';
+  // The bar reads the line for each of its four statements, so a detail missing any one fails it.
+  const saysStep = (detail: string, child: string, diff: string): boolean =>
+    detail.startsWith('phase step -0.230 cycle(s); >= 0.001 is required') &&
+    detail.includes(`Phases read: "chest" 0.000, "sleeve_l0" ${child}`) &&
+    detail.includes('a negative amplitude is read as amplitude > 0 at phase + 0.5') &&
+    detail.includes(`difference, ${diff}, folded into (-1/4, 1/4]`) &&
+    detail.includes("flipping an amplitude's sign does not change it") &&
+    detail.includes('[0.001, 0.250] or [0.501, 0.750]');
+  const plus = stepJudge(0, 0.27, 1);
+  const minus = stepJudge(0, 0.27, -1);
+  const plusLine = plus.problems.length === 1 ? printedFailLine(plus.problems[0]) : `${plus.problems.length} problems`;
+  const minusLine = minus.problems.length === 1 ? printedFailLine(minus.problems[0]) : `${minus.problems.length} problems`;
+  // Planted: the detail this line carried before issue #580, for the same edge.
+  const before580 = 'phase step -0.230 cycle(s); >= 0.001 is required — a link must lag the one above it (a larger "phase", or a positive "lag" on the chain track)';
+  say(
+    'CK530_A_CHAIN_STEP_REFUSAL_SAYS_THE_RAW_PHASES_THE_HALF_CYCLE_FOLD_AND_THE_PASSING_RANGE_AND_A_SIGN_FLIP_KEEPS_THE_STEP',
+    plus.status === 'FAIL' &&
+      minus.status === 'FAIL' &&
+      plus.problems.length === 1 &&
+      minus.problems.length === 1 &&
+      plus.problems[0].code === 'CHECK_CHAIN_LAG' &&
+      plus.problems[0].object === 'bone "sleeve_l0" under "chest"' &&
+      minus.problems[0].object === 'bone "sleeve_l0" under "chest"' &&
+      plus.problems[0].detail === expectedStep('0.270', '0.270') &&
+      minus.problems[0].detail === expectedStep('0.770', '0.770') &&
+      saysStep(plus.problems[0].detail, '0.270', '0.270') &&
+      saysStep(minus.problems[0].detail, '0.770', '0.770') &&
+      plusLine.endsWith('(see rig-parts guide CHECK_CHAIN_LAG)') &&
+      !saysStep(before580, '0.270', '0.270'),
+    `amp +1: ${plusLine} || amp -1: ${minusLine} || planted, the pre-#580 detail: ${saysStep(before580, '0.270', '0.270') ? 'ACCEPTED' : 'refused by the same reading'}`,
+    "issue #580: a negated amplitude was read as a refusal of its sign, and \"a larger phase\" does not help until the phase has gone half a cycle; the line now names the phases read (a negative amplitude already at + 0.5), the fold into (-1/4, 1/4] that makes the sign irrelevant, and the child phases that pass for this parent — the same step, -0.230, both times",
+  );
+
+  // Issue #580: the range the line prints is the range the bar passes. A parent at 0 and at 0.9 (whose windows cross
+  // the cycle's end), each child at the windows' edges and one step of 0.001 outside them, with the amplitude positive
+  // and negated: the verdict is PASS exactly where the printed windows hold the child phase as read. Expected windows by
+  // hand: parent 0 -> [0.001, 0.250], [0.501, 0.750]; parent 0.9 -> [0.000, 0.150], [0.401, 0.650], [0.901, 1).
+  const inWindows = (ws: ReadonlyArray<readonly [number, number]>, x: number): boolean => ws.some(([lo, hi]) => x >= lo - 1e-9 && (hi === 1 ? x < 1 : x <= hi + 1e-9));
+  const probes: Array<[number, number[]]> = [
+    [0, [0, 0.001, 0.25, 0.251, 0.5, 0.501, 0.75, 0.751]],
+    [0.9, [0.9, 0.901, 0.999, 0, 0.15, 0.151, 0.4, 0.401, 0.65, 0.651]],
+  ];
+  const windowRows: string[] = [];
+  let windowsAgree = true;
+  let plantedAgrees = true;
+  for (const [parentPhase, children] of probes) {
+    const ws = chainLagWindows(parentPhase);
+    // Planted: the one window the pre-#580 advice ("a larger phase") implies, without the half cycle.
+    const one: Array<[number, number]> = [[parentPhase + 0.001, parentPhase + 0.25]];
+    for (const child of children) {
+      for (const amp of [1, -1]) {
+        const read = (((child + (amp < 0 ? 0.5 : 0)) % 1) + 1) % 1;
+        const v = stepJudge(parentPhase, child, amp);
+        const passes = v.status === 'PASS';
+        if (passes !== inWindows(ws, Math.round(read * 1000) / 1000)) windowsAgree = false;
+        if (passes !== inWindows(one, read)) plantedAgrees = false;
+        windowRows.push(`${parentPhase}/${child}${amp < 0 ? '-' : '+'} ${v.status}`);
+      }
+    }
+  }
+  const wrapDetail = stepJudge(0.9, 0.2, 1).problems[0]?.detail ?? '';
+  say(
+    'CK531_THE_PASSING_RANGE_A_CHAIN_STEP_REFUSAL_PRINTS_IS_THE_RANGE_THE_BAR_PASSES_ACROSS_THE_CYCLE_END_AND_A_SIGN_FLIP',
+    windowsAgree &&
+      !plantedAgrees &&
+      JSON.stringify(chainLagWindows(0)) === '[[0.001,0.25],[0.501,0.75]]' &&
+      JSON.stringify(chainLagWindows(0.9)) === '[[0,0.15],[0.401,0.65],[0.901,1]]' &&
+      wrapDetail.includes('phase step -0.200 cycle(s)') &&
+      wrapDetail.includes('difference, 0.300, folded') &&
+      wrapDetail.includes('a "sleeve_l0" phase in [0.000, 0.150] or [0.401, 0.650] or [0.901, 1)'),
+    `${windowRows.join(', ')}; printed windows ${windowsAgree ? 'agree with every verdict' : 'DISAGREE with a verdict'}; planted single window ${plantedAgrees ? 'AGREES (no control)' : 'disagrees, as it must'}; parent 0.9, child 0.2: ${wrapDetail.slice(wrapDetail.indexOf('Phases read'))}`,
+    'issue #580: the passing range is in the author\'s terms — child phases, modulo 0.5 — and it is held to the bar by probing its edges, not restated: two windows half a cycle apart, a window crossing the cycle\'s end split at 1, and a negated amplitude (read at + 0.5) passing exactly where the positive one does',
   );
   runAnimationFoldCases(say);
   runFeetLevelCases(say);
