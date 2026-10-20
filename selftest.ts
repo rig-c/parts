@@ -5087,6 +5087,247 @@ function runWriteConfigCases(say: (name: string, ok: boolean, detail: string, wh
     'issue #537 bars 2 and 3: the flag draws its meaning from the recipe, a config is written to a new file, a recipe that drafts nothing and the existing cloth refusals stop the run before anything is written, and a text whose splice would not parse to the intended config is refused by the key that moved',
   );
   runEntrySpliceCases(say, dir);
+  runWriteConfigFromCases(say, dir, painting);
+  runWindWriteConfigFromCases(say);
+}
+
+/** The FAIL lines of a run, trimmed. */
+function failLines(out: string): string[] {
+  return out.split('\n').filter((l) => l.includes('FAIL  ')).map((l) => l.trim());
+}
+
+/** `text` with the value at `path` replaced by `value`'s JSON, every other byte as it was. */
+function withValueAt(text: string, path: (string | number)[], value: unknown): string {
+  const sp = jsonValueSpan(text, path);
+  return `${text.slice(0, sp.start)}${JSON.stringify(value)}${text.slice(sp.end)}`;
+}
+
+/**
+ * Issue #571, CL209–CL211, on the cloth fixture: `--write-config --from <previous config>`. Generation 1 is the
+ * partial config (`key` and `cloth`, recipe A = the fixture's) written by `--write-config`; generation 2 is that
+ * config with recipe B (`cloth.bottomwear.links` 3 -> 4). CL209 (the bar): gen 2 with `--from <gen 1>` exits 0 and
+ * the written config differs from its input exactly at the entries the drafts of A and B differ at (by entry name,
+ * the sections gen 1 holds); two runs write the same bytes; without `--from` the same run is refused,
+ * `PROPOSE_WRITE_CONFIG_CONFLICT`, and writes nothing. CL210: gen 2 with one recipe bone's `tip` edited by hand, with
+ * `--from`, is refused naming that bone and the three drafts, exit 1, nothing written. CL211: `--from` whose recipe
+ * equals `--cloth`'s writes the same bytes as no `--from`, on gen 1 and on the partial config. CL212: `--from` without
+ * `--write-config`, twice, and without a value are usage errors, exit 2, nothing written.
+ */
+function runWriteConfigFromCases(say: (name: string, ok: boolean, detail: string, why: string) => void, dir: string, painting: string): void {
+  const parts = join(dir, 'parts');
+  const P = readPartSet(parts);
+  const recipeB: ClothRecipes = { ...clothRecipe(), bottomwear: { ...(clothRecipe().bottomwear ?? { wind: [0, 0], gravity: [0, 0] }), links: 4 } };
+  const draftA = JSON.parse(JSON.stringify(propose(P, undefined, null, DEFAULT_GRID_RULE, clothRecipe()))) as Record<string, unknown>;
+  const draftB = JSON.parse(JSON.stringify(propose(P, undefined, null, DEFAULT_GRID_RULE, recipeB))) as Record<string, unknown>;
+  const base = ['propose', '--parts', parts, '--source', painting];
+  const write = (cfg: string, name: string, extra: string[] = []): { r: { status: number; out: string }; text: string | null } => {
+    const at = join(dir, `wf-${name}.json`);
+    const r = runCli([...base, '--cloth', cfg, '--out', join(dir, `wf-${name}`), '--write-config', at, ...extra]);
+    return { r, text: existsSync(at) ? readFileSync(at, 'utf8') : null };
+  };
+  const partial = join(dir, 'wf-partial.json');
+  writeFileSync(partial, `${JSON.stringify({ key: 'fixture', cloth: clothRecipe() }, null, 2)}\n`);
+  const gen1 = write(partial, 'gen1');
+  const gen1At = join(dir, 'wf-gen1.json');
+  const g2Text = gen1.text === null ? null : withValueAt(gen1.text, ['cloth', 'bottomwear', 'links'], 4);
+  const g2At = join(dir, 'wf-g2-input.json');
+  writeFileSync(g2At, g2Text ?? '{}');
+  const from = write(g2At, 'from', ['--from', gen1At]);
+  const again = write(g2At, 'again', ['--from', gen1At]);
+  const without = write(g2At, 'without');
+  const g2Obj = JSON.parse(g2Text ?? '{}') as Record<string, unknown>;
+  const diff = from.text === null ? ['not written'] : wcDiffPaths(g2Obj, JSON.parse(from.text) as unknown);
+  const want = wcDiffPaths(draftA, draftB).filter((q) => q.split('/')[1] in g2Obj && q.split('/')[1] !== 'cloth');
+  const same = diff.length === want.length && diff.every((q) => want.includes(q));
+  const vouched = /--from \S+: (\d+) entr(?:y|ies) taken as the previous recipe's draft/.exec(from.r.out)?.[1] ?? 'no count';
+  const wl = failLines(without.r.out);
+  say(
+    'CL209_WRITE_CONFIG_FROM_TAKES_THE_PREVIOUS_RECIPES_DRAFT_AS_THE_RECIPES_AND_WRITES_ONLY_WHAT_THE_CHANGE_MOVES',
+    gen1.r.status === 0 &&
+      g2Text !== null &&
+      from.r.status === 0 &&
+      again.r.status === 0 &&
+      from.text !== null &&
+      from.text === again.text &&
+      !from.text.includes(dir) &&
+      want.length > 0 &&
+      same &&
+      vouched !== 'no count' &&
+      Number(vouched) > 0 &&
+      without.r.status === 1 &&
+      wl.length > 0 &&
+      wl.every((l) => l.startsWith('FAIL  PROPOSE_WRITE_CONFIG_CONFLICT: ')) &&
+      without.text === null &&
+      !existsSync(join(dir, 'wf-without', 'proposal.json')),
+    `gen 1 exit ${gen1.r.status}; gen 2 (bottomwear.links 3 -> 4) with --from gen 1: exit ${from.r.status}/${again.r.status} (two runs ${from.text !== null && from.text === again.text ? 'byte-identical' : 'DIFFER'}), ${vouched} entr(ies) taken as the previous recipe's draft; structural diff ${diff.length} path(s), ${same ? 'equal to' : 'NOT'} the ${want.length} the drafts of A and B differ at: ${diff.join(' ')}; without --from: exit ${without.r.status}, ${wl.length} FAIL line(s), first ${(wl[0] ?? 'none').slice(0, 160)}; config ${without.text === null ? 'not written' : 'WRITTEN'}`,
+    'issue #571: a config holding the previous recipe\'s draft untouched is not hand-edited; named as the config the recipe is changed from, its draft is the recipe\'s, and the write moves exactly the entries the change moves',
+  );
+
+  // CL210: a hand edit to a recipe bone, in the --from run, is still refused by name.
+  const bones = (g2Obj.bones ?? []) as Array<Record<string, unknown>>;
+  const bi = bones.findIndex((b) => b.chain === 'skirt0_');
+  const tip = bi < 0 ? null : (bones[bi].tip as number[]);
+  const handText = g2Text === null || tip === null ? null : withValueAt(g2Text, ['bones', bi, 'tip'], [tip[0] + 3, tip[1]]);
+  const handAt = join(dir, 'wf-hand-input.json');
+  writeFileSync(handAt, handText ?? '{}');
+  const hand = write(handAt, 'hand', ['--from', gen1At]);
+  const hl = failLines(hand.r.out);
+  say(
+    'CL210_WITH_FROM_A_HAND_EDIT_EQUAL_TO_NONE_OF_THE_THREE_DRAFTS_IS_STILL_REFUSED_BY_NAME',
+    handText !== null &&
+      hand.r.status === 1 &&
+      hl.length === 1 &&
+      hl[0].startsWith(`FAIL  PROPOSE_WRITE_CONFIG_CONFLICT: config.bones[${bi}] "skirt0_" — `) &&
+      hl[0].includes("it equals neither the draft, the draft without the recipe, nor the previous recipe's draft") &&
+      tip !== null &&
+      hl[0].includes(`tip [${tip[0] + 3},${tip[1]}]`) &&
+      hl[0].includes(`the previous recipe's draft writes tip [${tip[0]},${tip[1]}]`) &&
+      hand.text === null &&
+      !existsSync(join(dir, 'wf-hand', 'proposal.json')),
+    `skirt0_ tip ${tip === null ? 'none' : `[${tip.join(',')}] -> [${tip[0] + 3},${tip[1]}]`} by hand, --from gen 1: exit ${hand.r.status}, ${hl.join(' | ') || 'no FAIL line'}; config ${hand.text === null ? 'not written' : 'WRITTEN'}`,
+    'issue #571 bar: --from vouches only for the previous recipe\'s draft; an entry equal to none of the three drafts is a hand edit, refused by the entry and the field read against the draft it was edited from',
+  );
+
+  // CL211: a --from whose recipe equals --cloth's changes no byte.
+  const g1from = write(gen1At, 'g1-from', ['--from', gen1At]);
+  const g1plain = write(gen1At, 'g1-plain');
+  const pfrom = write(partial, 'p-from', ['--from', partial]);
+  const pplain = write(partial, 'p-plain');
+  say(
+    'CL211_A_FROM_WHOSE_RECIPE_IS_THE_CURRENT_ONE_WRITES_THE_BYTES_WRITTEN_WITHOUT_IT',
+    g1from.r.status === 0 && g1plain.r.status === 0 && g1from.text !== null && g1from.text === g1plain.text && pfrom.r.status === 0 && pplain.r.status === 0 && pfrom.text !== null && pfrom.text === pplain.text && pfrom.text === gen1.text,
+    `gen 1 re-drafted with --from itself: exit ${g1from.r.status}, without: exit ${g1plain.r.status}, ${g1from.text !== null && g1from.text === g1plain.text ? 'byte-identical' : 'DIFFER'} (${g1from.text?.length ?? 0} B); the partial config with --from itself: exit ${pfrom.r.status}, without: exit ${pplain.r.status}, ${pfrom.text !== null && pfrom.text === pplain.text ? 'byte-identical' : 'DIFFER'}, ${pfrom.text !== null && pfrom.text === gen1.text ? 'equal to gen 1' : 'NOT gen 1'}`,
+    'issue #571: when the previous recipe is the current one its draft is the draft, so --from vouches for nothing the draft does not, and the write is the one without it',
+  );
+
+  // CL212: the flag's usage errors.
+  const usageRun = (extra: string[], name: string): { status: number; out: string; written: boolean } => {
+    const r = runCli([...base, '--cloth', partial, '--out', join(dir, `wf-u-${name}`), ...extra]);
+    return { ...r, written: existsSync(join(dir, `wf-u-${name}`)) || existsSync(join(dir, `wf-u-${name}.json`)) };
+  };
+  const noWrite = usageRun(['--from', gen1At], 'nowrite');
+  const twice = usageRun(['--write-config', join(dir, 'wf-u-twice.json'), '--from', gen1At, '--from', gen1At], 'twice');
+  const noValue = usageRun(['--write-config', join(dir, 'wf-u-novalue.json'), '--from'], 'novalue');
+  const missing = usageRun(['--write-config', join(dir, 'wf-u-missing.json'), '--from', join(dir, 'wf-none.json')], 'missing');
+  const first = (r: { out: string }): string => r.out.trim().split('\n')[0].slice(0, 110);
+  say(
+    'CL212_FROM_WITHOUT_WRITE_CONFIG_TWICE_OR_WITHOUT_A_VALUE_IS_A_USAGE_ERROR_AND_WRITES_NOTHING',
+    noWrite.status === 2 && noWrite.out.includes('--from names the config the recipe is changed from, for --write-config') && !noWrite.written &&
+      twice.status === 2 && twice.out.includes('--from is given twice') && !twice.written &&
+      noValue.status === 2 && noValue.out.includes('--from needs a value') && !noValue.written &&
+      missing.status === 1 && failLines(missing.out).some((l) => l.includes(join(dir, 'wf-none.json'))) && !missing.written,
+    `without --write-config: exit ${noWrite.status}, ${first(noWrite)}; twice: exit ${twice.status}, ${first(twice)}; no value: exit ${noValue.status}, ${first(noValue)}; a --from that does not exist: exit ${missing.status}, ${(failLines(missing.out)[0] ?? 'no FAIL line').replace(dir, '<dir>').slice(0, 110)}; ${[noWrite, twice, noValue, missing].some((r) => r.written) ? 'SOMETHING WRITTEN' : 'nothing written'}`,
+    'issue #571: --from means the config a --write-config recipe is changed from, so alone it is a usage error, as a flag given twice or without a value is; a previous config the reader refuses stops the run by the reader\'s own code',
+  );
+}
+
+/**
+ * Issue #571 bar on the public wind example (`examples/wind`, inputs from `bun run fetch-examples`), CL213–CL215:
+ * its config's rig sections are its proposal's, value for value. CL213: the config with `cloth.bottomwear.links`
+ * 3 -> 4, through `propose --keypoints … --write-config --from <the tracked config>`, exits 0; the written config
+ * differs from the changed one only at the bottomwear chain's bones, constraints and tracks (every path's entry a
+ * `skirt` name), and its rig sections are the run's proposal.json's, value for value; without `--from` the same run is
+ * refused, `PROPOSE_WRITE_CONFIG_CONFLICT` at every re-drafted entry, nothing written. CL214: one skirt bone's `tip`
+ * edited by hand in the same `--from` run is refused naming that bone, exit 1, nothing written. CL215: `build` on a
+ * `--from` write is green — on `links` 3 -> 2, which also removes the entries of the link the change takes away:
+ * the 3 -> 4 recipe's own draft does not build green on wind (`CHECK_TIP_OVER_ROOT` on the skirt, measured when this
+ * landed, issue #571's report), which is the recipe's verdict and not the writer's, as CL213's equality to the
+ * proposal shows.
+ */
+function runWindWriteConfigFromCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const wind = join(ROOT, 'examples', 'wind');
+  const inputs = join(wind, 'inputs');
+  if (![join(inputs, 'painting.png'), join(inputs, 'layers', 'full'), join(inputs, 'layers', 'head')].every((f) => existsSync(f))) {
+    console.log('  SKIP  CL213: no fetched examples/wind/inputs (painting.png + layers/{full,head}), so --write-config --from was not measured on the public example');
+    console.log('          ⚠️ This is a HOLE in this run, not a pass — run `bun run fetch-examples` to measure issue #571 on the wind example.');
+    return;
+  }
+  const dir = temp('wind-from');
+  try {
+    const asm = runCli(['assemble', '--source', join(inputs, 'painting.png'), '--full', join(inputs, 'layers', 'full'), '--head', join(inputs, 'layers', 'head'), '--config', join(wind, 'config.json'), '--out', join(dir, 'asm')]);
+    const pdir = join(dir, 'asm', 'rig');
+    // The config and what it names by a relative path, beside each other, so the written config builds where it is.
+    copyFileSync(join(wind, 'pose.json'), join(dir, 'pose.json'));
+    const tracked = readFileSync(join(wind, 'config.json'), 'utf8');
+    const changedText = withValueAt(tracked, ['cloth', 'bottomwear', 'links'], 4);
+    const changed = join(dir, 'config.json');
+    writeFileSync(changed, changedText);
+    const base = ['propose', '--parts', pdir, '--source', join(inputs, 'painting.png'), '--keypoints', join(wind, 'keypoints.json')];
+    const write = (cfg: string, name: string, extra: string[]): { r: { status: number; out: string }; at: string; text: string | null } => {
+      const at = join(dir, `${name}.json`);
+      const r = runCli([...base, '--cloth', cfg, '--out', join(dir, name), '--write-config', at, ...extra]);
+      return { r, at, text: existsSync(at) ? readFileSync(at, 'utf8') : null };
+    };
+    const from = write(changed, 'from', ['--from', join(wind, 'config.json')]);
+    const without = write(changed, 'without', []);
+    const diff = from.text === null ? ['not written'] : wcDiffPaths(JSON.parse(changedText) as unknown, JSON.parse(from.text) as unknown);
+    const sections = new Set(diff.map((q) => q.replace(/\/\{[^}]*\}$/, '')));
+    const names = diff.map((q) => /\{([^}]*)\}$/.exec(q)?.[1] ?? '');
+    const confined = diff.length > 0 && [...sections].every((q) => ['/bones', '/constraints', '/motion/tracks'].includes(q)) && names.every((n) => n.startsWith('skirt'));
+    const vouched = /--from \S+: (\d+) entr(?:y|ies) taken as the previous recipe's draft/.exec(from.r.out)?.[1] ?? 'no count';
+    const wl = failLines(without.r.out);
+    const propAt = join(dir, 'from', 'proposal.json');
+    const prop = existsSync(propAt) ? (JSON.parse(readFileSync(propAt, 'utf8')) as Record<string, unknown>) : {};
+    const outObj = from.text === null ? {} : (JSON.parse(from.text) as Record<string, unknown>);
+    const rigKeys = ['bones', 'constraints', 'meshes', 'regions', 'limbs'];
+    const asProposed = from.text !== null && rigKeys.every((k) => canonJson(outObj[k]) === canonJson(prop[k])) && canonJson((outObj.motion as { tracks?: unknown } | undefined)?.tracks) === canonJson((prop.motion as { tracks?: unknown } | undefined)?.tracks);
+    say(
+      'CL213_ON_WIND_A_CHANGED_SKIRT_RECIPE_WITH_FROM_WRITES_ONLY_THE_SKIRTS_ENTRIES_AS_PROPOSED',
+      asm.status === 0 &&
+        from.r.status === 0 &&
+        from.text !== null &&
+        !from.text.includes(dir) &&
+        confined &&
+        asProposed &&
+        vouched !== 'no count' &&
+        without.r.status === 1 &&
+        wl.length > 0 &&
+        wl.every((l) => l.startsWith('FAIL  PROPOSE_WRITE_CONFIG_CONFLICT: ')) &&
+        without.text === null,
+      `assemble exit ${asm.status}; links 3 -> 4 with --from the tracked config: exit ${from.r.status}, ${vouched} entr(ies) taken as the previous recipe's draft; structural diff ${diff.length} path(s) in ${[...sections].join(', ')}, ${confined ? 'every one a skirt entry' : 'NOT CONFINED'}: ${diff.join(' ')}; ${rigKeys.join(', ')} and motion.tracks ${asProposed ? 'equal' : 'NOT equal to'} proposal.json's; without --from: exit ${without.r.status}, ${wl.length} FAIL line(s), first ${(wl[0] ?? 'none').slice(0, 200)}`,
+      'issue #571 bar on the public example: a config whose rig sections are its proposal\'s, its skirt recipe changed, re-drafts through --from into a config that moves only the skirt\'s entries, to the proposal\'s values, where without --from every re-drafted entry reads as a hand edit',
+    );
+
+    const obj = JSON.parse(changedText) as { bones: Array<Record<string, unknown>> };
+    const bi = obj.bones.findIndex((b) => b.chain === 'skirt1_');
+    const tip = bi < 0 ? null : (obj.bones[bi].tip as number[]);
+    const handText = tip === null ? null : withValueAt(changedText, ['bones', bi, 'tip'], [tip[0] - 4, tip[1]]);
+    const handAt = join(dir, 'hand-config.json');
+    writeFileSync(handAt, handText ?? '{}');
+    const hand = write(handAt, 'hand', ['--from', join(wind, 'config.json')]);
+    const hl = failLines(hand.r.out);
+    say(
+      'CL214_ON_WIND_A_HAND_EDITED_SKIRT_BONE_IS_REFUSED_BY_NAME_IN_THE_FROM_RUN',
+      handText !== null &&
+        hand.r.status === 1 &&
+        hl.length === 1 &&
+        hl[0].startsWith(`FAIL  PROPOSE_WRITE_CONFIG_CONFLICT: config.bones[${bi}] "skirt1_" — `) &&
+        hl[0].includes("it equals neither the draft, the draft without the recipe, nor the previous recipe's draft") &&
+        hand.text === null &&
+        !existsSync(join(dir, 'hand', 'proposal.json')),
+      `skirt1_ tip ${tip === null ? 'none' : `[${tip.join(',')}] -> [${tip[0] - 4},${tip[1]}]`} by hand, --from the tracked config: exit ${hand.r.status}, ${hl.join(' | ') || 'no FAIL line'}; config ${hand.text === null ? 'not written' : 'WRITTEN'}`,
+      'issue #571 bar: in the same --from run, a hand edit to one skirt bone is still refused by name',
+    );
+
+    // CL215: a --from write builds green — links 3 -> 2, whose write removes the previous recipe's third link.
+    const shorterText = withValueAt(tracked, ['cloth', 'bottomwear', 'links'], 2);
+    const shorter = join(dir, 'shorter-config.json');
+    writeFileSync(shorter, shorterText);
+    const sh = write(shorter, 'shorter', ['--from', join(wind, 'config.json')]);
+    const removed = /spliced in from the draft/.test(sh.r.out) ? ((/text with (.+) spliced in from the draft/.exec(sh.r.out)?.[1] ?? '').split(', ').filter((l) => l.endsWith(' removed'))) : [];
+    const shDiff = sh.text === null ? ['not written'] : wcDiffPaths(JSON.parse(shorterText) as unknown, JSON.parse(sh.text) as unknown);
+    const shConfined = shDiff.length > 0 && shDiff.every((q) => /^\/(bones|constraints|motion\/tracks)\/\{skirt[^}]*\}$/.test(q));
+    const built = sh.text === null ? { status: -1, out: '' } : runCli(['build', '--config', sh.at, '--source', join(inputs, 'painting.png'), '--full', join(inputs, 'layers', 'full'), '--head', join(inputs, 'layers', 'head'), '--out', join(dir, 'build')]);
+    const checkLine = built.out.split('\n').map((l) => l.replace(/^\[\w+\]\s*/, '').trim()).find((l) => l.startsWith('check: ')) ?? 'no check line';
+    say(
+      'CL215_ON_WIND_A_FROM_WRITE_BUILDS_GREEN_AND_REMOVES_THE_LINK_THE_CHANGE_TAKES_AWAY',
+      sh.r.status === 0 && sh.text !== null && shConfined && removed.length > 0 && removed.every((l) => l.includes('skirt')) && built.status === 0 && checkLine.startsWith('check: PASS'),
+      `links 3 -> 2 with --from the tracked config: exit ${sh.r.status}; structural diff ${shDiff.length} path(s), ${shConfined ? 'every one a skirt entry' : 'NOT CONFINED'}; ${removed.length} removed: ${removed.join(', ')}; build exit ${built.status}: "${checkLine}"`,
+      'issue #571 bar: a config re-drafted through --from builds green, the entries the previous recipe drafted and the changed one does not removed by the rule that removes a replaced plain chain',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /** The array sections `--write-config` splices entry by entry (issue #552), and what names an entry, as the selftest reads them. */
