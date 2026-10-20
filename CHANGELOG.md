@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.51.0](https://github.com/rig-c/parts/compare/v1.50.0...v1.51.0) (2026-10-20)
+
+
+### Features
+
+* **limbs:** a cut cap short of layer pixels is named by side, filled from the neighbouring segment under either cap shape, and its contour step read at the sweep's ends ([#573](https://github.com/rig-c/parts/issues/573)) ([db7e66b](https://github.com/rig-c/parts/commit/db7e66b907e12644091d5ee7b12896187ad58056))
+
+
+### Bug Fixes
+
+* **propose:** --write-config --from &lt;previous config&gt; — an entry equal to the previous recipe's draft is the recipe's, not a hand edit ([#571](https://github.com/rig-c/parts/issues/571)) ([#575](https://github.com/rig-c/parts/issues/575)) ([2447004](https://github.com/rig-c/parts/commit/244700405cc490d9f0e9475fc75bf61fdf6d1d99))
+
 ## [1.50.0](https://github.com/rig-c/parts/compare/v1.49.2...v1.50.0) (2026-10-20)
 
 
