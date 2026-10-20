@@ -1588,6 +1588,15 @@ fragment below, cut to the bust:
 - **A `physics` constraint** on that bone in `constraints`, in rig-c's shape; every field but
   the bone is rigc's to accept.
 
+A region adds vertices: its `spacing` is finer than the mesh's, and every one of them is a
+triangle more for the runtime to skin. Before the first build, count them:
+`rig-parts mesh-stats --config config.json --parts work/rig` (issue #566; `work` is step 7's `assemble --out`, §4) runs the rig stage's own
+mesh construction over the assembled parts, without rigc, without `check`, and prints one line
+per mesh — `mesh-stats: topwear — contour 320 vertices, 568 triangles` on `reference-sample` —
+and the total, `mesh-stats: total 1908 triangles over 6 mesh(es)`, the counts the build's
+`mesh_report.json` will hold (§4, *Counting the triangles before a build*). On `reference-sample`
+it runs in under a second; the build it saves runs the render and `check` as well.
+
 `build` on `reference-sample` as tracked (PR #187; the values above are the ones tuned for its `hop`, issue #183):
 
 ```
@@ -2231,6 +2240,31 @@ full loader before its assemble stage writes anything.
 The selftest runs this order, with the README's flags, on each fetched example from
 a config holding only `key`, `seethrough` and `assemble.rig_scale`, pasting each
 proposal in as the steps above say (`RL01`); every step must exit 0.
+
+### Counting the triangles before a build (`mesh-stats`, issue #566)
+
+`rig-parts mesh-stats --config config.json --parts work/rig` prints the vertices and triangles of
+every mesh the config states and their total, against the parts `assemble` wrote (step 7's
+`work/rig`, or a `build --out` directory, which holds `parts.json` and `parts/` itself), in seconds.
+It is the rig stage's mesh construction itself — the same function the rig stage writes
+`mesh_report.json` from — run without rigc, without `check` and without writing a file, so a
+config can be tuned to a triangle budget before the first build and between builds:
+
+```
+mesh-stats: hair_back — lattice 155 vertices, 226 triangles
+…
+mesh-stats: total 1816 triangles over 9 mesh(es)
+```
+
+(`demo` as tracked, nine lattices.) The package holds no triangle budget: a budget is the
+consumer's, and the command prints no line against one. One line per mesh, in parts.json's
+order, the row order of `mesh_report.json`; the mode is `lattice` for a `grid` entry,
+`contour`, `auto` or `influence`. An `auto` part's count is its reduction's result: when rigc's
+motion gate refuses that result, the rig stage replays an earlier accepted step, which needs
+rigc, and the line says so. A problem the rig stage would refuse — a part with no PNG, an
+outline that does not close, a name `bones` does not declare — is the rig stage's own refusal,
+by the same name, exit 1; it takes no `--requirements`, because the rig stage's meshes read
+none, and no `--idle-keys`, because where the idle's keys go moves no vertex.
 
 ### For artists: your own layered file (issue #359)
 
