@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.48.0](https://github.com/rig-c/parts/compare/v1.47.0...v1.48.0) (2026-10-20)
+
+
+### Features
+
+* **check:** --environment takes the readings under a rigc-environment/1 schedule, and names it ([#538](https://github.com/rig-c/parts/issues/538)) ([#549](https://github.com/rig-c/parts/issues/549)) ([facf1f5](https://github.com/rig-c/parts/commit/facf1f53bc31e020a34b01cb6571d5d5e6d48c0d))
+
 ## [1.47.0](https://github.com/rig-c/parts/compare/v1.46.0...v1.47.0) (2026-10-20)
 
 
