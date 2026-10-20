@@ -30,7 +30,7 @@ import { checkImageSize, choosePerson, KEYPOINTS_SPEC, loadKeypoints, type RigJo
 import { basisLines, branchSqueezeLine, checkProposal, compare, compareLines, DEFAULT_GRID_RULE, draftTurn, drawLandmarks, FIGURE_GRID_DIVISOR, FRINGE_STEP_PX, GRID_RULES, type GridRule, HIP_MIN_FRACTION, type DraftLintFinding, lint, lintLine, type PartSet, proposeWithBasis, readPartSet, serializeProposal, withTurn, WRIST_ON_PART_PX } from './src/propose.ts';
 import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, coverageLines, serializeBasis } from './src/diagnostics.ts';
 import { BEND_DEGREES, BEND_WORST_SHARE, DUST_MAX_PX, DUST_MAX_SHARE, IDLE_BOUND_PX, MESH_DRAFT_REPORT, MESH_DRAFT_SPEC, meshDraftStage, MORE_TRIANGLES_FLAG, relativeConfigPaths, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
-import { clothConfigEdits, editPaths, writtenClothConfig } from './src/clothconfig.ts';
+import { clothConfigEdits, editPaths, previousCount, writtenClothConfig } from './src/clothconfig.ts';
 import { PROVENANCE_FILE, REMESH_SPEC, remeshStage } from './src/remesh.ts';
 import { RETUNE_FILE, RETUNE_SPEC, retuneStage } from './src/retune.ts';
 import { checkPainting } from './src/paintcheck.ts';
@@ -226,7 +226,7 @@ usage:
       a LINT line names each drafted radius and both figures. Without --cloth
       nothing changes.
 
-  rig-parts propose … --cloth <config.json> [--write-config <out.json>]
+  rig-parts propose … --cloth <config.json> [--write-config <out.json> [--from <previous.json>]]
       Also write the --cloth config's own text with what the recipe drafts
       spliced in (issue #537), the way mesh-draft writes its config, so that
       rig --config <out.json> builds it. What is spliced is measured: the
@@ -246,6 +246,14 @@ usage:
       (PROPOSE_WRITE_CONFIG_CONFLICT), or when the spliced text does not
       parse to the config with the sections set, naming the first key
       that moved (PROPOSE_WRITE_CONFIG_SPLICE).
+      --from <previous.json> (issue #571, only with --write-config) names
+      the config the recipe is changed from: its cloth block is read as
+      --cloth's is, the same parts are drafted a third time with it, and an
+      entry equal to that previous recipe's draft is the recipe's, replaced
+      (or removed) as one equal to the draft without the recipe is; an entry
+      equal to none of the three drafts is still refused by name, its field
+      read against the previous recipe's draft. The write line counts the
+      entries the previous draft vouched for. Without --from nothing changes.
 
   rig-parts propose --parts <dir> --source <painting.png> --out <dir> --from-config <config.json>
       Draw the config's CURRENT bones instead (<out>/render/landmarks_config.png
@@ -915,7 +923,7 @@ const TAKES = {
   layers: { valued: ['--export', '--template', '--canvas'], switches: [] },
   sheet: { valued: ['--source', '--layers', '--out', '--cell', '--cols'], switches: [] },
   rig: { valued: ['--config', '--parts', '--out', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
-  propose: { valued: ['--parts', '--source', '--out', '--from-config', '--compare', '--full', '--head', '--canvas', '--keypoints', '--person', '--wrist-snap', '--grid-rule', '--cloth', '--write-config'], switches: ['--head-box', '--no-back-hair'] },
+  propose: { valued: ['--parts', '--source', '--out', '--from-config', '--compare', '--full', '--head', '--canvas', '--keypoints', '--person', '--wrist-snap', '--grid-rule', '--cloth', '--write-config', '--from'], switches: ['--head-box', '--no-back-hair'] },
   compare: { valued: ['--left', '--right', '--map'], switches: [] },
   check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--requirements', '--set', '--environment'], switches: ['--seam-pairs', '--keep-stills', '--all-sets'] },
   loop: { valued: ['--frames', '--out'], switches: ['--palette'] },
@@ -1316,6 +1324,9 @@ function cmdPropose(args: string[]): number {
     const writeArg = flags.get('--write-config');
     if (writeArg !== undefined && flags.has('--from-config')) return usage('--write-config writes what the recipe drafts into its config; --from-config proposes nothing');
     if (writeArg !== undefined && clothArg === undefined) return usage('--write-config writes the --cloth config with what its recipe drafts spliced in; give --cloth <config.json>');
+    // Issue #571: the config the recipe is changed from; an entry equal to its recipe's draft is the recipe's, not a hand edit.
+    const fromArg = flags.get('--from');
+    if (fromArg !== undefined && writeArg === undefined) return usage('--from names the config the recipe is changed from, for --write-config; give --write-config <out.json>');
     if (writeArg !== undefined) {
       const ours = ['proposal.json', BASIS_FILE].map((f) => resolve(out, f));
       if (existsSync(writeArg) || ours.includes(resolve(writeArg))) {
@@ -1323,6 +1334,7 @@ function cmdPropose(args: string[]): number {
       }
     }
     const cloth = clothArg === undefined ? null : loadClothConfig(clothArg).cloth;
+    const previousCloth = fromArg === undefined ? null : loadClothConfig(fromArg).cloth;
     const partsDir = existsSync(partsArg) && statSync(partsArg).isFile() ? dirname(partsArg) : partsArg;
     if (!existsSync(source)) {
       throw new PartsError([{ code: 'PROPOSE_SOURCE_PRESENT', object: source, detail: 'no such file; the painting is drawn under the overlay' }]);
@@ -1366,8 +1378,10 @@ function cmdPropose(args: string[]): number {
         : (() => {
             const text = readFileSync(clothArg, 'utf8');
             // Issue #552: bones, constraints and motion.tracks entry by entry; a hand edit the recipe would drop is refused by name.
-            const edits = clothConfigEdits(drafted, proposeWithBasis(P, joints, wristSnap, gridRule, null).proposal, JSON.parse(text) as unknown);
-            return { at: writeArg, text: writtenClothConfig(clothArg, text, edits), paths: editPaths(edits), relative: relativeConfigPaths(dirname(resolve(clothArg)), JSON.parse(text) as Record<string, unknown>) };
+            // Issue #571: with --from, the same parts drafted a third time with the previous recipe.
+            const previous = previousCloth === null ? null : proposeWithBasis(P, joints, wristSnap, gridRule, previousCloth).proposal;
+            const edits = clothConfigEdits(drafted, proposeWithBasis(P, joints, wristSnap, gridRule, null).proposal, JSON.parse(text) as unknown, false, previous);
+            return { at: writeArg, text: writtenClothConfig(clothArg, text, edits), paths: editPaths(edits), vouched: previousCount(edits), relative: relativeConfigPaths(dirname(resolve(clothArg)), JSON.parse(text) as Record<string, unknown>) };
           })();
     const bfile = basisFile(P, prop, basis, cfg === null || cmpPath === undefined ? null : { where: cmpPath, config: cfg });
     const img = drawLandmarks(P, painting, prop.bones, 'PROPOSAL - CORRECT ME');
@@ -1385,10 +1399,11 @@ function cmdPropose(args: string[]): number {
     printLint(P, prop, joints, draftLint);
     console.log(basisLine(bfile, out));
     if (written !== null && clothArg !== undefined) {
+      const from = fromArg === undefined ? '' : `; --from ${fromArg}: ${written.vouched} ${written.vouched === 1 ? 'entry' : 'entries'} taken as the previous recipe's draft`;
       console.log(
         written.paths.length > 0
-          ? `wrote ${written.at}: ${clothArg}'s text with ${written.paths.join(', ')} spliced in from the draft; every other byte as read`
-          : `wrote ${written.at}: ${clothArg}'s text byte for byte; every entry the recipe drafts is already as drafted`,
+          ? `wrote ${written.at}: ${clothArg}'s text with ${written.paths.join(', ')} spliced in from the draft; every other byte as read${from}`
+          : `wrote ${written.at}: ${clothArg}'s text byte for byte; every entry the recipe drafts is already as drafted${from}`,
       );
       if (written.relative.length > 0 && dirname(resolve(written.at)) !== dirname(resolve(clothArg))) {
         console.log(`note: ${written.relative.map((r) => `${r.at} "${r.value}"`).join(', ')} written as stated; the loader resolves each against the directory the config sits in, ${dirname(written.at)} for ${written.at}, not ${dirname(clothArg)}; put the config beside ${clothArg} or rewrite them`);
