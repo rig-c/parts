@@ -234,12 +234,12 @@ import {
   singleRunHeadBox,
 } from './src/assemble.ts';
 import { ENVIRONMENT_RULE, environmentLine, readCheckEnvironment } from './src/check.ts';
-import { clothConfigEdits, writtenClothConfig } from './src/clothconfig.ts';
+import { chainsLeftBehind, clothConfigEdits, writtenClothConfig } from './src/clothconfig.ts';
 import { EnvironmentError, readEnvironmentSchedule } from 'rig-c/src/environment.ts';
 import { boneTrackOf, CLOTH_FLOOR_TEXT, CLOTH_LEVERS_TEXT, CLOTH_LINE, CLOTH_SETTLE_FLOOR, clothChains, type ClothLine, clothLine, clothRow, clothWarnText, frameRuns, MOTION_SEAM_FLOOR, MOTION_SEAM_LINE, type MotionSeamLine, motionSeamPairs, motionSeamWarnText, openingOverFloor, readMotionSeams } from './src/check.ts';
 import { BREATH_ANIMATION, type BreathPair, breathPairProblem, breathTracks, chainDirection, sweepAngles, sweepJoints, type SweepJoint, sweepLine, type SweepLine, SWEEP_LINE, type SweepPose, type Viewport } from './src/check.ts';
 import { barsNotMet, flatComposite, frameToRigMap, maxRgbDiff, rigToFrameMap, SEAM_BOX, SEAM_PX_BAR, SEAM_PX_LEVEL, seamRigPx, seamRigPxText, SEAM_MEAN_BAR, SEAM_DIR, SEAM_MARK, SEAM_NO_ART, seamFigures, type SeamFigures, seamPairRows, seamPairText, STILL_DIR, withoutPhysics, BREATH_TORSO_MEAN_FLOOR } from './src/check.ts';
-import { ACCEPTABLE_BARS, BARS, besideIdleLine, blackRig, drawingTurn, FOLD_LINE, type FoldsLine, LEVEL_BAR_DEGREES, LEVEL_LINE, LIMB_LINE, limbLine, foldsLine, STRESS_LINE, STRESS_RIGID, STRESS_TURNS, stressPlan, readFoldSets, edgeBonesText, buildGateLines, holesLine, causeLines, chainLine, measuredRules, SOURCE_LINE, sourceFigures, sourceSizeProblem, packedBuildArgs, GATE_PROFILE, DEFAULT_PACK_MODE, DEFAULT_PAGE_EDGES, findRigc, packageRigc, rigcIdentity, rigcRunnerAt, type RigcSpawn, type PackMode, type PageEdges, type FrameSet, GEOMETRY_FILE, gateGreen, headBoneOf, IDLE_MAX_PX, type JudgementLine, JUDGEMENT_LINES, packEdgeProblems, PARTS_HOME_SENTENCE, parsePackLines, readBoneTrack, readCheckInputs, readFrameSet, readGeometry, readRigcEntry, REPORTED_LINES, requireRigcVersion, RIGC_ENTRY_VERSION, RIGC_GEOMETRY_VERSION, rigcFailed, type RigcRunner, runCheck, SPINEBOY_YARDSTICK, stretchLine, TEXTURE_STRETCH_CEILING, TIP_RATIO_FLOOR, TIP_REST_RATIO_CEILING, attachmentPoses, stillLine, STILL_INSTRUMENT, foldBonesText, FOLD_GROUPS_SHOWN, FOLD_TRIANGLES_SHOWN } from './src/check.ts';
+import { ACCEPTABLE_BARS, BARS, besideIdleLine, blackRig, drawingTurn, FOLD_LINE, LEVEL_BAR_DEGREES, LEVEL_LINE, LIMB_LINE, limbLine, foldsLine, STRESS_LINE, STRESS_RIGID, STRESS_TURNS, stressPlan, readFoldSets, edgeBonesText, buildGateLines, holesLine, causeLines, chainLine, chainLagWindows, measuredRules, SOURCE_LINE, sourceFigures, sourceSizeProblem, packedBuildArgs, GATE_PROFILE, DEFAULT_PACK_MODE, DEFAULT_PAGE_EDGES, findRigc, packageRigc, rigcIdentity, rigcRunnerAt, type RigcSpawn, type PackMode, type PageEdges, type FrameSet, GEOMETRY_FILE, gateGreen, headBoneOf, IDLE_MAX_PX, type JudgementLine, JUDGEMENT_LINES, packEdgeProblems, PARTS_HOME_SENTENCE, parsePackLines, readBoneTrack, readCheckInputs, readFrameSet, readGeometry, readRigcEntry, REPORTED_LINES, requireRigcVersion, RIGC_ENTRY_VERSION, RIGC_GEOMETRY_VERSION, rigcFailed, type RigcRunner, runCheck, SPINEBOY_YARDSTICK, stretchLine, TEXTURE_STRETCH_CEILING, TIP_RATIO_FLOOR, TIP_REST_RATIO_CEILING, attachmentPoses, stillLine, STILL_INSTRUMENT, foldBonesText, FOLD_GROUPS_SHOWN, FOLD_TRIANGLES_SHOWN, type FoldsLine } from './src/check.ts';
 import { baseTagOf, blinkFigures, breathHeat, heatField, type BoneTrack, type BoneWorld, chainToward, edgeLength, frameBox, type GeometryPose, halfTravels, type MeshRest, stretchFigures, stretchSeverity, lagStep, readSine, setupToFrame, stillReading, stillTolerance, STILL_ROUNDINGS, SWING_TAGS, ulpOf } from './src/instruments.ts';
 import {
   aimLine,
@@ -428,6 +428,7 @@ import {
   type ProposalBasis,
   propose,
   proposalAssemble,
+  proposalAsConfig,
   STRAND_LINK_AT,
   proposeWithBasis,
   readPartSet,
@@ -10354,6 +10355,7 @@ function runProposeSuite(): number {
     runGridRuleControls(dir, say);
     runSqueezeControls(say);
     runClothProposeControls(say);
+    runChainLeftBehindControls(say);
     runSkirtInsideProposeControls(say);
     runNamedCutSkirtChecks(join(dir, 'named-cut-skirt'), (name, ok, detail) => say(name, ok, detail,
       'issue #412: real waist-cut selection, unchanged automatic exclusion, exact named refusals, hem riders and independently posed attachment geometry'));
@@ -10490,6 +10492,103 @@ function runSkirtInsideProposeControls(say: (name: string, ok: boolean, detail: 
     );
   } finally {
     for (const d of [dressDir, blouseDir, pieceDir, skirtDir, shiftDir, hemDir, belowDir]) rmSync(d, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Issue #572, PR540–PR541: a keyed sibling the cloth recipe leaves behind. The fixture is fixtures/cloth.ts with its
+ * back hair cut to the crown block alone, `[72, 20, 96, 52]` — hair that ends above the shoulders, which the proposer
+ * drafts as one bone, `bun`, under `head`, keyed beside the fringe's three chains and the lock — proposed with the
+ * `front hair` recipe only. By the draft's own tracks (read off the proposal, not typed here): `head` is keyed at
+ * one amplitude and `bun` at a smaller one, so once the recipe takes the fringe's and the lock's keys `neck > head >
+ * bun` is one unbranched run of keyed links, which `CHAIN_LAG` holds to non-decreasing amplitudes. Before it, `head`
+ * had five keyed children and the run stopped at `head`.
+ */
+function runChainLeftBehindControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const dir = temp('cloth-left-behind');
+  try {
+    const parts = CLOTH_PARTS.map((q) => (q.name === 'hair_back' ? { ...q, h: 52, rects: [[72, 20, 96, 52]] as Array<[number, number, number, number]> } : q));
+    writeProposeFixture(dir, parts, CLOTH_RIG);
+    const P = readPartSet(dir);
+    const fringe = { 'front hair': clothRecipe()['front hair'] };
+    const plain = propose(P, undefined, null, DEFAULT_GRID_RULE, null);
+    const prop = propose(P, undefined, null, DEFAULT_GRID_RULE, fringe);
+    const ampOf = (pp: typeof plain, bone: string): number | null => {
+      const t = pp.motion.tracks.find((x) => !('chain' in x) && x.bone === bone && x.prop === 'rotate');
+      return t === undefined || 'chain' in t ? null : t.amp;
+    };
+    const headAmp = ampOf(prop, 'head');
+    const bunAmp = ampOf(prop, 'bun');
+    // The siblings by definition: the first link of each chain the plain draft hangs from head with an idle track and the draft with the recipe does not.
+    const keyedNames = (pp: typeof plain): Set<string> => new Set(pp.motion.tracks.map((t) => ('chain' in t ? t.chain : t.bone)));
+    const taken = plain.bones.filter((b) => 'chain' in b && b.parent === 'head' && keyedNames(plain).has(b.chain) && !keyedNames(prop).has(b.chain)).map((b) => ('chain' in b ? `${b.chain}0` : ''));
+    const found = chainsLeftBehind(proposalAsConfig(P, plain), proposalAsConfig(P, prop));
+    const f = found[0];
+    const round3 = (x: number | null): number | null => (x === null ? null : Number(x.toFixed(3)));
+    // The negative: the author's config already keys bun at head's amplitude — the left-behind sibling passes (equal is non-decreasing).
+    const raise = (pp: typeof plain): typeof plain => ({ ...pp, motion: { ...pp.motion, tracks: pp.motion.tracks.map((t) => (!('chain' in t) && t.bone === 'bun' && t.prop === 'rotate' && headAmp !== null ? { ...t, amp: headAmp } : t)) } });
+    const raised = chainsLeftBehind(proposalAsConfig(P, raise(plain)), proposalAsConfig(P, raise(prop)));
+    // The second negative: a run the config before the recipe already holds is check's to name, as it was — not one the recipe made.
+    const already = chainsLeftBehind(proposalAsConfig(P, prop), proposalAsConfig(P, prop));
+    say(
+      'PR540_A_KEYED_SIBLING_THE_RECIPE_LEAVES_ALONE_UNDER_ITS_PARENT_IS_NAMED_WITH_BOTH_AMPLITUDES_AND_NONE_WHEN_IT_ALREADY_PASSES',
+      headAmp !== null &&
+        bunAmp !== null &&
+        round3(bunAmp) !== null &&
+        (round3(bunAmp) as number) < (round3(headAmp) as number) &&
+        taken.length === 4 &&
+        found.length === 1 &&
+        f.bone === 'bun' &&
+        f.above === 'head' &&
+        f.chain.join(' > ') === 'neck > head > bun' &&
+        f.amp === round3(bunAmp) &&
+        f.aboveAmp === round3(headAmp) &&
+        JSON.stringify(f.siblings) === JSON.stringify(taken) &&
+        f.field === 'motion.tracks bone "bun" prop "rotate" amp' &&
+        raised.length === 0 &&
+        already.length === 0 &&
+        ampOf(prop, 'bun') === ampOf(plain, 'bun'),
+      `draft: head amp ${headAmp}, bun amp ${bunAmp}; the recipe took ${taken.join(', ')} (want 4: the fringe's three and the lock); found ${found.length} (want 1): ${f === undefined ? 'none' : `${f.bone} under ${f.above}, ${f.amp} under ${f.aboveAmp}, chain ${f.chain.join(' > ')}, siblings ${f.siblings.join(', ')}, field ${f.field}`}; bun raised to head's amplitude: ${raised.length} (want 0); the run already in the config before: ${already.length} (want 0); the draft's bun track unchanged by the recipe: ${ampOf(prop, 'bun') === ampOf(plain, 'bun')}`,
+      'issue #572: the recipe removes the idle keys of the trees it drafts, so a keyed sibling left under the same parent can join it in one unbranched run that CHAIN_LAG then holds to non-decreasing amplitudes; propose reads that with chainFigures, names it, and changes no amplitude',
+    );
+
+    // PR541 — the command: the LINT line is printed and counted; with --write-config the written config is what is read,
+    // so an input whose bun already keys head's amplitude prints none; the written text is the same with and without the reading.
+    const painting = join(dir, 'painting.png');
+    const cfgOf = (pp: typeof plain): string => `${JSON.stringify({ key: 'fixture', cloth: fringe, assemble: proposalAssemble(P), bones: pp.bones, meshes: pp.meshes, regions: pp.regions, motion: pp.motion, proposed_rig_scale: pp.proposed_rig_scale }, null, 2)}\n`;
+    const low = join(dir, 'lb-low.json');
+    const high = join(dir, 'lb-high.json');
+    writeFileSync(low, cfgOf(plain));
+    writeFileSync(high, cfgOf(raise(plain)));
+    const base = ['propose', '--parts', dir, '--source', painting, '--cloth'];
+    const bare = runCli([...base, low, '--out', join(dir, 'lb-bare')]);
+    const wLow = runCli([...base, low, '--out', join(dir, 'lb-wlow'), '--write-config', join(dir, 'lb-wlow-out.json')]);
+    const wHigh = runCli([...base, high, '--out', join(dir, 'lb-whigh'), '--write-config', join(dir, 'lb-whigh-out.json')]);
+    const lintOf = (o: string): string[] => o.split('\n').filter((l) => l.startsWith('LINT bun under head: '));
+    const countOf = (o: string): string | undefined => o.split('\n').find((l) => / LINT line\(s\) over /.test(l));
+    const want = round3(bunAmp)?.toFixed(3) ?? '?';
+    const wantAbove = round3(headAmp)?.toFixed(3) ?? '?';
+    const says = (l: string | undefined): boolean => l !== undefined && l.includes(`amplitude ${want} below the link above's ${wantAbove} in the keyed chain neck > head > bun`) && l.includes(`(${taken.join(', ')})`) && l.includes(`motion.tracks bone "bun" prop "rotate" amp at ${wantAbove} or more in size passes`);
+    const highText = existsSync(join(dir, 'lb-whigh-out.json')) ? readFileSync(join(dir, 'lb-whigh-out.json'), 'utf8') : null;
+    say(
+      'PR541_PROPOSE_CLOTH_PRINTS_AND_COUNTS_THE_LEFT_BEHIND_LINT_AND_READS_THE_WRITTEN_CONFIG_UNDER_WRITE_CONFIG',
+      bare.status === 0 &&
+        lintOf(bare.out).length === 1 &&
+        says(lintOf(bare.out)[0]) &&
+        (countOf(bare.out) ?? '').startsWith('1 LINT line(s)') &&
+        wLow.status === 0 &&
+        lintOf(wLow.out).length === 1 &&
+        says(lintOf(wLow.out)[0]) &&
+        wHigh.status === 0 &&
+        lintOf(wHigh.out).length === 0 &&
+        (countOf(wHigh.out) ?? '').startsWith('0 LINT line(s)') &&
+        highText !== null &&
+        (JSON.parse(highText) as { motion: { tracks: Array<{ bone?: string; amp?: number }> } }).motion.tracks.find((t) => t.bone === 'bun')?.amp === headAmp,
+      `--cloth: exit ${bare.status}, ${lintOf(bare.out).length} left-behind LINT (want 1), ${says(lintOf(bare.out)[0]) ? 'naming both amplitudes, the siblings and the field' : `NOT as derived: ${lintOf(bare.out)[0] ?? 'absent'}`}, count "${countOf(bare.out) ?? 'absent'}"; --write-config over the drafted bun: exit ${wLow.status}, ${lintOf(wLow.out).length} (want 1); over a bun the author raised to head's: exit ${wHigh.status}, ${lintOf(wHigh.out).length} (want 0), count "${countOf(wHigh.out) ?? 'absent'}", the written bun ${highText === null ? 'NOT WRITTEN' : 'keeps the author\'s amplitude'}`,
+      'issue #572: the LINT reads what the run hands the author to build — the written config under --write-config, the proposal without it — and never rewrites the amplitude',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 
@@ -17958,6 +18057,100 @@ function runCheckSuite(): number {
       String(restLoose.line.first_violation) === String(shrink.line.first_violation),
     `declared, shrinking: ${String(restShrink.line.status)}, resting ${JSON.stringify(restShrink.line.resting_chains)} (undeclared ${String(shrink.line.status)}); declared, growing: ${String(restGrow.line.first_violation)} — ${growDetail?.object ?? 'no problem'}: ${growDetail?.detail.slice(0, 120) ?? ''}; declared, leading: ${String(restBack.line.first_violation)}; declared on a part no chain carries: ${String(restLoose.line.first_violation)}`,
     "issue #245, from the consumer's lying figure: CHAIN_LAG asked a leg chain for amplitudes growing toward the foot, the end that rests. A chain carrying a part declared rests (its bound bone walked up to the chain, as rises finds its chain) is read the opposite way — non-increasing, the planted growing chain refused at its first link that grows — while the lag is kept, since the declaration says how far the tip moves and not when; a declared part no chain carries relaxes nothing",
+  );
+
+  // Issue #580: the step refusal says the raw phases it read, the fold, and the passing range. The step is read modulo
+  // half a cycle, so a child at 0.27 under a parent at 0 (0.27 past a quarter) reads -0.230, and negating the child's
+  // amplitude (read as amplitude 1 at 0.77) reads the same step. Every expected figure below is computed by hand from
+  // the definition: 0.27 - 0 = 0.270; 0.77 - 0 = 0.770; both fold (mod 0.5 = 0.27, past 1/4) to 0.27 - 0.5 = -0.230; the
+  // passing child phases are 0 + 0.001 .. 0 + 0.25 and the same half a cycle on: [0.001, 0.250], [0.501, 0.750].
+  const stepRig = { bones: [{ name: 'root' }, { name: 'chest', parent: 'root' }, { name: 'sleeve_l0', parent: 'chest' }] };
+  const stepMotion = (parentPhase: number, childPhase: number, childAmp: number): Record<string, unknown> => ({
+    groups: {},
+    animations: { idle: { duration: 4, tracks: [sineTrack('chest', 'rotate', 1, 4, parentPhase, 0, 4), sineTrack('sleeve_l0', 'rotate', childAmp, 4, childPhase, 0, 4)] } },
+  });
+  const stepJudge = (parentPhase: number, childPhase: number, childAmp: number): { status: string; problems: Problem[] } => {
+    const ps: Problem[] = [];
+    const line = chainLine({ rig: stepRig, motion: stepMotion(parentPhase, childPhase, childAmp) }, ps) as Record<string, unknown>;
+    return { status: String(line.status), problems: ps };
+  };
+  const expectedStep = (child: string, diff: string): string =>
+    'phase step -0.230 cycle(s); >= 0.001 is required — a link must lag the one above it. ' +
+    `Phases read: "chest" 0.000, "sleeve_l0" ${child} (a negative amplitude is read as amplitude > 0 at phase + 0.5); ` +
+    `the step is their difference, ${diff}, folded into (-1/4, 1/4] cycle, since a sine's sign is half a cycle — so flipping an amplitude's sign does not change it. ` +
+    'To pass, the child\'s phase is the parent\'s + 0.001 to + 0.25, modulo 0.5: here a "sleeve_l0" phase in [0.001, 0.250] or [0.501, 0.750] (its "phase", or the "lag" on the chain track)';
+  // The bar reads the line for each of its four statements, so a detail missing any one fails it.
+  const saysStep = (detail: string, child: string, diff: string): boolean =>
+    detail.startsWith('phase step -0.230 cycle(s); >= 0.001 is required') &&
+    detail.includes(`Phases read: "chest" 0.000, "sleeve_l0" ${child}`) &&
+    detail.includes('a negative amplitude is read as amplitude > 0 at phase + 0.5') &&
+    detail.includes(`difference, ${diff}, folded into (-1/4, 1/4]`) &&
+    detail.includes("flipping an amplitude's sign does not change it") &&
+    detail.includes('[0.001, 0.250] or [0.501, 0.750]');
+  const plus = stepJudge(0, 0.27, 1);
+  const minus = stepJudge(0, 0.27, -1);
+  const plusLine = plus.problems.length === 1 ? printedFailLine(plus.problems[0]) : `${plus.problems.length} problems`;
+  const minusLine = minus.problems.length === 1 ? printedFailLine(minus.problems[0]) : `${minus.problems.length} problems`;
+  // Planted: the detail this line carried before issue #580, for the same edge.
+  const before580 = 'phase step -0.230 cycle(s); >= 0.001 is required — a link must lag the one above it (a larger "phase", or a positive "lag" on the chain track)';
+  say(
+    'CK530_A_CHAIN_STEP_REFUSAL_SAYS_THE_RAW_PHASES_THE_HALF_CYCLE_FOLD_AND_THE_PASSING_RANGE_AND_A_SIGN_FLIP_KEEPS_THE_STEP',
+    plus.status === 'FAIL' &&
+      minus.status === 'FAIL' &&
+      plus.problems.length === 1 &&
+      minus.problems.length === 1 &&
+      plus.problems[0].code === 'CHECK_CHAIN_LAG' &&
+      plus.problems[0].object === 'bone "sleeve_l0" under "chest"' &&
+      minus.problems[0].object === 'bone "sleeve_l0" under "chest"' &&
+      plus.problems[0].detail === expectedStep('0.270', '0.270') &&
+      minus.problems[0].detail === expectedStep('0.770', '0.770') &&
+      saysStep(plus.problems[0].detail, '0.270', '0.270') &&
+      saysStep(minus.problems[0].detail, '0.770', '0.770') &&
+      plusLine.endsWith('(see rig-parts guide CHECK_CHAIN_LAG)') &&
+      !saysStep(before580, '0.270', '0.270'),
+    `amp +1: ${plusLine} || amp -1: ${minusLine} || planted, the pre-#580 detail: ${saysStep(before580, '0.270', '0.270') ? 'ACCEPTED' : 'refused by the same reading'}`,
+    "issue #580: a negated amplitude was read as a refusal of its sign, and \"a larger phase\" does not help until the phase has gone half a cycle; the line now names the phases read (a negative amplitude already at + 0.5), the fold into (-1/4, 1/4] that makes the sign irrelevant, and the child phases that pass for this parent — the same step, -0.230, both times",
+  );
+
+  // Issue #580: the range the line prints is the range the bar passes. A parent at 0 and at 0.9 (whose windows cross
+  // the cycle's end), each child at the windows' edges and one step of 0.001 outside them, with the amplitude positive
+  // and negated: the verdict is PASS exactly where the printed windows hold the child phase as read. Expected windows by
+  // hand: parent 0 -> [0.001, 0.250], [0.501, 0.750]; parent 0.9 -> [0.000, 0.150], [0.401, 0.650], [0.901, 1).
+  const inWindows = (ws: ReadonlyArray<readonly [number, number]>, x: number): boolean => ws.some(([lo, hi]) => x >= lo - 1e-9 && (hi === 1 ? x < 1 : x <= hi + 1e-9));
+  const probes: Array<[number, number[]]> = [
+    [0, [0, 0.001, 0.25, 0.251, 0.5, 0.501, 0.75, 0.751]],
+    [0.9, [0.9, 0.901, 0.999, 0, 0.15, 0.151, 0.4, 0.401, 0.65, 0.651]],
+  ];
+  const windowRows: string[] = [];
+  let windowsAgree = true;
+  let plantedAgrees = true;
+  for (const [parentPhase, children] of probes) {
+    const ws = chainLagWindows(parentPhase);
+    // Planted: the one window the pre-#580 advice ("a larger phase") implies, without the half cycle.
+    const one: Array<[number, number]> = [[parentPhase + 0.001, parentPhase + 0.25]];
+    for (const child of children) {
+      for (const amp of [1, -1]) {
+        const read = (((child + (amp < 0 ? 0.5 : 0)) % 1) + 1) % 1;
+        const v = stepJudge(parentPhase, child, amp);
+        const passes = v.status === 'PASS';
+        if (passes !== inWindows(ws, Math.round(read * 1000) / 1000)) windowsAgree = false;
+        if (passes !== inWindows(one, read)) plantedAgrees = false;
+        windowRows.push(`${parentPhase}/${child}${amp < 0 ? '-' : '+'} ${v.status}`);
+      }
+    }
+  }
+  const wrapDetail = stepJudge(0.9, 0.2, 1).problems[0]?.detail ?? '';
+  say(
+    'CK531_THE_PASSING_RANGE_A_CHAIN_STEP_REFUSAL_PRINTS_IS_THE_RANGE_THE_BAR_PASSES_ACROSS_THE_CYCLE_END_AND_A_SIGN_FLIP',
+    windowsAgree &&
+      !plantedAgrees &&
+      JSON.stringify(chainLagWindows(0)) === '[[0.001,0.25],[0.501,0.75]]' &&
+      JSON.stringify(chainLagWindows(0.9)) === '[[0,0.15],[0.401,0.65],[0.901,1]]' &&
+      wrapDetail.includes('phase step -0.200 cycle(s)') &&
+      wrapDetail.includes('difference, 0.300, folded') &&
+      wrapDetail.includes('a "sleeve_l0" phase in [0.000, 0.150] or [0.401, 0.650] or [0.901, 1)'),
+    `${windowRows.join(', ')}; printed windows ${windowsAgree ? 'agree with every verdict' : 'DISAGREE with a verdict'}; planted single window ${plantedAgrees ? 'AGREES (no control)' : 'disagrees, as it must'}; parent 0.9, child 0.2: ${wrapDetail.slice(wrapDetail.indexOf('Phases read'))}`,
+    'issue #580: the passing range is in the author\'s terms — child phases, modulo 0.5 — and it is held to the bar by probing its edges, not restated: two windows half a cycle apart, a window crossing the cycle\'s end split at 1, and a negated amplitude (read at + 0.5) passing exactly where the positive one does',
   );
   runAnimationFoldCases(say);
   runFeetLevelCases(say);

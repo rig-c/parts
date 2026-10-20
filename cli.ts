@@ -27,11 +27,11 @@ import { makeInputs } from './src/inputs.ts';
 import { idleKeysOf, isIdleKeys } from './src/rig.ts';
 import { depthSkipLine, exportLayers, figuresPhrase, hiddenLayerLine, implausibleRules, layerFigures, type LayerSet, layerSetDiff, pct, readLayers, readWrapperLayers, ruleSummary, templateLayerNames, templatePsdBytes, times } from './src/layers.ts';
 import { checkImageSize, choosePerson, KEYPOINTS_SPEC, loadKeypoints, type RigJoints, toRigJoints } from './src/keypoints.ts';
-import { basisLines, branchSqueezeLine, checkProposal, compare, compareLines, DEFAULT_GRID_RULE, draftTurn, drawLandmarks, FIGURE_GRID_DIVISOR, FRINGE_STEP_PX, GRID_RULES, type GridRule, HIP_MIN_FRACTION, type DraftLintFinding, lint, lintLine, type PartSet, proposeWithBasis, readPartSet, serializeProposal, withTurn, WRIST_ON_PART_PX } from './src/propose.ts';
+import { basisLines, branchSqueezeLine, checkProposal, compare, compareLines, DEFAULT_GRID_RULE, draftTurn, drawLandmarks, FIGURE_GRID_DIVISOR, FRINGE_STEP_PX, GRID_RULES, type GridRule, HIP_MIN_FRACTION, type DraftLintFinding, lint, lintLine, type PartSet, proposalAsConfig, proposeWithBasis, readPartSet, serializeProposal, withTurn, WRIST_ON_PART_PX } from './src/propose.ts';
 import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, coverageLines, serializeBasis } from './src/diagnostics.ts';
 import { BEND_DEGREES, BEND_WORST_SHARE, DUST_MAX_PX, DUST_MAX_SHARE, IDLE_BOUND_PX, MESH_DRAFT_REPORT, MESH_DRAFT_SPEC, meshDraftStage, MORE_TRIANGLES_FLAG, relativeConfigPaths, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
 import { meshStatsStage } from './src/meshstats.ts';
-import { clothConfigEdits, editPaths, previousCount, writtenClothConfig } from './src/clothconfig.ts';
+import { chainsLeftBehind, clothConfigEdits, editPaths, previousCount, writtenClothConfig } from './src/clothconfig.ts';
 import { PROVENANCE_FILE, REMESH_SPEC, remeshStage } from './src/remesh.ts';
 import { RETUNE_FILE, RETUNE_SPEC, retuneStage } from './src/retune.ts';
 import { checkPainting } from './src/paintcheck.ts';
@@ -224,8 +224,12 @@ usage:
       ({across, max, shape}, issue #518) drafts the parts it meshes in the
       influence mode at their lattice's cell, the radius as stated or drafted
       as the farthest lattice vertex from its nearest link plus 3 cells, and
-      a LINT line names each drafted radius and both figures. Without --cloth
-      nothing changes.
+      a LINT line names each drafted radius and both figures. A keyed bone
+      the recipe leaves the only keyed child of its parent joins it in one
+      chain CHAIN_LAG holds to non-decreasing amplitudes (issue #572): a LINT
+      line names each link of such a chain below the link above, with both
+      amplitudes and the least that passes; no amplitude is changed. Without
+      --cloth nothing changes.
 
   rig-parts propose … --cloth <config.json> [--write-config <out.json> [--from <previous.json>]]
       Also write the --cloth config's own text with what the recipe drafts
@@ -1388,18 +1392,39 @@ function cmdPropose(args: string[]): number {
         : withTurn(drafted, draftTurn(P, { ...(fullRun === undefined ? {} : { full: readLayers(fullRun) }), ...(headRun === undefined ? {} : { head: readLayers(headRun) }) }, drafted));
     // Emit only after green: a proposal the config loader would refuse is not written, nor a basis record that does not hold to it.
     checkProposal(P, prop);
+    // The same parts drafted without the recipe: what --write-config measures its edits against, and what issue #572's chain reading compares with.
+    const plain = cloth === null ? null : proposeWithBasis(P, joints, wristSnap, gridRule, null).proposal;
     // Issue #537: the sections the recipe moves, measured against the same parts drafted without it, spliced before anything is written.
     const written =
-      writeArg === undefined || clothArg === undefined
+      writeArg === undefined || clothArg === undefined || plain === null
         ? null
         : (() => {
             const text = readFileSync(clothArg, 'utf8');
             // Issue #552: bones, constraints and motion.tracks entry by entry; a hand edit the recipe would drop is refused by name.
             // Issue #571: with --from, the same parts drafted a third time with the previous recipe.
             const previous = previousCloth === null ? null : proposeWithBasis(P, joints, wristSnap, gridRule, previousCloth).proposal;
-            const edits = clothConfigEdits(drafted, proposeWithBasis(P, joints, wristSnap, gridRule, null).proposal, JSON.parse(text) as unknown, false, previous);
-            return { at: writeArg, text: writtenClothConfig(clothArg, text, edits), paths: editPaths(edits), vouched: previousCount(edits), relative: relativeConfigPaths(dirname(resolve(clothArg)), JSON.parse(text) as Record<string, unknown>) };
+            const edits = clothConfigEdits(drafted, plain, JSON.parse(text) as unknown, false, previous);
+            return { at: writeArg, input: text, text: writtenClothConfig(clothArg, text, edits), paths: editPaths(edits), vouched: previousCount(edits), relative: relativeConfigPaths(dirname(resolve(clothArg)), JSON.parse(text) as Record<string, unknown>) };
           })();
+    // Issue #572: the keyed chains CHAIN_LAG reads only once the recipe took its trees' idle keys — in the config written
+    // against the --cloth config with --write-config, else in the proposal against the draft without the recipe.
+    const leftBehind: { findings: DraftLintFinding[]; unread: string | null } = (() => {
+      if (plain === null) return { findings: [], unread: null };
+      if (written === null) return { findings: chainsLeftBehind(proposalAsConfig(P, plain), proposalAsConfig(P, prop)), unread: null };
+      const read = (what: string, text: string): CharacterConfig | string => {
+        try {
+          return proposalAsConfig(P, JSON.parse(text) as Record<string, unknown>);
+        } catch (err) {
+          if (!(err instanceof PartsError)) throw err;
+          return `${what} does not load as a config (${err.problems[0].code}: ${err.problems[0].object})`;
+        }
+      };
+      const before = read(String(clothArg), written.input);
+      const after = read(written.at, written.text);
+      if (typeof before === 'string') return { findings: [], unread: before };
+      if (typeof after === 'string') return { findings: [], unread: after };
+      return { findings: chainsLeftBehind(before, after), unread: null };
+    })();
     const bfile = basisFile(P, prop, basis, cfg === null || cmpPath === undefined ? null : { where: cmpPath, config: cfg });
     const img = drawLandmarks(P, painting, prop.bones, 'PROPOSAL - CORRECT ME');
     mkdirSync(render, { recursive: true });
@@ -1413,7 +1438,8 @@ function cmdPropose(args: string[]): number {
     }
     console.log(`wrote proposal.json (${prop.bones.length} bone entries, ${Object.keys(prop.meshes).length} meshes) and render/landmarks.png (+_head) under ${out}`);
     for (const n of prop.notes) console.log(`note: ${n}`);
-    printLint(P, prop, joints, draftLint);
+    if (leftBehind.unread !== null) console.log(`note: the keyed chains were not read after the recipe (issue #572): ${leftBehind.unread}`);
+    printLint(P, prop, joints, [...draftLint, ...leftBehind.findings]);
     console.log(basisLine(bfile, out));
     if (written !== null && clothArg !== undefined) {
       const from = fromArg === undefined ? '' : `; --from ${fromArg}: ${written.vouched} ${written.vouched === 1 ? 'entry' : 'entries'} taken as the previous recipe's draft`;

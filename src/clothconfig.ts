@@ -15,9 +15,12 @@
  * move keeps the input's bytes.
  */
 
+import type { CharacterConfig } from './config.ts';
 import { PartsError, type Problem } from './errors.ts';
+import { chainFigures } from './instruments.ts';
 import { type ConfigEdit, splicedEdits } from './meshdraft.ts';
-import { PROPOSAL_CONFIG_SECTIONS, type Proposal } from './propose.ts';
+import { idleMotion } from './motion.ts';
+import { type ChainLeftBehindFinding, PROPOSAL_CONFIG_SECTIONS, type Proposal } from './propose.ts';
 
 function isPlain(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -278,4 +281,78 @@ export function previousCount(edits: readonly ClothEdit[]): number {
 /** What each edit names, in order: what the write line prints. */
 export function editPaths(edits: readonly ClothEdit[]): string[] {
   return edits.map((e) => e.label);
+}
+
+/** One config's keyed chains as `CHAIN_LAG` reads them: the rig's bone tree from `bones`, and the idle `idleMotion` writes. */
+function keyedChains(cfg: CharacterConfig): { figures: ReturnType<typeof chainFigures>; field: Map<string, string> } {
+  const bones: Array<{ name: string; parent: string | null }> = [];
+  const links = new Map<string, string[]>();
+  for (const e of cfg.bones) {
+    if ('chain' in e) {
+      const names = e.points.map((_, k) => `${e.chain}${k}`);
+      names.forEach((n, k) => bones.push({ name: n, parent: k === 0 ? e.parent : names[k - 1] }));
+      links.set(e.chain, names);
+    } else bones.push({ name: e.name, parent: e.parent });
+  }
+  // The config field that keys each bone's rotation, as the author would edit it.
+  const field = new Map<string, string>();
+  for (const t of cfg.motion.tracks) {
+    if ('chain' in t) (links.get(t.chain) ?? []).forEach((n, i) => field.set(n, `motion.tracks chain "${t.chain}" amps[${i}]`));
+    else if (t.prop === 'rotate') field.set(t.bone, `motion.tracks bone "${t.bone}" prop "rotate" amp`);
+  }
+  // check reads motion.json as written; the round trip through JSON is that file's shape.
+  const motion = JSON.parse(JSON.stringify(idleMotion(cfg, links))) as Record<string, unknown>;
+  return { figures: chainFigures({ bones }, motion), field };
+}
+
+/** The config field keying `bone`; every rotate-keyed bone of the idle is keyed by a config track, so a miss is this module's error. */
+function fieldOf(field: ReadonlyMap<string, string>, bone: string): string {
+  const f = field.get(bone);
+  if (f === undefined) throw new Error(`chainsLeftBehind: no config track keys the rotation of "${bone}"`);
+  return f;
+}
+
+/** Python's `round(x, 3)`, as check's `CHAIN_LAG` rounds both amplitudes before it compares them (`src/check.ts`, `chainLine`). */
+function round3(x: number): number {
+  return Number(x.toFixed(3));
+}
+
+/**
+ * Issue #572: the links `CHAIN_LAG` would refuse after the recipe that it did not read before. `before` is the config
+ * the recipe drafts into (the plain draft, or the `--cloth` config `--write-config` splices) and `after` the one it
+ * hands back (the draft with the recipe, or the config written), each read with `CHAIN_LAG`'s own reader,
+ * `chainFigures` over the bone tree and the idle the rig stage writes. A pair `above > bone` adjacent in a run of
+ * `after` and in no run of `before` is a run the recipe made — it took the idle keys off `above`'s other keyed
+ * children — and where `bone`'s amplitude falls below `above`'s (both to three places, as check compares them) it is a
+ * finding. A pair `before` already ran is check's to name, as it was. Nothing is changed: the amplitude is the
+ * author's. Rotate tracks under one control (`<bone>_ctl`) keep the same tree, so the config's bones read as the rig's.
+ */
+export function chainsLeftBehind(before: CharacterConfig, after: CharacterConfig): ChainLeftBehindFinding[] {
+  const b = keyedChains(before).figures;
+  const a = keyedChains(after);
+  const ran = new Set<string>();
+  for (const c of b.chains) for (let i = 1; i < c.length; i++) ran.add(`${c[i - 1].bone}>${c[i].bone}`);
+  const keyedUnder = (f: ReturnType<typeof chainFigures>, p: string): string[] => [...f.edges.filter((e) => e.parent === p).map((e) => e.child), ...f.otherPeriod.filter((e) => e.parent === p).map((e) => e.child)];
+  const out: ChainLeftBehindFinding[] = [];
+  for (const c of a.figures.chains) {
+    for (let i = 1; i < c.length; i++) {
+      const above = c[i - 1].bone;
+      const bone = c[i].bone;
+      const hi = round3(c[i - 1].reading.amp);
+      const lo = round3(c[i].reading.amp);
+      if (!(lo < hi) || ran.has(`${above}>${bone}`)) continue;
+      const now = new Set(keyedUnder(a.figures, above));
+      out.push({
+        kind: 'chain-left-behind',
+        bone,
+        above,
+        chain: c.map((l) => l.bone),
+        amp: lo,
+        aboveAmp: hi,
+        siblings: keyedUnder(b, above).filter((s) => !now.has(s)),
+        field: fieldOf(a.field, bone),
+      });
+    }
+  }
+  return out;
 }

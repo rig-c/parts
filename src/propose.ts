@@ -131,7 +131,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { drawText, GLYPH_H } from 'rig-c/tools/font5x7.ts';
-import { type BoneEntry, type ConfigConstraint, type ConfigStop, contourRegionsOf, deriveBustRegions, type Limb, type MeshSpec, type PartBinding, parseConfig, type Point, type Segment, type SkeletonSections, turnRidersByBone } from './config.ts';
+import { type BoneEntry, type CharacterConfig, type ConfigConstraint, type ConfigStop, contourRegionsOf, deriveBustRegions, type Limb, type MeshSpec, type PartBinding, parseConfig, type Point, type Segment, type SkeletonSections, turnRidersByBone } from './config.ts';
 export { contourRegionsOf, deriveBustRegions };
 import { computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toWorld } from './coords.ts';
 import { PartsError, type Problem, refuseIfAny } from './errors.ts';
@@ -458,9 +458,18 @@ export function proposalAssemble(P: PartSet): Record<string, unknown> {
  * refusals.
  */
 export function checkProposal(P: PartSet, p: Proposal): void {
+  proposalAsConfig(P, p);
+}
+
+/**
+ * The config sections of a proposal (or of a config: issue #572 reads `--write-config`'s text through it) parsed as
+ * the config loader parses them, beside this part set's `assemble`: what {@link checkProposal} refuses by, and what
+ * `propose --cloth` reads its chains' amplitudes off (`chainsLeftBehind`, `src/clothconfig.ts`).
+ */
+export function proposalAsConfig(P: PartSet, p: { readonly [K in (typeof PROPOSAL_CONFIG_SECTIONS)[number]]?: unknown }): CharacterConfig {
   const sections: Record<string, unknown> = {};
   for (const k of PROPOSAL_CONFIG_SECTIONS) if (p[k] !== undefined) sections[k] = p[k];
-  parseConfig({ key: 'proposal', assemble: proposalAssemble(P), ...sections });
+  return parseConfig({ key: 'proposal', assemble: proposalAssemble(P), ...sections });
 }
 
 /** Fixed key order, two-space indent, trailing newline: the same inputs write the same bytes. */
@@ -4658,8 +4667,26 @@ export interface InfluenceRadiusFinding {
   cell: number;
 }
 
+/**
+ * Issue #572: a link of a keyed chain `CHAIN_LAG` would read only after `propose --cloth` took the idle keys off the
+ * trees it drafted — `above`'s other keyed children (`siblings`) are gone, so `above > bone` is one unbranched run —
+ * whose amplitude falls below the link above's (`amp` under `aboveAmp`, three places as check reads them). `chain` is
+ * the run from its first link; `field` the config field that keys `bone`. A LINT, not an edit: the amplitude is the
+ * author's, and `aboveAmp` is the least that passes the amplitude rule.
+ */
+export interface ChainLeftBehindFinding {
+  kind: 'chain-left-behind';
+  bone: string;
+  above: string;
+  chain: string[];
+  amp: number;
+  aboveAmp: number;
+  siblings: string[];
+  field: string;
+}
+
 /** What `propose` hands `lint` beside the proposal: findings of the draft itself, not of a check over the spec. */
-export type DraftLintFinding = LimbJointOffArtFinding | InfluenceRadiusFinding;
+export type DraftLintFinding = LimbJointOffArtFinding | InfluenceRadiusFinding | ChainLeftBehindFinding;
 
 export type LintFinding =
   | OffArtFinding
@@ -4677,7 +4704,8 @@ export type LintFinding =
   | CrossedLimbsFinding
   | StopTouchAboveRootFinding
   | LimbJointOffArtFinding
-  | InfluenceRadiusFinding;
+  | InfluenceRadiusFinding
+  | ChainLeftBehindFinding;
 
 /** Which rule set read the torso and the sleeve chains, under `--keypoints`. */
 export interface LintBasis {
@@ -5233,6 +5261,7 @@ function findingBones(f: LintFinding, bones: readonly BoneEntry[]): string[] {
     case 'limb-joint-off-art':
       return [f.link];
     case 'influence-radius':
+    case 'chain-left-behind':
       return [];
     case 'hip-not-below-chest':
     case 'hip-not-past-chest':
@@ -5407,6 +5436,11 @@ export function basisLines(b: LintBasis): string[] {
  */
 export function lintLine(f: LintFinding): string {
   switch (f.kind) {
+    case 'chain-left-behind':
+      return (
+        `LINT ${f.bone} under ${f.above}: amplitude ${f.amp.toFixed(3)} below the link above's ${f.aboveAmp.toFixed(3)} in the keyed chain ${f.chain.join(' > ')}, which check reads only now that the recipe took the idle keys off ${f.above}'s other keyed children (${f.siblings.join(', ')}), ` +
+        `so CHECK_CHAIN_LAG refuses the build ("amps" grow toward the tip; check names a bone by its control, <bone>_ctl, where --idle-keys ctl gives it one) — ${f.field} at ${f.aboveAmp.toFixed(3)} or more in size passes; the draft leaves it as keyed, the amplitude is the author's`
+      );
     case 'influence-radius':
       return (
         `LINT ${f.part} on mesh ${pyRepr(f.part)}: influence radius ${f.radius} = farthest ${f.farthest} + ${f.cells} × cell ${f.cell} — drafted by config.cloth.${JSON.stringify(f.tag)}.influence, ` +
