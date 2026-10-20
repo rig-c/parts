@@ -68,7 +68,7 @@ import { jsonValueSpan, scratchConfig } from './meshdraft.ts';
 import { computeExactFrameTransforms } from './coords.ts';
 import { type PartsFile } from './parts.ts';
 import { applyMeshEdit, type DeltaApplied, type DeltaPlant, deltaSourceProblems, type MeshEditDocument, readMeshEdit } from './remeshdelta.ts';
-import { DEFAULT_IDLE_KEYS, type IdleKeys, type MeshAttachment, rigJsonText, type RigSpec } from './rig.ts';
+import { DEFAULT_IDLE_KEYS, type IdleKeys, type MeshAttachment, meshBoundBones, rigJsonText, type RigSpec } from './rig.ts';
 import { pyRound } from './round.ts';
 
 /** The provenance file's spec. */
@@ -555,7 +555,7 @@ const textsOf = (tree: FileTree): Array<readonly [string, string]> => [...tree].
 
 /**
  * The delta's `mesh_report.json` row (issue #526): the input's row, key for key, with `vertices`, `triangles`, `hull`,
- * `bones` (the sorted set the new weights name), `max_influences` and `mean_influences` recomputed from the new
+ * `bones` (the sorted set the new weights name, `meshBoundBones` — the reading every rig row takes), `max_influences` and `mean_influences` recomputed from the new
  * attachment and `mode` "delta" (in place, or last when the row had none). Every other key is the input's and
  * describes the mesh the delta was drawn over.
  */
@@ -566,7 +566,7 @@ export function deltaRow(row: Json, att: MeshAttachment): Json {
     vertices: n,
     triangles: att.triangles.length / 3,
     hull: att.hull,
-    bones: [...new Set(att.weights.flatMap((w) => w.map((e) => e.bone)))].sort(),
+    bones: meshBoundBones(att),
     max_influences: Math.max(...att.weights.map((w) => w.length)),
     mean_influences: pyRound(entries / n, 2),
     mode: 'delta',

@@ -461,9 +461,9 @@ import { apply as applyAffine, type ComparedMesh, contourAtBudget, cost, errors,
 import { FIELD_LATTICE_GRID, FIELD_POSES, fieldRegion, REGION_SPACINGS } from './fixtures/localfield.ts';
 import { BASE_SPACINGS, CONTROL, describeWorst, displacement, frameOpenings, kindOf, neighbours, pickAtBudget, type PlacedMask, POSE_PHASE, ranked, regionPoses, regionSpacings, resolveSegments, seamOpening, seamPairs, sineAt, SWEEP_TOLERANCES, testRegion, toWorldPx, variantConfig } from './tools/real_compare.ts';
 import { BEND_DEGREES, BEND_WORST_SHARE, bendAnimationNames, bendAnimations, type BendFigure, bendLinks, CALIBRATED_SENTENCE, candidateMesh, carriedBy, islandsJoin, MORE_TRIANGLES_FLAG, RELATIVE_SENTENCE, DUST_MAX_PX, DUST_MAX_SHARE, dustOf, figureRules, type GateLine, gateVerdict, IDLE_BOUND_PX, jsonValueSpan, MEASURED_SENTENCE, MESH_DRAFT_REPORT, meshDraftStage, NOT_COMPARED_SENTENCE, notCompared, partsNamed, type PartReadings, type Reading, READINGS, splicedConfig, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
-import { type Built, type CheckSide, checkHeldProblems, PROVENANCE_FILE, type RemeshInput, type RemeshPlant, type RemeshProvenance, type RemeshResult, remeshStage, requestHeldProblems, targetProblems } from './src/remesh.ts';
+import { type Built, type CheckSide, checkHeldProblems, deltaRow, PROVENANCE_FILE, type RemeshInput, type RemeshPlant, type RemeshProvenance, type RemeshResult, remeshStage, requestHeldProblems, targetProblems } from './src/remesh.ts';
 import { RETUNE_FILE, RETUNE_SPEC, type RetuneInput, type RetunePlant, type RetuneProvenance, type RetuneResult, retuneStage } from './src/retune.ts';
-import { DRAFT_COARSE_GRID, DRAFT_COSTLY_GRID, DRAFT_FIGURE, DRAFT_FINE_GRID, DRAFT_LINKS, DRAFT_SPECK_ALPHA, draftConfig, draftParts, writeDraftFixture, writeDraftFixtureWithContour, writeDraftIslandsFixture } from './fixtures/meshdraft.ts';
+import { DRAFT_COARSE_GRID, DRAFT_CONTOUR_MARK, DRAFT_COSTLY_GRID, DRAFT_FIGURE, DRAFT_FINE_GRID, DRAFT_LINKS, DRAFT_SPECK_ALPHA, draftConfig, draftImages, draftParts, writeDraftFixture, writeDraftFixtureWithContour, writeDraftIslandsFixture } from './fixtures/meshdraft.ts';
 import { pyRound } from './src/round.ts';
 import { COLORS, isSkeletonName, KEYPOINT_NAMES, renderSkeleton, scaledPoints, SKELETON_BASE, SKELETONS, stickScale } from './src/skeleton.ts';
 import { AUTHOR_LABEL_RULE, AUTHOR_NO_ROLE, authorLayerLine, BODY_TAGS, HEAD_TAGS, HIDDEN_NAME_RULE, readAuthorTag, readLayerTag, readTag, SPLIT_TAGS, type TagReading, V3_TAGS } from './src/tags.ts';
@@ -5879,6 +5879,31 @@ function runStopRigCases(say: (name: string, ok: boolean, detail: string, why: s
       'issue #404 (Bar 1): buildRig rebinds the stopped links\' slots, mesh weights and child links onto <link>_d and passes stops to rig.json, while withoutPhysics expands stops before stripping physics so check\'s loop and fold builds keep the stop constraints',
     );
 
+    // RG536B — issue #536 under stops: the skirt's row in the held build's mesh_report.json names the drawn links its
+    // weights were moved onto, as skeleton.model.json binds them and the delta row reads them; the legs, which no stop
+    // rebinds, and every row of the build without stops name the config's links as before.
+    const stopRows = (label: string): MeshReport[] => (readJsonFile(join(root, label, 'rig', 'mesh_report.json')) as unknown as MeshReport[] | null) ?? [];
+    const heldSkirt = stopRows('held').find((r) => r.part === 'skirt');
+    const freeSkirt = stopRows('free').find((r) => r.part === 'skirt');
+    const heldModel = modelBoundNames(join(root, 'held', 'build'), 'skirt');
+    const heldAtt = held.rig?.skins.default.skirt?.skirt;
+    const heldDelta = heldSkirt !== undefined && heldAtt !== undefined && 'type' in heldAtt ? (deltaRow(heldSkirt as unknown as Parameters<typeof deltaRow>[0], heldAtt).bones as string[]) : null;
+    const drawn536 = ['hip', 'skirt_l0_d', 'skirt_l1_d', 'skirt_r0_d', 'skirt_r1_d'];
+    const legs = (label: string): string => JSON.stringify(stopRows(label).filter((r) => r.part !== 'skirt').map((r) => [r.part, r.bones]));
+    say(
+      'RG536B_A_STOPPED_ROW_NAMES_THE_DRAWN_LINKS_THE_MODEL_BINDS_AND_AN_UNSTOPPED_ROW_IS_UNCHANGED',
+      JSON.stringify(heldSkirt?.bones) === JSON.stringify(drawn536) &&
+        JSON.stringify(heldModel) === JSON.stringify(drawn536) &&
+        JSON.stringify(heldDelta) === JSON.stringify(drawn536) &&
+        JSON.stringify(freeSkirt?.bones) === JSON.stringify(['hip', 'skirt_l0', 'skirt_l1', 'skirt_r0', 'skirt_r1']) &&
+        heldSkirt?.max_influences === freeSkirt?.max_influences &&
+        heldSkirt?.mean_influences === freeSkirt?.mean_influences &&
+        legs('held') === legs('free') &&
+        legs('free') === JSON.stringify([['leg_r', ['leg_r0', 'leg_r1']], ['leg_l', ['leg_l0', 'leg_l1']]]),
+      `held: skirt row ${JSON.stringify(heldSkirt?.bones)}, delta reading ${JSON.stringify(heldDelta)}, skeleton.model.json bindings ${JSON.stringify(heldModel)}; free: skirt row ${JSON.stringify(freeSkirt?.bones)}; influences ${heldSkirt?.max_influences}/${heldSkirt?.mean_influences} held, ${freeSkirt?.max_influences}/${freeSkirt?.mean_influences} free; legs held ${legs('held')}, free ${legs('free')}`,
+      'issue #536: the stops rebind a stopped link\'s weights onto <link>_d as the turn rebinds onto its twins, so the same rule — the row names what the emitted model binds — covers both, and a row no stop rebinds reads back what it always wrote',
+    );
+
     // RG491 (Bar 2) — direct buildRig refusal on unresolved chain/bone/link, and rig stage refusal when rigc rejects a stop rule.
     const rawStop = (stops: unknown): PartsError | null =>
       refusals(() => buildRig({ ...(parseConfig(stopConfig()) as unknown as Record<string, unknown>), stops } as unknown as CharacterConfig, partsFile, images));
@@ -7166,6 +7191,15 @@ function constraintRender(dir: string, config: Record<string, unknown>, idleKeys
   return { status: cli.status, out: cli.out, rig, build: buildOut, frames: g.frames.map((fr) => new Map(fr.bones.map((b) => [b.name, b]))) };
 }
 
+/** The sorted bone names a part's attachment binds in rigc's compiled model document under `buildDir` (issue #536). */
+function modelBoundNames(buildDir: string, part: string): string[] | null {
+  const path = join(buildDir, RIGC_MODEL_DOCUMENT);
+  if (!existsSync(path)) return null;
+  const model = JSON.parse(readFileSync(path, 'utf8')) as { skins: Array<{ name: string; attachments: Record<string, Record<string, { vertices?: { bindings?: Array<Array<{ bone: string }>> } }>> }> };
+  const bindings = model.skins.find((s) => s.name === 'default')?.attachments[part]?.[part]?.vertices?.bindings;
+  return bindings === undefined ? null : [...new Set(bindings.flatMap((v) => v.map((e) => e.bone)))].sort();
+}
+
 /** The largest per-frame distance between a bone's tip (origin + length along its x axis) and another bone's origin. */
 function tipGap(frames: Array<Map<string, GeometryBone>>, bone: string, length: number, target: string): number {
   let worst = 0;
@@ -7476,6 +7510,37 @@ function runTurnRigCases(say: (name: string, ok: boolean, detail: string, why: s
         sameBytes('dial', 'rest') === 0,
       `plain: ${greenLine(plainR)}, hem1 swings ${pyRound(swings, 6)} degrees over the idle (physics and keys); turned at rest: ${greenLine(restR)}; every plain bone in every frame off by at most ${restOff} at rest and ${dialOff} with the control at x ${DIAL}; twins at rest off their bones by ${restTwin}; dialled, eye's twin off (+${DIAL}, 0) by ${pyRound(eyeGap, 9)} and cloth's off (−${DIAL}/3, 0) by ${pyRound(clothGap, 9)}; idle PNGs byte-equal to the turned build at rest: ${sameBytes('twins', 'rest')} of ${restFrames} with the transform constraints taken out, ${sameBytes('dial', 'rest')} of ${restFrames} with the control at ${DIAL} (the planted negative)`,
       'issue #251: the control is a dial — at rest the constraints add exactly nothing (the frames are the twins-only rig\'s, byte for byte), and turned it moves each part by its fraction and nothing the idle keys or a physics constraint owns: their bones are bit-equal to the build without `turn` in every frame, so the twins ride the idle and the physics step rather than replacing them',
+    );
+
+    // RG536 — issue #536: the row names the bones the emitted model binds. The cloth's row in the turned build's
+    // mesh_report.json, the delta row's reading of the same attachment (`deltaRow`, remesh --delta's) and the names in
+    // the cloth's bindings in rigc's compile of that rig (skeleton.model.json) are one list: by hand (RG87) the twins
+    // turn_cloth_hem0 and turn_cloth_hem1. Before the fix the row named the config's segment bones, hem0 and hem1 —
+    // the list the build without `turn` binds, and the planted reading here. The counts do not move, and a build whose
+    // only meshed part sits at the pivot (no twin) writes the plain build's mesh_report.json byte for byte.
+    const reportRow = (sub: string, part: string): MeshReport | undefined => (readJsonFile(join(dir, sub, 'out', 'mesh_report.json')) as unknown as MeshReport[] | null)?.find((r) => r.part === part);
+    const restRow = reportRow('rest', 'cloth');
+    const plainRow = reportRow('plain', 'cloth');
+    const restModel = modelBoundNames(join(dir, 'rest', 'build'), 'cloth');
+    const plainModel = modelBoundNames(join(dir, 'plain', 'build'), 'cloth');
+    const restAtt = restR.rig?.skins.default.cloth?.cloth;
+    const restDelta = restRow !== undefined && restAtt !== undefined && 'type' in restAtt ? (deltaRow(restRow as unknown as Parameters<typeof deltaRow>[0], restAtt).bones as string[]) : null;
+    const twins536 = ['turn_cloth_hem0', 'turn_cloth_hem1'];
+    const pivot536 = buildRig(parseConfig(withTurn({ pivot: 0.6, depths: { cloth: 0.6, eye: 0.2 } })), rigParts(), rigImages());
+    say(
+      'RG536_THE_TURNED_ROW_NAMES_THE_TWINS_THE_MODEL_BINDS_AS_THE_DELTA_ROW_DOES_AND_A_ROW_THE_TURN_DOES_NOT_CARRY_IS_UNCHANGED',
+      JSON.stringify(restRow?.bones) === JSON.stringify(twins536) &&
+        JSON.stringify(restModel) === JSON.stringify(twins536) &&
+        JSON.stringify(restDelta) === JSON.stringify(twins536) &&
+        JSON.stringify(plainRow?.bones) === JSON.stringify(['hem0', 'hem1']) &&
+        JSON.stringify(plainModel) === JSON.stringify(['hem0', 'hem1']) &&
+        JSON.stringify(plainRow?.bones) !== JSON.stringify(restModel) &&
+        restRow?.max_influences === plainRow?.max_influences &&
+        restRow?.mean_influences === plainRow?.mean_influences &&
+        rigJsonText(pivot536.meshReport) === rigJsonText(plain.meshReport) &&
+        JSON.stringify(t.meshReport.map((r) => r.bones)) === JSON.stringify([twins536]),
+      `turned: row ${JSON.stringify(restRow?.bones)}, delta reading ${JSON.stringify(restDelta)}, skeleton.model.json bindings ${JSON.stringify(restModel)}; plain: row ${JSON.stringify(plainRow?.bones)}, bindings ${JSON.stringify(plainModel)} (the pre-#536 reading of the turned row, ${plainRow === undefined || JSON.stringify(plainRow.bones) !== JSON.stringify(restModel) ? 'not' : 'EQUAL to'} the turned model's); influences ${restRow?.max_influences}/${restRow?.mean_influences} turned, ${plainRow?.max_influences}/${plainRow?.mean_influences} plain; cloth at the pivot: mesh_report.json ${rigJsonText(pivot536.meshReport) === rigJsonText(plain.meshReport) ? 'is' : 'is NOT'} the plain build's byte for byte`,
+      'issue #536: a consumer that diffs two reports must see a bone change only when the binding changed, so every mode names what the emitted model binds — the turn\'s twins here, read off the written attachment after the turn — the reading remesh --delta already took; renaming a bone moves no count, and a rig the turn does not rebind reads back the names it always wrote',
     );
 
     // Names the turn needs, taken; and a part at the pivot depth, which stays.
@@ -35138,6 +35203,44 @@ function runRemeshSuite(): number {
         (bare16.e !== null ? !existsSync(bare16.out) : bareRead !== 'simple loop'),
       `rebind skipped: written, vertex 100 binds ${bindRead} (RM11 requires ${MOVED_100}); hull order skipped: ${order16.e === null ? 'written' : order16.e.problems.map((p) => `${p.code} ${p.detail.slice(0, 140)}`).join(' | ')}; and with the topology gate out: ${bareRead}`,
       'a gate nobody has seen fail is not a gate: the rebind is held by RM11\'s hand figure (rigc cannot see a binding that is merely wrong), and the hull order by the replay\'s own topology gate — and behind it by the next reader',
+    );
+
+    // RM17 — issue #536's bar: one package with `turn` (the contour fixture, strip at depth 0.6 and mark at 0.2 under
+    // pivot 0.5, so both parts are carried), its mark — a contour mesh — revised by a delta of no ops, so the part is
+    // unchanged. The whole-rig build's row (mode contour), the delta row and the mark's bindings in rigc's compile of
+    // the input (skeleton.model.json) name one list, turn_mark_body by hand (the mark's one segment is on body); before
+    // the fix the contour row named body, the template bone, and the delta row the twin.
+    const tc = draftConfig(DRAFT_COARSE_GRID);
+    tc.meshes = { ...(tc.meshes as Record<string, unknown>), mark: DRAFT_CONTOUR_MARK };
+    tc.regions = {};
+    tc.turn = { pivot: 0.5, depths: { strip: 0.6, mark: 0.2 } };
+    const tfx = writeRigFixture(join(root, 'fx-turn'), tc, draftImages(), draftParts());
+    const tInput = join(root, 'input-turn');
+    rigStage({ config: tfx.config, parts: tfx.parts, out: tInput }, runner, join(root, 'input-turn-gate'), () => {});
+    const tBuild = join(root, 'turn-build');
+    runner(['build', '--rig', join(tInput, 'rig.json'), '--motion', join(tInput, 'motion.json'), '--out', tBuild]);
+    const tModel = existsSync(join(tBuild, RIGC_MODEL_DOCUMENT)) ? (JSON.parse(readFileSync(join(tBuild, RIGC_MODEL_DOCUMENT), 'utf8')) as { skins: Array<{ name: string; attachments: Record<string, Record<string, { uvs: number[]; triangles: number[]; hull: number; vertices: { bindings: Array<Array<{ bone: string }>> } }>> }> }) : null;
+    const tMark = tModel?.skins.find((sk) => sk.name === 'default')?.attachments.mark?.mark;
+    const markBound = tMark === undefined ? null : [...new Set(tMark.vertices.bindings.flatMap((v) => v.map((e) => e.bone)))].sort();
+    const tDelta = request('delta-turn', {
+      ...deltaDoc([], { slot: 'mark', attachment: 'mark' }),
+      source: tMark === undefined ? {} : { vertexCount: tMark.uvs.length / 2, triangleCount: tMark.triangles.length / 3, hullLength: tMark.hull, hash: createHash('sha256').update(JSON.stringify(tMark)).digest('hex') },
+    });
+    const tOut = join(root, 'out-turn');
+    const e17 = refusals(() => remeshStage({ rig: tInput, config: tfx.config, parts: tfx.parts, part: 'mark', delta: tDelta, out: tOut }, runner, rigc, versions, join(root, 'scratch-turn'), () => {}));
+    const markRow = (d: string): { mode?: string; bones?: string[] } | undefined => ((readJsonFile(join(d, 'mesh_report.json')) as unknown as Array<{ part: string; mode?: string; bones?: string[] }> | null) ?? []).find((r) => r.part === 'mark');
+    const wholeRow = markRow(tInput);
+    const deltaRow17 = existsSync(tOut) ? markRow(tOut) : undefined;
+    say(
+      'RM17_UNDER_A_TURN_THE_CONTOUR_ROW_AND_THE_DELTA_ROW_OF_AN_UNCHANGED_PART_NAME_THE_BONES_THE_MODEL_BINDS',
+      e17 === null &&
+        wholeRow?.mode === 'contour' &&
+        deltaRow17?.mode === 'delta' &&
+        JSON.stringify(markBound) === JSON.stringify(['turn_mark_body']) &&
+        JSON.stringify(wholeRow.bones) === JSON.stringify(markBound) &&
+        JSON.stringify(deltaRow17.bones) === JSON.stringify(markBound),
+      `${codes(e17)}; whole-rig row (mode ${wholeRow?.mode}) ${JSON.stringify(wholeRow?.bones)}; delta row (mode ${deltaRow17?.mode}) ${JSON.stringify(deltaRow17?.bones)}; skeleton.model.json bindings ${JSON.stringify(markBound)}`,
+      'issue #536 bar: a consumer diffing two reports of one package sees a bone change only when the binding changed — the whole-rig build and remesh --delta name the same bones for an unchanged part, and they are the bones rigc compiles the binding to',
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
