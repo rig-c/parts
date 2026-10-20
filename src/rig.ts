@@ -166,6 +166,7 @@ import {
 import { type ContourChainRibs, type ContourReport, contourMesh, type ContourRegion, type ContourRib } from './contour.ts';
 import { type LocalInfluence, localInfluences } from './localweights.ts';
 import { edgeLength } from './length.ts';
+import { skeletonLimbJoints } from './limbs.ts';
 import { artCoverage, ART_ALPHA, latticeCells, latticeMesh, latticeStray, ONE_LOOP_PASSES } from './mesh.ts';
 import { bindFaceSurfaceDeform, BLINK, blinkHoldMisses, blinkSpan, CONTROL_SUFFIX, controlledBones, IDLE_FPS, idleMotion, type MotionSpec, moveKeysToControls } from './motion.ts';
 import { type AlternateSetMap, PAINTING_RUN, type PartsFile, readFrom, tagOf } from './parts.ts';
@@ -1092,20 +1093,7 @@ export function deriveAlternateDrawn(
     const altEyeAim = deg(pts.r_eye, pts.l_eye);
     out.head = places(normaliseDegrees((turn.get('head') ?? 0) + (altEyeAim - setupEyeAim)));
   }
-  const limbPairs: ReadonlyArray<readonly [string, readonly [number, number], readonly [number, number]]> = [
-    ['sleeve_r0', pts.r_shoulder, pts.r_elbow],
-    ['sleeve_r1', pts.r_elbow, pts.r_wrist],
-    ['arm_r0', pts.r_shoulder, pts.r_elbow],
-    ['arm_r1', pts.r_elbow, pts.r_wrist],
-    ['sleeve_l0', pts.l_shoulder, pts.l_elbow],
-    ['sleeve_l1', pts.l_elbow, pts.l_wrist],
-    ['arm_l0', pts.l_shoulder, pts.l_elbow],
-    ['arm_l1', pts.l_elbow, pts.l_wrist],
-    ['leg_r0', pts.r_hip, pts.r_knee],
-    ['leg_r1', pts.r_knee, pts.r_ankle],
-    ['leg_l0', pts.l_hip, pts.l_knee],
-    ['leg_l1', pts.l_knee, pts.l_ankle],
-  ];
+  const limbPairs = skeletonLimbJoints(pts);
   for (const [bone, a, b] of limbPairs) {
     if (B.has(bone)) out[bone] = places(normaliseDegrees(deg(a, b)));
   }
@@ -2379,21 +2367,10 @@ export function buildRig(
             return [wx + CX, cropToSpineY(wy, H)];
           };
           const pt = (q: readonly [number, number]): Point => [q[0], q[1]];
-          const skSegs: Record<string, [Point, Point]> | null =
-            alt.skeleton === undefined
-              ? null
-              : {
-                  sleeve_r0: [pt(alt.skeleton.r_shoulder), pt(alt.skeleton.r_elbow)],
-                  sleeve_r1: [pt(alt.skeleton.r_elbow), pt(alt.skeleton.r_wrist)],
-                  sleeve_l0: [pt(alt.skeleton.l_shoulder), pt(alt.skeleton.l_elbow)],
-                  sleeve_l1: [pt(alt.skeleton.l_elbow), pt(alt.skeleton.l_wrist)],
-                  leg_r0: [pt(alt.skeleton.r_hip), pt(alt.skeleton.r_knee)],
-                  leg_r1: [pt(alt.skeleton.r_knee), pt(alt.skeleton.r_ankle)],
-                  leg_l0: [pt(alt.skeleton.l_hip), pt(alt.skeleton.l_knee)],
-                  leg_l1: [pt(alt.skeleton.l_knee), pt(alt.skeleton.l_ankle)],
-                };
+          const skSegs: Map<string, readonly [Point, Point]> | null =
+            alt.skeleton === undefined ? null : new Map(skeletonLimbJoints(alt.skeleton).map(([bone, a, b]) => [bone, [pt(a), pt(b)] as const]));
           segs = segs.map((s) => {
-            const skPair = skSegs?.[s.bone];
+            const skPair = skSegs?.get(s.bone);
             return skPair !== undefined ? { bone: s.bone, a: skPair[0], b: skPair[1] } : { bone: s.bone, a: movePt(s.bone, s.a), b: movePt(s.bone, s.b) };
           });
           const nonSkirt = segs.filter((s) => !hipChainLinks.has(s.bone));
@@ -2489,6 +2466,8 @@ export function buildRig(
         slots: slotMap,
         ...(hideList.length > 0 ? { hides: hideList } : {}),
         ...(drawn === undefined ? {} : { drawn }),
+        ...(alt.drawnLength === undefined ? {} : { drawnLength: { ...alt.drawnLength } }),
+        ...(alt.registration === undefined ? {} : { registration: { offset: [alt.registration.offset[0], alt.registration.offset[1]], scale: alt.registration.scale } }),
         ...(coversFace && cfg.turn !== undefined ? { threshold: { ...FACE_RATED_BAND } } : {}),
       };
     }
