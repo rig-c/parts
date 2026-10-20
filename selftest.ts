@@ -18695,6 +18695,79 @@ function runRequirementsSuite(): number {
       "#87: in a rig composed of several characters a target can simply be another character's bone, named as the composed rig names it — so it resolves as any bone does, and the unprefixed name a single character would use is a miss named with the composed names",
     );
 
+    // Issue #540: a contact or an aim held against its own bone reads 0 by construction (or, an aim at its own origin, no
+    // line at all), so it is refused by the reader, beside the file's other refusals, before anything is built. The probe
+    // rig has no `hip`: `lower` (under `upper`, under the root) stands in for the issue's non-root bone, and `pointer`
+    // (length POINTER_LEN) for its aimed bone.
+    type SelfRun = { status: number; out: string; outDir: string };
+    const selfRun = (label: string, requirements: Array<Record<string, unknown>>): SelfRun => {
+      const root = join(dir, `self-${label}`);
+      writeReqRig(join(root, 'rig'));
+      writeRequirements(join(root, 'req.json'), { requirements });
+      const r = runCli(['check', '--rig', join(root, 'rig'), '--out', join(root, 'out'), '--requirements', join(root, 'req.json')]);
+      return { status: r.status, out: r.out, outDir: join(root, 'out') };
+    };
+    const nothingWritten = (r: SelfRun): boolean => !existsSync(r.outDir) || readdirSync(r.outDir).length === 0;
+    const failLines = (r: SelfRun): string[] => r.out.split('\n').filter((l) => l.startsWith('  FAIL  ')).map((l) => l.trim());
+    const selfRoot = { name: 'ROOT_SELF', kind: 'contact', animation: 'reach', bone: 'root', point: 'origin', target: { bone: 'root', point: 'origin' }, within_px: 0.01 };
+    const selfLower = { name: 'LOWER_SELF', kind: 'contact', animation: 'reach', bone: 'lower', point: 'origin', target: { bone: 'lower', point: 'origin' }, within_px: 0.01 };
+    const selfAim = { name: 'POINTER_SELF', kind: 'aim', animation: 'reach', bone: 'pointer', target: { bone: 'pointer', point: 'tip' }, within_degrees: 0.01 };
+    const singles = [selfRoot, selfLower, selfAim].map((r) => ({ name: r.name, run: selfRun(r.name.toLowerCase(), [r]) }));
+    const wantSelf = (n: string): string => `FAIL  REQUIREMENTS_SELF_TARGET: requirements[0] "${n}" field "target"`;
+    say(
+      'RQ57_A_CONTACT_ON_ITS_OWN_BONE_AND_POINT_AND_AN_AIM_AT_ITS_OWN_TIP_ARE_EACH_REFUSED_BY_NAME_AND_CHECK_WRITES_NOTHING',
+      singles.every(({ name, run }) => run.status === 1 && failLines(run).length === 1 && failLines(run)[0].startsWith(wantSelf(name)) && failLines(run)[0].includes('measures 0 by construction') && nothingWritten(run) && !run.out.includes('gate rig-play')),
+      singles.map(({ name, run }) => `${name}: exit ${run.status}; ${failLines(run).join(' | ') || 'no FAIL line'}; out ${nothingWritten(run) ? 'empty' : 'WRITTEN'}`).join(' || '),
+      "issue #540's three rows, each alone on the probe rig (contact root origin / root origin; lower origin / lower origin for the issue's hip; aim pointer / pointer tip): each read PASS at 0 before, a figure no rig could miss — now each is refused by name with exit 1 before rigc builds anything, and check's out directory has no entry",
+    );
+
+    const together = selfRun('together', [selfRoot, selfLower, selfAim]);
+    const tLines = failLines(together);
+    say(
+      'RQ58_THE_THREE_SELF_TARGETS_PLANTED_TOGETHER_ARE_NAMED_IN_ONE_THROW',
+      together.status === 1 &&
+        tLines.length === 3 &&
+        tLines[0].startsWith('FAIL  REQUIREMENTS_SELF_TARGET: requirements[0] "ROOT_SELF" field "target"') &&
+        tLines[1].startsWith('FAIL  REQUIREMENTS_SELF_TARGET: requirements[1] "LOWER_SELF" field "target"') &&
+        tLines[2].startsWith('FAIL  REQUIREMENTS_SELF_TARGET: requirements[2] "POINTER_SELF" field "target"') &&
+        together.out.includes('refused: 3 problem(s)') &&
+        nothingWritten(together),
+      `exit ${together.status}; ${tLines.length} FAIL line(s): ${tLines.map((l) => l.slice(0, 90)).join(' | ')}; out ${nothingWritten(together) ? 'empty' : 'WRITTEN'}`,
+      'readers collect every problem and throw once: the three rows in one file are three lines of one refusal, not the first of them',
+    );
+
+    // The positive controls' lines are the text check printed for the same two requirements before issue #540 (captured
+    // on the unpatched reader): 39.357337 px is the measured distance from the lower arm's tip to `far`'s origin at frame
+    // 0, and 10 px is LOWER_LEN, the lower arm's own length.
+    const kept = selfRun('kept', [
+      { name: 'HAND_ON_FAR', kind: 'contact', animation: 'reach', bone: 'lower', point: 'tip', target: { bone: 'far', point: 'origin' }, within_px: 100 },
+      { name: 'LOWER_SPAN', kind: 'contact', animation: 'reach', bone: 'lower', point: 'tip', target: { bone: 'lower', point: 'origin' }, within_px: LOWER_LEN + 0.01 },
+    ]);
+    const keptLine = (n: string): string => kept.out.split('\n').find((l) => l.startsWith(`  ${n}: `))?.trim() ?? `no ${n} line`;
+    const wantFar = 'HAND_ON_FAR: PASS — kind contact; animation reach; of bone "lower" tip; against bone "far" origin; frames 5; largest_px 39.357337; at frame 0 (t = 0s); within_px 100';
+    const wantSpan = `LOWER_SPAN: PASS — kind contact; animation reach; of bone "lower" tip; against bone "lower" origin; frames 5; largest_px ${LOWER_LEN}; at frame 0 (t = 0s); within_px ${LOWER_LEN + 0.01}`;
+    say(
+      'RQ59_A_CONTACT_BETWEEN_TWO_BONES_AND_A_TIP_AGAINST_ITS_OWN_ORIGIN_READ_AS_BEFORE',
+      keptLine('HAND_ON_FAR') === wantFar && keptLine('LOWER_SPAN') === wantSpan && !kept.out.includes('REQUIREMENTS_SELF_TARGET'),
+      `exit ${kept.status}; ${keptLine('HAND_ON_FAR')} | ${keptLine('LOWER_SPAN')}`,
+      "the positive control for RQ57-RQ60: the rule is the same bone AND the same point for a contact — two bones, or one bone's tip against its own origin (a reading of its length), are measured exactly as before",
+    );
+
+    const aimOrigin = selfRun('aim-origin', [{ ...selfAim, name: 'POINTER_ORIGIN', target: { bone: 'pointer', point: 'origin' } }]);
+    const aoLines = failLines(aimOrigin);
+    say(
+      'RQ60_AN_AIM_AT_ITS_OWN_ORIGIN_IS_REFUSED_AT_READ_TIME_WHERE_IT_WAS_NOT_MEASURABLE',
+      aimOrigin.status === 1 &&
+        aoLines.length === 1 &&
+        aoLines[0].startsWith('FAIL  REQUIREMENTS_SELF_TARGET: requirements[0] "POINTER_ORIGIN" field "target"') &&
+        aoLines[0].includes('no line to aim along') &&
+        !aimOrigin.out.includes('NOT MEASURABLE') &&
+        !aimOrigin.out.includes('CHECK_REQUIREMENT_MEASURABLE') &&
+        nothingWritten(aimOrigin),
+      `exit ${aimOrigin.status}; ${aoLines.join(' | ') || 'no FAIL line'}; NOT MEASURABLE printed: ${aimOrigin.out.includes('NOT MEASURABLE')}; out ${nothingWritten(aimOrigin) ? 'empty' : 'WRITTEN'}`,
+      "issue #540's fourth row: the same file read NOT MEASURABLE (CHECK_REQUIREMENT_MEASURABLE) after a build; an aim at a point of its own bone is one input, so it is refused once, by the reader, before anything is built",
+    );
+
     // Issue #111: the seam between two parts' art, held by the scene.
     const seamReq = { name: 'BANGS_ON_FACE', kind: 'seam', animation: 'idle', part: 'p', neighbour: 'n', within_px: 2 };
     const seamRead = readRequirements(file('seam', { spec, fps: REQ_FPS, requirements: [seamReq] }));
