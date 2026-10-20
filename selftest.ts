@@ -22016,7 +22016,10 @@ function runBuildSuite(): number {
         shinSeamLine.includes(' 0 px over 40, 0.00 rig px') &&
         shinCheck?.sets?.run?.PASS === true &&
         shinFoot !== undefined &&
-        shinFoot.y === 46,
+        // The painted foot runs rows 46–49 and the box's bottom holds there; since #557 the ankle cap is filled from the
+        // shin's layer above the cut, so the box starts 5 rows higher (41), where it started at 46 before.
+        shinFoot.y === 41 &&
+        shinFoot.y + shinFoot.h === 50,
       `build --all-sets exit ${shinRun.status}; sets.json run.drawnLength ${JSON.stringify(shinEntry?.drawnLength ?? null)}, registration ${JSON.stringify(shinEntry?.registration ?? null)}; parts.json run.drawnLength ${JSON.stringify(shinAlt?.drawnLength ?? null)}; run_foot_r box ${shinFoot === undefined ? 'absent' : `${shinFoot.w}x${shinFoot.h} @ ${shinFoot.x},${shinFoot.y}`}; ${shinSeamLine.trim() || 'no seam (run) line'}; check.json sets.run.PASS ${String(shinCheck?.sets?.run?.PASS ?? null)}`,
       'issue #539, bar 1: a set whose skeleton draws the shin at 0.5 of its base length is cut at the skeleton\'s knee and ankle, records drawnLength and registration in sets.json and parts.json, and its setup pose matches its own painting within the seam bar',
     );
