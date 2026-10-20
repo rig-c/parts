@@ -1537,7 +1537,7 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
   if ('cloth' in t) checkCloth(c, t.cloth);
   if ('requirements' in t && c.string('config.requirements', t.requirements) && base !== null) checkRequirementsFile(c, resolve(base, t.requirements));
   const from = isPlainObject(t.motion) ? t.motion.animations_from : undefined;
-  const animations = base !== null && typeof from === 'string' && from !== '' ? readAnimationsFrom(c, resolve(base, from)) : null;
+  const animations = base !== null && typeof from === 'string' && from !== '' ? readAnimationsFrom(c, base, from) : null;
   if (animations !== null) {
     checkFaceAnimationBand(c, animations, hasAltFace, t.turn, attached);
     checkAnimationSetKeys(c, animations, t.assemble, new Set<string>([...parts, ...patches, ...cuts, ...(limbs?.parts.keys() ?? [])]));
@@ -1592,13 +1592,18 @@ function checkRequirementsFile(c: Check, file: string): void {
  * Read the file `motion.animations_from` names (issue #183) and vouch for what
  * merging its animations beside the idle needs, every problem collected in `c`:
  *
- * - `CONFIG_FILE_PRESENT`: no such file, or a file that cannot be read.
+ * - `CONFIG_FILE_PRESENT`: no such file, or a file that cannot be read. The
+ *   line names the path as typed, the config's directory it was resolved
+ *   against and what that gave (issue #569): the path is read beside the
+ *   config, not in the working directory, and a reader who cannot see the
+ *   disk needs all three to tell which was wrong.
  * - `CONFIG_IS_JSON`: the text does not parse.
  * - `CONFIG_FIELD_TYPE`: the file is not an object, its `spec` is not
  *   "rigc-motion/1", its `animations` is not an object, or an animation in it
  *   is not one. `CONFIG_KEY_KNOWN` / `CONFIG_FIELD_PRESENT`: a key besides
  *   `spec` and `animations` (and the annotation and record doors), or one of
- *   the two absent. rig-c's `easings`, `groups`, `setup`, `physics` and `mix`
+ *   the two absent; an absent `spec` is told the line to write and the whole
+ *   file's shape (issue #569), from {@link ANIMATIONS_FROM_SPEC}. rig-c's `easings`, `groups`, `setup`, `physics` and `mix`
  *   are refused rather than dropped: `motion.json`'s own are this package's,
  *   and a table read and not written would be a value lost without a word.
  * - `CONFIG_ANIMATION_NAME_FREE`: an animation named `idle`, the one the
@@ -1609,18 +1614,21 @@ function checkRequirementsFile(c: Check, file: string): void {
  *
  * Returns the animations when this file added no problem, else null.
  */
-function readAnimationsFrom(c: Check, file: string): AnimationsFrom | null {
+function readAnimationsFrom(c: Check, base: string, from: string): AnimationsFrom | null {
   const field = 'config.motion.animations_from';
-  const shape = `a file in rig-c's motion-spec shape, {"spec": "${ANIMATIONS_FROM_SPEC}", "animations": {"<name>": {"duration": …, "tracks": [...]}}}, its path relative to the config's directory`;
+  const file = resolve(base, from);
+  const form = `{"spec": "${ANIMATIONS_FROM_SPEC}", "animations": {"<name>": {"duration": …, "tracks": [...]}}}`;
+  const shape = `a file in rig-c's motion-spec shape, ${form}, its path relative to the config's directory`;
+  const where = `names ${JSON.stringify(from)}, resolved against the config's directory ${base} (not the working directory) to ${file}`;
   if (!existsSync(file) || !statSync(file).isFile()) {
-    c.fail('CONFIG_FILE_PRESENT', field, `names ${file}, which is no such file; ${shape} is required`);
+    c.fail('CONFIG_FILE_PRESENT', field, `${where}, which is no such file; ${shape} is required`);
     return null;
   }
   let text: string;
   try {
     text = readFileSync(file, 'utf8');
   } catch (err) {
-    c.fail('CONFIG_FILE_PRESENT', field, `names ${file}, which cannot be read: ${(err as Error).message}; ${shape} is required`);
+    c.fail('CONFIG_FILE_PRESENT', field, `${where}, which cannot be read: ${(err as Error).message}; ${shape} is required`);
     return null;
   }
   let raw: Json;
@@ -1643,7 +1651,13 @@ function readAnimationsFrom(c: Check, file: string): AnimationsFrom | null {
       `names "${r.key}" ${r.count === 2 ? 'twice' : `${r.count} times`}; each key once is required — JSON keeps only the last, so ${r.at === 'animations' ? 'every animation of that name but the last' : 'every value but the last'} would be dropped without a word`,
     );
   }
-  const o = c.object(at, raw, ['spec', 'animations'], []);
+  // Both keys are required; `c.object` is given them as optional so an absent
+  // `spec` can be told the line to write, in the order `c.object` names them.
+  const o = c.object(at, raw, [], ['spec', 'animations']);
+  if (o !== null && !('spec' in o)) {
+    c.fail('CONFIG_FIELD_PRESENT', `${at}.spec`, `is absent and required: write "spec": "${ANIMATIONS_FROM_SPEC}" beside "animations", the motion-spec version motion.json states — the whole file is ${form}`);
+  }
+  if (o !== null && !('animations' in o)) c.fail('CONFIG_FIELD_PRESENT', `${at}.animations`, 'is absent and required');
   if (o !== null && 'spec' in o && o.spec !== ANIMATIONS_FROM_SPEC) {
     c.fail('CONFIG_FIELD_TYPE', `${at}.spec`, `is ${show(o.spec)}; "${ANIMATIONS_FROM_SPEC}" is required, the motion-spec version motion.json states`);
   }
