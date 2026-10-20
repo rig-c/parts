@@ -14851,6 +14851,139 @@ function runSweepCheckCases(say: (name: string, ok: boolean, detail: string, why
 }
 
 /**
+ * Issue #570: AUTHORING's recipe *planted feet on a parts figure*, its three json blocks — the config fragment,
+ * `dance.json` and `feet.json` — read out of the guide and built as written on the figure the guide names: on the
+ * 64x64 flat painting at scale 1 (a run pixel is a rig pixel), one `legwear` layer, two legs x 30..37 and 44..51 over
+ * rows 12..49 joined by a band over rows 6..11 (one island), and one `footwear` layer, two shoes x 29..38 and 43..52
+ * over rows 50..54. By hand, each leg is 44 px of bone, hip (34, 6) or (48, 6) to ankle (34, 50) or (48, 50):
+ *
+ * - The recipe: at t = 1 s the hip stands 3 px aside and 0 down, so the ankle lies sqrt(44^2 + 3^2) = 44.102154 px
+ *   from the hip joint and the solver stretches the leg straight — the tip misses its stage point by 0.102154 px, the
+ *   largest over the dance (at t = 0.5 s the hip has sunk 3 px, so the target is in reach). Each contact reads that,
+ *   under its 0.5 px bar.
+ * - The targets under the shins: the loader refuses both iks by name, and nothing is built.
+ * - No ik: the shins ride the hip, so each tip travels as the hip does; its largest offset is at t = 0.5 s, (1.5, -3),
+ *   sqrt(1.5^2 + 3^2) = 3.354102 px (between keys the offset is (3t, 3(1 - |2t - 1|)) over the first second, largest
+ *   at the sink, and the same each second after).
+ * - The knee: `leg_r`'s bendPositive true bends it outward (image left); drawn 1 px inward (x 35) the setup pose
+ *   turns it over and the seam bar fails, drawn 1 px outward (x 33) it builds green.
+ * - The outline uncut: without `maxEdge` each leg's side is one long edge, and the slivers fold in the dance.
+ */
+const FEET_HEADING = '### Recipe: planted feet on a parts figure';
+const FEET_FULL: RunLayerSpec[] = [
+  { name: 'legwear', depth: 0.6, rects: [{ x0: 30, y0: 6, x1: 52, y1: 12, colour: C }, { x0: 30, y0: 12, x1: 38, y1: 50, colour: C }, { x0: 44, y0: 12, x1: 52, y1: 50, colour: C }] },
+  { name: 'footwear', depth: 0.6, rects: [{ x0: 29, y0: 50, x1: 39, y1: 55, colour: C }, { x0: 43, y0: 50, x1: 53, y1: 55, colour: C }] },
+];
+
+/** The recipe's json blocks, in the order the guide writes them, from its heading to the next heading. */
+function feetRecipeBlocks(guide: string): string[] {
+  const at = guide.indexOf(`\n${FEET_HEADING}`);
+  if (at === -1) return [];
+  const end = guide.slice(at + 1).search(/\n#{2,3} /);
+  const section = end === -1 ? guide.slice(at) : guide.slice(at, at + 1 + end);
+  return [...section.matchAll(/```json\n([\s\S]*?)\n```/g)].map((m) => m[1]);
+}
+
+function runPlantedFeetCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const dir = temp('planted-feet');
+  try {
+    const blocks = feetRecipeBlocks(readFileSync(join(ROOT, 'docs', 'AUTHORING.md'), 'utf8'));
+    const fragment = blocks.length === 3 ? (JSON.parse(blocks[0]) as Record<string, unknown>) : null;
+    writeRun(join(dir, 'full'), FEET_FULL);
+    writeRun(join(dir, 'head'), FRAMED_HEAD);
+    writeFileSync(join(dir, 'painting.png'), encodePngBytes(flatPainting()));
+    type Bones = Array<Record<string, unknown>>;
+    const built = (label: string, edit: (c: Record<string, unknown>) => void = () => {}): { status: number; out: string; wrote: boolean } => {
+      const d = join(dir, label);
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, 'dance.json'), `${blocks[1] ?? ''}\n`);
+      writeFileSync(join(d, 'feet.json'), `${blocks[2] ?? ''}\n`);
+      const c: Record<string, unknown> = { ...assembleConfig({ plan: [['legwear', 'full', 'legwear'], ['shoes', 'full', 'footwear']], extend: [] }), ...(JSON.parse(JSON.stringify(fragment ?? {})) as Record<string, unknown>) };
+      edit(c);
+      writeFileSync(join(d, 'config.json'), JSON.stringify(c));
+      const r = runCli(['build', '--config', join(d, 'config.json'), '--source', join(dir, 'painting.png'), '--full', join(dir, 'full'), '--head', join(dir, 'head'), '--out', join(d, 'out')]);
+      return { ...r, wrote: existsSync(join(d, 'out', 'rig')) };
+    };
+    const clean = (out: string): string[] => out.split('\n').map((l) => l.replace(/^\[[a-z]+\] +/, ''));
+    const summary = (out: string): string => clean(out).find((l) => l.startsWith('check: ')) ?? 'no summary';
+    const contact = (out: string, name: string): { status: string; px: number } | null => {
+      const m = new RegExp(`^${name}: (PASS|FAIL) — kind contact; .*; largest_px ([0-9.]+);`).exec(clean(out).find((l) => l.startsWith(`${name}: `)) ?? '');
+      return m === null ? null : { status: m[1], px: Number(m[2]) };
+    };
+    const ankles = (out: string): string => ['RIGHT_ANKLE_STAYS', 'LEFT_ANKLE_STAYS'].map((n) => `${n} ${JSON.stringify(contact(out, n))}`).join(', ');
+    const failLines = (out: string, code: string): string[] => clean(out).filter((l) => l.startsWith(`FAIL  ${code}: `));
+    const round6 = (v: number): number => Math.round(v * 1e6) / 1e6;
+    const reach = round6(Math.sqrt(44 * 44 + 3 * 3) - 44);
+    const travel = round6(Math.sqrt(1.5 * 1.5 + 3 * 3));
+    const bothRead = (out: string, status: string, px: number): boolean =>
+      ['RIGHT_ANKLE_STAYS', 'LEFT_ANKLE_STAYS'].every((n) => contact(out, n)?.status === status && contact(out, n)?.px === px);
+    const bones = (c: Record<string, unknown>): Bones => c.bones as Bones;
+
+    const recipe = built('recipe');
+    say(
+      'CK540_AUTHORING_S_PLANTED_FEET_FRAGMENT_BUILDS_GREEN_AS_WRITTEN_AND_EACH_ANKLE_STAYS_WITHIN_THE_REACH_IT_IS_SHORT_BY',
+      fragment !== null &&
+        recipe.status === 0 &&
+        summary(recipe.out).startsWith('check: PASS;') &&
+        bothRead(recipe.out, 'PASS', reach) &&
+        clean(recipe.out).includes('requirements: 2 declared — 2 measured (2 PASS, 0 FAIL), 0 NOT MEASURABLE; not declared: follow, aim, range, stretch, seam'),
+      `${blocks.length} json block(s) under "${FEET_HEADING}"; build exit ${recipe.status}, "${summary(recipe.out)}"; ${ankles(recipe.out)}; by hand sqrt(44^2 + 3^2) - 44 = ${reach}`,
+      'issue #570: the recipe a guide hands an author is held to the tree — the fragment, the dance and the requirements are the guide\'s own bytes, built by rigc\'s gate, and the ankles read what the reach by hand says: the hip 3 px aside leaves the straight leg that much short',
+    );
+
+    const underShin = built('target-under-shin', (c) => {
+      for (const b of bones(c)) if (b.name === 'foot_r' || b.name === 'foot_l') b.parent = b.name === 'foot_r' ? 'leg_r1' : 'leg_l1';
+    });
+    const detached = failLines(underShin.out, 'CONFIG_CONSTRAINT_TARGET_DETACHED');
+    say(
+      'CK541_THE_FOOT_TARGETS_PARENTED_TO_THE_SHINS_ARE_REFUSED_BY_NAME_BEFORE_ANYTHING_IS_BUILT',
+      underShin.status === 1 &&
+        !underShin.wrote &&
+        detached.length === 2 &&
+        detached[0].startsWith('FAIL  CONFIG_CONSTRAINT_TARGET_DETACHED: config.constraints[0].target — is "foot_r", which sits under "leg_r0" (foot_r < leg_r1 < leg_r0)') &&
+        detached[1].startsWith('FAIL  CONFIG_CONSTRAINT_TARGET_DETACHED: config.constraints[1].target — is "foot_l", which sits under "leg_l0" (foot_l < leg_l1 < leg_l0)'),
+      `exit ${underShin.status}, rig written ${underShin.wrote}; ${detached.map((l) => l.slice(0, 140)).join(' | ') || 'no refusal'}`,
+      'issue #570, the recipe\'s first rule: a foot that hangs from the leg moves with it, so an ik aimed at it chases itself — the loader names both legs, the parentage and the remedy, and writes nothing',
+    );
+
+    const noIk = built('no-ik', (c) => (c.constraints = []));
+    say(
+      'CK542_WITHOUT_THE_IK_THE_SHINS_RIDE_THE_HIP_AND_EACH_ANKLE_TRAVELS_THE_HIP_S_LARGEST_OFFSET',
+      noIk.status === 1 && bothRead(noIk.out, 'FAIL', travel) && failLines(noIk.out, 'CHECK_REQUIREMENT_MET').length === 2,
+      `exit ${noIk.status}, "${summary(noIk.out)}"; ${ankles(noIk.out)}; by hand sqrt(1.5^2 + 3^2) = ${travel}`,
+      'issue #570, the negative control: the same figure and dance with the legs on the hip alone is the rig the recipe replaces, and the contact bars name the ankles leaving their points by the hip\'s own travel',
+    );
+
+    const knee = (x: number) => (c: Record<string, unknown>): void => {
+      const leg = bones(c).find((b) => b.chain === 'leg_r') as Record<string, unknown>;
+      leg.points = [[34, 6], [x, 28]];
+    };
+    const inward = built('knee-inward', knee(35));
+    const outward = built('knee-outward', knee(33));
+    say(
+      'CK543_A_KNEE_OFF_ITS_LINE_ON_THE_SIDE_BENDPOSITIVE_DOES_NOT_BEND_TO_FAILS_THE_SEAM_AND_ON_THE_SIDE_IT_DOES_BUILDS',
+      inward.status === 1 && failLines(inward.out, 'CHECK_SEAM_WITHIN_BAR').length === 1 && outward.status === 0 && summary(outward.out).startsWith('check: PASS;'),
+      `leg_r's knee at x 35 (inward): exit ${inward.status}, ${failLines(inward.out, 'CHECK_SEAM_WITHIN_BAR')[0]?.slice(0, 160) ?? 'no seam failure'}; at x 33 (outward): exit ${outward.status}, "${summary(outward.out)}"`,
+      'issue #570, the recipe\'s knee rule: the solver bends the knee to the side bendPositive names (outward on leg_r, true), so a knee drawn to the other side is turned over at the setup pose and the leg leaves its art; on its line or on the bend\'s side the setup pose stands as drawn',
+    );
+
+    const uncut = built('outline-uncut', (c) => {
+      const contour = ((c.meshes as Record<string, Record<string, unknown>>).legwear.contour ?? {}) as Record<string, unknown>;
+      delete contour.maxEdge;
+    });
+    const folds = failLines(uncut.out, 'CHECK_ANIMATIONS_DO_NOT_FOLD');
+    say(
+      'CK544_THE_LEGWEAR_OUTLINE_LEFT_UNCUT_FOLDS_IN_THE_DANCE_AND_MAXEDGE_IS_WHAT_KEEPS_IT_FLAT',
+      uncut.status === 1 && folds.length === 1 && folds[0].includes('animation "dance", mesh "legwear" (slot "legwear")') && recipe.status === 0,
+      `without maxEdge: exit ${uncut.status}, ${folds[0]?.slice(0, 200) ?? 'no fold'}; with it (CK540): exit ${recipe.status}`,
+      'issue #570, the recipe\'s mesh rule: on a narrow leg the traced outline is one long edge a side, and the slivers it leaves fold as the knee bends; where the vertices lie decides what the dance does to the art',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
  * Issue #557: the contour step, read by SEAM_OVER_RANGE on each bent frame (`contourStep`, src/check.ts) — on each line
  * across the upper segment, one frame pixel apart from one cap radius before the joint line to one past it, the
  * silhouette's extent from the axis on each side; the step is the largest change between adjacent lines. Joints bent
@@ -17746,6 +17879,7 @@ function runCheckSuite(): number {
   runLimbCheckCases(say);
   runSweepCheckCases(say);
   runContourStepCases(say);
+  runPlantedFeetCases(say);
   runMotionSeamCases(say);
   runSweepUnitCases(say);
   runDiscCheckCases(say);
@@ -32989,6 +33123,74 @@ function runContourWiringSuite(): number {
       hasCode(overlapWithBustHint92, 'RIG_CONTOUR_REGIONS_OVERLAP', 'config.meshes.cloth.contour.regions', 'contour.bust.clearance >='),
     `bust == derived regions: ${rigJsonText(builtBust92.rig) === rigJsonText(builtEquiv92.rig)}; roles boob_r=${roles92.get('boob_r')?.role}, boob_l=${roles92.get('boob_l')?.role}; +20 px shift -> d_cx=(${moved20[0].shape === 'circle' && baseDerived92[0].shape === 'circle' ? moved20[0].cx - baseDerived92[0].cx : 0},${moved20[1].shape === 'circle' && baseDerived92[1].shape === 'circle' ? moved20[1].cx - baseDerived92[1].cx : 0}); clearance=0 on all 5 sets -> ${zeroClearanceAll5.map((e) => e?.problems[0]?.code ?? 'none').join(',')}; mutant (CONFIG_BUST_CLEARANCE bypassed at clearance=0) -> ${lines(bypassedZeroClearance92)}; vertex overlap hint -> ${lines(overlapWithBustHint92)}`,
     'issue #475: contour.bust is read by propose (configRoles) and rig through contourRegionsOf, moves cx/cy with apex_r/apex_l, refuses clearance <= 0 or R_r + R_l >= D with CONFIG_BUST_CLEARANCE (which vertex-level RIG_CONTOUR_REGIONS_OVERLAP alone would pass on collinear touching circles), and names contour.bust.clearance when a vertex overlaps',
+  );
+
+  // CW100 — issue #570: what a bridge's corners bind. islandImages (fixtures/rig.ts) clears the cloth's unpadded
+  // columns 4..11, leaving two 4x8 islands of 32 px at rig x 10..13 and 22..25, rows 10..17 — the left one under
+  // hem0 (14, 14) -> (22, 14), the right one under hem1 (22, 14) -> (30, 14). Tolerance 0, margin 1 and no region:
+  // each grown silhouette is CT01's 12-vertex outline, and one bridge joins them. By hand, the bridged mesh is the two
+  // one-island meshes' vertices and no other, and every vertex — a bridge corner like the rest — weighs each segment
+  // by 1 / (d + 8)^2 over its distance d, normalised: the corner at rig (15, 10) lies 4 px from hem0 (at (15, 14)) and
+  // sqrt(65) from hem1's origin, so hem0 1/144 against hem1 1/(8 + sqrt 65)^2, written 0.64179 and 0.35821. The planted
+  // weighting is the one the sentence says does not exist: each vertex on the bone over its own island alone.
+  const cfg100 = (): CharacterConfig =>
+    parseConfig(
+      contourRigConfig((c) => {
+        contourCloth(c).bridges = true;
+        delete contourCloth(c).regions;
+      }),
+    );
+  const mesh100 = (gap: [number, number]): { att: Record<string, unknown>; row: Record<string, unknown> } => {
+    const r = buildRig(cfg100(), rigParts(), new Map([['cloth', block(16, 8, gap)], ['eye', block(4, 2)]]));
+    return { att: (r.rig.skins.default.cloth as Record<string, unknown>).cloth as Record<string, unknown>, row: r.meshReport.find((m) => m.part === 'cloth') as unknown as Record<string, unknown> };
+  };
+  const bridged100 = mesh100([4, 12]);
+  const leftAlone100 = mesh100([4, 16]);
+  const rightAlone100 = mesh100([0, 12]);
+  const uvPairs100 = (att: Record<string, unknown>): string[] => {
+    const uv = att.uvs as number[];
+    return Array.from({ length: uv.length / 2 }, (_, i) => `${uv[2 * i]},${uv[2 * i + 1]}`);
+  };
+  const joins100 = ((bridged100.row.contour as Record<string, unknown>).bridges as { joins: Array<{ vertices: number[] }> }).joins;
+  const corners100 = joins100.length === 1 ? joins100[0].vertices : [];
+  type W100 = Array<Array<{ bone: string; weight: number }>>;
+  const written100 = bridged100.att.weights as W100;
+  const rigAt100 = (i: number): [number, number] => {
+    const uv = bridged100.att.uvs as number[];
+    return [uv[2 * i] * 24 + 6, uv[2 * i + 1] * 16 + 6];
+  };
+  const toSeg100 = ([x, y]: [number, number], ax: number, bx: number): number => {
+    const cx = Math.min(Math.max(x, ax), bx);
+    return Math.sqrt((x - cx) ** 2 + (y - 14) ** 2);
+  };
+  const byHand100 = (i: number): Record<string, number> => {
+    const p = rigAt100(i);
+    const w0 = 1 / (toSeg100(p, 14, 22) + 8) ** 2;
+    const w1 = 1 / (toSeg100(p, 22, 30) + 8) ** 2;
+    return { hem0: w0 / (w0 + w1), hem1: w1 / (w0 + w1) };
+  };
+  const followsDistance100 = (w: W100): boolean =>
+    w.length === uvPairs100(bridged100.att).length && w.every((vw, i) => vw.length === 2 && vw.every((q) => Math.abs(q.weight - byHand100(i)[q.bone]) <= 1.5e-5));
+  const leftOnes100 = written100.map((_, i) => i).filter((i) => rigAt100(i)[0] < 18);
+  const fromOther100 = (w: W100, i: number): number => w[i].find((q) => q.bone === 'hem1')?.weight ?? 0;
+  const ownIslandOnly100: W100 = written100.map((_, i) => [{ bone: rigAt100(i)[0] < 18 ? 'hem0' : 'hem1', weight: 1 }]);
+  const leftCorners100 = corners100.filter((i) => leftOnes100.includes(i));
+  const union100 = [...uvPairs100(leftAlone100.att), ...uvPairs100(rightAlone100.att)].sort();
+  say(
+    'CW100_A_BRIDGE_ADDS_NO_VERTEX_AND_ITS_CORNERS_ARE_WEIGHTED_BY_DISTANCE_TO_EVERY_SEGMENT_THE_OTHER_ISLAND_S_BONE_INCLUDED',
+    corners100.length === 4 &&
+      JSON.stringify(uvPairs100(bridged100.att).sort()) === JSON.stringify(union100) &&
+      corners100.every((i) => i < (bridged100.att.hull as number)) &&
+      followsDistance100(written100) &&
+      JSON.stringify(rigAt100(corners100[0])) === '[15,10]' &&
+      JSON.stringify(written100[corners100[0]]) === JSON.stringify([{ bone: 'hem0', x: 1, y: 4, weight: 0.64179 }, { bone: 'hem1', x: -7, y: 4, weight: 0.35821 }]) &&
+      leftCorners100.length === 2 &&
+      leftCorners100.every((i) => fromOther100(written100, i) === 0.35821) &&
+      Math.min(...leftOnes100.map((i) => fromOther100(written100, i))) === 0.30431 &&
+      !followsDistance100(ownIslandOnly100) &&
+      leftCorners100.every((i) => fromOther100(ownIslandOnly100, i) === 0),
+    `the bridged mesh: ${uvPairs100(bridged100.att).length} vertices, the left island alone ${uvPairs100(leftAlone100.att).length} and the right alone ${uvPairs100(rightAlone100.att).length}, the same uv set: ${JSON.stringify(uvPairs100(bridged100.att).sort()) === JSON.stringify(union100)}; the bridge's corners ${JSON.stringify(corners100)} at rig ${corners100.map((i) => JSON.stringify(rigAt100(i))).join(' ')} (hull ${String(bridged100.att.hull)}), weighted ${corners100.map((i) => written100[i].map((q) => `${q.bone} ${q.weight}`).join(' + ')).join('; ')}; every vertex by 1/(d + 8)^2 over both segments: ${followsDistance100(written100)}; the left island's least weight from hem1 ${Math.min(...leftOnes100.map((i) => fromOther100(written100, i)))}; planted (each vertex on its own island's bone alone): ${followsDistance100(ownIslandOnly100) ? 'ACCEPTED' : 'refused'}`,
+    "issue #570: the sentence under contour.bridges says a bridge adds no vertex and that its corners bind by distance to every bone the segments name, reading no island — so on two legs in one layer each leg's vertices take the other leg's bones too. The two one-island meshes hand-check the first, the distance rule from its definition the second, and the planted island-bound weighting is what the sentence would say if it were wrong",
   );
 
   return bad();
