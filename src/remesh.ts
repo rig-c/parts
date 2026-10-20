@@ -15,6 +15,11 @@
  * `motion` gate; for `contour` its tolerance, margin, spacing and `maxEdge`; for `grid` its spacing. There is no
  * second vocabulary for them, so there is no second loader.
  *
+ * `--delta <mesh-edit.json>` (issue #526), in place of `--mesh`: rig-c/review's mesh edit, ops over the input's own
+ * mesh, replayed by `src/remeshdelta.ts`. That path builds no config entry — steps 3 and 4 become the source checks
+ * (the edit's counts and `source.hash`, the SHA-256 of the part's entry in rigc's model document over the input) and
+ * the replay — and steps 5 to 8 are the same.
+ *
  * ## The steps, each one a refusal by name
  *
  * 1. **The input** ({@link readTree}): `--rig` holds `rig.json`, `motion.json`, `mesh_report.json` and `images/`, as
@@ -55,12 +60,16 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { checkStage, gateThroughRigc, type Log, rigStage } from './build.ts';
+import { checkStage, gateThroughRigc, type Log, RIGC_MODEL_DOCUMENT, rigStage } from './build.ts';
 import { barsNotMet, type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackShape, type PageEdges, rigcRanClause, type RigcRunner } from './check.ts';
 import { loadConfigAndAnimations } from './config.ts';
 import { PartsError, type Problem, problemLine, refuseIfAny } from './errors.ts';
 import { jsonValueSpan, scratchConfig } from './meshdraft.ts';
-import { DEFAULT_IDLE_KEYS, type IdleKeys, rigJsonText } from './rig.ts';
+import { computeExactFrameTransforms } from './coords.ts';
+import { type PartsFile } from './parts.ts';
+import { applyMeshEdit, type DeltaApplied, type DeltaPlant, deltaSourceProblems, type MeshEditDocument, readMeshEdit } from './remeshdelta.ts';
+import { DEFAULT_IDLE_KEYS, type IdleKeys, type MeshAttachment, rigJsonText, type RigSpec } from './rig.ts';
+import { pyRound } from './round.ts';
 
 /** The provenance file's spec. */
 export const REMESH_SPEC = 'rig-parts-remesh/1';
@@ -88,8 +97,10 @@ export interface RemeshInput {
   parts: string;
   /** The part to remesh: its slot and its attachment, as the rig stage names both. */
   part: string;
-  /** The request's mesh entry: a JSON file holding what `config.json` would hold at `meshes.<part>`. */
-  mesh: string;
+  /** The request's mesh entry: a JSON file holding what `config.json` would hold at `meshes.<part>`. Exactly one of `mesh`, `delta`. */
+  mesh?: string;
+  /** The request as rig-c/review's mesh edit (`rig-review-mesh-edit/1`, issue #526): ops over the input's own mesh. Exactly one of `mesh`, `delta`. */
+  delta?: string;
   /** The new revision's directory; it must not exist. */
   out: string;
   idleKeys?: IdleKeys;
@@ -106,6 +117,8 @@ export interface RemeshInput {
 export interface RemeshPlant {
   perturb?: string;
   skipPreserve?: boolean;
+  /** Issue #526's mutants, handed to the delta's replay (`src/remeshdelta.ts`). */
+  delta?: DeltaPlant;
 }
 
 /** The versions the provenance names: this package's and the rigc that gated the revision (its `--version` line). */
@@ -143,7 +156,9 @@ export interface CheckSide {
 /** `remesh.json` (spec {@link REMESH_SPEC}). */
 export interface RemeshProvenance {
   spec: typeof REMESH_SPEC;
-  request: { part: string; mesh: unknown; mesh_sha256: string; idle_keys: IdleKeys; page_edges: PageEdges; pack_shape: PackShape };
+  request:
+    | { part: string; mesh: unknown; mesh_sha256: string; idle_keys: IdleKeys; page_edges: PageEdges; pack_shape: PackShape }
+    | { part: string; delta: MeshEditDocument; delta_sha256: string; ops: number; applied: Omit<DeltaApplied, 'ops'>; idle_keys: IdleKeys; page_edges: PageEdges; pack_shape: PackShape };
   versions: RemeshVersions;
   input: { rig: HashRow[]; config_sha256: string; parts_json_sha256: string };
   baseline: { reproduced: string[]; not_compared: string };
@@ -232,7 +247,7 @@ export function targetProblems(rig: Json, motion: Json, configMeshes: Readonly<R
   const out: Problem[] = [];
   const att = targetAttachment(rig, part);
   if (!isRecord(att) || att.type !== 'mesh') {
-    out.push({ code: 'REMESH_TARGET_MESH', object: `rig.json skins.default.${part}.${part}`, detail: `is ${att === undefined ? 'absent' : isRecord(att) ? `a ${String(att.type)} attachment` : 'not an attachment'}; a mesh attachment is required — only a mesh is remeshed` });
+    out.push({ code: 'REMESH_TARGET_MESH', object: `rig.json skins.default.${part}.${part}`, detail: `is ${att === undefined ? 'absent' : isRecord(att) ? `a ${typeof att.type === 'string' ? att.type : 'region'} attachment` : 'not an attachment'}; a mesh attachment is required — only a mesh is remeshed` });
   }
   if (!(part in configMeshes)) {
     out.push({ code: 'REMESH_TARGET_MESH', object: `config meshes.${part}`, detail: `is absent (the config meshes ${Object.keys(configMeshes).join(', ') || 'nothing'}); the input's target must be a mesh the config states, so the baseline can reproduce it` });
@@ -474,6 +489,28 @@ export function readMeshRequest(path: string): { entry: Json; bytes: Uint8Array 
   return { entry, bytes };
 }
 
+/** The request as rig-c/review's mesh edit (issue #526), read and held to its shape (`src/remeshdelta.ts`). */
+export function readDeltaRequest(path: string): { doc: MeshEditDocument; bytes: Uint8Array } {
+  if (!existsSync(path)) throw new PartsError([{ code: 'REMESH_DELTA_JSON', object: path, detail: 'no such file; the request\'s mesh edit (rig-c/review\'s rig-review-mesh-edit/1 document) is required' }]);
+  const bytes = new Uint8Array(readFileSync(path));
+  const { doc, problems } = readMeshEdit(text(bytes), path);
+  refuseIfAny(problems);
+  return { doc: doc as MeshEditDocument, bytes };
+}
+
+/**
+ * The hash rig-c/review binds a mesh edit to (`source.hash`): SHA-256 of `JSON.stringify` of the attachment's entry in
+ * rigc's model document (`skins[name "default"].attachments.<part>.<part>`), or null when the document holds none.
+ */
+export function modelAttachmentHash(modelText: string, part: string): string | null {
+  const model = JSON.parse(modelText) as { skins?: unknown };
+  const skin = Array.isArray(model.skins) ? (model.skins as unknown[]).find((s) => isRecord(s) && s.name === 'default') : undefined;
+  const atts = isRecord(skin) && isRecord(skin.attachments) ? skin.attachments : undefined;
+  const slot = atts !== undefined && isRecord(atts[part]) ? (atts[part] as Json) : undefined;
+  const entry = slot?.[part];
+  return entry === undefined ? null : createHash('sha256').update(JSON.stringify(entry)).digest('hex');
+}
+
 /** Step 1's tree rules: the files `rig` writes are present, and the two the splice rewrites are this writer's bytes. */
 export function inputTreeProblems(tree: FileTree, root: string): Problem[] {
   const out: Problem[] = [];
@@ -496,6 +533,35 @@ export function inputTreeProblems(tree: FileTree, root: string): Problem[] {
   return out;
 }
 
+/** A tree's images as the gate takes them (name under `images/`, bytes). */
+const pngsOf = (tree: FileTree): Array<readonly [string, Uint8Array]> => [...tree].filter(([k]) => k.startsWith('images/')).map(([k, b]) => [k.slice('images/'.length), b] as const);
+/** A tree's other files as text. */
+const textsOf = (tree: FileTree): Array<readonly [string, string]> => [...tree].filter(([k]) => !k.startsWith('images/')).map(([k, b]) => [k, text(b)] as const);
+
+/**
+ * The delta's `mesh_report.json` row (issue #526): the input's row, key for key, with `vertices`, `triangles`, `hull`,
+ * `bones` (the sorted set the new weights name), `max_influences` and `mean_influences` recomputed from the new
+ * attachment and `mode` "delta" (in place, or last when the row had none). Every other key is the input's and
+ * describes the mesh the delta was drawn over.
+ */
+export function deltaRow(row: Json, att: MeshAttachment): Json {
+  const n = att.uvs.length / 2;
+  const entries = att.weights.reduce((s, w) => s + w.length, 0);
+  const fresh: Json = {
+    vertices: n,
+    triangles: att.triangles.length / 3,
+    hull: att.hull,
+    bones: [...new Set(att.weights.flatMap((w) => w.map((e) => e.bone)))].sort(),
+    max_influences: Math.max(...att.weights.map((w) => w.length)),
+    mean_influences: pyRound(entries / n, 2),
+    mode: 'delta',
+  };
+  const out: Json = {};
+  for (const [k, v] of Object.entries(row)) out[k] = k in fresh ? fresh[k] : v;
+  if (!('mode' in out)) out.mode = 'delta';
+  return out;
+}
+
 /**
  * The stage: steps 1–8 of the module header. Writes `input.out` only when every step is green; refuses with every
  * problem of the first step that found one.
@@ -513,7 +579,9 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
   if (outAt.startsWith(`${rigAt}${sep}`)) throw new PartsError([{ code: 'REMESH_OUT_FRESH', object: input.out, detail: `is inside the input ${input.rig}; a revision is written beside the input, never into it` }]);
   const tree = readTree(rigAt);
   refuseIfAny(inputTreeProblems(tree, input.rig));
-  const request = readMeshRequest(input.mesh);
+  if ((input.mesh === undefined) === (input.delta === undefined)) throw new Error('remeshStage: exactly one of mesh, delta is required');
+  const meshReq = input.mesh === undefined ? null : readMeshRequest(input.mesh);
+  const deltaReq = input.delta === undefined ? null : readDeltaRequest(input.delta);
   const configText = readFileSync(input.config, 'utf8');
   const { config: cfg } = loadConfigAndAnimations(input.config);
   const inRig = JSON.parse(text(tree.get('rig.json') as Uint8Array)) as Json;
@@ -521,41 +589,85 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
   const inReport = JSON.parse(text(tree.get('mesh_report.json') as Uint8Array)) as Json[];
   // 2. The target.
   refuseIfAny(targetProblems(inRig, JSON.parse(inMotionText) as Json, cfg.meshes, part));
-  // The request is the config's to judge: spliced in and loaded, before anything is built.
-  const candConfig = scratchConfig(input.config, configText, join(scratch, 'candidate'), new Map([[part, request.entry]]));
-  loadConfigAndAnimations(candConfig);
-  const auto = 'auto' in request.entry;
-  const build = (name: string, config: string): Built => {
-    const out = join(scratch, name, 'rig');
-    rigStage({ config, parts: input.parts, out, idleKeys, pageEdges, packShape }, rigc, join(scratch, name, 'gate'), (l) => log(`[${name}:rig] ${l}`));
-    return readBuilt(out, part);
-  };
-  // 3. The baseline.
-  log(`rig-parts remesh: ${part} of ${input.rig}, ${tree.size} file(s); the baseline is the config as written`);
-  let base: Built;
-  try {
-    base = build('baseline', scratchConfig(input.config, configText, join(scratch, 'baseline'), new Map()));
-  } catch (err) {
-    if (!(err instanceof PartsError)) throw err;
-    throw new PartsError(err.problems.map((p) => ({ code: 'REMESH_BASELINE_MISMATCH', object: `${input.config} as written`, detail: `does not build, so it cannot reproduce the input: ${problemLine(p)}` })));
-  }
-  refuseIfAny(baselineProblems({ rig: inRig, motionText: inMotionText, report: inReport, image: tree.get(`images/${part}.png`) }, base, part, auto));
-  log(`  baseline: the config as written reproduces the input's ${part} (attachment, image, report row) and its bones${auto ? ' and motion' : ''}`);
-  // 4. The candidate.
-  let cand: Built;
-  try {
-    cand = build('candidate', candConfig);
-  } catch (err) {
-    if (!(err instanceof PartsError)) throw err;
-    throw new PartsError(err.problems.map((p) => ({ code: 'REMESH_CANDIDATE_REFUSED', object: `the request's meshes.${part} (${input.mesh})`, detail: `the producer refuses it, nothing is written: ${problemLine(p)}` })));
-  }
-  refuseIfAny(requestHeldProblems(base, cand, part));
-  const candRow = rowOf(cand.report, part);
-  if (candRow === undefined) throw new Error(`remesh: the candidate build wrote no mesh_report row for "${part}"`);
   const before = meshCounts(targetAttachment(inRig, part));
-  const after = meshCounts(targetAttachment(cand.rig, part));
+  let candAtt: unknown;
+  let candRow: Json;
+  let reproduced: string[];
+  let deltaRequest: RemeshProvenance['request'] | null = null;
+  if (meshReq !== null) {
+    const meshPath = input.mesh as string;
+    // The request is the config's to judge: spliced in and loaded, before anything is built.
+    const candConfig = scratchConfig(input.config, configText, join(scratch, 'candidate'), new Map([[part, meshReq.entry]]));
+    loadConfigAndAnimations(candConfig);
+    const auto = 'auto' in meshReq.entry;
+    const build = (name: string, config: string): Built => {
+      const out = join(scratch, name, 'rig');
+      rigStage({ config, parts: input.parts, out, idleKeys, pageEdges, packShape }, rigc, join(scratch, name, 'gate'), (l) => log(`[${name}:rig] ${l}`));
+      return readBuilt(out, part);
+    };
+    // 3. The baseline.
+    log(`rig-parts remesh: ${part} of ${input.rig}, ${tree.size} file(s); the baseline is the config as written`);
+    let base: Built;
+    try {
+      base = build('baseline', scratchConfig(input.config, configText, join(scratch, 'baseline'), new Map()));
+    } catch (err) {
+      if (!(err instanceof PartsError)) throw err;
+      throw new PartsError(err.problems.map((p) => ({ code: 'REMESH_BASELINE_MISMATCH', object: `${input.config} as written`, detail: `does not build, so it cannot reproduce the input: ${problemLine(p)}` })));
+    }
+    refuseIfAny(baselineProblems({ rig: inRig, motionText: inMotionText, report: inReport, image: tree.get(`images/${part}.png`) }, base, part, auto));
+    log(`  baseline: the config as written reproduces the input's ${part} (attachment, image, report row) and its bones${auto ? ' and motion' : ''}`);
+    // 4. The candidate.
+    let cand: Built;
+    try {
+      cand = build('candidate', candConfig);
+    } catch (err) {
+      if (!(err instanceof PartsError)) throw err;
+      throw new PartsError(err.problems.map((p) => ({ code: 'REMESH_CANDIDATE_REFUSED', object: `the request's meshes.${part} (${meshPath})`, detail: `the producer refuses it, nothing is written: ${problemLine(p)}` })));
+    }
+    refuseIfAny(requestHeldProblems(base, cand, part));
+    const row = rowOf(cand.report, part);
+    if (row === undefined) throw new Error(`remesh: the candidate build wrote no mesh_report row for "${part}"`);
+    candAtt = targetAttachment(cand.rig, part);
+    candRow = row;
+    reproduced = [`skins.default.${part}.${part}`, `images/${part}.png`, `mesh_report.json row "${part}"`, 'bones', ...(auto ? ['motion.json'] : [])];
+  } else {
+    // 3–4 on the delta path (issue #526): no config entry to build, so the baseline is the input itself, held to the
+    // delta by its source counts and its source.hash, and the candidate is the delta replayed over the input's mesh.
+    const deltaPath = input.delta as string;
+    const { doc, bytes } = deltaReq as { doc: MeshEditDocument; bytes: Uint8Array };
+    const inAtt = targetAttachment(inRig, part) as MeshAttachment;
+    refuseIfAny(deltaSourceProblems(doc, part, inAtt, deltaPath));
+    log(`rig-parts remesh: ${part} of ${input.rig}, ${tree.size} file(s); the request is a mesh edit of ${doc.ops.length} op(s), the baseline is the input itself`);
+    let model = null as string | null;
+    const inGate = gateThroughRigc(pngsOf(tree), textsOf(tree), rigc, join(scratch, 'gate-input'), { pageEdges, packShape }, (dir) => {
+      const p = join(dir, RIGC_MODEL_DOCUMENT);
+      model = existsSync(p) ? readFileSync(p, 'utf8') : null;
+    });
+    refuseIfAny(inGate.filter((g) => g.status !== 0).map((g) => ({ code: 'REMESH_RIGC_GREEN', object: `rigc ${g.label} over the input`, detail: `exited ${g.status}${g.lines.length > 0 ? `: ${g.lines.map((l) => l.trim()).join(' | ')}` : ''}${rigcRanClause(g)}; the delta's source.hash is read off the input's own build, and nothing was written` })));
+    if (model === null) throw new PartsError([{ code: 'REMESH_DELTA_SOURCE', object: `rigc's build over the input`, detail: `wrote no ${RIGC_MODEL_DOCUMENT}, so the delta's source.hash cannot be verified; nothing was written` }]);
+    const hash = modelAttachmentHash(model, part);
+    if (hash !== doc.source.hash) {
+      throw new PartsError([{ code: 'REMESH_DELTA_SOURCE', object: `${deltaPath} source.hash`, detail: `is ${doc.source.hash.slice(0, 16)}…; the input's ${part} in its ${RIGC_MODEL_DOCUMENT} hashes to ${hash === null ? 'nothing (no such entry)' : `${hash.slice(0, 16)}…`} — the delta was drawn over another mesh` }]);
+    }
+    log(`  source: ${part}'s entry in the input's ${RIGC_MODEL_DOCUMENT} hashes to ${hash.slice(0, 16)}…, the delta's source.hash; counts v=${before.vertices} t=${before.triangles} hull=${before.hull} as it states`);
+    const partsFile = JSON.parse(readFileSync(join(input.parts, 'parts.json'), 'utf8')) as PartsFile;
+    const rec = partsFile.parts.find((p) => p.name === part);
+    if (rec === undefined) throw new PartsError([{ code: 'REMESH_DELTA_SOURCE', object: `${input.parts}/parts.json`, detail: `names no part "${part}"; its box is where rig placed the image, which the delta's crop px are read against` }]);
+    const world = computeExactFrameTransforms((inRig as unknown as RigSpec).bones);
+    const r = applyMeshEdit({ part, attachment: inAtt, box: [rec.x, rec.y], rigSize: [partsFile.rig_size[0], partsFile.rig_size[1]], world }, doc, deltaPath, plant.delta);
+    if (Array.isArray(r)) throw new PartsError(r);
+    const row = rowOf(inReport, part);
+    if (row === undefined) throw new PartsError([{ code: 'REMESH_DELTA_SOURCE', object: `${input.rig}/mesh_report.json`, detail: `holds no row "${part}"; the delta's row is the input's with its counts recomputed` }]);
+    candAtt = r.attachment;
+    candRow = deltaRow(row, r.attachment);
+    const { ops, ...applied } = r.applied;
+    log(`  delta: ${ops} op(s) — moved ${applied.moved}, added ${applied.added}, removed ${applied.removed}, constrained ${applied.constrained}; ${r.untouched.length} source vertex(es) untouched; interior edges not locally Delaunay ${r.delaunay.before} -> ${r.delaunay.after}`);
+    reproduced = ['none built: the delta path builds no config entry, so the baseline is the input itself, held to the delta by source.vertexCount, source.triangleCount, source.hullLength and source.hash'];
+    deltaRequest = { part, delta: doc, delta_sha256: sha256(bytes), ops, applied, idle_keys: idleKeys, page_edges: pageEdges, pack_shape: packShape };
+  }
+  const after = meshCounts(candAtt);
   // 5–6. The splice and the preserve assertion.
-  let revision = splice(tree, part, targetAttachment(cand.rig, part), candRow);
+  let revision = splice(tree, part, candAtt, candRow);
   if (plant.perturb !== undefined) revision = perturbed(revision, plant.perturb);
   if (plant.skipPreserve !== true) refuseIfAny(preservedProblems(tree, revision, part));
   const spliced = ['rig.json', 'mesh_report.json'];
@@ -563,9 +675,7 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
   log(`  ${part}: v=${before.vertices} t=${before.triangles} hull=${before.hull} -> v=${after.vertices} t=${after.triangles} hull=${after.hull}`);
   log(`  preserved: ${identical.length} file(s) byte-identical to the input; rig.json identical outside skins.default.${part}.${part}; mesh_report.json identical but the "${part}" row`);
   // 7. The gate and check.
-  const pngs = [...revision].filter(([k]) => k.startsWith('images/')).map(([k, b]) => [k.slice('images/'.length), b] as const);
-  const texts = [...revision].filter(([k]) => !k.startsWith('images/')).map(([k, b]) => [k, text(b)] as const);
-  const gate = gateThroughRigc(pngs, texts, rigc, join(scratch, 'gate'), { pageEdges, packShape });
+  const gate = gateThroughRigc(pngsOf(revision), textsOf(revision), rigc, join(scratch, 'gate'), { pageEdges, packShape });
   for (const g of gate) {
     log(`  rigc ${g.label}, the revision: exit ${g.status}`);
     for (const l of g.lines) log(`    ${l.trim()}`);
@@ -587,11 +697,11 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
   // 8. The write.
   const provenance: RemeshProvenance = {
     spec: REMESH_SPEC,
-    request: { part, mesh: request.entry, mesh_sha256: sha256(request.bytes), idle_keys: idleKeys, page_edges: pageEdges, pack_shape: packShape },
+    request: deltaRequest ?? { part, mesh: (meshReq as { entry: Json }).entry, mesh_sha256: sha256((meshReq as { bytes: Uint8Array }).bytes), idle_keys: idleKeys, page_edges: pageEdges, pack_shape: packShape },
     versions,
     input: { rig: hashRows(tree), config_sha256: sha256(bytesOf(configText)), parts_json_sha256: sha256(new Uint8Array(readFileSync(join(input.parts, 'parts.json')))) },
     baseline: {
-      reproduced: [`skins.default.${part}.${part}`, `images/${part}.png`, `mesh_report.json row "${part}"`, 'bones', ...(auto ? ['motion.json'] : [])],
+      reproduced,
       not_compared: 'every other attachment, image and report row: carried over from the input as bytes, whether or not the config reproduces it',
     },
     target: { before, after },

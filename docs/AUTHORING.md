@@ -2924,6 +2924,12 @@ exits 0, and `mesh_draft.json` and the console name the reading and the amount.
 | <a id="REMESH_PRESERVED"></a>`REMESH_PRESERVED` | the spliced revision differs from the input outside the part's attachment and its report row; the file and the part that moved are named | a defect in this package: report it with the line |
 | <a id="REMESH_RIGC_GREEN"></a>`REMESH_RIGC_GREEN` | rigc's build gate refused the revision (its lines quoted), or `rigc --version` named no version for the provenance | read rigc's line; nothing was written |
 | <a id="REMESH_CHECK_HELD"></a>`REMESH_CHECK_HELD` | `check` on the revision did not measure a bar it measured on the input, or failed a bar the input met; the revision's own FAIL line is quoted | ask for a finer entry, or a different mode, for the part the line names |
+| <a id="REMESH_DELTA_JSON"></a>`REMESH_DELTA_JSON` | `--delta` is missing, does not parse, is not one object, its `schema` is not `rig-review-mesh-edit/1`, or `slot`, `skin`, `attachment` or `source` is not of its shape | export the mesh edit from rig-c/review as it writes it |
+| <a id="REMESH_DELTA_BASIS"></a>`REMESH_DELTA_BASIS` | the mesh edit's `basis` is not `"setup"`: it was drawn over a pose, and the producer binds setup positions, so it is refused rather than posed back (the basis found is quoted) | edit the mesh in setup space (rig-c/review #100) and export again |
+| <a id="REMESH_DELTA_OPS"></a>`REMESH_DELTA_OPS` | `ops` is not an array, or holds more than 300 ops — review's own cap per attachment | split the edit: apply the first part, then edit the revision |
+| <a id="REMESH_DELTA_SOURCE"></a>`REMESH_DELTA_SOURCE` | the mesh edit was not drawn over this part's mesh: its `slot` or `attachment` is not `--part`, its skin is not `default`, a `source` count (`vertexCount`, `triangleCount`, `hullLength`) or `source.hash` is not the input's (both figures quoted; the hash is SHA-256 of the part's entry in rigc's `skeleton.model.json` over the input); or the input's bindings are not where its uvs and `parts.json` place the image, so no position can be bound | export the edit from the revision you pass as `--rig` |
+| <a id="REMESH_DELTA_OP"></a>`REMESH_DELTA_OP` | one op, named `ops[i]` and quoted, does not apply at its place in the replay: an unknown kind, a non-finite number, an id out of range or already removed, a `from` that is not the live position within 0.001 px, a position outside the part's image, a split of an edge the producer's triangulation does not hold or outside its triangles, a free `add` outside every triangle, a move that folds its ring, a removal that leaves fewer than 3 vertices, ends a constraint or leaves a ring no ear clips, an `edge` that duplicates a constraint, is a hull edge, runs through a vertex or crosses the hull or a constraint, or an `unedge` of any edge this edit did not constrain | read the op the line names; an edge the producer flipped is not one review can unedge — redraw it with `edge`, or move the vertices |
+| <a id="REMESH_DELTA_TOPOLOGY"></a>`REMESH_DELTA_TOPOLOGY` | the replayed mesh breaks an outline rule (`contourTopologyProblems`' code quoted: one loop, the hull first, every triangle wound one way, no self-intersection, no coincident vertices), or holds more interior edges that are not locally Delaunay than the input did; or the input's own triangles are not wound one way | read the quoted code; the ops that made it are the edit's last ones |
 
 A remesh changes one part's mesh and nothing else: every file of the input but
 `rig.json` and `mesh_report.json` is copied as bytes, `rig.json` keeps every byte
@@ -2932,6 +2938,46 @@ accepted after the config was written — are carried over as they are. `remesh.
 names the input's SHA-256 per file, the request, both versions, the part's counts
 before and after and both checks, and quotes `check`'s own physics line as the scope
 of the revision's check.
+
+**`--delta <mesh-edit.json>`** (in place of `--mesh`, exactly one of the two; issue
+#526) reads rig-c/review's mesh edit, `rig-review-mesh-edit/1`: `slot`, `skin`,
+`attachment`, `source` (`vertexCount`, `triangleCount`, `hullLength`, `hash`), `units`,
+`basis` and up to 300 `ops`, each one of `move {v, from, to}`, `add {at, onEdge?}`,
+`remove {v}`, `edge {a, b}` and `unedge {a, b}`. Positions are crop px of the rig canvas
+(x right, y down): a vertex's position is its part-local px (`uv × (width, height)`)
+plus the image's origin, `parts.json`'s `x, y` less the pad of 4. Vertex ids are the
+attachment's indices; an added vertex takes the next id; a removed id is never reused.
+`basis` must be `"setup"`. Review only records the ops; the producer retriangulates,
+replaying them in order over the input part's own mesh:
+
+- `move`: `from` must be the live position within 0.001 px; the uv and every binding's
+  bone-local `x, y` are recomputed from `to` through the setup frames, the shares kept.
+- `add` with `onEdge`: the edge is split, two triangles into four (one into two on a
+  hull edge, whose loop gains the vertex); its shares are the two ends' blended by the
+  parameter along the edge. Without `onEdge`: the triangle holding the point is split in
+  three (on an edge, as `onEdge`), its shares the corners' barycentric blend. Both are
+  rounded as the lattice rounds shares (5 places, the heaviest closing the sum).
+- `remove`: the vertex and its triangles go, and the ring is ear-clipped by exact
+  orientation; a hull vertex's two hull neighbours become adjacent.
+- `edge`: a constraint — an existing edge is marked, a missing one is made by flipping
+  the edges its segment crosses.
+- `unedge`: only an edge this edit constrained. Every other edge belongs to the
+  producer's triangulation, which differs from the one review drew as soon as a flip
+  runs, so an `unedge` of it is refused rather than guessed at.
+
+After every op the Delaunay condition is restored by edge flips that never flip a hull
+edge or a constraint, and the result is measured: the outline rules and no more
+non-Delaunay interior edges than the input had. The output writes the hull loop first,
+the other vertices after in id order, uvs to 6 places and bindings as `rig` writes them;
+every vertex the edit neither moves nor removes keeps its uv pair and weight entries
+byte for byte. No config entry is built — the baseline is the input itself, held to the
+edit by `source`'s counts and `source.hash` (rigc's build over the input) — and the
+part's `mesh_report.json` row is the input's with `vertices`, `triangles`, `hull`,
+`bones`, `max_influences` and `mean_influences` recomputed and `mode` "delta"; its other
+keys describe the mesh the edit was drawn over. The splice, the preserve assertion, the
+gate and `check` are the `--mesh` path's. A constraint is a statement about this
+revision's triangulation only: the rig spec has no field for it, so a later edit of the
+revision reads it as any other edge.
 
 ### rig-c's mesh refusals, quoted in a line
 

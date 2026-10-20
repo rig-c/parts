@@ -34040,8 +34040,10 @@ function runRemeshSuite(): number {
         b3.e === null &&
         treeDigest(a3.out) === treeDigest(b3.out) &&
         JSON.stringify(provHashes) === JSON.stringify(inHashes) &&
-        JSON.stringify(prov3?.request.mesh) === JSON.stringify(REMESH_GRID_REQUEST) &&
-        prov3?.request.mesh_sha256 === createHash('sha256').update(readFileSync(gridReq)).digest('hex') &&
+        prov3 !== null &&
+        'mesh' in prov3.request &&
+        JSON.stringify(prov3.request.mesh) === JSON.stringify(REMESH_GRID_REQUEST) &&
+        prov3.request.mesh_sha256 === createHash('sha256').update(readFileSync(gridReq)).digest('hex') &&
         prov3.request.part === 'strip' &&
         prov3.versions.parts === 'selftest' &&
         prov3.input.config_sha256 === createHash('sha256').update(readFileSync(fx.config)).digest('hex') &&
@@ -34198,9 +34200,198 @@ function runRemeshSuite(): number {
     const unknown = runCli(['remesh', '--rig', input, '--config', fx.config, '--parts', fx.parts, '--part', 'strip', '--mesh', gridReq, '--out', join(root, 'usage'), '--grid', '9']);
     say(
       'RM10_REMESH_WITHOUT_MESH_OR_WITH_A_FLAG_IT_DOES_NOT_TAKE_IS_A_USAGE_ERROR',
-      noMesh.status === 2 && noMesh.out.includes('USAGE: remesh needs --mesh <value>') && unknown.status === 2 && unknown.out.includes('remesh does not take "--grid"; it takes --rig, --config, --parts, --part, --mesh, --out, --requirements, --idle-keys, --page-edges, --pack-shape') && !existsSync(join(root, 'usage')),
+      noMesh.status === 2 && noMesh.out.includes('USAGE: remesh needs exactly one of --mesh, --delta') && unknown.status === 2 && unknown.out.includes('remesh does not take "--grid"; it takes --rig, --config, --parts, --part, --mesh, --delta, --out, --requirements, --idle-keys, --page-edges, --pack-shape') && !existsSync(join(root, 'usage')),
       `${noMesh.out.split('\n')[0].trim()} | ${unknown.out.split('\n')[0].trim()}`,
       'the bounds are the entry\'s own fields, so the command takes no bound as a flag: a grid, a tolerance or a target is written in the --mesh file',
+    );
+
+    // ---- issue #526: --delta, rig-c/review's mesh edit (rig-review-mesh-edit/1) replayed over the strip ----
+    // The strip's lattice (grid 10, image 24x408 at (8, 6) in the rig canvas: parts.json's (12, 10) less the pad of 4)
+    // writes its hull first: ids 0..85, the loop (0,0) → (20,0) → (20,408) → (0,408) → (0,10) in part px; 86..125 are
+    // the interior column at x 10, y 10..400. The ids below are read off that layout and held to it first.
+    type StripAtt = { uvs: number[]; triangles: number[]; hull: number; weights: Array<Array<{ bone: string; x: number; y: number; weight: number }>> };
+    const stripOf = (dir: string): StripAtt => (JSON.parse(readFileSync(join(dir, 'rig.json'), 'utf8')) as { skins: { default: Record<string, Record<string, StripAtt>> } }).skins.default.strip.strip;
+    const inStrip = stripOf(input);
+    const px = (a: StripAtt, i: number): [number, number] => [Math.round(a.uvs[2 * i] * 24 * GRID) / GRID, Math.round(a.uvs[2 * i + 1] * 408 * GRID) / GRID];
+    const layout = [[100, 10, 150], [110, 10, 250], [86, 10, 10], [87, 10, 20], [56, 0, 300], [35, 20, 330], [20, 20, 180], [21, 20, 190], [60, 0, 260]].every(([i, x, y]) => px(inStrip, i).join() === `${x},${y}`) && inStrip.hull === 86 && inStrip.uvs.length === 252;
+    // The suite's own source.hash: rigc's build over the input, the strip's entry in its model document, hashed as review does.
+    const hashBuild = join(root, 'hash-build');
+    runner(['build', '--rig', join(input, 'rig.json'), '--motion', join(input, 'motion.json'), '--out', hashBuild]);
+    const modelSkins = (JSON.parse(readFileSync(join(hashBuild, RIGC_MODEL_DOCUMENT), 'utf8')) as { skins: Array<{ name: string; attachments: Record<string, Record<string, unknown>> }> }).skins;
+    const sourceHash = createHash('sha256').update(JSON.stringify(modelSkins.find((s) => s.name === 'default')?.attachments.strip.strip)).digest('hex');
+    const deltaDoc = (ops: unknown[], over: Record<string, unknown> = {}): Record<string, unknown> => ({
+      schema: 'rig-review-mesh-edit/1',
+      slot: 'strip',
+      skin: 'default',
+      attachment: 'strip',
+      source: { vertexCount: 126, triangleCount: 164, hullLength: 86, hash: sourceHash },
+      units: 'crop px, x right, y down; vertex ids are source indices, added vertices take the next id in op order, removed ids are not reused',
+      basis: 'setup',
+      preview: 'preview only — the producer retriangulates; the ops are a request over the original triangulation, not a mesh',
+      ops,
+      ...over,
+    });
+    const dStage = (name: string, doc: Record<string, unknown>, over: Partial<RemeshInput> = {}, plant: RemeshPlant = {}): { e: PartsError | null; out: string; log: string[]; r: RemeshResult | null } => {
+      const out = join(root, `out-${name}`);
+      const log: string[] = [];
+      let r: RemeshResult | null = null;
+      const delta = request(`delta-${name}`, doc);
+      const e = refusals(() => (r = remeshStage({ rig: input, config: fx.config, parts: fx.parts, part: 'strip', delta, out, ...over }, runner, rigc, versions, join(root, `scratch-${name}`), (l) => log.push(l), plant)));
+      return { e, out: over.out ?? out, log, r };
+    };
+    // Crop px = part px + (8, 6). The four ops: vertex 100 moved by (+1.5, -2); interior edge 86-87 split at its middle;
+    // interior vertex 110 removed; a constraint from hull vertex 56 (left, y 300) to 35 (right, y 330), which crosses
+    // the interior column between 116 and 117 and no vertex.
+    const FOUR_OPS = [
+      { op: 'move', v: 100, from: [18, 156], to: [19.5, 154] },
+      { op: 'add', at: [18, 21], onEdge: [86, 87] },
+      { op: 'remove', v: 110 },
+      { op: 'edge', a: 56, b: 35 },
+    ];
+    // Vertex 100's bindings by hand: both links point down the canvas (world rotation -90), so their local x runs down
+    // the crop and local y to the right: a crop move of (+1.5, -2) is local (-2, +1.5) — tail1 (11, -2) -> (9, -0.5),
+    // tail0 (144, -2) -> (142, -0.5); the shares are kept.
+    const MOVED_100 = '[{"bone":"tail1","x":9,"y":-0.5,"weight":0.78627},{"bone":"tail0","x":142,"y":-0.5,"weight":0.21373}]';
+    const uvKey = (a: StripAtt, i: number): string => JSON.stringify([a.uvs[2 * i], a.uvs[2 * i + 1]]);
+    const findUv = (a: StripAtt, u: number, v: number): number => {
+      for (let i = 0; i < a.uvs.length / 2; i++) if (Math.abs(a.uvs[2 * i] - u) < 1e-6 && Math.abs(a.uvs[2 * i + 1] - v) < 1e-6) return i;
+      return -1;
+    };
+    const movedBinding = (a: StripAtt): string => {
+      const i = findUv(a, 11.5 / 24, 148 / 408);
+      return i < 0 ? 'absent' : JSON.stringify(a.weights[i]);
+    };
+
+    // RM11 — the positive control, through the CLI.
+    const doc11 = request('delta-cli', deltaDoc(FOUR_OPS));
+    const out11 = join(root, 'cli-delta');
+    const run11 = runCli(['remesh', '--rig', input, '--config', fx.config, '--parts', fx.parts, '--part', 'strip', '--delta', doc11, '--out', out11]);
+    const prov11 = readJsonFile(join(out11, PROVENANCE_FILE)) as RemeshProvenance | null;
+    const req11 = prov11 !== null && 'delta' in prov11.request ? prov11.request : null;
+    const counts11 = run11.out.split('\n').filter((l) => /^ {2}strip: v=/.test(l) || /^ {2}delta: /.test(l)).map((l) => l.trim());
+    const out11Strip = existsSync(out11) ? stripOf(out11) : null;
+    say(
+      'RM11_A_FOUR_OP_MESH_EDIT_IS_REPLAYED_OVER_THE_STRIP_AND_THE_REVISION_IS_GATED_AND_CHECKED',
+      layout &&
+        run11.status === 0 &&
+        req11 !== null &&
+        req11.ops === 4 &&
+        JSON.stringify(req11.applied) === '{"moved":1,"added":1,"removed":1,"constrained":1}' &&
+        req11.delta_sha256 === createHash('sha256').update(readFileSync(doc11)).digest('hex') &&
+        run11.out.includes('the revision: exit 0') &&
+        prov11?.check.revision.pass === true &&
+        prov11.check.input.measured.join() === prov11.check.revision.measured.join() &&
+        remeshMoves(input, out11, 'strip').length === 0 &&
+        out11Strip !== null &&
+        movedBinding(out11Strip) === MOVED_100 &&
+        treeDigest(input) === inputDigest,
+      `layout as written: ${layout}; exit ${run11.status}; ${counts11.join(' | ')}; request ops ${req11?.ops}, applied ${JSON.stringify(req11?.applied)}; check ${prov11?.check.revision.pass} over ${prov11?.check.revision.measured.length} bar(s), the input's ${prov11?.check.input.measured.length}; vertex 100 binds ${out11Strip === null ? 'nothing written' : movedBinding(out11Strip)}`,
+      'issue #526 bar 1: a move, a split, a removal and a constraint are replayed over the input part\'s own mesh, the moved vertex rebound through the setup frames (held here to the hand figure), every other file the input\'s, rigc\'s gate green and check measuring the bars it measured on the input',
+    );
+
+    // RM12 — refusals by name, each before anything is written.
+    const cheap = (name: string, doc: Record<string, unknown>): ReturnType<typeof dStage> => dStage(name, doc);
+    const basis12 = cheap('basis', deltaDoc(FOUR_OPS, { basis: 'idle@0.5' }));
+    const ops12 = cheap('ops', deltaDoc(Array.from({ length: 301 }, () => ({ op: 'remove', v: 110 }))));
+    const kind12 = cheap('kind', deltaDoc([{ op: 'move', v: 100, from: [18, 156], to: [19.5, 154] }, { op: 'split', v: 3 }]));
+    const range12 = cheap('range', deltaDoc([{ op: 'move', v: 100, from: [18, 156], to: [19.5, 154] }, { op: 'remove', v: 999 }]));
+    const from12 = cheap('from', deltaDoc([{ op: 'move', v: 100, from: [18, 157], to: [19.5, 154] }]));
+    const unedge12 = cheap('unedge', deltaDoc([{ op: 'unedge', a: 86, b: 87 }]));
+    const count12 = cheap('count', deltaDoc(FOUR_OPS, { source: { vertexCount: 125, triangleCount: 164, hullLength: 86, hash: sourceHash } }));
+    const hash12 = cheap('hash', deltaDoc(FOUR_OPS, { source: { vertexCount: 126, triangleCount: 164, hullLength: 86, hash: '0'.repeat(64) } }));
+    const regionFx = writeDraftFixture(join(root, 'fx-region'), DRAFT_COARSE_GRID);
+    const regionIn = join(root, 'input-region');
+    rigStage({ config: regionFx.config, parts: regionFx.parts, out: regionIn }, runner, join(root, 'input-region-gate'), () => {});
+    const regionDigest = treeDigest(regionIn);
+    const region12 = dStage('region', deltaDoc([], { slot: 'mark', attachment: 'mark' }), { rig: regionIn, config: regionFx.config, parts: regionFx.parts, part: 'mark' });
+    const both12 = runCli(['remesh', '--rig', input, '--config', fx.config, '--parts', fx.parts, '--part', 'strip', '--mesh', gridReq, '--delta', doc11, '--out', join(root, 'usage-both')]);
+    const neither12 = runCli(['remesh', '--rig', input, '--config', fx.config, '--parts', fx.parts, '--part', 'strip', '--out', join(root, 'usage-neither')]);
+    const one = (s: ReturnType<typeof dStage>, code: string, object: RegExp, detail: RegExp): boolean => s.e !== null && s.e.problems.length === 1 && s.e.problems[0].code === code && object.test(s.e.problems[0].object) && detail.test(s.e.problems[0].detail) && !existsSync(s.out);
+    const checks12: Array<[string, boolean, ReturnType<typeof dStage> | null]> = [
+      ['basis', one(basis12, 'REMESH_DELTA_BASIS', /basis$/, /"idle@0\.5"; "setup" is required/), basis12],
+      ['301 ops', one(ops12, 'REMESH_DELTA_OPS', /ops$/, /holds 301 ops; at most 300/), ops12],
+      ['unknown kind', one(kind12, 'REMESH_DELTA_OP', /ops\[1\]$/, /unknown op kind "split"/), kind12],
+      ['id out of range', one(range12, 'REMESH_DELTA_OP', /ops\[1\]$/, /vertex 999, which is out of range/), range12],
+      ['from mismatch', one(from12, 'REMESH_DELTA_OP', /ops\[0\]$/, /from does not match/), from12],
+      ['unedge of a triangulation edge', one(unedge12, 'REMESH_DELTA_OP', /ops\[0\]$/, /this delta did not constrain; the producer owns the triangulation/), unedge12],
+      ['source count', one(count12, 'REMESH_DELTA_SOURCE', /source\.vertexCount$/, /is 125; the input's strip has 126/), count12],
+      ['source hash', one(hash12, 'REMESH_DELTA_SOURCE', /source\.hash$/, /hashes to [0-9a-f]{16}…/), hash12],
+      ['part not meshed', region12.e !== null && region12.e.problems.some((p) => p.code === 'REMESH_TARGET_MESH' && p.detail.startsWith('is a region attachment')) && !existsSync(region12.out) && treeDigest(regionIn) === regionDigest, region12],
+      ['--mesh and --delta', both12.status === 2 && both12.out.includes('USAGE: remesh needs exactly one of --mesh, --delta') && !existsSync(join(root, 'usage-both')), null],
+      ['neither', neither12.status === 2 && neither12.out.includes('USAGE: remesh needs exactly one of --mesh, --delta') && !existsSync(join(root, 'usage-neither')), null],
+    ];
+    say(
+      'RM12_A_MESH_EDIT_THAT_DOES_NOT_APPLY_IS_REFUSED_BY_NAME_WITH_ITS_OP_INDEX_AND_NOTHING_IS_WRITTEN',
+      checks12.every(([, ok]) => ok) && treeDigest(input) === inputDigest,
+      checks12.map(([what, ok, s]) => `${what}: ${ok ? '' : 'NOT AS REQUIRED '}${s === null ? 'usage, exit 2' : s.e === null ? 'written' : s.e.problems.map((p) => `${p.code} ${p.object.split(' ').slice(-1)[0]}`).join(', ')}`).join('; '),
+      'issue #526 bar 2: a posed basis, an op kind review does not write, an id no vertex holds, a from that is not the live position, an unedge of an edge the producer owns, a source that is not this mesh and a part that is no mesh are each refused by rule and op index, and no request is both --mesh and --delta or neither',
+    );
+
+    // RM13 — determinism.
+    const a13 = dStage('det-a', deltaDoc(FOUR_OPS));
+    const b13 = dStage('det-b', deltaDoc(FOUR_OPS));
+    const rows13 = (d: string): string => treeDigest(d).split('\n').map((l) => `${l.split(' ')[0]} ${l.split(' ')[1].slice(0, 12)}`).join(', ');
+    say(
+      'RM13_THE_SAME_MESH_EDIT_TWICE_WRITES_THE_SAME_BYTES',
+      a13.e === null && b13.e === null && treeDigest(a13.out) === treeDigest(b13.out) && !readFileSync(join(a13.out, PROVENANCE_FILE), 'utf8').includes(root),
+      `${codes(a13.e)} / ${codes(b13.e)}; trees equal: ${a13.e === null && b13.e === null && treeDigest(a13.out) === treeDigest(b13.out)}; ${a13.e === null ? rows13(a13.out) : ''}`,
+      'issue #526 bar 3: the replay reads no clock, no path and no iteration order of its own, so two runs write every file byte for byte the same',
+    );
+
+    // RM14 — bar 4, read by the suite: every source vertex the delta neither moved (100) nor removed (110) keeps its uv
+    // pair and weight entries byte for byte, found in the revision by its uv pair (indices move: the hull goes first).
+    const kept14 = out11Strip === null ? [] : Array.from({ length: 126 }, (_, i) => i).filter((i) => i !== 100 && i !== 110);
+    const lost14 = out11Strip === null ? ['nothing written'] : kept14.filter((i) => {
+      const j = Array.from({ length: out11Strip.uvs.length / 2 }, (_, k) => k).find((k) => uvKey(out11Strip, k) === uvKey(inStrip, i));
+      return j === undefined || JSON.stringify(out11Strip.weights[j]) !== JSON.stringify(inStrip.weights[i]);
+    }).map(String);
+    say(
+      'RM14_EVERY_UNTOUCHED_VERTEX_KEEPS_ITS_UV_PAIR_AND_WEIGHT_ENTRIES_BYTE_FOR_BYTE',
+      kept14.length === 124 && lost14.length === 0,
+      `${kept14.length} untouched source vertex(es) read by the suite; changed or absent: ${lost14.join(', ') || 'none'}`,
+      'issue #526 bar 4: the delta touches only what it names — the suite reads the input and the revision itself, matching vertices by their uv text, not through the module\'s own untouched list',
+    );
+
+    // RM15 — the hull: a split of hull edge 20-21 (right side, y 180..190) and the removal of hull vertex 60 (left, y 260).
+    const hullWalk = (a: StripAtt): string => {
+      const uses = new Map<string, number>();
+      for (let t = 0; t < a.triangles.length; t += 3) {
+        for (let k = 0; k < 3; k++) {
+          const [p, q] = [a.triangles[t + k], a.triangles[t + ((k + 1) % 3)]];
+          const key = p < q ? `${p}:${q}` : `${q}:${p}`;
+          uses.set(key, (uses.get(key) ?? 0) + 1);
+        }
+      }
+      const boundary = [...uses].filter(([, n]) => n === 1).map(([k]) => k);
+      const loop = Array.from({ length: a.hull }, (_, i) => (i < (i + 1) % a.hull ? `${i}:${(i + 1) % a.hull}` : `${(i + 1) % a.hull}:${i}`));
+      const verts = Array.from({ length: a.uvs.length / 2 }, (_, i) => px(a, i));
+      const topo = contourTopologyProblems('strip', verts, a.triangles, a.hull);
+      return loop.every((k) => boundary.includes(k)) && boundary.length === a.hull && topo.length === 0 ? 'simple loop' : `${boundary.length} boundary edge(s), ${loop.filter((k) => !boundary.includes(k)).length} loop pair(s) not on the boundary, ${topo.map((p) => p.code).join(',') || 'topology clean'}`;
+    };
+    const add15 = dStage('hull-add', deltaDoc([{ op: 'add', at: [28, 191], onEdge: [20, 21] }]));
+    const rem15 = dStage('hull-remove', deltaDoc([{ op: 'remove', v: 60 }]));
+    const hullOf = (s: ReturnType<typeof dStage>): string => (s.e === null ? `hull ${stripOf(s.out).hull}, ${hullWalk(stripOf(s.out))}, ${s.log.find((l) => l.includes('the revision: exit')) ?? ''}` : codes(s.e));
+    say(
+      'RM15_A_SPLIT_HULL_EDGE_AND_A_REMOVED_HULL_VERTEX_KEEP_THE_HULL_ONE_SIMPLE_LOOP_WRITTEN_FIRST',
+      add15.e === null && rem15.e === null && stripOf(add15.out).hull === 87 && stripOf(rem15.out).hull === 85 && hullWalk(stripOf(add15.out)) === 'simple loop' && hullWalk(stripOf(rem15.out)) === 'simple loop' && [add15, rem15].every((s) => s.log.some((l) => l.includes('the revision: exit 0'))),
+      `split ${hullOf(add15)}; removal ${hullOf(rem15)}`,
+      'rigc reads the hull as the first `hull` vertices in loop order: a vertex added on a hull edge joins the loop between its ends, a removed hull vertex leaves its neighbours adjacent, and the suite walks the boundary itself',
+    );
+
+    // RM16 — the mutants: the bone-local recompute skipped on move, and the hull renumber skipped (with the module's
+    // topology gate on, and taken out so the next reader is seen).
+    const bind16 = dStage('mut-bind', deltaDoc(FOUR_OPS), {}, { delta: { skipBind: true } });
+    const order16 = dStage('mut-order', deltaDoc([{ op: 'add', at: [28, 191], onEdge: [20, 21] }]), {}, { delta: { skipHullOrder: true } });
+    const bare16 = dStage('mut-order-bare', deltaDoc([{ op: 'add', at: [28, 191], onEdge: [20, 21] }]), {}, { delta: { skipHullOrder: true, skipTopology: true } });
+    const bindRead = bind16.e === null ? movedBinding(stripOf(bind16.out)) : codes(bind16.e);
+    const bareRead = bare16.e === null ? hullWalk(stripOf(bare16.out)) : bare16.e.problems.map((p) => `${p.code} ${p.detail.slice(0, 160)}`).join(' | ');
+    say(
+      'RM16_A_MOVE_THAT_SKIPS_THE_REBIND_AND_AN_OUTPUT_THAT_SKIPS_THE_HULL_ORDER_ARE_CAUGHT',
+      bind16.e === null && bindRead !== MOVED_100 &&
+        order16.e !== null && order16.e.problems.every((p) => p.code === 'REMESH_DELTA_TOPOLOGY') && !existsSync(order16.out) &&
+        (bare16.e !== null ? !existsSync(bare16.out) : bareRead !== 'simple loop'),
+      `rebind skipped: written, vertex 100 binds ${bindRead} (RM11 requires ${MOVED_100}); hull order skipped: ${order16.e === null ? 'written' : order16.e.problems.map((p) => `${p.code} ${p.detail.slice(0, 140)}`).join(' | ')}; and with the topology gate out: ${bareRead}`,
+      'a gate nobody has seen fail is not a gate: the rebind is held by RM11\'s hand figure (rigc cannot see a binding that is merely wrong), and the hull order by the replay\'s own topology gate — and behind it by the next reader',
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
