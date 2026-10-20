@@ -683,6 +683,95 @@ export function weightsABone(rg: AutoRegionSpec): rg is AutoWeightRegionSpec {
   return 'bone' in rg;
 }
 
+/** The three sections a part's bones are read from: a config's, or a proposal's, which has the same shape (issue #535). */
+export interface PartBinding {
+  bones: readonly BoneEntry[];
+  meshes: Readonly<Record<string, MeshSpec>>;
+  regions: Readonly<Record<string, string>>;
+}
+
+/**
+ * The bones each part binds (issue #535): a region's `regions.<part>`; for a
+ * mesh, every bone its `segments` name (a chain's name standing for each of
+ * its links `<chain>0`, `<chain>1`, …; an explicit segment's bone), its
+ * `contour` regions' bones (a declared `bust` included) and its `auto`
+ * regions' that weight one. The same reading the rig stage makes of the parts
+ * an alternate set covers (issue #476). Parts in `meshes` first, then
+ * `regions`, each part's bones in the order they are named, once. Pure: a bone
+ * that does not resolve is kept by name — the loader and the rig stage refuse
+ * it on their own.
+ */
+export function partBoundBones(b: PartBinding): Map<string, string[]> {
+  const chains = new Map<string, string[]>();
+  for (const e of b.bones) if ('chain' in e) chains.set(e.chain, e.points.map((_, k) => `${e.chain}${k}`));
+  const out = new Map<string, string[]>();
+  const bind = (part: string, bone: string): void => {
+    const list = out.get(part) ?? [];
+    if (!list.includes(bone)) list.push(bone);
+    out.set(part, list);
+  };
+  for (const [part, m] of Object.entries(b.meshes)) {
+    for (const sg of m.segments) {
+      if (typeof sg !== 'string') bind(part, sg[0]);
+      else for (const l of chains.get(sg) ?? [sg]) bind(part, l);
+    }
+    if ('contour' in m) for (const rg of contourRegionsOf(m.contour)) bind(part, rg.bone);
+    if ('auto' in m) for (const rg of m.auto.regions ?? []) if (weightsABone(rg)) bind(part, rg.bone);
+  }
+  for (const [part, bone] of Object.entries(b.regions)) bind(part, bone);
+  return out;
+}
+
+/**
+ * The bones a part can own (issue #535): every chain link, and every bone no
+ * other bone hangs from. A trunk bone — `head`, `chest`, anything with a child —
+ * is shared by nature, so binding it is never a rider relation on its own.
+ */
+export function ownableBones(bones: readonly BoneEntry[]): Set<string> {
+  const parents = new Set(bones.map((e) => e.parent));
+  const out = new Set<string>();
+  for (const e of bones) {
+    if ('chain' in e) e.points.forEach((_, k) => out.add(`${e.chain}${k}`));
+    else if (!parents.has(e.name)) out.add(e.name);
+  }
+  return out;
+}
+
+/**
+ * Issue #535's rider by bone, read off a binding for the carried parts (each
+ * with its `opaque_px`, in parts.json's draw order): the host of an ownable
+ * bone ({@link ownableBones}) is the carried part binding it with the most
+ * opaque pixels, the earlier in draw order on a tie; a part is a rider of `H`
+ * when it binds at least one ownable bone, every one of them is hosted by `H`,
+ * and it hosts none itself. A part whose ownable bones have two or more hosts
+ * rides none of them and is returned in `split` with its hosts. Parts not in
+ * `carried` neither host nor ride.
+ */
+export function turnRidersByBone(b: PartBinding, carried: ReadonlyArray<{ part: string; area: number }>): { riders: Map<string, { host: string; bones: string[] }>; split: Array<{ part: string; hosts: string[] }> } {
+  const bound = partBoundBones(b);
+  const ownable = ownableBones(b.bones);
+  const host = new Map<string, { part: string; area: number }>();
+  for (const c of carried) {
+    for (const bone of bound.get(c.part) ?? []) {
+      if (!ownable.has(bone)) continue;
+      const h = host.get(bone);
+      if (h === undefined || c.area > h.area) host.set(bone, c);
+    }
+  }
+  const hosts = new Set([...host.values()].map((h) => h.part));
+  const riders = new Map<string, { host: string; bones: string[] }>();
+  const split: Array<{ part: string; hosts: string[] }> = [];
+  for (const c of carried) {
+    if (hosts.has(c.part)) continue;
+    const own = (bound.get(c.part) ?? []).filter((bone) => host.has(bone));
+    if (own.length === 0) continue;
+    const of = [...new Set(own.map((bone) => (host.get(bone) as { part: string }).part))];
+    if (of.length === 1) riders.set(c.part, { host: of[0], bones: own });
+    else split.push({ part: c.part, hosts: of });
+  }
+  return { riders, split };
+}
+
 export interface SingleTrack {
   bone: string;
   prop: SingleProp;

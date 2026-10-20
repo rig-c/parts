@@ -277,7 +277,7 @@ import { type BoneEntry, type CharacterConfig, CONFIG_REQUIRES, type ConfigDoor,
 import { BUST_FIT_ALPHA, BUST_FIT_CLEARANCE, BUST_RESIDUAL_BOUND_PX, CALIBRATED_BUST_FIXTURES, midlineFallbackCleavage } from './fixtures/bust.ts';
 import { RIG_BONE_INHERIT, RIG_KEYS, RIG_SKIN_CONSTRAINT_KEYS } from 'rig-c/src/rig.ts';
 import { expandStops } from 'rig-c/src/stop.ts';
-import { applyFaceSurfaceDeform, cylinderYawDx, DEFAULT_HEAD_TURN_PARTS, EAR_DEPTH_RANGE, evalYawFaceSurface, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, FACE_RATED_BAND, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, headTurnFraction, headTurnPivot, resolveFaceDeformFractions, TURN_BONE, turnSurfaceRadius } from './src/turn.ts';
+import { applyFaceSurfaceDeform, cylinderYawDx, DEFAULT_HEAD_TURN_PARTS, EAR_DEPTH_RANGE, evalYawFaceSurface, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, FACE_RATED_BAND, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, headTurnFraction, headTurnPivot, resolveFaceDeformFractions, TURN_BONE, TURN_RIDER_APART, turnFractions, turnRiderDepth, type TurnSpec, turnSurfaceRadius } from './src/turn.ts';
 import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, toWorld } from './src/coords.ts';
 import { artMask, contourFit, type ContourMesh, contourMesh, FAINT_ALPHA, contourOutline, type ContourParams, type ContourRegion, contourTopologyProblems, delaunayViolations, GRID, growSilhouette, inCircle, keepPoints, MAX_SIDE, marginDisc, outlineInRegions, withinMarginSquared } from './src/contour.ts';
 import { BASE, blockOutline, blocks, BOTTLE, BUILDING, CONCAVE, type ContourCase, CONVEX, EMPTY, FAINT, FAINT_AT_LINE, FAR, FEATHERED, FEATHERED_CORE, FULL, HOLE, ISLANDS, NEAR, NOTCH, NOTCH_CUT, NOTCHED, PAIR, PINCH, REGION, REGION_FAR_BACKGROUND, SPIKE, STRAND, STRAND_CHAIN, STRIP } from './fixtures/contour.ts';
@@ -5556,6 +5556,7 @@ function runRigSuite(): number {
   runInfluencesCases(say);
   runAnimationsFromCases(say);
   runTurnRigCases(say);
+  runTurnRiderRigCases(say);
   runInheritRigCases(say);
   runClothRigCases(say);
   runSkirtInsideRigCases(say);
@@ -7023,6 +7024,154 @@ function turnGap(a: Array<Map<string, GeometryBone>>, boneA: string, b: Array<Ma
     worst = Math.max(worst, Math.abs(((((d + 180) % 360) + 360) % 360) - 180));
   });
   return worst;
+}
+
+/**
+ * Issue #535 at the rig stage and in the draft: a part that rides another
+ * part's bone travels with it.
+ *
+ * ## By hand
+ *
+ * The rig fixture plus `pin` (full:headwear) at (13, 13), 2x2 = **4 px**, a
+ * region on `hem0` — a chain link, so a bone a part can own, which `cloth`'s
+ * mesh (16x8 = **128 px**) binds too: its host is `cloth`, and `pin`, binding
+ * no other ownable bone and hosting none, rides it. parts.json draws `pin`
+ * after `cloth`, so the draft puts it at cloth − 0.001 = **0.85446875**.
+ *
+ * The issue's table, authored: pivot 0.680647, pin 0.009765625 (the nearest),
+ * cloth 0.85546875, eye 0.640625. Span 0.680647 − 0.009765625 = 0.670881375;
+ * pin travels **+1**, cloth (0.680647 − 0.85546875) / 0.670881375 =
+ * **−0.260585**: 1.2606 of the dial apart, past {@link TURN_RIDER_APART}.
+ *
+ * Drafted (runs: topwear 0.85546875, headwear 0.009765625, face 0.640625):
+ * pivot (128 · 0.85546875 + 8 · 0.640625 + 4 · 0.85446875) / 140 =
+ * 0.843163; nearest eye 0.640625, span 0.202538; cloth −0.060758, pin
+ * −0.05582 — 0.004938 apart, 0.2963 px at a dial of 60.
+ *
+ * The own-host control (as RG144's `hairpin` on its own `hairpin_r`/`_l`):
+ * `pin` on a leaf bone `pinbone` nothing else binds hosts that bone itself, so
+ * it rides nothing and the issue's depths build.
+ */
+function runTurnRiderRigCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const dir = temp('turn-rider');
+  try {
+    const DIAL = 60;
+    const order = ['cloth', 'eye', 'pin'];
+    const partsOf = (): PartsFile => {
+      const p = rigParts();
+      return { ...p, parts: [...p.parts, { ...p.parts[0], name: 'pin', from: 'full:headwear', x: 13, y: 13, w: 2, h: 2, opaque_px: 4 }] };
+    };
+    const imagesOf = (): Map<string, Raster> => new Map([...rigImages(), ['pin', block(2, 2)]]);
+    const cfgOf = (bone: 'hem0' | 'pinbone', turn?: TurnSpec): Record<string, unknown> => {
+      const c = rigConfig();
+      (c.assemble as { plan: unknown[] }).plan.push(['pin', 'full', 'headwear']);
+      if (bone === 'pinbone') c.bones = [...(c.bones as unknown[]), { name: 'pinbone', parent: 'body', at: [14, 13] }];
+      c.regions = { ...(c.regions as Record<string, string>), pin: bone };
+      if (turn !== undefined) c.turn = turn;
+      return c;
+    };
+    const ISSUE: TurnSpec = { pivot: 0.680647, depths: { cloth: 0.85546875, eye: 0.640625, pin: 0.009765625 } };
+    const run = (rows: Array<[string, number]>): LayerSet => ({
+      form: 'wrapper',
+      hidden: [],
+      source: 'fixture layers.json',
+      canvas: { w: 1, h: 1 },
+      layers: rows.map(([tag, d], i) => ({ name: tag, tag: readTag(tag) as TagReading, file: null, pixels: newRaster(1, 1), left: 0, top: 0, right: 1, bottom: 1, depth: d, drawOrder: i, opaquePx: 1 })),
+    });
+    const runs = { full: run([['topwear', 0.85546875], ['headwear', 0.009765625]]), head: run([['face', 0.640625]]) };
+    const fx = writeRigFixture(join(dir, 'hem0'), cfgOf('hem0'), imagesOf(), partsOf());
+    const P = readPartSet(fx.parts);
+    const drafted = draftTurn(P, runs, parseConfig(cfgOf('hem0')));
+    // Bar 2's mutant: the parameter that reads the riders by bone left out — the draft before #535.
+    const mutant = draftTurn(P, runs);
+    const build = (bone: 'hem0' | 'pinbone', turn: TurnSpec | null): RigOutput | PartsError => {
+      if (turn === null) return new PartsError([{ code: 'NO_TURN', object: 'draft', detail: 'no turn was drafted' }]);
+      return refusals(() => buildRig(parseConfig(cfgOf(bone, turn)), partsOf(), imagesOf())) ?? buildRig(parseConfig(cfgOf(bone, turn)), partsOf(), imagesOf());
+    };
+    const scale = (r: RigOutput | PartsError, part: string): number | null => {
+      if (r instanceof PartsError) return null;
+      const c = (r.rig.constraints ?? []).find((k) => k.name === `turn_${part}`) as { properties?: { x?: { to?: { x?: { scale?: number } } } } } | undefined;
+      return c?.properties?.x?.to?.x?.scale ?? null;
+    };
+    /** Bar 1's equality on a turn: the rider's fraction within TURN_RIDER_APART of its host's, the failure naming the part. */
+    const rides = (turn: TurnSpec | null, rider: string, host: string): { ok: boolean; line: string } => {
+      if (turn === null) return { ok: false, line: `"${rider}": no turn drafted` };
+      const fr = new Map(turnFractions(turn, order).map((f) => [f.part, f.fraction]));
+      const fp = fr.get(rider) ?? Number.NaN;
+      const fh = fr.get(host) ?? Number.NaN;
+      const ok = Math.abs(fp - fh) <= TURN_RIDER_APART;
+      return { ok, line: `${ok ? '' : `FAILS for "${rider}": `}"${rider}" ${fp} (${pyRound(fp * DIAL, 4)} px at +${DIAL}) vs "${host}" ${fh} (${pyRound(fh * DIAL, 4)} px), apart ${pyRound(Math.abs(fp - fh), 6)} of the dial against ${TURN_RIDER_APART}` };
+    };
+    const refusalLine = (r: RigOutput | PartsError): string => (r instanceof PartsError ? r.problems.map((q) => `${q.code} ${q.object}: ${q.detail}`).join(' | ') : 'built green');
+    const one = (r: RigOutput | PartsError, code: string, object: string): boolean => r instanceof PartsError && r.problems.length === 1 && r.problems[0].code === code && r.problems[0].object === object;
+
+    // (a) the draft and (b) the rig stage, on the issue's figures.
+    const authored = build('hem0', ISSUE);
+    const greenDraft = build('hem0', drafted.turn);
+    const rideNote = drafted.notes.find((n) => n.startsWith('turn: "pin" rides "cloth" by bone')) ?? '';
+    const fp = scale(greenDraft, 'pin');
+    const fc = scale(greenDraft, 'cloth');
+    const travelGap = fp === null || fc === null ? Number.POSITIVE_INFINITY : Math.abs(fp - fc) * DIAL;
+    const refused = authored instanceof PartsError ? (authored.problems[0]?.detail ?? '') : '';
+    // Nothing written on refusal: the CLI's rig stage over the authored depths.
+    const cliFix = writeRigFixture(join(dir, 'cli'), cfgOf('hem0', ISSUE), imagesOf(), partsOf());
+    const cliOut = join(dir, 'cli', 'out');
+    const cli = runCli(['rig', '--config', cliFix.config, '--parts', cliFix.parts, '--out', cliOut]);
+    say(
+      'RG535_A_PART_ON_ANOTHER_PARTS_BONE_IS_DRAFTED_AT_ITS_HOSTS_DEPTH_AND_AN_AUTHORED_DEPTH_FAR_FROM_THE_HOSTS_IS_REFUSED_BY_NAME',
+      drafted.turn !== null &&
+        drafted.turn.depths.pin === turnRiderDepth(0.85546875, true) &&
+        drafted.turn.depths.cloth === 0.85546875 &&
+        rideNote.includes('drawn above it; own full:headwear 0.009765625') &&
+        one(authored, 'CONFIG_TURN_RIDER_DEPTH', 'config.turn.depths.pin') &&
+        refused.includes('fraction +1.0000') &&
+        refused.includes('"pin" rides "cloth" by bone') &&
+        refused.includes('travels -0.2606') &&
+        refused.includes(`more than ${TURN_RIDER_APART} of pivot`) &&
+        refused.includes('0.85446875') &&
+        cli.status !== 0 &&
+        cli.out.includes('CONFIG_TURN_RIDER_DEPTH') &&
+        !existsSync(join(cliOut, 'rig.json')) &&
+        fp !== null &&
+        fc !== null &&
+        travelGap <= TURN_RIDER_APART * DIAL,
+      `drafted ${JSON.stringify(drafted.turn)}; "${rideNote}"; authored (the issue's table) -> ${refusalLine(authored)}; the CLI: exit ${cli.status}, rig.json ${existsSync(join(cliOut, 'rig.json')) ? 'WRITTEN' : 'not written'}; drafted -> ${refusalLine(greenDraft)}, constraint fractions pin ${fp} and cloth ${fc}, travel at +${DIAL}: pin ${fp === null ? 'none' : pyRound(fp * DIAL, 4)} px, cloth ${fc === null ? 'none' : pyRound(fc * DIAL, 4)} px, ${pyRound(travelGap, 4)} px apart against ${pyRound(TURN_RIDER_APART * DIAL, 4)}`,
+      "issue #535 (HQ: both halves): the config states which bone a part rides; a part whose every ownable bone another carried part hosts is the ornament pinned to it, so the draft carries it at the host's depth by draw order, as #271's face riders, and an authored depth that sends it more than 0.1 of the dial away from its host is refused by name with both fractions — the issue's figures, derived by hand above",
+    );
+
+    // The own-host control: the ornament on a leaf bone nothing else binds is its own carrier.
+    const ownDraft = draftTurn(readPartSet(writeRigFixture(join(dir, 'pinbone'), cfgOf('pinbone'), imagesOf(), partsOf()).parts), runs, parseConfig(cfgOf('pinbone')));
+    const ownBuilt = build('pinbone', ISSUE);
+    say(
+      'RG535_A_PART_ON_A_LEAF_BONE_ONLY_IT_BINDS_IS_ITS_OWN_CARRIER_AND_THE_ISSUES_DEPTHS_BUILD',
+      ownDraft.turn !== null &&
+        ownDraft.turn.depths.pin === 0.009765625 &&
+        !ownDraft.notes.some((n) => n.includes('by bone')) &&
+        !(ownBuilt instanceof PartsError) &&
+        scale(ownBuilt, 'pin') === 1 &&
+        scale(ownBuilt, 'cloth') === -0.260585,
+      `pin on "pinbone": drafted ${JSON.stringify(ownDraft.turn)}; the issue's depths -> ${refusalLine(ownBuilt)}, fractions pin ${scale(ownBuilt, 'pin')}, cloth ${scale(ownBuilt, 'cloth')}`,
+      "issue #535: a bone only one part binds is that part's own (RG144's hairpin on hairpin_r/_l), so binding it is no rider relation and the part keeps its own See-through median — the rule never fires on a bone nobody shares",
+    );
+
+    // Bar 2: the ornament at its own layer depth again.
+    const mutRides = rides(mutant.turn, 'pin', 'cloth');
+    const mutBuilt = build('hem0', mutant.turn);
+    const okRides = rides(drafted.turn, 'pin', 'cloth');
+    say(
+      'RG535_THE_MUTANT_AT_ITS_OWN_LAYER_DEPTH_FAILS_THE_EQUALITY_NAMING_THE_PART_AND_THE_RIG_STAGE_REFUSES_IT',
+      okRides.ok &&
+        mutant.turn !== null &&
+        mutant.turn.depths.pin === 0.009765625 &&
+        !mutRides.ok &&
+        mutRides.line.startsWith('FAILS for "pin"') &&
+        one(mutBuilt, 'CONFIG_TURN_RIDER_DEPTH', 'config.turn.depths.pin'),
+      `drafted: ${okRides.line}; mutant (riders by bone not read) ${JSON.stringify(mutant.turn)}: ${mutRides.line}; its rig -> ${refusalLine(mutBuilt)}`,
+      'issue #535 bar 2: take the depth from the ornament\'s own See-through layer again and the equality fails naming the part, and the refusal fires — the two halves each see the defect the issue measured',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 /**
@@ -8494,6 +8643,104 @@ function headRun(side: number, rects: Array<[string, number, number, number, num
   };
 }
 
+/**
+ * Issue #535 bars 1 and 3 on the public wind example (`examples/wind`, inputs from `bun run fetch-examples`). Bar 1:
+ * under the config's binding the drafted `hairpin` sits at `hair_back` − 0.001 (parts.json draws it after the back
+ * hair) and, through the rig stage, its constraint fraction is `hair_back`'s within TURN_RIDER_APART of the dial.
+ * Bar 3: the CLI's binding (the drafted proposal's own) changes no byte of the turn, and under the config's binding
+ * every other part keeps its depth and — at the pivot the draft had before — its constraint's bytes.
+ */
+function runWindRiderCases(say: (name: string, ok: boolean, detail: string, why: string) => void, dir: string): void {
+  const wind = join(ROOT, 'examples', 'wind');
+  const inputs = join(wind, 'inputs');
+  if (![join(inputs, 'painting.png'), join(inputs, 'layers', 'full'), join(inputs, 'layers', 'head')].every((f) => existsSync(f))) {
+    console.log('  SKIP  PR535: no fetched examples/wind/inputs (painting.png + layers/{full,head}), so the rider by bone was not measured on the public example');
+    console.log('          ⚠️ This is a HOLE in this run, not a pass — run `bun run fetch-examples` to measure issue #535 on the wind example.');
+    return;
+  }
+  const asm = runCli(['assemble', '--source', join(inputs, 'painting.png'), '--full', join(inputs, 'layers', 'full'), '--head', join(inputs, 'layers', 'head'), '--config', join(wind, 'config.json'), '--out', dir]);
+  const pdir = join(dir, 'rig');
+  if (asm.status !== 0 || !existsSync(join(pdir, 'parts.json'))) {
+    say('PR535_THE_WIND_EXAMPLE_ASSEMBLES_FOR_THE_RIDER_MEASUREMENT', false, `assemble exit ${asm.status}: ${asm.out.split('\n').slice(-3).join(' | ')}`, 'issue #535: the wind example is assembled before its turn is drafted');
+    return;
+  }
+  const raw = JSON.parse(readFileSync(join(wind, 'config.json'), 'utf8')) as Record<string, unknown>;
+  const cfg = parseConfig(raw);
+  const P = readPartSet(pdir);
+  const runs = { full: readLayers(join(inputs, 'layers', 'full')), head: readLayers(join(inputs, 'layers', 'head')) };
+  const ruled = draftTurn(P, runs, cfg);
+  const plain = draftTurn(P, runs);
+  const viaProposal = draftTurn(P, runs, propose(P));
+  const parts = readParts(join(pdir, 'parts.json'));
+  const images = new Map(parts.parts.map((q) => [q.name, readPng(join(pdir, 'parts', `${q.name}.png`))] as const));
+  // A drafted depth of a part a limb takes is carried by each of its limb parts (withTurn's mapping, on the config's limbs).
+  const limbs = (cfg.limbs ?? {}) as Record<string, { segments: Array<{ part: string; from: string }> }>;
+  const forConfig = (t: TurnSpec): TurnSpec => {
+    const into = new Map<string, string[]>();
+    for (const l of Object.values(limbs)) for (const sg of l.segments) into.set(sg.from, [...(into.get(sg.from) ?? []), sg.part]);
+    const depths: Record<string, number> = {};
+    for (const [q, d] of Object.entries(t.depths)) for (const x of into.get(q) ?? [q]) depths[x] = d;
+    return { pivot: t.pivot, depths };
+  };
+  const rigOf = (t: TurnSpec): RigOutput | PartsError => refusals(() => buildRig(parseConfig({ ...raw, turn: forConfig(t) }), parts, images)) ?? buildRig(parseConfig({ ...raw, turn: forConfig(t) }), parts, images);
+  const turnConstraints = (r: RigOutput | PartsError): Map<string, string> => (r instanceof PartsError ? new Map() : new Map((r.rig.constraints ?? []).filter((c) => c.type === 'transform' && String(c.name).startsWith(`${TURN_BONE}_`)).map((c) => [String(c.name), JSON.stringify(c)] as const)));
+  const scaleOf = (r: RigOutput | PartsError, part: string): number | null => {
+    const c = turnConstraints(r).get(`${TURN_BONE}_${part}`);
+    return c === undefined ? null : ((JSON.parse(c) as { properties: { x: { to: { x: { scale: number } } } } }).properties.x.to.x.scale ?? null);
+  };
+  const DIAL = 60;
+  const order = parts.parts.map((q) => q.name);
+  const hbIdx = order.indexOf('hair_back');
+  const hpIdx = order.indexOf('hairpin');
+  const own = runs.full.layers.find((l) => l.name === 'headwear')?.depth ?? null;
+  const note = ruled.notes.find((n) => n.startsWith('turn: "hairpin" rides "hair_back" by bone')) ?? '';
+  const built = ruled.turn === null ? null : rigOf(ruled.turn);
+  const fpin = built === null ? null : scaleOf(built, 'hairpin');
+  const fback = built === null ? null : scaleOf(built, 'hair_back');
+  const plainBuilt = plain.turn === null ? null : rigOf(plain.turn);
+  const ppin = plainBuilt === null ? null : scaleOf(plainBuilt, 'hairpin');
+  const pback = plainBuilt === null ? null : scaleOf(plainBuilt, 'hair_back');
+  say(
+    'PR535_ON_WIND_THE_HAIRPIN_IS_DRAFTED_AT_THE_BACK_HAIRS_DEPTH_AND_TRAVELS_WITH_IT_THROUGH_THE_RIG_STAGE',
+    ruled.turn !== null &&
+      hbIdx >= 0 &&
+      hpIdx > hbIdx &&
+      ruled.turn.depths.hairpin === turnRiderDepth(ruled.turn.depths.hair_back, true) &&
+      own !== null &&
+      note.includes(`drawn above it; own full:headwear ${own}`) &&
+      built !== null &&
+      !(built instanceof PartsError) &&
+      fpin !== null &&
+      fback !== null &&
+      Math.abs(fpin - fback) <= TURN_RIDER_APART,
+    `parts.json draws hair_back at ${hbIdx}, hairpin at ${hpIdx}; drafted hairpin ${ruled.turn?.depths.hairpin} = hair_back ${ruled.turn?.depths.hair_back} − 0.001 (own full:headwear ${own}); "${note}"; the rig stage -> ${built === null ? 'no turn' : built instanceof PartsError ? codes(built) : 'green'}, constraint fractions hairpin ${fpin} and hair_back ${fback}, travel at +${DIAL}: ${fpin === null ? 'none' : pyRound(fpin * DIAL, 4)} px and ${fback === null ? 'none' : pyRound(fback * DIAL, 4)} px (${fpin === null || fback === null ? '' : pyRound(Math.abs(fpin - fback) * DIAL, 4)} px apart, bound ${pyRound(TURN_RIDER_APART * DIAL, 4)}); at its own median the rig stage gives hairpin ${ppin} and hair_back ${pback}, ${ppin === null || pback === null ? '' : pyRound(Math.abs(ppin - pback), 6)} of the dial apart`,
+    "issue #535 bar 1 on the public example: wind's config binds the hairpin to the first link of each back-hair chain, which the back hair binds with more opaque px, so it is drafted at the back hair's depth by draw order and the turn carries the two together",
+  );
+
+  // Bar 3: what parts without a host relation travel.
+  const sameDraft = viaProposal.turn !== null && plain.turn !== null && JSON.stringify(viaProposal.turn) === JSON.stringify(plain.turn) && JSON.stringify(viaProposal.notes) === JSON.stringify(plain.notes);
+  const others = Object.keys(plain.turn?.depths ?? {}).filter((q) => q !== 'hairpin');
+  const sameDepths = ruled.turn !== null && plain.turn !== null && others.every((q) => ruled.turn?.depths[q] === plain.turn?.depths[q]) && Object.keys(ruled.turn.depths).length === Object.keys(plain.turn.depths).length;
+  const held = ruled.turn === null || plain.turn === null ? null : rigOf({ pivot: plain.turn.pivot, depths: ruled.turn.depths });
+  const hashOf = (r: RigOutput | PartsError | null): string => {
+    const m = r === null ? new Map<string, string>() : turnConstraints(r);
+    return createHash('sha256').update([...m].filter(([k]) => k !== `${TURN_BONE}_hairpin`).map(([k, v]) => `${k}=${v}`).join('\n')).digest('hex');
+  };
+  const hPlain = hashOf(plainBuilt);
+  const hHeld = hashOf(held);
+  const nOthers = plainBuilt === null ? 0 : [...turnConstraints(plainBuilt).keys()].filter((k) => k !== `${TURN_BONE}_hairpin`).length;
+  const fr = (t: TurnSpec | null): Map<string, number> => new Map(t === null ? [] : turnFractions(t, order).map((f) => [f.part, f.fraction]));
+  const fRuled = fr(ruled.turn);
+  const fPlain = fr(plain.turn);
+  const drift = Math.max(0, ...others.map((q) => Math.abs((fRuled.get(q) ?? 0) - (fPlain.get(q) ?? 0))));
+  say(
+    'PR535_ON_WIND_PARTS_WITHOUT_A_HOST_KEEP_THEIR_DEPTH_AND_THE_CLIS_DRAFT_IS_THE_ONE_BEFORE',
+    sameDraft && sameDepths && held !== null && !(held instanceof PartsError) && hPlain === hHeld && nOthers > 0,
+    `propose --full/--head's binding (the drafted proposal's own) -> turn and notes ${sameDraft ? 'byte-equal to' : 'DIFFER from'} the draft with the bone rule off; under the config's binding ${others.length} other part(s) ${sameDepths ? 'keep their depth byte for byte' : 'MOVED'}, the pivot ${plain.turn?.pivot} -> ${ruled.turn?.pivot} (the hairpin's ${ruled.turn?.depths.hairpin} re-weighs it), every other fraction moving at most ${pyRound(drift, 6)}; at the pivot before, the ${nOthers} other turn constraint(s) hash ${hHeld.slice(0, 16)} against ${hPlain.slice(0, 16)} without the rule`,
+    "issue #535 bar 3: a part no other part's bone binds keeps its own median, and the drafted pivot is still the mean over the drafted depths, so only the rider and the area it moves change what the dial does; where nothing rides (the drafted proposal), no byte moves",
+  );
+}
+
 function runProposeSuite(): number {
   section('propose: bones, meshes and regions from the parts');
   const { say, bad } = counter();
@@ -9136,6 +9383,12 @@ function runProposeSuite(): number {
       `turn ${JSON.stringify(lone.turn)}; "${loneNote}"`,
       'issue #271: a rider is carried by the face part; where there is none, its own median is the only depth there is, and the draft says so rather than inventing a carrier',
     );
+
+    // Issue #535 on the public wind example: its config pins `hairpin` to the six back-hair links `hair_back` binds
+    // with more opaque px, so under the config's binding the hairpin rides the back hair; the drafted proposal binds the
+    // hairpin to its own bone and tassel instead, so `propose --full/--head` (which reads the proposal's own) drafts
+    // what it drafted before. Assembled here from the fetched inputs; absent, a SKIP and a HOLE.
+    runWindRiderCases(say, join(dir, 'wind-rider'));
 
     // Issue #466: short back hair ending above neckY + 0.5 * fh (shoulder line, y 121 on PROPOSE_PARTS) drafts a single
     // central `bun` bone when its 31 px dilated mask bridges the eye axis near its bottom ([axis, bot - 0.1 * p.h]), and

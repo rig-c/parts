@@ -1292,7 +1292,7 @@ function cmdPropose(args: string[]): number {
     const prop =
       fullRun === undefined && headRun === undefined
         ? drafted
-        : withTurn(drafted, draftTurn(P, { ...(fullRun === undefined ? {} : { full: readLayers(fullRun) }), ...(headRun === undefined ? {} : { head: readLayers(headRun) }) }));
+        : withTurn(drafted, draftTurn(P, { ...(fullRun === undefined ? {} : { full: readLayers(fullRun) }), ...(headRun === undefined ? {} : { head: readLayers(headRun) }) }, drafted));
     // Emit only after green: a proposal the config loader would refuse is not written, nor a basis record that does not hold to it.
     checkProposal(P, prop);
     const bfile = basisFile(P, prop, basis, cfg === null || cmpPath === undefined ? null : { where: cmpPath, config: cfg });

@@ -63,6 +63,15 @@ export function turnRiderDepth(carrier: number, above: boolean): number {
   return above ? carrier - TURN_RIDER_OFFSET : carrier + TURN_RIDER_OFFSET;
 }
 
+/**
+ * The share of the span (`pivot − nearest`) past which a rider by bone's
+ * fraction (issue #535: a part whose every ownable bone another carried part
+ * hosts, `turnRidersByBone` in `src/config.ts`) is refused for differing from
+ * its host's (`CONFIG_TURN_RIDER_DEPTH`, the rig stage). #535's judgment line,
+ * set before it was measured: the same bar as `propose`'s `TURN_RUN_APART`.
+ */
+export const TURN_RIDER_APART = 0.1;
+
 /** The control bone the rig stage adds under `root` when the config has `turn`: nothing keys it, and its local x is the dial. */
 export const TURN_BONE = 'turn';
 
