@@ -44,7 +44,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { type AnimFrame, EncodeError, encodeApng, encodeIndexedApng, INDEXED_DEFAULTS } from './apng.ts';
-import { assemble, type AssembleResult, cutLines, type ExcludedCount, excludedLines, setExclusions, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, holeKindsLine, holeLines, measureRecomposite, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine } from './assemble.ts';
+import { assemble, type AssembleResult, cutLines, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, holeKindsLine, holeLines, measureRecomposite, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine } from './assemble.ts';
 import { allocationClause, type Reducer, stageBClause, unboundedClause } from './automesh.ts';
 import { residualClause } from './autoenvelope.ts';
 import { type AutoMotionCase, failingRows, idleSchedule, localRow, motionClause, motionDeformation, motionDocument, motionInput, motionRowText, motionStimulus, motionVerdict, noStimulusProblem, type ReplayCandidate, runComparison, sourceSelfFailure, stimulusMotion, withStimulus } from './automotion.ts';
@@ -165,6 +165,13 @@ export interface AssembleStageInput {
    * `"none"` takes them, the rule before #587 — kept for the selftest's control that shows the count go red under it.
    */
   setExclusion?: 'base' | 'none';
+  /**
+   * What a subset set's limb parts keep of a layer of more than one island when the set names one limb side (issue
+   * #588): `"joints"` (the default, the only one the CLI runs) the island the segment's joints fall on
+   * ({@link setIslandSources}); `"all"` every island, the rule before #588 — kept for the selftest's control that
+   * shows the island count go red under it.
+   */
+  setIslands?: 'joints' | 'all';
 }
 
 /** Where the assemble stage writes: `parts.json`, the directory of part PNGs, the recomposite, and its error map. */
@@ -320,7 +327,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   }
 
   const altProblems: Problem[] = [];
-  const altBuilt: Array<{ record: AlternatePartsRecord; images: Array<{ name: string; image: Raster }>; excluded: ExcludedCount[] }> = [];
+  const altBuilt: Array<{ record: AlternatePartsRecord; images: Array<{ name: string; image: Raster }>; excluded: ExcludedCount[]; islands: IslandCount[] }> = [];
   const baseSlots = result.parts.parts.map((p) => p.name);
   for (const alt of mergedAlts) {
     if (alt.source === undefined || alt.full === undefined) {
@@ -514,6 +521,8 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       alt.parts === undefined || input.setExclusion === 'none'
         ? []
         : setExclusions(result.images, exW, exH, Object.values(altLimbs).flatMap((l) => l.segments.map((sg) => sg.part)), new Set([...coveredSet, ...hidesSet]));
+    // Issue #588: a subset set that names one limb side keeps, of a layer that holds more than one island, the one its joints fall on.
+    const altIslands = alt.parts === undefined || input.setIslands === 'all' ? [] : setIslandSources(fields.limbs ?? {}, altLimbs);
     let altRes: ReturnType<typeof assemble>;
     try {
       altRes = assemble({
@@ -535,6 +544,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         seamRule: input.seam,
         projectRule: input.project,
         ...(altExclude.length === 0 ? {} : { exclude: altExclude }),
+        ...(altIslands.length === 0 ? {} : { limbIslands: altIslands }),
       });
     } catch (err) {
       if (err instanceof PartsError) {
@@ -583,6 +593,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       },
       images: keptImages,
       excluded: altRes.excluded,
+      islands: altRes.islands,
     });
   }
   refuseIfAny(altProblems);
@@ -644,8 +655,9 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   if (result.figures.uncoveredErrorPx > 0) log(holeKindsLine(result.holeKinds, scene));
   for (const u of result.uncovered) log(uncoveredLine(u, scene));
   for (const d of result.drift) log(driftLine(d));
-  // Issue #587: one line per subset set's limb part and base part over it that took a pixel. None otherwise.
-  for (const b of altBuilt) for (const l of excludedLines(b.record.name, b.excluded)) log(l);
+  // Issue #588: per subset set, one line per limb part cut from a layer of more than one island, then (issue #587) one
+  // per limb part and base part over it that took a pixel. None otherwise.
+  for (const b of altBuilt) for (const l of [...islandLines(b.record.name, b.islands), ...excludedLines(b.record.name, b.excluded)]) log(l);
   log(`wrote ${outs.partsJson}, ${result.images.length} PNG(s) in ${outs.partsDir}, ${outs.recomposite}, ${outs.errorMap} (uncovered error px red, covered error px blue, the painting grey)${figurePath === null ? '' : `, ${figurePath} (the figure, white, the recomposite was read inside)`}`);
   return result;
 }

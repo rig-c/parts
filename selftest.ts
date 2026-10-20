@@ -23725,6 +23725,182 @@ function runBuildSuite(): number {
       `exclusion "base" ${carryBase.failed === null ? 'assembles' : carryBase.failed.problems.map((q) => q.code).join(', ')}, "none" ${carryNone.failed === null ? 'assembles' : carryNone.failed.problems.map((q) => q.code).join(', ')}; ${carryFiles.length} file(s) compared, differing: ${carryDiffer.join(', ') || 'none'}; set thighs in the shorts' area: ${setThighs.map((t) => `${t} ${carryHeld.get(t)}`).join(', ')}; LINT set lines ${carryBase.lines.filter((l) => l.includes('LINT set "')).length}`,
       'issue #587, bar 2: the rule is positional — under a base part the set does not carry — so a set that replaces bottomwear keeps its thigh top under its own shorts, byte for byte as before',
     );
+
+    // BU200–BU203 — issue #588: a subset leg set cut from a layer that holds both legs keeps only the island its
+    // limb's joints fall on. The fixture is #587's (scale 1, the shorts, the base's two legs from row 20, the same
+    // bones and limbs), but every set's `legwear` holds BOTH legs, each from row 10: the set's own leg straight or
+    // folded as in #587, and the other leg straight, [22, 30) or [34, 42) x [10, 50). The two legs are 4 px apart, so
+    // the layer holds 2 islands (8-connected, alpha above 8). A set names one limb (leg_r or leg_l), so the rule
+    // before #588 put every pixel of the layer on that limb: each set part held a piece of both legs.
+    const islandDir = join(dir, 'island-sets');
+    const islandSets: Array<{ name: string; parts: string[]; rects: Array<[number, number, number, number]>; drawn?: Record<string, number> }> = [
+      { name: 'straight_l', parts: ['thigh_l', 'shin_l'], rects: [[34, 10, 42, 50], [22, 10, 30, 50]] },
+      { name: 'fold_l', parts: ['thigh_l', 'shin_l'], rects: [[34, 10, 42, 34], [42, 26, 58, 34], [22, 10, 30, 50]], drawn: { leg_l1: 0 } },
+      { name: 'straight_r', parts: ['thigh_r', 'shin_r'], rects: [[22, 10, 30, 50], [34, 10, 42, 50]] },
+      { name: 'fold_r', parts: ['thigh_r', 'shin_r'], rects: [[22, 10, 30, 34], [6, 26, 22, 34], [34, 10, 42, 50]], drawn: { leg_r1: 180 } },
+    ];
+    const islandConfig = (sets: typeof islandSets): Record<string, unknown> => {
+      const c = shortsConfig(false, false);
+      (c.assemble as Record<string, unknown>).alternates = sets.map((q) => ({
+        name: q.name,
+        source: 'painting.png',
+        full: `full_${q.name}`,
+        head: 'head',
+        parts: q.parts,
+        ...(q.drawn === undefined ? {} : { drawn: q.drawn }),
+      }));
+      return c;
+    };
+    const islandFixture = (name: string, sets: typeof islandSets): string => {
+      const d = join(islandDir, name);
+      writeAssembleFixture(d, islandConfig(sets), shortsPainting, { full: [{ name: 'legwear', depth: 0.6, rects: [{ x0: 22, y0: 20, x1: 30, y1: 50, colour: C }, { x0: 34, y0: 20, x1: 42, y1: 50, colour: C }] }, shortsLayer], head: HEAD_LAYERS });
+      for (const q of sets) writeRun(join(d, `full_${q.name}`), [{ name: 'legwear', depth: 0.6, rects: q.rects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1, colour: C })) }, shortsLayer]);
+      return d;
+    };
+    /** Each set part PNG under `out`: its islands' areas (8-connected, alpha above 8), largest first. */
+    const setIslands = (out: string, sets: typeof islandSets): Map<string, number[]> => {
+      const got = new Map<string, number[]>();
+      for (const q of sets) {
+        for (const p of q.parts) {
+          const f = join(out, 'parts', `${q.name}_${p}.png`);
+          if (!existsSync(f)) continue;
+          const img = readPng(f);
+          const m = newMask(img.width, img.height);
+          for (let i = 0; i < img.width * img.height; i++) m.data[i] = img.data[i * 4 + 3] > 8 ? 1 : 0;
+          const cc = connectedComponents(m, 8);
+          got.set(`${q.name}_${p}`, cc.stats.slice(1).map((s) => s.area).sort((a, b) => b - a));
+        }
+      }
+      return got;
+    };
+    const islandFigures = (got: Map<string, number[]>): string => [...got].map(([k, v]) => `${k} [${v.join(', ')}]`).join(', ');
+    const secondShare = (v: readonly number[]): number => (v.length < 2 ? 0 : v[1] / v[0]);
+
+    const islandGreenDir = islandFixture('green', islandSets);
+    const islandGreenOut = join(islandGreenDir, 'out');
+    const islandGreen = runCli([...buildArgs(islandGreenDir, islandGreenOut), '--all-sets']);
+    const islandHeld = setIslands(islandGreenOut, islandSets);
+    const islandGreenCheck = existsSync(join(islandGreenOut, 'check', 'check.json'))
+      ? (readJsonFile(join(islandGreenOut, 'check', 'check.json')) as { PASS?: boolean; sets?: Record<string, { PASS?: boolean }> })
+      : null;
+    // By hand, the straight sets: the knee's joint line is the row y = 30, so a thigh takes rows 10..29 of both legs
+    // (8 x 20 = 160 px each) and a shin rows 30..49 (160 each) and the knee's cap, the half-disc of radius 4 (half the
+    // leg's 8 px) about the knee on the thigh's side: rows 29, 28, 27, 26 hold 8, 8, 6, 4 pixel centres within 4 of it,
+    // 26 px. Each part keeps its own leg's and drops the other's. The folded sets: the other leg, 8 x 40 = 320 px, is
+    // dropped between thigh and shin, and the two drops add up to it. Then #587's line: 8 x 10 = 80 px under the shorts.
+    const KNEE_CAP_PX = 8 + 8 + 6 + 4;
+    const islandLine = (set: string, part: string, joints: string, kept: number, dropped: number): string =>
+      `LINT set "${set}" ${part}: legs holds 2 islands (8-connected, alpha above 8), kept the one under ${joints} (${kept} px), dropped 1 (${dropped} px)`;
+    const islandLint = shortsLint(islandGreen.out);
+    const straightLint = [
+      islandLine('straight_l', 'thigh_l', 'leg_l0 [38, 10] and leg_l1 [38, 30]', 160, 160),
+      islandLine('straight_l', 'shin_l', 'leg_l1 [38, 30]', 160 + KNEE_CAP_PX, 160),
+      `LINT set "straight_l" thigh_l: ${SHORTS_THIGH_PX} px under bottomwear excluded`,
+      islandLine('straight_r', 'thigh_r', 'leg_r0 [26, 10] and leg_r1 [26, 30]', 160, 160),
+      islandLine('straight_r', 'shin_r', 'leg_r1 [26, 30]', 160 + KNEE_CAP_PX, 160),
+      `LINT set "straight_r" thigh_r: ${SHORTS_THIGH_PX} px under bottomwear excluded`,
+    ];
+    const lintOf = (set: string): string[] => islandLint.filter((l) => l.startsWith(`LINT set "${set}" `));
+    const droppedOf = (l: string): number => Number(/dropped 1 \((\d+) px\)$/.exec(l)?.[1] ?? NaN);
+    const foldOk = (set: string, side: 'l' | 'r', knee: string, hip: string): boolean => {
+      const ls = lintOf(set);
+      return (
+        ls.length === 3 &&
+        ls[0].startsWith(`LINT set "${set}" thigh_${side}: legs holds 2 islands (8-connected, alpha above 8), kept the one under leg_${side}0 ${hip} and leg_${side}1 ${knee} (`) &&
+        ls[1].startsWith(`LINT set "${set}" shin_${side}: legs holds 2 islands (8-connected, alpha above 8), kept the one under leg_${side}1 ${knee} (`) &&
+        droppedOf(ls[0]) + droppedOf(ls[1]) === 8 * 40 &&
+        ls[2] === `LINT set "${set}" thigh_${side}: ${SHORTS_THIGH_PX} px under bottomwear excluded`
+      );
+    };
+    const islandBaseSame =
+      baseNames.every((n) => existsSync(join(islandGreenOut, 'parts', `${n}.png`)) && digest(join(islandGreenOut, 'parts', `${n}.png`)) === digest(join(shortsBaseOut, 'parts', `${n}.png`))) &&
+      existsSync(join(islandGreenOut, 'parts.json')) &&
+      JSON.stringify(readParts(join(islandGreenOut, 'parts.json')).parts) === JSON.stringify(readParts(join(shortsBaseOut, 'parts.json')).parts);
+    say(
+      'BU200_A_LEG_SET_CUT_FROM_A_TWO_LEG_LAYER_KEEPS_THE_ISLAND_UNDER_ITS_JOINTS_ONE_PER_PART_AND_THE_LINT_SAYS_SO_PER_PART',
+      islandGreen.status === 0 &&
+        islandHeld.size === 8 &&
+        [...islandHeld.values()].every((v) => v.length === 1) &&
+        JSON.stringify([...lintOf('straight_l'), ...lintOf('straight_r')]) === JSON.stringify(straightLint) &&
+        foldOk('fold_l', 'l', '[38, 30]', '[38, 10]') &&
+        foldOk('fold_r', 'r', '[26, 30]', '[26, 10]') &&
+        islandGreenCheck?.PASS === true &&
+        islandSets.every((q) => islandGreenCheck.sets?.[q.name]?.PASS === true) &&
+        islandBaseSame,
+      `exit ${islandGreen.status}; islands per set part (8-connected, alpha above 8, px): ${islandFigures(islandHeld)}; LINT: ${islandLint.join(' | ') || 'none'}; check --all-sets PASS ${islandGreenCheck?.PASS} (${islandSets.map((q) => `${q.name} ${islandGreenCheck?.sets?.[q.name]?.PASS}`).join(', ')}); base parts and records equal to the no-sets build: ${islandBaseSame}; FAIL lines: ${islandGreen.out.split('\n').filter((l) => l.includes('FAIL ')).map((l) => l.trim()).join(' | ') || 'none'}`,
+      'issue #588, bar 1 and 3: with no pre-split of the layer, every leg set part holds one island (its second is 0 % of its largest, the bar is 1 %), the LINT names per part the islands, the joints, and the kept and dropped pixels (by hand on the straight sets), check --all-sets is green, and the base\'s parts are the bytes a build with no set writes',
+    );
+
+    // Bar 3's mutant: every island kept (the rule before #588, a test-only parameter of assembleStage).
+    const islandStage = (d: string, out: string, rule: 'joints' | 'all'): { lines: string[]; failed: PartsError | null } => {
+      const lines: string[] = [];
+      const failed = refusals(() =>
+        assembleStage(
+          { source: join(d, 'painting.png'), full: join(d, 'full'), head: join(d, 'head'), config: join(d, 'config.json'), seam: 'near-white', project: DEFAULT_PROJECT_RULE, setIslands: rule },
+          { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, 'recomposite_error_rig.png') },
+          (l) => lines.push(l),
+        ),
+      );
+      return { lines, failed };
+    };
+    const islandMut = islandStage(islandGreenDir, join(islandGreenDir, 'out-all'), 'all');
+    const islandMutHeld = setIslands(join(islandGreenDir, 'out-all'), islandSets);
+    // By hand, under the mutant: a straight_l thigh holds both thighs' rows 20..29 once the shorts are excluded (8 x 10
+    // each), and its shin both shins (160 + the knee's 26, and 160): two islands, the second far past 1 % of the first.
+    // (The _r sets come out of the mutant with one island each only because the base's thigh_l and shin_l, drawn after
+    // the set's slot, cover the other leg from row 20 and #587 excludes it; the _l sets have no base part drawn after them.)
+    say(
+      'BU201_THE_MUTANT_THAT_KEEPS_EVERY_ISLAND_PUTS_THE_OTHER_LEG_BACK_IN_THE_LEFT_SETS_AND_GOES_RED_ON_THE_COUNT',
+      islandMut.failed === null &&
+        JSON.stringify(islandMutHeld.get('straight_l_thigh_l')) === JSON.stringify([80, 80]) &&
+        JSON.stringify(islandMutHeld.get('straight_l_shin_l')) === JSON.stringify([160 + KNEE_CAP_PX, 160]) &&
+        ['fold_l_thigh_l', 'fold_l_shin_l'].every((k) => secondShare(islandMutHeld.get(k) ?? []) > 0.01) &&
+        !islandMut.lines.some((l) => l.includes(' islands (8-connected')),
+      `setIslands "all": ${islandMut.failed === null ? 'assembles' : islandMut.failed.problems.map((q) => q.code).join(', ')}; islands per set part: ${islandFigures(islandMutHeld)}; island LINT lines ${islandMut.lines.filter((l) => l.includes(' islands (8-connected')).length}`,
+      'issue #588, bar 3: the count goes red when every island is kept — each left set part holds a piece of both legs again, its second island 100 % (thigh) and 86 % (shin) of its first where BU200 holds one',
+    );
+
+    // Bar 2: a joint on no island, and a segment whose joints fall on two, are refused by name; nothing is written.
+    // `off_r`: the right leg starts at row 12, so the hip [26, 10] touches the pixels (25..26, 9..10), all transparent.
+    // `gap_r`: the right leg broken at rows 28..29, so the hip is on the thigh's island and the knee [26, 30] on the shin's.
+    const ambSets: typeof islandSets = [
+      { name: 'off_r', parts: ['thigh_r', 'shin_r'], rects: [[22, 12, 30, 50], [34, 10, 42, 50]] },
+      { name: 'gap_r', parts: ['thigh_r', 'shin_r'], rects: [[22, 10, 30, 28], [22, 30, 30, 50], [34, 10, 42, 50]] },
+    ];
+    const ambDir = islandFixture('ambiguous', ambSets);
+    const ambOut = join(ambDir, 'out');
+    const amb = runCli([...buildArgs(ambDir, ambOut), '--all-sets']);
+    const ambLines = amb.out.split('\n').filter((l) => l.includes('ASSEMBLE_ALT_LIMB_ISLAND'));
+    const LEFT_ISLAND = '320 px at 34,10 8x40';
+    const offWant = `config.limbs.leg_r.segments[0] (part "thigh_r") (alternate set "off_r") — takes "legs", which holds 2 islands (8-connected, alpha above 8): island 1 (${LEFT_ISLAND}), island 2 (${8 * 38} px at 22,12 8x38); the set names one of the limbs that take "legs", so the segment keeps the island its joints fall on, and its joint "leg_r0"'s origin at [26, 10] is on none of them`;
+    const gapWant = `config.limbs.leg_r.segments[0] (part "thigh_r") (alternate set "gap_r") — takes "legs", which holds 3 islands (8-connected, alpha above 8): island 1 (${LEFT_ISLAND}), island 2 (${8 * 20} px at 22,30 8x20), island 3 (${8 * 18} px at 22,10 8x18); the set names one of the limbs that take "legs", so the segment keeps the island its joints fall on, and they fall on 2: "leg_r0"'s origin at [26, 10] on island 3 (${8 * 18} px at 22,10 8x18), "leg_r1"'s origin at [26, 30] on island 2 (${8 * 20} px at 22,30 8x20)`;
+    const ambWritten = existsSync(ambOut) ? readdirSync(ambOut) : [];
+    const ambMut = islandStage(ambDir, join(ambDir, 'out-all'), 'all');
+    say(
+      'BU202_A_JOINT_ON_NO_ISLAND_AND_A_SEGMENT_ON_TWO_ARE_REFUSED_WITH_THE_JOINT_AND_ISLAND_FIGURES_AND_NOTHING_IS_WRITTEN',
+      amb.status === 1 &&
+        ambLines.length === 2 &&
+        ambLines.some((l) => l.includes(offWant)) &&
+        ambLines.some((l) => l.includes(gapWant)) &&
+        ambWritten.length === 0 &&
+        ambMut.failed === null,
+      `exit ${amb.status}; ${ambLines.length} ASSEMBLE_ALT_LIMB_ISLAND line(s): ${ambLines.map((l) => l.trim()).join(' | ') || 'none'}; --out holds [${ambWritten.join(', ')}]; under setIslands "all" the same inputs ${ambMut.failed === null ? 'assemble' : `refuse ${ambMut.failed.problems.map((q) => q.code).join(', ')}`}`,
+      'issue #588, bar 2: a joint on no island names no island to keep, and a thigh whose hip and knee lie on two names two; either is refused by name with the joint and every island\'s figures (by hand), and the build writes nothing — the refusal is the rule\'s, since the rule before #588 assembles the same inputs',
+    );
+
+    // The rule reads a set that names one limb side only: a set carrying both legs is shared by the nearest polyline as
+    // the base is, and a set whose layer holds its one leg (BU190's) has one island, so neither prints an island line.
+    const bothDir = islandFixture('both', [{ name: 'both', parts: ['thigh_r', 'shin_r', 'thigh_l', 'shin_l'], rects: [[22, 10, 30, 50], [34, 10, 42, 50]] }]);
+    const both = islandStage(bothDir, join(bothDir, 'out-joints'), 'joints');
+    const bothAll = islandStage(bothDir, join(bothDir, 'out-all'), 'all');
+    const bothFiles = ['parts.json', ...['thigh_r', 'shin_r', 'thigh_l', 'shin_l'].map((n) => join('parts', `both_${n}.png`))];
+    const bothDiffer = bothFiles.filter((f) => !existsSync(join(bothDir, 'out-joints', f)) || !existsSync(join(bothDir, 'out-all', f)) || digest(join(bothDir, 'out-joints', f)) !== digest(join(bothDir, 'out-all', f)));
+    say(
+      'BU203_A_SET_THAT_CARRIES_BOTH_LEGS_OF_THE_LAYER_KEEPS_EVERY_ISLAND_AND_WRITES_THE_BYTES_IT_WROTE_BEFORE',
+      both.failed === null && bothAll.failed === null && bothDiffer.length === 0 && !both.lines.some((l) => l.includes(' islands (8-connected')) && !shortsGreen.out.includes(' islands (8-connected'),
+      `rule "joints" ${both.failed === null ? 'assembles' : both.failed.problems.map((q) => q.code).join(', ')}, "all" ${bothAll.failed === null ? 'assembles' : bothAll.failed.problems.map((q) => q.code).join(', ')}; ${bothFiles.length} file(s) compared, differing: ${bothDiffer.join(', ') || 'none'}; island LINT lines: both ${both.lines.filter((l) => l.includes(' islands (8-connected')).length}, BU190's build ${shortsGreen.out.split('\n').filter((l) => l.includes(' islands (8-connected')).length}`,
+      'issue #588: the rule is for a set that names one limb side of a layer more limbs take; a set that carries every limb of the layer is split by the nearest polyline, as the base is, byte for byte as before',
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
