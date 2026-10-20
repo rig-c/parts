@@ -2141,6 +2141,11 @@ export interface CheckReport {
   motionSeam: MotionSeamLine;
   /** `CLOTH_SETTLES` (issue #501): a warning, never a bar — in `check.json` only when the rig declares a physics constraint and has an idle; its SKIP is printed either way. */
   cloth: ClothLine;
+  /**
+   * Issue #557: the contour step at each pose `SEAM_OVER_RANGE` read, by `<part> <degrees>` ({@link contourStep}) —
+   * printed on every row; `check.json` carries it only for a joint whose cap is short ({@link SweepPose}).
+   */
+  sweepSteps?: Map<string, { left: number; right: number }>;
 }
 
 /**
@@ -2980,6 +2985,10 @@ export interface SweepJoint {
   radius: number;
   /** Issue #360: the cap's record says `shape: "disc"` — the disc is held to no pixel uncovered ({@link sweepLine}). */
   disc?: true;
+  /** Issue #557: the upper segment's bone (the limb record one segment up), whose direction the contour step is read across; null when parts.json has none. */
+  upperBone?: string | null;
+  /** Issue #557: the cap's record carries `short_px` — the step is then written into check.json ({@link SweepPose}). */
+  short?: { left: number; right: number };
 }
 
 /** Every limb record in `parts.json` that declares a `range`, in `parts.json`'s order. */
@@ -2988,7 +2997,20 @@ export function sweepJoints(parts: PartsFile): SweepJoint[] {
   for (const p of parts.parts) {
     const l = p.limb;
     if (l === undefined || l.range === undefined || l.cap === undefined || l.joint === undefined) continue;
-    out.push({ part: p.name, limb: l.name, segment: l.segment, joint: l.joint, bone: l.bone, range: [l.range[0], l.range[1]], at: [l.cap.at[0], l.cap.at[1]], radius: l.cap.radius, ...(l.cap.shape === 'disc' ? { disc: true as const } : {}) });
+    const up = parts.parts.find((q) => q.limb?.name === l.name && q.limb.segment === l.segment - 1)?.limb?.bone ?? null;
+    out.push({
+      part: p.name,
+      limb: l.name,
+      segment: l.segment,
+      joint: l.joint,
+      bone: l.bone,
+      range: [l.range[0], l.range[1]],
+      at: [l.cap.at[0], l.cap.at[1]],
+      radius: l.cap.radius,
+      ...(l.cap.shape === 'disc' ? { disc: true as const } : {}),
+      upperBone: up,
+      ...(l.cap.short_px === undefined ? {} : { short: { left: l.cap.short_px.left, right: l.cap.short_px.right } }),
+    });
   }
   return out;
 }
@@ -3052,6 +3074,90 @@ export function sweepUnread(j: SweepJoint, rig: Record<string, unknown>, limbSlo
   return null;
 }
 
+/** The setup pose's world transform of every bone `rig.json` declares (rigc's `computeExactFrameTransforms`, through `src/coords.ts`). */
+function setupWorld(rig: Record<string, unknown>): Map<string, BoneTransform> {
+  const bones = (Array.isArray(rig.bones) ? rig.bones : []).filter(isRecord);
+  const posable: Parameters<typeof computeExactFrameTransforms>[0][number][] = bones.map((b) => ({
+    name: String(b.name),
+    ...(typeof b.parent === 'string' && b.parent !== '' ? { parent: b.parent } : {}),
+    ...Object.fromEntries((['x', 'y', 'rotation', 'scaleX', 'scaleY', 'shearX', 'shearY'] as const).filter((k) => typeof b[k] === 'number').map((k) => [k, b[k] as number])),
+    ...(typeof b.inherit === 'string' ? { inherit: b.inherit } : {}),
+  }));
+  return computeExactFrameTransforms(posable);
+}
+
+/**
+ * Issue #557: the direction the contour step is read across — the upper
+ * segment's, from its bone's origin to the joint's bone's origin at the setup
+ * pose (the first of the two directions `src/limbs.ts` `jointLine` sums), as a
+ * unit vector in rig px, y down: the Spine world's difference with its y
+ * turned. The upper segment does not move while the joint bends, so lines
+ * across it are the same lines at every pose. Null when either bone is not in
+ * `rig.json` or the two origins coincide.
+ */
+export function sweepAxis(rig: Record<string, unknown>, j: Pick<SweepJoint, 'bone' | 'upperBone'>): [number, number] | null {
+  if (j.upperBone === undefined || j.upperBone === null) return null;
+  const world = setupWorld(rig);
+  const up = world.get(j.upperBone);
+  const me = world.get(j.bone);
+  if (up === undefined || me === undefined) return null;
+  const dx = me.worldX - up.worldX;
+  const dy = up.worldY - me.worldY;
+  const l = edgeLength(dx, dy);
+  return l === 0 ? null : [dx / l, dy / l];
+}
+
+/** Issue #557: how far the contour step's lines run out from the axis, in cap radii — past the limb's edge on either side, which lies at one radius. */
+export const STEP_REACH_RADII = 2;
+
+/**
+ * Issue #557: the contour step at a bent pose — the step the eye sees in the
+ * limb's outline where the cut meets it. On the frame `image` (rigc's render,
+ * over `background`), lines across the limb perpendicular to `axis` (rig px,
+ * unit, y down) at every frame pixel along it from one cap radius before the
+ * joint line to one radius past it; on each, from the axis outward on each
+ * side, the silhouette's extent: the distance, in rig px, of the first sample
+ * whose largest channel lies within {@link SEAM_PX_LEVEL} of the background
+ * (samples one frame pixel apart, out to {@link STEP_REACH_RADII} radii; a
+ * sample is the frame pixel `map` carries the rig point onto, nearest). The
+ * step on a side is the largest change in that extent between two adjacent
+ * lines, to 3 places. `left` is the side the cap's `short_px` calls left
+ * (across the axis at or above 0, `src/limbs.ts` `jointOffsets`), `right` the
+ * other. A straight full limb reads about one frame pixel — the sampling's
+ * own; a notch the bend opens in the outline reads its depth.
+ */
+export function contourStep(image: Raster, background: readonly number[], map: ScaleTranslate, at: readonly [number, number], axis: readonly [number, number], radius: number): { left: number; right: number } {
+  const d = 1 / map.sx;
+  const across: [number, number] = [-axis[1], axis[0]];
+  const solid = (px: number, py: number): boolean => {
+    const fx = Math.round(map.sx * (px - 0.5) + map.tx);
+    const fy = Math.round(map.sy * (py - 0.5) + map.ty);
+    if (fx < 0 || fy < 0 || fx >= image.width || fy >= image.height) return false;
+    const o = (fy * image.width + fx) * 4;
+    return Math.max(Math.abs(image.data[o] - background[0]), Math.abs(image.data[o + 1] - background[1]), Math.abs(image.data[o + 2] - background[2])) > SEAM_PX_LEVEL;
+  };
+  const along = Math.floor(radius * map.sx);
+  const out = Math.ceil(STEP_REACH_RADII * radius * map.sx);
+  const extent = (k: number, side: 1 | -1): number => {
+    const cx = at[0] + k * d * axis[0];
+    const cy = at[1] + k * d * axis[1];
+    let m = 0;
+    while (m <= out && solid(cx + side * m * d * across[0], cy + side * m * d * across[1])) m++;
+    return m * d;
+  };
+  const step = (side: 1 | -1): number => {
+    let best = 0;
+    let prev = extent(-along, side);
+    for (let k = -along + 1; k <= along; k++) {
+      const e = extent(k, side);
+      best = Math.max(best, Math.abs(e - prev));
+      prev = e;
+    }
+    return round3(best);
+  };
+  return { left: step(1), right: step(-1) };
+}
+
 /**
  * The throwaway copy (see {@link SWEEP_LINE}): `rig` with one underlay slot per
  * read joint — a region on the parent of the joint's bone, centred on its box
@@ -3076,13 +3182,7 @@ export function sweepCopy(
   files: ReadonlySet<string> = new Set(),
 ): { rig: Record<string, unknown>; motion: Record<string, unknown>; slots: string[]; images: Array<[string, Raster]> } {
   const bones = (Array.isArray(rig.bones) ? rig.bones : []).filter(isRecord);
-  const posable: Parameters<typeof computeExactFrameTransforms>[0][number][] = bones.map((b) => ({
-    name: String(b.name),
-    ...(typeof b.parent === 'string' && b.parent !== '' ? { parent: b.parent } : {}),
-    ...Object.fromEntries((['x', 'y', 'rotation', 'scaleX', 'scaleY', 'shearX', 'shearY'] as const).filter((k) => typeof b[k] === 'number').map((k) => [k, b[k] as number])),
-    ...(typeof b.inherit === 'string' ? { inherit: b.inherit } : {}),
-  }));
-  const world = computeExactFrameTransforms(posable);
+  const world = setupWorld(rig);
   const slots = (Array.isArray(rig.slots) ? rig.slots : []).filter(isRecord).map((s) => ({ ...s }));
   const skins = isRecord(rig.skins) ? rig.skins : {};
   const skin: Record<string, unknown> = { ...(isRecord(skins.default) ? skins.default : {}) };
@@ -3119,6 +3219,13 @@ export interface SweepPose {
   px_over_40: number;
   px_over_80: number;
   rig_px_over_40: number;
+  /**
+   * Issue #557, written only for a joint whose cap record carries `short_px`:
+   * the contour step at this pose ({@link contourStep}), rig px, per side of
+   * the limb. A reading, never a bar; a full cap's row prints it and writes
+   * what it wrote.
+   */
+  step_px?: { left: number; right: number };
 }
 
 /** One joint's row: its limb record, its disc, how many of the joint's own art pixels the disc holds, and each pose — or, not read, why. */
@@ -3163,6 +3270,8 @@ export function sweepLine(
   frames: (animation: string) => { under: FrameSet; bare: FrameSet },
   physicsLeftOut: number,
   problems: Problem[],
+  step: (j: SweepJoint, bare: FrameSet) => { left: number; right: number } | null = () => null,
+  printed: Map<string, { left: number; right: number }> = new Map(),
 ): SweepLine {
   const seen: { grid: FrameSet | null } = { grid: null };
   const rows: SweepRow[] = joints.map((j, i) => {
@@ -3212,7 +3321,10 @@ export function sweepLine(
             `mean <= ${SEAM_MEAN_BAR.toFixed(1)} and <= ${SEAM_PX_BAR} rig px over ${SEAM_PX_LEVEL} are required, the rest-pose seam's bar — the bend uncovers the joint, and a cap that covers the turn (the limb's art within that radius on the upper side of the joint line, carried by "${j.part}") keeps it covered`,
         });
       }
-      return { degrees: a, status: fail ? 'FAIL' : 'PASS', mean, px_over_40: f.over40, px_over_80: f.over80, rig_px_over_40: Number(seamRigPxText(f.over40, scale)) };
+      // Issue #557: the contour step on the bent frame — a reading, recorded only where the cap is short.
+      const st = step(j, bare);
+      if (st !== null) printed.set(`${j.part} ${a}`, st);
+      return { degrees: a, status: fail ? 'FAIL' : 'PASS', mean, px_over_40: f.over40, px_over_80: f.over80, rig_px_over_40: Number(seamRigPxText(f.over40, scale)), ...(st === null || j.short === undefined ? {} : { step_px: st }) };
     });
     return { ...head, status: poses.some((p) => p.status === 'FAIL') ? 'FAIL' : 'PASS', poses };
   });
@@ -4068,6 +4180,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   // joints' own art under the limbs, physics left out, rendered twice by rigc on one grid — none without a range
   let sweep: SweepLine | null = null;
   const sweepProblems: Problem[] = [];
+  const sweepSteps = new Map<string, { left: number; right: number }>();
   const joints = inp.parts === null ? [] : sweepJoints(inp.parts);
   if (joints.length > 0) {
     const parts = inp.parts as PartsFile;
@@ -4126,7 +4239,13 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           }
         });
       }
-      sweep = sweepLine(joints, under.map((u) => u.px), unread, (a) => sets.get(a) as { under: FrameSet; bare: FrameSet }, stripped === null ? 0 : stripped.physics.length, sweepProblems);
+      // Issue #557: the contour step, read across the upper segment on each bent frame without the underlays.
+      const axes = joints.map((j) => sweepAxis(base, j));
+      const stepOf = (j: SweepJoint, bare: FrameSet): { left: number; right: number } | null => {
+        const axis = axes[joints.indexOf(j)];
+        return axis === null ? null : contourStep(bare.frames[0].image, bare.background, rigToFrameMap(inp.stage, parts.rig_size[1], bare.viewport), j.at, axis, j.radius);
+      };
+      sweep = sweepLine(joints, under.map((u) => u.px), unread, (a) => sets.get(a) as { under: FrameSet; bare: FrameSet }, stripped === null ? 0 : stripped.physics.length, sweepProblems, stepOf, sweepSteps);
     } finally {
       rmSync(sweepDir, { recursive: true, force: true });
     }
@@ -4450,6 +4569,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     besideIdle: named,
     motionSeam,
     cloth,
+    ...(sweepSteps.size === 0 ? {} : { sweepSteps }),
   };
 }
 
