@@ -344,6 +344,7 @@ usage:
 
   rig-parts remesh --rig <dir> --config <config.json> --parts <dir> --part <name>
                    --mesh <entry.json> --out <dir> [--requirements <file.json>]
+                   (or --delta <mesh-edit.json> in place of --mesh)
                    [--idle-keys ctl|direct] [--page-edges pot|free] [--pack-shape rect|polygon]
       Re-fit one part's mesh of a gated rig (the directory rig writes) under
       the mesh entry --mesh holds — what config.json would hold at
@@ -370,6 +371,18 @@ usage:
       SHA-256, the part's counts before and after, both checks and their
       scope) — no path and no clock, so the same request writes the same bytes.
       Prints the part's counts and a hash table of every file.
+      --delta, in place of --mesh (exactly one of the two): rig-c/review's
+      mesh edit (rig-review-mesh-edit/1, basis "setup", at most 300 ops of
+      move, add, remove, edge and unedge, crop px of the rig canvas), whose
+      source counts and source.hash must be the input part's
+      (REMESH_DELTA_SOURCE). The ops are replayed in order over the input's
+      own mesh — moved vertices rebound, added ones weighted from their
+      edge's or triangle's corners, removed ones' rings re-triangulated,
+      Delaunay restored by flips that keep the hull and every constraint —
+      and the result is held to the outline rules (REMESH_DELTA_JSON,
+      REMESH_DELTA_BASIS, REMESH_DELTA_OPS, REMESH_DELTA_OP naming ops[i],
+      REMESH_DELTA_TOPOLOGY). No config entry is built: the baseline is the
+      input itself; the splice, the gate and check are as for --mesh.
 
   rig-parts check --rig <dir> --out <dir> [--parts <dir>] [--source <painting.png>]
                     [--page-edges pot|free] [--pack-shape rect|polygon]
@@ -834,7 +847,7 @@ const TAKES = {
   build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets'] },
   compose: { valued: ['--scene', '--out', '--requirements', '--accept'], switches: [] },
   'mesh-draft': { valued: ['--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: ['--more-triangles'] },
-  remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
+  remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--delta', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
   painting: { valued: ['--keypoints', '--person'], switches: [] },
 } as const satisfies Record<string, { valued: readonly string[]; switches: readonly string[] }>;
 
@@ -1649,8 +1662,9 @@ function cmdMeshDraft(args: string[]): number {
 
 /** `remesh` (issue #495): one part of a gated rig re-fitted under a requested mesh entry, into a new revision. */
 function cmdRemesh(args: string[]): number {
-  const f = flags(args, 'remesh', ['--rig', '--config', '--parts', '--part', '--mesh', '--out']);
+  const f = flags(args, 'remesh', ['--rig', '--config', '--parts', '--part', '--out']);
   if (typeof f === 'string') return usage(f);
+  if (f.has('--mesh') === f.has('--delta')) return usage('remesh needs exactly one of --mesh, --delta');
   const keys = idleKeysOf(f.get('--idle-keys'));
   if (!isIdleKeys(keys)) return usage(keys);
   const edges = pageEdgesOf(f.get('--page-edges'));
@@ -1671,7 +1685,7 @@ function cmdRemesh(args: string[]): number {
   try {
     const req = f.get('--requirements');
     remeshStage(
-      { rig: f.get('--rig') as string, config: f.get('--config') as string, parts: f.get('--parts') as string, part: f.get('--part') as string, mesh: f.get('--mesh') as string, out: f.get('--out') as string, idleKeys: keys, pageEdges: edges, packShape: shape, ...(req === undefined ? {} : { requirements: req }) },
+      { rig: f.get('--rig') as string, config: f.get('--config') as string, parts: f.get('--parts') as string, part: f.get('--part') as string, ...(f.has('--mesh') ? { mesh: f.get('--mesh') as string } : { delta: f.get('--delta') as string }), out: f.get('--out') as string, idleKeys: keys, pageEdges: edges, packShape: shape, ...(req === undefined ? {} : { requirements: req }) },
       runner,
       bin,
       { parts: version(), rigc: rigcVersion },
