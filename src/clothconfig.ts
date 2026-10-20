@@ -39,6 +39,8 @@ function canon(v: unknown): string {
 /** One edit `--write-config` makes, with the words the write line prints for it. */
 export interface ClothEdit extends ConfigEdit {
   label: string;
+  /** Issue #571: the input's entry was the previous recipe's draft (`--from`), and only that made it the recipe's. */
+  previous?: true;
 }
 
 /**
@@ -95,31 +97,44 @@ function shown(v: unknown): string {
  * - removed (P present, D absent — the recipe replaced a plain chain with its trees): `I` equal to `P` is removed;
  * - every other input entry is kept, bytes and order;
  * - an owned or removed `I` that is none of those — changed by hand — is a conflict, as is a name the input states twice.
+ *
+ * With `V`, the previous recipe's draft (`previous`, issue #571 — `--from`; null without it): `I` equal to `V` is the
+ * recipe's as `I` equal to `P` is — an owned name is replaced, and a name in `V` and not in `D` is removed — and a
+ * conflict is an `I` equal to none of `D`, `P` and `V`, its first differing field read against `V` where `V` holds the
+ * name. Without `previous` every rule, and every word of the refusal, is the one above.
  */
-function entryEdits(path: readonly string[], identity: (e: unknown) => string | null, drafted: readonly unknown[], plain: readonly unknown[], input: readonly unknown[], conflicts: Problem[]): ClothEdit[] {
+function entryEdits(path: readonly string[], identity: (e: unknown) => string | null, drafted: readonly unknown[], plain: readonly unknown[], input: readonly unknown[], conflicts: Problem[], previous: readonly unknown[] | null): ClothEdit[] {
   const section = path.join('.');
   const D = byName(drafted, identity, 'drafted', section);
   const P = byName(plain, identity, 'plain', section);
+  const V = previous === null ? null : byName(previous, identity, 'previous', section);
   const keys = input.map(identity);
   const where = new Map<string, number[]>();
   keys.forEach((k, i) => {
     if (k !== null) where.set(k, [...(where.get(k) ?? []), i]);
   });
   const owned = [...D.keys()].filter((k) => !P.has(k) || canon(P.get(k)) !== canon(D.get(k)));
-  const removed = [...P.keys()].filter((k) => !D.has(k));
+  const removed = [...P.keys(), ...(V === null ? [] : [...V.keys()].filter((k) => !P.has(k)))].filter((k) => !D.has(k));
   const replace: string[] = [];
   const remove: string[] = [];
+  const vouched = new Set<string>();
   const conflict = (k: string, i: number, drafts: boolean): void => {
     const author = input[i];
-    const field = firstField(author, P.has(k) ? P.get(k) : D.get(k));
+    const prev = V !== null && V.has(k) ? V.get(k) : undefined;
+    const field = firstField(author, prev !== undefined ? prev : P.has(k) ? P.get(k) : D.get(k));
     const fieldOf = (e: unknown, f: string): string => (isPlain(e) && e[f] !== undefined ? `${f} ${shown(e[f])}` : `no ${f}`);
     const held = field === null ? `the entry ${shown(author)}` : fieldOf(author, field);
     const draft = D.get(k);
     const draftSays = !drafts ? 'the draft removes the entry (the recipe drafts that part afresh)' : field === null ? `the draft writes ${shown(draft)}` : `the draft writes ${fieldOf(draft, field)}`;
+    // Issue #571: with --from, the entry equals none of the three drafts; the field is read against the previous recipe's, the draft a person edited from.
+    const says =
+      V === null
+        ? `it holds ${held} where ${draftSays}`
+        : `it equals neither the draft, the draft without the recipe, nor the previous recipe's draft: it holds ${held} where ${prev === undefined ? 'the previous recipe\'s draft has no such entry' : `the previous recipe's draft writes ${field === null ? shown(prev) : fieldOf(prev, field)}`} and ${draftSays}`;
     conflicts.push({
       code: 'PROPOSE_WRITE_CONFIG_CONFLICT',
       object: `config.${section}[${i}] "${k}"`,
-      detail: `${section} entry "${k}" is the recipe's, and it was changed by hand: it holds ${held} where ${draftSays}, so the write would drop the hand edit; take the draft by removing the hand edit (or the entry), or leave the recipe out for that part (its config.cloth block)`,
+      detail: `${section} entry "${k}" is the recipe's, and it was changed by hand: ${says}, so the write would drop the hand edit; take the draft by removing the hand edit (or the entry), or leave the recipe out for that part (its config.cloth block)`,
     });
   };
   for (const k of [...owned, ...removed]) {
@@ -134,19 +149,27 @@ function entryEdits(path: readonly string[], identity: (e: unknown) => string | 
     }
     if (at.length === 0) continue;
     const I = canon(input[at[0]]);
+    const isPrevious = V !== null && V.has(k) && I === canon(V.get(k));
     if (D.has(k)) {
       if (I === canon(D.get(k))) continue;
       if (P.has(k) && I === canon(P.get(k))) replace.push(k);
-      else conflict(k, at[0], true);
-    } else if (I === canon(P.get(k))) remove.push(k);
-    else conflict(k, at[0], false);
+      else if (isPrevious) {
+        replace.push(k);
+        vouched.add(k);
+      } else conflict(k, at[0], true);
+    } else if (P.has(k) && I === canon(P.get(k))) remove.push(k);
+    else if (isPrevious) {
+      remove.push(k);
+      vouched.add(k);
+    } else conflict(k, at[0], false);
   }
+  const mark = (k: string): { previous?: true } => (vouched.has(k) ? { previous: true } : {});
   const edits: ClothEdit[] = [];
   const work = [...keys];
-  for (const k of replace) edits.push({ path: [...path, work.indexOf(k)], value: D.get(k), label: `${section}["${k}"] replaced` });
+  for (const k of replace) edits.push({ path: [...path, work.indexOf(k)], value: D.get(k), label: `${section}["${k}"] replaced`, ...mark(k) });
   for (const k of remove) {
     const i = work.indexOf(k);
-    edits.push({ path: [...path, i], value: undefined, label: `${section}["${k}"] removed` });
+    edits.push({ path: [...path, i], value: undefined, label: `${section}["${k}"] removed`, ...mark(k) });
     work.splice(i, 1);
   }
   const order = [...D.keys()];
@@ -174,27 +197,53 @@ function entryEdits(path: readonly string[], identity: (e: unknown) => string | 
  * the input holds it as an array, and any other section, or one the input lacks, whole. Every conflict is collected and
  * refused in one throw, `PROPOSE_WRITE_CONFIG_CONFLICT`, before anything is written.
  *
+ * `previous` (issue #571, `propose --write-config --from <config>`) is the same parts drafted a third time, with the
+ * recipe of the config the recipe is changed from: an array entry equal to its draft is the recipe's ({@link entryEdits}),
+ * and an array section the two drafts agree at is read entry by entry where the previous draft differs from them. An
+ * object entry (`meshes.<part>`, `regions.<part>`) the recipe drafts is replaced whole already, so `previous` changes
+ * nothing there. Null — no `--from` — is the writer before #571, rule for rule and byte for byte.
+ *
  * `whole` is the selftest's mutant only (issue #552): `bones`, `constraints` and `motion.tracks` replaced whole, as
  * the #537 writer did; no flag or environment reaches it.
  */
-export function clothConfigEdits(drafted: Proposal, plain: Proposal, input: unknown, whole = false): ClothEdit[] {
+export function clothConfigEdits(drafted: Proposal, plain: Proposal, input: unknown, whole = false, previous: Proposal | null = null): ClothEdit[] {
   const edits: ClothEdit[] = [];
   const conflicts: Problem[] = [];
   const d = JSON.parse(JSON.stringify(drafted)) as Record<string, unknown>;
   const p = JSON.parse(JSON.stringify(plain)) as Record<string, unknown>;
+  const v = previous === null || whole ? null : (JSON.parse(JSON.stringify(previous)) as Record<string, unknown>);
+  const arrayOf = (path: readonly string[]): (typeof ARRAY_SECTIONS)[number] | undefined => (whole ? undefined : ARRAY_SECTIONS.find((x) => x.path.join('.') === path.join('.')));
+  const prevAt = (path: readonly string[]): unknown[] | null => {
+    if (v === null) return null;
+    const c = valueAt(v, path);
+    return Array.isArray(c) ? c : [];
+  };
   const one = (path: readonly string[], a: unknown, b: unknown): void => {
-    const s = whole ? undefined : ARRAY_SECTIONS.find((x) => x.path.join('.') === path.join('.'));
+    const s = arrayOf(path);
     const mine = valueAt(input, path);
-    if (s !== undefined && Array.isArray(b) && (a === undefined || Array.isArray(a)) && Array.isArray(mine)) edits.push(...entryEdits(path, s.identity, b, Array.isArray(a) ? a : [], mine, conflicts));
+    if (s !== undefined && Array.isArray(b) && (a === undefined || Array.isArray(a)) && Array.isArray(mine)) edits.push(...entryEdits(path, s.identity, b, Array.isArray(a) ? a : [], mine, conflicts, prevAt(path)));
     else edits.push({ path, value: b, label: path.join('.') });
+  };
+  // Issue #571: an array section the two drafts agree at, where the previous draft differs — its entries the previous recipe drafted and this one does not.
+  const prevOnly = (path: readonly string[], b: unknown): void => {
+    const s = arrayOf(path);
+    const mine = valueAt(input, path);
+    const c = valueAt(v, path);
+    if (v === null || s === undefined || !Array.isArray(b) || !Array.isArray(mine) || canon(c) === canon(b)) return;
+    edits.push(...entryEdits(path, s.identity, b, b, mine, conflicts, prevAt(path)));
   };
   for (const section of PROPOSAL_CONFIG_SECTIONS) {
     const a = p[section];
     const b = d[section];
-    if (JSON.stringify(a) === JSON.stringify(b)) continue;
+    if (JSON.stringify(a) === JSON.stringify(b)) {
+      if (isPlain(b)) for (const k of Object.keys(b)) prevOnly([section, k], b[k]);
+      else prevOnly([section], b);
+      continue;
+    }
     if (isPlain(a) && isPlain(b)) {
       for (const k of [...Object.keys(b), ...Object.keys(a).filter((k) => !(k in b))]) {
         if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) one([section, k], a[k], b[k]);
+        else prevOnly([section, k], b[k]);
       }
     } else one([section], a, b);
   }
@@ -219,6 +268,11 @@ export function writtenClothConfig(where: string, text: string, edits: readonly 
     ]);
   }
   return r.text;
+}
+
+/** Issue #571: how many edits the previous recipe's draft vouched for — an entry that equalled it, and only it. */
+export function previousCount(edits: readonly ClothEdit[]): number {
+  return edits.filter((e) => e.previous === true).length;
 }
 
 /** What each edit names, in order: what the write line prints. */
