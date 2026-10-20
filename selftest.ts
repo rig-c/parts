@@ -4904,9 +4904,149 @@ function runClothCliCases(say: (name: string, ok: boolean, detail: string, why: 
       `--cloth: exit ${ok.status}, ${written === null ? 'no proposal.json' : `${(written.constraints ?? []).length} constraint(s)`}, ${notes.length} cloth note(s) (want 4: skirt, back hair, fringe, lock); with --from-config: exit ${both.status}; a recipe whose wind falls toward the tip: exit ${refused.status}, ${refused.out.includes('CONFIG_CLOTH_RESPONSE_GROWS_TO_TIP') ? 'CONFIG_CLOTH_RESPONSE_GROWS_TO_TIP' : 'no rule named'}, proposal ${existsSync(join(dir, 'refused', 'proposal.json')) ? 'WRITTEN' : 'not written'}`,
       'emit only after green: a recipe the loader refuses writes nothing, and a flag beside a mode that proposes nothing is a usage error',
     );
+    runWriteConfigCases(say, dir, painting);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/** Key-order-blind JSON text: the value with every object's keys sorted. */
+function canonJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonJson).join(',')}]`;
+  if (typeof v === 'object' && v !== null) {
+    const o = v as Record<string, unknown>;
+    return `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${canonJson(o[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(v);
+}
+
+/**
+ * Issue #537, CL201–CL203: `propose --cloth … --write-config <out>` writes the `--cloth` config's own text with the
+ * sections the recipe moves spliced in. CL201 (bar 1): on the cloth fixture, a whole config holding the draft without
+ * the recipe, every top-level key the recipe does not move keeps its bytes (spans by `jsonValueSpan`), the moved ones
+ * equal proposal.json's, two runs write the same bytes, and `rig` then `check` on the written config exit 0. CL202:
+ * a partial config (`key` and `cloth` only) has the drafted sections inserted. CL203 (bars 2 and 3): every refusal by
+ * name, exit 1 (or the usage error, exit 2), and no config written.
+ */
+function runWriteConfigCases(say: (name: string, ok: boolean, detail: string, why: string) => void, dir: string, painting: string): void {
+  const parts = join(dir, 'parts');
+  const P = readPartSet(parts);
+  const plain = propose(P, undefined, null, DEFAULT_GRID_RULE, null);
+  const input = join(dir, 'wc-config.json');
+  const inputText = `${JSON.stringify({ key: 'fixture', cloth: clothRecipe(), assemble: proposalAssemble(P), bones: plain.bones, meshes: plain.meshes, regions: plain.regions, motion: plain.motion, proposed_rig_scale: plain.proposed_rig_scale }, null, 2)}\n`;
+  writeFileSync(input, inputText);
+  const base = ['propose', '--parts', parts, '--source', painting, '--cloth'];
+  const run = (name: string): { r: { status: number; out: string }; text: string | null } => {
+    const at = join(dir, `wc-${name}.json`);
+    const r = runCli([...base, input, '--out', join(dir, `wc-${name}`), '--write-config', at]);
+    return { r, text: existsSync(at) ? readFileSync(at, 'utf8') : null };
+  };
+  const one = run('one');
+  const two = run('two');
+  const prop = existsSync(join(dir, 'wc-one', 'proposal.json')) ? (JSON.parse(readFileSync(join(dir, 'wc-one', 'proposal.json'), 'utf8')) as Record<string, unknown>) : {};
+  const outText = one.text ?? '{}';
+  const inObj = JSON.parse(inputText) as Record<string, unknown>;
+  const outObj = JSON.parse(outText) as Record<string, unknown>;
+  const spliced = /spliced in from the draft/.test(one.r.out) ? (/text with (.+) spliced in from the draft/.exec(one.r.out)?.[1] ?? '').split(', ') : [];
+  const moved = [...new Set(spliced.map((p) => p.split('.')[0]))];
+  const span = (text: string, k: string): string => {
+    const sp = jsonValueSpan(text, [k]);
+    return text.slice(sp.start, sp.end);
+  };
+  const rows = [...new Set([...Object.keys(inObj), ...Object.keys(outObj)])].map((k) => {
+    const a = k in inObj ? span(inputText, k) : null;
+    const b = k in outObj ? span(outText, k) : null;
+    return { k, a, b, drafted: moved.includes(k) };
+  });
+  const keptOk = rows.filter((x) => !x.drafted).every((x) => x.a !== null && x.a === x.b);
+  const draftedOk = rows.filter((x) => x.drafted).every((x) => x.b !== null && canonJson(outObj[x.k]) === canonJson(prop[x.k]));
+  const table = rows.map((x) => `${x.k} ${x.a === null ? 'absent' : x.a.length}->${x.b === null ? 'absent' : x.b.length} B ${x.drafted ? 'drafted' : x.a === x.b ? 'same bytes' : 'MOVED'}`).join(', ');
+  const rigDir = join(dir, 'wc-rig');
+  const rig = one.text === null ? { status: -1, out: '' } : runCli(['rig', '--config', join(dir, 'wc-one.json'), '--parts', parts, '--out', rigDir]);
+  const chk = rig.status !== 0 ? { status: -1, out: '' } : runCli(['check', '--rig', rigDir, '--parts', parts, '--out', join(dir, 'wc-check')]);
+  const summary = chk.out.split('\n').find((l) => l.startsWith('check: ')) ?? 'no check line';
+  say(
+    'CL201_PROPOSE_WRITE_CONFIG_SPLICES_ONLY_THE_SECTIONS_THE_RECIPE_MOVES_AND_THE_CONFIG_BUILDS_AND_CHECKS',
+    one.r.status === 0 &&
+      two.r.status === 0 &&
+      one.text !== null &&
+      one.text === two.text &&
+      spliced.join(',') === 'bones,meshes.hair_back,meshes.hair_front,meshes.skirt,motion.tracks,constraints' &&
+      !outText.includes(dir) &&
+      keptOk &&
+      draftedOk &&
+      span(outText, 'motion') !== span(inputText, 'motion') &&
+      (outObj.motion as { duration: unknown }).duration === (inObj.motion as { duration: unknown }).duration &&
+      rig.status === 0 &&
+      chk.status === 0 &&
+      summary.startsWith('check: PASS'),
+    `propose exit ${one.r.status}/${two.r.status} (two runs ${one.text !== null && one.text === two.text ? 'byte-identical' : 'DIFFER'}, ${outText.length} B from ${inputText.length} B); spliced ${spliced.join(', ') || 'nothing'}; per key (input -> written): ${table}; kept keys byte-equal ${keptOk}, drafted keys equal proposal.json's ${draftedOk}; rig exit ${rig.status}, check exit ${chk.status}: "${summary}"`,
+    'issue #537 bar 1: the config written differs from the input only under the sections the recipe drafts (measured against the same parts drafted without it), equal to the proposal\'s, and builds and checks green; the producer is the one writer of its own config',
+  );
+
+  // CL202: a partial config, key and cloth only, gets every drafted section inserted; its two keys keep their bytes.
+  const partial = join(dir, 'wc-partial.json');
+  const partialText = `${JSON.stringify({ key: 'fixture', cloth: clothRecipe() }, null, 2)}\n`;
+  writeFileSync(partial, partialText);
+  const pr = runCli([...base, partial, '--out', join(dir, 'wc-p'), '--write-config', join(dir, 'wc-p.json')]);
+  const pText = existsSync(join(dir, 'wc-p.json')) ? readFileSync(join(dir, 'wc-p.json'), 'utf8') : '{}';
+  const pObj = JSON.parse(pText) as Record<string, unknown>;
+  const pProp = existsSync(join(dir, 'wc-p', 'proposal.json')) ? (JSON.parse(readFileSync(join(dir, 'wc-p', 'proposal.json'), 'utf8')) as { bones: unknown; constraints: unknown; meshes: Record<string, unknown>; motion: { tracks: unknown } }) : null;
+  say(
+    'CL202_PROPOSE_WRITE_CONFIG_INSERTS_THE_DRAFTED_SECTIONS_A_PARTIAL_CONFIG_LACKS',
+    pr.status === 0 &&
+      pProp !== null &&
+      Object.keys(pObj).join(',') === 'key,cloth,bones,meshes,motion,constraints' &&
+      span(pText, 'key') === span(partialText, 'key') &&
+      span(pText, 'cloth') === span(partialText, 'cloth') &&
+      canonJson(pObj.bones) === canonJson(pProp.bones) &&
+      canonJson(pObj.constraints) === canonJson(pProp.constraints) &&
+      Object.keys(pObj.meshes as Record<string, unknown>).join(',') === 'hair_back,hair_front,skirt' &&
+      canonJson((pObj.motion as { tracks: unknown }).tracks) === canonJson(pProp.motion.tracks),
+    `exit ${pr.status}; written keys ${Object.keys(pObj).join(', ')}; meshes ${Object.keys((pObj.meshes ?? {}) as Record<string, unknown>).join(', ')}; motion ${Object.keys((pObj.motion ?? {}) as Record<string, unknown>).join(', ')}`,
+    'issue #537: a config holding only the recipe has no section to replace, so the splice inserts each drafted one, an absent parent with it, and every byte it does not name stays the input\'s',
+  );
+
+  // CL203: every refusal; none writes the config (nor, past the usage errors, the proposal).
+  const refusal = (args: string[], at: string): { status: number; out: string; written: boolean } => {
+    const r = runCli(args);
+    return { ...r, written: existsSync(at) };
+  };
+  const noCloth = refusal(['propose', '--parts', parts, '--source', painting, '--out', join(dir, 'wc-r1'), '--write-config', join(dir, 'wc-r1.json')], join(dir, 'wc-r1.json'));
+  const fromCfg = refusal(['propose', '--parts', parts, '--source', painting, '--out', join(dir, 'wc-r2'), '--from-config', input, '--write-config', join(dir, 'wc-r2.json')], join(dir, 'wc-r2.json'));
+  const fresh = runCli([...base, input, '--out', join(dir, 'wc-r3'), '--write-config', input]);
+  const freshSame = readFileSync(input, 'utf8') === inputText;
+  const ours = refusal([...base, input, '--out', join(dir, 'wc-r4'), '--write-config', join(dir, 'wc-r4', 'proposal.json')], join(dir, 'wc-r4'));
+  const bare = join(dir, 'wc-bare');
+  writeProposeFixture(bare, CLOTH_PARTS.filter((q) => q.name !== 'skirt'), CLOTH_RIG);
+  const nothingCfg = join(dir, 'wc-nothing.json');
+  writeFileSync(nothingCfg, JSON.stringify({ key: 'fixture', cloth: { bottomwear: clothRecipe().bottomwear } }));
+  const nothing = refusal(['propose', '--parts', bare, '--source', join(bare, 'painting.png'), '--out', join(dir, 'wc-r5'), '--cloth', nothingCfg, '--write-config', join(dir, 'wc-r5.json')], join(dir, 'wc-r5.json'));
+  const twice = join(dir, 'wc-twice.json');
+  writeFileSync(twice, inputText.replace('\n  "bones": ', `\n  "bones": ${JSON.stringify(plain.bones)},\n  "bones": `));
+  const dup = refusal([...base, twice, '--out', join(dir, 'wc-r6'), '--write-config', join(dir, 'wc-r6.json')], join(dir, 'wc-r6.json'));
+  const grows = join(dir, 'wc-grows.json');
+  writeFileSync(grows, JSON.stringify({ ...inObj, cloth: { ...clothRecipe(), bottomwear: { ...clothRecipe().bottomwear, wind: [5, 1] } } }, null, 2));
+  const cf = refusal([...base, grows, '--out', join(dir, 'wc-r7'), '--write-config', join(dir, 'wc-r7.json')], join(dir, 'wc-r7.json'));
+  const nopart = join(dir, 'wc-nopart.json');
+  writeFileSync(nopart, JSON.stringify({ ...inObj, cloth: { ...clothRecipe(), bottomwear: { ...clothRecipe().bottomwear, part: 'nowhere' } } }, null, 2));
+  const cp = refusal([...base, nopart, '--out', join(dir, 'wc-r8'), '--write-config', join(dir, 'wc-r8.json')], join(dir, 'wc-r8.json'));
+  const failed = (r: { out: string }, code: string): boolean => r.out.includes(`FAIL  ${code}: `);
+  const noProposal = (name: string): boolean => !existsSync(join(dir, name, 'proposal.json'));
+  const line = (r: { status: number; out: string; written?: boolean }): string => `exit ${r.status}, ${(r.out.split('\n').find((l) => l.includes('FAIL  ')) ?? 'no FAIL line').trim().slice(0, 110)}${r.written === true ? ', WRITTEN' : ''}`;
+  say(
+    'CL203_PROPOSE_WRITE_CONFIG_REFUSES_BY_NAME_AND_WRITES_NOTHING',
+    noCloth.status === 2 && noCloth.out.includes('--write-config writes the --cloth config') && !noCloth.written && noProposal('wc-r1') &&
+      fromCfg.status === 2 && fromCfg.out.includes('--write-config writes what the recipe drafts into its config; --from-config proposes nothing') && !fromCfg.written && noProposal('wc-r2') &&
+      fresh.status === 1 && failed(fresh, 'PROPOSE_WRITE_CONFIG_FRESH') && freshSame && noProposal('wc-r3') &&
+      ours.status === 1 && failed(ours, 'PROPOSE_WRITE_CONFIG_FRESH') && !ours.written &&
+      nothing.status === 1 && failed(nothing, 'PROPOSE_CLOTH_DRAFTED') && !nothing.written && noProposal('wc-r5') &&
+      dup.status === 1 && failed(dup, 'PROPOSE_WRITE_CONFIG_SPLICE') && dup.out.includes('bones moved') && !dup.written && noProposal('wc-r6') &&
+      cf.status === 1 && failed(cf, 'CONFIG_CLOTH_RESPONSE_GROWS_TO_TIP') && !cf.written && noProposal('wc-r7') &&
+      cp.status === 1 && failed(cp, 'PROPOSE_CLOTH_PART') && !cp.written && noProposal('wc-r8'),
+    `without --cloth: ${noCloth.out.trim().split('\n')[0].slice(0, 90)} (exit ${noCloth.status}); with --from-config: exit ${fromCfg.status}; over the input: ${line(fresh)}, input ${freshSame ? 'unchanged' : 'CHANGED'}; over its own proposal.json: ${line(ours)}; a bottomwear recipe on parts with no bottomwear: ${line(nothing)}; "bones" stated twice: ${line(dup)}; planted CF wind tip below root: ${line(cf)}; planted bottomwear.part "nowhere": ${line(cp)}`,
+    'issue #537 bars 2 and 3: the flag draws its meaning from the recipe, a config is written to a new file, a recipe that drafts nothing and the existing cloth refusals stop the run before anything is written, and a text whose splice would not parse to the intended config is refused by the key that moved',
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -483,8 +483,11 @@ export function partsNamed(p: Problem, among: readonly string[], seams: { draft:
 // the config written: the input's own text, with the drafted entries spliced in
 // ---------------------------------------------------------------------------
 
-/** Where a JSON value starts and ends in a text, by a path of object keys. Throws when the path does not resolve. */
-export function jsonValueSpan(text: string, path: readonly string[]): { start: number; end: number } {
+/**
+ * Where a JSON value starts and ends in a text, by a path of object keys, and (for a non-empty path) where the key
+ * naming it starts (`key`, its opening quote). Throws when the path does not resolve.
+ */
+export function jsonValueSpan(text: string, path: readonly string[]): { start: number; end: number; key?: number } {
   let i = 0;
   const ws = (): void => {
     while (i < text.length && /\s/.test(text[i])) i++;
@@ -530,22 +533,27 @@ export function jsonValueSpan(text: string, path: readonly string[]): { start: n
     }
     while (i < text.length && !/[\s,}\]]/.test(text[i])) i++;
   };
-  const find = (depth: number): { start: number; end: number } => {
+  let keyAt: number | undefined;
+  const find = (depth: number): { start: number; end: number; key?: number } => {
     ws();
     if (depth === path.length) {
       const start = i;
       skip();
-      return { start, end: i };
+      return keyAt === undefined ? { start, end: i } : { start, end: i, key: keyAt };
     }
     if (text[i] !== '{') throw new Error(`jsonValueSpan: ${path.slice(0, depth).join('.') || 'the document'} is not an object`);
     i++;
     for (;;) {
       ws();
       if (text[i] === '}') throw new Error(`jsonValueSpan: no key "${path[depth]}" at ${path.slice(0, depth).join('.') || 'the top'}`);
+      const at = i;
       const key = str();
       ws();
       i++; // ':'
-      if (key === path[depth]) return find(depth + 1);
+      if (key === path[depth]) {
+        keyAt = at;
+        return find(depth + 1);
+      }
       skip();
       ws();
       if (text[i] === ',') i++;
@@ -554,25 +562,111 @@ export function jsonValueSpan(text: string, path: readonly string[]): { start: n
   return find(0);
 }
 
+/** One edit {@link splicedEdits} makes: the value at `path` set (replaced, or inserted when absent), or, `undefined`, removed. */
+export interface ConfigEdit {
+  path: readonly string[];
+  value: unknown;
+}
+
+/** The span at `path`, or null where the path does not resolve (a key absent, or a step that is not an object). */
+function spanOrNull(text: string, path: readonly string[]): { start: number; end: number; key?: number } | null {
+  try {
+    return jsonValueSpan(text, path);
+  } catch {
+    return null;
+  }
+}
+
+/** The white space a line starts with, for the line `at` lies on. */
+function indentAt(text: string, at: number): string {
+  const lineStart = text.lastIndexOf('\n', at) + 1;
+  return /^[ \t]*/.exec(text.slice(lineStart))?.[0] ?? '';
+}
+
+/** One edit on `text`; every byte it does not name is the input's. */
+function spliceOne(text: string, path: readonly string[], value: unknown): string {
+  const at = spanOrNull(text, path);
+  if (value === undefined) {
+    if (at === null || at.key === undefined) return text;
+    // The member and one comma beside it: the one before it, or (the first member) the one after it.
+    let before = at.key - 1;
+    while (before >= 0 && /\s/.test(text[before])) before--;
+    if (text[before] === ',') return `${text.slice(0, before)}${text.slice(at.end)}`;
+    let after = at.end;
+    while (after < text.length && /\s/.test(text[after])) after++;
+    if (text[after] === ',') {
+      after++;
+      while (after < text.length && /\s/.test(text[after])) after++;
+      return `${text.slice(0, at.key)}${text.slice(after)}`;
+    }
+    return `${text.slice(0, at.key)}${text.slice(at.end)}`;
+  }
+  if (at !== null) {
+    const body = JSON.stringify(value, null, 2).split('\n').join(`\n${indentAt(text, at.start)}`);
+    return `${text.slice(0, at.start)}${body}${text.slice(at.end)}`;
+  }
+  const parentPath = path.slice(0, -1);
+  const parent = spanOrNull(text, parentPath);
+  // A parent the text lacks is inserted whole, holding this one member.
+  if (parent === null) return spliceOne(text, parentPath, { [path[path.length - 1]]: value });
+  if (text[parent.start] !== '{') throw new Error(`splicedEdits: ${parentPath.join('.') || 'the document'} is not an object`);
+  const indent = `${indentAt(text, parent.start)}  `;
+  const member = `"${path[path.length - 1]}": ${JSON.stringify(value, null, 2).split('\n').join(`\n${indent}`)}`;
+  let last = parent.end - 2;
+  while (last > parent.start && /\s/.test(text[last])) last--;
+  if (last === parent.start) return `${text.slice(0, parent.start + 1)}\n${indent}${member}\n${indentAt(text, parent.start)}${text.slice(parent.end - 1)}`;
+  return `${text.slice(0, last + 1)},\n${indent}${member}${text.slice(last + 1)}`;
+}
+
+/** The first path, depth first in the intended document's key order, where `got` and `want` differ. */
+function firstMoved(got: unknown, want: unknown, path: readonly string[]): string | null {
+  const plain = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+  if (plain(got) && plain(want)) {
+    for (const k of [...Object.keys(want), ...Object.keys(got).filter((k) => !(k in want))]) {
+      const m = firstMoved(got[k], want[k], [...path, k]);
+      if (m !== null) return m;
+    }
+    return null;
+  }
+  return JSON.stringify(got) === JSON.stringify(want) ? null : path.join('.') || 'the document';
+}
+
+/**
+ * The input's own text with each edit made in order: a value present is replaced, as `JSON.stringify(value, null, 2)`
+ * indented to the line it starts on; one absent is inserted as the last member of its object (an absent parent
+ * inserted with it); `undefined` removes the member. Every other byte is the input's. The result is parsed and held
+ * to the intended document — the input parsed with the same edits made on it — and `moved` names the first path
+ * where it is not (a key the text states twice is the way it is not: the edit lands on the first, the parse keeps the
+ * last); null when it is.
+ */
+export function splicedEdits(text: string, edits: readonly ConfigEdit[]): { text: string; moved: string | null } {
+  let out = text;
+  for (const e of edits) out = spliceOne(out, e.path, e.value);
+  const want = JSON.parse(text) as Record<string, unknown>;
+  for (const e of edits) {
+    let o = want;
+    for (const k of e.path.slice(0, -1)) {
+      if (typeof o[k] !== 'object' || o[k] === null) o[k] = {};
+      o = o[k] as Record<string, unknown>;
+    }
+    const last = e.path[e.path.length - 1];
+    if (e.value === undefined) delete o[last];
+    else o[last] = e.value;
+  }
+  return { text: out, moved: firstMoved(JSON.parse(out), want, []) };
+}
+
 /**
  * The config written: `text` with `meshes.<part>` replaced for every part in `drafted`, each entry as
- * `JSON.stringify(entry, null, 2)` indented to the line its key starts on. Every other byte is the input's, so a
- * config with nothing drafted is written byte for byte as read, and a part that keeps its lattice keeps its text.
- * The result is parsed and held to the intended document before it is returned.
+ * `JSON.stringify(entry, null, 2)` indented to the line its key starts on ({@link splicedEdits}). Every other byte is
+ * the input's, so a config with nothing drafted is written byte for byte as read, and a part that keeps its lattice
+ * keeps its text. The result is parsed and held to the intended document before it is returned.
  */
 export function splicedConfig(text: string, drafted: ReadonlyMap<string, unknown>): string {
-  const spans = [...drafted.keys()].map((part) => ({ part, ...jsonValueSpan(text, ['meshes', part]) })).sort((a, b) => b.start - a.start);
-  let out = text;
-  for (const s of spans) {
-    const lineStart = out.lastIndexOf('\n', s.start) + 1;
-    const indent = /^\s*/.exec(out.slice(lineStart, s.start))?.[0] ?? '';
-    const body = JSON.stringify(drafted.get(s.part), null, 2).split('\n').join(`\n${indent}`);
-    out = `${out.slice(0, s.start)}${body}${out.slice(s.end)}`;
-  }
-  const want = JSON.parse(text) as { meshes: Record<string, unknown> };
-  for (const [part, entry] of drafted) want.meshes[part] = entry;
-  if (JSON.stringify(JSON.parse(out)) !== JSON.stringify(want)) throw new Error('splicedConfig: the spliced text does not parse to the intended config');
-  return out;
+  for (const part of drafted.keys()) jsonValueSpan(text, ['meshes', part]);
+  const r = splicedEdits(text, [...drafted].map(([part, entry]) => ({ path: ['meshes', part], value: entry })));
+  if (r.moved !== null) throw new Error('splicedConfig: the spliced text does not parse to the intended config');
+  return r.text;
 }
 
 /** A path in a config the loader resolves against the config's directory, and how to set it. */

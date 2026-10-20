@@ -14,7 +14,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, extname, join } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE, HOLES_LISTED, PROJECT_RULES, type ProjectRule, proposeFields, proposePlan, proposeSinglePlan, SEAM_RULES, type SeamRule } from './src/assemble.ts';
 import { type AlternateCliInput, assembleStage, build, checkStage, ERROR_MAP_FILE, loopStage, readRuns, readSource, rigStage, suppliedCheckFlag } from './src/build.ts';
 import { ACCEPTABLE_BARS, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, findRigc, PACK_SHAPES, rigcRunnerAt, type PackShape, PAGE_EDGES, type PageEdges, PARTS_HOME_SENTENCE, RIGC_GEOMETRY_VERSION, rigcRanClause, type RigcRunner, NO_PARTS_SENTENCE, SEAM_MEAN_BAR, SOURCE_SENTENCE, SEAM_PX_BAR, SEAM_PX_LEVEL, SPINEBOY_YARDSTICK, TEXTURE_STRETCH_CEILING } from './src/check.ts';
@@ -29,7 +29,8 @@ import { depthSkipLine, exportLayers, figuresPhrase, hiddenLayerLine, implausibl
 import { checkImageSize, choosePerson, KEYPOINTS_SPEC, loadKeypoints, type RigJoints, toRigJoints } from './src/keypoints.ts';
 import { basisLines, branchSqueezeLine, checkProposal, compare, compareLines, DEFAULT_GRID_RULE, draftTurn, drawLandmarks, FIGURE_GRID_DIVISOR, FRINGE_STEP_PX, GRID_RULES, type GridRule, HIP_MIN_FRACTION, type DraftLintFinding, lint, lintLine, type PartSet, proposeWithBasis, readPartSet, serializeProposal, withTurn, WRIST_ON_PART_PX } from './src/propose.ts';
 import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, coverageLines, serializeBasis } from './src/diagnostics.ts';
-import { BEND_DEGREES, BEND_WORST_SHARE, DUST_MAX_PX, DUST_MAX_SHARE, IDLE_BOUND_PX, MESH_DRAFT_REPORT, MESH_DRAFT_SPEC, meshDraftStage, MORE_TRIANGLES_FLAG, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
+import { BEND_DEGREES, BEND_WORST_SHARE, DUST_MAX_PX, DUST_MAX_SHARE, IDLE_BOUND_PX, MESH_DRAFT_REPORT, MESH_DRAFT_SPEC, meshDraftStage, MORE_TRIANGLES_FLAG, relativeConfigPaths, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
+import { clothConfigEdits, editPaths, writtenClothConfig } from './src/clothconfig.ts';
 import { PROVENANCE_FILE, REMESH_SPEC, remeshStage } from './src/remesh.ts';
 import { RETUNE_FILE, RETUNE_SPEC, retuneStage } from './src/retune.ts';
 import { checkPainting } from './src/paintcheck.ts';
@@ -224,6 +225,22 @@ usage:
       as the farthest lattice vertex from its nearest link plus 3 cells, and
       a LINT line names each drafted radius and both figures. Without --cloth
       nothing changes.
+
+  rig-parts propose … --cloth <config.json> [--write-config <out.json>]
+      Also write the --cloth config's own text with what the recipe drafts
+      spliced in (issue #537), the way mesh-draft writes its config, so that
+      rig --config <out.json> builds it. What is spliced is measured: the
+      same parts drafted again without the recipe, and each config section
+      that differs — bones and constraints whole (a hand-added bone does not
+      survive), meshes.<part>, regions.<part> and motion.tracks entry by
+      entry; a section the input lacks is inserted; every other byte as
+      read. The text is written as stated, so a relative path in it
+      resolves against <out.json>'s directory (a note names each when that
+      is not the input's). Only with --cloth and not with --from-config
+      (usage errors); refused, before anything is written, when <out.json>
+      exists or is a file this run writes (PROPOSE_WRITE_CONFIG_FRESH), or
+      when the spliced text does not parse to the config with the sections
+      set, naming the first key that moved (PROPOSE_WRITE_CONFIG_SPLICE).
 
   rig-parts propose --parts <dir> --source <painting.png> --out <dir> --from-config <config.json>
       Draw the config's CURRENT bones instead (<out>/render/landmarks_config.png
@@ -861,7 +878,7 @@ const TAKES = {
   layers: { valued: ['--export', '--template', '--canvas'], switches: [] },
   sheet: { valued: ['--source', '--layers', '--out', '--cell', '--cols'], switches: [] },
   rig: { valued: ['--config', '--parts', '--out', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
-  propose: { valued: ['--parts', '--source', '--out', '--from-config', '--compare', '--full', '--head', '--canvas', '--keypoints', '--person', '--wrist-snap', '--grid-rule', '--cloth'], switches: ['--head-box', '--no-back-hair'] },
+  propose: { valued: ['--parts', '--source', '--out', '--from-config', '--compare', '--full', '--head', '--canvas', '--keypoints', '--person', '--wrist-snap', '--grid-rule', '--cloth', '--write-config'], switches: ['--head-box', '--no-back-hair'] },
   compare: { valued: ['--left', '--right', '--map'], switches: [] },
   check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--requirements', '--set'], switches: ['--seam-pairs', '--keep-stills', '--all-sets'] },
   loop: { valued: ['--frames', '--out'], switches: ['--palette'] },
@@ -1258,6 +1275,16 @@ function cmdPropose(args: string[]): number {
     // Issue #364: the cloth and hair recipe, read from a config's cloth block; without it nothing changes.
     const clothArg = flags.get('--cloth');
     if (clothArg !== undefined && flags.has('--from-config')) return usage('--cloth drafts trees while proposing; --from-config proposes nothing');
+    // Issue #537: the --cloth config's own text with what its recipe drafts spliced in, beside proposal.json.
+    const writeArg = flags.get('--write-config');
+    if (writeArg !== undefined && flags.has('--from-config')) return usage('--write-config writes what the recipe drafts into its config; --from-config proposes nothing');
+    if (writeArg !== undefined && clothArg === undefined) return usage('--write-config writes the --cloth config with what its recipe drafts spliced in; give --cloth <config.json>');
+    if (writeArg !== undefined) {
+      const ours = ['proposal.json', BASIS_FILE].map((f) => resolve(out, f));
+      if (existsSync(writeArg) || ours.includes(resolve(writeArg))) {
+        throw new PartsError([{ code: 'PROPOSE_WRITE_CONFIG_FRESH', object: writeArg, detail: existsSync(writeArg) ? 'exists; the config is written to a new file, never over the --cloth config or an earlier one' : `is a file this run writes under ${out}; name another file` }]);
+      }
+    }
     const cloth = clothArg === undefined ? null : loadClothConfig(clothArg).cloth;
     const partsDir = existsSync(partsArg) && statSync(partsArg).isFile() ? dirname(partsArg) : partsArg;
     if (!existsSync(source)) {
@@ -1295,6 +1322,15 @@ function cmdPropose(args: string[]): number {
         : withTurn(drafted, draftTurn(P, { ...(fullRun === undefined ? {} : { full: readLayers(fullRun) }), ...(headRun === undefined ? {} : { head: readLayers(headRun) }) }, drafted));
     // Emit only after green: a proposal the config loader would refuse is not written, nor a basis record that does not hold to it.
     checkProposal(P, prop);
+    // Issue #537: the sections the recipe moves, measured against the same parts drafted without it, spliced before anything is written.
+    const written =
+      writeArg === undefined || clothArg === undefined
+        ? null
+        : (() => {
+            const edits = clothConfigEdits(drafted, proposeWithBasis(P, joints, wristSnap, gridRule, null).proposal);
+            const text = readFileSync(clothArg, 'utf8');
+            return { at: writeArg, text: writtenClothConfig(clothArg, text, edits), paths: editPaths(edits), relative: relativeConfigPaths(dirname(resolve(clothArg)), JSON.parse(text) as Record<string, unknown>) };
+          })();
     const bfile = basisFile(P, prop, basis, cfg === null || cmpPath === undefined ? null : { where: cmpPath, config: cfg });
     const img = drawLandmarks(P, painting, prop.bones, 'PROPOSAL - CORRECT ME');
     mkdirSync(render, { recursive: true });
@@ -1302,10 +1338,20 @@ function cmdPropose(args: string[]): number {
     writeFileSync(join(out, BASIS_FILE), serializeBasis(bfile));
     writePng(join(render, 'landmarks.png'), img.full);
     if (img.head !== null) writePng(join(render, 'landmarks_head.png'), img.head);
+    if (written !== null) {
+      mkdirSync(dirname(written.at), { recursive: true });
+      writeFileSync(written.at, written.text);
+    }
     console.log(`wrote proposal.json (${prop.bones.length} bone entries, ${Object.keys(prop.meshes).length} meshes) and render/landmarks.png (+_head) under ${out}`);
     for (const n of prop.notes) console.log(`note: ${n}`);
     printLint(P, prop, joints, draftLint);
     console.log(basisLine(bfile, out));
+    if (written !== null && clothArg !== undefined) {
+      console.log(`wrote ${written.at}: ${clothArg}'s text with ${written.paths.join(', ')} spliced in from the draft; every other byte as read`);
+      if (written.relative.length > 0 && dirname(resolve(written.at)) !== dirname(resolve(clothArg))) {
+        console.log(`note: ${written.relative.map((r) => `${r.at} "${r.value}"`).join(', ')} written as stated; the loader resolves each against the directory the config sits in, ${dirname(written.at)} for ${written.at}, not ${dirname(clothArg)}; put the config beside ${clothArg} or rewrite them`);
+      }
+    }
     if (cfg !== null) for (const l of compareLines(compare(prop.bones, cfg.bones))) console.log(l);
     return EXIT_OK;
   } catch (err) {
