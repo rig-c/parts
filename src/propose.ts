@@ -127,7 +127,7 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { drawText, GLYPH_H } from 'rig-c/tools/font5x7.ts';
-import { type BoneEntry, type ConfigConstraint, type ConfigStop, contourRegionsOf, deriveBustRegions, type Limb, type MeshSpec, parseConfig, type Point, type Segment, type SkeletonSections } from './config.ts';
+import { type BoneEntry, type ConfigConstraint, type ConfigStop, contourRegionsOf, deriveBustRegions, type Limb, type MeshSpec, type PartBinding, parseConfig, type Point, type Segment, type SkeletonSections, turnRidersByBone } from './config.ts';
 export { contourRegionsOf, deriveBustRegions };
 import { computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toWorld } from './coords.ts';
 import { PartsError, type Problem, refuseIfAny } from './errors.ts';
@@ -486,8 +486,17 @@ export type TurnRuns = Partial<Record<'full' | 'head', LayerSet>>;
  * A rider (issue #271, {@link TURN_RIDER_TAGS}: the eye group, nose, mouth)
  * does not carry its own median: it takes the face part's, offset by
  * {@link turnRiderDepth} by draw order. With no face part, or more than one,
- * the riders keep their own medians and a note says so. Every other layer is
- * its own carrier.
+ * the riders keep their own medians and a note says so.
+ *
+ * A rider by bone (issue #535, {@link turnRidersByBone} over `binds` — the
+ * proposal's own `bones`, `meshes` and `regions`, which the CLI passes): a part
+ * every ownable bone of which another carried part hosts takes its host's
+ * drafted depth, offset by {@link turnRiderDepth} by draw order as the face's
+ * riders are, and a note names the host, the bones and its own median. The tag
+ * rule is read first: a face rider is never read as a rider by bone, nor as a
+ * host. A part bound to two hosts' bones keeps its own median and a note says
+ * so. Without `binds` no part is read as a rider by bone — the draft as it was
+ * before #535. Every other layer is its own carrier.
  *
  * With no part to carry, or every carried part at one depth (nothing nearer
  * than the pivot), no `turn` is drafted and a note says why. Otherwise one note
@@ -496,7 +505,7 @@ export type TurnRuns = Partial<Record<'full' | 'head', LayerSet>>;
  * each carrier the other run places more than {@link TURN_RUN_APART} of the
  * span away.
  */
-export function draftTurn(P: PartSet, runs: TurnRuns): { turn: TurnSpec | null; notes: string[] } {
+export function draftTurn(P: PartSet, runs: TurnRuns, binds?: PartBinding): { turn: TurnSpec | null; notes: string[] } {
   P = P.beforeLimbs();
   const problems: Problem[] = [];
   const read: Array<{ part: string; run: 'full' | 'head'; tag: string; base: string | null; own: number; area: number; order: number; piece: boolean }> = [];
@@ -553,11 +562,28 @@ export function draftTurn(P: PartSet, runs: TurnRuns): { turn: TurnSpec | null; 
       `turn: rider(s) ${riders.map((x) => `"${x.part}"`).join(', ')} keep their own See-through depth_median: ${faces.length === 0 ? `no part comes from a "${TURN_CARRIER_TAG}" layer` : `${faces.length} parts (${faces.map((x) => `"${x.part}"`).join(', ')}) come from a "${TURN_CARRIER_TAG}" layer, and which one carries them cannot be read off the parts`} — a value in config.turn.depths sets one`,
     );
   }
-  const rows = read.map((x) => {
-    if (face === null || !isRider(x)) return { ...x, depth: x.own, source: `own, ${x.run}:${x.tag}` };
+  const tagRider = (x: { base: string | null }): boolean => face !== null && isRider(x);
+  const tagRows = read.map((x) => {
+    if (!tagRider(x) || face === null) return { ...x, depth: x.own, source: `own, ${x.run}:${x.tag}`, host: null as string | null };
     const above = x.order > face.order;
-    return { ...x, depth: turnRiderDepth(face.own, above), source: `"${face.part}" ${above ? '-' : '+'} ${TURN_RIDER_OFFSET}, drawn ${above ? 'above' : 'under'} it; own ${x.run}:${x.tag} ${x.own}` };
+    return { ...x, depth: turnRiderDepth(face.own, above), source: `"${face.part}" ${above ? '-' : '+'} ${TURN_RIDER_OFFSET}, drawn ${above ? 'above' : 'under'} it; own ${x.run}:${x.tag} ${x.own}`, host: null as string | null };
   });
+  // Issue #535: the riders by bone, read after the tag rule over the parts it left their own carriers.
+  const byBone = binds === undefined ? null : turnRidersByBone(binds, tagRows.filter((x) => !tagRider(x)).map((x) => ({ part: x.part, area: x.area })));
+  const rowOf = new Map(tagRows.map((x) => [x.part, x]));
+  const rows = tagRows.map((x) => {
+    const ride = byBone?.riders.get(x.part);
+    if (ride === undefined) return x;
+    const h = rowOf.get(ride.host) as (typeof tagRows)[number];
+    const above = x.order > h.order;
+    notes.push(
+      `turn: "${x.part}" rides "${ride.host}" by bone — every ownable bone it binds (${ride.bones.join(', ')}) is hosted by "${ride.host}", the carried part binding it with the most opaque px — so it is drafted at "${ride.host}"'s depth ${h.depth} ${above ? '-' : '+'} ${TURN_RIDER_OFFSET}, drawn ${above ? 'above' : 'under'} it; own ${x.run}:${x.tag} ${x.own} (issue #535)`,
+    );
+    return { ...x, depth: turnRiderDepth(h.depth, above), source: `"${ride.host}" by bone ${above ? '-' : '+'} ${TURN_RIDER_OFFSET}, drawn ${above ? 'above' : 'under'} it; own ${x.run}:${x.tag} ${x.own}`, host: ride.host };
+  });
+  for (const sp of byBone?.split ?? []) {
+    notes.push(`turn: "${sp.part}" binds ownable bones hosted by ${sp.hosts.map((h) => `"${h}"`).join(' and ')}, so it rides none of them by bone and keeps its own See-through depth_median — a value in config.turn.depths sets one (issue #535)`);
+  }
   const pivot = turnPivot(rows);
   const depths = Object.create(null) as Record<string, number>;
   for (const r of rows) depths[r.part] = r.depth;
@@ -580,7 +606,7 @@ export function draftTurn(P: PartSet, runs: TurnRuns): { turn: TurnSpec | null; 
   // Issue #271: a carrier the other run places elsewhere is named; the run read stays the part's own.
   const span = pivot - nearest.depth;
   for (const r of rows) {
-    if (isRider(r) && face !== null) continue;
+    if ((isRider(r) && face !== null) || r.host !== null) continue;
     const other = r.run === 'full' ? 'head' : 'full';
     const there = runs[other]?.layers.find((l) => l.name === r.tag);
     if (there === undefined || there.depth === null || there.opaquePx === 0 || !(there.depth < 1)) continue;

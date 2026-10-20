@@ -132,7 +132,7 @@
  * touches the disk, and the same inputs give the same bytes (key order is the
  * order the objects are built in, and every number is rounded by `pyRound`).
  */
-import { type AutoSpec, type BoneEntry, type InfluenceMeshSpec, type WeightRule, type CharacterConfig, type ConfigConstraint, type ConfigStop, CONSTRAINT_FOLLOWS, constraintForRig, contourRegionsOf, type ContourSpec, DEFAULT_BUST_BONE_L, DEFAULT_BUST_BONE_R, type Point, type RibsSpec, ROOT_BONE, stopForRig, weightsABone } from './config.ts';
+import { type AutoSpec, type BoneEntry, type InfluenceMeshSpec, type WeightRule, type CharacterConfig, type ConfigConstraint, type ConfigStop, CONSTRAINT_FOLLOWS, constraintForRig, contourRegionsOf, type ContourSpec, DEFAULT_BUST_BONE_L, DEFAULT_BUST_BONE_R, type Point, type RibsSpec, ROOT_BONE, stopForRig, turnRidersByBone, weightsABone } from './config.ts';
 import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toBoneLocal, toWorld } from './coords.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
 import { eyeLineDegrees } from './headframe.ts';
@@ -170,12 +170,13 @@ import { skeletonLimbJoints } from './limbs.ts';
 import { artCoverage, ART_ALPHA, latticeCells, latticeMesh, latticeStray, ONE_LOOP_PASSES } from './mesh.ts';
 import { bindFaceSurfaceDeform, BLINK, blinkHoldMisses, blinkSpan, CONTROL_SUFFIX, controlledBones, IDLE_FPS, idleMotion, type MotionSpec, moveKeysToControls } from './motion.ts';
 import { type AlternateSetMap, PAINTING_RUN, type PartsFile, readFrom, tagOf } from './parts.ts';
+import { readTag } from './tags.ts';
 import { EYE_GROUP_TAGS } from './propose.ts';
 import { alphaAbove, crop, pad, type Raster } from './raster/index.ts';
 import { pyRound } from './round.ts';
 import { boneHeat, type HeatDust, heatInfluences, HEAT_LIMITS, heatRow, type HeatRow, latticeSilhouette, tracedSilhouette } from './heat.ts';
 import type { PosePoints } from './skeleton.ts';
-import { applyFaceSurfaceDeform, FACE_RATED_BAND, TURN_BONE, type TurnSpec, turnConstraintName, turnFractions, turnTwin } from './turn.ts';
+import { applyFaceSurfaceDeform, FACE_RATED_BAND, TURN_BONE, TURN_CARRIER_TAG, TURN_PLACES, TURN_RIDER_APART, TURN_RIDER_TAGS, turnRiderDepth, type TurnSpec, turnConstraintName, turnFractions, turnNearest, turnTwin } from './turn.ts';
 import { DISTANCE_EXPONENT, type FloorForm, type Influence, influences, type InfluenceLimits, type MeshInfluences, meshLimits, type Segment } from './weights.ts';
 
 /** Transparent pixels added round every part image — the reference's `PAD`. */
@@ -556,6 +557,62 @@ export function detachedRules(constraints: readonly ConfigConstraint[]): Detache
     }
   });
   return out;
+}
+
+/** A fraction as the turn refusals print it: signed, 4 places. */
+function signed4(v: number): string {
+  const r = pyRound(v, 4);
+  return `${r >= 0 ? '+' : '-'}${Math.abs(r).toFixed(4)}`;
+}
+
+/**
+ * Issue #535: `CONFIG_TURN_RIDER_DEPTH` — an authored `turn.depths` entry for a
+ * rider by bone ({@link turnRidersByBone}: a part every ownable bone of which
+ * another carried part hosts, the host being the one binding it with the most
+ * `opaque_px`) whose fraction differs from its host's by more than
+ * {@link TURN_RIDER_APART} of the dial: the ornament would float off what it is
+ * pinned to. Read here, not by the config loader, because the host is chosen by
+ * `opaque_px`, which only parts.json holds. The candidates are the parts
+ * `turn.depths` carries, in parts.json order; a face rider (issue #271: a part
+ * from an eye-group, nose or mouth layer beside exactly one part from a `face`
+ * layer) is read by its tag, never by its bones, as `propose` reads it.
+ */
+function turnRiderProblems(turn: TurnSpec, cfg: CharacterConfig, recs: PartsFile['parts']): Problem[] {
+  const baseOf = (from: string): string | null => {
+    const t = tagOf(from);
+    return t === null ? null : (readTag(t)?.base ?? null);
+  };
+  const faces = recs.filter((r) => baseOf(r.from) === TURN_CARRIER_TAG && r.cut_from === undefined);
+  const tagRider = (from: string): boolean => {
+    const b = baseOf(from);
+    return faces.length === 1 && b !== null && TURN_RIDER_TAGS.includes(b);
+  };
+  const carried = recs.filter((r) => Object.hasOwn(turn.depths, r.name) && !tagRider(r.from));
+  const { riders } = turnRidersByBone(cfg, carried.map((r) => ({ part: r.name, area: r.opaque_px })));
+  if (riders.size === 0) return [];
+  const nearest = turnNearest(turn.depths);
+  if (nearest === null) return [];
+  const span = turn.pivot - nearest.depth;
+  const order = recs.map((r) => r.name);
+  const frac = new Map(turnFractions(turn, order).map((f) => [f.part, f.fraction]));
+  const problems: Problem[] = [];
+  for (const [part, ride] of riders) {
+    const fp = frac.get(part) as number;
+    const fh = frac.get(ride.host) as number;
+    const diff = Math.abs(fp - fh);
+    if (!(diff > TURN_RIDER_APART)) continue;
+    const above = order.indexOf(part) > order.indexOf(ride.host);
+    const want = pyRound(turnRiderDepth(turn.depths[ride.host], above), TURN_PLACES + 3);
+    problems.push({
+      code: 'CONFIG_TURN_RIDER_DEPTH',
+      object: `config.turn.depths.${part}`,
+      detail:
+        `is ${turn.depths[part]}, fraction ${signed4(fp)} of the dial; "${part}" rides "${ride.host}" by bone — every ownable bone it binds (${ride.bones.join(', ')}) is hosted by "${ride.host}", the carried part binding it with the most opaque px — ` +
+        `whose depth ${turn.depths[ride.host]} travels ${signed4(fh)}: the difference ${pyRound(diff, 4)} is more than ${TURN_RIDER_APART} of pivot − nearest (${turn.pivot} − ${nearest.depth} = ${pyRound(span, TURN_PLACES)}), so at the dial's x the part leaves what it rides by ${pyRound(diff, 4)} of it; ` +
+        `the host's depth ${above ? '−' : '+'} 0.001 (${want}, drawn ${above ? 'above' : 'under'} it) is required, or redraft the turn with propose --full/--head`,
+    });
+  }
+  return problems;
 }
 
 /** One carried part of the turn control (issue #251): its depth, its fraction, and the twins that carry it. */
@@ -2485,6 +2542,7 @@ export function buildRig(
   const stops = cfg.stops === undefined ? null : applyStops(cfg.stops, chains, bones, slots, skin);
   // ---- the turn control (issue #251) -------------------------------------
   // Only when the config has `turn`: every other build adds nothing here, so no byte moves.
+  if (cfg.turn !== undefined) refuseIfAny(turnRiderProblems(cfg.turn, cfg, parts.parts));
   const turned = cfg.turn === undefined ? null : applyTurn(cfg.turn, parts.parts.map((p) => p.name), bones, slots, skin, cfg.constraints ?? []);
 
   const name = `${cfg.key}_painting`;
