@@ -238,7 +238,7 @@ import { EnvironmentError, readEnvironmentSchedule } from 'rig-c/src/environment
 import { boneTrackOf, CLOTH_FLOOR_TEXT, CLOTH_LEVERS_TEXT, CLOTH_LINE, CLOTH_SETTLE_FLOOR, clothChains, type ClothLine, clothLine, clothRow, clothWarnText, frameRuns, MOTION_SEAM_FLOOR, MOTION_SEAM_LINE, type MotionSeamLine, motionSeamPairs, motionSeamWarnText, openingOverFloor, readMotionSeams } from './src/check.ts';
 import { BREATH_ANIMATION, type BreathPair, breathPairProblem, breathTracks, chainDirection, sweepAngles, sweepJoints, type SweepJoint, sweepLine, type SweepLine, SWEEP_LINE, type SweepPose, type Viewport } from './src/check.ts';
 import { barsNotMet, flatComposite, frameToRigMap, maxRgbDiff, rigToFrameMap, SEAM_BOX, SEAM_PX_BAR, SEAM_PX_LEVEL, seamRigPx, seamRigPxText, SEAM_MEAN_BAR, SEAM_DIR, SEAM_MARK, SEAM_NO_ART, seamFigures, type SeamFigures, seamPairRows, seamPairText, STILL_DIR, withoutPhysics, BREATH_TORSO_MEAN_FLOOR } from './src/check.ts';
-import { ACCEPTABLE_BARS, BARS, besideIdleLine, blackRig, drawingTurn, FOLD_LINE, LEVEL_BAR_DEGREES, LEVEL_LINE, LIMB_LINE, limbLine, foldsLine, STRESS_LINE, STRESS_RIGID, STRESS_TURNS, stressPlan, readFoldSets, edgeBonesText, buildGateLines, holesLine, causeLines, chainLine, chainLagWindows, measuredRules, SOURCE_LINE, sourceFigures, sourceSizeProblem, packedBuildArgs, GATE_PROFILE, DEFAULT_PACK_MODE, DEFAULT_PAGE_EDGES, findRigc, packageRigc, rigcIdentity, rigcRunnerAt, type RigcSpawn, type PackMode, type PageEdges, type FrameSet, GEOMETRY_FILE, gateGreen, headBoneOf, IDLE_MAX_PX, type JudgementLine, JUDGEMENT_LINES, packEdgeProblems, PARTS_HOME_SENTENCE, parsePackLines, readBoneTrack, readCheckInputs, readFrameSet, readGeometry, readRigcEntry, REPORTED_LINES, requireRigcVersion, RIGC_ENTRY_VERSION, RIGC_GEOMETRY_VERSION, rigcFailed, type RigcRunner, runCheck, SPINEBOY_YARDSTICK, stretchLine, TEXTURE_STRETCH_CEILING, TIP_RATIO_FLOOR, TIP_REST_RATIO_CEILING, attachmentPoses, stillLine, STILL_INSTRUMENT } from './src/check.ts';
+import { ACCEPTABLE_BARS, BARS, besideIdleLine, blackRig, drawingTurn, FOLD_LINE, LEVEL_BAR_DEGREES, LEVEL_LINE, LIMB_LINE, limbLine, foldsLine, STRESS_LINE, STRESS_RIGID, STRESS_TURNS, stressPlan, readFoldSets, edgeBonesText, buildGateLines, holesLine, causeLines, chainLine, chainLagWindows, measuredRules, SOURCE_LINE, sourceFigures, sourceSizeProblem, packedBuildArgs, GATE_PROFILE, DEFAULT_PACK_MODE, DEFAULT_PAGE_EDGES, findRigc, packageRigc, rigcIdentity, rigcRunnerAt, type RigcSpawn, type PackMode, type PageEdges, type FrameSet, GEOMETRY_FILE, gateGreen, headBoneOf, IDLE_MAX_PX, type JudgementLine, JUDGEMENT_LINES, packEdgeProblems, PARTS_HOME_SENTENCE, parsePackLines, readBoneTrack, readCheckInputs, readFrameSet, readGeometry, readRigcEntry, REPORTED_LINES, requireRigcVersion, RIGC_ENTRY_VERSION, RIGC_GEOMETRY_VERSION, rigcFailed, type RigcRunner, runCheck, SPINEBOY_YARDSTICK, stretchLine, TEXTURE_STRETCH_CEILING, TIP_RATIO_FLOOR, TIP_REST_RATIO_CEILING, attachmentPoses, stillLine, STILL_INSTRUMENT, foldBonesText, FOLD_GROUPS_SHOWN, FOLD_TRIANGLES_SHOWN } from './src/check.ts';
 import { baseTagOf, blinkFigures, breathHeat, heatField, type BoneTrack, type BoneWorld, chainToward, edgeLength, frameBox, type GeometryPose, halfTravels, type MeshRest, stretchFigures, stretchSeverity, lagStep, readSine, setupToFrame, stillReading, stillTolerance, STILL_ROUNDINGS, SWING_TAGS, ulpOf } from './src/instruments.ts';
 import {
   aimLine,
@@ -18686,8 +18686,9 @@ function runAnimationFoldCases(say: (name: string, ok: boolean, detail: string, 
   try {
     const nod = { duration: 1, tracks: [{ bone: 'body', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [6] }, { t: 1, v: [0] }] }] };
     const bend = { duration: 1, tracks: [{ bone: 'hem1', property: 'translate', keys: [{ t: 0, v: [0, 0] }, { t: 0.5, v: [-40, 0] }, { t: 1, v: [0, 0] }] }] };
-    const rigged = (name: string, animations: Record<string, unknown>): { rig: string; parts: string; status: number } => {
+    const rigged = (name: string, animations: Record<string, unknown>, shape?: (c: Record<string, unknown>) => void): { rig: string; parts: string; status: number } => {
       const c = rigConfig();
+      if (shape !== undefined) shape(c);
       // An empty table is the idle alone (CK364): the config names no animations_from at all.
       if (Object.keys(animations).length > 0) (c.motion as Record<string, unknown>).animations_from = 'anims/extra.json';
       // Issue #323: the fixture's one torso part, `cloth` (full:topwear), is read by BREATH_VISIBLE now that a figure with no
@@ -18961,6 +18962,139 @@ function runAnimationFoldCases(say: (name: string, ok: boolean, detail: string, 
         offRate.problems[0].detail === 'fps is 12; 24, the rate asked for, is required',
       `read: ${read === null ? 'taken' : codes(read)}, ${JSON.stringify(good.get('wave')?.map((m) => m.slot))} (skirt never folds, so no row), line ${line.status} with ${probs.length} problem(s); planted: unprinted ${codes(unprinted)} — ${unprinted?.problems[0]?.detail.slice(0, 120) ?? ''}; a set not written ${codes(unset)} — ${unset?.problems[0]?.detail.slice(0, 80) ?? ''}; another rate ${codes(offRate)} — ${offRate?.problems[0]?.detail ?? ''}`,
       "the fold line quotes rigc rather than re-wording it, so a folding mesh with no printed line is a reading that does not add up and is refused, never a row with an empty line; a set or rate the run did not write is the same — the bar is read off the files rigc wrote for the animations asked, or not at all",
+    );
+
+    // CK550 — issue #567: two knees that converge fold the legwear between them, and the FAIL names both knee bones and
+    // the worst frame. The rig stage's fixture with `cloth` weighted to two single bones instead of the hem chain: `knee_r`
+    // at (10, 10) with its tip at (10, 22) and `knee_l` at (26, 10) to (26, 22), r = 1, grid 8. A lattice vertex at x = 14
+    // is 4 px from knee_r's segment and 12 px from knee_l's, so w = 1/(4+1)^2 against 1/(12+1)^2: shares 169/194 = 0.87113
+    // and 25/194 = 0.12887 (5 places, as rig.json writes them); one at x = 22 is the mirror. `kneel` turns knee_r +60 and
+    // knee_l -60 degrees at its middle — each tip toward the other — so the middle column's lower vertices pass each
+    // other. Which triangle and frame fold is rigc's reading and is read off the row; that the line names the two knees
+    // with those shares, at the row's worst frame, is asserted. The mutant is the pre-#567 detail, rigc's line alone,
+    // which names no bone: the same assertions fail on it. The negative beside it is CK243's bend, whose cloth hangs on
+    // the hem chain — its line names the hem links and no knee.
+    const kneel = {
+      duration: 1,
+      tracks: [
+        { bone: 'knee_r', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [60] }, { t: 1, v: [0] }] },
+        { bone: 'knee_l', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [-60] }, { t: 1, v: [0] }] },
+      ],
+    };
+    const knees = rigged('knees', { kneel }, (c) => {
+      (c.bones as unknown[]).push({ name: 'knee_r', parent: 'body', at: [10, 10], tip: [10, 22] }, { name: 'knee_l', parent: 'body', at: [26, 10], tip: [26, 22] });
+      c.meshes = { cloth: { grid: 8, r: 1, segments: ['knee_r', 'knee_l'] } };
+    });
+    const kneesChk = checked('knees', knees);
+    const kneesRow = rows(kneesChk.fig)[0];
+    const kneesFail = failLine(kneesChk.out, `CHECK_${FOLD_LINE}`);
+    const namesKnees = (text: string | null, row: Record<string, unknown> | undefined): boolean =>
+      text !== null &&
+      row !== undefined &&
+      text.includes(`; at worst frame ${String(row.worst_frame)} the ${String(row.worst_triangles)} folded triangle(s) hang on, by the bone each vertex weighs most: `) &&
+      text.includes(' dominated by "knee_r", "knee_l" (') &&
+      text.includes('"knee_r" 0.87113, "knee_l" 0.12887') &&
+      text.includes('"knee_l" 0.87113, "knee_r" 0.12887');
+    const preLine = kneesFail === null || kneesRow === undefined ? null : kneesFail.replace(/; at worst frame [^]*?; no triangle turned over/, '; no triangle turned over');
+    say(
+      'CK550_TWO_KNEES_THAT_CONVERGE_AND_FOLD_THE_LEGWEAR_ARE_BOTH_NAMED_IN_THE_FOLD_FAIL_WITH_THEIR_SHARES_AND_THE_WORST_FRAME',
+      knees.status === 0 &&
+        kneesChk.status === 1 &&
+        rows(kneesChk.fig).length === 1 &&
+        kneesRow?.animation === 'kneel' &&
+        kneesRow?.slot === 'cloth' &&
+        kneesFail !== null &&
+        kneesFail.includes(`: ${String(kneesRow.line)}; at worst frame `) &&
+        String(kneesRow.line).includes(`; worst frame ${String(kneesRow.worst_frame)} `) &&
+        namesKnees(kneesFail, kneesRow) &&
+        preLine !== null &&
+        preLine !== kneesFail &&
+        !namesKnees(preLine, kneesRow) &&
+        redFail !== null &&
+        redFail.includes(`: ${rigcLine}; at worst frame ${String(redRows[0]?.worst_frame)} the `) &&
+        redFail.includes('"hem') &&
+        !redFail.includes('knee'),
+      `kneel: rig exit ${knees.status}, check exit ${kneesChk.status}, ${rows(kneesChk.fig).length} row(s), worst frame ${String(kneesRow?.worst_frame)}; ${kneesFail?.trim().slice(0, 900) ?? 'no FAIL line'}; the pre-#567 detail names the knees: ${namesKnees(preLine, kneesRow)}; bend: ${redFail?.slice(redFail.indexOf('; at worst frame'), redFail.indexOf('; at worst frame') + 260) ?? 'no FAIL line'}`,
+      "issue #567: the fold FAIL named the triangles only, so a reader had to dump rig.json's weights to find that two knees converging inverted the lattice between them; it now names, for the worst frame's folded triangles, the bones their vertices weigh most — in the stretch line's shape (issue #314) — beside rigc's line, which still carries the frames",
+    );
+
+    // CK551 — issue #567, by hand: foldBonesText over a hand-written rig. `legs` has six vertices and three triangles
+    // [0 1 2], [1 3 2], [3 4 5]; the weights put each vertex's largest share on knee_r (0, 2), knee_l (1, 3, 4) or hip (5).
+    // Triangles 0 and 1 are dominated by {knee_r, knee_l} and are one group, triangle 2 by {hip, knee_l}; each set in
+    // rig.json's bone order (hip, knee_r, knee_l). The second rig caps: 8 copies of [0 1 2] on b0 and one triangle each on
+    // b1..b4, so the first group lists 6 triangles and counts 2, and 3 groups are written and 2 counted. Through
+    // foldsLine the text sits between rigc's line and the requirement, and a declared fold takes no problem.
+    const w = (bone: string, weight: number): Record<string, unknown> => ({ bone, x: 0, y: 0, weight });
+    const handRig = {
+      bones: [{ name: 'root' }, { name: 'hip', parent: 'root' }, { name: 'knee_r', parent: 'hip' }, { name: 'knee_l', parent: 'hip' }],
+      skins: {
+        default: {
+          legs: {
+            legs: {
+              type: 'mesh',
+              triangles: [0, 1, 2, 1, 3, 2, 3, 4, 5],
+              weights: [[w('knee_r', 0.9), w('knee_l', 0.1)], [w('knee_l', 0.7), w('knee_r', 0.3)], [w('knee_r', 0.6), w('hip', 0.4)], [w('knee_l', 1)], [w('knee_l', 1)], [w('hip', 1)]],
+            },
+          },
+        },
+      },
+    };
+    const none = 'none of these bones hangs on a chain of the idle';
+    const handText = foldBonesText(handRig, {}, 'legs', 'legs', 6, [0, 1, 2]);
+    const handWant =
+      'at worst frame 6 the 3 folded triangle(s) hang on, by the bone each vertex weighs most: ' +
+      `triangles 0, 1 dominated by "knee_r", "knee_l" (triangle 0, vertices 0 1 2: vertex 0 is weighted to "knee_r" 0.9, "knee_l" 0.1 and vertex 1 to "knee_l" 0.7, "knee_r" 0.3 and vertex 2 to "knee_r" 0.6, "hip" 0.4; ${none}); ` +
+      `triangle 2 dominated by "hip", "knee_l" (vertices 3 4 5: vertex 3 is weighted to "knee_l" 1 and vertex 4 to "knee_l" 1 and vertex 5 to "hip" 1; ${none})`;
+    const capVerts = Array.from({ length: 15 }, (_, v) => [w(`b${Math.floor(v / 3)}`, 1)]);
+    const capRig = {
+      bones: [{ name: 'root' }, ...[0, 1, 2, 3, 4].map((i) => ({ name: `b${i}`, parent: 'root' }))],
+      skins: { default: { m: { m: { type: 'mesh', triangles: [...Array.from({ length: 8 }, () => [0, 1, 2]).flat(), 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14], weights: capVerts } } } },
+    };
+    const capText = foldBonesText(capRig, {}, 'm', 'm', 3, Array.from({ length: 12 }, (_, t) => t));
+    const one = (b: string, vs: number[]): string => `vertex ${vs[0]} is weighted to "${b}" 1 and vertex ${vs[1]} to "${b}" 1 and vertex ${vs[2]} to "${b}" 1; ${none}`;
+    const capWant =
+      'at worst frame 3 the 12 folded triangle(s) hang on, by the bone each vertex weighs most: ' +
+      `triangles 0, 1, 2, 3, 4, 5 and 2 more dominated by "b0" (triangle 0, vertices 0 1 2: ${one('b0', [0, 1, 2])}); ` +
+      `triangle 8 dominated by "b1" (vertices 3 4 5: ${one('b1', [3, 4, 5])}); ` +
+      `triangle 9 dominated by "b2" (vertices 6 7 8: ${one('b2', [6, 7, 8])}); … and 2 more group(s), 2 triangle(s)`;
+    const handMesh = { slot: 'legs', attachment: 'legs', triangleCount: 3, frames: 2, worstFrame: 6, worstTriangles: 3, worstTriangleList: [0, 1, 2], line: '"walk": mesh "legs" (slot "legs") folds on 2 frame(s) [5-6] at 12 fps; worst frame 6' };
+    const handProbs: Problem[] = [];
+    foldsLine(['walk'], 12, 0, new Map([['walk', [handMesh]]]), [], null, handProbs, undefined, handRig, [], {});
+    const declaredProbs: Problem[] = [];
+    foldsLine(['walk'], 12, 0, new Map([['walk', [handMesh]]]), [{ slot: 'legs', animation: 'walk', why: 'w' }], null, declaredProbs, undefined, handRig, [], {});
+    say(
+      'CK551_THE_FOLD_BONES_TEXT_GROUPS_TRIANGLES_BY_THEIR_DOMINANT_BONES_IN_RIG_ORDER_AND_CAPS_GROUPS_AND_TRIANGLES_BY_HAND',
+      FOLD_GROUPS_SHOWN === 3 &&
+        FOLD_TRIANGLES_SHOWN === 6 &&
+        handText === handWant &&
+        capText === capWant &&
+        handProbs.length === 1 &&
+        handProbs[0].detail === `rigc render --folds at 12 fps: ${handMesh.line}; ${handWant}; no triangle turned over against the setup pose is required — a fold the art means is declared in the --requirements file's may_fold, { "slot": "legs", "animation": "walk", "why": … }` &&
+        declaredProbs.length === 0,
+      `hand: ${handText === handWant ? 'as computed' : handText}; cap: ${capText === capWant ? 'as computed' : capText}; through foldsLine: ${handProbs.length} problem(s), ${handProbs[0]?.detail.slice(0, 160) ?? ''}…; declared: ${declaredProbs.length} problem(s)`,
+      "issue #567: a mesh folding on many triangles keeps a readable line — triangles that hang on the same bones are one group, spelled out once by its first triangle in the stretch line's words, and past the caps the rest are counted, never dropped silently",
+    );
+
+    // CK552 — issue #567: what is not read is said, never guessed, and the reader holds rigc's triangle list to indices.
+    const noAtt = foldBonesText(handRig, {}, 'legs', 'socks', 6, [0]);
+    const beyond = foldBonesText(handRig, {}, 'legs', 'legs', 6, [1, 3]);
+    const unweighted = foldBonesText({ bones: [{ name: 'root' }], slots: [{ name: 'legs', bone: 'root' }], skins: { default: { legs: { legs: { type: 'mesh', triangles: [0, 1, 2] } } } } }, {}, 'legs', 'legs', 2, [0]);
+    const badSet = join(dir, 'reading-bad');
+    mkdirSync(join(badSet, 'wave'), { recursive: true });
+    writeFileSync(join(badSet, 'frames.json'), `${JSON.stringify({ spec: 'rigc-frames/1', sets: [{ dir: 'wave', animation: 'wave', fps: 12 }] })}\n`);
+    writeFileSync(join(badSet, 'wave', 'folds.json'), `${JSON.stringify({ spec: 'rigc-folds/1', animation: 'wave', fps: 12, meshes: [{ slot: 'sleeve', attachment: 'sleeve', triangleCount: 4, frames: [{ index: 2 }], worst: { index: 2, triangles: [0, 1.5] } }] })}\n`);
+    const badRead = refusals(() => readFoldSets(badSet, ['wave'], 12, '  ..    folds    "wave": mesh "sleeve" (slot "sleeve") folds on 1 frame(s) [2] at 12 fps; worst frame 2\n'));
+    say(
+      'CK552_A_FOLD_WHOSE_ATTACHMENT_TRIANGLES_OR_WEIGHTS_ARE_NOT_READ_IS_SAID_AND_A_NON_INDEX_TRIANGLE_FROM_RIGC_IS_REFUSED',
+      noAtt === 'at worst frame 6 the folded triangles\' bones are not read: rig.json\'s default skin holds no attachment "socks" on slot "legs"' &&
+        beyond === 'at worst frame 6 the folded triangles\' bones are not read: rig.json\'s mesh "legs" lists 3 triangle(s), and rigc names triangle 3' &&
+        unweighted === 'at worst frame 2, triangle 0 (vertices 0 1 2): the mesh carries no weights, so vertex 0 and vertex 1 and vertex 2 ride slot "legs"\'s bone "root"' &&
+        badRead !== null &&
+        badRead.problems.length === 1 &&
+        badRead.problems[0].code === 'CHECK_FOLDS_READ' &&
+        badRead.problems[0].detail === 'worst.triangles[1] is 1.5; a triangle index, a whole number from 0, is required',
+      `no attachment: ${noAtt}; beyond the table: ${beyond}; unweighted: ${unweighted}; planted 1.5 in worst.triangles: ${codes(badRead)} — ${badRead?.problems[0]?.detail ?? ''}`,
+      'issue #567, the doctrine: never invent a value — a triangle the table does not reach, or an attachment the skin does not hold, is named as unread rather than mapped to a nearby one',
     );
 
     // CK247 — a check.json whose fold line failed names that bar to compose, and compose may accept it like any bar but the gate.
