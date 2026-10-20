@@ -345,6 +345,73 @@ export interface AssembleInput {
   keySkeleton?: ControlSkeleton;
   /** `assemble.head_face_underfill` (issue #492): composite `full:face` under `head:face` on the head canvas to fill transparent bare-skin holes. */
   headFaceUnderfill?: boolean;
+  /**
+   * Issue #587: rig pixels taken out of named parts once the cuts and the limbs are made, before the fringe pass and
+   * every figure a part's record holds — each entry clears `part`'s pixels (alpha, colour and region) where `mask` is
+   * 1, and {@link AssembleResult.excluded} counts the ones above `OPAQUE_ALPHA_ABOVE` it took, in entry order (a pixel
+   * an earlier entry cleared is not counted again). The set build passes {@link setExclusions}. An entry naming a part
+   * this run did not make clears nothing and counts 0. Absent or empty: nothing changes.
+   */
+  exclude?: readonly SetExclusion[];
+}
+
+/** One base part's cover over one of a subset set's limb parts (issue #587): `part` loses its pixels where `mask` is 1. */
+export interface SetExclusion {
+  /** The set's part (a limb segment's `part`). */
+  part: string;
+  /** The base part drawn in front of it that the set does not replace. */
+  under: string;
+  /** Rig pixels where `under` covers at setup: its PNG's alpha above `OPAQUE_ALPHA_ABOVE`, at its parts.json x, y. */
+  mask: Mask;
+}
+
+/** What one {@link SetExclusion} took (issue #587): `px` pixels of `part` with alpha above `OPAQUE_ALPHA_ABOVE`, under `under`. */
+export interface ExcludedCount {
+  part: string;
+  under: string;
+  px: number;
+}
+
+/**
+ * Issue #587: what a subset set's limb parts may not take from the set's painting.
+ *
+ * ⚖️ Invariant: for each of `segmentParts` (the set's limb segment parts, in the order given), one entry per base part
+ * drawn after that part in the base's draw order (`base`, the base build's placed parts, which is parts.json's order)
+ * whose name is not in `replaced` (the set's covered parts and its hides) and which covers at least one rig pixel: the
+ * pixels where that base part's PNG has alpha above `OPAQUE_ALPHA_ABOVE` (the `op=` count's threshold), placed at its
+ * parts.json x, y. The set's attachment is drawn in the base slot's place, so a base part drawn after that slot is
+ * drawn over the set's art as well, and what the set's painting shows there is that base part, which the base already
+ * draws. The set's painting is on the base's canvas (`ASSEMBLE_ALT_CANVAS_SIZE`) at the base's rig_scale, so a rig
+ * pixel is the same pixel in both; a skeleton set is held to the base's torso within the registration bar
+ * (`ASSEMBLE_ALT_SKELETON_REGISTERED`) and is not moved. A part with no base part in front of it gets no entry.
+ */
+export function setExclusions(base: readonly PlacedPart[], W: number, H: number, segmentParts: readonly string[], replaced: ReadonlySet<string>): SetExclusion[] {
+  const out: SetExclusion[] = [];
+  for (const part of segmentParts) {
+    const at = base.findIndex((q) => q.record.name === part);
+    if (at < 0) continue;
+    for (const { record, image } of base.slice(at + 1)) {
+      if (replaced.has(record.name)) continue;
+      const mask = newMask(W, H);
+      let any = false;
+      for (let y = 0; y < image.height; y++) {
+        for (let x = 0; x < image.width; x++) {
+          const rx = record.x + x;
+          const ry = record.y + y;
+          if (rx < 0 || ry < 0 || rx >= W || ry >= H || image.data[(y * image.width + x) * 4 + 3] <= OPAQUE_ALPHA_ABOVE) continue;
+          mask.data[ry * W + rx] = 1;
+          any = true;
+        }
+      }
+      if (any) out.push({ part, under: record.name, mask });
+    }
+  }
+  return out;
+}
+
+/** One `LINT` line per {@link ExcludedCount} that took a pixel (issue #587); none for a count of 0. */
+export function excludedLines(set: string, counts: readonly ExcludedCount[]): string[] {
+  return counts.filter((c) => c.px > 0).map((c) => `  LINT set "${set}" ${c.part}: ${c.px} px under ${c.under} excluded`);
 }
 
 /** The derived numbers of the two runs' geometry. */
@@ -3332,6 +3399,8 @@ export interface AssembleResult {
   projectRule: ProjectRule;
   /** Issue #492: head-canvas pixels filled by `config.assemble.head_face_underfill: true` when > 0. */
   headFaceUnderfillPx?: number;
+  /** Issue #587: what each `exclude` entry took, in entry order; empty without one. */
+  excluded: ExcludedCount[];
 }
 
 /** A hidden-art layer of a run (issue #359) and what read it: `cuts[i].under`, or a limb segment's cap; none is said. */
@@ -3847,6 +3916,27 @@ export function assemble(input: AssembleInput): AssembleResult {
   const pieceAt = (d: { plan: number } | { cut: number } | { limb: number }): { name: string; b: Built } =>
     'plan' in d ? { name: plan[d.plan][0], b: built[d.plan] as Built } : 'cut' in d ? { name: cuts[d.cut].into, b: pieces[d.cut] as Built } : { name: lim.parts[d.limb].part, b: limbPieces[d.limb] as Built };
 
+  // Issue #587: a set's limb part loses the pixels a base part it does not replace covers, before anything is counted.
+  const excluded: ExcludedCount[] = [];
+  for (const ex of input.exclude ?? []) {
+    const d = order.find((q) => !('patch' in q) && pieceAt(q).name === ex.part);
+    const b = d === undefined || 'patch' in d ? null : pieceAt(d).b;
+    let px = 0;
+    if (b !== null) {
+      if (b.region === null) {
+        b.region = newMask(W, H);
+        b.region.data.fill(1);
+      }
+      for (let p = 0; p < W * H; p++) {
+        if (ex.mask.data[p] === 0 || b.r.data[p * 4 + 3] === 0) continue;
+        if (b.r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) px++;
+        b.r.data.fill(0, p * 4, p * 4 + 4);
+        b.region.data[p] = 0;
+      }
+    }
+    excluded.push({ part: ex.part, under: ex.under, px });
+  }
+
   // Step 4b: push back a fringe the painting shows another part through, over
   // the plan parts still uncropped and the patches, in draw order.
   const stack: PlacedPart[] = order.map((d) => {
@@ -4008,6 +4098,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     seamRule,
     projectRule,
     ...(headFacePrep.underfillPx > 0 ? { headFaceUnderfillPx: headFacePrep.underfillPx } : {}),
+    excluded,
   };
 }
 

@@ -23166,6 +23166,155 @@ function runBuildSuite(): number {
       `exits drawn ${eqDrawn.run.status} / skeleton ${eqSkel.run.status} / skeleton+hand ${eqSkelHand.run.status}; wave PNG sha256[:12] drawn ${dDrawn.join(' ')} | skeleton ${dSkel.join(' ')} | skeleton+hand ${dHand.join(' ')}; rig.json drawn ${digest(join(eqDrawn.out, 'rig', 'rig.json'))} skeleton ${digest(join(eqSkel.out, 'rig', 'rig.json'))}; sets.json less drawnLength/registration equal ${setsLess(eqSkel.out) === setsLess(eqDrawn.out)}; drawnLength ${JSON.stringify(eqSkelEntry?.drawnLength ?? null)}; skeleton+hand drawn ${JSON.stringify(eqHandEntry?.drawn ?? null)}`,
       'issue #539, bar 2: a skeleton set whose segment lengths are the base\'s writes the bytes the drawn-only set at the same angles writes — part PNGs, rig.json, and sets.json but for drawnLength (each 1) and registration',
     );
+    // BU190–BU192 — issue #587: a subset set's limb part takes no pixel a base part it does not replace covers at
+    // setup. The fixture, at scale 1 (a run pixel is a rig pixel): shorts `bottomwear` [20, 44) x [8, 20) (24 x 12 =
+    // 288 px), a region on `hip`, drawn after the legs; the base's `legwear` holds the two legs from row 20 down,
+    // [22, 30) and [34, 42) x [20, 50), so the base thighs hold none of the shorts' area. Each set's `legwear` holds its
+    // one leg from row 10 (See-through's synthesised thigh top), straight, or with the shin folded out sideways
+    // (`drawn` leg_l1 0, leg_r1 180), and carries the leg's two parts but not `bottomwear`. Each set thigh's top,
+    // [x0, x0 + 8) x [10, 20), lies inside the shorts: 8 x 10 = 80 px, under the rule before #587 and excluded by it.
+    const shortsDir = join(dir, 'shorts-sets');
+    const NAVY_SHORTS: [number, number, number] = [NAVY[0], NAVY[1], NAVY[2]];
+    const shortsLayer: RunLayerSpec = { name: 'bottomwear', depth: 0.4, rects: [{ x0: 20, y0: 8, x1: 44, y1: 20, colour: NAVY_SHORTS }] };
+    const shortsSets: Array<{ name: string; parts: string[]; rects: Array<[number, number, number, number]>; drawn?: Record<string, number> }> = [
+      { name: 'straight_l', parts: ['thigh_l', 'shin_l'], rects: [[34, 10, 42, 50]] },
+      { name: 'fold_l', parts: ['thigh_l', 'shin_l'], rects: [[34, 10, 42, 34], [42, 26, 58, 34]], drawn: { leg_l1: 0 } },
+      { name: 'straight_r', parts: ['thigh_r', 'shin_r'], rects: [[22, 10, 30, 50]] },
+      { name: 'fold_r', parts: ['thigh_r', 'shin_r'], rects: [[22, 10, 30, 34], [6, 26, 22, 34]], drawn: { leg_r1: 180 } },
+    ];
+    const SHORTS_THIGH_PX = 8 * 10;
+    const shortsPainting = newRaster(SOURCE_SIDE, SOURCE_SIDE);
+    for (let y = 0; y < SOURCE_SIDE; y++) {
+      for (let x = 0; x < SOURCE_SIDE; x++) {
+        // The shorts at source px (2 source px per rig px), the rest the layers' colour.
+        const c = x >= 40 && x < 88 && y >= 16 && y < 40 ? NAVY_SHORTS : C;
+        shortsPainting.data.set([c[0], c[1], c[2], 255], (y * SOURCE_SIDE + x) * 4);
+      }
+    }
+    const shortsConfig = (carry: boolean, withSets = true): Record<string, unknown> => {
+      const c = assembleConfig({ plan: [['legs', 'full', 'legwear'], ['bottomwear', 'full', 'bottomwear']], extend: [] });
+      c.bones = [
+        { name: 'hip', parent: 'root', at: [32, 20] },
+        { chain: 'leg_r', parent: 'hip', points: [[26, 10], [26, 30]], tip: [26, 50] },
+        { chain: 'leg_l', parent: 'hip', points: [[38, 10], [38, 30]], tip: [38, 50] },
+      ];
+      c.limbs = {
+        leg_r: { segments: [{ part: 'thigh_r', from: 'legs', bone: 'leg_r0' }, { part: 'shin_r', from: 'legs', bone: 'leg_r1', joint: 'knee' }] },
+        leg_l: { segments: [{ part: 'thigh_l', from: 'legs', bone: 'leg_l0' }, { part: 'shin_l', from: 'legs', bone: 'leg_l1', joint: 'knee' }] },
+      };
+      c.regions = { bottomwear: 'hip', thigh_r: 'leg_r0', shin_r: 'leg_r1', thigh_l: 'leg_l0', shin_l: 'leg_l1' };
+      c.motion = { duration: 1, tracks: [{ bone: 'hip', prop: 'rotate', amp: 2, period: 1, phase: 0 }] };
+      if (withSets) {
+        (c.assemble as Record<string, unknown>).alternates = shortsSets.map((q) => ({
+          name: q.name,
+          source: 'painting.png',
+          full: `full_${q.name}`,
+          head: 'head',
+          parts: carry ? [...q.parts, 'bottomwear'] : q.parts,
+          ...(q.drawn === undefined ? {} : { drawn: q.drawn }),
+        }));
+      }
+      return c;
+    };
+    const shortsFixture = (name: string, cfg: Record<string, unknown>): string => {
+      const d = join(shortsDir, name);
+      writeAssembleFixture(d, cfg, shortsPainting, { full: [{ name: 'legwear', depth: 0.6, rects: [{ x0: 22, y0: 20, x1: 30, y1: 50, colour: C }, { x0: 34, y0: 20, x1: 42, y1: 50, colour: C }] }, shortsLayer], head: HEAD_LAYERS });
+      for (const q of shortsSets) writeRun(join(d, `full_${q.name}`), [{ name: 'legwear', depth: 0.6, rects: q.rects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1, colour: C })) }, shortsLayer]);
+      return d;
+    };
+    /** Per part PNG under `out`'s parts.json (base parts and every set's), its pixels above alpha 8 inside the base shorts' pixels above alpha 8. */
+    const inShorts = (out: string): Map<string, number> => {
+      const got = new Map<string, number>();
+      if (!existsSync(join(out, 'parts.json'))) return got;
+      const pf = readParts(join(out, 'parts.json'));
+      const [rw] = pf.rig_size;
+      const sw = pf.parts.find((p) => p.name === 'bottomwear');
+      if (sw === undefined) return got;
+      const swImg = readPng(join(out, 'parts', 'bottomwear.png'));
+      const area = new Set<number>();
+      for (let y = 0; y < swImg.height; y++) for (let x = 0; x < swImg.width; x++) if (swImg.data[(y * swImg.width + x) * 4 + 3] > 8) area.add((y + sw.y) * rw + x + sw.x);
+      const held = (file: string, rec: { x: number; y: number }): number => {
+        const img = readPng(file);
+        let n = 0;
+        for (let y = 0; y < img.height; y++) for (let x = 0; x < img.width; x++) if (img.data[(y * img.width + x) * 4 + 3] > 8 && area.has((y + rec.y) * rw + x + rec.x)) n++;
+        return n;
+      };
+      for (const p of pf.parts) if (p.name !== 'bottomwear') got.set(p.name, held(join(out, 'parts', `${p.name}.png`), p));
+      for (const a of pf.alternates ?? []) for (const p of a.records) got.set(`${a.name}_${p.name}`, held(join(out, 'parts', `${a.name}_${p.name}.png`), p));
+      return got;
+    };
+    const setThighs = shortsSets.map((q) => `${q.name}_${q.parts[0]}`);
+    const shortsLint = (out: string): string[] => out.split('\n').filter((l) => /^\[assemble\] {3}LINT set "/.test(l)).map((l) => l.replace(/^\[assemble\] /, '').trim());
+    const expectedLint = shortsSets.map((q) => `LINT set "${q.name}" ${q.parts[0]}: ${SHORTS_THIGH_PX} px under bottomwear excluded`);
+
+    const shortsGreenDir = shortsFixture('green', shortsConfig(false));
+    const shortsGreenOut = join(shortsGreenDir, 'out');
+    const shortsGreen = runCli([...buildArgs(shortsGreenDir, shortsGreenOut), '--all-sets']);
+    const shortsBaseDir = shortsFixture('no-sets', shortsConfig(false, false));
+    const shortsBaseOut = join(shortsBaseDir, 'out');
+    const shortsBase = runCli(buildArgs(shortsBaseDir, shortsBaseOut));
+    const greenHeld = inShorts(shortsGreenOut);
+    const greenCheck = existsSync(join(shortsGreenOut, 'check', 'check.json'))
+      ? (readJsonFile(join(shortsGreenOut, 'check', 'check.json')) as { PASS?: boolean; sets?: Record<string, { PASS?: boolean }> })
+      : null;
+    const baseNames = ['thigh_r', 'shin_r', 'thigh_l', 'shin_l', 'bottomwear'];
+    const basePngSame = baseNames.every(
+      (n) => existsSync(join(shortsGreenOut, 'parts', `${n}.png`)) && existsSync(join(shortsBaseOut, 'parts', `${n}.png`)) && digest(join(shortsGreenOut, 'parts', `${n}.png`)) === digest(join(shortsBaseOut, 'parts', `${n}.png`)),
+    );
+    const baseRecordsSame =
+      existsSync(join(shortsGreenOut, 'parts.json')) &&
+      existsSync(join(shortsBaseOut, 'parts.json')) &&
+      JSON.stringify(readParts(join(shortsGreenOut, 'parts.json')).parts) === JSON.stringify(readParts(join(shortsBaseOut, 'parts.json')).parts);
+    say(
+      'BU190_A_SUBSET_LEG_SET_TAKES_NONE_OF_THE_SHORTS_THE_BASE_DRAWS_OVER_IT_AND_THE_LINT_COUNTS_WHAT_IT_EXCLUDED',
+      shortsGreen.status === 0 &&
+        shortsBase.status === 0 &&
+        setThighs.every((t) => greenHeld.get(t) === 0) &&
+        ['thigh_r', 'thigh_l'].every((t) => greenHeld.get(t) === 0) &&
+        JSON.stringify(shortsLint(shortsGreen.out)) === JSON.stringify(expectedLint) &&
+        greenCheck?.PASS === true &&
+        shortsSets.every((q) => greenCheck.sets?.[q.name]?.PASS === true) &&
+        basePngSame &&
+        baseRecordsSame,
+      `exit ${shortsGreen.status} (no-sets ${shortsBase.status}); px in the shorts' area: ${[...greenHeld].map(([k, v]) => `${k} ${v}`).join(', ')}; LINT: ${shortsLint(shortsGreen.out).join(' | ') || 'none'}; check --all-sets PASS ${greenCheck?.PASS} (${shortsSets.map((q) => `${q.name} ${greenCheck?.sets?.[q.name]?.PASS}`).join(', ')}); base PNGs equal to the no-sets build: ${basePngSame}; base records equal: ${baseRecordsSame}`,
+      'issue #587, bar 1: the shorts are the base\'s bottomwear, drawn over the set\'s thigh slot, so a set thigh that also holds them draws them twice and moves them with the thigh; every set thigh holds 0 of the shorts\' area where the rule before #587 put 8 x 10 = 80 px, the LINT names the 80 excluded per set, check --all-sets is green, and the base\'s parts are the bytes a build with no set writes',
+    );
+
+    // Bar 1's mutant: the rule before #587 (a test-only parameter of assembleStage) puts the 80 px back in every set thigh and prints no LINT.
+    const shortsStage = (d: string, out: string, rule: 'base' | 'none'): { lines: string[]; failed: PartsError | null } => {
+      const lines: string[] = [];
+      const failed = refusals(() =>
+        assembleStage(
+          { source: join(d, 'painting.png'), full: join(d, 'full'), head: join(d, 'head'), config: join(d, 'config.json'), seam: 'near-white', project: DEFAULT_PROJECT_RULE, setExclusion: rule },
+          { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, 'recomposite_error_rig.png') },
+          (l) => lines.push(l),
+        ),
+      );
+      return { lines, failed };
+    };
+    const mutOut = join(shortsGreenDir, 'out-none');
+    const mut = shortsStage(shortsGreenDir, mutOut, 'none');
+    const mutHeld = inShorts(mutOut);
+    say(
+      'BU191_THE_MUTANT_THAT_SKIPS_THE_EXCLUSION_PUTS_THE_80_PX_OF_SHORTS_BACK_IN_EVERY_SET_THIGH',
+      mut.failed === null && setThighs.every((t) => mutHeld.get(t) === SHORTS_THIGH_PX) && !mut.lines.some((l) => l.includes('LINT set "')),
+      `setExclusion "none": ${mut.failed === null ? 'assembles' : mut.failed.problems.map((q) => q.code).join(', ')}; px in the shorts' area: ${setThighs.map((t) => `${t} ${mutHeld.get(t)}`).join(', ')} (${SHORTS_THIGH_PX} each by hand); LINT set lines ${mut.lines.filter((l) => l.includes('LINT set "')).length}`,
+      'issue #587, bar 1: the count goes red when the exclusion is skipped — each set thigh holds its 8 x 10 thigh top inside the shorts again, BU190\'s 0 becomes 80',
+    );
+
+    // Bar 2: a set that carries bottomwear itself replaces the shorts, so nothing is excluded: its bytes are the rule before #587's.
+    const carryDir = shortsFixture('carry', shortsConfig(true));
+    const carryBase = shortsStage(carryDir, join(carryDir, 'out-base'), 'base');
+    const carryNone = shortsStage(carryDir, join(carryDir, 'out-none'), 'none');
+    const carryFiles = ['parts.json', ...baseNames.map((n) => join('parts', `${n}.png`)), ...shortsSets.flatMap((q) => [...q.parts, 'bottomwear'].map((n) => join('parts', `${q.name}_${n}.png`)))];
+    const carryDiffer = carryFiles.filter((f) => !existsSync(join(carryDir, 'out-base', f)) || !existsSync(join(carryDir, 'out-none', f)) || digest(join(carryDir, 'out-base', f)) !== digest(join(carryDir, 'out-none', f)));
+    const carryHeld = inShorts(join(carryDir, 'out-base'));
+    say(
+      'BU192_A_SET_THAT_CARRIES_THE_SHORTS_ITSELF_EXCLUDES_NOTHING_AND_WRITES_THE_BYTES_IT_WROTE_BEFORE',
+      carryBase.failed === null && carryNone.failed === null && carryDiffer.length === 0 && setThighs.every((t) => carryHeld.get(t) === SHORTS_THIGH_PX) && !carryBase.lines.some((l) => l.includes('LINT set "')),
+      `exclusion "base" ${carryBase.failed === null ? 'assembles' : carryBase.failed.problems.map((q) => q.code).join(', ')}, "none" ${carryNone.failed === null ? 'assembles' : carryNone.failed.problems.map((q) => q.code).join(', ')}; ${carryFiles.length} file(s) compared, differing: ${carryDiffer.join(', ') || 'none'}; set thighs in the shorts' area: ${setThighs.map((t) => `${t} ${carryHeld.get(t)}`).join(', ')}; LINT set lines ${carryBase.lines.filter((l) => l.includes('LINT set "')).length}`,
+      'issue #587, bar 2: the rule is positional — under a base part the set does not carry — so a set that replaces bottomwear keeps its thigh top under its own shorts, byte for byte as before',
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
