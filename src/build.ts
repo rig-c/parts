@@ -1146,21 +1146,39 @@ function multiIntervalRun(
  * the gate is green — and, for every automatic mesh, only when its motion gate
  * accepted it (issue #126 item 3; {@link motionGates}).
  */
-export function rigStage(input: RigStageInput, rigc: RigcRunner, scratch: string, log: Log): RigOutput {
-  const { config: cfg, animations: from } = loadConfigAndAnimations(input.config);
-  const parts = readParts(join(input.parts, 'parts.json'));
+/** What the rig stage reads before it builds anything: the config with its `animations_from` table, parts.json, and each part's PNG (and each alternate set's) that exists. */
+export interface RigInputs {
+  cfg: ReturnType<typeof loadConfigAndAnimations>['config'];
+  from: ReturnType<typeof loadConfigAndAnimations>['animations'];
+  parts: ReturnType<typeof readParts>;
+  images: Map<string, Raster>;
+}
+
+/**
+ * The rig stage's inputs, read as {@link rigStage} reads them: `rigStage` and `mesh-stats` (issue #566,
+ * `src/meshstats.ts`) both start here, so the two read the same config, the same parts and the same images, and a
+ * PNG that is missing is left out of the map for `buildRig` to refuse by name (`RIG_PNG_PRESENT`).
+ */
+export function readRigInputs(config: string, partsDir: string): RigInputs {
+  const { config: cfg, animations: from } = loadConfigAndAnimations(config);
+  const parts = readParts(join(partsDir, 'parts.json'));
   const images = new Map<string, Raster>();
   for (const p of parts.parts) {
-    const png = join(input.parts, 'parts', `${p.name}.png`);
+    const png = join(partsDir, 'parts', `${p.name}.png`);
     if (existsSync(png)) images.set(p.name, readPng(png));
   }
   for (const alt of parts.alternates ?? []) {
     for (const p of alt.records) {
       const attName = `${alt.name}_${p.name}`;
-      const png = join(input.parts, 'parts', `${attName}.png`);
+      const png = join(partsDir, 'parts', `${attName}.png`);
       if (existsSync(png)) images.set(attName, readPng(png));
     }
   }
+  return { cfg, from, parts, images };
+}
+
+export function rigStage(input: RigStageInput, rigc: RigcRunner, scratch: string, log: Log): RigOutput {
+  const { cfg, from, parts, images } = readRigInputs(input.config, input.parts);
   const first = buildRig(cfg, parts, images, undefined, input.idleKeys ?? DEFAULT_IDLE_KEYS, input.reduce);
   const textsOf = (r: RigOutput): Array<[string, string]> => {
     const mergedMotion = withAnimations(r.motion, from === null ? null : from.table);

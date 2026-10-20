@@ -35285,6 +35285,153 @@ function runMeshDraftSuite(): number {
 }
 
 // ---------------------------------------------------------------------------
+// mesh-stats (issue #566)
+// ---------------------------------------------------------------------------
+
+/** One `mesh-stats:` mesh line read back: part, mode, vertices, triangles; null when the line is not one. */
+function meshStatsLineOf(line: string): { part: string; mode: string; vertices: number; triangles: number } | null {
+  const m = /^mesh-stats: (\S+) — (\S+) (\d+) vertices, (\d+) triangles/.exec(line.trim());
+  return m === null ? null : { part: m[1], mode: m[2], vertices: Number(m[3]), triangles: Number(m[4]) };
+}
+
+/** Where `mesh-stats`' printed lines and a mesh report disagree, field by field, in order; the total line too. Empty means they agree. */
+function meshStatsDiffs(out: string, report: ReadonlyArray<{ part: string; vertices: number; triangles: number; mode?: string }>): string[] {
+  const lines = out.trim().split('\n').filter((l) => l.startsWith('mesh-stats: '));
+  const rows = lines.map(meshStatsLineOf).filter((r) => r !== null);
+  const diffs: string[] = [];
+  if (rows.length !== report.length) diffs.push(`${rows.length} mesh line(s), the report holds ${report.length} row(s)`);
+  report.forEach((r, i) => {
+    const got = rows[i];
+    if (got === undefined) return;
+    for (const [k, want, have] of [
+      ['part', r.part, got.part],
+      ['mode', r.mode ?? 'lattice', got.mode],
+      ['vertices', r.vertices, got.vertices],
+      ['triangles', r.triangles, got.triangles],
+    ] as const) {
+      if (want !== have) diffs.push(`row ${i} ${k}: printed ${have}, report ${want}`);
+    }
+  });
+  const total = report.reduce((n, r) => n + r.triangles, 0);
+  const want = `mesh-stats: total ${total} triangles over ${report.length} mesh(es)`;
+  if (lines[lines.length - 1] !== want) diffs.push(`last line "${lines[lines.length - 1] ?? ''}", the report's total is "${want}"`);
+  return diffs;
+}
+
+/** The names under a directory, sorted, one level deep: what a command that writes nothing must leave as it found. */
+function topNames(dir: string): string {
+  return readdirSync(dir).sort().join(',');
+}
+
+function runMeshStatsSuite(): number | null {
+  section('mesh-stats: the configured meshes counted through the rig stage\'s own buildRig, without rigc (issue #566)');
+  const { say, bad } = counter();
+  const root = temp('mesh-stats');
+  try {
+    // MS01 — the positive control on the rig fixture: its one lattice, counted by hand in fixtures/rig.ts (RIG_EXPECT).
+    const fx = writeRigFixture(join(root, 'pos'));
+    const before = `${topNames(ROOT)}|${topNames(join(root, 'pos'))}|${topNames(fx.parts)}`;
+    const pos = runCli(['mesh-stats', '--config', fx.config, '--parts', fx.parts]);
+    const after = `${topNames(ROOT)}|${topNames(join(root, 'pos'))}|${topNames(fx.parts)}`;
+    const want = [`mesh-stats: cloth — lattice ${RIG_EXPECT.vertices} vertices, ${RIG_EXPECT.triangles} triangles`, `mesh-stats: total ${RIG_EXPECT.triangles} triangles over 1 mesh(es)`];
+    say(
+      'MS01_THE_RIG_FIXTURES_LATTICE_IS_COUNTED_AS_COUNTED_BY_HAND_AND_NOTHING_IS_WRITTEN',
+      pos.status === 0 && pos.out.trim() === want.join('\n') && before === after,
+      `exit ${pos.status}: ${pos.out.trim().split('\n').join(' | ')}; the worktree, the fixture and its parts dir listed before and after: ${before === after ? 'the same' : 'DIFFERENT'}`,
+      'issue #566: the count before a build; fixtures/rig.ts counts the 8 px lattice over the cloth block by hand (12 vertices, 12 triangles), and the command writes no file',
+    );
+
+    // MS02 — the flags: USAGE, exit 2, named, nothing written.
+    const usageRuns = [
+      ['no --config', ['mesh-stats', '--parts', fx.parts], 'USAGE: mesh-stats needs --config <value>'],
+      ['no --parts', ['mesh-stats', '--config', fx.config], 'USAGE: mesh-stats needs --parts <value>'],
+      ['an unknown flag', ['mesh-stats', '--config', fx.config, '--parts', fx.parts, '--out', join(root, 'usage')], 'mesh-stats does not take "--out"; it takes --config, --parts'],
+      ['a positional word', ['mesh-stats', 'config.json', '--config', fx.config, '--parts', fx.parts], 'mesh-stats does not take "config.json"; it takes --config, --parts'],
+    ] as const;
+    const beforeUsage = `${topNames(ROOT)}|${topNames(root)}`;
+    const usageGot = usageRuns.map(([label, args, line]) => {
+      const r = runCli([...args]);
+      return { label, ok: r.status === 2 && r.out.includes(line), text: `${label} -> exit ${r.status}, ${r.out.trim().split('\n')[0]}` };
+    });
+    const afterUsage = `${topNames(ROOT)}|${topNames(root)}`;
+    say(
+      'MS02_A_MISSING_CONFIG_OR_PARTS_AN_UNKNOWN_FLAG_OR_A_POSITIONAL_WORD_IS_A_USAGE_ERROR_NAMED_AND_NOTHING_IS_WRITTEN',
+      usageGot.every((u) => u.ok) && beforeUsage === afterUsage,
+      `${usageGot.map((u) => u.text).join(' | ')}; listings before and after: ${beforeUsage === afterUsage ? 'the same' : 'DIFFERENT'}`,
+      'CL26: the refusal of a flag is read off the TAKES row, and the row holds --config and --parts alone — no --out, because the command writes nothing',
+    );
+
+    // MS03 — a refusal from the mesh stage is the rig stage's own: the fixture with the cloth PNG taken away.
+    const gone = writeRigFixture(join(root, 'gone'));
+    rmSync(join(gone.parts, 'parts', 'cloth.png'));
+    const statsGone = runCli(['mesh-stats', '--config', gone.config, '--parts', gone.parts]);
+    const rigGone = runCli(['rig', '--config', gone.config, '--parts', gone.parts, '--out', join(root, 'gone', 'rig')]);
+    const failOf = (s: string): string => s.split('\n').find((l) => l.includes('FAIL')) ?? '';
+    say(
+      'MS03_A_PART_WITH_NO_PNG_IS_THE_RIG_STAGES_OWN_REFUSAL_BY_NAME_EXIT_1',
+      statsGone.status === 1 && failOf(statsGone.out).includes('RIG_PNG_PRESENT') && failOf(statsGone.out).includes('parts/cloth.png') && failOf(statsGone.out) === failOf(rigGone.out) && rigGone.status === 1 && !statsGone.out.includes('mesh-stats: total'),
+      `mesh-stats -> exit ${statsGone.status}, ${failOf(statsGone.out).trim()}; rig on the same input -> exit ${rigGone.status}, ${failOf(rigGone.out) === failOf(statsGone.out) ? 'the same line' : `a DIFFERENT line: ${failOf(rigGone.out).trim()}`}`,
+      'the design\'s point 3: what the mesh stage refuses is printed as the build prints it, because it is the same buildRig refusing',
+    );
+
+    // MS04–MS06 — the public examples: demo (lattices) and reference-sample (two contour meshes).
+    const keys = ['demo', 'reference-sample'];
+    const fetched = keys.filter((k) => existsSync(join(EXAMPLES_DIR, k, 'inputs', 'layers', 'head')));
+    if (fetched.length < keys.length) {
+      console.log(`  SKIP  examples/${keys.filter((k) => !fetched.includes(k)).join(', examples/')}/inputs not fetched; run bun run fetch-examples`);
+      console.log('          ⚠️ This is a HOLE in this run, not a pass — mesh-stats was held to no built mesh report.');
+      return bad();
+    }
+    if (!exampleInputsAtPin(keys, say, 'MS04_THE_FETCHED_EXAMPLE_INPUTS_MATCH_THE_PINNED_TREE')) return bad();
+    const asm = new Map<string, string>();
+    for (const k of keys) {
+      const d = join(EXAMPLES_DIR, k);
+      const out = join(root, k, 'asm');
+      assembleStage(
+        { source: join(d, 'inputs', 'painting.png'), full: join(d, 'inputs', 'layers', 'full'), head: join(d, 'inputs', 'layers', 'head'), config: join(d, 'config.json'), seam: DEFAULT_SEAM_RULE, project: DEFAULT_PROJECT_RULE },
+        { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, 'recomposite_error_rig.png') },
+        () => {},
+      );
+      asm.set(k, out);
+    }
+    const expected = (k: string): Array<{ part: string; vertices: number; triangles: number; mode?: string }> =>
+      JSON.parse(readFileSync(join(EXAMPLES_DIR, k, 'expected', 'mesh_report.json'), 'utf8')) as Array<{ part: string; vertices: number; triangles: number; mode?: string }>;
+    const runs = keys.map((k) => {
+      const t0 = performance.now();
+      const r = runCli(['mesh-stats', '--config', join(EXAMPLES_DIR, k, 'config.json'), '--parts', asm.get(k) as string]);
+      return { k, r, ms: performance.now() - t0, diffs: meshStatsDiffs(r.out, expected(k)) };
+    });
+    // Planted: reference-sample with its two contour meshes as lattices at the spacings it traced them at (AUTHORING's
+    // soft-region recipe: topwear 18, bottomwear 28) — a mesh-stats that counted a contour part's lattice.
+    const raw = JSON.parse(readFileSync(join(EXAMPLES_DIR, 'reference-sample', 'config.json'), 'utf8')) as { meshes: Record<string, Record<string, unknown>>; motion: Record<string, unknown> };
+    for (const [part, grid] of [['topwear', 18], ['bottomwear', 28]] as const) {
+      const { contour: _traced, ...rest } = raw.meshes[part];
+      raw.meshes[part] = { grid, ...rest };
+    }
+    raw.motion.animations_from = join(EXAMPLES_DIR, 'reference-sample', 'animations.json');
+    writeFileSync(join(root, 'lattice-config.json'), JSON.stringify(raw));
+    const planted = runCli(['mesh-stats', '--config', join(root, 'lattice-config.json'), '--parts', asm.get('reference-sample') as string]);
+    const plantedDiffs = meshStatsDiffs(planted.out, expected('reference-sample'));
+    say(
+      'MS05_ON_DEMO_AND_REFERENCE_SAMPLE_EVERY_MESHS_MODE_VERTICES_AND_TRIANGLES_AND_THE_TOTAL_ARE_THE_BUILT_MESH_REPORTS_AND_A_LATTICE_COUNT_FOR_A_CONTOUR_PART_IS_NOT',
+      runs.every((x) => x.r.status === 0 && x.diffs.length === 0) && planted.status === 0 && plantedDiffs.some((d) => d.includes('mode')) && plantedDiffs.some((d) => d.includes('triangles')),
+      `${runs.map((x) => `${x.k}: exit ${x.r.status}, ${x.diffs.length === 0 ? `every row and ${x.r.out.trim().split('\n').at(-1)?.replace('mesh-stats: ', '')} as expected/mesh_report.json` : x.diffs.join('; ')}`).join(' | ')}; planted, reference-sample's contour meshes counted as their lattices: exit ${planted.status}, ${plantedDiffs.length === 0 ? 'NOT told apart' : plantedDiffs.join('; ')}`,
+      'issue #566 bar 1: the dry-run count is the built count; expected/mesh_report.json is the build the chain suite holds this tree to, and reference-sample carries the contour mode',
+    );
+    const demo = runs.find((x) => x.k === 'demo');
+    say(
+      'MS06_MESH_STATS_ON_DEMO_RUNS_UNDER_5_S',
+      demo !== undefined && demo.r.status === 0 && demo.ms < 5000,
+      `demo: ${demo === undefined ? 'not run' : `${Math.round(demo.ms)} ms, the bun process included`} (bound 5000 ms); reference-sample: ${Math.round(runs.find((x) => x.k === 'reference-sample')?.ms ?? -1)} ms`,
+      'issue #566 bar 2: the count in seconds, before a build; no assemble, no rigc, no check in the command',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+  return bad();
+}
+
+// ---------------------------------------------------------------------------
 // influence (issue #378)
 // ---------------------------------------------------------------------------
 
@@ -42815,6 +42962,7 @@ const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number 
   ['scene', runSceneSuite],
   ['chain', runChainSuite],
   ['mesh-draft', runMeshDraftSuite],
+  ['mesh-stats', runMeshStatsSuite],
   ['influence', runInfluenceSuite],
   ['remesh', runRemeshSuite],
   ['retune', runRetuneSuite],
@@ -42885,7 +43033,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['check']],
   ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'contour-wiring', 'config', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
-  ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'remesh', 'retune', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
+  ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'mesh-stats', 'remesh', 'retune', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
 ];
 
 /**
