@@ -2143,6 +2143,62 @@ export interface CheckReport {
 }
 
 /**
+ * How many of the bars measured and how many said SKIP, by name — the
+ * summary's second half (issue #77): `PASS` reads only the bars that measured,
+ * so a run that measured one bar says so on the line that says PASS. The
+ * count is every bar `check` tallied: the {@link BARS}, and
+ * {@link FOLD_LINE} where it is written (issue #320).
+ */
+export function barsSummary(r: Pick<CheckReport, 'bars'>): string {
+  const { measured, skipped } = r.bars;
+  return `${measured.length} of ${measured.length + skipped.length} bar(s) measured, ${skipped.length} skipped${skipped.length === 0 ? '' : ` (${skipped.map((s) => s.bar).join(', ')})`}`;
+}
+
+/** The summary's warning clause: each warning line that read something, named, with the warnings they printed together; empty when none read. */
+export function warningsClause(r: Pick<CheckReport, 'motionSeam' | 'cloth'>): string {
+  const read = [...(r.motionSeam.status === 'SKIP' ? [] : [{ name: MOTION_SEAM_LINE, n: r.motionSeam.warnings }]), ...(r.cloth.status === 'SKIP' ? [] : [{ name: CLOTH_LINE, n: r.cloth.warnings }])];
+  if (read.length === 0) return '';
+  return `; ${read.reduce((a, x) => a + x.n, 0)} warning(s) (${read.map((x) => x.name).join(', ')}, not a bar)`;
+}
+
+/**
+ * The last line `check` prints, whole and as printed (`check: PASS; …` or `check: FAIL — …; …`), issue #541: the
+ * one place it is composed. `check` prints it from here, and `remesh.json` / `retune.json` carry it from here
+ * ({@link CheckReport} in, no clock, no path), so a consumer matching the carried line against a `check` run's stdout
+ * compares the same composer's output twice.
+ */
+export function checkSummaryLine(r: Pick<CheckReport, 'figures' | 'problems' | 'requirements' | 'bars' | 'motionSeam' | 'cloth'>): string {
+  const reqNotPass = r.requirements === null ? 0 : r.requirements.summary.declared - r.requirements.summary.pass;
+  const notMet = r.requirements === null ? `${r.problems.length} bar(s) not met` : `${r.problems.length - reqNotPass} bar(s) not met, ${reqNotPass} declared requirement(s) not PASS`;
+  return `${r.figures.PASS ? 'check: PASS' : `check: FAIL — ${notMet}`}; ${barsSummary(r)}${warningsClause(r)}`;
+}
+
+/** A block's status as {@link checkStatuses} reads it off `check.json`. */
+export type CheckStatus = 'PASS' | 'FAIL' | 'SKIP' | 'WARN' | 'CLEAR' | 'REPORTED';
+
+/**
+ * Every block's status as `check.json` records it (issue #541), read off the figures object `check.json` is written
+ * from, in the file's order, one entry per block the file holds. The three bars with figures and no `status` key are
+ * read the way {@link barsNotMet} reads the file: `gate` PASS when `gate_spine_html_green` is true, else FAIL (it is
+ * never skipped); `loop` SKIP when `loop_max_diff` is null, `seam` SKIP when `seam_mean` is null, otherwise FAIL when
+ * {@link barsNotMet} names it and PASS when it does not. Every other block carries its own `status` key and is copied:
+ * the judgement lines, then {@link FOLD_LINE}, {@link LEVEL_LINE}, {@link STRESS_LINE}, {@link LIMB_LINE},
+ * {@link SWEEP_LINE}, {@link MOTION_SEAM_LINE}, {@link CLOTH_LINE}, the reported lines and {@link SOURCE_LINE}, each
+ * where the file writes it. The `requirements` block's lines are not bars and are not read here.
+ */
+export function checkStatuses(fig: CheckFigures): Record<string, CheckStatus> {
+  const notMet = barsNotMet(fig as unknown as Record<string, unknown>);
+  const bar = (name: string, measured: boolean): CheckStatus => (!measured ? 'SKIP' : notMet.includes(name) ? 'FAIL' : 'PASS');
+  const out: Record<string, CheckStatus> = { gate: bar('gate', true), loop: bar('loop', fig.loop_max_diff !== null), seam: bar('seam', fig.seam_mean !== null) };
+  for (const n of JUDGEMENT_LINES) out[n] = fig[n].status;
+  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, ...REPORTED_LINES, SOURCE_LINE] as const) {
+    const l = fig[n];
+    if (l !== undefined) out[n] = l.status;
+  }
+  return out;
+}
+
+/**
  * The one line `check` prints when `motion.json` holds animations beside the
  * idle (issue #183), or null when it holds none, so a rig of the idle alone
  * prints what it printed before.

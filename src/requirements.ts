@@ -13,7 +13,7 @@
  * | outcome | when | what it does |
  * | --- | --- | --- |
  * | not declared | the file states no requirement of that kind | the summary names the kind; not a pass, not a skip |
- * | refused | a bone, constraint, mesh or animation does not resolve, a field or bar is missing, a `follow` names a property its constraint does not drive | refused by name before anything is built ({@link readRequirements}, {@link resolveRequirements}) |
+ * | refused | a bone, constraint, mesh or animation does not resolve, a field or bar is missing, a `follow` names a property its constraint does not drive, a `contact` is held against its own bone's same point or an `aim` against a point of its own bone (issue #540) | refused by name before anything is built ({@link readRequirements}, {@link resolveRequirements}) |
  * | not measurable | it reads and the rig builds, and the quantity is undefined in the frames | `NOT MEASURABLE — <why>`, with the figures; the run does not PASS |
  * | measured | otherwise | `PASS` or `FAIL` against the author's bar, with the figures and the worst frame |
  *
@@ -253,7 +253,9 @@ const EXCEPTION_ABSENT: Record<ExceptionList, string> = {
  * in `not_swinging` and in `rises` or `rests`;
  * which parts they are is read against parts.json and the rig by `check`),
  * each entry's every field and bar by name, a key the format does not read,
- * and a name used twice. Resolving the names against the rig is
+ * a name used twice, and a `contact` against its own bone and point or an
+ * `aim` at a point of its own bone (issue #540: each reads 0 by construction,
+ * or no line at all). Resolving the names against the rig is
  * {@link resolveRequirements}'s.
  */
 export function readRequirements(path: string): RequirementsFile {
@@ -273,6 +275,9 @@ export function readRequirements(path: string): RequirementsFile {
   if (!isRecord(raw)) return fileProblem(`holds ${JSON.stringify(raw)?.slice(0, 40)}; an object is required`);
   const field = (object: string, detail: string): void => {
     problems.push({ code: 'REQUIREMENTS_FIELD', object, detail });
+  };
+  const selfTarget = (label: string, detail: string): void => {
+    problems.push({ code: 'REQUIREMENTS_SELF_TARGET', object: `${label} field "target"`, detail });
   };
   if (raw.spec !== REQUIREMENTS_SPEC) field(`${at} field "spec"`, `is ${JSON.stringify(raw.spec)}; ${JSON.stringify(REQUIREMENTS_SPEC)} is required`);
   for (const k of Object.keys(raw)) if (!['spec', 'fps', 'targets', 'requirements', ...EXCEPTION_LISTS, 'may_fold'].includes(k) && !freeKey(k, raw[k])) field(`${at} field "${k}"`, 'is not a field this format reads (spec, fps, targets, requirements, not_planted, not_swinging, rises, rests, may_fold; note or *_note as a string; x-<name> as a record)');
@@ -331,6 +336,11 @@ export function readRequirements(path: string): RequirementsFile {
       let req: Requirement;
       if (kind === 'contact') {
         req = { ...common, kind, bone: str('bone'), point: point('point', r.point), target: target(), within_px: bar('within_px', (v) => v >= 0, 'a distance in stage px, 0 or more,') };
+        // Issue #540: a point against itself is 0 apart on every frame; the bone's other point is a reading (its length).
+        if ('bone' in req.target && req.bone.length > 0 && req.target.bone === req.bone && req.target.point === req.point) {
+          const other = req.point === 'tip' ? 'origin' : 'tip';
+          selfTarget(label, `contact of bone "${req.bone}" ${req.point} against bone "${req.target.bone}" ${req.target.point}, the same point: it measures 0 by construction, so a PASS says nothing — a different bone is required, or the bone's other point ("${other}")`);
+        }
       } else if (kind === 'follow') {
         const type = r.constraint_type;
         if (type !== 'ik' && type !== 'transform') field(`${label} field "constraint_type"`, `is ${JSON.stringify(type)}; "ik" or "transform" is required — a constraint resolves by name AND type, as in rig-c`);
@@ -349,6 +359,11 @@ export function readRequirements(path: string): RequirementsFile {
         };
       } else if (kind === 'aim') {
         req = { ...common, kind, bone: str('bone'), target: target(), within_degrees: bar('within_degrees', (v) => v >= 0 && v <= 180, 'an angle in degrees from 0 to 180') };
+        // Issue #540: the aimed bone's own tip lies on its axis (0 degrees on every frame) and its own origin gives no line at all.
+        if ('bone' in req.target && req.bone.length > 0 && req.target.bone === req.bone) {
+          const why = req.target.point === 'tip' ? 'its tip lies on its own axis, so the angle measures 0 by construction and a PASS says nothing' : 'its origin is where the line starts, so there is no line to aim along on any frame and nothing is measured';
+          selfTarget(label, `aim of bone "${req.bone}" axis against bone "${req.target.bone}" ${req.target.point}, a point of the aimed bone itself: ${why} — a different bone or a stage point is required`);
+        }
       } else if (kind === 'range') {
         const lo = bar('lo_degrees', () => true, 'an angle in degrees');
         const hi = bar('hi_degrees', () => true, 'an angle in degrees');
