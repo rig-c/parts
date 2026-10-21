@@ -5369,6 +5369,7 @@ function runWriteConfigCases(say: (name: string, ok: boolean, detail: string, wh
   );
   runEntrySpliceCases(say, dir);
   runWriteConfigFromCases(say, dir, painting);
+  runDroppedRecipeCases(say, dir, painting);
   runWindWriteConfigFromCases(say);
 }
 
@@ -5502,6 +5503,159 @@ function runWriteConfigFromCases(say: (name: string, ok: boolean, detail: string
   );
 }
 
+/** Each entry of the rig sections `--write-config` splices, by name: `/bones/{hip}`, `/meshes/{skirt}`, `/regions/{face}`. */
+function wcEntries(o: unknown): Map<string, string> {
+  const m = new Map<string, string>();
+  const at = (path: string[]): unknown => path.reduce<unknown>((v, k) => (typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>)[k] : undefined), o);
+  for (const s of WC_ARRAYS) {
+    const arr = at(s.path);
+    if (Array.isArray(arr)) for (const e of arr as Record<string, unknown>[]) m.set(`/${s.path.join('/')}/{${s.id(e)}}`, canonJson(e));
+  }
+  for (const sec of ['meshes', 'regions']) {
+    const obj = at([sec]);
+    if (typeof obj === 'object' && obj !== null && !Array.isArray(obj)) for (const [k, e] of Object.entries(obj)) m.set(`/${sec}/{${k}}`, canonJson(e));
+  }
+  return m;
+}
+
+/**
+ * Issue #630, CL220–CL223, on the cloth fixture: a `--from` change that drops one tag's recipe (`back hair`) and keeps
+ * the others. Generation 1 is the partial config written with the fixture's whole recipe; its input for generation 2
+ * is that config with `cloth["back hair"]` deleted. CL220 (the bar): with `--from <gen 1>` the run exits 0, two runs
+ * write the same bytes, every entry of the sections the input holds equals the draft of the kept recipe (so the dropped
+ * tag's entries equal the draft without any recipe, value for value), the written config differs from its input only
+ * at the entries the two recipes' drafts differ at (so no kept-tag entry moves), and the write line counts as returned
+ * to the plain draft exactly the entries, counted from the three drafts by definition, that the kept recipe's draft holds
+ * equal to the plain draft and the whole recipe's draft holds otherwise. CL221: a hand edit to one of the dropped tag's
+ * entries — a tree bone, and its mesh `meshes.hair_back` — is refused by name, exit 1, nothing written. CL222 (the
+ * mutant): the writer before #630 (`clothConfigEdits`'s `keepDropped`, the selftest's only door to it) leaves the
+ * dropped tag's plain bones and tracks out and its mesh as the previous recipe wrote it. CL223: on the same input,
+ * `--from` naming the input itself (its recipe the current one) writes the bytes written without `--from`.
+ */
+function runDroppedRecipeCases(say: (name: string, ok: boolean, detail: string, why: string) => void, dir: string, painting: string): void {
+  const parts = join(dir, 'parts');
+  const P = readPartSet(parts);
+  const kept = clothRecipe();
+  delete kept['back hair'];
+  const draftAll = JSON.parse(JSON.stringify(propose(P, undefined, null, DEFAULT_GRID_RULE, clothRecipe()))) as Record<string, unknown>;
+  const draftKept = JSON.parse(JSON.stringify(propose(P, undefined, null, DEFAULT_GRID_RULE, kept))) as Record<string, unknown>;
+  const draftPlain = JSON.parse(JSON.stringify(propose(P, undefined, null, DEFAULT_GRID_RULE, null))) as Record<string, unknown>;
+  const base = ['propose', '--parts', parts, '--source', painting];
+  const write = (cfg: string, name: string, extra: string[] = []): { r: { status: number; out: string }; text: string | null } => {
+    const at = join(dir, `dr-${name}.json`);
+    const r = runCli([...base, '--cloth', cfg, '--out', join(dir, `dr-${name}`), '--write-config', at, ...extra]);
+    return { r, text: existsSync(at) ? readFileSync(at, 'utf8') : null };
+  };
+  const partial = join(dir, 'dr-partial.json');
+  writeFileSync(partial, `${JSON.stringify({ key: 'fixture', cloth: clothRecipe() }, null, 2)}\n`);
+  const gen1 = write(partial, 'gen1');
+  const gen1At = join(dir, 'dr-gen1.json');
+  const g1Obj = gen1.text === null ? null : (JSON.parse(gen1.text) as Record<string, Record<string, unknown>>);
+  const dropText = g1Obj === null ? '{}' : `${JSON.stringify({ ...g1Obj, cloth: kept }, null, 2)}\n`;
+  // The input keeps gen 1's bytes except the cloth block: the same text with `back hair` taken out of it.
+  const inputText = gen1.text === null ? '{}' : withValueAt(gen1.text, ['cloth'], kept);
+  const inputAt = join(dir, 'dr-input.json');
+  writeFileSync(inputAt, inputText);
+  const from = write(inputAt, 'from', ['--from', gen1At]);
+  const again = write(inputAt, 'again', ['--from', gen1At]);
+  const inObj = JSON.parse(inputText) as Record<string, unknown>;
+  const outObj = from.text === null ? {} : (JSON.parse(from.text) as Record<string, unknown>);
+  // Every rig section the input holds, against the kept recipe's draft (motion by its tracks, the member the write splices).
+  const held = Object.keys(inObj).filter((k) => k !== 'key' && k !== 'cloth');
+  const sectionOf = (o: Record<string, unknown>, k: string): unknown => (k === 'motion' ? (o.motion as { tracks?: unknown } | undefined)?.tracks : o[k]);
+  const unequal = held.filter((k) => canonJson(sectionOf(outObj, k)) !== canonJson(sectionOf(draftKept, k)));
+  const moved = wcDiffPaths(draftAll, draftKept).filter((q) => q.split('/')[1] in inObj);
+  const diff = from.text === null ? ['not written'] : wcDiffPaths(inObj, outObj);
+  const confined = diff.length > 0 && diff.every((q) => moved.includes(q));
+  // By definition: an entry the kept recipe's draft holds equal to the plain draft and the whole recipe's draft does not.
+  const all = wcEntries(draftAll);
+  const keptE = wcEntries(draftKept);
+  const plainE = wcEntries(draftPlain);
+  const returned = [...keptE.keys()].filter((q) => q.split('/')[1] in inObj && keptE.get(q) === plainE.get(q) && all.get(q) !== keptE.get(q));
+  const count = /entr(?:y|ies) taken as the previous recipe's draft, (\d+) entr(?:y|ies) returned to the plain draft/.exec(from.r.out)?.[1] ?? 'no count';
+  const dropped = [...keptE.keys()].filter((q) => q.includes('{hairback') || q === '/meshes/{hair_back}');
+  const asPlain = dropped.length > 0 && dropped.every((q) => wcEntries(outObj).get(q) === plainE.get(q));
+  say(
+    'CL220_FROM_A_DROPPED_RECIPE_RETURNS_ITS_TAG_TO_THE_PLAIN_DRAFT_AND_KEEPS_THE_KEPT_TAGS',
+    gen1.r.status === 0 &&
+      dropText !== '{}' &&
+      from.r.status === 0 &&
+      again.r.status === 0 &&
+      from.text !== null &&
+      from.text === again.text &&
+      !from.text.includes(dir) &&
+      held.length > 0 &&
+      unequal.length === 0 &&
+      confined &&
+      asPlain &&
+      returned.length > 0 &&
+      count === String(returned.length),
+    `gen 1 exit ${gen1.r.status}; cloth["back hair"] dropped, --from gen 1: exit ${from.r.status}/${again.r.status} (two runs ${from.text !== null && from.text === again.text ? 'byte-identical' : 'DIFFER'}); ${held.map((k) => (k === 'motion' ? 'motion.tracks' : k)).join(', ')} ${unequal.length === 0 ? 'equal' : `NOT equal at ${unequal.join(', ')}`} to the kept recipe's draft; the dropped tag's ${dropped.length} entries (${dropped.join(' ')}) ${asPlain ? 'equal' : 'NOT equal'} to the plain draft; structural diff ${diff.length} path(s), ${confined ? 'every one' : 'NOT all'} among the ${moved.length} the two recipes' drafts differ at; ${count} returned to the plain draft, by definition ${returned.length}: ${returned.join(' ')}`,
+    "issue #630: a tag whose recipe is dropped while another is kept is the draft without the recipe again — its plain bones, tracks and mesh back, the previous recipe's trees out — and the tags the change keeps do not move",
+  );
+
+  // CL221: a hand edit to one of the dropped tag's entries is refused by name — a tree bone (the array rule) and its mesh (the entry rule).
+  const bones = (inObj.bones ?? []) as Array<Record<string, unknown>>;
+  const bi = bones.findIndex((b) => b.chain === 'hairback_r0_');
+  const tip = bi < 0 ? null : (bones[bi].tip as number[]);
+  const boneText = tip === null ? null : withValueAt(inputText, ['bones', bi, 'tip'], [tip[0] + 3, tip[1]]);
+  const boneAt = join(dir, 'dr-hand-bone-input.json');
+  writeFileSync(boneAt, boneText ?? '{}');
+  const hb = write(boneAt, 'hand-bone', ['--from', gen1At]);
+  const hbl = failLines(hb.r.out);
+  const meshR = ((inObj.meshes as Record<string, Record<string, unknown>> | undefined)?.hair_back?.r ?? null) as number | null;
+  const meshText = meshR === null ? null : withValueAt(inputText, ['meshes', 'hair_back', 'r'], meshR + 1);
+  const meshAt = join(dir, 'dr-hand-mesh-input.json');
+  writeFileSync(meshAt, meshText ?? '{}');
+  const hm = write(meshAt, 'hand-mesh', ['--from', gen1At]);
+  const hml = failLines(hm.r.out);
+  say(
+    'CL221_A_HAND_EDIT_TO_A_DROPPED_TAGS_BONE_OR_MESH_IS_STILL_REFUSED_BY_NAME',
+    boneText !== null &&
+      hb.r.status === 1 &&
+      hbl.length === 1 &&
+      hbl[0].startsWith(`FAIL  PROPOSE_WRITE_CONFIG_CONFLICT: config.bones[${bi}] "hairback_r0_" — `) &&
+      tip !== null &&
+      hbl[0].includes(`tip [${tip[0] + 3},${tip[1]}]`) &&
+      hb.text === null &&
+      !existsSync(join(dir, 'dr-hand-bone', 'proposal.json')) &&
+      meshText !== null &&
+      meshR !== null &&
+      hm.r.status === 1 &&
+      hml.length === 1 &&
+      hml[0].startsWith('FAIL  PROPOSE_WRITE_CONFIG_CONFLICT: config.meshes.hair_back — ') &&
+      hml[0].includes(`it holds r ${meshR + 1} where the previous recipe's draft writes r ${meshR}`) &&
+      hm.text === null &&
+      !existsSync(join(dir, 'dr-hand-mesh', 'proposal.json')),
+    `hairback_r0_ tip ${tip === null ? 'none' : `[${tip.join(',')}] -> [${tip[0] + 3},${tip[1]}]`}: exit ${hb.r.status}, ${hbl.join(' | ').slice(0, 220) || 'no FAIL line'}; meshes.hair_back r ${meshR} -> ${meshR === null ? 'none' : meshR + 1}: exit ${hm.r.status}, ${hml.join(' | ').slice(0, 260) || 'no FAIL line'}; configs ${hb.text === null && hm.text === null ? 'not written' : 'WRITTEN'}`,
+    "issue #630 bar: the dropped tag's entries go back to the plain draft only where they are the previous recipe's draft untouched; a hand edit to one is refused by the entry and the field, not dropped",
+  );
+
+  // CL222: the mutant, the writer before #630 — the dropped tag's plain entries never come back.
+  const g1Draft = propose(P, undefined, null, DEFAULT_GRID_RULE, clothRecipe());
+  const mutantEdits = clothConfigEdits(propose(P, undefined, null, DEFAULT_GRID_RULE, kept), propose(P, undefined, null, DEFAULT_GRID_RULE, null), inObj, false, g1Draft, true);
+  const mutantObj = JSON.parse(writtenClothConfig(inputAt, inputText, mutantEdits)) as Record<string, unknown>;
+  const mE = wcEntries(mutantObj);
+  const missingPlain = ['/bones/{hairback_r}', '/bones/{hairback_l}', '/motion/tracks/{hairback_r}', '/motion/tracks/{hairback_l}'].filter((q) => plainE.has(q) && !mE.has(q));
+  const staleMesh = mE.get('/meshes/{hair_back}') === all.get('/meshes/{hair_back}') && all.get('/meshes/{hair_back}') !== plainE.get('/meshes/{hair_back}');
+  say(
+    'CL222_THE_WRITER_BEFORE_630_LEAVES_THE_DROPPED_TAGS_PLAIN_CHAINS_OUT_AND_ITS_OLD_MESH_IN',
+    missingPlain.length === 4 && staleMesh,
+    `keepDropped: ${missingPlain.length} of 4 plain entries of the dropped tag missing (${missingPlain.join(' ')}); meshes.hair_back ${staleMesh ? "the previous recipe's, not the plain draft's" : 'NOT stale'}`,
+    "issue #630 mutant: a gate nobody has seen fail is not a gate; the writer before #630, kept as a test-only parameter, writes what step 0 measured — the old mesh kept, the plain chains missing — with no refusal",
+  );
+
+  // CL223: --from naming a config whose recipe is the current one changes no byte of this input's write.
+  const self = write(inputAt, 'self', ['--from', inputAt]);
+  const none = write(inputAt, 'none');
+  say(
+    'CL223_ON_A_DROPPED_RECIPES_INPUT_A_FROM_WHOSE_RECIPE_IS_THE_CURRENT_ONE_WRITES_THE_BYTES_WRITTEN_WITHOUT_IT',
+    self.r.status === 0 && none.r.status === 0 && self.text !== null && self.text === none.text && /, 0 entries returned to the plain draft/.test(self.r.out),
+    `--from the input itself: exit ${self.r.status}; without --from: exit ${none.r.status}; ${self.text !== null && self.text === none.text ? 'byte-identical' : 'DIFFER'} (${self.text?.length ?? 0} B); ${/, 0 entries returned to the plain draft/.test(self.r.out) ? '0 entries returned' : 'a nonzero or missing returned count'}`,
+    "issue #630: the return to the plain draft is the previous recipe's difference from the current one, so a --from whose recipe is the current one returns nothing and writes what no --from writes",
+  );
+}
+
 /**
  * Issue #571 bar on the public wind example (`examples/wind`, inputs from `bun run fetch-examples`), CL213–CL215:
  * its config's rig sections are its proposal's, value for value. CL213: the config with `cloth.bottomwear.links`
@@ -5605,6 +5759,30 @@ function runWindWriteConfigFromCases(say: (name: string, ok: boolean, detail: st
       sh.r.status === 0 && sh.text !== null && shConfined && removed.length > 0 && removed.every((l) => l.includes('skirt')) && built.status === 0 && checkLine.startsWith('check: PASS'),
       `links 3 -> 2 with --from the tracked config: exit ${sh.r.status}; structural diff ${shDiff.length} path(s), ${shConfined ? 'every one a skirt entry' : 'NOT CONFINED'}; ${removed.length} removed: ${removed.join(', ')}; build exit ${built.status}: "${checkLine}"`,
       'issue #571 bar: a config re-drafted through --from builds green, the entries the previous recipe drafted and the changed one does not removed by the rule that removes a replaced plain chain',
+    );
+
+    // CL224 (issue #630): the back hair's recipe dropped, the skirt's and the front hair's kept.
+    const keptObj = JSON.parse(tracked) as { cloth: Record<string, unknown> };
+    const keptCloth = { ...keptObj.cloth };
+    delete keptCloth['back hair'];
+    const dropText = withValueAt(tracked, ['cloth'], keptCloth);
+    const dropAt = join(dir, 'drop-config.json');
+    writeFileSync(dropAt, dropText);
+    const d1 = write(dropAt, 'drop', ['--from', join(wind, 'config.json')]);
+    const d2 = write(dropAt, 'drop-again', ['--from', join(wind, 'config.json')]);
+    const dPropAt = join(dir, 'drop', 'proposal.json');
+    const dProp = existsSync(dPropAt) ? (JSON.parse(readFileSync(dPropAt, 'utf8')) as Record<string, unknown>) : {};
+    const dObj = d1.text === null ? {} : (JSON.parse(d1.text) as Record<string, unknown>);
+    const dUnequal = [...rigKeys.filter((k) => canonJson(dObj[k]) !== canonJson(dProp[k])), ...(canonJson((dObj.motion as { tracks?: unknown } | undefined)?.tracks) === canonJson((dProp.motion as { tracks?: unknown } | undefined)?.tracks) ? [] : ['motion.tracks'])];
+    const dDiff = d1.text === null ? ['not written'] : wcDiffPaths(JSON.parse(dropText) as unknown, dObj);
+    // The kept tags' entries — the skirt's trees and the front hair's (bang_) chains, and their meshes — keep the tracked config's values.
+    const keptMoved = dDiff.filter((q) => /\{(skirt|bang_)[^}]*\}$/.test(q) || q.startsWith('/meshes/bottomwear') || q.startsWith('/meshes/hair_front'));
+    const dCount = /taken as the previous recipe's draft, (\d+) entr(?:y|ies) returned to the plain draft/.exec(d1.r.out)?.[1] ?? 'no count';
+    say(
+      'CL224_ON_WIND_A_DROPPED_BACK_HAIR_RECIPE_WRITES_THE_PROPOSAL_AND_KEEPS_THE_SKIRT_AND_FRONT_HAIR',
+      d1.r.status === 0 && d2.r.status === 0 && d1.text !== null && d1.text === d2.text && !d1.text.includes(dir) && dDiff.length > 0 && dUnequal.length === 0 && keptMoved.length === 0 && dCount !== 'no count' && Number(dCount) > 0,
+      `cloth["back hair"] dropped, --from the tracked config: exit ${d1.r.status}/${d2.r.status} (two runs ${d1.text !== null && d1.text === d2.text ? 'byte-identical' : 'DIFFER'}); ${rigKeys.join(', ')} and motion.tracks ${dUnequal.length === 0 ? 'equal' : `NOT equal at ${dUnequal.join(', ')}`} to proposal.json's; structural diff ${dDiff.length} path(s): ${dDiff.join(' ')}; kept tags' entries moved: ${keptMoved.length === 0 ? 'none' : keptMoved.join(' ')}; ${dCount} returned to the plain draft`,
+      "issue #630 bar on the public example: dropping one recipe of three writes the run's proposal value for value — the back hair's plain chains, tracks and mesh back — and moves no entry of the recipes kept",
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
