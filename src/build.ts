@@ -317,6 +317,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     cuts?: Cut[];
     skeleton?: string;
     drawn?: Record<string, number>;
+    tips?: Record<string, [number, number]>;
   }> = cfgAlts.map((a, i) => {
     const cli = cliByName.get(a.name);
     if (cli !== undefined) cliByName.delete(a.name);
@@ -332,6 +333,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       cuts: a.cuts,
       skeleton: a.skeleton === undefined ? undefined : resolve(configDir, a.skeleton),
       drawn: a.drawn,
+      tips: a.tips,
     };
   });
   for (const cli of cliByName.values()) {
@@ -548,6 +550,18 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       }
       for (const b of Object.keys(limbDrawn)) setPlaced.add(b);
     }
+    // Source-crop endpoints are final evidence, not angles or origin placement.
+    // Resize exactly onto the accepted raster, after skeleton/drawn placement.
+    const altTips: Record<string, [number, number]> | undefined = alt.tips === undefined ? undefined
+      : Object.fromEntries(Object.keys(alt.tips).sort().map((bone) => [bone, [
+          (alt.tips as Record<string, [number, number]>)[bone][0] * (result.parts.rig_size[0] / altSrc.width),
+          (alt.tips as Record<string, [number, number]>)[bone][1] * (result.parts.rig_size[1] / altSrc.height),
+        ] as [number, number]]));
+    const invalidTip = Object.entries(altTips ?? {}).find(([, tip]) => !tip.every(Number.isFinite));
+    if (invalidTip !== undefined) {
+      altProblems.push({ code: 'ASSEMBLE_ALT_TIP_POINT', object: `${alt.at}.tips.${invalidTip[0]}`, detail: 'does not normalize to a finite [x, y] endpoint on the accepted rig canvas' });
+      continue;
+    }
     const altOthers = Object.keys(otherLimbs).length === 0 ? undefined : otherLimbsOf(otherLimbs, setPlaced, fields.bones ?? [], result.images, result.parts.rig_size, altSkeleton !== undefined ? 'skeleton' : alt.drawn !== undefined ? 'drawn' : 'none');
     if (altOthers !== undefined && input.setSplit === 'whole-limb') altOthers.line = 'whole-limb';
     // Issue #587: a subset set's limb part takes nothing a base part it does not replace covers at setup.
@@ -561,6 +575,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       altRes = assemble({
         source: altSrc,
         limbUnderCover: alt.parts !== undefined && input.setCover !== 'painting',
+        ...(altTips === undefined ? {} : { boneTips: altTips }),
         capOwnership: input.setCapOwnership ?? 'target',
         full: altRuns.full,
         head: altRuns.head,
@@ -624,6 +639,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         ...(altRes.parts.single_run_pad === undefined ? {} : { single_run_pad: altRes.parts.single_run_pad }),
         ...(altSkeleton === undefined ? {} : { skeleton: altSkeleton }),
         ...(alt.drawn === undefined ? {} : { drawn: { ...alt.drawn } }),
+        ...(altTips === undefined ? {} : { tips_source_size: [altSrc.width, altSrc.height], tips: altTips }),
         ...(altDrawnLength === undefined ? {} : { drawnLength: altDrawnLength }),
         ...(altRegistration === undefined ? {} : { registration: altRegistration }),
       },

@@ -337,6 +337,8 @@ export interface AssembleInput {
   limbs?: Record<string, Limb>;
   /** `config.bones`, read for the limbs' joints; required with `limbs`. */
   bones?: BoneEntry[];
+  /** Already normalized alternate endpoints; applied after bones have been posed. */
+  boneTips?: Record<string, [number, number]>;
   /** Each segment's `cap` image, decoded by the caller, keyed `<limb>/<segment index>`; a segment naming a cap with none here is refused (`ASSEMBLE_LIMB_CAP_PRESENT`). */
   caps?: ReadonlyMap<string, Raster>;
   /** One run (issue #359): `head` is `full`, `headBox` {@link singleRunHeadBox}, and {@link checkSingleRun} holds the plan to it. Absent: two runs. */
@@ -632,11 +634,12 @@ function keepJointIslands(
   H: number,
   floorShare: number,
   others?: OtherLimbs,
+  tips?: Record<string, [number, number]>,
 ): { counts: IslandCount[]; splits: SplitCount[]; problems: Problem[] } {
   const counts: IslandCount[] = [];
   const splits: SplitCount[] = [];
   const problems: Problem[] = [];
-  const places = bonePlaces(bones);
+  const places = bonePlaces(bones, tips);
   for (const src of sources) {
     const b = sourceOf(src);
     if (b === null) continue;
@@ -1007,11 +1010,11 @@ function splitOneIsland(
 function assignCapOwnership(
   sources: readonly string[], limbs: Readonly<Record<string, Limb>>, bones: readonly BoneEntry[],
   parts: readonly LimbPart[], pieces: readonly Built[], sourceOf: (name: string) => Built | null,
-  capFrom: ReadonlyArray<CapFrom | null>, W: number, H: number, others?: OtherLimbs,
+  capFrom: ReadonlyArray<CapFrom | null>, W: number, H: number, others?: OtherLimbs, tips?: Record<string, [number, number]>,
 ): { counts: SplitCount[]; problems: Problem[] } {
   const counts: SplitCount[] = [], problems: Problem[] = [];
   if (others === undefined) return { counts, problems };
-  const places = bonePlaces(bones);
+  const places = bonePlaces(bones, tips);
   const drawAt = new Map(others.drawOrder.map((name, i) => [name, i]));
   parts.forEach((q, i) => {
     const from = capFrom[i], source = sourceOf(q.of), piece = pieces[i];
@@ -3695,10 +3698,11 @@ function limbBands(
   W: number,
   H: number,
   caps: ((limb: string, segment: number) => CapRecord | undefined) | null,
+  tips?: Record<string, [number, number]>,
 ): { problems: Problem[]; past: Map<number, { limb: string; joint: string; part: string; bone: string }> } {
   const problems: Problem[] = [];
   const past = new Map<number, { limb: string; joint: string; part: string; bone: string }>();
-  const places = bonePlaces(bones);
+  const places = bonePlaces(bones, tips);
   const lineAbove = (l: string, k: number): JointLine | null => {
     const segs = limbs[l].segments;
     const up = places.get(segs[k - 1].bone);
@@ -3795,11 +3799,12 @@ function cutLimbs(
   count: (m: Mask | null, region: Mask) => number,
   hiddenOf: (part: string) => HiddenArt | null = () => null,
   readHidden: (layer: string, by: string) => void = () => undefined,
+  tips?: Record<string, [number, number]>,
 ): { parts: LimbPart[]; pieces: Built[]; counts: LimbCount[]; capFrom: Array<CapFrom | null> } {
   const names = Object.keys(limbs);
   if (names.length === 0) return { parts: [], pieces: [], counts: [], capFrom: [] };
   const problems: Problem[] = [];
-  const places = bonePlaces(bones);
+  const places = bonePlaces(bones, tips);
   const parts: LimbPart[] = [];
   for (const l of names) {
     const covering = limbs[l].split !== undefined;
@@ -4729,7 +4734,7 @@ export function assemble(input: AssembleInput): AssembleResult {
   cutCounts.sort((a, b) => cuts.findIndex((q) => q.into === a.into) - cuts.findIndex((q) => q.into === b.into));
 
   // Issue #564: a cut from a part a limb takes lies outside the limb's segments, read before the limbs are cut.
-  const bands = input.limbs === undefined || cuts.length === 0 ? null : limbBands(cuts, pieces, input.limbs, input.bones ?? [], W, H, null);
+  const bands = input.limbs === undefined || cuts.length === 0 ? null : limbBands(cuts, pieces, input.limbs, input.bones ?? [], W, H, null, input.boneTips);
   if (bands !== null) {
     refuseIfAny(bands.problems);
     for (const [i, at] of bands.past) {
@@ -4744,9 +4749,9 @@ export function assemble(input: AssembleInput): AssembleResult {
     const ci = cuts.findIndex((q) => q.into === name);
     return ci >= 0 ? pieces[ci] : null;
   };
-  const lim = cutLimbs(input.limbs ?? {}, input.bones ?? [], input.caps ?? new Map(), W, H, limbSource, opaqueOf, mergedIn, count, (name) => hiddenArt.get(name) ?? null, (layer, by) => hiddenUses.get(layer)?.push(by));
+  const lim = cutLimbs(input.limbs ?? {}, input.bones ?? [], input.caps ?? new Map(), W, H, limbSource, opaqueOf, mergedIn, count, (name) => hiddenArt.get(name) ?? null, (layer, by) => hiddenUses.get(layer)?.push(by), input.boneTips);
   // Issue #564: and the cap a run's own layer fills above its upper joint, read once the limbs are cut.
-  if (bands !== null) refuseIfAny(limbBands(cuts, pieces, input.limbs ?? {}, input.bones ?? [], W, H, (l, k) => lim.parts.find((q) => q.limb === l && q.segment === k)?.record.cap).problems);
+  if (bands !== null) refuseIfAny(limbBands(cuts, pieces, input.limbs ?? {}, input.bones ?? [], W, H, (l, k) => lim.parts.find((q) => q.limb === l && q.segment === k)?.record.cap, input.boneTips).problems);
   const limbPieces = lim.pieces;
   const order = limbOrder(order0, plan, cuts, lim.parts);
   const pieceAt = (d: { plan: number } | { cut: number } | { limb: number }): { name: string; b: Built } =>
@@ -4757,10 +4762,10 @@ export function assemble(input: AssembleInput): AssembleResult {
   const islandKept =
     (input.limbIslands ?? []).length === 0
       ? { counts: [], splits: [], problems: [] }
-      : keepJointIslands(input.limbIslands ?? [], input.limbs ?? {}, input.bones ?? [], lim.parts, limbPieces, limbSource, W, H, input.islandFloor ?? ISLAND_FLOOR_SHARE, input.otherLimbs);
+      : keepJointIslands(input.limbIslands ?? [], input.limbs ?? {}, input.bones ?? [], lim.parts, limbPieces, limbSource, W, H, input.islandFloor ?? ISLAND_FLOOR_SHARE, input.otherLimbs, input.boneTips);
   refuseIfAny(islandKept.problems);
   const capAssigned = input.capOwnership === 'source' ? { counts: [], problems: [] }
-    : assignCapOwnership(input.limbIslands ?? [], input.limbs ?? {}, input.bones ?? [], lim.parts, limbPieces, limbSource, lim.capFrom, W, H, input.otherLimbs);
+    : assignCapOwnership(input.limbIslands ?? [], input.limbs ?? {}, input.bones ?? [], lim.parts, limbPieces, limbSource, lim.capFrom, W, H, input.otherLimbs, input.boneTips);
   refuseIfAny(capAssigned.problems);
 
 

@@ -98,6 +98,7 @@ import ts from 'typescript';
 import { runNamedCutSkirtChecks } from './tools/check_named_cut_skirt.ts';
 import { runChainInheritChecks } from './tools/check_chain_inherit.ts';
 import { runSubsetCoverChecks } from './tools/check_subset_cover.ts';
+import { runAlternateTipsChecks } from './tools/check_alternate_tips.ts';
 import { runFootOwnershipChecks } from './tools/check_foot_ownership.ts';
 import { runLimbSlotChecks } from './tools/check_limb_slots.ts';
 import { runLimbLayoutChecks } from './tools/check_limb_layout.ts';
@@ -47045,6 +47046,20 @@ function runLimbSlotSuite(): number {
   return bad();
 }
 
+function runAlternateTipsSuite(): number {
+  section('alternate-tips: explicit source-crop endpoints with recorded rig provenance');
+  const { say, bad } = counter();
+  const dir = temp('alternate-tips');
+  let index = 0;
+  try {
+    runAlternateTipsChecks(dir, (name, pass, detail) => say(`AT${String(++index).padStart(2, '0')}_${name}`, pass, detail,
+      'issue #652: explicit per-set endpoints, unchanged origin/rotation, recorded provenance and public source-bound ownership'), rigcRunnerAt(suiteRigc(), spawnRigc));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  return bad();
+}
+
 function runLimbLayoutSuite(): number {
   section('limb-layout: explicit source-bound producer adjacency and final companion');
   const { say, bad } = counter();
@@ -47097,6 +47112,7 @@ const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number 
   ['foot-ownership', runFootOwnershipSuite],
   ['limb-slots', runLimbSlotSuite],
   ['limb-layout', runLimbLayoutSuite],
+  ['alternate-tips', runAlternateTipsSuite],
   ['plausibility', runPlausibilitySuite],
   ['assemble-examples', runAssembleExamplesSuite],
   ['skeleton', runSkeletonSuite],
@@ -47179,7 +47195,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
  */
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['check']],
-  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'subset-cover', 'foot-ownership', 'limb-slots', 'limb-layout', 'contour-wiring', 'config', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
+  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'subset-cover', 'foot-ownership', 'limb-slots', 'limb-layout', 'alternate-tips', 'contour-wiring', 'config', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
   ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'mesh-stats', 'remesh', 'retune', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
 ];
 
