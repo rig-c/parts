@@ -590,6 +590,7 @@ import { BASE_SPACINGS, CONTROL, describeWorst, displacement, frameOpenings, kin
 import { BEND_DEGREES, BEND_WORST_SHARE, bendAnimationNames, bendAnimations, type BendFigure, bendLinks, CALIBRATED_SENTENCE, candidateMesh, carriedBy, islandsJoin, MORE_TRIANGLES_FLAG, RELATIVE_SENTENCE, DUST_MAX_PX, DUST_MAX_SHARE, dustOf, figureRules, type GateLine, gateVerdict, IDLE_BOUND_PX, jsonValueSpan, MEASURED_SENTENCE, MESH_DRAFT_REPORT, meshDraftStage, NOT_COMPARED_SENTENCE, notCompared, partsNamed, type PartReadings, type Reading, READINGS, splicedConfig, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
 import { type Built, type CheckSide, checkHeldProblems, deltaRow, PROVENANCE_FILE, type RemeshInput, type RemeshPlant, type RemeshProvenance, type RemeshResult, remeshStage, requestHeldProblems, targetProblems } from './src/remesh.ts';
 import { deltaFrames } from './src/remesh.ts';
+import { INPUT_CHECK_FILE, INPUT_CHECK_SPEC } from './src/remesh.ts';
 import { RETUNE_FILE, RETUNE_SPEC, type RetuneInput, type RetunePlant, type RetuneProvenance, type RetuneResult, retuneStage } from './src/retune.ts';
 import { DRAFT_COARSE_GRID, DRAFT_CONTOUR_MARK, DRAFT_COSTLY_GRID, DRAFT_FIGURE, DRAFT_FINE_GRID, DRAFT_LINKS, DRAFT_SPECK_ALPHA, draftConfig, draftImages, draftParts, writeDraftFixture, writeDraftFixtureWithContour, writeDraftIslandsFixture } from './fixtures/meshdraft.ts';
 import { pyRound } from './src/round.ts';
@@ -39676,6 +39677,167 @@ function runRemeshSuite(): number {
       `${cases21.map(([what, got, want]) => `${what}: ${got === want ? 'named' : `got ${got.slice(0, 160)}`}`).join('; ')}; bad stops: ${badStops.slice(0, 140)}; the same bones to rig-c's evaluate as written: ${raws21.map((r) => r.slice(0, 70)).join(' / ')}; in order without stops posed as written: ${same21}; through the stage, tail1 before tail0 (swapped ${swapped}, bones ${swapRig.bones.map((b) => b.name).join(',')}): ${swapLine.slice(0, 200)}`,
       'issue #613 bar 2: an uncaught throw is a remesh that exits 1 with no line to act on; nothing is sorted into an order rigc would refuse to load, and a rig already in order is read exactly as before',
     );
+
+    // ---- issue #617: --record-input-check writes the input's check once, --input-check reuses it when it is bound ----
+    // RM30 — the positive control, through the CLI: RM01's request again with --record-input-check, then once more with
+    // that record as --input-check. The record run writes RM01's files and the record; the reuse run prints the line in
+    // place of every [check-input] line and writes RM01's files byte for byte, its check.input included. The number of
+    // rows is counted here off the disk: every file under the input, parts.json, every file under parts/.
+    const remeshArgs = ['remesh', '--rig', input, '--config', fx.config, '--parts', fx.parts, '--part', 'strip', '--mesh', gridReq];
+    const rec30 = join(root, 'rec30');
+    const runRec30 = runCli([...remeshArgs, '--out', rec30, '--record-input-check']);
+    const record30 = join(rec30, INPUT_CHECK_FILE);
+    const reuse30 = join(root, 'reuse30');
+    const runReuse30 = runCli([...remeshArgs, '--out', reuse30, '--input-check', record30]);
+    const filesUnder = (d: string): number => (existsSync(d) ? treeDigest(d).split('\n').length : 0);
+    const rows30 = filesUnder(input) + 1 + filesUnder(join(fx.parts, 'parts'));
+    const line30 = `  check-input: not run — ${record30} (${INPUT_CHECK_SPEC}) is bound to this input by ${rows30} sha256 row(s) (rig ${filesUnder(input)}, parts ${rows30 - filesUnder(input)}, requirements 0)`;
+    const withoutRecord = (d: string): string => treeDigest(d).split('\n').filter((l) => !l.startsWith(`${INPUT_CHECK_FILE} `)).join('\n');
+    const checkInputSpan = (dir: string): string => {
+      if (!existsSync(join(dir, PROVENANCE_FILE))) return 'absent';
+      const t = readFileSync(join(dir, PROVENANCE_FILE), 'utf8');
+      const i = t.indexOf('"input": {', t.indexOf('"check": {'));
+      return t.slice(i, t.indexOf('"revision": {', i));
+    };
+    const rec30Json = readJsonFile(record30) as { spec?: string; rig?: { dir: string }; check?: unknown } | null;
+    say(
+      'RM30_A_RECORDED_INPUT_CHECK_BOUND_TO_THE_INPUT_IS_REUSED_AND_THE_REVISION_IS_THE_ONE_A_MEASURED_RUN_WRITES',
+      runRec30.status === 0 &&
+        withoutRecord(rec30) === treeDigest(out1) &&
+        rec30Json?.spec === INPUT_CHECK_SPEC &&
+        rec30Json.rig?.dir === resolve(input) &&
+        JSON.stringify(rec30Json.check) === JSON.stringify(prov1?.check.input) &&
+        runRec30.out.includes('[check-input]') &&
+        runReuse30.status === 0 &&
+        treeDigest(reuse30) === treeDigest(out1) &&
+        checkInputSpan(reuse30) === checkInputSpan(out1) &&
+        checkInputSpan(out1).startsWith('"input": {') &&
+        runReuse30.out.includes(line30) &&
+        !runReuse30.out.includes('[check-input]') &&
+        runReuse30.out.includes('[check-revision]') &&
+        !run1.out.includes('check-input: not run') &&
+        !run1.out.includes(INPUT_CHECK_FILE) &&
+        treeDigest(input) === inputDigest,
+      `record run: exit ${runRec30.status}, ${filesUnder(rec30)} file(s), RM01's files ${withoutRecord(rec30) === treeDigest(out1) ? 'byte for byte' : 'NOT byte for byte'}, the record's check ${JSON.stringify(rec30Json?.check) === JSON.stringify(prov1?.check.input) ? 'is' : 'is NOT'} RM01's check.input; reuse run: exit ${runReuse30.status}, the line ${runReuse30.out.includes(line30) ? 'printed' : `NOT printed (wanted ${JSON.stringify(line30)})`}, ${runReuse30.out.split('\n').filter((l) => l.startsWith('[check-input]')).length} [check-input] line(s), files ${treeDigest(reuse30) === treeDigest(out1) ? "RM01's byte for byte" : "NOT RM01's"}, check.input text ${checkInputSpan(reuse30) === checkInputSpan(out1) ? `identical (${checkInputSpan(out1).length} chars)` : 'differs'}`,
+      'issue #617 bars 1 and 4: a strip of candidates against one inspected rig measures the input once; the reuse writes what a measured run writes, and a run without either flag prints and writes what it did before',
+    );
+
+    // RM31 — a record that is not this input's is refused by name before anything is built, nothing written: one byte of
+    // an input image changed (on a copy of the input, the record's rig.dir pointed at the copy, so that byte is the only
+    // difference), a row missing, another rig-parts version (the stage's "selftest" against the CLI's), another rigc (its
+    // --version output with a line added), and a requirements file the record was not measured with.
+    const input31 = join(root, 'input31');
+    cpSync(input, input31, { recursive: true });
+    const plantRecord = (name: string, edit: (r: Record<string, unknown>) => void): string => {
+      const r = JSON.parse(readFileSync(record30, 'utf8')) as Record<string, unknown>;
+      edit(r);
+      const at = join(root, `${name}.json`);
+      writeFileSync(at, `${JSON.stringify(r, null, 2)}\n`);
+      return at;
+    };
+    const record31 = plantRecord('record31', (r) => ((r.rig as { dir: string }).dir = resolve(input31)));
+    const pngAt = join(input31, 'images', 'strip.png');
+    const before31 = readFileSync(pngAt);
+    const flipped = new Uint8Array(before31);
+    flipped[flipped.length - 1] ^= 1;
+    writeFileSync(pngAt, flipped);
+    const sha = (b: Uint8Array): string => createHash('sha256').update(b).digest('hex');
+    const runByte31 = runCli(['remesh', '--rig', input31, '--config', fx.config, '--parts', fx.parts, '--part', 'strip', '--mesh', gridReq, '--out', join(root, 'out31-byte'), '--input-check', record31]);
+    const byteLine = `REMESH_INPUT_CHECK_BOUND: ${record31} rig.files "images/strip.png" — is "${before31.length} bytes sha256 ${sha(before31)}"; this run's input requires "${flipped.length} bytes sha256 ${sha(flipped)}"`;
+    const failLines = (out: string): string[] => out.split('\n').filter((l) => l.startsWith('  FAIL  '));
+    const recordedParts = (JSON.parse(readFileSync(record30, 'utf8')) as { versions: { parts: string } }).versions.parts;
+    const noRow = plantRecord('record31-row', (r) => {
+      const rig = r.rig as { files: Array<{ path: string }> };
+      rig.files = rig.files.filter((f) => f.path !== 'motion.json');
+    });
+    const reqs31 = join(root, 'reqs31.json');
+    writeFileSync(reqs31, `${JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [] })}\n`);
+    const added: RigcRunner = (args) => {
+      const r = runner(args);
+      return args[0] === '--version' ? { ...r, out: `${r.out.trim()}\nplanted: a second rigc\n` } : r;
+    };
+    const direct31 = (name: string, over: Partial<RemeshInput>, run: RigcRunner, partsVersion: string): { e: PartsError | null; out: string; log: string[] } => {
+      const out = join(root, `out31-${name}`);
+      const log: string[] = [];
+      const e = refusals(() => remeshStage({ rig: input, config: fx.config, parts: fx.parts, part: 'strip', mesh: gridReq, out, ...over }, run, rigc, { parts: partsVersion, rigc: 'selftest' }, join(root, `scratch31-${name}`), (l) => log.push(l)));
+      return { e, out, log };
+    };
+    const cases31: Array<[string, { e: PartsError | null; out: string; log: string[] }, string]> = [
+      ['another rig-parts', direct31('version', { inputCheck: record30 }, runner, 'selftest'), `REMESH_INPUT_CHECK_BOUND ${record30} versions.parts`],
+      ['another rigc', direct31('rigc', { inputCheck: record30 }, added, recordedParts), `REMESH_INPUT_CHECK_BOUND ${record30} versions.rigc`],
+      ['a row missing', direct31('row', { inputCheck: noRow }, runner, recordedParts), `REMESH_INPUT_CHECK_BOUND ${noRow} rig.files "motion.json"`],
+      ['a requirements file', direct31('reqs', { inputCheck: record30, requirements: reqs31 }, runner, recordedParts), `REMESH_INPUT_CHECK_BOUND ${record30} options.requirements`],
+    ];
+    const named31 = (c: { e: PartsError | null }): string => c.e?.problems.map((p) => `${p.code} ${p.object}`).join(' | ') ?? 'written';
+    say(
+      'RM31_A_RECORD_OF_ANOTHER_BYTE_ROW_VERSION_RIGC_OR_REQUIREMENTS_IS_REFUSED_BY_NAME_BEFORE_ANYTHING_IS_BUILT',
+      runByte31.status === 1 &&
+        failLines(runByte31.out).length === 1 &&
+        failLines(runByte31.out)[0] === `  FAIL  ${byteLine} — the input's images/strip.png is not the bytes the check read, so the recorded check is not this input's and nothing was written (see rig-parts guide REMESH_INPUT_CHECK_BOUND)` &&
+        !runByte31.out.includes('baseline') &&
+        !existsSync(join(root, 'out31-byte')) &&
+        cases31.every(([, c, want]) => named31(c) === want && c.log.length === 0 && !existsSync(c.out)) &&
+        (cases31[0][1].e?.problems[0].detail.startsWith(`is ${JSON.stringify(recordedParts)}; this run's input requires "selftest"`) ?? false) &&
+        (cases31[1][1].e?.problems[0].detail.includes('planted: a second rigc') ?? false) &&
+        (cases31[2][1].e?.problems[0].detail.startsWith('is "absent"; this run\'s input requires "') ?? false) &&
+        (cases31[3][1].e?.problems[0].detail.startsWith(`is null; this run's input requires {"path":${JSON.stringify(resolve(reqs31))},"sha256":"`) ?? false) &&
+        treeDigest(input) === inputDigest,
+      `one byte: exit ${runByte31.status}, ${failLines(runByte31.out).map((l) => l.trim().slice(0, 220)).join(' | ')}; ${cases31.map(([what, c]) => `${what}: ${named31(c)} (${c.log.length} line(s) logged, ${existsSync(c.out) ? 'WRITTEN' : 'nothing written'})`).join('; ')}`,
+      'issue #617 bar 2: a record is reused only when every file the input check reads, the requirements it was given and both versions are this run\'s — anything else is a check of another input, named by its row with the value recorded and the value required',
+    );
+
+    // RM32 — the flags and the file: --input-check twice or without a value and --record-input-check twice are usage
+    // errors (exit 2); a path that is no file, a file that is no JSON, another spec and a check side of another shape are
+    // REMESH_INPUT_CHECK_FILE (exit 1), each before anything is built; nothing is written.
+    const u32 = join(root, 'usage32');
+    const twice32 = runCli([...remeshArgs, '--out', u32, '--input-check', record30, '--input-check', record30]);
+    const bare32 = runCli([...remeshArgs, '--out', u32, '--input-check']);
+    const switch32 = runCli([...remeshArgs, '--out', u32, '--record-input-check', '--record-input-check']);
+    const missing32 = join(root, 'no-record.json');
+    const nojson32 = join(root, 'record32.txt');
+    writeFileSync(nojson32, 'not a record\n');
+    const spec32 = plantRecord('record32-spec', (r) => (r.spec = 'rig-parts-remesh/1'));
+    const side32 = plantRecord('record32-side', (r) => delete (r.check as Record<string, unknown>).line);
+    const files32: Array<[string, string, string]> = [
+      ['no file', missing32, `  FAIL  REMESH_INPUT_CHECK_FILE: ${missing32} — no such file; `],
+      ['no JSON', nojson32, `  FAIL  REMESH_INPUT_CHECK_FILE: ${nojson32} — does not parse as JSON: `],
+      ['another spec', spec32, `  FAIL  REMESH_INPUT_CHECK_FILE: ${spec32} field "spec" — is "rig-parts-remesh/1"; "${INPUT_CHECK_SPEC}" is required`],
+      ['a side without its line', side32, `  FAIL  REMESH_INPUT_CHECK_FILE: ${side32} field "check" — is not a check side`],
+    ];
+    const fileRuns32 = files32.map(([what, at, want]) => [what, runCli([...remeshArgs, '--out', u32, '--input-check', at]), want] as const);
+    say(
+      'RM32_THE_INPUT_CHECK_FLAGS_TWICE_OR_WITHOUT_A_VALUE_ARE_USAGE_AND_A_FILE_THAT_IS_NO_RECORD_IS_REFUSED_BY_NAME',
+      twice32.status === 2 &&
+        twice32.out.includes('USAGE: --input-check is given twice') &&
+        bare32.status === 2 &&
+        bare32.out.includes('USAGE: --input-check needs a value') &&
+        switch32.status === 2 &&
+        switch32.out.includes('USAGE: --record-input-check is given twice') &&
+        fileRuns32.every(([, r, want]) => r.status === 1 && failLines(r.out).length === 1 && failLines(r.out)[0].startsWith(want) && !r.out.includes('baseline')) &&
+        !existsSync(u32),
+      `${[twice32, bare32, switch32].map((r) => `exit ${r.status} ${r.out.split('\n')[0].trim()}`).join(' | ')}; ${fileRuns32.map(([what, r]) => `${what}: exit ${r.status} ${failLines(r.out).map((l) => l.trim().slice(0, 160)).join(' / ')}`).join('; ')}`,
+      'issue #617 bar 5: the flag is held as every other file flag of the command is — a usage error for the line, a named refusal for the file — and a record that is not of its spec\'s shape is never read as a check',
+    );
+
+    // RM33 — the two snapshots bracket the check (issue #617, review P2): a copy of the input whose motion.json gains a
+    // trailing newline after the first snapshot and before check-input reads it (the stage's test-only hook) is refused
+    // by name with both digests, computed here, and neither the record nor the revision is written.
+    const input33 = join(root, 'input33');
+    cpSync(input, input33, { recursive: true });
+    const motion33 = join(input33, 'motion.json');
+    const before33 = readFileSync(motion33);
+    const after33 = Buffer.concat([before33, Buffer.from('\n')]);
+    const out33 = join(root, 'out33');
+    const e33 = refusals(() => remeshStage({ rig: input33, config: fx.config, parts: fx.parts, part: 'strip', mesh: gridReq, out: out33, recordInputCheck: true }, runner, rigc, versions, join(root, 'scratch33'), () => {}, { beforeInputCheck: () => writeFileSync(motion33, after33) }));
+    const sha33 = (b: Uint8Array): string => createHash('sha256').update(b).digest('hex');
+    const want33 = `REMESH_INPUT_CHECK_MOVED ${join(resolve(input33), 'motion.json')} — was ${before33.length} bytes sha256 ${sha33(before33)} when the input was first hashed and is ${after33.length} bytes sha256 ${sha33(after33)} after check-input read it`;
+    const got33 = e33?.problems.map((p) => `${p.code} ${p.object} — ${p.detail}`) ?? [];
+    say(
+      'RM33_A_FILE_THAT_MOVES_BETWEEN_THE_FIRST_SNAPSHOT_AND_CHECK_INPUT_IS_REFUSED_BY_NAME_AND_NO_RECORD_IS_WRITTEN',
+      got33.length === 1 && got33[0].startsWith(want33) && !existsSync(out33) && treeDigest(input) === inputDigest,
+      `${got33.map((l) => l.slice(0, 260)).join(' | ') || 'written'}; ${existsSync(out33) ? 'WRITTEN' : 'nothing written'}`,
+      'issue #617 (review P2): a record pairs its rows with the check measured from them only when the input is the same before and after the check read it; otherwise a later reuse would skip a check on bytes the check never saw',
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -40021,6 +40183,107 @@ function runRetuneSuite(): number {
         twice9[0].startsWith('line: first difference at character '),
       `RN01's revision: check exit ${rev9.status}, carried ${JSON.stringify(side9?.line ?? null)}, ${driftRev9.length} difference(s)${driftRev9.length === 0 ? '' : `: ${driftRev9.join(' | ')}`}; statuses ${statusText9(side9)}; its input: check exit ${in9.status}, ${driftIn9.length} difference(s)${driftIn9.length === 0 ? '' : `: ${driftIn9.join(' | ')}`}; key order ${Object.keys(keys9?.revision ?? {}).join(',')}; physics moved to body: retune ${codes(warn9.e)} (input ${warnProv9?.check.input.status[CLOTH_LINE] ?? 'none'}, revision ${warnSide9?.status[CLOTH_LINE] ?? 'none'}), check exit ${warnRun9.status}, carried ${JSON.stringify(warnSide9?.line ?? null)}, ${driftWarn9.length} difference(s)${driftWarn9.length === 0 ? '' : `: ${driftWarn9.join(' | ')}`}; warning statuses dropped: ${dropped9.join(' | ') || 'not caught'}; line composed off the five fields: ${twice9.join(' | ') || 'not caught'}`,
       'issue #541: the retune\'s check block carries check\'s last line as check prints it (one composer, src/check.ts checkSummaryLine) and every block\'s status as check.json writes it, on both sides, so a consumer binds them to the revision by its hash rows instead of running check again; a revision whose cloth line is a WARN against the input\'s CLEAR is written, a warning never being a hold; a side without the warning lines, or a line composed a second way, is named by the key or the character where it parts',
+    );
+
+    // ---- issue #617: the recorded input check, through retune ----
+    // RN10 — the positive control, through the CLI: RN01's request with --record-input-check, then with that record as
+    // --input-check: RN01's files byte for byte, the record beside them, the line in place of every [check-input] line.
+    const retuneArgs = ['retune', '--rig', input, '--config', damping, '--parts', fx.parts];
+    const rec10 = join(root, 'rec10');
+    const runRec10 = runCli([...retuneArgs, '--out', rec10, '--record-input-check']);
+    const record10 = join(rec10, INPUT_CHECK_FILE);
+    const reuse10 = join(root, 'reuse10');
+    const runReuse10 = runCli([...retuneArgs, '--out', reuse10, '--input-check', record10]);
+    const filesUnder = (d: string): number => (existsSync(d) ? treeDigest(d).split('\n').length : 0);
+    const rows10 = filesUnder(input) + 1 + filesUnder(join(fx.parts, 'parts'));
+    const line10 = `  check-input: not run — ${record10} (${INPUT_CHECK_SPEC}) is bound to this input by ${rows10} sha256 row(s) (rig ${filesUnder(input)}, parts ${rows10 - filesUnder(input)}, requirements 0)`;
+    const withoutRecord = (d: string): string => treeDigest(d).split('\n').filter((l) => !l.startsWith(`${INPUT_CHECK_FILE} `)).join('\n');
+    const rec10Json = readJsonFile(record10) as { check?: unknown } | null;
+    say(
+      'RN10_A_RECORDED_INPUT_CHECK_BOUND_TO_THE_INPUT_IS_REUSED_AND_THE_REVISION_IS_THE_ONE_A_MEASURED_RUN_WRITES',
+      runRec10.status === 0 &&
+        withoutRecord(rec10) === treeDigest(out1) &&
+        JSON.stringify(rec10Json?.check) === JSON.stringify(prov1?.check.input) &&
+        runReuse10.status === 0 &&
+        treeDigest(reuse10) === treeDigest(out1) &&
+        runReuse10.out.includes(line10) &&
+        !runReuse10.out.includes('[check-input]') &&
+        runReuse10.out.includes('[check-revision]') &&
+        !run1.out.includes('check-input: not run') &&
+        !run1.out.includes(INPUT_CHECK_FILE) &&
+        treeDigest(input) === inputDigest,
+      `record run: exit ${runRec10.status}, RN01's files ${withoutRecord(rec10) === treeDigest(out1) ? 'byte for byte' : 'NOT byte for byte'}; reuse run: exit ${runReuse10.status}, the line ${runReuse10.out.includes(line10) ? 'printed' : `NOT printed (wanted ${JSON.stringify(line10)})`}, ${runReuse10.out.split('\n').filter((l) => l.startsWith('[check-input]')).length} [check-input] line(s), files ${treeDigest(reuse10) === treeDigest(out1) ? "RN01's byte for byte" : "NOT RN01's"}`,
+      'issue #617 bars 3 and 4: retune reads and writes the record as remesh does, and without either flag prints and writes what it did before',
+    );
+
+    // RN11 — refused by name under retune's own codes, before the rebuild, nothing written: another page-edges mode, a
+    // requirements file the record was not measured with, and a path that is no record.
+    const u11 = join(root, 'out11');
+    const recorded10 = JSON.parse(readFileSync(record10, 'utf8')) as { options: { page_edges: string } };
+    const otherEdges = recorded10.options.page_edges === 'free' ? 'pot' : 'free';
+    const edges11 = runCli([...retuneArgs, '--out', u11, '--input-check', record10, '--page-edges', otherEdges]);
+    const reqs11 = join(root, 'reqs11.json');
+    writeFileSync(reqs11, `${JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [] })}\n`);
+    const reqRun11 = runCli([...retuneArgs, '--out', u11, '--input-check', record10, '--requirements', reqs11]);
+    const missing11 = join(root, 'no-record.json');
+    const file11 = runCli([...retuneArgs, '--out', u11, '--input-check', missing11]);
+    const fails = (out: string): string[] => out.split('\n').filter((l) => l.startsWith('  FAIL  '));
+    say(
+      'RN11_A_RECORD_OF_ANOTHER_PACK_MODE_OR_REQUIREMENTS_AND_A_PATH_THAT_IS_NO_RECORD_ARE_REFUSED_UNDER_RETUNES_CODES',
+      edges11.status === 1 &&
+        fails(edges11.out).length === 1 &&
+        fails(edges11.out)[0].startsWith(`  FAIL  RETUNE_INPUT_CHECK_BOUND: ${record10} options.page_edges — is "${recorded10.options.page_edges}"; this run's input requires "${otherEdges}"`) &&
+        reqRun11.status === 1 &&
+        fails(reqRun11.out).length === 1 &&
+        fails(reqRun11.out)[0].startsWith(`  FAIL  RETUNE_INPUT_CHECK_BOUND: ${record10} options.requirements — is null; `) &&
+        file11.status === 1 &&
+        fails(file11.out).length === 1 &&
+        fails(file11.out)[0].startsWith(`  FAIL  RETUNE_INPUT_CHECK_FILE: ${missing11} — no such file; `) &&
+        [edges11, reqRun11, file11].every((r) => !r.out.includes('rebuild')) &&
+        !existsSync(u11),
+      [edges11, reqRun11, file11].map((r) => `exit ${r.status} ${fails(r.out).map((l) => l.trim().slice(0, 200)).join(' / ')}`).join(' | '),
+      'issue #617 bars 2 and 3: retune binds the record as remesh does and names its refusals as its own',
+    );
+
+    // RN12 — one record format for both commands: RN10's record, written by retune, reused by a remesh of the same input
+    // (the strip re-fitted on remesh's grid request), and --input-check twice is retune's usage error.
+    const grid12 = join(root, 'grid12.json');
+    writeFileSync(grid12, `${JSON.stringify(REMESH_GRID_REQUEST)}\n`);
+    const out12 = join(root, 'out12-remesh');
+    const log12: string[] = [];
+    const recordedVersion = (JSON.parse(readFileSync(record10, 'utf8')) as { versions: { parts: string } }).versions.parts;
+    const e12 = refusals(() => remeshStage({ rig: input, config: fx.config, parts: fx.parts, part: 'strip', mesh: grid12, out: out12, inputCheck: record10 }, runner, rigc, { parts: recordedVersion, rigc: 'selftest' }, join(root, 'scratch12'), (l) => log12.push(l)));
+    const remesh12 = readJsonFile(join(out12, PROVENANCE_FILE)) as RemeshProvenance | null;
+    const twice12 = runCli([...retuneArgs, '--out', join(root, 'usage12'), '--input-check', record10, '--input-check', record10]);
+    say(
+      'RN12_A_RECORD_RETUNE_WROTE_SERVES_A_REMESH_OF_THE_SAME_INPUT_AND_THE_FLAG_TWICE_IS_A_USAGE_ERROR',
+      e12 === null &&
+        log12.some((l) => l.startsWith(`  check-input: not run — ${record10} (${INPUT_CHECK_SPEC}) is bound to this input by ${rows10} sha256 row(s)`)) &&
+        !log12.some((l) => l.startsWith('[check-input]')) &&
+        JSON.stringify(remesh12?.check.input) === JSON.stringify(rec10Json?.check) &&
+        twice12.status === 2 &&
+        twice12.out.includes('USAGE: --input-check is given twice') &&
+        !existsSync(join(root, 'usage12')),
+      `remesh with retune's record: ${e12 === null ? 'written' : e12.problems.map(problemLine).join(' | ').slice(0, 300)}, ${log12.filter((l) => l.startsWith('[check-input]')).length} [check-input] line(s), check.input ${JSON.stringify(remesh12?.check.input) === JSON.stringify(rec10Json?.check) ? 'the record\'s' : 'NOT the record\'s'}; twice: exit ${twice12.status} ${twice12.out.split('\n')[0].trim()}`,
+      'issue #617: the input check both commands run is one call over the same files, so its record is one format and one binding',
+    );
+
+    // RN13 — RM33 under retune: motion.json gains a trailing newline between the first snapshot and check-input.
+    const input13 = join(root, 'input13');
+    cpSync(input, input13, { recursive: true });
+    const motion13 = join(input13, 'motion.json');
+    const before13 = readFileSync(motion13);
+    const after13 = Buffer.concat([before13, Buffer.from('\n')]);
+    const out13 = join(root, 'out13');
+    const e13 = refusals(() => retuneStage({ rig: input13, config: damping, parts: fx.parts, out: out13, recordInputCheck: true }, runner, rigc, versions, join(root, 'scratch13'), () => {}, { beforeInputCheck: () => writeFileSync(motion13, after13) }));
+    const sha13 = (b: Uint8Array): string => createHash('sha256').update(b).digest('hex');
+    const want13 = `RETUNE_INPUT_CHECK_MOVED ${join(resolve(input13), 'motion.json')} — was ${before13.length} bytes sha256 ${sha13(before13)} when the input was first hashed and is ${after13.length} bytes sha256 ${sha13(after13)} after check-input read it`;
+    const got13 = e13?.problems.map((p) => `${p.code} ${p.object} — ${p.detail}`) ?? [];
+    say(
+      'RN13_A_FILE_THAT_MOVES_BETWEEN_THE_FIRST_SNAPSHOT_AND_CHECK_INPUT_IS_REFUSED_UNDER_RETUNES_CODE',
+      got13.length === 1 && got13[0].startsWith(want13) && !existsSync(out13) && treeDigest(input) === inputDigest,
+      `${got13.map((l) => l.slice(0, 260)).join(' | ') || 'written'}; ${existsSync(out13) ? 'WRITTEN' : 'nothing written'}`,
+      'issue #617 (review P2): retune brackets the check with the same two snapshots',
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
