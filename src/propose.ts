@@ -154,7 +154,7 @@ import { configRoles, type RoleOf } from './structure.ts';
 import { AUTHOR_NO_ROLE, isAuthorTag } from './tags.ts';
 import { TURN_BONE, TURN_CARRIER_TAG, TURN_PLACES, TURN_RIDER_OFFSET, TURN_RIDER_TAGS, turnFractions, turnNearest, turnPivot, turnRiderDepth, type TurnSpec } from './turn.ts';
 import { edgeLength } from './length.ts';
-import { bonePlaces, jointLine, limbCrossing, limbPolyline, limbRun, limbWidth, nearestLimb, nearestOnLine, offLineFigure, type Pt } from './limbs.ts';
+import { bonePlaces, jointLine, type JointLine, limbCrossing, limbPolyline, limbRun, limbWidth, nearestLimb, nearestOnLine, offLineFigure, type Pt } from './limbs.ts';
 import { type BranchSqueezeFinding, branchSqueezes, chainSqueezes, type SqueezeFinding } from './squeeze.ts';
 import { backHairMasses, type BackHairMass, backHairMassTrees, INFLUENCE_RADIUS_CELLS, RECIPE_BACK_HAIR_CHAINS, RECIPE_LENGTH_RATIO, chainConstraints, clothNote, type ClothRecipe, type ClothRecipes, type ClothTarget, CLOTH_TARGETS, draftTrees, spanCrosses, swingName, type Tail, tailOverlap, type TailOverlap, type TailSpan, treeConstraints, type TreeChain, type TreeInput, type TreeMassInput } from './cloth.ts';
 import { TEXTURE_STRETCH_CEILING } from './check.ts';
@@ -2588,7 +2588,18 @@ export function proposeWithBasis(
   // legwear part carries its limbs. With joints, when the tagged route has no part for a complete limb, the one topwear
   // part that holds every such limb's joints is the figure layer: the trunk and those limbs split it by the cut.
   const lwTagged = P.byTag('legwear', undefined, true).filter((p) => p.opaque_px > 500);
-  const figure = joints === undefined ? null : figureLayerOf(P, hw, lwTagged, joints, { hip, chest, neck: neckAt });
+  // Issue #631: a part a cloth recipe names is that recipe's mesh, so it is never the figure layer.
+  const clothNamed = new Map<string, string>();
+  for (const t of CLOTH_TARGETS) {
+    const r = cloth?.[t];
+    if (r === undefined) continue;
+    for (const [field, v] of [['part', r.part], ['parts', r.parts]] as const) {
+      if (v === undefined) continue;
+      for (const n of typeof v === 'string' ? [v] : v) if (!clothNamed.has(n)) clothNamed.set(n, `config.cloth.${JSON.stringify(t)}.${field}`);
+    }
+  }
+  const figure = joints === undefined ? null : figureLayerOf(P, hw, lwTagged, joints, { hip, chest, neck: neckAt }, clothNamed);
+  if (figure !== null) notes.push(...figure.cloth);
   if (figure !== null && figure.part === null) notes.push(figure.note);
   const figPart = figure === null ? null : figure.part;
   if (figure !== null && figPart !== null) {
@@ -3944,6 +3955,14 @@ function legsFromJoints(P: PartSet, lw: readonly PartRecord[], joints: RigJoints
  *   by `linePixels`): a garment hung over both legs is one column there, and
  *   would be split into legs it does not have. Only `topwear`: `bottomwear`
  *   would split a skirt into legs, and the head run's tags carry the head;
+ * - **and on the art at every cut** (issue #629): the trunk's at `chest` and
+ *   `neck`, each arm's at its elbow, each leg's at its knee, read by
+ *   assemble's own test (`ASSEMBLE_LIMB_JOINT_ON_ART`, {@link limbRun} on the
+ *   joint line) — the 15 px above does not put a joint line on the art;
+ * - **not a part a cloth recipe names** (issue #631, `clothNamed`: part name
+ *   to the field naming it): it keeps the recipe's mesh, and a note says so;
+ *   when only such parts hold the joints, `PROPOSE_FIGURE_LAYER` refuses them
+ *   by name — cut into limbs, the recipe's trees would move no artwork;
  * - **one candidate** is the figure layer;
  * - **several**: the one with the most opaque px in the
  *   `(2 x WRIST_ON_PART_PX + 1)`-square about each of those points, summed (the
@@ -3962,7 +3981,8 @@ function figureLayerOf(
   lw: readonly PartRecord[],
   joints: RigJoints,
   trunk: { hip: [number, number]; chest: [number, number]; neck: [number, number] },
-): { part: PartRecord | null; arms: boolean; legs: boolean; note: string } | null {
+  clothNamed: ReadonlyMap<string, string>,
+): { part: PartRecord | null; arms: boolean; legs: boolean; note: string; cloth: string[] } | null {
   const J = joints.joints;
   const given = (a: KeypointName, b: KeypointName, c: KeypointName): boolean => {
     const p = J[a].at;
@@ -3995,13 +4015,64 @@ function figureLayerOf(
         return `${p.name}'s art does not break on the line from ${a} to ${b}: the legs are one column there, as a garment over both legs is`;
       }
     }
+    return cutOffArt(p);
+  };
+  // Issue #629: each cut the draft would make on the layer — the trunk's at chest and neck, each arm's at its elbow,
+  // each leg's at its knee — read as assemble's cap reads it (`cutLimbs`, src/assemble.ts): the joint line through the
+  // lower bone's origin ({@link jointLine}), and the run of the limb's own art along it within 1 px ({@link limbRun}),
+  // each pixel the limb's whose polyline passes nearest it ({@link nearestLimb}), the limbs in the order the draft
+  // writes them. The points above lying within 15 px of the art does not put the joint line on it.
+  const cutOffArt = (p: PartRecord): string | null => {
+    const m = P.alpha(p);
+    const box = [0, 0, P.W - 1, P.H - 1] as const;
+    const arms = armSides.length > 0 ? (armsFromJoints(P, [p], joints, null, false).arms ?? []) : [];
+    const legs = legSides.length > 0 ? (legsFromJoints(P, [p], joints).chains ?? []) : [];
+    const [h, c, n] = [rnd(trunk.hip), rnd(trunk.chest), rnd(trunk.neck)];
+    const limbs: Array<{ limb: string; poly: Pt[]; cuts: Array<{ joint: string; line: JointLine | null }> }> = [
+      { limb: 'trunk', poly: [h, c, n], cuts: [{ joint: 'chest', line: jointLine(h, c, n) }, { joint: 'neck', line: jointLine(c, n, null) }] },
+      ...arms.map((a) => {
+        const [s, e, t] = [rnd(a.shoulder), rnd(a.elbow), rnd(a.tip)];
+        return { limb: `arm_${a.side}`, poly: [s, e, t], cuts: [{ joint: `${a.side}_elbow`, line: jointLine(s, e, t) }] };
+      }),
+      ...legs.map((g) => {
+        const [hp, k, an] = [rnd(g.hip), rnd(g.knee), rnd(g.ankle)];
+        return { limb: `leg_${g.side}`, poly: [hp, k, an], cuts: [{ joint: `${g.side}_knee`, line: jointLine(hp, k, an) }] };
+      }),
+    ];
+    const polys = limbs.map((l) => l.poly);
+    for (const [i, l] of limbs.entries()) {
+      const art = (x: number, y: number): boolean => x >= 0 && y >= 0 && x < P.W && y < P.H && m.data[y * P.W + x] === 1 && nearestLimb(polys, x, y) === i;
+      for (const { joint, line } of l.cuts) {
+        // A cut with no joint line is assemble's ASSEMBLE_LIMB_JOINT, named there; this reads only where the line is.
+        if (line === null || limbRun(line, art, box) !== null) continue;
+        return `${p.name}'s art is not on the ${joint} cut of ${l.limb}: the joint at [${line.at.join(', ')}] lies on none of ${l.limb}'s art within 1 px along its joint line (${offLineFigure(nearestOnLine(line, art, box))}), where assemble refuses the cut (ASSEMBLE_LIMB_JOINT_ON_ART)`;
+      }
+    }
     return null;
   };
   const read = tw.map((p) => ({ p, miss: misses(p) }));
-  const holds = read.filter((r) => r.miss === null).map((r) => r.p);
   const what = `every joint of ${limbNames.join(', ')} and the origins of hip, chest and neck`;
+  // Issue #631: a part a cloth recipe names explicitly is that recipe's mesh; a limb takes every pixel of its part, so as
+  // the figure layer its mesh would be dropped and the recipe's trees would control no artwork. It is no candidate.
+  const named = read.filter((r) => r.miss === null && clothNamed.has(r.p.name)).map((r) => r.p);
+  const holds = read.filter((r) => r.miss === null && !clothNamed.has(r.p.name)).map((r) => r.p);
+  const recipeOf = (p: PartRecord): string => clothNamed.get(p.name) as string;
+  if (named.length > 0 && holds.length === 0) {
+    throw new PartsError([
+      {
+        code: 'PROPOSE_FIGURE_LAYER',
+        object: `${named.length === 1 ? 'part' : 'parts'} ${named.map((p) => `"${p.name}"`).join(', ')} (topwear)`,
+        detail: `${why}, and only ${named.length === 1 ? 'it holds' : 'they hold'} within ${WRIST_ON_PART_PX} px ${what}, but ${named.map((p) => `${recipeOf(p)} names "${p.name}"`).join(' and ')}: a cloth recipe's part keeps the recipe's mesh, and a limb takes every pixel of its part, so cut into limbs the recipe's trees would control no artwork (issue #631); a figure layer no cloth recipe names is required — give the arms and legs their own handwear and legwear layers, or take the part out of the recipe`,
+      },
+    ]);
+  }
+  const cloth = named.map(
+    (p) =>
+      `${p.name} (${p.from}): not the figure layer, though its art holds within ${WRIST_ON_PART_PX} px ${what} — ${recipeOf(p)} names it, so it keeps the cloth recipe's mesh: a limb takes every pixel of its part, and cut into limbs the recipe's trees would control no artwork (issue #631)`,
+  );
   if (holds.length === 0) {
     return {
+      cloth,
       part: null,
       arms: false,
       legs: false,
@@ -4033,6 +4104,7 @@ function figureLayerOf(
   const fig = scored[0].p;
   const over = scored.length > 1 ? `; of the ${scored.length} topwear parts that hold them it has the most opaque px in the ${2 * half + 1}x${2 * half + 1} squares about those points, ${scored.map((c) => `${c.p.name} ${c.n}`).join(', ')}` : '';
   return {
+    cloth,
     part: fig,
     arms: armSides.length > 0,
     legs: legSides.length > 0,
