@@ -107,6 +107,7 @@ import { type CapRecord, type LimbRecord, PAINTING_RUN, type PartRecord, type Pa
 import { assignCrossedLimbs, assignOverlappingHands, type BonePlace, bonePlaces, capBox, coveredRadius, type CutPlacement, featherWeight, halfWidthAbout, inDisc, jointLine, type JointLine, jointOffsets, limbPolyline, limbRun, luma601, nearestLimb, nearestOnLine, offLineFigure, pastJoint, placeCut, segmentOf } from './limbs.ts';
 import {
   alphaComposite,
+  type Components,
   connectedComponents,
   crop,
   dilate,
@@ -360,6 +361,12 @@ export interface AssembleInput {
    * nothing changes.
    */
   limbIslands?: readonly string[];
+  /**
+   * Issue #608: the share of a layer's largest island under which `limbIslands` reads an island as a speck. Absent:
+   * {@link ISLAND_FLOOR_SHARE}. Kept for the selftest's mutant, which passes 0 to read every island as a candidate,
+   * the rule before #608; no config field and no command reaches it.
+   */
+  islandFloor?: number;
 }
 
 /** One base part's cover over one of a subset set's limb parts (issue #587): `part` loses its pixels where `mask` is 1. */
@@ -419,16 +426,25 @@ export function setExclusions(base: readonly PlacedPart[], W: number, H: number,
 /**
  * What one limb segment part kept of a layer that holds more than one island (issue #588): the layer's island count,
  * the joints the kept island lies under, and the part's pixels (alpha above `OPAQUE_ALPHA_ABOVE`) on it and on the
- * islands dropped.
+ * islands dropped. Issue #608: `islands` counts the candidates (islands at or above the floor, {@link readIslands});
+ * `specks` the islands under it, each of which goes with the candidate nearest it, and `dust` those of them equally
+ * near two, which go with none; a joint on no island that was assigned to the nearest within its cap's radius carries
+ * `off`, its distance and that radius; `droppedIslands` counts the islands (candidates, and dust specks) the part lost a
+ * pixel above `OPAQUE_ALPHA_ABOVE` from.
  */
 export interface IslandCount {
   part: string;
   /** The part the limb took (the segment's `from`). */
   of: string;
   islands: number;
-  joints: Array<{ bone: string; at: [number, number] }>;
+  specks: number;
+  dust: number;
+  /** The floor in pixels: `ISLAND_FLOOR_SHARE` of the largest island's area. */
+  floor: number;
+  joints: Array<{ bone: string; at: [number, number]; off?: { distance: number; margin: number } }>;
   kept: number;
   dropped: number;
+  droppedIslands: number;
 }
 
 /**
@@ -452,19 +468,115 @@ function pixelsAt(at: readonly [number, number], W: number, H: number): number[]
 }
 
 /**
+ * Issue #608: the share of a layer's largest island under which an island is a speck, not a candidate for a limb to
+ * keep — the ghost clean-up's own share (`GHOST_MIN_FRACTION`, the card's "under 1 %"), over the same islands (8-connected,
+ * alpha above `OPAQUE_ALPHA_ABOVE`). A share rather than a pixel count because the islands are read in rig pixels,
+ * whose size is the config's `rig_scale`, while the clean-up's `GHOST_MIN_AREA` is a count of run pixels.
+ */
+export const ISLAND_FLOOR_SHARE = GHOST_MIN_FRACTION;
+
+/** How {@link readIslands} sorted a layer's islands. */
+export interface IslandReading {
+  /** The candidates' labels, numbered as the LINT and the refusals number them: by area, largest first, then top row, then left column. */
+  candidates: number[];
+  /** The specks' labels, in the same order. */
+  specks: number[];
+  /** Per label: the candidate it goes with — itself for a candidate, the nearest candidate for a speck, 0 for a speck equally near two (dust) and for the background. */
+  owner: Int32Array;
+  /** `share` of the largest island's area, in pixels. */
+  floor: number;
+}
+
+/**
+ * Issue #608: a layer's islands sorted into candidates and specks.
+ *
+ * ⚖️ Invariant: an island is a candidate when its area is at least `share` times the largest island's — the
+ * inequality `cleanGhosts` keeps a component by — and a speck otherwise. A speck goes with the candidate nearest it:
+ * the one holding the pixel whose centre is nearest a centre of the speck's (squared distances, which are integers);
+ * equally near two, it goes with none. A speck beside a leg is the leg's whichever side of it the joints are, and one
+ * nearer the other leg is the other leg's; none is a candidate a joint could choose. `share` is
+ * {@link ISLAND_FLOOR_SHARE} but in the selftest's mutant, which reads the floor off (0) to show what it decides.
+ */
+export function readIslands(cc: Components, W: number, H: number, share: number): IslandReading {
+  const order = cc.stats.slice(1).sort((a, c) => c.area - a.area || a.top - c.top || a.left - c.left);
+  const big = order.length === 0 ? 0 : order[0].area;
+  const floor = share * big;
+  const candidates = order.filter((st) => st.area >= floor).map((st) => st.label);
+  const specks = order.filter((st) => st.area < floor).map((st) => st.label);
+  const owner = new Int32Array(cc.count);
+  for (const l of candidates) owner[l] = l;
+  if (specks.length > 0) {
+    // The nearest pixel of a set to a point outside it is on the set's edge (a step toward the point from any other
+    // pixel of it lands on one of its pixels, nearer), so only the candidates' edge pixels are read.
+    const isSpeck = new Uint8Array(cc.count);
+    for (const l of specks) isSpeck[l] = 1;
+    const edge: Array<[number, number, number]> = [];
+    const speckPx = new Map<number, Array<[number, number]>>(specks.map((l) => [l, []]));
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const l = cc.labels[y * W + x];
+        if (l === 0) continue;
+        if (isSpeck[l] === 1) {
+          speckPx.get(l)?.push([x, y]);
+          continue;
+        }
+        const inside = (u: number, v: number): boolean => u >= 0 && v >= 0 && u < W && v < H && cc.labels[v * W + u] === l;
+        if (!inside(x - 1, y) || !inside(x + 1, y) || !inside(x, y - 1) || !inside(x, y + 1)) edge.push([x, y, l]);
+      }
+    }
+    for (const s of specks) {
+      let best = Infinity;
+      let to = 0;
+      for (const [ex, ey, l] of edge) {
+        for (const [sx, sy] of speckPx.get(s) ?? []) {
+          const d = (ex - sx) ** 2 + (ey - sy) ** 2;
+          if (d < best) {
+            best = d;
+            to = l;
+          } else if (d === best && l !== to) {
+            to = 0;
+          }
+        }
+      }
+      owner[s] = to;
+    }
+  }
+  return { candidates, specks, owner, floor };
+}
+
+/** The squared distance from the point `at` to the nearest pixel centre of island `label` (Infinity for none). */
+function squaredDistanceTo(cc: Components, W: number, label: number, at: readonly [number, number]): number {
+  const st = cc.stats[label];
+  let best = Infinity;
+  for (let y = st.top; y < st.top + st.height; y++) {
+    for (let x = st.left; x < st.left + st.width; x++) {
+      if (cc.labels[y * W + x] !== label) continue;
+      const d = (x + 0.5 - at[0]) ** 2 + (y + 0.5 - at[1]) ** 2;
+      if (d < best) best = d;
+    }
+  }
+  return best;
+}
+
+/**
  * Issue #588: on each of `sources` that holds more than one island, keep in every limb segment part cut from it the
  * island its joints fall on, and clear the rest (alpha, colour and region).
  *
  * ⚖️ Invariant: an island is an 8-connected component of the part's pixels with alpha above `OPAQUE_ALPHA_ABOVE` —
- * the ghost clean-up's own rule (`cleanGhosts`); a pixel at or below it is on no island and is kept. A segment's joints are its bone's origin and, when a
- * segment follows it, the next segment's bone's origin (a bone's tip is no joint: the limb ends there), placed by
- * `bones` — the set's bones, posed or placed as its cut. A joint is on the island of a pixel whose square holds the
- * point; with 8-connectivity the pixels that share a point are one island, so a joint is on one island or on none.
- * Every joint of a segment on one island is required: a joint on none (`ASSEMBLE_ALT_LIMB_ISLAND`, the joint and the
- * islands named) or a segment whose joints fall on two names no island to keep, and is refused rather than guessed.
- * A source with one island is left as cut and counted nowhere, so a set whose layer holds its one leg writes what it
- * wrote before. A pixel the limbs wrote where the source is transparent (a `cap_shape: "ball"` lower half from the
- * cap image) is on no island and kept.
+ * the ghost clean-up's own rule (`cleanGhosts`); a pixel at or below it is on no island and is kept. Issue #608: an
+ * island under `floorShare` of the largest is a speck, which goes with its nearest candidate ({@link readIslands}); the
+ * rule runs on a source of two candidates or more, so a speck never makes a layer of one leg a layer of two. A
+ * segment's joints are its bone's origin and, when a segment follows it, the next segment's bone's origin (a bone's
+ * tip is no joint: the limb ends there), placed by `bones` — the set's bones, posed or placed as its cut. A joint is
+ * on the island of a pixel whose square holds the point (a speck's pixel puts it on that speck's candidate); with
+ * 8-connectivity the pixels that share a point are one island, so a joint is on one island or on none. A joint on
+ * none goes to the candidate whose nearest pixel centre lies within the radius of the cap cut at that joint (the
+ * lower segment's `cap.radius`, its disc's own reach, the inequality `inDisc` reads) when exactly one does; with none
+ * within it, two within it, or no cap at the joint (a limb's first joint carries none), `ASSEMBLE_ALT_LIMB_ISLAND`
+ * names the joint, the distances and the radius. A segment whose joints fall on two islands names no island to keep
+ * either, and is refused rather than guessed. A source with one candidate is left as cut and counted nowhere, so a
+ * set whose layer holds its one leg writes what it wrote before. A pixel the limbs wrote where the source is
+ * transparent (a `cap_shape: "ball"` lower half from the cap image) is on no island and kept.
  */
 function keepJointIslands(
   sources: readonly string[],
@@ -475,6 +587,7 @@ function keepJointIslands(
   sourceOf: (name: string) => Built | null,
   W: number,
   H: number,
+  floorShare: number,
 ): { counts: IslandCount[]; problems: Problem[] } {
   const counts: IslandCount[] = [];
   const problems: Problem[] = [];
@@ -485,42 +598,64 @@ function keepJointIslands(
     const m = newMask(W, H);
     for (let p = 0; p < W * H; p++) m.data[p] = b.r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE ? 1 : 0;
     const cc = connectedComponents(m, 8);
-    const n = cc.count - 1;
+    const reading = readIslands(cc, W, H, floorShare);
+    const n = reading.candidates.length;
     if (n < 2) continue;
-    // Numbered by area, largest first, then by the box's top row and left column: a function of the pixels, not of a scan.
-    const order = cc.stats.slice(1).sort((a, c) => c.area - a.area || a.top - c.top || a.left - c.left);
-    const numberOf = new Map(order.map((st, i) => [st.label, i + 1]));
+    const numberOf = new Map(reading.candidates.map((l, i) => [l, i + 1]));
     const islandText = (label: number): string => {
       const st = cc.stats[label];
       return `island ${numberOf.get(label)} (${st.area} px at ${st.left},${st.top} ${st.width}x${st.height})`;
     };
-    const all = order.map((st) => islandText(st.label)).join(', ');
+    const speckText =
+      reading.specks.length === 0
+        ? ''
+        : `, and ${reading.specks.length} speck${reading.specks.length === 1 ? '' : 's'} under ${pyRound(floorShare * 100, 3)} % of the largest (${pyRound(reading.floor, 3)} px), each with the island nearest it`;
+    const all = reading.candidates.map((l) => islandText(l)).join(', ');
+    const dust = reading.specks.filter((l) => reading.owner[l] === 0).length;
     parts.forEach((q, i) => {
       if (q.of !== src) return;
       const segs = limbs[q.limb].segments;
       const object = `config.limbs.${q.limb}.segments[${q.segment}] (part "${q.part}")`;
-      const jointBones = [segs[q.segment].bone, ...(q.segment + 1 < segs.length ? [segs[q.segment + 1].bone] : [])];
-      const joints = jointBones.map((bone) => {
+      const jointSegs = [q.segment, ...(q.segment + 1 < segs.length ? [q.segment + 1] : [])];
+      const head = `takes "${src}", which holds ${n} islands (8-connected, alpha above ${OPAQUE_ALPHA_ABOVE}): ${all}${speckText}; the set names one of the limbs that take "${src}", so the segment keeps the island its joints fall on`;
+      const joints: Array<{ bone: string; at: [number, number]; label: number; off?: { distance: number; margin: number } }> = [];
+      for (const k of jointSegs) {
+        const bone = segs[k].bone;
         const at = (places.get(bone) as BonePlace).at;
-        const labels = [...new Set(pixelsAt(at, W, H).map((p) => cc.labels[p]).filter((l) => l > 0))];
-        return { bone, at: [pyRound(at[0], 3), pyRound(at[1], 3)] as [number, number], labels };
-      });
-      const where = (j: (typeof joints)[number]): string => `"${j.bone}"'s origin at [${j.at.join(', ')}]`;
-      const off = joints.find((j) => j.labels.length === 0);
-      if (off !== undefined) {
-        problems.push({
-          code: 'ASSEMBLE_ALT_LIMB_ISLAND',
-          object,
-          detail: `takes "${src}", which holds ${n} islands (8-connected, alpha above ${OPAQUE_ALPHA_ABOVE}): ${all}; the set names one of the limbs that take "${src}", so the segment keeps the island its joints fall on, and its joint ${where(off)} is on none of them — no pixel touching the point has alpha above ${OPAQUE_ALPHA_ABOVE}; a bone origin on its limb's art is required (move the bone onto the joint), or a layer that holds this limb alone`,
-        });
-        return;
+        const rounded: [number, number] = [pyRound(at[0], 3), pyRound(at[1], 3)];
+        const where = `"${bone}"'s origin at [${rounded.join(', ')}]`;
+        const on = [...new Set(pixelsAt(at, W, H).map((p) => reading.owner[cc.labels[p]]).filter((l) => l > 0))];
+        if (on.length > 0) {
+          joints.push({ bone, at: rounded, label: on[0] });
+          continue;
+        }
+        // Issue #608: a joint on no island goes to the one candidate within its cap's radius.
+        const cap = k === 0 ? undefined : parts.find((r) => r.limb === q.limb && r.segment === k)?.record.cap;
+        const d2 = reading.candidates.map((l) => ({ l, d2: squaredDistanceTo(cc, W, l, at) }));
+        const figures = d2.map((e) => `island ${numberOf.get(e.l)} at ${pyRound(Math.sqrt(e.d2), 3)} px`).join(', ');
+        const stem = `${head}, and its joint ${where} is on none of them — no pixel touching the point has alpha above ${OPAQUE_ALPHA_ABOVE}; the nearest pixel centre of each: ${figures}`;
+        const fix = 'a bone origin on its limb\'s art is required (move the bone onto the joint), or a layer that holds this limb alone';
+        if (cap === undefined) {
+          problems.push({ code: 'ASSEMBLE_ALT_LIMB_ISLAND', object, detail: `${stem}; no cap is cut at this joint (a limb's first joint carries none), so no radius says which island is near enough to be the limb's; ${fix}` });
+          return;
+        }
+        const within = d2.filter((e) => e.d2 <= cap.radius * cap.radius);
+        if (within.length !== 1) {
+          problems.push({
+            code: 'ASSEMBLE_ALT_LIMB_ISLAND',
+            object,
+            detail: `${stem}; ${within.length === 0 ? 'none lies' : `${within.length} lie`} within the radius of the cap cut at it, ${pyRound(cap.radius, 3)} px, and exactly one is required to take a joint off the art; ${fix}`,
+          });
+          return;
+        }
+        joints.push({ bone, at: rounded, label: within[0].l, off: { distance: pyRound(Math.sqrt(within[0].d2), 3), margin: pyRound(cap.radius, 3) } });
       }
-      const on = [...new Set(joints.flatMap((j) => j.labels))];
+      const on = [...new Set(joints.map((j) => j.label))];
       if (on.length > 1) {
         problems.push({
           code: 'ASSEMBLE_ALT_LIMB_ISLAND',
           object,
-          detail: `takes "${src}", which holds ${n} islands (8-connected, alpha above ${OPAQUE_ALPHA_ABOVE}): ${all}; the set names one of the limbs that take "${src}", so the segment keeps the island its joints fall on, and they fall on ${on.length}: ${joints.map((j) => `${where(j)} on ${islandText(j.labels[0])}`).join(', ')}; every joint of a segment on one island is required — one stroke of art from joint to joint, or a layer that holds this limb alone`,
+          detail: `${head}, and they fall on ${on.length}: ${joints.map((j) => `"${j.bone}"'s origin at [${j.at.join(', ')}] ${j.off === undefined ? 'on' : `${j.off.distance} px off, within its cap's radius ${j.off.margin} of`} ${islandText(j.label)}`).join(', ')}; every joint of a segment on one island is required — one stroke of art from joint to joint, or a layer that holds this limb alone`,
         });
         return;
       }
@@ -528,30 +663,56 @@ function keepJointIslands(
       const piece = pieces[i];
       let kept = 0;
       let dropped = 0;
+      const lost = new Set<number>();
       for (let p = 0; p < W * H; p++) {
         const a = piece.r.data[p * 4 + 3];
         const l = cc.labels[p];
         if (a === 0 || l === 0) continue;
-        if (l === keep) {
+        const o = reading.owner[l];
+        if (o === keep) {
           if (a > OPAQUE_ALPHA_ABOVE) kept++;
           continue;
         }
-        if (a > OPAQUE_ALPHA_ABOVE) dropped++;
+        if (a > OPAQUE_ALPHA_ABOVE) {
+          dropped++;
+          // A dust speck is an island of its own; any other pixel counts as its candidate's.
+          lost.add(o === 0 ? -l : o);
+        }
         piece.r.data.fill(0, p * 4, p * 4 + 4);
         if (piece.region !== null) piece.region.data[p] = 0;
       }
-      counts.push({ part: q.part, of: src, islands: n, joints: joints.map((j) => ({ bone: j.bone, at: j.at })), kept, dropped });
+      counts.push({
+        part: q.part,
+        of: src,
+        islands: n,
+        specks: reading.specks.length,
+        dust,
+        floor: pyRound(reading.floor, 3),
+        joints: joints.map((j) => ({ bone: j.bone, at: j.at, ...(j.off === undefined ? {} : { off: j.off }) })),
+        kept,
+        dropped,
+        droppedIslands: lost.size,
+      });
     });
   }
   return { counts, problems };
 }
 
-/** One `LINT` line per {@link IslandCount} (issue #588), in `config.limbs` order. */
+/**
+ * One `LINT` line per {@link IslandCount} (issue #588), in `config.limbs` order. Issue #608: the specks under the floor
+ * are named when there are any, a joint taken to the nearest island carries its distance and its cap's radius, and
+ * the islands dropped are the ones the part lost a pixel from — `dropped none` when it lost none, never `dropped 1 (0 px)`.
+ */
 export function islandLines(set: string, counts: readonly IslandCount[]): string[] {
-  return counts.map(
-    (c) =>
-      `  LINT set "${set}" ${c.part}: ${c.of} holds ${c.islands} islands (8-connected, alpha above ${OPAQUE_ALPHA_ABOVE}), kept the one under ${c.joints.map((j) => `${j.bone} [${j.at.join(', ')}]`).join(' and ')} (${c.kept} px), dropped ${c.islands - 1} (${c.dropped} px)`,
-  );
+  return counts.map((c) => {
+    const specks =
+      c.specks === 0
+        ? ''
+        : `, and ${c.specks} speck${c.specks === 1 ? '' : 's'} under ${pyRound(ISLAND_FLOOR_SHARE * 100, 3)} % of the largest (${c.floor} px), each with the island nearest it${c.dust === 0 ? '' : ` (${c.dust} equally near two, with none)`}`;
+    const joints = c.joints.map((j) => `${j.bone} [${j.at.join(', ')}]${j.off === undefined ? '' : ` (${j.off.distance} px off it, within its cap's radius ${j.off.margin})`}`).join(' and ');
+    const dropped = c.droppedIslands === 0 ? 'dropped none' : `dropped ${c.droppedIslands} (${c.dropped} px)`;
+    return `  LINT set "${set}" ${c.part}: ${c.of} holds ${c.islands} islands (8-connected, alpha above ${OPAQUE_ALPHA_ABOVE})${specks}, kept the one under ${joints} (${c.kept} px), ${dropped}`;
+  });
 }
 
 /** One `LINT` line per {@link ExcludedCount} that took a pixel (issue #587); none for a count of 0. */
@@ -4115,7 +4276,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     'plan' in d ? { name: plan[d.plan][0], b: built[d.plan] as Built } : 'cut' in d ? { name: cuts[d.cut].into, b: pieces[d.cut] as Built } : { name: lim.parts[d.limb].part, b: limbPieces[d.limb] as Built };
 
   // Issue #588: a set that names one limb side keeps, in each part cut from a layer of more than one island, the island its joints fall on.
-  const islandKept = (input.limbIslands ?? []).length === 0 ? { counts: [], problems: [] } : keepJointIslands(input.limbIslands ?? [], input.limbs ?? {}, input.bones ?? [], lim.parts, limbPieces, limbSource, W, H);
+  const islandKept = (input.limbIslands ?? []).length === 0 ? { counts: [], problems: [] } : keepJointIslands(input.limbIslands ?? [], input.limbs ?? {}, input.bones ?? [], lim.parts, limbPieces, limbSource, W, H, input.islandFloor ?? ISLAND_FLOOR_SHARE);
   refuseIfAny(islandKept.problems);
 
   // Issue #587: a set's limb part loses the pixels a base part it does not replace covers, before anything is counted.

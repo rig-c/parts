@@ -116,8 +116,13 @@ export interface ClothRecipe {
  * cloth fixture and the public `wind` example (8 covered parts, `render --folds` with the physics on under wind
  * +1 -> -1 -> calm and a hip sway of 8 and 30 degrees, max 6, across, smooth): farthest + 2 to + 6 cells read 0
  * folded frames on every part, + 2 at the window's edge on one front-hair part, and a fold returned at 8-11 cells on
- * another. 3 is one cell inside that edge. [Hypothesis until a third subject: each edge rests on one part.] Past the
- * floor alone the mesh folds more than its lattice, and a larger radius is not safer; no ceiling is drafted.
+ * another. That reading counted folds only. Read against `check` as well (the rig as built under the same wind
+ * schedule, the three covered `wind` parts at the same number of cells), + 4 is the ceiling: `wind` `bottomwear`'s
+ * `CHECK_TIP_OVER_ROOT` ratio is 1.898 on the lattice, 1.801 at + 2 cells, 1.590 at + 3 and 1.471 at + 4, under the
+ * floor 1.4725, and 1.351 at + 6 (#513, rig-parts 1.52.0, rigc 2.60.0; the lattice, + 3 and + 4 read again on
+ * rig-parts 1.54.0, rigc 2.60.0 with the same figures, #599). The window that holds both is + 2 to + 3 cells, and 3 is
+ * its upper edge: one cell inside the fold edge, one under the check ceiling. [Hypothesis until a third subject: each
+ * edge rests on one part.] Past the floor alone the mesh folds more than its lattice, and a larger radius is not safer.
  */
 export const INFLUENCE_RADIUS_CELLS = 3;
 
