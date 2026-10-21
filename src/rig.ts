@@ -400,14 +400,20 @@ export function roundShares(list: readonly Influence[]): Influence[] {
  * trunk splits into branches and across adjacent trees' ruffled hem steps.
  * Four Laplacian passes (`FORK_SMOOTH_PASSES`, self share 0.5, floor 0.005, cap
  * 8 influences) diffuse each vertex's shares across its triangle neighbours
- * before rounding with {@link roundShares}.
+ * before rounding with {@link roundShares}. Every share is diffused alike —
+ * trunk, branch and fixed bones — none is held in place.
+ *
+ * Issue #615: an influence mesh that declares `influence.hold_tip: true` is
+ * smoothed by the same passes with `cap` its declared `influence.max`, so a
+ * vertex never binds more bones than the config states; the lattice's call
+ * passes no cap and keeps `FORK_SMOOTH_MAX_INFLUENCES`, byte for byte.
  */
 export const FORK_SMOOTH_PASSES = 4;
 export const FORK_SMOOTH_SELF = 0.5;
 export const FORK_SMOOTH_FLOOR = 0.005;
 export const FORK_SMOOTH_MAX_INFLUENCES = 8;
 
-export function smoothForkShares(raw: ReadonlyArray<readonly Influence[]>, triangles: readonly number[]): Influence[][] {
+export function smoothForkShares(raw: ReadonlyArray<readonly Influence[]>, triangles: readonly number[], cap: number = FORK_SMOOTH_MAX_INFLUENCES): Influence[][] {
   const adj: number[][] = raw.map(() => []);
   const addEdge = (u: number, v: number): void => {
     if (!adj[u].includes(v)) adj[u].push(v);
@@ -435,7 +441,7 @@ export function smoothForkShares(raw: ReadonlyArray<readonly Influence[]>, trian
       const kept = [...m.entries()]
         .filter(([, w]) => w >= FORK_SMOOTH_FLOOR)
         .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
-        .slice(0, FORK_SMOOTH_MAX_INFLUENCES);
+        .slice(0, cap);
       const sum = kept.reduce((s, [, w]) => s + w, 0);
       return roundShares(kept.map(([bone, w]) => ({ bone, weight: w / sum })));
     });
@@ -1912,6 +1918,7 @@ export function buildRig(
     let maxInfl = 0;
     let capped = 0;
     let widest = 0;
+    const pulled: Influence[][] = [];
     for (const [vi, [x, y]] of lattice.points.entries()) {
       const r = influenceShares([x, y], local, spec.influence);
       if ('nearest' in r) {
@@ -1920,12 +1927,17 @@ export function buildRig(
       }
       if (r.inReach > spec.influence.max) capped++;
       widest = Math.max(widest, r.inReach);
+      pulled.push(r.weights.map((e) => ({ bone: names[e.control ?? 0], weight: e.weight })));
+    }
+    // Issue #615: `hold_tip: true`, declared on the mesh (propose writes it from the recipe's `split.hold_tip`), smooths
+    // the pulled shares by the lattice's held-fork passes, capped at the declared `max`; absent, the shares are rig-c's.
+    const shares = spec.influence.hold_tip === true ? smoothForkShares(pulled, lattice.triangles, spec.influence.max) : pulled;
+    for (const [vi, [x, y]] of lattice.points.entries()) {
       const wx = x + ox;
       const wy = y + oy;
-      const ent: WeightEntry[] = r.weights.map((e) => {
-        const bone = names[e.control ?? 0];
+      const ent: WeightEntry[] = shares[vi].map(({ bone, weight }) => {
         const [bx, by] = toBoneLocal(world.get(bone) as BoneTransform, spineX(wx), spineY(wy));
-        return { bone, x: places(bx), y: places(by), weight: e.weight };
+        return { bone, x: places(bx), y: places(by), weight };
       });
       weights.push(ent);
       infl += ent.length;

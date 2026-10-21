@@ -137,7 +137,7 @@ part name, `[i]` an entry of a list):
 - **stops[i]** — required: `chain`, `against`, `at`, `inward`, `outward`; optional: `links`, `lower` (issue #404)
 - **stops[i].lower** — required: `inward`, `outward`
 - **meshes.&lt;part&gt;** — exactly one of `grid`, `contour`, `auto`, `influence`; required in every mode: `segments`, and `r` in every mode but `influence`, which refuses it; optional in every mode: `exponent`, `rule`; optional with `contour` or `auto`: `ribs`; optional with `grid` or `contour`: `influences` (issue #284; beside `auto` it is refused, CONFIG_INFLUENCES_MODE); optional with `grid`: `stray` (issue #303; beside `contour` or `auto` it is refused, CONFIG_STRAY_MODE)
-- **meshes.&lt;part&gt;.influence** — required: `cell`, `radius`, `across`, `max`, `shape` (issue #378); beside it `r`, `exponent`, `rule`, `influences`, `stray` and `ribs` are refused by name
+- **meshes.&lt;part&gt;.influence** — required: `cell`, `radius`, `across`, `max`, `shape` (issue #378); optional: `hold_tip` (issue #615, the value true only); beside it `r`, `exponent`, `rule`, `influences`, `stray` and `ribs` are refused by name
 - **meshes.&lt;part&gt;.influences** — optional, at least one: `maxInfluences` (a whole number, 1 or more, or null for no cap), `floor` ("cut" or "continuous")
 - **meshes.&lt;part&gt;.ribs.&lt;chain&gt;** — required: `stations`
 - **meshes.&lt;part&gt;.contour** — required: `tolerance`, `margin`, `spacing`; optional: `maxEdge`, `budget`, `stray`, `bridges`, `regions`, `bust`
