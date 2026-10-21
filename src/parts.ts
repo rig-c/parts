@@ -29,6 +29,8 @@
  * - `refused_drift_px` — of those, the ones refused because See-through's
  *   pixel and the painting's disagreed by more than the drift limit;
  * - `merged_px` — pixels brought in from the other run below the head crop;
+ *   on a subset set's limb part, less those the set's exclusion (issue #587)
+ *   cleared, so it counts the written PNG's (issue #603);
  * - `seam_override_px` — pixels whose colour the seam pass replaced;
  * - `fringe_pushed_back` — written only when not empty: the pixels of this
  *   part's fringe (alpha below 250) made transparent because the painting
@@ -164,6 +166,16 @@ export interface CapRecord {
    */
   short_px?: { left: number; right: number };
   /**
+   * Issue #603, written only when above 0: the cap's pixels a subset set's
+   * exclusion (issue #587) cleared — pixels a base part the set does not
+   * replace covers at setup — each taken out of the count it was in
+   * (`layer_px`, `image_px`, `upper_px`, `lower_px`, `lower_kept_px`), so
+   * those counts are the written PNG's. The disc's pixels are then the
+   * counts above, `upper_px`, the lower half's and `excluded_px` together.
+   * A cap no exclusion touched writes no key.
+   */
+  excluded_px?: number;
+  /**
    * Issue #360, written only under the segment's `cap_shape: "disc"`: the
    * shape; the cap's pixels taken from the upper segment's art where the
    * lower's layer had none (`upper_px`). `radius` is then the half-width about the
@@ -219,6 +231,7 @@ const CAP_KEYS = [
   'image_layer',
   'missing_px',
   'short_px',
+  'excluded_px',
   'shape',
   'upper_px',
   'lower_px',
@@ -704,6 +717,8 @@ function checkCap(c: unknown, object: string, fail: (code: string, object: strin
       : BALL_KEYS.every((k) => !(k in co))) &&
     // Issue #557: the shortfall by side, when written, adds up to the missing pixels, and is never written for none.
     (!('short_px' in co) || shortSides(co.short_px, co.missing_px)) &&
+          // Issue #603: the pixels a set's exclusion took from the cap, written only when it took one.
+          (!('excluded_px' in co) || (isCount(co.excluded_px) && co.excluded_px > 0)) &&
     ('edge' in co ? co.edge === 'feather' && typeof co.feather_radius === 'number' && Number.isFinite(co.feather_radius) && co.feather_radius >= 0 && isCount(co.feathered_px) : !('feather_radius' in co) && !('feathered_px' in co)) &&
     // Issue #360 (item 14): a placed cut carries its band, line and counts, the line inside the band; none of them rides alone.
     ('cut_band' in co
@@ -722,7 +737,7 @@ function checkCap(c: unknown, object: string, fail: (code: string, object: strin
     fail(
       'PARTS_FIELD_TYPE',
       object,
-      `is ${show(c)}; {at: [x, y], width, radius, box: [x, y, w, h], layer_px, image_px?, image_layer? (with image_px), missing_px, short_px? ({left, right}, adding up to missing_px, above 0), shape? ("disc" or "ball", with upper_px; "ball" with lower_px, lower_kept_px and lower_missing_px, at most missing_px; without it upper_px? above 0), edge? ("feather", with feather_radius and feathered_px), cut_band? (with cut_offset inside the band, cut_at, cut_crossed at most joint_crossed, band_px, stroke_luma_max? 0..255)} is required`,
+      `is ${show(c)}; {at: [x, y], width, radius, box: [x, y, w, h], layer_px, image_px?, image_layer? (with image_px), missing_px, short_px? ({left, right}, adding up to missing_px, above 0), excluded_px? (above 0), shape? ("disc" or "ball", with upper_px; "ball" with lower_px, lower_kept_px and lower_missing_px, at most missing_px; without it upper_px? above 0), edge? ("feather", with feather_radius and feathered_px), cut_band? (with cut_offset inside the band, cut_at, cut_crossed at most joint_crossed, band_px, stroke_luma_max? 0..255)} is required`,
     );
   }
 }
