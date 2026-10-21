@@ -449,7 +449,11 @@ usage:
       rig-parts or rigc is refused by name with the row, the value recorded
       and the value required (REMESH_INPUT_CHECK_BOUND); a file that is not
       the record is REMESH_INPUT_CHECK_FILE. Both are read before anything is
-      built, and nothing is written. Without either flag nothing written moves.
+      built, and nothing is written. The record's rows are hashed again
+      right after check-input has read the input; a file that moved in
+      between is refused with both digests (REMESH_INPUT_CHECK_MOVED), and no
+      record or revision is written. Without either flag nothing written
+      moves.
 
   rig-parts retune --rig <dir> --config <config.json> --parts <dir> --out <dir>
                    [--requirements <file.json>] [--idle-keys ctl|direct]
@@ -477,8 +481,8 @@ usage:
       writes the same bytes. Prints what changed and a hash table of every file.
       --record-input-check and --input-check are remesh's (one record format,
       one binding; a record either command wrote serves the other over the
-      same input), refused as RETUNE_INPUT_CHECK_BOUND and
-      RETUNE_INPUT_CHECK_FILE.
+      same input), refused as RETUNE_INPUT_CHECK_BOUND,
+      RETUNE_INPUT_CHECK_FILE and RETUNE_INPUT_CHECK_MOVED.
 
   rig-parts check --rig <dir> --out <dir> [--parts <dir>] [--source <painting.png>]
                     [--page-edges pot|free] [--pack-shape rect|polygon]

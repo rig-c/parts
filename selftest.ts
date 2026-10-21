@@ -39772,6 +39772,26 @@ function runRemeshSuite(): number {
       `${[twice32, bare32, switch32].map((r) => `exit ${r.status} ${r.out.split('\n')[0].trim()}`).join(' | ')}; ${fileRuns32.map(([what, r]) => `${what}: exit ${r.status} ${failLines(r.out).map((l) => l.trim().slice(0, 160)).join(' / ')}`).join('; ')}`,
       'issue #617 bar 5: the flag is held as every other file flag of the command is — a usage error for the line, a named refusal for the file — and a record that is not of its spec\'s shape is never read as a check',
     );
+
+    // RM33 — the two snapshots bracket the check (issue #617, review P2): a copy of the input whose motion.json gains a
+    // trailing newline after the first snapshot and before check-input reads it (the stage's test-only hook) is refused
+    // by name with both digests, computed here, and neither the record nor the revision is written.
+    const input33 = join(root, 'input33');
+    cpSync(input, input33, { recursive: true });
+    const motion33 = join(input33, 'motion.json');
+    const before33 = readFileSync(motion33);
+    const after33 = Buffer.concat([before33, Buffer.from('\n')]);
+    const out33 = join(root, 'out33');
+    const e33 = refusals(() => remeshStage({ rig: input33, config: fx.config, parts: fx.parts, part: 'strip', mesh: gridReq, out: out33, recordInputCheck: true }, runner, rigc, versions, join(root, 'scratch33'), () => {}, { beforeInputCheck: () => writeFileSync(motion33, after33) }));
+    const sha33 = (b: Uint8Array): string => createHash('sha256').update(b).digest('hex');
+    const want33 = `REMESH_INPUT_CHECK_MOVED ${join(resolve(input33), 'motion.json')} — was ${before33.length} bytes sha256 ${sha33(before33)} when the input was first hashed and is ${after33.length} bytes sha256 ${sha33(after33)} after check-input read it`;
+    const got33 = e33?.problems.map((p) => `${p.code} ${p.object} — ${p.detail}`) ?? [];
+    say(
+      'RM33_A_FILE_THAT_MOVES_BETWEEN_THE_FIRST_SNAPSHOT_AND_CHECK_INPUT_IS_REFUSED_BY_NAME_AND_NO_RECORD_IS_WRITTEN',
+      got33.length === 1 && got33[0].startsWith(want33) && !existsSync(out33) && treeDigest(input) === inputDigest,
+      `${got33.map((l) => l.slice(0, 260)).join(' | ') || 'written'}; ${existsSync(out33) ? 'WRITTEN' : 'nothing written'}`,
+      'issue #617 (review P2): a record pairs its rows with the check measured from them only when the input is the same before and after the check read it; otherwise a later reuse would skip a check on bytes the check never saw',
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -40200,6 +40220,24 @@ function runRetuneSuite(): number {
         !existsSync(join(root, 'usage12')),
       `remesh with retune's record: ${e12 === null ? 'written' : e12.problems.map(problemLine).join(' | ').slice(0, 300)}, ${log12.filter((l) => l.startsWith('[check-input]')).length} [check-input] line(s), check.input ${JSON.stringify(remesh12?.check.input) === JSON.stringify(rec10Json?.check) ? 'the record\'s' : 'NOT the record\'s'}; twice: exit ${twice12.status} ${twice12.out.split('\n')[0].trim()}`,
       'issue #617: the input check both commands run is one call over the same files, so its record is one format and one binding',
+    );
+
+    // RN13 — RM33 under retune: motion.json gains a trailing newline between the first snapshot and check-input.
+    const input13 = join(root, 'input13');
+    cpSync(input, input13, { recursive: true });
+    const motion13 = join(input13, 'motion.json');
+    const before13 = readFileSync(motion13);
+    const after13 = Buffer.concat([before13, Buffer.from('\n')]);
+    const out13 = join(root, 'out13');
+    const e13 = refusals(() => retuneStage({ rig: input13, config: damping, parts: fx.parts, out: out13, recordInputCheck: true }, runner, rigc, versions, join(root, 'scratch13'), () => {}, { beforeInputCheck: () => writeFileSync(motion13, after13) }));
+    const sha13 = (b: Uint8Array): string => createHash('sha256').update(b).digest('hex');
+    const want13 = `RETUNE_INPUT_CHECK_MOVED ${join(resolve(input13), 'motion.json')} — was ${before13.length} bytes sha256 ${sha13(before13)} when the input was first hashed and is ${after13.length} bytes sha256 ${sha13(after13)} after check-input read it`;
+    const got13 = e13?.problems.map((p) => `${p.code} ${p.object} — ${p.detail}`) ?? [];
+    say(
+      'RN13_A_FILE_THAT_MOVES_BETWEEN_THE_FIRST_SNAPSHOT_AND_CHECK_INPUT_IS_REFUSED_UNDER_RETUNES_CODE',
+      got13.length === 1 && got13[0].startsWith(want13) && !existsSync(out13) && treeDigest(input) === inputDigest,
+      `${got13.map((l) => l.slice(0, 260)).join(' | ') || 'written'}; ${existsSync(out13) ? 'WRITTEN' : 'nothing written'}`,
+      'issue #617 (review P2): retune brackets the check with the same two snapshots',
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

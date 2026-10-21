@@ -132,6 +132,8 @@ export interface RemeshPlant {
   delta?: DeltaPlant;
   /** Issue #613's mutant: the setup frames read off `rig.json`'s bones as written, its `stops` not expanded. */
   unexpandedStops?: boolean;
+  /** Issue #617's mutant: run just before check-input reads the input, after the first snapshot, to change a file under it. */
+  beforeInputCheck?: () => void;
 }
 
 /** The versions the provenance names: this package's and the rigc that gated the revision (its `--version` line). */
@@ -470,8 +472,8 @@ export function preservedProblems(input: FileTree, revision: FileTree, part: str
 
 /** The codes the shared readings below refuse with, by the revising command that runs them (`remesh`, `retune`). */
 export const REVISION_CODES = {
-  remesh: { inputPresent: 'REMESH_INPUT_PRESENT', inputWritten: 'REMESH_INPUT_WRITTEN', checkHeld: 'REMESH_CHECK_HELD', inputCheckFile: 'REMESH_INPUT_CHECK_FILE', inputCheckBound: 'REMESH_INPUT_CHECK_BOUND', rigcGreen: 'REMESH_RIGC_GREEN' },
-  retune: { inputPresent: 'RETUNE_INPUT_PRESENT', inputWritten: 'RETUNE_INPUT_WRITTEN', checkHeld: 'RETUNE_CHECK_HELD', inputCheckFile: 'RETUNE_INPUT_CHECK_FILE', inputCheckBound: 'RETUNE_INPUT_CHECK_BOUND', rigcGreen: 'RETUNE_RIGC_GREEN' },
+  remesh: { inputPresent: 'REMESH_INPUT_PRESENT', inputWritten: 'REMESH_INPUT_WRITTEN', checkHeld: 'REMESH_CHECK_HELD', inputCheckFile: 'REMESH_INPUT_CHECK_FILE', inputCheckBound: 'REMESH_INPUT_CHECK_BOUND', inputCheckMoved: 'REMESH_INPUT_CHECK_MOVED', rigcGreen: 'REMESH_RIGC_GREEN' },
+  retune: { inputPresent: 'RETUNE_INPUT_PRESENT', inputWritten: 'RETUNE_INPUT_WRITTEN', checkHeld: 'RETUNE_CHECK_HELD', inputCheckFile: 'RETUNE_INPUT_CHECK_FILE', inputCheckBound: 'RETUNE_INPUT_CHECK_BOUND', inputCheckMoved: 'RETUNE_INPUT_CHECK_MOVED', rigcGreen: 'RETUNE_RIGC_GREEN' },
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -667,6 +669,35 @@ export function inputCheckOf(
   if (recorded === null) return { binding, reused: null };
   refuseIfAny(inputCheckBoundProblems(recorded, binding, req.inputCheck as string, op));
   return { binding, reused: canonicalSide(recorded.check) };
+}
+
+/**
+ * The second snapshot (issue #617): the input as the record's first snapshot read it, hashed again by
+ * {@link inputCheckBinding} right after check-input has read it. The two snapshots bracket the check, so a record is
+ * written only when the bytes the check measured are the bytes its rows name; a file that moved in between is named
+ * with both digests under `op`'s moved code.
+ */
+export function inputCheckMovedProblems(first: InputCheckBinding, req: { requirements?: string; parts: string }, rigAt: string, op: 'remesh' | 'retune'): Problem[] {
+  const code = REVISION_CODES[op].inputCheckMoved;
+  const second = inputCheckBinding(rigAt, readTree(rigAt), req.parts, req.requirements, first.options.page_edges, first.options.pack_shape, first.versions);
+  const out: Problem[] = [];
+  const row = (r: HashRow | undefined): string => (r === undefined ? 'absent' : `${r.bytes} bytes sha256 ${r.sha256}`);
+  const moved = (object: string, before: string, after: string): void => {
+    out.push({ code, object, detail: `was ${before} when the input was first hashed and is ${after} after check-input read it; the check may have measured bytes the record's rows do not name, so neither the record nor the revision is written` });
+  };
+  const ra = first.options.requirements;
+  const rb = second.options.requirements;
+  if (ra !== null && rb !== null && ra.sha256 !== rb.sha256) moved(ra.path, `sha256 ${ra.sha256}`, `sha256 ${rb.sha256}`);
+  for (const k of ['rig', 'parts'] as const) {
+    const a = new Map(first[k].files.map((r) => [r.path, r]));
+    const b = new Map(second[k].files.map((r) => [r.path, r]));
+    for (const p of [...new Set([...a.keys(), ...b.keys()])].sort()) {
+      const x = a.get(p);
+      const y = b.get(p);
+      if (x === undefined || y === undefined || x.sha256 !== y.sha256 || x.bytes !== y.bytes) moved(join(first[k].dir, p), row(x), row(y));
+    }
+  }
+  return out;
 }
 
 /** One side of the check block, read off a check report. */
@@ -971,7 +1002,13 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
   const checkOf = (rig: string, name: string): CheckReport =>
     checkStage({ rig, parts: input.parts, out: join(scratch, name), pageEdges, packShape, ...(input.requirements === undefined ? {} : { requirements: input.requirements }) }, rigc, checkBin, (l) => log(`[${name}] ${l}`));
   if (recorded.reused !== null) log(inputCheckReusedLine(input.inputCheck as string, recorded.binding as InputCheckBinding));
-  const inSide = recorded.reused ?? checkSide(checkOf(rigAt, 'check-input'));
+  let inSide: CheckSide;
+  if (recorded.reused !== null) inSide = recorded.reused;
+  else {
+    plant.beforeInputCheck?.();
+    inSide = checkSide(checkOf(rigAt, 'check-input'));
+    if (recorded.binding !== null) refuseIfAny(inputCheckMovedProblems(recorded.binding, input, rigAt, 'remesh'));
+  }
   const revCheck = checkOf(staged, 'check-revision');
   const sides = { input: inSide, revision: checkSide(revCheck) };
   refuseIfAny(checkHeldProblems(sides.input, sides.revision, revCheck.problems));

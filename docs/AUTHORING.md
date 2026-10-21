@@ -3329,6 +3329,7 @@ exits 0, and `mesh_draft.json` and the console name the reading and the amount.
 | <a id="REMESH_BONE_ORDER"></a>`REMESH_BONE_ORDER` | a bone of the input names a parent that is not declared before it — later in `bones` (`bones[i]` named), or nowhere once rig-c has expanded the rig's `stops` (issue #613). The delta's positions are read through the setup frames, which rig-c poses parents first, as rigc's rig reader resolves them (`CE_RIG_BONE_PARENT_ORDER`); the bones are not sorted into an order rigc would not load. rigc's gate over the input refuses such a rig first, so the line means rigc and its library read the bones apart | a defect between this package and rigc: report it with the line |
 | <a id="REMESH_INPUT_CHECK_FILE"></a>`REMESH_INPUT_CHECK_FILE` | `--input-check` names no file, a file that does not parse, one whose `spec` is not `rig-parts-input-check/1`, or one whose `versions`, `options`, `rig`, `parts` or `check` is not of the record's shape (issue #617); read before anything is built, nothing written | pass the `input-check.json` a `--record-input-check` run wrote |
 | <a id="REMESH_INPUT_CHECK_BOUND"></a>`REMESH_INPUT_CHECK_BOUND` | a row of the `--input-check` record is not this run's (issue #617): a file under `--rig` or `--parts` (`parts.json`, `parts/`) added, missing or of other bytes, the rig or parts directory, the requirements file (absent, present, or of another path or bytes), `--page-edges`, `--pack-shape`, this package's version or `rigc --version`'s output; the row, the value recorded and the value required are named. The record is a check of another input, so it is not reused; nothing was built or written | run once with `--record-input-check` over this input, or leave `--input-check` off to measure the input again |
+| <a id="REMESH_INPUT_CHECK_MOVED"></a>`REMESH_INPUT_CHECK_MOVED` | under `--record-input-check`, a file under `--rig` or `--parts` (or the requirements file) is not the same bytes after check-input read it as when the input was first hashed; the file and both digests are named. The check may have measured bytes the record's rows do not name, so neither the record nor the revision is written | leave the input alone while the run measures it, and run again |
 | <a id="REMESH_BONES_POSED"></a>`REMESH_BONES_POSED` | rig-c cannot pose the input's bones at the setup pose — its expansion of the rig's `stops`, or its evaluation of the bones (a bone `inherit` the runtime resolves to no mode), refuses with the sentence quoted; nothing was written | read rig-c's sentence; rigc's gate over the input passed, so report it with the line |
 
 A remesh changes one part's mesh and nothing else: every file of the input but
@@ -3362,7 +3363,10 @@ prints `check-input: not run — <file> (rig-parts-input-check/1) is bound to th
 by N sha256 row(s) …` in place of the input's check, and its `check.input` is the
 recorded one, byte for byte. A row that is not its own is refused by name
 (`REMESH_INPUT_CHECK_BOUND`, the row, the value recorded and the value required), and
-nothing is written. The revision is always measured. `retune` reads and writes the same
+nothing is written. The record's rows are hashed when the run starts and again right
+after the input's check has read the input; a file that moved in between is refused by
+name with both digests (`REMESH_INPUT_CHECK_MOVED`), so a record never pairs rows with a
+check measured from other bytes. The revision is always measured. `retune` reads and writes the same
 record, so either command's serves the other over the same input. Without either flag
 nothing printed or written changes.
 
@@ -3425,6 +3429,7 @@ revision reads it as any other edge.
 | <a id="RETUNE_CHECK_HELD"></a>`RETUNE_CHECK_HELD` | `check` on the revision did not measure a bar it measured on the input, or failed a bar the input met; the revision's own FAIL line is quoted | soften the constraint or the idle track the line names |
 | <a id="RETUNE_INPUT_CHECK_FILE"></a>`RETUNE_INPUT_CHECK_FILE` | as [`REMESH_INPUT_CHECK_FILE`](#REMESH_INPUT_CHECK_FILE), under `retune` | pass the `input-check.json` a `--record-input-check` run of either command wrote |
 | <a id="RETUNE_INPUT_CHECK_BOUND"></a>`RETUNE_INPUT_CHECK_BOUND` | as [`REMESH_INPUT_CHECK_BOUND`](#REMESH_INPUT_CHECK_BOUND), under `retune`; read before the rebuild | run once with `--record-input-check` over this input, or leave `--input-check` off |
+| <a id="RETUNE_INPUT_CHECK_MOVED"></a>`RETUNE_INPUT_CHECK_MOVED` | as [`REMESH_INPUT_CHECK_MOVED`](#REMESH_INPUT_CHECK_MOVED), under `retune` | leave the input alone while the run measures it, and run again |
 
 A retune replaces a rig's physics and its idle and nothing else. The config is built
 once through the rig stage; from that build `rig.json` takes `constraints` and
@@ -3449,7 +3454,7 @@ consumer binds them to the revision by the `revision` hash rows instead of runni
 `check` a second time.
 `--record-input-check` and `--input-check` are `remesh`'s (issue #617; see *The
 input's check, measured once* above), read before the rebuild and refused as
-`RETUNE_INPUT_CHECK_BOUND` and `RETUNE_INPUT_CHECK_FILE`.
+`RETUNE_INPUT_CHECK_BOUND`, `RETUNE_INPUT_CHECK_FILE` and `RETUNE_INPUT_CHECK_MOVED`.
 
 ### rig-c's mesh refusals, quoted in a line
 

@@ -40,7 +40,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { checkStage, gateThroughRigc, type Log, rigStage } from './build.ts';
 import { type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackShape, type PageEdges, rigcRanClause, type RigcRunner } from './check.ts';
 import { PartsError, type Problem, problemLine, refuseIfAny } from './errors.ts';
-import { type CheckSide, checkHeldProblems, checkSide, checkScope, type FileTree, firstDifference, type HashRow, hashRows, INPUT_CHECK_FILE, type InputCheckBinding, inputCheckHashes, inputCheckOf, inputCheckReusedLine, inputCheckText, inputTreeProblems, perturbed, readTree, sha256 } from './remesh.ts';
+import { type CheckSide, checkHeldProblems, checkSide, checkScope, type FileTree, firstDifference, type HashRow, hashRows, INPUT_CHECK_FILE, type InputCheckBinding, inputCheckHashes, inputCheckMovedProblems, inputCheckOf, inputCheckReusedLine, inputCheckText, inputTreeProblems, perturbed, readTree, sha256 } from './remesh.ts';
 import { DEFAULT_IDLE_KEYS, type IdleKeys, rigJsonText } from './rig.ts';
 
 /** The provenance file's spec. */
@@ -87,6 +87,8 @@ export interface RetunePlant {
   perturb?: string;
   skipPreserve?: boolean;
   skipHold?: boolean;
+  /** Issue #617's mutant: run just before check-input reads the input, after the first snapshot, to change a file under it. */
+  beforeInputCheck?: () => void;
 }
 
 /** One constraint the request changed: its name and type, and each field whose value moved, in the rebuild's order. */
@@ -391,7 +393,13 @@ export function retuneStage(input: RetuneInput, rigc: RigcRunner, checkBin: stri
   const checkOf = (rig: string, name: string): CheckReport =>
     checkStage({ rig, parts: input.parts, out: join(scratch, name), pageEdges, packShape, ...(input.requirements === undefined ? {} : { requirements: input.requirements }) }, rigc, checkBin, (l) => log(`[${name}] ${l}`));
   if (recorded.reused !== null) log(inputCheckReusedLine(input.inputCheck as string, recorded.binding as InputCheckBinding));
-  const inSide: CheckSide = recorded.reused ?? checkSide(checkOf(rigAt, 'check-input'));
+  let inSide: CheckSide;
+  if (recorded.reused !== null) inSide = recorded.reused;
+  else {
+    plant.beforeInputCheck?.();
+    inSide = checkSide(checkOf(rigAt, 'check-input'));
+    if (recorded.binding !== null) refuseIfAny(inputCheckMovedProblems(recorded.binding, input, rigAt, 'retune'));
+  }
   const revCheck = checkOf(staged, 'check-revision');
   const sides = { input: inSide, revision: checkSide(revCheck) };
   refuseIfAny(checkHeldProblems(sides.input, sides.revision, revCheck.problems, 'retune'));
