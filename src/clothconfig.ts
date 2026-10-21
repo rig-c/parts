@@ -44,6 +44,11 @@ export interface ClothEdit extends ConfigEdit {
   label: string;
   /** Issue #571: the input's entry was the previous recipe's draft (`--from`), and only that made it the recipe's. */
   previous?: true;
+  /**
+   * Issue #630: the entry is written back to the draft without the recipe (`--from`): the previous recipe drafted it
+   * and the recipe now does not — a tag whose recipe was dropped while another was kept.
+   */
+  plain?: true;
 }
 
 /**
@@ -105,8 +110,23 @@ function shown(v: unknown): string {
  * recipe's as `I` equal to `P` is — an owned name is replaced, and a name in `V` and not in `D` is removed — and a
  * conflict is an `I` equal to none of `D`, `P` and `V`, its first differing field read against `V` where `V` holds the
  * name. Without `previous` every rule, and every word of the refusal, is the one above.
+ *
+ * Issue #630: with `V`, a name `D` holds equal to `P` that `V` lacks or holds differently — an entry the previous
+ * recipe drafted (or replaced) and this one leaves to the draft without the recipe, as for a tag whose recipe was
+ * dropped while another was kept — is owned too: inserted where the input lacks it, replaced where the input equals
+ * `V`, and a conflict where it equals neither. Such an edit carries `plain`. `keepDropped` is the selftest's mutant
+ * only (the writer before #630, which never owned it); no flag or environment reaches it.
  */
-function entryEdits(path: readonly string[], identity: (e: unknown) => string | null, drafted: readonly unknown[], plain: readonly unknown[], input: readonly unknown[], conflicts: Problem[], previous: readonly unknown[] | null): ClothEdit[] {
+function entryEdits(
+  path: readonly string[],
+  identity: (e: unknown) => string | null,
+  drafted: readonly unknown[],
+  plain: readonly unknown[],
+  input: readonly unknown[],
+  conflicts: Problem[],
+  previous: readonly unknown[] | null,
+  keepDropped = false,
+): ClothEdit[] {
   const section = path.join('.');
   const D = byName(drafted, identity, 'drafted', section);
   const P = byName(plain, identity, 'plain', section);
@@ -116,7 +136,10 @@ function entryEdits(path: readonly string[], identity: (e: unknown) => string | 
   keys.forEach((k, i) => {
     if (k !== null) where.set(k, [...(where.get(k) ?? []), i]);
   });
-  const owned = [...D.keys()].filter((k) => !P.has(k) || canon(P.get(k)) !== canon(D.get(k)));
+  const recipes = new Set([...D.keys()].filter((k) => !P.has(k) || canon(P.get(k)) !== canon(D.get(k))));
+  // Issue #630: a plain entry the previous recipe drafted differently or took away, which this recipe leaves plain.
+  const returned = new Set(V === null || keepDropped ? [] : [...D.keys()].filter((k) => !recipes.has(k) && (!V.has(k) || canon(V.get(k)) !== canon(D.get(k)))));
+  const owned = [...D.keys()].filter((k) => recipes.has(k) || returned.has(k));
   const removed = [...P.keys(), ...(V === null ? [] : [...V.keys()].filter((k) => !P.has(k)))].filter((k) => !D.has(k));
   const replace: string[] = [];
   const remove: string[] = [];
@@ -166,7 +189,7 @@ function entryEdits(path: readonly string[], identity: (e: unknown) => string | 
       vouched.add(k);
     } else conflict(k, at[0], false);
   }
-  const mark = (k: string): { previous?: true } => (vouched.has(k) ? { previous: true } : {});
+  const mark = (k: string): { previous?: true; plain?: true } => ({ ...(vouched.has(k) ? { previous: true as const } : {}), ...(returned.has(k) ? { plain: true as const } : {}) });
   const edits: ClothEdit[] = [];
   const work = [...keys];
   for (const k of replace) edits.push({ path: [...path, work.indexOf(k)], value: D.get(k), label: `${section}["${k}"] replaced`, ...mark(k) });
@@ -186,7 +209,7 @@ function entryEdits(path: readonly string[], identity: (e: unknown) => string | 
         break;
       }
     }
-    edits.push({ path: [...path, pos], value: D.get(k), insert: true, label: `${section}["${k}"] inserted` });
+    edits.push({ path: [...path, pos], value: D.get(k), insert: true, label: `${section}["${k}"] inserted`, ...mark(k) });
     work.splice(pos, 0, k);
   }
   return edits;
@@ -206,10 +229,20 @@ function entryEdits(path: readonly string[], identity: (e: unknown) => string | 
  * object entry (`meshes.<part>`, `regions.<part>`) the recipe drafts is replaced whole already, so `previous` changes
  * nothing there. Null — no `--from` — is the writer before #571, rule for rule and byte for byte.
  *
+ * Issue #630: where the two drafts agree and the previous draft differs — what the previous recipe drafted and this one
+ * leaves to the draft without the recipe, a tag whose recipe was dropped while another was kept — the entry goes back
+ * to the plain draft: in an array section by {@link entryEdits}' rule, and at any other entry (`meshes.<part>`,
+ * `regions.<part>`, a section the input holds whole) when the input equals the previous draft there or lacks the entry
+ * in an object it holds; an input equal to neither the draft nor the previous draft there is a hand edit, refused by
+ * name. Each such edit that writes the plain draft's value carries `plain` (a removal does not, as an array name the
+ * previous recipe drafted and the plain draft lacks is removed without it). A section the input lacks is left to the
+ * input, as before.
+ *
  * `whole` is the selftest's mutant only (issue #552): `bones`, `constraints` and `motion.tracks` replaced whole, as
- * the #537 writer did; no flag or environment reaches it.
+ * the #537 writer did; `keepDropped` is the selftest's mutant only (issue #630): the writer before it, which leaves a
+ * dropped recipe's entries as the previous draft wrote them. No flag or environment reaches either.
  */
-export function clothConfigEdits(drafted: Proposal, plain: Proposal, input: unknown, whole = false, previous: Proposal | null = null): ClothEdit[] {
+export function clothConfigEdits(drafted: Proposal, plain: Proposal, input: unknown, whole = false, previous: Proposal | null = null, keepDropped = false): ClothEdit[] {
   const edits: ClothEdit[] = [];
   const conflicts: Problem[] = [];
   const d = JSON.parse(JSON.stringify(drafted)) as Record<string, unknown>;
@@ -224,27 +257,56 @@ export function clothConfigEdits(drafted: Proposal, plain: Proposal, input: unkn
   const one = (path: readonly string[], a: unknown, b: unknown): void => {
     const s = arrayOf(path);
     const mine = valueAt(input, path);
-    if (s !== undefined && Array.isArray(b) && (a === undefined || Array.isArray(a)) && Array.isArray(mine)) edits.push(...entryEdits(path, s.identity, b, Array.isArray(a) ? a : [], mine, conflicts, prevAt(path)));
+    if (s !== undefined && Array.isArray(b) && (a === undefined || Array.isArray(a)) && Array.isArray(mine)) edits.push(...entryEdits(path, s.identity, b, Array.isArray(a) ? a : [], mine, conflicts, prevAt(path), keepDropped));
     else edits.push({ path, value: b, label: path.join('.') });
   };
   // Issue #571: an array section the two drafts agree at, where the previous draft differs — its entries the previous recipe drafted and this one does not.
+  // Issue #630: and any other entry there, which goes back to the draft (the plain draft's value, the two agreeing).
   const prevOnly = (path: readonly string[], b: unknown): void => {
+    if (v === null) return;
     const s = arrayOf(path);
     const mine = valueAt(input, path);
     const c = valueAt(v, path);
-    if (v === null || s === undefined || !Array.isArray(b) || !Array.isArray(mine) || canon(c) === canon(b)) return;
-    edits.push(...entryEdits(path, s.identity, b, b, mine, conflicts, prevAt(path)));
+    if (canon(c) === canon(b)) return;
+    if (s !== undefined && (Array.isArray(b) || b === undefined) && Array.isArray(mine)) {
+      const drafts = Array.isArray(b) ? b : [];
+      edits.push(...entryEdits(path, s.identity, drafts, drafts, mine, conflicts, prevAt(path), keepDropped));
+      return;
+    }
+    if (keepDropped || s !== undefined) return;
+    // The entry's own object must be the input's: a section the input lacks is the input's to lack, as before #630.
+    const holder = path.length === 1 ? input : valueAt(input, path.slice(0, -1));
+    if (!isPlain(holder) || (path.length === 1 && mine === undefined)) return;
+    const where = `config.${path.join('.')}`;
+    if (canon(mine) === canon(b)) return;
+    if (mine === undefined || canon(mine) === canon(c)) {
+      edits.push({ path, value: b, label: `${path.join('.')} ${b === undefined ? 'removed' : mine === undefined ? 'inserted' : 'replaced'}`, ...(b !== undefined ? { plain: true as const } : {}), ...(mine !== undefined ? { previous: true as const } : {}) });
+      return;
+    }
+    const field = firstField(mine, c);
+    const at = (e: unknown, f: string): string => (isPlain(e) && e[f] !== undefined ? `${f} ${shown(e[f])}` : `no ${f}`);
+    conflicts.push({
+      code: 'PROPOSE_WRITE_CONFIG_CONFLICT',
+      object: where,
+      detail: `${path.join('.')} is the previous recipe's, the recipe now leaves it to the draft without the recipe, and it was changed by hand: it equals neither the draft nor the previous recipe's draft: it holds ${field === null ? shown(mine) : at(mine, field)} where the previous recipe's draft writes ${c === undefined ? 'no such entry' : field === null ? shown(c) : at(c, field)} and the draft writes ${b === undefined ? 'no such entry' : field === null ? shown(b) : at(b, field)}, so the write would drop the hand edit; take the draft by removing the hand edit (or the entry), or keep the recipe for that part (its config.cloth block)`,
+    });
+  };
+  const prevKeys = (section: string, have: readonly string[]): string[] => {
+    const pv = v === null ? undefined : v[section];
+    return isPlain(pv) ? Object.keys(pv).filter((k) => !have.includes(k)) : [];
   };
   for (const section of PROPOSAL_CONFIG_SECTIONS) {
     const a = p[section];
     const b = d[section];
     if (JSON.stringify(a) === JSON.stringify(b)) {
-      if (isPlain(b)) for (const k of Object.keys(b)) prevOnly([section, k], b[k]);
+      if (isPlain(b)) for (const k of [...Object.keys(b), ...prevKeys(section, Object.keys(b))]) prevOnly([section, k], b[k]);
+      else if (b === undefined && isPlain(v === null ? undefined : v[section])) for (const k of prevKeys(section, [])) prevOnly([section, k], undefined);
       else prevOnly([section], b);
       continue;
     }
     if (isPlain(a) && isPlain(b)) {
-      for (const k of [...Object.keys(b), ...Object.keys(a).filter((k) => !(k in b))]) {
+      const keys = [...Object.keys(b), ...Object.keys(a).filter((k) => !(k in b))];
+      for (const k of [...keys, ...prevKeys(section, keys)]) {
         if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) one([section, k], a[k], b[k]);
         else prevOnly([section, k], b[k]);
       }
@@ -276,6 +338,11 @@ export function writtenClothConfig(where: string, text: string, edits: readonly 
 /** Issue #571: how many edits the previous recipe's draft vouched for — an entry that equalled it, and only it. */
 export function previousCount(edits: readonly ClothEdit[]): number {
   return edits.filter((e) => e.previous === true).length;
+}
+
+/** Issue #630: how many edits wrote an entry back to the draft without the recipe — a dropped recipe's entries. */
+export function plainCount(edits: readonly ClothEdit[]): number {
+  return edits.filter((e) => e.plain === true).length;
 }
 
 /** What each edit names, in order: what the write line prints. */

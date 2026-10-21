@@ -31,7 +31,7 @@ import { basisLines, branchSqueezeLine, checkProposal, compare, compareLines, DE
 import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, coverageLines, serializeBasis } from './src/diagnostics.ts';
 import { BEND_DEGREES, BEND_WORST_SHARE, DUST_MAX_PX, DUST_MAX_SHARE, IDLE_BOUND_PX, MESH_DRAFT_REPORT, MESH_DRAFT_SPEC, meshDraftStage, MORE_TRIANGLES_FLAG, relativeConfigPaths, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
 import { meshStatsStage } from './src/meshstats.ts';
-import { chainsLeftBehind, clothConfigEdits, editPaths, previousCount, writtenClothConfig } from './src/clothconfig.ts';
+import { chainsLeftBehind, clothConfigEdits, editPaths, plainCount, previousCount, writtenClothConfig } from './src/clothconfig.ts';
 import { INPUT_CHECK_FILE, INPUT_CHECK_SPEC, PROVENANCE_FILE, REMESH_SPEC, remeshStage } from './src/remesh.ts';
 import { RETUNE_FILE, RETUNE_SPEC, retuneStage } from './src/retune.ts';
 import { checkPainting } from './src/paintcheck.ts';
@@ -257,8 +257,11 @@ usage:
       entry equal to that previous recipe's draft is the recipe's, replaced
       (or removed) as one equal to the draft without the recipe is; an entry
       equal to none of the three drafts is still refused by name, its field
-      read against the previous recipe's draft. The write line counts the
-      entries the previous draft vouched for. Without --from nothing changes.
+      read against the previous recipe's draft. An entry the previous recipe
+      drafted that the recipe now leaves plain (a tag whose recipe was
+      dropped) goes back to the draft without the recipe (issue #630). The
+      write line counts the entries the previous draft vouched for and the
+      entries returned to the plain draft. Without --from nothing changes.
 
   rig-parts propose --parts <dir> --source <painting.png> --out <dir> --from-config <config.json>
       Draw the config's CURRENT bones instead (<out>/render/landmarks_config.png
@@ -1429,7 +1432,7 @@ function cmdPropose(args: string[]): number {
             // Issue #571: with --from, the same parts drafted a third time with the previous recipe.
             const previous = previousCloth === null ? null : proposeWithBasis(P, joints, wristSnap, gridRule, previousCloth).proposal;
             const edits = clothConfigEdits(drafted, plain, JSON.parse(text) as unknown, false, previous);
-            return { at: writeArg, input: text, text: writtenClothConfig(clothArg, text, edits), paths: editPaths(edits), vouched: previousCount(edits), relative: relativeConfigPaths(dirname(resolve(clothArg)), JSON.parse(text) as Record<string, unknown>) };
+            return { at: writeArg, input: text, text: writtenClothConfig(clothArg, text, edits), paths: editPaths(edits), vouched: previousCount(edits), returned: plainCount(edits), relative: relativeConfigPaths(dirname(resolve(clothArg)), JSON.parse(text) as Record<string, unknown>) };
           })();
     // Issue #572: the keyed chains CHAIN_LAG reads only once the recipe took its trees' idle keys — in the config written
     // against the --cloth config with --write-config, else in the proposal against the draft without the recipe.
@@ -1467,7 +1470,8 @@ function cmdPropose(args: string[]): number {
     printLint(P, prop, joints, [...draftLint, ...leftBehind.findings]);
     console.log(basisLine(bfile, out));
     if (written !== null && clothArg !== undefined) {
-      const from = fromArg === undefined ? '' : `; --from ${fromArg}: ${written.vouched} ${written.vouched === 1 ? 'entry' : 'entries'} taken as the previous recipe's draft`;
+      // Issue #630: the entries a recipe dropped since --from gives back to the draft without the recipe.
+      const from = fromArg === undefined ? '' : `; --from ${fromArg}: ${written.vouched} ${written.vouched === 1 ? 'entry' : 'entries'} taken as the previous recipe's draft, ${written.returned} ${written.returned === 1 ? 'entry' : 'entries'} returned to the plain draft`;
       console.log(
         written.paths.length > 0
           ? `wrote ${written.at}: ${clothArg}'s text with ${written.paths.join(', ')} spliced in from the draft; every other byte as read${from}`
