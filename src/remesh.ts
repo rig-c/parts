@@ -50,6 +50,10 @@
  *    through `check` beside the input; every bar the input measured is measured on the revision, and no bar the
  *    input met is failed by it (`REMESH_CHECK_HELD`). `check`'s scope is the revision's scope, and the provenance
  *    quotes check's own physics line ({@link checkScope}) rather than presenting a green check as more than it read.
+ *    Under `--input-check <input-check.json>` (issue #617) the input's check is not run again: the record an earlier
+ *    `--record-input-check` wrote is reused when every row binding it to what that check reads is this run's
+ *    ({@link inputCheckBoundProblems}), and refused by name otherwise (`REMESH_INPUT_CHECK_FILE`,
+ *    `REMESH_INPUT_CHECK_BOUND`) before anything is built.
  * 8. **The write**: `--out` receives the revision's files and {@link PROVENANCE_FILE} — spec {@link REMESH_SPEC}:
  *    the request, both versions, every input file's SHA-256, the target before and after, and both checks — with no
  *    path and no clock in it, so a second identical request writes the same bytes.
@@ -69,6 +73,7 @@ import { type BoneTransform, computeExactFrameTransforms } from './coords.ts';
 import { type PartsFile } from './parts.ts';
 import { applyMeshEdit, type DeltaApplied, type DeltaPlant, deltaSourceProblems, type MeshEditDocument, readMeshEdit } from './remeshdelta.ts';
 import { DEFAULT_IDLE_KEYS, type IdleKeys, type MeshAttachment, meshBoundBones, rigJsonText, type RigSpec } from './rig.ts';
+import { readRequirements } from './requirements.ts';
 import { pyRound } from './round.ts';
 import { type RigSpec as RigcRigSpec } from 'rig-c/src/rig.ts';
 import { expandStops } from 'rig-c/src/stop.ts';
@@ -109,6 +114,10 @@ export interface RemeshInput {
   pageEdges?: PageEdges;
   packShape?: PackShape;
   requirements?: string;
+  /** Issue #617: a {@link INPUT_CHECK_FILE} an earlier run wrote over this input; its check is reused when it is bound to this run's input. */
+  inputCheck?: string;
+  /** Issue #617: write {@link INPUT_CHECK_FILE} into `out` beside the provenance. Without it, and without `inputCheck`, nothing written moves. */
+  recordInputCheck?: boolean;
 }
 
 /**
@@ -461,9 +470,204 @@ export function preservedProblems(input: FileTree, revision: FileTree, part: str
 
 /** The codes the shared readings below refuse with, by the revising command that runs them (`remesh`, `retune`). */
 export const REVISION_CODES = {
-  remesh: { inputPresent: 'REMESH_INPUT_PRESENT', inputWritten: 'REMESH_INPUT_WRITTEN', checkHeld: 'REMESH_CHECK_HELD' },
-  retune: { inputPresent: 'RETUNE_INPUT_PRESENT', inputWritten: 'RETUNE_INPUT_WRITTEN', checkHeld: 'RETUNE_CHECK_HELD' },
+  remesh: { inputPresent: 'REMESH_INPUT_PRESENT', inputWritten: 'REMESH_INPUT_WRITTEN', checkHeld: 'REMESH_CHECK_HELD', inputCheckFile: 'REMESH_INPUT_CHECK_FILE', inputCheckBound: 'REMESH_INPUT_CHECK_BOUND', rigcGreen: 'REMESH_RIGC_GREEN' },
+  retune: { inputPresent: 'RETUNE_INPUT_PRESENT', inputWritten: 'RETUNE_INPUT_WRITTEN', checkHeld: 'RETUNE_CHECK_HELD', inputCheckFile: 'RETUNE_INPUT_CHECK_FILE', inputCheckBound: 'RETUNE_INPUT_CHECK_BOUND', rigcGreen: 'RETUNE_RIGC_GREEN' },
 } as const;
+
+// ---------------------------------------------------------------------------
+// the recorded input check (issue #617)
+// ---------------------------------------------------------------------------
+
+/** The recorded input check's spec. */
+export const INPUT_CHECK_SPEC = 'rig-parts-input-check/1';
+
+/** The recorded input check, written into `--out` under `--record-input-check`, read by `--input-check`. */
+export const INPUT_CHECK_FILE = 'input-check.json';
+
+/**
+ * Everything the input's `check` reads, as one record: the versions it ran under (this package's, and `rigc
+ * --version`'s whole output — the entry line and the Spine runtime beside it decide which validator gates), the pack
+ * mode and the requirements file it was given, and every file under the rig directory and the parts directory
+ * (`parts.json` and every file under `parts/`) by SHA-256. The directories are named as resolved because `check`'s
+ * own text can name them (a rig without an idle is skipped with `motion.json`'s path, `readCheckInputs`), so a check
+ * of the same bytes elsewhere is not the same record.
+ */
+export interface InputCheckBinding {
+  versions: { parts: string; rigc: string };
+  options: { page_edges: PageEdges; pack_shape: PackShape; requirements: { path: string; sha256: string } | null };
+  rig: { dir: string; files: HashRow[] };
+  parts: { dir: string; files: HashRow[] };
+}
+
+/** {@link INPUT_CHECK_FILE} (spec {@link INPUT_CHECK_SPEC}): the binding, then the input's check side as the provenance carries it. */
+export interface InputCheckRecord extends InputCheckBinding {
+  spec: typeof INPUT_CHECK_SPEC;
+  check: CheckSide;
+}
+
+/** `rigc --version`'s whole output, trimmed, or a refusal under `op`'s rigc code: the record binds the rigc that measured. */
+export function rigcVersionText(rigc: RigcRunner, op: 'remesh' | 'retune'): string {
+  const v = rigc(['--version']);
+  const out = v.out.trim();
+  if (v.status !== 0 || out === '') throw new PartsError([{ code: REVISION_CODES[op].rigcGreen, object: 'rigc --version', detail: `exited ${v.status}${rigcRanClause(v)}; the recorded input check binds the rigc that measured it, so its version is required` }]);
+  return out;
+}
+
+/** The binding of this run's input: what the input's `check` would read now ({@link InputCheckBinding}). */
+export function inputCheckBinding(rigAt: string, tree: FileTree, partsDir: string, requirements: string | undefined, pageEdges: PageEdges, packShape: PackShape, versions: { parts: string; rigc: string }): InputCheckBinding {
+  const partsAt = resolve(partsDir);
+  const partsTree: FileTree = new Map();
+  const json = join(partsAt, 'parts.json');
+  if (existsSync(json) && statSync(json).isFile()) partsTree.set('parts.json', new Uint8Array(readFileSync(json)));
+  const pngs = join(partsAt, 'parts');
+  if (existsSync(pngs) && statSync(pngs).isDirectory()) for (const [k, b] of readTree(pngs)) partsTree.set(`parts/${k}`, b);
+  let req: { path: string; sha256: string } | null = null;
+  if (requirements !== undefined) {
+    readRequirements(requirements);
+    const at = resolve(requirements);
+    req = { path: at, sha256: sha256(new Uint8Array(readFileSync(at))) };
+  }
+  return {
+    versions: { parts: versions.parts, rigc: versions.rigc },
+    options: { page_edges: pageEdges, pack_shape: packShape, requirements: req },
+    rig: { dir: resolve(rigAt), files: hashRows(tree) },
+    parts: { dir: partsAt, files: hashRows(new Map([...partsTree].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))) },
+  };
+}
+
+/** The number of SHA-256 rows a binding holds: every rig file, every parts file, and the requirements file when there is one. */
+export function inputCheckHashes(b: InputCheckBinding): number {
+  return b.rig.files.length + b.parts.files.length + (b.options.requirements === null ? 0 : 1);
+}
+
+/** {@link INPUT_CHECK_FILE}'s text: the binding and the side, in the spec's key order. */
+export function inputCheckText(b: InputCheckBinding, side: CheckSide): string {
+  const record: InputCheckRecord = { spec: INPUT_CHECK_SPEC, versions: b.versions, options: b.options, rig: b.rig, parts: b.parts, check: canonicalSide(side) };
+  return rigJsonText(record);
+}
+
+/** A check side with its keys in the provenance's order, so a side read back writes the bytes a measured one does. */
+function canonicalSide(s: CheckSide): CheckSide {
+  return { pass: s.pass, measured: [...s.measured], not_met: [...s.not_met], skipped: s.skipped.map((x) => ({ bar: x.bar, reason: x.reason })), physics: s.physics, line: s.line, status: { ...s.status } };
+}
+
+const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every((x) => typeof x === 'string');
+const isRows = (v: unknown): v is HashRow[] => Array.isArray(v) && v.every((r) => isRecord(r) && typeof r.path === 'string' && typeof r.bytes === 'number' && typeof r.sha256 === 'string');
+
+/**
+ * Read {@link INPUT_CHECK_FILE} and hold it to its spec's shape; every field that is not of it is named in one
+ * refusal under `op`'s file code. Nothing in it is trusted past its shape: its binding is {@link inputCheckBoundProblems}'s.
+ */
+export function readInputCheck(path: string, op: 'remesh' | 'retune'): InputCheckRecord {
+  const code = REVISION_CODES[op].inputCheckFile;
+  const fail = (object: string, detail: string): Problem => ({ code, object, detail });
+  if (!existsSync(path) || !statSync(path).isFile()) throw new PartsError([fail(path, `no such file; --input-check takes the ${INPUT_CHECK_FILE} an earlier ${op} --record-input-check wrote over the same input`)]);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (err) {
+    throw new PartsError([fail(path, `does not parse as JSON: ${(err as Error).message}`)]);
+  }
+  if (!isRecord(raw)) throw new PartsError([fail(path, `holds ${JSON.stringify(raw)?.slice(0, 40)}; one ${INPUT_CHECK_SPEC} object is required`)]);
+  if (raw.spec !== INPUT_CHECK_SPEC) throw new PartsError([fail(`${path} field "spec"`, `is ${JSON.stringify(raw.spec) ?? 'absent'}; "${INPUT_CHECK_SPEC}" is required`)]);
+  const out: Problem[] = [];
+  const field = (name: string, ok: boolean, want: string): void => {
+    if (!ok) out.push(fail(`${path} field "${name}"`, `is not ${want}`));
+  };
+  const v = raw.versions;
+  field('versions', isRecord(v) && typeof v.parts === 'string' && typeof v.rigc === 'string', '{ parts, rigc } as strings');
+  const o = raw.options;
+  const req = isRecord(o) ? o.requirements : undefined;
+  field('options', isRecord(o) && typeof o.page_edges === 'string' && typeof o.pack_shape === 'string' && (req === null || (isRecord(req) && typeof req.path === 'string' && typeof req.sha256 === 'string')), '{ page_edges, pack_shape, requirements: null or { path, sha256 } }');
+  for (const k of ['rig', 'parts'] as const) {
+    const t = raw[k];
+    field(k, isRecord(t) && typeof t.dir === 'string' && isRows(t.files), '{ dir, files: [{ path, bytes, sha256 }] }');
+  }
+  const c = raw.check;
+  const ok =
+    isRecord(c) &&
+    typeof c.pass === 'boolean' &&
+    isStrings(c.measured) &&
+    isStrings(c.not_met) &&
+    Array.isArray(c.skipped) &&
+    c.skipped.every((x) => isRecord(x) && typeof x.bar === 'string' && typeof x.reason === 'string') &&
+    (c.physics === null || typeof c.physics === 'string') &&
+    typeof c.line === 'string' &&
+    isRecord(c.status) &&
+    Object.values(c.status).every((x) => typeof x === 'string');
+  field('check', ok, 'a check side { pass, measured, not_met, skipped, physics, line, status } as remesh.json carries one');
+  refuseIfAny(out);
+  return raw as unknown as InputCheckRecord;
+}
+
+/**
+ * The binding (issue #617): every row of the record against this run's — each version, each option, each directory,
+ * and each file by path, size and SHA-256, a row on one side only included. Each difference is one problem naming
+ * the record's row, the value it holds and the value this run's input requires; none means the record's check was
+ * measured on exactly what this run's check would read.
+ */
+export function inputCheckBoundProblems(recorded: InputCheckBinding, now: InputCheckBinding, path: string, op: 'remesh' | 'retune'): Problem[] {
+  const code = REVISION_CODES[op].inputCheckBound;
+  const out: Problem[] = [];
+  const moved = (row: string, found: unknown, required: unknown, why: string): void => {
+    out.push({ code, object: `${path} ${row}`, detail: `is ${JSON.stringify(found)}; this run's input requires ${JSON.stringify(required)} — ${why}, so the recorded check is not this input's and nothing was written` });
+  };
+  if (recorded.versions.parts !== now.versions.parts) moved('versions.parts', recorded.versions.parts, now.versions.parts, 'the check was measured by another version of this package');
+  if (recorded.versions.rigc !== now.versions.rigc) moved('versions.rigc', recorded.versions.rigc, now.versions.rigc, 'the check was measured under another rigc');
+  if (recorded.options.page_edges !== now.options.page_edges) moved('options.page_edges', recorded.options.page_edges, now.options.page_edges, 'the check packed its pages another way');
+  if (recorded.options.pack_shape !== now.options.pack_shape) moved('options.pack_shape', recorded.options.pack_shape, now.options.pack_shape, 'the check packed its pages another way');
+  const ra = recorded.options.requirements;
+  const rb = now.options.requirements;
+  if (ra === null || rb === null) {
+    if (ra !== rb) moved('options.requirements', ra, rb, 'the check measured another set of declared requirements');
+  } else {
+    if (ra.path !== rb.path) moved('options.requirements.path', ra.path, rb.path, 'the check read its requirements from another file');
+    if (ra.sha256 !== rb.sha256) moved('options.requirements.sha256', ra.sha256, rb.sha256, 'the check read other requirements bytes');
+  }
+  for (const k of ['rig', 'parts'] as const) {
+    if (recorded[k].dir !== now[k].dir) moved(`${k}.dir`, recorded[k].dir, now[k].dir, `the check read another ${k} directory`);
+    const a = new Map(recorded[k].files.map((r) => [r.path, r]));
+    const b = new Map(now[k].files.map((r) => [r.path, r]));
+    for (const p of [...new Set([...a.keys(), ...b.keys()])].sort()) {
+      const x = a.get(p);
+      const y = b.get(p);
+      const row = `${k}.files "${p}"`;
+      if (x === undefined) moved(row, 'absent', y?.sha256, `the input holds ${p} (${y?.bytes} bytes), which the check did not read`);
+      else if (y === undefined) moved(row, x.sha256, 'absent', `the check read ${p}, which the input no longer holds`);
+      else if (x.sha256 !== y.sha256 || x.bytes !== y.bytes) moved(row, `${x.bytes} bytes sha256 ${x.sha256}`, `${y.bytes} bytes sha256 ${y.sha256}`, `the input's ${p} is not the bytes the check read`);
+    }
+  }
+  return out;
+}
+
+/** The line a reused input check prints in place of check-input's lines. */
+export function inputCheckReusedLine(path: string, b: InputCheckBinding): string {
+  const req = b.options.requirements === null ? 0 : 1;
+  return `  check-input: not run — ${path} (${INPUT_CHECK_SPEC}) is bound to this input by ${inputCheckHashes(b)} sha256 row(s) (rig ${b.rig.files.length}, parts ${b.parts.files.length}, requirements ${req}), parts ${b.versions.parts}, rigc ${b.versions.rigc.split('\n')[0]}, page edges ${b.options.page_edges}, pack shape ${b.options.pack_shape}; the input's check side is the recorded one`;
+}
+
+/**
+ * Steps 1's reading of `--input-check` and `--record-input-check` for both revising commands: the binding of this
+ * run's input when either is asked for (one `rigc --version`), and the recorded side when the record is bound to it.
+ * Neither asked for, nothing is read and null is returned for both.
+ */
+export function inputCheckOf(
+  req: { inputCheck?: string; recordInputCheck?: boolean; requirements?: string; parts: string },
+  rigAt: string,
+  tree: FileTree,
+  pageEdges: PageEdges,
+  packShape: PackShape,
+  partsVersion: string,
+  rigc: RigcRunner,
+  op: 'remesh' | 'retune',
+): { binding: InputCheckBinding | null; reused: CheckSide | null } {
+  if (req.inputCheck === undefined && req.recordInputCheck !== true) return { binding: null, reused: null };
+  const recorded = req.inputCheck === undefined ? null : readInputCheck(req.inputCheck, op);
+  const binding = inputCheckBinding(rigAt, tree, req.parts, req.requirements, pageEdges, packShape, { parts: partsVersion, rigc: rigcVersionText(rigc, op) });
+  if (recorded === null) return { binding, reused: null };
+  refuseIfAny(inputCheckBoundProblems(recorded, binding, req.inputCheck as string, op));
+  return { binding, reused: canonicalSide(recorded.check) };
+}
 
 /** One side of the check block, read off a check report. */
 export function checkSide(r: CheckReport): CheckSide {
@@ -656,6 +860,7 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
   const tree = readTree(rigAt);
   refuseIfAny(inputTreeProblems(tree, input.rig));
   if ((input.mesh === undefined) === (input.delta === undefined)) throw new Error('remeshStage: exactly one of mesh, delta is required');
+  const recorded = inputCheckOf(input, rigAt, tree, pageEdges, packShape, versions.parts, rigc, 'remesh');
   const meshReq = input.mesh === undefined ? null : readMeshRequest(input.mesh);
   const deltaReq = input.delta === undefined ? null : readDeltaRequest(input.delta);
   const configText = readFileSync(input.config, 'utf8');
@@ -765,9 +970,10 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
   }
   const checkOf = (rig: string, name: string): CheckReport =>
     checkStage({ rig, parts: input.parts, out: join(scratch, name), pageEdges, packShape, ...(input.requirements === undefined ? {} : { requirements: input.requirements }) }, rigc, checkBin, (l) => log(`[${name}] ${l}`));
-  const inCheck = checkOf(rigAt, 'check-input');
+  if (recorded.reused !== null) log(inputCheckReusedLine(input.inputCheck as string, recorded.binding as InputCheckBinding));
+  const inSide = recorded.reused ?? checkSide(checkOf(rigAt, 'check-input'));
   const revCheck = checkOf(staged, 'check-revision');
-  const sides = { input: checkSide(inCheck), revision: checkSide(revCheck) };
+  const sides = { input: inSide, revision: checkSide(revCheck) };
   refuseIfAny(checkHeldProblems(sides.input, sides.revision, revCheck.problems));
   const scope = checkScope(sides.revision.physics);
   log(`  check: input ${sides.input.pass ? 'PASS' : `FAIL (${sides.input.not_met.join(', ')})`}, revision ${sides.revision.pass ? 'PASS' : `FAIL (${sides.revision.not_met.join(', ')})`}, the same ${sides.revision.measured.length} bar(s) measured; ${scope}`);
@@ -795,6 +1001,11 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
   }
   writeFileSync(join(outAt, PROVENANCE_FILE), rigJsonText(provenance));
   written.push(PROVENANCE_FILE);
+  if (input.recordInputCheck === true) {
+    writeFileSync(join(outAt, INPUT_CHECK_FILE), inputCheckText(recorded.binding as InputCheckBinding, sides.input));
+    written.push(INPUT_CHECK_FILE);
+    log(`  recorded: the input's check in ${INPUT_CHECK_FILE}, bound by ${inputCheckHashes(recorded.binding as InputCheckBinding)} sha256 row(s); pass it as --input-check to a later remesh or retune of ${input.rig}`);
+  }
   log('  file                                     sha256 (input)     sha256 (revision)');
   const inHash = new Map(hashRows(tree).map((r) => [r.path, r.sha256]));
   for (const r of provenance.revision) log(`  ${r.path.padEnd(40)} ${(inHash.get(r.path) ?? 'absent').slice(0, 16)}   ${r.sha256.slice(0, 16)}${inHash.get(r.path) === r.sha256 ? '' : '  (spliced)'}`);

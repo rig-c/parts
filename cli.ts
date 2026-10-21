@@ -32,7 +32,7 @@ import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, coverageLines, serializeB
 import { BEND_DEGREES, BEND_WORST_SHARE, DUST_MAX_PX, DUST_MAX_SHARE, IDLE_BOUND_PX, MESH_DRAFT_REPORT, MESH_DRAFT_SPEC, meshDraftStage, MORE_TRIANGLES_FLAG, relativeConfigPaths, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
 import { meshStatsStage } from './src/meshstats.ts';
 import { chainsLeftBehind, clothConfigEdits, editPaths, previousCount, writtenClothConfig } from './src/clothconfig.ts';
-import { PROVENANCE_FILE, REMESH_SPEC, remeshStage } from './src/remesh.ts';
+import { INPUT_CHECK_FILE, INPUT_CHECK_SPEC, PROVENANCE_FILE, REMESH_SPEC, remeshStage } from './src/remesh.ts';
 import { RETUNE_FILE, RETUNE_SPEC, retuneStage } from './src/retune.ts';
 import { checkPainting } from './src/paintcheck.ts';
 import { readPng, writePng } from './src/raster/png.ts';
@@ -397,6 +397,7 @@ usage:
                    --mesh <entry.json> --out <dir> [--requirements <file.json>]
                    (or --delta <mesh-edit.json> in place of --mesh)
                    [--idle-keys ctl|direct] [--page-edges pot|free] [--pack-shape rect|polygon]
+                   [--record-input-check] [--input-check <input-check.json>]
       Re-fit one part's mesh of a gated rig (the directory rig writes) under
       the mesh entry --mesh holds — what config.json would hold at
       meshes.<name>: a grid, a contour or an auto entry, its bounds the
@@ -434,10 +435,26 @@ usage:
       REMESH_DELTA_BASIS, REMESH_DELTA_OPS, REMESH_DELTA_OP naming ops[i],
       REMESH_DELTA_TOPOLOGY). No config entry is built: the baseline is the
       input itself; the splice, the gate and check are as for --mesh.
+      --record-input-check writes ${INPUT_CHECK_FILE} into --out beside
+      ${PROVENANCE_FILE} (spec "${INPUT_CHECK_SPEC}": both versions — rigc's
+      whole --version output — the pack mode, the requirements file's path and
+      SHA-256, the rig and parts directories as resolved with every file's
+      SHA-256 — every file under --rig, parts.json and every file under
+      parts/ — and the input's check side as ${PROVENANCE_FILE} carries it).
+      --input-check <input-check.json> reuses that check instead of running
+      check on the input again (a line says so, with the number of SHA-256
+      rows that bound it), and the provenance's check.input is the recorded
+      one, byte for byte. Every row must be this run's: a file added, missing
+      or of other bytes, another directory, requirements file, pack mode,
+      rig-parts or rigc is refused by name with the row, the value recorded
+      and the value required (REMESH_INPUT_CHECK_BOUND); a file that is not
+      the record is REMESH_INPUT_CHECK_FILE. Both are read before anything is
+      built, and nothing is written. Without either flag nothing written moves.
 
   rig-parts retune --rig <dir> --config <config.json> --parts <dir> --out <dir>
                    [--requirements <file.json>] [--idle-keys ctl|direct]
                    [--page-edges pot|free] [--pack-shape rect|polygon]
+                   [--record-input-check] [--input-check <input-check.json>]
       Splice the constraints and the idle a config states onto a gated rig
       (the directory rig writes) and write a new revision into --out, which
       must not exist (RETUNE_OUT_FRESH); the input is never written. The
@@ -458,6 +475,10 @@ usage:
       SHA-256, what was held, which constraint fields and idle tracks changed,
       both checks and their scope) — no path and no clock, so the same request
       writes the same bytes. Prints what changed and a hash table of every file.
+      --record-input-check and --input-check are remesh's (one record format,
+      one binding; a record either command wrote serves the other over the
+      same input), refused as RETUNE_INPUT_CHECK_BOUND and
+      RETUNE_INPUT_CHECK_FILE.
 
   rig-parts check --rig <dir> --out <dir> [--parts <dir>] [--source <painting.png>]
                     [--page-edges pot|free] [--pack-shape rect|polygon]
@@ -955,8 +976,8 @@ const TAKES = {
   compose: { valued: ['--scene', '--out', '--requirements', '--accept'], switches: [] },
   'mesh-draft': { valued: ['--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: ['--more-triangles'] },
   'mesh-stats': { valued: ['--config', '--parts'], switches: [] },
-  remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--delta', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
-  retune: { valued: ['--rig', '--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
+  remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--delta', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--input-check'], switches: ['--record-input-check'] },
+  retune: { valued: ['--rig', '--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--input-check'], switches: ['--record-input-check'] },
   painting: { valued: ['--keypoints', '--person'], switches: [] },
 } as const satisfies Record<string, { valued: readonly string[]; switches: readonly string[] }>;
 
@@ -1846,7 +1867,10 @@ function cmdMeshStats(args: string[]): number {
 
 /** `remesh` (issue #495): one part of a gated rig re-fitted under a requested mesh entry, into a new revision. */
 function cmdRemesh(args: string[]): number {
-  const f = flags(args, 'remesh', ['--rig', '--config', '--parts', '--part', '--out']);
+  // Issue #617: --record-input-check carries no value, so it is taken out before the valued flags are read.
+  const record = args.filter((a) => a === '--record-input-check').length;
+  if (record > 1) return usage('--record-input-check is given twice');
+  const f = flags(args.filter((a) => a !== '--record-input-check'), 'remesh', ['--rig', '--config', '--parts', '--part', '--out']);
   if (typeof f === 'string') return usage(f);
   if (f.has('--mesh') === f.has('--delta')) return usage('remesh needs exactly one of --mesh, --delta');
   const keys = idleKeysOf(f.get('--idle-keys'));
@@ -1868,8 +1892,9 @@ function cmdRemesh(args: string[]): number {
   const scratch = mkdtempSync(join(tmpdir(), 'rig-parts-remesh-'));
   try {
     const req = f.get('--requirements');
+    const ic = f.get('--input-check');
     remeshStage(
-      { rig: f.get('--rig') as string, config: f.get('--config') as string, parts: f.get('--parts') as string, part: f.get('--part') as string, ...(f.has('--mesh') ? { mesh: f.get('--mesh') as string } : { delta: f.get('--delta') as string }), out: f.get('--out') as string, idleKeys: keys, pageEdges: edges, packShape: shape, ...(req === undefined ? {} : { requirements: req }) },
+      { rig: f.get('--rig') as string, config: f.get('--config') as string, parts: f.get('--parts') as string, part: f.get('--part') as string, ...(f.has('--mesh') ? { mesh: f.get('--mesh') as string } : { delta: f.get('--delta') as string }), out: f.get('--out') as string, idleKeys: keys, pageEdges: edges, packShape: shape, ...(req === undefined ? {} : { requirements: req }), ...(ic === undefined ? {} : { inputCheck: ic }), ...(record === 1 ? { recordInputCheck: true } : {}) },
       runner,
       bin,
       { parts: version(), rigc: rigcVersion },
@@ -1886,7 +1911,10 @@ function cmdRemesh(args: string[]): number {
 
 /** `retune` (issue #527): the constraints and the idle a config states, spliced onto a gated rig, into a new revision. */
 function cmdRetune(args: string[]): number {
-  const f = flags(args, 'retune', ['--rig', '--config', '--parts', '--out']);
+  // Issue #617: --record-input-check carries no value, so it is taken out before the valued flags are read.
+  const record = args.filter((a) => a === '--record-input-check').length;
+  if (record > 1) return usage('--record-input-check is given twice');
+  const f = flags(args.filter((a) => a !== '--record-input-check'), 'retune', ['--rig', '--config', '--parts', '--out']);
   if (typeof f === 'string') return usage(f);
   const keys = idleKeysOf(f.get('--idle-keys'));
   if (!isIdleKeys(keys)) return usage(keys);
@@ -1907,8 +1935,9 @@ function cmdRetune(args: string[]): number {
   const scratch = mkdtempSync(join(tmpdir(), 'rig-parts-retune-'));
   try {
     const req = f.get('--requirements');
+    const ic = f.get('--input-check');
     retuneStage(
-      { rig: f.get('--rig') as string, config: f.get('--config') as string, parts: f.get('--parts') as string, out: f.get('--out') as string, idleKeys: keys, pageEdges: edges, packShape: shape, ...(req === undefined ? {} : { requirements: req }) },
+      { rig: f.get('--rig') as string, config: f.get('--config') as string, parts: f.get('--parts') as string, out: f.get('--out') as string, idleKeys: keys, pageEdges: edges, packShape: shape, ...(req === undefined ? {} : { requirements: req }), ...(ic === undefined ? {} : { inputCheck: ic }), ...(record === 1 ? { recordInputCheck: true } : {}) },
       runner,
       bin,
       { parts: version(), rigc: rigcVersion },
