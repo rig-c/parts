@@ -167,12 +167,12 @@ export interface CapRecord {
   short_px?: { left: number; right: number };
   /**
    * Issue #603, written only when above 0: the cap's pixels a subset set's
-   * exclusion (issue #587) cleared — pixels a base part the set does not
-   * replace covers at setup — each taken out of the count it was in
+   * exclusion (issue #587) or preceding ownership assignment (issue #637)
+   * cleared, each taken out of the count it was in
    * (`layer_px`, `image_px`, `upper_px`, `lower_px`, `lower_kept_px`), so
    * those counts are the written PNG's. The disc's pixels are then the
    * counts above, `upper_px`, the lower half's and `excluded_px` together.
-   * A cap no exclusion touched writes no key.
+   * A cap neither step touched writes no key.
    */
   excluded_px?: number;
   /**

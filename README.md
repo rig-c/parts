@@ -466,8 +466,12 @@ bun run smoke            # pack, install into an empty directory, run from the i
 The generated `foot-ownership` suite can be run alone with
 `bun run selftest -- --only foot-ownership` (exit 2 means a green partial run,
 not a full-tree verdict). Issue #638's revised acceptance requires zero foreign-leg
-components and reports valid own-cap components separately; it was changed after
-measurement, and does not claim the original second-island 1% bar passed.
+components and reports historical own-cap components separately; it was changed
+after measurement, and the historical case did not pass the original second-island
+1% bar. Issue #637 additionally preserves assigned own-cap connections under covers:
+the generated default is now one connected component, retaining the historical
+own-cap pixels and their bridge. The controls require both historical measurements
+and current connected ownership, with no foreign-leg pixels.
 [AUTHORING's limb section](docs/AUTHORING.md#limbs-cut-at-their-joints-limbs-issue-349)
 records the generated default-cap case and its preservation controls.
 
