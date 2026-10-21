@@ -104,7 +104,7 @@ import { type Problem, refuseIfAny } from './errors.ts';
 import { figuresPhrase, implausibleRules, type Layer, type LayerFigures, layerFigures, type LayerSet, NEAR_WHITE_MIN, OPAQUE_ALPHA_ABOVE, ruleSummary } from './layers.ts';
 import { padToSquare, squarePad } from './inputs.ts';
 import { type CapRecord, type LimbRecord, PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, type SceneRecord, type SingleRunPad } from './parts.ts';
-import { assignCrossedLimbs, assignOverlappingHands, type BonePlace, bonePlaces, capBox, coveredRadius, type CutPlacement, featherWeight, halfWidthAbout, inDisc, jointLine, type JointLine, jointOffsets, limbPolyline, limbRun, luma601, nearestLimb, nearestOnLine, offLineFigure, pastJoint, placeCut, segmentOf } from './limbs.ts';
+import { assignCrossedLimbs, assignOverlappingHands, type BonePlace, bonePlaces, capBox, coveredRadius, type CutPlacement, featherWeight, halfWidthAbout, inDisc, jointLine, type JointLine, jointOffsets, limbPolyline, limbRun, luma601, nearestLimb, nearestOnLine, offLineFigure, pastJoint, placeCut, polylineDist2, segmentOf } from './limbs.ts';
 import {
   alphaComposite,
   type Components,
@@ -375,6 +375,33 @@ export interface AssembleInput {
    * the rule before #608; no config field and no command reaches it.
    */
   islandFloor?: number;
+  /**
+   * Issue #609: the config's limbs a subset set does not carry that take one of `limbIslands` — the other leg of a
+   * two-leg layer — with what the set says of their place. On a `limbIslands` part of one island, every limb segment
+   * part cut from it keeps the pixels nearer its own limb's segment line than the other limb's ({@link OtherLimbs}),
+   * once the limbs are cut and in place of the island rule, which needs two islands. Absent: nothing changes.
+   */
+  otherLimbs?: OtherLimbs;
+}
+
+/**
+ * Issue #609: the limbs of a layer a subset set names one side of, which the set does not carry, as the set build
+ * hands them to {@link assemble}.
+ */
+export interface OtherLimbs {
+  /** The config's limbs, by name, that the set does not carry and that take one of `limbIslands`. */
+  limbs: Readonly<Record<string, Limb>>;
+  /**
+   * Per limb, its segment bones the set does not place: neither its skeleton names it (`SKELETON_LIMB_BONES`) nor
+   * its `drawn`, nor an ancestor of it. Empty: the limb stands where the set's own bones (`bones`) put it.
+   */
+  unposed: Readonly<Record<string, readonly string[]>>;
+  /** Per limb, the rig pixels where the base build's parts of that limb hold art (alpha above `OPAQUE_ALPHA_ABOVE`) at setup. */
+  baseArt: Readonly<Record<string, Mask>>;
+  /** The base build's parts in draw order (`parts.json`'s order): a later one is drawn in front. */
+  drawOrder: readonly string[];
+  /** How the set states its pose, for the refusal's words: a `skeleton` file, `drawn` angles, or neither. */
+  pose: 'skeleton' | 'drawn' | 'none';
 }
 
 /** One base part's cover over one of a subset set's limb parts (issue #587): `part` loses its pixels where `mask` is 1. */
@@ -596,8 +623,10 @@ function keepJointIslands(
   W: number,
   H: number,
   floorShare: number,
-): { counts: IslandCount[]; problems: Problem[] } {
+  others?: OtherLimbs,
+): { counts: IslandCount[]; splits: SplitCount[]; problems: Problem[] } {
   const counts: IslandCount[] = [];
+  const splits: SplitCount[] = [];
   const problems: Problem[] = [];
   const places = bonePlaces(bones);
   for (const src of sources) {
@@ -608,7 +637,11 @@ function keepJointIslands(
     const cc = connectedComponents(m, 8);
     const reading = readIslands(cc, W, H, floorShare);
     const n = reading.candidates.length;
-    if (n < 2) continue;
+    if (n < 2) {
+      // Issue #609: one island may hold both limbs, overlapping; the island rule cannot part them, the segment lines can.
+      if (n === 1 && others !== undefined) splitOneIsland(src, b, limbs, places, parts, pieces, others, W, H, splits, problems);
+      continue;
+    }
     const numberOf = new Map(reading.candidates.map((l, i) => [l, i + 1]));
     const islandText = (label: number): string => {
       const st = cc.stats[label];
@@ -703,7 +736,253 @@ function keepJointIslands(
       });
     });
   }
-  return { counts, problems };
+  return { counts, splits, problems };
+}
+
+/**
+ * Issue #609: the overlap band's width — a pixel whose centre's distances to the two limbs' segment lines differ by at
+ * most this is equally near both, and goes to the limb drawn in front. Half a pixel: the reach by which `src/limbs.ts`
+ * reads a pixel centre as on a line (`limbWidth`: the pixels "whose centre lies within half a pixel of the joint
+ * line"), here read on the line of points equally near both.
+ */
+export const OVERLAP_BAND_PX = 0.5;
+
+/**
+ * Issue #609: the share of the overlap at which the two limbs' segment lines run closer than the limb's half-width
+ * over most of it — more than half, the plain majority. A straight crossing at angle θ reads cos θ / 2 of its overlap
+ * there ({@link skeletonsTooClose}), under half at any angle; only lines that run alongside each other reach it.
+ */
+export const OVERLAP_TOO_CLOSE_SHARE = 0.5;
+
+/** What one limb segment part kept of a layer of one island that also holds another limb (issue #609). */
+export interface SplitCount {
+  part: string;
+  /** The part the limb took (the segment's `from`). */
+  of: string;
+  /** The part's own limb. */
+  limb: string;
+  /** The part's pixels (alpha above `OPAQUE_ALPHA_ABOVE`) kept, and those given to each other limb, in `config.limbs` order. */
+  kept: number;
+  given: Array<{ limb: string; px: number }>;
+  /** Of `kept` and `given`, the pixels in the overlap band ({@link OVERLAP_BAND_PX}), which went to the limb drawn in front: those kept, those given. */
+  bandKept: number;
+  bandGiven: number;
+}
+
+/** A point and its distance to a set of line pieces. */
+type LinePt = readonly [number, number];
+
+/** The distance from `p` along the unit normal `n` to the piece `c`–`d` (|t| with `p + t n` on it), or Infinity when the normal line misses it. */
+function normalGap(p: LinePt, n: LinePt, c: LinePt, d: LinePt): number {
+  const ex = d[0] - c[0];
+  const ey = d[1] - c[1];
+  const cx = c[0] - p[0];
+  const cy = c[1] - p[1];
+  const det = ex * n[1] - n[0] * ey;
+  const len = Math.sqrt(ex * ex + ey * ey);
+  if (Math.abs(det) <= 1e-9 * len) {
+    // The piece is parallel to the normal: it meets the normal line only when it lies on it.
+    if (Math.abs(cx * n[1] - cy * n[0]) > 1e-9) return Infinity;
+    const tc = cx * n[0] + cy * n[1];
+    const td = (d[0] - p[0]) * n[0] + (d[1] - p[1]) * n[1];
+    return tc * td <= 0 ? 0 : Math.min(Math.abs(tc), Math.abs(td));
+  }
+  const t = (ex * cy - ey * cx) / det;
+  const v = (n[0] * cy - n[1] * cx) / det;
+  return v < 0 || v > 1 ? Infinity : Math.abs(t);
+}
+
+/**
+ * Issue #609: whether two limbs' segment lines run closer than `half` (the own limb's half-width) over most of where
+ * their art can overlap. The own line is read every 1 px along each of its pieces, from the piece's start; a reading
+ * is in the overlap when the other line passes within `2 * half` of it (two limbs of that half-width can meet there),
+ * and close when the other line crosses the own limb's normal there within `half` — the gap measured across the
+ * limb, as its width is. A crossing at angle θ is close over cos θ / 2 of its overlap; two lines alongside each other
+ * less than `half` apart, over all of it.
+ */
+function skeletonsTooClose(own: readonly LinePt[], other: readonly LinePt[], half: number): { overlap: number; close: number } {
+  let overlap = 0;
+  let close = 0;
+  for (let i = 0; i + 1 < own.length; i++) {
+    const a = own[i];
+    const b = own[i + 1];
+    const len = Math.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2);
+    if (len === 0) continue;
+    const u: LinePt = [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
+    const n: LinePt = [-u[1], u[0]];
+    for (let k = 0; k <= Math.floor(len); k++) {
+      const s: LinePt = [a[0] + k * u[0], a[1] + k * u[1]];
+      if (Math.sqrt(polylineDist2(other as Array<[number, number]>, s[0], s[1])) >= 2 * half) continue;
+      overlap++;
+      let gap = Infinity;
+      for (let j = 0; j + 1 < other.length; j++) gap = Math.min(gap, normalGap(s, n, other[j], other[j + 1]));
+      if (other.length === 1) gap = Math.sqrt((other[0][0] - s[0]) ** 2 + (other[0][1] - s[1]) ** 2);
+      if (gap < half) close++;
+    }
+  }
+  return { overlap, close };
+}
+
+/**
+ * Issue #609: on a layer of one island that the set's limbs take and `others`' limbs take too, give each pixel of the
+ * set's limb parts to the limb whose segment line is nearest it, in the set's pose, and keep the set's.
+ *
+ * ⚖️ Invariant: a limb's segment line is its polyline ({@link limbPolyline}: its segments' bone origins, then the last
+ * bone's end) at `places`, the set's own bones — the set's limb where the set cut it, the other limb where the set
+ * placed it (its skeleton's keypoints). A pixel of a part (alpha above 0, where the layer has art) is nearer the
+ * other limb when its centre's distance to that limb's line is less than its distance to its own limb's by more than
+ * {@link OVERLAP_BAND_PX}; within it, in the overlap band, it goes to the limb whose part there (the part of the
+ * segment nearest it) is drawn later in the base's draw order. A pixel given away is cleared (alpha, colour and
+ * region). An other limb the set does not place is never put at the base's place: when the layer has art where the
+ * base build draws that limb, the layer holds it and the set is refused by name (`ASSEMBLE_ALT_LIMB_POSE`); when it
+ * has none, nothing says the layer holds it, and it takes no pixel. Two limbs whose lines run closer than the limb's
+ * half-width (the least `cap.radius` of its joints) over more than {@link OVERLAP_TOO_CLOSE_SHARE} of their overlap
+ * ({@link skeletonsTooClose}) have no line between them to split by, and are refused by name
+ * (`ASSEMBLE_ALT_LIMB_OVERLAP`) rather than cut down the middle.
+ */
+function splitOneIsland(
+  src: string,
+  source: Built,
+  limbs: Readonly<Record<string, Limb>>,
+  places: ReadonlyMap<string, BonePlace>,
+  parts: readonly LimbPart[],
+  pieces: readonly Built[],
+  others: OtherLimbs,
+  W: number,
+  H: number,
+  splits: SplitCount[],
+  problems: Problem[],
+): void {
+  const mine = parts.map((q, i) => ({ q, i })).filter(({ q }) => q.of === src);
+  if (mine.length === 0) return;
+  const ownNames = [...new Set(mine.map(({ q }) => q.limb))];
+  const otherNames = Object.keys(others.limbs).filter((l) => others.limbs[l].segments.some((sg) => sg.from === src));
+  if (otherNames.length === 0) return;
+  const owners = ownNames.map((l) => `config.limbs.${l}`).join(' and ');
+  const problemsBefore = problems.length;
+  let refused = false;
+  const posed: string[] = [];
+  for (const l of otherNames) {
+    const unposed = others.unposed[l] ?? [];
+    if (unposed.length === 0) {
+      posed.push(l);
+      continue;
+    }
+    const art = others.baseArt[l];
+    let on = 0;
+    for (let p = 0; p < W * H; p++) if (source.r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE && art !== undefined && art.data[p] === 1) on++;
+    if (on === 0) continue;
+    const baseParts = others.limbs[l].segments.map((sg) => `"${sg.part}"`).join(', ');
+    const stated =
+      others.pose === 'skeleton'
+        ? `its skeleton places none of ${unposed.map((b) => `"${b}"`).join(', ')} (the body-18 table names only the arm and leg bones), nor an ancestor of one`
+        : others.pose === 'drawn'
+          ? `its drawn names none of ${unposed.map((b) => `"${b}"`).join(', ')}, nor an ancestor of one`
+          : `it gives neither skeleton nor drawn, so none of ${unposed.map((b) => `"${b}"`).join(', ')} is placed`;
+    problems.push({
+      code: 'ASSEMBLE_ALT_LIMB_POSE',
+      object: `part "${src}" (${owners}, and config.limbs.${l})`,
+      detail: `holds one island (8-connected, alpha above ${OPAQUE_ALPHA_ABOVE}), and ${on} of its px lie where the base build draws ${l} (${baseParts}) at setup, so the layer holds both ${ownNames.join(', ')} and ${l}; the set carries ${ownNames.join(', ')} alone, so each pixel goes to the limb whose segment line is nearest it in the set's pose, and the set does not pose ${l}: ${stated}; its place in the set is never taken from the base's — drawn would need ${unposed.map((b) => `"${b}"`).join(', ')}, which a subset set may not state for a bone it does not cover (CONFIG_SET_COVERS_BONE), so a skeleton file whose keypoints place ${l} is required, or a set that carries ${l}'s parts too, or a layer that holds ${ownNames.join(', ')} alone`,
+    });
+    refused = true;
+  }
+  if (refused || posed.length === 0) return;
+  const polyOf = (l: string, all: Readonly<Record<string, Limb>>): Array<[number, number]> => limbPolyline(all[l], places);
+  // The too-close refusal, per own limb and other limb, on the own limb's half-width.
+  for (const own of ownNames) {
+    const radii = parts.filter((q) => q.limb === own && q.record.cap !== undefined).map((q) => (q.record.cap as CapRecord).radius);
+    for (const l of posed) {
+      if (radii.length === 0) {
+        problems.push({
+          code: 'ASSEMBLE_ALT_LIMB_OVERLAP',
+          object: `config.limbs.${own} (part "${src}", and config.limbs.${l})`,
+          detail: `takes "${src}", which holds ${own} and ${l} in one island; no joint of ${own} carries a cap, so no half-width is measured to tell whether the two segment lines run apart; a limb of two segments or more is required`,
+        });
+        continue;
+      }
+      const half = Math.min(...radii);
+      const t = skeletonsTooClose(polyOf(own, limbs), polyOf(l, others.limbs), half);
+      if (t.overlap > 0 && t.close > OVERLAP_TOO_CLOSE_SHARE * t.overlap) {
+        problems.push({
+          code: 'ASSEMBLE_ALT_LIMB_OVERLAP',
+          object: `config.limbs.${own} (part "${src}", and config.limbs.${l})`,
+          detail: `takes "${src}", which holds ${own} and ${l} in one island, and in the set's pose ${l}'s segment line runs within ${pyRound(half, 3)} px (${own}'s half-width, the least cap radius of its joints) of ${own}'s, across ${own}, at ${t.close} of the ${t.overlap} readings 1 px apart along ${own}'s line where ${l}'s passes within ${pyRound(2 * half, 3)} px (${pyRound(t.close / t.overlap, 3)}; more than ${OVERLAP_TOO_CLOSE_SHARE} is most); the two limbs lie over each other there, so no line between them says whose a pixel is — a layer that holds ${own} alone, or a set that carries ${l}'s parts too, is required`,
+        });
+      }
+    }
+  }
+  if (problems.length > problemsBefore) return;
+  const drawAt = new Map(others.drawOrder.map((name, i) => [name, i]));
+  // Each other limb's pieces, and the part each piece's segment is.
+  const otherLines = posed.map((l) => ({ l, line: polyOf(l, others.limbs), segs: others.limbs[l].segments }));
+  for (const { q, i } of mine) {
+    const piece = pieces[i];
+    const ownLine = polyOf(q.limb, limbs);
+    const ownAt = drawAt.get(q.part) ?? -1;
+    let kept = 0;
+    let bandKept = 0;
+    let bandGiven = 0;
+    const given = new Map<string, number>(posed.map((l) => [l, 0]));
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const p = y * W + x;
+        const a = piece.r.data[p * 4 + 3];
+        if (a === 0) continue;
+        if (source.r.data[p * 4 + 3] === 0) {
+          if (a > OPAQUE_ALPHA_ABOVE) kept++;
+          continue;
+        }
+        const dOwn = Math.sqrt(polylineDist2(ownLine, x + 0.5, y + 0.5));
+        let best: { l: string; d: number; part: string } | null = null;
+        for (const o of otherLines) {
+          // The nearest piece of the other limb's line, and so its segment's part.
+          let dk = Infinity;
+          let seg = 0;
+          for (let k = 0; k + 1 < o.line.length; k++) {
+            const d = polylineDist2([o.line[k], o.line[k + 1]], x + 0.5, y + 0.5);
+            if (d < dk) {
+              dk = d;
+              seg = k;
+            }
+          }
+          if (o.line.length === 1) dk = polylineDist2(o.line, x + 0.5, y + 0.5);
+          const d = Math.sqrt(dk);
+          if (best === null || d < best.d) best = { l: o.l, d, part: o.segs[Math.min(seg, o.segs.length - 1)].part };
+        }
+        const nearest = best as { l: string; d: number; part: string };
+        const inBand = Math.abs(nearest.d - dOwn) <= OVERLAP_BAND_PX;
+        const give = inBand ? (drawAt.get(nearest.part) ?? -1) > ownAt : nearest.d < dOwn;
+        if (!give) {
+          if (a > OPAQUE_ALPHA_ABOVE) {
+            kept++;
+            if (inBand) bandKept++;
+          }
+          continue;
+        }
+        if (a > OPAQUE_ALPHA_ABOVE) {
+          given.set(nearest.l, (given.get(nearest.l) ?? 0) + 1);
+          if (inBand) bandGiven++;
+        }
+        piece.r.data.fill(0, p * 4, p * 4 + 4);
+        if (piece.region !== null) piece.region.data[p] = 0;
+      }
+    }
+    splits.push({ part: q.part, of: src, limb: q.limb, kept, given: posed.map((l) => ({ limb: l, px: given.get(l) ?? 0 })), bandKept, bandGiven });
+  }
+}
+
+/**
+ * One `LINT` line per {@link SplitCount} (issue #609), in `config.limbs` order: the part's pixels kept and given to each
+ * other limb, each with its share of the part's pixels before the split (3 places), and the overlap band's pixels and
+ * which way they went.
+ */
+export function splitLines(set: string, counts: readonly SplitCount[]): string[] {
+  return counts.map((c) => {
+    const all = c.kept + c.given.reduce((s, g) => s + g.px, 0);
+    const share = (n: number): string => (all === 0 ? '0' : String(pyRound(n / all, 3)));
+    const gave = c.given.map((g) => `gave ${g.px} px (${share(g.px)}) to ${g.limb}`).join(', ');
+    return `  LINT set "${set}" ${c.part}: ${c.of} holds ${c.limb} and ${c.given.map((g) => g.limb).join(', ')} in one island (8-connected, alpha above ${OPAQUE_ALPHA_ABOVE}), split by the nearest segment line at the set's bones: kept ${c.kept} px (${share(c.kept)}), ${gave}; ${c.bandKept + c.bandGiven} px in the overlap band (nearer one line than the other by ${OVERLAP_BAND_PX} px or less) went to the limb drawn in front, ${c.bandKept} kept and ${c.bandGiven} given`;
+  });
 }
 
 /**
@@ -3820,6 +4099,8 @@ export interface AssembleResult {
   excluded: ExcludedCount[];
   /** Issue #588: what each limb segment part cut from a `limbIslands` part of more than one island kept; empty otherwise. */
   islands: IslandCount[];
+  /** Issue #609: what each limb segment part cut from a `limbIslands` part of one island that `otherLimbs` take kept; empty otherwise. */
+  splits: SplitCount[];
 }
 
 /** A hidden-art layer of a run (issue #359) and what read it: `cuts[i].under`, or a limb segment's cap; none is said. */
@@ -4337,7 +4618,11 @@ export function assemble(input: AssembleInput): AssembleResult {
     'plan' in d ? { name: plan[d.plan][0], b: built[d.plan] as Built } : 'cut' in d ? { name: cuts[d.cut].into, b: pieces[d.cut] as Built } : { name: lim.parts[d.limb].part, b: limbPieces[d.limb] as Built };
 
   // Issue #588: a set that names one limb side keeps, in each part cut from a layer of more than one island, the island its joints fall on.
-  const islandKept = (input.limbIslands ?? []).length === 0 ? { counts: [], problems: [] } : keepJointIslands(input.limbIslands ?? [], input.limbs ?? {}, input.bones ?? [], lim.parts, limbPieces, limbSource, W, H, input.islandFloor ?? ISLAND_FLOOR_SHARE);
+  // Issue #609: on a layer of one island that also holds a limb the set does not carry, by the nearest segment line.
+  const islandKept =
+    (input.limbIslands ?? []).length === 0
+      ? { counts: [], splits: [], problems: [] }
+      : keepJointIslands(input.limbIslands ?? [], input.limbs ?? {}, input.bones ?? [], lim.parts, limbPieces, limbSource, W, H, input.islandFloor ?? ISLAND_FLOOR_SHARE, input.otherLimbs);
   refuseIfAny(islandKept.problems);
 
   // Issue #587: a set's limb part loses the pixels a base part it does not replace covers, before anything is counted.
@@ -4533,6 +4818,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     ...(headFacePrep.underfillPx > 0 ? { headFaceUnderfillPx: headFacePrep.underfillPx } : {}),
     excluded,
     islands: islandKept.counts,
+    splits: islandKept.splits,
   };
 }
 
