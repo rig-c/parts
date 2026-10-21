@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.57.0](https://github.com/rig-c/parts/compare/v1.56.0...v1.57.0) (2026-10-21)
+
+
+### Features
+
+* accept explicit alternate bone endpoints ([#655](https://github.com/rig-c/parts/issues/655)) ([0faeb5a](https://github.com/rig-c/parts/commit/0faeb5a131fec10882db1fa24f33eab50ad3936f)), closes [#652](https://github.com/rig-c/parts/issues/652)
+
 ## [1.56.0](https://github.com/rig-c/parts/compare/v1.55.2...v1.56.0) (2026-10-21)
 
 
