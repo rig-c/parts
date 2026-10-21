@@ -591,6 +591,7 @@ import { type Built, type CheckSide, checkHeldProblems, deltaRow, PROVENANCE_FIL
 import { RETUNE_FILE, RETUNE_SPEC, type RetuneInput, type RetunePlant, type RetuneProvenance, type RetuneResult, retuneStage } from './src/retune.ts';
 import { DRAFT_COARSE_GRID, DRAFT_CONTOUR_MARK, DRAFT_COSTLY_GRID, DRAFT_FIGURE, DRAFT_FINE_GRID, DRAFT_LINKS, DRAFT_SPECK_ALPHA, draftConfig, draftImages, draftParts, writeDraftFixture, writeDraftFixtureWithContour, writeDraftIslandsFixture } from './fixtures/meshdraft.ts';
 import { pyRound } from './src/round.ts';
+import { ISLAND_FLOOR_SHARE as ISLAND_FLOOR_SHARE_608, islandLines as islandLinesOf608, setIslandSources as setIslandSourcesOf608 } from './src/assemble.ts';
 import { COLORS, isSkeletonName, KEYPOINT_NAMES, renderSkeleton, scaledPoints, SKELETON_BASE, SKELETONS, stickScale } from './src/skeleton.ts';
 import { AUTHOR_LABEL_RULE, AUTHOR_NO_ROLE, authorLayerLine, BODY_TAGS, HEAD_TAGS, HIDDEN_NAME_RULE, readAuthorTag, readLayerTag, readTag, SPLIT_TAGS, type TagReading, V3_TAGS } from './src/tags.ts';
 
@@ -24023,6 +24024,205 @@ function runBuildSuite(): number {
       both.failed === null && bothAll.failed === null && bothDiffer.length === 0 && !both.lines.some((l) => l.includes(' islands (8-connected')) && !shortsGreen.out.includes(' islands (8-connected'),
       `rule "joints" ${both.failed === null ? 'assembles' : both.failed.problems.map((q) => q.code).join(', ')}, "all" ${bothAll.failed === null ? 'assembles' : bothAll.failed.problems.map((q) => q.code).join(', ')}; ${bothFiles.length} file(s) compared, differing: ${bothDiffer.join(', ') || 'none'}; island LINT lines: both ${both.lines.filter((l) => l.includes(' islands (8-connected')).length}, BU190's build ${shortsGreen.out.split('\n').filter((l) => l.includes(' islands (8-connected')).length}`,
       'issue #588: the rule is for a set that names one limb side of a layer more limbs take; a set that carries every limb of the layer is split by the nearest polyline, as the base is, byte for byte as before',
+    );
+
+    // BU220–BU223 — issue #608: an island under 1 % of its layer's largest is a speck that goes with the island nearest
+    // it, and a joint just off the art goes to the one island within the radius of the cap cut at it. The fixture's
+    // runs are 128 px on the 128 px painting at rig_scale 0.5, so the run-to-rig map is k = 0.5 with no pad and a rig
+    // pixel (X, Y) samples the run pixel (2X, 2Y) exactly; every rect below is in rig px (doubled in the run). The base
+    // holds both legs, `legwear` [22, 30) and [34, 42) x [10, 50), and both shoes, `footwear` [22, 30) and [34, 42) x
+    // [50, 58); chain leg_r (26, 10) -> (26, 30), tip (26, 52), a `foot_r` bone at the ankle (26, 52), and leg_l the same
+    // at x 38. A speck: the run pixel (62, 40) at alpha 20, tied to the right leg in the run by a thread on run row 41
+    // (x 60..63), so the ghost clean-up reads one component; the rig samples no odd run row, so in the rig the speck is
+    // one pixel at (31, 20), alpha 20, one column clear of the leg — the 1-px low-alpha sliver of the card.
+    const spDir = join(dir, 'island-floor-608');
+    type SpRect = [number, number, number, number];
+    interface SpSet {
+      name: string;
+      legs: SpRect[];
+      feet: SpRect[];
+      speck?: boolean;
+    }
+    const SP_LEG_R: SpRect = [22, 10, 30, 50];
+    const SP_LEG_L: SpRect = [34, 10, 42, 50];
+    const SP_FOOT_R: SpRect = [22, 50, 30, 58];
+    const SP_FOOT_L: SpRect = [34, 50, 42, 58];
+    const SP_SPECK: [number, number] = [31, 20];
+    const SP_SPECK_ALPHA = 20;
+    const spRect = (r: SpRect): { x0: number; y0: number; x1: number; y1: number; colour: [number, number, number] } => ({ x0: r[0] * 2, y0: r[1] * 2, x1: r[2] * 2, y1: r[3] * 2, colour: [C[0], C[1], C[2]] });
+    const spConfig = (sets: SpSet[]): Record<string, unknown> => {
+      const c = assembleConfig({ plan: [['legs', 'full', 'legwear'], ['shoes', 'full', 'footwear']], extend: [], resolution: 128 });
+      c.bones = [
+        { name: 'hip', parent: 'root', at: [32, 10] },
+        { chain: 'leg_r', parent: 'hip', points: [[26, 10], [26, 30]], tip: [26, 52] },
+        { name: 'foot_r', parent: 'leg_r1', at: [26, 52] },
+        { chain: 'leg_l', parent: 'hip', points: [[38, 10], [38, 30]], tip: [38, 52] },
+        { name: 'foot_l', parent: 'leg_l1', at: [38, 52] },
+      ];
+      const leg = (s: string): Record<string, unknown> => ({
+        segments: [
+          { part: `thigh_${s}`, from: 'legs', bone: `leg_${s}0` },
+          { part: `shin_${s}`, from: 'legs', bone: `leg_${s}1`, joint: 'knee' },
+          { part: `foot_${s}`, from: 'shoes', bone: `foot_${s}`, joint: 'ankle' },
+        ],
+      });
+      c.limbs = { leg_r: leg('r'), leg_l: leg('l') };
+      c.regions = { thigh_r: 'leg_r0', shin_r: 'leg_r1', foot_r: 'foot_r', thigh_l: 'leg_l0', shin_l: 'leg_l1', foot_l: 'foot_l' };
+      c.motion = { duration: 1, tracks: [{ bone: 'hip', prop: 'rotate', amp: 2, period: 1, phase: 0 }] };
+      if (sets.length > 0) (c.assemble as Record<string, unknown>).alternates = sets.map((q) => ({ name: q.name, source: 'painting.png', full: `full_${q.name}`, head: 'head', parts: ['thigh_r', 'shin_r', 'foot_r'] }));
+      return c;
+    };
+    const spLayers = (legs: SpRect[], feet: SpRect[], speck: boolean): RunLayerSpec[] => [
+      // The thread: run row 2 * 20 + 1 = 41, from the leg's edge (run x 60) to the speck's column (run x 62) and one past it.
+      { name: 'legwear', depth: 0.6, rects: [...legs.map(spRect), ...(speck ? [{ x0: 60, y0: SP_SPECK[1] * 2 + 1, x1: SP_SPECK[0] * 2 + 2, y1: SP_SPECK[1] * 2 + 2, colour: [C[0], C[1], C[2]] as [number, number, number] }] : [])] },
+      { name: 'footwear', depth: 0.5, rects: feet.map(spRect) },
+    ];
+    const spFixture = (name: string, sets: SpSet[]): string => {
+      const d = join(spDir, name);
+      writeAssembleFixture(d, spConfig(sets), flatPainting(), { full: spLayers([SP_LEG_R, SP_LEG_L], [SP_FOOT_R, SP_FOOT_L], false), head: HEAD_LAYERS });
+      // writeAssembleFixture writes 64 px runs; these runs are 128 px.
+      writeRun(join(d, 'full'), spLayers([SP_LEG_R, SP_LEG_L], [SP_FOOT_R, SP_FOOT_L], false), 128);
+      writeRun(join(d, 'head'), HEAD_LAYERS, 128);
+      for (const q of sets) {
+        const rd = join(d, `full_${q.name}`);
+        writeRun(rd, spLayers(q.legs, q.feet, q.speck === true), 128);
+        if (q.speck !== true) continue;
+        const lj = JSON.parse(readFileSync(join(rd, 'layers.json'), 'utf8')) as { layers: Array<{ name: string; left: number; top: number }> };
+        const leg = lj.layers.find((l) => l.name === 'legwear') as { left: number; top: number };
+        const f = join(rd, 'parts', 'legwear.png');
+        const img = readPng(f);
+        img.data.set([C[0], C[1], C[2], SP_SPECK_ALPHA], ((SP_SPECK[1] * 2 - leg.top) * img.width + SP_SPECK[0] * 2 - leg.left) * 4);
+        writeFileSync(f, encodePngBytes(img));
+      }
+      return d;
+    };
+    const spStage = (d: string, out: string): { lines: string[]; failed: PartsError | null } => {
+      const lines: string[] = [];
+      const failed = refusals(() =>
+        assembleStage(
+          { source: join(d, 'painting.png'), full: join(d, 'full'), head: join(d, 'head'), config: join(d, 'config.json'), seam: 'near-white', project: DEFAULT_PROJECT_RULE },
+          { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, 'recomposite_error_rig.png') },
+          (l) => lines.push(l),
+        ),
+      );
+      return { lines, failed };
+    };
+    const spLint = (lines: readonly string[]): string[] => lines.filter((l) => / islands \(8-connected/.test(l)).map((l) => l.trim());
+    /** The alpha of the rig pixel `at` in a part PNG of `out`, or null when the part or the pixel is outside it. */
+    const spAlphaAt = (out: string, part: string, at: [number, number]): number | null => {
+      const pf = existsSync(join(out, 'parts.json')) ? readParts(join(out, 'parts.json')) : null;
+      const rec = pf === null ? undefined : [...pf.parts, ...(pf.alternates ?? []).flatMap((a) => a.records.map((r) => ({ ...r, name: `${a.name}_${r.name}` })))].find((p) => p.name === part);
+      if (rec === undefined || !existsSync(join(out, 'parts', `${part}.png`))) return null;
+      const img = readPng(join(out, 'parts', `${part}.png`));
+      const [x, y] = [at[0] - rec.x, at[1] - rec.y];
+      return x < 0 || y < 0 || x >= img.width || y >= img.height ? 0 : img.data[(y * img.width + x) * 4 + 3];
+    };
+
+    // The green sets. `split_r`: the hand-split layer — its `legwear` holds the right leg alone and the speck, its
+    // `footwear` the right shoe; the ankle (26, 52) is two rows past the legwear's last row (49), on the shoe. `two_r`: both
+    // legs, both shoes and the speck.
+    const spGreenSets: SpSet[] = [
+      { name: 'split_r', legs: [SP_LEG_R], feet: [SP_FOOT_R], speck: true },
+      { name: 'two_r', legs: [SP_LEG_R, SP_LEG_L], feet: [SP_FOOT_R, SP_FOOT_L], speck: true },
+    ];
+    const spGreenDir = spFixture('green', spGreenSets);
+    const spGreen = spStage(spGreenDir, join(spGreenDir, 'out'));
+    const spBaseDir = spFixture('no-sets', []);
+    const spBase = spStage(spBaseDir, join(spBaseDir, 'out'));
+    // By hand. The largest island of `legs` in each set is a leg, 8 x 40 = 320 px; 1 % of it is 3.2 px, so the 1-px speck
+    // is under the floor. `split_r`: one candidate, so the layer is cut as a layer of one island is — no island line, and
+    // the speck (above the knee line y = 30, so the thigh's) stays in the thigh at its alpha. `two_r`: two candidates; the
+    // speck's nearest leg pixel centres are (29, 20), 2 columns off, and (34, 20), 3 off, so it goes with the right leg.
+    // The thigh keeps the right leg's rows 10..29 (8 x 20 = 160 px) and the speck, 161 px, and drops the left leg's 160.
+    // The shin: rows 30..49 (160 px) and the knee's cap (26 px, BU200's by hand), 186; the left leg's 160 dropped. Its
+    // ankle is on no `legs` pixel: the nearest pixel centre of the right leg is (25.5, 49.5) or (26.5, 49.5),
+    // sqrt(0.5² + 2.5²) = sqrt(6.5) = 2.550 px off, and of the left leg (34.5, 49.5), sqrt(8.5² + 2.5²) = 8.860 px. The
+    // cap cut at the ankle: its line, the row y = 52, crosses the shoe on rows 51 and 52, x 22..29, offsets -3.5 .. 3.5
+    // from the joint's 26, so the width is 8 and the radius 4 — the right leg alone within it. The foot: the right
+    // shoe, 8 x 8 = 64 px, kept; the left shoe's 64 dropped.
+    const SP_FLOOR = 0.01 * 320;
+    const spLine = (part: string, of: string, specks: boolean, joints: string, kept: number, dropped: string): string =>
+      `LINT set "two_r" ${part}: ${of} holds 2 islands (8-connected, alpha above 8)${specks ? `, and 1 speck under 1 % of the largest (${SP_FLOOR} px), each with the island nearest it` : ''}, kept the one under ${joints} (${kept} px), ${dropped}`;
+    const spWant = [
+      spLine('thigh_r', 'legs', true, 'leg_r0 [26, 10] and leg_r1 [26, 30]', 161, 'dropped 1 (160 px)'),
+      spLine('shin_r', 'legs', true, "leg_r1 [26, 30] and foot_r [26, 52] (2.55 px off it, within its cap's radius 4)", 160 + 26, 'dropped 1 (160 px)'),
+      spLine('foot_r', 'shoes', false, 'foot_r [26, 52]', 64, 'dropped 1 (64 px)'),
+    ];
+    const spGreenLint = spLint(spGreen.lines);
+    const spBaseFiles = ['parts.json', ...['thigh_r', 'shin_r', 'foot_r', 'thigh_l', 'shin_l', 'foot_l'].map((n) => join('parts', `${n}.png`))];
+    const spBaseParts = (out: string): string => (existsSync(join(out, 'parts.json')) ? JSON.stringify(readParts(join(out, 'parts.json')).parts) : 'absent');
+    const spBaseDiffer = spBaseFiles.slice(1).filter((f) => digest(join(spGreenDir, 'out', f)) !== digest(join(spBaseDir, 'out', f)));
+    const spBaseSame = spBaseDiffer.length === 0 && spBaseParts(join(spGreenDir, 'out')) === spBaseParts(join(spBaseDir, 'out'));
+    say(
+      'BU220_A_JOINT_JUST_OFF_THE_ART_GOES_TO_THE_ONE_ISLAND_WITHIN_ITS_CAP_RADIUS_AND_A_SPECK_GOES_WITH_THE_NEAREST_LEG',
+      spGreen.failed === null && spBase.failed === null && JSON.stringify(spGreenLint) === JSON.stringify(spWant) && spAlphaAt(join(spGreenDir, 'out'), 'two_r_thigh_r', SP_SPECK) === SP_SPECK_ALPHA && spBaseSame,
+      `${spGreen.failed === null ? 'assembles' : `refuses ${spGreen.failed.problems.map((q) => `${q.code}: ${q.object} — ${q.detail}`).join(' | ')}`} (no-sets ${spBase.failed === null ? 'assembles' : spBase.failed.problems.map((q) => q.code).join(', ')}); island LINT: ${spGreenLint.join(' | ') || 'none'}; two_r_thigh_r alpha at the speck ${spAlphaAt(join(spGreenDir, 'out'), 'two_r_thigh_r', SP_SPECK)}; base files differing from the no-sets build: ${spBaseDiffer.join(', ') || 'none'}, base records equal ${spBaseParts(join(spGreenDir, 'out')) === spBaseParts(join(spBaseDir, 'out'))}`,
+      "issue #608, bars 1 and 4: an ankle 2.55 px past the legwear's edge, on the shoe, goes to the right leg — the one island within the 4 px radius of the cap cut there — and the LINT prints the distance and the radius; the 1-px speck at alpha 20 is under 1 % of the largest island, goes with the leg nearest it and is named, not counted as an island; every count by hand; the base's parts are the bytes a build with no set writes",
+    );
+
+    // Bar 2: the hand-split set's layer holds one leg and the speck — one candidate — so no island line prints at all,
+    // the build is not refused for the ankle off the legwear, and the speck stays in the thigh at alpha 20.
+    say(
+      'BU221_A_HAND_SPLIT_LAYER_WITH_A_ONE_PIXEL_SPECK_PRINTS_NO_ISLAND_LINE_AND_KEEPS_THE_SPECK',
+      spGreen.failed === null && !spGreen.lines.some((l) => l.includes('LINT set "split_r"')) && spAlphaAt(join(spGreenDir, 'out'), 'split_r_thigh_r', SP_SPECK) === SP_SPECK_ALPHA,
+      `${spGreen.failed === null ? 'assembles' : spGreen.failed.problems.map((q) => q.code).join(', ')}; split_r LINT lines: ${spGreen.lines.filter((l) => l.includes('LINT set "split_r"')).map((l) => l.trim()).join(' | ') || 'none'}; split_r_thigh_r alpha at the speck ${spAlphaAt(join(spGreenDir, 'out'), 'split_r_thigh_r', SP_SPECK)}`,
+      "issue #608, bar 2: a speck makes no layer of one leg a layer of two — it prints no island line (no `dropped 1 (0 px)`), and the ankle off the legwear refuses nothing, as on that layer without the speck",
+    );
+
+    // Bar 3: the refusals stay, by name. `far_r`: both legs end at row 43 and the shoes run from row 44, so the ankle is
+    // sqrt(0.5² + 8.5²) = 8.515 px off the right leg (more than twice the radius 4) and sqrt(8.5² + 8.5²) = 12.021 px off
+    // the left: none within. `near_r`: the right leg ends at row 48, the left leg is [31, 39) x [10, 51), one column clear
+    // of it, and the right shoe is [20, 32) x [50, 58), so the ankle's line crosses x 20..31, offsets -5.5 .. 5.5: width
+    // 12, radius 6; the right leg is sqrt(0.5² + 3.5²) = 3.536 px off and the left sqrt(5.5² + 1.5²) = 5.701 px: two within.
+    const spRefusedSets: SpSet[] = [
+      { name: 'far_r', legs: [[22, 10, 30, 44], [34, 10, 42, 44]], feet: [[22, 44, 30, 58], [34, 44, 42, 58]] },
+      { name: 'near_r', legs: [[22, 10, 30, 49], [31, 10, 39, 51]], feet: [[20, 50, 32, 58], [34, 51, 42, 58]] },
+    ];
+    const spRefDir = spFixture('refused', spRefusedSets);
+    const spRefOut = join(spRefDir, 'out');
+    const spRef = runCli([...buildArgs(spRefDir, spRefOut), '--all-sets']);
+    const spRefLines = spRef.out.split('\n').filter((l) => l.includes('ASSEMBLE_ALT_LIMB_ISLAND'));
+    const spHead = (set: string, islands: string): string =>
+      `config.limbs.leg_r.segments[1] (part "shin_r") (alternate set "${set}") — takes "legs", which holds 2 islands (8-connected, alpha above 8): ${islands}; the set names one of the limbs that take "legs", so the segment keeps the island its joints fall on, and its joint "foot_r"'s origin at [26, 52] is on none of them — no pixel touching the point has alpha above 8; the nearest pixel centre of each: `;
+    const farWant = `${spHead('far_r', `island 1 (${8 * 34} px at 22,10 8x34), island 2 (${8 * 34} px at 34,10 8x34)`)}island 1 at 8.515 px, island 2 at 12.021 px; none lies within the radius of the cap cut at it, 4 px, and exactly one is required to take a joint off the art`;
+    const nearWant = `${spHead('near_r', `island 1 (${8 * 41} px at 31,10 8x41), island 2 (${8 * 39} px at 22,10 8x39)`)}island 1 at 5.701 px, island 2 at 3.536 px; 2 lie within the radius of the cap cut at it, 6 px, and exactly one is required to take a joint off the art`;
+    const spRefWritten = existsSync(spRefOut) ? readdirSync(spRefOut) : [];
+    say(
+      'BU222_A_JOINT_TWICE_ITS_CAP_RADIUS_OFF_THE_ART_AND_ONE_WITHIN_IT_OF_TWO_ISLANDS_ARE_REFUSED_BY_NAME',
+      spRef.status === 1 && spRefLines.length === 2 && spRefLines.some((l) => l.includes(farWant)) && spRefLines.some((l) => l.includes(nearWant)) && spRefWritten.length === 0,
+      `exit ${spRef.status}; ${spRefLines.length} ASSEMBLE_ALT_LIMB_ISLAND line(s): ${spRefLines.map((l) => l.trim()).join(' | ') || 'none'}; --out holds [${spRefWritten.join(', ')}]`,
+      "issue #608, bar 3: the margin is the cap's radius, not a licence — a joint more than twice it off the art names every island's distance and the radius and is refused, and so is one two islands lie within; the build writes nothing",
+    );
+
+    // Bar 4's mutant: the floor off (assemble's test-only islandFloor 0, every island a candidate — the rule before #608)
+    // on the hand-split set, through assemble itself with the set's limbs and its run. The speck becomes a second island:
+    // the thigh drops it (1 px) and the shin, which holds none of it, reads `dropped none` where the rule before #608
+    // printed `dropped 1 (0 px)`. The same call with the floor on prints no island line.
+    const spCfg = loadConfig(join(spGreenDir, 'config.json'));
+    const spSetLimbs = { leg_r: (spCfg.limbs as Record<string, Limb>).leg_r };
+    const spInput = (floor?: number): AssembleInput => ({
+      source: readPng(join(spGreenDir, 'painting.png')),
+      full: readWrapperLayers(join(spGreenDir, 'full_split_r')),
+      head: readWrapperLayers(join(spGreenDir, 'head')),
+      ...stageFields(spCfg),
+      limbs: spSetLimbs,
+      projectRule: DEFAULT_PROJECT_RULE,
+      seamRule: 'near-white',
+      limbIslands: setIslandSourcesOf608(spCfg.limbs as Record<string, Limb>, spSetLimbs),
+      ...(floor === undefined ? {} : { islandFloor: floor }),
+    });
+    const spOn = assemble(spInput());
+    const spOff = assemble(spInput(0));
+    const spOffLines = islandLinesOf608('split_r', spOff.islands).map((l) => l.trim());
+    const spOffWant = [
+      'LINT set "split_r" thigh_r: legs holds 2 islands (8-connected, alpha above 8), kept the one under leg_r0 [26, 10] and leg_r1 [26, 30] (160 px), dropped 1 (1 px)',
+      "LINT set \"split_r\" shin_r: legs holds 2 islands (8-connected, alpha above 8), kept the one under leg_r1 [26, 30] and foot_r [26, 52] (2.55 px off it, within its cap's radius 4) (186 px), dropped none",
+    ];
+    say(
+      'BU223_THE_MUTANT_WITH_THE_FLOOR_OFF_MAKES_THE_SPECK_AN_ISLAND_AND_THE_HAND_SPLIT_SET_PRINTS_ISLAND_LINES',
+      spOn.islands.length === 0 && JSON.stringify(spOffLines) === JSON.stringify(spOffWant) && ISLAND_FLOOR_SHARE_608 === 0.01,
+      `floor ${ISLAND_FLOOR_SHARE_608}: ${spOn.islands.length} island count(s); floor 0: ${spOffLines.join(' | ') || 'none'}`,
+      'issue #608, bar 4: the floor is what keeps the speck from being an island — with it off, the hand-split layer reads two islands and prints two lines; the shin\'s line, which holds none of the speck, says `dropped none` rather than `dropped 1 (0 px)`',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
