@@ -65,11 +65,13 @@ import { barsNotMet, type CheckReport, checkStatuses, type CheckStatus, checkSum
 import { loadConfigAndAnimations } from './config.ts';
 import { PartsError, type Problem, problemLine, refuseIfAny } from './errors.ts';
 import { jsonValueSpan, scratchConfig } from './meshdraft.ts';
-import { computeExactFrameTransforms } from './coords.ts';
+import { type BoneTransform, computeExactFrameTransforms } from './coords.ts';
 import { type PartsFile } from './parts.ts';
 import { applyMeshEdit, type DeltaApplied, type DeltaPlant, deltaSourceProblems, type MeshEditDocument, readMeshEdit } from './remeshdelta.ts';
 import { DEFAULT_IDLE_KEYS, type IdleKeys, type MeshAttachment, meshBoundBones, rigJsonText, type RigSpec } from './rig.ts';
 import { pyRound } from './round.ts';
+import { type RigSpec as RigcRigSpec } from 'rig-c/src/rig.ts';
+import { expandStops } from 'rig-c/src/stop.ts';
 
 /** The provenance file's spec. */
 export const REMESH_SPEC = 'rig-parts-remesh/1';
@@ -119,6 +121,8 @@ export interface RemeshPlant {
   skipPreserve?: boolean;
   /** Issue #526's mutants, handed to the delta's replay (`src/remeshdelta.ts`). */
   delta?: DeltaPlant;
+  /** Issue #613's mutant: the setup frames read off `rig.json`'s bones as written, its `stops` not expanded. */
+  unexpandedStops?: boolean;
 }
 
 /** The versions the provenance names: this package's and the rigc that gated the revision (its `--version` line). */
@@ -532,6 +536,53 @@ export function modelAttachmentHash(modelText: string, part: string): string | n
 }
 
 /**
+ * The setup frames a delta's crop px are read through (issue #613): the input's bones as rigc's rig reader reads them.
+ * That reader expands `stops` before it resolves a single parent (rig-c's `expandStops`, `src/stop.ts`), and the
+ * expansion generates a drawn link `<link>_d` per stopped link that `rig` hangs the next link, and every slot and
+ * weight on the link, from — so a rig with stops names parents its own `bones` array does not declare, and evaluating
+ * that array as written throws in rig-c's `evaluate`. Here the expansion is rig-c's own call, as `check` makes it for
+ * the loop (`withoutPhysics`); a rig without `stops` is the array as written, the same object, so its frames and
+ * every byte read through them are what they were. Nothing is reordered: rigc refuses a parent declared after its
+ * child (`CE_RIG_BONE_PARENT_ORDER`), so a parent this walk finds after its child, or nowhere, is refused by name
+ * (`REMESH_BONE_ORDER`) rather than sorted into an order rigc would not load; and any other throw from the
+ * expansion or the evaluation is named with rig-c's own sentence (`REMESH_BONES_POSED`). On the delta path both sit
+ * behind rigc's gate over the input, which refuses either first, so reaching one means rigc and its library read the
+ * same bones apart. `unexpanded` is the mutant: the bones as written.
+ */
+export function deltaFrames(rig: Json, where: string, unexpanded = false): Map<string, BoneTransform> | Problem[] {
+  let bones: RigSpec['bones'];
+  try {
+    bones = (unexpanded || !Array.isArray(rig.stops) ? (rig as unknown as RigSpec) : (expandStops(rig as unknown as RigcRigSpec, where) as unknown as RigSpec)).bones;
+  } catch (err) {
+    if (!(err instanceof Error)) throw err;
+    return [{ code: 'REMESH_BONES_POSED', object: `${where} stops`, detail: `rig-c's expansion refuses them: ${err.message}; the delta's crop px are read through the setup frames of the bones the expansion lays out, so nothing was written` }];
+  }
+  const at = new Map<string, number>();
+  for (const [i, b] of bones.entries()) if (!at.has(b.name)) at.set(b.name, i);
+  const out: Problem[] = [];
+  const seen = new Set<string>();
+  for (const [i, b] of bones.entries()) {
+    const parent = b.parent;
+    if (parent !== undefined && parent !== '' && !seen.has(parent)) {
+      const later = at.get(parent);
+      out.push({
+        code: 'REMESH_BONE_ORDER',
+        object: `${where} bones[${i}] "${b.name}"`,
+        detail: `names parent "${parent}", which ${later === undefined ? `no bone declares${Array.isArray(rig.stops) && !unexpanded ? ' after rig-c expands the rig\'s stops' : ''}` : `is declared after it, at bones[${later}]`}; a parent declared before its child is required, as rigc's rig reader resolves it (CE_RIG_BONE_PARENT_ORDER), and nothing was written`,
+      });
+    }
+    seen.add(b.name);
+  }
+  if (out.length > 0) return out;
+  try {
+    return computeExactFrameTransforms(bones);
+  } catch (err) {
+    if (!(err instanceof Error)) throw err;
+    return [{ code: 'REMESH_BONES_POSED', object: `${where} bones`, detail: `rig-c cannot pose them at the setup pose: ${err.message}; the delta's crop px are read through those frames, so nothing was written` }];
+  }
+}
+
+/**
  * Step 1's tree rules: the files `rig` writes are present, and the ones the splice rewrites (`spliced`) are this
  * writer's bytes. `op` names the revising command, whose codes these are (`retune` splices `rig.json` and `motion.json`).
  */
@@ -678,7 +729,8 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
     const partsFile = JSON.parse(readFileSync(join(input.parts, 'parts.json'), 'utf8')) as PartsFile;
     const rec = partsFile.parts.find((p) => p.name === part);
     if (rec === undefined) throw new PartsError([{ code: 'REMESH_DELTA_SOURCE', object: `${input.parts}/parts.json`, detail: `names no part "${part}"; its box is where rig placed the image, which the delta's crop px are read against` }]);
-    const world = computeExactFrameTransforms((inRig as unknown as RigSpec).bones);
+    const world = deltaFrames(inRig, `${input.rig}/rig.json`, plant.unexpandedStops === true);
+    if (Array.isArray(world)) throw new PartsError(world);
     const r = applyMeshEdit({ part, attachment: inAtt, box: [rec.x, rec.y], rigSize: [partsFile.rig_size[0], partsFile.rig_size[1]], world }, doc, deltaPath, plant.delta);
     if (Array.isArray(r)) throw new PartsError(r);
     const row = rowOf(inReport, part);

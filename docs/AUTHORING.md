@@ -3324,6 +3324,8 @@ exits 0, and `mesh_draft.json` and the console name the reading and the amount.
 | <a id="REMESH_DELTA_SOURCE"></a>`REMESH_DELTA_SOURCE` | the mesh edit was not drawn over this part's mesh: its `slot` or `attachment` is not `--part`, its skin is not `default`, a `source` count (`vertexCount`, `triangleCount`, `hullLength`) or `source.hash` is not the input's (both figures quoted; the hash is SHA-256 of the part's entry in rigc's `skeleton.model.json` over the input); or the input's bindings are not where its uvs and `parts.json` place the image, so no position can be bound | export the edit from the revision you pass as `--rig` |
 | <a id="REMESH_DELTA_OP"></a>`REMESH_DELTA_OP` | one op, named `ops[i]` and quoted, does not apply at its place in the replay: an unknown kind, a non-finite number, an id out of range or already removed, a `from` that is not the live position within 0.001 px, a position outside the part's image, a split of an edge the producer's triangulation does not hold or outside its triangles, a free `add` outside every triangle, a move that folds its ring, a removal that leaves fewer than 3 vertices, ends a constraint or leaves a ring no ear clips, an `edge` that duplicates a constraint, is a hull edge, runs through a vertex or crosses the hull or a constraint, or an `unedge` of any edge this edit did not constrain | read the op the line names; an edge the producer flipped is not one review can unedge — redraw it with `edge`, or move the vertices |
 | <a id="REMESH_DELTA_TOPOLOGY"></a>`REMESH_DELTA_TOPOLOGY` | the replayed mesh breaks an outline rule (`contourTopologyProblems`' code quoted: one loop, the hull first, every triangle wound one way, no self-intersection, no coincident vertices), or holds more interior edges that are not locally Delaunay than the input did; or the input's own triangles are not wound one way | read the quoted code; the ops that made it are the edit's last ones |
+| <a id="REMESH_BONE_ORDER"></a>`REMESH_BONE_ORDER` | a bone of the input names a parent that is not declared before it — later in `bones` (`bones[i]` named), or nowhere once rig-c has expanded the rig's `stops` (issue #613). The delta's positions are read through the setup frames, which rig-c poses parents first, as rigc's rig reader resolves them (`CE_RIG_BONE_PARENT_ORDER`); the bones are not sorted into an order rigc would not load. rigc's gate over the input refuses such a rig first, so the line means rigc and its library read the bones apart | a defect between this package and rigc: report it with the line |
+| <a id="REMESH_BONES_POSED"></a>`REMESH_BONES_POSED` | rig-c cannot pose the input's bones at the setup pose — its expansion of the rig's `stops`, or its evaluation of the bones (a bone `inherit` the runtime resolves to no mode), refuses with the sentence quoted; nothing was written | read rig-c's sentence; rigc's gate over the input passed, so report it with the line |
 
 A remesh changes one part's mesh and nothing else: every file of the input but
 `rig.json` and `mesh_report.json` is copied as bytes, `rig.json` keeps every byte
@@ -3355,6 +3357,11 @@ replaying them in order over the input part's own mesh:
 
 - `move`: `from` must be the live position within 0.001 px; the uv and every binding's
   bone-local `x, y` are recomputed from `to` through the setup frames, the shares kept.
+  The setup frames are the bones as rigc reads them (issue #613): a rig with `stops` is
+  expanded first by rig-c's own `expandStops`, so a link that hangs from a drawn link
+  `<link>_d` — which `rig.json`'s `bones` never declares — is posed on it; a rig
+  without `stops` is posed from its `bones` as written. A bone the frames cannot pose
+  is refused by name (`REMESH_BONE_ORDER`, `REMESH_BONES_POSED`).
 - `add` with `onEdge`: the edge is split, two triangles into four (one into two on a
   hull edge, whose loop gains the vertex); its shares are the two ends' blended by the
   parameter along the edge. Without `onEdge`: the triangle holding the point is split in

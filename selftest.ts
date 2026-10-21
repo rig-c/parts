@@ -588,6 +588,7 @@ import { FIELD_LATTICE_GRID, FIELD_POSES, fieldRegion, REGION_SPACINGS } from '.
 import { BASE_SPACINGS, CONTROL, describeWorst, displacement, frameOpenings, kindOf, neighbours, pickAtBudget, type PlacedMask, POSE_PHASE, ranked, regionPoses, regionSpacings, resolveSegments, seamOpening, seamPairs, sineAt, SWEEP_TOLERANCES, testRegion, toWorldPx, variantConfig } from './tools/real_compare.ts';
 import { BEND_DEGREES, BEND_WORST_SHARE, bendAnimationNames, bendAnimations, type BendFigure, bendLinks, CALIBRATED_SENTENCE, candidateMesh, carriedBy, islandsJoin, MORE_TRIANGLES_FLAG, RELATIVE_SENTENCE, DUST_MAX_PX, DUST_MAX_SHARE, dustOf, figureRules, type GateLine, gateVerdict, IDLE_BOUND_PX, jsonValueSpan, MEASURED_SENTENCE, MESH_DRAFT_REPORT, meshDraftStage, NOT_COMPARED_SENTENCE, notCompared, partsNamed, type PartReadings, type Reading, READINGS, splicedConfig, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
 import { type Built, type CheckSide, checkHeldProblems, deltaRow, PROVENANCE_FILE, type RemeshInput, type RemeshPlant, type RemeshProvenance, type RemeshResult, remeshStage, requestHeldProblems, targetProblems } from './src/remesh.ts';
+import { deltaFrames } from './src/remesh.ts';
 import { RETUNE_FILE, RETUNE_SPEC, type RetuneInput, type RetunePlant, type RetuneProvenance, type RetuneResult, retuneStage } from './src/retune.ts';
 import { DRAFT_COARSE_GRID, DRAFT_CONTOUR_MARK, DRAFT_COSTLY_GRID, DRAFT_FIGURE, DRAFT_FINE_GRID, DRAFT_LINKS, DRAFT_SPECK_ALPHA, draftConfig, draftImages, draftParts, writeDraftFixture, writeDraftFixtureWithContour, writeDraftIslandsFixture } from './fixtures/meshdraft.ts';
 import { pyRound } from './src/round.ts';
@@ -38745,6 +38746,178 @@ function runRemeshSuite(): number {
         JSON.stringify(deltaRow18.bones) === JSON.stringify(markBound),
       `${codes(e18)}; whole-rig row (mode ${wholeRow?.mode}) ${JSON.stringify(wholeRow?.bones)}; delta row (mode ${deltaRow18?.mode}) ${JSON.stringify(deltaRow18?.bones)}; skeleton.model.json bindings ${JSON.stringify(markBound)}`,
       'issue #536 bar: a consumer diffing two reports of one package sees a bone change only when the binding changed — the whole-rig build and remesh --delta name the same bones for an unchanged part, and they are the bones rigc compiles the binding to',
+    );
+
+    // RM20 — issue #613: a delta over a rig with `stops`. `rig` hangs the next link of a stopped chain, and the skirt's
+    // weights, from the drawn link `<link>_d`, which rigc's reader generates by expanding `stops` and `rig.json`'s own
+    // bones never declare. The fixture is the stop rig's (RG490: two legs, a skirt on two 2-link chains held off the
+    // legs). By hand from the config: every skirt link stands on a vertical line, so its setup
+    // frame turns 270 (y up) and its drawn link stands on the same frame; a crop move of (+1, 0) — one pixel right — is
+    // local (0, +1) in such a frame (local x runs down the crop, local y to the right), so each binding of the moved
+    // vertex keeps its x and its share and gains 1 in y. The crop position is the part's box less PAD plus uv x size.
+    // The mutant reads the frames off the bones as written: before the fix that threw uncaught in rig-c's evaluate.
+    const sRec = (name: string, from: string, x: number, y: number, w: number, h: number): PartsFile['parts'][number] => ({ name, from, x, y, w, h, opaque_px: w * h, projected_core_px: 0, source_px_taken: 0, refused_drift_px: 0, merged_px: 0, seam_override_px: 0 });
+    const sParts: PartsFile = { rig_size: [120, 160], scale_rig_per_source: 1, parts: [sRec('leg_r', 'full:legwear', 32, 80, 20, 64), sRec('leg_l', 'full:author:leg_l', 68, 80, 20, 64), sRec('skirt', 'full:bottomwear', 24, 70, 72, 68)], ghost_px: {} };
+    const sImages = new Map<string, Raster>([['leg_r', block(20, 64)], ['leg_l', block(20, 64)], ['skirt', block(72, 68)]]);
+    const sConfig = {
+      key: 'stop_remesh',
+      assemble: { rig_scale: 1, plan: [['leg_r', 'full', 'legwear'], ['leg_l', 'full', 'author:leg_l'], ['skirt', 'full', 'bottomwear']] },
+      bones: [
+        { name: 'hip', parent: 'root', at: [60, 72] },
+        { chain: 'leg_r', parent: 'hip', points: [[42, 80], [42, 112]], tip: [42, 140] },
+        { chain: 'leg_l', parent: 'hip', points: [[78, 80], [78, 112]], tip: [78, 140] },
+        { chain: 'skirt_r', parent: 'hip', points: [[34, 78], [34, 108]], tip: [34, 134] },
+        { chain: 'skirt_l', parent: 'hip', points: [[86, 78], [86, 108]], tip: [86, 134] },
+      ],
+      meshes: { leg_r: { grid: 8, r: 8, segments: ['leg_r'] }, leg_l: { grid: 8, r: 8, segments: ['leg_l'] }, skirt: { grid: 8, r: 10, segments: ['skirt_r', 'skirt_l', ['hip', [34, 74], [86, 74]]] } },
+      regions: {},
+      // A stop holds a link a constraint swings (rigc refuses one nothing writes), so the skirt keeps RG490's physics.
+      constraints: [
+        { name: 'skirt_r0_physics', type: 'physics', bone: 'skirt_r0', rotate: 1, inertia: 0.5, strength: 60, damping: 0.85, wind: 2, gravity: 5, mass: 1, mix: 1 },
+        { name: 'skirt_r1_physics', type: 'physics', bone: 'skirt_r1', rotate: 1, inertia: 0.5, strength: 40, damping: 0.85, wind: 8, gravity: 15, mass: 1, mix: 1 },
+        { name: 'skirt_l0_physics', type: 'physics', bone: 'skirt_l0', rotate: 1, inertia: 0.5, strength: 60, damping: 0.85, wind: -2, gravity: 5, mass: 1, mix: 1 },
+        { name: 'skirt_l1_physics', type: 'physics', bone: 'skirt_l1', rotate: 1, inertia: 0.5, strength: 40, damping: 0.85, wind: -8, gravity: 15, mass: 1, mix: 1 },
+      ],
+      stops: [
+        { chain: 'skirt_r', against: 'leg_r0', at: [54, 0], inward: 0, outward: 60, lower: { inward: 0, outward: 30 } },
+        { chain: 'skirt_l', against: 'leg_l0', at: [54, 0], inward: 0, outward: 60, lower: { inward: 0, outward: 30 } },
+      ],
+      motion: { duration: 2, tracks: [{ bone: 'hip', prop: 'translatex', amp: 16, period: 2, phase: 0 }] },
+    };
+    const sfx = writeRigFixture(join(root, 'fx-stops'), sConfig, sImages, sParts);
+    const sInput = join(root, 'input-stops');
+    const sRigE = refusals(() => rigStage({ config: sfx.config, parts: sfx.parts, out: sInput }, runner, join(root, 'input-stops-gate'), () => {}));
+    type SkirtAtt = StripAtt & { width: number; height: number };
+    const sRig = existsSync(join(sInput, 'rig.json')) ? (JSON.parse(readFileSync(join(sInput, 'rig.json'), 'utf8')) as { bones: RigSpec['bones']; stops?: unknown; skins: { default: Record<string, Record<string, SkirtAtt>> } }) : null;
+    const sNames = new Set((sRig?.bones ?? []).map((b) => b.name));
+    const r1Parent20 = sRig?.bones.find((b) => b.name === 'skirt_r1')?.parent;
+    const DRAWN = ['skirt_r0_d', 'skirt_r1_d', 'skirt_l0_d', 'skirt_l1_d'];
+    let asWritten20 = 'no rig';
+    if (sRig !== null) {
+      try {
+        computeExactFrameTransforms(sRig.bones);
+        asWritten20 = 'posed';
+      } catch (err) {
+        asWritten20 = `threw: ${(err as Error).message}`;
+      }
+    }
+    const frames20 = sRig === null ? null : deltaFrames(sRig as unknown as Record<string, unknown>, 'rig.json');
+    const fr = (n: string): BoneTransform | undefined => (frames20 === null || Array.isArray(frames20) ? undefined : frames20.get(n));
+    const drawnOnLink = DRAWN.every((d) => {
+      const a = fr(d);
+      const b = fr(d.slice(0, -2));
+      return a !== undefined && b !== undefined && a.worldX === b.worldX && a.worldY === b.worldY && Math.abs(a.worldRotation - 270) < 1e-9 && Math.abs(b.worldRotation - 270) < 1e-9;
+    });
+    const sSkirt = sRig?.skins.default.skirt?.skirt;
+    const sv = sSkirt === undefined ? -1 : sSkirt.weights.findIndex((w) => w.length > 0 && w.every((e) => DRAWN.includes(e.bone)));
+    const sBuild = join(root, 'stops-build');
+    runner(['build', '--rig', join(sInput, 'rig.json'), '--motion', join(sInput, 'motion.json'), '--out', sBuild]);
+    const sModel = existsSync(join(sBuild, RIGC_MODEL_DOCUMENT)) ? (JSON.parse(readFileSync(join(sBuild, RIGC_MODEL_DOCUMENT), 'utf8')) as { skins: Array<{ name: string; attachments: Record<string, Record<string, unknown>> }> }) : null;
+    const sHash = createHash('sha256').update(JSON.stringify(sModel?.skins.find((sk) => sk.name === 'default')?.attachments.skirt?.skirt ?? null)).digest('hex');
+    const sFrom: [number, number] = sSkirt === undefined || sv < 0 ? [0, 0] : [24 - PAD + sSkirt.uvs[2 * sv] * sSkirt.width, 70 - PAD + sSkirt.uvs[2 * sv + 1] * sSkirt.height];
+    const sDelta = request('delta-stops', {
+      ...deltaDoc([{ op: 'move', v: sv, from: sFrom, to: [sFrom[0] + 1, sFrom[1]] }], { slot: 'skirt', attachment: 'skirt' }),
+      source: sSkirt === undefined ? {} : { vertexCount: sSkirt.uvs.length / 2, triangleCount: sSkirt.triangles.length / 3, hullLength: sSkirt.hull, hash: sHash },
+    });
+    const sStage = (name: string, plant: RemeshPlant = {}): { e: PartsError | null; out: string; r: RemeshResult | null } => {
+      const out = join(root, `out-${name}`);
+      let r: RemeshResult | null = null;
+      const e = refusals(() => (r = remeshStage({ rig: sInput, config: sfx.config, parts: sfx.parts, part: 'skirt', delta: sDelta, out }, runner, rigc, versions, join(root, `scratch-${name}`), () => {}, plant)));
+      return { e, out, r };
+    };
+    const sDigest = existsSync(sInput) ? treeDigest(sInput) : '';
+    const fixed20 = sStage('stops');
+    const mutant20 = sStage('stops-mutant', { unexpandedStops: true });
+    const sOut = existsSync(fixed20.out) ? (JSON.parse(readFileSync(join(fixed20.out, 'rig.json'), 'utf8')) as typeof sRig) : null;
+    const before20 = sSkirt === undefined || sv < 0 ? [] : sSkirt.weights[sv];
+    const after20 = sOut?.skins.default.skirt?.skirt?.weights[sv] ?? [];
+    const rebound20 = before20.length > 0 && after20.length === before20.length && before20.every((b, i) => after20[i].bone === b.bone && after20[i].weight === b.weight && Math.abs(after20[i].x - b.x) <= 0.001 && Math.abs(after20[i].y - (b.y + 1)) <= 0.001);
+    const m20 = mutant20.e?.problems ?? [];
+    const mutantNamed = m20.length > 0 && m20.every((p) => p.code === 'REMESH_BONE_ORDER') && m20.some((p) => /bones\[\d+\] "skirt_r1"$/.test(p.object) && p.detail.startsWith('names parent "skirt_r0_d", which no bone declares')) && !existsSync(mutant20.out);
+    say(
+      'RM20_A_DELTA_OVER_A_RIG_WITH_STOPS_READS_ITS_FRAMES_AS_RIGC_EXPANDS_THEM_AND_IS_WRITTEN_GATED_AND_CHECKED',
+      sRigE === null &&
+        Array.isArray(sRig?.stops) &&
+        r1Parent20 === 'skirt_r0_d' &&
+        !sNames.has('skirt_r0_d') &&
+        asWritten20 === 'threw: bone "skirt_r1" names parent "skirt_r0_d", which is not declared before it' &&
+        drawnOnLink &&
+        sv >= 0 &&
+        fixed20.e === null &&
+        fixed20.r !== null &&
+        (fixed20.r as RemeshResult).provenance.check.revision.pass === (fixed20.r as RemeshResult).provenance.check.input.pass &&
+        (fixed20.r as RemeshResult).provenance.check.revision.measured.join() === (fixed20.r as RemeshResult).provenance.check.input.measured.join() &&
+        rebound20 &&
+        remeshMoves(sInput, fixed20.out, 'skirt').length === 0 &&
+        mutantNamed &&
+        treeDigest(sInput) === sDigest,
+      `rig ${sRigE === null ? 'written' : sRigE.problems.map(problemLine).join(' | ').slice(0, 600)}; skirt_r1 hangs from ${r1Parent20}, declared in rig.json: ${sNames.has('skirt_r0_d')}; the bones as written to rig-c's evaluate: ${asWritten20}; drawn links on their links' frames at 270: ${drawnOnLink}; vertex ${sv} ${JSON.stringify(before20)} -> ${JSON.stringify(after20)}; remesh ${codes(fixed20.e)}, check ${fixed20.r === null ? 'not run' : `input ${(fixed20.r as RemeshResult).provenance.check.input.pass ? 'PASS' : `FAIL (${(fixed20.r as RemeshResult).provenance.check.input.not_met.join(', ')})`}, revision ${(fixed20.r as RemeshResult).provenance.check.revision.pass ? 'PASS' : `FAIL (${(fixed20.r as RemeshResult).provenance.check.revision.not_met.join(', ')})`} over ${(fixed20.r as RemeshResult).provenance.check.revision.measured.length} bar(s)`}; mutant (stops not expanded): ${m20.map((p) => `${p.code} ${p.object} ${p.detail.slice(0, 60)}`).join(' | ') || 'written'}`,
+      'issue #613 bar 1: rigc expands stops before it resolves a parent, so the input rigc gated green is posed the same way here, and a mesh edit on such a rig is built, check measuring on the revision what it measured on the input — before the fix the remesh exited 1 on an uncaught rig-c error; the bindings are held to the hand figure, since rigc cannot see a binding that is merely wrong',
+    );
+
+    // RM21 — issue #613's refusals, read off deltaFrames, the frames the delta path reads: a child declared before its
+    // parent, a parent no bone declares, a two-bone cycle (whose first bone's parent is declared after it), a bone inherit
+    // rig-c resolves to no mode, and stops rig-c's expansion refuses — each named, none thrown. Beside them: a rig in
+    // order without stops is posed exactly as rig-c poses its bones as written, so no byte read through it moves; and
+    // through the stage, a child declared before its parent never reaches the frames, since rigc's gate over the input
+    // refuses it first by its own rule. The mutant: the same bones handed to rig-c's evaluate as written throw.
+    const bn = (name: string, parent?: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({ name, ...(parent === undefined ? {} : { parent }), x: 0, y: 10, ...extra });
+    const rigOf = (bones: unknown[], extra: Record<string, unknown> = {}): Record<string, unknown> => ({ bones, ...extra });
+    const fp = (rig: Record<string, unknown>): string => {
+      let v: ReturnType<typeof deltaFrames> | string;
+      try {
+        v = deltaFrames(rig, 'rig.json');
+      } catch (err) {
+        v = `threw ${(err as Error).message}`;
+      }
+      return typeof v === 'string' ? v : Array.isArray(v) ? v.map((p) => `${p.code} ${p.object} — ${p.detail}`).join(' | ') : 'frames';
+    };
+    const raw = (bones: unknown[]): string => {
+      try {
+        computeExactFrameTransforms(bones as RigSpec['bones']);
+        return 'posed';
+      } catch (err) {
+        return `threw ${(err as Error).message}`;
+      }
+    };
+    const fwd = [bn('root'), bn('b', 'c'), bn('c', 'root')];
+    const gone = [bn('root'), bn('b', 'nowhere')];
+    const cyc = [bn('root'), bn('a', 'b'), bn('b', 'a')];
+    const inh = [bn('root'), bn('b', 'root', { inherit: 'sideways' })];
+    const ORDER_TAIL = "; a parent declared before its child is required, as rigc's rig reader resolves it (CE_RIG_BONE_PARENT_ORDER), and nothing was written";
+    const cases21: Array<[string, string, string]> = [
+      ['child before parent', fp(rigOf(fwd)), `REMESH_BONE_ORDER rig.json bones[1] "b" — names parent "c", which is declared after it, at bones[2]${ORDER_TAIL}`],
+      ['missing parent', fp(rigOf(gone)), `REMESH_BONE_ORDER rig.json bones[1] "b" — names parent "nowhere", which no bone declares${ORDER_TAIL}`],
+      ['cycle', fp(rigOf(cyc)), `REMESH_BONE_ORDER rig.json bones[1] "a" — names parent "b", which is declared after it, at bones[2]${ORDER_TAIL}`],
+      ['inherit', fp(rigOf(inh)), 'REMESH_BONES_POSED rig.json bones — rig-c cannot pose them at the setup pose: bone "b" inherit is "sideways", which the runtime resolves to no mode; the delta\'s crop px are read through those frames, so nothing was written'],
+    ];
+    const badStops = fp(rigOf([bn('root'), bn('b', 'root')], { stops: [{ chain: 's', links: ['nowhere'], against: 'b', at: [0, 0], inward: 0, outward: 1 }] }));
+    const raws21 = [raw(fwd), raw(gone), raw(cyc)];
+    const plain = [bn('root'), bn('a', 'root', { rotation: 30 }), bn('b', 'a', { rotation: -15, scaleX: 2 })];
+    const plainFrames = deltaFrames(rigOf(plain), 'rig.json');
+    const plainRaw = computeExactFrameTransforms(plain as unknown as RigSpec['bones']);
+    const same21 = !Array.isArray(plainFrames) && [...plainRaw].every(([k, t]) => JSON.stringify(plainFrames.get(k)) === JSON.stringify(t)) && plainFrames.size === plainRaw.size;
+    // Through the stage: the strip input with tail1_ctl declared before tail0, its parent, rewritten in the writer's text.
+    const swapIn = join(root, 'input-swapped');
+    cpSync(input, swapIn, { recursive: true });
+    const swapRig = JSON.parse(readFileSync(join(swapIn, 'rig.json'), 'utf8')) as { bones: Array<{ name: string; parent?: string }> };
+    const i0 = swapRig.bones.findIndex((b) => b.name === 'tail0');
+    const i1 = swapRig.bones.findIndex((b) => b.name === 'tail1_ctl');
+    const swapped = i0 >= 0 && i1 === i0 + 1 && swapRig.bones[i1].parent === 'tail0';
+    if (swapped) [swapRig.bones[i0], swapRig.bones[i1]] = [swapRig.bones[i1], swapRig.bones[i0]];
+    writeFileSync(join(swapIn, 'rig.json'), rigJsonText(swapRig));
+    const swap21 = dStage('swapped', deltaDoc([{ op: 'remove', v: 110 }]), { rig: swapIn });
+    const swapLine = swap21.e?.problems.map((p) => `${p.code} ${p.detail}`).join(' | ') ?? 'written';
+    say(
+      'RM21_A_BONE_THE_FRAMES_CANNOT_POSE_IS_REFUSED_BY_NAME_AND_A_RIG_IN_ORDER_IS_POSED_AS_WRITTEN',
+      cases21.every(([, got, want]) => got === want) &&
+        badStops.startsWith('REMESH_BONES_POSED rig.json stops — rig-c\'s expansion refuses them: ') && badStops.includes('"nowhere"') &&
+        raws21.every((r) => r.startsWith('threw bone "')) &&
+        same21 &&
+        swapped &&
+        swap21.e !== null && swap21.e.problems.length === 1 && swap21.e.problems[0].code === 'REMESH_RIGC_GREEN' && swapLine.includes('bone "tail1_ctl" names parent "tail0", which is not declared before it') && !existsSync(swap21.out),
+      `${cases21.map(([what, got, want]) => `${what}: ${got === want ? 'named' : `got ${got.slice(0, 160)}`}`).join('; ')}; bad stops: ${badStops.slice(0, 140)}; the same bones to rig-c's evaluate as written: ${raws21.map((r) => r.slice(0, 70)).join(' / ')}; in order without stops posed as written: ${same21}; through the stage, tail1 before tail0 (swapped ${swapped}, bones ${swapRig.bones.map((b) => b.name).join(',')}): ${swapLine.slice(0, 200)}`,
+      'issue #613 bar 2: an uncaught throw is a remesh that exits 1 with no line to act on; nothing is sorted into an order rigc would refuse to load, and a rig already in order is read exactly as before',
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
