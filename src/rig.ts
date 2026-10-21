@@ -83,8 +83,9 @@
  *   transparent edge and the render changes at rest — measured on the demo
  *   example, 36 px of the setup pose (max 7 levels) — while a clear-row cut
  *   changes no pixel outside the blink (issue #26, `RG16`). A `painting:`
- *   patch (`assemble.patches`) is always a region; its slot sits where
- *   parts.json puts it, which is where its `draw` put it.
+ *   patch (`assemble.patches`) is always a region. With declared limbs, an
+ *   exclusively bound rider joins its limb's slot block (issue #646), keeping
+ *   that limb's internal draw order; other patches keep the parts order.
  * - **The idle** and, under `idleKeys: 'ctl'` (the default), its control
  *   bones (`src/motion.ts`). Under `idleKeys: 'direct'` the keys stay on the
  *   bones the meshes are weighted to, no `<bone>_ctl` is added, and the rig
@@ -167,6 +168,7 @@ import { type ContourChainRibs, type ContourReport, contourMesh, type ContourReg
 import { type LocalInfluence, localInfluences } from './localweights.ts';
 import { edgeLength } from './length.ts';
 import { skeletonLimbJoints } from './limbs.ts';
+import { coalesceLimbSlots } from './limbslots.ts';
 import { artCoverage, ART_ALPHA, latticeCells, latticeMesh, latticeStray, ONE_LOOP_PASSES } from './mesh.ts';
 import { bindFaceSurfaceDeform, BLINK, blinkHoldMisses, blinkSpan, CONTROL_SUFFIX, controlledBones, IDLE_FPS, idleMotion, type MotionSpec, moveKeysToControls } from './motion.ts';
 import { type AlternateSetMap, PAINTING_RUN, type PartsFile, readFrom, tagOf } from './parts.ts';
@@ -2558,6 +2560,9 @@ export function buildRig(
     };
   }
   const hasAlternateFaceSet = sets !== undefined && Object.values(sets.sets).some((e) => Object.hasOwn(e.slots, 'face'));
+  // Read every base/alternate binding before rebinds; publish only the slot
+  // permutation below, after stops/turn have used the original enumeration.
+  const limbLayout = coalesceLimbSlots(cfg.limbs, bones, slots, skin);
   // ---- leg stops (issue #404) --------------------------------------------
   // Only when the config has `stops`: each link after the first (and any bone hanging from a stopped link) hangs
   // from the drawn link `<link>_d` above it, and slots and weights on a stopped link bind `<link>_d`.
@@ -2580,7 +2585,7 @@ export function buildRig(
     images: 'images',
     skeleton: { x: -CX, y: 0, width: W, height: H },
     bones,
-    slots,
+    slots: limbLayout.slots,
     skins: { default: skin },
   };
   if (cfg.constraints !== undefined) rig.constraints = cfg.constraints.map(constraintForRig);
