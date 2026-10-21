@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.55.1](https://github.com/rig-c/parts/compare/v1.55.0...v1.55.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* **propose:** --write-config --from returns a tag whose recipe was dropped to its plain draft, and counts what it returned ([#630](https://github.com/rig-c/parts/issues/630)) ([#634](https://github.com/rig-c/parts/issues/634)) ([d924c0b](https://github.com/rig-c/parts/commit/d924c0b11391fb7d59d0e82ef0702990909907ee))
+* **propose:** the figure layer is chosen with the assembler's joint-line test, and a part a cloth recipe names is never taken as the figure ([#629](https://github.com/rig-c/parts/issues/629), [#631](https://github.com/rig-c/parts/issues/631)) ([#633](https://github.com/rig-c/parts/issues/633)) ([94c2d4c](https://github.com/rig-c/parts/commit/94c2d4cb55000db320cad59ee663ccce28f756c1))
+* **selftest:** the check that AUTHORING's quoted fold lines match the console moves from the check suite to the tree suite ([#627](https://github.com/rig-c/parts/issues/627)) ([#636](https://github.com/rig-c/parts/issues/636)) ([8302ddc](https://github.com/rig-c/parts/commit/8302ddc246c98330e3018ca3bdcd752cccfef224))
+
 ## [1.55.0](https://github.com/rig-c/parts/compare/v1.54.0...v1.55.0) (2026-10-21)
 
 
