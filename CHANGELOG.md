@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.54.0](https://github.com/rig-c/parts/compare/v1.53.0...v1.54.0) (2026-10-21)
+
+
+### Features
+
+* **assemble:** a one-side limb set cut from a two-leg layer keeps the island its limb's joints fall on, and refuses by name when the joints fall on none or on two ([#588](https://github.com/rig-c/parts/issues/588)) ([#605](https://github.com/rig-c/parts/issues/605)) ([25cc35d](https://github.com/rig-c/parts/commit/25cc35dc64d80974ed87183906c49cee06fe11d9))
+* **assemble:** a subset set's limb parts leave out the pixels a base part the set does not replace covers, and the set LINT counts them ([#587](https://github.com/rig-c/parts/issues/587)) ([#602](https://github.com/rig-c/parts/issues/602)) ([ccfc403](https://github.com/rig-c/parts/commit/ccfc40305a2c67fcadc20fcd131a13b88d6ec3ff))
+
 ## [1.53.0](https://github.com/rig-c/parts/compare/v1.52.0...v1.53.0) (2026-10-20)
 
 
