@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.55.0](https://github.com/rig-c/parts/compare/v1.54.0...v1.55.0) (2026-10-21)
+
+
+### Features
+
+* **assemble:** a limb set whose source layer holds both legs in one island splits it by the nearest leg segment, with the other leg posed in the set ([#609](https://github.com/rig-c/parts/issues/609)) ([#624](https://github.com/rig-c/parts/issues/624)) ([4ff7ec9](https://github.com/rig-c/parts/commit/4ff7ec913db2517ee81c12c268ce3d7f3634a4f9))
+* **build:** check.json records the config the build read, its path as typed and the sha256 of its bytes, beside [#556](https://github.com/rig-c/parts/issues/556)'s requirements record ([#607](https://github.com/rig-c/parts/issues/607)) ([#621](https://github.com/rig-c/parts/issues/621)) ([7486fe0](https://github.com/rig-c/parts/commit/7486fe0b91db55ffaca1a25b2da3d5923fedee5d))
+* **check:** SEAM_OVER_RANGE holds a cap_shape "ball" joint to the disc rule, over the whole disc, as it holds a "disc" joint ([#598](https://github.com/rig-c/parts/issues/598)) ([#616](https://github.com/rig-c/parts/issues/616)) ([dd54fb2](https://github.com/rig-c/parts/commit/dd54fb22962a4837001d0fcf1b2d3bac42449f93))
+* **remesh:** remesh and retune can record their input check and reuse it for the same input tree, bound by every file's sha256 and the tool versions ([#617](https://github.com/rig-c/parts/issues/617)) ([#632](https://github.com/rig-c/parts/issues/632)) ([591df55](https://github.com/rig-c/parts/commit/591df555ced1d26000f1c086dcb1209df337d0d1))
+* **rig:** an influence mesh under `influence.hold_tip: true` gets the lattice's held-fork share smoothing, capped at its declared max, and propose drafts the field and max 8 from the recipe ([#615](https://github.com/rig-c/parts/issues/615)) ([#622](https://github.com/rig-c/parts/issues/622)) ([863fdc7](https://github.com/rig-c/parts/commit/863fdc7d16109c2aef46b882878c034bb39e927d))
+
+
+### Bug Fixes
+
+* **assemble:** a subset set's limb part counts merged_px and its cap after [#587](https://github.com/rig-c/parts/issues/587)'s exclusion, and the cap records the pixels it cleared as excluded_px ([#603](https://github.com/rig-c/parts/issues/603)) ([#619](https://github.com/rig-c/parts/issues/619)) ([ce247e3](https://github.com/rig-c/parts/commit/ce247e339bb3f9a9cbcf92eb4709703d521ed252))
+* **assemble:** the limb-set island rule ignores specks under 1 % of the largest island, and gives a joint just off the art to the one island within its cap's radius ([#608](https://github.com/rig-c/parts/issues/608)) ([#614](https://github.com/rig-c/parts/issues/614)) ([5db9fba](https://github.com/rig-c/parts/commit/5db9fbaa5c9d88c6dd0fe392cf83e0c72ab75232))
+* **docs:** AUTHORING and cloth.ts name the influence radius ceiling, +4 cells fails CHECK_TIP_OVER_ROOT on wind's bottomwear, so the window is +2 to +3 ([#599](https://github.com/rig-c/parts/issues/599)) ([#611](https://github.com/rig-c/parts/issues/611)) ([0776d20](https://github.com/rig-c/parts/commit/0776d20f3cebf03450f8c0e1b3c371900e431594))
+* **parts:** the parts.json reader holds a set record's cap to the same rule as a base part's cap ([#620](https://github.com/rig-c/parts/issues/620)) ([#623](https://github.com/rig-c/parts/issues/623)) ([4e8a5ef](https://github.com/rig-c/parts/commit/4e8a5ef7f03c3dc6678899c497380f6cc0cf225e))
+* **remesh:** remesh --delta expands the input's stops before it poses the bones, as rigc does, and an unresolvable parent is a named refusal ([#613](https://github.com/rig-c/parts/issues/613)) ([#618](https://github.com/rig-c/parts/issues/618)) ([f5ab456](https://github.com/rig-c/parts/commit/f5ab456b5aa7d03a2daa7304a600a0b61339759d))
+* **selftest:** the imports from ./src/check.ts are one multi-line statement, one name per line, so parallel PRs stop colliding on one line ([#606](https://github.com/rig-c/parts/issues/606)) ([#610](https://github.com/rig-c/parts/issues/610)) ([c368fb7](https://github.com/rig-c/parts/commit/c368fb793117d443aad54d3dfa7f2f79ecce3889))
+
 ## [1.54.0](https://github.com/rig-c/parts/compare/v1.53.0...v1.54.0) (2026-10-21)
 
 
