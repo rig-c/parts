@@ -16236,6 +16236,10 @@ function runBallCheckCases(say: (name: string, ok: boolean, detail: string, why:
     const img = newRaster(30, 30);
     for (let j = 0; j < 30; j++) for (let i = 0; i < 30; i++) if (inBall(12 + i, 17 + j)) img.data.set([...BALL_RGB, 255], (j * 30 + i) * 4);
     writeFileSync(join(dir, 'ball.png'), encodePngBytes(img));
+    // Issue #598's mutant: the same ball with its lower half (rows >= 32, the joint line's lower side) left unpainted.
+    const upperOnly = newRaster(30, 30);
+    for (let j = 0; j < 30; j++) for (let i = 0; i < 30; i++) if (inBall(12 + i, 17 + j) && 17 + j <= 31) upperOnly.data.set([...BALL_RGB, 255], (j * 30 + i) * 4);
+    writeFileSync(join(dir, 'ball_upper.png'), encodePngBytes(upperOnly));
     const built = (label: string, extra: Record<string, unknown>, cmd: 'build' | 'assemble' = 'build'): { status: number; out: string; fig: Record<string, unknown> | null; parts: PartsFile | null } => {
       const cfg = join(dir, `${label}.json`);
       writeFileSync(cfg, JSON.stringify(ballConfig(extra)));
@@ -16247,6 +16251,7 @@ function runBallCheckCases(say: (name: string, ok: boolean, detail: string, why:
     const disc = built('disc', { cap_shape: 'disc', cap: 'ball.png' });
     const ball = built('ball', { cap_shape: 'ball', cap: 'ball.png' });
     const bare = built('bare', { cap_shape: 'ball' }, 'assemble');
+    const halfBall = built('halfball', { cap_shape: 'ball', cap: 'ball_upper.png' });
     // By hand, from the definitions above.
     let upperHalf = 0;
     let lowerNotch = 0;
@@ -16347,6 +16352,40 @@ function runBallCheckCases(say: (name: string, ok: boolean, detail: string, why:
           `  LINT "forearm_r" cap at [27, 32] (limb "arm_r", joint "elbow", radius 15 px): short_px left ${notchLeft}, right ${lowerNotch - notchLeft}: no layer gives them — ${lowerNotch} px of the disc on the lower side of the cut (cap_shape "ball"), where "forearm_r"'s layer is transparent and no cap image gives a pixel; the rest of the disc is filled, ${upperHalf} px from "forearm_r"'s layer, 0 px from "upperarm_r", on the lower side 0 px written, ${lowerArt} px left as painted`,
       `bare ball cap ${JSON.stringify(cap(bare))}; line ${capLine(bare) === wantBare ? 'as derived' : `GOT ${capLine(bare)}`}; LINT ${bareLint === '' ? 'absent' : bareLint}`,
       'issue #579: the tool invents no pixel of the ball — where the lower piece is transparent and no image gives one, the pixel is missing, in missing_px and short_px by side and in the LINT, exactly as the upper half\'s missing pixels are counted; the planted mutant is the build without the image, so the notch is named rather than filled',
+    );
+    // Issue #598: the ball is held to the disc's rule, over the whole disc.
+    const discRule = (b: { out: string }): string[] => b.out.split('\n').filter((l) => l.includes('FAIL  CHECK_SEAM_OVER_RANGE: joint "elbow"'));
+    const ballWords = 'the cap is cap_shape "ball", which promises the disc covered at every pose, on both sides of the joint line — no pixel of it over 40, under the rest-pose seam\'s bar as well';
+    const discWords = 'the cap is cap_shape "disc", which promises the disc covered at every pose — no pixel of it over 40, under the rest-pose seam\'s bar as well';
+    say(
+      'CK590_A_BALL_JOINT_S_ROW_SAYS_SHAPE_BALL_IS_HELD_TO_THE_DISC_RULE_AND_ITS_WHOLE_DISC_READS_NO_PIXEL_OVER_40',
+      ball.status === 0 &&
+        line(ball.fig)?.status === 'PASS' &&
+        line(ball.fig)?.joints[0]?.shape === 'ball' &&
+        line(disc.fig)?.joints[0]?.shape === 'disc' &&
+        [-45, 0, 45].every((a) => pose(ball.fig, a)?.status === 'PASS' && pose(ball.fig, a)?.px_over_40 === 0) &&
+        discRule(ball).length === 0 &&
+        discRule(disc).length === 2 &&
+        discRule(disc).every((l) => l.includes(discWords)),
+      `SEAM_OVER_RANGE ball ${poses(ball.fig)}, disc ${poses(disc.fig)}; disc-rule lines ball ${discRule(ball).length}, disc ${discRule(disc).length}`,
+      'issue #598: a ball is held to the disc rule as a disc is, and the row says which shape held it; a whole disc about the pivot maps onto itself at every turn, so by construction no pixel of the joint\'s art is uncovered and the rule reads 0 frame px over 40 at every pose; the disc\'s message keeps its words',
+    );
+    const hb = line(halfBall.fig);
+    say(
+      'CK591_A_BALL_WITH_NO_LOWER_HALF_FAILS_THE_DISC_RULE_BY_NAME_UNDER_THE_SEAM_S_BAR',
+      halfBall.status === 1 &&
+        cap(halfBall)?.lower_missing_px === lowerNotch &&
+        hb?.status === 'FAIL' &&
+        hb.joints[0]?.shape === 'ball' &&
+        pose(halfBall.fig, 0)?.status === 'PASS' &&
+        [-45, 45].every((a) => {
+          const p = pose(halfBall.fig, a);
+          return p !== undefined && p.status === 'FAIL' && p.px_over_40 > 0 && p.mean <= SEAM_MEAN_BAR && p.rig_px_over_40 <= SEAM_PX_BAR;
+        }) &&
+        discRule(halfBall).length === 2 &&
+        discRule(halfBall).every((l) => l.includes(ballWords)),
+      `SEAM_OVER_RANGE half ball ${poses(halfBall.fig)}; lower_missing_px ${cap(halfBall)?.lower_missing_px} (by hand ${lowerNotch}); disc-rule lines: ${discRule(halfBall).map((l) => l.trim().slice(0, 400)).join(' | ')}`,
+      'issue #598\'s planted mutant: the cap image paints only the upper half, so the notch inside the disc is missing on the lower side; bent, the turned notch uncovers the joint\'s art — under the rest-pose seam\'s bar, which alone passed the joint before this rule held a ball — and the disc rule names the joint, both ends of the range and cap_shape "ball"',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
