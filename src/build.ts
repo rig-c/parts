@@ -84,7 +84,7 @@ import { type AlternatePartsRecord, type PartRecord, readParts, type Recomposite
 import { encodePngBytes, readPng, writePng } from './raster/png.ts';
 import type { Raster } from './raster/types.ts';
 import { type Mask, newMask } from './raster/types.ts';
-import { type OtherLimbs, splitLines, type SplitCount } from './assemble.ts';
+import { type OtherLimbs, splitLines, capOwnershipLines, type SplitCount } from './assemble.ts';
 import type { BoneEntry } from './config.ts';
 import { OPAQUE_ALPHA_ABOVE } from './layers.ts';
 import { readRequirements, type RequirementLine, summaryText } from './requirements.ts';
@@ -169,6 +169,10 @@ export interface AssembleStageInput {
    * `"none"` takes them, the rule before #587 — kept for the selftest's control that shows the count go red under it.
    */
   setExclusion?: 'base' | 'none';
+  /** Issue #637: the CLI protects assigned source/cap art under covers; painting is the unprotected test mutant only. */
+  setCover?: 'layer' | 'painting';
+  /** Issue #637: source is the skipped-cap ownership test mutant, never a CLI/config option. */
+  setCapOwnership?: 'target' | 'source';
   /**
    * What a subset set's limb parts keep of a layer of more than one island when the set names one limb side (issue
    * #588): `"joints"` (the default, the only one the CLI runs) the island the segment's joints fall on
@@ -340,7 +344,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   }
 
   const altProblems: Problem[] = [];
-  const altBuilt: Array<{ record: AlternatePartsRecord; images: Array<{ name: string; image: Raster }>; excluded: ExcludedCount[]; islands: IslandCount[]; splits: SplitCount[] }> = [];
+  const altBuilt: Array<{ record: AlternatePartsRecord; images: Array<{ name: string; image: Raster }>; excluded: ExcludedCount[]; islands: IslandCount[]; splits: SplitCount[]; capSplits: SplitCount[] }> = [];
   const baseSlots = result.parts.parts.map((p) => p.name);
   for (const alt of mergedAlts) {
     if (alt.source === undefined || alt.full === undefined) {
@@ -555,6 +559,8 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     try {
       altRes = assemble({
         source: altSrc,
+        limbUnderCover: alt.parts !== undefined && input.setCover !== 'painting',
+        capOwnership: input.setCapOwnership ?? 'target',
         full: altRuns.full,
         head: altRuns.head,
         resolution: fields.resolution,
@@ -624,6 +630,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       excluded: altRes.excluded,
       islands: altRes.islands,
       splits: altRes.splits,
+      capSplits: altRes.capSplits,
     });
   }
   refuseIfAny(altProblems);
@@ -688,7 +695,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   // Issue #588: per subset set, one line per limb part cut from a layer of more than one island, then (issue #587) one
   // per limb part and base part over it that took a pixel. None otherwise.
   // Issue #609: then one per limb part cut from a layer of one island that also holds a limb the set does not carry.
-  for (const b of altBuilt) for (const l of [...islandLines(b.record.name, b.islands), ...splitLines(b.record.name, b.splits), ...excludedLines(b.record.name, b.excluded)]) log(l);
+  for (const b of altBuilt) for (const l of [...islandLines(b.record.name, b.islands), ...splitLines(b.record.name, b.splits), ...capOwnershipLines(b.record.name, b.capSplits), ...excludedLines(b.record.name, b.excluded)]) log(l);
   log(`wrote ${outs.partsJson}, ${result.images.length} PNG(s) in ${outs.partsDir}, ${outs.recomposite}, ${outs.errorMap} (uncovered error px red, covered error px blue, the painting grey)${figurePath === null ? '' : `, ${figurePath} (the figure, white, the recomposite was read inside)`}`);
   return result;
 }

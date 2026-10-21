@@ -92,6 +92,7 @@ import { inflateSync } from 'node:zlib';
 import ts from 'typescript';
 import { runNamedCutSkirtChecks } from './tools/check_named_cut_skirt.ts';
 import { runChainInheritChecks } from './tools/check_chain_inherit.ts';
+import { runSubsetCoverChecks } from './tools/check_subset_cover.ts';
 import { runFootOwnershipChecks } from './tools/check_foot_ownership.ts';
 import {
   assembleConfig,
@@ -24144,10 +24145,11 @@ function runBuildSuite(): number {
       }
       return c;
     };
-    const shortsFixture = (name: string, cfg: Record<string, unknown>): string => {
+    const shortsFixture = (name: string, cfg: Record<string, unknown>, carry = false): string => {
       const d = join(shortsDir, name);
       writeAssembleFixture(d, cfg, shortsPainting, { full: [{ name: 'legwear', depth: 0.6, rects: [{ x0: 22, y0: 20, x1: 30, y1: 50, colour: C }, { x0: 34, y0: 20, x1: 42, y1: 50, colour: C }] }, shortsLayer], head: HEAD_LAYERS });
-      for (const q of shortsSets) writeRun(join(d, `full_${q.name}`), [{ name: 'legwear', depth: 0.6, rects: q.rects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1, colour: C })) }, shortsLayer]);
+      // #637: this exclusion control has only the base's cover; a carried cover stays in the set.
+      for (const q of shortsSets) writeRun(join(d, `full_${q.name}`), [{ name: 'legwear', depth: 0.6, rects: q.rects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1, colour: C })) }, ...(carry ? [shortsLayer] : [])]);
       return d;
     };
     /** Per part PNG under `out`'s parts.json (base parts and every set's), its pixels above alpha 8 inside the base shorts' pixels above alpha 8. */
@@ -24231,7 +24233,7 @@ function runBuildSuite(): number {
     );
 
     // Bar 2: a set that carries bottomwear itself replaces the shorts, so nothing is excluded: its bytes are the rule before #587's.
-    const carryDir = shortsFixture('carry', shortsConfig(true));
+    const carryDir = shortsFixture('carry', shortsConfig(true), true);
     const carryBase = shortsStage(carryDir, join(carryDir, 'out-base'), 'base');
     const carryNone = shortsStage(carryDir, join(carryDir, 'out-none'), 'none');
     const carryFiles = ['parts.json', ...baseNames.map((n) => join('parts', `${n}.png`)), ...shortsSets.flatMap((q) => [...q.parts, 'bottomwear'].map((n) => join('parts', `${q.name}_${n}.png`)))];
@@ -24272,7 +24274,8 @@ function runBuildSuite(): number {
     const islandFixture = (name: string, sets: typeof islandSets): string => {
       const d = join(islandDir, name);
       writeAssembleFixture(d, islandConfig(sets), shortsPainting, { full: [{ name: 'legwear', depth: 0.6, rects: [{ x0: 22, y0: 20, x1: 30, y1: 50, colour: C }, { x0: 34, y0: 20, x1: 42, y1: 50, colour: C }] }, shortsLayer], head: HEAD_LAYERS });
-      for (const q of sets) writeRun(join(d, `full_${q.name}`), [{ name: 'legwear', depth: 0.6, rects: q.rects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1, colour: C })) }, shortsLayer]);
+      // #637's actual set-cover case is UC00; this island control retains #587's base-only footprint.
+      for (const q of sets) writeRun(join(d, `full_${q.name}`), [{ name: 'legwear', depth: 0.6, rects: q.rects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1, colour: C })) }]);
       return d;
     };
     /** Each set part PNG under `out`: its islands' areas (8-connected, alpha above 8), largest first. */
@@ -24904,7 +24907,8 @@ function runBuildSuite(): number {
       }));
       writeAssembleFixture(d, c, shortsPainting, { full: [{ name: 'legwear', depth: 0.6, rects: [{ x0: 22, y0: 20, x1: 30, y1: 50, colour: C }, { x0: 34, y0: 20, x1: 42, y1: 50, colour: C }] }, shortsLayer], head: HEAD_LAYERS });
       for (const q of sets) {
-        writeRun(join(d, `full_${q.name}`), [{ name: 'legwear', depth: 0.6, rects: q.rects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1, colour: C })) }, shortsLayer]);
+        // #637's covered overlap is UC10; retain the base-only exclusion in this #609 control.
+        writeRun(join(d, `full_${q.name}`), [{ name: 'legwear', depth: 0.6, rects: q.rects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1, colour: C })) }]);
         writeFileSync(join(d, `${q.name}_pose.json`), `${JSON.stringify({ width: 64, height: 64, points: q.pose }, null, 2)}\n`);
       }
       return d;
@@ -46718,13 +46722,26 @@ function runChainInheritSuite(): number {
   return bad();
 }
 
+function runSubsetCoverSuite(): number {
+  section('subset-cover: target-assigned source and cap art under covers');
+  const { say, bad } = counter();
+  const dir = temp('subset-cover');
+  try {
+    runSubsetCoverChecks(dir, (name, pass, detail) => say(name, pass, detail,
+      'issue #637: target ownership in both cap assignment doors, source/cap preservation mutants, coherent provenance counts and unchanged base/no-cover pixels'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  return bad();
+}
+
 function runFootOwnershipSuite(): number {
   section('foot-ownership: every segment shares its own source in the set pose');
   const { say, bad } = counter();
   const dir = temp('foot-ownership');
   try {
     runFootOwnershipChecks(dir, (name, pass, detail) => say(name, pass, detail,
-      'issue #638: post-measurement alternative 3 requires zero foreign-leg components; own-cap is separate, preserved and not a claim that the original 1% bar passed'));
+      'issue #638: post-measurement alternative 3 requires zero foreign-leg components; historical own-cap controls and issue #637 connected source-bound default, never a claim that the original 1% bar passed'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -46765,6 +46782,7 @@ const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number 
   ['requirements', runRequirementsSuite],
   ['loop', runLoopSuite],
   ['assemble', runAssembleSuite],
+  ['subset-cover', runSubsetCoverSuite],
   ['foot-ownership', runFootOwnershipSuite],
   ['plausibility', runPlausibilitySuite],
   ['assemble-examples', runAssembleExamplesSuite],
@@ -46848,7 +46866,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
  */
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['check']],
-  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'foot-ownership', 'contour-wiring', 'config', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
+  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'subset-cover', 'foot-ownership', 'contour-wiring', 'config', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
   ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'mesh-stats', 'remesh', 'retune', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
 ];
 

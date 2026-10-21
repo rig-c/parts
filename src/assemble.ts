@@ -99,6 +99,7 @@
  *
  * Pure: no clock, no randomness, no file access. The CLI reads and writes.
  */
+import { sourceLimbTarget, nearestTargetPart } from './limbownership.ts';
 import { type ArmSplit, type BoneEntry, type CharacterConfig, type ControlSkeleton, controlSkeletonOf, type Cut, type EarlyConfig, type Extend, type Limb, type Patch, type PlanEntry, type Run, type SeeThrough } from './config.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
 import { figuresPhrase, implausibleRules, type Layer, type LayerFigures, layerFigures, type LayerSet, NEAR_WHITE_MIN, OPAQUE_ALPHA_ABOVE, ruleSummary } from './layers.ts';
@@ -349,7 +350,8 @@ export interface AssembleInput {
   /**
    * Issue #587: rig pixels taken out of named parts once the cuts and the limbs are made, before the fringe pass and
    * every figure a part's record holds — each entry clears `part`'s pixels (alpha, colour and region) where `mask` is
-   * 1, and {@link AssembleResult.excluded} counts the ones above `OPAQUE_ALPHA_ABOVE` it took, in entry order (a pixel
+   * 1 (except owned source/cap art protected by issue #637). {@link AssembleResult.excluded} counts the ones
+   * above `OPAQUE_ALPHA_ABOVE` it took, in entry order (a pixel
    * an earlier entry cleared is not counted again). The set build passes {@link setExclusions}. An entry naming a part
    * this run did not make clears nothing and counts 0. Absent or empty: nothing changes. Issue #603: the part's
    * `merged_px` and, on a limb segment's part, its `cap` record are counted after it, so they add up to the PNG written
@@ -382,6 +384,10 @@ export interface AssembleInput {
    * once the limbs are cut and in place of the island rule, which needs two islands. Absent: nothing changes.
    */
   otherLimbs?: OtherLimbs;
+  /** Issue #637: preserve owned source/cap art under covers after limb assignment. Base builds omit it. */
+  limbUnderCover?: boolean;
+  /** Issue #637: `source` is the pre-fix test mutant that skips source-transparent cap ownership; stages use target. */
+  capOwnership?: 'target' | 'source';
 }
 
 /**
@@ -895,16 +901,8 @@ function splitOneIsland(
   const taking = (l: string, all: Readonly<Record<string, Limb>>): Limb => others.line === 'whole-limb'
     ? all[l]
     : { ...all[l], segments: all[l].segments.filter((sg) => sg.from === src) };
-  const polyOf = (l: string, all: Readonly<Record<string, Limb>>): Array<[number, number]> => {
-    const selected = taking(l, all);
-    const last = selected.segments[selected.segments.length - 1];
-    const line = limbPolyline(selected, places);
-    if ((places.get(last.bone) as BonePlace).end === null) {
-      const next = all[l].segments[all[l].segments.indexOf(last) + 1];
-      if (next !== undefined) line.push((places.get(next.bone) as BonePlace).at);
-    }
-    return line;
-  };
+  const polyOf = (l: string, all: Readonly<Record<string, Limb>>): Array<[number, number]> =>
+    others.line === 'whole-limb' ? limbPolyline(all[l], places) : sourceLimbTarget(all[l], src, places).line;
   for (const [l, all] of [...ownNames.map((l) => [l, limbs] as const), ...posed.map((l) => [l, others.limbs] as const)]) {
     const selected = taking(l, all);
     const line = polyOf(l, all);
@@ -999,6 +997,85 @@ function splitOneIsland(
     }
     splits.push({ part: q.part, of: src, limb: q.limb, kept, given: posed.map((l) => ({ limb: l, px: given.get(l) ?? 0 })), bandKept, bandGiven });
   }
+}
+
+/**
+ * Assign only live, source-transparent cap pixels after the existing source-art
+ * assignment. Both the nearest-line and island doors leave such pixels without
+ * a source verdict. Cap origin is provenance, never proof of ownership.
+ */
+function assignCapOwnership(
+  sources: readonly string[], limbs: Readonly<Record<string, Limb>>, bones: readonly BoneEntry[],
+  parts: readonly LimbPart[], pieces: readonly Built[], sourceOf: (name: string) => Built | null,
+  capFrom: ReadonlyArray<CapFrom | null>, W: number, H: number, others?: OtherLimbs,
+): { counts: SplitCount[]; problems: Problem[] } {
+  const counts: SplitCount[] = [], problems: Problem[] = [];
+  if (others === undefined) return { counts, problems };
+  const places = bonePlaces(bones);
+  const drawAt = new Map(others.drawOrder.map((name, i) => [name, i]));
+  parts.forEach((q, i) => {
+    const from = capFrom[i], source = sourceOf(q.of), piece = pieces[i];
+    if (from === null || source === null || !sources.includes(q.of)) return;
+    const otherNames = Object.keys(others.limbs).filter((l) => others.limbs[l].segments.some((sg) => sg.from === q.of));
+    if (otherNames.length === 0) return;
+    const [bx, by, bw, bh] = from.box;
+    const candidates: number[] = [];
+    for (let y = Math.max(0, by); y < Math.min(H, by + bh); y++) for (let x = Math.max(0, bx); x < Math.min(W, bx + bw); x++) {
+      const p = y * W + x;
+      if (from.codes[(y - by) * bw + x - bx] !== 0 && piece.r.data[p * 4 + 3] > 0 && source.r.data[p * 4 + 3] === 0) candidates.push(p);
+    }
+    if (candidates.length === 0) return;
+    const before = problems.length;
+    const posed: string[] = [];
+    for (const l of otherNames) {
+      const unposed = others.unposed[l] ?? [];
+      if (unposed.length === 0) { posed.push(l); continue; }
+      // Same evidence boundary as #609: without a posed other limb, overlap
+      // with its base art requires a pose. No overlap retains the compatible
+      // path; the missing limb is never silently placed at its base bones.
+      const on = candidates.filter((p) => piece.r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE && others.baseArt[l]?.data[p] === 1).length;
+      if (on > 0) problems.push({ code: 'ASSEMBLE_ALT_LIMB_POSE', object: `part "${q.part}" (config.limbs.${q.limb}, source-transparent cap, and config.limbs.${l})`,
+        detail: `holds ${on} cap pixels where the base draws ${l}, but the set does not pose ${unposed.map((b) => `"${b}"`).join(', ')}; a supplied pose for the other limb is required to assign the cap by its target source segments, never its base place` });
+    }
+    if (problems.length > before || posed.length === 0) return;
+    const own = sourceLimbTarget(limbs[q.limb], q.of, places);
+    const other = posed.map((l) => ({ l, target: sourceLimbTarget(others.limbs[l], q.of, places) }));
+    for (const { l, target } of [{ l: q.limb, target: own }, ...other]) {
+      if (target.missingEndBone !== null) problems.push({ code: 'ASSEMBLE_ALT_LIMB_POSE', object: `config.limbs.${l} (part "${q.part}", source-transparent cap, bone "${target.missingEndBone}")`,
+        detail: `takes "${q.of}" on a segment with no supplied end; an explicit bone tip or the following segment's joint in the set's pose is required to assign its cap, never an invented endpoint` });
+    }
+    if (problems.length > before) return;
+    let kept = 0, bandKept = 0, bandGiven = 0;
+    const given = new Map(posed.map((l) => [l, 0]));
+    for (const p of candidates) {
+      const x = p % W + 0.5, y = Math.floor(p / W) + 0.5;
+      const dOwn = Math.sqrt(polylineDist2(own.line, x, y));
+      let best: { l: string; distance: number; part: string } | null = null;
+      for (const o of other) {
+        const near = nearestTargetPart(o.target, x, y);
+        if (best === null || near.distance < best.distance) best = { l: o.l, ...near };
+      }
+      if (best === null) continue;
+      const inBand = Math.abs(best.distance - dOwn) <= OVERLAP_BAND_PX;
+      const give = inBand ? (drawAt.get(best.part) ?? -1) > (drawAt.get(q.part) ?? -1) : best.distance < dOwn;
+      const opaque = piece.r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE;
+      if (!give) {
+        if (opaque) { kept++; if (inBand) bandKept++; }
+      } else {
+        if (opaque) { given.set(best.l, (given.get(best.l) ?? 0) + 1); if (inBand) bandGiven++; }
+        piece.r.data.fill(0, p * 4, p * 4 + 4);
+        if (piece.region !== null) piece.region.data[p] = 0;
+      }
+    }
+    counts.push({ part: q.part, of: q.of, limb: q.limb, kept, given: posed.map((l) => ({ limb: l, px: given.get(l) ?? 0 })), bandKept, bandGiven });
+  });
+  return { counts, problems };
+}
+
+/** Only actual cap reassignments are reported; source-art split counts remain their own stage's. */
+export function capOwnershipLines(set: string, counts: readonly SplitCount[]): string[] {
+  return counts.filter((c) => c.given.some((g) => g.px > 0)).map((c) =>
+    `  LINT set "${set}" ${c.part}: source-transparent cap assigned by target source segments at the set's bones: kept ${c.kept} px, ${c.given.map((g) => `gave ${g.px} px to ${g.limb}`).join(', ')}; overlap band ${OVERLAP_BAND_PX} px, ${c.bandKept} kept and ${c.bandGiven} given by draw order`);
 }
 
 /**
@@ -2143,9 +2220,11 @@ export function pixelOwners(rigLayers: readonly Raster[], rank: readonly number[
  *
  * Both rules return `clear` (no layer in front of this one, by `frontOf`, is the owner) and `takenMask`, the
  * masks the part counts in `parts.json` are derived from; `takenMask` is a
- * subset of the top-most set, and so of `clear`.
+ * subset of the top-most set, and so of `clear`. Issue #637's optional `keep`
+ * masks mark own-layer art under a subset set's actual cover (alpha above 8);
+ * those pixels are occluded, outside every projection core, and never recoloured.
  */
-export function projectSource(rigLayers: Raster[], srcr: Raster, frame: Frame, run: Run, rule: ProjectRule = DEFAULT_PROJECT_RULE, rank: readonly number[] | null = null): ProjectionStats[] {
+export function projectSource(rigLayers: Raster[], srcr: Raster, frame: Frame, run: Run, rule: ProjectRule = DEFAULT_PROJECT_RULE, rank: readonly number[] | null = null, keep: ReadonlyArray<Mask | null> | null = null): ProjectionStats[] {
   const { W, H } = frame;
   const owner = pixelOwners(rigLayers, rank);
   const inFront = (o: number, i: number): boolean => frontOf(o, i, rank);
@@ -2165,8 +2244,8 @@ export function projectSource(rigLayers: Raster[], srcr: Raster, frame: Frame, r
     const takenMask = newMask(W, H);
     let anyTop = false;
     for (let p = 0; p < W * H; p++) {
-      if (owner[p] === -1 || owner[p] === i || !inFront(owner[p], i)) clear.data[p] = 1;
-      if (owner[p] === i && r.data[p * 4 + 3] >= CORE_ALPHA) {
+      if (keep?.[i]?.data[p] !== 1 && (owner[p] === -1 || owner[p] === i || !inFront(owner[p], i))) clear.data[p] = 1;
+      if (keep?.[i]?.data[p] !== 1 && owner[p] === i && r.data[p * 4 + 3] >= CORE_ALPHA) {
         top.data[p] = 1;
         anyTop = true;
       }
@@ -2637,7 +2716,8 @@ function keepArtWhole(part: PlacedPart, cleared: Cleared[], holderAt: (q: number
 
 /**
  * Step 4b (issue #119), over every part in draw order, before the seam
- * override. Modifies the part images in place and returns, per part, the
+ * override. Issue #637's optional `keep` masks protect own-layer art under a set cover.
+ * Modifies the part images in place and returns, per part, the
  * pixels it cleared, by holder.
  *
  * ⚖️ Invariant: a pixel is PUSHED BACK in a part when, over the stack as it
@@ -2683,7 +2763,7 @@ function keepArtWhole(part: PlacedPart, cleared: Cleared[], holderAt: (q: number
  * hold the pixel after it); and every pixel at alpha >= `CORE_ALPHA`, which
  * is the seam override's.
  */
-export function pushBackFringe(parts: PlacedPart[], srcr: Raster, rule: SeamRule, silhouette: Mask | null, feathered: ReadonlyArray<Mask | null> | null = null): FringePushed[][] {
+export function pushBackFringe(parts: PlacedPart[], srcr: Raster, rule: SeamRule, silhouette: Mask | null, feathered: ReadonlyArray<Mask | null> | null = null, keep: ReadonlyArray<Mask | null> | null = null): FringePushed[][] {
   const { width: W } = srcr;
   const { holder, cand } = seamCandidates(parts, srcr, rule, silhouette);
   const at = (i: number, d: number): number => {
@@ -2701,7 +2781,7 @@ export function pushBackFringe(parts: PlacedPart[], srcr: Raster, rule: SeamRule
     // cover itself the loop below has nothing to clear, and the seam override acts on the pixel as before.
     if (cand[d] === 0 || !shows(d)) continue;
     for (let i = holder[d] + 1; i < parts.length; i++) {
-      if (feathered?.[i]?.data[d] === 1) continue;
+      if (feathered?.[i]?.data[d] === 1 || keep?.[i]?.data[d] === 1) continue;
       const s = at(i, d);
       if (s < 0) continue;
       const img = parts[i].image.data;
@@ -2742,10 +2822,12 @@ export function pushBackFringe(parts: PlacedPart[], srcr: Raster, rule: SeamRule
  * characters — ORACLE_assemble.md.)
  * Each candidate is recoloured to the painting's colour in the TOP-MOST part
  * covering it, and only where that part's alpha is >= 250; alpha never
- * changes. Candidates are chosen once, before any recolouring.
+ * changes. Candidates are chosen once, before any recolouring. Issue #637's
+ * optional `keep` masks, indexed by part in rig space, preserve own-layer art
+ * under a subset set's actual cover instead of recolouring it to the painting.
  * (`assemble_parts.py` `main`, "5. seam override".)
  */
-export function seamOverride(parts: PlacedPart[], srcr: Raster, rule: SeamRule, silhouette: Mask | null): void {
+export function seamOverride(parts: PlacedPart[], srcr: Raster, rule: SeamRule, silhouette: Mask | null, keep: ReadonlyArray<Mask | null> | null = null): void {
   const { width: W } = srcr;
   const { top, cand } = seamCandidates(parts, srcr, rule, silhouette);
   parts.forEach(({ record: p, image }, i) => {
@@ -2754,7 +2836,7 @@ export function seamOverride(parts: PlacedPart[], srcr: Raster, rule: SeamRule, 
       for (let x = 0; x < p.w; x++) {
         const d = (p.y + y) * W + p.x + x;
         const s = (y * p.w + x) * 4;
-        if (cand[d] === 0 || top[d] !== i || image.data[s + 3] < CORE_ALPHA) continue;
+        if (keep?.[i]?.data[d] === 1 || cand[d] === 0 || top[d] !== i || image.data[s + 3] < CORE_ALPHA) continue;
         image.data[s] = srcr.data[d * 4];
         image.data[s + 1] = srcr.data[d * 4 + 1];
         image.data[s + 2] = srcr.data[d * 4 + 2];
@@ -3405,7 +3487,7 @@ const CAP_FROM_LOWER = 4;
 const CAP_FROM_LOWER_KEPT = 5;
 
 /**
- * Issue #603: the set exclusion cleared rig pixel `(x, y)` of a lower segment's part; when the cap wrote or kept it,
+ * Issues #603/#637: ownership or set exclusion cleared rig pixel `(x, y)` of a lower segment's part; when the cap wrote or kept it,
  * move it from the count it was in to `excluded_px`, so the record's counts are the PNG's. A pixel off the cap's disc,
  * or one the cap counted missing (it wrote none), changes nothing.
  */
@@ -4131,6 +4213,8 @@ export interface AssembleResult {
   islands: IslandCount[];
   /** Issue #609: what each limb segment part cut from a `limbIslands` part of one island that `otherLimbs` take kept; empty otherwise. */
   splits: SplitCount[];
+  /** Issue #637: source-transparent cap pixels assigned before preservation, in either source-art door. */
+  capSplits: SplitCount[];
 }
 
 /** A hidden-art layer of a run (issue #359) and what read it: `cuts[i].under`, or a limb segment's cap; none is said. */
@@ -4327,6 +4411,13 @@ export function assemble(input: AssembleInput): AssembleResult {
   });
   refuseIfAny(hiddenProblems);
 
+  // Issue #637: only subset limb sources, and only where a layer in front actually holds art.
+  // Never extend an absent limb pixel or borrow a base layer's colour. The mask survives cuts by
+  // the source key; only the resulting limb pieces read it, after #609 has assigned their pixels.
+  const underCover = new Map<string, Mask>();
+  const coverFootprints = new Map<string, Mask>();
+  const limbSources = new Set(Object.values(input.limbs ?? {}).flatMap((l) => l.segments.map((sg) => sg.from)));
+  const limbPlans = new Set([...limbSources, ...cuts.filter((c) => limbSources.has(c.into)).map((c) => c.from)]);
   const rig = new Map<string, Raster>();
   const stats = new Map<string, ProjectionStats>();
   const ghost: Record<string, number> = {};
@@ -4337,7 +4428,21 @@ export function assemble(input: AssembleInput): AssembleResult {
     const layers = runLayers(set, input.resolution);
     if (run === 'full') fullTags.push(...layers.filter((l) => l.opaqueRunPx > 0).map((l) => l.tag));
     const rigLayers = layers.map((l) => layerToRig(l.canvas, frame, run));
-    const st = projectSource(rigLayers, srcr, frame, run, projectRule, planRanks(layers.map((l) => l.tag), run, plan));
+    const rank = planRanks(layers.map((l) => l.tag), run, plan);
+    const keep = layers.map((l, i): Mask | null => {
+      if (input.limbUnderCover !== true || !plan.some(([name, ru, tag]) => limbPlans.has(name) && ru === run && tag === l.tag)) return null;
+      const mask = newMask(W, H);
+      const cover = newMask(W, H);
+      for (let p = 0; p < W * H; p++) {
+        if (!rigLayers.some((r, j) => frontOf(j, i, rank) && r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE)) continue;
+        cover.data[p] = 1;
+        if (rigLayers[i].data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) mask.data[p] = 1;
+      }
+      underCover.set(`${run}:${l.tag}`, mask);
+      coverFootprints.set(`${run}:${l.tag}`, cover);
+      return mask;
+    });
+    const st = projectSource(rigLayers, srcr, frame, run, projectRule, rank, keep);
     layers.forEach((l, i) => {
       rig.set(`${run}:${l.tag}`, rigLayers[i]);
       stats.set(`${run}:${l.tag}`, st[i]);
@@ -4654,16 +4759,61 @@ export function assemble(input: AssembleInput): AssembleResult {
       ? { counts: [], splits: [], problems: [] }
       : keepJointIslands(input.limbIslands ?? [], input.limbs ?? {}, input.bones ?? [], lim.parts, limbPieces, limbSource, W, H, input.islandFloor ?? ISLAND_FLOOR_SHARE, input.otherLimbs);
   refuseIfAny(islandKept.problems);
+  const capAssigned = input.capOwnership === 'source' ? { counts: [], problems: [] }
+    : assignCapOwnership(input.limbIslands ?? [], input.limbs ?? {}, input.bones ?? [], lim.parts, limbPieces, limbSource, lim.capFrom, W, H, input.otherLimbs);
+  refuseIfAny(capAssigned.problems);
 
-  // Issue #587: a set's limb part loses the pixels a base part it does not replace covers, before anything is counted.
-  // Issue #603: its merged_px and its cap record lose them too, so they count what its PNG holds.
-  const excluded: ExcludedCount[] = [];
+
+  // Issue #637: protection belongs to the assigned piece, never to a component guessed from
+  // its size or colour. After target assignment, a retained upper-copy cap is the limb's connecting art beneath
+  // its upper segment (limbOrder draws the upper over the lower). Other cap provenance is
+  // protected only beneath an actual front layer, including where the lower source is
+  // transparent. Source art still needs both its own alpha and that actual cover.
+  // Read this after island/nearest-line assignment: a cleared pixel is never brought back.
   const recount = input.exclusionCounts !== 'before';
+  // Assignment owns its bookkeeping even when cover preservation is not requested
+  // (for example a direct assemble caller). Only the explicit historical mutant
+  // with neither protection nor target assignment retains the old count path.
+  if (recount && (input.limbUnderCover === true || input.capOwnership !== 'source')) {
+    limbPieces.forEach((b, i) => {
+      if (b.region !== null) b.merged = mergedIn(b, b.region);
+      const cap = lim.parts[i].record.cap, from = lim.capFrom[i];
+      if (cap === undefined || from === null) return;
+      const [bx, by, bw, bh] = from.box;
+      for (let y = Math.max(0, by); y < Math.min(H, by + bh); y++) for (let x = Math.max(0, bx); x < Math.min(W, bx + bw); x++) {
+        if (b.r.data[(y * W + x) * 4 + 3] === 0) excludeCapPixel(cap, from, x, y);
+      }
+    });
+  }
+  const limbKeep = limbPieces.map((b, i): Mask | null => {
+    if (input.limbUnderCover !== true) return null;
+    const keep = newMask(W, H);
+    const sourceKeep = underCover.get(b.key);
+    if (sourceKeep !== undefined) keep.data.set(sourceKeep.data);
+    const cap = lim.parts[i].record.cap;
+    const from = lim.capFrom[i];
+    if (cap === undefined || from === null) return keep;
+    const [bx, by, bw, bh] = from.box;
+    for (let y = Math.max(0, by); y < Math.min(H, by + bh); y++) {
+      for (let x = Math.max(0, bx); x < Math.min(W, bx + bw); x++) {
+        const code = from.codes[(y - by) * bw + x - bx];
+        if (code === 0) continue;
+        const p = y * W + x;
+        if (b.r.data[p * 4 + 3] > 0 && (code === CAP_FROM_UPPER || coverFootprints.get(b.key)?.data[p] === 1)) keep.data[p] = 1;
+      }
+    }
+    return keep;
+  });
+
+  // Issue #587: unprotected pixels under base parts not replaced by the set still leave.
+  // Issue #603: merged_px and cap counts lose exactly the pixels cleared from the PNG.
+  const excluded: ExcludedCount[] = [];
   for (const ex of input.exclude ?? []) {
     const d = order.find((q) => !('patch' in q) && pieceAt(q).name === ex.part);
     const b = d === undefined || 'patch' in d ? null : pieceAt(d).b;
     const capOf = d !== undefined && 'limb' in d ? lim.parts[d.limb].record.cap : undefined;
     const from = d !== undefined && 'limb' in d ? lim.capFrom[d.limb] : null;
+    const keep = d !== undefined && 'limb' in d ? limbKeep[d.limb] : null;
     let px = 0;
     if (b !== null) {
       if (b.region === null) {
@@ -4672,7 +4822,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       }
       let mergedOut = 0;
       for (let p = 0; p < W * H; p++) {
-        if (ex.mask.data[p] === 0 || b.r.data[p * 4 + 3] === 0) continue;
+        if (ex.mask.data[p] === 0 || b.r.data[p * 4 + 3] === 0 || keep?.data[p] === 1) continue;
         if (b.r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) px++;
         // merged_px counts the last merge's copied pixels and its ring inside the part's region (`mergedIn`).
         if (b.region.data[p] === 1) mergedOut += (b.trace.lastSel?.data[p] ?? 0) + (b.trace.lastRing?.data[p] ?? 0);
@@ -4694,7 +4844,8 @@ export function assemble(input: AssembleInput): AssembleResult {
     return { record: whole, image: b.r };
   });
   const featheredInOrder: Array<Mask | null> = order.map((d) => ('patch' in d ? null : (pieceAt(d).b.feathered ?? null)));
-  const pushedBy = pushBackFringe(stack, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, featheredInOrder);
+  const keepInOrder = order.map((d) => ('limb' in d ? limbKeep[d.limb] : null));
+  const pushedBy = pushBackFringe(stack, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, featheredInOrder, keepInOrder);
   // Issue #255: a part's drift refusals in a body, and who holds the body in the draw order (the push-back clears
   // only fringe below CORE_ALPHA, and the seam override only recolours, so the holders read here are final).
   const holderAt = new Int32Array(W * H).fill(-1);
@@ -4798,7 +4949,7 @@ export function assemble(input: AssembleInput): AssembleResult {
   refuseIfAny(empty);
   const placed: PlacedPart[] = order.map((d) => ('plan' in d ? planned[d.plan] : 'cut' in d ? cutPlaced[d.cut] : 'limb' in d ? limbPlaced[d.limb] : cut[d.patch]) as PlacedPart);
 
-  seamOverride(placed, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null);
+  seamOverride(placed, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, keepInOrder);
   const can = recomposite(placed, W, H);
   // Issue #242: on a scene painting the figure is read off the full run, and every recomposite figure inside it.
   const inside = input.scene === true ? sceneFigure([...rig.entries()].filter(([k]) => k.startsWith('full:')).map(([, r]) => r), W, H) : null;
@@ -4849,6 +5000,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     excluded,
     islands: islandKept.counts,
     splits: islandKept.splits,
+    capSplits: capAssigned.counts,
   };
 }
 

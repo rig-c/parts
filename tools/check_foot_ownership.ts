@@ -86,9 +86,9 @@ function pixels({ record, image }: Image): string[] {
 }
 
 export function runFootOwnershipChecks(dir: string, say: Say): void {
-  const run = (d: string, name: string, split: AssembleStageInput['setSplit'] = 'nearest'): string => {
+  const run = (d: string, name: string, split: AssembleStageInput['setSplit'] = 'nearest', extra: Pick<AssembleStageInput, 'setCover' | 'setCapOwnership'> = {}): string => {
     const out = join(d, name), log: string[] = [];
-    assembleStage({ source: join(d, 'painting.png'), full: join(d, 'full'), head: join(d, 'head'), config: join(d, 'config.json'), seam: 'near-white', project: 'core', setSplit: split },
+    assembleStage({ source: join(d, 'painting.png'), full: join(d, 'full'), head: join(d, 'head'), config: join(d, 'config.json'), seam: 'near-white', project: 'core', setSplit: split, ...extra },
       { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, 'recomposite_error_rig.png') }, (l) => log.push(l));
     writeFileSync(join(out, 'raw.log'), `${log.join('\n')}\n`);
     return out;
@@ -214,13 +214,17 @@ export function runFootOwnershipChecks(dir: string, say: Say): void {
   // These figures do NOT satisfy the original <=1% second-island bar. Cap/exclusion
   // repair belongs to #637; no component is deleted or cap shape changed here.
   const def = join(dir, 'default-cap'); writeFootOwnershipFixture(def, 'connected', 'default');
-  const fixed = run(def, 'nearest'), whole = run(def, 'whole-limb-mutant', 'whole-limb');
-  const defRight = foot(fixed, 'r'), defLeft = foot(fixed, 'l'), beforeRight = foot(whole, 'r');
+  // Freeze #638's historical geometry measurement on the explicit pre-637 path.
+  // Both legacy sides share these test-only settings; only source geometry differs.
+  const legacy = { setCover: 'painting', setCapOwnership: 'source' } as const;
+  const fixed = run(def, 'nearest'), historical = run(def, 'legacy-nearest', 'nearest', legacy);
+  const whole = run(def, 'legacy-whole-limb-mutant', 'whole-limb', legacy);
+  const defRight = foot(fixed, 'r'), defLeft = foot(fixed, 'l'), beforeRight = foot(whole, 'r'), legacyRight = foot(historical, 'r');
   const defGeometry = footGeometry(def);
-  const beforeAreas = areas(beforeRight), afterAreas = areas(defRight);
-  say('UF11_DEFAULT_CAP_RETAINS_THE_MEASURED_97_16_TO_104_16_CASE',
-    JSON.stringify(beforeAreas) === '[97,16]' && JSON.stringify(afterAreas) === '[104,16]',
-    `whole-limb mutant ${JSON.stringify(beforeAreas)} -> source segments ${JSON.stringify(afterAreas)}; second/largest before ${beforeAreas[1] / beforeAreas[0]}, after ${afterAreas[1] / afterAreas[0]}; original 1% bar not met`);
+  const beforeAreas = areas(beforeRight), afterAreas = areas(legacyRight), currentAreas = areas(defRight);
+  say('UF11_LEGACY_97_16_TO_104_16_AND_CURRENT_CONNECTED_272_BOTH_HOLD',
+    JSON.stringify(beforeAreas) === '[97,16]' && JSON.stringify(afterAreas) === '[104,16]' && JSON.stringify(currentAreas) === '[272]',
+    `explicit legacy whole/source ${JSON.stringify(beforeAreas)} -> ${JSON.stringify(afterAreas)}; current source-bound default ${JSON.stringify(currentAreas)}; historical 1% bar unmet, current connected bar required`);
   const defOwners = [ownership(defRight, 'r', defGeometry), ownership(defLeft, 'l', defGeometry)];
   say('UF12_DEFAULT_CAP_POSITIVE_HAS_ZERO_FOREIGN_LEG_COMPONENTS', defOwners.every((o) => o.foreignPx === 0 && o.foreignComponents.length === 0),
     `right/left ${JSON.stringify(defOwners)}; acceptance changed after measurement to foreign-leg zero, own-cap separate`);
@@ -228,7 +232,7 @@ export function runFootOwnershipChecks(dir: string, say: Say): void {
   const source = runs.full.layers.find((l) => l.name === 'footwear');
   if (source === undefined) throw new Error('generated default footwear missing');
   const sourceAt = (x: number, y: number): number[] => rgbaAt({ image: source.pixels, record: { ...defRight.record, x: source.left, y: source.top } }, x, y);
-  const ownCaps = components(defRight).filter((c) => c.every(([x, y]) => sourceAt(x, y)[3] === 0 && defGeometry.owner(x, y) === 'r'));
+  const ownCaps = components(legacyRight).filter((c) => c.every(([x, y]) => sourceAt(x, y)[3] === 0 && defGeometry.owner(x, y) === 'r'));
   const beforeCaps = components(beforeRight).filter((c) => c.every(([x, y]) => sourceAt(x, y)[3] === 0));
   const cap = defRight.record.limb?.cap;
   const ankle = defGeometry.places.get('foot_r'), shin = defGeometry.places.get('leg_r1');
@@ -244,9 +248,9 @@ export function runFootOwnershipChecks(dir: string, say: Say): void {
   // In cutLimbs' priority order, no cap image + transparent lower layer + an
   // upper pixel is exactly CAP_FROM_UPPER (3). UF16 causally plants its absence;
   // colour equality here verifies a copy, never chooses an owner.
-  say('UF13_ALL_16_SEPARATE_PIXELS_ARE_OWN_CAP_FROM_UPPER', ownCaps.length === 1 && capPixels.length === 2 * 8 && fromUpper &&
-    (cap.upper_px ?? 0) >= capPixels.length && margins.every((d) => d > 0.5) && JSON.stringify(ownCaps) === JSON.stringify(beforeCaps),
-    `own-cap areas ${JSON.stringify(ownCaps.map((c) => c.length))}; CAP_FROM_UPPER branch ${fromUpper}; distance advantage ${Math.min(...margins)}..${Math.max(...margins)}; cap ${JSON.stringify(cap)}`);
+  say('UF13_THE_16_LEGACY_OWN_CAP_PIXELS_SURVIVE_IN_THE_CONNECTED_DEFAULT', ownCaps.length === 1 && capPixels.length === 2 * 8 && fromUpper &&
+    (cap.upper_px ?? 0) >= capPixels.length && margins.every((d) => d > 0.5) && JSON.stringify(ownCaps) === JSON.stringify(beforeCaps) && capPixels.every(([x, y]) => JSON.stringify(rgbaAt(defRight, x, y)) === JSON.stringify(rgbaAt(legacyRight, x, y))),
+    `legacy own-cap areas ${JSON.stringify(ownCaps.map((c) => c.length))}, retained in connected default ${JSON.stringify(currentAreas)}; CAP_FROM_UPPER branch ${fromUpper}; distance advantage ${Math.min(...margins)}..${Math.max(...margins)}; cap ${JSON.stringify(cap)}`);
   const deleted: Image = { record: defRight.record, image: { ...defRight.image, data: new Uint8ClampedArray(defRight.image.data) } };
   for (const [x, y] of capPixels) {
     const p = ((y - deleted.record.y) * deleted.image.width + x - deleted.record.x) * 4;
@@ -284,5 +288,5 @@ export function runFootOwnershipChecks(dir: string, say: Say): void {
   const beforeOwners = ['r', 'l'].map((s) => ownership(foot(whole, s), s, defGeometry));
   say('UF17_WHOLE_LIMB_LINE_MUTANT_RETAINS_FOREIGN_LEG_PIXELS', beforeOwners.some((o) => o.foreignPx > 0) &&
     defOwners.every((o) => o.foreignPx === 0), `before ${JSON.stringify(beforeOwners)}; after ${JSON.stringify(defOwners)}; own-cap [16] survives both`);
-  writeFileSync(join(fixed, 'ownership.json'), `${JSON.stringify({ beforeAreas, afterAreas, beforeOwners, ownership: defOwners, ownCapAreas: ownCaps.map((c) => c.length), capPixels, margins, fromUpper, plantedOwner, lostOwnCap, causal }, null, 2)}\n`);
+  writeFileSync(join(fixed, 'ownership.json'), `${JSON.stringify({ legacyBeforeAreas: beforeAreas, legacyAfterAreas: afterAreas, currentAreas, beforeOwners, ownership: defOwners, ownCapAreas: ownCaps.map((c) => c.length), capPixels, margins, fromUpper, plantedOwner, lostOwnCap, causal }, null, 2)}\n`);
 }
