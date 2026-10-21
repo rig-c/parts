@@ -27,6 +27,9 @@
  *    (`RETUNE_PRESERVED`, naming the first path that moved).
  * 6. **The gate and check**: the revision goes through rigc's build gate (`RETUNE_RIGC_GREEN`) and through `check`
  *    beside the input; every bar the input measured is measured, none the input met is failed (`RETUNE_CHECK_HELD`).
+ *    Under `--input-check` (issue #617) the input's check is the recorded one when the record is bound to this input
+ *    (`src/remesh.ts` {@link inputCheckOf}), refused by name otherwise (`RETUNE_INPUT_CHECK_FILE`,
+ *    `RETUNE_INPUT_CHECK_BOUND`) before the rebuild.
  * 7. **The write**: `--out` receives the revision's files and {@link RETUNE_FILE} — spec {@link RETUNE_SPEC} — with
  *    no path and no clock in it, so a second identical request writes the same bytes.
  *
@@ -37,7 +40,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { checkStage, gateThroughRigc, type Log, rigStage } from './build.ts';
 import { type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackShape, type PageEdges, rigcRanClause, type RigcRunner } from './check.ts';
 import { PartsError, type Problem, problemLine, refuseIfAny } from './errors.ts';
-import { type CheckSide, checkHeldProblems, checkSide, checkScope, type FileTree, firstDifference, type HashRow, hashRows, inputTreeProblems, perturbed, readTree, sha256 } from './remesh.ts';
+import { type CheckSide, checkHeldProblems, checkSide, checkScope, type FileTree, firstDifference, type HashRow, hashRows, INPUT_CHECK_FILE, type InputCheckBinding, inputCheckHashes, inputCheckMovedProblems, inputCheckOf, inputCheckReusedLine, inputCheckText, inputTreeProblems, perturbed, readTree, sha256 } from './remesh.ts';
 import { DEFAULT_IDLE_KEYS, type IdleKeys, rigJsonText } from './rig.ts';
 
 /** The provenance file's spec. */
@@ -69,6 +72,10 @@ export interface RetuneInput {
   pageEdges?: PageEdges;
   packShape?: PackShape;
   requirements?: string;
+  /** Issue #617: a recorded input check (`input-check.json`, as `remesh` writes it) reused when it is bound to this run's input. */
+  inputCheck?: string;
+  /** Issue #617: write `input-check.json` into `out` beside the provenance. Without it, and without `inputCheck`, nothing written moves. */
+  recordInputCheck?: boolean;
 }
 
 /**
@@ -80,6 +87,8 @@ export interface RetunePlant {
   perturb?: string;
   skipPreserve?: boolean;
   skipHold?: boolean;
+  /** Issue #617's mutant: run just before check-input reads the input, after the first snapshot, to change a file under it. */
+  beforeInputCheck?: () => void;
 }
 
 /** One constraint the request changed: its name and type, and each field whose value moved, in the rebuild's order. */
@@ -340,6 +349,7 @@ export function retuneStage(input: RetuneInput, rigc: RigcRunner, checkBin: stri
   if (outAt.startsWith(`${rigAt}${sep}`)) throw new PartsError([{ code: 'RETUNE_OUT_FRESH', object: input.out, detail: `is inside the input ${input.rig}; a revision is written beside the input, never into it` }]);
   const tree = readTree(rigAt);
   refuseIfAny(inputTreeProblems(tree, input.rig, 'retune', RETUNE_SPLICED));
+  const recorded = inputCheckOf(input, rigAt, tree, pageEdges, packShape, versions.parts, rigc, 'retune');
   const inFiles = rigFiles(tree);
   // 2. The rebuild.
   log(`rig-parts retune: ${input.rig}, ${tree.size} file(s); the rebuild is the config as written`);
@@ -382,9 +392,16 @@ export function retuneStage(input: RetuneInput, rigc: RigcRunner, checkBin: stri
   }
   const checkOf = (rig: string, name: string): CheckReport =>
     checkStage({ rig, parts: input.parts, out: join(scratch, name), pageEdges, packShape, ...(input.requirements === undefined ? {} : { requirements: input.requirements }) }, rigc, checkBin, (l) => log(`[${name}] ${l}`));
-  const inCheck = checkOf(rigAt, 'check-input');
+  if (recorded.reused !== null) log(inputCheckReusedLine(input.inputCheck as string, recorded.binding as InputCheckBinding));
+  let inSide: CheckSide;
+  if (recorded.reused !== null) inSide = recorded.reused;
+  else {
+    plant.beforeInputCheck?.();
+    inSide = checkSide(checkOf(rigAt, 'check-input'));
+    if (recorded.binding !== null) refuseIfAny(inputCheckMovedProblems(recorded.binding, input, rigAt, 'retune'));
+  }
   const revCheck = checkOf(staged, 'check-revision');
-  const sides = { input: checkSide(inCheck), revision: checkSide(revCheck) };
+  const sides = { input: inSide, revision: checkSide(revCheck) };
   refuseIfAny(checkHeldProblems(sides.input, sides.revision, revCheck.problems, 'retune'));
   const scope = checkScope(sides.revision.physics);
   log(`  check: input ${sides.input.pass ? 'PASS' : `FAIL (${sides.input.not_met.join(', ')})`}, revision ${sides.revision.pass ? 'PASS' : `FAIL (${sides.revision.not_met.join(', ')})`}, the same ${sides.revision.measured.length} bar(s) measured; ${scope}`);
@@ -409,6 +426,11 @@ export function retuneStage(input: RetuneInput, rigc: RigcRunner, checkBin: stri
   }
   writeFileSync(join(outAt, RETUNE_FILE), rigJsonText(provenance));
   written.push(RETUNE_FILE);
+  if (input.recordInputCheck === true) {
+    writeFileSync(join(outAt, INPUT_CHECK_FILE), inputCheckText(recorded.binding as InputCheckBinding, sides.input));
+    written.push(INPUT_CHECK_FILE);
+    log(`  recorded: the input's check in ${INPUT_CHECK_FILE}, bound by ${inputCheckHashes(recorded.binding as InputCheckBinding)} sha256 row(s); pass it as --input-check to a later remesh or retune of ${input.rig}`);
+  }
   log('  file                                     sha256 (input)     sha256 (revision)');
   const inHash = new Map(hashRows(tree).map((r) => [r.path, r.sha256]));
   for (const r of provenance.revision) log(`  ${r.path.padEnd(40)} ${(inHash.get(r.path) ?? 'absent').slice(0, 16)}   ${r.sha256.slice(0, 16)}${inHash.get(r.path) === r.sha256 ? '' : '  (spliced)'}`);
