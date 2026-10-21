@@ -353,6 +353,13 @@ export interface AssembleInput {
    * this run did not make clears nothing and counts 0. Absent or empty: nothing changes.
    */
   exclude?: readonly SetExclusion[];
+  /**
+   * Issue #588: the parts a limb takes on which a subset set names one limb side ({@link setIslandSources}). On each
+   * that holds more than one island, every limb segment part cut from it keeps the island its joints fall on and
+   * loses the rest ({@link AssembleResult.islands}), once the limbs are cut and before `exclude`. Absent or empty:
+   * nothing changes.
+   */
+  limbIslands?: readonly string[];
 }
 
 /** One base part's cover over one of a subset set's limb parts (issue #587): `part` loses its pixels where `mask` is 1. */
@@ -407,6 +414,144 @@ export function setExclusions(base: readonly PlacedPart[], W: number, H: number,
     }
   }
   return out;
+}
+
+/**
+ * What one limb segment part kept of a layer that holds more than one island (issue #588): the layer's island count,
+ * the joints the kept island lies under, and the part's pixels (alpha above `OPAQUE_ALPHA_ABOVE`) on it and on the
+ * islands dropped.
+ */
+export interface IslandCount {
+  part: string;
+  /** The part the limb took (the segment's `from`). */
+  of: string;
+  islands: number;
+  joints: Array<{ bone: string; at: [number, number] }>;
+  kept: number;
+  dropped: number;
+}
+
+/**
+ * Issue #588: the parts a subset set's limbs take on which the set names one limb side — every `from` of `setLimbs`
+ * (in their order, each once) that more of `limbs` (the config's) take than of `setLimbs`. In the base build every
+ * limb that takes a part shares its pixels by the nearest polyline, so each limb gets its own side; a set that carries
+ * fewer of them puts every pixel of the part on the limbs it carries, both legs of a two-leg layer on one leg.
+ */
+export function setIslandSources(limbs: Readonly<Record<string, Limb>>, setLimbs: Readonly<Record<string, Limb>>): string[] {
+  const takes = (all: Readonly<Record<string, Limb>>, src: string): number => Object.values(all).filter((l) => l.segments.some((sg) => sg.from === src)).length;
+  const froms = [...new Set(Object.values(setLimbs).flatMap((l) => l.segments.map((sg) => sg.from)))];
+  return froms.filter((src) => takes(limbs, src) > takes(setLimbs, src));
+}
+
+/** The rig pixels whose square holds the point `[x, y]` (a pixel's centre is at `x + 0.5`): one, two on an edge, four on a corner. */
+function pixelsAt(at: readonly [number, number], W: number, H: number): number[] {
+  const along = (v: number, n: number): number[] => (Number.isInteger(v) ? [v - 1, v] : [Math.floor(v)]).filter((i) => i >= 0 && i < n);
+  const out: number[] = [];
+  for (const y of along(at[1], H)) for (const x of along(at[0], W)) out.push(y * W + x);
+  return out;
+}
+
+/**
+ * Issue #588: on each of `sources` that holds more than one island, keep in every limb segment part cut from it the
+ * island its joints fall on, and clear the rest (alpha, colour and region).
+ *
+ * ⚖️ Invariant: an island is an 8-connected component of the part's pixels with alpha above `OPAQUE_ALPHA_ABOVE` —
+ * the ghost clean-up's own rule (`cleanGhosts`); a pixel at or below it is on no island and is kept. A segment's joints are its bone's origin and, when a
+ * segment follows it, the next segment's bone's origin (a bone's tip is no joint: the limb ends there), placed by
+ * `bones` — the set's bones, posed or placed as its cut. A joint is on the island of a pixel whose square holds the
+ * point; with 8-connectivity the pixels that share a point are one island, so a joint is on one island or on none.
+ * Every joint of a segment on one island is required: a joint on none (`ASSEMBLE_ALT_LIMB_ISLAND`, the joint and the
+ * islands named) or a segment whose joints fall on two names no island to keep, and is refused rather than guessed.
+ * A source with one island is left as cut and counted nowhere, so a set whose layer holds its one leg writes what it
+ * wrote before. A pixel the limbs wrote where the source is transparent (a `cap_shape: "ball"` lower half from the
+ * cap image) is on no island and kept.
+ */
+function keepJointIslands(
+  sources: readonly string[],
+  limbs: Readonly<Record<string, Limb>>,
+  bones: readonly BoneEntry[],
+  parts: readonly LimbPart[],
+  pieces: readonly Built[],
+  sourceOf: (name: string) => Built | null,
+  W: number,
+  H: number,
+): { counts: IslandCount[]; problems: Problem[] } {
+  const counts: IslandCount[] = [];
+  const problems: Problem[] = [];
+  const places = bonePlaces(bones);
+  for (const src of sources) {
+    const b = sourceOf(src);
+    if (b === null) continue;
+    const m = newMask(W, H);
+    for (let p = 0; p < W * H; p++) m.data[p] = b.r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE ? 1 : 0;
+    const cc = connectedComponents(m, 8);
+    const n = cc.count - 1;
+    if (n < 2) continue;
+    // Numbered by area, largest first, then by the box's top row and left column: a function of the pixels, not of a scan.
+    const order = cc.stats.slice(1).sort((a, c) => c.area - a.area || a.top - c.top || a.left - c.left);
+    const numberOf = new Map(order.map((st, i) => [st.label, i + 1]));
+    const islandText = (label: number): string => {
+      const st = cc.stats[label];
+      return `island ${numberOf.get(label)} (${st.area} px at ${st.left},${st.top} ${st.width}x${st.height})`;
+    };
+    const all = order.map((st) => islandText(st.label)).join(', ');
+    parts.forEach((q, i) => {
+      if (q.of !== src) return;
+      const segs = limbs[q.limb].segments;
+      const object = `config.limbs.${q.limb}.segments[${q.segment}] (part "${q.part}")`;
+      const jointBones = [segs[q.segment].bone, ...(q.segment + 1 < segs.length ? [segs[q.segment + 1].bone] : [])];
+      const joints = jointBones.map((bone) => {
+        const at = (places.get(bone) as BonePlace).at;
+        const labels = [...new Set(pixelsAt(at, W, H).map((p) => cc.labels[p]).filter((l) => l > 0))];
+        return { bone, at: [pyRound(at[0], 3), pyRound(at[1], 3)] as [number, number], labels };
+      });
+      const where = (j: (typeof joints)[number]): string => `"${j.bone}"'s origin at [${j.at.join(', ')}]`;
+      const off = joints.find((j) => j.labels.length === 0);
+      if (off !== undefined) {
+        problems.push({
+          code: 'ASSEMBLE_ALT_LIMB_ISLAND',
+          object,
+          detail: `takes "${src}", which holds ${n} islands (8-connected, alpha above ${OPAQUE_ALPHA_ABOVE}): ${all}; the set names one of the limbs that take "${src}", so the segment keeps the island its joints fall on, and its joint ${where(off)} is on none of them — no pixel touching the point has alpha above ${OPAQUE_ALPHA_ABOVE}; a bone origin on its limb's art is required (move the bone onto the joint), or a layer that holds this limb alone`,
+        });
+        return;
+      }
+      const on = [...new Set(joints.flatMap((j) => j.labels))];
+      if (on.length > 1) {
+        problems.push({
+          code: 'ASSEMBLE_ALT_LIMB_ISLAND',
+          object,
+          detail: `takes "${src}", which holds ${n} islands (8-connected, alpha above ${OPAQUE_ALPHA_ABOVE}): ${all}; the set names one of the limbs that take "${src}", so the segment keeps the island its joints fall on, and they fall on ${on.length}: ${joints.map((j) => `${where(j)} on ${islandText(j.labels[0])}`).join(', ')}; every joint of a segment on one island is required — one stroke of art from joint to joint, or a layer that holds this limb alone`,
+        });
+        return;
+      }
+      const keep = on[0];
+      const piece = pieces[i];
+      let kept = 0;
+      let dropped = 0;
+      for (let p = 0; p < W * H; p++) {
+        const a = piece.r.data[p * 4 + 3];
+        const l = cc.labels[p];
+        if (a === 0 || l === 0) continue;
+        if (l === keep) {
+          if (a > OPAQUE_ALPHA_ABOVE) kept++;
+          continue;
+        }
+        if (a > OPAQUE_ALPHA_ABOVE) dropped++;
+        piece.r.data.fill(0, p * 4, p * 4 + 4);
+        if (piece.region !== null) piece.region.data[p] = 0;
+      }
+      counts.push({ part: q.part, of: src, islands: n, joints: joints.map((j) => ({ bone: j.bone, at: j.at })), kept, dropped });
+    });
+  }
+  return { counts, problems };
+}
+
+/** One `LINT` line per {@link IslandCount} (issue #588), in `config.limbs` order. */
+export function islandLines(set: string, counts: readonly IslandCount[]): string[] {
+  return counts.map(
+    (c) =>
+      `  LINT set "${set}" ${c.part}: ${c.of} holds ${c.islands} islands (8-connected, alpha above ${OPAQUE_ALPHA_ABOVE}), kept the one under ${c.joints.map((j) => `${j.bone} [${j.at.join(', ')}]`).join(' and ')} (${c.kept} px), dropped ${c.islands - 1} (${c.dropped} px)`,
+  );
 }
 
 /** One `LINT` line per {@link ExcludedCount} that took a pixel (issue #587); none for a count of 0. */
@@ -3451,6 +3596,8 @@ export interface AssembleResult {
   headFaceUnderfillPx?: number;
   /** Issue #587: what each `exclude` entry took, in entry order; empty without one. */
   excluded: ExcludedCount[];
+  /** Issue #588: what each limb segment part cut from a `limbIslands` part of more than one island kept; empty otherwise. */
+  islands: IslandCount[];
 }
 
 /** A hidden-art layer of a run (issue #359) and what read it: `cuts[i].under`, or a limb segment's cap; none is said. */
@@ -3953,18 +4100,23 @@ export function assemble(input: AssembleInput): AssembleResult {
     }
   }
   // Issue #349: the limbs, after the cuts (a limb may take a cut's piece, and a cut's under image fills its base first).
-  const lim = cutLimbs(input.limbs ?? {}, input.bones ?? [], input.caps ?? new Map(), W, H, (name) => {
+  const limbSource = (name: string): Built | null => {
     const pi = plan.findIndex((e) => e[0] === name);
     if (pi >= 0) return built[pi];
     const ci = cuts.findIndex((q) => q.into === name);
     return ci >= 0 ? pieces[ci] : null;
-  }, opaqueOf, mergedIn, count, (name) => hiddenArt.get(name) ?? null, (layer, by) => hiddenUses.get(layer)?.push(by));
+  };
+  const lim = cutLimbs(input.limbs ?? {}, input.bones ?? [], input.caps ?? new Map(), W, H, limbSource, opaqueOf, mergedIn, count, (name) => hiddenArt.get(name) ?? null, (layer, by) => hiddenUses.get(layer)?.push(by));
   // Issue #564: and the cap a run's own layer fills above its upper joint, read once the limbs are cut.
   if (bands !== null) refuseIfAny(limbBands(cuts, pieces, input.limbs ?? {}, input.bones ?? [], W, H, (l, k) => lim.parts.find((q) => q.limb === l && q.segment === k)?.record.cap).problems);
   const limbPieces = lim.pieces;
   const order = limbOrder(order0, plan, cuts, lim.parts);
   const pieceAt = (d: { plan: number } | { cut: number } | { limb: number }): { name: string; b: Built } =>
     'plan' in d ? { name: plan[d.plan][0], b: built[d.plan] as Built } : 'cut' in d ? { name: cuts[d.cut].into, b: pieces[d.cut] as Built } : { name: lim.parts[d.limb].part, b: limbPieces[d.limb] as Built };
+
+  // Issue #588: a set that names one limb side keeps, in each part cut from a layer of more than one island, the island its joints fall on.
+  const islandKept = (input.limbIslands ?? []).length === 0 ? { counts: [], problems: [] } : keepJointIslands(input.limbIslands ?? [], input.limbs ?? {}, input.bones ?? [], lim.parts, limbPieces, limbSource, W, H);
+  refuseIfAny(islandKept.problems);
 
   // Issue #587: a set's limb part loses the pixels a base part it does not replace covers, before anything is counted.
   const excluded: ExcludedCount[] = [];
@@ -4149,6 +4301,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     projectRule,
     ...(headFacePrep.underfillPx > 0 ? { headFaceUnderfillPx: headFacePrep.underfillPx } : {}),
     excluded,
+    islands: islandKept.counts,
   };
 }
 
