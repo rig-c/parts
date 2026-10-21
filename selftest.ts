@@ -15280,8 +15280,13 @@ function runSweepCheckCases(say: (name: string, ok: boolean, detail: string, why
     );
 
     const keys = (fig: Record<string, unknown> | null): string => Object.keys(fig ?? {}).join(',');
-    const without = covered.fig === null ? null : Object.fromEntries(Object.entries(covered.fig).filter(([k]) => k !== SWEEP_LINE));
-    const plainText = existsSync(join(dir, 'plain', 'check', 'check.json')) ? readFileSync(join(dir, 'plain', 'check', 'check.json'), 'utf8') : '';
+    // Issue #607: the two builds read two config files and each check.json names its own (config), so that record is
+    // set aside on both sides and held to plain.json here; every other byte is compared.
+    const without = covered.fig === null ? null : Object.fromEntries(Object.entries(covered.fig).filter(([k]) => k !== SWEEP_LINE && k !== 'config'));
+    const plainRaw = existsSync(join(dir, 'plain', 'check', 'check.json')) ? readFileSync(join(dir, 'plain', 'check', 'check.json')) : null;
+    const plainText = plainRaw === null ? '' : `${withoutConfigRecord(plainRaw, join('check', 'check.json')).toString('utf8')}\n`;
+    const plainConfig = (plain.fig?.config ?? null) as Record<string, unknown> | null;
+    const plainConfigNamed = plainConfig !== null && plainConfig.path === join(dir, 'plain.json') && plainConfig.sha256 === createHash('sha256').update(readFileSync(join(dir, 'plain.json'))).digest('hex');
     const coveredParts = readFileSync(join(dir, 'covered', 'parts.json'), 'utf8');
     const plainParts = readFileSync(join(dir, 'plain', 'parts.json'), 'utf8');
     say(
@@ -15294,9 +15299,10 @@ function runSweepCheckCases(say: (name: string, ok: boolean, detail: string, why
         coveredParts.split('\n').filter((l) => l.includes('"range"')).length === 1 &&
         coveredParts.replace(/,\n\s*"range": \[\n?\s*0,\n?\s*120\n?\s*\]/, '') === plainParts &&
         `${JSON.stringify(without, null, 1)}\n` === plainText &&
+        plainConfigNamed &&
         !existsSync(join(dir, 'covered', 'check', '_sweep')),
       `without a range: exit ${plain.status}, keys ${keys(plain.fig)}; with one, less ${SWEEP_LINE}: ${`${JSON.stringify(without, null, 1)}\n` === plainText ? 'the same bytes' : 'DIFFERENT'}; parts.json with the range less it: ${coveredParts.replace(/,\n\s*"range": \[\n?\s*0,\n?\s*120\n?\s*\]/, '') === plainParts ? 'the same bytes' : 'DIFFERENT'}`,
-      'opt-in by construction: a limb with no declared range is not posed, so its check renders, prints and writes exactly what it did; the planted negative is the covered build, which differs from this one by the range in parts.json and the line in check.json, and by nothing else',
+      'opt-in by construction: a limb with no declared range is not posed, so its check renders, prints and writes exactly what it did; the planted negative is the covered build, which differs from this one by the range in parts.json and the line in check.json, and by nothing else but the config record (issue #607), which names each build\'s own config file',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -21744,6 +21750,7 @@ function runBuildSuite(): number {
     const fwdPairs = pairLinesOf(fwd.out, '[check] ');
     const handPairs = pairLinesOf(hand.out, '');
     const pairsTwice = runCli([...buildArgs(cutDir, join(cutDir, 'out-pairs-twice')), '--seam-pairs', '--seam-pairs']);
+    const fwdSameAsHand = withoutConfigRecord(Buffer.from(JSON.stringify(fwdFig ?? {})), join('check', 'check.json')).equals(Buffer.from(JSON.stringify(handFig ?? {}, null, 1)));
     say(
       'BU165_BUILD_SEAM_PAIRS_AND_CHECK_SEAM_PAIRS_ON_THE_SAME_RIG_READ_THE_SAME_SEAM_ROWS',
       fwd.status === 0 &&
@@ -21751,7 +21758,10 @@ function runBuildSuite(): number {
         Array.isArray(fwdRows) &&
         (fwdRows as unknown[]).length > 0 &&
         JSON.stringify(fwdRows) === JSON.stringify(handRows) &&
-        JSON.stringify(fwdFig) === JSON.stringify(handFig) &&
+        // Issue #607: build records its config and check alone reads none, so the build's record is set aside here.
+        fwdSameAsHand &&
+        handFig !== null &&
+        !('config' in handFig) &&
         fwdPairs.length === (fwdRows as unknown[]).length &&
         fwdPairs.join('\n') === handPairs.join('\n') &&
         sameFiles(join(fwdCheck, SEAM_DIR), join(byHand, SEAM_DIR)) &&
@@ -21764,7 +21774,7 @@ function runBuildSuite(): number {
         pairsTwice.status === 2 &&
         pairsTwice.out.includes('--seam-pairs is given twice') &&
         !existsSync(join(cutDir, 'out-pairs-twice')),
-      `build --seam-pairs: exit ${fwd.status}, ${Array.isArray(fwdRows) ? `${(fwdRows as unknown[]).length} seam row(s)` : 'no seam_pairs'}, ${fwdPairs.length} seam pair line(s); check --seam-pairs on its rig and parts: exit ${hand.status}, ${Array.isArray(handRows) ? `${(handRows as unknown[]).length} row(s)` : 'no seam_pairs'}, check.json ${JSON.stringify(fwdFig) === JSON.stringify(handFig) ? 'the same' : 'DIFFERENT'}, pair lines ${fwdPairs.join('\n') === handPairs.join('\n') ? 'the same' : 'DIFFERENT'}, ${SEAM_DIR}/ ${sameFiles(join(fwdCheck, SEAM_DIR), join(byHand, SEAM_DIR)) ? `${filesUnder(join(byHand, SEAM_DIR)).length} picture(s) byte-identical` : 'DIFFERENT or empty'}; ` +
+      `build --seam-pairs: exit ${fwd.status}, ${Array.isArray(fwdRows) ? `${(fwdRows as unknown[]).length} seam row(s)` : 'no seam_pairs'}, ${fwdPairs.length} seam pair line(s); check --seam-pairs on its rig and parts: exit ${hand.status}, ${Array.isArray(handRows) ? `${(handRows as unknown[]).length} row(s)` : 'no seam_pairs'}, check.json ${fwdSameAsHand ? 'the same but the build\'s config record' : 'DIFFERENT'} (config ${handFig !== null && 'config' in handFig ? 'WRITTEN by check' : 'absent from check'}), pair lines ${fwdPairs.join('\n') === handPairs.join('\n') ? 'the same' : 'DIFFERENT'}, ${SEAM_DIR}/ ${sameFiles(join(fwdCheck, SEAM_DIR), join(byHand, SEAM_DIR)) ? `${filesUnder(join(byHand, SEAM_DIR)).length} picture(s) byte-identical` : 'DIFFERENT or empty'}; ` +
         `the same build without it: exit ${cutPlain.status}, seam_pairs ${plainFig !== null && 'seam_pairs' in plainFig ? 'WRITTEN' : 'absent'}, ${SEAM_DIR}/ ${existsSync(join(plainCheck, SEAM_DIR)) ? 'WRITTEN' : 'absent'}, the rest of check.json ${JSON.stringify(fwdRest) === JSON.stringify(plainFig) ? 'the same' : 'DIFFERENT'}; given twice: exit ${pairsTwice.status}`,
       'issue #257: build dropped the flag, so a consumer who needed the pairs ran check a second time by hand and the artifact build reported was checked without them; forwarded, the check inside build is the check by hand, row for row and byte for byte, and without the flag build writes what it wrote before',
     );
@@ -21959,9 +21969,10 @@ function runBuildSuite(): number {
     const recRun = runCli([...buildArgs(dir, recOut, 'records.json'), '--loop']);
     const plantRun = runCli([...buildArgs(dir, plantOut, 'records-plant.json'), '--loop']);
     const hemRecRun = runCli(buildArgs(hemDir, hemRecOut, 'records.json'));
-    const recDiff = treeDiff(out, recOut);
-    const hemRecDiff = treeDiff(hemOut, hemRecOut);
-    const plantDiff = treeDiff(out, plantOut);
+    // Issue #607: each build records the config it read, so check.json's config record is set aside here (withoutConfigRecord).
+    const recDiff = treeDiff(out, recOut, withoutConfigRecord);
+    const hemRecDiff = treeDiff(hemOut, hemRecOut, withoutConfigRecord);
+    const plantDiff = treeDiff(out, plantOut, withoutConfigRecord);
     const recFiles = existsSync(recOut) ? filesUnder(recOut).length : 0;
     const hemRecFiles = existsSync(hemRecOut) ? filesUnder(hemRecOut).length : 0;
     say(
@@ -22083,8 +22094,9 @@ function runBuildSuite(): number {
       'issue #92 end to end: the constraint goes to rigc as written but its note and record, the scene target is declared detached from the bone it drives, rigc\'s gate passes both (RG60 shows A25 reading the declaration), and every line check reads stays green',
     );
 
-    const sameTree = treeDiff(notedOut, plainOut);
-    const halfTree = treeDiff(plainOut, halfOut);
+    // Issue #607: two config files, so each check.json names its own; the record is set aside (withoutConfigRecord).
+    const sameTree = treeDiff(notedOut, plainOut, withoutConfigRecord);
+    const halfTree = treeDiff(plainOut, halfOut, withoutConfigRecord);
     say(
       'BU14_A_RECORD_AND_A_NOTE_ON_A_CONSTRAINT_LEAVE_EVERY_FILE_THE_BUILD_WRITES_BYTE_IDENTICAL_AND_ONE_VALUE_DOES_NOT',
       plain.status === 0 && half.status === 0 && sameTree.length === 0 && halfTree.some((d) => d.startsWith('rig/rig.json')),
@@ -22164,7 +22176,9 @@ function runBuildSuite(): number {
     const configOut = join(dir, 'req-config');
     const byConfig = runIn(buildArgs(dir, configOut, declaring('config-reqs.json', 'reqs.json')));
     const recordOf = (out: string): Record<string, unknown> | null => ((readJsonFile(join(out, 'check', 'check.json'))?.requirements as Record<string, unknown> | undefined)?.file ?? null) as Record<string, unknown> | null;
-    const rebuildDiff = treeDiff(flagOut, configOut);
+    // Issue #607: the rebuild reads another config file (the one that declares the requirements), and check.json names
+    // the config each build read, so that record is set aside here; BU211 holds both records.
+    const rebuildDiff = treeDiff(flagOut, configOut, withoutConfigRecord);
     const flagRecord = recordOf(flagOut);
     const showRecord = (r: Record<string, unknown> | null): string => (r === null ? 'none' : `{path ${JSON.stringify(r.path)}, sha256 ${String(r.sha256).slice(0, 16)}, keys ${JSON.stringify(r.keys)}}`);
     say(
@@ -22213,6 +22227,63 @@ function runBuildSuite(): number {
         JSON.stringify(recordOf(sameOut)) === JSON.stringify(recordOf(configOut)),
       `the same file by its absolute path: exit ${same.status}, ${sameDiff.length === 0 ? 'every file byte-identical to the config-only build' : sameDiff.slice(0, 2).join('; ')}; a copy of its bytes: exit ${copy.status}, ${copyDiff.length === 0 ? 'byte-identical' : copyDiff.slice(0, 2).join('; ')}; record ${showRecord(recordOf(sameOut))}`,
       "issue #556, bar 2's other half: one file named twice is one input — the declaration is read and recorded, so a build given both writes what the config alone writes; the record names the file once",
+    );
+
+    // BU210–BU212 — issue #607: build records the config it read in check.json, beside #556's requirements record and
+    // in its shape: the path as --config was typed (never resolved) and the sha256 of the bytes the full loader parsed.
+    // The expected digests are sha256 of the fixture's own files, taken here; nothing is copied from a run.
+    const shaOf = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex');
+    const configSha = shaOf(join(dir, 'config.json'));
+    const configRecordOf = (out: string): Record<string, unknown> | null => (readJsonFile(join(out, 'check', 'check.json'))?.config ?? null) as Record<string, unknown> | null;
+    const namesFile = (r: Record<string, unknown> | null, typed: string, file: string): boolean => JSON.stringify(r) === JSON.stringify({ path: typed, sha256: shaOf(file) });
+    const keysOf = (out: string): string[] => Object.keys(readJsonFile(join(out, 'check', 'check.json')) ?? {});
+    const relOut = join(dir, 'config-relative');
+    const relArgs = buildArgs(dir, relOut);
+    relArgs[relArgs.indexOf('--config') + 1] = 'config.json';
+    const byRel = runIn(relArgs);
+    const relRecord = configRecordOf(relOut);
+    const showConfig = (r: Record<string, unknown> | null): string => (r === null ? 'none' : `{path ${JSON.stringify(r.path)}, sha256 ${String(r.sha256).slice(0, 16)}}`);
+    // The planted negative: the same record held to another file's bytes — the requirements file beside it, and a
+    // copy of the config one newline longer, which loads to the same config — must not match.
+    const longer = join(dir, 'config-longer.json');
+    writeFileSync(longer, `${readFileSync(join(dir, 'config.json'), 'utf8')}\n`);
+    const plantedOther = namesFile(relRecord, 'config.json', reqsPath);
+    const plantedLonger = namesFile(relRecord, 'config.json', longer);
+    say(
+      'BU210_BUILD_RECORDS_THE_CONFIG_IT_READ_AS_TYPED_WITH_THE_SHA256_OF_ITS_BYTES_AND_ANOTHER_FILE_S_DIGEST_DOES_NOT_MATCH',
+      byRel.status === 0 &&
+        namesFile(relRecord, 'config.json', join(dir, 'config.json')) &&
+        Object.keys(relRecord ?? {}).join(',') === 'path,sha256' &&
+        keysOf(relOut).slice(-2).join(',') === 'config,PASS' &&
+        !plantedOther &&
+        !plantedLonger,
+      `--config config.json typed relative to the run's directory: exit ${byRel.status}; check.json config ${showConfig(relRecord)} (the file's sha256 ${configSha.slice(0, 16)}), keys ending [${keysOf(relOut).slice(-2).join(', ')}]; planted, the record held to reqs.json's bytes: ${plantedOther ? 'MATCHES' : 'refused'}, to a copy one newline longer: ${plantedLonger ? 'MATCHES' : 'refused'}`,
+      "issue #607's bar: a consumer ties a build to its config by hash rather than by where the files sit, so the record is the argument as typed — a relative path stays relative, so the bytes do not move with the directory — and the digest of the bytes read, which a file of other bytes, even one that loads to the same config, does not match",
+    );
+
+    const flagConfig = configRecordOf(flagOut);
+    const declaringConfig = configRecordOf(configOut);
+    say(
+      'BU211_BESIDE_A_REQUIREMENTS_RECORD_THE_CONFIG_RECORD_COMES_FIRST_AND_EACH_BUILD_NAMES_ITS_OWN_CONFIG',
+      namesFile(flagConfig, join(dir, 'config.json'), join(dir, 'config.json')) &&
+        namesFile(declaringConfig, join(dir, 'config-reqs.json'), join(dir, 'config-reqs.json')) &&
+        keysOf(flagOut).slice(-3).join(',') === 'config,requirements,PASS' &&
+        keysOf(configOut).slice(-3).join(',') === 'config,requirements,PASS' &&
+        JSON.stringify(recordOf(flagOut)) === JSON.stringify({ path: 'reqs.json', sha256: reqsSha, keys: ['spec', 'fps', 'requirements'] }),
+      `BU178's flag build: config ${showConfig(flagConfig)}, keys ending [${keysOf(flagOut).slice(-3).join(', ')}], requirements.file ${showRecord(recordOf(flagOut))}; its rebuild from config-reqs.json: config ${showConfig(declaringConfig)}, keys ending [${keysOf(configOut).slice(-3).join(', ')}]`,
+      'issue #607: the record sits just before #556\'s requirements block, and #556\'s record keeps its path, digest and keys; two builds from two config files are tied each to its own (an absolute --config is recorded absolute, as typed), so BU178 sets this one record aside and compares every other byte',
+    );
+
+    const aloneOut = join(dir, 'config-check-alone');
+    const alone = runIn(['check', '--rig', join(relOut, 'rig'), '--parts', relOut, '--out', aloneOut]);
+    const aloneText = existsSync(join(aloneOut, 'check.json')) ? readFileSync(join(aloneOut, 'check.json')) : Buffer.from('');
+    const aloneFig = readJsonFile(join(aloneOut, 'check.json'));
+    const sameAsBuild = aloneText.length > 0 && withoutConfigRecord(readFileSync(join(relOut, 'check', 'check.json')), join('check', 'check.json')).equals(Buffer.from(JSON.stringify(JSON.parse(aloneText.toString('utf8')), null, 1)));
+    say(
+      'BU212_CHECK_ALONE_READS_NO_CONFIG_AND_WRITES_NO_CONFIG_RECORD_AND_OTHERWISE_THE_BUILD_S_CHECK_JSON',
+      alone.status === 0 && aloneFig !== null && !('config' in aloneFig) && sameAsBuild,
+      `check --rig <build>/rig --parts <build>: exit ${alone.status}; config ${aloneFig !== null && 'config' in aloneFig ? 'WRITTEN' : 'absent'}; against the build's check.json without its config record: ${sameAsBuild ? 'identical' : 'DIFFERS'}`,
+      'issue #607: check takes no --config, so it has none to record, as #556 records a requirements file only where one was read; the build adds the one key and moves nothing else in the file',
     );
 
     // Issue #95: build --idle-keys, on a two-bone ik over two keyed chain links. By hand, in rig px (y down):
@@ -24886,7 +24957,9 @@ function runChainSuite(): number | null {
       const exp = join(ex, 'expected');
       const out = join(dir, key);
       const inputs = join(ex, 'inputs');
-      const r = runCli(['build', '--config', join(ex, 'config.json'), '--source', join(inputs, 'painting.png'), '--full', join(inputs, 'layers', 'full'), '--head', join(inputs, 'layers', 'head'), '--out', out]);
+      // Issue #607: the config is typed relative to the run's directory, the repository root, so check.json's config
+      // record — the path as typed and the sha256 of its bytes — is the same on every machine and expected/ holds it.
+      const r = runCli(['build', '--config', relative(ROOT, join(ex, 'config.json')), '--source', join(inputs, 'painting.png'), '--full', join(inputs, 'layers', 'full'), '--head', join(inputs, 'layers', 'head'), '--out', out]);
       const tail = lastLines(r.out, 4);
       const stopped = r.out.split('\n').find((l) => l.startsWith('build: stopped at')) ?? null;
       const refusal = r.out.split('\n').filter((l) => /^\[[a-z]+\] {3}FAIL {2}/.test(l)).slice(0, 3);
@@ -30670,6 +30743,17 @@ function treeDiff(a: string, b: string, normalise: (bytes: Buffer, file: string)
     out.push(`${f}: differs from byte ${at} (${JSON.stringify(x.subarray(at, at + 24).toString('latin1'))} vs ${JSON.stringify(y.subarray(at, at + 24).toString('latin1'))})`);
   }
   return out;
+}
+
+/**
+ * A {@link treeDiff} normaliser for two builds from two config files (issue #607): `check/check.json`'s `config`
+ * record names the config each build read, by path and digest, so it differs by construction; every other byte of
+ * every file is compared. The record itself is held where it is the claim (BU210–BU212).
+ */
+function withoutConfigRecord(bytes: Buffer, file: string): Buffer {
+  if (file !== join('check', 'check.json')) return bytes;
+  const { config: _record, ...rest } = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
+  return Buffer.from(JSON.stringify(rest, null, 1));
 }
 
 /** A file's text, or "" when it is absent. */
