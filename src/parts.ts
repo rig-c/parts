@@ -304,6 +304,10 @@ export interface AlternatePartsRecord {
   scene?: SceneRecord;
   single_run_pad?: SingleRunPad;
   skeleton?: PosePoints;
+  /** Explicit endpoints normalized once into this parts file's rig-crop frame. */
+  tips?: Record<string, [number, number]>;
+  /** Source dimensions used to normalize tips onto rig_size; required with tips. */
+  tips_source_size?: [number, number];
   drawn?: Record<string, number>;
   /** Issue #539: as `sets.json`'s; written only when `skeleton` placed the set's limb bones. */
   drawnLength?: Record<string, number>;
@@ -455,6 +459,8 @@ export function serializeParts(file: PartsFile): string {
             ...(a.single_run_pad === undefined ? {} : { single_run_pad: Object.fromEntries(SINGLE_RUN_PAD_KEYS.map((k) => [k, (a.single_run_pad as SingleRunPad)[k]])) }),
             ...(a.skeleton === undefined ? {} : { skeleton: Object.fromEntries(KEYPOINT_NAMES.map((k) => [k, (a.skeleton as PosePoints)[k]])) }),
             ...(a.drawn === undefined ? {} : { drawn: a.drawn }),
+            ...(a.tips_source_size === undefined ? {} : { tips_source_size: a.tips_source_size }),
+            ...(a.tips === undefined ? {} : { tips: Object.fromEntries(Object.keys(a.tips).sort().map((bone) => [bone, (a.tips as Record<string, [number, number]>)[bone]])) }),
             ...(a.drawnLength === undefined ? {} : { drawnLength: a.drawnLength }),
             ...(a.registration === undefined ? {} : { registration: { offset: a.registration.offset, scale: a.registration.scale } }),
           })),
@@ -672,8 +678,26 @@ function checkParts(raw: unknown, path: string): PartsFile {
     o.alternates.forEach((a, i) => {
       if (typeof a !== 'object' || a === null || Array.isArray(a)) return;
       const set = a as Record<string, unknown>;
-      if (!Array.isArray(set.records)) return;
       const at = `${path} alternates[${i}]${typeof set.name === 'string' ? ` (set "${set.name}")` : ''}`;
+      if ('tips' in set || 'tips_source_size' in set) {
+        const sourceSize = set.tips_source_size;
+        if (!('tips' in set) || !Array.isArray(sourceSize) || sourceSize.length !== 2 || !sourceSize.every((n) => typeof n === 'number' && Number.isInteger(n) && n > 0)) {
+          fail('PARTS_ALT_TIPS_SOURCE', `${at} tips_source_size`, 'requires the positive integer [source_width, source_height] used to normalize the tips; re-run assemble');
+        } else if (sizeOk && typeof scale === 'number' && (Math.trunc(sourceSize[0] * scale) !== (size as number[])[0] || Math.trunc(sourceSize[1] * scale) !== (size as number[])[1])) {
+          fail('PARTS_ALT_TIPS_SOURCE', `${at} tips_source_size`, 'does not produce rig_size at scale_rig_per_source; re-run assemble rather than guessing the normalization ratio');
+        }
+      }
+      if ('tips' in set) {
+        const t = set.tips;
+        if (typeof t !== 'object' || t === null || Array.isArray(t) || Object.keys(t).length === 0) {
+          fail('PARTS_ALT_TIPS', `${at} tips`, 'requires a non-empty bone-name map of finite [x, y] endpoints in rig-crop pixels');
+        } else for (const [bone, point] of Object.entries(t)) {
+          if (!Array.isArray(point) || point.length !== 2 || !point.every((n) => typeof n === 'number' && Number.isFinite(n))) {
+            fail('PARTS_ALT_TIPS', `${at} tips.${bone}`, 'requires a finite [x, y] endpoint in rig-crop pixels');
+          }
+        }
+      }
+      if (!Array.isArray(set.records)) return;
       set.records.forEach((p, j) => {
         if (typeof p !== 'object' || p === null || Array.isArray(p)) return;
         const r = p as Record<string, unknown>;

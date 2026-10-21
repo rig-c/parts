@@ -1244,6 +1244,43 @@ export function buildRig(
   const CX = W / 2;
   const byPart = new Map(parts.parts.map((p) => [p.name, p]));
 
+  // Standalone rig checks source-bound normalization, never reconstructing
+  // original dimensions from nominal scale or treating source points as rig points.
+  for (const a of parts.alternates ?? []) {
+    if (a.tips === undefined && a.tips_source_size === undefined) continue;
+    const size = a.tips_source_size;
+    if (a.tips === undefined || !Array.isArray(size) || size.length !== 2 || !size.every((n) => typeof n === 'number' && Number.isInteger(n) && n > 0)
+      || Math.trunc(size[0] * parts.scale_rig_per_source) !== W || Math.trunc(size[1] * parts.scale_rig_per_source) !== H) {
+      fail('RIG_ALT_TIPS_SOURCE', `parts.json alternate set "${a.name}" tips_source_size`, 'requires the original source dimensions that produce rig_size at scale_rig_per_source; re-run assemble to record normalization provenance');
+    }
+  }
+  refuseIfAny(problems);
+  for (const a of cfg.assemble.alternates ?? cfg.alternates ?? []) {
+    const record = parts.alternates?.find((p) => p.name === a.name);
+    if (a.tips === undefined) {
+      if (record?.tips !== undefined) {
+        fail('RIG_ALT_TIPS_MATCH_CONFIG', `parts.json alternate set "${a.name}" tips`, 'records endpoints while the matching config set has no tips; re-run assemble after removing source-crop tips');
+      }
+      continue;
+    }
+    if (record?.tips === undefined) {
+      fail('RIG_ALT_TIPS_RECORDED', `parts.json alternate set "${a.name}" tips`, 'is absent while config declares source-crop tips; re-run assemble to record normalized endpoints before rig');
+      continue;
+    }
+    const [sw, sh] = record.tips_source_size as [number, number];
+    const configured = Object.keys(a.tips).sort(), recorded = Object.keys(record.tips).sort();
+    if (configured.length !== recorded.length || configured.some((bone, i) => bone !== recorded[i])) {
+      fail('RIG_ALT_TIPS_MATCH_CONFIG', `parts.json alternate set "${a.name}" tips`, `records bones [${recorded.join(', ')}] while config declares [${configured.join(', ')}]; re-run assemble after changing source-crop tips`);
+    } else for (const bone of configured) {
+      const raw = a.tips[bone], found = record.tips[bone];
+      const expected: Point = [raw[0] * (W / sw), raw[1] * (H / sh)];
+      if (!Array.isArray(found) || found.length !== 2 || found[0] !== expected[0] || found[1] !== expected[1]) {
+        fail('RIG_ALT_TIPS_MATCH_CONFIG', `parts.json alternate set "${a.name}" tips.${bone}`, `is ${JSON.stringify(found)}; config source-crop tip ${JSON.stringify(raw)} on ${sw}x${sh} requires rig-crop ${JSON.stringify(expected)}; re-run assemble, never reinterpret or silently replace recorded endpoints`);
+      }
+    }
+  }
+  refuseIfAny(problems);
+
   // ---- bones -------------------------------------------------------------
   const B = new Map<string, Bone>();
   B.set(ROOT_BONE, { name: ROOT_BONE, parent: null, x: CX, y: H });
@@ -2370,6 +2407,13 @@ export function buildRig(
     const setEntries: Record<string, AlternateSetMap> = {};
     for (const [altIdx, alt] of parts.alternates.entries()) {
       const cfgAlt = cfg.alternates?.find((a) => a.name === alt.name);
+      for (const [bone, tip] of Object.entries(alt.tips ?? {})) {
+        if (bone === ROOT_BONE || !B.has(bone)) fail('RIG_NAME_RESOLVES', `parts.json alternates[${altIdx}].tips.${bone}`, `names "${bone}", which config.bones does not declare; re-run assemble with declared bone names`);
+        if (!Array.isArray(tip) || tip.length !== 2 || !tip.every((n) => typeof n === 'number' && Number.isFinite(n))) {
+          fail('RIG_ALT_TIP_POINT', `parts.json alternates[${altIdx}].tips.${bone}`, 'requires a finite [x, y] endpoint in rig-crop pixels');
+        }
+      }
+      refuseIfAny(problems);
       const explicitDrawn = alt.drawn ?? cfgAlt?.drawn;
       const isSubsetSet = alt.parts !== undefined || cfgAlt?.parts !== undefined;
       let coveredBones: Set<string> | null = null;
@@ -2443,6 +2487,7 @@ export function buildRig(
           continue;
         }
         const fullSegs = meshSegments.get(p.name) as Segment[];
+        const explicitSegments = new Map(fullSegs.map((s, k) => [s, typeof mesh.segments[(meshSegmentEntries.get(p.name) as number[])[k]] !== 'string']));
         const baseAtt = skin[p.name]?.[p.name];
         const baseBones = baseAtt !== undefined && 'type' in baseAtt ? new Set(baseAtt.weights.flatMap((v) => v.map((e) => e.bone))) : null;
         const filteredSegs = baseBones !== null && baseBones.size > 0 ? fullSegs.filter((s) => baseBones.has(s.bone)) : fullSegs;
@@ -2460,8 +2505,23 @@ export function buildRig(
             alt.skeleton === undefined ? null : new Map(skeletonLimbJoints(alt.skeleton).map(([bone, a, b]) => [bone, [pt(a), pt(b)] as const]));
           segs = segs.map((s) => {
             const skPair = skSegs?.get(s.bone);
-            return skPair !== undefined ? { bone: s.bone, a: skPair[0], b: skPair[1] } : { bone: s.bone, a: movePt(s.bone, s.a), b: movePt(s.bone, s.b) };
+            const moved = skPair !== undefined ? { bone: s.bone, a: skPair[0], b: skPair[1] } : { bone: s.bone, a: movePt(s.bone, s.a), b: movePt(s.bone, s.b) };
+            explicitSegments.set(moved, explicitSegments.get(s) === true);
+            return moved;
           });
+        }
+        if (alt.tips !== undefined) {
+          segs = segs.map((s) => {
+            // Coordinate tuples are independent authored geometry. Only a named
+            // bone/chain endpoint takes the explicit alternate tip.
+            const explicit = explicitSegments.get(s) === true;
+            const end = alt.tips?.[s.bone];
+            return explicit || end === undefined ? s : { ...s, b: [end[0], end[1]] };
+          });
+        }
+        // Select against final endpoints, retaining each original entry's
+        // tuple/named provenance through the preceding pose and base filters.
+        if (drawn !== undefined) {
           const nonSkirt = segs.filter((s) => !hipChainLinks.has(s.bone));
           if (nonSkirt.length > 0) segs = nonSkirt;
           const yOverlapping = segs.filter((s) => Math.max(s.a[1], s.b[1]) >= p.y && Math.min(s.a[1], s.b[1]) <= p.y + p.h);

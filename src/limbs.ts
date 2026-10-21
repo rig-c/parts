@@ -115,6 +115,7 @@
  *   crossing.
  */
 import type { BoneEntry, Limb, LimbSplit } from './config.ts';
+import { refuseIfAny, type Problem } from './errors.ts';
 import { edgeLength } from './length.ts';
 import { pyRound } from './round.ts';
 import type { KeypointName, PosePoints } from './skeleton.ts';
@@ -128,13 +129,24 @@ export interface BonePlace {
 }
 
 /** Where every bone `bones` declares sits and ends (module comment). */
-export function bonePlaces(bones: readonly BoneEntry[]): Map<string, BonePlace> {
+export function bonePlaces(bones: readonly BoneEntry[], tips?: Readonly<Record<string, readonly [number, number]>>): Map<string, BonePlace> {
   const out = new Map<string, BonePlace>();
   for (const b of bones) {
     if ('chain' in b) {
       b.points.forEach((p, k) => out.set(`${b.chain}${k}`, { at: [p[0], p[1]], end: k + 1 < b.points.length ? [b.points[k + 1][0], b.points[k + 1][1]] : [b.tip[0], b.tip[1]] }));
     } else out.set(b.name, { at: [b.at[0], b.at[1]], end: b.tip === undefined ? null : [b.tip[0], b.tip[1]] });
   }
+  // Explicit alternate endpoints overlay the already placed bones. Origins and
+  // following chain-link joints stay where the existing pose put them.
+  const problems: Problem[] = [];
+  for (const [bone, tip] of Object.entries(tips ?? {})) {
+    const place = out.get(bone);
+    const validPoint = Array.isArray(tip) && tip.length === 2 && tip.every((n) => typeof n === 'number' && Number.isFinite(n));
+    if (place === undefined) problems.push({ code: 'ASSEMBLE_ALT_TIP_NAME', object: `alternate tips.${bone}`, detail: `names "${bone}", which the supplied bones do not declare` });
+    if (!validPoint) problems.push({ code: 'ASSEMBLE_ALT_TIP_POINT', object: `alternate tips.${bone}`, detail: 'requires a finite [x, y] endpoint in rig-crop pixels' });
+    if (place !== undefined && validPoint) out.set(bone, { at: place.at, end: [tip[0], tip[1]] });
+  }
+  refuseIfAny(problems);
   return out;
 }
 

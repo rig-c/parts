@@ -260,6 +260,8 @@ export interface AlternateSetConfig {
   cuts?: Cut[];
   skeleton?: string;
   drawn?: Record<string, number>;
+  /** Explicit bone endpoints on this alternate painting, full source-crop pixels, x right/y down. */
+  tips?: Record<string, Point>;
 }
 
 export interface Assemble {
@@ -1356,6 +1358,9 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
     // Issue #349: the limbs' joints are their bones' origins, so the bones are read with them, and only then.
     let limbs: LimbNames | null = null;
     let names: { bones: Set<string>; chains: Map<string, number>; parents: Map<string, string> } | null = null;
+    const hasTips = isPlainObject(t.assemble) && Array.isArray(t.assemble.alternates) && t.assemble.alternates.some((a) => isPlainObject(a) && 'tips' in a);
+    if (hasTips && !('bones' in t)) c.fail('CONFIG_FIELD_PRESENT', 'config.bones', 'is absent; alternate tips name declared bones, so assemble reads bones when tips are supplied');
+    if (hasTips && 'bones' in t && !('limbs' in t)) names = checkBones(c, t.bones);
     if ('limbs' in t) {
       if (!('bones' in t)) c.fail('CONFIG_FIELD_PRESENT', 'config.bones', 'is absent; config.limbs names bones, and each joint is its bone\'s origin, so assemble reads the bones with the limbs');
       names = 'bones' in t ? checkBones(c, t.bones) : null;
@@ -2132,7 +2137,7 @@ function checkAlternates(
   const seenNames = new Map<string, number>();
   (v as Json[]).forEach((entry, i) => {
     const at = `${p}[${i}]`;
-    const e = c.object(at, entry, ['name'], ['source', 'full', 'head', 'parts', 'hides', 'head_box', 'cuts', 'skeleton', 'drawn']);
+    const e = c.object(at, entry, ['name'], ['source', 'full', 'head', 'parts', 'hides', 'head_box', 'cuts', 'skeleton', 'drawn', 'tips']);
     if (e === null) return;
     if ('name' in e && c.string(`${at}.name`, e.name)) {
       if (!partNameOk(e.name)) c.fail('CONFIG_PART_NAME', `${at}.name`, `names the set ${show(e.name)}; a set name is a file prefix, so it may not be empty, start with "." or hold a slash`);
@@ -2152,6 +2157,17 @@ function checkAlternates(
             c.fail('CONFIG_NAME_RESOLVES', `${at}.drawn.${bName}`, `names "${bName}", which config.bones does not declare`);
           }
           c.number(`${at}.drawn.${bName}`, deg);
+        }
+      }
+    }
+    if ('tips' in e) {
+      if (!isPlainObject(e.tips) || Object.keys(e.tips).length === 0) {
+        c.fail('CONFIG_FIELD_TYPE', `${at}.tips`, `is ${show(e.tips)}; a non-empty object of declared bone name -> [x, y] in full source-crop pixels is required`);
+      } else for (const [bone, point] of Object.entries(e.tips)) {
+        const path = `${at}.tips.${bone}`;
+        if (bones !== null && (bone === ROOT_BONE || !bones.has(bone))) c.fail('CONFIG_NAME_RESOLVES', path, `names "${bone}", which config.bones does not declare as a single bone or expanded chain link`);
+        if (!Array.isArray(point) || point.length !== 2 || !point.every((n) => typeof n === 'number' && Number.isFinite(n))) {
+          c.fail('CONFIG_FIELD_TYPE', path, `is ${show(point)}; a finite point [x, y] in full source-crop pixels is required`);
         }
       }
     }
