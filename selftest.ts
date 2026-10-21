@@ -83,9 +83,14 @@
  * read first and its former `SPINE_PARTS_` name is the fallback, so a script
  * written before the rename keeps working.
  */
+import { mock } from 'bun:test';
+import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { isAbsolute, sep } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { availableParallelism, tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { inflateSync } from 'node:zlib';
@@ -897,8 +902,94 @@ function px(r: Raster, x: number, y: number): number[] {
   return Array.from(r.data.subarray((y * r.width + x) * 4, (y * r.width + x) * 4 + 4));
 }
 
+interface CheckReadScope {
+  roots: Set<string>;
+  denied: string[];
+  reads: number;
+  active: () => boolean;
+  restore: () => void;
+}
+
+let checkReadScope: CheckReadScope | null = null;
+
+/** Issue #640: test data for the complete check worker comes only from its generated temp directories. */
+function startCheckReadScope(): CheckReadScope {
+  if (checkReadScope !== null) throw new Error('CHECK_TEMP_INPUTS: a check read scope is already active');
+  const original = { ...fs }, promises = { ...fsPromises }, originalFile = Bun.file;
+  const canonical = (p: string): string => original.existsSync(p) ? original.realpathSync(p) : resolve(p);
+  const scope: CheckReadScope = { roots: new Set(), denied: [], reads: 0, active: () => checkReadScope === scope,
+    restore: () => {
+      checkReadScope = null;
+      mock.module('node:fs', () => ({ ...original, default: original }));
+      mock.module('node:fs/promises', () => ({ ...promises, default: promises }));
+      if (!Reflect.set(Bun, 'file', originalFile)) throw new Error('CHECK_TEMP_INPUTS: could not restore Bun.file');
+    } };
+  const inspect = (value: unknown, operation: string): void => {
+    if (checkReadScope !== scope) return;
+    const path = typeof value === 'string' ? value : Buffer.isBuffer(value) ? value.toString() : value instanceof URL && value.protocol === 'file:' ? fileURLToPath(value) : null;
+    const absolute = path === null ? null : canonical(isAbsolute(path) ? path : resolve(path));
+    if (absolute !== null && [...scope.roots].some((root) => absolute === root || absolute.startsWith(root + sep))) { scope.reads++; return; }
+    const site = new Error().stack?.split('\n').find((line) => line.includes('selftest.ts:'))?.trim() ?? 'selftest.ts';
+    const message = `CHECK_TEMP_INPUTS: ${absolute === null ? String(value) : relative(ROOT, absolute)} — data read outside generated check temp directories; ${site}; ${operation}`;
+    scope.denied.push(message);
+    throw new Error(message);
+  };
+  const watch = <T extends (...args: never[]) => unknown>(read: T, operation: string): T => new Proxy(read, { apply(target, receiver, args) { inspect(args[0], operation); return Reflect.apply(target, receiver, args); } });
+  const guardedPromises = { ...promises, readFile: watch(promises.readFile, 'node:fs/promises.readFile'), open: watch(promises.open, 'node:fs/promises.open'), copyFile: watch(promises.copyFile, 'node:fs/promises.copyFile source'), cp: watch(promises.cp, 'node:fs/promises.cp source') };
+  const guarded = { ...original, readFileSync: watch(original.readFileSync, 'fs.readFileSync'), readFile: watch(original.readFile, 'fs.readFile'), openSync: watch(original.openSync, 'fs.openSync'), open: watch(original.open, 'fs.open'), createReadStream: watch(original.createReadStream, 'fs.createReadStream'),
+    copyFileSync: watch(original.copyFileSync, 'fs.copyFileSync source'), cpSync: watch(original.cpSync, 'fs.cpSync source'),
+    promises: { ...guardedPromises, copyFile: watch(promises.copyFile, 'fs.promises.copyFile source'), cp: watch(promises.cp, 'fs.promises.cp source') } };
+  // Bun updates existing named imports too: readers imported by PNG/parts helpers share this boundary.
+  mock.module('node:fs', () => ({ ...guarded, default: guarded }));
+  mock.module('node:fs/promises', () => ({ ...guardedPromises, default: guardedPromises }));
+  checkReadScope = scope;
+  if (!Reflect.set(Bun, 'file', watch(originalFile, 'Bun.file'))) { scope.restore(); throw new Error('CHECK_TEMP_INPUTS: cannot guard Bun.file'); }
+  return scope;
+}
+
+/** Exercise the real cached-reader/copy doors without removing any unverified denial. */
+function checkInputBoundary(scope: CheckReadScope): { copied: boolean; plants: Array<{ name: string; refused: boolean; detail: string }>; unexpected: string[] } {
+  const dir = temp('check-input-boundary');
+  try {
+    const source = join(dir, 'generated.txt'), value = 'generated check input\n';
+    writeFileSync(source, value);
+    copyFileSync(source, join(dir, 'copied.txt'));
+    cpSync(source, join(dir, 'cp.txt'));
+    const copied = ['copied.txt', 'cp.txt'].every((file) => readFileSync(join(dir, file), 'utf8') === value);
+    const tracked = join(ROOT, 'package.json');
+    const attempts: Array<[string, string, (out: string) => unknown]> = [
+      ['cached read', 'fs.readFileSync', () => readJsonFile(tracked)],
+      ['copyFileSync', 'fs.copyFileSync source', (out) => copyFileSync(tracked, out)],
+      ['cpSync', 'fs.cpSync source', (out) => cpSync(tracked, out)],
+      ['module copyFile', 'node:fs/promises.copyFile source', (out) => fsPromises.copyFile(tracked, out)],
+      ['module cp', 'node:fs/promises.cp source', (out) => fsPromises.cp(tracked, out)],
+      ['fs.promises copyFile', 'fs.promises.copyFile source', (out) => fs.promises.copyFile(tracked, out)],
+      ['fs.promises cp', 'fs.promises.cp source', (out) => fs.promises.cp(tracked, out)],
+    ];
+    const plants = attempts.map(([name, operation, attempt], i) => {
+      const before = scope.denied.length, out = join(dir, `refused-${i}.json`);
+      let detail = '';
+      try {
+        const pending = attempt(out);
+        // A missing guard may return a native promise: consume only its rejection, never count it as a refusal.
+        if (pending instanceof Promise) void pending.catch(() => {});
+      } catch (e) { detail = String(e); }
+      const message = scope.denied[before];
+      const refused = scope.denied.length === before + 1 && message !== undefined &&
+        message.startsWith('CHECK_TEMP_INPUTS: package.json —') && message.endsWith(`; ${operation}`) &&
+        detail === `Error: ${message}` && /selftest\.ts:\d+/.test(message) && !existsSync(out);
+      // Remove exactly the message this operation proved expected; pre-existing/additional denials remain.
+      if (refused) scope.denied.splice(before, 1);
+      return { name, refused, detail };
+    });
+    return { copied, plants, unexpected: [...scope.denied] };
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
 function temp(label: string): string {
-  return mkdtempSync(join(tmpdir(), `rig-parts-selftest-${label}-`));
+  const dir = mkdtempSync(join(tmpdir(), `rig-parts-selftest-${label}-`));
+  if (checkReadScope !== null) checkReadScope.roots.add(realpathSync(dir));
+  return dir;
 }
 
 // ---------------------------------------------------------------------------
@@ -15622,6 +15713,56 @@ const FEET_FULL: RunLayerSpec[] = [
   { name: 'footwear', depth: 0.6, rects: [{ x0: 29, y0: 50, x1: 39, y1: 55, colour: C }, { x0: 43, y0: 50, x1: 53, y1: 55, colour: C }] },
 ];
 
+/** The public synthetic recipe CK540 builds; TY21 holds the guide's parsed payloads to these values. */
+function plantedFeetRecipeFixture(): [Record<string, unknown>, Record<string, unknown>, Record<string, unknown>] {
+  return [
+    {
+      "bones": [
+        { "name": "hip", "parent": "root", "at": [41, 4] },
+        { "chain": "leg_r", "parent": "hip", "points": [[34, 6], [34, 28]], "tip": [34, 50] },
+        { "chain": "leg_l", "parent": "hip", "points": [[48, 6], [48, 28]], "tip": [48, 50] },
+        { "name": "foot_r", "parent": "root", "at": [34, 50] },
+        { "name": "foot_l", "parent": "root", "at": [48, 50] }
+      ],
+      "constraints": [
+        { "type": "ik", "name": "leg_r_ik", "bones": ["leg_r0", "leg_r1"], "target": "foot_r", "bendPositive": true },
+        { "type": "ik", "name": "leg_l_ik", "bones": ["leg_l0", "leg_l1"], "target": "foot_l", "bendPositive": false }
+      ],
+      "meshes": {
+        "legwear": { "contour": { "tolerance": 1, "margin": 1, "spacing": 4, "maxEdge": 4 }, "r": 4, "segments": ["leg_r", "leg_l"] }
+      },
+      "regions": { "shoes": "root" },
+      "motion": {
+        "duration": 1,
+        "tracks": [{ "bone": "hip", "prop": "translatey", "amp": 0.5, "period": 1, "phase": 0, "base": 0.5 }],
+        "animations_from": "dance.json"
+      },
+      "requirements": "feet.json"
+    },
+    {
+      "spec": "rigc-motion/1",
+      "animations": {
+        "dance": {
+          "duration": 4,
+          "loop": true,
+          "tracks": [
+            { "bone": "hip", "property": "translatex", "keys": [{ "t": 0, "v": [0] }, { "t": 1, "v": [3] }, { "t": 2, "v": [0] }, { "t": 3, "v": [-3] }, { "t": 4, "v": [0] }] },
+            { "bone": "hip", "property": "translatey", "keys": [{ "t": 0, "v": [0] }, { "t": 0.5, "v": [-3] }, { "t": 1, "v": [0] }, { "t": 1.5, "v": [-3] }, { "t": 2, "v": [0] }, { "t": 2.5, "v": [-3] }, { "t": 3, "v": [0] }, { "t": 3.5, "v": [-3] }, { "t": 4, "v": [0] }] }
+          ]
+        }
+      }
+    },
+    {
+      "spec": "spine-parts-requirements/1",
+      "fps": 12,
+      "requirements": [
+        { "name": "RIGHT_ANKLE_STAYS", "kind": "contact", "animation": "dance", "bone": "leg_r1", "point": "tip", "target": { "stage": [34, 50] }, "within_px": 0.5 },
+        { "name": "LEFT_ANKLE_STAYS", "kind": "contact", "animation": "dance", "bone": "leg_l1", "point": "tip", "target": { "stage": [48, 50] }, "within_px": 0.5 }
+      ]
+    }
+  ];
+}
+
 /** The recipe's json blocks, in the order the guide writes them, from its heading to the next heading. */
 function feetRecipeBlocks(guide: string): string[] {
   const at = guide.indexOf(`\n${FEET_HEADING}`);
@@ -15631,11 +15772,52 @@ function feetRecipeBlocks(guide: string): string[] {
   return [...section.matchAll(/```json\n([\s\S]*?)\n```/g)].map((m) => m[1]);
 }
 
+/** Locate a JSON leaf in supplied bytes, for a source-line refusal or in-memory stale-field plant. */
+function recipeJsonField(text: string, field: string): { from: number; to: number } | null {
+  const source = ts.parseJsonText('recipe.json', text), statement = source.statements[0];
+  let node: ts.Node | undefined = statement !== undefined && ts.isExpressionStatement(statement) ? statement.expression : undefined;
+  for (const part of field.match(/[^.[\]]+/g) ?? []) {
+    if (node !== undefined && ts.isObjectLiteralExpression(node)) {
+      const property: ts.ObjectLiteralElementLike | undefined = node.properties.find((p) => ts.isPropertyAssignment(p) && (ts.isStringLiteral(p.name) || ts.isIdentifier(p.name)) && p.name.text === part);
+      node = property !== undefined && ts.isPropertyAssignment(property) ? property.initializer : undefined;
+    } else if (node !== undefined && ts.isArrayLiteralExpression(node) && /^\d+$/.test(part)) node = node.elements[Number(part)];
+    else return null;
+  }
+  return node === undefined ? null : { from: node.getStart(source), to: node.end };
+}
+
+/** TY21 keeps the real recipe identical in meaning to the generated payloads CK540 actually builds. */
+function feetRecipeFaults(file: string, guide: string): string[] {
+  const blocks = feetRecipeBlocks(guide), heading = guide.indexOf(FEET_HEADING);
+  const headingLine = heading < 0 ? 1 : guide.slice(0, heading).split('\n').length;
+  if (blocks.length !== 3) return [`${file}:${headingLine} planted-feet recipe has ${blocks.length} JSON blocks; 3 generated payloads are required`];
+  const expected = plantedFeetRecipeFixture(), faults: string[] = [];
+  let cursor = heading;
+  for (const [i, block] of blocks.entries()) {
+    const at = guide.indexOf(block, cursor); cursor = at + block.length;
+    let actual: unknown;
+    try { actual = JSON.parse(block) as unknown; }
+    catch { faults.push(`${file}:${guide.slice(0, at).split('\n').length} planted-feet recipe block ${i + 1} is not JSON`); continue; }
+    for (const field of jsonDifferences(expected[i], actual)) {
+      const range = recipeJsonField(block, field), line = guide.slice(0, at + (range?.from ?? 0)).split('\n').length;
+      faults.push(`${file}:${line} planted-feet recipe block ${i + 1} field ${field} differs from the generated fixture`);
+    }
+  }
+  return faults;
+}
+
 function runPlantedFeetCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
   const dir = temp('planted-feet');
   try {
-    const blocks = feetRecipeBlocks(readFileSync(join(ROOT, 'docs', 'AUTHORING.md'), 'utf8'));
-    const fragment = blocks.length === 3 ? (JSON.parse(blocks[0]) as Record<string, unknown>) : null;
+    const fixture = plantedFeetRecipeFixture();
+    const blocks = fixture.map((value, i) => {
+      const file = join(dir, `recipe-${i}.json`);
+      writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+      return readFileSync(file, 'utf8');
+    });
+    const fragment = JSON.parse(blocks[0]) as Record<string, unknown>;
+    const readerDrift = jsonDifferences(fixture, blocks.map((block) => JSON.parse(block) as unknown));
+    const invalidFragment = threw(() => JSON.parse(blocks[0].trimEnd().slice(0, -1)));
     writeRun(join(dir, 'full'), FEET_FULL);
     writeRun(join(dir, 'head'), FRAMED_HEAD);
     writeFileSync(join(dir, 'painting.png'), encodePngBytes(flatPainting()));
@@ -15669,13 +15851,13 @@ function runPlantedFeetCases(say: (name: string, ok: boolean, detail: string, wh
     const recipe = built('recipe');
     say(
       'CK540_AUTHORING_S_PLANTED_FEET_FRAGMENT_BUILDS_GREEN_AS_WRITTEN_AND_EACH_ANKLE_STAYS_WITHIN_THE_REACH_IT_IS_SHORT_BY',
-      fragment !== null &&
+      readerDrift.length === 0 && invalidFragment !== null &&
         recipe.status === 0 &&
         summary(recipe.out).startsWith('check: PASS;') &&
         bothRead(recipe.out, 'PASS', reach) &&
         clean(recipe.out).includes('requirements: 2 declared — 2 measured (2 PASS, 0 FAIL), 0 NOT MEASURABLE; not declared: follow, aim, range, stretch, seam'),
-      `${blocks.length} json block(s) under "${FEET_HEADING}"; build exit ${recipe.status}, "${summary(recipe.out)}"; ${ankles(recipe.out)}; by hand sqrt(44^2 + 3^2) - 44 = ${reach}`,
-      'issue #570: the recipe a guide hands an author is held to the tree — the fragment, the dance and the requirements are the guide\'s own bytes, built by rigc\'s gate, and the ankles read what the reach by hand says: the hip 3 px aside leaves the straight leg that much short',
+      `${blocks.length} generated recipe JSON file(s), round-trip differences ${readerDrift.length}, malformed fragment refused ${invalidFragment !== null}; build exit ${recipe.status}, "${summary(recipe.out)}"; ${ankles(recipe.out)}; by hand sqrt(44^2 + 3^2) - 44 = ${reach}`,
+      'issue #570: the fragment, dance and requirements are built by rigc\'s gate and the ankles read the reach by hand; issue #640: these generated payloads stay in check, while TY21 holds the live guide to their exact parsed values',
     );
 
     const underShin = built('target-under-shin', (c) => {
@@ -16694,8 +16876,14 @@ function runBallCheckCases(say: (name: string, ok: boolean, detail: string, why:
 }
 
 function runCheckSuite(): number {
+  const scope = startCheckReadScope();
+  try { return runCheckFixtureCases(scope); } finally { scope.restore(); }
+}
+
+function runCheckFixtureCases(inputScope: CheckReadScope): number {
   section('check: build, gates, seam and loop through the installed rig-c');
   const { say, bad } = counter();
+  let finishInputContract = (): void => { throw new Error('CHECK_TEMP_INPUTS: the generated input contract was not reached'); };
   const dir = temp('check');
   try {
     const rig = join(dir, 'rig');
@@ -17050,30 +17238,32 @@ function runCheckSuite(): number {
       { parts: ['b', SEAM_NO_ART], px_over_40: 1, px_over_80: 0, frame_box: [0, 0, 0, 0], rig_box: [0, 0, 1, 1], picture: `${SEAM_DIR}/03_b_no-art.png` },
     ];
     const text = got.length > 0 ? seamPairText(got[0]) : '';
+
+    const guidePath = join(dir, 'generated-guide.md');
+    const generatedGuide = [
+      '# Generated seam contract', '',
+      '- **seam**: the setup-pose render against the flat composite',
+      `  setup-pose still; at most ${SEAM_PX_BAR} **rig** pixels over ${SEAM_PX_LEVEL}; divide by seam_frame_scale.`,
+      '  --seam-pairs writes seam_pairs and check/seam/; differing_copies_px is counted, **not** excluded.',
+      '- **loop**: generated fixture.', '',
+      'Each pair is a console line `seam pair`; the picture is beside it.',
+      '**magenta = a counted pixel**', '',
+    ].join('\n').replace('divide by seam_frame_scale', 'divide by `seam_frame_scale`');
+    writeFileSync(guidePath, generatedGuide);
+    const guide = readFileSync(guidePath, 'utf8');
+    const before202 = '- **seam**: the setup-pose render against the flat composite of `parts/`: mean\n  max-channel |d| ≤ 1.0 of 255, and at most 50 pixels over 40;\n';
+    const staleGuide = guide.replace(seamDocBullet(guide).text, before202);
+    const guideFaults = seamDocFaults('docs/generated.md', guide), staleGuideFaults = seamDocFaults('docs/generated.md', staleGuide);
+    const staleGuideLine = staleGuide.split('\n').findIndex((line) => line.includes('at most 50 pixels over 40')) + 1;
     say(
       'CK99_A_CUT_PAIR_COUNTS_BY_HAND_THE_PIXELS_THAT_READ_ITS_BAND_IN_TWO_DIFFERENT_COLOURS',
+      guideFaults.length === 0 && staleGuideFaults.length === 1 && staleGuideFaults[0].startsWith(`docs/generated.md:${staleGuideLine} `) &&
       JSON.stringify(got) === JSON.stringify(wantRows) &&
         agreeing[0]?.cut?.differing_copies_px === 0 &&
         text.includes('one layer cut in two (both from full:x): 1 of these px read a pixel both parts hold in different colours') &&
         text.includes('a wider cuts[].overlap moves neither'),
-      `rows ${JSON.stringify(got)}; with the piece's column 3 agreeing with the base: differing ${String(agreeing[0]?.cut?.differing_copies_px)}; text ${text}`,
+      `generated guide faults ${guideFaults.length}; stale guide -> ${staleGuideFaults.join('; ')}; rows ${JSON.stringify(got)}; with the piece's column 3 agreeing with the base: differing ${String(agreeing[0]?.cut?.differing_copies_px)}; text ${text}`,
       "the reading that answers issue #202's question: on the public scarf the count did not move with the band's width (26 px over 40 at overlap 1, 8 and 16), and 16 of the cut line's 24 counted pixels read a band pixel the two parts hold in different colours [observed, outside this suite]. Here the attribution, the boxes, the ranking and that count are computed by hand on six columns, and the planted negative — the same copies made to agree — reads 0, so the count is the colours and not the band's mere presence",
-    );
-
-    // AUTHORING §7's seam bar states the rows, the picture and the band reading; the text before issue #202 must not pass.
-    const authoring = readFileSync(join(ROOT, 'docs', 'AUTHORING.md'), 'utf8');
-    const seamBullet = (t: string): string => {
-      const at = t.indexOf('- **seam**: the setup-pose render against the flat composite');
-      return at === -1 ? '' : t.slice(at, t.indexOf('\n- **loop**', at));
-    };
-    const statesWhere = (b: string): boolean =>
-      ['--seam-pairs', 'seam_pairs', 'check/seam/', 'differing_copies_px', '**not**', 'excluded', 'setup-pose still'].every((w) => b.includes(w));
-    const before202 = '- **seam**: the setup-pose render against the flat composite of `parts/`: mean\n  max-channel |d| ≤ 1.0 of 255, and at most 50 pixels over 40;\n';
-    say(
-      'CK100_AUTHORING_S_SEAM_BAR_SAYS_WHERE_THE_COUNT_IS_AND_THAT_A_CUT_S_BAND_IS_COUNTED',
-      statesWhere(seamBullet(authoring)) && !statesWhere(seamBullet(before202)),
-      `§7 seam bullet ${seamBullet(authoring).length} chars, states the rows, picture and band: ${statesWhere(seamBullet(authoring))}; the pre-#202 bullet: ${statesWhere(seamBullet(before202))}`,
-      'the document is the interface for the author who meets the line: it must say which frame the bar reads, how a pixel is given to a pair, where the picture is, and that the band is counted and why — and the bullet as it stood before issue #202 is the planted negative',
     );
 
     // Issue #209: a figure that fills less of its canvas renders at a frame scale above 1, where the map's centre term
@@ -17228,49 +17418,36 @@ function runCheckSuite(): number {
         writeFileSync(join(d, 'parts', `${CHECK_PARTS[0].name}.png`), encodePngBytes(r0));
       }),
     );
+    const generatedCheckPath = join(dir, 'aligned-87', 'out', 'check.json');
+    const generatedCheck = readFileSync(generatedCheckPath, 'utf8');
+    const generatedVerdict = seamExampleFaults('examples/generated/expected/check.json', generatedCheck);
+    const staleVerdict = seamExampleFaults('examples/generated/expected/check.json', generatedCheck.replace('"seam_frame_scale"', '"seam_frame_scale_before"'));
     say(
       'CK106_THE_ALIGNED_STACK_AND_A_SIX_PIXEL_PATCH_ARE_GREEN_AT_ALL_THREE_SCALES_WHERE_THE_FRAME_COUNT_WOULD_FAIL_THE_PATCH',
+      generatedVerdict.length === 0 && staleVerdict.length === 1 && /^examples\/generated\/expected\/check\.json:\d+ /.test(staleVerdict[0]) &&
       [...aligned, ...patched].every((r) => r.status === 0 && r.fig?.PASS === true && barsNotMet(r.fig).length === 0) &&
         aligned.every((r) => num(r.fig, 'seam_px_over_40') === 0) &&
         patched.every((r) => rigPxOf(r) > 0 && rigPxOf(r) <= 49) &&
         num(patched[2].fig, 'seam_px_over_40') > SEAM_PX_BAR &&
         barsNotMet({ ...(patched[2].fig ?? {}), seam_frame_scale: undefined }).includes('seam'),
-      `aligned: ${aligned.map(showRun).join('; ')} | patch: ${patched.map(showRun).join('; ')}; the patch at s ~ 2 read by the frame count (check.json without seam_frame_scale): bars not met ${JSON.stringify(barsNotMet({ ...(patched[2].fig ?? {}), seam_frame_scale: undefined }))}`,
+      `generated check faults ${generatedVerdict.length}; stale scale field -> ${staleVerdict.join('; ')}; aligned: ${aligned.map(showRun).join('; ')} | patch: ${patched.map(showRun).join('; ')}; the patch at s ~ 2 read by the frame count (check.json without seam_frame_scale): bars not met ${JSON.stringify(barsNotMet({ ...(patched[2].fig ?? {}), seam_frame_scale: undefined }))}`,
       "issue #216's consumer reading: a correct rig drawn small on its stage (s = 1.59) passed with a margin of 0 — 50 frame px against the bar of 50 — because the frame holds s² pixels per rig pixel. The patch is the planted negative of the frame count: green under the bar in rig pixels at every scale, red at s ~ 2 when the same check.json is read the way a file written before this field is (barsNotMet without seam_frame_scale, the frame count). On the fixture the patch read 19, 52 and 86 frame px at s ~ 1.0, 1.5 and 2.0, about 19 to 23 rig px [observed, the prototype of this control]",
     );
 
-    // The public examples keep their verdicts: their tracked check.json files, read as check.json is read (barsNotMet),
-    // pass the bar in rig pixels and passed it in frame pixels, each with the frame scale written.
-    const exampleVerdicts = ['reference-demo', 'reference-sample', 'scarf'].map((key) => {
-      const f = readJsonFile(join(ROOT, 'examples', key, 'expected', 'check.json'));
-      const s = num(f, 'seam_frame_scale');
-      const n = num(f, 'seam_px_over_40');
-      return { key, pass: f?.PASS === true, s, n, newBar: barsNotMet(f ?? {}).length === 0, oldBar: n <= SEAM_PX_BAR, keys: f === null ? '' : Object.keys(f).slice(Object.keys(f).indexOf('seam_mean'), Object.keys(f).indexOf('seam_mean') + 4).join(',') };
-    });
-    say(
-      'CK107_THE_THREE_PUBLIC_EXAMPLES_NEAR_FRAME_SCALE_ONE_KEEP_THEIR_VERDICTS_UNDER_THE_BAR_IN_RIG_PIXELS',
-      exampleVerdicts.every((e) => e.pass && e.newBar && e.oldBar && Math.abs(e.s - 1) < 0.1 && e.keys === 'seam_mean,seam_px_over_40,seam_px_over_80,seam_frame_scale'),
-      exampleVerdicts.map((e) => `${e.key}: PASS ${e.pass}, s ${e.s}, ${e.n} frame px = ${seamRigPx(e.n, e.s).toFixed(2)} rig px; bars not met (rig px) ${e.newBar ? 'none' : 'SOME'}; frame count <= ${SEAM_PX_BAR} ${e.oldBar}; seam keys ${e.keys}`).join('; '),
-      'issue #216 item 3: the examples render at s = 0.9422, 1.0116 and 1.0107 (issue #209), where dividing by s² moves a count of 2 by less than 0.3; each tracked check.json must carry the scale after the three seam figures and read green under both forms, so the change of form changed no verdict the chain suite (CH04) holds them to',
-    );
-
-    // The legend of the seam pictures, and the bar's form, in the two places an author meets them.
+    // Repository text belongs to TY21. Check holds the reader to generated guide/help, and its input boundary.
     const help = runCli(['--help']).out;
     const helpCheck = help.slice(help.indexOf('rig-parts check --rig'), help.indexOf('rig-parts check --rig') + 6000);
-    const pairLine = authoring.split('\n').findIndex((l) => l.includes('Each pair is a console line `seam pair'));
-    const besidePair = pairLine === -1 ? '' : authoring.split('\n').slice(pairLine, pairLine + 4).join('\n');
-    say(
-      'CK108_THE_SEAM_PICTURE_LEGEND_AND_THE_BAR_IN_RIG_PIXELS_ARE_IN_THE_HELP_AND_BESIDE_AUTHORING_S_SEAM_PAIR_LINE',
-      helpCheck.includes('magenta = a counted pixel') &&
-        helpCheck.includes(`${SEAM_PX_BAR} rig px over ${SEAM_PX_LEVEL}`) &&
-        helpCheck.includes('divided by s²') &&
-        besidePair.includes('**magenta = a counted pixel**') &&
-        seamBullet(authoring).includes('at most 50 **rig** pixels over 40') &&
-        seamBullet(authoring).includes('`seam_frame_scale`') &&
-        !seamBullet(before202).includes('**rig** pixels'),
-      `help: legend ${helpCheck.includes('magenta = a counted pixel')}, bar in rig px ${helpCheck.includes(`${SEAM_PX_BAR} rig px over ${SEAM_PX_LEVEL}`)}; AUTHORING beside the seam pair line: legend ${besidePair.includes('**magenta = a counted pixel**')}; §7 bullet states rig pixels ${seamBullet(authoring).includes('at most 50 **rig** pixels over 40')} and seam_frame_scale ${seamBullet(authoring).includes('`seam_frame_scale`')}`,
-      'issue #216 item 4: an agent reading a seam picture cannot see what the magenta marks unless the text says so, where it reads the pair line; the help and §7 state the bar as it now reads, and the pre-#202 bullet (the planted negative of CK100) does not',
-    );
+    finishInputContract = (): void => {
+      const boundary = checkInputBoundary(inputScope);
+      say(
+        'CK108_GENERATED_SEAM_GUIDE_AND_HELP_AGREE_AND_THE_ENTIRE_CHECK_WORKER_REFUSES_TRACKED_INPUTS',
+        helpCheck.includes('magenta = a counted pixel') && helpCheck.includes(`${SEAM_PX_BAR} rig px over ${SEAM_PX_LEVEL}`) && helpCheck.includes('divided by s²') &&
+          guideFaults.length === 0 && staleGuideFaults.length === 1 && inputScope.active() && inputScope.roots.size > 1 && inputScope.reads > 0 && boundary.copied && boundary.unexpected.length === 0 && inputScope.denied.length === 0 &&
+          boundary.plants.every((plant) => plant.refused),
+        `generated guide faults ${guideFaults.length}; help legend/bar ${helpCheck.includes('magenta = a counted pixel')}/${helpCheck.includes('divided by s²')}; ${inputScope.reads} permitted data reads in ${inputScope.roots.size} generated temp roots; generated copies ${boundary.copied}; unexpected tracked reads ${boundary.unexpected.join('; ') || 'none'}; planted actual reads/copies ${JSON.stringify(boundary.plants)}`,
+        'issue #640: CK100/CK107 repository assertions live in tree; generated reader controls stay in CK99/CK106. This scope starts before check fixtures and remains active through every check helper; tracked cached reads and native sync/promise copy sources are refused before their bytes are opened; only each exactly verified expected denial is removed, never unrelated denials',
+      );
+    };
 
     // Issue #231: the seated figure — legs that swing, a raised forearm on its own chain, a still cut piece. Without a
     // declaration every bar reads it as main does and four fail; with the scene file's not_planted, not_swinging and
@@ -18608,24 +18785,32 @@ function runCheckSuite(): number {
 
   // The entry, read by name off `rigc --version`: the launcher's two lines as rig-c 2.0.3 writes them,
   // a third form, no line at all, and the live rigc beside this package, which must be the round trip
-  // with the spine-core this repository pins.
-  const fullEntry = readRigcEntry('2.0.3\nentry: cli.ts — @esotericsoftware/spine-core 4.3.13 present\n');
+  // with the generated fixture pin; TY10 holds that fixture to the repository's live pin.
+  const fullEntry = readRigcEntry(`2.0.3\nentry: cli.ts — @esotericsoftware/spine-core ${ENTRY_FIXTURE_SPINE_CORE} present\n`);
   const coreEntry = readRigcEntry('2.0.3\nentry: cli_core.ts — @esotericsoftware/spine-core absent — the round trip and the commands that need it are not available here; see --help\n');
   const thirdEntry = refusals(() => readRigcEntry('2.1.0\nentry: cli_wasm.ts — something else\n'));
   const noEntry = refusals(() => readRigcEntry('1.5.1\n'));
   const live = spawnSync(suiteRigc(), ['--version'], { encoding: 'utf8' });
   const liveEntry = readRigcEntry(`${live.stdout ?? ''}${live.stderr ?? ''}`);
-  const pinned = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { devDependencies: Record<string, string> }).devDependencies['@esotericsoftware/spine-core'];
+  const entryDir = temp('check-entry');
+  const pinned = (() => {
+    try {
+      const fixtureManifest = join(entryDir, 'package.json');
+      writeFileSync(fixtureManifest, `${JSON.stringify({ devDependencies: { [SPINE_CORE]: ENTRY_FIXTURE_SPINE_CORE } }, null, 2)}\n`);
+      return (JSON.parse(readFileSync(fixtureManifest, 'utf8')) as { devDependencies: Record<string, string> }).devDependencies[SPINE_CORE];
+    } finally { rmSync(entryDir, { recursive: true, force: true }); }
+  })();
   say(
     'CK51_THE_RIGC_ENTRY_IS_READ_BY_NAME_IN_BOTH_FORMS_AND_ANY_OTHER_IS_REFUSED',
-    JSON.stringify(fullEntry) === '{"entry":"cli.ts","spine_core":"4.3.13"}' &&
+    JSON.stringify(fullEntry) === JSON.stringify({ entry: 'cli.ts', spine_core: ENTRY_FIXTURE_SPINE_CORE }) &&
+      pinned === ENTRY_FIXTURE_SPINE_CORE &&
       JSON.stringify(coreEntry) === '{"entry":"cli_core.ts","spine_core":null}' &&
       codes(thirdEntry) === 'CHECK_RIGC_ENTRY_READS rigc\'s entry line "entry: cli_wasm.ts — something else"' &&
       codes(noEntry) === 'CHECK_RIGC_ENTRY `rigc --version`' &&
       (noEntry?.problems[0].detail.includes(`rig-c ${RIGC_ENTRY_VERSION} or later is required`) ?? false) &&
       liveEntry.entry === 'cli.ts' &&
       liveEntry.spine_core === pinned,
-    `full ${JSON.stringify(fullEntry)}; core ${JSON.stringify(coreEntry)}; a third form -> ${codes(thirdEntry)}; no entry line -> ${codes(noEntry)}; the live rigc -> ${JSON.stringify(liveEntry)} against the pinned spine-core ${pinned}`,
+    `full ${JSON.stringify(fullEntry)}; core ${JSON.stringify(coreEntry)}; a third form -> ${codes(thirdEntry)}; no entry line -> ${codes(noEntry)}; the live rigc -> ${JSON.stringify(liveEntry)} against the generated fixture's spine-core pin ${pinned}`,
     "rig-c 2.0's launcher chooses which validator gates a build by whether spine-core resolves beside it, and check.json records which one did; a reader that took any entry: line would record a third entry as one of the two",
   );
 
@@ -18863,6 +19048,7 @@ function runCheckSuite(): number {
   runBreathAloneCases(say);
   runDressRiderCheckCases(say);
   runEnvironmentCheckCases(say);
+  finishInputContract();
   return bad();
 }
 
@@ -19604,7 +19790,9 @@ function runRigcIdentityCases(say: (name: string, ok: boolean, detail: string, w
     const oldCheck = refusals(() => runCheck(rig, join(dir, 'out-old'), rigcRunnerAt(old, spawnRigc)));
     const olderCheck = refusals(() => runCheck(rig, join(dir, 'out-older'), rigcRunnerAt(older, spawnRigc)));
     const own = join(ROOT, 'node_modules', '.bin', 'rigc');
-    const ownVersion = (JSON.parse(readFileSync(join(ROOT, 'node_modules', 'rig-c', 'package.json'), 'utf8')) as { version: string }).version;
+    // TY10 holds this actual CLI version to the installed manifest; check reads generated data only.
+    const ownVersionCall = spawnRigc(own, ['--version']);
+    const ownVersion = ownVersionCall.out.trim().split('\n')[0];
     const live = rigcRunnerAt(suiteRigc(), spawnRigc);
     const liveVersion = live(['--version']);
     const liveFailed = live(['build', '--rig', join(dir, 'missing', 'rig.json'), '--motion', join(dir, 'missing', 'motion.json'), '--out', join(dir, 'missing', 'build')]);
@@ -19623,6 +19811,7 @@ function runRigcIdentityCases(say: (name: string, ok: boolean, detail: string, w
         olderCheck?.problems.length === 1 &&
         olderCheck.problems[0].code === 'CHECK_RIGC_VERSION' &&
         olderCheck.problems[0].detail.startsWith(`is 1.3.0; rigc 1.3.0 at ${older} ran it; rig-c ${RIGC_GEOMETRY_VERSION} or later is required`) &&
+        ownVersionCall.status === 0 && ownVersion.length > 0 &&
         suiteRigc() === own &&
         packageRigc(ROOT) === own &&
         liveVersion.ran === ownAt &&
@@ -26080,6 +26269,38 @@ function foldDocLineFaults(docs: ReadonlyArray<readonly [string, string]>): { re
     });
   }
   return { read, faults };
+}
+
+/** The seam bullet and its actual line in a supplied document (issue #640). */
+function seamDocBullet(text: string): { text: string; line: number } {
+  const at = text.indexOf('- **seam**: the setup-pose render against the flat composite');
+  const end = at < 0 ? -1 : text.indexOf('\n- **loop**', at);
+  return { text: at < 0 ? '' : text.slice(at, end < 0 ? undefined : end), line: at < 0 ? 1 : text.slice(0, at).split('\n').length };
+}
+
+/** CK99/CK108 hold this reader on generated input; TY21 supplies the real guide. */
+function seamDocFaults(file: string, text: string): string[] {
+  const bullet = seamDocBullet(text);
+  const words = ['--seam-pairs', 'seam_pairs', 'check/seam/', 'differing_copies_px', '**not**', 'excluded', 'setup-pose still', `at most ${SEAM_PX_BAR} **rig** pixels over ${SEAM_PX_LEVEL}`, '`seam_frame_scale`'];
+  const countLine = bullet.text.split('\n').findIndex((line) => line.includes('at most') && line.includes('pixels over'));
+  const faultLine = bullet.line + Math.max(0, countLine);
+  const faults = words.every((word) => bullet.text.includes(word)) ? [] : [`${file}:${faultLine} stale seam bar: must name its still, pair counts/picture, counted band and rig-pixel scale`];
+  const lines = text.split('\n'), pair = lines.findIndex((line) => line.includes('Each pair is a console line `seam pair'));
+  if (pair < 0 || !lines.slice(pair, pair + 4).join('\n').includes('**magenta = a counted pixel**')) faults.push(`${file}:${pair < 0 ? 1 : pair + 1} seam pair legend must say magenta = a counted pixel beside its console line`);
+  return faults;
+}
+
+/** CK106 holds this reader on a generated check file; TY22 supplies tracked example records. */
+function seamExampleFaults(file: string, text: string): string[] {
+  const lines = text.split('\n'), scaleLine = lines.findIndex((line) => /"seam_frame_scale[^"\s]*"\s*:/.test(line));
+  const line = scaleLine < 0 ? Math.max(1, lines.findIndex((row) => row.includes('"seam_mean"')) + 1) : scaleLine + 1;
+  let f: Record<string, unknown>;
+  try { f = JSON.parse(text) as Record<string, unknown>; } catch { return [`${file}:1 check record is not JSON`]; }
+  if (f === null || typeof f !== 'object' || Array.isArray(f)) return [`${file}:1 check record must be an object`];
+  const scale = f.seam_frame_scale, count = f.seam_px_over_40, keys = Object.keys(f), at = keys.indexOf('seam_mean');
+  return f.PASS === true && typeof scale === 'number' && Math.abs(scale - 1) < 0.1 && typeof count === 'number' && count <= SEAM_PX_BAR && barsNotMet(f).length === 0 &&
+    keys.slice(at, at + 4).join(',') === 'seam_mean,seam_px_over_40,seam_px_over_80,seam_frame_scale' ? []
+    : [`${file}:${line} stale seam verdict: PASS, near-one seam_frame_scale after the three seam figures, and green rig/frame-pixel bars are required`];
 }
 
 /** AUTHORING's reference-sample fold line before issue #568, verbatim: the wording from before issue #363. TY20 plants it (issue #627; CK560 until then). */
@@ -32656,6 +32877,8 @@ function summaryOnlyConstants(source: string, from: number, to: number): string[
   return [...inside].filter((k) => !outside.has(k));
 }
 
+// The runtime version in CK51's named-entry positive fixture; TY10 holds the live pin to it.
+const ENTRY_FIXTURE_SPINE_CORE = '4.3.13';
 const SPINE_CORE = '@esotericsoftware/spine-core';
 /** The upstream compiler's npm name (renamed at 2.20.4; the bin stays `rigc`). */
 const RIGC_PACKAGE = 'rig-c';
@@ -32668,6 +32891,15 @@ function pinDrift(ours: { devDependencies?: Record<string, string> }, theirs: { 
   if (a === undefined) return `package.json declares no ${SPINE_CORE} devDependency`;
   if (b === undefined) return `rig-c ${theirs.version ?? '?'} declares no ${SPINE_CORE} devDependency, so there is no pin to hold this one to`;
   return a === b ? null : `package.json pins ${SPINE_CORE} ${a}; rig-c ${theirs.version ?? '?'} develops against ${b}; the two must be equal`;
+}
+
+/** Hold CK51's generated pin to the live manifest, naming the manifest line on drift. */
+function entryFixturePinDrift(file: string, text: string, fixturePin: string): string | null {
+  const manifest = JSON.parse(text) as { devDependencies?: Record<string, string> };
+  const actual = manifest.devDependencies?.[SPINE_CORE];
+  if (actual === fixturePin) return null;
+  const line = Math.max(1, text.split('\n').findIndex((row) => row.includes(JSON.stringify(SPINE_CORE))) + 1);
+  return `${file}:${line} ${SPINE_CORE} pin ${actual ?? 'absent'}; CK51's named-entry fixture requires ${fixturePin}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -35579,6 +35811,44 @@ function runTreeSuite(): number {
     "issue #568: an examinee read \"physics constraint(s) left out\" as the fold bar's and concluded it was silent where cloth folds, so every quoted line is rebuilt by the console's own formatter; issue #627: CK560 read these files from the check suite, whose result then moved with the working tree, and the tree suite is the one that reads the tree",
   );
 
+  // Issue #640: the live guide/example files are tree inputs; check's readers use generated fixtures only.
+  const file21 = 'docs/AUTHORING.md', guide21 = text.find(([file]) => file === file21)?.[1] ?? '';
+  const held21 = seamDocFaults(file21, guide21), bullet21 = seamDocBullet(guide21);
+  const bar21 = `at most ${SEAM_PX_BAR} **rig** pixels over ${SEAM_PX_LEVEL}`;
+  const old21 = `at most ${SEAM_PX_BAR} pixels over ${SEAM_PX_LEVEL}`;
+  const staleText21 = guide21.replace(bullet21.text, bullet21.text.replace(bar21, old21));
+  const stale21 = seamDocFaults(file21, staleText21);
+  const line21 = staleText21.split('\n').findIndex((line) => line.includes(old21)) + 1;
+  const recipe21 = feetRecipeFaults(file21, guide21), firstRecipe21 = feetRecipeBlocks(guide21)[0] ?? '';
+  const recipeAt21 = guide21.indexOf(firstRecipe21, guide21.indexOf(FEET_HEADING));
+  const parent21 = recipeJsonField(firstRecipe21, 'bones[3].parent');
+  const lineRecipe21 = guide21.slice(0, recipeAt21 + (parent21?.from ?? 0)).split('\n').length;
+  const staleRecipeText21 = parent21 === null ? guide21 : guide21.slice(0, recipeAt21 + parent21.from) + JSON.stringify('leg_r1') + guide21.slice(recipeAt21 + parent21.to);
+  const staleRecipe21 = feetRecipeFaults(file21, staleRecipeText21);
+  const missingRecipe21 = feetRecipeFaults(file21, guide21.replace(FEET_HEADING, '### Removed recipe'));
+  const invalidRecipe21 = feetRecipeFaults(file21, guide21.replace(firstRecipe21, '{'));
+  say(
+    'TY21_AUTHORING_SEAM_AND_PLANTED_FEET_RECIPE_MATCH_THE_GENERATED_CHECK_INPUTS',
+    guide21.length > 0 && held21.length === 0 && stale21.length === 1 && line21 > 0 && stale21[0].startsWith(`${file21}:${line21} `) &&
+      recipe21.length === 0 && firstRecipe21.length > 0 && parent21 !== null &&
+      staleRecipe21.length === 1 && staleRecipe21[0].startsWith(`${file21}:${lineRecipe21} `) && staleRecipe21[0].includes('bones[3].parent') &&
+      missingRecipe21.length === 1 && invalidRecipe21.length === 1 && invalidRecipe21[0].includes('is not JSON'),
+    `guide faults ${held21.join('; ') || 'none'}; planted pre-#202 seam line -> ${stale21.join('; ') || 'not caught'}; recipe faults ${recipe21.join('; ') || 'none'}; stale parent -> ${staleRecipe21.join('; ') || 'not caught'}; missing/invalid recipe ${missingRecipe21.join('; ')} / ${invalidRecipe21.join('; ')}`,
+    'issue #640: live AUTHORING assertions from CK100 and CK108 belong to tree; CK99/CK108 keep generated reader/help controls, and stale tracked lines are refused by file:line. The guide\'s three parsed planted-feet payloads equal the structured fixtures CK540-544 build, including their planted invalid parent, without reading docs from check',
+  );
+  const files22 = ['reference-demo', 'reference-sample', 'scarf'].map((key) => `examples/${key}/expected/check.json`);
+  const records22 = files22.map((file) => [file, text.find(([path]) => path === file)?.[1] ?? ''] as const);
+  const held22 = records22.flatMap(([file, record]) => seamExampleFaults(file, record));
+  const [file22, record22] = records22[0];
+  const stale22 = seamExampleFaults(file22, record22.replace('"seam_frame_scale"', '"seam_frame_scale_before"'));
+  const line22 = record22.split('\n').findIndex((line) => line.includes('"seam_frame_scale"')) + 1;
+  say(
+    'TY22_TRACKED_EXAMPLE_SEAM_VERDICTS_KEEP_BOTH_PIXEL_BARS_AND_THE_SCALE_FIELD',
+    records22.every(([, record]) => record.length > 0) && held22.length === 0 && line22 > 0 && stale22.length === 1 && stale22[0].startsWith(`${file22}:${line22} `),
+    `${records22.length} expected check records: ${held22.join('; ') || 'all green with scale and key order'}; planted stale scale-field line -> ${stale22.join('; ') || 'not caught'}`,
+    'issue #640: the tracked records from CK107 belong to tree; CK106 keeps the generated record positive/negative, and each stale input is refused by its actual file:line',
+  );
+
   const self = readFileSync(join(ROOT, 'selftest.ts'), 'utf8');
   const from = self.indexOf(SUMMARY_START);
   const to = from < 0 ? -1 : self.indexOf(SUMMARY_END, from);
@@ -35598,16 +35868,27 @@ function runTreeSuite(): number {
     'a hand-written figure never goes red — it goes stale; the summary may state only what the run counted',
   );
 
-  const ours = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { devDependencies?: Record<string, string> };
+  const oursText = readFileSync(join(ROOT, 'package.json'), 'utf8');
+  const ours = JSON.parse(oursText) as { devDependencies?: Record<string, string> };
   const rigcPkgPath = join(ROOT, 'node_modules', RIGC_PACKAGE, 'package.json');
   const theirs = existsSync(rigcPkgPath) ? (JSON.parse(readFileSync(rigcPkgPath, 'utf8')) as { version?: string; devDependencies?: Record<string, string> }) : null;
   const drift = pinDrift(ours, theirs);
   const plantDrift = pinDrift({ devDependencies: { [SPINE_CORE]: '4.3.12' } }, theirs);
   const plantAbsent = pinDrift({ devDependencies: {} }, theirs);
+  const fixtureDrift = entryFixturePinDrift('package.json', oursText, ENTRY_FIXTURE_SPINE_CORE);
+  const fixturePlant = entryFixturePinDrift('package.json', oursText, `${ENTRY_FIXTURE_SPINE_CORE}-stale`);
+  const pinLine = oursText.split('\n').findIndex((row) => row.includes(JSON.stringify(SPINE_CORE))) + 1;
+  const installedVersion = spawnRigc(suiteRigc(), ['--version']);
+  const cliVersion = installedVersion.out.trim().split('\n')[0];
+  const versionDrift = (version: string | undefined): string | null => version === cliVersion ? null : `node_modules/${RIGC_PACKAGE}/package.json version ${version ?? 'absent'}; CLI reports ${cliVersion}`;
+  const packageVersionDrift = versionDrift(theirs?.version);
+  const versionPlant = versionDrift(`${cliVersion}-stale`);
   say(
     'TY10_THE_SPINE_CORE_PIN_IS_THE_ONE_RIG_C_DEVELOPS_AGAINST',
-    drift === null && plantDrift !== null && plantAbsent !== null,
-    `package.json ${SPINE_CORE} ${ours.devDependencies?.[SPINE_CORE] ?? 'absent'}, rig-c ${theirs?.version ?? '(not installed)'}'s devDependency ${theirs?.devDependencies?.[SPINE_CORE] ?? 'absent'}: ${drift ?? 'equal'}; a planted 4.3.12 -> ${plantDrift ?? 'not found'}; a planted absence -> ${plantAbsent ?? 'not found'}`,
+    drift === null && plantDrift !== null && plantAbsent !== null &&
+      fixtureDrift === null && pinLine > 0 && fixturePlant !== null && fixturePlant.startsWith(`package.json:${pinLine} `) &&
+      installedVersion.status === 0 && cliVersion.length > 0 && packageVersionDrift === null && versionPlant !== null,
+    `package.json ${SPINE_CORE} ${ours.devDependencies?.[SPINE_CORE] ?? 'absent'}, rig-c ${theirs?.version ?? '(not installed)'}'s devDependency ${theirs?.devDependencies?.[SPINE_CORE] ?? 'absent'}: ${drift ?? 'equal'}; a planted 4.3.12 -> ${plantDrift ?? 'not found'}; a planted absence -> ${plantAbsent ?? 'not found'}; CK51 fixture ${ENTRY_FIXTURE_SPINE_CORE}: ${fixtureDrift ?? 'equal'}; planted fixture drift -> ${fixturePlant}; installed CLI ${cliVersion}: ${packageVersionDrift ?? 'equal'}, planted version drift -> ${versionPlant}`,
     "spine-core is this repository's development dependency — the round trip in its selftest and CI, the selftest's posing oracle, the two tools — because rig-c 2.0 stopped carrying it; a runtime other than the one rigc's round trip is developed against would be a second opinion nobody chose",
   );
 
