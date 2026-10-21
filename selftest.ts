@@ -13616,6 +13616,52 @@ function runFigureLayerCases(dir: string, say: (name: string, ok: boolean, detai
     `plan exit ${plan.status}, rows ${rows}; assemble exit ${asm.status}; propose exit ${prop.status}, figure note ${prop.out.includes(cliNote) ? 'printed' : 'ABSENT'}, limbs ${Object.keys((drafted.limbs ?? {}) as Record<string, unknown>).join(',')}; build exit ${built.status}: "${cut.trim()}"; "${summary.trim()}"`,
     'issue #577 bars 1 and 2: a public fixture whose figure is one layer is drafted with every limb by propose --keypoints and no hand re-sort, and the draft builds green — the figure is grained (4-row bands) because a flat block barely shows a 1.6 px breath (BREATH_VISIBLE read 1.713 on the same figure in flat colour and 4.457 grained, against its floor 3.809: a property of the fixture, not of the rule)',
   );
+
+  // PR560 — issue #629: the 15 px tolerance does not put a joint line on the art. r_elbow moved to (72, 97): the arm's
+  // nearest pixel is (72, 83), 14 px below by the larger gap, so the figure still holds every point within 15 px. But
+  // the elbow's joint line, through (72, 97) across the axis unit((-28, 19)/|.| + (-26, -19)/|.|) = (-0.99985, -0.01744)
+  // (shoulder (100, 78), elbow, wrist (46, 78)), is nearly vertical, and the arm's art on it is rows 72..83: in row 83
+  // (dy = 83.5 - 97 = -13.5) the pixel x 72 has |0.5 x -0.99985 + -13.5 x -0.01744| = 0.264 <= 0.5 and x 71 has 0.735,
+  // so [72, 83] is on the line, |-0.5 x -0.01744 + -13.5 x -0.99985| = 13.507 px from the joint — over the 1 px
+  // assemble's cap reads (ASSEMBLE_LIMB_JOINT_ON_ART). Nothing else lies on the line near the joint (the torso starts at
+  // x 104), so the layer is not the figure, no limb is drafted, and the note names the joint and the layer.
+  const bent = propose(P, joints((k) => {
+    k.people[0].joints.r_elbow = { state: 'observed', at: [72, 97] };
+  }));
+  const cutNote = none(
+    "figure's art is not on the r_elbow cut of arm_r: the joint at [72, 97] lies on none of arm_r's art within 1 px along its joint line (the nearest of it on that line is the pixel [72, 83], 13.507 px from the joint), where assemble refuses the cut (ASSEMBLE_LIMB_JOINT_ON_ART)",
+  );
+  say(
+    'PR560_A_FIGURE_LAYER_WHOSE_JOINT_IS_WITHIN_15_PX_BUT_WHOSE_JOINT_LINE_MISSES_ITS_ART_IS_NOT_CHOSEN_AND_THE_NOTE_NAMES_THE_JOINT',
+    bent.limbs === undefined && 'figure' in bent.meshes && bent.notes.includes(cutNote) && limbsOf(one) === wantLimbs,
+    `r_elbow at (72, 97): limbs ${bent.limbs === undefined ? 'none' : limbsOf(bent)}, ${JSON.stringify(bent.notes.find((n) => n.startsWith('figure layer')) ?? null)}; as written: limbs ${limbsOf(one) === wantLimbs ? 'all five' : limbsOf(one)}`,
+    'issue #629: the figure layer was chosen by a dilation, every joint within 15 px of the art, while assemble cuts a limb only where its joint line crosses the limb\'s art within 1 px — so propose drafted a config assemble refused; the layer is now read by assemble\'s own test (limbRun on the joint line, the limb\'s art by the nearest polyline) before it is chosen',
+  );
+
+  // PR561 — issue #631: config.cloth.bottomwear.part names `figure`. Alone it is the only topwear part that holds the
+  // joints, and it is refused by name rather than cut into limbs (a limb takes every pixel of its part, so the recipe's
+  // mesh would be deleted and its trees would control no artwork). Beside PR553's holed twin, which holds fewer px about
+  // the points and so lost to `figure` there, the twin is the figure layer, `figure` keeps the recipe's mesh (its
+  // segments are the skirt trees' links) and is cut into no limb, and a note names it and the recipe.
+  const recipe = clothRecipe().bottomwear;
+  const skirt: ClothRecipes = recipe === undefined ? {} : { bottomwear: { ...recipe, part: 'figure' } };
+  const alone = refusals(() => propose(P, J, null, 'figure', skirt));
+  const beside = propose(Pt, J, null, 'figure', skirt);
+  const segs = (beside.meshes.figure?.segments ?? []).filter((x): x is string => typeof x === 'string');
+  const clothLine = `figure (full:topwear): not the figure layer, though its art holds within 15 px ${what('arm_r, arm_l, leg_r, leg_l')} — config.cloth."bottomwear".part names it, so it keeps the cloth recipe's mesh: a limb takes every pixel of its part, and cut into limbs the recipe's trees would control no artwork (issue #631)`;
+  const fromOf = (p: Proposal): string[] => [...new Set(Object.values(p.limbs ?? {}).flatMap((l) => l.segments.map((g) => g.from)))];
+  say(
+    'PR561_A_PART_A_CLOTH_RECIPE_NAMES_IS_NO_FIGURE_LAYER_IT_KEEPS_ITS_MESH_AND_ALONE_IS_REFUSED_BY_NAME',
+    codes(alone) === 'PROPOSE_FIGURE_LAYER part "figure" (topwear)' &&
+      (alone?.message ?? '').includes('but config.cloth."bottomwear".part names "figure"') &&
+      fromOf(beside).join(',') === 'twin' &&
+      Object.keys(beside.limbs ?? {}).join(',') === 'trunk,arm_r,arm_l,leg_r,leg_l' &&
+      segs.length > 0 &&
+      segs.every((x) => x.startsWith('skirt')) &&
+      beside.notes.includes(clothLine),
+    `alone: ${codes(alone)}; beside the twin: limbs from ${fromOf(beside).join(',') || 'nothing'} (${Object.keys(beside.limbs ?? {}).join(',')}), figure's mesh ${beside.meshes.figure === undefined ? 'DELETED' : `kept, chain segments ${segs.join(',')}`}; note ${beside.notes.includes(clothLine) ? 'as written' : `ABSENT (${JSON.stringify(beside.notes.find((n) => n.includes('#631')) ?? null)})`}`,
+    'issue #631: a topwear part the cloth recipe names was also chosen as the figure layer; the skirt path drafted its trees and marked the recipe used, and the limb cleanup then deleted the part\'s mesh, leaving cloth bones, tracks and constraints that move no artwork — a declared mesh lost without a word',
+  );
 }
 
 /**
