@@ -169,6 +169,7 @@ import { type LocalInfluence, localInfluences } from './localweights.ts';
 import { edgeLength } from './length.ts';
 import { skeletonLimbJoints } from './limbs.ts';
 import { coalesceLimbSlots } from './limbslots.ts';
+import { layoutAlias, placeLimbLayouts, type LayoutPlan } from './limblayout.ts';
 import { artCoverage, ART_ALPHA, latticeCells, latticeMesh, latticeStray, ONE_LOOP_PASSES } from './mesh.ts';
 import { bindFaceSurfaceDeform, BLINK, blinkHoldMisses, blinkSpan, CONTROL_SUFFIX, controlledBones, IDLE_FPS, idleMotion, type MotionSpec, moveKeysToControls } from './motion.ts';
 import { type AlternateSetMap, PAINTING_RUN, type PartsFile, readFrom, tagOf } from './parts.ts';
@@ -1079,6 +1080,8 @@ export interface AttachmentSetsFile {
 
 export interface RigOutput {
   rig: RigSpec;
+  /** Internal explicit-layout provenance; serialized only as an external companion. */
+  layout?: LayoutPlan;
   motion: MotionSpec;
   meshReport: MeshReport[];
   /** The padded images, by file name (`<part>.png`), in parts.json order. */
@@ -1695,6 +1698,11 @@ export function buildRig(
 
   // ---- attachments -------------------------------------------------------
   const slots: RigSpec['slots'] = [];
+  const slotFamilies = new Map<string, string[]>();
+  const addSlots = (part: string, ...rows: RigSpec['slots']): void => {
+    slots.push(...rows);
+    slotFamilies.set(part, [...(slotFamilies.get(part) ?? []), ...rows.map((s) => s.name)]);
+  };
   const skin: RigSpec['skins']['default'] = {};
   const meshReport: MeshReport[] = [];
   const outImages: Array<[string, Raster]> = [];
@@ -2221,12 +2229,12 @@ export function buildRig(
         const cyUp = p.y + r / 2;
         skin[p.name] = { [p.name]: region(file, bone.name, cx, cyLow) };
         skin[still] = { [still]: region(stillFile, sb.name, cx, cyUp) };
-        slots.push({ name: p.name, bone: bone.name, attachment: p.name }, { name: still, bone: sb.name, attachment: still });
+        addSlots(p.name, { name: p.name, bone: bone.name, attachment: p.name }, { name: still, bone: sb.name, attachment: still });
         continue;
       }
       const cy = p.y + p.h / 2;
       skin[p.name] = { [p.name]: region(file, bone.name, cx, cy) };
-      slots.push({ name: p.name, bone: bone.name, attachment: p.name });
+      addSlots(p.name, { name: p.name, bone: bone.name, attachment: p.name });
       continue;
     }
     const segs = meshSegments.get(p.name) as Segment[];
@@ -2234,7 +2242,7 @@ export function buildRig(
       const row = autoAttachment(p, img, file, mesh.auto, mesh.r, mesh.exponent, segs, mesh.rule ?? 'distance', mesh, problems);
       if (row === null) continue;
       skin[p.name] = { [p.name]: row.attachment };
-      slots.push({ name: p.name, bone: segs[0].bone, attachment: p.name });
+      addSlots(p.name, { name: p.name, bone: segs[0].bone, attachment: p.name });
       meshReport.push(row.report);
       autoMotion.push(row.motion);
       continue;
@@ -2243,7 +2251,7 @@ export function buildRig(
       const row = contourAttachment(p, img, file, mesh.contour, mesh.r, mesh.exponent, segs, mesh.rule ?? 'distance', mesh, mesh.influences, problems);
       if (row === null) continue;
       skin[p.name] = { [p.name]: row.attachment };
-      slots.push({ name: p.name, bone: segs[0].bone, attachment: p.name });
+      addSlots(p.name, { name: p.name, bone: segs[0].bone, attachment: p.name });
       meshReport.push(row.report);
       continue;
     }
@@ -2251,7 +2259,7 @@ export function buildRig(
       const row = influenceAttachment(p, img, file, mesh, segs, meshSegmentEntries.get(p.name) as number[], problems);
       if (row === null) continue;
       skin[p.name] = { [p.name]: row.attachment };
-      slots.push({ name: p.name, bone: segs[0].bone, attachment: p.name });
+      addSlots(p.name, { name: p.name, bone: segs[0].bone, attachment: p.name });
       meshReport.push(row.report);
       continue;
     }
@@ -2331,7 +2339,7 @@ export function buildRig(
     const uvs: number[] = [];
     for (const [x, y] of lm.vertices) uvs.push(pyRound(x / w, 6), pyRound(y / h, 6));
     skin[p.name] = { [p.name]: { type: 'mesh', image: file, width: w, height: h, uvs, triangles: lm.triangles, hull: lm.hull, weights } };
-    slots.push({ name: p.name, bone: segs[0].bone, attachment: p.name });
+    addSlots(p.name, { name: p.name, bone: segs[0].bone, attachment: p.name });
     meshReport.push({
       part: p.name,
       vertices: lm.vertices.length,
@@ -2563,14 +2571,16 @@ export function buildRig(
   // Read every base/alternate binding before rebinds; publish only the slot
   // permutation below, after stops/turn have used the original enumeration.
   const limbLayout = coalesceLimbSlots(cfg.limbs, bones, slots, skin);
+  const explicitLayout = placeLimbLayouts(cfg.limbs, bones, limbLayout, skin, slotFamilies);
   // ---- leg stops (issue #404) --------------------------------------------
   // Only when the config has `stops`: each link after the first (and any bone hanging from a stopped link) hangs
   // from the drawn link `<link>_d` above it, and slots and weights on a stopped link bind `<link>_d`.
-  const stops = cfg.stops === undefined ? null : applyStops(cfg.stops, chains, bones, slots, skin);
+  const stops = cfg.stops === undefined ? null : applyStops(cfg.stops, chains, bones, slots, skin, (original, emitted) => layoutAlias(explicitLayout.plan, original, emitted));
   // ---- the turn control (issue #251) -------------------------------------
   // Only when the config has `turn`: every other build adds nothing here, so no byte moves.
   if (cfg.turn !== undefined) refuseIfAny(turnRiderProblems(cfg.turn, cfg, parts.parts));
   const turned = cfg.turn === undefined ? null : applyTurn(cfg.turn, parts.parts.map((p) => p.name), bones, slots, skin, cfg.constraints ?? []);
+  for (const row of turned?.rows ?? []) for (const t of row.twins) layoutAlias(explicitLayout.plan, t.bone, t.twin);
   // issue #536: every row names the bones the emitted attachment binds, read once the turn and the stops have
   // rebound the weights; a rig with neither rebinds nothing, so this reads back the names each row already holds.
   for (const row of meshReport) {
@@ -2585,7 +2595,7 @@ export function buildRig(
     images: 'images',
     skeleton: { x: -CX, y: 0, width: W, height: H },
     bones,
-    slots: limbLayout.slots,
+    slots: explicitLayout.slots,
     skins: { default: skin },
   };
   if (cfg.constraints !== undefined) rig.constraints = cfg.constraints.map(constraintForRig);
@@ -2638,6 +2648,7 @@ export function buildRig(
     faceAxis,
     turn: turned?.rows ?? null,
     ...(sets === undefined ? {} : { sets }),
+    ...(explicitLayout.plan === undefined ? {} : { layout: explicitLayout.plan }),
   };
 }
 
@@ -2834,12 +2845,13 @@ function applyStops(
   bones: RigBone[],
   slots: RigSpec['slots'],
   skin: RigSpec['skins']['default'],
+  alias?: (original: string, emitted: string) => void,
 ): RigStop[] {
   const out: RigStop[] = [];
   const drawn = new Map<string, string>();
   for (const s of stops) {
     const links = s.links ?? chains.get(s.chain) ?? [];
-    for (const l of links) drawn.set(l, `${l}_d`);
+    for (const l of links) { drawn.set(l, `${l}_d`); alias?.(l, `${l}_d`); }
     out.push(stopForRig(s, links));
   }
   for (const b of bones) {

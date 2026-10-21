@@ -93,6 +93,7 @@ import { KEYPOINT_NAMES, type KeypointName, type PosePoints } from './skeleton.t
 import { AUTHOR_NO_ROLE, isAuthorTag } from './tags.ts';
 import { TURN_BONE } from './turn.ts';
 import { pyRound } from './round.ts';
+import { LAYOUT_FILE, layoutCompanion, refreshLimbLayout } from './limblayout.ts';
 
 /** Where a stage's lines go. The commands hand it `console.log`; `build` hands it a prefixing wrapper. */
 export type Log = (line: string) => void;
@@ -1289,18 +1290,22 @@ export function readRigInputs(config: string, partsDir: string): RigInputs {
   return { cfg, from, parts, images };
 }
 
-export function rigStage(input: RigStageInput, rigc: RigcRunner, scratch: string, log: Log): RigOutput {
-  const { cfg, from, parts, images } = readRigInputs(input.config, input.parts);
-  const first = buildRig(cfg, parts, images, undefined, input.idleKeys ?? DEFAULT_IDLE_KEYS, input.reduce);
-  const textsOf = (r: RigOutput): Array<[string, string]> => {
-    const mergedMotion = withAnimations(r.motion, from === null ? null : from.table);
+/** Final candidate serialization shared by initial and settled motion replay. */
+export function rigOutputTexts(r: RigOutput, animations: Parameters<typeof withAnimations>[1]): Array<[string, string]> {
+    const mergedMotion = withAnimations(r.motion, animations);
+    if (r.layout !== undefined) r.layout = refreshLimbLayout(r.layout, r.rig);
     return [
       ['rig.json', rigJsonText(r.rig)],
       ['motion.json', rigJsonText(mergedMotion)],
       ['mesh_report.json', rigJsonText(r.meshReport)],
       ...(r.sets === undefined ? [] : [[SETS_FILE, rigJsonText(r.sets)] as [string, string]]),
     ];
-  };
+}
+
+export function rigStage(input: RigStageInput, rigc: RigcRunner, scratch: string, log: Log): RigOutput {
+  const { cfg, from, parts, images } = readRigInputs(input.config, input.parts);
+  const first = buildRig(cfg, parts, images, undefined, input.idleKeys ?? DEFAULT_IDLE_KEYS, input.reduce);
+  const textsOf = (r: RigOutput): Array<[string, string]> => rigOutputTexts(r, from === null ? null : from.table);
   const firstTexts = textsOf(first);
   // The gate runs before the lines are printed, and its lines print where they always did: an automatic part's motion
   // gate compares the model document of this very build, the one written (issue #126 item 3). mesh_report.json is staged
@@ -1449,9 +1454,13 @@ export function rigStage(input: RigStageInput, rigc: RigcRunner, scratch: string
     rig.meshReport.splice(0, rig.meshReport.length, ...rows);
     texts[2] = ['mesh_report.json', rigJsonText(rig.meshReport)];
   }
+  const layout = rig.layout === undefined ? undefined : layoutCompanion(rig.layout, rig.rig, texts[0][1], texts.find(([n]) => n === SETS_FILE)?.[1]);
+  // This stage owns the companion. A red run reaches neither cleanup nor emit.
+  if (layout === undefined) rmSync(join(input.out, LAYOUT_FILE), { force: true });
   mkdirSync(join(input.out, 'images'), { recursive: true });
   for (const [file, img] of rig.images) writePng(join(input.out, 'images', file), img);
   for (const [file, text] of texts) writeFileSync(join(input.out, file), text);
+  if (layout !== undefined) writeFileSync(join(input.out, LAYOUT_FILE), rigJsonText(layout));
   log(`rig-parts rig: wrote ${join(input.out, 'rig.json')}, motion.json, mesh_report.json and ${rig.images.length} image(s) under ${join(input.out, 'images')}`);
   return rig;
 }
