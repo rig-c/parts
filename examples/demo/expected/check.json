@@ -680,5 +680,9 @@
    ]
   }
  },
+ "config": {
+  "path": "examples/demo/config.json",
+  "sha256": "f2913f67c07e2757d6a35991c31f84c9355a6d1f2ea709694da5b40b6d3ae2ef"
+ },
  "PASS": true
 }

@@ -105,7 +105,9 @@ export interface ClothRecipe {
    * Issue #518: draft the parts this recipe meshes in the influence mode (`meshes.<part>.influence`, issue #378) rather
    * than on a lattice: `across`, `max` and `shape` as declared (no default — the reading that fixed the radius did not
    * vary them), `cell` the lattice cell the part would have had, and `radius` as declared or, absent, drafted as
-   * {@link INFLUENCE_RADIUS_CELLS} cells past the part's farthest lattice vertex from its nearest link.
+   * {@link INFLUENCE_RADIUS_CELLS} cells past the part's farthest lattice vertex from its nearest link. Issue #615:
+   * under `split.hold_tip: true` the drafted mesh also declares `hold_tip: true` and `max` at least 8 (the lattice's
+   * held-fork smoothing cap), so the rig stage smooths its shares as it smooths the lattice's.
    */
   influence?: { across: boolean; max: number; shape: 'linear' | 'smooth'; radius?: number };
 }

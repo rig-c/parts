@@ -328,9 +328,11 @@ export type MeshSpec = LatticeMeshSpec | ContourMeshSpec | AutoMeshSpec | Influe
  * `buildSegmentsLattice` and `influenceShares` from `rig-c/mesh`, promised for this call (rig-c/core#1450), so the
  * rule is core's and the mesh is written with explicit weights like every other mode (`src/rig.ts`). `segments`
  * names the links as in every mode; each entry is one of rig-c's `bones` entries, which `across: false` keeps apart.
+ * `hold_tip: true` (issue #615, optional, written by `propose --cloth` from the recipe's `split.hold_tip`) smooths the
+ * pulled shares by the lattice's held-fork passes, capped at `max`; absent, the shares are rig-c's as pulled.
  */
 export interface InfluenceMeshSpec {
-  influence: { cell: number; radius: number; across: boolean; max: number; shape: 'linear' | 'smooth' };
+  influence: { cell: number; radius: number; across: boolean; max: number; shape: 'linear' | 'smooth'; hold_tip?: true };
   segments: Segment[];
 }
 
@@ -1159,20 +1161,36 @@ function partNameOk(name: string): boolean {
 // the loader
 // ---------------------------------------------------------------------------
 
-/** The file as parsed JSON, or a refusal naming why not. Both loaders read through it. */
-function readConfigFile(path: string): Json {
+/** The file's bytes as read and as parsed JSON, or a refusal naming why not. Every loader reads through it. */
+function readConfigBytes(path: string): { raw: Json; bytes: Buffer } {
   if (!existsSync(path)) refuseIfAny([{ code: 'CONFIG_FILE_PRESENT', object: path, detail: 'no such file' }]);
+  const bytes = readFileSync(path);
   let raw: Json;
   try {
-    raw = JSON.parse(readFileSync(path, 'utf8'));
+    raw = JSON.parse(bytes.toString('utf8'));
   } catch (err) {
     refuseIfAny([{ code: 'CONFIG_IS_JSON', object: path, detail: `does not parse as JSON: ${(err as Error).message}` }]);
   }
-  return raw;
+  return { raw, bytes };
+}
+
+/** The file as parsed JSON, or a refusal naming why not. */
+function readConfigFile(path: string): Json {
+  return readConfigBytes(path).raw;
 }
 
 export function loadConfig(path: string): CharacterConfig {
   return loadConfigAndAnimations(path).config;
+}
+
+/**
+ * The full loader, with the bytes it parsed (issue #607): `build` hashes these
+ * into `check.json`'s `config` record, so the digest is of the bytes this read
+ * took, not of a later read of the same path.
+ */
+export function loadConfigWithBytes(path: string): { config: CharacterConfig; bytes: Buffer } {
+  const { raw, bytes } = readConfigBytes(path);
+  return { config: parseConfigFrom(raw, dirname(resolve(path))).config, bytes };
 }
 
 /**
@@ -2476,8 +2494,11 @@ function checkInfluence(c: Check, at: string, m: Record<string, Json>): void {
   for (const k of INFLUENCE_FOREIGN_FIELDS) {
     if (k in m) c.fail('CONFIG_INFLUENCE_MODE', `${at}.${k}`, `is ${show(m[k])} on an influence mesh; it pulls each vertex by rig-c's influence (radius, across, max, shape), which reads no ${k} — remove ${k}`);
   }
-  const o = c.object(`${at}.influence`, m.influence, ['cell', 'radius', 'across', 'max', 'shape'], []);
+  const o = c.object(`${at}.influence`, m.influence, ['cell', 'radius', 'across', 'max', 'shape'], ['hold_tip']);
   if (o === null) return;
+  // Issue #615: one spelling — true smooths the held fork, absent leaves the shares as pulled; false would be a second
+  // spelling of absent, and a mesh_report row that echoes it would differ from the one written before the field existed.
+  if ('hold_tip' in o && o.hold_tip !== true) c.fail('CONFIG_FIELD_TYPE', `${at}.influence.hold_tip`, `is ${show(o.hold_tip)}; true (the pulled shares smoothed across the held fork, capped at max) is required — remove hold_tip to keep the shares as rig-c pulls them`);
   if ('cell' in o) c.int(`${at}.influence.cell`, o.cell, 1);
   if ('radius' in o) c.number(`${at}.influence.radius`, o.radius, 'positive');
   if ('across' in o && typeof o.across !== 'boolean') c.fail('CONFIG_FIELD_TYPE', `${at}.influence.across`, `is ${show(o.across)}; true (every link within radius pulls, across the segments entries) or false (only the links of the entry nearest the vertex) is required`);

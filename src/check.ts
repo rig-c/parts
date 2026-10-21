@@ -1888,6 +1888,12 @@ export interface CheckFigures {
   skipped?: { loop?: string; seam?: string };
   /** Written only under `--set` or `--all-sets` (issue #454): each checked alternate set's setup-pose seam and recomposite figures, keyed by set name. */
   sets?: Record<string, SetCheckFigures>;
+  /**
+   * Written only by `build` (issue #607): the config it read, the path as `--config` was typed and the sha256 of the
+   * bytes its full loader parsed ({@link inputFileRecord}), just before the requirements block. Provenance, not a
+   * bar; `check` and `compose` read no config and write no key.
+   */
+  config?: InputFileRecord;
   /** Written only under `--requirements` (issue #93): the file's fps, the summary, and one line per declared requirement, by name. */
   requirements?: RequirementsBlock;
   PASS: boolean;
@@ -3930,7 +3936,7 @@ export function environmentLine(env: CheckEnvironment): string {
  * MEASURABLE is a problem. Without it nothing here reads, writes or prints
  * anything it did not before.
  */
-export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, requirementsAs: string | undefined = requirements): CheckReport {
+export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, requirementsAs: string | undefined = requirements, config?: InputFileRecord): CheckReport {
   let inp: CheckInputs;
   let reqFile: RequirementsFile | null = null;
   let reqRecord: RequirementsFileRecord | null = null;
@@ -4583,6 +4589,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(sourceRead === null ? {} : { [SOURCE_LINE]: sourceRead }),
     ...(Object.keys(skipped).length === 0 ? {} : { skipped }),
     ...(Object.keys(setsFigures).length === 0 ? {} : { sets: setsFigures }),
+    ...(config === undefined ? {} : { config }),
     ...(reqBlock === null ? {} : { requirements: reqBlock }),
     PASS: false,
   };
@@ -4693,7 +4700,23 @@ export interface RequirementsFileRecord {
 export function requirementsFileRecord(path: string, recorded: string): RequirementsFileRecord {
   const bytes = readFileSync(resolve(path));
   const raw = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
-  return { path: recorded, sha256: createHash('sha256').update(bytes).digest('hex'), keys: Object.keys(raw) };
+  return { ...inputFileRecord(bytes, recorded), keys: Object.keys(raw) };
+}
+
+/**
+ * An input file as `check.json` records it — the path as the caller wrote it,
+ * never resolved, then the sha256 of the bytes read — in the order the
+ * requirements record (issue #556) opens with; `build`'s `config` record
+ * (issue #607) is this and nothing more.
+ */
+export interface InputFileRecord {
+  path: string;
+  sha256: string;
+}
+
+/** The {@link InputFileRecord} of `bytes`, recorded as `recorded`: the one place a record's digest is taken. */
+export function inputFileRecord(bytes: Uint8Array, recorded: string): InputFileRecord {
+  return { path: recorded, sha256: createHash('sha256').update(bytes).digest('hex') };
 }
 
 /** The throwaway copies' specs and builds, under `--out`; removed before the stage returns. */

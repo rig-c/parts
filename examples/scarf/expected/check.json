@@ -650,5 +650,9 @@
    ]
   }
  },
+ "config": {
+  "path": "examples/scarf/config.json",
+  "sha256": "ab477592065515a709b678d2c3d7fd174fa002684f6e822381fd084e99b9391b"
+ },
  "PASS": true
 }

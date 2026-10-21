@@ -71,8 +71,8 @@ import {
   splitSchedule,
   untestedIntervals,
 } from './autoreplay.ts';
-import { besideIdleLine, checkSummaryLine, CLOTH_LINE, type ClothLine, clothWarnText, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamWarnText, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, environmentLine, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, readCheckEnvironment, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR } from './check.ts';
-import { type Cut, type Extend, type Limb, loadConfig, loadConfigAndAnimations, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
+import { besideIdleLine, checkSummaryLine, inputFileRecord, type InputFileRecord, CLOTH_LINE, type ClothLine, clothWarnText, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamWarnText, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, environmentLine, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, readCheckEnvironment, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR } from './check.ts';
+import { type Cut, type Extend, type Limb, loadConfigAndAnimations, loadConfigWithBytes, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
 import { failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import type { MeshQualityReport, MotionSchedule } from 'rig-c/mesh';
 import { encodeGif } from './gif.ts';
@@ -1396,6 +1396,8 @@ export interface CheckStageInput {
   requirements?: string;
   /** The path `check.json`'s `requirements.file` records (issue #556): `config.requirements` as declared when build read it from the config; absent, `requirements` as given. */
   requirementsAs?: string;
+  /** The config `build` read (issue #607), recorded as `check.json`'s `config`; absent, no key is written, as `check` alone writes none. */
+  config?: InputFileRecord;
   /**
    * `check --seam-pairs` (issue #202): split the seam's counted pixels by pair
    * and draw each pair's picture even when the bar passes. A failing seam is
@@ -1620,7 +1622,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   const entryLine = versionLines.find((l) => l.startsWith('entry:'));
   log(`  ${rigcIdentity(bin, v)}${entryLine === undefined ? '' : `; ${entryLine}`}`);
   const mode: PackMode = { pageEdges: input.pageEdges ?? DEFAULT_PAGE_EDGES, packShape: input.packShape ?? DEFAULT_PACK_SHAPE };
-  const r = runCheck(input.rig, input.out, rigc, input.parts, mode, input.source, input.requirements, input.seamPairs === true, input.keepStills === true, input.set, input.allSets === true, input.environment, input.requirementsAs);
+  const r = runCheck(input.rig, input.out, rigc, input.parts, mode, input.source, input.requirements, input.seamPairs === true, input.keepStills === true, input.set, input.allSets === true, input.environment, input.requirementsAs, input.config);
   if (r.figures.environment !== undefined) log(`  ${environmentLine(r.figures.environment)}`);
   log(`  gate rig-play (rigc ${packedBuildLabel(mode)}), verbatim:`);
   for (const l of r.gateHtml) log(l);
@@ -2106,13 +2108,17 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
   log(`rig-parts build: ${input.config} -> ${out}, seam rule ${input.seam}, projection rule ${input.project}, page edges ${input.pageEdges}, pack shape ${input.packShape ?? DEFAULT_PACK_SHAPE}${idleKeys === DEFAULT_IDLE_KEYS ? '' : `, idle keys ${idleKeys}`}${input.loop ? `, with the idle loop${input.leadIn === undefined ? '' : ` after a lead-in of ${input.leadIn} period(s)`}` : ''}`);
 
   let req: BuildRequirements | null = null;
+  let configRecord: InputFileRecord | null = null;
   try {
     // build runs rig next, which needs the whole config, so the full loader is
     // asked first: a config rig would refuse is refused before assemble writes
     // anything, and under [assemble], as it was before the stage had its own
     // narrower door.
     // Issue #556: the flag, or the config's declaration when there is none; both naming other bytes is refused here.
-    req = buildRequirements(input.requirements, loadConfig(input.config).requirements, input.config);
+    // Issue #607: the bytes this read parsed are the ones check.json's config record hashes, under the path as typed.
+    const loaded = loadConfigWithBytes(input.config);
+    configRecord = inputFileRecord(loaded.bytes, input.config);
+    req = buildRequirements(input.requirements, loaded.config.requirements, input.config);
     // The same for the requirements file's own shape; its names resolve against the rig, in the check, before it builds.
     if (req !== null) readRequirements(req.read);
     // And the schedule (issue #538), by rigc's own reader, as check reads it.
@@ -2134,7 +2140,7 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
 
   let report: CheckReport;
   try {
-    report = checkStage({ rig: join(out, 'rig'), parts: out, out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(req === null ? {} : { requirements: req.read, requirementsAs: req.recorded }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }) }, run.check, run.checkBin, prefixed('check'));
+    report = checkStage({ rig: join(out, 'rig'), parts: out, out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(req === null ? {} : { requirements: req.read, requirementsAs: req.recorded }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }), ...(configRecord === null ? {} : { config: configRecord }) }, run.check, run.checkBin, prefixed('check'));
   } catch (err) {
     return refused('check', err);
   }

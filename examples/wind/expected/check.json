@@ -920,5 +920,9 @@
    ]
   }
  },
+ "config": {
+  "path": "examples/wind/config.json",
+  "sha256": "ca6445e19f8ef624e75716608afe7a2ce42518eedaef993f28696c7d17e3c9c4"
+ },
  "PASS": true
 }

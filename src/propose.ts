@@ -146,7 +146,7 @@ import { type Mask, newMask, newRaster, type Raster } from './raster/types.ts';
 import { npMean, npMedian, npPercentile, pyFixed, pyInt, pyIntList, pyRepr, pyRound, pyStrList } from './pyfmt.ts';
 import type { JointState, RigJoint, RigJoints } from './keypoints.ts';
 import { IDLE_FPS } from './motion.ts';
-import { influenceFarthest } from './rig.ts';
+import { FORK_SMOOTH_MAX_INFLUENCES, influenceFarthest } from './rig.ts';
 import { type Segment as WeightSegment } from './weights.ts';
 import { pyRound as roundTo } from './round.ts';
 import { KEYPOINT_NAMES, type KeypointName } from './skeleton.ts';
@@ -3470,7 +3470,15 @@ export function proposeWithBasis(
       radius = roundTo(farthest + INFLUENCE_RADIUS_CELLS * cell, 4);
       radii.push({ kind: 'influence-radius', part: name, tag, radius, farthest: roundTo(farthest, 4), cells: INFLUENCE_RADIUS_CELLS, cell });
     }
-    meshes[name] = { influence: { cell, radius, across: decl.across, max: decl.max, shape: decl.shape }, segments };
+    // Issue #615: under the recipe's `split.hold_tip` the mesh declares `hold_tip: true`, which the rig stage reads to
+    // smooth the held fork as it smooths the lattice's, and `max` is raised to the lattice's smoothing cap
+    // (FORK_SMOOTH_MAX_INFLUENCES, 8) as the lattice's `r` is raised to its grid — the rig stage caps the smoothing
+    // at the declared max. On wind's bottomwear under a 60-degree hip sway (#615, rigc 2.60.0) the draft folds 41
+    // frames at max 6, 23 smoothed at max 6, 3 at max 8 unsmoothed and 0 smoothed at max 8, against the lattice's 5.
+    // A declared max above the cap is kept.
+    const held = recipeOf(tag)?.split?.hold_tip === true;
+    const max = held ? Math.max(decl.max, FORK_SMOOTH_MAX_INFLUENCES) : decl.max;
+    meshes[name] = { influence: { cell, radius, across: decl.across, max, shape: decl.shape, ...(held ? { hold_tip: true as const } : {}) }, segments };
   }
   const constrained = clothConstraints.length === 0 ? {} : { constraints: clothConstraints };
   return {

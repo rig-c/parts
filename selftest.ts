@@ -577,6 +577,7 @@ import { CANVAS as PAINT_CANVAS, figureJoints as paintJoints, FIGURE as PAINT_FI
 import { LEGS_APART, LEGS_JOINED, LYING_PARTS, LYING_RIG, type PoseName, POSES, SEATED_PARTS, SEATED_RIG } from './fixtures/poses.ts';
 import { buildSheet, tileImage, tilesFrom } from './src/sheet.ts';
 import { block, constraintConfig, dustImages, dustParts, FACE_EXPECT, faceConfig, faceImages, faceParts, HEAT_STRIP_EXPECT, heatStripConfig, islandImages, LASH_CREASE, LASH_RIG, LASH_ROW, lashConfig, lashImages, lashParts, RIG_CANVAS, RIG_EXPECT, rigConfig, rigImages, rigParts, SCENE_TARGET, shoeConfig, shoeImages, shoeKick, shoeParts, TURNED_EXPECT, turnedConfig, writeRigFixture } from './fixtures/rig.ts';
+import { FORK_SMOOTH_MAX_INFLUENCES, smoothForkShares } from './src/rig.ts';
 import { type AttachmentSetsFile, blinkHoldProblems, buildRig, influenceReachHolds, DEFAULT_IDLE_KEYS, expandSetAttachmentKeys, FACE_TIPS_AXIS_NAME, HEAD_UP_BONE, flattenRig, IDLE_DRIVES_MESHES_WHY, type MeshAttachment, PAD, type RegionAttachment, rigJsonText, type RigOutput, type RigSpec, roundShares, tipRoundingBound, writtenShares } from './src/rig.ts';
 import { type ComposedScene, composeFromFiles, IMAGE_SEP, PLATE, PLATE_IMAGE, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames } from './src/scene.ts';
 import { sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild } from './fixtures/scene.ts';
@@ -15340,8 +15341,13 @@ function runSweepCheckCases(say: (name: string, ok: boolean, detail: string, why
     );
 
     const keys = (fig: Record<string, unknown> | null): string => Object.keys(fig ?? {}).join(',');
-    const without = covered.fig === null ? null : Object.fromEntries(Object.entries(covered.fig).filter(([k]) => k !== SWEEP_LINE));
-    const plainText = existsSync(join(dir, 'plain', 'check', 'check.json')) ? readFileSync(join(dir, 'plain', 'check', 'check.json'), 'utf8') : '';
+    // Issue #607: the two builds read two config files and each check.json names its own (config), so that record is
+    // set aside on both sides and held to plain.json here; every other byte is compared.
+    const without = covered.fig === null ? null : Object.fromEntries(Object.entries(covered.fig).filter(([k]) => k !== SWEEP_LINE && k !== 'config'));
+    const plainRaw = existsSync(join(dir, 'plain', 'check', 'check.json')) ? readFileSync(join(dir, 'plain', 'check', 'check.json')) : null;
+    const plainText = plainRaw === null ? '' : `${withoutConfigRecord(plainRaw, join('check', 'check.json')).toString('utf8')}\n`;
+    const plainConfig = (plain.fig?.config ?? null) as Record<string, unknown> | null;
+    const plainConfigNamed = plainConfig !== null && plainConfig.path === join(dir, 'plain.json') && plainConfig.sha256 === createHash('sha256').update(readFileSync(join(dir, 'plain.json'))).digest('hex');
     const coveredParts = readFileSync(join(dir, 'covered', 'parts.json'), 'utf8');
     const plainParts = readFileSync(join(dir, 'plain', 'parts.json'), 'utf8');
     say(
@@ -15354,9 +15360,10 @@ function runSweepCheckCases(say: (name: string, ok: boolean, detail: string, why
         coveredParts.split('\n').filter((l) => l.includes('"range"')).length === 1 &&
         coveredParts.replace(/,\n\s*"range": \[\n?\s*0,\n?\s*120\n?\s*\]/, '') === plainParts &&
         `${JSON.stringify(without, null, 1)}\n` === plainText &&
+        plainConfigNamed &&
         !existsSync(join(dir, 'covered', 'check', '_sweep')),
       `without a range: exit ${plain.status}, keys ${keys(plain.fig)}; with one, less ${SWEEP_LINE}: ${`${JSON.stringify(without, null, 1)}\n` === plainText ? 'the same bytes' : 'DIFFERENT'}; parts.json with the range less it: ${coveredParts.replace(/,\n\s*"range": \[\n?\s*0,\n?\s*120\n?\s*\]/, '') === plainParts ? 'the same bytes' : 'DIFFERENT'}`,
-      'opt-in by construction: a limb with no declared range is not posed, so its check renders, prints and writes exactly what it did; the planted negative is the covered build, which differs from this one by the range in parts.json and the line in check.json, and by nothing else',
+      'opt-in by construction: a limb with no declared range is not posed, so its check renders, prints and writes exactly what it did; the planted negative is the covered build, which differs from this one by the range in parts.json and the line in check.json, and by nothing else but the config record (issue #607), which names each build\'s own config file',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -21804,6 +21811,7 @@ function runBuildSuite(): number {
     const fwdPairs = pairLinesOf(fwd.out, '[check] ');
     const handPairs = pairLinesOf(hand.out, '');
     const pairsTwice = runCli([...buildArgs(cutDir, join(cutDir, 'out-pairs-twice')), '--seam-pairs', '--seam-pairs']);
+    const fwdSameAsHand = withoutConfigRecord(Buffer.from(JSON.stringify(fwdFig ?? {})), join('check', 'check.json')).equals(Buffer.from(JSON.stringify(handFig ?? {}, null, 1)));
     say(
       'BU165_BUILD_SEAM_PAIRS_AND_CHECK_SEAM_PAIRS_ON_THE_SAME_RIG_READ_THE_SAME_SEAM_ROWS',
       fwd.status === 0 &&
@@ -21811,7 +21819,10 @@ function runBuildSuite(): number {
         Array.isArray(fwdRows) &&
         (fwdRows as unknown[]).length > 0 &&
         JSON.stringify(fwdRows) === JSON.stringify(handRows) &&
-        JSON.stringify(fwdFig) === JSON.stringify(handFig) &&
+        // Issue #607: build records its config and check alone reads none, so the build's record is set aside here.
+        fwdSameAsHand &&
+        handFig !== null &&
+        !('config' in handFig) &&
         fwdPairs.length === (fwdRows as unknown[]).length &&
         fwdPairs.join('\n') === handPairs.join('\n') &&
         sameFiles(join(fwdCheck, SEAM_DIR), join(byHand, SEAM_DIR)) &&
@@ -21824,7 +21835,7 @@ function runBuildSuite(): number {
         pairsTwice.status === 2 &&
         pairsTwice.out.includes('--seam-pairs is given twice') &&
         !existsSync(join(cutDir, 'out-pairs-twice')),
-      `build --seam-pairs: exit ${fwd.status}, ${Array.isArray(fwdRows) ? `${(fwdRows as unknown[]).length} seam row(s)` : 'no seam_pairs'}, ${fwdPairs.length} seam pair line(s); check --seam-pairs on its rig and parts: exit ${hand.status}, ${Array.isArray(handRows) ? `${(handRows as unknown[]).length} row(s)` : 'no seam_pairs'}, check.json ${JSON.stringify(fwdFig) === JSON.stringify(handFig) ? 'the same' : 'DIFFERENT'}, pair lines ${fwdPairs.join('\n') === handPairs.join('\n') ? 'the same' : 'DIFFERENT'}, ${SEAM_DIR}/ ${sameFiles(join(fwdCheck, SEAM_DIR), join(byHand, SEAM_DIR)) ? `${filesUnder(join(byHand, SEAM_DIR)).length} picture(s) byte-identical` : 'DIFFERENT or empty'}; ` +
+      `build --seam-pairs: exit ${fwd.status}, ${Array.isArray(fwdRows) ? `${(fwdRows as unknown[]).length} seam row(s)` : 'no seam_pairs'}, ${fwdPairs.length} seam pair line(s); check --seam-pairs on its rig and parts: exit ${hand.status}, ${Array.isArray(handRows) ? `${(handRows as unknown[]).length} row(s)` : 'no seam_pairs'}, check.json ${fwdSameAsHand ? 'the same but the build\'s config record' : 'DIFFERENT'} (config ${handFig !== null && 'config' in handFig ? 'WRITTEN by check' : 'absent from check'}), pair lines ${fwdPairs.join('\n') === handPairs.join('\n') ? 'the same' : 'DIFFERENT'}, ${SEAM_DIR}/ ${sameFiles(join(fwdCheck, SEAM_DIR), join(byHand, SEAM_DIR)) ? `${filesUnder(join(byHand, SEAM_DIR)).length} picture(s) byte-identical` : 'DIFFERENT or empty'}; ` +
         `the same build without it: exit ${cutPlain.status}, seam_pairs ${plainFig !== null && 'seam_pairs' in plainFig ? 'WRITTEN' : 'absent'}, ${SEAM_DIR}/ ${existsSync(join(plainCheck, SEAM_DIR)) ? 'WRITTEN' : 'absent'}, the rest of check.json ${JSON.stringify(fwdRest) === JSON.stringify(plainFig) ? 'the same' : 'DIFFERENT'}; given twice: exit ${pairsTwice.status}`,
       'issue #257: build dropped the flag, so a consumer who needed the pairs ran check a second time by hand and the artifact build reported was checked without them; forwarded, the check inside build is the check by hand, row for row and byte for byte, and without the flag build writes what it wrote before',
     );
@@ -22019,9 +22030,10 @@ function runBuildSuite(): number {
     const recRun = runCli([...buildArgs(dir, recOut, 'records.json'), '--loop']);
     const plantRun = runCli([...buildArgs(dir, plantOut, 'records-plant.json'), '--loop']);
     const hemRecRun = runCli(buildArgs(hemDir, hemRecOut, 'records.json'));
-    const recDiff = treeDiff(out, recOut);
-    const hemRecDiff = treeDiff(hemOut, hemRecOut);
-    const plantDiff = treeDiff(out, plantOut);
+    // Issue #607: each build records the config it read, so check.json's config record is set aside here (withoutConfigRecord).
+    const recDiff = treeDiff(out, recOut, withoutConfigRecord);
+    const hemRecDiff = treeDiff(hemOut, hemRecOut, withoutConfigRecord);
+    const plantDiff = treeDiff(out, plantOut, withoutConfigRecord);
     const recFiles = existsSync(recOut) ? filesUnder(recOut).length : 0;
     const hemRecFiles = existsSync(hemRecOut) ? filesUnder(hemRecOut).length : 0;
     say(
@@ -22143,8 +22155,9 @@ function runBuildSuite(): number {
       'issue #92 end to end: the constraint goes to rigc as written but its note and record, the scene target is declared detached from the bone it drives, rigc\'s gate passes both (RG60 shows A25 reading the declaration), and every line check reads stays green',
     );
 
-    const sameTree = treeDiff(notedOut, plainOut);
-    const halfTree = treeDiff(plainOut, halfOut);
+    // Issue #607: two config files, so each check.json names its own; the record is set aside (withoutConfigRecord).
+    const sameTree = treeDiff(notedOut, plainOut, withoutConfigRecord);
+    const halfTree = treeDiff(plainOut, halfOut, withoutConfigRecord);
     say(
       'BU14_A_RECORD_AND_A_NOTE_ON_A_CONSTRAINT_LEAVE_EVERY_FILE_THE_BUILD_WRITES_BYTE_IDENTICAL_AND_ONE_VALUE_DOES_NOT',
       plain.status === 0 && half.status === 0 && sameTree.length === 0 && halfTree.some((d) => d.startsWith('rig/rig.json')),
@@ -22224,7 +22237,9 @@ function runBuildSuite(): number {
     const configOut = join(dir, 'req-config');
     const byConfig = runIn(buildArgs(dir, configOut, declaring('config-reqs.json', 'reqs.json')));
     const recordOf = (out: string): Record<string, unknown> | null => ((readJsonFile(join(out, 'check', 'check.json'))?.requirements as Record<string, unknown> | undefined)?.file ?? null) as Record<string, unknown> | null;
-    const rebuildDiff = treeDiff(flagOut, configOut);
+    // Issue #607: the rebuild reads another config file (the one that declares the requirements), and check.json names
+    // the config each build read, so that record is set aside here; BU211 holds both records.
+    const rebuildDiff = treeDiff(flagOut, configOut, withoutConfigRecord);
     const flagRecord = recordOf(flagOut);
     const showRecord = (r: Record<string, unknown> | null): string => (r === null ? 'none' : `{path ${JSON.stringify(r.path)}, sha256 ${String(r.sha256).slice(0, 16)}, keys ${JSON.stringify(r.keys)}}`);
     say(
@@ -22273,6 +22288,63 @@ function runBuildSuite(): number {
         JSON.stringify(recordOf(sameOut)) === JSON.stringify(recordOf(configOut)),
       `the same file by its absolute path: exit ${same.status}, ${sameDiff.length === 0 ? 'every file byte-identical to the config-only build' : sameDiff.slice(0, 2).join('; ')}; a copy of its bytes: exit ${copy.status}, ${copyDiff.length === 0 ? 'byte-identical' : copyDiff.slice(0, 2).join('; ')}; record ${showRecord(recordOf(sameOut))}`,
       "issue #556, bar 2's other half: one file named twice is one input — the declaration is read and recorded, so a build given both writes what the config alone writes; the record names the file once",
+    );
+
+    // BU210–BU212 — issue #607: build records the config it read in check.json, beside #556's requirements record and
+    // in its shape: the path as --config was typed (never resolved) and the sha256 of the bytes the full loader parsed.
+    // The expected digests are sha256 of the fixture's own files, taken here; nothing is copied from a run.
+    const shaOf = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex');
+    const configSha = shaOf(join(dir, 'config.json'));
+    const configRecordOf = (out: string): Record<string, unknown> | null => (readJsonFile(join(out, 'check', 'check.json'))?.config ?? null) as Record<string, unknown> | null;
+    const namesFile = (r: Record<string, unknown> | null, typed: string, file: string): boolean => JSON.stringify(r) === JSON.stringify({ path: typed, sha256: shaOf(file) });
+    const keysOf = (out: string): string[] => Object.keys(readJsonFile(join(out, 'check', 'check.json')) ?? {});
+    const relOut = join(dir, 'config-relative');
+    const relArgs = buildArgs(dir, relOut);
+    relArgs[relArgs.indexOf('--config') + 1] = 'config.json';
+    const byRel = runIn(relArgs);
+    const relRecord = configRecordOf(relOut);
+    const showConfig = (r: Record<string, unknown> | null): string => (r === null ? 'none' : `{path ${JSON.stringify(r.path)}, sha256 ${String(r.sha256).slice(0, 16)}}`);
+    // The planted negative: the same record held to another file's bytes — the requirements file beside it, and a
+    // copy of the config one newline longer, which loads to the same config — must not match.
+    const longer = join(dir, 'config-longer.json');
+    writeFileSync(longer, `${readFileSync(join(dir, 'config.json'), 'utf8')}\n`);
+    const plantedOther = namesFile(relRecord, 'config.json', reqsPath);
+    const plantedLonger = namesFile(relRecord, 'config.json', longer);
+    say(
+      'BU210_BUILD_RECORDS_THE_CONFIG_IT_READ_AS_TYPED_WITH_THE_SHA256_OF_ITS_BYTES_AND_ANOTHER_FILE_S_DIGEST_DOES_NOT_MATCH',
+      byRel.status === 0 &&
+        namesFile(relRecord, 'config.json', join(dir, 'config.json')) &&
+        Object.keys(relRecord ?? {}).join(',') === 'path,sha256' &&
+        keysOf(relOut).slice(-2).join(',') === 'config,PASS' &&
+        !plantedOther &&
+        !plantedLonger,
+      `--config config.json typed relative to the run's directory: exit ${byRel.status}; check.json config ${showConfig(relRecord)} (the file's sha256 ${configSha.slice(0, 16)}), keys ending [${keysOf(relOut).slice(-2).join(', ')}]; planted, the record held to reqs.json's bytes: ${plantedOther ? 'MATCHES' : 'refused'}, to a copy one newline longer: ${plantedLonger ? 'MATCHES' : 'refused'}`,
+      "issue #607's bar: a consumer ties a build to its config by hash rather than by where the files sit, so the record is the argument as typed — a relative path stays relative, so the bytes do not move with the directory — and the digest of the bytes read, which a file of other bytes, even one that loads to the same config, does not match",
+    );
+
+    const flagConfig = configRecordOf(flagOut);
+    const declaringConfig = configRecordOf(configOut);
+    say(
+      'BU211_BESIDE_A_REQUIREMENTS_RECORD_THE_CONFIG_RECORD_COMES_FIRST_AND_EACH_BUILD_NAMES_ITS_OWN_CONFIG',
+      namesFile(flagConfig, join(dir, 'config.json'), join(dir, 'config.json')) &&
+        namesFile(declaringConfig, join(dir, 'config-reqs.json'), join(dir, 'config-reqs.json')) &&
+        keysOf(flagOut).slice(-3).join(',') === 'config,requirements,PASS' &&
+        keysOf(configOut).slice(-3).join(',') === 'config,requirements,PASS' &&
+        JSON.stringify(recordOf(flagOut)) === JSON.stringify({ path: 'reqs.json', sha256: reqsSha, keys: ['spec', 'fps', 'requirements'] }),
+      `BU178's flag build: config ${showConfig(flagConfig)}, keys ending [${keysOf(flagOut).slice(-3).join(', ')}], requirements.file ${showRecord(recordOf(flagOut))}; its rebuild from config-reqs.json: config ${showConfig(declaringConfig)}, keys ending [${keysOf(configOut).slice(-3).join(', ')}]`,
+      'issue #607: the record sits just before #556\'s requirements block, and #556\'s record keeps its path, digest and keys; two builds from two config files are tied each to its own (an absolute --config is recorded absolute, as typed), so BU178 sets this one record aside and compares every other byte',
+    );
+
+    const aloneOut = join(dir, 'config-check-alone');
+    const alone = runIn(['check', '--rig', join(relOut, 'rig'), '--parts', relOut, '--out', aloneOut]);
+    const aloneText = existsSync(join(aloneOut, 'check.json')) ? readFileSync(join(aloneOut, 'check.json')) : Buffer.from('');
+    const aloneFig = readJsonFile(join(aloneOut, 'check.json'));
+    const sameAsBuild = aloneText.length > 0 && withoutConfigRecord(readFileSync(join(relOut, 'check', 'check.json')), join('check', 'check.json')).equals(Buffer.from(JSON.stringify(JSON.parse(aloneText.toString('utf8')), null, 1)));
+    say(
+      'BU212_CHECK_ALONE_READS_NO_CONFIG_AND_WRITES_NO_CONFIG_RECORD_AND_OTHERWISE_THE_BUILD_S_CHECK_JSON',
+      alone.status === 0 && aloneFig !== null && !('config' in aloneFig) && sameAsBuild,
+      `check --rig <build>/rig --parts <build>: exit ${alone.status}; config ${aloneFig !== null && 'config' in aloneFig ? 'WRITTEN' : 'absent'}; against the build's check.json without its config record: ${sameAsBuild ? 'identical' : 'DIFFERS'}`,
+      'issue #607: check takes no --config, so it has none to record, as #556 records a requirements file only where one was read; the build adds the one key and moves nothing else in the file',
     );
 
     // Issue #95: build --idle-keys, on a two-bone ik over two keyed chain links. By hand, in rig px (y down):
@@ -24946,7 +25018,9 @@ function runChainSuite(): number | null {
       const exp = join(ex, 'expected');
       const out = join(dir, key);
       const inputs = join(ex, 'inputs');
-      const r = runCli(['build', '--config', join(ex, 'config.json'), '--source', join(inputs, 'painting.png'), '--full', join(inputs, 'layers', 'full'), '--head', join(inputs, 'layers', 'head'), '--out', out]);
+      // Issue #607: the config is typed relative to the run's directory, the repository root, so check.json's config
+      // record — the path as typed and the sha256 of its bytes — is the same on every machine and expected/ holds it.
+      const r = runCli(['build', '--config', relative(ROOT, join(ex, 'config.json')), '--source', join(inputs, 'painting.png'), '--full', join(inputs, 'layers', 'full'), '--head', join(inputs, 'layers', 'head'), '--out', out]);
       const tail = lastLines(r.out, 4);
       const stopped = r.out.split('\n').find((l) => l.startsWith('build: stopped at')) ?? null;
       const refusal = r.out.split('\n').filter((l) => /^\[[a-z]+\] {3}FAIL {2}/.test(l)).slice(0, 3);
@@ -30730,6 +30804,17 @@ function treeDiff(a: string, b: string, normalise: (bytes: Buffer, file: string)
     out.push(`${f}: differs from byte ${at} (${JSON.stringify(x.subarray(at, at + 24).toString('latin1'))} vs ${JSON.stringify(y.subarray(at, at + 24).toString('latin1'))})`);
   }
   return out;
+}
+
+/**
+ * A {@link treeDiff} normaliser for two builds from two config files (issue #607): `check/check.json`'s `config`
+ * record names the config each build read, by path and digest, so it differs by construction; every other byte of
+ * every file is compared. The record itself is held where it is the claim (BU210–BU212).
+ */
+function withoutConfigRecord(bytes: Buffer, file: string): Buffer {
+  if (file !== join('check', 'check.json')) return bytes;
+  const { config: _record, ...rest } = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
+  return Buffer.from(JSON.stringify(rest, null, 1));
 }
 
 /** A file's text, or "" when it is absent. */
@@ -38434,6 +38519,123 @@ function runInfluenceSuite(): number {
       good8 === null && clothAs({ ...decl, radius: 40 }) === null && out8.every((o) => o.ok),
       `the block: ${good8 === null ? 'loads' : codes(good8)}; with a radius: ${codes(clothAs({ ...decl, radius: 40 }))}; ${out8.map((o) => `${o.what} ${o.ok ? 'refused once' : `NOT: ${o.got}`}`).join('; ')}`,
       'issue #518: across, max and shape are the author\'s — #513 did not vary them, so propose does not choose them — and the cell is the lattice\'s own, so a cell declared here would be read by nothing',
+    );
+
+    // IF11 — issue #615: a recipe with `influence` and `split.hold_tip: true` drafts its parts with `hold_tip: true` and
+    // `max` raised to the lattice's smoothing cap (8), a declared max above it kept; the same recipe without hold_tip
+    // drafts what it drafted before, and every part another recipe meshes is the same with or without it.
+    const heldRecipe = (max: number): ReturnType<typeof clothRecipe> => {
+      const r = recipeWith(() => ({ ...decl, max })) as Record<string, Record<string, unknown>>;
+      r.bottomwear = { ...r.bottomwear, split: { ...(r.bottomwear.split as Record<string, unknown>), hold_tip: true } };
+      return r as ReturnType<typeof clothRecipe>;
+    };
+    const held11 = proposeWithBasis(P6, undefined, null, DEFAULT_GRID_RULE, heldRecipe(6)).proposal;
+    const above11 = proposeWithBasis(P6, undefined, null, DEFAULT_GRID_RULE, heldRecipe(10)).proposal;
+    const skirtInf = (pp: typeof held11): unknown => (pp.meshes.skirt as unknown as { influence?: unknown }).influence ?? null;
+    const others11 = Object.keys(drafted6.proposal.meshes).filter((k) => k !== 'skirt');
+    const want11 = { cell: fx.proposed.skirt.grid, radius: (skirtInf(drafted6.proposal) as { radius?: number } | null)?.radius, across: true, max: FORK_SMOOTH_MAX_INFLUENCES, shape: 'smooth', hold_tip: true };
+    say(
+      'IF11_A_HOLD_TIP_RECIPE_DRAFTS_HOLD_TIP_AND_MAX_EIGHT_ON_ITS_INFLUENCE_PARTS_AND_A_RECIPE_WITHOUT_IT_DRAFTS_AS_BEFORE',
+      JSON.stringify(skirtInf(held11)) === JSON.stringify(want11) &&
+        (skirtInf(above11) as { max?: number } | null)?.max === 10 &&
+        (skirtInf(above11) as { hold_tip?: boolean } | null)?.hold_tip === true &&
+        !JSON.stringify(skirtInf(drafted6.proposal)).includes('hold_tip') &&
+        (skirtInf(drafted6.proposal) as { max?: number } | null)?.max === 6 &&
+        others11.every((k) => JSON.stringify(held11.meshes[k]) === JSON.stringify(drafted6.proposal.meshes[k])),
+      `held: ${JSON.stringify(skirtInf(held11))}; declared max 10: ${JSON.stringify(skirtInf(above11))}; without hold_tip: ${JSON.stringify(skirtInf(drafted6.proposal))}; the other meshes (${others11.join(', ')}) ${others11.every((k) => JSON.stringify(held11.meshes[k]) === JSON.stringify(drafted6.proposal.meshes[k])) ? 'the same' : 'DIFFER'}`,
+      'issue #615 (HQ decision): the rig stage cannot see the recipe, so the draft writes what the recipe means on the mesh — hold_tip, and the max the smoothing needs (8, the lattice\'s cap; at 6 the smoothing does not close the gap) as the lattice\'s r is raised to its grid; a larger declared max is the author\'s, and nothing moves where the recipe does not opt in',
+    );
+
+    // IF12 — issue #615: the rig stage smooths a hold_tip influence mesh by the lattice's passes capped at the declared
+    // max, and only it. Read independently: the same config with hold_tip removed is the pull as rig-c computes it
+    // (IF03 holds that one to rig-c's own generator), and the held mesh must be exactly smoothForkShares of those
+    // shares over the same triangles at that cap — the cap read at 8 and at 7 — with every other attachment unchanged.
+    type Att = { triangles: number[]; weights: Array<Array<{ bone: string; x: number; y: number; weight: number }>> };
+    type RigSkins = { skins: { default: Record<string, Record<string, Att>> } };
+    const rig12 = (id: string, maxOf: number, held: boolean): { status: number; rig: RigSkins | null; row: (Row & { influence?: Record<string, unknown> }) | null } => {
+      const pp = JSON.parse(JSON.stringify(held11)) as typeof held11;
+      const inf = (pp.meshes.skirt as unknown as { influence: Record<string, unknown> }).influence;
+      inf.max = maxOf;
+      if (!held) delete inf.hold_tip;
+      const cfg = join(root, `if12-${id}.json`);
+      writeFileSync(cfg, JSON.stringify({ ...proposalConfig(CLOTH_PARTS, pp), constraints: pp.constraints ?? [] }));
+      const out = join(root, `rig-if12-${id}`);
+      const r = runCli(['rig', '--config', cfg, '--parts', fx.parts, '--out', out]);
+      return { status: r.status, rig: r.status === 0 ? (JSON.parse(readFileSync(join(out, 'rig.json'), 'utf8')) as RigSkins) : null, row: r.status === 0 ? (rowsOf(out).find((x) => x.part === 'skirt') ?? null) : null };
+    };
+    const shares12 = (a: Att): Array<Array<{ bone: string; weight: number }>> => a.weights.map((v) => v.map((e) => ({ bone: e.bone, weight: e.weight })));
+    const reads12 = [8, 7].map((cap) => {
+      const h = rig12(`held${cap}`, cap, true);
+      const u = rig12(`plain${cap}`, cap, false);
+      const ha = h.rig?.skins.default.skirt?.skirt;
+      const ua = u.rig?.skins.default.skirt?.skirt;
+      const expect = ua === undefined ? null : smoothForkShares(shares12(ua), ua.triangles, cap);
+      const exact = ha !== undefined && expect !== null && JSON.stringify(shares12(ha)) === JSON.stringify(expect);
+      const moved = ha !== undefined && ua !== undefined && JSON.stringify(shares12(ha)) !== JSON.stringify(shares12(ua));
+      const widest = ha === undefined ? NaN : Math.max(...ha.weights.map((v) => v.length));
+      const rest = h.rig !== null && u.rig !== null && Object.keys(h.rig.skins.default).filter((k) => k !== 'skirt').every((k) => JSON.stringify(h.rig?.skins.default[k]) === JSON.stringify(u.rig?.skins.default[k]));
+      const echo = h.row?.influence?.hold_tip === true && u.row !== null && u.row.influence !== undefined && !('hold_tip' in u.row.influence);
+      return { cap, ok: h.status === 0 && u.status === 0 && exact && moved && widest <= cap && h.row?.max_influences === widest && rest && echo, exact, moved, widest, rest, echo, status: `${h.status}/${u.status}` };
+    });
+    say(
+      'IF12_A_HOLD_TIP_INFLUENCE_MESH_IS_THE_PULL_SMOOTHED_BY_THE_HELD_FORK_PASSES_CAPPED_AT_ITS_MAX_AND_WITHOUT_IT_IS_THE_PULL',
+      reads12.every((r) => r.ok) && JSON.stringify(smoothForkShares([[{ bone: 'a', weight: 1 }], [{ bone: 'b', weight: 1 }], [{ bone: 'c', weight: 1 }]], [0, 1, 2])) === JSON.stringify(smoothForkShares([[{ bone: 'a', weight: 1 }], [{ bone: 'b', weight: 1 }], [{ bone: 'c', weight: 1 }]], [0, 1, 2], FORK_SMOOTH_MAX_INFLUENCES)),
+      reads12.map((r) => `max ${r.cap}: exit ${r.status}, held = smoothForkShares(pull, triangles, ${r.cap}) exactly ${r.exact}, smoothing seen ${r.moved}, widest vertex ${r.widest} bone(s), other attachments unchanged ${r.rest}, mesh_report echoes hold_tip only when declared ${r.echo}`).join('; '),
+      'issue #615 (HQ decision): the smoothing is the lattice\'s own function, capped at the declared max so no vertex exceeds the config, and it runs on the field alone — a mesh without hold_tip (a split skirt included, which the lattice\'s fork test alone would smooth) keeps rig-c\'s pull byte for byte; the lattice\'s call passes no cap and keeps its 8',
+    );
+
+    // IF13 — issue #615 bar 2: the fixture skirt drafted under hold_tip folds no more than its hold_tip lattice under
+    // IF04's 60-degree hip sway with the physics on, where the draft before #615 (max 6, no hold_tip) folds more. The
+    // same mesh at max 8 with hold_tip removed is read and printed, not held: on this skirt it reads as the lattice too.
+    const sway13 = (id: string, cfgObj: Record<string, unknown>): number | null => {
+      const cfg = join(root, `if13-${id}.json`);
+      writeFileSync(cfg, JSON.stringify(cfgObj));
+      const out = join(root, `rig-if13-${id}`);
+      if (runCli(['rig', '--config', cfg, '--parts', fx.parts, '--out', out]).status !== 0) return null;
+      const m = JSON.parse(readFileSync(join(out, 'motion.json'), 'utf8')) as { animations?: Record<string, unknown> };
+      m.animations = { ...(m.animations ?? {}), sway: { duration: 4, tracks: [{ bone: 'hip', property: 'rotate', keys: Array.from({ length: 49 }, (_, i) => ({ t: pyRound(i / 12, 6), v: [pyRound(60 * Math.sin((2 * Math.PI * i) / 24), 4)] })) }] } };
+      writeFileSync(join(out, 'motion.json'), JSON.stringify(m));
+      return influenceFolds(out, join(root, `f13-${id}`), 'sway', null).get('skirt')?.frames ?? null;
+    };
+    const heldLattice = (() => {
+      const r = clothRecipe() as Record<string, Record<string, unknown>>;
+      r.bottomwear = { ...r.bottomwear, split: { ...(r.bottomwear.split as Record<string, unknown>), hold_tip: true } };
+      return proposeWithBasis(P6, undefined, null, DEFAULT_GRID_RULE, r as ReturnType<typeof clothRecipe>).proposal;
+    })();
+    const unheld = (max: number): typeof held11 => {
+      const pp = JSON.parse(JSON.stringify(held11)) as typeof held11;
+      const inf = (pp.meshes.skirt as unknown as { influence: Record<string, unknown> }).influence;
+      delete inf.hold_tip;
+      inf.max = max;
+      return pp;
+    };
+    const unsmoothed = unheld(FORK_SMOOTH_MAX_INFLUENCES);
+    const before13 = unheld(6);
+    const f13 = {
+      lattice: sway13('lattice', { ...proposalConfig(CLOTH_PARTS, heldLattice), constraints: heldLattice.constraints ?? [] }),
+      held: sway13('held', { ...proposalConfig(CLOTH_PARTS, held11), constraints: held11.constraints ?? [] }),
+      unsmoothed: sway13('unsmoothed', { ...proposalConfig(CLOTH_PARTS, unsmoothed), constraints: unsmoothed.constraints ?? [] }),
+      before: sway13('before', { ...proposalConfig(CLOTH_PARTS, before13), constraints: before13.constraints ?? [] }),
+    };
+    say(
+      'IF13_UNDER_HOLD_TIP_THE_INFLUENCE_SKIRT_FOLDS_NO_MORE_THAN_ITS_LATTICE_WHERE_THE_DRAFT_BEFORE_IT_FOLDS_MORE',
+      f13.lattice !== null && f13.held !== null && f13.unsmoothed !== null && f13.before !== null && f13.held <= f13.lattice && f13.before > f13.lattice,
+      `skirt folded frames at a 60-degree hip sway, 30 fps, physics on: lattice under hold_tip ${f13.lattice ?? 'not built'}; influence drafted under hold_tip (max 8, smoothed) ${f13.held ?? 'not built'}; the draft before #615 (max 6, not smoothed) ${f13.before ?? 'not built'}; read, not held: max 8 with hold_tip removed ${f13.unsmoothed ?? 'not built'}`,
+      'issue #615 bar 2: the stimulus folds the draft as it was before the field, so the reading is not blind; which half of the decision closes the gap is not this control\'s to hold — the max raised alone reads as the lattice here, and IF12 holds the smoothing itself',
+    );
+
+    // IF14 — issue #615: the loader takes `hold_tip: true` and refuses any other value by name, once.
+    const holdAs = (v: unknown): PartsError | null => robeAs({ influence: { cell: 8, radius: 20, across: true, max: 4, shape: 'linear', hold_tip: v }, segments: ['chest', 'hem'] });
+    const planted14: Array<[string, unknown]> = [['false', false], ['a string', 'yes'], ['a number', 1], ['null', null]];
+    const out14 = planted14.map(([what, v]) => {
+      const e = holdAs(v);
+      return { what, ok: e !== null && e.problems.length === 1 && e.problems[0].code === 'CONFIG_FIELD_TYPE' && e.problems[0].object === 'config.meshes.robe.influence.hold_tip', got: codes(e) };
+    });
+    say(
+      'IF14_THE_INFLUENCE_BLOCK_TAKES_HOLD_TIP_TRUE_AND_REFUSES_ANY_OTHER_VALUE_ONCE_BY_NAME',
+      holdAs(true) === null && out14.every((o) => o.ok),
+      `hold_tip true: ${holdAs(true) === null ? 'loads' : codes(holdAs(true))}; ${out14.map((o) => `${o.what} ${o.ok ? 'refused once' : `NOT: ${o.got}`}`).join('; ')}`,
+      'issue #615: true is the one spelling — absent leaves rig-c\'s pull, so false would be a second spelling of absent whose mesh_report echo differs from the bytes written before the field existed',
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
