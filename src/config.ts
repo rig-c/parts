@@ -931,7 +931,14 @@ export interface LimbSplit {
 export interface Limb {
   segments: LimbSegment[];
   split?: LimbSplit;
+  /** Explicit rig-stage adjacency; absent, the existing limb closure is unchanged. */
+  layout?: LimbLayout;
 }
+
+export type LimbLayoutTarget = { limb: string; part?: never } | { part: string; limb?: never };
+export type LimbLayout = { parts?: string[] } & (
+  { before: LimbLayoutTarget; after?: never } | { after: LimbLayoutTarget; before?: never }
+);
 
 export interface CharacterConfig {
   key: string;
@@ -1791,7 +1798,7 @@ export function parseProposalSections(raw: Json): SkeletonSections & { limbs?: R
       const taken = isPlainObject(top.limbs)
         ? Object.values(top.limbs).flatMap((l) => (isPlainObject(l) && Array.isArray(l.segments) ? l.segments.flatMap((sg) => (isPlainObject(sg) && typeof sg.from === 'string' ? [sg.from] : [])) : []))
         : [];
-      checkLimbs(c, top.limbs, { parts: [...new Set(taken)], patches: [], cuts: [] }, names);
+      checkLimbs(c, top.limbs, { parts: [...new Set(taken)], patches: [], cuts: [] }, names, false);
     }
     if ('meshes' in top) checkMeshes(c, top.meshes, names.bones, names.chains);
     if ('regions' in top) checkRegions(c, top.regions, names.bones);
@@ -2969,7 +2976,7 @@ interface LimbNames {
  * has two segments or more. With `names` null (no `bones`), bones are not
  * resolved. Returns the limb parts and the parts the limbs take.
  */
-function checkLimbs(c: Check, v: Json, made: { parts: string[]; patches: string[]; cuts: string[] }, names: { bones: Set<string>; parents: Map<string, string> } | null): LimbNames {
+function checkLimbs(c: Check, v: Json, made: { parts: string[]; patches: string[]; cuts: string[] }, names: { bones: Set<string>; parents: Map<string, string> } | null, resolveLayoutParts = true): LimbNames {
   const out: LimbNames = { parts: new Map(), consumed: new Map(), chains: new Map() };
   if (!isPlainObject(v)) {
     c.fail('CONFIG_FIELD_TYPE', 'config.limbs', `is ${show(v)}; an object of limb name -> {"segments": [...]} is required`);
@@ -2981,7 +2988,7 @@ function checkLimbs(c: Check, v: Json, made: { parts: string[]; patches: string[
   const splitLimbs: string[] = [];
   for (const [limb, spec] of Object.entries(v)) {
     const at = `config.limbs.${limb}`;
-    const o = c.object(at, spec, ['segments'], ['split']);
+    const o = c.object(at, spec, ['segments'], ['split', 'layout']);
     if (o === null) continue;
     if ('split' in o) {
       const sp = c.object(`${at}.split`, o.split, [], ['line', 'edge']);
@@ -3119,7 +3126,44 @@ function checkLimbs(c: Check, v: Json, made: { parts: string[]; patches: string[
       }
     }
   }
+  checkLimbLayouts(c, v, made, out, resolveLayoutParts);
   return out;
+}
+
+/** Validate after every limb is known; a declaration may refer forward by name. */
+function checkLimbLayouts(c: Check, limbs: Record<string, Json>, made: { parts: string[]; patches: string[]; cuts: string[] }, names: LimbNames, resolveParts: boolean): void {
+  const produced = new Set([...made.parts, ...made.patches, ...made.cuts].filter((n) => !names.consumed.has(n)));
+  for (const n of names.parts.keys()) produced.add(n);
+  for (const [limb, raw] of Object.entries(limbs)) {
+    if (!isPlainObject(raw) || !('layout' in raw)) continue;
+    const at = `config.limbs.${limb}.layout`;
+    const l = c.object(at, raw.layout, [], ['before', 'after', 'parts']);
+    if (l === null) continue;
+    const sides = ['before', 'after'].filter((s) => s in l);
+    if (sides.length !== 1) c.fail('CONFIG_LAYOUT_TARGET', at, 'exactly one of before or after is required; it means immediate setup-slot adjacency');
+    for (const side of sides) {
+      const t = c.object(`${at}.${side}`, l[side], [], ['limb', 'part']);
+      if (t === null) continue;
+      const keys = ['limb', 'part'].filter((k) => k in t);
+      if (keys.length !== 1) { c.fail('CONFIG_LAYOUT_TARGET', `${at}.${side}`, 'exactly one typed target, {limb: name} or {part: name}, is required'); continue; }
+      const k = keys[0], n = t[k];
+      if (!c.string(`${at}.${side}.${k}`, n)) continue;
+      if (k === 'limb' ? !Object.hasOwn(limbs, n) : resolveParts && !produced.has(n)) {
+        const consumed = names.consumed.get(n);
+        c.fail('CONFIG_LAYOUT_NAME', `${at}.${side}.${k}`, `names "${n}"; ${k === 'limb' ? `a declared limb (${Object.keys(limbs).join(', ')})` : `a produced part (${[...produced].join(', ')})`} is required${consumed === undefined ? '' : `; "${n}" is consumed by limb "${consumed}" into ${names.chains.get(consumed)?.parts.join(', ')}`}`);
+      }
+    }
+    if (!('parts' in l)) continue;
+    const own = names.chains.get(limb)?.parts ?? [];
+    if (!Array.isArray(l.parts) || l.parts.length === 0 || !l.parts.every((p) => typeof p === 'string' && own.includes(p))) {
+      c.fail('CONFIG_LAYOUT_SCOPE', `${at}.parts`, `is ${show(l.parts)}; a nonempty list of this limb's source-bound segment parts (${own.join(', ')}) is required; rider names are not selectors`);
+      continue;
+    }
+    const positions = l.parts.map((p) => own.indexOf(p as string)).sort((a, b) => a - b);
+    if (new Set(positions).size !== positions.length || positions.some((p, i) => i > 0 && p !== positions[i - 1] + 1)) {
+      c.fail('CONFIG_LAYOUT_SCOPE', `${at}.parts`, `is ${show(l.parts)}; distinct consecutive segment-part references in ${own.join(', ')} are required`);
+    }
+  }
 }
 
 /**

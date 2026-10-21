@@ -558,6 +558,59 @@ whose pixels overlap them, so setup RGBA equality must be measured on the author
 input. Public generated setup comparisons are evidence for those inputs, not a
 universal promise that all art keeps its compositing order.
 
+**Explicit adjacency** (issue #647) is optional and takes effect at **rig time**,
+after every base and alternate attachment has been built. For example, on an
+existing limb named `unit_a`:
+
+```json
+"layout": { "before": { "limb": "unit_b" } }
+```
+
+Exactly one of `before` and `after` is required, and its target names exactly one
+`limb` or produced `part`. It means immediately adjacent in setup slot order, with
+the subject block before or after the stationary target block. It does not name
+an anatomical role or request a pose depth policy. A consumed source layer is not
+a produced part: name the emitted segment part instead.
+
+Without `parts`, the subject is its whole exclusive limb block, including its
+inherited riders. To move only a source-bound segment scope, write, for example:
+
+```json
+"layout": { "parts": ["piece_a_lower"], "after": { "part": "panel" } }
+```
+
+`parts` is a nonempty list of this limb's own **consecutive segment-part names**,
+not numeric indices or rider names. List order does not reorder the art. Inherited
+riders move only when every base/alternate binding belongs entirely to the selected
+segment boundaries. A rider spanning selected and unselected boundaries stays
+unforced, as does mixed ownership across limbs. Partial layout explicitly overrides
+whole-limb closure for that scope: it never drags an unselected upper segment along
+with the selected lower one. A target limb is its whole exclusive block; a target
+part uses its actual generated slot family, including a still piece, without
+suffix matching. A requested segment or target with mixed bindings is refused.
+
+Only disjoint placements are supported. Self, reciprocal, chained/shared-slot,
+and pair/part conflicts name both declaration paths and the shared slot; no
+constraint solver chooses a winner. Internal block order and all unselected
+slots' mutual order are stable. Declaring placement may change visible occlusion;
+assembly's part/PNG/recomposite order and every setup seam bar remain unchanged,
+so check can still refuse a setup whose occlusion differs from its authored stack.
+
+A declared layout writes **`layout.json`**, `spec: "rig-parts-layout/1"`, beside
+`rig.json` and optional `sets.json`. The companion records the SHA-256 of those
+**exact final accepted bytes**, final `setup_slots`, and deterministic `placements`
+with `limb`, selected segment `parts`, authored `before`/`after`, resolved `slots`
+and `target_slots`. It is never a new core RigSpec field or a fictitious alternate
+set. Replayed candidates re-resolve closure before their gate. All metadata checks
+precede output; only a successful green undeclared `rig` removes its stale owned
+companion. With no layout declaration, output and log bytes retain the preceding
+limb-closure path and no companion is emitted.
+
+Producer adjacency is **not consumer motion acceptance**. Pose 0.42 does not read
+this companion. Pose issue #346 owns its actual reader and explicit depth-source
+mapping, including a refusal when a part/scope has no supported depth source. Do
+not infer it from names, parents, weights, an ordinal or a zero-depth fallback.
+
 `propose --keypoints` drafts the block from the body-18 joints (§3, *A posed figure*): an arm
 whose shoulder, elbow and wrist are given is `arm_<s>`, `upperarm_<s>` on `sleeve_<s>0` and
 `forearm_<s>` on `sleeve_<s>1`, cut at `elbow`; a leg whose hip, knee and ankle are given is
@@ -3359,6 +3412,12 @@ says why each requirement exists and what breaks without it.
 | <a id="RIG_KEY_FRAME_UNTURNED"></a>`RIG_KEY_FRAME_UNTURNED` | a `translate` key on a bone whose parent is a chain link turned along its chain, or a `scale`/`shear` key (a track, or the blink's `eyes`/`brows` group) on a turned link: the key would act along the link's axis, not the picture's; the detail names the track, the bone and the turn | key the chain's own parent, or key `rotate`; a link whose turn is 0 (a level chain) keeps every key |
 | <a id="RIG_BLINK_INSIDE_IDLE"></a>`RIG_BLINK_INSIDE_IDLE` | the blink runs outside the idle | `motion.blink.t` |
 | <a id="RIG_BLINK_HOLD_SPANS_A_FRAME"></a>`RIG_BLINK_HOLD_SPANS_A_FRAME` | the tree's `BLINK.hold` is shorter than one frame at `IDLE_FPS`, so for some `motion.blink.t` no idle frame — and no frame of the loop — shows the closed eye; the detail counts the phases that miss and names the first | nothing in the config: `BLINK.hold` in `src/motion.ts`, at least `1/IDLE_FPS` s (§3) |
+| <a id="CONFIG_LAYOUT_TARGET"></a>`CONFIG_LAYOUT_TARGET` | `config.limbs.<name>.layout` declares both or neither `before`/`after`, or a target declares both or neither `limb`/`part` | write one immediate placement side and one typed named target |
+| <a id="CONFIG_LAYOUT_NAME"></a>`CONFIG_LAYOUT_NAME` | a layout names no declared target limb or produced part; a consumed source layer is not an emitted part | use the declared limb or produced segment/part names printed in the detail |
+| <a id="CONFIG_LAYOUT_SCOPE"></a>`CONFIG_LAYOUT_SCOPE` | layout `parts` is empty, duplicated, nonconsecutive, foreign, or names a rider instead of an own source-bound segment part | select distinct consecutive own segment-part references; inherited riders are proven separately |
+| <a id="RIG_LAYOUT_NONEXCLUSIVE"></a>`RIG_LAYOUT_NONEXCLUSIVE` | a requested segment family/target, or an accepted replay's bindings, span owners or leave the selected segment scope across base/alternate attachments | correct the named bindings or scope; mixed ownership is never forced and no stale proof is emitted |
+| <a id="RIG_LAYOUT_UNREPRESENTABLE"></a>`RIG_LAYOUT_UNREPRESENTABLE` | the named slot family is absent, a target is not contiguous, the accepted slot population/adjacency changed, or final rig text is stale | use an emitted contiguous target and the exact final accepted source; unrelated slots are not absorbed |
+| <a id="RIG_LAYOUT_CONFLICT"></a>`RIG_LAYOUT_CONFLICT` | layout declarations share a slot, target themselves, or form a reciprocal/chained pair; both field paths are printed | declare one disjoint pair, with each participating slot in only that placement |
 | <a id="RIG_STILL_ROW_INSIDE_PART"></a><a id="RIG_STILL_ROW_CLEAR"></a><a id="RIG_STILL_PIECES_HAVE_ART"></a><a id="RIG_STILL_NAME_FREE"></a>`RIG_STILL_ROW_INSIDE_PART`, `RIG_STILL_ROW_CLEAR`, `RIG_STILL_PIECES_HAVE_ART`, `RIG_STILL_NAME_FREE` | a `motion.blink.still` row that is not strictly inside the part, that crosses art (a cut through art changes the render even at rest), that leaves one piece with no art, or whose `<part>_still` slot name another part already has | that entry's `row` — a row with no art between the crease and the lash line — or rename the other part |
 | <a id="RIG_SET_COVERS_BONE"></a>`RIG_SET_COVERS_BONE` | `assemble.alternates[i].drawn.<bone>` (issue #476): a subset set in `parts.json` `alternates` (`parts` present) states a `drawn` world angle for a bone none of its covered slots ride; the detail names the bone, the set, and the covered bones | remove the uncovered bone from that set's `drawn`, or add the part that rides it to `parts` |
 | <a id="RIG_INFLUENCE_REACH"></a>`RIG_INFLUENCE_REACH` | an influence mesh's `radius` is at or under the distance from its farthest lattice vertex to that vertex's nearest link (issue #378): a link pulls only when it is nearer than `radius`, so that vertex would be pulled by none. The vertex, where it is and the distance are named | a `radius` above the distance named, or a segment nearer that part of the art |

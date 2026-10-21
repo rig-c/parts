@@ -130,7 +130,9 @@ part name, `[i]` an entry of a list):
 - **assemble.patches[i].draw**, when an object — required: `before`
 - **assemble.cuts[i]** — required: `from`, `into`, `polygon`, `draw`, `overlap`; optional: `under`, `under_fill`
 - **assemble.cuts[i].draw**, when an object — required: `before`
-- **limbs.&lt;limb&gt;** — required: `segments` (issue #349)
+- **limbs.&lt;limb&gt;** — required: `segments`; optional: `split`, `layout` (issues #349, #446, #647)
+- **limbs.&lt;limb&gt;.layout** — exactly one of `before`, `after`; optional: `parts` (own consecutive segment-part references, issue #647)
+- **limbs.&lt;limb&gt;.layout.before**, **limbs.&lt;limb&gt;.layout.after** — exactly one typed target: `limb` or `part`
 - **limbs.&lt;limb&gt;.segments[i]** — required: `part`, `from`, `bone`; required below a joint (i > 0): `joint`; optional below a joint: `range`, `cap`, `edge`, `cap_shape`, `cut_band`
 - **bones[i]**, a single bone — required: `name`, `parent`, `at`; optional: `tip`, `inherit`
 - **bones[i]**, a chain — required: `chain`, `parent`, `points`, `tip`; optional: `link_inherit`
