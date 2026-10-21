@@ -370,7 +370,17 @@ the larger of the x and y gaps, every joint of those limbs and the origins of
 `hip`, `chest` and `neck` — and, when both legs are drafted, whose art breaks on the
 line from `r_knee` to `l_knee` and on the line from `r_ankle` to `l_ankle` (the
 reading `PAINTING_LEGS_APART` makes): a robe over both legs is one column there,
-and would be split into legs it does not have. The arms are the sleeve chains and
+and would be split into legs it does not have. Within 15 px is not on the art: each
+cut the draft makes on the layer — the trunk's at `chest` and `neck`, each arm's at
+its elbow, each leg's at its knee — must lie on that limb's own art within 1 px
+along its joint line, read by assemble's own test (the run `ASSEMBLE_LIMB_JOINT_ON_ART`
+refuses a cut without, each pixel the limb's whose bones pass nearest it), or the
+draft is a config assemble refuses (issue #629, selftest `PR560`). A part a cloth
+recipe names (`config.cloth.<tag>.part` or `.parts`) is no candidate either: it
+keeps the recipe's mesh — a limb takes every pixel of its part, so cut into limbs
+the recipe's trees would move no artwork — and a note names it and the recipe;
+when it is the only part that holds the joints, `PROPOSE_FIGURE_LAYER` refuses it by
+name (issue #631, `PR561`). The arms are the sleeve chains and
 `arm_<s>` limbs and the legs the `leg_<s>` chains and limbs above, on that part,
 and the trunk is a limb of its own, `trunk` — `trunk_hip` on `hip`, `trunk_chest`
 on `chest` below the joint at chest's origin, `trunk_neck` on `neck` past the
@@ -387,7 +397,8 @@ Two topwear parts that both hold everything are decided by their opaque px in th
 31x31 squares about those points (the square the 15 px tolerance reads), and the
 note adds both counts; a tie is refused, `PROPOSE_FIGURE_LAYER`. A topwear part that
 misses one gets no limb, keeps the topwear rule, and a `figure layer: …` note names
-the first point it misses or the line on which its legs are one column. With no
+the first point it misses, the line on which its legs are one column, or the cut
+whose joint line misses its art, with the nearest pixel on that line and how far. With no
 topwear part over 500 px nothing is said and nothing moves. A garment figure whose
 tags carry its limbs is drafted byte for byte as before: the public examples'
 proposals are unchanged. The fixture is `fixtures/mannequin.ts`: one `topwear`
@@ -3238,7 +3249,7 @@ says why each requirement exists and what breaks without it.
 | <a id="PROPOSE_FACE_PRESENT"></a>`PROPOSE_FACE_PRESENT` | no part comes from a `face` layer, and the face-less fallback cannot derive a face box either: it needs the head run's `neck` and at least one head-run `front hair`/`back hair` part whose top is above the neck's, and the message names the half that is missing. With both, `propose` does not refuse — it derives the box and says so in its first note (§5) | `assemble.plan`: take the face, or the head run's hair and neck |
 | <a id="PROPOSE_CUT_FROM_RECORDED"></a>`PROPOSE_CUT_FROM_RECORDED` | two parts share one layer and none of them records `cut_from`: a `parts.json` an `assemble` before 1.6.0 wrote with `assemble.cuts`. The records are in draw order, so which is the plan part and which the piece cannot be read off the file; the message names the parts and the layer. Every other reader still takes the file | `--parts`: re-run assemble (1.6.0+) to record `cut_from` |
 | <a id="PROPOSE_LIMB_PARTS"></a>`PROPOSE_LIMB_PARTS` | `parts.json` holds a standalone or incomplete limb part `config.limbs` cut at its joints (issues #349, #440) that cannot be reassembled into the source part `of` (a missing segment or `cap` record, or `of` still present beside the limb parts); a complete `assemble` output with `config.limbs` reconstructs its pre-limb parts in the same run | `--parts` a complete `assemble` output (every segment of each limb, with its `cap` record) or a build assembled with `config.limbs` left out; `propose --from-config` reads the config's bones on either build |
-| <a id="PROPOSE_FIGURE_LAYER"></a>`PROPOSE_FIGURE_LAYER` | with `--keypoints` (issue #577): a limb is drafted from the figure layer (no handwear or legwear part over 500 px for it), and two or more `topwear` parts each hold every joint and the trunk bones' origins within 15 px with the same opaque px in the 31x31 squares about them, so nothing says which is the figure (§3, *A figure of one material*) | leave the others out of `assemble.plan`, or give the arms and legs their own handwear and legwear layers |
+| <a id="PROPOSE_FIGURE_LAYER"></a>`PROPOSE_FIGURE_LAYER` | with `--keypoints` (issue #577): a limb is drafted from the figure layer (no handwear or legwear part over 500 px for it), and two or more `topwear` parts each hold every joint and the trunk bones' origins within 15 px with the same opaque px in the 31x31 squares about them, so nothing says which is the figure; or the only `topwear` parts that hold them are named by a cloth recipe (`config.cloth.<tag>.part` or `.parts`, issue #631), whose mesh a limb would take (§3, *A figure of one material*) | leave the others out of `assemble.plan`, or give the arms and legs their own handwear and legwear layers; for a recipe's part, take it out of the recipe |
 | <a id="PROPOSE_CLOTH_DRAFTED"></a>`PROPOSE_CLOTH_DRAFTED` | with `--cloth` (issue #364): the config's `cloth` block holds a recipe for a tag the proposer drafts no chain on — no part has that tag, or every `back hair` part ends above the shoulders (a bun bone, no chain). A `bottomwear` recipe with no `bottomwear` part names every `topwear` part shaped like a skirt (issue #402) | leave that recipe out, or assemble the layer it is for, or declare the named part in `cloth.bottomwear.part` |
 | <a id="PROPOSE_CLOTH_PART"></a>`PROPOSE_CLOTH_PART` | with `--cloth` (issues #402, #437): `cloth.bottomwear.part` (a string) names no part, a part or cut piece whose source is not `topwear` (a `bottomwear` part takes the recipe by its tag already), or a target whose box ends above the hip + 0.25 face heights, the topwear rule's waist line; or `cloth.<tag>.parts` (or `part` as a list, issue #437) names a part not in `parts.json`, a part no link of the drafted tree crosses (`spanCrosses == 0`), or parts out of root-to-tip depth order along the chain | name the `topwear` part or its cut skirt piece that holds the skirt (or leave `part` out), or list only parts in `parts.json` that the drafted tree links cross in root-to-tip order |
 | <a id="PROPOSE_WRITE_CONFIG_FRESH"></a>`PROPOSE_WRITE_CONFIG_FRESH` | with `--write-config` (issue #537): the out path exists, or is a file the run writes itself (`proposal.json`, `basis.json` under `--out`); the config is written to a new file, never over the `--cloth` config or an earlier one | name a file that does not exist yet, beside the `--cloth` config |
@@ -3327,6 +3338,9 @@ exits 0, and `mesh_draft.json` and the console name the reading and the amount.
 | <a id="REMESH_DELTA_OP"></a>`REMESH_DELTA_OP` | one op, named `ops[i]` and quoted, does not apply at its place in the replay: an unknown kind, a non-finite number, an id out of range or already removed, a `from` that is not the live position within 0.001 px, a position outside the part's image, a split of an edge the producer's triangulation does not hold or outside its triangles, a free `add` outside every triangle, a move that folds its ring, a removal that leaves fewer than 3 vertices, ends a constraint or leaves a ring no ear clips, an `edge` that duplicates a constraint, is a hull edge, runs through a vertex or crosses the hull or a constraint, or an `unedge` of any edge this edit did not constrain | read the op the line names; an edge the producer flipped is not one review can unedge — redraw it with `edge`, or move the vertices |
 | <a id="REMESH_DELTA_TOPOLOGY"></a>`REMESH_DELTA_TOPOLOGY` | the replayed mesh breaks an outline rule (`contourTopologyProblems`' code quoted: one loop, the hull first, every triangle wound one way, no self-intersection, no coincident vertices), or holds more interior edges that are not locally Delaunay than the input did; or the input's own triangles are not wound one way | read the quoted code; the ops that made it are the edit's last ones |
 | <a id="REMESH_BONE_ORDER"></a>`REMESH_BONE_ORDER` | a bone of the input names a parent that is not declared before it — later in `bones` (`bones[i]` named), or nowhere once rig-c has expanded the rig's `stops` (issue #613). The delta's positions are read through the setup frames, which rig-c poses parents first, as rigc's rig reader resolves them (`CE_RIG_BONE_PARENT_ORDER`); the bones are not sorted into an order rigc would not load. rigc's gate over the input refuses such a rig first, so the line means rigc and its library read the bones apart | a defect between this package and rigc: report it with the line |
+| <a id="REMESH_INPUT_CHECK_FILE"></a>`REMESH_INPUT_CHECK_FILE` | `--input-check` names no file, a file that does not parse, one whose `spec` is not `rig-parts-input-check/1`, or one whose `versions`, `options`, `rig`, `parts` or `check` is not of the record's shape (issue #617); read before anything is built, nothing written | pass the `input-check.json` a `--record-input-check` run wrote |
+| <a id="REMESH_INPUT_CHECK_BOUND"></a>`REMESH_INPUT_CHECK_BOUND` | a row of the `--input-check` record is not this run's (issue #617): a file under `--rig` or `--parts` (`parts.json`, `parts/`) added, missing or of other bytes, the rig or parts directory, the requirements file (absent, present, or of another path or bytes), `--page-edges`, `--pack-shape`, this package's version or `rigc --version`'s output; the row, the value recorded and the value required are named. The record is a check of another input, so it is not reused; nothing was built or written | run once with `--record-input-check` over this input, or leave `--input-check` off to measure the input again |
+| <a id="REMESH_INPUT_CHECK_MOVED"></a>`REMESH_INPUT_CHECK_MOVED` | under `--record-input-check`, a file under `--rig` or `--parts` (or the requirements file) is not the same bytes after check-input read it as when the input was first hashed; the file and both digests are named. The check may have measured bytes the record's rows do not name, so neither the record nor the revision is written | leave the input alone while the run measures it, and run again |
 | <a id="REMESH_BONES_POSED"></a>`REMESH_BONES_POSED` | rig-c cannot pose the input's bones at the setup pose — its expansion of the rig's `stops`, or its evaluation of the bones (a bone `inherit` the runtime resolves to no mode), refuses with the sentence quoted; nothing was written | read rig-c's sentence; rigc's gate over the input passed, so report it with the line |
 
 A remesh changes one part's mesh and nothing else: every file of the input but
@@ -3345,6 +3359,27 @@ figures, every other block its own `status`: `PASS`, `FAIL`, `SKIP`, `WARN`,
 binds the block to the files by the `revision` hash rows. A warning's status is
 carried, never held: a revision whose `CLOTH_SETTLES` is a `WARN` where the input's
 is `CLEAR` is written.
+
+**The input's check, measured once** (issue #617). Every remesh runs `check` on the
+input as well as on the revision, and for a strip of candidates against one inspected
+rig the input's check is the same every time. `--record-input-check` writes
+`input-check.json` into `--out` beside `remesh.json` (spec `rig-parts-input-check/1`):
+what that check read — every file under `--rig`, `parts.json` and every file under
+`parts/` by SHA-256, the two directories as resolved (check's own text can name them),
+the requirements file's path and SHA-256, `--page-edges`, `--pack-shape`, this package's
+version and `rigc --version`'s whole output — and the input's check side as
+`remesh.json` carries it. A later run given `--input-check <input-check.json>` compares
+every row with its own input before anything is built; when every row is its own it
+prints `check-input: not run — <file> (rig-parts-input-check/1) is bound to this input
+by N sha256 row(s) …` in place of the input's check, and its `check.input` is the
+recorded one, byte for byte. A row that is not its own is refused by name
+(`REMESH_INPUT_CHECK_BOUND`, the row, the value recorded and the value required), and
+nothing is written. The record's rows are hashed when the run starts and again right
+after the input's check has read the input; a file that moved in between is refused by
+name with both digests (`REMESH_INPUT_CHECK_MOVED`), so a record never pairs rows with a
+check measured from other bytes. The revision is always measured. `retune` reads and writes the same
+record, so either command's serves the other over the same input. Without either flag
+nothing printed or written changes.
 
 **`--delta <mesh-edit.json>`** (in place of `--mesh`, exactly one of the two; issue
 #526) reads rig-c/review's mesh edit, `rig-review-mesh-edit/1`: `slot`, `skin`,
@@ -3403,6 +3438,9 @@ revision reads it as any other edge.
 | <a id="RETUNE_PRESERVED"></a>`RETUNE_PRESERVED` | the spliced revision differs from the input outside `rig.json`'s `constraints` and `invariants.detached` and `motion.json`'s `animations.idle`; the file and the path that moved are named | a defect in this package: report it with the line |
 | <a id="RETUNE_RIGC_GREEN"></a>`RETUNE_RIGC_GREEN` | rigc's build gate refused the revision (its lines quoted), or `rigc --version` named no version for the provenance | read rigc's line; nothing was written |
 | <a id="RETUNE_CHECK_HELD"></a>`RETUNE_CHECK_HELD` | `check` on the revision did not measure a bar it measured on the input, or failed a bar the input met; the revision's own FAIL line is quoted | soften the constraint or the idle track the line names |
+| <a id="RETUNE_INPUT_CHECK_FILE"></a>`RETUNE_INPUT_CHECK_FILE` | as [`REMESH_INPUT_CHECK_FILE`](#REMESH_INPUT_CHECK_FILE), under `retune` | pass the `input-check.json` a `--record-input-check` run of either command wrote |
+| <a id="RETUNE_INPUT_CHECK_BOUND"></a>`RETUNE_INPUT_CHECK_BOUND` | as [`REMESH_INPUT_CHECK_BOUND`](#REMESH_INPUT_CHECK_BOUND), under `retune`; read before the rebuild | run once with `--record-input-check` over this input, or leave `--input-check` off |
+| <a id="RETUNE_INPUT_CHECK_MOVED"></a>`RETUNE_INPUT_CHECK_MOVED` | as [`REMESH_INPUT_CHECK_MOVED`](#REMESH_INPUT_CHECK_MOVED), under `retune` | leave the input alone while the run measures it, and run again |
 
 A retune replaces a rig's physics and its idle and nothing else. The config is built
 once through the rig stage; from that build `rig.json` takes `constraints` and
@@ -3425,6 +3463,9 @@ revision's check. The check sides are `remesh`'s, `line` and `status` included
 (issue #541): `check`'s own last line and every block's status on that tree, so a
 consumer binds them to the revision by the `revision` hash rows instead of running
 `check` a second time.
+`--record-input-check` and `--input-check` are `remesh`'s (issue #617; see *The
+input's check, measured once* above), read before the rebuild and refused as
+`RETUNE_INPUT_CHECK_BOUND`, `RETUNE_INPUT_CHECK_FILE` and `RETUNE_INPUT_CHECK_MOVED`.
 
 ### rig-c's mesh refusals, quoted in a line
 
