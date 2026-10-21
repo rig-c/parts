@@ -83,6 +83,10 @@ import { placeBoneEntriesForSkeleton, poseBoneEntriesForDrawn, REGISTER_OFFSET_B
 import { type AlternatePartsRecord, type PartRecord, readParts, type RecompositeRecord, type SingleRunPad, tagOf, writeParts } from './parts.ts';
 import { encodePngBytes, readPng, writePng } from './raster/png.ts';
 import type { Raster } from './raster/types.ts';
+import { type Mask, newMask } from './raster/types.ts';
+import { type OtherLimbs, splitLines, type SplitCount } from './assemble.ts';
+import type { BoneEntry } from './config.ts';
+import { OPAQUE_ALPHA_ABOVE } from './layers.ts';
 import { readRequirements, type RequirementLine, summaryText } from './requirements.ts';
 import { type AutoMeshReport, buildRig, DEFAULT_IDLE_KEYS, type FaceAxis, type IdleKeys, type MeshReport, type RigCommand, rigJsonText, type RigOutput, type RigSpec, SETS_FILE, type StrayCleared, type TurnRow } from './rig.ts';
 import { KEYPOINT_NAMES, type KeypointName, type PosePoints } from './skeleton.ts';
@@ -172,6 +176,13 @@ export interface AssembleStageInput {
    * shows the island count go red under it.
    */
   setIslands?: 'joints' | 'all';
+  /**
+   * How a subset set's limb parts share a layer of one island with a limb the set does not carry (issue #609):
+   * `"nearest"` (the default, the only one the CLI runs) by the nearest segment line in the set's pose, the other limb
+   * placed by the set's skeleton ({@link OtherLimbs}); `"connectivity"` every pixel on the set's limb, the rule before
+   * #609 — kept for the selftest's control that shows the second-limb share go red under it.
+   */
+  setSplit?: 'nearest' | 'connectivity';
 }
 
 /** Where the assemble stage writes: `parts.json`, the directory of part PNGs, the recomposite, and its error map. */
@@ -327,7 +338,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   }
 
   const altProblems: Problem[] = [];
-  const altBuilt: Array<{ record: AlternatePartsRecord; images: Array<{ name: string; image: Raster }>; excluded: ExcludedCount[]; islands: IslandCount[] }> = [];
+  const altBuilt: Array<{ record: AlternatePartsRecord; images: Array<{ name: string; image: Raster }>; excluded: ExcludedCount[]; islands: IslandCount[]; splits: SplitCount[] }> = [];
   const baseSlots = result.parts.parts.map((p) => p.name);
   for (const alt of mergedAlts) {
     if (alt.source === undefined || alt.full === undefined) {
@@ -470,6 +481,16 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     let altBones = fields.bones;
     let altDrawnLength: Record<string, number> | undefined;
     let altRegistration: { offset: [number, number]; scale: number } | undefined;
+    // Issue #588: a subset set that names one limb side keeps, of a layer that holds more than one island, the one its joints fall on.
+    const altIslands = alt.parts === undefined || input.setIslands === 'all' ? [] : setIslandSources(fields.limbs ?? {}, altLimbs);
+    // Issue #609: the limbs of those layers the set does not carry — the other leg of a two-leg layer.
+    const otherLimbs: Record<string, Limb> =
+      input.setSplit === 'connectivity'
+        ? {}
+        : Object.fromEntries(Object.entries(fields.limbs ?? {}).filter(([ln, l]) => !(ln in altLimbs) && l.segments.some((sg) => altIslands.includes(sg.from))));
+    const otherBones = new Set(Object.values(otherLimbs).flatMap((l) => l.segments.map((sg) => sg.bone)));
+    // The bones the set places: by its skeleton, or by the angles it states; every other bone keeps the base's place unless an ancestor moved.
+    const setPlaced = new Set<string>();
     if (Object.keys(altLimbs).length > 0 && fields.bones !== undefined && (altSkeleton !== undefined || alt.drawn !== undefined)) {
       const coveredLimbBones = new Set(Object.values(altLimbs).flatMap((l) => l.segments.map((sg) => sg.bone)));
       const limbDrawn: Record<string, number> = {};
@@ -510,19 +531,23 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         }
         altRegistration = { offset: [reg.offset[0], reg.offset[1]], scale: reg.scale };
         altDrawnLength = skeletonDrawnLength(fields.bones, coveredLimbBones, joints);
-        altBones = placeBoneEntriesForSkeleton(fields.bones, coveredLimbBones, joints, limbDrawn);
+        // Issue #609: the other limb of a shared layer stands at the set's own keypoints too, so its segment line is the
+        // set's; the skeleton file holds them. Only its place widens: drawn and drawnLength stay the covered bones'.
+        const placed = new Set([...coveredLimbBones, ...[...otherBones].filter((b) => SKELETON_LIMB_BONES.some(([t]) => t === b))]);
+        for (const b of placed) if (SKELETON_LIMB_BONES.some(([t]) => t === b)) setPlaced.add(b);
+        altBones = placeBoneEntriesForSkeleton(fields.bones, placed, joints, limbDrawn);
       } else {
         altBones = poseBoneEntriesForDrawn(fields.bones, limbDrawn);
       }
+      for (const b of Object.keys(limbDrawn)) setPlaced.add(b);
     }
+    const altOthers = Object.keys(otherLimbs).length === 0 ? undefined : otherLimbsOf(otherLimbs, setPlaced, fields.bones ?? [], result.images, result.parts.rig_size, altSkeleton !== undefined ? 'skeleton' : alt.drawn !== undefined ? 'drawn' : 'none');
     // Issue #587: a subset set's limb part takes nothing a base part it does not replace covers at setup.
     const [exW, exH] = result.parts.rig_size;
     const altExclude =
       alt.parts === undefined || input.setExclusion === 'none'
         ? []
         : setExclusions(result.images, exW, exH, Object.values(altLimbs).flatMap((l) => l.segments.map((sg) => sg.part)), new Set([...coveredSet, ...hidesSet]));
-    // Issue #588: a subset set that names one limb side keeps, of a layer that holds more than one island, the one its joints fall on.
-    const altIslands = alt.parts === undefined || input.setIslands === 'all' ? [] : setIslandSources(fields.limbs ?? {}, altLimbs);
     let altRes: ReturnType<typeof assemble>;
     try {
       altRes = assemble({
@@ -545,6 +570,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         projectRule: input.project,
         ...(altExclude.length === 0 ? {} : { exclude: altExclude }),
         ...(altIslands.length === 0 ? {} : { limbIslands: altIslands }),
+        ...(altOthers === undefined ? {} : { otherLimbs: altOthers }),
       });
     } catch (err) {
       if (err instanceof PartsError) {
@@ -594,6 +620,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       images: keptImages,
       excluded: altRes.excluded,
       islands: altRes.islands,
+      splits: altRes.splits,
     });
   }
   refuseIfAny(altProblems);
@@ -657,9 +684,56 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   for (const d of result.drift) log(driftLine(d));
   // Issue #588: per subset set, one line per limb part cut from a layer of more than one island, then (issue #587) one
   // per limb part and base part over it that took a pixel. None otherwise.
-  for (const b of altBuilt) for (const l of [...islandLines(b.record.name, b.islands), ...excludedLines(b.record.name, b.excluded)]) log(l);
+  // Issue #609: then one per limb part cut from a layer of one island that also holds a limb the set does not carry.
+  for (const b of altBuilt) for (const l of [...islandLines(b.record.name, b.islands), ...splitLines(b.record.name, b.splits), ...excludedLines(b.record.name, b.excluded)]) log(l);
   log(`wrote ${outs.partsJson}, ${result.images.length} PNG(s) in ${outs.partsDir}, ${outs.recomposite}, ${outs.errorMap} (uncovered error px red, covered error px blue, the painting grey)${figurePath === null ? '' : `, ${figurePath} (the figure, white, the recomposite was read inside)`}`);
   return result;
+}
+
+/**
+ * Issue #609: what a subset set says of the limbs of its shared layers it does not carry ({@link OtherLimbs}). A bone
+ * is placed by the set when the set places it (`setPlaced`: its skeleton's table bones, its drawn bones) or an
+ * ancestor of it — the rule `placeBoneEntriesForSkeleton` and `poseBoneEntriesForDrawn` move a child by; any other
+ * bone keeps the base's place, which is not the set's, so a limb with one is `unposed`. The base art is each limb's
+ * base parts at alpha above `OPAQUE_ALPHA_ABOVE`, at their `parts.json` x, y.
+ */
+function otherLimbsOf(
+  limbs: Readonly<Record<string, Limb>>,
+  setPlaced: ReadonlySet<string>,
+  bones: readonly BoneEntry[],
+  base: ReadonlyArray<{ record: PartRecord; image: Raster }>,
+  rigSize: readonly [number, number],
+  pose: OtherLimbs['pose'],
+): OtherLimbs {
+  const parent = new Map<string, string>();
+  for (const b of bones) {
+    if ('chain' in b) b.points.forEach((_, k) => parent.set(`${b.chain}${k}`, k === 0 ? b.parent : `${b.chain}${k - 1}`));
+    else parent.set(b.name, b.parent);
+  }
+  const placed = (b: string): boolean => {
+    for (let at: string | undefined = b, n = 0; at !== undefined && n <= parent.size; at = parent.get(at), n++) if (setPlaced.has(at)) return true;
+    return false;
+  };
+  const [W, H] = rigSize;
+  const unposed: Record<string, string[]> = {};
+  const baseArt: Record<string, Mask> = {};
+  for (const [ln, l] of Object.entries(limbs)) {
+    unposed[ln] = l.segments.map((sg) => sg.bone).filter((b) => !placed(b));
+    const names = new Set(l.segments.map((sg) => sg.part));
+    const m = newMask(W, H);
+    for (const { record, image } of base) {
+      if (!names.has(record.name)) continue;
+      for (let y = 0; y < image.height; y++) {
+        for (let x = 0; x < image.width; x++) {
+          const rx = record.x + x;
+          const ry = record.y + y;
+          if (rx >= 0 && ry >= 0 && rx < W && ry < H && image.data[(y * image.width + x) * 4 + 3] > OPAQUE_ALPHA_ABOVE) m.data[ry * W + rx] = 1;
+        }
+      }
+    }
+    baseArt[ln] = m;
+  }
+  return { limbs, unposed, baseArt, drawOrder: base.map((q) => q.record.name), pose };
 }
 
 /**
@@ -1557,7 +1631,7 @@ export function sweepCheckLines(line: SweepLine, steps: ReadonlyMap<string, { le
   return [
     `${SWEEP_LINE}: ${line.status} — ${line.joints.length} joint(s) bent to their declared range's ends and middle${line.physics_left_out === 0 ? '' : `, ${line.physics_left_out} physics constraint(s) left out`}; at each, the pose against the same pose with the joint's own art drawn under the limb, on the rest-pose seam's bar (mean |d| <= ${line.bar.mean.toFixed(1)}, <= ${line.bar.rig_px_over_40} rig px over ${line.bar.level})${s === null ? '' : ` at frame scale ${s}`}`,
     ...line.joints.flatMap((j) => {
-      const head = `joint "${j.joint}" (${j.limb}, "${j.part}" on "${j.bone}", range [${j.range.join(', ')}]${j.shape === 'disc' ? `, cap_shape "disc": no pixel over ${line.bar.level} in the disc` : ''})`;
+      const head = `joint "${j.joint}" (${j.limb}, "${j.part}" on "${j.bone}", range [${j.range.join(', ')}]${j.shape === undefined ? '' : `, cap_shape "${j.shape}": no pixel over ${line.bar.level} in the disc`})`;
       if (j.unread !== undefined) return [`${head}: FAIL — not read: ${j.unread}`];
       // Issue #557: the contour step, a reading on every row (check.json carries it only for a short cap).
       return j.poses.map((p) => {

@@ -16435,9 +16435,14 @@ function runBallCheckCases(say: (name: string, ok: boolean, detail: string, why:
         [-45, 0, 45].every((a) => pose(ball.fig, a)?.status === 'PASS' && pose(ball.fig, a)?.px_over_40 === 0) &&
         discRule(ball).length === 0 &&
         discRule(disc).length === 2 &&
-        discRule(disc).every((l) => l.includes(discWords)),
-      `SEAM_OVER_RANGE ball ${poses(ball.fig)}, disc ${poses(disc.fig)}; disc-rule lines ball ${discRule(ball).length}, disc ${discRule(disc).length}`,
-      'issue #598: a ball is held to the disc rule as a disc is, and the row says which shape held it; a whole disc about the pivot maps onto itself at every turn, so by construction no pixel of the joint\'s art is uncovered and the rule reads 0 frame px over 40 at every pose; the disc\'s message keeps its words',
+        discRule(disc).every((l) => l.includes(discWords)) &&
+        // Issue #609 (from #598): the console row names the shape that held it, a ball as a disc, at every pose.
+        rows(ball).length === 3 &&
+        rows(ball).every((r) => r.includes(', cap_shape "ball": no pixel over 40 in the disc) at ')) &&
+        rows(disc).length === 3 &&
+        rows(disc).every((r) => r.includes(', cap_shape "disc": no pixel over 40 in the disc) at ')),
+      `SEAM_OVER_RANGE ball ${poses(ball.fig)}, disc ${poses(disc.fig)}; disc-rule lines ball ${discRule(ball).length}, disc ${discRule(disc).length}; console rows ball: ${rows(ball).map((r) => r.trim().slice(0, 140)).join(' | ') || 'none'}`,
+      'issue #598: a ball is held to the disc rule as a disc is, and the row says which shape held it — check.json\'s shape and the console row\'s cap_shape label alike (issue #609); a whole disc about the pivot maps onto itself at every turn, so by construction no pixel of the joint\'s art is uncovered and the rule reads 0 frame px over 40 at every pose; the disc\'s message keeps its words',
     );
     const hb = line(halfBall.fig);
     say(
@@ -24623,6 +24628,222 @@ function runBuildSuite(): number {
       kneeJson.includes('"excluded_px": 16') && refusals(() => readParts(join(kneeGreenOut, 'parts.json'))) === null && planted16 === 'reads' && /^PARTS_FIELD_TYPE .*"cap"$/.test(planted0) && /^PARTS_FIELD_TYPE .*"cap"$/.test(plantedHalf),
       `written: excluded_px 16 on the set's shin ${kneeJson.includes('"excluded_px": 16')}; the base shin_l's cap with excluded_px 16: ${planted16}; 0: ${planted0}; 1.5: ${plantedHalf}`,
       'issue #603: excluded_px is a known cap key written only when the exclusion took a cap pixel, so 0 is a record no assemble writes, and a fraction is no pixel count',
+    );
+    // BU250–BU253 — issue #609: a subset leg set whose `legwear` holds both legs in ONE island (the folded shin crosses
+    // the standing leg, so #588's island rule has nothing to part) gives each pixel to the leg whose segment line is
+    // nearest it in the set's pose. #587's fixture (scale 1, the shorts, the base's two legs from row 20, the same bones
+    // and limbs) with a bone `arm_r0` at (20, 2), so a skeleton set registers on the base's torso (r_shoulder on
+    // arm_r0, the hips on leg_r0 / leg_l0, every one at its base place: offset [0, 0], scale 1). `cross_r`: the right
+    // shin folded right, [30, 46) x [26, 34), across the standing left leg [34, 42) x [10, 50); `cross_l`: the left shin
+    // folded left, [18, 34) x [26, 34), across the standing right leg [22, 30) x [10, 50); each thigh [x0, x0 + 8) x
+    // [10, 34). The skeleton places both legs: its own folded, the other straight at its base keypoints.
+    type Seg609 = [[number, number], [number, number]];
+    const STAND_R: Seg609[] = [[[26, 10], [26, 30]], [[26, 30], [26, 50]]];
+    const STAND_L: Seg609[] = [[[38, 10], [38, 30]], [[38, 30], [38, 50]]];
+    const torso609: Record<string, [number, number]> = {
+      nose: [32, 1], neck: [32, 2], r_shoulder: [20, 2], r_elbow: [16, 6], r_wrist: [14, 9], l_shoulder: [44, 2], l_elbow: [48, 6], l_wrist: [50, 9],
+      r_eye: [31, 1], l_eye: [33, 1], r_ear: [30, 1], l_ear: [34, 1],
+    };
+    interface Set609 {
+      name: string;
+      parts: string[];
+      rects: Array<[number, number, number, number]>;
+      drawn: Record<string, number>;
+      pose: Record<string, [number, number]>;
+      own: Seg609[];
+      other: Seg609[];
+    }
+    const crossSets: Set609[] = [
+      {
+        name: 'cross_r',
+        parts: ['thigh_r', 'shin_r'],
+        rects: [[22, 10, 30, 34], [30, 26, 46, 34], [34, 10, 42, 50]],
+        drawn: { leg_r1: 0 },
+        pose: { ...torso609, r_hip: [26, 10], r_knee: [26, 30], r_ankle: [46, 30], l_hip: [38, 10], l_knee: [38, 30], l_ankle: [38, 50] },
+        own: [[[26, 10], [26, 30]], [[26, 30], [46, 30]]],
+        other: STAND_L,
+      },
+      {
+        name: 'cross_l',
+        parts: ['thigh_l', 'shin_l'],
+        rects: [[34, 10, 42, 34], [18, 26, 34, 34], [22, 10, 30, 50]],
+        drawn: { leg_l1: 180 },
+        pose: { ...torso609, r_hip: [26, 10], r_knee: [26, 30], r_ankle: [26, 50], l_hip: [38, 10], l_knee: [38, 30], l_ankle: [18, 30] },
+        own: [[[38, 10], [38, 30]], [[38, 30], [18, 30]]],
+        other: STAND_R,
+      },
+    ];
+    const crossDir = join(dir, 'overlap-609');
+    const crossFixture = (name: string, sets: Set609[], by: 'skeleton' | 'drawn'): string => {
+      const d = join(crossDir, name);
+      const c = shortsConfig(false, false);
+      c.bones = [{ name: 'hip', parent: 'root', at: [32, 20] }, { name: 'arm_r0', parent: 'hip', at: [20, 2] }, ...(c.bones as Array<Record<string, unknown>>).slice(1)];
+      if (sets.length > 0) (c.assemble as Record<string, unknown>).alternates = sets.map((q) => ({
+        name: q.name,
+        source: 'painting.png',
+        full: `full_${q.name}`,
+        head: 'head',
+        parts: q.parts,
+        ...(by === 'drawn' ? { drawn: q.drawn } : { skeleton: `${q.name}_pose.json` }),
+      }));
+      writeAssembleFixture(d, c, shortsPainting, { full: [{ name: 'legwear', depth: 0.6, rects: [{ x0: 22, y0: 20, x1: 30, y1: 50, colour: C }, { x0: 34, y0: 20, x1: 42, y1: 50, colour: C }] }, shortsLayer], head: HEAD_LAYERS });
+      for (const q of sets) {
+        writeRun(join(d, `full_${q.name}`), [{ name: 'legwear', depth: 0.6, rects: q.rects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1, colour: C })) }, shortsLayer]);
+        writeFileSync(join(d, `${q.name}_pose.json`), `${JSON.stringify({ width: 64, height: 64, points: q.pose }, null, 2)}\n`);
+      }
+      return d;
+    };
+    /**
+     * The card's share, from its definition: of a set part's pixels (alpha above 8), those whose centre is strictly
+     * nearer the other leg's segment line than its own leg's, both in the set's pose (the skeleton's segments above).
+     */
+    const secondLimbShare = (out: string, q: Set609, part: string): { px: number; nearer: number; share: number } | null => {
+      const f = join(out, 'parts', `${q.name}_${part}.png`);
+      const rec = existsSync(join(out, 'parts.json')) ? readParts(join(out, 'parts.json')).alternates?.find((a) => a.name === q.name)?.records.find((r) => r.name === part) : undefined;
+      if (rec === undefined || !existsSync(f)) return null;
+      const segD2 = (px: number, py: number, [[ax, ay], [bx, by]]: Seg609): number => {
+        const dx = bx - ax;
+        const dy = by - ay;
+        const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
+        return (px - ax - t * dx) ** 2 + (py - ay - t * dy) ** 2;
+      };
+      const near = (px: number, py: number, segs: Seg609[]): number => Math.min(...segs.map((s) => segD2(px, py, s)));
+      const img = readPng(f);
+      let px = 0;
+      let nearer = 0;
+      for (let y = 0; y < img.height; y++) {
+        for (let x = 0; x < img.width; x++) {
+          if (img.data[(y * img.width + x) * 4 + 3] <= 8) continue;
+          px++;
+          if (near(rec.x + x + 0.5, rec.y + y + 0.5, q.other) < near(rec.x + x + 0.5, rec.y + y + 0.5, q.own)) nearer++;
+        }
+      }
+      return { px, nearer, share: px === 0 ? 0 : nearer / px };
+    };
+    const shareFigures = (out: string, sets: Set609[]): string =>
+      sets
+        .flatMap((q) =>
+          q.parts.map((p) => {
+            const s = secondLimbShare(out, q, p);
+            return `${q.name}_${p} ${s === null ? 'absent' : `${s.nearer}/${s.px} = ${s.share.toFixed(3)}`}`;
+          }),
+        )
+        .join(', ');
+    const splitLint = (out: string): string[] => out.split('\n').filter((l) => l.includes(' in one island (8-connected, alpha above 8), split by the nearest segment line')).map((l) => l.replace(/^\[assemble\] /, '').trim());
+
+    // By hand, the overlap band: each set's shin crosses the other leg's line at a right angle, at (38, 30) and (26, 30),
+    // inside the 8 x 8 square where the two legs' art meets. A pixel centre there is (dx, dy) off the crossing, each of
+    // ±0.5, ±1.5, ±2.5, ±3.5, so its two distances are |dy| and |dx| and differ by a whole pixel or not at all: the band
+    // (within 0.5 px) is the pixels with |dx| = |dy|, 4 x 4 = 16, and no other pixel of either layer is in it (every other
+    // pair of distances differs by 1 or more, both lines being axis-aligned). The knee's joint line puts all 16 on the
+    // shin. leg_l's parts are drawn after leg_r's (config.limbs order), so cross_l keeps its 16 and cross_r gives them.
+    const crossGreenDir = crossFixture('green', crossSets, 'skeleton');
+    const crossGreenOut = join(crossGreenDir, 'out');
+    const crossGreen = runCli([...buildArgs(crossGreenDir, crossGreenOut), '--all-sets']);
+    const crossNoSetsDir = crossFixture('no-sets', [], 'skeleton');
+    const crossNoSets = runCli(buildArgs(crossNoSetsDir, join(crossNoSetsDir, 'out')));
+    const crossLint = splitLint(crossGreen.out);
+    const bandOf = (set: string, part: string): string => /; (\d+) px in the overlap band \(nearer one line than the other by 0\.5 px or less\) went to the limb drawn in front, (\d+) kept and (\d+) given$/.exec(crossLint.find((l) => l.startsWith(`LINT set "${set}" ${part}: `)) ?? '')?.slice(1).join('/') ?? 'none';
+    const crossCheck = existsSync(join(crossGreenOut, 'check', 'check.json')) ? (readJsonFile(join(crossGreenOut, 'check', 'check.json')) as { PASS?: boolean; sets?: Record<string, { PASS?: boolean }> }) : null;
+    const crossBaseFiles = ['parts.json', ...baseNames.map((n) => join('parts', `${n}.png`))];
+    const crossBaseDiffer = crossBaseFiles.slice(1).filter((f) => !existsSync(join(crossGreenOut, f)) || !existsSync(join(crossNoSetsDir, 'out', f)) || digest(join(crossGreenOut, f)) !== digest(join(crossNoSetsDir, 'out', f)));
+    const crossBaseRecords = existsSync(join(crossGreenOut, 'parts.json')) && existsSync(join(crossNoSetsDir, 'out', 'parts.json')) && JSON.stringify(readParts(join(crossGreenOut, 'parts.json')).parts) === JSON.stringify(readParts(join(crossNoSetsDir, 'out', 'parts.json')).parts);
+    const crossShares = crossSets.flatMap((q) => q.parts.map((p) => secondLimbShare(crossGreenOut, q, p)));
+    say(
+      'BU250_A_LEG_SET_WHOSE_LAYER_HOLDS_BOTH_LEGS_IN_ONE_ISLAND_SPLITS_BY_THE_NEAREST_SEGMENT_LINE_AND_EVERY_PART_HOLDS_UNDER_1_PERCENT_OF_THE_OTHER',
+      crossGreen.status === 0 &&
+        crossNoSets.status === 0 &&
+        crossShares.every((s) => s !== null && s.px > 0 && s.share <= 0.01) &&
+        crossLint.length === 4 &&
+        bandOf('cross_r', 'thigh_r') === '0/0/0' &&
+        bandOf('cross_r', 'shin_r') === '16/0/16' &&
+        bandOf('cross_l', 'thigh_l') === '0/0/0' &&
+        bandOf('cross_l', 'shin_l') === '16/16/0' &&
+        !crossGreen.out.includes(' islands (8-connected') &&
+        crossCheck?.PASS === true &&
+        crossSets.every((q) => crossCheck.sets?.[q.name]?.PASS === true) &&
+        crossBaseDiffer.length === 0 &&
+        crossBaseRecords,
+      `exit ${crossGreen.status} (no-sets ${crossNoSets.status}); second-limb share per set part (nearer the other leg's line / px, alpha above 8): ${shareFigures(crossGreenOut, crossSets)}; band px/kept/given: cross_r thigh_r ${bandOf('cross_r', 'thigh_r')}, shin_r ${bandOf('cross_r', 'shin_r')}, cross_l thigh_l ${bandOf('cross_l', 'thigh_l')}, shin_l ${bandOf('cross_l', 'shin_l')}; split LINT: ${crossLint.join(' | ') || 'none'}; check --all-sets PASS ${crossCheck?.PASS}; base files differing from the no-sets build: ${crossBaseDiffer.join(', ') || 'none'}, base records equal ${crossBaseRecords}; FAIL lines: ${crossGreen.out.split('\n').filter((l) => l.includes('FAIL ')).map((l) => l.trim().slice(0, 300)).join(' | ') || 'none'}`,
+      'issue #609, bars 1 and 6: with no pre-split of the one-island layer, every leg set part holds at most 1 % of pixels nearer the other leg\'s segment line (the card\'s share, from its definition), the LINT names per part what was kept and given and the 16 band pixels (by hand) going to the leg drawn in front, check --all-sets is green, and the base\'s parts are the bytes a build with no set writes',
+    );
+
+    // Bar 3's mutant: every pixel of the island on the set's leg (the rule before #609, a test-only parameter of
+    // assembleStage). By hand, cross_l's shin then holds the right leg's column [22, 30) x [10, 50) outside its own
+    // shin's rows, nearer the right leg's line: far past 1 %.
+    const crossStage = (d: string, out: string, rule: 'nearest' | 'connectivity'): { lines: string[]; failed: PartsError | null } => {
+      const lines: string[] = [];
+      const failed = refusals(() =>
+        assembleStage(
+          { source: join(d, 'painting.png'), full: join(d, 'full'), head: join(d, 'head'), config: join(d, 'config.json'), seam: 'near-white', project: DEFAULT_PROJECT_RULE, setSplit: rule },
+          { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, 'recomposite_error_rig.png') },
+          (l) => lines.push(l),
+        ),
+      );
+      return { lines, failed };
+    };
+    const crossMutOut = join(crossGreenDir, 'out-connectivity');
+    const crossMut = crossStage(crossGreenDir, crossMutOut, 'connectivity');
+    const mutShin = secondLimbShare(crossMutOut, crossSets[1], 'shin_l');
+    say(
+      'BU251_THE_MUTANT_THAT_SPLITS_BY_CONNECTIVITY_ONLY_PUTS_THE_OTHER_SHIN_BACK_IN_THE_SET_AND_GOES_RED_ON_THE_SHARE',
+      crossMut.failed === null && mutShin !== null && mutShin.share > 0.01 && !crossMut.lines.some((l) => l.includes('split by the nearest segment line')),
+      `setSplit "connectivity": ${crossMut.failed === null ? 'assembles' : crossMut.failed.problems.map((q) => q.code).join(', ')}; second-limb share ${shareFigures(crossMutOut, crossSets)}; split LINT lines ${crossMut.lines.filter((l) => l.includes('split by the nearest segment line')).length}`,
+      'issue #609, bar 3: the share goes red when the island is kept whole — cross_l\'s shin holds the right leg\'s column again, where BU250 holds none of it',
+    );
+
+    // Bar 4: the same sets stated by `drawn` (the folded shin's angle) pose only their own leg; the other leg's place
+    // would be the base's, so the layer is refused by name. By hand: each set's layer holds the other leg's whole
+    // column, so all of the base's other-leg art, [22, 30) or [34, 42) x [20, 50) = 8 x 30 = 240 px, lies under it.
+    const crossDrawnDir = crossFixture('drawn', crossSets, 'drawn');
+    const crossDrawnOut = join(crossDrawnDir, 'out');
+    const crossDrawn = runCli([...buildArgs(crossDrawnDir, crossDrawnOut), '--all-sets']);
+    const poseLines = crossDrawn.out.split('\n').filter((l) => l.includes('FAIL  ASSEMBLE_ALT_LIMB_POSE: '));
+    const poseWant = (set: string, own: string, other: string, side: string): string =>
+      `part "legs" (config.limbs.${own}, and config.limbs.${other}) (alternate set "${set}") — holds one island (8-connected, alpha above 8), and ${8 * 30} of its px lie where the base build draws ${other} ("thigh_${side}", "shin_${side}") at setup, so the layer holds both ${own} and ${other}; the set carries ${own} alone, so each pixel goes to the limb whose segment line is nearest it in the set's pose, and the set does not pose ${other}: its drawn names none of "${other}0", "${other}1", nor an ancestor of one; its place in the set is never taken from the base's — drawn would need "${other}0", "${other}1", which a subset set may not state for a bone it does not cover (CONFIG_SET_COVERS_BONE)`;
+    const crossDrawnWritten = existsSync(crossDrawnOut) ? readdirSync(crossDrawnOut) : [];
+    say(
+      'BU252_A_DRAWN_SET_WHOSE_ONE_ISLAND_HOLDS_A_LEG_IT_DOES_NOT_POSE_IS_REFUSED_BY_NAME_AND_NOTHING_IS_WRITTEN',
+      crossDrawn.status === 1 &&
+        poseLines.length === 2 &&
+        poseLines.some((l) => l.includes(poseWant('cross_r', 'leg_r', 'leg_l', 'l'))) &&
+        poseLines.some((l) => l.includes(poseWant('cross_l', 'leg_l', 'leg_r', 'r'))) &&
+        crossDrawnWritten.length === 0,
+      `exit ${crossDrawn.status}; ${poseLines.length} ASSEMBLE_ALT_LIMB_POSE line(s): ${poseLines.map((l) => l.trim()).join(' | ') || 'none'}; --out holds [${crossDrawnWritten.join(', ')}]`,
+      'issue #609, bar 4: a set that states only its own leg\'s angles cannot say where the other leg of its one-island layer stands, and the base\'s place is never taken for it — the layer, both limbs, the 240 px by hand and what drawn would need are named, and the build writes nothing',
+    );
+
+    // Bar 5: two legs drawn over each other. `side_l`'s skeleton stands both legs straight and 2 px apart, the right at
+    // x 31 and the left at x 33 (the hips' mean stays (32, 10), so the set registers as before), its layer the two legs
+    // [27, 35) and [29, 37) x [10, 50), one island. By hand: the knee's joint line, the row y = 30, crosses the layer at
+    // x 27..36, offsets -5.5 .. 3.5 from the joint's 33, so the width is 10 and the half-width (the knee cap's radius) 5.
+    // The left leg's line is read every 1 px down each of its two 20 px pieces, 21 readings each, 42; the right leg's
+    // line is 2 px off every one (under 2 x 5 = 10, so all 42 are in the overlap) and crosses each reading's normal 2 px
+    // away (under 5, so all 42 are close): 42 of 42, more than half, refused.
+    const sideSets: Set609[] = [
+      {
+        name: 'side_l',
+        parts: ['thigh_l', 'shin_l'],
+        rects: [[29, 10, 37, 50], [27, 10, 35, 50]],
+        drawn: {},
+        pose: { ...torso609, r_hip: [31, 10], r_knee: [31, 30], r_ankle: [31, 50], l_hip: [33, 10], l_knee: [33, 30], l_ankle: [33, 50] },
+        own: [[[33, 10], [33, 30]], [[33, 30], [33, 50]]],
+        other: [[[31, 10], [31, 30]], [[31, 30], [31, 50]]],
+      },
+    ];
+    const sideDir = crossFixture('side', sideSets, 'skeleton');
+    const sideOut = join(sideDir, 'out');
+    const side = runCli([...buildArgs(sideDir, sideOut), '--all-sets']);
+    const overlapLines = side.out.split('\n').filter((l) => l.includes('FAIL  ASSEMBLE_ALT_LIMB_OVERLAP: '));
+    const overlapWant =
+      'config.limbs.leg_l (part "legs", and config.limbs.leg_r) (alternate set "side_l") — takes "legs", which holds leg_l and leg_r in one island, and in the set\'s pose leg_r\'s segment line runs within 5 px (leg_l\'s half-width, the least cap radius of its joints) of leg_l\'s, across leg_l, at 42 of the 42 readings 1 px apart along leg_l\'s line where leg_r\'s passes within 10 px (1; more than 0.5 is most)';
+    const sideWritten = existsSync(sideOut) ? readdirSync(sideOut) : [];
+    // The positive control beside it: the crossing sets are not refused (a crossing at angle θ reads cos θ / 2 of its overlap, under half).
+    say(
+      'BU253_TWO_LEGS_WHOSE_LINES_RUN_CLOSER_THAN_THE_HALF_WIDTH_OVER_MOST_OF_THE_OVERLAP_ARE_REFUSED_WITH_THE_FIGURES',
+      side.status === 1 && overlapLines.length === 1 && overlapLines[0].includes(overlapWant) && sideWritten.length === 0 && crossGreen.status === 0 && !crossGreen.out.includes('ASSEMBLE_ALT_LIMB_OVERLAP'),
+      `exit ${side.status}; ${overlapLines.length} ASSEMBLE_ALT_LIMB_OVERLAP line(s): ${overlapLines.map((l) => l.trim()).join(' | ') || 'none'}; --out holds [${sideWritten.join(', ')}]; the crossing sets: exit ${crossGreen.status}`,
+      'issue #609, bar 5: two leg lines 2 px apart under a half-width of 5 lie over each other along all 42 readings, so no line between them says whose a pixel is, and the set is refused with the figures (by hand) rather than cut down the middle; the right-angle crossings of BU250 are split, not refused',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
