@@ -570,6 +570,16 @@ layers, as follows; every step is arithmetic on the declared bones and the layer
   `ASSEMBLE_ALT_LIMB_POSE`, never a guessed length or direction. The existing
   overlap band and draw order settle near ties. A source already holding only
   that side follows the existing path.
+  Issue #638's acceptance was **changed after measurement** (decision alternative 3):
+  foreign-leg components must be zero, with own-cap components counted separately.
+  This does not satisfy the original second-island <=1% bar. On the public generated
+  default-cap control, the whole-limb-line mutant has islands `[97,16]` and the
+  source-segment line `[104,16]`. All 16 pixels of the separate component are
+  `CAP_FROM_UPPER` copies from the same leg's shin, strictly owned by that foot's
+  ankle-to-toe segment. The control preserves them byte for byte, detects a planted
+  foreign owner, and rejects deleting valid own-cap art to reduce the island count.
+  Cap construction and exclusion remain unchanged; their bridge/occlusion repair
+  belongs to issue #637, independently of this ownership correction.
 - **The joint line.** Between two segments the joint is the lower bone's origin, and the line
   runs through it perpendicular to the limb's axis there — the sum of the upper bone's and the
   lower bone's unit directions, so on a bent limb the bisector. A pixel whose centre is past the

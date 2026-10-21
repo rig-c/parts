@@ -180,9 +180,11 @@ export interface AssembleStageInput {
    * How a subset set's limb parts share a layer of one island with a limb the set does not carry (issue #609):
    * `"nearest"` (the default, the only one the CLI runs) by the nearest segment line in the set's pose, the other limb
    * placed by the set's skeleton ({@link OtherLimbs}); `"connectivity"` every pixel on the set's limb, the rule before
-   * #609 — kept for the selftest's control that shows the second-limb share go red under it.
+   * #609 — kept for the selftest's control that shows the second-limb share go red under it. Issue #638's
+   * `"whole-limb"` mutant uses the pre-fix line, including segments taking other sources, to reproduce its measured
+   * default-cap case. Neither mutant is a CLI/config option or bypasses the rig-c gate.
    */
-  setSplit?: 'nearest' | 'connectivity';
+  setSplit?: 'nearest' | 'connectivity' | 'whole-limb';
 }
 
 /** Where the assemble stage writes: `parts.json`, the directory of part PNGs, the recomposite, and its error map. */
@@ -542,6 +544,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       for (const b of Object.keys(limbDrawn)) setPlaced.add(b);
     }
     const altOthers = Object.keys(otherLimbs).length === 0 ? undefined : otherLimbsOf(otherLimbs, setPlaced, fields.bones ?? [], result.images, result.parts.rig_size, altSkeleton !== undefined ? 'skeleton' : alt.drawn !== undefined ? 'drawn' : 'none');
+    if (altOthers !== undefined && input.setSplit === 'whole-limb') altOthers.line = 'whole-limb';
     // Issue #587: a subset set's limb part takes nothing a base part it does not replace covers at setup.
     const [exW, exH] = result.parts.rig_size;
     const altExclude =

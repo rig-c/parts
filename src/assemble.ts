@@ -389,6 +389,8 @@ export interface AssembleInput {
  * hands them to {@link assemble}.
  */
 export interface OtherLimbs {
+  /** Issue #638's test-only pre-fix mutant; absent uses only segments taking the source. No CLI/config field. */
+  line?: 'whole-limb';
   /** The config's limbs, by name, that the set does not carry and that take one of `limbIslands`. */
   limbs: Readonly<Record<string, Limb>>;
   /**
@@ -890,7 +892,9 @@ function splitOneIsland(
   if (refused || posed.length === 0) return;
   // Issue #638: a separate footwear layer belongs to the ankle-to-toe segments, not to a nearby thigh or shin.
   // The same source selection applies to every segment, without reading a part name or a layer tag.
-  const taking = (l: string, all: Readonly<Record<string, Limb>>): Limb => ({ ...all[l], segments: all[l].segments.filter((sg) => sg.from === src) });
+  const taking = (l: string, all: Readonly<Record<string, Limb>>): Limb => others.line === 'whole-limb'
+    ? all[l]
+    : { ...all[l], segments: all[l].segments.filter((sg) => sg.from === src) };
   const polyOf = (l: string, all: Readonly<Record<string, Limb>>): Array<[number, number]> => {
     const selected = taking(l, all);
     const last = selected.segments[selected.segments.length - 1];

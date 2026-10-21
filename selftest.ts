@@ -46724,7 +46724,7 @@ function runFootOwnershipSuite(): number {
   const dir = temp('foot-ownership');
   try {
     runFootOwnershipChecks(dir, (name, pass, detail) => say(name, pass, detail,
-      'issue #638: two shoes in one layer, foot-only ownership mutant, ankle-to-toe distance and unchanged per-side footwear'));
+      'issue #638: post-measurement alternative 3 requires zero foreign-leg components; own-cap is separate, preserved and not a claim that the original 1% bar passed'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

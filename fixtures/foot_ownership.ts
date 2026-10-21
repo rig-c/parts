@@ -6,7 +6,7 @@ import { assembleConfig, C, flatPainting, HEAD_LAYERS, type RunLayerSpec, writeA
 export type FootLayout = 'islands' | 'connected' | 'per-side';
 
 /** Two legs and explicit ankle-to-toe bones, all coordinates in the 64x64 rig frame. */
-export function writeFootOwnershipFixture(dir: string, layout: FootLayout = 'islands'): void {
+export function writeFootOwnershipFixture(dir: string, layout: FootLayout = 'islands', cap: 'disc' | 'default' = 'disc'): void {
   const legs: RunLayerSpec = { name: 'legwear', depth: 0.6, rects: [
     { x0: 22, y0: 10, x1: 30, y1: 50, colour: C },
     { x0: 34, y0: 10, x1: 42, y1: 50, colour: C },
@@ -37,7 +37,7 @@ export function writeFootOwnershipFixture(dir: string, layout: FootLayout = 'isl
   cfg.limbs = Object.fromEntries(['r', 'l'].map((s) => [`leg_${s}`, { segments: [
     { part: `thigh_${s}`, from: 'legs', bone: `leg_${s}0` },
     { part: `shin_${s}`, from: 'legs', bone: `leg_${s}1`, joint: 'knee' },
-    { part: `foot_${s}`, from: layout === 'per-side' ? `shoe_${s}` : 'shoes', bone: `foot_${s}`, joint: 'ankle', cap_shape: 'disc' },
+    { part: `foot_${s}`, from: layout === 'per-side' ? `shoe_${s}` : 'shoes', bone: `foot_${s}`, joint: 'ankle', ...(cap === 'disc' ? { cap_shape: 'disc' } : {}) },
   ] }]));
   cfg.regions = Object.fromEntries(['r', 'l'].flatMap((s) => [[`thigh_${s}`, `leg_${s}0`], [`shin_${s}`, `leg_${s}1`], [`foot_${s}`, `foot_${s}`]]));
   (cfg.assemble as Record<string, unknown>).alternates = ['r', 'l'].map((s) => ({
