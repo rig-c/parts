@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.55.2](https://github.com/rig-c/parts/compare/v1.55.1...v1.55.2) (2026-10-21)
+
+
+### Bug Fixes
+
+* **assemble:** assign connected footwear by its source segments ([#642](https://github.com/rig-c/parts/issues/642)) ([b0cf05f](https://github.com/rig-c/parts/commit/b0cf05f63f5a8da9d9f8bc0e6b269915cea69598))
+* **assemble:** preserve assigned limb art through cover exclusions ([#644](https://github.com/rig-c/parts/issues/644)) ([c7ef313](https://github.com/rig-c/parts/commit/c7ef3139dbe244db7c8ab05013305e69a2120d45)), closes [#637](https://github.com/rig-c/parts/issues/637)
+
 ## [1.55.1](https://github.com/rig-c/parts/compare/v1.55.0...v1.55.1) (2026-10-21)
 
 
