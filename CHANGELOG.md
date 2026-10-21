@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.56.0](https://github.com/rig-c/parts/compare/v1.55.2...v1.56.0) (2026-10-21)
+
+
+### Features
+
+* declare explicit limb layout and emit bound slot groups ([#654](https://github.com/rig-c/parts/issues/654)) ([c176b43](https://github.com/rig-c/parts/commit/c176b43f03a197e8968d864666665e7ea2cc8d9b)), closes [#647](https://github.com/rig-c/parts/issues/647)
+
+
+### Bug Fixes
+
+* coalesce explicitly bound riders into limb slot blocks ([#649](https://github.com/rig-c/parts/issues/649)) ([dab13da](https://github.com/rig-c/parts/commit/dab13da59b5c1889169a4c8dafcb6f6be7d97460)), closes [#646](https://github.com/rig-c/parts/issues/646)
+
 ## [1.55.2](https://github.com/rig-c/parts/compare/v1.55.1...v1.55.2) (2026-10-21)
 
 
