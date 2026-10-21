@@ -389,6 +389,8 @@ export interface AssembleInput {
  * hands them to {@link assemble}.
  */
 export interface OtherLimbs {
+  /** Issue #638's test-only pre-fix mutant; absent uses only segments taking the source. No CLI/config field. */
+  line?: 'whole-limb';
   /** The config's limbs, by name, that the set does not carry and that take one of `limbIslands`. */
   limbs: Readonly<Record<string, Limb>>;
   /**
@@ -827,8 +829,9 @@ function skeletonsTooClose(own: readonly LinePt[], other: readonly LinePt[], hal
  * Issue #609: on a layer of one island that the set's limbs take and `others`' limbs take too, give each pixel of the
  * set's limb parts to the limb whose segment line is nearest it, in the set's pose, and keep the set's.
  *
- * ⚖️ Invariant: a limb's segment line is its polyline ({@link limbPolyline}: its segments' bone origins, then the last
- * bone's end) at `places`, the set's own bones — the set's limb where the set cut it, the other limb where the set
+ * ⚖️ Invariant: a limb's segment line is the polyline of its segments taking this source ({@link limbPolyline}:
+ * those segments' bone origins, then the last bone's end or the next segment's joint) at `places`, the set's own
+ * bones — the set's limb where the set cut it, the other limb where the set
  * placed it (its skeleton's keypoints). A pixel of a part (alpha above 0, where the layer has art) is nearer the
  * other limb when its centre's distance to that limb's line is less than its distance to its own limb's by more than
  * {@link OVERLAP_BAND_PX}; within it, in the overlap band, it goes to the limb whose part there (the part of the
@@ -887,7 +890,34 @@ function splitOneIsland(
     refused = true;
   }
   if (refused || posed.length === 0) return;
-  const polyOf = (l: string, all: Readonly<Record<string, Limb>>): Array<[number, number]> => limbPolyline(all[l], places);
+  // Issue #638: a separate footwear layer belongs to the ankle-to-toe segments, not to a nearby thigh or shin.
+  // The same source selection applies to every segment, without reading a part name or a layer tag.
+  const taking = (l: string, all: Readonly<Record<string, Limb>>): Limb => others.line === 'whole-limb'
+    ? all[l]
+    : { ...all[l], segments: all[l].segments.filter((sg) => sg.from === src) };
+  const polyOf = (l: string, all: Readonly<Record<string, Limb>>): Array<[number, number]> => {
+    const selected = taking(l, all);
+    const last = selected.segments[selected.segments.length - 1];
+    const line = limbPolyline(selected, places);
+    if ((places.get(last.bone) as BonePlace).end === null) {
+      const next = all[l].segments[all[l].segments.indexOf(last) + 1];
+      if (next !== undefined) line.push((places.get(next.bone) as BonePlace).at);
+    }
+    return line;
+  };
+  for (const [l, all] of [...ownNames.map((l) => [l, limbs] as const), ...posed.map((l) => [l, others.limbs] as const)]) {
+    const selected = taking(l, all);
+    const line = polyOf(l, all);
+    if (line.length <= selected.segments.length) {
+      const bone = selected.segments[selected.segments.length - 1].bone;
+      problems.push({
+        code: 'ASSEMBLE_ALT_LIMB_POSE',
+        object: `config.limbs.${l} (part "${src}", bone "${bone}")`,
+        detail: `takes this shared one-island source on a segment with no end: "${bone}" has no tip, so its origin alone cannot place the segment line; an explicit bone tip in the set's pose is required to assign the pixels, never another layer's segment line`,
+      });
+    }
+  }
+  if (problems.length > problemsBefore) return;
   // The too-close refusal, per own limb and other limb, on the own limb's half-width.
   for (const own of ownNames) {
     const radii = parts.filter((q) => q.limb === own && q.record.cap !== undefined).map((q) => (q.record.cap as CapRecord).radius);
@@ -914,7 +944,7 @@ function splitOneIsland(
   if (problems.length > problemsBefore) return;
   const drawAt = new Map(others.drawOrder.map((name, i) => [name, i]));
   // Each other limb's pieces, and the part each piece's segment is.
-  const otherLines = posed.map((l) => ({ l, line: polyOf(l, others.limbs), segs: others.limbs[l].segments }));
+  const otherLines = posed.map((l) => ({ l, line: polyOf(l, others.limbs), segs: taking(l, others.limbs).segments }));
   for (const { q, i } of mine) {
     const piece = pieces[i];
     const ownLine = polyOf(q.limb, limbs);

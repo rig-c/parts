@@ -463,6 +463,14 @@ bun run selftest         # every gate's controls; with the examples fetched, bui
 bun run smoke            # pack, install into an empty directory, run from the install (needs a network)
 ```
 
+The generated `foot-ownership` suite can be run alone with
+`bun run selftest -- --only foot-ownership` (exit 2 means a green partial run,
+not a full-tree verdict). Issue #638's revised acceptance requires zero foreign-leg
+components and reports valid own-cap components separately; it was changed after
+measurement, and does not claim the original second-island 1% bar passed.
+[AUTHORING's limb section](docs/AUTHORING.md#limbs-cut-at-their-joints-limbs-issue-349)
+records the generated default-cap case and its preservation controls.
+
 [CLAUDE.md](CLAUDE.md) is the doctrine, [CONTRIBUTING.md](CONTRIBUTING.md) the
 practice, [RELEASING.md](RELEASING.md) the cut, [docs/STABILITY.md](docs/STABILITY.md)
 the interface it holds.
