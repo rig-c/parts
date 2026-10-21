@@ -1159,20 +1159,36 @@ function partNameOk(name: string): boolean {
 // the loader
 // ---------------------------------------------------------------------------
 
-/** The file as parsed JSON, or a refusal naming why not. Both loaders read through it. */
-function readConfigFile(path: string): Json {
+/** The file's bytes as read and as parsed JSON, or a refusal naming why not. Every loader reads through it. */
+function readConfigBytes(path: string): { raw: Json; bytes: Buffer } {
   if (!existsSync(path)) refuseIfAny([{ code: 'CONFIG_FILE_PRESENT', object: path, detail: 'no such file' }]);
+  const bytes = readFileSync(path);
   let raw: Json;
   try {
-    raw = JSON.parse(readFileSync(path, 'utf8'));
+    raw = JSON.parse(bytes.toString('utf8'));
   } catch (err) {
     refuseIfAny([{ code: 'CONFIG_IS_JSON', object: path, detail: `does not parse as JSON: ${(err as Error).message}` }]);
   }
-  return raw;
+  return { raw, bytes };
+}
+
+/** The file as parsed JSON, or a refusal naming why not. */
+function readConfigFile(path: string): Json {
+  return readConfigBytes(path).raw;
 }
 
 export function loadConfig(path: string): CharacterConfig {
   return loadConfigAndAnimations(path).config;
+}
+
+/**
+ * The full loader, with the bytes it parsed (issue #607): `build` hashes these
+ * into `check.json`'s `config` record, so the digest is of the bytes this read
+ * took, not of a later read of the same path.
+ */
+export function loadConfigWithBytes(path: string): { config: CharacterConfig; bytes: Buffer } {
+  const { raw, bytes } = readConfigBytes(path);
+  return { config: parseConfigFrom(raw, dirname(resolve(path))).config, bytes };
 }
 
 /**

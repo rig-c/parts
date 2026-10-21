@@ -315,5 +315,9 @@
    ]
   }
  },
+ "config": {
+  "path": "examples/reference-sample/config.json",
+  "sha256": "b680fd8de9ad121a6aa50390bab4f40034acd6e2f57a39d261e4fb709007e24c"
+ },
  "PASS": true
 }

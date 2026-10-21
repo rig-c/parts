@@ -4193,6 +4193,13 @@ declaration is `BUILD_REQUIREMENTS_CONFLICT` (`BU179`); the same file by both, o
 of it, builds what the config alone builds (`BU180`). Without either, no `requirements`
 block is written and no byte moves.
 
+**Which config a build read** (issue #607). `build` records its config in the same
+shape, just before the `requirements` block: `"config": { "path", "sha256" }`, `path`
+as `--config` was typed (a relative path stays relative) and `sha256` of the bytes the
+build's full loader parsed, so a reader ties a build to its config by digest rather than
+by where the files sit (selftest `BU210`, `BU211`). `check` reads no config and writes
+no `config` record; otherwise its `check.json` is the build's (`BU212`).
+
 **Feet that are not planted** (issue #231). The feet halves of `BREATH_VISIBLE` and
 `STILL_REGIONS_DARK` assume a figure that stands: every `footwear` part holds still.
 Whether the figure stands is the scene's knowledge, so a scene where it sits and its
