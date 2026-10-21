@@ -592,6 +592,7 @@ import { RETUNE_FILE, RETUNE_SPEC, type RetuneInput, type RetunePlant, type Retu
 import { DRAFT_COARSE_GRID, DRAFT_CONTOUR_MARK, DRAFT_COSTLY_GRID, DRAFT_FIGURE, DRAFT_FINE_GRID, DRAFT_LINKS, DRAFT_SPECK_ALPHA, draftConfig, draftImages, draftParts, writeDraftFixture, writeDraftFixtureWithContour, writeDraftIslandsFixture } from './fixtures/meshdraft.ts';
 import { pyRound } from './src/round.ts';
 import { ISLAND_FLOOR_SHARE as ISLAND_FLOOR_SHARE_608, islandLines as islandLinesOf608, setIslandSources as setIslandSourcesOf608 } from './src/assemble.ts';
+import { setExclusions as setExclusionsOf603 } from './src/assemble.ts';
 import { COLORS, isSkeletonName, KEYPOINT_NAMES, renderSkeleton, scaledPoints, SKELETON_BASE, SKELETONS, stickScale } from './src/skeleton.ts';
 import { AUTHOR_LABEL_RULE, AUTHOR_NO_ROLE, authorLayerLine, BODY_TAGS, HEAD_TAGS, HIDDEN_NAME_RULE, readAuthorTag, readLayerTag, readTag, SPLIT_TAGS, type TagReading, V3_TAGS } from './src/tags.ts';
 
@@ -24223,6 +24224,233 @@ function runBuildSuite(): number {
       spOn.islands.length === 0 && JSON.stringify(spOffLines) === JSON.stringify(spOffWant) && ISLAND_FLOOR_SHARE_608 === 0.01,
       `floor ${ISLAND_FLOOR_SHARE_608}: ${spOn.islands.length} island count(s); floor 0: ${spOffLines.join(' | ') || 'none'}`,
       'issue #608, bar 4: the floor is what keeps the speck from being an island — with it off, the hand-split layer reads two islands and prints two lines; the shin\'s line, which holds none of the speck, says `dropped none` rather than `dropped 1 (0 px)`',
+    );
+
+    // BU240–BU243 — issue #603: a subset set's limb part counts its merged_px and its knee cap after #587's
+    // exclusion. The fixture is #587's (scale 1 on the full run, the shorts, the two legs, the same bones and limbs)
+    // with two changes. The legs part is the head run's `legwear`, continued below the head crop from the full run's
+    // (`extend_below_crop`): HEAD_BOX [32, 0, 96, 64] source px is rig [16, 48) x [0, 32) at half a rig px per head-run
+    // px, so the crop's bottom row is 32 - HEAD_BOTTOM_INSET (4) = 28, and every leg pixel on rows 28..49 is a copied
+    // one (the painting is white off the figure, so growRim's ring adds none). And a base `kneepad` (`objects`),
+    // [34, 42) x [28, 36), drawn after the legs, covers the left knee. One set, `straight_l`, paints the left leg from
+    // row 10 in both runs and carries thigh_l and shin_l only. By hand, for the set: thigh_l's copied pixels are its
+    // rows 28, 29 (16), every one under the kneepad: merged_px 0. shin_l's region is rows 30..49, 160 copied, of which
+    // rows 30..35 (48) lie under the kneepad: merged_px 112. The knee's cap — at [38, 30], radius 4, BU200's 26 px on
+    // rows 26..29 (4 + 6 + 8 + 8), all from the layer — loses rows 28 and 29 (8 + 8) to the kneepad: layer_px 10,
+    // excluded_px 16, missing_px 0. #587's LINT: thigh_l 80 under bottomwear and 16 under kneepad, shin_l 64 (48 + 16).
+    const kneeDir = join(dir, 'knee-sets');
+    const KNEE_RED: [number, number, number] = [200, 40, 40];
+    const KNEE_HEAD_BOTTOM = 32 - 4;
+    const kneeFixture = (name: string, carry: boolean, withSets = true): string => {
+      const d = join(kneeDir, name);
+      const painting = newRaster(SOURCE_SIDE, SOURCE_SIDE);
+      for (let y = 0; y < SOURCE_SIDE; y++) {
+        for (let x = 0; x < SOURCE_SIDE; x++) {
+          const rx = Math.floor(x / 2);
+          const ry = Math.floor(y / 2);
+          let c: [number, number, number] = [255, 255, 255];
+          if (((rx >= 22 && rx < 30) || (rx >= 34 && rx < 42)) && ry >= 10 && ry < 50) c = [C[0], C[1], C[2]];
+          if (rx >= 20 && rx < 44 && ry >= 8 && ry < 20) c = NAVY_SHORTS;
+          if (rx >= 34 && rx < 42 && ry >= 28 && ry < 36) c = KNEE_RED;
+          painting.data.set([c[0], c[1], c[2], 255], (y * SOURCE_SIDE + x) * 4);
+        }
+      }
+      const kneeLayer: RunLayerSpec = { name: 'objects', depth: 0.3, rects: [{ x0: 34, y0: 28, x1: 42, y1: 36, colour: KNEE_RED }] };
+      // A head-run rectangle from rig px: x = 16 + hx / 2, y = hy / 2.
+      const headLegs = (rects: Array<[number, number, number, number]>): RunLayerSpec => ({ name: 'legwear', depth: 0.6, rects: rects.map(([x0, y0, x1, y1]) => ({ x0: (x0 - 16) * 2, y0: y0 * 2, x1: (x1 - 16) * 2, y1: y1 * 2, colour: C })) });
+      const c = assembleConfig({ plan: [['legs', 'head', 'legwear'], ['bottomwear', 'full', 'bottomwear'], ['kneepad', 'full', 'objects']], extend: [{ part: 'legs', run: 'full', tag: 'legwear' }] });
+      c.bones = [
+        { name: 'hip', parent: 'root', at: [32, 20] },
+        { chain: 'leg_r', parent: 'hip', points: [[26, 10], [26, 30]], tip: [26, 50] },
+        { chain: 'leg_l', parent: 'hip', points: [[38, 10], [38, 30]], tip: [38, 50] },
+      ];
+      c.limbs = {
+        leg_r: { segments: [{ part: 'thigh_r', from: 'legs', bone: 'leg_r0' }, { part: 'shin_r', from: 'legs', bone: 'leg_r1', joint: 'knee' }] },
+        leg_l: { segments: [{ part: 'thigh_l', from: 'legs', bone: 'leg_l0' }, { part: 'shin_l', from: 'legs', bone: 'leg_l1', joint: 'knee' }] },
+      };
+      c.regions = { bottomwear: 'hip', kneepad: 'hip', thigh_r: 'leg_r0', shin_r: 'leg_r1', thigh_l: 'leg_l0', shin_l: 'leg_l1' };
+      c.motion = { duration: 1, tracks: [{ bone: 'hip', prop: 'rotate', amp: 2, period: 1, phase: 0 }] };
+      if (withSets) {
+        (c.assemble as Record<string, unknown>).alternates = [
+          { name: 'straight_l', source: 'painting.png', full: 'full_straight_l', head: 'head_straight_l', parts: carry ? ['thigh_l', 'shin_l', 'bottomwear', 'kneepad'] : ['thigh_l', 'shin_l'] },
+        ];
+      }
+      writeAssembleFixture(d, c, painting, {
+        full: [{ name: 'legwear', depth: 0.6, rects: [{ x0: 22, y0: 20, x1: 30, y1: 50, colour: C }, { x0: 34, y0: 20, x1: 42, y1: 50, colour: C }] }, shortsLayer, kneeLayer],
+        head: [headLegs([[22, 20, 30, 32], [34, 20, 42, 32]])],
+      });
+      writeRun(join(d, 'full_straight_l'), [{ name: 'legwear', depth: 0.6, rects: [{ x0: 34, y0: 10, x1: 42, y1: 50, colour: C }] }, shortsLayer, kneeLayer]);
+      writeRun(join(d, 'head_straight_l'), [headLegs([[34, 10, 42, 32]])]);
+      // The set's own assemble, for the direct calls below: the base config with the set's one limb and no set.
+      const own = JSON.parse(JSON.stringify(c)) as Record<string, unknown>;
+      delete (own.assemble as Record<string, unknown>).alternates;
+      own.limbs = { leg_l: (c.limbs as Record<string, unknown>).leg_l };
+      own.regions = { bottomwear: 'hip', kneepad: 'hip', thigh_l: 'leg_l0', shin_l: 'leg_l1' };
+      writeFileSync(join(d, 'config_set.json'), `${JSON.stringify(own, null, 2)}\n`);
+      return d;
+    };
+    const kneeStage = (d: string, out: string, rule: 'base' | 'none'): { lines: string[]; result: ReturnType<typeof assemble> | null; failed: PartsError | null } => {
+      const lines: string[] = [];
+      const box: { result: ReturnType<typeof assemble> | null } = { result: null };
+      const failed = refusals(() => {
+        box.result = assembleStage(
+          { source: join(d, 'painting.png'), full: join(d, 'full'), head: join(d, 'head'), config: join(d, 'config.json'), seam: 'near-white', project: DEFAULT_PROJECT_RULE, setExclusion: rule },
+          { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, 'recomposite_error_rig.png') },
+          (l) => lines.push(l),
+        );
+      });
+      return { lines, result: box.result, failed };
+    };
+    interface KneeCounts {
+      merged: number;
+      layer: number;
+      excluded: number | null;
+      missing: number;
+    }
+    const countsOf = (rec: PartRecord): KneeCounts => ({ merged: rec.merged_px, layer: rec.limb?.cap?.layer_px ?? 0, excluded: rec.limb?.cap?.excluded_px ?? null, missing: rec.limb?.cap?.missing_px ?? 0 });
+    /** A limb part's record counts, and a hand count of its PNG: opaque px on rows >= 28 off the cap's upper half-disc (the merge), and the cap's upper-side disc pixels with alpha above 0 and at 0. */
+    const kneeCount = (rec: PartRecord | undefined, png: string): { record: KneeCounts | null; png: { merged: number; capKept: number; capClear: number } | null } => {
+      if (rec === undefined || !existsSync(png)) return { record: null, png: null };
+      const img = readPng(png);
+      const cap = rec.limb?.cap;
+      const onCap = (x: number, y: number): boolean => cap !== undefined && (x + 0.5 - cap.at[0]) ** 2 + (y + 0.5 - cap.at[1]) ** 2 <= cap.radius * cap.radius && y + 0.5 - cap.at[1] <= 0;
+      const alphaAt = (x: number, y: number): number => {
+        const lx = x - rec.x;
+        const ly = y - rec.y;
+        return lx >= 0 && ly >= 0 && lx < img.width && ly < img.height ? img.data[(ly * img.width + lx) * 4 + 3] : 0;
+      };
+      let merged = 0;
+      let capKept = 0;
+      let capClear = 0;
+      for (let y = 0; y < 64; y++) {
+        for (let x = 0; x < 64; x++) {
+          if (onCap(x, y)) {
+            if (alphaAt(x, y) > 0) capKept++;
+            else capClear++;
+          } else if (y >= KNEE_HEAD_BOTTOM && alphaAt(x, y) > 8) merged++;
+        }
+      }
+      return { record: countsOf(rec), png: { merged, capKept, capClear } };
+    };
+    const kneeSetRecs = (out: string): Map<string, PartRecord> => {
+      const got = new Map<string, PartRecord>();
+      if (!existsSync(join(out, 'parts.json'))) return got;
+      for (const a of readParts(join(out, 'parts.json')).alternates ?? []) for (const p of a.records) got.set(p.name, p);
+      return got;
+    };
+    const showKnee = (k: ReturnType<typeof kneeCount>): string =>
+      k.record === null || k.png === null
+        ? 'absent'
+        : `record merged_px ${k.record.merged}, cap layer_px ${k.record.layer}, excluded_px ${k.record.excluded ?? 'absent'}, missing_px ${k.record.missing} | PNG merge px ${k.png.merged}, cap px kept ${k.png.capKept}, cleared ${k.png.capClear}`;
+
+    const kneeGreenDir = kneeFixture('green', false);
+    const kneeGreenOut = join(kneeGreenDir, 'out');
+    const kneeGreen = kneeStage(kneeGreenDir, kneeGreenOut, 'base');
+    const kneeRecs = kneeSetRecs(kneeGreenOut);
+    const thighK = kneeCount(kneeRecs.get('thigh_l'), join(kneeGreenOut, 'parts', 'straight_l_thigh_l.png'));
+    const shinK = kneeCount(kneeRecs.get('shin_l'), join(kneeGreenOut, 'parts', 'straight_l_shin_l.png'));
+    const kneeLint = kneeGreen.lines.filter((l) => l.includes('LINT set "')).map((l) => l.trim());
+    const kneeLintWant = ['LINT set "straight_l" thigh_l: 80 px under bottomwear excluded', 'LINT set "straight_l" thigh_l: 16 px under kneepad excluded', 'LINT set "straight_l" shin_l: 64 px under kneepad excluded'];
+    say(
+      'BU240_A_SET_SHIN_UNDER_A_BASE_KNEEPAD_COUNTS_ITS_MERGED_PX_AND_ITS_KNEE_CAP_AFTER_THE_EXCLUSION_AS_ITS_PNG_HOLDS_THEM',
+      kneeGreen.failed === null &&
+        JSON.stringify(thighK.record) === JSON.stringify({ merged: 0, layer: 0, excluded: null, missing: 0 }) &&
+        thighK.png?.merged === 0 &&
+        JSON.stringify(shinK.record) === JSON.stringify({ merged: 112, layer: 10, excluded: 16, missing: 0 }) &&
+        shinK.png?.merged === 112 &&
+        shinK.png.capKept === 10 &&
+        shinK.png.capClear === 16 &&
+        JSON.stringify(kneeLint) === JSON.stringify(kneeLintWant),
+      `${kneeGreen.failed === null ? 'assembles' : kneeGreen.failed.problems.map((q) => q.code).join(', ')}; thigh_l ${showKnee(thighK)}; shin_l ${showKnee(shinK)}; LINT ${kneeLint.join(' | ') || 'none'}`,
+      'issue #603: a record\'s counts add up to the part\'s PNG — the set\'s shin holds 112 merged pixels and 10 of its cap\'s 26 once the kneepad\'s are excluded, and its record says 112, layer_px 10 and excluded_px 16 (by hand: 160 - 48, 26 - 16), where the counts before #603 said 160 and 26; the thigh\'s 16 merged pixels all lie under the kneepad, merged_px 0',
+    );
+
+    // Bar 3's mutant: the same set assembled directly, with the counts read before the exclusion (a test-only input of assemble()).
+    const kneeBase = kneeGreen.result;
+    const kneeOwn = (rule: 'after' | 'before'): ReturnType<typeof assemble> | null => {
+      if (kneeBase === null) return null;
+      const box: { r: ReturnType<typeof assemble> | null } = { r: null };
+      refusals(() => {
+        box.r = assemble({
+          source: readPng(join(kneeGreenDir, 'painting.png')),
+          full: readWrapperLayers(join(kneeGreenDir, 'full_straight_l')),
+          head: readWrapperLayers(join(kneeGreenDir, 'head_straight_l')),
+          ...stageFields(loadConfig(join(kneeGreenDir, 'config_set.json'))),
+          projectRule: DEFAULT_PROJECT_RULE,
+          seamRule: 'near-white',
+          exclude: setExclusionsOf603(kneeBase.images, 64, 64, ['thigh_l', 'shin_l'], new Set(['thigh_l', 'shin_l'])),
+          exclusionCounts: rule,
+        });
+      });
+      return box.r;
+    };
+    const ownCounts = (r: ReturnType<typeof assemble> | null, name: string): KneeCounts | null => {
+      const rec = r?.parts.parts.find((p) => p.name === name);
+      return rec === undefined ? null : countsOf(rec);
+    };
+    const ownAfter = kneeOwn('after');
+    const ownBefore = kneeOwn('before');
+    const pngOf = (r: ReturnType<typeof assemble> | null, name: string): string => {
+      const im = r?.images.find((q) => q.record.name === name);
+      return im === undefined ? 'absent' : createHash('sha256').update(encodePngBytes(im.image)).digest('hex').slice(0, 12);
+    };
+    say(
+      'BU241_THE_MUTANT_THAT_READS_THE_COUNTS_BEFORE_THE_EXCLUSION_PUTS_160_MERGED_AND_26_CAP_PX_ON_A_PNG_THAT_HOLDS_112_AND_10',
+      shinK.record !== null &&
+        JSON.stringify(ownCounts(ownAfter, 'shin_l')) === JSON.stringify(shinK.record) &&
+        JSON.stringify(ownCounts(ownAfter, 'thigh_l')) === JSON.stringify(thighK.record) &&
+        JSON.stringify(ownCounts(ownBefore, 'shin_l')) === JSON.stringify({ merged: 160, layer: 26, excluded: null, missing: 0 }) &&
+        ownCounts(ownBefore, 'thigh_l')?.merged === 16 &&
+        ['thigh_l', 'shin_l'].every((n) => pngOf(ownBefore, n) !== 'absent' && pngOf(ownBefore, n) === pngOf(ownAfter, n)),
+      `direct assemble, counts after: shin_l ${JSON.stringify(ownCounts(ownAfter, 'shin_l'))}, thigh_l ${JSON.stringify(ownCounts(ownAfter, 'thigh_l'))}; before: shin_l ${JSON.stringify(ownCounts(ownBefore, 'shin_l'))}, thigh_l ${JSON.stringify(ownCounts(ownBefore, 'thigh_l'))}; PNG sha256[:12] after ${['thigh_l', 'shin_l'].map((n) => pngOf(ownAfter, n)).join(' ')}, before ${['thigh_l', 'shin_l'].map((n) => pngOf(ownBefore, n)).join(' ')}`,
+      'issue #603, bar 3: the same PNGs under both readings, and the counts go red when read before the exclusion — the shin\'s record says 160 merged and 26 from the layer over a PNG that holds 112 and 10, and the thigh\'s 16 merged over none; read after, the direct call writes BU240\'s records',
+    );
+
+    // Bar 2: a set that carries the kneepad and the shorts excludes nothing — its bytes are the same under either rule,
+    // its cap writes no excluded_px — and the base's parts are the bytes a build with no set writes.
+    const kneeCarryDir = kneeFixture('carry', true);
+    const kneeCarryBase = kneeStage(kneeCarryDir, join(kneeCarryDir, 'out-base'), 'base');
+    const kneeCarryNone = kneeStage(kneeCarryDir, join(kneeCarryDir, 'out-none'), 'none');
+    const kneeNoSetsDir = kneeFixture('no-sets', false, false);
+    const kneeNoSets = kneeStage(kneeNoSetsDir, join(kneeNoSetsDir, 'out'), 'base');
+    const kneeBaseNames = ['thigh_r', 'shin_r', 'thigh_l', 'shin_l', 'bottomwear', 'kneepad'];
+    const kneeCarryFiles = ['parts.json', ...kneeBaseNames.map((n) => join('parts', `${n}.png`)), ...['thigh_l', 'shin_l', 'bottomwear', 'kneepad'].map((n) => join('parts', `straight_l_${n}.png`))];
+    const kneeCarryDiffer = kneeCarryFiles.filter((f) => !existsSync(join(kneeCarryDir, 'out-base', f)) || !existsSync(join(kneeCarryDir, 'out-none', f)) || digest(join(kneeCarryDir, 'out-base', f)) !== digest(join(kneeCarryDir, 'out-none', f)));
+    const kneeCarryJson = existsSync(join(kneeCarryDir, 'out-base', 'parts.json')) ? readFileSync(join(kneeCarryDir, 'out-base', 'parts.json'), 'utf8') : '';
+    const kneeBaseDiffer = kneeBaseNames.filter((n) => digest(join(kneeGreenOut, 'parts', `${n}.png`)) === 'absent' || digest(join(kneeGreenOut, 'parts', `${n}.png`)) !== digest(join(kneeNoSetsDir, 'out', 'parts', `${n}.png`)));
+    const kneeBaseRecs =
+      existsSync(join(kneeGreenOut, 'parts.json')) &&
+      existsSync(join(kneeNoSetsDir, 'out', 'parts.json')) &&
+      JSON.stringify(readParts(join(kneeGreenOut, 'parts.json')).parts) === JSON.stringify(readParts(join(kneeNoSetsDir, 'out', 'parts.json')).parts);
+    say(
+      'BU242_A_SET_THAT_CARRIES_THE_KNEEPAD_EXCLUDES_NOTHING_WRITES_THE_BYTES_IT_WROTE_BEFORE_AND_THE_BASE_IS_THE_NO_SET_BUILD',
+      kneeCarryBase.failed === null && kneeCarryNone.failed === null && kneeNoSets.failed === null && kneeCarryDiffer.length === 0 && kneeCarryJson !== '' && !kneeCarryJson.includes('excluded_px') && kneeBaseDiffer.length === 0 && kneeBaseRecs,
+      `carry "base" ${kneeCarryBase.failed === null ? 'assembles' : kneeCarryBase.failed.problems.map((q) => q.code).join(', ')}, "none" ${kneeCarryNone.failed === null ? 'assembles' : kneeCarryNone.failed.problems.map((q) => q.code).join(', ')}; ${kneeCarryFiles.length} file(s) compared, differing: ${kneeCarryDiffer.join(', ') || 'none'}; excluded_px in its parts.json: ${kneeCarryJson.includes('excluded_px')}; base PNGs differing from the no-set build: ${kneeBaseDiffer.join(', ') || 'none'}; base records equal: ${kneeBaseRecs}`,
+      'issue #603, bar 2: the recount moves only what the exclusion took — a set with nothing excluded, and the base, write the bytes they wrote before',
+    );
+
+    // The reader: excluded_px is a count above 0, written only when the exclusion took a cap pixel. readParts holds a
+    // `parts` record's cap to its rules (an alternate set's records it reads as written), so the plant is the base
+    // shin_l's cap carrying the key.
+    const kneeJson = existsSync(join(kneeGreenOut, 'parts.json')) ? readFileSync(join(kneeGreenOut, 'parts.json'), 'utf8') : '';
+    const plantExcluded = (label: string, value: number): string => {
+      const f = join(kneeDir, `planted-${label}.json`);
+      const doc = JSON.parse(kneeJson) as { parts: Array<{ name: string; limb?: { cap?: Record<string, unknown> } }> };
+      const cap = doc.parts.find((q) => q.name === 'shin_l')?.limb?.cap;
+      if (cap === undefined) return 'no base shin_l cap';
+      cap.excluded_px = value;
+      writeFileSync(f, `${JSON.stringify(doc, null, 2)}\n`);
+      const e = refusals(() => readParts(f));
+      return e === null ? 'reads' : e.problems.map((q) => `${q.code} ${q.object}`).join(', ');
+    };
+    const planted16 = kneeJson === '' ? 'absent' : plantExcluded('sixteen', 16);
+    const planted0 = kneeJson === '' ? 'absent' : plantExcluded('zero', 0);
+    const plantedHalf = kneeJson === '' ? 'absent' : plantExcluded('half', 1.5);
+    say(
+      'BU243_THE_READER_REFUSES_A_CAP_EXCLUDED_PX_OF_0_OR_NOT_A_COUNT_AND_READS_A_COUNT_ABOVE_0',
+      kneeJson.includes('"excluded_px": 16') && refusals(() => readParts(join(kneeGreenOut, 'parts.json'))) === null && planted16 === 'reads' && /^PARTS_FIELD_TYPE .*"cap"$/.test(planted0) && /^PARTS_FIELD_TYPE .*"cap"$/.test(plantedHalf),
+      `written: excluded_px 16 on the set's shin ${kneeJson.includes('"excluded_px": 16')}; the base shin_l's cap with excluded_px 16: ${planted16}; 0: ${planted0}; 1.5: ${plantedHalf}`,
+      'issue #603: excluded_px is a known cap key written only when the exclusion took a cap pixel, so 0 is a record no assemble writes, and a fraction is no pixel count',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

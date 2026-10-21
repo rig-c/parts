@@ -351,9 +351,17 @@ export interface AssembleInput {
    * every figure a part's record holds — each entry clears `part`'s pixels (alpha, colour and region) where `mask` is
    * 1, and {@link AssembleResult.excluded} counts the ones above `OPAQUE_ALPHA_ABOVE` it took, in entry order (a pixel
    * an earlier entry cleared is not counted again). The set build passes {@link setExclusions}. An entry naming a part
-   * this run did not make clears nothing and counts 0. Absent or empty: nothing changes.
+   * this run did not make clears nothing and counts 0. Absent or empty: nothing changes. Issue #603: the part's
+   * `merged_px` and, on a limb segment's part, its `cap` record are counted after it, so they add up to the PNG written
+   * ({@link CapRecord} `excluded_px`).
    */
   exclude?: readonly SetExclusion[];
+  /**
+   * Issue #603: `"after"` (the default, the only one the stages pass) counts `merged_px` and a limb segment's `cap`
+   * record after `exclude`; `"before"` leaves them as counted before it, the rule before #603, which counted pixels the
+   * exclusion took out of the PNG — kept for the selftest's control that shows the counts go red under it.
+   */
+  exclusionCounts?: 'after' | 'before';
   /**
    * Issue #588: the parts a limb takes on which a subset set names one limb side ({@link setIslandSources}). On each
    * that holds more than one island, every limb segment part cut from it keeps the island its joints fall on and
@@ -3071,6 +3079,46 @@ export interface LimbPart {
   record: LimbRecord;
 }
 
+/**
+ * Issue #603: which count of a cap record each pixel of its box was counted in — {@link CAP_FROM_LAYER} and the
+ * constants after it, 0 where the pixel is off the disc or was counted missing (the cap wrote no pixel there) — the
+ * box's pixel (i, j) at `codes[j * box[2] + i]`, rig pixel `(box[0] + i, box[1] + j)`.
+ */
+interface CapFrom {
+  box: [number, number, number, number];
+  codes: Uint8Array;
+}
+/** Issue #603: a {@link CapFrom} code per count of {@link CapRecord} a pixel the cap wrote or kept was counted in. */
+const CAP_FROM_LAYER = 1;
+const CAP_FROM_IMAGE = 2;
+const CAP_FROM_UPPER = 3;
+const CAP_FROM_LOWER = 4;
+const CAP_FROM_LOWER_KEPT = 5;
+
+/**
+ * Issue #603: the set exclusion cleared rig pixel `(x, y)` of a lower segment's part; when the cap wrote or kept it,
+ * move it from the count it was in to `excluded_px`, so the record's counts are the PNG's. A pixel off the cap's disc,
+ * or one the cap counted missing (it wrote none), changes nothing.
+ */
+function excludeCapPixel(cap: CapRecord, from: CapFrom, x: number, y: number): void {
+  const [bx, by, bw, bh] = from.box;
+  if (x < bx || y < by || x >= bx + bw || y >= by + bh) return;
+  const i = (y - by) * bw + (x - bx);
+  const code = from.codes[i];
+  if (code === 0) return;
+  from.codes[i] = 0;
+  if (code === CAP_FROM_LAYER) cap.layer_px--;
+  else if (code === CAP_FROM_IMAGE) cap.image_px = (cap.image_px as number) - 1;
+  else if (code === CAP_FROM_UPPER) {
+    cap.upper_px = (cap.upper_px as number) - 1;
+    // Without a shape, upper_px is written only above 0 (issue #557).
+    if (cap.upper_px === 0 && cap.shape === undefined) delete cap.upper_px;
+  }
+  else if (code === CAP_FROM_LOWER) cap.lower_px = (cap.lower_px as number) - 1;
+  else cap.lower_kept_px = (cap.lower_kept_px as number) - 1;
+  cap.excluded_px = (cap.excluded_px ?? 0) + 1;
+}
+
 /** What the limbs did to one part they took: its opaque pixels and each segment's share (`limbLines`). */
 export interface LimbCount {
   of: string;
@@ -3356,9 +3404,9 @@ function cutLimbs(
   count: (m: Mask | null, region: Mask) => number,
   hiddenOf: (part: string) => HiddenArt | null = () => null,
   readHidden: (layer: string, by: string) => void = () => undefined,
-): { parts: LimbPart[]; pieces: Built[]; counts: LimbCount[] } {
+): { parts: LimbPart[]; pieces: Built[]; counts: LimbCount[]; capFrom: Array<CapFrom | null> } {
   const names = Object.keys(limbs);
-  if (names.length === 0) return { parts: [], pieces: [], counts: [] };
+  if (names.length === 0) return { parts: [], pieces: [], counts: [], capFrom: [] };
   const problems: Problem[] = [];
   const places = bonePlaces(bones);
   const parts: LimbPart[] = [];
@@ -3404,6 +3452,8 @@ function cutLimbs(
   /** For each part taken, which limb (index into names) owns each pixel, -1 where it has none. */
   const owners = new Map<string, Int32Array>();
   const counts: LimbCount[] = [];
+  // Issue #603: which count of its cap each pixel of a lower segment's cap box was counted in, for the set exclusion.
+  const capFrom: Array<CapFrom | null> = parts.map(() => null);
   for (const src of sources) {
     const b = builtOf(src);
     if (b === null) continue;
@@ -3605,6 +3655,10 @@ function cutLimbs(
       let lowerPx = 0;
       let lowerKept = 0;
       let lowerMissing = 0;
+      const from: CapFrom = { box, codes: new Uint8Array(Math.max(0, box[2]) * Math.max(0, box[3])) };
+      const mark = (x: number, y: number, code: number): void => {
+        from.codes[(y - box[1]) * box[2] + (x - box[0])] = code;
+      };
       for (let y = Math.max(0, box[1]); y < Math.min(H, box[1] + box[3]); y++) {
         for (let x = Math.max(0, box[0]); x < Math.min(W, box[0] + box[2]); x++) {
           if (!inDisc(line.at, radius, x, y)) continue;
@@ -3614,10 +3668,13 @@ function cutLimbs(
             if (!ball) continue;
             // Transparent is alpha 0, the reading the upper half's fill gives a layer's and the image's pixel: no pixel the
             // lower piece paints, however faint, changes.
-            if (lower.data[p * 4 + 3] > 0) lowerKept++;
-            else if (img !== null && img.data[u + 3] > 0) {
+            if (lower.data[p * 4 + 3] > 0) {
+              lowerKept++;
+              mark(x, y, CAP_FROM_LOWER_KEPT);
+            } else if (img !== null && img.data[u + 3] > 0) {
               lower.data.set(img.data.subarray(u, u + 4), p * 4);
               lowerPx++;
+              mark(x, y, CAP_FROM_LOWER);
             } else {
               lowerMissing++;
               missing++;
@@ -3629,15 +3686,18 @@ function cutLimbs(
           if (img !== null && img.data[u + 3] > 0) {
             lower.data.set(img.data.subarray(u, u + 4), p * 4);
             imagePx++;
+            mark(x, y, CAP_FROM_IMAGE);
           } else if (ownLower[p] === li && lowerSrc.r.data[p * 4 + 3] > 0) {
             lower.data.set(lowerSrc.r.data.subarray(p * 4, p * 4 + 4), p * 4);
             layerPx++;
+            mark(x, y, CAP_FROM_LAYER);
           } else if (upper.data[p * 4 + 3] > 0) {
             // Issue #360: the disc is filled from the art — the upper segment's, where the lower's layer has none.
             // Issue #557: under either shape — the half-disc too takes the neighbouring segment's pixels, so a cap is
             // short only where no layer of the limb gives a pixel.
             lower.data.set(upper.data.subarray(p * 4, p * 4 + 4), p * 4);
             upperPx++;
+            mark(x, y, CAP_FROM_UPPER);
           } else {
             missing++;
             if (jointOffsets(line, x, y).across >= 0) shortLeft++;
@@ -3717,12 +3777,13 @@ function cutLimbs(
       };
       if (hidden !== null) readHidden(hidden.layer, `config.limbs.${l}.segments[${k}].cap (part "${sg.part}")`);
       parts[at].record.cap = cap;
+      capFrom[at] = from;
       const c = counts.find((q) => q.of === sg.from);
       if (c !== undefined) c.joints.push({ limb: l, joint: String(sg.joint), part: sg.part, upper: segs[k - 1].part, cap, from: sg.from, upperFrom: upFrom, half: pyRound(half, 3), shortInHalf });
     });
   }
   refuseIfAny(problems);
-  return { parts, pieces: pieces as Built[], counts };
+  return { parts, pieces: pieces as Built[], counts, capFrom };
 }
 
 // ---------------------------------------------------------------------------
@@ -4280,22 +4341,31 @@ export function assemble(input: AssembleInput): AssembleResult {
   refuseIfAny(islandKept.problems);
 
   // Issue #587: a set's limb part loses the pixels a base part it does not replace covers, before anything is counted.
+  // Issue #603: its merged_px and its cap record lose them too, so they count what its PNG holds.
   const excluded: ExcludedCount[] = [];
+  const recount = input.exclusionCounts !== 'before';
   for (const ex of input.exclude ?? []) {
     const d = order.find((q) => !('patch' in q) && pieceAt(q).name === ex.part);
     const b = d === undefined || 'patch' in d ? null : pieceAt(d).b;
+    const capOf = d !== undefined && 'limb' in d ? lim.parts[d.limb].record.cap : undefined;
+    const from = d !== undefined && 'limb' in d ? lim.capFrom[d.limb] : null;
     let px = 0;
     if (b !== null) {
       if (b.region === null) {
         b.region = newMask(W, H);
         b.region.data.fill(1);
       }
+      let mergedOut = 0;
       for (let p = 0; p < W * H; p++) {
         if (ex.mask.data[p] === 0 || b.r.data[p * 4 + 3] === 0) continue;
         if (b.r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) px++;
+        // merged_px counts the last merge's copied pixels and its ring inside the part's region (`mergedIn`).
+        if (b.region.data[p] === 1) mergedOut += (b.trace.lastSel?.data[p] ?? 0) + (b.trace.lastRing?.data[p] ?? 0);
         b.r.data.fill(0, p * 4, p * 4 + 4);
         b.region.data[p] = 0;
+        if (recount && capOf !== undefined && from !== null) excludeCapPixel(capOf, from, p % W, Math.floor(p / W));
       }
+      if (recount) b.merged -= mergedOut;
     }
     excluded.push({ part: ex.part, under: ex.under, px });
   }
