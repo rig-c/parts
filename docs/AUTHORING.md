@@ -1849,13 +1849,27 @@ recipe is: replaced by the draft, or removed where the draft no longer holds the
 refused, `PROPOSE_WRITE_CONFIG_CONFLICT`, the detail reading "it equals neither the draft,
 the draft without the recipe, nor the previous recipe's draft" and naming the first field
 that differs from the previous recipe's draft (the entry a person most likely edited
-from). The write line ends `--from <path>: n entries taken as the previous recipe's
-draft`. `meshes.<part>` and `regions.<part>` are unchanged by `--from`: a mesh the
-recipe drafts is replaced whole already, and one the two drafts agree at is not touched.
+from). **A dropped recipe (issue #630).** A change can remove one tag's recipe and
+keep another's (`back hair` taken out of `cloth`, `bottomwear` left in). That tag's
+entries are then the draft without the recipe again, so every entry the previous
+recipe drafted and the recipe now leaves to the plain draft goes back to it: its plain
+chains and their tracks inserted (beside their drafted neighbours, as above), its trees
+and their constraints removed, its `meshes.<part>` (and any `regions.<part>`) replaced
+by the plain draft's — where the input holds that entry as the previous recipe's draft
+wrote it, or lacks it in a section it holds. A hand edit to one of those entries is
+refused by name as any other, `PROPOSE_WRITE_CONFIG_CONFLICT` (`config.meshes.hair_back`
+in CL221, the field read against the previous recipe's draft); the tags the change keeps
+do not move. Before #630 the write exited 0 with the dropped tag's old mesh kept and its
+plain chains missing (CL222 keeps that writer as the selftest's mutant). The write line
+ends `--from <path>: n entries taken as the previous recipe's draft, m entries returned
+to the plain draft`. Apart from a dropped recipe's entries, `meshes.<part>` and
+`regions.<part>` are unchanged by `--from`: a mesh the recipe drafts is replaced whole
+already, and one all three drafts agree at is not touched.
 Without `--from` every rule and every byte is the writer's before #571; with a `--from`
 whose recipe equals `--cloth`'s the previous draft is the draft, and the written config
 is byte for byte the one written without it (CL209–CL212 hold each on the cloth fixture,
-CL213–CL215 on `wind`). The written config is the recipe's draft, not a verdict on it: on
+CL213–CL215 on `wind`; CL220–CL223 the dropped recipe on the cloth fixture, CL224 on
+`wind`, where dropping `back hair` writes the run's proposal value for value). The written config is the recipe's draft, not a verdict on it: on
 `wind`, `links` 3 → 4 writes the skirt entries of its proposal value for value, and that
 draft fails `CHECK_TIP_OVER_ROOT` on the skirt in `build`; 3 → 2 builds green (CL215). A `meshes.<part>` the
 recipe drafts is still the draft's whole, as a hand-edited lattice does not survive
