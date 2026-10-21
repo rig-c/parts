@@ -644,53 +644,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
           fail('PARTS_FIELD_TYPE', `${object} "range"`, `is ${show(r)}; [min, max], two finite degrees from rest with min <= 0 <= max, is required — config.limbs' rule (CONFIG_LIMB_RANGE)`);
         }
       }
-      if ('cap' in q) {
-        const c = q.cap;
-        const co = typeof c === 'object' && c !== null && !Array.isArray(c) ? (c as Record<string, unknown>) : null;
-        const pt = (v: unknown, n: number): boolean => Array.isArray(v) && v.length === n && v.every((x) => typeof x === 'number' && Number.isFinite(x));
-        const ok =
-          co !== null &&
-          Object.keys(co).every((k) => (CAP_KEYS as readonly string[]).includes(k)) &&
-          pt(co.at, 2) &&
-          typeof co.width === 'number' &&
-          typeof co.radius === 'number' &&
-          pt(co.box, 4) &&
-          isCount(co.layer_px) &&
-          isCount(co.missing_px) &&
-          (!('image_px' in co) || isCount(co.image_px)) &&
-          (!('image_layer' in co) || ('image_px' in co && typeof co.image_layer === 'string' && co.image_layer !== '')) &&
-          // Issue #360: a disc cap carries its count, a feathered edge its band and count, and neither carries them alone.
-          ('shape' in co ? (co.shape === 'disc' || co.shape === 'ball') && isCount(co.upper_px) : !('upper_px' in co) || (isCount(co.upper_px) && co.upper_px > 0)) &&
-          // Issue #579: a ball cap carries its lower half's three counts, its missing ones inside missing_px; no other cap carries them.
-          (co.shape === 'ball'
-            ? isCount(co.lower_px) && isCount(co.lower_kept_px) && isCount(co.lower_missing_px) && isCount(co.missing_px) && co.lower_missing_px <= co.missing_px
-            : BALL_KEYS.every((k) => !(k in co))) &&
-          // Issue #557: the shortfall by side, when written, adds up to the missing pixels, and is never written for none.
-          (!('short_px' in co) || shortSides(co.short_px, co.missing_px)) &&
-          // Issue #603: the pixels a set's exclusion took from the cap, written only when it took one.
-          (!('excluded_px' in co) || (isCount(co.excluded_px) && co.excluded_px > 0)) &&
-          ('edge' in co ? co.edge === 'feather' && typeof co.feather_radius === 'number' && Number.isFinite(co.feather_radius) && co.feather_radius >= 0 && isCount(co.feathered_px) : !('feather_radius' in co) && !('feathered_px' in co)) &&
-          // Issue #360 (item 14): a placed cut carries its band, line and counts, the line inside the band; none of them rides alone.
-          ('cut_band' in co
-            ? isCount(co.cut_band) &&
-              co.cut_band >= 1 &&
-              Number.isInteger(co.cut_offset) &&
-              Math.abs(co.cut_offset as number) <= co.cut_band &&
-              pt(co.cut_at, 2) &&
-              isCount(co.cut_crossed) &&
-              isCount(co.joint_crossed) &&
-              isCount(co.band_px) &&
-              (co.cut_crossed as number) <= (co.joint_crossed as number) &&
-              (!('stroke_luma_max' in co) || (isCount(co.stroke_luma_max) && co.stroke_luma_max <= 255))
-            : CUT_KEYS.every((k) => !(k in co)));
-        if (!ok) {
-          fail(
-            'PARTS_FIELD_TYPE',
-            `${object} "cap"`,
-            `is ${show(c)}; {at: [x, y], width, radius, box: [x, y, w, h], layer_px, image_px?, image_layer? (with image_px), missing_px, short_px? ({left, right}, adding up to missing_px, above 0), excluded_px? (above 0), shape? ("disc" or "ball", with upper_px; "ball" with lower_px, lower_kept_px and lower_missing_px, at most missing_px; without it upper_px? above 0), edge? ("feather", with feather_radius and feathered_px), cut_band? (with cut_offset inside the band, cut_at, cut_crossed at most joint_crossed, band_px, stroke_luma_max? 0..255)} is required`,
-          );
-        }
-      }
+      if ('cap' in q) checkCap(q.cap, `${object} "cap"`, fail);
     }
   }
   if ('scene' in o) {
@@ -713,11 +667,80 @@ function checkParts(raw: unknown, path: string): PartsFile {
   if ('alternates' in o && !Array.isArray(o.alternates)) {
     fail('PARTS_FIELD_TYPE', `${path} field "alternates"`, `is ${show(o.alternates)}; an array of alternate set records is required`);
   }
+  if (Array.isArray(o.alternates)) {
+    // Issue #620: a set record's cap is a cap, so it is held to the base records' rule; the object names the set and the part.
+    o.alternates.forEach((a, i) => {
+      if (typeof a !== 'object' || a === null || Array.isArray(a)) return;
+      const set = a as Record<string, unknown>;
+      if (!Array.isArray(set.records)) return;
+      const at = `${path} alternates[${i}]${typeof set.name === 'string' ? ` (set "${set.name}")` : ''}`;
+      set.records.forEach((p, j) => {
+        if (typeof p !== 'object' || p === null || Array.isArray(p)) return;
+        const r = p as Record<string, unknown>;
+        const l = r[LIMB_KEY];
+        if (typeof l !== 'object' || l === null || Array.isArray(l) || !('cap' in l)) return;
+        const part = typeof r.name === 'string' ? `part "${r.name}"` : `records[${j}]`;
+        checkCap((l as Record<string, unknown>).cap, `${at} ${part} field "${LIMB_KEY}" "cap"`, fail);
+      });
+    });
+  }
   refuseIfAny(problems);
   return raw as PartsFile;
 }
 
 const isCount = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0;
+
+/**
+ * A limb segment's `cap` record (issue #349, with #360's disc, edge and band, #557's short_px and #579's ball): every key
+ * a cap key, its fields of their kinds, and its counts consistent — one refusal naming `object` when any is not. A base
+ * part's cap and a set record's cap (issue #620) are held to this one rule.
+ */
+function checkCap(c: unknown, object: string, fail: (code: string, object: string, detail: string) => void): void {
+  const co = typeof c === 'object' && c !== null && !Array.isArray(c) ? (c as Record<string, unknown>) : null;
+  const pt = (v: unknown, n: number): boolean => Array.isArray(v) && v.length === n && v.every((x) => typeof x === 'number' && Number.isFinite(x));
+  const ok =
+    co !== null &&
+    Object.keys(co).every((k) => (CAP_KEYS as readonly string[]).includes(k)) &&
+    pt(co.at, 2) &&
+    typeof co.width === 'number' &&
+    typeof co.radius === 'number' &&
+    pt(co.box, 4) &&
+    isCount(co.layer_px) &&
+    isCount(co.missing_px) &&
+    (!('image_px' in co) || isCount(co.image_px)) &&
+    (!('image_layer' in co) || ('image_px' in co && typeof co.image_layer === 'string' && co.image_layer !== '')) &&
+    // Issue #360: a disc cap carries its count, a feathered edge its band and count, and neither carries them alone.
+    ('shape' in co ? (co.shape === 'disc' || co.shape === 'ball') && isCount(co.upper_px) : !('upper_px' in co) || (isCount(co.upper_px) && co.upper_px > 0)) &&
+    // Issue #579: a ball cap carries its lower half's three counts, its missing ones inside missing_px; no other cap carries them.
+    (co.shape === 'ball'
+      ? isCount(co.lower_px) && isCount(co.lower_kept_px) && isCount(co.lower_missing_px) && isCount(co.missing_px) && co.lower_missing_px <= co.missing_px
+      : BALL_KEYS.every((k) => !(k in co))) &&
+    // Issue #557: the shortfall by side, when written, adds up to the missing pixels, and is never written for none.
+    (!('short_px' in co) || shortSides(co.short_px, co.missing_px)) &&
+          // Issue #603: the pixels a set's exclusion took from the cap, written only when it took one.
+          (!('excluded_px' in co) || (isCount(co.excluded_px) && co.excluded_px > 0)) &&
+    ('edge' in co ? co.edge === 'feather' && typeof co.feather_radius === 'number' && Number.isFinite(co.feather_radius) && co.feather_radius >= 0 && isCount(co.feathered_px) : !('feather_radius' in co) && !('feathered_px' in co)) &&
+    // Issue #360 (item 14): a placed cut carries its band, line and counts, the line inside the band; none of them rides alone.
+    ('cut_band' in co
+      ? isCount(co.cut_band) &&
+        co.cut_band >= 1 &&
+        Number.isInteger(co.cut_offset) &&
+        Math.abs(co.cut_offset as number) <= co.cut_band &&
+        pt(co.cut_at, 2) &&
+        isCount(co.cut_crossed) &&
+        isCount(co.joint_crossed) &&
+        isCount(co.band_px) &&
+        (co.cut_crossed as number) <= (co.joint_crossed as number) &&
+        (!('stroke_luma_max' in co) || (isCount(co.stroke_luma_max) && co.stroke_luma_max <= 255))
+      : CUT_KEYS.every((k) => !(k in co)));
+  if (!ok) {
+    fail(
+      'PARTS_FIELD_TYPE',
+      object,
+      `is ${show(c)}; {at: [x, y], width, radius, box: [x, y, w, h], layer_px, image_px?, image_layer? (with image_px), missing_px, short_px? ({left, right}, adding up to missing_px, above 0), excluded_px? (above 0), shape? ("disc" or "ball", with upper_px; "ball" with lower_px, lower_kept_px and lower_missing_px, at most missing_px; without it upper_px? above 0), edge? ("feather", with feather_radius and feathered_px), cut_band? (with cut_offset inside the band, cut_at, cut_crossed at most joint_crossed, band_px, stroke_luma_max? 0..255)} is required`,
+    );
+  }
+}
 /** Issue #557: a cap's `short_px` — `{left, right}`, two counts and no other key, adding up to `missing`, above 0. */
 function shortSides(v: unknown, missing: unknown): boolean {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;

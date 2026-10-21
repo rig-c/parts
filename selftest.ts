@@ -4394,6 +4394,66 @@ function runPartsSuite(): number {
       `the positive control is PT128's record (${padOk === null ? 'reads' : codes(padOk)}); ${padSeen.map((o) => `${o.what} -> ${o.got}`).join('; ')}`,
       'issue #366: a reader maps a part back to the file through this block, so a block that disagrees with the centring the stage pads by, or with the rig beside it, would send the part somewhere it never was — each is said rather than read',
     );
+
+    // PT131 — issue #620: a set record's cap. A set "three_quarter" whose record "forearm_r" carries PT127's cap, built
+    // in another key order, is written in the fixed order and reads back as written; a set record with no limb and an
+    // upper segment's record (no cap) read as before, and a file without alternates keeps its bytes.
+    const altRecomposite: RecompositeRecord = { mean_abs: 0, within_limit: 0, within_share: 1, error_limit: 0, error_px: 0, covered_alpha: 0, uncovered_error_px: 0, hole_count: 0, holes_listed: 0, holes: [] };
+    const altSet = (records: unknown[], name = 'three_quarter'): Record<string, unknown> => ({ name, slots: { forearm_r: `${name}_forearm_r` }, records, ghost_px: {}, recomposite: altRecomposite });
+    const altText131 = serializeParts({ ...file, alternates: [altSet([baseRec, upper, lower])] } as unknown as PartsFile);
+    writeFileSync(path, altText131);
+    const altOk = refusals(() => readParts(path));
+    const altBack = altOk === null ? readParts(path) : null;
+    const altCapBack = altBack?.alternates?.[0].records.find((q) => q.name === 'forearm_r')?.limb?.cap;
+    say(
+      'PT131_A_SET_RECORD_S_WELL_FORMED_CAP_READS_BACK_IN_ITS_FIXED_ORDER',
+      altOk === null &&
+        JSON.stringify(altCapBack) === '{"at":[15,30],"width":10,"radius":5,"box":[10,25,10,10],"layer_px":28,"missing_px":12}' &&
+        altBack !== null &&
+        serializeParts(altBack) === altText131 &&
+        !serializeParts(file).includes('alternates'),
+      `the set's three records ${altOk === null ? 'read back' : codes(altOk)}, the cap as ${JSON.stringify(altCapBack)}; write, read, write gives ${altBack !== null && serializeParts(altBack) === altText131 ? 'identical' : 'DIFFERENT'} bytes; without alternates the bytes name them ${serializeParts(file).includes('alternates') ? 'SOMEWHERE' : 'nowhere'}`,
+      'issue #620: the rule is the base records\' one, so a cap the base would read is read in a set too, and nothing about a well-formed set\'s bytes moves',
+    );
+
+    // PT132 — issue #620: a malformed cap in a set record is refused by name, once per planted fault, with the base
+    // records' detail: a cap with no missing_px, a short_px whose sides (6 + 5 = 11) do not add up to missing_px 12, and
+    // an unknown cap key. Two faulted sets in one file are two refusals, each naming its own set.
+    const setFaults: Array<[string, Record<string, unknown>]> = [
+      ['a set cap with no missing_px', { ...cap, missing_px: undefined }],
+      ['a set cap whose short_px does not add up to missing_px', { ...cap, short_px: { left: 6, right: 5 } }],
+      ['a set cap with an unknown key', { ...cap, weight: 1 }],
+    ];
+    const setObject = `${path} alternates[0] (set "three_quarter") part "forearm_r" field "limb" "cap"`;
+    const setSeen = setFaults.map(([what, c]) => {
+      const faulted = { ...lower, limb: { ...lower.limb, cap: c } };
+      writeFileSync(path, JSON.stringify({ ...file, parts: [...file.parts, upper, faulted] }));
+      const baseErr = refusals(() => readParts(path));
+      writeFileSync(path, JSON.stringify({ ...file, alternates: [altSet([upper, faulted])] }));
+      const err = refusals(() => readParts(path));
+      const p0 = err?.problems[0];
+      const b0 = baseErr?.problems[0];
+      return {
+        what,
+        ok: err !== null && err.problems.length === 1 && p0?.code === 'PARTS_FIELD_TYPE' && p0.object === setObject && b0 !== undefined && b0.object === 'part "forearm_r" field "limb" "cap"' && p0.detail === b0.detail,
+        got: `${codes(err)} at ${p0?.object === setObject ? 'the set\'s part' : JSON.stringify(p0?.object)}`,
+      };
+    });
+    const twoSets = { ...file, alternates: [altSet([upper, { ...lower, limb: { ...lower.limb, cap: { ...cap, missing_px: undefined } } }]), altSet([{ ...lower, limb: { ...lower.limb, cap: { ...cap, weight: 1 } } }], 'profile')] };
+    writeFileSync(path, JSON.stringify(twoSets));
+    const twoErr = refusals(() => readParts(path));
+    const twoObjects = twoErr?.problems.map((q) => q.object) ?? [];
+    const twoOk =
+      twoErr !== null &&
+      twoErr.problems.length === 2 &&
+      twoObjects[0] === setObject &&
+      twoObjects[1] === `${path} alternates[1] (set "profile") part "forearm_r" field "limb" "cap"`;
+    say(
+      'PT132_A_MALFORMED_CAP_IN_A_SET_RECORD_IS_REFUSED_BY_NAME_ONCE_PER_FAULT',
+      setSeen.every((o) => o.ok) && twoOk,
+      `the positive control is PT131's set (${altOk === null ? 'reads' : codes(altOk)}); ${setSeen.map((o) => `${o.what} -> ${o.got}`).join('; ')}; two faulted sets -> ${twoErr === null ? 'reads clean' : `${twoErr.problems.length} refusal(s), ${twoObjects.map((q) => (q.startsWith(path) ? q.slice(path.length + 1) : q)).join(' | ')}`}`,
+      'issue #620: a set record is cut and packed like a base part, and its cap is read by check as the base\'s is; a set cap read as written would let a malformed record through the one reader every stage trusts',
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
