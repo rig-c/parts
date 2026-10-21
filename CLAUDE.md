@@ -185,8 +185,15 @@ a session rotated — the reader rule above, measured on ourselves. So it is her
 - **One issue = one PR.** The issue is the order: decision, bars, what is out of
   scope. A message that changes an order is copied to the issue.
 - **A feature PR is opened and reported, and merged only after HQ's sign.** A
-  `release:` PR from release-please merges on the sub-commander's own call, and
-  so does the cut it makes. AI review runs at most once per PR, at HQ's request.
+  `release:` PR from release-please merges and cuts only after HQ's explicit
+  "LGTM #NNN" naming the PR and its current head, quoted in the cut report;
+  the sub-commander approves the release PR's awaiting CI run on that exact
+  head only. A release PR is never armed: release-please rewrites its head on
+  every push to main. Merge it manually with `--match-head-commit` naming the
+  head signed by HQ. AI review runs at most once per PR, at HQ's request.
+- **Never push to an armed PR** — one with auto-merge armed. Disable auto-merge
+  first, push, and report the new head. HQ re-arms a **FEATURE PR** only;
+  a release PR is never armed. A merge of main into the branch counts as a push.
 - **A pull request that changes a shipped file is never titled `docs:`** —
   release-please hides that type, and the `ships` job in `ci.yml` refuses the
   landing. Use `fix:` or `feat:`.
