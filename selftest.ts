@@ -90,7 +90,7 @@ import { fileURLToPath } from 'node:url';
 import { isAbsolute, sep } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { availableParallelism, tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { inflateSync } from 'node:zlib';
@@ -36008,11 +36008,12 @@ function runTreeSuite(): number {
   );
   runAliasControls(say);
   runRepublishControls(say);
+  runPushProvenanceControls(say);
   return bad();
 }
 
 // ---------------------------------------------------------------------------
-// the aliases: one gated tree, published under every name (AL01–AL07)
+// the aliases: one gated tree, published under every name (AL01–AL09)
 // ---------------------------------------------------------------------------
 
 interface AliasStep {
@@ -36382,6 +36383,7 @@ const UNPUBLISHED_CUT_LINE = 'a release-please failure after the tag leaves a ve
 
 interface ReleaseStep extends AliasStep {
   id?: string;
+  'continue-on-error'?: boolean | string;
   uses?: string;
   with?: Record<string, unknown>;
   env?: Record<string, unknown>;
@@ -36443,7 +36445,7 @@ function republishFaults(yml: string, doc: string, packageName: string): string[
     if (step.if !== PUBLISH_CONDITION) faults.push(`release.yml: "${label}" runs under ${JSON.stringify(step.if ?? null)}, where every step after the resolve step runs under ${PUBLISH_CONDITION}`);
     const text = JSON.stringify(step);
     if (text.includes('steps.release.outputs.')) faults.push(`release.yml: "${label}" reads steps.release.outputs, which a dispatch never sets; the tag comes from steps.target`);
-    if ((step.uses ?? '').startsWith('actions/checkout@') && step.with?.ref !== '${{ steps.target.outputs.tag }}') faults.push(`release.yml: the release job checks out ${JSON.stringify(step.with?.ref ?? null)}, not the resolved tag`);
+    if ((step.uses ?? '').startsWith('actions/checkout@') && step.with?.ref !== '${{ steps.target.outputs.sha || steps.target.outputs.tag }}') faults.push(`release.yml: the release job checks out ${JSON.stringify(step.with?.ref ?? null)}, not the resolved tag or verified SHA`);
   });
   const confirmIf = wf.jobs?.confirm?.if ?? '';
   if (!confirmIf.includes("inputs.version != ''") || !confirmIf.includes("inputs.tag == ''")) faults.push(`release.yml: the confirm job runs under ${JSON.stringify(wf.jobs?.confirm?.if ?? null)}, so it can run on a \`tag\` dispatch or with no version`);
@@ -36453,7 +36455,7 @@ function republishFaults(yml: string, doc: string, packageName: string): string[
     }
   }
   if (!doc.includes(UNPUBLISHED_CUT_LINE)) faults.push(`RELEASING.md does not carry "${UNPUBLISHED_CUT_LINE}"`);
-  if (!doc.includes('gh workflow run release.yml -f tag=')) faults.push('RELEASING.md does not give the dispatch `gh workflow run release.yml -f tag=`');
+  if (!/gh workflow run release\.yml --ref (v[\w.-]+) -f tag=\1/.test(doc)) faults.push('RELEASING.md does not give the dispatch with matching --ref and tag');
   for (const code of REPUBLISH_REFUSALS) if (!doc.includes(code)) faults.push(`RELEASING.md does not name the refusal ${code}`);
   return faults;
 }
@@ -36472,7 +36474,7 @@ function runRepublishControls(say: (name: string, ok: boolean, detail: string, w
     { what: 'release-please runs on a dispatch', yml: edit(yml, "        id: release\n        if: ${{ github.event_name == 'push' }}\n", '        id: release\n'), want: 'so a dispatch could cut' },
     { what: 'an alias publish keyed on release-please again', yml: edit(yml, aliasCondition, aliasCondition.replace(PUBLISH_CONDITION, "${{ steps.release.outputs.release_created == 'true' }}")), want: `"Publish the alias ${ALIASES[0]}" runs under` },
     { what: 'the confirmation reads the cut tag again', yml: edit(yml, 'TAG_NAME: ${{ steps.target.outputs.tag }}', 'TAG_NAME: ${{ steps.release.outputs.tag_name }}'), want: 'reads steps.release.outputs' },
-    { what: 'the checkout takes the cut tag again', yml: edit(yml, 'ref: ${{ steps.target.outputs.tag }}', 'ref: ${{ steps.release.outputs.tag_name }}'), want: 'not the resolved tag' },
+    { what: 'the checkout takes the cut tag again', yml: edit(yml, 'ref: ${{ steps.target.outputs.sha || steps.target.outputs.tag }}', 'ref: ${{ steps.release.outputs.tag_name }}'), want: 'not the resolved tag' },
     { what: 'the form refusal dropped', yml: edit(yml, '::error::RELEASE_TAG_FORM:', '::error::'), want: 'RELEASE_TAG_FORM' },
     { what: 'the below-latest refusal dropped', yml: edit(yml, '::error::RELEASE_TAG_BELOW_LATEST:', '::error::'), want: 'RELEASE_TAG_BELOW_LATEST' },
     { what: "the latest read dropped", yml: edit(yml, `npm view "${packageName}" version`, `npm view "${packageName}" dist-tags`), want: "below the registry's latest is not refused" },
@@ -36495,6 +36497,147 @@ function runRepublishControls(say: (name: string, ok: boolean, detail: string, w
       ` — planted ${plants.length}: ${cases.map((c) => `${c.what} -> ${c.ok ? 'named' : `NOT named (${c.said.slice(0, 160)})`}`).join('; ')}`,
     'issue #555: release-please cut v1.49.0 and its GitHub release, then failed before the publish, and a re-run skips every publish step because release-please no longer reports a release; the tag is published by a dispatch through the same gate and the same publish steps in this file, so the trusted publisher and provenance hold, and an input reaching a script through anything but env is an injection',
   );
+}
+
+/** Port of core #1552's closed shell controls: execute the resolver and actual publish bodies, never services. */
+function runPushProvenanceControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const yml = readFileSync(join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8');
+  const mock = temp('push-provenance');
+  const bin = join(mock, 'bin');
+  mkdirSync(bin);
+  const trace = join(mock, 'calls.txt');
+  const commit = '1'.repeat(40);
+  const different = '2'.repeat(40);
+  const object = '3'.repeat(40);
+  const tag = 'v1.2.3';
+  const rule = 'PROVENANCE_SHA_MISMATCH';
+  const pinned = '${{ steps.target.outputs.sha || steps.target.outputs.tag }}';
+  const bodies: Record<string, string> = {
+    gh: 'printf "gh %s\\n" "$*" >> "$MOCK_TRACE"\nif [ "$1" = api ]; then\n  case "$*" in "api repos/$REPO/commits/refs%2Ftags%2F$CUT_TAG --jq .sha") printf "%s\\n" "$MOCK_COMMIT";; "api repos/$REPO/commits/tags%2F$CUT_TAG --jq .sha") if [ "$MOCK_KIND" = tag ]; then exit 1; fi; printf "%s\\n" "$MOCK_COMMIT";; "api repos/$REPO/git/ref/tags/$CUT_TAG --jq .sha") if [ "$MOCK_KIND" = tag ]; then printf "%s\\n" "$MOCK_OBJECT"; else printf "%s\\n" "$MOCK_COMMIT"; fi;; *) exit 94;; esac\n  exit "$MOCK_API_EXIT"\nfi\n[ "$*" = "release view $INPUT_TAG --repo mock/parts" ] || exit 95\nexit "$MOCK_RELEASE_EXIT"\n',
+    npm: 'printf "npm %s\\n" "$*" >> "$MOCK_TRACE"\nif [ "$1" = publish ]; then exit 0; fi\n[ "$1" = view ] && [ "$3" = version ] || exit 92\ncase "$2" in @rig-c/parts@*) [ -n "$MOCK_SERVED" ] || exit 1; printf "%s\\n" "$MOCK_SERVED";; @rig-c/parts) printf "%s\\n" "$MOCK_LATEST";; *) exit 96;; esac\n',
+    bun: 'printf "bun %s\\n" "$*" >> "$MOCK_TRACE"\n[ "$1" = scripts/alias_tarball.ts ] && [ "$2" = pack ] || exit 93\nprintf "mock-alias.tgz\\n"\n',
+  };
+  for (const [name, body] of Object.entries(bodies)) writeFileSync(join(bin, name), `#!/bin/bash\nset -euo pipefail\n${body}`, { mode: 0o755 });
+  // Only the spelling/semver logic and package version reader use real executables.
+  // No service command or credentials are inherited by the child.
+  symlinkSync('/usr/bin/grep', join(bin, 'grep'));
+  symlinkSync(process.execPath, join(bin, 'node'));
+  writeFileSync(join(mock, 'package.json'), JSON.stringify({ version: '1.2.3' }));
+  interface Scenario {
+    name: string; event?: string; created?: string; cutTag?: string; inputTag?: string; inputVersion?: string;
+    commit?: string; sha?: string; apiExit?: string; releaseExit?: string; served?: string; latest?: string;
+    rule?: string; noRelease?: boolean; apiReads?: number; kind?: string;
+  }
+  const scenarios: Scenario[] = [
+    { name: 'matching lightweight push' },
+    { name: 'matching annotated push', kind: 'tag' },
+    { name: 'mismatching rerun retains cut tag', sha: different, rule },
+    { name: 'annotated tag object is not the commit', kind: 'tag', sha: object, rule },
+    { name: 'lookup fails with plausible SHA', apiExit: '1', rule: 'RELEASE_TAG_UNRESOLVED' },
+    ...['', 'null', commit.slice(0, 7), 'g'.repeat(40), `${commit}\n${different}`, `{"sha":"${commit}"}`].map((value) => ({ name: `invalid commit ${JSON.stringify(value)}`, commit: value, rule: 'RELEASE_TAG_UNRESOLVED' })),
+    { name: 'invalid cut tag', cutTag: '../heads/main', rule: 'RELEASE_TAG_UNRESOLVED', apiReads: 0 },
+    ...['false', ''].map((created) => ({ name: `no release ${JSON.stringify(created)}`, created, cutTag: '', noRelease: true, apiReads: 0 })),
+    { name: 'matching dispatch', event: 'workflow_dispatch', apiReads: 0 },
+    { name: 'prerelease dispatch keeps rc', event: 'workflow_dispatch', inputTag: 'v1.2.3-rc.1', apiReads: 0 },
+    { name: 'both dispatch inputs', event: 'workflow_dispatch', inputVersion: '1.2.3', rule: 'RELEASE_DISPATCH_INPUT', apiReads: 0 },
+    { name: 'neither dispatch input', event: 'workflow_dispatch', inputTag: '', rule: 'RELEASE_DISPATCH_INPUT', apiReads: 0 },
+    { name: 'invalid dispatch form', event: 'workflow_dispatch', inputTag: 'main', rule: 'RELEASE_TAG_FORM', apiReads: 0 },
+    { name: 'unreleased dispatch', event: 'workflow_dispatch', releaseExit: '1', rule: 'RELEASE_TAG_UNRELEASED', apiReads: 0 },
+    { name: 'already published before below latest', event: 'workflow_dispatch', served: '1.2.3', latest: '1.2.4', rule: 'RELEASE_ALREADY_PUBLISHED', apiReads: 0 },
+    { name: 'below latest', event: 'workflow_dispatch', latest: '1.2.4', rule: 'RELEASE_TAG_BELOW_LATEST', apiReads: 0 },
+  ];
+  const inspect = (text: string): { faults: string[]; rows: string[] } => {
+    const faults: string[] = [];
+    const rows: string[] = [];
+    const wf = Bun.YAML.parse(text) as ReleaseWorkflow;
+    const steps = wf.jobs?.release?.steps ?? [];
+    const targetAt = steps.findIndex((step) => step.id === 'target');
+    const target = steps[targetAt];
+    if (target?.run === undefined) return { faults: ['no executable target'], rows };
+    const checkoutAt = steps.findIndex((step) => (step.uses ?? '').startsWith('actions/checkout@'));
+    if (checkoutAt <= targetAt || steps[checkoutAt]?.with?.ref !== pinned) faults.push('checkout must consume the verified push SHA with dispatch tag fallback after target');
+    if (target.if !== undefined || target['continue-on-error'] !== undefined) faults.push('target refusal can be skipped or ignored');
+    const publishes = steps.map((step, at) => ({ step, at })).filter(({ step }) => /\bnpm publish\b/.test(step.run ?? ''));
+    if (publishes.length !== 1 + ALIASES.length || publishes.some(({ step, at }) => at <= checkoutAt || step.if !== PUBLISH_CONDITION)) faults.push('every canonical and alias publish must follow the checked target and checkout under the publish condition');
+    for (const scenario of scenarios) {
+      writeFileSync(trace, '');
+      const outputFile = join(mock, 'outputs.txt');
+      writeFileSync(outputFile, '');
+      const cutFile = join(mock, 'already-cut-tag.txt');
+      const cutTag = scenario.cutTag ?? tag;
+      // Release-please already cut the tag before this resolver; the fixture must survive a refusal.
+      const cut = `${cutTag}\n${commit}\n`;
+      writeFileSync(cutFile, cut);
+      writeFileSync(join(mock, 'package.json'), JSON.stringify({ version: (scenario.inputTag ?? tag).slice(1) }));
+      const event = scenario.event ?? 'push';
+      const sha = scenario.sha ?? commit;
+      const env = {
+        PATH: bin, MOCK_TRACE: trace, MOCK_COMMIT: scenario.commit ?? commit, MOCK_KIND: scenario.kind ?? 'commit', MOCK_OBJECT: object,
+        MOCK_API_EXIT: scenario.apiExit ?? '0', MOCK_RELEASE_EXIT: scenario.releaseExit ?? '0', MOCK_SERVED: scenario.served ?? '', MOCK_LATEST: scenario.latest ?? '1.2.2',
+        EVENT: event, CREATED: scenario.created ?? 'true', CUT_TAG: cutTag, INPUT_TAG: scenario.inputTag ?? tag, INPUT_VERSION: scenario.inputVersion ?? '',
+        REPO: 'mock/parts', GITHUB_SHA: sha, GITHUB_EVENT_NAME: event, GITHUB_OUTPUT: outputFile, RUNNER_TEMP: 'mock-runner-temp',
+      };
+      const run = (body: string) => spawnSync('/bin/bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', body], { cwd: mock, encoding: 'utf8', timeout: 5000, env });
+      const resolved = run(target.run);
+      const outputs = Object.fromEntries(readFileSync(outputFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => line.split('=')));
+      let exit = resolved.status;
+      let output = `${resolved.stdout ?? ''}${resolved.stderr ?? ''}${resolved.error === undefined ? '' : String(resolved.error)}`;
+      if (exit === 0 && outputs.publish === 'true') {
+        for (const { step } of publishes) {
+          const ran = run(step.run ?? '');
+          exit = ran.status;
+          output += `${ran.stdout ?? ''}${ran.stderr ?? ''}${ran.error === undefined ? '' : String(ran.error)}`;
+          if (exit !== 0) break;
+        }
+      }
+      const calls = readFileSync(trace, 'utf8').trim().split('\n').filter(Boolean);
+      const published = calls.filter((line) => line.startsWith('npm publish '));
+      const api = calls.filter((line) => line.startsWith('gh api '));
+      const wantExit = scenario.rule === undefined ? 0 : 1;
+      const wantPublished = wantExit === 0 && !scenario.noRelease ? 1 + ALIASES.length : 0;
+      if (exit !== wantExit || published.length !== wantPublished) faults.push(`${scenario.name}: exit ${exit}, publishes ${published.length}; required ${wantExit}/${wantPublished}; ${output}`);
+      if (api.length !== (scenario.apiReads ?? 1) || api.some((line) => line !== `gh api repos/mock/parts/commits/refs%2Ftags%2F${cutTag} --jq .sha`)) faults.push(`${scenario.name}: unexpected commit API reads ${JSON.stringify(api)}`);
+      if (scenario.rule !== undefined && !output.includes(`::error::${scenario.rule}:`)) faults.push(`${scenario.name}: missing named refusal ${scenario.rule}`);
+      if (event === 'push' && scenario.rule !== undefined && Object.keys(outputs).length !== 0) faults.push(`${scenario.name}: outputs emitted before refusal`);
+      if (scenario.rule === rule && (!output.includes(sha) || !output.includes(commit) || !output.includes('the tag remains cut') || !output.includes(`gh workflow run release.yml --ref ${cutTag} -f tag=${cutTag}`))) faults.push(`${scenario.name}: refusal must name both SHAs and exact tag-ref recovery`);
+      if (event === 'push' && wantExit === 0 && !scenario.noRelease && JSON.stringify(outputs) !== JSON.stringify({ publish: 'true', tag: cutTag, sha: commit })) faults.push(`${scenario.name}: wrong verified outputs ${JSON.stringify(outputs)}`);
+      if (event === 'workflow_dispatch' && wantExit === 0 && JSON.stringify(outputs) !== JSON.stringify({ publish: 'true', tag: scenario.inputTag ?? tag })) faults.push(`${scenario.name}: dispatch outputs changed`);
+      if (scenario.noRelease && JSON.stringify(outputs) !== JSON.stringify({ publish: 'false' })) faults.push(`${scenario.name}: no-release output changed`);
+      if (readFileSync(cutFile, 'utf8') !== cut) faults.push(`${scenario.name}: cut tag changed`);
+      if (published.some((line) => !line.includes('--provenance'))) faults.push(`${scenario.name}: provenance dropped`);
+      if (scenario.name === 'prerelease dispatch keeps rc' && published.some((line) => !line.endsWith('--tag rc'))) faults.push(`${scenario.name}: rc dist-tag dropped`);
+      rows.push(`${scenario.name}: exit ${exit}, publishes ${published.length}/${wantPublished}, outputs ${JSON.stringify(outputs)}, calls ${JSON.stringify(calls)}, output ${JSON.stringify(output.trim())}`);
+    }
+    return { faults, rows };
+  };
+  try {
+    const standing = inspect(yml);
+    const change = (from: string, to: string): string | null => yml.split(from).length === 2 ? yml.replace(from, to) : null;
+    const plants = [
+      { what: 'push comparison reversed', text: change('"$GITHUB_SHA" != "$tag_sha"', '"$GITHUB_SHA" = "$tag_sha"') },
+      { what: 'lookup failure ignored', text: change('if ! tag_sha=', 'if tag_sha=') },
+      { what: 'short SHA accepted', text: change('^[0-9a-f]{40}$', '^[0-9a-f]{7,40}$') },
+      { what: 'short tag commit ref', text: change('commits/refs%2Ftags%2F$CUT_TAG', 'commits/tags%2F$CUT_TAG') },
+      { what: 'tag object from refs API', text: change('commits/refs%2Ftags%2F$CUT_TAG', 'git/ref/tags/$CUT_TAG') },
+      { what: 'publish output before comparison', text: change('if [ "$GITHUB_SHA" != "$tag_sha" ]; then', 'echo "publish=true" >> "$GITHUB_OUTPUT"; if [ "$GITHUB_SHA" != "$tag_sha" ]; then') },
+      { what: 'checkout resolves mutable tag again', text: change(`ref: ${pinned}`, 'ref: ${{ steps.target.outputs.tag }}') },
+      { what: 'recovery loses tag ref', text: change('release.yml --ref $CUT_TAG -f tag=$CUT_TAG', 'release.yml -f tag=$CUT_TAG') },
+      { what: 'target failure ignored', text: change('        id: target\n', '        id: target\n        continue-on-error: true\n') },
+    ];
+    const probes: string[] = [];
+    const rows = [...standing.rows];
+    for (const plant of plants) {
+      if (plant.text === null || plant.text === yml) probes.push(`${plant.what}: no edit made`);
+      else {
+        const found = inspect(plant.text);
+        if (found.faults.length === 0) probes.push(`${plant.what}: no fault fired`);
+        rows.push(`${plant.what}: ${found.faults.length} fault(s) — ${found.faults.join('; ')}`);
+      }
+    }
+    say('AL09_PUSH_PROVENANCE_MATCHES_THE_CUT_TAG_COMMIT_BEFORE_ANY_NAME_IS_PUBLISHED', standing.faults.length === 0 && probes.length === 0,
+      `${[...standing.faults, ...probes].join('; ') || `${scenarios.length} shell scenarios and ${plants.length} mutants held`}; ${rows.join('; ')}`.replaceAll('\n', '\\n'),
+      'issue #653, ported from core #1552/#1551: npm provenance reads the run SHA; an earlier push rerun may cut a newer tag, so retain that cut and refuse all publishes with both SHAs and tag-ref recovery, while normal pushes keep publishing every name');
+  } finally { rmSync(mock, { recursive: true, force: true }); }
 }
 
 /**
