@@ -14,10 +14,15 @@
 # files — rig-parts, its name from 1.0.0-rc.1 to 1.5.3,
 # and the alias spine-parts, the name the package first shipped as (RELEASING.md).
 #
+# A push re-run can cut a tag newer than its GITHUB_SHA. Before publish=true,
+# resolve the full tag ref to its commit and refuse PROVENANCE_SHA_MISMATCH
+# with both SHAs and a tag-ref dispatch command. The tag remains cut, and the
+# checkout consumes the verified SHA rather than resolving the tag again (#653).
+#
 # A failure after the tag leaves a version unpublished: release-please has cut
 # the tag and the GitHub release, so a re-run no longer reports
 # `release_created` and skips every publish step. Such a tag is published by a
-# dispatch with the `tag` input (`gh workflow run release.yml -f tag=vX.Y.Z`),
+# dispatch with the `tag` input (`gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z`),
 # which runs the same gate and the same publish steps in this same file, so the
 # trusted publisher and provenance are unchanged (RELEASING.md, "Republishing a
 # cut whose publish failed"). A tag below the registry's latest is refused
@@ -119,7 +124,14 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$EVENT" = push ]; then
-            if [ "$CREATED" = true ]; then echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$CUT_TAG" >> "$GITHUB_OUTPUT"; else echo "publish=false" >> "$GITHUB_OUTPUT"; fi
+            if [ "$CREATED" != true ]; then echo "publish=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+            # The commits API peels annotated tags; the refs API returns their tag-object SHA.
+            # An explicit tag ref avoids resolving a branch with the same name.
+            if [[ ! "$CUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::RELEASE_TAG_UNRESOLVED: \"$CUT_TAG\" is not a stable cut tag vX.Y.Z"; exit 1; fi
+            if ! tag_sha="$(gh api "repos/$REPO/commits/refs%2Ftags%2F$CUT_TAG" --jq .sha)"; then echo "::error::RELEASE_TAG_UNRESOLVED: cannot resolve $CUT_TAG to a commit"; exit 1; fi
+            if [[ ! "$tag_sha" =~ ^[0-9a-f]{40}$ ]]; then echo "::error::RELEASE_TAG_UNRESOLVED: $CUT_TAG did not resolve to a full commit SHA"; exit 1; fi
+            if [ "$GITHUB_SHA" != "$tag_sha" ]; then echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA $GITHUB_SHA is not $CUT_TAG's commit $tag_sha; the tag remains cut; recover with gh workflow run release.yml --ref $CUT_TAG -f tag=$CUT_TAG"; exit 1; fi
+            echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$CUT_TAG" >> "$GITHUB_OUTPUT"; echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ -n "$INPUT_TAG" ] && [ -n "$INPUT_VERSION" ]; then echo "::error::RELEASE_DISPATCH_INPUT: both tag \"$INPUT_TAG\" and version \"$INPUT_VERSION\" were given; a dispatch takes tag (publish a cut tag) or version (re-run a confirmation), one of them"; exit 1; fi
@@ -142,7 +154,8 @@ jobs:
       - uses: actions/checkout@v4
         if: ${{ steps.target.outputs.publish == 'true' }}
         with:
-          ref: ${{ steps.target.outputs.tag }}
+          # Do not resolve a push's mutable tag again after checking its commit.
+          ref: ${{ steps.target.outputs.sha || steps.target.outputs.tag }}
 
       - uses: oven-sh/setup-bun@v2
         if: ${{ steps.target.outputs.publish == 'true' }}

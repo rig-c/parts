@@ -221,10 +221,17 @@ after it is skipped and the registry keeps serving the previous version. A
 publish by hand would lose provenance, and the trusted publisher names
 `release.yml`.
 
-The tag is published by a dispatch of the same workflow:
+A push re-run can cut a tag at a newer commit than its `GITHUB_SHA`. Before
+publishing, the workflow resolves the full tag ref through the commits API,
+requires a full commit SHA, and compares it with `GITHUB_SHA`. A mismatch
+refuses `PROVENANCE_SHA_MISMATCH`, names both SHAs, and leaves the tag cut.
+A normal matching push checks out the verified SHA.
+
+The tag is published by a dispatch of the same workflow at the tag ref, so
+provenance names the tag commit:
 
 ```sh
-gh workflow run release.yml -f tag=vX.Y.Z
+gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z
 ```
 
 The `release` job then skips release-please — a dispatch never cuts a tag or a
