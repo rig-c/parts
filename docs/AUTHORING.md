@@ -560,6 +560,16 @@ layers, as follows; every step is arithmetic on the declared bones and the layer
   part's Otsu luma split, or its uncrossed silhouette width, across the crossing) — so the covering
   limb's pixels stay on the covering limb and the seam follows the limb. Without `split`, the
   nearest-bone split stays and `propose`'s `LINT` names the crossing.
+  For a subset alternate set (issues #588, #609 and #638), ownership applies to every
+  segment source, including a separate `footwear` layer holding both shoes. With
+  separate islands, each segment keeps the island under its joints; with one shared
+  island, pixels go to the nearer line in the set's pose, using only the segments
+  that take that source. Footwear therefore reads each leg's ankle-to-toe segment,
+  not its thigh or shin. The toe comes from the foot bone's authored `tip`, placed
+  with that bone in the set; a missing endpoint on a shared one-island source is
+  `ASSEMBLE_ALT_LIMB_POSE`, never a guessed length or direction. The existing
+  overlap band and draw order settle near ties. A source already holding only
+  that side follows the existing path.
 - **The joint line.** Between two segments the joint is the lower bone's origin, and the line
   runs through it perpendicular to the limb's axis there — the sum of the upper bone's and the
   lower bone's unit directions, so on a bent limb the bisector. A pixel whose centre is past the

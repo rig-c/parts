@@ -92,6 +92,7 @@ import { inflateSync } from 'node:zlib';
 import ts from 'typescript';
 import { runNamedCutSkirtChecks } from './tools/check_named_cut_skirt.ts';
 import { runChainInheritChecks } from './tools/check_chain_inherit.ts';
+import { runFootOwnershipChecks } from './tools/check_foot_ownership.ts';
 import {
   assembleConfig,
   AUTHOR_PART,
@@ -46717,6 +46718,19 @@ function runChainInheritSuite(): number {
   return bad();
 }
 
+function runFootOwnershipSuite(): number {
+  section('foot-ownership: every segment shares its own source in the set pose');
+  const { say, bad } = counter();
+  const dir = temp('foot-ownership');
+  try {
+    runFootOwnershipChecks(dir, (name, pass, detail) => say(name, pass, detail,
+      'issue #638: two shoes in one layer, foot-only ownership mutant, ankle-to-toe distance and unchanged per-side footwear'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  return bad();
+}
+
 const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number | null]> = [
   ['raster-components', runComponentsSuite],
   ['raster-morph', runMorphSuite],
@@ -46751,6 +46765,7 @@ const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number 
   ['requirements', runRequirementsSuite],
   ['loop', runLoopSuite],
   ['assemble', runAssembleSuite],
+  ['foot-ownership', runFootOwnershipSuite],
   ['plausibility', runPlausibilitySuite],
   ['assemble-examples', runAssembleExamplesSuite],
   ['skeleton', runSkeletonSuite],
@@ -46833,7 +46848,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
  */
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['check']],
-  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'contour-wiring', 'config', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
+  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'foot-ownership', 'contour-wiring', 'config', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
   ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'mesh-stats', 'remesh', 'retune', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
 ];
 
