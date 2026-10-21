@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.57.1](https://github.com/rig-c/parts/compare/v1.57.0...v1.57.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* **ci:** refuse push releases with mismatched provenance ([#659](https://github.com/rig-c/parts/issues/659)) ([5b7f63a](https://github.com/rig-c/parts/commit/5b7f63a2aeddd5ab1900b777bdad042aeb89848b))
+
 ## [1.57.0](https://github.com/rig-c/parts/compare/v1.56.0...v1.57.0) (2026-10-21)
 
 
