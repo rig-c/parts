@@ -19811,9 +19811,10 @@ function runAnimationFoldCases(say: (name: string, ok: boolean, detail: string, 
     );
 
     // CK560 — issue #568: the fold line a document quotes is the line the console prints. The console's head line is
-    // foldsLines over check.json's record (the demo skirt and the flip skirt above, 9 physics constraints each), and every
-    // head line tracked Markdown quotes is foldsLines over its own figures; planted: AUTHORING's line from before #568
-    // ("its 2 physics constraint(s) left out", the wording before #363) and the demo skirt's printed line reworded so.
+    // foldsLines over check.json's record (the demo skirt and the flip skirt above, 9 physics constraints each), and the
+    // document reader takes that printed line apart and rebuilds it; planted: the demo skirt's printed line reworded to
+    // the wording before #363 ("its 9 physics constraint(s) left out"). Issue #627: this suite reads no file outside its
+    // temp directory, so the lines tracked Markdown quotes are read by the tree suite (TY20), not here.
     const headOf = (out: string): string => foldPrinted(out)[0]?.trim() ?? '';
     const demoHead = headOf(demoChk.out);
     const flipHead = headOf(flipChk.out);
@@ -19823,13 +19824,6 @@ function runAnimationFoldCases(say: (name: string, ok: boolean, detail: string, 
     };
     const demoRecord = asFolds(demoChk.fig);
     const flipRecord = asFolds(flipChk.fig);
-    const docs560 = treeFiles()
-      .filter((f) => f.endsWith('.md'))
-      .map((f) => [f, readFileSync(join(ROOT, f), 'utf8')] as const);
-    const held560 = foldDocLineFaults(docs560);
-    const authoring560 = docs560.find(([f]) => f === 'docs/AUTHORING.md')?.[1] ?? '';
-    const current560 = OLD_FOLD_DOC_LINE.replace('its 2 physics constraint(s) left out', 'with its 2 physics constraint(s) on and off');
-    const plantOld560 = foldDocLineFaults(docs560.map(([f, t]) => [f, f === 'docs/AUTHORING.md' ? t.replace(current560, OLD_FOLD_DOC_LINE) : t] as const));
     const demoAsDoc = foldDocLineFaults([['docs/plant.md', `[check]   ${demoHead}\n`]]);
     const leftOut = demoHead.replace(', with its 9 physics constraint(s) on and off', ', its 9 physics constraint(s) left out');
     const plantLeftOut560 = foldDocLineFaults([['docs/plant.md', `[check]   ${leftOut}\n`]]);
@@ -19841,18 +19835,14 @@ function runAnimationFoldCases(say: (name: string, ok: boolean, detail: string, 
         foldsLines(demoRecord)[0] === demoHead &&
         foldsLines(flipRecord)[0] === flipHead &&
         demoHead.includes(', with its 9 physics constraint(s) on and off (') &&
-        held560.read > 0 &&
-        held560.faults.length === 0 &&
-        authoring560.includes(current560) &&
-        plantOld560.faults.length === 1 &&
-        plantOld560.faults[0].startsWith('docs/AUTHORING.md:') &&
-        plantOld560.faults[0].includes('"its 2 physics constraint(s) left out"') &&
         demoAsDoc.read === 1 &&
         demoAsDoc.faults.length === 0 &&
         leftOut !== demoHead &&
-        plantLeftOut560.faults.length === 1,
-      `console head = foldsLines(check.json): demo ${demoRecord !== null && foldsLines(demoRecord)[0] === demoHead}, flip ${flipRecord !== null && foldsLines(flipRecord)[0] === flipHead}; ${held560.read} quoted fold line(s) in tracked Markdown, ${held560.faults.length === 0 ? 'every one the console\'s' : held560.faults.join('; ')}; planted, AUTHORING's pre-#568 line -> ${plantOld560.faults.join('; ') || 'not caught'}; the demo skirt's printed line quoted -> ${demoAsDoc.faults.length === 0 ? 'held' : demoAsDoc.faults.join('; ')}; reworded "left out" -> ${plantLeftOut560.faults.join('; ') || 'not caught'}`,
-      'issue #568: an examinee read "physics constraint(s) left out" as the fold bar\'s and concluded it was silent where cloth folds; since #363 the bar reads physics on and off and the console says so, and a document that quotes the line in other words is the one that misleads, so every quoted line is rebuilt by the console\'s own formatter',
+        plantLeftOut560.faults.length === 1 &&
+        plantLeftOut560.faults[0].startsWith('docs/plant.md:1 ') &&
+        plantLeftOut560.faults[0].includes('"its 9 physics constraint(s) left out"'),
+      `console head = foldsLines(check.json): demo ${demoRecord !== null && foldsLines(demoRecord)[0] === demoHead}, flip ${flipRecord !== null && foldsLines(flipRecord)[0] === flipHead}; the demo skirt's printed line quoted -> ${demoAsDoc.faults.length === 0 ? 'held' : demoAsDoc.faults.join('; ')}; reworded "left out" -> ${plantLeftOut560.faults.join('; ') || 'not caught'}`,
+      'issue #568: an examinee read "physics constraint(s) left out" as the fold bar\'s and concluded it was silent where cloth folds; since #363 the bar reads physics on and off and the console says so, and a document that quotes the line in other words is the one that misleads, so the reader that rebuilds every quoted line is held here to the line the console prints; issue #627: the quotes themselves are read by TY20 in the tree suite',
     );
 
     // CK246 — the reader: a set rigc did not write, or a folding mesh rigc printed no line for, is refused by name.
@@ -25862,7 +25852,7 @@ function foldDocLineFaults(docs: ReadonlyArray<readonly [string, string]>): { re
   return { read, faults };
 }
 
-/** AUTHORING's reference-sample fold line before issue #568, verbatim: the wording from before issue #363. CK560 plants it. */
+/** AUTHORING's reference-sample fold line before issue #568, verbatim: the wording from before issue #363. TY20 plants it (issue #627; CK560 until then). */
 const OLD_FOLD_DOC_LINE = '[check]   ANIMATIONS_DO_NOT_FOLD: PASS — 2 animation(s) read by rigc render --folds at 12 fps, its 2 physics constraint(s) left out (idle, hop): 0 folding mesh(es), 0 not declared in may_fold (<= 0)';
 
 /**
@@ -35334,6 +35324,29 @@ function runTreeSuite(): number {
     `${flat19.faults.length === 0 ? `${flat19.named.length} README(s) under examples/ name expected/rig.json (${flat19.named.join(', ')}), each saying "${FLAT_FORM_PHRASE}"` : flat19.faults.join('; ')}` +
       `; planted: a README naming it without the phrase -> ${plants19[0].join('; ') || 'not found'} | the phrase wrapped across a line -> ${plants19[1].join('; ') || 'not flagged'} | the phrase gone from the demo README -> ${plants19[2].join('; ') || 'not found'} | the root README naming it -> ${plants19[3].join('; ') || 'not flagged'}`,
     "issue #397: expected/rig.json is flattenRig of the built rig, every bone unturned, and a build's rig/rig.json carries rotation and length on its chain links; a reader who built wind at 1.21.0 and diffed the two read thousands of differing lines as a broken package, where flattenRig of that build matched exactly",
+  );
+
+  // TY20 — issue #627 (from CK560, issue #568): every ANIMATIONS_DO_NOT_FOLD head line tracked Markdown quotes is the
+  // line foldsLines, the console's formatter, prints for its own figures. CK560 holds that reader to the printed line;
+  // the quotes are the tree's, so they are read here. Planted: AUTHORING's line from before #568 ("its 2 physics
+  // constraint(s) left out", the wording before #363) in place of the current one.
+  const docs20 = text.filter(([f]) => f.endsWith('.md'));
+  const held20 = foldDocLineFaults(docs20);
+  const current20 = OLD_FOLD_DOC_LINE.replace('its 2 physics constraint(s) left out', 'with its 2 physics constraint(s) on and off');
+  const authoring20 = docs20.find(([f]) => f === 'docs/AUTHORING.md')?.[1] ?? '';
+  const plantOld20 = foldDocLineFaults(withDoc('docs/AUTHORING.md', (t) => t.replace(current20, OLD_FOLD_DOC_LINE)));
+  say(
+    'TY20_EVERY_FOLD_LINE_TRACKED_MARKDOWN_QUOTES_IS_THE_LINE_THE_CONSOLE_PRINTS',
+    docs20.length > 0 &&
+      held20.read > 0 &&
+      held20.faults.length === 0 &&
+      authoring20.includes(current20) &&
+      plantOld20.read === held20.read &&
+      plantOld20.faults.length === 1 &&
+      plantOld20.faults[0].startsWith('docs/AUTHORING.md:') &&
+      plantOld20.faults[0].includes('"its 2 physics constraint(s) left out"'),
+    `${held20.read} quoted ${FOLD_LINE} line(s) over ${docs20.length} tracked Markdown file(s), ${held20.faults.length === 0 ? "every one the console's" : held20.faults.join('; ')}; planted, AUTHORING's pre-#568 line -> ${plantOld20.faults.join('; ') || 'not caught'}`,
+    "issue #568: an examinee read \"physics constraint(s) left out\" as the fold bar's and concluded it was silent where cloth folds, so every quoted line is rebuilt by the console's own formatter; issue #627: CK560 read these files from the check suite, whose result then moved with the working tree, and the tree suite is the one that reads the tree",
   );
 
   const self = readFileSync(join(ROOT, 'selftest.ts'), 'utf8');
