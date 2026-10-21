@@ -577,6 +577,7 @@ import { CANVAS as PAINT_CANVAS, figureJoints as paintJoints, FIGURE as PAINT_FI
 import { LEGS_APART, LEGS_JOINED, LYING_PARTS, LYING_RIG, type PoseName, POSES, SEATED_PARTS, SEATED_RIG } from './fixtures/poses.ts';
 import { buildSheet, tileImage, tilesFrom } from './src/sheet.ts';
 import { block, constraintConfig, dustImages, dustParts, FACE_EXPECT, faceConfig, faceImages, faceParts, HEAT_STRIP_EXPECT, heatStripConfig, islandImages, LASH_CREASE, LASH_RIG, LASH_ROW, lashConfig, lashImages, lashParts, RIG_CANVAS, RIG_EXPECT, rigConfig, rigImages, rigParts, SCENE_TARGET, shoeConfig, shoeImages, shoeKick, shoeParts, TURNED_EXPECT, turnedConfig, writeRigFixture } from './fixtures/rig.ts';
+import { FORK_SMOOTH_MAX_INFLUENCES, smoothForkShares } from './src/rig.ts';
 import { type AttachmentSetsFile, blinkHoldProblems, buildRig, influenceReachHolds, DEFAULT_IDLE_KEYS, expandSetAttachmentKeys, FACE_TIPS_AXIS_NAME, HEAD_UP_BONE, flattenRig, IDLE_DRIVES_MESHES_WHY, type MeshAttachment, PAD, type RegionAttachment, rigJsonText, type RigOutput, type RigSpec, roundShares, tipRoundingBound, writtenShares } from './src/rig.ts';
 import { type ComposedScene, composeFromFiles, IMAGE_SEP, PLATE, PLATE_IMAGE, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames } from './src/scene.ts';
 import { sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild } from './fixtures/scene.ts';
@@ -38458,6 +38459,123 @@ function runInfluenceSuite(): number {
       good8 === null && clothAs({ ...decl, radius: 40 }) === null && out8.every((o) => o.ok),
       `the block: ${good8 === null ? 'loads' : codes(good8)}; with a radius: ${codes(clothAs({ ...decl, radius: 40 }))}; ${out8.map((o) => `${o.what} ${o.ok ? 'refused once' : `NOT: ${o.got}`}`).join('; ')}`,
       'issue #518: across, max and shape are the author\'s — #513 did not vary them, so propose does not choose them — and the cell is the lattice\'s own, so a cell declared here would be read by nothing',
+    );
+
+    // IF11 — issue #615: a recipe with `influence` and `split.hold_tip: true` drafts its parts with `hold_tip: true` and
+    // `max` raised to the lattice's smoothing cap (8), a declared max above it kept; the same recipe without hold_tip
+    // drafts what it drafted before, and every part another recipe meshes is the same with or without it.
+    const heldRecipe = (max: number): ReturnType<typeof clothRecipe> => {
+      const r = recipeWith(() => ({ ...decl, max })) as Record<string, Record<string, unknown>>;
+      r.bottomwear = { ...r.bottomwear, split: { ...(r.bottomwear.split as Record<string, unknown>), hold_tip: true } };
+      return r as ReturnType<typeof clothRecipe>;
+    };
+    const held11 = proposeWithBasis(P6, undefined, null, DEFAULT_GRID_RULE, heldRecipe(6)).proposal;
+    const above11 = proposeWithBasis(P6, undefined, null, DEFAULT_GRID_RULE, heldRecipe(10)).proposal;
+    const skirtInf = (pp: typeof held11): unknown => (pp.meshes.skirt as unknown as { influence?: unknown }).influence ?? null;
+    const others11 = Object.keys(drafted6.proposal.meshes).filter((k) => k !== 'skirt');
+    const want11 = { cell: fx.proposed.skirt.grid, radius: (skirtInf(drafted6.proposal) as { radius?: number } | null)?.radius, across: true, max: FORK_SMOOTH_MAX_INFLUENCES, shape: 'smooth', hold_tip: true };
+    say(
+      'IF11_A_HOLD_TIP_RECIPE_DRAFTS_HOLD_TIP_AND_MAX_EIGHT_ON_ITS_INFLUENCE_PARTS_AND_A_RECIPE_WITHOUT_IT_DRAFTS_AS_BEFORE',
+      JSON.stringify(skirtInf(held11)) === JSON.stringify(want11) &&
+        (skirtInf(above11) as { max?: number } | null)?.max === 10 &&
+        (skirtInf(above11) as { hold_tip?: boolean } | null)?.hold_tip === true &&
+        !JSON.stringify(skirtInf(drafted6.proposal)).includes('hold_tip') &&
+        (skirtInf(drafted6.proposal) as { max?: number } | null)?.max === 6 &&
+        others11.every((k) => JSON.stringify(held11.meshes[k]) === JSON.stringify(drafted6.proposal.meshes[k])),
+      `held: ${JSON.stringify(skirtInf(held11))}; declared max 10: ${JSON.stringify(skirtInf(above11))}; without hold_tip: ${JSON.stringify(skirtInf(drafted6.proposal))}; the other meshes (${others11.join(', ')}) ${others11.every((k) => JSON.stringify(held11.meshes[k]) === JSON.stringify(drafted6.proposal.meshes[k])) ? 'the same' : 'DIFFER'}`,
+      'issue #615 (HQ decision): the rig stage cannot see the recipe, so the draft writes what the recipe means on the mesh — hold_tip, and the max the smoothing needs (8, the lattice\'s cap; at 6 the smoothing does not close the gap) as the lattice\'s r is raised to its grid; a larger declared max is the author\'s, and nothing moves where the recipe does not opt in',
+    );
+
+    // IF12 — issue #615: the rig stage smooths a hold_tip influence mesh by the lattice's passes capped at the declared
+    // max, and only it. Read independently: the same config with hold_tip removed is the pull as rig-c computes it
+    // (IF03 holds that one to rig-c's own generator), and the held mesh must be exactly smoothForkShares of those
+    // shares over the same triangles at that cap — the cap read at 8 and at 7 — with every other attachment unchanged.
+    type Att = { triangles: number[]; weights: Array<Array<{ bone: string; x: number; y: number; weight: number }>> };
+    type RigSkins = { skins: { default: Record<string, Record<string, Att>> } };
+    const rig12 = (id: string, maxOf: number, held: boolean): { status: number; rig: RigSkins | null; row: (Row & { influence?: Record<string, unknown> }) | null } => {
+      const pp = JSON.parse(JSON.stringify(held11)) as typeof held11;
+      const inf = (pp.meshes.skirt as unknown as { influence: Record<string, unknown> }).influence;
+      inf.max = maxOf;
+      if (!held) delete inf.hold_tip;
+      const cfg = join(root, `if12-${id}.json`);
+      writeFileSync(cfg, JSON.stringify({ ...proposalConfig(CLOTH_PARTS, pp), constraints: pp.constraints ?? [] }));
+      const out = join(root, `rig-if12-${id}`);
+      const r = runCli(['rig', '--config', cfg, '--parts', fx.parts, '--out', out]);
+      return { status: r.status, rig: r.status === 0 ? (JSON.parse(readFileSync(join(out, 'rig.json'), 'utf8')) as RigSkins) : null, row: r.status === 0 ? (rowsOf(out).find((x) => x.part === 'skirt') ?? null) : null };
+    };
+    const shares12 = (a: Att): Array<Array<{ bone: string; weight: number }>> => a.weights.map((v) => v.map((e) => ({ bone: e.bone, weight: e.weight })));
+    const reads12 = [8, 7].map((cap) => {
+      const h = rig12(`held${cap}`, cap, true);
+      const u = rig12(`plain${cap}`, cap, false);
+      const ha = h.rig?.skins.default.skirt?.skirt;
+      const ua = u.rig?.skins.default.skirt?.skirt;
+      const expect = ua === undefined ? null : smoothForkShares(shares12(ua), ua.triangles, cap);
+      const exact = ha !== undefined && expect !== null && JSON.stringify(shares12(ha)) === JSON.stringify(expect);
+      const moved = ha !== undefined && ua !== undefined && JSON.stringify(shares12(ha)) !== JSON.stringify(shares12(ua));
+      const widest = ha === undefined ? NaN : Math.max(...ha.weights.map((v) => v.length));
+      const rest = h.rig !== null && u.rig !== null && Object.keys(h.rig.skins.default).filter((k) => k !== 'skirt').every((k) => JSON.stringify(h.rig?.skins.default[k]) === JSON.stringify(u.rig?.skins.default[k]));
+      const echo = h.row?.influence?.hold_tip === true && u.row !== null && u.row.influence !== undefined && !('hold_tip' in u.row.influence);
+      return { cap, ok: h.status === 0 && u.status === 0 && exact && moved && widest <= cap && h.row?.max_influences === widest && rest && echo, exact, moved, widest, rest, echo, status: `${h.status}/${u.status}` };
+    });
+    say(
+      'IF12_A_HOLD_TIP_INFLUENCE_MESH_IS_THE_PULL_SMOOTHED_BY_THE_HELD_FORK_PASSES_CAPPED_AT_ITS_MAX_AND_WITHOUT_IT_IS_THE_PULL',
+      reads12.every((r) => r.ok) && JSON.stringify(smoothForkShares([[{ bone: 'a', weight: 1 }], [{ bone: 'b', weight: 1 }], [{ bone: 'c', weight: 1 }]], [0, 1, 2])) === JSON.stringify(smoothForkShares([[{ bone: 'a', weight: 1 }], [{ bone: 'b', weight: 1 }], [{ bone: 'c', weight: 1 }]], [0, 1, 2], FORK_SMOOTH_MAX_INFLUENCES)),
+      reads12.map((r) => `max ${r.cap}: exit ${r.status}, held = smoothForkShares(pull, triangles, ${r.cap}) exactly ${r.exact}, smoothing seen ${r.moved}, widest vertex ${r.widest} bone(s), other attachments unchanged ${r.rest}, mesh_report echoes hold_tip only when declared ${r.echo}`).join('; '),
+      'issue #615 (HQ decision): the smoothing is the lattice\'s own function, capped at the declared max so no vertex exceeds the config, and it runs on the field alone — a mesh without hold_tip (a split skirt included, which the lattice\'s fork test alone would smooth) keeps rig-c\'s pull byte for byte; the lattice\'s call passes no cap and keeps its 8',
+    );
+
+    // IF13 — issue #615 bar 2: the fixture skirt drafted under hold_tip folds no more than its hold_tip lattice under
+    // IF04's 60-degree hip sway with the physics on, where the draft before #615 (max 6, no hold_tip) folds more. The
+    // same mesh at max 8 with hold_tip removed is read and printed, not held: on this skirt it reads as the lattice too.
+    const sway13 = (id: string, cfgObj: Record<string, unknown>): number | null => {
+      const cfg = join(root, `if13-${id}.json`);
+      writeFileSync(cfg, JSON.stringify(cfgObj));
+      const out = join(root, `rig-if13-${id}`);
+      if (runCli(['rig', '--config', cfg, '--parts', fx.parts, '--out', out]).status !== 0) return null;
+      const m = JSON.parse(readFileSync(join(out, 'motion.json'), 'utf8')) as { animations?: Record<string, unknown> };
+      m.animations = { ...(m.animations ?? {}), sway: { duration: 4, tracks: [{ bone: 'hip', property: 'rotate', keys: Array.from({ length: 49 }, (_, i) => ({ t: pyRound(i / 12, 6), v: [pyRound(60 * Math.sin((2 * Math.PI * i) / 24), 4)] })) }] } };
+      writeFileSync(join(out, 'motion.json'), JSON.stringify(m));
+      return influenceFolds(out, join(root, `f13-${id}`), 'sway', null).get('skirt')?.frames ?? null;
+    };
+    const heldLattice = (() => {
+      const r = clothRecipe() as Record<string, Record<string, unknown>>;
+      r.bottomwear = { ...r.bottomwear, split: { ...(r.bottomwear.split as Record<string, unknown>), hold_tip: true } };
+      return proposeWithBasis(P6, undefined, null, DEFAULT_GRID_RULE, r as ReturnType<typeof clothRecipe>).proposal;
+    })();
+    const unheld = (max: number): typeof held11 => {
+      const pp = JSON.parse(JSON.stringify(held11)) as typeof held11;
+      const inf = (pp.meshes.skirt as unknown as { influence: Record<string, unknown> }).influence;
+      delete inf.hold_tip;
+      inf.max = max;
+      return pp;
+    };
+    const unsmoothed = unheld(FORK_SMOOTH_MAX_INFLUENCES);
+    const before13 = unheld(6);
+    const f13 = {
+      lattice: sway13('lattice', { ...proposalConfig(CLOTH_PARTS, heldLattice), constraints: heldLattice.constraints ?? [] }),
+      held: sway13('held', { ...proposalConfig(CLOTH_PARTS, held11), constraints: held11.constraints ?? [] }),
+      unsmoothed: sway13('unsmoothed', { ...proposalConfig(CLOTH_PARTS, unsmoothed), constraints: unsmoothed.constraints ?? [] }),
+      before: sway13('before', { ...proposalConfig(CLOTH_PARTS, before13), constraints: before13.constraints ?? [] }),
+    };
+    say(
+      'IF13_UNDER_HOLD_TIP_THE_INFLUENCE_SKIRT_FOLDS_NO_MORE_THAN_ITS_LATTICE_WHERE_THE_DRAFT_BEFORE_IT_FOLDS_MORE',
+      f13.lattice !== null && f13.held !== null && f13.unsmoothed !== null && f13.before !== null && f13.held <= f13.lattice && f13.before > f13.lattice,
+      `skirt folded frames at a 60-degree hip sway, 30 fps, physics on: lattice under hold_tip ${f13.lattice ?? 'not built'}; influence drafted under hold_tip (max 8, smoothed) ${f13.held ?? 'not built'}; the draft before #615 (max 6, not smoothed) ${f13.before ?? 'not built'}; read, not held: max 8 with hold_tip removed ${f13.unsmoothed ?? 'not built'}`,
+      'issue #615 bar 2: the stimulus folds the draft as it was before the field, so the reading is not blind; which half of the decision closes the gap is not this control\'s to hold — the max raised alone reads as the lattice here, and IF12 holds the smoothing itself',
+    );
+
+    // IF14 — issue #615: the loader takes `hold_tip: true` and refuses any other value by name, once.
+    const holdAs = (v: unknown): PartsError | null => robeAs({ influence: { cell: 8, radius: 20, across: true, max: 4, shape: 'linear', hold_tip: v }, segments: ['chest', 'hem'] });
+    const planted14: Array<[string, unknown]> = [['false', false], ['a string', 'yes'], ['a number', 1], ['null', null]];
+    const out14 = planted14.map(([what, v]) => {
+      const e = holdAs(v);
+      return { what, ok: e !== null && e.problems.length === 1 && e.problems[0].code === 'CONFIG_FIELD_TYPE' && e.problems[0].object === 'config.meshes.robe.influence.hold_tip', got: codes(e) };
+    });
+    say(
+      'IF14_THE_INFLUENCE_BLOCK_TAKES_HOLD_TIP_TRUE_AND_REFUSES_ANY_OTHER_VALUE_ONCE_BY_NAME',
+      holdAs(true) === null && out14.every((o) => o.ok),
+      `hold_tip true: ${holdAs(true) === null ? 'loads' : codes(holdAs(true))}; ${out14.map((o) => `${o.what} ${o.ok ? 'refused once' : `NOT: ${o.got}`}`).join('; ')}`,
+      'issue #615: true is the one spelling — absent leaves rig-c\'s pull, so false would be a second spelling of absent whose mesh_report echo differs from the bytes written before the field existed',
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
