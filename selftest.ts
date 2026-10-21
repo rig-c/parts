@@ -37864,7 +37864,7 @@ function runInfluenceSuite(): number {
         lint6.some((l) => l.startsWith(skirtLint)) &&
         serializeProposal(drafted6.proposal) === serializeProposal(again6.proposal),
       `${want6.map((w) => `${w.p}: ${JSON.stringify(w.m.influence ?? null)} beside the rig stage's farthest ${w.far}`).join('; ')}; rig exit ${rig6.status}; ${lint6.length} LINT line(s): ${lint6.map((l) => l.slice(0, 120)).join(' | ')}; two runs ${serializeProposal(drafted6.proposal) === serializeProposal(again6.proposal) ? 'byte-identical' : 'differ'}`,
-      'issue #518: the radius is the reach floor (RIG_INFLUENCE_REACH\'s figure, measured here as the rig stage measures it) plus 3 of the part\'s cells — #513 read 0 folded frames from +2 to +6 cells on every covered part, +2 at the edge, and a radius at the floor folding more than the lattice; the author sees the rule and both figures, and the same inputs draft the same bytes',
+      'issue #518: the radius is the reach floor (RIG_INFLUENCE_REACH\'s figure, measured here as the rig stage measures it) plus 3 of the part\'s cells — #513 read 0 folded frames from +2 to +6 cells on every covered part, +2 at the edge, and a radius at the floor folding more than the lattice; read against check as well (#599), +4 cells fails CHECK_TIP_OVER_ROOT on wind\'s bottomwear (1.471 < 1.4725), so the window is +2 to +3 and the 3 sits inside it; the author sees the rule and both figures, and the same inputs draft the same bytes',
     );
 
     // IF07 — a radius the recipe states is kept as stated and no LINT is printed for it; a recipe without `influence`
