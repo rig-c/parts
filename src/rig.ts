@@ -670,6 +670,7 @@ function applyTurn(
   slots: RigSpec['slots'],
   skin: RigSpec['skins']['default'],
   constraints: readonly ConfigConstraint[],
+  frontSlots: ReadonlySet<string> = new Set(),
 ): { constraints: Array<Record<string, unknown>>; detached: DetachedRule[]; rows: TurnRow[] } {
   const problems: Problem[] = [];
   const taken = new Set(bones.map((b) => b.name));
@@ -680,7 +681,8 @@ function applyTurn(
     const row: TurnRow = { ...f, twins: [] };
     rows.push(row);
     if (f.fraction === 0) continue;
-    const mine = slots.filter((sl) => sl.name === f.part || sl.name === `${f.part}${STILL_SUFFIX}` || sl.name === `${f.part}${FRONT_SUFFIX}`);
+    // A declared front slot (issue #664) rides its part; a part merely named `<part>_front` is a part of its own.
+    const mine = slots.filter((sl) => sl.name === f.part || sl.name === `${f.part}${STILL_SUFFIX}` || (sl.name === `${f.part}${FRONT_SUFFIX}` && frontSlots.has(sl.name)));
     const bound: string[] = [];
     const bind = (b: string): void => {
       if (!bound.includes(b)) bound.push(b);
@@ -707,7 +709,7 @@ function applyTurn(
     const twinOf = new Map(row.twins.map((t) => [t.bone, t.twin]));
     for (const t of row.twins) bones.push({ name: t.twin, parent: t.bone, x: 0, y: 0 });
     for (const sl of slots) {
-      if (sl.name !== row.part && sl.name !== `${row.part}${STILL_SUFFIX}` && sl.name !== `${row.part}${FRONT_SUFFIX}`) continue;
+      if (sl.name !== row.part && sl.name !== `${row.part}${STILL_SUFFIX}` && !(sl.name === `${row.part}${FRONT_SUFFIX}` && frontSlots.has(sl.name))) continue;
       sl.bone = twinOf.get(sl.bone) as string;
       const atts = skin[sl.name] ?? {};
       for (const [k, att] of Object.entries(atts)) {
@@ -2415,6 +2417,8 @@ export function buildRig(
     }
   }
   refuseIfAny(problems);
+  // Only declared front slots are front slots: a part authored as `<part>_front` is an ordinary part (review of #667).
+  const declaredFront = new Set(frontSlots.map((sl) => sl.name));
   // ---- alternate painting sets (issues #454, #465) ------------------------
   // Only when `parts.alternates` is present: each alternate set's `<set>_<part>`
   // attachments are added to `skins.default[<part>]` on the existing bones and
@@ -2436,7 +2440,7 @@ export function buildRig(
       }
       // Issue #664: one segment is drawn by one slot of a set, its base slot or its front slot, never both.
       for (const slotName of Object.keys(alt.slots)) {
-        if (Object.hasOwn(alt.slots, `${slotName}${FRONT_SUFFIX}`)) {
+        if (declaredFront.has(`${slotName}${FRONT_SUFFIX}`) && Object.hasOwn(alt.slots, `${slotName}${FRONT_SUFFIX}`)) {
           fail('RIG_SET_FRONT_BOTH', `parts.json alternates[${altIdx}] (set "${alt.name}") part "${slotName}"`, `maps both slot "${slotName}" and its front slot "${slotName}${FRONT_SUFFIX}"; a set draws a segment on its base slot or on its front slot, not both — re-run assemble`);
         }
       }
@@ -2448,7 +2452,7 @@ export function buildRig(
       if (isSubsetSet) {
         coveredBones = new Set<string>();
         for (const slotName of Object.keys(alt.slots)) {
-          const pName = slotName.endsWith(FRONT_SUFFIX) && altFront.has(slotName.slice(0, -FRONT_SUFFIX.length)) ? slotName.slice(0, -FRONT_SUFFIX.length) : slotName;
+          const pName = declaredFront.has(slotName) && altFront.has(slotName.slice(0, -FRONT_SUFFIX.length)) ? slotName.slice(0, -FRONT_SUFFIX.length) : slotName;
           if (pName in cfg.regions) coveredBones.add(cfg.regions[pName]);
           for (const s of meshSegments.get(pName) ?? []) coveredBones.add(s.bone);
           const m = cfg.meshes[pName];
@@ -2672,7 +2676,7 @@ export function buildRig(
   // ---- the turn control (issue #251) -------------------------------------
   // Only when the config has `turn`: every other build adds nothing here, so no byte moves.
   if (cfg.turn !== undefined) refuseIfAny(turnRiderProblems(cfg.turn, cfg, parts.parts));
-  const turned = cfg.turn === undefined ? null : applyTurn(cfg.turn, parts.parts.map((p) => p.name), bones, rebound, skin, cfg.constraints ?? []);
+  const turned = cfg.turn === undefined ? null : applyTurn(cfg.turn, parts.parts.map((p) => p.name), bones, rebound, skin, cfg.constraints ?? [], declaredFront);
   for (const row of turned?.rows ?? []) for (const t of row.twins) layoutAlias(explicitLayout.plan, t.bone, t.twin);
   // issue #536: every row names the bones the emitted attachment binds, read once the turn and the stops have
   // rebound the weights; a rig with neither rebinds nothing, so this reads back the names each row already holds.
@@ -2905,9 +2909,11 @@ export function expandSetAttachmentKeys(rig: RigSpec, sets: AttachmentSetsFile |
           }
           // Issue #664: a set that draws this track's part on its front slot moves the part in the draw order, which a
           // keyed attachment swap cannot do; keyed draw-order changes are out of scope.
-          const frontBase = slot.endsWith(FRONT_SUFFIX) ? slot.slice(0, -FRONT_SUFFIX.length) : null;
+          // A declared front slot is the one slot the rig writes with no setup attachment.
+          const isFront = (name: string): boolean => rig.slots.some((sl) => sl.name === name && sl.attachment === null);
+          const frontBase = slot.endsWith(FRONT_SUFFIX) && isFront(slot) ? slot.slice(0, -FRONT_SUFFIX.length) : null;
           const drawsFront =
-            (Object.hasOwn(entry.slots, `${slot}${FRONT_SUFFIX}`) && entry.hides?.includes(slot) === true) ||
+            (isFront(`${slot}${FRONT_SUFFIX}`) && Object.hasOwn(entry.slots, `${slot}${FRONT_SUFFIX}`) && entry.hides?.includes(slot) === true) ||
             (frontBase !== null && Object.hasOwn(entry.slots, slot) && entry.hides?.includes(frontBase) === true);
           if (drawsFront) {
             const part = frontBase ?? slot;

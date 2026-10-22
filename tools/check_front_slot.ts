@@ -145,6 +145,25 @@ export function runFrontSlotChecks(dir: string, say: Say, runner: RigcRunner): v
     `setup still f0 bytes equal ${declaredFrame.png.equals(undeclaredFrame.png)}, viewport equal ${declaredFrame.vp === undeclaredFrame.vp}; rig.json equal less the one front slot ${sameRig}; parts.json equal ${sameParts}; sets.json equal ${sameSets}`,
   );
 
+  // ---- an ordinary part named like a front slot (review of #667) -------------------------------------------------------
+  // No limb declares front; the upper arm is authored as `forearm_r_front`. The set covers both arm parts, so its record
+  // maps `forearm_r` and `forearm_r_front`: two parts, not one part twice, so nothing may be refused as a front slot.
+  const lookalike = join(dir, 'lookalike');
+  writeFrontSlotFixture(lookalike, { limbFront: false, setFront: false, upperName: 'forearm_r_front' });
+  let lookalikeError = '';
+  let lookalikeSlots: string[] = [];
+  try {
+    const lookOut = build(lookalike, runner);
+    lookalikeSlots = Object.keys(((readJson(join(lookOut, 'rig', 'sets.json')).sets as Json).chest as Json).slots as Json).sort();
+  } catch (e) {
+    lookalikeError = (e as Error).message;
+  }
+  say(
+    'FS07_A_PART_NAMED_LIKE_A_FRONT_SLOT_IS_AN_ORDINARY_PART',
+    lookalikeError === '' && JSON.stringify(lookalikeSlots) === JSON.stringify(['forearm_r', 'forearm_r_front']),
+    `no front declared, upper arm authored as "forearm_r_front": build ${lookalikeError === '' ? 'green' : `refused (${lookalikeError.slice(0, 200)})`}; set chest maps ${JSON.stringify(lookalikeSlots)}`,
+  );
+
   // ---- refusals by name ----------------------------------------------------------------------------------------------
   const mutate = (edit: (c: Json) => void): Json => {
     const c = structuredClone(cfgRaw);

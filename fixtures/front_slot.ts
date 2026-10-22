@@ -52,12 +52,15 @@ export interface FrontSlotOptions {
   limbFront?: boolean;
   /** The set `chest` names `front: ["forearm_r"]` (default true). */
   setFront?: boolean;
+  /** The upper arm segment's part name (default `upperarm_r`); `forearm_r_front` makes an ordinary part that only looks like a front slot. */
+  upperName?: string;
 }
 
 /** The fixture in `dir`: `painting.png`, `full/`, `head/`, `chest.png`, `chest_full/`, `config.json`. */
 export function writeFrontSlotFixture(dir: string, opts: FrontSlotOptions = {}): Record<string, unknown> {
   const limbFront = opts.limbFront ?? true;
   const setFront = opts.setFront ?? true;
+  const upper = opts.upperName ?? 'upperarm_r';
   const cfg = assembleConfig({ plan: [['arm', 'full', 'handwear-r'], ['torso', 'full', 'topwear'], ['face', 'head', 'face']], extend: [] });
   cfg.bones = [
     { name: 'chest', parent: 'root', at: [31, 16] },
@@ -66,17 +69,17 @@ export function writeFrontSlotFixture(dir: string, opts: FrontSlotOptions = {}):
   cfg.limbs = {
     arm_r: {
       segments: [
-        { part: 'upperarm_r', from: 'arm', bone: 'sleeve_r0' },
+        { part: upper, from: 'arm', bone: 'sleeve_r0' },
         { part: 'forearm_r', from: 'arm', bone: 'sleeve_r1', joint: 'elbow' },
       ],
       ...(limbFront ? { front: { parts: ['forearm_r'], after: 'face' } } : {}),
     },
   };
-  cfg.regions = { upperarm_r: 'sleeve_r0', forearm_r: 'sleeve_r1', torso: 'chest', face: 'chest' };
+  cfg.regions = { [upper]: 'sleeve_r0', forearm_r: 'sleeve_r1', torso: 'chest', face: 'chest' };
   // An explicit static track closes the declared idle duration at rigc's gate.
   cfg.motion = { duration: 1, tracks: [{ bone: 'chest', prop: 'rotate', amp: 0, base: 0, period: 1, phase: 0 }] };
   (cfg.assemble as Record<string, unknown>).alternates = [
-    { name: 'chest', source: 'chest.png', full: 'chest_full', head: 'head', parts: ['upperarm_r', 'forearm_r'], drawn: { sleeve_r1: 0 }, ...(setFront ? { front: ['forearm_r'] } : {}) },
+    { name: 'chest', source: 'chest.png', full: 'chest_full', head: 'head', parts: [upper, 'forearm_r'], drawn: { sleeve_r1: 0 }, ...(setFront ? { front: ['forearm_r'] } : {}) },
   ];
   const arm = (rects: Rect[]): RunLayerSpec => ({ name: 'handwear-r', depth: 0.7, rects });
   const topwear: RunLayerSpec = { name: 'topwear', depth: 0.5, rects: [TORSO_RECT] };
