@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.58.0](https://github.com/rig-c/parts/compare/v1.57.1...v1.58.0) (2026-10-22)
+
+
+### Features
+
+* save proposed config fields and close first-reader gaps ([#662](https://github.com/rig-c/parts/issues/662)) ([07138f2](https://github.com/rig-c/parts/commit/07138f272ab74f36d9f7de3c3c3d59dcdcceb627))
+
 ## [1.57.1](https://github.com/rig-c/parts/compare/v1.57.0...v1.57.1) (2026-10-21)
 
 
