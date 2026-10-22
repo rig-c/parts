@@ -5486,6 +5486,14 @@ function lintBasis(bones: readonly BoneEntry[], joints: RigJoints): LintBasis {
     if (from[0] === to[0] && from[1] === to[1]) return { chain, joints: [a, b], line: null, why: `${a} and ${b} are one point, ${fmtAt(from)}, so they declare no line` };
     return { chain, joints: [a, b], line: { from, to }, why: null };
   });
+  // Leg joints place a bent chain; projecting all links onto hip -> ankle is
+  // not a rule for that bend. Say why that check does not read these chains.
+  for (const side of ['r', 'l'] as const) {
+    const chain = `leg_${side}`;
+    if (bones.some((e) => 'chain' in e && e.chain === chain)) {
+      chains.push({ chain, joints: [`${side}_hip`, `${side}_ankle`], line: null, why: 'chain-not-advancing reads sleeve chains only; a bent knee need not advance along hip -> ankle' });
+    }
+  }
   return { person: joints.person, torso, chains };
 }
 

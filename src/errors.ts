@@ -34,6 +34,18 @@ export function guidePointer(code: string): string {
   return ` (see rig-parts guide ${code})`;
 }
 
+/**
+ * Complete only a bare relayed core compile refusal (issue #356). Current core
+ * names a guide rule; older callers may name the compile section or a child.
+ * Keep those pointers and all non-compile lines verbatim. The parts rule's
+ * outer pointer remains failLine's responsibility.
+ */
+export function coreCompileGuideLine(line: string): string {
+  if (!/^\s*rigc compile error\b/.test(line) || /\(see rigc guide (?:§5\.1(?:\.\d+)*|[A-Z][A-Z0-9_]*)\)/.test(line)) return line;
+  const body = line.trimEnd();
+  return `${body} (see rigc guide §5.1)${line.slice(body.length)}`;
+}
+
 /** A refusal as it is printed: `  FAIL  RULE: object — detail (see rig-parts guide RULE)`. */
 export function failLine(p: Problem): string {
   return `  FAIL  ${problemLine(p)}${guidePointer(p.code)}`;

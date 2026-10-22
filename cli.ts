@@ -20,6 +20,7 @@ import { type AlternateCliInput, assembleStage, build, checkStage, ERROR_MAP_FIL
 import { ACCEPTABLE_BARS, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, findRigc, PACK_SHAPES, rigcRunnerAt, type PackShape, PAGE_EDGES, type PageEdges, PARTS_HOME_SENTENCE, RIGC_GEOMETRY_VERSION, rigcRanClause, type RigcRunner, NO_PARTS_SENTENCE, SEAM_MEAN_BAR, SOURCE_SENTENCE, SEAM_PX_BAR, SEAM_PX_LEVEL, SPINEBOY_YARDSTICK, TEXTURE_STRETCH_CEILING } from './src/check.ts';
 import { ComfyClient, resolveHost, runPainting, runSeeThrough } from './src/comfy/index.ts';
 import { type CharacterConfig, loadClothConfig, loadConfig, loadEarlyConfig, loadPaintConfig } from './src/config.ts';
+import { configWriteLines, readConfigWriteTarget, separateConfigWriteTarget, stageConfigWrite, type StagedConfigWrite } from './tools/configwrite.ts';
 import { failLine, guidePointer, PartsError } from './src/errors.ts';
 import { GUIDE_DOC, type GuideAnswer, guideRule, guideSection } from './src/guide.ts';
 import { proposeHeadBox } from './src/headbox.ts';
@@ -27,8 +28,8 @@ import { makeInputs } from './src/inputs.ts';
 import { idleKeysOf, isIdleKeys } from './src/rig.ts';
 import { depthSkipLine, exportLayers, figuresPhrase, hiddenLayerLine, implausibleRules, layerFigures, type LayerSet, layerSetDiff, pct, readLayers, readWrapperLayers, ruleSummary, templateLayerNames, templatePsdBytes, times } from './src/layers.ts';
 import { checkImageSize, choosePerson, KEYPOINTS_SPEC, loadKeypoints, type RigJoints, toRigJoints } from './src/keypoints.ts';
-import { basisLines, branchSqueezeLine, checkProposal, compare, compareLines, DEFAULT_GRID_RULE, draftTurn, drawLandmarks, FIGURE_GRID_DIVISOR, FRINGE_STEP_PX, GRID_RULES, type GridRule, HIP_MIN_FRACTION, type DraftLintFinding, lint, lintLine, type PartSet, proposalAsConfig, proposeWithBasis, readPartSet, serializeProposal, withTurn, WRIST_ON_PART_PX } from './src/propose.ts';
-import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, coverageLines, serializeBasis } from './src/diagnostics.ts';
+import { basisLines, branchSqueezeLine, checkProposal, compare, compareLines, DEFAULT_GRID_RULE, draftTurn, drawLandmarks, FIGURE_GRID_DIVISOR, FRINGE_STEP_PX, GRID_RULES, type GridRule, HIP_MIN_FRACTION, type DraftLintFinding, lint, lintLine, type PartSet, PROPOSAL_CONFIG_SECTIONS, proposalAsConfig, proposeWithBasis, readPartSet, serializeProposal, withTurn, WRIST_ON_PART_PX } from './src/propose.ts';
+import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, coverageLines, legChainChoice, serializeBasis } from './src/diagnostics.ts';
 import { BEND_DEGREES, BEND_WORST_SHARE, DUST_MAX_PX, DUST_MAX_SHARE, IDLE_BOUND_PX, MESH_DRAFT_REPORT, MESH_DRAFT_SPEC, meshDraftStage, MORE_TRIANGLES_FLAG, relativeConfigPaths, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
 import { meshStatsStage } from './src/meshstats.ts';
 import { chainsLeftBehind, clothConfigEdits, editPaths, plainCount, previousCount, writtenClothConfig } from './src/clothconfig.ts';
@@ -269,13 +270,24 @@ usage:
       coverage lines after them; no ${BASIS_FILE}, as nothing is proposed.
       Exits 1 when any LINT line is printed.
 
+  rig-parts propose … --write-config <config.json>
+      Without --cloth, update an existing config with the whole proposal's
+      present config sections, including proposed_rig_scale; notes stay in the
+      proposal. Absent optional sections and all other fields are kept. The
+      full config loader validates a same-directory candidate before atomic
+      replacement; relative paths resolve beside the config. An equal update
+      keeps the original bytes and mtime. A changed source, an artifact alias
+      or a failed write is refused by name. Change lines go to stderr.
+
   rig-parts propose --head-box --full <dir | layers.json | file.psd> --canvas <W>x<H> [--no-back-hair]
+                         [--write-config <config.json>]
       Propose seethrough.head_box (source px, square) from the full run's
       layers for a painting of WxH px (portrait or landscape: the full run is
       mapped back through the pad inputs added), held inside the painting; a
       shift is printed when one was needed. When "back hair" contributes, prints
       the box without it and how much of the side and area it took;
-      --no-back-hair leaves "back hair" out of the box.
+      --no-back-hair leaves "back hair" out of the box. --write-config updates
+      only seethrough.head_box in an existing config through the layers loader.
 
   rig-parts compare --left <file> --right <file> [--map <bonemap.json>]
       Compare two skeletons bone by bone. Each file is a config, a proposal.json
@@ -697,7 +709,7 @@ usage:
       ${DEFAULT_PROJECT_RULE}.
 
   rig-parts assemble --propose-plan --source <painting.png> --full <dir|psd>
-                       [--head <dir|psd>] --config <config.json>
+                       [--head <dir|psd>] --config <config.json> [--write-config <config.json>]
       Print {plan, extend_below_crop, notes} for config.assemble, from the two
       runs. A layer \`layers\` WARNs about (PLAN_LAYER_TRANSLUCENT,
       PLAN_LAYER_BACKGROUND, PLAN_LAYER_OVERSIZED) is not proposed, and a note
@@ -709,7 +721,8 @@ usage:
       config.seethrough.resolution and config.assemble.rig_scale — the rest of
       the config need not exist yet. With no --head, the one run is held as
       assemble holds it and every row is written from it, and the first note
-      says so.
+      says so. --write-config must name --config itself; it updates the whole
+      assemble.plan and assemble.extend_below_crop through the assemble loader.
 
   rig-parts inputs --source <painting.png> --config <config.json> --out <dir>
       Cut the two images See-through is fed: <out>/st_input_full.png (the
@@ -975,7 +988,7 @@ const TAKES = {
   compare: { valued: ['--left', '--right', '--map'], switches: [] },
   check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--requirements', '--set', '--environment'], switches: ['--seam-pairs', '--keep-stills', '--all-sets'] },
   loop: { valued: ['--frames', '--out'], switches: ['--palette'] },
-  assemble: { valued: ['--source', '--full', '--head', '--config', '--out', '--seam', '--project', '--alt'], switches: ['--propose-plan'] },
+  assemble: { valued: ['--source', '--full', '--head', '--config', '--out', '--seam', '--project', '--alt', '--write-config'], switches: ['--propose-plan'] },
   'comfy seethrough': { valued: ['--image', '--out', '--resolution', '--steps', '--seed', '--prefix', '--host', '--wait', '--timeout', '--poll'], switches: ['--offload', '--lama', '--nf4'] },
   'comfy paint': { valued: ['--config', '--out', '--seeds', '--seed0', '--host', '--wait', '--timeout', '--poll'], switches: [] },
   inputs: { valued: ['--source', '--config', '--out'], switches: [] },
@@ -1267,7 +1280,7 @@ function parseCanvas(v: string): { w: number; h: number } | null {
   return m === null ? null : { w: Number(m[1]), h: Number(m[2]) };
 }
 
-function printLint(P: PartSet, spec: { bones: CharacterConfig['bones']; meshes: CharacterConfig['meshes']; regions: CharacterConfig['regions']; motion: CharacterConfig['motion']; constraints?: CharacterConfig['constraints'] }, joints?: RigJoints, drafted: readonly DraftLintFinding[] = []): number {
+function printLint(P: PartSet, spec: { bones: CharacterConfig['bones']; meshes: CharacterConfig['meshes']; regions: CharacterConfig['regions']; motion: CharacterConfig['motion']; constraints?: CharacterConfig['constraints']; limbs?: CharacterConfig['limbs']; notes?: readonly string[] }, joints?: RigJoints, drafted: readonly DraftLintFinding[] = []): number {
   const res = lint(P, spec, joints, drafted);
   // Under --keypoints only: which rule set read the torso and the chains, and on what basis.
   if (res.basis !== undefined) for (const l of basisLines(res.basis)) console.log(l);
@@ -1285,7 +1298,7 @@ function printLint(P: PartSet, spec: { bones: CharacterConfig['bones']; meshes: 
   }
   console.log(`${res.findings.length} LINT line(s) over ${Object.keys(spec.meshes).length - res.unknownMeshes.length} mesh(es) and the hip`);
   // Issue #86: after every line above, which check read each bone, or why none did.
-  for (const l of coverageLines(res.coverage)) console.log(l);
+  for (const l of coverageLines(res.coverage, legChainChoice(P, spec, joints))) console.log(l);
   return res.findings.length;
 }
 
@@ -1311,17 +1324,24 @@ function cmdPropose(args: string[]): number {
     flags.set(flag, value);
     i++;
   }
+  let staged: StagedConfigWrite | null = null;
   try {
     if (headBox) {
-      const stray = [...flags.keys()].filter((f) => f !== '--full' && f !== '--canvas');
-      if (stray.length > 0) return usage(`--head-box takes --full and --canvas only; got ${stray.join(', ')}`);
+      const stray = [...flags.keys()].filter((f) => f !== '--full' && f !== '--canvas' && f !== '--write-config');
+      if (stray.length > 0) return usage(`--head-box takes --full, --canvas and optional --write-config only; got ${stray.join(', ')}`);
       const full = flags.get('--full');
       const canvasArg = flags.get('--canvas');
       if (full === undefined) return usage('--head-box needs --full <dir | layers.json | file.psd>, the full run\'s layers');
       if (canvasArg === undefined) return usage('--head-box needs --canvas <W>x<H>, the painting\'s size in px');
       const canvas = parseCanvas(canvasArg);
       if (canvas === null) return usage(`--canvas ${canvasArg} is not <W>x<H> in integer px`);
+      const target = flags.has('--write-config') ? readConfigWriteTarget(flags.get('--write-config') as string) : null;
       const r = proposeHeadBox(readLayers(full), canvas, { backHair: !noBackHair });
+      if (target !== null) {
+        staged = stageConfigWrite(target, { kind: 'head-box', head_box: r.head_box });
+        staged.commit();
+        for (const line of configWriteLines(target, staged.changes)) console.error(line);
+      }
       console.log(`rig-parts propose --head-box: ${full}`);
       console.log(`  painting ${canvas.w}x${canvas.h}; head layers ${r.layers.map(([n, c]) => `${n} ${c} px`).join(', ')}`);
       if (r.shift[0] !== 0 || r.shift[1] !== 0) {
@@ -1372,16 +1392,21 @@ function cmdPropose(args: string[]): number {
     // Issue #537: the --cloth config's own text with what its recipe drafts spliced in, beside proposal.json.
     const writeArg = flags.get('--write-config');
     if (writeArg !== undefined && flags.has('--from-config')) return usage('--write-config writes what the recipe drafts into its config; --from-config proposes nothing');
-    if (writeArg !== undefined && clothArg === undefined) return usage('--write-config writes the --cloth config with what its recipe drafts spliced in; give --cloth <config.json>');
     // Issue #571: the config the recipe is changed from; an entry equal to its recipe's draft is the recipe's, not a hand edit.
     const fromArg = flags.get('--from');
     if (fromArg !== undefined && writeArg === undefined) return usage('--from names the config the recipe is changed from, for --write-config; give --write-config <out.json>');
-    if (writeArg !== undefined) {
-      const ours = ['proposal.json', BASIS_FILE].map((f) => resolve(out, f));
+    if (fromArg !== undefined && clothArg === undefined) return usage('--from names a previous cloth recipe; give --cloth <config.json>');
+    if (writeArg !== undefined && clothArg !== undefined) {
+      const ours = ['proposal.json', BASIS_FILE, 'render/landmarks.png', 'render/landmarks_head.png'].map((f) => resolve(out, f));
       if (existsSync(writeArg) || ours.includes(resolve(writeArg))) {
         throw new PartsError([{ code: 'PROPOSE_WRITE_CONFIG_FRESH', object: writeArg, detail: existsSync(writeArg) ? 'exists; the config is written to a new file, never over the --cloth config or an earlier one' : `is a file this run writes under ${out}; name another file` }]);
       }
+      separateConfigWriteTarget({ path: resolve(writeArg) }, ours, 'PROPOSE_WRITE_CONFIG_FRESH');
     }
+    // The existing cloth writer keeps its fresh-file, per-entry splice contract.
+    // Without --cloth, #356 updates only an existing config through the stage loader.
+    const target = writeArg === undefined || clothArg !== undefined ? null : readConfigWriteTarget(writeArg);
+    if (target !== null) separateConfigWriteTarget(target, [join(out, 'proposal.json'), join(out, BASIS_FILE), join(out, 'render', 'landmarks.png'), join(out, 'render', 'landmarks_head.png')]);
     const cloth = clothArg === undefined ? null : loadClothConfig(clothArg).cloth;
     const previousCloth = fromArg === undefined ? null : loadClothConfig(fromArg).cloth;
     const partsDir = existsSync(partsArg) && statSync(partsArg).isFile() ? dirname(partsArg) : partsArg;
@@ -1455,14 +1480,16 @@ function cmdPropose(args: string[]): number {
     })();
     const bfile = basisFile(P, prop, basis, cfg === null || cmpPath === undefined ? null : { where: cmpPath, config: cfg });
     const img = drawLandmarks(P, painting, prop.bones, 'PROPOSAL - CORRECT ME');
+    if (target !== null) staged = stageConfigWrite(target, { kind: 'proposal', proposal: prop, sections: PROPOSAL_CONFIG_SECTIONS });
+    else if (written !== null) staged = stageConfigWrite({ kind: 'fresh', path: written.at, text: written.text });
     mkdirSync(render, { recursive: true });
     writeFileSync(join(out, 'proposal.json'), serializeProposal(prop));
     writeFileSync(join(out, BASIS_FILE), serializeBasis(bfile));
     writePng(join(render, 'landmarks.png'), img.full);
     if (img.head !== null) writePng(join(render, 'landmarks_head.png'), img.head);
-    if (written !== null) {
-      mkdirSync(dirname(written.at), { recursive: true });
-      writeFileSync(written.at, written.text);
+    if (staged !== null) {
+      staged.commit();
+      if (target !== null) for (const line of configWriteLines(target, staged.changes)) console.error(line);
     }
     console.log(`wrote proposal.json (${prop.bones.length} bone entries, ${Object.keys(prop.meshes).length} meshes) and render/landmarks.png (+_head) under ${out}`);
     for (const n of prop.notes) console.log(`note: ${n}`);
@@ -1484,7 +1511,12 @@ function cmdPropose(args: string[]): number {
     if (cfg !== null) for (const l of compareLines(compare(prop.bones, cfg.bones))) console.log(l);
     return EXIT_OK;
   } catch (err) {
+    if (staged !== null) {
+      try { staged.abort(err); } catch (combined) { return printRefusal(combined); }
+    }
     return printRefusal(err);
+  } finally {
+    staged?.cancel();
   }
 }
 
@@ -1566,6 +1598,7 @@ function cmdAssemble(args: string[]): number {
   // --head is optional (issue #359): without it the full run is the one run, and it must hold the face.
   for (const f of ['--source', '--full', '--config']) if (!flags.has(f)) return usage(`assemble needs ${f}`);
   if (propose && (flags.has('--out') || flags.has('--seam') || flags.has('--project') || alts.length > 0)) return usage('--propose-plan prints to the console; it takes none of --out, --seam, --project, --alt');
+  if (!propose && flags.has('--write-config')) return usage('--write-config belongs to assemble --propose-plan');
   if (!propose && !flags.has('--out')) return usage('assemble needs --out <dir>');
   const seam = flags.get('--seam') ?? DEFAULT_SEAM_RULE;
   if (!(SEAM_RULES as readonly string[]).includes(seam)) return usage(`--seam ${seam}; one of ${SEAM_RULES.join(', ')} is required`);
@@ -1573,13 +1606,22 @@ function cmdAssemble(args: string[]): number {
   if (!(PROJECT_RULES as readonly string[]).includes(project)) return usage(`--project ${project}; one of ${PROJECT_RULES.join(', ')} is required`);
   const [source, full, config] = ['--source', '--full', '--config'].map((f) => flags.get(f) as string);
   const head = flags.get('--head') ?? null;
+  const writePath = flags.get('--write-config');
+  if (writePath !== undefined && resolve(writePath) !== resolve(config)) return usage('--write-config must name the same file as --config for assemble --propose-plan');
+  let staged: StagedConfigWrite | null = null;
   try {
     if (propose) {
+      const target = writePath === undefined ? null : readConfigWriteTarget(writePath);
       const src = readSource(source);
       const runs = readRuns(full, head);
       const g = proposeFields(loadEarlyConfig(config, 'layers'), runs.single ? { w: src.width, h: src.height } : null);
       const geometry = { sourceW: src.width, sourceH: src.height, ...g };
       const proposal = runs.single ? proposeSinglePlan(runs.full, geometry) : proposePlan(runs.full, runs.head, geometry);
+      if (target !== null) {
+        staged = stageConfigWrite(target, { kind: 'assemble-plan', plan: proposal.plan, extend_below_crop: proposal.extend_below_crop });
+        staged.commit();
+        for (const line of configWriteLines(target, staged.changes)) console.error(line);
+      }
       console.log(JSON.stringify(proposal, null, 2));
       return EXIT_OK;
     }
@@ -1591,7 +1633,12 @@ function cmdAssemble(args: string[]): number {
     );
     return EXIT_OK;
   } catch (err) {
+    if (staged !== null) {
+      try { staged.abort(err); } catch (combined) { return printRefusal(combined); }
+    }
     return printRefusal(err);
+  } finally {
+    staged?.cancel();
   }
 }
 
