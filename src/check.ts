@@ -127,7 +127,7 @@ import {
   type ChainEdge,
   type WorldBox,
 } from './instruments.ts';
-import { type AlternatePartsRecord, type LimbRecord, type PartRecord, type PartsFile, readParts } from './parts.ts';
+import { type AlternatePartsRecord, FRONT_SUFFIX, type LimbRecord, type PartRecord, type PartsFile, readParts } from './parts.ts';
 import { poseRigBonesForDrawn, type RigBone, SETS_FILE } from './rig.ts';
 import { turnTwin } from './turn.ts';
 import {
@@ -1238,23 +1238,58 @@ export function flatComposite(parts: PartsFile, partsDir: string, background: re
 }
 
 /**
- * The flat stack of parts for an alternate set (issue #454), in `parts.parts`
- * slot order: hidden slots skipped, covered slots drawn from `alt.records` at
- * their box, uncovered base slots drawn at their base box.
+ * What an alternate set draws, in draw order (issues #454, #664): `parts.parts`
+ * order, hidden slots skipped, covered slots drawn from `alt.records` at their
+ * box, uncovered base slots at their base box. A part the set draws on its front
+ * slot (`alt.front`) is drawn from its record although `alt.hides` names it (the
+ * hide is its base slot's) — with `slotOrder`, the rig's final setup slot names,
+ * right after the nearest part slot before `<part>_front` there; without it (or
+ * with no such slot), in its own place, as the base slot would draw it.
  */
-export function flatCompositeForSet(parts: PartsFile, alt: AlternatePartsRecord, partsDir: string, background: readonly [number, number, number, number]): Raster {
+export function setPlacements(parts: PartsFile, alt: AlternatePartsRecord, slotOrder?: readonly string[]): Array<{ name: string; png: string; box: PartRecord }> {
+  const hides = new Set(alt.hides ?? []);
+  const front = new Set(alt.front ?? []);
+  const byName = new Map(alt.records.map((r) => [r.name, r]));
+  const partNames = new Set(parts.parts.map((p) => p.name));
+  // Each front part the slot order places -> the part it is drawn after.
+  const after = new Map<string, string>();
+  if (slotOrder !== undefined) {
+    for (const p of front) {
+      const at = slotOrder.indexOf(`${p}${FRONT_SUFFIX}`);
+      for (let j = at - 1; j >= 0; j--) {
+        if (partNames.has(slotOrder[j]) && !front.has(slotOrder[j])) {
+          after.set(p, slotOrder[j]);
+          break;
+        }
+      }
+    }
+  }
+  const moved = [...after.keys()].sort((a, b) => (slotOrder as readonly string[]).indexOf(`${a}${FRONT_SUFFIX}`) - (slotOrder as readonly string[]).indexOf(`${b}${FRONT_SUFFIX}`));
+  const out: Array<{ name: string; png: string; box: PartRecord }> = [];
+  const draw = (name: string, base: PartRecord): void => {
+    if (hides.has(name) && !front.has(name)) return;
+    const rec = byName.get(name);
+    out.push({ name, png: rec === undefined ? name : `${alt.name}_${rec.name}`, box: rec ?? base });
+  };
+  const baseOf = new Map(parts.parts.map((p) => [p.name, p]));
+  for (const p of parts.parts) {
+    if (after.has(p.name)) continue;
+    draw(p.name, p);
+    for (const m of moved) if (after.get(m) === p.name) draw(m, baseOf.get(m) as PartRecord);
+  }
+  return out;
+}
+
+/**
+ * The flat stack of parts for an alternate set (issue #454), in the order
+ * {@link setPlacements} gives: with `slotOrder`, a front part (issue #664) is
+ * stacked where its front slot draws it.
+ */
+export function flatCompositeForSet(parts: PartsFile, alt: AlternatePartsRecord, partsDir: string, background: readonly [number, number, number, number], slotOrder?: readonly string[]): Raster {
   const [W, H] = parts.rig_size;
   let canvas = newRaster(W, H);
   for (let i = 0; i < W * H; i++) canvas.data.set(background, i * 4);
-  const hides = new Set(alt.hides ?? []);
-  const byName = new Map(alt.records.map((r) => [r.name, r]));
-  for (const p of parts.parts) {
-    if (hides.has(p.name)) continue;
-    const rec = byName.get(p.name);
-    const pngName = rec === undefined ? p.name : `${alt.name}_${rec.name}`;
-    const box = rec ?? p;
-    canvas = alphaComposite(canvas, readPng(join(partsDir, `${pngName}.png`)), box.x, box.y);
-  }
+  for (const { png, box } of setPlacements(parts, alt, slotOrder)) canvas = alphaComposite(canvas, readPng(join(partsDir, `${png}.png`)), box.x, box.y);
   return canvas;
 }
 
@@ -4477,23 +4512,15 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
             if (asr.status !== 0) refuseIfAny(rigcFailed(`render (the setup-pose still of set "${alt.name}")`, asr, asr.out.split('\n').filter((l) => l.includes('FAIL'))));
             const altStillSet = readFrameSet(join(setDir, 'render'));
             if (keepStills) cpSync(join(setDir, 'render'), join(keptDir, alt.name), { recursive: true });
-            const altComposite = flatCompositeForSet(inp.parts, alt, inp.partsDir, altStillSet.background);
+            const rigSlotOrder = (Array.isArray(inp.rig.slots) ? inp.rig.slots : []).filter(isRecord).map((sl) => String(sl.name));
+            const altComposite = flatCompositeForSet(inp.parts, alt, inp.partsDir, altStillSet.background, rigSlotOrder);
             const altSeam = seamFigures(altComposite, altStillSet.frames[0].image, inp.stage, altStillSet.viewport, altStillSet.background, undefined, alt.scene !== undefined);
             const altMean = round3(altSeam.mean);
             const altScale = round6(altStillSet.viewport.scale);
             const altFailed = seamFails(altMean, altSeam.over40, altScale);
             let altPairs: SeamPairRow[] | null = null;
             if (seamPairsAsked || altFailed) {
-              const hides = new Set(alt.hides ?? []);
-              const byName = new Map(alt.records.map((r) => [r.name, r]));
-              const placed = inp.parts.parts
-                .filter((p) => !hides.has(p.name))
-                .map((p) => {
-                  const rec = byName.get(p.name);
-                  const pngName = rec === undefined ? p.name : `${alt.name}_${rec.name}`;
-                  const box = rec ?? p;
-                  return { name: p.name, from: box.from, x: box.x, y: box.y, image: readPng(join(inp.partsDir, `${pngName}.png`)) };
-                });
+              const placed = setPlacements(inp.parts, alt, rigSlotOrder).map(({ name, png, box }) => ({ name, from: box.from, x: box.x, y: box.y, image: readPng(join(inp.partsDir, `${png}.png`)) }));
               const split = seamPairRows(altSeam, placed, inp.parts.rig_size, altStillSet.viewport);
               const altSeamDir = join(seamDir, alt.name);
               mkdirSync(altSeamDir, { recursive: true });

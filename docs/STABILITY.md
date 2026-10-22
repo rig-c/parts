@@ -127,13 +127,14 @@ part name, `[i]` an entry of a list):
 - **seethrough** — required: `resolution`, `steps`, `seed`, `offload`; optional: `head_box`, `arm_split`
 - **seethrough.arm_split** — required: `order`, and one of `x` or `line` (issue #439)
 - **assemble** — required: `rig_scale`, `plan` (from plain `assemble` on); optional: `extend_below_crop`, `patches`, `cuts`, `alternates`, `head_face_underfill`
-- **assemble.alternates[i]** — required: `name`; optional: `source`, `full`, `head`, `parts`, `hides`, `head_box`, `cuts`, `skeleton`, `drawn`, `tips` (issues #454, #465, #652)
+- **assemble.alternates[i]** — required: `name`; optional: `source`, `full`, `head`, `parts`, `hides`, `head_box`, `cuts`, `skeleton`, `drawn`, `tips`, `front` (issues #454, #465, #652, #664)
 - **assemble.extend_below_crop[i]** — required: `part`, `run`, `tag`
 - **assemble.patches[i]** — required: `name`, `box`, `alpha`, `draw`
 - **assemble.patches[i].draw**, when an object — required: `before`
 - **assemble.cuts[i]** — required: `from`, `into`, `polygon`, `draw`, `overlap`; optional: `under`, `under_fill`
 - **assemble.cuts[i].draw**, when an object — required: `before`
-- **limbs.&lt;limb&gt;** — required: `segments`; optional: `split`, `layout` (issues #349, #446, #647)
+- **limbs.&lt;limb&gt;** — required: `segments`; optional: `split`, `layout`, `front` (issues #349, #446, #647, #664)
+- **limbs.&lt;limb&gt;.front** — required: `parts` (own segment parts, issue #664), `after` (a produced part)
 - **limbs.&lt;limb&gt;.layout** — exactly one of `before`, `after`; optional: `parts` (own consecutive segment-part references, issue #647)
 - **limbs.&lt;limb&gt;.layout.before**, **limbs.&lt;limb&gt;.layout.after** — exactly one typed target: `limb` or `part`
 - **limbs.&lt;limb&gt;.segments[i]** — required: `part`, `from`, `bone`; required below a joint (i > 0): `joint`; optional below a joint: `range`, `cap`, `edge`, `cap_shape`, `cut_band`

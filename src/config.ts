@@ -262,6 +262,13 @@ export interface AlternateSetConfig {
   drawn?: Record<string, number>;
   /** Explicit bone endpoints on this alternate painting, full source-crop pixels, x right/y down. */
   tips?: Record<string, Point>;
+  /**
+   * Issue #664: covered limb segment parts this set draws on their front slot
+   * (`<part>_front`, declared by `config.limbs.<limb>.front`) instead of the
+   * base slot, which the set hides. Absent, the set draws every covered part
+   * in its base slot.
+   */
+  front?: string[];
 }
 
 export interface Assemble {
@@ -935,6 +942,18 @@ export interface Limb {
   split?: LimbSplit;
   /** Explicit rig-stage adjacency; absent, the existing limb closure is unchanged. */
   layout?: LimbLayout;
+  /** Issue #664: a second, empty-at-setup slot per named segment part; absent, no slot is added and no byte moves. */
+  front?: LimbFront;
+}
+
+/**
+ * Issue #664: `parts` are this limb's own segment parts; each gets a slot
+ * `<part>_front` on its base slot's bone with no setup attachment, placed in the
+ * final setup slot order immediately after `after`'s whole slot family.
+ */
+export interface LimbFront {
+  parts: string[];
+  after: string;
 }
 
 export type LimbLayoutTarget = { limb: string; part?: never } | { part: string; limb?: never };
@@ -2137,7 +2156,7 @@ function checkAlternates(
   const seenNames = new Map<string, number>();
   (v as Json[]).forEach((entry, i) => {
     const at = `${p}[${i}]`;
-    const e = c.object(at, entry, ['name'], ['source', 'full', 'head', 'parts', 'hides', 'head_box', 'cuts', 'skeleton', 'drawn', 'tips']);
+    const e = c.object(at, entry, ['name'], ['source', 'full', 'head', 'parts', 'hides', 'head_box', 'cuts', 'skeleton', 'drawn', 'tips', 'front']);
     if (e === null) return;
     if ('name' in e && c.string(`${at}.name`, e.name)) {
       if (!partNameOk(e.name)) c.fail('CONFIG_PART_NAME', `${at}.name`, `names the set ${show(e.name)}; a set name is a file prefix, so it may not be empty, start with "." or hold a slash`);
@@ -2227,6 +2246,27 @@ function checkAlternates(
           c.fail('CONFIG_PART_UNIQUE', `${at}.hides[${k}]`, `repeats "${hn}"; each hidden slot is named once`);
         } else seenHides.add(hn);
       });
+    }
+    // Issue #664: a part the set draws on its front slot is one the set covers and a limb declares a front slot for.
+    if ('front' in e) {
+      if (!Array.isArray(e.front) || e.front.length === 0) {
+        c.fail('CONFIG_SET_FRONT', `${at}.front`, `is ${show(e.front)}; a nonempty list of covered limb segment parts with a declared front slot is required`);
+      } else {
+        const seenFront = new Set<string>();
+        (e.front as Json[]).forEach((fn, k) => {
+          if (!c.string(`${at}.front[${k}]`, fn)) return;
+          const declaredBy = limbs?.front.get(fn);
+          const covered = 'parts' in e && seenParts.has(fn) && !seenHides.has(fn);
+          if (seenFront.has(fn)) c.fail('CONFIG_SET_FRONT', `${at}.front[${k}]`, `repeats "${fn}"; each front part is named once`);
+          else if (!covered) {
+            c.fail('CONFIG_SET_FRONT', `${at}.front[${k}]`, `names "${fn}", which this set does not cover${'parts' in e ? ` (its parts less its hides: ${[...seenParts].filter((q) => !seenHides.has(q)).map((q) => `"${q}"`).join(', ') || 'none'})` : ' (a set without parts is a full set; front slots are for a subset set over a limb)'}; a set draws on a front slot only the parts it covers`);
+          } else if (declaredBy === undefined) {
+            const declared = [...(limbs?.front.keys() ?? [])].map((q) => `"${q}"`).join(', ') || 'none';
+            c.fail('CONFIG_SET_FRONT', `${at}.front[${k}]`, `names "${fn}", which no config.limbs.<limb>.front.parts lists (front slots declared: ${declared}); declare the front slot on its limb first`);
+          }
+          seenFront.add(fn);
+        });
+      }
     }
     if ('parts' in e && limbs !== null) {
       for (const [limbName, chain] of limbs.chains) {
@@ -2968,6 +3008,8 @@ interface LimbNames {
   parts: Map<string, { bone: string; at: string }>;
   consumed: Map<string, string>;
   chains: Map<string, { parts: string[]; bones: string[]; froms: string[] }>;
+  /** Issue #664: each segment part a limb's `front.parts` names -> that limb. */
+  front: Map<string, string>;
 }
 
 /**
@@ -2993,7 +3035,7 @@ interface LimbNames {
  * resolved. Returns the limb parts and the parts the limbs take.
  */
 function checkLimbs(c: Check, v: Json, made: { parts: string[]; patches: string[]; cuts: string[] }, names: { bones: Set<string>; parents: Map<string, string> } | null, resolveLayoutParts = true): LimbNames {
-  const out: LimbNames = { parts: new Map(), consumed: new Map(), chains: new Map() };
+  const out: LimbNames = { parts: new Map(), consumed: new Map(), chains: new Map(), front: new Map() };
   if (!isPlainObject(v)) {
     c.fail('CONFIG_FIELD_TYPE', 'config.limbs', `is ${show(v)}; an object of limb name -> {"segments": [...]} is required`);
     return out;
@@ -3004,7 +3046,7 @@ function checkLimbs(c: Check, v: Json, made: { parts: string[]; patches: string[
   const splitLimbs: string[] = [];
   for (const [limb, spec] of Object.entries(v)) {
     const at = `config.limbs.${limb}`;
-    const o = c.object(at, spec, ['segments'], ['split', 'layout']);
+    const o = c.object(at, spec, ['segments'], ['split', 'layout', 'front']);
     if (o === null) continue;
     if ('split' in o) {
       const sp = c.object(`${at}.split`, o.split, [], ['line', 'edge']);
@@ -3143,7 +3185,59 @@ function checkLimbs(c: Check, v: Json, made: { parts: string[]; patches: string[
     }
   }
   checkLimbLayouts(c, v, made, out, resolveLayoutParts);
+  checkLimbFronts(c, v, made, out, resolveLayoutParts);
   return out;
+}
+
+/**
+ * Issue #664: `config.limbs.<limb>.front` — `parts` a nonempty list of this
+ * limb's own segment parts, each once (`CONFIG_FRONT_SCOPE`); `after` one
+ * produced part, the same notion {@link checkLimbLayouts} holds a part target
+ * to, and not a part of this limb (`CONFIG_FRONT_NAME`). A front slot and an
+ * explicit layout are not composed: a config declaring both, on one limb or on
+ * two, is refused (`CONFIG_FRONT_LAYOUT`).
+ */
+function checkLimbFronts(c: Check, limbs: Record<string, Json>, made: { parts: string[]; patches: string[]; cuts: string[] }, names: LimbNames, resolveParts: boolean): void {
+  const produced = new Set([...made.parts, ...made.patches, ...made.cuts].filter((n) => !names.consumed.has(n)));
+  for (const n of names.parts.keys()) produced.add(n);
+  const layouts = Object.entries(limbs).filter(([, raw]) => isPlainObject(raw) && 'layout' in raw).map(([l]) => l);
+  for (const [limb, raw] of Object.entries(limbs)) {
+    if (!isPlainObject(raw) || !('front' in raw)) continue;
+    const at = `config.limbs.${limb}.front`;
+    if (layouts.length > 0) {
+      c.fail(
+        'CONFIG_FRONT_LAYOUT',
+        at,
+        `is declared while ${layouts.map((l) => `config.limbs.${l}.layout`).join(', ')} ${layouts.length === 1 ? 'is' : 'are'} declared; version 1 of front slots does not compose with an explicit limb layout (issue #647) — the layout's adjacency proof would have to move the front slots too — so declare one or the other on a rig`,
+      );
+    }
+    const f = c.object(at, raw.front, ['parts', 'after'], []);
+    if (f === null) continue;
+    const own = names.chains.get(limb)?.parts ?? [];
+    if ('parts' in f) {
+      const ps = f.parts;
+      if (!Array.isArray(ps) || ps.length === 0 || !ps.every((p) => typeof p === 'string' && own.includes(p))) {
+        c.fail('CONFIG_FRONT_SCOPE', `${at}.parts`, `is ${show(ps)}; a nonempty list of this limb's own segment parts (${own.join(', ')}) is required — a front slot is a second slot for one of its segments`);
+      } else if (new Set(ps).size !== ps.length) {
+        c.fail('CONFIG_FRONT_SCOPE', `${at}.parts`, `is ${show(ps)}; each segment part is named once`);
+      } else {
+        for (const p of ps as string[]) {
+          names.front.set(p, limb);
+          // The front slot is named <part>_front; a part already made under that name would take the same slot name.
+          if (produced.has(`${p}_front`)) c.fail('CONFIG_FRONT_NAME', `${at}.parts`, `names "${p}", whose front slot "${p}_front" is the name of a part this config already makes; rename that part, since a slot name is held once`);
+        }
+      }
+    }
+    if ('after' in f && c.string(`${at}.after`, f.after)) {
+      const n = f.after;
+      if (own.includes(n)) {
+        c.fail('CONFIG_FRONT_NAME', `${at}.after`, `names "${n}", a segment part of this same limb; a front slot is placed after a part the limb is drawn behind, never after its own segment`);
+      } else if (resolveParts && !produced.has(n)) {
+        const consumed = names.consumed.get(n);
+        c.fail('CONFIG_FRONT_NAME', `${at}.after`, `names "${n}"; a produced part (${[...produced].join(', ')}) is required${consumed === undefined ? '' : `; "${n}" is consumed by limb "${consumed}" into ${names.chains.get(consumed)?.parts.join(', ')}`}`);
+      }
+    }
+  }
 }
 
 /** Validate after every limb is known; a declaration may refer forward by name. */

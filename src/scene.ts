@@ -1115,7 +1115,7 @@ export function composeScene(
       const sized = s === 1 ? {} : { x: scaledBy(bone.x, s), y: scaledBy(bone.y, s), ...(bone.length === undefined ? {} : { length: scaledBy(bone.length, s) }) };
       bones.push({ ...bone, name: P(id, bone.name), ...(bone.parent === undefined ? {} : { parent: P(id, bone.parent) }), ...sized, ...(first ? { x: placed(bone.x, dx, s), y: placed(bone.y, dy, s) } : {}) });
     }
-    for (const s of b.rig.slots) slotDefs.set(prefixed(id, s.name), { ...s, name: prefixed(id, s.name), bone: P(id, s.bone), attachment: prefixed(id, s.attachment) });
+    for (const s of b.rig.slots) slotDefs.set(prefixed(id, s.name), { ...s, name: prefixed(id, s.name), bone: P(id, s.bone), attachment: s.attachment === null ? null : prefixed(id, s.attachment) });
     // Everything the character places in root's own frame moves with it: a region on a slot root carries, and a
     // weight bound to root. Every other offset is local to a bone the shift already moved.
     const slotBone = new Map(b.rig.slots.map((s) => [s.name, s.bone]));
@@ -1305,7 +1305,8 @@ export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly 
   for (const s of rig.slots) {
     name('slot', s.name);
     name(`slot ${s.name} bone`, s.bone);
-    name(`slot ${s.name} attachment`, s.attachment);
+    // Issue #664: a front slot shows nothing at setup; null names nothing.
+    if (s.attachment !== null) name(`slot ${s.name} attachment`, s.attachment);
   }
   for (const [slot, atts] of Object.entries(rig.skins.default)) {
     name('skin slot', slot);

@@ -104,6 +104,7 @@ import { runAlternateTipsChecks } from './tools/check_alternate_tips.ts';
 import { runFootOwnershipChecks } from './tools/check_foot_ownership.ts';
 import { runLimbSlotChecks } from './tools/check_limb_slots.ts';
 import { runLimbLayoutChecks } from './tools/check_limb_layout.ts';
+import { runFrontSlotChecks } from './tools/check_front_slot.ts';
 import {
   assembleConfig,
   AUTHOR_PART,
@@ -38561,7 +38562,7 @@ function runPublicScenes(green: ReadonlyMap<string, string>, dir: string, say: (
   for (const [key, build] of [['demo', demo], ['sample', sample]] as const) {
     const own = readJsonAt(join(build, 'rig', 'rig.json')) as RigSpec;
     for (const sl of own.slots.filter((x) => x.bone === 'root')) {
-      const a = own.skins.default[sl.name]?.[sl.attachment] as RegionAttachment | undefined;
+      const a = own.skins.default[sl.name]?.[sl.attachment ?? ''] as RegionAttachment | undefined;
       const c = sideRig?.skins.default[`${key}:${sl.name}`]?.[`${key}:${sl.attachment}`] as RegionAttachment | undefined;
       if (a === undefined || 'weights' in a) continue;
       rootRegions.push(`${key}:${sl.name}`);
@@ -38586,7 +38587,7 @@ function runPublicScenes(green: ReadonlyMap<string, string>, dir: string, say: (
 
   const meshSlot = (build: string): string => {
     const r = readJsonAt(join(build, 'rig', 'rig.json')) as RigSpec;
-    return r.slots.find((s) => 'type' in (r.skins.default[s.name]?.[s.attachment] ?? {}))?.name ?? '';
+    return r.slots.find((s) => 'type' in (r.skins.default[s.name]?.[s.attachment ?? ''] ?? {}))?.name ?? '';
   };
   const firstMesh = meshSlot(sample);
   const demoFirst = demoSlots[0].slice('demo:'.length);
@@ -47347,6 +47348,19 @@ function runLimbLayoutSuite(): number {
   return bad();
 }
 
+function runFrontSlotSuite(): number {
+  section('front-slot: a gesture set draws a limb segment on its front slot');
+  const { say, bad } = counter();
+  const dir = temp('front-slot');
+  try {
+    runFrontSlotChecks(dir, (name, pass, detail) => say(name, pass, detail,
+      'issue #664: an empty-at-setup front slot after its declared target, a set covering it and hiding the base slot, the set still and seam in front order, an unchanged setup render, and every new refusal by name'), rigcRunnerAt(suiteRigc(), spawnRigc));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  return bad();
+}
+
 /** #356 standalone controls also run through the shared tally and CI shards. */
 function runConfigWriteSuite(): number {
   section('config-write: owned proposal fields and staged replacement');
@@ -47417,6 +47431,7 @@ const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number 
   ['foot-ownership', runFootOwnershipSuite],
   ['limb-slots', runLimbSlotSuite],
   ['limb-layout', runLimbLayoutSuite],
+  ['front-slot', runFrontSlotSuite],
   ['alternate-tips', runAlternateTipsSuite],
   ['plausibility', runPlausibilitySuite],
   ['assemble-examples', runAssembleExamplesSuite],
@@ -47500,7 +47515,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
  */
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['check']],
-  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'subset-cover', 'foot-ownership', 'limb-slots', 'limb-layout', 'alternate-tips', 'contour-wiring', 'config', 'config-write', 'core-pointer', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
+  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'subset-cover', 'foot-ownership', 'limb-slots', 'limb-layout', 'front-slot', 'alternate-tips', 'contour-wiring', 'config', 'config-write', 'core-pointer', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
   ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'mesh-stats', 'remesh', 'retune', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
 ];
 

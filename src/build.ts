@@ -80,7 +80,7 @@ import { CONTROL_SUFFIX, withAnimations } from './motion.ts';
 import type { PaletteError } from './palette.ts';
 import { type LayerSet, readLayers } from './layers.ts';
 import { placeBoneEntriesForSkeleton, poseBoneEntriesForDrawn, REGISTER_OFFSET_BAR, REGISTER_SCALE_BAR, registeredWithinBar, registerSkeleton, SKELETON_LIMB_BONES, skeletonDrawnLength, skeletonLimbJoints } from './limbs.ts';
-import { type AlternatePartsRecord, type PartRecord, readParts, type RecompositeRecord, type SingleRunPad, tagOf, writeParts } from './parts.ts';
+import { type AlternatePartsRecord, FRONT_SUFFIX, type PartRecord, readParts, type RecompositeRecord, type SingleRunPad, tagOf, writeParts } from './parts.ts';
 import { encodePngBytes, readPng, writePng } from './raster/png.ts';
 import type { Raster } from './raster/types.ts';
 import { type Mask, newMask } from './raster/types.ts';
@@ -287,6 +287,28 @@ export function readCaps(configPath: string, limbs: Readonly<Record<string, Limb
   return out;
 }
 
+/**
+ * Issue #664: `items` (in parts.json's order) with each part named in `front`
+ * moved to just after the part `after` maps it to — where its front slot draws
+ * it. Several front parts after one target keep `items`' order. A part whose
+ * target is not among `items` stays where it is. With `front` empty, `items`.
+ */
+export function frontOrdered<T extends { record: { name: string } }>(items: readonly T[], front: ReadonlySet<string>, after: ReadonlyMap<string, string>): T[] {
+  if (front.size === 0) return [...items];
+  const names = new Set(items.map((x) => x.record.name));
+  const moving = items.filter((x) => front.has(x.record.name) && names.has(after.get(x.record.name) ?? '') && after.get(x.record.name) !== x.record.name);
+  const out: T[] = [];
+  const place = (x: T): void => {
+    if (out.includes(x)) return;
+    out.push(x);
+    for (const m of moving) if (after.get(m.record.name) === x.record.name) place(m);
+  };
+  for (const x of items) if (!moving.includes(x)) place(x);
+  // Front parts whose targets form a cycle have no anchor: they are appended at the end, in items' order.
+  for (const x of items) place(x);
+  return out;
+}
+
 /** Read, assemble, and write only after every refusal has had its chance. Throws a PartsError on a refusal, having written nothing. */
 export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, log: Log): AssembleResult {
   // The early door: assemble runs before propose has drafted bones, meshes,
@@ -318,6 +340,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     skeleton?: string;
     drawn?: Record<string, number>;
     tips?: Record<string, [number, number]>;
+    front?: string[];
   }> = cfgAlts.map((a, i) => {
     const cli = cliByName.get(a.name);
     if (cli !== undefined) cliByName.delete(a.name);
@@ -334,6 +357,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       skeleton: a.skeleton === undefined ? undefined : resolve(configDir, a.skeleton),
       drawn: a.drawn,
       tips: a.tips,
+      front: a.front,
     };
   });
   for (const cli of cliByName.values()) {
@@ -349,6 +373,9 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const altProblems: Problem[] = [];
   const altBuilt: Array<{ record: AlternatePartsRecord; images: Array<{ name: string; image: Raster }>; excluded: ExcludedCount[]; islands: IslandCount[]; splits: SplitCount[]; capSplits: SplitCount[] }> = [];
   const baseSlots = result.parts.parts.map((p) => p.name);
+  // Issue #664: each limb segment part with a declared front slot -> the part its front slot follows.
+  const frontAfter = new Map<string, string>();
+  for (const limb of Object.values(fields.limbs ?? {})) for (const p of limb.front?.parts ?? []) frontAfter.set(p, (limb.front as { after: string }).after);
   for (const alt of mergedAlts) {
     if (alt.source === undefined || alt.full === undefined) {
       altProblems.push({
@@ -566,10 +593,17 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     if (altOthers !== undefined && input.setSplit === 'whole-limb') altOthers.line = 'whole-limb';
     // Issue #587: a subset set's limb part takes nothing a base part it does not replace covers at setup.
     const [exW, exH] = result.parts.rig_size;
+    // Issue #664: a part the set draws on its front slot is drawn after its front slot's target, so only base parts
+    // drawn after that target cover it; every other segment part keeps the base order.
+    const altFront = new Set(alt.front ?? []);
+    const altSegParts = Object.values(altLimbs).flatMap((l) => l.segments.map((sg) => sg.part));
+    const replacedSet = new Set([...coveredSet, ...hidesSet]);
     const altExclude =
       alt.parts === undefined || input.setExclusion === 'none'
         ? []
-        : setExclusions(result.images, exW, exH, Object.values(altLimbs).flatMap((l) => l.segments.map((sg) => sg.part)), new Set([...coveredSet, ...hidesSet]));
+        : altFront.size === 0
+          ? setExclusions(result.images, exW, exH, altSegParts, replacedSet)
+          : altSegParts.flatMap((sp) => setExclusions(altFront.has(sp) ? frontOrdered(result.images, new Set([sp]), frontAfter) : result.images, exW, exH, [sp], replacedSet));
     let altRes: ReturnType<typeof assemble>;
     try {
       altRes = assemble({
@@ -614,12 +648,12 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       .map(({ record, image }) => ({ name: `${alt.name}_${record.name}`, image }));
     const keptRecords = altRes.parts.parts.filter((p) => coveredSet.has(p.name));
     const slots: Record<string, string> = {};
-    for (const r of keptRecords) slots[r.name] = `${alt.name}_${r.name}`;
+    for (const r of keptRecords) slots[altFront.has(r.name) ? `${r.name}${FRONT_SUFFIX}` : r.name] = `${alt.name}_${r.name}`;
     let altRecomposite = altRes.parts.recomposite as RecompositeRecord;
     if (alt.parts !== undefined) {
       const [rW, rH] = result.parts.rig_size;
       const altByName = new Map(altRes.images.map((x) => [x.record.name, x]));
-      const fullSetPlaced = result.images
+      const fullSetPlaced = frontOrdered(result.images, altFront, frontAfter)
         .filter(({ record }) => !hidesSet.has(record.name))
         .map((baseItem) => altByName.get(baseItem.record.name) ?? baseItem);
       const altSrcRig = sourceInRig(altSrc, rW, rH);
@@ -630,7 +664,8 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       record: {
         name: alt.name,
         ...(alt.parts === undefined ? {} : { parts: [...alt.parts] }),
-        ...(alt.hides === undefined || alt.hides.length === 0 ? {} : { hides: [...alt.hides] }),
+        ...(alt.hides === undefined || alt.hides.length === 0 ? (altFront.size === 0 ? {} : { hides: [...altFront] }) : { hides: [...alt.hides, ...[...altFront].filter((p) => !(alt.hides as string[]).includes(p))] }),
+        ...(altFront.size === 0 ? {} : { front: [...altFront] }),
         slots,
         records: keptRecords,
         ghost_px: altRes.parts.ghost_px,
