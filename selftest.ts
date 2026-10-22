@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { runConfigWriteChecks } from './tools/check_configwrite.ts';
+import { runCorePointerChecks } from './tools/check_corepointer.ts';
 /**
  * rig-parts selftest — proof that every gate here can go RED.
  *
@@ -580,7 +582,7 @@ import {
 import { headFrame } from './src/headframe.ts';
 import { pyFixed } from './src/pyfmt.ts';
 import { SQUEEZE_AMPS, SQUEEZE_TIPS, squeezeConfig, squeezeImages, squeezeParts } from './fixtures/squeeze.ts';
-import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, checkBasis, coverageLines, serializeBasis } from './src/diagnostics.ts';
+import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, checkBasis, coverageLines, legChainChoice, legChainChoiceLine, serializeBasis } from './src/diagnostics.ts';
 import { checkImageSize, choosePerson, KEYPOINTS_SPACE, KEYPOINTS_SPEC, loadKeypoints, parseKeypoints, type RigJoints, toRigJoints } from './src/keypoints.ts';
 import { backgroundMask, checkPainting, linePixels, PAINTING_GAPS, PAINTING_JOINTS, pixelOf } from './src/paintcheck.ts';
 import { CANVAS as PAINT_CANVAS, figureJoints as paintJoints, FIGURE as PAINT_FIGURE, keypointFile as paintKeypointFile, mutant as paintMutant, paint as paintFigure } from './fixtures/painting.ts';
@@ -4872,7 +4874,7 @@ function runCliSuite(): number {
     const headBoxKp = runCli(['propose', '--head-box', '--full', parts, '--canvas', '10x10', '--keypoints', 'a.json']);
     say(
       'CL11_KEYPOINTS_TWICE_WITHOUT_A_VALUE_OR_BESIDE_HEAD_BOX_IS_A_USAGE_ERROR',
-      twiceKp.status === 2 && twiceKp.out.includes('--keypoints is given twice') && bareKp.status === 2 && bareKp.out.includes('--keypoints needs a value') && headBoxKp.status === 2 && headBoxKp.out.includes('--head-box takes --full and --canvas only; got --keypoints') && !existsSync(join(dir, 'kp-out')),
+      twiceKp.status === 2 && twiceKp.out.includes('--keypoints is given twice') && bareKp.status === 2 && bareKp.out.includes('--keypoints needs a value') && headBoxKp.status === 2 && headBoxKp.out.includes('--head-box takes --full, --canvas and optional --write-config only; got --keypoints') && !existsSync(join(dir, 'kp-out')),
       `twice -> exit ${twiceKp.status}; no value -> exit ${bareKp.status}; beside --head-box -> exit ${headBoxKp.status}, ${(headBoxKp.out.split('\n').find((l) => l.includes('FAIL')) ?? '').trim()}`,
       'two files would be two poses and the proposer reads one; the head box is read off the full run before any parts exist, so a pose has nothing to place there',
     );
@@ -4932,7 +4934,7 @@ function runCliSuite(): number {
       `${lint86.findings.length} LINT line(s) over ${Object.keys(prop.meshes).length} mesh(es) and the hip`,
       ...compareLines(compare(prop.bones, RP86.bones)),
     ];
-    const added86 = [...coverageLines(lint86.coverage), basisLine(basisFile(PX, prop, proposeWithBasis(PX).basis, { where: reparentCfg, config: RP86 }), reparentOut)];
+    const added86 = [...coverageLines(lint86.coverage, legChainChoice(PX, prop)), basisLine(basisFile(PX, prop, proposeWithBasis(PX).basis, { where: reparentCfg, config: RP86 }), reparentOut)];
     const stray = [...lines86.filter((l) => !isNew(l))];
     stray.splice(2, 0, 'note: a line nobody printed before');
     const movedUp = [...lines86];
@@ -5453,7 +5455,7 @@ function runWriteConfigCases(say: (name: string, ok: boolean, detail: string, wh
   const line = (r: { status: number; out: string; written?: boolean }): string => `exit ${r.status}, ${(r.out.split('\n').find((l) => l.includes('FAIL  ')) ?? 'no FAIL line').trim().slice(0, 110)}${r.written === true ? ', WRITTEN' : ''}`;
   say(
     'CL203_PROPOSE_WRITE_CONFIG_REFUSES_BY_NAME_AND_WRITES_NOTHING',
-    noCloth.status === 2 && noCloth.out.includes('--write-config writes the --cloth config') && !noCloth.written && noProposal('wc-r1') &&
+    noCloth.status === 1 && failed(noCloth, 'CONFIG_FILE_PRESENT') && !noCloth.written && noProposal('wc-r1') &&
       fromCfg.status === 2 && fromCfg.out.includes('--write-config writes what the recipe drafts into its config; --from-config proposes nothing') && !fromCfg.written && noProposal('wc-r2') &&
       fresh.status === 1 && failed(fresh, 'PROPOSE_WRITE_CONFIG_FRESH') && freshSame && noProposal('wc-r3') &&
       ours.status === 1 && failed(ours, 'PROPOSE_WRITE_CONFIG_FRESH') && !ours.written &&
@@ -5462,7 +5464,7 @@ function runWriteConfigCases(say: (name: string, ok: boolean, detail: string, wh
       cf.status === 1 && failed(cf, 'CONFIG_CLOTH_RESPONSE_GROWS_TO_TIP') && !cf.written && noProposal('wc-r7') &&
       cp.status === 1 && failed(cp, 'PROPOSE_CLOTH_PART') && !cp.written && noProposal('wc-r8'),
     `without --cloth: ${noCloth.out.trim().split('\n')[0].slice(0, 90)} (exit ${noCloth.status}); with --from-config: exit ${fromCfg.status}; over the input: ${line(fresh)}, input ${freshSame ? 'unchanged' : 'CHANGED'}; over its own proposal.json: ${line(ours)}; a bottomwear recipe on parts with no bottomwear: ${line(nothing)}; "bones" stated twice: ${line(dup)}; planted CF wind tip below root: ${line(cf)}; planted bottomwear.part "nowhere": ${line(cp)}`,
-    'issue #537 bars 2 and 3: the flag draws its meaning from the recipe, a config is written to a new file, a recipe that drafts nothing and the existing cloth refusals stop the run before anything is written, and a text whose splice would not parse to the intended config is refused by the key that moved',
+    'issue #537 bars 2 and 3: with --cloth the flag draws its meaning from the recipe and writes a new file; without it #356 requires an existing config, a recipe that drafts nothing and the existing cloth refusals stop the run before anything is written, and a text whose splice would not parse to the intended config is refused by the key that moved',
   );
   runEntrySpliceCases(say, dir);
   runWriteConfigFromCases(say, dir, painting);
@@ -26520,7 +26522,7 @@ function runReadmeLoopSuite(): number | null {
         r.refused === null
           ? `${loopReport(r, lines)}; the config started with key, seethrough (no head_box) and assemble.rig_scale, and got the head box, the plan and the proposal's ${r.pasted.join(', ')} pasted, uncorrected (the README names ${paste.join(', ')})`
           : `${loopReport(r, lines)}${end.describe}`,
-        "issue #20: the README loop is what an agent follows, so it is run as written; plain assemble once refused the config for the four sections the next step drafts, and the only way past was a stub of invented rig fields. Issue #118: where an example's tracked config records a correction against its proposal on a part TIP_OVER_ROOT reads — a mesh moved to contour mode (scarf) or a chain of that mesh moved (the demo's skirt, issue #227) — the uncorrected loop must end where the README says to read check.json, on the FAIL line that names that part and no other",
+        "issue #20: the README loop is what an agent follows; this control runs its optional no-flag copy route (#356 tests the writer steps separately), plain assemble once refused the config for the four sections the next step drafts, and the only way past was a stub of invented rig fields. Issue #118: where an example's tracked config records a correction against its proposal on a part TIP_OVER_ROOT reads — a mesh moved to contour mode (scarf) or a chain of that mesh moved (the demo's skirt, issue #227) — the uncorrected loop must end where the README says to read check.json, on the FAIL line that names that part and no other",
       );
     };
 
@@ -33134,6 +33136,102 @@ function runDiagnosticsSuite(): number {
       'the rule-set lines say which chains the joints read; the coverage carries the same fact to each link it leaves unread',
     );
 
+    // #356: leg placement is not a sleeve monotonicity measurement. Every unread
+    // leg link says why; an actual off-art mesh read still counts as checked.
+    const legReason = 'chain-not-advancing reads sleeve chains only; a bent knee need not advance along hip -> ankle';
+    const seatedJoints = poseJoints('seated');
+    const legLint = lint(Pse, seSpec, seatedJoints);
+    const legRows = legLint.coverage.filter((c) => /^leg_[rl][0-9]+$/.test(c.bone));
+    const legBasis = legLint.basis?.chains.filter((c) => /^leg_[rl]$/.test(c.chain)) ?? [];
+    const noLegs = lint(Pst, stSpec, Jst);
+    const noJoints = lint(Pse, seSpec);
+    const meshLeg = lint(Pse, { ...seSpec, meshes: { ...seSpec.meshes, legs: { grid: 8, r: 8, segments: ['leg_r'] } } }, seatedJoints);
+    const readLeg = meshLeg.coverage.find((c) => c.bone === 'leg_r1');
+    const missingLegJoints = lint(Pse, seSpec, poseJoints('seated', (k) => {
+      k.people[0].joints.r_hip = { state: 'missing' };
+      k.people[0].joints.r_ankle = { state: 'missing' };
+    }));
+    say(
+      'DG14_LEG_CHAINS_DECLARE_THE_UNMEASURED_JOINT_RULE_AND_NEVER_CLAIM_A_SLEEVE_CHECK',
+      legRows.length === 4 && legRows.every((c) => coverageOutcome(c) === 'not checked' && c.read.length === 0 && c.why.includes(`lint chain ${c.bone.slice(0, -1)}: not read against the joints (${legReason})`)) &&
+        legBasis.length === 2 && legBasis.every((c) => c.line === null && c.why === legReason) &&
+        legLint.basis !== undefined && !basisLines(legLint.basis).some((l) => /^lint chain leg_.*each link/.test(l)) &&
+        !noLegs.basis?.chains.some((c) => /^leg_/.test(c.chain)) && noJoints.basis === undefined &&
+        !legLint.findings.some((f) => f.kind === 'chain-not-advancing' && /^leg_/.test(f.point)) &&
+        readLeg !== undefined && readLeg.read.includes("off-art on mesh 'legs'") && coverageOutcome(readLeg) !== 'not checked' &&
+        missingLegJoints.basis?.chains.filter((c) => /^leg_/.test(c.chain)).every((c) => c.line === null && c.why === legReason) === true,
+      `seated legs: ${legRows.map(coverageRow).join('; ')}; basis: ${legBasis.map((c) => c.chain + ': ' + c.why).join('; ')}; planted mesh read: ${readLeg === undefined ? 'absent' : coverageRow(readLeg)}`,
+      'leg joints place the chain but no chain-not-advancing rule measures a bent knee; coverage names that boundary, while a mesh read remains a measured read. No leg chain and no keypoints add no leg claim',
+    );
+
+    // #356 gap 7: count and identities are the proposal's actual chain/part
+    // declarations. The paired controls change the selected branches, not a label.
+    const twoChoice = legChainChoice(Pse, se, seatedJoints);
+    const twoChoiceLine = legChainChoiceLine(twoChoice);
+    const oneJoints = poseJoints('seated', (k) => delete k.people[0].joints.r_knee);
+    const oneProposal = proposeWithBasis(Pse, oneJoints).proposal;
+    const oneChoice = legChainChoice(Pse, oneProposal, oneJoints);
+    const oneChoiceLine = legChainChoiceLine(oneChoice);
+    const noKneeJoints = poseJoints('seated', (k) => { delete k.people[0].joints.r_knee; delete k.people[0].joints.l_knee; });
+    const noKneeProposal = proposeWithBasis(Pse, noKneeJoints).proposal;
+    const noKneeChoice = legChainChoice(Pse, noKneeProposal, noKneeJoints);
+    const noKneeLine = legChainChoiceLine(noKneeChoice);
+    const noKeypointLine = legChainChoiceLine(legChainChoice(Pse, proposeWithBasis(Pse).proposal));
+    const offLegJoints = poseJoints('seated', (k) => { k.people[0].joints.r_ankle = { state: 'observed', at: [15, 225] }; });
+    const offLegProposal = proposeWithBasis(Pse, offLegJoints).proposal;
+    const offLegChoice = legChainChoice(Pse, offLegProposal, offLegJoints);
+    const offLegLine = legChainChoiceLine(offLegChoice);
+    const wantTwo = 'coverage leg-chain choice: 2 chains — leg_r: source "legs"; parts "thigh_r", "shin_r" | leg_l: source "legs"; parts "thigh_l", "shin_l"; selection only, not a checked verdict';
+    const wantOne = 'coverage leg-chain choice: 1 chain — leg_l: source "legs"; parts "thigh_l", "shin_l"; selection only, not a checked verdict';
+    say(
+      'DG15_LEG_CHOICE_COVERAGE_NAMES_THE_TWO_ACTUAL_CHAINS_AND_PARTS_AND_ONE_WHEN_ONLY_ONE_LEG_IS_SELECTED',
+      twoChoiceLine === wantTwo && oneChoiceLine === wantOne &&
+        coverageLines(legLint.coverage, twoChoice).includes(wantTwo) && coverageLines(legLint.coverage, oneChoice).includes(wantOne) &&
+        coverageLines(legLint.coverage, twoChoice).at(-1) === coverageLines(legLint.coverage).at(-1),
+      `both knees: ${twoChoiceLine}; planted r_knee absent: ${oneChoiceLine}`,
+      'the selected chains are counted from bones, and their source/driven parts from limb, mesh and region bindings; selection changes no measured coverage count',
+    );
+    say(
+      'DG16_NO_LEG_CHOICE_NAMES_MISSING_JOINTS_OR_THE_PRODUCERS_REFUSAL_AND_NO_KEYPOINTS_IS_EXPLICIT',
+      noKneeLine === 'coverage leg-chain choice: 0 chains — r_knee has no position; l_knee has no position' &&
+        noKeypointLine === 'coverage leg-chain choice: 0 chains — no keypoints supplied; leg placement requires hip, knee and ankle positions' &&
+        offLegChoice.chains.length === 0 && offLegChoice.none !== null && offLegProposal.notes.includes(offLegChoice.none) && offLegLine.includes('r_ankle at [15.0, 225.0] lies on the art of no legwear part') &&
+        noKneeChoice.chains.length === 0 && !noKneeLine.includes('leg_r:') && !noKneeLine.includes('leg_l:'),
+      `no knees: ${noKneeLine}; no keypoints: ${noKeypointLine}; planted ankle away from the part: ${offLegLine}`,
+      'absence is a reported choice with its input or recorded producer reason; it is never reported as one chain, two chains or a checked verdict',
+    );
+    const choiceCli = (key: string, raw: KeypointJson | null): { status: number; out: string } => {
+      const args = ['propose', '--parts', SE, '--source', join(SE, 'painting.png'), '--out', join(SE, 'choice-' + key)];
+      if (raw !== null) {
+        const path = join(SE, 'choice-' + key + '.json');
+        writeFileSync(path, JSON.stringify(raw)); args.push('--keypoints', path);
+      }
+      return runCli(args);
+    };
+    const bothRaw = structuredClone(POSES.seated.keypoints) as KeypointJson;
+    const oneRaw = structuredClone(bothRaw); delete oneRaw.people[0].joints.r_knee;
+    const noneRaw = structuredClone(oneRaw); delete noneRaw.people[0].joints.l_knee;
+    const choiceCalls = [choiceCli('two', bothRaw), choiceCli('one', oneRaw), choiceCli('none', noneRaw)];
+    const wantChoiceLines = [wantTwo, wantOne, noKneeLine];
+    say(
+      'DG17_THE_REAL_PROPOSE_CLI_PRINTS_TWO_ONE_AND_ZERO_LEG_CHOICES_THROUGH_COVERAGE',
+      choiceCalls.every((r, i) => r.status === 0 && r.out.split('\n').filter((l) => l.startsWith('coverage leg-chain choice:')).join('\n') === wantChoiceLines[i]),
+      choiceCalls.map((r, i) => `${i}: exit ${r.status}; ${r.out.split('\n').find((l) => l.startsWith('coverage leg-chain choice:')) ?? r.out.slice(0, 300)}`).join(' | '),
+      'the terminal coverage path uses the same actual selection record: removing one knee changes two chains to one, removing both changes it to none with the reason',
+    );
+
+    const renamedLegDir = join(dir, 'renamed-leg-source');
+    writeProposeFixture(renamedLegDir, POSES.seated.parts.map((p) => p.name === 'legs' ? { ...p, name: 'lower-cloth' } : p), POSES.seated.rig);
+    const renamedLegParts = readPartSet(renamedLegDir);
+    const renamedLegProposal = proposeWithBasis(renamedLegParts, seatedJoints).proposal;
+    const renamedChoiceLine = legChainChoiceLine(legChainChoice(renamedLegParts, renamedLegProposal, seatedJoints));
+    say(
+      'DG18_LEG_CHOICE_SOURCE_NAMES_FOLLOW_THE_PROPOSAL_BINDINGS_RATHER_THAN_A_FIXED_PART_LABEL',
+      renamedChoiceLine === wantTwo.replaceAll('"legs"', '"lower-cloth"') && renamedChoiceLine !== wantTwo && !renamedChoiceLine.includes('"legs"'),
+      `source renamed in the synthetic parts: ${renamedChoiceLine}`,
+      'renaming the source changes only the source identities read from the actual limb segments; the two chain identities and driven part identities remain the proposal\'s',
+    );
+
     // ---- the basis on the hand-built figure, by hand (PR01's derivation): hip is bottomwear's top + 0.14 face heights;
     // chest is half way neck -> hip; neck has no neck part, so 0.12 face heights below the chin; head 0.88 face heights
     // below the face's top; each link a band measure on its own part, the skirt's from hip's y. Planted: hip recorded as a
@@ -35690,22 +35788,33 @@ function runTreeSuite(): number {
 
   // TY16 — issue #343: every rule the source can print has exactly one row in the guide's rule/line tables, the row's
   // first cell starts with one anchor per name, and no row names a rule the source cannot print.
+  const guideSources = runtimeRuleSources(text);
   const guideText = readFileSync(join(ROOT, GUIDE_DOC), 'utf8');
   const rigc16 = rigcSources();
-  const drift16 = ledgerDrift(sources, guideText, rigc16);
+  const drift16 = ledgerDrift(guideSources, guideText, rigc16);
   const rowLine = (name: string): string => guideText.split('\n').find((l) => l.includes(`<a id="${name}"></a>`)) ?? '';
   const loopRow = rowLine('CHECK_LOOP_CLOSES');
   const usageRow = rowLine('USAGE');
   const plants16 = [
-    ledgerDrift(sources, guideText.replace(`${rowLine('CHECK_RIGC_PACKAGE')}\n`, ''), rigc16).faults,
-    ledgerDrift(sources, guideText.replace(`${loopRow}\n`, `${loopRow}\n${loopRow}\n`), rigc16).faults,
-    ledgerDrift(sources, guideText.replace(`${usageRow}\n`, `${usageRow}\n| <a id="DEAD_RULE"></a>\`DEAD_RULE\` | planted | nothing |\n`), rigc16).faults,
-    ledgerDrift(sources, guideText.replace(loopRow, loopRow.replace('<a id="CHECK_LOOP_CLOSES"></a>', '')), rigc16).faults,
-    ledgerDrift([...sources, ['src/plant.ts', "export const p = { code: 'PLANTED_RULE', object: 'x', detail: 'y' };\n// code: 'COMMENT_RULE'\n"]], guideText, rigc16).faults,
-    ledgerDrift([...sources, ['src/plant.ts', 'export const q = (n: string) => ({ code: `CHECK_${NOWHERE_DECLARED}`, object: n, detail: n });\n']], guideText, rigc16).faults,
-    ledgerDrift(sources, guideText, [...rigc16, ['src/plant.ts', "function refuse(code: string, m: string): never { throw new MeshReductionError(code, m); }\nrefuse('PLANTED_MESH_CODE', 'x');\n"]]).faults,
-    ledgerDrift(sources.map(([f, s]) => [f, s.replaceAll('instanceof MeshReductionError', 'instanceof Error')] as const), guideText, rigc16).faults,
+    ledgerDrift(guideSources, guideText.replace(`${rowLine('CHECK_RIGC_PACKAGE')}\n`, ''), rigc16).faults,
+    ledgerDrift(guideSources, guideText.replace(`${loopRow}\n`, `${loopRow}\n${loopRow}\n`), rigc16).faults,
+    ledgerDrift(guideSources, guideText.replace(`${usageRow}\n`, `${usageRow}\n| <a id="DEAD_RULE"></a>\`DEAD_RULE\` | planted | nothing |\n`), rigc16).faults,
+    ledgerDrift(guideSources, guideText.replace(loopRow, loopRow.replace('<a id="CHECK_LOOP_CLOSES"></a>', '')), rigc16).faults,
+    ledgerDrift([...guideSources, ['src/plant.ts', "export const p = { code: 'PLANTED_RULE', object: 'x', detail: 'y' };\n// code: 'COMMENT_RULE'\n"]], guideText, rigc16).faults,
+    ledgerDrift([...guideSources, ['src/plant.ts', 'export const q = (n: string) => ({ code: `CHECK_${NOWHERE_DECLARED}`, object: n, detail: n });\n']], guideText, rigc16).faults,
+    ledgerDrift(guideSources, guideText, [...rigc16, ['src/plant.ts', "function refuse(code: string, m: string): never { throw new MeshReductionError(code, m); }\nrefuse('PLANTED_MESH_CODE', 'x');\n"]]).faults,
+    ledgerDrift(guideSources.map(([f, s]) => [f, s.replaceAll('instanceof MeshReductionError', 'instanceof Error')] as const), guideText, rigc16).faults,
   ];
+  const discovery16 = runtimeRuleSources([
+    ['cli.ts', "import './tools/adapter.ts'; import type { Shape } from './tools/types.ts';"],
+    ['tools/adapter.ts', "export { rule } from './nested.ts';"],
+    ['tools/nested.ts', "export const rule = 'PLANTED_RUNTIME_RULE'; // COMMENT_RULE"],
+    ['tools/types.ts', "export type Shape = 'TYPE_ONLY_RULE';"],
+    ['tools/check_adapter.ts', "export const rule = 'TEST_ONLY_RULE';"],
+  ]);
+  const discovered16 = emittableRules(discovery16);
+  const discoveryHit16 = discovery16.map(([f]) => f).join(',') === 'cli.ts,tools/adapter.ts,tools/nested.ts' &&
+    [...discovered16.names.keys()].join(',') === 'PLANTED_RUNTIME_RULE' && discovered16.unread.length === 0;
   const plantsHit16 =
     plants16[0].length === 1 && plants16[0][0].startsWith('CHECK_RIGC_PACKAGE is printed by src/check.ts:') &&
     plants16[1].length === 1 && /^CHECK_LOOP_CLOSES is named by 2 rows/.test(plants16[1][0]) &&
@@ -35717,14 +35826,14 @@ function runTreeSuite(): number {
     plants16[7].length === drift16.quoted && plants16[7].every((f) => / is named by the row at line \d+ and the source cannot print it$/.test(f));
   say(
     'TY16_EVERY_RULE_THE_SOURCE_CAN_PRINT_HAS_EXACTLY_ONE_ANCHORED_ROW_IN_THE_GUIDE',
-    drift16.emitted > 0 && drift16.quoted > 0 && drift16.faults.length === 0 && plantsHit16,
+    drift16.emitted > 0 && drift16.quoted > 0 && drift16.faults.length === 0 && plantsHit16 && discoveryHit16,
     `${GUIDE_DOC}: ${drift16.faults.length === 0 ? `the ${drift16.emitted} name(s) the source can print are the ${drift16.named} its ${drift16.rows} rule/line row(s) name, each on one row with its anchor (${drift16.quoted} of them rig-c's mesh codes, which this package quotes in its lines)` : drift16.faults.join('; ')}` +
-      `; planted: a row dropped -> ${plants16[0].join('; ') || 'not found'} | a row twice -> ${plants16[1].join('; ') || 'not found'} | a row for a dead name -> ${plants16[2].join('; ') || 'not found'} | an anchor dropped -> ${plants16[3].join('; ') || 'not found'} | a new code in the source (and one in a comment) -> ${plants16[4].join('; ') || 'not found'} | a name template on an undeclared constant -> ${plants16[5].join('; ') || 'not found'} | a new code rig-c's mesh library throws -> ${plants16[6].join('; ') || 'not found'} | no source catching MeshReductionError -> ${plants16[7].length} row(s) named as for a code nothing prints`,
-    "issue #343: the guide is the one ledger, and a FAIL line's pointer prints the row naming its rule; a rule with no row sends the pointer nowhere, a rule on two rows prints two answers, and a row for a rule nothing prints is advice about a line no build shows. Read in both directions from the syntax tree of src/ and cli.ts, so a comment never counts",
+      `; runtime dependency discovery ${discoveryHit16 ? 'caught the transitive rule and excluded type-only/test/comment rules' : 'FAILED'}; planted: a row dropped -> ${plants16[0].join('; ') || 'not found'} | a row twice -> ${plants16[1].join('; ') || 'not found'} | a row for a dead name -> ${plants16[2].join('; ') || 'not found'} | an anchor dropped -> ${plants16[3].join('; ') || 'not found'} | a new code in the source (and one in a comment) -> ${plants16[4].join('; ') || 'not found'} | a name template on an undeclared constant -> ${plants16[5].join('; ') || 'not found'} | a new code rig-c's mesh library throws -> ${plants16[6].join('; ') || 'not found'} | no source catching MeshReductionError -> ${plants16[7].length} row(s) named as for a code nothing prints`,
+    "issue #343: the guide is the one ledger, and a FAIL line's pointer prints the row naming its rule; a rule with no row sends the pointer nowhere, a rule on two rows prints two answers, and a row for a rule nothing prints is advice about a line no build shows. Read in both directions from the syntax tree of src/, cli.ts and their local runtime dependencies, so a comment never counts",
   );
 
   // TY17 — issue #343: every FAIL line the source prints ends with the guide's pointer, written by one function.
-  const bare17 = pointerless(sources);
+  const bare17 = pointerless(guideSources);
   const plants17 = [
     pointerless([['src/plant.ts', 'export const f = (m: string): string => `  FAIL  PLANTED_RULE: ${m}`;\n']]),
     pointerless([['src/plant.ts', "export const f = (m: string): string => `  FAIL  PLANTED_RULE: ${m}${guidePointer('PLANTED_RULE')}`;\n"]]),
@@ -35733,7 +35842,7 @@ function runTreeSuite(): number {
   say(
     'TY17_EVERY_FAIL_LINE_THE_SOURCE_PRINTS_ENDS_WITH_THE_GUIDE_POINTER',
     bare17.length === 0 && plants17[0].join() === 'src/plant.ts:1' && plants17[1].length === 0 && plants17[2].join() === 'src/plant.ts:1' && printedFailLine({ code: 'X_Y', object: 'o', detail: 'd' }) === '  FAIL  X_Y: o — d (see rig-parts guide X_Y)',
-    `${bare17.length === 0 ? `no FAIL line head in src/ or cli.ts outside failLine or a template ending guidePointer(…)` : `without the pointer: ${bare17.join(', ')}`}; planted: a template -> ${plants17[0].join(', ') || 'not found'}, the same ending guidePointer -> ${plants17[1].join(', ') || 'not flagged'}, a plain string -> ${plants17[2].join(', ') || 'not found'}; failLine writes "${printedFailLine({ code: 'X_Y', object: 'o', detail: 'd' })}"`,
+    `${bare17.length === 0 ? `no FAIL line head in runtime sources outside failLine or a template ending guidePointer(…)` : `without the pointer: ${bare17.join(', ')}`}; planted: a template -> ${plants17[0].join(', ') || 'not found'}, the same ending guidePointer -> ${plants17[1].join(', ') || 'not flagged'}, a plain string -> ${plants17[2].join(', ') || 'not found'}; failLine writes "${printedFailLine({ code: 'X_Y', object: 'o', detail: 'd' })}"`,
     "issue #343: the pointer is the line's way to its row, in the form rig-c shares word for word; one function writes it, and a FAIL line written by hand elsewhere would be the one line without it",
   );
 
@@ -36720,6 +36829,27 @@ const STABILITY_DOC = 'docs/STABILITY.md';
 // ---------------------------------------------------------------------------
 // the guide's ledger, held to what the source can print (TY16, TY17; issue #343)
 // ---------------------------------------------------------------------------
+
+/** Include local runtime adapters reached from cli.ts/src without scanning unrelated test tools. */
+function runtimeRuleSources(text: ReadonlyArray<readonly [string, string]>): Array<readonly [string, string]> {
+  const available = new Map(text);
+  const selected = new Set(text.filter(([f]) => f === 'cli.ts' || (f.startsWith('src/') && f.endsWith('.ts'))).map(([f]) => f));
+  for (const file of selected) {
+    const sf = ts.createSourceFile(file, available.get(file) ?? '', ts.ScriptTarget.Latest, true);
+    for (const statement of sf.statements) {
+      if (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) continue;
+      if (ts.isImportDeclaration(statement) && statement.importClause?.isTypeOnly) continue;
+      if (ts.isExportDeclaration(statement) && statement.isTypeOnly) continue;
+      const bindings = ts.isImportDeclaration(statement) ? statement.importClause?.namedBindings : statement.exportClause;
+      if (bindings !== undefined && (ts.isNamedImports(bindings) || ts.isNamedExports(bindings)) && bindings.elements.length > 0 && bindings.elements.every((e) => e.isTypeOnly) && !(ts.isImportDeclaration(statement) && statement.importClause?.name !== undefined)) continue;
+      const specifier = statement.moduleSpecifier;
+      if (specifier === undefined || !ts.isStringLiteral(specifier) || !specifier.text.startsWith('.')) continue;
+      const dependency = join(dirname(file), specifier.text).split(sep).join('/');
+      if (dependency.endsWith('.ts') && available.has(dependency)) selected.add(dependency);
+    }
+  }
+  return text.filter(([file]) => selected.has(file));
+}
 
 /**
  * Names the source spells in an upper-snake string but never prints at the
@@ -47217,6 +47347,36 @@ function runLimbLayoutSuite(): number {
   return bad();
 }
 
+/** #356 standalone controls also run through the shared tally and CI shards. */
+function runConfigWriteSuite(): number {
+  section('config-write: owned proposal fields and staged replacement');
+  const { say, bad } = counter();
+  const dir = temp('config-write');
+  try {
+    runConfigWriteChecks(dir, (name, ok, detail) => say(name, ok, detail, 'the same pure merge, filesystem and CLI controls as tools/check_configwrite.ts'));
+    const guide = readFileSync(join(ROOT, GUIDE_DOC), 'utf8');
+    for (const code of ['CONFIG_WRITE_TARGET', 'CONFIG_WRITE_CHANGED', 'CONFIG_WRITE_FAILED']) {
+      const answer = runCli(['guide', code]);
+      const row = guideRule(guide, code);
+      const planted = guideRule(guide.split('\n').filter((l) => !l.includes(`<a id="${code}"></a>`)).join('\n'), code);
+      say(`GW_${code}`, answer.status === 0 && 'lines' in row && answer.out === row.lines.join('\n') + '\n' && !('lines' in planted),
+        `guide ${code}: exit ${answer.status}; planted missing row: ${'lines' in planted ? 'still answered' : 'refused'}`,
+        'each newly emitted writer refusal has a callable guide row; deleting that row is a negative control');
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  return bad();
+}
+
+function runCorePointerSuite(): number {
+  section('core-pointer: compile guide relay');
+  const { say, bad } = counter();
+  const dir = temp('core-pointer');
+  try {
+    runCorePointerChecks(dir, (name, ok, detail) => say(name, ok, detail, 'synthetic core replies measure relay behavior, never a real core verdict'));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  return bad();
+}
+
 const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number | null]> = [
   ['raster-components', runComponentsSuite],
   ['raster-morph', runMorphSuite],
@@ -47229,6 +47389,8 @@ const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number 
   ['layers-wrapper', runWrapperSuite],
   ['layers-psd', runPsdSuite],
   ['config', runConfigSuite],
+  ['config-write', runConfigWriteSuite],
+  ['core-pointer', runCorePointerSuite],
   ['parts', runPartsSuite],
   ['sheet', runSheetSuite],
   ['cli', runCliSuite],
@@ -47338,7 +47500,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
  */
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['check']],
-  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'subset-cover', 'foot-ownership', 'limb-slots', 'limb-layout', 'alternate-tips', 'contour-wiring', 'config', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
+  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'subset-cover', 'foot-ownership', 'limb-slots', 'limb-layout', 'alternate-tips', 'contour-wiring', 'config', 'config-write', 'core-pointer', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
   ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'mesh-stats', 'remesh', 'retune', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
 ];
 

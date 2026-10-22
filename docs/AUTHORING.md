@@ -47,7 +47,17 @@ with `flattenRig(built)`, not with the built file.
 
 The painting is yours to bring: a PNG of one character, front-facing, full body,
 taller than wide, on a plain light background. How it was made is not read by any
-stage (`config.generation` is recorded for the optional adapter only).
+stage (`config.generation` is recorded for the optional adapter only). rig-parts
+ships no weights and generates no images itself. The optional `comfy` adapter
+drives models on the user's own ComfyUI host. The default OpenPose ControlNet
+and upscaler sources, pinned model cards and declared terms are in
+[NOTICE](../NOTICE.md#models-named-by-the-optional-painting-graph).
+`comfy seethrough --offload` selects the wrapper's CUDA group offload on that
+host; omit it for a local Mac/MPS host. A Mac CLI may drive a remote CUDA host.
+This offload limitation does not establish MPS compatibility for the rest of the
+model stack. The wrapper README and the adapter graph use different node names
+and depth-model identifiers; [the adapter notes](../README.md#the-optional-comfyui-adapter)
+name the graph actually sent.
 
 ## 2. The folder
 
@@ -2046,10 +2056,13 @@ moved on the public `wind` example with its keypoints, whose tracked config the 
 wrote back byte for byte (measured once, when the flag landed). The text is written as stated: a relative path in it
 (`motion.animations_from`, `generation.control.skeleton`) resolves against the directory
 the written config sits in, so the out path belongs beside the input, and when it is not
-a note names each such path. Refused before anything is written: `--write-config`
-without `--cloth` or beside `--from-config`, and `--from` without `--write-config`
-(`USAGE`), an out path that exists or that
-the run writes itself (`PROPOSE_WRITE_CONFIG_FRESH`), a hand edit to an entry the
+a note names each such path. These are the cloth mode's rules; the three other
+`--write-config` modes are described in §4. Refused before anything is written:
+`--write-config` beside `--from-config`, and `--from` without both `--cloth` and `--write-config`
+(`USAGE`), an out path that exists or collides with any of the four artifacts
+under `--out` (`proposal.json`, `basis.json`, `render/landmarks.png`,
+`render/landmarks_head.png`), including directory-symlink and hardlink aliases
+(`PROPOSE_WRITE_CONFIG_FRESH`), a hand edit to an entry the
 recipe owns (`PROPOSE_WRITE_CONFIG_CONFLICT`), and a text whose splice does not
 parse to the config with the sections set — a key stated twice
 (`PROPOSE_WRITE_CONFIG_SPLICE`); a recipe that drafts nothing is
@@ -2446,21 +2459,28 @@ full loader before its assemble stage writes anything.
    a painting padded to a square by hand, whose padding becomes part of the rig.
    Config: the `layers` row, `head_box` not yet. A translucent painting is refused
    (`INPUTS_PAINTING_OPAQUE`).
-2. **See-through, full run** (external).
+2. **See-through, full run** (external), on `inputs/st_input_full.png`. Upload
+   that white-padded square to the Hugging Face Space too. Its [current source](https://huggingface.co/spaces/24yearsold/see-through-demo/blob/049a1ab07908e404aad03f73431dd1a98f88202c/common/utils/cv.py#L254-L274)
+   pads non-square images before resizing; the earlier centre-crop report is not
+   the current source path. The explicit white square keeps the input consistent
+   with rig-parts' full-run coordinate map.
 3. `rig-parts layers inputs/layers/full` — read it. A refusal here is about the
    files, not the art (§6, *Reading the inputs*). A `WARN` line is about the art: a
    layer See-through made that is not plausibly part of the figure, which step 6
    leaves out (§6, *Plausibility*). It refuses nothing.
-4. `rig-parts propose --head-box --full inputs/layers/full --canvas <W>x<H>` →
-   `seethrough.head_box`. Run `rig-parts inputs` again: it now also writes
+4. `rig-parts propose --head-box --full inputs/layers/full --canvas <W>x<H> --write-config config.json`
+   saves `seethrough.head_box` in the existing config. `<W>x<H>` is the original
+   painting's size, not the padded square's. The existing optional `--no-back-hair`
+   leaves the back-hair layer out of the head-box proposal; without it that layer
+   contributes to the box. Run `rig-parts inputs` again: it now also writes
    `st_input_head.png`, the painting cropped to that box at its exact size.
 5. **See-through, head run** (external), on that crop. See-through's own second,
    head stage does not replace it: that stage's layers are pasted back at the full
    run's scale on every route that was read (README *Getting See-through layers*),
    so the full run's eyes stay at its density — 22×13 px for reference-demo's right eye
    white at `resolution` 1024, against 60×38 px in the head run.
-6. `rig-parts assemble --propose-plan --source … --full … --head … --config config.json`
-   → paste `plan` and `extend_below_crop` into `config.assemble`. Config: the
+6. `rig-parts assemble --propose-plan --source … --full … --head … --config config.json --write-config config.json`
+   saves `assemble.plan` and `assemble.extend_below_crop`. Config: the
    `layers` row, with `head_box`.
    Read `notes`: every layer not planned — each tag a layer of either run holds that no
    row takes — is named there once, `<tag>: in no plan row — …`, with why, run by run: the
@@ -2491,8 +2511,8 @@ full loader before its assemble stage writes anything.
 7. `rig-parts assemble … --out work` — read its `uncovered hole` and `uncovered:` lines and look at
    `work/render/recomposite_error_rig.png` (§5): red is painting no part holds, which
    no later stage can see — then
-   `rig-parts propose --parts work/rig --source inputs/painting.png --out work` →
-   `work/proposal.json` and `work/render/landmarks.png` (+ `_head`). Copy
+   `rig-parts propose --parts work/rig --source inputs/painting.png --out work --write-config config.json` →
+   `work/proposal.json` and `work/render/landmarks.png` (+ `_head`). The flag saves
    each of `bones`, `meshes`, `regions`, `limbs`, `motion`, `constraints`, `turn` and `proposed_rig_scale` it
    wrote into the config: `limbs` is written only with `--keypoints`, `constraints`
    only with `--cloth` and `turn` only with `--full`/`--head` (`PROPOSAL_CONFIG_SECTIONS` in `src/propose.ts` is the list,
@@ -2508,6 +2528,13 @@ full loader before its assemble stage writes anything.
    `[bone, from, to]` segment (the off-art check reads only chain links), a
    region, a mesh that names no part, a torso bone absent, a chain the joints
    declare no line for — and a `coverage:` summary counts the three apart.
+   Before the totals, `coverage leg-chain choice:` reports the `leg_r` and
+   `leg_l` chains declared by the supplied proposal or config, their count and
+   recorded source/part bindings, or why none was selected. A missing source is
+   `not recorded`, a chain with no bound parts says `none bound`; nothing is
+   inferred to fill either. The line is selection only, not a checked verdict.
+   Read it and the per-part notes again when changing keypoint sources: a bone
+   map for two leg chains does not cover a proposal that bound only one.
    A `not checked` bone is one nothing verified: look at it on
    `landmarks.png`. `work/basis.json` (spec `spine-parts-basis/1`) says, per
    proposed bone, what its origin and its stated tip rest on: `joint` (which,
@@ -2637,9 +2664,13 @@ full loader before its assemble stage writes anything.
     relative `motion.animations_from` or `generation.control.skeleton` keeps its
     text, so it resolves against `draft/`; the command says so.
 
-The selftest runs this order, with the README's flags, on each fetched example from
-a config holding only `key`, `seethrough` and `assemble.rig_scale`, pasting each
-proposal in as the steps above say (`RL01`); every step must exit 0.
+The command-order selftest runs these stages on each fetched example from a
+config holding only `key`, `seethrough` and `assemble.rig_scale` (`RL01`). For
+the proposal step, copy `bones`, `meshes`, `regions`, `limbs`, `motion`,
+`constraints`, `turn` and `proposed_rig_scale` into the config, each section the
+proposal wrote. `RL01` exercises that manual route and does not execute
+`--write-config`. The save forms above write the fields owned by their mode;
+a saved draft still needs validation.
 
 ### Counting the triangles before a build (`mesh-stats`, issue #566)
 
@@ -2795,6 +2826,43 @@ file's figure, and every part is the clean file's but `hair_back`, which keeps a
 80-px hole behind the face where the hair under the eye was never painted — every
 one of them occluded, so nothing shows it at rest; paint it there if the face will
 move off it (`AS245`).
+
+**Saving proposed config fields (`--write-config`, issue #356).** The flag is a
+valued destination path. Its modes have different ownership:
+
+| proposal mode | destination | fields written |
+| --- | --- | --- |
+| `propose --head-box` | existing regular config | `seethrough.head_box` |
+| `assemble --propose-plan` | existing regular config; must name `--config` itself | `assemble.plan`, `assemble.extend_below_crop` |
+| ordinary `propose --parts` without `--cloth` | existing regular config | each present `PROPOSAL_CONFIG_SECTIONS` value: `bones`, `meshes`, `regions`, `limbs`, `motion`, `constraints`, `turn`, `proposed_rig_scale` |
+| `propose --cloth <input.json>` | new file | the recipe's edits spliced into the cloth config; §3, *The config written*, gives entry ownership, hand-edit conflicts and `--from <previous.json>` |
+
+For the first three modes, each selected field replaces its whole value; other
+fields and optional proposal sections not emitted are retained. Changed whole
+values are spliced into the original text through `splicedEdits`, preserving
+untouched bytes. `notes` stays in the proposal. The stage's loader validates a same-directory candidate before
+replacement, so relative file references keep their base and invalid retained
+references are refused. A scale mismatch retains `CONFIG_PROPOSED_RIG_SCALE`;
+the writer does not change `assemble.rig_scale` to hide it. An unchanged update
+keeps the original bytes and mtime. A final source-change check precedes atomic
+replacement; this is a config-file commit, not a transaction over every artifact
+of the proposing command. A refusal leaves the target config unchanged. The
+writer lists changes on stderr, keeping the existing head-box and plan JSON on
+stdout. Without the flag, no config is changed. `--from-config` proposes nothing
+and refuses this flag; `--from` belongs to the cloth mode only.
+All four modes use one file-writing adapter. Fresh cloth output keeps its
+already-checked splice text and intentional partial-config contract; the full
+loader is not imposed on it. Publication links the complete same-directory
+staged file into a destination that must still be absent, so an intervening
+creator is refused without overwrite. Removing the staged temporary happens
+after publication: if that cleanup fails, `CONFIG_WRITE_FAILED` may accompany
+an already-published complete config. Inspect both named paths before retrying. A different
+`--write-config` destination for `assemble --propose-plan` is a usage error.
+For ordinary and cloth proposals, the destination must be separate from all four
+artifacts under `--out`: `proposal.json`, `basis.json`, `render/landmarks.png` and
+`render/landmarks_head.png`. Matching paths, directory-symlink aliases and
+existing hardlinks are refused before artifact output; the ordinary mode names
+`CONFIG_WRITE_TARGET`, and the cloth mode `PROPOSE_WRITE_CONFIG_FRESH`.
 
 ## 5. After each stage: what to read
 
@@ -3301,9 +3369,12 @@ See-through with another seed.
 
 | rule | means | change |
 | --- | --- | --- |
+| <a id="CONFIG_WRITE_TARGET"></a>`CONFIG_WRITE_TARGET` | ordinary `propose … --write-config` would overwrite its config through one of its own four artifact paths under `--out`: `proposal.json`, `basis.json`, `render/landmarks.png`, `render/landmarks_head.png`; the collision check resolves existing path ancestors and compares existing file identity, so directory-symlink aliases and hardlinks count too. Refused before artifact output; the cloth mode names the same collision `PROPOSE_WRITE_CONFIG_FRESH` | choose a config outside all four artifact paths and their aliases |
+| <a id="CONFIG_WRITE_CHANGED"></a>`CONFIG_WRITE_CHANGED` | the existing destination no longer matches the snapshot read for `--write-config` when the writer is ready to commit: it is absent, no longer a regular file, or its permissions or text differ. The writer refuses to replace the current destination | keep the current config, reconcile any concurrent edit, and rerun against it |
+| <a id="CONFIG_WRITE_FAILED"></a>`CONFIG_WRITE_FAILED` | a proposed-value splice moved an unintended field, or a config-writing operation failed: reading, checking collisions, staging, writing proposal artifacts, publishing or replacing the destination, or removing the staged temporary. The message names the action and path. Cleanup failures retain the primary failure and name the stranded temporary. Fresh cloth publication precedes temporary cleanup, so a cleanup failure may leave the complete new config present; there is no transaction over every proposal artifact | inspect the named action, destination and temporary; restore access or permissions as needed; remove only the specifically reported stranded temporary, and inspect any published config before retrying |
 | <a id="CONFIG_FILE_PRESENT"></a><a id="CONFIG_IS_JSON"></a>`CONFIG_FILE_PRESENT`, `CONFIG_IS_JSON` | no such file, or not JSON; for a file the config names (`motion.animations_from`, `requirements`), the path is read relative to the config's directory, and the `motion.animations_from` line names the path as typed, that directory and what the two resolved to (issue #569) | `--config`; a file the config names: put it at the resolved path, or write the path from the config's directory |
 | <a id="CONFIG_KEY_KNOWN"></a><a id="CONFIG_KEY_RETIRED"></a><a id="CONFIG_FIELD_PRESENT"></a><a id="CONFIG_FIELD_TYPE"></a>`CONFIG_KEY_KNOWN`, `CONFIG_KEY_RETIRED`, `CONFIG_FIELD_PRESENT`, `CONFIG_FIELD_TYPE` | an unknown key (a retired one says what replaces it), a missing one (a `motion.animations_from` file with no `spec` is told to write `"spec": "rigc-motion/1"` and the whole file's shape, issue #569), a wrong type (`bones[i].link_inherit` must be an object whose values are strings); a project's own record under a plain key, or an annotation (`note`, `<name>_note`) holding something other than a string; in `meshes.<part>.auto` (§3, *An automatic mesh*), a missing or out-of-range number, a Stage B opt-in that is not exactly a value rig-c accepts, or a field the mode does not have — a bound on one of the five allocation rows, or an authored `motionAmplitude` (it is derived, never written); under `comfy paint`, `CONFIG_FIELD_PRESENT` on `config.generation`: a config with no `generation` block (the line names the fields it holds) | the named field; a record goes under a key beginning `x-` (any JSON, read by nothing), a remark under `note` or `<name>_note` (a string) — §3; under `comfy paint`, `config.generation` |
-| <a id="CONFIG_KEY_UNIQUE"></a>`CONFIG_KEY_UNIQUE` | a key written twice in one object of a file the config names — the pose file `generation.control.skeleton` names, or the `motion.animations_from` file; JSON keeps only the last value, so every other would be dropped without a word | that file: each key once |
+| <a id="CONFIG_KEY_UNIQUE"></a>`CONFIG_KEY_UNIQUE` | a key written twice in an existing config updated by `--write-config`, or in one object of a file the config names — the pose file `generation.control.skeleton` names, or the `motion.animations_from` file; JSON keeps only the last value, so every other would be dropped without a word | that file: each key once |
 | <a id="CONFIG_ANIMATION_NAME_FREE"></a>`CONFIG_ANIMATION_NAME_FREE` | the `motion.animations_from` file holds an animation named `idle`, the animation `config.motion` writes | rename that animation |
 | <a id="CONFIG_HEAD_BOX_SQUARE"></a>`CONFIG_HEAD_BOX_SQUARE` | `seethrough.head_box` is not a non-empty square | `head_box` — take `propose --head-box`'s |
 | <a id="CONFIG_TAG_KNOWN"></a><a id="CONFIG_PART_NAME"></a><a id="CONFIG_PART_UNIQUE"></a>`CONFIG_TAG_KNOWN`, `CONFIG_PART_NAME`, `CONFIG_PART_UNIQUE` | a plan or extend entry names neither a v3 tag nor `author:<label>` (an `author:` tag with a malformed label says what the label must be), a part name that is not a file name, or a part or layer twice — a patch named like a plan part or another patch, and a cut's `into` named like a plan part, a patch or another cut's, included | `assemble.plan`, `assemble.patches`, `assemble.cuts` |
@@ -3439,7 +3510,7 @@ says why each requirement exists and what breaks without it.
 | <a id="PROPOSE_FIGURE_LAYER"></a>`PROPOSE_FIGURE_LAYER` | with `--keypoints` (issue #577): a limb is drafted from the figure layer (no handwear or legwear part over 500 px for it), and two or more `topwear` parts each hold every joint and the trunk bones' origins within 15 px with the same opaque px in the 31x31 squares about them, so nothing says which is the figure; or the only `topwear` parts that hold them are named by a cloth recipe (`config.cloth.<tag>.part` or `.parts`, issue #631), whose mesh a limb would take (§3, *A figure of one material*) | leave the others out of `assemble.plan`, or give the arms and legs their own handwear and legwear layers; for a recipe's part, take it out of the recipe |
 | <a id="PROPOSE_CLOTH_DRAFTED"></a>`PROPOSE_CLOTH_DRAFTED` | with `--cloth` (issue #364): the config's `cloth` block holds a recipe for a tag the proposer drafts no chain on — no part has that tag, or every `back hair` part ends above the shoulders (a bun bone, no chain). A `bottomwear` recipe with no `bottomwear` part names every `topwear` part shaped like a skirt (issue #402) | leave that recipe out, or assemble the layer it is for, or declare the named part in `cloth.bottomwear.part` |
 | <a id="PROPOSE_CLOTH_PART"></a>`PROPOSE_CLOTH_PART` | with `--cloth` (issues #402, #437): `cloth.bottomwear.part` (a string) names no part, a part or cut piece whose source is not `topwear` (a `bottomwear` part takes the recipe by its tag already), or a target whose box ends above the hip + 0.25 face heights, the topwear rule's waist line; or `cloth.<tag>.parts` (or `part` as a list, issue #437) names a part not in `parts.json`, a part no link of the drafted tree crosses (`spanCrosses == 0`), or parts out of root-to-tip depth order along the chain | name the `topwear` part or its cut skirt piece that holds the skirt (or leave `part` out), or list only parts in `parts.json` that the drafted tree links cross in root-to-tip order |
-| <a id="PROPOSE_WRITE_CONFIG_FRESH"></a>`PROPOSE_WRITE_CONFIG_FRESH` | with `--write-config` (issue #537): the out path exists, or is a file the run writes itself (`proposal.json`, `basis.json` under `--out`); the config is written to a new file, never over the `--cloth` config or an earlier one | name a file that does not exist yet, beside the `--cloth` config |
+| <a id="PROPOSE_WRITE_CONFIG_FRESH"></a>`PROPOSE_WRITE_CONFIG_FRESH` | with `--cloth … --write-config` (issues #537, #356): the out path exists or collides with one of the four artifacts under `--out` — `proposal.json`, `basis.json`, `render/landmarks.png`, `render/landmarks_head.png` — including directory-symlink and hardlink aliases; the config is written to a new file, never over the `--cloth` config or an earlier one | name a file that does not exist yet, beside the `--cloth` config and separate from all four artifact paths and their aliases |
 | <a id="PROPOSE_WRITE_CONFIG_CONFLICT"></a>`PROPOSE_WRITE_CONFIG_CONFLICT` | with `--write-config` (issue #552): an entry of `bones`, `constraints` or `motion.tracks` the recipe re-drafts or removes was changed by hand in the `--cloth` config — it equals neither the draft with the recipe nor the draft without it — so the write would drop the hand edit; the object is the entry (`config.constraints[40] "skirt0a_0_physics"` in CL207), the detail names the first field the hand edit holds and what the draft writes there. With `--from <previous config>` (issue #571) an entry equal to the previous recipe's draft is the recipe's too, and the conflict is an entry that equals neither the draft, the draft without the recipe, nor the previous recipe's draft: the detail says so and reads the first differing field against the previous recipe's draft. Also a name the config states twice where the recipe drafts it. Every conflict is named at once and nothing is written | take the draft by removing the hand edit (or the entry), or leave the recipe out for that part (its `cloth` block); state a name once |
 | <a id="PROPOSE_WRITE_CONFIG_SPLICE"></a>`PROPOSE_WRITE_CONFIG_SPLICE` | with `--write-config` (issue #537): the `--cloth` config's text with the drafted sections spliced in does not parse to that config with them set, and the message names the first key that moved — the text states a key twice, so the splice lands on the first and the parse keeps the last | state each key once in the `--cloth` config |
 | <a id="PROPOSE_CLOTH_BACK_HAIR_CHAINS"></a>`PROPOSE_CLOTH_BACK_HAIR_CHAINS` | with `--cloth` (issues #390, #445, #461): `cloth."back hair".chains` exceeds what the narrower side's opaque width at the eye-line root row holds at the part's mesh grid (`max(1, min(floor(w_r / grid), floor(w_l / grid)))`), or places a tree root outside the 15 px dilated art mask of the `back hair` part (e.g. an inner twin-tail root over the face where the hair has no pixel); the message names the part, each side's root-row width, the grid spacing, and any off-art root with its pixel alpha | lower `cloth."back hair".chains` to at most the max fit named in the message, or omit `chains` so `propose --cloth` derives the tree count per visible hair mass on each side from its root-row width |

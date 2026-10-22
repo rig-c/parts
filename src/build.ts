@@ -73,7 +73,7 @@ import {
 } from './autoreplay.ts';
 import { besideIdleLine, checkSummaryLine, inputFileRecord, type InputFileRecord, CLOTH_LINE, type ClothLine, clothWarnText, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamWarnText, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, environmentLine, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, readCheckEnvironment, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR } from './check.ts';
 import { type Cut, type Extend, type Limb, loadConfigAndAnimations, loadConfigWithBytes, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
-import { failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
+import { coreCompileGuideLine, failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import type { MeshQualityReport, MotionSchedule } from 'rig-c/mesh';
 import { encodeGif } from './gif.ts';
 import { CONTROL_SUFFIX, withAnimations } from './motion.ts';
@@ -817,7 +817,8 @@ function gateRun(label: string, rigc: RigcRunner, args: string[]): GateRun {
   const r = rigc(args);
   const lines = r.out.split('\n').filter((l) => /^ {2}FAIL {2}/.test(l) || /assertions: \d+ measured/.test(l) || /^rigc compile error/.test(l) || DECLARED_SKIP.test(l) || HERE_LINE.test(l));
   const failed = lines.some((l) => /^ {2}FAIL {2}/.test(l) || /^rigc compile error/.test(l));
-  return { label, status: r.status, lines: r.status !== 0 && !failed ? [...lines, ...causeLines(r.out)] : lines, ...(r.ran === undefined ? {} : { ran: r.ran }) };
+  const quoted = r.status !== 0 && !failed ? [...lines, ...causeLines(r.out)] : lines;
+  return { label, status: r.status, lines: quoted.map(coreCompileGuideLine), ...(r.ran === undefined ? {} : { ran: r.ran }) };
 }
 
 /**

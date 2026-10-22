@@ -1,7 +1,10 @@
 # rig-parts
 
 **AI-authored 2D character rigs from one anime painting, verified before they
-are written.** rig-parts takes a single character painting and the layers
+are written.** rig-parts generates no images. The painting and See-through layers
+come from models the user runs on their GPU or a web demo; this package ships no
+weights. The optional `comfy` adapter drives the user's own ComfyUI host and models.
+rig-parts takes a single character painting and the layers
 [See-through](https://github.com/shitagaki-lab/see-through) decomposed it into,
 merges them into measured rig-space parts, authors weighted meshes, bone chains
 and a looping idle over them in [rig-c](https://github.com/rig-c/core)'s
@@ -168,10 +171,18 @@ rig-parts at what it wrote:
 
 | Route | Where | Output rig-parts reads |
 | --- | --- | --- |
-| Hugging Face Space | [24yearsold/see-through-demo](https://huggingface.co/spaces/24yearsold/see-through-demo) (ZeroGPU; upstream states 1-2 extractions a day for a registered user) | the `.psd` it produces |
+| Hugging Face Space | [24yearsold/see-through-demo](https://huggingface.co/spaces/24yearsold/see-through-demo) (ZeroGPU) | the `.psd` it produces; upload `st_input_full.png`, the white-padded square from `inputs`, for the full run, and `st_input_head.png` for the separate head run |
 | ModelScope demo | [ljsabc/See-Through](https://modelscope.cn/studios/ljsabc/See-Through), linked from the upstream README | the `.psd` it produces |
 | Upstream CLI | `python inference/scripts/inference_psd.py --srcp <image> --save_to_psd` in a checkout of [shitagaki-lab/see-through](https://github.com/shitagaki-lab/see-through) | the `.psd` in `workspace/layerdiff_output/` |
 | ComfyUI wrapper | [jtydhr88/ComfyUI-See-through](https://github.com/jtydhr88/ComfyUI-See-through) on your own ComfyUI box; the optional `comfy` adapter (`rig-parts comfy seethrough`) drives it | the `layers.json` + PNGs it writes |
+
+Use the square `inputs` outputs on the Space too. Its [app calls `apply_layerdiff`](https://huggingface.co/spaces/24yearsold/see-through-demo/blob/049a1ab07908e404aad03f73431dd1a98f88202c/app.py#L110-L118),
+which [calls `center_square_pad_resize`](https://huggingface.co/spaces/24yearsold/see-through-demo/blob/049a1ab07908e404aad03f73431dd1a98f88202c/common/utils/inference_utils.py#L78-L83).
+That [preprocessing function](https://huggingface.co/spaces/24yearsold/see-through-demo/blob/049a1ab07908e404aad03f73431dd1a98f88202c/common/utils/cv.py#L254-L274)
+pads a non-square upload before resizing; the centre-crop reported in
+[#356](https://github.com/rig-c/parts/issues/356) is not the current source path.
+`st_input_full.png` supplies the explicit white padding that rig-parts maps back
+to the original painting. This is a source inspection, not a new demo run.
 
 **The head run is needed on every route that was read.** See-through's model
 already separates the head in a second stage of its own: it crops the head the
@@ -217,10 +228,10 @@ commands drive it; nothing else in the pipeline needs one:
 
 ```sh
 rig-parts comfy paint --config config.json --out <dir> --host http://<box>:8188
-rig-parts comfy seethrough --image st_input_full.png --out layers/full --host http://<box>:8188 --offload
+rig-parts comfy seethrough --image st_input_full.png --out layers/full --host http://<box>:8188
 ```
 
-`comfy paint` generates `painting_<seed>.png` from the config's inline
+`comfy paint` asks the user's models to generate `painting_<seed>.png` from the config's inline
 `generation` block — checkpoint, LoRAs, sampler, and an optional OpenPose
 control skeleton it draws itself — and records the prompts verbatim beside it.
 `comfy seethrough` runs the [ComfyUI-See-through](https://github.com/jtydhr88/ComfyUI-See-through)
@@ -229,6 +240,32 @@ from `--host` or `COMFY_HOST` and has no default; before anything is uploaded
 the graph is checked against the box's `/object_info`, so a missing node class
 or model is refused by name, and the adapter waits for an empty queue rather
 than queueing behind someone else's job.
+
+The painting graph uses `4x-AnimeSharp.pth`, then Lanczos resizing. The
+[creator's card](https://huggingface.co/Kim2091/AnimeSharp/blob/7696d95ced82b0c1f2a41f6ac73336133f0a90e1/README.md)
+declares CC BY-NC-SA 4.0. When `generation.control` is set, the intended OpenPose
+ControlNet is [xinsir/controlnet-openpose-sdxl-1.0](https://huggingface.co/xinsir/controlnet-openpose-sdxl-1.0/blob/23f966cd5cfdd3f7729c903e243d87152162d2b7/README.md),
+whose card declares Apache-2.0. Install its `diffusion_pytorch_model.safetensors`
+on the host as `controlnet-openpose-sdxl-1.0.safetensors`, or select its installed
+filename with `generation.control.model`. A filename alone does not verify the
+weights. [NOTICE](NOTICE.md#models-named-by-the-optional-painting-graph) pins the
+sources and records their declared terms; those declarations do not assign a
+blanket licence to output images. The graph's automatic upscaler selection is
+unchanged; the owner decision is tracked separately in [#428](https://github.com/rig-c/parts/issues/428).
+
+`--offload` selects the wrapper's CUDA group-offload path on the **ComfyUI host**:
+its [LayerDiff and depth loaders](https://github.com/jtydhr88/ComfyUI-See-through/blob/98d754bf04f668647919ab750eccb0e0640faa81/nodes.py#L395-L475)
+call `enable_group_offload('cuda', ...)`. Omit it for a local Mac/MPS host. A Mac
+running this CLI may pass it to a remote CUDA host. This describes that offload
+path; it is not a claim that the remaining model stack has been verified on MPS.
+
+The [wrapper README at `98d754b`](https://github.com/jtydhr88/ComfyUI-See-through/blob/98d754bf04f668647919ab750eccb0e0640faa81/README.md#L22-L28)
+describes a combined Decompose node and names `24yearsold/seethroughv0.0.1_marigold`
+for depth. The shipped `workflows/seethrough.json` instead sends
+`SeeThrough_GenerateLayers`, `SeeThrough_GenerateDepth` and `SeeThrough_PostProcess`,
+and selects `layerdifforg/seethroughv0.0.1_marigold`, matching the wrapper's
+[implemented depth default](https://github.com/jtydhr88/ComfyUI-See-through/blob/98d754bf04f668647919ab750eccb0e0640faa81/nodes.py#L82-L85).
+Use the graph's node classes and the host's `/object_info` when checking the adapter.
 
 ## The loop, for an agent
 
@@ -261,8 +298,10 @@ rig-parts build --config config.json --source painting.png --full layers/full --
 
 At each step the config holds only what that step reads; the one table of what
 that is, step by step, is [docs/AUTHORING.md §4](docs/AUTHORING.md#4-the-command-order).
-The selftest runs this block in order, command by command, on each fetched example,
-from a config holding only what the first step reads (`RL01`). On `demo` the
+The command-order controls exercise the hand-copy route above on each fetched
+example from a config holding only what the first step reads (`RL01`). The optional
+`--write-config` forms below save the proposed fields; `RL01` does not exercise
+that flag. On `demo` the
 proposal pasted uncorrected stops at the last step, naming its `bottomwear` on
 `CHECK_TIP_OVER_ROOT` — the correction its tracked config records there, the two outer
 skirt chains moved (issue #227, [its README](examples/demo/README.md)); on `scarf`,
@@ -296,10 +335,10 @@ agent skill.
 | `comfy seethrough --image --out [--host]` | optional: run the ComfyUI See-through wrapper on one image and write the form `layers` reads |
 | `layers <dir \| layers.json \| file.psd>` | print every layer of a decomposition: draw order, name, tag group, box, size, opaque pixels, depth, and its translucent, background and area figures; a `WARN` line for a layer `--propose-plan` will leave out |
 | `sheet --source <png> --layers <path>… --out <png>` | a labelled contact sheet of the painting and every layer or part |
-| `assemble --propose-plan …` | propose `assemble.plan` and `extend_below_crop` from the two runs, leaving out an implausible layer with a note naming the rule, naming in a note any full-run body no planned part covers, and naming every layer no row takes with why (empty, taken from the other run only, a plausibility rule; `nose`, never planned, with the row that lets `propose` read the head's pitch) |
+| `assemble --propose-plan … [--write-config <config>]` | propose `assemble.plan` and `extend_below_crop` from the two runs, leaving out an implausible layer with a note naming the rule, naming in a note any full-run body no planned part covers, and naming every layer no row takes with why (empty, taken from the other run only, a plausibility rule; `nose`, never planned, with the row that lets `propose` read the head's pitch) |
 | `assemble --source --full --head --config --out [--seam] [--project]` | merge the two runs into rig-space parts, `parts.json`, the recomposite and its error map, and list the uncovered holes |
-| `propose --head-box --full <run> --canvas WxH` | propose `seethrough.head_box` from the full run, held inside the painting |
-| `propose --parts --source --out [--compare <config>]` | propose bones, meshes, regions and an idle; draw the overlay; print, per bone, which check read it or that none did and why (its role, its kind of segment), and write `basis.json` beside the proposal — what each bone rests on (a joint, a part's mask, a ratio, other bones) and, with `--compare`, whether the config's bone differs |
+| `propose --head-box --full <run> --canvas WxH [--no-back-hair] [--write-config <config>]` | propose `seethrough.head_box` from the full run, held inside the painting; `--no-back-hair` leaves the back-hair layer out of that proposal |
+| `propose --parts --source --out [--compare <config>] [--write-config <config>]` | propose bones, meshes, regions and an idle; draw the overlay; print, per bone, which check read it or that none did and why (its role, its kind of segment), and write `basis.json` beside the proposal — what each bone rests on (a joint, a part's mask, a ratio, other bones) and, with `--compare`, whether the config's bone differs |
 | `propose … --keypoints <file> [--person <id>]` | read a posed figure's joints from one explicit file (space, image size, people, each joint observed, occluded or missing, its source): a joint with a position places the neck, hip, chest or a sleeve chain as given, a note says how every joint was used or which rule stood in, and LINT reads the torso and sleeves along the joints instead of by screen y ([AUTHORING §3](docs/AUTHORING.md)) |
 | `propose … --grid-rule figure\|part` | how each drafted lattice's spacing is chosen: `figure` (the default) one spacing for the figure, round(H / 37) rig px, a part already coarser keeping its own, with a note on its calibration and cost; `part` the reference's rule, a tenth of the part's short side (the oracle examples are proposed under it) |
 | `propose … --from-config <config>` | draw and LINT the config's current bones (by the joints too, given `--keypoints`) |
@@ -322,10 +361,40 @@ fields, the files a build writes and their spec ids, the environment, and what t
 package relies on in rig-c — and what is not, is [docs/STABILITY.md](docs/STABILITY.md).
 Coming from 0.16.0: [docs/MIGRATION.md](docs/MIGRATION.md).
 
+`--write-config <config.json>` saves the three proposals above into an existing
+regular config file: `seethrough.head_box`, `assemble.plan` plus
+`assemble.extend_below_crop`, or the present config sections of an ordinary
+proposal. For `assemble --propose-plan`, the destination must name `--config`
+itself; a different destination is a usage error. Other fields and absent optional
+sections remain; proposal notes are not copied. Changed whole values are spliced
+into the original text, preserving untouched bytes. Stage loaders validate the candidate, including `proposed_rig_scale`,
+before atomic replacement. Relative paths keep the config's directory as their
+base. Changes are listed on stderr; the head-box and plan JSON on stdout remain.
+An identical update leaves bytes and mtime untouched. Without the flag no config
+is changed. This commits the config file, not a transaction across the proposal
+artifacts.
+
+With `--cloth <config.json>`, the flag requires a **new** destination and applies
+the recipe's entry ownership: recipe-owned entries are spliced into the cloth
+config while hand entries and unrelated text survive; conflicts are refused.
+The destination must also be separate from all four artifacts under `--out`:
+`proposal.json`, `basis.json`, `render/landmarks.png`, `render/landmarks_head.png`.
+Aliases, including directory symlinks and hardlinks, count as collisions too.
+Fresh output is published without overwriting a file created while the command
+runs. Its already-checked splice text may be a partial config; it is not passed
+through the full-config loader. If removing the staged temporary fails after
+publication, the error may accompany an already-published complete config.
+`--from <previous.json>` retains the previous-recipe comparison.
+`--from-config` proposes nothing and cannot be combined with `--write-config`.
+[AUTHORING §4](docs/AUTHORING.md#4-the-command-order) describes all four modes.
+
 ## What it does not do
 
 These are limits of the approach, stated so nobody reads more into a green run:
 
+- **rig-parts generates no images.** The painting and See-through layers are made
+  by models the user runs on their GPU or a web demo. No weights ship here; the
+  optional `comfy` adapter drives the user's own ComfyUI host and models.
 - **One depth value per layer.** See-through gives each layer a single depth, so a
   layer that is in front of another in one place and behind it in another is drawn
   right in the still (the painting's own pixels are projected onto it) and wrong once
@@ -354,7 +423,10 @@ These are limits of the approach, stated so nobody reads more into a green run:
   file of joints comes from any pose
   estimator or a hand; this package does not estimate a pose itself, and its
   keypoint support has been measured on generated figures and on files read off the
-  examples' own configs, never on an estimator's output.
+  examples' own configs, and on one reported estimator output: RTMPose whole-body
+  through rtmlib on one painting built green with the estimated file unedited
+  ([#356](https://github.com/rig-c/parts/issues/356)). That is one measurement,
+  not an estimator success rate; it has not been re-run here.
 - **The proposer reads tags, not pictures.** A swinging element painted inside another
   layer (a sash tail in the skirt), hair that is none of the shapes it knows, and
   whether an accessory swings are the corrector's to add. The one accessory shape it

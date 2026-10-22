@@ -39,6 +39,7 @@
   "files": [
     "bin/rig-parts.cjs",
     "cli.ts",
+    "tools/configwrite.ts",
     "src",
     "workflows",
     "docs/AUTHORING.md",

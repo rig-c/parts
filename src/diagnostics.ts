@@ -32,6 +32,8 @@
  * write the same bytes.
  */
 import { type Problem, refuseIfAny } from './errors.ts';
+import type { BoneEntry, Limb } from './config.ts';
+import type { RigJoints } from './keypoints.ts';
 import { BASIS_KINDS, type BasisKind, type BoneBasis, type BoneCoverage, COVERAGE_OUTCOMES, coverageOutcome, expand, FRAME_KEYS, type FrameBasis, type FrameKey, type PartSet, type Placement, type Proposal, type ProposalBasis } from './propose.ts';
 import { BONE_ROLES, type BoneRole, compareStructure, readSkeleton } from './structure.ts';
 
@@ -175,8 +177,66 @@ export function basisLine(f: BasisFile, out: string): string {
   return `wrote ${BASIS_FILE} (${f.bones.length} bone record(s) by the basis of their origin: ${kinds}${cmp}) under ${out}`;
 }
 
+/** The leg choice actually declared by the supplied proposal/config. Placement
+ * and coverage are distinct: selecting a chain never claims its links were checked.
+ */
+export interface LegChainChoice {
+  chains: Array<{ chain: string; sources: string[]; parts: string[] }>;
+  /** Present when no chain was selected; null never stands for a guessed cause. */
+  none: string | null;
+}
+
+export function legChainChoice(P: PartSet, spec: { bones: readonly BoneEntry[]; meshes: Proposal['meshes']; regions?: Proposal['regions']; limbs?: Readonly<Record<string, Limb>>; notes?: readonly string[] }, joints?: RigJoints): LegChainChoice {
+  const chains: LegChainChoice['chains'] = [];
+  for (const entry of spec.bones) {
+    if (!('chain' in entry) || !/^leg_[rl]$/.test(entry.chain)) continue;
+    const links = new Set(entry.points.map((_, i) => `${entry.chain}${i}`));
+    const sources = new Set<string>();
+    const parts = new Set<string>();
+    for (const limb of Object.values(spec.limbs ?? {})) {
+      for (const segment of limb.segments) if (links.has(segment.bone)) {
+        sources.add(segment.from);
+        parts.add(segment.part);
+      }
+    }
+    const hasSourceBinding = sources.size > 0;
+    const bound = (part: string): void => {
+      parts.add(part);
+      if (!hasSourceBinding && P.recs.some((p) => p.name === part)) sources.add(part);
+    };
+    for (const [part, mesh] of Object.entries(spec.meshes)) {
+      if (mesh.segments.some((s) => typeof s === 'string' ? s === entry.chain || links.has(s) : links.has(s[0]))) bound(part);
+    }
+    for (const [part, bone] of Object.entries(spec.regions ?? {})) if (links.has(bone)) bound(part);
+    chains.push({ chain: entry.chain, sources: [...sources], parts: [...parts] });
+  }
+  if (chains.length > 0) return { chains, none: null };
+  if (joints === undefined) return { chains, none: 'no keypoints supplied; leg placement requires hip, knee and ankle positions' };
+  const recorded = spec.notes?.find((n) => n.includes(': no leg chain — '));
+  if (recorded !== undefined) return { chains, none: recorded };
+  const gaps: string[] = [];
+  for (const side of ['r', 'l'] as const) {
+    const missing = ([`${side}_hip`, `${side}_knee`, `${side}_ankle`] as const).filter((key) => joints.joints[key].at === null);
+    if (missing.length > 0) gaps.push(`${missing.join(', ')} ${missing.length === 1 ? 'has' : 'have'} no position`);
+    else {
+      const hip = joints.joints[`${side}_hip`].at as [number, number];
+      const knee = joints.joints[`${side}_knee`].at as [number, number];
+      if (hip[0] === knee[0] && hip[1] === knee[1]) gaps.push(`${side}_hip and ${side}_knee are one point; the thigh has no direction`);
+    }
+  }
+  if (gaps.length === 2) return { chains, none: gaps.join('; ') };
+  if (!P.byTag('legwear', undefined, true).some((p) => p.opaque_px > 500)) return { chains, none: 'no legwear part over 500 opaque px; the proposal declares no leg chain' };
+  return { chains, none: 'no leg_r or leg_l chain declared; the supplied spec records no leg-placement refusal' };
+}
+
+export function legChainChoiceLine(choice: LegChainChoice): string {
+  if (choice.chains.length === 0) return `coverage leg-chain choice: 0 chains — ${choice.none ?? 'no placement reason recorded'}`;
+  const named = (values: readonly string[]): string => values.map((v) => JSON.stringify(v)).join(', ');
+  return `coverage leg-chain choice: ${choice.chains.length} ${choice.chains.length === 1 ? 'chain' : 'chains'} — ${choice.chains.map((c) => `${c.chain}: source ${c.sources.length === 0 ? 'not recorded' : named(c.sources)}; parts ${c.parts.length === 0 ? 'none bound' : named(c.parts)}`).join(' | ')}; selection only, not a checked verdict`;
+}
+
 /** One coverage line per bone, then the summary. Every line starts `coverage`. */
-export function coverageLines(coverage: readonly BoneCoverage[]): string[] {
+export function coverageLines(coverage: readonly BoneCoverage[], legChoice?: LegChainChoice): string[] {
   const out: string[] = [];
   for (const c of coverage) {
     const role = c.role === null ? 'role not read' : c.role.role;
@@ -184,6 +244,7 @@ export function coverageLines(coverage: readonly BoneCoverage[]): string[] {
     if (outcome === 'not checked') out.push(`coverage ${c.bone} [${role}]: not checked — ${c.why.join('; ')}`);
     else out.push(`coverage ${c.bone} [${role}]: ${outcome} — read by ${c.read.join(', ')}${c.lint > 0 ? `; named by ${c.lint} LINT line(s)` : ''}`);
   }
+  if (legChoice !== undefined) out.push(legChainChoiceLine(legChoice));
   const by = (o: (typeof COVERAGE_OUTCOMES)[number]): number => coverage.filter((c) => coverageOutcome(c) === o).length;
   const roles: Record<BoneRole, number> = { target: 0, deforms: 0, control: 0, unclassified: 0 };
   let unread = 0;

@@ -83,7 +83,7 @@ import { basename, delimiter, dirname, join, resolve } from 'node:path';
 import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig } from './assemble.ts';
 import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toBoneLocal } from './coords.ts';
 import { capBox, inDisc } from './limbs.ts';
-import { PartsError, type Problem, refuseIfAny } from './errors.ts';
+import { coreCompileGuideLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { framesInside, IDLE_FPS, TIME_SLACK } from './motion.ts';
 import {
   blinkFigures,
@@ -818,7 +818,8 @@ const HERE_LINE = /^\.\.\s+here: /;
 export function buildGateLines(out: string): string[] {
   return out
     .split('\n')
-    .filter((l) => (l.trim().startsWith('..') && (l.includes(' assertions: ') || l.includes('pages=') || l.includes('pack:') || HERE_LINE.test(l.trim()))) || l.includes('FAIL') || l.includes('compile error'));
+    .filter((l) => (l.trim().startsWith('..') && (l.includes(' assertions: ') || l.includes('pages=') || l.includes('pack:') || HERE_LINE.test(l.trim()))) || l.includes('FAIL') || l.includes('compile error'))
+    .map(coreCompileGuideLine);
 }
 
 /**
@@ -3848,7 +3849,7 @@ export function clothWarnText(r: ClothRow, duration: number): string {
  */
 export function rigcFailed(what: string, call: RigcCall, lines: readonly string[]): Problem[] {
   const named = lines.filter((l) => l.includes('FAIL') || l.includes('compile error'));
-  const quoted = named.length > 0 ? named.map((l) => l.trim()) : causeLines(call.out);
+  const quoted = (named.length > 0 ? named.map((l) => l.trim()) : causeLines(call.out)).map(coreCompileGuideLine);
   const object = `\`rigc ${what}\``;
   const ran = rigcRanClause(call);
   if (quoted.length === 0) return [{ code: 'CHECK_RIGC_GREEN', object, detail: `exit ${call.status}, and it printed nothing${ran}` }];

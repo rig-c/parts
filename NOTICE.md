@@ -122,6 +122,28 @@ redistributed.
 The [parts-examples](https://github.com/rig-c/parts-examples) README records
 both, beside each character's generation record.
 
+### Models named by the optional painting graph
+
+**[observed 2026-10-22]** In `src/graphs.ts`, the intended OpenPose ControlNet is
+[xinsir/controlnet-openpose-sdxl-1.0](https://huggingface.co/xinsir/controlnet-openpose-sdxl-1.0/blob/23f966cd5cfdd3f7729c903e243d87152162d2b7/README.md).
+That revision's card declares `license: apache-2.0`. Its
+[`diffusion_pytorch_model.safetensors`](https://huggingface.co/xinsir/controlnet-openpose-sdxl-1.0/blob/23f966cd5cfdd3f7729c903e243d87152162d2b7/diffusion_pytorch_model.safetensors)
+is the source for the host-local name `controlnet-openpose-sdxl-1.0.safetensors`.
+The graph uses that name only when `generation.control` is configured and
+`generation.control.model` is absent; a configured model filename replaces it.
+The local filename alone does not identify or verify the installed weights.
+
+**[observed 2026-10-22]** The graph always names `4x-AnimeSharp.pth` for model
+upscaling, followed by Lanczos resizing. The source is
+[Kim2091/AnimeSharp at `7696d95`](https://huggingface.co/Kim2091/AnimeSharp/blob/7696d95ced82b0c1f2a41f6ac73336133f0a90e1/4x-AnimeSharp.pth),
+and the [creator's card at that revision](https://huggingface.co/Kim2091/AnimeSharp/blob/7696d95ced82b0c1f2a41f6ac73336133f0a90e1/README.md)
+declares CC BY-NC-SA 4.0, including its NonCommercial condition. rig-parts ships
+neither model and grants no additional rights to their weights. These observations
+record the models' declared terms; they do not assign a blanket licence to output
+images. The existing upscaler selection is unchanged. Whether to require explicit
+selection is the separate, deferred owner decision in
+[#428](https://github.com/rig-c/parts/issues/428).
+
 ## 4. Behaviour reimplemented, not code copied
 
 The raster operations in `src/raster/` reproduce the documented behaviour of
