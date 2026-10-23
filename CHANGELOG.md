@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.60.2](https://github.com/rig-c/parts/compare/v1.60.1...v1.60.2) (2026-10-23)
+
+
+### Bug Fixes
+
+* **build:** isolate CLI stages in sequential processes ([#690](https://github.com/rig-c/parts/issues/690)) ([c51beae](https://github.com/rig-c/parts/commit/c51beae5e98b7f3154576f42569fcb7b6941fa50)), closes [#689](https://github.com/rig-c/parts/issues/689) [#699](https://github.com/rig-c/parts/issues/699) [#693](https://github.com/rig-c/parts/issues/693) [#677](https://github.com/rig-c/parts/issues/677)
+* **config:** correct clearance hints and document authoring contracts ([#703](https://github.com/rig-c/parts/issues/703)) ([7a214c9](https://github.com/rig-c/parts/commit/7a214c97af17e04298882a10416d92742acd54ca)), closes [#697](https://github.com/rig-c/parts/issues/697) [#674](https://github.com/rig-c/parts/issues/674) [#668](https://github.com/rig-c/parts/issues/668) [#534](https://github.com/rig-c/parts/issues/534) [#560](https://github.com/rig-c/parts/issues/560)
+* preserve revision ancestry and register declared set anchors ([#702](https://github.com/rig-c/parts/issues/702)) ([32c9c9d](https://github.com/rig-c/parts/commit/32c9c9d621ae0c7f0127f66e1766df392d151a75))
+* **propose:** resolve missing attachments against destination config ([#700](https://github.com/rig-c/parts/issues/700)) ([cc21421](https://github.com/rig-c/parts/commit/cc214211a29d0d4e9be2b1828d9967ae5c8e6a70))
+* resolve installed smoke commands and canonical paths on Windows ([9efd432](https://github.com/rig-c/parts/commit/9efd432f73a5202d342c72ae9caa0c1188f3a428))
+* **rig:** retain authored draw order for declared limb riders ([#704](https://github.com/rig-c/parts/issues/704)) ([cab7610](https://github.com/rig-c/parts/commit/cab7610ee9ce283f3b9fac5388e7a264af47ad76))
+* **smoke:** prove Bun absent in a controlled search path ([#694](https://github.com/rig-c/parts/issues/694)) ([62158aa](https://github.com/rig-c/parts/commit/62158aa4a520a073faf2d3c7e36c7bef6e7e3c94))
+
 ## [1.60.1](https://github.com/rig-c/parts/compare/v1.60.0...v1.60.1) (2026-10-23)
 
 
