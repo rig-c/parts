@@ -30,7 +30,7 @@ The painting was generated for this repository with a public checkpoint (Hassaku
 (Illustrious) v1.3 Style A, by Ikena, Fair AI Public License 1.0-SD) and no LoRA, on a
 pose that holds the hands apart, then given one hand-detailer pass; its generation
 record, See-through layers and licence are in
-<a href="https://github.com/rig-c/parts-examples">parts-examples</a>.
+<a href="https://github.com/rig-c/examples">rig-c/examples</a>.
 See-through ran twice, once on the whole figure and once on a square head crop.
 Then one command: <code>rig-parts build --loop --lead-in 3</code>. The proposer's bones, meshes,
 regions and motion were used as proposed but for one correction, written in the
@@ -209,7 +209,7 @@ head run on `st_input_head.png` is what gives the eyes more pixels
 four, and `rig-parts comfy` is only a convenience for that route: every
 stage after See-through reads files, whichever route wrote them. On the two
 reference examples each run took 171–199 s through the wrapper, and on the demo 179 s (each run's
-`meta.json`, in [parts-examples](https://github.com/rig-c/parts-examples)).
+`meta.json`, in [rig-c/examples](https://github.com/rig-c/examples)).
 
 ### The two images See-through is fed: `inputs`
 

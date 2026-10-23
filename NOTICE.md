@@ -119,7 +119,7 @@ redistributed.
   `allowDifferentLicense: false`: generated images may be used commercially and
   the model must be credited, which this line does.
 
-The [parts-examples](https://github.com/rig-c/parts-examples) README records
+The [rig-c/examples](https://github.com/rig-c/examples) README records
 both, beside each character's generation record.
 
 ### Models named by the optional painting graph

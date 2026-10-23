@@ -140,7 +140,7 @@ one way that passes `painting`: the `generation` block and the pose file of seed
 and chosen to be the next public example — a character for a wind demo, where hair
 and cloth move by physics under a side gust. It is the public example `wind`: its
 painting, See-through layers and generation record are in
-[parts-examples](https://github.com/rig-c/parts-examples) (`wind/`), and its config,
+[rig-c/examples](https://github.com/rig-c/examples) (`wind/`), and its config,
 proposal and build are [`examples/wind`](../examples/wind/README.md). The block:
 
 ```json
@@ -350,4 +350,4 @@ To paint one without the character drifting, repaint only the limb:
 
 `comfy paint` does not run an inpainting graph; the demo's hand-detailer pass is
 the same idea at hand scale (a masked repaint on the same checkpoint, recorded
-beside its painting in parts-examples).
+beside its painting in rig-c/examples).

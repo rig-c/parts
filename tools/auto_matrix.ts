@@ -1287,7 +1287,7 @@ interface DocInput {
   head: string;
   dirty: boolean;
   keys: string[];
-  /** The spine-parts-examples commit `scripts/fetch-examples.sh` pins. */
+  /** The rig-c/examples commit `scripts/fetch-examples.sh` pins. */
   pinned: string;
   /** `--machine`'s label (never an address). */
   machine: string;

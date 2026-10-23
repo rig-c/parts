@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Fetches the heavy inputs of the public example characters — each painting,
 # the two images See-through was fed, and the two See-through layer sets — from
-# https://github.com/rig-c/parts-examples into the gitignored
+# https://github.com/rig-c/examples — the rig-c examples repository, whose
+# corpus directories this script pins — into the gitignored
 # examples/<key>/inputs/ of this checkout.
 #
 # What lives HERE, tracked, is the light half of each example: its config, the
@@ -45,8 +46,8 @@
 # and both layers.json manifests before the exit status may be 0.
 set -euo pipefail
 
-REPO_URL="https://github.com/rig-c/parts-examples"
-# ⚠️ PLACEHOLDER. Set this to the full 40-character commit of parts-examples
+REPO_URL="https://github.com/rig-c/examples"
+# ⚠️ PLACEHOLDER. Set this to the full 40-character commit of rig-c/examples
 # these fixtures were compared against. The script refuses to run until it is.
 # PIN: <commit> — the examples repository's commit that adds wind/, the figure painted
 # to pass `rig-parts painting` and to serve a wind demo (issue #372); demo/, scarf/,
