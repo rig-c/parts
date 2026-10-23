@@ -1,16 +1,65 @@
 /** Ordinary build stage processes. No public option selects this internal protocol. */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { assembleStage, checkStage, rigStage, type AssembleOutputs, type AssembleStageInput, type CheckStageInput, type RigStageInput } from '../src/build.ts';
 import { rigcRunnerAt, type CheckReport, type RigcRunner } from '../src/check.ts';
 import { PartsError, type Problem } from '../src/errors.ts';
 
+/** Preserve native/custom executables; adapt only a proven package-manager script shim. */
+export function selectedRigcCommand(bin: string, platform: NodeJS.Platform = process.platform): { command: string; prefix: string[] } {
+  if (platform !== 'win32' || extname(bin).toLowerCase() === '.exe') return { command: bin, prefix: [] };
+  const fail = (detail: string): never => { throw new Error('RIGC_LAUNCHER_IDENTITY: ' + bin + ' — ' + detail + '; the selected executable must keep its own launcher'); };
+  try {
+    const selected = resolve(bin);
+    // findRigc selected this exact local .bin path; do not resolve an ambient package.
+    if (basename(selected) !== 'rigc' || basename(dirname(selected)) !== '.bin') return fail('unknown or custom script shim');
+    const packageRoot = join(dirname(dirname(selected)), 'rig-c');
+    const manifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { name?: unknown; bin?: unknown };
+    const binMap = manifest.bin;
+    const declared = typeof binMap === 'string' ? binMap : binMap !== null && typeof binMap === 'object' ? (binMap as Record<string, unknown>).rigc : undefined;
+    if (manifest.name !== 'rig-c' || typeof declared !== 'string') return fail('the selected package does not declare rigc');
+    const entry = resolve(packageRoot, declared);
+    const within = relative(realpathSync.native(packageRoot), realpathSync.native(entry));
+    if (within === '..' || within.startsWith('..' + sep) || isAbsolute(within) || !statSync(entry).isFile()) return fail('bin target is outside the selected package');
+    const launcher = readFileSync(entry, 'utf8');
+    if (launcher.split(/\r?\n/, 1)[0] !== '#!/usr/bin/env node') return fail('declared bin is not a Node launcher');
+    if (realpathSync.native(selected) !== realpathSync.native(entry)) {
+      // npm cmd-shim's shell companion is checked in full, including both forwarding branches.
+      // Extra custom commands, another target or an unknown shim format are refused, never bypassed.
+      const reference = relative(dirname(selected), entry).split(sep).join('/');
+      if (/["$\x60\r\n]/.test(reference)) return fail('target cannot be identified literally in the package shim');
+      const expected = [
+        '#!/bin/sh', 'basedir=$(dirname "$(echo "$0" | sed -e \'s,\\\\,/,g\')")',
+        'case \x60uname\x60 in', '*CYGWIN*|*MINGW*|*MSYS*)', 'if command -v cygpath > /dev/null 2>&1; then',
+        'basedir=\x60cygpath -w "$basedir"\x60', 'fi', ';;', 'esac',
+        'if [ -x "$basedir/node" ]; then', 'exec "$basedir/node" "$basedir/' + reference + '" "$@"',
+        'else', 'exec node "$basedir/' + reference + '" "$@"', 'fi',
+      ];
+      const actual = readFileSync(selected, 'utf8').split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+      const equal = actual.length === expected.length && actual.every((line, i) => line === expected[i] ||
+        (i === 10 && line === expected[i].replace('node" ', 'node"  ')) || (i === 12 && line === expected[i].replace('exec node ', 'exec node  ')));
+      if (!equal) return fail('selected shim is not the declared launcher forwarding wrapper');
+    }
+    return { command: 'node', prefix: [entry] };
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('RIGC_LAUNCHER_IDENTITY:')) throw error;
+    return fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function childStarted(child: { status: number | null; signal: string | null }): boolean {
+  return typeof child.status === 'number' || (typeof child.signal === 'string' && child.signal !== '');
+}
+
 export function processRigcRunner(bin: string): RigcRunner {
   return rigcRunnerAt(bin, (b, args) => {
-    const r = spawnSync(b, [...args], { encoding: 'utf8', maxBuffer: 1 << 28 });
-    if (r.error !== undefined) return { status: 127, out: `could not start ${b}: ${r.error.message}` };
-    return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+    let launch: { command: string; prefix: string[] };
+    try { launch = selectedRigcCommand(b); }
+    catch (error) { return { status: 127, out: error instanceof Error ? error.message : String(error) }; }
+    const r = spawnSync(launch.command, [...launch.prefix, ...args], { shell: false, windowsHide: true, encoding: 'utf8', maxBuffer: 1 << 28 });
+    if (!childStarted(r)) return { status: 127, out: 'could not start ' + b + ': ' + (r.error?.message ?? 'no exit status or signal was reported') };
+    return { status: r.status ?? 1, out: (r.stdout ?? '') + (r.stderr ?? '') };
   });
 }
 
@@ -79,6 +128,12 @@ export function encodeCheckReceipt(report: CheckReport): string {
     sweepSteps: report.sweepSteps === undefined ? null : [...report.sweepSteps] });
 }
 
+/** Minimum Bun may attach error to an ordinary nonzero exit; only an unstarted child is a launch failure. */
+export function readBuildChild(stage: Stage, child: { status: number | null; signal: string | null; error?: Error }, text: string): CheckReport | void {
+  if (!childStarted(child) && child.error !== undefined) throw new Error('BUILD_STAGE_CHILD: ' + stage + ' could not start — ' + child.error.message);
+  return readBuildReceipt(stage, child.status ?? null, child.signal ?? null, text);
+}
+
 /** Inherited descriptors keep stdout/stderr write order; no shell parses paths or flags. */
 export function launchBuildChild(argv: readonly string[]): { status: number | null; signal: string | null; error?: Error } {
   const [command, ...args] = argv;
@@ -96,8 +151,7 @@ export function runBuildProcess(job: BuildProcessJob, home: string): CheckReport
   writeFileSync(request, JSON.stringify(job));
   try {
     const child = launchBuildChild([process.execPath, import.meta.path, request, result]);
-    if (child.error !== undefined) throw new Error('BUILD_STAGE_CHILD: ' + job.stage + ' could not start — ' + child.error.message);
-    return readBuildReceipt(job.stage, child.status, child.signal, existsSync(result) ? readFileSync(result, 'utf8') : '');
+    return readBuildChild(job.stage, child, existsSync(result) ? readFileSync(result, 'utf8') : '');
   } finally {
     rmSync(request, { force: true });
     rmSync(result, { force: true });

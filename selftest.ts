@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { encodeCheckReceipt, readBuildReceipt } from './tools/build-process.ts';
+import { encodeCheckReceipt, readBuildReceipt, readBuildChild, selectedRigcCommand } from './tools/build-process.ts';
 import { runConfigWriteChecks } from './tools/check_configwrite.ts';
 import { runCorePointerChecks } from './tools/check_corepointer.ts';
 /**
@@ -22297,7 +22297,17 @@ function entries(dir: string): string[] {
 
 function runBuildSuite(): number {
   section('build: assemble, rig and check in one process, on generated runs');
-  const { say, bad } = counter();
+  const { say: caseSay, bad } = counter();
+  const captured: Array<{ args: string[]; status: number | null; stdout: string | null; stderr: string | null; error?: string }> = [];
+  const runBuildCli = (args: string[]): { status: number; out: string } => {
+    const r = spawnSync('bun', [join(ROOT, 'cli.ts'), ...args], { cwd: ROOT, encoding: 'utf8' });
+    captured.push({ args, status: r.status, stdout: r.stdout, stderr: r.stderr, error: r.error?.message });
+    return { status: r.status ?? 1, out: (r.stdout ?? '') + (r.stderr ?? '') };
+  };
+  const say = (name: string, ok: boolean, detail: string, why: string): void => {
+    caseSay(name, ok, detail + (ok ? '' : '\n          raw child streams: ' + JSON.stringify(captured)), why);
+    captured.length = 0;
+  };
   const dir = temp('build');
   try {
     // Issue #689: the process boundary must reject a missing, red or malformed child, not invent a stage result.
@@ -22307,18 +22317,84 @@ function runBuildSuite(): number {
     const refusal = JSON.stringify({ version: 1, stage: 'rig', kind: 'refused', problems: [originalProblem] });
     let carried: unknown;
     try { readBuildReceipt('rig', 1, null, refusal); } catch (err) { carried = err; }
-    say('BU219_A_CHILD_REFUSAL_PRESERVES_THE_ORIGINAL_PROBLEM_AND_REJECTS_EMPTY_OR_MISMATCHED_REFUSALS',
+    say('BU262_A_CHILD_REFUSAL_PRESERVES_THE_ORIGINAL_PROBLEM_AND_REJECTS_EMPTY_OR_MISMATCHED_REFUSALS',
       carried instanceof PartsError && JSON.stringify(carried.problems) === JSON.stringify([originalProblem]) &&
       threw(() => readBuildReceipt('rig', 0, null, refusal))?.includes('BUILD_STAGE_RESULT') === true &&
       threw(() => readBuildReceipt('rig', 1, null, JSON.stringify({ version: 1, stage: 'rig', kind: 'refused', problems: [] })))?.includes('BUILD_STAGE_RESULT') === true,
       'one original problem survives byte-for-byte; false green and empty refusal are rejected',
       'the parent must print the original refusal under its existing stage prefix exactly once');
-    say('BU220_NONZERO_SIGNALED_AND_UNREPORTED_CHILDREN_CANNOT_ADVANCE_THE_BUILD',
+    say('BU263_NONZERO_SIGNALED_AND_UNREPORTED_CHILDREN_CANNOT_ADVANCE_THE_BUILD',
       threw(() => readBuildReceipt('assemble', 7, null, receipt('assemble')))?.includes('BUILD_STAGE_CHILD') === true &&
       threw(() => readBuildReceipt('assemble', null, 'SIGTERM', receipt('assemble')))?.includes('BUILD_STAGE_CHILD') === true &&
       threw(() => readBuildReceipt('assemble', 1, null, ''))?.includes('BUILD_STAGE_CHILD') === true,
       'exit 7, signal and exit 1 without a refusal stop before another stage',
       'a crashed child is not a green receipt and is not an input refusal it never reported');
+    const legacyError = new Error('legacy nonzero metadata');
+    let legacyRefusal: unknown;
+    try { readBuildChild('rig', { status: 1, signal: null, error: legacyError }, refusal); } catch (error) { legacyRefusal = error; }
+    say('BU266_A_STARTED_NONZERO_CHILD_READS_ITS_REFUSAL_DESPITE_LEGACY_ERROR_METADATA',
+      legacyRefusal instanceof PartsError && JSON.stringify(legacyRefusal.problems) === JSON.stringify([originalProblem]) &&
+      readBuildChild('assemble', { status: 0, signal: null }, receipt('assemble')) === undefined &&
+      threw(() => readBuildChild('assemble', { status: null, signal: null, error: new Error('ENOENT fixture') }, ''))?.includes('could not start') === true &&
+      threw(() => readBuildChild('assemble', { status: null, signal: 'SIGTERM', error: legacyError }, receipt('assemble')))?.includes('BUILD_STAGE_CHILD') === true &&
+      threw(() => readBuildChild('assemble', { status: 1, signal: null, error: legacyError }, ''))?.includes('BUILD_STAGE_CHILD') === true &&
+      threw(() => readBuildChild('assemble', { status: 1, signal: null, error: legacyError }, receipt('assemble')))?.includes('BUILD_STAGE_CHILD') === true,
+      'a real exit 1 keeps the complete original refusal; absent executable, signal, missing receipt and false completion still stop',
+      'minimum Bun attaches error metadata to an already-started nonzero child; that field cannot erase a valid refusal or invent success');
+
+    const identityRoot = join(dir, 'selected package with spaces');
+    const identityBin = join(identityRoot, 'node_modules', '.bin', 'rigc');
+    const identityPackage = join(identityRoot, 'node_modules', 'rig-c');
+    const declaredEntry = join(identityPackage, 'unusual entry', 'chosen.cjs');
+    mkdirSync(dirname(identityBin), { recursive: true });
+    mkdirSync(dirname(declaredEntry), { recursive: true });
+    writeFileSync(join(identityPackage, 'package.json'), JSON.stringify({ name: 'rig-c', bin: { rigc: 'unusual entry/chosen.cjs' } }));
+    writeFileSync(declaredEntry, "#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({argv:process.argv.slice(2),root:__dirname}));");
+    const relEntry = relative(dirname(identityBin), declaredEntry).split(sep).join('/');
+    const shimPrelude = '#!/bin/sh\n' + 'basedir=$(dirname "$(echo "$0" | sed -e \'s,\\\\,/,g\')")\n' +
+      '\ncase \x60uname\x60 in\n    *CYGWIN*|*MINGW*|*MSYS*)\n        if command -v cygpath > /dev/null 2>&1; then\n            basedir=\x60cygpath -w "$basedir"\x60\n        fi\n    ;;\nesac\n\n';
+    const validShim = shimPrelude + 'if [ -x "$basedir/node" ]; then\n  exec "$basedir/node"  "$basedir/' + relEntry + '" "$@"\nelse \n  exec node  "$basedir/' + relEntry + '" "$@"\nfi\n';
+    writeFileSync(identityBin, validShim, { mode: 0o755 });
+    const selected = selectedRigcCommand(identityBin, 'win32');
+    const literalArgs = ['space here', '& echo must-stay-literal', '%PATH%', 'quote"slash\\', 'line\nbreak'];
+    const selectedRan = spawnSync(selected.command, [...selected.prefix, ...literalArgs], { encoding: 'utf8', shell: false });
+    captured.push({ args: [selected.command, ...selected.prefix, ...literalArgs], status: selectedRan.status, stdout: selectedRan.stdout, stderr: selectedRan.stderr, error: selectedRan.error?.message });
+    const selectedOutput = selectedRan.status === 0 ? JSON.parse(selectedRan.stdout) as { argv?: unknown; root?: unknown } : null;
+    say('BU267_WINDOWS_PACKAGE_LAUNCH_USES_THE_SELECTED_METADATA_ENTRY_WITH_LITERAL_ARGV',
+      selected.prefix.length === 1 && realpathSync.native(selected.prefix[0]) === realpathSync.native(declaredEntry) &&
+      selectedRan.status === 0 && JSON.stringify(selectedOutput?.argv) === JSON.stringify(literalArgs) && selectedOutput?.root === dirname(declaredEntry),
+      'selected package metadata names a nonstandard entry under a spaced directory; exact argv and launcher location survive; stderr ' + JSON.stringify(selectedRan.stderr),
+      'the selected launcher keeps its own module-resolution anchor; entering core directly or shell-interpreting argv would change this control');
+    writeFileSync(identityBin, validShim + 'echo custom behavior\n');
+    const customRejected = threw(() => selectedRigcCommand(identityBin, 'win32'));
+    writeFileSync(identityBin, validShim.replace(relEntry, '../other-package/other.cjs'));
+    const wrongTargetRejected = threw(() => selectedRigcCommand(identityBin, 'win32'));
+    writeFileSync(identityBin, validShim);
+    writeFileSync(join(identityPackage, 'package.json'), JSON.stringify({ name: 'other-package', bin: { rigc: 'unusual entry/chosen.cjs' } }));
+    const wrongPackageRejected = threw(() => selectedRigcCommand(identityBin, 'win32'));
+    writeFileSync(join(identityPackage, 'package.json'), JSON.stringify({ name: 'rig-c', bin: { rigc: 'missing.cjs' } }));
+    const missingEntryRejected = threw(() => selectedRigcCommand(identityBin, 'win32'));
+    say('BU268_UNKNOWN_CUSTOM_MISMATCHED_AND_MISSING_LAUNCHERS_CANNOT_MAP_TO_ANOTHER_PACKAGE',
+      [customRejected, wrongTargetRejected, wrongPackageRejected, missingEntryRejected].every(message => message?.includes('RIGC_LAUNCHER_IDENTITY')) &&
+      selectedRigcCommand(identityBin, 'linux').command === identityBin,
+      'custom extra behavior, another target/package and missing metadata entry are refused by name; ordinary non-Windows executable identity is unchanged',
+      'finding some ambient rig-c is not proof that it owns the selected executable');
+
+    const actualReceipt = join(dir, 'actual-refusal.json');
+    const actualChild = join(dir, 'actual-refusal.ts');
+    writeFileSync(actualChild, "import {writeFileSync} from 'node:fs';writeFileSync(" + JSON.stringify(actualReceipt) + "," + JSON.stringify(refusal) + ");process.stderr.write('literal refusal stderr');process.exit(1);");
+    const actualExit = spawnSync(process.execPath, [actualChild], { encoding: 'utf8' });
+    const absentExit = spawnSync(join(dir, 'no-such-executable'), [], { encoding: 'utf8' });
+    captured.push({ args: [actualChild], status: actualExit.status, stdout: actualExit.stdout, stderr: actualExit.stderr, error: actualExit.error?.message });
+    let actualRefusal: unknown;
+    try { readBuildChild('rig', actualExit, readFileSync(actualReceipt, 'utf8')); } catch (error) { actualRefusal = error; }
+    say('BU269_REAL_NONZERO_CHILD_AND_REAL_ABSENT_EXECUTABLE_HAVE_DISTINCT_RESULTS',
+      actualExit.status === 1 && actualExit.signal === null && actualExit.stderr === 'literal refusal stderr' &&
+      actualRefusal instanceof PartsError && JSON.stringify(actualRefusal.problems) === JSON.stringify([originalProblem]) &&
+      absentExit.error !== undefined && threw(() => readBuildChild('assemble', absentExit, ''))?.includes('could not start') === true,
+      'actual exit 1 preserves its packet and exact stderr; actual ENOENT is a launch failure; legacy error present ' + (actualExit.error !== undefined),
+      'this runs the boundary in the current Bun rather than assuming a synthetic Node-shaped spawn result');
+
     const streamChild = join(dir, 'stream-child.ts');
     const streamOuter = join(dir, 'stream-outer.ts');
     const streamFile = join(dir, 'streams.txt');
@@ -22328,7 +22404,7 @@ function runBuildSuite(): number {
     let streamStatus: number | null;
     try { streamStatus = spawnSync(process.execPath, [streamOuter], { stdio: ['ignore', streamFd, streamFd] }).status; } finally { fs.closeSync(streamFd); }
     const streams = readFileSync(streamFile, 'utf8');
-    say('BU221_STAGE_CHILD_STDOUT_AND_STDERR_ARE_INHERITED_IN_WRITE_ORDER', streamStatus === 0 && streams === 'ABC',
+    say('BU264_STAGE_CHILD_STDOUT_AND_STDERR_ARE_INHERITED_IN_WRITE_ORDER', streamStatus === 0 && streams === 'ABC',
       'interleaved writes read ' + JSON.stringify(streams) + '; exit ' + streamStatus,
       'buffering stdout and stderr separately would replay ACB and change the CLI stream order');
     const helper = join(ROOT, 'tools/build-process.ts');
@@ -22336,7 +22412,9 @@ function runBuildSuite(): number {
     const unknownRequest = join(dir, 'unknown-stage.json');
     writeFileSync(unknownRequest, JSON.stringify({ stage: 'unknown', input: {}, bin: 'not-run' }));
     const unknownChild = spawnSync(process.execPath, [helper, unknownRequest, join(dir, 'unknown-result.json')], { encoding: 'utf8' });
-    say('BU222_INTERNAL_STAGE_SELECTORS_REFUSE_MISSING_OR_UNKNOWN_REQUESTS_BY_NAME',
+    captured.push({ args: [helper], status: noRequest.status, stdout: noRequest.stdout, stderr: noRequest.stderr, error: noRequest.error?.message });
+    captured.push({ args: [helper, unknownRequest], status: unknownChild.status, stdout: unknownChild.stdout, stderr: unknownChild.stderr, error: unknownChild.error?.message });
+    say('BU265_INTERNAL_STAGE_SELECTORS_REFUSE_MISSING_OR_UNKNOWN_REQUESTS_BY_NAME',
       noRequest.status === 1 && noRequest.stderr.includes('BUILD_STAGE_REQUEST') && unknownChild.status === 1 && unknownChild.stderr.includes('BUILD_STAGE_REQUEST'),
       'missing and unknown internal requests exit 1 by name before any stage runs',
       'the internal worker is not a public mode and an unknown selector cannot fall through to a default stage');
@@ -22370,7 +22448,7 @@ function runBuildSuite(): number {
     writeFileSync(join(dir, 'wrongtag.json'), `${JSON.stringify(assembleConfig({ plan: [...PLAN, ['wings', 'head', 'wings']] }), null, 2)}\n`);
 
     const out = join(dir, 'out');
-    const green = runCli([...buildArgs(dir, out), '--loop']);
+    const green = runBuildCli([...buildArgs(dir, out), '--loop']);
     const tail = lastLines(green.out, 4);
     const expectedTree = [...BUILD_OWNS].sort();
     const tree = entries(out);
@@ -22399,7 +22477,7 @@ function runBuildSuite(): number {
     const roundAbsent = readBuildReceipt('check', 0, null, encodeCheckReceipt(noMapReport));
     const roundPresent = readBuildReceipt('check', 0, null, encodeCheckReceipt(withMapReport));
     const reportJson = (report: typeof realReport): string => JSON.stringify({ ...report, sweepSteps: undefined });
-    say('BU217_STAGE_RECEIPTS_PRESERVE_A_REAL_CHECK_REPORT_AND_OPTIONAL_MAP_WITHOUT_INVENTING_VOID_OUTPUTS',
+    say('BU260_STAGE_RECEIPTS_PRESERVE_A_REAL_CHECK_REPORT_AND_OPTIONAL_MAP_WITHOUT_INVENTING_VOID_OUTPUTS',
       readBuildReceipt('assemble', 0, null, receipt('assemble')) === undefined && readBuildReceipt('rig', 0, null, receipt('rig')) === undefined &&
       realReport.figures.PASS && realReport.pack.length > 0 &&
       reportJson(roundAbsent) === reportJson(noMapReport) && !Object.hasOwn(roundAbsent, 'sweepSteps') &&
@@ -22415,7 +22493,7 @@ function runBuildSuite(): number {
       ...badReports.map((report) => JSON.stringify({ ...validCheck, report })),
       ...badSweepEntries.map((sweepSteps) => JSON.stringify({ ...validCheck, sweepSteps })),
     ];
-    say('BU218_MISSING_MALFORMED_WRONG_STAGE_INCOMPLETE_CHECK_AND_INVALID_MAP_RECEIPTS_ARE_REFUSED',
+    say('BU261_MISSING_MALFORMED_WRONG_STAGE_INCOMPLETE_CHECK_AND_INVALID_MAP_RECEIPTS_ARE_REFUSED',
       malformed.every((text) => threw(() => readBuildReceipt('assemble', 0, null, text))?.includes('BUILD_STAGE_RESULT')) &&
       badChecks.every((text) => threw(() => readBuildReceipt('check', 0, null, text))?.includes('BUILD_STAGE_RESULT')) &&
       threw(() => readBuildReceipt('check', 1, null, encodeCheckReceipt(realReport)))?.includes('BUILD_STAGE_CHILD') === true,
@@ -22433,11 +22511,11 @@ function runBuildSuite(): number {
     (cutConfig.assemble as Record<string, unknown>).cuts = [{ from: 'topwear', into: 'tie', polygon: [[12, 22], [29, 30], [12, 47]], draw: { before: 'bottomwear' }, overlap: 0 }];
     writeAssembleFixture(cutDir, cutConfig);
     const fwdOut = join(cutDir, 'out-forwarded');
-    const fwd = runCli([...buildArgs(cutDir, fwdOut), '--seam-pairs', '--keep-stills']);
+    const fwd = runBuildCli([...buildArgs(cutDir, fwdOut), '--seam-pairs', '--keep-stills']);
     const cutPlainOut = join(cutDir, 'out-plain');
-    const cutPlain = runCli(buildArgs(cutDir, cutPlainOut));
+    const cutPlain = runBuildCli(buildArgs(cutDir, cutPlainOut));
     const byHand = join(dir, 'check-by-hand');
-    const hand = runCli(['check', '--rig', join(fwdOut, 'rig'), '--parts', fwdOut, '--out', byHand, '--seam-pairs', '--keep-stills']);
+    const hand = runBuildCli(['check', '--rig', join(fwdOut, 'rig'), '--parts', fwdOut, '--out', byHand, '--seam-pairs', '--keep-stills']);
     const fwdCheck = join(fwdOut, 'check');
     const fwdFig = readJsonFile(join(fwdCheck, 'check.json'));
     const handFig = readJsonFile(join(byHand, 'check.json'));
@@ -22451,7 +22529,7 @@ function runBuildSuite(): number {
     const { seam_pairs: _fwdRows, ...fwdRest } = fwdFig ?? {};
     const fwdPairs = pairLinesOf(fwd.out, '[check] ');
     const handPairs = pairLinesOf(hand.out, '');
-    const pairsTwice = runCli([...buildArgs(cutDir, join(cutDir, 'out-pairs-twice')), '--seam-pairs', '--seam-pairs']);
+    const pairsTwice = runBuildCli([...buildArgs(cutDir, join(cutDir, 'out-pairs-twice')), '--seam-pairs', '--seam-pairs']);
     const fwdSameAsHand = withoutConfigRecord(Buffer.from(JSON.stringify(fwdFig ?? {})), join('check', 'check.json')).equals(Buffer.from(JSON.stringify(handFig ?? {}, null, 1)));
     say(
       'BU165_BUILD_SEAM_PAIRS_AND_CHECK_SEAM_PAIRS_ON_THE_SAME_RIG_READ_THE_SAME_SEAM_ROWS',
@@ -22481,7 +22559,7 @@ function runBuildSuite(): number {
       'issue #257: build dropped the flag, so a consumer who needed the pairs ran check a second time by hand and the artifact build reported was checked without them; forwarded, the check inside build is the check by hand, row for row and byte for byte, and without the flag build writes what it wrote before',
     );
     const fwdStill = join(fwdCheck, STILL_DIR);
-    const keepTwice = runCli([...buildArgs(cutDir, join(cutDir, 'out-keep-twice')), '--keep-stills', '--keep-stills']);
+    const keepTwice = runBuildCli([...buildArgs(cutDir, join(cutDir, 'out-keep-twice')), '--keep-stills', '--keep-stills']);
     say(
       'BU166_BUILD_KEEP_STILLS_LEAVES_THE_STILL_CHECK_KEEP_STILLS_LEAVES_ON_THE_SAME_RIG',
       filesUnder(fwdStill).includes('frames.json') &&
@@ -22503,7 +22581,7 @@ function runBuildSuite(): number {
     const wideDir = join(dir, 'landscape');
     writeAssembleFixture(wideDir, moving, landscapePainting(), { full: LANDSCAPE_FULL_LAYERS, head: HEAD_LAYERS });
     const wideOut = join(wideDir, 'out');
-    const wide = runCli(buildArgs(wideDir, wideOut));
+    const wide = runBuildCli(buildArgs(wideDir, wideOut));
     const wideParts = existsSync(join(wideOut, 'parts.json')) ? serializeParts(readParts(join(wideOut, 'parts.json'))) : 'absent';
     const pngs = entries(join(out, 'parts'));
     const pngSame = pngs.filter((f) => existsSync(join(wideOut, 'parts', f)) && Buffer.compare(readFileSync(join(out, 'parts', f)), readFileSync(join(wideOut, 'parts', f))) === 0);
@@ -22521,7 +22599,7 @@ function runBuildSuite(): number {
     const highDir = join(dir, 'landscape-unshifted');
     writeAssembleFixture(highDir, moving, landscapePainting());
     const highOut = join(highDir, 'out');
-    runCli(buildArgs(highDir, highOut));
+    runBuildCli(buildArgs(highDir, highOut));
     const highParts = existsSync(join(highOut, 'parts.json')) ? readParts(join(highOut, 'parts.json')) : null;
     const highTop = highParts?.parts.find((p) => p.name === 'topwear');
     say(
@@ -22571,7 +22649,7 @@ function runBuildSuite(): number {
     writeFileSync(join(stale, 'check', 'check.json'), '{"PASS": true}\n');
     writeFileSync(join(stale, 'idle.gif'), 'stale');
     writeFileSync(join(stale, 'keep.txt'), 'not build\'s');
-    const still = runCli(buildArgs(dir, stale, 'still.json'));
+    const still = runBuildCli(buildArgs(dir, stale, 'still.json'));
     const stillTree = entries(stale);
     const rigFail = still.out.split('\n').find((l) => l.startsWith('[rig]   FAIL  RIG_RIGC_GREEN: ')) ?? null;
     say(
@@ -22587,11 +22665,11 @@ function runBuildSuite(): number {
     );
 
     const early = join(dir, 'early');
-    const wrong = runCli(buildArgs(dir, early, 'wrongtag.json'));
+    const wrong = runBuildCli(buildArgs(dir, early, 'wrongtag.json'));
     const planFail = wrong.out.split('\n').find((l) => l.startsWith('[assemble]   FAIL  ASSEMBLE_PLAN_TAG_IN_RUN: ')) ?? null;
-    const noOut = runCli(buildArgs(dir, early).slice(0, -2));
-    const badSeam = runCli([...buildArgs(dir, early), '--seam', 'whiteish']);
-    const badProject = runCli([...buildArgs(dir, early), '--project', 'eroded']);
+    const noOut = runBuildCli(buildArgs(dir, early).slice(0, -2));
+    const badSeam = runBuildCli([...buildArgs(dir, early), '--seam', 'whiteish']);
+    const badProject = runBuildCli([...buildArgs(dir, early), '--project', 'eroded']);
     say(
       'BU03_AN_ASSEMBLE_REFUSAL_STOPS_THE_BUILD_FIRST_AND_A_MALFORMED_CALL_IS_A_USAGE_ERROR',
       wrong.status === 1 &&
@@ -22632,7 +22710,7 @@ function runBuildSuite(): number {
     writeAssembleFixture(hemDir, hemCfg, hemPainting(), { full: HEM_FULL, head: FRAMED_HEAD });
     const unpatched = assemble({ ...fixtureInput(hemDir), patches: [], seamRule: 'near-white' });
     const hemOut = join(hemDir, 'out');
-    const hemBuild = runCli(buildArgs(hemDir, hemOut));
+    const hemBuild = runBuildCli(buildArgs(hemDir, hemOut));
     const hemParts = existsSync(join(hemOut, 'parts.json')) ? readParts(join(hemOut, 'parts.json')) : null;
     const hemRig = readJsonFile(join(hemOut, 'rig', 'rig.json'));
     const hemCheck = readJsonFile(join(hemOut, 'check', 'check.json'));
@@ -22668,9 +22746,9 @@ function runBuildSuite(): number {
     const recOut = join(dir, 'out-records');
     const plantOut = join(dir, 'out-records-plant');
     const hemRecOut = join(hemDir, 'out-records');
-    const recRun = runCli([...buildArgs(dir, recOut, 'records.json'), '--loop']);
-    const plantRun = runCli([...buildArgs(dir, plantOut, 'records-plant.json'), '--loop']);
-    const hemRecRun = runCli(buildArgs(hemDir, hemRecOut, 'records.json'));
+    const recRun = runBuildCli([...buildArgs(dir, recOut, 'records.json'), '--loop']);
+    const plantRun = runBuildCli([...buildArgs(dir, plantOut, 'records-plant.json'), '--loop']);
+    const hemRecRun = runBuildCli(buildArgs(hemDir, hemRecOut, 'records.json'));
     // Issue #607: each build records the config it read, so check.json's config record is set aside here (withoutConfigRecord).
     const recDiff = treeDiff(out, recOut, withoutConfigRecord);
     const hemRecDiff = treeDiff(hemOut, hemRecOut, withoutConfigRecord);
@@ -22684,9 +22762,9 @@ function runBuildSuite(): number {
       'issue #70: a record is read by nothing, which is a claim about every output, so it is held to every file the furthest stage writes — parts, the rig, the packed build, check.json and the loop — and the plant is the witness that a real value moving does reach those files',
     );
 
-    const wrongHome = runCli(['check', '--rig', join(hemOut, 'rig'), '--parts', join(hemOut, 'parts'), '--out', join(hemDir, 'check2')]);
+    const wrongHome = runBuildCli(['check', '--rig', join(hemOut, 'rig'), '--parts', join(hemOut, 'parts'), '--out', join(hemDir, 'check2')]);
     const homeLine = wrongHome.out.split('\n').find((l) => l.includes('CHECK_INPUT_PRESENT')) ?? '';
-    const help = runCli(['--help']);
+    const help = runBuildCli(['--help']);
     say(
       'BU05_CHECK_PARTS_GIVEN_THE_PARTS_DIRECTORY_ITSELF_SAYS_WHAT_PARTS_IS_AND_NAMES_THE_PARENT',
       wrongHome.status === 1 && homeLine.includes(PARTS_HOME_SENTENCE) && homeLine.includes(`${hemOut} holds parts.json, so --parts ${hemOut} is the directory meant`) && help.out.includes(PARTS_HOME_SENTENCE) && !existsSync(join(hemDir, 'check2', 'check.json')),
@@ -22734,7 +22812,7 @@ function runBuildSuite(): number {
     };
     writeFileSync(join(dir, 'hang.json'), `${JSON.stringify(hang, null, 2)}\n`);
     const hangOut = join(dir, 'hang');
-    const hung = runCli(buildArgs(dir, hangOut, 'hang.json'));
+    const hung = runBuildCli(buildArgs(dir, hangOut, 'hang.json'));
     const hangRig = existsSync(join(hangOut, 'rig', 'rig.json')) ? (JSON.parse(readFileSync(join(hangOut, 'rig', 'rig.json'), 'utf8')) as RigSpec) : null;
     const link = hangRig?.bones.find((b) => b.name === 'skirt0');
     const skirtRegion = hangRig?.skins.default.bottomwear?.bottomwear as RegionAttachment | undefined;
@@ -22750,7 +22828,7 @@ function runBuildSuite(): number {
     keyed.motion.tracks.push({ bone: 'skirt0', prop: 'scalex', amp: 0.01, period: 1, phase: 0, base: 1 });
     writeFileSync(join(dir, 'keyed.json'), `${JSON.stringify(keyed, null, 2)}\n`);
     const keyedOut = join(dir, 'keyed');
-    const stretched = runCli(buildArgs(dir, keyedOut, 'keyed.json'));
+    const stretched = runBuildCli(buildArgs(dir, keyedOut, 'keyed.json'));
     const keyFail = stretched.out.split('\n').find((l) => l.startsWith('[rig]   FAIL  RIG_KEY_FRAME_UNTURNED: ')) ?? null;
     say(
       'BU10_A_SCALE_KEY_ON_A_TURNED_LINK_STOPS_THE_BUILD_AT_RIG_BY_NAME_AND_NOTHING_AFTER_IT',
@@ -22784,9 +22862,9 @@ function runBuildSuite(): number {
     const notedOut = join(dir, 'scene-noted');
     const plainOut = join(dir, 'scene');
     const halfOut = join(dir, 'scene-half');
-    const noted = runCli(buildArgs(dir, notedOut, 'scene-noted.json'));
-    const plain = runCli(buildArgs(dir, plainOut, 'scene.json'));
-    const half = runCli(buildArgs(dir, halfOut, 'scene-half.json'));
+    const noted = runBuildCli(buildArgs(dir, notedOut, 'scene-noted.json'));
+    const plain = runBuildCli(buildArgs(dir, plainOut, 'scene.json'));
+    const half = runBuildCli(buildArgs(dir, halfOut, 'scene-half.json'));
     const sceneRig = readJsonFile(join(notedOut, 'rig', 'rig.json'));
     const sceneCheck = readJsonFile(join(notedOut, 'check', 'check.json'));
     say(
@@ -22808,7 +22886,7 @@ function runBuildSuite(): number {
 
     writeFileSync(join(dir, 'scene-typo.json'), `${JSON.stringify(sceneCfg({ ...level, mixRotatee: 1 }), null, 2)}\n`);
     const typoOut = join(dir, 'scene-typo');
-    const typo = runCli(buildArgs(dir, typoOut, 'scene-typo.json'));
+    const typo = runBuildCli(buildArgs(dir, typoOut, 'scene-typo.json'));
     const typoLine = typo.out.split('\n').find((l) => l.startsWith('[rig]   FAIL  RIG_RIGC_GREEN: ')) ?? null;
     say(
       'BU15_A_CONSTRAINT_FIELD_RIGC_DOES_NOT_READ_STOPS_THE_BUILD_AT_RIG_IN_RIGCS_WORDS',
@@ -22824,7 +22902,7 @@ function runBuildSuite(): number {
       return pth;
     };
     const badOut = join(dir, 'req-bad');
-    const badReq = runCli([...buildArgs(dir, badOut), '--requirements', reqFile('req-bad', { spec: 'spine-parts-requirements/0', requirements: [] })]);
+    const badReq = runBuildCli([...buildArgs(dir, badOut), '--requirements', reqFile('req-bad', { spec: 'spine-parts-requirements/0', requirements: [] })]);
     say(
       'BU17_A_REQUIREMENTS_FILE_CHECK_WOULD_REFUSE_STOPS_BUILD_BEFORE_ASSEMBLE_WRITES_ANYTHING',
       badReq.status === 1 && badReq.out.includes('[assemble]   FAIL  REQUIREMENTS_FIELD: ') && badReq.out.includes('build: stopped at assemble; no later stage ran') && entries(badOut).length === 0,
@@ -22832,7 +22910,7 @@ function runBuildSuite(): number {
       "the file's own shape needs no rig, so build reads it with the config, before assemble: a malformed file costs no build, as a config rig would refuse costs none",
     );
     const reqOut = join(dir, 'req-out');
-    const swingReq = runCli([...buildArgs(dir, reqOut), '--requirements', reqFile('req-skirt', { requirements: [{ name: 'SKIRT_RANGE', kind: 'range', animation: 'idle', bone: 'skirt', lo_degrees: -3, hi_degrees: 3 }] })]);
+    const swingReq = runBuildCli([...buildArgs(dir, reqOut), '--requirements', reqFile('req-skirt', { requirements: [{ name: 'SKIRT_RANGE', kind: 'range', animation: 'idle', bone: 'skirt', lo_degrees: -3, hi_degrees: 3 }] })]);
     const skirtFig = readJsonFile(join(reqOut, 'check', 'check.json'));
     const skirtLine = ((skirtFig?.requirements as { lines?: Record<string, Record<string, unknown>> } | undefined)?.lines?.SKIRT_RANGE ?? {}) as Record<string, unknown>;
     const lo = Number(skirtLine.least_degrees);
@@ -22851,7 +22929,7 @@ function runBuildSuite(): number {
       "build runs the same check stage with the same flag: the fixture's idle swings the skirt as a sine of amplitude 2 degrees, so its rotation from setup stays within ±2 by hand and goes both ways",
     );
     const unknownOut = join(dir, 'req-unknown');
-    const unknownReq = runCli([...buildArgs(dir, unknownOut), '--requirements', reqFile('req-unknown', { requirements: [{ name: 'TAIL_RANGE', kind: 'range', animation: 'idle', bone: 'tail', lo_degrees: -3, hi_degrees: 3 }] })]);
+    const unknownReq = runBuildCli([...buildArgs(dir, unknownOut), '--requirements', reqFile('req-unknown', { requirements: [{ name: 'TAIL_RANGE', kind: 'range', animation: 'idle', bone: 'tail', lo_degrees: -3, hi_degrees: 3 }] })]);
     say(
       'BU19_A_NAME_THE_BUILT_RIG_DOES_NOT_HAVE_STOPS_BUILD_AT_CHECK_BEFORE_THE_CHECK_BUILDS',
       unknownReq.status === 1 && unknownReq.out.includes('[check]   FAIL  REQUIREMENTS_RESOLVES: requirement "TAIL_RANGE" (range)') && unknownReq.out.includes('build: stopped at check; no later stage ran') && !existsSync(join(unknownOut, 'check', 'build')) && existsSync(join(unknownOut, 'rig', 'rig.json')),
@@ -23026,7 +23104,7 @@ function runBuildSuite(): number {
     writeFileSync(join(dir, 'ik-free.json'), `${JSON.stringify(ikCfg(false), null, 2)}\n`);
 
     const ikCtlOut = join(dir, 'ik-ctl');
-    const ikCtl = runCli(buildArgs(dir, ikCtlOut, 'ik.json'));
+    const ikCtl = runBuildCli(buildArgs(dir, ikCtlOut, 'ik.json'));
     const ikFail = ikCtl.out.split('\n').filter((l) => l.includes('FAIL'));
     say(
       'BU21_BUILD_REFUSES_A_TWO_BONE_IK_OVER_KEYED_LINKS_UNDER_THE_DEFAULT_NAMING_BUILD_IDLE_KEYS_DIRECT',
@@ -23043,7 +23121,7 @@ function runBuildSuite(): number {
     );
 
     const ikOut = join(dir, 'ik-direct');
-    const ik = runCli([...buildArgs(dir, ikOut, 'ik.json'), '--idle-keys', 'direct']);
+    const ik = runBuildCli([...buildArgs(dir, ikOut, 'ik.json'), '--idle-keys', 'direct']);
     const ikRig = existsSync(join(ikOut, 'rig', 'rig.json')) ? (JSON.parse(readFileSync(join(ikOut, 'rig', 'rig.json'), 'utf8')) as RigSpec) : null;
     const ikCheck = readJsonFile(join(ikOut, 'check', 'check.json'));
     const ikGeo = join(ikOut, 'check', 'idle_frames', 'idle', GEOMETRY_FILE);
@@ -23073,8 +23151,8 @@ function runBuildSuite(): number {
     const contact = { name: 'TIP_ON_TARGET', kind: 'contact', animation: 'idle', bone: 'skirt1', point: 'tip', target: { bone: 'tgt', point: 'origin' }, within_px: 0.001 };
     const inOut = join(dir, 'ik-req-in');
     const farOut = join(dir, 'ik-req-far');
-    const inReq = runCli([...buildArgs(dir, inOut, 'ik.json'), '--idle-keys', 'direct', '--requirements', reqFile('ik-in', { requirements: [contact] })]);
-    const farReq = runCli([...buildArgs(dir, farOut, 'ik.json'), '--idle-keys', 'direct', '--requirements', reqFile('ik-far', { targets: [{ bone: 'tgt', animation: 'idle', at: [ikX, skirtBox.y + 24] }], requirements: [contact] })]);
+    const inReq = runBuildCli([...buildArgs(dir, inOut, 'ik.json'), '--idle-keys', 'direct', '--requirements', reqFile('ik-in', { requirements: [contact] })]);
+    const farReq = runBuildCli([...buildArgs(dir, farOut, 'ik.json'), '--idle-keys', 'direct', '--requirements', reqFile('ik-far', { targets: [{ bone: 'tgt', animation: 'idle', at: [ikX, skirtBox.y + 24] }], requirements: [contact] })]);
     const lineOf = (o: string): Record<string, unknown> => (((readJsonFile(join(o, 'check', 'check.json'))?.requirements as { lines?: Record<string, Record<string, unknown>> } | undefined)?.lines?.TIP_ON_TARGET ?? {}) as Record<string, unknown>);
     const inLine = lineOf(inOut);
     const farLine = lineOf(farOut);
@@ -23094,7 +23172,7 @@ function runBuildSuite(): number {
     // so ctl gives each a control): the first two must be the same build, byte for byte and line for line.
     const twin = (flag: string[], name: string): { out: string; lines: string[]; status: number } => {
       const o = join(dir, name);
-      const r = runCli([...buildArgs(dir, o, 'ik-free.json'), ...flag]);
+      const r = runBuildCli([...buildArgs(dir, o, 'ik-free.json'), ...flag]);
       return { out: o, status: r.status, lines: r.out.split(o).join('<out>').split('\n') };
     };
     const bare = twin([], 'twin-bare');
@@ -23119,7 +23197,7 @@ function runBuildSuite(): number {
     // constraints removed, period 2 against period 1). The plants are the refusals: an idle track that does not end
     // at the duration, the flag without --loop, and a count of 0.
     const leadOut = join(dir, 'lead-in');
-    const lead = runCli([...buildArgs(dir, leadOut), '--loop', '--lead-in', '1']);
+    const lead = runBuildCli([...buildArgs(dir, leadOut), '--loop', '--lead-in', '1']);
     const leadLine = lead.out.split('\n').find((l) => l.includes('lead-in: 1 period(s)')) ?? '';
     const encoded = (text: string): string => /(\d+) frame\(s\) encoded/.exec(text)?.[1] ?? 'none';
     const sameLoop = existsSync(join(leadOut, 'idle.png')) && encoded(lead.out) === encoded(green.out) && encoded(green.out) !== 'none';
@@ -23129,8 +23207,8 @@ function runBuildSuite(): number {
     const repeatOk = repeated[LEAD_IN_ANIMATION].duration === 2 && lk.map((k) => k.t).join(',') === '0,0.5,1,1.5,2' && JSON.stringify(lk[2].curve) === '[1.25,0,1.75,2]';
     const shortIdle = { animations: { idle: { duration: 1, tracks: [{ bone: 'b', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [2] }] }] } } };
     const shortErr = refusals(() => repeatIdle(shortIdle, 1));
-    const noLoop = runCli([...buildArgs(dir, join(dir, 'lead-no-loop')), '--lead-in', '1']);
-    const zero = runCli([...buildArgs(dir, join(dir, 'lead-zero')), '--loop', '--lead-in', '0']);
+    const noLoop = runBuildCli([...buildArgs(dir, join(dir, 'lead-no-loop')), '--lead-in', '1']);
+    const zero = runBuildCli([...buildArgs(dir, join(dir, 'lead-zero')), '--loop', '--lead-in', '0']);
     say(
       'BU25_BUILD_LOOP_LEAD_IN_KEEPS_THE_LAST_PERIOD_AND_A_PERIODIC_IDLE_LOOPS_AS_WITHOUT_IT',
       lead.status === 0 && /kept \(\d+ frame\(s\), the last period\); f\d+, one period after f\d+, differs from it by max \|d\| 0, 0 px over 40/.test(leadLine) && sameLoop && repeatOk &&
@@ -23144,10 +23222,10 @@ function runBuildSuite(): number {
     // layer stops at [assemble] with ASSEMBLE_SINGLE_RUN_FACE and writes nothing.
     const artDir = join(dir, 'artist');
     writeArtistFixture(artDir);
-    const single = runCli(['build', '--config', join(artDir, 'config.json'), '--source', join(artDir, 'painting.png'), '--full', join(artDir, 'art.psd'), '--out', join(artDir, 'out')]);
+    const single = runBuildCli(['build', '--config', join(artDir, 'config.json'), '--source', join(artDir, 'painting.png'), '--full', join(artDir, 'art.psd'), '--out', join(artDir, 'out')]);
     const facelessDir = join(dir, 'artist-faceless');
     writeArtistFixture(facelessDir, { drop: ['face'], config: { ...artistConfig(), assemble: { rig_scale: 1, plan: ARTIST_PLAN.filter(([, , t]) => t !== 'face') }, regions: Object.fromEntries(ARTIST_PLAN.filter(([, , t]) => t !== 'face').map((p) => [p[0], p[0] === 'topwear' ? 'chest' : 'anchor'])) } });
-    const faceless = runCli(['build', '--config', join(facelessDir, 'config.json'), '--source', join(facelessDir, 'painting.png'), '--full', join(facelessDir, 'art.psd'), '--out', join(facelessDir, 'out')]);
+    const faceless = runBuildCli(['build', '--config', join(facelessDir, 'config.json'), '--source', join(facelessDir, 'painting.png'), '--full', join(facelessDir, 'art.psd'), '--out', join(facelessDir, 'out')]);
     const facelessFail = faceless.out.split('\n').filter((l) => l.includes('FAIL  '));
     say(
       'BU167_A_SINGLE_RUN_BUILD_FROM_AN_ARTIST_PSD_IS_GREEN_AND_ONE_WITHOUT_ITS_FACE_STOPS_AT_ASSEMBLE',
@@ -23168,12 +23246,12 @@ function runBuildSuite(): number {
     // with the square file's 128x128 painting stops at [assemble] with ASSEMBLE_SINGLE_RUN_SOURCE and writes nothing.
     const portDir = join(dir, 'artist-portrait');
     writeArtistFixture(portDir, { portrait: true });
-    const port = runCli(['build', '--config', join(portDir, 'config.json'), '--source', join(portDir, 'painting.png'), '--full', join(portDir, 'art.psd'), '--out', join(portDir, 'out')]);
+    const port = runBuildCli(['build', '--config', join(portDir, 'config.json'), '--source', join(portDir, 'painting.png'), '--full', join(portDir, 'art.psd'), '--out', join(portDir, 'out')]);
     const portParts = join(portDir, 'out', 'parts.json');
     const portPad = existsSync(portParts) ? JSON.stringify(readParts(portParts).single_run_pad) : 'no parts.json';
     const wrongSizeDir = join(dir, 'artist-portrait-square-painting');
     writeArtistFixture(wrongSizeDir, { portrait: true, painting: {} });
-    const wrongSize = runCli(['build', '--config', join(wrongSizeDir, 'config.json'), '--source', join(wrongSizeDir, 'painting.png'), '--full', join(wrongSizeDir, 'art.psd'), '--out', join(wrongSizeDir, 'out')]);
+    const wrongSize = runBuildCli(['build', '--config', join(wrongSizeDir, 'config.json'), '--source', join(wrongSizeDir, 'painting.png'), '--full', join(wrongSizeDir, 'art.psd'), '--out', join(wrongSizeDir, 'out')]);
     const wrongSizeFail = wrongSize.out.split('\n').filter((l) => l.includes('FAIL  '));
     say(
       'BU168_A_PORTRAIT_SINGLE_RUN_BUILD_IS_PADDED_AND_GREEN_AND_ONE_WITH_ANOTHER_SIZE_OF_PAINTING_STOPS_AT_ASSEMBLE',
@@ -23209,12 +23287,12 @@ function runBuildSuite(): number {
     ];
     writeAssembleFixture(altDir, altCfg);
     const altOut = join(altDir, 'out');
-    const altRun = runCli([...buildArgs(altDir, altOut), '--alt', `body_side=${join(altDir, 'painting.png')}:${join(altDir, 'full')}:${join(altDir, 'head')}`]);
+    const altRun = runBuildCli([...buildArgs(altDir, altOut), '--alt', `body_side=${join(altDir, 'painting.png')}:${join(altDir, 'full')}:${join(altDir, 'head')}`]);
     const altSetsPath = join(altOut, 'rig', 'sets.json');
     const altSets = existsSync(altSetsPath) ? readJsonFile(altSetsPath) : null;
     const altAtlas = existsSync(join(altOut, 'check', 'build', 'skeleton.atlas')) ? readFileSync(join(altOut, 'check', 'build', 'skeleton.atlas'), 'utf8') : '';
-    const missingAlt = runCli([...buildArgs(dir, join(dir, 'alt-missing')), '--alt', `side=${join(dir, 'no-such.png')}:${join(dir, 'full')}:${join(dir, 'head')}`]);
-    const canvasAlt = runCli([...buildArgs(dir, join(dir, 'alt-canvas')), '--alt', `side=${join(portDir, 'painting.png')}:${join(dir, 'full')}:${join(dir, 'head')}`]);
+    const missingAlt = runBuildCli([...buildArgs(dir, join(dir, 'alt-missing')), '--alt', `side=${join(dir, 'no-such.png')}:${join(dir, 'full')}:${join(dir, 'head')}`]);
+    const canvasAlt = runBuildCli([...buildArgs(dir, join(dir, 'alt-canvas')), '--alt', `side=${join(portDir, 'painting.png')}:${join(dir, 'full')}:${join(dir, 'head')}`]);
     say(
       'BU169_ALTERNATE_PAINTINGS_EMIT_SUBSET_AND_FULL_ATTACHMENT_SETS_AND_SETS_JSON_AND_REFUSE_MISSING_OR_MISMATCHED_INPUTS',
       altRun.status === 0 &&
@@ -23298,10 +23376,10 @@ function runBuildSuite(): number {
       )}\n`,
     );
     const posedOut = join(posedDir, 'out');
-    const posedRun = runCli([...buildArgs(posedDir, posedOut), '--all-sets']);
+    const posedRun = runBuildCli([...buildArgs(posedDir, posedOut), '--all-sets']);
     const posedSets = existsSync(join(posedOut, 'rig', 'sets.json')) ? readJsonFile(join(posedOut, 'rig', 'sets.json')) : null;
     const posedSetDrawn = (posedSets?.sets as Record<string, Record<string, unknown>> | undefined)?.posed?.drawn;
-    const badSetRun = runCli(['check', '--rig', join(posedOut, 'rig'), '--parts', posedOut, '--out', join(posedDir, 'bad-set'), '--set', 'no_such_set']);
+    const badSetRun = runBuildCli(['check', '--rig', join(posedOut, 'rig'), '--parts', posedOut, '--out', join(posedDir, 'bad-set'), '--set', 'no_such_set']);
     const posedRigPath = join(posedOut, 'rig', 'rig.json');
     const posedRigDoc = JSON.parse(readFileSync(posedRigPath, 'utf8')) as { skins: { default: Record<string, Record<string, unknown>> } };
     posedRigDoc.skins.default.bottomwear.posed_bottomwear = {
@@ -23309,7 +23387,7 @@ function runBuildSuite(): number {
       image: 'posed_bottomwear.png',
     };
     writeFileSync(posedRigPath, `${JSON.stringify(posedRigDoc, null, 2)}\n`);
-    const uncompRun = runCli(['check', '--rig', join(posedOut, 'rig'), '--parts', posedOut, '--out', join(posedDir, 'uncomp-check'), '--set', 'posed']);
+    const uncompRun = runBuildCli(['check', '--rig', join(posedOut, 'rig'), '--parts', posedOut, '--out', join(posedDir, 'uncomp-check'), '--set', 'posed']);
     say(
       'BU170_POSED_ALTERNATE_SET_COMPENSATES_DRAWN_BONE_ANGLES_AND_DROPPING_COMPENSATION_FAILS_SEAM_AND_FOLDS',
       posedRun.status === 0 &&
@@ -23380,7 +23458,7 @@ function runBuildSuite(): number {
       )}\n`,
     );
     const visOut = join(visDir, 'out');
-    const visRun = runCli([...buildArgs(visDir, visOut), '--all-sets', '--alt', `body_side=${join(visDir, 'painting.png')}:${join(visDir, 'full')}:${join(visDir, 'head')}`]);
+    const visRun = runBuildCli([...buildArgs(visDir, visOut), '--all-sets', '--alt', `body_side=${join(visDir, 'painting.png')}:${join(visDir, 'full')}:${join(visDir, 'head')}`]);
     const visRig = existsSync(join(visOut, 'rig', 'rig.json')) ? readJsonFile(join(visOut, 'rig', 'rig.json')) : null;
     const visSets = existsSync(join(visOut, 'rig', 'sets.json')) ? readJsonFile(join(visOut, 'rig', 'sets.json')) : null;
     const visSetsMap = (visSets?.sets ?? {}) as Record<string, unknown>;
@@ -23443,7 +23521,7 @@ function runBuildSuite(): number {
         },
       }),
     );
-    const uncovRun = runCli(buildArgs(uncovDir, join(uncovDir, 'out')));
+    const uncovRun = runBuildCli(buildArgs(uncovDir, join(uncovDir, 'out')));
 
     const missLayerDir = join(dir, 'viseme-missing-layer');
     const missLayerCfg = JSON.parse(JSON.stringify(visCfg)) as Record<string, unknown>;
@@ -23453,7 +23531,7 @@ function runBuildSuite(): number {
     ];
     writeAssembleFixture(missLayerDir, missLayerCfg, undefined, { full: FULL_LAYERS, head: baseMouthHead });
     writeRun(join(missLayerDir, 'head_no_mouth'), HEAD_LAYERS);
-    const missLayerRun = runCli(buildArgs(missLayerDir, join(missLayerDir, 'out')));
+    const missLayerRun = runBuildCli(buildArgs(missLayerDir, join(missLayerDir, 'out')));
 
     // Bar 4: on the posed rig where bottomwear folds in pose_set, a subset set covering only ["face"] passes check --set
     // because ANIMATIONS_DO_NOT_FOLD counts folds only on the subset set's own slots.
@@ -23484,7 +23562,7 @@ function runBuildSuite(): number {
     const posedSetsDoc = JSON.parse(readFileSync(posedSetsPath, 'utf8')) as { sets: Record<string, unknown> };
     posedSetsDoc.sets.a = { slots: { face: 'a_face' } };
     writeFileSync(posedSetsPath, `${JSON.stringify(posedSetsDoc, null, 2)}\n`);
-    const subsetFoldRun = runCli(['check', '--rig', join(posedOut, 'rig'), '--parts', posedOut, '--out', join(posedDir, 'subset-check'), '--set', 'a']);
+    const subsetFoldRun = runBuildCli(['check', '--rig', join(posedOut, 'rig'), '--parts', posedOut, '--out', join(posedDir, 'subset-check'), '--set', 'a']);
     say(
       'BU171_SUBSET_SETS_COVER_ONE_REGION_AND_TRACK_SET_KEYS_SWITCH_IT_WITH_ZERO_OUTSIDE_DIFF_AND_REFUSE_UNCOVERED_OR_MISSING_LAYERS',
       visRun.status === 0 &&
@@ -23565,7 +23643,7 @@ function runBuildSuite(): number {
     const noGestDir = join(gestDir, 'no-gesture');
     writeAssembleFixture(noGestDir, gestBaseCfg, undefined, { full: baseArmFull, head: HEAD_LAYERS });
     const noGestOut = join(noGestDir, 'out');
-    const noGestRun = runCli(buildArgs(noGestDir, noGestOut));
+    const noGestRun = runBuildCli(buildArgs(noGestDir, noGestOut));
 
     const withGestCfg = JSON.parse(JSON.stringify(gestBaseCfg)) as Record<string, unknown>;
     (withGestCfg.assemble as Record<string, unknown>).alternates = [
@@ -23583,7 +23661,7 @@ function runBuildSuite(): number {
     writeAssembleFixture(withGestStaticDir, withGestCfg, undefined, { full: baseArmFull, head: HEAD_LAYERS });
     writeRun(join(withGestStaticDir, 'full_wave'), waveArmFull);
     const withGestStaticOut = join(withGestStaticDir, 'out');
-    const withGestStaticRun = runCli(buildArgs(withGestStaticDir, withGestStaticOut));
+    const withGestStaticRun = runBuildCli(buildArgs(withGestStaticDir, withGestStaticOut));
     const noGestRigDoc = existsSync(join(noGestOut, 'rig', 'rig.json'))
       ? (readJsonFile(join(noGestOut, 'rig', 'rig.json')) as Record<string, unknown>)
       : null;
@@ -23662,7 +23740,7 @@ function runBuildSuite(): number {
       )}\n`,
     );
     const waveOut = join(waveDir, 'out');
-    const waveRun = runCli([
+    const waveRun = runBuildCli([
       ...buildArgs(waveDir, waveOut),
       '--all-sets',
       '--keep-stills',
@@ -23863,7 +23941,7 @@ function runBuildSuite(): number {
     const badBoneCfg = JSON.parse(JSON.stringify(withGestCfg)) as Record<string, unknown>;
     ((badBoneCfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0].drawn as Record<string, number>).chest = 15;
     writeAssembleFixture(badBoneDir, badBoneCfg, undefined, { full: baseArmFull, head: HEAD_LAYERS });
-    const badBoneRun = runCli(buildArgs(badBoneDir, join(badBoneDir, 'out')));
+    const badBoneRun = runBuildCli(buildArgs(badBoneDir, join(badBoneDir, 'out')));
 
     const forgedParts = readParts(join(waveOut, 'parts.json'));
     const forgedPartSet = readPartSet(waveOut);
@@ -23882,7 +23960,7 @@ function runBuildSuite(): number {
     const badLimbPartsCfg = JSON.parse(JSON.stringify(withGestCfg)) as Record<string, unknown>;
     (badLimbPartsCfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0].parts = ['upperarm_r', 'forearm_r'];
     writeAssembleFixture(badLimbPartsDir, badLimbPartsCfg, undefined, { full: baseArmFull, head: HEAD_LAYERS });
-    const badLimbPartsRun = runCli(buildArgs(badLimbPartsDir, join(badLimbPartsDir, 'out')));
+    const badLimbPartsRun = runBuildCli(buildArgs(badLimbPartsDir, join(badLimbPartsDir, 'out')));
 
     const badJointArtDir = join(gestDir, 'bad-joint-art');
     const badJointArtCfg = JSON.parse(JSON.stringify(withGestCfg)) as Record<string, unknown>;
@@ -23903,7 +23981,7 @@ function runBuildSuite(): number {
         ],
       },
     ]);
-    const badJointArtRun = runCli(buildArgs(badJointArtDir, join(badJointArtDir, 'out')));
+    const badJointArtRun = runBuildCli(buildArgs(badJointArtDir, join(badJointArtDir, 'out')));
 
     say(
       'BU172_GESTURE_LIMB_SUBSET_SET_CUTS_AT_BASE_JOINTS_EMITS_DRAWN_SWITCHES_AND_RESTORES_BYTE_IDENTICALLY_AND_ROTATES_FOREARM_BY_30_DEG',
@@ -24115,10 +24193,10 @@ function runBuildSuite(): number {
     writeFileSync(join(outfitDir, 'config.json'), `${JSON.stringify(outfitCombinedCfg, null, 2)}\n`);
 
     const outfitBaseOut = join(outfitDir, 'out_base');
-    const outfitBaseRun = runCli(buildArgs(outfitDir, outfitBaseOut, 'base_config.json'));
+    const outfitBaseRun = runBuildCli(buildArgs(outfitDir, outfitBaseOut, 'base_config.json'));
     const outfitCombinedOut = join(outfitDir, 'out');
-    const outfitCombinedRun = runCli([...buildArgs(outfitDir, outfitCombinedOut), '--all-sets']);
-    const outfitCheckSetRun = runCli([
+    const outfitCombinedRun = runBuildCli([...buildArgs(outfitDir, outfitCombinedOut), '--all-sets']);
+    const outfitCheckSetRun = runBuildCli([
       'check',
       '--rig',
       join(outfitCombinedOut, 'rig'),
@@ -24203,7 +24281,7 @@ function runBuildSuite(): number {
       'upperarm_r',
     ];
     writeFileSync(join(outfitDir, 'trap_partial_limb.json'), `${JSON.stringify(trap1Cfg, null, 2)}\n`);
-    const trap1Run = runCli(buildArgs(outfitDir, join(outfitDir, 'out_t1'), 'trap_partial_limb.json'));
+    const trap1Run = runBuildCli(buildArgs(outfitDir, join(outfitDir, 'out_t1'), 'trap_partial_limb.json'));
 
     const trap1HidesCfg = JSON.parse(JSON.stringify(outfitCombinedCfg)) as Record<string, unknown>;
     ((trap1HidesCfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).parts = [
@@ -24217,7 +24295,7 @@ function runBuildSuite(): number {
       'forearm_r',
     ];
     writeFileSync(join(outfitDir, 'trap_hides_limb.json'), `${JSON.stringify(trap1HidesCfg, null, 2)}\n`);
-    const trap1HidesRun = runCli(buildArgs(outfitDir, join(outfitDir, 'out_t1_hides'), 'trap_hides_limb.json'));
+    const trap1HidesRun = runBuildCli(buildArgs(outfitDir, join(outfitDir, 'out_t1_hides'), 'trap_hides_limb.json'));
 
     // Trap 2: wide sleeve swallowed into topwear (`ASSEMBLE_PART_OPAQUE`, `ASSEMBLE_LIMB_PIXELS`, `ASSEMBLE_LIMB_JOINT_ON_ART`).
     writeRun(
@@ -24227,7 +24305,7 @@ function runBuildSuite(): number {
     const trap2OpaqueCfg = JSON.parse(JSON.stringify(outfitCombinedCfg)) as Record<string, unknown>;
     ((trap2OpaqueCfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).full = 'full_b_speck';
     writeFileSync(join(outfitDir, 'trap_wide_opaque.json'), `${JSON.stringify(trap2OpaqueCfg, null, 2)}\n`);
-    const trap2OpaqueRun = runCli(buildArgs(outfitDir, join(outfitDir, 'out_t2_opaque'), 'trap_wide_opaque.json'));
+    const trap2OpaqueRun = runBuildCli(buildArgs(outfitDir, join(outfitDir, 'out_t2_opaque'), 'trap_wide_opaque.json'));
 
     writeRun(
       join(outfitDir, 'full_b_wrist_only'),
@@ -24238,7 +24316,7 @@ function runBuildSuite(): number {
     const trap2PixelsCfg = JSON.parse(JSON.stringify(outfitCombinedCfg)) as Record<string, unknown>;
     ((trap2PixelsCfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).full = 'full_b_wrist_only';
     writeFileSync(join(outfitDir, 'trap_wide_pixels.json'), `${JSON.stringify(trap2PixelsCfg, null, 2)}\n`);
-    const trap2PixelsRun = runCli(buildArgs(outfitDir, join(outfitDir, 'out_t2_pixels'), 'trap_wide_pixels.json'));
+    const trap2PixelsRun = runBuildCli(buildArgs(outfitDir, join(outfitDir, 'out_t2_pixels'), 'trap_wide_pixels.json'));
 
     writeRun(
       join(outfitDir, 'full_b_wide'),
@@ -24257,7 +24335,7 @@ function runBuildSuite(): number {
     const trap2Cfg = JSON.parse(JSON.stringify(outfitCombinedCfg)) as Record<string, unknown>;
     ((trap2Cfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).full = 'full_b_wide';
     writeFileSync(join(outfitDir, 'trap_wide_sleeve.json'), `${JSON.stringify(trap2Cfg, null, 2)}\n`);
-    const trap2Run = runCli(buildArgs(outfitDir, join(outfitDir, 'out_t2'), 'trap_wide_sleeve.json'));
+    const trap2Run = runBuildCli(buildArgs(outfitDir, join(outfitDir, 'out_t2'), 'trap_wide_sleeve.json'));
 
     // Trap 2 resolution B: omitting unchanged arm segments from both `parts` and `hides` keeps the base arm and builds green.
     const keepBaseArmCfg = JSON.parse(JSON.stringify(outfitCombinedCfg)) as Record<string, unknown>;
@@ -24269,7 +24347,7 @@ function runBuildSuite(): number {
     ];
     ((keepBaseArmCfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).hides = ['hairpin'];
     writeFileSync(join(outfitDir, 'keep_base_arm_config.json'), `${JSON.stringify(keepBaseArmCfg, null, 2)}\n`);
-    const keepBaseArmRun = runCli(buildArgs(outfitDir, join(outfitDir, 'out_keep_arm'), 'keep_base_arm_config.json'));
+    const keepBaseArmRun = runBuildCli(buildArgs(outfitDir, join(outfitDir, 'out_keep_arm'), 'keep_base_arm_config.json'));
 
     // Trap 3: missing layer (`ASSEMBLE_ALT_INPUT_PRESENT`) and wrong canvas (`ASSEMBLE_ALT_CANVAS_SIZE`).
     writeRun(
@@ -24279,7 +24357,7 @@ function runBuildSuite(): number {
     const trap3Cfg = JSON.parse(JSON.stringify(outfitCombinedCfg)) as Record<string, unknown>;
     ((trap3Cfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).full = 'full_b_missing';
     writeFileSync(join(outfitDir, 'trap_missing_layer.json'), `${JSON.stringify(trap3Cfg, null, 2)}\n`);
-    const trap3Run = runCli(buildArgs(outfitDir, join(outfitDir, 'out_t3'), 'trap_missing_layer.json'));
+    const trap3Run = runBuildCli(buildArgs(outfitDir, join(outfitDir, 'out_t3'), 'trap_missing_layer.json'));
 
     writeFileSync(
       join(outfitDir, 'painting_b_64.png'),
@@ -24288,7 +24366,7 @@ function runBuildSuite(): number {
     const trap4Cfg = JSON.parse(JSON.stringify(outfitCombinedCfg)) as Record<string, unknown>;
     ((trap4Cfg.assemble as { alternates: Array<Record<string, unknown>> }).alternates[0]).source = 'painting_b_64.png';
     writeFileSync(join(outfitDir, 'trap_canvas_size.json'), `${JSON.stringify(trap4Cfg, null, 2)}\n`);
-    const trap4Run = runCli(buildArgs(outfitDir, join(outfitDir, 'out_t4'), 'trap_canvas_size.json'));
+    const trap4Run = runBuildCli(buildArgs(outfitDir, join(outfitDir, 'out_t4'), 'trap_canvas_size.json'));
 
     say(
       'BU173_OUTFIT_TRANSACTION_KEEPS_BONES_DRAWN_FACE_AXIS_IDLE_RE_RUNS_CLOTHING_MESH_COMPOSES_VISEMES_AND_REFUSES_SLEEVE_TRAPS',
@@ -24393,7 +24471,7 @@ function runBuildSuite(): number {
     const shinDir = join(skDir, 'shin-half');
     writeSkFixture(shinDir, [runSet], { full_run: runFull }, { 'run_pose.json': poseFile({ r_ankle: [34, 46] }) });
     const shinOut = join(shinDir, 'out');
-    const shinRun = runCli([...buildArgs(shinDir, shinOut), '--all-sets']);
+    const shinRun = runBuildCli([...buildArgs(shinDir, shinOut), '--all-sets']);
     const shinSets = readJsonFile(join(shinOut, 'rig', 'sets.json')) as { sets?: Record<string, { drawnLength?: Record<string, number>; registration?: unknown }> } | null;
     const shinEntry = shinSets?.sets?.run;
     const shinParts = existsSync(join(shinOut, 'parts.json')) ? readParts(join(shinOut, 'parts.json')) : null;
@@ -24451,7 +24529,7 @@ function runBuildSuite(): number {
     // torso's midpoint (24.5, 27), offset [24.5, 27] - (1 / 1.2) * 1.2 * [44.5, 27] = [-20, 0].
     const regDir = join(skDir, 'unregistered');
     writeSkFixture(regDir, [runSet], { full_run: runFull }, { 'run_pose.json': poseFile({ r_ankle: [34, 46] }, (p) => [1.2 * (p[0] + 20), 1.2 * p[1]]) });
-    const regRun = runCli(buildArgs(regDir, join(regDir, 'out')));
+    const regRun = runBuildCli(buildArgs(regDir, join(regDir, 'out')));
     const regLine = regRun.out.split('\n').find((l) => l.includes('FAIL  ASSEMBLE_ALT_SKELETON_REGISTERED:')) ?? '';
     say(
       'BU176_A_SKELETON_SET_FRAMED_OFF_THE_BASE_TORSO_IS_REFUSED_WITH_THE_OFFSET_AND_SCALE_IT_NEEDS',
@@ -24477,7 +24555,7 @@ function runBuildSuite(): number {
       const at = join(skDir, label);
       writeSkFixture(at, [{ ...waveSetBase, ...extra }], { full_wave: waveArmFull }, { 'wave_pose.json': wavePose });
       const out = join(at, 'out');
-      return { run: runCli(buildArgs(at, out)), out };
+      return { run: runBuildCli(buildArgs(at, out)), out };
     };
     const eqDrawn = eqBuild('wave-drawn', { drawn: { arm_r0: -30, arm_r1: 0, arm_r2: 30 } });
     const eqSkel = eqBuild('wave-skeleton', { skeleton: 'wave_pose.json', drawn: { arm_r0: -30, arm_r1: 0, arm_r2: 30 } });
@@ -24598,10 +24676,10 @@ function runBuildSuite(): number {
 
     const shortsGreenDir = shortsFixture('green', shortsConfig(false));
     const shortsGreenOut = join(shortsGreenDir, 'out');
-    const shortsGreen = runCli([...buildArgs(shortsGreenDir, shortsGreenOut), '--all-sets']);
+    const shortsGreen = runBuildCli([...buildArgs(shortsGreenDir, shortsGreenOut), '--all-sets']);
     const shortsBaseDir = shortsFixture('no-sets', shortsConfig(false, false));
     const shortsBaseOut = join(shortsBaseDir, 'out');
-    const shortsBase = runCli(buildArgs(shortsBaseDir, shortsBaseOut));
+    const shortsBase = runBuildCli(buildArgs(shortsBaseDir, shortsBaseOut));
     const greenHeld = inShorts(shortsGreenOut);
     const greenCheck = existsSync(join(shortsGreenOut, 'check', 'check.json'))
       ? (readJsonFile(join(shortsGreenOut, 'check', 'check.json')) as { PASS?: boolean; sets?: Record<string, { PASS?: boolean }> })
@@ -24718,7 +24796,7 @@ function runBuildSuite(): number {
 
     const islandGreenDir = islandFixture('green', islandSets);
     const islandGreenOut = join(islandGreenDir, 'out');
-    const islandGreen = runCli([...buildArgs(islandGreenDir, islandGreenOut), '--all-sets']);
+    const islandGreen = runBuildCli([...buildArgs(islandGreenDir, islandGreenOut), '--all-sets']);
     const islandHeld = setIslands(islandGreenOut, islandSets);
     const islandGreenCheck = existsSync(join(islandGreenOut, 'check', 'check.json'))
       ? (readJsonFile(join(islandGreenOut, 'check', 'check.json')) as { PASS?: boolean; sets?: Record<string, { PASS?: boolean }> })
@@ -24809,7 +24887,7 @@ function runBuildSuite(): number {
     ];
     const ambDir = islandFixture('ambiguous', ambSets);
     const ambOut = join(ambDir, 'out');
-    const amb = runCli([...buildArgs(ambDir, ambOut), '--all-sets']);
+    const amb = runBuildCli([...buildArgs(ambDir, ambOut), '--all-sets']);
     const ambLines = amb.out.split('\n').filter((l) => l.includes('ASSEMBLE_ALT_LIMB_ISLAND'));
     const LEFT_ISLAND = '320 px at 34,10 8x40';
     const offWant = `config.limbs.leg_r.segments[0] (part "thigh_r") (alternate set "off_r") — takes "legs", which holds 2 islands (8-connected, alpha above 8): island 1 (${LEFT_ISLAND}), island 2 (${8 * 38} px at 22,12 8x38); the set names one of the limbs that take "legs", so the segment keeps the island its joints fall on, and its joint "leg_r0"'s origin at [26, 10] is on none of them`;
@@ -24996,7 +25074,7 @@ function runBuildSuite(): number {
     ];
     const spRefDir = spFixture('refused', spRefusedSets);
     const spRefOut = join(spRefDir, 'out');
-    const spRef = runCli([...buildArgs(spRefDir, spRefOut), '--all-sets']);
+    const spRef = runBuildCli([...buildArgs(spRefDir, spRefOut), '--all-sets']);
     const spRefLines = spRef.out.split('\n').filter((l) => l.includes('ASSEMBLE_ALT_LIMB_ISLAND'));
     const spHead = (set: string, islands: string): string =>
       `config.limbs.leg_r.segments[1] (part "shin_r") (alternate set "${set}") — takes "legs", which holds 2 islands (8-connected, alpha above 8): ${islands}; the set names one of the limbs that take "legs", so the segment keeps the island its joints fall on, and its joint "foot_r"'s origin at [26, 52] is on none of them — no pixel touching the point has alpha above 8; the nearest pixel centre of each: `;
@@ -25378,9 +25456,9 @@ function runBuildSuite(): number {
     // shin. leg_l's parts are drawn after leg_r's (config.limbs order), so cross_l keeps its 16 and cross_r gives them.
     const crossGreenDir = crossFixture('green', crossSets, 'skeleton');
     const crossGreenOut = join(crossGreenDir, 'out');
-    const crossGreen = runCli([...buildArgs(crossGreenDir, crossGreenOut), '--all-sets']);
+    const crossGreen = runBuildCli([...buildArgs(crossGreenDir, crossGreenOut), '--all-sets']);
     const crossNoSetsDir = crossFixture('no-sets', [], 'skeleton');
-    const crossNoSets = runCli(buildArgs(crossNoSetsDir, join(crossNoSetsDir, 'out')));
+    const crossNoSets = runBuildCli(buildArgs(crossNoSetsDir, join(crossNoSetsDir, 'out')));
     const crossLint = splitLint(crossGreen.out);
     const bandOf = (set: string, part: string): string => /; (\d+) px in the overlap band \(nearer one line than the other by 0\.5 px or less\) went to the limb drawn in front, (\d+) kept and (\d+) given$/.exec(crossLint.find((l) => l.startsWith(`LINT set "${set}" ${part}: `)) ?? '')?.slice(1).join('/') ?? 'none';
     const crossCheck = existsSync(join(crossGreenOut, 'check', 'check.json')) ? (readJsonFile(join(crossGreenOut, 'check', 'check.json')) as { PASS?: boolean; sets?: Record<string, { PASS?: boolean }> }) : null;
@@ -25436,7 +25514,7 @@ function runBuildSuite(): number {
     // column, so all of the base's other-leg art, [22, 30) or [34, 42) x [20, 50) = 8 x 30 = 240 px, lies under it.
     const crossDrawnDir = crossFixture('drawn', crossSets, 'drawn');
     const crossDrawnOut = join(crossDrawnDir, 'out');
-    const crossDrawn = runCli([...buildArgs(crossDrawnDir, crossDrawnOut), '--all-sets']);
+    const crossDrawn = runBuildCli([...buildArgs(crossDrawnDir, crossDrawnOut), '--all-sets']);
     const poseLines = crossDrawn.out.split('\n').filter((l) => l.includes('FAIL  ASSEMBLE_ALT_LIMB_POSE: '));
     const poseWant = (set: string, own: string, other: string, side: string): string =>
       `part "legs" (config.limbs.${own}, and config.limbs.${other}) (alternate set "${set}") — holds one island (8-connected, alpha above 8), and ${8 * 30} of its px lie where the base build draws ${other} ("thigh_${side}", "shin_${side}") at setup, so the layer holds both ${own} and ${other}; the set carries ${own} alone, so each pixel goes to the limb whose segment line is nearest it in the set's pose, and the set does not pose ${other}: its drawn names none of "${other}0", "${other}1", nor an ancestor of one; its place in the set is never taken from the base's — drawn would need "${other}0", "${other}1", which a subset set may not state for a bone it does not cover (CONFIG_SET_COVERS_BONE)`;
@@ -25472,7 +25550,7 @@ function runBuildSuite(): number {
     ];
     const sideDir = crossFixture('side', sideSets, 'skeleton');
     const sideOut = join(sideDir, 'out');
-    const side = runCli([...buildArgs(sideDir, sideOut), '--all-sets']);
+    const side = runBuildCli([...buildArgs(sideDir, sideOut), '--all-sets']);
     const overlapLines = side.out.split('\n').filter((l) => l.includes('FAIL  ASSEMBLE_ALT_LIMB_OVERLAP: '));
     const overlapWant =
       'config.limbs.leg_l (part "legs", and config.limbs.leg_r) (alternate set "side_l") — takes "legs", which holds leg_l and leg_r in one island, and in the set\'s pose leg_r\'s segment line runs within 5 px (leg_l\'s half-width, the least cap radius of its joints) of leg_l\'s, across leg_l, at 42 of the 42 readings 1 px apart along leg_l\'s line where leg_r\'s passes within 10 px (1; more than 0.5 is most)';
