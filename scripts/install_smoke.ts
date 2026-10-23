@@ -68,11 +68,13 @@
  * until a publish makes it one (that is `--source registry`), and a green run is
  * one platform's answer, the runner's.
  */
+import { runWithoutBun } from './smoke_without_bun.ts';
+import { checkSmokeWithoutBun } from './check_smoke_without_bun.ts';
 import { findSmokeExecutable, isSmokePathInside, runSmokeCommand } from './smoke_process.ts';
 import { checkSmokeProcess } from './check_smoke_process.ts';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AliasTarballError, compareTarballs } from './alias_tarball.ts';
 
@@ -731,16 +733,19 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
   } else notes.push(`an auto mesh built from the install, passed the installed rigc's gate and its motion gate: ${autoLine.trim()}`);
 
   // The shim's own promise: with bun off PATH it says so in one sentence.
-  const bunPath = onPath('bun');
   const nodePath = onPath('node');
-  if (bunPath === null) notes.push('SKIP the without-bun control: bun is not on PATH in this run');
-  else if (nodePath !== null && dirname(nodePath) === dirname(bunPath)) notes.push(`SKIP the without-bun control: node and bun share ${dirname(bunPath)}`);
-  else {
-    const stripped = (process.env.PATH ?? '').split(delimiter).filter((part) => part !== dirname(bunPath));
-    const withoutBun = run(bin, ['--version'], home, { ...process.env, PATH: stripped.join(delimiter) });
-    if (withoutBun.status === 0 || !/runs on Bun/.test(withoutBun.out)) {
-      fault('shim', `SMOKE_SHIM_NAMES_BUN_WHEN_BUN_IS_ABSENT: with ${dirname(bunPath)} off PATH the shim exited ${withoutBun.status} saying ${JSON.stringify(withoutBun.out.trim().slice(0, 300))}`);
-    } else notes.push('with bun off PATH the shim names Bun and stops');
+  const entry = installedPkg.bin?.[COMMAND];
+  if (nodePath === null || entry === undefined) {
+    fault('shim', 'SMOKE_SHIM_NAMES_BUN_WHEN_BUN_IS_ABSENT: the installed command and Node are required for the controlled search');
+  } else {
+    try {
+      const withoutBun = runWithoutBun(nodePath, resolve(pkgRoot, entry), work);
+      if (withoutBun.status !== 1 || !/runs on Bun/.test(withoutBun.out) || !/not found on PATH/.test(withoutBun.out)) {
+        fault('shim', 'SMOKE_SHIM_NAMES_BUN_WHEN_BUN_IS_ABSENT: Node-only search proved bun ENOENT; shim exit ' + withoutBun.status + ' saying ' + JSON.stringify(withoutBun.out.trim().slice(0, 300)));
+      } else notes.push('Node-only search proved bun ENOENT; shim exit 1 names Bun and stops');
+    } catch (error) {
+      fault('shim', 'SMOKE_SHIM_NAMES_BUN_WHEN_BUN_IS_ABSENT: ' + (error instanceof Error ? error.message : String(error)));
+    }
   }
 
   if (!keep) rmSync(home, { recursive: true, force: true });
@@ -850,6 +855,7 @@ function main(): number {
   }
 
   checkSmokeProcess();
+  checkSmokeWithoutBun();
 
   let served: { served: boolean; attempts: number; ms: number; last: string } | null = null;
   const waitStarted = Date.now();
