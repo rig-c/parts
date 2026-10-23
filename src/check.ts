@@ -2184,6 +2184,8 @@ export function barsNotMet(fig: Readonly<Record<string, unknown>>): string[] {
     const l = fig[n];
     if (typeof l === 'object' && l !== null && (l as { status?: unknown }).status === 'FAIL') out.push(n);
   }
+  const motion = fig[MOTION_SEAM_LINE];
+  if (isRecord(motion) && isRecord(motion.roots) && motion.roots.status === 'FAIL') out.push(MOTION_SEAM_LINE);
   return out;
 }
 
@@ -2248,7 +2250,7 @@ export function barsSummary(r: Pick<CheckReport, 'bars'>): string {
 
 /** The summary's warning clause: each warning line that read something, named, with the warnings they printed together; empty when none read. */
 export function warningsClause(r: Pick<CheckReport, 'motionSeam' | 'cloth'>): string {
-  const read = [...(r.motionSeam.status === 'SKIP' ? [] : [{ name: MOTION_SEAM_LINE, n: r.motionSeam.warnings }]), ...(r.cloth.status === 'SKIP' ? [] : [{ name: CLOTH_LINE, n: r.cloth.warnings }])];
+  const read = [...(r.motionSeam.status === 'SKIP' || (r.motionSeam.roots !== undefined && r.motionSeam.pairs.every(p => p.root !== undefined)) ? [] : [{ name: MOTION_SEAM_LINE, n: r.motionSeam.warnings }]), ...(r.cloth.status === 'SKIP' ? [] : [{ name: CLOTH_LINE, n: r.cloth.warnings }])];
   if (read.length === 0) return '';
   return `; ${read.reduce((a, x) => a + x.n, 0)} warning(s) (${read.map((x) => x.name).join(', ')}, not a bar)`;
 }
@@ -3516,16 +3518,15 @@ export function sweepLine(
 /**
  * `SEAM_OVER_MOTION` (issue #493): every declared neighbour pair read in every
  * animation `motion.json` holds, the idle included, by rig-c's seam reading
- * (`rigc render --seam`, rig-c 2.60.0) — a **warning, never a bar**. The
+ * (`rigc render --seam`, rig-c 2.60.0). Existing internal-joint and explicit-seam pairs remain **warnings, never bars**. Proven body-root pairs are the exception (issue #686): an active-reading tear fails a counted bar. The
  * owner's ruling (2026-10-18): a seam opening in motion may be intentional, so
  * the line names the pair, the animation, the frames and the cells, and moves
- * neither the exit status nor `check: PASS`; the summary counts it apart from
- * the bars.
+ * neither the exit status nor `check: PASS` for those existing pairs; the summary counts their warnings apart from the bars.
  *
  * The pairs are the ones the inputs declare and nothing else: each limb's
  * consecutive segments in `parts.json` (`config.limbs`, the upper and the
  * segment below each joint) and, under `--requirements`, each `seam`
- * requirement's part and neighbour. None declared, the line is a SKIP naming
+ * requirement's part and neighbour, then proven body-to-segment-zero pairs resolved from hierarchy, slots and provenance. None declared, the line is a SKIP naming
  * why, never a pass, and `check.json` carries no key for it.
  *
  * **The floor** ({@link openingOverFloor}): a frame's gap or ghost is reported
@@ -3564,6 +3565,8 @@ export interface MotionSeamPair {
   declared: string[];
   /** Why the pair is not read: a slot `rig.json` does not have. */
   unread?: string;
+  /** Issue #686: segment-zero provenance and its immediate named body carrier. */
+  root?: { limb: string; bone: string; parent: string };
 }
 
 /** One pair in one animation, as the floor reads rigc's file. */
@@ -3583,30 +3586,34 @@ export interface MotionSeamRow {
   max_px: number;
   /** The frames rigc names open whose every opening is one cell thick: under the floor, not reported. */
   under_floor: number[];
+  /** New roots only: the worst above-floor hit, retaining rigc's cell and world box. */
+  worst?: MotionSeamHit & { kind: 'gap' | 'ghost' };
 }
 
-/** The line: `WARN` with at least one warning, `CLEAR` with none, `SKIP` with nothing declared or nothing to read. */
+/** Existing pairs warn; new body roots alone can FAIL. Unavailable readings are named SKIP, never measured zero. */
 export interface MotionSeamLine {
-  status: 'WARN' | 'CLEAR' | 'SKIP';
+  status: 'WARN' | 'CLEAR' | 'SKIP' | 'FAIL';
   reason?: string;
   fps: number;
   floor: string;
   pairs: MotionSeamPair[];
   animations: string[];
-  /** Rows with a frame over the floor: the WARN lines. */
+  /** Existing non-root rows with a frame over the floor: the WARN lines. */
   warnings: number;
   rows: MotionSeamRow[];
   /** Physics-only reference worlds (issue #591); do not participate in warnings or bars. */
   worlds?: MotionSeamWorlds;
+  /** Present only for proven body-root pairs; existing internal seams remain warnings. */
+  roots?: { status: 'PASS' | 'FAIL' | 'SKIP'; pairs: string[]; failed: number; reason?: string };
 }
 
 /**
  * The neighbour pairs the inputs declare, in their order: each limb's
  * consecutive segments (`parts.json`'s limb records, by segment), then each
- * `seam` requirement's part and neighbour. A pair named twice, in either
+ * `seam` requirement's part and neighbour, then proven roots when rig.json is supplied. A pair named twice, in either
  * order, is one pair with both declarations.
  */
-export function motionSeamPairs(parts: PartsFile, seams: ReadonlyArray<{ name: string; part: string; neighbour: string }>): MotionSeamPair[] {
+export function motionSeamPairs(parts: PartsFile, seams: ReadonlyArray<{ name: string; part: string; neighbour: string }>, rig?: Record<string, unknown>): MotionSeamPair[] {
   const out: MotionSeamPair[] = [];
   const add = (a: string, b: string, declared: string): void => {
     const hit = out.find((p) => (p.a === a && p.b === b) || (p.a === b && p.b === a));
@@ -3623,6 +3630,78 @@ export function motionSeamPairs(parts: PartsFile, seams: ReadonlyArray<{ name: s
     }
   }
   for (const r of seams) add(r.part, r.neighbour, `requirement "${r.name}" (seam)`);
+  if (rig !== undefined) for (const root of motionRootPairs(parts, rig)) {
+    add(root.a, root.b, root.declared[0]);
+    const pair = out.find(p => (p.a === root.a && p.b === root.b) || (p.a === root.b && p.b === root.a));
+    if (pair !== undefined) pair.root = root.root;
+  }
+  return out;
+}
+
+
+/**
+ * Only the immediate named carrier is eligible. Slot binding and source provenance
+ * establish identity; coordinates, mesh influences and part-name guesses do not.
+ * No body provenance means legacy input, not proof of closed body-root seams.
+ */
+function motionRootPairs(parts: PartsFile, rig: Record<string, unknown>): MotionSeamPair[] {
+  const limbs = [...new Set(parts.parts.flatMap(p => p.limb === undefined ? [] : [p.limb.name]))];
+  // Root-free inputs keep the old selector without inspecting irrelevant body bindings.
+  if (limbs.length === 0) return [];
+  const bodies = partsTagged(parts, ['topwear', 'bottomwear']).filter(p => p.limb === undefined);
+  if (bodies.length === 0) return [];
+  const problems: Problem[] = [];
+  const bad = (object: string, detail: string): void => { problems.push({ code: 'CHECK_MOTION_SEAM_ROOT', object, detail }); };
+  const bones = (Array.isArray(rig.bones) ? rig.bones : []).filter(isRecord);
+  const slots = (Array.isArray(rig.slots) ? rig.slots : []).filter(isRecord);
+  const skin = isRecord(rig.skins) && isRecord(rig.skins.default) ? rig.skins.default : {};
+  const binding = (part: PartRecord): Record<string, unknown> | null => {
+    const matches = slots.filter(s => s.name === part.name);
+    const on = skin[part.name];
+    const slot = matches.length === 1 ? matches[0] : null;
+    const attachment = slot !== null && typeof slot.attachment === 'string' && isRecord(on) ? on[slot.attachment] : undefined;
+    if (parts.parts.filter(p => p.name === part.name).length !== 1 || slot === null || typeof slot.bone !== 'string' || !isRecord(attachment)) {
+      bad('part "' + part.name + '"', 'requires one part, one slot of that name and its named setup attachment in the default skin; found ' + matches.length + ' slot(s)');
+      return null;
+    }
+    return slot;
+  };
+  const carriers = bodies.map(part => ({ part, slot: binding(part) }));
+  const out: MotionSeamPair[] = [];
+  for (const limb of limbs) {
+    const roots = parts.parts.filter(p => p.limb?.name === limb && p.limb.segment === 0);
+    if (roots.length !== 1) {
+      bad('config.limbs.' + limb, 'has ' + roots.length + ' segment-zero part(s); exactly one is required to identify its body-root seam');
+      continue;
+    }
+    const root = roots[0];
+    const l = root.limb as LimbRecord;
+    const object = 'root part "' + root.name + '" (config.limbs.' + limb + ', bone "' + l.bone + '")';
+    const named = bones.filter(b => b.name === l.bone);
+    if (named.length !== 1 || typeof named[0].parent !== 'string' || bones.filter(b => b.name === named[0].parent).length !== 1) {
+      bad(object, 'requires one declared bone and its one named immediate parent in rig.json; found ' + named.length + ' bone(s), parent ' + JSON.stringify(named[0]?.parent));
+      continue;
+    }
+    const parent = named[0].parent;
+    const slot = binding(root);
+    if (slot === null) continue;
+    const twin = turnTwin(root.name, l.bone);
+    const twinBones = bones.filter(b => b.name === twin);
+    if (slot.bone !== l.bone && !(slot.bone === twin && twinBones.length === 1 && twinBones[0].parent === l.bone)) {
+      bad(object, 'slot binds "' + String(slot.bone) + '"; the declared bone "' + l.bone + '" or its named turn child is required');
+      continue;
+    }
+    const eligible = carriers.filter(c => c.slot?.bone === parent);
+    if (eligible.length !== 1) {
+      bad(object, 'requires exactly one topwear/bottomwear body drawing whose slot binds its immediate parent "' + parent + '"; found ' + eligible.length + ': ' + eligible.map(c => '"' + c.part.name + '"').join(', ') + '; no nearest, name or mesh-influence fallback');
+      continue;
+    }
+    const body = eligible[0].part;
+    out.push({ pair: body.name + '|' + root.name, a: body.name, b: root.name,
+      declared: ['config.limbs.' + limb + ' segment 0, body carrier "' + parent + '" from ' + body.from],
+      root: { limb, bone: l.bone, parent } });
+  }
+  refuseIfAny(problems);
   return out;
 }
 
@@ -3802,6 +3881,7 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
         return;
       }
       const over = new Map<number, number>();
+      let rootWorst: MotionSeamRow['worst'];
       const kinds: Record<'gap' | 'ghost', MotionSeamWorldKind> = { gap: { max_px: 0, worst: null }, ghost: { max_px: 0, worst: null } };
       for (const kind of ['gap', 'ghost'] as const) {
         const k = p[kind];
@@ -3813,7 +3893,10 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
         const hits = frames as SeamHitRead[];
         const worst = hits.reduce<MotionSeamHit | null>((best, h) => best === null || h.px > best.px || (h.px === best.px && h.index < best.index) ? h : best, null);
         kinds[kind] = { max_px: worst?.px ?? 0, worst };
-        for (const h of hits) if (plant.noFloor === true || openingOverFloor(h)) over.set(h.index, Math.max(over.get(h.index) ?? 0, h.px));
+        for (const h of hits) if (plant.noFloor === true || openingOverFloor(h)) {
+          over.set(h.index, Math.max(over.get(h.index) ?? 0, h.px));
+          if (want.root !== undefined && (rootWorst === undefined || h.px > rootWorst.px || (h.px === rootWorst.px && h.index < rootWorst.index))) rootWorst = { ...h, kind };
+        }
       }
       worldRows?.push({ pair: want.pair, animation, status: p.status, drawn: p.drawn, banded: p.banded, gap: kinds.gap, ghost: kinds.ghost });
       const opens = [...over.keys()].sort((x, y) => x - y);
@@ -3827,6 +3910,7 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
         px: opens.map((f) => over.get(f) ?? 0),
         max_px: opens.reduce((m, f) => Math.max(m, over.get(f) ?? 0), 0),
         under_floor: p.opens.filter((f) => !over.has(f)),
+        ...(rootWorst === undefined ? {} : { worst: rootWorst }),
       });
     });
   }
@@ -3834,9 +3918,28 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
   return rows;
 }
 
-/** The line from its rows: WARN when a row has a frame over the floor, CLEAR when none has, SKIP when no row was read. */
-export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fps: number, rows: MotionSeamRow[], reason?: string): MotionSeamLine {
-  const warnings = rows.filter((r) => r.opens.length > 0).length;
+/** Only active proven root rows fail; existing rows warn, with the same floor. Reference worlds are not read here. */
+export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fps: number, rows: MotionSeamRow[], reason?: string, problems: Problem[] = []): MotionSeamLine {
+  const roots = pairs.filter(p => p.root !== undefined);
+  const rootNames = new Set(roots.map(p => p.pair));
+  const warnings = rows.filter((r) => !rootNames.has(r.pair) && r.opens.length > 0).length;
+  const failed = rows.filter(r => rootNames.has(r.pair) && r.status === 'read' && r.banded > 0 && r.opens.length > 0);
+  for (const row of failed) {
+    const h = row.worst;
+    problems.push({ code: 'CHECK_SEAM_OVER_MOTION', object: 'body-root seam "' + row.pair + '" in "' + row.animation + '"',
+      detail: h === undefined
+        ? 'opens on frames ' + frameRuns(row.opens) + ', max ' + row.max_px + ' cells; no above-floor root hit metadata was returned'
+        : h.kind + ' at frame ' + h.index + ' (t = ' + h.index / fps + 's): ' + h.px + ' cells, cell ' + h.cell + ', world box [' + h.box.join(', ') + ']; at most ' + Math.round(Math.max(h.box[2] - h.box[0], h.box[3] - h.box[1]) / h.cell) + ' cells, the unchanged one-cell floor, is required' });
+  }
+  const missing = roots.flatMap(p => animations.length === 0 ? ['"' + p.pair + '": no animation'] : animations.flatMap(a => {
+    const row = rows.find(r => r.pair === p.pair && r.animation === a);
+    return row?.status === 'read' && row.banded > 0 ? [] : ['"' + p.pair + '" in "' + a + '": ' + (p.unread ?? (row === undefined ? 'no returned reading' : 'no band on any frame'))];
+  }));
+  const rootGate: MotionSeamLine['roots'] = roots.length === 0 ? undefined : {
+    status: failed.length > 0 ? 'FAIL' : missing.length > 0 || reason !== undefined ? 'SKIP' : 'PASS',
+    pairs: roots.map(p => p.pair), failed: failed.length,
+    ...(missing.length === 0 && reason === undefined ? {} : { reason: reason ?? missing.join('; ') }),
+  };
   const read = rows.some((r) => r.status === 'read');
   const skipWhy =
     reason ??
@@ -3846,7 +3949,7 @@ export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fp
         ? `no declared pair is read: ${pairs.map((p) => `"${p.pair}" ${String(p.unread)}`).join('; ')}`
         : `rigc read no band on any frame of any declared pair in any animation — nothing measured, which is not a seam that held`);
   return {
-    status: skipWhy !== undefined ? 'SKIP' : warnings > 0 ? 'WARN' : 'CLEAR',
+    status: rootGate?.status === 'FAIL' ? 'FAIL' : skipWhy !== undefined ? 'SKIP' : warnings > 0 ? 'WARN' : 'CLEAR',
     ...(skipWhy === undefined ? {} : { reason: skipWhy }),
     fps,
     floor: MOTION_SEAM_FLOOR,
@@ -3854,6 +3957,7 @@ export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fp
     animations,
     warnings,
     rows,
+    ...(rootGate === undefined ? {} : { roots: rootGate }),
   };
 }
 
@@ -4534,13 +4638,14 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     }
   }
 
-  // 3e. every declared neighbour pair read in every animation by rigc's seam reading (issue #493): a warning, never a
-  // bar — the build as played, at the idle's rate; SKIP, named, with no pair declared or no animation to read
+  // 3e. Existing neighbour pairs warn (issue #493); proven body-root tears alone gate (issue #686).
+  // Read the build as played at the idle's rate; unavailable data is named SKIP.
   let motionSeam: MotionSeamLine;
+  const motionRootProblems: Problem[] = [];
   {
     const fps = IDLE_FPS;
     const seamReqs = reqFile === null || seams === null ? [] : reqFile.requirements.flatMap((r) => (r.kind === 'seam' && seams?.has(r.name) === true ? [{ name: r.name, part: r.part, neighbour: r.neighbour }] : []));
-    const pairs = inp.parts === null ? [] : motionSeamPairs(inp.parts, seamReqs);
+    const pairs = inp.parts === null ? [] : motionSeamPairs(inp.parts, seamReqs, inp.rig);
     const slotNames = new Set((Array.isArray(inp.rig.slots) ? inp.rig.slots : []).filter(isRecord).map((sl) => String(sl.name)));
     for (const p of pairs) {
       const missing = [p.a, p.b].filter((n) => !slotNames.has(n));
@@ -4560,7 +4665,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         const r = measured(['render', '--candidate', buildDir, '--seam', list, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', activeDest]);
         if (r.status !== 0) refuseIfAny(rigcFailed(`render --seam ${list} --fps ${fps}`, r, r.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
         const activeWorldRows: MotionSeamWorldRow[] = [];
-        motionSeam = motionSeamLine(pairs, animationNames, fps, readMotionSeams(activeDest, animationNames, fps, read, {}, stripped !== null && env === null ? activeWorldRows : undefined));
+        motionSeam = motionSeamLine(pairs, animationNames, fps, readMotionSeams(activeDest, animationNames, fps, read, {}, stripped !== null && env === null ? activeWorldRows : undefined), undefined, motionRootProblems);
         if (stripped !== null) {
           const response = environmentResponse(readFileSync(join(buildDir, 'skeleton.json'), 'utf8'));
           motionSeam.worlds = motionSeamWorlds(true, response.wind.length > 0, world => {
@@ -4836,7 +4941,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const rank = (q: Problem): number => JUDGEMENT_LINES.findIndex((n) => q.code === `CHECK_${n}`);
   problems.sort((a, b) => rank(a) - rank(b));
   problems.unshift(...barProblems);
-  problems.push(...foldProblems, ...levelProblems, ...stressProblems, ...limbProblems, ...sweepProblems, ...reqProblems);
+  problems.push(...foldProblems, ...levelProblems, ...stressProblems, ...limbProblems, ...sweepProblems, ...motionRootProblems, ...reqProblems);
   figures.PASS = problems.length === 0;
   const publishCheck = (): void => write('check.json', `${JSON.stringify(figures, null, 1)}\n`);
   if (motionSeam.worlds === undefined) publishCheck();
@@ -4862,6 +4967,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   if (limbs !== null) tally(LIMB_LINE, null);
   // Issue #360: the range bar where it is written; a joint it cannot read fails, so it always measures.
   if (sweep !== null) tally(SWEEP_LINE, null);
+  if (motionSeam.roots !== undefined) tally(MOTION_SEAM_LINE, motionSeam.roots.status === 'SKIP' ? (motionSeam.roots.reason ?? 'no body-root reading') : null);
   return {
     figures,
     gateHtml,
