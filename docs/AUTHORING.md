@@ -1105,6 +1105,12 @@ holes), `grownPixels` (added by the margin), `pinchFilledPixels` (added by the p
 `grownHolePixels` (transparent pixels the grown silhouette encloses — a notch whose mouth grew
 shut))
 and, per region, the vertices its bone reaches (`g > 0`) and holds alone (`g = 1`).
+Across contour, automatic and influence reports, `regions[].bone` and `reach.nearest`
+name the authored template bones used to calculate the regions and reach. Stops and turn
+can rebind the emitted attachment after those calculations; these diagnostic names are
+not rewritten. The row's `bones` lists the final attachment bindings after rebinding.
+Use that list (or the emitted attachment), rather than a region or reach name, when
+resolving the bones the resulting rig actually binds (issue #560).
 `art_coverage` is over all the part's art, stray islands included (in the automatic mode it is
 not: there the islands `source.stray` leaves out are cleared from every reader's art, see
 `source.stray` below). A lattice mesh's row is
@@ -1671,7 +1677,7 @@ same shape over the face bones, and `examples/demo/animations.json` holds seven 
   "animations": {
     "sway": { "duration": 2, "loop": true, "tracks": [
       { "bone": "chest", "property": "rotate", "keys": [
-        { "t": 0, "v": [0] }, { "t": 0.5, "v": [3] }, { "t": 1.5, "v": [-3] }, { "t": 2, "v": [0] } ] },
+        { "t": 0, "v": [0], "curve": [0.15, 0, 0.35, 3] }, { "t": 0.5, "v": [3] }, { "t": 1.5, "v": [-3] }, { "t": 2, "v": [0] } ] },
       { "bone": "head", "property": "rotate", "keys": [
         { "t": 0, "v": [0] }, { "t": 1, "v": [-2] }, { "t": 2, "v": [0] } ] } ] } } }
 ```
@@ -1680,6 +1686,14 @@ same shape over the face bones, and `examples/demo/animations.json` holds seven 
   `CONFIG_FIELD_PRESENT: config.motion.animations_from (<file>).spec — is absent and required:
   write "spec": "rigc-motion/1" beside "animations", …`, and another value is `CONFIG_FIELD_TYPE`
   naming the value found and `"rigc-motion/1"`.
+- **Keys keep rig-c's motion fields, including `curve`.** The loader carries the named
+  animations as written; rig-c gates them, as it gates this example in selftest `CF514`.
+  [The core key format](https://github.com/rig-c/core/blob/main/docs/AUTHORING.md#45-keys--times-values-curves)
+  defines `curve` as four numbers per value channel: absolute control-point
+  `[time, value, time, value]`, not normalized graph handles. The first chest key above
+  shapes its span to the next key. A key carries `ease` or `curve`, never both, and
+  the final key carries neither. Top-level motion fields are a separate contract:
+  `animations_from` supplies `spec` and `animations`, not a second setup or easing table.
 - **Key times strictly increase within a track, and the last is at `duration`** — rig-c's rule
   (its AUTHORING §4.5, "`t` is in seconds and must strictly increase"; R7: no key past the
   declared duration, and a duration more than a frame longer than the last key is refused).
@@ -1907,6 +1921,55 @@ per mesh — `mesh-stats: topwear — contour 320 vertices, 568 triangles` on `r
 and the total, `mesh-stats: total 1908 triangles over 6 mesh(es)`, the counts the build's
 `mesh_report.json` will hold (§4, *Counting the triangles before a build*). On `reference-sample`
 it runs in under a second; the build it saves runs the render and `check` as well.
+
+**Choose region spacing against the triangle budget.** Interior grid density grows
+roughly as area / spacing², including the transition band: for a circle that area
+extends to `r + band`, not just `r`. The outline, background grid and sampled region
+rings also contribute, so multiplying the *whole* triangle count by that ratio
+incorrectly scales the fixed part. Read the part's `mesh_report.json` row first, and use
+`mesh-stats` for the candidate rather than waiting for a rendered build.
+
+A bounded calibration on the public [family office config](https://github.com/rig-c/examples/blob/d5a1768ce4a2d1e3f5726d1739cd0da4a63b0e13/family/roa/config.json)
+uses both `topwear` bust regions at spacing 14. Its pinned
+[mesh report](https://github.com/rig-c/examples/blob/d5a1768ce4a2d1e3f5726d1739cd0da4a63b0e13/family/roa/out/rig/mesh_report.json)
+has 500 vertices, 883 triangles, 115 hull vertices, 53 background interior vertices
+and 332 regional interior vertices. For this topology, `T = 2V - H - 2`; separating
+those contributions gives `T_fixed = 2(115 + 53) - 115 - 2 = 219` and a regional
+term of `2 × 332 = 664`. Freeze the local estimate before trying other spacings:
+
+`T_est(s) = 219 + 664 × (14 / s)²`
+
+Measured with Bun 1.4.2 and rig-c 2.60.0, changing **only both region spacings** in
+that pinned config, through the same `mesh-stats` reader (no repair application):
+
+| Region spacing (px) | Estimated triangles | Actual triangles | Absolute relative error |
+| --- | ---: | ---: | ---: |
+| 14 (calibration) | 883.00 | 883 | 0% |
+| 10 | 1520.44 | 1470 | 3.43% |
+| 18 | 620.68 | 624 | 0.53% |
+| 22 | 487.89 | 491 | 0.63% |
+
+The three held-out spacings stayed within 15%; this is a local planning rule,
+not a guarantee for another silhouette, band, overlap or meshing mode. Ring samples
+scale with perimeter / spacing, and point rejection and boundary splits change the
+counts too. Recalibrate when those inputs change; do not refit the estimate to the
+same points and call them validation.
+
+For a per-mesh budget `B > T_fixed`, start at
+`s >= s0 × sqrt((T0 - T_fixed) / (B - T_fixed))`, then count the candidate.
+An author choosing 700 triangles here gets about 16.45 px; spacing 18 actually
+counts 624. If `B <= T_fixed`, coarsening the soft region alone is not the remedy.
+Core's `A13_MESH_BUDGET` reads
+[`invariants.meshTriangles`](https://github.com/rig-c/core/blob/main/docs/AUTHORING.md#37-invariants--what-the-artifact-cannot-say-about-itself)
+from the rig spec; this is not an additional parts-config field, and a dry count
+is not a compiler or appearance verdict. Use the actual count for the budget decision.
+
+To repeat the table, check out that public example pin, copy its config to
+`work/spacing18.json`, change both
+`meshes.topwear.contour.regions[].spacing` values to 18, and run from the example
+repository root (repeat with 10, 14 and 22):
+
+`rig-parts mesh-stats --config work/spacing18.json --parts family/roa/out`
 
 `build` on `reference-sample` as tracked (PR #187; the values above are the ones tuned for its `hop`, issue #183):
 
@@ -3494,7 +3557,7 @@ See-through with another seed.
 | <a id="CONFIG_TURN_REQUIRED"></a>`CONFIG_TURN_REQUIRED` | `motion.animations_from` carries `turn` or `tilt` `derive` keys while `config.turn` is absent, or an attached head part (`face`, `hair_front`, `hair_back`) is missing from `config.turn.depths` (issue #478): without `turn.depths` the head pivot and back-of-head counter-parallax cannot be derived | run `propose --full` (or `--head`) to draft `config.turn`, or declare `config.turn` with `pivot` and `depths` covering `face`, `hair_front` and `hair_back` |
 | <a id="CONFIG_FACE_BAND_EXCEEDED"></a>`CONFIG_FACE_BAND_EXCEEDED` | `turn.band` or a `motion.animations_from` `turn`/`tilt` `derive.degrees` exceeds the single-plate rated band (`FACE_RATED_BAND`: `yaw <= 15°`, `pitch <= 12°`, issue #472) while no `assemble.alternates` entry replaces `face`; the detail gives the requested angle, the rated limit and both remedies | clamp the angle to `±15°` yaw / `±12°` pitch, or declare an `assemble.alternates` entry covering `face` for the 3/4 or profile plate |
 | <a id="CONFIG_PROPOSED_RIG_SCALE"></a>`CONFIG_PROPOSED_RIG_SCALE` | `proposed_rig_scale` (the `scale_rig_per_source` `propose` drafted the rig sections at, issue #354) differs from `assemble.rig_scale`: the coordinates in `bones`, `meshes`, `limbs` and `motion` are in that rig canvas's pixels and do not scale when `assemble.rig_scale` changes | re-run `assemble` and `propose` at the new `assemble.rig_scale`, or restore `assemble.rig_scale` to `proposed_rig_scale` |
-| <a id="CONFIG_BUST_CLEARANCE"></a>`CONFIG_BUST_CLEARANCE` | `meshes.<part>.contour.bust` (issue #475): `clearance <= 0`, `R_r + R_l >= \|apex_r − apex_l\|` (the derived outer radii overlap or touch across the apex span `D`, or `cleavage` sits off the segment so `d_r + d_l − 2·clearance >= D`), or a derived `R_s`, `r_s = round(alpha × R_s)` or `band_s = round(R_s) − r_s` is not positive; the detail names `clearance`, `R_r + R_l` and `D` | raise `contour.bust.clearance` so `0 < clearance < d_s` and `R_r + R_l < \|apex_r − apex_l\|`, or place `cleavage` between `apex_r` and `apex_l` |
+| <a id="CONFIG_BUST_CLEARANCE"></a>`CONFIG_BUST_CLEARANCE` | `meshes.<part>.contour.bust`: `clearance <= 0`, `R_r + R_l >= D` where `R_s = round(d_s - clearance)` and `D = \|apex_r − apex_l\|`, a non-positive core `r_s = round(alpha × R_s)`, or a negative band `R_s − r_s`; the detail names the rounded values found | use the detail's first passing clearance on 0.01 px steps, checked against the same rounded rules (not the unrounded distance bound); if no such value exists, move `cleavage` or the apices, or change `alpha`, then retry. A larger clearance can also erase a core, so do not keep increasing it blindly |
 | <a id="CONFIG_SET_COVERS_SLOT"></a>`CONFIG_SET_COVERS_SLOT` | `motion.animations_from` (issue #473): a track key carries `"set": "<name>" \| null` on a track other than `property: "attachment"`, names an alternate set not declared in `assemble.alternates`, or names an alternate set that does not cover the track's `slot` (neither in `slots` nor in `hides`); the detail names the set, the slot and the slots that set covers | declare the set in `assemble.alternates`, add the slot to that set's `parts` (or `hides`), or key `"set"` on a slot the set covers |
 | <a id="CONFIG_SET_COVERS_BONE"></a>`CONFIG_SET_COVERS_BONE` | `assemble.alternates[i].drawn.<bone>` (issue #476): a subset set (`parts` present) states a `drawn` world angle for a bone none of its covered parts ride; the detail names the bone, the set, and the bones its covered parts ride | remove the uncovered bone from that set's `drawn`, or add the part that rides it to `parts` |
 | <a id="CONFIG_LIMB_SET_JOINTS"></a>`CONFIG_LIMB_SET_JOINTS` | `assemble.alternates[i]` (issue #476): a gesture set over a limb chain declared in `config.limbs.<limb>` names the unsplit `from` layer instead of the limb's segment `part`s, covers (or hides) only a subset of the limb chain's segments, or declares custom polygon `cuts` on the limb; the detail names the limb and its segment parts | cover all segment `part`s of `config.limbs.<limb>` in `parts` with no custom `cuts`, so `assemble` cuts the set at the base's joints |

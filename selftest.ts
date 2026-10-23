@@ -3253,6 +3253,41 @@ function runBustConfigControls(say: (name: string, ok: boolean, detail: string, 
     `default and custom contour.bust load (${loads.map((e) => (e === null ? 'ok' : codes(e))).join(', ')}), derived ${JSON.stringify(derivedDef)}; planted: ${outcomes.map((o) => `${o.what} ${o.ok ? 'refused once' : `NOT: ${o.got}`}`).join('; ')}`,
     'issue #475: meshes.<part>.contour.bust derives bust_r and bust_l from apex_r, apex_l and cleavage, refuses clearance <= 0 or R_r + R_l >= D with CONFIG_BUST_CLEARANCE, refuses duplicate bust_r/bust_l in contour.regions with CONFIG_REGION_NAME_UNIQUE, and resolves bone_r/bone_l against config.bones',
   );
+  // Issue #534: the printed remedy must pass the rounded predicate, not only its unrounded bound.
+  const hinted = (apex_l: number[], cleavage: number[], clearance: number) =>
+    bustCfg({ apex_r: [0, 0], apex_l, cleavage, clearance });
+  const hintCases = [
+    { what: 'off-axis rounding interval', apex_l: [20, 0], cleavage: [10, 3], bad: 0.45, first: 0.95 },
+    { what: 'exact half rounds up', apex_l: [20, 0], cleavage: [10, 0], bad: 0.5, first: 0.51 },
+  ].map(({ what, apex_l, cleavage, bad, first }) => {
+    const e = refusals(() => parseConfig(hinted(apex_l, cleavage, bad)));
+    const detail = e?.problems[0]?.detail ?? '';
+    const match = /first passing clearance in 0\.01 px steps is ([0-9.]+) px/.exec(detail);
+    const suggested = match === null ? NaN : Number(match[1]);
+    const passes = Number.isFinite(suggested) && refusals(() => parseConfig(hinted(apex_l, cleavage, suggested))) === null;
+    const below = refusals(() => parseConfig(hinted(apex_l, cleavage, first - 0.01)));
+    return { what, ok: e?.problems.length === 1 && e.problems[0].code === 'CONFIG_BUST_CLEARANCE' && suggested === first && passes && below?.problems[0]?.code === 'CONFIG_BUST_CLEARANCE', detail };
+  });
+  const invalidDomain = [
+    { what: 'near MAX_SAFE_INTEGER', apex_l: [Number.MAX_SAFE_INTEGER, 0], cleavage: [Number.MAX_SAFE_INTEGER / 2, Number.MAX_SAFE_INTEGER], object: `${BAT}.apex_l[0]`, hintUnavailable: true },
+    { what: 'finite coordinates overflow the distances', apex_l: [1e200, 0], cleavage: [0, 1e200], object: `${BAT}.apex_l[0]`, hintUnavailable: true },
+    { what: 'non-finite coordinate', apex_l: [20, 0], cleavage: [Infinity, 0], object: `${BAT}.cleavage`, hintUnavailable: false },
+  ].map(({ what, apex_l, cleavage, object, hintUnavailable }) => {
+    const e = refusals(() => parseConfig(hinted(apex_l, cleavage, 0)));
+    const details = e?.problems.map((p) => p.detail).join('; ') ?? '';
+    return { what, ok: e !== null && e.problems.some((p) => p.code === 'CONFIG_FIELD_TYPE' && p.object === object) &&
+      !details.includes('first passing clearance') && (!hintUnavailable || details.includes('clearance hint unavailable')), details };
+  });
+  const impossible = refusals(() => parseConfig(hinted([2, 0], [1, 0], 0.1)));
+  const impossibleDetail = impossible?.problems[0]?.detail ?? '';
+  say(
+    'CF521_BUST_CLEARANCE_HINT_PASSES_THE_ROUNDED_RULE_AND_NAMES_AN_INFEASIBLE_HUNDREDTH_GRID',
+    hintCases.every((c) => c.ok) && invalidDomain.every((c) => c.ok) && impossible?.problems.length === 1 && impossible.problems[0].code === 'CONFIG_BUST_CLEARANCE' &&
+      impossibleDetail.includes('no clearance in 0.01 px steps') && !impossibleDetail.includes('first passing clearance'),
+    hintCases.map((c) => `${c.what}: ${c.ok ? 'hint passes and previous hundredth refuses' : c.detail}`).join('; ') + `; small-span: ${impossibleDetail}; invalid domain: ${invalidDomain.map((c) => `${c.what} ${c.ok ? 'named refusal, no numeric remedy' : c.details}`).join('; ')}`,
+    'issue #534: round(d_s - clearance) controls overlap; the unrounded lower-bound mutant and exact half must refuse, each printed candidate must load, infeasible geometry must not promise a passing number, and invalid numerical domains must return named refusals without searching',
+  );
+
 }
 
 /**

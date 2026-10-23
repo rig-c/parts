@@ -456,7 +456,10 @@ for each — a config fragment, the `check` lines it passes with, and its limit:
 
 - [**Expressions and other named animations**](docs/AUTHORING.md#recipe-expressions-and-other-named-animations):
   the face's parts are bones; animations written over them in rig-c's motion-spec shape and
-  named by `motion.animations_from` are built and gated beside the idle on every build. One
+  named by `motion.animations_from` are built and gated beside the idle on every build. Keys
+  carry core motion fields, including raw `curve` control points in absolute time/value
+  coordinates ([core key format](https://github.com/rig-c/core/blob/main/docs/AUTHORING.md#45-keys--times-values-curves));
+  the linked recipe includes a core-gated example. One
   attachment per slot, so a part moves, turns and scales but is never swapped for another
   image; `check` measures the idle alone.
 - [**A soft region driven by physics**](docs/AUTHORING.md#recipe-a-soft-region-driven-by-physics)
