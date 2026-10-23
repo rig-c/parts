@@ -100,6 +100,19 @@ import { FLOOR_FORMS, type FloorForm, type MeshInfluences } from './weights.ts';
 
 export type Point = [number, number];
 
+/** A rigid binding; the object form can keep an exclusive rider in authored order (#680). */
+export type RegionSpec = string | { bone: string; gather?: false };
+
+/** Read a declared region binding without changing the authored representation. */
+export function regionBone(region: RegionSpec): string {
+  return typeof region === 'string' ? region : region.bone;
+}
+
+/** The raw reader keeps invalid values intact for their own named refusal. */
+function rawRegionBone(region: Json): Json {
+  return isPlainObject(region) ? region.bone : region;
+}
+
 export interface Lora {
   name: string;
   strength: number;
@@ -331,7 +344,7 @@ export type Segment = string | [string, Point, Point];
  *   locally refined by rig-c's `reduceMesh` under the author's declared
  *   bounds (`src/automesh.ts`).
  */
-export type MeshSpec = LatticeMeshSpec | ContourMeshSpec | AutoMeshSpec | InfluenceMeshSpec;
+export type MeshSpec = (LatticeMeshSpec | ContourMeshSpec | AutoMeshSpec | InfluenceMeshSpec) & { gather?: false };
 
 /**
  * One mesh in the influence mode (issue #378): rig-c's `segments` lattice over the part at `cell` px, every vertex
@@ -703,7 +716,7 @@ export function weightsABone(rg: AutoRegionSpec): rg is AutoWeightRegionSpec {
 export interface PartBinding {
   bones: readonly BoneEntry[];
   meshes: Readonly<Record<string, MeshSpec>>;
-  regions: Readonly<Record<string, string>>;
+  regions: Readonly<Record<string, RegionSpec>>;
 }
 
 /**
@@ -734,7 +747,7 @@ export function partBoundBones(b: PartBinding): Map<string, string[]> {
     if ('contour' in m) for (const rg of contourRegionsOf(m.contour)) bind(part, rg.bone);
     if ('auto' in m) for (const rg of m.auto.regions ?? []) if (weightsABone(rg)) bind(part, rg.bone);
   }
-  for (const [part, bone] of Object.entries(b.regions)) bind(part, bone);
+  for (const [part, region] of Object.entries(b.regions)) bind(part, regionBone(region));
   return out;
 }
 
@@ -973,7 +986,7 @@ export interface CharacterConfig {
   limbs?: Record<string, Limb>;
   bones: BoneEntry[];
   meshes: Record<string, MeshSpec>;
-  regions: Record<string, string>;
+  regions: Record<string, RegionSpec>;
   motion: Motion;
   constraints?: ConfigConstraint[];
   /** Leg stops (issue #404, rig-c 2.56.0's `RigStop`): absent, no stop is added and no byte of any output moves. */
@@ -1798,7 +1811,7 @@ export function repeatedKeys(text: string): Array<{ at: string; key: string; cou
 export interface SkeletonSections {
   bones: BoneEntry[];
   meshes: Record<string, MeshSpec>;
-  regions: Record<string, string>;
+  regions: Record<string, RegionSpec>;
   motion: Motion;
 }
 
@@ -1862,7 +1875,7 @@ function checkBlinkStill(c: Check, v: Json, eyes: Json, bones: Set<string>, regi
         c.fail('CONFIG_STILL_OFF_THE_BLINK', `${at}.${part}.bone`, `is "${e.bone}", which config.motion.blink.eyes names, so the still piece would blink too; a bone the blink does not key is required (the eye bone's parent, as propose writes it)`);
       }
     }
-    const rb = Object.prototype.hasOwnProperty.call(regionOf, part) ? regionOf[part] : undefined;
+    const rb = Object.prototype.hasOwnProperty.call(regionOf, part) ? rawRegionBone(regionOf[part]) : undefined;
     if (typeof rb !== 'string') {
       c.fail('CONFIG_NAME_RESOLVES', `${at}.${part}`, `names "${part}", which config.regions does not attach; a region part is required — a mesh is not cut`);
     } else if (!eyeList.includes(rb)) {
@@ -2307,8 +2320,8 @@ function checkAlternates(
         const limbSeg = limbs?.parts.get(pn);
         if (limbSeg !== undefined) {
           coveredBones.add(limbSeg.bone);
-        } else if (isPlainObject(regions) && typeof regions[pn] === 'string') {
-          coveredBones.add(regions[pn]);
+        } else if (isPlainObject(regions) && typeof rawRegionBone(regions[pn]) === 'string') {
+          coveredBones.add(rawRegionBone(regions[pn]) as string);
         } else if (isPlainObject(meshes) && isPlainObject(meshes[pn])) {
           const m = meshes[pn] as Record<string, Json>;
           if (Array.isArray(m.segments)) {
@@ -2503,8 +2516,9 @@ function checkMeshes(c: Check, v: Json, bones: Set<string>, chains: Map<string, 
     const at = `config.meshes.${part}`;
     // The known keys keep their old order (grid, r, segments) with contour after them, and `r` and `segments` are
     // required in the place and words the object check uses, so a lattice mesh's refusals read as they did.
-    const m = c.object(at, spec, [], ['grid', 'r', 'segments', 'contour', 'auto', 'exponent', 'rule', 'ribs', 'influences', 'stray', 'influence']);
+    const m = c.object(at, spec, [], ['grid', 'r', 'segments', 'contour', 'auto', 'exponent', 'rule', 'ribs', 'influences', 'stray', 'influence', 'gather']);
     if (m === null) continue;
+    checkGather(c, at, m);
     // issue #378: the influence mode weights by rig-c's own pull, so `r` (the distance rule's softening) is not one of its
     // fields — it is refused there below, and required in every other mode as it always was.
     for (const key of 'influence' in m ? ['segments'] : ['r', 'segments']) if (!(key in m)) c.fail('CONFIG_FIELD_PRESENT', `${at}.${key}`, 'is absent and required');
@@ -3026,12 +3040,23 @@ function checkAuto(c: Check, at: string, v: Json, bones: Set<string>): void {
   }
 }
 
+/** Only false opts out; remove the key for the historical gathering rule. */
+function checkGather(c: Check, at: string, entry: Record<string, Json>): void {
+  if ('gather' in entry && entry.gather !== false) c.fail('CONFIG_FIELD_TYPE', `${at}.gather`, `is ${show(entry.gather)}; false is required to keep a limb rider at its authored draw position — remove gather for normal gathering`);
+}
+
 function checkRegions(c: Check, v: Json, bones: Set<string>): void {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) {
     c.fail('CONFIG_FIELD_TYPE', 'config.regions', `is ${show(v)}; an object of part name -> bone name is required`);
     return;
   }
-  for (const [part, bone] of Object.entries(v as Record<string, Json>)) {
+  for (const [part, entry] of Object.entries(v as Record<string, Json>)) {
+    const at = `config.regions.${part}`;
+    if (isPlainObject(entry)) {
+      const o = c.object(at, entry, ['bone'], ['gather']);
+      if (o !== null) checkGather(c, at, o);
+    }
+    const bone = rawRegionBone(entry);
     if (typeof bone !== 'string') c.fail('CONFIG_NAME_RESOLVES', `config.regions.${part}`, `is ${show(bone)}; a bone name is required`);
     // Issue #671: the part and the bone by name, so an entry `propose --only-missing` drafted on a bone the config
     // does not declare says which.
@@ -3330,7 +3355,7 @@ function checkCoverage(c: Check, made: string[], patches: string[], meshes: Json
       }
     }
     for (const [part, seg] of limbs.parts) {
-      const bone = isPlainObject(regions) ? regions[part] : undefined;
+      const bone = isPlainObject(regions) ? rawRegionBone(regions[part]) : undefined;
       if (typeof bone === 'string' && bone !== seg.bone) {
         c.fail('CONFIG_LIMB_BONE', `config.regions.${part}`, `is "${bone}"; "${part}" is ${seg.at}, which rides "${seg.bone}" with weight 1, so config.regions.${part} "${seg.bone}" is required`);
       }

@@ -1,3 +1,4 @@
+import { regionBone, type RegionSpec } from './config.ts';
 /**
  * The propose stage: bone origins, mesh candidate lists, regions and a default
  * idle, read off the assembled parts — and the overlay a person or an agent
@@ -4885,7 +4886,7 @@ export function coverageOutcome(c: BoneCoverage): CoverageOutcome {
  */
 export function lint(
   P: PartSet,
-  spec: { bones: readonly BoneEntry[]; meshes: Readonly<Record<string, MeshSpec>>; regions?: Readonly<Record<string, string>>; motion?: SkeletonSections['motion']; constraints?: readonly ConfigConstraint[]; limbs?: Readonly<Record<string, Limb>>; stops?: readonly ConfigStop[] },
+  spec: { bones: readonly BoneEntry[]; meshes: Readonly<Record<string, MeshSpec>>; regions?: Readonly<Record<string, RegionSpec>>; motion?: SkeletonSections['motion']; constraints?: readonly ConfigConstraint[]; limbs?: Readonly<Record<string, Limb>>; stops?: readonly ConfigStop[] },
   joints?: RigJoints,
   drafted: readonly DraftLintFinding[] = [],
 ): LintResult {
@@ -5391,7 +5392,7 @@ function findingBones(f: LintFinding, bones: readonly BoneEntry[]): string[] {
  * art by design: its role is the reason, never a finding.
  */
 function lintCoverage(
-  spec: { bones: readonly BoneEntry[]; meshes: Readonly<Record<string, MeshSpec>>; regions?: Readonly<Record<string, string>>; motion?: SkeletonSections['motion']; constraints?: readonly ConfigConstraint[] },
+  spec: { bones: readonly BoneEntry[]; meshes: Readonly<Record<string, MeshSpec>>; regions?: Readonly<Record<string, RegionSpec>>; motion?: SkeletonSections['motion']; constraints?: readonly ConfigConstraint[] },
   byName: ReadonlyMap<string, ExpandedBone>,
   read: ReadonlyMap<string, string[]>,
   findings: readonly LintFinding[],
@@ -5433,7 +5434,7 @@ function lintCoverage(
           else if (chain !== null && sp === chain && unknownMeshes.includes(mname)) partless.push(`${at} (mesh ${JSON.stringify(mname)})`);
         });
       }
-      const regions = Object.entries(spec.regions ?? {}).filter(([, b]) => b === bone).map(([part]) => `regions.${part}`);
+      const regions = Object.entries(spec.regions ?? {}).filter(([, b]) => regionBone(b) === bone).map(([part]) => `regions.${part}`);
       const stills = Object.entries(spec.motion?.blink?.still ?? {}).filter(([, st]) => st.bone === bone).map(([part]) => `motion.blink.still.${part}`);
       const s = (list: readonly string[], one: string, many: string): string => (list.length === 1 ? one : many);
       if (single.length > 0) why.push(`named as a single bone by ${single.join(', ')}: a single bone has no links, and the off-art check reads only the links <segment><digits> of a chain`);

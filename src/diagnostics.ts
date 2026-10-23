@@ -1,3 +1,4 @@
+import { regionBone, type RegionSpec } from './config.ts';
 /**
  * What `propose` looked at, said (issue #86): the coverage lines lint's
  * per-bone record prints, and the basis file written beside the proposal.
@@ -186,7 +187,7 @@ export interface LegChainChoice {
   none: string | null;
 }
 
-export function legChainChoice(P: PartSet, spec: { bones: readonly BoneEntry[]; meshes: Proposal['meshes']; regions?: Proposal['regions']; limbs?: Readonly<Record<string, Limb>>; notes?: readonly string[] }, joints?: RigJoints): LegChainChoice {
+export function legChainChoice(P: PartSet, spec: { bones: readonly BoneEntry[]; meshes: Proposal['meshes']; regions?: Readonly<Record<string, RegionSpec>>; limbs?: Readonly<Record<string, Limb>>; notes?: readonly string[] }, joints?: RigJoints): LegChainChoice {
   const chains: LegChainChoice['chains'] = [];
   for (const entry of spec.bones) {
     if (!('chain' in entry) || !/^leg_[rl]$/.test(entry.chain)) continue;
@@ -207,7 +208,7 @@ export function legChainChoice(P: PartSet, spec: { bones: readonly BoneEntry[]; 
     for (const [part, mesh] of Object.entries(spec.meshes)) {
       if (mesh.segments.some((s) => typeof s === 'string' ? s === entry.chain || links.has(s) : links.has(s[0]))) bound(part);
     }
-    for (const [part, bone] of Object.entries(spec.regions ?? {})) if (links.has(bone)) bound(part);
+    for (const [part, bone] of Object.entries(spec.regions ?? {})) if (links.has(regionBone(bone))) bound(part);
     chains.push({ chain: entry.chain, sources: [...sources], parts: [...parts] });
   }
   if (chains.length > 0) return { chains, none: null };
