@@ -47740,6 +47740,79 @@ function runArmSplitUpgradeSuite(): number {
   return bad();
 }
 
+// ---- Issue #679: destination attachment ownership and reference resolution -----------------------------------------
+import { mergeConfigProposal, type ConfigJson } from './src/configwrite.ts';
+import { configWriteFixture, configWriteProposal } from './fixtures/configwrite.ts';
+
+function runOnlyMissing679Checks(dir: string, say: (name: string, ok: boolean, detail: string) => void): void {
+  const cfg = limbConfig();
+  const assembly = cfg.assemble as { plan: Array<[string, string, string]> };
+  assembly.plan = [...assembly.plan.map(([n, run, tag]): [string, string, string] => [n === 'arm' ? 'handwear_r' : n, run, tag]), ['face', 'head', 'face']];
+  const limbs = cfg.limbs as Record<string, { segments: Array<{ from: string }> }>;
+  for (const s of limbs.arm_r.segments) s.from = 'handwear_r';
+  (cfg.regions as Record<string, string>).face = 'hip';
+  cfg.motion = { duration: 1, tracks: [{ bone: 'hip', prop: 'rotate', amp: 0, base: 0, period: 1, phase: 0 }] };
+  const fixture = join(dir, 'only-missing-679');
+  writeAssembleFixture(fixture, cfg, flatPainting(), { full: LIMB_FULL, head: HEAD_LAYERS });
+  const config = join(fixture, 'config.json'), parts = join(fixture, 'assembled');
+  assembleStage({ source: join(fixture, 'painting.png'), full: join(fixture, 'full'), head: join(fixture, 'head'), config, seam: 'near-white', project: 'core' },
+    { partsJson: join(parts, 'parts.json'), partsDir: join(parts, 'parts'), recomposite: join(parts, 'recomposite.png'), errorMap: join(parts, 'error.png') }, () => {});
+  const original = readFileSync(config, 'utf8'), mtime = statSync(config).mtimeMs;
+  const rig = (label: string): PartsError | null => refusals(() => rigStage({ config, parts, out: join(fixture, `rig-${label}`) }, rigcRunnerAt(suiteRigc(), spawnRigc), join(fixture, `scratch-${label}`), () => {}));
+  const before = rig('before');
+  const joints = { neck: [64, 12], r_shoulder: [30, 20], r_elbow: [30, 60], r_wrist: [30, 100], r_hip: [68, 20], r_knee: [68, 60], r_ankle: [68, 100], l_hip: [96, 20], l_knee: [96, 60], l_ankle: [96, 100] };
+  const keypoints = join(fixture, 'keypoints.json');
+  writeFileSync(keypoints, JSON.stringify({ spec: KEYPOINTS_SPEC, space: KEYPOINTS_SPACE, width: 128, height: 128, source: 'flat-block joint coordinates', people: [{ id: 'a', joints: Object.fromEntries(Object.entries(joints).map(([k, at]) => [k, { state: 'observed', at }])) }] }));
+  for (const withKeypoints of [false, true]) {
+    const out = join(fixture, withKeypoints ? 'with-keypoints' : 'without-keypoints');
+    const r = runCli(['propose', '--parts', parts, '--source', join(fixture, 'painting.png'), '--out', out, '--write-config', config, '--only-missing', ...(withKeypoints ? ['--keypoints', keypoints] : [])]);
+    const notes = r.out.split('\n').filter((l) => l.startsWith('note: --only-missing:'));
+    const after = rig(withKeypoints ? 'with' : 'without');
+    const armNote = notes.filter((n) => n.includes('part "handwear_r"') && n.includes('config.limbs.arm_r'));
+    const prop = existsSync(join(out, 'proposal.json')) ? JSON.parse(readFileSync(join(out, 'proposal.json'), 'utf8')) as { limbs?: unknown; notes: string[] } : null;
+    say(`MW679_${withKeypoints ? 'KEYPOINTS' : 'NO_KEYPOINTS'}_KEEPS_A_LIMB_CONFIG_BYTES_MTIME_AND_RIG_GREEN`,
+      before === null && after === null && r.status === 0 && original === readFileSync(config, 'utf8') && statSync(config).mtimeMs === mtime && armNote.length === 1 && prop !== null && (withKeypoints ? prop.limbs !== undefined : prop.limbs === undefined) && prop.notes.some((n) => n.includes('--only-missing: skipped part "handwear_r"')),
+      `propose exit ${r.status}; bytes unchanged ${original === readFileSync(config, 'utf8')}; mtime unchanged ${statSync(config).mtimeMs === mtime}; baseline rig ${codes(before)}, result rig ${codes(after)}; arm skip notes ${armNote.length}; ${r.status === 0 ? notes.join(' | ') : r.out}`);
+  }
+
+  const raw = configWriteFixture();
+  const prop = configWriteProposal();
+  const make = (meshes: Record<string, unknown>, regions: Record<string, string> = {}): ReturnType<typeof mergeConfigProposal> & { notes: string[] } => {
+    const p = { ...prop, meshes: meshes as unknown as Proposal['meshes'], regions, notes: [] as string[] };
+    const result = mergeConfigProposal(raw, { kind: 'proposal-missing', proposal: p, parts: [] });
+    return { ...result, notes: p.notes };
+  };
+  const rejected = (name: string, mesh: unknown, bone: string, region = false): void => {
+    const r = region ? make({}, { [name]: bone }) : make({ [name]: mesh });
+    say(`MW679_${name.toUpperCase()}_IS_SKIPPED_WITH_ITS_REFERENCE_NAMED`, r.changes.length === 0 && r.edits.length === 0 && JSON.stringify(r.config) === JSON.stringify(raw) && r.notes.length === 1 && r.notes[0].includes(`part "${name}"`) && r.notes[0].includes(`"${bone}"`),
+      `${r.changes.length} changes, ${r.edits.length} edits; ${r.notes.join(' | ')}`);
+  };
+  rejected('foreign_region', null, 'leg_r0', true);
+  rejected('foreign_chain', { grid: 8, r: 1, segments: ['draft_chain'] }, 'draft_chain');
+  rejected('foreign_tuple', { grid: 8, r: 1, segments: [['draft_bone', [0, 0], [0, 8]]] }, 'draft_bone');
+  const auto = { ...syntheticPolicy(4), motion: { maxLocalDeformation: 1 }, regions: [{ name: 'local', shape: 'circle', cx: 8, cy: 8, r: 4, maxEdgeLength: 4, transition: 0, grade: 0, minArtSamples: 1, bone: 'body', band: 0 }] };
+  rejected('foreign_auto_bone', { auto: { ...auto, regions: [{ ...auto.regions[0], bone: 'draft_bone' }] }, r: 1, segments: ['hem'] }, 'draft_bone');
+  rejected('foreign_auto_influence', { auto: { ...auto, protect: { influences: ['draft_bone'] } }, r: 1, segments: ['hem0'] }, 'draft_bone');
+  rejected('foreign_auto_region', { auto: { ...auto, protect: { regionBoundaries: ['draft_region'] } }, r: 1, segments: ['hem'] }, 'draft_region');
+  rejected('foreign_contour_bone', { contour: { tolerance: 0, margin: 1, spacing: 4, regions: [{ name: 'local', shape: 'circle', cx: 8, cy: 8, r: 4, spacing: 4, band: 0, bone: 'draft_bone' }] }, r: 1, segments: ['hem'] }, 'draft_bone');
+  const valid = make({ chain: { grid: 8, r: 1, segments: ['hem'] }, link: { grid: 8, r: 1, segments: ['hem1'] }, tuple: { grid: 8, r: 1, segments: [['body', [0, 0], [0, 8]]] }, automatic: { auto: { ...auto, protect: { influences: ['hem0', 'root'], regionBoundaries: ['local'] } }, r: 1, segments: ['hem'] } }, { root_region: 'root' });
+  say('MW679_CONFIG_CHAINS_EXPANDED_LINKS_ROOT_AND_LOCAL_AUTO_REGIONS_RESOLVE', valid.changes.length === 5 && valid.notes.length === 0,
+    `${valid.changes.length} entries added; notes ${JSON.stringify(valid.notes)}; chain, link, explicit bone, root and local auto references read by the loader`);
+  const patchRaw = structuredClone(raw);
+  (patchRaw.assemble as Record<string, unknown>).patches = [{ name: 'painted', box: [0, 0, 8, 8], alpha: 'box', draw: 'front' }];
+  const p = { ...prop, meshes: { painted: { grid: 8, r: 1, segments: ['body'] } }, regions: {}, notes: [] as string[] };
+  const patch = mergeConfigProposal(patchRaw, { kind: 'proposal-missing', proposal: p, parts: [{ name: 'painted', from: 'painting:patch' }] });
+  say('MW679_PATCH_OWNERSHIP_NEVER_DRAFTS_A_MESH', patch.changes.length === 0 && patch.edits.length === 0 && p.notes.length === 1 && p.notes[0].includes('assemble.patches') && p.notes[0].includes('always a region'), `${patch.changes.length} changes; ${p.notes.join(' | ')}`);
+  const missingRaw = structuredClone(raw);
+  (missingRaw.assemble as Record<string, unknown>).plan = [['sleeves', 'full', 'handwear-r']];
+  const missingProp = { ...prop, meshes: {}, regions: { drape_r: 'absent', hand_r: 'body' }, notes: [] as string[] };
+  const selected = mergeConfigProposal(missingRaw, { kind: 'proposal-missing', proposal: missingProp, parts: [{ name: 'drape_r', from: 'full:drape-r' }, { name: 'hand_r', from: 'full:hand-r' }] });
+  say('MW679_A_SKIPPED_SPLIT_ENTRY_GETS_NO_PLAN_ROW_WHILE_A_RESOLVABLE_SIBLING_IS_ADDED',
+    JSON.stringify((selected.config.assemble as { plan: ConfigJson }).plan) === JSON.stringify([['sleeves', 'full', 'handwear-r'], ['hand_r', 'full', 'hand-r']]) && selected.changes.length === 2 && !Object.hasOwn(selected.config.regions as object, 'drape_r') && missingProp.notes.some((n) => n.includes('"absent"')),
+    `${JSON.stringify(selected.changes)}; ${missingProp.notes.join(' | ')}`);
+}
+// ---- End issue #679 controls --------------------------------------------------------------------------------------
+
 /** #356 standalone controls also run through the shared tally and CI shards. */
 function runConfigWriteSuite(): number {
   section('config-write: owned proposal fields and staged replacement');
@@ -47747,6 +47820,7 @@ function runConfigWriteSuite(): number {
   const dir = temp('config-write');
   try {
     runConfigWriteChecks(dir, (name, ok, detail) => say(name, ok, detail, 'the same pure merge, filesystem and CLI controls as tools/check_configwrite.ts'));
+    runOnlyMissing679Checks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #679: destination attachment coverage, resolvable entries only, and unchanged limb config bytes and rig gate'));
     const guide = readFileSync(join(ROOT, GUIDE_DOC), 'utf8');
     for (const code of ['CONFIG_WRITE_TARGET', 'CONFIG_WRITE_CHANGED', 'CONFIG_WRITE_FAILED']) {
       const answer = runCli(['guide', code]);

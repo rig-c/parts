@@ -202,17 +202,21 @@ export function runArmSplitUpgradeChecks(dir: string, say: Say, runner: RigcRunn
     `the migrated pre-1.37 config, a second run: exit ${again.status}; bytes equal ${readFileSync(oldConfig, 'utf8') === settledText}; mtime ${statSync(oldConfig).mtimeMs === settledStat.mtimeMs ? 'unchanged' : 'moved'}; stderr ${JSON.stringify(againLines)}`,
   );
 
-  // ---- AU05: a missing part whose proposed bone the config does not declare ----------------------------------------
+  // ---- AU05: skip the unresolved entry, retaining only the resolvable sibling (issue #679) ----------------------------
   const nohip = fixture('no-hip', { hip: false });
   const nohipOut = assembleInto(nohip.at);
-  const nohipStat = statSync(join(nohip.at, 'config.json'));
   const nohipRun = onlyMissing(nohip.at, nohipOut);
+  const nohipAfter = readFileSync(join(nohip.at, 'config.json'), 'utf8');
   const fails = nohipRun.stdout.split('\n').filter((l) => l.trim().startsWith('FAIL'));
-  const untouched = readFileSync(join(nohip.at, 'config.json'), 'utf8') === nohip.text && statSync(join(nohip.at, 'config.json')).mtimeMs === nohipStat.mtimeMs;
+  const notes = nohipRun.stdout.split('\n').filter((l) => l.startsWith('note: --only-missing:') && l.includes('part "drape_r"'));
+  const expectedNoHip = nohip.text.replace(OLD_ARM_ROW, `${OLD_ARM_ROW},${ADDED_ROWS[1]}`)
+    .replace(`"sleeves": "${ARM_SPLIT_HAND_TUNED.sleevesRegion}" },`, `"sleeves": "${ARM_SPLIT_HAND_TUNED.sleevesRegion}",\n    "hand_r": "chest" },`);
+  const actualLines = nohipRun.stderr.split('\n').filter((l) => l.startsWith('config '));
+  const expectedLines = [`config ${join(nohip.at, 'config.json')}: added assemble.plan[6] ${ADDED_ROWS[1]}`, `config ${join(nohip.at, 'config.json')}: added regions.hand_r`];
   record(
-    'AU05_A_MISSING_PART_ON_A_BONE_THE_CONFIG_LACKS_IS_REFUSED_BY_NAME_AND_NOTHING_IS_WRITTEN',
-    nohipRun.status === 1 && fails.length === 1 && fails[0].includes('CONFIG_NAME_RESOLVES: config.regions.drape_r') && fails[0].includes('"hip"') && fails[0].includes('"drape_r"') && untouched,
-    `the pre-1.37 config without hip: exit ${nohipRun.status}; ${fails.map((l) => l.trim()).join(' | ') || 'no FAIL line'} (by hand: config.regions.drape_r naming "hip", the one bone missing); config bytes and mtime untouched ${untouched}, the plan rows not written either`,
+    'AU05_AN_UNRESOLVED_ENTRY_IS_SKIPPED_WITH_A_NOTE_AND_ONLY_THE_RESOLVABLE_SIBLING_IS_WRITTEN',
+    nohipRun.status === 0 && fails.length === 0 && notes.length === 1 && notes[0].includes('"hip"') && notes[0].includes('config.bones does not declare') && nohipAfter === expectedNoHip && JSON.stringify(actualLines) === JSON.stringify(expectedLines),
+    `the pre-1.37 config without hip: exit ${nohipRun.status}; ${notes.join(' | ') || 'no drape_r skip note'}; only the hand row and region added, every other byte as read ${nohipAfter === expectedNoHip}; stderr ${JSON.stringify(actualLines)}`,
   );
 
   // ---- AU06: the switch outside its mode ------------------------------------------------------------------------------
@@ -232,7 +236,7 @@ export function runArmSplitUpgradeChecks(dir: string, say: Say, runner: RigcRunn
   });
   record(
     'AU06_ONLY_MISSING_OUTSIDE_PROPOSE_PARTS_WRITE_CONFIG_IS_A_USAGE_ERROR',
-    usageResults.every((u) => u.ok) && readFileSync(cfg, 'utf8') === nohip.text,
+    usageResults.every((u) => u.ok) && readFileSync(cfg, 'utf8') === nohipAfter,
     usageResults.map((u) => `${u.what}: ${u.ok ? 'exit 2' : 'NOT refused as usage'} (${u.line.trim()})`).join('; '),
   );
 

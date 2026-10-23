@@ -2888,7 +2888,7 @@ valued destination path. Its modes have different ownership:
 | `propose --head-box` | existing regular config | `seethrough.head_box` |
 | `assemble --propose-plan` | existing regular config; must name `--config` itself | `assemble.plan`, `assemble.extend_below_crop` |
 | ordinary `propose --parts` without `--cloth` | existing regular config | each present `PROPOSAL_CONFIG_SECTIONS` value: `bones`, `meshes`, `regions`, `limbs`, `motion`, `constraints`, `turn`, `proposed_rig_scale` |
-| ordinary `propose --parts … --only-missing` (issue #671) | existing regular config | only `meshes.<part>` or `regions.<part>`, as the proposal drafts it, for each proposed part the config attaches by neither, and an `assemble.plan` row for such a part from `full:drape-<s>` / `full:hand-<s>` the plan does not name (the drape just before the full run's `handwear-<s>` row, the hand just after it); added row by row and entry by entry, every existing row and entry and every other byte as read |
+| ordinary `propose --parts … --only-missing` (issues #671, #679) | existing regular config | only resolvable `meshes.<part>` or `regions.<part>` for an unattached part: attached covers existing `meshes` and `regions`, source parts consumed by the config's own `limbs.<name>.segments[].from`, and `assemble.patches` (always regions), with or without `--keypoints`. Entries are checked against the config's bones and chains, including mesh and `auto` bone/region references; an unresolved entry is never written. Each skipped part gets a note naming its attachment or the unresolved reference and why. An accepted split part from `full:drape-<s>` / `full:hand-<s>` also gains its missing `assemble.plan` row (drape before the full run's `handwear-<s>` row, hand after it); added row by row and entry by entry, every existing byte as read |
 | `propose --cloth <input.json>` | new file | the recipe's edits spliced into the cloth config; §3, *The config written*, gives entry ownership, hand-edit conflicts and `--from <previous.json>` |
 
 For the first three modes (not `--only-missing`), each selected field replaces its whole value; other
@@ -2907,8 +2907,8 @@ and refuses this flag; `--from` belongs to the cloth mode only.
 `--only-missing` (issue #671) is the upgrade path for a config proposed before a stage
 made a part it never named — the 1.37.0 arm split's `drape_<s>` and `hand_<s>`
 ([MIGRATION](MIGRATION.md#after-1370-merged-arm-layers-are-split-issue-490)): the same
-loader validates the candidate, so an added region on a bone the config does not
-declare is refused naming the part and the bone (`CONFIG_NAME_RESOLVES`); a part of any
+loader validates the candidate after unresolved entries have been skipped with a note
+naming the part, reference and reason; a skipped entry gets no plan row, and a part of any
 other origin gets no plan row; nothing missing keeps the bytes and mtime; stderr names each added row and entry. It is a usage error with `--head-box`, `--cloth`
 or `--from-config`, or without `--parts` or `--write-config`.
 All four modes use one file-writing adapter. Fresh cloth output keeps its
