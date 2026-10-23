@@ -36329,6 +36329,25 @@ function runTreeSuite(): number {
   runAliasControls(say);
   runRepublishControls(say);
   runPushProvenanceControls(say);
+  const rssRows: SelftestRssRow[] = [
+    { pid: 11, parent: 1, start: '100', bytes: 16384 },
+    { pid: 22, parent: 11, start: '200', bytes: 1073741824 },
+    { pid: 33, parent: 22, start: '300', bytes: 8192 },
+    { pid: 44, parent: 1, start: '400', bytes: 1073741824 },
+  ];
+  const holders = new Map<number, string>([[11, '100']]);
+  const held = selftestFamilyRss(rssRows, holders);
+  const parentOnly = rssRows[0].bytes;
+  say('TY24_THE_PEAK_SAMPLER_INCLUDES_CHILDREN_AND_EXCLUDES_UNRELATED_HOLDERS', held === 1073766400 && parentOnly < 1073741824, `family ${held} B, planted parent-only ${parentOnly} B; the unrelated GiB is excluded`, 'issue #677: the child holds the allocation; parent-only accounting cannot establish the memory bar');
+  const released = selftestFamilyRss([rssRows[0]], holders);
+  const peakHeld = Math.max(held, released);
+  say('TY25_THE_PEAK_SURVIVES_RELEASE_AND_REUSED_PIDS_DO_NOT_REVIVE_HOLDERS', peakHeld === held && released === 16384 && selftestFamilyRss([{ ...rssRows[0], start: 'replacement', bytes: 1073741824 }], holders) === 0, `held peak ${peakHeld} B, released current ${released} B; a different birth identity is excluded`, 'a peak is not the final current RSS and a reused PID is not its former allocation holder');
+  const peakLines: string[] = [];
+  const finishUnavailable = selftestPeakFinish(() => 'family RSS unavailable', (line) => { peakLines.push(line); });
+  finishUnavailable();
+  finishUnavailable();
+  say('TY26_THE_UNAVAILABLE_FAMILY_PEAK_FINISHES_ONCE_AND_KEEPS_THE_OWN_PROCESS_PEAK', peakLines.length === 1 && peakLines[0].includes('self_max_rss_kib=') && peakLines[0].includes('family RSS unavailable'), `explicit finish plus exit finish writes ${peakLines.length} line(s); own-process field present: ${peakLines[0]?.includes('self_max_rss_kib=')}`, 'the fallback must be idempotent too; a platform without proc still keeps the own-process kernel maximum when its runtime supports it');
+
   return bad();
 }
 
@@ -47697,6 +47716,82 @@ const TALLY_SUITE = 'run-tally';
 const STARTED_FIRST: readonly string[] = ['readme-loop', 'chain', 'build', 'check', 'scene', 'assemble-examples', 'propose', 'rig', 'auto-mesh-examples', 'auto-motion', 'build-cost', 'auto-mesh'];
 
 /** The argument that makes this file run one suite, or one unit of a split suite, as a worker, for the parent run, and nothing else. */
+/** A sampled process identity: PID reuse must not retain the former holder. */
+interface SelftestRssRow { pid: number; parent: number; start: string; bytes: number }
+
+/** Sum discovered descendants, retaining an orphan only while its identity is unchanged. */
+function selftestFamilyRss(rows: readonly SelftestRssRow[], known: Map<number, string>): number {
+  const family = new Map<number, string>();
+  for (const row of rows) if (known.get(row.pid) === row.start) family.set(row.pid, row.start);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const row of rows) if (!family.has(row.pid) && family.has(row.parent)) {
+      family.set(row.pid, row.start);
+      grew = true;
+    }
+  }
+  known.clear();
+  for (const [pid, start] of family) known.set(pid, start);
+  return rows.reduce((sum, row) => sum + (family.has(row.pid) ? row.bytes : 0), 0);
+}
+
+/** Linux /proc status RSS in KiB; shared pages count once per PID.
+ * This samples the selftest family, excluding an ancestor package runner. A blocked event
+ * loop or a child shorter than 200 ms can be missed; this line is not a memory guard.
+ */
+/** Node-compatible process.resourceUsage().maxRSS is KiB, not Bun.Subprocess bytes.
+ * The own-process kernel high-water mark and the sampled descendants answer different questions.
+ * https://nodejs.org/api/process.html#processresourceusage
+ */
+function selftestPeakFinish(familyText: () => string, write: (text: string) => void = (text) => { process.stderr.write(text); }): () => void {
+  let finished = false;
+  return (): void => {
+    if (finished) return;
+    finished = true;
+    let own = 'self_max_rss_kib=unavailable';
+    try { own = 'self_max_rss_kib=' + process.resourceUsage().maxRSS; } catch { /* not supported by every runtime */ }
+    write('selftest peak (stderr, never tallied): ' + own + '; ' + familyText() + '\n');
+  };
+}
+function startSelftestPeak(): () => void {
+  if (process.platform !== 'linux' || !existsSync('/proc/self/stat')) {
+    return selftestPeakFinish(() => 'family RSS unavailable; Linux /proc is required');
+  }
+  const identity = (text: string): readonly [number, string] => {
+    const fields = text.slice(text.lastIndexOf(')') + 2).split(/\s+/);
+    return [Number(fields[1]), fields[19]];
+  };
+  const [, rootStart] = identity(readFileSync('/proc/self/stat', 'utf8'));
+  const known = new Map<number, string>([[process.pid, rootStart]]);
+  let peak = 0;
+  let samples = 0;
+  let unreadable = 0;
+  const sample = (): void => {
+    const rows: SelftestRssRow[] = [];
+    for (const entry of readdirSync('/proc')) {
+      if (!/^\d+$/.test(entry)) continue;
+      try {
+        const [parent, start] = identity(readFileSync('/proc/' + entry + '/stat', 'utf8'));
+        const rss = /^VmRSS:\s+(\d+)\s+kB$/m.exec(readFileSync('/proc/' + entry + '/status', 'utf8'));
+        rows.push({ pid: Number(entry), parent, start, bytes: rss === null ? 0 : Number(rss[1]) * 1024 });
+      } catch {
+        unreadable++;
+      }
+    }
+    peak = Math.max(peak, selftestFamilyRss(rows, known));
+    samples++;
+  };
+  sample();
+  const timer = setInterval(sample, 200);
+  timer.unref();
+  return selftestPeakFinish(() => {
+    clearInterval(timer);
+    sample();
+    return 'family_rss_bytes=' + peak + '; interval_ms=200; samples=' + samples + '; unreadable_proc_entries=' + unreadable + '; method=linux-proc-status-summed-rss';
+  });
+}
+
 const WORKER_FLAG = '--suite-worker';
 
 /**
@@ -48403,4 +48498,7 @@ async function main(): Promise<void> {
   );
 }
 
+const finishSelftestPeak = process.argv.includes(WORKER_FLAG) ? null : startSelftestPeak();
+if (finishSelftestPeak !== null) process.on('exit', finishSelftestPeak);
 await main();
+finishSelftestPeak?.();
