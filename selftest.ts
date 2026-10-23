@@ -31332,22 +31332,98 @@ function runInputsSuite(): number {
  * (`exampleDirs`: `examples/<key>/config.json` tracked, `inputs/painting.png`
  * and `inputs/layers/{full,head}` from `bun run fetch-examples`).
  */
-function runAssembleExamplesSuite(): number | null {
-  // Issue #395: split into one unit per example (SPLIT_SUITES); the first opens the section and checks the inputs.
-  const part = splitPart('assemble-examples');
-  if (part.head) section('assemble: the public examples (examples/<key>/inputs)');
-  const found = exampleDirs().filter((d) => existsSync(join(d, 'inputs', 'layers', 'head')));
-  if (found.length === 0) {
-    if (!part.head) return null;
-    console.log('  SKIP  no fetched example (examples/<key>/config.json + inputs/painting.png + inputs/layers/{full,head}); run bun run fetch-examples');
-    console.log('          ⚠️ This is a HOLE in this run, not a pass — assemble-examples measured no real painting.');
-    return null;
+/** Internal example stages stay inside one suite/unit record and run in print order. */
+const ASSEMBLE_STAGE_FLAG = '--assemble-stage-worker';
+const ASSEMBLE_STAGES = ['AE01', 'AE02', 'AE03'] as const;
+type AssembleStage = typeof ASSEMBLE_STAGES[number];
+const ASSEMBLE_CASES: Readonly<Record<AssembleStage, string>> = {
+  AE01: 'AE01_EXAMPLE_ASSEMBLES_GREEN_AND_DETERMINISTIC',
+  AE02: 'AE02_EXAMPLE_LAYERS_PASS_EVERY_PLAUSIBILITY_RULE_AND_A_PLANTED_HAZE_DOES_NOT',
+  AE03: 'AE03_EVERY_TAG_OF_EITHER_RUN_IS_IN_A_ROW_OR_NAMED_ONCE_IN_NO_ROW',
+};
+
+function readAssembleStageArgs(args: readonly string[], examples: readonly string[]): { example: string; stage: AssembleStage; result: string } | string {
+  if (args.length !== 5 || args[0] !== ASSEMBLE_STAGE_FLAG || args[3] !== '--result' || !args[4] || args[4].startsWith('--')) {
+    return 'ASSEMBLE_STAGE_SELECTOR: expected ' + ASSEMBLE_STAGE_FLAG + ' <example> <AE01|AE02|AE03> --result <file>; found ' + JSON.stringify(args);
   }
+  if (!examples.includes(args[1])) return 'ASSEMBLE_STAGE_SELECTOR: example ' + JSON.stringify(args[1]) + ' is unknown; expected ' + examples.join(', ');
+  const stage = ASSEMBLE_STAGES.find((s) => s === args[2]);
+  if (stage === undefined) return 'ASSEMBLE_STAGE_SELECTOR: stage ' + JSON.stringify(args[2]) + ' is unknown; expected ' + ASSEMBLE_STAGES.join(', ');
+  return { example: args[1], stage, result: args[4] };
+}
+
+function assembleStageKey(example: string, stage: AssembleStage): string {
+  return 'assemble-examples@' + example + '/' + stage;
+}
+
+/** One stage must account for exactly its original case; a FAIL is retained and counted. */
+function replayAssembleStage(example: string, stage: AssembleStage, run: WorkerRun | undefined, print: (line: string) => void, printErr: (text: string) => void): number {
+  const key = assembleStageKey(example, stage);
+  const refuse = (detail: string): never => { throw new Error('ASSEMBLE_STAGE_ACCOUNTING: ' + key + ' — ' + detail); };
+  if (run === undefined) return refuse('no worker ran this stage');
+  if (run.key !== key) return refuse('worker key is ' + JSON.stringify(run.key));
+  if (run.status !== 0) return refuse('worker exited ' + String(run.status) + ': ' + run.stderr.trim());
+  if (run.result === null) return refuse('worker wrote no result');
+  let record: { key?: unknown; returned?: unknown; crash?: unknown };
+  try {
+    const value: unknown = JSON.parse(run.result);
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return refuse('result is not an object');
+    record = value;
+  } catch (err) { return refuse('result is not readable JSON: ' + (err as Error).message); }
+  if (record.key !== key) return refuse('result key is ' + JSON.stringify(record.key));
+  if (typeof record.crash === 'string') return refuse('stage crashed: ' + record.crash);
+  if (record.returned !== 0 && record.returned !== 1) return refuse('returned count is ' + JSON.stringify(record.returned) + ', expected 0 or 1');
+  const lines = run.stdout === '' ? [] : run.stdout.replace(/\n$/, '').split('\n');
+  const cases = lines.filter((l) => /^  (PASS|FAIL)  /.test(l));
+  const expected = ASSEMBLE_CASES[stage] + '[' + example + ']';
+  if (cases.length !== 1 || !(cases[0] === '  PASS  ' + expected || cases[0].startsWith('  FAIL  ' + expected + ': '))) return refuse('expected exactly one case ' + expected + '; found ' + JSON.stringify(cases));
+  if (lines.some((l) => l.startsWith('── ') || (/^  [A-Z]+  /.test(l) && !/^  (PASS|FAIL)  /.test(l)))) return refuse('stage opened a section or printed an unexpected gutter word');
+  const failures = cases[0].startsWith('  FAIL  ') ? 1 : 0;
+  if (record.returned !== failures) return refuse('returned ' + record.returned + ' but printed ' + failures + ' FAIL');
+  for (const line of lines) print(line);
+  if (run.stderr !== '') printErr(run.stderr);
+  return failures;
+}
+
+/** Planted stage records exercise the same reader as real ordinary children. */
+function assembleStageControlFaults(): string[] {
+  const faults: string[] = [];
+  if (ASSEMBLE_STAGES.join(',') !== 'AE01,AE02,AE03') faults.push('stage sequence missing, duplicated or out of order');
+  const known = ['demo'];
+  const args = [ASSEMBLE_STAGE_FLAG, 'demo', 'AE01', '--result', 'stage.json'];
+  const parsed = readAssembleStageArgs(args, known);
+  if (typeof parsed === 'string' || parsed.example !== 'demo' || parsed.stage !== 'AE01' || parsed.result !== 'stage.json') faults.push('healthy stage selector refused');
+  for (const planted of [[], args.slice(0, 4), [ASSEMBLE_STAGE_FLAG, 'unknown', 'AE01', '--result', 'x'], [ASSEMBLE_STAGE_FLAG, 'demo', 'AE99', '--result', 'x'], [...args, '--result', 'again'], [ASSEMBLE_STAGE_FLAG, 'demo', 'AE01', '--result', '--result']]) {
+    const refusal = readAssembleStageArgs(planted, known);
+    if (typeof refusal !== 'string' || !refusal.includes('ASSEMBLE_STAGE_SELECTOR')) faults.push('invalid stage selector accepted: ' + JSON.stringify(planted));
+  }
+  for (const stage of ASSEMBLE_STAGES) {
+    const read = readAssembleStageArgs([ASSEMBLE_STAGE_FLAG, 'demo', stage, '--result', 'stage.json'], known);
+    if (typeof read === 'string' || read.stage !== stage) faults.push('known stage selector refused: ' + stage);
+  }
+  const key = 'assemble-examples@demo/AE01';
+  const name = 'AE01_EXAMPLE_ASSEMBLES_GREEN_AND_DETERMINISTIC[demo]';
+  const fixture = (over: Partial<WorkerRun>): WorkerRun => ({ key, status: 0, stdout: '  PASS  ' + name + '\n          detail\n          origin: fixture\n', stderr: '', result: JSON.stringify({ key, returned: 0 }), ...over });
+  const read = (run: WorkerRun | undefined): { value: number | string; out: string; err: string } => {
+    const out: string[] = [], err: string[] = [];
+    try { return { value: replayAssembleStage('demo', 'AE01', run, (l) => out.push(l), (s) => err.push(s)), out: out.join('\n'), err: err.join('') }; }
+    catch (e) { return { value: (e as Error).message, out: out.join('\n'), err: err.join('') }; }
+  };
+  const healthy = read(fixture({ stderr: 'fixture stderr\n' }));
+  if (healthy.value !== 0 || healthy.out + '\n' !== fixture({}).stdout || healthy.err !== 'fixture stderr\n') faults.push('healthy stage bytes/count changed');
+  const red = read(fixture({ stdout: '  FAIL  ' + name + ': planted\n', result: JSON.stringify({ key, returned: 1 }) }));
+  if (red.value !== 1 || red.out !== '  FAIL  ' + name + ': planted') faults.push('stage FAIL was hidden or recounted');
+  const planted: Array<WorkerRun | undefined> = [undefined, fixture({ status: 1 }), fixture({ result: null }), fixture({ result: '{' }), fixture({ result: 'null' }), fixture({ key: key + '-other' }), fixture({ result: JSON.stringify({ key: 'other', returned: 0 }) }), fixture({ result: JSON.stringify({ key, crash: 'planted crash' }) }), fixture({ result: JSON.stringify({ key, returned: -1 }) }), fixture({ stdout: '' }), fixture({ stdout: fixture({}).stdout + fixture({}).stdout }), fixture({ stdout: '  PASS  AE02_WRONG[demo]\n' }), fixture({ stdout: '  FAIL  ' + name + ': planted\n' }), fixture({ result: JSON.stringify({ key, returned: 1 }) }), fixture({ stdout: '── unexpected ──\n' + fixture({}).stdout }), fixture({ stdout: fixture({}).stdout + '  SKIP  omitted\n' })];
+  for (const run of planted) if (!(typeof read(run).value === 'string' && String(read(run).value).includes('ASSEMBLE_STAGE_ACCOUNTING'))) faults.push('invalid stage record accepted');
+  return faults;
+}
+
+/** The original case blocks, each in an ordinary child with its own address space. */
+function runAssembleExampleStage(ex: string, stage: AssembleStage): number {
+  const name = relative(join(ROOT, 'examples'), ex);
   const { say, bad } = counter();
-  if (!exampleInputsAtPin(found.map((d) => relative(join(ROOT, 'examples'), d)), part.head ? say : quietSay, 'AE900_THE_FETCHED_EXAMPLE_INPUTS_MATCH_THE_PINNED_TREE')) return bad();
-  for (const ex of found) {
-    const name = relative(join(ROOT, 'examples'), ex);
-    if (!part.has(name)) continue;
+  switch (stage) {
+  case 'AE01': {
     let detail: string;
     let ok = false;
     try {
@@ -31367,9 +31443,9 @@ function runAssembleExamplesSuite(): number | null {
     }
     say(`AE01_EXAMPLE_ASSEMBLES_GREEN_AND_DETERMINISTIC[${name}]`, ok, detail, 'a public painting and its real See-through runs: the question the generated rectangles cannot answer is whether real layers go through green');
 
-    // Plausibility on real layers: no layer crosses a rule, and the issue's haze
-    // planted in place of the full run's (empty) wings layer is left out with the
-    // rest of the proposal unmoved, while a copy of the real topwear is proposed.
+    break;
+  }
+  case 'AE02': {
     let pDetail: string;
     let pOk = false;
     try {
@@ -31409,9 +31485,9 @@ function runAssembleExamplesSuite(): number | null {
       'the bars were set off these layers with margin, so a real layer crossing one means the bar is wrong; the planted haze is the issue\'s layer on a real run, whose other layers are the figure it is measured against',
     );
 
-    // Issue #308: on a real pair of runs every tag either run holds is in a row or named once in no row, and nose is
-    // named with the row that lets propose read the pitch. [observed] On the four examples nose is in no row and its
-    // head-run layer holds the more of it.
+    break;
+  }
+  case 'AE03': {
     let uDetail: string;
     let uOk = false;
     try {
@@ -31436,8 +31512,60 @@ function runAssembleExamplesSuite(): number | null {
       uDetail,
       'issue #308: on a real painting the proposer left seven layers out with notes: [] — a reader of a real run has to be able to account for every layer the decomposition made, nose included',
     );
+    break;
+  }
   }
   return bad();
+}
+
+function runAssembleExamplesSuite(): number | null {
+  // Issue #395: split into one unit per example (SPLIT_SUITES); the first opens the section and checks the inputs.
+  const part = splitPart('assemble-examples');
+  if (part.head) section('assemble: the public examples (examples/<key>/inputs)');
+  const found = exampleDirs().filter((d) => existsSync(join(d, 'inputs', 'layers', 'head')));
+  if (found.length === 0) {
+    if (!part.head) return null;
+    console.log('  SKIP  no fetched example (examples/<key>/config.json + inputs/painting.png + inputs/layers/{full,head}); run bun run fetch-examples');
+    console.log('          ⚠️ This is a HOLE in this run, not a pass — assemble-examples measured no real painting.');
+    return null;
+  }
+  const { say, bad } = counter();
+  if (!exampleInputsAtPin(found.map((d) => relative(join(ROOT, 'examples'), d)), part.head ? say : quietSay, 'AE900_THE_FETCHED_EXAMPLE_INPUTS_MATCH_THE_PINNED_TREE')) return bad();
+  let stageFailures = 0;
+  const results = temp('assemble-stages');
+  try {
+    for (const ex of found) {
+      const name = relative(join(ROOT, 'examples'), ex);
+      if (!part.has(name)) continue;
+      for (const stage of ASSEMBLE_STAGES) {
+        const key = assembleStageKey(name, stage);
+        const result = join(results, name + '-' + stage + '.json');
+        const child = spawnSync(process.execPath, [import.meta.path, ASSEMBLE_STAGE_FLAG, name, stage, '--result', result], { encoding: 'utf8', maxBuffer: 1 << 26 });
+        const run: WorkerRun = { key, status: child.status, stdout: child.stdout ?? '', stderr: (child.stderr ?? '') + (child.error === undefined ? '' : 'could not start stage: ' + child.error.message), result: existsSync(result) ? readFileSync(result, 'utf8') : null };
+        stageFailures += replayAssembleStage(name, stage, run, (line) => console.log(line), (text) => { process.stderr.write(text); });
+      }
+    }
+  } finally {
+    rmSync(results, { recursive: true, force: true });
+  }
+  return bad() + stageFailures;
+}
+
+function assembleStageMain(args: readonly string[]): void {
+  const request = readAssembleStageArgs(args, exampleKeys().all);
+  if (typeof request === 'string') {
+    console.error('selftest: ' + request);
+    process.exit(2);
+  }
+  const { example, stage, result } = request;
+  const key = assembleStageKey(example, stage);
+  let record: { key: string; returned: number } | { key: string; crash: string };
+  try {
+    record = { key, returned: runAssembleExampleStage(join(EXAMPLES_DIR, example), stage) };
+  } catch (err) {
+    record = { key, crash: (err as Error).stack ?? String(err) };
+  }
+  writeFileSync(result, JSON.stringify(record));
 }
 
 /** A raster with its rows and columns exchanged. */
@@ -37442,6 +37570,7 @@ function runTallySuite(live: RunTally): number {
       return { lines, value: (err as Error).message };
     }
   };
+  const stageFaults = assembleStageControlFaults();
   const fine = replay(worker({}));
   const hole = replay(worker({ result: JSON.stringify({ key: 'alpha', returned: null }), stdout: '── alpha ──\n  SKIP  nothing\n' }));
   const plants: Array<[string, { lines: string[]; value: number | null | string }, string]> = [
@@ -37455,8 +37584,8 @@ function runTallySuite(live: RunTally): number {
   const missed = plants.filter(([, r, want]) => !(typeof r.value === 'string' && r.value.includes(want)));
   say(
     'RT06_A_WORKER_THAT_CANNOT_ACCOUNT_FOR_ITS_SUITE_THROWS_AND_A_HEALTHY_ONE_REPLAYS_ITS_LINES_AND_ITS_COUNT',
-    fine.value === 0 && fine.lines.join('\n') === '── alpha ──\n  PASS  A01' && hole.value === null && hole.lines.length === 2 && missed.length === 0 && plants[1][1].lines.length === 2,
-    `healthy -> ${fine.lines.length} line(s), count ${String(fine.value)}; a skip -> ${String(hole.value)}; ${plants.map(([what, r]) => `${what} -> ${typeof r.value === 'string' ? r.value : `NOT refused (${String(r.value)})`}`).join('; ')}`,
+    stageFaults.length === 0 && fine.value === 0 && fine.lines.join('\n') === '── alpha ──\n  PASS  A01' && hole.value === null && hole.lines.length === 2 && missed.length === 0 && plants[1][1].lines.length === 2,
+    `healthy -> ${fine.lines.length} line(s), count ${String(fine.value)}; a skip -> ${String(hole.value)}; ${plants.map(([what, r]) => `${what} -> ${typeof r.value === 'string' ? r.value : `NOT refused (${String(r.value)})`}`).join('; ')}${stageFaults.length === 0 ? '' : '; stage controls: ' + stageFaults.join('; ')}`,
     'issue #99: a suite run in another process is only as good as its accounting, and a throw here is what RunTally.of prints as the suite\'s SUITE_CRASHED FAIL line; the lines printed before the worker failed are still replayed, as an in-process suite\'s are before it throws',
   );
 
@@ -37586,6 +37715,13 @@ function runTallySuite(live: RunTally): number {
     const c = spawnSync(process.execPath, [join(ROOT, 'selftest.ts'), ...args], { encoding: 'utf8', maxBuffer: 1 << 26, timeout, killSignal: 'SIGKILL' });
     return { status: c.status, stdout: c.stdout ?? '', stderr: c.stderr ?? '' };
   };
+  const stageRefusals = [
+    [ASSEMBLE_STAGE_FLAG],
+    [ASSEMBLE_STAGE_FLAG, 'demo', 'AE99', '--result', 'unused.json'],
+    [ASSEMBLE_STAGE_FLAG, 'no-such-example', 'AE01', '--result', 'unused.json'],
+    [ASSEMBLE_STAGE_FLAG, 'demo', 'AE01', '--result'],
+    [ASSEMBLE_STAGE_FLAG, 'demo', 'AE01', '--result', 'unused.json', '--result', 'again.json'],
+  ].map((args) => refusalFaults(child(args, 30_000), 'ASSEMBLE_STAGE_SELECTOR:'));
   const refusedLines: Array<[readonly string[], string]> = [
     [['--unknown-flag'], '"--unknown-flag" is no flag of this run'],
     [['--suite', 'assemble'], '"--suite" is no flag of this run'],
@@ -37601,6 +37737,7 @@ function runTallySuite(live: RunTally): number {
   const oldRefused = refusalFaults(oldWhole, refusedLines[0][1]);
   say(
     'RT12_AN_UNKNOWN_FLAG_A_STRAY_WORD_AND_AN_UNKNOWN_SUITE_ARE_REFUSED_BY_NAME_BEFORE_ANY_SUITE_STARTS',
+    stageRefusals.every((f) => f.length === 0) &&
     refusedRuns.every(([, , f]) => f.length === 0) &&
       Array.isArray(pure) &&
       pure.length === 2 &&
@@ -37611,7 +37748,7 @@ function runTallySuite(live: RunTally): number {
       Array.isArray(pureTwice) &&
       pureTwice.some((r) => r.includes('given twice')) &&
       oldRefused.length > 0,
-    `${refusedRuns.map(([args, , f]) => `${args.join(' ')} -> ${f.length === 0 ? 'exit 2, named, no section opened' : f.join('; ')}`).join('; ')}; read: --suite assemble -> ${Array.isArray(pure) ? pure.join(' | ') : 'ACCEPTED'}; --only twice -> ${Array.isArray(pureTwice) ? pureTwice.join(' | ') : 'ACCEPTED'}; the old parent (every suite run, exit 0) -> ${oldRefused.join('; ') || 'NOT refused'}`,
+    `${refusedRuns.map(([args, , f]) => `${args.join(' ')} -> ${f.length === 0 ? 'exit 2, named, no section opened' : f.join('; ')}`).join('; ')}; read: --suite assemble -> ${Array.isArray(pure) ? pure.join(' | ') : 'ACCEPTED'}; --only twice -> ${Array.isArray(pureTwice) ? pureTwice.join(' | ') : 'ACCEPTED'}; the old parent (every suite run, exit 0) -> ${oldRefused.join('; ') || 'NOT refused'}${stageRefusals.every((f) => f.length === 0) ? '' : '; stage selectors: ' + stageRefusals.flat().join('; ')}`,
     'issue #500: a word the run does not read is a word the caller meant, and ignoring it ran the whole suite for every request of one — so it is refused by name, before a worker starts, rather than guessed at',
   );
 
@@ -48435,6 +48572,10 @@ async function mergeMain(dir: string, keys: readonly string[], units: readonly s
 }
 
 async function main(): Promise<void> {
+  if (process.argv.includes(ASSEMBLE_STAGE_FLAG)) {
+    assembleStageMain(process.argv.slice(2));
+    return;
+  }
   if (process.argv.includes(WORKER_FLAG)) {
     workerMain(process.argv);
     return;
@@ -48498,7 +48639,7 @@ async function main(): Promise<void> {
   );
 }
 
-const finishSelftestPeak = process.argv.includes(WORKER_FLAG) ? null : startSelftestPeak();
+const finishSelftestPeak = process.argv.includes(WORKER_FLAG) || process.argv.includes(ASSEMBLE_STAGE_FLAG) ? null : startSelftestPeak();
 if (finishSelftestPeak !== null) process.on('exit', finishSelftestPeak);
 await main();
 finishSelftestPeak?.();
