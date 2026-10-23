@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.60.1](https://github.com/rig-c/parts/compare/v1.60.0...v1.60.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* **check:** read seams in default and still air ([#676](https://github.com/rig-c/parts/issues/676)) ([8fe6713](https://github.com/rig-c/parts/commit/8fe6713c606bc6c9aa584555b8780536ad1d37f5))
+* **docs:** the examples repository is rig-c/examples (renamed from parts-examples) ([#681](https://github.com/rig-c/parts/issues/681)) ([1b37eb1](https://github.com/rig-c/parts/commit/1b37eb1fca3af9c12f7e0163fdab633eb0ebed8e))
+* **selftest:** isolate public example stages in sequential children ([#688](https://github.com/rig-c/parts/issues/688)) ([2f93435](https://github.com/rig-c/parts/commit/2f934359420b6533f3ccdbc3e821d56429af2649))
+* **selftest:** report process-family peak RSS on stderr ([#684](https://github.com/rig-c/parts/issues/684)) ([50e2faf](https://github.com/rig-c/parts/commit/50e2faf513ef7838e8437af47c2812d7ec2b9be2))
+
 ## [1.60.0](https://github.com/rig-c/parts/compare/v1.59.0...v1.60.0) (2026-10-23)
 
 
