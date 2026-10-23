@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.59.0](https://github.com/rig-c/parts/compare/v1.58.0...v1.59.0) (2026-10-23)
+
+
+### Features
+
+* **limbs:** a limb segment's front slot for gesture sets ([#667](https://github.com/rig-c/parts/issues/667)) ([1488155](https://github.com/rig-c/parts/commit/148815520a7d484210259e343c230584f9d412ea)), closes [#664](https://github.com/rig-c/parts/issues/664)
+
 ## [1.58.0](https://github.com/rig-c/parts/compare/v1.57.1...v1.58.0) (2026-10-22)
 
 
