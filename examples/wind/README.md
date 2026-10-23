@@ -74,6 +74,25 @@ also holds the licence; `bun run fetch-examples` copies the inputs into `inputs/
   written; `rig.json` is the build's `rig/rig.json` carried to the flat form by
   `flattenRig` (`src/rig.ts`), as for `scarf`.
 
+- `config.wave.json` — the same config plus one **gesture set** (issue #670), the public
+  example of a drawn alternate set and of a front slot. `wave_r` is a drawn-only subset
+  set over the right arm (`assemble.alternates`, issue #476): its parts are re-cut from
+  wind's own painting and layers at `drawn` `sleeve_r0` −110°, `sleeve_r1` −112°
+  (the base stands at −119.3° and −128.8°). Its forearm draws on a front slot
+  (issue #664): `limbs.arm_r.front` places `forearm_r_front` right after `topwear`,
+  and the set's `front` draws it there, hiding `forearm_r`. The raise is small, about
+  9° and 17°: drawn from the base painting, a larger angle leaves a segment with no
+  pixels (`ASSEMBLE_LIMB_PIXELS`). A real raised-arm painting would need its own
+  generation, See-through run and registration. `config.json` and `expected/` do not
+  change with it.
+- `expected-wave/` — the build of `config.wave.json`, by the same call as `expected/`
+  with `--config examples/wind/config.wave.json`: `parts.json`, `motion.json`,
+  `mesh_report.json`, `sets.json`, and `rig.json` **as built**. The set's regions
+  are drawn turned, which the flat form refuses, so this rig is not flattened. The
+  chain suite builds it (`CH30`), holds it to these files (`CH31`) and runs
+  `check --set wave_r` on it (`CH32`). `@rig-c/play`'s `setSet('wave_r')` on this
+  build poses the arm as `check --set` does.
+
 There is no `animations.json`. `demo` and `scarf` carry named gestures (issue #224);
 this example's motion beyond the idle is the consumer's environment, which the recipe
 answers and does not key.

@@ -1,0 +1,18 @@
+{
+ "spec": "rig-parts-sets/1",
+ "sets": {
+  "wave_r": {
+   "slots": {
+    "forearm_r_front": "wave_r_forearm_r",
+    "upperarm_r": "wave_r_upperarm_r"
+   },
+   "hides": [
+    "forearm_r"
+   ],
+   "drawn": {
+    "sleeve_r0": -110,
+    "sleeve_r1": -112
+   }
+  }
+ }
+}
