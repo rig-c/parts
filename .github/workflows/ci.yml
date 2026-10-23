@@ -148,10 +148,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         bun: ['1.2.0', latest]
-    # First split run 39959626297: Windows minimum Bun hit the 10-minute
-    # native-build job limit. HQ permits one Windows-only 20-minute window.
-    # After the first green Windows builds, record the maximum completed job
-    # duration and replace 20 with duration * 1.5, rounded UP to 5 minutes.
+    # Green matrix run 39963251495: maximum Windows native-build job
+    # 120446378030 took 746 seconds (minimum Bun); latest Bun took 474.
+    # 746 * 1.5 = 1119 seconds; round UP to 5-minute units = 20 minutes.
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 20 || 10 }}
     steps:
       - uses: actions/checkout@v4
