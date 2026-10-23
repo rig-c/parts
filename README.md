@@ -338,7 +338,7 @@ agent skill.
 | `assemble --propose-plan … [--write-config <config>]` | propose `assemble.plan` and `extend_below_crop` from the two runs, leaving out an implausible layer with a note naming the rule, naming in a note any full-run body no planned part covers, and naming every layer no row takes with why (empty, taken from the other run only, a plausibility rule; `nose`, never planned, with the row that lets `propose` read the head's pitch) |
 | `assemble --source --full --head --config --out [--seam] [--project]` | merge the two runs into rig-space parts, `parts.json`, the recomposite and its error map, and list the uncovered holes |
 | `propose --head-box --full <run> --canvas WxH [--no-back-hair] [--write-config <config>]` | propose `seethrough.head_box` from the full run, held inside the painting; `--no-back-hair` leaves the back-hair layer out of that proposal |
-| `propose --parts --source --out [--compare <config>] [--write-config <config>]` | propose bones, meshes, regions and an idle; draw the overlay; print, per bone, which check read it or that none did and why (its role, its kind of segment), and write `basis.json` beside the proposal — what each bone rests on (a joint, a part's mask, a ratio, other bones) and, with `--compare`, whether the config's bone differs |
+| `propose --parts --source --out [--compare <config>] [--write-config <config> [--only-missing]]` | propose bones, meshes, regions and an idle; draw the overlay; print, per bone, which check read it or that none did and why (its role, its kind of segment), and write `basis.json` beside the proposal — what each bone rests on (a joint, a part's mask, a ratio, other bones) and, with `--compare`, whether the config's bone differs |
 | `propose … --keypoints <file> [--person <id>]` | read a posed figure's joints from one explicit file (space, image size, people, each joint observed, occluded or missing, its source): a joint with a position places the neck, hip, chest or a sleeve chain as given, a note says how every joint was used or which rule stood in, and LINT reads the torso and sleeves along the joints instead of by screen y ([AUTHORING §3](docs/AUTHORING.md)) |
 | `propose … --grid-rule figure\|part` | how each drafted lattice's spacing is chosen: `figure` (the default) one spacing for the figure, round(H / 37) rig px, a part already coarser keeping its own, with a note on its calibration and cost; `part` the reference's rule, a tenth of the part's short side (the oracle examples are proposed under it) |
 | `propose … --from-config <config>` | draw and LINT the config's current bones (by the joints too, given `--keypoints`) |
@@ -385,6 +385,17 @@ runs. Its already-checked splice text may be a partial config; it is not passed
 through the full-config loader. If removing the staged temporary fails after
 publication, the error may accompany an already-published complete config.
 `--from <previous.json>` retains the previous-recipe comparison.
+With `--only-missing` (issue #671), an ordinary proposal's `--write-config` adds
+only `meshes.<part>` or `regions.<part>` for each proposed part the config
+attaches by neither, entry by entry, and, for a part the 1.37.0 arm split makes
+(`full:drape-<s>`, `full:hand-<s>`) that `assemble.plan` does not name, its plan
+row beside the arm's row; every existing row and entry and every other byte
+stays as read, and nothing else of the proposal is written. The candidate passes
+the full loader first, so an entry on a bone the config does not declare is
+refused naming the part and the bone; nothing missing leaves bytes and mtime
+untouched. It is the upgrade path for a config proposed before the 1.37.0 arm
+split ([MIGRATION](docs/MIGRATION.md#after-1370-merged-arm-layers-are-split-issue-490)),
+and a usage error with `--head-box`, `--cloth` or `--from-config`.
 `--from-config` proposes nothing and cannot be combined with `--write-config`.
 [AUTHORING §4](docs/AUTHORING.md#4-the-command-order) describes all four modes.
 

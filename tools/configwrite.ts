@@ -199,5 +199,5 @@ export function stageConfigWrite(target: ConfigWriteTarget | FreshConfigWrite, p
 }
 /** Print to stderr so proposal JSON on stdout remains machine-readable. */
 export function configWriteLines(target: ConfigWriteTarget, changes: readonly ConfigWriteChange[]): string[] {
-  return changes.length === 0 ? [`config ${target.path}: unchanged`] : changes.map((c) => `config ${target.path}: ${c.kind} ${c.path}`);
+  return changes.length === 0 ? [`config ${target.path}: unchanged`] : changes.map((c) => `config ${target.path}: ${c.kind} ${c.path}${c.value === undefined ? '' : ` ${c.value}`}`);
 }

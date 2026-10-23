@@ -2,7 +2,9 @@
  * The three config updates proposed by the CLI (issue #356). Pure JSON merge:
  * no file reads/writes and no substitute for the stage's existing validator.
  * A present proposal section replaces that whole field; an absent optional
- * section is retained. The caller supplies the proposer's own section tuple,
+ * section is retained. `proposal-missing` (issue #671, `--only-missing`) instead
+ * adds only the `meshes` / `regions` entries of proposed parts the config attaches
+ * by neither, one edit per entry, and leaves every existing entry as it is. The caller supplies the proposer's own section tuple,
  * avoiding a second policy list or a runtime import of the proposer graph.
  */
 import type { PlanProposal } from './assemble.ts';
@@ -16,10 +18,14 @@ export interface ConfigObject { [key: string]: ConfigJson }
 export type ConfigWritePatch =
   | { kind: 'head-box'; head_box: HeadBoxProposal['head_box'] }
   | { kind: 'assemble-plan'; plan: PlanProposal['plan']; extend_below_crop: PlanProposal['extend_below_crop'] }
-  | { kind: 'proposal'; proposal: Proposal; sections: typeof PROPOSAL_CONFIG_SECTIONS };
+  | { kind: 'proposal'; proposal: Proposal; sections: typeof PROPOSAL_CONFIG_SECTIONS }
+  /** Issue #671 (`--only-missing`): only `meshes.<part>` / `regions.<part>` for a proposed part the config attaches by neither. */
+  | { kind: 'proposal-missing'; proposal: Proposal; parts: ReadonlyArray<{ name: string; from: string }> };
 export interface ConfigWriteChange {
   path: string;
   kind: 'added' | 'replaced' | 'removed';
+  /** The value written, where the path alone does not say it (an array element added, issue #671). */
+  value?: string;
 }
 export interface ConfigWriteResult {
   config: ConfigObject;
@@ -111,7 +117,49 @@ export function mergeConfigProposal(raw: unknown, patch: ConfigWritePatch): Conf
       }
       break;
     }
-    default: return refuse('write-config', 'has no supported operation; head-box, assemble-plan or proposal is required');
+    case 'proposal-missing': {
+      // Issue #671: a config proposed before a part existed (the #490 arm split's drape_<s> and hand_<s>) gains its
+      // plan row (split parts only) and an entry for that part alone, entry by entry, in the section the proposal drafts
+      // it in. A part the config already attaches, by either section, keeps its entry as written; nothing else of the
+      // proposal is read.
+      const attached = (part: string): boolean => (object(config.meshes) && own(config.meshes, part)) || (object(config.regions) && own(config.regions, part));
+      for (const section of ['meshes', 'regions'] as const) {
+        if (config[section] !== undefined && !object(config[section])) return refuse(`config.${section}`, 'is not an object; an object of part entries is required before an entry is added to it');
+      }
+      const added: ConfigWriteChange[] = [];
+      // The #490 split's parts the plan does not name, each row where `mergedArmSplitPlan` puts it: the drape just
+      // before the full run's handwear-<s> row, the hand just after it. A part of any other origin is not planned here.
+      const assemble = config.assemble;
+      const plan = object(assemble) && Array.isArray(assemble.plan) ? assemble.plan : null;
+      if (plan !== null) {
+        const row = (e: ConfigJson): [string, string, string] | null =>
+          Array.isArray(e) && e.length === 3 && e.every((x) => typeof x === 'string') ? (e as [string, string, string]) : null;
+        for (const part of patch.parts) {
+          const m = /^full:(drape|hand)-([rl])$/.exec(part.from);
+          if (m === null) continue;
+          if (plan.some((e) => { const r = row(e); return r !== null && (r[0] === part.name || (r[1] === 'full' && r[2] === `${m[1]}-${m[2]}`)); })) continue;
+          const arm = plan.findIndex((e) => { const r = row(e); return r !== null && r[1] === 'full' && r[2] === `handwear-${m[2]}`; });
+          if (arm < 0) continue;
+          const at = m[1] === 'drape' ? arm : arm + 1;
+          const value: ConfigJson = [part.name, 'full', `${m[1]}-${m[2]}`];
+          plan.splice(at, 0, value);
+          edits.push({ path: ['assemble', 'plan', at], value, insert: true, inline: true });
+          added.push({ path: `assemble.plan[${at}]`, kind: 'added', value: JSON.stringify(value) });
+        }
+      }
+      for (const section of ['meshes', 'regions'] as const) {
+        for (const [part, entry] of Object.entries(patch.proposal[section])) {
+          if (attached(part)) continue;
+          const value = clone(entry, field(`proposal.${section}`, part));
+          if (!object(config[section])) config[section] = {};
+          (config[section] as ConfigObject)[part] = value;
+          edits.push({ path: [section, part], value });
+          added.push({ path: field(section, part), kind: 'added' });
+        }
+      }
+      return { config, changes: added, edits };
+    }
+    default: return refuse('write-config', 'has no supported operation; head-box, assemble-plan, proposal or proposal-missing is required');
   }
   return { config, changes: changes(before, config), edits };
 }

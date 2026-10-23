@@ -105,6 +105,7 @@ import { runFootOwnershipChecks } from './tools/check_foot_ownership.ts';
 import { runLimbSlotChecks } from './tools/check_limb_slots.ts';
 import { runLimbLayoutChecks } from './tools/check_limb_layout.ts';
 import { runFrontSlotChecks } from './tools/check_front_slot.ts';
+import { runArmSplitUpgradeChecks } from './tools/check_arm_split_upgrade.ts';
 import {
   assembleConfig,
   AUTHOR_PART,
@@ -47361,6 +47362,19 @@ function runFrontSlotSuite(): number {
   return bad();
 }
 
+function runArmSplitUpgradeSuite(): number {
+  section('arm-split-upgrade: a config proposed before the arm split gains only its missing entries');
+  const { say, bad } = counter();
+  const dir = temp('arm-split-upgrade');
+  try {
+    runArmSplitUpgradeChecks(dir, (name, pass, detail) => say(name, pass, detail,
+      'issue #671: a config proposed before 1.37.0 meets the parts the #490 arm split makes; rig names them and the MIGRATION entry, and propose --only-missing adds an entry for each part the config attaches by neither section, every other byte as read'), rigcRunnerAt(suiteRigc(), spawnRigc));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  return bad();
+}
+
 /** #356 standalone controls also run through the shared tally and CI shards. */
 function runConfigWriteSuite(): number {
   section('config-write: owned proposal fields and staged replacement');
@@ -47432,6 +47446,7 @@ const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number 
   ['limb-slots', runLimbSlotSuite],
   ['limb-layout', runLimbLayoutSuite],
   ['front-slot', runFrontSlotSuite],
+  ['arm-split-upgrade', runArmSplitUpgradeSuite],
   ['alternate-tips', runAlternateTipsSuite],
   ['plausibility', runPlausibilitySuite],
   ['assemble-examples', runAssembleExamplesSuite],
@@ -47515,7 +47530,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
  */
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['check']],
-  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'subset-cover', 'foot-ownership', 'limb-slots', 'limb-layout', 'front-slot', 'alternate-tips', 'contour-wiring', 'config', 'config-write', 'core-pointer', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
+  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'subset-cover', 'foot-ownership', 'limb-slots', 'limb-layout', 'front-slot', 'arm-split-upgrade', 'alternate-tips', 'contour-wiring', 'config', 'config-write', 'core-pointer', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
   ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'mesh-stats', 'remesh', 'retune', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
 ];
 

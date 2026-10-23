@@ -2997,9 +2997,10 @@ function checkRegions(c: Check, v: Json, bones: Set<string>): void {
     return;
   }
   for (const [part, bone] of Object.entries(v as Record<string, Json>)) {
-    if (typeof bone !== 'string' || !bones.has(bone)) {
-      c.fail('CONFIG_NAME_RESOLVES', `config.regions.${part}`, `is ${show(bone)}; a bone name is required`);
-    }
+    if (typeof bone !== 'string') c.fail('CONFIG_NAME_RESOLVES', `config.regions.${part}`, `is ${show(bone)}; a bone name is required`);
+    // Issue #671: the part and the bone by name, so an entry `propose --only-missing` drafted on a bone the config
+    // does not declare says which.
+    else if (!bones.has(bone)) c.fail('CONFIG_NAME_RESOLVES', `config.regions.${part}`, `names the bone ${show(bone)} for the part "${part}", which config.bones does not declare; a declared bone is required`);
   }
 }
 
