@@ -128,7 +128,7 @@ import {
   type WorldBox,
 } from './instruments.ts';
 import { type AlternatePartsRecord, FRONT_SUFFIX, type LimbRecord, type PartRecord, type PartsFile, readParts } from './parts.ts';
-import { poseRigBonesForDrawn, type RigBone, SETS_FILE } from './rig.ts';
+import { ARM_SPLIT_MIGRATION, poseRigBonesForDrawn, type RigBone, SETS_FILE } from './rig.ts';
 import { turnTwin } from './turn.ts';
 import {
   aimLine,
@@ -1278,6 +1278,29 @@ export function setPlacements(parts: PartsFile, alt: AlternatePartsRecord, slotO
     for (const m of moved) if (after.get(m) === p.name) draw(m, baseOf.get(m) as PartRecord);
   }
   return out;
+}
+
+/**
+ * Issue #671: why a set made before 1.37.0 can fail its seam after #490's arm
+ * split. The set covers a side's sleeve (a part from `full:handwear-<s>`), and
+ * the split made that side's `hand_<s>` / `drape_<s>` parts of their own, which
+ * the set neither covers nor hides, so the base hand is drawn as well as the
+ * hand inside the set's own sleeve art. Returns the hint for the set's seam
+ * refusal, or null when nothing of the kind applies.
+ */
+export function armSplitSetHint(parts: PartsFile, alt: AlternatePartsRecord): string | null {
+  const from = new Map(parts.parts.map((p) => [p.name, p.from]));
+  const covered = new Set(Object.keys(alt.slots).map((n) => (n.endsWith(FRONT_SUFFIX) ? n.slice(0, -FRONT_SUFFIX.length) : n)));
+  const hidden = new Set(alt.hides ?? []);
+  const open: string[] = [];
+  for (const side of ['r', 'l']) {
+    if (![...covered].some((n) => from.get(n) === `full:handwear-${side}`)) continue;
+    for (const p of parts.parts) {
+      if ((p.from === `full:hand-${side}` || p.from === `full:drape-${side}`) && !covered.has(p.name) && !hidden.has(p.name)) open.push(p.name);
+    }
+  }
+  if (open.length === 0) return null;
+  return ` — the set covers a sleeve whose merged arm layer 1.37.0 split (issue #490), and it neither covers nor hides ${open.map((n) => `"${n}"`).join(', ')}, so the base draws ${open.length === 1 ? 'that part' : 'those parts'} beside the set's own art; a set made before 1.37.0 hides it: add ${open.map((n) => `"${n}"`).join(', ')} to the set's hides (see ${ARM_SPLIT_MIGRATION})`;
 }
 
 /**
@@ -4447,6 +4470,8 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   let blink: JudgementLine = skip(lacking);
   let sourceRead: ReportedLine | null = null;
   const setsFigures: Record<string, SetCheckFigures> = {};
+  // Issue #671: a failing set's hint, read with its seam; never written to check.json.
+  const setHints = new Map<string, string>();
   if (inp.parts !== null || inp.source !== null) {
     try {
       mkdirSync(stillDir, { recursive: true });
@@ -4518,6 +4543,10 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
             const altMean = round3(altSeam.mean);
             const altScale = round6(altStillSet.viewport.scale);
             const altFailed = seamFails(altMean, altSeam.over40, altScale);
+            if (altFailed) {
+              const hint = armSplitSetHint(inp.parts, alt);
+              if (hint !== null) setHints.set(alt.name, hint);
+            }
             let altPairs: SeamPairRow[] | null = null;
             if (seamPairsAsked || altFailed) {
               const placed = setPlacements(inp.parts, alt, rigSlotOrder).map(({ name, png, box }) => ({ name, from: box.from, x: box.x, y: box.y, image: readPng(join(inp.partsDir, `${png}.png`)) }));
@@ -4653,7 +4682,8 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           `mean |d| ${setFig.seam_mean}/255 and ${setFig.seam_px_over_40} frame px over ${SEAM_PX_LEVEL} (${setFig.seam_px_over_80} over ${SEAM_PX_LEVEL_HIGH}) at frame scale ${setFig.seam_frame_scale}, ${seamRigPxText(setFig.seam_px_over_40, setFig.seam_frame_scale)} rig px (the count / s²); mean <= ${SEAM_MEAN_BAR.toFixed(1)} and <= ${SEAM_PX_BAR} rig px over ${SEAM_PX_LEVEL} are required` +
           (worst === null
             ? `; no pixel is over ${SEAM_PX_LEVEL}, so the mean alone fails and there is no pair to name`
-            : `; worst of ${(setFig.seam_pairs as SeamPairRow[]).length} pair(s): ${seamPairText(worst)}`),
+            : `; worst of ${(setFig.seam_pairs as SeamPairRow[]).length} pair(s): ${seamPairText(worst)}`) +
+          (setHints.get(setName) ?? ''),
       });
     }
   }

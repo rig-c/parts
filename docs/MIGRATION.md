@@ -403,6 +403,15 @@ the neck line, `chest` above the hip, else `hip` (its note reads `drape_<s>
 (full:drape-<s>): no rule -> region on hip`). Confirm against the notes `propose` prints
 for your parts; the bone must be one your config declares.
 
+**An alternate set made before 1.37.0** that covers the split sleeve (a set over the part
+that takes `handwear-<s>`) still covers only that part. The split made `hand_<s>` and
+`drape_<s>` parts of their own, so while the set is active the base draws them beside the
+set's own sleeve art, which still holds the hand it was painted with. `check --set` then
+fails the set's seam (`CHECK_SEAM_WITHIN_BAR`, issue #671); its detail names the parts and
+this entry. What to do: add them to the set's `hides`, for example `"hides": ["hand_r",
+"drape_r"]`, or only `hand_<s>` if the set's painting still shows the base drape. This is
+a judgement on the set's own art, so `--only-missing` does not write it.
+
 ## After 1.38.0: cloth that comes to rest on the idle
 
 Issue #501 reads every physics chain by its tip on the idle `check` renders (physics on,

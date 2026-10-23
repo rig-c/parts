@@ -10,7 +10,7 @@ import { mkdirSync, readFileSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { ARM_SPLIT_ADDED, ARM_SPLIT_HAND_TUNED, writeArmSplitFixture, type ArmSplitOptions } from '../fixtures/arm_split_upgrade.ts';
 import { assembleStage, readRigInputs, rigStage } from '../src/build.ts';
-import type { RigcRunner } from '../src/check.ts';
+import { armSplitSetHint, type RigcRunner } from '../src/check.ts';
 import { PartsError, type Problem } from '../src/errors.ts';
 import { jsonValueSpan } from '../src/meshdraft.ts';
 import { ARM_SPLIT_MIGRATION, buildRig } from '../src/rig.ts';
@@ -273,6 +273,26 @@ export function runArmSplitUpgradeChecks(dir: string, say: Say, runner: RigcRunn
     'AU09_THE_MIGRATED_SPLIT_PLAN_CONFIG_BUILDS_GREEN',
     twinRig.length === 0 && readFileSync(join(twinRebuilt, 'parts.json'), 'utf8') === twinParts && twinParts === oldParts0,
     `assemble -> rig ${twinRig.length === 0 ? 'green' : `refused ${twinRig.map((p) => `${p.code} ${p.object}`).join(', ')}`}; parts.json the same bytes as before the write ${readFileSync(join(twinRebuilt, 'parts.json'), 'utf8') === twinParts} and as the pre-1.37 config's ${twinParts === oldParts0} (check not run: the fixture's idle is static)`,
+  );
+
+  // ---- AU11: a set made before 1.37.0 over the split sleeve, which now draws the base hand beside its own -------------
+  // The hint the set's seam refusal carries, read off parts.json and the set's record alone (computed by hand here).
+  const splitParts = {
+    rig_size: [64, 64],
+    parts: [
+      { name: 'drape_r', from: 'full:drape-r' }, { name: 'sleeves', from: 'full:handwear-r' }, { name: 'hand_r', from: 'full:hand-r' },
+      { name: 'topwear', from: 'full:topwear' },
+    ],
+  } as unknown as Parameters<typeof armSplitSetHint>[0];
+  const setOf = (slots: Record<string, string>, hides?: string[]) => ({ name: 'wave', slots, ...(hides === undefined ? {} : { hides }), records: [] }) as unknown as Parameters<typeof armSplitSetHint>[1];
+  const open = armSplitSetHint(splitParts, setOf({ sleeves: 'wave_sleeves' }));
+  const hidden = armSplitSetHint(splitParts, setOf({ sleeves: 'wave_sleeves' }, ['hand_r', 'drape_r']));
+  const elsewhere = armSplitSetHint(splitParts, setOf({ topwear: 'wave_topwear' }));
+  const unsplit = armSplitSetHint({ ...splitParts, parts: splitParts.parts.filter((q) => !q.from.startsWith('full:hand-') && !q.from.startsWith('full:drape-')) }, setOf({ sleeves: 'wave_sleeves' }));
+  record(
+    'AU11_A_PRE_1_37_SET_OVER_THE_SPLIT_SLEEVE_IS_TOLD_TO_HIDE_THE_SPLIT_PARTS',
+    open !== null && open.includes('"drape_r", "hand_r"') && open.includes(ARM_SPLIT_MIGRATION) && hidden === null && elsewhere === null && unsplit === null,
+    `set over the sleeve, hiding nothing -> ${open === null ? 'no hint' : `hint naming ${open.includes('"drape_r", "hand_r"') ? '"drape_r", "hand_r"' : 'other parts'} and ${open.includes(ARM_SPLIT_MIGRATION) ? 'the MIGRATION entry' : 'no entry'}`}; hiding both -> ${hidden === null ? 'no hint' : 'hint'}; a set over another part -> ${elsewhere === null ? 'no hint' : 'hint'}; no split parts -> ${unsplit === null ? 'no hint' : 'hint'}`,
   );
 
   // The cases are measured in the order their inputs need and printed by number.
