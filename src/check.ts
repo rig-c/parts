@@ -79,7 +79,7 @@
  */
 import { createHash } from 'node:crypto';
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig } from './assemble.ts';
 import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toBoneLocal } from './coords.ts';
 import { capBox, inDisc } from './limbs.ts';
@@ -465,53 +465,64 @@ export function readRigcEntry(versionOut: string): RigcEntryRecord {
   throw new Error('unreachable');
 }
 
-/**
- * This package's own rigc: `node_modules/.bin/rigc` under `root` and nowhere else — no directory above it and no
- * PATH, which {@link findRigc} walks (issue #337). The selftest's suites run rigc through it from the package root,
- * so a fixture in a temp directory, or a tree nested inside another checkout (a harness worktree under
- * `.claude/worktrees/`) whose own install is missing, cannot reach another tree's rigc. A miss is refused naming
- * the one path looked at.
- */
-export function packageRigc(root: string): string {
-  const bin = join(resolve(root), 'node_modules', '.bin', 'rigc');
-  if (!existsSync(bin)) {
-    refuseIfAny([
-      {
-        code: 'CHECK_RIGC_PACKAGE',
-        object: bin,
-        detail: `does not exist; this package's own rigc is required here and no other is looked for — not in a directory above ${resolve(root)}, not on PATH (\`bun install\` puts it there)`,
-      },
-    ]);
-  }
-  return bin;
+/** Executable names, in selection order. Bun's rigc.bunx is a companion, never a command. */
+function rigcPaths(directory: string, platform: 'win32' | 'posix'): string[] {
+  return (platform === 'win32' ? ['rigc', 'rigc.exe'] : ['rigc']).map(name => join(directory, name));
 }
 
 /**
- * Where the `rigc` binary is: `node_modules/.bin/rigc` in `from` or any
- * directory above it (a clone has it beside the package; an install has it in
- * the consumer's `node_modules/.bin`), then every directory on `PATH`. A miss
- * is refused naming every place looked.
+ * This package's own rigc under root/node_modules/.bin and nowhere else: no ancestor or PATH.
+ * Windows Bun supplies rigc.exe and rigc.bunx; the executable keeps its own launcher's runtime gates.
+ * The optional platform argument lets the same discovery controls plant both install shapes.
  */
-export function findRigc(from: string, pathVar: string): string {
+export function packageRigc(root: string, platform: 'win32' | 'posix' = sep === '\\' ? 'win32' : 'posix'): string {
+  const paths = rigcPaths(join(resolve(root), 'node_modules', '.bin'), platform);
+  const bin = paths.find(path => existsSync(path));
+  if (bin !== undefined) return bin;
+  refuseIfAny([
+    {
+      code: 'CHECK_RIGC_PACKAGE',
+      object: paths[0],
+      detail: platform === 'win32'
+        ? "none of " + paths.join(", ") + " exists; rigc.bunx alone is not executable; this package's own rigc is required here and no ancestor or PATH is searched (bun install puts it there)"
+        : `does not exist; this package's own rigc is required here and no other is looked for — not in a directory above ${resolve(root)}, not on PATH (\`bun install\` puts it there)`,
+    },
+  ]);
+  return '';
+}
+
+/**
+ * Find rigc beside from or its ancestors, then on PATH. Windows also looks for rigc.exe;
+ * selecting it does not replace it with a compiler entry or another package's launcher.
+ */
+export function findRigc(from: string, pathVar: string, platform: 'win32' | 'posix' = sep === '\\' ? 'win32' : 'posix'): string {
   const looked: string[] = [];
+  let directories = 0;
   let dir = resolve(from);
   for (;;) {
-    const bin = join(dir, 'node_modules', '.bin', 'rigc');
-    looked.push(bin);
-    if (existsSync(bin)) return bin;
+    directories++;
+    for (const bin of rigcPaths(join(dir, 'node_modules', '.bin'), platform)) {
+      looked.push(bin);
+      if (existsSync(bin)) return bin;
+    }
     const up = dirname(dir);
     if (up === dir) break;
     dir = up;
   }
-  for (const p of pathVar.split(delimiter).filter((s) => s !== '')) {
-    const bin = join(p, 'rigc');
-    if (existsSync(bin)) return bin;
+  const onPath: string[] = [];
+  for (const p of pathVar.split(delimiter).filter(s => s !== '')) {
+    for (const bin of rigcPaths(p, platform)) {
+      onPath.push(bin);
+      if (existsSync(bin)) return bin;
+    }
   }
   refuseIfAny([
     {
       code: 'CHECK_RIGC_PRESENT',
       object: 'the rig-c CLI `rigc`',
-      detail: `found at none of ${looked.length} node_modules/.bin/rigc path(s) from ${resolve(from)} up (nearest ${looked[0]}) nor on PATH; rig-c is this package's dependency — \`bun install\` puts it at node_modules/.bin/rigc`,
+      detail: platform === 'win32'
+        ? 'found at none of ' + looked.join(', ') + ' nor PATH candidates [' + onPath.join(', ') + ']; executable shapes rigc, rigc.exe were looked for; rigc.bunx alone is not executable; bun install supplies this dependency'
+        : `found at none of ${directories} node_modules/.bin/rigc path(s) from ${resolve(from)} up (nearest ${looked[0]}) nor on PATH; rig-c is this package's dependency — \`bun install\` puts it at node_modules/.bin/rigc`,
     },
   ]);
   return '';

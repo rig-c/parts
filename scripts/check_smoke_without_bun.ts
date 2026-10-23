@@ -1,9 +1,9 @@
 /** The absent-Bun control must prove absence, even with two installed candidates. */
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
-import { nodeOnlySearchEnvironment, runWithoutBun } from './smoke_without_bun.ts';
+import { delimiter, isAbsolute, join, relative, sep } from 'node:path';
+import { cleanupWithoutBun, nodeOnlySearchEnvironment, runWithoutBun } from './smoke_without_bun.ts';
 
 export function checkSmokeWithoutBun(): void {
   const root = mkdtempSync(join(tmpdir(), 'smoke absent bun '));
@@ -11,7 +11,21 @@ export function checkSmokeWithoutBun(): void {
     if (!ok) throw new Error(name);
     console.log('  PASS  ' + name);
   };
+  let leftover: string | undefined;
   try {
+    const busy = (): Error & { code: string } => Object.assign(new Error('planted busy'), { code: 'EBUSY' });
+    let attempts = 0, waits = 0;
+    const notes: string[] = [];
+    cleanupWithoutBun('fixture cleanup', () => { if (++attempts < 3) throw busy(); }, message => notes.push(message), () => { waits++; });
+    expect(attempts === 3 && waits === 2 && notes.length === 0, 'SMOKE_WITHOUT_BUN_TRANSIENT_EBUSY_CLEANUP_RETRIES');
+    attempts = 0; waits = 0;
+    cleanupWithoutBun('leftover fixture', () => { attempts++; throw busy(); }, message => notes.push(message), () => { waits++; });
+    expect(attempts === 4 && waits === 3 && notes.length === 1 && notes[0].startsWith('NOTE SMOKE_WITHOUT_BUN_CLEANUP:') && notes[0].includes('leftover fixture'),
+      'SMOKE_WITHOUT_BUN_PERSISTENT_EBUSY_NAMES_LEFTOVER_WITHOUT_CHANGING_SHIM_RESULT');
+    let arbitrary: unknown;
+    try { cleanupWithoutBun('wrong permissions', () => { throw Object.assign(new Error('planted denied'), { code: 'EACCES' }); }, () => { throw new Error('must not note arbitrary failure'); }, () => {}); }
+    catch (error) { arbitrary = error; }
+    expect(arbitrary instanceof Error && arbitrary.message === 'planted denied', 'SMOKE_WITHOUT_BUN_ARBITRARY_CLEANUP_ERRORS_ARE_NOT_IGNORED');
     const said = spawnSync('node', ['-p', 'process.execPath'], { encoding: 'utf8' });
     if (said.status !== 0 || said.stdout.trim() === '') throw new Error('SMOKE_WITHOUT_BUN_NODE_REQUIRED');
     const node = said.stdout.trim();
@@ -41,6 +55,21 @@ export function checkSmokeWithoutBun(): void {
     const bad = runWithoutBun(node, wrong, root, oldEnv);
     expect(bad.probe.errorCode === 'ENOENT' && (bad.status !== 1 || !/runs on Bun/.test(bad.out)),
       'SMOKE_WITHOUT_BUN_ACCEPTING_SHIM_IS_RED');
-  } finally { rmSync(root, { recursive: true, force: true }); }
+    const outerNotes: string[] = [];
+    const kept = runWithoutBun(node, entry, root, oldEnv, owned => {
+      leftover = owned;
+      cleanupWithoutBun(owned, () => { throw busy(); }, message => outerNotes.push(message), () => {});
+    });
+    if (leftover === undefined) throw new Error('SMOKE_WITHOUT_BUN_OUTER_CLEANUP: no owned cleanup path was observed');
+    const relation = relative(realpathSync.native(root), realpathSync.native(leftover));
+    const independent = relation === '..' || relation.startsWith('..' + sep) || isAbsolute(relation);
+    rmSync(root, { recursive: true, force: true });
+    expect(kept.status === 1 && kept.probe.errorCode === 'ENOENT' && /runs on Bun/.test(kept.out) &&
+      independent && !existsSync(root) && existsSync(leftover) && outerNotes.length === 1 && outerNotes[0].includes(leftover),
+      'SMOKE_WITHOUT_BUN_PERSISTENT_NOTE_AND_REFUSAL_SURVIVE_OUTER_CLEANUP');
+  } finally {
+    if (leftover !== undefined) cleanupWithoutBun(leftover);
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 if (import.meta.main) checkSmokeWithoutBun();

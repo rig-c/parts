@@ -12,10 +12,12 @@
  *   2  a usage error, or a command this version does not implement
  */
 import { spawnSync } from 'node:child_process';
+import { runBuildProcess, processRigcRunner as rigcRunner } from './tools/build-process.ts';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE, HOLES_LISTED, PROJECT_RULES, type ProjectRule, proposeFields, proposePlan, proposeSinglePlan, SEAM_RULES, type SeamRule } from './src/assemble.ts';
+import { parseAltArg } from './tools/alternate-cli.ts';
 import { type AlternateCliInput, assembleStage, build, checkStage, ERROR_MAP_FILE, loopStage, readRuns, readSource, rigStage, suppliedCheckFlag } from './src/build.ts';
 import { ACCEPTABLE_BARS, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, findRigc, PACK_SHAPES, rigcRunnerAt, type PackShape, PAGE_EDGES, type PageEdges, PARTS_HOME_SENTENCE, RIGC_GEOMETRY_VERSION, rigcRanClause, type RigcRunner, NO_PARTS_SENTENCE, SEAM_MEAN_BAR, SOURCE_SENTENCE, SEAM_PX_BAR, SEAM_PX_LEVEL, SPINEBOY_YARDSTICK, TEXTURE_STRETCH_CEILING } from './src/check.ts';
 import { ComfyClient, resolveHost, runPainting, runSeeThrough } from './src/comfy/index.ts';
@@ -1040,19 +1042,6 @@ function notTaken(command: Command, flag: string): string {
   return `${command} does not take "${flag}"; it takes ${[...row.valued, ...row.switches].join(', ')}`;
 }
 
-/** Parse `--alt <name>=<source>:<full>[:<head>]` (issue #454), or return a usage message. */
-function parseAltArg(value: string): AlternateCliInput | string {
-  const eq = value.indexOf('=');
-  if (eq <= 0) return `--alt "${value}" is not <name>=<source>:<full>[:<head>]`;
-  const name = value.slice(0, eq);
-  if (name.startsWith('.') || name.includes('/') || name.includes('\\')) return `--alt set name "${name}" may not start with "." or hold a slash`;
-  const rest = value.slice(eq + 1);
-  const parts = rest.split(':');
-  if (parts.length < 2 || parts.length > 3 || parts[0].length === 0 || parts[1].length === 0 || (parts.length === 3 && parts[2].length === 0)) {
-    return `--alt "${value}" is not <name>=<source>:<full>[:<head>]`;
-  }
-  return { name, source: parts[0], full: parts[1], ...(parts.length === 3 ? { head: parts[2] } : {}) };
-}
 
 /**
  * `layers <path>` prints the table; `layers --export <dir> <path>` writes the
@@ -1244,14 +1233,6 @@ function cmdRig(args: string[]): number {
  * the spawn from here. A call that fails carries which rigc ran it, path and
  * version ({@link rigcRunnerAt}, issue #337), and every refusal quoting it says so.
  */
-function rigcRunner(bin: string): RigcRunner {
-  return rigcRunnerAt(bin, (b, args) => {
-    const r = spawnSync(b, [...args], { encoding: 'utf8', maxBuffer: 1 << 28 });
-    if (r.error !== undefined) return { status: 127, out: `could not start ${b}: ${r.error.message}` };
-    return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
-  });
-}
-
 /** The command's valued flags as `--flag value` pairs, each one its {@link TAKES} row holds; `required` must all be given. Its bare switches are taken out by the caller before this reads the rest. A string is a usage error. */
 function flags(args: string[], command: Command, required: readonly string[]): Map<string, string> | string {
   const got = new Map<string, string>();
@@ -1877,7 +1858,11 @@ function cmdBuild(args: string[]): number {
   try {
     const r = build(
       { config, source, full, head, out, seam: seam as SeamRule, project: project as ProjectRule, loop, pageEdges: edges, packShape: shape, ...(flags.has('--requirements') ? { requirements: flags.get('--requirements') as string } : {}), idleKeys: keys, ...(leadText === undefined ? {} : { leadIn: Number(leadText) }), seamPairs: on.has('--seam-pairs'), keepStills: on.has('--keep-stills'), ...(alts.length === 0 ? {} : { alts }), ...(flags.has('--set') ? { set: flags.get('--set') as string } : {}), allSets: on.has('--all-sets'), ...(flags.has('--environment') ? { environment: flags.get('--environment') as string } : {}) },
-      { rig: rigcRunner(bin), check: rigcRunner(bin), checkBin: bin, scratch: join(scratch, 'rig-gate') },
+      { rig: rigcRunner(bin), check: rigcRunner(bin), checkBin: bin, scratch: join(scratch, 'rig-gate'), stages: {
+        assemble: (input, outputs) => runBuildProcess({ stage: 'assemble', bin, input, outputs }, join(scratch, 'workers')),
+        rig: (input, _rigc, gateScratch) => runBuildProcess({ stage: 'rig', bin, input, scratch: gateScratch }, join(scratch, 'workers')),
+        check: (input, _rigc, checkBin) => runBuildProcess({ stage: 'check', bin: checkBin, input }, join(scratch, 'workers')),
+      } },
       console.log,
     );
     return r.stoppedAt === null ? EXIT_OK : EXIT_REFUSED;

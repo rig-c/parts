@@ -2195,9 +2195,18 @@ export function suppliedCheckFlag(flag: string): string | null {
  * rig-c's launcher answers for; they are two fields so a caller can tell
  * the stages' calls apart (the selftest counts them).
  */
+/** Stage implementations may run outside this process; only check has a returned value the driver reads. */
+export interface BuildStages {
+  assemble: (input: AssembleStageInput, outputs: AssembleOutputs, log: Log) => void;
+  rig: (input: RigStageInput, rigc: RigcRunner, scratch: string, log: Log) => void;
+  check: typeof checkStage;
+}
+
 export interface BuildRunners {
   rig: RigcRunner;
   check: RigcRunner;
+  /** The CLI isolates stages; API callers keep the same in-process functions by default. */
+  stages?: BuildStages;
   /** Where the check's rigc binary is, for its header line. */
   checkBin: string;
   /** A directory the rig stage may stage its gate in, and the loop its lead-in render after it; emptied before and after each. */
@@ -2248,6 +2257,7 @@ export function artifactPaths(buildDir: string, pack: readonly PackLine[]): stri
  * rethrown: it is not a stage's message and must not be printed as one.
  */
 export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResult {
+  const stages: BuildStages = run.stages ?? { assemble: assembleStage, rig: rigStage, check: checkStage };
   const prefixed = (stage: BuildStage): Log => (line) => log(`[${stage}] ${line}`);
   const refused = (stage: BuildStage, err: unknown, check: CheckReport | null = null): BuildResult => {
     if (!(err instanceof PartsError)) throw err;
@@ -2282,7 +2292,7 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
     if (req !== null) readRequirements(req.read);
     // And the schedule (issue #538), by rigc's own reader, as check reads it.
     if (input.environment !== undefined) readCheckEnvironment(input.environment);
-    assembleStage(
+    stages.assemble(
       { source: input.source, full: input.full, head: input.head, config: input.config, seam: input.seam, project: input.project, ...(input.alts === undefined ? {} : { alts: input.alts }) },
       { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, ERROR_MAP_FILE) },
       prefixed('assemble'),
@@ -2292,14 +2302,14 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
   }
 
   try {
-    rigStage({ config: input.config, parts: out, out: join(out, 'rig'), idleKeys, pageEdges: input.pageEdges, packShape: input.packShape, command: 'build' }, run.rig, run.scratch, prefixed('rig'));
+    stages.rig({ config: input.config, parts: out, out: join(out, 'rig'), idleKeys, pageEdges: input.pageEdges, packShape: input.packShape, command: 'build' }, run.rig, run.scratch, prefixed('rig'));
   } catch (err) {
     return refused('rig', err);
   }
 
   let report: CheckReport;
   try {
-    report = checkStage({ rig: join(out, 'rig'), parts: out, out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(req === null ? {} : { requirements: req.read, requirementsAs: req.recorded }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }), ...(configRecord === null ? {} : { config: configRecord }) }, run.check, run.checkBin, prefixed('check'));
+    report = stages.check({ rig: join(out, 'rig'), parts: out, out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(req === null ? {} : { requirements: req.read, requirementsAs: req.recorded }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }), ...(configRecord === null ? {} : { config: configRecord }) }, run.check, run.checkBin, prefixed('check'));
   } catch (err) {
     return refused('check', err);
   }
