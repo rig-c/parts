@@ -1,9 +1,9 @@
 /** Portable smoke-process controls; no checkout dependencies are required. */
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { findSmokeExecutable, runSmokeCommand } from './smoke_process.ts';
+import { findSmokeExecutable, isSmokePathInside, runSmokeCommand } from './smoke_process.ts';
 
 export function checkSmokeProcess(): void {
   const root = mkdtempSync(join(tmpdir(), 'smoke process '));
@@ -27,6 +27,24 @@ export function checkSmokeProcess(): void {
     expect(findSmokeExecutable('missing-smoke-tool', env, 'win32') === null &&
       runSmokeCommand('missing-smoke-tool', [], root, env, {}, 'win32').out.includes('SMOKE_PREREQ_TOOLS_ON_PATH'),
       'SMOKE_PROCESS_ABSENT_TOOL_IS_NAMED');
+    const install = join(root, 'canonical install');
+    const alias = join(root, 'install alias');
+    const outside = join(root, 'canonical install-other');
+    mkdirSync(join(install, 'nested'), { recursive: true });
+    mkdirSync(outside);
+    writeFileSync(join(install, 'nested', 'entry.js'), '');
+    writeFileSync(join(outside, 'entry.js'), '');
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+    symlinkSync(install, alias, linkType);
+    symlinkSync(outside, join(install, 'escape'), linkType);
+    expect(isSmokePathInside(alias, join(install, 'nested', 'entry.js')) &&
+      isSmokePathInside(install, join(alias, 'nested', 'entry.js')),
+      'SMOKE_PROCESS_CANONICAL_ALIAS_IS_THE_SAME_INSTALL');
+    expect(!isSmokePathInside(install, join(outside, 'entry.js')) &&
+      !isSmokePathInside(install, join(install, 'escape', 'entry.js')) &&
+      !isSmokePathInside(install, join(install, 'missing.js')) &&
+      !isSmokePathInside(join(root, 'missing-root'), join(install, 'nested', 'entry.js')),
+      'SMOKE_PROCESS_CONTAINMENT_REFUSES_OUTSIDE_SYMLINK_PREFIX_AND_MISSING');
     const node = findSmokeExecutable('node');
     if (node === null) throw new Error('SMOKE_PROCESS_NODE_REQUIRED');
     copyFileSync(node, join(bin, 'node.exe'));

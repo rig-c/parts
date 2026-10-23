@@ -68,7 +68,7 @@
  * until a publish makes it one (that is `--source registry`), and a green run is
  * one platform's answer, the runner's.
  */
-import { findSmokeExecutable, runSmokeCommand } from './smoke_process.ts';
+import { findSmokeExecutable, isSmokePathInside, runSmokeCommand } from './smoke_process.ts';
 import { checkSmokeProcess } from './check_smoke_process.ts';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -620,7 +620,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
     fault('fixture', `SMOKE_FIXTURE_FROM_THE_PACKAGE: \`bun make_fixture.ts\` exited ${gen.status}. ${gen.out.trim().slice(0, 3000)}`);
   } else {
     const resolved = [...gen.out.matchAll(/^RESOLVED (.+)$/gm)].map((m) => (m[1].startsWith('file://') ? fileURLToPath(m[1]) : m[1]));
-    const outsideInstall = resolved.filter((p) => !p.startsWith(join(home, 'node_modules')));
+    const outsideInstall = resolved.filter((p) => !isSmokePathInside(join(home, 'node_modules'), p));
     if (resolved.length !== 2 || outsideInstall.length > 0) {
       fault('fixture', `SMOKE_FIXTURE_FROM_THE_PACKAGE: the generator's imports resolved to ${resolved.join(', ') || '(nothing)'}; both were required under ${join(home, 'node_modules')}`);
     } else notes.push(`the fixture's codec and PSD writer resolved inside the install`);
@@ -701,7 +701,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
   const probe = run('bun', [join(home, 'contour_probe.ts')], home);
   output += probe.out;
   const probed = [...probe.out.matchAll(/^RESOLVED (.+)$/gm)].map((m) => (m[1].startsWith('file://') ? fileURLToPath(m[1]) : m[1]));
-  const strayProbe = probed.filter((p) => !p.startsWith(join(home, 'node_modules')));
+  const strayProbe = probed.filter((p) => !isSmokePathInside(join(home, 'node_modules'), p));
   if (probe.status !== 0 || !probe.out.split('\n').includes(EXPECT_CONTOUR) || probed.length !== 2 || strayProbe.length > 0) {
     fault(
       'contour',
