@@ -1,3 +1,4 @@
+import { regionBone } from './config.ts';
 /**
  * The rig stage: a character config and its assembled parts in, a rig spec
  * and a motion spec in rig-c's format out.
@@ -1413,7 +1414,8 @@ export function buildRig(
       : '';
   const where = (part: string): string => `parts.json holds ${parts.parts.length} part(s): ${parts.parts.map((p) => p.name).join(', ')}`;
   for (const part of Object.keys(cfg.meshes)) if (!byPart.has(part)) fail('RIG_PART_PRESENT', `config.meshes.${part}`, `names the part "${part}", which is not in parts.json; ${where(part)}`);
-  for (const [part, bone] of Object.entries(cfg.regions)) {
+  for (const [part, region] of Object.entries(cfg.regions)) {
+    const bone = regionBone(region);
     if (!byPart.has(part)) fail('RIG_PART_PRESENT', `config.regions.${part}`, `names the part "${part}", which is not in parts.json; ${where(part)}`);
     if (!B.has(bone)) fail('RIG_NAME_RESOLVES', `config.regions.${part}`, `names the bone "${bone}", which config.bones does not declare`);
   }
@@ -2259,7 +2261,7 @@ export function buildRig(
     outImages.push([file, img]);
     const mesh = cfg.meshes[p.name];
     if (mesh === undefined) {
-      const bone = B.get(cfg.regions[p.name]) as Bone;
+      const bone = B.get(regionBone(cfg.regions[p.name])) as Bone;
       const cx = p.x + p.w / 2;
       const st = stills[p.name];
       if (st !== undefined) {
@@ -2463,7 +2465,7 @@ export function buildRig(
         coveredBones = new Set<string>();
         for (const slotName of Object.keys(alt.slots)) {
           const pName = declaredFront.has(slotName) && altFront.has(slotName.slice(0, -FRONT_SUFFIX.length)) ? slotName.slice(0, -FRONT_SUFFIX.length) : slotName;
-          if (pName in cfg.regions) coveredBones.add(cfg.regions[pName]);
+          if (pName in cfg.regions) coveredBones.add(regionBone(cfg.regions[pName]));
           for (const s of meshSegments.get(pName) ?? []) coveredBones.add(s.bone);
           const m = cfg.meshes[pName];
           if (m !== undefined) {
@@ -2528,7 +2530,7 @@ export function buildRig(
         outImages.push([file, img]);
         const mesh = cfg.meshes[p.name];
         if (mesh === undefined) {
-          const bone = B.get(cfg.regions[p.name]) as Bone;
+          const bone = B.get(regionBone(cfg.regions[p.name])) as Bone;
           skin[skinSlot][attName] = altRegion(file, bone.name, p.x + p.w / 2, p.y + p.h / 2);
           continue;
         }
@@ -2676,7 +2678,11 @@ export function buildRig(
   const hasAlternateFaceSet = sets !== undefined && Object.values(sets.sets).some((e) => Object.hasOwn(e.slots, 'face'));
   // Read every base/alternate binding before rebinds; publish only the slot
   // permutation below, after stops/turn have used the original enumeration.
-  const limbLayout = coalesceLimbSlots(cfg.limbs, bones, slots, skin);
+  const ungathered = [
+    ...Object.entries(cfg.meshes).filter(([, spec]) => spec.gather === false).map(([part]) => ({ part, object: `config.meshes.${part}.gather`, slots: slotFamilies.get(part) ?? [part] })),
+    ...Object.entries(cfg.regions).filter(([, spec]) => typeof spec !== 'string' && spec.gather === false).map(([part]) => ({ part, object: `config.regions.${part}.gather`, slots: slotFamilies.get(part) ?? [part] })),
+  ];
+  const limbLayout = coalesceLimbSlots(cfg.limbs, bones, slots, skin, ungathered);
   const explicitLayout = placeLimbLayouts(cfg.limbs, bones, limbLayout, skin, slotFamilies);
   // ---- leg stops (issue #404) --------------------------------------------
   // Only when the config has `stops`: each link after the first (and any bone hanging from a stopped link) hangs

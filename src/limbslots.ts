@@ -4,6 +4,7 @@
  * ownership boundary: descendants belong to the first segment encountered up
  * their parent graph, so a nested limb does not become its ancestor's rider.
  */
+import { refuseIfAny } from './errors.ts';
 import type { Limb } from './config.ts';
 import type { RigSpec } from './rig.ts';
 
@@ -19,6 +20,8 @@ export interface LimbSlotOwner {
 
 export interface LimbSlotLayout {
   slots: RigSpec['slots'];
+  /** Explicitly retained generated families; omitted for historical output. */
+  ungathered?: readonly string[];
   owners: LimbSlotOwner[];
   /** First segment SLOT encountered in setup order, not anatomical segment 0. */
   anchors: Array<{ limb: string; slot: string | null }>;
@@ -33,18 +36,20 @@ export interface LimbSlotLayout {
  * Even a listed zero-weight reference is read, as in meshBoundBones: there is
  * no epsilon or first-weight rule. Mixed/outside/empty bindings stay outside
  * the gathered blocks, with their classification returned for inspection.
+ * Declared opt-outs retain their authored family without changing ownership.
  * Their mutual order is preserved; complete closure is not promised across a
- * nonexclusive segment or rider. No new refusal is introduced.
+ * nonexclusive segment or rider. An opt-out on a non-rider is refused by name.
  */
 export function coalesceLimbSlots(
   limbs: Readonly<Record<string, Limb>> | undefined,
   bones: RigSpec['bones'],
   slots: RigSpec['slots'],
   skin: RigSpec['skins']['default'],
+  retain: readonly { part: string; object: string; slots: readonly string[] }[] = [],
 ): LimbSlotLayout {
-  if (limbs === undefined || Object.keys(limbs).length === 0) return { slots, owners: [], anchors: [] };
+  if (retain.length === 0 && (limbs === undefined || Object.keys(limbs).length === 0)) return { slots, owners: [], anchors: [] };
   const seeds = new Map<string, string[]>();
-  for (const [name, limb] of Object.entries(limbs)) {
+  for (const [name, limb] of Object.entries(limbs ?? {})) {
     for (const s of limb.segments) {
       const names = seeds.get(s.bone) ?? [];
       if (!names.includes(name)) names.push(name);
@@ -83,7 +88,13 @@ export function coalesceLimbSlots(
     const kind = exclusive && mine.size === 1 && outside.size === 0 ? 'exclusive' : mine.size > 0 ? 'nonexclusive' : bindings.some((b) => b.bones.length > 0) ? 'outside' : 'unbound';
     return { slot: slot.name, kind, limb: kind === 'exclusive' ? [...mine][0] : null, bindings, limbs: [...mine], outside: [...outside] };
   });
-  const anchors = Object.entries(limbs).map(([name, limb]) => ({ limb: name, slot: slots.find((s) => limb.segments.some((sg) => sg.part === s.name))?.name ?? null }));
+  const segments = new Set(Object.values(limbs ?? {}).flatMap((limb) => limb.segments.map((s) => s.part)));
+  refuseIfAny(retain.flatMap((r) => {
+    const owner = owners.find((o) => o.slot === r.part);
+    return owner?.kind === 'exclusive' && !segments.has(r.part) ? [] : [{ code: 'RIG_GATHER_RIDER', object: r.object, detail: `part "${r.part}" is ${segments.has(r.part) ? 'a declared limb segment' : owner?.kind ?? 'absent'}; an exclusively bound non-segment limb rider is required to opt out of gathering — remove gather or bind this rider exclusively to one declared limb` }];
+  }));
+  const ungathered = new Set(retain.flatMap((r) => [...r.slots]));
+  const anchors = Object.entries(limbs ?? {}).map(([name, limb]) => ({ limb: name, slot: slots.find((s) => limb.segments.some((sg) => sg.part === s.name))?.name ?? null }));
   const at = new Map<string, string[]>();
   const anchored = new Set<string>();
   for (const anchor of anchors) {
@@ -91,7 +102,7 @@ export function coalesceLimbSlots(
     at.set(anchor.slot, [...(at.get(anchor.slot) ?? []), anchor.limb]);
     anchored.add(anchor.limb);
   }
-  const owned = new Map(owners.map((o) => [o.slot, o.limb !== null && anchored.has(o.limb) ? o.limb : null]));
+  const owned = new Map(owners.map((o) => [o.slot, o.limb !== null && anchored.has(o.limb) && !ungathered.has(o.slot) ? o.limb : null]));
   const gathered = new Map<string, RigSpec['slots']>();
   for (const slot of slots) {
     const name = owned.get(slot.name);
@@ -102,5 +113,5 @@ export function coalesceLimbSlots(
     for (const name of at.get(slot.name) ?? []) reordered.push(...(gathered.get(name) ?? []));
     if (owned.get(slot.name) === null) reordered.push(slot);
   }
-  return { slots: reordered.every((s, i) => s === slots[i]) ? slots : reordered, owners, anchors };
+  return { slots: reordered.every((s, i) => s === slots[i]) ? slots : reordered, owners, anchors, ...(ungathered.size === 0 ? {} : { ungathered: [...ungathered] }) };
 }

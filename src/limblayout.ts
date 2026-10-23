@@ -23,6 +23,8 @@ export interface LayoutPlan {
   limbs: Readonly<Record<string, Limb>>;
   families: ReadonlyMap<string, readonly string[]>;
   originalOrder: string[];
+  /** Authored rider families excluded from implicit closure, including replay. */
+  ungathered?: readonly string[];
 }
 export interface LayoutCompanion {
   spec: typeof LAYOUT_SPEC;
@@ -88,14 +90,14 @@ export function placeLimbLayouts(limbs: Readonly<Record<string, Limb>> | undefin
     const d = l.layout;
     if (d === undefined) continue;
     const at = `config.limbs.${limb}.layout`, parts = l.segments.map((s) => s.part).filter((p) => d.parts === undefined || d.parts.includes(p));
-    const subject = base.slots.filter((s) => owned(s, skin, sources, limb, parts));
+    const subject = base.slots.filter((s) => !base.ungathered?.includes(s.name) && owned(s, skin, sources, limb, parts));
     const authored = d.before ?? d.after as LimbLayoutTarget;
     const target: LimbLayoutTarget = authored.limb === undefined ? { part: authored.part } : { limb: authored.limb };
     let targets: RigSpec['slots'];
     if (target.limb !== undefined) {
       const other = limbs[target.limb];
       const all = other?.segments.map((s) => s.part) ?? [];
-      targets = base.slots.filter((s) => owned(s, skin, sources, target.limb as string, all));
+      targets = base.slots.filter((s) => !base.ungathered?.includes(s.name) && owned(s, skin, sources, target.limb as string, all));
       for (const p of all) {
         if ((families.get(p) ?? []).length === 0) problems.push({ code: 'RIG_LAYOUT_UNREPRESENTABLE', object: at, detail: `target limb "${target.limb}" segment part "${p}" has no emitted family` });
         for (const n of families.get(p) ?? []) if (!targets.some((s) => s.name === n)) problems.push({ code: 'RIG_LAYOUT_NONEXCLUSIVE', object: `${at} target limb "${target.limb}" slot "${n}"`, detail: `requires exclusive target ownership across every attachment; found ${bindingDetail(base.slots.filter((s) => s.name === n), skin, sources)}` });
@@ -128,7 +130,7 @@ export function placeLimbLayouts(limbs: Readonly<Record<string, Limb>> | undefin
     result.push(s);
     for (const p of placements) if (p.after !== undefined && p.target_slots[p.target_slots.length - 1] === s.name) result.push(...base.slots.filter((x) => p.slots.includes(x.name)));
   }
-  const plan = { placements, sources, limbs, families, originalOrder: names };
+  const plan = { placements, sources, limbs, families, originalOrder: names, ...(base.ungathered === undefined ? {} : { ungathered: base.ungathered }) };
   validateLimbLayout(plan, { slots: result, skins: { default: skin } });
   return { slots: result, plan };
 }
@@ -138,7 +140,7 @@ export function refreshLimbLayout(plan: LayoutPlan, rig: RigSpec): LayoutPlan {
   const byName = new Map(rig.slots.map((s) => [s.name, s]));
   const slots = plan.originalOrder.flatMap((n) => { const s = byName.get(n); return s === undefined ? [] : [s]; });
   if (slots.length !== rig.slots.length || new Set(rig.slots.map((s) => s.name)).size !== slots.length) refuseIfAny([{ code: 'RIG_LAYOUT_UNREPRESENTABLE', object: 'rig.slots', detail: 'accepted candidate changed the source slot population; an exact permutation is required' }]);
-  const next = placeLimbLayouts(plan.limbs, rig.bones, { slots, owners: [], anchors: [] }, rig.skins.default, plan.families, plan.sources);
+  const next = placeLimbLayouts(plan.limbs, rig.bones, { slots, owners: [], anchors: [], ...(plan.ungathered === undefined ? {} : { ungathered: plan.ungathered }) }, rig.skins.default, plan.families, plan.sources);
   rig.slots = next.slots;
   return next.plan as LayoutPlan;
 }

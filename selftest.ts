@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runGatherOptOutChecks } from './tools/check_gather_optout.ts';
 import { parseAltArg } from './tools/alternate-cli.ts';
 import { encodeCheckReceipt, readBuildReceipt, readBuildChild, selectedRigcCommand } from './tools/build-process.ts';
 import { runSetAnchorChecks } from './tools/check_set_anchor.ts';
@@ -48124,6 +48125,8 @@ function runLimbSlotSuite(): number {
   try {
     runLimbSlotChecks(dir, (name, pass, detail) => say(`LS${String(++index).padStart(2, '0')}_${name.toUpperCase()}`, pass, detail,
       'issue #646: explicit all-attachment ownership, stable local slot closure, in-memory identity fault with native restoration, mixed-binding limits and unchanged no-limbs output'));
+    runGatherOptOutChecks(join(dir, 'gather-optout'), (name, pass, detail) => say(`RGO${String(++index).padStart(2, '0')}_${name.toUpperCase()}`, pass, detail,
+      'issue #680: declared per-rider gathering opt-out, unchanged binding and authored setup composite, named non-rider refusal and single-target placement limits'), rigcRunnerAt(suiteRigc(), spawnRigc));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

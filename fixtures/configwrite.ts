@@ -1,6 +1,6 @@
 /** Synthetic config fields for #356; no artwork, model output or private data. */
 import { rigConfig } from './rig.ts';
-import { parseConfig } from '../src/config.ts';
+import { parseConfig, regionBone } from '../src/config.ts';
 import type { Proposal } from '../src/propose.ts';
 
 export function configWriteFixture(): Record<string, unknown> {
@@ -15,7 +15,7 @@ export function configWriteFixture(): Record<string, unknown> {
 export function configWriteProposal(): Proposal {
   const base = parseConfig(rigConfig());
   return {
-    bones: base.bones, meshes: base.meshes, regions: base.regions,
+    bones: base.bones, meshes: base.meshes, regions: Object.fromEntries(Object.entries(base.regions).map(([part, region]) => [part, regionBone(region)])),
     motion: { duration: 4, tracks: [{ chain: 'hem', amps: [1, 2], period: 4, phase: 0, lag: 0.1 }] },
     proposed_rig_scale: 0.5,
     notes: ['This belongs only in the proposal.'],

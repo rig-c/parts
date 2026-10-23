@@ -142,7 +142,7 @@ part name, `[i]` an entry of a list):
 - **bones[i]**, a chain — required: `chain`, `parent`, `points`, `tip`; optional: `link_inherit`
 - **stops[i]** — required: `chain`, `against`, `at`, `inward`, `outward`; optional: `links`, `lower` (issue #404)
 - **stops[i].lower** — required: `inward`, `outward`
-- **meshes.&lt;part&gt;** — exactly one of `grid`, `contour`, `auto`, `influence`; required in every mode: `segments`, and `r` in every mode but `influence`, which refuses it; optional in every mode: `exponent`, `rule`; optional with `contour` or `auto`: `ribs`; optional with `grid` or `contour`: `influences` (issue #284; beside `auto` it is refused, CONFIG_INFLUENCES_MODE); optional with `grid`: `stray` (issue #303; beside `contour` or `auto` it is refused, CONFIG_STRAY_MODE)
+- **meshes.&lt;part&gt;** — exactly one of `grid`, `contour`, `auto`, `influence`; required in every mode: `segments`, and `r` in every mode but `influence`, which refuses it; optional in every mode: `exponent`, `rule`, `gather` (issue #680, false only: preserve an exclusive non-segment rider's authored draw position without changing its binding; absent, output bytes unchanged); optional with `contour` or `auto`: `ribs`; optional with `grid` or `contour`: `influences` (issue #284; beside `auto` it is refused, CONFIG_INFLUENCES_MODE); optional with `grid`: `stray` (issue #303; beside `contour` or `auto` it is refused, CONFIG_STRAY_MODE)
 - **meshes.&lt;part&gt;.influence** — required: `cell`, `radius`, `across`, `max`, `shape` (issue #378); optional: `hold_tip` (issue #615, the value true only); beside it `r`, `exponent`, `rule`, `influences`, `stray` and `ribs` are refused by name
 - **meshes.&lt;part&gt;.influences** — optional, at least one: `maxInfluences` (a whole number, 1 or more, or null for no cap), `floor` ("cut" or "continuous")
 - **meshes.&lt;part&gt;.ribs.&lt;chain&gt;** — required: `stations`
@@ -166,7 +166,7 @@ part name, `[i]` an entry of a list):
 - **cloth.&lt;tag&gt;.split** — required: `at`, `into`; optional: `hold_tip`
 - **cloth.&lt;tag&gt;.strength** — required: `trunk`, `branch`, `edge`
 - **cloth.&lt;tag&gt;.swing** — required: `scales`
-- **regions.&lt;part&gt;** — a bone name
+- **regions.&lt;part&gt;** — a bone name, or `{bone, gather?}` with the same required bone name and optional `gather: false` (issue #680); absent, normal gathering and historical bytes are unchanged. An opt-out requires an exclusive non-segment limb rider ([named refusal](AUTHORING.md#RIG_GATHER_RIDER))
 - **motion** — required: `duration`, `tracks`; optional: `blink`, `animations_from`
 - **motion.tracks[i]**, a single track — required: `bone`, `prop`, `amp`, `period`, `phase`; optional: `base`
 - **motion.tracks[i]**, a chain track — required: `chain`, `amps`, `period`, `phase`, `lag`
