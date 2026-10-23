@@ -86,7 +86,17 @@ export function warpAffine(src: FloatImage, map: ScaleTranslate, width: number, 
   }
   const px = positions(width, map.sx, map.tx, 'x');
   const py = positions(height, map.sy, map.ty, 'y');
-  const weights = (step: number): number[] => {
+  // Positions have only 32 fractional steps. Reuse their weights instead of
+  // allocating one Array per output pixel; keep the scalar arithmetic intact.
+  const weightTable = Object.freeze(Array.from({ length: INTER_TAB_SIZE }, (_, step) => {
+    const f = step / INTER_TAB_SIZE;
+    return Object.freeze(filter === 'bilinear' ? [1 - f, f] : cubic(f));
+  }));
+  const weights = (step: number): readonly number[] => {
+    const cached = weightTable[step];
+    if (cached !== undefined) return cached;
+    // A finite subnormal scale can overflow its inverse. Preserve the former
+    // non-finite-position arithmetic rather than introducing a lookup refusal.
     const f = step / INTER_TAB_SIZE;
     return filter === 'bilinear' ? [1 - f, f] : cubic(f);
   };

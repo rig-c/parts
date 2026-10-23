@@ -86,6 +86,7 @@ import { runCorePointerChecks } from './tools/check_corepointer.ts';
  * written before the rename keeps working.
  */
 import { mock } from 'bun:test';
+import { newFloatImage, RasterError } from './src/raster/types.ts';
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -1278,6 +1279,160 @@ function runResizeSuite(): number {
   return bad();
 }
 
+/** Scalar warp oracle frozen before weight reuse; SHA-256
+ * 75526393858234298f141dec780ff4220f2c9d4ee34f367ada0aa9f803056deb.
+ * Per-sample weights and position arithmetic stay independent of production;
+ * only the explicit mutant parameter changes the frozen scalar algorithm.
+ */
+const REF_WARP_AB_BITS = 10;
+const REF_WARP_AB_SCALE = 1 << REF_WARP_AB_BITS;
+const REF_WARP_INTER_BITS = 5;
+const REF_WARP_INTER_TAB_SIZE = 1 << REF_WARP_INTER_BITS;
+
+function warpReferenceRound(v: number): number {
+  const f = Math.floor(v);
+  const d = v - f;
+  if (d > 0.5) return f + 1;
+  if (d < 0.5) return f;
+  return f % 2 === 0 ? f : f + 1;
+}
+
+function warpReferenceCubic(x: number): [number, number, number, number] {
+  const A = -0.75;
+  const c0 = ((A * (x + 1) - 5 * A) * (x + 1) + 8 * A) * (x + 1) - 4 * A;
+  const c1 = ((A + 2) * x - (A + 3)) * x * x + 1;
+  const c2 = ((A + 2) * (1 - x) - (A + 3)) * (1 - x) * (1 - x) + 1;
+  return [c0, c1, c2, 1 - c0 - c1 - c2];
+}
+
+/**
+ * The sample position of each output index along one axis, in cv2's own
+ * arithmetic: the inverse map in 10-bit fixed point, rounded to 1/32 of a
+ * pixel (`REF_WARP_INTER_TAB_SIZE`). Returned as the integer part and the 1/32 step.
+ *
+ * ⚠️ The two axes are rounded differently, because cv2 does: along x the
+ * offset and the per-column step are rounded to fixed point SEPARATELY
+ * (`X0 + adelta[x]`), along y their sum is rounded once per row (`Y0`). Using
+ * the x rule for both moved samples by up to 6.3 levels in 84,508 measured
+ * against cv2 4.13.
+ */
+function warpReferencePositions(outSize: number, scale: number, translate: number, axis: 'x' | 'y'): Array<[number, number]> {
+  const inv = 1 / scale;
+  const offset = -translate / scale;
+  const half = REF_WARP_AB_SCALE / REF_WARP_INTER_TAB_SIZE / 2;
+  const out: Array<[number, number]> = [];
+  for (let o = 0; o < outSize; o++) {
+    const fixed = axis === 'x' ? warpReferenceRound(offset * REF_WARP_AB_SCALE) + warpReferenceRound(inv * o * REF_WARP_AB_SCALE) : warpReferenceRound((inv * o + offset) * REF_WARP_AB_SCALE);
+    const q = Math.floor((fixed + half) / (1 << (REF_WARP_AB_BITS - REF_WARP_INTER_BITS)));
+    const i = Math.floor(q / REF_WARP_INTER_TAB_SIZE);
+    out.push([i, q - i * REF_WARP_INTER_TAB_SIZE]);
+  }
+  return out;
+}
+
+/**
+ * `cv2.warpAffine(src, [[sx, 0, tx], [0, sy, ty]], (width, height), flags,
+ * borderValue=0)` on a float image, for the scale-and-translate maps the
+ * pipeline uses. Every channel is warped independently; a caller that wants a
+ * premultiplied warp premultiplies first, as the reference does.
+ *
+ * What is cv2's and reproduced here, because each moves a sample:
+ * - no half-pixel offset: output pixel `x` samples input `(x - tx) / sx`;
+ * - that position is rounded to 1/32 of a pixel through cv2's 10-bit fixed
+ *   point before the filter weights are read;
+ * - taps outside the image read the border value 0 and still carry weight.
+ *
+ * Measured against cv2 4.13 over 84,508 float samples at random scales and
+ * offsets: bilinear within 3.1e-5, bicubic within 6.1e-5 (float32 rounding).
+ *
+ * ⚠️ `cv2.INTER_AREA` passed to `warpAffine` is not an area filter: on every
+ * one of those 84,508 samples cv2 returned exactly its INTER_LINEAR output.
+ * The reference passes INTER_AREA when the scale is below one, so the port of
+ * that call site asks for `bilinear`, and says why.
+ */
+function warpReference(src: FloatImage, map: Parameters<typeof warpAffine>[1], width: number, height: number, filter: Parameters<typeof warpAffine>[4], mutant: 'none' | 'phase' | 'alias' | 'order' = 'none'): FloatImage {
+  for (const [k, v] of Object.entries(map)) {
+    if (!Number.isFinite(v)) throw new RasterError(`warpAffine: ${k} is ${v}; a finite number is required`);
+  }
+  if (map.sx === 0 || map.sy === 0) throw new RasterError(`warpAffine: scale ${map.sx}x${map.sy} is singular`);
+  if (filter !== 'bilinear' && filter !== 'bicubic') {
+    throw new RasterError(`warpAffine: filter "${String(filter)}"; bilinear or bicubic is required`);
+  }
+  const px = warpReferencePositions(width, map.sx, map.tx, 'x');
+  const py = warpReferencePositions(height, map.sy, map.ty, 'y');
+  const shared: number[] = [];
+  const weights = (step: number): number[] => {
+    const f = (mutant === 'phase' ? (step + 1) % REF_WARP_INTER_TAB_SIZE : step) / REF_WARP_INTER_TAB_SIZE;
+    const value = filter === 'bilinear' ? [1 - f, f] : warpReferenceCubic(f);
+    if (mutant !== 'alias') return value;
+    shared.splice(0, shared.length, ...value);
+    return shared;
+  };
+  const first = filter === 'bilinear' ? 0 : -1;
+  const taps = filter === 'bilinear' ? 2 : 4;
+  const { width: sw, height: sh, channels: ch } = src;
+  const out = newFloatImage(width, height, ch);
+  for (let y = 0; y < height; y++) {
+    const [iy, fy] = py[y];
+    const wy = weights(fy);
+    for (let x = 0; x < width; x++) {
+      const [ix, fx] = px[x];
+      const wx = weights(fx);
+      for (let c = 0; c < ch; c++) {
+        let s = 0;
+        for (let j = 0; j < taps; j++) {
+          const sy = iy + first + j;
+          if (sy < 0 || sy >= sh) continue;
+          let row = 0;
+          for (let i = 0; i < taps; i++) {
+            const tap = mutant === 'order' ? taps - 1 - i : i;
+            const sx = ix + first + tap;
+            if (sx < 0 || sx >= sw) continue;
+            row += src.data[(sy * sw + sx) * ch + c] * wx[tap];
+          }
+          s += row * wy[j];
+        }
+        out.data[(y * width + x) * ch + c] = s;
+      }
+    }
+  }
+  return out;
+}
+
+interface WarpControlInput {
+  name: string;
+  image: FloatImage;
+  map: Parameters<typeof warpAffine>[1];
+  width: number;
+  height: number;
+}
+
+function warpControlInputs(): WarpControlInput[] {
+  const result: WarpControlInput[] = [];
+  for (const channels of [1, 4]) {
+    const values = [0, -0, 1, -1, 0.125, -0.75, 2 ** 60, -(2 ** 60), 1e-18, -1e-18, 13.25];
+    const image: FloatImage = { width: 6, height: 5, channels, data: Float32Array.from({ length: 6 * 5 * channels }, (_, i) => values[(i * 7 + Math.floor(i / 6)) % values.length]) };
+    for (let fy = 0; fy < 32; fy++) for (let fx = 0; fx < 32; fx++) {
+      result.push({ name: `phase ${fx},${fy} channels ${channels}`, image, map: { sx: 1, sy: 1, tx: -fx / 32, ty: -fy / 32 }, width: 5, height: 4 });
+    }
+    for (const [name, map, width, height] of [
+      ['negative scales and border', { sx: -1.25, sy: -0.75, tx: 2.5, ty: 1.5 }, 7, 6],
+      ['all taps outside', { sx: 1, sy: 1, tx: 30, ty: -30 }, 2, 3],
+      ['thin output', { sx: 0.5, sy: 2, tx: -0.5, ty: 0.25 }, 1, 7],
+      ['inverse overflow', { sx: Number.MIN_VALUE, sy: 1, tx: 0, ty: 0 }, 3, 2],
+      ['vertical inverse overflow', { sx: 1, sy: Number.MIN_VALUE, tx: 0, ty: 0 }, 3, 2],
+      ['zero width', { sx: 1, sy: 1, tx: 0, ty: 0 }, 0, 3],
+      ['zero height', { sx: 1, sy: 1, tx: 0, ty: 0 }, 3, 0],
+    ] as const) result.push({ name: `${name} channels ${channels}`, image, map, width, height });
+  }
+  return result;
+}
+
+function sameFloatImageBits(a: FloatImage, b: FloatImage): boolean {
+  return a.width === b.width && a.height === b.height && a.channels === b.channels &&
+    Buffer.compare(Buffer.from(a.data.buffer, a.data.byteOffset, a.data.byteLength), Buffer.from(b.data.buffer, b.data.byteOffset, b.data.byteLength)) === 0;
+}
+
 function runWarpSuite(): number {
   section('raster: warpAffine');
   const { say, bad } = counter();
@@ -1332,6 +1487,69 @@ function runWarpSuite(): number {
     `scale 0: ${singular ?? 'accepted'}`,
     'a zero scale has no inverse; cv2 would hand back the border everywhere',
   );
+  const allControls = warpControlInputs();
+  const overflows = allControls.filter((c) => !Number.isFinite(1 / c.map.sx) || !Number.isFinite(1 / c.map.sy));
+  const controls = allControls.filter((c) => !overflows.includes(c));
+  const filters = ['bilinear', 'bicubic'] as const;
+  let compared = 0;
+  const differences: string[] = [];
+  for (const filter of filters) for (const input of controls) {
+    const { image, map, width, height } = input;
+    compared++;
+    if (!sameFloatImageBits(warpAffine(image, map, width, height, filter), warpReference(image, map, width, height, filter))) differences.push(`${filter}: ${input.name}`);
+  }
+  say(
+    'WA06_EVERY_QUANTIZED_WEIGHT_PAIR_MATCHES_THE_FROZEN_SCALAR_ORACLE_BIT_FOR_BIT',
+    differences.length === 0,
+    `${compared} calls over both filters and every 32 by 32 phase pair, one and four channels, negative scales, borders and empty output; mismatches: ${differences.join('; ') || 'none'}`,
+    'issue #677: weight reuse changes allocation only; equal repeated optimized runs cannot detect a shared arithmetic regression, so the oracle keeps the pre-change scalar operations',
+  );
+  for (const mutant of ['phase', 'alias', 'order'] as const) {
+    let witness: string | null = null;
+    for (const filter of filters) {
+      for (const input of controls) {
+        const { image, map, width, height } = input;
+        if (!sameFloatImageBits(warpReference(image, map, width, height, filter), warpReference(image, map, width, height, filter, mutant))) {
+          witness = `${filter}: ${input.name}`;
+          break;
+        }
+      }
+      if (witness !== null) break;
+    }
+    say(
+      `WA07_THE_FROZEN_ORACLE_REJECTS_THE_${mutant.toUpperCase()}_MUTANT`,
+      witness !== null,
+      `the planted ${mutant} mutation differs at ${witness ?? 'NO fixture'}`,
+      'a wrong fraction, an aliased row, or reversed floating-point accumulation must be visible to the same raw-bit comparison as the positive control',
+    );
+  }
+  const positiveZero: FloatImage = { width: 1, height: 1, channels: 1, data: Float32Array.of(0) };
+  const negativeZero: FloatImage = { ...positiveZero, data: Float32Array.of(-0) };
+  say('WA08_THE_BYTE_ORACLE_DISTINGUISHES_SIGNED_ZERO', !sameFloatImageBits(positiveZero, negativeZero) && sameFloatImageBits(positiveZero, { ...positiveZero, data: Float32Array.of(0) }), 'equal numeric zeros with opposite sign bits differ; copied positive zero agrees', 'Float32 bit equality is stronger than numeric or epsilon equality');
+
+
+  // A finite subnormal scale can produce non-finite sample positions. The frozen
+  // scalar function itself can store either NaN sign under JIT compilation;
+  // retain NaN outcomes here, and keep raw-bit equality for every other sample.
+  const sameExceptional = (a: FloatImage, b: FloatImage): boolean => {
+    if (a.width !== b.width || a.height !== b.height || a.channels !== b.channels) return false;
+    const bitsA = new Uint32Array(a.data.buffer, a.data.byteOffset, a.data.length);
+    const bitsB = new Uint32Array(b.data.buffer, b.data.byteOffset, b.data.length);
+    return bitsA.every((value, i) => value === bitsB[i] || (Number.isNaN(a.data[i]) && Number.isNaN(b.data[i])));
+  };
+  let overflowCompared = 0;
+  let overflowSame = true;
+  let plantedZeroRejected = true;
+  for (const filter of filters) for (const input of overflows) {
+    const expected = warpReference(input.image, input.map, input.width, input.height, filter);
+    const actual = warpAffine(input.image, input.map, input.width, input.height, filter);
+    overflowCompared++;
+    overflowSame &&= sameExceptional(expected, actual);
+    const planted = { ...expected, data: expected.data.map((value) => Number.isNaN(value) ? 0 : value) };
+    plantedZeroRejected &&= !sameExceptional(expected, planted);
+  }
+  say('WA09_INVERSE_OVERFLOW_KEEPS_NAN_OUTCOMES_AND_EVERY_OTHER_FLOAT_BIT', overflowSame && plantedZeroRejected, `${overflowCompared} overflow calls agree; replacing NaN with zero is rejected: ${plantedZeroRejected}`, 'the finite, nonzero map contract admits subnormal scales; NaN payload signs are not a scalar arithmetic oracle, but zero in place of NaN and changed border bits must fail');
+
   return bad();
 }
 
@@ -36156,6 +36374,25 @@ function runTreeSuite(): number {
   runAliasControls(say);
   runRepublishControls(say);
   runPushProvenanceControls(say);
+  const rssRows: SelftestRssRow[] = [
+    { pid: 11, parent: 1, start: '100', bytes: 16384 },
+    { pid: 22, parent: 11, start: '200', bytes: 1073741824 },
+    { pid: 33, parent: 22, start: '300', bytes: 8192 },
+    { pid: 44, parent: 1, start: '400', bytes: 1073741824 },
+  ];
+  const holders = new Map<number, string>([[11, '100']]);
+  const held = selftestFamilyRss(rssRows, holders);
+  const parentOnly = rssRows[0].bytes;
+  say('TY24_THE_PEAK_SAMPLER_INCLUDES_CHILDREN_AND_EXCLUDES_UNRELATED_HOLDERS', held === 1073766400 && parentOnly < 1073741824, `family ${held} B, planted parent-only ${parentOnly} B; the unrelated GiB is excluded`, 'issue #677: the child holds the allocation; parent-only accounting cannot establish the memory bar');
+  const released = selftestFamilyRss([rssRows[0]], holders);
+  const peakHeld = Math.max(held, released);
+  say('TY25_THE_PEAK_SURVIVES_RELEASE_AND_REUSED_PIDS_DO_NOT_REVIVE_HOLDERS', peakHeld === held && released === 16384 && selftestFamilyRss([{ ...rssRows[0], start: 'replacement', bytes: 1073741824 }], holders) === 0, `held peak ${peakHeld} B, released current ${released} B; a different birth identity is excluded`, 'a peak is not the final current RSS and a reused PID is not its former allocation holder');
+  const peakLines: string[] = [];
+  const finishUnavailable = selftestPeakFinish(() => 'family RSS unavailable', (line) => { peakLines.push(line); });
+  finishUnavailable();
+  finishUnavailable();
+  say('TY26_THE_UNAVAILABLE_FAMILY_PEAK_FINISHES_ONCE_AND_KEEPS_THE_OWN_PROCESS_PEAK', peakLines.length === 1 && peakLines[0].includes('self_max_rss_kib=') && peakLines[0].includes('family RSS unavailable'), `explicit finish plus exit finish writes ${peakLines.length} line(s); own-process field present: ${peakLines[0]?.includes('self_max_rss_kib=')}`, 'the fallback must be idempotent too; a platform without proc still keeps the own-process kernel maximum when its runtime supports it');
+
   return bad();
 }
 
@@ -47524,6 +47761,82 @@ const TALLY_SUITE = 'run-tally';
 const STARTED_FIRST: readonly string[] = ['readme-loop', 'chain', 'build', 'check', 'scene', 'assemble-examples', 'propose', 'rig', 'auto-mesh-examples', 'auto-motion', 'build-cost', 'auto-mesh'];
 
 /** The argument that makes this file run one suite, or one unit of a split suite, as a worker, for the parent run, and nothing else. */
+/** A sampled process identity: PID reuse must not retain the former holder. */
+interface SelftestRssRow { pid: number; parent: number; start: string; bytes: number }
+
+/** Sum discovered descendants, retaining an orphan only while its identity is unchanged. */
+function selftestFamilyRss(rows: readonly SelftestRssRow[], known: Map<number, string>): number {
+  const family = new Map<number, string>();
+  for (const row of rows) if (known.get(row.pid) === row.start) family.set(row.pid, row.start);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const row of rows) if (!family.has(row.pid) && family.has(row.parent)) {
+      family.set(row.pid, row.start);
+      grew = true;
+    }
+  }
+  known.clear();
+  for (const [pid, start] of family) known.set(pid, start);
+  return rows.reduce((sum, row) => sum + (family.has(row.pid) ? row.bytes : 0), 0);
+}
+
+/** Linux /proc status RSS in KiB; shared pages count once per PID.
+ * This samples the selftest family, excluding an ancestor package runner. A blocked event
+ * loop or a child shorter than 200 ms can be missed; this line is not a memory guard.
+ */
+/** Node-compatible process.resourceUsage().maxRSS is KiB, not Bun.Subprocess bytes.
+ * The own-process kernel high-water mark and the sampled descendants answer different questions.
+ * https://nodejs.org/api/process.html#processresourceusage
+ */
+function selftestPeakFinish(familyText: () => string, write: (text: string) => void = (text) => { process.stderr.write(text); }): () => void {
+  let finished = false;
+  return (): void => {
+    if (finished) return;
+    finished = true;
+    let own = 'self_max_rss_kib=unavailable';
+    try { own = 'self_max_rss_kib=' + process.resourceUsage().maxRSS; } catch { /* not supported by every runtime */ }
+    write('selftest peak (stderr, never tallied): ' + own + '; ' + familyText() + '\n');
+  };
+}
+function startSelftestPeak(): () => void {
+  if (process.platform !== 'linux' || !existsSync('/proc/self/stat')) {
+    return selftestPeakFinish(() => 'family RSS unavailable; Linux /proc is required');
+  }
+  const identity = (text: string): readonly [number, string] => {
+    const fields = text.slice(text.lastIndexOf(')') + 2).split(/\s+/);
+    return [Number(fields[1]), fields[19]];
+  };
+  const [, rootStart] = identity(readFileSync('/proc/self/stat', 'utf8'));
+  const known = new Map<number, string>([[process.pid, rootStart]]);
+  let peak = 0;
+  let samples = 0;
+  let unreadable = 0;
+  const sample = (): void => {
+    const rows: SelftestRssRow[] = [];
+    for (const entry of readdirSync('/proc')) {
+      if (!/^\d+$/.test(entry)) continue;
+      try {
+        const [parent, start] = identity(readFileSync('/proc/' + entry + '/stat', 'utf8'));
+        const rss = /^VmRSS:\s+(\d+)\s+kB$/m.exec(readFileSync('/proc/' + entry + '/status', 'utf8'));
+        rows.push({ pid: Number(entry), parent, start, bytes: rss === null ? 0 : Number(rss[1]) * 1024 });
+      } catch {
+        unreadable++;
+      }
+    }
+    peak = Math.max(peak, selftestFamilyRss(rows, known));
+    samples++;
+  };
+  sample();
+  const timer = setInterval(sample, 200);
+  timer.unref();
+  return selftestPeakFinish(() => {
+    clearInterval(timer);
+    sample();
+    return 'family_rss_bytes=' + peak + '; interval_ms=200; samples=' + samples + '; unreadable_proc_entries=' + unreadable + '; method=linux-proc-status-summed-rss';
+  });
+}
+
 const WORKER_FLAG = '--suite-worker';
 
 /**
@@ -48230,4 +48543,7 @@ async function main(): Promise<void> {
   );
 }
 
+const finishSelftestPeak = process.argv.includes(WORKER_FLAG) ? null : startSelftestPeak();
+if (finishSelftestPeak !== null) process.on('exit', finishSelftestPeak);
 await main();
+finishSelftestPeak?.();
