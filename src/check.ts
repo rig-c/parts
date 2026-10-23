@@ -78,8 +78,8 @@
  * `TIME_SLACK`, issue #244).
  */
 import { createHash } from 'node:crypto';
-import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, delimiter, dirname, join, resolve } from 'node:path';
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig } from './assemble.ts';
 import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toBoneLocal } from './coords.ts';
 import { capBox, inDisc } from './limbs.ts';
@@ -3512,6 +3512,7 @@ export const MOTION_SEAM_LINE = 'SEAM_OVER_MOTION';
 
 /** The seam reading's scratch build and renders, under `--out`; removed before the stage returns. */
 const MOTION_SEAM_SCRATCH = '_seam_motion';
+const MOTION_SEAM_DIR = 'seam_motion';
 
 /** rig-c's seam reading: the file it writes in each set's directory, and its format tag. */
 export const SEAM_READING_FILE = 'seam.json';
@@ -3628,7 +3629,6 @@ export interface MotionSeamHit {
   box: [number, number, number, number];
 }
 export interface MotionSeamWorldKind {
-  frames: MotionSeamHit[];
   max_px: number;
   worst: MotionSeamHit | null;
 }
@@ -3647,6 +3647,8 @@ export interface MotionSeamWorld {
   gravity: [number, number];
   status: 'REPORTED' | 'SKIP';
   reason?: string;
+  /** Complete rigc render directory, relative to check.json; absent when not rendered. */
+  dir?: string;
   rows: MotionSeamWorldRow[];
 }
 export interface MotionSeamWorlds {
@@ -3673,6 +3675,51 @@ export function readMotionSeamWorldRows(dir: string, animations: readonly string
   const rows: MotionSeamWorldRow[] = [];
   readMotionSeams(dir, animations, fps, pairs, {}, rows);
   return rows;
+}
+
+
+/** Publish complete validated render directories with check.json; roll back if its writer fails. */
+export function publishMotionSeamWorlds(out: string, scratch: string, worlds: MotionSeamWorlds, publishCheck: () => void): void {
+  const problems: Problem[] = [];
+  const names = (['default', 'still'] as const).filter(name => worlds[name].dir !== undefined);
+  for (const name of names) {
+    const world = worlds[name];
+    const home = join(scratch, name);
+    if (world.dir !== MOTION_SEAM_DIR + '/' + name) problems.push({ code: 'FRAMES_SIDECAR', object: 'seam world ' + name, detail: 'raw directory reference must be ' + MOTION_SEAM_DIR + '/' + name });
+    const manifest = readJson(join(home, 'frames.json'), problems);
+    const sets = manifest !== null && Array.isArray(manifest.sets) ? manifest.sets.filter(isRecord) : [];
+    for (const animation of new Set(world.rows.map(row => row.animation))) {
+      const set = sets.find(item => item.animation === animation);
+      const rawDir = set !== undefined && typeof set.dir === 'string' ? set.dir : null;
+      const at = rawDir === null ? null : resolve(home, rawDir);
+      const rel = at === null ? '..' : relative(home, at);
+      if (rawDir === null || isAbsolute(rawDir) || at === null || isAbsolute(rel) || /^\.\.(?:[\\/]|$)/.test(rel) || !existsSync(join(at, SEAM_READING_FILE))) {
+        problems.push({ code: 'FRAMES_SIDECAR', object: home, detail: 'animation ' + JSON.stringify(animation) + ' raw dir ' + JSON.stringify(rawDir) + ' must be relative, stay inside its render directory and hold seam.json' });
+      }
+    }
+  }
+  refuseIfAny(problems);
+  const stage = join(scratch, '_publish');
+  const previous = join(scratch, '_previous');
+  const kept = join(out, MOTION_SEAM_DIR);
+  const check = join(out, 'check.json');
+  const previousCheck = existsSync(check) ? readFileSync(check) : null;
+  mkdirSync(out, { recursive: true });
+  mkdirSync(stage, { recursive: true });
+  for (const name of names) renameSync(join(scratch, name), join(stage, name));
+  const hadPrevious = existsSync(kept);
+  if (hadPrevious) renameSync(kept, previous);
+  try {
+    renameSync(stage, kept);
+    publishCheck();
+  } catch (err) {
+    rmSync(kept, { recursive: true, force: true });
+    if (hadPrevious) renameSync(previous, kept);
+    if (previousCheck === null) rmSync(check, { force: true });
+    else writeFileSync(check, previousCheck);
+    throw err;
+  }
+  rmSync(previous, { recursive: true, force: true });
 }
 
 type SeamHitRead = MotionSeamHit;
@@ -3721,7 +3768,7 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
         return;
       }
       const over = new Map<number, number>();
-      const kinds: Record<'gap' | 'ghost', MotionSeamWorldKind> = { gap: { frames: [], max_px: 0, worst: null }, ghost: { frames: [], max_px: 0, worst: null } };
+      const kinds: Record<'gap' | 'ghost', MotionSeamWorldKind> = { gap: { max_px: 0, worst: null }, ghost: { max_px: 0, worst: null } };
       for (const kind of ['gap', 'ghost'] as const) {
         const k = p[kind];
         const frames = isRecord(k) && Array.isArray(k.frames) ? k.frames.map(hitOf) : null;
@@ -3731,7 +3778,7 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
         }
         const hits = frames as SeamHitRead[];
         const worst = hits.reduce<MotionSeamHit | null>((best, h) => best === null || h.px > best.px || (h.px === best.px && h.index < best.index) ? h : best, null);
-        kinds[kind] = { frames: hits, max_px: worst?.px ?? 0, worst };
+        kinds[kind] = { max_px: worst?.px ?? 0, worst };
         for (const h of hits) if (plant.noFloor === true || openingOverFloor(h)) over.set(h.index, Math.max(over.get(h.index) ?? 0, h.px));
       }
       worldRows?.push({ pair: want.pair, animation, status: p.status, drawn: p.drawn, banded: p.banded, gap: kinds.gap, ghost: kinds.ghost });
@@ -4110,13 +4157,15 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const seamDir = join(out, SEAM_DIR);
   const keptDir = join(out, STILL_DIR);
   const foldDir = join(out, FOLD_SCRATCH);
-  for (const d of [buildDir, idleDir, stillDir, isoDir, loopDir, seamDir, keptDir, foldDir]) rmSync(d, { recursive: true, force: true });
+  const seamMotionDir = join(out, MOTION_SEAM_SCRATCH);
+  for (const d of [buildDir, idleDir, stillDir, isoDir, loopDir, seamDir, keptDir, foldDir, seamMotionDir]) rmSync(d, { recursive: true, force: true });
   const written: string[] = [];
   const write = (name: string, data: string): void => {
     writeFileSync(join(out, name), data);
     written.push(name);
   };
 
+  try {
   // 1. build, packed, under the policy profile
   const build = rigc(['build', '--rig', inp.rigPath, '--motion', inp.motionPath, '--out', buildDir, ...packedBuildArgs(mode)]);
   const gateHtml = buildGateLines(build.out);
@@ -4469,18 +4518,19 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     else if (animationNames.length === 0) motionSeam = motionSeamLine(pairs, [], fps, [], 'motion.json holds no animation to read the declared pairs in');
     else if (read.length === 0) motionSeam = motionSeamLine(pairs, animationNames, fps, []);
     else {
-      const seamMotionDir = join(out, MOTION_SEAM_SCRATCH);
       rmSync(seamMotionDir, { recursive: true, force: true });
-      try {
+      {
         const list = read.map((p) => `${p.a}:${p.b}`).join(',');
-        const r = measured(['render', '--candidate', buildDir, '--seam', list, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', seamMotionDir]);
+        const activeDest = stripped === null ? seamMotionDir : join(seamMotionDir, env === null ? 'default' : 'active');
+        const renderedWorlds = new Set<'default' | 'still'>();
+        const r = measured(['render', '--candidate', buildDir, '--seam', list, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', activeDest]);
         if (r.status !== 0) refuseIfAny(rigcFailed(`render --seam ${list} --fps ${fps}`, r, r.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
         const activeWorldRows: MotionSeamWorldRow[] = [];
-        motionSeam = motionSeamLine(pairs, animationNames, fps, readMotionSeams(seamMotionDir, animationNames, fps, read, {}, stripped !== null && env === null ? activeWorldRows : undefined));
+        motionSeam = motionSeamLine(pairs, animationNames, fps, readMotionSeams(activeDest, animationNames, fps, read, {}, stripped !== null && env === null ? activeWorldRows : undefined));
         if (stripped !== null) {
           const response = environmentResponse(readFileSync(join(buildDir, 'skeleton.json'), 'utf8'));
           motionSeam.worlds = motionSeamWorlds(true, response.wind.length > 0, world => {
-            if (world === 'default' && env === null) return activeWorldRows;
+            if (world === 'default' && env === null) { renderedWorlds.add(world); return activeWorldRows; }
             const dest = join(seamMotionDir, world);
             const args = ['render', '--candidate', buildDir, '--seam', list, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', dest];
             if (world === 'still') {
@@ -4491,11 +4541,15 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
             // These reference worlds are independent of the caller's --environment.
             const rendered = rigc(args);
             if (rendered.status !== 0) refuseIfAny(rigcFailed('render --seam (' + world + ' reference world)', rendered, rendered.out.split('\n').filter(l => l.includes('FAIL') || l.includes('rigc:'))));
-            return readMotionSeamWorldRows(dest, animationNames, fps, read);
+            const rows = readMotionSeamWorldRows(dest, animationNames, fps, read);
+            renderedWorlds.add(world);
+            return rows;
           });
+          for (const world of renderedWorlds) {
+            const reading = motionSeam.worlds?.[world];
+            if (reading !== undefined) reading.dir = MOTION_SEAM_DIR + '/' + world;
+          }
         }
-      } finally {
-        rmSync(seamMotionDir, { recursive: true, force: true });
       }
     }
   }
@@ -4743,7 +4797,9 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   problems.unshift(...barProblems);
   problems.push(...foldProblems, ...levelProblems, ...stressProblems, ...limbProblems, ...sweepProblems, ...reqProblems);
   figures.PASS = problems.length === 0;
-  write('check.json', `${JSON.stringify(figures, null, 1)}\n`);
+  const publishCheck = (): void => write('check.json', `${JSON.stringify(figures, null, 1)}\n`);
+  if (motionSeam.worlds === undefined) publishCheck();
+  else publishMotionSeamWorlds(out, seamMotionDir, motionSeam.worlds, publishCheck);
   const bars: CheckReport['bars'] = { measured: ['gate'], skipped: [] };
   const tally = (bar: string, reason: string | null): void => {
     if (reason === null) bars.measured.push(bar);
@@ -4782,6 +4838,9 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     cloth,
     ...(sweepSteps.size === 0 ? {} : { sweepSteps }),
   };
+  } finally {
+    rmSync(seamMotionDir, { recursive: true, force: true });
+  }
 }
 
 // ---------------------------------------------------------------------------

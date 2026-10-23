@@ -645,7 +645,8 @@ usage:
       steps. Without the flag no environment provenance key is written.
       Physics rigs with readable declared seam pairs also report independent
       default wind [1, 0] and still wind [0, 0], gravity [0, 1], under
-      SEAM_OVER_MOTION.worlds. Raw gap/ghost cells, informational only: no
+      SEAM_OVER_MOTION.worlds: gap/ghost maximum and worst frame only;
+      dir points to retained raw seam renders relative to check.json. No
       new bar or warning, and the custom reading is unchanged. No wind
       response or no band is SKIP; no pair or animation gives no worlds.
       Nonphysics output is unchanged. In rig-play environment(null) returns

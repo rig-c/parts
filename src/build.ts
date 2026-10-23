@@ -1736,7 +1736,8 @@ export function motionSeamLines(line: MotionSeamLine, plant: MotionSeamPlant = {
       if (w === undefined) return [];
       const label = 'seam world "' + name + '"';
       const header = label + ' wind [' + w.wind.join(', ') + '], gravity [' + w.gravity.join(', ') + ']: ' + w.status +
-        (w.status === 'SKIP' ? ' — ' + String(w.reason) : ' — raw gap/ghost cell counts, informational, not judged');
+        (w.status === 'SKIP' ? ' — ' + String(w.reason) : ' — raw gap/ghost cell counts, informational, not judged') +
+        (w.dir === undefined ? '' : '; raw render: ' + w.dir);
       return [header, ...w.rows.map(r => {
         const head = label + ' "' + r.pair + '" in "' + r.animation + '": ';
         if (r.status === 'skip') return head + 'SKIP — rigc read no band';
