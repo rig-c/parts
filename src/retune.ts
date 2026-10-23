@@ -40,7 +40,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { checkStage, gateThroughRigc, type Log, rigStage } from './build.ts';
 import { type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackShape, type PageEdges, rigcRanClause, type RigcRunner } from './check.ts';
 import { PartsError, type Problem, problemLine, refuseIfAny } from './errors.ts';
-import { type CheckSide, checkHeldProblems, checkSide, checkScope, type FileTree, firstDifference, type HashRow, hashRows, INPUT_CHECK_FILE, type InputCheckBinding, inputCheckHashes, inputCheckMovedProblems, inputCheckOf, inputCheckReusedLine, inputCheckText, inputTreeProblems, perturbed, readTree, sha256 } from './remesh.ts';
+import { type CheckSide, carryProvenance, type ParentProvenance, checkHeldProblems, checkSide, checkScope, type FileTree, firstDifference, type HashRow, hashRows, INPUT_CHECK_FILE, type InputCheckBinding, inputCheckHashes, inputCheckMovedProblems, inputCheckOf, inputCheckReusedLine, inputCheckText, inputTreeProblems, perturbed, readTree, sha256 } from './remesh.ts';
 import { DEFAULT_IDLE_KEYS, type IdleKeys, rigJsonText } from './rig.ts';
 
 /** The provenance file's spec. */
@@ -103,7 +103,7 @@ export interface RetuneProvenance {
   spec: typeof RETUNE_SPEC;
   request: { idle_keys: IdleKeys; page_edges: PageEdges; pack_shape: PackShape };
   versions: { parts: string; rigc: string };
-  input: { rig: HashRow[]; config_sha256: string; parts_json_sha256: string };
+  input: { rig: HashRow[]; config_sha256: string; parts_json_sha256: string; provenance?: ParentProvenance[] };
   held: { compared: string[]; not_compared: string };
   changed: { constraints: ConstraintChange[]; added: string[]; removed: string[]; idle: { tracks_changed: number; duration: [number, number] } };
   preserved: { identical: string[]; spliced: string[] };
@@ -375,7 +375,7 @@ export function retuneStage(input: RetuneInput, rigc: RigcRunner, checkBin: stri
   if (changed.added.length > 0) log(`  constraints added: ${changed.added.join(', ')}`);
   if (changed.removed.length > 0) log(`  constraints removed: ${changed.removed.join(', ')}`);
   log(`  idle: ${changed.idle.tracks_changed} track(s) changed, duration ${changed.idle.duration[0]} -> ${changed.idle.duration[1]}`);
-  log(`  preserved: ${identical.length} file(s) byte-identical to the input; rig.json identical outside constraints and invariants.detached; motion.json identical outside animations.idle`);
+  log(`  preserved: ${identical.filter((p) => p !== RETUNE_FILE && !(input.recordInputCheck === true && p === INPUT_CHECK_FILE)).length} file(s) byte-identical to the input; rig.json identical outside constraints and invariants.detached; motion.json identical outside animations.idle`);
   // 6. The gate and check.
   const pngs = [...revision].filter(([k]) => k.startsWith('images/')).map(([k, b]) => [k.slice('images/'.length), b] as const);
   const texts = [...revision].filter(([k]) => !k.startsWith('images/')).map(([k, b]) => [k, text(b)] as const);
@@ -405,15 +405,19 @@ export function retuneStage(input: RetuneInput, rigc: RigcRunner, checkBin: stri
   refuseIfAny(checkHeldProblems(sides.input, sides.revision, revCheck.problems, 'retune'));
   const scope = checkScope(sides.revision.physics);
   log(`  check: input ${sides.input.pass ? 'PASS' : `FAIL (${sides.input.not_met.join(', ')})`}, revision ${sides.revision.pass ? 'PASS' : `FAIL (${sides.revision.not_met.join(', ')})`}, the same ${sides.revision.measured.length} bar(s) measured; ${scope}`);
-  // 7. The write.
+  // 7. The write. The hold above still compares the original rig and motion bytes.
+  const lineage = carryProvenance(tree, revision, RETUNE_FILE);
+  revision = lineage.revision;
+  if (input.recordInputCheck === true) revision.set(INPUT_CHECK_FILE, new TextEncoder().encode(inputCheckText(recorded.binding as InputCheckBinding, sides.input)));
+  revision = new Map([...revision].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
   const provenance: RetuneProvenance = {
     spec: RETUNE_SPEC,
     request: { idle_keys: idleKeys, page_edges: pageEdges, pack_shape: packShape },
     versions,
-    input: { rig: hashRows(tree), config_sha256: sha256(new Uint8Array(readFileSync(input.config))), parts_json_sha256: sha256(new Uint8Array(readFileSync(join(input.parts, 'parts.json')))) },
+    input: { rig: hashRows(tree), config_sha256: sha256(new Uint8Array(readFileSync(input.config))), parts_json_sha256: sha256(new Uint8Array(readFileSync(join(input.parts, 'parts.json')))), ...(lineage.parents.length === 0 ? {} : { provenance: lineage.parents }) },
     held: { compared: [...RETUNE_HELD], not_compared: RETUNE_NOT_COMPARED },
     changed,
-    preserved: { identical, spliced },
+    preserved: { identical: identical.filter((p) => p !== RETUNE_FILE && !(input.recordInputCheck === true && p === INPUT_CHECK_FILE)), spliced },
     revision: hashRows(revision),
     check: { ...sides, scope },
   };
@@ -427,8 +431,6 @@ export function retuneStage(input: RetuneInput, rigc: RigcRunner, checkBin: stri
   writeFileSync(join(outAt, RETUNE_FILE), rigJsonText(provenance));
   written.push(RETUNE_FILE);
   if (input.recordInputCheck === true) {
-    writeFileSync(join(outAt, INPUT_CHECK_FILE), inputCheckText(recorded.binding as InputCheckBinding, sides.input));
-    written.push(INPUT_CHECK_FILE);
     log(`  recorded: the input's check in ${INPUT_CHECK_FILE}, bound by ${inputCheckHashes(recorded.binding as InputCheckBinding)} sha256 row(s); pass it as --input-check to a later remesh or retune of ${input.rig}`);
   }
   log('  file                                     sha256 (input)     sha256 (revision)');

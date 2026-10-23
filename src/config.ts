@@ -259,6 +259,8 @@ export interface AlternateSetConfig {
   head_box?: [number, number, number, number];
   cuts?: Cut[];
   skeleton?: string;
+  /** One or two skeleton keypoints paired with declared base-bone origins (issue #543). */
+  anchor?: Partial<Record<KeypointName, string>>;
   drawn?: Record<string, number>;
   /** Explicit bone endpoints on this alternate painting, full source-crop pixels, x right/y down. */
   tips?: Record<string, Point>;
@@ -2156,7 +2158,7 @@ function checkAlternates(
   const seenNames = new Map<string, number>();
   (v as Json[]).forEach((entry, i) => {
     const at = `${p}[${i}]`;
-    const e = c.object(at, entry, ['name'], ['source', 'full', 'head', 'parts', 'hides', 'head_box', 'cuts', 'skeleton', 'drawn', 'tips', 'front']);
+    const e = c.object(at, entry, ['name'], ['source', 'full', 'head', 'parts', 'hides', 'head_box', 'cuts', 'skeleton', 'anchor', 'drawn', 'tips', 'front']);
     if (e === null) return;
     if ('name' in e && c.string(`${at}.name`, e.name)) {
       if (!partNameOk(e.name)) c.fail('CONFIG_PART_NAME', `${at}.name`, `names the set ${show(e.name)}; a set name is a file prefix, so it may not be empty, start with "." or hold a slash`);
@@ -2165,6 +2167,16 @@ function checkAlternates(
     }
     for (const k of ['source', 'full', 'head', 'skeleton'] as const) {
       if (k in e) c.string(`${at}.${k}`, e[k]);
+    }
+    if ('anchor' in e) {
+      if (!('skeleton' in e)) c.fail('CONFIG_FIELD_PRESENT', `${at}.skeleton`, 'is absent; anchor registers a skeleton set and requires its skeleton file');
+      const a = e.anchor;
+      if (!isPlainObject(a) || Object.keys(a).length < 1 || Object.keys(a).length > 2) {
+        c.fail('CONFIG_FIELD_TYPE', `${at}.anchor`, `is ${show(a)}; one or two keypoint name -> declared base bone entries are required`);
+      } else for (const [keypoint, bone] of Object.entries(a)) {
+        if (!(KEYPOINT_NAMES as readonly string[]).includes(keypoint)) c.fail('CONFIG_KEY_KNOWN', `${at}.anchor.${keypoint}`, `is not a body-18 keypoint; one of ${KEYPOINT_NAMES.join(', ')} is required`);
+        if (typeof bone !== 'string' || (bones !== null && !bones.has(bone))) c.fail('CONFIG_NAME_RESOLVES', `${at}.anchor.${keypoint}`, `names ${show(bone)}; a bone config.bones declares is required`);
+      }
     }
     if ('drawn' in e) {
       const d = e.drawn;

@@ -338,6 +338,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     head_box?: [number, number, number, number];
     cuts?: Cut[];
     skeleton?: string;
+    anchor?: NonNullable<typeof cfg.assemble.alternates>[number]['anchor'];
     drawn?: Record<string, number>;
     tips?: Record<string, [number, number]>;
     front?: string[];
@@ -355,6 +356,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       head_box: a.head_box,
       cuts: a.cuts,
       skeleton: a.skeleton === undefined ? undefined : resolve(configDir, a.skeleton),
+      anchor: a.anchor,
       drawn: a.drawn,
       tips: a.tips,
       front: a.front,
@@ -544,7 +546,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       const placedBySkeleton = altSkeleton !== undefined && input.altPlacement !== 'angles' && SKELETON_LIMB_BONES.some(([b]) => coveredLimbBones.has(b));
       if (placedBySkeleton && altSkeleton !== undefined) {
         // Issue #539: the painting must sit where the base figure sits before its own joints are cut at.
-        const reg = registerSkeleton(fields.bones, altSkeleton);
+        const reg = registerSkeleton(fields.bones, altSkeleton, alt.anchor);
         if (!reg.ok) {
           const read = reg.anchors.map((a) => `${a.keypoint} on "${a.bone}"`).join(', ') || 'none';
           altProblems.push({

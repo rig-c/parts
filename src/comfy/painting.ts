@@ -31,7 +31,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ControlPose, PaintConfig } from '../config.ts';
 import { type Problem, refuseIfAny } from '../errors.ts';
-import { buildPrompts, checkGraph, paintingGraph, resolvedControl, resolvedLoras, resolvedSampler } from '../graphs.ts';
+import { buildPrompts, checkGraph, paintingGraph, resolvedControl, resolvedLoras, resolvedSampler, UPSCALE_MODEL, UPSCALE_THEN } from '../graphs.ts';
 import { decodePngBytes, encodePngBytes } from '../raster/png.ts';
 import { isSkeletonName, renderSkeleton } from '../skeleton.ts';
 import { ComfyClient, historyImages, refuse } from './client.ts';
@@ -112,6 +112,7 @@ export async function runPainting(client: ComfyClient, run: PaintRun, say: (line
       checkpoint: g.checkpoint,
       loras: resolvedLoras(g.loras),
       sampler: resolvedSampler(g.sampler),
+      upscale: { model: UPSCALE_MODEL, then: UPSCALE_THEN },
       control,
       pose_from: prompts.poseFrom,
       dropped: prompts.dropped,

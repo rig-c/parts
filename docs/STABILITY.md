@@ -127,7 +127,7 @@ part name, `[i]` an entry of a list):
 - **seethrough** — required: `resolution`, `steps`, `seed`, `offload`; optional: `head_box`, `arm_split`
 - **seethrough.arm_split** — required: `order`, and one of `x` or `line` (issue #439)
 - **assemble** — required: `rig_scale`, `plan` (from plain `assemble` on); optional: `extend_below_crop`, `patches`, `cuts`, `alternates`, `head_face_underfill`
-- **assemble.alternates[i]** — required: `name`; optional: `source`, `full`, `head`, `parts`, `hides`, `head_box`, `cuts`, `skeleton`, `drawn`, `tips`, `front` (issues #454, #465, #652, #664)
+- **assemble.alternates[i]** — required: `name`; optional: `source`, `full`, `head`, `parts`, `hides`, `head_box`, `cuts`, `skeleton`, `anchor`, `drawn`, `tips`, `front` (issues #454, #465, #543, #652, #664)
 - **assemble.extend_below_crop[i]** — required: `part`, `run`, `tag`
 - **assemble.patches[i]** — required: `name`, `box`, `alpha`, `draw`
 - **assemble.patches[i].draw**, when an object — required: `before`
@@ -213,6 +213,23 @@ every number) are AUTHORING §3's tables, and the loader refuses any other by na
 | `input-check.json` | `remesh --record-input-check`, `retune --record-input-check` | spec `rig-parts-input-check/1` (issue #617, additive): `versions` (`parts`, `rigc` — `rigc --version`'s whole output), `options` (`page_edges`, `pack_shape`, `requirements` — null, or `path` as resolved and `sha256`), `rig` and `parts` (`dir` as resolved, `files` — `path`, `bytes`, `sha256` per file: every file under `--rig`; `parts.json` and every file under `parts/`), `check` (the input's check side as `remesh.json` carries it); `--input-check` reads it back, and either command's serves the other |
 | the scene report | `compose` | spec `spine-parts-scene-report/1` |
 | `idle.png`, `idle-indexed.png`, `idle.gif` | `loop`, `build --loop` | APNG and GIF encodings of the rendered idle |
+
+Skeleton alternate registration accepts an optional `anchor` mapping of one or
+two body-18 keypoints to declared base-bone origins (issue #543). One pair holds
+scale at 1; two determine scale and offset. The registration bars and painting
+pixels are unchanged, and omitting the field retains torso registration.
+
+Painting generation metadata includes `upscale: {model, then}` (issue #698),
+read from the same `UPSCALE_MODEL` and `UPSCALE_THEN` constants as the graph.
+This adds provenance; it does not change model selection.
+
+Revision ancestry is additive (issue #531): a previous root `remesh.json` or
+`retune.json` is preserved at `provenance/<command>-<sha256>.json`, and optional
+`input.provenance` rows name its source, path, bytes and SHA-256. The chain survives
+same-command and mixed-command revisions without changing their rig splice or
+hold. `revision` rows name actual output bytes, including a new `input-check.json`
+when recorded, and exclude the new root provenance itself. A first revision has
+no parent rows. Hashes and names are deterministic.
 
 Files authors write for this package, each with a spec id the reader holds:
 `spine-parts-requirements/1` (`check --requirements`), `spine-parts-scene/1`

@@ -118,7 +118,7 @@ import type { BoneEntry, Limb, LimbSplit } from './config.ts';
 import { refuseIfAny, type Problem } from './errors.ts';
 import { edgeLength } from './length.ts';
 import { pyRound } from './round.ts';
-import type { KeypointName, PosePoints } from './skeleton.ts';
+import { KEYPOINT_NAMES, type KeypointName, type PosePoints } from './skeleton.ts';
 
 export type Pt = [number, number];
 
@@ -301,10 +301,25 @@ export type SkeletonRegistration =
  * base's the mean of those bones' origins; `scale` is the base torso's length
  * over the skeleton's, and `offset` takes the skeleton torso's midpoint, so
  * scaled, onto the base's. Both to 6 places. Not ok when the base declares no
- * bone at one end, or the skeleton's torso has no length.
+ * bone at one end, or the skeleton's torso has no length. An explicit anchor
+ * (issue #543) replaces torso discovery: one pair holds scale at 1; two pairs
+ * read scale from their distance and offset from their midpoint.
  */
-export function registerSkeleton(bones: readonly BoneEntry[], pts: PosePoints): SkeletonRegistration {
+export function registerSkeleton(bones: readonly BoneEntry[], pts: PosePoints, anchor?: Partial<Record<KeypointName, string>>): SkeletonRegistration {
   const places = bonePlaces(bones);
+  if (anchor !== undefined) {
+    const named = KEYPOINT_NAMES.flatMap((keypoint) => typeof anchor[keypoint] === 'string' ? [{ keypoint, bone: anchor[keypoint] as string }] : []);
+    if (named.length < 1 || named.length > 2 || named.some((a) => !places.has(a.bone))) return { ok: false, missing: [], anchors: named };
+    const source = named.map((a) => pts[a.keypoint]);
+    const target = named.map((a) => (places.get(a.bone) as BonePlace).at);
+    const length = source.length === 1 ? 1 : edgeLength(source[1][0] - source[0][0], source[1][1] - source[0][1]);
+    if (length === 0) return { ok: false, missing: [], anchors: named };
+    const scale = source.length === 1 ? 1 : edgeLength(target[1][0] - target[0][0], target[1][1] - target[0][1]) / length;
+    const offset: Pt = [0, 0];
+    for (let i = 0; i < source.length; i++) for (const axis of [0, 1] as const) offset[axis] += (target[i][axis] - scale * source[i][axis]) / source.length;
+    const rounded = (v: number): number => { const n = pyRound(v, 6); return n === 0 ? 0 : n; };
+    return { ok: true, offset: [rounded(offset[0]), rounded(offset[1])], scale: rounded(scale), anchors: named };
+  }
   const anchors: Array<{ keypoint: KeypointName; bone: string; end: 'top' | 'bottom' }> = [];
   for (const t of SKELETON_TORSO) {
     const bone = t.bones.find((b) => places.has(b));
