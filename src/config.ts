@@ -2812,11 +2812,34 @@ function checkContour(c: Check, at: string, v: Json, bones: Set<string>): void {
       const bandR = RR - rR;
       const bandL = RL - rL;
       if (clearance <= 0 || RR + RL >= D || rR <= 0 || rL <= 0 || bandR < 0 || bandL < 0) {
-        const minClearance = Math.max(0, (dR + dL - D) / 2);
+        // Invalid coordinates already have named problems, but c.point accepts any finite pair.
+        // Restrict only this diagnostic search to onGrid's existing domain, not the refusal rule.
+        let remedy = `clearance hint unavailable: correct the CONFIG_FIELD_TYPE landmark coordinates to the 1/${GRID} px grid within ±${MAX_SIDE} px first`;
+        if ([rx, ry, lx, ly, kx, ky].every((n) => Number.isInteger(n * GRID) && Math.abs(n) <= MAX_SIDE)) {
+          let low = 1;
+          let high = Math.ceil(Math.max(dR, dL) * 100) + 100;
+          // The coordinate domain bounds high below 2^24; binary search needs at most 24 steps.
+          const maxSteps = Math.ceil(Math.log2(high));
+          for (let step = 0; low < high && step < maxSteps; step++) {
+            const mid = low + Math.floor((high - low) / 2);
+            if (Math.round(dR - mid / 100) + Math.round(dL - mid / 100) < D) high = mid;
+            else low = mid + 1;
+          }
+          if (low === high) {
+            const candidate = low / 100;
+            const nextRR = Math.round(dR - candidate);
+            const nextRL = Math.round(dL - candidate);
+            const nextR = Math.round(alpha * nextRR);
+            const nextL = Math.round(alpha * nextRL);
+            remedy = nextRR + nextRL < D && nextR > 0 && nextL > 0 && nextRR - nextR >= 0 && nextRL - nextL >= 0
+              ? `the first passing clearance in 0.01 px steps is ${candidate} px for these landmarks and alpha; set clearance to that value`
+              : 'no clearance in 0.01 px steps meets all these rounded-radius checks; move cleavage or the apices, or change alpha, and retry';
+          }
+        }
         c.fail(
           'CONFIG_BUST_CLEARANCE',
           `${bat}.clearance`,
-          `is ${clearance} (giving R_r = ${RR}, R_l = ${RL}, R_r + R_l = ${RR + RL} px against apex distance D = ${pyRound(D, 2)} px, r_r = ${rR}, band_r = ${bandR}, r_l = ${rL}, band_l = ${bandL}); a clearance > 0 with R_r + R_l < D (clearance > ${pyRound(minClearance, 2)} px) and positive radii is required`,
+          `is ${clearance} (giving R_r = ${RR}, R_l = ${RL}, R_r + R_l = ${RR + RL} px against apex distance D = ${pyRound(D, 2)} px, r_r = ${rR}, band_r = ${bandR}, r_l = ${rL}, band_l = ${bandL}); a clearance > 0 with R_r + R_l < D and positive core radii and non-negative bands is required; ${remedy}`,
         );
       }
     }
