@@ -48,7 +48,7 @@ jobs:
       - run: bun install --frozen-lockfile
 
       # The public examples' heavy inputs (paintings, See-through layer sets)
-      # live in the parts-examples repository and are fetched, at the commit
+      # live in the rig-c/examples repository and are fetched, at the commit
       # scripts/fetch-examples.sh pins, into the gitignored examples/*/inputs —
       # so a fresh checkout has none, and without this step every suite that
       # reads them reports a HOLE.

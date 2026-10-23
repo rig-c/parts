@@ -123,7 +123,7 @@ paintings, their See-through runs, the parts and configs the reference produced
 - ✅ **The public examples are not that corpus.** `examples/<key>/` holds
   characters generated to be published — a public checkpoint, no identity
   LoRA, no private character text; the generation record and the licence are
-  in the [parts-examples](https://github.com/rig-c/parts-examples)
+  in the [rig-c/examples](https://github.com/rig-c/examples)
   repository. Their config, proposal, contact sheets and the reference's
   outputs (`expected/`) are tracked here — for `scarf`, which no reference
   ever ran, `expected/` is this port's own build at the commit that added

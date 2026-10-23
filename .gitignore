@@ -31,7 +31,7 @@ node_modules
 /scratch
 /corpus
 # The heavy half of each public example — painting, See-through inputs and
-# layer sets — fetched by `bun run fetch-examples` from the spine-parts-examples
+# layer sets — fetched by `bun run fetch-examples` from the rig-c/examples
 # repository at a pinned commit. Anchored, because the selftest's matcher reads
 # `*` inside one component and an unanchored pattern with a slash in it would
 # never match a single component.

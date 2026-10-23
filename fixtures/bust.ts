@@ -1,7 +1,7 @@
 /**
  * Ground-truth bust contour region calibration across the five calibrated
  * example characters (`A`–`E`; each shared across three outfit sets `office`,
- * `homewear`, `swimwear` in `parts-examples` commit `302f0e0`, so the
+ * `homewear`, `swimwear` in `rig-c/examples` commit `302f0e0`, so the
  * independent sample size is 5 characters / 15 outfit configs) and the
  * closed-form fit (`α = 0.22`, `ε = 3.8 px`, issue #475).
  */

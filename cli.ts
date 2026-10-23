@@ -660,7 +660,15 @@ usage:
       the default (AUTHORING §6, The world the readings are taken in). One
       environment: line names the path, the step count and the sha256's first
       16 hex; check.json's environment holds path (as given), sha256 and
-      steps. Without the flag no key and no render argument moves.
+      steps. Without the flag no environment provenance key is written.
+      Physics rigs with readable declared seam pairs also report independent
+      default wind [1, 0] and still wind [0, 0], gravity [0, 1], under
+      SEAM_OVER_MOTION.worlds: gap/ghost maximum and worst frame only;
+      dir points to retained raw seam renders relative to check.json. No
+      new bar or warning, and the custom reading is unchanged. No wind
+      response or no band is SKIP; no pair or animation gives no worlds.
+      Nonphysics output is unchanged. In rig-play environment(null) returns
+      to the default world, not still air (AUTHORING, Physics seam environments).
 
   rig-parts loop --frames <dir> --out <file.png | file.gif> [--palette]
       Encode a frame set rigc render wrote (its --out directory, or the set
