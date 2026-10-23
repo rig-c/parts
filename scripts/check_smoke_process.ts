@@ -1,6 +1,6 @@
 /** Portable smoke-process controls; no checkout dependencies are required. */
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { findSmokeExecutable, isSmokePathInside, runSmokeCommand } from './smoke_process.ts';
@@ -12,6 +12,42 @@ export function checkSmokeProcess(): void {
     console.log('  PASS  ' + name);
   };
   try {
+    if (process.platform === 'win32') {
+      // A junction is not an 8.3-name control: use the runner's actual TEMP identity.
+      const entry = join(root, 'actual temp entry.js');
+      writeFileSync(entry, '');
+      const node = findSmokeExecutable('node');
+      if (node === null) throw new Error('SMOKE_PROCESS_WINDOWS_SHORT_LONG_NODE_REQUIRED');
+      const script = "const fs=require('node:fs');const paths=JSON.parse(process.argv[1]);process.stdout.write(JSON.stringify(paths.map(input=>{try{const s=fs.statSync(input,{bigint:true});return {input,realpath:fs.realpathSync(input),native:fs.realpathSync.native(input),stat:{dev:String(s.dev),ino:String(s.ino),directory:s.isDirectory()}}}catch(e){return {input,error:e.message}}})));";
+      const raw = spawnSync(node, ['-e', script, JSON.stringify([root, entry])], { encoding: 'utf8', shell: false });
+      type NativeRow = { input: string; realpath?: string; native?: string; stat?: { dev: string; ino: string; directory: boolean }; error?: string };
+      let native: NativeRow[];
+      try { native = JSON.parse(raw.stdout) as NativeRow[]; }
+      catch { throw new Error('SMOKE_PROCESS_WINDOWS_SHORT_LONG_NODE_OBSERVATION: ' + JSON.stringify({ status: raw.status, stderr: raw.stderr, stdout: raw.stdout, error: raw.error?.message })); }
+      const observe = (input: string) => {
+        const capture = <T>(read: () => T): { value: T } | { error: string } => {
+          try { return { value: read() }; }
+          catch (error) { return { error: error instanceof Error ? error.message : String(error) }; }
+        };
+        return { input, realpath: capture(() => realpathSync(input)),
+          native: typeof realpathSync.native === 'function' ? capture(() => realpathSync.native(input)) : { unavailable: true },
+          stat: capture(() => { const s = statSync(input, { bigint: true }); return { dev: String(s.dev), ino: String(s.ino), directory: s.isDirectory() }; }) };
+      };
+      const bun = [root, entry, ...native.flatMap(row => typeof row.native === 'string' ? [row.native] : [])].map(observe);
+      const shortRoot = root;
+      const longRoot = native[0]?.native;
+      const longEntry = native[1]?.native;
+      const shortName = /[\\/][^\\/]*~\d+(?=[\\/]|$)/i;
+      const actualPair = raw.status === 0 && raw.error === undefined && typeof longRoot === 'string' && typeof longEntry === 'string' &&
+        shortName.test(shortRoot) && !shortName.test(longRoot) && shortRoot.toLowerCase() !== longRoot.toLowerCase();
+      const accepted = actualPair && isSmokePathInside(shortRoot, longEntry) && isSmokePathInside(longRoot, realpathSync(entry));
+      if (!accepted) console.error('SMOKE_PROCESS_WINDOWS_SHORT_LONG_OBSERVATION ' + JSON.stringify({ temp: tmpdir(), root, shortRoot, native, bun, actualPair, accepted }));
+      if (!actualPair) {
+        console.log('  HOLE  SMOKE_PROCESS_WINDOWS_ACTUAL_SHORT_LONG_IDENTITY: no actual short/long TEMP pair was measured; no 8.3 proof');
+        throw new Error('SMOKE_PROCESS_WINDOWS_ACTUAL_SHORT_LONG_IDENTITY requires an actual existing 8.3 TEMP pair');
+      }
+      expect(accepted, 'SMOKE_PROCESS_WINDOWS_ACTUAL_SHORT_LONG_IDENTITY');
+    }
     const bin = join(root, 'bin with spaces');
     mkdirSync(bin);
     writeFileSync(join(bin, 'npm.cmd'), '@exit /b 99\r\n');
