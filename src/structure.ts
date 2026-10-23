@@ -1,3 +1,4 @@
+import { regionBone } from './config.ts';
 /**
  * A structural comparison of two skeletons (issue #85).
  *
@@ -193,7 +194,7 @@ export function configRoles(s: SkeletonSections & { constraints?: readonly Confi
         if (weightsABone(rg)) push(bound, rg.bone, `meshes.${part}.auto.regions[${i}]`);
       });
   }
-  for (const [part, bone] of Object.entries(s.regions)) push(bound, bone, `regions.${part}`);
+  for (const [part, bone] of Object.entries(s.regions)) push(bound, regionBone(bone), `regions.${part}`);
   for (const [part, st] of Object.entries(s.motion.blink?.still ?? {})) push(bound, st.bone, `motion.blink.still.${part}`);
   const keyed = new Map<string, string[]>();
   s.motion.tracks.forEach((t, i) => {

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { regionBone } from '../src/config.ts';
 /**
  * Issue #161, Stage A: weight rules measured against hand-painted weights, on a public editor export, before any
  * mechanism. One command writes the evidence page and its picture:
@@ -704,7 +705,7 @@ function faceRun(cfg: CharacterConfig, parts: readonly PlacedPart[], r: number):
   const raw = JSON.parse(readFileSync(join(ROOT, 'examples', 'reference-sample', 'config.json'), 'utf8')) as { meshes: Record<string, { segments: unknown[] }> };
   const headSeg = raw.meshes.neck.segments.find((s): s is [string, [number, number], [number, number]] => Array.isArray(s) && s[0] === 'head');
   if (headSeg === undefined) throw new Error('weight_rule_survey: the sample neck mesh declares no head segment');
-  const lidOf: Record<string, string> = { lash_l: cfg.regions.lash_l, lash_r: cfg.regions.lash_r };
+  const lidOf: Record<string, string> = { lash_l: regionBone(cfg.regions.lash_l), lash_r: regionBone(cfg.regions.lash_r) };
   const lids = FACE.lashes.map((l) => lidOf[l]);
   const segs: Segment[] = [
     { bone: 'head', a: [headSeg[1][0] - ox, headSeg[1][1] - oy], b: [headSeg[2][0] - ox, headSeg[2][1] - oy] },

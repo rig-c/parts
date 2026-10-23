@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { regionBone } from '../src/config.ts';
 /**
  * Issue #160, Stage A: interior feature contours in the automatic source, measured on public inputs before any
  * mechanism. One command writes the evidence page and its picture:
@@ -852,7 +853,7 @@ export function faceFixture(cfg: CharacterConfig, parts: readonly PlacedPart[]):
     art,
     policy: (s) => withPolicyMotion(permissivePolicy(s)),
     spacing,
-    referenceChain: ancestry(cfg, cfg.regions[FACE.part]),
+    referenceChain: ancestry(cfg, regionBone(cfg.regions[FACE.part])),
     lid: 'lid',
     pivot: [(cx0 + cx1) / 2, (cy0 + cy1) / 2],
     T: [0, height],
