@@ -68,12 +68,13 @@
  * until a publish makes it one (that is `--source registry`), and a green run is
  * one platform's answer, the runner's.
  */
-import { spawnSync } from 'node:child_process';
 import { runWithoutBun } from './smoke_without_bun.ts';
 import { checkSmokeWithoutBun } from './check_smoke_without_bun.ts';
+import { findSmokeExecutable, isSmokePathInside, runSmokeCommand } from './smoke_process.ts';
+import { checkSmokeProcess } from './check_smoke_process.ts';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AliasTarballError, compareTarballs } from './alias_tarball.ts';
 
@@ -349,16 +350,14 @@ interface Ran {
   out: string;
 }
 
+const smokePackages: Record<string, string> = { npm: 'npm', rigc: 'rig-c' };
+
 function run(cmd: string, args: string[], cwd: string, env?: Record<string, string | undefined>): Ran {
-  const r = spawnSync(cmd, args, { cwd, env: env ?? process.env, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  const failed = r.error === undefined ? '' : `\n${r.error.message}`;
-  return { status: typeof r.status === 'number' ? r.status : 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}${failed}` };
+  return runSmokeCommand(cmd, args, cwd, env, smokePackages);
 }
 
 function onPath(cmd: string): string | null {
-  const r = spawnSync('command', ['-v', cmd], { encoding: 'utf8', shell: true });
-  const found = typeof r.stdout === 'string' ? r.stdout.trim() : '';
-  return found === '' ? null : found;
+  return findSmokeExecutable(cmd);
 }
 
 const EXIT_GREEN = 0;
@@ -571,12 +570,13 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
   output += install.out;
   const pkgRoot = join(home, 'node_modules', PACKAGE);
   const bin = join(home, 'node_modules', '.bin', COMMAND);
-  if (!existsSync(join(pkgRoot, 'package.json')) || !existsSync(bin)) {
+  if (!existsSync(join(pkgRoot, 'package.json')) || onPath(bin) === null) {
     fault('install', `SMOKE_INSTALL_EMPTY_DIR: ${spec.installer} install of ${built.tgz} exited ${install.status} and left ${existsSync(pkgRoot) ? `no .bin/${COMMAND}` : `no node_modules/${PACKAGE}`} under ${home}. ${install.out.trim().slice(0, 3000)}`);
     if (!keep) rmSync(home, { recursive: true, force: true });
     return { faults, steps, notes, output };
   }
   const installedPkg = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8')) as { version?: string; bin?: Record<string, string> };
+  for (const name of Object.keys(installedPkg.bin ?? {})) smokePackages[name] = PACKAGE;
   const installedVersion = installedPkg.version ?? '';
 
   // --version, from the install, against the installed package.json.
@@ -593,7 +593,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
   const others = Object.keys(installedPkg.bin ?? {}).filter((name) => name !== COMMAND).sort();
   for (const name of others) {
     const other = join(home, 'node_modules', '.bin', name);
-    const said = existsSync(other) ? run(other, ['--version'], home) : null;
+    const said = onPath(other) !== null ? run(other, ['--version'], home) : null;
     if (said !== null) output += said.out;
     if (said === null || said.status !== 0 || said.out.trim() !== installedVersion) {
       fault('bin', `SMOKE_EVERY_BIN_RUNS_FROM_THE_INSTALL: the installed package.json declares the command \`${name}\`; ${said === null ? `${spec.installer} left no .bin/${name}` : `\`${name} --version\` exited ${said.status} saying ${JSON.stringify(said.out.trim().slice(0, 400))}`}; exit 0 and ${installedVersion} were required`);
@@ -604,7 +604,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
   // The installed rigc's entry: neither rig-parts nor rig-c 2.x installs spine-core, so rigc's launcher
   // must find no runtime from its own package root and run cli_core.ts, rigc's own validator.
   const rigcBin = join(home, 'node_modules', '.bin', 'rigc');
-  const rigcVersion = existsSync(rigcBin) ? run(rigcBin, ['--version'], home) : null;
+  const rigcVersion = onPath(rigcBin) !== null ? run(rigcBin, ['--version'], home) : null;
   if (rigcVersion !== null) output += rigcVersion.out;
   const entryLine = rigcVersion?.out.split('\n').map((l) => l.trim()).find((l) => l.startsWith('entry:')) ?? null;
   if (rigcVersion === null || rigcVersion.status !== 0 || entryLine === null || !/^entry: cli_core\.ts — @esotericsoftware\/spine-core absent — /.test(entryLine)) {
@@ -622,7 +622,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
     fault('fixture', `SMOKE_FIXTURE_FROM_THE_PACKAGE: \`bun make_fixture.ts\` exited ${gen.status}. ${gen.out.trim().slice(0, 3000)}`);
   } else {
     const resolved = [...gen.out.matchAll(/^RESOLVED (.+)$/gm)].map((m) => (m[1].startsWith('file://') ? fileURLToPath(m[1]) : m[1]));
-    const outsideInstall = resolved.filter((p) => !p.startsWith(join(home, 'node_modules')));
+    const outsideInstall = resolved.filter((p) => !isSmokePathInside(join(home, 'node_modules'), p));
     if (resolved.length !== 2 || outsideInstall.length > 0) {
       fault('fixture', `SMOKE_FIXTURE_FROM_THE_PACKAGE: the generator's imports resolved to ${resolved.join(', ') || '(nothing)'}; both were required under ${join(home, 'node_modules')}`);
     } else notes.push(`the fixture's codec and PSD writer resolved inside the install`);
@@ -703,7 +703,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
   const probe = run('bun', [join(home, 'contour_probe.ts')], home);
   output += probe.out;
   const probed = [...probe.out.matchAll(/^RESOLVED (.+)$/gm)].map((m) => (m[1].startsWith('file://') ? fileURLToPath(m[1]) : m[1]));
-  const strayProbe = probed.filter((p) => !p.startsWith(join(home, 'node_modules')));
+  const strayProbe = probed.filter((p) => !isSmokePathInside(join(home, 'node_modules'), p));
   if (probe.status !== 0 || !probe.out.split('\n').includes(EXPECT_CONTOUR) || probed.length !== 2 || strayProbe.length > 0) {
     fault(
       'contour',
@@ -854,6 +854,7 @@ function main(): number {
     }
   }
 
+  checkSmokeProcess();
   checkSmokeWithoutBun();
 
   let served: { served: boolean; attempts: number; ms: number; last: string } | null = null;
