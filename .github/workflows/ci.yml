@@ -148,12 +148,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         bun: ['1.2.0', latest]
-    # Provisional standalone measurement window, not the final build deadline.
-    # In combined run 39957368512 Windows smoke took about 4 minutes; build
-    # controls were still incomplete when the combined 10-minute job timed out.
-    # After the first green Windows build, record its actual duration here and
-    # set this to duration * 1.5, rounded UP to a multiple of 5 minutes.
-    timeout-minutes: 10
+    # First split run 39959626297: Windows minimum Bun hit the 10-minute
+    # native-build job limit. HQ permits one Windows-only 20-minute window.
+    # After the first green Windows builds, record the maximum completed job
+    # duration and replace 20 with duration * 1.5, rounded UP to 5 minutes.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 20 || 10 }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2

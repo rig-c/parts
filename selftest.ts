@@ -22380,6 +22380,13 @@ function entries(dir: string): string[] {
   return existsSync(dir) ? readdirSync(dir).sort() : [];
 }
 
+/** Ordered artifact identity, using the host's canonical filesystem spelling on both sides. */
+function sameOutputFiles(actual: readonly string[], expected: readonly string[]): boolean {
+  return actual.length === expected.length && actual.every((file, i) =>
+    existsSync(file) && statSync(file).isFile() && existsSync(expected[i]) && statSync(expected[i]).isFile() &&
+    realpathSync.native(file) === realpathSync.native(expected[i]));
+}
+
 function runBuildSuite(): number {
   section('build: assemble, rig and check in one process, on generated runs');
   const { say: caseSay, bad } = counter();
@@ -22395,6 +22402,32 @@ function runBuildSuite(): number {
   };
   const dir = temp('build');
   try {
+    const pathControl = join(dir, 'artifact-path-control');
+    const pathBuild = join(pathControl, 'build');
+    const pathOutside = join(pathControl, 'outside');
+    mkdirSync(pathBuild, { recursive: true });
+    mkdirSync(pathOutside);
+    const artifactNames = ['skeleton.json', 'skeleton.atlas', 'skeleton.png'];
+    const expectedPaths = artifactNames.map((name) => join(pathBuild, name));
+    for (const name of artifactNames) {
+      writeFileSync(join(pathBuild, name), name);
+      writeFileSync(join(pathOutside, name), name);
+    }
+    const pathAlias = join(pathControl, 'alias');
+    symlinkSync(pathBuild, pathAlias, process.platform === 'win32' ? 'junction' : 'dir');
+    const aliasedPaths = artifactNames.map((name) => join(pathAlias, name));
+    const wrongArtifactPaths = [
+      [...expectedPaths].reverse(), expectedPaths.slice(0, 2), [...expectedPaths, expectedPaths[0]],
+      [join(pathOutside, artifactNames[0]), ...expectedPaths.slice(1)],
+      [join(pathBuild, 'absent.json'), ...expectedPaths.slice(1)],
+      [pathBuild, ...expectedPaths.slice(1)],
+    ];
+    say('BU271_ARTIFACT_IDENTITIES_KEEP_ORDER_AND_ACCEPT_CANONICAL_ALIASES_BUT_NOT_SIBLINGS_OR_MISSING_FILES',
+      sameOutputFiles(expectedPaths, expectedPaths) && sameOutputFiles(aliasedPaths, expectedPaths) &&
+      wrongArtifactPaths.every((paths) => !sameOutputFiles(paths, expectedPaths)),
+      'direct paths and a real directory alias agree; reversed, missing, extra, sibling, absent and directory entries do not',
+      'artifact lines name filesystem objects, so the host separator and canonical spelling cannot replace identity or order');
+
     // Issue #689: the process boundary must reject a missing, red or malformed child, not invent a stage result.
     const receipt = (stage: string, kind = 'done'): string => JSON.stringify({ version: 1, stage, kind });
     const malformed = ['', '{', receipt('other'), receipt('rig'), receipt('assemble', 'unknown'), JSON.stringify({ version: 2, stage: 'assemble', kind: 'done' })];
@@ -22569,6 +22602,7 @@ function runBuildSuite(): number {
     const expectedTree = [...BUILD_OWNS].sort();
     const tree = entries(out);
     const artifacts = tail.slice(1).map((l) => l.trim());
+    const expectedArtifacts = ['skeleton.json', 'skeleton.atlas', 'skeleton.png'].map((name) => join(out, 'check', 'build', name));
     const stageOrder = ['[assemble]', '[rig]', '[check]', '[loop]'].map((p) => green.out.indexOf(`\n${p} `));
     const partsSame = existsSync(join(out, 'parts.json')) && serializeParts(readParts(join(out, 'parts.json'))) === serializeParts(EXPECTED_PARTS);
     say(
@@ -22576,8 +22610,7 @@ function runBuildSuite(): number {
       green.status === 0 &&
         tree.join(',') === expectedTree.join(',') &&
         /^pack: skeleton\.png \d+x\d+, \d+ region\(s\), [\d.]+% covered, padding \d+, page edges free, shape polygon; page opaque [\d.]+% \(alpha > 0\) — spineboy yardstick /.test(tail[0]?.trim() ?? '') &&
-        artifacts.map((a) => a.split('/').pop()).join(',') === 'skeleton.json,skeleton.atlas,skeleton.png' &&
-        artifacts.every((a) => a.startsWith(join(out, 'check', 'build')) && existsSync(a)) &&
+        sameOutputFiles(artifacts, expectedArtifacts) &&
         stageOrder.every((at, i) => at > 0 && (i === 0 || at > stageOrder[i - 1])) &&
         partsSame,
       `exit ${green.status}; --out holds [${tree.join(', ')}]; last lines: ${tail.map((l) => l.trim()).join(' | ')}; stage prefixes at ${stageOrder.join(', ')}; parts.json equals the fixture's hand-derived one: ${partsSame}`,
@@ -22993,10 +23026,17 @@ function runBuildSuite(): number {
     // Issue #607: two config files, so each check.json names its own; the record is set aside (withoutConfigRecord).
     const sameTree = treeDiff(notedOut, plainOut, withoutConfigRecord);
     const halfTree = treeDiff(plainOut, halfOut, withoutConfigRecord);
+    const plainRigFile = join(plainOut, 'rig', 'rig.json');
+    const halfRigFile = join(halfOut, 'rig', 'rig.json');
+    const rigFilesPresent = [plainRigFile, halfRigFile].every((file) => existsSync(file) && statSync(file).isFile());
+    const rigBytesDiffer = rigFilesPresent && !readFileSync(plainRigFile).equals(readFileSync(halfRigFile));
+    const constraintValues = rigFilesPresent &&
+      JSON.stringify(readJsonFile(plainRigFile)?.constraints) === JSON.stringify([level]) &&
+      JSON.stringify(readJsonFile(halfRigFile)?.constraints) === JSON.stringify([{ ...level, mixRotate: 0.5 }]);
     say(
       'BU14_A_RECORD_AND_A_NOTE_ON_A_CONSTRAINT_LEAVE_EVERY_FILE_THE_BUILD_WRITES_BYTE_IDENTICAL_AND_ONE_VALUE_DOES_NOT',
-      plain.status === 0 && half.status === 0 && sameTree.length === 0 && halfTree.some((d) => d.startsWith('rig/rig.json')),
-      `with the note and record against without: ${sameTree.length === 0 ? `${filesUnder(plainOut).length} file(s), byte-identical` : sameTree.slice(0, 3).join('; ')}; mixRotate 0.5 against none written (1): ${halfTree.length} file(s) differ (${halfTree.slice(0, 2).join('; ')})`,
+      plain.status === 0 && half.status === 0 && sameTree.length === 0 && rigBytesDiffer && constraintValues,
+      `with the note and record against without: ${sameTree.length === 0 ? `${filesUnder(plainOut).length} file(s), byte-identical` : sameTree.slice(0, 3).join('; ')}; mixRotate 0.5 against none written (1): ${halfTree.length} file(s) differ (${halfTree.slice(0, 2).join('; ')}); rig.json file bytes differ: ${rigBytesDiffer}, constraint values preserved: ${constraintValues}`,
       'issue #70\'s door holds on a constraint too: a record and a note are read by nothing, so they move no byte; the planted value is the witness that the comparison sees a change in the constraint',
     );
 
