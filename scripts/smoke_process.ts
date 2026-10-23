@@ -29,8 +29,8 @@ export function findSmokeExecutable(command: string, env: Env = process.env, pla
 /** Compare existing filesystem identities, including aliases, without accepting lexical siblings. */
 export function isSmokePathInside(directory: string, candidate: string): boolean {
   try {
-    const parent = realpathSync(directory);
-    const child = realpathSync(candidate);
+    const parent = realpathSync.native(directory);
+    const child = realpathSync.native(candidate);
     const path = relative(parent, child);
     return path === '' || (!isAbsolute(path) && path !== '..' && !path.startsWith('..' + sep));
   } catch { return false; }
