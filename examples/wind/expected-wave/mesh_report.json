@@ -1,0 +1,132 @@
+[
+ {
+  "part": "hair_back",
+  "vertices": 204,
+  "triangles": 256,
+  "hull": 150,
+  "bones": [
+   "hairback_l0_0",
+   "hairback_l0a_0",
+   "hairback_l0a_1",
+   "hairback_l0b_0",
+   "hairback_l0b_1",
+   "hairback_r0_0",
+   "hairback_r0a_0",
+   "hairback_r0a_1",
+   "hairback_r0b_0",
+   "hairback_r0b_1",
+   "head"
+  ],
+  "max_influences": 5,
+  "mean_influences": 4.13,
+  "art_coverage": 1,
+  "grid": 36
+ },
+ {
+  "part": "hairpin",
+  "vertices": 144,
+  "triangles": 182,
+  "hull": 104,
+  "bones": [
+   "hairback_l0_0",
+   "hairback_l0a_0",
+   "hairback_l0b_0",
+   "hairback_r0_0",
+   "hairback_r0a_0",
+   "hairback_r0b_0",
+   "head"
+  ],
+  "max_influences": 4,
+  "mean_influences": 3.11,
+  "art_coverage": 1,
+  "grid": 36
+ },
+ {
+  "part": "neck",
+  "vertices": 15,
+  "triangles": 16,
+  "hull": 12,
+  "bones": [
+   "chest",
+   "head"
+  ],
+  "max_influences": 2,
+  "mean_influences": 1.8,
+  "art_coverage": 1,
+  "grid": 31
+ },
+ {
+  "part": "bottomwear",
+  "vertices": 130,
+  "triangles": 204,
+  "hull": 54,
+  "bones": [
+   "hip",
+   "skirt0_0",
+   "skirt0a_0",
+   "skirt0a_1",
+   "skirt0b_0",
+   "skirt0b_1",
+   "skirt1_0",
+   "skirt1a_0",
+   "skirt1a_1",
+   "skirt1b_0",
+   "skirt1b_1",
+   "skirt2_0",
+   "skirt2a_0",
+   "skirt2a_1",
+   "skirt2b_0",
+   "skirt2b_1",
+   "skirt3_0",
+   "skirt3a_0",
+   "skirt3a_1",
+   "skirt3b_0",
+   "skirt3b_1"
+  ],
+  "max_influences": 8,
+  "mean_influences": 6.88,
+  "art_coverage": 1,
+  "grid": 31
+ },
+ {
+  "part": "topwear",
+  "vertices": 147,
+  "triangles": 234,
+  "hull": 58,
+  "bones": [
+   "chest",
+   "hip",
+   "robe_l0",
+   "robe_l1",
+   "robe_l2",
+   "robe_l3",
+   "robe_r0",
+   "robe_r1",
+   "robe_r2",
+   "robe_r3"
+  ],
+  "max_influences": 4,
+  "mean_influences": 3.63,
+  "art_coverage": 1,
+  "grid": 36
+ },
+ {
+  "part": "hair_front",
+  "vertices": 40,
+  "triangles": 54,
+  "hull": 24,
+  "bones": [
+   "bang_c0",
+   "bang_c1",
+   "bang_l0",
+   "bang_l1",
+   "bang_r0",
+   "bang_r1",
+   "head"
+  ],
+  "max_influences": 4,
+  "mean_influences": 3.73,
+  "art_coverage": 1,
+  "grid": 31
+ }
+]

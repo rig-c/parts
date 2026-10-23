@@ -1,0 +1,1687 @@
+{
+  "key": "wind",
+  "generation": {
+    "checkpoint": "hassakuXLIllustrious_v13StyleA.safetensors",
+    "loras": [],
+    "trigger": "",
+    "identity": "1girl, solo, adult woman, very long twin tails reaching the knees, deep blue hair, amber eyes, large red hair ribbons with long trailing ends",
+    "sampler": {
+      "steps": 30,
+      "cfg": 6,
+      "sampler": "euler_ancestral",
+      "scheduler": "normal"
+    },
+    "costume": "white blouse with long fitted sleeves, red ribbon bow at the collar with long trailing ribbon ends, very wide flared tiered skirt, three ruffled layers, petticoat, skirt above the knees, knees visible, white thighhighs, red ankle boots, fully clothed, empty hands",
+    "negative_extra": "revealing clothes, bare shoulders, off shoulder, 2girls, multiple girls, holding, bag, weapon, clouds, cloud, sun, sky, sky background, grey background, blue background, gradient background, scenery, outdoors, from behind, back view, back of head, facing away, vignette, beige background, brown background, dark background, black background, spotlight, lighting gradient, flat color, cel shading, monochrome, lineart, long skirt, knee-length skirt, cape, legs together, knees together, crossed legs, hands on skirt, holding skirt, wide sleeves",
+    "pose": "full body, head to toe, entire body in frame, front view, facing viewer, looking at viewer, standing, legs apart, arms spread away from body, arms out to the sides, hands apart away from skirt, open hands, spread fingers, relaxed pose, gentle smile, feet visible, feet facing forward, shoes",
+    "style": "anime illustration, detailed, soft shading, (white background:1.3), simple background, plain background",
+    "negative_pose": "cropped, out of frame, cut off feet, close-up, portrait, upper body, from side, profile, sitting, kneeling, dynamic pose, arms raised, hand on face, contact shadow, cast shadow, floor, multiple views, reference sheet",
+    "latent": [
+      832,
+      1216
+    ],
+    "seed": 372108,
+    "control": {
+      "skeleton": "pose.json",
+      "strength": 0.8,
+      "end_percent": 0.7
+    },
+    "seed_note": "chosen from 24 seeds under three wordings (issue #372; the table is wind/candidates.json in the examples repository): all 24 screened with `rig-parts painting` on the pose file's joints x2, the seven best re-read on joints placed by eye, all seven PASS; 372108 for its ribbons wrapping the twin tails (a free ribbon arc would be the rest shape a physics constraint swings from), its tails hanging behind the figure, and the widest two-layer skirt"
+  },
+  "seethrough": {
+    "resolution": 1024,
+    "steps": 30,
+    "seed": 42,
+    "offload": true,
+    "head_box": [
+      310,
+      0,
+      1324,
+      1014
+    ],
+    "head_box_note": "propose --head-box: the proposed [310, -184, 1324, 830] ran 184 px above the painting; the command shifted it down at the same 1014 px side"
+  },
+  "assemble": {
+    "rig_scale": 0.5,
+    "plan": [
+      [
+        "hair_back",
+        "head",
+        "back hair"
+      ],
+      [
+        "hairpin",
+        "full",
+        "headwear"
+      ],
+      [
+        "shoes",
+        "full",
+        "footwear"
+      ],
+      [
+        "legwear",
+        "full",
+        "legwear"
+      ],
+      [
+        "handwear_l",
+        "full",
+        "handwear-l"
+      ],
+      [
+        "handwear_r",
+        "full",
+        "handwear-r"
+      ],
+      [
+        "neck",
+        "head",
+        "neck"
+      ],
+      [
+        "bottomwear",
+        "full",
+        "bottomwear"
+      ],
+      [
+        "topwear",
+        "full",
+        "topwear"
+      ],
+      [
+        "ear_r",
+        "head",
+        "ears-r"
+      ],
+      [
+        "ear_l",
+        "head",
+        "ears-l"
+      ],
+      [
+        "face",
+        "head",
+        "face"
+      ],
+      [
+        "mouth",
+        "head",
+        "mouth"
+      ],
+      [
+        "brow_l",
+        "head",
+        "eyebrow-l"
+      ],
+      [
+        "eyewhite_r",
+        "head",
+        "eyewhite-r"
+      ],
+      [
+        "eyewhite_l",
+        "head",
+        "eyewhite-l"
+      ],
+      [
+        "iris_l",
+        "head",
+        "irides-l"
+      ],
+      [
+        "iris_r",
+        "head",
+        "irides-r"
+      ],
+      [
+        "brow_r",
+        "head",
+        "eyebrow-r"
+      ],
+      [
+        "lash_l",
+        "head",
+        "eyelash-l"
+      ],
+      [
+        "lash_r",
+        "head",
+        "eyelash-r"
+      ],
+      [
+        "hair_front",
+        "head",
+        "front hair"
+      ]
+    ],
+    "extend_below_crop": [
+      {
+        "part": "hair_back",
+        "run": "full",
+        "tag": "back hair"
+      }
+    ],
+    "alternates": [
+      {
+        "name": "wave_r",
+        "source": "inputs/painting.png",
+        "full": "inputs/layers/full",
+        "parts": [
+          "upperarm_r",
+          "forearm_r"
+        ],
+        "drawn": {
+          "sleeve_r0": -110,
+          "sleeve_r1": -112
+        },
+        "front": [
+          "forearm_r"
+        ]
+      }
+    ]
+  },
+  "cloth": {
+    "bottomwear": {
+      "chains": 4,
+      "links": 3,
+      "split": {
+        "at": 1,
+        "into": 2,
+        "hold_tip": true
+      },
+      "damping": 0.85,
+      "alternate_damping": 0.7,
+      "wind": [
+        2,
+        10
+      ],
+      "gravity": [
+        5,
+        30
+      ],
+      "translate": 0.2,
+      "swing": {
+        "scales": [
+          1.3,
+          1,
+          1,
+          1.3
+        ]
+      },
+      "strength": {
+        "trunk": 50,
+        "branch": 110,
+        "edge": 45
+      }
+    },
+    "back hair": {
+      "links": 3,
+      "split": {
+        "at": 1,
+        "into": 2,
+        "hold_tip": true
+      },
+      "wind": [
+        1,
+        8
+      ],
+      "gravity": [
+        4,
+        24
+      ],
+      "strength": {
+        "trunk": 100,
+        "branch": 68,
+        "edge": 68
+      }
+    },
+    "front hair": {
+      "chains": 1,
+      "links": 3,
+      "wind": [
+        1,
+        6
+      ],
+      "gravity": [
+        2,
+        12
+      ],
+      "translate": 0.2
+    }
+  },
+  "bones": [
+    {
+      "name": "hip",
+      "parent": "root",
+      "at": [
+        416,
+        612
+      ]
+    },
+    {
+      "name": "chest",
+      "parent": "hip",
+      "at": [
+        416,
+        432
+      ]
+    },
+    {
+      "name": "neck",
+      "parent": "chest",
+      "at": [
+        416,
+        252
+      ]
+    },
+    {
+      "name": "head",
+      "parent": "neck",
+      "at": [
+        411,
+        212
+      ]
+    },
+    {
+      "name": "eye_r",
+      "parent": "head",
+      "at": [
+        378,
+        164
+      ]
+    },
+    {
+      "name": "eye_l",
+      "parent": "head",
+      "at": [
+        444,
+        160
+      ]
+    },
+    {
+      "name": "brow_r",
+      "parent": "head",
+      "at": [
+        376,
+        140
+      ]
+    },
+    {
+      "name": "brow_l",
+      "parent": "head",
+      "at": [
+        443,
+        133
+      ]
+    },
+    {
+      "name": "mouth",
+      "parent": "head",
+      "at": [
+        413,
+        200
+      ]
+    },
+    {
+      "chain": "hairback_r0_",
+      "parent": "head",
+      "points": [
+        [
+          288,
+          162
+        ]
+      ],
+      "tip": [
+        242,
+        471
+      ]
+    },
+    {
+      "chain": "hairback_r0a_",
+      "parent": "hairback_r0_0",
+      "points": [
+        [
+          242,
+          471
+        ],
+        [
+          270,
+          690
+        ]
+      ],
+      "tip": [
+        192,
+        845
+      ]
+    },
+    {
+      "chain": "hairback_r0b_",
+      "parent": "hairback_r0_0",
+      "points": [
+        [
+          242,
+          471
+        ],
+        [
+          292,
+          690
+        ]
+      ],
+      "tip": [
+        194,
+        845
+      ]
+    },
+    {
+      "chain": "hairback_l0_",
+      "parent": "head",
+      "points": [
+        [
+          530,
+          162
+        ]
+      ],
+      "tip": [
+        585,
+        471
+      ]
+    },
+    {
+      "chain": "hairback_l0a_",
+      "parent": "hairback_l0_0",
+      "points": [
+        [
+          585,
+          471
+        ],
+        [
+          510,
+          690
+        ]
+      ],
+      "tip": [
+        595,
+        845
+      ]
+    },
+    {
+      "chain": "hairback_l0b_",
+      "parent": "hairback_l0_0",
+      "points": [
+        [
+          585,
+          471
+        ],
+        [
+          528,
+          690
+        ]
+      ],
+      "tip": [
+        596,
+        845
+      ]
+    },
+    {
+      "chain": "bang_r",
+      "parent": "head",
+      "points": [
+        [
+          373,
+          72
+        ],
+        [
+          366,
+          110
+        ]
+      ],
+      "tip": [
+        360,
+        156
+      ]
+    },
+    {
+      "chain": "bang_c",
+      "parent": "head",
+      "points": [
+        [
+          404,
+          61
+        ],
+        [
+          407,
+          103
+        ]
+      ],
+      "tip": [
+        410,
+        153
+      ]
+    },
+    {
+      "chain": "bang_l",
+      "parent": "head",
+      "points": [
+        [
+          437,
+          67
+        ],
+        [
+          449,
+          105
+        ]
+      ],
+      "tip": [
+        460,
+        150
+      ]
+    },
+    {
+      "chain": "sleeve_r",
+      "parent": "chest",
+      "points": [
+        [
+          340,
+          272
+        ],
+        [
+          258,
+          418
+        ]
+      ],
+      "tip": [
+        160,
+        540
+      ]
+    },
+    {
+      "chain": "sleeve_l",
+      "parent": "chest",
+      "points": [
+        [
+          492,
+          272
+        ],
+        [
+          574,
+          418
+        ]
+      ],
+      "tip": [
+        665,
+        540
+      ]
+    },
+    {
+      "chain": "robe_r",
+      "parent": "chest",
+      "points": [
+        [
+          357,
+          385
+        ],
+        [
+          321,
+          469
+        ],
+        [
+          249,
+          553
+        ],
+        [
+          221,
+          637
+        ]
+      ],
+      "tip": [
+        216,
+        688
+      ]
+    },
+    {
+      "chain": "robe_l",
+      "parent": "chest",
+      "points": [
+        [
+          472,
+          385
+        ],
+        [
+          507,
+          469
+        ],
+        [
+          572,
+          553
+        ],
+        [
+          606,
+          637
+        ]
+      ],
+      "tip": [
+        612,
+        688
+      ]
+    },
+    {
+      "chain": "skirt0_",
+      "parent": "hip",
+      "points": [
+        [
+          224,
+          632
+        ]
+      ],
+      "tip": [
+        191,
+        702
+      ]
+    },
+    {
+      "chain": "skirt0a_",
+      "parent": "skirt0_0",
+      "points": [
+        [
+          191,
+          702
+        ],
+        [
+          197,
+          752
+        ]
+      ],
+      "tip": [
+        284,
+        787
+      ]
+    },
+    {
+      "chain": "skirt0b_",
+      "parent": "skirt0_0",
+      "points": [
+        [
+          191,
+          702
+        ],
+        [
+          260,
+          752
+        ]
+      ],
+      "tip": [
+        320,
+        787
+      ]
+    },
+    {
+      "chain": "skirt1_",
+      "parent": "hip",
+      "points": [
+        [
+          350,
+          632
+        ]
+      ],
+      "tip": [
+        339,
+        702
+      ]
+    },
+    {
+      "chain": "skirt1a_",
+      "parent": "skirt1_0",
+      "points": [
+        [
+          339,
+          702
+        ],
+        [
+          322,
+          752
+        ]
+      ],
+      "tip": [
+        357,
+        787
+      ]
+    },
+    {
+      "chain": "skirt1b_",
+      "parent": "skirt1_0",
+      "points": [
+        [
+          339,
+          702
+        ],
+        [
+          384,
+          752
+        ]
+      ],
+      "tip": [
+        393,
+        787
+      ]
+    },
+    {
+      "chain": "skirt2_",
+      "parent": "hip",
+      "points": [
+        [
+          476,
+          632
+        ]
+      ],
+      "tip": [
+        487,
+        702
+      ]
+    },
+    {
+      "chain": "skirt2a_",
+      "parent": "skirt2_0",
+      "points": [
+        [
+          487,
+          702
+        ],
+        [
+          447,
+          752
+        ]
+      ],
+      "tip": [
+        429,
+        787
+      ]
+    },
+    {
+      "chain": "skirt2b_",
+      "parent": "skirt2_0",
+      "points": [
+        [
+          487,
+          702
+        ],
+        [
+          509,
+          752
+        ]
+      ],
+      "tip": [
+        465,
+        787
+      ]
+    },
+    {
+      "chain": "skirt3_",
+      "parent": "hip",
+      "points": [
+        [
+          602,
+          632
+        ]
+      ],
+      "tip": [
+        635,
+        702
+      ]
+    },
+    {
+      "chain": "skirt3a_",
+      "parent": "skirt3_0",
+      "points": [
+        [
+          635,
+          702
+        ],
+        [
+          571,
+          752
+        ]
+      ],
+      "tip": [
+        502,
+        787
+      ]
+    },
+    {
+      "chain": "skirt3b_",
+      "parent": "skirt3_0",
+      "points": [
+        [
+          635,
+          702
+        ],
+        [
+          634,
+          752
+        ]
+      ],
+      "tip": [
+        538,
+        787
+      ]
+    },
+    {
+      "name": "skirt_swing",
+      "parent": "hip",
+      "at": [
+        413,
+        632
+      ],
+      "tip": [
+        413,
+        702
+      ]
+    },
+    {
+      "chain": "leg_r",
+      "parent": "hip",
+      "points": [
+        [
+          374,
+          612
+        ],
+        [
+          350,
+          860
+        ]
+      ],
+      "tip": [
+        328,
+        1095
+      ]
+    },
+    {
+      "chain": "leg_l",
+      "parent": "hip",
+      "points": [
+        [
+          458,
+          612
+        ],
+        [
+          480,
+          860
+        ]
+      ],
+      "tip": [
+        502,
+        1095
+      ]
+    },
+    {
+      "name": "foot_r",
+      "parent": "leg_r1",
+      "at": [
+        328,
+        1095
+      ],
+      "inherit": "noRotationOrReflection"
+    },
+    {
+      "name": "foot_l",
+      "parent": "leg_l1",
+      "at": [
+        502,
+        1095
+      ],
+      "inherit": "noRotationOrReflection"
+    }
+  ],
+  "meshes": {
+    "hair_back": {
+      "grid": 36,
+      "r": 36,
+      "segments": [
+        [
+          "head",
+          [
+            411,
+            212
+          ],
+          [
+            411,
+            56
+          ]
+        ],
+        "hairback_r0_",
+        "hairback_r0a_",
+        "hairback_r0b_",
+        "hairback_l0_",
+        "hairback_l0a_",
+        "hairback_l0b_"
+      ]
+    },
+    "hair_front": {
+      "grid": 31,
+      "r": 6,
+      "segments": [
+        [
+          "head",
+          [
+            411,
+            212
+          ],
+          [
+            411,
+            47
+          ]
+        ],
+        "bang_r",
+        "bang_c",
+        "bang_l"
+      ]
+    },
+    "hairpin": {
+      "grid": 36,
+      "r": 15,
+      "segments": [
+        [
+          "head",
+          [
+            411,
+            212
+          ],
+          [
+            411,
+            56
+          ]
+        ],
+        "hairback_r0_0",
+        "hairback_r0a_0",
+        "hairback_r0b_0",
+        "hairback_l0_0",
+        "hairback_l0a_0",
+        "hairback_l0b_0"
+      ]
+    },
+    "neck": {
+      "grid": 31,
+      "r": 3,
+      "segments": [
+        [
+          "chest",
+          [
+            416,
+            270
+          ],
+          [
+            416,
+            432
+          ]
+        ],
+        [
+          "head",
+          [
+            411,
+            212
+          ],
+          [
+            411,
+            162
+          ]
+        ]
+      ]
+    },
+    "topwear": {
+      "grid": 36,
+      "r": 15,
+      "segments": [
+        [
+          "chest",
+          [
+            416,
+            238
+          ],
+          [
+            416,
+            592
+          ]
+        ],
+        [
+          "hip",
+          [
+            416,
+            592
+          ],
+          [
+            416,
+            712
+          ]
+        ],
+        "robe_r",
+        "robe_l"
+      ]
+    },
+    "bottomwear": {
+      "grid": 31,
+      "r": 31,
+      "segments": [
+        [
+          "hip",
+          [
+            170,
+            617
+          ],
+          [
+            657,
+            617
+          ]
+        ],
+        "skirt0_",
+        "skirt0a_",
+        "skirt0b_",
+        "skirt1_",
+        "skirt1a_",
+        "skirt1b_",
+        "skirt2_",
+        "skirt2a_",
+        "skirt2b_",
+        "skirt3_",
+        "skirt3a_",
+        "skirt3b_"
+      ]
+    }
+  },
+  "regions": {
+    "eyewhite_r": "eye_r",
+    "eyewhite_l": "eye_l",
+    "ear_r": "head",
+    "ear_l": "head",
+    "face": "head",
+    "mouth": "mouth",
+    "brow_l": "brow_l",
+    "iris_l": "eye_l",
+    "iris_r": "eye_r",
+    "brow_r": "brow_r",
+    "lash_l": "eye_l",
+    "lash_r": "eye_r",
+    "upperarm_r": "sleeve_r0",
+    "forearm_r": "sleeve_r1",
+    "upperarm_l": "sleeve_l0",
+    "forearm_l": "sleeve_l1",
+    "thigh_r": "leg_r0",
+    "shin_r": "leg_r1",
+    "foot_r": "foot_r",
+    "thigh_l": "leg_l0",
+    "shin_l": "leg_l1",
+    "foot_l": "foot_l"
+  },
+  "limbs": {
+    "arm_r": {
+      "segments": [
+        {
+          "part": "upperarm_r",
+          "from": "handwear_r",
+          "bone": "sleeve_r0"
+        },
+        {
+          "part": "forearm_r",
+          "from": "handwear_r",
+          "bone": "sleeve_r1",
+          "joint": "elbow"
+        }
+      ],
+      "front": {
+        "parts": [
+          "forearm_r"
+        ],
+        "after": "topwear"
+      }
+    },
+    "arm_l": {
+      "segments": [
+        {
+          "part": "upperarm_l",
+          "from": "handwear_l",
+          "bone": "sleeve_l0"
+        },
+        {
+          "part": "forearm_l",
+          "from": "handwear_l",
+          "bone": "sleeve_l1",
+          "joint": "elbow"
+        }
+      ]
+    },
+    "leg_r": {
+      "segments": [
+        {
+          "part": "thigh_r",
+          "from": "legwear",
+          "bone": "leg_r0"
+        },
+        {
+          "part": "shin_r",
+          "from": "legwear",
+          "bone": "leg_r1",
+          "joint": "knee"
+        },
+        {
+          "part": "foot_r",
+          "from": "shoes",
+          "bone": "foot_r",
+          "joint": "ankle"
+        }
+      ]
+    },
+    "leg_l": {
+      "segments": [
+        {
+          "part": "thigh_l",
+          "from": "legwear",
+          "bone": "leg_l0"
+        },
+        {
+          "part": "shin_l",
+          "from": "legwear",
+          "bone": "leg_l1",
+          "joint": "knee"
+        },
+        {
+          "part": "foot_l",
+          "from": "shoes",
+          "bone": "foot_l",
+          "joint": "ankle"
+        }
+      ]
+    }
+  },
+  "motion": {
+    "duration": 3.3333333333333335,
+    "tracks": [
+      {
+        "bone": "chest",
+        "prop": "translatey",
+        "amp": 4.5,
+        "period": 3.3333333333333335,
+        "phase": 0,
+        "base": 4.5
+      },
+      {
+        "bone": "chest",
+        "prop": "scalex",
+        "amp": 0.004,
+        "period": 3.3333333333333335,
+        "phase": 0,
+        "base": 1.004
+      },
+      {
+        "bone": "head",
+        "prop": "rotate",
+        "amp": 0.9,
+        "period": 3.3333333333333335,
+        "phase": 0.12
+      },
+      {
+        "bone": "neck",
+        "prop": "rotate",
+        "amp": 0.35,
+        "period": 3.3333333333333335,
+        "phase": 0.08
+      },
+      {
+        "chain": "sleeve_r",
+        "amps": [
+          0.2,
+          0.6
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.22,
+        "lag": 0.08
+      },
+      {
+        "chain": "sleeve_l",
+        "amps": [
+          -0.2,
+          -0.6
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.27,
+        "lag": 0.08
+      },
+      {
+        "chain": "robe_r",
+        "amps": [
+          0.12,
+          0.3,
+          0.6,
+          1.1
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.25,
+        "lag": 0.07
+      },
+      {
+        "chain": "robe_l",
+        "amps": [
+          -0.12,
+          -0.3,
+          -0.6,
+          -1.1
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.29,
+        "lag": 0.07
+      }
+    ],
+    "blink": {
+      "t": 2.3,
+      "eyes": [
+        "eye_r",
+        "eye_l"
+      ],
+      "brows": [
+        "brow_r",
+        "brow_l"
+      ],
+      "squash": 0.12,
+      "brow_drop": 1.2
+    }
+  },
+  "constraints": [
+    {
+      "type": "physics",
+      "name": "hairback_r0_0_physics",
+      "bone": "hairback_r0_0",
+      "rotate": 1,
+      "strength": 100,
+      "wind": 1,
+      "gravity": 4
+    },
+    {
+      "type": "physics",
+      "name": "hairback_r0a_0_physics",
+      "bone": "hairback_r0a_0",
+      "rotate": 1,
+      "strength": 68,
+      "wind": 4.5,
+      "gravity": 14
+    },
+    {
+      "type": "physics",
+      "name": "hairback_r0a_1_physics",
+      "bone": "hairback_r0a_1",
+      "rotate": 1,
+      "strength": 68,
+      "wind": 8,
+      "gravity": 24
+    },
+    {
+      "type": "physics",
+      "name": "hairback_r0b_0_physics",
+      "bone": "hairback_r0b_0",
+      "rotate": 1,
+      "strength": 68,
+      "wind": 4.5,
+      "gravity": 14
+    },
+    {
+      "type": "physics",
+      "name": "hairback_r0b_1_physics",
+      "bone": "hairback_r0b_1",
+      "rotate": 1,
+      "strength": 68,
+      "wind": 8,
+      "gravity": 24
+    },
+    {
+      "type": "physics",
+      "name": "hairback_l0_0_physics",
+      "bone": "hairback_l0_0",
+      "rotate": 1,
+      "strength": 100,
+      "wind": 1,
+      "gravity": 4
+    },
+    {
+      "type": "physics",
+      "name": "hairback_l0a_0_physics",
+      "bone": "hairback_l0a_0",
+      "rotate": 1,
+      "strength": 68,
+      "wind": 4.5,
+      "gravity": 14
+    },
+    {
+      "type": "physics",
+      "name": "hairback_l0a_1_physics",
+      "bone": "hairback_l0a_1",
+      "rotate": 1,
+      "strength": 68,
+      "wind": 8,
+      "gravity": 24
+    },
+    {
+      "type": "physics",
+      "name": "hairback_l0b_0_physics",
+      "bone": "hairback_l0b_0",
+      "rotate": 1,
+      "strength": 68,
+      "wind": 4.5,
+      "gravity": 14
+    },
+    {
+      "type": "physics",
+      "name": "hairback_l0b_1_physics",
+      "bone": "hairback_l0b_1",
+      "rotate": 1,
+      "strength": 68,
+      "wind": 8,
+      "gravity": 24
+    },
+    {
+      "type": "physics",
+      "name": "bang_r0_physics",
+      "bone": "bang_r0",
+      "rotate": 1,
+      "strength": 50,
+      "wind": 1,
+      "gravity": 2
+    },
+    {
+      "type": "physics",
+      "name": "bang_r1_physics",
+      "bone": "bang_r1",
+      "rotate": 1,
+      "strength": 50,
+      "wind": 6,
+      "gravity": 12
+    },
+    {
+      "type": "physics",
+      "name": "bang_r1_translate",
+      "bone": "bang_r1",
+      "x": 0.2,
+      "y": 0.2,
+      "strength": 50
+    },
+    {
+      "type": "physics",
+      "name": "bang_c0_physics",
+      "bone": "bang_c0",
+      "rotate": 1,
+      "strength": 100,
+      "wind": 1,
+      "gravity": 2
+    },
+    {
+      "type": "physics",
+      "name": "bang_c1_physics",
+      "bone": "bang_c1",
+      "rotate": 1,
+      "strength": 100,
+      "wind": 6,
+      "gravity": 12
+    },
+    {
+      "type": "physics",
+      "name": "bang_c1_translate",
+      "bone": "bang_c1",
+      "x": 0.2,
+      "y": 0.2,
+      "strength": 100
+    },
+    {
+      "type": "physics",
+      "name": "bang_l0_physics",
+      "bone": "bang_l0",
+      "rotate": 1,
+      "strength": 50,
+      "wind": 1,
+      "gravity": 2
+    },
+    {
+      "type": "physics",
+      "name": "bang_l1_physics",
+      "bone": "bang_l1",
+      "rotate": 1,
+      "strength": 50,
+      "wind": 6,
+      "gravity": 12
+    },
+    {
+      "type": "physics",
+      "name": "bang_l1_translate",
+      "bone": "bang_l1",
+      "x": 0.2,
+      "y": 0.2,
+      "strength": 50
+    },
+    {
+      "type": "physics",
+      "name": "skirt_swing_physics",
+      "bone": "skirt_swing",
+      "rotate": 1,
+      "strength": 50,
+      "damping": 0.85,
+      "wind": 2,
+      "gravity": 5
+    },
+    {
+      "type": "transform",
+      "name": "skirt_swing_0",
+      "source": "skirt_swing",
+      "bones": [
+        "skirt0_0"
+      ],
+      "localSource": true,
+      "localTarget": true,
+      "additive": true,
+      "properties": {
+        "rotate": {
+          "offset": -90,
+          "to": {
+            "rotate": {
+              "scale": 1.3
+            }
+          }
+        }
+      },
+      "mixRotate": 1
+    },
+    {
+      "type": "transform",
+      "name": "skirt_swing_1",
+      "source": "skirt_swing",
+      "bones": [
+        "skirt1_0"
+      ],
+      "localSource": true,
+      "localTarget": true,
+      "additive": true,
+      "properties": {
+        "rotate": {
+          "offset": -90,
+          "to": {
+            "rotate": {
+              "scale": 1
+            }
+          }
+        }
+      },
+      "mixRotate": 1
+    },
+    {
+      "type": "transform",
+      "name": "skirt_swing_2",
+      "source": "skirt_swing",
+      "bones": [
+        "skirt2_0"
+      ],
+      "localSource": true,
+      "localTarget": true,
+      "additive": true,
+      "properties": {
+        "rotate": {
+          "offset": -90,
+          "to": {
+            "rotate": {
+              "scale": 1
+            }
+          }
+        }
+      },
+      "mixRotate": 1
+    },
+    {
+      "type": "transform",
+      "name": "skirt_swing_3",
+      "source": "skirt_swing",
+      "bones": [
+        "skirt3_0"
+      ],
+      "localSource": true,
+      "localTarget": true,
+      "additive": true,
+      "properties": {
+        "rotate": {
+          "offset": -90,
+          "to": {
+            "rotate": {
+              "scale": 1.3
+            }
+          }
+        }
+      },
+      "mixRotate": 1
+    },
+    {
+      "type": "physics",
+      "name": "skirt0a_0_physics",
+      "bone": "skirt0a_0",
+      "rotate": 1,
+      "strength": 45,
+      "damping": 0.85,
+      "wind": 6,
+      "gravity": 17.5
+    },
+    {
+      "type": "physics",
+      "name": "skirt0a_1_physics",
+      "bone": "skirt0a_1",
+      "rotate": 1,
+      "strength": 45,
+      "damping": 0.85,
+      "wind": 10,
+      "gravity": 30
+    },
+    {
+      "type": "physics",
+      "name": "skirt0a_1_translate",
+      "bone": "skirt0a_1",
+      "x": 0.2,
+      "y": 0.2,
+      "strength": 45,
+      "damping": 0.85
+    },
+    {
+      "type": "physics",
+      "name": "skirt0b_0_physics",
+      "bone": "skirt0b_0",
+      "rotate": 1,
+      "strength": 110,
+      "damping": 0.85,
+      "wind": 6,
+      "gravity": 17.5
+    },
+    {
+      "type": "physics",
+      "name": "skirt0b_1_physics",
+      "bone": "skirt0b_1",
+      "rotate": 1,
+      "strength": 110,
+      "damping": 0.85,
+      "wind": 10,
+      "gravity": 30
+    },
+    {
+      "type": "physics",
+      "name": "skirt0b_1_translate",
+      "bone": "skirt0b_1",
+      "x": 0.2,
+      "y": 0.2,
+      "strength": 110,
+      "damping": 0.85
+    },
+    {
+      "type": "physics",
+      "name": "skirt1a_0_physics",
+      "bone": "skirt1a_0",
+      "rotate": 1,
+      "strength": 110,
+      "damping": 0.7,
+      "wind": 6,
+      "gravity": 17.5
+    },
+    {
+      "type": "physics",
+      "name": "skirt1a_1_physics",
+      "bone": "skirt1a_1",
+      "rotate": 1,
+      "strength": 110,
+      "damping": 0.7,
+      "wind": 10,
+      "gravity": 30
+    },
+    {
+      "type": "physics",
+      "name": "skirt1a_1_translate",
+      "bone": "skirt1a_1",
+      "x": 0.2,
+      "y": 0.2,
+      "strength": 110,
+      "damping": 0.7
+    },
+    {
+      "type": "physics",
+      "name": "skirt1b_0_physics",
+      "bone": "skirt1b_0",
+      "rotate": 1,
+      "strength": 110,
+      "damping": 0.7,
+      "wind": 6,
+      "gravity": 17.5
+    },
+    {
+      "type": "physics",
+      "name": "skirt1b_1_physics",
+      "bone": "skirt1b_1",
+      "rotate": 1,
+      "strength": 110,
+      "damping": 0.7,
+      "wind": 10,
+      "gravity": 30
+    },
+    {
+      "type": "physics",
+      "name": "skirt1b_1_translate",
+      "bone": "skirt1b_1",
+      "x": 0.2,
+      "y": 0.2,
+      "strength": 110,
+      "damping": 0.7
+    },
+    {
+      "type": "physics",
+      "name": "skirt2a_0_physics",
+      "bone": "skirt2a_0",
+      "rotate": 1,
+      "strength": 110,
+      "damping": 0.85,
+      "wind": 6,
+      "gravity": 17.5
+    },
+    {
+      "type": "physics",
+      "name": "skirt2a_1_physics",
+      "bone": "skirt2a_1",
+      "rotate": 1,
+      "strength": 110,
+      "damping": 0.85,
+      "wind": 10,
+      "gravity": 30
+    },
+    {
+      "type": "physics",
+      "name": "skirt2a_1_translate",
+      "bone": "skirt2a_1",
+      "x": 0.2,
+      "y": 0.2,
+      "strength": 110,
+      "damping": 0.85
+    },
+    {
+      "type": "physics",
+      "name": "skirt2b_0_physics",
+      "bone": "skirt2b_0",
+      "rotate": 1,
+      "strength": 110,
+      "damping": 0.85,
+      "wind": 6,
+      "gravity": 17.5
+    },
+    {
+      "type": "physics",
+      "name": "skirt2b_1_physics",
+      "bone": "skirt2b_1",
+      "rotate": 1,
+      "strength": 110,
+      "damping": 0.85,
+      "wind": 10,
+      "gravity": 30
+    },
+    {
+      "type": "physics",
+      "name": "skirt2b_1_translate",
+      "bone": "skirt2b_1",
+      "x": 0.2,
+      "y": 0.2,
+      "strength": 110,
+      "damping": 0.85
+    },
+    {
+      "type": "physics",
+      "name": "skirt3a_0_physics",
+      "bone": "skirt3a_0",
+      "rotate": 1,
+      "strength": 110,
+      "damping": 0.7,
+      "wind": 6,
+      "gravity": 17.5
+    },
+    {
+      "type": "physics",
+      "name": "skirt3a_1_physics",
+      "bone": "skirt3a_1",
+      "rotate": 1,
+      "strength": 110,
+      "damping": 0.7,
+      "wind": 10,
+      "gravity": 30
+    },
+    {
+      "type": "physics",
+      "name": "skirt3a_1_translate",
+      "bone": "skirt3a_1",
+      "x": 0.2,
+      "y": 0.2,
+      "strength": 110,
+      "damping": 0.7
+    },
+    {
+      "type": "physics",
+      "name": "skirt3b_0_physics",
+      "bone": "skirt3b_0",
+      "rotate": 1,
+      "strength": 45,
+      "damping": 0.7,
+      "wind": 6,
+      "gravity": 17.5
+    },
+    {
+      "type": "physics",
+      "name": "skirt3b_1_physics",
+      "bone": "skirt3b_1",
+      "rotate": 1,
+      "strength": 45,
+      "damping": 0.7,
+      "wind": 10,
+      "gravity": 30
+    },
+    {
+      "type": "physics",
+      "name": "skirt3b_1_translate",
+      "bone": "skirt3b_1",
+      "x": 0.2,
+      "y": 0.2,
+      "strength": 45,
+      "damping": 0.7
+    }
+  ],
+  "proposed_rig_scale": 0.5
+}
