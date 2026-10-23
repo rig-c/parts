@@ -183,7 +183,7 @@ export interface RemeshProvenance {
     | { part: string; mesh: unknown; mesh_sha256: string; idle_keys: IdleKeys; page_edges: PageEdges; pack_shape: PackShape }
     | { part: string; delta: MeshEditDocument; delta_sha256: string; ops: number; applied: Omit<DeltaApplied, 'ops'>; idle_keys: IdleKeys; page_edges: PageEdges; pack_shape: PackShape };
   versions: RemeshVersions;
-  input: { rig: HashRow[]; config_sha256: string; parts_json_sha256: string };
+  input: { rig: HashRow[]; config_sha256: string; parts_json_sha256: string; provenance?: ParentProvenance[] };
   baseline: { reproduced: string[]; not_compared: string };
   target: { before: MeshCounts; after: MeshCounts };
   preserved: { identical: string[]; spliced: string[] };
@@ -221,6 +221,28 @@ export function readTree(root: string): FileTree {
 
 export function hashRows(tree: FileTree): HashRow[] {
   return [...tree].map(([path, bytes]) => ({ path, bytes: bytes.length, sha256: sha256(bytes) }));
+}
+
+/** A previous root record, recoverable byte for byte at its content-addressed path (issue #531). */
+export interface ParentProvenance extends HashRow { source: 'remesh.json' | 'retune.json' }
+
+/** Keep prior records before replacing the current root record; no rig, motion or hold input is changed. */
+export function carryProvenance(input: FileTree, revision: FileTree, replacing: 'remesh.json' | 'retune.json'): { revision: FileTree; parents: ParentProvenance[] } {
+  const next = new Map(revision), parents: ParentProvenance[] = [];
+  for (const source of ['remesh.json', 'retune.json'] as const) {
+    const bytes = input.get(source);
+    if (bytes === undefined) continue;
+    const digest = sha256(bytes), path = `provenance/${source.slice(0, -5)}-${digest}.json`;
+    const existing = next.get(path);
+    if (existing !== undefined && !bytesEqual(existing, bytes)) {
+      throw new PartsError([{ code: replacing === 'remesh.json' ? 'REMESH_PRESERVED' : 'RETUNE_PRESERVED', object: path,
+        detail: `already holds ${existing.length} bytes sha256 ${sha256(existing)}; preserving parent ${source} requires ${bytes.length} bytes sha256 ${digest} at that path, so nothing is written` }]);
+    }
+    next.set(path, bytes);
+    parents.push({ source, path, bytes: bytes.length, sha256: digest });
+  }
+  next.delete(replacing); // The new root record cannot list a hash of itself.
+  return { revision: new Map([...next].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)), parents };
 }
 
 const text = (b: Uint8Array): string => new TextDecoder().decode(b);
@@ -986,7 +1008,7 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
   const spliced = ['rig.json', 'mesh_report.json'];
   const identical = [...tree.keys()].filter((k) => !spliced.includes(k));
   log(`  ${part}: v=${before.vertices} t=${before.triangles} hull=${before.hull} -> v=${after.vertices} t=${after.triangles} hull=${after.hull}`);
-  log(`  preserved: ${identical.length} file(s) byte-identical to the input; rig.json identical outside skins.default.${part}.${part}; mesh_report.json identical but the "${part}" row`);
+  log(`  preserved: ${identical.filter((p) => p !== PROVENANCE_FILE && !(input.recordInputCheck === true && p === INPUT_CHECK_FILE)).length} file(s) byte-identical to the input; rig.json identical outside skins.default.${part}.${part}; mesh_report.json identical but the "${part}" row`);
   // 7. The gate and check.
   const gate = gateThroughRigc(pngsOf(revision), textsOf(revision), rigc, join(scratch, 'gate'), { pageEdges, packShape });
   for (const g of gate) {
@@ -1014,18 +1036,22 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
   refuseIfAny(checkHeldProblems(sides.input, sides.revision, revCheck.problems));
   const scope = checkScope(sides.revision.physics);
   log(`  check: input ${sides.input.pass ? 'PASS' : `FAIL (${sides.input.not_met.join(', ')})`}, revision ${sides.revision.pass ? 'PASS' : `FAIL (${sides.revision.not_met.join(', ')})`}, the same ${sides.revision.measured.length} bar(s) measured; ${scope}`);
-  // 8. The write.
+  // 8. The write. Previous root records are metadata, preserved separately after the rig hold.
+  const lineage = carryProvenance(tree, revision, PROVENANCE_FILE);
+  revision = lineage.revision;
+  if (input.recordInputCheck === true) revision.set(INPUT_CHECK_FILE, new TextEncoder().encode(inputCheckText(recorded.binding as InputCheckBinding, sides.input)));
+  revision = new Map([...revision].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
   const provenance: RemeshProvenance = {
     spec: REMESH_SPEC,
     request: deltaRequest ?? { part, mesh: (meshReq as { entry: Json }).entry, mesh_sha256: sha256((meshReq as { bytes: Uint8Array }).bytes), idle_keys: idleKeys, page_edges: pageEdges, pack_shape: packShape },
     versions,
-    input: { rig: hashRows(tree), config_sha256: sha256(bytesOf(configText)), parts_json_sha256: sha256(new Uint8Array(readFileSync(join(input.parts, 'parts.json')))) },
+    input: { rig: hashRows(tree), config_sha256: sha256(bytesOf(configText)), parts_json_sha256: sha256(new Uint8Array(readFileSync(join(input.parts, 'parts.json')))), ...(lineage.parents.length === 0 ? {} : { provenance: lineage.parents }) },
     baseline: {
       reproduced,
       not_compared: 'every other attachment, image and report row: carried over from the input as bytes, whether or not the config reproduces it',
     },
     target: { before, after },
-    preserved: { identical, spliced },
+    preserved: { identical: identical.filter((p) => p !== PROVENANCE_FILE && !(input.recordInputCheck === true && p === INPUT_CHECK_FILE)), spliced },
     revision: hashRows(revision),
     check: { ...sides, scope },
   };
@@ -1039,8 +1065,6 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
   writeFileSync(join(outAt, PROVENANCE_FILE), rigJsonText(provenance));
   written.push(PROVENANCE_FILE);
   if (input.recordInputCheck === true) {
-    writeFileSync(join(outAt, INPUT_CHECK_FILE), inputCheckText(recorded.binding as InputCheckBinding, sides.input));
-    written.push(INPUT_CHECK_FILE);
     log(`  recorded: the input's check in ${INPUT_CHECK_FILE}, bound by ${inputCheckHashes(recorded.binding as InputCheckBinding)} sha256 row(s); pass it as --input-check to a later remesh or retune of ${input.rig}`);
   }
   log('  file                                     sha256 (input)     sha256 (revision)');

@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 import { parseAltArg } from './tools/alternate-cli.ts';
 import { encodeCheckReceipt, readBuildReceipt, readBuildChild, selectedRigcCommand } from './tools/build-process.ts';
+import { runSetAnchorChecks } from './tools/check_set_anchor.ts';
+import { runRevisionChainChecks } from './tools/check_revision_chain.ts';
 import { runConfigWriteChecks } from './tools/check_configwrite.ts';
 import { runCorePointerChecks } from './tools/check_corepointer.ts';
 /**
@@ -495,7 +497,7 @@ import type { AutoMeshReport, MeshReport } from './src/rig.ts';
 import { failLine as printedFailLine, PartsError, type Problem, problemLine } from './src/errors.ts';
 import { GUIDE_DOC, guideRule, guideSection, guideSections, ledgerRows, nearestNames, NEAREST_LISTED } from './src/guide.ts';
 import { encodeGif } from './src/gif.ts';
-import { buildPrompts, checkGraph, fillSeeThrough, FRAMING, NEGATIVE_HEAD, paintingGraph, POSITIVE_HEAD, stripWords } from './src/graphs.ts';
+import { buildPrompts, checkGraph, fillSeeThrough, FRAMING, NEGATIVE_HEAD, paintingGraph, POSITIVE_HEAD, stripWords, UPSCALE_MODEL, UPSCALE_THEN } from './src/graphs.ts';
 import { proposeHeadBox } from './src/headbox.ts';
 import { makeInputs, squarePad } from './src/inputs.ts';
 import { exportLayers, implausibleRules, type Layer, layerFigures, type LayerSet, layerSetDiff, PLAUSIBLE_AREA_RATIO_MAX, PLAUSIBLE_JUDGED_AREA_RATIO, PLAUSIBLE_TRANSLUCENT_MAX, PLAUSIBLE_BACKGROUND_MAX, PLAUSIBLE_BACKGROUND_TRANSLUCENT_MIN, readLayers, readPsdLayers, readWrapperLayers, ruleSummary, templateLayerNames, templatePsdBytes } from './src/layers.ts';
@@ -1819,6 +1821,10 @@ function runPsdSuite(): number {
 function runConfigSuite(): number {
   section('config: the character config loader');
   const { say, bad } = counter();
+  runSetAnchorChecks((name, ok, detail) => say(name, ok, detail, 'issue #543: explicit keypoint-to-bone registration, no painting transform'));
+  const lineageDir = temp('revision-chain-698');
+  try { runRevisionChainChecks(lineageDir, (name, ok, detail) => say(name, ok, detail, 'issue #531: recoverable deterministic parent metadata and truthful output rows; full command acceptance is separate')); }
+  finally { rmSync(lineageDir, { recursive: true, force: true }); }
   const good = refusals(() => parseConfig(minimalConfig()));
   say(
     'CF01_A_MINIMAL_CONFIG_WITH_ANNOTATIONS_LOADS_GREEN',
@@ -24748,6 +24754,28 @@ function runBuildSuite(): number {
       `exits drawn ${eqDrawn.run.status} / skeleton ${eqSkel.run.status} / skeleton+hand ${eqSkelHand.run.status}; wave PNG sha256[:12] drawn ${dDrawn.join(' ')} | skeleton ${dSkel.join(' ')} | skeleton+hand ${dHand.join(' ')}; rig.json drawn ${digest(join(eqDrawn.out, 'rig', 'rig.json'))} skeleton ${digest(join(eqSkel.out, 'rig', 'rig.json'))}; sets.json less drawnLength/registration equal ${setsLess(eqSkel.out) === setsLess(eqDrawn.out)}; drawnLength ${JSON.stringify(eqSkelEntry?.drawnLength ?? null)}; skeleton+hand drawn ${JSON.stringify(eqHandEntry?.drawn ?? null)}`,
       'issue #539, bar 2: a skeleton set whose segment lengths are the base\'s writes the bytes the drawn-only set at the same angles writes — part PNGs, rig.json, and sets.json but for drawnLength (each 1) and registration',
     );
+    // Issue #543: BU172's arm-only base has no hip anchor; the declared neck-to-arm origin supplies registration.
+    const anchoredBuild = (label: string, anchor: boolean, neck: [number, number]): { run: { status: number; out: string }; out: string } => {
+      const at = join(skDir, label);
+      const cfg = structuredClone(gestBaseCfg);
+      (cfg.assemble as Record<string, unknown>).alternates = [{ ...waveSetBase, skeleton: 'wave_pose.json', drawn: { arm_r0: -30, arm_r1: 0, arm_r2: 30 }, ...(anchor ? { anchor: { neck: 'arm_r0' } } : {}) }];
+      writeAssembleFixture(at, cfg, undefined, { full: baseArmFull, head: HEAD_LAYERS });
+      writeRun(join(at, 'full_wave'), waveArmFull);
+      writeFileSync(join(at, 'wave_pose.json'), poseFile({ neck, r_elbow: [ex, 30], r_wrist: [ex + 8, 30] }));
+      const out = join(at, 'out');
+      return { run: runCli(buildArgs(at, out)), out };
+    };
+    const anchored = anchoredBuild('anchor-one', true, [15.5, 26]);
+    const unanchored = anchoredBuild('anchor-missing', false, [15.5, 26]);
+    const offAnchor = anchoredBuild('anchor-off', true, [17, 26]);
+    const anchorRegistration = (readJsonFile(join(anchored.out, 'rig', 'sets.json')) as { sets?: { wave?: { registration?: unknown } } } | null)?.sets?.wave?.registration;
+    say('BU698_AN_ARM_ONLY_SKELETON_SET_USES_ITS_DECLARED_ANCHOR_AND_REFUSES_MISSING_OR_OFF_ANCHORS',
+      noGestRun.status === 0 && eqSkel.run.status === 0 && anchored.run.status === 0 && JSON.stringify(anchorRegistration) === '{"offset":[-0.5,0],"scale":1}' &&
+        unanchored.run.status === 1 && unanchored.run.out.includes('ASSEMBLE_ALT_SKELETON_REGISTERED') && unanchored.run.out.includes("torso's bottom") && entries(unanchored.out).length === 0 &&
+        offAnchor.run.status === 1 && offAnchor.run.out.includes('ASSEMBLE_ALT_SKELETON_REGISTERED') && offAnchor.run.out.includes('offset [-2, 0] rig px and scale 1') && entries(offAnchor.out).length === 0,
+      `canonical arm-only base ${noGestRun.status}, torso skeleton ${eqSkel.run.status}; anchored ${anchored.run.status}, sets.json registration ${JSON.stringify(anchorRegistration)}; missing ${unanchored.run.status}; displaced ${offAnchor.run.status}: ${offAnchor.run.out.split('\n').find((l) => l.includes('ASSEMBLE_ALT_SKELETON_REGISTERED'))?.trim() ?? 'no registration refusal'}`,
+      'issue #543: one declared anchor reads offset and holds scale at 1, an arm-only skeleton set builds through the existing gate; no anchor and an offset over the existing bar refuse before any output; BU174 and BU177 retain the torso controls');
+
     // BU190–BU192 — issue #587: a subset set's limb part takes no pixel a base part it does not replace covers at
     // setup. The fixture, at scale 1 (a run pixel is a rig pixel): shorts `bottomwear` [20, 44) x [8, 20) (24 x 12 =
     // 288 px), a region on `hip`, drawn after the legs; the base's `legwear` holds the two legs from row 20 down,
@@ -32256,6 +32284,15 @@ function runComfySuite(): number {
       `exit ${paint.status}; painting_5/6 ${painted ? 'byte-identical to what the box saved' : 'missing or different'}; control_stand_clasp.png ${eq(control, skel) ? '= the rendered skeleton' : 'differs'}, upload ${eq(up, skel) ? '= it' : 'differs'}; KSampler seeds ${JSON.stringify(seeds)}; dropped ${JSON.stringify(pm?.dropped)}; meta positive ${pprompts[0]?.['6']?.inputs.text === positive ? '= the text sent' : 'differs from the text sent'}`,
       'the meta is the record of what produced the painting, so the prompt in it is the prompt that was sent, and the control image is the one that was uploaded',
     );
+    const upscaleMatches = (m: Record<string, unknown> | null): boolean =>
+      JSON.stringify(m?.upscale) === JSON.stringify({ model: UPSCALE_MODEL, then: UPSCALE_THEN });
+    const secondMeta = readJsonFile(join(pdir, 'painting_6_meta.json'));
+    say('CY698_PAINT_META_RECORDS_THE_GRAPH_UPSCALE_MODEL_AND_THEN_FACTOR',
+      upscaleMatches(pm) && upscaleMatches(secondMeta) && pprompts.every((g) => g['12'].inputs.model_name === UPSCALE_MODEL && g['14'].inputs.scale_by === UPSCALE_THEN) &&
+      !upscaleMatches({ ...pm, upscale: { model: UPSCALE_MODEL, then: UPSCALE_THEN + 1 } }) && !upscaleMatches({ ...pm, upscale: undefined }),
+      `two seed meta files name ${JSON.stringify(pm?.upscale)}; graph model ${String(pprompts[0]?.['12']?.inputs.model_name)}, then ${String(pprompts[0]?.['14']?.inputs.scale_by)}; missing and changed factors refused by the control`,
+      'issue #698: the metadata names the constants the sent graph actually used, and planting a missing or different factor breaks the comparison');
+
 
     const ckpt = R['paint-missing-ckpt'];
     say(
@@ -40367,8 +40404,9 @@ function remeshMoves(inDir: string, revDir: string, part: string): string[] {
   const a = files(inDir);
   const b = files(revDir);
   const moved: string[] = [];
-  for (const [k, h] of a) if (k !== 'rig.json' && k !== 'mesh_report.json' && b.get(k) !== h) moved.push(k);
-  for (const k of b.keys()) if (!a.has(k) && k !== PROVENANCE_FILE) moved.push(k);
+  const archives = revisionArchiveMoves(a, b, PROVENANCE_FILE, moved);
+  for (const [k, h] of a) if (k !== 'rig.json' && k !== 'mesh_report.json' && k !== PROVENANCE_FILE && b.get(k) !== h) moved.push(k);
+  for (const k of b.keys()) if (!a.has(k) && k !== PROVENANCE_FILE && !archives.has(k)) moved.push(k);
   if (!b.has('rig.json')) return [...moved, 'rig.json'];
   type Skins = Record<string, Record<string, Record<string, unknown>>>;
   const ra = JSON.parse(readFileSync(join(inDir, 'rig.json'), 'utf8')) as Record<string, unknown>;
@@ -40401,6 +40439,37 @@ function treeDigest(root: string): string {
   };
   walk(root);
   return out.join('\n');
+}
+
+/** Independent reader: only an exact content-addressed copy of an input root record is an allowed new archive. */
+function revisionArchiveMoves(a: Map<string, string>, b: Map<string, string>, replacing: string, moved: string[]): Set<string> {
+  const allowed = new Set<string>();
+  for (const source of [PROVENANCE_FILE, RETUNE_FILE]) {
+    const hash = a.get(source);
+    if (hash === undefined) continue;
+    const path = `provenance/${source.slice(0, -5)}-${hash}.json`;
+    if (b.get(path) !== hash) moved.push(`parent ${source} not recoverable at ${path}`);
+    else allowed.add(path);
+  }
+  if (!b.has(replacing)) moved.push(replacing);
+  return allowed;
+}
+
+/** Read the written tree independently of the production hash-row and ancestry helpers. */
+function revisionRowsAgree(dir: string, file: string, parentDir: string): boolean {
+  if (!existsSync(join(dir, file))) return false;
+  const record = readJsonFile(join(dir, file)) as { revision: Array<{ path: string; bytes: number; sha256: string }>; input: { provenance?: Array<{ source: string; path: string; bytes: number; sha256: string }> } };
+  const rows = treeDigest(dir).split('\n').map((line) => {
+    const [path, sha256] = line.split(' ');
+    return { path, bytes: statSync(join(dir, path)).size, sha256 };
+  }).filter((row) => row.path !== file);
+  const parents = [PROVENANCE_FILE, RETUNE_FILE].filter((source) => existsSync(join(parentDir, source)));
+  return JSON.stringify(rows) === JSON.stringify(record.revision) && parents.every((source) => {
+    const bytes = readFileSync(join(parentDir, source));
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    const row = record.input.provenance?.find((p) => p.source === source);
+    return row !== undefined && row.sha256 === sha256 && row.bytes === bytes.length && existsSync(join(dir, row.path)) && readFileSync(join(dir, row.path)).equals(bytes);
+  });
 }
 
 /**
@@ -40491,6 +40560,18 @@ function runRemeshSuite(): number {
       `exit ${run1.status}; moved outside the strip: ${moves1.join(', ') || 'nothing'}; strip t ${prov1?.target.before.triangles} -> ${prov1?.target.after.triangles}; check ${prov1?.check.revision.pass} over ${prov1?.check.revision.measured.length} bar(s); ${hashLines1.length} hash line(s), ${hashLines1.filter((l) => l.endsWith('(spliced)')).length} spliced`,
       'issue #495 bar 1: the target\'s mesh changes, every other file is byte-identical to the input (read here by the suite\'s own hashes, not the stage\'s), rigc\'s gate and check are green with the input\'s bars, the hash table is printed, and the input is untouched',
     );
+
+    // Issue #531: the first revision is the next input, with a config reproducing its requested lattice.
+    const chainConfig = JSON.parse(readFileSync(fx.config, 'utf8')) as { meshes: Record<string, unknown> };
+    chainConfig.meshes.strip = REMESH_GRID_REQUEST;
+    const chainConfigPath = join(root, 'fx', 'config-chain.json');
+    writeFileSync(chainConfigPath, JSON.stringify(chainConfig));
+    const chainA = stage('chain-a', gridReq, { rig: out1, config: chainConfigPath, recordInputCheck: true });
+    const chainB = stage('chain-b', gridReq, { rig: out1, config: chainConfigPath, recordInputCheck: true });
+    say('RM698_A_REMESH_OF_A_REVISION_RECOVERS_THE_PARENT_AND_HASHES_THE_WRITTEN_TREE_DETERMINISTICALLY',
+      run1.status === 0 && chainA.e === null && chainB.e === null && revisionRowsAgree(chainA.out, PROVENANCE_FILE, out1) && treeDigest(chainA.out) === treeDigest(chainB.out),
+      `canonical RM01 exit ${run1.status}; second runs ${codes(chainA.e)} / ${codes(chainB.e)}; written rows and parent agree ${revisionRowsAgree(chainA.out, PROVENANCE_FILE, out1)}; repeat identical ${treeDigest(chainA.out) === treeDigest(chainB.out)}`,
+      'issue #531: actual gated remesh-of-remesh with a recorded input check, independent disk hashes and raw parent bytes, two identical requests');
 
     // RM02 — bounds that cannot be met: an auto entry whose smallest angle no triangle reaches.
     const tight = syntheticPolicy(DRAFT_FIGURE.spacing);
@@ -41108,8 +41189,8 @@ function runRemeshSuite(): number {
 
     // ---- issue #617: --record-input-check writes the input's check once, --input-check reuses it when it is bound ----
     // RM30 — the positive control, through the CLI: RM01's request again with --record-input-check, then once more with
-    // that record as --input-check. The record run writes RM01's files and the record; the reuse run prints the line in
-    // place of every [check-input] line and writes RM01's files byte for byte, its check.input included. The number of
+    // that record as --input-check. The record run writes RM01's files apart from the recorded-check hash row and the record; the reuse run prints the line in
+    // place of every [check-input] line and writes RM01's files apart from the recorded-check hash row byte for byte, its check.input included. The number of
     // rows is counted here off the disk: every file under the input, parts.json, every file under parts/.
     const remeshArgs = ['remesh', '--rig', input, '--config', fx.config, '--parts', fx.parts, '--part', 'strip', '--mesh', gridReq];
     const rec30 = join(root, 'rec30');
@@ -41120,7 +41201,13 @@ function runRemeshSuite(): number {
     const filesUnder = (d: string): number => (existsSync(d) ? treeDigest(d).split('\n').length : 0);
     const rows30 = filesUnder(input) + 1 + filesUnder(join(fx.parts, 'parts'));
     const line30 = `  check-input: not run — ${record30} (${INPUT_CHECK_SPEC}) is bound to this input by ${rows30} sha256 row(s) (rig ${filesUnder(input)}, parts ${rows30 - filesUnder(input)}, requirements 0)`;
-    const withoutRecord = (d: string): string => treeDigest(d).split('\n').filter((l) => !l.startsWith(`${INPUT_CHECK_FILE} `)).join('\n');
+    const withoutRecord = (d: string): string => {
+      const doc = readJsonFile(join(d, PROVENANCE_FILE)) as { revision: Array<{ path: string }> } | null;
+      if (doc === null) return 'absent';
+      doc.revision = doc.revision.filter((row) => row.path !== INPUT_CHECK_FILE);
+      const hash = createHash('sha256').update(rigJsonText(doc)).digest('hex');
+      return treeDigest(d).split('\n').filter((l) => !l.startsWith(`${INPUT_CHECK_FILE} `)).map((l) => l.startsWith(`${PROVENANCE_FILE} `) ? `${PROVENANCE_FILE} ${hash}` : l).join('\n');
+    };
     const checkInputSpan = (dir: string): string => {
       if (!existsSync(join(dir, PROVENANCE_FILE))) return 'absent';
       const t = readFileSync(join(dir, PROVENANCE_FILE), 'utf8');
@@ -41131,7 +41218,7 @@ function runRemeshSuite(): number {
     say(
       'RM30_A_RECORDED_INPUT_CHECK_BOUND_TO_THE_INPUT_IS_REUSED_AND_THE_REVISION_IS_THE_ONE_A_MEASURED_RUN_WRITES',
       runRec30.status === 0 &&
-        withoutRecord(rec30) === treeDigest(out1) &&
+        withoutRecord(rec30) === treeDigest(out1) && revisionRowsAgree(rec30, PROVENANCE_FILE, input) &&
         rec30Json?.spec === INPUT_CHECK_SPEC &&
         rec30Json.rig?.dir === resolve(input) &&
         JSON.stringify(rec30Json.check) === JSON.stringify(prov1?.check.input) &&
@@ -41146,7 +41233,7 @@ function runRemeshSuite(): number {
         !run1.out.includes('check-input: not run') &&
         !run1.out.includes(INPUT_CHECK_FILE) &&
         treeDigest(input) === inputDigest,
-      `record run: exit ${runRec30.status}, ${filesUnder(rec30)} file(s), RM01's files ${withoutRecord(rec30) === treeDigest(out1) ? 'byte for byte' : 'NOT byte for byte'}, the record's check ${JSON.stringify(rec30Json?.check) === JSON.stringify(prov1?.check.input) ? 'is' : 'is NOT'} RM01's check.input; reuse run: exit ${runReuse30.status}, the line ${runReuse30.out.includes(line30) ? 'printed' : `NOT printed (wanted ${JSON.stringify(line30)})`}, ${runReuse30.out.split('\n').filter((l) => l.startsWith('[check-input]')).length} [check-input] line(s), files ${treeDigest(reuse30) === treeDigest(out1) ? "RM01's byte for byte" : "NOT RM01's"}, check.input text ${checkInputSpan(reuse30) === checkInputSpan(out1) ? `identical (${checkInputSpan(out1).length} chars)` : 'differs'}`,
+      `record run: exit ${runRec30.status}, ${filesUnder(rec30)} file(s), RM01's files apart from the recorded-check hash row ${withoutRecord(rec30) === treeDigest(out1) ? 'byte for byte' : 'NOT byte for byte'}, the record's check ${JSON.stringify(rec30Json?.check) === JSON.stringify(prov1?.check.input) ? 'is' : 'is NOT'} RM01's check.input; reuse run: exit ${runReuse30.status}, the line ${runReuse30.out.includes(line30) ? 'printed' : `NOT printed (wanted ${JSON.stringify(line30)})`}, ${runReuse30.out.split('\n').filter((l) => l.startsWith('[check-input]')).length} [check-input] line(s), files ${treeDigest(reuse30) === treeDigest(out1) ? "RM01's byte for byte" : "NOT RM01's"}, check.input text ${checkInputSpan(reuse30) === checkInputSpan(out1) ? `identical (${checkInputSpan(out1).length} chars)` : 'differs'}`,
       'issue #617 bars 1 and 4: a strip of candidates against one inspected rig measures the input once; the reuse writes what a measured run writes, and a run without either flag prints and writes what it did before',
     );
 
@@ -41291,8 +41378,9 @@ function retuneMoves(inDir: string, revDir: string): string[] {
   const a = new Map(treeDigest(inDir).split('\n').map((l) => l.split(' ') as [string, string]));
   const b = new Map(treeDigest(revDir).split('\n').map((l) => l.split(' ') as [string, string]));
   const moved: string[] = [];
-  for (const [k, h] of a) if (k !== 'rig.json' && k !== 'motion.json' && b.get(k) !== h) moved.push(k);
-  for (const k of b.keys()) if (!a.has(k) && k !== RETUNE_FILE) moved.push(k);
+  const archives = revisionArchiveMoves(a, b, RETUNE_FILE, moved);
+  for (const [k, h] of a) if (k !== 'rig.json' && k !== 'motion.json' && k !== RETUNE_FILE && b.get(k) !== h) moved.push(k);
+  for (const k of b.keys()) if (!a.has(k) && k !== RETUNE_FILE && !archives.has(k)) moved.push(k);
   if (!b.has('rig.json') || !b.has('motion.json')) return [...moved, 'rig.json or motion.json'];
   type Obj = Record<string, unknown>;
   const read = (d: string, f: string): Obj => JSON.parse(readFileSync(join(d, f), 'utf8')) as Obj;
@@ -41393,6 +41481,13 @@ function runRetuneSuite(): number {
       'issue #527: a damping change reaches rig.json\'s constraints and nothing else moves — every attachment, every image and motion.json byte-identical (read here by the suite\'s own hashes), rigc\'s gate green and check holding the input\'s bars, the field that changed named, the input untouched',
     );
 
+    const chainA = stage('chain-a', damping, { rig: out1, recordInputCheck: true });
+    const chainB = stage('chain-b', damping, { rig: out1, recordInputCheck: true });
+    say('RN698_A_RETUNE_OF_A_REVISION_RECOVERS_THE_PARENT_AND_HASHES_THE_WRITTEN_TREE_DETERMINISTICALLY',
+      run1.status === 0 && chainA.e === null && chainB.e === null && revisionRowsAgree(chainA.out, RETUNE_FILE, out1) && treeDigest(chainA.out) === treeDigest(chainB.out),
+      `canonical RN01 exit ${run1.status}; second runs ${codes(chainA.e)} / ${codes(chainB.e)}; written rows and parent agree ${revisionRowsAgree(chainA.out, RETUNE_FILE, out1)}; repeat identical ${treeDigest(chainA.out) === treeDigest(chainB.out)}`,
+      'issue #531: actual gated retune-of-retune with a recorded input check, independent disk hashes and raw parent bytes, two identical requests');
+
     // RN02 — bar 1 in miniature: the input is a remesh revision, whose strip the config does not reproduce.
     const gridReq = join(root, 'grid.json');
     writeFileSync(gridReq, `${JSON.stringify(REMESH_GRID_REQUEST)}\n`);
@@ -41404,7 +41499,7 @@ function runRetuneSuite(): number {
     const [dIn, dRem, dRet, dRig] = [input, remeshed, s2.out, rebuilt2].map((d) => (existsSync(join(d, 'rig.json')) ? digest(strip(d)) : 'absent'));
     say(
       'RN02_ON_A_REMESH_REVISION_THE_RETUNE_KEEPS_THE_STRIP_THE_CONFIG_DOES_NOT_REPRODUCE_AND_RIG_CONFIG_LOSES_IT',
-      rm === null && s2.e === null && rb2 === null && dRem !== dIn && dRet === dRem && dRig !== dRem && dRig === dIn && retuneMoves(remeshed, s2.out).length === 0 && (rigOf(s2.out).constraints as Obj[])[0].damping === 0.7,
+      rm === null && s2.e === null && rb2 === null && dRem !== dIn && dRet === dRem && dRig !== dRem && dRig === dIn && retuneMoves(remeshed, s2.out).length === 0 && revisionRowsAgree(s2.out, RETUNE_FILE, remeshed) && (rigOf(s2.out).constraints as Obj[])[0].damping === 0.7,
       `remesh ${codes(rm)}, retune ${codes(s2.e)}, rig --config ${codes(rb2)}; strip sha256/16: input ${dIn}, remesh revision ${dRem}, retune of it ${dRet}, rig --config on the same request ${dRig}`,
       'issue #527 bar 1: a rig whose config does not reproduce one mesh keeps that mesh byte for byte through a damping retune; the whole rebuild the same request has today rebuilds the mesh from the config and drops it',
     );
@@ -41615,7 +41710,7 @@ function runRetuneSuite(): number {
 
     // ---- issue #617: the recorded input check, through retune ----
     // RN10 — the positive control, through the CLI: RN01's request with --record-input-check, then with that record as
-    // --input-check: RN01's files byte for byte, the record beside them, the line in place of every [check-input] line.
+    // --input-check: RN01's files apart from the recorded-check hash row byte for byte, the record beside them, the line in place of every [check-input] line.
     const retuneArgs = ['retune', '--rig', input, '--config', damping, '--parts', fx.parts];
     const rec10 = join(root, 'rec10');
     const runRec10 = runCli([...retuneArgs, '--out', rec10, '--record-input-check']);
@@ -41625,12 +41720,18 @@ function runRetuneSuite(): number {
     const filesUnder = (d: string): number => (existsSync(d) ? treeDigest(d).split('\n').length : 0);
     const rows10 = filesUnder(input) + 1 + filesUnder(join(fx.parts, 'parts'));
     const line10 = `  check-input: not run — ${record10} (${INPUT_CHECK_SPEC}) is bound to this input by ${rows10} sha256 row(s) (rig ${filesUnder(input)}, parts ${rows10 - filesUnder(input)}, requirements 0)`;
-    const withoutRecord = (d: string): string => treeDigest(d).split('\n').filter((l) => !l.startsWith(`${INPUT_CHECK_FILE} `)).join('\n');
+    const withoutRecord = (d: string): string => {
+      const doc = readJsonFile(join(d, RETUNE_FILE)) as { revision: Array<{ path: string }> } | null;
+      if (doc === null) return 'absent';
+      doc.revision = doc.revision.filter((row) => row.path !== INPUT_CHECK_FILE);
+      const hash = createHash('sha256').update(rigJsonText(doc)).digest('hex');
+      return treeDigest(d).split('\n').filter((l) => !l.startsWith(`${INPUT_CHECK_FILE} `)).map((l) => l.startsWith(`${RETUNE_FILE} `) ? `${RETUNE_FILE} ${hash}` : l).join('\n');
+    };
     const rec10Json = readJsonFile(record10) as { check?: unknown } | null;
     say(
       'RN10_A_RECORDED_INPUT_CHECK_BOUND_TO_THE_INPUT_IS_REUSED_AND_THE_REVISION_IS_THE_ONE_A_MEASURED_RUN_WRITES',
       runRec10.status === 0 &&
-        withoutRecord(rec10) === treeDigest(out1) &&
+        withoutRecord(rec10) === treeDigest(out1) && revisionRowsAgree(rec10, RETUNE_FILE, input) &&
         JSON.stringify(rec10Json?.check) === JSON.stringify(prov1?.check.input) &&
         runReuse10.status === 0 &&
         treeDigest(reuse10) === treeDigest(out1) &&
@@ -41640,7 +41741,7 @@ function runRetuneSuite(): number {
         !run1.out.includes('check-input: not run') &&
         !run1.out.includes(INPUT_CHECK_FILE) &&
         treeDigest(input) === inputDigest,
-      `record run: exit ${runRec10.status}, RN01's files ${withoutRecord(rec10) === treeDigest(out1) ? 'byte for byte' : 'NOT byte for byte'}; reuse run: exit ${runReuse10.status}, the line ${runReuse10.out.includes(line10) ? 'printed' : `NOT printed (wanted ${JSON.stringify(line10)})`}, ${runReuse10.out.split('\n').filter((l) => l.startsWith('[check-input]')).length} [check-input] line(s), files ${treeDigest(reuse10) === treeDigest(out1) ? "RN01's byte for byte" : "NOT RN01's"}`,
+      `record run: exit ${runRec10.status}, RN01's files apart from the recorded-check hash row ${withoutRecord(rec10) === treeDigest(out1) ? 'byte for byte' : 'NOT byte for byte'}; reuse run: exit ${runReuse10.status}, the line ${runReuse10.out.includes(line10) ? 'printed' : `NOT printed (wanted ${JSON.stringify(line10)})`}, ${runReuse10.out.split('\n').filter((l) => l.startsWith('[check-input]')).length} [check-input] line(s), files ${treeDigest(reuse10) === treeDigest(out1) ? "RN01's byte for byte" : "NOT RN01's"}`,
       'issue #617 bars 3 and 4: retune reads and writes the record as remesh does, and without either flag prints and writes what it did before',
     );
 
