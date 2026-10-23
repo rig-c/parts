@@ -1,16 +1,18 @@
 /**
- * The three config updates proposed by the CLI (issue #356). Pure JSON merge:
+ * The config updates proposed by the CLI (issues #356, #671, #679):
  * no file reads/writes and no substitute for the stage's existing validator.
  * A present proposal section replaces that whole field; an absent optional
  * section is retained. `proposal-missing` (issue #671, `--only-missing`) instead
- * adds only the `meshes` / `regions` entries of proposed parts the config attaches
- * by neither, one edit per entry, and leaves every existing entry as it is. The caller supplies the proposer's own section tuple,
+ * adds only resolvable `meshes` / `regions` entries for parts not already attached
+ * by meshes, regions, limbs or patches, and appends skip diagnostics to the
+ * proposal notes. The caller supplies the proposer's own section tuple,
  * avoiding a second policy list or a runtime import of the proposer graph.
  */
 import type { PlanProposal } from './assemble.ts';
 import type { HeadBoxProposal } from './headbox.ts';
 import type { Proposal, PROPOSAL_CONFIG_SECTIONS } from './propose.ts';
 import { PartsError } from './errors.ts';
+import { parseProposalSections } from './config.ts';
 import type { ConfigEdit } from './meshdraft.ts';
 
 export type ConfigJson = null | boolean | number | string | ConfigJson[] | ConfigObject;
@@ -19,7 +21,7 @@ export type ConfigWritePatch =
   | { kind: 'head-box'; head_box: HeadBoxProposal['head_box'] }
   | { kind: 'assemble-plan'; plan: PlanProposal['plan']; extend_below_crop: PlanProposal['extend_below_crop'] }
   | { kind: 'proposal'; proposal: Proposal; sections: typeof PROPOSAL_CONFIG_SECTIONS }
-  /** Issue #671 (`--only-missing`): only `meshes.<part>` / `regions.<part>` for a proposed part the config attaches by neither. */
+  /** Issues #671/#679: add unattached, resolvable entries; append skip explanations to the proposal's notes for the caller to print. */
   | { kind: 'proposal-missing'; proposal: Proposal; parts: ReadonlyArray<{ name: string; from: string }> };
 export interface ConfigWriteChange {
   path: string;
@@ -118,13 +120,52 @@ export function mergeConfigProposal(raw: unknown, patch: ConfigWritePatch): Conf
       break;
     }
     case 'proposal-missing': {
-      // Issue #671: a config proposed before a part existed (the #490 arm split's drape_<s> and hand_<s>) gains its
-      // plan row (split parts only) and an entry for that part alone, entry by entry, in the section the proposal drafts
-      // it in. A part the config already attaches, by either section, keeps its entry as written; nothing else of the
-      // proposal is read.
-      const attached = (part: string): boolean => (object(config.meshes) && own(config.meshes, part)) || (object(config.regions) && own(config.regions, part));
+      // Read attachment ownership from the destination, even without --keypoints. A limb's source is consumed;
+      // the loader requires regions for its segment parts instead. Patches are always regions.
+      const attachments = new Map<string, string>();
       for (const section of ['meshes', 'regions'] as const) {
         if (config[section] !== undefined && !object(config[section])) return refuse(`config.${section}`, 'is not an object; an object of part entries is required before an entry is added to it');
+        if (object(config[section])) for (const part of Object.keys(config[section])) attachments.set(part, field(`config.${section}`, part));
+      }
+      if (object(config.limbs)) for (const [limb, spec] of Object.entries(config.limbs)) {
+        if (object(spec) && Array.isArray(spec.segments)) for (const segment of spec.segments) {
+          if (object(segment) && typeof segment.from === 'string') attachments.set(segment.from, `${field('config.limbs', limb)} (source cut into its segment parts)`);
+        }
+      }
+      if (object(config.assemble) && Array.isArray(config.assemble.patches)) for (const patch of config.assemble.patches) {
+        if (object(patch) && typeof patch.name === 'string') attachments.set(patch.name, 'config.assemble.patches (a patch is always a region)');
+      }
+      // This mode appends diagnostics to the proposal's existing notes output, never to the destination config.
+      const note = (part: string, why: string): void => {
+        const line = `--only-missing: skipped part "${part}" — ${why}; no entry or plan row added`;
+        if (!patch.proposal.notes.includes(line)) patch.proposal.notes.push(line);
+      };
+      const proposed = new Set([...patch.parts.map((p) => p.name), ...Object.keys(patch.proposal.meshes), ...Object.keys(patch.proposal.regions), ...Object.values(patch.proposal.limbs ?? {}).flatMap((l) => l.segments.map((s) => s.from))]);
+      for (const part of proposed) {
+        const by = attachments.get(part);
+        if (by !== undefined) note(part, `already attached by ${by}`);
+      }
+      const entries: Array<{ section: 'meshes' | 'regions'; part: string; value: ConfigJson }> = [];
+      const accepted = new Set<string>();
+      for (const section of ['meshes', 'regions'] as const) for (const [part, entry] of Object.entries(patch.proposal[section])) {
+        if (attachments.has(part) || accepted.has(part)) continue;
+        const value = clone(entry, field(`proposal.${section}`, part));
+        // Reuse the loader's own bone/chain expansion and mesh reference checks (including auto region names),
+        // against CONFIG bones, never the draft's bones. Coverage and all retained fields still pass through the
+        // caller's full config gate. Other entries are absent here so a forward dependency cannot leak from a draft.
+        try {
+          parseProposalSections({ bones: config.bones, meshes: section === 'meshes' ? { [part]: value } : {}, regions: section === 'regions' ? { [part]: value } : {}, motion: config.motion });
+        } catch (error) {
+          if (!(error instanceof PartsError)) throw error;
+          const at = `proposal.${section}.${part}`;
+          const problems = error.problems.filter((p) => p.object === at || p.object.startsWith(`${at}.`) || p.object.startsWith(`${at}[`));
+          if (problems.length > 0) {
+            note(part, problems.map((p) => `${p.code}: ${p.object.replace(/^proposal\./, 'config.')} — ${p.detail}`).join('; '));
+            continue;
+          }
+        }
+        entries.push({ section, part, value });
+        accepted.add(part);
       }
       const added: ConfigWriteChange[] = [];
       // The #490 split's parts the plan does not name, each row where `mergedArmSplitPlan` puts it: the drape just
@@ -135,6 +176,7 @@ export function mergeConfigProposal(raw: unknown, patch: ConfigWritePatch): Conf
         const row = (e: ConfigJson): [string, string, string] | null =>
           Array.isArray(e) && e.length === 3 && e.every((x) => typeof x === 'string') ? (e as [string, string, string]) : null;
         for (const part of patch.parts) {
+          if (!accepted.has(part.name)) continue;
           const m = /^full:(drape|hand)-([rl])$/.exec(part.from);
           if (m === null) continue;
           if (plan.some((e) => { const r = row(e); return r !== null && (r[0] === part.name || (r[1] === 'full' && r[2] === `${m[1]}-${m[2]}`)); })) continue;
@@ -147,15 +189,11 @@ export function mergeConfigProposal(raw: unknown, patch: ConfigWritePatch): Conf
           added.push({ path: `assemble.plan[${at}]`, kind: 'added', value: JSON.stringify(value) });
         }
       }
-      for (const section of ['meshes', 'regions'] as const) {
-        for (const [part, entry] of Object.entries(patch.proposal[section])) {
-          if (attached(part)) continue;
-          const value = clone(entry, field(`proposal.${section}`, part));
-          if (!object(config[section])) config[section] = {};
-          (config[section] as ConfigObject)[part] = value;
-          edits.push({ path: [section, part], value });
-          added.push({ path: field(section, part), kind: 'added' });
-        }
+      for (const { section, part, value } of entries) {
+        if (!object(config[section])) config[section] = {};
+        (config[section] as ConfigObject)[part] = value;
+        edits.push({ path: [section, part], value });
+        added.push({ path: field(section, part), kind: 'added' });
       }
       return { config, changes: added, edits };
     }
