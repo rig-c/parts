@@ -309,6 +309,11 @@ import {
   MOTION_SEAM_LINE,
   type MotionSeamLine,
   motionSeamPairs,
+  motionSeamLine,
+  motionSeamWorlds,
+  type MotionSeamWorldRow,
+  readMotionSeamWorldRows,
+  publishMotionSeamWorlds,
   motionSeamWarnText,
   openingOverFloor,
   packageRigc,
@@ -16120,6 +16125,148 @@ function soGhostAt90(): number {
   return n;
 }
 
+
+/** Issue #591: hand-computable sidecars fix the environment contract. */
+function runMotionSeamWorldCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const dir = temp('seam-world-controls');
+  try {
+    const pairs = [{ pair: 'a|b', a: 'a', b: 'b', declared: ['fixture declaration'] }];
+    const hit = (index: number, px: number, w: number, h: number) => ({ index, px, cell: 1, box: [0, 0, w, h] });
+    const raw = (world: 'default' | 'still'): MotionSeamWorldRow[] => {
+      const home = join(dir, world);
+      mkdirSync(join(home, 'idle'), { recursive: true });
+      writeFileSync(join(home, 'frames.json'), JSON.stringify({ sets: [{ animation: 'idle', dir: 'idle' }] }));
+      const gap = world === 'default' ? [hit(0, 1, 1, 1)] : [hit(1, 6, 3, 2)];
+      const ghost = world === 'default' ? [hit(1, 2, 2, 1)] : [hit(2, 9, 3, 3)];
+      writeFileSync(join(home, 'idle', 'seam.json'), JSON.stringify({ spec: 'rigc-seam/1', animation: 'idle', fps: 12,
+        pairs: [{ a: 'a', b: 'b', status: 'read', drawn: 3, banded: 3, opens: world === 'default' ? [0, 1] : [1, 2],
+          gap: { frames: gap }, ghost: { frames: ghost } }] }));
+      return readMotionSeamWorldRows(home, ['idle'], 12, pairs);
+    };
+    const calls: string[] = [];
+    const worlds = motionSeamWorlds(true, true, (world) => { calls.push(world); return raw(world); });
+    const holds = (w: typeof worlds): boolean => w !== undefined &&
+      JSON.stringify(w.default.wind) === '[1,0]' && JSON.stringify(w.still.wind) === '[0,0]' &&
+      JSON.stringify(w.default.gravity) === '[0,1]' && JSON.stringify(w.still.gravity) === '[0,1]' &&
+      w.default.rows[0]?.gap.max_px === 1 && w.default.rows[0]?.ghost.max_px === 2 &&
+      w.still.rows[0]?.gap.max_px === 6 && w.still.rows[0]?.gap.worst?.index === 1 && w.still.rows[0]?.ghost.max_px === 9;
+    say('SO05_PHYSICS_WORLDS_KEEP_RAW_GAP_AND_GHOST_COUNTS_EVEN_UNDER_THE_WARNING_FLOOR',
+      holds(worlds) && calls.join(',') === 'default,still' && Object.keys(worlds?.default.rows[0].gap ?? {}).join(',') === 'max_px,worst',
+      JSON.stringify(worlds),
+      'issue #591: default has a one-cell gap and a two-cell line ghost; still has a 3x2 gap and a 3x3 ghost, by hand. Raw cell counts, not distances or new bars.');
+    const missing = motionSeamWorlds(true, true, () => raw('default'));
+    const swapped = worlds === undefined ? undefined : { default: worlds.still, still: worlds.default };
+    const base = motionSeamLine(pairs, ['idle'], 12, []);
+    const beforeBytes = JSON.stringify(base);
+    const withWorlds = { ...base, worlds };
+    const printed = motionSeamLines(withWorlds);
+    say('SO06_MISSING_OR_SWAPPED_STILL_AND_SUPPRESSED_OUTPUT_FAIL_THE_SAME_READING',
+      !holds(missing) && !holds(swapped) && printed.some(l => l.includes('world "default"') && l.includes('gap 1')) &&
+        printed.some(l => l.includes('world "still"') && l.includes('gap 6')) &&
+        !motionSeamLines(base).some(l => l.includes('world "still"')) &&
+        barsNotMet({ gate_spine_html_green: true, [MOTION_SEAM_LINE]: withWorlds }).length === 0 && base.warnings === withWorlds.warnings && JSON.stringify(base) === beforeBytes,
+      'missing still ' + holds(missing) + ', swapped ' + holds(swapped) + '; ' + printed.join(' | '),
+      'planted: both callbacks reading default, labels swapped, world lines suppressed; adding a reading cannot add a bar or alter existing warning counts.');
+    let untouched = 0;
+    const absent = motionSeamWorlds(false, true, () => { untouched++; return raw('default'); });
+    const noWind = motionSeamWorlds(true, false, raw);
+    const noBand = motionSeamWorlds(true, true, () => raw('default').map(r => ({ ...r, status: 'skip' as const, banded: 0 })));
+    say('SO07_NONPHYSICS_CALLS_NOTHING_AND_UNAVAILABLE_WORLDS_ARE_NAMED_SKIPS',
+      absent === undefined && untouched === 0 && noWind?.still.status === 'SKIP' && noWind.still.reason?.includes('no physics constraint answers wind') === true &&
+        noWind.still.rows.length === 0 && noBand?.default.status === 'SKIP' && noBand.default.reason?.includes('no band') === true,
+      'nonphysics ' + String(absent) + ', calls ' + untouched + '; no wind ' + JSON.stringify(noWind?.still),
+      'no physics adds no key or call; a physics rig with no wind response cannot pass a schedule rigc refuses, and no band is not a measured zero.');
+    if (worlds !== undefined) {
+      const kept = join(dir, 'published');
+      const saved = { default: { ...worlds.default, dir: 'seam_motion/default' }, still: { ...worlds.still, dir: 'seam_motion/still' } };
+      const refsHold = (w: typeof saved): boolean => (['default', 'still'] as const).every(name =>
+        w[name].dir === 'seam_motion/' + name && existsSync(join(kept, w[name].dir, 'frames.json')) &&
+        existsSync(join(kept, w[name].dir, 'idle', 'seam.json')));
+      publishMotionSeamWorlds(kept, dir, saved, () => writeFileSync(join(kept, 'check.json'), JSON.stringify(saved)));
+      const keptRaw = JSON.parse(readFileSync(join(kept, saved.still.dir, 'idle', 'seam.json'), 'utf8')) as { pairs: Array<{ gap: { frames: unknown[] } }> };
+      const broken = { ...saved, still: { ...saved.still, dir: 'seam_motion/missing' } };
+      say('SO10_COMPACT_WORLDS_KEEP_MAX_AND_WORST_AND_REFERENCE_REAL_RAW_SIDECARS',
+        refsHold(saved) && !refsHold(broken) && keptRaw.pairs[0].gap.frames.length === 1 &&
+          Object.keys(saved.still.rows[0].gap).join(',') === 'max_px,worst' && saved.still.rows[0].gap.worst?.index === 1,
+        'raw references ' + refsHold(saved) + '; planted missing reference ' + refsHold(broken) + '; still raw hits ' + keptRaw.pairs[0].gap.frames.length,
+        'full per-frame hits remain in the referenced rigc seam.json; adding frames to the compact kind or pointing at an absent directory fails this reading.');
+      const oldCheck = readFileSync(join(kept, 'check.json'), 'utf8');
+      raw('default'); raw('still');
+      rmSync(join(dir, 'still', 'idle', 'seam.json'));
+      const missingRaw = refusals(() => publishMotionSeamWorlds(kept, dir, saved, () => { throw new Error('must not publish missing raw'); }));
+      raw('still');
+      writeFileSync(join(dir, 'still', 'frames.json'), JSON.stringify({ sets: [{ animation: 'idle', dir: join(dir, 'still', 'idle') }] }));
+      const absoluteRaw = refusals(() => publishMotionSeamWorlds(kept, dir, saved, () => { throw new Error('must not publish absolute frame dir'); }));
+      raw('still');
+      let rolledBack = false;
+      try { publishMotionSeamWorlds(kept, dir, saved, () => { writeFileSync(join(kept, 'check.json'), 'partial'); throw new Error('planted publication refusal'); }); }
+      catch (err) { rolledBack = (err as Error).message === 'planted publication refusal'; }
+      say('SO11_MISSING_RAW_AND_FAILED_CHECK_PUBLICATION_CANNOT_LEAVE_BROKEN_REFERENCES',
+        missingRaw?.problems.some(p => p.code === 'FRAMES_SIDECAR') === true && absoluteRaw?.problems.some(p => p.code === 'FRAMES_SIDECAR') === true && rolledBack && refsHold(saved) &&
+          readFileSync(join(kept, 'check.json'), 'utf8') === oldCheck,
+        'missing raw ' + codes(missingRaw) + '; absolute raw ' + codes(absoluteRaw) + '; rolled back ' + rolledBack + '; original check and raw references restored',
+        'planted missing seam.json and an absolute frame-set directory refuse before publication; a failed check writer restores the prior directory and check bytes.');
+      raw('still');
+    }
+    writeFileSync(join(dir, 'still', 'idle', 'seam.json'), '{}');
+    const refused = refusals(() => readMotionSeamWorldRows(join(dir, 'still'), ['idle'], 12, pairs));
+    say('SO08_MALFORMED_WORLD_SIDECARS_ARE_REFUSED_BY_NAME',
+      refused !== null && refused.problems.some(p => p.code === 'FRAMES_SIDECAR'), codes(refused),
+      'informational readings must not turn a malformed sidecar into a successful zero.');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+
+/** Issue #591: the injected runner observes the actual orchestration, including custom schedules. */
+function runMotionSeamWorldIntegration(dir: string, say: (name: string, ok: boolean, detail: string, why: string) => void, original: MotionSeamLine | null): void {
+  if (original === null) { say('SO09_SEAM_WORLDS_REACH_RIGC_WITHOUT_REPLACING_THE_CUSTOM_READING', false, 'no cut fixture', 'the positive fixture must build'); return; }
+  const spec = join(dir, 'physics-spec');
+  cpSync(join(dir, 'cut', 'rig'), spec, { recursive: true });
+  const rigPath = join(spec, 'rig.json');
+  const rig = JSON.parse(readFileSync(rigPath, 'utf8')) as Record<string, unknown>;
+  rig.constraints = [{ type: 'physics', name: 'seam_spring', bone: 'sleeve_r1', rotate: 1, wind: 1, strength: 100, damping: 0.85, inertia: 0.5, mass: 1, mix: 1 }];
+  writeFileSync(rigPath, JSON.stringify(rig));
+  const env = join(dir, 'custom-world.json');
+  writeFileSync(env, JSON.stringify({ spec: 'rigc-environment/1', steps: [{ t: 0, wind: [2, 0] }] }));
+  const actual = rigcRunnerAt(suiteRigc(), spawnRigc);
+  const calls: Array<{ world: string; rows: MotionSeamWorldRow[]; files: string[] }> = [];
+  const tap: RigcRunner = args => {
+    const r = actual(args);
+    if (args[0] === 'render' && args.includes('--seam') && r.status === 0) {
+      const given = args[args.indexOf('--environment') + 1];
+      const world = !args.includes('--environment') ? 'default' : given === env ? 'custom' :
+        JSON.stringify((readJsonFile(given)?.steps as Array<Record<string, unknown>> | undefined)?.[0]?.wind) === '[0,0]' ? 'still' : 'wrong';
+      const dest = args[args.indexOf('--out') + 1];
+      calls.push({ world, rows: readMotionSeamWorldRows(dest, ['idle', 'bend'], 12, original.pairs), files: listing(dest) });
+    }
+    return r;
+  };
+  const defaults = runCheck(spec, join(dir, 'world-default'), tap, join(dir, 'cut'));
+  const defaultCalls = calls.splice(0);
+  const custom = runCheck(spec, join(dir, 'world-custom'), tap, join(dir, 'cut'), DEFAULT_PACK_MODE, undefined, undefined, false, false, undefined, false, env);
+  const customCalls = calls.splice(0);
+  const plain = runCheck(join(dir, 'cut', 'rig'), join(dir, 'world-plain'), tap, join(dir, 'cut'));
+  const plainCalls = calls.splice(0);
+  const worlds = custom.motionSeam.worlds;
+  const sourceMatches = worlds !== undefined && JSON.stringify(worlds.default.rows) === JSON.stringify(customCalls[1]?.rows) && JSON.stringify(worlds.still.rows) === JSON.stringify(customCalls[2]?.rows);
+  const rawReferencesHold = (home: string, value: typeof worlds, reads: typeof calls): boolean => value !== undefined && (['default', 'still'] as const).every((name, i) => {
+    const w = value[name];
+    return w.dir === 'seam_motion/' + name && existsSync(join(home, w.dir, 'frames.json')) &&
+      JSON.stringify(listing(join(home, w.dir))) === JSON.stringify(reads[i]?.files) &&
+      JSON.stringify(readMotionSeamWorldRows(join(home, w.dir), ['idle', 'bend'], 12, original.pairs)) === JSON.stringify(w.rows);
+  });
+  say('SO09_SEAM_WORLDS_REACH_RIGC_WITHOUT_REPLACING_THE_CUSTOM_READING',
+    defaultCalls.map(c => c.world).join(',') === 'default,still' && customCalls.map(c => c.world).join(',') === 'custom,default,still' && sourceMatches &&
+      JSON.stringify(defaults.motionSeam.worlds) === JSON.stringify(worlds) &&
+      plainCalls.map(c => c.world).join(',') === 'default' && JSON.stringify(plain.motionSeam) === JSON.stringify(original) &&
+      rawReferencesHold(join(dir, 'world-default'), defaults.motionSeam.worlds, defaultCalls) &&
+      rawReferencesHold(join(dir, 'world-custom'), worlds, customCalls.slice(1)) &&
+      !existsSync(join(dir, 'world-plain', 'seam_motion')) && !existsSync(join(dir, 'world-custom', '_seam_motion')) &&
+      JSON.stringify(custom.figures.environment) === JSON.stringify(readCheckEnvironment(env)),
+    'default calls ' + defaultCalls.map(c => c.world) + '; custom calls ' + customCalls.map(c => c.world) + '; plain calls ' + plainCalls.map(c => c.world) + '; raw worlds match ' + sourceMatches,
+    'the current custom reading remains first, default is reused without a schedule, complete raw render files survive at deterministic relative references after scratch cleanup, and nonphysics has no extra file, call or serialized byte in the seam block.');
+}
+
 function runMotionSeamCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
   const dir = temp('motion-seam');
   try {
@@ -16253,6 +16400,7 @@ function runMotionSeamCases(say: (name: string, ok: boolean, detail: string, why
       `pairs ${JSON.stringify(both.map((p) => `${p.pair} <- ${p.declared.join(' + ')}`))}; floor: 1 in 1 ${openingOverFloor({ px: 1, cell: 1, box: box(1, 1) })}, 5 in a line of 5 ${openingOverFloor({ px: 5, cell: 1, box: box(5, 1) })}, a 2x2 block ${openingOverFloor({ px: 4, cell: 1, box: box(2, 2) })}; runs ${frameRuns([0, 1, 2, 4, 6, 7])}`,
       "a pair is a limb's two segments at a joint, or a seam requirement's two parts, and one pair however many declare it, in either order; the floor counts in rig-c's cells — a line one cell deep holds at most as many cells as its box is long, a 2x2 hole already more — so it reads the same at any cell size",
     );
+    runMotionSeamWorldIntegration(dir, say, ln);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -19044,6 +19192,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
   runSweepCheckCases(say);
   runContourStepCases(say);
   runPlantedFeetCases(say);
+  runMotionSeamWorldCases(say);
   runMotionSeamCases(say);
   runSweepUnitCases(say);
   runDiscCheckCases(say);
@@ -26312,6 +26461,18 @@ function foldDocLineFaults(docs: ReadonlyArray<readonly [string, string]>): { re
     });
   }
   return { read, faults };
+}
+
+
+/** Issue #591: only tree supplies the tracked guide to this document reader. */
+function seamWorldDocFaults(file: string, text: string): string[] {
+  const start = text.indexOf('**Physics seam environments**');
+  const end = start < 0 ? -1 : text.indexOf('\n\n', start);
+  const block = start < 0 ? '' : text.slice(start, end < 0 ? undefined : end);
+  const required = ['Default: wind [1, 0], gravity [0, 1]', 'Still: wind [0, 0], gravity [0, 1]',
+    'environment(null) returns to Default', 'informational', 'declared pairs', 'no wind response', 'byte-identical',
+    'Per-frame hits are not embedded in check.json', '`seam_motion/default`', '`seam_motion/still`', 'unrendered SKIP has no directory reference'];
+  return required.every(s => block.includes(s)) ? [] : [file + ':' + (start < 0 ? 1 : text.slice(0, start).split('\n').length) + ' stale or missing physics seam environment contract'];
 }
 
 /** The seam bullet and its actual line in a supplied document (issue #640). */
@@ -35986,6 +36147,18 @@ function runTreeSuite(): number {
     `guide faults ${held21.join('; ') || 'none'}; planted pre-#202 seam line -> ${stale21.join('; ') || 'not caught'}; recipe faults ${recipe21.join('; ') || 'none'}; stale parent -> ${staleRecipe21.join('; ') || 'not caught'}; missing/invalid recipe ${missingRecipe21.join('; ')} / ${invalidRecipe21.join('; ')}`,
     'issue #640: live AUTHORING assertions from CK100 and CK108 belong to tree; CK99/CK108 keep generated reader/help controls, and stale tracked lines are refused by file:line. The guide\'s three parsed planted-feet payloads equal the structured fixtures CK540-544 build, including their planted invalid parent, without reading docs from check',
   );
+
+  const envDoc = seamWorldDocFaults(file21, guide21);
+  const wrongDefault = seamWorldDocFaults(file21, guide21.replace('Default: wind [1, 0], gravity [0, 1]', 'Default: wind [0, 0], gravity [0, 1]'));
+  const wrongNull = seamWorldDocFaults(file21, guide21.replace('environment(null) returns to Default', 'environment(null) returns to Still'));
+  const noEnvDoc = seamWorldDocFaults(file21, guide21.replace('**Physics seam environments**', '**Removed contract**'));
+  const wrongRawDoc = seamWorldDocFaults(file21, guide21.replace('Per-frame hits are not embedded in check.json', 'Per-frame hits are embedded in check.json'));
+  const wrongRawDir = seamWorldDocFaults(file21, guide21.replace('seam_motion/still', '_seam_motion/still'));
+  say('TY23_PHYSICS_SEAM_GUIDE_HOLDS_DEFAULT_STILL_NULL_AND_AVAILABILITY',
+    envDoc.length === 0 && wrongDefault.length === 1 && wrongNull.length === 1 && noEnvDoc.length === 1 && wrongRawDoc.length === 1 && wrongRawDir.length === 1,
+    [envDoc, wrongDefault, wrongNull, noEnvDoc, wrongRawDoc, wrongRawDir].map(x => x.join('; ') || 'green').join(' | '),
+    'issue #591: a stale default, null described as still air, or a missing environment explanation is a named file:line fault in tree.');
+
   const files22 = ['reference-demo', 'reference-sample', 'scarf'].map((key) => `examples/${key}/expected/check.json`);
   const records22 = files22.map((file) => [file, text.find(([path]) => path === file)?.[1] ?? ''] as const);
   const held22 = records22.flatMap(([file, record]) => seamExampleFaults(file, record));

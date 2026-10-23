@@ -747,7 +747,257 @@
      40
     ]
    }
-  ]
+  ],
+  "worlds": {
+   "default": {
+    "wind": [
+     1,
+     0
+    ],
+    "gravity": [
+     0,
+     1
+    ],
+    "status": "REPORTED",
+    "rows": [
+     {
+      "pair": "thigh_r|shin_r",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 0,
+       "worst": null
+      }
+     },
+     {
+      "pair": "shin_r|foot_r",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 0,
+       "worst": null
+      }
+     },
+     {
+      "pair": "thigh_l|shin_l",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 0,
+       "worst": null
+      }
+     },
+     {
+      "pair": "shin_l|foot_l",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 0,
+       "worst": null
+      }
+     },
+     {
+      "pair": "upperarm_l|forearm_l",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 4,
+       "worst": {
+        "index": 4,
+        "px": 4,
+        "cell": 1.000000054446045,
+        "box": [
+         165.0000089835974,
+         831.0000452446634,
+         171.0000093102737,
+         837.0000455713396
+        ]
+       }
+      }
+     },
+     {
+      "pair": "upperarm_r|forearm_r",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 5,
+       "worst": {
+        "index": 26,
+        "px": 5,
+        "cell": 0.9999999812465508,
+        "box": [
+         -178.99999664313256,
+         813.9999847346924,
+         -163.9999969244343,
+         828.9999844533905
+        ]
+       }
+      }
+     }
+    ],
+    "dir": "seam_motion/default"
+   },
+   "still": {
+    "wind": [
+     0,
+     0
+    ],
+    "gravity": [
+     0,
+     1
+    ],
+    "status": "REPORTED",
+    "rows": [
+     {
+      "pair": "thigh_r|shin_r",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 0,
+       "worst": null
+      }
+     },
+     {
+      "pair": "shin_r|foot_r",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 0,
+       "worst": null
+      }
+     },
+     {
+      "pair": "thigh_l|shin_l",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 0,
+       "worst": null
+      }
+     },
+     {
+      "pair": "shin_l|foot_l",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 0,
+       "worst": null
+      }
+     },
+     {
+      "pair": "upperarm_l|forearm_l",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 4,
+       "worst": {
+        "index": 4,
+        "px": 4,
+        "cell": 1.000000054446045,
+        "box": [
+         165.0000089835974,
+         831.0000452446634,
+         171.0000093102737,
+         837.0000455713396
+        ]
+       }
+      }
+     },
+     {
+      "pair": "upperarm_r|forearm_r",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 5,
+       "worst": {
+        "index": 26,
+        "px": 5,
+        "cell": 0.9999999812465508,
+        "box": [
+         -178.99999664313256,
+         813.9999847346924,
+         -163.9999969244343,
+         828.9999844533905
+        ]
+       }
+      }
+     }
+    ],
+    "dir": "seam_motion/still"
+   }
+  }
  },
  "CLOTH_SETTLES": {
   "status": "WARN",
