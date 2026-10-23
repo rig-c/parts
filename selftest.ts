@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { parseAltArg } from './tools/alternate-cli.ts';
 import { encodeCheckReceipt, readBuildReceipt, readBuildChild, selectedRigcCommand } from './tools/build-process.ts';
 import { runConfigWriteChecks } from './tools/check_configwrite.ts';
 import { runCorePointerChecks } from './tools/check_corepointer.ts';
@@ -4668,6 +4669,90 @@ function usageDrift(run: (args: string[]) => { status: number; out: string }, su
 function runCliSuite(): number {
   section('cli: the command surface');
   const { say, bad } = counter();
+  const altLexCases = [
+    {
+      "value": "side=C:\\x\\y:C:\\x\\full:abc1234",
+      "expected": {
+        "name": "side",
+        "source": "C:\\x\\y",
+        "full": "C:\\x\\full",
+        "head": "abc1234"
+      }
+    },
+    {
+      "value": "side=C:\\x\\y:C:\\x\\full",
+      "expected": {
+        "name": "side",
+        "source": "C:\\x\\y",
+        "full": "C:\\x\\full"
+      }
+    },
+    {
+      "value": "side=c:/x/y:D:/x/full:E:/x/head",
+      "expected": {
+        "name": "side",
+        "source": "c:/x/y",
+        "full": "D:/x/full",
+        "head": "E:/x/head"
+      }
+    },
+    {
+      "value": "side=C:\\x y\\p.png:C:\\x y\\full:head",
+      "expected": {
+        "name": "side",
+        "source": "C:\\x y\\p.png",
+        "full": "C:\\x y\\full",
+        "head": "head"
+      }
+    },
+    {
+      "value": "side=/x/y:/x/full:abc1234",
+      "expected": {
+        "name": "side",
+        "source": "/x/y",
+        "full": "/x/full",
+        "head": "abc1234"
+      }
+    },
+    {
+      "value": "side=/x/y:/x/full",
+      "expected": {
+        "name": "side",
+        "source": "/x/y",
+        "full": "/x/full"
+      }
+    },
+    {
+      "value": "side=paint.png:layers/full:layers/head",
+      "expected": {
+        "name": "side",
+        "source": "paint.png",
+        "full": "layers/full",
+        "head": "layers/head"
+      }
+    },
+    {
+      "value": "side=a:b:c",
+      "expected": {
+        "name": "side",
+        "source": "a",
+        "full": "b",
+        "head": "c"
+      }
+    }
+  ];
+  const altLexResults = altLexCases.map(row => parseAltArg(row.value));
+  const oldDriveFields = altLexCases.slice(0, 2).map(row => row.value.slice(row.value.indexOf('=') + 1).split(':'));
+  say('CL225_ALT_LEXER_KEEPS_DRIVE_PREFIX_COLONS_AND_EXISTING_POSIX_FIELDS_BYTE_FOR_BYTE',
+    altLexResults.every((value, i) => JSON.stringify(value) === JSON.stringify(altLexCases[i].expected)) && oldDriveFields.every(fields => fields.length > 3),
+    'two Windows absolute paths, optional abc1234 head, forward-slash drives, spaces, POSIX and relative paths retain their exact fields; the old split rejects both required drive controls',
+    'a drive prefix is part of its one path, not another alternate input; no canonicalization or new path syntax is involved');
+  const badAltLexCases = ["side=source","side=source:full:head:extra","=source:full",".side=source:full","a/b=source:full","a\\b=source:full","side=:full","side=source:","side=source:full:","side=C:\\x\\y::head","side=C:\\x\\y:C:\\x\\full:","side=C:\\x\\y:C:\\x\\full:head:extra"];
+  const badAltLexResults = badAltLexCases.map(value => parseAltArg(value));
+  say('CL226_ALT_LEXER_STILL_REFUSES_MISSING_EXTRA_EMPTY_AND_UNSAFE_NAME_SEGMENTS',
+    badAltLexResults.every(value => typeof value === 'string' && value.startsWith('--alt ')),
+    badAltLexResults.length + ' planted malformed inputs are refused by the existing usage messages',
+    'keeping a leading drive colon must not accept an empty source/full/head, a fourth field, or a forbidden set name');
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { version: string };
   const v = runCli(['--version']);
   say(

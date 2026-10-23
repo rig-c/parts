@@ -41,6 +41,7 @@
     "cli.ts",
     "tools/configwrite.ts",
     "tools/build-process.ts",
+    "tools/alternate-cli.ts",
     "src",
     "workflows",
     "docs/AUTHORING.md",
