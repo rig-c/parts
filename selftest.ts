@@ -18718,7 +18718,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const nowhere = refusals(() => findRigc(dir, ''));
     say(
       'CK07_RIGC_IS_FOUND_BESIDE_THE_PACKAGE_AND_A_MISS_IS_REFUSED_NAMING_WHERE_IT_LOOKED',
-      found.endsWith(join('node_modules', '.bin', 'rigc')) && codes(nowhere).startsWith('CHECK_RIGC_PRESENT') && (nowhere?.problems[0].detail.includes(join(dir, 'node_modules', '.bin', 'rigc')) ?? false),
+      found === packageRigc(ROOT) && codes(nowhere).startsWith('CHECK_RIGC_PRESENT') && (nowhere?.problems[0].detail.includes(join(dir, 'node_modules', '.bin', 'rigc')) ?? false),
       `from the package: ${relative(ROOT, found)}; from ${relative(tmpdir(), dir)} with an empty PATH: ${nowhere?.problems[0].detail.slice(0, 120) ?? 'found one'}…`,
       'a missing rigc must say which binary and where it looked, not surface as a spawn error',
     );
@@ -19946,7 +19946,7 @@ function runRigcIdentityCases(say: (name: string, ok: boolean, detail: string, w
     const pinned = refusals(() => packageRigc(nested));
     const oldCheck = refusals(() => runCheck(rig, join(dir, 'out-old'), rigcRunnerAt(old, spawnRigc)));
     const olderCheck = refusals(() => runCheck(rig, join(dir, 'out-older'), rigcRunnerAt(older, spawnRigc)));
-    const own = join(ROOT, 'node_modules', '.bin', 'rigc');
+    const own = packageRigc(ROOT);
     // TY10 holds this actual CLI version to the installed manifest; check reads generated data only.
     const ownVersionCall = spawnRigc(own, ['--version']);
     const ownVersion = ownVersionCall.out.trim().split('\n')[0];
@@ -22362,7 +22362,7 @@ function runBuildSuite(): number {
     const selectedOutput = selectedRan.status === 0 ? JSON.parse(selectedRan.stdout) as { argv?: unknown; root?: unknown } : null;
     say('BU267_WINDOWS_PACKAGE_LAUNCH_USES_THE_SELECTED_METADATA_ENTRY_WITH_LITERAL_ARGV',
       selected.prefix.length === 1 && realpathSync.native(selected.prefix[0]) === realpathSync.native(declaredEntry) &&
-      selectedRan.status === 0 && JSON.stringify(selectedOutput?.argv) === JSON.stringify(literalArgs) && selectedOutput?.root === dirname(declaredEntry),
+      selectedRan.status === 0 && JSON.stringify(selectedOutput?.argv) === JSON.stringify(literalArgs) && typeof selectedOutput?.root === 'string' && realpathSync.native(selectedOutput.root) === realpathSync.native(dirname(declaredEntry)),
       'selected package metadata names a nonstandard entry under a spaced directory; exact argv and launcher location survive; stderr ' + JSON.stringify(selectedRan.stderr),
       'the selected launcher keeps its own module-resolution anchor; entering core directly or shell-interpreting argv would change this control');
     writeFileSync(identityBin, validShim + 'echo custom behavior\n');
@@ -22379,6 +22379,37 @@ function runBuildSuite(): number {
       selectedRigcCommand(identityBin, 'linux').command === identityBin,
       'custom extra behavior, another target/package and missing metadata entry are refused by name; ordinary non-Windows executable identity is unchanged',
       'finding some ambient rig-c is not proof that it owns the selected executable');
+
+    // Windows Bun installs a native rigc.exe with a rigc.bunx companion, not an extensionless file.
+    const discoveryRoot = join(dir, 'launcher shapes');
+    const discoveryBin = join(discoveryRoot, 'node_modules', '.bin');
+    const nestedDiscovery = join(discoveryRoot, 'nested');
+    const pathDiscovery = join(dir, 'launcher path');
+    mkdirSync(discoveryBin, { recursive: true }); mkdirSync(nestedDiscovery); mkdirSync(pathDiscovery);
+    const nativeRigc = join(discoveryBin, 'rigc.exe');
+    const companionRigc = join(discoveryBin, 'rigc.bunx');
+    writeFileSync(companionRigc, 'companion is not executable');
+    const companionPackage = threw(() => packageRigc(discoveryRoot, 'win32'));
+    const companionFind = threw(() => findRigc(nestedDiscovery, '', 'win32'));
+    writeFileSync(nativeRigc, 'native launcher fixture');
+    const ownNative = packageRigc(discoveryRoot, 'win32');
+    const walkedNative = findRigc(nestedDiscovery, '', 'win32');
+    const pinnedMissing = threw(() => packageRigc(nestedDiscovery, 'win32'));
+    const pathNative = join(pathDiscovery, 'rigc.exe');
+    writeFileSync(pathNative, 'PATH launcher fixture');
+    const emptyDiscovery = join(dir, 'empty discovery'); mkdirSync(emptyDiscovery);
+    const foundPathNative = findRigc(emptyDiscovery, pathDiscovery, 'win32');
+    writeFileSync(join(discoveryBin, 'rigc'), 'extensionless launcher fixture');
+    const preferred = packageRigc(discoveryRoot, 'win32');
+    const missingShape = threw(() => findRigc(emptyDiscovery, '', 'win32'));
+    say('BU270_WINDOWS_RIGC_DISCOVERY_KEEPS_PACKAGE_AND_PATH_IDENTITY_AND_NAMES_MISSING_SHAPES',
+      ownNative === nativeRigc && walkedNative === nativeRigc && foundPathNative === pathNative &&
+      selectedRigcCommand(ownNative, 'win32').command === nativeRigc && selectedRigcCommand(ownNative, 'win32').prefix.length === 0 &&
+      preferred === join(discoveryBin, 'rigc') && pinnedMissing?.includes('CHECK_RIGC_PACKAGE') === true &&
+      [companionPackage, companionFind, missingShape].every(message => message?.includes('rigc.exe') && message.includes('rigc.bunx')) &&
+      companionPackage?.includes('CHECK_RIGC_PACKAGE') === true && companionFind?.includes('CHECK_RIGC_PRESENT') === true,
+      'rigc.exe is selected unchanged; an extensionless launcher keeps precedence; package lookup never walks upward; PATH follows local lookup; a lone rigc.bunx is refused and both executable shapes are named',
+      'a companion file is not an executable, and discovering a Windows launcher must not substitute another package or enter its compiler directly');
 
     const actualReceipt = join(dir, 'actual-refusal.json');
     const actualChild = join(dir, 'actual-refusal.ts');
