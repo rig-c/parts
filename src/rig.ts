@@ -185,6 +185,11 @@ import { DISTANCE_EXPONENT, type FloorForm, type Influence, influences, type Inf
 /** Transparent pixels added round every part image — the reference's `PAD`. */
 export const PAD = 4;
 
+/** Issue #671: the MIGRATION entry for 1.37.0's arm split (#490), by its heading's anchor. */
+export const ARM_SPLIT_MIGRATION = 'docs/MIGRATION.md#after-1370-merged-arm-layers-are-split-issue-490';
+/** Issue #671: the command that adds only what a config lacks for the arm split's parts: their plan rows and their entries. */
+export const ARM_SPLIT_REMEDY = 'rig-parts propose --parts <parts> --source <painting> --out <dir> --write-config <config> --only-missing';
+
 /**
  * The places a bone's rotation and every local offset (a bone's `x, y`, a
  * weight's bind `x, y`, a region's `x, y` and `rotation`) are written to.
@@ -1401,6 +1406,11 @@ export function buildRig(
   }
 
   // ---- parts ↔ config ----------------------------------------------------
+  // Issue #671: a part 1.37.0's arm split (#490) makes from the full run is new to a config proposed before it.
+  const armSplitHint = (from: string): string =>
+    /^full:(drape|hand)-[rl]$/.test(from)
+      ? ` — the full run's merged arm layer was split into this part (issue #490, from 1.37.0), which a config proposed before 1.37.0 does not name; see ${ARM_SPLIT_MIGRATION}, and add only its plan row and entry with: ${ARM_SPLIT_REMEDY}`
+      : '';
   const where = (part: string): string => `parts.json holds ${parts.parts.length} part(s): ${parts.parts.map((p) => p.name).join(', ')}`;
   for (const part of Object.keys(cfg.meshes)) if (!byPart.has(part)) fail('RIG_PART_PRESENT', `config.meshes.${part}`, `names the part "${part}", which is not in parts.json; ${where(part)}`);
   for (const [part, bone] of Object.entries(cfg.regions)) {
@@ -1421,7 +1431,7 @@ export function buildRig(
   for (const p of parts.parts) {
     const inM = p.name in cfg.meshes;
     const inR = p.name in cfg.regions;
-    if (!inM && !inR) fail('RIG_PART_ATTACHED', `part "${p.name}"`, 'is in parts.json and has neither a config.meshes nor a config.regions entry; exactly one is required');
+    if (!inM && !inR) fail('RIG_PART_ATTACHED', `part "${p.name}"`, `is in parts.json and has neither a config.meshes nor a config.regions entry; exactly one is required${armSplitHint(p.from)}`);
     if (inM && inR) fail('RIG_PART_ATTACHED', `part "${p.name}"`, 'has both a config.meshes and a config.regions entry; exactly one is required');
     else if (inM && readFrom(p.from)?.run === PAINTING_RUN) {
       fail('RIG_PART_ATTACHED', `part "${p.name}"`, `is a painting patch (${p.from}) and has a config.meshes entry; a patch is a region — config.regions.${p.name} names its bone`);

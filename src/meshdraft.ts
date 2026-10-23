@@ -589,6 +589,11 @@ export interface ConfigEdit {
   path: readonly (string | number)[];
   value: unknown;
   insert?: boolean;
+  /**
+   * With `insert` (issue #671): in an array written on one line, the element goes in as `JSON.stringify(value)`
+   * beside its neighbours on that line, so a one-line plan stays one line; elsewhere it changes nothing.
+   */
+  inline?: boolean;
 }
 
 /** The span at `path`, or null where the path does not resolve (a key absent, or a step that is not an object). */
@@ -607,10 +612,18 @@ function indentAt(text: string, at: number): string {
 }
 
 /** An element inserted into the array at `arrayPath` before its element `index` (at its length: after the last). */
-function insertElement(text: string, arrayPath: readonly (string | number)[], index: number, value: unknown): string {
+function insertElement(text: string, arrayPath: readonly (string | number)[], index: number, value: unknown, inline = false): string {
   const arr = spanOrNull(text, arrayPath);
   if (arr === null || text[arr.start] !== '[') throw new Error(`splicedEdits: ${arrayPath.join('.') || 'the document'} is not an array`);
   const next = spanOrNull(text, [...arrayPath, index]);
+  if (inline && !text.slice(arr.start, arr.end).includes('\n')) {
+    const body = JSON.stringify(value);
+    if (next !== null) return `${text.slice(0, next.start)}${body},${text.slice(next.start)}`;
+    const last = index > 0 ? spanOrNull(text, [...arrayPath, index - 1]) : null;
+    if (index > 0 && last === null) throw new Error(`splicedEdits: ${arrayPath.join('.')} has no element ${index - 1}`);
+    if (last === null) return `${text.slice(0, arr.start + 1)}${body}${text.slice(arr.end - 1)}`;
+    return `${text.slice(0, last.end)},${body}${text.slice(last.end)}`;
+  }
   if (next !== null) {
     // Before the element: the new one takes its line, and the old one follows on a line of its own at the same indent.
     const indent = indentAt(text, next.start);
@@ -626,11 +639,11 @@ function insertElement(text: string, arrayPath: readonly (string | number)[], in
 }
 
 /** One edit on `text`; every byte it does not name is the input's. */
-function spliceOne(text: string, path: readonly (string | number)[], value: unknown, insert = false): string {
+function spliceOne(text: string, path: readonly (string | number)[], value: unknown, insert = false, inline = false): string {
   const step = path[path.length - 1];
   if (insert) {
     if (typeof step !== 'number') throw new Error(`splicedEdits: an insert names an array index; ${path.join('.')} does not`);
-    return insertElement(text, path.slice(0, -1), step, value);
+    return insertElement(text, path.slice(0, -1), step, value, inline);
   }
   const at = spanOrNull(text, path);
   if (value === undefined) {
@@ -694,7 +707,7 @@ function firstMoved(got: unknown, want: unknown, path: readonly string[]): strin
  */
 export function splicedEdits(text: string, edits: readonly ConfigEdit[]): { text: string; moved: string | null } {
   let out = text;
-  for (const e of edits) out = spliceOne(out, e.path, e.value, e.insert === true);
+  for (const e of edits) out = spliceOne(out, e.path, e.value, e.insert === true, e.inline === true);
   const want = JSON.parse(text) as Record<string, unknown>;
   for (const e of edits) {
     let o: Record<string | number, unknown> | unknown[] = want;

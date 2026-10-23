@@ -342,6 +342,76 @@ What to do: nothing. A warning names the pair, the animation, the frames and the
 an opening that is not intended wants a cap that covers the turn, or a motion that bends
 less.
 
+## After 1.37.0: merged arm layers are split (issue #490)
+
+Issue #490 splits a full-run `handwear-<s>` layer that See-through merged — the sleeve,
+the bare hand at `<s>_wrist`, and an overgarment drape reaching more than a forearm's
+length below the wrist, the drape's colour at least 80 off the sleeve's — into
+`drape-<s>`, `handwear-<s>` and `hand-<s>`, whenever the config carries
+`generation.control.skeleton` (the wrist and the forearm are read off it). `assemble`
+rewrites a plan's lone `full` `handwear-<s>` row into three: `drape_<s>` behind, the
+row's own part (the sleeve, which keeps `handwear-<s>`), and `hand_<s>` in front.
+
+Who is affected: a config proposed before 1.37.0 whose plan takes `handwear-<s>` from
+the full run and that carries `generation.control.skeleton` — and only where that layer
+is a merged arm run; a config whose arm layer holds the sleeve alone builds as before.
+Its `meshes` and `regions` never named the two new parts, so `rig` refuses each by name
+(issue #671):
+
+```
+RIG_PART_ATTACHED: part "drape_r" — is in parts.json and has neither a config.meshes nor a config.regions entry; exactly one is required — the full run's merged arm layer was split into this part (issue #490, from 1.37.0), …
+```
+
+| change | before | after |
+| --- | --- | --- |
+| `assemble.plan` as `assemble` reads it, a lone `["<name>", "full", "handwear-<s>"]` row over a merged arm run | the row | `["drape_<s>", "full", "drape-<s>"]`, the row, `["hand_<s>", "full", "hand-<s>"]` |
+| `parts.json` | one part holding sleeve, hand and drape | `drape_<s>` (`full:drape-<s>`), the sleeve part (`full:handwear-<s>`), `hand_<s>` (`full:hand-<s>`) |
+| `rig` on a config without entries for them | — | `RIG_PART_ATTACHED` for each, the detail naming this entry and `--only-missing` |
+| `propose … --write-config <config> --only-missing` | — | new (issue #671): adds only the plan rows and entries the config lacks for them |
+
+What to do, keeping every entry you tuned — one command, after `assemble` has written
+the split parts:
+
+```
+rig-parts propose --parts <work/rig> --source <painting> --out <dir> --write-config config.json --only-missing
+```
+
+For each part the config attaches by neither `meshes` nor `regions`, it adds what is
+missing and nothing else (issue #671):
+
+- a part from `full:drape-<s>` or `full:hand-<s>` that `assemble.plan` does not name gains
+  its plan row where `assemble` rewrites it: `["drape_<s>", "full", "drape-<s>"]` just
+  before the row that takes `handwear-<s>` from the full run, `["hand_<s>", "full",
+  "hand-<s>"]` just after it. `assemble` then takes the plan as written and makes the
+  same `parts.json` byte for byte. The config loader reads `meshes` and `regions` against
+  the parts the plan makes, so the entries need the rows;
+- the part gains `meshes.<part>` or `regions.<part>` as the proposal drafts it.
+
+Every existing plan row, every existing entry, every other section and every other byte
+stays as read, each addition is spliced in alone, and stderr names each row and entry
+added. The full loader reads the result before it replaces the file: an entry on a bone
+your config does not declare is refused naming the part and the bone, and nothing is
+written. A second run with nothing missing changes no byte.
+
+Or by hand, the same four additions: the two plan rows above, and a region for each part.
+`propose` drafts both as regions: `hand_<s>` on the tip link of `sleeve_<s>` where it
+drafts a sleeve chain (a handwear part over 500 px, or the arm drafted from
+`--keypoints`; its note reads `hand_<s> (full:hand-<s>): split hand -> region on
+sleeve_<s>2, the tip link of sleeve_<s>` for a three-link chain); otherwise `hand_<s>`,
+like `drape_<s>` always, rides the trunk bone by its box's centre height — `head` above
+the neck line, `chest` above the hip, else `hip` (its note reads `drape_<s>
+(full:drape-<s>): no rule -> region on hip`). Confirm against the notes `propose` prints
+for your parts; the bone must be one your config declares.
+
+**An alternate set made before 1.37.0** that covers the split sleeve (a set over the part
+that takes `handwear-<s>`) still covers only that part. The split made `hand_<s>` and
+`drape_<s>` parts of their own, so while the set is active the base draws them beside the
+set's own sleeve art, which still holds the hand it was painted with. `check --set` then
+fails the set's seam (`CHECK_SEAM_WITHIN_BAR`, issue #671); its detail names the parts and
+this entry. What to do: add them to the set's `hides`, for example `"hides": ["hand_r",
+"drape_r"]`, or only `hand_<s>` if the set's painting still shows the base drape. This is
+a judgement on the set's own art, so `--only-missing` does not write it.
+
 ## After 1.38.0: cloth that comes to rest on the idle
 
 Issue #501 reads every physics chain by its tip on the idle `check` renders (physics on,

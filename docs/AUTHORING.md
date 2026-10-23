@@ -2888,9 +2888,10 @@ valued destination path. Its modes have different ownership:
 | `propose --head-box` | existing regular config | `seethrough.head_box` |
 | `assemble --propose-plan` | existing regular config; must name `--config` itself | `assemble.plan`, `assemble.extend_below_crop` |
 | ordinary `propose --parts` without `--cloth` | existing regular config | each present `PROPOSAL_CONFIG_SECTIONS` value: `bones`, `meshes`, `regions`, `limbs`, `motion`, `constraints`, `turn`, `proposed_rig_scale` |
+| ordinary `propose --parts … --only-missing` (issue #671) | existing regular config | only `meshes.<part>` or `regions.<part>`, as the proposal drafts it, for each proposed part the config attaches by neither, and an `assemble.plan` row for such a part from `full:drape-<s>` / `full:hand-<s>` the plan does not name (the drape just before the full run's `handwear-<s>` row, the hand just after it); added row by row and entry by entry, every existing row and entry and every other byte as read |
 | `propose --cloth <input.json>` | new file | the recipe's edits spliced into the cloth config; §3, *The config written*, gives entry ownership, hand-edit conflicts and `--from <previous.json>` |
 
-For the first three modes, each selected field replaces its whole value; other
+For the first three modes (not `--only-missing`), each selected field replaces its whole value; other
 fields and optional proposal sections not emitted are retained. Changed whole
 values are spliced into the original text through `splicedEdits`, preserving
 untouched bytes. `notes` stays in the proposal. The stage's loader validates a same-directory candidate before
@@ -2903,6 +2904,13 @@ of the proposing command. A refusal leaves the target config unchanged. The
 writer lists changes on stderr, keeping the existing head-box and plan JSON on
 stdout. Without the flag, no config is changed. `--from-config` proposes nothing
 and refuses this flag; `--from` belongs to the cloth mode only.
+`--only-missing` (issue #671) is the upgrade path for a config proposed before a stage
+made a part it never named — the 1.37.0 arm split's `drape_<s>` and `hand_<s>`
+([MIGRATION](MIGRATION.md#after-1370-merged-arm-layers-are-split-issue-490)): the same
+loader validates the candidate, so an added region on a bone the config does not
+declare is refused naming the part and the bone (`CONFIG_NAME_RESOLVES`); a part of any
+other origin gets no plan row; nothing missing keeps the bytes and mtime; stderr names each added row and entry. It is a usage error with `--head-box`, `--cloth`
+or `--from-config`, or without `--parts` or `--write-config`.
 All four modes use one file-writing adapter. Fresh cloth output keeps its
 already-checked splice text and intentional partial-config contract; the full
 loader is not imposed on it. Publication links the complete same-directory
@@ -3591,7 +3599,7 @@ says why each requirement exists and what breaks without it.
 
 | rule | means | change |
 | --- | --- | --- |
-| <a id="RIG_PART_PRESENT"></a><a id="RIG_PART_ATTACHED"></a>`RIG_PART_PRESENT`, `RIG_PART_ATTACHED` | a `meshes`/`regions` key that is not in `parts.json`, a part with neither, or a `painting:` part with a mesh | the config and the plan must name the same parts; a patch is a region |
+| <a id="RIG_PART_PRESENT"></a><a id="RIG_PART_ATTACHED"></a>`RIG_PART_PRESENT`, `RIG_PART_ATTACHED` | a `meshes`/`regions` key that is not in `parts.json`, a part with neither, or a `painting:` part with a mesh | the config and the plan must name the same parts; a patch is a region. A `drape_<s>` or `hand_<s>` from `full:drape-<s>` / `full:hand-<s>` is the 1.37.0 arm split's (issue #490), new to a config proposed before it: the detail names [MIGRATION](MIGRATION.md#after-1370-merged-arm-layers-are-split-issue-490), whose remedy is `propose … --write-config <config> --only-missing` (the two plan rows and the two entries) |
 | <a id="RIG_PNG_PRESENT"></a><a id="RIG_PNG_MATCHES_BOX"></a><a id="RIG_PART_HAS_ART"></a>`RIG_PNG_PRESENT`, `RIG_PNG_MATCHES_BOX`, `RIG_PART_HAS_ART` | a part's PNG is missing, the wrong size, or has no art pixel | re-run assemble |
 | <a id="RIG_NAME_RESOLVES"></a><a id="RIG_SEGMENT_DEFINED"></a><a id="RIG_CHAIN_POINTS"></a>`RIG_NAME_RESOLVES`, `RIG_SEGMENT_DEFINED`, `RIG_CHAIN_POINTS` | a segment names an undeclared bone, a bone with no `tip` and no next link, or a chain too short to make a link | that bone's `tip`, or write the segment out as `[bone, [x0,y0], [x1,y1]]` |
 | <a id="RIG_INFLUENCES_KEPT"></a>`RIG_INFLUENCES_KEPT` | a mesh's declared `influences` leaves a vertex with no bone: every capped share is under 0.03 (at or under it, for the continuous floor). The largest of k shares is at least 1/k, so this needs 34 or more kept bones; the default cap of 4 never reaches it (issue #284). The detail names the first vertex, how many more, and its largest share | declare `maxInfluences` 33 or less, or name fewer bones in `segments` |

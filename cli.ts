@@ -279,6 +279,24 @@ usage:
       keeps the original bytes and mtime. A changed source, an artifact alias
       or a failed write is refused by name. Change lines go to stderr.
 
+  rig-parts propose --parts <dir> --source <painting.png> --out <dir> --write-config <config.json> --only-missing
+      Add to the existing config only what it lacks for the parts it attaches
+      by neither meshes.<part> nor regions.<part> (issue #671: a config proposed
+      before 1.37.0 meets the drape_<s> and hand_<s> parts the arm split makes,
+      issue #490; docs/MIGRATION.md). A part from full:drape-<s> or
+      full:hand-<s> that assemble.plan does not name gains its plan row where
+      assemble's rewrite puts it: the drape just before the full run's
+      handwear-<s> row, the hand just after it. Each part then gains its entry
+      as the proposal drafts it. Each row and entry is spliced in alone; every
+      existing row and entry and every other byte stays as read, and nothing
+      else of the proposal (bones, motion, …) is written. An unplanned part of
+      any other origin gets no row. The full config loader validates the
+      candidate first, so an added entry on a bone the config does not declare
+      is refused naming the part and the bone, and nothing is written. Nothing
+      missing keeps the bytes and mtime. One change line per added row and
+      entry goes to stderr. A usage error with --head-box, --cloth or
+      --from-config, or without --parts or --write-config.
+
   rig-parts propose --head-box --full <dir | layers.json | file.psd> --canvas <W>x<H> [--no-back-hair]
                          [--write-config <config.json>]
       Propose seethrough.head_box (source px, square) from the full run's
@@ -984,7 +1002,7 @@ const TAKES = {
   layers: { valued: ['--export', '--template', '--canvas'], switches: [] },
   sheet: { valued: ['--source', '--layers', '--out', '--cell', '--cols'], switches: [] },
   rig: { valued: ['--config', '--parts', '--out', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
-  propose: { valued: ['--parts', '--source', '--out', '--from-config', '--compare', '--full', '--head', '--canvas', '--keypoints', '--person', '--wrist-snap', '--grid-rule', '--cloth', '--write-config', '--from'], switches: ['--head-box', '--no-back-hair'] },
+  propose: { valued: ['--parts', '--source', '--out', '--from-config', '--compare', '--full', '--head', '--canvas', '--keypoints', '--person', '--wrist-snap', '--grid-rule', '--cloth', '--write-config', '--from'], switches: ['--head-box', '--no-back-hair', '--only-missing'] },
   compare: { valued: ['--left', '--right', '--map'], switches: [] },
   check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--requirements', '--set', '--environment'], switches: ['--seam-pairs', '--keep-stills', '--all-sets'] },
   loop: { valued: ['--frames', '--out'], switches: ['--palette'] },
@@ -1306,10 +1324,16 @@ function cmdPropose(args: string[]): number {
   const flags = new Map<string, string>();
   let headBox = false;
   let noBackHair = false;
+  let onlyMissing = false;
   for (let i = 0; i < args.length; i++) {
     const flag = args[i];
     if (flag === '--head-box') {
       headBox = true;
+      continue;
+    }
+    if (flag === '--only-missing') {
+      if (onlyMissing) return usage('--only-missing is given twice');
+      onlyMissing = true;
       continue;
     }
     if (flag === '--no-back-hair') {
@@ -1323,6 +1347,16 @@ function cmdPropose(args: string[]): number {
     if (flags.has(flag)) return usage(`${flag} is given twice`);
     flags.set(flag, value);
     i++;
+  }
+  // Issue #671: --only-missing adds entries to an existing config for the parts it attaches by neither section; it
+  // belongs to the ordinary proposal's --write-config alone.
+  if (onlyMissing) {
+    const mode = 'propose --parts … --write-config <config.json> --only-missing';
+    if (headBox) return usage(`--only-missing belongs to ${mode}; --head-box writes seethrough.head_box only`);
+    if (!flags.has('--parts')) return usage(`--only-missing belongs to ${mode}; give --parts <dir>, the parts the entries are drafted from`);
+    if (flags.has('--from-config')) return usage(`--only-missing belongs to ${mode}; --from-config proposes nothing`);
+    if (flags.has('--cloth')) return usage(`--only-missing belongs to ${mode}; --cloth writes a new config with the recipe's entries spliced in`);
+    if (!flags.has('--write-config')) return usage(`--only-missing belongs to ${mode}; give --write-config <config.json>, the existing config the entries are added to`);
   }
   let staged: StagedConfigWrite | null = null;
   try {
@@ -1480,7 +1514,7 @@ function cmdPropose(args: string[]): number {
     })();
     const bfile = basisFile(P, prop, basis, cfg === null || cmpPath === undefined ? null : { where: cmpPath, config: cfg });
     const img = drawLandmarks(P, painting, prop.bones, 'PROPOSAL - CORRECT ME');
-    if (target !== null) staged = stageConfigWrite(target, { kind: 'proposal', proposal: prop, sections: PROPOSAL_CONFIG_SECTIONS });
+    if (target !== null) staged = stageConfigWrite(target, onlyMissing ? { kind: 'proposal-missing', proposal: prop, parts: P.recs } : { kind: 'proposal', proposal: prop, sections: PROPOSAL_CONFIG_SECTIONS });
     else if (written !== null) staged = stageConfigWrite({ kind: 'fresh', path: written.at, text: written.text });
     mkdirSync(render, { recursive: true });
     writeFileSync(join(out, 'proposal.json'), serializeProposal(prop));
