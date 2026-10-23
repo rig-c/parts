@@ -1719,7 +1719,7 @@ export function sweepCheckLines(line: SweepLine, steps: ReadonlyMap<string, { le
  * read nothing of (its SKIP) or the line could not read. A SKIP with nothing declared prints its reason alone.
  */
 export function motionSeamLines(line: MotionSeamLine, plant: MotionSeamPlant = {}): string[] {
-  if (line.status === 'SKIP' && line.rows.length === 0 && line.pairs.every((p) => p.unread === undefined)) return [`${MOTION_SEAM_LINE}: SKIP — ${String(line.reason)}`];
+  if (line.worlds === undefined && line.status === 'SKIP' && line.rows.length === 0 && line.pairs.every((p) => p.unread === undefined)) return [`${MOTION_SEAM_LINE}: SKIP — ${String(line.reason)}`];
   const read = `${line.pairs.length} declared pair(s) in ${line.animations.length} animation(s) (${line.animations.join(', ')}), read by rigc render --seam at ${line.fps} fps on the build as played`;
   const head =
     line.status === 'SKIP'
@@ -1731,6 +1731,19 @@ export function motionSeamLines(line: MotionSeamLine, plant: MotionSeamPlant = {
     ...line.rows.filter((r) => r.status === 'skip').map((r) => `seam "${r.pair}" in "${r.animation}": SKIP — rigc read no band on any of the ${r.drawn} frame(s) both slots draw, so there is no seam to read`),
     ...(plant.silent === true ? [] : line.rows.filter((r) => r.opens.length > 0).map(motionSeamWarnText)),
     ...line.rows.filter((r) => r.opens.length === 0 && r.under_floor.length > 0).map((r) => `seam "${r.pair}" in "${r.animation}": under the floor — rigc names ${r.under_floor.length} frame(s) open ${frameRuns(r.under_floor)}, each opening one cell thick`),
+    ...(line.worlds === undefined ? [] : (['default', 'still'] as const).flatMap(name => {
+      const w = line.worlds?.[name];
+      if (w === undefined) return [];
+      const label = 'seam world "' + name + '"';
+      const header = label + ' wind [' + w.wind.join(', ') + '], gravity [' + w.gravity.join(', ') + ']: ' + w.status +
+        (w.status === 'SKIP' ? ' — ' + String(w.reason) : ' — raw gap/ghost cell counts, informational, not judged');
+      return [header, ...w.rows.map(r => {
+        const head = label + ' "' + r.pair + '" in "' + r.animation + '": ';
+        if (r.status === 'skip') return head + 'SKIP — rigc read no band';
+        const at = (kind: typeof r.gap) => kind.worst === null ? 'none' : 'frame ' + kind.worst.index + ' (t = ' + kind.worst.index / line.fps + 's)';
+        return head + 'gap ' + r.gap.max_px + ' cell(s), worst ' + at(r.gap) + '; ghost ' + r.ghost.max_px + ' cell(s), worst ' + at(r.ghost);
+      })];
+    })),
   ];
 }
 

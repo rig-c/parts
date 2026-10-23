@@ -160,7 +160,7 @@ import {
 } from './requirements.ts';
 import { RIG_BONE_INHERIT, type RigSpec as RigcRigSpec } from 'rig-c/src/rig.ts';
 import { expandStops } from 'rig-c/src/stop.ts';
-import { ENVIRONMENT_SPEC, EnvironmentError, readEnvironmentSchedule } from 'rig-c/src/environment.ts';
+import { ENVIRONMENT_SPEC, EnvironmentError, environmentResponse, readEnvironmentSchedule } from 'rig-c/src/environment.ts';
 import { alphaComposite } from './raster/composite.ts';
 import { readPng, writePng } from './raster/png.ts';
 import { newFloatImage, newRaster, type Raster } from './raster/types.ts';
@@ -3561,6 +3561,8 @@ export interface MotionSeamLine {
   /** Rows with a frame over the floor: the WARN lines. */
   warnings: number;
   rows: MotionSeamRow[];
+  /** Physics-only reference worlds (issue #591); do not participate in warnings or bars. */
+  worlds?: MotionSeamWorlds;
 }
 
 /**
@@ -3617,7 +3619,63 @@ export interface MotionSeamPlant {
   silent?: true;
 }
 
-type SeamHitRead = { index: number; px: number; cell: number; box: [number, number, number, number] };
+
+/** One raw opening, in rigc cells; its frame time is index / the line's fps. */
+export interface MotionSeamHit {
+  index: number;
+  px: number;
+  cell: number;
+  box: [number, number, number, number];
+}
+export interface MotionSeamWorldKind {
+  frames: MotionSeamHit[];
+  max_px: number;
+  worst: MotionSeamHit | null;
+}
+/** Raw gap and ghost readings, including cells under the warning floor. */
+export interface MotionSeamWorldRow {
+  pair: string;
+  animation: string;
+  status: 'read' | 'skip';
+  drawn: number;
+  banded: number;
+  gap: MotionSeamWorldKind;
+  ghost: MotionSeamWorldKind;
+}
+export interface MotionSeamWorld {
+  wind: [number, number];
+  gravity: [number, number];
+  status: 'REPORTED' | 'SKIP';
+  reason?: string;
+  rows: MotionSeamWorldRow[];
+}
+export interface MotionSeamWorlds {
+  default: MotionSeamWorld;
+  still: MotionSeamWorld;
+}
+
+/** No callback and no output for nonphysics; a wind no constraint answers is not measured. */
+export function motionSeamWorlds(physics: boolean, answersWind: boolean, read: (world: 'default' | 'still') => MotionSeamWorldRow[]): MotionSeamWorlds | undefined {
+  if (!physics) return undefined;
+  const world = (wind: [number, number], rows: MotionSeamWorldRow[], reason?: string): MotionSeamWorld => {
+    const measured = rows.some(r => r.status === 'read');
+    return { wind, gravity: [0, 1], status: measured ? 'REPORTED' : 'SKIP',
+      ...(measured ? {} : { reason: reason ?? 'rigc read no band on any frame of any declared pair in any animation' }), rows };
+  };
+  return {
+    default: world([1, 0], read('default')),
+    still: answersWind ? world([0, 0], read('still')) : world([0, 0], [], 'no physics constraint answers wind; still air is not separately measurable'),
+  };
+}
+
+/** The same validated sidecars as the warning, retaining the raw gap and ghost cells. */
+export function readMotionSeamWorldRows(dir: string, animations: readonly string[], fps: number, pairs: readonly MotionSeamPair[]): MotionSeamWorldRow[] {
+  const rows: MotionSeamWorldRow[] = [];
+  readMotionSeams(dir, animations, fps, pairs, {}, rows);
+  return rows;
+}
+
+type SeamHitRead = MotionSeamHit;
 
 /**
  * The rows of one `rigc render --seam` run over every animation: `frames.json`
@@ -3626,7 +3684,7 @@ type SeamHitRead = { index: number; px: number; cell: number; box: [number, numb
  * file that is missing, a file that is not the animation's or not at the rate
  * asked, a pair out of the flag's order, and a field of the wrong shape.
  */
-export function readMotionSeams(dir: string, animations: readonly string[], fps: number, pairs: readonly MotionSeamPair[], plant: MotionSeamPlant = {}): MotionSeamRow[] {
+export function readMotionSeams(dir: string, animations: readonly string[], fps: number, pairs: readonly MotionSeamPair[], plant: MotionSeamPlant = {}, worldRows?: MotionSeamWorldRow[]): MotionSeamRow[] {
   const problems: Problem[] = [];
   const bad = (object: string, detail: string): void => {
     problems.push({ code: 'FRAMES_SIDECAR', object, detail });
@@ -3663,6 +3721,7 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
         return;
       }
       const over = new Map<number, number>();
+      const kinds: Record<'gap' | 'ghost', MotionSeamWorldKind> = { gap: { frames: [], max_px: 0, worst: null }, ghost: { frames: [], max_px: 0, worst: null } };
       for (const kind of ['gap', 'ghost'] as const) {
         const k = p[kind];
         const frames = isRecord(k) && Array.isArray(k.frames) ? k.frames.map(hitOf) : null;
@@ -3670,8 +3729,12 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
           bad(`${at} ${kind}`, 'is not { frames: [{ index, px, cell, box }…], spans, worst } as rigc-seam/1 writes it');
           return;
         }
-        for (const h of frames as SeamHitRead[]) if (plant.noFloor === true || openingOverFloor(h)) over.set(h.index, Math.max(over.get(h.index) ?? 0, h.px));
+        const hits = frames as SeamHitRead[];
+        const worst = hits.reduce<MotionSeamHit | null>((best, h) => best === null || h.px > best.px || (h.px === best.px && h.index < best.index) ? h : best, null);
+        kinds[kind] = { frames: hits, max_px: worst?.px ?? 0, worst };
+        for (const h of hits) if (plant.noFloor === true || openingOverFloor(h)) over.set(h.index, Math.max(over.get(h.index) ?? 0, h.px));
       }
+      worldRows?.push({ pair: want.pair, animation, status: p.status, drawn: p.drawn, banded: p.banded, gap: kinds.gap, ghost: kinds.ghost });
       const opens = [...over.keys()].sort((x, y) => x - y);
       rows.push({
         pair: want.pair,
@@ -4412,7 +4475,25 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         const list = read.map((p) => `${p.a}:${p.b}`).join(',');
         const r = measured(['render', '--candidate', buildDir, '--seam', list, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', seamMotionDir]);
         if (r.status !== 0) refuseIfAny(rigcFailed(`render --seam ${list} --fps ${fps}`, r, r.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
-        motionSeam = motionSeamLine(pairs, animationNames, fps, readMotionSeams(seamMotionDir, animationNames, fps, read));
+        const activeWorldRows: MotionSeamWorldRow[] = [];
+        motionSeam = motionSeamLine(pairs, animationNames, fps, readMotionSeams(seamMotionDir, animationNames, fps, read, {}, stripped !== null && env === null ? activeWorldRows : undefined));
+        if (stripped !== null) {
+          const response = environmentResponse(readFileSync(join(buildDir, 'skeleton.json'), 'utf8'));
+          motionSeam.worlds = motionSeamWorlds(true, response.wind.length > 0, world => {
+            if (world === 'default' && env === null) return activeWorldRows;
+            const dest = join(seamMotionDir, world);
+            const args = ['render', '--candidate', buildDir, '--seam', list, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', dest];
+            if (world === 'still') {
+              const schedule = join(seamMotionDir, 'still.json');
+              writeFileSync(schedule, JSON.stringify({ spec: ENVIRONMENT_SPEC, steps: [{ t: 0, wind: [0, 0] }] }));
+              args.push('--environment', schedule);
+            }
+            // These reference worlds are independent of the caller's --environment.
+            const rendered = rigc(args);
+            if (rendered.status !== 0) refuseIfAny(rigcFailed('render --seam (' + world + ' reference world)', rendered, rendered.out.split('\n').filter(l => l.includes('FAIL') || l.includes('rigc:'))));
+            return readMotionSeamWorldRows(dest, animationNames, fps, read);
+          });
+        }
       } finally {
         rmSync(seamMotionDir, { recursive: true, force: true });
       }

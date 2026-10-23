@@ -3888,7 +3888,7 @@ measured). `build --loop` encodes a product and takes none. One line,
 `environment: <path>, rigc-environment/1, <n> step(s), sha256 <16 hex>`, says which
 schedule, and `check.json` carries `environment` — `path` as the command line gave it,
 the `sha256` of the bytes read, `steps` — after `pack_mode`; without the flag neither
-is written and no render argument moves.
+is written; the physics seam reference worlds below are separate probes.
 
 The world before the first step is the runtime's, so a still schedule is the one that
 states it: `{ "t": 0, "wind": [1, 0], "gravity": [0, 1] }` reads what a run without the
@@ -3899,6 +3899,8 @@ and it moves the readings: on the same fixture `TEXTURE_STRETCH` 1.382 → 1.214
 wind (1, 0), then (40, 0) from 0.5 s, reads `TEXTURE_STRETCH` 32.181 (FAIL, `hair_back`
 triangle 258), two meshes folding under `ANIMATIONS_DO_NOT_FOLD` (FAIL; none without the
 flag) and 8 `CLOTH_SETTLES` warnings for 9 (selftest `CK515`).
+
+**Physics seam environments** (issue #591). Default: wind [1, 0], gravity [0, 1]. Still: wind [0, 0], gravity [0, 1]. In rig-play, environment(null) returns to Default; still air requires an explicit wind [0, 0]. For a physics rig with readable declared pairs and animations, SEAM_OVER_MOTION adds optional `worlds.default` and `worlds.still` readings. They are informational raw gap/ghost cell counts (including cells below the warning floor), never new bars or warnings; neither changes PASS, exit status or the bar count. Each world records its vectors, status and rows; each row names its pair, animation, drawn/banded frames and gap/ghost frames, maximum and worst frame, cell size and world box. The original reading and any custom `--environment` schedule keep their existing meaning; the two reference worlds are independent of that schedule. A rig with no wind response reports Still as SKIP with its reason; no band is SKIP, never a measured zero. With no readable declared pair or animation no worlds block is written. Only existing declared pairs are read: neighbouring limb segments and explicit seam requirements; thigh/hem pairs are not inferred. Nonphysics output stays byte-identical, with no extra key, line or render. Reference renders start physics at frame 0 at 12 fps; they do not certify a composed player scene or another sampling rate. Malformed sidecars or renderer failures remain named refusals.
 
 ### compose
 
