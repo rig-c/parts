@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { encodeCheckReceipt, readBuildReceipt } from './tools/build-process.ts';
 import { runConfigWriteChecks } from './tools/check_configwrite.ts';
 import { runCorePointerChecks } from './tools/check_corepointer.ts';
 /**
@@ -22299,6 +22300,47 @@ function runBuildSuite(): number {
   const { say, bad } = counter();
   const dir = temp('build');
   try {
+    // Issue #689: the process boundary must reject a missing, red or malformed child, not invent a stage result.
+    const receipt = (stage: string, kind = 'done'): string => JSON.stringify({ version: 1, stage, kind });
+    const malformed = ['', '{', receipt('other'), receipt('rig'), receipt('assemble', 'unknown'), JSON.stringify({ version: 2, stage: 'assemble', kind: 'done' })];
+    const originalProblem = { code: 'FIXTURE_RULE', object: 'fixture', detail: 'found 2; required 1' };
+    const refusal = JSON.stringify({ version: 1, stage: 'rig', kind: 'refused', problems: [originalProblem] });
+    let carried: unknown;
+    try { readBuildReceipt('rig', 1, null, refusal); } catch (err) { carried = err; }
+    say('BU219_A_CHILD_REFUSAL_PRESERVES_THE_ORIGINAL_PROBLEM_AND_REJECTS_EMPTY_OR_MISMATCHED_REFUSALS',
+      carried instanceof PartsError && JSON.stringify(carried.problems) === JSON.stringify([originalProblem]) &&
+      threw(() => readBuildReceipt('rig', 0, null, refusal))?.includes('BUILD_STAGE_RESULT') === true &&
+      threw(() => readBuildReceipt('rig', 1, null, JSON.stringify({ version: 1, stage: 'rig', kind: 'refused', problems: [] })))?.includes('BUILD_STAGE_RESULT') === true,
+      'one original problem survives byte-for-byte; false green and empty refusal are rejected',
+      'the parent must print the original refusal under its existing stage prefix exactly once');
+    say('BU220_NONZERO_SIGNALED_AND_UNREPORTED_CHILDREN_CANNOT_ADVANCE_THE_BUILD',
+      threw(() => readBuildReceipt('assemble', 7, null, receipt('assemble')))?.includes('BUILD_STAGE_CHILD') === true &&
+      threw(() => readBuildReceipt('assemble', null, 'SIGTERM', receipt('assemble')))?.includes('BUILD_STAGE_CHILD') === true &&
+      threw(() => readBuildReceipt('assemble', 1, null, ''))?.includes('BUILD_STAGE_CHILD') === true,
+      'exit 7, signal and exit 1 without a refusal stop before another stage',
+      'a crashed child is not a green receipt and is not an input refusal it never reported');
+    const streamChild = join(dir, 'stream-child.ts');
+    const streamOuter = join(dir, 'stream-outer.ts');
+    const streamFile = join(dir, 'streams.txt');
+    writeFileSync(streamChild, "import { writeSync } from 'node:fs'; writeSync(1,'A'); writeSync(2,'B'); writeSync(1,'C');");
+    writeFileSync(streamOuter, 'import { launchBuildChild } from ' + JSON.stringify(join(ROOT, 'tools/build-process.ts')) + '; const r=launchBuildChild([process.execPath,' + JSON.stringify(streamChild) + ']); process.exit(r.status ?? 1);');
+    const streamFd = fs.openSync(streamFile, 'w');
+    let streamStatus: number | null;
+    try { streamStatus = spawnSync(process.execPath, [streamOuter], { stdio: ['ignore', streamFd, streamFd] }).status; } finally { fs.closeSync(streamFd); }
+    const streams = readFileSync(streamFile, 'utf8');
+    say('BU221_STAGE_CHILD_STDOUT_AND_STDERR_ARE_INHERITED_IN_WRITE_ORDER', streamStatus === 0 && streams === 'ABC',
+      'interleaved writes read ' + JSON.stringify(streams) + '; exit ' + streamStatus,
+      'buffering stdout and stderr separately would replay ACB and change the CLI stream order');
+    const helper = join(ROOT, 'tools/build-process.ts');
+    const noRequest = spawnSync(process.execPath, [helper], { encoding: 'utf8' });
+    const unknownRequest = join(dir, 'unknown-stage.json');
+    writeFileSync(unknownRequest, JSON.stringify({ stage: 'unknown', input: {}, bin: 'not-run' }));
+    const unknownChild = spawnSync(process.execPath, [helper, unknownRequest, join(dir, 'unknown-result.json')], { encoding: 'utf8' });
+    say('BU222_INTERNAL_STAGE_SELECTORS_REFUSE_MISSING_OR_UNKNOWN_REQUESTS_BY_NAME',
+      noRequest.status === 1 && noRequest.stderr.includes('BUILD_STAGE_REQUEST') && unknownChild.status === 1 && unknownChild.stderr.includes('BUILD_STAGE_REQUEST'),
+      'missing and unknown internal requests exit 1 by name before any stage runs',
+      'the internal worker is not a public mode and an unknown selector cannot fall through to a default stage');
+
     // The fixture's own config has an idle with no track, which rigc refuses
     // (a declared duration with no key at it). The green build's idle is the
     // smallest one the judgement lines (issue #11) also accept: the topwear
@@ -22347,6 +22389,38 @@ function runBuildSuite(): number {
       `exit ${green.status}; --out holds [${tree.join(', ')}]; last lines: ${tail.map((l) => l.trim()).join(' | ')}; stage prefixes at ${stageOrder.join(', ')}; parts.json equals the fixture's hand-derived one: ${partsSame}`,
       "issue #2: the packed page is the artifact and the loose parts an intermediate, so the lines a reader stops at are the pack line and the three files; the parts.json equality is what shows build called the assemble stage rather than something like it",
     );
+
+    // Reuse the green generated build above: this is the real check function's report, not a hand-shaped stand-in.
+    const reportRunner = rigcRunnerAt(suiteRigc(), spawnRigc);
+    const realReport = checkStage({ rig: join(out, 'rig'), parts: out, out: join(dir, 'receipt-check') }, reportRunner, suiteRigc(), () => {});
+    const noMapReport = { ...realReport };
+    delete noMapReport.sweepSteps;
+    const withMapReport = { ...realReport, sweepSteps: new Map([['fixture 0', { left: 2, right: 3 }], ['fixture 1', { left: 5, right: 7 }]]) };
+    const roundAbsent = readBuildReceipt('check', 0, null, encodeCheckReceipt(noMapReport));
+    const roundPresent = readBuildReceipt('check', 0, null, encodeCheckReceipt(withMapReport));
+    const reportJson = (report: typeof realReport): string => JSON.stringify({ ...report, sweepSteps: undefined });
+    say('BU217_STAGE_RECEIPTS_PRESERVE_A_REAL_CHECK_REPORT_AND_OPTIONAL_MAP_WITHOUT_INVENTING_VOID_OUTPUTS',
+      readBuildReceipt('assemble', 0, null, receipt('assemble')) === undefined && readBuildReceipt('rig', 0, null, receipt('rig')) === undefined &&
+      realReport.figures.PASS && realReport.pack.length > 0 &&
+      reportJson(roundAbsent) === reportJson(noMapReport) && !Object.hasOwn(roundAbsent, 'sweepSteps') &&
+      reportJson(roundPresent) === reportJson(withMapReport) && roundPresent.sweepSteps instanceof Map &&
+      JSON.stringify([...roundPresent.sweepSteps]) === JSON.stringify([...withMapReport.sweepSteps]) &&
+      JSON.stringify(roundPresent.figures) === JSON.stringify(realReport.figures) && JSON.stringify(roundPresent.pack) === JSON.stringify(realReport.pack),
+      'the real fixture check report round-trips whole, nested figures/pack unchanged, with no map and with two ordered map entries; void stages return void',
+      'a shallow PASS-only stand-in, lost nested pack data or JSON-stringified empty Map would not preserve the driver contract');
+    const validCheck = JSON.parse(encodeCheckReceipt(noMapReport)) as Record<string, unknown>;
+    const badReports = [null, {}, { ...noMapReport, figures: { PASS: 'true' } }, { ...noMapReport, pack: [{ ...realReport.pack[0], page: null }] }];
+    const badSweepEntries = [undefined, {}, [['fixture 0']], [['fixture 0', { left: '2', right: 3 }]], [[0, { left: 2, right: 3 }]], [['fixture 0', { left: 2 }]]];
+    const badChecks = [
+      ...badReports.map((report) => JSON.stringify({ ...validCheck, report })),
+      ...badSweepEntries.map((sweepSteps) => JSON.stringify({ ...validCheck, sweepSteps })),
+    ];
+    say('BU218_MISSING_MALFORMED_WRONG_STAGE_INCOMPLETE_CHECK_AND_INVALID_MAP_RECEIPTS_ARE_REFUSED',
+      malformed.every((text) => threw(() => readBuildReceipt('assemble', 0, null, text))?.includes('BUILD_STAGE_RESULT')) &&
+      badChecks.every((text) => threw(() => readBuildReceipt('check', 0, null, text))?.includes('BUILD_STAGE_RESULT')) &&
+      threw(() => readBuildReceipt('check', 1, null, encodeCheckReceipt(realReport)))?.includes('BUILD_STAGE_CHILD') === true,
+      'bad JSON/stage/version, missing report/nested figures/pack, malformed map entries and nonzero check completion all go red',
+      'a successful process is insufficient without its complete check report, and a complete receipt cannot erase a nonzero exit');
 
     // Issue #257: build forwards check's two switches. The moving config with the topwear cut by a triangle at overlap 0
     // (assemble.cuts, issue #170): the piece's resampled edge meets the base's along the cut line, so the seam counts a

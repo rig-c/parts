@@ -12,6 +12,7 @@
  *   2  a usage error, or a command this version does not implement
  */
 import { spawnSync } from 'node:child_process';
+import { runBuildProcess, processRigcRunner as rigcRunner } from './tools/build-process.ts';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
@@ -1244,14 +1245,6 @@ function cmdRig(args: string[]): number {
  * the spawn from here. A call that fails carries which rigc ran it, path and
  * version ({@link rigcRunnerAt}, issue #337), and every refusal quoting it says so.
  */
-function rigcRunner(bin: string): RigcRunner {
-  return rigcRunnerAt(bin, (b, args) => {
-    const r = spawnSync(b, [...args], { encoding: 'utf8', maxBuffer: 1 << 28 });
-    if (r.error !== undefined) return { status: 127, out: `could not start ${b}: ${r.error.message}` };
-    return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
-  });
-}
-
 /** The command's valued flags as `--flag value` pairs, each one its {@link TAKES} row holds; `required` must all be given. Its bare switches are taken out by the caller before this reads the rest. A string is a usage error. */
 function flags(args: string[], command: Command, required: readonly string[]): Map<string, string> | string {
   const got = new Map<string, string>();
@@ -1877,7 +1870,11 @@ function cmdBuild(args: string[]): number {
   try {
     const r = build(
       { config, source, full, head, out, seam: seam as SeamRule, project: project as ProjectRule, loop, pageEdges: edges, packShape: shape, ...(flags.has('--requirements') ? { requirements: flags.get('--requirements') as string } : {}), idleKeys: keys, ...(leadText === undefined ? {} : { leadIn: Number(leadText) }), seamPairs: on.has('--seam-pairs'), keepStills: on.has('--keep-stills'), ...(alts.length === 0 ? {} : { alts }), ...(flags.has('--set') ? { set: flags.get('--set') as string } : {}), allSets: on.has('--all-sets'), ...(flags.has('--environment') ? { environment: flags.get('--environment') as string } : {}) },
-      { rig: rigcRunner(bin), check: rigcRunner(bin), checkBin: bin, scratch: join(scratch, 'rig-gate') },
+      { rig: rigcRunner(bin), check: rigcRunner(bin), checkBin: bin, scratch: join(scratch, 'rig-gate'), stages: {
+        assemble: (input, outputs) => runBuildProcess({ stage: 'assemble', bin, input, outputs }, join(scratch, 'workers')),
+        rig: (input, _rigc, gateScratch) => runBuildProcess({ stage: 'rig', bin, input, scratch: gateScratch }, join(scratch, 'workers')),
+        check: (input, _rigc, checkBin) => runBuildProcess({ stage: 'check', bin: checkBin, input }, join(scratch, 'workers')),
+      } },
       console.log,
     );
     return r.stoppedAt === null ? EXIT_OK : EXIT_REFUSED;

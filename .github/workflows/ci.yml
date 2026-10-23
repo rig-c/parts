@@ -119,12 +119,20 @@ jobs:
   # 🕳️ What it cannot see: it runs the tarball this tree packs, which is not the
   # tarball npm serves until a publish makes it one. That half is
   # `release.yml`'s confirmation step.
-  installs:
-    runs-on: ubuntu-latest
+  install-platforms:
+    name: install ${{ matrix.os }} Bun ${{ matrix.bun }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        bun: ['1.2.0', latest]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ matrix.bun }}
       # npm packs and installs, and the `bin` shim is a Node script, so the
       # runner's node is half of what is under test.
       - uses: actions/setup-node@v4
@@ -132,6 +140,29 @@ jobs:
           node-version: 22
       - name: The package installs into an empty directory and runs from there
         run: bun run smoke
+      # The packed package is exercised above without checkout dependencies.
+      # Then the stage boundary and its plants run on every host/runtime.
+      - run: bun install --frozen-lockfile
+      - name: Build stage controls on this host and Bun
+        shell: bash
+        env:
+          RIG_PARTS_SELFTEST_JOBS: '1'
+        run: |
+          set +e
+          bun selftest.ts --only build
+          status=$?
+          test "$status" -eq 2
+
+  # Preserve the required check name; every platform/runtime must finish green.
+  installs:
+    needs: install-platforms
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every installation and stage control passed
+        env:
+          INSTALLS_RESULT: ${{ needs.install-platforms.result }}
+        run: test "$INSTALLS_RESULT" = success
 
   # What a landing that moves the published package looks like, which is
   # nothing: a release opens on commit TYPES, while what ships is decided by an

@@ -40,6 +40,7 @@
     "bin/rig-parts.cjs",
     "cli.ts",
     "tools/configwrite.ts",
+    "tools/build-process.ts",
     "src",
     "workflows",
     "docs/AUTHORING.md",
