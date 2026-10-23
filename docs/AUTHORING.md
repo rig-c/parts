@@ -4758,7 +4758,7 @@ is built (`CK83`–`CK85`, `RQ30`–`RQ35`).
 
 | step | reference-sample | reference-demo | source |
 | --- | --- | --- | --- |
-| painting (GPU) | 20.2 s | 18.3 s | `generation.json` `elapsed_s`, in [parts-examples](https://github.com/rig-c/parts-examples) |
+| painting (GPU) | 20.2 s | 18.3 s | `generation.json` `elapsed_s`, in [rig-c/examples](https://github.com/rig-c/examples) |
 | See-through full run (GPU) | 194.9 s | 198.5 s | `inputs/layers/full/meta.json` `elapsed_s` |
 | See-through head run (GPU) | 170.9 s | 171.4 s | `inputs/layers/head/meta.json` `elapsed_s` |
 | `build` (CPU, user + sys) | 14.6 s | 30.7 s | measured with `/usr/bin/time -p` on an Apple M4 machine under other load, rigc's child processes included; wall clock 12.7 s and 27.5 s |
