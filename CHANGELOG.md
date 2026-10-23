@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.60.0](https://github.com/rig-c/parts/compare/v1.59.0...v1.60.0) (2026-10-23)
+
+
+### Features
+
+* **propose:** an upgrade path for configs proposed before the 1.37 arm split ([#673](https://github.com/rig-c/parts/issues/673)) ([0226fb1](https://github.com/rig-c/parts/commit/0226fb1563776c07943167bf93c9b30e9b462439)), closes [#671](https://github.com/rig-c/parts/issues/671)
+
 ## [1.59.0](https://github.com/rig-c/parts/compare/v1.58.0...v1.59.0) (2026-10-23)
 
 
