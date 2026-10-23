@@ -3580,14 +3580,16 @@ export interface MotionSeamRow {
   banded: number;
   /** The frames over the floor, ascending: the warning's frames. */
   opens: number[];
-  /** Beside `opens`, frame by frame: the most cells of either kind on that frame. */
+  /** Beside `opens`: GAP only on roots; the legacy maximum of both kinds elsewhere. */
   px: number[];
-  /** The most cells of either kind on any frame over the floor; 0 when none is. */
+  /** Maximum gated/warned count over the floor; root ghost is separate INFO. */
   max_px: number;
   /** The frames rigc names open whose every opening is one cell thick: under the floor, not reported. */
   under_floor: number[];
   /** New roots only: the worst above-floor hit, retaining rigc's cell and world box. */
   worst?: MotionSeamHit & { kind: 'gap' | 'ghost' };
+  /** Roots only: preserve mixed ghost without inferring an owner from rigc-seam/1. */
+  ghost_info?: MotionSeamWorldKind & { owner: 'unavailable'; frames: number };
 }
 
 /** Existing pairs warn; new body roots alone can FAIL. Unavailable readings are named SKIP, never measured zero. */
@@ -3604,7 +3606,7 @@ export interface MotionSeamLine {
   /** Physics-only reference worlds (issue #591); do not participate in warnings or bars. */
   worlds?: MotionSeamWorlds;
   /** Present only for proven body-root pairs; existing internal seams remain warnings. */
-  roots?: { status: 'PASS' | 'FAIL' | 'SKIP'; pairs: string[]; failed: number; reason?: string };
+  roots?: { status: 'PASS' | 'FAIL' | 'SKIP'; mode: 'gap-only'; ghost_owner: 'unavailable'; ghost_followup: 'rig-c/core#1555'; pairs: string[]; failed: number; reason?: string };
 }
 
 /**
@@ -3882,6 +3884,8 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
       }
       const over = new Map<number, number>();
       let rootWorst: MotionSeamRow['worst'];
+      let rootGapFrames: number[] = [];
+      let ghostFrames = 0;
       const kinds: Record<'gap' | 'ghost', MotionSeamWorldKind> = { gap: { max_px: 0, worst: null }, ghost: { max_px: 0, worst: null } };
       for (const kind of ['gap', 'ghost'] as const) {
         const k = p[kind];
@@ -3891,11 +3895,15 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
           return;
         }
         const hits = frames as SeamHitRead[];
+        if (kind === 'gap') rootGapFrames = hits.map(h => h.index);
+        else ghostFrames = hits.length;
         const worst = hits.reduce<MotionSeamHit | null>((best, h) => best === null || h.px > best.px || (h.px === best.px && h.index < best.index) ? h : best, null);
         kinds[kind] = { max_px: worst?.px ?? 0, worst };
-        for (const h of hits) if (plant.noFloor === true || openingOverFloor(h)) {
+        // rigc-seam/1 exposes aggregate ghost, not its drawing owner. A drawn
+        // overlap band is not proof of a hole; only GAP gates roots until core#1555.
+        for (const h of hits) if ((want.root === undefined || kind === 'gap') && (plant.noFloor === true || openingOverFloor(h))) {
           over.set(h.index, Math.max(over.get(h.index) ?? 0, h.px));
-          if (want.root !== undefined && (rootWorst === undefined || h.px > rootWorst.px || (h.px === rootWorst.px && h.index < rootWorst.index))) rootWorst = { ...h, kind };
+          if (want.root !== undefined && (rootWorst === undefined || h.px > rootWorst.px || (h.px === rootWorst.px && h.index < rootWorst.index))) rootWorst = { ...h, kind: 'gap' };
         }
       }
       worldRows?.push({ pair: want.pair, animation, status: p.status, drawn: p.drawn, banded: p.banded, gap: kinds.gap, ghost: kinds.ghost });
@@ -3909,8 +3917,9 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
         opens,
         px: opens.map((f) => over.get(f) ?? 0),
         max_px: opens.reduce((m, f) => Math.max(m, over.get(f) ?? 0), 0),
-        under_floor: p.opens.filter((f) => !over.has(f)),
+        under_floor: (want.root === undefined ? p.opens : rootGapFrames).filter((f) => !over.has(f)),
         ...(rootWorst === undefined ? {} : { worst: rootWorst }),
+        ...(want.root === undefined ? {} : { ghost_info: { ...kinds.ghost, owner: 'unavailable' as const, frames: ghostFrames } }),
       });
     });
   }
@@ -3918,7 +3927,7 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
   return rows;
 }
 
-/** Only active proven root rows fail; existing rows warn, with the same floor. Reference worlds are not read here. */
+/** Only active proven root GAP rows fail; mixed ghost is INFO. Existing warnings/floor are unchanged. */
 export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fps: number, rows: MotionSeamRow[], reason?: string, problems: Problem[] = []): MotionSeamLine {
   const roots = pairs.filter(p => p.root !== undefined);
   const rootNames = new Set(roots.map(p => p.pair));
@@ -3937,6 +3946,7 @@ export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fp
   }));
   const rootGate: MotionSeamLine['roots'] = roots.length === 0 ? undefined : {
     status: failed.length > 0 ? 'FAIL' : missing.length > 0 || reason !== undefined ? 'SKIP' : 'PASS',
+    mode: 'gap-only', ghost_owner: 'unavailable', ghost_followup: 'rig-c/core#1555',
     pairs: roots.map(p => p.pair), failed: failed.length,
     ...(missing.length === 0 && reason === undefined ? {} : { reason: reason ?? missing.join('; ') }),
   };

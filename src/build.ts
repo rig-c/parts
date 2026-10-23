@@ -1726,14 +1726,16 @@ export function motionSeamLines(line: MotionSeamLine, plant: MotionSeamPlant = {
   const head =
     line.status === 'SKIP'
       ? `${MOTION_SEAM_LINE}: SKIP — ${String(line.reason)}; ${read}`
-      : `${MOTION_SEAM_LINE}: ${line.status} — ${read}: ${line.warnings} warning(s), never a bar${line.roots === undefined ? '' : '; body-root gate ' + line.roots.status + ' (' + line.roots.pairs.length + ' pair(s))' + (line.roots.reason === undefined ? '' : ' — ' + line.roots.reason)}; ${line.floor}`;
+      : `${MOTION_SEAM_LINE}: ${line.status} — ${read}: ${line.warnings} warning(s), never a bar${line.roots === undefined ? '' : '; body-root gap-only gate ' + line.roots.status + ' (' + line.roots.pairs.length + ' pair(s)); ghost ownership unavailable' + (line.roots.reason === undefined ? '' : ' — ' + line.roots.reason)}; ${line.floor}`;
   return [
     head,
     ...line.pairs.filter((p) => p.unread !== undefined).map((p) => `seam "${p.pair}" (${p.declared.join('; ')}): not read — ${String(p.unread)}`),
     ...line.rows.filter((r) => r.status === 'skip').map((r) => `seam "${r.pair}" in "${r.animation}": SKIP — rigc read no band on any of the ${r.drawn} frame(s) both slots draw, so there is no seam to read`),
     ...(plant.silent === true ? [] : line.rows.filter((r) => r.opens.length > 0).map(r => line.pairs.some(p => p.pair === r.pair && p.root !== undefined)
-      ? `FAIL seam "${r.pair}" opens on ${r.opens.length} frame(s) ${frameRuns(r.opens)} max ${r.max_px} px in "${r.animation}" — body-root seam over the one-cell floor`
+      ? `FAIL seam "${r.pair}" opens on ${r.opens.length} frame(s) ${frameRuns(r.opens)} max ${r.max_px} px in "${r.animation}" — body-root GAP over the one-cell floor (gap-only)`
       : motionSeamWarnText(r))),
+    ...line.rows.filter(r => r.ghost_info !== undefined && r.ghost_info.frames > 0).map(r =>
+      `INFO seam "${r.pair}" in "${r.animation}": ghost ${r.ghost_info?.max_px} cells on ${r.ghost_info?.frames} frame(s); owner unavailable in this rigc-seam/1 reading; see rig-c/core#1555; not gated (gap-only)`),
     ...line.rows.filter((r) => r.opens.length === 0 && r.under_floor.length > 0).map((r) => `seam "${r.pair}" in "${r.animation}": under the floor — rigc names ${r.under_floor.length} frame(s) open ${frameRuns(r.under_floor)}, each opening one cell thick`),
     ...(line.worlds === undefined ? [] : (['default', 'still'] as const).flatMap(name => {
       const w = line.worlds?.[name];

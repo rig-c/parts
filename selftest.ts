@@ -16304,12 +16304,12 @@ function runMotionRootSeamCases(say: (name: string, ok: boolean, detail: string,
       'two body carriers and four segment-zero bindings, by hand; a dropped mirror and an internal-only selector cannot cover the four new pairs.');
 
     type RootHit = { index: number; px: number; cell: number; box: [number, number, number, number] };
-    const read = (hits: RootHit[], skip = false): ReturnType<typeof readMotionSeams> => {
+    const read = (hits: RootHit[], skip = false, ghosts: RootHit[] = []): ReturnType<typeof readMotionSeams> => {
       mkdirSync(join(dir, 'idle'), { recursive: true });
       writeFileSync(join(dir, 'frames.json'), JSON.stringify({ sets: [{ animation: 'idle', dir: 'idle' }] }));
       writeFileSync(join(dir, 'idle', 'seam.json'), JSON.stringify({ spec: 'rigc-seam/1', animation: 'idle', fps: 12,
         pairs: pairs.map((p, i) => ({ a: p.a, b: p.b, status: skip ? 'skip' : 'read', drawn: skip ? 0 : 13, banded: skip ? 0 : 13,
-          opens: i === 0 ? hits.map(h => h.index) : [], gap: { frames: i === 0 ? hits : [] }, ghost: { frames: [] } })) }));
+          opens: i === 0 ? [...new Set([...hits, ...ghosts].map(h => h.index))] : [], gap: { frames: i === 0 ? hits : [] }, ghost: { frames: i === 0 ? ghosts : [] } })) }));
       return readMotionSeams(dir, ['idle'], 12, pairs);
     };
     const cleanProblems: Problem[] = [];
@@ -16317,16 +16317,25 @@ function runMotionRootSeamCases(say: (name: string, ok: boolean, detail: string,
     const problems: Problem[] = [];
     // A typed reader fixture, NOT a measured painting or a claim that the current guide reproduces this count.
     const tear = motionSeamLine(pairs, ['idle'], 12, read([{ index: 5, px: 4922, cell: 1, box: [0, 0, 128, 123] }]), undefined, problems);
+    const ghostProblems: Problem[] = [];
+    const ghostOnly = [331, 4922].map(px => motionSeamLine(pairs, ['idle'], 12,
+      read([], false, [{ index: 5, px, cell: 1, box: [0, 0, 128, 123] }]), undefined, ghostProblems));
+    const ghostPrinted = ghostOnly.map(line => motionSeamLines(line).join('\n'));
     const names = problems.map(p => p.code + ' ' + p.object + ' ' + p.detail).join(' | ');
     const failed = (line: MotionSeamLine, ps: Problem[]): boolean => line.status === 'FAIL' && line.roots?.status === 'FAIL' &&
       ps.some(p => p.code === 'CHECK_SEAM_OVER_MOTION') &&
       JSON.stringify(barsNotMet({ gate_spine_html_green: true, [MOTION_SEAM_LINE]: line })) === JSON.stringify([MOTION_SEAM_LINE]);
     say('SO13_A_ROOT_TEAR_IS_A_NAMED_BAR_FAILURE_WITH_ITS_ACTUAL_READER_FIGURES',
       clean.status === 'CLEAR' && clean.roots?.status === 'PASS' && cleanProblems.length === 0 && failed(tear, problems) &&
+        clean.roots.mode === 'gap-only' && ghostProblems.length === 0 &&
+        ghostOnly.every((line, i) => line.roots?.status === 'PASS' && line.roots.mode === 'gap-only' && line.rows[0].opens.length === 0 &&
+          line.rows[0].ghost_info?.max_px === [331, 4922][i] && line.rows[0].ghost_info?.owner === 'unavailable' &&
+          barsNotMet({ gate_spine_html_green: true, [MOTION_SEAM_LINE]: line }).length === 0 &&
+          ghostPrinted[i].includes('INFO seam') && ghostPrinted[i].includes('owner unavailable in this rigc-seam/1 reading; see rig-c/core#1555') && !ghostPrinted[i].includes('FAIL seam')) &&
         !failed(tear, []) && !failed({ ...tear, status: 'CLEAR' }, problems) &&
         ['coat|upperarm_r', 'idle', '5', '4922', '128', '123', 'cell'].every(s => names.includes(s)),
-      names + '; clean ' + JSON.stringify(clean.roots) + '; bars ' + barsNotMet({ gate_spine_html_green: true, [MOTION_SEAM_LINE]: tear }),
-      'frame 5 has 4922 cells in a 128x123 box at cell 1, so the unchanged floor is 128. Removing the named problem or downgrading FAIL is planted red.');
+      names + '; clean ' + JSON.stringify(clean.roots) + '; ghost-only ' + JSON.stringify(ghostOnly.map(line => line.rows[0])) + '; bars ' + barsNotMet({ gate_spine_html_green: true, [MOTION_SEAM_LINE]: tear }),
+      'frame5 has4922 GAP cells in a128x123 box at cell1, so the unchanged floor is128. The same above-floor mixed ghost counts331/4922 stay named INFO, not a gap-only failure; no owner is inferred from the aggregate.');
 
     const edgeResults = [1, 0.5].map(cell => {
       const low = motionSeamLine(pairs, ['idle'], 12, read([{ index: 0, px: 8, cell, box: [17, -9, 17 + 8 * cell, -9 + 2 * cell] }]));
@@ -16429,23 +16438,111 @@ function soRootDiagnostic(value: Record<string, unknown>): string {
   return JSON.stringify(value);
 }
 
-/** The shoulder is (27,4). The body is30x6; its20x6 rest band is flat opaque art, not a rigc-derived expectation. */
-function soRootGhostAt90(): number {
+/**
+ * Independent covered-band oracle. At t, hip moves -15t and its arm child +15t:
+ * the body is x[7-15t,37-15t], the arm stays x[17,37], and their band hull
+ * x[17-15t,37] is covered (the overlap width is20-15t >=5). At t=1 only
+ * x[2,7), y[4,10) draws from the body's rest band outside both arm-view rest
+ * drawings:5x6=30 body-owned GHOST cells. The arm-only x[22,37), y[4,10)
+ * has a body-view carry-back outside both rest drawings:15x6=90 more,120 total,
+ * with no GAP. No renderer output sets this count.
+ */
+function soRootCoveredGhostAt(t: number): { gap: number; ghost: number; ghostA: number; ghostB: number } {
   const body = (x: number, y: number): boolean => x >= 7 && x < 37 && y >= 4 && y < 10;
   const arm = (x: number, y: number): boolean =>
     (x >= 17 && x < 37 && y >= 4 && y < 32) || (x >= 12 && x < 42 && y >= 32 && y < 61) ||
-    (x >= 12 && x < 42 && y < 32 && (x + 0.5 - 27) ** 2 + (y + 0.5 - 32) ** 2 <= SO_R ** 2);
+    (x >= 12 && x < 42 && y < 32 && (x - 27) ** 2 + (y - 32) ** 2 <= SO_R ** 2);
+  const rest = (x: number, y: number): boolean => body(x, y) || arm(x, y);
+  const band = (x: number, y: number): boolean => body(x, y) && arm(x, y);
+  const d = 15 * t;
+  let gap = 0, ghostA = 0, ghostB = 0;
+  for (let y = -64; y < 128; y++) for (let x = -64; x < 128; x++) {
+    const cx = x + 0.5, cy = y + 0.5;
+    const a = body(cx + d, cy), b = arm(cx, cy);
+    if (!a && !b && cx >= 17 - d && cx < 37 && cy >= 4 && cy < 10 && (rest(cx + d, cy) || rest(cx, cy))) gap++;
+    else if (a && !b && band(cx + d, cy) && !rest(cx, cy)) ghostA++;
+    else if (b && !a && band(cx, cy) && !rest(cx + d, cy)) ghostB++;
+  }
+  return { gap, ghost: ghostA + ghostB, ghostA, ghostB };
+}
+
+/** Explicit parent-space translations; the shoulder animation does not key rotation. */
+function soRootShoulderTracks(kind: 'ghost' | 'gap'): Array<Record<string, unknown>> {
+  const track = (bone: string, end: number): Record<string, unknown> =>
+    ({ bone, property: 'translatex', keys: [{ t: 0, v: [0] }, { t: 1, v: [end] }] });
+  return kind === 'gap' ? [track('sleeve_r0', 30)] : [track('hip', -15), track('sleeve_r0', 15)];
+}
+
+/** Independent GAP oracle: the translated 20x6 band spans x17..67; body ends37, arm starts47. */
+function soRootGapAt30(): number {
+  const body = (x: number, y: number): boolean => x >= 7 && x < 37 && y >= 4 && y < 10;
+  const arm = (x: number, y: number): boolean => x >= 17 && x < 37 && y >= 4 && y < 32;
   const rest = (x: number, y: number): boolean => body(x, y) || arm(x, y);
   let n = 0;
-  // Include negative crop coordinates: the rotating band can leave the original canvas.
-  for (let y = -64; y < 128; y++) for (let x = -64; x < 128; x++) {
-    const bx = 27 - (y + 0.5 - 4) - 0.5;
-    const by = 4 + (x + 0.5 - 27) - 0.5;
-    const moving = arm(bx, by);
-    if (moving && !body(x, y) && body(bx, by) && arm(bx, by) && !rest(x, y)) n++;
-    else if (body(x, y) && !moving && body(x, y) && arm(x, y) && !rest(bx, by)) n++;
+  for (let y = 4; y < 10; y++) for (let x = 17; x < 67; x++) {
+    if (!body(x, y) && !arm(x - 30, y) && (rest(x, y) || rest(x - 30, y))) n++;
   }
   return n;
+}
+
+/** RGB-only negative: white cloth over skin, with the original fixture's exact alpha and rectangles. */
+function soRootWhiteFixture(dir: string): { full: string; source: string; proof: Record<string, unknown> } {
+  const white: [number, number, number] = [255, 255, 255];
+  const skin: [number, number, number] = [190, 135, 100];
+  const full = join(dir, 'full-white');
+  writeRun(full, [...SO_FULL.map(layer => ({ ...layer, rects: layer.rects.map(rect => ({ ...rect, colour: skin })) })),
+    { ...SO_ROOT_BODY, rects: SO_ROOT_BODY.rects.map(rect => ({ ...rect, colour: white })) }]);
+  const original = readLayers(join(dir, 'full'));
+  const layers = readLayers(full);
+  const painting = flatPainting();
+  const sx = painting.width / layers.canvas.w, sy = painting.height / layers.canvas.h;
+  // The ghost variant's explicit plan draws arm then coat. Use decoded PNGs and
+  // manifest coordinates at the actual run->source scale; preserve source alpha.
+  const sourceOrder = ['handwear-r', 'topwear'].map(name => layers.layers.find(layer => layer.name === name)!);
+  for (const layer of sourceOrder) for (let y = 0; y < painting.height; y++) for (let x = 0; x < painting.width; x++) {
+    const lx = Math.floor(x / sx) - layer.left, ly = Math.floor(y / sy) - layer.top;
+    if (lx < 0 || ly < 0 || lx >= layer.pixels.width || ly >= layer.pixels.height) continue;
+    const from = (ly * layer.pixels.width + lx) * 4, at = (y * painting.width + x) * 4;
+    const alpha = layer.pixels.data[from + 3] / 255;
+    for (let channel = 0; channel < 3; channel++) painting.data[at + channel] =
+      Math.round(layer.pixels.data[from + channel] * alpha + painting.data[at + channel] * (1 - alpha));
+  }
+  const source = join(dir, 'painting-white.png');
+  writeFileSync(source, encodePngBytes(painting));
+  const decodedPainting = readPng(source);
+  const sample = (layer: Layer, colour: readonly number[]): { at: [number, number]; rgba: number[]; matches: boolean } | null => {
+    for (let y = 0; y < layer.pixels.height; y++) for (let x = 0; x < layer.pixels.width; x++) {
+      if (layer.pixels.data[(y * layer.pixels.width + x) * 4 + 3] !== 255) continue;
+      const px = Math.floor((layer.left + x + 0.5) * sx), py = Math.floor((layer.top + y + 0.5) * sy);
+      const at = (py * decodedPainting.width + px) * 4;
+      const rgba = Array.from(decodedPainting.data.slice(at, at + 4));
+      if (colour.every((v, c) => rgba[c] === v)) return { at: [px, py], rgba, matches: rgba[3] === 255 };
+    }
+    return null;
+  };
+  const whiteSource = sample(sourceOrder[1], white), skinSource = sample(sourceOrder[0], skin);
+  const sameAlpha = (a: Raster, b: Raster): boolean => a.width === b.width && a.height === b.height &&
+    a.data.every((v, i) => i % 4 !== 3 || v === b.data[i]);
+  const literal = (name: string, colour: readonly number[]): boolean => {
+    const layer = layers.layers.find(l => l.name === name);
+    return layer !== undefined && layer.opaquePx > 0 && layer.pixels.data.every((v, i, data) =>
+      i % 4 === 3 || data[i - i % 4 + 3] === 0 || v === colour[i % 4]);
+  };
+  const alphaEqual = layers.layers.every(layer => {
+    const old = original.layers.find(l => l.name === layer.name);
+    return old !== undefined && layer.left === old.left && layer.top === old.top &&
+      layer.right === old.right && layer.bottom === old.bottom && sameAlpha(layer.pixels, old.pixels);
+  });
+  return { full, source, proof: { white, skin, whiteInput: literal('topwear', white), skinInput: literal('handwear-r', skin),
+    alphaAndBoxesEqual: alphaEqual, paintingAlphaEqual: sameAlpha(decodedPainting, flatPainting()),
+    paintingRGBSourceConsistent: whiteSource?.matches === true && skinSource?.matches === true,
+    sourceSamples: { whiteSource, skinSource }, sourceOrder: sourceOrder.map(layer => layer.name),
+    inputTags: layers.layers.map(layer => layer.name), runToSource: [sx, sy] } };
+}
+
+function soRootHasGhostInfo(out: string, cells: number): boolean {
+  return out.split('\n').some(line => line.includes('INFO seam "coat|upperarm_r" in "shoulder": ghost ' + cells + ' cells') &&
+    line.includes('owner unavailable in this rigc-seam/1 reading; see rig-c/core#1555'));
 }
 
 /** Stock assemble/rig/render/check and both real CLI consumers; no substituted renderer or gate. */
@@ -16455,22 +16552,28 @@ function runMotionRootRendererCases(home: string, legacyOutput: string, say: (na
   writeRun(join(dir, 'full'), [...SO_FULL, SO_ROOT_BODY]);
   writeRun(join(dir, 'head'), FRAMED_HEAD);
   writeFileSync(join(dir, 'painting.png'), encodePngBytes(flatPainting()));
-  const buildOne = (name: string, tear: boolean) => {
+  const whiteFixture = soRootWhiteFixture(dir);
+  const buildOne = (name: string, kind: 'normal' | 'ghost' | 'gap') => {
     const cfg = soRootConfig();
-    const animations = { ...SO_BEND.animations, ...(tear ? { shoulder: { duration: 1, loop: false,
-      tracks: [{ bone: 'sleeve_r0', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 1, v: [90] }] }] } } : {}) };
+    // Only the negative changes draw order: the white body is explicitly OVER the skin arm.
+    if (kind === 'ghost') (cfg.assemble as Record<string, unknown>).plan = [['arm', 'full', 'handwear-r'], ['coat', 'full', 'topwear']];
+    const animations = { ...SO_BEND.animations, ...(kind === 'normal' ? {} : { shoulder: { duration: 1, loop: false,
+      tracks: soRootShoulderTracks(kind) } }) };
     (cfg.motion as Record<string, unknown>).animations_from = name + '.motion.json';
     const config = join(dir, name + '.json');
     writeFileSync(config, JSON.stringify(cfg));
     writeFileSync(join(dir, name + '.motion.json'), JSON.stringify({ spec: 'rigc-motion/1', animations }));
     const out = join(dir, name);
-    const result = runCli(['build', '--config', config, '--source', join(dir, 'painting.png'), '--full', join(dir, 'full'), '--head', join(dir, 'head'), '--out', out]);
+    const result = runCli(['build', '--config', config, '--source', kind === 'ghost' ? whiteFixture.source : join(dir, 'painting.png'),
+      '--full', kind === 'ghost' ? whiteFixture.full : join(dir, 'full'), '--head', join(dir, 'head'), '--out', out]);
     return { ...result, home: out, fig: readJsonFile(join(out, 'check', 'check.json')) };
   };
-  const normal = buildOne('normal', false);
-  const torn = buildOne('torn', true);
+  const normal = buildOne('normal', 'normal');
+  const ghost = buildOne('ghost-only', 'ghost');
+  const torn = buildOne('gap', 'gap');
   const line = torn.fig?.[MOTION_SEAM_LINE] as MotionSeamLine | undefined;
   const normalLine = normal.fig?.[MOTION_SEAM_LINE] as MotionSeamLine | undefined;
+  const ghostLine = ghost.fig?.[MOTION_SEAM_LINE] as MotionSeamLine | undefined;
   const normalBreath = (normal.fig?.BREATH_VISIBLE ?? {}) as Record<string, unknown>;
   const normalParts = existsSync(join(normal.home, 'parts.json')) ? readParts(join(normal.home, 'parts.json')) : null;
   const visibleCoat = normalParts?.parts.find(p => p.name === 'coat')?.visible_px ?? 0;
@@ -16480,24 +16583,61 @@ function runMotionRootRendererCases(home: string, legacyOutput: string, say: (na
   const sets = Array.isArray(frames?.sets) ? frames.sets as Array<{ animation: string; dir: string }> : [];
   const shoulder = sets.find(s => s.animation === 'shoulder');
   const raw = shoulder === undefined ? null : readJsonFile(join(reread, shoulder.dir, 'seam.json'));
-  const pair = (raw?.pairs as Array<{ ghost: { frames: Array<{ index: number; px: number }> } }> | undefined)?.[0];
-  const at90 = pair?.ghost.frames.find(h => h.index === 12)?.px;
-  const expected = soRootGhostAt90();
+  const pair = (raw?.pairs as Array<{ gap: { frames: Array<{ index: number; px: number }> } }> | undefined)?.[0];
+  const at30 = pair?.gap.frames.find(h => h.index === 12)?.px;
+  const expectedGap = soRootGapAt30();
+  const ghostReread = join(dir, 'raw-ghost');
+  const ghostRender = spawnRigc(suiteRigc(), ['render', '--candidate', join(ghost.home, 'check', 'build'), '--seam', 'coat:upperarm_r', '--fps', '12', '--max', '16', '--out', ghostReread]);
+  const ghostFrames = readJsonFile(join(ghostReread, 'frames.json'));
+  const ghostSets = Array.isArray(ghostFrames?.sets) ? ghostFrames.sets as Array<{ animation: string; dir: string }> : [];
+  const ghostShoulder = ghostSets.find(s => s.animation === 'shoulder');
+  const ghostRaw = ghostShoulder === undefined ? null : readJsonFile(join(ghostReread, ghostShoulder.dir, 'seam.json'));
+  const ghostPair = (ghostRaw?.pairs as Array<{ gap: { frames: Array<{ index: number; px: number }> }; ghost: { frames: Array<{ index: number; px: number }> } }> | undefined)?.[0];
+  const ghostAtEnd = ghostPair?.ghost.frames.find(h => h.index === 12)?.px;
+  const independentCovered = Array.from({ length: 13 }, (_, index) => soRootCoveredGhostAt(index / 12));
+  const expectedGhost = independentCovered[12].ghost;
   const rootRow = line?.rows.find(r => r.pair === 'coat|upperarm_r' && r.animation === 'shoulder');
+  const ghostParts = existsSync(join(ghost.home, 'parts.json')) ? readParts(join(ghost.home, 'parts.json')) : null;
+  const opaqueColours = (name: string, colour: readonly number[]): { opaque: number; literal: number; alphaEqual: boolean } => {
+    if (!existsSync(join(ghost.home, 'parts', name + '.png')) || !existsSync(join(normal.home, 'parts', name + '.png'))) return { opaque: 0, literal: 0, alphaEqual: false };
+    const image = readPng(join(ghost.home, 'parts', name + '.png')), old = readPng(join(normal.home, 'parts', name + '.png'));
+    let opaque = 0, literal = 0;
+    for (let i = 0; i < image.data.length; i += 4) if (image.data[i + 3] === 255) {
+      opaque++; if (colour.every((v, c) => image.data[i + c] === v)) literal++;
+    }
+    return { opaque, literal, alphaEqual: image.width === old.width && image.height === old.height && image.data.every((v, i) => i % 4 !== 3 || v === old.data[i]) };
+  };
+  const whitePart = opaqueColours('coat', [255, 255, 255]), skinPart = opaqueColours('upperarm_r', [190, 135, 100]);
+  const ghostRig = existsSync(join(ghost.home, 'rig', 'rig.json')) ? readJsonFile(join(ghost.home, 'rig', 'rig.json')) : null;
+  const ghostSlots = Array.isArray(ghostRig?.slots) ? ghostRig.slots as Array<{ name: string }> : [];
+  const overSkin = ghostSlots.findIndex(s => s.name === 'coat') > ghostSlots.findIndex(s => s.name === 'upperarm_r') && ghostSlots.some(s => s.name === 'upperarm_r');
+  const keptInfo = soRootHasGhostInfo(ghost.out, expectedGhost);
+  const droppedInfoRed = !soRootHasGhostInfo(ghost.out.split('\n').filter(line => !line.includes('INFO seam')).join('\n'), expectedGhost);
   const removed = line === undefined ? null : motionSeamLine(line.pairs.filter(p => p.root === undefined), line.animations, line.fps,
     line.rows.filter(r => line.pairs.some(p => p.pair === r.pair && p.root === undefined)));
   const directOut = join(dir, 'check-again');
   const direct = runCli(['check', '--rig', join(torn.home, 'rig'), '--parts', torn.home, '--out', directOut]);
   const directFig = readJsonFile(join(directOut, 'check.json'));
-  say('SO18_STOCK_RENDERER_SHOULDER_ROOT_MATCHES_AN_INDEPENDENT_FLAT_CELL_ORACLE',
+  say('SO18_STOCK_RENDERER_SHOULDER_GAP_AND_GHOST_MATCH_INDEPENDENT_FLAT_CELL_ORACLES',
     normal.status === 0 && normal.fig?.PASS === true && normalBreath.status === 'PASS' && visibleCoat > 0 && normalLine?.roots?.status === 'PASS' &&
-      render.status === 0 && expected === 120 && at90 === expected && rootRow?.opens.includes(12) === true &&
-      rootRow.px[rootRow.opens.indexOf(12)] === expected && line?.roots?.status === 'FAIL' &&
+      normalLine.roots.mode === 'gap-only' && render.status === 0 && expectedGap === 60 && at30 === expectedGap && rootRow?.opens.includes(12) === true &&
+      rootRow.px[rootRow.opens.indexOf(12)] === expectedGap && rootRow.worst?.kind === 'gap' && line?.roots?.status === 'FAIL' &&
+      ghostRender.status === 0 && independentCovered.every(frame => frame.gap === 0) && expectedGhost === 120 && independentCovered[12].ghostA === 30 && independentCovered[12].ghostB === 90 && ghostAtEnd === expectedGhost &&
+      ghostPair?.gap.frames.length === 0 && ghost.status === 0 && ghost.fig?.PASS === true &&
+      ghostLine?.roots?.status === 'PASS' && ghostLine.roots.mode === 'gap-only' &&
+      ghostLine.rows.some(r => r.pair === 'coat|upperarm_r' && r.animation === 'shoulder' && r.opens.length === 0 && r.ghost_info?.max_px === expectedGhost) &&
+      whiteFixture.proof.whiteInput === true && whiteFixture.proof.skinInput === true &&
+      whiteFixture.proof.alphaAndBoxesEqual === true && whiteFixture.proof.paintingAlphaEqual === true && whiteFixture.proof.paintingRGBSourceConsistent === true &&
+      whitePart.literal > 0 && skinPart.literal > 0 && whitePart.alphaEqual && skinPart.alphaEqual && overSkin &&
+      ghostParts?.parts.find(p => p.name === 'coat')?.from === 'full:topwear' &&
+      ghostParts.parts.find(p => p.name === 'upperarm_r')?.from === 'full:handwear-r' && keptInfo && droppedInfoRed &&
       removed !== null && removed.roots === undefined && removed.status !== 'FAIL',
     soRootDiagnostic({ normalExit: normal.status, normalBreath, visibleCoat, normalRoot: normalLine?.roots,
-      stockFrame12Ghost: at90, independent: expected, activeRoot: rootRow, omissionMutant: removed?.status,
-      normalChild: normal.status === 0 ? undefined : normal.out }),
-    'at 90 degrees two disjoint 6x10 band contributions give 120 ghost cells. A rigid shared-carrier normal remains green; dropping the root declaration cannot satisfy this reading.');
+      stockFrame12Gap: at30, independentGap: expectedGap, stockFrame12Ghost: ghostAtEnd, independentGhost: expectedGhost, independentCovered, stockGhostGapFrames: ghostPair?.gap.frames,
+      ghostExit: ghost.status, ghostPass: ghost.fig?.PASS, ghostRoot: ghostLine?.roots, activeRoot: rootRow, omissionMutant: removed?.status,
+      whiteFixture: whiteFixture.proof, whitePart, skinPart, overSkin, keptInfo, droppedInfoRed,
+      normalChild: normal.status === 0 ? undefined : normal.out, ghostChild: ghost.status === 0 ? undefined : ghost.out }),
+    'translatex30 leaves an uncovered10x6 band-hull rectangle:60 GAP cells by independent integer-centre enumeration. The covered negative moves hip-15 and compensates its child+15: its hull is covered at every time, while5x6body-owned plus15x6arm-owned cells give120mixed ghost cells that remain INFO with literal white cloth OVER skin; input and generated PNG readers must prove RGB/provenance and unchanged alpha. Normal and ghost-only real builds must stay overall green; dropping the GAP root or ghost INFO is planted red.');
   const totalBars = (out: string): number | null => {
     const match = out.match(/check: [^\n]*; (\d+) of (\d+) bar\(s\) measured/);
     return match === null ? null : Number(match[2]);
@@ -27128,7 +27268,10 @@ function seamWorldDocFaults(file: string, text: string): string[] {
     'active rendered environment fails `CHECK_SEAM_OVER_MOTION`',
     'overall PASS false and exits 1',
     'Existing internal-joint and explicit-only pairs remain warnings: their PASS, exit status and bar count are unchanged',
-    'reference worlds remain informational', 'absence is not a zero or a PASS'];
+    'reference worlds remain informational', 'absence is not a zero or a PASS',
+    'metric mode is `gap-only`', 'mixed ghost is INFO',
+    'owner unavailable in this rigc-seam/1 reading; see rig-c/core#1555',
+    'does not certify UNDER-owned ghost coverage'];
   return required.every(s => block.includes(s)) && rootRequired.every(s => roots.includes(s)) ? [] :
     [file + ':' + (start < 0 ? 1 : text.slice(0, start).split('\n').length) + ' stale or missing physics seam environment or body-root exception contract'];
 }
@@ -36962,6 +37105,11 @@ function runTreeSuite(): number {
     ['legacy warnings', 'Existing internal-joint and explicit-only pairs remain warnings: their PASS, exit status and bar count are unchanged', 'Existing internal-joint and explicit-only pairs also fail'],
     ['reference gate', 'reference worlds remain informational', 'reference worlds also gate'],
     ['root availability', 'absence is not a zero or a PASS', 'absence is a zero and a PASS'],
+    ['root metric mode', 'metric mode is `gap-only`', 'metric mode is `all-openings`'],
+    ['mixed ghost policy', 'mixed ghost is INFO', 'mixed ghost is FAIL'],
+    ['owner capability', 'owner unavailable in this rigc-seam/1 reading', 'owner inferred from aggregate cells'],
+    ['owner dependency', 'rig-c/core#1555', 'rig-c/core#0'],
+    ['partial coverage', 'does not certify UNDER-owned ghost coverage', 'certifies every UNDER-owned ghost'],
   ];
   const docResults = docPlants.map(([name, from, to]) => ({ name, replaced: guide21.includes(from), faults: seamWorldDocFaults(file21, guide21.replace(from, to)) }));
   say('TY23_PHYSICS_SEAM_GUIDE_HOLDS_DEFAULT_STILL_NULL_AND_AVAILABILITY',
