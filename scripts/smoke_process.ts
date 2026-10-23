@@ -1,8 +1,8 @@
 /** Smoke-only executable resolution and shell-free package-command dispatch. */
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants, existsSync, readFileSync, statSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 type Env = Record<string, string | undefined>;
 function value(env: Env, key: string, platform: string): string {
@@ -26,6 +26,16 @@ export function findSmokeExecutable(command: string, env: Env = process.env, pla
   return null;
 }
 
+/** Compare existing filesystem identities, including aliases, without accepting lexical siblings. */
+export function isSmokePathInside(directory: string, candidate: string): boolean {
+  try {
+    const parent = realpathSync(directory);
+    const child = realpathSync(candidate);
+    const path = relative(parent, child);
+    return path === '' || (!isAbsolute(path) && path !== '..' && !path.startsWith('..' + sep));
+  } catch { return false; }
+}
+
 function packageEntry(shim: string, packageName: string, command: string): string {
   const req = createRequire(join(dirname(shim), 'smoke-resolver.cjs'));
   let manifest: string;
@@ -46,8 +56,7 @@ function packageEntry(shim: string, packageName: string, command: string): strin
     : pkg.bin !== null && typeof pkg.bin === 'object' ? (pkg.bin as Record<string, unknown>)[command] : undefined;
   if (pkg.name !== packageName || typeof declared !== 'string') throw new Error('command is absent from package bin metadata');
   const entry = resolve(dirname(manifest), declared);
-  const within = relative(dirname(manifest), entry);
-  if (within.startsWith('..') || isAbsolute(within) || !/\.(?:cjs|mjs|js)$/.test(entry) || !statSync(entry).isFile())
+  if (!isSmokePathInside(dirname(manifest), entry) || !/\.(?:cjs|mjs|js)$/.test(entry) || !statSync(entry).isFile())
     throw new Error('declared JavaScript bin entry is not a package file');
   return entry;
 }
