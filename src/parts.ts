@@ -293,10 +293,22 @@ export interface AlternateSetMap {
   threshold?: { yaw: number; pitch: number };
 }
 
+/**
+ * Issue #664: the suffix of a limb segment part's front slot — a second slot on
+ * the segment's bone, empty at setup, that a gesture set draws the part on.
+ */
+export const FRONT_SUFFIX = '_front';
+
 export interface AlternatePartsRecord {
   name: string;
   parts?: string[];
   hides?: string[];
+  /**
+   * Issue #664: the covered parts this set draws on their front slot: each `p`
+   * is mapped as `slots["<p>_front"]` (never `slots[p]`) and listed in `hides`.
+   * Written only when the set declares `front`.
+   */
+  front?: string[];
   slots: Record<string, string>;
   records: PartRecord[];
   ghost_px: Record<string, number>;
@@ -451,6 +463,7 @@ export function serializeParts(file: PartsFile): string {
             name: a.name,
             ...(a.parts === undefined ? {} : { parts: a.parts }),
             ...(a.hides === undefined ? {} : { hides: a.hides }),
+            ...(a.front === undefined ? {} : { front: a.front }),
             slots: a.slots,
             records: serializePartList(a.records),
             ghost_px: Object.fromEntries(Object.keys(a.ghost_px).sort().map((k) => [k, a.ghost_px[k]])),
@@ -694,6 +707,20 @@ function checkParts(raw: unknown, path: string): PartsFile {
         } else for (const [bone, point] of Object.entries(t)) {
           if (!Array.isArray(point) || point.length !== 2 || !point.every((n) => typeof n === 'number' && Number.isFinite(n))) {
             fail('PARTS_ALT_TIPS', `${at} tips.${bone}`, 'requires a finite [x, y] endpoint in rig-crop pixels');
+          }
+        }
+      }
+      // Issue #664: each front part is drawn on its front slot and hidden on its base slot, never both.
+      if ('front' in set) {
+        const slots = typeof set.slots === 'object' && set.slots !== null && !Array.isArray(set.slots) ? (set.slots as Record<string, unknown>) : {};
+        const hides = Array.isArray(set.hides) ? set.hides : [];
+        if (!Array.isArray(set.front) || set.front.length === 0 || !set.front.every((p) => typeof p === 'string')) {
+          fail('PARTS_FIELD_TYPE', `${at} front`, `is ${show(set.front)}; a nonempty array of part names is required`);
+        } else {
+          for (const p of set.front as string[]) {
+            if (!Object.hasOwn(slots, `${p}${FRONT_SUFFIX}`) || !hides.includes(p)) {
+              fail('PARTS_FIELD_TYPE', `${at} front "${p}"`, `requires slots."${p}${FRONT_SUFFIX}" and "${p}" in hides; re-run assemble`);
+            }
           }
         }
       }

@@ -172,7 +172,7 @@ import { coalesceLimbSlots } from './limbslots.ts';
 import { layoutAlias, placeLimbLayouts, type LayoutPlan } from './limblayout.ts';
 import { artCoverage, ART_ALPHA, latticeCells, latticeMesh, latticeStray, ONE_LOOP_PASSES } from './mesh.ts';
 import { bindFaceSurfaceDeform, BLINK, blinkHoldMisses, blinkSpan, CONTROL_SUFFIX, controlledBones, IDLE_FPS, idleMotion, type MotionSpec, moveKeysToControls } from './motion.ts';
-import { type AlternateSetMap, PAINTING_RUN, type PartsFile, readFrom, tagOf } from './parts.ts';
+import { type AlternateSetMap, FRONT_SUFFIX, PAINTING_RUN, type PartsFile, readFrom, tagOf } from './parts.ts';
 import { readTag } from './tags.ts';
 import { EYE_GROUP_TAGS } from './propose.ts';
 import { alphaAbove, crop, pad, type Raster } from './raster/index.ts';
@@ -507,7 +507,8 @@ export interface RigSpec {
   images: 'images';
   skeleton: { x: number; y: number; width: number; height: number };
   bones: RigBone[];
-  slots: Array<{ name: string; bone: string; attachment: string }>;
+  /** `attachment` null only on a limb segment's front slot (issue #664), which shows nothing at setup. */
+  slots: Array<{ name: string; bone: string; attachment: string | null }>;
   skins: { default: Record<string, Record<string, MeshAttachment | RegionAttachment>> };
   /**
    * `config.constraints`, in the order written, each as the config wrote it
@@ -669,6 +670,7 @@ function applyTurn(
   slots: RigSpec['slots'],
   skin: RigSpec['skins']['default'],
   constraints: readonly ConfigConstraint[],
+  frontSlots: ReadonlySet<string> = new Set(),
 ): { constraints: Array<Record<string, unknown>>; detached: DetachedRule[]; rows: TurnRow[] } {
   const problems: Problem[] = [];
   const taken = new Set(bones.map((b) => b.name));
@@ -679,7 +681,8 @@ function applyTurn(
     const row: TurnRow = { ...f, twins: [] };
     rows.push(row);
     if (f.fraction === 0) continue;
-    const mine = slots.filter((sl) => sl.name === f.part || sl.name === `${f.part}${STILL_SUFFIX}`);
+    // A declared front slot (issue #664) rides its part; a part merely named `<part>_front` is a part of its own.
+    const mine = slots.filter((sl) => sl.name === f.part || sl.name === `${f.part}${STILL_SUFFIX}` || (sl.name === `${f.part}${FRONT_SUFFIX}` && frontSlots.has(sl.name)));
     const bound: string[] = [];
     const bind = (b: string): void => {
       if (!bound.includes(b)) bound.push(b);
@@ -706,7 +709,7 @@ function applyTurn(
     const twinOf = new Map(row.twins.map((t) => [t.bone, t.twin]));
     for (const t of row.twins) bones.push({ name: t.twin, parent: t.bone, x: 0, y: 0 });
     for (const sl of slots) {
-      if (sl.name !== row.part && sl.name !== `${row.part}${STILL_SUFFIX}`) continue;
+      if (sl.name !== row.part && sl.name !== `${row.part}${STILL_SUFFIX}` && !(sl.name === `${row.part}${FRONT_SUFFIX}` && frontSlots.has(sl.name))) continue;
       sl.bone = twinOf.get(sl.bone) as string;
       const atts = skin[sl.name] ?? {};
       for (const [k, att] of Object.entries(atts)) {
@@ -2394,6 +2397,28 @@ export function buildRig(
     });
   }
   refuseIfAny(problems);
+  // ---- front slots (issue #664) ------------------------------------------
+  // Only when a limb declares `front`: each named segment part gets `<part>_front` on its base slot's bone, showing
+  // nothing at setup. They ride with every slot through stops and turn, but stay out of the limb closure (#646) and
+  // are placed after their target's family once the setup order is final.
+  const frontSlots: RigSpec['slots'] = [];
+  const frontTargets: Array<{ slot: string; after: string; at: string }> = [];
+  for (const [limbName, limb] of Object.entries(cfg.limbs ?? {})) {
+    if (limb.front === undefined) continue;
+    for (const part of limb.front.parts) {
+      const at = `config.limbs.${limbName}.front`;
+      const base = slots.find((sl) => sl.name === part);
+      if (base === undefined) {
+        fail('RIG_NAME_RESOLVES', `${at}.parts`, `names "${part}", which has no slot in the base rig; a front slot rides its segment's base slot bone`);
+        continue;
+      }
+      frontSlots.push({ name: `${part}${FRONT_SUFFIX}`, bone: base.bone, attachment: null });
+      frontTargets.push({ slot: `${part}${FRONT_SUFFIX}`, after: limb.front.after, at });
+    }
+  }
+  refuseIfAny(problems);
+  // Only declared front slots are front slots: a part authored as `<part>_front` is an ordinary part (review of #667).
+  const declaredFront = new Set(frontSlots.map((sl) => sl.name));
   // ---- alternate painting sets (issues #454, #465) ------------------------
   // Only when `parts.alternates` is present: each alternate set's `<set>_<part>`
   // attachments are added to `skins.default[<part>]` on the existing bones and
@@ -2413,13 +2438,21 @@ export function buildRig(
           fail('RIG_ALT_TIP_POINT', `parts.json alternates[${altIdx}].tips.${bone}`, 'requires a finite [x, y] endpoint in rig-crop pixels');
         }
       }
+      // Issue #664: one segment is drawn by one slot of a set, its base slot or its front slot, never both.
+      for (const slotName of Object.keys(alt.slots)) {
+        if (declaredFront.has(`${slotName}${FRONT_SUFFIX}`) && Object.hasOwn(alt.slots, `${slotName}${FRONT_SUFFIX}`)) {
+          fail('RIG_SET_FRONT_BOTH', `parts.json alternates[${altIdx}] (set "${alt.name}") part "${slotName}"`, `maps both slot "${slotName}" and its front slot "${slotName}${FRONT_SUFFIX}"; a set draws a segment on its base slot or on its front slot, not both — re-run assemble`);
+        }
+      }
+      const altFront = new Set(alt.front ?? []);
       refuseIfAny(problems);
       const explicitDrawn = alt.drawn ?? cfgAlt?.drawn;
       const isSubsetSet = alt.parts !== undefined || cfgAlt?.parts !== undefined;
       let coveredBones: Set<string> | null = null;
       if (isSubsetSet) {
         coveredBones = new Set<string>();
-        for (const pName of Object.keys(alt.slots)) {
+        for (const slotName of Object.keys(alt.slots)) {
+          const pName = declaredFront.has(slotName) && altFront.has(slotName.slice(0, -FRONT_SUFFIX.length)) ? slotName.slice(0, -FRONT_SUFFIX.length) : slotName;
           if (pName in cfg.regions) coveredBones.add(cfg.regions[pName]);
           for (const s of meshSegments.get(pName) ?? []) coveredBones.add(s.bone);
           const m = cfg.meshes[pName];
@@ -2477,13 +2510,16 @@ export function buildRig(
         const attName = `${alt.name}_${p.name}`;
         const rawImg = images.get(attName);
         if (rawImg === undefined) continue;
+        // Issue #664: a part the set draws on its front slot files its attachment under that slot; bones are shared.
+        const skinSlot = altFront.has(p.name) ? `${p.name}${FRONT_SUFFIX}` : p.name;
+        skin[skinSlot] ??= {};
         const img = pad(rawImg, PAD, PAD, PAD, PAD, [0, 0, 0, 0]);
         const file = `${attName}.png`;
         outImages.push([file, img]);
         const mesh = cfg.meshes[p.name];
         if (mesh === undefined) {
           const bone = B.get(cfg.regions[p.name]) as Bone;
-          skin[p.name][attName] = altRegion(file, bone.name, p.x + p.w / 2, p.y + p.h / 2);
+          skin[skinSlot][attName] = altRegion(file, bone.name, p.x + p.w / 2, p.y + p.h / 2);
           continue;
         }
         const fullSegs = meshSegments.get(p.name) as Segment[];
@@ -2535,7 +2571,7 @@ export function buildRig(
         const r = 'r' in mesh ? mesh.r : 80;
         const lm = latticeMesh(attName, art, grid, maxLoopPasses);
         if ('code' in lm) {
-          skin[p.name][attName] = altRegion(file, segs[0].bone, p.x + p.w / 2, p.y + p.h / 2);
+          skin[skinSlot][attName] = altRegion(file, segs[0].bone, p.x + p.w / 2, p.y + p.h / 2);
           continue;
         }
         const ox = p.x - PAD;
@@ -2598,7 +2634,7 @@ export function buildRig(
         }
         const uvs: number[] = [];
         for (const [x, y] of lm.vertices) uvs.push(pyRound(x / w, 6), pyRound(y / h, 6));
-        skin[p.name][attName] = { type: 'mesh', image: file, width: w, height: h, uvs, triangles: lm.triangles, hull: lm.hull, weights };
+        skin[skinSlot][attName] = { type: 'mesh', image: file, width: w, height: h, uvs, triangles: lm.triangles, hull: lm.hull, weights };
       }
       const slotMap: Record<string, string> = {};
       for (const [slotName, att] of Object.entries(alt.slots)) slotMap[slotName] = att;
@@ -2635,11 +2671,12 @@ export function buildRig(
   // ---- leg stops (issue #404) --------------------------------------------
   // Only when the config has `stops`: each link after the first (and any bone hanging from a stopped link) hangs
   // from the drawn link `<link>_d` above it, and slots and weights on a stopped link bind `<link>_d`.
-  const stops = cfg.stops === undefined ? null : applyStops(cfg.stops, chains, bones, slots, skin, (original, emitted) => layoutAlias(explicitLayout.plan, original, emitted));
+  const rebound = frontSlots.length === 0 ? slots : [...slots, ...frontSlots];
+  const stops = cfg.stops === undefined ? null : applyStops(cfg.stops, chains, bones, rebound, skin, (original, emitted) => layoutAlias(explicitLayout.plan, original, emitted));
   // ---- the turn control (issue #251) -------------------------------------
   // Only when the config has `turn`: every other build adds nothing here, so no byte moves.
   if (cfg.turn !== undefined) refuseIfAny(turnRiderProblems(cfg.turn, cfg, parts.parts));
-  const turned = cfg.turn === undefined ? null : applyTurn(cfg.turn, parts.parts.map((p) => p.name), bones, slots, skin, cfg.constraints ?? []);
+  const turned = cfg.turn === undefined ? null : applyTurn(cfg.turn, parts.parts.map((p) => p.name), bones, rebound, skin, cfg.constraints ?? [], declaredFront);
   for (const row of turned?.rows ?? []) for (const t of row.twins) layoutAlias(explicitLayout.plan, t.bone, t.twin);
   // issue #536: every row names the bones the emitted attachment binds, read once the turn and the stops have
   // rebound the weights; a rig with neither rebinds nothing, so this reads back the names each row already holds.
@@ -2655,7 +2692,7 @@ export function buildRig(
     images: 'images',
     skeleton: { x: -CX, y: 0, width: W, height: H },
     bones,
-    slots: explicitLayout.slots,
+    slots: frontSlots.length === 0 ? explicitLayout.slots : spliceFrontSlots(explicitLayout.slots, frontSlots, frontTargets, slotFamilies),
     skins: { default: skin },
   };
   if (cfg.constraints !== undefined) rig.constraints = cfg.constraints.map(constraintForRig);
@@ -2710,6 +2747,32 @@ export function buildRig(
     ...(sets === undefined ? {} : { sets }),
     ...(explicitLayout.plan === undefined ? {} : { layout: explicitLayout.plan }),
   };
+}
+
+/**
+ * Issue #664: the final setup slot order with each front slot placed
+ * immediately after its target part's whole slot family (the part's slot and
+ * its `<part>_still`), wherever the closure (#646) left that family's last
+ * member; several front slots after one family keep the order the config
+ * declares them in. A target with no slot in the order is refused by name.
+ */
+function spliceFrontSlots(order: RigSpec['slots'], fronts: RigSpec['slots'], targets: ReadonlyArray<{ slot: string; after: string; at: string }>, families: ReadonlyMap<string, readonly string[]>): RigSpec['slots'] {
+  const problems: Problem[] = [];
+  const out = [...order];
+  for (const [i, f] of fronts.entries()) {
+    const t = targets[i];
+    const family = families.get(t.after) ?? [];
+    const last = Math.max(-1, ...family.map((n) => out.findIndex((s) => s.name === n)));
+    if (last < 0) {
+      problems.push({ code: 'RIG_NAME_RESOLVES', object: `${t.at}.after`, detail: `names "${t.after}", which has no slot in the rig's setup order; a front slot is placed after a part's slot family` });
+      continue;
+    }
+    let at = last + 1;
+    while (at < out.length && fronts.slice(0, i).includes(out[at])) at++;
+    out.splice(at, 0, f);
+  }
+  refuseIfAny(problems);
+  return out;
 }
 
 /**
@@ -2841,6 +2904,23 @@ export function expandSetAttachmentKeys(rig: RigSpec, sets: AttachmentSetsFile |
               code: 'CONFIG_SET_COVERS_SLOT',
               object: keyAt,
               detail: `names alternate set "${setVal}" for slot "${slot}", which config.assemble.alternates does not declare (declared sets: ${declaredSets})`,
+            });
+            return;
+          }
+          // Issue #664: a set that draws this track's part on its front slot moves the part in the draw order, which a
+          // keyed attachment swap cannot do; keyed draw-order changes are out of scope.
+          // A declared front slot is the one slot the rig writes with no setup attachment.
+          const isFront = (name: string): boolean => rig.slots.some((sl) => sl.name === name && sl.attachment === null);
+          const frontBase = slot.endsWith(FRONT_SUFFIX) && isFront(slot) ? slot.slice(0, -FRONT_SUFFIX.length) : null;
+          const drawsFront =
+            (isFront(`${slot}${FRONT_SUFFIX}`) && Object.hasOwn(entry.slots, `${slot}${FRONT_SUFFIX}`) && entry.hides?.includes(slot) === true) ||
+            (frontBase !== null && Object.hasOwn(entry.slots, slot) && entry.hides?.includes(frontBase) === true);
+          if (drawsFront) {
+            const part = frontBase ?? slot;
+            problems.push({
+              code: 'CONFIG_SET_FRONT_KEYED',
+              object: keyAt,
+              detail: `names alternate set "${setVal}" on slot "${slot}", and set "${setVal}" draws "${part}" on its front slot "${part}${FRONT_SUFFIX}" (hiding "${part}"); a keyed set switch on a front part would change the draw order mid-clip, which is out of scope — show the set with setSet, or key a part the set draws on its base slot`,
             });
             return;
           }
