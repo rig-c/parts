@@ -270,7 +270,7 @@ const pair={pair:'back|front',a:'back',b:'front'};
 const positive=reader(pair,set.animation,hit,f.time),negative=reader(pair,set.animation,hit,f.time+1);
 const result={scope:'declared whole-box reader probe, not a measured GAP',positive,negative};
 writeFileSync(join(out,'render-read-proof.json'),JSON.stringify(result,null,2)+'\\n');
-if(positive.status!=='exempt'||positive.box_cells!==1||positive.covered_cells!==1||negative.status!=='unavailable'||negative.raw_px!==1)throw new Error('SMOKE_ROOT_COVERAGE '+JSON.stringify(result));
+if(positive.status!=='exempt'||positive.box_cells!==1||positive.covered_cells!==1||negative.status==='exempt'||negative.status!=='unavailable'||negative.reason!=='raw and geometry frame time differ')throw new Error('SMOKE_ROOT_COVERAGE '+JSON.stringify(result));
 console.log('ROOT_COVERAGE_EXACT_RGBA 1/1; wrong-time unavailable retains1');
 `;
 
