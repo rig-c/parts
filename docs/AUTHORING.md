@@ -4214,6 +4214,30 @@ assemble*, at the end of this section):
   `--keep-stills` retains those seam frames under `setup_still/`, and the original
   auto-fitted diagnostic frames separately under `setup_still_auto/`.
 
+  `seam_scope.population` is a census of the **included comparison samples**,
+  before reading their RGB residual, including samples with zero error. Its
+  `basis` is `reference-alpha/top-two-of-2x2`: the same source reference
+  attribution used by the error rows below. `pairs` lists only two distinct
+  source parts actually encountered in that footprint, lower first; `pair_count`
+  is that list's length. `single_art` names samples attributed to only one part,
+  and `no_reference_art` counts samples with no contributing source art. These
+  buckets describe reference support, not anatomical joints, posed ownership,
+  physical gaps or ghost ownership. They never invent combinations from part
+  names or use the renderer's drawn-alpha threshold instead of alpha above0.
+
+  Each bucket records `whole_sample_px`, `scope_sample_px` and
+  `inherited_sample_px`, with whole=scope+inherited. Base scope equals whole;
+  checked sets partition the same included cells with their existing effect
+  mask, independently of RGB error. The sum of all whole buckets equals
+  `measured_sample_px`: all included U cells for non-scenes, only the existing
+  authored scene interior for scenes. This count is **not** the fixed mean
+  denominator A. A measured zero-error pair therefore remains named, while a
+  measured state with no genuine pair has `pair_count: 0` and explicit
+  single/no-reference buckets. A seam SKIP without parts has no fabricated
+  population. The existing sparse `pairs`, `whole_pairs` and requested
+  `seam_pairs` remain error-attribution rows; this census adds no zero-error
+  picture, box, flag, allowance, bar or render.
+
   The bar reads one
   frame, the setup-pose still, never the idle. When it fails (or when `check
   --seam-pairs` asks, or `build --seam-pairs`, which forwards it, pass or fail), the pixels over 40 are split by the pair of

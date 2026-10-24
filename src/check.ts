@@ -1461,6 +1461,7 @@ export function seamFigures(
   scene = false,
   effect?: Uint8Array,
   sourceGrid = false,
+  observe?: (pixel: number, map: ScaleTranslate) => void,
 ): SeamFigures {
   const [W, H] = [composite.width, composite.height];
   const src = newFloatImage(W, H, 3);
@@ -1497,16 +1498,17 @@ export function seamFigures(
   const edgeCol = scene ? Array.from({ length: vp.pixelWidth }, (_, x) => onEdge(x, map.tx, map.sx, W)) : null;
   const edgeRow = scene ? Array.from({ length: vp.pixelHeight }, (_, y) => onEdge(y, map.ty, map.sy, H)) : null;
   for (let p = 0; p < n; p++) {
+    const u = p % vp.pixelWidth - map.tx, v = Math.floor(p / vp.pixelWidth) - map.ty;
+    const excluded = sourceGrid && scene
+      ? u < 0 || v < 0 || u >= W || v >= H || onEdge(u, 0, 1, W) || onEdge(v, 0, 1, H)
+      : edgeCol !== null && edgeRow !== null && (edgeCol[p % vp.pixelWidth] || edgeRow[Math.floor(p / vp.pixelWidth)]);
+    if (!excluded && (effect === undefined || effect[p] !== 0)) observe?.(p, map);
     let m = 0;
     for (let c = 0; c < 3; c++) {
       const w = Math.fround(warped.data[p * 3 + c] + background[c]);
       const d = Math.abs(w - frame.data[p * 4 + c]);
       if (d > m) m = d;
     }
-    const u = p % vp.pixelWidth - map.tx, v = Math.floor(p / vp.pixelWidth) - map.ty;
-    const excluded = sourceGrid && scene
-      ? u < 0 || v < 0 || u >= W || v >= H || onEdge(u, 0, 1, W) || onEdge(v, 0, 1, H)
-      : edgeCol !== null && edgeRow !== null && (edgeCol[p % vp.pixelWidth] || edgeRow[Math.floor(p / vp.pixelWidth)]);
     if (excluded) {
       borderPx++;
       if (m > SEAM_PX_LEVEL) borderOver40++;
@@ -1851,6 +1853,8 @@ export interface SeamScope {
   effects?: SeamEffects['reasons'];
   changes?: SeamEffects['changes'];
   unavailable?: SeamSupportUnavailable;
+  /** Every actually observed pre-threshold reference contributor category, not error-only rows. */
+  population?: SeamPopulation;
   whole_pairs?: Array<Omit<SeamPairRow, 'picture'>>;
   pairs?: Array<{ parts: [string, string]; whole_px_over_40: number; affected_px_over_40: number; inherited_px_over_40: number; reasons: Partial<SeamEffects['reasons']> }>;
 }
@@ -1936,13 +1940,30 @@ export interface PlacedAlpha {
   image: Raster;
 }
 
-/**
- * Split the seam's counted pixels by the pair of parts that answers for each
- * ({@link SeamPairRow}), worst first: by `px_over_40` descending, ties by the
- * pair's names in draw order. `parts` is parts.json's list in its order, each
- * with its image as assembled.
- */
-export function seamPairRows(seam: SeamFigures, parts: readonly PlacedAlpha[], rigSize: readonly [number, number], vp: Viewport): Array<{ row: SeamPairRow; pixels: number[] }> {
+/** Actual included source-grid sample support, independent of RGB error. */
+export interface SeamPopulationCounts {
+  whole_sample_px: number;
+  scope_sample_px: number;
+  inherited_sample_px: number;
+}
+
+export interface SeamPopulation {
+  basis: 'reference-alpha/top-two-of-2x2';
+  measured_sample_px: number;
+  pair_count: number;
+  pairs: Array<SeamPopulationCounts & { parts: [string, string] }>;
+  single_art: Array<SeamPopulationCounts & { part: string }>;
+  no_reference_art: SeamPopulationCounts;
+}
+
+interface SeamReferenceSample {
+  first: number; second: number; u0: number; v0: number;
+  rx0: number; ry0: number; rx1: number; ry1: number;
+  read: Array<[number, number]>;
+}
+
+/** The existing 2x2 reference attribution; no posed ownership or anatomical pair is inferred. */
+function seamReferenceAttribution(parts: readonly PlacedAlpha[], rigSize: readonly [number, number], vp: Viewport) {
   const [W, H] = rigSize;
   // Each rig pixel's two topmost parts with art there (-1 for none): the top two of a union of pixels are among each pixel's own top two.
   const top = new Int32Array(W * H).fill(-1);
@@ -1961,7 +1982,93 @@ export function seamPairRows(seam: SeamFigures, parts: readonly PlacedAlpha[], r
       }
     }
   });
-  const { sx, sy, tx, ty } = seam.map;
+  const sample: SeamReferenceSample = { first: -1, second: -1, u0: 0, v0: 0, rx0: 0, ry0: 0, rx1: 0, ry1: 0, read: [] };
+  return (p: number, map: ScaleTranslate, details = false): SeamReferenceSample => {
+    const fx = p % vp.pixelWidth, fy = Math.floor(p / vp.pixelWidth);
+    const { sx, sy, tx, ty } = map;
+    const u0 = Math.floor((fx - tx) / sx), v0 = Math.floor((fy - ty) / sy);
+    let first = -1, second = -1;
+    const read = sample.read; read.length = 0;
+    let rx0 = Infinity, ry0 = Infinity, rx1 = -Infinity, ry1 = -Infinity;
+    for (let dv = 0; dv < 2; dv++) {
+      for (let du = 0; du < 2; du++) {
+        const u = u0 + du, v = v0 + dv;
+        if (u < 0 || u >= W || v < 0 || v >= H) continue;
+        if (details) read.push([u, v]);
+        rx0 = Math.min(rx0, u); ry0 = Math.min(ry0, v);
+        rx1 = Math.max(rx1, u); ry1 = Math.max(ry1, v);
+        for (let layer = 0; layer < 2; layer++) {
+          const k = layer === 0 ? top[v * W + u] : next[v * W + u];
+          if (k < 0 || k === first || k === second) continue;
+          if (k > first) { second = first; first = k; }
+          else if (k > second) second = k;
+        }
+      }
+    }
+    if (rx1 < rx0) {
+      rx0 = rx1 = Math.min(Math.max(u0, 0), W - 1);
+      ry0 = ry1 = Math.min(Math.max(v0, 0), H - 1);
+    }
+    sample.first = first; sample.second = second; sample.u0 = u0; sample.v0 = v0;
+    sample.rx0 = rx0; sample.ry0 = ry0; sample.rx1 = rx1; sample.ry1 = ry1;
+    return sample;
+  };
+}
+
+/**
+ * Observe only cells the existing seam loop actually includes. The callback has
+ * no RGB argument: membership cannot be selected from threshold-error pixels.
+ * Source-grid background is a bucket, not a fabricated two-part pair. Counted
+ * residuals still use their old NO_ART attribution, boxes and pictures.
+ */
+export function createSeamPopulation(parts: readonly PlacedAlpha[], rigSize: readonly [number, number], vp: Viewport, scope?: Uint8Array) {
+  const at = seamReferenceAttribution(parts, rigSize, vp);
+  const counts = (): SeamPopulationCounts => ({ whole_sample_px: 0, scope_sample_px: 0, inherited_sample_px: 0 });
+  const pairs = new Map<number, Map<number, SeamPopulationCounts & { parts: [string, string] }>>();
+  const singles = new Map<number, SeamPopulationCounts & { part: string }>();
+  const noArt = counts();
+  let measured = 0;
+  return {
+    observe: (p: number, map: ScaleTranslate): void => {
+      const { first: b, second: a } = at(p, map);
+      let row: SeamPopulationCounts;
+      if (a >= 0) {
+        let lower = pairs.get(b);
+        if (lower === undefined) { lower = new Map(); pairs.set(b, lower); }
+        let pair = lower.get(a);
+        if (pair === undefined) { pair = { parts: [parts[a].name, parts[b].name], ...counts() }; lower.set(a, pair); }
+        row = pair;
+      } else if (b >= 0) {
+        let single = singles.get(b);
+        if (single === undefined) { single = { part: parts[b].name, ...counts() }; singles.set(b, single); }
+        row = single;
+      } else row = noArt;
+      measured++; row.whole_sample_px++;
+      if (scope === undefined || scope[p] !== 0) row.scope_sample_px++;
+      else row.inherited_sample_px++;
+    },
+    finish: (): SeamPopulation => {
+      const rows = [...pairs.entries()].sort(([a], [b]) => a - b)
+        .flatMap(([, lower]) => [...lower.entries()].sort(([a], [b]) => a - b).map(([, row]) => ({ ...row })));
+      return { basis: 'reference-alpha/top-two-of-2x2', measured_sample_px: measured,
+        pair_count: rows.length, pairs: rows,
+        single_art: [...singles.entries()].sort(([a], [b]) => a - b).map(([, row]) => ({ ...row })),
+        no_reference_art: { ...noArt } };
+    },
+    rows: (seam: SeamFigures) => seamPairRowsFrom(seam, parts, rigSize, vp, at),
+  };
+}
+
+/**
+ * Split only counted error pixels into the existing diagnostic rows, worst
+ * first; population metadata does not create zero-error boxes or pictures.
+ */
+export function seamPairRows(seam: SeamFigures, parts: readonly PlacedAlpha[], rigSize: readonly [number, number], vp: Viewport): Array<{ row: SeamPairRow; pixels: number[] }> {
+  return seamPairRowsFrom(seam, parts, rigSize, vp, seamReferenceAttribution(parts, rigSize, vp));
+}
+
+function seamPairRowsFrom(seam: SeamFigures, parts: readonly PlacedAlpha[], rigSize: readonly [number, number], vp: Viewport, attribution: ReturnType<typeof seamReferenceAttribution>): Array<{ row: SeamPairRow; pixels: number[] }> {
+  const [W, H] = rigSize;
   // A part's pixel at rig (u, v) as an offset into its image, or -1 where it holds no art.
   const at = (k: number, u: number, v: number): number => {
     const part = parts[k];
@@ -1984,39 +2091,7 @@ export function seamPairRows(seam: SeamFigures, parts: readonly PlacedAlpha[], r
   seam.counted.forEach((p, idx) => {
     const fx = p % vp.pixelWidth;
     const fy = Math.floor(p / vp.pixelWidth);
-    const u0 = Math.floor((fx - tx) / sx);
-    const v0 = Math.floor((fy - ty) / sy);
-    let first = -1;
-    let second = -1;
-    const read: Array<[number, number]> = [];
-    let rx0 = Infinity;
-    let ry0 = Infinity;
-    let rx1 = -Infinity;
-    let ry1 = -Infinity;
-    for (let dv = 0; dv < 2; dv++) {
-      for (let du = 0; du < 2; du++) {
-        const u = u0 + du;
-        const v = v0 + dv;
-        if (u < 0 || u >= W || v < 0 || v >= H) continue;
-        read.push([u, v]);
-        rx0 = Math.min(rx0, u);
-        ry0 = Math.min(ry0, v);
-        rx1 = Math.max(rx1, u);
-        ry1 = Math.max(ry1, v);
-        for (const k of [top[v * W + u], next[v * W + u]]) {
-          if (k < 0 || k === first || k === second) continue;
-          if (k > first) {
-            second = first;
-            first = k;
-          } else if (k > second) second = k;
-        }
-      }
-    }
-    // A sample wholly outside the rig reads no rig pixel; its rig box is the nearest rig pixel.
-    if (rx1 < rx0) {
-      rx0 = rx1 = Math.min(Math.max(u0, 0), W - 1);
-      ry0 = ry1 = Math.min(Math.max(v0, 0), H - 1);
-    }
+    const { u0, v0, first, second, read, rx0, ry0, rx1, ry1 } = attribution(p, seam.map, true);
     const a = second;
     const b = first;
     const key = `${a},${b}`;
@@ -5545,10 +5620,11 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         if (keepStills) cpSync(join(stillDir, 'seam'), keptDir, { recursive: true });
         const composite = flatComposite(inp.parts, inp.partsDir, stillSet.background);
         const autoSeam = seamFigures(composite, stillSet.frames[0].image, inp.stage, stillSet.viewport, stillSet.background, undefined, inp.parts.scene !== undefined);
-        seam = seamFigures(composite, canonicalSet.frames[0].image, inp.stage, canonicalSet.viewport, canonicalSet.background, undefined, inp.parts.scene !== undefined, undefined, true);
-        seamScope = { mode: 'source-grid/base', domain, denominator_px: canonicalDenominator(seam), auto_frame_raw: seamReading(autoSeam, stillSet.viewport), whole: seamReading(seam, canonicalSet.viewport) };
         const placed = inp.parts.parts.map(p => ({ name: p.name, from: p.from, x: p.x, y: p.y, image: readPng(join(inp.partsDir, `${p.name}.png`)) }));
-        const baseRows = seamPairRows(seam, placed, inp.parts.rig_size, canonicalSet.viewport);
+        const basePopulation = createSeamPopulation(placed, inp.parts.rig_size, canonicalSet.viewport);
+        seam = seamFigures(composite, canonicalSet.frames[0].image, inp.stage, canonicalSet.viewport, canonicalSet.background, undefined, inp.parts.scene !== undefined, undefined, true, basePopulation.observe);
+        seamScope = { mode: 'source-grid/base', domain, denominator_px: canonicalDenominator(seam), auto_frame_raw: seamReading(autoSeam, stillSet.viewport), whole: seamReading(seam, canonicalSet.viewport), population: basePopulation.finish() };
+        const baseRows = basePopulation.rows(seam);
         seamScope.whole_pairs = baseRows.map(({ row: { picture: _picture, ...raw } }) => raw);
         if (seamPairsAsked || seamFails(round3(seam.mean), seam.over40, 1)) {
           const split = baseRows;
@@ -5571,11 +5647,12 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
             const altSupport = seamSupport(join(setDir, 'build'), join(setDir, 'rig.json'), altCanonical, altPlaced, seamStacks, inp.stage);
             const effects = seamEffectSelection(baseSupport, altSupport);
             const autoAltSeam = seamFigures(altComposite, altStillSet.frames[0].image, inp.stage, altStillSet.viewport, altStillSet.background, undefined, alt.scene !== undefined);
-            const wholeAltSeam = seamFigures(altComposite, altCanonical.frames[0].image, inp.stage, altCanonical.viewport, altCanonical.background, undefined, inp.parts.scene !== undefined, undefined, true);
+            const population = createSeamPopulation(altPlaced, inp.parts.rig_size, altCanonical.viewport, effects.mask);
+            const wholeAltSeam = seamFigures(altComposite, altCanonical.frames[0].image, inp.stage, altCanonical.viewport, altCanonical.background, undefined, inp.parts.scene !== undefined, undefined, true, population.observe);
             const altSeam = seamFigures(altComposite, altCanonical.frames[0].image, inp.stage, altCanonical.viewport, altCanonical.background, undefined, inp.parts.scene !== undefined, effects.mask, true);
-            const wholeRows = seamPairRows(wholeAltSeam, altPlaced, inp.parts.rig_size, altCanonical.viewport);
+            const wholeRows = population.rows(wholeAltSeam);
             const altScope: SeamScope = {
-              mode: 'source-grid/affected-set', domain, denominator_px: canonicalDenominator(altSeam),
+              mode: 'source-grid/affected-set', domain, denominator_px: canonicalDenominator(altSeam), population: population.finish(),
               auto_frame_raw: seamReading(autoAltSeam, altStillSet.viewport), whole: seamReading(wholeAltSeam, altCanonical.viewport), effects: effects.reasons, changes: effects.changes,
               ...((baseSupport.unavailable ?? altSupport.unavailable) === undefined ? {} : { unavailable: baseSupport.unavailable ?? altSupport.unavailable }),
               // Raw rows retain every original field except an unwritten picture.
@@ -5596,7 +5673,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
             }
             let altPairs: SeamPairRow[] | null = null;
             if (seamPairsAsked || altFailed) {
-              const split = seamPairRows(altSeam, altPlaced, inp.parts.rig_size, altCanonical.viewport);
+              const split = population.rows(altSeam);
               const altSeamDir = join(seamDir, alt.name);
               mkdirSync(altSeamDir, { recursive: true });
               for (const { row, pixels } of split) {

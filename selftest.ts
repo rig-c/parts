@@ -364,6 +364,7 @@ import {
   SEAM_PX_LEVEL,
   type SeamFigures,
   seamFigures,
+  createSeamPopulation,
   seamEffectSelection,
   seamDrawingSignature,
   seamSourceAttachment,
@@ -15136,6 +15137,7 @@ function runSourceCases(dir: string, say: (name: string, ok: boolean, detail: st
       withIdle.fig.seam_mean === null &&
       withIdle.fig.seam_px_over_40 === null &&
       withIdle.fig.seam_px_over_80 === null &&
+      !('seam_scope' in withIdle.fig) &&
       skippedIdle?.loop === undefined &&
       (skippedIdle?.seam ?? '').startsWith(NO_PARTS) &&
       withIdle.out.includes(`  seam: SKIP — ${NO_PARTS}`) &&
@@ -18507,6 +18509,73 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       "issue #216's consumer reading: a correct rig drawn small on its stage (s = 1.59) passed with a margin of 0 — 50 frame px against the bar of 50 — because the frame holds s² pixels per rig pixel. The patch is the planted negative of the frame count: green under the bar in rig pixels at every scale, red at s ~ 2 when the same check.json is read the way a file written before this field is (barsNotMet without seam_frame_scale, the frame count). On the fixture the patch read 19, 52 and 86 frame px at s ~ 1.0, 1.5 and 2.0, about 19 to 23 rig px [observed, the prototype of this control]",
     );
 
+    // #716: support membership is fixed before RGB error is observed. The two
+    // full-canvas source drawings contribute to every one of these 12 samples.
+    const populationViewport716 = { x: 0, y: 0, width: 4, height: 3, scale: 1, pixelWidth: 4, pixelHeight: 3 };
+    const populationStage716 = { x: 0, y: 0, width: 4, height: 3 };
+    const populationArt716 = newRaster(4, 3);
+    for (let q = 0; q < 12; q++) populationArt716.data.set([80, 60, 40, 255], q * 4);
+    const populationParts716 = ['back', 'front'].map(name => ({ name, from: `full:${name}`, x: 0, y: 0, image: populationArt716 }));
+    const zeroPopulation716 = createSeamPopulation(populationParts716, [4, 3], populationViewport716);
+    const zeroFigures716 = seamFigures(populationArt716, populationArt716, populationStage716, populationViewport716, [0, 0, 0, 255], undefined, false, undefined, true, zeroPopulation716.observe);
+    const measuredZero716 = zeroPopulation716.finish();
+    say('CK716_ZERO_ERROR_RETAINS_THE_ACTUALLY_MEASURED_REFERENCE_PAIR',
+      zeroFigures716.over40 === 0 && zeroPopulation716.rows(zeroFigures716).length === 0 &&
+      measuredZero716.measured_sample_px === 12 && measuredZero716.pair_count === 1 &&
+      JSON.stringify(measuredZero716.pairs) === JSON.stringify([{ parts: ['back', 'front'], whole_sample_px: 12, scope_sample_px: 12, inherited_sample_px: 0 }]) &&
+      measuredZero716.single_art.length === 0 && measuredZero716.no_reference_art.whole_sample_px === 0,
+      JSON.stringify({ residual: zeroFigures716.over40, population: measuredZero716 }),
+      'two opaque full-canvas 4x3 source drawings give one reference contributor pair on all 12 included samples even when no RGB error exceeds40; residual rows stay empty, with no zero-hit picture or box');
+    const singlePopulation716 = createSeamPopulation(populationParts716.slice(0, 1), [4, 3], populationViewport716);
+    const emptyPopulation716 = createSeamPopulation([], [4, 3], populationViewport716);
+    seamFigures(populationArt716, populationArt716, populationStage716, populationViewport716, [0, 0, 0, 255], undefined, false, undefined, true, singlePopulation716.observe);
+    seamFigures(populationArt716, populationArt716, populationStage716, populationViewport716, [0, 0, 0, 255], undefined, false, undefined, true, emptyPopulation716.observe);
+    const singleReading716 = singlePopulation716.finish(), emptyReading716 = emptyPopulation716.finish();
+    say('CK716_NO_PAIR_SINGLE_ART_AND_NO_REFERENCE_ART_ARE_DISTINCT_POPULATIONS',
+      singleReading716.pair_count === 0 && singleReading716.single_art.length === 1 &&
+      singleReading716.single_art[0].part === 'back' && singleReading716.single_art[0].whole_sample_px === 12 &&
+      emptyReading716.pair_count === 0 && emptyReading716.single_art.length === 0 && emptyReading716.no_reference_art.whole_sample_px === 12 &&
+      JSON.stringify(singleReading716) !== JSON.stringify(measuredZero716) && JSON.stringify(emptyReading716) !== JSON.stringify(singleReading716),
+      JSON.stringify({ single: singleReading716, noReferenceArt: emptyReading716 }),
+      'these are attribution-census helper inputs, not a fake empty built rig; actual missing parts retain CK56 named SKIP and no seam_scope. Neither a single part nor background invents a genuine two-part pair');
+    const errorFrame716 = newRaster(4, 3); errorFrame716.data.set(populationArt716.data);
+    for (let q = 0; q < 12; q++) errorFrame716.data[q * 4] += 100;
+    const scopeMask716 = new Uint8Array(12); scopeMask716.fill(1, 0, 4);
+    const errorPopulation716 = createSeamPopulation(populationParts716, [4, 3], populationViewport716);
+    const splitPopulation716 = createSeamPopulation(populationParts716, [4, 3], populationViewport716, scopeMask716);
+    const errorFigures716 = seamFigures(populationArt716, errorFrame716, populationStage716, populationViewport716, [0, 0, 0, 255], undefined, false, undefined, true, errorPopulation716.observe);
+    seamFigures(populationArt716, errorFrame716, populationStage716, populationViewport716, [0, 0, 0, 255], undefined, false, undefined, true, splitPopulation716.observe);
+    const errorReading716 = errorPopulation716.finish(), splitReading716 = splitPopulation716.finish();
+    say('CK716_POPULATION_PRECEDES_RGB_THRESHOLD_AND_PARTITIONS_EXISTING_SCOPE',
+      errorFigures716.over40 === 12 && JSON.stringify(errorReading716) === JSON.stringify(measuredZero716) &&
+      splitReading716.pair_count === 1 && splitReading716.pairs[0].whole_sample_px === 12 &&
+      splitReading716.pairs[0].scope_sample_px === 4 && splitReading716.pairs[0].inherited_sample_px === 8 &&
+      JSON.stringify(errorPopulation716.rows(errorFigures716).map(x => x.row)) === JSON.stringify(seamPairRows(errorFigures716, populationParts716, [4, 3], populationViewport716).map(x => x.row)),
+      JSON.stringify({ error: errorFigures716.over40, whole: errorReading716, split: splitReading716 }),
+      'the RGB-only defect changes every sample by100 but cannot change observed reference membership; the independent four-cell mask partitions whole12 into scope4 and inherited8, never another denominator or allowance');
+    const dot716 = newRaster(1, 1); dot716.data.set([80, 60, 40, 255]);
+    const separatedParts716 = ['back', 'front', 'marker'].map((name, i) => ({ name, from: `full:${name}`, x: i === 2 ? 3 : 0, y: 0, image: dot716 }));
+    const separatedPopulation716 = createSeamPopulation(separatedParts716, [4, 3], populationViewport716);
+    seamFigures(populationArt716, populationArt716, populationStage716, populationViewport716, [0, 0, 0, 255], undefined, false, undefined, true, separatedPopulation716.observe);
+    const separatedReading716 = separatedPopulation716.finish();
+    const populationTotal716 = (p: ReturnType<typeof zeroPopulation716.finish>) =>
+      p.pairs.reduce((n, row) => n + row.whole_sample_px, 0) + p.single_art.reduce((n, row) => n + row.whole_sample_px, 0) + p.no_reference_art.whole_sample_px;
+    say('CK716_ONLY_OBSERVED_REFERENCE_PAIRS_EXIST_AND_BUCKETS_PARTITION_THE_SAMPLES',
+      separatedReading716.pair_count === 1 && separatedReading716.pairs[0].parts.join('|') === 'back|front' && separatedReading716.pairs[0].whole_sample_px === 1 &&
+      separatedReading716.single_art.length === 1 && separatedReading716.single_art[0].part === 'marker' && separatedReading716.single_art[0].whole_sample_px === 2 &&
+      separatedReading716.no_reference_art.whole_sample_px === 9 &&
+      [measuredZero716, singleReading716, emptyReading716, splitReading716, separatedReading716].every(p => populationTotal716(p) === p.measured_sample_px),
+      JSON.stringify(separatedReading716),
+      'the shared source texel0 contributes only to sample0; marker texel3 contributes to samples2 and3. No 2x2 footprint can see both, so no guessed front/marker or back/marker pair exists; all12 samples still belong to exactly one typed bucket');
+    const faint716 = newRaster(1, 1); faint716.data.set([80, 60, 40, 1]);
+    const faintPopulation716 = createSeamPopulation(['back', 'front'].map(name => ({ name, from: `full:${name}`, x: 0, y: 0, image: faint716 })), [4, 3], populationViewport716);
+    seamFigures(populationArt716, populationArt716, populationStage716, populationViewport716, [0, 0, 0, 255], undefined, false, undefined, true, faintPopulation716.observe);
+    say('CK716_REFERENCE_MEMBERSHIP_KEEPS_ALPHA_ABOVE_ZERO_NOT_THE_DRAWN_ALPHA_THRESHOLD',
+      faintPopulation716.finish().pair_count === 1 && faintPopulation716.finish().pairs[0].whole_sample_px === 1 &&
+      faintPopulation716.finish().no_reference_art.whole_sample_px === 11,
+      JSON.stringify(faintPopulation716.finish()),
+      'the two source texels have alpha1, so the existing reference attribution sees both at sample0; this census does not substitute the renderer DRAWN alpha threshold');
+
     // #705: fix support and expectations before reading a candidate render. IDs below
     // denote exact ordered contributor stacks, not residual colours or set names.
     const support705 = (reference: number[], posed = reference, depth = 2): SeamSupport => ({
@@ -18593,13 +18662,24 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     for (const x of [5, 6]) unionFrame705.data[x * 4] = 255;
     const unionViewport705 = { x: 0, y: 0, width: 7, height: 4, scale: 1, pixelWidth: 7, pixelHeight: 4 };
     const unionStage705 = { x: 0, y: 0, width: 5, height: 4 };
-    const fullUnion705 = seamFigures(unionReference705, unionFrame705, unionStage705, unionViewport705, [0, 0, 0, 255], undefined, false, undefined, true);
-    const sceneUnion705 = seamFigures(unionReference705, unionFrame705, unionStage705, unionViewport705, [0, 0, 0, 255], undefined, true, undefined, true);
+    const unionParts716 = ['back', 'front'].map(name => ({ name, from: `full:${name}`, x: 0, y: 0, image: unionReference705 }));
+    const unionPopulation716 = createSeamPopulation(unionParts716, [5, 4], unionViewport705);
+    const scenePopulation716 = createSeamPopulation(unionParts716, [5, 4], unionViewport705);
+    const fullUnion705 = seamFigures(unionReference705, unionFrame705, unionStage705, unionViewport705, [0, 0, 0, 255], undefined, false, undefined, true, unionPopulation716.observe);
+    const sceneUnion705 = seamFigures(unionReference705, unionFrame705, unionStage705, unionViewport705, [0, 0, 0, 255], undefined, true, undefined, true, scenePopulation716.observe);
     say('CK714_UNION_OUTSIDE_RESIDUAL_COUNTS_WITH_FIXED_A_AND_SCENE_EXCLUDES_OUTSIDE',
       fullUnion705.denominator === 20 && fullUnion705.mean === 25.5 && fullUnion705.over40 === 2 && bar705(fullUnion705.mean, fullUnion705.over40) &&
       sceneUnion705.denominator === 2 && sceneUnion705.mean === 0 && sceneUnion705.over40 === 0,
       JSON.stringify({ full: fullUnion705, scene: sceneUnion705 }),
       'RGB construction before renderer observations: non-scene sum510 divided by authored20, never union28; a 5x4 scene retains exactly the original2 interior cells and excludes original border and outside cells.');
+    const unionReading716 = unionPopulation716.finish(), sceneReading716 = scenePopulation716.finish();
+    say('CK716_POPULATION_COUNTS_INCLUDED_UNION_OR_SCENE_SAMPLES_NOT_THE_FIXED_MEAN_DENOMINATOR',
+      unionReading716.measured_sample_px === 28 && unionReading716.pairs[0].whole_sample_px === 20 && unionReading716.no_reference_art.whole_sample_px === 8 &&
+      sceneReading716.measured_sample_px === 2 && sceneReading716.pairs[0].whole_sample_px === 2 && sceneReading716.no_reference_art.whole_sample_px === 0 &&
+      populationTotal716(unionReading716) === 28 && populationTotal716(sceneReading716) === 2 &&
+      fullUnion705.denominator === 20 && sceneUnion705.denominator === 2,
+      JSON.stringify({ full: unionReading716, scene: sceneReading716 }),
+      'the unchanged #705 calls include28 non-scene union cells but only2 original scene-interior cells; the non-scene mean still divides by authored20, so this support count is not a replacement denominator');
 
     // #705 semantic identity: two differently packed representations carry
     // exactly the same source attachment, own art, posed vertices and colour.
@@ -18655,6 +18735,13 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       existsSync(join(scopeHome705, 'out', STILL_DIR, 'frames.json')) && existsSync(join(scopeHome705, 'out', 'setup_still_auto', 'frames.json')),
       JSON.stringify({ PASS: scopeFigures705.PASS, canonicalRenders: canonicalCalls705.length, alreadyBuiltOnce: canonicalBuiltOnce705, sets: scopeFigures705.sets }),
       'the source scale/origin is independent of the disjoint third drawing extent; all regular gates still run, each pinned render reuses its already built candidate, and source/blink still keep their original auto-fitted path');
+    const stockPopulations716 = [scopeFigures705.seam_scope?.population, ...Object.values(scopeFigures705.sets ?? {}).map(row => row.seam_scope?.population)];
+    say('CK716_STOCK_ZERO_ERROR_STATES_RETAIN_THE_MEASURED_REFERENCE_POPULATION',
+      scopeFigures705.seam_px_over_40 === 0 && stockPopulations716.length === 3 &&
+      stockPopulations716.every(p => p !== undefined && p.pair_count === p.pairs.length && p.pair_count > 0 &&
+        p.pairs.some(row => row.parts.join('|') === 'back|front' && row.whole_sample_px > 0) && populationTotal716(p) === p.measured_sample_px),
+      JSON.stringify(stockPopulations716),
+      'the unchanged CK708 actual stock engine run supplies base and two selected states; no new build/render. Source back/front support exists even when all threshold-error lists are empty');
     const edgeFrame705 = readFrameSet(join(scopeHome705, 'out', STILL_DIR)).frames[0].image;
     const edgeSidecar705 = JSON.parse(readFileSync(join(scopeHome705, 'out', STILL_DIR, 'frames.json'), 'utf8')) as { pinned: { by: string; outside: unknown[] } };
     const edgeRead705 = Array.from(edgeFrame705.data.subarray((46 * edgeFrame705.width + 95) * 4, (46 * edgeFrame705.width + 95) * 4 + 4));
@@ -18718,6 +18805,17 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       failedScope705.problems.length === baseSeamProblems705.length + coverProblems705.length,
       JSON.stringify({ sameReferencePair: coveredPair705, set: coveredSet705, namedFailure: coverProblems705, allProblems: failedScope705.problems }),
       'the reference pair stays back/front; only the real third drawing moves over its known 8x8 patch. The actual semantic-support construction must select that residual, retain its full contribution and name the pair; a policy-only integer-stack plant cannot establish this proof.');
+    const inheritedPopulationPairs716 = inheritedSets705.map(row => row?.seam_scope?.population?.pairs.find(pair => samePair705(pair.parts)));
+    const affectedPopulationPair716 = coveredScope705?.population?.pairs.find(pair => samePair705(pair.parts));
+    say('CK716_STOCK_POPULATION_SCOPE_DOES_NOT_REJUDGE_INHERITED_ERRORS_OR_HIDE_AFFECTED_ERRORS',
+      inheritedPopulationPairs716.every(pair => pair !== undefined && pair.whole_sample_px >= knownPatch705 && pair.inherited_sample_px >= knownPatch705 &&
+        pair.whole_sample_px === pair.scope_sample_px + pair.inherited_sample_px) &&
+      affectedPopulationPair716 !== undefined && affectedPopulationPair716.scope_sample_px >= knownPatch705 &&
+      affectedPopulationPair716.whole_sample_px === affectedPopulationPair716.scope_sample_px + affectedPopulationPair716.inherited_sample_px &&
+      basePair705?.px_over_40 === knownPatch705 && coveredPair705 !== undefined && coveredPair705.affected_px_over_40 >= knownPatch705 &&
+      inheritedSets705.every(row => row?.PASS === true) && coveredSet705?.PASS === false && failedScope705.figures.PASS === false,
+      JSON.stringify({ inherited: inheritedPopulationPairs716, affected: affectedPopulationPair716, originalBaseError: basePair705, originalAffectedError: coveredPair705 }),
+      'the existing real64-cell defect stays baseFAIL; its exact inherited and occlusion-selected cells bound the corresponding population support. Other zero-error boundary cells may remain conservatively selected, so scope support is not mislabeled as threshold error');
     const clippedHome705 = join(dir, 'source-grid-clipped');
     writeCheckRig(clippedHome705);
     const clippedRig705 = JSON.parse(readFileSync(join(clippedHome705, 'rig.json'), 'utf8')) as { bones: Array<{ name: string; x: number }> };
