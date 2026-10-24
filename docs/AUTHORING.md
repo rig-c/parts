@@ -567,7 +567,11 @@ set takes `full`. A missing or empty selected layer is
 `ASSEMBLE_ALT_INPUT_PRESENT`, naming the set and layer. An unknown or hidden
 part is `CONFIG_SET_LAYERS`; an invalid layer name is `CONFIG_TAG_KNOWN`.
 A painting patch has no run layer and cannot be a selection target; use a
-layer-backed plan part. A cut-backed part keeps its polygon on the selected layer.
+layer-backed plan part. A cut-backed part extracts its polygon from its own
+selected layer. The same polygon is subtracted from the parent's own selected
+layer, retaining its overlap band and applying any `under` there using the
+removed parent's pixels. Selecting a piece never changes its parent's layer
+or output name, including when only the parent selects another layer.
 
 Each limb segment reads its own selection, including when adjacent segments
 select different layers. The joint bounds remain those of their original logical

@@ -8,6 +8,8 @@ export interface AlternateLayerSources {
   plan: PlanEntry[];
   cuts: Cut[];
   limbs: Record<string, Limb>;
+  /** Cut output -> independently selected piece layer; its from still names the parent's own source. */
+  cutLayers: ReadonlyMap<string, string>;
   /** Effective source name -> original logical source, only for sources split across layers. */
   groups: ReadonlyMap<string, string>;
 }
@@ -16,7 +18,7 @@ export interface AlternateLayerSources {
 export function alternateLayerSources(
   plan: PlanEntry[], cuts: Cut[], limbs: Record<string, Limb>, covered: ReadonlySet<string>, layers?: Readonly<Record<string, string>>,
 ): AlternateLayerSources {
-  if (layers === undefined || Object.keys(layers).length === 0) return { plan, cuts, limbs, groups: new Map() };
+  if (layers === undefined || Object.keys(layers).length === 0) return { plan, cuts, limbs, cutLayers: new Map(), groups: new Map() };
   const problems: Problem[] = [];
   const planByName = new Map(plan.map(p => [p[0], p]));
   const cutByName = new Map(cuts.map(c => [c.into, c]));
@@ -34,6 +36,7 @@ export function alternateLayerSources(
   const variants = new Map<string, Map<string, string>>();
   const madePlans = new Map<string, PlanEntry[]>();
   const madeCuts = new Map<string, Cut[]>();
+  const cutLayers = new Map<string, string>();
   const originalTag = (source: string): string => (rowOf(source) as PlanEntry)[2];
   const chosen = (part: string, source: string): string => Object.hasOwn(layers, part) ? layers[part] : originalTag(source);
   const variant = (source: string, layer: string): string => {
@@ -50,7 +53,9 @@ export function alternateLayerSources(
     choices.set(layer, name);
     const cut = cutByName.get(source);
     if (cut !== undefined) {
-      const next = { ...cut, into: name, from: variant(cut.from, layer) };
+      const parentLayer = chosen(cut.from, cut.from);
+      const next = { ...cut, into: name, from: variant(cut.from, parentLayer) };
+      if (layer !== parentLayer) cutLayers.set(name, layer);
       madeCuts.set(source, [...(madeCuts.get(source) ?? []), next]);
     } else {
       const row = planByName.get(source) as PlanEntry;
@@ -74,6 +79,7 @@ export function alternateLayerSources(
     plan: plan.flatMap(([name]) => madePlans.get(name) ?? []),
     cuts: cuts.flatMap(c => madeCuts.get(c.into) ?? []),
     limbs: selected,
+    cutLayers,
     groups,
   };
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { runAlternateLayerChecks } from './tools/check_alternate_layers.ts';
+import { runAlternateCutLayerChecks } from './tools/check_alternate_cut_layers.ts';
 import { runGatherOptOutChecks } from './tools/check_gather_optout.ts';
 import { parseAltArg } from './tools/alternate-cli.ts';
 import { encodeCheckReceipt, readBuildReceipt, readBuildChild, selectedRigcCommand } from './tools/build-process.ts';
@@ -48874,6 +48875,8 @@ function runAlternateLayersSuite(): number {
   const dir = temp('alternate-layers');
   let index = 0;
   try {
+    runAlternateCutLayerChecks(dir, (name, pass, detail) => say(`AZ${String(++index).padStart(2, '0')}_${name}`, pass, detail,
+      'issue #714: independent cut-piece pixels never re-source or retain the parent polygon'));
     runAlternateLayerChecks(dir, (name, pass, detail) => say(`AZ${String(++index).padStart(2, '0')}_${name}`, pass, detail,
       'issue #666: source provenance, logical limb cuts, caps, islands and base exclusions on reader-validated public controls'));
   } finally { rmSync(dir, { recursive: true, force: true }); }

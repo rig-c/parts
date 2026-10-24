@@ -497,7 +497,12 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     rawCuts = selectedLayers.cuts;
     altLimbs = selectedLayers.limbs;
     let missingLayer = false;
-    for (const [name, run, tag] of altPlan) {
+    const selectedCutLayers: PlanEntry[] = rawCuts.flatMap(c => {
+      const tag = selectedLayers.cutLayers.get(c.into);
+      const parent = altPlan.find(([name]) => name === c.from);
+      return tag === undefined || parent === undefined ? [] : [[c.into, parent[1], tag]];
+    });
+    for (const [name, run, tag] of [...altPlan, ...selectedCutLayers]) {
       const l = altRuns[run].layers.find((x) => x.name === tag);
       if (l === undefined || l.opaquePx === 0) {
         altProblems.push({
@@ -632,6 +637,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         extend: altExtend,
         patches: altPatches,
         cuts: altCuts,
+        ...(selectedLayers.cutLayers.size === 0 ? {} : { cutLayers: selectedLayers.cutLayers }),
         under: altUnder,
         ...(Object.keys(altLimbs).length > 0 ? { limbs: altLimbs, bones: altBones } : {}),
         ...(fields.scene === undefined ? {} : { scene: fields.scene }),

@@ -322,6 +322,8 @@ export interface AssembleInput {
   patches: Patch[];
   /** `assemble.cuts`: plan parts' pixels taken into new parts by polygon (`cutPart`), placed per their `draw`. */
   cuts: Cut[];
+  /** Internal alternate selection: piece layer by cut output; polygon subtraction and under stay on from. */
+  cutLayers?: ReadonlyMap<string, string>;
   /**
    * `cuts[i].under`'s image, decoded by the caller (the stage reads no file),
    * at the cut's index: null for a cut without `under`. Absent = every cut
@@ -4406,6 +4408,12 @@ export function assemble(input: AssembleInput): AssembleResult {
   // Issue #490: when generation.control.skeleton is present, split merged arm layers (or refuse when sleeve and drape share one colour).
   const full = input.keySkeleton === undefined ? fullArmSplit : splitMergedArmRuns(fullArmSplit, input.resolution, frame, source.width, source.height, input.keySkeleton);
   const plan = mergedArmSplitPlan(armSplitPlan(input.plan, input.armSplit), full);
+  const cutLayerPlan: PlanEntry[] = input.cuts.flatMap(c => {
+    const tag = input.cutLayers?.get(c.into);
+    const parent = plan.find(([name]) => name === c.from);
+    return tag === undefined || parent === undefined ? [] : [[c.into, parent[1], tag]];
+  });
+  const sourcePlan = plan.flatMap(row => [row, ...cutLayerPlan.filter(([name]) => input.cuts.some(c => c.into === name && c.from === row[0]))]);
   // Issue #492: in two-run mode, check that head:face covers >= 75% of full:face's silhouette on the head canvas
   // (after applying head_face_underfill when declared). Skip only on a single-run subset (a mouth-only or clothes-only alternate).
   const checkHeadFace =
@@ -4417,7 +4425,7 @@ export function assemble(input: AssembleInput): AssembleResult {
   const head = headFacePrep.head;
   const padRecord = singleRunPadRecord(single, source.width, source.height, input.resolution, frame);
   if (single) checkSingleRun(full, plan, extend);
-  checkPlanAgainstRuns(plan, extend, full, head);
+  checkPlanAgainstRuns(sourcePlan, extend, full, head);
   const { W, H } = frame;
   const srcr = sourceInRig(source, W, H);
   // Issue #359: a part's hidden-art layer is the under of a cut that names none — and, with one named, a refusal, since
@@ -4460,9 +4468,9 @@ export function assemble(input: AssembleInput): AssembleResult {
     const layers = runLayers(set, input.resolution);
     if (run === 'full') fullTags.push(...layers.filter((l) => l.opaqueRunPx > 0).map((l) => l.tag));
     const rigLayers = layers.map((l) => layerToRig(l.canvas, frame, run));
-    const rank = planRanks(layers.map((l) => l.tag), run, plan);
+    const rank = planRanks(layers.map((l) => l.tag), run, sourcePlan);
     const keep = layers.map((l, i): Mask | null => {
-      if (input.limbUnderCover !== true || !plan.some(([name, ru, tag]) => limbPlans.has(name) && ru === run && tag === l.tag)) return null;
+      if (input.limbUnderCover !== true || ![...plan, ...cutLayerPlan].some(([name, ru, tag]) => (limbPlans.has(name) || limbSources.has(name)) && ru === run && tag === l.tag)) return null;
       const mask = newMask(W, H);
       const cover = newMask(W, H);
       for (let p = 0; p < W * H; p++) {
@@ -4596,7 +4604,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     }
     return { x0, y0, x1, y1, opaque };
   };
-  plan.forEach(([name, run, tag], pi) => {
+  const buildSource = (name: string, run: Run, tag: string, pi: number): Built | null => {
     const key = `${run}:${tag}`;
     const src = rig.get(key) as Raster;
     const r: Raster = { width: W, height: H, data: new Uint8ClampedArray(src.data) };
@@ -4620,9 +4628,16 @@ export function assemble(input: AssembleInput): AssembleResult {
         object: `part "${name}" (${key}, config.assemble.plan[${pi}])`,
         detail: `has 0 pixels with alpha above ${OPAQUE_ALPHA_ABOVE} in the rig (${x1 < 0 ? 'no pixel at all' : 'only fringe below it'}; ${ghost[key]} ghost px removed in the run); a part with at least one opaque pixel is required — drop it from the plan or take the tag from the other run`,
       });
-      return;
+      return null;
     }
-    built[pi] = { key, r, st, extendKeys, trace, merged, region: null };
+    return { key, r, st, extendKeys, trace, merged, region: null };
+  };
+  plan.forEach(([name, run, tag], pi) => { built[pi] = buildSource(name, run, tag, pi); });
+  // Snapshot independent piece pixels before any parent's subtraction or under fill.
+  const cutSources = cuts.map(c => {
+    const pi = plan.findIndex(([name]) => name === c.from);
+    const row = plan[pi], tag = input.cutLayers?.get(c.into);
+    return tag === undefined ? null : buildSource(c.from, row[1], tag, pi);
   });
   const silhouette = seamRule === 'silhouette' || patches.some((q) => q.alpha === 'silhouette') ? figureSilhouette(srcr) : null;
   const cut = patches.map((q, i) => {
@@ -4755,6 +4770,15 @@ export function assemble(input: AssembleInput): AssembleResult {
       }
       cutCounts.push(c);
     });
+  });
+  // Parent partition counts and under use the removed parent art above. Only
+  // the emitted piece (and any limb cut from it) reads this independent source.
+  cutSources.forEach((source, i) => {
+    if (source === null) return;
+    const m = cutMasks[i], r = newRaster(W, H);
+    for (let p = 0; p < W * H; p++) if (m.data[p] === 1) r.data.set(source.r.data.subarray(p * 4, p * 4 + 4), p * 4);
+    if (opaqueOf(r) === 0) empty.push({ code: 'ASSEMBLE_CUT_PIXELS', object: `config.assemble.cuts[${i}] (part "${cuts[i].into}")`, detail: `takes 0 opaque pixels from selected ${source.key}; draw its polygon over that layer's art` });
+    pieces[i] = { ...source, r, region: m, merged: mergedIn(source, m) };
   });
   refuseIfAny(empty);
   // In cut order, as the config lists them.
