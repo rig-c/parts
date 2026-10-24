@@ -5084,3 +5084,66 @@ machine under a load average of 5 to 11, the difference in user + sys was +5.6 a
 the load moves the same build by (the pre-change reference-demo build alone took 43.6 to
 45.8 s there). Since issue #123 that build and render are gone again — the still regions read the
 idle's geometry — and the `build` row was not re-measured for it either.
+
+### Machine-readable selftest summary (`--summary-json`, issue #725)
+
+`bun run selftest -- --summary-json <file>` writes a JSON summary beside the normal console output
+so automated lanes and reports read the run's own `RunTally` rather than regex-parsing logs. It is
+supported on full runs, partial `--only` runs, and `--merge` runs (and refused with exit `2` when
+missing a path, given twice, or combined with `--shard`):
+
+```json
+{
+  "spec": "rig-selftest-summary/1",
+  "tool": "rig-parts",
+  "exit": 0,
+  "partial": false,
+  "only": null,
+  "faults": [],
+  "totals": {
+    "suites": 63,
+    "ran": 62,
+    "skipped_suites": 1,
+    "controls": 2250,
+    "passed": 2250,
+    "failed": 0,
+    "skipped": 1,
+    "holes": 1
+  },
+  "suites": [
+    {
+      "suite": "png",
+      "ran": true,
+      "controls": 2,
+      "passed": 2,
+      "failed": 0,
+      "skipped": 0,
+      "status": "pass",
+      "reason": null
+    }
+  ],
+  "skips": [
+    {
+      "suite": "corpus",
+      "name": "corpus",
+      "reason": "no --corpus <dir>, no RIG_PARTS_CORPUS (or SPINE_PARTS_CORPUS) and no fetched examples/*/inputs",
+      "hole": true
+    }
+  ],
+  "holes": [
+    {
+      "suite": "corpus",
+      "name": "corpus",
+      "reason": "no --corpus <dir>, no RIG_PARTS_CORPUS (or SPINE_PARTS_CORPUS) and no fetched examples/*/inputs"
+    }
+  ]
+}
+```
+
+- Every count in `totals` and `suites` is read from the same `RunTally` instance that prints the
+  console summary (`RT15`).
+- Only two-space-indented `SKIP` gutter lines enter `skips`, and only those followed by a
+  `This is a HOLE in this run` continuation line (or a suite returning `null` outside `--only`)
+  enter `holes`; check names or indented detail lines containing `HOLE` or `SKIP` (such as
+  `RG82_BLINK_NO_HOLE_…` or `SO21_ZERO_SETUP_BANDS_REMAIN_NAMED_SKIPS_…`) are counted as `PASS` or
+  `FAIL` controls and never as `skips` or `holes` (`RT16`, `RT17`).

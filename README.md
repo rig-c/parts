@@ -546,8 +546,11 @@ bun run typecheck        # tsc --noEmit, strict
 bun run lint             # one rule: no explicit any
 bun run fetch-examples   # the public examples' paintings and layers, into examples/*/inputs (needs a network); each file held to its blob id at the pinned commit, a stale one replaced by name
 bun run selftest         # every gate's controls; with the examples fetched, build on each of them against its expected/
+bun run selftest -- --summary-json summary.json  # also write rig-selftest-summary/1 (per-suite PASS/FAIL/SKIP counts, holes, partial flag and exit)
 bun run smoke            # pack, install into an empty directory, run from the install (needs a network)
 ```
+
+`bun run selftest -- --summary-json <file>` writes a machine-readable summary (`spec: "rig-selftest-summary/1"`, `tool: "rig-parts"`) derived from the same `RunTally` that prints the console summary: `exit` (`0 | 1 | 2`), `partial` (`boolean`), `only` (`string[] | null`), `faults`, `totals` (`suites`, `ran`, `skipped_suites`, `controls`, `passed`, `failed`, `skipped`, `holes`), per-suite `suites` entries (`suite`, `ran`, `controls`, `passed`, `failed`, `skipped`, `status`, `reason`), `skips` (`{ suite, name, reason, hole }`), and `holes` (`{ suite, name, reason }`). See [AUTHORING §8](docs/AUTHORING.md#machine-readable-selftest-summary---summary-json-issue-725) for the full shape.
 
 The generated `foot-ownership` suite can be run alone with
 `bun run selftest -- --only foot-ownership` (exit 2 means a green partial run,
