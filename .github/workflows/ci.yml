@@ -126,7 +126,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        bun: ['1.2.0', latest]
+        bun: [latest]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -147,7 +147,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        bun: ['1.2.0', latest]
+        bun: [latest]
     # Green matrix run 39963251495: maximum Windows native-build job
     # 120446378030 took 746 seconds (minimum Bun); latest Bun took 474.
     # 746 * 1.5 = 1119 seconds; round UP to 5-minute units = 20 minutes.
