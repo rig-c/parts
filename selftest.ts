@@ -315,6 +315,7 @@ import {
   type MotionSeamLine,
   type MotionSeamPair,
   motionSeamPairs,
+  motionSeamSelection,
   motionSeamLine,
   motionSeamWorlds,
   type MotionSeamWorldRow,
@@ -16409,8 +16410,8 @@ function runMotionRootSeamCases(say: (name: string, ok: boolean, detail: string,
     const both = motionSeamPairs(shared.parts, [], shared.rig, setup);
     const one = motionSeamPairs(shared.parts, [], shared.rig, candidates => setup(candidates).map(row => row.pair.startsWith('second_coat|')
       ? { ...row, banded: 0, status: 'skip' as const } : row));
-    const none = refusals(() => motionSeamPairs(shared.parts, [], shared.rig, candidates => setup(candidates).map(row =>
-      row.pair.endsWith('|upperarm_r') ? { ...row, banded: 0, status: 'skip' as const } : row)));
+    const none = motionSeamSelection(shared.parts, [], shared.rig, candidates => setup(candidates).map(row =>
+      row.pair.endsWith('|upperarm_r') ? { ...row, banded: 0, status: 'skip' as const } : row));
     const noReader = refusals(() => motionSeamPairs(shared.parts, [], shared.rig));
     const unread = refusals(() => motionSeamPairs(shared.parts, [], shared.rig, () => []));
     const undrawn = refusals(() => motionSeamPairs(shared.parts, [], shared.rig, candidates => setup(candidates).map(row => ({ ...row, drawn: 0 }))));
@@ -16442,11 +16443,42 @@ function runMotionRootSeamCases(say: (name: string, ok: boolean, detail: string,
       errors.every(e => e?.problems.some(p => p.code === 'CHECK_MOTION_SEAM_ROOT') === true) &&
         shoulderPairs.join(',') === 'coat,second_coat' && bothLine.rows.filter(row => row.pair.endsWith('|upperarm_r')).length === 2 &&
         covers(one) && !covers(both) && setupRead.length === both.length && setupRead.every(row => row.banded === 1) && wrongSetup !== null &&
-        none?.problems.some(p => p.code === 'CHECK_MOTION_SEAM_ROOT' && p.detail.includes('coat') && p.detail.includes('second_coat')) === true &&
+        none.unmeasuredRoots.length === 1 && none.unmeasuredRoots[0].limb === 'arm_r' &&
+        none.unmeasuredRoots[0].bone === 'arm_r0' && none.unmeasuredRoots[0].parent === 'chest' &&
+        none.unmeasuredRoots[0].part === 'upperarm_r' && none.unmeasuredRoots[0].candidates.join(',') === 'coat,second_coat' &&
+        none.unmeasuredRoots[0].reason.includes('not measured') && !none.pairs.some(p => p.b === 'upperarm_r') &&
         noReader !== null && unread !== null && undrawn !== null && codes(errors[0]).includes('coat'),
-      JSON.stringify({ both: both.map(p => p.pair), one: one.map(p => p.pair), none: codes(none), unread: codes(unread),
+      JSON.stringify({ both: both.map(p => p.pair), one: one.map(p => p.pair), none, unread: codes(unread),
         noReader: codes(noReader), undrawn: codes(undrawn), setupRows: setupRead.length, wrongSetup: codes(wrongSetup), bindings: errors.map(codes) }),
-      'shared chest is legitimate: one positive setup band selects one pair; two select both rows; no band is a named refusal. Missing or undrawn setup data is not zero contact. Duplicate slots, unknown bones, wrong carrier, missing drawing/parent/segment0 still refuse; the stock setup reader rejects an animated sidecar.');
+      'shared chest is legitimate: one positive setup band selects one pair; two select both rows; valid zero bands retain named unmeasured roots, not a refusal or measured PASS. Missing or undrawn setup data still refuses. Duplicate slots, unknown bones, wrong carrier, missing drawing/parent/segment0 still refuse; the stock setup reader rejects an animated sidecar.');
+
+    const allZero = motionSeamSelection(shared.parts, [], shared.rig, candidates => setup(candidates).map(row => ({ ...row, banded: 0, status: 'skip' as const })));
+    const zeroLine = motionSeamLine(allZero.pairs, ['idle'], 12, [], undefined, [], allZero.unmeasuredRoots);
+    const zeroNoAnimation = motionSeamLine(allZero.pairs, [], 12, [], undefined, [], allZero.unmeasuredRoots);
+    const selectedRows = none.pairs.map(pair => ({ pair: pair.pair, animation: 'idle', status: 'read' as const, drawn: 13, banded: 13, opens: [], px: [], max_px: 0, under_floor: [] }));
+    const partialPass = motionSeamLine(none.pairs, ['idle'], 12, selectedRows, undefined, [], none.unmeasuredRoots);
+    const failedProblems: Problem[] = [];
+    const partialFail = motionSeamLine(none.pairs, ['idle'], 12, selectedRows.map((row, i) => i !== 0 ? row : {
+      ...row, opens: [12], px: [60], max_px: 60, worst: { kind: 'gap' as const, index: 12, px: 60, cell: 1, box: [37, 4, 47, 10] as RootHit['box'] },
+    }), undefined, failedProblems, none.unmeasuredRoots);
+    const zeroPrinted = motionSeamLines(zeroLine);
+    const partialPrinted = motionSeamLines(partialPass);
+    say('SO21_ZERO_SETUP_BANDS_REMAIN_NAMED_SKIPS_AND_MEASURED_FAILURE_WINS',
+      allZero.pairs.length === 0 && allZero.unmeasuredRoots.length === 4 && zeroLine.roots?.status === 'SKIP' &&
+        zeroLine.status === 'SKIP' && zeroLine.roots.pairs.length === 0 && zeroLine.rows.length === 0 &&
+        zeroNoAnimation.roots?.status === 'SKIP' && zeroNoAnimation.roots.unmeasured?.length === 4 &&
+        allZero.unmeasuredRoots.every(root => zeroPrinted.some(line => line.includes('root pair for ' + root.limb) &&
+          line.includes('SKIP') && line.includes(root.bone) && line.includes(root.parent) && root.candidates.every(name => line.includes(name)))) &&
+        partialPass.roots?.status === 'SKIP' && partialPass.roots.unmeasured?.length === 1 && partialPass.roots.pairs.length === none.pairs.length &&
+        partialPrinted.some(line => line.includes('gap-only gate SKIP')) && partialPrinted.some(line => line.includes('root pair for arm_r') && line.includes('SKIP')) &&
+        partialFail.status === 'FAIL' && partialFail.roots?.status === 'FAIL' && partialFail.roots.unmeasured?.length === 1 &&
+        failedProblems.some(problem => problem.code === 'CHECK_SEAM_OVER_MOTION') &&
+        barsNotMet({ gate_spine_html_green: true, [MOTION_SEAM_LINE]: partialPass }).length === 0 &&
+        JSON.stringify(barsNotMet({ gate_spine_html_green: true, [MOTION_SEAM_LINE]: partialFail })) === JSON.stringify([MOTION_SEAM_LINE]) &&
+        clean.roots !== undefined && !Object.hasOwn(clean.roots, 'unmeasured') &&
+        noReader !== null && unread !== null && undrawn !== null,
+      soRootDiagnostic({ allZero, zero: zeroLine.roots, zeroPrinted, partialPass: partialPass.roots, partialFail: partialFail.roots, failedProblems }),
+      'valid zero-band limbs keep bone, parent and candidates without fabricated pairs. All-zero and PASS-plus-SKIP are incomplete; a measured GAP60 over floor10 still fails beside a SKIP. No-animation stays SKIP; unavailable or undrawn setup data still refuses.');
 
     const weighted = soRootFixture();
     // Both body meshes mention hip. Influence membership must not replace their declared slot carriers.
@@ -16470,7 +16502,8 @@ function runMotionRootSeamCases(say: (name: string, ok: boolean, detail: string,
       covers(motionSeamPairs(weighted.parts, [], weighted.rig, setup)) &&
         refusals(() => motionSeamPairs(misleading.parts, [], misleading.rig, setup))?.problems.some(p => p.code === 'CHECK_MOTION_SEAM_ROOT') === true &&
         JSON.stringify(motionSeamPairs(noBody.parts, [], noBody.rig)) === JSON.stringify(oldPairs) &&
-        JSON.stringify(rootFreeUnread) === JSON.stringify(rootFreeLegacy) && rootFreeSetupCalls === 0,
+        JSON.stringify(rootFreeUnread) === JSON.stringify(rootFreeLegacy) && rootFreeSetupCalls === 0 &&
+        motionSeamSelection(rootFree.parts, legacySeams).unmeasuredRoots.length === 0,
       'weighted carriers ' + JSON.stringify(motionSeamPairs(weighted.parts, [], weighted.rig, setup).map(p => p.pair)) + '; old no-body ' + JSON.stringify(oldPairs) + '; root-free unread body keeps ' + JSON.stringify(rootFreeUnread),
       'a shoulder with no eligible body provenance cannot borrow a neckwear drawing. Legacy limb-only inputs have no new body-root declaration; root-free inputs do not inspect unrelated body identity, even when an explicit seam remains.');
 
@@ -27369,6 +27402,7 @@ function seamWorldDocFaults(file: string, text: string): string[] {
   const rootRequired = ['exactly one segment0 part', 'named immediate parent', 'source provenance',
     '`topwear|upperarm_r`', '`topwear|upperarm_l`', '`bottomwear|thigh_r`', '`bottomwear|thigh_l`',
     'CHECK_MOTION_SEAM_ROOT', 'setup pose', '`banded > 0`', 'all matching drawings', 'px > round(max(box width, box height) / cell)',
+    'eligible candidates all return valid setup banded 0', 'unmeasuredRoots', 'measured FAIL takes precedence over SKIP', 'measured PASS plus any unmeasured root stays SKIP',
     'active rendered environment fails `CHECK_SEAM_OVER_MOTION`',
     'overall PASS false and exits 1',
     'Existing internal-joint and explicit-only pairs remain warnings: their PASS, exit status and bar count are unchanged',
@@ -37206,6 +37240,10 @@ function runTreeSuite(): number {
     ['root identity', 'exactly one segment0 part', 'the nearest limb part'],
     ['root setup predicate', '`banded > 0`', '`banded >= 0`'],
     ['all root contacts', 'all matching drawings', 'only the first matching drawing'],
+    ['zero setup bands', 'eligible candidates all return valid setup banded 0', 'zero setup bands are a measured PASS'],
+    ['zero root metadata', 'unmeasuredRoots', 'discardedRoots'],
+    ['root fail precedence', 'measured FAIL takes precedence over SKIP', 'SKIP masks a measured FAIL'],
+    ['partial root coverage', 'measured PASS plus any unmeasured root stays SKIP', 'any measured PASS completes the root bar'],
     ['root floor', 'px > round(max(box width, box height) / cell)', 'px >= round(max(box width, box height) / cell)'],
     ['active root gate', 'active rendered environment fails `CHECK_SEAM_OVER_MOTION`', 'active rendered environment only reports a warning'],
     ['root exit', 'overall PASS false and exits 1', 'overall PASS true and exits 0'],
@@ -48729,6 +48767,24 @@ function runFrontSlotSuite(): number {
   try {
     runFrontSlotChecks(dir, (name, pass, detail) => say(name, pass, detail,
       'issue #664: an empty-at-setup front slot after its declared target, a set covering it and hiding the base slot, the set still and seam in front order, an unchanged setup render, and every new refusal by name'), rigcRunnerAt(suiteRigc(), spawnRigc));
+    // Reuse the unchanged real fixture: torso x[18,44), upperarm x[9,16)
+    // cannot share a setup alpha band. The gesture forearm is not segment0.
+    const out = join(dir, 'front', 'out');
+    const report = runCheck(join(out, 'rig'), join(out, 'zero-band-check'), rigcRunnerAt(suiteRigc(), spawnRigc), out,
+      undefined, undefined, undefined, false, true, 'chest');
+    const root = report.motionSeam.roots;
+    const unmeasured = root?.unmeasured?.[0];
+    const names = motionSeamLines(report.motionSeam);
+    say('FS08_VALID_ZERO_SETUP_BAND_IS_A_NAMED_SKIPPED_ROOT_BAR',
+      root?.status === 'SKIP' && root.pairs.length === 0 && root.unmeasured?.length === 1 &&
+        unmeasured?.limb === 'arm_r' && unmeasured.part === 'upperarm_r' && unmeasured.candidates.join(',') === 'torso' &&
+        unmeasured.bone.length > 0 && unmeasured.parent === 'chest' && unmeasured.reason.includes('not measured') &&
+        report.figures.SEAM_OVER_MOTION === report.motionSeam && !report.bars.measured.includes(MOTION_SEAM_LINE) &&
+        report.bars.skipped.some(bar => bar.bar === MOTION_SEAM_LINE && bar.reason.includes('arm_r') && bar.reason.includes('torso')) &&
+        !report.problems.some(problem => problem.code === 'CHECK_MOTION_SEAM_ROOT' || problem.code === 'CHECK_SEAM_OVER_MOTION') &&
+        names.some(line => line.includes('root pair for arm_r') && line.includes('SKIP') && line.includes('torso')),
+      JSON.stringify({ roots: root, bars: report.bars, PASS: report.figures.PASS, lines: names }),
+      'the stock setup reader must prove drawn1/banded0, keep the root block and bar SKIP, and preserve all original front-slot checks and fixture geometry.');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

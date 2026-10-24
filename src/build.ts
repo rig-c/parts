@@ -1721,14 +1721,17 @@ export function sweepCheckLines(line: SweepLine, steps: ReadonlyMap<string, { le
  * read nothing of (its SKIP) or the line could not read. A SKIP with nothing declared prints its reason alone.
  */
 export function motionSeamLines(line: MotionSeamLine, plant: MotionSeamPlant = {}): string[] {
-  if (line.worlds === undefined && line.status === 'SKIP' && line.rows.length === 0 && line.pairs.every((p) => p.unread === undefined)) return [`${MOTION_SEAM_LINE}: SKIP — ${String(line.reason)}`];
+  const unmeasured = (line.roots?.unmeasured ?? []).map(root => `root pair for ${root.limb} (${root.part}, bone "${root.bone}", parent "${root.parent}", candidates ${root.candidates.join('/')}): SKIP — ${root.reason}`);
+  const rootStatus = line.roots === undefined ? '' : '; body-root gap-only gate ' + line.roots.status + ' (' + line.roots.pairs.length + ' pair(s)); ghost ownership unavailable' + (line.roots.reason === undefined ? '' : ' — ' + line.roots.reason);
+  if (line.worlds === undefined && line.status === 'SKIP' && line.rows.length === 0 && line.pairs.every((p) => p.unread === undefined)) return [`${MOTION_SEAM_LINE}: SKIP — ${String(line.reason)}${unmeasured.length === 0 ? '' : rootStatus}`, ...unmeasured];
   const read = `${line.pairs.length} declared pair(s) in ${line.animations.length} animation(s) (${line.animations.join(', ')}), read by rigc render --seam at ${line.fps} fps on the build as played`;
   const head =
     line.status === 'SKIP'
-      ? `${MOTION_SEAM_LINE}: SKIP — ${String(line.reason)}; ${read}`
-      : `${MOTION_SEAM_LINE}: ${line.status} — ${read}: ${line.warnings} warning(s), never a bar${line.roots === undefined ? '' : '; body-root gap-only gate ' + line.roots.status + ' (' + line.roots.pairs.length + ' pair(s)); ghost ownership unavailable' + (line.roots.reason === undefined ? '' : ' — ' + line.roots.reason)}; ${line.floor}`;
+      ? `${MOTION_SEAM_LINE}: SKIP — ${String(line.reason)}; ${read}${unmeasured.length === 0 ? '' : rootStatus}`
+      : `${MOTION_SEAM_LINE}: ${line.status} — ${read}: ${line.warnings} warning(s), never a bar${rootStatus}; ${line.floor}`;
   return [
     head,
+    ...unmeasured,
     ...line.pairs.filter((p) => p.unread !== undefined).map((p) => `seam "${p.pair}" (${p.declared.join('; ')}): not read — ${String(p.unread)}`),
     ...line.rows.filter((r) => r.status === 'skip').map((r) => `seam "${r.pair}" in "${r.animation}": SKIP — rigc read no band on any of the ${r.drawn} frame(s) both slots draw, so there is no seam to read`),
     ...(plant.silent === true ? [] : line.rows.filter((r) => r.opens.length > 0).map(r => line.pairs.some(p => p.pair === r.pair && p.root !== undefined)

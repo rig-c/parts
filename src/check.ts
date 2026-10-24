@@ -3579,6 +3579,21 @@ export interface MotionRootSetupRow {
   status: 'read' | 'skip';
 }
 
+/** Eligible, readable setup drawings with no overlap band: not a measured root. */
+export interface MotionUnmeasuredRoot {
+  limb: string;
+  bone: string;
+  parent: string;
+  part: string;
+  candidates: string[];
+  reason: string;
+}
+
+export interface MotionSeamSelection {
+  pairs: MotionSeamPair[];
+  unmeasuredRoots: MotionUnmeasuredRoot[];
+}
+
 /** One pair in one animation, as the floor reads rigc's file. */
 export interface MotionSeamRow {
   pair: string;
@@ -3617,8 +3632,8 @@ export interface MotionSeamLine {
   rows: MotionSeamRow[];
   /** Physics-only reference worlds (issue #591); do not participate in warnings or bars. */
   worlds?: MotionSeamWorlds;
-  /** Present only for proven body-root pairs; existing internal seams remain warnings. */
-  roots?: { status: 'PASS' | 'FAIL' | 'SKIP'; mode: 'gap-only'; ghost_owner: 'unavailable'; ghost_followup: 'rig-c/core#1555'; pairs: string[]; failed: number; reason?: string };
+  /** Selected body-root pairs and named zero-band roots; existing internal seams remain warnings. */
+  roots?: { status: 'PASS' | 'FAIL' | 'SKIP'; mode: 'gap-only'; ghost_owner: 'unavailable'; ghost_followup: 'rig-c/core#1555'; pairs: string[]; failed: number; reason?: string; unmeasured?: MotionUnmeasuredRoot[] };
 }
 
 /**
@@ -3628,7 +3643,13 @@ export interface MotionSeamLine {
  * order, is one pair with both declarations.
  */
 export function motionSeamPairs(parts: PartsFile, seams: ReadonlyArray<{ name: string; part: string; neighbour: string }>, rig?: Record<string, unknown>, readSetup?: (candidates: readonly MotionSeamPair[]) => readonly MotionRootSetupRow[]): MotionSeamPair[] {
+  return motionSeamSelection(parts, seams, rig, readSetup).pairs;
+}
+
+/** Complete selection: a valid zero setup band is named separately, never a fabricated pair or PASS. */
+export function motionSeamSelection(parts: PartsFile, seams: ReadonlyArray<{ name: string; part: string; neighbour: string }>, rig?: Record<string, unknown>, readSetup?: (candidates: readonly MotionSeamPair[]) => readonly MotionRootSetupRow[]): MotionSeamSelection {
   const out: MotionSeamPair[] = [];
+  const unmeasuredRoots: MotionUnmeasuredRoot[] = [];
   const add = (a: string, b: string, declared: string): void => {
     const hit = out.find((p) => (p.a === a && p.b === b) || (p.a === b && p.b === a));
     if (hit !== undefined) hit.declared.push(declared);
@@ -3660,20 +3681,23 @@ export function motionSeamPairs(parts: PartsFile, seams: ReadonlyArray<{ name: s
           bad(candidate.pair, 'requires one setup frame with both drawings present and banded 0/1 matching status skip/read; the stock reading is missing, duplicate or unreadable');
         } else if (row.banded > 0) selected.push(candidate);
       }
-      for (const limb of new Set(candidates.map(p => p.root?.limb))) {
-        const eligible = candidates.filter(p => p.root?.limb === limb);
-        if (!selected.some(p => p.root?.limb === limb)) bad('config.limbs.' + limb,
-          'no eligible body drawing overlaps its segment-zero drawing at the stock setup pose (banded > 0 required); candidates: ' + eligible.map(p => '"' + p.a + '"').join(', ') + '; no nearest, name or mesh-influence fallback');
-      }
     }
+    // Missing, duplicate or undrawn data must refuse before a zero-band result exists.
     refuseIfAny(problems);
+    for (const candidate of candidates) {
+      const root = candidate.root;
+      if (root === undefined || selected.some(p => p.root?.limb === root.limb) || unmeasuredRoots.some(p => p.limb === root.limb)) continue;
+      const names = candidates.filter(p => p.root?.limb === root.limb).map(p => p.a);
+      unmeasuredRoots.push({ ...root, part: candidate.b, candidates: names,
+        reason: 'no setup band with ' + names.join('/') + ' — not measured' });
+    }
   }
   for (const root of selected) {
     add(root.a, root.b, root.declared[0]);
     const pair = out.find(p => (p.a === root.a && p.b === root.b) || (p.a === root.b && p.b === root.a));
     if (pair !== undefined) pair.root = root.root;
   }
-  return out;
+  return { pairs: out, unmeasuredRoots };
 }
 
 
@@ -4190,7 +4214,7 @@ function readSeamRows(dir: string, animations: readonly string[], fps: number, p
 }
 
 /** Only active proven root GAP rows fail; mixed ghost is INFO. Existing warnings/floor are unchanged. */
-export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fps: number, rows: MotionSeamRow[], reason?: string, problems: Problem[] = []): MotionSeamLine {
+export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fps: number, rows: MotionSeamRow[], reason?: string, problems: Problem[] = [], unmeasuredRoots: readonly MotionUnmeasuredRoot[] = []): MotionSeamLine {
   const roots = pairs.filter(p => p.root !== undefined);
   const rootNames = new Set(roots.map(p => p.pair));
   const warnings = rows.filter((r) => !rootNames.has(r.pair) && r.opens.length > 0).length;
@@ -4207,15 +4231,19 @@ export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fp
     const row = rows.find(r => r.pair === p.pair && r.animation === a);
     return row?.status === 'read' && row.banded > 0 ? [] : ['"' + p.pair + '" in "' + a + '": ' + (p.unread ?? (row === undefined ? 'no returned reading' : 'no band on any frame'))];
   }));
-  const rootGate: MotionSeamLine['roots'] = roots.length === 0 ? undefined : {
-    status: failed.length > 0 ? 'FAIL' : missing.length > 0 || reason !== undefined ? 'SKIP' : 'PASS',
+  const unmeasured = unmeasuredRoots.map(root => ({ ...root, candidates: [...root.candidates] }));
+  const rootReasons = [...missing, ...unmeasured.map(root => 'root pair for ' + root.limb + ': ' + root.reason)];
+  const rootGate: MotionSeamLine['roots'] = roots.length === 0 && unmeasured.length === 0 ? undefined : {
+    status: failed.length > 0 ? 'FAIL' : rootReasons.length > 0 || reason !== undefined ? 'SKIP' : 'PASS',
     mode: 'gap-only', ghost_owner: 'unavailable', ghost_followup: 'rig-c/core#1555',
     pairs: roots.map(p => p.pair), failed: failed.length,
-    ...(missing.length === 0 && reason === undefined ? {} : { reason: reason ?? missing.join('; ') }),
+    ...(rootReasons.length === 0 && reason === undefined ? {} : { reason: unmeasured.length === 0 ? (reason ?? missing.join('; ')) : [reason, ...rootReasons].filter(r => r !== undefined).join('; ') }),
+    ...(unmeasured.length === 0 ? {} : { unmeasured }),
   };
   const read = rows.some((r) => r.status === 'read');
   const skipWhy =
     reason ??
+    (pairs.length === 0 && unmeasured.length > 0 ? rootGate?.reason : undefined) ??
     (read
       ? undefined
       : pairs.every((p) => p.unread !== undefined)
@@ -4918,7 +4946,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   {
     const fps = IDLE_FPS;
     const seamReqs = reqFile === null || seams === null ? [] : reqFile.requirements.flatMap((r) => (r.kind === 'seam' && seams?.has(r.name) === true ? [{ name: r.name, part: r.part, neighbour: r.neighbour }] : []));
-    const pairs = inp.parts === null ? [] : motionSeamPairs(inp.parts, seamReqs, inp.rig, candidates => {
+    const selection: MotionSeamSelection = inp.parts === null ? { pairs: [], unmeasuredRoots: [] } : motionSeamSelection(inp.parts, seamReqs, inp.rig, candidates => {
       // The stock reader's band is setup alpha overlap, not an inferred distance.
       // A static motion copy changes only animations; the accepted candidate and
       // authored motion remain intact. Root-free inputs never enter this path.
@@ -4954,6 +4982,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         return readMotionRootSetup(renderDir, fps, candidates);
       } finally { rmSync(setupDir, { recursive: true, force: true }); }
     });
+    const { pairs, unmeasuredRoots } = selection;
     const slotNames = new Set((Array.isArray(inp.rig.slots) ? inp.rig.slots : []).filter(isRecord).map((sl) => String(sl.name)));
     for (const p of pairs) {
       const missing = [p.a, p.b].filter((n) => !slotNames.has(n));
@@ -4961,9 +4990,11 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     }
     const read = pairs.filter((p) => p.unread === undefined);
     if (inp.parts === null) motionSeam = motionSeamLine([], animationNames, fps, [], inp.noParts ?? 'no parts.json');
-    else if (pairs.length === 0) motionSeam = motionSeamLine([], animationNames, fps, [], 'no neighbour pair is declared: parts.json holds no limb segment below a joint (config.limbs) and no --requirements seam names two parts');
-    else if (animationNames.length === 0) motionSeam = motionSeamLine(pairs, [], fps, [], 'motion.json holds no animation to read the declared pairs in');
-    else if (read.length === 0) motionSeam = motionSeamLine(pairs, animationNames, fps, []);
+    else if (pairs.length === 0) motionSeam = motionSeamLine([], animationNames, fps, [], unmeasuredRoots.length === 0
+      ? 'no neighbour pair is declared: parts.json holds no limb segment below a joint (config.limbs) and no --requirements seam names two parts'
+      : undefined, motionRootProblems, unmeasuredRoots);
+    else if (animationNames.length === 0) motionSeam = motionSeamLine(pairs, [], fps, [], 'motion.json holds no animation to read the declared pairs in', motionRootProblems, unmeasuredRoots);
+    else if (read.length === 0) motionSeam = motionSeamLine(pairs, animationNames, fps, [], undefined, motionRootProblems, unmeasuredRoots);
     else {
       rmSync(seamMotionDir, { recursive: true, force: true });
       {
@@ -4974,7 +5005,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         const r = measured(['render', '--candidate', buildDir, '--seam', list, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), ...(hasRoots ? ['--geometry'] : []), '--out', activeDest]);
         if (r.status !== 0) refuseIfAny(rigcFailed(`render --seam ${list} --fps ${fps}`, r, r.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
         const activeWorldRows: MotionSeamWorldRow[] = [];
-        motionSeam = motionSeamLine(pairs, animationNames, fps, readMotionSeams(activeDest, animationNames, fps, read, {}, stripped !== null && env === null ? activeWorldRows : undefined, hasRoots ? motionRootCoverageReader(buildDir, activeDest, out) : undefined), undefined, motionRootProblems);
+        motionSeam = motionSeamLine(pairs, animationNames, fps, readMotionSeams(activeDest, animationNames, fps, read, {}, stripped !== null && env === null ? activeWorldRows : undefined, hasRoots ? motionRootCoverageReader(buildDir, activeDest, out) : undefined), undefined, motionRootProblems, unmeasuredRoots);
         if (stripped !== null) {
           const response = environmentResponse(readFileSync(join(buildDir, 'skeleton.json'), 'utf8'));
           motionSeam.worlds = motionSeamWorlds(true, response.wind.length > 0, world => {
@@ -5200,7 +5231,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(stress === null ? {} : { [STRESS_LINE]: stress }),
     ...(limbs === null ? {} : { [LIMB_LINE]: limbs }),
     ...(sweep === null ? {} : { [SWEEP_LINE]: sweep }),
-    ...(motionSeam.pairs.length === 0 ? {} : { [MOTION_SEAM_LINE]: motionSeam }),
+    ...(motionSeam.pairs.length === 0 && motionSeam.roots === undefined ? {} : { [MOTION_SEAM_LINE]: motionSeam }),
     ...(stripped === null || idle === null ? {} : { [CLOTH_LINE]: cloth }),
     RECOMPOSITE_HOLES: inp.parts === null ? { status: 'SKIP', reason: inp.noParts ?? '' } : holesLine(inp.parts),
     ...(sourceRead === null ? {} : { [SOURCE_LINE]: sourceRead }),
