@@ -204,7 +204,13 @@ publish. The workflow passes `--provenance` on the command line instead.
 4. **Merge it.** That is the cut.
 5. Watch the second `release` run: it tags, releases, publishes under all three
    names, and then confirms the published package installs and runs and that each
-   alias carries its files, waiting up to 15 minutes for the registry.
+   alias carries its files, waiting up to 15 minutes for `@rig-c/parts` and up
+   to 15 minutes per alias for both packument and tarball (on `1.60.2`, workflow
+   run `40021159671`, `@rig-c/parts@1.60.2` was served after `3m 09s` at
+   `21:07:48Z` and `rig-parts@1.60.2`'s packument answered `2m 26s` later at
+   `21:10:14Z` — `2m 08s` into the alias poll, registry `time` `21:09:40.809Z` vs
+   `21:07:33.120Z` — while its tarball was still propagating behind the
+   packument).
 
 ## Republishing a cut whose publish failed
 
@@ -297,17 +303,19 @@ must pass too.
 ⚖️ **The registry half is a confirmation, not the gate**: the last step of
 `release.yml` runs the same script with `--source registry --alias rig-parts
 --alias spine-parts` after every publish. It is not the gate because its own firing cannot be
-observed without publishing something broken. Each `--alias` fetches the same version
-under that alias and holds its unpacked files to the package's with
-`scripts/alias_tarball.ts compare`, rather than installing it a second time. Its
-exits:
+observed without publishing something broken. Each `--alias` waits up to its own
+`--wait` (15 minutes, for both packument and tarball) for the same version under
+that alias and holds its unpacked files to the package's with
+`scripts/alias_tarball.ts compare`, rather than installing it a second time,
+reporting which package it is waiting for and for how long. Its exits:
 
 | exit | what it means | what to do |
 | --- | --- | --- |
 | `0` | the published package installs and runs, and every alias carries its files | nothing |
 | `1` | the registry served it and a case went red on it, or an alias differs beyond its name | read the named fault; the cut needs a follow-up |
 | `2` | no case ran | a broken invocation, not a verdict |
-| `3` | the registry did not serve the version, or an alias, inside `--wait` — the confirmation was NOT taken | re-run it: Actions → release → Run workflow, with the version |
+| `3` | the registry did not serve `@rig-c/parts` inside `--wait` — the confirmation was NOT taken | re-run it: Actions → release → Run workflow, with the version |
+| `4` | `@rig-c/parts` installed and passed, and an alias was still not served inside its own `--wait` (`WAIT`, naming the alias and its wait) | re-run it once the registry serves the alias: Actions → release → Run workflow, with the version |
 
 A dispatch with `version` runs the `confirm` job only, so a re-run cannot
 publish or re-cut anything; release-please, which makes the tag and the

@@ -7,11 +7,13 @@
  *     bun run smoke -- --source registry --version 0.1.0 --wait 15
  *     bun run smoke -- --source registry --version 0.1.0 --case clean --alias <name> [--alias <name>…]
  *
- * Four exit codes, because a caller has to be able to tell the outcomes apart
+ * Five exit codes, because a caller has to be able to tell the outcomes apart
  * without reading prose: **0** every case passed, **1** a case went red —
- * against `--source registry`, the published artifact does not run — **2**
- * nothing ran at all, and **3** the registry never served the version inside
- * `--wait`, which says nothing about the package.
+ * against `--source registry`, the published artifact does not run — or an
+ * `--alias` tarball differs, **2** nothing ran at all, **3** the registry never
+ * served the main package inside `--wait`, which says nothing about the
+ * package, and **4** (`WAIT`) the main package installed and passed and an
+ * `--alias` was still not served inside its own wait.
  *
  * Nothing else in this repository asks that question. `prepublishOnly` gates the
  * SOURCE TREE, the `ships` job in `ci.yml` reads packed PATH LISTS, and
@@ -48,21 +50,29 @@
  *
  * ⏳ **The wait.** A publish returns before the registry serves what it
  * published — npm says so on the way out, with no upper bound — so `--wait
- * <minutes>` keeps asking, 5 s, 10 s, 20 s, then every 30 s, and prints how long
- * it has been asking. A version the registry has not served yet is exit 3 and a
- * message saying the confirmation was NOT taken; only a case going red on an
- * artifact the registry did serve is exit 1. ⚠️ The wait's probe is `npm view
- * <spec> version`, the packument, not the tarball.
+ * <minutes>` keeps asking, 5 s, 10 s, 20 s, then every 30 s, and prints which
+ * package it is waiting for, which piece is still propagating (packument or
+ * tarball), and how long it has been asking. Both `npm view <spec> version
+ * --prefer-online` (the packument) and `npm pack <spec> --prefer-online` (the
+ * tarball) are polled inside the wait loop, because the tarball CDN can lag
+ * behind the packument. A main package version the registry has not served yet
+ * is exit 3 and a message saying the confirmation was NOT taken; only a case
+ * going red on an artifact the registry did serve is exit 1.
  *
  * 🪞 **The aliases.** Each `--alias <name>` (registry only) adds one of the
  * package's other names: after the cases, the same version under that name is
- * asked for within what is left of `--wait` (at least once), both tarballs are
- * fetched from the
- * registry, and `scripts/alias_tarball.ts`'s `compare` holds the alias to the
- * package — every path, every byte, the `name` line of `package.json`
- * excepted. Compared rather than installed a second time: identical files are
- * the stronger claim, and they take seconds. A difference is exit 1; an alias
- * the registry has not served yet is exit 3, and only when no case went red.
+ * asked for within its own full `--wait` (default 15 minutes per alias, set
+ * from workflow run `40021159671` on `1.60.2` where `@rig-c/parts@1.60.2` was
+ * served after `3m 09s` and `rig-parts@1.60.2`'s packument answered `2m 26s`
+ * later — `2m 08s` into the alias poll, registry `time` `21:09:40.809Z` vs
+ * `21:07:33.120Z` — while its tarball was still propagating), both tarballs are
+ * fetched from the registry, and `scripts/alias_tarball.ts`'s `compare` holds
+ * the alias to the package — every path, every byte, the `name` line of
+ * `package.json` excepted. Compared rather than installed a second time:
+ * identical files are the stronger claim, and they take seconds. A difference
+ * is exit 1; when the main package passed and an alias is still not served
+ * within its wait, the script reports a named `WAIT` naming the alias and its
+ * wait and exits 4, distinct from exit 3 for an unserved main package.
  *
  * What it cannot see: the tarball a branch packs is not the tarball npm serves
  * until a publish makes it one (that is `--source registry`), and a green run is
@@ -72,9 +82,9 @@ import { runWithoutBun } from './smoke_without_bun.ts';
 import { checkSmokeWithoutBun } from './check_smoke_without_bun.ts';
 import { findSmokeExecutable, isSmokePathInside, runSmokeCommand } from './smoke_process.ts';
 import { checkSmokeProcess } from './check_smoke_process.ts';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AliasTarballError, compareTarballs } from './alias_tarball.ts';
 
@@ -429,11 +439,13 @@ function onPath(cmd: string): string | null {
   return findSmokeExecutable(cmd);
 }
 
-const EXIT_GREEN = 0;
-const EXIT_RED = 1;
-const EXIT_NOTHING_RAN = 2;
-const EXIT_NOT_SERVED = 3;
-const DEFAULT_WAIT_MINUTES = 15;
+export const EXIT_GREEN = 0;
+export const EXIT_RED = 1;
+export const EXIT_NOTHING_RAN = 2;
+export const EXIT_NOT_SERVED = 3;
+export const EXIT_ALIAS_WAIT = 4;
+export const DEFAULT_WAIT_MINUTES = 15;
+export const DEFAULT_ALIAS_WAIT_MINUTES = 15;
 
 function sleepMs(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -448,24 +460,65 @@ function backoffMs(attempt: number): number {
   return Math.min(5000 * 2 ** (attempt - 1), 30000);
 }
 
-function waitForRegistry(spec: string, minutes: number, cwd: string): { served: boolean; attempts: number; ms: number; last: string } {
+export interface RegistryWait {
+  served: boolean;
+  attempts: number;
+  ms: number;
+  last: string;
+  missing: 'none' | 'packument' | 'tarball';
+  packument: { attempt: number; ms: number } | null;
+  tgz: string;
+}
+
+export interface RegistryWaitHooks {
+  run?: (cmd: string, args: string[], cwd: string) => Ran;
+  sleep?: (ms: number) => void;
+  log?: (line: string) => void;
+}
+
+export function waitForRegistry(spec: string, minutes: number, cwd: string, into: string, hooks?: RegistryWaitHooks): RegistryWait {
+  const runner = hooks?.run ?? run;
+  const sleeper = hooks?.sleep ?? sleepMs;
+  const logger = hooks?.log ?? ((line: string): void => console.log(line));
+  logger(`  waiting up to ${minutes} min for the registry to serve ${spec} (packument and tarball)`);
   const started = Date.now();
   const deadline = started + Math.round(minutes * 60_000);
   let attempts = 0;
   let last = '';
+  let missing: 'none' | 'packument' | 'tarball' = 'packument';
+  let packument: { attempt: number; ms: number } | null = null;
   for (;;) {
     attempts += 1;
     // `--prefer-online`: npm caches a packument, a negative answer included, and
     // a poll reading its own earlier 404 would wait out the whole ceiling.
-    const asked = run('npm', ['view', spec, 'version', '--prefer-online'], cwd);
-    if (asked.status === 0) return { served: true, attempts, ms: Date.now() - started, last: asked.out.trim() };
-    const said = asked.out.split('\n').map((l) => l.trim()).filter((l) => l !== '' && !/A complete log of this run/.test(l));
-    last = said.find((l) => /\berror code\b/.test(l)) ?? said[0] ?? '';
+    const asked = runner('npm', ['view', spec, 'version', '--prefer-online'], cwd);
+    if (asked.status === 0) {
+      if (packument === null) packument = { attempt: attempts, ms: Date.now() - started };
+      rmSync(into, { recursive: true, force: true });
+      mkdirSync(into, { recursive: true });
+      const packed = runner('npm', ['pack', spec, '--pack-destination', into, '--silent', '--prefer-online'], into);
+      const made = existsSync(into) ? readdirSync(into).filter((f) => f.endsWith('.tgz')) : [];
+      const tgz = packed.status === 0 && made.length === 1 ? join(into, made[0]) : '';
+      if (tgz !== '' && existsSync(tgz) && statSync(tgz).size > 0) {
+        return { served: true, attempts, ms: Date.now() - started, last: asked.out.trim(), missing: 'none', packument, tgz };
+      }
+      missing = 'tarball';
+      const said = packed.out.split('\n').map((l) => l.trim()).filter((l) => l !== '' && !/A complete log of this run/.test(l));
+      last = said.find((l) => /\berror code\b/.test(l)) ?? said[0] ?? `npm pack ${spec} exited ${packed.status}`;
+    } else {
+      missing = 'packument';
+      const said = asked.out.split('\n').map((l) => l.trim()).filter((l) => l !== '' && !/A complete log of this run/.test(l));
+      last = said.find((l) => /\berror code\b/.test(l)) ?? said[0] ?? `npm view ${spec} exited ${asked.status}`;
+    }
     const left = deadline - Date.now();
-    if (left <= 0) return { served: false, attempts, ms: Date.now() - started, last };
+    if (left <= 0) return { served: false, attempts, ms: Date.now() - started, last, missing, packument, tgz: '' };
     const nap = Math.min(backoffMs(attempts), left);
-    console.log(`  the registry is not serving ${spec} yet — attempt ${attempts}, ${elapsedText(Date.now() - started)} into a ${minutes} min wait; asking again in ${Math.round(nap / 1000)}s`);
-    sleepMs(nap);
+    const piece =
+      packument === null
+        ? 'packument not served yet'
+        : `packument served on attempt ${packument.attempt} (${elapsedText(packument.ms)}), tarball not served yet`;
+    logger(`  the registry is not serving ${spec} yet (${piece}) — attempt ${attempts}, ${elapsedText(Date.now() - started)} into its ${minutes} min wait; asking again in ${Math.round(nap / 1000)}s`);
+    sleeper(nap);
   }
 }
 
@@ -512,14 +565,19 @@ function tarPaths(tgz: string, cwd: string): string[] {
     .map((l) => (l.startsWith('package/') ? l.slice('package/'.length) : l));
 }
 
-function tarballFor(work: string, source: { kind: 'tree' } | { kind: 'registry'; spec: string }, plant: Plant): { tgz: string; faults: string[]; packedPaths: number; evidence: string } {
+function tarballFor(work: string, source: { kind: 'tree' } | { kind: 'registry'; spec: string }, plant: Plant, fetchedTgz?: string): { tgz: string; faults: string[]; packedPaths: number; evidence: string } {
   const faults: string[] = [];
   const packDir = join(work, 'pack');
   mkdirSync(packDir, { recursive: true });
-  const packed =
-    source.kind === 'tree'
-      ? run('npm', ['pack', ROOT, '--pack-destination', packDir, '--silent'], work)
-      : run('npm', ['pack', source.spec, '--pack-destination', packDir, '--silent', '--prefer-online'], work);
+  let packed: Ran = { status: 0, out: '' };
+  if (source.kind === 'registry' && fetchedTgz !== undefined && fetchedTgz !== '' && existsSync(fetchedTgz)) {
+    copyFileSync(fetchedTgz, join(packDir, basename(fetchedTgz)));
+  } else {
+    packed =
+      source.kind === 'tree'
+        ? run('npm', ['pack', ROOT, '--pack-destination', packDir, '--silent'], work)
+        : run('npm', ['pack', source.spec, '--pack-destination', packDir, '--silent', '--prefer-online'], work);
+  }
   const tarballs = existsSync(packDir) ? readdirSync(packDir).filter((f) => f.endsWith('.tgz')) : [];
   if (packed.status !== 0 || tarballs.length !== 1) {
     faults.push(`SMOKE_PACK_WROTE_A_TARBALL: \`npm pack\` exited ${packed.status} and left ${tarballs.length} tarball(s) in ${packDir}; one was required. ${packed.out.trim()}`);
@@ -613,7 +671,7 @@ function tableRows(out: string): Array<{ name: string; opaque: number }> {
   return rows;
 }
 
-function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
+function runCase(spec: CaseSpec, work: string, keep: boolean, fetchedTgz?: string): CaseResult {
   const faults: string[] = [];
   const steps: string[] = [];
   const notes: string[] = [];
@@ -623,7 +681,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
     steps.push(step);
   };
 
-  const built = tarballFor(work, spec.source, spec.plant);
+  const built = tarballFor(work, spec.source, spec.plant, fetchedTgz);
   for (const f of built.faults) fault('pack', f);
   if (built.tgz === '') return { faults, steps, notes, output };
   notes.push(`the tarball carries ${built.packedPaths} path(s)`);
@@ -744,32 +802,40 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
 
   // The actual no-runtime compositor must replay a kept official frame,
   // exempt the fully covered probe and retain a wrong-time probe as unavailable.
-  writeFileSync(join(home, 'render_read_probe.ts'), RENDER_READ_PROBE);
-  const coverage = check?.status === 0 ? run('bun', [join(home, 'render_read_probe.ts'), checkOut], home) : null;
-  if (coverage !== null) output += coverage.out;
-  if (coverage === null || coverage.status !== 0 || !coverage.out.includes('ROOT_COVERAGE_EXACT_RGBA 1/1')) {
-    fault('render-read', `SMOKE_RUNTIME_FREE_ROOT_COVERAGE: ${coverage === null ? 'the installed check did not pass' : `exit ${coverage.status}: ${JSON.stringify(coverage.out.slice(0, 3000))}`}`);
-  } else notes.push('runtime-free root coverage replayed exact RGBA; covered1/1; wrong time retained raw1');
+  // A `--source registry` rerun against a cut published before `motionRootCoverageReader`
+  // and `seam_scope` landed (`<= 1.60.2`) does not carry those exports in its installed
+  // `src/check.ts`; every `--source tree` run and every cut shipping them runs both probes.
+  const installedCheckSource = existsSync(join(pkgRoot, 'src', 'check.ts')) ? readFileSync(join(pkgRoot, 'src', 'check.ts'), 'utf8') : '';
+  if (spec.source.kind === 'tree' || installedCheckSource.includes('motionRootCoverageReader')) {
+    writeFileSync(join(home, 'render_read_probe.ts'), RENDER_READ_PROBE);
+    const coverage = check?.status === 0 ? run('bun', [join(home, 'render_read_probe.ts'), checkOut], home) : null;
+    if (coverage !== null) output += coverage.out;
+    if (coverage === null || coverage.status !== 0 || !coverage.out.includes('ROOT_COVERAGE_EXACT_RGBA 1/1')) {
+      fault('render-read', `SMOKE_RUNTIME_FREE_ROOT_COVERAGE: ${coverage === null ? 'the installed check did not pass' : `exit ${coverage.status}: ${JSON.stringify(coverage.out.slice(0, 3000))}`}`);
+    } else notes.push('runtime-free root coverage replayed exact RGBA; covered1/1; wrong time retained raw1');
 
-  writeFileSync(join(home, 'make_seam_scope.ts'), SEAM_SCOPE_GENERATOR);
-  const scopeGen = run('bun', [join(home, 'make_seam_scope.ts')], home);
-  output += scopeGen.out;
-  const scopeOut = join(home, 'seam-scope-out');
-  const scopeCheck = scopeGen.status === 0 ? run(bin, ['check', '--rig', join(home, 'seam-scope'), '--out', scopeOut, '--all-sets', '--seam-pairs'], home) : null;
-  if (scopeCheck !== null) output += scopeCheck.out;
-  type Scope = { unavailable?: unknown; pairs?: Array<{ parts: string[]; whole_px_over_40: number; affected_px_over_40: number; inherited_px_over_40: number; reasons: Record<string, number> }> };
-  type State = { PASS?: boolean; seam_scope?: Scope };
-  const scopeJson = existsSync(join(scopeOut, 'check.json')) ? JSON.parse(readFileSync(join(scopeOut, 'check.json'), 'utf8')) as State & { sets?: Record<string, State> } : null;
-  const pair = (row: State | undefined) => row?.seam_scope?.pairs?.find(p => p.parts.length === 2 && p.parts.includes('back') && p.parts.includes('front'));
-  const inherited = pair(scopeJson?.sets?.extent), affected = pair(scopeJson?.sets?.cover);
-  if (scopeCheck?.status !== 1 || scopeJson?.PASS !== false || scopeJson.seam_scope?.unavailable !== undefined ||
-    scopeJson.sets?.extent?.PASS !== true || scopeJson.sets.extent.seam_scope?.unavailable !== undefined ||
-    inherited?.whole_px_over_40 !== 64 || inherited.affected_px_over_40 !== 0 || inherited.inherited_px_over_40 !== 64 ||
-    scopeJson.sets?.cover?.PASS !== false || scopeJson.sets.cover.seam_scope?.unavailable !== undefined ||
-    affected === undefined || affected.affected_px_over_40 < 64 || (affected.reasons.posed_changed ?? 0) < 64 ||
-    !scopeCheck.out.includes('CHECK_SEAM_WITHIN_BAR')) {
-    fault('render-read', `SMOKE_RUNTIME_FREE_AFFECTED_SETS: generator ${scopeGen.status}; check ${scopeCheck?.status ?? 'not run'}; ${JSON.stringify({ inherited, affected, figures: scopeJson, diagnostic: scopeCheck?.out.slice(-3000) }).slice(0, 6000)}`);
-  } else notes.push('runtime-free all-sets: base FAIL64 retained; disjoint set PASS inherited64/affected0; third occlusion FAIL affected64');
+    writeFileSync(join(home, 'make_seam_scope.ts'), SEAM_SCOPE_GENERATOR);
+    const scopeGen = run('bun', [join(home, 'make_seam_scope.ts')], home);
+    output += scopeGen.out;
+    const scopeOut = join(home, 'seam-scope-out');
+    const scopeCheck = scopeGen.status === 0 ? run(bin, ['check', '--rig', join(home, 'seam-scope'), '--out', scopeOut, '--all-sets', '--seam-pairs'], home) : null;
+    if (scopeCheck !== null) output += scopeCheck.out;
+    type Scope = { unavailable?: unknown; pairs?: Array<{ parts: string[]; whole_px_over_40: number; affected_px_over_40: number; inherited_px_over_40: number; reasons: Record<string, number> }> };
+    type State = { PASS?: boolean; seam_scope?: Scope };
+    const scopeJson = existsSync(join(scopeOut, 'check.json')) ? JSON.parse(readFileSync(join(scopeOut, 'check.json'), 'utf8')) as State & { sets?: Record<string, State> } : null;
+    const pair = (row: State | undefined) => row?.seam_scope?.pairs?.find(p => p.parts.length === 2 && p.parts.includes('back') && p.parts.includes('front'));
+    const inherited = pair(scopeJson?.sets?.extent), affected = pair(scopeJson?.sets?.cover);
+    if (scopeCheck?.status !== 1 || scopeJson?.PASS !== false || scopeJson.seam_scope?.unavailable !== undefined ||
+      scopeJson.sets?.extent?.PASS !== true || scopeJson.sets.extent.seam_scope?.unavailable !== undefined ||
+      inherited?.whole_px_over_40 !== 64 || inherited.affected_px_over_40 !== 0 || inherited.inherited_px_over_40 !== 64 ||
+      scopeJson.sets?.cover?.PASS !== false || scopeJson.sets.cover.seam_scope?.unavailable !== undefined ||
+      affected === undefined || affected.affected_px_over_40 < 64 || (affected.reasons.posed_changed ?? 0) < 64 ||
+      !scopeCheck.out.includes('CHECK_SEAM_WITHIN_BAR')) {
+      fault('render-read', `SMOKE_RUNTIME_FREE_AFFECTED_SETS: generator ${scopeGen.status}; check ${scopeCheck?.status ?? 'not run'}; ${JSON.stringify({ inherited, affected, figures: scopeJson, diagnostic: scopeCheck?.out.slice(-3000) }).slice(0, 6000)}`);
+    } else notes.push('runtime-free all-sets: base FAIL64 retained; disjoint set PASS inherited64/affected0; third occlusion FAIL affected64');
+  } else {
+    notes.push(`runtime-free root coverage and seam_scope skipped on ${spec.source.spec} (cut predates motionRootCoverageReader)`);
+  }
 
   // `compose` from the install: a generated character checked green by the installed `check`, composed twice.
   writeFileSync(join(home, 'make_scene.ts'), SCENE_GENERATOR);
@@ -866,17 +932,18 @@ usage:
 
 --alias <name> is for \`--source registry\` too, once per alias: after the cases,
 the same version under each other name the package is published as is asked for
-within what is left of --wait (at least once), and its unpacked files are held to
-the package's, both fetched from the registry, byte for byte but for the name line
-of package.json (scripts/alias_tarball.ts compare).
+within its own --wait (default 15 min per alias, for both packument and tarball),
+and its unpacked files are held to the package's, both fetched from the registry,
+byte for byte but for the name line of package.json (scripts/alias_tarball.ts compare).
 
 exit codes:
   0  every case passed
   1  a case went red — against \`--source registry\`, the published artifact does not run —
      or an --alias tarball carries other files or other bytes than the package's
   2  no case ran, so this run measured nothing
-  3  the registry did not serve the version — under the name or under an --alias — within
-     --wait, so the confirmation was NOT taken
+  3  the registry did not serve the main package within --wait, so the confirmation was NOT taken
+  4  the main package installed and passed, and an --alias was still not served within its own
+     --wait (WAIT, naming the alias and how long it waited)
 
 cases:
   clean            a correct package installs; --version, layers (wrapper and PSD), sheet, check, compose, the contour mesh and an auto-mode rig run from it
@@ -955,132 +1022,162 @@ function main(): number {
   checkSmokeProcess();
   checkSmokeWithoutBun();
 
-  let served: { served: boolean; attempts: number; ms: number; last: string } | null = null;
-  const waitStarted = Date.now();
-  if (source.kind === 'registry') {
-    served = waitForRegistry(source.spec, waitMinutes, ROOT);
-    if (!served.served) {
-      console.log(
-        `  FAIL  SMOKE_REGISTRY_SERVED_THE_VERSION: the registry did not serve ${source.spec} within ${waitMinutes} min (${served.attempts} attempt(s), ${elapsedText(served.ms)}) — the confirmation was NOT taken, and nothing here says the package is broken. ` +
-          `Re-run it (Actions -> release -> Run workflow, version ${wanted}) or by hand: ${byHand}` +
-          (served.last === '' ? '' : `. The last thing npm said was: ${served.last}`),
-      );
-      return EXIT_NOT_SERVED;
+  const aliasWaitMinutes = waitFlag === null ? DEFAULT_ALIAS_WAIT_MINUTES : waitMinutes;
+  const registryPackRoot = source.kind === 'registry' ? mkdtempSync(join(tmpdir(), 'rig-parts-smoke-registry-')) : null;
+  let served: RegistryWait | null = null;
+  try {
+    if (source.kind === 'registry' && registryPackRoot !== null) {
+      served = waitForRegistry(source.spec, waitMinutes, ROOT, join(registryPackRoot, 'package'));
+      if (!served.served) {
+        const mainStage =
+          served.packument === null
+            ? 'its packument never answered'
+            : `its packument answered on attempt ${served.packument.attempt} (${elapsedText(served.packument.ms)}) and its tarball did not`;
+        console.log(
+          `  FAIL  SMOKE_REGISTRY_SERVED_THE_VERSION: the registry did not serve ${source.spec} within its ${waitMinutes} min wait (${served.attempts} attempt(s), ${elapsedText(served.ms)}; ${mainStage}) — the confirmation was NOT taken, and nothing here says the package is broken. ` +
+            `Re-run it (Actions -> release -> Run workflow, version ${wanted}) or by hand: ${byHand}` +
+            (served.last === '' ? '' : `. The last thing npm said was: ${served.last}`),
+        );
+        return EXIT_NOT_SERVED;
+      }
+      const afterPackument =
+        served.packument !== null && served.packument.attempt < served.attempts
+          ? ` (packument on attempt ${served.packument.attempt} at ${elapsedText(served.packument.ms)}, tarball on attempt ${served.attempts})`
+          : '';
+      console.log(`  the registry served ${source.spec} on attempt ${served.attempts}, ${elapsedText(served.ms)} into its ${waitMinutes} min wait${afterPackument}`);
     }
-    console.log(`  the registry served ${source.spec} on attempt ${served.attempts}, ${elapsedText(served.ms)} after this run started asking`);
-  }
 
-  const battery: CaseSpec[] = [
-    { name: 'clean', source, installer, plant: 'none', dirName: 'empty' },
-    // A CORRECT package at a path nothing in the tree has seen, so a pass is not
-    // a pass about this machine's tidy temp directory.
-    { name: 'unusual-path', source, installer, plant: 'none', dirName: 'install smoke ünïcode ñ' },
-    { name: 'drop-src-module', source, installer, plant: 'drop-src-module', dirName: 'planted-src' },
-    { name: 'drop-rigc', source, installer, plant: 'drop-rigc', dirName: 'planted-rigc' },
-    { name: 'drop-psd', source, installer, plant: 'drop-psd', dirName: 'planted-psd' },
-    { name: 'add-spine-core', source, installer, plant: 'add-spine-core', dirName: 'planted-spine-core' },
-  ];
-  const chosen = only === null ? battery : battery.filter((c) => c.name === only);
-  if (chosen.length === 0) {
-    console.log(`  FAIL  SMOKE_CASE_NAMED: no case is named "${only}" — ${battery.map((c) => c.name).join(', ')}`);
-    return EXIT_RED;
-  }
+    const battery: CaseSpec[] = [
+      { name: 'clean', source, installer, plant: 'none', dirName: 'empty' },
+      // A CORRECT package at a path nothing in the tree has seen, so a pass is not
+      // a pass about this machine's tidy temp directory.
+      { name: 'unusual-path', source, installer, plant: 'none', dirName: 'install smoke ünïcode ñ' },
+      { name: 'drop-src-module', source, installer, plant: 'drop-src-module', dirName: 'planted-src' },
+      { name: 'drop-rigc', source, installer, plant: 'drop-rigc', dirName: 'planted-rigc' },
+      { name: 'drop-psd', source, installer, plant: 'drop-psd', dirName: 'planted-psd' },
+      { name: 'add-spine-core', source, installer, plant: 'add-spine-core', dirName: 'planted-spine-core' },
+    ];
+    const chosen = only === null ? battery : battery.filter((c) => c.name === only);
+    if (chosen.length === 0) {
+      console.log(`  FAIL  SMOKE_CASE_NAMED: no case is named "${only}" — ${battery.map((c) => c.name).join(', ')}`);
+      return EXIT_RED;
+    }
 
-  let bad = 0;
-  let ran = 0;
-  for (const spec of chosen) {
-    const work = mkdtempSync(join(tmpdir(), 'rig-parts-smoke-'));
-    try {
-      const result = runCase(spec, work, keep);
-      ran += 1;
-      if (spec.plant === 'none') {
-        if (result.faults.length === 0) console.log(`  PASS  SMOKE_CASE[${spec.name}]  ${result.notes.join('; ')}`);
-        else {
-          bad += 1;
-          console.log(`  FAIL  SMOKE_CASE[${spec.name}]`);
-          for (const f of result.faults) console.log(`          ${f}`);
+    let bad = 0;
+    let ran = 0;
+    for (const spec of chosen) {
+      const work = mkdtempSync(join(tmpdir(), 'rig-parts-smoke-'));
+      try {
+        const result = runCase(spec, work, keep, served?.tgz);
+        ran += 1;
+        if (spec.plant === 'none') {
+          if (result.faults.length === 0) console.log(`  PASS  SMOKE_CASE[${spec.name}]  ${result.notes.join('; ')}`);
+          else {
+            bad += 1;
+            console.log(`  FAIL  SMOKE_CASE[${spec.name}]`);
+            for (const f of result.faults) console.log(`          ${f}`);
+          }
+          continue;
         }
-        continue;
+        // 🌱 Inverted: the plant is green when the smoke went red where it said it would, naming what went missing.
+        const planted = PLANTED[spec.plant];
+        const missed: string[] = [];
+        if (result.faults.length === 0) missed.push('the smoke passed on a package the plant broke');
+        for (const step of planted.steps) if (!result.steps.includes(step)) missed.push(`no fault came from the ${step} step, where this plant has to bite`);
+        const said = `${result.faults.join('\n')}\n${result.output}`;
+        for (const name of planted.names) if (!said.includes(name)) missed.push(`nothing in the run named ${name}, so the failure does not say what is missing`);
+        if (result.steps.includes('pack')) missed.push('the plant itself did not apply');
+        if (missed.length === 0) {
+          console.log(`  PASS  SMOKE_PLANT[${spec.name}]  ${planted.what}`);
+          for (const note of result.notes) console.log(`          ${note}`);
+          for (const f of result.faults.slice(0, 2)) console.log(`          red: ${f.split('\n')[0].slice(0, 300)}`);
+        } else {
+          bad += 1;
+          console.log(`  FAIL  SMOKE_PLANT[${spec.name}]`);
+          for (const m of missed) console.log(`          ${m}`);
+        }
+      } finally {
+        if (!keep) rmSync(work, { recursive: true, force: true });
+        else console.log(`          kept: ${work}`);
       }
-      // 🌱 Inverted: the plant is green when the smoke went red where it said it would, naming what went missing.
-      const planted = PLANTED[spec.plant];
-      const missed: string[] = [];
-      if (result.faults.length === 0) missed.push('the smoke passed on a package the plant broke');
-      for (const step of planted.steps) if (!result.steps.includes(step)) missed.push(`no fault came from the ${step} step, where this plant has to bite`);
-      const said = `${result.faults.join('\n')}\n${result.output}`;
-      for (const name of planted.names) if (!said.includes(name)) missed.push(`nothing in the run named ${name}, so the failure does not say what is missing`);
-      if (result.steps.includes('pack')) missed.push('the plant itself did not apply');
-      if (missed.length === 0) {
-        console.log(`  PASS  SMOKE_PLANT[${spec.name}]  ${planted.what}`);
-        for (const note of result.notes) console.log(`          ${note}`);
-        for (const f of result.faults.slice(0, 2)) console.log(`          red: ${f.split('\n')[0].slice(0, 300)}`);
-      } else {
-        bad += 1;
-        console.log(`  FAIL  SMOKE_PLANT[${spec.name}]`);
-        for (const m of missed) console.log(`          ${m}`);
-      }
-    } finally {
-      if (!keep) rmSync(work, { recursive: true, force: true });
-      else console.log(`          kept: ${work}`);
     }
+    if (ran === 0) {
+      console.log('  FAIL  SMOKE_CASE_NAMED: no case ran, so this run measured nothing');
+      return EXIT_NOTHING_RAN;
+    }
+    const servedTgz = served !== null ? served.tgz : '';
+    const readings =
+      served !== null && source.kind === 'registry'
+        ? aliases.map((name) => ({ name, reading: confirmAlias(source.spec, servedTgz, `${name}@${wanted}`, aliasWaitMinutes, wanted, byHand) }))
+        : [];
+    const aliasRed = readings.some((r) => r.reading === 'differs');
+    const aliasLate = readings.some((r) => r.reading === 'late');
+    const said = { same: 'carries the same files', differs: 'differs', late: 'is still waiting on the registry (WAIT)' } as const;
+    const aliasNote = readings.map((r) => `; the alias ${r.name} ${said[r.reading]}`).join('');
+    if (bad === 0 && !aliasRed && !aliasLate) {
+      console.log(`rig-parts install smoke: green — ${ran} case(s)${aliasNote}`);
+      return EXIT_GREEN;
+    }
+    if (bad === 0 && !aliasRed && aliasLate) {
+      console.log(`rig-parts install smoke: WAIT — ${ran} case(s) passed on ${source.kind === 'registry' ? source.spec : PACKAGE}${aliasNote}`);
+      return EXIT_ALIAS_WAIT;
+    }
+    console.log(`rig-parts install smoke: ${bad} of ${ran} case(s) failed${aliasNote}`);
+    if (bad === 0) return EXIT_RED;
+    if (served !== null) {
+      console.log(`the published artifact does not run: the registry served ${source.kind === 'registry' ? source.spec : ''} and ${bad} of ${ran} case(s) above went red on it. This is a fault in what was published, not a wait that was too short`);
+    }
+    return EXIT_RED;
+  } finally {
+    if (registryPackRoot !== null) rmSync(registryPackRoot, { recursive: true, force: true });
   }
-  if (ran === 0) {
-    console.log('  FAIL  SMOKE_CASE_NAMED: no case ran, so this run measured nothing');
-    return EXIT_NOTHING_RAN;
-  }
-  const readings =
-    served !== null && source.kind === 'registry'
-      ? aliases.map((name) => ({ name, reading: confirmAlias(source.spec, `${name}@${wanted}`, Math.max(0, waitMinutes - (Date.now() - waitStarted) / 60_000), waitMinutes, byHand) }))
-      : [];
-  const aliasRed = readings.some((r) => r.reading === 'differs');
-  const aliasLate = readings.some((r) => r.reading === 'late');
-  const said = { same: 'carries the same files', differs: 'differs', late: 'was NOT confirmed' } as const;
-  const aliasNote = readings.map((r) => `; the alias ${r.name} ${said[r.reading]}`).join('');
-  console.log(bad === 0 && !aliasRed && !aliasLate ? `rig-parts install smoke: green — ${ran} case(s)${aliasNote}` : `rig-parts install smoke: ${bad} of ${ran} case(s) failed${aliasNote}`);
-  if (bad === 0 && !aliasRed && !aliasLate) return EXIT_GREEN;
-  if (bad === 0 && !aliasRed) return EXIT_NOT_SERVED;
-  if (bad === 0) return EXIT_RED;
-  if (served !== null) {
-    console.log(`the published artifact does not run: the registry served ${source.kind === 'registry' ? source.spec : ''} and ${bad} of ${ran} case(s) above went red on it. This is a fault in what was published, not a wait that was too short`);
-  }
-  return EXIT_RED;
 }
 
 /**
- * The alias's confirmation: ask for `aliasSpec` within `leftMinutes` (at least
- * once), fetch it and `packageSpec` from the registry, and hold the one to the
- * other with `compareTarballs`. Prints its own PASS or FAIL line. `late` is a
- * confirmation not taken — the registry did not hand over the alias's bytes —
- * and says nothing about them; `differs` is a fact about what was published.
+ * The alias's confirmation: ask for `aliasSpec` within its own `aliasWaitMinutes`
+ * (polling both packument and tarball), and hold its unpacked files to
+ * `packageTgz` (`packageSpec`) with `compareTarballs`. Prints its own PASS,
+ * WAIT, or FAIL line. `late` is a named `WAIT` — the main package passed and the
+ * registry has not yet served the alias within its wait — and exits 4, distinct
+ * from exit 3 for an unserved main package; `differs` is a fact about what was
+ * published (exit 1).
  */
-function confirmAlias(packageSpec: string, aliasSpec: string, leftMinutes: number, waitMinutes: number, byHand: string): 'same' | 'differs' | 'late' {
+export function confirmAlias(packageSpec: string, packageTgz: string, aliasSpec: string, aliasWaitMinutes: number, wanted: string, byHand: string, hooks?: RegistryWaitHooks): 'same' | 'differs' | 'late' {
+  const logger = hooks?.log ?? ((line: string): void => console.log(line));
   const fetchDir = mkdtempSync(join(tmpdir(), 'rig-parts-smoke-alias-'));
   try {
-    const got = waitForRegistry(aliasSpec, leftMinutes, fetchDir);
-    const fetched = got.served ? [packageSpec, aliasSpec].map((spec, i) => fetchTarball(spec, join(fetchDir, i === 0 ? 'package' : 'alias'))) : [];
-    const missing = fetched.map((f) => (typeof f === 'string' ? (existsSync(f) ? null : `${f} is not on disk`) : f.failed)).find((m) => m !== null);
-    if (!got.served || missing !== undefined) {
-      console.log(
-        `  FAIL  SMOKE_ALIAS_CARRIES_THE_SAME_FILES: the registry did not hand over ${aliasSpec} within what was left of the ${waitMinutes} min wait ` +
-          `(${got.attempts} attempt(s), ${elapsedText(got.ms)}${got.served ? `; its packument answered and \`npm pack\` did not: ${(missing ?? '').slice(0, 400)}` : ''}) — ` +
-          `the alias's confirmation was NOT taken, and nothing here says it differs. Take it by hand once the registry answers: ${byHand}` +
-          (got.last === '' || got.served ? '' : `. The last thing npm said was: ${got.last}`),
+    const got = waitForRegistry(aliasSpec, aliasWaitMinutes, fetchDir, join(fetchDir, 'alias'), hooks);
+    if (!got.served) {
+      const stage =
+        got.packument === null
+          ? 'its packument never answered'
+          : `its packument answered on attempt ${got.packument.attempt} (${elapsedText(got.packument.ms)}) and its tarball did not`;
+      logger(
+        `  WAIT  SMOKE_ALIAS_CARRIES_THE_SAME_FILES: the registry did not serve ${aliasSpec} within its ${aliasWaitMinutes} min wait ` +
+          `(${got.attempts} attempt(s), ${elapsedText(got.ms)}; ${stage}) — ` +
+          `${packageSpec} installed and passed, and the alias is still waiting on the registry, not a broken cut. ` +
+          `Re-run it (Actions -> release -> Run workflow, version ${wanted}) or by hand: ${byHand}` +
+          (got.last === '' ? '' : `. The last thing npm said was: ${got.last}`),
       );
       return 'late';
     }
-    const [packageTgz, aliasTgz] = fetched as string[];
+    const afterAliasPackument =
+      got.packument !== null && got.packument.attempt < got.attempts
+        ? ` (packument on attempt ${got.packument.attempt} at ${elapsedText(got.packument.ms)}, tarball on attempt ${got.attempts})`
+        : '';
+    logger(`  the registry served ${aliasSpec} on attempt ${got.attempts}, ${elapsedText(got.ms)} into its ${aliasWaitMinutes} min wait${afterAliasPackument}`);
     try {
-      const reading = compareTarballs(packageTgz, aliasTgz);
+      const reading = compareTarballs(packageTgz, got.tgz);
       if (reading.faults.length === 0) {
-        console.log(`  PASS  SMOKE_ALIAS_CARRIES_THE_SAME_FILES: the registry served ${aliasSpec} and its ${reading.files} file(s) are ${packageSpec}'s, byte for byte but for the name line of package.json`);
+        logger(`  PASS  SMOKE_ALIAS_CARRIES_THE_SAME_FILES: the registry served ${aliasSpec} and its ${reading.files} file(s) are ${packageSpec}'s, byte for byte but for the name line of package.json`);
         return 'same';
       }
-      console.log(`  FAIL  SMOKE_ALIAS_CARRIES_THE_SAME_FILES: the registry served ${aliasSpec} and it is not ${packageSpec} under another name:`);
-      for (const fault of reading.faults) console.log(`          ${fault}`);
+      logger(`  FAIL  SMOKE_ALIAS_CARRIES_THE_SAME_FILES: the registry served ${aliasSpec} and it is not ${packageSpec} under another name:`);
+      for (const fault of reading.faults) logger(`          ${fault}`);
       return 'differs';
     } catch (error) {
       if (!(error instanceof AliasTarballError)) throw error;
-      console.log(`  FAIL  SMOKE_ALIAS_CARRIES_THE_SAME_FILES: the registry served ${aliasSpec} and it could not be read as a package: ${error.message}`);
+      logger(`  FAIL  SMOKE_ALIAS_CARRIES_THE_SAME_FILES: the registry served ${aliasSpec} and it could not be read as a package: ${error.message}`);
       return 'differs';
     }
   } finally {
@@ -1088,12 +1185,4 @@ function confirmAlias(packageSpec: string, aliasSpec: string, leftMinutes: numbe
   }
 }
 
-/** `npm pack <spec>` into an empty directory: the one tarball's path, or what npm said when it left none. */
-function fetchTarball(spec: string, into: string): string | { failed: string } {
-  mkdirSync(into, { recursive: true });
-  const packed = run('npm', ['pack', spec, '--pack-destination', into, '--silent', '--prefer-online'], into);
-  const made = readdirSync(into).filter((f) => f.endsWith('.tgz'));
-  return packed.status === 0 && made.length === 1 ? join(into, made[0]) : { failed: `npm pack ${spec} exited ${packed.status}: ${packed.out.trim()}` };
-}
-
-process.exit(main());
+if (import.meta.main) process.exit(main());
