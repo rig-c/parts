@@ -131,7 +131,8 @@ import {
 } from './instruments.ts';
 import { type AlternatePartsRecord, FRONT_SUFFIX, type LimbRecord, type PartRecord, type PartsFile, readParts } from './parts.ts';
 import { ARM_SPLIT_MIGRATION, poseRigBonesForDrawn, type RigBone, SETS_FILE } from './rig.ts';
-import { turnTwin } from './turn.ts';
+import { TURN_BONE, turnConstraintName, turnTwin } from './turn.ts';
+import { ROOT_BONE } from './config.ts';
 import {
   aimLine,
   contactLine,
@@ -3732,6 +3733,44 @@ function motionRootCandidates(parts: PartsFile, rig: Record<string, unknown>): M
     return slot;
   };
   const carriers = bodies.map(part => ({ part, slot: binding(part) }));
+  // Match applyTurn's emitted structure, not a name prefix or a nearby ancestor.
+  // Its leaf/control bones have exactly these fields; no transform tolerance is introduced.
+  const keys = (record: Record<string, unknown>, wanted: readonly string[]): boolean =>
+    Object.keys(record).sort().join(',') === [...wanted].sort().join(',');
+  const identity = (bone: Record<string, unknown>, parent: string): boolean =>
+    keys(bone, ['name', 'parent', 'x', 'y']) && bone.parent === parent && bone.x === 0 && bone.y === 0;
+  const generatedBodyTurn = (part: PartRecord, slot: Record<string, unknown>, parent: string): boolean => {
+    const twin = turnTwin(part.name, parent);
+    if (slot.bone !== twin) return false;
+    const children = bones.filter(bone => bone.name === twin);
+    const controls = bones.filter(bone => bone.name === TURN_BONE);
+    if (children.length !== 1 || !identity(children[0], parent) ||
+        controls.length !== 1 || !identity(controls[0], ROOT_BONE)) return false;
+    const constraints = (Array.isArray(rig.constraints) ? rig.constraints : []).filter(isRecord)
+      .filter(constraint => constraint.name === turnConstraintName(part.name));
+    if (constraints.length !== 1) return false;
+    const constraint = constraints[0];
+    if (!keys(constraint, ['type', 'name', 'bones', 'source', 'localSource', 'additive', 'properties']) ||
+        constraint.type !== 'transform' || constraint.source !== TURN_BONE ||
+        constraint.localSource !== true || constraint.additive !== true || !Array.isArray(constraint.bones) ||
+        constraint.bones.length === 0 || constraint.bones.some(name => typeof name !== 'string') ||
+        new Set(constraint.bones).size !== constraint.bones.length || !constraint.bones.includes(twin)) return false;
+    // Every target belongs to this part's generated row, even on a multi-bone body mesh.
+    if (!constraint.bones.every(name => {
+      const targets = bones.filter(bone => bone.name === name);
+      if (targets.length !== 1 || typeof targets[0].parent !== 'string') return false;
+      const carrier = targets[0].parent;
+      return targets[0].name === turnTwin(part.name, carrier) && identity(targets[0], carrier) &&
+        bones.filter(bone => bone.name === carrier).length === 1;
+    })) return false;
+    const properties = constraint.properties;
+    if (!isRecord(properties) || !keys(properties, ['x']) || !isRecord(properties.x) ||
+        !keys(properties.x, ['to']) || !isRecord(properties.x.to) || !keys(properties.x.to, ['x']) ||
+        !isRecord(properties.x.to.x) || !keys(properties.x.to.x, ['scale'])) return false;
+    const fraction = properties.x.to.x.scale;
+    // applyTurn emits no row/twin at fraction0; its nonzero fraction is finite, not guessed here.
+    return typeof fraction === 'number' && Number.isFinite(fraction) && fraction !== 0;
+  };
   const out: MotionSeamPair[] = [];
   for (const limb of limbs) {
     const roots = parts.parts.filter(p => p.limb?.name === limb && p.limb.segment === 0);
@@ -3756,9 +3795,9 @@ function motionRootCandidates(parts: PartsFile, rig: Record<string, unknown>): M
       bad(object, 'slot binds "' + String(slot.bone) + '"; the declared bone "' + l.bone + '" or its named turn child is required');
       continue;
     }
-    const eligible = carriers.filter(c => c.slot?.bone === parent);
+    const eligible = carriers.filter(c => c.slot !== null && (c.slot.bone === parent || generatedBodyTurn(c.part, c.slot, parent)));
     if (eligible.length === 0) {
-      bad(object, 'requires a topwear/bottomwear body drawing whose slot binds its immediate parent "' + parent + '"; found none; no nearest, name or mesh-influence fallback');
+      bad(object, 'requires a topwear/bottomwear body drawing whose slot binds its immediate parent "' + parent + '" directly or through its verified generated turn child; found none; no nearest, name or mesh-influence fallback');
       continue;
     }
     for (const { part: body } of eligible) out.push({ pair: body.name + '|' + root.name, a: body.name, b: root.name,

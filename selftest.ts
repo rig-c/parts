@@ -188,7 +188,7 @@ import {
 } from './fixtures/assemble_fixture.ts';
 import { type AnimFrame, chunkTypes, encodeApng, encodeIndexedApng } from './src/apng.ts';
 import { assignOverlappingHands, capBox, featherWeight, type JointLine, jointLine, limbWidth, nearestLimb, pastJoint, segmentOf } from './src/limbs.ts';
-import { artifactPaths, assembleStage, build, BUILD_OWNS, CHECK_FLAGS_IN_BUILD, type CheckFlagInBuild, checkStage, ctlRemedies, driftShare, faceAxisLine, fringeLines, turnLine, LEAD_IN_ANIMATION, REFERENCE_BUILD_ARGS, repeatIdle, REFERENCE_BUILD_LABEL, RIGC_MODEL_DOCUMENT, rigStage } from './src/build.ts';
+import { artifactPaths, assembleStage, build, BUILD_OWNS, CHECK_FLAGS_IN_BUILD, type CheckFlagInBuild, checkStage, ctlRemedies, driftShare, faceAxisLine, fringeLines, turnLine, LEAD_IN_ANIMATION, REFERENCE_BUILD_ARGS, repeatIdle, REFERENCE_BUILD_LABEL, RIGC_MODEL_DOCUMENT, readRuns, rigStage } from './src/build.ts';
 import { CHECK_PARTS, CHECK_RIG, checkPartRaster, IDLE_PEAK, MERGED_STAGE, mergedCores, type MergedRigOptions, mergedStack, SEATED_CHECK_PARTS, shiftRight, writeCheckRig, writeMergedCheckRig, writeSeatedCheckRig } from './fixtures/checkrig.ts';
 import { fakePainting } from './fixtures/fakecomfy.ts';
 import { BLOUSE, CLOTH_PARTS, CLOTH_RIG, clothRecipe, DRESS, DRESS_RIG, dressHipJoints, dressParts, FLOOR_SKIRT_EMPTY_COL_PARTS, FLOOR_SKIRT_PARTS, HEM, HEM_BELOW, SHIFT, SPLIT_TAIL_PARTS, SPLIT_TAIL_UNCROSSED, splitTailRecipe } from './fixtures/cloth.ts';
@@ -434,7 +434,7 @@ import { type BoneEntry, type CharacterConfig, CONFIG_REQUIRES, type ConfigDoor,
 import { BUST_FIT_ALPHA, BUST_FIT_CLEARANCE, BUST_RESIDUAL_BOUND_PX, CALIBRATED_BUST_FIXTURES, midlineFallbackCleavage } from './fixtures/bust.ts';
 import { RIG_BONE_INHERIT, RIG_KEYS, RIG_SKIN_CONSTRAINT_KEYS } from 'rig-c/src/rig.ts';
 import { expandStops } from 'rig-c/src/stop.ts';
-import { applyFaceSurfaceDeform, cylinderYawDx, DEFAULT_HEAD_TURN_PARTS, EAR_DEPTH_RANGE, evalYawFaceSurface, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, FACE_RATED_BAND, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, headTurnFraction, headTurnPivot, resolveFaceDeformFractions, TURN_BONE, TURN_RIDER_APART, turnFractions, turnRiderDepth, type TurnSpec, turnSurfaceRadius } from './src/turn.ts';
+import { applyFaceSurfaceDeform, cylinderYawDx, DEFAULT_HEAD_TURN_PARTS, EAR_DEPTH_RANGE, evalYawFaceSurface, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, FACE_RATED_BAND, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, headTurnFraction, headTurnPivot, resolveFaceDeformFractions, TURN_BONE, TURN_RIDER_APART, turnFractions, turnRiderDepth, turnTwin, turnConstraintName, type TurnSpec, turnSurfaceRadius } from './src/turn.ts';
 import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, toWorld } from './src/coords.ts';
 import { artMask, contourFit, type ContourMesh, contourMesh, FAINT_ALPHA, contourOutline, type ContourParams, type ContourRegion, contourTopologyProblems, delaunayViolations, GRID, growSilhouette, inCircle, keepPoints, MAX_SIDE, marginDisc, outlineInRegions, withinMarginSquared } from './src/contour.ts';
 import { BASE, blockOutline, blocks, BOTTLE, BUILDING, CONCAVE, type ContourCase, CONVEX, EMPTY, FAINT, FAINT_AT_LINE, FAR, FEATHERED, FEATHERED_CORE, FULL, HOLE, ISLANDS, NEAR, NOTCH, NOTCH_CUT, NOTCHED, PAIR, PINCH, REGION, REGION_FAR_BACKGROUND, SPIKE, STRAND, STRAND_CHAIN, STRIP } from './fixtures/contour.ts';
@@ -16659,6 +16659,89 @@ function soRootHasGhostInfo(out: string, cells: number): boolean {
     line.includes('owner unavailable in this rigc-seam/1 reading; see rig-c/core#1555'));
 }
 
+/** Issue #708: use the real producer on SO18's already assembled flat parts; no extra CLI render/build. */
+function runMotionRootTurnCases(home: string, configPath: string, full: string, head: string,
+  say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const P = readPartSet(home);
+  const cfg = loadConfigAndAnimations(configPath).config;
+  const parts = readParts(join(home, 'parts.json'));
+  const images = new Map(parts.parts.map(part => [part.name, readPng(join(home, 'parts', part.name + '.png'))]));
+  const proposed = draftTurn(P, readRuns(full, head), cfg);
+  if (proposed.turn === null) {
+    say('SO22_GENERATED_BODY_TURN_CHILD_KEEPS_ITS_NAMED_ROOT_CARRIER', false, JSON.stringify(proposed),
+      'the actual layer depths must produce a turn before testing its generated identity child; no substitute pivot');
+    return;
+  }
+  const turn = proposed.turn;
+  const plain = buildRig(cfg, parts, images);
+  const turned = buildRig({ ...cfg, turn }, parts, images);
+  const doc = (rig: RigSpec): Record<string, unknown> => JSON.parse(rigJsonText(rig)) as Record<string, unknown>;
+  // These are typed setup-policy rows only. SO18 and the public #708 comparison measure stock bands.
+  const setup = (candidates: readonly MotionSeamPair[]) => candidates.map(pair => ({ pair: pair.pair, drawn: 1, banded: 1, status: 'read' as const }));
+  const selected = (rig: Record<string, unknown>) => motionSeamSelection(parts, [], rig, setup);
+  const a = selected(doc(plain.rig));
+  let b: ReturnType<typeof selected> | null = null;
+  const error = refusals(() => { b = selected(doc(turned.rig)); });
+  const body = parts.parts.find(part => part.name === 'coat');
+  const parent = plain.rig.slots.find(slot => slot.name === 'coat')?.bone;
+  const namedTwin = parent === undefined ? '' : turnTwin('coat', parent);
+  const generated = turned.turn?.find(row => row.part === 'coat');
+  const expectedChild = turned.rig.bones.find(bone => bone.name === namedTwin);
+  const atPivot = buildRig({ ...cfg, turn: { ...turn, pivot: turn.depths.coat } }, parts, images);
+  const pivotSelection = selected(doc(atPivot.rig));
+  const zero = motionSeamSelection(parts, [], doc(turned.rig), candidates => setup(candidates).map(row => ({ ...row, banded: 0, status: 'skip' as const })));
+  const zeroLine = motionSeamLine(zero.pairs, ['idle'], 12, [], undefined, [], zero.unmeasuredRoots);
+  const expected = a.pairs.map(pair => ({ pair: pair.pair, root: pair.root }));
+  // A second legitimate body on the same carrier, made by the same producer, must not be guessed away.
+  const second = { ...parts, parts: [...parts.parts, { ...body!, name: 'second_coat' }] };
+  const moreImages = new Map(images); moreImages.set('second_coat', images.get('coat')!);
+  const moreCfg = { ...cfg, regions: { ...cfg.regions, second_coat: cfg.regions.coat } };
+  const both = buildRig({ ...moreCfg, turn: { ...turn, depths: { ...turn.depths, second_coat: turn.depths.coat } } }, second, moreImages);
+  const mixed = buildRig({ ...moreCfg, turn }, second, moreImages);
+  const selectMore = (rig: RigSpec) => motionSeamSelection(second, [], doc(rig), setup).pairs.filter(pair => pair.root !== undefined).map(pair => pair.pair);
+  const bothPairs = selectMore(both.rig), mixedPairs = selectMore(mixed.rig);
+  const actual = b as ReturnType<typeof selected> | null;
+  say('SO22_GENERATED_BODY_TURN_CHILD_KEEPS_ITS_NAMED_ROOT_CARRIER',
+    error === null && body?.from === 'full:topwear' && parent === 'hip' && generated !== undefined && generated.fraction !== 0 &&
+      generated.twins.some(twin => twin.bone === parent && twin.twin === namedTwin) &&
+      expectedChild?.parent === parent && expectedChild.x === 0 && expectedChild.y === 0 &&
+      turned.rig.slots.find(slot => slot.name === 'coat')?.bone === namedTwin &&
+      JSON.stringify(actual?.pairs.map(pair => ({ pair: pair.pair, root: pair.root }))) === JSON.stringify(expected) &&
+      JSON.stringify(pivotSelection.pairs) === JSON.stringify(a.pairs) && atPivot.rig.slots.find(slot => slot.name === 'coat')?.bone === parent &&
+      bothPairs.join(',') === 'coat|upperarm_r,second_coat|upperarm_r' && JSON.stringify(bothPairs) === JSON.stringify(mixedPairs) &&
+      zero.pairs.every(pair => pair.root === undefined) && zero.unmeasuredRoots.length === 1 && zeroLine.roots?.status === 'SKIP',
+    JSON.stringify({ proposed, parent, namedTwin, generated, expected, actual, error: codes(error), bothPairs, mixedPairs, zero: zeroLine.roots }),
+    'actual buildRig/applyTurn output, using the same real assembled SO18 parts and exported proposal depth reader: the generated body twin preserves original named carrier/pair identity. Pivot0 emits no body twin; both/mixed eligible bodies remain selected; valid zero setup bands remain named SKIP, not identity refusal.');
+
+  const faults: Array<[string, (rig: Record<string, unknown>) => void]> = [
+    ['wrong-parent', rig => { (rig.bones as Array<Record<string, unknown>>).find(bone => bone.name === namedTwin)!.parent = 'root'; }],
+    ['duplicate-twin', rig => { const bones = rig.bones as Array<Record<string, unknown>>; bones.push({ ...bones.find(bone => bone.name === namedTwin)! }); }],
+    ['translated-child', rig => { (rig.bones as Array<Record<string, unknown>>).find(bone => bone.name === namedTwin)!.x = 1; }],
+    ['rotated-child', rig => { (rig.bones as Array<Record<string, unknown>>).find(bone => bone.name === namedTwin)!.rotation = 1; }],
+    ['unknown-binding', rig => { (rig.slots as Array<Record<string, unknown>>).find(slot => slot.name === 'coat')!.bone = 'not_the_carrier'; }],
+    ['missing-transform', rig => { rig.constraints = (rig.constraints as Array<Record<string, unknown>>).filter(c => c.name !== turnConstraintName('coat')); }],
+    ['duplicate-transform', rig => { const cs = rig.constraints as Array<Record<string, unknown>>; cs.push({ ...cs.find(c => c.name === turnConstraintName('coat'))! }); }],
+    ['wrong-transform-source', rig => { (rig.constraints as Array<Record<string, unknown>>).find(c => c.name === turnConstraintName('coat'))!.source = 'hip'; }],
+    ['wrong-local-source', rig => { (rig.constraints as Array<Record<string, unknown>>).find(c => c.name === turnConstraintName('coat'))!.localSource = false; }],
+    ['wrong-transform-property', rig => { (rig.constraints as Array<Record<string, unknown>>).find(c => c.name === turnConstraintName('coat'))!.properties = { y: { to: { x: { scale: 1 } } } }; }],
+    ['missing-control', rig => { rig.bones = (rig.bones as Array<Record<string, unknown>>).filter(bone => bone.name !== TURN_BONE); }],
+    ['wrong-control-parent', rig => { (rig.bones as Array<Record<string, unknown>>).find(bone => bone.name === TURN_BONE)!.parent = 'hip'; }],
+    ['duplicate-body-slot', rig => { const slots = rig.slots as Array<Record<string, unknown>>; slots.push({ ...slots.find(slot => slot.name === 'coat')! }); }],
+  ];
+  const refused = faults.map(([name, plant]) => {
+    const rig = doc(turned.rig); plant(rig);
+    const err = refusals(() => selected(rig));
+    return { name, refused: err?.problems.some(problem => problem.code === 'CHECK_MOTION_SEAM_ROOT') === true, problems: codes(err) };
+  });
+  const rootFree = { ...parts, parts: parts.parts.map(part => { const copy = { ...part }; delete copy.limb; return copy; }) };
+  let rootFreeCalls = 0;
+  const rootFreePairs = motionSeamPairs(rootFree, [], doc(turned.rig), () => { rootFreeCalls++; return []; });
+  say('SO23_BODY_TURN_PROOF_REFUSES_SPOOFED_BINDINGS_AND_ROOT_FREE_READS_NOTHING',
+    error === null && refused.every(row => row.refused) && rootFreeCalls === 0 && rootFreePairs.length === 0,
+    JSON.stringify({ refused, rootFreeCalls, rootFreePairs }),
+    'all faults mutate private in-memory copies of actual generated output, never tracked files or dependencies. Exact naming alone cannot prove a producer identity child; root-free parts still make no setup call.');
+}
+
 /** Stock assemble/rig/render/check and both real CLI consumers; no substituted renderer or gate. */
 function runMotionRootRendererCases(home: string, legacyOutput: string, say: (name: string, ok: boolean, detail: string, why: string) => void): void {
   const dir = join(home, 'shoulder-root');
@@ -16798,6 +16881,7 @@ function runMotionRootRendererCases(home: string, legacyOutput: string, say: (na
       totalBars: [legacyBars, normalBars, totalBars(torn.out), totalBars(direct.out)], matcherControls, escapedControls,
       children: forwarded ? undefined : { build: torn.out, check: direct.out } }),
     'real build and check both write PASS=false, retain only the new failed root bar, print its named failure and counted failed summary, and return1; escaped diagnostics cannot inject child FAIL lines into the tally.');
+  runMotionRootTurnCases(normal.home, join(dir, 'normal.json'), join(dir, 'full'), join(dir, 'head'), say);
 }
 
 /** Issue #591: hand-computable sidecars fix the environment contract. */
