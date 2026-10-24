@@ -6,6 +6,7 @@ import { runGatherOptOutChecks } from './tools/check_gather_optout.ts';
 import { parseAltArg } from './tools/alternate-cli.ts';
 import { encodeCheckReceipt, readBuildReceipt, readBuildChild, selectedRigcCommand } from './tools/build-process.ts';
 import { runSetAnchorChecks } from './tools/check_set_anchor.ts';
+import { runSetFocusChecks } from './tools/check_set_focus.ts';
 import { runRevisionChainChecks } from './tools/check_revision_chain.ts';
 import { runConfigWriteChecks } from './tools/check_configwrite.ts';
 import { runCorePointerChecks } from './tools/check_corepointer.ts';
@@ -49384,6 +49385,8 @@ function runAlternateTipsSuite(): number {
   const dir = temp('alternate-tips');
   let index = 0;
   try {
+    runSetFocusChecks(join(dir, 'focus'), (name, pass, detail) => say(`SF${String(++index).padStart(2, '0')}_${name}`, pass, detail,
+      'issue #719: authored painting points through the coordinate door, absent omission and named pre-output refusals'));
     runAlternateTipsChecks(dir, (name, pass, detail) => say(`AT${String(++index).padStart(2, '0')}_${name}`, pass, detail,
       'issue #652: explicit per-set endpoints, unchanged origin/rotation, recorded provenance and public source-bound ownership'), rigcRunnerAt(suiteRigc(), spawnRigc));
   } finally {

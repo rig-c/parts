@@ -136,8 +136,9 @@ import { explicitAttachment, type ExplicitMeshReport } from './explicitmesh.ts';
  * order the objects are built in, and every number is rounded by `pyRound`).
  */
 import { type AutoSpec, type BoneEntry, type InfluenceMeshSpec, type WeightRule, type CharacterConfig, type ConfigConstraint, type ConfigStop, CONSTRAINT_FOLLOWS, constraintForRig, contourRegionsOf, type ContourSpec, DEFAULT_BUST_BONE_L, DEFAULT_BUST_BONE_R, type Point, type RibsSpec, ROOT_BONE, stopForRig, turnRidersByBone, weightsABone } from './config.ts';
-import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toBoneLocal, toWorld } from './coords.ts';
+import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, normaliseDegrees, paintingToSetupPoint, toBoneLocal, toWorld } from './coords.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
+import { recordedFocusProblems } from './setfocus.ts';
 import { eyeLineDegrees } from './headframe.ts';
 import type { RigBoneInherit, RigStop } from 'rig-c/src/rig.ts';
 import { f32 } from 'rig-c/compile';
@@ -1253,6 +1254,18 @@ export function buildRig(
   const [W, H] = parts.rig_size;
   const CX = W / 2;
   const byPart = new Map(parts.parts.map((p) => [p.name, p]));
+
+  for (const a of parts.alternates ?? []) {
+    problems.push(...recordedFocusProblems(a, `parts.json alternate set "${a.name}".focus`, parts.rig_size, parts.scale_rig_per_source));
+  }
+  for (const a of cfg.assemble.alternates ?? cfg.alternates ?? []) {
+    const record = parts.alternates?.find((p) => p.name === a.name);
+    if ((a.focus !== undefined || record?.focus !== undefined)
+      && JSON.stringify(a.focus) !== JSON.stringify(record?.focus)) {
+      fail('CONFIG_SET_FOCUS', `config.assemble alternate set "${a.name}".focus`, 'does not match the assembled painting point; re-run assemble after changing or removing focus');
+    }
+  }
+  refuseIfAny(problems);
 
   // Standalone rig checks source-bound normalization, never reconstructing
   // original dimensions from nominal scale or treating source points as rig points.
@@ -2687,6 +2700,7 @@ export function buildRig(
       const coversFace = Object.hasOwn(slotMap, 'face');
       setEntries[alt.name] = {
         slots: slotMap,
+        ...(alt.focus === undefined ? {} : { focus: paintingToSetupPoint(alt.focus, alt.focus_source_size as [number, number], parts.rig_size) }),
         ...(hideList.length > 0 ? { hides: hideList } : {}),
         ...(drawn === undefined ? {} : { drawn }),
         ...(alt.drawnLength === undefined ? {} : { drawnLength: { ...alt.drawnLength } }),
