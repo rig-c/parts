@@ -85,10 +85,11 @@ jobs:
     # Release-please, which makes tags and releases, runs on a push only.
     if: ${{ github.event_name == 'push' || inputs.tag != '' || inputs.version == '' }}
     runs-on: ubuntu-latest
-    # The confirmation waits up to 15 minutes for the registry, on top of the
-    # gates `prepublishOnly` runs and the publish itself; a ceiling under the
-    # wait would report a late registry as a cancelled job.
-    timeout-minutes: 30
+    # The confirmation waits up to 15 minutes for `@rig-c/parts` and up to 15
+    # minutes per alias (packument and tarball), on top of the gates
+    # `prepublishOnly` runs and the publish itself; a ceiling under the wait
+    # would report a late registry as a cancelled job.
+    timeout-minutes: 60
     permissions:
       contents: write # release commit, tag, GitHub release
       pull-requests: write # open and update the release PR
@@ -242,15 +243,19 @@ jobs:
       # broken. What it adds is the artifact the registry actually serves.
       #
       # ⏳ The wait belongs to the script: a publish returns before the registry
-      # serves it, and a version not served yet is exit 3 ("confirmation NOT
-      # taken"), never the same red as a package that does not run (exit 1).
+      # serves it, so the script polls both the packument and the tarball and
+      # reports which package it is waiting for and for how long. A main package
+      # version not served yet is exit 3 ("confirmation NOT taken"), never the
+      # same red as a package that does not run (exit 1).
       #
       # 🪞 Each `--alias <name>` adds one alias: after the case, the same
-      # version under each alias is fetched within what is left of the same
-      # wait, and its unpacked files are held to the package's — every path,
-      # every byte, the manifest's name line excepted. Compared rather than
-      # installed again: identical files are the stronger claim. A
-      # difference is exit 1; an alias still arriving is exit 3, re-run by the
+      # version under each alias is asked for within its own 15-minute wait (for
+      # both packument and tarball), and its unpacked files are held to the
+      # package's — every path, every byte, the manifest's name line excepted.
+      # Compared rather than installed again: identical files are the stronger
+      # claim. A difference is exit 1; when the main package passed and an alias
+      # is still arriving after its wait, the script reports a named `WAIT`
+      # naming the alias and exits 4, distinct from exit 3, re-run by the
       # dispatch below.
       - name: Confirm the published package installs and runs
         if: ${{ steps.target.outputs.publish == 'true' }}
@@ -269,7 +274,7 @@ jobs:
   confirm:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.version != '' && inputs.tag == '' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 50
     permissions:
       contents: read
     steps:

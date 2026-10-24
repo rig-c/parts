@@ -440,6 +440,7 @@ import {
 import { COMPOSED_HAND_X, COMPOSED_SHOULDER, writeComposedRig, DRIVER_AT, DRIVER_SLIDE, FAR_ABOVE, LOWER_LEN, LURE_ANGLE, OVERREACH_FROM, OVERREACH_TO, POINTER_LEN, REACH_FROM, REACH_TO, REQ_FPS, REQ_STAGE, RIDE_MIX, RIDER_AT, SHOULDER, stageOf, SWING_BROKEN, SWING_PEAK, UPPER_LEN, VANE_AT, VANE_MIX, writeReqRig, writeRequirements } from './fixtures/reqrig.ts';
 import { buildHeaderProblem } from './tools/atlas_population.ts';
 import { ALIASES, AliasTarballError, compareTarballs, MANIFEST as ALIAS_MANIFEST, packAlias, packInto, renamed } from './scripts/alias_tarball.ts';
+import { confirmAlias, DEFAULT_ALIAS_WAIT_MINUTES, EXIT_ALIAS_WAIT, EXIT_NOT_SERVED } from './scripts/install_smoke.ts';
 import { blobId, checkExampleInputs, type Copier, FETCH_RECORD, recordText, runSync } from './scripts/example_inputs.ts';
 import { BLINK, blinkHoldMisses, CONTROL_SUFFIX, framesInside, IDLE_FPS, type MotionKey, type MotionSpec, sineTrack, TIME_SLACK } from './src/motion.ts';
 import { type BoneEntry, type CharacterConfig, CONFIG_REQUIRES, type ConfigDoor, CONSTRAINT_BONE_FIELDS, type ContourRegionSpec, contourRegionsOf, type Cut, DEFAULT_BUST_ALPHA, DEFAULT_BUST_CLEARANCE, deriveBustRegions, type Extend, type Generation, isDoorKey, type Limb, loadClothConfig, loadConfig, loadConfigAndAnimations, loadEarlyConfig, loadPaintConfig, type Patch, type PlanEntry, type Point, parseConfig, parseEarlyConfig, parseProposalSections, type SkeletonSections } from './src/config.ts';
@@ -38323,6 +38324,43 @@ function runAliasControls(say: (name: string, ok: boolean, detail: string, why: 
       twoNames === null &&
       noName === null;
     const refusal = 'FAIL  SMOKE_ALIAS_CARRIES_THE_SAME_FILES';
+    const retryLines: string[] = [];
+    const retryNaps: number[] = [];
+    let packCalls = 0;
+    const retryReading = confirmAlias(`${packageName}@1.60.2`, primary, `${ALIASES[0]}@1.60.2`, DEFAULT_ALIAS_WAIT_MINUTES, '1.60.2', 'by-hand', {
+      run: (_cmd, args) => {
+        if (args[0] === 'view') return { status: 0, out: '1.60.2\n' };
+        packCalls += 1;
+        if (packCalls === 1) return { status: 1, out: 'npm error code ETARGET\n' };
+        const dest = args[args.indexOf('--pack-destination') + 1];
+        copyFileSync(made.tgz, join(dest, 'alias.tgz'));
+        return { status: 0, out: '' };
+      },
+      sleep: (ms) => retryNaps.push(ms),
+      log: (line) => retryLines.push(line),
+    });
+    const lateLines: string[] = [];
+    const lateReading = confirmAlias(`${packageName}@1.60.2`, primary, `${ALIASES[0]}@1.60.2`, 0, '1.60.2', 'by-hand', {
+      run: () => ({ status: 1, out: 'npm error code E404\n' }),
+      sleep: () => {},
+      log: (line) => lateLines.push(line),
+    });
+    const waitOk =
+      DEFAULT_ALIAS_WAIT_MINUTES === 15 &&
+      EXIT_NOT_SERVED === 3 &&
+      EXIT_ALIAS_WAIT === 4 &&
+      retryReading === 'same' &&
+      retryNaps.join(',') === '5000' &&
+      retryLines.some((l) => l.includes(`waiting up to 15 min for the registry to serve ${ALIASES[0]}@1.60.2 (packument and tarball)`)) &&
+      retryLines.some((l) => l.includes('packument served on attempt 1') && l.includes('tarball not served yet') && l.includes('into its 15 min wait')) &&
+      retryLines.some((l) => l.includes(`PASS  SMOKE_ALIAS_CARRIES_THE_SAME_FILES: the registry served ${ALIASES[0]}@1.60.2`)) &&
+      lateReading === 'late' &&
+      lateLines.some((l) => l.includes(`waiting up to 0 min for the registry to serve ${ALIASES[0]}@1.60.2 (packument and tarball)`)) &&
+      lateLines.some((l) => l.includes(`WAIT  SMOKE_ALIAS_CARRIES_THE_SAME_FILES: the registry did not serve ${ALIASES[0]}@1.60.2 within its 0 min wait`) && l.includes(`${packageName}@1.60.2 installed and passed, and the alias is still waiting on the registry`)) &&
+      !lateLines.some((l) => l.includes(refusal)) &&
+      doc.includes('40021159671') &&
+      doc.includes('2m 26s') &&
+      doc.includes('| `4` |');
     const smokeOk =
       tree.status === 1 &&
       tree.out.includes(refusal) &&
@@ -38335,13 +38373,16 @@ function runAliasControls(say: (name: string, ok: boolean, detail: string, why: 
       twice.out.includes('is given twice') &&
       help.status === 0 &&
       help.out.includes('--alias <name>') &&
-      ![tree, self, bare, twice].some((r) => r.out.includes('install smoke —'));
+      help.out.includes('4  the main package installed and passed') &&
+      ![tree, self, bare, twice].some((r) => r.out.includes('install smoke —')) &&
+      waitOk;
     say(
       'AL05_THE_COMPARE_EXITS_0_1_2_AND_THE_SMOKE_REFUSES_AN_ALIAS_IT_COULD_NOT_CONFIRM',
       cliOk && smokeOk,
       `compare: the pair ${same.status}, the one-byte plant ${differs.status}, an absent tarball ${absent.status}; pack under the package's own name ${ownName.status}; a manifest with two name lines and one with none -> ${twoNames === null ? 'refused' : 'rewritten'}, ${noName === null ? 'refused' : 'rewritten'} (0, 1, 2, 2, refused, refused required); ` +
-        `smoke: --alias on a tree source ${tree.status}, a second --alias naming the package itself ${self.status}, a second --alias with no name ${bare.status}, the same --alias twice ${twice.status} (1, 1, 1, 1 required, each before the run's header line), --help ${help.status} and ${help.out.includes('--alias <name>') ? 'lists' : 'does NOT list'} --alias`,
-      'a confirmation given a flag it cannot use would print a reading nobody took; the refusal has to come before the registry is asked anything',
+        `smoke: --alias on a tree source ${tree.status}, a second --alias naming the package itself ${self.status}, a second --alias with no name ${bare.status}, the same --alias twice ${twice.status} (1, 1, 1, 1 required, each before the run's header line), --help ${help.status} and ${help.out.includes('--alias <name>') ? 'lists' : 'does NOT list'} --alias; ` +
+        `alias wait: ${DEFAULT_ALIAS_WAIT_MINUTES} min per alias, packument-first tarball retry -> ${retryReading} after ${retryNaps.length} sleep(s), unserved alias after main passed -> ${lateReading} (WAIT, exit ${EXIT_ALIAS_WAIT} vs main exit ${EXIT_NOT_SERVED})`,
+      'a confirmation given a flag it cannot use would print a reading nobody took; the refusal has to come before the registry is asked anything, and an alias whose tarball lags its packument or is still arriving after the main package passed is retried within its own 15 min wait and reported as WAIT (exit 4), never as a broken cut',
     );
   } catch (error) {
     if (!(error instanceof AliasTarballError)) throw error;
