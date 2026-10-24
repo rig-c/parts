@@ -1,3 +1,4 @@
+import { alternateLayerSources, alternateLayerIslands, alternateLayerOthers } from './alternatelayers.ts';
 /**
  * The stages as callable units, and `build`, which runs three of them in a row.
  *
@@ -334,6 +335,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     full?: string;
     head?: string;
     parts?: string[];
+    layers?: Record<string, string>;
     hides?: string[];
     head_box?: [number, number, number, number];
     cuts?: Cut[];
@@ -352,6 +354,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       full: cli?.full ?? (a.full === undefined ? undefined : resolve(configDir, a.full)),
       head: cli !== undefined ? cli.head : a.head === undefined ? undefined : resolve(configDir, a.head),
       parts: a.parts,
+      layers: a.layers,
       hides: a.hides,
       head_box: a.head_box,
       cuts: a.cuts,
@@ -466,8 +469,8 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     const hidesSet = new Set(alt.hides ?? []);
     const declaredSlots = alt.parts !== undefined ? alt.parts.filter((p) => !hidesSet.has(p)) : baseSlots.filter((p) => !hidesSet.has(p));
     const coveredSet = new Set(declaredSlots);
-    const rawCuts = alt.cuts !== undefined ? alt.cuts : fields.cuts.filter((c) => coveredSet.has(c.into) && coveredSet.has(c.from)).map((c) => ({ ...c, under: undefined }));
-    const altLimbs: Record<string, Limb> = {};
+    let rawCuts = alt.cuts !== undefined ? alt.cuts : fields.cuts.filter((c) => coveredSet.has(c.into) && coveredSet.has(c.from)).map((c) => ({ ...c, under: undefined }));
+    let altLimbs: Record<string, Limb> = {};
     if (fields.limbs !== undefined) {
       for (const [ln, limb] of Object.entries(fields.limbs)) {
         if (limb.segments.every((sg) => coveredSet.has(sg.part))) {
@@ -485,9 +488,14 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         neededPlan.add(name);
       }
     }
-    const altPlan: PlanEntry[] = fields.plan
+    let altPlan: PlanEntry[] = fields.plan
       .filter(([name]) => neededPlan.has(name))
       .map(([name, run, tag]): PlanEntry => (altRuns.single ? [name, 'full', tag] : [name, run, tag]));
+    const originalAltLimbs = altLimbs;
+    const selectedLayers = alternateLayerSources(altPlan, rawCuts, altLimbs, coveredSet, alt.layers);
+    altPlan = selectedLayers.plan;
+    rawCuts = selectedLayers.cuts;
+    altLimbs = selectedLayers.limbs;
     let missingLayer = false;
     for (const [name, run, tag] of altPlan) {
       const l = altRuns[run].layers.find((x) => x.name === tag);
@@ -520,12 +528,13 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     let altDrawnLength: Record<string, number> | undefined;
     let altRegistration: { offset: [number, number]; scale: number } | undefined;
     // Issue #588: a subset set that names one limb side keeps, of a layer that holds more than one island, the one its joints fall on.
-    const altIslands = alt.parts === undefined || input.setIslands === 'all' ? [] : setIslandSources(fields.limbs ?? {}, altLimbs);
+    const originalIslands = alt.parts === undefined || input.setIslands === 'all' ? [] : setIslandSources(fields.limbs ?? {}, originalAltLimbs);
+    const altIslands = alternateLayerIslands(originalIslands, selectedLayers.groups);
     // Issue #609: the limbs of those layers the set does not carry — the other leg of a two-leg layer.
     const otherLimbs: Record<string, Limb> =
       input.setSplit === 'connectivity'
         ? {}
-        : Object.fromEntries(Object.entries(fields.limbs ?? {}).filter(([ln, l]) => !(ln in altLimbs) && l.segments.some((sg) => altIslands.includes(sg.from))));
+        : Object.fromEntries(Object.entries(fields.limbs ?? {}).filter(([ln, l]) => !(ln in altLimbs) && l.segments.some((sg) => originalIslands.includes(sg.from))));
     const otherBones = new Set(Object.values(otherLimbs).flatMap((l) => l.segments.map((sg) => sg.bone)));
     // The bones the set places: by its skeleton, or by the angles it states; every other bone keeps the base's place unless an ancestor moved.
     const setPlaced = new Set<string>();
@@ -619,6 +628,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         headBox: altHeadBox,
         rigScale: fields.rigScale,
         plan: altPlan,
+        ...(selectedLayers.groups.size === 0 ? {} : { limbSourceGroups: selectedLayers.groups }),
         extend: altExtend,
         patches: altPatches,
         cuts: altCuts,
@@ -631,7 +641,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         projectRule: input.project,
         ...(altExclude.length === 0 ? {} : { exclude: altExclude }),
         ...(altIslands.length === 0 ? {} : { limbIslands: altIslands }),
-        ...(altOthers === undefined ? {} : { otherLimbs: altOthers }),
+        ...(altOthers === undefined ? {} : { otherLimbs: alternateLayerOthers(altOthers, selectedLayers.groups) }),
       });
     } catch (err) {
       if (err instanceof PartsError) {

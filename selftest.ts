@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runAlternateLayerChecks } from './tools/check_alternate_layers.ts';
 import { runGatherOptOutChecks } from './tools/check_gather_optout.ts';
 import { parseAltArg } from './tools/alternate-cli.ts';
 import { encodeCheckReceipt, readBuildReceipt, readBuildChild, selectedRigcCommand } from './tools/build-process.ts';
@@ -48867,6 +48868,18 @@ function runLimbSlotSuite(): number {
   return bad();
 }
 
+function runAlternateLayersSuite(): number {
+  section('alternate-layers: covered parts select named run layers');
+  const { say, bad } = counter();
+  const dir = temp('alternate-layers');
+  let index = 0;
+  try {
+    runAlternateLayerChecks(dir, (name, pass, detail) => say(`AZ${String(++index).padStart(2, '0')}_${name}`, pass, detail,
+      'issue #666: source provenance, logical limb cuts, caps, islands and base exclusions on reader-validated public controls'));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  return bad();
+}
+
 function runAlternateTipsSuite(): number {
   section('alternate-tips: explicit source-crop endpoints with recorded rig provenance');
   const { say, bad } = counter();
@@ -49086,6 +49099,7 @@ const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number 
   ['front-slot', runFrontSlotSuite],
   ['arm-split-upgrade', runArmSplitUpgradeSuite],
   ['alternate-tips', runAlternateTipsSuite],
+  ['alternate-layers', runAlternateLayersSuite],
   ['plausibility', runPlausibilitySuite],
   ['assemble-examples', runAssembleExamplesSuite],
   ['skeleton', runSkeletonSuite],
@@ -49244,7 +49258,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
  */
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['check']],
-  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'subset-cover', 'foot-ownership', 'limb-slots', 'limb-layout', 'front-slot', 'arm-split-upgrade', 'alternate-tips', 'contour-wiring', 'config', 'config-write', 'core-pointer', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
+  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'subset-cover', 'foot-ownership', 'limb-slots', 'limb-layout', 'front-slot', 'arm-split-upgrade', 'alternate-tips', 'alternate-layers', 'contour-wiring', 'config', 'config-write', 'core-pointer', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
   ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'mesh-stats', 'remesh', 'retune', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
 ];
 

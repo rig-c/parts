@@ -335,6 +335,8 @@ export interface AssembleInput {
   scene?: boolean;
   /** `config.limbs` (issue #349): the parts cut at their joints ({@link LimbCount}). Absent or empty: nothing changes. */
   limbs?: Record<string, Limb>;
+  /** Alternate sources with different layers retain the original joint cut bounds. */
+  limbSourceGroups?: ReadonlyMap<string, string>;
   /** `config.bones`, read for the limbs' joints; required with `limbs`. */
   bones?: BoneEntry[];
   /** Already normalized alternate endpoints; applied after bones have been posed. */
@@ -623,6 +625,13 @@ function squaredDistanceTo(cc: Components, W: number, label: number, at: readonl
  * set whose layer holds its one leg writes what it wrote before. A pixel the limbs wrote where the source is
  * transparent (a `cap_shape: "ball"` lower half from the cap image) is on no island and kept.
  */
+/** Layer variants share the original source's segment line for ownership, without changing its pixel source. */
+function logicalSourceLimb(limb: Limb, source: string, groups: ReadonlyMap<string, string>): Limb {
+  if (!groups.has(source)) return limb;
+  const original = groups.get(source);
+  return { ...limb, segments: limb.segments.map(s => (groups.get(s.from) ?? s.from) === original ? { ...s, from: source } : s) };
+}
+
 function keepJointIslands(
   sources: readonly string[],
   limbs: Readonly<Record<string, Limb>>,
@@ -635,6 +644,7 @@ function keepJointIslands(
   floorShare: number,
   others?: OtherLimbs,
   tips?: Record<string, [number, number]>,
+  sourceGroups: ReadonlyMap<string, string> = new Map(),
 ): { counts: IslandCount[]; splits: SplitCount[]; problems: Problem[] } {
   const counts: IslandCount[] = [];
   const splits: SplitCount[] = [];
@@ -650,7 +660,7 @@ function keepJointIslands(
     const n = reading.candidates.length;
     if (n < 2) {
       // Issue #609: one island may hold both limbs, overlapping; the island rule cannot part them, the segment lines can.
-      if (n === 1 && others !== undefined) splitOneIsland(src, b, limbs, places, parts, pieces, others, W, H, splits, problems);
+      if (n === 1 && others !== undefined) splitOneIsland(src, b, limbs, places, parts, pieces, others, W, H, splits, problems, sourceGroups);
       continue;
     }
     const numberOf = new Map(reading.candidates.map((l, i) => [l, i + 1]));
@@ -864,6 +874,7 @@ function splitOneIsland(
   H: number,
   splits: SplitCount[],
   problems: Problem[],
+  sourceGroups: ReadonlyMap<string, string> = new Map(),
 ): void {
   const mine = parts.map((q, i) => ({ q, i })).filter(({ q }) => q.of === src);
   if (mine.length === 0) return;
@@ -903,9 +914,9 @@ function splitOneIsland(
   // The same source selection applies to every segment, without reading a part name or a layer tag.
   const taking = (l: string, all: Readonly<Record<string, Limb>>): Limb => others.line === 'whole-limb'
     ? all[l]
-    : { ...all[l], segments: all[l].segments.filter((sg) => sg.from === src) };
+    : { ...all[l], segments: logicalSourceLimb(all[l], src, sourceGroups).segments.filter((sg) => sg.from === src) };
   const polyOf = (l: string, all: Readonly<Record<string, Limb>>): Array<[number, number]> =>
-    others.line === 'whole-limb' ? limbPolyline(all[l], places) : sourceLimbTarget(all[l], src, places).line;
+    others.line === 'whole-limb' ? limbPolyline(all[l], places) : sourceLimbTarget(logicalSourceLimb(all[l], src, sourceGroups), src, places).line;
   for (const [l, all] of [...ownNames.map((l) => [l, limbs] as const), ...posed.map((l) => [l, others.limbs] as const)]) {
     const selected = taking(l, all);
     const line = polyOf(l, all);
@@ -1011,6 +1022,7 @@ function assignCapOwnership(
   sources: readonly string[], limbs: Readonly<Record<string, Limb>>, bones: readonly BoneEntry[],
   parts: readonly LimbPart[], pieces: readonly Built[], sourceOf: (name: string) => Built | null,
   capFrom: ReadonlyArray<CapFrom | null>, W: number, H: number, others?: OtherLimbs, tips?: Record<string, [number, number]>,
+  sourceGroups: ReadonlyMap<string, string> = new Map(),
 ): { counts: SplitCount[]; problems: Problem[] } {
   const counts: SplitCount[] = [], problems: Problem[] = [];
   if (others === undefined) return { counts, problems };
@@ -1041,8 +1053,8 @@ function assignCapOwnership(
         detail: `holds ${on} cap pixels where the base draws ${l}, but the set does not pose ${unposed.map((b) => `"${b}"`).join(', ')}; a supplied pose for the other limb is required to assign the cap by its target source segments, never its base place` });
     }
     if (problems.length > before || posed.length === 0) return;
-    const own = sourceLimbTarget(limbs[q.limb], q.of, places);
-    const other = posed.map((l) => ({ l, target: sourceLimbTarget(others.limbs[l], q.of, places) }));
+    const own = sourceLimbTarget(logicalSourceLimb(limbs[q.limb], q.of, sourceGroups), q.of, places);
+    const other = posed.map((l) => ({ l, target: sourceLimbTarget(logicalSourceLimb(others.limbs[l], q.of, sourceGroups), q.of, places) }));
     for (const { l, target } of [{ l: q.limb, target: own }, ...other]) {
       if (target.missingEndBone !== null) problems.push({ code: 'ASSEMBLE_ALT_LIMB_POSE', object: `config.limbs.${l} (part "${q.part}", source-transparent cap, bone "${target.missingEndBone}")`,
         detail: `takes "${q.of}" on a segment with no supplied end; an explicit bone tip or the following segment's joint in the set's pose is required to assign its cap, never an invented endpoint` });
@@ -3800,7 +3812,9 @@ function cutLimbs(
   hiddenOf: (part: string) => HiddenArt | null = () => null,
   readHidden: (layer: string, by: string) => void = () => undefined,
   tips?: Record<string, [number, number]>,
+  sourceGroups: ReadonlyMap<string, string> = new Map(),
 ): { parts: LimbPart[]; pieces: Built[]; counts: LimbCount[]; capFrom: Array<CapFrom | null> } {
+  const logical = (source: string): string => sourceGroups.get(source) ?? source;
   const names = Object.keys(limbs);
   if (names.length === 0) return { parts: [], pieces: [], counts: [], capFrom: [] };
   const problems: Problem[] = [];
@@ -3809,7 +3823,7 @@ function cutLimbs(
   for (const l of names) {
     const covering = limbs[l].split !== undefined;
     limbs[l].segments.forEach((sg, k) =>
-      parts.push({ limb: l, segment: k, part: sg.part, of: sg.from, ...(covering ? { covering: true } : {}), record: { name: l, segment: k, of: sg.from, bone: sg.bone, ...(k === 0 ? {} : { joint: sg.joint as string, ...(sg.range === undefined ? {} : { range: [sg.range[0], sg.range[1]] as [number, number] }) }) } }),
+      parts.push({ limb: l, segment: k, part: sg.part, of: sg.from, ...(covering ? { covering: true } : {}), record: { name: l, segment: k, of: logical(sg.from), bone: sg.bone, ...(k === 0 ? {} : { joint: sg.joint as string, ...(sg.range === undefined ? {} : { range: [sg.range[0], sg.range[1]] as [number, number] }) }) } }),
     );
   }
   const polylines = new Map(names.map((l) => [l, limbPolyline(limbs[l], places)]));
@@ -3850,10 +3864,11 @@ function cutLimbs(
   const counts: LimbCount[] = [];
   // Issue #603: which count of its cap each pixel of a lower segment's cap box was counted in, for the set exclusion.
   const capFrom: Array<CapFrom | null> = parts.map(() => null);
+  const jobs: Array<{ src: string; b: Built; on: string[]; own: Int32Array; before: number }> = [];
   for (const src of sources) {
     const b = builtOf(src);
     if (b === null) continue;
-    const on = names.filter((l) => limbs[l].segments.some((sg) => sg.from === src));
+    const on = names.filter((l) => limbs[l].segments.some((sg) => logical(sg.from) === logical(src)));
     const own = new Int32Array(W * H).fill(-1);
     const before = opaqueOf(b.r);
     if (before === 0) {
@@ -3878,11 +3893,17 @@ function cutLimbs(
       const underPolys = underNames.map((l) => polylines.get(l) as Array<[number, number]>);
       assignCrossedLimbs(coverIdx, polylines.get(coverLimb) as Array<[number, number]>, limbs[coverLimb].split as NonNullable<Limb['split']>, underIndices, underPolys, b.r, OPAQUE_ALPHA_ABOVE, own);
     }
+    owners.set(src, own);
+    jobs.push({ src, b, on, own, before });
+  }
+  // Place every cut on the selected lower source before any source is split.
+  // A per-part layer change does not turn a logical elbow into two uncut layers.
+  for (const { src, b, on, own } of jobs) {
     // Issue #360 (item 14): each joint of this part that declares cut_band has its cut placed, on the limb's own art.
     for (const l of on) {
       const li = names.indexOf(l);
       limbs[l].segments.forEach((sg, k) => {
-        if (k === 0 || sg.cut_band === undefined || sg.from !== src || limbs[l].segments[k - 1].from !== src) return;
+        if (k === 0 || sg.cut_band === undefined || sg.from !== src || logical(limbs[l].segments[k - 1].from) !== logical(src)) return;
         const line = (lines.get(l) as Array<JointLine | null>)[k] as JointLine;
         const art = (x: number, y: number): boolean => x >= 0 && y >= 0 && x < W && y < H && own[y * W + x] === li && b.r.data[(y * W + x) * 4 + 3] > OPAQUE_ALPHA_ABOVE;
         const luma = (x: number, y: number): number => luma601(b.r.data[(y * W + x) * 4], b.r.data[(y * W + x) * 4 + 1], b.r.data[(y * W + x) * 4 + 2]);
@@ -3901,12 +3922,15 @@ function cutLimbs(
         placements.set(`${l}/${k}`, placed);
       });
     }
+  }
+  for (const { src, b, on, own, before: wholeBefore } of jobs) {
+    let selectedBefore = 0;
     const segOverride = new Int32Array(W * H).fill(-1);
     const segAt = (l: string, x: number, y: number): number => {
       const segs = limbs[l].segments;
-      const first = segs.findIndex((sg) => sg.from === src);
+      const first = segs.findIndex((sg) => logical(sg.from) === logical(src));
       let last = first;
-      while (last + 1 < segs.length && segs[last + 1].from === src) last++;
+      while (last + 1 < segs.length && logical(segs[last + 1].from) === logical(src)) last++;
       return segmentOf(cutLines.get(l) as Array<JointLine | null>, first, last, x, y);
     };
     // Issue #400: when two forearm segments share `src` and their hand regions overlap, the overlap goes to the front
@@ -3914,7 +3938,7 @@ function cutLimbs(
     const forearms = on.flatMap((l) => {
       const li = names.indexOf(l);
       return limbs[l].segments.flatMap((sg, k) => {
-        if (k === 0 || sg.joint !== 'elbow' || sg.from !== src) return [];
+        if (k === 0 || sg.joint !== 'elbow' || logical(sg.from) !== logical(src)) return [];
         const me = places.get(sg.bone) as BonePlace;
         return me.end === null ? [] : [{ limb: li, seg: k, elbow: me.at, wrist: me.end, isSeg: (x: number, y: number): boolean => segAt(l, x, y) === k }];
       });
@@ -3931,6 +3955,8 @@ function cutLimbs(
         const l = names[own[p]];
         const k = segOverride[p] >= 0 ? segOverride[p] : segAt(l, x, y);
         const at = parts.findIndex((q) => q.limb === l && q.segment === k);
+        if (parts[at].of !== src) continue;
+        if (b.r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) selectedBefore++;
         rasters[at].data.set(b.r.data.subarray(p * 4, p * 4 + 4), p * 4);
         if (b.region === null || b.region.data[p] === 1) regions[at].data[p] = 1;
       }
@@ -3938,6 +3964,7 @@ function cutLimbs(
     owners.set(src, own);
     const shares = parts.map((q, i) => ({ q, i })).filter(({ q }) => q.of === src);
     const counted = shares.map(({ q, i }) => ({ part: q.part, px: opaqueOf(rasters[i]) }));
+    const before = sourceGroups.has(src) ? selectedBefore : wholeBefore;
     const sum = counted.reduce((a, c) => a + c.px, 0);
     if (sum !== before) {
       problems.push({ code: 'ASSEMBLE_COUNTS_ADD_UP', object: `part "${src}" (config.limbs)`, detail: `opaque px: ${before} before the limbs, ${sum} over their parts; equal is required (a bug in the assembler, not in the inputs)` });
@@ -4749,7 +4776,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     const ci = cuts.findIndex((q) => q.into === name);
     return ci >= 0 ? pieces[ci] : null;
   };
-  const lim = cutLimbs(input.limbs ?? {}, input.bones ?? [], input.caps ?? new Map(), W, H, limbSource, opaqueOf, mergedIn, count, (name) => hiddenArt.get(name) ?? null, (layer, by) => hiddenUses.get(layer)?.push(by), input.boneTips);
+  const lim = cutLimbs(input.limbs ?? {}, input.bones ?? [], input.caps ?? new Map(), W, H, limbSource, opaqueOf, mergedIn, count, (name) => hiddenArt.get(name) ?? null, (layer, by) => hiddenUses.get(layer)?.push(by), input.boneTips, input.limbSourceGroups);
   // Issue #564: and the cap a run's own layer fills above its upper joint, read once the limbs are cut.
   if (bands !== null) refuseIfAny(limbBands(cuts, pieces, input.limbs ?? {}, input.bones ?? [], W, H, (l, k) => lim.parts.find((q) => q.limb === l && q.segment === k)?.record.cap, input.boneTips).problems);
   const limbPieces = lim.pieces;
@@ -4762,10 +4789,10 @@ export function assemble(input: AssembleInput): AssembleResult {
   const islandKept =
     (input.limbIslands ?? []).length === 0
       ? { counts: [], splits: [], problems: [] }
-      : keepJointIslands(input.limbIslands ?? [], input.limbs ?? {}, input.bones ?? [], lim.parts, limbPieces, limbSource, W, H, input.islandFloor ?? ISLAND_FLOOR_SHARE, input.otherLimbs, input.boneTips);
+      : keepJointIslands(input.limbIslands ?? [], input.limbs ?? {}, input.bones ?? [], lim.parts, limbPieces, limbSource, W, H, input.islandFloor ?? ISLAND_FLOOR_SHARE, input.otherLimbs, input.boneTips, input.limbSourceGroups);
   refuseIfAny(islandKept.problems);
   const capAssigned = input.capOwnership === 'source' ? { counts: [], problems: [] }
-    : assignCapOwnership(input.limbIslands ?? [], input.limbs ?? {}, input.bones ?? [], lim.parts, limbPieces, limbSource, lim.capFrom, W, H, input.otherLimbs, input.boneTips);
+    : assignCapOwnership(input.limbIslands ?? [], input.limbs ?? {}, input.bones ?? [], lim.parts, limbPieces, limbSource, lim.capFrom, W, H, input.otherLimbs, input.boneTips, input.limbSourceGroups);
   refuseIfAny(capAssigned.problems);
 
 
