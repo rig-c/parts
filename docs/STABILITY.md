@@ -214,6 +214,26 @@ every number) are AUTHORING §3's tables, and the loader refuses any other by na
 | the scene report | `compose` | spec `spine-parts-scene-report/1` |
 | `idle.png`, `idle-indexed.png`, `idle.gif` | `loop`, `build --loop` | APNG and GIF encodings of the rendered idle |
 
+Issue #705 pins setup-seam acceptance to one source-relative scale1 union U of the authored stage and all actual drawn base/checked-set still vertices. U is snapped relative to the source origin, including odd-width half phase.
+The existing seam fields and pair pictures use that grid; source/blink and
+motion-root frames are unchanged. `sets.<name>` gates its affected numerator
+on the same fixed base source-cell denominator A. Non-scenes count the whole U numerator; scenes retain original border and outside-authored exclusions. Padding never enlarges A. Base failure OR any affected-set
+failure remains overall failure, with mean 1.0, levels 40/80 and aggregate 50
+unchanged. Added `seam_scope` identifies `source-grid/base` or
+`source-grid/affected-set`, `denominator_px`, canonical `whole`, diagnostic
+`auto_frame_raw` (unrounded mean, display mean, support, counts, scale, viewport),
+effect/inheritance reasons, semantic drawing changes and named unavailability,
+`domain.states` state/frame/piece/bounds/pose identity, and each raw pair's
+whole/affected/inherited counts and reasons. `whole_pairs`
+keeps complete canonical raw pair data (boxes/cut metadata included), omitting
+`picture` unless its image exists. Semantic signatures preserve original source
+attachment UVs/topology/weights, own image content and world vertices/colour,
+not atlas pages/UVs or global piece ordinals. Unknown/no-art support stays conservative.
+An unavailable, nonfinite, unrepresentable or oversized union, or nonempty official pinned.outside, refuses `CHECK_SEAM_DOMAIN`. Geometry margins outside the authored canvas are included in U, not treated as opaque-clip evidence. State-by-state geometry reads retain bounds/identities rather than all decoded pages or poses. `--keep-stills` keeps
+canonical frames in `setup_still/` and fitted diagnostics in `setup_still_auto/`.
+There is one extra seam render per checked state and no extra compile/gate.
+
+
 Skeleton alternate registration accepts an optional `anchor` mapping of one or
 two body-18 keypoints to declared base-bone origins (issue #543). One pair holds
 scale at 1; two determine scale and offset. The registration bars and painting

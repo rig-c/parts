@@ -997,6 +997,13 @@ and drawn on by a set that names the part in its own `front`:
   family; then only the set's #587 exclusion and recomposite figures read the
   parts order, and the render and its seam bar follow the rig.
 
+Two alternative runtime sets may register different attachments on the same
+front slot, one attachment per set. This is allowed registration, not concurrent
+activation: the current player's `setSet(name)` clears the previous selection,
+and `setSets(names)` rejects overlapping touched slots. Existing same-set
+base-plus-front and keyed-front refusals still apply. This states the producer
+and player-source selection contracts, not a newly executed playback test.
+
 ### The weight cut (`meshes.<part>.influences`, issue #284)
 
 This section and the mesh sections after it are for parts with no joints; a limb is cut at
@@ -4007,6 +4014,19 @@ documents do not ship). Each is an input this package built; none is an author's
 | <a id="CLOTH_SETTLES"></a>`CLOTH_SETTLES` | **a warning, never a refusal** (issue #501; the owner's ruling: cloth at rest while the character stands may be intended). Every physics chain, read by its tip on the idle `check` renders — `rigc render --animation idle --fps 12 --geometry`, physics on, rigc's default environment. A chain is a **physics leaf** — a bone a physics constraint names (`rig.json`'s `constraints` or `motion.json`'s `physics`) with no such bone under it — and the run of physics bones above it; its tip is the leaf's end (origin plus `length` along its world x axis), or its origin when the leaf has no length; its speed between frames is the tip's distance over their time, from the idle's `geometry.json`. A chain **settles** at the first frame from which every speed to the idle's last frame is under the floor, and each one that does — before the loop's length is out — prints `WARN chain "<root>" .. "<tip>" (N physics link(s)) settles at <t> s of the <d> s idle — its tip's end under 0.01694 rig px/s from there to the last frame (fastest on the idle <v> rig px/s)`. **The floor**, 0.01694 rig px/s, is derived, not chosen: half the slowest tip an idle key drives on the public examples (the repository's floor rule, half the weaker figure) — measured with this port's build of each (rig-c 2.60.0), over the 31 chains a keyed bone at or above the leaf drives (`demo` 12, `reference-sample` 1, `scarf` 11, `wind` 7) the slowest frame-to-frame tip speed is `scarf`'s `skirt_l2`, 0.03388 rig px/s; the ten no key drives — `wind`'s skirt, eight trees and the swing, hung from a `hip` its idle never keys, and `reference-sample`'s `hip_jiggle` — fall under it from 1.5 to 2.75 s on a 3.333 s idle (`hip_jiggle` at 0 s: it never moves) and end at 0.0025 rig px/s or less. `check.json`'s `CLOTH_SETTLES` holds `status` (`WARN`, `CLEAR`), `fps`, `frames`, `duration`, `floor_rig_px_per_s`, `floor`, `levers`, `warnings` and one row per chain (`tip`, `root`, `links`, `point` — `end` or `origin` — `settles_at`, null when it does not, `max_rig_px_per_s`, `min_rig_px_per_s`); it moves no exit status, no `check: PASS` and no bar count — the summary's warning clause names it, `; N warning(s) (CLOTH_SETTLES, not a bar)` (with `SEAM_OVER_MOTION` before it, and N their sum, where that read a pair). It reads the idle alone, one loop from rigc's physics reset at frame 0: a chain that settles later than the idle is long is not seen. **SKIP**, named: no physics constraint (then `check.json` has no key), or no idle — nothing measured, never a pass | if the chain should move while the character stands, one of the consumer's two levers: an environment at render (`rigc render --environment`, wind and gravity in time — rig-c's AUTHORING §8.4), or a consumer's animation that moves the bone the chain hangs from. The drafted idle keys no hip, by measurement: a hip turn at the idle's period fails a bar on all five public examples (issue #502, §3 *What moves them*). A `cloth` recipe's skirt hangs from `hip`, which the drafted idle never keys (§3, *Recipe: cloth and hair that answer the world*, *What moves them*, which has a worked schedule for `wind`). If it is intended, nothing |
 | <a id="CHECK_FOLDS_READ"></a>`CHECK_FOLDS_READ` | the fold render's `frames.json` names no set for an animation, a `folds.json` is missing, not `rigc-folds/1`, another animation's or another rate's, or a folding mesh has no line rigc printed for it | a rigc problem; report it, with `rigc --version` |
 | <a id="CHECK_SEAM_FRAME_SIZE"></a><a id="FRAMES_SIDECAR"></a><a id="CHECK_GEOMETRY_FILE"></a>`CHECK_SEAM_FRAME_SIZE`, `FRAMES_SIDECAR`, `CHECK_GEOMETRY_FILE` | rigc's render is not what its `frames.json` says, or its `geometry.json` is not a whole `rigc-geometry/1` export of the frames beside it (a frame count, a mesh whose vertex count differs from its rest entry; for the face half, another viewport than `frames.json`'s, other frame indices, the head bone or a feature's bone missing from a frame, a non-finite transform or time) | a rigc problem; report it |
+| <a id="CHECK_SEAM_DOMAIN"></a>`CHECK_SEAM_DOMAIN` | the source-relative common union U cannot prove finite, bounded, exactly representable scale1 coverage of every actual drawn setup state, or official pinned.outside is not empty; U is the enlarged render and A remains the fixed authored denominator | retain the named evidence and report the unavailable or outside-art boundary; do not shrink art, pad the measured domain or infer transparency from geometry alone |
+| <a id="CHECK_SEAM_SUPPORT"></a>`CHECK_SEAM_SUPPORT` | the affected-set effect mask does not match the fixed source grid, or the declared source cells leave no mean denominator | report the named support mismatch; no alternate denominator or successful zero is substituted |
+| <a id="RENDERER_API_UNAVAILABLE"></a>`RENDERER_API_UNAVAILABLE` | the official renderer read API needed to identify a set's semantic support is unavailable | all cells remain conservatively affected; this is an informational capability reason, not an inherited-PASS proof |
+| <a id="SOURCE_RIG_UNREADABLE"></a>`SOURCE_RIG_UNREADABLE` | the original selected rig or its image-root declaration cannot be read for semantic support | retain the named unavailable reason; the set includes all cells conservatively |
+| <a id="SOURCE_SKIN_UNSUPPORTED"></a>`SOURCE_SKIN_UNSUPPORTED` | the source rig has no supported default-skin attachment mapping for the selected drawing | provide the exact supported mapping or report it; no skin or attachment is guessed, and all cells remain affected |
+| <a id="SOURCE_ATTACHMENT_MISSING"></a>`SOURCE_ATTACHMENT_MISSING` | no source attachment matches the actual selected slot and attachment identity | report those names; no suffix, nearest drawing or filename fallback is used, and all cells remain affected |
+| <a id="SOURCE_ATTACHMENT_AMBIGUOUS"></a>`SOURCE_ATTACHMENT_AMBIGUOUS` | more than one source attachment matches the actual selected slot and attachment identity | resolve the named source ambiguity; all cells remain conservatively affected meanwhile |
+| <a id="SOURCE_MAPPING_UNSUPPORTED"></a>`SOURCE_MAPPING_UNSUPPORTED` | the actual drawing mapping cannot be proven by this reader, including clipping or a sequence/non-image attachment | retain the named feature and include all cells conservatively; unsupported is not unchanged |
+| <a id="SOURCE_IMAGE_UNREADABLE"></a>`SOURCE_IMAGE_UNREADABLE` | the image resolved from the exact selected source attachment cannot be read | retain the named slot and attachment and report the missing image evidence; all cells remain affected |
+| <a id="POSE_EXPORT_UNREADABLE"></a>`POSE_EXPORT_UNREADABLE` | the setup geometry export needed to bind semantic support to the rendered pose cannot be read | retain the unavailable reason and all affected cells; no successful empty support is fabricated |
+| <a id="POSE_MISMATCH"></a>`POSE_MISMATCH` | the official sampled setup pose and captured geometry disagree in index, actual time or attachment roster | report the mismatch; the set includes all cells conservatively rather than inheriting an unproven drawing |
+| <a id="POSE_ATTACHMENT_MISSING"></a>`POSE_ATTACHMENT_MISSING` | a rendered piece does not resolve to exactly one attachment in the actual posed roster | report the named slot; no attachment identity is invented and all cells remain affected |
+| <a id="RASTER_READ_UNAVAILABLE"></a>`RASTER_READ_UNAVAILABLE` | the official posed-piece raster/page reading needed for semantic support is unavailable | retain the named capability reason; the set includes all cells conservatively, never an unmeasured inherited PASS |
 | <a id="LOOP_ENCODE"></a>`LOOP_ENCODE` | the loop encoder refused a frame (translucent pixel in a GIF, a size change) | the frames; for a translucent frame write the lossless or the indexed APNG, which keep alpha |
 | <a id="LOOP_LEAD_IN_IDLE"></a>`LOOP_LEAD_IN_IDLE` | `build --lead-in`: the idle cannot be repeated without inventing a value (a track not keyed from 0 to the duration, or ending where it does not start; a field besides `duration`, `loop`, `note`, `tracks`), the motion already has an `idle_lead_in`, or the render did not write whole periods | the refusal names the track or field; the demo's idle, as the rig stage writes it, repeats as written |
 | <a id="CHECK_PACK_LINE_READS"></a>`CHECK_PACK_LINE_READS` | rigc printed a `pack:` line that is not `pack: <page> <W>x<H>, <N> region(s), <P>% covered, padding <D>`, then `, page edges free` or nothing, then `, shape rect`, `, shape polygon` or nothing (rig-c 2.1 prints the shape; 1.5–2.0 printed none, read as `rect`); an unknown shape is this refusal; the line is quoted | a rigc this package does not know the output of; report it, with `rigc --version` |
@@ -4127,16 +4147,71 @@ assemble*, at the end of this section):
   max-channel |d| ≤ 1.0 of 255, and at most 50 **rig** pixels over 40 — the
   frame pixels over 40 divided by s², `s` the frame scale the `seam:` line
   prints and `check.json`'s `seam_frame_scale` holds (issue #216). The frame
-  holds s² pixels per rig pixel, so a stack that parts from the render over a
-  fixed area of the rig reads s² times as many frame pixels: on the public
-  `reference-sample` a part moved 2 rig px read 400, 891 and 1,560 frame px over 40 at
-  s = 1.0, 1.5 and 2.0, and 400, 396 and 390 rig px; reference-sample as built read
-  3, 3 and 7 frame px [measured, issue #216]. Divided by s² the bar reads the
-  same rig at every scale, and at s = 1 it is the reference's count. The mean
-  is a share of the frame and needs no such division (0.242, 0.188 and 0.226 on
-  reference-sample as built; 0.353, 0.305 and 0.340 with the part moved).
-  `seam_px_over_40` and `seam_px_over_80` stay frame pixels, and so does each
-  pair's count below. The bar reads one
+  count is still divided by s². Since issue #705 its acceptance frame is instead
+  pinned to a common source-relative integer **scale1** lattice. U includes the
+  authored stage and every final drawn/posed vertex (transparent margins included)
+  of base and all actually checked sets, over every still frame. It is computed
+  once, state by state from official selected/clipped pieces; atlas/poser closures
+  are released per state, retaining only finite bounds and identities. Odd-width
+  source origins retain their half-integer phase. The public disjoint-third-part
+  baseline read4.64,4.80,8.87 with unchanged original geometry; those are historical
+  observations, not expectations or the consumer's private figures. Source,
+  blink, physics and motion-root readings retain their original frames.
+
+  Write D for authored width x height cells, B for its original declared scene
+  border, A=|D minus B|>0 (B empty for non-scenes). **A never grows with U.** A
+  non-scene numerator counts the entire U, including opaque art outside the
+  authored canvas compared with reference background. A scene excludes its
+  original border and everything outside its authored canvas, preserving its
+  intentional-frame-edge contract. Base mean is the included maxRGB residual sum
+  divided by A; a set applies its semantic effect selector to that same numerator
+  and denominator. Counts over40/80 use the same inclusion. Existing rounded mean
+  <=1.0 and one aggregate<=50 rig pixels over40 remain; no per-pair allowance,
+  mask-size denominator or padding dilution. Base failure remains overall failure.
+
+  All states reuse existing gated builds: one extra stock seam render per state,
+  plus official in-process bound/semantic-support work. U dimensions are reported;
+  a larger U costs more pixels, not a free operation. Strict pinned.outside=[]
+  proves complete drawn geometry within U; it does not claim alpha outside D is
+  zero. Finite source-relative offsets must be exactly representable in the
+  float32 warp map. An unavailable, unrepresentable or oversized union refuses
+  CHECK_SEAM_DOMAIN before union allocation, never a guessed/fallback box. The
+  known minimum two RGBA frames plus Float32 RGB warp/source require20U+12D bytes;
+  if that alone exceeds the existing6GiB execution budget it refuses. This is a
+  preflight lower bound, not proof of total memory acceptance.
+
+  Effect selection compares exact ordered source alpha-gather stacks and the
+  official renderer's posed contributor stacks, before observing residuals. Source
+  signatures retain the selected original rig/skin attachment mapping (including
+  source UVs, triangles and weights), its own resolved image content and actual
+  posed vertices/colour. Packed page bytes, atlas UV/page coordinates and global
+  piece indices do not define a drawing change. Unsupported mapping or missing
+  binding carries a deterministic named `unavailable` cause and includes the
+  whole set conservatively.
+  Replacement, hide, front placement, posed descendants, order/gather changes
+  and third-drawing occlusion can affect an otherwise unnamed base pair. Equal
+  known stacks inherit the base reading; set names alone cannot exclude a pair.
+  Singleton/no-art reference support or unavailable posed provenance includes
+  the cells conservatively. Complete contributing stacks retain translucent
+  dependencies, including lower drawings; inclusion is conservative, not an
+  assertion that every included drawing is visibly exposed.
+
+  The top-level seam fields are the canonical base verdict, and `sets.<name>`
+  uses the canonical **affected** numerator. `seam_scope` states that scope,
+  fixed `denominator_px`, full canonical `whole` residual and diagnostic
+  `auto_frame_raw` with its own viewport, unrounded mean and counts. Public
+  `domain.states` records each state name, frame/piece counts, world bounds and
+  `pose_sha256`. Each set
+  also records effect/inheritance reasons and every raw pair's whole, affected
+  and inherited counts. `whole_pairs` preserves full canonical raw rows, including
+  frame/rig boxes and cut metadata, but omits `picture` rather than naming an
+  unwritten image; an inherited failure is retained by the base, not
+  silently blessed or judged again for the set. `barsNotMet`, named failures
+  and the console's seam figures use these same canonical acceptance fields.
+  `--keep-stills` retains those seam frames under `setup_still/`, and the original
+  auto-fitted diagnostic frames separately under `setup_still_auto/`.
+
+  The bar reads one
   frame, the setup-pose still, never the idle. When it fails (or when `check
   --seam-pairs` asks, or `build --seam-pairs`, which forwards it, pass or fail), the pixels over 40 are split by the pair of
   parts that answers for each (issue #202): the two parts drawn last among those

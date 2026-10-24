@@ -231,10 +231,81 @@
    "in": "rig.json"
   }
  ],
- "seam_mean": 0.138,
- "seam_px_over_40": 7,
+ "seam_mean": 0,
+ "seam_px_over_40": 0,
  "seam_px_over_80": 0,
- "seam_frame_scale": 0.959664,
+ "seam_frame_scale": 1,
+ "seam_scope": {
+  "mode": "source-grid/base",
+  "domain": {
+   "viewport": {
+    "x": -416,
+    "y": 0,
+    "width": 832,
+    "height": 1216,
+    "scale": 1,
+    "pixelWidth": 832,
+    "pixelHeight": 1216
+   },
+   "authored": {
+    "x": -416,
+    "y": 0,
+    "width": 832,
+    "height": 1216
+   },
+   "numerator": "whole-union",
+   "states": [
+    {
+     "state": "base",
+     "frames": 2,
+     "pieces": 56,
+     "bounds": {
+      "minX": -353.0000248283513,
+      "minY": 7.000003466604767,
+      "maxX": 354.9999917105496,
+      "maxY": 1180.0000309542993
+     },
+     "pose_sha256": "70b2c610d768abe2e72aae7f252595dab9cea5093e09c31b8c154c15a3190f7c"
+    }
+   ]
+  },
+  "denominator_px": 1011712,
+  "auto_frame_raw": {
+   "mean": 0.13802321584601152,
+   "display_mean": 0.138,
+   "denominator_px": 936320,
+   "px_over_40": 7,
+   "px_over_80": 0,
+   "frame_scale": 0.9596636404179908,
+   "viewport": {
+    "x": -399.93004816175664,
+    "y": -39.930019866800585,
+    "width": 801.8600632057116,
+    "height": 1267.1106300019446,
+    "scale": 0.9596636404179908,
+    "pixelWidth": 770,
+    "pixelHeight": 1216
+   }
+  },
+  "whole": {
+   "mean": 0.00001482635374493927,
+   "display_mean": 0,
+   "denominator_px": 1011712,
+   "px_over_40": 0,
+   "px_over_80": 0,
+   "frame_scale": 1,
+   "viewport": {
+    "x": -416,
+    "y": 0,
+    "width": 832,
+    "height": 1216,
+    "scale": 1,
+    "pixelWidth": 832,
+    "pixelHeight": 1216
+   }
+  },
+  "whole_pairs": []
+ },
  "BREATH_VISIBLE": {
   "status": "PASS",
   "torso_parts": [
