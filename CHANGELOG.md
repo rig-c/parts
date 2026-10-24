@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.62.0](https://github.com/rig-c/parts/compare/v1.61.0...v1.62.0) (2026-10-24)
+
+
+### Features
+
+* **sets:** an alternate set may declare an authored focus point, emitted in sets.json ([#722](https://github.com/rig-c/parts/issues/722)) ([ddc5993](https://github.com/rig-c/parts/commit/ddc599358c2ae69f353a0dc5d51606b2bcb9b811))
+* transfer accepted meshes through hash-guarded explicit payloads ([#718](https://github.com/rig-c/parts/issues/718)) ([a5a2bbb](https://github.com/rig-c/parts/commit/a5a2bbbffaa2bcf5614d38cd6f20fd87e0f3bc9c)), closes [#658](https://github.com/rig-c/parts/issues/658)
+
+
+### Bug Fixes
+
+* **check:** count open root gaps and under-piece exposure ([#728](https://github.com/rig-c/parts/issues/728)) ([47c4dd1](https://github.com/rig-c/parts/commit/47c4dd1cef4f9a6b828c5547818cc9542735ecfe)), closes [#711](https://github.com/rig-c/parts/issues/711)
+* **check:** retain measured seam population at zero error ([#721](https://github.com/rig-c/parts/issues/721)) ([940b3f6](https://github.com/rig-c/parts/commit/940b3f63cf58713200de1575eb1c19a0c35ab825)), closes [#716](https://github.com/rig-c/parts/issues/716)
+* **release:** give each alias its own registry wait and poll the tarball too ([#727](https://github.com/rig-c/parts/issues/727)) ([6dddbb5](https://github.com/rig-c/parts/commit/6dddbb5f653a5dca0c16b083e606b9dd86e9f03d))
+
 ## [1.61.0](https://github.com/rig-c/parts/compare/v1.60.2...v1.61.0) (2026-10-24)
 
 
