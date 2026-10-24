@@ -103,7 +103,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { availableParallelism, tmpdir } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { inflateSync } from 'node:zlib';
 import ts from 'typescript';
 import { runNamedCutSkirtChecks } from './tools/check_named_cut_skirt.ts';
@@ -990,11 +990,31 @@ interface CheckReadScope {
 
 let checkReadScope: CheckReadScope | null = null;
 
+/**
+ * Issue #733: canonicalise a path through its nearest existing ancestor so a missing child under a symlinked
+ * temp root (such as macOS's `/var/folders/…` -> `/private/var/folders/…`) resolves under the same `realpathSync`
+ * prefix that `temp(...)` registered in `scope.roots`.
+ */
+function canonicalCheckPath(
+  p: string,
+  fsOps: { existsSync: (path: string) => boolean; realpathSync: (path: string) => string } = fs,
+): string {
+  let cur = isAbsolute(p) ? resolve(p) : resolve(p);
+  const tail: string[] = [];
+  while (!fsOps.existsSync(cur)) {
+    const parent = dirname(cur);
+    if (parent === cur) return join(cur, ...tail);
+    tail.unshift(basename(cur));
+    cur = parent;
+  }
+  return tail.length === 0 ? fsOps.realpathSync(cur) : join(fsOps.realpathSync(cur), ...tail);
+}
+
 /** Issue #640: test data for the complete check worker comes only from its generated temp directories. */
 function startCheckReadScope(): CheckReadScope {
   if (checkReadScope !== null) throw new Error('CHECK_TEMP_INPUTS: a check read scope is already active');
   const original = { ...fs }, promises = { ...fsPromises }, originalFile = Bun.file;
-  const canonical = (p: string): string => original.existsSync(p) ? original.realpathSync(p) : resolve(p);
+  const canonical = (p: string): string => canonicalCheckPath(p, original);
   const scope: CheckReadScope = { roots: new Set(), denied: [], reads: 0, active: () => checkReadScope === scope,
     restore: () => {
       checkReadScope = null;
@@ -1025,26 +1045,49 @@ function startCheckReadScope(): CheckReadScope {
   return scope;
 }
 
-/** Exercise the real cached-reader/copy doors without removing any unverified denial. */
-function checkInputBoundary(scope: CheckReadScope): { copied: boolean; plants: Array<{ name: string; refused: boolean; detail: string }>; unexpected: string[] } {
+/** Exercise the real cached-reader/copy doors and an explicit symlinked temp root (#733) without removing any unverified denial. */
+function checkInputBoundary(scope: CheckReadScope): { copied: boolean; symlinkedRoot: boolean; plants: Array<{ name: string; refused: boolean; detail: string }>; unexpected: string[] } {
   const dir = temp('check-input-boundary');
+  const linkHolder = mkdtempSync(join(tmpdir(), 'rig-parts-selftest-check-symlink-'));
   try {
     const source = join(dir, 'generated.txt'), value = 'generated check input\n';
     writeFileSync(source, value);
     copyFileSync(source, join(dir, 'copied.txt'));
     cpSync(source, join(dir, 'cp.txt'));
     const copied = ['copied.txt', 'cp.txt'].every((file) => readFileSync(join(dir, file), 'utf8') === value);
+    const viaLink = join(linkHolder, 'via-link');
+    symlinkSync(dir, viaLink, 'dir');
+    const missingViaLink = join(viaLink, 'missing-union-candidate', 'skeleton.json');
+    const readsBefore = scope.reads, deniedBefore = scope.denied.length;
+    const existingViaLinkOk = readFileSync(join(viaLink, 'generated.txt'), 'utf8') === value;
+    let missingViaLinkErr = '';
+    try { readFileSync(missingViaLink, 'utf8'); } catch (e) { missingViaLinkErr = String(e); }
+    const oldMissingSpelling = existsSync(missingViaLink) ? realpathSync(missingViaLink) : resolve(missingViaLink);
+    const newMissingSpelling = canonicalCheckPath(missingViaLink);
+    const realRoot = realpathSync(dir);
+    const symlinkedRoot =
+      existingViaLinkOk &&
+      scope.reads === readsBefore + 2 &&
+      scope.denied.length === deniedBefore &&
+      !missingViaLinkErr.includes('CHECK_TEMP_INPUTS') &&
+      missingViaLinkErr.includes('ENOENT') &&
+      newMissingSpelling === join(realRoot, 'missing-union-candidate', 'skeleton.json') &&
+      !oldMissingSpelling.startsWith(realRoot + sep);
     const tracked = join(ROOT, 'package.json');
-    const attempts: Array<[string, string, (out: string) => unknown]> = [
-      ['cached read', 'fs.readFileSync', () => readJsonFile(tracked)],
-      ['copyFileSync', 'fs.copyFileSync source', (out) => copyFileSync(tracked, out)],
-      ['cpSync', 'fs.cpSync source', (out) => cpSync(tracked, out)],
-      ['module copyFile', 'node:fs/promises.copyFile source', (out) => fsPromises.copyFile(tracked, out)],
-      ['module cp', 'node:fs/promises.cp source', (out) => fsPromises.cp(tracked, out)],
-      ['fs.promises copyFile', 'fs.promises.copyFile source', (out) => fs.promises.copyFile(tracked, out)],
-      ['fs.promises cp', 'fs.promises.cp source', (out) => fs.promises.cp(tracked, out)],
+    const trackedLink = join(linkHolder, 'tracked-link');
+    symlinkSync(ROOT, trackedLink, 'dir');
+    const missingTrackedRel = relative(ROOT, join(realpathSync(ROOT), 'missing-union-candidate', 'package.json'));
+    const attempts: Array<[string, string, string, (out: string) => unknown]> = [
+      ['cached read', 'package.json', 'fs.readFileSync', () => readJsonFile(tracked)],
+      ['symlinked tracked missing read', missingTrackedRel, 'fs.readFileSync', () => readFileSync(join(trackedLink, 'missing-union-candidate', 'package.json'), 'utf8')],
+      ['copyFileSync', 'package.json', 'fs.copyFileSync source', (out) => copyFileSync(tracked, out)],
+      ['cpSync', 'package.json', 'fs.cpSync source', (out) => cpSync(tracked, out)],
+      ['module copyFile', 'package.json', 'node:fs/promises.copyFile source', (out) => fsPromises.copyFile(tracked, out)],
+      ['module cp', 'package.json', 'node:fs/promises.cp source', (out) => fsPromises.cp(tracked, out)],
+      ['fs.promises copyFile', 'package.json', 'fs.promises.copyFile source', (out) => fs.promises.copyFile(tracked, out)],
+      ['fs.promises cp', 'package.json', 'fs.promises.cp source', (out) => fs.promises.cp(tracked, out)],
     ];
-    const plants = attempts.map(([name, operation, attempt], i) => {
+    const plants = attempts.map(([name, targetRel, operation, attempt], i) => {
       const before = scope.denied.length, out = join(dir, `refused-${i}.json`);
       let detail = '';
       try {
@@ -1054,14 +1097,17 @@ function checkInputBoundary(scope: CheckReadScope): { copied: boolean; plants: A
       } catch (e) { detail = String(e); }
       const message = scope.denied[before];
       const refused = scope.denied.length === before + 1 && message !== undefined &&
-        message.startsWith('CHECK_TEMP_INPUTS: package.json —') && message.endsWith(`; ${operation}`) &&
+        message.startsWith(`CHECK_TEMP_INPUTS: ${targetRel} —`) && message.endsWith(`; ${operation}`) &&
         detail === `Error: ${message}` && /selftest\.ts:\d+/.test(message) && !existsSync(out);
       // Remove exactly the message this operation proved expected; pre-existing/additional denials remain.
       if (refused) scope.denied.splice(before, 1);
       return { name, refused, detail };
     });
-    return { copied, plants, unexpected: [...scope.denied] };
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+    return { copied, symlinkedRoot, plants, unexpected: [...scope.denied] };
+  } finally {
+    rmSync(linkHolder, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 function temp(label: string): string {
@@ -18906,10 +18952,10 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       say(
         'CK108_GENERATED_SEAM_GUIDE_AND_HELP_AGREE_AND_THE_ENTIRE_CHECK_WORKER_REFUSES_TRACKED_INPUTS',
         helpCheck.includes('magenta = a counted pixel') && helpCheck.includes(`${SEAM_PX_BAR} rig px over ${SEAM_PX_LEVEL}`) && helpCheck.includes('divided by s²') &&
-          guideFaults.length === 0 && staleGuideFaults.length === 1 && inputScope.active() && inputScope.roots.size > 1 && inputScope.reads > 0 && boundary.copied && boundary.unexpected.length === 0 && inputScope.denied.length === 0 &&
+          guideFaults.length === 0 && staleGuideFaults.length === 1 && inputScope.active() && inputScope.roots.size > 1 && inputScope.reads > 0 && boundary.copied && boundary.symlinkedRoot && boundary.unexpected.length === 0 && inputScope.denied.length === 0 &&
           boundary.plants.every((plant) => plant.refused),
-        `generated guide faults ${guideFaults.length}; help legend/bar ${helpCheck.includes('magenta = a counted pixel')}/${helpCheck.includes('divided by s²')}; ${inputScope.reads} permitted data reads in ${inputScope.roots.size} generated temp roots; generated copies ${boundary.copied}; unexpected tracked reads ${boundary.unexpected.join('; ') || 'none'}; planted actual reads/copies ${JSON.stringify(boundary.plants)}`,
-        'issue #640: CK100/CK107 repository assertions live in tree; generated reader controls stay in CK99/CK106. This scope starts before check fixtures and remains active through every check helper; tracked cached reads and native sync/promise copy sources are refused before their bytes are opened; only each exactly verified expected denial is removed, never unrelated denials',
+        `generated guide faults ${guideFaults.length}; help legend/bar ${helpCheck.includes('magenta = a counted pixel')}/${helpCheck.includes('divided by s²')}; ${inputScope.reads} permitted data reads in ${inputScope.roots.size} generated temp roots; generated copies ${boundary.copied}; symlinked root ${boundary.symlinkedRoot}; unexpected tracked reads ${boundary.unexpected.join('; ') || 'none'}; planted actual reads/copies ${JSON.stringify(boundary.plants)}`,
+        'issue #640: CK100/CK107 repository assertions live in tree; generated reader controls stay in CK99/CK106. This scope starts before check fixtures and remains active through every check helper; missing paths canonicalise through their nearest existing ancestor so symlinked temp roots agree on existing and missing children; tracked cached reads and native sync/promise copy sources are refused before their bytes are opened; only each exactly verified expected denial is removed, never unrelated denials',
       );
     };
 
