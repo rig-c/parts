@@ -264,24 +264,32 @@ writeFileSync(join(DIR,'parts.json'),serializeParts(parts));
 console.log('SCOPE_INPUT_PATCH '+known);
 `;
 
-// These are explicit whole-box reader probes, NOT invented GAP observations.
-// The installed check's actual kept frame supplies the RGBA replay, geometry
-// and time. The cell sits inside the opaque back ellipse; wrong time must keep
-// the original raw count as unavailable, never fabricate coverage.
+// Read actual installed geometry through the current root owner reader. This
+// certifies resolved order and named refusals, not an invented GAP/alpha mask.
 const RENDER_READ_PROBE = `import { readFileSync,writeFileSync } from 'node:fs';
 import {join} from 'node:path';
-import {motionRootCoverageReader} from '${PACKAGE}/src/check.ts';
-const out=process.argv[2],rendered=join(out,'setup_still');
+import {motionRootDrawOrderReader} from '${PACKAGE}/src/check.ts';
+import {PartsError} from '${PACKAGE}/src/errors.ts';
+const out=process.argv[2],rendered=join(out,'idle_frames');
 const side=JSON.parse(readFileSync(join(rendered,'frames.json'),'utf8'));
 const set=side.sets[0],geometry=JSON.parse(readFileSync(join(rendered,set.dir,'geometry.json'),'utf8'));
-const f=geometry.frames[0],hit={index:f.index,px:1,cell:1,box:[-6,39,-5,40]};
-const reader=motionRootCoverageReader(join(out,'build'),rendered,join(out,'coverage-probe'));
+const f=geometry.frames[0],reader=motionRootDrawOrderReader(rendered);
 const pair={pair:'back|front',a:'back',b:'front'};
-const positive=reader(pair,set.animation,hit,f.time),negative=reader(pair,set.animation,hit,f.time+1);
-const result={scope:'declared whole-box reader probe, not a measured GAP',positive,negative};
+const positive=reader(pair,set.animation,f.index,f.time);
+const reversed=reader({pair:'front|back',a:'front',b:'back'},set.animation,f.index,f.time);
+const refusal=(read,detail)=>{
+ try{read();}catch(error){
+  if(error instanceof PartsError&&error.problems.some(p=>p.code==='FRAMES_SIDECAR'&&p.detail.includes(detail)))return true;
+  throw error;
+ }
+ return false;
+};
+const wrongTime=refusal(()=>reader(pair,set.animation,f.index,f.time+1),'raw and geometry frame time differ');
+const missingSlot=refusal(()=>reader({pair:'back|missing',a:'back',b:'missing'},set.animation,f.index,f.time),'both named pair slots required');
+const result={scope:'actual resolved draw order, not a measured GAP',positive,reversed,wrongTime,missingSlot};
 writeFileSync(join(out,'render-read-proof.json'),JSON.stringify(result,null,2)+'\\n');
-if(positive.status!=='exempt'||positive.box_cells!==1||positive.covered_cells!==1||negative.status==='exempt'||negative.status!=='unavailable'||negative.reason!=='raw and geometry frame time differ')throw new Error('SMOKE_ROOT_COVERAGE '+JSON.stringify(result));
-console.log('ROOT_COVERAGE_EXACT_RGBA 1/1; wrong-time unavailable retains1');
+if(positive!=='a'||reversed!=='b'||!wrongTime||!missingSlot)throw new Error('SMOKE_ROOT_DRAW_ORDER '+JSON.stringify(result));
+console.log('ROOT_DRAW_ORDER_RESOLVED a/b; wrong-time and missing-slot FRAMES_SIDECAR');
 `;
 
 // `compose` from the install (issue #74): the check rig's two soft parts as a character laid out where `build --out`
@@ -800,19 +808,16 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, fetchedTgz?: strin
     );
   } else notes.push(`check passed on the generated rig, gated by ${checkJson.rigc_entry?.entry as string}`);
 
-  // The actual no-runtime compositor must replay a kept official frame,
-  // exempt the fully covered probe and retain a wrong-time probe as unavailable.
-  // A `--source registry` rerun against a cut published before `motionRootCoverageReader`
-  // and `seam_scope` landed (`<= 1.60.2`) does not carry those exports in its installed
-  // `src/check.ts`; every `--source tree` run and every cut shipping them runs both probes.
+  // Registry cuts without the current owner reader cannot run these probes.
+  // Every tree run executes them: a missing helper there is a package defect.
   const installedCheckSource = existsSync(join(pkgRoot, 'src', 'check.ts')) ? readFileSync(join(pkgRoot, 'src', 'check.ts'), 'utf8') : '';
-  if (spec.source.kind === 'tree' || installedCheckSource.includes('motionRootCoverageReader')) {
+  if (spec.source.kind === 'tree' || installedCheckSource.includes('motionRootDrawOrderReader')) {
     writeFileSync(join(home, 'render_read_probe.ts'), RENDER_READ_PROBE);
-    const coverage = check?.status === 0 ? run('bun', [join(home, 'render_read_probe.ts'), checkOut], home) : null;
-    if (coverage !== null) output += coverage.out;
-    if (coverage === null || coverage.status !== 0 || !coverage.out.includes('ROOT_COVERAGE_EXACT_RGBA 1/1')) {
-      fault('render-read', `SMOKE_RUNTIME_FREE_ROOT_COVERAGE: ${coverage === null ? 'the installed check did not pass' : `exit ${coverage.status}: ${JSON.stringify(coverage.out.slice(0, 3000))}`}`);
-    } else notes.push('runtime-free root coverage replayed exact RGBA; covered1/1; wrong time retained raw1');
+    const rootOrder = check?.status === 0 ? run('bun', [join(home, 'render_read_probe.ts'), checkOut], home) : null;
+    if (rootOrder !== null) output += rootOrder.out;
+    if (rootOrder === null || rootOrder.status !== 0 || !rootOrder.out.includes('ROOT_DRAW_ORDER_RESOLVED a/b; wrong-time and missing-slot FRAMES_SIDECAR')) {
+      fault('render-read', `SMOKE_RUNTIME_FREE_ROOT_DRAW_ORDER: ${rootOrder === null ? 'the installed check did not pass' : `exit ${rootOrder.status}: ${JSON.stringify(rootOrder.out.slice(0, 3000))}`}`);
+    } else notes.push('runtime-free root order resolved actual geometry a/b; wrong-time and missing-slot refused FRAMES_SIDECAR');
 
     writeFileSync(join(home, 'make_seam_scope.ts'), SEAM_SCOPE_GENERATOR);
     const scopeGen = run('bun', [join(home, 'make_seam_scope.ts')], home);
@@ -834,7 +839,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, fetchedTgz?: strin
       fault('render-read', `SMOKE_RUNTIME_FREE_AFFECTED_SETS: generator ${scopeGen.status}; check ${scopeCheck?.status ?? 'not run'}; ${JSON.stringify({ inherited, affected, figures: scopeJson, diagnostic: scopeCheck?.out.slice(-3000) }).slice(0, 6000)}`);
     } else notes.push('runtime-free all-sets: base FAIL64 retained; disjoint set PASS inherited64/affected0; third occlusion FAIL affected64');
   } else {
-    notes.push(`runtime-free root coverage and seam_scope skipped on ${spec.source.spec} (cut predates motionRootCoverageReader)`);
+    notes.push(`runtime-free root draw-order and seam_scope skipped on ${spec.source.spec} (installed check.ts does not export motionRootDrawOrderReader)`);
   }
 
   // `compose` from the install: a generated character checked green by the installed `check`, composed twice.

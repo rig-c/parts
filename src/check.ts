@@ -79,7 +79,7 @@
  */
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import type { Frame as RootCoverageFrame, Piece as RootCoveragePiece, Viewport as RootCoverageViewport } from 'rig-c/render-shared';
+import type { Viewport as RootCoverageViewport } from 'rig-c/render-shared';
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig } from './assemble.ts';
@@ -4056,18 +4056,16 @@ export interface MotionSeamRow {
   banded: number;
   /** The frames over the floor, ascending: the warning's frames. */
   opens: number[];
-  /** Beside `opens`: GAP only on roots; the legacy maximum of both kinds elsewhere. */
+  /** Beside `opens`: gapOpen plus UNDER-owned ghost on roots; legacy maximum elsewhere. */
   px: number[];
-  /** Maximum gated/warned count over the floor; root ghost is separate INFO. */
+  /** Maximum gated/warned count over the unchanged one-cell floor. */
   max_px: number;
   /** The frames rigc names open whose every opening is one cell thick: under the floor, not reported. */
   under_floor: number[];
   /** New roots only: the worst above-floor hit, retaining rigc's cell and world box. */
-  worst?: MotionSeamHit & { kind: 'gap' | 'ghost' };
-  /** Roots only: preserve mixed ghost without inferring an owner from rigc-seam/1. */
-  ghost_info?: MotionSeamWorldKind & { owner: 'unavailable'; frames: number };
-  /** Roots only, above-floor raw GAP hits: sufficient whole-box proof, never a GAP mask. */
-  coverage?: RootGapCoverage[];
+  worst?: MotionSeamHit & { kind: 'gap' | 'ghost' | 'gapOpen' | 'underGhost' | 'gapOpen+underGhost' };
+  /** Exact stock partitions and the resolved UNDER owner, retained even below the floor. */
+  cells?: MotionRootCells[];
 }
 
 /** Existing pairs warn; new body roots alone can FAIL. Unavailable readings are named SKIP, never measured zero. */
@@ -4084,7 +4082,7 @@ export interface MotionSeamLine {
   /** Physics-only reference worlds (issue #591); do not participate in warnings or bars. */
   worlds?: MotionSeamWorlds;
   /** Selected body-root pairs and named zero-band roots; existing internal seams remain warnings. */
-  roots?: { status: 'PASS' | 'FAIL' | 'SKIP'; mode: 'gap-only'; ghost_owner: 'unavailable'; ghost_followup: 'rig-c/core#1555'; pairs: string[]; failed: number; reason?: string; unmeasured?: MotionUnmeasuredRoot[] };
+  roots?: { status: 'PASS' | 'FAIL' | 'SKIP'; mode: 'gap-open+under-ghost'; ghost_owner: 'resolved-draw-order'; pairs: string[]; failed: number; reason?: string; unmeasured?: MotionUnmeasuredRoot[] };
 }
 
 /**
@@ -4292,193 +4290,57 @@ export interface MotionSeamHit {
   box: [number, number, number, number];
 }
 
-/** Match rig-c's DRAWN_ALPHA (passthrough): alpha, never RGB brightness. */
-const ROOT_DRAWN_ALPHA = 128;
-const ROOT_COVERAGE_DIR = 'root_gap_coverage';
-export interface RootGapCoverage extends MotionSeamHit {
-  status: 'exempt' | 'conservative' | 'unavailable';
-  reason: string;
-  /** Whole box cell centres, NOT the unavailable exact GAP subset. */
-  box_cells?: number;
-  covered_cells?: number;
-  /** Deterministic sidecar relative to check.json, written only for actual examined hits. */
-  evidence?: string;
+/** Per-frame body-root metric, using only stock partition counts. */
+export interface MotionRootCells {
+  index: number;
+  gap: number;
+  gapOpen: number;
+  gapCovered: number;
+  ghostA: number;
+  ghostB: number;
+  under: 'a' | 'b' | null;
+  underGhost: number;
+  overGhost: number;
+  counted: number;
+  /** Original raw-kind box floor, never the narrowed partition box. */
+  floor?: number;
+  floor_box?: MotionSeamHit['box'];
 }
-export type RootGapCoverageReader = (pair: MotionSeamPair, animation: string, hit: MotionSeamHit, time: number | undefined) => RootGapCoverage;
+export type RootDrawOrderReader = (pair: MotionSeamPair, animation: string, index: number, time: number | undefined) => 'a' | 'b';
 
-/** All-box coverage is sufficient because the raw GAP cells are a subset of the box. */
-export function rootGapBoxCoverage(hit: MotionSeamHit, alpha: readonly number[] | null, reason = 'composite metadata unavailable', worldMagnitude?: number): RootGapCoverage {
-  const width = Math.round((hit.box[2] - hit.box[0]) / hit.cell);
-  const height = Math.round((hit.box[3] - hit.box[1]) / hit.cell);
-  const unavailable = (): RootGapCoverage => ({ ...hit, status: 'unavailable', reason });
-  // Binary64 unit roundoff u. Core seam.ts readFrame/centreX/centreY/take
-  // forms each edge with grid-origin multiply, offset multiply, centre add and
-  // half-cell add: four rounded operations (cell/2 and integer+.5 are exact
-  // in the normal/safe-index domain below). For M bounding the SAME pair's
-  // rest/posed coordinates, |origin| <= M+4c, |offset| <= 2M+8c;
-  // B=4(M+4c) bounds every intermediate magnitude, including cancellation.
-  // Each edge's forward error is <= gamma(4)B. Add both edge errors, the
-  // subtraction error u(|lo|+|hi|), and division error u|q|/(1-u).
-  // gamma(32) rounds outward over at most 32 arithmetic operations, including
-  // B, both gamma evaluations and the error expression below. A bound
-  // >= half a cell cannot identify a unique integer and remains unavailable.
-  // Without the coordinate bound only EXACT integer extents are accepted.
-  const u = Number.EPSILON / 2;
-  const gamma = (n: number): number => n * u / (1 - n * u);
-  const integerExtent = (lo: number, hi: number, cells: number): boolean => {
-    const q = (hi - lo) / hit.cell;
-    if (worldMagnitude === undefined) return q === cells;
-    const B = 4 * (worldMagnitude + 4 * hit.cell);
-    if (!Number.isFinite(worldMagnitude) || worldMagnitude < Math.max(Math.abs(lo), Math.abs(hi)) ||
-      hit.cell < 2 ** -1021 || !Number.isFinite(B) || B / hit.cell >= 2 ** 51) return false;
-    const error = ((2 * gamma(4) * B + u * (Math.abs(lo) + Math.abs(hi))) / hit.cell +
-      u * Math.abs(q) / (1 - u)) / (1 - gamma(32)) + Number.MIN_VALUE;
-    return error < 0.5 && Math.abs(q - cells) <= error;
-  };
-  if (!Number.isFinite(hit.cell) || hit.cell <= 0 || !hit.box.every(Number.isFinite) ||
-    !Number.isSafeInteger(width * height) || width <= 0 || height <= 0 ||
-    !integerExtent(hit.box[0], hit.box[2], width) || !integerExtent(hit.box[1], hit.box[3], height) ||
-    alpha === null || alpha.length !== width * height || alpha.some(a => !Number.isFinite(a) || a < 0 || a > 255)) return unavailable();
-  const covered = alpha.filter(a => a >= ROOT_DRAWN_ALPHA).length;
-  return { ...hit, status: covered === alpha.length ? 'exempt' : 'conservative',
-    reason: covered === alpha.length ? 'whole world-cell box covered at DRAWN_ALPHA 128' : 'uncovered box cells: retain the entire original GAP count; exact GAP subset unavailable',
-    box_cells: alpha.length, covered_cells: covered };
-}
-
-/**
- * Root-only lazy reader. The render already made by runCheck supplies every
- * used world vertex, tint, frame time and draw order. The public renderer entry
- * supplies packed UV/page metadata and rasterisation, not a second seam metric.
- * Unsupported clipping/binding or even one replay pixel mismatch retains raw.
- */
-export function motionRootCoverageReader(build: string, rendered: string, out: string): RootGapCoverageReader {
-  type Renderer = OfficialRenderer;
-  type PoseAttachment = NonNullable<RootCoverageFrame['attachments']>[number];
-  interface Prepared { api: Renderer; pages: ReturnType<Renderer['loadCandidate']>['pages']; pieces: RootCoveragePiece[]; attachments: PoseAttachment[] }
-  interface Animation { frames: Map<number, { frame: RootCoverageFrame; alphaReplayExact: boolean }>; restMagnitude: number }
-  let prepared: Prepared | undefined;
-  const animations = new Map<string, Animation>();
-  const read = (path: string): unknown => JSON.parse(readFileSync(path, 'utf8')) as unknown;
-  const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
-  class CoverageUnavailable extends Error {}
-  const requireFact = (condition: unknown, reason: string): void => { if (!condition) throw new CoverageUnavailable(reason); };
-  const attachments = (value: unknown): PoseAttachment[] => {
-    requireFact(Array.isArray(value), 'geometry attachment roster unavailable');
-    return (value as unknown[]).map(a => {
-      if (!isRecord(a) || typeof a.slot !== 'string' || typeof a.attachment !== 'string' ||
-        !Array.isArray(a.vertices) || a.vertices.length % 2 !== 0 || !a.vertices.every(v => typeof v === 'number' && Number.isFinite(v)) ||
-        !Array.isArray(a.color) || a.color.length !== 4 || !a.color.every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1)) throw new CoverageUnavailable('geometry attachment fields unavailable');
-      return { slot: a.slot, attachment: a.attachment, vertices: a.vertices as number[], color: a.color as [number, number, number, number] };
-    });
-  };
-  const prepare = (): Prepared => {
-    if (prepared !== undefined) return prepared;
-    // Node's module loader is called only here, never for a root-free reading.
-    const loaded: unknown = officialRenderer();
-    requireFact(isRecord(loaded) && ['loadCandidate', 'throughPoser', 'sampleSetupPose', 'renderFrame'].every(k => typeof loaded[k] === 'function'), 'official renderer exports unavailable');
-    const api = loaded as Renderer;
-    const skeleton = join(build, 'skeleton.json'), atlas = join(build, 'skeleton.atlas');
-    const text = readFileSync(skeleton, 'utf8'), document: unknown = JSON.parse(text);
-    const unsupported = (v: unknown): boolean => Array.isArray(v) ? v.some(unsupported) : isRecord(v) &&
-      (v.type === 'clipping' || Object.keys(v).some(k => k === 'dark' || k === 'rgba2' || k === 'rgb2' || unsupported(v[k])));
-    requireFact(!unsupported(document), 'clipping or dark-tint metadata is not replayable from this geometry');
-    const candidate = api.loadCandidate({ skeletonText: text, atlasText: readFileSync(atlas, 'utf8'), atlasDir: build, label: 'root GAP composite' }, { skeleton, atlas }, undefined);
-    const metadata = api.throughPoser(candidate.choice, p => api.sampleSetupPose(p, { geometry: true, bones: true })).value[0];
-    requireFact(metadata !== undefined && metadata.attachments !== undefined && metadata.pieces.every(p => !('source' in p) && p.dark === undefined), 'unclipped packed metadata unavailable');
-    prepared = { api, pages: candidate.pages, pieces: metadata.pieces, attachments: metadata.attachments ?? [] };
-    return prepared;
-  };
-  return (pair, animation, hit, time) => {
-    let result = rootGapBoxCoverage(hit, null);
-    let alpha: number[] | null = null;
-    let frameTime: number | null = null;
-    const reason = 'official composite metadata or pixel replay unavailable';
-    try {
-      requireFact(Number.isInteger(hit.index) && hit.index >= 0 && typeof time === 'number' && Number.isFinite(time), 'actual raw frame time unavailable');
-      const { api, pages, pieces, attachments: metadataAttachments } = prepare();
-      const sidecar = read(join(rendered, 'frames.json'));
-      requireFact(isRecord(sidecar) && Array.isArray(sidecar.sets) && isRecord(sidecar.viewport), 'render viewport unavailable');
-      // requireFact deliberately does not narrow unknown values: each reader
-      // checks again at its own boundary rather than using an unchecked cast.
-      if (!isRecord(sidecar) || !Array.isArray(sidecar.sets) || !isRecord(sidecar.viewport)) throw new CoverageUnavailable(reason);
-      const set = sidecar.sets.find(s => isRecord(s) && s.animation === animation);
-      requireFact(isRecord(set) && typeof set.dir === 'string' && !isAbsolute(set.dir) && !set.dir.split(/[\\/]/).includes('..'), 'local animation directory unavailable');
-      if (!isRecord(set) || typeof set.dir !== 'string') throw new CoverageUnavailable(reason);
-      const v = sidecar.viewport;
-      requireFact(['x', 'y', 'width', 'height', 'scale', 'pixelWidth', 'pixelHeight'].every(k => typeof v[k] === 'number' && Number.isFinite(v[k])) &&
-        Number(v.scale) > 0 && Number.isSafeInteger(v.pixelWidth) && Number(v.pixelWidth) > 0 && Number.isSafeInteger(v.pixelHeight) && Number(v.pixelHeight) > 0, 'finite render viewport unavailable');
-      const viewport: RootCoverageViewport = { minX: Number(v.x), minY: Number(v.y), maxX: Number(v.x) + Number(v.width), maxY: Number(v.y) + Number(v.height), scale: Number(v.scale), width: Number(v.pixelWidth), height: Number(v.pixelHeight) };
-      requireFact(Array.isArray(sidecar.background) && sidecar.background.length === 4 && sidecar.background.every(x => typeof x === 'number' && Number.isInteger(x) && x >= 0 && x <= 255), 'render background unavailable');
-      const background = sidecar.background as [number, number, number, number];
-      let state = animations.get(animation);
-      if (state === undefined) {
-        const geometry = read(join(rendered, set.dir, GEOMETRY_FILE));
-        requireFact(isRecord(geometry) && isRecord(geometry.setup) && Array.isArray(geometry.rest) && Array.isArray(geometry.frames) && geometry.animation === animation, 'same-animation geometry unavailable');
-        if (!isRecord(geometry) || !isRecord(geometry.setup) || !Array.isArray(geometry.rest) || !Array.isArray(geometry.frames)) throw new CoverageUnavailable(reason);
-        const setup = attachments(geometry.setup.attachments);
-        requireFact(setup.length === pieces.length && new Set(setup.map(a => a.slot)).size === setup.length, 'setup draw roster unavailable');
-        for (const p of pieces) {
-          const a = setup.find(a => a.slot === p.slot);
-          const rest = geometry.rest.find(r => isRecord(r) && r.slot === p.slot && r.attachment === a?.attachment);
-          requireFact(a !== undefined && isRecord(rest) && rest.kind === p.kind && a.vertices.length === p.world.length && same(a.color, p.tint) &&
-            (p.kind !== 'mesh' || same(rest.triangles, Array.from(p.triangles))), 'packed metadata topology or tint differs');
-        }
-        // The metadata poser supplies attachment identity, never world positions.
-        // Match it explicitly to the captured setup, including default skin.
-        requireFact(setup.every(a => metadataAttachments.some(b => a.slot === b.slot && a.attachment === b.attachment)), 'default attachment identity differs');
-        let restMagnitude = 0;
-        for (const r of geometry.rest) {
-          if (!isRecord(r) || !Array.isArray(r.vertices) || !r.vertices.every(v => typeof v === 'number' && Number.isFinite(v))) throw new CoverageUnavailable('rest coordinate bound unavailable');
-          for (const v of r.vertices as number[]) restMagnitude = Math.max(restMagnitude, Math.abs(v));
-        }
-        state = { restMagnitude, frames: new Map() };
-        for (const f of geometry.frames) {
-          if (!isRecord(f) || !Number.isInteger(f.index) || typeof f.time !== 'number' || !Number.isFinite(f.time)) throw new CoverageUnavailable('frame identity unavailable');
-          const posed = attachments(f.attachments);
-          requireFact(posed.length === pieces.length && new Set(posed.map(a => a.slot)).size === posed.length, 'frame draw roster differs');
-          const drawn = posed.map(a => {
-            const p = pieces.find(p => p.slot === a.slot), original = setup.find(p => p.slot === a.slot);
-            if (p === undefined || original?.attachment !== a.attachment || p.world.length !== a.vertices.length) throw new CoverageUnavailable('frame attachment binding differs');
-            return { ...p, world: a.vertices, tint: a.color };
-          });
-          requireFact(!state.frames.has(Number(f.index)), 'duplicate frame index');
-          state.frames.set(Number(f.index), { frame: { index: Number(f.index), time: f.time, pieces: drawn }, alphaReplayExact: false });
-        }
-        animations.set(animation, state);
+/** Geometry attachments are the stock poser's resolved draw order on that frame, back to front. */
+export function motionRootDrawOrderReader(rendered: string): RootDrawOrderReader {
+  const animations = new Map<string, Map<number, { time: number; slots: string[] }>>();
+  return (pair, animation, index, time) => {
+    const fail = (detail: string): never => {
+      refuseIfAny([{ code: 'FRAMES_SIDECAR', object: pair.pair + ' in ' + animation + ' frame ' + index,
+        detail: 'body-root resolved draw order unavailable: ' + detail }]);
+      throw new Error('unreachable');
+    };
+    let frames = animations.get(animation);
+    if (frames === undefined) {
+      const problems: Problem[] = [];
+      const sidecar = readJson(join(rendered, 'frames.json'), problems);
+      const set = Array.isArray(sidecar?.sets) ? sidecar.sets.find(v => isRecord(v) && v.animation === animation) : undefined;
+      if (!isRecord(set) || typeof set.dir !== 'string' || isAbsolute(set.dir) || set.dir.split(/[\\/]/).includes('..')) return fail('local animation directory required');
+      const geometry = readJson(join(rendered, set.dir, GEOMETRY_FILE), problems);
+      refuseIfAny(problems);
+      if (geometry?.animation !== animation || !Array.isArray(geometry.frames)) return fail('same-animation geometry required');
+      frames = new Map();
+      for (const value of geometry.frames) {
+        if (!isRecord(value) || !Number.isInteger(value.index) || typeof value.time !== 'number' || !Number.isFinite(value.time) ||
+          !Array.isArray(value.attachments) || value.attachments.some(v => !isRecord(v) || typeof v.slot !== 'string')) return fail('finite frame identity and attachment roster required');
+        const slots = value.attachments.map(v => String((v as Record<string, unknown>).slot));
+        if (new Set(slots).size !== slots.length || frames.has(Number(value.index))) return fail('duplicate frame or slot');
+        frames.set(Number(value.index), { time: value.time, slots });
       }
-      const captured = state.frames.get(hit.index);
-      frameTime = captured?.frame.time ?? null;
-      requireFact(captured !== undefined && captured.frame.time === time, 'raw and geometry frame time differ');
-      if (captured === undefined) throw new CoverageUnavailable(reason);
-      frameTime = captured.frame.time;
-      if (!captured.alphaReplayExact) {
-        const png = readPng(join(rendered, set.dir, 'f' + String(hit.index).padStart(4, '0') + '.png'));
-        const replay = api.renderFrame(captured.frame, pages, viewport, background);
-        requireFact(png.width === replay.width && png.height === replay.height && Buffer.from(png.data).equals(Buffer.from(replay.data)), 'official frame RGBA pixel replay differs');
-        captured.alphaReplayExact = true;
-      }
-      const width = Math.round((hit.box[2] - hit.box[0]) / hit.cell), height = Math.round((hit.box[3] - hit.box[1]) / hit.cell);
-      requireFact(Number.isSafeInteger(width * height) && width > 0 && height > 0 && Number.isFinite(hit.cell) && hit.cell > 0, 'world cell box unavailable');
-      const grid = { minX: hit.box[0], minY: hit.box[1], maxX: hit.box[2], maxY: hit.box[3], width, height, scale: 1 / hit.cell };
-      const composite = api.renderFrame(captured.frame, pages, grid, [0, 0, 0, 0]);
-      alpha = Array.from({ length: width * height }, (_, i) => composite.data[i * 4 + 3]);
-      let worldMagnitude = state.restMagnitude;
-      for (const p of captured.frame.pieces) for (const v of p.world) worldMagnitude = Math.max(worldMagnitude, Math.abs(v));
-      // All drawings' magnitude bounds either pair without selecting an owner.
-      result = rootGapBoxCoverage(hit, alpha, 'world cell box grid unavailable', worldMagnitude);
-    } catch (error) {
-      // No guessed coverage and no absolute paths from an upstream exception.
-      result = rootGapBoxCoverage(hit, null, error instanceof CoverageUnavailable ? error.message : reason);
+      animations.set(animation, frames);
     }
-    const key = createHash('sha256').update(JSON.stringify([pair.pair, animation, hit.index])).digest('hex');
-    const evidence = ROOT_COVERAGE_DIR + '/' + key + '.json';
-    mkdirSync(join(out, ROOT_COVERAGE_DIR), { recursive: true });
-    writeFileSync(join(out, evidence), JSON.stringify({ spec: 'rig-parts-root-gap-box/1', pair: pair.pair, animation,
-      raw_time: typeof time === 'number' && Number.isFinite(time) ? time : null, frame_time: frameTime, raw: hit, ...result, alpha_threshold: ROOT_DRAWN_ALPHA,
-      scope: 'whole world-cell box centres; not an exact GAP-cell mask',
-      grid: { minX: hit.box[0], minY: hit.box[1], maxX: hit.box[2], maxY: hit.box[3], cell: hit.cell, rows: 'top to bottom' },
-      alpha, exact_rgba_replay: alpha !== null, followup: 'rig-c/core#1556' }, null, 1) + '\n');
-    return { ...result, evidence };
+    const frame = frames.get(index);
+    if (frame === undefined || frame.time !== time) return fail('raw and geometry frame time differ');
+    const a = frame.slots.indexOf(pair.a), b = frame.slots.indexOf(pair.b);
+    if (a < 0 || b < 0 || a === b) return fail('both named pair slots required exactly once');
+    return a < b ? 'a' : 'b';
   };
 }
 export interface MotionSeamWorldKind {
@@ -4526,7 +4388,7 @@ export function motionSeamWorlds(physics: boolean, answersWind: boolean, read: (
 /** The same validated sidecars as the warning, retaining the raw gap and ghost cells. */
 export function readMotionSeamWorldRows(dir: string, animations: readonly string[], fps: number, pairs: readonly MotionSeamPair[]): MotionSeamWorldRow[] {
   const rows: MotionSeamWorldRow[] = [];
-  readMotionSeams(dir, animations, fps, pairs, {}, rows);
+  readMotionSeams(dir, animations, fps, pairs.map(({ root: _root, ...pair }) => pair), {}, rows);
   return rows;
 }
 
@@ -4584,8 +4446,8 @@ type SeamHitRead = MotionSeamHit;
  * file that is missing, a file that is not the animation's or not at the rate
  * asked, a pair out of the flag's order, and a field of the wrong shape.
  */
-export function readMotionSeams(dir: string, animations: readonly string[], fps: number, pairs: readonly MotionSeamPair[], plant: MotionSeamPlant = {}, worldRows?: MotionSeamWorldRow[], coverageReader?: RootGapCoverageReader): MotionSeamRow[] {
-  return readSeamRows(dir, animations, fps, pairs, plant, worldRows, false, coverageReader);
+export function readMotionSeams(dir: string, animations: readonly string[], fps: number, pairs: readonly MotionSeamPair[], plant: MotionSeamPlant = {}, worldRows?: MotionSeamWorldRow[], drawOrderReader?: RootDrawOrderReader): MotionSeamRow[] {
+  return readSeamRows(dir, animations, fps, pairs, plant, worldRows, false, drawOrderReader);
 }
 
 /** The same stock seam reader, restricted to one canonical setup-only frame. */
@@ -4610,7 +4472,7 @@ export function readMotionRootSetup(dir: string, fps: number, pairs: readonly Mo
   return rows.map(({ pair, drawn, banded, status }) => ({ pair, drawn, banded, status }));
 }
 
-function readSeamRows(dir: string, animations: readonly string[], fps: number, pairs: readonly MotionSeamPair[], plant: MotionSeamPlant = {}, worldRows?: MotionSeamWorldRow[], setup = false, coverageReader?: RootGapCoverageReader): MotionSeamRow[] {
+function readSeamRows(dir: string, animations: readonly string[], fps: number, pairs: readonly MotionSeamPair[], plant: MotionSeamPlant = {}, worldRows?: MotionSeamWorldRow[], setup = false, drawOrderReader?: RootDrawOrderReader): MotionSeamRow[] {
   const problems: Problem[] = [];
   const bad = (object: string, detail: string): void => {
     problems.push({ code: 'FRAMES_SIDECAR', object, detail });
@@ -4649,10 +4511,8 @@ function readSeamRows(dir: string, animations: readonly string[], fps: number, p
       }
       const over = new Map<number, number>();
       let rootWorst: MotionSeamRow['worst'];
-      let rootGapFrames: number[] = [];
-      let ghostFrames = 0;
-      const coverage: RootGapCoverage[] = [];
-      const exempt = new Set<number>();
+      const rootFrames = new Set<number>();
+      const cells: MotionRootCells[] = [];
       const kinds: Record<'gap' | 'ghost', MotionSeamWorldKind> = { gap: { max_px: 0, worst: null }, ghost: { max_px: 0, worst: null } };
       for (const kind of ['gap', 'ghost'] as const) {
         const k = p[kind];
@@ -4662,22 +4522,72 @@ function readSeamRows(dir: string, animations: readonly string[], fps: number, p
           return;
         }
         const hits = frames as SeamHitRead[];
-        if (kind === 'gap') rootGapFrames = hits.map(h => h.index);
-        else ghostFrames = hits.length;
+
         const worst = hits.reduce<MotionSeamHit | null>((best, h) => best === null || h.px > best.px || (h.px === best.px && h.index < best.index) ? h : best, null);
         kinds[kind] = { max_px: worst?.px ?? 0, worst };
-        // rigc-seam/1 exposes aggregate ghost, not its drawing owner. A drawn
-        // overlap band is not proof of a hole; only GAP gates roots until core#1555.
-        for (const h of hits) if ((want.root === undefined || kind === 'gap') && (plant.noFloor === true || openingOverFloor(h))) {
-          if (want.root !== undefined) {
-            const raw = isRecord(k) && Array.isArray(k.frames) ? k.frames.find(v => isRecord(v) && v.index === h.index) : undefined;
-            const time = isRecord(raw) && typeof raw.time === 'number' ? raw.time : undefined;
-            const proof = coverageReader?.(want, animation, h, time) ?? rootGapBoxCoverage(h, null);
-            coverage.push(proof);
-            if (proof.status === 'exempt') { exempt.add(h.index); continue; }
-          }
+        // Existing internal pairs retain their original maximum-kind warning and floor.
+        for (const h of hits) if (want.root === undefined && (plant.noFloor === true || openingOverFloor(h))) {
           over.set(h.index, Math.max(over.get(h.index) ?? 0, h.px));
-          if (want.root !== undefined && (rootWorst === undefined || h.px > rootWorst.px || (h.px === rootWorst.px && h.index < rootWorst.index))) rootWorst = { ...h, kind: 'gap' };
+        }
+      }
+      if (want.root !== undefined && !setup) {
+        const partitions = new Map<string, SeamHitRead[]>();
+        for (const name of ['gap', 'ghost', 'gapOpen', 'gapCovered', 'ghostA', 'ghostB']) {
+          const value = p[name];
+          const hits = isRecord(value) && Array.isArray(value.frames) ? value.frames.map(hitOf) : null;
+          if (hits === null || hits.some(h => h === null)) { bad(at + ' ' + name, 'requires stock per-frame cell partitions from rig-c >=2.69.0'); return; }
+          if (new Set(hits.map(h => h?.index)).size !== hits.length || hits.some(h => h === null || !Number.isSafeInteger(h.index) || h.index < 0 || !Number.isSafeInteger(h.px) || h.px <= 0 || !Number.isFinite(h.cell) || !h.box.every(Number.isFinite) || h.box[2] <= h.box[0] || h.box[3] <= h.box[1])) {
+            bad(at + ' ' + name, 'requires unique nonnegative frame indices, positive whole counts and finite boxes'); return;
+          }
+          if (!isRecord(value) || !Array.isArray(value.frames) || value.frames.some(v => !isRecord(v) || typeof v.time !== 'number' || !Number.isFinite(v.time) || v.time < 0)) {
+            bad(at + ' ' + name, 'requires the actual finite stock frame time'); return;
+          }
+          partitions.set(name, hits as SeamHitRead[]);
+        }
+        const rawHits = (name: string): SeamHitRead[] => {
+          const value = p[name];
+          return isRecord(value) && Array.isArray(value.frames) ? value.frames.map(hitOf).filter((h): h is SeamHitRead => h !== null) : [];
+        };
+        for (const hits of partitions.values()) for (const h of hits) rootFrames.add(h.index);
+        for (const index of [...rootFrames].sort((a, b) => a - b)) {
+          const hit = (name: string): SeamHitRead | undefined => partitions.get(name)?.find(h => h.index === index);
+          const count = (name: string): number => hit(name)?.px ?? 0;
+          if (count('gapOpen') + count('gapCovered') !== count('gap') || count('ghostA') + count('ghostB') !== count('ghost')) {
+            bad(at + ' frame ' + index, 'gapOpen + gapCovered must equal gap and ghostA + ghostB must equal ghost'); continue;
+          }
+          const raw = [...rawHits('gap'), ...rawHits('ghost')].find(h => h.index === index);
+          const source = ['gap', 'ghost'].flatMap(name => {
+            const value = p[name]; return isRecord(value) && Array.isArray(value.frames) ? value.frames.filter(v => isRecord(v) && v.index === index) : [];
+          })[0];
+          const time = isRecord(source) && typeof source.time === 'number' ? source.time : undefined;
+          const coherent = [...partitions].every(([name, hits]) => {
+            const h = hits.find(h => h.index === index);
+            if (h === undefined) return true;
+            const value = p[name];
+            const record = isRecord(value) && Array.isArray(value.frames) ? value.frames.find(v => isRecord(v) && v.index === index) : undefined;
+            return isRecord(record) && record.time === time && h.cell === raw?.cell;
+          });
+          if (!coherent) { bad(at + ' frame ' + index, 'all raw and partition hits must share the actual frame time and stock cell size'); continue; }
+
+          if (count('ghost') > 0 && drawOrderReader === undefined) { bad(at + ' frame ' + index, 'resolved per-frame draw-order reader required for ghost ownership'); continue; }
+          const under = count('ghost') > 0 ? drawOrderReader?.(want, animation, index, time) ?? null : null;
+          const underHit = under === null ? undefined : hit(under === 'a' ? 'ghostA' : 'ghostB');
+          // Visibility changes the count, not the existing raw kind's floor.
+          // With both kinds contributing, their original raw boxes are united.
+          const counted = count('gapOpen') + (underHit?.px ?? 0);
+          const bounds = [count('gapOpen') > 0 ? hit('gap') : undefined, underHit === undefined ? undefined : hit('ghost')].filter((h): h is SeamHitRead => h !== undefined);
+          const cell = raw?.cell ?? 0;
+          const box: MotionSeamHit['box'] | undefined = bounds.length === 0 ? undefined : [Math.min(...bounds.map(h => h.box[0])), Math.min(...bounds.map(h => h.box[1])), Math.max(...bounds.map(h => h.box[2])), Math.max(...bounds.map(h => h.box[3]))];
+          const floor = box === undefined ? undefined : Math.round(Math.max(box[2] - box[0], box[3] - box[1]) / cell);
+          cells.push({ index, gap: count('gap'), gapOpen: count('gapOpen'), gapCovered: count('gapCovered'), ghostA: count('ghostA'), ghostB: count('ghostB'),
+            under, underGhost: underHit?.px ?? 0, overGhost: count('ghost') - (underHit?.px ?? 0), counted,
+            ...(box === undefined ? {} : { floor, floor_box: box }) });
+          if (box === undefined || raw === undefined) continue;
+          const h = { index, px: counted, cell, box };
+          if (plant.noFloor === true || openingOverFloor(h)) {
+            over.set(index, counted);
+            if (rootWorst === undefined || counted > rootWorst.px || (counted === rootWorst.px && index < rootWorst.index)) rootWorst = { ...h, kind: underHit === undefined ? 'gapOpen' : hit('gapOpen') === undefined ? 'underGhost' : 'gapOpen+underGhost' };
+          }
         }
       }
       worldRows?.push({ pair: want.pair, animation, status: p.status, drawn: p.drawn, banded: p.banded, gap: kinds.gap, ghost: kinds.ghost });
@@ -4691,10 +4601,9 @@ function readSeamRows(dir: string, animations: readonly string[], fps: number, p
         opens,
         px: opens.map((f) => over.get(f) ?? 0),
         max_px: opens.reduce((m, f) => Math.max(m, over.get(f) ?? 0), 0),
-        under_floor: (want.root === undefined ? p.opens : rootGapFrames).filter((f) => !over.has(f) && !exempt.has(f)),
+        under_floor: (want.root === undefined ? p.opens : [...rootFrames].filter(f => cells.some(c => c.index === f && c.counted > 0))).filter((f) => !over.has(f)),
         ...(rootWorst === undefined ? {} : { worst: rootWorst }),
-        ...(coverage.length === 0 ? {} : { coverage }),
-        ...(want.root === undefined ? {} : { ghost_info: { ...kinds.ghost, owner: 'unavailable' as const, frames: ghostFrames } }),
+        ...(want.root === undefined ? {} : { cells }),
       });
     });
   }
@@ -4702,7 +4611,7 @@ function readSeamRows(dir: string, animations: readonly string[], fps: number, p
   return rows;
 }
 
-/** Only active proven root GAP rows fail; mixed ghost is INFO. Existing warnings/floor are unchanged. */
+/** Only active proven roots gate gapOpen plus UNDER-owned ghost; existing warnings/floor are unchanged. */
 export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fps: number, rows: MotionSeamRow[], reason?: string, problems: Problem[] = [], unmeasuredRoots: readonly MotionUnmeasuredRoot[] = []): MotionSeamLine {
   const roots = pairs.filter(p => p.root !== undefined);
   const rootNames = new Set(roots.map(p => p.pair));
@@ -4710,11 +4619,10 @@ export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fp
   const failed = rows.filter(r => rootNames.has(r.pair) && r.status === 'read' && r.banded > 0 && r.opens.length > 0);
   for (const row of failed) {
     const h = row.worst;
-    const proof = row.coverage?.find(p => p.index === h?.index);
     problems.push({ code: 'CHECK_SEAM_OVER_MOTION', object: 'body-root seam "' + row.pair + '" in "' + row.animation + '"',
       detail: h === undefined
         ? 'opens on frames ' + frameRuns(row.opens) + ', max ' + row.max_px + ' cells; no above-floor root hit metadata was returned'
-        : h.kind + ' at frame ' + h.index + ' (t = ' + h.index / fps + 's): ' + h.px + ' cells, cell ' + h.cell + ', world box [' + h.box.join(', ') + ']; at most ' + Math.round(Math.max(h.box[2] - h.box[0], h.box[3] - h.box[1]) / h.cell) + ' cells, the unchanged one-cell floor, is required' + (proof === undefined ? '' : '; ' + proof.status + ': ' + proof.reason + '; entire original GAP count retained') });
+        : h.kind + ' at frame ' + h.index + ' (t = ' + h.index / fps + 's): ' + h.px + ' cells, cell ' + h.cell + ', world box [' + h.box.join(', ') + ']; at most ' + Math.round(Math.max(h.box[2] - h.box[0], h.box[3] - h.box[1]) / h.cell) + ' cells, the unchanged one-cell floor, is required' });
   }
   const missing = roots.flatMap(p => animations.length === 0 ? ['"' + p.pair + '": no animation'] : animations.flatMap(a => {
     const row = rows.find(r => r.pair === p.pair && r.animation === a);
@@ -4724,7 +4632,7 @@ export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fp
   const rootReasons = [...missing, ...unmeasured.map(root => 'root pair for ' + root.limb + ': ' + root.reason)];
   const rootGate: MotionSeamLine['roots'] = roots.length === 0 && unmeasured.length === 0 ? undefined : {
     status: failed.length > 0 ? 'FAIL' : rootReasons.length > 0 || reason !== undefined ? 'SKIP' : 'PASS',
-    mode: 'gap-only', ghost_owner: 'unavailable', ghost_followup: 'rig-c/core#1555',
+    mode: 'gap-open+under-ghost', ghost_owner: 'resolved-draw-order',
     pairs: roots.map(p => p.pair), failed: failed.length,
     ...(rootReasons.length === 0 && reason === undefined ? {} : { reason: unmeasured.length === 0 ? (reason ?? missing.join('; ')) : [reason, ...rootReasons].filter(r => r !== undefined).join('; ') }),
     ...(unmeasured.length === 0 ? {} : { unmeasured }),
@@ -5086,7 +4994,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const keptDir = join(out, STILL_DIR);
   const foldDir = join(out, FOLD_SCRATCH);
   const seamMotionDir = join(out, MOTION_SEAM_SCRATCH);
-  for (const d of [buildDir, idleDir, stillDir, isoDir, loopDir, seamDir, keptDir, join(out, 'setup_still_auto'), foldDir, seamMotionDir, join(out, ROOT_COVERAGE_DIR)]) rmSync(d, { recursive: true, force: true });
+  for (const d of [buildDir, idleDir, stillDir, isoDir, loopDir, seamDir, keptDir, join(out, 'setup_still_auto'), foldDir, seamMotionDir]) rmSync(d, { recursive: true, force: true });
   const written: string[] = [];
   const write = (name: string, data: string): void => {
     writeFileSync(join(out, name), data);
@@ -5494,7 +5402,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         const r = measured(['render', '--candidate', buildDir, '--seam', list, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), ...(hasRoots ? ['--geometry'] : []), '--out', activeDest]);
         if (r.status !== 0) refuseIfAny(rigcFailed(`render --seam ${list} --fps ${fps}`, r, r.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
         const activeWorldRows: MotionSeamWorldRow[] = [];
-        motionSeam = motionSeamLine(pairs, animationNames, fps, readMotionSeams(activeDest, animationNames, fps, read, {}, stripped !== null && env === null ? activeWorldRows : undefined, hasRoots ? motionRootCoverageReader(buildDir, activeDest, out) : undefined), undefined, motionRootProblems, unmeasuredRoots);
+        motionSeam = motionSeamLine(pairs, animationNames, fps, readMotionSeams(activeDest, animationNames, fps, read, {}, stripped !== null && env === null ? activeWorldRows : undefined, hasRoots ? motionRootDrawOrderReader(activeDest) : undefined), undefined, motionRootProblems, unmeasuredRoots);
         if (stripped !== null) {
           const response = environmentResponse(readFileSync(join(buildDir, 'skeleton.json'), 'utf8'));
           motionSeam.worlds = motionSeamWorlds(true, response.wind.length > 0, world => {

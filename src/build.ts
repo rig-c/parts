@@ -1748,7 +1748,7 @@ export function sweepCheckLines(line: SweepLine, steps: ReadonlyMap<string, { le
  */
 export function motionSeamLines(line: MotionSeamLine, plant: MotionSeamPlant = {}): string[] {
   const unmeasured = (line.roots?.unmeasured ?? []).map(root => `root pair for ${root.limb} (${root.part}, bone "${root.bone}", parent "${root.parent}", candidates ${root.candidates.join('/')}): SKIP — ${root.reason}`);
-  const rootStatus = line.roots === undefined ? '' : '; body-root gap-only gate ' + line.roots.status + ' (' + line.roots.pairs.length + ' pair(s)); ghost ownership unavailable' + (line.roots.reason === undefined ? '' : ' — ' + line.roots.reason);
+  const rootStatus = line.roots === undefined ? '' : '; body-root gap-open+under-ghost gate ' + line.roots.status + ' (' + line.roots.pairs.length + ' pair(s)); ghost ownership from resolved draw order' + (line.roots.reason === undefined ? '' : ' — ' + line.roots.reason);
   if (line.worlds === undefined && line.status === 'SKIP' && line.rows.length === 0 && line.pairs.every((p) => p.unread === undefined)) return [`${MOTION_SEAM_LINE}: SKIP — ${String(line.reason)}${unmeasured.length === 0 ? '' : rootStatus}`, ...unmeasured];
   const read = `${line.pairs.length} declared pair(s) in ${line.animations.length} animation(s) (${line.animations.join(', ')}), read by rigc render --seam at ${line.fps} fps on the build as played`;
   const head =
@@ -1761,12 +1761,10 @@ export function motionSeamLines(line: MotionSeamLine, plant: MotionSeamPlant = {
     ...line.pairs.filter((p) => p.unread !== undefined).map((p) => `seam "${p.pair}" (${p.declared.join('; ')}): not read — ${String(p.unread)}`),
     ...line.rows.filter((r) => r.status === 'skip').map((r) => `seam "${r.pair}" in "${r.animation}": SKIP — rigc read no band on any of the ${r.drawn} frame(s) both slots draw, so there is no seam to read`),
     ...(plant.silent === true ? [] : line.rows.filter((r) => r.opens.length > 0).map(r => line.pairs.some(p => p.pair === r.pair && p.root !== undefined)
-      ? `FAIL seam "${r.pair}" opens on ${r.opens.length} frame(s) ${frameRuns(r.opens)} max ${r.max_px} px in "${r.animation}" — body-root GAP over the one-cell floor (gap-only)`
+      ? `FAIL seam "${r.pair}" opens on ${r.opens.length} frame(s) ${frameRuns(r.opens)} max ${r.max_px} px in "${r.animation}" — body-root gapOpen + UNDER-owned ghost over the one-cell floor`
       : motionSeamWarnText(r))),
-    ...line.rows.flatMap(r => (r.coverage ?? []).map(h =>
-      `INFO seam "${r.pair}" in "${r.animation}" frame ${h.index}: root GAP raw ${h.px}; whole-box ${h.status} — ${h.reason}${h.status === 'exempt' ? '; not gated' : '; entire original GAP count retained'}${h.evidence === undefined ? '' : '; evidence: ' + h.evidence}; exact GAP partition deferred to rig-c/core#1556`)),
-    ...line.rows.filter(r => r.ghost_info !== undefined && r.ghost_info.frames > 0).map(r =>
-      `INFO seam "${r.pair}" in "${r.animation}": ghost ${r.ghost_info?.max_px} cells on ${r.ghost_info?.frames} frame(s); owner unavailable in this rigc-seam/1 reading; see rig-c/core#1555; not gated (gap-only)`),
+    ...line.rows.flatMap(r => (r.cells ?? []).map(h =>
+      `INFO seam "${r.pair}" in "${r.animation}" frame ${h.index}: gapOpen ${h.gapOpen}, gapCovered ${h.gapCovered}, ghost ${h.ghostA + h.ghostB}; UNDER ${h.under ?? 'none'} ghost ${h.underGhost}, OVER ghost ${h.overGhost}; counted ${h.counted}`)),
     ...line.rows.filter((r) => r.opens.length === 0 && r.under_floor.length > 0).map((r) => `seam "${r.pair}" in "${r.animation}": under the floor — rigc names ${r.under_floor.length} frame(s) open ${frameRuns(r.under_floor)}, each opening one cell thick`),
     ...(line.worlds === undefined ? [] : (['default', 'still'] as const).flatMap(name => {
       const w = line.worlds?.[name];
