@@ -206,6 +206,7 @@ export function legChainChoice(P: PartSet, spec: { bones: readonly BoneEntry[]; 
       if (!hasSourceBinding && P.recs.some((p) => p.name === part)) sources.add(part);
     };
     for (const [part, mesh] of Object.entries(spec.meshes)) {
+      if ('explicit' in mesh) { if (mesh.explicit.weights.some(row => row.some(w => links.has(w.bone)))) bound(part); continue; }
       if (mesh.segments.some((s) => typeof s === 'string' ? s === entry.chain || links.has(s) : links.has(s[0]))) bound(part);
     }
     for (const [part, bone] of Object.entries(spec.regions ?? {})) if (links.has(regionBone(bone))) bound(part);

@@ -179,6 +179,10 @@ export function configRoles(s: SkeletonSections & { constraints?: readonly Confi
   }
   const bound = new Map<string, string[]>();
   for (const [part, m] of Object.entries(s.meshes)) {
+    if ('explicit' in m) {
+      for (const row of m.explicit.weights) for (const w of row) push(bound, w.bone, `meshes.${part}.explicit.weights`);
+      continue;
+    }
     m.segments.forEach((sp, i) => {
       const at = `meshes.${part}.segments[${i}]`;
       if (typeof sp === 'string') for (const b of chains.get(sp) ?? [sp]) push(bound, b, at);

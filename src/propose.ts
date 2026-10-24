@@ -4908,6 +4908,7 @@ export function lint(
       unknownMeshes.push(mname);
       continue;
     }
+    if ('explicit' in m) continue;
     const mask = dilate(P.alpha(part), 31);
     const names: string[] = [];
     for (const sp of m.segments) {
@@ -4932,7 +4933,7 @@ export function lint(
     return part !== undefined && splitFrom(part.from)[0] === 'head' && splitFrom(part.from)[1] === 'front hair';
   });
   const lockChains = lockMeshes.flatMap(([mname, m]) =>
-    m.segments.flatMap((sp) => {
+    ('explicit' in m ? [] : m.segments).flatMap((sp) => {
       if (typeof sp !== 'string') return [];
       const e = spec.bones.find((b) => 'chain' in b && b.chain === sp);
       return e !== undefined && 'chain' in e && e.parent === 'head' ? [{ mesh: mname, entry: e }] : [];
@@ -5426,6 +5427,10 @@ function lintCoverage(
       const single: string[] = [];
       const partless: string[] = [];
       for (const [mname, m] of Object.entries(spec.meshes)) {
+        if ('explicit' in m) {
+          if (m.explicit.weights.some(row => row.some(w => w.bone === bone))) why.push(`bound by meshes.${mname}.explicit.weights: the segment-origin checks do not read an accepted payload`);
+          continue;
+        }
         m.segments.forEach((sp, i) => {
           const at = `meshes.${mname}.segments[${i}]`;
           if (typeof sp !== 'string') {

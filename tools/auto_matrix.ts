@@ -890,6 +890,7 @@ function regionText(rg: { cx: number; cy: number; r: number; band: number; maxEd
 function weighting(ex: Example, part: string, ox: number, oy: number, basis: { boneOrder: string[]; idle: AmplitudeBasis } = ex): Weighting {
   const m = ex.cfg.meshes[part];
   if (m === undefined) throw new Error(`auto_matrix: ${part} is not a mesh of ${ex.key}`);
+  if ('explicit' in m) throw new Error(`auto_matrix: ${part} of ${ex.key} is an explicit payload, which the distance rule does not generate`);
   if ('influence' in m) throw new Error(`auto_matrix: ${part} of ${ex.key} is an influence mesh, which the distance rule's r does not weight`);
   return { ox, oy, segs: resolveSegments(ex.cfg, m.segments), r: m.r, boneOrder: basis.boneOrder, idle: basis.idle };
 }
