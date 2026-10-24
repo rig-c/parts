@@ -234,6 +234,440 @@
     "pixelHeight": 1216
    }
   },
+  "population": {
+   "basis": "reference-alpha/top-two-of-2x2",
+   "measured_sample_px": 1011712,
+   "pair_count": 40,
+   "pairs": [
+    {
+     "parts": [
+      "hair_side_r",
+      "hair_back"
+     ],
+     "whole_sample_px": 678,
+     "scope_sample_px": 678,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hair_side_l",
+      "hair_back"
+     ],
+     "whole_sample_px": 774,
+     "scope_sample_px": 774,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "legwear",
+      "shoe_gap_r"
+     ],
+     "whole_sample_px": 475,
+     "scope_sample_px": 475,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "legwear",
+      "shoe_gap_l"
+     ],
+     "whole_sample_px": 535,
+     "scope_sample_px": 535,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "shoe_gap_r",
+      "shoes"
+     ],
+     "whole_sample_px": 904,
+     "scope_sample_px": 904,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "shoe_gap_l",
+      "shoes"
+     ],
+     "whole_sample_px": 1649,
+     "scope_sample_px": 1649,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "legwear",
+      "bottomwear"
+     ],
+     "whole_sample_px": 9824,
+     "scope_sample_px": 9824,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hair_side_r",
+      "topwear"
+     ],
+     "whole_sample_px": 119,
+     "scope_sample_px": 119,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hair_side_l",
+      "topwear"
+     ],
+     "whole_sample_px": 27,
+     "scope_sample_px": 27,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hair_back",
+      "topwear"
+     ],
+     "whole_sample_px": 5251,
+     "scope_sample_px": 5251,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "handwear_r",
+      "topwear"
+     ],
+     "whole_sample_px": 21956,
+     "scope_sample_px": 21956,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "handwear_l",
+      "topwear"
+     ],
+     "whole_sample_px": 19883,
+     "scope_sample_px": 19883,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "legwear",
+      "topwear"
+     ],
+     "whole_sample_px": 23,
+     "scope_sample_px": 23,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "bottomwear",
+      "topwear"
+     ],
+     "whole_sample_px": 8201,
+     "scope_sample_px": 8201,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hair_back",
+      "ear_r"
+     ],
+     "whole_sample_px": 48,
+     "scope_sample_px": 48,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hair_back",
+      "ear_l"
+     ],
+     "whole_sample_px": 102,
+     "scope_sample_px": 102,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hair_back",
+      "face"
+     ],
+     "whole_sample_px": 1762,
+     "scope_sample_px": 1762,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "topwear",
+      "face"
+     ],
+     "whole_sample_px": 393,
+     "scope_sample_px": 393,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "ear_r",
+      "face"
+     ],
+     "whole_sample_px": 63,
+     "scope_sample_px": 63,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "ear_l",
+      "face"
+     ],
+     "whole_sample_px": 113,
+     "scope_sample_px": 113,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "topwear",
+      "mouth"
+     ],
+     "whole_sample_px": 6,
+     "scope_sample_px": 6,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "face",
+      "mouth"
+     ],
+     "whole_sample_px": 61,
+     "scope_sample_px": 61,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "face",
+      "eyewhite_r"
+     ],
+     "whole_sample_px": 38,
+     "scope_sample_px": 38,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "face",
+      "eyewhite_l"
+     ],
+     "whole_sample_px": 12,
+     "scope_sample_px": 12,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "eyewhite_r",
+      "iris_r"
+     ],
+     "whole_sample_px": 73,
+     "scope_sample_px": 73,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "face",
+      "lash_r"
+     ],
+     "whole_sample_px": 65,
+     "scope_sample_px": 65,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "eyewhite_r",
+      "lash_r"
+     ],
+     "whole_sample_px": 99,
+     "scope_sample_px": 99,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "iris_r",
+      "lash_r"
+     ],
+     "whole_sample_px": 18,
+     "scope_sample_px": 18,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "eyewhite_l",
+      "iris_l"
+     ],
+     "whole_sample_px": 71,
+     "scope_sample_px": 71,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "face",
+      "lash_l"
+     ],
+     "whole_sample_px": 22,
+     "scope_sample_px": 22,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "eyewhite_l",
+      "lash_l"
+     ],
+     "whole_sample_px": 46,
+     "scope_sample_px": 46,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "iris_l",
+      "lash_l"
+     ],
+     "whole_sample_px": 88,
+     "scope_sample_px": 88,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hair_back",
+      "hair_front"
+     ],
+     "whole_sample_px": 1802,
+     "scope_sample_px": 1802,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "ear_r",
+      "hair_front"
+     ],
+     "whole_sample_px": 84,
+     "scope_sample_px": 84,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "ear_l",
+      "hair_front"
+     ],
+     "whole_sample_px": 30,
+     "scope_sample_px": 30,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "face",
+      "hair_front"
+     ],
+     "whole_sample_px": 3603,
+     "scope_sample_px": 3603,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "eyewhite_r",
+      "hair_front"
+     ],
+     "whole_sample_px": 3,
+     "scope_sample_px": 3,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "iris_r",
+      "hair_front"
+     ],
+     "whole_sample_px": 1,
+     "scope_sample_px": 1,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "lash_r",
+      "hair_front"
+     ],
+     "whole_sample_px": 66,
+     "scope_sample_px": 66,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "lash_l",
+      "hair_front"
+     ],
+     "whole_sample_px": 89,
+     "scope_sample_px": 89,
+     "inherited_sample_px": 0
+    }
+   ],
+   "single_art": [
+    {
+     "part": "hair_side_r",
+     "whole_sample_px": 844,
+     "scope_sample_px": 844,
+     "inherited_sample_px": 0
+    },
+    {
+     "part": "hair_side_l",
+     "whole_sample_px": 214,
+     "scope_sample_px": 214,
+     "inherited_sample_px": 0
+    },
+    {
+     "part": "hair_back",
+     "whole_sample_px": 452,
+     "scope_sample_px": 452,
+     "inherited_sample_px": 0
+    },
+    {
+     "part": "handwear_l",
+     "whole_sample_px": 2753,
+     "scope_sample_px": 2753,
+     "inherited_sample_px": 0
+    },
+    {
+     "part": "legwear",
+     "whole_sample_px": 29284,
+     "scope_sample_px": 29284,
+     "inherited_sample_px": 0
+    },
+    {
+     "part": "shoe_gap_r",
+     "whole_sample_px": 42,
+     "scope_sample_px": 42,
+     "inherited_sample_px": 0
+    },
+    {
+     "part": "shoe_gap_l",
+     "whole_sample_px": 31,
+     "scope_sample_px": 31,
+     "inherited_sample_px": 0
+    },
+    {
+     "part": "shoes",
+     "whole_sample_px": 4579,
+     "scope_sample_px": 4579,
+     "inherited_sample_px": 0
+    },
+    {
+     "part": "bottomwear",
+     "whole_sample_px": 1026,
+     "scope_sample_px": 1026,
+     "inherited_sample_px": 0
+    },
+    {
+     "part": "topwear",
+     "whole_sample_px": 80068,
+     "scope_sample_px": 80068,
+     "inherited_sample_px": 0
+    }
+   ],
+   "no_reference_art": {
+    "whole_sample_px": 813362,
+    "scope_sample_px": 813362,
+    "inherited_sample_px": 0
+   }
+  },
   "whole_pairs": []
  },
  "BREATH_VISIBLE": {

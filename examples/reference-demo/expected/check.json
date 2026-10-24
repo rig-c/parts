@@ -82,6 +82,437 @@
     "pixelHeight": 1216
    }
   },
+  "population": {
+   "basis": "reference-alpha/top-two-of-2x2",
+   "measured_sample_px": 1011712,
+   "pair_count": 43,
+   "pairs": [
+    {
+     "parts": [
+      "hair_back",
+      "earring"
+     ],
+     "whole_sample_px": 804,
+     "scope_sample_px": 804,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hair_back",
+      "neck"
+     ],
+     "whole_sample_px": 2,
+     "scope_sample_px": 2,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hair_back",
+      "bottomwear"
+     ],
+     "whole_sample_px": 28626,
+     "scope_sample_px": 28626,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "legwear",
+      "bottomwear"
+     ],
+     "whole_sample_px": 45591,
+     "scope_sample_px": 45591,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "bottomwear",
+      "shoes"
+     ],
+     "whole_sample_px": 16078,
+     "scope_sample_px": 16078,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hair_back",
+      "topwear"
+     ],
+     "whole_sample_px": 26124,
+     "scope_sample_px": 26124,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "neck",
+      "topwear"
+     ],
+     "whole_sample_px": 1549,
+     "scope_sample_px": 1549,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "bottomwear",
+      "topwear"
+     ],
+     "whole_sample_px": 475,
+     "scope_sample_px": 475,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hair_back",
+      "sleeves"
+     ],
+     "whole_sample_px": 19954,
+     "scope_sample_px": 19954,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "bottomwear",
+      "sleeves"
+     ],
+     "whole_sample_px": 6728,
+     "scope_sample_px": 6728,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "topwear",
+      "sleeves"
+     ],
+     "whole_sample_px": 16623,
+     "scope_sample_px": 16623,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hair_back",
+      "ear_r"
+     ],
+     "whole_sample_px": 20,
+     "scope_sample_px": 20,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "earring",
+      "ear_r"
+     ],
+     "whole_sample_px": 4,
+     "scope_sample_px": 4,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hair_back",
+      "ear_l"
+     ],
+     "whole_sample_px": 7,
+     "scope_sample_px": 7,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "earring",
+      "ear_l"
+     ],
+     "whole_sample_px": 3,
+     "scope_sample_px": 3,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hair_back",
+      "hairpin"
+     ],
+     "whole_sample_px": 3115,
+     "scope_sample_px": 3115,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hair_back",
+      "face"
+     ],
+     "whole_sample_px": 2123,
+     "scope_sample_px": 2123,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "neck",
+      "face"
+     ],
+     "whole_sample_px": 97,
+     "scope_sample_px": 97,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "topwear",
+      "face"
+     ],
+     "whole_sample_px": 329,
+     "scope_sample_px": 329,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "ear_r",
+      "face"
+     ],
+     "whole_sample_px": 49,
+     "scope_sample_px": 49,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "ear_l",
+      "face"
+     ],
+     "whole_sample_px": 144,
+     "scope_sample_px": 144,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "face",
+      "brow_r"
+     ],
+     "whole_sample_px": 52,
+     "scope_sample_px": 52,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "face",
+      "eyewhite_r"
+     ],
+     "whole_sample_px": 25,
+     "scope_sample_px": 25,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "face",
+      "eyewhite_l"
+     ],
+     "whole_sample_px": 42,
+     "scope_sample_px": 42,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "face",
+      "mouth"
+     ],
+     "whole_sample_px": 591,
+     "scope_sample_px": 591,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "eyewhite_l",
+      "iris_l"
+     ],
+     "whole_sample_px": 153,
+     "scope_sample_px": 153,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "face",
+      "lash_l"
+     ],
+     "whole_sample_px": 134,
+     "scope_sample_px": 134,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "eyewhite_l",
+      "lash_l"
+     ],
+     "whole_sample_px": 109,
+     "scope_sample_px": 109,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "iris_l",
+      "lash_l"
+     ],
+     "whole_sample_px": 92,
+     "scope_sample_px": 92,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "eyewhite_r",
+      "iris_r"
+     ],
+     "whole_sample_px": 124,
+     "scope_sample_px": 124,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "face",
+      "lash_r"
+     ],
+     "whole_sample_px": 241,
+     "scope_sample_px": 241,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "eyewhite_r",
+      "lash_r"
+     ],
+     "whole_sample_px": 96,
+     "scope_sample_px": 96,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "iris_r",
+      "lash_r"
+     ],
+     "whole_sample_px": 89,
+     "scope_sample_px": 89,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hair_back",
+      "hair_front"
+     ],
+     "whole_sample_px": 1107,
+     "scope_sample_px": 1107,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "earring",
+      "hair_front"
+     ],
+     "whole_sample_px": 1,
+     "scope_sample_px": 1,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "ear_r",
+      "hair_front"
+     ],
+     "whole_sample_px": 288,
+     "scope_sample_px": 288,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "ear_l",
+      "hair_front"
+     ],
+     "whole_sample_px": 370,
+     "scope_sample_px": 370,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "hairpin",
+      "hair_front"
+     ],
+     "whole_sample_px": 1271,
+     "scope_sample_px": 1271,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "face",
+      "hair_front"
+     ],
+     "whole_sample_px": 6298,
+     "scope_sample_px": 6298,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "brow_l",
+      "hair_front"
+     ],
+     "whole_sample_px": 119,
+     "scope_sample_px": 119,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "brow_r",
+      "hair_front"
+     ],
+     "whole_sample_px": 54,
+     "scope_sample_px": 54,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "lash_l",
+      "hair_front"
+     ],
+     "whole_sample_px": 123,
+     "scope_sample_px": 123,
+     "inherited_sample_px": 0
+    },
+    {
+     "parts": [
+      "lash_r",
+      "hair_front"
+     ],
+     "whole_sample_px": 28,
+     "scope_sample_px": 28,
+     "inherited_sample_px": 0
+    }
+   ],
+   "single_art": [
+    {
+     "part": "hair_back",
+     "whole_sample_px": 116048,
+     "scope_sample_px": 116048,
+     "inherited_sample_px": 0
+    },
+    {
+     "part": "earring",
+     "whole_sample_px": 43,
+     "scope_sample_px": 43,
+     "inherited_sample_px": 0
+    },
+    {
+     "part": "bottomwear",
+     "whole_sample_px": 252106,
+     "scope_sample_px": 252106,
+     "inherited_sample_px": 0
+    },
+    {
+     "part": "shoes",
+     "whole_sample_px": 997,
+     "scope_sample_px": 997,
+     "inherited_sample_px": 0
+    },
+    {
+     "part": "hairpin",
+     "whole_sample_px": 7666,
+     "scope_sample_px": 7666,
+     "inherited_sample_px": 0
+    }
+   ],
+   "no_reference_art": {
+    "whole_sample_px": 455000,
+    "scope_sample_px": 455000,
+    "inherited_sample_px": 0
+   }
+  },
   "whole_pairs": []
  },
  "BREATH_VISIBLE": {

@@ -236,6 +236,22 @@ An unavailable, nonfinite, unrepresentable or oversized union, or nonempty offic
 canonical frames in `setup_still/` and fitted diagnostics in `setup_still_auto/`.
 There is one extra seam render per checked state and no extra compile/gate.
 
+Issue #716 adds `seam_scope.population` on a measured base or checked set,
+without changing that metric or its consumers. Before RGB error is read, each
+included comparison sample is attributed by the existing alpha-above0,
+top-two-of-2x2 reference rule. `basis` names that rule; `pair_count` and `pairs`
+name only genuine observed two-part footprints in source draw order.
+`single_art` and `no_reference_art` remain separate buckets. Each row's
+`whole_sample_px` equals `scope_sample_px + inherited_sample_px`; base scope
+equals whole, and a set uses the unchanged semantic effect mask. The sum of
+whole buckets equals `measured_sample_px`, not the mean denominator A. Scenes
+retain their existing exclusions. A zero-error comparison can have named pair
+support; no genuine pair is explicit, while an unmeasured seam retains SKIP
+and no population. This is reference support, not joint or physical-gap
+measurement. Existing sparse error rows, boxes, pictures, flags, thresholds,
+verdicts, gates and CLI consumer counts are unchanged; no zero-error picture is
+created and no new bar or refusal is added.
+
 
 Skeleton alternate registration accepts an optional `anchor` mapping of one or
 two body-18 keypoints to declared base-bone origins (issue #543). One pair holds
