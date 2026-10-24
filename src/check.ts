@@ -2154,12 +2154,43 @@ export const STRESS_LINE = 'STRESS_OFF_CHAIN';
 export const BARS = ['gate', 'loop', 'seam', ...JUDGEMENT_LINES] as const;
 
 /**
+ * `SEAM_OVER_MOTION` (issue #493): every declared neighbour pair read in every
+ * animation `motion.json` holds, the idle included, by rig-c's seam reading
+ * (`rigc render --seam`, rig-c 2.60.0). Existing internal-joint and explicit-seam pairs remain **warnings, never bars**. Proven body-root pairs are the exception (issue #686): an active-reading tear fails a counted bar. The
+ * owner's ruling (2026-10-18): a seam opening in motion may be intentional, so
+ * the line names the pair, the animation, the frames and the cells, and moves
+ * neither the exit status nor `check: PASS` for those existing pairs; the summary counts their warnings apart from the bars.
+ *
+ * The pairs are the ones the inputs declare and nothing else: each limb's
+ * consecutive segments in `parts.json` (`config.limbs`, the upper and the
+ * segment below each joint) and, under `--requirements`, each `seam`
+ * requirement's part and neighbour, then proven body-to-segment-zero pairs resolved from hierarchy, slots and provenance. None declared, the line is a SKIP naming
+ * why, never a pass, and `check.json` carries no key for it.
+ *
+ * **The floor** ({@link openingOverFloor}): a frame's gap or ghost is reported
+ * when it holds more cells than its box is long — when it is thicker than one
+ * cell. rigc counts a cell drawn when the renderer paints its centre at half
+ * opacity or more, so a boundary that moves by less than a cell flips the
+ * cells along it in or out: a line of cells one deep, scattered or joined,
+ * holds at most as many cells as its box's longer side. A hole of any area
+ * holds more. The rule types no number; it is read off rigc's own cell and
+ * box, and measured, not chosen: on `examples/wind`'s idle rigc names 43
+ * openings over its six limb pairs (28 and 15 frames of the two elbows, 1 to
+ * 5 cells, boxes up to 17 cells long) and every one is one cell thick; on
+ * rig-c's `gallery/walk` its 13 joint cracks of 1 to 3 cells are too; the
+ * ghost rig-c's own reading names on a skirt swung clear of a leg (1564 cells
+ * in a box 92 long) is far over it.
+ */
+export const MOTION_SEAM_LINE = 'SEAM_OVER_MOTION';
+
+/**
  * The bars a character's own check may have failed and `compose --accept`
  * still take (issue #203): every bar of {@link BARS} but the gate, which is
  * rig-c's and never accepted, {@link FOLD_LINE} (issue #320) and
- * {@link STRESS_LINE} (issue #347).
+ * {@link STRESS_LINE} (issue #347), and the failing body-root bar of
+ * {@link MOTION_SEAM_LINE} (issue #686).
  */
-export const ACCEPTABLE_BARS: readonly string[] = [...BARS.filter((b) => b !== 'gate'), FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE];
+export const ACCEPTABLE_BARS: readonly string[] = [...BARS.filter((b) => b !== 'gate'), FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE];
 
 /**
  * The bars a `check.json`, as `check` writes it, says were not met, in
@@ -3517,35 +3548,7 @@ export function sweepLine(
 // the seam over every animation (issue #493; the line is {@link MOTION_SEAM_LINE}'s)
 // ---------------------------------------------------------------------------
 
-/**
- * `SEAM_OVER_MOTION` (issue #493): every declared neighbour pair read in every
- * animation `motion.json` holds, the idle included, by rig-c's seam reading
- * (`rigc render --seam`, rig-c 2.60.0). Existing internal-joint and explicit-seam pairs remain **warnings, never bars**. Proven body-root pairs are the exception (issue #686): an active-reading tear fails a counted bar. The
- * owner's ruling (2026-10-18): a seam opening in motion may be intentional, so
- * the line names the pair, the animation, the frames and the cells, and moves
- * neither the exit status nor `check: PASS` for those existing pairs; the summary counts their warnings apart from the bars.
- *
- * The pairs are the ones the inputs declare and nothing else: each limb's
- * consecutive segments in `parts.json` (`config.limbs`, the upper and the
- * segment below each joint) and, under `--requirements`, each `seam`
- * requirement's part and neighbour, then proven body-to-segment-zero pairs resolved from hierarchy, slots and provenance. None declared, the line is a SKIP naming
- * why, never a pass, and `check.json` carries no key for it.
- *
- * **The floor** ({@link openingOverFloor}): a frame's gap or ghost is reported
- * when it holds more cells than its box is long — when it is thicker than one
- * cell. rigc counts a cell drawn when the renderer paints its centre at half
- * opacity or more, so a boundary that moves by less than a cell flips the
- * cells along it in or out: a line of cells one deep, scattered or joined,
- * holds at most as many cells as its box's longer side. A hole of any area
- * holds more. The rule types no number; it is read off rigc's own cell and
- * box, and measured, not chosen: on `examples/wind`'s idle rigc names 43
- * openings over its six limb pairs (28 and 15 frames of the two elbows, 1 to
- * 5 cells, boxes up to 17 cells long) and every one is one cell thick; on
- * rig-c's `gallery/walk` its 13 joint cracks of 1 to 3 cells are too; the
- * ghost rig-c's own reading names on a skirt swung clear of a leg (1564 cells
- * in a box 92 long) is far over it.
- */
-export const MOTION_SEAM_LINE = 'SEAM_OVER_MOTION';
+
 
 /** The seam reading's scratch build and renders, under `--out`; removed before the stage returns. */
 const MOTION_SEAM_SCRATCH = '_seam_motion';

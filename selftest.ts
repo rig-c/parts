@@ -39484,6 +39484,57 @@ function runSceneSuite(): number {
       "issue #203: never invent a value — a misspelt bar, a problem code in place of the bar's name, or the gate would otherwise accept nothing, or everything, silently; the names are check's own BARS list less the gate",
     );
 
+    // The source check is planted, as in SC39-42; compose still gates and checks the actual composed rig.
+    // A 10x6 root GAP is 60 cells, above its longer-side floor10. No new seam rendering is claimed here.
+    const rootLine = motionSeamLine([{
+      pair: 'coat|upperarm_r', a: 'coat', b: 'upperarm_r', declared: ['body root arm_r'],
+      root: { limb: 'arm_r', bone: 'arm_r0', parent: 'chest' },
+    }], ['idle'], 12, [{ pair: 'coat|upperarm_r', animation: 'idle', status: 'read', drawn: 13, banded: 13,
+      opens: [12], px: [60], max_px: 60, under_floor: [],
+      worst: { kind: 'gap', index: 12, px: 60, cell: 1, box: [37, 4, 47, 10] },
+    }]);
+    const rootFields = { [MOTION_SEAM_LINE]: rootLine };
+    writeSceneBuild(join(dir, 'root-red'), 'plain', redOn(rootFields));
+    writeSceneBuild(join(dir, 'root-gate-red'), 'plain', redOn(rootFields, false));
+    writeSceneBuild(join(dir, 'root-ungated'), 'plain', {
+      ...redOn(rootFields), rig: r => ((r.slots as Array<Record<string, unknown>>)[0].attachment = 'ghost'),
+    });
+    const rootSource = join(dir, 'root-red', 'check', 'check.json');
+    const rootBefore = readFileSync(rootSource, 'utf8');
+    const rootOut = join(dir, 'composed-root-accepted');
+    const rootAccepted = runCli(['compose', '--scene', scene(withPlain('root-red')), '--out', rootOut, '--accept', MOTION_SEAM_LINE]);
+    const rootBareOut = join(dir, 'composed-root-refused');
+    const rootBare = runCli(['compose', '--scene', scene(withPlain('root-red')), '--out', rootBareOut]);
+    const rootGateOut = join(dir, 'composed-root-gate-red');
+    const rootGate = runCli(['compose', '--scene', scene(withPlain('root-gate-red')), '--out', rootGateOut, '--accept', MOTION_SEAM_LINE]);
+    const rootGateNameOut = join(dir, 'composed-root-gate-name');
+    const rootGateName = runCli(['compose', '--scene', scene(withPlain('root-red')), '--out', rootGateNameOut, '--accept', MOTION_SEAM_LINE + ',gate']);
+    const rootUngatedOut = join(dir, 'composed-root-ungated');
+    const rootUngated = runCli(['compose', '--scene', scene(withPlain('root-ungated')), '--out', rootUngatedOut, '--accept', MOTION_SEAM_LINE]);
+    const rootReport = readJsonFile(join(rootOut, SCENE_REPORT_FILE));
+    const rootAcceptedRow = (rootReport?.characters as Array<Record<string, unknown>> | undefined)?.find(c => c.id === 'plain');
+    const rootComposedCheck = readJsonFile(join(rootOut, 'check', 'check.json'));
+    say(
+      'SC46_ROOT_SEAM_FAIL_CAN_BE_PREVIEWED_BY_NAME_BUT_NEVER_GREEN_OR_WITHOUT_RIGC_GATE',
+      rootLine.roots?.status === 'FAIL' &&
+        rootAccepted.status === 1 && rootAccepted.out.includes('FAILED SEAM_OVER_MOTION, accepted') &&
+        rootAccepted.out.includes('not green, whatever the composed check reads') &&
+        /^\[compose\]   rigc build --profile rig-play --pack\b[^\n]*: exit 0$/m.test(rootAccepted.out) &&
+        JSON.stringify(rootAcceptedRow?.accepted) === JSON.stringify([MOTION_SEAM_LINE]) && rootComposedCheck?.PASS === true &&
+        readFileSync(rootSource, 'utf8') === rootBefore && readJsonFile(rootSource)?.PASS === false &&
+        barsNotMet(readJsonFile(rootSource) ?? {}).join(',') === MOTION_SEAM_LINE &&
+        rootBare.status === 1 && composeFail(rootBare.out, 'SCENE_BUILD_GREEN') !== null && !existsSync(join(rootBareOut, 'rig')) &&
+        rootGate.status === 1 && (composeFail(rootGate.out, 'SCENE_BUILD_GREEN') ?? '').includes('gate is not accepted (the gate never is)') && !existsSync(join(rootGateOut, 'rig')) &&
+        rootGateName.status === 1 && (composeFail(rootGateName.out, 'SCENE_ACCEPT_KNOWN') ?? '').includes('rig-c\'s gate, which is never accepted') && !existsSync(join(rootGateNameOut, 'rig')) &&
+        rootUngated.status === 1 && composeFail(rootUngated.out, 'COMPOSE_RIGC_GREEN') !== null && !existsSync(join(rootUngatedOut, 'rig')) && !existsSync(join(rootUngatedOut, SCENE_REPORT_FILE)),
+      JSON.stringify({ accepted: { exit: rootAccepted.status, row: rootAcceptedRow?.accepted, composedPASS: rootComposedCheck?.PASS, output: rootAccepted.out },
+        sourceUnchanged: readFileSync(rootSource, 'utf8') === rootBefore, withoutAccept: { exit: rootBare.status, refusal: composeFail(rootBare.out, 'SCENE_BUILD_GREEN') },
+        sourceGate: { exit: rootGate.status, refusal: composeFail(rootGate.out, 'SCENE_BUILD_GREEN') },
+        gateName: { exit: rootGateName.status, refusal: composeFail(rootGateName.out, 'SCENE_ACCEPT_KNOWN') },
+        actualGate: { exit: rootUngated.status, refusal: composeFail(rootUngated.out, 'COMPOSE_RIGC_GREEN') } }),
+      'issue #686: the documented compose --accept SEAM_OVER_MOTION path previews a root FAIL, preserves its source check and records acceptance; even a green composed check exits1. Neither a failed source gate, accepting gate by name, nor an actual composed rig-c gate refusal can emit a preview rig.',
+    );
+
     // ---- stops on composed characters (issue #431) -------------------------
     {
       const stopPhys = [
