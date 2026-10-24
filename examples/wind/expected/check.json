@@ -629,6 +629,58 @@
     "declared": [
      "config.limbs.arm_r segment 1, joint \"elbow\""
     ]
+   },
+   {
+    "pair": "bottomwear|thigh_r",
+    "a": "bottomwear",
+    "b": "thigh_r",
+    "declared": [
+     "config.limbs.leg_r segment 0, body carrier \"hip\" from full:bottomwear"
+    ],
+    "root": {
+     "limb": "leg_r",
+     "bone": "leg_r0",
+     "parent": "hip"
+    }
+   },
+   {
+    "pair": "bottomwear|thigh_l",
+    "a": "bottomwear",
+    "b": "thigh_l",
+    "declared": [
+     "config.limbs.leg_l segment 0, body carrier \"hip\" from full:bottomwear"
+    ],
+    "root": {
+     "limb": "leg_l",
+     "bone": "leg_l0",
+     "parent": "hip"
+    }
+   },
+   {
+    "pair": "topwear|upperarm_l",
+    "a": "topwear",
+    "b": "upperarm_l",
+    "declared": [
+     "config.limbs.arm_l segment 0, body carrier \"chest\" from full:topwear"
+    ],
+    "root": {
+     "limb": "arm_l",
+     "bone": "sleeve_l0",
+     "parent": "chest"
+    }
+   },
+   {
+    "pair": "topwear|upperarm_r",
+    "a": "topwear",
+    "b": "upperarm_r",
+    "declared": [
+     "config.limbs.arm_r segment 0, body carrier \"chest\" from full:topwear"
+    ],
+    "root": {
+     "limb": "arm_r",
+     "bone": "sleeve_r0",
+     "parent": "chest"
+    }
    }
   ],
   "animations": [
@@ -746,8 +798,194 @@
      39,
      40
     ]
+   },
+   {
+    "pair": "bottomwear|thigh_r",
+    "animation": "idle",
+    "status": "read",
+    "drawn": 41,
+    "banded": 41,
+    "opens": [],
+    "px": [],
+    "max_px": 0,
+    "under_floor": [
+     7,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31,
+     32,
+     33,
+     34,
+     35,
+     36,
+     37,
+     38,
+     39,
+     40
+    ],
+    "ghost_info": {
+     "max_px": 71,
+     "worst": {
+      "index": 5,
+      "px": 71,
+      "cell": 1.0000002143960982,
+      "box": [
+       -116.00002486994737,
+       420.00009004636127,
+       -25.000005359902445,
+       576.0001234921526
+      ]
+     },
+     "owner": "unavailable",
+     "frames": 39
+    }
+   },
+   {
+    "pair": "bottomwear|thigh_l",
+    "animation": "idle",
+    "status": "read",
+    "drawn": 41,
+    "banded": 41,
+    "opens": [],
+    "px": [],
+    "max_px": 0,
+    "under_floor": [
+     8,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31,
+     32,
+     33,
+     34,
+     35,
+     36,
+     37,
+     38,
+     39,
+     40
+    ],
+    "ghost_info": {
+     "max_px": 331,
+     "worst": {
+      "index": 21,
+      "px": 331,
+      "cell": 1.0000003222791094,
+      "box": [
+       92.00002964967808,
+       415.0001337458304,
+       113.00003641753938,
+       434.00013986913353
+      ]
+     },
+     "owner": "unavailable",
+     "frames": 39
+    }
+   },
+   {
+    "pair": "topwear|upperarm_l",
+    "animation": "idle",
+    "status": "read",
+    "drawn": 41,
+    "banded": 41,
+    "opens": [],
+    "px": [],
+    "max_px": 0,
+    "under_floor": [],
+    "ghost_info": {
+     "max_px": 1,
+     "worst": {
+      "index": 2,
+      "px": 1,
+      "cell": 1.000000054446045,
+      "box": [
+       80.00000435568361,
+       961.0000523226493,
+       81.00000441012966,
+       962.0000523770952
+      ]
+     },
+     "owner": "unavailable",
+     "frames": 2
+    }
+   },
+   {
+    "pair": "topwear|upperarm_r",
+    "animation": "idle",
+    "status": "read",
+    "drawn": 41,
+    "banded": 41,
+    "opens": [],
+    "px": [],
+    "max_px": 0,
+    "under_floor": [],
+    "ghost_info": {
+     "max_px": 1,
+     "worst": {
+      "index": 27,
+      "px": 1,
+      "cell": 0.9999999303603231,
+      "box": [
+       -82.99999421990682,
+       954.9999334941086,
+       -81.99999428954649,
+       955.9999334244688
+      ]
+     },
+     "owner": "unavailable",
+     "frames": 2
+    }
    }
   ],
+  "roots": {
+   "status": "PASS",
+   "mode": "gap-only",
+   "ghost_owner": "unavailable",
+   "ghost_followup": "rig-c/core#1555",
+   "pairs": [
+    "bottomwear|thigh_r",
+    "bottomwear|thigh_l",
+    "topwear|upperarm_l",
+    "topwear|upperarm_r"
+   ],
+   "failed": 0
+  },
   "worlds": {
    "default": {
     "wind": [
@@ -866,6 +1104,126 @@
          813.9999847346924,
          -163.9999969244343,
          828.9999844533905
+        ]
+       }
+      }
+     },
+     {
+      "pair": "bottomwear|thigh_r",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 2,
+       "worst": {
+        "index": 7,
+        "px": 2,
+        "cell": 1.0000002143960982,
+        "box": [
+         -29.000006217486828,
+         421.00009026075736,
+         -27.000005788694637,
+         422.00009047515346
+        ]
+       }
+      },
+      "ghost": {
+       "max_px": 71,
+       "worst": {
+        "index": 5,
+        "px": 71,
+        "cell": 1.0000002143960982,
+        "box": [
+         -116.00002486994737,
+         420.00009004636127,
+         -25.000005359902445,
+         576.0001234921526
+        ]
+       }
+      }
+     },
+     {
+      "pair": "bottomwear|thigh_l",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 3,
+       "worst": {
+        "index": 15,
+        "px": 3,
+        "cell": 1.0000003222791094,
+        "box": [
+         92.00002964967808,
+         416.0001340681095,
+         95.0000306165154,
+         417.0001343903886
+        ]
+       }
+      },
+      "ghost": {
+       "max_px": 331,
+       "worst": {
+        "index": 21,
+        "px": 331,
+        "cell": 1.0000003222791094,
+        "box": [
+         92.00002964967808,
+         415.0001337458304,
+         113.00003641753938,
+         434.00013986913353
+        ]
+       }
+      }
+     },
+     {
+      "pair": "topwear|upperarm_l",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 1,
+       "worst": {
+        "index": 2,
+        "px": 1,
+        "cell": 1.000000054446045,
+        "box": [
+         80.00000435568361,
+         961.0000523226493,
+         81.00000441012966,
+         962.0000523770952
+        ]
+       }
+      }
+     },
+     {
+      "pair": "topwear|upperarm_r",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 1,
+       "worst": {
+        "index": 27,
+        "px": 1,
+        "cell": 0.9999999303603231,
+        "box": [
+         -82.99999421990682,
+         954.9999334941086,
+         -81.99999428954649,
+         955.9999334244688
         ]
        }
       }
@@ -990,6 +1348,106 @@
          813.9999847346924,
          -163.9999969244343,
          828.9999844533905
+        ]
+       }
+      }
+     },
+     {
+      "pair": "bottomwear|thigh_r",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 178,
+       "worst": {
+        "index": 6,
+        "px": 178,
+        "cell": 1.0000002143960982,
+        "box": [
+         -116.00002486994737,
+         417.000089403173,
+         -97.00002079642152,
+         576.0001234921526
+        ]
+       }
+      }
+     },
+     {
+      "pair": "bottomwear|thigh_l",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 134,
+       "worst": {
+        "index": 16,
+        "px": 134,
+        "cell": 1.0000003222791094,
+        "box": [
+         92.00002964967808,
+         418.0001347126678,
+         103.00003319474831,
+         434.00013986913353
+        ]
+       }
+      }
+     },
+     {
+      "pair": "topwear|upperarm_l",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 1,
+       "worst": {
+        "index": 2,
+        "px": 1,
+        "cell": 1.000000054446045,
+        "box": [
+         80.00000435568361,
+         961.0000523226493,
+         81.00000441012966,
+         962.0000523770952
+        ]
+       }
+      }
+     },
+     {
+      "pair": "topwear|upperarm_r",
+      "animation": "idle",
+      "status": "read",
+      "drawn": 41,
+      "banded": 41,
+      "gap": {
+       "max_px": 0,
+       "worst": null
+      },
+      "ghost": {
+       "max_px": 1,
+       "worst": {
+        "index": 27,
+        "px": 1,
+        "cell": 0.9999999303603231,
+        "box": [
+         -82.99999421990682,
+         954.9999334941086,
+         -81.99999428954649,
+         955.9999334244688
         ]
        }
       }

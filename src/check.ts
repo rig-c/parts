@@ -78,6 +78,8 @@
  * `TIME_SLACK`, issue #244).
  */
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
+import type { Frame as RootCoverageFrame, Piece as RootCoveragePiece, Viewport as RootCoverageViewport } from 'rig-c/render';
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig } from './assemble.ts';
@@ -2152,12 +2154,43 @@ export const STRESS_LINE = 'STRESS_OFF_CHAIN';
 export const BARS = ['gate', 'loop', 'seam', ...JUDGEMENT_LINES] as const;
 
 /**
+ * `SEAM_OVER_MOTION` (issue #493): every declared neighbour pair read in every
+ * animation `motion.json` holds, the idle included, by rig-c's seam reading
+ * (`rigc render --seam`, rig-c 2.60.0). Existing internal-joint and explicit-seam pairs remain **warnings, never bars**. Proven body-root pairs are the exception (issue #686): an active-reading tear fails a counted bar. The
+ * owner's ruling (2026-10-18): a seam opening in motion may be intentional, so
+ * the line names the pair, the animation, the frames and the cells, and moves
+ * neither the exit status nor `check: PASS` for those existing pairs; the summary counts their warnings apart from the bars.
+ *
+ * The pairs are the ones the inputs declare and nothing else: each limb's
+ * consecutive segments in `parts.json` (`config.limbs`, the upper and the
+ * segment below each joint) and, under `--requirements`, each `seam`
+ * requirement's part and neighbour, then proven body-to-segment-zero pairs resolved from hierarchy, slots and provenance. None declared, the line is a SKIP naming
+ * why, never a pass, and `check.json` carries no key for it.
+ *
+ * **The floor** ({@link openingOverFloor}): a frame's gap or ghost is reported
+ * when it holds more cells than its box is long — when it is thicker than one
+ * cell. rigc counts a cell drawn when the renderer paints its centre at half
+ * opacity or more, so a boundary that moves by less than a cell flips the
+ * cells along it in or out: a line of cells one deep, scattered or joined,
+ * holds at most as many cells as its box's longer side. A hole of any area
+ * holds more. The rule types no number; it is read off rigc's own cell and
+ * box, and measured, not chosen: on `examples/wind`'s idle rigc names 43
+ * openings over its six limb pairs (28 and 15 frames of the two elbows, 1 to
+ * 5 cells, boxes up to 17 cells long) and every one is one cell thick; on
+ * rig-c's `gallery/walk` its 13 joint cracks of 1 to 3 cells are too; the
+ * ghost rig-c's own reading names on a skirt swung clear of a leg (1564 cells
+ * in a box 92 long) is far over it.
+ */
+export const MOTION_SEAM_LINE = 'SEAM_OVER_MOTION';
+
+/**
  * The bars a character's own check may have failed and `compose --accept`
  * still take (issue #203): every bar of {@link BARS} but the gate, which is
  * rig-c's and never accepted, {@link FOLD_LINE} (issue #320) and
- * {@link STRESS_LINE} (issue #347).
+ * {@link STRESS_LINE} (issue #347), and the failing body-root bar of
+ * {@link MOTION_SEAM_LINE} (issue #686).
  */
-export const ACCEPTABLE_BARS: readonly string[] = [...BARS.filter((b) => b !== 'gate'), FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE];
+export const ACCEPTABLE_BARS: readonly string[] = [...BARS.filter((b) => b !== 'gate'), FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE];
 
 /**
  * The bars a `check.json`, as `check` writes it, says were not met, in
@@ -2184,6 +2217,8 @@ export function barsNotMet(fig: Readonly<Record<string, unknown>>): string[] {
     const l = fig[n];
     if (typeof l === 'object' && l !== null && (l as { status?: unknown }).status === 'FAIL') out.push(n);
   }
+  const motion = fig[MOTION_SEAM_LINE];
+  if (isRecord(motion) && isRecord(motion.roots) && motion.roots.status === 'FAIL') out.push(MOTION_SEAM_LINE);
   return out;
 }
 
@@ -2248,7 +2283,7 @@ export function barsSummary(r: Pick<CheckReport, 'bars'>): string {
 
 /** The summary's warning clause: each warning line that read something, named, with the warnings they printed together; empty when none read. */
 export function warningsClause(r: Pick<CheckReport, 'motionSeam' | 'cloth'>): string {
-  const read = [...(r.motionSeam.status === 'SKIP' ? [] : [{ name: MOTION_SEAM_LINE, n: r.motionSeam.warnings }]), ...(r.cloth.status === 'SKIP' ? [] : [{ name: CLOTH_LINE, n: r.cloth.warnings }])];
+  const read = [...(r.motionSeam.status === 'SKIP' || (r.motionSeam.roots !== undefined && r.motionSeam.pairs.every(p => p.root !== undefined)) ? [] : [{ name: MOTION_SEAM_LINE, n: r.motionSeam.warnings }]), ...(r.cloth.status === 'SKIP' ? [] : [{ name: CLOTH_LINE, n: r.cloth.warnings }])];
   if (read.length === 0) return '';
   return `; ${read.reduce((a, x) => a + x.n, 0)} warning(s) (${read.map((x) => x.name).join(', ')}, not a bar)`;
 }
@@ -3513,36 +3548,7 @@ export function sweepLine(
 // the seam over every animation (issue #493; the line is {@link MOTION_SEAM_LINE}'s)
 // ---------------------------------------------------------------------------
 
-/**
- * `SEAM_OVER_MOTION` (issue #493): every declared neighbour pair read in every
- * animation `motion.json` holds, the idle included, by rig-c's seam reading
- * (`rigc render --seam`, rig-c 2.60.0) — a **warning, never a bar**. The
- * owner's ruling (2026-10-18): a seam opening in motion may be intentional, so
- * the line names the pair, the animation, the frames and the cells, and moves
- * neither the exit status nor `check: PASS`; the summary counts it apart from
- * the bars.
- *
- * The pairs are the ones the inputs declare and nothing else: each limb's
- * consecutive segments in `parts.json` (`config.limbs`, the upper and the
- * segment below each joint) and, under `--requirements`, each `seam`
- * requirement's part and neighbour. None declared, the line is a SKIP naming
- * why, never a pass, and `check.json` carries no key for it.
- *
- * **The floor** ({@link openingOverFloor}): a frame's gap or ghost is reported
- * when it holds more cells than its box is long — when it is thicker than one
- * cell. rigc counts a cell drawn when the renderer paints its centre at half
- * opacity or more, so a boundary that moves by less than a cell flips the
- * cells along it in or out: a line of cells one deep, scattered or joined,
- * holds at most as many cells as its box's longer side. A hole of any area
- * holds more. The rule types no number; it is read off rigc's own cell and
- * box, and measured, not chosen: on `examples/wind`'s idle rigc names 43
- * openings over its six limb pairs (28 and 15 frames of the two elbows, 1 to
- * 5 cells, boxes up to 17 cells long) and every one is one cell thick; on
- * rig-c's `gallery/walk` its 13 joint cracks of 1 to 3 cells are too; the
- * ghost rig-c's own reading names on a skirt swung clear of a leg (1564 cells
- * in a box 92 long) is far over it.
- */
-export const MOTION_SEAM_LINE = 'SEAM_OVER_MOTION';
+
 
 /** The seam reading's scratch build and renders, under `--out`; removed before the stage returns. */
 const MOTION_SEAM_SCRATCH = '_seam_motion';
@@ -3564,6 +3570,31 @@ export interface MotionSeamPair {
   declared: string[];
   /** Why the pair is not read: a slot `rig.json` does not have. */
   unread?: string;
+  /** Issue #686: segment-zero provenance and its immediate named body carrier. */
+  root?: { limb: string; bone: string; parent: string };
+}
+
+/** Stock setup-only seam rows: banded > 0, not distance or mesh influence, proves alpha overlap. */
+export interface MotionRootSetupRow {
+  pair: string;
+  drawn: number;
+  banded: number;
+  status: 'read' | 'skip';
+}
+
+/** Eligible, readable setup drawings with no overlap band: not a measured root. */
+export interface MotionUnmeasuredRoot {
+  limb: string;
+  bone: string;
+  parent: string;
+  part: string;
+  candidates: string[];
+  reason: string;
+}
+
+export interface MotionSeamSelection {
+  pairs: MotionSeamPair[];
+  unmeasuredRoots: MotionUnmeasuredRoot[];
 }
 
 /** One pair in one animation, as the floor reads rigc's file. */
@@ -3577,37 +3608,51 @@ export interface MotionSeamRow {
   banded: number;
   /** The frames over the floor, ascending: the warning's frames. */
   opens: number[];
-  /** Beside `opens`, frame by frame: the most cells of either kind on that frame. */
+  /** Beside `opens`: GAP only on roots; the legacy maximum of both kinds elsewhere. */
   px: number[];
-  /** The most cells of either kind on any frame over the floor; 0 when none is. */
+  /** Maximum gated/warned count over the floor; root ghost is separate INFO. */
   max_px: number;
   /** The frames rigc names open whose every opening is one cell thick: under the floor, not reported. */
   under_floor: number[];
+  /** New roots only: the worst above-floor hit, retaining rigc's cell and world box. */
+  worst?: MotionSeamHit & { kind: 'gap' | 'ghost' };
+  /** Roots only: preserve mixed ghost without inferring an owner from rigc-seam/1. */
+  ghost_info?: MotionSeamWorldKind & { owner: 'unavailable'; frames: number };
+  /** Roots only, above-floor raw GAP hits: sufficient whole-box proof, never a GAP mask. */
+  coverage?: RootGapCoverage[];
 }
 
-/** The line: `WARN` with at least one warning, `CLEAR` with none, `SKIP` with nothing declared or nothing to read. */
+/** Existing pairs warn; new body roots alone can FAIL. Unavailable readings are named SKIP, never measured zero. */
 export interface MotionSeamLine {
-  status: 'WARN' | 'CLEAR' | 'SKIP';
+  status: 'WARN' | 'CLEAR' | 'SKIP' | 'FAIL';
   reason?: string;
   fps: number;
   floor: string;
   pairs: MotionSeamPair[];
   animations: string[];
-  /** Rows with a frame over the floor: the WARN lines. */
+  /** Existing non-root rows with a frame over the floor: the WARN lines. */
   warnings: number;
   rows: MotionSeamRow[];
   /** Physics-only reference worlds (issue #591); do not participate in warnings or bars. */
   worlds?: MotionSeamWorlds;
+  /** Selected body-root pairs and named zero-band roots; existing internal seams remain warnings. */
+  roots?: { status: 'PASS' | 'FAIL' | 'SKIP'; mode: 'gap-only'; ghost_owner: 'unavailable'; ghost_followup: 'rig-c/core#1555'; pairs: string[]; failed: number; reason?: string; unmeasured?: MotionUnmeasuredRoot[] };
 }
 
 /**
  * The neighbour pairs the inputs declare, in their order: each limb's
  * consecutive segments (`parts.json`'s limb records, by segment), then each
- * `seam` requirement's part and neighbour. A pair named twice, in either
+ * `seam` requirement's part and neighbour, then proven roots when rig.json is supplied. A pair named twice, in either
  * order, is one pair with both declarations.
  */
-export function motionSeamPairs(parts: PartsFile, seams: ReadonlyArray<{ name: string; part: string; neighbour: string }>): MotionSeamPair[] {
+export function motionSeamPairs(parts: PartsFile, seams: ReadonlyArray<{ name: string; part: string; neighbour: string }>, rig?: Record<string, unknown>, readSetup?: (candidates: readonly MotionSeamPair[]) => readonly MotionRootSetupRow[]): MotionSeamPair[] {
+  return motionSeamSelection(parts, seams, rig, readSetup).pairs;
+}
+
+/** Complete selection: a valid zero setup band is named separately, never a fabricated pair or PASS. */
+export function motionSeamSelection(parts: PartsFile, seams: ReadonlyArray<{ name: string; part: string; neighbour: string }>, rig?: Record<string, unknown>, readSetup?: (candidates: readonly MotionSeamPair[]) => readonly MotionRootSetupRow[]): MotionSeamSelection {
   const out: MotionSeamPair[] = [];
+  const unmeasuredRoots: MotionUnmeasuredRoot[] = [];
   const add = (a: string, b: string, declared: string): void => {
     const hit = out.find((p) => (p.a === a && p.b === b) || (p.a === b && p.b === a));
     if (hit !== undefined) hit.declared.push(declared);
@@ -3623,6 +3668,104 @@ export function motionSeamPairs(parts: PartsFile, seams: ReadonlyArray<{ name: s
     }
   }
   for (const r of seams) add(r.part, r.neighbour, `requirement "${r.name}" (seam)`);
+  const candidates = rig === undefined ? [] : motionRootCandidates(parts, rig);
+  const selected: MotionSeamPair[] = [];
+  if (candidates.length > 0) {
+    const rows = readSetup?.(candidates);
+    const problems: Problem[] = [];
+    const bad = (object: string, detail: string): void => { problems.push({ code: 'CHECK_MOTION_SEAM_ROOT', object, detail }); };
+    if (rows === undefined || rows.length !== candidates.length) {
+      bad('body-root setup reading', 'requires one stock setup-only seam row per eligible candidate; found ' + (rows === undefined ? 'no reader' : rows.length) + ', required ' + candidates.length + '; unavailable is not zero overlap');
+    } else {
+      for (const candidate of candidates) {
+        const matches = rows.filter(row => row.pair === candidate.pair);
+        const row = matches[0];
+        if (matches.length !== 1 || row.drawn !== 1 || (row.banded !== 0 && row.banded !== 1) || row.status !== (row.banded === 1 ? 'read' : 'skip')) {
+          bad(candidate.pair, 'requires one setup frame with both drawings present and banded 0/1 matching status skip/read; the stock reading is missing, duplicate or unreadable');
+        } else if (row.banded > 0) selected.push(candidate);
+      }
+    }
+    // Missing, duplicate or undrawn data must refuse before a zero-band result exists.
+    refuseIfAny(problems);
+    for (const candidate of candidates) {
+      const root = candidate.root;
+      if (root === undefined || selected.some(p => p.root?.limb === root.limb) || unmeasuredRoots.some(p => p.limb === root.limb)) continue;
+      const names = candidates.filter(p => p.root?.limb === root.limb).map(p => p.a);
+      unmeasuredRoots.push({ ...root, part: candidate.b, candidates: names,
+        reason: 'no setup band with ' + names.join('/') + ' — not measured' });
+    }
+  }
+  for (const root of selected) {
+    add(root.a, root.b, root.declared[0]);
+    const pair = out.find(p => (p.a === root.a && p.b === root.b) || (p.a === root.b && p.b === root.a));
+    if (pair !== undefined) pair.root = root.root;
+  }
+  return { pairs: out, unmeasuredRoots };
+}
+
+
+/**
+ * Only the immediate named carrier is eligible. Slot binding and source provenance
+ * establish candidates; stock setup alpha overlap selects all matching drawings.
+ * No body provenance means legacy input, not proof of closed body-root seams.
+ */
+function motionRootCandidates(parts: PartsFile, rig: Record<string, unknown>): MotionSeamPair[] {
+  const limbs = [...new Set(parts.parts.flatMap(p => p.limb === undefined ? [] : [p.limb.name]))];
+  // Root-free inputs keep the old selector without inspecting irrelevant body bindings.
+  if (limbs.length === 0) return [];
+  const bodies = partsTagged(parts, ['topwear', 'bottomwear']).filter(p => p.limb === undefined);
+  if (bodies.length === 0) return [];
+  const problems: Problem[] = [];
+  const bad = (object: string, detail: string): void => { problems.push({ code: 'CHECK_MOTION_SEAM_ROOT', object, detail }); };
+  const bones = (Array.isArray(rig.bones) ? rig.bones : []).filter(isRecord);
+  const slots = (Array.isArray(rig.slots) ? rig.slots : []).filter(isRecord);
+  const skin = isRecord(rig.skins) && isRecord(rig.skins.default) ? rig.skins.default : {};
+  const binding = (part: PartRecord): Record<string, unknown> | null => {
+    const matches = slots.filter(s => s.name === part.name);
+    const on = skin[part.name];
+    const slot = matches.length === 1 ? matches[0] : null;
+    const attachment = slot !== null && typeof slot.attachment === 'string' && isRecord(on) ? on[slot.attachment] : undefined;
+    if (parts.parts.filter(p => p.name === part.name).length !== 1 || slot === null || typeof slot.bone !== 'string' || !isRecord(attachment)) {
+      bad('part "' + part.name + '"', 'requires one part, one slot of that name and its named setup attachment in the default skin; found ' + matches.length + ' slot(s)');
+      return null;
+    }
+    return slot;
+  };
+  const carriers = bodies.map(part => ({ part, slot: binding(part) }));
+  const out: MotionSeamPair[] = [];
+  for (const limb of limbs) {
+    const roots = parts.parts.filter(p => p.limb?.name === limb && p.limb.segment === 0);
+    if (roots.length !== 1) {
+      bad('config.limbs.' + limb, 'has ' + roots.length + ' segment-zero part(s); exactly one is required to identify its body-root seam');
+      continue;
+    }
+    const root = roots[0];
+    const l = root.limb as LimbRecord;
+    const object = 'root part "' + root.name + '" (config.limbs.' + limb + ', bone "' + l.bone + '")';
+    const named = bones.filter(b => b.name === l.bone);
+    if (named.length !== 1 || typeof named[0].parent !== 'string' || bones.filter(b => b.name === named[0].parent).length !== 1) {
+      bad(object, 'requires one declared bone and its one named immediate parent in rig.json; found ' + named.length + ' bone(s), parent ' + JSON.stringify(named[0]?.parent));
+      continue;
+    }
+    const parent = named[0].parent;
+    const slot = binding(root);
+    if (slot === null) continue;
+    const twin = turnTwin(root.name, l.bone);
+    const twinBones = bones.filter(b => b.name === twin);
+    if (slot.bone !== l.bone && !(slot.bone === twin && twinBones.length === 1 && twinBones[0].parent === l.bone)) {
+      bad(object, 'slot binds "' + String(slot.bone) + '"; the declared bone "' + l.bone + '" or its named turn child is required');
+      continue;
+    }
+    const eligible = carriers.filter(c => c.slot?.bone === parent);
+    if (eligible.length === 0) {
+      bad(object, 'requires a topwear/bottomwear body drawing whose slot binds its immediate parent "' + parent + '"; found none; no nearest, name or mesh-influence fallback');
+      continue;
+    }
+    for (const { part: body } of eligible) out.push({ pair: body.name + '|' + root.name, a: body.name, b: root.name,
+      declared: ['config.limbs.' + limb + ' segment 0, body carrier "' + parent + '" from ' + body.from],
+      root: { limb, bone: l.bone, parent } });
+  }
+  refuseIfAny(problems);
   return out;
 }
 
@@ -3655,12 +3798,202 @@ export interface MotionSeamPlant {
 }
 
 
-/** One raw opening, in rigc cells; its frame time is index / the line's fps. */
+/** One raw opening in rigc cells; actual raw frame time is read separately for coverage. */
 export interface MotionSeamHit {
   index: number;
   px: number;
   cell: number;
   box: [number, number, number, number];
+}
+
+/** Match rig-c's DRAWN_ALPHA (passthrough): alpha, never RGB brightness. */
+const ROOT_DRAWN_ALPHA = 128;
+const ROOT_COVERAGE_DIR = 'root_gap_coverage';
+export interface RootGapCoverage extends MotionSeamHit {
+  status: 'exempt' | 'conservative' | 'unavailable';
+  reason: string;
+  /** Whole box cell centres, NOT the unavailable exact GAP subset. */
+  box_cells?: number;
+  covered_cells?: number;
+  /** Deterministic sidecar relative to check.json, written only for actual examined hits. */
+  evidence?: string;
+}
+export type RootGapCoverageReader = (pair: MotionSeamPair, animation: string, hit: MotionSeamHit, time: number | undefined) => RootGapCoverage;
+
+/** All-box coverage is sufficient because the raw GAP cells are a subset of the box. */
+export function rootGapBoxCoverage(hit: MotionSeamHit, alpha: readonly number[] | null, reason = 'composite metadata unavailable', worldMagnitude?: number): RootGapCoverage {
+  const width = Math.round((hit.box[2] - hit.box[0]) / hit.cell);
+  const height = Math.round((hit.box[3] - hit.box[1]) / hit.cell);
+  const unavailable = (): RootGapCoverage => ({ ...hit, status: 'unavailable', reason });
+  // Binary64 unit roundoff u. Core seam.ts readFrame/centreX/centreY/take
+  // forms each edge with grid-origin multiply, offset multiply, centre add and
+  // half-cell add: four rounded operations (cell/2 and integer+.5 are exact
+  // in the normal/safe-index domain below). For M bounding the SAME pair's
+  // rest/posed coordinates, |origin| <= M+4c, |offset| <= 2M+8c;
+  // B=4(M+4c) bounds every intermediate magnitude, including cancellation.
+  // Each edge's forward error is <= gamma(4)B. Add both edge errors, the
+  // subtraction error u(|lo|+|hi|), and division error u|q|/(1-u).
+  // gamma(32) rounds outward over at most 32 arithmetic operations, including
+  // B, both gamma evaluations and the error expression below. A bound
+  // >= half a cell cannot identify a unique integer and remains unavailable.
+  // Without the coordinate bound only EXACT integer extents are accepted.
+  const u = Number.EPSILON / 2;
+  const gamma = (n: number): number => n * u / (1 - n * u);
+  const integerExtent = (lo: number, hi: number, cells: number): boolean => {
+    const q = (hi - lo) / hit.cell;
+    if (worldMagnitude === undefined) return q === cells;
+    const B = 4 * (worldMagnitude + 4 * hit.cell);
+    if (!Number.isFinite(worldMagnitude) || worldMagnitude < Math.max(Math.abs(lo), Math.abs(hi)) ||
+      hit.cell < 2 ** -1021 || !Number.isFinite(B) || B / hit.cell >= 2 ** 51) return false;
+    const error = ((2 * gamma(4) * B + u * (Math.abs(lo) + Math.abs(hi))) / hit.cell +
+      u * Math.abs(q) / (1 - u)) / (1 - gamma(32)) + Number.MIN_VALUE;
+    return error < 0.5 && Math.abs(q - cells) <= error;
+  };
+  if (!Number.isFinite(hit.cell) || hit.cell <= 0 || !hit.box.every(Number.isFinite) ||
+    !Number.isSafeInteger(width * height) || width <= 0 || height <= 0 ||
+    !integerExtent(hit.box[0], hit.box[2], width) || !integerExtent(hit.box[1], hit.box[3], height) ||
+    alpha === null || alpha.length !== width * height || alpha.some(a => !Number.isFinite(a) || a < 0 || a > 255)) return unavailable();
+  const covered = alpha.filter(a => a >= ROOT_DRAWN_ALPHA).length;
+  return { ...hit, status: covered === alpha.length ? 'exempt' : 'conservative',
+    reason: covered === alpha.length ? 'whole world-cell box covered at DRAWN_ALPHA 128' : 'uncovered box cells: retain the entire original GAP count; exact GAP subset unavailable',
+    box_cells: alpha.length, covered_cells: covered };
+}
+
+/**
+ * Root-only lazy reader. The render already made by runCheck supplies every
+ * used world vertex, tint, frame time and draw order. The public renderer entry
+ * supplies packed UV/page metadata and rasterisation, not a second seam metric.
+ * Unsupported clipping/binding or even one replay pixel mismatch retains raw.
+ */
+export function motionRootCoverageReader(build: string, rendered: string, out: string): RootGapCoverageReader {
+  type Renderer = typeof import('rig-c/render');
+  type PoseAttachment = NonNullable<RootCoverageFrame['attachments']>[number];
+  interface Prepared { api: Renderer; pages: ReturnType<Renderer['loadCandidate']>['pages']; pieces: RootCoveragePiece[]; attachments: PoseAttachment[] }
+  interface Animation { frames: Map<number, { frame: RootCoverageFrame; alphaReplayExact: boolean }>; restMagnitude: number }
+  let prepared: Prepared | undefined;
+  const animations = new Map<string, Animation>();
+  const read = (path: string): unknown => JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+  class CoverageUnavailable extends Error {}
+  const requireFact = (condition: unknown, reason: string): void => { if (!condition) throw new CoverageUnavailable(reason); };
+  const attachments = (value: unknown): PoseAttachment[] => {
+    requireFact(Array.isArray(value), 'geometry attachment roster unavailable');
+    return (value as unknown[]).map(a => {
+      if (!isRecord(a) || typeof a.slot !== 'string' || typeof a.attachment !== 'string' ||
+        !Array.isArray(a.vertices) || a.vertices.length % 2 !== 0 || !a.vertices.every(v => typeof v === 'number' && Number.isFinite(v)) ||
+        !Array.isArray(a.color) || a.color.length !== 4 || !a.color.every(v => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1)) throw new CoverageUnavailable('geometry attachment fields unavailable');
+      return { slot: a.slot, attachment: a.attachment, vertices: a.vertices as number[], color: a.color as [number, number, number, number] };
+    });
+  };
+  const prepare = (): Prepared => {
+    if (prepared !== undefined) return prepared;
+    // Node's module loader is called only here, never for a root-free reading.
+    const loaded: unknown = createRequire(import.meta.url)('rig-c/render');
+    requireFact(isRecord(loaded) && ['loadCandidate', 'throughPoser', 'sampleSetupPose', 'renderFrame'].every(k => typeof loaded[k] === 'function'), 'official renderer exports unavailable');
+    const api = loaded as Renderer;
+    const skeleton = join(build, 'skeleton.json'), atlas = join(build, 'skeleton.atlas');
+    const text = readFileSync(skeleton, 'utf8'), document: unknown = JSON.parse(text);
+    const unsupported = (v: unknown): boolean => Array.isArray(v) ? v.some(unsupported) : isRecord(v) &&
+      (v.type === 'clipping' || Object.keys(v).some(k => k === 'dark' || k === 'rgba2' || k === 'rgb2' || unsupported(v[k])));
+    requireFact(!unsupported(document), 'clipping or dark-tint metadata is not replayable from this geometry');
+    const candidate = api.loadCandidate({ skeletonText: text, atlasText: readFileSync(atlas, 'utf8'), atlasDir: build, label: 'root GAP composite' }, { skeleton, atlas }, undefined);
+    const metadata = api.throughPoser(candidate.choice, p => api.sampleSetupPose(p, { geometry: true, bones: true })).value[0];
+    requireFact(metadata !== undefined && metadata.attachments !== undefined && metadata.pieces.every(p => !('source' in p) && p.dark === undefined), 'unclipped packed metadata unavailable');
+    prepared = { api, pages: candidate.pages, pieces: metadata.pieces, attachments: metadata.attachments ?? [] };
+    return prepared;
+  };
+  return (pair, animation, hit, time) => {
+    let result = rootGapBoxCoverage(hit, null);
+    let alpha: number[] | null = null;
+    let frameTime: number | null = null;
+    const reason = 'official composite metadata or pixel replay unavailable';
+    try {
+      requireFact(Number.isInteger(hit.index) && hit.index >= 0 && typeof time === 'number' && Number.isFinite(time), 'actual raw frame time unavailable');
+      const { api, pages, pieces, attachments: metadataAttachments } = prepare();
+      const sidecar = read(join(rendered, 'frames.json'));
+      requireFact(isRecord(sidecar) && Array.isArray(sidecar.sets) && isRecord(sidecar.viewport), 'render viewport unavailable');
+      // requireFact deliberately does not narrow unknown values: each reader
+      // checks again at its own boundary rather than using an unchecked cast.
+      if (!isRecord(sidecar) || !Array.isArray(sidecar.sets) || !isRecord(sidecar.viewport)) throw new CoverageUnavailable(reason);
+      const set = sidecar.sets.find(s => isRecord(s) && s.animation === animation);
+      requireFact(isRecord(set) && typeof set.dir === 'string' && !isAbsolute(set.dir) && !set.dir.split(/[\\/]/).includes('..'), 'local animation directory unavailable');
+      if (!isRecord(set) || typeof set.dir !== 'string') throw new CoverageUnavailable(reason);
+      const v = sidecar.viewport;
+      requireFact(['x', 'y', 'width', 'height', 'scale', 'pixelWidth', 'pixelHeight'].every(k => typeof v[k] === 'number' && Number.isFinite(v[k])) &&
+        Number(v.scale) > 0 && Number.isSafeInteger(v.pixelWidth) && Number(v.pixelWidth) > 0 && Number.isSafeInteger(v.pixelHeight) && Number(v.pixelHeight) > 0, 'finite render viewport unavailable');
+      const viewport: RootCoverageViewport = { minX: Number(v.x), minY: Number(v.y), maxX: Number(v.x) + Number(v.width), maxY: Number(v.y) + Number(v.height), scale: Number(v.scale), width: Number(v.pixelWidth), height: Number(v.pixelHeight) };
+      requireFact(Array.isArray(sidecar.background) && sidecar.background.length === 4 && sidecar.background.every(x => typeof x === 'number' && Number.isInteger(x) && x >= 0 && x <= 255), 'render background unavailable');
+      const background = sidecar.background as [number, number, number, number];
+      let state = animations.get(animation);
+      if (state === undefined) {
+        const geometry = read(join(rendered, set.dir, GEOMETRY_FILE));
+        requireFact(isRecord(geometry) && isRecord(geometry.setup) && Array.isArray(geometry.rest) && Array.isArray(geometry.frames) && geometry.animation === animation, 'same-animation geometry unavailable');
+        if (!isRecord(geometry) || !isRecord(geometry.setup) || !Array.isArray(geometry.rest) || !Array.isArray(geometry.frames)) throw new CoverageUnavailable(reason);
+        const setup = attachments(geometry.setup.attachments);
+        requireFact(setup.length === pieces.length && new Set(setup.map(a => a.slot)).size === setup.length, 'setup draw roster unavailable');
+        for (const p of pieces) {
+          const a = setup.find(a => a.slot === p.slot);
+          const rest = geometry.rest.find(r => isRecord(r) && r.slot === p.slot && r.attachment === a?.attachment);
+          requireFact(a !== undefined && isRecord(rest) && rest.kind === p.kind && a.vertices.length === p.world.length && same(a.color, p.tint) &&
+            (p.kind !== 'mesh' || same(rest.triangles, Array.from(p.triangles))), 'packed metadata topology or tint differs');
+        }
+        // The metadata poser supplies attachment identity, never world positions.
+        // Match it explicitly to the captured setup, including default skin.
+        requireFact(setup.every(a => metadataAttachments.some(b => a.slot === b.slot && a.attachment === b.attachment)), 'default attachment identity differs');
+        let restMagnitude = 0;
+        for (const r of geometry.rest) {
+          if (!isRecord(r) || !Array.isArray(r.vertices) || !r.vertices.every(v => typeof v === 'number' && Number.isFinite(v))) throw new CoverageUnavailable('rest coordinate bound unavailable');
+          for (const v of r.vertices as number[]) restMagnitude = Math.max(restMagnitude, Math.abs(v));
+        }
+        state = { restMagnitude, frames: new Map() };
+        for (const f of geometry.frames) {
+          if (!isRecord(f) || !Number.isInteger(f.index) || typeof f.time !== 'number' || !Number.isFinite(f.time)) throw new CoverageUnavailable('frame identity unavailable');
+          const posed = attachments(f.attachments);
+          requireFact(posed.length === pieces.length && new Set(posed.map(a => a.slot)).size === posed.length, 'frame draw roster differs');
+          const drawn = posed.map(a => {
+            const p = pieces.find(p => p.slot === a.slot), original = setup.find(p => p.slot === a.slot);
+            if (p === undefined || original?.attachment !== a.attachment || p.world.length !== a.vertices.length) throw new CoverageUnavailable('frame attachment binding differs');
+            return { ...p, world: a.vertices, tint: a.color };
+          });
+          requireFact(!state.frames.has(Number(f.index)), 'duplicate frame index');
+          state.frames.set(Number(f.index), { frame: { index: Number(f.index), time: f.time, pieces: drawn }, alphaReplayExact: false });
+        }
+        animations.set(animation, state);
+      }
+      const captured = state.frames.get(hit.index);
+      frameTime = captured?.frame.time ?? null;
+      requireFact(captured !== undefined && captured.frame.time === time, 'raw and geometry frame time differ');
+      if (captured === undefined) throw new CoverageUnavailable(reason);
+      frameTime = captured.frame.time;
+      if (!captured.alphaReplayExact) {
+        const png = readPng(join(rendered, set.dir, 'f' + String(hit.index).padStart(4, '0') + '.png'));
+        const replay = api.renderFrame(captured.frame, pages, viewport, background);
+        requireFact(png.width === replay.width && png.height === replay.height && Buffer.from(png.data).equals(Buffer.from(replay.data)), 'official frame RGBA pixel replay differs');
+        captured.alphaReplayExact = true;
+      }
+      const width = Math.round((hit.box[2] - hit.box[0]) / hit.cell), height = Math.round((hit.box[3] - hit.box[1]) / hit.cell);
+      requireFact(Number.isSafeInteger(width * height) && width > 0 && height > 0 && Number.isFinite(hit.cell) && hit.cell > 0, 'world cell box unavailable');
+      const grid = { minX: hit.box[0], minY: hit.box[1], maxX: hit.box[2], maxY: hit.box[3], width, height, scale: 1 / hit.cell };
+      const composite = api.renderFrame(captured.frame, pages, grid, [0, 0, 0, 0]);
+      alpha = Array.from({ length: width * height }, (_, i) => composite.data[i * 4 + 3]);
+      let worldMagnitude = state.restMagnitude;
+      for (const p of captured.frame.pieces) for (const v of p.world) worldMagnitude = Math.max(worldMagnitude, Math.abs(v));
+      // All drawings' magnitude bounds either pair without selecting an owner.
+      result = rootGapBoxCoverage(hit, alpha, 'world cell box grid unavailable', worldMagnitude);
+    } catch (error) {
+      // No guessed coverage and no absolute paths from an upstream exception.
+      result = rootGapBoxCoverage(hit, null, error instanceof CoverageUnavailable ? error.message : reason);
+    }
+    const key = createHash('sha256').update(JSON.stringify([pair.pair, animation, hit.index])).digest('hex');
+    const evidence = ROOT_COVERAGE_DIR + '/' + key + '.json';
+    mkdirSync(join(out, ROOT_COVERAGE_DIR), { recursive: true });
+    writeFileSync(join(out, evidence), JSON.stringify({ spec: 'rig-parts-root-gap-box/1', pair: pair.pair, animation,
+      raw_time: typeof time === 'number' && Number.isFinite(time) ? time : null, frame_time: frameTime, raw: hit, ...result, alpha_threshold: ROOT_DRAWN_ALPHA,
+      scope: 'whole world-cell box centres; not an exact GAP-cell mask',
+      grid: { minX: hit.box[0], minY: hit.box[1], maxX: hit.box[2], maxY: hit.box[3], cell: hit.cell, rows: 'top to bottom' },
+      alpha, exact_rgba_replay: alpha !== null, followup: 'rig-c/core#1556' }, null, 1) + '\n');
+    return { ...result, evidence };
+  };
 }
 export interface MotionSeamWorldKind {
   max_px: number;
@@ -3765,7 +4098,33 @@ type SeamHitRead = MotionSeamHit;
  * file that is missing, a file that is not the animation's or not at the rate
  * asked, a pair out of the flag's order, and a field of the wrong shape.
  */
-export function readMotionSeams(dir: string, animations: readonly string[], fps: number, pairs: readonly MotionSeamPair[], plant: MotionSeamPlant = {}, worldRows?: MotionSeamWorldRow[]): MotionSeamRow[] {
+export function readMotionSeams(dir: string, animations: readonly string[], fps: number, pairs: readonly MotionSeamPair[], plant: MotionSeamPlant = {}, worldRows?: MotionSeamWorldRow[], coverageReader?: RootGapCoverageReader): MotionSeamRow[] {
+  return readSeamRows(dir, animations, fps, pairs, plant, worldRows, false, coverageReader);
+}
+
+/** The same stock seam reader, restricted to one canonical setup-only frame. */
+export function readMotionRootSetup(dir: string, fps: number, pairs: readonly MotionSeamPair[]): MotionRootSetupRow[] {
+  const problems: Problem[] = [];
+  const sidecar = readJson(join(dir, 'frames.json'), problems);
+  const sets = sidecar !== null && Array.isArray(sidecar.sets) ? sidecar.sets.filter(isRecord) : [];
+  const set = sets[0];
+  if (sidecar?.spec !== 'rigc-frames/1' || sets.length !== 1 || set.animation !== null || set.fps !== fps ||
+    set.sampled !== 1 || set.written !== 1 || set.stride !== 1 || set.duration !== 0 || typeof set.dir !== 'string' ||
+    isAbsolute(set.dir) || set.dir.split(/[\\/]/).includes('..')) {
+    problems.push({ code: 'FRAMES_SIDECAR', object: join(dir, 'frames.json'),
+      detail: 'requires exactly one stock setup-only set: animation null, sampled/written/stride 1, duration 0, the requested fps and a local directory; unavailable is not zero overlap' });
+  }
+  refuseIfAny(problems);
+  const rows = readSeamRows(dir, ['setup'], fps, pairs, {}, undefined, true);
+  for (const row of rows) if (row.drawn !== 1 || (row.banded !== 0 && row.banded !== 1) || row.status !== (row.banded === 1 ? 'read' : 'skip')) {
+    problems.push({ code: 'FRAMES_SIDECAR', object: row.pair,
+      detail: 'setup seam requires both drawings on its one frame, banded 0/1 and matching skip/read; an absent drawing is not zero overlap' });
+  }
+  refuseIfAny(problems);
+  return rows.map(({ pair, drawn, banded, status }) => ({ pair, drawn, banded, status }));
+}
+
+function readSeamRows(dir: string, animations: readonly string[], fps: number, pairs: readonly MotionSeamPair[], plant: MotionSeamPlant = {}, worldRows?: MotionSeamWorldRow[], setup = false, coverageReader?: RootGapCoverageReader): MotionSeamRow[] {
   const problems: Problem[] = [];
   const bad = (object: string, detail: string): void => {
     problems.push({ code: 'FRAMES_SIDECAR', object, detail });
@@ -3777,7 +4136,8 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
   const hitOf = (h: unknown): SeamHitRead | null =>
     isRecord(h) && typeof h.index === 'number' && typeof h.px === 'number' && typeof h.cell === 'number' && h.cell > 0 && nums(h.box) && h.box.length === 4 ? { index: h.index, px: h.px, cell: h.cell, box: [h.box[0], h.box[1], h.box[2], h.box[3]] } : null;
   for (const animation of animations) {
-    const set = sets.find((x) => x.animation === animation);
+    const rawAnimation = setup ? null : animation;
+    const set = sets.find((x) => x.animation === rawAnimation);
     if (set === undefined || typeof set.dir !== 'string') {
       bad(join(dir, 'frames.json'), `names no frame set for animation ${JSON.stringify(animation)}; \`rigc render --seam\` over the build writes one per animation`);
       continue;
@@ -3786,7 +4146,7 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
     const file = readJson(path, problems);
     if (file === null) continue;
     if (file.spec !== SEAM_READING_SPEC) bad(path, `spec is ${JSON.stringify(file.spec)}; "${SEAM_READING_SPEC}" is required`);
-    if (file.animation !== animation) bad(path, `animation is ${JSON.stringify(file.animation)}; ${JSON.stringify(animation)} is required`);
+    if (file.animation !== rawAnimation) bad(path, `animation is ${JSON.stringify(file.animation)}; ${JSON.stringify(rawAnimation)} is required`);
     if (file.fps !== fps) bad(path, `fps is ${JSON.stringify(file.fps)}; ${fps}, the rate asked for, is required`);
     const read = Array.isArray(file.pairs) ? file.pairs : [];
     if (read.length !== pairs.length) bad(path, `holds ${read.length} pair(s); the ${pairs.length} asked for, in the flag's order, are required`);
@@ -3802,6 +4162,11 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
         return;
       }
       const over = new Map<number, number>();
+      let rootWorst: MotionSeamRow['worst'];
+      let rootGapFrames: number[] = [];
+      let ghostFrames = 0;
+      const coverage: RootGapCoverage[] = [];
+      const exempt = new Set<number>();
       const kinds: Record<'gap' | 'ghost', MotionSeamWorldKind> = { gap: { max_px: 0, worst: null }, ghost: { max_px: 0, worst: null } };
       for (const kind of ['gap', 'ghost'] as const) {
         const k = p[kind];
@@ -3811,9 +4176,23 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
           return;
         }
         const hits = frames as SeamHitRead[];
+        if (kind === 'gap') rootGapFrames = hits.map(h => h.index);
+        else ghostFrames = hits.length;
         const worst = hits.reduce<MotionSeamHit | null>((best, h) => best === null || h.px > best.px || (h.px === best.px && h.index < best.index) ? h : best, null);
         kinds[kind] = { max_px: worst?.px ?? 0, worst };
-        for (const h of hits) if (plant.noFloor === true || openingOverFloor(h)) over.set(h.index, Math.max(over.get(h.index) ?? 0, h.px));
+        // rigc-seam/1 exposes aggregate ghost, not its drawing owner. A drawn
+        // overlap band is not proof of a hole; only GAP gates roots until core#1555.
+        for (const h of hits) if ((want.root === undefined || kind === 'gap') && (plant.noFloor === true || openingOverFloor(h))) {
+          if (want.root !== undefined) {
+            const raw = isRecord(k) && Array.isArray(k.frames) ? k.frames.find(v => isRecord(v) && v.index === h.index) : undefined;
+            const time = isRecord(raw) && typeof raw.time === 'number' ? raw.time : undefined;
+            const proof = coverageReader?.(want, animation, h, time) ?? rootGapBoxCoverage(h, null);
+            coverage.push(proof);
+            if (proof.status === 'exempt') { exempt.add(h.index); continue; }
+          }
+          over.set(h.index, Math.max(over.get(h.index) ?? 0, h.px));
+          if (want.root !== undefined && (rootWorst === undefined || h.px > rootWorst.px || (h.px === rootWorst.px && h.index < rootWorst.index))) rootWorst = { ...h, kind: 'gap' };
+        }
       }
       worldRows?.push({ pair: want.pair, animation, status: p.status, drawn: p.drawn, banded: p.banded, gap: kinds.gap, ghost: kinds.ghost });
       const opens = [...over.keys()].sort((x, y) => x - y);
@@ -3826,7 +4205,10 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
         opens,
         px: opens.map((f) => over.get(f) ?? 0),
         max_px: opens.reduce((m, f) => Math.max(m, over.get(f) ?? 0), 0),
-        under_floor: p.opens.filter((f) => !over.has(f)),
+        under_floor: (want.root === undefined ? p.opens : rootGapFrames).filter((f) => !over.has(f) && !exempt.has(f)),
+        ...(rootWorst === undefined ? {} : { worst: rootWorst }),
+        ...(coverage.length === 0 ? {} : { coverage }),
+        ...(want.root === undefined ? {} : { ghost_info: { ...kinds.ghost, owner: 'unavailable' as const, frames: ghostFrames } }),
       });
     });
   }
@@ -3834,19 +4216,44 @@ export function readMotionSeams(dir: string, animations: readonly string[], fps:
   return rows;
 }
 
-/** The line from its rows: WARN when a row has a frame over the floor, CLEAR when none has, SKIP when no row was read. */
-export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fps: number, rows: MotionSeamRow[], reason?: string): MotionSeamLine {
-  const warnings = rows.filter((r) => r.opens.length > 0).length;
+/** Only active proven root GAP rows fail; mixed ghost is INFO. Existing warnings/floor are unchanged. */
+export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fps: number, rows: MotionSeamRow[], reason?: string, problems: Problem[] = [], unmeasuredRoots: readonly MotionUnmeasuredRoot[] = []): MotionSeamLine {
+  const roots = pairs.filter(p => p.root !== undefined);
+  const rootNames = new Set(roots.map(p => p.pair));
+  const warnings = rows.filter((r) => !rootNames.has(r.pair) && r.opens.length > 0).length;
+  const failed = rows.filter(r => rootNames.has(r.pair) && r.status === 'read' && r.banded > 0 && r.opens.length > 0);
+  for (const row of failed) {
+    const h = row.worst;
+    const proof = row.coverage?.find(p => p.index === h?.index);
+    problems.push({ code: 'CHECK_SEAM_OVER_MOTION', object: 'body-root seam "' + row.pair + '" in "' + row.animation + '"',
+      detail: h === undefined
+        ? 'opens on frames ' + frameRuns(row.opens) + ', max ' + row.max_px + ' cells; no above-floor root hit metadata was returned'
+        : h.kind + ' at frame ' + h.index + ' (t = ' + h.index / fps + 's): ' + h.px + ' cells, cell ' + h.cell + ', world box [' + h.box.join(', ') + ']; at most ' + Math.round(Math.max(h.box[2] - h.box[0], h.box[3] - h.box[1]) / h.cell) + ' cells, the unchanged one-cell floor, is required' + (proof === undefined ? '' : '; ' + proof.status + ': ' + proof.reason + '; entire original GAP count retained') });
+  }
+  const missing = roots.flatMap(p => animations.length === 0 ? ['"' + p.pair + '": no animation'] : animations.flatMap(a => {
+    const row = rows.find(r => r.pair === p.pair && r.animation === a);
+    return row?.status === 'read' && row.banded > 0 ? [] : ['"' + p.pair + '" in "' + a + '": ' + (p.unread ?? (row === undefined ? 'no returned reading' : 'no band on any frame'))];
+  }));
+  const unmeasured = unmeasuredRoots.map(root => ({ ...root, candidates: [...root.candidates] }));
+  const rootReasons = [...missing, ...unmeasured.map(root => 'root pair for ' + root.limb + ': ' + root.reason)];
+  const rootGate: MotionSeamLine['roots'] = roots.length === 0 && unmeasured.length === 0 ? undefined : {
+    status: failed.length > 0 ? 'FAIL' : rootReasons.length > 0 || reason !== undefined ? 'SKIP' : 'PASS',
+    mode: 'gap-only', ghost_owner: 'unavailable', ghost_followup: 'rig-c/core#1555',
+    pairs: roots.map(p => p.pair), failed: failed.length,
+    ...(rootReasons.length === 0 && reason === undefined ? {} : { reason: unmeasured.length === 0 ? (reason ?? missing.join('; ')) : [reason, ...rootReasons].filter(r => r !== undefined).join('; ') }),
+    ...(unmeasured.length === 0 ? {} : { unmeasured }),
+  };
   const read = rows.some((r) => r.status === 'read');
   const skipWhy =
     reason ??
+    (pairs.length === 0 && unmeasured.length > 0 ? rootGate?.reason : undefined) ??
     (read
       ? undefined
       : pairs.every((p) => p.unread !== undefined)
         ? `no declared pair is read: ${pairs.map((p) => `"${p.pair}" ${String(p.unread)}`).join('; ')}`
         : `rigc read no band on any frame of any declared pair in any animation — nothing measured, which is not a seam that held`);
   return {
-    status: skipWhy !== undefined ? 'SKIP' : warnings > 0 ? 'WARN' : 'CLEAR',
+    status: rootGate?.status === 'FAIL' ? 'FAIL' : skipWhy !== undefined ? 'SKIP' : warnings > 0 ? 'WARN' : 'CLEAR',
     ...(skipWhy === undefined ? {} : { reason: skipWhy }),
     fps,
     floor: MOTION_SEAM_FLOOR,
@@ -3854,6 +4261,7 @@ export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fp
     animations,
     warnings,
     rows,
+    ...(rootGate === undefined ? {} : { roots: rootGate }),
   };
 }
 
@@ -4192,7 +4600,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const keptDir = join(out, STILL_DIR);
   const foldDir = join(out, FOLD_SCRATCH);
   const seamMotionDir = join(out, MOTION_SEAM_SCRATCH);
-  for (const d of [buildDir, idleDir, stillDir, isoDir, loopDir, seamDir, keptDir, foldDir, seamMotionDir]) rmSync(d, { recursive: true, force: true });
+  for (const d of [buildDir, idleDir, stillDir, isoDir, loopDir, seamDir, keptDir, foldDir, seamMotionDir, join(out, ROOT_COVERAGE_DIR)]) rmSync(d, { recursive: true, force: true });
   const written: string[] = [];
   const write = (name: string, data: string): void => {
     writeFileSync(join(out, name), data);
@@ -4534,13 +4942,50 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     }
   }
 
-  // 3e. every declared neighbour pair read in every animation by rigc's seam reading (issue #493): a warning, never a
-  // bar — the build as played, at the idle's rate; SKIP, named, with no pair declared or no animation to read
+  // 3e. Existing neighbour pairs warn (issue #493); proven body-root tears alone gate (issue #686).
+  // Read the build as played at the idle's rate; unavailable data is named SKIP.
   let motionSeam: MotionSeamLine;
+  const motionRootProblems: Problem[] = [];
   {
     const fps = IDLE_FPS;
     const seamReqs = reqFile === null || seams === null ? [] : reqFile.requirements.flatMap((r) => (r.kind === 'seam' && seams?.has(r.name) === true ? [{ name: r.name, part: r.part, neighbour: r.neighbour }] : []));
-    const pairs = inp.parts === null ? [] : motionSeamPairs(inp.parts, seamReqs);
+    const selection: MotionSeamSelection = inp.parts === null ? { pairs: [], unmeasuredRoots: [] } : motionSeamSelection(inp.parts, seamReqs, inp.rig, candidates => {
+      // The stock reader's band is setup alpha overlap, not an inferred distance.
+      // A static motion copy changes only animations; the accepted candidate and
+      // authored motion remain intact. Root-free inputs never enter this path.
+      const setupDir = join(out, '_seam_root_setup');
+      rmSync(setupDir, { recursive: true, force: true });
+      mkdirSync(setupDir, { recursive: true });
+      try {
+        let candidate = buildDir;
+        if (isRecord(inp.motion.animations) && Object.keys(inp.motion.animations).length > 0) {
+          const motion = join(setupDir, 'motion.json');
+          writeFileSync(motion, JSON.stringify({ ...inp.motion, animations: {} }));
+          candidate = join(setupDir, 'build');
+          const compiled = rigc(['build', '--rig', inp.rigPath, '--motion', motion, '--out', candidate, ...packedBuildArgs(mode)]);
+          if (compiled.status !== 0) refuseIfAny(rigcFailed('build (body-root setup observation)', compiled, buildGateLines(compiled.out)));
+          const problems: Problem[] = [];
+          const original = readJson(join(buildDir, 'skeleton.json'), problems);
+          const setup = readJson(join(candidate, 'skeleton.json'), problems);
+          const changed = ['bones', 'slots', 'skins', 'ik', 'transform', 'path', 'physics'].filter(key =>
+            JSON.stringify(original?.[key]) !== JSON.stringify(setup?.[key]));
+          const pages = parsePackLines(compiled.out.split('\n')).map(page => page.page);
+          if (original === null || setup === null || !isRecord(setup.animations) || Object.keys(setup.animations).length > 0 || changed.length > 0 ||
+            JSON.stringify(pages) !== JSON.stringify(pack.map(page => page.page)) ||
+            pages.some(page => !existsSync(join(candidate, page)) || !readFileSync(join(buildDir, page)).equals(readFileSync(join(candidate, page))))) {
+            problems.push({ code: 'CHECK_MOTION_SEAM_ROOT', object: 'stock setup observation',
+              detail: 'requires unchanged default bones/slots/skins/constraints and atlas PNG bytes, with no animation; differing default fields: ' + changed.join(', ') });
+          }
+          refuseIfAny(problems);
+        }
+        const renderDir = join(setupDir, 'render');
+        const list = candidates.map(pair => pair.a + ':' + pair.b).join(',');
+        const rendered = rigc(['render', '--candidate', candidate, '--seam', list, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', renderDir]);
+        if (rendered.status !== 0) refuseIfAny(rigcFailed('render --seam (body-root setup observation)', rendered, rendered.out.split('\n').filter(line => line.includes('FAIL') || line.includes('rigc:'))));
+        return readMotionRootSetup(renderDir, fps, candidates);
+      } finally { rmSync(setupDir, { recursive: true, force: true }); }
+    });
+    const { pairs, unmeasuredRoots } = selection;
     const slotNames = new Set((Array.isArray(inp.rig.slots) ? inp.rig.slots : []).filter(isRecord).map((sl) => String(sl.name)));
     for (const p of pairs) {
       const missing = [p.a, p.b].filter((n) => !slotNames.has(n));
@@ -4548,19 +4993,22 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     }
     const read = pairs.filter((p) => p.unread === undefined);
     if (inp.parts === null) motionSeam = motionSeamLine([], animationNames, fps, [], inp.noParts ?? 'no parts.json');
-    else if (pairs.length === 0) motionSeam = motionSeamLine([], animationNames, fps, [], 'no neighbour pair is declared: parts.json holds no limb segment below a joint (config.limbs) and no --requirements seam names two parts');
-    else if (animationNames.length === 0) motionSeam = motionSeamLine(pairs, [], fps, [], 'motion.json holds no animation to read the declared pairs in');
-    else if (read.length === 0) motionSeam = motionSeamLine(pairs, animationNames, fps, []);
+    else if (pairs.length === 0) motionSeam = motionSeamLine([], animationNames, fps, [], unmeasuredRoots.length === 0
+      ? 'no neighbour pair is declared: parts.json holds no limb segment below a joint (config.limbs) and no --requirements seam names two parts'
+      : undefined, motionRootProblems, unmeasuredRoots);
+    else if (animationNames.length === 0) motionSeam = motionSeamLine(pairs, [], fps, [], 'motion.json holds no animation to read the declared pairs in', motionRootProblems, unmeasuredRoots);
+    else if (read.length === 0) motionSeam = motionSeamLine(pairs, animationNames, fps, [], undefined, motionRootProblems, unmeasuredRoots);
     else {
       rmSync(seamMotionDir, { recursive: true, force: true });
       {
         const list = read.map((p) => `${p.a}:${p.b}`).join(',');
         const activeDest = stripped === null ? seamMotionDir : join(seamMotionDir, env === null ? 'default' : 'active');
         const renderedWorlds = new Set<'default' | 'still'>();
-        const r = measured(['render', '--candidate', buildDir, '--seam', list, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', activeDest]);
+        const hasRoots = read.some(p => p.root !== undefined);
+        const r = measured(['render', '--candidate', buildDir, '--seam', list, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), ...(hasRoots ? ['--geometry'] : []), '--out', activeDest]);
         if (r.status !== 0) refuseIfAny(rigcFailed(`render --seam ${list} --fps ${fps}`, r, r.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
         const activeWorldRows: MotionSeamWorldRow[] = [];
-        motionSeam = motionSeamLine(pairs, animationNames, fps, readMotionSeams(activeDest, animationNames, fps, read, {}, stripped !== null && env === null ? activeWorldRows : undefined));
+        motionSeam = motionSeamLine(pairs, animationNames, fps, readMotionSeams(activeDest, animationNames, fps, read, {}, stripped !== null && env === null ? activeWorldRows : undefined, hasRoots ? motionRootCoverageReader(buildDir, activeDest, out) : undefined), undefined, motionRootProblems, unmeasuredRoots);
         if (stripped !== null) {
           const response = environmentResponse(readFileSync(join(buildDir, 'skeleton.json'), 'utf8'));
           motionSeam.worlds = motionSeamWorlds(true, response.wind.length > 0, world => {
@@ -4786,7 +5234,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(stress === null ? {} : { [STRESS_LINE]: stress }),
     ...(limbs === null ? {} : { [LIMB_LINE]: limbs }),
     ...(sweep === null ? {} : { [SWEEP_LINE]: sweep }),
-    ...(motionSeam.pairs.length === 0 ? {} : { [MOTION_SEAM_LINE]: motionSeam }),
+    ...(motionSeam.pairs.length === 0 && motionSeam.roots === undefined ? {} : { [MOTION_SEAM_LINE]: motionSeam }),
     ...(stripped === null || idle === null ? {} : { [CLOTH_LINE]: cloth }),
     RECOMPOSITE_HOLES: inp.parts === null ? { status: 'SKIP', reason: inp.noParts ?? '' } : holesLine(inp.parts),
     ...(sourceRead === null ? {} : { [SOURCE_LINE]: sourceRead }),
@@ -4836,7 +5284,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const rank = (q: Problem): number => JUDGEMENT_LINES.findIndex((n) => q.code === `CHECK_${n}`);
   problems.sort((a, b) => rank(a) - rank(b));
   problems.unshift(...barProblems);
-  problems.push(...foldProblems, ...levelProblems, ...stressProblems, ...limbProblems, ...sweepProblems, ...reqProblems);
+  problems.push(...foldProblems, ...levelProblems, ...stressProblems, ...limbProblems, ...sweepProblems, ...motionRootProblems, ...reqProblems);
   figures.PASS = problems.length === 0;
   const publishCheck = (): void => write('check.json', `${JSON.stringify(figures, null, 1)}\n`);
   if (motionSeam.worlds === undefined) publishCheck();
@@ -4862,6 +5310,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   if (limbs !== null) tally(LIMB_LINE, null);
   // Issue #360: the range bar where it is written; a joint it cannot read fails, so it always measures.
   if (sweep !== null) tally(SWEEP_LINE, null);
+  if (motionSeam.roots !== undefined) tally(MOTION_SEAM_LINE, motionSeam.roots.status === 'SKIP' ? (motionSeam.roots.reason ?? 'no body-root reading') : null);
   return {
     figures,
     gateHtml,
