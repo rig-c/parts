@@ -680,6 +680,21 @@ function isSectionHeader(line: string): boolean {
   return /^── .+ ──$/.test(line);
 }
 
+interface SuiteSkip {
+  name: string;
+  reason: string;
+  hole: boolean;
+}
+
+function parseSkipLine(line: string, suiteKey: string): SuiteSkip {
+  const body = line.replace(/^ {2}SKIP */, '').trim();
+  const m = /^([A-Za-z0-9_-]+): (.*)$/.exec(body);
+  if (m !== null && (m[1] === suiteKey || casePrefix(m[1]) !== null)) {
+    return { name: m[1], reason: m[2], hole: false };
+  }
+  return { name: suiteKey, reason: body, hole: false };
+}
+
 interface SuiteBlock {
   key: string;
   ran: boolean;
@@ -690,12 +705,16 @@ interface SuiteBlock {
   /** The failure count the suite handed back; a suite that did not run hands back none and failed nothing. */
   returned: number;
   names: readonly string[];
+  skips: readonly SuiteSkip[];
 }
 
 class RunTally {
   readonly blocks: SuiteBlock[] = [];
   readonly gutter = new Map<string, number>();
   private readonly named: string[] = [];
+  private readonly skipped: SuiteSkip[] = [];
+  private activeKey = '';
+  private activeSkipStart = 0;
   private controlLines = 0;
   private failLines = 0;
   private quietLines = 0;
@@ -709,14 +728,22 @@ class RunTally {
         continue;
       }
       const word = gutterWord(line);
-      if (word === null) continue;
+      if (word === null) {
+        if (line.includes('This is a HOLE in this run') && this.skipped.length > this.activeSkipStart) {
+          this.skipped[this.skipped.length - 1].hole = true;
+        }
+        continue;
+      }
       this.gutter.set(word, (this.gutter.get(word) ?? 0) + 1);
       if (VERDICT_GUTTER.includes(word)) {
         this.controlLines++;
         const name = caseName(line);
         if (name !== null) this.named.push(name);
         if (word === FAIL_GUTTER) this.failLines++;
-      } else if (QUIET_GUTTER.includes(word)) this.quietLines++;
+      } else if (QUIET_GUTTER.includes(word)) {
+        this.quietLines++;
+        if (word === 'SKIP') this.skipped.push(parseSkipLine(line, this.activeKey));
+      }
     }
   }
 
@@ -727,6 +754,11 @@ class RunTally {
     const headers = this.headerLines;
     const fails = this.failLines;
     const named = this.named.length;
+    const skipStart = this.skipped.length;
+    const prevKey = this.activeKey;
+    const prevSkipStart = this.activeSkipStart;
+    this.activeKey = key;
+    this.activeSkipStart = skipStart;
     // A suite that throws is a named FAIL, not a stack trace that ends the run:
     // the crash is printed as a case line so the floor and the verdict see it.
     let value: number | null;
@@ -735,16 +767,26 @@ class RunTally {
     } catch (err) {
       console.log(`  FAIL  SUITE_CRASHED[${key}]: ${(err as Error).stack ?? String(err)}`);
       value = (this.failLines - fails);
+    } finally {
+      this.activeKey = prevKey;
+      this.activeSkipStart = prevSkipStart;
     }
+    const ran = value !== null;
+    const skips = this.skipped.slice(skipStart).map((s) => ({
+      name: s.name || key,
+      reason: s.reason,
+      hole: s.hole || (!ran && !s.reason.startsWith('not run — ')),
+    }));
     this.blocks.push({
       key,
-      ran: value !== null,
+      ran,
       controls: this.controlLines - controls,
       quiet: this.quietLines - quiet,
       headers: this.headerLines - headers,
       fails: this.failLines - fails,
       returned: value ?? 0,
       names: this.named.slice(named),
+      skips,
     });
     return value;
   }
@@ -39131,7 +39173,7 @@ function runTallySuite(live: RunTally): number {
   const before = live.total;
   const gutterBefore = new Map(live.gutter);
   const { say, bad } = counter();
-  const block = (over: Partial<SuiteBlock>): SuiteBlock => ({ key: 'alpha', ran: true, controls: 3, quiet: 0, headers: 1, fails: 0, returned: 0, names: [], ...over });
+  const block = (over: Partial<SuiteBlock>): SuiteBlock => ({ key: 'alpha', ran: true, controls: 3, quiet: 0, headers: 1, fails: 0, returned: 0, names: [], skips: [], ...over });
   const gutter = (...words: string[]): Map<string, number> => {
     const m = new Map<string, number>();
     for (const w of words) m.set(w, (m.get(w) ?? 0) + 1);
@@ -39413,6 +39455,181 @@ function runTallySuite(live: RunTally): number {
       casePrefix('SUITE_CRASHED[x]') === null,
     `planted: ${shared.join('; ') || 'no fault'}; clean: ${apart.length === 0 ? 'no fault' : apart.join('; ')}`,
     'issue #516: #378\'s suite first printed IN01–IN05 beside the inputs suite\'s IN01–IN10, and only a rename after the full run found it; the tally is the one place that reads every suite\'s case lines, so it refuses a prefix two suites print, by name, with no exception kept by hand',
+  );
+
+  // RT15–RT17 — issue #725: `--summary-json <file>` writes a machine-readable summary derived from the same RunTally
+  // that prints the console summary, with per-suite counts, skips, holes, partial flag and exit code.
+  const allSuiteKeys = [...keys, TALLY_SUITE];
+  const buildSyntheticFullTally = (withHoles: boolean): RunTally => {
+    const t = new RunTally();
+    for (let i = 0; i < allSuiteKeys.length; i++) {
+      const k = allSuiteKeys[i];
+      const liveBlock = live.blocks.find((b) => b.key === k);
+      if (withHoles && k === 'corpus') {
+        t.of(k, () => {
+          t.observe(
+            `── ${k} ──\n` +
+              '  SKIP  no --corpus <dir>, no RIG_PARTS_CORPUS (or SPINE_PARTS_CORPUS) and no fetched examples/*/inputs\n' +
+              '          ⚠️ This is a HOLE in this run, not a pass — no real layer set was read.',
+          );
+          return null;
+        });
+        continue;
+      }
+      const count = liveBlock !== undefined && liveBlock.ran && liveBlock.controls > 0 ? liveBlock.controls : 2;
+      t.of(k, () => {
+        t.observe(`── ${k} ──`);
+        if (withHoles && k === 'cli') {
+          t.observe(
+            '  SKIP  CL213: no fetched examples/wind/inputs (painting.png + layers/{full,head}), so --write-config --from was not measured on the public example\n' +
+              '          ⚠️ This is a HOLE in this run, not a pass — run `bun run fetch-examples` to measure issue #571 on the wind example.',
+          );
+        }
+        for (let c = 1; c <= count; c++) t.observe(`  PASS  S${i}C${c}_OK`);
+        return 0;
+      });
+    }
+    return t;
+  };
+  const fullGreenTally = buildSyntheticFullTally(false);
+  const greenPrinted: string[] = [];
+  printGreenSummary(fullGreenTally, (l) => greenPrinted.push(l));
+  const greenDoc = buildSummaryJson(fullGreenTally, null, [], 0);
+  const greenAgree = summaryAgreementFaults(greenDoc, fullGreenTally, greenPrinted.join('\n'), '', 0);
+
+  const holeTally = buildSyntheticFullTally(true);
+  const holePrinted: string[] = [];
+  printGreenSummary(holeTally, (l) => holePrinted.push(l));
+  const holeDoc = buildSummaryJson(holeTally, null, [], 0);
+  const holeAgree = summaryAgreementFaults(holeDoc, holeTally, holePrinted.join('\n'), '', 0);
+
+  const summaryDir = temp('summary-json');
+  const partialJsonPath = join(summaryDir, 'partial-summary.json');
+  let partialJsonRun: ChildRun = { status: null, stdout: '', stderr: '' };
+  let partialDoc: SelftestSummaryJson | null = null;
+  let partialJsonAgree: string[] = ['partial summary JSON was not written'];
+  let shardSummaryRefusal: string[] = ['shard summary refusal did not run'];
+  try {
+    partialJsonRun = child([ONLY_FLAG, named, SUMMARY_JSON_FLAG, partialJsonPath], 120_000);
+    if (existsSync(partialJsonPath)) {
+      partialDoc = JSON.parse(readFileSync(partialJsonPath, 'utf8')) as SelftestSummaryJson;
+      partialJsonAgree = summaryAgreementFaults(partialDoc, null, partialJsonRun.stdout, partialJsonRun.stderr, partialJsonRun.status);
+    }
+    shardSummaryRefusal = refusalFaults(
+      child([SUMMARY_JSON_FLAG, join(summaryDir, 'unused.json'), SHARD_FLAG, SHARDS[0][0], RECORD_FLAG, join(summaryDir, 'rec.json')], 30_000),
+      `${SUMMARY_JSON_FLAG} and ${SHARD_FLAG}`,
+    );
+  } finally {
+    rmSync(summaryDir, { recursive: true, force: true });
+  }
+  const partialJsonAt = partialFaults(partialJsonRun, [named], allSuiteKeys);
+  say(
+    'RT15_SUMMARY_JSON_AGREES_WITH_PRINTED_SUMMARY_ON_FULL_HOLE_AND_PARTIAL_RUNS',
+    greenAgree.length === 0 &&
+      greenDoc.exit === 0 &&
+      !greenDoc.partial &&
+      greenDoc.totals.holes === 0 &&
+      greenDoc.totals.controls === fullGreenTally.total &&
+      holeAgree.length === 0 &&
+      holeDoc.totals.holes === 2 &&
+      holeDoc.holes.map((h) => `${h.suite}:${h.name}`).join(',') === 'cli:CL213,corpus:corpus' &&
+      holeDoc.suites.find((s) => s.suite === 'corpus')?.status === 'hole' &&
+      holeDoc.suites.find((s) => s.suite === 'cli')?.status === 'pass' &&
+      partialJsonAt.length === 0 &&
+      partialJsonAgree.length === 0 &&
+      partialDoc !== null &&
+      partialDoc.exit === 2 &&
+      partialDoc.partial &&
+      partialDoc.only?.join(',') === named &&
+      partialDoc.totals.holes === 0 &&
+      partialDoc.totals.skipped_suites === allSuiteKeys.length - 1,
+    `full green (${greenDoc.totals.controls} controls over ${greenDoc.totals.ran} suites): ${greenAgree.join('; ') || 'agrees with printed summary'}; ` +
+      `run with HOLEs (cli:CL213 + corpus): ${holeAgree.join('; ') || `agrees, holes=[${holeDoc.holes.map((h) => `${h.suite}:${h.name}`).join(', ')}]`}; ` +
+      `partial ${ONLY_FLAG} ${named} ${SUMMARY_JSON_FLAG}: exit ${partialDoc?.exit ?? 'none'}, partial=${String(partialDoc?.partial)}, ${partialJsonAgree.join('; ') || 'agrees with PARTIAL line'}`,
+    'issue #725: the JSON summary is derived from the same RunTally that prints the console summary, and must agree with it on a full green run, a run with suite-level and case-level HOLEs, and a partial --only run (exit 2)',
+  );
+
+  const blinkTally = new RunTally();
+  blinkTally.of('rig', () => {
+    blinkTally.observe(
+      '── rig ──\n' +
+        '  PASS  RG82_BLINK_NO_HOLE_IS_MEASURED_ON_THE_FACES_AXES_THROUGH_RIG_AND_CHECK\n' +
+        '          face axes: BLINK_NO_HOLE: PASS; HOLE and SKIP in detail text\n' +
+        '  PASS  SO21_ZERO_SETUP_BANDS_REMAIN_NAMED_SKIPS_AND_MEASURED_FAILURE_WINS\n' +
+        '          detail quoting SKIP  A15_IDLE_NO_MESH_BONE_KEYS and HOLE text',
+    );
+    return 0;
+  });
+  const blinkDoc = buildSummaryJson(blinkTally, null, [], 0);
+  const blinkAgree = summaryAgreementFaults(blinkDoc, blinkTally, '', '', 0);
+  say(
+    'RT16_CHECK_NAMES_WITH_HOLE_OR_SKIP_DO_NOT_CHANGE_SKIP_OR_HOLE_COUNTS',
+    blinkAgree.length === 0 &&
+      blinkDoc.totals.controls === 2 &&
+      blinkDoc.totals.passed === 2 &&
+      blinkDoc.totals.failed === 0 &&
+      blinkDoc.totals.skipped === 0 &&
+      blinkDoc.totals.holes === 0 &&
+      blinkDoc.skips.length === 0 &&
+      blinkDoc.holes.length === 0,
+    `controls=${blinkDoc.totals.controls}, passed=${blinkDoc.totals.passed}, skipped=${blinkDoc.totals.skipped}, holes=${blinkDoc.totals.holes} (${blinkAgree.join('; ') || 'no fault'})`,
+    'issue #725: a loose regex over logs captured RG82_BLINK_NO_HOLE as a HOLE; RunTally counts only 2-space gutter words, so PASS/FAIL case names and 10-space detail lines containing HOLE or SKIP never increment skipped or holes',
+  );
+
+  const plantSuiteDoc: SelftestSummaryJson = {
+    ...greenDoc,
+    suites: greenDoc.suites.map((s) => (s.suite === 'png' ? { ...s, controls: s.controls + 1, passed: s.passed + 1 } : s)),
+  };
+  const plantSuiteFaults = summaryAgreementFaults(plantSuiteDoc, fullGreenTally, greenPrinted.join('\n'), '', 0);
+  const plantTotalsDoc: SelftestSummaryJson = {
+    ...greenDoc,
+    totals: { ...greenDoc.totals, controls: greenDoc.totals.controls + 1, failed: 1 },
+  };
+  const plantTotalsFaults = summaryAgreementFaults(plantTotalsDoc, fullGreenTally, greenPrinted.join('\n'), '', 0);
+  const plantMissingHoleDoc: SelftestSummaryJson = {
+    ...holeDoc,
+    totals: { ...holeDoc.totals, holes: 0 },
+    holes: [],
+  };
+  const plantMissingHoleFaults = summaryAgreementFaults(plantMissingHoleDoc, holeTally, holePrinted.join('\n'), '', 0);
+  const plantForgedBlinkHoleDoc: SelftestSummaryJson = {
+    ...blinkDoc,
+    totals: { ...blinkDoc.totals, holes: 1 },
+    holes: [{ suite: 'rig', name: 'RG82_BLINK_NO_HOLE_IS_MEASURED_ON_THE_FACES_AXES_THROUGH_RIG_AND_CHECK', reason: 'BLINK_NO_HOLE: PASS' }],
+  };
+  const plantForgedBlinkHoleFaults = summaryAgreementFaults(plantForgedBlinkHoleDoc, blinkTally, '', '', 0);
+  const plantPartialExitDoc: SelftestSummaryJson | null =
+    partialDoc === null ? null : { ...partialDoc, exit: 0, partial: false, only: null };
+  const plantPartialExitFaults =
+    plantPartialExitDoc === null ? [] : summaryAgreementFaults(plantPartialExitDoc, null, partialJsonRun.stdout, partialJsonRun.stderr, partialJsonRun.status);
+  const flagNoVal = readRunArgs([SUMMARY_JSON_FLAG], RUN_FLAGS);
+  const flagEmptyVal = readRunArgs([SUMMARY_JSON_FLAG, ''], RUN_FLAGS);
+  const flagTwice = readRunArgs([SUMMARY_JSON_FLAG, 'a.json', SUMMARY_JSON_FLAG, 'b.json'], RUN_FLAGS);
+  say(
+    'RT17_SUMMARY_JSON_DISAGREEMENT_AND_BAD_FLAGS_ARE_REFUSED',
+    plantSuiteFaults.some((f) => f.includes('suite "png"')) &&
+      plantSuiteFaults.some((f) => f.includes('codec')) &&
+      plantTotalsFaults.some((f) => f.includes('totals.controls=')) &&
+      plantTotalsFaults.some((f) => f.includes('totals.failed=1')) &&
+      plantMissingHoleFaults.some((f) => f.includes('missing 2 hole(s) recorded by the tally: cli:CL213, corpus:corpus')) &&
+      plantMissingHoleFaults.some((f) => f.includes('printed HOLE line names "corpus"')) &&
+      plantForgedBlinkHoleFaults.some((f) => f.includes('unexpected hole(s) not in the tally: rig:RG82_BLINK_NO_HOLE_IS_MEASURED_ON_THE_FACES_AXES_THROUGH_RIG_AND_CHECK')) &&
+      plantPartialExitFaults.some((f) => f.includes('exit=0 disagrees with process exit 2')) &&
+      plantPartialExitFaults.some((f) => f.includes('printed PARTIAL line was emitted, but summary JSON has partial=false')) &&
+      Array.isArray(flagNoVal) &&
+      flagNoVal.includes(`${SUMMARY_JSON_FLAG} needs a value`) &&
+      Array.isArray(flagEmptyVal) &&
+      flagEmptyVal.includes(`${SUMMARY_JSON_FLAG} needs a value`) &&
+      Array.isArray(flagTwice) &&
+      flagTwice.includes(`${SUMMARY_JSON_FLAG} was given twice`) &&
+      shardSummaryRefusal.length === 0,
+    `suite count plant -> ${plantSuiteFaults.join(' | ') || 'NOT refused'}; ` +
+      `totals plant -> ${plantTotalsFaults.join(' | ') || 'NOT refused'}; ` +
+      `missing hole plant -> ${plantMissingHoleFaults.join(' | ') || 'NOT refused'}; ` +
+      `forged BLINK_NO_HOLE plant -> ${plantForgedBlinkHoleFaults.join(' | ') || 'NOT refused'}; ` +
+      `partial exit/flag plant -> ${plantPartialExitFaults.join(' | ') || 'NOT refused'}; ` +
+      `flags: no value -> ${Array.isArray(flagNoVal) ? flagNoVal.join(', ') : 'ACCEPTED'}, empty -> ${Array.isArray(flagEmptyVal) ? flagEmptyVal.join(', ') : 'ACCEPTED'}, twice -> ${Array.isArray(flagTwice) ? flagTwice.join(', ') : 'ACCEPTED'}, with --shard -> ${shardSummaryRefusal.length === 0 ? 'exit 2, named, no section opened' : shardSummaryRefusal.join(', ')}`,
+    'issue #725: a gate nobody has seen fail is not a gate — planted per-suite count drift, total/failure drift, dropped HOLEs, a forged BLINK_NO_HOLE entry, a partial run claiming exit 0/partial=false, and invalid --summary-json flags are each refused by name',
   );
   return bad();
 }
@@ -50212,6 +50429,59 @@ const MERGE_FLAG = '--merge';
 const ONLY_FLAG = '--only';
 const CORPUS_FLAG = '--corpus';
 
+/** `--summary-json <file>` (issue #725): write a machine-readable summary derived from the same RunTally that prints the console summary. */
+const SUMMARY_JSON_FLAG = '--summary-json';
+const SUMMARY_JSON_SPEC = 'rig-selftest-summary/1';
+const SUMMARY_JSON_TOOL = 'rig-parts';
+
+type SummarySuiteStatus = 'pass' | 'fail' | 'hole' | 'skipped';
+
+interface SummarySuiteEntry {
+  suite: string;
+  ran: boolean;
+  controls: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  status: SummarySuiteStatus;
+  reason: string | null;
+}
+
+interface SummarySkipEntry {
+  suite: string;
+  name: string;
+  reason: string;
+  hole: boolean;
+}
+
+interface SummaryHoleEntry {
+  suite: string;
+  name: string;
+  reason: string;
+}
+
+interface SelftestSummaryJson {
+  spec: string;
+  tool: string;
+  exit: 0 | 1 | 2;
+  partial: boolean;
+  only: string[] | null;
+  faults: string[];
+  totals: {
+    suites: number;
+    ran: number;
+    skipped_suites: number;
+    controls: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+    holes: number;
+  };
+  suites: SummarySuiteEntry[];
+  skips: SummarySkipEntry[];
+  holes: SummaryHoleEntry[];
+}
+
 /**
  * Every flag the parent run reads, and the value it takes (issue #500). Each takes exactly one value, and nothing else
  * may stand on the command line: an unknown flag, a stray word, a flag given twice or one with no value is refused by
@@ -50225,6 +50495,7 @@ const RUN_FLAGS: ReadonlyArray<readonly [string, string]> = [
   [RECORD_FLAG, '<file>'],
   [MERGE_FLAG, '<dir>'],
   [ONLY_FLAG, '<suite>[,<suite>…]'],
+  [SUMMARY_JSON_FLAG, '<file>'],
 ];
 
 /** The flags, as the refusal lists them. */
@@ -50248,7 +50519,7 @@ function readRunArgs(argv: readonly string[], flags: ReadonlyArray<readonly [str
       continue;
     }
     const value = argv[i + 1];
-    if (value === undefined || value.startsWith('--')) {
+    if (value === undefined || value.trim() === '' || value.startsWith('--')) {
       refusals.push(`${token} needs a value`);
       continue;
     }
@@ -50300,6 +50571,287 @@ function partialVerdict(ran: readonly string[], skipped: readonly string[], case
   return failures > 0 ? { code: 1, err: `rig-parts selftest: ${failures} control(s) failed`, out } : { code: 2, err: null, out };
 }
 
+/** Build the machine-readable summary (issue #725) from the same {@link RunTally} that prints the console summary. */
+function buildSummaryJson(
+  tally: RunTally,
+  only: ReadonlySet<string> | null,
+  faults: readonly string[],
+  exit: 0 | 1 | 2,
+): SelftestSummaryJson {
+  const suites: SummarySuiteEntry[] = tally.blocks.map((b) => {
+    const passed = b.controls - b.fails;
+    const failed = b.fails;
+    const skipped = b.skips.length;
+    const status: SummarySuiteStatus =
+      b.fails > 0 || b.returned > 0
+        ? 'fail'
+        : b.ran
+          ? 'pass'
+          : b.skips.some((s) => s.hole)
+            ? 'hole'
+            : 'skipped';
+    const reason = b.ran ? null : (b.skips[0]?.reason ?? null);
+    return {
+      suite: b.key,
+      ran: b.ran,
+      controls: b.controls,
+      passed,
+      failed,
+      skipped,
+      status,
+      reason,
+    };
+  });
+  const skips: SummarySkipEntry[] = tally.blocks.flatMap((b) =>
+    b.skips.map((s) => ({
+      suite: b.key,
+      name: s.name,
+      reason: s.reason,
+      hole: s.hole,
+    })),
+  );
+  const holes: SummaryHoleEntry[] = skips
+    .filter((s) => s.hole)
+    .map(({ suite, name, reason }) => ({ suite, name, reason }));
+  const ranCount = suites.filter((s) => s.ran).length;
+  const skippedSuitesCount = suites.length - ranCount;
+  const passedTotal = suites.reduce((sum, s) => sum + s.passed, 0);
+  const failedTotal = suites.reduce((sum, s) => sum + s.failed, 0);
+  const partial = only !== null && suites.some((s) => !only.has(s.suite));
+  return {
+    spec: SUMMARY_JSON_SPEC,
+    tool: SUMMARY_JSON_TOOL,
+    exit,
+    partial,
+    only: only === null ? null : [...only],
+    faults: [...faults],
+    totals: {
+      suites: suites.length,
+      ran: ranCount,
+      skipped_suites: skippedSuitesCount,
+      controls: tally.total,
+      passed: passedTotal,
+      failed: failedTotal,
+      skipped: skips.length,
+      holes: holes.length,
+    },
+    suites,
+    skips,
+    holes,
+  };
+}
+
+function writeSummaryJson(path: string, doc: SelftestSummaryJson): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`);
+}
+
+const SUMMARY_CLAUSE_SUITES: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ['raster-op', ['raster-components', 'raster-morph', 'raster-blur', 'raster-resize', 'raster-warp', 'raster-poly', 'raster-composite']],
+  ['codec', ['png']],
+  ['wrapper-reader', ['layers-wrapper']],
+  ['PSD-reader', ['layers-psd']],
+  ['config', ['config']],
+  ['parts.json', ['parts']],
+  ['sheet', ['sheet']],
+  ['CLI', ['cli']],
+  ['assemble', ['assemble']],
+  ['plausibility', ['plausibility']],
+  ['propose', ['propose']],
+  ['keypoints', ['keypoints']],
+  ['painting', ['painting']],
+  ['structure', ['structure']],
+  ['diagnostics', ['diagnostics']],
+  ['rig', ['rig']],
+  ['chain-inherit', ['chain-inherit']],
+  ['contour-mesh', ['contour']],
+  ['contour-wiring', ['contour-wiring']],
+  ['auto-mesh', ['auto-mesh']],
+  ['check', ['check']],
+  ['requirements', ['requirements']],
+  ['loop-encoder', ['loop']],
+  ['skeleton', ['skeleton']],
+  ['inputs', ['inputs']],
+  ['fetch-examples', ['fetch-examples']],
+  ['prompt', ['prompt']],
+  ['comfy-adapter', ['comfy']],
+  ['build', ['build']],
+  ['scene', ['scene']],
+  ['tree', ['tree']],
+  ['tally', ['run-tally']],
+  ['corpus', ['corpus']],
+  ['example-propose', ['propose-corpus']],
+  ['assemble-example', ['assemble-examples']],
+  ['example-inputs', ['inputs-examples']],
+  ['example-auto-mesh', ['auto-mesh-examples']],
+  ['example-chain', ['chain']],
+  ['readme-loop', ['readme-loop']],
+];
+
+/** Where a `SelftestSummaryJson` disagrees with its `RunTally`, the printed summary/PARTIAL lines, or the exit code (issue #725). */
+function summaryAgreementFaults(
+  doc: SelftestSummaryJson,
+  tally: RunTally | null,
+  printedOut: string,
+  printedErr: string,
+  expectedExit: number | null,
+): string[] {
+  const faults: string[] = [];
+  if (doc.spec !== SUMMARY_JSON_SPEC) faults.push(`summary JSON spec=${JSON.stringify(doc.spec)}, required ${JSON.stringify(SUMMARY_JSON_SPEC)}`);
+  if (doc.tool !== SUMMARY_JSON_TOOL) faults.push(`summary JSON tool=${JSON.stringify(doc.tool)}, required ${JSON.stringify(SUMMARY_JSON_TOOL)}`);
+  if (expectedExit !== null && doc.exit !== expectedExit) {
+    faults.push(`summary JSON exit=${doc.exit} disagrees with process exit ${expectedExit}`);
+  }
+  const bySuite = new Map(doc.suites.map((s) => [s.suite, s]));
+  const sumControls = doc.suites.reduce((sum, s) => sum + s.controls, 0);
+  const sumPassed = doc.suites.reduce((sum, s) => sum + s.passed, 0);
+  const sumFailed = doc.suites.reduce((sum, s) => sum + s.failed, 0);
+  const sumSkipped = doc.suites.reduce((sum, s) => sum + s.skipped, 0);
+  const ranSuites = doc.suites.filter((s) => s.ran).map((s) => s.suite);
+  const unranSuites = doc.suites.filter((s) => !s.ran).map((s) => s.suite);
+  if (doc.totals.suites !== doc.suites.length) faults.push(`summary JSON totals.suites=${doc.totals.suites} disagrees with suites.length=${doc.suites.length}`);
+  if (doc.totals.ran !== ranSuites.length) faults.push(`summary JSON totals.ran=${doc.totals.ran} disagrees with ran suite count ${ranSuites.length}`);
+  if (doc.totals.skipped_suites !== unranSuites.length) faults.push(`summary JSON totals.skipped_suites=${doc.totals.skipped_suites} disagrees with unran suite count ${unranSuites.length}`);
+  if (doc.totals.controls !== sumControls) faults.push(`summary JSON totals.controls=${doc.totals.controls} disagrees with summed suite controls ${sumControls}`);
+  if (doc.totals.passed !== sumPassed) faults.push(`summary JSON totals.passed=${doc.totals.passed} disagrees with summed suite passed ${sumPassed}`);
+  if (doc.totals.failed !== sumFailed) faults.push(`summary JSON totals.failed=${doc.totals.failed} disagrees with summed suite failures ${sumFailed}`);
+  if (doc.totals.skipped !== sumSkipped || doc.totals.skipped !== doc.skips.length) {
+    faults.push(`summary JSON totals.skipped=${doc.totals.skipped} disagrees with summed suite skips ${sumSkipped} and skips.length=${doc.skips.length}`);
+  }
+  if (doc.totals.holes !== doc.holes.length) faults.push(`summary JSON totals.holes=${doc.totals.holes} disagrees with holes.length=${doc.holes.length}`);
+
+  if (tally !== null) {
+    if (doc.totals.controls !== tally.total) {
+      faults.push(`summary JSON totals.controls=${doc.totals.controls} disagrees with tally.total=${tally.total}`);
+    }
+    if (doc.suites.length !== tally.blocks.length) {
+      faults.push(`summary JSON has ${doc.suites.length} suite(s); tally has ${tally.blocks.length}`);
+    }
+    for (let i = 0; i < Math.min(doc.suites.length, tally.blocks.length); i++) {
+      const s = doc.suites[i];
+      const b = tally.blocks[i];
+      const bPassed = b.controls - b.fails;
+      if (s.suite !== b.key || s.ran !== b.ran || s.controls !== b.controls || s.passed !== bPassed || s.failed !== b.fails || s.skipped !== b.skips.length) {
+        faults.push(
+          `suite "${b.key}" summary JSON has ran=${s.ran}, controls=${s.controls}, passed=${s.passed}, failed=${s.failed}, skipped=${s.skipped}; ` +
+            `tally has ran=${b.ran}, controls=${b.controls}, passed=${bPassed}, failed=${b.fails}, skipped=${b.skips.length}`,
+        );
+      }
+    }
+    const tallyHoles = tally.blocks.flatMap((b) => b.skips.filter((sk) => sk.hole).map((sk) => `${b.key}:${sk.name}`));
+    const jsonHoles = doc.holes.map((h) => `${h.suite}:${h.name}`);
+    const missingHoles = tallyHoles.filter((h) => !jsonHoles.includes(h));
+    const extraHoles = jsonHoles.filter((h) => !tallyHoles.includes(h));
+    if (missingHoles.length > 0) faults.push(`summary JSON holes is missing ${missingHoles.length} hole(s) recorded by the tally: ${missingHoles.join(', ')}`);
+    if (extraHoles.length > 0) faults.push(`summary JSON holes holds unexpected hole(s) not in the tally: ${extraHoles.join(', ')}`);
+  }
+
+  const outLines = printedOut.split('\n').filter((l) => l.trim() !== '');
+  const greenLine = outLines.find((l) => l.startsWith('rig-parts selftest: green — ')) ?? null;
+  const partialLine = outLines.find((l) => l.startsWith('rig-parts selftest: PARTIAL run ')) ?? null;
+  const holeLine = outLines.find((l) => l.startsWith('  ⚠️ HOLE: ')) ?? null;
+
+  if (greenLine !== null) {
+    if (doc.partial || doc.only !== null) faults.push(`printed whole-run green summary, but summary JSON has partial=${doc.partial}, only=${JSON.stringify(doc.only)}`);
+    const m = /^rig-parts selftest: green — (\d+) control\(s\) over (\d+) suite\(s\): (.+)$/.exec(greenLine);
+    if (m === null) {
+      faults.push(`printed green summary line did not match expected format: ${JSON.stringify(greenLine)}`);
+    } else {
+      const printedTotal = Number(m[1]);
+      const printedRan = Number(m[2]);
+      if (doc.totals.controls !== printedTotal) {
+        faults.push(`printed summary total ${printedTotal} control(s) disagrees with summary JSON totals.controls=${doc.totals.controls}`);
+      }
+      if (doc.totals.ran !== printedRan) {
+        faults.push(`printed summary ran ${printedRan} suite(s) disagrees with summary JSON totals.ran=${doc.totals.ran}`);
+      }
+      const clauseMap = new Map(SUMMARY_CLAUSE_SUITES);
+      for (const rawClause of m[3].split(', ')) {
+        const cm = /^(?:\+ )?(\d+) (\S+)$/.exec(rawClause);
+        if (cm === null) {
+          faults.push(`printed summary clause ${JSON.stringify(rawClause)} is not "<count> <label>"`);
+          continue;
+        }
+        const count = Number(cm[1]);
+        const label = cm[2];
+        const suiteKeys = clauseMap.get(label);
+        if (suiteKeys === undefined) {
+          faults.push(`printed summary clause ${JSON.stringify(rawClause)} names unknown label ${JSON.stringify(label)}`);
+          continue;
+        }
+        const jsonSum = suiteKeys.reduce((sum, k) => sum + (bySuite.get(k)?.controls ?? 0), 0);
+        if (jsonSum !== count) {
+          faults.push(`printed summary clause "${rawClause}" (${suiteKeys.join('+')}) disagrees with summary JSON controls=${jsonSum}`);
+        }
+      }
+    }
+    const printedHoleSuites =
+      holeLine === null
+        ? []
+        : (/^  ⚠️ HOLE: (.+) did not run, so this run does not cover (?:it|them)\.$/.exec(holeLine)?.[1].split(', ') ?? []);
+    if (printedHoleSuites.join(',') !== unranSuites.join(',')) {
+      faults.push(`printed HOLE suites [${printedHoleSuites.join(', ')}] disagree with summary JSON unran suites [${unranSuites.join(', ')}]`);
+    }
+    for (const hs of printedHoleSuites) {
+      if (!doc.holes.some((h) => h.suite === hs)) {
+        faults.push(`printed HOLE line names "${hs}", which is absent from summary JSON holes`);
+      }
+    }
+  }
+
+  if (partialLine !== null) {
+    if (!doc.partial || doc.only === null || doc.only.length === 0) {
+      faults.push(`printed PARTIAL line was emitted, but summary JSON has partial=${doc.partial}, only=${JSON.stringify(doc.only)}`);
+    }
+    const pm = /^rig-parts selftest: PARTIAL run \(--only\) — not a verdict on the tree\. (\d+) suite\(s\) ran \[([^\]]*)\] over (\d+) case line\(s\); (\d+) suite\(s\) were not run \[([^\]]*)\]\./.exec(partialLine);
+    if (pm === null) {
+      faults.push(`printed PARTIAL line did not match expected format: ${JSON.stringify(partialLine)}`);
+    } else {
+      const pRanCount = Number(pm[1]);
+      const pRanList = pm[2] === '' ? [] : pm[2].split(', ');
+      const pCases = Number(pm[3]);
+      const pSkipCount = Number(pm[4]);
+      const pSkipList = pm[5] === '' ? [] : pm[5].split(', ');
+      if (doc.totals.ran !== pRanCount || ranSuites.join(',') !== pRanList.join(',')) {
+        faults.push(`printed PARTIAL ran suites (${pRanCount}: [${pRanList.join(', ')}]) disagree with summary JSON (${doc.totals.ran}: [${ranSuites.join(', ')}])`);
+      }
+      if (doc.totals.controls !== pCases) {
+        faults.push(`printed PARTIAL case count ${pCases} disagrees with summary JSON totals.controls=${doc.totals.controls}`);
+      }
+      if (doc.totals.skipped_suites !== pSkipCount || unranSuites.join(',') !== pSkipList.join(',')) {
+        faults.push(`printed PARTIAL skipped suites (${pSkipCount}) disagree with summary JSON (${doc.totals.skipped_suites})`);
+      }
+    }
+  }
+
+  if (printedErr.includes('control(s) failed') && doc.totals.failed === 0) {
+    faults.push('stderr reported failed controls, but summary JSON totals.failed=0');
+  }
+  return faults;
+}
+
+function printGreenSummary(tally: RunTally, log: (line: string) => void = console.log): void {
+  // the summary begins here
+  const n = (key: string): number => tally.countOf(key);
+  const raster = ['raster-components', 'raster-morph', 'raster-blur', 'raster-resize', 'raster-warp', 'raster-poly', 'raster-composite'].reduce((sum, k) => sum + n(k), 0);
+  const holes = tally.blocks.filter((b) => !b.ran).map((b) => b.key);
+  const ran = tally.blocks.length - holes.length;
+  const corpusClause = holes.includes('corpus') ? '' : `, + ${n('corpus')} corpus`;
+  const chainClause = holes.includes('chain') ? '' : `, + ${n('chain')} example-chain`;
+  const readmeLoopClause = holes.includes('readme-loop') ? '' : `, + ${n('readme-loop')} readme-loop`;
+  const proposeClause = holes.includes('propose-corpus') ? '' : `, + ${n('propose-corpus')} example-propose`;
+  const assembleExamplesClause = holes.includes('assemble-examples') ? '' : `, + ${n('assemble-examples')} assemble-example`;
+  const inputsClause = holes.includes('inputs-examples') ? '' : `, + ${n('inputs-examples')} example-inputs`;
+  const autoExamplesClause = holes.includes('auto-mesh-examples') ? '' : `, + ${n('auto-mesh-examples')} example-auto-mesh`;
+  log(
+    `rig-parts selftest: green — ${tally.total} control(s) over ${ran} suite(s): ${raster} raster-op, + ${n('png')} codec, ` +
+      `+ ${n('layers-wrapper')} wrapper-reader, + ${n('layers-psd')} PSD-reader, + ${n('config')} config, + ${n('parts')} parts.json, ` +
+      `+ ${n('sheet')} sheet, + ${n('cli')} CLI, + ${n('assemble')} assemble, + ${n('plausibility')} plausibility, + ${n('propose')} propose, + ${n('keypoints')} keypoints, + ${n('painting')} painting, + ${n('structure')} structure, + ${n('diagnostics')} diagnostics, + ${n('rig')} rig, + ${n('chain-inherit')} chain-inherit, + ${n('contour')} contour-mesh, + ${n('contour-wiring')} contour-wiring, + ${n('auto-mesh')} auto-mesh, + ${n('check')} check, + ${n('requirements')} requirements, + ${n('loop')} loop-encoder, + ${n('skeleton')} skeleton, + ${n('inputs')} inputs, + ${n('fetch-examples')} fetch-examples, + ${n('prompt')} prompt, + ${n('comfy')} comfy-adapter, + ${n('build')} build, + ${n('scene')} scene, + ${n('tree')} tree, + ${n('run-tally')} tally${corpusClause}${proposeClause}${assembleExamplesClause}${inputsClause}${autoExamplesClause}${chainClause}${readmeLoopClause}`,
+  );
+  if (holes.length > 0) log(`  ⚠️ HOLE: ${holes.join(', ')} did not run, so this run does not cover ${holes.length === 1 ? 'it' : 'them'}.`);
+  // the summary ends here
+}
+
 /**
  * The run's verdict from its suites' workers: every suite's units replayed through one tally in `keys` order, the
  * tally's own suite, the floor, and the summary. A whole run reads its live workers; a merge reads the shards' records.
@@ -50312,6 +50864,7 @@ async function reportRun(
   clockText: () => string,
   cleanup: () => void,
   only: ReadonlySet<string> | null = null,
+  summaryJson: string | null = null,
 ): Promise<void> {
   const tally = new RunTally();
   const printLine = console.log;
@@ -50356,6 +50909,7 @@ async function reportRun(
   console.log('');
   const floor = [...tallyFaults(tally.blocks, tally.gutter, tally.total), ...suiteSetFaults(tally.blocks.map((b) => b.key), [...keys, TALLY_SUITE])];
   if (floor.length > 0) {
+    if (summaryJson !== null) writeSummaryJson(summaryJson, buildSummaryJson(tally, only, floor, 2));
     console.error('rig-parts selftest: this run cannot account for itself — that is not a pass, it is an empty gate');
     for (const f of floor) console.error(`  ${f}`);
     process.exit(2);
@@ -50368,33 +50922,18 @@ async function reportRun(
     bad,
   );
   if (partial !== null) {
+    if (summaryJson !== null) writeSummaryJson(summaryJson, buildSummaryJson(tally, only, floor, partial.code));
     if (partial.err !== null) console.error(partial.err);
     console.log(partial.out);
     process.exit(partial.code);
   }
   if (bad > 0) {
+    if (summaryJson !== null) writeSummaryJson(summaryJson, buildSummaryJson(tally, only, floor, 1));
     console.error(`rig-parts selftest: ${bad} control(s) failed`);
     process.exit(1);
   }
-  // the summary begins here
-  const n = (key: string): number => tally.countOf(key);
-  const raster = ['raster-components', 'raster-morph', 'raster-blur', 'raster-resize', 'raster-warp', 'raster-poly', 'raster-composite'].reduce((sum, k) => sum + n(k), 0);
-  const holes = tally.blocks.filter((b) => !b.ran).map((b) => b.key);
-  const ran = tally.blocks.length - holes.length;
-  const corpusClause = holes.includes('corpus') ? '' : `, + ${n('corpus')} corpus`;
-  const chainClause = holes.includes('chain') ? '' : `, + ${n('chain')} example-chain`;
-  const readmeLoopClause = holes.includes('readme-loop') ? '' : `, + ${n('readme-loop')} readme-loop`;
-  const proposeClause = holes.includes('propose-corpus') ? '' : `, + ${n('propose-corpus')} example-propose`;
-  const assembleExamplesClause = holes.includes('assemble-examples') ? '' : `, + ${n('assemble-examples')} assemble-example`;
-  const inputsClause = holes.includes('inputs-examples') ? '' : `, + ${n('inputs-examples')} example-inputs`;
-  const autoExamplesClause = holes.includes('auto-mesh-examples') ? '' : `, + ${n('auto-mesh-examples')} example-auto-mesh`;
-  console.log(
-    `rig-parts selftest: green — ${tally.total} control(s) over ${ran} suite(s): ${raster} raster-op, + ${n('png')} codec, ` +
-      `+ ${n('layers-wrapper')} wrapper-reader, + ${n('layers-psd')} PSD-reader, + ${n('config')} config, + ${n('parts')} parts.json, ` +
-      `+ ${n('sheet')} sheet, + ${n('cli')} CLI, + ${n('assemble')} assemble, + ${n('plausibility')} plausibility, + ${n('propose')} propose, + ${n('keypoints')} keypoints, + ${n('painting')} painting, + ${n('structure')} structure, + ${n('diagnostics')} diagnostics, + ${n('rig')} rig, + ${n('chain-inherit')} chain-inherit, + ${n('contour')} contour-mesh, + ${n('contour-wiring')} contour-wiring, + ${n('auto-mesh')} auto-mesh, + ${n('check')} check, + ${n('requirements')} requirements, + ${n('loop')} loop-encoder, + ${n('skeleton')} skeleton, + ${n('inputs')} inputs, + ${n('fetch-examples')} fetch-examples, + ${n('prompt')} prompt, + ${n('comfy')} comfy-adapter, + ${n('build')} build, + ${n('scene')} scene, + ${n('tree')} tree, + ${n('run-tally')} tally${corpusClause}${proposeClause}${assembleExamplesClause}${inputsClause}${autoExamplesClause}${chainClause}${readmeLoopClause}`,
-  );
-  if (holes.length > 0) console.log(`  ⚠️ HOLE: ${holes.join(', ')} did not run, so this run does not cover ${holes.length === 1 ? 'it' : 'them'}.`);
-  // the summary ends here
+  printGreenSummary(tally);
+  if (summaryJson !== null) writeSummaryJson(summaryJson, buildSummaryJson(tally, only, floor, 0));
 }
 
 /**
@@ -50454,7 +50993,13 @@ async function shardMain(shard: string, record: string): Promise<void> {
  * a whole run prints, so the merged stdout is a whole run's. A record that cannot be read, or a set that is not every
  * unit once, exits 2 before anything is replayed.
  */
-async function mergeMain(dir: string, keys: readonly string[], units: readonly string[], examples: readonly string[]): Promise<void> {
+async function mergeMain(
+  dir: string,
+  keys: readonly string[],
+  units: readonly string[],
+  examples: readonly string[],
+  summaryJson: string | null = null,
+): Promise<void> {
   const files = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.json')).sort() : [];
   const records: ShardRecord[] = [];
   const faults: string[] = [];
@@ -50482,7 +51027,7 @@ async function mergeMain(dir: string, keys: readonly string[], units: readonly s
     }
     return `${lines.join('\n')}\n`;
   };
-  await reportRun(keys, (key) => suiteUnits(key, examples), async (unit) => byUnit.get(unit)?.run, clockText, () => {});
+  await reportRun(keys, (key) => suiteUnits(key, examples), async (unit) => byUnit.get(unit)?.run, clockText, () => {}, null, summaryJson);
 }
 
 async function main(): Promise<void> {
@@ -50502,7 +51047,10 @@ async function main(): Promise<void> {
   const record = args.get(RECORD_FLAG) ?? null;
   const merge = args.get(MERGE_FLAG) ?? null;
   const onlyValue = args.get(ONLY_FLAG) ?? null;
+  const summaryJsonArg = args.get(SUMMARY_JSON_FLAG) ?? null;
+  const summaryJson = summaryJsonArg === null ? null : resolve(summaryJsonArg);
   if (onlyValue !== null && (shard !== null || merge !== null)) refuseArgs([`${ONLY_FLAG} and ${SHARD_FLAG} or ${MERGE_FLAG} each choose which suites run; give one of them`]);
+  if (summaryJson !== null && shard !== null) refuseArgs([`${SUMMARY_JSON_FLAG} and ${SHARD_FLAG} cannot be combined; a shard writes ${RECORD_FLAG} and produces no run summary`]);
   const onlyRead = onlyValue === null ? null : readOnlyList(onlyValue, [...keys, TALLY_SUITE]);
   if (Array.isArray(onlyRead)) refuseArgs(onlyRead);
   const only = onlyRead;
@@ -50521,7 +51069,7 @@ async function main(): Promise<void> {
       process.exit(2);
     }
     if (shard !== null && record !== null) await shardMain(shard, resolve(record));
-    else if (merge !== null) await mergeMain(resolve(merge), keys, units, examples);
+    else if (merge !== null) await mergeMain(resolve(merge), keys, units, examples, summaryJson);
     return;
   }
   const corpus = corpusDir();
@@ -50550,6 +51098,7 @@ async function main(): Promise<void> {
     () => workerClockText(timed, clock, jobs, performance.now() - t0),
     () => rmSync(results, { recursive: true, force: true }),
     only,
+    summaryJson,
   );
 }
 
