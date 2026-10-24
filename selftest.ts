@@ -23703,10 +23703,11 @@ function runBuildSuite(): number {
       'a successful process is insufficient without its complete check report, and a complete receipt cannot erase a nonzero exit');
 
     // Issue #257: build forwards check's two switches. The moving config with the topwear cut by a triangle at overlap 0
-    // (assemble.cuts, issue #170): the piece's resampled edge meets the base's along the cut line, so the seam counts a
-    // few pixels over 40 and still passes its bar — rows on a green build. One build with both switches, then check with
-    // both on the rig and the parts that build wrote: the same measurement, so check.json, the seam pair lines, the
-    // pictures under seam/ and the kept still must be the same bytes. The same build without them must have none of it.
+    // (assemble.cuts, issue #170). At the source grid this cut can have no residual rows: the flag still writes an
+    // array, and build/check must agree on both empty and nonempty picture inventories. CK105 separately shifts real
+    // reference alpha by two pixels and requires the actual CLI seam refusal, not a color-only or policy-unit plant.
+    // One build with both switches, then check on its rig/parts: check.json, pair lines, pictures and kept still agree.
+    // The same build without the switches must have none of their optional fields or artifacts.
     const cutDir = join(dir, 'cut-seam');
     const cutConfig = JSON.parse(JSON.stringify(moving)) as Record<string, unknown>;
     cutConfig.regions = { ...(cutConfig.regions as Record<string, string>), tie: 'chest' };
@@ -23728,6 +23729,11 @@ function runBuildSuite(): number {
     const sameFiles = (a: string, b: string): boolean => filesUnder(a).length > 0 && filesUnder(a).join() === filesUnder(b).join() && filesUnder(a).every((f) => Buffer.compare(readFileSync(join(a, f)), readFileSync(join(b, f))) === 0);
     const fwdRows = fwdFig?.seam_pairs;
     const handRows = handFig?.seam_pairs;
+    const fwdPictures = filesUnder(join(fwdCheck, SEAM_DIR));
+    const handPictures = filesUnder(join(byHand, SEAM_DIR));
+    const sameSeamPictures = Array.isArray(fwdRows) && fwdRows.length === 0
+      ? fwdFig?.seam_px_over_40 === 0 && fwdPictures.length === 0 && handPictures.length === 0
+      : sameFiles(join(fwdCheck, SEAM_DIR), join(byHand, SEAM_DIR));
     const { seam_pairs: _fwdRows, ...fwdRest } = fwdFig ?? {};
     const fwdPairs = pairLinesOf(fwd.out, '[check] ');
     const handPairs = pairLinesOf(hand.out, '');
@@ -23738,7 +23744,7 @@ function runBuildSuite(): number {
       fwd.status === 0 &&
         hand.status === 0 &&
         Array.isArray(fwdRows) &&
-        (fwdRows as unknown[]).length > 0 &&
+        Array.isArray(handRows) &&
         JSON.stringify(fwdRows) === JSON.stringify(handRows) &&
         // Issue #607: build records its config and check alone reads none, so the build's record is set aside here.
         fwdSameAsHand &&
@@ -23746,7 +23752,7 @@ function runBuildSuite(): number {
         !('config' in handFig) &&
         fwdPairs.length === (fwdRows as unknown[]).length &&
         fwdPairs.join('\n') === handPairs.join('\n') &&
-        sameFiles(join(fwdCheck, SEAM_DIR), join(byHand, SEAM_DIR)) &&
+        sameSeamPictures &&
         plainFig !== null &&
         !('seam_pairs' in plainFig) &&
         JSON.stringify(fwdRest) === JSON.stringify(plainFig) &&
@@ -23756,7 +23762,7 @@ function runBuildSuite(): number {
         pairsTwice.status === 2 &&
         pairsTwice.out.includes('--seam-pairs is given twice') &&
         !existsSync(join(cutDir, 'out-pairs-twice')),
-      `build --seam-pairs: exit ${fwd.status}, ${Array.isArray(fwdRows) ? `${(fwdRows as unknown[]).length} seam row(s)` : 'no seam_pairs'}, ${fwdPairs.length} seam pair line(s); check --seam-pairs on its rig and parts: exit ${hand.status}, ${Array.isArray(handRows) ? `${(handRows as unknown[]).length} row(s)` : 'no seam_pairs'}, check.json ${fwdSameAsHand ? 'the same but the build\'s config record' : 'DIFFERENT'} (config ${handFig !== null && 'config' in handFig ? 'WRITTEN by check' : 'absent from check'}), pair lines ${fwdPairs.join('\n') === handPairs.join('\n') ? 'the same' : 'DIFFERENT'}, ${SEAM_DIR}/ ${sameFiles(join(fwdCheck, SEAM_DIR), join(byHand, SEAM_DIR)) ? `${filesUnder(join(byHand, SEAM_DIR)).length} picture(s) byte-identical` : 'DIFFERENT or empty'}; ` +
+      `build --seam-pairs: exit ${fwd.status}, ${Array.isArray(fwdRows) ? `${(fwdRows as unknown[]).length} seam row(s)` : 'no seam_pairs'}, ${fwdPairs.length} seam pair line(s); check --seam-pairs on its rig and parts: exit ${hand.status}, ${Array.isArray(handRows) ? `${(handRows as unknown[]).length} row(s)` : 'no seam_pairs'}, check.json ${fwdSameAsHand ? 'the same but the build\'s config record' : 'DIFFERENT'} (config ${handFig !== null && 'config' in handFig ? 'WRITTEN by check' : 'absent from check'}), pair lines ${fwdPairs.join('\n') === handPairs.join('\n') ? 'the same' : 'DIFFERENT'}, ${SEAM_DIR}/ ${sameSeamPictures ? `${handPictures.length} picture(s), identical inventories${handPictures.length === 0 ? ' (valid zero-row result)' : ' and bytes'}` : 'DIFFERENT'}; ` +
         `the same build without it: exit ${cutPlain.status}, seam_pairs ${plainFig !== null && 'seam_pairs' in plainFig ? 'WRITTEN' : 'absent'}, ${SEAM_DIR}/ ${existsSync(join(plainCheck, SEAM_DIR)) ? 'WRITTEN' : 'absent'}, the rest of check.json ${JSON.stringify(fwdRest) === JSON.stringify(plainFig) ? 'the same' : 'DIFFERENT'}; given twice: exit ${pairsTwice.status}`,
       'issue #257: build dropped the flag, so a consumer who needed the pairs ran check a second time by hand and the artifact build reported was checked without them; forwarded, the check inside build is the check by hand, row for row and byte for byte, and without the flag build writes what it wrote before',
     );
@@ -24607,7 +24613,7 @@ function runBuildSuite(): number {
         badSetRun.status === 1 &&
         badSetRun.out.includes('FAIL  CHECK_INPUT_PRESENT:') &&
         uncompRun.status === 1 &&
-        uncompRun.out.includes('FAIL  CHECK_SEAM_WITHIN_BAR: the setup-pose render of set "posed"') &&
+        uncompRun.out.includes('FAIL  CHECK_SEAM_WITHIN_BAR: the source-grid setup-pose render of set "posed"') &&
         uncompRun.out.includes('FAIL  CHECK_ANIMATIONS_DO_NOT_FOLD: animation "pose_set", mesh "posed_bottomwear"'),
       `compensated build --all-sets exit ${posedRun.status}, sets.json drawn ${JSON.stringify(posedSetDrawn ?? null)}; unknown --set exit ${badSetRun.status}; uncompensated mutant check --set posed exit ${uncompRun.status} (seam fail: ${uncompRun.out.includes('FAIL  CHECK_SEAM_WITHIN_BAR:')}, fold fail: ${uncompRun.out.includes('FAIL  CHECK_ANIMATIONS_DO_NOT_FOLD:')})`,
       'issue #465: an alternate set painted in a pose records its drawn bone angles in sets.json and emits its attachments in the posed bones\' local frame, so check --set / --all-sets and posed animations stay seam-clean and fold-free; dropping the compensation fails both CHECK_SEAM_WITHIN_BAR and CHECK_ANIMATIONS_DO_NOT_FOLD',
