@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runExplicitMeshChecks } from './tools/check_explicitmesh.ts';
 import { runAlternateLayerChecks } from './tools/check_alternate_layers.ts';
 import { runAlternateCutLayerChecks } from './tools/check_alternate_cut_layers.ts';
 import { runGatherOptOutChecks } from './tools/check_gather_optout.ts';
@@ -1837,6 +1838,9 @@ function runPsdSuite(): number {
 function runConfigSuite(): number {
   section('config: the character config loader');
   const { say, bad } = counter();
+  const explicitDir = temp('explicit-658');
+  try { runExplicitMeshChecks(explicitDir, (name, ok, detail) => say(name, ok, detail, 'issue #658: guarded accepted payload transfer, not regeneration')); }
+  finally { rmSync(explicitDir, { recursive: true, force: true }); }
   runSetAnchorChecks((name, ok, detail) => say(name, ok, detail, 'issue #543: explicit keypoint-to-bone registration, no painting transform'));
   const lineageDir = temp('revision-chain-698');
   try { runRevisionChainChecks(lineageDir, (name, ok, detail) => say(name, ok, detail, 'issue #531: recoverable deterministic parent metadata and truthful output rows; full command acceptance is separate')); }

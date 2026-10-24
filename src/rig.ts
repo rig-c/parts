@@ -1,4 +1,5 @@
-import { regionBone } from './config.ts';
+import { explicitBoneNames, regionBone } from './config.ts';
+import { explicitAttachment, type ExplicitMeshReport } from './explicitmesh.ts';
 /**
  * The rig stage: a character config and its assembled parts in, a rig spec
  * and a motion spec in rig-c's format out.
@@ -795,7 +796,7 @@ export function meshBoundBones(att: Pick<MeshAttachment, 'weights'>): string[] {
 }
 
 /** One row of `mesh_report.json`: a lattice mesh's row is as it always was; a contour mesh's says so. */
-export type MeshReport = LatticeMeshReport | ContourMeshReport | AutoMeshReport | InfluenceMeshReport;
+export type MeshReport = LatticeMeshReport | ContourMeshReport | AutoMeshReport | InfluenceMeshReport | ExplicitMeshReport;
 
 /**
  * An influence mesh's row (issue #378): the lattice's counts and coverage as every row has them, the block as declared,
@@ -1364,7 +1365,14 @@ export function buildRig(
   // issue #378: which `segments` entry each resolved segment came from — rig-c's `bones` entries, which an influence
   // mesh's `across: false` keeps apart. Every mode resolves them; only the influence mode reads this.
   const meshSegmentEntries = new Map<string, number[]>();
+  const explicitNames = explicitBoneNames(new Set(B.keys()), new Map([...chains].map(([k, v]) => [k, v.length])), cfg.stops);
   for (const [part, m] of Object.entries(cfg.meshes)) {
+    if ('explicit' in m) {
+      for (const bone of [...m.segments.map(s => typeof s === 'string' ? s : s[0]), ...m.explicit.weights.flatMap(row => row.map(w => w.bone))]) {
+        if (!explicitNames.has(bone)) fail('RIG_NAME_RESOLVES', `config.meshes.${part}.explicit`, `names the bone "${bone}", which config.bones does not declare`);
+      }
+      continue;
+    }
     if ('contour' in m) {
       (m.contour.regions ?? []).forEach((rg, i) => {
         if (!B.has(rg.bone)) fail('RIG_NAME_RESOLVES', `config.meshes.${part}.contour.regions[${i}].bone`, `names the bone "${rg.bone}", which config.bones does not declare`);
@@ -1499,6 +1507,11 @@ export function buildRig(
   // to its control under `ctl` as theirs do. A config with no contour region adds nothing here.
   for (const m of Object.values(cfg.meshes)) if ('contour' in m) for (const rg of contourRegionsOf(m.contour)) meshBones.add(rg.bone);
   for (const m of Object.values(cfg.meshes)) if ('auto' in m) for (const rg of m.auto.regions ?? []) if (weightsABone(rg)) meshBones.add(rg.bone);
+  for (const m of Object.values(cfg.meshes)) if ('explicit' in m) for (const row of m.explicit.weights) for (const w of row) meshBones.add(w.bone);
+  // Accepted final bindings may already name a stop's drawn link. Its source link still needs the idle control.
+  for (const stop of cfg.stops ?? []) for (const link of stop.links ?? chains.get(stop.chain) ?? []) {
+    if (meshBones.has(`${link}_d`)) meshBones.add(link);
+  }
   const meshKeyed = controlledBones(motion, meshBones);
   const controls = idleKeys === 'ctl' ? meshKeyed : [];
   for (const k of controls) {
@@ -2289,6 +2302,14 @@ export function buildRig(
       addSlots(p.name, { name: p.name, bone: bone.name, attachment: p.name });
       continue;
     }
+    if ('explicit' in mesh) {
+      const row = explicitAttachment(p, images.get(p.name) as Raster, parts.rig_size, mesh);
+      if (Array.isArray(row)) { problems.push(...row); continue; }
+      skin[p.name] = { [p.name]: row.attachment };
+      addSlots(p.name, { name: p.name, bone: mesh.segments[0] as string, attachment: p.name });
+      meshReport.push(row.report);
+      continue;
+    }
     const segs = meshSegments.get(p.name) as Segment[];
     if ('auto' in mesh) {
       const row = autoAttachment(p, img, file, mesh.auto, mesh.r, mesh.exponent, segs, mesh.rule ?? 'distance', mesh, problems);
@@ -2469,6 +2490,7 @@ export function buildRig(
           for (const s of meshSegments.get(pName) ?? []) coveredBones.add(s.bone);
           const m = cfg.meshes[pName];
           if (m !== undefined) {
+            if ('explicit' in m) for (const row of m.explicit.weights) for (const w of row) coveredBones.add(w.bone);
             if ('contour' in m) for (const rg of contourRegionsOf(m.contour)) coveredBones.add(rg.bone);
             if ('auto' in m) for (const rg of m.auto.regions ?? []) if (weightsABone(rg)) coveredBones.add(rg.bone);
           }
@@ -2532,6 +2554,10 @@ export function buildRig(
         if (mesh === undefined) {
           const bone = B.get(regionBone(cfg.regions[p.name])) as Bone;
           skin[skinSlot][attName] = altRegion(file, bone.name, p.x + p.w / 2, p.y + p.h / 2);
+          continue;
+        }
+        if ('explicit' in mesh) {
+          fail('RIG_EXPLICIT_ALTERNATE', `config.meshes.${p.name}.explicit`, `set "${alt.name}" replaces this part; an accepted payload is bound to one image and region, not alternate artwork or bind poses — use a generated mesh for this alternate part`);
           continue;
         }
         const fullSegs = meshSegments.get(p.name) as Segment[];
@@ -2682,8 +2708,13 @@ export function buildRig(
     ...Object.entries(cfg.meshes).filter(([, spec]) => spec.gather === false).map(([part]) => ({ part, object: `config.meshes.${part}.gather`, slots: slotFamilies.get(part) ?? [part] })),
     ...Object.entries(cfg.regions).filter(([, spec]) => typeof spec !== 'string' && spec.gather === false).map(([part]) => ({ part, object: `config.regions.${part}.gather`, slots: slotFamilies.get(part) ?? [part] })),
   ];
-  const limbLayout = coalesceLimbSlots(cfg.limbs, bones, slots, skin, ungathered);
-  const explicitLayout = placeLimbLayouts(cfg.limbs, bones, limbLayout, skin, slotFamilies);
+  // Accepted explicit weights already name drawn stop links. Resolve only the
+  // declared aliases for ownership before applyStops, without rebinding them
+  // or adding these lookup-only entries to the emitted bone graph.
+  const ownershipBones = cfg.stops === undefined ? bones : [...bones, ...cfg.stops.flatMap(s =>
+    (s.links ?? chains.get(s.chain) ?? []).map(link => ({ name: `${link}_d`, parent: link, x: 0, y: 0 })))];
+  const limbLayout = coalesceLimbSlots(cfg.limbs, ownershipBones, slots, skin, ungathered);
+  const explicitLayout = placeLimbLayouts(cfg.limbs, ownershipBones, limbLayout, skin, slotFamilies);
   // ---- leg stops (issue #404) --------------------------------------------
   // Only when the config has `stops`: each link after the first (and any bone hanging from a stopped link) hangs
   // from the drawn link `<link>_d` above it, and slots and weights on a stopped link bind `<link>_d`.
@@ -2701,6 +2732,13 @@ export function buildRig(
     if (att !== undefined && 'type' in att) row.bones = meshBoundBones(att);
   }
 
+  for (const [part, mesh] of Object.entries(cfg.meshes)) if ('explicit' in mesh) {
+    const att = skin[part]?.[part];
+    if (att !== undefined && 'type' in att && JSON.stringify(att.weights) !== JSON.stringify(mesh.explicit.weights.map(row => row.map(w => ({ bone: w.bone, x: w.x, y: w.y, weight: w.weight }))))) {
+      fail('RIG_EXPLICIT_BINDING', `config.meshes.${part}.explicit.weights`, 'the declared stops or turn would change these accepted bindings; supply the accepted final emitted bone names and bind coordinates, or use a generated mesh; no payload is normalized');
+    }
+  }
+  refuseIfAny(problems);
   const name = `${cfg.key}_painting`;
   const rig: RigSpec = {
     spec: 'rigc-rig/1',

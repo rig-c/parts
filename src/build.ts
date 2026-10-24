@@ -1448,6 +1448,8 @@ export function rigStage(input: RigStageInput, rigc: RigcRunner, scratch: string
           ? ''
           : `; replayed to accepted step ${rp.chosen_step} of ${rp.accepted_steps} after ${rp.replays} replay(s); selection ${readingText(rp.selection, roleReadings(run.report).bound)}; held out ${readingText(rp.held_out, roleReadings(run.report).bound)}`;
       log(`${head}auto ${from} -> ${r.boundaryVertices}+${r.interiorVertices} (hull+interior) bindings ${r.bindings} ${infl} ${t.reason}${tried}; worst ${worst}${unboundedClause(m.residuals, m.settings.targets.artFit)}${allocationClause(m.residuals)}${stageBClause(m.settings, m.result)}${residualClause(m.skinning_residual)}${strayClause(m.stray_cleared)}; ${moved}${replayed}`);
+    } else if ('mode' in m && m.mode === 'explicit') {
+      log(`${head}explicit ${infl} image sha256 ${m.image_sha256} region sha256 ${m.region_sha256}`);
     } else if ('mode' in m && m.mode === 'influence') {
       // issue #378: rig-c's segments lattice and pull, the figures its own build prints for the generator (AUTHORING §3.4.7).
       const i = m.influence;

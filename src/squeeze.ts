@@ -182,6 +182,7 @@ export function chainSqueezes(
   const times = frameTimes(motion.duration);
 
   for (const [mname, m] of Object.entries(spec.meshes)) {
+    if ('explicit' in m) { unread.push(`mesh ${JSON.stringify(mname)} is an explicit payload; the lattice squeeze is not read`); continue; }
     const keyed = m.segments.filter((s): s is string => typeof s === 'string' && chains.has(s) && tracks.has(s));
     if (keyed.length < 2) continue;
     const pairs: Array<[string, string]> = [];
@@ -318,7 +319,7 @@ export function branchSqueezes(
   }
 
   for (const [mname, m] of Object.entries(spec.meshes)) {
-    if ('contour' in m || 'auto' in m || 'influence' in m || m.rule === 'heat' || m.r >= m.grid) continue;
+    if ('explicit' in m || 'contour' in m || 'auto' in m || 'influence' in m || m.rule === 'heat' || m.r >= m.grid) continue;
     const byFork = new Map<string, string[]>();
     for (const sp of m.segments) {
       if (typeof sp !== 'string') continue;

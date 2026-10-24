@@ -133,7 +133,7 @@ export const NOT_COMPARED_SENTENCE = 'mesh-draft drafts lattice entries only, so
 /** A config entry `mesh-draft` did not draft because it is not a lattice (issue #307), in config order. */
 export interface NotCompared {
   part: string;
-  mode: 'contour' | 'auto' | 'influence';
+  mode: 'contour' | 'auto' | 'influence' | 'explicit';
   note: string;
 }
 
@@ -142,7 +142,7 @@ export function notCompared(meshes: CharacterConfig['meshes']): NotCompared[] {
   const out: NotCompared[] = [];
   for (const [part, spec] of Object.entries(meshes)) {
     if ('grid' in spec) continue;
-    const mode = 'auto' in spec ? 'auto' : 'influence' in spec ? 'influence' : 'contour';
+    const mode = 'explicit' in spec ? 'explicit' : 'auto' in spec ? 'auto' : 'influence' in spec ? 'influence' : 'contour';
     out.push({ part, mode, note: `its entry is "${mode}", not a lattice: ${NOT_COMPARED_SENTENCE}` });
   }
   return out;

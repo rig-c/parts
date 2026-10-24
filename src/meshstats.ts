@@ -16,7 +16,7 @@ import { buildRig, DEFAULT_IDLE_KEYS, type MeshReport } from './rig.ts';
 /** One mesh's counts, as the rig stage's `mesh_report.json` row holds them; `mode` is `lattice` for a `grid` entry, whose row carries no mode. */
 export interface MeshStatsRow {
   part: string;
-  mode: 'lattice' | 'contour' | 'auto' | 'influence';
+  mode: 'lattice' | 'contour' | 'auto' | 'influence' | 'explicit';
   vertices: number;
   triangles: number;
 }
