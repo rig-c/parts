@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.61.0](https://github.com/rig-c/parts/compare/v1.60.2...v1.61.0) (2026-10-24)
+
+
+### Features
+
+* **check:** gate body-root motion gaps with composite coverage ([#707](https://github.com/rig-c/parts/issues/707)) ([58122e7](https://github.com/rig-c/parts/commit/58122e77b1e28e16879564a18d5c617dc6b08729)), closes [#686](https://github.com/rig-c/parts/issues/686)
+
+
+### Bug Fixes
+
+* **check:** resolve generated body turn carriers ([#710](https://github.com/rig-c/parts/issues/710)) ([4f276e0](https://github.com/rig-c/parts/commit/4f276e0deee1915f178aa10a6803a82998befdc4)), closes [#708](https://github.com/rig-c/parts/issues/708)
+* **check:** stabilize setup seams and alternate-set verdicts ([#713](https://github.com/rig-c/parts/issues/713)) ([7e71791](https://github.com/rig-c/parts/commit/7e717915799c101f3c4040c73782bc6b14dc95a5)), closes [#705](https://github.com/rig-c/parts/issues/705)
+* let alternate parts select named author layers ([#712](https://github.com/rig-c/parts/issues/712)) ([62ca5b0](https://github.com/rig-c/parts/commit/62ca5b07ab1f566b6c36e85fe2196d726f58c300))
+* preserve parent cutouts for independently selected alternate pieces ([#715](https://github.com/rig-c/parts/issues/715)) ([e0ac7d4](https://github.com/rig-c/parts/commit/e0ac7d4afcbb0b18b1149d4111e0686366a6ff29))
+
 ## [1.60.2](https://github.com/rig-c/parts/compare/v1.60.1...v1.60.2) (2026-10-23)
 
 
