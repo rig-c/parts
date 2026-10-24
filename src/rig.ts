@@ -2708,8 +2708,13 @@ export function buildRig(
     ...Object.entries(cfg.meshes).filter(([, spec]) => spec.gather === false).map(([part]) => ({ part, object: `config.meshes.${part}.gather`, slots: slotFamilies.get(part) ?? [part] })),
     ...Object.entries(cfg.regions).filter(([, spec]) => typeof spec !== 'string' && spec.gather === false).map(([part]) => ({ part, object: `config.regions.${part}.gather`, slots: slotFamilies.get(part) ?? [part] })),
   ];
-  const limbLayout = coalesceLimbSlots(cfg.limbs, bones, slots, skin, ungathered);
-  const explicitLayout = placeLimbLayouts(cfg.limbs, bones, limbLayout, skin, slotFamilies);
+  // Accepted explicit weights already name drawn stop links. Resolve only the
+  // declared aliases for ownership before applyStops, without rebinding them
+  // or adding these lookup-only entries to the emitted bone graph.
+  const ownershipBones = cfg.stops === undefined ? bones : [...bones, ...cfg.stops.flatMap(s =>
+    (s.links ?? chains.get(s.chain) ?? []).map(link => ({ name: `${link}_d`, parent: link, x: 0, y: 0 })))];
+  const limbLayout = coalesceLimbSlots(cfg.limbs, ownershipBones, slots, skin, ungathered);
+  const explicitLayout = placeLimbLayouts(cfg.limbs, ownershipBones, limbLayout, skin, slotFamilies);
   // ---- leg stops (issue #404) --------------------------------------------
   // Only when the config has `stops`: each link after the first (and any bone hanging from a stopped link) hangs
   // from the drawn link `<link>_d` above it, and slots and weights on a stopped link bind `<link>_d`.

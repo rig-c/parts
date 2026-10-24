@@ -3,9 +3,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { explicitFixture } from '../fixtures/explicitmesh.ts';
+import { explicitFixture, stoppedLimbFixture } from '../fixtures/explicitmesh.ts';
 import { rigConfig, rigImages, rigParts, writeRigFixture } from '../fixtures/rig.ts';
-import { parseConfig, partBoundBones } from '../src/config.ts';
+import { parseConfig, partBoundBones, type ExplicitMeshSpec, type Limb } from '../src/config.ts';
 import { PartsError } from '../src/errors.ts';
 import { buildRig, rigJsonText, type MeshAttachment } from '../src/rig.ts';
 import { explicitImageHash, explicitRegionHash } from '../src/explicitmesh.ts';
@@ -13,6 +13,7 @@ import { readRigInputs, rigStage } from '../src/build.ts';
 import { notCompared } from '../src/meshdraft.ts';
 import { meshStatsRows } from '../src/meshstats.ts';
 import { configRoles } from '../src/structure.ts';
+import { layoutCompanion, refreshLimbLayout } from '../src/limblayout.ts';
 
 export function runExplicitMeshChecks(root: string, report: (name: string, ok: boolean, detail: string) => void): number {
   mkdirSync(root, { recursive: true }); let failed = 0;
@@ -86,6 +87,42 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
   const altImages = rigImages(); altImages.set('other_cloth', altImages.get('cloth')!);
   const alternate = refused(() => buildRig(cfg, altParts, altImages));
   check('GX18_BASE_PAYLOAD_IS_NOT_GUESSED_FOR_ALTERNATE_ART', alternate?.problems.some(p => p.code === 'RIG_EXPLICIT_ALTERNATE') === true, codes(alternate));
+  const transferPart = (f: ReturnType<typeof stoppedLimbFixture>, part: string) => {
+    const original = buildRig(parseConfig(f.config), f.parts, f.images), raw = structuredClone(f.config);
+    const accepted = original.rig.skins.default[part][part] as MeshAttachment;
+    const record = f.parts.parts.find(p => p.name === part)!;
+    const mesh: ExplicitMeshSpec = { segments: [...new Set([original.rig.slots.find(s => s.name === part)!.bone, ...accepted.weights.flatMap(row => row.map(w => w.bone))])], explicit: {
+      image_sha256: explicitImageHash(f.images.get(part)!), region_sha256: explicitRegionHash(f.parts.rig_size, record),
+      uvs: accepted.uvs, triangles: accepted.triangles, hull: accepted.hull, weights: accepted.weights,
+    } };
+    (raw.meshes as Record<string, unknown>)[part] = mesh;
+    delete (raw.regions as Record<string, unknown>)[part];
+    return { raw, original, accepted, mesh };
+  };
+  const limb = stoppedLimbFixture(), acceptedRider = transferPart(limb, 'rider');
+  const order = (rig: typeof built.rig): string => JSON.stringify(rig.slots.map(s => s.name));
+  check('GX19_STOPPED_GENERATED_LIMB_IS_THE_POSITIVE_ORDER_CONTROL', order(acceptedRider.original.rig) === '["upper","rider","lower","unrelated"]', order(acceptedRider.original.rig));
+  const riderInput = JSON.stringify(acceptedRider.mesh.explicit), rider = buildRig(parseConfig(acceptedRider.raw), limb.parts, limb.images);
+  check('GX20_ACCEPTED_DRAWN_LINK_RIDER_KEEPS_LIMB_ORDER_AND_PAYLOAD', order(rider.rig) === order(acceptedRider.original.rig) && JSON.stringify(rider.rig.skins.default.rider.rider) === JSON.stringify(acceptedRider.accepted) && JSON.stringify(acceptedRider.mesh.explicit) === riderInput,
+    `${order(rider.rig)}; accepted leg1_d weights and input unchanged`);
+  const subset = stoppedLimbFixture();
+  subset.config.stops = [{ chain: 'leg', links: ['leg1'], against: 'body', at: [0, 0], inward: -45, outward: 45 }];
+  const selected = transferPart(subset, 'rider'), selectedBuilt = buildRig(parseConfig(selected.raw), subset.parts, subset.images);
+  check('GX21_ONLY_THE_DECLARED_STOP_LINKS_GAIN_OWNERSHIP_ALIASES', JSON.stringify(selected.mesh.segments) === '["leg1_d"]' && order(selectedBuilt.rig) === order(selected.original.rig), order(selectedBuilt.rig));
+  const undeclared = structuredClone(selected.raw), undeclaredMesh = (undeclared.meshes as Record<string, ExplicitMeshSpec>).rider;
+  undeclaredMesh.segments = ['leg0_d'];
+  for (const row of undeclaredMesh.explicit.weights) for (const w of row) w.bone = 'leg0_d';
+  const unknownAlias = refused(() => buildRig(parseConfig(undeclared), subset.parts, subset.images));
+  check('GX22_AN_UNSTOPPED_CHAIN_LINK_DRAWN_ALIAS_IS_REFUSED', unknownAlias?.problems.some(p => p.code === 'CONFIG_NAME_RESOLVES') === true, codes(unknownAlias));
+  const laidOut = stoppedLimbFixture();
+  (laidOut.config.meshes as Record<string, unknown>).lower = { grid: 8, r: 8, segments: ['leg1'] };
+  delete (laidOut.config.regions as Record<string, unknown>).lower;
+  (laidOut.config.limbs as Record<string, Limb>).limb.layout = { parts: ['lower'], before: { part: 'unrelated' } };
+  const acceptedLower = transferPart(laidOut, 'lower'), lower = buildRig(parseConfig(acceptedLower.raw), laidOut.parts, laidOut.images);
+  check('GX23_EXPLICIT_STOPPED_SEGMENT_LAYOUT_RETAINS_SELECTED_RIDERS', order(lower.rig) === order(acceptedLower.original.rig) && JSON.stringify(lower.rig.skins.default.lower.lower) === JSON.stringify(acceptedLower.accepted) && JSON.stringify(lower.layout?.placements[0].slots) === '["rider","lower"]', JSON.stringify(lower.layout?.placements));
+  if (lower.layout === undefined) throw new Error('GENERATED_STOPPED_LAYOUT_REQUIRED');
+  const replay = refreshLimbLayout(lower.layout, lower.rig), companion = layoutCompanion(replay, lower.rig, rigJsonText(lower.rig));
+  check('GX24_STOPPED_LAYOUT_REPLAY_AND_COMPANION_KEEP_ALIAS_PROVENANCE', JSON.stringify(companion.setup_slots) === order(lower.rig) && JSON.stringify(replay.placements[0].slots) === '["rider","lower"]' && JSON.stringify(lower.rig.skins.default.lower.lower) === JSON.stringify(acceptedLower.accepted), JSON.stringify(companion.placements));
   return failed;
 }
 
