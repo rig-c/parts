@@ -79,7 +79,7 @@
  */
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import type { Frame as RootCoverageFrame, Piece as RootCoveragePiece, Viewport as RootCoverageViewport } from 'rig-c/render';
+import type { Frame as RootCoverageFrame, Piece as RootCoveragePiece, Viewport as RootCoverageViewport } from 'rig-c/render-shared';
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig } from './assemble.ts';
@@ -1222,6 +1222,8 @@ export function motionHeat(frames: readonly Raster[]): Raster {
 }
 
 export interface SeamFigures {
+  /** Authored support size for a canonical union; absent for the unchanged auto reading. */
+  denominator?: number;
   mean: number;
   over40: number;
   over80: number;
@@ -1457,6 +1459,8 @@ export function seamFigures(
   background: readonly [number, number, number, number],
   map: ScaleTranslate = rigToFrameMap(stage, composite.height, vp),
   scene = false,
+  effect?: Uint8Array,
+  sourceGrid = false,
 ): SeamFigures {
   const [W, H] = [composite.width, composite.height];
   const src = newFloatImage(W, H, 3);
@@ -1473,11 +1477,23 @@ export function seamFigures(
   const counted: number[] = [];
   const countedDiff: number[] = [];
   const n = vp.pixelWidth * vp.pixelHeight;
+  if (effect !== undefined && effect.length !== n) refuseIfAny([{ code: 'CHECK_SEAM_SUPPORT', object: 'the effect mask', detail: 'does not have the source grid size' }]);
   // Issue #242: on a scene, the frame columns and rows whose composite sample reaches the painting's border.
   const onEdge = (i: number, t: number, s: number, size: number): boolean => {
     const k = Math.floor((i - t) / s);
     return k <= 0 || k + 1 >= size - 1;
   };
+  // Original authored border, evaluated on its own cells, not on union padding.
+  let authoredA = W * H;
+  if (sourceGrid) {
+    if (vp.scale !== 1 || ![map.tx, map.ty].every(x => Number.isSafeInteger(x) && Math.fround(x) === x))
+      refuseIfAny([{ code: 'CHECK_SEAM_DOMAIN', object: 'the source-grid sample map', detail: 'requires exact integer offsets at scale 1' }]);
+    if (scene) {
+      authoredA = 0;
+      for (let v = 0; v < H; v++) for (let u = 0; u < W; u++)
+        if (!onEdge(u, 0, 1, W) && !onEdge(v, 0, 1, H)) authoredA++;
+    }
+  }
   const edgeCol = scene ? Array.from({ length: vp.pixelWidth }, (_, x) => onEdge(x, map.tx, map.sx, W)) : null;
   const edgeRow = scene ? Array.from({ length: vp.pixelHeight }, (_, y) => onEdge(y, map.ty, map.sy, H)) : null;
   for (let p = 0; p < n; p++) {
@@ -1487,11 +1503,16 @@ export function seamFigures(
       const d = Math.abs(w - frame.data[p * 4 + c]);
       if (d > m) m = d;
     }
-    if (edgeCol !== null && edgeRow !== null && (edgeCol[p % vp.pixelWidth] || edgeRow[Math.floor(p / vp.pixelWidth)])) {
+    const u = p % vp.pixelWidth - map.tx, v = Math.floor(p / vp.pixelWidth) - map.ty;
+    const excluded = sourceGrid && scene
+      ? u < 0 || v < 0 || u >= W || v >= H || onEdge(u, 0, 1, W) || onEdge(v, 0, 1, H)
+      : edgeCol !== null && edgeRow !== null && (edgeCol[p % vp.pixelWidth] || edgeRow[Math.floor(p / vp.pixelWidth)]);
+    if (excluded) {
       borderPx++;
       if (m > SEAM_PX_LEVEL) borderOver40++;
       continue;
     }
+    if (effect !== undefined && effect[p] === 0) continue;
     sum += m;
     if (m > SEAM_PX_LEVEL) {
       over40++;
@@ -1500,13 +1521,357 @@ export function seamFigures(
     }
     if (m > SEAM_PX_LEVEL_HIGH) over80++;
   }
-  return { mean: scene ? (n - borderPx === 0 ? 0 : sum / (n - borderPx)) : sum / n, over40, over80, border: scene ? { framePx: borderPx, over40: borderOver40 } : null, counted, countedDiff, map };
+  const denominator = sourceGrid ? authoredA : n - borderPx;
+  if (denominator <= 0) refuseIfAny([{ code: 'CHECK_SEAM_SUPPORT', object: 'the seam mean denominator', detail: 'has no source cells after the declared scene-border exclusion' }]);
+  return { ...(sourceGrid ? { denominator } : {}), mean: sum / denominator, over40, over80, border: scene ? { framePx: borderPx, over40: borderOver40 } : null, counted, countedDiff, map };
+}
+
+export interface SeamSupportUnavailable {
+  code: 'RENDERER_API_UNAVAILABLE' | 'SOURCE_RIG_UNREADABLE' | 'SOURCE_SKIN_UNSUPPORTED' |
+    'SOURCE_ATTACHMENT_MISSING' | 'SOURCE_ATTACHMENT_AMBIGUOUS' | 'SOURCE_MAPPING_UNSUPPORTED' |
+    'SOURCE_IMAGE_UNREADABLE' | 'POSE_EXPORT_UNREADABLE' | 'POSE_MISMATCH' |
+    'POSE_ATTACHMENT_MISSING' | 'RASTER_READ_UNAVAILABLE';
+  slot?: string;
+  attachment?: string;
+  feature?: 'clipping' | 'sequence-or-non-image-attachment';
+}
+
+class SeamSupportError extends Error {
+  constructor(readonly reason: SeamSupportUnavailable) { super(reason.code); }
+}
+
+/** Sort object keys only; array order is part of UV/topology/weight semantics. */
+function seamSourceValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(seamSourceValue);
+  if (isRecord(value)) return Object.fromEntries(Object.keys(value).sort().map(k => [k, seamSourceValue(value[k])]));
+  return value;
+}
+
+/**
+ * One semantic drawing identity, never an atlas or a frame ordinal. Source
+ * UVs, triangles, weights and all other declared attachment fields stay in the
+ * signature. Only the image path is replaced by its resolved OWN image content;
+ * page UVs, packed page bytes, and piece bookkeeping are not arguments.
+ */
+export function seamDrawingSignature(input: {
+  slot: string; attachment: string; source: Record<string, unknown>;
+  image: { width: number; height: number; rgba_sha256: string };
+  vertices: readonly number[]; color: readonly number[];
+}): string {
+  const source = Object.fromEntries(Object.entries(input.source).filter(([key]) => key !== 'image'));
+  return JSON.stringify(seamSourceValue({ slot: input.slot, attachment: input.attachment, source, image: input.image, vertices: input.vertices, color: input.color }));
+}
+
+/** Resolve only the actually selected default-skin identity, not a filename suffix. */
+export function seamSourceAttachment(rig: Record<string, unknown>, slot: string, attachment: string): Record<string, unknown> {
+  const skins = isRecord(rig.skins) ? rig.skins : null;
+  const skin = skins !== null && isRecord(skins.default) ? skins.default : null;
+  if (skin === null) throw new SeamSupportError({ code: 'SOURCE_SKIN_UNSUPPORTED', slot, attachment });
+  const drawings = isRecord(skin[slot]) ? skin[slot] : {};
+  const matches = Object.entries(drawings).filter(([key, value]) => isRecord(value) && (typeof value.name === 'string' ? value.name : key) === attachment);
+  if (matches.length !== 1) throw new SeamSupportError({ code: matches.length === 0 ? 'SOURCE_ATTACHMENT_MISSING' : 'SOURCE_ATTACHMENT_AMBIGUOUS', slot, attachment });
+  const source = matches[0][1];
+  if (!isRecord(source) || !['region', 'mesh'].includes(typeof source.type === 'string' ? source.type : 'region') || typeof source.image !== 'string' || source.image.length === 0 || source.sequence !== undefined) {
+    throw new SeamSupportError({ code: 'SOURCE_MAPPING_UNSUPPORTED', slot, attachment, feature: 'sequence-or-non-image-attachment' });
+  }
+  return source;
+}
+
+/** #705: ordered contributor identities on the fixed source grid, before residuals. */
+export interface SeamSupport {
+  reference: Int32Array;
+  posed: Int32Array;
+  referenceDepth: Uint8Array;
+  posedDepth: Uint8Array;
+  unavailable?: SeamSupportUnavailable;
+  drawings?: Array<{ scope: 'reference' | 'posed'; name: string; identity: string; order: number; geometry: string; art: string; source_png_sha256?: string }>;
+}
+
+export interface SeamEffects {
+  mask: Uint8Array;
+  /** Indices into SEAM_EFFECT_REASONS, used only for the raw pair audit. */
+  cellReasons: Uint8Array;
+  reasons: { reference_changed: number; posed_changed: number; no_art_or_singleton: number; unavailable: number; inherited: number };
+  changes: Array<{ scope: 'reference' | 'posed'; drawing: string; reasons: string[] }>;
+}
+
+const SEAM_EFFECT_REASONS = ['reference_changed', 'posed_changed', 'no_art_or_singleton', 'unavailable', 'inherited'] as const;
+
+/** Exact stack equality proves inheritance; missing/singleton provenance never proves exclusion. */
+export function seamEffectSelection(base: SeamSupport, selected: SeamSupport): SeamEffects {
+  const n = base.reference.length;
+  if ([base.posed, base.referenceDepth, base.posedDepth, selected.reference, selected.posed, selected.referenceDepth, selected.posedDepth].some(a => a.length !== n)) {
+    refuseIfAny([{ code: 'CHECK_SEAM_SUPPORT', object: 'the alternate effect grid', detail: 'does not have the base source grid size' }]);
+  }
+  const mask = new Uint8Array(n), cellReasons = new Uint8Array(n);
+  const reasons: SeamEffects['reasons'] = { reference_changed: 0, posed_changed: 0, no_art_or_singleton: 0, unavailable: 0, inherited: 0 };
+  for (let q = 0; q < n; q++) {
+    const reason: keyof typeof reasons = base.unavailable !== undefined || selected.unavailable !== undefined ? 'unavailable'
+      : base.reference[q] !== selected.reference[q] ? 'reference_changed'
+      : base.posed[q] !== selected.posed[q] ? 'posed_changed'
+      : Math.min(base.referenceDepth[q], selected.referenceDepth[q]) < 2 ? 'no_art_or_singleton' : 'inherited';
+    reasons[reason]++;
+    cellReasons[q] = SEAM_EFFECT_REASONS.indexOf(reason);
+    if (reason !== 'inherited') mask[q] = 1;
+  }
+  const changes: SeamEffects['changes'] = [];
+  const before = base.drawings ?? [], after = selected.drawings ?? [];
+  for (const scope of ['reference', 'posed'] as const) {
+    const names = [...new Set([...before, ...after].filter(d => d.scope === scope).map(d => d.name))];
+    for (const name of names) {
+      const b = before.find(d => d.scope === scope && d.name === name), a = after.find(d => d.scope === scope && d.name === name);
+      const fields = b === undefined ? ['added'] : a === undefined ? ['hidden/removed'] :
+        (['identity', 'order', 'geometry', 'art'] as const).filter(k => b[k] !== a[k]);
+      if (fields.length > 0) changes.push({ scope, drawing: name, reasons: fields });
+    }
+  }
+  return { mask, cellReasons, reasons, changes };
+}
+
+/** Public state evidence excludes raw candidate bytes: compiler image paths vary with output location. */
+export interface SeamStateBounds {
+  state: string;
+  frames: number;
+  pieces: number;
+  bounds: { minX: number; minY: number; maxX: number; maxY: number } | null;
+  pose_sha256: string;
+}
+
+/** The promised read facade (rig-c >=2.69.0 <3); optional Spine registration
+ * follows rigc's own package-root resolution. No candidate error selects a
+ * different API. Importing check, or constructing a root-free reader, loads none.
+ */
+type OfficialRenderer = typeof import('rig-c/render-shared');
+function officialRenderer(): OfficialRenderer {
+  const require = createRequire(import.meta.url);
+  const coreRoot = dirname(require.resolve('rig-c/package.json'));
+  let runtimePresent = false;
+  try { require.resolve('@esotericsoftware/spine-core/package.json', { paths: [coreRoot] }); runtimePresent = true; } catch { /* Optional runtime is absent, as in rigc's launcher. */ }
+  if (runtimePresent) require('rig-c/render');
+  return require('rig-c/render-shared') as OfficialRenderer;
+}
+
+/** One decoder/poser lifetime per state; retain only finite bounds and identities, never atlas pages or rasters. */
+export function seamStateBounds(build: string, state: string): SeamStateBounds {
+  try {
+    type Renderer = OfficialRenderer;
+    const api = officialRenderer();
+    if (['loadCandidate', 'throughPoser', 'sampleAnimation'].some(k => typeof api[k as keyof Renderer] !== 'function')) throw new Error('official posed-piece API unavailable');
+    const skeleton = join(build, 'skeleton.json'), atlas = join(build, 'skeleton.atlas');
+    const skeletonText = readFileSync(skeleton, 'utf8'), atlasText = readFileSync(atlas, 'utf8');
+    const loaded = api.loadCandidate({ skeletonText, atlasText, atlasDir: build, label: 'setup seam union' }, { skeleton, atlas }, undefined);
+    const frames = api.throughPoser(loaded.choice, poser => api.sampleAnimation(poser, 'still', STILL_FPS, { geometry: true })).value;
+    if (frames.length === 0) throw new Error('no actual still frames');
+    let bounds: SeamStateBounds['bounds'] = null, pieces = 0;
+    const digest = createHash('sha256');
+    for (const frame of frames) {
+      if (!Number.isSafeInteger(frame.index) || !Number.isFinite(frame.time)) throw new Error('unreadable still identity');
+      digest.update(JSON.stringify([frame.index, frame.time]));
+      for (const piece of frame.pieces) {
+        if (piece.world.length === 0 || piece.world.length % 2 !== 0 || !piece.world.every(Number.isFinite)) throw new Error('unreadable drawn vertices');
+        pieces++;
+        digest.update(JSON.stringify([piece.slot, piece.world, piece.tint]));
+        for (let i = 0; i < piece.world.length; i += 2) {
+          const x = piece.world[i], y = piece.world[i + 1];
+          if (bounds === null) bounds = { minX: x, minY: y, maxX: x, maxY: y };
+          else { bounds.minX = Math.min(bounds.minX, x); bounds.minY = Math.min(bounds.minY, y); bounds.maxX = Math.max(bounds.maxX, x); bounds.maxY = Math.max(bounds.maxY, y); }
+        }
+      }
+    }
+    return { state, frames: frames.length, pieces, bounds,
+      pose_sha256: digest.digest('hex') };
+  } catch {
+    refuseIfAny([{ code: 'CHECK_SEAM_DOMAIN', object: 'setup seam union state ' + JSON.stringify(state), detail: 'official selected candidate/still drawn-piece bounds are unavailable; no guessed or empty bounds are substituted' }]);
+    throw new Error('unreachable');
+  }
+}
+
+/** Source-relative integer lattice: odd-width canvases keep their half-integer world origin. */
+export function seamUnionViewport(stage: StageBox, states: readonly Pick<SeamStateBounds, 'state' | 'bounds'>[]): Viewport {
+  const bad = (detail: string): never => { refuseIfAny([{ code: 'CHECK_SEAM_DOMAIN', object: 'the common setup-seam union', detail }]); throw new Error('unreachable'); };
+  if (![stage.x, stage.y, stage.width, stage.height].every(Number.isFinite) ||
+    !Number.isSafeInteger(stage.width) || !Number.isSafeInteger(stage.height) || stage.width <= 0 || stage.height <= 0 || states.length === 0) return bad('requires finite authored bounds and actual state readings');
+  let minX = stage.x, minY = stage.y, maxX = stage.x + stage.width, maxY = stage.y + stage.height;
+  if (![maxX, maxY].every(Number.isFinite)) return bad('authored endpoints are not finite');
+  for (const state of states) {
+    const b = state.bounds;
+    if (b === null) continue; // Actual empty drawn roster; the authored stage remains in U.
+    if (![b.minX, b.minY, b.maxX, b.maxY].every(Number.isFinite) || b.maxX < b.minX || b.maxY < b.minY) return bad('state ' + JSON.stringify(state.state) + ' has unavailable finite bounds');
+    minX = Math.min(minX, b.minX); minY = Math.min(minY, b.minY); maxX = Math.max(maxX, b.maxX); maxY = Math.max(maxY, b.maxY);
+  }
+  const left = Math.floor(minX - stage.x), bottom = Math.floor(minY - stage.y);
+  const right = Math.ceil(maxX - stage.x), top = Math.ceil(maxY - stage.y);
+  const width = right - left, height = top - bottom;
+  const x = stage.x + left, y = stage.y + bottom;
+  if (![left, bottom, right, top, width, height, -left, top - stage.height].every(n => Number.isSafeInteger(n) && Math.fround(n) === n) ||
+    width <= 0 || height <= 0 || x > minX || y > minY || x + width < maxX || y + height < maxY ||
+    x - stage.x !== left || y - stage.y !== bottom || x + width - stage.x !== right || y + height - stage.y !== top) return bad('union endpoints/offsets cannot preserve the exact finite source-relative float32 sample map');
+  const cells = width * height, authored = stage.width * stage.height;
+  // Known live lower bound: two RGBA still frames (8U), RGB Float32 warp (12U),
+  // RGB Float32 source (12D). Refuse before these alone exceed the existing6GiB
+  // execution guard (#677/#705); this is not a claim that other heap/atlas work fits that guard.
+  const knownBytes = 20 * cells + 12 * authored;
+  if (!Number.isSafeInteger(cells) || !Number.isSafeInteger(knownBytes) || knownBytes > 6 * 1024 ** 3) return bad('union ' + width + 'x' + height + ' requires at least ' + knownBytes + ' known raster bytes, beyond the existing 6 GiB execution budget');
+  return { x, y, width, height, scale: 1, pixelWidth: width, pixelHeight: height };
+}
+
+/** U is a picture, not the mean denominator. Strict outside metadata checks every actual still frame. */
+export function seamCanonicalViewport(stage: StageBox, vp: Viewport, sidecar: unknown, expected: Viewport = { ...stage, scale: 1, pixelWidth: stage.width, pixelHeight: stage.height }): Viewport {
+  const pinned = isRecord(sidecar) && isRecord(sidecar.pinned) ? sidecar.pinned : null;
+  const map = rigToFrameMap(stage, stage.height, expected);
+  if (![map.tx, map.ty].every(n => Number.isSafeInteger(n) && Math.fround(n) === n) ||
+    Object.keys(expected).some(k => vp[k as keyof Viewport] !== expected[k as keyof Viewport]) || pinned?.by !== '--viewport' || !Array.isArray(pinned.outside) || pinned.outside.length !== 0) {
+    refuseIfAny([{ code: 'CHECK_SEAM_DOMAIN', object: 'the source-anchored setup seam', detail: `requires the fixed common union at scale1 and official pinned.outside=[]; viewport ${JSON.stringify(vp)}, pinned ${JSON.stringify(pinned)}; an incomplete or unavailable union cannot pass` }]);
+  }
+  return expected;
+}
+
+/** Collision-free interning: a stack is its exact preceding stack and drawing identity. */
+class SeamStacks {
+  private readonly signatures = new Map<string, number>();
+  private readonly links = new Map<string, number>();
+  append(previous: number, signature: string): number {
+    let drawing = this.signatures.get(signature);
+    if (drawing === undefined) { drawing = this.signatures.size + 1; this.signatures.set(signature, drawing); }
+    const key = `${previous},${drawing}`;
+    let id = this.links.get(key);
+    if (id === undefined) {
+      id = this.links.size + 1;
+      if (id > 0x7fffffff) refuseIfAny([{ code: 'CHECK_SEAM_SUPPORT', object: 'the contributor stack', detail: 'exceeds the signed 32-bit index domain' }]);
+      this.links.set(key, id);
+    }
+    return id;
+  }
+}
+
+type SeamPlaced = PlacedAlpha & { png?: string };
+
+/**
+ * Reference alpha uses the same 2x2 gather as seamPairRows. Actual support is
+ * rasterised by the official renderer, never by a copied triangle algorithm.
+ * Full ordered stacks retain third-party occlusion and gathering dependencies,
+ * including translucent layers; unchanged names alone cannot establish inheritance.
+ */
+function seamSupport(build: string, rigPath: string, set: FrameSet, placed: readonly SeamPlaced[], stacks: SeamStacks, stage: StageBox): SeamSupport {
+  const [W, H] = [set.viewport.pixelWidth, set.viewport.pixelHeight];
+  const n = W * H;
+  const support: SeamSupport = { reference: new Int32Array(n), posed: new Int32Array(n), referenceDepth: new Uint8Array(n), posedDepth: new Uint8Array(n), drawings: [] };
+  const touched = new Int32Array(n);
+  const map = rigToFrameMap(stage, stage.height, set.viewport);
+  placed.forEach((p, i) => {
+    const art = createHash('sha256').update(p.image.data).digest('hex');
+    const shape = [p.x, p.y, p.image.width, p.image.height];
+    const signature = JSON.stringify(['reference', p.name, shape, art]);
+    support.drawings?.push({ scope: 'reference', name: p.name, identity: p.name, order: i, geometry: createHash('sha256').update(JSON.stringify(shape)).digest('hex'), art });
+    for (let y = 0; y < p.image.height; y++) for (let x = 0; x < p.image.width; x++) {
+      if (p.image.data[(y * p.image.width + x) * 4 + 3] === 0) continue;
+      // Each integer source sample gathers its own and the next row/column.
+      for (const v of [p.y + y - 1, p.y + y]) for (const u of [p.x + x - 1, p.x + x]) {
+        if (u < 0 || v < 0 || u >= stage.width || v >= stage.height) continue;
+        const fx = u + map.tx, fy = v + map.ty;
+        if (fx < 0 || fy < 0 || fx >= W || fy >= H) continue;
+        const q = fy * W + fx;
+        if (touched[q] === i + 1) continue;
+        touched[q] = i + 1;
+        support.reference[q] = stacks.append(support.reference[q], signature);
+        support.referenceDepth[q] = Math.min(255, support.referenceDepth[q] + 1);
+      }
+    }
+  });
+  let boundary: SeamSupportUnavailable = { code: 'RENDERER_API_UNAVAILABLE' };
+  try {
+    type Renderer = OfficialRenderer;
+    const api = officialRenderer();
+    if (['loadCandidate', 'throughPoser', 'sampleAnimation', 'pageFor', 'projector', 'rasterisePiece'].some(k => typeof api[k as keyof Renderer] !== 'function')) throw new SeamSupportError(boundary);
+    boundary = { code: 'SOURCE_RIG_UNREADABLE' };
+    const sourceRig: unknown = JSON.parse(readFileSync(rigPath, 'utf8'));
+    if (!isRecord(sourceRig) || (sourceRig.images !== undefined && typeof sourceRig.images !== 'string')) throw new SeamSupportError(boundary);
+    const imageHome = resolve(dirname(rigPath), typeof sourceRig.images === 'string' ? sourceRig.images : '.');
+    boundary = { code: 'RASTER_READ_UNAVAILABLE' };
+    const skeleton = join(build, 'skeleton.json'), atlas = join(build, 'skeleton.atlas');
+    const candidate = api.loadCandidate({ skeletonText: readFileSync(skeleton, 'utf8'), atlasText: readFileSync(atlas, 'utf8'), atlasDir: build, label: 'setup seam effects' }, { skeleton, atlas }, undefined);
+    const pose = api.throughPoser(candidate.choice, p => api.sampleAnimation(p, 'still', STILL_FPS, { geometry: true })).value[0];
+    boundary = { code: 'POSE_EXPORT_UNREADABLE' };
+    const geometry: unknown = JSON.parse(readFileSync(join(set.dir, GEOMETRY_FILE), 'utf8'));
+    const captured = isRecord(geometry) && Array.isArray(geometry.frames) ? geometry.frames[0] : null;
+    if (pose === undefined || !isRecord(captured) || captured.index !== pose.index || captured.time !== pose.time || JSON.stringify(captured.attachments) !== JSON.stringify(pose.attachments)) throw new SeamSupportError({ code: 'POSE_MISMATCH' });
+    const vp: RootCoverageViewport = { minX: set.viewport.x, minY: set.viewport.y, maxX: set.viewport.x + W, maxY: set.viewport.y + H, scale: 1, width: W, height: H };
+    const project = api.projector(vp);
+    pose.pieces.forEach((piece, i) => {
+      if ('source' in piece) throw new SeamSupportError({ code: 'SOURCE_MAPPING_UNSUPPORTED', slot: piece.slot, feature: 'clipping' });
+      const page = api.pageFor(candidate.pages, piece);
+      const matches = pose.attachments?.filter(a => a.slot === piece.slot) ?? [];
+      if (matches.length !== 1) throw new SeamSupportError({ code: 'POSE_ATTACHMENT_MISSING', slot: piece.slot });
+      const posed = matches[0], identity = posed.attachment;
+      const source = seamSourceAttachment(sourceRig, piece.slot, identity);
+      boundary = { code: 'SOURCE_IMAGE_UNREADABLE', slot: piece.slot, attachment: identity };
+      const imagePath = resolve(imageHome, String(source.image));
+      const own = readPng(imagePath);
+      const art = createHash('sha256').update(own.data).digest('hex');
+      const signature = seamDrawingSignature({ slot: piece.slot, attachment: identity, source,
+        image: { width: own.width, height: own.height, rgba_sha256: art }, vertices: posed.vertices, color: posed.color });
+      // Reporting may name a global draw index; it never enters the signature.
+      support.drawings?.push({ scope: 'posed', name: piece.slot, identity, order: i,
+        geometry: createHash('sha256').update(JSON.stringify(seamSourceValue({ source: Object.fromEntries(Object.entries(source).filter(([key]) => key !== 'image')), vertices: posed.vertices, color: posed.color }))).digest('hex'), art, source_png_sha256: createHash('sha256').update(readFileSync(imagePath)).digest('hex') });
+      boundary = { code: 'RASTER_READ_UNAVAILABLE', slot: piece.slot, attachment: identity };
+      api.rasterisePiece(page, piece, project, vp, (x, y, _r, _g, _b, alpha) => {
+        if (alpha <= 0) return;
+        const q = y * W + x;
+        // A mesh may emit more than one clipped triangle from the same drawing.
+        if (touched[q] === -(i + 1)) return;
+        touched[q] = -(i + 1);
+        support.posed[q] = stacks.append(support.posed[q], signature);
+        support.posedDepth[q] = Math.min(255, support.posedDepth[q] + 1);
+      });
+    });
+  } catch (error) {
+    support.unavailable = error instanceof SeamSupportError ? error.reason : boundary;
+  }
+  return support;
+}
+
+export interface SeamReading {
+  mean: number;
+  display_mean: number;
+  denominator_px: number;
+  px_over_40: number;
+  px_over_80: number;
+  frame_scale: number;
+  viewport: Viewport;
+}
+
+export interface SeamScope {
+  mode: 'source-grid/base' | 'source-grid/affected-set';
+  domain?: { viewport: Viewport; authored: StageBox; numerator: 'whole-union' | 'authored-scene-interior'; states: SeamStateBounds[] };
+  denominator_px: number;
+  /** The unchanged auto-fitted reading is diagnostic, never another acceptance bar. */
+  auto_frame_raw: SeamReading;
+  /** All canonical residuals, including inherited ones, before selecting effects. */
+  whole: SeamReading;
+  effects?: SeamEffects['reasons'];
+  changes?: SeamEffects['changes'];
+  unavailable?: SeamSupportUnavailable;
+  whole_pairs?: Array<Omit<SeamPairRow, 'picture'>>;
+  pairs?: Array<{ parts: [string, string]; whole_px_over_40: number; affected_px_over_40: number; inherited_px_over_40: number; reasons: Partial<SeamEffects['reasons']> }>;
+}
+
+function canonicalDenominator(seam: SeamFigures): number {
+  const denominator = seam.denominator;
+  if (denominator === undefined) {
+    refuseIfAny([{ code: 'CHECK_SEAM_SUPPORT', object: 'the canonical seam denominator', detail: 'the fixed authored support was not read' }]);
+    throw new Error('unreachable');
+  }
+  return denominator;
+}
+
+function seamReading(seam: SeamFigures, viewport: Viewport): SeamReading {
+  return { mean: seam.mean, display_mean: round3(seam.mean), denominator_px: seam.denominator ?? viewport.pixelWidth * viewport.pixelHeight - (seam.border?.framePx ?? 0), px_over_40: seam.over40, px_over_80: seam.over80, frame_scale: viewport.scale, viewport };
 }
 
 /**
  * Where `check --keep-stills` leaves the setup-pose still under `--out`
  * (issue #209): rigc's own render directory as `render` wrote it —
- * `frames.json` (the viewport the seam and the source line map by, and the
+ * `frames.json` (the canonical viewport the seam maps by, and the
  * background) and the set directory beside it — so a reader compares against
  * the frame the bars read rather than rebuilding it. Removed at the start of
  * every run, so it is on disk only after a run that asked for it.
@@ -1557,6 +1922,8 @@ export interface SeamPairRow {
   frame_box: [number, number, number, number];
   rig_box: [number, number, number, number];
   cut?: { from: string; differing_copies_px: number };
+  /** Counted sample centres outside the authored source; clamped rig_box is not source provenance there. */
+  outside_authored_px?: number;
   picture: string;
 }
 
@@ -1612,7 +1979,7 @@ export function seamPairRows(seam: SeamFigures, parts: readonly PlacedAlpha[], r
     const db = parts[b].image.data;
     return da[oa] !== db[ob] || da[oa + 1] !== db[ob + 1] || da[oa + 2] !== db[ob + 2];
   };
-  interface Acc { a: number; b: number; over40: number; over80: number; f: [number, number, number, number]; r: [number, number, number, number]; pixels: number[]; differing: number }
+  interface Acc { a: number; b: number; over40: number; over80: number; f: [number, number, number, number]; r: [number, number, number, number]; pixels: number[]; differing: number; outside: number }
   const byPair = new Map<string, Acc>();
   seam.counted.forEach((p, idx) => {
     const fx = p % vp.pixelWidth;
@@ -1655,11 +2022,12 @@ export function seamPairRows(seam: SeamFigures, parts: readonly PlacedAlpha[], r
     const key = `${a},${b}`;
     let acc = byPair.get(key);
     if (acc === undefined) {
-      acc = { a, b, over40: 0, over80: 0, f: [fx, fy, fx, fy], r: [rx0, ry0, rx1, ry1], pixels: [], differing: 0 };
+      acc = { a, b, over40: 0, over80: 0, f: [fx, fy, fx, fy], r: [rx0, ry0, rx1, ry1], pixels: [], differing: 0, outside: 0 };
       byPair.set(key, acc);
     }
     if (a >= 0 && parts[a].from === parts[b].from && read.some(([u, v]) => differ(a, b, u, v))) acc.differing++;
     acc.over40++;
+    if (u0 < 0 || v0 < 0 || u0 >= W || v0 >= H) acc.outside++;
     acc.pixels.push(p);
     if (seam.countedDiff[idx] > SEAM_PX_LEVEL_HIGH) acc.over80++;
     acc.f = [Math.min(acc.f[0], fx), Math.min(acc.f[1], fy), Math.max(acc.f[2], fx), Math.max(acc.f[3], fy)];
@@ -1673,7 +2041,8 @@ export function seamPairRows(seam: SeamFigures, parts: readonly PlacedAlpha[], r
     const pair: [string, string] = acc.a < 0 ? [name(acc.b), SEAM_NO_ART] : [name(acc.a), name(acc.b)];
     const file = `${String(i + 1).padStart(Math.max(2, width), '0')}_${pair.map((n) => (n === SEAM_NO_ART ? 'no-art' : n)).join('_')}.png`;
     const cut = acc.a >= 0 && parts[acc.a].from === parts[acc.b].from ? { cut: { from: parts[acc.a].from, differing_copies_px: acc.differing } } : {};
-    return { row: { parts: pair, px_over_40: acc.over40, px_over_80: acc.over80, frame_box: acc.f, rig_box: acc.r, ...cut, picture: `${SEAM_DIR}/${file}` }, pixels: acc.pixels };
+    return { row: { parts: pair, px_over_40: acc.over40,
+        ...(acc.outside > 0 ? { outside_authored_px: acc.outside } : {}), px_over_80: acc.over80, frame_box: acc.f, rig_box: acc.r, ...cut, picture: `${SEAM_DIR}/${file}` }, pixels: acc.pixels };
   });
 }
 
@@ -1914,6 +2283,8 @@ export interface CheckFigures {
    * divided by its square ({@link seamRigPx}). Null with the other three.
    */
   seam_frame_scale: number | null;
+  /** Canonical acceptance scope and separately labelled diagnostic/raw readings (#705). */
+  seam_scope?: SeamScope;
   /**
    * Written only when `parts.json` declares a scene (issue #242): the frame pixels
    * on the painting's border that the seam figures above leave out, and how many
@@ -1979,6 +2350,7 @@ export interface SetCheckFigures {
   seam_px_over_40: number;
   seam_px_over_80: number;
   seam_frame_scale: number;
+  seam_scope?: SeamScope;
   seam_border?: { frame_px_left_out: number; px_over_40_left_out: number };
   seam_pairs?: SeamPairRow[];
   RECOMPOSITE_HOLES: ReportedLine;
@@ -2244,7 +2616,7 @@ export interface CheckReport {
   idle: { frames: number; fps: number; duration: number; lastIndex: number; loopAt: { x: number; y: number } } | null;
   /** The physics line ({@link loopPhysicsLine}); null when the rig declares no physics constraint or has no idle. */
   loopPhysics: string | null;
-  /** The setup-pose still's grid; null when nothing read the still (no parts.json and no `--source`). */
+  /** The canonical seam grid with parts; otherwise the source-only fitted still grid. Null when neither was read. */
   seamViewport: Viewport | null;
   /** Every bar in {@link BARS} that measured, and every one that did not with its reason. */
   bars: { measured: string[]; skipped: Array<{ bar: string; reason: string }> };
@@ -3905,7 +4277,7 @@ export function rootGapBoxCoverage(hit: MotionSeamHit, alpha: readonly number[] 
  * Unsupported clipping/binding or even one replay pixel mismatch retains raw.
  */
 export function motionRootCoverageReader(build: string, rendered: string, out: string): RootGapCoverageReader {
-  type Renderer = typeof import('rig-c/render');
+  type Renderer = OfficialRenderer;
   type PoseAttachment = NonNullable<RootCoverageFrame['attachments']>[number];
   interface Prepared { api: Renderer; pages: ReturnType<Renderer['loadCandidate']>['pages']; pieces: RootCoveragePiece[]; attachments: PoseAttachment[] }
   interface Animation { frames: Map<number, { frame: RootCoverageFrame; alphaReplayExact: boolean }>; restMagnitude: number }
@@ -3927,7 +4299,7 @@ export function motionRootCoverageReader(build: string, rendered: string, out: s
   const prepare = (): Prepared => {
     if (prepared !== undefined) return prepared;
     // Node's module loader is called only here, never for a root-free reading.
-    const loaded: unknown = createRequire(import.meta.url)('rig-c/render');
+    const loaded: unknown = officialRenderer();
     requireFact(isRecord(loaded) && ['loadCandidate', 'throughPoser', 'sampleSetupPose', 'renderFrame'].every(k => typeof loaded[k] === 'function'), 'official renderer exports unavailable');
     const api = loaded as Renderer;
     const skeleton = join(build, 'skeleton.json'), atlas = join(build, 'skeleton.atlas');
@@ -4639,7 +5011,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const keptDir = join(out, STILL_DIR);
   const foldDir = join(out, FOLD_SCRATCH);
   const seamMotionDir = join(out, MOTION_SEAM_SCRATCH);
-  for (const d of [buildDir, idleDir, stillDir, isoDir, loopDir, seamDir, keptDir, foldDir, seamMotionDir, join(out, ROOT_COVERAGE_DIR)]) rmSync(d, { recursive: true, force: true });
+  for (const d of [buildDir, idleDir, stillDir, isoDir, loopDir, seamDir, keptDir, join(out, 'setup_still_auto'), foldDir, seamMotionDir, join(out, ROOT_COVERAGE_DIR)]) rmSync(d, { recursive: true, force: true });
   const written: string[] = [];
   const write = (name: string, data: string): void => {
     writeFileSync(join(out, name), data);
@@ -5098,6 +5470,8 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   // 4. the setup pose as a one-key throwaway animation — the seam reads it against the parts, the source line against
   // the painting — and, beside it, the same pose with the eyes shut
   let seam: SeamFigures | null = null;
+  let seamScope: SeamScope | undefined;
+  const seamStacks = new SeamStacks();
   let seamPairs: SeamPairRow[] | null = null;
   let seamViewport: Viewport | null = null;
   let blink: JudgementLine = skip(lacking);
@@ -5133,48 +5507,88 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       if (sr.status !== 0) refuseIfAny(rigcFailed('render (the setup-pose still)', sr, sr.out.split('\n').filter((l) => l.includes('FAIL'))));
       const stillSet = readFrameSet(join(stillDir, 'render'));
       seamViewport = stillSet.viewport;
-      if (keepStills) cpSync(join(stillDir, 'render'), keptDir, { recursive: true });
+      if (keepStills) cpSync(join(stillDir, 'render'), inp.parts === null ? keptDir : join(out, 'setup_still_auto'), { recursive: true });
       if (inp.parts !== null) {
+        // Stage existing gated files, not decoded pages/poses. No second build or gate.
+        const selectedAlts = set !== undefined || allSets
+          ? (allSets ? (inp.parts.alternates ?? []) : (inp.parts.alternates ?? []).filter(a => a.name === set)) : [];
+        const setStillAnimations: Record<string, unknown> = { still: animations.still };
+        const setStillBase = { ...withoutSliders(inp.rig, setStillAnimations), images };
+        const setsJsonPath = join(inp.rigDir, SETS_FILE);
+        const setsJsonRaw = existsSync(setsJsonPath) ? readJson(setsJsonPath, []) : null;
+        const setsMap = setsJsonRaw !== null && isRecord(setsJsonRaw.sets) ? setsJsonRaw.sets : null;
+        const staged = selectedAlts.map(alt => {
+          const entry = setsMap !== null && isRecord(setsMap[alt.name]) ? setsMap[alt.name] as Record<string, unknown> : null;
+          const drawn = entry !== null && isRecord(entry.drawn)
+            ? Object.fromEntries(Object.entries(entry.drawn).filter((e): e is [string, number] => typeof e[1] === 'number' && Number.isFinite(e[1]))) : alt.drawn;
+          const dir = join(stillDir, 'set_' + alt.name);
+          mkdirSync(dir, { recursive: true });
+          writeFileSync(join(dir, 'rig.json'), JSON.stringify(stillRigForSet(setStillBase, alt, drawn)));
+          writeFileSync(join(dir, 'motion.json'), JSON.stringify({ ...inp.motion, animations: setStillAnimations }));
+          const built = rigc(['build', '--rig', join(dir, 'rig.json'), '--motion', join(dir, 'motion.json'), '--out', join(dir, 'build'), '--profile', 'spine']);
+          if (built.status !== 0) refuseIfAny(rigcFailed(`build (the setup-pose still of set "${alt.name}")`, built, buildGateLines(built.out)));
+          return { alt, dir };
+        });
+        const states: SeamStateBounds[] = [seamStateBounds(join(stillDir, 'build'), 'base')];
+        for (const { alt, dir } of staged) states.push(seamStateBounds(join(dir, 'build'), alt.name));
+        const union = seamUnionViewport(inp.stage, states);
+        const domain = { viewport: union, authored: inp.stage, numerator: inp.parts.scene === undefined ? 'whole-union' as const : 'authored-scene-interior' as const, states };
+        const canonical = (build: string, dir: string): FrameSet => {
+          const cr = rigc(['render', '--candidate', build, '--animation', 'still', '--fps', String(STILL_FPS), '--max', String(Math.max(union.width, union.height)), '--viewport', [union.x, union.y, union.width, union.height].join(','), '--geometry', '--out', dir]);
+          if (cr.status !== 0) refuseIfAny(rigcFailed('render (the source-grid setup seam)', cr, cr.out.split('\n').filter(l => l.includes('FAIL'))));
+          const reading = readFrameSet(dir);
+          seamCanonicalViewport(inp.stage, reading.viewport, JSON.parse(readFileSync(join(dir, 'frames.json'), 'utf8')) as unknown, union);
+          return reading;
+        };
+        const canonicalSet = canonical(join(stillDir, 'build'), join(stillDir, 'seam'));
+        seamViewport = canonicalSet.viewport;
+        if (keepStills) cpSync(join(stillDir, 'seam'), keptDir, { recursive: true });
         const composite = flatComposite(inp.parts, inp.partsDir, stillSet.background);
-        seam = seamFigures(composite, stillSet.frames[0].image, inp.stage, stillSet.viewport, stillSet.background, undefined, inp.parts.scene !== undefined);
-        if (seamPairsAsked || seamFails(round3(seam.mean), seam.over40, round6(stillSet.viewport.scale))) {
-          const placed = inp.parts.parts.map((p) => ({ name: p.name, from: p.from, x: p.x, y: p.y, image: readPng(join(inp.partsDir, `${p.name}.png`)) }));
-          const split = seamPairRows(seam, placed, inp.parts.rig_size, stillSet.viewport);
+        const autoSeam = seamFigures(composite, stillSet.frames[0].image, inp.stage, stillSet.viewport, stillSet.background, undefined, inp.parts.scene !== undefined);
+        seam = seamFigures(composite, canonicalSet.frames[0].image, inp.stage, canonicalSet.viewport, canonicalSet.background, undefined, inp.parts.scene !== undefined, undefined, true);
+        seamScope = { mode: 'source-grid/base', domain, denominator_px: canonicalDenominator(seam), auto_frame_raw: seamReading(autoSeam, stillSet.viewport), whole: seamReading(seam, canonicalSet.viewport) };
+        const placed = inp.parts.parts.map(p => ({ name: p.name, from: p.from, x: p.x, y: p.y, image: readPng(join(inp.partsDir, `${p.name}.png`)) }));
+        const baseRows = seamPairRows(seam, placed, inp.parts.rig_size, canonicalSet.viewport);
+        seamScope.whole_pairs = baseRows.map(({ row: { picture: _picture, ...raw } }) => raw);
+        if (seamPairsAsked || seamFails(round3(seam.mean), seam.over40, 1)) {
+          const split = baseRows;
           mkdirSync(seamDir, { recursive: true });
-          for (const { row, pixels } of split) writePng(join(out, row.picture), seamPicture(stillSet.frames[0].image, row, pixels));
+          for (const { row, pixels } of split) writePng(join(out, row.picture), seamPicture(canonicalSet.frames[0].image, row, pixels));
           seamPairs = split.map((x) => x.row);
         }
         if (set !== undefined || allSets) {
-          const alts = allSets ? (inp.parts.alternates ?? []) : (inp.parts.alternates ?? []).filter((a) => a.name === set);
-          const setStillAnimations: Record<string, unknown> = { still: animations.still };
-          const setStillBase = { ...withoutSliders(inp.rig, setStillAnimations), images };
-          const setsJsonPath = join(inp.rigDir, SETS_FILE);
-          const setsJsonRaw = existsSync(setsJsonPath) ? readJson(setsJsonPath, []) : null;
-          const setsMap = setsJsonRaw !== null && isRecord(setsJsonRaw.sets) ? setsJsonRaw.sets : null;
-          for (const alt of alts) {
-            const setEntry: Record<string, unknown> | null =
-              setsMap !== null && isRecord(setsMap[alt.name]) ? (setsMap[alt.name] as Record<string, unknown>) : null;
-            const setDrawn: Record<string, number> | undefined =
-              setEntry !== null && isRecord(setEntry.drawn)
-                ? Object.fromEntries(
-                    Object.entries(setEntry.drawn).filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1])),
-                  )
-                : alt.drawn;
-            const setDir = join(stillDir, `set_${alt.name}`);
-            mkdirSync(setDir, { recursive: true });
-            writeFileSync(join(setDir, 'rig.json'), JSON.stringify(stillRigForSet(setStillBase, alt, setDrawn)));
-            writeFileSync(join(setDir, 'motion.json'), JSON.stringify({ ...inp.motion, animations: setStillAnimations }));
-            const asb = rigc(['build', '--rig', join(setDir, 'rig.json'), '--motion', join(setDir, 'motion.json'), '--out', join(setDir, 'build'), '--profile', 'spine']);
-            if (asb.status !== 0) refuseIfAny(rigcFailed(`build (the setup-pose still of set "${alt.name}")`, asb, buildGateLines(asb.out)));
+          const baseSupport = seamSupport(join(stillDir, 'build'), join(stillDir, 'rig.json'), canonicalSet, placed, seamStacks, inp.stage);
+          for (const { alt, dir: setDir } of staged) {
             const asr = rigc(['render', '--candidate', join(setDir, 'build'), '--animation', 'still', '--fps', String(STILL_FPS), '--max', String(maxSide), '--out', join(setDir, 'render')]);
             if (asr.status !== 0) refuseIfAny(rigcFailed(`render (the setup-pose still of set "${alt.name}")`, asr, asr.out.split('\n').filter((l) => l.includes('FAIL'))));
             const altStillSet = readFrameSet(join(setDir, 'render'));
-            if (keepStills) cpSync(join(setDir, 'render'), join(keptDir, alt.name), { recursive: true });
+            if (keepStills) cpSync(join(setDir, 'render'), join(out, 'setup_still_auto', alt.name), { recursive: true });
             const rigSlotOrder = (Array.isArray(inp.rig.slots) ? inp.rig.slots : []).filter(isRecord).map((sl) => String(sl.name));
             const altComposite = flatCompositeForSet(inp.parts, alt, inp.partsDir, altStillSet.background, rigSlotOrder);
-            const altSeam = seamFigures(altComposite, altStillSet.frames[0].image, inp.stage, altStillSet.viewport, altStillSet.background, undefined, alt.scene !== undefined);
+            const altCanonical = canonical(join(setDir, 'build'), join(setDir, 'seam'));
+            if (keepStills) cpSync(join(setDir, 'seam'), join(keptDir, alt.name), { recursive: true });
+            const altPlaced = setPlacements(inp.parts, alt, rigSlotOrder).map(({ name, png, box }) => ({ name, from: box.from, x: box.x, y: box.y, image: readPng(join(inp.partsDir, `${png}.png`)) }));
+            const altSupport = seamSupport(join(setDir, 'build'), join(setDir, 'rig.json'), altCanonical, altPlaced, seamStacks, inp.stage);
+            const effects = seamEffectSelection(baseSupport, altSupport);
+            const autoAltSeam = seamFigures(altComposite, altStillSet.frames[0].image, inp.stage, altStillSet.viewport, altStillSet.background, undefined, alt.scene !== undefined);
+            const wholeAltSeam = seamFigures(altComposite, altCanonical.frames[0].image, inp.stage, altCanonical.viewport, altCanonical.background, undefined, inp.parts.scene !== undefined, undefined, true);
+            const altSeam = seamFigures(altComposite, altCanonical.frames[0].image, inp.stage, altCanonical.viewport, altCanonical.background, undefined, inp.parts.scene !== undefined, effects.mask, true);
+            const wholeRows = seamPairRows(wholeAltSeam, altPlaced, inp.parts.rig_size, altCanonical.viewport);
+            const altScope: SeamScope = {
+              mode: 'source-grid/affected-set', domain, denominator_px: canonicalDenominator(altSeam),
+              auto_frame_raw: seamReading(autoAltSeam, altStillSet.viewport), whole: seamReading(wholeAltSeam, altCanonical.viewport), effects: effects.reasons, changes: effects.changes,
+              ...((baseSupport.unavailable ?? altSupport.unavailable) === undefined ? {} : { unavailable: baseSupport.unavailable ?? altSupport.unavailable }),
+              // Raw rows retain every original field except an unwritten picture.
+              whole_pairs: wholeRows.map(({ row: { picture: _picture, ...raw } }) => raw),
+              pairs: wholeRows.map(({ row, pixels }) => {
+                const affected = pixels.filter(q => effects.mask[q] !== 0).length;
+                const reasons: Partial<SeamEffects['reasons']> = {};
+                for (const q of pixels) { const reason = SEAM_EFFECT_REASONS[effects.cellReasons[q]]; reasons[reason] = (reasons[reason] ?? 0) + 1; }
+                return { parts: row.parts, whole_px_over_40: row.px_over_40, affected_px_over_40: affected, inherited_px_over_40: row.px_over_40 - affected, reasons };
+              }),
+            };
             const altMean = round3(altSeam.mean);
-            const altScale = round6(altStillSet.viewport.scale);
+            const altScale = 1;
             const altFailed = seamFails(altMean, altSeam.over40, altScale);
             if (altFailed) {
               const hint = armSplitSetHint(inp.parts, alt);
@@ -5182,22 +5596,22 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
             }
             let altPairs: SeamPairRow[] | null = null;
             if (seamPairsAsked || altFailed) {
-              const placed = setPlacements(inp.parts, alt, rigSlotOrder).map(({ name, png, box }) => ({ name, from: box.from, x: box.x, y: box.y, image: readPng(join(inp.partsDir, `${png}.png`)) }));
-              const split = seamPairRows(altSeam, placed, inp.parts.rig_size, altStillSet.viewport);
+              const split = seamPairRows(altSeam, altPlaced, inp.parts.rig_size, altCanonical.viewport);
               const altSeamDir = join(seamDir, alt.name);
               mkdirSync(altSeamDir, { recursive: true });
               for (const { row, pixels } of split) {
                 row.picture = `${SEAM_DIR}/${alt.name}/${basename(row.picture)}`;
-                writePng(join(out, row.picture), seamPicture(altStillSet.frames[0].image, row, pixels));
+                writePng(join(out, row.picture), seamPicture(altCanonical.frames[0].image, row, pixels));
               }
               altPairs = split.map((x) => x.row);
             }
             setsFigures[alt.name] = {
-              render_px: `${altStillSet.viewport.pixelWidth}x${altStillSet.viewport.pixelHeight}`,
+              render_px: `${altCanonical.viewport.pixelWidth}x${altCanonical.viewport.pixelHeight}`,
               seam_mean: altMean,
               seam_px_over_40: altSeam.over40,
               seam_px_over_80: altSeam.over80,
               seam_frame_scale: altScale,
+              seam_scope: altScope,
               ...(altSeam.border === null ? {} : { seam_border: { frame_px_left_out: altSeam.border.framePx, px_over_40_left_out: altSeam.border.over40 } }),
               ...(altPairs === null ? {} : { seam_pairs: altPairs }),
               RECOMPOSITE_HOLES: altHolesLine(inp.parts, alt),
@@ -5260,6 +5674,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     seam_px_over_40: seam === null ? null : seam.over40,
     seam_px_over_80: seam === null ? null : seam.over80,
     seam_frame_scale: seam === null || seamViewport === null ? null : round6(seamViewport.scale),
+    ...(seamScope === undefined ? {} : { seam_scope: seamScope }),
     ...(seam === null || seam.border === null ? {} : { seam_border: { frame_px_left_out: seam.border.framePx, px_over_40_left_out: seam.border.over40 } }),
     ...(seamPairs === null ? {} : { seam_pairs: seamPairs }),
     BREATH_VISIBLE: breath,
@@ -5297,7 +5712,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     const worst = seamPairs === null || seamPairs.length === 0 ? null : seamPairs[0];
     barProblems.push({
       code: 'CHECK_SEAM_WITHIN_BAR',
-      object: 'the setup-pose render vs the flat composite of parts/',
+      object: 'the source-grid setup-pose render vs the flat composite of parts/ (base, judged once)',
       detail:
         `mean |d| ${figures.seam_mean}/255 and ${figures.seam_px_over_40} frame px over ${SEAM_PX_LEVEL} (${figures.seam_px_over_80} over ${SEAM_PX_LEVEL_HIGH}) at frame scale ${figures.seam_frame_scale}, ${seamRigPxText(figures.seam_px_over_40, figures.seam_frame_scale)} rig px (the count / s²); mean <= ${SEAM_MEAN_BAR.toFixed(1)} and <= ${SEAM_PX_BAR} rig px over ${SEAM_PX_LEVEL} are required` +
         (worst === null
@@ -5310,7 +5725,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       const worst = setFig.seam_pairs === undefined || setFig.seam_pairs.length === 0 ? null : setFig.seam_pairs[0];
       barProblems.push({
         code: 'CHECK_SEAM_WITHIN_BAR',
-        object: `the setup-pose render of set "${setName}" vs the flat composite of parts/`,
+        object: `the source-grid setup-pose render of set "${setName}" vs the flat composite of parts/ (affected cells only, base denominator retained)`,
         detail:
           `mean |d| ${setFig.seam_mean}/255 and ${setFig.seam_px_over_40} frame px over ${SEAM_PX_LEVEL} (${setFig.seam_px_over_80} over ${SEAM_PX_LEVEL_HIGH}) at frame scale ${setFig.seam_frame_scale}, ${seamRigPxText(setFig.seam_px_over_40, setFig.seam_frame_scale)} rig px (the count / s²); mean <= ${SEAM_MEAN_BAR.toFixed(1)} and <= ${SEAM_PX_BAR} rig px over ${SEAM_PX_LEVEL} are required` +
           (worst === null

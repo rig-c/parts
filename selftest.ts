@@ -364,6 +364,13 @@ import {
   SEAM_PX_LEVEL,
   type SeamFigures,
   seamFigures,
+  seamEffectSelection,
+  seamDrawingSignature,
+  seamSourceAttachment,
+  seamCanonicalViewport,
+  seamUnionViewport,
+  seamStateBounds,
+  type SeamSupport,
   seamPairRows,
   seamPairText,
   seamRigPx,
@@ -509,7 +516,7 @@ import { encodeGif } from './src/gif.ts';
 import { buildPrompts, checkGraph, fillSeeThrough, FRAMING, NEGATIVE_HEAD, paintingGraph, POSITIVE_HEAD, stripWords, UPSCALE_MODEL, UPSCALE_THEN } from './src/graphs.ts';
 import { proposeHeadBox } from './src/headbox.ts';
 import { makeInputs, squarePad } from './src/inputs.ts';
-import { exportLayers, implausibleRules, type Layer, layerFigures, type LayerSet, layerSetDiff, PLAUSIBLE_AREA_RATIO_MAX, PLAUSIBLE_JUDGED_AREA_RATIO, PLAUSIBLE_TRANSLUCENT_MAX, PLAUSIBLE_BACKGROUND_MAX, PLAUSIBLE_BACKGROUND_TRANSLUCENT_MIN, readLayers, readPsdLayers, readWrapperLayers, ruleSummary, templateLayerNames, templatePsdBytes } from './src/layers.ts';
+import { OPAQUE_ALPHA_ABOVE, exportLayers, implausibleRules, type Layer, layerFigures, type LayerSet, layerSetDiff, PLAUSIBLE_AREA_RATIO_MAX, PLAUSIBLE_JUDGED_AREA_RATIO, PLAUSIBLE_TRANSLUCENT_MAX, PLAUSIBLE_BACKGROUND_MAX, PLAUSIBLE_BACKGROUND_TRANSLUCENT_MIN, readLayers, readPsdLayers, readWrapperLayers, ruleSummary, templateLayerNames, templatePsdBytes } from './src/layers.ts';
 import { PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, readFrom, readParts, serializeParts, tagOf, writeParts } from './src/parts.ts';
 import {
   alphaComposite,
@@ -4669,9 +4676,24 @@ function runSheetSuite(): number {
   return bad();
 }
 
-function runCli(args: string[]): { status: number; out: string } {
-  const r = spawnSync('bun', [join(ROOT, 'cli.ts'), ...args], { cwd: ROOT, encoding: 'utf8' });
+interface FixtureChildDiagnostic { argv: string[]; status: number; stdout: string; stderr: string }
+type FixtureCaseReporter = (name: string, ok: boolean, detail: string, why: string) => void;
+
+function runCli(args: string[], capture?: (child: FixtureChildDiagnostic) => void): { status: number; out: string } {
+  const argv = [join(ROOT, 'cli.ts'), ...args];
+  const r = spawnSync('bun', argv, { cwd: ROOT, encoding: 'utf8' });
+  capture?.({ argv: ['bun', ...argv], status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' });
   return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+}
+
+/** Generated synthetic fixtures only: retain both child streams on a red case, escaped so no child gutter enters RunTally. */
+function fixtureChildDiagnostics(report: FixtureCaseReporter): { say: FixtureCaseReporter; runCli: (args: string[]) => { status: number; out: string } } {
+  const children: FixtureChildDiagnostic[] = [];
+  return {
+    runCli: args => runCli(args, child => { children.push(child); }),
+    say: (name, ok, detail, why) => report(name, ok,
+      ok || children.length === 0 ? detail : detail + '; child diagnostics ' + JSON.stringify(children), why),
+  };
 }
 
 /** What is wrong between one command's listed flags and the flags its parser accepts, one sentence per difference. */
@@ -7687,34 +7709,44 @@ function runAnimationsFromDocControls(say: (name: string, ok: boolean, detail: s
     if (sway !== undefined && head !== undefined) head.keys.push({ ...head.keys[head.keys.length - 1] });
     const dupGate = gateFixture('gate-dup', twice);
     const red = runCli(['rig', '--config', dupGate.config, '--parts', dupGate.parts, '--out', dupGate.out]);
-    const rigcSays = `animation "sway" bone "head" rotate: key times must strictly increase (at t=${sway?.duration ?? 'none'})`;
+    const rigcSays = 'animation "sway" bone "head" rotate: key times must strictly increase';
+    const keyOrderCode = 'CE_COMPILE_KEY_TIMES_NOT_INCREASING';
+    const keyOrderRefusal = (line: string): boolean => line.includes('rigc compile error: ') && line.includes(rigcSays) && new RegExp(`\\b${keyOrderCode}\\b`).test(line);
     const redLines = red.out.split('\n');
     const gateLine = redLines.find((l) => l.includes('FAIL') && l.includes('RIG_RIGC_GREEN')) ?? '';
     const fromLine = redLines.find((l) => l.includes(`animations beside the idle, from ${dupGate.file} as written: sway`)) ?? '';
+    // Detail may grow; the code and named animation/bone/property cannot drift.
+    const extended = `rigc compile error: <motion>: ${rigcSays} — additional adjacent-key detail (see rigc guide ${keyOrderCode})`;
+    const detailExtensionHeld = keyOrderRefusal(extended);
+    const wrongCodeRejected = !keyOrderRefusal(extended.replace(keyOrderCode, `${keyOrderCode}_OTHER`));
+    const wrongBoneRejected = !keyOrderRefusal(extended.replace('bone "head"', 'bone "chest"'));
+    const wrongPropertyRejected = !keyOrderRefusal(extended.replace('rotate:', 'translate:'));
     say(
       'CF514_THE_EXAMPLE_GATES_GREEN_AND_ITS_BOUNDARY_KEY_WRITTEN_TWICE_IS_RIGC_S_REFUSAL_BESIDE_THE_LINE_NAMING_THE_FILE',
       green.status === 0 && existsSync(join(docGate.out, 'motion.json')) &&
-        red.status !== 0 && gateLine.includes(`rigc compile error: `) && gateLine.includes(rigcSays) && gateLine.includes('CE_COMPILE_KEY_TIMES_NOT_INCREASING') && fromLine !== '' &&
-        !existsSync(join(dupGate.out, 'motion.json')),
-      `the example on the fixture -> rig exit ${green.status}; head's last key written twice -> exit ${red.status}; gate line ${gateLine.includes(rigcSays) ? `holds "${rigcSays}"` : `LACKS "${rigcSays}": ${gateLine.trim().slice(0, 200)}`}; the line naming the file: ${fromLine === '' ? 'ABSENT' : 'present'}; motion.json written: ${existsSync(join(dupGate.out, 'motion.json'))}`,
+        red.status === 1 && keyOrderRefusal(gateLine) && fromLine !== '' &&
+        !existsSync(join(dupGate.out, 'motion.json')) && detailExtensionHeld && wrongCodeRejected && wrongBoneRejected && wrongPropertyRejected,
+      `the example on the fixture -> rig exit ${green.status}; head's last key written twice -> exit ${red.status}; gate line ${gateLine.includes(rigcSays) ? `holds "${rigcSays}"` : `LACKS "${rigcSays}": ${JSON.stringify(gateLine.trim())}`}; stable code ${new RegExp(`\\b${keyOrderCode}\\b`).test(gateLine)}; detail extension ${detailExtensionHeld}; wrong code/bone/property rejected ${wrongCodeRejected}/${wrongBoneRejected}/${wrongPropertyRejected}; the line naming the file: ${fromLine === '' ? 'ABSENT' : 'present'}; motion.json written: ${existsSync(join(dupGate.out, 'motion.json'))}`,
       'issue #569: a duplicate key time is rigc\'s to refuse (this package does not re-implement rigc\'s validation); what the author needs is that the refusal reaches them naming the animation, the track and the time, and the file it came from, which the rig stage\'s line above it names',
     );
 
     // CF515 — the recipe quotes the three lines as the tree prints them; the recipe before issue #569 quotes none.
     const flat = (t: string): string => t.replace(/\s+/g, ' ');
+    const quotedCoreVersion = 'rig-c 2.69.0';
+    const quotedKeyOrder = 'animation "sway" bone "head" rotate: key times must strictly increase — key 3 at t=2 does not come after key 2 at t=2 (keys counted from 0)';
     const quoted: Array<[string, string]> = [
       ['spec', `is absent and required: write "spec": "${SPEC}" beside "animations"`],
       ['path', `resolved against the config's directory`],
       ['path', '(not the working directory) to'],
-      ['rigc', 'key times must strictly increase (at t='],
+      ['rigc', quotedKeyOrder],
     ];
     const printed: Record<string, string> = { spec: noSpec?.problems[0]?.detail ?? '', path: beside?.detail ?? '', rigc: gateLine };
-    const held = (r: string): boolean => quoted.every(([k, q]) => flat(r).includes(q) && printed[k].includes(q));
+    const held = (r: string): boolean => flat(r).includes(quotedCoreVersion) && quoted.every(([k, q]) => flat(r).includes(q) && printed[k].includes(q));
     const before = '### Recipe: expressions and other named animations\n\nWrite a file in rig-c\'s motion-spec shape beside the config and name it:\n';
     say(
       'CF515_THE_RECIPE_QUOTES_THE_THREE_REFUSALS_AS_THE_TREE_PRINTS_THEM',
-      held(recipe) && !held(before),
-      `${quoted.map(([k, q]) => `"${q}": recipe ${flat(recipe).includes(q) ? 'yes' : 'NO'}, printed ${printed[k].includes(q) ? 'yes' : 'NO'}`).join('; ')}; planted, the recipe before issue #569 -> ${held(before) ? 'PASSES' : 'fails the bar'}`,
+      held(recipe) && !held(before) && !held(flat(recipe).replace(quotedKeyOrder, 'key times must strictly increase (at t=2)')) && !held(recipe.replace(quotedCoreVersion, 'rig-c')),
+      `${quoted.map(([k, q]) => `"${q}": recipe ${flat(recipe).includes(q) ? 'yes' : 'NO'}, printed ${printed[k].includes(q) ? 'yes' : 'NO'}`).join('; ')}; quoted version ${flat(recipe).includes(quotedCoreVersion)}; planted old wording ${!held(flat(recipe).replace(quotedKeyOrder, 'key times must strictly increase (at t=2)'))}; missing version ${!held(recipe.replace(quotedCoreVersion, 'rig-c'))}; planted, the recipe before issue #569 -> ${held(before) ? 'PASSES' : 'fails the bar'}`,
       'issue #569: the document is the interface for the author who meets the line; a quotation that drifts from what the tree prints sends that author looking for words no run shows',
     );
   } finally {
@@ -14995,7 +15027,7 @@ function readJsonFile(path: string): Record<string, unknown> | null {
 }
 
 // Issue #333: the fold bar reads the idle too, so every rig whose motion holds an animation writes it after the judgement lines.
-const CHECK_KEYS = ['gate_spine_html_green', 'rigc_entry', 'pack_mode', 'loop_max_diff', 'seam_mean', 'seam_px_over_40', 'seam_px_over_80', 'seam_frame_scale', ...JUDGEMENT_LINES, FOLD_LINE, ...REPORTED_LINES, 'PASS'];
+const CHECK_KEYS = ['gate_spine_html_green', 'rigc_entry', 'pack_mode', 'loop_max_diff', 'seam_mean', 'seam_px_over_40', 'seam_px_over_80', 'seam_frame_scale', 'seam_scope', ...JUDGEMENT_LINES, FOLD_LINE, ...REPORTED_LINES, 'PASS'];
 
 /** A judgement line's status in a check.json read back, or null. */
 function lineStatus(fig: Record<string, unknown> | null, name: string): string | null {
@@ -15086,7 +15118,7 @@ function runSourceCases(dir: string, say: (name: string, ok: boolean, detail: st
     const l = fig?.[name] as { status?: string; reason?: string } | undefined;
     return l?.status === 'SKIP' ? String(l.reason) : `not SKIP (${l?.status ?? 'absent'})`;
   };
-  const sourceKeys = [...CHECK_KEYS.slice(0, -1), SOURCE_LINE, 'skipped', 'PASS'].join(',');
+  const sourceKeys = [...CHECK_KEYS.slice(0, -1).filter(k => k !== 'seam_scope'), SOURCE_LINE, 'skipped', 'PASS'].join(',');
 
   // The card's shape: two prefixed copies under one root, a plate region at slot 0, no parts.json, an idle.
   const withIdle = merged('merged-idle', { idle: true, plate: true });
@@ -15706,7 +15738,8 @@ function sweepUnderPx(): number {
   return n;
 }
 
-function runSweepCheckCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+function runSweepCheckCases(report: FixtureCaseReporter): void {
+  const { say, runCli } = fixtureChildDiagnostics(report);
   const dir = temp('sweep-check');
   try {
     writeRun(join(dir, 'full'), SWEEP_FULL);
@@ -16078,7 +16111,8 @@ function runPlantedFeetCases(say: (name: string, ok: boolean, detail: string, wh
  * - The short cap: the thigh narrowed to x 12..35, so the disc's right side past x 35 is in no layer — the record
  *   carries short_px, and check.json then carries the step on each pose; a full cap's check.json carries none.
  */
-function runContourStepCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+function runContourStepCases(report: FixtureCaseReporter): void {
+  const { say, runCli } = fixtureChildDiagnostics(report);
   const dir = temp('contour-step');
   try {
     const range: [number, number] = [-15, 15];
@@ -16745,7 +16779,8 @@ function runMotionRootTurnCases(home: string, configPath: string, full: string, 
 }
 
 /** Stock assemble/rig/render/check and both real CLI consumers; no substituted renderer or gate. */
-function runMotionRootRendererCases(home: string, legacyOutput: string, say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+function runMotionRootRendererCases(home: string, legacyOutput: string, report: FixtureCaseReporter): void {
+  const { say, runCli } = fixtureChildDiagnostics(report);
   const dir = join(home, 'shoulder-root');
   mkdirSync(dir, { recursive: true });
   writeRun(join(dir, 'full'), [...SO_FULL, SO_ROOT_BODY]);
@@ -17027,7 +17062,8 @@ function runMotionSeamWorldIntegration(dir: string, say: (name: string, ok: bool
     'the current custom reading remains first, default is reused without a schedule, complete raw render files survive at deterministic relative references after scratch cleanup, and nonphysics has no extra file, call or serialized byte in the seam block.');
 }
 
-function runMotionSeamCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+function runMotionSeamCases(report: FixtureCaseReporter): void {
+  const { say, runCli } = fixtureChildDiagnostics(report);
   runMotionRootSeamCases(say);
   const dir = temp('motion-seam');
   try {
@@ -17291,7 +17327,8 @@ function discConfig(extra: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
-function runDiscCheckCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+function runDiscCheckCases(report: FixtureCaseReporter): void {
+  const { say, runCli } = fixtureChildDiagnostics(report);
   const dir = temp('disc-check');
   try {
     writeRun(join(dir, 'full'), SWEEP_FULL);
@@ -17620,7 +17657,8 @@ function ballConfig(extra: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
-function runBallCheckCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+function runBallCheckCases(report: FixtureCaseReporter): void {
+  const { say, runCli } = fixtureChildDiagnostics(report);
   const dir = temp('ball-check');
   try {
     writeRun(join(dir, 'full'), NOTCH_FULL);
@@ -17796,6 +17834,122 @@ function runCheckSuite(): number {
   const scope = startCheckReadScope();
   try { return runCheckFixtureCases(scope); } finally { scope.restore(); }
 }
+
+// CK705_TINY_FIXTURE_CONSTRUCTOR_BEGIN
+/** Constructor only: the exact same body is extracted and executed by the
+ * private reader preflight; it cannot run a CLI, build, renderer or suite. */
+function writeSeamScope705Fixtures(dir: string) {
+  // Actual stock producer/reader integration, with no new public art. All
+  // marker alpha lives in the same disjoint 2x2 square; only its transparent
+  // extent changes (4,40,52), on one 96x96 source canvas.
+  // At source x=60 the checked sets reach x=100 and112, beyond the base
+  // edge attachment at x=98. They MUST drive common U growth themselves.
+  const scopeHome705 = join(dir, 'source-grid-sets');
+  writeCheckRig(scopeHome705, { canvas: { w: 96, h: 96 } });
+  const scopeRig705 = JSON.parse(readFileSync(join(scopeHome705, 'rig.json'), 'utf8')) as {
+    skeleton: { x: number; y: number; width: number; height: number };
+    slots: Array<{ name: string; bone: string; attachment: string }>;
+    skins: { default: Record<string, Record<string, Record<string, unknown>>> };
+  };
+  const scopeParts705 = readParts(join(scopeHome705, 'parts.json'));
+  const marker705 = (width: number): Raster => {
+    const image = newRaster(width, 4);
+    for (let y = 1; y < 3; y++) for (let x = 1; x < 3; x++) image.data.set([80, 160, 40, 255], (y * width + x) * 4);
+    return image;
+  };
+  // The rig keeps original full-size images; reference parts are exact source
+  // crops inside D. This is the same original/cropped distinction as FS09,
+  // not a change to rig geometry or removal of outside opaque error.
+  const sourceCrops705: Array<{ fixture: string; original: string; reference: string; original_size: [number, number]; crop: [number, number, number, number]; authored_box: [number, number, number, number]; original_sha256: string; reference_sha256: string }> = [];
+  const writeDrawing705 = (name: string, original: Raster, x: number, y: number, home = scopeHome705): Raster => {
+    const w = Math.min(original.width, 96 - x), h = Math.min(original.height, 96 - y);
+    if (w < 1 || h < 1) throw new Error('CK705_REFERENCE_CROP_EMPTY');
+    const reference = crop(original, 0, 0, w, h);
+    const originalBytes = encodePngBytes(original), referenceBytes = encodePngBytes(reference);
+    writeFileSync(join(home, 'images', `${name}.png`), originalBytes);
+    writeFileSync(join(home, 'parts', `${name}.png`), referenceBytes);
+    sourceCrops705.push({ fixture: home === scopeHome705 ? 'normal' : 'defect', original: `images/${name}.png`, reference: `parts/${name}.png`, original_size: [original.width, original.height], crop: [0, 0, w, h], authored_box: [x, y, w, h], original_sha256: createHash('sha256').update(originalBytes).digest('hex'), reference_sha256: createHash('sha256').update(referenceBytes).digest('hex') });
+    return reference;
+  };
+  const record705 = (image: Raster): PartRecord => ({ ...scopeParts705.parts[0], name: 'marker', from: 'full:mouth', x: 60, y: 2, w: image.width, h: image.height, opaque_px: image.data.filter((value, index) => index % 4 === 3 && value > OPAQUE_ALPHA_ABOVE).length });
+  scopeParts705.parts.push(record705(writeDrawing705('marker', marker705(4), 60, 2)));
+  scopeRig705.slots.unshift({ name: 'marker', bone: 'root', attachment: 'marker' });
+  const attachment705 = (w: number, image: string): Record<string, unknown> => ({ image, x: scopeRig705.skeleton.x + 60 + w / 2, y: scopeRig705.skeleton.y + cropToSpineY(4, 96) });
+  scopeRig705.skins.default.marker = { marker: attachment705(4, 'marker.png') };
+  for (const width of [40, 52]) {
+    const name = `extent${width}_marker`;
+    const reference = writeDrawing705(name, marker705(width), 60, 2);
+    scopeRig705.skins.default.marker[name] = attachment705(width, `${name}.png`);
+    const recomposite705: RecompositeRecord = { mean_abs: 0, within_limit: 8, within_share: 1, error_limit: 40, error_px: 0, covered_alpha: 128, uncovered_error_px: 0, hole_count: 0, holes_listed: 5, holes: [] };
+    (scopeParts705.alternates ??= []).push({ name: `extent${width}`, slots: { marker: name }, records: [record705(reference)], ghost_px: {}, recomposite: recomposite705 });
+  }
+  // One opaque texel at source x=95, the last column: a5x3 original
+  // attachment, a3x3 reference crop, and two transparent original columns
+  // extending outside the authored canvas.
+  // A19 still reads transparent texels; the edge witness itself
+  // is alpha 255, not a transparent marker's nominal extent.
+  const edge705 = newRaster(5, 3);
+  const edgeRgba705 = [250, 0, 180, 255];
+  edge705.data.set(edgeRgba705, (1 * 5 + 2) * 4);
+  const edgeReference705 = writeDrawing705('edge', edge705, 93, 45);
+  scopeParts705.parts.push({ ...record705(edgeReference705), name: 'edge', x: 93, y: 45 });
+  scopeRig705.slots.push({ name: 'edge', bone: 'root', attachment: 'edge' });
+  scopeRig705.skins.default.edge = { edge: { image: 'edge.png', x: -48 + 93 + 2.5, y: cropToSpineY(45 + 1.5, 96) } };
+  writeFileSync(join(scopeHome705, 'rig.json'), JSON.stringify(scopeRig705));
+  writeFileSync(join(scopeHome705, 'parts.json'), serializeParts(scopeParts705));
+  // Independent defect before the stock reading: front is fully opaque at
+  // crop [24,32)x[32,40), while back has nonzero alpha there. Whitening only
+  // parts/front.png therefore plants 8*8=64 cells with max-channel error 215
+  // against the unchanged blue rig image. Both reference contributors remain
+  // known on this patch; disjoint marker repacking cannot own that base error.
+  const failHome705 = join(dir, 'source-grid-failure-scope');
+  mkdirSync(failHome705);
+  for (const name of ['rig.json', 'motion.json', 'parts.json', 'images', 'parts']) cpSync(join(scopeHome705, name), join(failHome705, name), { recursive: true });
+  const failParts705 = readParts(join(failHome705, 'parts.json'));
+  const failRig705 = JSON.parse(readFileSync(join(failHome705, 'rig.json'), 'utf8')) as typeof scopeRig705;
+  const frontReference705 = readPng(join(failHome705, 'parts', 'front.png'));
+  const frontImage705 = readPng(join(failHome705, 'images', 'front.png'));
+  const backReference705 = readPng(join(failHome705, 'parts', 'back.png'));
+  let knownPatch705 = 0;
+  for (let y = 32; y < 40; y++) for (let x = 24; x < 32; x++) {
+    const f = ((y - 20) * 26 + x - 18) * 4, b = (y * 30 + x - 4) * 4;
+    if (frontImage705.data[f + 3] === 255 && backReference705.data[b + 3] > 0 && frontImage705.data[f] === 40) knownPatch705++;
+    frontReference705.data.set([255, 255, 255, 255], f);
+  }
+  writeFileSync(join(failHome705, 'parts', 'front.png'), encodePngBytes(frontReference705));
+  // The third drawing is last in the actual stack, but disjoint for base and
+  // both extent alternatives. The new alternative alone moves its actual
+  // 8x8 opaque square onto that same patch; its reference remains at (60,2).
+  // This planted posed/third-occlusion defect keeps the counted pair names
+  // back/front: no reference marker is present at the original pair's patch.
+  failRig705.slots = [...failRig705.slots.filter(slot => slot.name !== 'marker'), failRig705.slots.find(slot => slot.name === 'marker')!];
+  const cover705 = newRaster(10, 10);
+  for (let y = 1; y < 9; y++) for (let x = 1; x < 9; x++) cover705.data.set([80, 160, 40, 255], (y * 10 + x) * 4);
+  const coverReference705 = writeDrawing705('cover_marker', cover705, 60, 2, failHome705);
+  failRig705.skins.default.marker.cover_marker = { image: 'cover_marker.png', x: -48 + 23 + 5, y: cropToSpineY(31 + 5, 96) };
+  failParts705.alternates!.push({ name: 'cover', slots: { marker: 'cover_marker' },
+    records: [record705(coverReference705)], ghost_px: {}, recomposite: { ...failParts705.alternates![0].recomposite! } });
+  // Exactly one additional opaque source sample, outside authored D but
+  // inside the already declared extent52 quad: crop (60+40,2+1)=(100,3).
+  // The other four marker samples, original back/front geometry and art,
+  // and both disjoint transparent-extent alternatives remain byte-identical.
+  // Background is read from the actual stock frame below, not guessed RGB.
+  const outsideMarker705 = marker705(52);
+  const outsideRgba705 = [80, 160, 40, 255];
+  outsideMarker705.data.set(outsideRgba705, (1 * 52 + 40) * 4);
+  const outsideReference705 = writeDrawing705('outside_marker', outsideMarker705, 60, 2, failHome705);
+  failRig705.skins.default.marker.outside_marker = attachment705(52, 'outside_marker.png');
+  failParts705.alternates!.push({ name: 'outside', slots: { marker: 'outside_marker' },
+    records: [record705(outsideReference705)], ghost_px: {}, recomposite: { ...failParts705.alternates![0].recomposite! } });
+  writeFileSync(join(failHome705, 'rig.json'), JSON.stringify(failRig705));
+  writeFileSync(join(failHome705, 'parts.json'), serializeParts(failParts705));
+  const normalCrops705 = sourceCrops705.filter(row => row.fixture === 'normal');
+  const defectCrops705 = [...normalCrops705.map(row => ({ ...row, fixture: 'defect' })), ...sourceCrops705.filter(row => row.fixture === 'defect')];
+  writeFileSync(join(scopeHome705, 'SOURCE-CROPS.json'), JSON.stringify(normalCrops705));
+  writeFileSync(join(failHome705, 'SOURCE-CROPS.json'), JSON.stringify(defectCrops705));
+  return { scopeHome705, failHome705, knownPatch705, edgeRgba705, outsideRgba705, sourceCrops705: [...normalCrops705, ...defectCrops705] };
+}
+// CK705_TINY_FIXTURE_CONSTRUCTOR_END
 
 function runCheckFixtureCases(inputScope: CheckReadScope): number {
   section('check: build, gates, seam and loop through the installed rig-c');
@@ -18192,7 +18346,9 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const padOut = join(dir, 'padded-out');
     const pad = runCli(['check', '--rig', padRig, '--out', padOut, '--keep-stills']);
     const padFig = readJsonFile(join(padOut, 'check.json'));
-    const kept = existsSync(join(padOut, STILL_DIR, 'frames.json')) ? readFrameSet(join(padOut, STILL_DIR)) : null;
+    const canonicalKept = existsSync(join(padOut, STILL_DIR, 'frames.json')) ? readFrameSet(join(padOut, STILL_DIR)) : null;
+    const kept = existsSync(join(padOut, 'setup_still_auto', 'frames.json')) ? readFrameSet(join(padOut, 'setup_still_auto')) : null;
+    const padScope = padFig?.seam_scope as { auto_frame_raw?: { mean: number; px_over_40: number; px_over_80: number } } | undefined;
     const padStage = { x: -PAD.w / 2, y: 0, width: PAD.w, height: PAD.h };
     const padParts = readParts(join(padRig, 'parts.json'));
     const padComposite = kept === null ? null : flatComposite(padParts, join(padRig, 'parts'), kept.background);
@@ -18207,23 +18363,24 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     });
     const ck01Mean = typeof fig?.seam_mean === 'number' ? fig.seam_mean : NaN;
     say(
-      'CK101_A_FIGURE_RENDERED_AT_A_FRAME_SCALE_NEAR_ONE_AND_A_HALF_KEEPS_THE_SEAM_IT_HAS_AT_SCALE_ONE',
+      'CK101_THE_FITTED_DIAGNOSTIC_RETAINS_ITS_MAP_AND_CANONICAL_COUNTS_STAY_AT_SCALE_ONE',
       pad.status === 0 &&
         padFig !== null &&
         kept !== null &&
         sPad > 1.4 &&
         centred !== null &&
         typeof padFig.seam_mean === 'number' &&
-        Math.abs(centred.mean - padFig.seam_mean) <= 0.0005 &&
-        centred.over40 === padFig.seam_px_over_40 &&
-        centred.over80 === padFig.seam_px_over_80 &&
+        Math.abs(centred.mean - (padScope?.auto_frame_raw?.mean ?? NaN)) <= 0.0005 &&
+        centred.over40 === padScope?.auto_frame_raw?.px_over_40 &&
+        centred.over80 === padScope?.auto_frame_raw?.px_over_80 &&
+        padFig.seam_frame_scale === 1 && canonicalKept?.viewport.scale === 1 &&
         padFig.seam_px_over_40 === fig?.seam_px_over_40 &&
         typeof padFig.seam_mean === 'number' &&
         padFig.seam_mean <= 2 * ck01Mean &&
         nudged.length === 4 &&
         nudged.every((m) => m > centred.mean),
       `exit ${pad.status}; frame scale ${sPad}; seam mean ${String(padFig?.seam_mean)}, ${String(padFig?.seam_px_over_40)} px over 40 (CK01's rig, near scale 1: mean ${ck01Mean}, ${String(fig?.seam_px_over_40)} px); recomputed off the kept still: mean ${centred?.mean.toFixed(4)}, ${String(centred?.over40)} px; the map nudged 0.1 frame px: means ${nudged.map((m) => m.toFixed(4)).join(', ')}`,
-      "issue #209's consumer reading: two rigs at s = 1.59 and 1.35 failed the seam bar with nothing that reads as a seam, because the composite was laid 0.5 (s - 1) frame px off the render on each axis. The fixture's own stack, rendered at s ~ 1.5, must keep the pixel count CK01's run has and a mean no larger than twice CK01's (the order of the s ~ 1 figure, not a measured number), check.json's figures must be the ones the kept still and rigToFrameMap give, and the map must sit at the mean's minimum: a tenth of a frame px off it on either axis reads worse",
+      "issue #209's consumer reading: two rigs at s = 1.59 and 1.35 failed the seam bar with nothing that reads as a seam, because the composite was laid 0.5 (s - 1) frame px off the render on each axis. The fixture's own stack, rendered at s ~ 1.5, must keep the pixel count CK01's run has and a mean no larger than twice CK01's (the order of the s ~ 1 figure, not a measured number), check.json's auto_frame_raw must be the ones the fitted diagnostic still and rigToFrameMap give, while acceptance uses the separately kept canonical scale-one frame, and the map must sit at the mean's minimum: a tenth of a frame px off it on either axis reads worse",
     );
 
     // The mutant: the same kept still against the reference's map, the term removed. Its offset is 0.5 (s - 1) frame px
@@ -18309,15 +18466,13 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const seamedRig = seamed.map(rigPxOf);
     const seamedFrame = seamed.map((r) => num(r.fig, 'seam_px_over_40'));
     say(
-      'CK105_A_PLANTED_TWO_PIXEL_SEAM_IS_RED_IN_RIG_PIXELS_AT_FRAME_SCALES_ONE_ONE_AND_A_HALF_AND_TWO',
+      'CK105_A_PLANTED_TWO_PIXEL_SEAM_IS_CANONICALLY_IDENTICAL_WHILE_FITTED_DIAGNOSTIC_SCALES_CHANGE',
       seamed.every((r) => r.status === 1 && failLine(r.out, 'CHECK_SEAM_WITHIN_BAR') !== null && barsNotMet(r.fig ?? {}).includes('seam')) &&
         seamed.every((r) => (failLine(r.out, 'CHECK_SEAM_WITHIN_BAR') ?? '').includes(`${seamRigPxText(num(r.fig, 'seam_px_over_40'), num(r.fig, 'seam_frame_scale'))} rig px (the count / s²)`)) &&
         seamedRig.every((x) => x > SEAM_PX_BAR) &&
-        Math.abs(num(seamed[0].fig, 'seam_frame_scale') - 1) < 0.05 &&
-        Math.abs(num(seamed[1].fig, 'seam_frame_scale') - 1.5) < 0.05 &&
-        Math.abs(num(seamed[2].fig, 'seam_frame_scale') - 2) < 0.05 &&
-        Math.max(...seamedRig) / Math.min(...seamedRig) <= 1.25 &&
-        seamedFrame[2] / seamedFrame[0] >= 3,
+        seamed.every(r => num(r.fig, 'seam_frame_scale') === 1) &&
+        seamedRig.every(x => x === seamedRig[0]) && seamedFrame.every(x => x === seamedFrame[0]) &&
+        seamed.every((r, i) => Math.abs(((r.fig?.seam_scope as { auto_frame_raw?: { frame_scale: number } })?.auto_frame_raw?.frame_scale ?? NaN) - [1, 1.5, 2][i]) < 0.05),
       seamed.map(showRun).join('; '),
       "issue #216 item 2: a real seam has an area on the rig, so the frame counts it s² times over — the bar in rig pixels must read it red at every scale and read it as the same seam (the three rig-pixel figures within a quarter of each other, while the frame count grows by more than three from s ~ 1 to s ~ 2, the s² the form divides out). On the public sample a part moved 2 rig px read 400, 891 and 1,560 frame px over 40 at s = 1.0, 1.5 and 2.0 and 400, 396 and 390 rig px [measured for issue #216, a scratch run]",
     );
@@ -18340,16 +18495,243 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const generatedVerdict = seamExampleFaults('examples/generated/expected/check.json', generatedCheck);
     const staleVerdict = seamExampleFaults('examples/generated/expected/check.json', generatedCheck.replace('"seam_frame_scale"', '"seam_frame_scale_before"'));
     say(
-      'CK106_THE_ALIGNED_STACK_AND_A_SIX_PIXEL_PATCH_ARE_GREEN_AT_ALL_THREE_SCALES_WHERE_THE_FRAME_COUNT_WOULD_FAIL_THE_PATCH',
+      'CK106_ALIGNED_AND_PATCH_COUNTS_ARE_CANONICALLY_IDENTICAL_AND_THE_FITTED_FRAME_MUTANT_STILL_FAILS',
       generatedVerdict.length === 0 && staleVerdict.length === 1 && /^examples\/generated\/expected\/check\.json:\d+ /.test(staleVerdict[0]) &&
       [...aligned, ...patched].every((r) => r.status === 0 && r.fig?.PASS === true && barsNotMet(r.fig).length === 0) &&
         aligned.every((r) => num(r.fig, 'seam_px_over_40') === 0) &&
         patched.every((r) => rigPxOf(r) > 0 && rigPxOf(r) <= 49) &&
-        num(patched[2].fig, 'seam_px_over_40') > SEAM_PX_BAR &&
-        barsNotMet({ ...(patched[2].fig ?? {}), seam_frame_scale: undefined }).includes('seam'),
-      `generated check faults ${generatedVerdict.length}; stale scale field -> ${staleVerdict.join('; ')}; aligned: ${aligned.map(showRun).join('; ')} | patch: ${patched.map(showRun).join('; ')}; the patch at s ~ 2 read by the frame count (check.json without seam_frame_scale): bars not met ${JSON.stringify(barsNotMet({ ...(patched[2].fig ?? {}), seam_frame_scale: undefined }))}`,
+        patched.every(r => num(r.fig, 'seam_frame_scale') === 1) &&
+        patched.every(r => num(r.fig, 'seam_px_over_40') === num(patched[0].fig, 'seam_px_over_40')) &&
+        barsNotMet({ ...(patched[2].fig ?? {}), seam_mean: 0, seam_px_over_40: (patched[2].fig?.seam_scope as { auto_frame_raw?: { px_over_40: number } })?.auto_frame_raw?.px_over_40, seam_frame_scale: undefined }).includes('seam'),
+      `canonical scale1/count equality; generated check faults ${generatedVerdict.length}; stale scale field -> ${staleVerdict.join('; ')}; aligned: ${aligned.map(showRun).join('; ')} | patch: ${patched.map(showRun).join('; ')}; the patch at s ~ 2 read by the frame count (check.json without seam_frame_scale): bars not met ${JSON.stringify(barsNotMet({ ...(patched[2].fig ?? {}), seam_frame_scale: undefined }))}`,
       "issue #216's consumer reading: a correct rig drawn small on its stage (s = 1.59) passed with a margin of 0 — 50 frame px against the bar of 50 — because the frame holds s² pixels per rig pixel. The patch is the planted negative of the frame count: green under the bar in rig pixels at every scale, red at s ~ 2 when the same check.json is read the way a file written before this field is (barsNotMet without seam_frame_scale, the frame count). On the fixture the patch read 19, 52 and 86 frame px at s ~ 1.0, 1.5 and 2.0, about 19 to 23 rig px [observed, the prototype of this control]",
     );
+
+    // #705: fix support and expectations before reading a candidate render. IDs below
+    // denote exact ordered contributor stacks, not residual colours or set names.
+    const support705 = (reference: number[], posed = reference, depth = 2): SeamSupport => ({
+      reference: Int32Array.from(reference), posed: Int32Array.from(posed),
+      referenceDepth: Uint8Array.from(reference, () => depth), posedDepth: Uint8Array.from(posed, () => depth),
+    });
+    const base705 = support705([1, 1, 1, 1]);
+    const unchanged705 = seamEffectSelection(base705, support705([1, 1, 1, 1]));
+    const changed705 = seamEffectSelection(base705, support705([1, 2, 1, 1]));
+    const posed705 = seamEffectSelection(base705, support705([1, 1, 1, 1], [1, 1, 3, 1]));
+    const singleton705 = seamEffectSelection(base705, support705([1, 1, 1, 1], undefined, 1));
+    const unavailable705 = seamEffectSelection(base705, { ...base705, unavailable: { code: 'SOURCE_ATTACHMENT_MISSING', slot: 'drawing', attachment: 'missing' } });
+    say('CK705_AFFECTS_ARE_REFERENCE_AND_POSED_STACK_DEPENDENCIES_NOT_SET_NAMES_OR_RESIDUALS',
+      [...unchanged705.mask].every(x => x === 0) && JSON.stringify([...changed705.mask]) === '[0,1,0,0]' &&
+      JSON.stringify([...posed705.mask]) === '[0,0,1,0]' && [...singleton705.mask, ...unavailable705.mask].every(x => x === 1) &&
+      unchanged705.reasons.inherited === 4 && unavailable705.reasons.unavailable === 4,
+      JSON.stringify([unchanged705.reasons, changed705.reasons, posed705.reasons, singleton705.reasons, unavailable705.reasons]),
+      'replacement/hide/front/gather changes the reference stack; posed descendants/order/third occluders change the actual draw stack; singleton/no-art and unreadable support remain conservative, never silently zero');
+    const composite705 = newRaster(20, 10);
+    const render705 = newRaster(20, 10);
+    for (let q = 0; q < 200; q++) { composite705.data[q * 4 + 3] = 255; render705.data[q * 4 + 3] = 255; }
+    // One affected cell differs by 40, at the threshold, plus 100 inherited
+    // cells differing by 255. Affected mean = 40/200, NOT 40/1 or 25500/200.
+    render705.data[0] = 40;
+    for (let q = 100; q < 200; q++) render705.data[q * 4] = 255;
+    const mask705 = new Uint8Array(200); mask705[0] = 1;
+    const vp705 = { x: 0, y: 0, width: 20, height: 10, scale: 1, pixelWidth: 20, pixelHeight: 10 };
+    const stage705 = { x: 0, y: 0, width: 20, height: 10 };
+    const affected705 = seamFigures(composite705, render705, stage705, vp705, [0, 0, 0, 0], undefined, false, mask705);
+    const whole705 = seamFigures(composite705, render705, stage705, vp705, [0, 0, 0, 0]);
+    const meanOnly705 = newRaster(20, 10); for (let q = 0; q < 200; q++) meanOnly705.data.set([2, 0, 0, 255], q * 4);
+    const mean705 = seamFigures(composite705, meanOnly705, stage705, vp705, [0, 0, 0, 0], undefined, false, new Uint8Array(200).fill(1));
+    const bar705 = (mean: number, count: number) => barsNotMet({ gate_spine_html_green: true, seam_mean: mean, seam_px_over_40: count, seam_frame_scale: 1 }).includes('seam');
+    // A=20000: 25 cells on a/b plus 26 on c/d, each at |d|100. The
+    // mean .255 is below1, so only the aggregate51 (not either pair) fails.
+    const aggregateReference705 = newRaster(200, 100), aggregateFrame705 = newRaster(200, 100);
+    for (let q = 0; q < 20000; q++) { aggregateReference705.data[q * 4 + 3] = 255; aggregateFrame705.data[q * 4 + 3] = 255; }
+    for (const offset of [0, 100]) for (let y = 5; y < 10; y++) for (let x = 5; x < 10; x++) aggregateFrame705.data[(y * 200 + x + offset) * 4] = 100;
+    aggregateFrame705.data[(10 * 200 + 105) * 4] = 100;
+    const aggregateViewport705 = { x: 0, y: 0, width: 200, height: 100, scale: 1, pixelWidth: 200, pixelHeight: 100 };
+    const aggregate705 = seamFigures(aggregateReference705, aggregateFrame705, { x: 0, y: 0, width: 200, height: 100 }, aggregateViewport705, [0, 0, 0, 255]);
+    const pairArt705 = newRaster(100, 100); for (let q = 0; q < 10000; q++) pairArt705.data[q * 4 + 3] = 255;
+    const aggregatePairs705 = seamPairRows(aggregate705, ['a', 'b', 'c', 'd'].map((name, i) => ({ name, from: `full:${name}`, x: i < 2 ? 0 : 100, y: 0, image: pairArt705 })), [200, 100], aggregateViewport705);
+
+    say('CK706_FIXED_DENOMINATOR_MEAN_ONLY_AND_ONE_AGGREGATE_ALLOWANCE_PRESERVE_BASE_FAILURE',
+      affected705.mean === 0.2 && affected705.over40 === 0 && whole705.over40 === 100 && mean705.mean === 2 && mean705.over40 === 0 &&
+      bar705(mean705.mean, mean705.over40) && !bar705(1, 50) && bar705(1.001, 50) &&
+      aggregate705.mean === 0.255 && aggregate705.over40 === 51 && aggregatePairs705.length === 2 &&
+      JSON.stringify(aggregatePairs705.map(p => p.row.px_over_40)) === '[26,25]' && bar705(aggregate705.mean, aggregate705.over40) &&
+      barsNotMet({ gate_spine_html_green: true, seam_mean: 0, seam_px_over_40: 51, seam_frame_scale: 1, sets: { unchanged: { seam_mean: 0, seam_px_over_40: 0, seam_frame_scale: 1 } } }).includes('seam'),
+      `affected ${affected705.mean}/${affected705.over40}; whole ${whole705.mean}/${whole705.over40}; mean-only ${mean705.mean}/${mean705.over40}; aggregate ${aggregate705.mean}/${aggregate705.over40}, pairs ${aggregatePairs705.map(p => p.row.px_over_40).join("+")}`,
+      'A=200 for both readings; a 40-level residual is in the mean even though not over40; 25+26 exceeds the one allowance50 although neither pair does; an alternate never clears a base failure');
+    const pin705 = { spec: 'rigc-frames/1', pinned: { by: '--viewport', outside: [] } };
+    const pinFaults705: string[] = [];
+    for (const [label, pin, vp] of [
+      ['outside', { pinned: { by: '--viewport', outside: [{ slot: 'edge', frames: [0] }] } }, vp705],
+      ['missing', {}, vp705], ['phase', pin705, { ...vp705, x: 0.5 }],
+    ] as const) {
+      try { seamCanonicalViewport(stage705, vp, pin); } catch (e) { pinFaults705.push(`${label}:${String(e)}`); }
+    }
+    const oddStage705 = { x: -2.5, y: 0, width: 5, height: 5 };
+    const oddUnion705 = seamUnionViewport(oddStage705, [{ state: 'base', bounds: { minX: -3, minY: -0.25, maxX: 4, maxY: 5.25 } }]);
+    const unionFaults705 = [
+      () => seamStateBounds(join(dir, 'missing-union-candidate'), 'unavailable'),
+      () => seamUnionViewport(stage705, []),
+      () => seamUnionViewport(stage705, [{ state: 'invalid', bounds: { minX: NaN, minY: 0, maxX: 1, maxY: 1 } }]),
+      () => seamUnionViewport(stage705, [{ state: 'huge', bounds: { minX: 0, minY: 0, maxX: 100000, maxY: 100000 } }]),
+    ].map(read => { try { read(); return ''; } catch (error) { return String(error); } });
+    say('CK707_COMMON_UNION_KEEPS_SOURCE_PHASE_AND_REFUSES_UNAVAILABLE_OR_OVERSIZED_BOUNDS',
+      seamCanonicalViewport(stage705, vp705, pin705).scale === 1 &&
+      seamCanonicalViewport({ ...stage705, x: 0.25 }, { ...vp705, x: 0.25 }, pin705).x === 0.25 &&
+      pinFaults705.length === 3 && pinFaults705.every(x => x.includes('CHECK_SEAM_DOMAIN')) &&
+      JSON.stringify(oddUnion705) === JSON.stringify({ x: -3.5, y: -1, width: 8, height: 7, scale: 1, pixelWidth: 8, pixelHeight: 7 }) &&
+      unionFaults705.every(x => x.includes('CHECK_SEAM_DOMAIN')),
+      JSON.stringify({ pinFaults: pinFaults705, oddUnion: oddUnion705, unionFaults: unionFaults705 }),
+      'snap relative to authored origin, including odd-width half phase; only a complete fixed union passes outside metadata. Missing/nonfinite/oversized reads refuse before a union raster is allocated.');
+
+    // Independent full-U numerator: two outside cells at level255 contribute
+    // 510/A20=25.5 and count2; scene excludes them, while its original A2
+    // counts the unchanged interior sample. No enlarged-canvas denominator.
+    const unionReference705 = newRaster(5, 4), unionFrame705 = newRaster(7, 4);
+    for (let q = 0; q < 20; q++) unionReference705.data[q * 4 + 3] = 255;
+    for (let q = 0; q < 28; q++) unionFrame705.data[q * 4 + 3] = 255;
+    for (const x of [5, 6]) unionFrame705.data[x * 4] = 255;
+    const unionViewport705 = { x: 0, y: 0, width: 7, height: 4, scale: 1, pixelWidth: 7, pixelHeight: 4 };
+    const unionStage705 = { x: 0, y: 0, width: 5, height: 4 };
+    const fullUnion705 = seamFigures(unionReference705, unionFrame705, unionStage705, unionViewport705, [0, 0, 0, 255], undefined, false, undefined, true);
+    const sceneUnion705 = seamFigures(unionReference705, unionFrame705, unionStage705, unionViewport705, [0, 0, 0, 255], undefined, true, undefined, true);
+    say('CK714_UNION_OUTSIDE_RESIDUAL_COUNTS_WITH_FIXED_A_AND_SCENE_EXCLUDES_OUTSIDE',
+      fullUnion705.denominator === 20 && fullUnion705.mean === 25.5 && fullUnion705.over40 === 2 && bar705(fullUnion705.mean, fullUnion705.over40) &&
+      sceneUnion705.denominator === 2 && sceneUnion705.mean === 0 && sceneUnion705.over40 === 0,
+      JSON.stringify({ full: fullUnion705, scene: sceneUnion705 }),
+      'RGB construction before renderer observations: non-scene sum510 divided by authored20, never union28; a 5x4 scene retains exactly the original2 interior cells and excludes original border and outside cells.');
+
+    // #705 semantic identity: two differently packed representations carry
+    // exactly the same source attachment, own art, posed vertices and colour.
+    const sourceMapping705 = { type: 'mesh', image: 'own.png', uvs: [0, 0, 1, 0, 1, 1], triangles: [0, 1, 2], weights: [[{ bone: 'b', x: 0, y: 0, weight: 1 }]] };
+    const semantic705 = { slot: 'slot', attachment: 'drawing', source: sourceMapping705,
+      image: { width: 2, height: 2, rgba_sha256: 'own RGBA content' }, vertices: [0, 0, 2, 0, 2, 2], color: [1, 1, 1, 1] };
+    const layoutA705 = { ...semantic705, atlas: { page: 'page-a', uv: [0, 0, 0.5, 0.5], globalPageHash: 'unrelated-page-bytes-A', globalIndex: 0 } };
+    const layoutB705 = { ...semantic705, source: { weights: sourceMapping705.weights, triangles: sourceMapping705.triangles, uvs: sourceMapping705.uvs, image: 'same-bytes/own.png', type: 'mesh' }, atlas: { page: 'page-b', uv: [0.5, 0.5, 1, 1], globalPageHash: 'unrelated-page-bytes-B', globalIndex: 99 } };
+    const semanticToken705 = seamDrawingSignature(layoutA705);
+    const binding705 = { skins: { default: { slot: { placeholder: { ...sourceMapping705, name: 'drawing' } } } } };
+    const bound705 = seamSourceAttachment(binding705, 'slot', 'drawing');
+    const bindingErrors705: string[] = [];
+    for (const input of [
+      { rig: binding705, slot: 'slot', attachment: 'missing' },
+      { rig: { skins: { default: { slot: { a: { ...sourceMapping705, name: 'drawing' }, b: { ...sourceMapping705, name: 'drawing' } } } } }, slot: 'slot', attachment: 'drawing' },
+      { rig: { skins: { default: { slot: { drawing: { ...sourceMapping705, sequence: {} } } } } }, slot: 'slot', attachment: 'drawing' },
+    ]) { try { seamSourceAttachment(input.rig, input.slot, input.attachment); } catch (error) { bindingErrors705.push(String(error)); } }
+
+    const semanticNegatives705 = [
+      { ...semantic705, image: { ...semantic705.image, rgba_sha256: 'changed OWN art' } },
+      { ...semantic705, vertices: [0, 0, 3, 0, 2, 2] },
+      { ...semantic705, color: [1, 1, 1, 0.5] },
+      { ...semantic705, source: { ...sourceMapping705, uvs: [0, 0, 0, 1, 1, 1] } },
+      { ...semantic705, source: { ...sourceMapping705, triangles: [0, 2, 1] } },
+      { ...semantic705, source: { ...sourceMapping705, weights: [[{ bone: 'other', x: 0, y: 0, weight: 1 }]] } },
+    ];
+    say('CK710_PACKING_REPRESENTATION_IS_NOT_A_DRAWING_CHANGE_BUT_SOURCE_MAPPING_IS',
+      bound705.image === 'own.png' && bindingErrors705.length === 3 &&
+      ['SOURCE_ATTACHMENT_MISSING', 'SOURCE_ATTACHMENT_AMBIGUOUS', 'SOURCE_MAPPING_UNSUPPORTED'].every((code, i) => bindingErrors705[i].includes(code)) &&
+      semanticToken705 === seamDrawingSignature(layoutB705) && semanticNegatives705.every(input => seamDrawingSignature(input) !== semanticToken705),
+      JSON.stringify({ repackedInherited: semanticToken705 === seamDrawingSignature(layoutB705), ownArtWorldColorUvTriangleWeightNegatives: semanticNegatives705.map(input => seamDrawingSignature(input) !== semanticToken705) }),
+      'the exact helper used by the actual rig/skin binding ignores only image-path/atlas representation and object-key order; own resolved pixels, actual vertices/colour and every source UV/topology/weight definition remain semantic. No per-pixel RGBA string is interned.');
+
+    const { scopeHome705, failHome705, knownPatch705, edgeRgba705, outsideRgba705, sourceCrops705 } = writeSeamScope705Fixtures(dir);
+    const scopeCalls705: string[][] = [];
+    const live705 = rigcRunnerAt(suiteRigc(), spawnRigc);
+    const tap705: RigcRunner = args => {
+      const request = [...args];
+      // runCheck has no public still-size flag. Its injected runner can request
+      // a different fitted diagnostic size without changing canonical argv.
+      if (request[0] === 'render' && request.includes('--animation') && request[request.indexOf('--animation') + 1] === 'still' && !request.includes('--viewport')) request[request.indexOf('--max') + 1] = '192';
+      scopeCalls705.push(request); return live705(request);
+    };
+    const scopeResult705 = runCheck(scopeHome705, join(scopeHome705, 'out'), tap705, undefined, DEFAULT_PACK_MODE, undefined, undefined, true, true, undefined, true);
+    const scopeFigures705 = scopeResult705.figures;
+    const canonicalCalls705 = scopeCalls705.filter(args => args[0] === 'render' && args.includes('--viewport'));
+    const canonicalBuiltOnce705 = canonicalCalls705.every(args => scopeCalls705.filter(call => call[0] === 'build' && call[call.indexOf('--out') + 1] === args[args.indexOf('--candidate') + 1]).length === 1);
+    say('CK708_STOCK_SOURCE_GRID_SEAM_HAS_ONE_EXTRA_RENDER_PER_STATE_AND_NO_EXTRA_GATE',
+      scopeFigures705.PASS && scopeFigures705.seam_frame_scale === 1 &&
+      scopeFigures705.seam_scope?.auto_frame_raw.frame_scale !== scopeFigures705.seam_scope?.whole.frame_scale && canonicalCalls705.length === 3 && canonicalBuiltOnce705 &&
+      Object.values(scopeFigures705.sets ?? {}).length === 2 && Object.values(scopeFigures705.sets ?? {}).every(row => row.PASS && row.seam_frame_scale === 1 && row.seam_scope?.unavailable === undefined && row.seam_scope?.mode === 'source-grid/affected-set' && (row.seam_scope.whole_pairs ?? []).every(pair => !('picture' in pair) && pair.frame_box.length === 4 && pair.rig_box.length === 4)) &&
+      canonicalCalls705.every(args => args[args.indexOf('--viewport') + 1] === '-48,0,112,96' && args[args.indexOf('--max') + 1] === '112') &&
+      existsSync(join(scopeHome705, 'out', STILL_DIR, 'frames.json')) && existsSync(join(scopeHome705, 'out', 'setup_still_auto', 'frames.json')),
+      JSON.stringify({ PASS: scopeFigures705.PASS, canonicalRenders: canonicalCalls705.length, alreadyBuiltOnce: canonicalBuiltOnce705, sets: scopeFigures705.sets }),
+      'the source scale/origin is independent of the disjoint third drawing extent; all regular gates still run, each pinned render reuses its already built candidate, and source/blink still keep their original auto-fitted path');
+    const edgeFrame705 = readFrameSet(join(scopeHome705, 'out', STILL_DIR)).frames[0].image;
+    const edgeSidecar705 = JSON.parse(readFileSync(join(scopeHome705, 'out', STILL_DIR, 'frames.json'), 'utf8')) as { pinned: { by: string; outside: unknown[] } };
+    const edgeRead705 = Array.from(edgeFrame705.data.subarray((46 * edgeFrame705.width + 95) * 4, (46 * edgeFrame705.width + 95) * 4 + 4));
+    // The fixture constructor declares source right edges 98/100/112. Snap
+    // official float32 world endpoints onto the same source-relative ceil grid
+    // as seamUnionViewport; raw world floats need not be those integer edges.
+    const sourceRightCells705 = (domain: NonNullable<typeof scopeFigures705.seam_scope>['domain'], state: string): number | undefined => {
+      if (domain === undefined) return undefined;
+      const maxX = domain.states.find(row => row.state === state)?.bounds?.maxX;
+      return maxX === undefined ? undefined : Math.ceil(maxX - domain.authored.x);
+    };
+    const scopeRightCells705 = ['base', 'extent40', 'extent52'].map(state => sourceRightCells705(scopeFigures705.seam_scope?.domain, state));
+    const [scopeBaseCells705, scope40Cells705, scope52Cells705] = scopeRightCells705;
+    say('CK713_OPAQUE_EDGE_ART_IS_VISIBLE_ON_THE_PINNED_SOURCE_DOMAIN',
+      scopeFigures705.PASS && scopeFigures705.seam_frame_scale === 1 && edgeFrame705.width === 112 &&
+      scopeFigures705.seam_scope?.denominator_px === 96 * 96 &&
+      scopeBaseCells705 === 98 && scope40Cells705 === 100 && scope52Cells705 === 112 &&
+      scopeBaseCells705 < scope40Cells705 && scope40Cells705 < scope52Cells705 &&
+      scopeFigures705.seam_scope.domain?.viewport.width === 112 &&
+      edgeSidecar705.pinned.by === '--viewport' && edgeSidecar705.pinned.outside.length === 0 &&
+      JSON.stringify(edgeRead705) === JSON.stringify(edgeRgba705) && readPng(join(scopeHome705, 'images', 'edge.png')).data[(1 * 5 + 2) * 4 + 3] === 255,
+      JSON.stringify({ actualEdgeFrameWidth: edgeFrame705.width, actualBaseA: scopeFigures705.seam_scope?.denominator_px, sourceRightCells: scopeRightCells705, sourceTexel: [95, 46], sourceRgba: edgeRgba705, stockFrameRgba: edgeRead705, actualBoundsAndCommonU: scopeFigures705.seam_scope?.domain, pinned: edgeSidecar705.pinned }),
+      'the existing CK708 stock run: transparent last two columns extend the actual quad outside authored96, base bounds reach98, while selected extent40/52 reach100/112 and grow common U to112 without denominator dilution; opaque95,46 remains exact. CK709 separately counts actual opaque outside art as error, not a clipped PASS.');
+
+    const failedScope705 = runCheck(failHome705, join(failHome705, 'out'), live705, undefined, DEFAULT_PACK_MODE, undefined, undefined, true, true, undefined, true);
+    const inheritedSets705 = ['extent40', 'extent52'].map(name => failedScope705.figures.sets?.[name]);
+    const measuredBounds705 = failedScope705.figures.seam_scope?.domain;
+    const failedRightCells705 = ['base', 'extent40', 'extent52'].map(state => sourceRightCells705(measuredBounds705, state));
+    const [failedBaseCells705, failed40Cells705, failed52Cells705] = failedRightCells705;
+    const basePair705 = failedScope705.figures.seam_scope?.whole_pairs?.find(pair => pair.parts.join('|') === 'back|front');
+    const outsideSet705 = failedScope705.figures.sets?.outside;
+    const outsideWhole705 = outsideSet705?.seam_scope?.whole_pairs ?? [];
+    const outsideStill705 = readFrameSet(join(failHome705, 'out', STILL_DIR, 'outside'));
+    const outsideFrame705 = outsideStill705.frames[0].image;
+    const outsidePixel705 = Array.from(outsideFrame705.data.subarray((3 * outsideFrame705.width + 100) * 4, (3 * outsideFrame705.width + 100) * 4 + 4));
+    const outsideContrast705 = Math.max(...outsideRgba705.slice(0, 3).map((value, channel) => Math.abs(value - outsideStill705.background[channel])));
+    const baseSeamProblems705 = failedScope705.problems.filter(problem => problem.code === 'CHECK_SEAM_WITHIN_BAR' && problem.object.includes('(base, judged once)'));
+    const samePair705 = (parts: readonly string[]): boolean => parts.join('|') === 'back|front';
+    say('CK711_ACTUAL_BASE_FAILURE_IS_INHERITED_ONCE_BY_UNCHANGED_PAIRS',
+      knownPatch705 === 8 * 8 && basePair705?.px_over_40 === knownPatch705 &&
+      failedBaseCells705 === 98 && failed40Cells705 === 100 && failed52Cells705 === 112 &&
+      failedBaseCells705 < failed40Cells705 && failed40Cells705 < failed52Cells705 &&
+      measuredBounds705?.viewport.width === 112 && failedScope705.figures.PASS === false && failedScope705.figures.seam_px_over_40 !== null && failedScope705.figures.seam_px_over_40 >= knownPatch705 &&
+      baseSeamProblems705.length === 1 && baseSeamProblems705[0].detail.includes('back') && baseSeamProblems705[0].detail.includes('front') &&
+      inheritedSets705.every(row => row !== undefined && row.PASS && row.seam_px_over_40 === 0 && row.seam_scope !== undefined && row.seam_scope.unavailable === undefined && row.seam_scope.whole.px_over_40 >= knownPatch705 &&
+        row.seam_scope.pairs?.some(pair => samePair705(pair.parts) && pair.whole_px_over_40 === knownPatch705 && pair.affected_px_over_40 === 0 && pair.inherited_px_over_40 === pair.whole_px_over_40 && pair.reasons.inherited === pair.whole_px_over_40)) &&
+      !failedScope705.problems.some(problem => problem.object.includes('set "extent40"') || problem.object.includes('set "extent52"')) &&
+      outsideSet705?.PASS === true && outsideSet705.seam_scope?.unavailable === undefined &&
+      outsideSet705.seam_px_over_40 === 1 && outsideWhole705.reduce((sum, pair) => sum + (pair.outside_authored_px ?? 0), 0) === 1 &&
+      JSON.stringify(outsidePixel705) === JSON.stringify(outsideRgba705) && outsideContrast705 > SEAM_PX_LEVEL,
+      JSON.stringify({ actualBaseCount: failedScope705.figures.seam_px_over_40, actualBaseA: failedScope705.figures.seam_scope?.denominator_px, sourceRightCells: failedRightCells705, sourceCrops: sourceCrops705, independentlyPlantedCells: knownPatch705, overallPASS: failedScope705.figures.PASS, baseProblems: baseSeamProblems705, basePair: basePair705, actualStateBoundsAndCommonU: measuredBounds705, inheritedSets: inheritedSets705, outside: { set: outsideSet705, rawPairs: outsideWhole705, sourceSample: [100, 3], actualRgba: outsidePixel705, actualBackground: outsideStill705.background, contrast: outsideContrast705 } }),
+      'one additional runCheck serves CK711/712: selected sets extend source-relative ceil cells from base98 to100/112, all states use U112x96 with fixed A9216, and the original back/front raw64 stays exactly64/affected0/inherited64. A separate set adds one opaque sample at crop100,3: actual stock RGBA, outside count1 and affected count1 must retain it. This is engine integration; no extra runCheck or public producer.');
+    const coveredSet705 = failedScope705.figures.sets?.cover;
+    const coveredScope705 = coveredSet705?.seam_scope;
+    const coveredPair705 = coveredScope705?.pairs?.find(pair => samePair705(pair.parts));
+    const coverProblems705 = failedScope705.problems.filter(problem => problem.code === 'CHECK_SEAM_WITHIN_BAR' && problem.object.includes('set "cover"'));
+    say('CK712_ACTUAL_THIRD_OCCLUSION_FAILS_THE_AFFECTED_ORIGINAL_PAIR',
+      coveredSet705?.PASS === false && coveredScope705 !== undefined && coveredScope705.unavailable === undefined && coveredPair705 !== undefined && coveredPair705.affected_px_over_40 >= knownPatch705 && coveredPair705.affected_px_over_40 > 50 &&
+      (coveredPair705.reasons.posed_changed ?? 0) >= knownPatch705 && coverProblems705.length === 1 && coverProblems705[0].detail.includes('back') && coverProblems705[0].detail.includes('front') &&
+      coveredScope705.changes?.some(change => change.scope === 'posed' && change.drawing === 'marker' && change.reasons.includes('geometry')) === true &&
+      failedScope705.problems.length === baseSeamProblems705.length + coverProblems705.length,
+      JSON.stringify({ sameReferencePair: coveredPair705, set: coveredSet705, namedFailure: coverProblems705, allProblems: failedScope705.problems }),
+      'the reference pair stays back/front; only the real third drawing moves over its known 8x8 patch. The actual semantic-support construction must select that residual, retain its full contribution and name the pair; a policy-only integer-stack plant cannot establish this proof.');
+    const clippedHome705 = join(dir, 'source-grid-clipped');
+    writeCheckRig(clippedHome705);
+    const clippedRig705 = JSON.parse(readFileSync(join(clippedHome705, 'rig.json'), 'utf8')) as { bones: Array<{ name: string; x: number }> };
+    clippedRig705.bones[0].x += CHECK_RIG.w;
+    writeFileSync(join(clippedHome705, 'rig.json'), JSON.stringify(clippedRig705));
+    const clippedRun705 = runCli(['check', '--rig', clippedHome705, '--out', join(clippedHome705, 'out')]);
+    const outsideFig705 = readJsonFile(join(clippedHome705, 'out', 'check.json'));
+    const outsideScope705 = outsideFig705?.seam_scope as { denominator_px?: number; domain?: { viewport: { width: number } }; whole_pairs?: Array<{ outside_authored_px?: number }> } | undefined;
+    say('CK709_ACTUAL_OUTSIDE_ART_IS_COUNTED_ON_COMPLETE_UNION_NOT_CLIPPED_PASS',
+      clippedRun705.status === 1 && clippedRun705.out.includes('CHECK_SEAM_WITHIN_BAR') && !clippedRun705.out.includes('CHECK_SEAM_DOMAIN') && outsideFig705?.PASS === false &&
+      outsideScope705?.denominator_px === CHECK_RIG.w * CHECK_RIG.h && (outsideScope705.domain?.viewport.width ?? 0) > CHECK_RIG.w &&
+      (outsideScope705.whole_pairs ?? []).some(pair => (pair.outside_authored_px ?? 0) > 0),
+      JSON.stringify({ exit: clippedRun705.status, output: clippedRun705.out, scope: outsideScope705 }),
+      'the original root translation moves real opaque drawings past authored D; all are rendered on complete U, and full non-scene numerator keeps their outside residual with fixed authored denominator. No art, pose, threshold or gate bypass is changed.');
 
     // Repository text belongs to TY21. Check holds the reader to generated guide/help, and its input boundary.
     const help = runCli(['--help']).out;
@@ -19167,11 +19549,11 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     );
 
     // TEXTURE_STRETCH (issue #31): a mesh the idle stretches by a hand-computed ratio, the same geometry forged, the no-mesh and no-file SKIPs, the version gate.
-    const stretchRun = (label: string, by: number): { status: number; out: string; fig: Record<string, unknown> | null; geo: string } => {
+    const stretchRun = (label: string, by: number): { status: number; out: string; fig: Record<string, unknown> | null; geo: string; checkFile: string } => {
       const r = join(dir, label);
       writeCheckRig(r, { stretchMesh: by });
       const res = runCli(['check', '--rig', r, '--out', join(dir, `${label}-out`)]);
-      return { ...res, fig: readJsonFile(join(dir, `${label}-out`, 'check.json')), geo: join(dir, `${label}-out`, 'idle_frames', 'idle', GEOMETRY_FILE) };
+      return { ...res, fig: readJsonFile(join(dir, `${label}-out`, 'check.json')), geo: join(dir, `${label}-out`, 'idle_frames', 'idle', GEOMETRY_FILE), checkFile: join(dir, `${label}-out`, 'check.json') };
     };
     type StretchFig = { status?: string; severity?: number; max_ratio?: number; min_ratio?: number; frames?: number; worst?: { slot: string; triangle: number; vertices: number[]; edge: number[]; frame: number; ratio: number } };
     const rest = CHECK_PARTS[0].h;
@@ -19244,10 +19626,14 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const stretchAgain = stretchRun('stretch-mild-2', stretchBy);
     const sameGeo = existsSync(mild.geo) && existsSync(stretchAgain.geo) && Buffer.compare(readFileSync(mild.geo), readFileSync(stretchAgain.geo)) === 0;
     const sameCheck = mild.fig !== null && stretchAgain.fig !== null && JSON.stringify(mild.fig) === JSON.stringify(stretchAgain.fig);
+    const firstCheckBytes = existsSync(mild.checkFile) ? readFileSync(mild.checkFile) : null;
+    const secondCheckBytes = existsSync(stretchAgain.checkFile) ? readFileSync(stretchAgain.checkFile) : null;
+    const sameCheckBytes = firstCheckBytes !== null && secondCheckBytes !== null && Buffer.compare(firstCheckBytes, secondCheckBytes) === 0;
     say(
-      'CK33_TWO_RUNS_ON_A_STRETCHED_MESH_WRITE_THE_SAME_GEOMETRY_AND_THE_SAME_TEXTURE_STRETCH',
-      stretchAgain.status === 0 && sameGeo && sameCheck,
-      `second run exit ${stretchAgain.status}; geometry.json ${sameGeo ? 'byte-identical' : 'DIFFERS'}; check.json ${sameCheck ? 'identical' : 'DIFFERS'} (TEXTURE_STRETCH ${JSON.stringify((stretchAgain.fig?.TEXTURE_STRETCH as StretchFig | undefined)?.worst ?? null)})`,
+      'CK33_TWO_RUNS_ON_A_STRETCHED_MESH_WRITE_THE_SAME_GEOMETRY_AND_BYTE_IDENTICAL_CHECK_JSON',
+      stretchAgain.status === 0 && sameGeo && sameCheck && sameCheckBytes,
+      `second run exit ${stretchAgain.status}; geometry.json ${sameGeo ? 'byte-identical' : 'DIFFERS'}; check.json ${sameCheck ? 'identical' : 'DIFFERS'}; actual bytes ${sameCheckBytes ? 'byte-identical' : 'DIFFERS'} (TEXTURE_STRETCH ${JSON.stringify((stretchAgain.fig?.TEXTURE_STRETCH as StretchFig | undefined)?.worst ?? null)})` +
+        (stretchAgain.status === 0 && sameGeo && sameCheck && sameCheckBytes ? '' : `; exact comparison ${JSON.stringify({ firstLabel: 'stretch-mild', firstRawSHA256: firstCheckBytes === null ? null : createHash('sha256').update(firstCheckBytes).digest('hex'), first: mild.fig, secondLabel: 'stretch-mild-2', secondRawSHA256: secondCheckBytes === null ? null : createHash('sha256').update(secondCheckBytes).digest('hex'), second: stretchAgain.fig })}`),
       "CK02 compares two runs of the fixture with no mesh, where this line is a SKIP; determinism of a figure has to be shown where there is a figure",
     );
 
@@ -19295,11 +19681,12 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     // fixtures/squeeze.ts through the rig stage (its default control bones) and check: the proposer's mirror fails, and
     // the line names hairback_r2 and hairback_l2 on two chains, by their first links; the edge is the one propose's
     // squeeze lint predicted off the same lattice (PR120); one sign passes.
+    const { say: squeezeSay, runCli: squeezeCli } = fixtureChildDiagnostics(say);
     const squeezeRun = (label: string, sign: 1 | -1): { rig: { status: number; out: string }; check: { status: number; out: string }; fig: Record<string, unknown> | null } => {
       const d = join(dir, label);
       const fx = writeRigFixture(d, squeezeConfig(sign), squeezeImages(), squeezeParts());
-      const rig = runCli(['rig', '--config', fx.config, '--parts', fx.parts, '--out', join(d, 'rig')]);
-      const check = runCli(['check', '--rig', join(d, 'rig'), '--parts', fx.parts, '--out', join(d, 'out')]);
+      const rig = squeezeCli(['rig', '--config', fx.config, '--parts', fx.parts, '--out', join(d, 'rig')]);
+      const check = squeezeCli(['check', '--rig', join(d, 'rig'), '--parts', fx.parts, '--out', join(d, 'out')]);
       return { rig, check, fig: readJsonFile(join(d, 'out', 'check.json')) };
     };
     const mirrored = squeezeRun('squeeze-mirrored', -1);
@@ -19315,7 +19702,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       predicted === undefined || predicted.kind !== 'squeeze'
         ? null
         : `; ${predicted.vertices.map((v, i) => vertexText(v, i === 0)).join(' and ')}; on the idle's chains, the chain from "hairback_r0_ctl" carries "hairback_r2" and the chain from "hairback_l0_ctl" carries "hairback_l2" — the texture on it is squeezed`;
-    say(
+    squeezeSay(
       'CK241_A_STRETCH_FAIL_NAMES_THE_BONES_ITS_EDGE_HANGS_ON_AND_THEIR_TWO_CHAINS_AND_ONE_SIGN_PASSES',
       mirrored.rig.status === 0 &&
         mirrored.check.status === 1 &&
@@ -23326,10 +23713,11 @@ function runBuildSuite(): number {
       'a successful process is insufficient without its complete check report, and a complete receipt cannot erase a nonzero exit');
 
     // Issue #257: build forwards check's two switches. The moving config with the topwear cut by a triangle at overlap 0
-    // (assemble.cuts, issue #170): the piece's resampled edge meets the base's along the cut line, so the seam counts a
-    // few pixels over 40 and still passes its bar — rows on a green build. One build with both switches, then check with
-    // both on the rig and the parts that build wrote: the same measurement, so check.json, the seam pair lines, the
-    // pictures under seam/ and the kept still must be the same bytes. The same build without them must have none of it.
+    // (assemble.cuts, issue #170). At the source grid this cut can have no residual rows: the flag still writes an
+    // array, and build/check must agree on both empty and nonempty picture inventories. CK105 separately shifts real
+    // reference alpha by two pixels and requires the actual CLI seam refusal, not a color-only or policy-unit plant.
+    // One build with both switches, then check on its rig/parts: check.json, pair lines, pictures and kept still agree.
+    // The same build without the switches must have none of their optional fields or artifacts.
     const cutDir = join(dir, 'cut-seam');
     const cutConfig = JSON.parse(JSON.stringify(moving)) as Record<string, unknown>;
     cutConfig.regions = { ...(cutConfig.regions as Record<string, string>), tie: 'chest' };
@@ -23351,6 +23739,11 @@ function runBuildSuite(): number {
     const sameFiles = (a: string, b: string): boolean => filesUnder(a).length > 0 && filesUnder(a).join() === filesUnder(b).join() && filesUnder(a).every((f) => Buffer.compare(readFileSync(join(a, f)), readFileSync(join(b, f))) === 0);
     const fwdRows = fwdFig?.seam_pairs;
     const handRows = handFig?.seam_pairs;
+    const fwdPictures = filesUnder(join(fwdCheck, SEAM_DIR));
+    const handPictures = filesUnder(join(byHand, SEAM_DIR));
+    const sameSeamPictures = Array.isArray(fwdRows) && fwdRows.length === 0
+      ? fwdFig?.seam_px_over_40 === 0 && fwdPictures.length === 0 && handPictures.length === 0
+      : sameFiles(join(fwdCheck, SEAM_DIR), join(byHand, SEAM_DIR));
     const { seam_pairs: _fwdRows, ...fwdRest } = fwdFig ?? {};
     const fwdPairs = pairLinesOf(fwd.out, '[check] ');
     const handPairs = pairLinesOf(hand.out, '');
@@ -23361,7 +23754,7 @@ function runBuildSuite(): number {
       fwd.status === 0 &&
         hand.status === 0 &&
         Array.isArray(fwdRows) &&
-        (fwdRows as unknown[]).length > 0 &&
+        Array.isArray(handRows) &&
         JSON.stringify(fwdRows) === JSON.stringify(handRows) &&
         // Issue #607: build records its config and check alone reads none, so the build's record is set aside here.
         fwdSameAsHand &&
@@ -23369,7 +23762,7 @@ function runBuildSuite(): number {
         !('config' in handFig) &&
         fwdPairs.length === (fwdRows as unknown[]).length &&
         fwdPairs.join('\n') === handPairs.join('\n') &&
-        sameFiles(join(fwdCheck, SEAM_DIR), join(byHand, SEAM_DIR)) &&
+        sameSeamPictures &&
         plainFig !== null &&
         !('seam_pairs' in plainFig) &&
         JSON.stringify(fwdRest) === JSON.stringify(plainFig) &&
@@ -23379,7 +23772,7 @@ function runBuildSuite(): number {
         pairsTwice.status === 2 &&
         pairsTwice.out.includes('--seam-pairs is given twice') &&
         !existsSync(join(cutDir, 'out-pairs-twice')),
-      `build --seam-pairs: exit ${fwd.status}, ${Array.isArray(fwdRows) ? `${(fwdRows as unknown[]).length} seam row(s)` : 'no seam_pairs'}, ${fwdPairs.length} seam pair line(s); check --seam-pairs on its rig and parts: exit ${hand.status}, ${Array.isArray(handRows) ? `${(handRows as unknown[]).length} row(s)` : 'no seam_pairs'}, check.json ${fwdSameAsHand ? 'the same but the build\'s config record' : 'DIFFERENT'} (config ${handFig !== null && 'config' in handFig ? 'WRITTEN by check' : 'absent from check'}), pair lines ${fwdPairs.join('\n') === handPairs.join('\n') ? 'the same' : 'DIFFERENT'}, ${SEAM_DIR}/ ${sameFiles(join(fwdCheck, SEAM_DIR), join(byHand, SEAM_DIR)) ? `${filesUnder(join(byHand, SEAM_DIR)).length} picture(s) byte-identical` : 'DIFFERENT or empty'}; ` +
+      `build --seam-pairs: exit ${fwd.status}, ${Array.isArray(fwdRows) ? `${(fwdRows as unknown[]).length} seam row(s)` : 'no seam_pairs'}, ${fwdPairs.length} seam pair line(s); check --seam-pairs on its rig and parts: exit ${hand.status}, ${Array.isArray(handRows) ? `${(handRows as unknown[]).length} row(s)` : 'no seam_pairs'}, check.json ${fwdSameAsHand ? 'the same but the build\'s config record' : 'DIFFERENT'} (config ${handFig !== null && 'config' in handFig ? 'WRITTEN by check' : 'absent from check'}), pair lines ${fwdPairs.join('\n') === handPairs.join('\n') ? 'the same' : 'DIFFERENT'}, ${SEAM_DIR}/ ${sameSeamPictures ? `${handPictures.length} picture(s), identical inventories${handPictures.length === 0 ? ' (valid zero-row result)' : ' and bytes'}` : 'DIFFERENT'}; ` +
         `the same build without it: exit ${cutPlain.status}, seam_pairs ${plainFig !== null && 'seam_pairs' in plainFig ? 'WRITTEN' : 'absent'}, ${SEAM_DIR}/ ${existsSync(join(plainCheck, SEAM_DIR)) ? 'WRITTEN' : 'absent'}, the rest of check.json ${JSON.stringify(fwdRest) === JSON.stringify(plainFig) ? 'the same' : 'DIFFERENT'}; given twice: exit ${pairsTwice.status}`,
       'issue #257: build dropped the flag, so a consumer who needed the pairs ran check a second time by hand and the artifact build reported was checked without them; forwarded, the check inside build is the check by hand, row for row and byte for byte, and without the flag build writes what it wrote before',
     );
@@ -24230,7 +24623,7 @@ function runBuildSuite(): number {
         badSetRun.status === 1 &&
         badSetRun.out.includes('FAIL  CHECK_INPUT_PRESENT:') &&
         uncompRun.status === 1 &&
-        uncompRun.out.includes('FAIL  CHECK_SEAM_WITHIN_BAR: the setup-pose render of set "posed"') &&
+        uncompRun.out.includes('FAIL  CHECK_SEAM_WITHIN_BAR: the source-grid setup-pose render of set "posed"') &&
         uncompRun.out.includes('FAIL  CHECK_ANIMATIONS_DO_NOT_FOLD: animation "pose_set", mesh "posed_bottomwear"'),
       `compensated build --all-sets exit ${posedRun.status}, sets.json drawn ${JSON.stringify(posedSetDrawn ?? null)}; unknown --set exit ${badSetRun.status}; uncompensated mutant check --set posed exit ${uncompRun.status} (seam fail: ${uncompRun.out.includes('FAIL  CHECK_SEAM_WITHIN_BAR:')}, fold fail: ${uncompRun.out.includes('FAIL  CHECK_ANIMATIONS_DO_NOT_FOLD:')})`,
       'issue #465: an alternate set painted in a pose records its drawn bone angles in sets.json and emits its attachments in the posed bones\' local frame, so check --set / --all-sets and posed animations stay seam-clean and fold-free; dropping the compensation fails both CHECK_SEAM_WITHIN_BAR and CHECK_ANIMATIONS_DO_NOT_FOLD',
@@ -48921,8 +49314,65 @@ function runFrontSlotSuite(): number {
     // Reuse the unchanged real fixture: torso x[18,44), upperarm x[9,16)
     // cannot share a setup alpha band. The gesture forearm is not segment0.
     const out = join(dir, 'front', 'out');
-    const report = runCheck(join(out, 'rig'), join(out, 'zero-band-check'), rigcRunnerAt(suiteRigc(), spawnRigc), out,
-      undefined, undefined, undefined, false, true, 'chest');
+    // #705: reuse the produced fixture, add a second declared alternative with
+    // the same drawing bytes and a distinct attachment identity on each slot.
+    // No simultaneous player activation is claimed by this producer/check test.
+    const shared = join(dir, 'shared-front');
+    cpSync(out, shared, { recursive: true });
+    const sharedParts = readParts(join(shared, 'parts.json'));
+    const first = sharedParts.alternates?.find(a => a.name === 'chest');
+    if (first === undefined) throw new Error('front fixture has no chest alternate');
+    const second = structuredClone(first); second.name = 'second';
+    second.slots = Object.fromEntries(Object.entries(first.slots).map(([slot, name]) => {
+      if (!name.startsWith('chest_')) throw new Error('front fixture attachment prefix unavailable');
+      return [slot, 'second_' + name.slice('chest_'.length)];
+    }));
+    const sharedRigPath = join(shared, 'rig', 'rig.json');
+    const sharedRig = JSON.parse(readFileSync(sharedRigPath, 'utf8')) as {
+      images: string; skins: Record<string, Record<string, Record<string, unknown>>>;
+    };
+    const originalRigPath = join(out, 'rig', 'rig.json');
+    const originalRig = JSON.parse(readFileSync(originalRigPath, 'utf8')) as typeof sharedRig;
+    const originalImageHome = resolve(dirname(originalRigPath), originalRig.images);
+    const clonedImageHome = join(shared, 'rig', 'shared-source-images');
+    cpSync(originalImageHome, clonedImageHome, { recursive: true });
+    sharedRig.images = relative(dirname(sharedRigPath), clonedImageHome);
+    const imageHash = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex');
+    const originalBindings = Object.entries(originalRig.skins).flatMap(([skin, slots]) =>
+      Object.entries(slots).flatMap(([slot, attachments]) => Object.entries(attachments).map(([name, value]) => {
+        const attachment = value as Record<string, unknown>;
+        if (typeof attachment.image !== 'string') throw new Error('front fixture source image binding unavailable');
+        return { skin, slot, name, attachment: JSON.stringify(attachment), image: attachment.image, sha256: imageHash(resolve(originalImageHome, attachment.image)) };
+      })));
+    const { images: _originalImages, skins: _originalSkins, ...originalGeometry } = originalRig;
+    for (const [slot, oldName] of Object.entries(first.slots)) {
+      const next = second.slots[slot];
+      const attachment = sharedRig.skins.default[slot]?.[oldName];
+      if (attachment === undefined || typeof attachment !== 'object' || attachment === null || !('image' in attachment) || typeof attachment.image !== 'string') throw new Error('front fixture attachment/image binding unavailable');
+      sharedRig.skins.default[slot][next] = { ...(attachment as Record<string, unknown>), image: `${next}.png` };
+      // Rig images may include producer padding. The cropped reference PNG is
+      // a different contract and must never replace that source image closure.
+      copyFileSync(resolve(originalImageHome, attachment.image), join(clonedImageHome, `${next}.png`));
+      copyFileSync(join(shared, 'parts', `${oldName}.png`), join(shared, 'parts', `${next}.png`));
+    }
+    const { images: _clonedImages, skins: _clonedSkins, ...clonedGeometry } = sharedRig;
+    const oldSourceUnchanged = JSON.stringify(originalGeometry) === JSON.stringify(clonedGeometry) && originalBindings.every(binding =>
+      JSON.stringify(sharedRig.skins[binding.skin]?.[binding.slot]?.[binding.name]) === binding.attachment && imageHash(resolve(clonedImageHome, binding.image)) === binding.sha256);
+    const secondSourceExact = Object.entries(first.slots).every(([slot, oldName]) => {
+      const source = sharedRig.skins.default[slot][oldName] as Record<string, unknown>;
+      const next = second.slots[slot];
+      return typeof source.image === 'string' && imageHash(join(clonedImageHome, `${next}.png`)) === imageHash(resolve(originalImageHome, source.image)) &&
+        imageHash(join(shared, 'parts', `${next}.png`)) === imageHash(join(shared, 'parts', `${oldName}.png`));
+    });
+    sharedParts.alternates?.push(second);
+    writeFileSync(join(shared, 'parts.json'), serializeParts(sharedParts));
+    writeFileSync(sharedRigPath, JSON.stringify(sharedRig));
+    const setsPath = join(shared, 'rig', 'sets.json');
+    const sharedSets = JSON.parse(readFileSync(setsPath, 'utf8')) as { sets: Record<string, Record<string, unknown>> };
+    sharedSets.sets.second = { ...sharedSets.sets.chest, slots: second.slots };
+    writeFileSync(setsPath, JSON.stringify(sharedSets));
+    const report = runCheck(join(shared, 'rig'), join(shared, 'zero-band-check'), rigcRunnerAt(suiteRigc(), spawnRigc), shared,
+      undefined, undefined, undefined, false, true, undefined, true);
     const root = report.motionSeam.roots;
     const unmeasured = root?.unmeasured?.[0];
     const names = motionSeamLines(report.motionSeam);
@@ -48936,6 +49386,13 @@ function runFrontSlotSuite(): number {
         names.some(line => line.includes('root pair for arm_r') && line.includes('SKIP') && line.includes('torso')),
       JSON.stringify({ roots: root, bars: report.bars, PASS: report.figures.PASS, lines: names }),
       'the stock setup reader must prove drawn1/banded0, keep the root block and bar SKIP, and preserve all original front-slot checks and fixture geometry.');
+    say('FS09_TWO_ALTERNATIVE_SETS_REGISTER_DISTINCT_ATTACHMENTS_ON_THE_SAME_FRONT_SLOT',
+      oldSourceUnchanged && secondSourceExact && originalBindings.length > 0 && second.slots.forearm_r_front !== first.slots.forearm_r_front &&
+      Object.keys(report.figures.sets ?? {}).join(',') === 'chest,second' &&
+      Object.values(report.figures.sets ?? {}).every(row => row.PASS && row.seam_scope?.mode === 'source-grid/affected-set' && row.seam_scope.unavailable === undefined),
+      JSON.stringify({ oldSourceUnchanged, secondSourceExact, oldBindings: originalBindings, slots: [first.slots, second.slots], sets: report.figures.sets }),
+      'both alternatives compile/gate on their shared front slot without a new cross-set refusal; all old source attachment definitions, geometry and original rig image bytes survive the clone, while cropped parts are copied separately. FS05 retains same-set and keyed-front negatives. setSet/setSets player selection is documented from source, not executed here.');
+
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

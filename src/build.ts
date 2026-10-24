@@ -1825,6 +1825,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
       `  seam${fig.seam_border === undefined ? '' : ` (config.scene: ${fig.seam_border.frame_px_left_out} frame px on the painting's border rows and columns left out, ${fig.seam_border.px_over_40_left_out} of them over ${SEAM_PX_LEVEL})`}: setup pose at ${r.seamViewport.pixelWidth}x${r.seamViewport.pixelHeight}, scale ${r.seamViewport.scale.toFixed(4)}: mean |d| ${fig.seam_mean} (<= ${SEAM_MEAN_BAR.toFixed(1)}), ` +
         `${fig.seam_px_over_40} px over ${SEAM_PX_LEVEL}, ${fig.seam_frame_scale === null || fig.seam_px_over_40 === null ? '' : seamRigPxText(fig.seam_px_over_40, fig.seam_frame_scale)} rig px (the count / s²; <= ${SEAM_PX_BAR}), ${fig.seam_px_over_80} px over ${SEAM_PX_LEVEL_HIGH} (reported)`,
     );
+    if (fig.seam_scope !== undefined) log(`  seam scope: ${fig.seam_scope.mode}, denominator ${fig.seam_scope.denominator_px} source cells; union ${fig.seam_scope.domain?.viewport.pixelWidth}x${fig.seam_scope.domain?.viewport.pixelHeight}, numerator ${fig.seam_scope.domain?.numerator}; auto-frame raw mean ${fig.seam_scope.auto_frame_raw.mean}, ${fig.seam_scope.auto_frame_raw.px_over_40} px over ${SEAM_PX_LEVEL} at scale ${fig.seam_scope.auto_frame_raw.frame_scale} (diagnostic only)`);
     const pairs = fig.seam_pairs ?? [];
     pairs.forEach((row, i) => log(`  seam pair ${i + 1} of ${pairs.length}: ${seamPairText(row)}`));
     if (fig.sets !== undefined) {
@@ -1833,6 +1834,11 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
           `  seam (${setName})${setFig.seam_border === undefined ? '' : ` (config.scene: ${setFig.seam_border.frame_px_left_out} frame px on the painting's border rows and columns left out, ${setFig.seam_border.px_over_40_left_out} of them over ${SEAM_PX_LEVEL})`}: setup pose at ${setFig.render_px}, scale ${setFig.seam_frame_scale.toFixed(4)}: mean |d| ${setFig.seam_mean} (<= ${SEAM_MEAN_BAR.toFixed(1)}), ` +
             `${setFig.seam_px_over_40} px over ${SEAM_PX_LEVEL}, ${seamRigPxText(setFig.seam_px_over_40, setFig.seam_frame_scale)} rig px (the count / s²; <= ${SEAM_PX_BAR}), ${setFig.seam_px_over_80} px over ${SEAM_PX_LEVEL_HIGH} (reported)`,
         );
+        if (setFig.seam_scope !== undefined) {
+          const scope = setFig.seam_scope;
+          log(`  seam scope (${setName}): ${scope.mode}, denominator ${scope.denominator_px} base source cells; union ${scope.domain?.viewport.pixelWidth}x${scope.domain?.viewport.pixelHeight}, numerator ${scope.domain?.numerator}; whole canonical ${scope.whole.px_over_40} px over ${SEAM_PX_LEVEL}, mean ${scope.whole.mean}; auto-frame raw ${scope.auto_frame_raw.px_over_40} at scale ${scope.auto_frame_raw.frame_scale} (diagnostic only); effects ${JSON.stringify(scope.effects)}, changes ${JSON.stringify(scope.changes)}${scope.unavailable === undefined ? '' : `; ${JSON.stringify(scope.unavailable)}`}`);
+          for (const pair of scope.pairs ?? []) log(`  seam inheritance (${setName}): ${JSON.stringify(pair.parts)}, whole ${pair.whole_px_over_40}, affected ${pair.affected_px_over_40}, inherited from base ${pair.inherited_px_over_40} px over ${SEAM_PX_LEVEL}`);
+        }
         const setPairs = setFig.seam_pairs ?? [];
         setPairs.forEach((row, i) => log(`  seam pair (${setName}) ${i + 1} of ${setPairs.length}: ${seamPairText(row)}`));
       }
