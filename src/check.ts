@@ -79,7 +79,7 @@
  */
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import type { Frame as RootCoverageFrame, Piece as RootCoveragePiece, Viewport as RootCoverageViewport } from 'rig-c/render';
+import type { Frame as RootCoverageFrame, Piece as RootCoveragePiece, Viewport as RootCoverageViewport } from 'rig-c/render-shared';
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig } from './assemble.ts';
@@ -1637,11 +1637,25 @@ export interface SeamStateBounds {
   pose_sha256: string;
 }
 
+/** The promised read facade (rig-c >=2.69.0 <3); optional Spine registration
+ * follows rigc's own package-root resolution. No candidate error selects a
+ * different API. Importing check, or constructing a root-free reader, loads none.
+ */
+type OfficialRenderer = typeof import('rig-c/render-shared');
+function officialRenderer(): OfficialRenderer {
+  const require = createRequire(import.meta.url);
+  const coreRoot = dirname(require.resolve('rig-c/package.json'));
+  let runtimePresent = false;
+  try { require.resolve('@esotericsoftware/spine-core/package.json', { paths: [coreRoot] }); runtimePresent = true; } catch { /* Optional runtime is absent, as in rigc's launcher. */ }
+  if (runtimePresent) require('rig-c/render');
+  return require('rig-c/render-shared') as OfficialRenderer;
+}
+
 /** One decoder/poser lifetime per state; retain only finite bounds and identities, never atlas pages or rasters. */
 export function seamStateBounds(build: string, state: string): SeamStateBounds {
   try {
-    type Renderer = typeof import('rig-c/render');
-    const api = createRequire(import.meta.url)('rig-c/render') as Renderer;
+    type Renderer = OfficialRenderer;
+    const api = officialRenderer();
     if (['loadCandidate', 'throughPoser', 'sampleAnimation'].some(k => typeof api[k as keyof Renderer] !== 'function')) throw new Error('official posed-piece API unavailable');
     const skeleton = join(build, 'skeleton.json'), atlas = join(build, 'skeleton.atlas');
     const skeletonText = readFileSync(skeleton, 'utf8'), atlasText = readFileSync(atlas, 'utf8');
@@ -1766,8 +1780,8 @@ function seamSupport(build: string, rigPath: string, set: FrameSet, placed: read
   });
   let boundary: SeamSupportUnavailable = { code: 'RENDERER_API_UNAVAILABLE' };
   try {
-    type Renderer = typeof import('rig-c/render');
-    const api = createRequire(import.meta.url)('rig-c/render') as Renderer;
+    type Renderer = OfficialRenderer;
+    const api = officialRenderer();
     if (['loadCandidate', 'throughPoser', 'sampleAnimation', 'pageFor', 'projector', 'rasterisePiece'].some(k => typeof api[k as keyof Renderer] !== 'function')) throw new SeamSupportError(boundary);
     boundary = { code: 'SOURCE_RIG_UNREADABLE' };
     const sourceRig: unknown = JSON.parse(readFileSync(rigPath, 'utf8'));
@@ -4263,7 +4277,7 @@ export function rootGapBoxCoverage(hit: MotionSeamHit, alpha: readonly number[] 
  * Unsupported clipping/binding or even one replay pixel mismatch retains raw.
  */
 export function motionRootCoverageReader(build: string, rendered: string, out: string): RootGapCoverageReader {
-  type Renderer = typeof import('rig-c/render');
+  type Renderer = OfficialRenderer;
   type PoseAttachment = NonNullable<RootCoverageFrame['attachments']>[number];
   interface Prepared { api: Renderer; pages: ReturnType<Renderer['loadCandidate']>['pages']; pieces: RootCoveragePiece[]; attachments: PoseAttachment[] }
   interface Animation { frames: Map<number, { frame: RootCoverageFrame; alphaReplayExact: boolean }>; restMagnitude: number }
@@ -4285,7 +4299,7 @@ export function motionRootCoverageReader(build: string, rendered: string, out: s
   const prepare = (): Prepared => {
     if (prepared !== undefined) return prepared;
     // Node's module loader is called only here, never for a root-free reading.
-    const loaded: unknown = createRequire(import.meta.url)('rig-c/render');
+    const loaded: unknown = officialRenderer();
     requireFact(isRecord(loaded) && ['loadCandidate', 'throughPoser', 'sampleSetupPose', 'renderFrame'].every(k => typeof loaded[k] === 'function'), 'official renderer exports unavailable');
     const api = loaded as Renderer;
     const skeleton = join(build, 'skeleton.json'), atlas = join(build, 'skeleton.atlas');

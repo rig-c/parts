@@ -205,6 +205,75 @@ writeFileSync(join(DIR, 'parts.json'), serializeParts({
 }));
 `;
 
+
+// Installed support proof: same soft back/front construction at 96px. The
+// reference-only 8x8 white patch has 64 error cells before any reading. A
+// disjoint marker inherits those cells; its cover alternative alone moves
+// above that patch. No Spine runtime is installed for either case.
+const SEAM_SCOPE_GENERATOR = CHECK_RIG_GENERATOR.replace("'checkrig'", "'seam-scope'").replace('const W = 48;', 'const W = 96;').replace('const H = 80;', 'const H = 96;') + `
+const { readFileSync } = await import('node:fs');
+const { readParts } = await import('${PACKAGE}/src/parts.ts');
+const { decodePngBytes } = await import('${PACKAGE}/src/raster/png.ts');
+const r = JSON.parse(readFileSync(join(DIR, 'rig.json'), 'utf8'));
+const parts = readParts(join(DIR, 'parts.json'));
+const marker = (width, cover = false) => {
+  const height = cover ? 10 : 4, data = new Uint8ClampedArray(width * height * 4);
+  const end = cover ? 9 : 3;
+  for (let y = 1; y < end; y++) for (let x = 1; x < end; x++) data.set([80,160,40,255], (y * width + x) * 4);
+  return {width,height,data};
+};
+const rec = (name, image) => ({...parts.parts[0],name,from:'full:mouth',x:60,y:2,w:image.width,h:image.height,opaque_px:image.data.filter((v,i)=>i%4===3&&v>8).length});
+for (const [name, image] of [['marker',marker(4)],['extent_marker',marker(12)],['cover_marker',marker(10,true)]]) {
+  for (const d of ['images','parts']) writeFileSync(join(DIR,d,name+'.png'),encodePngBytes(image));
+}
+r.slots.push({name:'marker',bone:'root',attachment:'marker'});
+r.skins.default.marker={
+  marker:{image:'marker.png',x:-48+62,y:cropToSpineY(4,96)},
+  extent_marker:{image:'extent_marker.png',x:-48+66,y:cropToSpineY(4,96)},
+  cover_marker:{image:'cover_marker.png',x:-48+28,y:cropToSpineY(36,96)},
+};
+parts.parts.push(rec('marker',marker(4)));
+const recomposite={mean_abs:0,within_limit:8,within_share:1,error_limit:40,error_px:0,covered_alpha:128,uncovered_error_px:0,hole_count:0,holes_listed:5,holes:[]};
+parts.alternates=[
+ {name:'extent',slots:{marker:'extent_marker'},records:[rec('marker',marker(12))],ghost_px:{},recomposite},
+ {name:'cover',slots:{marker:'cover_marker'},records:[rec('marker',marker(10,true))],ghost_px:{},recomposite},
+];
+const front=decodePngBytes(readFileSync(join(DIR,'parts/front.png')), 'scope front reference');
+const back=decodePngBytes(readFileSync(join(DIR,'parts/back.png')), 'scope back reference');
+const image=decodePngBytes(readFileSync(join(DIR,'images/front.png')), 'scope front original');
+let known=0;
+for(let y=32;y<40;y++)for(let x=24;x<32;x++){
+ const i=((y-20)*26+x-18)*4,b=(y*30+x-4)*4;
+ if(image.data[i]===40&&image.data[i+3]===255&&back.data[b+3]>0)known++;
+ front.data.set([255,255,255,255],i);
+}
+if(known!==64)throw new Error('SMOKE_SCOPE_64_INPUT_WITNESS '+known);
+writeFileSync(join(DIR,'parts/front.png'),encodePngBytes(front));
+writeFileSync(join(DIR,'rig.json'),JSON.stringify(r));
+writeFileSync(join(DIR,'parts.json'),serializeParts(parts));
+console.log('SCOPE_INPUT_PATCH '+known);
+`;
+
+// These are explicit whole-box reader probes, NOT invented GAP observations.
+// The installed check's actual kept frame supplies the RGBA replay, geometry
+// and time. The cell sits inside the opaque back ellipse; wrong time must keep
+// the original raw count as unavailable, never fabricate coverage.
+const RENDER_READ_PROBE = `import { readFileSync,writeFileSync } from 'node:fs';
+import {join} from 'node:path';
+import {motionRootCoverageReader} from '${PACKAGE}/src/check.ts';
+const out=process.argv[2],rendered=join(out,'setup_still');
+const side=JSON.parse(readFileSync(join(rendered,'frames.json'),'utf8'));
+const set=side.sets[0],geometry=JSON.parse(readFileSync(join(rendered,set.dir,'geometry.json'),'utf8'));
+const f=geometry.frames[0],hit={index:f.index,px:1,cell:1,box:[-6,39,-5,40]};
+const reader=motionRootCoverageReader(join(out,'build'),rendered,join(out,'coverage-probe'));
+const pair={pair:'back|front',a:'back',b:'front'};
+const positive=reader(pair,set.animation,hit,f.time),negative=reader(pair,set.animation,hit,f.time+1);
+const result={scope:'declared whole-box reader probe, not a measured GAP',positive,negative};
+writeFileSync(join(out,'render-read-proof.json'),JSON.stringify(result,null,2)+'\\n');
+if(positive.status!=='exempt'||positive.box_cells!==1||positive.covered_cells!==1||negative.status!=='unavailable'||negative.raw_px!==1)throw new Error('SMOKE_ROOT_COVERAGE '+JSON.stringify(result));
+console.log('ROOT_COVERAGE_EXACT_RGBA 1/1; wrong-time unavailable retains1');
+`;
+
 // `compose` from the install (issue #74): the check rig's two soft parts as a character laid out where `build --out`
 // lays one out (`parts.json`, `parts/`, `rig/`), carried by a `body` bone under root — the scene's root is shared, so a
 // character keying root is refused — plus a flat 96x80 plate and a scene placing two copies side by side, ids `a`
@@ -566,7 +635,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
   mkdirSync(join(work, spec.dirName), { recursive: true });
   const home = realpathSync(join(work, spec.dirName));
   writeFileSync(join(home, 'package.json'), `${JSON.stringify({ name: 'rig-parts-install-smoke', private: true, version: '0.0.0', type: 'module' }, null, 2)}\n`);
-  const install = spec.installer === 'npm' ? run('npm', ['install', built.tgz, '--no-audit', '--no-fund'], home) : run('bun', ['add', built.tgz], home);
+  const install = spec.installer === 'npm' ? run('npm', ['install', built.tgz, '--no-audit', '--no-fund'], home) : run('bun', ['add', built.tgz, '--backend=copyfile'], home);
   output += install.out;
   const pkgRoot = join(home, 'node_modules', PACKAGE);
   const bin = join(home, 'node_modules', '.bin', COMMAND);
@@ -663,7 +732,7 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
   const rigGen = run('bun', [join(home, 'make_checkrig.ts')], home);
   output += rigGen.out;
   const checkOut = join(home, 'check-out');
-  const check = rigGen.status === 0 ? run(bin, ['check', '--rig', join(home, 'checkrig'), '--out', checkOut], home) : null;
+  const check = rigGen.status === 0 ? run(bin, ['check', '--rig', join(home, 'checkrig'), '--out', checkOut, '--keep-stills'], home) : null;
   if (check !== null) output += check.out;
   const checkJson = existsSync(join(checkOut, 'check.json')) ? (JSON.parse(readFileSync(join(checkOut, 'check.json'), 'utf8')) as { PASS?: unknown; rigc_entry?: { entry?: unknown } }) : null;
   if (check === null || check.status !== 0 || !check.out.includes('check: PASS') || checkJson?.PASS !== true || checkJson.rigc_entry?.entry !== 'cli_core.ts') {
@@ -672,6 +741,35 @@ function runCase(spec: CaseSpec, work: string, keep: boolean): CaseResult {
       `SMOKE_CHECK_FROM_THE_INSTALL: ${check === null ? `\`bun make_checkrig.ts\` exited ${rigGen.status}. ${rigGen.out.trim().slice(0, 2000)}` : `\`rig-parts check\` exited ${check.status}; check.json ${checkJson === null ? 'not written' : `PASS ${String(checkJson.PASS)}, rigc_entry ${JSON.stringify(checkJson.rigc_entry)}`}; exit 0, "check: PASS" and rigc_entry cli_core.ts were required. ${check.out.trim().split('\n').filter((l) => l.includes('FAIL')).slice(0, 3).join(' | ').slice(0, 2000)}`}`,
     );
   } else notes.push(`check passed on the generated rig, gated by ${checkJson.rigc_entry?.entry as string}`);
+
+  // The actual no-runtime compositor must replay a kept official frame,
+  // exempt the fully covered probe and retain a wrong-time probe as unavailable.
+  writeFileSync(join(home, 'render_read_probe.ts'), RENDER_READ_PROBE);
+  const coverage = check?.status === 0 ? run('bun', [join(home, 'render_read_probe.ts'), checkOut], home) : null;
+  if (coverage !== null) output += coverage.out;
+  if (coverage === null || coverage.status !== 0 || !coverage.out.includes('ROOT_COVERAGE_EXACT_RGBA 1/1')) {
+    fault('render-read', `SMOKE_RUNTIME_FREE_ROOT_COVERAGE: ${coverage === null ? 'the installed check did not pass' : `exit ${coverage.status}: ${JSON.stringify(coverage.out.slice(0, 3000))}`}`);
+  } else notes.push('runtime-free root coverage replayed exact RGBA; covered1/1; wrong time retained raw1');
+
+  writeFileSync(join(home, 'make_seam_scope.ts'), SEAM_SCOPE_GENERATOR);
+  const scopeGen = run('bun', [join(home, 'make_seam_scope.ts')], home);
+  output += scopeGen.out;
+  const scopeOut = join(home, 'seam-scope-out');
+  const scopeCheck = scopeGen.status === 0 ? run(bin, ['check', '--rig', join(home, 'seam-scope'), '--out', scopeOut, '--all-sets', '--seam-pairs'], home) : null;
+  if (scopeCheck !== null) output += scopeCheck.out;
+  type Scope = { unavailable?: unknown; pairs?: Array<{ parts: string[]; whole_px_over_40: number; affected_px_over_40: number; inherited_px_over_40: number; reasons: Record<string, number> }> };
+  type State = { PASS?: boolean; seam_scope?: Scope };
+  const scopeJson = existsSync(join(scopeOut, 'check.json')) ? JSON.parse(readFileSync(join(scopeOut, 'check.json'), 'utf8')) as State & { sets?: Record<string, State> } : null;
+  const pair = (row: State | undefined) => row?.seam_scope?.pairs?.find(p => p.parts.length === 2 && p.parts.includes('back') && p.parts.includes('front'));
+  const inherited = pair(scopeJson?.sets?.extent), affected = pair(scopeJson?.sets?.cover);
+  if (scopeCheck?.status !== 1 || scopeJson?.PASS !== false || scopeJson.seam_scope?.unavailable !== undefined ||
+    scopeJson.sets?.extent?.PASS !== true || scopeJson.sets.extent.seam_scope?.unavailable !== undefined ||
+    inherited?.whole_px_over_40 !== 64 || inherited.affected_px_over_40 !== 0 || inherited.inherited_px_over_40 !== 64 ||
+    scopeJson.sets?.cover?.PASS !== false || scopeJson.sets.cover.seam_scope?.unavailable !== undefined ||
+    affected === undefined || affected.affected_px_over_40 < 64 || (affected.reasons.posed_changed ?? 0) < 64 ||
+    !scopeCheck.out.includes('CHECK_SEAM_WITHIN_BAR')) {
+    fault('render-read', `SMOKE_RUNTIME_FREE_AFFECTED_SETS: generator ${scopeGen.status}; check ${scopeCheck?.status ?? 'not run'}; ${JSON.stringify({ inherited, affected, figures: scopeJson, diagnostic: scopeCheck?.out.slice(-3000) }).slice(0, 6000)}`);
+  } else notes.push('runtime-free all-sets: base FAIL64 retained; disjoint set PASS inherited64/affected0; third occlusion FAIL affected64');
 
   // `compose` from the install: a generated character checked green by the installed `check`, composed twice.
   writeFileSync(join(home, 'make_scene.ts'), SCENE_GENERATOR);

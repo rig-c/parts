@@ -7709,34 +7709,44 @@ function runAnimationsFromDocControls(say: (name: string, ok: boolean, detail: s
     if (sway !== undefined && head !== undefined) head.keys.push({ ...head.keys[head.keys.length - 1] });
     const dupGate = gateFixture('gate-dup', twice);
     const red = runCli(['rig', '--config', dupGate.config, '--parts', dupGate.parts, '--out', dupGate.out]);
-    const rigcSays = `animation "sway" bone "head" rotate: key times must strictly increase (at t=${sway?.duration ?? 'none'})`;
+    const rigcSays = 'animation "sway" bone "head" rotate: key times must strictly increase';
+    const keyOrderCode = 'CE_COMPILE_KEY_TIMES_NOT_INCREASING';
+    const keyOrderRefusal = (line: string): boolean => line.includes('rigc compile error: ') && line.includes(rigcSays) && new RegExp(`\\b${keyOrderCode}\\b`).test(line);
     const redLines = red.out.split('\n');
     const gateLine = redLines.find((l) => l.includes('FAIL') && l.includes('RIG_RIGC_GREEN')) ?? '';
     const fromLine = redLines.find((l) => l.includes(`animations beside the idle, from ${dupGate.file} as written: sway`)) ?? '';
+    // Detail may grow; the code and named animation/bone/property cannot drift.
+    const extended = `rigc compile error: <motion>: ${rigcSays} — additional adjacent-key detail (see rigc guide ${keyOrderCode})`;
+    const detailExtensionHeld = keyOrderRefusal(extended);
+    const wrongCodeRejected = !keyOrderRefusal(extended.replace(keyOrderCode, `${keyOrderCode}_OTHER`));
+    const wrongBoneRejected = !keyOrderRefusal(extended.replace('bone "head"', 'bone "chest"'));
+    const wrongPropertyRejected = !keyOrderRefusal(extended.replace('rotate:', 'translate:'));
     say(
       'CF514_THE_EXAMPLE_GATES_GREEN_AND_ITS_BOUNDARY_KEY_WRITTEN_TWICE_IS_RIGC_S_REFUSAL_BESIDE_THE_LINE_NAMING_THE_FILE',
       green.status === 0 && existsSync(join(docGate.out, 'motion.json')) &&
-        red.status !== 0 && gateLine.includes(`rigc compile error: `) && gateLine.includes(rigcSays) && gateLine.includes('CE_COMPILE_KEY_TIMES_NOT_INCREASING') && fromLine !== '' &&
-        !existsSync(join(dupGate.out, 'motion.json')),
-      `the example on the fixture -> rig exit ${green.status}; head's last key written twice -> exit ${red.status}; gate line ${gateLine.includes(rigcSays) ? `holds "${rigcSays}"` : `LACKS "${rigcSays}": ${gateLine.trim().slice(0, 200)}`}; the line naming the file: ${fromLine === '' ? 'ABSENT' : 'present'}; motion.json written: ${existsSync(join(dupGate.out, 'motion.json'))}`,
+        red.status === 1 && keyOrderRefusal(gateLine) && fromLine !== '' &&
+        !existsSync(join(dupGate.out, 'motion.json')) && detailExtensionHeld && wrongCodeRejected && wrongBoneRejected && wrongPropertyRejected,
+      `the example on the fixture -> rig exit ${green.status}; head's last key written twice -> exit ${red.status}; gate line ${gateLine.includes(rigcSays) ? `holds "${rigcSays}"` : `LACKS "${rigcSays}": ${JSON.stringify(gateLine.trim())}`}; stable code ${new RegExp(`\\b${keyOrderCode}\\b`).test(gateLine)}; detail extension ${detailExtensionHeld}; wrong code/bone/property rejected ${wrongCodeRejected}/${wrongBoneRejected}/${wrongPropertyRejected}; the line naming the file: ${fromLine === '' ? 'ABSENT' : 'present'}; motion.json written: ${existsSync(join(dupGate.out, 'motion.json'))}`,
       'issue #569: a duplicate key time is rigc\'s to refuse (this package does not re-implement rigc\'s validation); what the author needs is that the refusal reaches them naming the animation, the track and the time, and the file it came from, which the rig stage\'s line above it names',
     );
 
     // CF515 — the recipe quotes the three lines as the tree prints them; the recipe before issue #569 quotes none.
     const flat = (t: string): string => t.replace(/\s+/g, ' ');
+    const quotedCoreVersion = 'rig-c 2.69.0';
+    const quotedKeyOrder = 'animation "sway" bone "head" rotate: key times must strictly increase — key 3 at t=2 does not come after key 2 at t=2 (keys counted from 0)';
     const quoted: Array<[string, string]> = [
       ['spec', `is absent and required: write "spec": "${SPEC}" beside "animations"`],
       ['path', `resolved against the config's directory`],
       ['path', '(not the working directory) to'],
-      ['rigc', 'key times must strictly increase (at t='],
+      ['rigc', quotedKeyOrder],
     ];
     const printed: Record<string, string> = { spec: noSpec?.problems[0]?.detail ?? '', path: beside?.detail ?? '', rigc: gateLine };
-    const held = (r: string): boolean => quoted.every(([k, q]) => flat(r).includes(q) && printed[k].includes(q));
+    const held = (r: string): boolean => flat(r).includes(quotedCoreVersion) && quoted.every(([k, q]) => flat(r).includes(q) && printed[k].includes(q));
     const before = '### Recipe: expressions and other named animations\n\nWrite a file in rig-c\'s motion-spec shape beside the config and name it:\n';
     say(
       'CF515_THE_RECIPE_QUOTES_THE_THREE_REFUSALS_AS_THE_TREE_PRINTS_THEM',
-      held(recipe) && !held(before),
-      `${quoted.map(([k, q]) => `"${q}": recipe ${flat(recipe).includes(q) ? 'yes' : 'NO'}, printed ${printed[k].includes(q) ? 'yes' : 'NO'}`).join('; ')}; planted, the recipe before issue #569 -> ${held(before) ? 'PASSES' : 'fails the bar'}`,
+      held(recipe) && !held(before) && !held(flat(recipe).replace(quotedKeyOrder, 'key times must strictly increase (at t=2)')) && !held(recipe.replace(quotedCoreVersion, 'rig-c')),
+      `${quoted.map(([k, q]) => `"${q}": recipe ${flat(recipe).includes(q) ? 'yes' : 'NO'}, printed ${printed[k].includes(q) ? 'yes' : 'NO'}`).join('; ')}; quoted version ${flat(recipe).includes(quotedCoreVersion)}; planted old wording ${!held(flat(recipe).replace(quotedKeyOrder, 'key times must strictly increase (at t=2)'))}; missing version ${!held(recipe.replace(quotedCoreVersion, 'rig-c'))}; planted, the recipe before issue #569 -> ${held(before) ? 'PASSES' : 'fails the bar'}`,
       'issue #569: the document is the interface for the author who meets the line; a quotation that drifts from what the tree prints sends that author looking for words no run shows',
     );
   } finally {

@@ -229,6 +229,8 @@ keeps complete canonical raw pair data (boxes/cut metadata included), omitting
 `picture` unless its image exists. Semantic signatures preserve original source
 attachment UVs/topology/weights, own image content and world vertices/colour,
 not atlas pages/UVs or global piece ordinals. Unknown/no-art support stays conservative.
+Renderer metadata and exact raster reads use the promised `rig-c/render-shared` entry (rig-c >=2.69.0 <3.0.0). It registers no Spine runtime; where that runtime resolves from rig-c's own package root, the existing `rig-c/render` entry registers the official Spine side explicitly. An install without Spine keeps rig-c's own candidate chooser and gate; candidate or loader failures never select a guessed fallback.
+
 An unavailable, nonfinite, unrepresentable or oversized union, or nonempty official pinned.outside, refuses `CHECK_SEAM_DOMAIN`. Geometry margins outside the authored canvas are included in U, not treated as opaque-clip evidence. State-by-state geometry reads retain bounds/identities rather than all decoded pages or poses. `--keep-stills` keeps
 canonical frames in `setup_still/` and fitted diagnostics in `setup_still_auto/`.
 There is one extra seam render per checked state and no extra compile/gate.
