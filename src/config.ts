@@ -268,6 +268,8 @@ export interface AlternateSetConfig {
   full?: string;
   head?: string;
   parts?: string[];
+  /** Per covered output part, the layer in its existing source run (issue #666). */
+  layers?: Record<string, string>;
   hides?: string[];
   head_box?: [number, number, number, number];
   cuts?: Cut[];
@@ -2171,7 +2173,7 @@ function checkAlternates(
   const seenNames = new Map<string, number>();
   (v as Json[]).forEach((entry, i) => {
     const at = `${p}[${i}]`;
-    const e = c.object(at, entry, ['name'], ['source', 'full', 'head', 'parts', 'hides', 'head_box', 'cuts', 'skeleton', 'anchor', 'drawn', 'tips', 'front']);
+    const e = c.object(at, entry, ['name'], ['source', 'full', 'head', 'parts', 'hides', 'head_box', 'cuts', 'skeleton', 'anchor', 'drawn', 'tips', 'front', 'layers']);
     if (e === null) return;
     if ('name' in e && c.string(`${at}.name`, e.name)) {
       if (!partNameOk(e.name)) c.fail('CONFIG_PART_NAME', `${at}.name`, `names the set ${show(e.name)}; a set name is a file prefix, so it may not be empty, start with "." or hold a slash`);
@@ -2271,6 +2273,16 @@ function checkAlternates(
           c.fail('CONFIG_PART_UNIQUE', `${at}.hides[${k}]`, `repeats "${hn}"; each hidden slot is named once`);
         } else seenHides.add(hn);
       });
+    }
+    if ('layers' in e) {
+      if (!isPlainObject(e.layers)) c.fail('CONFIG_FIELD_TYPE', `${at}.layers`, `is ${show(e.layers)}; an object of covered part -> layer name is required`);
+      else for (const [part, layer] of Object.entries(e.layers)) {
+        const path = `${at}.layers.${part}`;
+        const covered = ('parts' in e ? seenParts : allSlots).has(part) && !seenHides.has(part);
+        if (!covered) c.fail('CONFIG_SET_LAYERS', path, `names "${part}", which the set does not cover; name a covered, nonhidden part`);
+        if (made.patches.includes(part)) c.fail('CONFIG_SET_LAYERS', path, `names the painting patch "${part}", which has no run layer source; declare a layer-backed plan part instead`);
+        if (typeof layer !== 'string' || readLayerTag(layer) === null) c.fail('CONFIG_TAG_KNOWN', path, `is ${show(layer)}; a See-through v3 tag or "${AUTHOR_PREFIX}<label>" is required; ${AUTHOR_LABEL_RULE}`);
+      }
     }
     // Issue #664: a part the set draws on its front slot is one the set covers and a limb declares a front slot for.
     if ('front' in e) {
