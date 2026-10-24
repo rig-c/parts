@@ -93,6 +93,7 @@ import { CLOTH_TARGETS, type ClothRecipes, RECIPE_STRENGTH, RIGC_DEFAULT_DAMPING
 import { GRID, MAX_SIDE } from './contour.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
 import { edgeLength } from './length.ts';
+import { setFocusProblems } from './setfocus.ts';
 import { isSkeletonName, KEYPOINT_NAMES, type KeypointName, type PosePoints, scaledPoints, SKELETON_NAMES, type SkeletonName } from './skeleton.ts';
 import { acceptedTagNames, AUTHOR_LABEL_RULE, AUTHOR_PREFIX, readLayerTag } from './tags.ts';
 import { EAR_DEPTH_RANGE, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, type FaceDeformKey, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, TURN_BONE, type TurnSpec, turnNearest } from './turn.ts';
@@ -264,6 +265,8 @@ export interface Cut {
 
 export interface AlternateSetConfig {
   name: string;
+  /** Authored point on this painting, x right/y down; omitted means no focus. */
+  focus?: Point;
   source?: string;
   full?: string;
   head?: string;
@@ -2195,7 +2198,7 @@ function checkAlternates(
   const seenNames = new Map<string, number>();
   (v as Json[]).forEach((entry, i) => {
     const at = `${p}[${i}]`;
-    const e = c.object(at, entry, ['name'], ['source', 'full', 'head', 'parts', 'hides', 'head_box', 'cuts', 'skeleton', 'anchor', 'drawn', 'tips', 'front', 'layers']);
+    const e = c.object(at, entry, ['name'], ['source', 'full', 'head', 'parts', 'hides', 'head_box', 'cuts', 'skeleton', 'anchor', 'drawn', 'tips', 'front', 'layers', 'focus']);
     if (e === null) return;
     if ('name' in e && c.string(`${at}.name`, e.name)) {
       if (!partNameOk(e.name)) c.fail('CONFIG_PART_NAME', `${at}.name`, `names the set ${show(e.name)}; a set name is a file prefix, so it may not be empty, start with "." or hold a slash`);
@@ -2205,6 +2208,7 @@ function checkAlternates(
     for (const k of ['source', 'full', 'head', 'skeleton'] as const) {
       if (k in e) c.string(`${at}.${k}`, e[k]);
     }
+    if ('focus' in e) c.problems.push(...setFocusProblems(e.focus, `${at} (set ${show(e.name)}).focus`));
     if ('anchor' in e) {
       if (!('skeleton' in e)) c.fail('CONFIG_FIELD_PRESENT', `${at}.skeleton`, 'is absent; anchor registers a skeleton set and requires its skeleton file');
       const a = e.anchor;

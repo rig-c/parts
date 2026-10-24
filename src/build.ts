@@ -1,4 +1,5 @@
 import { alternateLayerSources, alternateLayerIslands, alternateLayerOthers } from './alternatelayers.ts';
+import { setFocusProblems } from './setfocus.ts';
 /**
  * The stages as callable units, and `build`, which runs three of them in a row.
  *
@@ -343,6 +344,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     anchor?: NonNullable<typeof cfg.assemble.alternates>[number]['anchor'];
     drawn?: Record<string, number>;
     tips?: Record<string, [number, number]>;
+    focus?: [number, number];
     front?: string[];
   }> = cfgAlts.map((a, i) => {
     const cli = cliByName.get(a.name);
@@ -362,6 +364,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       anchor: a.anchor,
       drawn: a.drawn,
       tips: a.tips,
+      focus: a.focus,
       front: a.front,
     };
   });
@@ -464,6 +467,10 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         detail: `is ${altSrc.width}x${altSrc.height}, while the primary painting ${input.source} is ${src.width}x${src.height}; an alternate painting must share the primary painting's canvas size so its parts land in the same rig frame`,
       });
       continue;
+    }
+    if (alt.focus !== undefined) {
+      const invalidFocus = setFocusProblems(alt.focus, `${alt.at}.focus`, [altSrc.width, altSrc.height]);
+      if (invalidFocus.length > 0) { altProblems.push(...invalidFocus); continue; }
     }
     const altRuns = readRuns(alt.full, alt.head ?? null);
     const hidesSet = new Set(alt.hides ?? []);
@@ -693,6 +700,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         ...(altSkeleton === undefined ? {} : { skeleton: altSkeleton }),
         ...(alt.drawn === undefined ? {} : { drawn: { ...alt.drawn } }),
         ...(altTips === undefined ? {} : { tips_source_size: [altSrc.width, altSrc.height], tips: altTips }),
+        ...(alt.focus === undefined ? {} : { focus: [...alt.focus], focus_source_size: [altSrc.width, altSrc.height] }),
         ...(altDrawnLength === undefined ? {} : { drawnLength: altDrawnLength }),
         ...(altRegistration === undefined ? {} : { registration: altRegistration }),
       },

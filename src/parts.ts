@@ -89,6 +89,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { type Problem, refuseIfAny } from './errors.ts';
 import { KEYPOINT_NAMES, type PosePoints } from './skeleton.ts';
 import { readLayerTag } from './tags.ts';
+import { recordedFocusProblems } from './setfocus.ts';
 
 export interface PartRecord {
   name: string;
@@ -283,6 +284,8 @@ export interface RecompositeRecord {
 }
 
 export interface AlternateSetMap {
+  /** Authored point in setup-world coordinates, only when supplied (issue #719). */
+  focus?: [number, number];
   slots: Record<string, string>;
   hides?: string[];
   drawn?: Record<string, number>;
@@ -301,6 +304,9 @@ export const FRONT_SUFFIX = '_front';
 
 export interface AlternatePartsRecord {
   name: string;
+  /** Original authored painting point and its source size, only when supplied. */
+  focus?: [number, number];
+  focus_source_size?: [number, number];
   parts?: string[];
   hides?: string[];
   /**
@@ -472,6 +478,8 @@ export function serializeParts(file: PartsFile): string {
             ...(a.single_run_pad === undefined ? {} : { single_run_pad: Object.fromEntries(SINGLE_RUN_PAD_KEYS.map((k) => [k, (a.single_run_pad as SingleRunPad)[k]])) }),
             ...(a.skeleton === undefined ? {} : { skeleton: Object.fromEntries(KEYPOINT_NAMES.map((k) => [k, (a.skeleton as PosePoints)[k]])) }),
             ...(a.drawn === undefined ? {} : { drawn: a.drawn }),
+            ...(a.focus === undefined ? {} : { focus: a.focus }),
+            ...(a.focus_source_size === undefined ? {} : { focus_source_size: a.focus_source_size }),
             ...(a.tips_source_size === undefined ? {} : { tips_source_size: a.tips_source_size }),
             ...(a.tips === undefined ? {} : { tips: Object.fromEntries(Object.keys(a.tips).sort().map((bone) => [bone, (a.tips as Record<string, [number, number]>)[bone]])) }),
             ...(a.drawnLength === undefined ? {} : { drawnLength: a.drawnLength }),
@@ -692,6 +700,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
       if (typeof a !== 'object' || a === null || Array.isArray(a)) return;
       const set = a as Record<string, unknown>;
       const at = `${path} alternates[${i}]${typeof set.name === 'string' ? ` (set "${set.name}")` : ''}`;
+      if (sizeOk && typeof scale === 'number') problems.push(...recordedFocusProblems(set, `${at}.focus`, size as number[], scale));
       if ('tips' in set || 'tips_source_size' in set) {
         const sourceSize = set.tips_source_size;
         if (!('tips' in set) || !Array.isArray(sourceSize) || sourceSize.length !== 2 || !sourceSize.every((n) => typeof n === 'number' && Number.isInteger(n) && n > 0)) {

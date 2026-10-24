@@ -22,5 +22,17 @@
  * `flattenRig` goes back through `toWorld`. No rotation matrix is written out
  * by hand in this package.
  */
+import { cropToSpineY } from 'rig-c/src/transform.ts';
+
+/** A painting point on the accepted integer rig canvas, in setup-world coordinates. */
+export function paintingToSetupPoint(point: readonly number[], sourceSize: readonly number[], rigSize: readonly number[]): [number, number] {
+  return [point[0] * (rigSize[0] / sourceSize[0]) - rigSize[0] / 2, cropToSpineY(point[1] * (rigSize[1] / sourceSize[1]), rigSize[1])];
+}
+
+/** Inverse of paintingToSetupPoint; cropToSpineY is its own inverse. */
+export function setupToPaintingPoint(point: readonly number[], sourceSize: readonly number[], rigSize: readonly number[]): [number, number] {
+  return [(point[0] + rigSize[0] / 2) / (rigSize[0] / sourceSize[0]), cropToSpineY(point[1], rigSize[1]) / (rigSize[1] / sourceSize[1])];
+}
+
 export { computeExactFrameTransforms, computeWorldTransforms, cropToSpineY, normaliseDegrees, toBoneLocal, toBoneLocalVector, toWorld } from 'rig-c/src/transform.ts';
 export type { BoneTransform } from 'rig-c/src/transform.ts';
