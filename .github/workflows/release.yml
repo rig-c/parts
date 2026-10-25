@@ -180,6 +180,14 @@ jobs:
         if: ${{ steps.target.outputs.publish == 'true' }}
         run: bun install --frozen-lockfile
 
+      # Cross-package release gate (#741): pack this checkout, install it into an
+      # empty directory, build a character with `rig-parts build --all-sets`
+      # (`skeleton.model.json` + `sets.json` with `focus`), and load the result
+      # through a fresh install of `@rig-c/play@latest` before `npm publish` runs.
+      - name: Gate parts output through @rig-c/play
+        if: ${{ steps.target.outputs.publish == 'true' }}
+        run: bun run smoke -- --case clean
+
       # Nothing to build — the package ships TypeScript sources and bun runs
       # them. prepublishOnly runs `typecheck && lint && selftest` against the
       # tagged tree, so a broken gate fails the publish rather than shipping.

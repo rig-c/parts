@@ -38203,10 +38203,25 @@ function aliasWorkflowFaults(yml: string, doc: string, packageName: string): str
     const steps = packed.filter((name) => name === alias).length;
     if (steps !== 1) faults.push(`release.yml: ${steps} step(s) pack the alias ${alias} with scripts/alias_tarball.ts, where one does`);
   }
-  const calls: string[] = [];
-  for (const body of Object.values(wf.jobs ?? {})) for (const step of body.steps ?? []) calls.push(...lines(step).filter((line) => line.startsWith('bun run smoke')));
-  if (calls.length === 0) faults.push('release.yml calls no `bun run smoke`, so nothing confirms any name');
-  for (const call of calls) {
+  const smokeCalls: Array<{ job: string; at: number; step: AliasStep; call: string }> = [];
+  for (const [job, body] of Object.entries(wf.jobs ?? {})) {
+    (body.steps ?? []).forEach((step, at) => {
+      for (const call of lines(step).filter((line) => line.startsWith('bun run smoke'))) smokeCalls.push({ job, at, step, call });
+    });
+  }
+  const firstGated = publishers.find((p) => p.job === 'release' && !lines(p.step).some((l) => l.includes('scripts/alias_tarball.ts pack')));
+  const prePublishGates = smokeCalls.filter((c) => !c.call.includes('--source registry'));
+  const registryConfirmations = smokeCalls.filter((c) => c.call.includes('--source registry'));
+  if (prePublishGates.length !== 1) {
+    faults.push(`release.yml: ${prePublishGates.length} pre-publish \`bun run smoke\` gate step(s) without \`--source registry\`, where 1 (\`bun run smoke -- --case clean\` before \`Publish to npm\`) is required`);
+  } else {
+    const pre = prePublishGates[0];
+    if (pre.job !== 'release' || pre.call !== 'bun run smoke -- --case clean' || firstGated === undefined || pre.at >= firstGated.at || pre.step.if !== firstGated.step.if) {
+      faults.push(`release.yml: the pre-publish smoke gate \`${pre.call}\` in job "${pre.job}" at step ${pre.at + 1} must be \`bun run smoke -- --case clean\` before "Publish to npm" in job "release" under the same condition`);
+    }
+  }
+  if (registryConfirmations.length === 0) faults.push('release.yml calls no `bun run smoke -- --source registry`, so nothing confirms any name');
+  for (const { call } of registryConfirmations) {
     const argv = call.split(/\s+/);
     const given = argv.flatMap((word, i) => (word === '--alias' ? [argv[i + 1] ?? '(nothing)'] : []));
     if ([...given].sort().join() !== [...ALIASES].sort().join()) {
@@ -38289,6 +38304,8 @@ function runAliasControls(say: (name: string, ok: boolean, detail: string, why: 
   const edit = (text: string, from: string, to: string): string | null => (text.includes(from) ? text.split(from).join(to) : null);
   const aliasStepAt = yml.indexOf('      - name: Publish the alias');
   const aliasStep = aliasStepAt === -1 ? '' : yml.slice(aliasStepAt, yml.indexOf('\n\n', aliasStepAt) + 2);
+  const preGateAt = yml.indexOf('      - name: Gate parts output through @rig-c/play\n');
+  const preGateStep = preGateAt === -1 ? '' : yml.slice(preGateAt, yml.indexOf('\n\n', preGateAt) + 2);
   const gatedStep = '      - name: Publish to npm\n';
   const condition = "        if: ${{ steps.target.outputs.publish == 'true' }}\n";
   const plants: Array<{ what: string; yml: string | null; doc?: string | null; quiet?: boolean }> = [
@@ -38300,6 +38317,8 @@ function runAliasControls(say: (name: string, ok: boolean, detail: string, why: 
     { what: 'the alias is published ahead of the gated publish', yml: aliasStep === '' ? null : edit(yml.replace(aliasStep, ''), gatedStep, `${aliasStep}${gatedStep}`) },
     { what: 'the alias step publishes the checkout instead of the tarball', yml: edit(yml, 'npm publish "$alias_tgz" --provenance', 'npm publish --provenance') },
     { what: 'the alias step loses the release condition', yml: aliasStep === '' || !aliasStep.includes(condition) ? null : edit(yml, aliasStep, aliasStep.replace(condition, '')) },
+    { what: 'the pre-publish smoke gate step is dropped', yml: preGateStep === '' ? null : edit(yml, preGateStep, '') },
+    { what: 'the pre-publish smoke gate is moved after Publish to npm', yml: preGateStep === '' ? null : edit(yml.replace(preGateStep, ''), aliasStep, `${preGateStep}${aliasStep}`) },
     { what: `RELEASING.md stops confirming ${firstAlias}`, yml, doc: edit(doc, `npm view ${firstAlias} version`, `npm view ${firstAlias} dist-tags`) },
     { what: 'an alias step is renamed', yml: edit(yml, `name: Publish the alias ${lastAlias}`, 'name: Another name'), quiet: true },
   ];
@@ -38421,6 +38440,8 @@ function runAliasControls(say: (name: string, ok: boolean, detail: string, why: 
     const self = smoke(['--case', 'no-such-case', '--wait', '0', '--source', 'registry', '--alias', ALIASES[0], '--alias', packageName]);
     const bare = smoke(['--case', 'no-such-case', '--wait', '0', '--source', 'registry', '--alias', ALIASES[0], '--alias']);
     const twice = smoke(['--case', 'no-such-case', '--wait', '0', '--source', 'registry', '--alias', ALIASES[0], '--alias', ALIASES[0]]);
+    const barePlay = smoke(['--case', 'no-such-case', '--play-version']);
+    const twicePlay = smoke(['--case', 'no-such-case', '--play-version', '1.17.0', '--play-version', 'latest']);
     const help = smoke(['--help']);
     const cliOk =
       same.status === 0 &&
@@ -38480,10 +38501,15 @@ function runAliasControls(say: (name: string, ok: boolean, detail: string, why: 
       bare.out.includes('needs the other name') &&
       twice.status === 1 &&
       twice.out.includes('is given twice') &&
+      barePlay.status === 1 &&
+      barePlay.out.includes('FAIL  SMOKE_PLAY_LOADS_THE_BUILD: --play-version needs a version or dist-tag') &&
+      twicePlay.status === 1 &&
+      twicePlay.out.includes('FAIL  SMOKE_PLAY_LOADS_THE_BUILD: --play-version is given twice') &&
       help.status === 0 &&
       help.out.includes('--alias <name>') &&
+      help.out.includes('--play-version <ver>') &&
       help.out.includes('4  the main package installed and passed') &&
-      ![tree, self, bare, twice].some((r) => r.out.includes('install smoke —')) &&
+      ![tree, self, bare, twice, barePlay, twicePlay].some((r) => r.out.includes('install smoke —')) &&
       waitOk;
     say(
       'AL05_THE_COMPARE_EXITS_0_1_2_AND_THE_SMOKE_REFUSES_AN_ALIAS_IT_COULD_NOT_CONFIRM',
