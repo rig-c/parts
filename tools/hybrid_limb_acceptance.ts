@@ -165,6 +165,8 @@ if (mode !== '--prepare') for (const [name, explicit, full] of [['subset',false,
  const images=p.r.images.map(([n,r])=>[n,encodePngBytes(r)] as const);
  const texts=rigOutputTexts(p.r,null);
  const build=join(root,`alternate-${name}`,'compiled');
+ const imageDir=join(root,`alternate-${name}`,'images');mkdirSync(imageDir,{recursive:true});
+ for(const [n,bytes] of images) writeFileSync(join(imageDir,n),bytes);
  const gates=gateThroughRigc(images,texts,rigc,join(root,`alternate-${name}`,'gate'),null,b=>cpSync(b,build,{recursive:true}));
  if(gates.some(g=>g.status!==0)) throw new Error(JSON.stringify(gates));
  const skeleton=join(build,'skeleton.json'),atlas=join(build,'skeleton.atlas');
