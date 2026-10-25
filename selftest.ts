@@ -6316,9 +6316,10 @@ function runEntrySpliceCases(say: (name: string, ok: boolean, detail: string, wh
     'issue #552 mutant: a gate nobody has seen fail is not a gate; the #537 writer, kept as a test-only parameter, loses what the author added and the build names each loss',
   );
 
-  // CL207: a hand edit inside a recipe-owned constraint, re-drafted, is a conflict by name; nothing is written.
+  // CL207: a hand edit inside a recipe-owned constraint or track, re-drafted, is a conflict by name; nothing is written,
+  // and the refusal names the recovery step (remove the hand-edited entry from config.<section> and run propose --cloth again).
   const physName = 'skirt0a_0_physics';
-  const tuned = JSON.parse(outText) as { constraints: Array<Record<string, unknown>> };
+  const tuned = JSON.parse(outText) as { constraints: Array<Record<string, unknown>>; motion: { tracks: Array<Record<string, unknown>> } };
   const tunedAt = join(dir, 'es-tuned.json');
   const physIndex = tuned.constraints.findIndex((c) => c.name === physName);
   const sp = physIndex < 0 ? null : jsonValueSpan(outText, ['constraints', physIndex]);
@@ -6326,6 +6327,23 @@ function runEntrySpliceCases(say: (name: string, ok: boolean, detail: string, wh
   writeFileSync(tunedAt, tunedText);
   const cf = run(tunedAt, 'conflict');
   const cfLines = cf.r.out.split('\n').filter((l) => l.includes('FAIL  ')).map((l) => l.trim());
+  const trackName = 'hairback_r';
+  const trackIndex = plain.motion.tracks.findIndex((t) => 'chain' in t && t.chain === trackName);
+  const trackSpan = trackIndex < 0 ? null : jsonValueSpan(inputText, ['motion', 'tracks', trackIndex, 'amps', 0]);
+  const handTrackText = trackSpan === null ? inputText : `${inputText.slice(0, trackSpan.start)}5${inputText.slice(trackSpan.end)}`;
+  const handTrackAt = join(dir, 'es-hand-track.json');
+  writeFileSync(handTrackAt, handTrackText);
+  const tf = run(handTrackAt, 'track-conflict');
+  const tfLines = tf.r.out.split('\n').filter((l) => l.includes('FAIL  ')).map((l) => l.trim());
+  const namesRecovery = (line: string, kind: string, name: string, sec: string): boolean =>
+    line.includes(`remove the hand-edited ${kind} "${name}" from config.${sec}`) && line.includes('propose --cloth');
+  const oldConflictLine = 'FAIL  PROPOSE_WRITE_CONFIG_CONFLICT: config.motion.tracks[0] "hairback_r" — motion.tracks entry "hairback_r" is the recipe\'s, and it was changed by hand: take the draft by removing the hand edit (or the entry), or leave the recipe out for that part (its config.cloth block)';
+  // Removing the hand-edited track as the message says lets propose --cloth write the recipe's draft.
+  const recoveredObj = JSON.parse(handTrackText) as { motion: { tracks: Array<Record<string, unknown>> } };
+  recoveredObj.motion.tracks = recoveredObj.motion.tracks.filter((t) => t.chain !== trackName);
+  const recoveredAt = join(dir, 'es-recovered-input.json');
+  writeFileSync(recoveredAt, `${JSON.stringify(recoveredObj, null, 2)}\n`);
+  const rec = run(recoveredAt, 'recovered');
   say(
     'CL207_A_HAND_EDIT_TO_A_RECIPE_ENTRY_IS_REFUSED_BY_NAME_AND_NOTHING_IS_WRITTEN',
     tunedText !== outText &&
@@ -6334,10 +6352,20 @@ function runEntrySpliceCases(say: (name: string, ok: boolean, detail: string, wh
       cfLines[0].startsWith(`FAIL  PROPOSE_WRITE_CONFIG_CONFLICT: config.constraints[${physIndex}] "${physName}" — `) &&
       cfLines[0].includes('damping 0.6') &&
       cfLines[0].includes('damping 0.85') &&
+      namesRecovery(cfLines[0], 'constraint', physName, 'constraints') &&
       cf.text === null &&
-      !existsSync(join(dir, 'es-conflict', 'proposal.json')),
-    `damping 0.85 -> 0.6 by hand on ${physName}: exit ${cf.r.status}, ${cfLines.join(' | ') || 'no FAIL line'}; config ${cf.text === null ? 'not written' : 'WRITTEN'}, proposal ${existsSync(join(dir, 'es-conflict', 'proposal.json')) ? 'WRITTEN' : 'not written'}`,
-    'issue #552: a re-draft that would drop a hand edit to an entry the recipe owns refuses by the entry and the field instead, before anything is written',
+      !existsSync(join(dir, 'es-conflict', 'proposal.json')) &&
+      handTrackText !== inputText &&
+      tf.r.status === 1 &&
+      tfLines.length === 1 &&
+      tfLines[0].startsWith(`FAIL  PROPOSE_WRITE_CONFIG_CONFLICT: config.motion.tracks[${trackIndex}] "${trackName}" — `) &&
+      namesRecovery(tfLines[0], 'track', trackName, 'motion.tracks') &&
+      !namesRecovery(oldConflictLine, 'track', trackName, 'motion.tracks') &&
+      tf.text === null &&
+      rec.r.status === 0 &&
+      rec.text !== null,
+    `damping 0.85 -> 0.6 on ${physName}: exit ${cf.r.status}, ${cfLines.join(' | ') || 'no FAIL line'}; hand-edited track ${trackName}: exit ${tf.r.status}, ${tfLines.join(' | ') || 'no FAIL line'}; after removing track ${trackName} as instructed: exit ${rec.r.status}; planted pre-#753 line -> ${namesRecovery(oldConflictLine, 'track', trackName, 'motion.tracks') ? 'PASSES' : 'fails the bar'}`,
+    'issues #552, #753: a re-draft that would drop a hand edit to an entry the recipe owns refuses by the entry and the field before anything is written, and names the recovery step — remove the hand-edited track/bone/constraint from config.<section> and run propose --cloth again',
   );
 
   // CL208: order — a hand bone between two recipe bones stays there; a recipe constraint removed by hand comes back after its drafted neighbour.
@@ -7838,7 +7866,7 @@ function runAnimationsFromDocControls(say: (name: string, ok: boolean, detail: s
       'issue #569: a duplicate key time is rigc\'s to refuse (this package does not re-implement rigc\'s validation); what the author needs is that the refusal reaches them naming the animation, the track and the time, and the file it came from, which the rig stage\'s line above it names',
     );
 
-    // CF515 — the recipe quotes the three lines as the tree prints them; the recipe before issue #569 quotes none.
+    // CF515 — the recipe quotes the three lines as the tree prints them, and states the allowed and refused top-level keys (issue #753); the recipe before issue #569 quotes none.
     const flat = (t: string): string => t.replace(/\s+/g, ' ');
     const quotedCoreVersion = 'rig-c 2.69.0';
     const quotedKeyOrder = 'animation "sway" bone "head" rotate: key times must strictly increase — key 3 at t=2 does not come after key 2 at t=2 (keys counted from 0)';
@@ -7849,13 +7877,32 @@ function runAnimationsFromDocControls(say: (name: string, ok: boolean, detail: s
       ['rigc', quotedKeyOrder],
     ];
     const printed: Record<string, string> = { spec: noSpec?.problems[0]?.detail ?? '', path: beside?.detail ?? '', rigc: gateLine };
-    const held = (r: string): boolean => flat(r).includes(quotedCoreVersion) && quoted.every(([k, q]) => flat(r).includes(q) && printed[k].includes(q));
+    const easingsCfg = asConfig('easings', 'a.json');
+    fileAt('easings', 'a.json', { spec: SPEC, animations: { nod }, easings: { slow: [0.2, 0, 0.8, 1] } });
+    const easingsRefusal = only(refusals(() => loadConfig(easingsCfg)));
+    const doorsCfg = asConfig('doors', 'a.json');
+    fileAt('doors', 'a.json', { spec: SPEC, animations: { nod }, note: 'ok', 'x-record': 1 });
+    const doorsOk = refusals(() => loadConfig(doorsCfg)) === null;
+    const keyFacts = ['spec', 'animations', 'note', 'x-', 'easings', 'groups', 'setup', 'physics', 'mix', 'CONFIG_KEY_KNOWN', '§3'];
+    const held = (r: string): boolean =>
+      flat(r).includes(quotedCoreVersion) &&
+      quoted.every(([k, q]) => flat(r).includes(q) && printed[k].includes(q)) &&
+      keyFacts.every((w) => flat(r).includes(w));
     const before = '### Recipe: expressions and other named animations\n\nWrite a file in rig-c\'s motion-spec shape beside the config and name it:\n';
+    const withoutKeyFacts = flat(recipe).replace(/easings/g, 'other');
     say(
       'CF515_THE_RECIPE_QUOTES_THE_THREE_REFUSALS_AS_THE_TREE_PRINTS_THEM',
-      held(recipe) && !held(before) && !held(flat(recipe).replace(quotedKeyOrder, 'key times must strictly increase (at t=2)')) && !held(recipe.replace(quotedCoreVersion, 'rig-c')),
-      `${quoted.map(([k, q]) => `"${q}": recipe ${flat(recipe).includes(q) ? 'yes' : 'NO'}, printed ${printed[k].includes(q) ? 'yes' : 'NO'}`).join('; ')}; quoted version ${flat(recipe).includes(quotedCoreVersion)}; planted old wording ${!held(flat(recipe).replace(quotedKeyOrder, 'key times must strictly increase (at t=2)'))}; missing version ${!held(recipe.replace(quotedCoreVersion, 'rig-c'))}; planted, the recipe before issue #569 -> ${held(before) ? 'PASSES' : 'fails the bar'}`,
-      'issue #569: the document is the interface for the author who meets the line; a quotation that drifts from what the tree prints sends that author looking for words no run shows',
+      easingsRefusal !== null &&
+        easingsRefusal.code === 'CONFIG_KEY_KNOWN' &&
+        easingsRefusal.detail.includes('known: spec, animations') &&
+        doorsOk &&
+        held(recipe) &&
+        !held(before) &&
+        !held(withoutKeyFacts) &&
+        !held(flat(recipe).replace(quotedKeyOrder, 'key times must strictly increase (at t=2)')) &&
+        !held(recipe.replace(quotedCoreVersion, 'rig-c')),
+      `${quoted.map(([k, q]) => `"${q}": recipe ${flat(recipe).includes(q) ? 'yes' : 'NO'}, printed ${printed[k].includes(q) ? 'yes' : 'NO'}`).join('; ')}; easings -> ${easingsRefusal === null ? 'loads' : `${easingsRefusal.code} (${easingsRefusal.detail.slice(0, 60)}…)`}; note + x-record -> ${doorsOk ? 'loads' : 'REFUSED'}; key facts in recipe: ${keyFacts.every((w) => flat(recipe).includes(w)) ? 'all present' : 'MISSING'}; planted without easings -> ${held(withoutKeyFacts) ? 'PASSES' : 'fails the bar'}`,
+      'issues #569, #753: the document is the interface for the author who meets the line; the recipe quotes what the tree prints and names the allowed top-level keys (spec, animations, note, x-*) and the rig-c top-level keys CONFIG_KEY_KNOWN refuses (easings, groups, setup, physics, mix), pointing to the §3 field row',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -38368,6 +38415,23 @@ function runTreeSuite(): number {
     'issue #640: the tracked records from CK107 belong to tree; CK106 keeps the generated record positive/negative, and each stale input is refused by its actual file:line',
   );
 
+  // TY27 — issue #753 item 1: AUTHORING §4 step 8 and SKILL.md step 6 write the full propose --from-config invocation
+  // with --parts, --source and --out, never eliding required flags with `… --from-config`.
+  const skill24 = text.find(([file]) => file === 'skills/rig-parts/SKILL.md')?.[1] ?? '';
+  const step8Start = guide21.indexOf('\n8. Correct, then ');
+  const step8Block = step8Start < 0 ? '' : guide21.slice(step8Start, guide21.indexOf('\n9. ', step8Start));
+  const fullFromConfig = (s: string): boolean => {
+    const flat = s.replace(/\s+/g, ' ');
+    return !/propose\s+…\s+--from-config/.test(flat) && /rig-parts propose\s+--parts\s+\S+\s+--source\s+\S+\s+--out\s+\S+\s+--from-config\s+config\.json/.test(flat);
+  };
+  const plantElided = '8. Correct, then `rig-parts propose … --from-config config.json` to redraw the';
+  say(
+    'TY27_STEP_8_AND_SKILL_WRITE_THE_FULL_PROPOSE_FROM_CONFIG_INVOCATION_WITH_OUT',
+    fullFromConfig(step8Block) && fullFromConfig(skill24) && !fullFromConfig(plantElided),
+    `AUTHORING §4 step 8 full invocation: ${fullFromConfig(step8Block) ? 'yes' : 'NO'}; SKILL.md full invocation: ${fullFromConfig(skill24) ? 'yes' : 'NO'}; planted pre-#753 elided line -> ${fullFromConfig(plantElided) ? 'PASSES' : 'caught'}`,
+    'issue #753: step 8 elided required flags as `rig-parts propose … --from-config config.json`, and an examinee running it literally hit `FAIL USAGE: propose needs --out <dir>`',
+  );
+
   const self = readFileSync(join(ROOT, 'selftest.ts'), 'utf8');
   const from = self.indexOf(SUMMARY_START);
   const to = from < 0 ? -1 : self.indexOf(SUMMARY_END, from);
@@ -41900,17 +41964,34 @@ function runMeshStatsSuite(): number | null {
       'CL26: the refusal of a flag is read off the TAKES row, and the row holds --config and --parts alone — no --out, because the command writes nothing',
     );
 
-    // MS03 — a refusal from the mesh stage is the rig stage's own: the fixture with the cloth PNG taken away.
+    // MS03 — a refusal from the mesh stage is the rig stage's own: the fixture with the cloth PNG taken away, and
+    // passing the parent directory instead of the parts directory (issue #753) names parts.json, parts/, work/rig and out.
     const gone = writeRigFixture(join(root, 'gone'));
     rmSync(join(gone.parts, 'parts', 'cloth.png'));
     const statsGone = runCli(['mesh-stats', '--config', gone.config, '--parts', gone.parts]);
     const rigGone = runCli(['rig', '--config', gone.config, '--parts', gone.parts, '--out', join(root, 'gone', 'rig')]);
     const failOf = (s: string): string => s.split('\n').find((l) => l.includes('FAIL')) ?? '';
+    const wrongPartsDir = runCli(['mesh-stats', '--config', fx.config, '--parts', join(root, 'pos')]);
+    const helpOut = runCli(['--help']).out.replace(/\s+/g, ' ');
+    const guideMeshStats = readFileSync(join(ROOT, 'docs', 'AUTHORING.md'), 'utf8').replace(/\s+/g, ' ');
+    const namesPartsForms = (s: string): boolean => ['parts.json', 'parts/', 'work/rig', 'assemble --out', 'build --out'].every((w) => s.includes(w));
+    const oldPartsLine = `FAIL  PARTS_FILE_PRESENT: ${join(root, 'pos', 'parts.json')} — no such file`;
     say(
       'MS03_A_PART_WITH_NO_PNG_IS_THE_RIG_STAGES_OWN_REFUSAL_BY_NAME_EXIT_1',
-      statsGone.status === 1 && failOf(statsGone.out).includes('RIG_PNG_PRESENT') && failOf(statsGone.out).includes('parts/cloth.png') && failOf(statsGone.out) === failOf(rigGone.out) && rigGone.status === 1 && !statsGone.out.includes('mesh-stats: total'),
-      `mesh-stats -> exit ${statsGone.status}, ${failOf(statsGone.out).trim()}; rig on the same input -> exit ${rigGone.status}, ${failOf(rigGone.out) === failOf(statsGone.out) ? 'the same line' : `a DIFFERENT line: ${failOf(rigGone.out).trim()}`}`,
-      'the design\'s point 3: what the mesh stage refuses is printed as the build prints it, because it is the same buildRig refusing',
+      statsGone.status === 1 &&
+        failOf(statsGone.out).includes('RIG_PNG_PRESENT') &&
+        failOf(statsGone.out).includes('parts/cloth.png') &&
+        failOf(statsGone.out) === failOf(rigGone.out) &&
+        rigGone.status === 1 &&
+        !statsGone.out.includes('mesh-stats: total') &&
+        wrongPartsDir.status === 1 &&
+        failOf(wrongPartsDir.out).includes('PARTS_FILE_PRESENT') &&
+        namesPartsForms(failOf(wrongPartsDir.out)) &&
+        !namesPartsForms(oldPartsLine) &&
+        namesPartsForms(helpOut) &&
+        namesPartsForms(guideMeshStats),
+      `mesh-stats missing PNG -> exit ${statsGone.status}, ${failOf(statsGone.out).trim()}; rig on the same input -> exit ${rigGone.status}, ${failOf(rigGone.out) === failOf(statsGone.out) ? 'the same line' : `a DIFFERENT line: ${failOf(rigGone.out).trim()}`}; wrong --parts parent dir -> exit ${wrongPartsDir.status}, ${failOf(wrongPartsDir.out).replace(root, '<root>').trim()}; planted old PARTS_FILE_PRESENT line -> ${namesPartsForms(oldPartsLine) ? 'PASSES' : 'fails the bar'}`,
+      'the design\'s point 3 and issue #753: what the mesh stage refuses is printed as the build prints it, and passing an assemble parent directory to --parts names the directory holding parts.json and parts/ (work/rig from assemble --out work, or out from build --out out)',
     );
 
     // MS04–MS06 — the public examples: demo (lattices) and reference-sample (two contour meshes).

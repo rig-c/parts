@@ -1840,8 +1840,8 @@ that crosses the region with no point of it inside to split at — is still stop
 
 The package proposes no expression and keys nothing but the idle; what it gives is a rig whose
 face is bones (`eye_r`, `eye_l`, `brow_r`, `brow_l`, `mouth` on `reference-sample`) and one door for
-animations you write over them, `motion.animations_from` (the row above, issues #183 and #569).
-Name a file in rig-c's motion-spec shape, its path relative to the directory `config.json` sits
+animations you write over them, `motion.animations_from` (the `motion.animations_from` row in the §3 field table above, issues #183 and #569).
+Name a file in rig-c's motion-spec shape whose top-level keys are `"spec"` (`"rigc-motion/1"`) and `"animations"` (plus optional `"note"` / `"<name>_note"` strings and `"x-<name>"` records; any other top-level key — rig-c's `easings`, `groups`, `setup`, `physics`, `mix`, `archetype` and `cut` included — is refused by `CONFIG_KEY_KNOWN`), its path relative to the directory `config.json` sits
 in — not the working directory:
 
 ```jsonc
@@ -1873,8 +1873,8 @@ same shape over the face bones, and `examples/demo/animations.json` holds seven 
   defines `curve` as four numbers per value channel: absolute control-point
   `[time, value, time, value]`, not normalized graph handles. The first chest key above
   shapes its span to the next key. A key carries `ease` or `curve`, never both, and
-  the final key carries neither. Top-level motion fields are a separate contract:
-  `animations_from` supplies `spec` and `animations`, not a second setup or easing table.
+  the final key carries neither. Top-level motion fields are a separate contract (the `motion.animations_from` row in the §3 field table):
+  `animations_from` accepts only `spec` and `animations` at the top level (plus `note` / `<name>_note` and `x-<name>`), refusing rig-c's `easings`, `groups`, `setup`, `physics`, `mix`, `archetype` and `cut` with `CONFIG_KEY_KNOWN` (`known: spec, animations`); tracks inside `animations` may use the easings `shut` and `open` and the groups `eyes` and `brows` that `motion.json` already holds.
 - **Key times strictly increase within a track, and the last is at `duration`** — rig-c's rule
   (its AUTHORING §4.5, "`t` is in seconds and must strictly increase"; R7: no key past the
   declared duration, and a duration more than a frame longer than the last key is refused).
@@ -2097,7 +2097,7 @@ fragment below, cut to the bust:
 
 A region adds vertices: its `spacing` is finer than the mesh's, and every one of them is a
 triangle more for the runtime to skin. Before the first build, count them:
-`rig-parts mesh-stats --config config.json --parts work/rig` (issue #566; `work` is step 7's `assemble --out`, §4) runs the rig stage's own
+`rig-parts mesh-stats --config config.json --parts work/rig` (issue #566; `--parts` is the directory holding `parts.json` and `parts/`: `work/rig` from step 7's `assemble --out work`, or `out` from `build --out out`, not `work` itself — §4) runs the rig stage's own
 mesh construction over the assembled parts, without rigc, without `check`, and prints one line
 per mesh — `mesh-stats: topwear — contour 320 vertices, 568 triangles` on `reference-sample` —
 and the total, `mesh-stats: total 1908 triangles over 6 mesh(es)`, the counts the build's
@@ -2317,8 +2317,8 @@ chain, a constraint or a track added by hand survives a `--write-config`. An ent
 recipe re-drafts or removes that the author changed by hand (it equals neither draft) is
 not dropped: the run is refused, `PROPOSE_WRITE_CONFIG_CONFLICT`, naming the entry
 (`config.constraints[40] "skirt0a_0_physics"` in CL207), the first field the hand edit holds and
-what the draft writes there, every conflict at once and nothing written; take the draft
-by removing the hand edit, or leave the recipe out for that part. **A changed recipe
+what the draft writes there, every conflict at once and nothing written; to take the recipe's draft,
+remove the hand-edited track, bone or constraint from `config.<section>` (or revert the hand edit) and run `propose --cloth` again, or leave the recipe out for that part. **A changed recipe
 (issue #571).** The draft of the recipe as it stood before a change is neither of the
 two drafts, so a config holding that draft untouched would read as hand-edited at every
 entry the change moves (29 refusals on the public `wind` example with
@@ -2870,7 +2870,7 @@ full loader before its assemble stage writes anything.
    For a posed figure (seated, reclining), add `--keypoints keypoints.json` (and
    `--person <id>` when the file holds more than one person): the joints it gives
    place the neck, hip, chest and sleeves (§3, *A posed figure*).
-8. Correct, then `rig-parts propose … --from-config config.json` to redraw the
+8. Correct, then `rig-parts propose --parts work/rig --source inputs/painting.png --out work --from-config config.json` to redraw the
    config's own bones and LINT them — every chain link against its mesh's art, and
    the single bones `hip` and `chest` against each other and the figure (a config
    without them prints a `note:` that those lines did not run); repeat until it
@@ -2992,9 +2992,11 @@ a saved draft still needs validation.
 
 ### Counting the triangles before a build (`mesh-stats`, issue #566)
 
-`rig-parts mesh-stats --config config.json --parts work/rig` prints the vertices and triangles of
-every mesh the config states and their total, against the parts `assemble` wrote (step 7's
-`work/rig`, or a `build --out` directory, which holds `parts.json` and `parts/` itself), in seconds.
+`rig-parts mesh-stats --config config.json --parts work/rig` (after `assemble --out work`) or
+`rig-parts mesh-stats --config config.json --parts out` (after `build --out out`) prints the
+vertices and triangles of every mesh the config states and their total, against the parts
+`assemble` wrote (`--parts` is the directory holding `parts.json` and `parts/`: step 7's
+`work/rig` from `assemble --out work`, or `out` from `build --out out` — not `work` itself), in seconds.
 It is the rig stage's mesh construction itself — the same function the rig stage writes
 `mesh_report.json` from — run without rigc, without `check` and without writing a file, so a
 config can be tuned to a triangle budget before the first build and between builds:
@@ -3850,7 +3852,7 @@ says why each requirement exists and what breaks without it.
 | <a id="PROPOSE_CLOTH_DRAFTED"></a>`PROPOSE_CLOTH_DRAFTED` | with `--cloth` (issue #364): the config's `cloth` block holds a recipe for a tag the proposer drafts no chain on — no part has that tag, or every `back hair` part ends above the shoulders (a bun bone, no chain). A `bottomwear` recipe with no `bottomwear` part names every `topwear` part shaped like a skirt (issue #402) | leave that recipe out, or assemble the layer it is for, or declare the named part in `cloth.bottomwear.part` |
 | <a id="PROPOSE_CLOTH_PART"></a>`PROPOSE_CLOTH_PART` | with `--cloth` (issues #402, #437): `cloth.bottomwear.part` (a string) names no part, a part or cut piece whose source is not `topwear` (a `bottomwear` part takes the recipe by its tag already), or a target whose box ends above the hip + 0.25 face heights, the topwear rule's waist line; or `cloth.<tag>.parts` (or `part` as a list, issue #437) names a part not in `parts.json`, a part no link of the drafted tree crosses (`spanCrosses == 0`), or parts out of root-to-tip depth order along the chain | name the `topwear` part or its cut skirt piece that holds the skirt (or leave `part` out), or list only parts in `parts.json` that the drafted tree links cross in root-to-tip order |
 | <a id="PROPOSE_WRITE_CONFIG_FRESH"></a>`PROPOSE_WRITE_CONFIG_FRESH` | with `--cloth … --write-config` (issues #537, #356): the out path exists or collides with one of the four artifacts under `--out` — `proposal.json`, `basis.json`, `render/landmarks.png`, `render/landmarks_head.png` — including directory-symlink and hardlink aliases; the config is written to a new file, never over the `--cloth` config or an earlier one | name a file that does not exist yet, beside the `--cloth` config and separate from all four artifact paths and their aliases |
-| <a id="PROPOSE_WRITE_CONFIG_CONFLICT"></a>`PROPOSE_WRITE_CONFIG_CONFLICT` | with `--write-config` (issue #552): an entry of `bones`, `constraints` or `motion.tracks` the recipe re-drafts or removes was changed by hand in the `--cloth` config — it equals neither the draft with the recipe nor the draft without it — so the write would drop the hand edit; the object is the entry (`config.constraints[40] "skirt0a_0_physics"` in CL207), the detail names the first field the hand edit holds and what the draft writes there. With `--from <previous config>` (issue #571) an entry equal to the previous recipe's draft is the recipe's too, and the conflict is an entry that equals neither the draft, the draft without the recipe, nor the previous recipe's draft: the detail says so and reads the first differing field against the previous recipe's draft. Also a name the config states twice where the recipe drafts it. Every conflict is named at once and nothing is written | take the draft by removing the hand edit (or the entry), or leave the recipe out for that part (its `cloth` block); state a name once |
+| <a id="PROPOSE_WRITE_CONFIG_CONFLICT"></a>`PROPOSE_WRITE_CONFIG_CONFLICT` | with `--write-config` (issue #552): an entry of `bones`, `constraints` or `motion.tracks` the recipe re-drafts or removes was changed by hand in the `--cloth` config — it equals neither the draft with the recipe nor the draft without it — so the write would drop the hand edit; the object is the entry (`config.constraints[40] "skirt0a_0_physics"` in CL207), the detail names the first field the hand edit holds and what the draft writes there. With `--from <previous config>` (issue #571) an entry equal to the previous recipe's draft is the recipe's too, and the conflict is an entry that equals neither the draft, the draft without the recipe, nor the previous recipe's draft: the detail says so and reads the first differing field against the previous recipe's draft. Also a name the config states twice where the recipe drafts it. Every conflict is named at once and nothing is written | to take the recipe's draft, remove the hand-edited track, bone or constraint from `config.<section>` (or revert the hand edit) and run `propose --cloth` again, or leave the recipe out for that part (its `cloth` block); state a name once |
 | <a id="PROPOSE_WRITE_CONFIG_SPLICE"></a>`PROPOSE_WRITE_CONFIG_SPLICE` | with `--write-config` (issue #537): the `--cloth` config's text with the drafted sections spliced in does not parse to that config with them set, and the message names the first key that moved — the text states a key twice, so the splice lands on the first and the parse keeps the last | state each key once in the `--cloth` config |
 | <a id="PROPOSE_CLOTH_BACK_HAIR_CHAINS"></a>`PROPOSE_CLOTH_BACK_HAIR_CHAINS` | with `--cloth` (issues #390, #445, #461): `cloth."back hair".chains` exceeds what the narrower side's opaque width at the eye-line root row holds at the part's mesh grid (`max(1, min(floor(w_r / grid), floor(w_l / grid)))`), or places a tree root outside the 15 px dilated art mask of the `back hair` part (e.g. an inner twin-tail root over the face where the hair has no pixel); the message names the part, each side's root-row width, the grid spacing, and any off-art root with its pixel alpha | lower `cloth."back hair".chains` to at most the max fit named in the message, or omit `chains` so `propose --cloth` derives the tree count per visible hair mass on each side from its root-row width |
 | <a id="PROPOSE_ACCESSORY_BODY"></a>`PROPOSE_ACCESSORY_BODY` | an accessory has nothing above its pendant rows to hang its bone on | that part's plan entry, or author its bones by hand |
@@ -3861,7 +3863,7 @@ says why each requirement exists and what breaks without it.
 | <a id="KEYPOINTS_JOINT_KNOWN"></a><a id="KEYPOINTS_JOINT_STATE"></a><a id="KEYPOINTS_POSITION_STATED"></a><a id="KEYPOINTS_POSITION_INSIDE"></a>`KEYPOINTS_JOINT_KNOWN`, `KEYPOINTS_JOINT_STATE`, `KEYPOINTS_POSITION_STATED`, `KEYPOINTS_POSITION_INSIDE` | a joint name outside body-18, a state outside observed / occluded / missing, an observed joint with no `at` or a missing one with one, or a position outside the `width`x`height` image | that joint |
 | <a id="KEYPOINTS_PERSON_UNIQUE"></a><a id="KEYPOINTS_PERSON_CHOSEN"></a>`KEYPOINTS_PERSON_UNIQUE`, `KEYPOINTS_PERSON_CHOSEN` | two people share an id; or the file holds more than one person and no `--person` names one, or `--person` names none of them (the message lists the ids) | `--person <id>` |
 | <a id="KEYPOINTS_IMAGE_SIZE"></a>`KEYPOINTS_IMAGE_SIZE` | the file's `width`x`height` is not the `--source` painting's | a file measured on this painting |
-| <a id="PARTS_FILE_PRESENT"></a><a id="PARTS_IS_JSON"></a><a id="PARTS_KEY_KNOWN"></a><a id="PARTS_FIELD_PRESENT"></a><a id="PARTS_FIELD_TYPE"></a><a id="PARTS_NAME_UNIQUE"></a><a id="PARTS_FROM_KNOWN"></a><a id="PARTS_CUT_FROM_KNOWN"></a><a id="PARTS_BOX_INSIDE_RIG"></a><a id="PARTS_COUNTS_ADD_UP"></a><a id="PARTS_HOLES_LARGEST_FIRST"></a><a id="PARTS_HOLE_PART_KNOWN"></a><a id="PARTS_SINGLE_RUN_PAD"></a>`PARTS_*` (`PARTS_FILE_PRESENT`, `PARTS_IS_JSON`, `PARTS_KEY_KNOWN`, `PARTS_FIELD_PRESENT`, `PARTS_FIELD_TYPE`, `PARTS_NAME_UNIQUE`, `PARTS_FROM_KNOWN`, `PARTS_CUT_FROM_KNOWN`, `PARTS_BOX_INSIDE_RIG`, `PARTS_COUNTS_ADD_UP`, `PARTS_HOLES_LARGEST_FIRST`, `PARTS_HOLE_PART_KNOWN`, `PARTS_SINGLE_RUN_PAD`) | the `parts.json` read is not assemble's contract (`PARTS_COUNTS_ADD_UP`: `visible_px + occluded_px` is not `opaque_px`, `visible_not_projected_px` is above `visible_px`, or the `recomposite` block's figures disagree — more uncovered than error pixels, a hole larger than its box, the wrong number of holes listed, listed areas that do not sum to `uncovered_error_px`; the last two codes are the block's order and its border names; `PARTS_SINGLE_RUN_PAD`: the `single_run_pad` block's margins are not the centring, its file is not smaller than its square, or `rig_size` is not the file at the scale, issue #366 — §5) | re-run assemble; do not edit `parts.json` |
+| <a id="PARTS_FILE_PRESENT"></a><a id="PARTS_IS_JSON"></a><a id="PARTS_KEY_KNOWN"></a><a id="PARTS_FIELD_PRESENT"></a><a id="PARTS_FIELD_TYPE"></a><a id="PARTS_NAME_UNIQUE"></a><a id="PARTS_FROM_KNOWN"></a><a id="PARTS_CUT_FROM_KNOWN"></a><a id="PARTS_BOX_INSIDE_RIG"></a><a id="PARTS_COUNTS_ADD_UP"></a><a id="PARTS_HOLES_LARGEST_FIRST"></a><a id="PARTS_HOLE_PART_KNOWN"></a><a id="PARTS_SINGLE_RUN_PAD"></a>`PARTS_*` (`PARTS_FILE_PRESENT`, `PARTS_IS_JSON`, `PARTS_KEY_KNOWN`, `PARTS_FIELD_PRESENT`, `PARTS_FIELD_TYPE`, `PARTS_NAME_UNIQUE`, `PARTS_FROM_KNOWN`, `PARTS_CUT_FROM_KNOWN`, `PARTS_BOX_INSIDE_RIG`, `PARTS_COUNTS_ADD_UP`, `PARTS_HOLES_LARGEST_FIRST`, `PARTS_HOLE_PART_KNOWN`, `PARTS_SINGLE_RUN_PAD`) | the `parts.json` read is not assemble's contract (`PARTS_FILE_PRESENT`: no `parts.json` under `--parts`, which names the directory holding `parts.json` and `parts/` — `work/rig` from `assemble --out work`, or `out` from `build --out out`; `PARTS_COUNTS_ADD_UP`: `visible_px + occluded_px` is not `opaque_px`, `visible_not_projected_px` is above `visible_px`, or the `recomposite` block's figures disagree — more uncovered than error pixels, a hole larger than its box, the wrong number of holes listed, listed areas that do not sum to `uncovered_error_px`; the last two codes are the block's order and its border names; `PARTS_SINGLE_RUN_PAD`: the `single_run_pad` block's margins are not the centring, its file is not smaller than its square, or `rig_size` is not the file at the scale, issue #366 — §5) | pass the directory holding `parts.json` and `parts/` (`work/rig` or `out`), or re-run assemble; do not edit `parts.json` |
 
 ### compare
 

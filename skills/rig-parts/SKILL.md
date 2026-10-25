@@ -125,7 +125,7 @@ under that.
 6. Correct against `render/landmarks.png` and `note:` lines; a
    `coverage … not checked` line is a bone no check read (the line says why),
    and `basis.json` beside the proposal says what each bone rests on — check
-   the `ratio` bones and any with a `fallback` first. `propose …
+   the `ratio` bones and any with a `fallback` first. `rig-parts propose --parts work/rig --source <painting> --out work
    --from-config config.json` (with the same `--keypoints`) until it prints no
    `LINT` line. `rig-parts compare
    --left work/proposal.json --right config.json` lists what the correction changed,

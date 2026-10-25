@@ -416,7 +416,8 @@ usage:
   rig-parts mesh-stats --config <config.json> --parts <dir>
       Print the vertices and triangles of every mesh the config states, as the
       rig stage would make them from the parts in --parts (the directory
-      holding parts.json and parts/<name>.png), and their total, in seconds:
+      holding parts.json and parts/ — work/rig from assemble --out work, or
+      out from build --out out), and their total, in seconds:
       the rig stage's own mesh construction, without rigc, without assemble
       and without check (issue #566). One line per mesh in parts.json's order,
       "mesh-stats: <part> — <mode> <V> vertices, <T> triangles" (mode lattice,

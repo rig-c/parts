@@ -515,7 +515,7 @@ export function writeParts(path: string, file: PartsFile): void {
 }
 
 export function readParts(path: string): PartsFile {
-  if (!existsSync(path)) refuseIfAny([{ code: 'PARTS_FILE_PRESENT', object: path, detail: 'no such file' }]);
+  if (!existsSync(path)) refuseIfAny([{ code: 'PARTS_FILE_PRESENT', object: path, detail: 'no such file; --parts names the directory holding parts.json and parts/ (work/rig from assemble --out work, or out from build --out out)' }]);
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(path, 'utf8'));
