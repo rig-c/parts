@@ -55,6 +55,12 @@ export function runHybridLimbChecks(dir: string, say: Say): void {
   const noBand = structuredClone(a.parsed); noBand.parts = noBand.parts.filter((p) => p.limb?.band === undefined);
   writeFileSync(join(dir, 'missing-band.json'), serializeParts(noBand));
   say('MISSING_BAND_REFUSED', refusal(() => readParts(join(dir, 'missing-band.json'))).includes('PARTS_HYBRID_PAIR'), 'a joint cannot reference a missing band');
+  const orphan = structuredClone(a.parsed), orphanJoint = orphan.parts.find((p) => p.limb?.hybrid)?.limb;
+  if (orphanJoint === undefined) throw new Error('joint absent');
+  delete orphanJoint.hybrid;
+  orphanJoint.cap = {at:[30,30],width:16,radius:8,box:[22,22,16,16],layer_px:0,missing_px:0};
+  writeFileSync(join(dir,'orphan-band.json'),serializeParts(orphan));
+  say('ORPHAN_BAND_REFUSED', refusal(()=>readParts(join(dir,'orphan-band.json'))).includes('PARTS_HYBRID_PAIR'), 'band cannot survive independently of its joint record');
   const rigid = structuredClone(a.cfg); delete rigid.regions.proximal;
   rigid.meshes.proximal = { grid: 1, r: 1, segments: ['upper'] };
   say('NONREGION_NEIGHBOUR_REFUSED', refusal(() => buildRig(rigid, a.parsed, a.images, undefined, 'direct')).includes('RIG_HYBRID_RIGID'), 'outer pieces must remain rigid regions');

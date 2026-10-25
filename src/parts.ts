@@ -706,6 +706,15 @@ function checkParts(raw: unknown, path: string): PartsFile {
       const limb = r.limb;
       if (typeof limb !== 'object' || limb === null || Array.isArray(limb)) continue;
       const l = limb as Record<string, unknown>, h = l.hybrid;
+      if (typeof l.band === 'object' && l.band !== null && !Array.isArray(l.band)) {
+        const referring = records.filter((q) => {
+          const ql = q.limb;
+          if (typeof ql !== 'object' || ql === null || Array.isArray(ql)) return false;
+          const qh = (ql as Record<string, unknown>).hybrid;
+          return typeof qh === 'object' && qh !== null && !Array.isArray(qh) && (qh as Record<string, unknown>).part === r.name;
+        });
+        if (referring.length !== 1) fail('PARTS_HYBRID_PAIR', `band "${String(r.name)}"`, `has ${referring.length} referring joints; exactly one matching rigid joint record is required — re-run assemble`);
+      }
       if (typeof h !== 'object' || h === null || Array.isArray(h)) continue;
       const joint = h as Record<string, unknown>;
       const target = records.find((q) => q.name === joint.part);
