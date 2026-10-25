@@ -45,7 +45,7 @@ export function readConfigWriteTarget(path: string): ConfigWriteTarget {
   const target = resolve(path);
   let stat: ReturnType<typeof lstatSync>;
   try { stat = lstatSync(target); }
-  catch (error) { return refusal('CONFIG_FILE_PRESENT', target, `cannot read the existing config: ${error instanceof Error ? error.message : String(error)}`); }
+  catch (error) { return refusal('CONFIG_FILE_PRESENT', target, `cannot read the existing config: ${error instanceof Error ? error.message : String(error)}; without --cloth, --write-config updates an existing config in place (only propose --cloth --write-config writes to a new file)`); }
   if (!stat.isFile()) return refusal('CONFIG_FIELD_TYPE', target, 'is not a regular file (symlinks are not replaced); --write-config updates an existing config file in place');
   let original: string;
   try { original = readFileSync(target, 'utf8'); }
@@ -133,7 +133,7 @@ export function stageConfigWrite(target: ConfigWriteTarget | FreshConfigWrite, p
       if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
       return ioFailure(path, 'checking the fresh destination failed', error);
     }
-    refusal('PROPOSE_WRITE_CONFIG_FRESH', path, 'exists; the config is written to a new file, never over the --cloth config or an earlier one');
+    refusal('PROPOSE_WRITE_CONFIG_FRESH', path, 'exists; the config is written to a new file, never over the --cloth config or an earlier one (unlike assemble --propose-plan and propose without --cloth, which update an existing --config in place)');
   };
   if (fresh) freshAbsent();
   const temp = join(dirname(path), `.${basename(path)}.rig-parts-${randomBytes(8).toString('hex')}.tmp`);
@@ -182,7 +182,7 @@ export function stageConfigWrite(target: ConfigWriteTarget | FreshConfigWrite, p
           // refuses an intervening creator atomically; rename would overwrite it.
           try { (files.publish ?? linkSync)(temp, path); }
           catch (error) {
-            if (error instanceof Error && 'code' in error && error.code === 'EEXIST') refusal('PROPOSE_WRITE_CONFIG_FRESH', path, 'exists; the config is written to a new file, never over the --cloth config or an earlier one');
+            if (error instanceof Error && 'code' in error && error.code === 'EEXIST') refusal('PROPOSE_WRITE_CONFIG_FRESH', path, 'exists; the config is written to a new file, never over the --cloth config or an earlier one (unlike assemble --propose-plan and propose without --cloth, which update an existing --config in place)');
             throw error;
           }
           cancel();

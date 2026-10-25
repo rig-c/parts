@@ -13,9 +13,10 @@ import { block } from '../fixtures/rig.ts';
 import { mergeConfigProposal, type ConfigObject, type ConfigWritePatch } from '../src/configwrite.ts';
 import { parseConfig } from '../src/config.ts';
 import { PartsError } from '../src/errors.ts';
+import { KEYPOINTS_SPEC } from '../src/keypoints.ts';
 import { PROPOSAL_CONFIG_SECTIONS } from '../src/propose.ts';
 import { KEYPOINT_NAMES } from '../src/skeleton.ts';
-import { encodePngBytes } from '../src/raster/png.ts';
+import { encodePngBytes, readPng } from '../src/raster/png.ts';
 import { configWriteLines, readConfigWriteTarget, stageConfigWrite } from './configwrite.ts';
 
 const ROOT = resolve(import.meta.dir, '..');
@@ -28,9 +29,9 @@ export function runConfigWriteChecks(dir: string, report: (name: string, ok: boo
     report(name, ok, detail);
     if (!ok) failed++;
   }
-  function rejected(fn: () => unknown, code: string, path?: string): boolean {
+  function rejected(fn: () => unknown, code: string, path?: string, detailIncludes?: string): boolean {
     try { fn(); return false; }
-    catch (e) { return e instanceof PartsError && e.problems.some(p => p.code === code && (path === undefined || p.object.includes(path))); }
+    catch (e) { return e instanceof PartsError && e.problems.some(p => p.code === code && (path === undefined || p.object.includes(path)) && (detailIncludes === undefined || p.detail.includes(detailIncludes))); }
   }
   function freeze(value: unknown): void {
     if (typeof value !== 'object' || value === null || Object.isFrozen(value)) return;
@@ -219,12 +220,61 @@ export function runConfigWriteChecks(dir: string, report: (name: string, ok: boo
   const mismatchedBefore = readFileSync(mismatched, 'utf8');
   const scaleRefusal = cli([...proposeArgs, '--write-config', mismatched]);
   check('CW_CLI_SCALE', scaleRefusal.status === 1 && scaleRefusal.stdout.includes('CONFIG_PROPOSED_RIG_SCALE') && readFileSync(mismatched, 'utf8') === mismatchedBefore, 'actual draft scale mismatch refuses before replacing target');
-  check('CW_USAGE_FROM', cli([...proposeArgs, '--from-config', proposalFile, '--write-config', proposalFile]).status === 2, 'writer refused for lint-only --from-config');
+  const fromConfigTakes = 'takes --parts, --source, --out, --from-config and optional --keypoints [--person] only';
+  const usageFrom = cli([...proposeArgs, '--from-config', proposalFile, '--write-config', proposalFile]);
+  check('CW_USAGE_FROM', usageFrom.status === 2 && usageFrom.stdout.includes(fromConfigTakes), 'writer refused for lint-only --from-config, listing its accepted flags');
+  const srcImg = readPng(source);
+  const kpFile = join(dir, 'from-config-keypoints.json');
+  save(kpFile, {
+    spec: KEYPOINTS_SPEC,
+    space: { units: 'painting-px', origin: 'top-left', y: 'down' },
+    width: srcImg.width,
+    height: srcImg.height,
+    source: 'check_configwrite fixture',
+    people: [{ id: 'p0', joints: Object.fromEntries(KEYPOINT_NAMES.map(k => [k, { state: 'missing' }])) }],
+  });
+  const fromConfigAcceptedOut = join(dir, 'from-config-accepted');
+  const fromConfigAccepted = cli(['propose', '--parts', parts, '--source', source, '--out', fromConfigAcceptedOut, '--from-config', proposalFile, '--keypoints', kpFile, '--person', 'p0']);
+  const fromConfigRefusedExtras: ReadonlyArray<readonly [string, string[]]> = [
+    ['--compare', ['--compare', proposalFile]],
+    ['--full', ['--full', layers]],
+    ['--head', ['--head', layers]],
+    ['--wrist-snap', ['--keypoints', kpFile, '--wrist-snap', '20']],
+    ['--grid-rule', ['--grid-rule', 'part']],
+    ['--cloth', ['--cloth', proposalFile]],
+    ['--write-config', ['--write-config', proposalFile]],
+    ['--only-missing', ['--write-config', proposalFile, '--only-missing']],
+  ];
+  const fromConfigOtherRefused: ReadonlyArray<readonly [string, string[]]> = [
+    ['--canvas', ['--canvas', '64x64']],
+    ['--from', ['--from', proposalFile]],
+    ['--head-box', ['--head-box']],
+    ['--no-back-hair', ['--no-back-hair']],
+    ['--person without --keypoints', ['--person', 'p0']],
+  ];
+  const refusedChecks = fromConfigRefusedExtras.map(([label, extra]) => {
+    const r = cli(['propose', '--parts', parts, '--source', source, '--out', join(dir, 'fc-refused'), '--from-config', proposalFile, ...extra]);
+    return { label, ok: r.status === 2 && r.stdout.includes('FAIL  USAGE:') && r.stdout.includes(fromConfigTakes) };
+  });
+  const otherRefusedChecks = fromConfigOtherRefused.map(([label, extra]) => {
+    const r = cli(['propose', '--parts', parts, '--source', source, '--out', join(dir, 'fc-refused'), '--from-config', proposalFile, ...extra]);
+    return { label, ok: r.status === 2 && r.stdout.includes('FAIL  USAGE:') };
+  });
+  check(
+    'CW_FROM_CONFIG_ACCEPTED_FLAGS',
+    fromConfigAccepted.status !== 2 &&
+      !fromConfigAccepted.stdout.includes('FAIL  USAGE:') &&
+      existsSync(join(fromConfigAcceptedOut, 'render', 'landmarks_config.png')) &&
+      refusedChecks.every(c => c.ok) &&
+      otherRefusedChecks.every(c => c.ok),
+    `accepted 6 flags (--parts, --source, --out, --from-config, --keypoints, --person) ran without USAGE (exit ${fromConfigAccepted.status}); all ${refusedChecks.length + otherRefusedChecks.length} other propose flags refused with USAGE`,
+  );
   check('CW_USAGE_ASSEMBLE', cli(['assemble', '--source', painting, '--full', layers, '--config', planFile, '--write-config', planFile, '--out', join(dir, 'unused')]).status === 2, 'plain assemble cannot write config');
-  check('CW_USAGE_OTHER', cli([...planArgs, '--write-config', headFile]).status === 2, 'plan cannot transplant into another config');
+  const usageOther = cli([...planArgs, '--write-config', headFile]);
+  check('CW_USAGE_OTHER', usageOther.status === 2 && usageOther.stdout.includes('assemble --propose-plan updates --config in place; only propose --cloth --write-config writes to a new file'), 'plan cannot transplant into another config and states both --write-config rules');
   check('CW_USAGE_VALUE', cli([...headArgs, '--write-config']).status === 2, 'missing destination is usage error');
   const missing = join(dir, 'missing.json');
-  check('CW_MISSING', rejected(() => readConfigWriteTarget(missing), 'CONFIG_FILE_PRESENT') && !existsSync(missing), 'missing destination is not implicitly created');
+  check('CW_MISSING', rejected(() => readConfigWriteTarget(missing), 'CONFIG_FILE_PRESENT', undefined, 'without --cloth, --write-config updates an existing config in place (only propose --cloth --write-config writes to a new file)') && !existsSync(missing), 'missing destination is not implicitly created and states both --write-config rules');
   // Existing and fresh modes share the writer, but retain different ownership
   // and validation. These checks compare unowned bytes, not a re-serialization.
   const bytePath = join(dir, 'byte-config.json');
@@ -247,13 +297,14 @@ export function runConfigWriteChecks(dir: string, report: (name: string, ok: boo
   check('CW_FRESH_STAGED', !existsSync(freshPath) && temporaryCount() === 1, 'shared writer stages a partial cloth config without publishing or requiring rig sections');
   freshStage.commit(); freshStage.cancel();
   check('CW_FRESH_PUBLISH', readFileSync(freshPath, 'utf8') === freshText && temporaryCount() === 0, 'fresh mode publishes the checked text byte for byte and cleans its sibling temp');
+  const freshCrossRule = 'unlike assemble --propose-plan and propose without --cloth, which update an existing --config in place';
   const freshRacePath = join(dir, 'fresh-race.json');
   const freshRace = stageConfigWrite({ kind: 'fresh', path: freshRacePath, text: freshText });
   writeFileSync(freshRacePath, 'concurrent creator');
-  check('CW_FRESH_CHANGED', rejected(() => freshRace.commit(), 'PROPOSE_WRITE_CONFIG_FRESH') && readFileSync(freshRacePath, 'utf8') === 'concurrent creator' && temporaryCount() === 0, 'fresh mode rechecks its destination at commit and preserves an intervening creator');
+  check('CW_FRESH_CHANGED', rejected(() => freshRace.commit(), 'PROPOSE_WRITE_CONFIG_FRESH', undefined, freshCrossRule) && readFileSync(freshRacePath, 'utf8') === 'concurrent creator' && temporaryCount() === 0, 'fresh mode rechecks its destination at commit and preserves an intervening creator');
   const freshAtomicPath = join(dir, 'fresh-atomic.json');
   const freshAtomic = stageConfigWrite({ kind: 'fresh', path: freshAtomicPath, text: freshText }, undefined, { publish: (from, to) => { writeFileSync(to, 'after the final check'); linkSync(from, to); } });
-  check('CW_FRESH_ATOMIC', rejected(() => freshAtomic.commit(), 'PROPOSE_WRITE_CONFIG_FRESH') && readFileSync(freshAtomicPath, 'utf8') === 'after the final check' && temporaryCount() === 0, 'same-directory publish cannot replace a file created after the final absence check');
+  check('CW_FRESH_ATOMIC', rejected(() => freshAtomic.commit(), 'PROPOSE_WRITE_CONFIG_FRESH', undefined, freshCrossRule) && readFileSync(freshAtomicPath, 'utf8') === 'after the final check' && temporaryCount() === 0, 'same-directory publish cannot replace a file created after the final absence check');
   const freshAbortPath = join(dir, 'fresh-abort.json');
   const freshAbort = stageConfigWrite({ kind: 'fresh', path: freshAbortPath, text: freshText });
   check('CW_FRESH_ABORT', rejected(() => freshAbort.abort(new Error('artifact emission failed')), 'CONFIG_WRITE_FAILED') && !existsSync(freshAbortPath) && temporaryCount() === 0, 'shared artifact abort leaves the fresh destination absent and removes its owned temp');
@@ -297,7 +348,7 @@ export function runConfigWriteChecks(dir: string, report: (name: string, ok: boo
   check('CW_CLOTH_PARTIAL', clothRun.status === 0 && clothWritten !== null && clothWritten['x-kept'] === 'authored' && !('assemble' in clothWritten) && readFileSync(clothInput, 'utf8') === clothText, 'cloth still splices a partial config without the in-place full loader');
   const clothBefore = clothWritten === null ? '' : readFileSync(clothOutput, 'utf8');
   const clothExists = cli([...clothBase, '--out', join(dir, 'cloth-refused'), '--write-config', clothOutput]);
-  check('CW_CLOTH_FRESH', clothExists.status === 1 && clothExists.stdout.includes('PROPOSE_WRITE_CONFIG_FRESH') && readFileSync(clothOutput, 'utf8') === clothBefore && !existsSync(join(dir, 'cloth-refused')), 'cloth never replaces an existing output');
+  check('CW_CLOTH_FRESH', clothExists.status === 1 && clothExists.stdout.includes('PROPOSE_WRITE_CONFIG_FRESH') && clothExists.stdout.includes(freshCrossRule) && readFileSync(clothOutput, 'utf8') === clothBefore && !existsSync(join(dir, 'cloth-refused')), 'cloth never replaces an existing output and states both --write-config rules');
   for (const artifact of ['proposal.json', 'basis.json', 'render/landmarks.png', 'render/landmarks_head.png']) {
     const output = join(dir, 'cloth-collision-' + artifact.replaceAll('/', '-'));
     const target = join(output, artifact);
