@@ -343,6 +343,15 @@ import {
   readFrameSet,
   readGeometry,
   readMotionSeams,
+  readWindBand,
+  resolveWindBand,
+  measureWindBand,
+  WIND_BAND_LINE,
+  WIND_BAND_MAX_STEPS,
+  WIND_BAND_RULE,
+  WIND_BAND_SPEC,
+  type WindBandLine,
+  windBandLines,
   motionRootDrawOrderReader,
   type RootDrawOrderReader,
   readRigcEntry,
@@ -20900,9 +20909,328 @@ function runEnvironmentCheckCases(say: (name: string, ok: boolean, detail: strin
       `no physics constraint: exit ${np.status}, ${failOf(np.out).replace(new RegExp(gustPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '<schedule>').slice(0, 170)}; a step at 9 s of a 3.333 s idle: exit ${late.status}, ${failOf(late.out).replace(new RegExp(latePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '<schedule>').slice(0, 170)}; build with a wrong spec: exit ${built.status}, ${builtFail.replace(mutantRows[0].path, '<schedule>').slice(0, 90)}…, parts.json ${existsSync(join(buildOut, 'parts.json')) ? 'WRITTEN' : 'absent'}`,
       "issue #538: what a well-formed schedule cannot do to this rig is rigc render's to refuse, not this package's to re-derive — its --environment line is carried by name; build reads the schedule by the same reader before assemble, as it reads --requirements",
     );
+    runWindBandCases(root, bare, nophysics, say);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+}
+
+/**
+ * Issue #590: `check --wind-band <spec.json>` and `build --wind-band <spec.json>` (`rig-parts-wind-band/1`).
+ * WB01: a steady-wind sweep across `min..max` by `step` on the cloth fixture reports `WIND_BAND` (`mode: "steady"`,
+ * `band`, `pairs_holding_all_steps`, and per-pair `band`, `breaks`, `readings`), prints one `WIND_BAND:` line per
+ * pair that breaks inside the swept range plus the summary line, leaves `PASS: true`, and removes its `_wind_band`
+ * scratch directory. WB02: the planted mutants (`ignoreBreaks` and `silentPairs`) fail WB01's predicate. WB03: the
+ * `--max 16` seam optimization is byte-exact against `--max 640` (`idle/seam.json` identical byte for byte). WB04:
+ * every missing/malformed field, unknown key, >64 step range, unknown slot, unbanded pair (`face:skirt`), non-physics
+ * rig, or zero-wind physics rig is refused as `CHECK_WIND_BAND` with `--out` absent, and `build --wind-band` refuses
+ * before `parts.json` is written. WB05: `check` without `--wind-band` writes no `WIND_BAND` key or console line and
+ * is byte-identical to the `--wind-band` run minus `WIND_BAND`, and `rig-parts guide` resolves `CHECK_WIND_BAND` and
+ * `WIND_BAND`.
+ */
+function runWindBandCases(
+  root: string,
+  bare: ReturnType<typeof clothBuild>,
+  nophysics: ReturnType<typeof clothBuild>,
+  say: (name: string, ok: boolean, detail: string, why: string) => void,
+): void {
+  const wbDir = join(root, 'wind-band');
+  mkdirSync(wbDir, { recursive: true });
+  const writeSpec = (name: string, doc: unknown): string => {
+    const p = join(wbDir, `${name}.json`);
+    writeFileSync(p, typeof doc === 'string' ? doc : `${JSON.stringify(doc, null, 2)}\n`);
+    return p;
+  };
+  // In CLOTH_PARTS, hair_back's crown (y 20..72) and face (y 44..94) sit on `head` with 0 relative motion under wind,
+  // while hair_back's physics tails (x 50..76, 164..190, y 72..300) and skirt's physics tiers (x 68..172, y 160..280)
+  // overlap at the hem and open under strong steady wind.
+  const specPath = writeSpec('good', {
+    spec: WIND_BAND_SPEC,
+    min: 0,
+    max: 8,
+    step: 4,
+    fps: 12,
+    max_gap: 50,
+    max_ghost: 20,
+    pairs: ['hair_back:face', 'hair_back:skirt'],
+  });
+  const checkOut = join(wbDir, 'check-good');
+  const goodRun = runCli(['check', '--rig', bare.out, '--parts', bare.parts, '--out', checkOut, '--wind-band', specPath]);
+  const goodText = existsSync(join(checkOut, 'check.json')) ? readFileSync(join(checkOut, 'check.json'), 'utf8') : null;
+  const goodJson = goodText === null ? null : (JSON.parse(goodText) as Record<string, unknown>);
+  const wb = (goodJson?.[WIND_BAND_LINE] as WindBandLine | undefined) ?? null;
+  const pairHold = wb?.pairs.find((p) => p.pair === 'hair_back|face') ?? null;
+  const pairBreak = wb?.pairs.find((p) => p.pair === 'hair_back|skirt') ?? null;
+  const printedWbLines = goodRun.out
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith(`${WIND_BAND_LINE}:`));
+  const expectedWbLines = wb === null ? [] : windBandLines(wb).map((l) => l.trim());
+  const scratchGone = !existsSync(join(checkOut, '_wind_band'));
+  say(
+    'WB01_STEADY_WIND_SWEEP_REPORTS_THE_BAND_EACH_PAIR_HOLDS_AND_THE_BREAKING_PAIR_LINE',
+    goodRun.status === 0 &&
+      goodJson?.PASS === true &&
+      wb !== null &&
+      wb.status === 'REPORTED' &&
+      wb.spec === WIND_BAND_SPEC &&
+      wb.steady_wind_only === true &&
+      JSON.stringify(wb.steps) === '[0,4,8]' &&
+      JSON.stringify(wb.gravity) === '[0,1]' &&
+      wb.fps === 12 &&
+      wb.max_gap === 50 &&
+      wb.max_ghost === 20 &&
+      wb.holds_from === 0 &&
+      wb.holds_to === 0 &&
+      wb.pairs_holding_all === 1 &&
+      pairHold !== null &&
+      pairHold.holds_all === true &&
+      pairHold.holds_from === 0 &&
+      pairHold.holds_to === 8 &&
+      pairHold.first_break_below === null &&
+      pairHold.first_break_above === null &&
+      pairHold.steps.length === 3 &&
+      pairBreak !== null &&
+      pairBreak.holds_all === false &&
+      pairBreak.holds_from === 0 &&
+      pairBreak.holds_to === 0 &&
+      pairBreak.first_break_below === null &&
+      pairBreak.first_break_above?.x === 4 &&
+      pairBreak.steps.length === 3 &&
+      printedWbLines.length === 2 &&
+      JSON.stringify(printedWbLines) === JSON.stringify(expectedWbLines) &&
+      printedWbLines[0].includes('band [0, 0] of [0, 8]; 1/2 pair(s) hold throughout') &&
+      printedWbLines[1].startsWith('WIND_BAND: pair "hair_back|skirt" — holds [0, 0]; first break above at x = 4') &&
+      scratchGone,
+    `exit ${goodRun.status}, PASS=${String(goodJson?.PASS)}, band=[${String(wb?.holds_from)}, ${String(wb?.holds_to)}], holdingAll=${String(wb?.pairs_holding_all)}; hair_back|face holds=[${String(pairHold?.holds_from)}, ${String(pairHold?.holds_to)}]; hair_back|skirt holds=[${String(pairBreak?.holds_from)}, ${String(pairBreak?.holds_to)}] steps=${JSON.stringify(pairBreak?.steps ?? [])}; console=${JSON.stringify(printedWbLines)}; scratchGone=${scratchGone}`,
+    'issue #590: check --wind-band sweeps steady wind [x, 0] with gravity [0, 1] across min..max by step, records each pair\'s steps, breaks and steady-wind band in check.json\'s WIND_BAND without flipping PASS, and prints the summary line plus one WIND_BAND line per breaking pair',
+  );
+
+  // WB02: planted mutants — ignoring breaks or silencing per-pair console lines fails WB01's check.
+  const rigDoc = JSON.parse(readFileSync(join(bare.out, 'rig.json'), 'utf8')) as Record<string, unknown>;
+  const motionDoc = JSON.parse(readFileSync(join(bare.out, 'motion.json'), 'utf8')) as Record<string, unknown>;
+  const parsedWb = readWindBand(specPath);
+  resolveWindBand(parsedWb, {
+    rig: rigDoc,
+    rigPath: join(bare.out, 'rig.json'),
+    motion: motionDoc,
+    motionPath: join(bare.out, 'motion.json'),
+  });
+  const runRigc: RigcRunner = (args) => {
+    const r = spawnSync(suiteRigc(), [...args], { encoding: 'utf8', maxBuffer: 1 << 26 });
+    return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+  };
+  const mutWb = measureWindBand(
+    parsedWb,
+    join(checkOut, 'build'),
+    join(wbDir, 'scratch-mut'),
+    ['idle'],
+    runRigc,
+    { ignoreBreaks: true },
+  );
+  const mutSilentLines = wb === null ? [] : windBandLines(wb, { silentPairs: true });
+  say(
+    'WB02_PLANTED_MUTANTS_IGNORING_BREAKS_OR_SILENCING_PAIR_LINES_FAIL_THE_READING',
+    mutWb.pairs_holding_all === 2 &&
+      mutWb.holds_from === 0 &&
+      mutWb.holds_to === 8 &&
+      mutWb.pairs.every((p) => p.holds_all && p.holds_from === 0 && p.holds_to === 8 && p.first_break_below === null && p.first_break_above === null) &&
+      mutSilentLines.length === 1 &&
+      !mutSilentLines.some((l) => l.includes('pair "hair_back|skirt"')),
+    `ignoreBreaks: holdingAll=${String(mutWb.pairs_holding_all)}, band=[${String(mutWb.holds_from)}, ${String(mutWb.holds_to)}]; silentPairs lines=${JSON.stringify(mutSilentLines)}`,
+    'issue #590: a mutant that ignores max_gap/max_ghost breaks reports every pair as holding [0, 8], and a mutant that omits per-pair console lines prints only the summary line; both fail WB01',
+  );
+
+  // WB03: ruling 5 — seam.json is byte-identical at --max 16 and --max 640 under steady wind.
+  const envStepPath = writeSpec('env-step-4', {
+    spec: 'rigc-environment/1',
+    steps: [{ t: 0, wind: [4, 0], gravity: [0, 1] }],
+  });
+  const seam16Dir = join(wbDir, 'seam-16');
+  const seam640Dir = join(wbDir, 'seam-640');
+  const r16 = runRigc([
+    'render',
+    '--candidate',
+    join(checkOut, 'build'),
+    '--seam',
+    'hair_back:skirt',
+    '--fps',
+    '12',
+    '--max',
+    '16',
+    '--environment',
+    envStepPath,
+    '--out',
+    seam16Dir,
+  ]);
+  const r640 = runRigc([
+    'render',
+    '--candidate',
+    join(checkOut, 'build'),
+    '--seam',
+    'hair_back:skirt',
+    '--fps',
+    '12',
+    '--max',
+    '640',
+    '--environment',
+    envStepPath,
+    '--out',
+    seam640Dir,
+  ]);
+  const seam16Bytes = existsSync(join(seam16Dir, 'idle', 'seam.json')) ? readFileSync(join(seam16Dir, 'idle', 'seam.json'), 'utf8') : '';
+  const seam640Bytes = existsSync(join(seam640Dir, 'idle', 'seam.json')) ? readFileSync(join(seam640Dir, 'idle', 'seam.json'), 'utf8') : '';
+  const f16 = existsSync(join(seam16Dir, 'frames.json')) ? readFrameSet(seam16Dir) : null;
+  const f640 = existsSync(join(seam640Dir, 'frames.json')) ? readFrameSet(seam640Dir) : null;
+  say(
+    'WB03_SEAM_JSON_IS_BYTE_IDENTICAL_AT_MAX_16_AND_MAX_640',
+    r16.status === 0 &&
+      r640.status === 0 &&
+      seam16Bytes.length > 0 &&
+      seam16Bytes === seam640Bytes &&
+      f16 !== null &&
+      f640 !== null &&
+      Math.max(f16.viewport.pixelWidth, f16.viewport.pixelHeight) <= 16 &&
+      Math.max(f640.viewport.pixelWidth, f640.viewport.pixelHeight) > 16,
+    `r16=${r16.status} (${f16?.viewport.pixelWidth ?? 0}x${f16?.viewport.pixelHeight ?? 0}), r640=${r640.status} (${f640?.viewport.pixelWidth ?? 0}x${f640?.viewport.pixelHeight ?? 0}), seam.json bytes=${seam16Bytes.length}, identical=${seam16Bytes === seam640Bytes}`,
+    'issue #590 ruling 5: rigc render --seam computes seam cells on the canonical drawing grid independent of the frame raster size (--max), so --max 16 and --max 640 produce byte-identical seam.json',
+  );
+
+  // WB04: every malformed or inapplicable wind-band spec is refused as CHECK_WIND_BAND with nothing written.
+  const baseSpec = {
+    spec: WIND_BAND_SPEC,
+    min: 0,
+    max: 4,
+    step: 2,
+    fps: 12,
+    max_gap: 0,
+    max_ghost: 5,
+    pairs: ['hair_back:face'],
+  };
+  const badSpecs: Array<[string, unknown, string]> = [
+    ['not-json', '{not json', 'does not parse as JSON'],
+    ['not-obj', '[]', `is an array; a ${WIND_BAND_SPEC} JSON object is required`],
+    ['unknown-key', { ...baseSpec, extra: 1 }, 'unknown key;'],
+    ['no-spec', { ...baseSpec, spec: undefined }, 'is missing;'],
+    ['bad-spec', { ...baseSpec, spec: 'rig-parts-wind-band/2' }, `is "rig-parts-wind-band/2"; "${WIND_BAND_SPEC}" is required`],
+    ['no-min', { ...baseSpec, min: undefined }, 'is missing;'],
+    ['no-max', { ...baseSpec, max: undefined }, 'is missing;'],
+    ['no-step', { ...baseSpec, step: undefined }, 'is missing;'],
+    ['no-fps', { ...baseSpec, fps: undefined }, 'is missing;'],
+    ['no-gap', { ...baseSpec, max_gap: undefined }, 'is missing;'],
+    ['no-ghost', { ...baseSpec, max_ghost: undefined }, 'is missing;'],
+    ['no-pairs', { ...baseSpec, pairs: undefined }, 'is missing;'],
+    ['min-ge-max', { ...baseSpec, min: 4, max: 4 }, 'min is 4 and max is 4; min < max is required'],
+    ['step-le-0', { ...baseSpec, step: 0 }, 'is 0; a positive number (> 0) is required'],
+    ['non-int-steps', { ...baseSpec, min: 0, max: 1, step: 0.3 }, 'an integer number of steps (within 1e-6) is required'],
+    ['too-many-steps', { ...baseSpec, min: 0, max: WIND_BAND_MAX_STEPS + 1, step: 1 }, `between 1 and ${WIND_BAND_MAX_STEPS} steps is required`],
+    ['bad-fps', { ...baseSpec, fps: 0 }, 'is 0; a positive integer (>= 1) is required'],
+    ['neg-gap', { ...baseSpec, max_gap: -1 }, 'is -1; a non-negative integer (>= 0) is required'],
+    ['frac-ghost', { ...baseSpec, max_ghost: 1.5 }, 'is 1.5; a non-negative integer (>= 0) is required'],
+    ['empty-pairs', { ...baseSpec, pairs: [] }, 'a non-empty array of "<a>|<b>" or "<a>:<b>" slot pairs is required'],
+    ['same-slot', { ...baseSpec, pairs: ['face:face'] }, 'naming two distinct non-empty slots is required'],
+    ['dup-pair', { ...baseSpec, pairs: ['hair_back:face', 'face|hair_back'] }, 'duplicates an earlier pair in pairs'],
+  ];
+  const badReaderOk = badSpecs.every(([label, doc, needle]) => {
+    const p = writeSpec(`bad-${label}`, doc);
+    try {
+      readWindBand(p);
+      return false;
+    } catch (err) {
+      return err instanceof PartsError && err.problems.every((q) => q.code === WIND_BAND_RULE) && err.problems.some((q) => q.detail.includes(needle));
+    }
+  });
+  const missingWbPath = join(wbDir, 'no-such-wind-band.json');
+  const missingWbRun = runCli(['check', '--rig', bare.out, '--parts', bare.parts, '--out', join(wbDir, 'out-missing'), '--wind-band', missingWbPath]);
+  const unknownSlotPath = writeSpec('unknown-slot', { ...baseSpec, pairs: ['face:no_such_slot'] });
+  const unknownSlotRun = runCli(['check', '--rig', bare.out, '--parts', bare.parts, '--out', join(wbDir, 'out-unknown-slot'), '--wind-band', unknownSlotPath]);
+  const unbandedPath = writeSpec('unbanded', { ...baseSpec, pairs: ['face:skirt'] });
+  const unbandedOut = join(wbDir, 'out-unbanded');
+  const unbandedRun = runCli(['check', '--rig', bare.out, '--parts', bare.parts, '--out', unbandedOut, '--wind-band', unbandedPath]);
+  const npWbOut = join(wbDir, 'out-nophysics');
+  const npWbRun = runCli(['check', '--rig', nophysics.out, '--parts', nophysics.parts, '--out', npWbOut, '--wind-band', specPath]);
+  const zeroWindRigDoc: Record<string, unknown> = {
+    ...rigDoc,
+    constraints: ((rigDoc.constraints as Array<Record<string, unknown>> | undefined) ?? []).map((c) => (c.type === 'physics' ? { ...c, wind: 0 } : c)),
+  };
+  let zeroWindDetail = '';
+  try {
+    resolveWindBand(readWindBand(specPath), {
+      rig: zeroWindRigDoc,
+      rigPath: join(bare.out, 'rig.json'),
+      motion: motionDoc,
+      motionPath: join(bare.out, 'motion.json'),
+    });
+  } catch (err) {
+    zeroWindDetail = err instanceof PartsError ? err.problems.map((q) => `${q.code}:${q.detail}`).join(' | ') : String(err);
+  }
+  const buildWbOut = join(wbDir, 'build-bad-wb');
+  const badSpecFile = writeSpec('bad-for-build', { ...baseSpec, spec: 'rig-parts-wind-band/2' });
+  const buildWbRun = runCli([
+    'build',
+    '--config',
+    join(root, 'bare.json'),
+    '--source',
+    join(root, 'none.png'),
+    '--full',
+    join(root, 'none'),
+    '--out',
+    buildWbOut,
+    '--wind-band',
+    badSpecFile,
+  ]);
+  say(
+    'WB04_EVERY_MALFORMED_OR_UNAPPLICABLE_WIND_BAND_IS_REFUSED_AS_CHECK_WIND_BAND_WITH_NOTHING_WRITTEN',
+    badReaderOk &&
+      missingWbRun.status === 1 &&
+      missingWbRun.out.includes(`FAIL  ${WIND_BAND_RULE}:`) &&
+      !existsSync(join(wbDir, 'out-missing')) &&
+      unknownSlotRun.status === 1 &&
+      unknownSlotRun.out.includes(`FAIL  ${WIND_BAND_RULE}:`) &&
+      unknownSlotRun.out.includes('names slot "no_such_slot"') &&
+      !existsSync(join(wbDir, 'out-unknown-slot')) &&
+      unbandedRun.status === 1 &&
+      unbandedRun.out.includes(`FAIL  ${WIND_BAND_RULE}:`) &&
+      unbandedRun.out.includes('rigc read no seam band on any frame of idle') &&
+      !existsSync(unbandedOut) &&
+      npWbRun.status === 1 &&
+      npWbRun.out.includes(`FAIL  ${WIND_BAND_RULE}:`) &&
+      npWbRun.out.includes('declares no physics constraint') &&
+      !existsSync(npWbOut) &&
+      zeroWindDetail.startsWith(`${WIND_BAND_RULE}:`) &&
+      zeroWindDetail.includes('answers wind (every constraint has wind 0)') &&
+      buildWbRun.status === 1 &&
+      buildWbRun.out.includes(`[assemble]   FAIL  ${WIND_BAND_RULE}:`) &&
+      !existsSync(join(buildWbOut, 'parts.json')),
+    `badReaderOk=${badReaderOk}; missing=${missingWbRun.status}; unknownSlot=${unknownSlotRun.status}; unbanded=${unbandedRun.status} (outExists=${existsSync(unbandedOut)}); nophysics=${npWbRun.status}; zeroWind=${zeroWindDetail.slice(0, 80)}; build=${buildWbRun.status}`,
+    'issue #590 ruling 2: every field of rig-parts-wind-band/1 is required with no fallback to SEAM_OVER_MOTION, and malformed specs, >64 steps, unknown slots, unbanded pairs, and rigs without wind-answering physics constraints refuse as CHECK_WIND_BAND with --out absent',
+  );
+
+  // WB05: check without --wind-band is byte-identical to check with --wind-band minus WIND_BAND, and guide resolves both names.
+  const bareText = existsSync(join(bare.checkOut, 'check.json')) ? readFileSync(join(bare.checkOut, 'check.json'), 'utf8') : null;
+  const bareJson = bareText === null ? null : (JSON.parse(bareText) as Record<string, unknown>);
+  const strippedGoodText = (() => {
+    if (goodJson === null) return null;
+    const copy = { ...goodJson };
+    delete copy[WIND_BAND_LINE];
+    return `${JSON.stringify(copy, null, 1)}\n`;
+  })();
+  const guideRuleRun = runCli(['guide', WIND_BAND_RULE]);
+  const guideLineRun = runCli(['guide', WIND_BAND_LINE]);
+  say(
+    'WB05_CHECK_WITHOUT_WIND_BAND_IS_BYTE_IDENTICAL_AND_GUIDE_RESOLVES_THE_NEW_NAMES',
+    bareText !== null &&
+      bareJson !== null &&
+      !(WIND_BAND_LINE in bareJson) &&
+      !(bare.check?.out ?? '').includes(`${WIND_BAND_LINE}:`) &&
+      strippedGoodText === bareText &&
+      guideRuleRun.status === 0 &&
+      guideRuleRun.out.includes(WIND_BAND_RULE) &&
+      guideLineRun.status === 0 &&
+      guideLineRun.out.includes(WIND_BAND_LINE),
+    `bare has WIND_BAND=${bareJson !== null && WIND_BAND_LINE in bareJson}; strippedGood===bare=${strippedGoodText === bareText}; guide ${WIND_BAND_RULE}=${guideRuleRun.status}, guide ${WIND_BAND_LINE}=${guideLineRun.status}`,
+    'issue #590: check without --wind-band writes no WIND_BAND key or console line and is byte-for-byte identical to the --wind-band check.json minus WIND_BAND; rig-parts guide resolves both CHECK_WIND_BAND and WIND_BAND',
+  );
 }
 
 /**
