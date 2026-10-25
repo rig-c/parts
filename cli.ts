@@ -268,9 +268,10 @@ usage:
 
   rig-parts propose --parts <dir> --source <painting.png> --out <dir> --from-config <config.json>
       Draw the config's CURRENT bones instead (<out>/render/landmarks_config.png
-      and _head) and LINT them (by the joints too, given --keypoints), with the
-      coverage lines after them; no ${BASIS_FILE}, as nothing is proposed.
-      Exits 1 when any LINT line is printed.
+      and _head) and LINT them (by the joints too, given --keypoints [--person]), with the
+      coverage lines after them; no ${BASIS_FILE}, as nothing is proposed (takes
+      --parts, --source, --out, --from-config and optional --keypoints [--person]
+      only). Exits 1 when any LINT line is printed.
 
   rig-parts propose … --write-config <config.json>
       Without --cloth, update an existing config with the whole proposal's
@@ -1352,11 +1353,12 @@ function cmdPropose(args: string[]): number {
   }
   // Issue #671: --only-missing adds entries to an existing config for the parts it attaches by neither section; it
   // belongs to the ordinary proposal's --write-config alone.
+  const fromConfigTakes = '(takes --parts, --source, --out, --from-config and optional --keypoints [--person] only)';
   if (onlyMissing) {
     const mode = 'propose --parts … --write-config <config.json> --only-missing';
     if (headBox) return usage(`--only-missing belongs to ${mode}; --head-box writes seethrough.head_box only`);
     if (!flags.has('--parts')) return usage(`--only-missing belongs to ${mode}; give --parts <dir>, the parts the entries are drafted from`);
-    if (flags.has('--from-config')) return usage(`--only-missing belongs to ${mode}; --from-config proposes nothing`);
+    if (flags.has('--from-config')) return usage(`--only-missing belongs to ${mode}; --from-config proposes nothing ${fromConfigTakes}`);
     if (flags.has('--cloth')) return usage(`--only-missing belongs to ${mode}; --cloth writes a new config with the recipe's entries spliced in`);
     if (!flags.has('--write-config')) return usage(`--only-missing belongs to ${mode}; give --write-config <config.json>, the existing config the entries are added to`);
   }
@@ -1401,17 +1403,17 @@ function cmdPropose(args: string[]): number {
     if (partsArg === undefined) return usage('propose needs --parts <dir>, the directory holding parts.json and parts/');
     if (source === undefined) return usage('propose needs --source <painting.png>, drawn under the overlay');
     if (out === undefined) return usage('propose needs --out <dir>');
-    if (flags.has('--from-config') && flags.has('--compare')) return usage('--from-config and --compare are two modes; give one');
+    if (flags.has('--from-config') && flags.has('--compare')) return usage(`--from-config and --compare are two modes; give one (--from-config ${fromConfigTakes.slice(1, -1)})`);
     if (flags.has('--person') && !flags.has('--keypoints')) return usage('--person names a person in the --keypoints file; give --keypoints <file>');
     // Issue #251: the See-through runs the turn control's depths are read from; without them nothing is drafted.
-    if (flags.has('--from-config') && (flags.has('--full') || flags.has('--head'))) return usage('--full and --head draft the turn control while proposing; --from-config proposes nothing');
+    if (flags.has('--from-config') && (flags.has('--full') || flags.has('--head'))) return usage(`--full and --head draft the turn control while proposing; --from-config proposes nothing ${fromConfigTakes}`);
     // Issue #199: a declared tolerance for a wrist on no handwear part. Whole px above the built-in one: the distance is
     // counted in whole px, so a fraction would bind what its floor binds, and a value at or under the built-in binds nothing.
     const snapArg = flags.get('--wrist-snap');
     let wristSnap: number | null = null;
     if (snapArg !== undefined) {
       if (!flags.has('--keypoints')) return usage('--wrist-snap binds a wrist joint to a handwear part; give --keypoints <file>');
-      if (flags.has('--from-config')) return usage('--wrist-snap binds a wrist while proposing; --from-config proposes nothing');
+      if (flags.has('--from-config')) return usage(`--wrist-snap binds a wrist while proposing; --from-config proposes nothing ${fromConfigTakes}`);
       if (!/^[0-9]+$/.test(snapArg) || Number(snapArg) <= WRIST_ON_PART_PX) {
         return usage(`--wrist-snap ${snapArg} is not an integer above ${WRIST_ON_PART_PX}, the px within which a wrist already holds a part`);
       }
@@ -1419,15 +1421,15 @@ function cmdPropose(args: string[]): number {
     }
     // Issue #265: the drafted lattice's spacing; the figure's unless the reference's per-part rule is asked for.
     const ruleArg = flags.get('--grid-rule');
-    if (ruleArg !== undefined && flags.has('--from-config')) return usage('--grid-rule chooses the drafted spacing; --from-config proposes nothing');
+    if (ruleArg !== undefined && flags.has('--from-config')) return usage(`--grid-rule chooses the drafted spacing; --from-config proposes nothing ${fromConfigTakes}`);
     if (ruleArg !== undefined && !(GRID_RULES as readonly string[]).includes(ruleArg)) return usage(`--grid-rule ${ruleArg}; one of ${GRID_RULES.join(', ')} is required`);
     const gridRule = (ruleArg ?? DEFAULT_GRID_RULE) as GridRule;
     // Issue #364: the cloth and hair recipe, read from a config's cloth block; without it nothing changes.
     const clothArg = flags.get('--cloth');
-    if (clothArg !== undefined && flags.has('--from-config')) return usage('--cloth drafts trees while proposing; --from-config proposes nothing');
+    if (clothArg !== undefined && flags.has('--from-config')) return usage(`--cloth drafts trees while proposing; --from-config proposes nothing ${fromConfigTakes}`);
     // Issue #537: the --cloth config's own text with what its recipe drafts spliced in, beside proposal.json.
     const writeArg = flags.get('--write-config');
-    if (writeArg !== undefined && flags.has('--from-config')) return usage('--write-config writes what the recipe drafts into its config; --from-config proposes nothing');
+    if (writeArg !== undefined && flags.has('--from-config')) return usage(`--write-config writes what the recipe drafts into its config; --from-config proposes nothing ${fromConfigTakes}`);
     // Issue #571: the config the recipe is changed from; an entry equal to its recipe's draft is the recipe's, not a hand edit.
     const fromArg = flags.get('--from');
     if (fromArg !== undefined && writeArg === undefined) return usage('--from names the config the recipe is changed from, for --write-config; give --write-config <out.json>');
@@ -1435,7 +1437,7 @@ function cmdPropose(args: string[]): number {
     if (writeArg !== undefined && clothArg !== undefined) {
       const ours = ['proposal.json', BASIS_FILE, 'render/landmarks.png', 'render/landmarks_head.png'].map((f) => resolve(out, f));
       if (existsSync(writeArg) || ours.includes(resolve(writeArg))) {
-        throw new PartsError([{ code: 'PROPOSE_WRITE_CONFIG_FRESH', object: writeArg, detail: existsSync(writeArg) ? 'exists; the config is written to a new file, never over the --cloth config or an earlier one' : `is a file this run writes under ${out}; name another file` }]);
+        throw new PartsError([{ code: 'PROPOSE_WRITE_CONFIG_FRESH', object: writeArg, detail: existsSync(writeArg) ? 'exists; the config is written to a new file, never over the --cloth config or an earlier one (unlike assemble --propose-plan and propose without --cloth, which update an existing --config in place)' : `is a file this run writes under ${out}; name another file` }]);
       }
       separateConfigWriteTarget({ path: resolve(writeArg) }, ours, 'PROPOSE_WRITE_CONFIG_FRESH');
     }
@@ -1643,7 +1645,7 @@ function cmdAssemble(args: string[]): number {
   const [source, full, config] = ['--source', '--full', '--config'].map((f) => flags.get(f) as string);
   const head = flags.get('--head') ?? null;
   const writePath = flags.get('--write-config');
-  if (writePath !== undefined && resolve(writePath) !== resolve(config)) return usage('--write-config must name the same file as --config for assemble --propose-plan');
+  if (writePath !== undefined && resolve(writePath) !== resolve(config)) return usage('--write-config must name the same file as --config for assemble --propose-plan (assemble --propose-plan updates --config in place; only propose --cloth --write-config writes to a new file)');
   let staged: StagedConfigWrite | null = null;
   try {
     if (propose) {

@@ -38453,6 +38453,51 @@ function runTreeSuite(): number {
     'issue #753: step 8 elided required flags as `rig-parts propose … --from-config config.json`, and an examinee running it literally hit `FAIL USAGE: propose needs --out <dir>`',
   );
 
+  // TY28 — issue #759: AUTHORING §4 (--write-config) and §6 (PROPOSE_WRITE_CONFIG_FRESH) state both --write-config
+  // destination rules side by side with their cited tree sections, and README.md + AUTHORING §4 step 8 list the
+  // accepted and refused flags of `propose --from-config`.
+  const readme28 = text.find(([file]) => file === 'README.md')?.[1] ?? '';
+  const wcStart = guide21.indexOf('**Saving proposed config fields (`--write-config`, issue #356).**');
+  const wcBlock = wcStart < 0 ? '' : guide21.slice(wcStart, guide21.indexOf('\n## 5. ', wcStart));
+  const freshRow = guide21.split('\n').find((l) => l.includes('<a id="PROPOSE_WRITE_CONFIG_FRESH"></a>')) ?? '';
+  const holdingWriteConfigDoc = (wc: string, row: string): boolean => {
+    const flatWc = wc.replace(/\s+/g, ' ');
+    const flatRow = row.replace(/\s+/g, ' ');
+    return (
+      flatWc.includes('two destination rules') &&
+      flatWc.includes('in place on an existing regular config') &&
+      flatWc.includes('must name `--config` itself') &&
+      flatWc.includes('§4, *What each step requires of the config*') &&
+      flatWc.includes('§4 step 6') &&
+      flatWc.includes('`propose --cloth <input.json> --write-config <out.json>` writes to a new file (`PROPOSE_WRITE_CONFIG_FRESH`') &&
+      flatWc.includes('§3, *The config written*') &&
+      flatRow.includes('unlike `assemble --propose-plan` and `propose` without `--cloth`, which update an existing `--config` in place; §4, *Saving proposed config fields*')
+    );
+  };
+  const loopStart28 = readme28.indexOf('## The loop, for an agent');
+  const loopEnd28 = loopStart28 < 0 ? -1 : readme28.indexOf('\n```', readme28.indexOf('```sh\n', loopStart28) + 6);
+  const loopBlock28 = loopStart28 < 0 || loopEnd28 < 0 ? '' : readme28.slice(loopStart28, loopEnd28);
+  const cmdRow28 = readme28.split('\n').find((l) => l.startsWith('| `propose ') && l.includes('--from-config')) ?? '';
+  const acceptedFlags28 = ['--parts', '--source', '--out', '--from-config', '--keypoints', '--person'];
+  const refusedFlags28 = ['--full', '--head', '--cloth', '--write-config', '--wrist-snap', '--grid-rule', '--only-missing', '--compare'];
+  const holdingFromConfigDoc = (s: string): boolean => {
+    const flat = s.replace(/\s+/g, ' ');
+    return acceptedFlags28.every((f) => flat.includes(f)) && refusedFlags28.every((f) => flat.includes(f));
+  };
+  const plantPre759Wc = wcBlock.replace(/\s+/g, ' ').replaceAll('two destination rules', 'different modes');
+  const plantPre759Loop = '#    -> LINT lines; exit 1 while any remain';
+  say(
+    'TY28_AUTHORING_WRITE_CONFIG_RULES_AND_README_FROM_CONFIG_FLAGS_HOLD_THE_PARSER_FACTS',
+    holdingWriteConfigDoc(wcBlock, freshRow) &&
+      holdingFromConfigDoc(loopBlock28) &&
+      holdingFromConfigDoc(cmdRow28) &&
+      holdingFromConfigDoc(step8Block) &&
+      !holdingWriteConfigDoc(plantPre759Wc, freshRow) &&
+      !holdingFromConfigDoc(plantPre759Loop),
+    `AUTHORING --write-config + PROPOSE_WRITE_CONFIG_FRESH hold both rules and cited sections: ${holdingWriteConfigDoc(wcBlock, freshRow) ? 'yes' : 'NO'}; README loop + Commands row + AUTHORING step 8 list 6 accepted and 8 refused --from-config flags: ${holdingFromConfigDoc(loopBlock28) && holdingFromConfigDoc(cmdRow28) && holdingFromConfigDoc(step8Block) ? 'yes' : 'NO'}; planted pre-#759 --write-config block -> ${holdingWriteConfigDoc(plantPre759Wc, freshRow) ? 'PASSES' : 'caught'}; planted pre-#759 README loop line -> ${holdingFromConfigDoc(plantPre759Loop) ? 'PASSES' : 'caught'}`,
+    'issue #759: the two --write-config destination rules (in-place existing config vs fresh file for --cloth) and the accepted flags of propose --from-config are stated at each doc and refusal site',
+  );
+
   const self = readFileSync(join(ROOT, 'selftest.ts'), 'utf8');
   const from = self.indexOf(SUMMARY_START);
   const to = from < 0 ? -1 : self.indexOf(SUMMARY_END, from);
