@@ -493,6 +493,16 @@
     "iris_r": "eye_r",
     "legwear": "hip"
   },
+  "motion_seams": [
+    {
+      "part": "topwear",
+      "neighbour": "handwear_l"
+    },
+    {
+      "part": "topwear",
+      "neighbour": "handwear_r"
+    }
+  ],
   "motion": {
     "duration": 3.3333333333333335,
     "tracks": [

@@ -118,7 +118,7 @@ The fields, object by object (a bold path is where the object sits; `<part>` is 
 part name, `[i]` an entry of a list):
 
 <!-- stable:config -->
-- **config** — required by the full loader, in front of rig and build: `key`, `assemble`, `bones`, `meshes`, `regions`, `motion`; optional: `generation`, `seethrough`, `limbs`, `constraints`, `stops`, `turn`, `scene`, `cloth`, `proposed_rig_scale`, `requirements` (issue #556, additive: a path beside the config that build reads in place of its requirements flag, whose behaviour is unchanged)
+- **config** — required by the full loader, in front of rig and build: `key`, `assemble`, `bones`, `meshes`, `regions`, `motion`; optional: `generation`, `seethrough`, `limbs`, `constraints`, `stops`, `turn`, `scene`, `cloth`, `proposed_rig_scale`, `requirements` (issue #556, additive: a path beside the config that build reads in place of its requirements flag, whose behaviour is unchanged), `motion_seams`
 - **generation** — required: `checkpoint`, `loras`, `trigger`, `identity`, `sampler`, `costume`, `negative_extra`, `style`, `negative_pose`, `latent`, `seed`; optional: `pose`, `control`
 - **generation.loras[i]** — required: `name`, `strength`; optional: `strength_clip`
 - **generation.sampler** — required: `steps`, `cfg`, `sampler`, `scheduler`
@@ -381,3 +381,52 @@ carrier and measured geometry must agree; the lower rigid piece alone carries
 existing `LIMB_ONE_BONE` line checks ordinary segments as before; the band
 requires exactly its two adjacent carriers. `SEAM_OVER_RANGE` uses the stored
 radius and existing rest-art comparison, without changing its bar.
+
+## Explicit motion seam observations (issue #750)
+
+`motion_seams: [{part, neighbour}]` is optional in proposal/config/parts.json.
+Absent leaves the existing declaration path unchanged. Readers refuse unknown
+parts, self-pairs, unordered duplicates, malformed entries and unknown entry
+fields by name. Empty declares no additional pair. Proposal turn/copy/write and
+assemble preserve it; check never infers a removed declaration. A declared pair
+uses the existing non-root WARN floor and unchanged exits, unless independently
+selected by the existing proven body-root FAIL contract.
+
+All played non-root WARN rows may add `worst` and `pose_at_worst`, including
+existing limb rows. Worst is the maximum above-floor raw hit, earliest frame
+on a tie, gap before ghost on a remaining tie. Pose evidence binds the same
+seam geometry's actual setup, frame index, animation, viewport and raw time.
+It records carrier-path world axes, parent-relative setup-axis deltas modulo
+360, unchanged static ranges and explicit unavailable comparison reasons;
+frame0 and source key endpoints are not setup or measured pose substitutes.
+No angle bar or new threshold is added. Missing/mismatched data refuses.
+Without a declaration only optional WARN evidence changes existing check bytes.
+For the declared no-chest control at identical paths, the exact byte projection
+of an existing seam container excludes only its selection, rows, derived status
+and reason. The historical optional-container bar required exactly seven keys,
+`CLEAR` and zero warnings across every animation. Its measured raw exit 1 stays
+red: the added greeting keys only the head, but the original idle also keys the
+chest and reports an above-floor opening at frames 8–12. The source type also
+permits informational `worlds`; neither finding changes the product contract.
+
+[HQ's post-verdict restatement](https://github.com/rig-c/parts/issues/750#issuecomment-6398631279)
+corrects that premise. When the baseline omits `SEAM_OVER_MOTION` entirely, audit
+the new container against the complete `MotionSeamLine` source type, including
+its required and optional fields and referenced types, rather than a hand-kept
+key list. Independently verify fps 12, the exact source floor, compiled animation
+roster, generated selection and every row against the raw readings. All added
+greeting rows must be readable and clean. Any WARN must name an animation that
+actually keys a joint on the pair's carrier ancestry, witnessed by the original
+authored motion, compiled tracks and actual drawing carriers. The original idle
+WARN remains reported with the unchanged floor and exit behavior. Only after
+those audits may lossless removal of the new container establish exact equality
+of every outside byte. An existing baseline container keeps the narrower field
+exclusions above. The original red and the separate post-verdict re-evaluation
+are retained together; no input, animation selector or threshold is changed.
+
+The WARN pose reader also requires the published stock coordinate header and
+the required source bone/parent roster. It binds the complete geometry frame
+cohort to the actual PNG frame set through `readFrameSet` and `boneTrackOf`,
+including unselected frames, before reading the worst pose. Identical static
+ranges on a bone deduplicate; conflicting ranges are explicitly ambiguous,
+never described as no declared range.

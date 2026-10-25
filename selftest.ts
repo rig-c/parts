@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runMotionSeamContractCases, runMotionSeamDocumentationCases, runStoppedMotionSeamCase } from './tools/fixtures/motion_seam_controls.ts';
 import { runExplicitMeshChecks } from './tools/check_explicitmesh.ts';
 import { runAlternateLayerChecks } from './tools/check_alternate_layers.ts';
 import { runAlternateCutLayerChecks } from './tools/check_alternate_cut_layers.ts';
@@ -11005,7 +11006,7 @@ function runProposeSuite(): number {
         tNote.includes('Pivot depth 0.657258') &&
         JSON.stringify(draft.notes.slice(-TURN_DEPTH_CAVEAT.length)) === JSON.stringify(TURN_DEPTH_CAVEAT) &&
         tNote.includes('skirt -0.227723 (depth 0.75), sleeve_a 0.386139 (depth 0.5), sleeve_b -0.534654 (depth 0.875), face 1 (depth 0.25)') &&
-        JSON.stringify(Object.keys(turned)) === JSON.stringify(['bones', 'meshes', 'regions', 'motion', 'turn', 'proposed_rig_scale', 'notes']) &&
+        JSON.stringify(Object.keys(turned)) === JSON.stringify(['bones', 'meshes', 'regions', ...(tprop.motion_seams === undefined ? [] : ['motion_seams']), 'motion', 'turn', 'proposed_rig_scale', 'notes']) &&
         serializeProposal(withTurn(tprop, { turn: null, notes: [] })) === serializeProposal(tprop) &&
         tLoad === null,
       `turn ${JSON.stringify(draft.turn)}; note "${tNote}"; keys ${Object.keys(turned).join(', ')}; the proposal with it ${tLoad === null ? 'loads' : `is refused: ${codes(tLoad)}`}`,
@@ -17306,6 +17307,7 @@ function runMotionSeamWorldIntegration(dir: string, say: (name: string, ok: bool
 
 function runMotionSeamCases(report: FixtureCaseReporter): void {
   const { say, runCli } = fixtureChildDiagnostics(report);
+  runMotionSeamContractCases(say, temp);
   runMotionRootSeamCases(say);
   const dir = temp('motion-seam');
   try {
@@ -17314,14 +17316,25 @@ function runMotionSeamCases(report: FixtureCaseReporter): void {
     writeRun(join(dir, 'head'), FRAMED_HEAD);
     writeFileSync(join(dir, 'painting.png'), encodePngBytes(flatPainting()));
     writeFileSync(join(dir, 'animations.json'), JSON.stringify(SO_BEND));
-    const built = (label: string, limbs: boolean): { status: number; out: string; fig: Record<string, unknown> | null } => {
+    const built = (label: string, limbs: boolean, patch: Record<string, unknown> = {}, fullRun?: string): { status: number; out: string; fig: Record<string, unknown> | null; stage: string } => {
       const cfg = join(dir, `${label}.json`);
-      writeFileSync(cfg, JSON.stringify(soConfig(limbs)));
-      const r = runCli(['build', '--config', cfg, '--source', join(dir, 'painting.png'), '--full', join(dir, limbs ? 'full' : 'full-uncut'), '--head', join(dir, 'head'), '--out', join(dir, label)]);
-      return { ...r, fig: readJsonFile(join(dir, label, 'check', 'check.json')) };
+      writeFileSync(cfg, JSON.stringify({ ...soConfig(limbs), ...patch }));
+      const r = runCli(['build', '--config', cfg, '--source', join(dir, 'painting.png'), '--full', join(dir, fullRun ?? (limbs ? 'full' : 'full-uncut')), '--head', join(dir, 'head'), '--out', join(dir, label)]);
+      return { ...r, stage: join(dir, label), fig: readJsonFile(join(dir, label, 'check', 'check.json')) };
     };
     const cut = built('cut', true);
     const whole = built('whole', false);
+    // Independent authored pieces declare a seam without config.limbs' distinct one-source-bone contract.
+    writeRun(join(dir, 'full-stopped'), [
+      { name: 'author:upperarm', depth: 0.5, rects: [SO_FULL[0].rects[0]] },
+      { name: 'author:forearm', depth: 0.6, rects: [SO_FULL[0].rects[1], { x0: 17, y0: 17, x1: 37, y1: 32, colour: C }] },
+    ]);
+    runStoppedMotionSeamCase(say, patch => built('stopped', true, {
+      ...patch,
+      limbs: undefined,
+      motion_seams: [{ part: 'upperarm_r', neighbour: 'forearm_r' }],
+      assemble: { ...(soConfig(true).assemble as Record<string, unknown>), plan: [['upperarm_r', 'full', 'author:upperarm'], ['forearm_r', 'full', 'author:forearm']] },
+    }, 'full-stopped'));
     const lines = (out: string): string[] => out.split('\n').map((l) => l.replace(/^\[check\] /, ''));
     const line = (fig: Record<string, unknown> | null): MotionSeamLine | null => (fig?.[MOTION_SEAM_LINE] as MotionSeamLine | undefined) ?? null;
     const ln = line(cut.fig);
@@ -38224,6 +38237,7 @@ function runContourWiringSuite(): number {
 function runTreeSuite(): number {
   section('tree: the rules CLAUDE.md states, held to the files');
   const { say, bad } = counter();
+  runMotionSeamDocumentationCases(say);
   const patterns = ignorePatterns();
   const readerFaults = ignoreReaderFaults(patterns);
   const files = treeFiles();
@@ -38410,12 +38424,12 @@ function runTreeSuite(): number {
   const plants18 = [
     pasteListFaults(withDoc('README.md', (t) => t.replace(readmeLine, OLD_README_PASTE_LINE)), sections18),
     pasteListFaults(withDoc('skills/rig-parts/SKILL.md', (t) => t.replace(/\bcopy `bones`/, 'take `bones`')), sections18),
-    pasteListFaults([...text, ['examples/plant/README.md', 'Copy `motion`, `bones`, `meshes`, `regions`, `limbs`, `constraints`, `turn` and `proposed_rig_scale` into the config.\n']], sections18),
-    pasteListFaults([...text, ['examples/plant/README.md', 'Paste `bones`, `meshes`, `regions`, `limbs`, `motion`, `constraints`, `turn`, `proposed_rig_scale` and `notes` into the config.\n']], sections18),
+    pasteListFaults([...text, ['examples/plant/README.md', 'Copy `motion`, `bones`, `meshes`, `regions`, `limbs`, `constraints`, `turn`, `motion_seams` and `proposed_rig_scale` into the config.\n']], sections18),
+    pasteListFaults([...text, ['examples/plant/README.md', 'Paste `bones`, `meshes`, `regions`, `limbs`, `motion`, `constraints`, `turn`, `motion_seams`, `proposed_rig_scale` and `notes` into the config.\n']], sections18),
     pasteListFaults([...text.filter(([f]) => f !== 'CHANGELOG.md'), ['CHANGELOG.md', `${OLD_README_PASTE_LINE}\n`], ['examples/plant/README.md', 'paste `plan` and `extend_below_crop` into `config.assemble`\n']], sections18),
   ];
   const plantsHit18 =
-    plants18[0].length === 1 && new RegExp(`^README\\.md:${readmeSite?.line ?? -1} copies bones, meshes, regions, motion; .* \\(missing limbs, constraints, turn, proposed_rig_scale\\)$`).test(plants18[0][0]) &&
+    plants18[0].length === 1 && new RegExp(`^README\\.md:${readmeSite?.line ?? -1} copies bones, meshes, regions, motion; .* \\(missing limbs, constraints, turn, motion_seams, proposed_rig_scale\\)$`).test(plants18[0][0]) &&
     plants18[1].join() === 'skills/rig-parts/SKILL.md holds no sentence saying which proposal sections to copy into the config' &&
     plants18[2].length === 1 && plants18[2][0].startsWith('examples/plant/README.md:1 copies motion, bones,') && plants18[2][0].endsWith('(another order)') &&
     plants18[3].length === 1 && plants18[3][0].endsWith('(not a section: notes)') && !plants18[3][0].includes('(missing') &&
