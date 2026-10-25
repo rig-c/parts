@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.65.0](https://github.com/rig-c/parts/compare/v1.64.0...v1.65.0) (2026-10-25)
+
+
+### Features
+
+* **check:** report the steady-wind band each seam pair holds (--wind-band) ([#739](https://github.com/rig-c/parts/issues/739)) ([803fb36](https://github.com/rig-c/parts/commit/803fb36626301e1bec81da10aacf0e9caeea6803))
+* **limbs:** add source-derived hybrid joint bands ([#747](https://github.com/rig-c/parts/issues/747)) ([0628d7b](https://github.com/rig-c/parts/commit/0628d7bc311a2b548edf7a11e8407546357d4b4d))
+
 ## [1.64.0](https://github.com/rig-c/parts/compare/v1.63.0...v1.64.0) (2026-10-25)
 
 
