@@ -770,6 +770,64 @@ lattice and contour modes a mesh may declare it:
 "bottomwear": { "grid": 25, "r": 10, "segments": [["hip", [232, 425], [601, 425]], "skirt_r", "skirt_c", "skirt_l"], "influences": { "maxInfluences": 6, "floor": "continuous" } }
 ```
 
+**A topwear hem over a rigid bottomwear (issue #650).** A distance lattice whose
+`topwear` provenance declares exactly two distinct segment bones receives a waist
+driver only when one is the explicit region binding of a `bottomwear` part and the
+other is its descendant in the declared bone graph. Part and bone spellings do not
+select this rule. More than one eligible bottomwear partner, or multiple topwear
+drivers of one bottomwear region, is `RIG_WAIST_PAIR`;
+without a qualifying pair every output keeps the ordinary path.
+
+Call the region bone H and the descendant C. The existing lattice art criterion is
+strictly alpha above 8, after any declared stray removal. The last such pixel row
+is the painted hem, rather than the padded image boundary. The lattice splits its
+original triangles at C's image-space origin row and the hem row, retaining the
+original diagonal partition and rebuilding
+the outline, triangles, UVs and bindings together. At and above C's row, distance
+weights stay unchanged. Below it, with `t = min(1, (y - C.y) / (hem - C.y))`, the
+uncut distance share `h` becomes `h + (1 - h) * t` for H and its complement for C;
+the declared cap and floor are then applied once. The whole last art pixel and the
+padding below it bind fully to H. `RIG_WAIST_HEIGHT` names a missing hem or a C
+origin not strictly above it; `RIG_WAIST_BINDING` names a missing member of the
+declared pair. Alternate drawings use their own art and posed C origin. Heat,
+contour, automatic, influence and meshes with other binding sets keep their rules.
+The original triangle's native setup position and UV field are interpolated at
+each new point. Bind coordinates are inverted through the runtime frame, written
+with the existing six decimal places, then stored by the runtime as float32;
+UVs retain the interpolated value and the runtime's existing page-float32 step.
+This is the nearest representable field under those storage rules, not a promise
+of exact mathematical setup coordinates or universally identical raster pixels.
+Setup RGBA equality must be measured on the actual input.
+
+Only the paired bottomwear region becomes a mesh. Its whole existing padded
+image is partitioned by the top's actual triangle arrangement. Inside that domain
+each bone receives the barycentric stored moments `w`, `w*x`, `w*y`, divided by
+the resulting positive weight to recover local coordinates; cap/floor is not
+applied again. Common vertices copy complete bindings. Outside the top domain,
+the supplied region rectangle's nodes retain H, and the arrangement connects the
+fields. The bottom's mesh report names the top driver's grid and measures the
+resulting geometry and art coverage. Alternate sets select their own paired
+field; a subset without a new bottom drawing receives a derived attachment on
+the existing bottom slot/image. A set hiding the top retains the rigid bottom.
+Explicit still pieces remain separate and retain their own binding.
+
+External numeric deforms on the changed top topology are expanded in the **old
+per-influence** index space, including sparse runs, odd `offset`, odd lengths,
+`fromVertex` and null setup keys. Per-bone delta moments are transferred by the
+same old-to-new barycentric correspondence. `RIG_WAIST_DEFORM_RUN` names an old
+run outside its array; `RIG_WAIST_DEFORM_SUPPORT` refuses a nonzero moment whose
+bone the new field no longer contains. Such a moment cannot be carried by another
+bone under arbitrary motion. `RIG_WAIST_DEFORM_REBIND` refuses nonzero numeric
+offsets after stops/turn changed those local binding frames without a proven
+correspondence. A whole-attachment transform is `RIG_WAIST_DEFORM_MODEL`: evaluating
+a nonlinear model at new nodes is not proven equivalent to its old piecewise
+field. `RIG_WAIST_DEFORM_REGION` refuses an authored timeline on the original
+bottom region, which had no mesh deform array. Refusals occur when external
+animations are merged, before the build gate or output. Other attachments,
+including unrelated face deforms, retain their existing path and are not refused.
+This changes the rig's response to motion; the consumer's motion and an owner's
+viewing of the result remain separate checks.
+
 **When to reach for it:** a part that folds where two chains meet, or at the end of a curl.
 The default does not move; a fold is today found by looking at a build that passes every
 bar, and this field is what there is to turn once one is seen.

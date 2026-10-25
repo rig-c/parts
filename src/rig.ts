@@ -169,8 +169,10 @@ import { type LocalInfluence, localInfluences } from './localweights.ts';
 import { edgeLength } from './length.ts';
 import { skeletonLimbJoints } from './limbs.ts';
 import { coalesceLimbSlots } from './limbslots.ts';
-import { artCoverage, ART_ALPHA, latticeCells, latticeMesh, latticeStray, ONE_LOOP_PASSES } from './mesh.ts';
+import { artCoverage, ART_ALPHA, latticeCells, latticeMesh, latticeStray, ONE_LOOP_PASSES, type LatticeMesh } from './mesh.ts';
+import { waistPairs, waistBand, waistInfluences } from './waist.ts';
 import { bindFaceSurfaceDeform, BLINK, blinkHoldMisses, blinkSpan, CONTROL_SUFFIX, controlledBones, IDLE_FPS, idleMotion, type MotionSpec, moveKeysToControls } from './motion.ts';
+import { preserveWaistRest, refineWaistMesh, remapWaistDeforms, storedWorld, waistBottomMesh, waistBottomLayoutOf, type WaistMapping } from './waistmesh.ts';
 import { type AlternateSetMap, PAINTING_RUN, type PartsFile, readFrom, tagOf } from './parts.ts';
 import { readTag } from './tags.ts';
 import { EYE_GROUP_TAGS } from './propose.ts';
@@ -1700,6 +1702,18 @@ export function buildRig(
   const outImages: Array<[string, Raster]> = [];
   const loopPasses: Record<string, number> = {};
   const autoMotion: AutoMotionCase[] = [];
+  const waistTargets = new Map<string, WaistMapping>();
+  const waistLayouts = new Map<string, { lm: LatticeMesh; origin: [number, number] }>();
+  const waistRegions = new Map<string, { region: RegionAttachment; origin: [number, number]; size: [number, number]; bones: RigBone[] }>();
+  const waistOld = (lm: LatticeMesh, file: string, w: number, h: number, ox: number, oy: number, segsAt: (y: number) => readonly Segment[], r: number, limits: InfluenceLimits, exponent: number, frames: ReadonlyMap<string, BoneTransform>): MeshAttachment => ({
+    type: 'mesh', image: file, width: w, height: h, triangles: lm.triangles, hull: lm.hull,
+    uvs: lm.vertices.flatMap(([x, y]) => [pyRound(x / w, 6), pyRound(y / h, 6)]),
+    weights: lm.vertices.map(([x, y]) => {
+      const shares = influences([x + ox, y + oy], segsAt(y + oy), r, limits, exponent);
+      const rounded = limits.floor === 'continuous' ? roundShares(shares) : latticeShares(shares);
+      return rounded.map(({ bone, weight }) => { const p = toBoneLocal(frames.get(bone) as BoneTransform, spineX(x + ox), spineY(y + oy)); return { bone, x: places(p[0]), y: places(p[1]), weight }; });
+    }),
+  });
   // A region's centre in its bone's setup frame; on a turned bone the image
   // is turned back by the bone's world rotation, so it is drawn upright.
   const region = (image: string, bone: string, cx: number, cy: number): RegionAttachment => {
@@ -1744,6 +1758,9 @@ export function buildRig(
     if (torso.length === 0) return () => segs;
     return (wy: number): Segment[] => (wy < hipBone.y ? torso : segs);
   };
+  const waist = waistPairs(parts.parts, cfg, meshSegments, B);
+  problems.push(...waist.problems);
+  refuseIfAny(problems);
   // A contour mesh (issue #84): `src/contour.ts` over the padded image, every refusal collected with the others;
   // the weights by `src/localweights.ts`; slot, uvs, bind positions and by-name weights written as the lattice's.
   // The config's region numbers are rig px; the part image's are rig px less (p.x − PAD, p.y − PAD) — a
@@ -2220,12 +2237,14 @@ export function buildRig(
         const cyLow = st.row + (p.h - r) / 2;
         const cyUp = p.y + r / 2;
         skin[p.name] = { [p.name]: region(file, bone.name, cx, cyLow) };
+        waistRegions.set(p.name, { region: skin[p.name][p.name] as RegionAttachment, origin: [p.x - PAD, st.row - PAD], size: [lower.width, lower.height], bones });
         skin[still] = { [still]: region(stillFile, sb.name, cx, cyUp) };
         slots.push({ name: p.name, bone: bone.name, attachment: p.name }, { name: still, bone: sb.name, attachment: still });
         continue;
       }
       const cy = p.y + p.h / 2;
       skin[p.name] = { [p.name]: region(file, bone.name, cx, cy) };
+      waistRegions.set(p.name, { region: skin[p.name][p.name] as RegionAttachment, origin: [p.x - PAD, p.y - PAD], size: [img.width, img.height], bones });
       slots.push({ name: p.name, bone: bone.name, attachment: p.name });
       continue;
     }
@@ -2260,14 +2279,18 @@ export function buildRig(
     // silhouette are built over; absent, `art` is `allArt` itself and nothing downstream moves.
     const stray = mesh.stray === undefined ? null : latticeStray(allArt, mesh.stray);
     const art = stray === null ? allArt : stray.art;
-    const lm = latticeMesh(p.name, art, mesh.grid, maxLoopPasses);
+    const ox = p.x - PAD;
+    const oy = p.y - PAD;
+    const pair = waist.pairs.get(p.name);
+    const band = pair === undefined ? null : waistBand(pair, art, (B.get(pair.upper) as Bone).y - oy);
+    if (band !== null && 'code' in band) { problems.push(band); continue; }
+    const originalLm = latticeMesh(p.name, art, mesh.grid, maxLoopPasses);
+    const lm = band === null || 'code' in originalLm ? originalLm : refineWaistMesh(originalLm, [band.anchor, band.hem]);
     if ('code' in lm) {
       problems.push(lm);
       continue;
     }
     loopPasses[p.name] = lm.passes;
-    const ox = p.x - PAD;
-    const oy = p.y - PAD;
     // issue #161: under rule "heat", the field over the lattice's art (alpha above 8) with its holes filled.
     // issue #303: an island no bone reaches is worded against the lattice's own `stray` when it is dust.
     const dust = (): HeatDust => {
@@ -2294,7 +2317,8 @@ export function buildRig(
       const wx = vx0 + ox;
       const wy = vy0 + oy;
       const vSegs = segsAt(wy);
-      const shares = heat === null ? influences([wx, wy], vSegs, mesh.r, limits, mesh.exponent ?? DISTANCE_EXPONENT) : heatInfluences(heat, [vx0, vy0], limits);
+      const shares = band !== null ? waistInfluences([wx, wy], vy0, band, vSegs, mesh.r, limits, mesh.exponent ?? DISTANCE_EXPONENT) : heat === null ? influences([wx, wy], vSegs, mesh.r, limits, mesh.exponent ?? DISTANCE_EXPONENT) : heatInfluences(heat, [vx0, vy0], limits);
+      if ('code' in shares) { problems.push(shares); continue; }
       if (shares.length === 0) {
         // issue #284: a declared cut that keeps no bone (nothingKeptProblem says when that can be).
         if (emptied === null) emptied = { vertex: vi, at: [wx, wy], capped: heat === null ? influences([wx, wy], vSegs, mesh.r, { maxInfluences: limits.maxInfluences, minWeight: 0 }, mesh.exponent ?? DISTANCE_EXPONENT) : heatInfluences(heat, [vx0, vy0], { maxInfluences: limits.maxInfluences, minWeight: 0 }) };
@@ -2307,6 +2331,7 @@ export function buildRig(
       problems.push(nothingKeptProblem(p.name, limits.floor, emptied, emptiedMore));
       continue;
     }
+    if (rawShares.length !== lm.vertices.length) continue; // named waist binding problems already collected
     const allChainLinks = new Set([...chains.values()].flat());
     const forkCounts = new Map<string, number>();
     for (const sp of mesh.segments) {
@@ -2315,7 +2340,7 @@ export function buildRig(
       const par = links !== undefined && links.length > 0 ? (B.get(links[0])?.parent ?? null) : null;
       if (par !== null && allChainLinks.has(par)) forkCounts.set(par, (forkCounts.get(par) ?? 0) + 1);
     }
-    const heldFork = heat === null && mesh.r >= mesh.grid && mesh.influences === undefined && [...forkCounts.values()].some((c) => c >= 2);
+    const heldFork = band === null && heat === null && mesh.r >= mesh.grid && mesh.influences === undefined && [...forkCounts.values()].some((c) => c >= 2);
     const finalShares = heldFork ? smoothForkShares(rawShares, lm.triangles) : rawShares;
     for (const [vi, [vx0, vy0]] of lm.vertices.entries()) {
       const wx = vx0 + ox;
@@ -2331,6 +2356,12 @@ export function buildRig(
     const uvs: number[] = [];
     for (const [x, y] of lm.vertices) uvs.push(pyRound(x / w, 6), pyRound(y / h, 6));
     skin[p.name] = { [p.name]: { type: 'mesh', image: file, width: w, height: h, uvs, triangles: lm.triangles, hull: lm.hull, weights } };
+    if (band !== null && !('code' in originalLm)) {
+      const att = skin[p.name][p.name] as MeshAttachment;
+      const old = waistOld(originalLm, file, w, h, ox, oy, segsAt, mesh.r, limits, mesh.exponent ?? DISTANCE_EXPONENT, world);
+      waistTargets.set(`default/${p.name}/${p.name}`, preserveWaistRest(old, originalLm, att, lm, storedWorld(bones), band.anchor));
+      waistLayouts.set(p.name, { lm, origin: [ox, oy] });
+    }
     slots.push({ name: p.name, bone: segs[0].bone, attachment: p.name });
     meshReport.push({
       part: p.name,
@@ -2432,13 +2463,15 @@ export function buildRig(
         if (mesh === undefined) {
           const bone = B.get(cfg.regions[p.name]) as Bone;
           skin[p.name][attName] = altRegion(file, bone.name, p.x + p.w / 2, p.y + p.h / 2);
+          waistRegions.set(attName, { region: skin[p.name][attName] as RegionAttachment, origin: [p.x - PAD, p.y - PAD], size: [img.width, img.height], bones: posedBones ?? bones });
           continue;
         }
         const fullSegs = meshSegments.get(p.name) as Segment[];
         const baseAtt = skin[p.name]?.[p.name];
         const baseBones = baseAtt !== undefined && 'type' in baseAtt ? new Set(baseAtt.weights.flatMap((v) => v.map((e) => e.bone))) : null;
         const filteredSegs = baseBones !== null && baseBones.size > 0 ? fullSegs.filter((s) => baseBones.has(s.bone)) : fullSegs;
-        let segs = filteredSegs.length > 0 ? filteredSegs : fullSegs;
+        let segs = waist.pairs.has(p.name) ? fullSegs : filteredSegs.length > 0 ? filteredSegs : fullSegs;
+        let waistSegs = segs;
         if (drawn !== undefined) {
           const movePt = (bone: string, pt0: Point): Point => {
             const m0 = world.get(bone) as BoneTransform;
@@ -2454,6 +2487,7 @@ export function buildRig(
             const skPair = skSegs?.get(s.bone);
             return skPair !== undefined ? { bone: s.bone, a: skPair[0], b: skPair[1] } : { bone: s.bone, a: movePt(s.bone, s.a), b: movePt(s.bone, s.b) };
           });
+          waistSegs = segs;
           const nonSkirt = segs.filter((s) => !hipChainLinks.has(s.bone));
           if (nonSkirt.length > 0) segs = nonSkirt;
           const yOverlapping = segs.filter((s) => Math.max(s.a[1], s.b[1]) >= p.y && Math.min(s.a[1], s.b[1]) <= p.y + p.h);
@@ -2465,20 +2499,26 @@ export function buildRig(
         const art = stray === null ? allArt : stray.art;
         const grid = 'grid' in mesh ? mesh.grid : 28;
         const r = 'r' in mesh ? mesh.r : 80;
-        const lm = latticeMesh(attName, art, grid, maxLoopPasses);
+        const ox = p.x - PAD;
+        const oy = p.y - PAD;
+        const pair = waist.pairs.get(p.name);
+        const band = pair === undefined ? null : waistBand(pair, art, cropToSpineY((altWorld.get(pair.upper) as BoneTransform).worldY, H) - oy);
+        if (band !== null && 'code' in band) { problems.push(band); continue; }
+        if (band !== null) segs = waistSegs;
+        const originalLm = latticeMesh(attName, art, grid, maxLoopPasses);
+        const lm = band === null || 'code' in originalLm ? originalLm : refineWaistMesh(originalLm, [band.anchor, band.hem]);
         if ('code' in lm) {
+          if (band !== null) { problems.push(lm); continue; }
           skin[p.name][attName] = altRegion(file, segs[0].bone, p.x + p.w / 2, p.y + p.h / 2);
           continue;
         }
-        const ox = p.x - PAD;
-        const oy = p.y - PAD;
         const w = img.width;
         const h = img.height;
         const limits: InfluenceLimits = meshLimits('influences' in mesh ? mesh.influences : undefined);
         const segsAt = dressSegsAt(p, segs);
         const exponent = ('exponent' in mesh ? mesh.exponent : undefined) ?? DISTANCE_EXPONENT;
         let touchesArt: boolean[] | null = null;
-        if (drawn !== undefined && limits.maxInfluences === 1) {
+        if (band === null && drawn !== undefined && limits.maxInfluences === 1) {
           const lc = latticeCells(art, grid);
           touchesArt = lm.vertices.map(([vx0, vy0]) => {
             const ii = Math.round(vx0 / grid);
@@ -2498,12 +2538,14 @@ export function buildRig(
           const wx = vx0 + ox;
           const wy = vy0 + oy;
           const vSegs = segsAt(wy);
-          let shares = influences([wx, wy], vSegs, r, limits, exponent);
-          if (shares.length === 0) {
+          let shares = band === null ? influences([wx, wy], vSegs, r, limits, exponent) : waistInfluences([wx, wy], vy0, band, vSegs, r, limits, exponent);
+          if ('code' in shares) { problems.push(shares); continue; }
+          if (band === null && shares.length === 0) {
             shares = influences([wx, wy], vSegs, Infinity, { maxInfluences: 1, minWeight: 0 }, exponent);
           }
           rawShares.push(limits.floor === 'continuous' ? roundShares(shares) : latticeShares(shares));
         }
+        if (rawShares.length !== lm.vertices.length) continue;
         if (touchesArt !== null) {
           let firstArtBone: string | null = null;
           for (let vi = 0; vi < lm.vertices.length; vi++) {
@@ -2531,6 +2573,12 @@ export function buildRig(
         const uvs: number[] = [];
         for (const [x, y] of lm.vertices) uvs.push(pyRound(x / w, 6), pyRound(y / h, 6));
         skin[p.name][attName] = { type: 'mesh', image: file, width: w, height: h, uvs, triangles: lm.triangles, hull: lm.hull, weights };
+        if (band !== null && !('code' in originalLm)) {
+          const att = skin[p.name][attName] as MeshAttachment;
+          const old = waistOld(originalLm, file, w, h, ox, oy, segsAt, r, limits, exponent, altWorld);
+          waistTargets.set(`default/${p.name}/${attName}`, preserveWaistRest(old, originalLm, att, lm, storedWorld(posedBones ?? bones), band.anchor));
+          waistLayouts.set(attName, { lm, origin: [ox, oy] });
+        }
       }
       const slotMap: Record<string, string> = {};
       for (const [slotName, att] of Object.entries(alt.slots)) slotMap[slotName] = att;
@@ -2559,6 +2607,42 @@ export function buildRig(
       sets: setEntries,
     };
   }
+  refuseIfAny(problems);
+  // The bottom follows the explicitly selected top attachment, including subset/alternate sets.
+  // Derived attachment names are local to the existing slot/set contract, never a new config field.
+  const waistRegionTargets = new Set<string>();
+  const freeAttachment = (slot: string, prefix: string): string => { let n = prefix; while (skin[slot][n] !== undefined) n += '_'; return n; };
+  for (const pair of waist.pairs.values()) {
+    const convert = (topName: string, bottomName: string, destination: string): void => {
+      const layout = waistLayouts.get(topName), source = waistRegions.get(bottomName);
+      if (layout === undefined || source === undefined) { fail('RIG_WAIST_SET_BINDING', `pair "${pair.top}"/"${pair.bottom}"`, `attachments "${topName}"/"${bottomName}" do not carry their declared mesh/region source geometry`); return; }
+      const top = skin[pair.top][topName] as MeshAttachment;
+      const bottom = waistBottomMesh(top, layout.lm, layout.origin, source.region, source.origin, source.size, pair.lower, source.bones);
+      skin[pair.bottom][destination] = bottom;
+      if (destination === pair.bottom) {
+        const driver = cfg.meshes[pair.top];
+        const image = outImages.find(([name])=> name === bottom.image)?.[1];
+        const shape = waistBottomLayoutOf(bottom);
+        if (driver !== undefined && 'grid' in driver && image !== undefined && shape !== undefined) meshReport.push({ part:pair.bottom,vertices:bottom.weights.length,triangles:bottom.triangles.length/3,hull:bottom.hull,bones:[...new Set(bottom.weights.flatMap((ws)=>ws.map((w)=>w.bone)))].sort(),max_influences:Math.max(...bottom.weights.map((ws)=>ws.length)),mean_influences:pyRound(bottom.weights.reduce((n,ws)=>n+ws.length,0)/bottom.weights.length,2),art_coverage:pyRound(artCoverage(shape,alphaAbove(image,ART_ALPHA)),5),grid:driver.grid });
+      }
+      waistRegionTargets.add(`default/${pair.bottom}/${destination}`);
+    };
+    convert(pair.top, pair.bottom, pair.bottom);
+    for (const [setName, entry] of Object.entries(sets?.sets ?? {})) {
+      const topName = entry.slots[pair.top] ?? pair.top, bottomName = entry.slots[pair.bottom] ?? pair.bottom;
+      if (entry.hides?.includes(pair.bottom)) continue;
+      if (entry.hides?.includes(pair.top)) {
+        const source = waistRegions.get(bottomName);
+        if (source !== undefined) { const name = freeAttachment(pair.bottom, `${setName}_${pair.bottom}_rigid`); skin[pair.bottom][name] = source.region; entry.slots[pair.bottom] = name; }
+        continue;
+      }
+      if (topName === pair.top && bottomName === pair.bottom) continue;
+      const destination = bottomName === pair.bottom ? freeAttachment(pair.bottom, `${setName}_${pair.bottom}_waist`) : bottomName;
+      convert(topName, bottomName, destination); entry.slots[pair.bottom] = destination;
+    }
+  }
+  refuseIfAny(problems);
+  const waistBindingsBeforeRebind = new Map([...waistTargets].map(([name, map]) => [name, JSON.stringify(map.current.weights)]));
   const hasAlternateFaceSet = sets !== undefined && Object.values(sets.sets).some((e) => Object.hasOwn(e.slots, 'face'));
   // Read every base/alternate binding before rebinds; publish only the slot
   // permutation below, after stops/turn have used the original enumeration.
@@ -2605,6 +2689,7 @@ export function buildRig(
   const partAreas: Record<string, number> = {};
   for (const p of parts.parts) partAreas[p.name] = p.opaque_px;
   bindFaceSurfaceDeform(motion, (merged) => {
+    remapWaistDeforms(merged, waistTargets, waistRegionTargets, waistBindingsBeforeRebind);
     expandSetAttachmentKeys(rig, sets, merged);
     applyFaceSurfaceDeform(rig, merged, {
       imageWidth: faceImg?.width,

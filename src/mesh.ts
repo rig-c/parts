@@ -336,6 +336,12 @@ export function artCoverage(mesh: Pick<LatticeMesh, 'vertices' | 'triangles'>, a
  * still not one closed outline after the passes is refused rather than handed on.
  */
 export function latticeMesh(part: string, art: Mask, grid: number, maxPasses: number = ONE_LOOP_PASSES): LatticeMesh | Problem {
+  return latticeMeshRows(part, art, grid, [], maxPasses);
+}
+
+/** Refine the original kept cells at supplied image rows; no new mask/bridge decision or omitted cell. */
+export function latticeMeshRows(part: string, art: Mask, grid: number, rows: readonly number[], maxPasses: number = ONE_LOOP_PASSES): LatticeMesh | Problem {
+  if (rows.some((y) => !Number.isFinite(y))) return { code: 'RIG_LATTICE_STATION', object: `mesh "${part}"`, detail: `station rows [${rows.join(', ')}] include a non-finite coordinate; supplied finite image rows are required` };
   const lattice = latticeCells(art, grid);
   let any = false;
   for (let i = 0; i < lattice.cells.data.length && !any; i++) any = lattice.cells.data[i] !== 0;
@@ -347,7 +353,20 @@ export function latticeMesh(part: string, art: Mask, grid: number, maxPasses: nu
     };
   }
   const loop = oneLoop(lattice.cells, maxPasses);
-  const mesh = triangulate(lattice, loop.cells, loop.passes);
+  let refined = lattice;
+  let kept = loop.cells;
+  const extra = rows.filter((y) => y > 0 && y < art.height && !lattice.ys.includes(y));
+  if (extra.length > 0) {
+    const ys = [...new Set([...lattice.ys, ...extra])].sort((a, b) => a - b);
+    kept = newMask(lattice.nx, ys.length - 1);
+    let originalRow = 0;
+    for (let j = 0; j < ys.length - 1; j++) {
+      while (originalRow + 1 < lattice.ny && ys[j] >= lattice.ys[originalRow + 1]) originalRow++;
+      kept.data.set(loop.cells.data.subarray(originalRow * lattice.nx, (originalRow + 1) * lattice.nx), j * lattice.nx);
+    }
+    refined = { ...lattice, ys, ny: ys.length - 1, cells: kept };
+  }
+  const mesh = triangulate(refined, kept, loop.passes);
   if (mesh.loops !== 1 || mesh.pinchedVertices !== 0) {
     return {
       code: 'RIG_LATTICE_ONE_LOOP',
