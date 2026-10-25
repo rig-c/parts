@@ -62,7 +62,8 @@ jobs:
         run: bun run fetch-examples
 
       # Its units run in worker processes, as many at once as the runner has
-      # cores; the step is red when a unit wrote no result or failed, and the
+      # cores, capped at two by default for one 6 GiB slot; the step is red
+      # when a unit wrote no result, failed, or exceeded the family RSS budget. The
       # record is uploaded either way, so the merge can name what went wrong.
       - name: Run this shard's units
         run: bun selftest.ts --shard ${{ matrix.shard }} --record shards/shard-${{ matrix.shard }}.json

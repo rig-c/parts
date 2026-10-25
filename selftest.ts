@@ -67,7 +67,7 @@ import { runCorePointerChecks } from './tools/check_corepointer.ts';
  *
  * Each suite runs in a worker process of its own — this file again, under
  * `--suite-worker <key>` — several at a time (`RIG_PARTS_SELFTEST_JOBS`, or
- * the machine's available parallelism). The parent prints what each worker
+ * at most two workers by default for a 6 GiB slot). The parent prints what each worker
  * printed, in the suites' own order and one suite after another, through the
  * same `RunTally.of` as before, so the case lines and the counts are what a
  * sequential run prints. A worker that cannot account for its suite is that
@@ -39719,7 +39719,7 @@ function staleFormerNameLines(files: ReadonlyArray<readonly [string, string]>): 
 // the tally's own controls
 // ---------------------------------------------------------------------------
 
-function runTallySuite(live: RunTally): number {
+function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | null = null): number {
   section('run-tally: the floor, planted');
   // What the run had printed when this suite began: this suite's own cases are
   // not in a block until it returns, so the live check reads the run up to here.
@@ -40184,6 +40184,45 @@ function runTallySuite(live: RunTally): number {
       `flags: no value -> ${Array.isArray(flagNoVal) ? flagNoVal.join(', ') : 'ACCEPTED'}, empty -> ${Array.isArray(flagEmptyVal) ? flagEmptyVal.join(', ') : 'ACCEPTED'}, twice -> ${Array.isArray(flagTwice) ? flagTwice.join(', ') : 'ACCEPTED'}, with --shard -> ${shardSummaryRefusal.length === 0 ? 'exit 2, named, no section opened' : shardSummaryRefusal.join(', ')}`,
     'issue #725: a gate nobody has seen fail is not a gate — planted per-suite count drift, total/failure drift, dropped HOLEs, a forged BLINK_NO_HOLE entry, a partial run claiming exit 0/partial=false, and invalid --summary-json flags are each refused by name',
   );
+  const peakLine = (bytes: number): string => `selftest peak (stderr, never tallied): self_max_rss_kib=1; family_rss_bytes=${bytes}; interval_ms=200; samples=2; unreadable_proc_entries=0; method=linux-proc-status-summed-rss`;
+  const unavailablePeak = 'selftest peak (stderr, never tallied): self_max_rss_kib=1; family RSS unavailable; Linux /proc is required';
+  say('RT18_THE_FAMILY_PEAK_BOUNDARY_IS_INCLUSIVE_AND_UNAVAILABLE_IS_NEVER_PASS',
+    selftestPeakVerdict([peakLine(SELFTEST_FAMILY_LIMIT_BYTES)]).status === 'pass' &&
+      selftestPeakVerdict([peakLine(SELFTEST_FAMILY_LIMIT_BYTES + 1)]).status === 'fail' &&
+      selftestPeakVerdict([unavailablePeak]).status === 'skip' &&
+      selftestPeakVerdict([]).status === 'skip' &&
+      selftestPeakVerdict(['family_rss_bytes=1']).status === 'fail' &&
+      selftestPeakVerdict([unavailablePeak, peakLine(SELFTEST_FAMILY_LIMIT_BYTES + 1)]).status === 'fail' &&
+      defaultSelftestWorkers(1) === 1 && defaultSelftestWorkers(20) === 2,
+    '6 GiB equality PASS; +1 B FAIL; missing /proc SKIP; malformed FAIL; one over-limit shard stays red even beside an unavailable shard; default min(cores,2)',
+    'issue #762: the run reads its family receipt, including every shard, rather than treating parent-only RSS or an unavailable measurement as green');
+
+  if (process.platform !== 'linux' || !existsSync('/proc/self/stat')) {
+    console.log('  SKIP  RT19_A_TOUCHED_CHILD_MAKES_THE_FIXTURE_PEAK_VERDICT_RED: Linux /proc is required');
+  } else {
+    // Fixture-only ceiling: this tests the production verdict path, not the machine's 6 GiB limit.
+    const fixtureCeiling = 64 * 1024 ** 2;
+    const fixtureAllocation = 128 * 1024 ** 2;
+    // An isolated small sampler avoids this large file's own resident code dominating the fixture.
+    const fixture = `import {existsSync,readFileSync,readdirSync} from 'node:fs';\n` +
+      `import {spawn} from 'node:child_process';\n` +
+      selftestFamilyRss.toString() + '\n' + selftestPeakFinish.toString() + '\n' + startSelftestPeak.toString() + '\n' +
+      `const healthy=startSelftestPeak(); await new Promise(r=>setTimeout(r,450)); healthy();\n` +
+      `const planted=startSelftestPeak(); const child=spawn(process.execPath,['-e',${JSON.stringify(`const held=new Uint8Array(${fixtureAllocation}); held.fill(7); console.log('TOUCHED_128_MIB'); setTimeout(()=>console.log(held[0]+held[held.length-1]),650);`)}],{stdio:['ignore','pipe','inherit']});\n` +
+      `let touched=''; child.stdout.on('data',b=>touched+=b); const code=await new Promise(r=>child.on('close',r)); planted(); if(code!==0||!touched.includes('TOUCHED_128_MIB'))process.exit(1);\n`;
+    const plantedRun = spawnSync(process.execPath, ['-e', fixture], { encoding: 'utf8', timeout: 15000 });
+    const receipts = plantedRun.stderr.split('\n').filter((line) => line.startsWith('selftest peak (stderr, never tallied):'));
+    const healthyVerdict = selftestPeakVerdict(receipts.slice(0, 1), fixtureCeiling);
+    const plantedVerdict = selftestPeakVerdict(receipts.slice(1), fixtureCeiling);
+    say('RT19_A_TOUCHED_CHILD_MAKES_THE_FIXTURE_PEAK_VERDICT_RED',
+      plantedRun.status === 0 && receipts.length === 2 && healthyVerdict.status === 'pass' && plantedVerdict.status === 'fail',
+      `fixture-only ceiling ${fixtureCeiling} B, touched child ${fixtureAllocation} B held 650 ms; healthy: ${healthyVerdict.status} ${healthyVerdict.detail}; plant: ${plantedVerdict.status} ${plantedVerdict.detail}; child exit ${plantedRun.status}`,
+      'same sampler, emitted peak-line reader and verdict as the real run; a real child allocation crosses a fixture-only ceiling without consuming the 6 GiB slot; this is not a >6 GiB allocation test');
+  }
+  const verdict = selftestPeakVerdict(peakLines?.() ?? []);
+  if (verdict.status === 'skip') console.log(`  SKIP  RT20_THE_RUNS_OWN_FAMILY_PEAK_FITS_ITS_SIX_GIB_SLOT: ${verdict.detail}`);
+  else say('RT20_THE_RUNS_OWN_FAMILY_PEAK_FITS_ITS_SIX_GIB_SLOT', verdict.status === 'pass', verdict.detail,
+    'the sampled family peak belongs to this run or every recorded shard; above 6 GiB is red; no Linux /proc measurement is SKIP, never PASS');
   return bad();
 }
 
@@ -50599,17 +50638,18 @@ function selftestFamilyRss(rows: readonly SelftestRssRow[], known: Map<number, s
  * The own-process kernel high-water mark and the sampled descendants answer different questions.
  * https://nodejs.org/api/process.html#processresourceusage
  */
-function selftestPeakFinish(familyText: () => string, write: (text: string) => void = (text) => { process.stderr.write(text); }): () => void {
-  let finished = false;
-  return (): void => {
-    if (finished) return;
-    finished = true;
+function selftestPeakFinish(familyText: () => string, write: (text: string) => void = (text) => { process.stderr.write(text); }): () => string {
+  let line: string | null = null;
+  return (): string => {
+    if (line !== null) return line;
     let own = 'self_max_rss_kib=unavailable';
     try { own = 'self_max_rss_kib=' + process.resourceUsage().maxRSS; } catch { /* not supported by every runtime */ }
-    write('selftest peak (stderr, never tallied): ' + own + '; ' + familyText() + '\n');
+    line = 'selftest peak (stderr, never tallied): ' + own + '; ' + familyText() + '\n';
+    write(line);
+    return line;
   };
 }
-function startSelftestPeak(): () => void {
+function startSelftestPeak(): () => string {
   if (process.platform !== 'linux' || !existsSync('/proc/self/stat')) {
     return selftestPeakFinish(() => 'family RSS unavailable; Linux /proc is required');
   }
@@ -50646,6 +50686,36 @@ function startSelftestPeak(): () => void {
     return 'family_rss_bytes=' + peak + '; interval_ms=200; samples=' + samples + '; unreadable_proc_entries=' + unreadable + '; method=linux-proc-status-summed-rss';
   });
 }
+
+/** The selftest family's slot budget; this does not change check's raster-union budget. */
+const SELFTEST_FAMILY_LIMIT_BYTES = 6 * 1024 ** 3;
+
+interface SelftestPeakVerdict { status: 'pass' | 'fail' | 'skip'; detail: string }
+
+/** Read the emitted receipt, never substitute the parent's maxRSS for its descendants. */
+function selftestPeakVerdict(lines: readonly string[], ceiling = SELFTEST_FAMILY_LIMIT_BYTES): SelftestPeakVerdict {
+  if (lines.length === 0) return { status: 'skip', detail: 'no family peak receipt; Linux /proc measurement is unavailable' };
+  const missing: string[] = [];
+  const peaks: number[] = [];
+  for (const [i, text] of lines.entries()) {
+    const line = text.trim();
+    if (/^selftest peak \(stderr, never tallied\): self_max_rss_kib=(?:\d+|unavailable); family RSS unavailable(?:; Linux \/proc is required)?$/.test(line)) {
+      missing.push(`receipt ${i + 1}: Linux /proc family RSS unavailable`);
+      continue;
+    }
+    const m = /^selftest peak \(stderr, never tallied\): self_max_rss_kib=(?:\d+|unavailable); family_rss_bytes=(\d+); interval_ms=200; samples=([1-9]\d*); unreadable_proc_entries=\d+; method=linux-proc-status-summed-rss$/.exec(line);
+    if (m === null || !Number.isSafeInteger(Number(m[1])) || Number(m[1]) <= 0) return { status: 'fail', detail: `receipt ${i + 1}: malformed or empty family peak line` };
+    peaks.push(Number(m[1]));
+  }
+  const peak = Math.max(0, ...peaks);
+  // An unavailable shard cannot conceal a measured failure from another shard.
+  if (peak > ceiling) return { status: 'fail', detail: `family_rss_bytes=${peak} exceeds ceiling_bytes=${ceiling}` };
+  if (missing.length > 0) return { status: 'skip', detail: missing.join('; ') };
+  return { status: 'pass', detail: `family_rss_bytes=${peak} <= ceiling_bytes=${ceiling}; ${peaks.length} measured receipt(s)` };
+}
+
+/** The measured operating point for one 6 GiB slot, bounded by the cores actually available. */
+function defaultSelftestWorkers(cores: number): number { return Math.min(cores, 2); }
 
 const WORKER_FLAG = '--suite-worker';
 
@@ -50719,7 +50789,7 @@ const quietSay = (): void => {};
 /**
  * The environment variables renamed with the package: each pair is the name
  * read first and the former name it falls back to. `jobs` sets how many workers
- * run at once (the machine's available parallelism when neither is set);
+ * run at once (min(available cores, 2) when neither is set);
  * `corpus` names the extra suite's corpus when `--corpus` does not.
  */
 const ENV_TWINS = {
@@ -50833,10 +50903,10 @@ function workerMain(argv: readonly string[]): void {
   writeFileSync(result, JSON.stringify(record));
 }
 
-/** How many workers run at once: `ENV_TWINS.jobs` when set, a positive whole number or the run exits 2; else the machine's available parallelism. */
+/** How many workers run at once: `ENV_TWINS.jobs` when set, a positive whole number or the run exits 2; else min(available cores, 2) for a 6 GiB slot. */
 function workerCount(): number {
   const set = envTwin(process.env, ENV_TWINS.jobs);
-  if (set === null) return availableParallelism();
+  if (set === null) return defaultSelftestWorkers(availableParallelism());
   if (!/^[1-9]\d*$/.test(set.value)) {
     console.error(`selftest: ${set.name} is ${JSON.stringify(set.value)}; a positive whole number of workers is required`);
     process.exit(2);
@@ -50926,6 +50996,7 @@ interface ShardRecord {
   shard: string;
   jobs: number;
   cores: number;
+  peakLine?: string;
   units: RecordedUnit[];
 }
 
@@ -50943,6 +51014,7 @@ function parseShardRecord(text: string): ShardRecord | string {
   const r = raw as Partial<ShardRecord>;
   if (r.spec !== SHARD_RECORD_SPEC) return `spec ${JSON.stringify(r.spec ?? null)}; "${SHARD_RECORD_SPEC}" is required`;
   if (typeof r.shard !== 'string' || typeof r.jobs !== 'number' || typeof r.cores !== 'number' || !Array.isArray(r.units)) return 'shard, jobs, cores or units is absent or of the wrong type';
+  if (r.peakLine !== undefined && typeof r.peakLine !== 'string') return 'peakLine is not a string';
   for (const u of r.units as unknown[]) {
     const x = (typeof u === 'object' && u !== null ? u : {}) as Partial<RecordedUnit>;
     const ok =
@@ -51452,6 +51524,7 @@ async function reportRun(
   cleanup: () => void,
   only: ReadonlySet<string> | null = null,
   summaryJson: string | null = null,
+  shardPeakLines: readonly string[] | null = null,
 ): Promise<void> {
   const tally = new RunTally();
   const printLine = console.log;
@@ -51490,7 +51563,7 @@ async function reportRun(
   printErr(clockText());
   if (only !== null && !only.has(TALLY_SUITE)) skip(TALLY_SUITE, ONLY_FLAG);
   else if (only !== null && !tally.blocks.some((b) => b.controls > 0)) skip(TALLY_SUITE, `it measures the run it is part of, and no suite before it printed a case; name one beside it in ${ONLY_FLAG}`);
-  else tally.of(TALLY_SUITE, () => runTallySuite(tally));
+  else tally.of(TALLY_SUITE, () => runTallySuite(tally, () => shardPeakLines ?? [finishSelftestPeak?.() ?? '']));
   console.log = printLine;
 
   console.log('');
@@ -51561,13 +51634,17 @@ async function shardMain(shard: string, record: string): Promise<void> {
   for (const u of ordered) process.stdout.write(u.stdout);
   process.stderr.write(workerClockText(mine, clock, jobs, performance.now() - t0));
   mkdirSync(dirname(record), { recursive: true });
-  const text: ShardRecord = { spec: SHARD_RECORD_SPEC, shard, jobs, cores: availableParallelism(), units: done };
+  const peakLine = finishSelftestPeak?.() ?? '';
+  const peakVerdict = selftestPeakVerdict([peakLine]);
+  const text: ShardRecord = { spec: SHARD_RECORD_SPEC, shard, jobs, cores: availableParallelism(), peakLine, units: done };
   writeFileSync(record, `${JSON.stringify(text)}\n`);
   const red = done.filter((u) => {
     if (u.status !== 0 || u.result === null) return true;
     const r = JSON.parse(u.result) as { returned?: unknown; crash?: unknown };
     return typeof r.crash === 'string' || (typeof r.returned === 'number' && r.returned > 0);
   });
+  if (peakVerdict.status !== 'pass') console.error(`rig-parts selftest: shard ${shard} family peak ${peakVerdict.status.toUpperCase()}: ${peakVerdict.detail}`);
+  if (peakVerdict.status === 'fail') process.exit(1);
   if (red.length > 0) {
     console.error(`rig-parts selftest: shard ${shard}: ${red.map((u) => u.key).join(', ')} did not run green; the merge names what failed`);
     process.exit(1);
@@ -51614,7 +51691,7 @@ async function mergeMain(
     }
     return `${lines.join('\n')}\n`;
   };
-  await reportRun(keys, (key) => suiteUnits(key, examples), async (unit) => byUnit.get(unit)?.run, clockText, () => {}, null, summaryJson);
+  await reportRun(keys, (key) => suiteUnits(key, examples), async (unit) => byUnit.get(unit)?.run, clockText, () => {}, null, summaryJson, records.map((r) => r.peakLine ?? 'selftest peak (stderr, never tallied): self_max_rss_kib=unavailable; family RSS unavailable'));
 }
 
 async function main(): Promise<void> {
