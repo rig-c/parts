@@ -506,6 +506,7 @@ import {
   verdict as featureVerdict,
   type WeightedMesh,
 } from './tools/feature_contour_survey.ts';
+import { refreshControls } from './tools/feature_contour_refresh.ts';
 import { affineFit, boneHeat, capFloor, columnsOf, footprintRegion, HEAT as WX_HEAT, heatAt, heaviestOf, l1, lidReading, localOffset, nearestRank as wxNearestRank, skinPoint } from './tools/weight_rule_survey.ts';
 import { exampleTotals, figuresOf, gridFrame, policyEcho, TrialLedger, trialPolicy } from './tools/production_trial.ts';
 import { assertUnchanged, crumbsLeft, lossOf, lossTotal, maskMd5, strayCleared } from './tools/production_trial_stray.ts';
@@ -45348,6 +45349,10 @@ function runAutoMeshSuite(): number {
     `blink holes ${JSON.stringify(holesFc06)}; filled ${JSON.stringify(filledFc06)}; rule at 19/25/22 ${blinkShare([30, 19])}/${blinkShare([30, 25])}/${blinkShare([30, 22])}; envelope ${JSON.stringify(envFc06)}; on ring ${JSON.stringify(onFc06)}, planted off by 1/128 ${JSON.stringify(offFc06)}; ring edges ${JSON.stringify(edgesFc06)}`,
     'the fixture the evidence page reads is the one its text states: the hole, the rule that closes it, and an envelope that bounds exactly the lid\'s travel; the ring instruments, which say how much of a feature line a triangulation holds, are held to a hand case',
   );
+
+  for (const [i, control] of refreshControls().entries()) {
+    say(`FC07_${i + 1}_FEATURE_REFRESH_CONTROL`, control.pass, control.name, 'issue #160 refresh: analytical normal, defect and edge controls precede the measurement');
+  }
 
   // ---------------------------------------------------------------------------
   // Issue #165 Stage A: tools/auto_envelope_survey.ts's instruments (EV01-EV06), each on a hand-built input.
