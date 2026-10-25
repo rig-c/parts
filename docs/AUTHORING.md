@@ -282,8 +282,14 @@ costs nothing a bar reads (`demo`, tips 371 px apart: 1.050 for the pair, as for
 alone), and on one mass with the two chains close it squeezes the lattice between them
 (issue #314: tips 39 px apart, an edge at 0.065 of its rest length). Whether the hair is one
 mass is not something the proposer can read off the opaque shape — both chains always hang
-on the one `back hair` part — so the draft is unchanged and the squeeze is measured instead,
-by the lint above.
+on the one `back hair` part — but their lattice and motion are readable. A fresh draft now
+uses the squeeze reading above (issue #751): when an opposed pair fails and reversing the
+second chain's signs passes the unchanged bar, it drafts that passing sign and adds a
+`shared-mesh chain signs` note with both figures and the reason. Magnitudes and timing
+stay unchanged. Every shared pair is re-read; an alternative introducing a new or worse
+finding is not adopted. When no measured alternative passes, the draft and LINT remain.
+Already-clean and unread pairs are unchanged. `propose --from-config` only observes the
+supplied config: it still prints the original LINT and never rewrites its amplitudes.
 
 **A posed figure: `propose --keypoints`.** Without joints the proposer reads the
 torso by screen y: the hip 0.14 face heights below `bottomwear`'s top edge (or below
