@@ -2774,6 +2774,35 @@ export function buildRig(
   // from the drawn link `<link>_d` above it, and slots and weights on a stopped link bind `<link>_d`.
   const rebound = frontSlots.length === 0 ? slots : [...slots, ...frontSlots];
   const stops = cfg.stops === undefined ? null : applyStops(cfg.stops, chains, bones, rebound, skin, (original, emitted) => layoutAlias(explicitLayout.plan, original, emitted));
+  for (const [part, mesh] of Object.entries(cfg.meshes)) if ('explicit' in mesh) {
+    const defaultBone = typeof mesh.segments[0] === 'string' ? mesh.segments[0] : mesh.segments[0][0];
+    if (mesh.explicit.islands !== undefined) {
+      mesh.explicit.islands.forEach((isl, i) => {
+        const att = skin[isl.slot]?.[isl.slot];
+        const slotEntry = slots.find((s) => s.name === isl.slot);
+        const expectedBone = isl.bone ?? defaultBone;
+        const weightsChanged =
+          att !== undefined &&
+          'type' in att &&
+          JSON.stringify(att.weights) !== JSON.stringify(isl.weights.map(row => row.map(w => ({ bone: w.bone, x: w.x, y: w.y, weight: w.weight }))));
+        const boneChanged = slotEntry !== undefined && slotEntry.bone !== expectedBone;
+        if (weightsChanged || boneChanged) {
+          fail('RIG_EXPLICIT_BINDING', `config.meshes.${part}.explicit.islands[${i}].weights`, 'the declared stops would change these accepted bindings; supply the accepted final emitted bone names and bind coordinates, or use a generated mesh; no payload is normalized');
+        }
+      });
+      continue;
+    }
+    const att = skin[part]?.[part];
+    const slotEntry = slots.find((s) => s.name === part);
+    const weightsChanged =
+      att !== undefined &&
+      'type' in att &&
+      JSON.stringify(att.weights) !== JSON.stringify((mesh.explicit.weights ?? []).map(row => row.map(w => ({ bone: w.bone, x: w.x, y: w.y, weight: w.weight }))));
+    const boneChanged = slotEntry !== undefined && slotEntry.bone !== defaultBone;
+    if (weightsChanged || boneChanged) {
+      fail('RIG_EXPLICIT_BINDING', `config.meshes.${part}.explicit.weights`, 'the declared stops would change these accepted bindings; supply the accepted final emitted bone names and bind coordinates, or use a generated mesh; no payload is normalized');
+    }
+  }
   // ---- the turn control (issue #251) -------------------------------------
   // Only when the config has `turn`: every other build adds nothing here, so no byte moves.
   if (cfg.turn !== undefined) refuseIfAny(turnRiderProblems(cfg.turn, cfg, parts.parts));
@@ -2794,30 +2823,6 @@ export function buildRig(
     }
     const att = skin[row.part]?.[row.part];
     if (att !== undefined && 'type' in att) row.bones = meshBoundBones(att);
-  }
-
-  for (const [part, mesh] of Object.entries(cfg.meshes)) if ('explicit' in mesh) {
-    const defaultBone = typeof mesh.segments[0] === 'string' ? mesh.segments[0] : mesh.segments[0][0];
-    if (mesh.explicit.islands !== undefined) {
-      mesh.explicit.islands.forEach((isl, i) => {
-        const att = skin[isl.slot]?.[isl.slot];
-        const slotEntry = slots.find((s) => s.name === isl.slot);
-        const expectedBone = isl.bone ?? defaultBone;
-        const weightsChanged =
-          att !== undefined &&
-          'type' in att &&
-          JSON.stringify(att.weights) !== JSON.stringify(isl.weights.map(row => row.map(w => ({ bone: w.bone, x: w.x, y: w.y, weight: w.weight }))));
-        const boneChanged = slotEntry !== undefined && slotEntry.bone !== expectedBone;
-        if (weightsChanged || boneChanged) {
-          fail('RIG_EXPLICIT_BINDING', `config.meshes.${part}.explicit.islands[${i}].weights`, 'the declared stops or turn would change these accepted bindings; supply the accepted final emitted bone names and bind coordinates, or use a generated mesh; no payload is normalized');
-        }
-      });
-      continue;
-    }
-    const att = skin[part]?.[part];
-    if (att !== undefined && 'type' in att && JSON.stringify(att.weights) !== JSON.stringify((mesh.explicit.weights ?? []).map(row => row.map(w => ({ bone: w.bone, x: w.x, y: w.y, weight: w.weight }))))) {
-      fail('RIG_EXPLICIT_BINDING', `config.meshes.${part}.explicit.weights`, 'the declared stops or turn would change these accepted bindings; supply the accepted final emitted bone names and bind coordinates, or use a generated mesh; no payload is normalized');
-    }
   }
   refuseIfAny(problems);
   const name = `${cfg.key}_painting`;
