@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.67.0](https://github.com/rig-c/parts/compare/v1.66.0...v1.67.0) (2026-10-25)
+
+
+### Features
+
+* declare torso-sleeve motion seams and report posed WARN joints ([#770](https://github.com/rig-c/parts/issues/770)) ([b1f428a](https://github.com/rig-c/parts/commit/b1f428ade5efb83c3dd9ff8bf2d0df4628aab79a)), closes [#750](https://github.com/rig-c/parts/issues/750)
+
+
+### Bug Fixes
+
+* **docs:** state the cloth recipe's count units and point mesh-stats at the per-region report ([#769](https://github.com/rig-c/parts/issues/769)) ([#772](https://github.com/rig-c/parts/issues/772)) ([9e0ff71](https://github.com/rig-c/parts/commit/9e0ff7177f43447469bcf0fd37e7127ac3cda731))
+
 ## [1.66.0](https://github.com/rig-c/parts/compare/v1.65.0...v1.66.0) (2026-10-25)
 
 
