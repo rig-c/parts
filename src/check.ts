@@ -7168,6 +7168,7 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
       const carry = breathCarrier(inp.rig, inp.motion, p.name, geometryPath, frames, { art, box: p, stage: inp.stage, shown, toward: rises ? 'up' : 'down', root: t.root, tip: t.tip });
       if (carry !== null) rows[rows.length - 1] = { ...rows[rows.length - 1], carried_by: carry.bone, breath_rig_px: round3(carry.breath), root_without_breath_rig_px: round3(carry.root), tip_without_breath_rig_px: round3(carry.tip) };
       const offChain = carry === null && round3(t.tip) > 0 ? offChainClause(inp.rig, inp.motion, p.name) : null;
+      const misplaced = rises || carry !== null || offChain !== null ? null : chainRootsBelowArtClause(inp.rig, inp.motion, p, inp.stage, readGeometry(geometryPath, frames)?.setupBones);
       const why =
         carry === null
           ? `the chain's amplitudes do not grow toward the tip, or the mesh is not weighted to the chain${offChain === null ? '' : `; ${offChain}`}`
@@ -7177,7 +7178,7 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
       problems.push({
         code: 'CHECK_TIP_OVER_ROOT',
         object: `part "${p.name}", box ${p.x},${p.y} ${p.w}x${p.h} rig px, posed by the idle's geometry${rises ? ', declared rises' : ''}`,
-        detail: `the art in its ${tipHalf} half travels ${round3(t.tip)} rig px and in its ${rootHalf} half ${round3(t.root)} rig px (ratio ${ratio ?? 'undefined: nothing moves'}); a ratio >= ${TIP_RATIO_FLOOR} is required — ${why}`,
+        detail: `the art in its ${tipHalf} half travels ${round3(t.tip)} rig px and in its ${rootHalf} half ${round3(t.root)} rig px (ratio ${ratio ?? 'undefined: nothing moves'}); a ratio >= ${TIP_RATIO_FLOOR} is required — ${misplaced ?? why}`,
       });
     }
   }
@@ -7234,6 +7235,24 @@ function offChainClause(rig: Record<string, unknown>, motion: Record<string, unk
   const list = [...off].map(([bone, e]) => `"${bone}" (${e.vertices} of ${of} vertices, largest weight ${round3(e.largest)})`).join(', ');
   const drop = off.size === 1 ? `"${[...off.keys()][0]}"` : 'each of those bones';
   return `it is weighted off the chain to ${list} — drop the segment on ${drop} in \`meshes.${part}.segments\`, or grow the chain's amplitudes toward the tip`;
+}
+
+/** #752: a failing hanging part whose carrying pivots all sit below its art needs their placement named, not larger angles. */
+export function chainRootsBelowArtClause(
+  rig: Record<string, unknown>, motion: Record<string, unknown>, part: Pick<PartRecord, 'name' | 'y' | 'h'>,
+  stage: StageBox, setupBones: unknown,
+): string | null {
+  const { found } = chainsCarrying(rig, motion, part.name);
+  if (found.length === 0 || !Array.isArray(setupBones)) return null;
+  const origins = new Map(setupBones.filter(isRecord).filter((b) => typeof b.name === 'string' && typeof b.worldX === 'number' && typeof b.worldY === 'number').map((b) => [String(b.name), { x: b.worldX as number, y: b.worldY as number }]));
+  const roots = found.map((chain) => {
+    const at = origins.get(chain[0]);
+    return at === undefined ? null : { chain, x: at.x - stage.x, y: cropToSpineY(at.y - stage.y, stage.height) };
+  });
+  if (roots.some((r) => r === null || !Number.isFinite(r.x) || !Number.isFinite(r.y) || r.y <= part.y + part.h)) return null;
+  const placed = roots.filter((r): r is NonNullable<typeof r> => r !== null);
+  const list = placed.map((r) => `${r.chain.join(' > ')} at crop [${round3(r.x)}, ${round3(r.y)}]`).join('; ');
+  return `the carrying chains' roots are below the art: ${list}; the part's crop y range is ${part.y}..${part.y + part.h} — re-place these chains' \`bones\` \`points\` / \`tip\` across this art, rooting them in its upper half (y ${part.y}..${part.y + part.h / 2}) and ending in its lower half (y ${part.y + part.h / 2}..${part.y + part.h}); \`propose\` on these assembled parts drafts those positions; increasing amplitudes leaves the root positions unchanged`;
 }
 
 /**

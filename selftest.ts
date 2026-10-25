@@ -274,6 +274,7 @@ import {
   buildGateLines,
   causeLines,
   chainDirection,
+  chainRootsBelowArtClause,
   chainLagWindows,
   chainLine,
   CLOTH_FLOOR_TEXT,
@@ -19201,6 +19202,26 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const foldRigDir = join(dir, 'seated-fold-up-rig');
     const foldRig = readJsonFile(join(foldRigDir, 'rig.json')) ?? {};
     const foldMotion = readJsonFile(join(foldRigDir, 'motion.json')) ?? {};
+    const rootBox752 = { name: 'arm', y: 20, h: 40 };
+    const rootStage752 = { x: -5, y: 10, width: 100, height: 100 };
+    const below752 = chainRootsBelowArtClause(foldRig, foldMotion, rootBox752, rootStage752, [{ name: 'arm0_ctl', worldX: 7, worldY: 10 }]);
+    say('CK752_BELOW_ART_CHAIN_ROOTS_NAME_THE_INPUT_AND_THE_ART_HALVES_IN_CROP_COORDINATES',
+      below752 !== null && below752.includes('arm0_ctl > arm1_ctl at crop [12, 100]') &&
+      below752.includes('crop y range is 20..60') && below752.includes('`bones` `points` / `tip`') &&
+      below752.includes('upper half (y 20..40)') && below752.includes('lower half (y 40..60)') &&
+      below752.includes('increasing amplitudes leaves the root positions unchanged'),
+      below752 ?? 'no placement clause',
+      'a translated stage is inverted through the shared coordinate door: the carrying root is below the part; the message names the chain placement input and the two halves already used by TIP_OVER_ROOT, without changing its arithmetic');
+    const unchanged752 = [
+      chainRootsBelowArtClause(foldRig, foldMotion, rootBox752, rootStage752, [{ name: 'arm0_ctl', worldX: 7, worldY: 90 }]),
+      chainRootsBelowArtClause(foldRig, foldMotion, rootBox752, rootStage752, [{ name: 'arm0_ctl', worldX: 7, worldY: 50 }]),
+      chainRootsBelowArtClause(foldRig, foldMotion, rootBox752, rootStage752, []),
+      chainRootsBelowArtClause(foldRig, foldMotion, rootBox752, rootStage752, [{ name: 'arm0_ctl', worldX: 7, worldY: NaN }]),
+      chainRootsBelowArtClause(foldRig, foldMotion, { ...rootBox752, name: 'missing' }, rootStage752, [{ name: 'arm0_ctl', worldX: 7, worldY: 10 }]),
+    ];
+    say('CK753_IN_BOX_BOUNDARY_UNREAD_AND_UNBOUND_ROOTS_KEEP_THE_EXISTING_DIAGNOSTIC',
+      unchanged752.every((r) => r === null), JSON.stringify(unchanged752),
+      'placement advice is not guessed for a root inside or exactly on the box, missing/nonfinite setup origins, or a part that rides no chain; PASS and declared-rises rows do not call this failing-row clause');
     const unlengthed = {
       ...foldRig,
       bones: (Array.isArray(foldRig.bones) ? (foldRig.bones as Array<Record<string, unknown>>) : []).map((b) => (b.name === 'arm1_ctl' ? Object.fromEntries(Object.entries(b).filter(([k]) => k !== 'length')) : b)),
