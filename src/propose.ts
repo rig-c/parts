@@ -3494,10 +3494,44 @@ export function proposeWithBasis(
   }
   const constrained = clothConstraints.length === 0 ? {} : { constraints: clothConstraints };
   return {
-    proposal: { bones, meshes, regions, ...drafted, motion: blink === undefined ? { duration: IDLE_SECONDS, tracks: idleTracks } : { duration: IDLE_SECONDS, tracks: idleTracks, blink }, ...constrained, proposed_rig_scale: P.rigScale, notes },
+    proposal: draftPassingChainSigns(P, { bones, meshes, regions, ...drafted, motion: blink === undefined ? { duration: IDLE_SECONDS, tracks: idleTracks } : { duration: IDLE_SECONDS, tracks: idleTracks, blink }, ...constrained, proposed_rig_scale: P.rigScale, notes }),
     basis: { frame, bones: records },
     draftLint: [...jointsOffArt, ...radii],
   };
+}
+
+/**
+ * Issue #751: a fresh draft need not leave a measured, passing sign choice to its author.
+ * The supplied-config lint never calls this. The reader and bar are unchanged; an
+ * unread or still-failing alternative stays a LINT, not a guessed correction.
+ */
+export function draftPassingChainSigns(P: PartSet, proposal: Proposal): Proposal {
+  const images = new Map(P.recs.filter((p) => P.images.has(p.name)).map((p) => [p.name, { x: p.x, y: p.y, image: P.images.get(p.name) as Raster }]));
+  const key = (f: { mesh: string; a: { chain: string }; b: { chain: string } }): string => JSON.stringify([f.mesh, f.a.chain, f.b.chain]);
+  let current = proposal;
+  let reading = chainSqueezes(current, images);
+  const initial = reading.findings;
+  for (const original of initial) {
+    const finding = reading.findings.find((f) => key(f) === key(original));
+    if (finding === undefined || finding.turned === null || !Number.isFinite(finding.turned) || finding.turned > TEXTURE_STRETCH_CEILING) continue;
+    const candidate: Proposal = {
+      ...current,
+      motion: { ...current.motion, tracks: current.motion.tracks.map((t) => 'chain' in t && t.chain === finding.b.chain ? { ...t, amps: t.amps.map((a) => -a) } : t) },
+    };
+    // A track can be shared by other pairs/meshes. Accept no new or worsened
+    // finding, and do not turn a previously readable pair into an unread one.
+    const after = chainSqueezes(candidate, images);
+    if (JSON.stringify(after.unread) !== JSON.stringify(reading.unread) || after.findings.some((f) => {
+      const before = reading.findings.find((old) => key(old) === key(f));
+      return key(f) === key(finding) || before === undefined || f.both.severity > before.both.severity;
+    })) continue;
+    current = {
+      ...candidate,
+      notes: [...current.notes, `shared-mesh chain signs: ${finding.a.chain} and ${finding.b.chain} on mesh ${pyRepr(finding.mesh)} were opposed; drafted one sign by reversing ${finding.b.chain}'s amplitudes, keeping their magnitudes and timing: squeeze ${pyFixed(finding.both.severity, 3)} -> ${pyFixed(finding.turned, 3)} (<= ${TEXTURE_STRETCH_CEILING}, check's TEXTURE_STRETCH bar); all shared pairs re-read without a new or worsened finding`],
+    };
+    reading = after;
+  }
+  return current;
 }
 
 /**

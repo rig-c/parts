@@ -602,6 +602,7 @@ import {
   PartSet,
   type Placement,
   type Proposal,
+  type ProposedChainTrack,
   type ProposalBasis,
   propose,
   proposalAssemble,
@@ -611,6 +612,7 @@ import {
   readPartSet,
   serializeProposal,
   draftTurn,
+  draftPassingChainSigns,
   EYE_GROUP_TAGS,
   TURN_DEPTH_CAVEAT,
   withTurn,
@@ -11147,6 +11149,7 @@ function runProposeSuite(): number {
 
     runGridRuleControls(dir, say);
     runSqueezeControls(say);
+    runDraftChainSignControls(dir, say);
     runClothProposeControls(say);
     runChainLeftBehindControls(say);
     runSkirtInsideProposeControls(say);
@@ -12433,6 +12436,69 @@ function runSqueezeControls(say: (name: string, ok: boolean, detail: string, why
     `opposed: ${opposed.findings.length} finding(s), ${JSON.stringify(line.slice(0, 260))}…; hairback_l doubled: alone ${heavy?.aloneA.toFixed(3)} / ${heavy?.aloneB.toFixed(3)}, ${JSON.stringify(heavyLine.slice(-110))}; both ${sq?.both.severity.toFixed(3)}, alone ${sq?.aloneA.toFixed(3)} / ${sq?.aloneB.toFixed(3)}, one sign ${sq?.turned?.toFixed(3)}, tips ${sq?.tipGap}, the edge's vertices ride ${tops.join(', ')}; one sign: ${same.findings.length} finding(s); rule heat: ${heat.squeezeUnread.join('|') || 'read'}`,
     "issue #314: a consumer's proposal mirrored the back hair's two chains on one mass 39 px apart and lint printed 0 lines, then check failed an edge between them at 15.3; the proposer holds every number that squeeze follows from, so the lint builds the rig stage's lattice and weights, swings the pair alone and holds it to check's own bar — and one sign, the examinee's remedy, is silent",
   );
+}
+
+/** #751: selection belongs to fresh drafting; the existing squeeze reader still names the planted defect. */
+function runDraftChainSignControls(dir: string, say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const P = new PartSet(squeezeParts(), squeezeImages());
+  const fixture = (sign: 1 | -1): Proposal => {
+    const c = squeezeConfig(sign) as unknown as SkeletonSections;
+    return { bones: c.bones, meshes: c.meshes, regions: c.regions as Record<string, string>, motion: c.motion as Proposal['motion'], proposed_rig_scale: 0.5, notes: [] };
+  };
+  const opposed = fixture(-1), before = JSON.stringify(opposed);
+  const selected = draftPassingChainSigns(P, opposed);
+  const squeeze = (p: Proposal) => lint(P, p).findings.filter((f) => f.kind === 'squeeze');
+  const fresh = propose(P);
+  const planted: Proposal = { ...fresh, motion: { ...fresh.motion, tracks: fresh.motion.tracks.map((t) => 'chain' in t && t.chain === 'hairback_l' ? { ...t, amps: t.amps.map((a) => -a) } : t) } };
+  const freshChains = fresh.motion.tracks.filter((t): t is ProposedChainTrack => 'chain' in t && ['hairback_r', 'hairback_l'].includes(t.chain));
+  say('PR751_FRESH_DRAFT_USES_MEASURED_PASSING_SIGN_AND_FORCED_OPPOSITION_STILL_LINTS',
+    squeeze(opposed).length === 1 && squeeze(selected).length === 0 && JSON.stringify(opposed) === before &&
+    selected.notes.some((n) => n.startsWith('shared-mesh chain signs:') && n.includes(`<= ${TEXTURE_STRETCH_CEILING}`)) &&
+    freshChains.length === 2 && freshChains.every((t) => JSON.stringify(t.amps) === JSON.stringify(SQUEEZE_AMPS)) &&
+    fresh.notes.some((n) => n.startsWith('shared-mesh chain signs:')) && squeeze(fresh).length === 0 && squeeze(planted).length === 1 &&
+    JSON.stringify(selected.motion.tracks.map((t) => 'chain' in t ? { ...t, amps: t.amps.map(Math.abs) } : t)) === JSON.stringify(opposed.motion.tracks.map((t) => 'chain' in t ? { ...t, amps: t.amps.map(Math.abs) } : t)),
+    `fixture findings ${squeeze(opposed).length}->${squeeze(selected).length}; fresh ${squeeze(fresh).length}, forced opposed ${squeeze(planted).length}; chains ${JSON.stringify(freshChains)}, notes ${JSON.stringify(selected.notes)}`,
+    'the normal draft is exercised through propose, not just the selector; restoring the opposed signs must still fire the unchanged reader, and selection preserves all timing/magnitudes and the supplied object');
+  const same = fixture(1);
+  const heavy = fixture(-1);
+  heavy.motion = { ...heavy.motion, tracks: heavy.motion.tracks.map((t) => 'chain' in t ? { ...t, amps: t.amps.map((a) => 100 * a) } : t) };
+  const heavyFinding = squeeze(heavy)[0];
+  const unread = fixture(-1);
+  unread.meshes = { hair: { ...unread.meshes.hair, rule: 'heat' } };
+  say('PR751_CLEAN_UNREAD_AND_NEITHER_SIGN_PASSING_DRAFTS_ARE_UNCHANGED',
+    draftPassingChainSigns(P, same) === same && draftPassingChainSigns(P, unread) === unread &&
+    heavyFinding !== undefined && heavyFinding.turned !== null && heavyFinding.turned > TEXTURE_STRETCH_CEILING && draftPassingChainSigns(P, heavy) === heavy,
+    `clean same object ${draftPassingChainSigns(P, same) === same}; unread same object ${draftPassingChainSigns(P, unread) === unread}; heavy current ${heavyFinding?.both.severity}, alternative ${heavyFinding?.turned}, unchanged ${draftPassingChainSigns(P, heavy) === heavy}`,
+    '100x amplitudes are an extreme defect, not a new bar; an unread or non-passing alternative must not be guessed into a correction');
+  const shared = fixture(-1);
+  const left = shared.bones.find((b) => 'chain' in b && b.chain === 'hairback_r');
+  if (left === undefined || !('chain' in left)) throw new Error('squeeze fixture lost its first chain');
+  shared.bones = [...shared.bones, { ...left, chain: 'hairback_third' }];
+  const mirrored = shared.motion.tracks.find((t) => 'chain' in t && t.chain === 'hairback_l');
+  if (mirrored === undefined || !('chain' in mirrored)) throw new Error('squeeze fixture lost its opposed track');
+  shared.motion = { ...shared.motion, tracks: [...shared.motion.tracks, { ...mirrored, chain: 'hairback_third', amps: [...mirrored.amps] }] };
+  shared.meshes = { ...shared.meshes, other: { grid: 16, r: 8, segments: ['hairback_l', 'hairback_third'] } };
+  const sharedParts = squeezeParts();
+  const sharedImages = squeezeImages();
+  sharedImages.set('other', sharedImages.get('hair') as Raster);
+  const sharedP = new PartSet({ ...sharedParts, parts: [...sharedParts.parts, { ...sharedParts.parts[0], name: 'other' }] }, sharedImages);
+  const sharedBefore = lint(sharedP, shared).findings.filter((f) => f.kind === 'squeeze');
+  const sharedSelected = draftPassingChainSigns(sharedP, shared);
+  say('PR751_A_PASSING_SIGN_FOR_ONE_MESH_MUST_NOT_BREAK_ANOTHER_SHARED_PAIR',
+    sharedBefore.length === 1 && sharedBefore[0].mesh === 'hair' && sharedBefore[0].turned !== null && sharedBefore[0].turned <= TEXTURE_STRETCH_CEILING && sharedSelected === shared,
+    `before ${sharedBefore.map((f) => f.mesh).join(',')}, passing local alternative ${sharedBefore[0]?.turned}; globally unchanged ${sharedSelected === shared}`,
+    'the second mesh shares hairback_l with a third chain already carrying its negative sign; flipping that shared track clears hair but would introduce an opposed squeeze on other');
+  const home = join(dir, 'supplied-opposed-signs');
+  const fx = writeRigFixture(home, squeezeConfig(-1), squeezeImages(), squeezeParts());
+  const painting = join(home, 'painting.png');
+  writeFileSync(painting, encodePngBytes(block(100, 320)));
+  const input = readFileSync(fx.config, 'utf8');
+  const observed = runCli(['propose', '--parts', fx.parts, '--source', painting, '--from-config', fx.config, '--out', join(home, 'lint')]);
+  say('PR751_FROM_CONFIG_REMAINS_OBSERVATIONAL_AND_RETAINS_THE_OPPOSED_LINT',
+    observed.status === 1 && observed.out.includes("LINT hairback_r and hairback_l on mesh 'hair' squeeze it:") &&
+    !observed.out.includes('shared-mesh chain signs:') && readFileSync(fx.config, 'utf8') === input,
+    `exit ${observed.status}; original squeeze line ${observed.out.includes("LINT hairback_r and hairback_l on mesh 'hair' squeeze it:")}; supplied bytes unchanged ${readFileSync(fx.config, 'utf8') === input}`,
+    'a user-supplied config still receives the original diagnostic, never fresh-draft amplitude edits');
 }
 
 /**
