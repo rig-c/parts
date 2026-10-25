@@ -648,7 +648,8 @@ export interface TurnRow {
  * the control {@link TURN_BONE} under `root` at its origin, nothing keying it;
  * for each part `config.turn.depths` lists, in parts.json order, a leaf twin of
  * every bone the part's slots bind (its region's bone, a blink.still piece's
- * bone, a mesh's slot bone and every bone its weights name) — an identity child,
+ * bone, a mesh's slot bone and every bone its weights name), in `bones`
+ * declaration order (issue #746) — an identity child,
  * x 0, y 0, no rotation, so its world transform is its bone's exactly and every
  * idle key, physics step or constraint on the bone reaches it — the part's
  * slots and weights moved onto the twins, and one transform constraint per part
@@ -672,7 +673,7 @@ export interface TurnRow {
  * constraint. A name the turn needs that is taken is refused by name
  * (`RIG_TURN_NAME_FREE`).
  */
-function applyTurn(
+export function applyTurn(
   turn: TurnSpec,
   order: readonly string[],
   bones: RigBone[],
@@ -681,8 +682,21 @@ function applyTurn(
   constraints: readonly ConfigConstraint[],
   frontSlots: ReadonlySet<string> = new Set(),
   slotFamilies: ReadonlyMap<string, readonly string[]> = new Map(),
+  stops: ReadonlyArray<{ links: readonly string[] }> | null = null,
+  orderByDeclaration: boolean = true,
 ): { constraints: Array<Record<string, unknown>>; detached: DetachedRule[]; rows: TurnRow[] } {
   const problems: Problem[] = [];
+  const undrawn = new Map<string, string>();
+  for (const s of stops ?? []) for (const l of s.links) undrawn.set(`${l}_d`, l);
+  const boneOrder = new Map(bones.map((b, i) => [b.name, i * 2]));
+  const orderOf = (b: string): number => {
+    const direct = boneOrder.get(b);
+    if (direct !== undefined) return direct;
+    const base = undrawn.get(b);
+    const baseIdx = base === undefined ? undefined : boneOrder.get(base);
+    if (baseIdx === undefined) throw new Error(`applyTurn: bound bone "${b}" is not in bones`);
+    return baseIdx + 1;
+  };
   const taken = new Set(bones.map((b) => b.name));
   const transforms = new Set(constraints.filter((c) => c.type === 'transform').map((c) => c.name));
   if (taken.has(TURN_BONE)) problems.push({ code: 'RIG_TURN_NAME_FREE', object: `bone "${TURN_BONE}"`, detail: 'is the control the rig stage adds for config.turn, and the rig already has a bone of that name; rename it' });
@@ -702,6 +716,8 @@ function applyTurn(
       bind(sl.bone);
       for (const att of Object.values(skin[sl.name] ?? {})) if ('type' in att) for (const v of att.weights) for (const w of v) bind(w.bone);
     }
+    for (const b of bound) orderOf(b);
+    if (orderByDeclaration) bound.sort((a, b) => orderOf(a) - orderOf(b));
     for (const b of bound) {
       const twin = turnTwin(f.part, b);
       if (taken.has(twin)) problems.push({ code: 'RIG_TURN_NAME_FREE', object: `bone "${twin}"`, detail: `is the twin that carries part "${f.part}" on "${b}" under config.turn, and the rig already has a bone of that name; rename it` });
@@ -1259,6 +1275,7 @@ export function buildRig(
   maxLoopPasses: number = ONE_LOOP_PASSES,
   idleKeys: IdleKeys = DEFAULT_IDLE_KEYS,
   reduce: Reducer = runReduction,
+  turnOrderByDeclaration: boolean = true,
 ): RigOutput {
   // Generated bands have a fixed one-pixel lattice, with their axial weights
   // below; config never supplies a second mesh policy for the same source.
@@ -2835,7 +2852,7 @@ export function buildRig(
   // ---- the turn control (issue #251) -------------------------------------
   // Only when the config has `turn`: every other build adds nothing here, so no byte moves.
   if (cfg.turn !== undefined) refuseIfAny(turnRiderProblems(cfg.turn, cfg, parts.parts));
-  const turned = cfg.turn === undefined ? null : applyTurn(cfg.turn, parts.parts.map((p) => p.name), bones, rebound, skin, cfg.constraints ?? [], declaredFront, slotFamilies);
+  const turned = cfg.turn === undefined ? null : applyTurn(cfg.turn, parts.parts.map((p) => p.name), bones, rebound, skin, cfg.constraints ?? [], declaredFront, slotFamilies, stops, turnOrderByDeclaration);
   for (const row of turned?.rows ?? []) for (const t of row.twins) layoutAlias(explicitLayout.plan, t.bone, t.twin);
   // issue #536: every row names the bones the emitted attachment binds, read once the turn and the stops have
   // rebound the weights; a rig with neither rebinds nothing, so this reads back the names each row already holds.

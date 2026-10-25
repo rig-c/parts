@@ -7,7 +7,7 @@ import { explicitFixture, explicitIslandsFixture, type IslandsExplicitMeshSpec, 
 import { block, islandImages, rigConfig, rigImages, rigParts, writeRigFixture } from '../fixtures/rig.ts';
 import { parseConfig, partBoundBones, type ExplicitMeshSpec, type Limb } from '../src/config.ts';
 import { PartsError } from '../src/errors.ts';
-import { buildRig, rigJsonText, type MeshAttachment } from '../src/rig.ts';
+import { applyTurn, buildRig, rigJsonText, type MeshAttachment } from '../src/rig.ts';
 import { explicitImageHash, explicitRegionHash } from '../src/explicitmesh.ts';
 import { gateThroughRigc, readRigInputs, rigStage } from '../src/build.ts';
 import { DEFAULT_PACK_MODE, flatComposite, flatCompositeForSet, packageRigc, readFrameSet, runCheck, SEAM_MEAN_BAR, SEAM_PX_BAR, seamFigures, setPlacements, STILL_DIR, stillRigForSet } from '../src/check.ts';
@@ -454,6 +454,56 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
       rawStopAndTurnErr?.problems.some(p => p.code === 'RIG_EXPLICIT_BINDING' && p.object === 'config.meshes.cloth.explicit.weights') === true &&
       rawStopSlotOnlyErr?.problems.some(p => p.code === 'RIG_EXPLICIT_BINDING' && p.object === 'config.meshes.cloth.explicit.weights') === true,
     `single=${JSON.stringify(turnedSingleBuilt.meshReport[0].bones)} (restEq=${singleTurnRender.sameRestPng}, turnMoves=${singleTurnRender.turnMovesPx}); islands=${JSON.stringify(turnedIsl2Built.meshReport[0].bones)} (restEq=${islTurnRender.sameRestPng}, turnMoves=${islTurnRender.turnMovesPx}); plants=${codes(directTurnParseErr)} | ${codes(directTurnBuildErr)} | ${codes(rawStopAndTurnErr)} | ${codes(rawStopSlotOnlyErr)}`,
+  );
+  const cfgA = explicitFixture();
+  cfgA.config.turn = turnSpec;
+  cfgA.mesh.segments = ['body', 'hem0', 'hem1'];
+  cfgA.mesh.explicit.weights[0] = [
+    { bone: 'hem0', x: 0, y: 0, weight: 0.5 },
+    { bone: 'hem1', x: 0, y: 0, weight: 0.5 },
+  ];
+  const cfgB = explicitFixture();
+  cfgB.config.turn = turnSpec;
+  cfgB.mesh.segments = ['body', 'hem0', 'hem1'];
+  cfgB.mesh.explicit.weights[0] = [
+    { bone: 'hem1', x: 0, y: 0, weight: 0.5 },
+    { bone: 'hem0', x: 0, y: 0, weight: 0.5 },
+  ];
+  const plainBoneNames = new Set(built.rig.bones.map(b => b.name));
+  const stoppedBoneNames = new Set([
+    ...stoppedTurnedBuilt.rig.bones.map(b => b.name),
+    ...(stoppedTurnedBuilt.rig.stops ?? []).flatMap(s => s.links.map(l => `${l}_d`)),
+  ]);
+  const boundNamesResolve =
+    ['body', 'hem0', 'hem1'].every(b => plainBoneNames.has(b)) &&
+    ['body', 'hem0_d', 'hem1_d'].every(b => stoppedBoneNames.has(b));
+  let missingBoneGuard = '';
+  try {
+    applyTurn(turnSpec, ['cloth', 'eye'], structuredClone(built.rig.bones), [{ name: 'cloth', bone: 'absent_bone', attachment: 'cloth' }], {}, []);
+  } catch (err) {
+    missingBoneGuard = (err as Error).message;
+  }
+  const turnOrderA = buildRig(parseConfig(cfgA.config), parts, images);
+  const turnOrderB = buildRig(parseConfig(cfgB.config), parts, images);
+  const turnClothA = (turnOrderA.rig.constraints?.find(c => c.name === 'turn_cloth') as { bones: string[] } | undefined)?.bones;
+  const turnClothB = (turnOrderB.rig.constraints?.find(c => c.name === 'turn_cloth') as { bones: string[] } | undefined)?.bones;
+  const plantOrderA = buildRig(parseConfig(cfgA.config), parts, images, undefined, undefined, undefined, false);
+  const plantOrderB = buildRig(parseConfig(cfgB.config), parts, images, undefined, undefined, undefined, false);
+  const plantTurnClothA = (plantOrderA.rig.constraints?.find(c => c.name === 'turn_cloth') as { bones: string[] } | undefined)?.bones;
+  const plantTurnClothB = (plantOrderB.rig.constraints?.find(c => c.name === 'turn_cloth') as { bones: string[] } | undefined)?.bones;
+  check(
+    'GX28_TURN_TWINS_FOLLOW_BONE_DECLARATION_ORDER_NOT_WEIGHT_ENCOUNTER_ORDER',
+    boundNamesResolve &&
+      missingBoneGuard === 'applyTurn: bound bone "absent_bone" is not in bones' &&
+      JSON.stringify(turnOrderA.rig.bones) === JSON.stringify(turnOrderB.rig.bones) &&
+      JSON.stringify(turnOrderA.rig.constraints) === JSON.stringify(turnOrderB.rig.constraints) &&
+      JSON.stringify(turnClothA) === '["turn_cloth_body","turn_cloth_hem0","turn_cloth_hem1"]' &&
+      JSON.stringify(turnClothB) === '["turn_cloth_body","turn_cloth_hem0","turn_cloth_hem1"]' &&
+      JSON.stringify(plantTurnClothA) === '["turn_cloth_body","turn_cloth_hem0","turn_cloth_hem1"]' &&
+      JSON.stringify(plantTurnClothB) === '["turn_cloth_body","turn_cloth_hem1","turn_cloth_hem0"]' &&
+      JSON.stringify(plantOrderA.rig.bones) !== JSON.stringify(plantOrderB.rig.bones) &&
+      JSON.stringify(plantOrderA.rig.constraints) !== JSON.stringify(plantOrderB.rig.constraints),
+    `resolved=${boundNamesResolve}; sorted=${JSON.stringify(turnClothA)}===${JSON.stringify(turnClothB)}; planted=${JSON.stringify(plantTurnClothA)} vs ${JSON.stringify(plantTurnClothB)}; guard=${missingBoneGuard}`,
   );
   return failed;
 }
