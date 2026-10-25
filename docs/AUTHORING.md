@@ -2786,6 +2786,66 @@ full loader before its assemble stage writes anything.
    files, not the art (§6, *Reading the inputs*). A `WARN` line is about the art: a
    layer See-through made that is not plausibly part of the figure, which step 6
    leaves out (§6, *Plausibility*). It refuses nothing.
+   The trailing `drawn(a>8)_left,top`, `drawn(a>8)_right,bottom`, `drawn(a>8)_size`
+   and `opaque(a>=250)_left,top`, `opaque(a>=250)_right,bottom`,
+   `opaque(a>=250)_size` columns give two boxes of each drawn layer's original
+   source alpha, in **input-canvas px**, beside the unchanged manifest/layer box.
+   All original columns stay as read: legacy `opaque_px` still counts **alpha >8**.
+   The second box uses the existing **alpha >=CORE_ALPHA (250)** cut, shared with
+   assemble's opaque ownership, projection and seam logic. Only that alpha cut is
+   applied here: no owner clipping, projection-core erosion, ghost cleanup or
+   rig resampling. Alpha 249 is drawn but not CORE; 250 and 251 meet both cuts.
+   Add the reader's `left,top` to a PNG-local pixel; right and bottom are exclusive,
+   so one painted pixel has a 1x1 box. `none` and a line naming the layer say that
+   it has no box at that threshold. A fully transparent layer has neither box;
+   a layer with drawn support but no CORE support is explicitly named as such.
+   Hidden art remains listed apart and is never drawn.
+
+   **Body-group union (issue #757).** The summary unions exactly the drawn layers
+   whose reader tag has `group === 'body'`: the existing body tags include front
+   and back hair, head, neck/neckwear, topwear, handwear (including its sides),
+   bottomwear, legwear, footwear, tail, wings and objects, plus the derived
+   `hand-r/l` and `drape-r/l`. Face, eyes, headwear and the other head-group tags,
+   author layers and hidden art do not contribute. A tag classifies a layer; it
+   does not prove anatomical identity. The main height line uses **alpha >=250**;
+   the raw **alpha >8** union is printed separately and can span the whole input
+   canvas because of boundary support. Each union's height is `bottom - top`,
+   never a sum of layer heights, and an empty union has height unavailable.
+   This is a per-layer thresholded-mask union (OR), not RGBA-over compositing:
+   overlapping source alpha below the applicable cut cannot accumulate into it:
+   two alpha-8 layers do not become drawn support, and two alpha-249 layers do not
+   become CORE support. Neither union is an anatomical height or the height of
+   the final assembled parts. A head-run
+   reading is still only that input's body-group union.
+
+   **Units before choosing `assemble.rig_scale`.** `layers` reads one input and
+   knows no painting size or full/head role or registration. For scale guidance,
+   run `layers` on the **full run** and use its **alpha >=250** body-group extent
+   as the source reference, with the mapping below when it is known. At the
+   [public task-01 input pin](https://github.com/rig-c/exam/tree/131e80f794830238520aae8709db7155719813db/tasks/01-build/inputs),
+   the full-run source CORE union is 911 input-canvas px tall; the head-run 964
+   is a crop extent and is not the full scale reference. These input roles are
+   supplied by that fixture's contract, not inferred by this CLI from a file name.
+   The CLI prints generic body-group unions, without a figure-height or rig-scale
+   advice line. Only with a known full-run
+   mapping from `inputs` can its coordinates be converted: for painting `w x h`,
+   square side `L = max(w,h)`, run resolution `R`, and padding
+   `padX = floor((L-w)/2)`, `padY = floor((L-h)/2)`, a run point maps to painting
+   `(x*L/R-padX, y*L/R-padY)`. This is `checkGeometry`'s `fullK = L/R` and the
+   full `runMap` before rig scale; the mapped vertical extent is `height*L/R`.
+   It is an affine extent, not a newly resampled or clipped painting-pixel mask.
+   For an artist's single run at one file pixel per painting pixel, the raw
+   file's height needs no scale conversion; assemble's internal square padding
+   only translates it. A separately generated head crop has its own crop map
+   and cannot supply a full-body height. Contact-sheet tiles resize independently
+   and preserve no common placement, so their pixels are not measurement inputs.
+   The 1,100–1,200 rig-px advice in §3 uses the union of assembled parts' boxes,
+   the `H` of `propose`'s `mesh spacing:` note. Ghost cleanup, the run-to-rig
+   resampling and the chosen parts can change the bounds and threshold coverage:
+   the analytic conversion above does not measure that final `H`. Instead,
+   use a known painting-space extent for scale guidance and inspect the parts
+   after assembly. Do not substitute this tag-group union for anatomy or assume
+   its input pixels are painting pixels. `layers` performs no registration.
 4. `rig-parts propose --head-box --full inputs/layers/full --canvas <W>x<H> --write-config config.json`
    saves `seethrough.head_box` in the existing config. `<W>x<H>` is the original
    painting's size, not the padded square's. The existing optional `--no-back-hair`
