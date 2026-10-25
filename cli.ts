@@ -523,6 +523,7 @@ usage:
                     [--page-edges pot|free] [--pack-shape rect|polygon]
                     [--requirements <file.json>] [--seam-pairs] [--keep-stills]
                     [--set <name> | --all-sets] [--environment <schedule.json>]
+                    [--wind-band <spec.json>]
       Build, gate, render and measure a rig through rig-c's CLI (the rigc at
       node_modules/.bin/rigc, or on PATH). --rig holds rig.json and motion.json:
       a rig spec, which rigc build compiles, not a compiled skeleton.json.
@@ -671,6 +672,14 @@ usage:
       response or no band is SKIP; no pair or animation gives no worlds.
       Nonphysics output is unchanged. In rig-play environment(null) returns
       to the default world, not still air (AUTHORING, Physics seam environments).
+      --wind-band <spec.json> sweeps steady wind [x, 0], gravity [0, 1] at t = 0
+      over [min, max] in step increments through rigc render --seam (spec
+      "rig-parts-wind-band/1"; every field required: spec, min, max, step, fps,
+      max_gap, max_ghost, pairs; refused by CHECK_WIND_BAND before anything is
+      written). Prints WIND_BAND: REPORTED with the steady-wind band and one
+      WIND_BAND: line per pair that breaks inside [min, max], and records
+      WIND_BAND in check.json. Steady wind only; it does not measure gusts or
+      transient overshoot (AUTHORING §6, Steady-wind seam band).
 
   rig-parts loop --frames <dir> --out <file.png | file.gif> [--palette]
       Encode a frame set rigc render wrote (its --out directory, or the set
@@ -788,7 +797,7 @@ usage:
                     [--pack-shape rect|polygon] [--loop] [--requirements <file.json>]
                     [--idle-keys ctl|direct] [--lead-in <periods>] [--seam-pairs] [--keep-stills]
                     [--alt <name>=<source>:<full>[:<head>]] [--set <name> | --all-sets]
-                    [--environment <schedule.json>]
+                    [--environment <schedule.json>] [--wind-band <spec.json>]
       assemble, then rig, then check, in one process, each stage's own lines
       printed under [assemble], [rig] and [check]; the first stage that refuses
       stops the build with its own FAIL lines. The config must already carry
@@ -819,6 +828,9 @@ usage:
       --environment is forwarded to check (as for check); the schedule is read
       by rig-c's reader before assemble runs, so a malformed one is refused,
       CHECK_ENVIRONMENT, under [assemble] before anything is assembled.
+      --wind-band is forwarded to check (as for check); the spec is read before
+      assemble runs, so a malformed one is refused, CHECK_WIND_BAND, under
+      [assemble] before anything is assembled.
       --seam-pairs and --keep-stills are forwarded to check (as for check:
       the seam split by pair on a pass too, under check/seam/; the setup-pose
       still under check/setup_still/). check's --rig and --parts are refused:
@@ -1014,13 +1026,13 @@ const TAKES = {
   rig: { valued: ['--config', '--parts', '--out', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
   propose: { valued: ['--parts', '--source', '--out', '--from-config', '--compare', '--full', '--head', '--canvas', '--keypoints', '--person', '--wrist-snap', '--grid-rule', '--cloth', '--write-config', '--from'], switches: ['--head-box', '--no-back-hair', '--only-missing'] },
   compare: { valued: ['--left', '--right', '--map'], switches: [] },
-  check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--requirements', '--set', '--environment'], switches: ['--seam-pairs', '--keep-stills', '--all-sets'] },
+  check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--requirements', '--set', '--environment', '--wind-band'], switches: ['--seam-pairs', '--keep-stills', '--all-sets'] },
   loop: { valued: ['--frames', '--out'], switches: ['--palette'] },
   assemble: { valued: ['--source', '--full', '--head', '--config', '--out', '--seam', '--project', '--alt', '--write-config'], switches: ['--propose-plan'] },
   'comfy seethrough': { valued: ['--image', '--out', '--resolution', '--steps', '--seed', '--prefix', '--host', '--wait', '--timeout', '--poll'], switches: ['--offload', '--lama', '--nf4'] },
   'comfy paint': { valued: ['--config', '--out', '--seeds', '--seed0', '--host', '--wait', '--timeout', '--poll'], switches: [] },
   inputs: { valued: ['--source', '--config', '--out'], switches: [] },
-  build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set', '--environment'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets'] },
+  build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set', '--environment', '--wind-band'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets'] },
   compose: { valued: ['--scene', '--out', '--requirements', '--accept'], switches: [] },
   'mesh-draft': { valued: ['--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: ['--more-triangles'] },
   'mesh-stats': { valued: ['--config', '--parts'], switches: [] },
@@ -1271,7 +1283,7 @@ function cmdCheck(args: string[]): number {
   try {
     const bin = findRigc(import.meta.dir, process.env.PATH ?? '');
     const r = checkStage(
-      { rig, parts: f.get('--parts'), source: f.get('--source'), out, pageEdges: edges, packShape: shape, requirements: f.get('--requirements'), seamPairs: seamPairs === 1, keepStills: keepStills === 1, ...(f.has('--set') ? { set: f.get('--set') as string } : {}), allSets: allSets === 1, ...(f.has('--environment') ? { environment: f.get('--environment') as string } : {}) },
+      { rig, parts: f.get('--parts'), source: f.get('--source'), out, pageEdges: edges, packShape: shape, requirements: f.get('--requirements'), seamPairs: seamPairs === 1, keepStills: keepStills === 1, ...(f.has('--set') ? { set: f.get('--set') as string } : {}), allSets: allSets === 1, ...(f.has('--environment') ? { environment: f.get('--environment') as string } : {}), ...(f.has('--wind-band') ? { windBand: f.get('--wind-band') as string } : {}) },
       rigcRunner(bin),
       bin,
       console.log,
@@ -1857,7 +1869,7 @@ function cmdBuild(args: string[]): number {
   const scratch = mkdtempSync(join(tmpdir(), 'rig-parts-build-'));
   try {
     const r = build(
-      { config, source, full, head, out, seam: seam as SeamRule, project: project as ProjectRule, loop, pageEdges: edges, packShape: shape, ...(flags.has('--requirements') ? { requirements: flags.get('--requirements') as string } : {}), idleKeys: keys, ...(leadText === undefined ? {} : { leadIn: Number(leadText) }), seamPairs: on.has('--seam-pairs'), keepStills: on.has('--keep-stills'), ...(alts.length === 0 ? {} : { alts }), ...(flags.has('--set') ? { set: flags.get('--set') as string } : {}), allSets: on.has('--all-sets'), ...(flags.has('--environment') ? { environment: flags.get('--environment') as string } : {}) },
+      { config, source, full, head, out, seam: seam as SeamRule, project: project as ProjectRule, loop, pageEdges: edges, packShape: shape, ...(flags.has('--requirements') ? { requirements: flags.get('--requirements') as string } : {}), idleKeys: keys, ...(leadText === undefined ? {} : { leadIn: Number(leadText) }), seamPairs: on.has('--seam-pairs'), keepStills: on.has('--keep-stills'), ...(alts.length === 0 ? {} : { alts }), ...(flags.has('--set') ? { set: flags.get('--set') as string } : {}), allSets: on.has('--all-sets'), ...(flags.has('--environment') ? { environment: flags.get('--environment') as string } : {}), ...(flags.has('--wind-band') ? { windBand: flags.get('--wind-band') as string } : {}) },
       { rig: rigcRunner(bin), check: rigcRunner(bin), checkBin: bin, scratch: join(scratch, 'rig-gate'), stages: {
         assemble: (input, outputs) => runBuildProcess({ stage: 'assemble', bin, input, outputs }, join(scratch, 'workers')),
         rig: (input, _rigc, gateScratch) => runBuildProcess({ stage: 'rig', bin, input, scratch: gateScratch }, join(scratch, 'workers')),

@@ -2628,6 +2628,8 @@ export interface CheckFigures {
   RECOMPOSITE_HOLES: ReportedLine;
   /** Written only under `--source` (issue #77): the setup pose against the painting, REPORTED. */
   SETUP_POSE_VS_SOURCE?: ReportedLine;
+  /** Written only under `--wind-band` (issue #590): the steady-wind band each declared seam pair holds, REPORTED. */
+  [WIND_BAND_LINE]?: WindBandLine;
   /**
    * Written only when the loop or the seam measured nothing (issue #77): the
    * reason for each, by the name its console line goes by. The judgement and
@@ -2941,6 +2943,8 @@ export interface CheckReport {
   motionSeam: MotionSeamLine;
   /** `CLOTH_SETTLES` (issue #501): a warning, never a bar — in `check.json` only when the rig declares a physics constraint and has an idle; its SKIP is printed either way. */
   cloth: ClothLine;
+  /** `WIND_BAND` (issue #590): the steady-wind band each declared seam pair holds, written under `--wind-band` only. */
+  windBand?: WindBandLine;
   /**
    * Issue #557: the contour step at each pose `SEAM_OVER_RANGE` read, by `<part> <degrees>` ({@link contourStep}) —
    * printed on every row; `check.json` carries it only for a joint whose cap is short ({@link SweepPose}).
@@ -2989,15 +2993,15 @@ export type CheckStatus = 'PASS' | 'FAIL' | 'SKIP' | 'WARN' | 'CLEAR' | 'REPORTE
  * never skipped); `loop` SKIP when `loop_max_diff` is null, `seam` SKIP when `seam_mean` is null, otherwise FAIL when
  * {@link barsNotMet} names it and PASS when it does not. Every other block carries its own `status` key and is copied:
  * the judgement lines, then {@link FOLD_LINE}, {@link LEVEL_LINE}, {@link STRESS_LINE}, {@link LIMB_LINE},
- * {@link SWEEP_LINE}, {@link MOTION_SEAM_LINE}, {@link CLOTH_LINE}, the reported lines and {@link SOURCE_LINE}, each
- * where the file writes it. The `requirements` block's lines are not bars and are not read here.
+ * {@link SWEEP_LINE}, {@link MOTION_SEAM_LINE}, {@link CLOTH_LINE}, the reported lines, {@link SOURCE_LINE} and
+ * {@link WIND_BAND_LINE}, each where the file writes it. The `requirements` block's lines are not bars and are not read here.
  */
 export function checkStatuses(fig: CheckFigures): Record<string, CheckStatus> {
   const notMet = barsNotMet(fig as unknown as Record<string, unknown>);
   const bar = (name: string, measured: boolean): CheckStatus => (!measured ? 'SKIP' : notMet.includes(name) ? 'FAIL' : 'PASS');
   const out: Record<string, CheckStatus> = { gate: bar('gate', true), loop: bar('loop', fig.loop_max_diff !== null), seam: bar('seam', fig.seam_mean !== null) };
   for (const n of JUDGEMENT_LINES) out[n] = fig[n].status;
-  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, ...REPORTED_LINES, SOURCE_LINE] as const) {
+  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, ...REPORTED_LINES, SOURCE_LINE, WIND_BAND_LINE] as const) {
     const l = fig[n];
     if (l !== undefined) out[n] = l.status;
   }
@@ -5123,6 +5127,471 @@ export function environmentLine(env: CheckEnvironment): string {
   return `environment: ${env.path}, ${ENVIRONMENT_SPEC}, ${env.steps} step(s), sha256 ${env.sha256.slice(0, 16)} — every render a bar or a warning reads with the physics on is posed under it; the physics-off, setup-pose and loop renders are not`;
 }
 
+// ---------------------------------------------------------------------------
+// the steady-wind seam band (issue #590)
+// ---------------------------------------------------------------------------
+
+/** The spec id of a `--wind-band` file (issue #590). */
+export const WIND_BAND_SPEC = 'rig-parts-wind-band/1';
+/** The refusal rule of `--wind-band` (issue #590). */
+export const WIND_BAND_RULE = 'CHECK_WIND_BAND';
+/** The reported line `--wind-band` writes to `check.json` and the console (issue #590). */
+export const WIND_BAND_LINE = 'WIND_BAND';
+/** Maximum number of steps `(max - min) / step` a `--wind-band` sweep may take. */
+export const WIND_BAND_MAX_STEPS = 64;
+
+const WIND_BAND_KEYS = ['spec', 'min', 'max', 'step', 'fps', 'max_gap', 'max_ghost', 'pairs'] as const;
+const WIND_BAND_SCRATCH = '_wind_band';
+
+/** Parsed `--wind-band <spec.json>` specification (issue #590). Every field is required; nothing falls back. */
+export interface WindBandSpec {
+  path: string;
+  sha256: string;
+  min: number;
+  max: number;
+  step: number;
+  steps: number[];
+  fps: number;
+  max_gap: number;
+  max_ghost: number;
+  pairs: Array<{ pair: string; a: string; b: string }>;
+}
+
+/** First step where a seam pair exceeds `max_gap` or `max_ghost` below or above its holding band. */
+export interface WindBandBreak {
+  x: number;
+  kind: 'gap' | 'ghost';
+  px: number;
+  bar: number;
+  animation: string;
+  frame: number;
+}
+
+/** Per-step steady-wind seam reading for one pair across all animations. */
+export interface WindBandStepReading {
+  x: number;
+  holds: boolean;
+  gap_max_px: number;
+  ghost_max_px: number;
+}
+
+/** One declared seam pair's steady-wind band and worst readings across the swept range. */
+export interface WindBandPairRow {
+  pair: string;
+  a: string;
+  b: string;
+  holds_all: boolean;
+  holds_from: number | null;
+  holds_to: number | null;
+  first_break_below: WindBandBreak | null;
+  first_break_above: WindBandBreak | null;
+  worst_gap: { x: number; px: number; animation: string; frame: number | null };
+  worst_ghost: { x: number; px: number; animation: string; frame: number | null };
+  steps: WindBandStepReading[];
+}
+
+/** `check.json`'s `WIND_BAND` block (issue #590): REPORTED, never a bar. */
+export interface WindBandLine {
+  status: 'REPORTED';
+  spec: typeof WIND_BAND_SPEC;
+  path: string;
+  sha256: string;
+  steady_wind_only: true;
+  gravity: [0, 1];
+  min: number;
+  max: number;
+  step: number;
+  steps: number[];
+  fps: number;
+  animations: string[];
+  max_gap: number;
+  max_ghost: number;
+  holds_from: number | null;
+  holds_to: number | null;
+  pairs_holding_all: number;
+  pairs: WindBandPairRow[];
+}
+
+/** Planted mutants for negative controls on `WIND_BAND`. */
+export interface WindBandPlant {
+  /** Mutant: ignore gap/ghost bar violations so every step is reported as holding. */
+  ignoreBreaks?: boolean;
+  /** Mutant: suppress per-pair breaking console lines. */
+  silentPairs?: boolean;
+}
+
+/**
+ * Read and validate `--wind-band <spec.json>` before anything is built (issue #590).
+ * Every field (`spec`, `min`, `max`, `step`, `fps`, `max_gap`, `max_ghost`, `pairs`) is
+ * required; nothing falls back to `SEAM_OVER_MOTION`'s pairs, floor or fps.
+ */
+export function readWindBand(given: string): WindBandSpec {
+  const path = resolve(given);
+  if (!existsSync(path) || !statSync(path).isFile()) {
+    throw new PartsError([
+      {
+        code: WIND_BAND_RULE,
+        object: given,
+        detail: `--wind-band ${given}: nothing at ${path} — it takes a wind-band spec { "spec": "${WIND_BAND_SPEC}", ${WIND_BAND_KEYS.slice(1).map((k) => `"${k}"`).join(', ')} }`,
+      },
+    ]);
+  }
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(path);
+  } catch (err) {
+    throw new PartsError([{ code: WIND_BAND_RULE, object: given, detail: `--wind-band ${given}: not readable — ${(err as Error).message}` }]);
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(bytes.toString('utf8'));
+  } catch (err) {
+    throw new PartsError([{ code: WIND_BAND_RULE, object: given, detail: `does not parse as JSON — ${(err as Error).message}; a ${WIND_BAND_SPEC} object is required` }]);
+  }
+  if (!isRecord(raw)) {
+    throw new PartsError([{ code: WIND_BAND_RULE, object: given, detail: `is ${Array.isArray(raw) ? 'an array' : typeof raw}; a ${WIND_BAND_SPEC} JSON object is required` }]);
+  }
+  const problems: Problem[] = [];
+  const bad = (object: string, detail: string): void => {
+    problems.push({ code: WIND_BAND_RULE, object, detail });
+  };
+  for (const k of Object.keys(raw)) {
+    if (!(WIND_BAND_KEYS as readonly string[]).includes(k)) {
+      bad(`${given} "${k}"`, `unknown key; ${WIND_BAND_SPEC} takes ${WIND_BAND_KEYS.join(', ')}`);
+    }
+  }
+  for (const k of WIND_BAND_KEYS) {
+    if (!Object.hasOwn(raw, k)) {
+      bad(`${given} "${k}"`, `is missing; ${WIND_BAND_SPEC} requires every field (${WIND_BAND_KEYS.join(', ')}) and guesses none`);
+    }
+  }
+  if (Object.hasOwn(raw, 'spec') && raw.spec !== WIND_BAND_SPEC) {
+    bad(`${given} "spec"`, `is ${JSON.stringify(raw.spec)}; "${WIND_BAND_SPEC}" is required`);
+  }
+  const finite = (k: 'min' | 'max' | 'step'): number | null => {
+    if (!Object.hasOwn(raw, k)) return null;
+    const v = raw[k];
+    if (typeof v !== 'number' || !Number.isFinite(v)) {
+      bad(`${given} "${k}"`, `is ${JSON.stringify(v)}; a finite number is required`);
+      return null;
+    }
+    return v;
+  };
+  const min = finite('min');
+  const max = finite('max');
+  const step = finite('step');
+  const steps: number[] = [];
+  if (min !== null && max !== null && min >= max) {
+    bad(`${given} "min".."max"`, `min is ${min} and max is ${max}; min < max is required`);
+  }
+  if (step !== null && step <= 0) {
+    bad(`${given} "step"`, `is ${step}; a positive number (> 0) is required`);
+  }
+  if (min !== null && max !== null && step !== null && min < max && step > 0) {
+    const rawCount = (max - min) / step;
+    const count = Math.round(rawCount);
+    if (!Number.isFinite(rawCount) || Math.abs(rawCount - count) > 1e-6) {
+      bad(`${given} "step"`, `(max - min) / step is ${rawCount}; an integer number of steps (within 1e-6) is required so the sweep lands on max ${max}`);
+    } else if (count < 1 || count > WIND_BAND_MAX_STEPS) {
+      bad(`${given} "step"`, `sweeps ${count} step(s) (${count + 1} wind points); between 1 and ${WIND_BAND_MAX_STEPS} steps is required`);
+    } else {
+      for (let k = 0; k <= count; k++) steps.push(k === count ? round6(max) : round6(min + k * step));
+    }
+  }
+  if (Object.hasOwn(raw, 'fps')) {
+    if (typeof raw.fps !== 'number' || !Number.isInteger(raw.fps) || raw.fps < 1) {
+      bad(`${given} "fps"`, `is ${JSON.stringify(raw.fps)}; a positive integer (>= 1) is required`);
+    }
+  }
+  for (const k of ['max_gap', 'max_ghost'] as const) {
+    if (!Object.hasOwn(raw, k)) continue;
+    const v = raw[k];
+    if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+      bad(`${given} "${k}"`, `is ${JSON.stringify(v)}; a non-negative integer (>= 0) is required`);
+    }
+  }
+  const pairs: Array<{ pair: string; a: string; b: string }> = [];
+  if (Object.hasOwn(raw, 'pairs')) {
+    if (!Array.isArray(raw.pairs) || raw.pairs.length === 0) {
+      bad(`${given} "pairs"`, `is ${JSON.stringify(raw.pairs)}; a non-empty array of "<a>|<b>" or "<a>:<b>" slot pairs is required`);
+    } else {
+      const seen = new Set<string>();
+      raw.pairs.forEach((entry, i) => {
+        const at = `${given} pairs[${i}]`;
+        if (typeof entry !== 'string') {
+          bad(at, `is ${JSON.stringify(entry)}; a string "<a>|<b>" or "<a>:<b>" naming two distinct slots is required`);
+          return;
+        }
+        const m = /^([^|:]+)[|:]([^|:]+)$/.exec(entry);
+        const a = m?.[1]?.trim() ?? '';
+        const b = m?.[2]?.trim() ?? '';
+        if (m === null || a === '' || b === '' || a !== m[1] || b !== m[2] || a === b) {
+          bad(at, `is ${JSON.stringify(entry)}; "<a>|<b>" or "<a>:<b>" naming two distinct non-empty slots is required`);
+          return;
+        }
+        const canon = a < b ? `${a}|${b}` : `${b}|${a}`;
+        if (seen.has(canon)) {
+          bad(at, `names "${a}|${b}", which duplicates an earlier pair in pairs`);
+          return;
+        }
+        seen.add(canon);
+        pairs.push({ pair: `${a}|${b}`, a, b });
+      });
+    }
+  }
+  refuseIfAny(problems);
+  return {
+    path: given,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    min: min as number,
+    max: max as number,
+    step: step as number,
+    steps,
+    fps: raw.fps as number,
+    max_gap: raw.max_gap as number,
+    max_ghost: raw.max_ghost as number,
+    pairs,
+  };
+}
+
+function rigAnswersWind(rig: Record<string, unknown>, motion: Record<string, unknown>): boolean {
+  const constraints = Array.isArray(rig.constraints) ? rig.constraints.filter(isRecord) : [];
+  for (const c of constraints) {
+    if (c.type === 'physics' && typeof c.wind === 'number' && c.wind !== 0) return true;
+  }
+  if (isRecord(motion.physics)) {
+    for (const e of Object.values(motion.physics)) {
+      if (isRecord(e) && typeof e.wind === 'number' && e.wind !== 0) return true;
+    }
+  }
+  if (isRecord(motion.animations)) {
+    for (const a of Object.values(motion.animations)) {
+      const tracks = isRecord(a) && Array.isArray(a.tracks) ? a.tracks.filter(isRecord) : [];
+      for (const t of tracks) {
+        if ('physics' in t && t.property === 'wind' && Array.isArray(t.keys) && t.keys.length > 0) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Resolve every slot in `wb.pairs` against `rig.json`, check that `motion.json` holds at least one animation,
+ * and check that the rig declares a wind-responsive physics constraint before `rigc build` runs (issue #590).
+ */
+export function resolveWindBand(wb: WindBandSpec, inp: Pick<CheckInputs, 'rig' | 'rigPath' | 'motion' | 'motionPath'>): void {
+  const problems: Problem[] = [];
+  const slotList = (Array.isArray(inp.rig.slots) ? inp.rig.slots : []).filter(isRecord).map((s) => String(s.name));
+  const slotSet = new Set(slotList);
+  for (const p of wb.pairs) {
+    const missing = [p.a, p.b].filter((n) => !slotSet.has(n));
+    if (missing.length > 0) {
+      problems.push({
+        code: WIND_BAND_RULE,
+        object: `${wb.path} pair "${p.pair}"`,
+        detail: `names ${missing.map((n) => `slot "${n}"`).join(' and ')}, which ${inp.rigPath} does not have (slots: ${slotList.join(', ')})`,
+      });
+    }
+  }
+  if (!(isRecord(inp.motion.animations) && Object.keys(inp.motion.animations).length > 0)) {
+    problems.push({
+      code: WIND_BAND_RULE,
+      object: wb.path,
+      detail: `${inp.motionPath} holds no animation, so check renders no frame a wind-band sweep could pose`,
+    });
+  }
+  if (withoutPhysics(inp.rig, inp.motion) === null) {
+    problems.push({
+      code: WIND_BAND_RULE,
+      object: wb.path,
+      detail: `${inp.rigPath} declares no physics constraint, so no wind moves anything in it`,
+    });
+  } else if (!rigAnswersWind(inp.rig, inp.motion)) {
+    problems.push({
+      code: WIND_BAND_RULE,
+      object: wb.path,
+      detail: `no physics constraint in ${inp.rigPath} or ${inp.motionPath} answers wind (every constraint has wind 0), so a wind sweep moves nothing in it`,
+    });
+  }
+  refuseIfAny(problems);
+}
+
+function holdingSpan(holdsAt: readonly boolean[], steps: readonly number[]): { start: number; end: number } | null {
+  const runs: Array<{ start: number; end: number }> = [];
+  let i = 0;
+  while (i < holdsAt.length) {
+    if (!holdsAt[i]) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j + 1 < holdsAt.length && holdsAt[j + 1]) j++;
+    runs.push({ start: i, end: j });
+    i = j + 1;
+  }
+  if (runs.length === 0) return null;
+  const distToDefault = (r: { start: number; end: number }): number => {
+    const lo = steps[r.start];
+    const hi = steps[r.end];
+    return 1 >= lo && 1 <= hi ? 0 : Math.min(Math.abs(1 - lo), Math.abs(1 - hi));
+  };
+  return [...runs].sort((a, b) => distToDefault(a) - distToDefault(b) || (b.end - b.start) - (a.end - a.start) || a.start - b.start)[0];
+}
+
+/**
+ * Sweep steady wind `wind: [x, 0], gravity: [0, 1]` at `t = 0` across `wb.steps` through `rigc render --seam`
+ * (`--max 16`) and compute the holding band of each pair and of the rig overall (issue #590).
+ */
+export function measureWindBand(
+  wb: WindBandSpec,
+  buildDir: string,
+  scratchDir: string,
+  animationNames: readonly string[],
+  rigc: RigcRunner,
+  plant: WindBandPlant = {},
+): WindBandLine {
+  rmSync(scratchDir, { recursive: true, force: true });
+  mkdirSync(scratchDir, { recursive: true });
+  const list = wb.pairs.map((p) => `${p.a}:${p.b}`).join(',');
+  const seamPairs: MotionSeamPair[] = wb.pairs.map((p) => ({ ...p, declared: [wb.path] }));
+  const stepRows: MotionSeamWorldRow[][] = [];
+  for (let idx = 0; idx < wb.steps.length; idx++) {
+    const x = wb.steps[idx];
+    const schedulePath = join(scratchDir, `step_${idx}.json`);
+    const renderDir = join(scratchDir, `render_${idx}`);
+    writeFileSync(schedulePath, JSON.stringify({ spec: ENVIRONMENT_SPEC, steps: [{ t: 0, wind: [x, 0], gravity: [0, 1] }] }));
+    const rendered = rigc(['render', '--candidate', buildDir, '--seam', list, '--fps', String(wb.fps), '--max', String(FOLD_RENDER_MAX), '--environment', schedulePath, '--out', renderDir]);
+    if (rendered.status !== 0) {
+      refuseIfAny(rigcFailed(`render --seam (wind-band x = ${x})`, rendered, rendered.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
+    }
+    const rows = readMotionSeamWorldRows(renderDir, animationNames, wb.fps, seamPairs);
+    rmSync(renderDir, { recursive: true, force: true });
+    if (idx === 0) {
+      const unbandedProblems: Problem[] = [];
+      for (const p of wb.pairs) {
+        if (!rows.some((r) => r.pair === p.pair && r.status === 'read' && r.banded > 0)) {
+          unbandedProblems.push({
+            code: WIND_BAND_RULE,
+            object: `${wb.path} pair "${p.pair}"`,
+            detail: `rigc read no seam band on any frame of ${animationNames.join(', ')}; the two slots share no setup-pose alpha overlap band to measure`,
+          });
+        }
+      }
+      refuseIfAny(unbandedProblems);
+    }
+    stepRows.push(rows);
+  }
+
+  const pairRows: WindBandPairRow[] = wb.pairs.map((p) => {
+    const perStep = wb.steps.map((x, idx) => {
+      const rows = stepRows[idx].filter((r) => r.pair === p.pair);
+      let gapPx = 0;
+      let gapAnim = animationNames[0] ?? 'idle';
+      let gapFrame: number | null = null;
+      let ghostPx = 0;
+      let ghostAnim = animationNames[0] ?? 'idle';
+      let ghostFrame: number | null = null;
+      for (const r of rows) {
+        if (r.gap.max_px > gapPx || (r.gap.max_px === gapPx && gapFrame === null && r.gap.worst !== null)) {
+          gapPx = r.gap.max_px;
+          gapAnim = r.animation;
+          gapFrame = r.gap.worst?.index ?? null;
+        }
+        if (r.ghost.max_px > ghostPx || (r.ghost.max_px === ghostPx && ghostFrame === null && r.ghost.worst !== null)) {
+          ghostPx = r.ghost.max_px;
+          ghostAnim = r.animation;
+          ghostFrame = r.ghost.worst?.index ?? null;
+        }
+      }
+      const holds = plant.ignoreBreaks === true ? true : gapPx <= wb.max_gap && ghostPx <= wb.max_ghost;
+      return { x, holds, gapPx, gapAnim, gapFrame, ghostPx, ghostAnim, ghostFrame };
+    });
+
+    const breakAt = (idx: number): WindBandBreak => {
+      const s = perStep[idx];
+      const gapOver = s.gapPx - wb.max_gap;
+      const ghostOver = s.ghostPx - wb.max_ghost;
+      const kind: 'gap' | 'ghost' = s.gapPx > wb.max_gap && (s.ghostPx <= wb.max_ghost || gapOver >= ghostOver) ? 'gap' : 'ghost';
+      return {
+        x: s.x,
+        kind,
+        px: kind === 'gap' ? s.gapPx : s.ghostPx,
+        bar: kind === 'gap' ? wb.max_gap : wb.max_ghost,
+        animation: kind === 'gap' ? s.gapAnim : s.ghostAnim,
+        frame: (kind === 'gap' ? s.gapFrame : s.ghostFrame) ?? 0,
+      };
+    };
+
+    const span = holdingSpan(perStep.map((s) => s.holds), wb.steps);
+    const holdsAll = perStep.every((s) => s.holds);
+    const worstGap = perStep.reduce((best, s) => (s.gapPx > best.gapPx ? s : best), perStep[0]);
+    const worstGhost = perStep.reduce((best, s) => (s.ghostPx > best.ghostPx ? s : best), perStep[0]);
+
+    return {
+      pair: p.pair,
+      a: p.a,
+      b: p.b,
+      holds_all: holdsAll,
+      holds_from: span === null ? null : wb.steps[span.start],
+      holds_to: span === null ? null : wb.steps[span.end],
+      first_break_below: span !== null && span.start > 0 ? breakAt(span.start - 1) : null,
+      first_break_above: span === null ? breakAt(0) : span.end < wb.steps.length - 1 ? breakAt(span.end + 1) : null,
+      worst_gap: { x: worstGap.x, px: worstGap.gapPx, animation: worstGap.gapAnim, frame: worstGap.gapFrame },
+      worst_ghost: { x: worstGhost.x, px: worstGhost.ghostPx, animation: worstGhost.ghostAnim, frame: worstGhost.ghostFrame },
+      steps: perStep.map((s) => ({ x: s.x, holds: s.holds, gap_max_px: s.gapPx, ghost_max_px: s.ghostPx })),
+    };
+  });
+
+  const allHoldAt = wb.steps.map((_, idx) => pairRows.every((p) => p.steps[idx].holds));
+  const overallSpan = holdingSpan(allHoldAt, wb.steps);
+
+  return {
+    status: 'REPORTED',
+    spec: WIND_BAND_SPEC,
+    path: wb.path,
+    sha256: wb.sha256,
+    steady_wind_only: true,
+    gravity: [0, 1],
+    min: wb.min,
+    max: wb.max,
+    step: wb.step,
+    steps: wb.steps,
+    fps: wb.fps,
+    animations: [...animationNames],
+    max_gap: wb.max_gap,
+    max_ghost: wb.max_ghost,
+    holds_from: overallSpan === null ? null : wb.steps[overallSpan.start],
+    holds_to: overallSpan === null ? null : wb.steps[overallSpan.end],
+    pairs_holding_all: pairRows.filter((p) => p.holds_all).length,
+    pairs: pairRows,
+  };
+}
+
+/**
+ * Console lines for `WIND_BAND` (issue #590): one summary line with the steady-wind band and the count of pairs that
+ * hold throughout, plus one `WIND_BAND:` line per pair that breaks inside the swept range.
+ */
+export function windBandLines(line: WindBandLine, plant: WindBandPlant = {}): string[] {
+  const bandText =
+    line.holds_from === null || line.holds_to === null
+      ? `none of [${line.min}, ${line.max}]`
+      : `[${line.holds_from}, ${line.holds_to}] of [${line.min}, ${line.max}]`;
+  const summary =
+    `${WIND_BAND_LINE}: ${line.status} — steady wind [x, 0], gravity [0, 1] at t = 0 over [${line.min}, ${line.max}] step ${line.step} (${line.steps.length} step(s) at ${line.fps} fps across ${line.animations.join(', ')}; bars gap <= ${line.max_gap}, ghost <= ${line.max_ghost}; steady wind only, does not measure gusts): ` +
+    `band ${bandText}; ${line.pairs_holding_all}/${line.pairs.length} pair(s) hold throughout`;
+  if (plant.silentPairs === true) return [summary];
+  const breaking = line.pairs
+    .filter((p) => !p.holds_all)
+    .map((p) => {
+      const pairBand = p.holds_from === null || p.holds_to === null ? 'holds nowhere' : `holds [${p.holds_from}, ${p.holds_to}]`;
+      const fmtBreak = (dir: 'below' | 'above', b: WindBandBreak | null): string | null =>
+        b === null ? null : `first break ${dir} at x = ${b.x} (${b.kind} ${b.px} > ${b.bar} in "${b.animation}" frame ${b.frame})`;
+      const breaks = [fmtBreak('below', p.first_break_below), fmtBreak('above', p.first_break_above)].filter((s): s is string => s !== null).join('; ');
+      return `${WIND_BAND_LINE}: pair "${p.pair}" — ${pairBand}; ${breaks}; worst gap ${p.worst_gap.px} at x = ${p.worst_gap.x}, worst ghost ${p.worst_ghost.px} at x = ${p.worst_ghost.x}`;
+    });
+  return [summary, ...breaking];
+}
+
 /**
  * Run the whole check. Refuses (throws a PartsError) when the inputs are
  * unreadable or a rigc step that everything after it depends on is red — the
@@ -5149,7 +5618,7 @@ export function environmentLine(env: CheckEnvironment): string {
  * MEASURABLE is a problem. Without it nothing here reads, writes or prints
  * anything it did not before.
  */
-export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, requirementsAs: string | undefined = requirements, config?: InputFileRecord): CheckReport {
+export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string): CheckReport {
   let inp: CheckInputs;
   let reqFile: RequirementsFile | null = null;
   let reqRecord: RequirementsFileRecord | null = null;
@@ -5167,14 +5636,20 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   };
   // Issue #538: the schedule is read once, first, by rigc's own reader; refused, nothing is built or written.
   const env = environment === undefined ? null : take(() => readCheckEnvironment(environment));
+  // Issue #590: the steady-wind band spec is read and resolved before anything is built or written.
+  const wb = windBand === undefined ? null : take(() => readWindBand(windBand));
   if (requirements === undefined) {
     const got = take(() => readCheckInputs(rigDir, partsHome, source, set, allSets));
+    if (got !== null && wb !== null) take(() => resolveWindBand(wb, got));
     refuseIfAny(refused);
     inp = got as CheckInputs;
   } else {
     const got = take(() => readCheckInputs(rigDir, partsHome, source, set, allSets));
     reqFile = take(() => readRequirements(requirements));
-    refuseIfAny(refused);
+    if (got === null || reqFile === null) {
+      if (got !== null && wb !== null) take(() => resolveWindBand(wb, got));
+      refuseIfAny(refused);
+    }
     reqRecord = requirementsFileRecord(requirements, requirementsAs ?? requirements);
     inp = got as CheckInputs;
     const file = reqFile as RequirementsFile;
@@ -5189,6 +5664,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         return placedArt(rec.x, rec.y, readPng(join(ready.partsDir, `${n}.png`)));
       }));
     }
+    if (wb !== null) take(() => resolveWindBand(wb, ready));
     refuseIfAny(refused);
   }
   // Issue #538: a motion with no animation gives check no render a schedule could pose — every frame it reads would be
@@ -5215,6 +5691,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           return call;
         };
   const out = resolve(outDir);
+  const outExisted = existsSync(out);
   mkdirSync(out, { recursive: true });
   const buildDir = join(out, 'build');
   const idleDir = join(out, 'idle_frames');
@@ -5225,7 +5702,8 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const keptDir = join(out, STILL_DIR);
   const foldDir = join(out, FOLD_SCRATCH);
   const seamMotionDir = join(out, MOTION_SEAM_SCRATCH);
-  for (const d of [buildDir, idleDir, stillDir, isoDir, loopDir, seamDir, keptDir, join(out, 'setup_still_auto'), foldDir, seamMotionDir]) rmSync(d, { recursive: true, force: true });
+  const windBandDir = join(out, WIND_BAND_SCRATCH);
+  for (const d of [buildDir, idleDir, stillDir, isoDir, loopDir, seamDir, keptDir, join(out, 'setup_still_auto'), foldDir, seamMotionDir, windBandDir]) rmSync(d, { recursive: true, force: true });
   const written: string[] = [];
   const write = (name: string, data: string): void => {
     writeFileSync(join(out, name), data);
@@ -5275,6 +5753,22 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   };
   const animationNames = isRecord(inp.motion.animations) ? Object.keys(inp.motion.animations) : [];
   const named = animationNames.filter((n) => n !== 'idle');
+  // Issue #590: steady-wind seam band sweep, only under --wind-band; run before idle/still renders so a refusal
+  // on an unbanded pair writes nothing.
+  let windBandRead: WindBandLine | null = null;
+  if (wb !== null) {
+    try {
+      windBandRead = measureWindBand(wb, buildDir, windBandDir, animationNames, rigc);
+    } catch (err) {
+      rmSync(windBandDir, { recursive: true, force: true });
+      rmSync(join(out, 'gate_spine-html.txt'), { force: true });
+      rmSync(buildDir, { recursive: true, force: true });
+      if (!outExisted) rmSync(out, { recursive: true, force: true });
+      throw err;
+    } finally {
+      rmSync(windBandDir, { recursive: true, force: true });
+    }
+  }
   let folds: FoldsLine | null = null;
   const foldProblems: Problem[] = [];
   // Issue #348: the feet the level line reads, off parts.json and rig.json; none, and nothing below moves.
@@ -5916,6 +6410,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(stripped === null || idle === null ? {} : { [CLOTH_LINE]: cloth }),
     RECOMPOSITE_HOLES: inp.parts === null ? { status: 'SKIP', reason: inp.noParts ?? '' } : holesLine(inp.parts),
     ...(sourceRead === null ? {} : { [SOURCE_LINE]: sourceRead }),
+    ...(windBandRead === null ? {} : { [WIND_BAND_LINE]: windBandRead }),
     ...(Object.keys(skipped).length === 0 ? {} : { skipped }),
     ...(Object.keys(setsFigures).length === 0 ? {} : { sets: setsFigures }),
     ...(config === undefined ? {} : { config }),
@@ -6005,6 +6500,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     motionSeam,
     cloth,
     ...(sweepSteps.size === 0 ? {} : { sweepSteps }),
+    ...(windBandRead === null ? {} : { windBand: windBandRead }),
   };
   } finally {
     rmSync(seamMotionDir, { recursive: true, force: true });
