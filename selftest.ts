@@ -38625,6 +38625,66 @@ function runTreeSuite(): number {
     'issue #759: the two --write-config destination rules (in-place existing config vs fresh file for --cloth) and the accepted flags of propose --from-config are stated at each doc and refusal site',
   );
 
+  // TY29 — issue #769: AUTHORING states the cloth recipe's count units (explicit back-hair chains per emitted side,
+  // front-hair chains per qualifying hanging strand vs the fringe's two-link columns, omitted back-hair chains derived
+  // from visible hair masses rather than a universal default of 1 or 2, and the fixture example not recommending two
+  // trees on a one-mass side) and points mesh-stats / soft-region readers at mesh_report.json's per-region report.
+  const clothRecipeStart29 = guide21.indexOf('### Recipe: cloth and hair that answer the world');
+  const clothRecipeBlock29 = clothRecipeStart29 < 0 ? '' : guide21.slice(clothRecipeStart29, guide21.indexOf('\n**A keyed sibling left behind', clothRecipeStart29));
+  const contourReportStart29 = guide21.indexOf("**What it reports.** `mesh_report.json`'s row for a contour mesh");
+  const contourReportBlock29 = contourReportStart29 < 0 ? '' : guide21.slice(contourReportStart29, guide21.indexOf('\n**Refusals**', contourReportStart29));
+  const softRegionStart29 = guide21.indexOf('**Choose region spacing against the triangle budget.**');
+  const softRegionBlock29 = softRegionStart29 < 0 ? '' : guide21.slice(softRegionStart29, guide21.indexOf('\nA bounded calibration', softRegionStart29));
+  const meshStatsStart29 = guide21.indexOf('### Counting the triangles before a build (`mesh-stats`, issue #566)');
+  const meshStatsBlock29 = meshStatsStart29 < 0 ? '' : guide21.slice(meshStatsStart29, guide21.indexOf('\n### For artists:', meshStatsStart29));
+  const holdingClothUnitsDoc29 = (s: string): boolean => {
+    const flat = s.replace(/\s+/g, ' ');
+    return (
+      flat.includes('not a recommendation to declare two trees on a one-mass side') &&
+      flat.includes('an explicit `chains: N` is passed to **each emitted side of the eye axis**') &&
+      flat.includes('not a combined total across both sides') &&
+      flat.includes("the recipe's `chains`, `links` and `split` are applied separately to each qualifying hanging strand and do not replace the fringe's fixed three two-link columns") &&
+      flat.includes("applied **separately to each qualifying hanging strand** and does not replace the fringe's fixed two-link columns") &&
+      flat.includes('**not** a universal default of 1 or 2 trees for every painting')
+    );
+  };
+  const holdingMeshStatsRegionDoc29 = (ms: string, sr: string, cr: string): boolean => {
+    const flatMs = ms.replace(/\s+/g, ' ');
+    const flatSr = sr.replace(/\s+/g, ' ');
+    const flatCr = cr.replace(/\s+/g, ' ');
+    return (
+      flatMs.includes('projects its `meshReport` via `meshStatsRows` to `{part, mode, vertices, triangles}` and the total (`meshStatsLines`)') &&
+      flatMs.includes('writes no `mesh_report.json` or skeleton data and runs no `rigc` or `check`') &&
+      flatMs.includes('it takes `--config` and `--parts` alone (no `--candidate`, `--regions`, `--report`') &&
+      flatMs.includes('regions: [{ name, bone, reached, whole }, ...]') &&
+      flatMs.includes('nonzero region contribution, `g > 0`, and `whole` counts vertices where `g >= 1`') &&
+      flatMs.includes('see §3, *A contour mesh*, *What it reports*') &&
+      flatMs.includes(
+        "Neither `mesh-stats`'s dry totals nor `mesh_report.json`'s static `regions[].{reached, whole}` setup-weight counts are a rendered `> 0.5 px` counterfactual-motion count or a claim that the config passed the compiler, coverage, motion or visual `check` gates",
+      ) &&
+      flatSr.includes('see *A contour mesh*, *What it reports*, above, which `mesh-stats` does not print') &&
+      flatCr.includes('regions: [{ name, bone, reached, whole }, ...]') &&
+      flatCr.includes('where `g >= 1`') &&
+      flatCr.includes('static setup-weight vertex counts, not a rendered frame-to-frame or `> 0.5 px` counterfactual-motion count')
+    );
+  };
+  const plantPre769Cloth = clothRecipeBlock29.replaceAll('an explicit `chains: N` is passed to **each emitted side of the eye axis**', 'chains are across the piece');
+  const plantPre769MeshStats =
+    '(`demo` as tracked, nine lattices.) The package holds no triangle budget: a budget is the consumer\'s, and the command prints no line against one. One line per mesh, in parts.json\'s order, the row order of `mesh_report.json`; the mode is `lattice` for a `grid` entry, `contour`, `auto` or `influence`.';
+  const plantPre769SoftRegion = "Read the part's `mesh_report.json` row first, and use `mesh-stats` for the candidate rather than waiting for a rendered build.";
+  const plantPre769ContourReport = 'and, per region, the vertices its bone reaches (`g > 0`) and holds alone (`g = 1`).';
+  say(
+    'TY29_AUTHORING_CLOTH_COUNT_UNITS_AND_MESH_STATS_REGION_REPORT_POINTER_HOLD_THE_CODE_FACTS',
+    holdingClothUnitsDoc29(clothRecipeBlock29) &&
+      holdingMeshStatsRegionDoc29(meshStatsBlock29, softRegionBlock29, contourReportBlock29) &&
+      !holdingClothUnitsDoc29(plantPre769Cloth) &&
+      !holdingMeshStatsRegionDoc29(plantPre769MeshStats, softRegionBlock29, contourReportBlock29) &&
+      !holdingMeshStatsRegionDoc29(meshStatsBlock29, plantPre769SoftRegion, contourReportBlock29) &&
+      !holdingMeshStatsRegionDoc29(meshStatsBlock29, softRegionBlock29, plantPre769ContourReport),
+    `AUTHORING cloth recipe count units: ${holdingClothUnitsDoc29(clothRecipeBlock29) ? 'yes' : 'NO'}; mesh-stats + soft-region + contour report cross-references: ${holdingMeshStatsRegionDoc29(meshStatsBlock29, softRegionBlock29, contourReportBlock29) ? 'yes' : 'NO'}; planted pre-#769 cloth block -> ${holdingClothUnitsDoc29(plantPre769Cloth) ? 'PASSES' : 'caught'}; planted pre-#769 mesh-stats / soft-region / contour-report lines -> ${holdingMeshStatsRegionDoc29(plantPre769MeshStats, softRegionBlock29, contourReportBlock29) || holdingMeshStatsRegionDoc29(meshStatsBlock29, plantPre769SoftRegion, contourReportBlock29) || holdingMeshStatsRegionDoc29(meshStatsBlock29, softRegionBlock29, plantPre769ContourReport) ? 'PASSES' : 'caught'}`,
+    'issue #769: the cloth recipe states its count units at the where/trees rows (back-hair chains per emitted side, front-hair chains per qualifying hanging strand vs the fringe, omitted back-hair chains derived from visible masses), and mesh-stats / soft-region docs point to mesh_report.json\'s regions[].{name, bone, reached, whole} static setup-weight counts',
+  );
+
   const self = readFileSync(join(ROOT, 'selftest.ts'), 'utf8');
   const from = self.indexOf(SUMMARY_START);
   const to = from < 0 ? -1 : self.indexOf(SUMMARY_END, from);
