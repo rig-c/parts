@@ -2359,6 +2359,7 @@ function checkAlternates(
         const path = `${at}.layers.${part}`;
         const covered = ('parts' in e ? seenParts : allSlots).has(part) && !seenHides.has(part);
         if (!covered) c.fail('CONFIG_SET_LAYERS', path, `names "${part}", which the set does not cover; name a covered, nonhidden part`);
+        if (limbs?.parts.get(part)?.band !== undefined) c.fail('CONFIG_SET_LAYERS', path, `names generated band "${part}"; select the shared layer through its rigid segment parts, not a separate band layer`);
         if (made.patches.includes(part)) c.fail('CONFIG_SET_LAYERS', path, `names the painting patch "${part}", which has no run layer source; declare a layer-backed plan part instead`);
         if (typeof layer !== 'string' || readLayerTag(layer) === null) c.fail('CONFIG_TAG_KNOWN', path, `is ${show(layer)}; a See-through v3 tag or "${AUTHOR_PREFIX}<label>" is required; ${AUTHOR_LABEL_RULE}`);
       }
@@ -2388,11 +2389,13 @@ function checkAlternates(
       for (const [limbName, chain] of limbs.chains) {
         const coveredSegs = chain.parts.filter((sp) => seenParts.has(sp) && !seenHides.has(sp));
         const hiddenSegs = chain.parts.filter((sp) => seenHides.has(sp));
-        if ((coveredSegs.length > 0 || hiddenSegs.length > 0) && coveredSegs.length !== chain.parts.length) {
+        const bands = [...limbs.parts].filter(([, p]) => p.band?.limb === limbName).map(([name]) => name);
+        const selectedBands = bands.filter((n) => seenParts.has(n)), hiddenBands = bands.filter((n) => seenHides.has(n));
+        if ((coveredSegs.length > 0 || hiddenSegs.length > 0 || selectedBands.length > 0 || hiddenBands.length > 0) && (coveredSegs.length !== chain.parts.length || hiddenBands.length > 0)) {
           c.fail(
             'CONFIG_LIMB_SET_JOINTS',
             `${at}.parts`,
-            `covers [${coveredSegs.map((s) => `"${s}"`).join(', ')}]${hiddenSegs.length > 0 ? ` (and hides [${hiddenSegs.map((s) => `"${s}"`).join(', ')}])` : ''} of config.limbs.${limbName}, which cuts at the base's joints into [${chain.parts.map((s) => `"${s}"`).join(', ')}]; a gesture set over a limb chain must cover all ${chain.parts.length} of its segment parts so it is cut at the base's joints`,
+            `covers [${coveredSegs.map((s) => `"${s}"`).join(', ')}]${hiddenSegs.length > 0 ? ` (and hides [${hiddenSegs.map((s) => `"${s}"`).join(', ')}])` : ''} of config.limbs.${limbName}, which cuts at the base's joints into [${chain.parts.map((s) => `"${s}"`).join(', ')}]; a gesture set over a limb chain must cover all ${chain.parts.length} of its segment parts so it is cut at the base's joints${hiddenBands.length === 0 ? '' : `; generated bands [${hiddenBands.join(', ')}] cannot be hidden independently`}`,
           );
         } else if (coveredSegs.length === chain.parts.length && !cutsConsumedLimb && 'cuts' in e && Array.isArray(e.cuts) && e.cuts.length > 0) {
           c.fail(
@@ -2411,6 +2414,7 @@ function checkAlternates(
         const limbSeg = limbs?.parts.get(pn);
         if (limbSeg !== undefined) {
           coveredBones.add(limbSeg.bone);
+          if (limbSeg.band !== undefined) coveredBones.add(limbSeg.band.upper);
         } else if (isPlainObject(regions) && typeof rawRegionBone(regions[pn]) === 'string') {
           coveredBones.add(rawRegionBone(regions[pn]) as string);
         } else if (isPlainObject(meshes) && isPlainObject(meshes[pn])) {
@@ -3258,7 +3262,7 @@ function checkRegions(c: Check, v: Json, bones: Set<string>): void {
 
 /** What the loader read off `config.limbs` (issue #349): each limb part with its bone, and each part a limb takes, with the first limb taking it. */
 interface LimbNames {
-  parts: Map<string, { bone: string; at: string }>;
+  parts: Map<string, { bone: string; at: string; band?: { limb: string; upper: string } }>;
   consumed: Map<string, string>;
   chains: Map<string, { parts: string[]; bones: string[]; froms: string[] }>;
   /** Issue #664: each segment part a limb's `front.parts` names -> that limb. */
@@ -3365,7 +3369,10 @@ function checkLimbs(c: Check, v: Json, made: { parts: string[]; patches: string[
           if (c.string(`${sat}.hybrid.part`, h.part)) {
             if (!partNameOk(h.part)) c.fail('CONFIG_PART_NAME', `${sat}.hybrid.part`, `is ${show(h.part)}; a part filename is required`);
             else if (firstAt.has(h.part) || [...made.parts, ...made.patches, ...made.cuts].includes(h.part)) c.fail('CONFIG_PART_UNIQUE', `${sat}.hybrid.part`, `names "${h.part}", already produced; a unique band name is required`);
-            else firstAt.set(h.part, `${sat}.hybrid`);
+            else {
+              firstAt.set(h.part, `${sat}.hybrid`);
+              if (typeof e.bone === 'string' && typeof bones[i - 1] === 'string') out.parts.set(h.part, { bone: e.bone, at: `${sat}.hybrid`, band: { limb, upper: bones[i - 1] as string } });
+            }
           }
           if ('width' in h && !(typeof h.width === 'number' && Number.isFinite(h.width) && h.width > 0)) c.fail('CONFIG_FIELD_TYPE', `${sat}.hybrid.width`, `is ${show(h.width)}; finite full axial width above 0 rig px is required`);
         }
@@ -3560,6 +3567,7 @@ function checkCoverage(c: Check, made: string[], patches: string[], meshes: Json
       }
     }
     for (const [part, seg] of limbs.parts) {
+      if (seg.band !== undefined) continue;
       const bone = isPlainObject(regions) ? rawRegionBone(regions[part]) : undefined;
       if (typeof bone === 'string' && bone !== seg.bone) {
         c.fail('CONFIG_LIMB_BONE', `config.regions.${part}`, `is "${bone}"; "${part}" is ${seg.at}, which rides "${seg.bone}" with weight 1, so config.regions.${part} "${seg.bone}" is required`);
@@ -3573,6 +3581,10 @@ function checkCoverage(c: Check, made: string[], patches: string[], meshes: Json
   for (const part of parts) {
     const inM = m.includes(part);
     const inR = r.includes(part);
+    if (limbs?.parts.get(part)?.band !== undefined) {
+      if (inM || inR) c.fail('CONFIG_PART_ATTACHED', `part "${part}"`, 'is a generated hybrid band; remove its mesh/region entry — the joint supplies its two-carrier attachment');
+      continue;
+    }
     if (!inM && !inR) c.fail('CONFIG_PART_ATTACHED', `part "${part}"`, 'has neither a meshes entry nor a regions entry; exactly one is required');
     if (inM && inR) c.fail('CONFIG_PART_ATTACHED', `part "${part}"`, 'has both a meshes entry and a regions entry; exactly one is required');
   }

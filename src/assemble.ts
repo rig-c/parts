@@ -4220,6 +4220,10 @@ function cutLimbs(
     segs.forEach((sg, k) => {
       if (sg.hybrid === undefined || k === 0) return;
       const object = `config.limbs.${l}.segments[${k}].hybrid`;
+      if (sg.from !== segs[k - 1].from) {
+        problems.push({ code: 'ASSEMBLE_HYBRID_SOURCE', object, detail: `takes "${sg.from}" below and "${segs[k - 1].from}" above; one continuous source layer is required — select the same layer for both rigid neighbours` });
+        return;
+      }
       const line = (lines.get(l) as Array<JointLine | null>)[k] as JointLine;
       const source = builtOf(sg.from) as Built;
       const li = names.indexOf(l), own = owners.get(sg.from) as Int32Array;

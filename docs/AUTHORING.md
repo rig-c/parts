@@ -981,6 +981,14 @@ The strict reader requires the pair to agree. Re-run assemble after changing
 the declaration (`RIG_HYBRID_SOURCE`); non-region neighbours are
 `RIG_HYBRID_RIGID`.
 
+A subset alternate covering the limb automatically covers its generated bands
+as well. A band may also be listed explicitly in `parts`; it cannot be hidden
+independently or given a separate `layers` override. The band image, its paired
+records and the alternate's source axis switch with the rigid pieces. The
+reader applies the same band-field and pair checks to alternate records.
+Declaring hybrid on an old cut manifest is refused until assemble produces the
+matching band and lower joint record.
+
 `LIMB_ONE_BONE` keeps its historical rule for ordinary segments. A recorded
 band instead requires both adjacent carriers and no third carrier. The range
 check still compares against the same rest-art disc and uses the same
@@ -3609,6 +3617,7 @@ row in this page's `rule` and `line` tables; the selftest holds that (`TY16`).
 | --- | --- | --- |
 | <a id="CONFIG_HYBRID_SOURCE"></a>`CONFIG_HYBRID_SOURCE` | the two hybrid neighbours name different source parts | use a single continuous source layer for the joint band |
 | <a id="CONFIG_HYBRID_CUT"></a>`CONFIG_HYBRID_CUT` | a hybrid joint also declares a cut-cap option | remove cap, cap_shape, edge and cut_band at that joint |
+| <a id="ASSEMBLE_HYBRID_SOURCE"></a>`ASSEMBLE_HYBRID_SOURCE` | effective alternate layer selection gives a band different upper and lower source layers | select the same continuous layer for both rigid neighbours |
 | <a id="ASSEMBLE_HYBRID_WIDTH"></a>`ASSEMBLE_HYBRID_WIDTH` | the source-derived or explicit band is nonpositive, lacks a source crossing or reaches beyond an adjacent bone span | put the joint inside the art and declare a finite positive full width that fits both spans |
 | <a id="ASSEMBLE_HYBRID_OVERLAP"></a>`ASSEMBLE_HYBRID_OVERLAP` | two joint bands overlap on source pixels | reduce their widths so their sampling supports are disjoint |
 | <a id="PARTS_HYBRID_PAIR"></a>`PARTS_HYBRID_PAIR` | a rigid joint references a missing or inconsistent generated band | re-run assemble; keep source, joint, carriers and measured geometry together |

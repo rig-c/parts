@@ -2,7 +2,9 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { hybridConfig, writeHybridFixture } from '../fixtures/hybrid_limb.ts';
-import { assembleStage } from '../src/build.ts';
+import { readPng, writePng } from '../src/raster/png.ts';
+import { assemble, stageFields } from '../src/assemble.ts';
+import { assembleStage, readRigInputs, readRuns } from '../src/build.ts';
 import { limbLine, sweepJoints, sweepUnderlay } from '../src/check.ts';
 import { loadConfig, parseConfig } from '../src/config.ts';
 import { PartsError } from '../src/errors.ts';
@@ -10,16 +12,27 @@ import { readParts, serializeParts } from '../src/parts.ts';
 import { hashRows, readTree } from '../src/remesh.ts';
 import { buildRig, rigJsonText } from '../src/rig.ts';
 
-export function prepareHybrid(dir: string, mode: boolean, width?: number, turns = 0) {
+export function prepareHybrid(dir: string, mode: boolean, width?: number, turns = 0, edit?: (raw: Record<string, unknown>) => void) {
   writeHybridFixture(dir, mode, width, turns);
+  if (edit !== undefined) { const path = join(dir, 'config.json'); const raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>; edit(raw); writeFileSync(path, JSON.stringify(raw)); }
   const out = join(dir, 'parts'); mkdirSync(out, { recursive: true });
   const a = assembleStage({ source: join(dir, 'painting.png'), full: join(dir, 'full'), head: join(dir, 'head'), config: join(dir, 'config.json'), seam: 'near-white', project: 'core' },
     { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, () => {});
-  const cfg = loadConfig(join(dir, 'config.json'));
-  const parsed = readParts(join(out, 'parts.json'));
-  const images = new Map(a.images.map((p) => [p.record.name, p.image]));
+  const { cfg, parts: parsed, images } = readRigInputs(join(dir, 'config.json'), out);
   const r = buildRig(cfg, parsed, images, undefined, 'direct');
   return { a, cfg, parsed, images, r, out };
+}
+export function prepareHybridAlternate(dir: string, name: string, explicit: boolean, full = false) {
+    const at = join(dir, name);
+    return prepareHybrid(at, true, undefined, 0, (raw) => {
+      const art = join(at, 'alternate'); writeHybridFixture(art);
+      for (const file of ['painting.png', 'full/parts/handwear-r.png']) {
+        const image = readPng(join(art, file));
+        for (let i = 0; i < image.data.length; i += 4) { image.data[i] = 30; image.data[i+1] = 90; image.data[i+2] = 160; }
+        writePng(join(art,file),image);
+      }
+      (raw.assemble as Record<string, unknown>).alternates = [{name:'other',source:'alternate/painting.png',full:'alternate/full',head:'alternate/head',drawn:{upper:-90,lower:-75},...(full ? {} : {parts:['proximal','distal',...(explicit ? ['joint_band'] : [])]})}];
+    });
 }
 function refusal(fn: () => unknown): string {
   try { fn(); return ''; } catch (e) { if (e instanceof PartsError) return e.message; throw e; }
@@ -103,7 +116,32 @@ export function runHybridLimbChecks(dir: string, say: Say): void {
     (raw.regions as Record<string,string>).last = 'last';
   });
   say('ADJACENT_BANDS_REFUSED', overlapping.includes('ASSEMBLE_HYBRID_OVERLAP'), overlapping.split('\n')[0]);
+  const subset = prepareHybridAlternate(dir, 'subset', false), explicitSet = prepareHybridAlternate(dir, 'explicit-set', true), fullSet = prepareHybridAlternate(dir, 'full-set', false, true);
+  for (const [label, value] of [['AUTO',subset],['EXPLICIT',explicitSet],['FULL',fullSet]] as const) {
+    const record = value.parsed.alternates?.[0], bandRecord = record?.records.find(p=>p.name==='joint_band');
+    const att = value.r.rig.skins.default.joint_band.other_joint_band;
+    say(`SET_${label}_SWITCHES_BAND_WITH_ITS_LIMB`, record?.slots.joint_band==='other_joint_band' && bandRecord?.limb?.band !== undefined && (fullSet===value || record.parts?.includes('joint_band')===true) && att !== undefined && 'weights' in att && new Set(att.weights.flatMap(v=>v.map(w=>w.bone))).size===2, 'generated slot, paired record, selected image and two-carrier mesh follow the set');
+    const bandImage = value.images.get('other_joint_band');
+    let blue = 0, other = 0;
+    if (bandImage !== undefined) for (let i = 0; i < bandImage.data.length; i += 4) if (bandImage.data[i+3] > 8) {
+      if (bandImage.data[i]===30 && bandImage.data[i+1]===90 && bandImage.data[i+2]===160) blue++; else other++;
+    }
+    say(`SET_${label}_CARRIES_NEW_ART_AND_AXIS`, blue>0 && other===0 && bandRecord?.limb?.band?.axis[0]!==0, `new source ${blue} blue pixels, ${other} other pixels; nonvertical source-axis provenance carried`);
+  }
+  const badAlt = structuredClone(subset.parsed), badAltBand = badAlt.alternates?.[0].records.find(p=>p.limb?.band)?.limb?.band;
+  if (!badAltBand) throw new Error('alternate band absent'); badAltBand.width=0;
+  writeFileSync(join(dir,'bad-alternate.json'),serializeParts(badAlt));
+  const altFault = refusal(()=>readParts(join(dir,'bad-alternate.json')));
+  say('ALTERNATE_BAND_GEOMETRY_REFUSED', altFault.includes('PARTS_FIELD_TYPE') && altFault.includes('alternates[0]'), altFault.split('\n')[0]);
+  const twoSources = structuredClone(a.cfg.limbs ?? {}); twoSources.arm.segments[1].from='other';
+  const runs = readRuns(join(dir,'auto/full'),join(dir,'auto/head'));
+  const sourceFault = refusal(()=>assemble({source:readPng(join(dir,'auto/painting.png')),full:runs.full,head:runs.head,...stageFields(a.cfg),extend:[],patches:[],cuts:[],seamRule:'near-white',projectRule:'core',plan:[['sleeve','full','handwear-r'],['other','full','handwear-r']],limbs:twoSources,bones:a.cfg.bones}));
+  say('EFFECTIVE_SOURCES_MUST_STAY_CONTINUOUS', sourceFault.includes('ASSEMBLE_HYBRID_SOURCE'), sourceFault.split('\n')[0]);
+  const hiddenBand = hybridConfig(true);
+  (hiddenBand.assemble as Record<string,unknown>).alternates=[{name:'hide',parts:['proximal','distal'],hides:['joint_band']}];
+  say('SET_CANNOT_HIDE_JUST_THE_BAND', refusal(()=>parseConfig(hiddenBand)).includes('CONFIG_LIMB_SET_JOINTS'), 'trimmed rigid pieces cannot select a missing joint');
   const cut = prepareHybrid(join(dir, 'cut'), false);
+  say('DECLARED_BAND_WITH_OLD_CUT_PARTS_REFUSED', refusal(()=>buildRig(parseConfig(hybridConfig(true)),cut.parsed,cut.images,undefined,'direct')).includes('RIG_HYBRID_SOURCE'), 'adding the opt-in requires assemble before rig');
   say('ABSENT_HAS_NO_BAND_FIELDS', !serializeParts(cut.parsed).includes('"band"') && !serializeParts(cut.parsed).includes('"hybrid"') && cut.r.meshReport.length === 0, 'historical cut path only');
   const again = prepareHybrid(join(dir, 'again'), true);
   say('DETERMINISTIC_PART_BYTES', JSON.stringify(hashRows(readTree(a.out))) === JSON.stringify(hashRows(readTree(again.out))), 'same paths, byte counts and hashes, no tolerance');

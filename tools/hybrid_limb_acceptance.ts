@@ -8,7 +8,7 @@ import { loadCandidate, type GeometryFile } from 'rig-c/src/render_shared.ts';
 import type { SeamFile } from 'rig-c/src/seam.ts';
 import type { FoldsFile } from 'rig-c/src/folds.ts';
 import { Plate } from 'rig-c/tools/plate.ts';
-import { prepareHybrid } from './check_hybrid_limb.ts';
+import { prepareHybrid, prepareHybridAlternate } from './check_hybrid_limb.ts';
 import { processRigcRunner } from './build-process.ts';
 import { readFrameSet, sweepAngles, sweepAnimationName, sweepCopy, sweepJoints, sweepLine, sweepUnderlay, type FrameSet } from '../src/check.ts';
 import { gateThroughRigc, rigOutputTexts } from '../src/build.ts';
@@ -158,4 +158,18 @@ if(mode==='--measure') {
  console.log(`ACCEPTANCE seam=${seamPass} plant=${plantRed} folds=${foldPass}; range [-30,30], 61 samples at 60 fps`);
  if(!seamPass || !plantRed || !foldPass) process.exitCode=1;
 
+}
+
+if (mode !== '--prepare') for (const [name, explicit, full] of [['subset',false,false],['explicit',true,false],['full',false,true]] as const) {
+ const p=prepareHybridAlternate(root,`alternate-${name}`,explicit,full);
+ const images=p.r.images.map(([n,r])=>[n,encodePngBytes(r)] as const);
+ const texts=rigOutputTexts(p.r,null);
+ const build=join(root,`alternate-${name}`,'compiled');
+ const gates=gateThroughRigc(images,texts,rigc,join(root,`alternate-${name}`,'gate'),null,b=>cpSync(b,build,{recursive:true}));
+ if(gates.some(g=>g.status!==0)) throw new Error(JSON.stringify(gates));
+ const skeleton=join(build,'skeleton.json'),atlas=join(build,'skeleton.atlas');
+ const candidate=loadCandidate({skeletonText:readFileSync(skeleton,'utf8'),atlasText:readFileSync(atlas,'utf8'),atlasDir:build,label:name},{skeleton,atlas},'core');
+ if(!candidate.choice.core) throw new Error(candidate.choice.why);
+ candidate.choice.core.setup(undefined);
+ console.log(`ALTERNATE ${name}: generated band slot/art/axis controls plus rigc gate and core setup green`);
 }

@@ -662,69 +662,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
       else if (b.from !== r.from) fail('PARTS_CUT_FROM_KNOWN', object, `names "${base}", whose from is ${show(b.from)}; this piece's is ${show(r.from)}, and a piece shares its base's layer`);
     }
   }
-  if (Array.isArray(o.parts)) {
-    // A limb segment (issue #349) names its limb, its index, the part it was cut from, its bone, and below a joint the joint and its cap.
-    for (const p of o.parts) {
-      if (typeof p !== 'object' || p === null || Array.isArray(p) || !(LIMB_KEY in p)) continue;
-      const r = p as Record<string, unknown>;
-      const object = `part "${String(r.name)}" field "${LIMB_KEY}"`;
-      const l = r[LIMB_KEY];
-      if (typeof l !== 'object' || l === null || Array.isArray(l)) {
-        fail('PARTS_FIELD_TYPE', object, `is ${show(l)}; an object {name, segment, of, bone, joint?, cap?} is required`);
-        continue;
-      }
-      const q = l as Record<string, unknown>;
-      for (const k of Object.keys(q)) if (!(LIMB_KEYS as readonly string[]).includes(k)) fail('PARTS_KEY_KNOWN', `${object} key "${k}"`, `is not a limb field; known: ${LIMB_KEYS.join(', ')}`);
-      for (const k of ['name', 'of', 'bone'] as const) if (!(typeof q[k] === 'string' && q[k] !== '')) fail('PARTS_FIELD_TYPE', `${object} "${k}"`, `is ${show(q[k])}; a non-empty string is required`);
-      if (!isCount(q.segment)) fail('PARTS_FIELD_TYPE', `${object} "segment"`, `is ${show(q.segment)}; the segment's index, a non-negative integer, is required`);
-      const below = isCount(q.segment) && q.segment > 0;
-      if (below !== ('joint' in q) || below !== ('cap' in q || 'hybrid' in q || 'band' in q) || ['cap', 'hybrid', 'band'].filter((k) => k in q).length > 1) fail('PARTS_FIELD_PRESENT', object, `segment ${show(q.segment)} with${'joint' in q ? '' : 'out'} a joint and with${'cap' in q ? '' : 'out'} a cap; a segment below a joint requires its joint and exactly one of cap, hybrid, or band; the upper segment has neither`);
-      if ('joint' in q && !(typeof q.joint === 'string' && q.joint !== '')) fail('PARTS_FIELD_TYPE', `${object} "joint"`, `is ${show(q.joint)}; the joint's name is required`);
-      // Issue #360: a declared range rides below a joint only, and holds the loader's rule — two degrees, rest in it.
-      if ('range' in q) {
-        const r = q.range;
-        if (!below) fail('PARTS_FIELD_PRESENT', `${object} "range"`, `is on segment ${show(q.segment)}; a range is the bend of a joint, so only a segment below one (index above 0) carries it`);
-        else if (!(Array.isArray(r) && r.length === 2 && r.every((n) => typeof n === 'number' && Number.isFinite(n)) && (r[0] as number) <= 0 && 0 <= (r[1] as number))) {
-          fail('PARTS_FIELD_TYPE', `${object} "range"`, `is ${show(r)}; [min, max], two finite degrees from rest with min <= 0 <= max, is required — config.limbs' rule (CONFIG_LIMB_RANGE)`);
-        }
-      }
-      for (const field of ['hybrid', 'band']) if (field in q) {
-        const h = q[field];
-        if (!below || typeof h !== 'object' || h === null || Array.isArray(h)) fail('PARTS_FIELD_TYPE', `${object} ${field}`, 'a band below a joint with {upper, width, at, axis} is required');
-        else {
-          const b = h as Record<string, unknown>;
-          const pair = (v: unknown): v is number[] => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number' && Number.isFinite(n));
-          if (Object.keys(b).sort().join(',') !== (field === 'hybrid' ? 'at,axis,part,radius,upper,width' : 'at,axis,radius,upper,width') || (field === 'hybrid' && (typeof b.part !== 'string' || b.part === '')) || !(typeof b.radius === 'number' && Number.isFinite(b.radius) && b.radius > 0) || typeof b.upper !== 'string' || b.upper === '' || b.upper === q.bone || !(typeof b.width === 'number' && Number.isFinite(b.width) && b.width > 0) || !pair(b.at) || !pair(b.axis) || Math.abs(edgeLength(b.axis[0], b.axis[1]) - 1) > 1e-6 || (field === 'band' && 'range' in q)) fail('PARTS_FIELD_TYPE', `${object} ${field}`, `is ${show(h)}; distinct upper carrier, positive width, finite at, unit axis and no duplicate range are required`);
-        }
-      }
-      if ('cap' in q) checkCap(q.cap, `${object} "cap"`, fail);
-    }
-  }
-  if (Array.isArray(o.parts)) {
-    const records = o.parts.filter((p): p is Record<string, unknown> => typeof p === 'object' && p !== null && !Array.isArray(p));
-    for (const r of records) {
-      const limb = r.limb;
-      if (typeof limb !== 'object' || limb === null || Array.isArray(limb)) continue;
-      const l = limb as Record<string, unknown>, h = l.hybrid;
-      if (typeof l.band === 'object' && l.band !== null && !Array.isArray(l.band)) {
-        const referring = records.filter((q) => {
-          const ql = q.limb;
-          if (typeof ql !== 'object' || ql === null || Array.isArray(ql)) return false;
-          const qh = (ql as Record<string, unknown>).hybrid;
-          return typeof qh === 'object' && qh !== null && !Array.isArray(qh) && (qh as Record<string, unknown>).part === r.name;
-        });
-        if (referring.length !== 1) fail('PARTS_HYBRID_PAIR', `band "${String(r.name)}"`, `has ${referring.length} referring joints; exactly one matching rigid joint record is required — re-run assemble`);
-      }
-      if (typeof h !== 'object' || h === null || Array.isArray(h)) continue;
-      const joint = h as Record<string, unknown>;
-      const target = records.find((q) => q.name === joint.part);
-      const record = (v: unknown): Record<string, unknown> | undefined => typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : undefined;
-      const bl = record(target?.limb);
-      const b = record(bl?.band);
-      const same = b !== undefined && ['upper', 'width', 'radius', 'at', 'axis'].every((k) => JSON.stringify(b[k]) === JSON.stringify(joint[k]));
-      if (bl === undefined || bl.name !== l.name || bl.segment !== l.segment || bl.bone !== l.bone || bl.of !== l.of || bl.joint !== l.joint || !same) fail('PARTS_HYBRID_PAIR', `part "${String(r.name)}" hybrid "${String(joint.part)}"`, 'requires its matching band on the same source, joint, carriers and measured geometry');
-    }
-  }
+  if (Array.isArray(o.parts)) checkLimbRecords(o.parts, '', fail);
   if ('scene' in o) {
     const sc = o.scene;
     if (typeof sc !== 'object' || sc === null || Array.isArray(sc)) fail('PARTS_FIELD_TYPE', `${path} field "scene"`, `is ${show(sc)}; an object is required`);
@@ -785,6 +723,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
         }
       }
       if (!Array.isArray(set.records)) return;
+      if (set.records.some((p) => typeof p === 'object' && p !== null && !Array.isArray(p) && typeof p.limb === 'object' && p.limb !== null && ('hybrid' in p.limb || 'band' in p.limb))) checkLimbRecords(set.records, `${at} `, fail, false);
       set.records.forEach((p, j) => {
         if (typeof p !== 'object' || p === null || Array.isArray(p)) return;
         const r = p as Record<string, unknown>;
@@ -797,6 +736,74 @@ function checkParts(raw: unknown, path: string): PartsFile {
   }
   refuseIfAny(problems);
   return raw as PartsFile;
+}
+
+/** Same opt-in provenance rules on the base and a set; caps are already checked by the legacy set reader. */
+function checkLimbRecords(recordsRaw: unknown[], prefix: string, fail: (code: string, object: string, detail: string) => void, caps = true): void {
+  {
+    // A limb segment (issue #349) names its limb, its index, the part it was cut from, its bone, and below a joint the joint and its cap.
+    for (const p of recordsRaw) {
+      if (typeof p !== 'object' || p === null || Array.isArray(p) || !(LIMB_KEY in p)) continue;
+      const r = p as Record<string, unknown>;
+      const object = `${prefix}part "${String(r.name)}" field "${LIMB_KEY}"`;
+      const l = r[LIMB_KEY];
+      if (typeof l !== 'object' || l === null || Array.isArray(l)) {
+        fail('PARTS_FIELD_TYPE', object, `is ${show(l)}; an object {name, segment, of, bone, joint?, cap?} is required`);
+        continue;
+      }
+      const q = l as Record<string, unknown>;
+      for (const k of Object.keys(q)) if (!(LIMB_KEYS as readonly string[]).includes(k)) fail('PARTS_KEY_KNOWN', `${object} key "${k}"`, `is not a limb field; known: ${LIMB_KEYS.join(', ')}`);
+      for (const k of ['name', 'of', 'bone'] as const) if (!(typeof q[k] === 'string' && q[k] !== '')) fail('PARTS_FIELD_TYPE', `${object} "${k}"`, `is ${show(q[k])}; a non-empty string is required`);
+      if (!isCount(q.segment)) fail('PARTS_FIELD_TYPE', `${object} "segment"`, `is ${show(q.segment)}; the segment's index, a non-negative integer, is required`);
+      const below = isCount(q.segment) && q.segment > 0;
+      if (below !== ('joint' in q) || below !== ('cap' in q || 'hybrid' in q || 'band' in q) || ['cap', 'hybrid', 'band'].filter((k) => k in q).length > 1) fail('PARTS_FIELD_PRESENT', object, `segment ${show(q.segment)} with${'joint' in q ? '' : 'out'} a joint and with${'cap' in q ? '' : 'out'} a cap; a segment below a joint requires its joint and exactly one of cap, hybrid, or band; the upper segment has neither`);
+      if ('joint' in q && !(typeof q.joint === 'string' && q.joint !== '')) fail('PARTS_FIELD_TYPE', `${object} "joint"`, `is ${show(q.joint)}; the joint's name is required`);
+      // Issue #360: a declared range rides below a joint only, and holds the loader's rule — two degrees, rest in it.
+      if ('range' in q) {
+        const r = q.range;
+        if (!below) fail('PARTS_FIELD_PRESENT', `${object} "range"`, `is on segment ${show(q.segment)}; a range is the bend of a joint, so only a segment below one (index above 0) carries it`);
+        else if (!(Array.isArray(r) && r.length === 2 && r.every((n) => typeof n === 'number' && Number.isFinite(n)) && (r[0] as number) <= 0 && 0 <= (r[1] as number))) {
+          fail('PARTS_FIELD_TYPE', `${object} "range"`, `is ${show(r)}; [min, max], two finite degrees from rest with min <= 0 <= max, is required — config.limbs' rule (CONFIG_LIMB_RANGE)`);
+        }
+      }
+      for (const field of ['hybrid', 'band']) if (field in q) {
+        const h = q[field];
+        if (!below || typeof h !== 'object' || h === null || Array.isArray(h)) fail('PARTS_FIELD_TYPE', `${object} ${field}`, 'a band below a joint with {upper, width, at, axis} is required');
+        else {
+          const b = h as Record<string, unknown>;
+          const pair = (v: unknown): v is number[] => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number' && Number.isFinite(n));
+          if (Object.keys(b).sort().join(',') !== (field === 'hybrid' ? 'at,axis,part,radius,upper,width' : 'at,axis,radius,upper,width') || (field === 'hybrid' && (typeof b.part !== 'string' || b.part === '')) || !(typeof b.radius === 'number' && Number.isFinite(b.radius) && b.radius > 0) || typeof b.upper !== 'string' || b.upper === '' || b.upper === q.bone || !(typeof b.width === 'number' && Number.isFinite(b.width) && b.width > 0) || !pair(b.at) || !pair(b.axis) || Math.abs(edgeLength(b.axis[0], b.axis[1]) - 1) > 1e-6 || (field === 'band' && 'range' in q)) fail('PARTS_FIELD_TYPE', `${object} ${field}`, `is ${show(h)}; distinct upper carrier, positive width, finite at, unit axis and no duplicate range are required`);
+        }
+      }
+      if (caps && 'cap' in q) checkCap(q.cap, `${object} "cap"`, fail);
+    }
+  }
+  {
+    const records = recordsRaw.filter((p): p is Record<string, unknown> => typeof p === 'object' && p !== null && !Array.isArray(p));
+    for (const r of records) {
+      const limb = r.limb;
+      if (typeof limb !== 'object' || limb === null || Array.isArray(limb)) continue;
+      const l = limb as Record<string, unknown>, h = l.hybrid;
+      if (typeof l.band === 'object' && l.band !== null && !Array.isArray(l.band)) {
+        const referring = records.filter((q) => {
+          const ql = q.limb;
+          if (typeof ql !== 'object' || ql === null || Array.isArray(ql)) return false;
+          const qh = (ql as Record<string, unknown>).hybrid;
+          return typeof qh === 'object' && qh !== null && !Array.isArray(qh) && (qh as Record<string, unknown>).part === r.name;
+        });
+        if (referring.length !== 1) fail('PARTS_HYBRID_PAIR', `${prefix}band "${String(r.name)}"`, `has ${referring.length} referring joints; exactly one matching rigid joint record is required — re-run assemble`);
+      }
+      if (typeof h !== 'object' || h === null || Array.isArray(h)) continue;
+      const joint = h as Record<string, unknown>;
+      const target = records.find((q) => q.name === joint.part);
+      const record = (v: unknown): Record<string, unknown> | undefined => typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : undefined;
+      const bl = record(target?.limb);
+      const b = record(bl?.band);
+      const same = b !== undefined && ['upper', 'width', 'radius', 'at', 'axis'].every((k) => JSON.stringify(b[k]) === JSON.stringify(joint[k]));
+      if (bl === undefined || bl.name !== l.name || bl.segment !== l.segment || bl.bone !== l.bone || bl.of !== l.of || bl.joint !== l.joint || !same) fail('PARTS_HYBRID_PAIR', `${prefix}part "${String(r.name)}" hybrid "${String(joint.part)}"`, 'requires its matching band on the same source, joint, carriers and measured geometry');
+    }
+  }
+
 }
 
 const isCount = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0;

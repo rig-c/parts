@@ -1268,6 +1268,12 @@ export function buildRig(
   const fail = (code: string, object: string, detail: string): void => {
     problems.push({ code, object, detail });
   };
+  for (const [name, limb] of Object.entries(cfg.limbs ?? {})) limb.segments.forEach((sg, k) => {
+    if (sg.hybrid === undefined) return;
+    const band = parts.parts.find((p) => p.name === sg.hybrid?.part);
+    const joint = parts.parts.find((p) => p.name === sg.part);
+    if (band?.limb?.band === undefined || joint?.limb?.hybrid?.part !== sg.hybrid.part) fail('RIG_HYBRID_SOURCE', `config.limbs.${name}.segments[${k}].hybrid`, `declares band "${sg.hybrid.part}" for "${sg.part}"; assembled band is ${band?.limb?.band === undefined ? 'absent' : 'present'}, joint reference is ${JSON.stringify(joint?.limb?.hybrid?.part ?? null)} — re-run assemble before rig`);
+  });
   for (const p of bands) {
     const b = p.limb as NonNullable<typeof p.limb>, h = b.band as NonNullable<typeof b.band>;
     const segments = cfg.limbs?.[b.name]?.segments;
