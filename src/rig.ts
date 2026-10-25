@@ -2729,7 +2729,9 @@ export function buildRig(
       for (const [slotName, att] of Object.entries(alt.slots)) slotMap[slotName] = att;
       const hideList: string[] = [];
       for (const h of alt.hides ?? []) {
-        if (!hideList.includes(h)) hideList.push(h);
+        for (const member of slotFamilies.get(h) ?? [h]) {
+          if (!hideList.includes(member)) hideList.push(member);
+        }
         if (stills[h] !== undefined && !hideList.includes(`${h}${STILL_SUFFIX}`)) hideList.push(`${h}${STILL_SUFFIX}`);
       }
       for (const slotName of Object.keys(alt.slots)) {

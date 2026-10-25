@@ -10,7 +10,7 @@ import { PartsError } from '../src/errors.ts';
 import { buildRig, rigJsonText, type MeshAttachment } from '../src/rig.ts';
 import { explicitImageHash, explicitRegionHash } from '../src/explicitmesh.ts';
 import { gateThroughRigc, readRigInputs, rigStage } from '../src/build.ts';
-import { DEFAULT_PACK_MODE, packageRigc } from '../src/check.ts';
+import { DEFAULT_PACK_MODE, flatComposite, flatCompositeForSet, packageRigc, readFrameSet, runCheck, SEAM_MEAN_BAR, SEAM_PX_BAR, seamFigures, setPlacements, STILL_DIR, stillRigForSet } from '../src/check.ts';
 import { composeFromFiles, SCENE_SPEC } from '../src/scene.ts';
 import { processRigcRunner } from './build-process.ts';
 import { notCompared } from '../src/meshdraft.ts';
@@ -160,8 +160,19 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
   singleOnTwoIslands.config.meshes = { cloth: singleOnTwoIslands.mesh };
   const singleOnTwoBuilt = buildRig(parseConfig(singleOnTwoIslands.config), islFix.parts, islFix.images);
   const islBeforeFix = explicitIslandsFixture();
-  islBeforeFix.parts.parts.splice(1, 0, { ...islBeforeFix.parts.parts[1], name: 'mid', from: 'full:bottomwear' });
-  islBeforeFix.images.set('mid', islBeforeFix.images.get('eye')!);
+  const midImg = block(10, 10);
+  for (let i = 0; i < 100; i++) midImg.data.set([40, 90, 220, 255], i * 4);
+  islBeforeFix.parts.parts.splice(1, 0, {
+    ...islBeforeFix.parts.parts[1],
+    name: 'mid',
+    from: 'full:bottomwear',
+    x: 18,
+    y: 9,
+    w: 10,
+    h: 10,
+    opaque_px: 100,
+  });
+  islBeforeFix.images.set('mid', midImg);
   (islBeforeFix.config.assemble as { plan: string[][] }).plan.splice(1, 0, ['mid', 'full', 'bottomwear']);
   (islBeforeFix.config.regions as Record<string, string>).mid = 'body';
   islBeforeFix.mesh.explicit.islands[1].before = 'eye';
@@ -184,6 +195,66 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
   const composed = composeFromFiles(scenePath);
   const composedIsl2 = composed.rig.skins.default['ch:cloth__island2']['ch:cloth__island2'] as MeshAttachment;
   const composeGate = gateThroughRigc(composed.images, [['rig.json', rigJsonText(composed.rig)], ['motion.json', rigJsonText(composed.motion)]], runner, join(root, 'isl-compose-scratch'), DEFAULT_PACK_MODE);
+  const islBeforeDisk = writeRigFixture(join(root, 'isl-before-disk'), islBeforeFix.config, islBeforeFix.images, islBeforeFix.parts);
+  const islBeforeRigOut = join(root, 'isl-before-rig');
+  const islBeforeCheckOut = join(root, 'isl-before-check');
+  rigStage({ config: islBeforeDisk.config, parts: islBeforeDisk.parts, out: islBeforeRigOut }, runner, join(root, 'isl-before-scratch'), () => {});
+  const islBeforeCheck = runCheck(islBeforeRigOut, islBeforeCheckOut, runner, islBeforeDisk.parts, DEFAULT_PACK_MODE, undefined, undefined, false, true);
+  const beforeStill = readFrameSet(join(islBeforeCheckOut, STILL_DIR));
+  const plantedOrderRef = flatComposite(islBeforeFix.parts, join(islBeforeDisk.parts, 'parts'), beforeStill.background);
+  const plantedOrderSeam = seamFigures(plantedOrderRef, beforeStill.frames[0].image, islBeforeBuilt.rig.skeleton, beforeStill.viewport, beforeStill.background);
+  const islHideFix = explicitIslandsFixture();
+  (islHideFix.config.assemble as Record<string, unknown>).alternates = [{ name: 'no_cloth', parts: ['eye'], hides: ['cloth'] }];
+  const directIslHideCfg = structuredClone(islHideFix.config);
+  ((directIslHideCfg.assemble as { alternates: Array<{ hides: string[] }> }).alternates[0]).hides = ['cloth__island2'];
+  parseConfig(directIslHideCfg);
+  const altNoCloth = {
+    name: 'no_cloth',
+    parts: ['eye'],
+    hides: ['cloth'],
+    slots: { eye: 'no_cloth_eye' },
+    records: [{ ...islHideFix.parts.parts[1] }],
+    ghost_px: {},
+    recomposite: {
+      mean_abs: 0,
+      within_limit: 8,
+      within_share: 1,
+      error_limit: 40,
+      error_px: 0,
+      covered_alpha: 128,
+      uncovered_error_px: 0,
+      hole_count: 0,
+      holes_listed: 0,
+      holes: [],
+    },
+  };
+  islHideFix.parts.alternates = [altNoCloth];
+  islHideFix.images.set('no_cloth_eye', islHideFix.images.get('eye')!);
+  const islHideBuilt = buildRig(parseConfig(islHideFix.config), islHideFix.parts, islHideFix.images);
+  const islHideSlotOrder = islHideBuilt.rig.slots.map(s => s.name);
+  const islHideStillRig = stillRigForSet(islHideBuilt.rig as unknown as Record<string, unknown>, altNoCloth);
+  const islHideStillSlots = (islHideStillRig.slots as Array<{ name: string; attachment: string | null }>);
+  const islHideDisk = writeRigFixture(join(root, 'isl-hide-disk'), islHideFix.config, islHideFix.images, islHideFix.parts);
+  writeFileSync(join(islHideDisk.parts, 'parts', 'no_cloth_eye.png'), readFileSync(join(islHideDisk.parts, 'parts', 'eye.png')));
+  const islHideRigOut = join(root, 'isl-hide-rig');
+  const islHideCheckOut = join(root, 'isl-hide-check');
+  rigStage({ config: islHideDisk.config, parts: islHideDisk.parts, out: islHideRigOut }, runner, join(root, 'isl-hide-scratch'), () => {});
+  const islHideCheck = runCheck(islHideRigOut, islHideCheckOut, runner, islHideDisk.parts, DEFAULT_PACK_MODE, undefined, undefined, false, true, 'no_cloth');
+  const hideStill = readFrameSet(join(islHideCheckOut, STILL_DIR, 'no_cloth'));
+  const hideImg = hideStill.frames[0].image;
+  const hideBg = hideStill.background;
+  let hiddenIslandsClean = true;
+  for (let y = 10; y < 18; y++) {
+    for (const x of [10, 11, 12, 13, 22, 23, 24, 25]) {
+      const p = (y * hideImg.width + x) * 4;
+      if (hideImg.data[p] !== hideBg[0] || hideImg.data[p + 1] !== hideBg[1] || hideImg.data[p + 2] !== hideBg[2]) {
+        hiddenIslandsClean = false;
+      }
+    }
+  }
+  const baseHideStill = readFrameSet(join(islHideCheckOut, STILL_DIR));
+  const hideRef = flatCompositeForSet(islHideFix.parts, altNoCloth, join(islHideDisk.parts, 'parts'), baseHideStill.background, islHideSlotOrder);
+  const plantedHideSeam = seamFigures(hideRef, baseHideStill.frames[0].image, islHideBuilt.rig.skeleton, baseHideStill.viewport, baseHideStill.background);
   const islRep = islBuilt.meshReport[0];
   check(
     'GX25_EXPLICIT_TWO_ISLAND_ROUND_TRIP_AND_SLOT_ORDER',
@@ -196,6 +267,21 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
       composedIsl2.path === 'ch.cloth' &&
       composedIsl2.image === 'ch.cloth.png' &&
       composeGate.every(g => g.status === 0) &&
+      !islBeforeCheck.problems.some(p => p.code === 'CHECK_SEAM_WITHIN_BAR') &&
+      islBeforeCheck.figures.seam_px_over_40 === 0 &&
+      (islBeforeCheck.figures.seam_mean ?? 99) <= SEAM_MEAN_BAR &&
+      plantedOrderSeam.over40 === 32 &&
+      plantedOrderSeam.mean > SEAM_MEAN_BAR &&
+      JSON.stringify(islHideBuilt.sets?.sets.no_cloth.hides) === '["cloth","cloth__island2"]' &&
+      islHideStillSlots.find(s => s.name === 'cloth')?.attachment === null &&
+      islHideStillSlots.find(s => s.name === 'cloth__island2')?.attachment === null &&
+      JSON.stringify(setPlacements(islHideFix.parts, altNoCloth, islHideSlotOrder).map(p => p.name)) === '["eye"]' &&
+      !islHideCheck.problems.some(p => p.code === 'CHECK_SEAM_WITHIN_BAR') &&
+      islHideCheck.figures.sets?.no_cloth.PASS === true &&
+      islHideCheck.figures.sets?.no_cloth.seam_px_over_40 === 0 &&
+      hiddenIslandsClean &&
+      plantedHideSeam.over40 === 64 &&
+      (plantedHideSeam.over40 > SEAM_PX_BAR || plantedHideSeam.mean > SEAM_MEAN_BAR) &&
       islBuilt.rig.slots[0].bone === 'body' &&
       islBuilt.rig.slots[1].bone === 'eye' &&
       att1.path === undefined &&
@@ -210,7 +296,7 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
       JSON.stringify(islRep.bones) === '["body","eye"]' &&
       islRep.art_coverage === 1 &&
       JSON.stringify(partBoundBones(islCfg).get('cloth')) === '["body","eye"]',
-    `${order(islBuilt.rig)} -> ${order(islBeforeBuilt.rig)}; report vertices=${islRep.vertices}, coverage=${islRep.art_coverage}, composeGate=${composeGate.map(g => g.status).join(',')}`,
+    `${order(islBuilt.rig)} -> ${order(islBeforeBuilt.rig)}; beforeSeamOver40=${islBeforeCheck.figures.seam_px_over_40} (planted=${plantedOrderSeam.over40}); hideSet=${JSON.stringify(islHideBuilt.sets?.sets.no_cloth.hides)} (planted=${plantedHideSeam.over40})`,
   );
   const threeIslandCloth = block(16, 8);
   for (let y = 0; y < 8; y++) {

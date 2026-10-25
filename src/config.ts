@@ -1667,7 +1667,8 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
   const animations = base !== null && typeof from === 'string' && from !== '' ? readAnimationsFrom(c, base, from) : null;
   if (animations !== null) {
     checkFaceAnimationBand(c, animations, hasAltFace, t.turn, attached);
-    checkAnimationSetKeys(c, animations, t.assemble, new Set<string>([...parts, ...patches, ...cuts, ...(limbs?.parts.keys() ?? [])]));
+    const baseSlots = new Set<string>([...parts.filter((n) => !(limbs?.consumed.has(n) ?? false)), ...patches, ...cuts, ...(limbs?.parts.keys() ?? [])]);
+    checkAnimationSetKeys(c, animations, t.assemble, new Set<string>([...parts, ...patches, ...cuts, ...(limbs?.parts.keys() ?? []), ...explicitIslandSlotNames(baseSlots, t.meshes)]));
   }
   const pose = base === null ? null : poseBeside(c, t.generation, base);
   refuseIfAny(c.problems);
@@ -2209,6 +2210,20 @@ function checkCuts(c: Check, v: Json, plan: string[], patches: string[], p = 'co
   return names;
 }
 
+function explicitIslandSlotNames(baseSlots: ReadonlySet<string>, meshes: Json): string[] {
+  if (!isPlainObject(meshes)) return [];
+  const out: string[] = [];
+  for (const [part, spec] of Object.entries(meshes)) {
+    if (!baseSlots.has(part) || !isPlainObject(spec) || !isPlainObject(spec.explicit) || !Array.isArray(spec.explicit.islands)) continue;
+    for (let i = 1; i < spec.explicit.islands.length; i++) {
+      const isl = spec.explicit.islands[i];
+      const slot = isPlainObject(isl) && typeof isl.slot === 'string' && isl.slot !== '' ? isl.slot : `${part}__island${i + 1}`;
+      out.push(slot);
+    }
+  }
+  return out;
+}
+
 function checkAlternates(
   c: Check,
   v: Json,
@@ -2221,11 +2236,15 @@ function checkAlternates(
 ): void {
   const p = 'config.assemble.alternates';
   if (!c.array(p, v, true)) return;
-  const allSlots = new Set<string>([
+  const baseSlots = new Set<string>([
     ...made.parts.filter((n) => !(limbs?.consumed.has(n) ?? false)),
     ...made.patches,
     ...made.cuts,
     ...(limbs?.parts.keys() ?? []),
+  ]);
+  const allSlots = new Set<string>([
+    ...baseSlots,
+    ...explicitIslandSlotNames(baseSlots, meshes),
   ]);
   const seenNames = new Map<string, number>();
   (v as Json[]).forEach((entry, i) => {
@@ -4217,6 +4236,10 @@ function checkAnimationSetKeys(
       const hides = new Set<string>(
         Array.isArray(alt.hides) ? alt.hides.filter((h): h is string => typeof h === 'string') : [],
       );
+      for (const sl of allSlots) {
+        const m = /^(.+)__island[2-9]\d*$/.exec(sl);
+        if (m !== null && hides.has(m[1])) hides.add(sl);
+      }
       const altCuts = Array.isArray(alt.cuts)
         ? alt.cuts.filter(isPlainObject).map((cu) => cu.into).filter((s): s is string => typeof s === 'string')
         : [];
