@@ -5215,9 +5215,11 @@ export function driftBodies(part: string, from: string, refused: Mask, minPx: nu
  * off the painting, max channel), in a body of 196 px at 16,12 14x14 (at
  * least 150 px past a 5x5 opening); by the plan's draw order "face" holds 196
  * px of it (the top-most part at alpha >= 250), "face" drawn in front of
- * "topwear"; informational: no gate reads this. The plan's draw order only
- * moves it between parts; removing it needs different input layers. At rest,
- * the seam pass repaints the holder's pixels that pass its rule from the
+ * "topwear"; informational: no gate reads this. Swapping the plan order of the
+ * parts named here can clear it (when only the front one differs from the
+ * painting) or move it to the other part (when both do): swap, rebuild and read
+ * this line again; if it moves, removing it needs different input layers. At
+ * rest, the seam pass repaints the holder's pixels that pass its rule from the
  * painting`.
  * When `behind` is non-empty (issue #351), names the part(s) drawn behind
  * `part` whose colour is within `DRIFT_LIMIT` of the painting.
@@ -5235,7 +5237,7 @@ export function driftLine(d: DriftBodies): string {
   return (
     `drift: "${d.part}" refuses ${d.refusedPx} px of ${d.from} (its colour more than ${DRIFT_LIMIT} off the painting, max channel), in ${held} (at least ${fmtPx(d.minPx)} px past a ${BODY_KERNEL}x${BODY_KERNEL} opening); ` +
     `by the plan's draw order ${d.holders.map((h) => `"${h.part}" holds ${h.px} px`).join(', ')} of it (the top-most part at alpha >= ${CORE_ALPHA})${frontClause}${behindClause}; ` +
-    "informational: no gate reads this. The plan's draw order only moves it between parts; removing it needs different input layers. At rest, the seam pass repaints the holder's pixels that pass its rule from the painting"
+    "informational: no gate reads this. Swapping the plan order of the parts named here can clear it (when only the front one differs from the painting) or move it to the other part (when both do): swap, rebuild and read this line again; if it moves, removing it needs different input layers. At rest, the seam pass repaints the holder's pixels that pass its rule from the painting"
   );
 }
 

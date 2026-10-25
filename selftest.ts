@@ -31894,9 +31894,12 @@ function runAssembleSuite(): number {
     const driftVerdictFacts = (s: string): boolean =>
       /informational/i.test(s) &&
       /no gate reads/i.test(s) &&
-      /draw order.*moves.*between.*parts/i.test(s) &&
+      /can clear/i.test(s) &&
+      /or move/i.test(s) &&
+      /swap, rebuild and read (?:this line )?again/i.test(s) &&
       /removing.*input layers/i.test(s) &&
-      /seam.*repaints.*rule.*painting/i.test(s);
+      /seam.*repaints.*rule.*painting/i.test(s) &&
+      !/only moves it between parts/i.test(s);
     const driftWant =
       `drift: "topwear" refuses ${db.px} px of full:topwear (its colour more than 90 off the painting, max channel), in a body of ${db.px} px at ${db.x},${db.y} ${db.w}x${db.h} (at least 150 px past a 5x5 opening); ` +
       `by the plan's draw order "face" holds ${db.px} px of it (the top-most part at alpha >= 250), "face" drawn in front of "topwear"`;
@@ -32005,6 +32008,7 @@ function runAssembleSuite(): number {
       readFileSync(join(ROOT, 'docs', 'AUTHORING.md'), 'utf8')
         .split('\n')
         .find((l) => l.startsWith('| `assemble` | one line per part')) ?? '';
+    const oldUniversalLine = `${behindWant}; informational: no gate reads this. The plan's draw order only moves it between parts; removing it needs different input layers. At rest, the seam pass repaints the holder's pixels that pass its rule from the painting`;
     say(
       'AS258_SWAPPING_PLAN_ORDER_MOVES_DRIFT_BETWEEN_OVERLAPPING_PARTS_WITHOUT_REMOVING_IT_AND_DRIFT_LINE_STATES_ITS_VERDICT',
       swapRunA.drift.length === 1 &&
@@ -32024,9 +32028,36 @@ function runAssembleSuite(): number {
         driftVerdictFacts(swapLineB) &&
         driftVerdictFacts(authoringAssembleRow) &&
         !driftVerdictFacts(behindWant) &&
+        !driftVerdictFacts(oldUniversalLine) &&
         !driftVerdictFacts('informational: inputs only, no gate reads this'),
-      `bottomwear in front -> drift part=${swapRunA.drift[0]?.part ?? 'none'} (${swapRunA.drift[0]?.refusedPx ?? 0} px at y=${swapRunA.drift[0]?.bodies[0]?.y ?? -1}, behind=${swapRunA.drift[0]?.behind?.[0]?.part ?? 'none'}, seam=${swapBottomSeam}); legwear in front -> drift part=${swapRunB.drift[0]?.part ?? 'none'} (${swapRunB.drift[0]?.refusedPx ?? 0} px at y=${swapRunB.drift[0]?.bodies[0]?.y ?? -1}, behind=${swapRunB.drift[0]?.behind?.[0]?.part ?? 'none'}, seam=${swapLegSeam}); clean input layers -> ${swapRunClean.drift.length} drift line(s); AUTHORING row facts=${driftVerdictFacts(authoringAssembleRow)}; planted pre-#758=${driftVerdictFacts(behindWant)}, planted inputs-only=${driftVerdictFacts('informational: inputs only, no gate reads this')}`,
-      'issue #758: reordering assemble.plan over mutually overlapping layers moves which part owns and refuses the shared core without removing the drift line, while clean input layers remove it and the seam pass repaints the holder at rest; driftLine and AUTHORING §5 state those facts',
+      `bottomwear in front -> drift part=${swapRunA.drift[0]?.part ?? 'none'} (${swapRunA.drift[0]?.refusedPx ?? 0} px at y=${swapRunA.drift[0]?.bodies[0]?.y ?? -1}, behind=${swapRunA.drift[0]?.behind?.[0]?.part ?? 'none'}, seam=${swapBottomSeam}); legwear in front -> drift part=${swapRunB.drift[0]?.part ?? 'none'} (${swapRunB.drift[0]?.refusedPx ?? 0} px at y=${swapRunB.drift[0]?.bodies[0]?.y ?? -1}, behind=${swapRunB.drift[0]?.behind?.[0]?.part ?? 'none'}, seam=${swapLegSeam}); clean input layers -> ${swapRunClean.drift.length} drift line(s); AUTHORING row facts=${driftVerdictFacts(authoringAssembleRow)}; planted pre-#758=${driftVerdictFacts(behindWant)}, planted old-universal=${driftVerdictFacts(oldUniversalLine)}, planted inputs-only=${driftVerdictFacts('informational: inputs only, no gate reads this')}`,
+      'issue #758: reordering assemble.plan over mutually overlapping layers moves which part owns and refuses the shared core without removing the drift line, while clean input layers remove it and the seam pass repaints the holder at rest; driftLine and AUTHORING §5 state those facts and refuse the universal "only moves" claim',
+    );
+
+    // Issue #758 (PR #761 review): when two opaque layers in one run overlap and only the front one differs from the
+    // painting, swapping their plan order gives ownership to the matching layer and clears the drift count to 0.
+    const frontOnlyFull: RunLayerSpec[] = [
+      { name: 'legwear', depth: 0.6, rects: [mutualBaseRect] },
+      { name: 'bottomwear', depth: 0.4, rects: [mutualBaseRect, zLower] },
+    ];
+    const clearDirBefore = join(dir, 'drift-clear-before');
+    const clearDirAfter = join(dir, 'drift-clear-after');
+    writeAssembleFixture(clearDirBefore, assembleConfig({ plan: planBottomFront, extend: [] }), flatPainting(), { full: frontOnlyFull, head: FRAMED_HEAD });
+    writeAssembleFixture(clearDirAfter, assembleConfig({ plan: planLegFront, extend: [] }), flatPainting(), { full: frontOnlyFull, head: FRAMED_HEAD });
+    const clearRunBefore = assemble({ ...fixtureInput(clearDirBefore), seamRule: 'near-white' });
+    const clearRunAfter = assemble({ ...fixtureInput(clearDirAfter), seamRule: 'near-white' });
+    const clearLineBefore = clearRunBefore.drift.length === 1 ? driftLine(clearRunBefore.drift[0]) : '';
+    say(
+      'AS259_SWAPPING_PLAN_ORDER_CLEARS_DRIFT_WHEN_ONLY_THE_FRONT_PART_DIFFERS_FROM_THE_PAINTING',
+      clearRunBefore.drift.length === 1 &&
+        clearRunBefore.drift[0].part === 'bottomwear' &&
+        clearRunBefore.drift[0].refusedPx === db.px &&
+        clearRunBefore.drift[0].behind?.[0]?.part === 'legwear' &&
+        driftVerdictFacts(clearLineBefore) &&
+        clearRunAfter.drift.length === 0 &&
+        (clearRunAfter.parts.parts.find((q) => q.name === 'legwear')?.refused_drift_px ?? -1) === 0,
+      `bottomwear (mismatching) in front -> ${clearRunBefore.drift.length} drift entry on "${clearRunBefore.drift[0]?.part ?? 'none'}" (${clearRunBefore.drift[0]?.refusedPx ?? 0} px, behind="${clearRunBefore.drift[0]?.behind?.[0]?.part ?? 'none'}"); swapped so legwear (matching) is in front -> ${clearRunAfter.drift.length} drift entries (legwear refused_drift_px=${clearRunAfter.parts.parts.find((q) => q.name === 'legwear')?.refused_drift_px ?? -1})`,
+      'issue #758 (PR #761): when only the front layer in the same run differs from the painting, swapping the plan ranks gives pixelOwners to the matching layer and clears the drift to 0',
     );
 
     runLimbCases(say);
