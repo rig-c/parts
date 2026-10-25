@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.66.0](https://github.com/rig-c/parts/compare/v1.65.0...v1.66.0) (2026-10-25)
+
+
+### Features
+
+* **layers:** report drawn and opaque core bounds ([#765](https://github.com/rig-c/parts/issues/765)) ([e9deea4](https://github.com/rig-c/parts/commit/e9deea40baf40c05608cdb93360b1075c452a419))
+
+
+### Bug Fixes
+
+* **check:** name chain roots below the failing part art ([#760](https://github.com/rig-c/parts/issues/760)) ([c905482](https://github.com/rig-c/parts/commit/c905482d6e4f8857a31af11e10bf1b22badcb4d1))
+* close four authoring and message gaps from exam sittings ([#753](https://github.com/rig-c/parts/issues/753)) ([#756](https://github.com/rig-c/parts/issues/756)) ([d200378](https://github.com/rig-c/parts/commit/d20037851f099d283a1002a0d59ae915744c5874))
+* name both --write-config rules in each refusal and list --from-config's flags ([#759](https://github.com/rig-c/parts/issues/759)) ([#764](https://github.com/rig-c/parts/issues/764)) ([8137220](https://github.com/rig-c/parts/commit/8137220435145c50adf7ebe9240c3b0fef7ca73c))
+* **propose:** draft measured passing signs for shared mesh chains ([#755](https://github.com/rig-c/parts/issues/755)) ([6b3c7e2](https://github.com/rig-c/parts/commit/6b3c7e244fb4ec13786472bc6270d10d66c86c26))
+* **selftest:** anchor mesh-draft's stage matches to its scratch dir ([#766](https://github.com/rig-c/parts/issues/766)) ([#768](https://github.com/rig-c/parts/issues/768)) ([cfc39b6](https://github.com/rig-c/parts/commit/cfc39b6e88a71f1585ab119d48eca32e7e4a1d1d))
+* **selftest:** hold family RSS to the six GiB slot ([#767](https://github.com/rig-c/parts/issues/767)) ([1d35223](https://github.com/rig-c/parts/commit/1d3522313c71ea1b3dbcde0fb9baa929d407d0e8))
+* state drift line verdict and plan-order vs input-layer behavior ([#758](https://github.com/rig-c/parts/issues/758)) ([#761](https://github.com/rig-c/parts/issues/761)) ([9df18c7](https://github.com/rig-c/parts/commit/9df18c7b55ff8b755fe7abe9654f8d4a7336e80d))
+* **turn:** order turn twins by bone declaration, not mesh weight encounter ([#749](https://github.com/rig-c/parts/issues/749)) ([e6f983e](https://github.com/rig-c/parts/commit/e6f983e454a7f40fca436c43fccc5c94d60bbf80))
+
 ## [1.65.0](https://github.com/rig-c/parts/compare/v1.64.0...v1.65.0) (2026-10-25)
 
 
