@@ -3,15 +3,31 @@ import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeAlternateCutLayerFixture } from '../fixtures/alternate_cut_layers.ts';
 import { assembleLayerFixture } from './check_alternate_layers.ts';
-import { loadConfig } from '../src/config.ts';
+import { rigStage } from '../src/build.ts';
+import { runCheck, type CheckReport, type RigcRunner } from '../src/check.ts';
+import { loadConfig, type CharacterConfig } from '../src/config.ts';
 import { readLayers } from '../src/layers.ts';
 import { readParts, type PartRecord } from '../src/parts.ts';
 import { readPng, encodePngBytes } from '../src/raster/png.ts';
+import { newRaster } from '../src/raster/types.ts';
 import { paint, C, writeRun } from '../fixtures/assemble_fixture.ts';
 import { PartsError } from '../src/errors.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
-export function runAlternateCutLayerChecks(dir: string, say: Say): void {
+const EXPECTED_TEN_BARS = [
+  'gate',
+  'loop',
+  'seam',
+  'BREATH_VISIBLE',
+  'BLINK_NO_HOLE',
+  'CHAIN_LAG',
+  'TIP_OVER_ROOT',
+  'STILL_REGIONS_DARK',
+  'TEXTURE_STRETCH',
+  'ANIMATIONS_DO_NOT_FOLD',
+] as const;
+
+export function runAlternateCutLayerChecks(dir: string, say: Say, runner: RigcRunner): void {
   const d = join(dir, 'independent-cut'); writeAlternateCutLayerFixture(d);
   const path = join(d, 'config.json'), cfg = loadConfig(path), alt = cfg.assemble.alternates![0];
   const save = (): void => writeFileSync(path, JSON.stringify(cfg, null, 2) + '\n');
@@ -75,4 +91,93 @@ export function runAlternateCutLayerChecks(dir: string, say: Say): void {
   let limbRefusal = '';
   try { loadConfig(join(ld, 'config.json')); } catch (e) { if (!(e instanceof PartsError)) throw e; limbRefusal = e.message; }
   say('CUT_GESTURE_CUSTOM_POLYGONS_STILL_REFUSED', limbRefusal.includes('CONFIG_LIMB_SET_JOINTS'), limbRefusal);
+
+  // Issue #726: check --set raised on the alternates fixture measures all 10 of 10 bars (0 SKIP) and each of the
+  // five bars that previously skipped (BLINK_NO_HOLE, CHAIN_LAG, TIP_OVER_ROOT, STILL_REGIONS_DARK, TEXTURE_STRETCH)
+  // fails on its planted mutant.
+  const runSetCheck = (name: string, mutateCfg?: (c: CharacterConfig) => void, mutateOut?: (out: string) => void): CheckReport => {
+    const md = join(dir, name);
+    writeAlternateCutLayerFixture(md);
+    const mc = loadConfig(join(md, 'config.json'));
+    mc.assemble.alternates![0].layers = { sleeve: 'author:raised' };
+    if (mutateCfg !== undefined) mutateCfg(mc);
+    writeFileSync(join(md, 'config.json'), JSON.stringify(mc, null, 2) + '\n');
+    const out = assembleLayerFixture(md, 'out');
+    rigStage({ config: join(md, 'config.json'), parts: out, out: join(out, 'rig') }, runner, join(md, 'scratch'), () => {});
+    if (mutateOut !== undefined) mutateOut(out);
+    return runCheck(join(out, 'rig'), join(out, 'check'), runner, out, undefined, undefined, undefined, false, false, 'raised');
+  };
+  const green = runSetCheck('set-check-green');
+  say(
+    'CUT_SET_CHECK_ALL_TEN_BARS_MEASURED',
+    green.figures.PASS === true &&
+      green.figures.sets?.raised?.PASS === true &&
+      green.bars.skipped.length === 0 &&
+      JSON.stringify(green.bars.measured) === JSON.stringify(EXPECTED_TEN_BARS),
+    JSON.stringify({ measured: green.bars.measured, skipped: green.bars.skipped, setPass: green.figures.sets?.raised?.PASS }),
+  );
+  const blinkMutant = runSetCheck('set-check-blink-mutant', undefined, (out) => {
+    const emptyFace = newRaster(8, 12);
+    for (let y = 0; y < 4; y++) for (let x = 0; x < 8; x++) emptyFace.data.set([...C, 255], (y * 8 + x) * 4);
+    writeFileSync(join(out, 'parts', 'face.png'), encodePngBytes(emptyFace));
+    const padded = newRaster(12, 16);
+    for (let y = 0; y < 4; y++) for (let x = 0; x < 8; x++) padded.data.set([...C, 255], ((y + 2) * 12 + (x + 2)) * 4);
+    writeFileSync(join(out, 'rig', 'images', 'face.png'), encodePngBytes(padded));
+  });
+  say(
+    'CUT_SET_CHECK_BLINK_NO_HOLE_MUTANT_FAILS',
+    blinkMutant.figures.PASS === false &&
+      blinkMutant.figures.BLINK_NO_HOLE.status === 'FAIL' &&
+      JSON.stringify(blinkMutant.problems.map((p) => p.code)) === JSON.stringify(['CHECK_BLINK_NO_HOLE']),
+    JSON.stringify({ codes: blinkMutant.problems.map((p) => p.code), blink: blinkMutant.figures.BLINK_NO_HOLE }),
+  );
+  const chainLagMutant = runSetCheck('set-check-chain-lag-mutant', (mc) => {
+    const tr = mc.motion.tracks[1];
+    if ('chain' in tr) tr.lag = 0;
+  });
+  say(
+    'CUT_SET_CHECK_CHAIN_LAG_MUTANT_FAILS',
+    chainLagMutant.figures.PASS === false &&
+      chainLagMutant.figures.CHAIN_LAG.status === 'FAIL' &&
+      JSON.stringify(chainLagMutant.problems.map((p) => p.code)) === JSON.stringify(['CHECK_CHAIN_LAG']),
+    JSON.stringify({ codes: chainLagMutant.problems.map((p) => p.code), chain: chainLagMutant.figures.CHAIN_LAG }),
+  );
+  const tipOverRootMutant = runSetCheck('set-check-tip-over-root-mutant', (mc) => {
+    const tr = mc.motion.tracks[1];
+    if ('chain' in tr) tr.amps = [1, 1];
+    mc.motion.tracks.push({ bone: 'skirt0', prop: 'translatex', amp: 8, period: 1, phase: 0 });
+  });
+  say(
+    'CUT_SET_CHECK_TIP_OVER_ROOT_MUTANT_FAILS',
+    tipOverRootMutant.figures.PASS === false &&
+      tipOverRootMutant.figures.TIP_OVER_ROOT.status === 'FAIL' &&
+      JSON.stringify(tipOverRootMutant.problems.map((p) => p.code)) === JSON.stringify(['CHECK_TIP_OVER_ROOT']),
+    JSON.stringify({ codes: tipOverRootMutant.problems.map((p) => p.code), tip: tipOverRootMutant.figures.TIP_OVER_ROOT }),
+  );
+  const stillRegionsMutant = runSetCheck('set-check-still-regions-mutant', (mc) => {
+    delete mc.regions.face;
+    mc.meshes.face = { segments: [['head', [44, 8], [44, 14]], ['anchor', [44, 14], [44, 20]]], grid: 8, r: 80 };
+    const tr = mc.motion.tracks[0];
+    if ('bone' in tr) tr.amp = 6;
+  });
+  say(
+    'CUT_SET_CHECK_STILL_REGIONS_DARK_MUTANT_FAILS',
+    stillRegionsMutant.figures.PASS === false &&
+      stillRegionsMutant.figures.STILL_REGIONS_DARK.status === 'FAIL' &&
+      JSON.stringify(stillRegionsMutant.problems.map((p) => p.code)) === JSON.stringify(['CHECK_STILL_REGIONS_DARK']),
+    JSON.stringify({ codes: stillRegionsMutant.problems.map((p) => p.code), still: stillRegionsMutant.figures.STILL_REGIONS_DARK }),
+  );
+  const textureStretchMutant = runSetCheck('set-check-texture-stretch-mutant', (mc) => {
+    delete mc.regions.body;
+    mc.bones.push({ name: 'hem', parent: 'root', at: [16, 48] });
+    mc.meshes.body = { segments: [['anchor', [16, 8], [16, 12]], ['hem', [16, 44], [16, 48]]], grid: 8, r: 4 };
+    mc.motion.tracks.push({ bone: 'hem', prop: 'translatey', base: -20, amp: 20, period: 1, phase: 0.25 });
+  });
+  say(
+    'CUT_SET_CHECK_TEXTURE_STRETCH_MUTANT_FAILS',
+    textureStretchMutant.figures.PASS === false &&
+      textureStretchMutant.figures.TEXTURE_STRETCH.status === 'FAIL' &&
+      JSON.stringify(textureStretchMutant.problems.map((p) => p.code)) === JSON.stringify(['CHECK_TEXTURE_STRETCH']),
+    JSON.stringify({ codes: textureStretchMutant.problems.map((p) => p.code), stretch: textureStretchMutant.figures.TEXTURE_STRETCH }),
+  );
 }
