@@ -1,0 +1,264 @@
+{
+  "spec": "feature-contour-refresh/1",
+  "ringSpacing": 4,
+  "trials": [
+    {
+      "spacing": 8,
+      "complete": false,
+      "edges": [
+        {
+          "present": 2,
+          "of": 8
+        },
+        {
+          "present": 5,
+          "of": 8
+        }
+      ]
+    },
+    {
+      "spacing": 4,
+      "complete": true,
+      "edges": [
+        {
+          "present": 16,
+          "of": 16
+        },
+        {
+          "present": 16,
+          "of": 16
+        }
+      ]
+    }
+  ],
+  "controls": [
+    {
+      "name": "affine normal zero and kink defect 1.875 px",
+      "pass": true
+    },
+    {
+      "name": "uncarried edge rejected and zero translation zero",
+      "pass": true
+    },
+    {
+      "name": "declared and independently traced hole coincide; reversed ring canonicalizes",
+      "pass": true
+    },
+    {
+      "name": "solid and open notch have no interior hole",
+      "pass": true
+    },
+    {
+      "name": "misplaced line differs while evaluation edge stays fixed",
+      "pass": true
+    }
+  ],
+  "rings": {
+    "declared": [
+      [
+        [
+          20,
+          19
+        ],
+        [
+          44,
+          19
+        ],
+        [
+          44,
+          25
+        ],
+        [
+          20,
+          25
+        ]
+      ]
+    ],
+    "alpha": [
+      [
+        [
+          20,
+          19
+        ],
+        [
+          44,
+          19
+        ],
+        [
+          44,
+          25
+        ],
+        [
+          20,
+          25
+        ]
+      ]
+    ],
+    "misplaced": [
+      [
+        [
+          20,
+          22
+        ],
+        [
+          44,
+          22
+        ],
+        [
+          44,
+          28
+        ],
+        [
+          20,
+          28
+        ]
+      ]
+    ]
+  },
+  "builds": [
+    {
+      "label": "lattice-8",
+      "sourceVertices": 47,
+      "ring": null,
+      "sourceEdge": 1.875,
+      "vertices": 8,
+      "triangles": 10,
+      "edge": {
+        "max": 1.875,
+        "at": [
+          20,
+          19
+        ],
+        "carried": 240,
+        "uncarried": 0
+      },
+      "motion": {
+        "max": 0.9375,
+        "uncarried": 0
+      },
+      "residual": "0.937498 / 1 (pass)",
+      "verdict": "accepted",
+      "termination": "no-further-valid-reduction after 55 candidate(s), blocked by MQ_SKINNING_RESIDUAL: 3.203158 against <= 1, removing source vertex 32",
+      "problem": null
+    },
+    {
+      "label": "lattice-4",
+      "sourceVertices": 129,
+      "ring": null,
+      "sourceEdge": 0.75,
+      "vertices": 8,
+      "triangles": 10,
+      "edge": {
+        "max": 0.95,
+        "at": [
+          44,
+          25
+        ],
+        "carried": 240,
+        "uncarried": 0
+      },
+      "motion": {
+        "max": 0.7845766974015087,
+        "uncarried": 0
+      },
+      "residual": "0.784577 / 1 (pass)",
+      "verdict": "accepted",
+      "termination": "no-further-valid-reduction after 137 candidate(s), blocked by MQ_SKINNING_RESIDUAL: 3.263164 against <= 1, removing source vertex 76",
+      "problem": null
+    },
+    {
+      "label": "declared-line",
+      "sourceVertices": 57,
+      "ring": {
+        "vertices": 16,
+        "edges": 16,
+        "of": 16,
+        "protectedVertices": 0
+      },
+      "sourceEdge": 6.661338147750939e-16,
+      "vertices": 16,
+      "triangles": 26,
+      "edge": {
+        "max": 6.661338147750939e-16,
+        "at": [
+          20,
+          23.25
+        ],
+        "carried": 240,
+        "uncarried": 0
+      },
+      "motion": {
+        "max": 0.9375,
+        "uncarried": 0
+      },
+      "residual": "0.937498 / 1 (pass)",
+      "verdict": "accepted",
+      "termination": "no-further-valid-reduction after 73 candidate(s), blocked by MQ_SKINNING_RESIDUAL: 3.084467 against <= 1, removing source vertex 42",
+      "problem": null
+    },
+    {
+      "label": "alpha-hole",
+      "sourceVertices": 57,
+      "ring": {
+        "vertices": 16,
+        "edges": 16,
+        "of": 16,
+        "protectedVertices": 0
+      },
+      "sourceEdge": 6.661338147750939e-16,
+      "vertices": 16,
+      "triangles": 26,
+      "edge": {
+        "max": 6.661338147750939e-16,
+        "at": [
+          20,
+          23.25
+        ],
+        "carried": 240,
+        "uncarried": 0
+      },
+      "motion": {
+        "max": 0.9375,
+        "uncarried": 0
+      },
+      "residual": "0.937498 / 1 (pass)",
+      "verdict": "accepted",
+      "termination": "no-further-valid-reduction after 73 candidate(s), blocked by MQ_SKINNING_RESIDUAL: 3.084467 against <= 1, removing source vertex 42",
+      "problem": null
+    },
+    {
+      "label": "misplaced-3px",
+      "sourceVertices": 65,
+      "ring": {
+        "vertices": 16,
+        "edges": 16,
+        "of": 16,
+        "protectedVertices": 0
+      },
+      "sourceEdge": 1.5,
+      "vertices": 14,
+      "triangles": 22,
+      "edge": {
+        "max": 1.5000000000000007,
+        "at": [
+          41.5,
+          19
+        ],
+        "carried": 240,
+        "uncarried": 0
+      },
+      "motion": {
+        "max": 0.9375,
+        "uncarried": 0
+      },
+      "residual": "0.937498 / 1 (pass)",
+      "verdict": "accepted",
+      "termination": "no-further-valid-reduction after 94 candidate(s), blocked by MQ_SKINNING_RESIDUAL: 3.128027 against <= 1, removing source vertex 50",
+      "problem": null
+    }
+  ],
+  "meshesEqual": true,
+  "plantLoses": false,
+  "pairs": [],
+  "outcome": "inconclusive; no mechanism justified"
+}

@@ -1,0 +1,19 @@
+{
+  "spec": "feature-contour-refresh-receipt/1",
+  "runId": "20261025T071135Z-44ce72a6a0284e4589b2a2749ca1b20d",
+  "inputSha256": "db0932723e893748c4c602b0996064dbed5e0d089194f820a42a65d58753c9fe",
+  "baseCommit": "4bfd3c53cc49c92cc7928ea943b1a7ee72283808",
+  "runtime": {
+    "bun": "1.4.4",
+    "git": "git version 2.43.0",
+    "node": "v24.21.0",
+    "python3": "Python 3.12.3"
+  },
+  "rig-c": "2.69.0",
+  "exitCode": 0,
+  "command": "bun tools/feature_contour_refresh.ts scratch/feature-refresh",
+  "lockSha256": "2fe9dcbf23b6966d087dfa9ab9e0654ffd93971de6768d48cbe34f675bbef436",
+  "toolSha256": "30dd690ee091371d5587fa8bac702b29601eb1fc16c9759e12deefc274e097ef",
+  "readingSha256": "c4005afabeb138ef1f66588a6a7f40130316cd134ae23b612c46a2e7593aefdc",
+  "pictureSha256": "08fef3e0490ca03255be584ab01720df74b09823d163e0f9d771b17ade11d95c"
+}

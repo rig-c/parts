@@ -930,7 +930,8 @@ function sourceCaption(c: FixtureCase, b: Build): string {
   if (b.label === '(ii)') return `(II) LATTICE S ${c.spacing / 2}`;
   if (b.label === '(ii-q)') return `(II-Q) LATTICE S ${c.spacing / 4}`;
   if (b.label === '(iii)') return '(III) RING, LINE KEPT';
-  return '(IV) RING, THINNED';
+  if (b.label === '(iv)') return '(IV) RING, THINNED';
+  return b.label.toUpperCase();
 }
 
 /** The picture: one row per case, one panel per build and one for the dense reference — the art at setup with the mesh above, posed at the closed lid below. */
