@@ -102,6 +102,84 @@ function matrixChecks(say: Say): void {
   const f = matrix(); f.slots.splice(6, 0, { name: 'top_piece', bone: 'root', attachment: 'top_piece' }); f.skin.top_piece = { top_piece: { image: 'block.png', x: 0, y: 0 } }; f.families.set('panel', ['panel', 'top_piece']); f.limbs.unit.layout = { after: { part: 'panel' } };
   const family = placeLimbLayouts(f.limbs, f.bones, coalesceLimbSlots(f.limbs, f.bones, f.slots, f.skin), f.skin, f.families);
   say('GENERATED_TARGET_FAMILY_NO_SUFFIX', equal(family.plan?.placements[0].target_slots, ['panel', 'top_piece']), JSON.stringify(family.plan?.placements));
+  const sAfter = matrix(); sAfter.limbs.unit.layout = { parts: ['a1'], after: { part: 'panel' } }; sAfter.limbs.other.layout = { after: { part: 'panel' } };
+  const starAfterA = sAfter.place();
+  const starAfterB = placeLimbLayouts({ other: sAfter.limbs.other, unit: sAfter.limbs.unit }, sAfter.bones, sAfter.base, sAfter.skin, sAfter.families);
+  say(
+    'SHARED_TARGET_BOTH_AFTER_BASE_ORDER',
+    equal(starAfterA.slots.map((s) => s.name), ['a0', 'a2', 'upper', 'span', 'panel', 'a1', 'lower', 'b0', 'b1', 'mixed', 'switch']) &&
+      equal(starAfterA.slots, starAfterB.slots) &&
+      equal(starAfterA.plan?.placements, starAfterB.plan?.placements),
+    JSON.stringify(starAfterA.plan?.placements),
+  );
+  const sBefore = matrix(); sBefore.limbs.unit.layout = { parts: ['a1'], before: { part: 'panel' } }; sBefore.limbs.other.layout = { before: { part: 'panel' } };
+  const starBeforeA = sBefore.place();
+  const starBeforeB = placeLimbLayouts({ other: sBefore.limbs.other, unit: sBefore.limbs.unit }, sBefore.bones, sBefore.base, sBefore.skin, sBefore.families);
+  say(
+    'SHARED_TARGET_BOTH_BEFORE_BASE_ORDER',
+    equal(starBeforeA.slots.map((s) => s.name), ['a0', 'a2', 'upper', 'span', 'a1', 'lower', 'b0', 'b1', 'panel', 'mixed', 'switch']) &&
+      equal(starBeforeA.slots, starBeforeB.slots) &&
+      equal(starBeforeA.plan?.placements, starBeforeB.plan?.placements),
+    JSON.stringify(starBeforeA.plan?.placements),
+  );
+  const sBothSides = matrix(); sBothSides.limbs.unit.layout = { parts: ['a1'], before: { part: 'panel' } }; sBothSides.limbs.other.layout = { after: { part: 'panel' } };
+  const starBothA = sBothSides.place();
+  const starBothB = placeLimbLayouts({ other: sBothSides.limbs.other, unit: sBothSides.limbs.unit }, sBothSides.bones, sBothSides.base, sBothSides.skin, sBothSides.families);
+  say(
+    'SHARED_TARGET_BEFORE_AND_AFTER',
+    equal(starBothA.slots.map((s) => s.name), ['a0', 'a2', 'upper', 'span', 'a1', 'lower', 'panel', 'b0', 'b1', 'mixed', 'switch']) &&
+      equal(starBothA.slots, starBothB.slots) &&
+      equal(starBothA.plan?.placements, starBothB.plan?.placements),
+    JSON.stringify(starBothA.plan?.placements),
+  );
+  const swappedNames = ['a0', 'a2', 'upper', 'span', 'panel', 'b0', 'b1', 'a1', 'lower', 'mixed', 'switch'];
+  const swappedSlots = swappedNames.map((n) => starAfterA.slots.find((s) => s.name === n)!);
+  const swappedRefused = refused(() => validateLimbLayout(starAfterA.plan!, { slots: swappedSlots, skins: { default: sAfter.skin } }));
+  say('SHARED_TARGET_SWAPPED_MOVER_ORDER_REFUSED', swappedRefused.includes('RIG_LAYOUT_UNREPRESENTABLE'), swappedRefused);
+  const mTwice = matrix();
+  const dupLimbs: Record<string, Limb> = {
+    unit: { ...mTwice.limbs.unit, layout: { parts: ['a1'], after: { part: 'panel' } } },
+    dup: { segments: [{ part: 'a1', from: 'source', bone: 'x1' }], layout: { after: { part: 'panel' } } },
+  };
+  const moverTwice = refused(() => placeLimbLayouts(dupLimbs, mTwice.bones, mTwice.base, mTwice.skin, mTwice.families));
+  say('MOVER_USED_TWICE_REFUSED', moverTwice.includes('RIG_LAYOUT_CONFLICT') && moverTwice.includes('config.limbs.unit.layout') && moverTwice.includes('config.limbs.dup.layout') && moverTwice.includes('"a1"'), moverTwice);
+  const mTarget = matrix(); mTarget.limbs.unit.layout = { parts: ['a1'], after: { part: 'panel' } }; mTarget.limbs.other.layout = { before: { part: 'a1' } };
+  const moverAsTargetA = refused(() => placeLimbLayouts({ unit: mTarget.limbs.unit, other: mTarget.limbs.other }, mTarget.bones, mTarget.base, mTarget.skin, mTarget.families));
+  const moverAsTargetB = refused(() => placeLimbLayouts({ other: mTarget.limbs.other, unit: mTarget.limbs.unit }, mTarget.bones, mTarget.base, mTarget.skin, mTarget.families));
+  say(
+    'MOVER_AS_TARGET_REFUSED',
+    moverAsTargetA.includes('RIG_LAYOUT_CONFLICT') &&
+      moverAsTargetA.includes('config.limbs.unit.layout') &&
+      moverAsTargetA.includes('config.limbs.other.layout') &&
+      moverAsTargetA.includes('"a1"') &&
+      moverAsTargetB.includes('RIG_LAYOUT_CONFLICT') &&
+      moverAsTargetB.includes('config.limbs.unit.layout') &&
+      moverAsTargetB.includes('config.limbs.other.layout') &&
+      moverAsTargetB.includes('"a1"'),
+    `${moverAsTargetA} | ${moverAsTargetB}`,
+  );
+  const pOverlap = matrix();
+  pOverlap.limbs.extra = { segments: [{ part: 'c0', from: 'source', bone: 'z0' }], layout: { after: { part: 'b0' } } };
+  pOverlap.limbs.unit.layout = { after: { limb: 'other' } };
+  pOverlap.bones.push({ name: 'z0', parent: 'root', x: 0, y: 0 });
+  pOverlap.slots.push({ name: 'c0', bone: 'z0', attachment: 'c0' });
+  pOverlap.skin.c0 = { c0: { image: 'block.png', x: 0, y: 0 } };
+  pOverlap.families.set('c0', ['c0']);
+  const pOverlapBase = coalesceLimbSlots(pOverlap.limbs, pOverlap.bones, pOverlap.slots, pOverlap.skin);
+  const partialOverlapA = refused(() => placeLimbLayouts({ unit: pOverlap.limbs.unit, other: pOverlap.limbs.other, extra: pOverlap.limbs.extra }, pOverlap.bones, pOverlapBase, pOverlap.skin, pOverlap.families));
+  const partialOverlapB = refused(() => placeLimbLayouts({ extra: pOverlap.limbs.extra, other: pOverlap.limbs.other, unit: pOverlap.limbs.unit }, pOverlap.bones, pOverlapBase, pOverlap.skin, pOverlap.families));
+  say(
+    'PARTIAL_TARGET_OVERLAP_REFUSED',
+    partialOverlapA.includes('RIG_LAYOUT_CONFLICT') &&
+      partialOverlapA.includes('config.limbs.unit.layout') &&
+      partialOverlapA.includes('config.limbs.extra.layout') &&
+      partialOverlapA.includes('"b0"') &&
+      partialOverlapB.includes('RIG_LAYOUT_CONFLICT') &&
+      partialOverlapB.includes('config.limbs.unit.layout') &&
+      partialOverlapB.includes('config.limbs.extra.layout') &&
+      partialOverlapB.includes('"b0"'),
+    `${partialOverlapA} | ${partialOverlapB}`,
+  );
 }
 
 export function runLimbLayoutChecks(dir: string, say: Say, runner: RigcRunner, frozenBuilder?: typeof buildRig): void {
@@ -175,6 +253,26 @@ export function runLimbLayoutChecks(dir: string, say: Say, runner: RigcRunner, f
   save(path, valid); const staged = rigStage(stageArgs, runner, scratch, () => {});
   const emitted = JSON.parse(readFileSync(join(out, LAYOUT_FILE), 'utf8')) as { rig: { sha256: string }; setup_slots: string[] };
   say('ACTUAL_CORE_GATED_COMPANION', emitted.rig.sha256 === hash(readFileSync(join(out, 'rig.json'))) && equal(emitted.setup_slots, order(staged.rig)) && !Object.hasOwn(JSON.parse(readFileSync(join(out, 'rig.json'), 'utf8')), 'layout'), JSON.stringify(emitted));
+  const starCfg = structuredClone(valid);
+  (starCfg.limbs as Record<string, Record<string, unknown>>).branchC.layout = { parts: ['tileC1'], after: { part: 'tileD' } };
+  const starPath = join(home, 'star-config.json'), starOut = join(home, 'star-rig');
+  save(starPath, starCfg);
+  const stagedStar = rigStage({ config: starPath, parts: assembled, out: starOut }, runner, scratch, () => {});
+  const starEmitted = JSON.parse(readFileSync(join(starOut, LAYOUT_FILE), 'utf8')) as { spec: string; rig: { sha256: string }; setup_slots: string[]; placements: Array<{ limb: string; target_slots: string[] }> };
+  const starOrder = order(stagedStar.rig), baseOrder = order(original.rig);
+  say(
+    'SHARED_TARGET_STAGE_AND_COMPANION_GATE',
+    starEmitted.spec === 'rig-parts-layout/1' &&
+      starEmitted.rig.sha256 === hash(readFileSync(join(starOut, 'rig.json'))) &&
+      equal(starEmitted.setup_slots, starOrder) &&
+      starEmitted.placements.length === 2 &&
+      equal(starEmitted.placements.map((p) => p.limb), ['branchB', 'branchC']) &&
+      starEmitted.placements.every((p) => equal(p.target_slots, ['tileD'])) &&
+      (baseOrder.indexOf('tileB1') < baseOrder.indexOf('tileC1')) === (starOrder.indexOf('tileB1') < starOrder.indexOf('tileC1')) &&
+      starOrder.indexOf('tileD') + 1 === starOrder.indexOf('tileB1') &&
+      starOrder.indexOf('tileB1') + 1 === starOrder.indexOf('tileC1'),
+    JSON.stringify(starEmitted),
+  );
   // The exact serializer used on the settled replay path gates a changed final candidate.
   const replayed: RigOutput = { ...alt, rig: structuredClone(alt.rig) };
   const attachment = replayed.rig.skins.default.tileE.tileE;

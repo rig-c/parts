@@ -726,8 +726,10 @@ with the selected lower one. A target limb is its whole exclusive block; a targe
 part uses its actual generated slot family, including a still piece, without
 suffix matching. A requested segment or target with mixed bindings is refused.
 
-Only disjoint placements are supported. Self, reciprocal, chained/shared-slot,
-and pair/part conflicts name both declaration paths and the shared slot; no
+Several placements may share one stationary target (a star); between same-side
+co-movers base draw order decides, and a depth-driven order among them is not
+provided. Self, reciprocal, chained, shared-mover, mover-as-target, and partially
+overlapping target conflicts name both declaration paths and the shared slot; no
 constraint solver chooses a winner. Internal block order and all unselected
 slots' mutual order are stable. Declaring placement may change visible occlusion;
 assembly's part/PNG/recomposite order and every setup seam bar remain unchanged,
@@ -3819,7 +3821,7 @@ says why each requirement exists and what breaks without it.
 | <a id="RIG_SET_FRONT_BOTH"></a>`RIG_SET_FRONT_BOTH` | a `parts.json` alternate record (issue #664) maps both a part's slot and its front slot `<part>_front`; the detail names the set and the part | re-run `assemble`, which maps one or the other |
 | <a id="RIG_LAYOUT_NONEXCLUSIVE"></a>`RIG_LAYOUT_NONEXCLUSIVE` | a requested segment family/target, or an accepted replay's bindings, span owners or leave the selected segment scope across base/alternate attachments | correct the named bindings or scope; mixed ownership is never forced and no stale proof is emitted |
 | <a id="RIG_LAYOUT_UNREPRESENTABLE"></a>`RIG_LAYOUT_UNREPRESENTABLE` | the named slot family is absent, a target is not contiguous, the accepted slot population/adjacency changed, or final rig text is stale | use an emitted contiguous target and the exact final accepted source; unrelated slots are not absorbed |
-| <a id="RIG_LAYOUT_CONFLICT"></a>`RIG_LAYOUT_CONFLICT` | layout declarations share a slot, target themselves, or form a reciprocal/chained pair; both field paths are printed | declare one disjoint pair, with each participating slot in only that placement |
+| <a id="RIG_LAYOUT_CONFLICT"></a>`RIG_LAYOUT_CONFLICT` | layout declarations share a moving slot, use a moving slot as a target, target themselves, form a reciprocal/chained pair, or partially overlap a shared target block; both field paths are printed | move each participating slot in at most one placement, and share only a stationary target block |
 | <a id="RIG_STILL_ROW_INSIDE_PART"></a><a id="RIG_STILL_ROW_CLEAR"></a><a id="RIG_STILL_PIECES_HAVE_ART"></a><a id="RIG_STILL_NAME_FREE"></a>`RIG_STILL_ROW_INSIDE_PART`, `RIG_STILL_ROW_CLEAR`, `RIG_STILL_PIECES_HAVE_ART`, `RIG_STILL_NAME_FREE` | a `motion.blink.still` row that is not strictly inside the part, that crosses art (a cut through art changes the render even at rest), that leaves one piece with no art, or whose `<part>_still` slot name another part already has | that entry's `row` — a row with no art between the crease and the lash line — or rename the other part |
 | <a id="RIG_SET_COVERS_BONE"></a>`RIG_SET_COVERS_BONE` | `assemble.alternates[i].drawn.<bone>` (issue #476): a subset set in `parts.json` `alternates` (`parts` present) states a `drawn` world angle for a bone none of its covered slots ride; the detail names the bone, the set, and the covered bones | remove the uncovered bone from that set's `drawn`, or add the part that rides it to `parts` |
 | <a id="RIG_EXPLICIT_BINDING"></a>`RIG_EXPLICIT_BINDING` | the declared stops or turn would change the accepted payload's bindings | transfer the accepted final emitted bone names and local coordinates, or use a generated mesh; no normalization is applied |
