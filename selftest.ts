@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { runMotionSeamContractCases } from './tools/fixtures/motion_seam_controls.ts';
+import { runMotionSeamContractCases, runMotionSeamDocumentationCases } from './tools/fixtures/motion_seam_controls.ts';
 import { runExplicitMeshChecks } from './tools/check_explicitmesh.ts';
 import { runAlternateLayerChecks } from './tools/check_alternate_layers.ts';
 import { runAlternateCutLayerChecks } from './tools/check_alternate_cut_layers.ts';
@@ -17307,7 +17307,7 @@ function runMotionSeamWorldIntegration(dir: string, say: (name: string, ok: bool
 
 function runMotionSeamCases(report: FixtureCaseReporter): void {
   const { say, runCli } = fixtureChildDiagnostics(report);
-  runMotionSeamContractCases(say);
+  runMotionSeamContractCases(say, temp);
   runMotionRootSeamCases(say);
   const dir = temp('motion-seam');
   try {
@@ -38226,6 +38226,7 @@ function runContourWiringSuite(): number {
 function runTreeSuite(): number {
   section('tree: the rules CLAUDE.md states, held to the files');
   const { say, bad } = counter();
+  runMotionSeamDocumentationCases(say);
   const patterns = ignorePatterns();
   const readerFaults = ignoreReaderFaults(patterns);
   const files = treeFiles();

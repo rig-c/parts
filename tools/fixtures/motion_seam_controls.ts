@@ -20,7 +20,7 @@ const close = (a: number | null, b: number): boolean => a !== null && Math.abs(a
 const refuses = (read: () => unknown, text: string): boolean => { try { read(); return false; } catch (e) { return e instanceof PartsError && e.problems.some(p => `${p.code} ${p.object} ${p.detail}`.includes(text)); } };
 const rec = (name: string, from: string): PartRecord => ({ name, from, x: 0, y: 0, w: 4, h: 4, opaque_px: 16, projected_core_px: 16, source_px_taken: 16, refused_drift_px: 0, merged_px: 0, seam_override_px: 0 });
 
-export function runMotionSeamContractCases(say: Say): void {
+export function runMotionSeamContractCases(say: Say, makeTemp: (label: string) => string = label => mkdtempSync(join(tmpdir(), `parts-${label}-`))): void {
   const parts: PartsFile = { rig_size: [16,16], scale_rig_per_source: 1, ghost_px: {}, parts: [rec('cloth', 'full:topwear'), rec('arm', 'full:handwear-l')] };
   const cfg: CharacterConfig = { key: 'fixture', assemble: { rig_scale: 1, plan: [['cloth','full','topwear'],['arm','full','handwear-l']] },
     bones: [{ name: 'lower', parent: 'root', at: [8,12] }, { name: 'upper', parent: 'lower', at: [8,6] }, { chain: 'branch', parent: 'upper', points: [[4,4],[3,8]], tip: [2,12] }],
@@ -71,7 +71,7 @@ export function runMotionSeamContractCases(say: Say): void {
   rows[0].pose_at_worst = pose;
   const text = motionSeamWarnText(rows[0]);
   say('MS07_WARN_TEXT_NAMES_ANIMATION_SPANS_WORST_TIME_EACH_JOINT_AND_STATIC_RANGE', text.includes('"added"') && text.includes('worst frame 2 (t = 0.125s)') && text.includes('"joint"') && text.includes('modulo360') && text.includes('[-30,90]'), text, 'The line carries actual posed evidence alongside the unchanged static range.');
-  const home = mkdtempSync(join(tmpdir(), 'parts-motion-seam-'));
+  const home = makeTemp('motion-seam');
   try {
     const serialized = join(home, 'parts.json');
     writeFileSync(serialized, serializeParts(declared));
@@ -128,6 +128,10 @@ export function runMotionSeamContractCases(say: Say): void {
   const ambiguousPose=seamPoseFrame(geometry,'added',2,0.125,cohort,[{...joints[0],...ambiguousRanges}]);
   say('MS13_IDENTICAL_RANGES_DEDUP_AND_CONFLICTING_RANGES_STAY_AMBIGUOUS', JSON.stringify(sameRanges.range)==='[-30,90]' && ambiguousRanges.range===null && ambiguousPose.joints[0].reason?.includes('ambiguous declared static ranges')===true && !ambiguousPose.joints[0].reason?.includes('no declared static range'), JSON.stringify({sameRanges,ambiguousPose}), 'Conflicting source limb ranges on one bone are not reported as an absent declaration.');
 
+}
+
+/** Source/document checks belong to the tree suite, outside the check worker's generated-input boundary. */
+export function runMotionSeamDocumentationCases(say: Say): void {
   const root = resolve(import.meta.dir, '../..');
   const copyDocs = ['README.md','docs/AUTHORING.md','docs/MIGRATION.md','skills/rig-parts/SKILL.md'];
   const sections: readonly string[] = PROPOSAL_CONFIG_SECTIONS;
@@ -150,7 +154,9 @@ export function runMotionSeamContractCases(say: Say): void {
 }
 if (import.meta.main) {
   let failures = 0, count = 0;
-  runMotionSeamContractCases((name, ok, detail) => { count++; if (!ok) failures++; console.log(`${ok ? 'PASS' : 'FAIL'} ${name} ${detail}`); });
+  const say: Say = (name, ok, detail) => { count++; if (!ok) failures++; console.log(`${ok ? 'PASS' : 'FAIL'} ${name} ${detail}`); };
+  runMotionSeamContractCases(say);
+  runMotionSeamDocumentationCases(say);
   console.log(`motion-seam pure controls: ${count - failures} PASS / ${failures} FAIL`);
   process.exitCode = failures === 0 ? 0 : 1;
 }
