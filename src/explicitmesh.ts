@@ -78,13 +78,6 @@ export function explicitAttachment(
         detail: `declares ${declaredCount} island slot(s) (${declaredSlots.map((s) => `"${s}"`).join(', ')}), but parts/${part.name}.png has ${actualCount} art island(s) (${areaList}); extra ${extra} — nothing is written`,
       }];
     }
-  } else if (actualCount > 1) {
-    const missing = Array.from({ length: actualCount - 1 }, (_, k) => `"${part.name}__island${k + 2}"`).join(', ');
-    return [{
-      code: 'RIG_EXPLICIT_ISLAND_COUNT',
-      object: `config.meshes.${part.name}.explicit`,
-      detail: `states 1 slot ("${part.name}"), but parts/${part.name}.png has ${actualCount} art island(s) (${areaList}); missing ${missing} — nothing is written`,
-    }];
   }
   const padded = pad(image, PAD, PAD, PAD, PAD, [0, 0, 0, 0]);
   const defaultBone = typeof spec.segments[0] === 'string' ? spec.segments[0] : spec.segments[0][0];

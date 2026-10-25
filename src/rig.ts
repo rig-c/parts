@@ -680,6 +680,7 @@ function applyTurn(
   skin: RigSpec['skins']['default'],
   constraints: readonly ConfigConstraint[],
   frontSlots: ReadonlySet<string> = new Set(),
+  slotFamilies: ReadonlyMap<string, readonly string[]> = new Map(),
 ): { constraints: Array<Record<string, unknown>>; detached: DetachedRule[]; rows: TurnRow[] } {
   const problems: Problem[] = [];
   const taken = new Set(bones.map((b) => b.name));
@@ -690,8 +691,9 @@ function applyTurn(
     const row: TurnRow = { ...f, twins: [] };
     rows.push(row);
     if (f.fraction === 0) continue;
+    const family = new Set(slotFamilies.get(f.part) ?? [f.part]);
     // A declared front slot (issue #664) rides its part; a part merely named `<part>_front` is a part of its own.
-    const mine = slots.filter((sl) => sl.name === f.part || sl.name === `${f.part}${STILL_SUFFIX}` || (sl.name === `${f.part}${FRONT_SUFFIX}` && frontSlots.has(sl.name)));
+    const mine = slots.filter((sl) => family.has(sl.name) || sl.name === `${f.part}${STILL_SUFFIX}` || (sl.name === `${f.part}${FRONT_SUFFIX}` && frontSlots.has(sl.name)));
     const bound: string[] = [];
     const bind = (b: string): void => {
       if (!bound.includes(b)) bound.push(b);
@@ -715,10 +717,11 @@ function applyTurn(
   const detached: DetachedRule[] = [];
   for (const row of rows) {
     if (row.twins.length === 0) continue;
+    const family = new Set(slotFamilies.get(row.part) ?? [row.part]);
     const twinOf = new Map(row.twins.map((t) => [t.bone, t.twin]));
     for (const t of row.twins) bones.push({ name: t.twin, parent: t.bone, x: 0, y: 0 });
     for (const sl of slots) {
-      if (sl.name !== row.part && sl.name !== `${row.part}${STILL_SUFFIX}` && !(sl.name === `${row.part}${FRONT_SUFFIX}` && frontSlots.has(sl.name))) continue;
+      if (!family.has(sl.name) && sl.name !== `${row.part}${STILL_SUFFIX}` && !(sl.name === `${row.part}${FRONT_SUFFIX}` && frontSlots.has(sl.name))) continue;
       sl.bone = twinOf.get(sl.bone) as string;
       const atts = skin[sl.name] ?? {};
       for (const [k, att] of Object.entries(atts)) {
@@ -2536,7 +2539,7 @@ export function buildRig(
           const m = cfg.meshes[pName];
           if (m !== undefined) {
             if ('explicit' in m) {
-              for (const bName of explicitSlotBones(m)) coveredBones.add(bName);
+              if (m.explicit.islands !== undefined) for (const bName of explicitSlotBones(m)) coveredBones.add(bName);
               for (const row of explicitWeightRows(m)) for (const w of row) coveredBones.add(w.bone);
             }
             if ('contour' in m) for (const rg of contourRegionsOf(m.contour)) coveredBones.add(rg.bone);
@@ -2772,7 +2775,7 @@ export function buildRig(
   // ---- the turn control (issue #251) -------------------------------------
   // Only when the config has `turn`: every other build adds nothing here, so no byte moves.
   if (cfg.turn !== undefined) refuseIfAny(turnRiderProblems(cfg.turn, cfg, parts.parts));
-  const turned = cfg.turn === undefined ? null : applyTurn(cfg.turn, parts.parts.map((p) => p.name), bones, rebound, skin, cfg.constraints ?? [], declaredFront);
+  const turned = cfg.turn === undefined ? null : applyTurn(cfg.turn, parts.parts.map((p) => p.name), bones, rebound, skin, cfg.constraints ?? [], declaredFront, slotFamilies);
   for (const row of turned?.rows ?? []) for (const t of row.twins) layoutAlias(explicitLayout.plan, t.bone, t.twin);
   // issue #536: every row names the bones the emitted attachment binds, read once the turn and the stops have
   // rebound the weights; a rig with neither rebinds nothing, so this reads back the names each row already holds.
@@ -2792,10 +2795,18 @@ export function buildRig(
   }
 
   for (const [part, mesh] of Object.entries(cfg.meshes)) if ('explicit' in mesh) {
+    const defaultBone = typeof mesh.segments[0] === 'string' ? mesh.segments[0] : mesh.segments[0][0];
     if (mesh.explicit.islands !== undefined) {
       mesh.explicit.islands.forEach((isl, i) => {
         const att = skin[isl.slot]?.[isl.slot];
-        if (att !== undefined && 'type' in att && JSON.stringify(att.weights) !== JSON.stringify(isl.weights.map(row => row.map(w => ({ bone: w.bone, x: w.x, y: w.y, weight: w.weight }))))) {
+        const slotEntry = slots.find((s) => s.name === isl.slot);
+        const expectedBone = isl.bone ?? defaultBone;
+        const weightsChanged =
+          att !== undefined &&
+          'type' in att &&
+          JSON.stringify(att.weights) !== JSON.stringify(isl.weights.map(row => row.map(w => ({ bone: w.bone, x: w.x, y: w.y, weight: w.weight }))));
+        const boneChanged = slotEntry !== undefined && slotEntry.bone !== expectedBone;
+        if (weightsChanged || boneChanged) {
           fail('RIG_EXPLICIT_BINDING', `config.meshes.${part}.explicit.islands[${i}].weights`, 'the declared stops or turn would change these accepted bindings; supply the accepted final emitted bone names and bind coordinates, or use a generated mesh; no payload is normalized');
         }
       });

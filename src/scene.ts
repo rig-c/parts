@@ -384,7 +384,7 @@ export interface CharacterBuild {
 
 const BONE_KEYS = ['name', 'parent', 'length', 'rotation', 'x', 'y'];
 const SLOT_KEYS = ['name', 'bone', 'attachment'];
-const ATTACHMENT_KEYS = ['type', 'image', 'width', 'height', 'uvs', 'triangles', 'hull', 'weights', 'x', 'y', 'rotation'];
+const ATTACHMENT_KEYS = ['type', 'path', 'image', 'width', 'height', 'uvs', 'triangles', 'hull', 'weights', 'x', 'y', 'rotation'];
 const RIG_KEYS = ['spec', 'name', 'images', 'skeleton', 'bones', 'slots', 'skins', 'constraints', 'stops', 'invariants'];
 const STOP_KEYS = ['chain', 'links', 'against', 'at', 'inward', 'outward', 'lower'];
 const STOP_LOWER_KEYS = ['inward', 'outward'];
@@ -1123,7 +1123,11 @@ export function composeScene(
       const out: Record<string, Attachment> = {};
       const onRoot = slotBone.get(slot) === ROOT_BONE;
       for (const [name, att] of Object.entries(atts as unknown as Record<string, Attachment>)) {
-        const a: Attachment = { ...att, image: imageName(id, att.image as string) };
+        const a: Attachment = {
+          ...att,
+          ...(typeof att.path === 'string' ? { path: imageName(id, att.path) } : {}),
+          image: imageName(id, att.image as string),
+        };
         if (Array.isArray(att.weights)) {
           a.weights = (att.weights as Array<Array<Record<string, unknown>>>).map((v) =>
             v.map((w) =>

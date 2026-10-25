@@ -1,15 +1,18 @@
 #!/usr/bin/env bun
 /** #658 controls: named field, immutable payload, and actual image/placement binding. */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { explicitFixture, explicitIslandsFixture, type SingleExplicitMeshSpec, stoppedLimbFixture } from '../fixtures/explicitmesh.ts';
-import { rigConfig, rigImages, rigParts, writeRigFixture } from '../fixtures/rig.ts';
+import { explicitFixture, explicitIslandsFixture, type IslandsExplicitMeshSpec, type SingleExplicitMeshSpec, stoppedLimbFixture } from '../fixtures/explicitmesh.ts';
+import { block, islandImages, rigConfig, rigImages, rigParts, writeRigFixture } from '../fixtures/rig.ts';
 import { parseConfig, partBoundBones, type ExplicitMeshSpec, type Limb } from '../src/config.ts';
 import { PartsError } from '../src/errors.ts';
 import { buildRig, rigJsonText, type MeshAttachment } from '../src/rig.ts';
 import { explicitImageHash, explicitRegionHash } from '../src/explicitmesh.ts';
-import { readRigInputs, rigStage } from '../src/build.ts';
+import { gateThroughRigc, readRigInputs, rigStage } from '../src/build.ts';
+import { DEFAULT_PACK_MODE, packageRigc } from '../src/check.ts';
+import { composeFromFiles, SCENE_SPEC } from '../src/scene.ts';
+import { processRigcRunner } from './build-process.ts';
 import { notCompared } from '../src/meshdraft.ts';
 import { meshStatsRows } from '../src/meshstats.ts';
 import { configRoles } from '../src/structure.ts';
@@ -126,6 +129,36 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
   const islFix = explicitIslandsFixture(), islCfg = parseConfig(islFix.config), islBuilt = buildRig(islCfg, islFix.parts, islFix.images);
   const att1 = islBuilt.rig.skins.default.cloth.cloth as MeshAttachment;
   const att2 = islBuilt.rig.skins.default.cloth__island2.cloth__island2 as MeshAttachment;
+  const islTransferred = explicitIslandsFixture();
+  islTransferred.mesh = {
+    segments: ['body', 'eye'],
+    explicit: {
+      image_sha256: explicitImageHash(islFix.images.get('cloth')!),
+      region_sha256: explicitRegionHash(islFix.parts.rig_size, islFix.parts.parts[0]),
+      islands: [
+        { slot: 'cloth', uvs: [...att1.uvs], triangles: [...att1.triangles], hull: att1.hull, weights: structuredClone(att1.weights) },
+        { slot: 'cloth__island2', bone: islBuilt.rig.slots.find(s => s.name === 'cloth__island2')!.bone, uvs: [...att2.uvs], triangles: [...att2.triangles], hull: att2.hull, weights: structuredClone(att2.weights) },
+      ],
+    },
+  } satisfies IslandsExplicitMeshSpec;
+  islTransferred.config.meshes = { cloth: islTransferred.mesh };
+  const islRebuilt = buildRig(parseConfig(islTransferred.config), islFix.parts, islFix.images);
+  const genTwoIsl = buildRig(parseConfig(rigConfig()), islFix.parts, islFix.images);
+  const genTwoIslAtt = genTwoIsl.rig.skins.default.cloth.cloth as MeshAttachment;
+  const singleOnTwoIslands = explicitFixture();
+  singleOnTwoIslands.mesh = {
+    segments: [...new Set([genTwoIsl.rig.slots.find(s => s.name === 'cloth')!.bone, ...genTwoIslAtt.weights.flatMap(row => row.map(w => w.bone))])],
+    explicit: {
+      image_sha256: explicitImageHash(islFix.images.get('cloth')!),
+      region_sha256: explicitRegionHash(islFix.parts.rig_size, islFix.parts.parts[0]),
+      uvs: [...genTwoIslAtt.uvs],
+      triangles: [...genTwoIslAtt.triangles],
+      hull: genTwoIslAtt.hull,
+      weights: structuredClone(genTwoIslAtt.weights),
+    },
+  };
+  singleOnTwoIslands.config.meshes = { cloth: singleOnTwoIslands.mesh };
+  const singleOnTwoBuilt = buildRig(parseConfig(singleOnTwoIslands.config), islFix.parts, islFix.images);
   const islBeforeFix = explicitIslandsFixture();
   islBeforeFix.parts.parts.splice(1, 0, { ...islBeforeFix.parts.parts[1], name: 'mid', from: 'full:bottomwear' });
   islBeforeFix.images.set('mid', islBeforeFix.images.get('eye')!);
@@ -133,11 +166,36 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
   (islBeforeFix.config.regions as Record<string, string>).mid = 'body';
   islBeforeFix.mesh.explicit.islands[1].before = 'eye';
   const islBeforeBuilt = buildRig(parseConfig(islBeforeFix.config), islBeforeFix.parts, islBeforeFix.images);
+  const islDisk = writeRigFixture(join(root, 'isl-disk'), islFix.config, islFix.images, islFix.parts);
+  const islBuildDir = join(root, 'isl-build');
+  const islRigOut = join(islBuildDir, 'rig');
+  const runner = processRigcRunner(packageRigc(resolve(import.meta.dir, '..')));
+  rigStage({ config: islDisk.config, parts: islDisk.parts, out: islRigOut }, runner, join(root, 'isl-rig-scratch'), () => {});
+  cpSync(islDisk.parts, islBuildDir, { recursive: true });
+  mkdirSync(join(islBuildDir, 'check'), { recursive: true });
+  writeFileSync(join(islBuildDir, 'check', 'check.json'), JSON.stringify({ PASS: true, gate_spine_html_green: true }));
+  const scenePath = join(root, 'isl-scene.json');
+  writeFileSync(scenePath, JSON.stringify({
+    spec: SCENE_SPEC,
+    canvas: { width: 40, height: 40 },
+    characters: [{ id: 'ch', build: islBuildDir, offset: [0, 0] }],
+    order: ['ch'],
+  }));
+  const composed = composeFromFiles(scenePath);
+  const composedIsl2 = composed.rig.skins.default['ch:cloth__island2']['ch:cloth__island2'] as MeshAttachment;
+  const composeGate = gateThroughRigc(composed.images, [['rig.json', rigJsonText(composed.rig)], ['motion.json', rigJsonText(composed.motion)]], runner, join(root, 'isl-compose-scratch'), DEFAULT_PACK_MODE);
   const islRep = islBuilt.meshReport[0];
   check(
     'GX25_EXPLICIT_TWO_ISLAND_ROUND_TRIP_AND_SLOT_ORDER',
     order(islBuilt.rig) === '["cloth","cloth__island2","eye"]' &&
       order(islBeforeBuilt.rig) === '["cloth","mid","cloth__island2","eye"]' &&
+      rigJsonText(buildRig(islCfg, islFix.parts, islFix.images).rig) === rigJsonText(islBuilt.rig) &&
+      rigJsonText(islRebuilt.rig) === rigJsonText(islBuilt.rig) &&
+      rigJsonText(singleOnTwoBuilt.rig) === rigJsonText(genTwoIsl.rig) &&
+      readFileSync(join(islRigOut, 'rig.json'), 'utf8') === rigJsonText(islBuilt.rig) &&
+      composedIsl2.path === 'ch.cloth' &&
+      composedIsl2.image === 'ch.cloth.png' &&
+      composeGate.every(g => g.status === 0) &&
       islBuilt.rig.slots[0].bone === 'body' &&
       islBuilt.rig.slots[1].bone === 'eye' &&
       att1.path === undefined &&
@@ -152,11 +210,17 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
       JSON.stringify(islRep.bones) === '["body","eye"]' &&
       islRep.art_coverage === 1 &&
       JSON.stringify(partBoundBones(islCfg).get('cloth')) === '["body","eye"]',
-    `${order(islBuilt.rig)} -> ${order(islBeforeBuilt.rig)}; report vertices=${islRep.vertices}, coverage=${islRep.art_coverage}`,
+    `${order(islBuilt.rig)} -> ${order(islBeforeBuilt.rig)}; report vertices=${islRep.vertices}, coverage=${islRep.art_coverage}, composeGate=${composeGate.map(g => g.status).join(',')}`,
   );
-  const singleOnTwoIslands = explicitFixture();
-  singleOnTwoIslands.mesh.explicit.image_sha256 = explicitImageHash(islFix.images.get('cloth')!);
-  const missingIslErr = refused(() => buildRig(parseConfig(singleOnTwoIslands.config), islFix.parts, islFix.images));
+  const threeIslandCloth = block(16, 8);
+  for (let y = 0; y < 8; y++) {
+    for (const x of [4, 5, 10, 11]) threeIslandCloth.data.set([0, 0, 0, 0], (y * 16 + x) * 4);
+  }
+  const threeIslandsImages = islandImages();
+  threeIslandsImages.set('cloth', threeIslandCloth);
+  const twoOnThreeIslands = explicitIslandsFixture();
+  twoOnThreeIslands.mesh.explicit.image_sha256 = explicitImageHash(threeIslandCloth);
+  const missingIslErr = refused(() => buildRig(parseConfig(twoOnThreeIslands.config), twoOnThreeIslands.parts, threeIslandsImages));
   const twoOnOneIsland = explicitIslandsFixture();
   twoOnOneIsland.mesh.explicit.image_sha256 = explicitImageHash(images.get('cloth')!);
   const extraIslErr = refused(() => buildRig(parseConfig(twoOnOneIsland.config), parts, images));
@@ -172,23 +236,42 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
   const beforeOnFirst = explicitIslandsFixture();
   beforeOnFirst.mesh.explicit.islands[0].before = 'eye';
   const beforeOnFirstErr = refused(() => parseConfig(beforeOnFirst.config));
+  const unknownIslBone = explicitIslandsFixture();
+  unknownIslBone.mesh.segments = ['body'];
+  for (const row of unknownIslBone.mesh.explicit.islands[1].weights) for (const w of row) w.bone = 'body';
+  unknownIslBone.mesh.explicit.islands[1].bone = 'absent';
+  const unknownIslBoneErr = refused(() => parseConfig(unknownIslBone.config));
   const undeclaredIslBone = explicitIslandsFixture();
   undeclaredIslBone.mesh.segments = ['body'];
+  for (const row of undeclaredIslBone.mesh.explicit.islands[1].weights) for (const w of row) w.bone = 'body';
+  undeclaredIslBone.mesh.explicit.islands[1].bone = 'eye';
   const undeclaredIslBoneErr = refused(() => parseConfig(undeclaredIslBone.config));
   const badBeforeTarget = explicitIslandsFixture();
   badBeforeTarget.mesh.explicit.islands[1].before = 'absent_part';
   const badBeforeErr = refused(() => buildRig(parseConfig(badBeforeTarget.config), badBeforeTarget.parts, badBeforeTarget.images));
+  const stoppedIsl2 = explicitIslandsFixture();
+  stoppedIsl2.mesh.segments = ['body', 'hem1'];
+  stoppedIsl2.mesh.explicit.islands[1].bone = 'hem1';
+  for (const row of stoppedIsl2.mesh.explicit.islands[1].weights) for (const w of row) w.bone = 'hem1';
+  stoppedIsl2.config.stops = [{ chain: 'hem', against: 'body', at: [0, 0], inward: -45, outward: 45, lower: { inward: -45, outward: 45 } }];
+  const stoppedIsl2Err = refused(() => buildRig(parseConfig(stoppedIsl2.config), stoppedIsl2.parts, stoppedIsl2.images));
+  const turnedIsl2 = explicitIslandsFixture();
+  turnedIsl2.config.turn = { pivot: 0.5, depths: { cloth: 0.2, eye: 0.199 } };
+  const turnedIsl2Err = refused(() => buildRig(parseConfig(turnedIsl2.config), turnedIsl2.parts, turnedIsl2.images));
   check(
     'GX26_EXPLICIT_ISLAND_COUNT_AND_SLOT_NAME_REFUSALS',
-    missingIslErr?.problems.some(p => p.code === 'RIG_EXPLICIT_ISLAND_COUNT' && p.detail.includes('missing "cloth__island2"')) === true &&
+    missingIslErr?.problems.some(p => p.code === 'RIG_EXPLICIT_ISLAND_COUNT' && p.detail.includes('missing "cloth__island3"')) === true &&
       extraIslErr?.problems.some(p => p.code === 'RIG_EXPLICIT_ISLAND_COUNT' && p.detail.includes('extra "cloth__island2"')) === true &&
       wrongSlotErr?.problems.some(p => p.code === 'CONFIG_EXPLICIT_ISLAND_SLOT' && p.object === 'config.meshes.cloth.explicit.islands[1].slot') === true &&
       bothModeErr?.problems.some(p => p.code === 'CONFIG_EXPLICIT_ISLANDS' && p.object === 'config.meshes.cloth.explicit.uvs') === true &&
       oneEntryErr?.problems.some(p => p.code === 'CONFIG_EXPLICIT_ISLANDS' && p.object === 'config.meshes.cloth.explicit.islands') === true &&
       beforeOnFirstErr?.problems.some(p => p.code === 'CONFIG_EXPLICIT_ISLANDS' && p.object === 'config.meshes.cloth.explicit.islands[0].before') === true &&
-      undeclaredIslBoneErr?.problems.some(p => p.code === 'CONFIG_NAME_RESOLVES') === true &&
-      badBeforeErr?.problems.some(p => p.code === 'RIG_NAME_RESOLVES' && p.object === 'config.meshes.cloth.explicit.islands[1].before') === true,
-    `${codes(missingIslErr)}; ${codes(extraIslErr)}; ${codes(wrongSlotErr)}; ${codes(bothModeErr)}; ${codes(oneEntryErr)}; ${codes(beforeOnFirstErr)}; ${codes(undeclaredIslBoneErr)}; ${codes(badBeforeErr)}`,
+      unknownIslBoneErr?.problems.some(p => p.code === 'CONFIG_NAME_RESOLVES' && p.object === 'config.meshes.cloth.explicit.islands[1].bone') === true &&
+      undeclaredIslBoneErr?.problems.some(p => p.code === 'CONFIG_NAME_RESOLVES' && p.object === 'config.meshes.cloth.explicit.islands[1].bone') === true &&
+      badBeforeErr?.problems.some(p => p.code === 'RIG_NAME_RESOLVES' && p.object === 'config.meshes.cloth.explicit.islands[1].before') === true &&
+      stoppedIsl2Err?.problems.some(p => p.code === 'RIG_EXPLICIT_BINDING' && p.object === 'config.meshes.cloth.explicit.islands[1].weights') === true &&
+      turnedIsl2Err?.problems.some(p => p.code === 'RIG_EXPLICIT_BINDING' && p.object === 'config.meshes.cloth.explicit.islands[1].weights') === true,
+    `${codes(missingIslErr)}; ${codes(extraIslErr)}; ${codes(wrongSlotErr)}; ${codes(bothModeErr)}; ${codes(oneEntryErr)}; ${codes(beforeOnFirstErr)}; ${codes(unknownIslBoneErr)}; ${codes(undeclaredIslBoneErr)}; ${codes(badBeforeErr)}; ${codes(stoppedIsl2Err)}; ${codes(turnedIsl2Err)}`,
   );
   return failed;
 }

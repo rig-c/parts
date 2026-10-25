@@ -796,7 +796,7 @@ export function partBoundBones(b: PartBinding): Map<string, string[]> {
   for (const [part, m] of Object.entries(b.meshes)) {
     if ('explicit' in m) {
       for (const row of explicitWeightRows(m)) for (const w of row) bind(part, w.bone);
-      for (const bName of explicitSlotBones(m)) bind(part, bName);
+      if (m.explicit.islands !== undefined) for (const bName of explicitSlotBones(m)) bind(part, bName);
       continue;
     }
     for (const sg of m.segments) {
