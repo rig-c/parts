@@ -665,7 +665,7 @@ export function withTurn(p: Proposal, draft: { turn: TurnSpec | null; notes: str
     }
     turn = { pivot: turn.pivot, depths };
   }
-  return { bones: p.bones, meshes: p.meshes, regions: p.regions, ...(p.motion_seams === undefined ? {} : { motion_seams: p.motion_seams }), ...(p.limbs === undefined ? {} : { limbs: p.limbs }), motion: p.motion, ...(p.constraints === undefined ? {} : { constraints: p.constraints }), ...(turn === null ? {} : { turn }), proposed_rig_scale: p.proposed_rig_scale, notes: [...p.notes, ...draft.notes] };
+  return { bones: p.bones, meshes: p.meshes, regions: p.regions, ...(p.limbs === undefined ? {} : { limbs: p.limbs }), ...(p.motion_seams === undefined ? {} : { motion_seams: p.motion_seams }), motion: p.motion, ...(p.constraints === undefined ? {} : { constraints: p.constraints }), ...(turn === null ? {} : { turn }), proposed_rig_scale: p.proposed_rig_scale, notes: [...p.notes, ...draft.notes] };
 }
 
 // ---------------------------------------------------------------------------

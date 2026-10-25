@@ -11,7 +11,7 @@ import { motionSeamLine, motionSeamSelection, motionSeamWarnText, openingOverFlo
 import { parseConfig, parseEarlyConfig, parseProposalSections, type CharacterConfig } from '../../src/config.ts';
 import { readParts, serializeParts, type PartsFile, type PartRecord } from '../../src/parts.ts';
 import { stageFields } from '../../src/assemble.ts';
-import { withTurn, PROPOSAL_CONFIG_SECTIONS, type Proposal } from '../../src/propose.ts';
+import { withTurn, serializeProposal, PROPOSAL_CONFIG_SECTIONS, type Proposal } from '../../src/propose.ts';
 import { PartsError } from '../../src/errors.ts';
 
 type Say = (name: string, ok: boolean, detail: string, why: string) => void;
@@ -35,6 +35,12 @@ export function runMotionSeamContractCases(say: Say, makeTemp: (label: string) =
   const shared = { ...cfg, meshes: { ...cfg.meshes, arm: { grid: 2, r: 2, segments: ['lower'] } } };
   const wrongSource = parts.parts.map(p => ({ ...p, from: 'full:neckwear' }));
   say('MS02_UNPROVEN_CARRIERS_AND_PROVENANCE_DO_NOT_DECLARE', draftMotionSeams(unrelated, parts.parts).length === 0 && draftMotionSeams(shared, parts.parts).length === 0 && draftMotionSeams(cfg, wrongSource).length === 0, 'unrelated parent / shared trunk binding / unrelated provenance', 'An ancestor in common does not establish the source-bound trunk/handwear structure.');
+  const lowerBranch: CharacterConfig = { ...cfg, bones: cfg.bones.map(b => 'chain' in b ? { ...b, parent: 'lower' } : b) };
+  const lowerDeclarations = draftMotionSeams(lowerBranch, parts.parts);
+  const mixed: CharacterConfig = { ...cfg, bones: [...cfg.bones, { chain: 'other', parent: 'lower', points: [[12,4],[13,8]], tip: [14,12] }], meshes: { ...cfg.meshes, arm: { grid: 2, r: 2, segments: ['branch','other'] } } };
+  const ownUpper: CharacterConfig = { ...cfg, meshes: { ...cfg.meshes, arm: { grid: 2, r: 2, segments: ['upper'] } } };
+  const wrongSleeve = parts.parts.map(p => p.name === 'arm' ? { ...p, from: 'full:neckwear' } : p);
+  say('MS14_EITHER_NEAREST_TRUNK_QUALIFIES_BUT_MIXED_NEAREST_CARRIERS_DO_NOT', JSON.stringify(lowerDeclarations) === JSON.stringify(declarations) && lowerDeclarations.length === 1 && draftMotionSeams(mixed, parts.parts).length === 0 && draftMotionSeams(ownUpper, parts.parts).length === 0 && draftMotionSeams(lowerBranch, wrongSleeve).length === 0 && draftMotionSeams(unrelated, parts.parts).length === 0, JSON.stringify({ upper: declarations, lower: lowerDeclarations, mixed: draftMotionSeams(mixed, parts.parts) }), 'The sleeve may branch from either of the two existing direct parent/child trunk carriers. Every sleeve carrier must have the same nearest trunk; its own trunk binding, mixed nearest trunks, unrelated root and wrong provenance remain excluded.');
   const declared = { ...parts, motion_seams: declarations };
   const pairs = motionSeamSelection(declared, []).pairs;
   const removed = motionSeamSelection(parts, []).pairs;
@@ -49,6 +55,8 @@ export function runMotionSeamContractCases(say: Say, makeTemp: (label: string) =
   const fields = stageFields(early);
   const proposal: Proposal = { bones: cfg.bones, meshes: cfg.meshes, regions: {}, motion: { duration: 1, tracks: [] }, motion_seams: declarations, proposed_rig_scale: 1, notes: [] };
   const turned = withTurn(proposal, { turn: { pivot: 0, depths: {} }, notes: [] });
+  const both: Proposal = { bones: cfg.bones, meshes: {}, regions: { cloth: 'upper', upperarm: 'branch0', forearm: 'branch1' }, limbs: { arm: { segments: [{ part: 'upperarm', from: 'arm', bone: 'branch0' }, { part: 'forearm', from: 'arm', bone: 'branch1', joint: 'elbow' }] } }, motion_seams: [{ part: 'cloth', neighbour: 'upperarm' }], motion: proposal.motion, proposed_rig_scale: 1, notes: [] };
+  say('MS15_NOOP_TURN_PRESERVES_SERIALIZED_LIMBS_THEN_MOTION_SEAMS_ORDER', serializeProposal(withTurn(both, { turn: null, notes: [] })) === serializeProposal(both), Object.keys(both).join(', '), 'The proposal emitter places limbs before motion_seams; a no-op turn preserves its bytes when both optional fields are present.');
   const encoded = JSON.parse(serializeParts(declared)) as PartsFile;
   const written = mergeConfigProposal(cfg, { kind: 'proposal', proposal, sections: PROPOSAL_CONFIG_SECTIONS });
   const writtenConfig = parseConfig(written.config);

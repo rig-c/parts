@@ -48,8 +48,9 @@ export function motionSeamParents(bones: readonly BoneEntry[]): Map<string, stri
 /**
  * Source-bound declaration generator, also callable on a frozen handed config.
  * A non-limb topwear mesh has exactly two single-bone carriers, a named parent
- * and child. Handwear is bound strictly below that child, with no second trunk
- * carrier of its own. This proves the declared binding structure, not positive
+ * and child. Every handwear carrier is strictly below the same nearest member
+ * of that pair, either parent or child, and none is a trunk carrier itself.
+ * This proves the declared binding structure, not positive
  * compiled vertex weights or alpha overlap (the stock seam reader observes that).
  * No motion keys, thresholds, part spelling or nearest geometry select a pair.
  */
@@ -74,15 +75,16 @@ export function draftMotionSeams(config: Pick<CharacterConfig, 'bones' | 'meshes
     for (const sleeve of parts) {
       if (sleeve.limb !== undefined || consumed.has(sleeve.name) || !['handwear-r', 'handwear-l'].includes(tagOf(sleeve.from) ?? '')) continue;
       const carriers = bound(sleeve.name);
-      const underChild = (bone: string): boolean => {
+      const nearestTrunk = (bone: string): string | undefined => {
         const seen = new Set<string>();
         for (let b: string | undefined = parents.get(bone); b !== undefined && !seen.has(b); b = parents.get(b)) {
-          if (b === child) return true;
+          if (trunk.includes(b)) return b;
           seen.add(b);
         }
-        return false;
+        return undefined;
       };
-      if (carriers.length > 0 && carriers.every(b => parents.has(b) && !trunk.includes(b) && underChild(b))) out.push({ part: body.name, neighbour: sleeve.name });
+      const carrierTrunk = carriers.length === 0 ? undefined : nearestTrunk(carriers[0]);
+      if (carrierTrunk !== undefined && carriers.every(b => parents.has(b) && !trunk.includes(b) && nearestTrunk(b) === carrierTrunk)) out.push({ part: body.name, neighbour: sleeve.name });
     }
   }
   return out;

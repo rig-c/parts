@@ -118,7 +118,7 @@ The fields, object by object (a bold path is where the object sits; `<part>` is 
 part name, `[i]` an entry of a list):
 
 <!-- stable:config -->
-- **config** — required by the full loader, in front of rig and build: `key`, `assemble`, `bones`, `meshes`, `regions`, `motion`; optional: `generation`, `seethrough`, `limbs`, `constraints`, `stops`, `turn`, `scene`, `cloth`, `proposed_rig_scale`, `requirements`, `motion_seams` (issue #556, additive: a path beside the config that build reads in place of its requirements flag, whose behaviour is unchanged)
+- **config** — required by the full loader, in front of rig and build: `key`, `assemble`, `bones`, `meshes`, `regions`, `motion`; optional: `generation`, `seethrough`, `limbs`, `constraints`, `stops`, `turn`, `scene`, `cloth`, `proposed_rig_scale`, `requirements` (issue #556, additive: a path beside the config that build reads in place of its requirements flag, whose behaviour is unchanged), `motion_seams`
 - **generation** — required: `checkpoint`, `loras`, `trigger`, `identity`, `sampler`, `costume`, `negative_extra`, `style`, `negative_pose`, `latent`, `seed`; optional: `pose`, `control`
 - **generation.loras[i]** — required: `name`, `strength`; optional: `strength_clip`
 - **generation.sampler** — required: `steps`, `cfg`, `sampler`, `scheduler`
@@ -401,8 +401,16 @@ It records carrier-path world axes, parent-relative setup-axis deltas modulo
 frame0 and source key endpoints are not setup or measured pose substitutes.
 No angle bar or new threshold is added. Missing/mismatched data refuses.
 Without a declaration only optional WARN evidence changes existing check bytes.
-For the declared no-chest control, the exact existing JSON projection excludes
-only the new seam selection/rows/derived status/reason, at identical paths.
+For the declared no-chest control at identical paths, the exact byte projection
+of an existing seam container excludes only its selection, rows, derived status
+and reason. If the baseline JSON omits `SEAM_OVER_MOTION` entirely because it
+selects no pair or root, the new optional container may be excluded only after
+independent audits prove its exact required-key schema (`status`, `fps`, `floor`,
+`pairs`, `animations`, `warnings`, `rows`), `CLEAR` with no `reason`, fps 12, the
+exact source floor and compiled animation roster, zero warnings, the exact
+generated selection, and readable clean rows for every selected pair in every
+animation. All bytes outside that projection stay identical; an existing
+baseline container keeps the narrower field exclusions above.
 
 The WARN pose reader also requires the published stock coordinate header and
 the required source bone/parent roster. It binds the complete geometry frame
