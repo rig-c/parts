@@ -10,6 +10,7 @@ import { runSetFocusChecks } from './tools/check_set_focus.ts';
 import { runRevisionChainChecks } from './tools/check_revision_chain.ts';
 import { runConfigWriteChecks } from './tools/check_configwrite.ts';
 import { runCorePointerChecks } from './tools/check_corepointer.ts';
+import { runLayerBoundsChecks } from './tools/check_layer_bounds.ts';
 /**
  * rig-parts selftest — proof that every gate here can go RED.
  *
@@ -1606,6 +1607,7 @@ function runWrapperSuite(): number {
     return d;
   };
   try {
+    runLayerBoundsChecks(fresh('layer-bounds'), (name, ok, detail) => say(name, ok, detail, 'original alpha > 8, input-canvas offsets and the existing body group; analytical controls before acceptance measurements'));
     const dir = fresh('wrapper');
     writeWrapperFixture(dir);
     const set = readWrapperLayers(dir);
@@ -32642,11 +32644,15 @@ function authorLayerControls(say: (name: string, ok: boolean, detail: string, wh
     const lyA = runCli(['layers', join(authored, 'full')]);
     const lyP = runCli(['layers', join(plain, 'full')]);
     const rowA = /^ {2}4 +author:hand +author +31,46 +44,59 +13x13 +169 /m.test(lyA.out);
+    const hasAuthorOutput = (out: string): boolean => /^(?: {2}\d+ +.+ +author +| {2}author-made: layer )/m.test(out);
+    const plainHasAuthorOutput = hasAuthorOutput(lyP.out);
+    const authorRowPlant = `${lyP.out}\n  99  author:plant  author  0,0  1,1  1x1  1\n`;
+    const authorLinePlant = `${lyP.out}\n  ${authorLayerLine('author:plant')}\n`;
     say(
       'AS225_LAYERS_PRINTS_AN_AUTHOR_MADE_LAYER_IN_GROUP_AUTHOR_AND_SAYS_IT_HAS_NO_ROLE',
-      lyA.status === 0 && rowA && hasLine(lyA.out, `  ${authorLayerLine('author:hand')}`) && lyP.status === 0 && !lyP.out.includes('author-made') && !lyP.out.includes(' author '),
-      `exit ${lyA.status}; row "4 author:hand author 31,46 44,59 13x13 169": ${rowA}; the line: ${lyA.out.split('\n').find((l) => l.includes('author-made:'))?.trim() ?? 'absent'}; the plain run (exit ${lyP.status}) prints an author group or line ${lyP.out.includes('author-made') || lyP.out.includes(' author ') ? 'SOMEWHERE' : 'nowhere'}`,
-      'issue #256: the layer table is the first place an agent reads a run, so a layer the author made is printed as one there — its group column says author, never body or head — and a run with none prints what it printed before',
+      lyA.status === 0 && rowA && hasLine(lyA.out, `  ${authorLayerLine('author:hand')}`) && lyP.status === 0 && !plainHasAuthorOutput && hasAuthorOutput(authorRowPlant) && hasAuthorOutput(authorLinePlant),
+      `exit ${lyA.status}; row "4 author:hand author 31,46 44,59 13x13 169": ${rowA}; the line: ${lyA.out.split('\n').find((l) => l.includes('author-made:'))?.trim() ?? 'absent'}; the plain run (exit ${lyP.status}) prints an author group or provenance line ${plainHasAuthorOutput ? 'SOMEWHERE' : 'nowhere'}; planted row/line detected: ${hasAuthorOutput(authorRowPlant)}/${hasAuthorOutput(authorLinePlant)}`,
+      'issue #256: the original row prefix and author-made provenance line still identify the layer; a run with none has neither output, while a generic population exclusion may name author without declaring an author layer',
     );
 
     // assemble --propose-plan
@@ -33170,7 +33176,8 @@ function runPlausibilitySuite(): number {
         warnLines[0].startsWith('  WARN  PLAN_LAYER_TRANSLUCENT: layer "wings" — 80.0% translucent, 100.0% background-coloured, 2.000x the rest of the figure; ') &&
         warnLines[1].startsWith('  WARN  PLAN_LAYER_BACKGROUND: layer "wings" — ') &&
         warned.out.includes('  2 WARN line(s)') &&
-        /80\.0%\s+100\.0%\s+2\.000x$/.test(wingsRow) &&
+        // 2780 = 43 * 64 + 28 drawn pixels, spanning 64x44; the haze's alpha 200/40 is all below CORE_ALPHA.
+        /80\.0%\s+100\.0%\s+2\.000x\s+0,0\s+64,44\s+64x44\s+none\s+none\s+none$/.test(wingsRow) &&
         quiet.status === 0 &&
         quiet.out.includes('  0 WARN line(s)'),
       `hazed run -> exit ${warned.status}, ${warnLines.length} WARN line(s), first "${warnLines[0]?.trim() ?? ''}"; wings row "${wingsRow.trim()}"; the fixture's run -> exit ${quiet.status}, ${quiet.out.includes('  0 WARN line(s)') ? '0 WARN lines' : 'WARN lines'}`,

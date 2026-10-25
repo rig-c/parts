@@ -102,7 +102,7 @@
 import { sourceLimbTarget, nearestTargetPart } from './limbownership.ts';
 import { type ArmSplit, type BoneEntry, type CharacterConfig, type ControlSkeleton, controlSkeletonOf, type Cut, type EarlyConfig, type Extend, type Limb, type Patch, type PlanEntry, type Run, type SeeThrough } from './config.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
-import { figuresPhrase, implausibleRules, type Layer, type LayerFigures, layerFigures, type LayerSet, NEAR_WHITE_MIN, OPAQUE_ALPHA_ABOVE, ruleSummary } from './layers.ts';
+import { CORE_ALPHA, figuresPhrase, implausibleRules, type Layer, type LayerFigures, layerFigures, type LayerSet, NEAR_WHITE_MIN, OPAQUE_ALPHA_ABOVE, ruleSummary } from './layers.ts';
 import { padToSquare, squarePad } from './inputs.ts';
 import { type CapRecord, type LimbRecord, PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, type SceneRecord, type SingleRunPad } from './parts.ts';
 import { assignCrossedLimbs, assignOverlappingHands, type BonePlace, bonePlaces, capBox, coveredRadius, type CutPlacement, featherWeight, halfWidthAbout, inDisc, jointLine, type JointLine, jointOffsets, limbPolyline, limbRun, luma601, nearestLimb, nearestOnLine, offLineFigure, pastJoint, placeCut, polylineDist2, segmentOf } from './limbs.ts';
@@ -133,8 +133,6 @@ const f32 = Math.fround;
 // the reference's constants, each named once
 // ---------------------------------------------------------------------------
 
-/** Alpha at or above this is "opaque" for ownership, projection cores and the seam override. `>= 250`, not `== 255`: See-through leaves alpha-254 speckle. */
-export const CORE_ALPHA = 250;
 /** A ghost component is kept when its area is at least this many pixels … */
 export const GHOST_MIN_AREA = 40;
 /** … and at least this fraction of the layer's largest component. */
@@ -160,7 +158,7 @@ export const CROP_PROBE_ALPHA = 128;
 /** Alpha at or above this in a later plan part keeps `growRim`'s ring off the pixel. */
 export const FRONT_ALPHA = 128;
 /** A painting pixel whose min channel is above this is "near-white" (the faithful rim and seam guard). Defined beside the layer reader, which applies the same test to a layer's colour (`layerFigures`). */
-export { NEAR_WHITE_MIN };
+export { CORE_ALPHA, NEAR_WHITE_MIN };
 /** The seam override acts where the flat composite differs from the painting by more than this, max channel. */
 export const SEAM_LIMIT = 60;
 /** `--propose-plan` drops a tag with fewer run-space opaque pixels than this after ghost clean-up. */

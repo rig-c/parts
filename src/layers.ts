@@ -41,6 +41,8 @@ import { BODY_TAGS, HEAD_TAGS, HIDDEN_NAME_RULE, type LayerTagReading, layerTagR
 
 /** Alpha strictly above this counts as painted. The reference uses the same cut for its ghost clean-up and its sheets. */
 export const OPAQUE_ALPHA_ABOVE = 8;
+/** Alpha at or above this is "opaque" for ownership, projection cores and the seam override. `>= 250`, not `== 255`: See-through leaves alpha-254 speckle. */
+export const CORE_ALPHA = 250;
 /**
  * A pixel whose min channel is above this is "near-white". The assemble stage's
  * rim and seam guard apply it to the painting (`src/assemble.ts` re-exports it
@@ -98,6 +100,66 @@ export interface LayerSet {
   layers: Layer[];
   /** The hidden-art layers (issue #359), in the order the input lists them; empty when it holds none. */
   hidden: HiddenLayer[];
+}
+
+/** Bounds in input-canvas pixels, with exclusive right/bottom boundaries. */
+export interface OpaqueBox {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+function alphaBox(layer: Pick<Layer, 'pixels' | 'left' | 'top'>, includes: (alpha: number) => boolean): OpaqueBox | null {
+  const p = layer.pixels;
+  let left = p.width;
+  let top = p.height;
+  let right = 0;
+  let bottom = 0;
+  for (let y = 0; y < p.height; y++) {
+    for (let x = 0; x < p.width; x++) {
+      if (!includes(p.data[(y * p.width + x) * 4 + 3])) continue;
+      left = Math.min(left, x);
+      top = Math.min(top, y);
+      right = Math.max(right, x + 1);
+      bottom = Math.max(bottom, y + 1);
+    }
+  }
+  return right === 0 ? null : { left: layer.left + left, top: layer.top + top, right: layer.left + right, bottom: layer.top + bottom };
+}
+
+/** Original alpha above the legacy painted-pixel cut (>8), before cleanup or resampling. */
+export function layerOpaqueBox(layer: Pick<Layer, 'pixels' | 'left' | 'top'>): OpaqueBox | null {
+  return alphaBox(layer, alpha => alpha > OPAQUE_ALPHA_ABOVE);
+}
+
+/** Original alpha at or above CORE_ALPHA; not an owned, eroded or resampled projection core. */
+export function layerCoreBox(layer: Pick<Layer, 'pixels' | 'left' | 'top'>): OpaqueBox | null {
+  return alphaBox(layer, alpha => alpha >= CORE_ALPHA);
+}
+
+function bodyBox(set: LayerSet, readBox: (layer: Layer) => OpaqueBox | null): OpaqueBox | null {
+  let union: OpaqueBox | null = null;
+  for (const layer of set.layers) {
+    if (layer.tag.group !== 'body') continue;
+    const box = readBox(layer);
+    if (box === null) continue;
+    union = union === null ? box : {
+      left: Math.min(union.left, box.left), top: Math.min(union.top, box.top),
+      right: Math.max(union.right, box.right), bottom: Math.max(union.bottom, box.bottom),
+    };
+  }
+  return union;
+}
+
+/** Source >8 union of the reader's existing drawn body group, not an anatomical silhouette. */
+export function bodyOpaqueBox(set: LayerSet): OpaqueBox | null {
+  return bodyBox(set, layerOpaqueBox);
+}
+
+/** Source >=CORE_ALPHA union of the same body group; no ownership, erosion or cleanup. */
+export function bodyCoreBox(set: LayerSet): OpaqueBox | null {
+  return bodyBox(set, layerCoreBox);
 }
 
 function opaque(r: Raster): number {

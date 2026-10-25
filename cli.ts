@@ -28,7 +28,7 @@ import { GUIDE_DOC, type GuideAnswer, guideRule, guideSection } from './src/guid
 import { proposeHeadBox } from './src/headbox.ts';
 import { makeInputs } from './src/inputs.ts';
 import { idleKeysOf, isIdleKeys } from './src/rig.ts';
-import { depthSkipLine, exportLayers, figuresPhrase, hiddenLayerLine, implausibleRules, layerFigures, type LayerSet, layerSetDiff, pct, readLayers, readWrapperLayers, ruleSummary, templateLayerNames, templatePsdBytes, times } from './src/layers.ts';
+import { bodyCoreBox, bodyOpaqueBox, CORE_ALPHA, depthSkipLine, exportLayers, figuresPhrase, hiddenLayerLine, implausibleRules, layerCoreBox, layerFigures, layerOpaqueBox, type LayerSet, layerSetDiff, type OpaqueBox, OPAQUE_ALPHA_ABOVE, pct, readLayers, readWrapperLayers, ruleSummary, templateLayerNames, templatePsdBytes, times } from './src/layers.ts';
 import { checkImageSize, choosePerson, KEYPOINTS_SPEC, loadKeypoints, type RigJoints, toRigJoints } from './src/keypoints.ts';
 import { basisLines, branchSqueezeLine, checkProposal, compare, compareLines, DEFAULT_GRID_RULE, draftTurn, drawLandmarks, FIGURE_GRID_DIVISOR, FRINGE_STEP_PX, GRID_RULES, type GridRule, HIP_MIN_FRACTION, type DraftLintFinding, lint, lintLine, type PartSet, PROPOSAL_CONFIG_SECTIONS, proposalAsConfig, proposeWithBasis, readPartSet, serializeProposal, withTurn, WRIST_ON_PART_PX } from './src/propose.ts';
 import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, coverageLines, legChainChoice, serializeBasis } from './src/diagnostics.ts';
@@ -79,6 +79,11 @@ usage:
       where something covers it: listed apart, never drawn, never a part. An
       input with no depth (a PSD, or depth_median null on every layer, whose
       manifest order is then the draw order) prints one SKIP depth line.
+      Trailing boxes name both source-alpha cuts: drawn(a>8), and opaque
+      (a>=250, CORE_ALPHA). The legacy opaque_px still counts alpha above 8.
+      Right/bottom are exclusive, in INPUT-CANVAS px; absent boxes are named.
+      The body-group union height uses alpha >=250, with the >8 union shown
+      separately: no cleanup, ownership, anatomical height or painting map.
       Refuses, by name, a missing file, an unknown tag, a PNG whose
       size is not its box, and anything else outside the input contract —
       never a WARN.
@@ -995,10 +1000,29 @@ function printLayerTable(set: LayerSet): void {
   const head = ['order', 'name', 'group', 'left,top', 'right,bottom', 'size', 'opaque_px', 'depth', 'translucent', 'background', 'area'];
   const widths = head.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i].length)));
   const line = (cells: string[]): string => `  ${cells.map((c, i) => c.padEnd(widths[i])).join('  ')}`.trimEnd();
-  console.log(line(head));
-  for (const r of rows) console.log(line(r));
+  // Keep every legacy line byte-for-byte as a prefix; size the trailing fields separately.
+  const legacy = [line(head), ...rows.map(line)];
+  const legacyWidth = Math.max(...legacy.map(l => l.length));
+  const drawn = `drawn(a>${OPAQUE_ALPHA_ABOVE})`;
+  const opaque = `opaque(a>=${CORE_ALPHA})`;
+  const boxes = set.layers.map(l => [layerOpaqueBox(l), layerCoreBox(l)] as const);
+  const opaqueHead = [drawn, opaque].flatMap(label => [`${label}_left,top`, `${label}_right,bottom`, `${label}_size`]);
+  const opaqueRows = boxes.map(pair => pair.flatMap(b => b === null ? ['none', 'none', 'none'] : [`${b.left},${b.top}`, `${b.right},${b.bottom}`, `${b.right - b.left}x${b.bottom - b.top}`]));
+  const opaqueWidths = opaqueHead.map((h, i) => Math.max(h.length, ...opaqueRows.map(r => r[i].length)));
+  for (const [i, cells] of [opaqueHead, ...opaqueRows].entries()) {
+    console.log(`${legacy[i].padEnd(legacyWidth)}  ${cells.map((c, j) => c.padEnd(opaqueWidths[j])).join('  ')}`.trimEnd());
+  }
   const painted = set.layers.filter((l) => l.opaquePx > 0).length;
   console.log(`  ${set.layers.length} layer(s): ${painted} with opaque pixels, ${set.layers.length - painted} with none`);
+  console.log(`  source-alpha boxes: ${drawn}, ${opaque}; legacy opaque_px remains alpha > ${OPAQUE_ALPHA_ABOVE}; INPUT-CANVAS px; right/bottom exclusive`);
+  for (const [i, [drawnBox, coreBox]] of boxes.entries()) {
+    if (drawnBox === null) console.log(`  layer "${set.layers[i].name}": no ${drawn} box (no pixels with alpha > ${OPAQUE_ALPHA_ABOVE})`);
+    if (coreBox === null) console.log(`  layer "${set.layers[i].name}": no ${opaque} box (no pixels with alpha >= ${CORE_ALPHA})${drawnBox === null ? '' : `; ${drawn} box is present`}`);
+  }
+  const bodyBounds = (body: OpaqueBox | null): string => body === null ? 'none; height unavailable INPUT-CANVAS px' : `${body.left},${body.top} to ${body.right},${body.bottom}; size ${body.right - body.left}x${body.bottom - body.top}; height ${body.bottom - body.top} INPUT-CANVAS px`;
+  console.log(`  body-group union [${opaque}]: ${bodyBounds(bodyCoreBox(set))}; source alpha >= ${CORE_ALPHA} only, not an owned/eroded core or anatomical height`);
+  console.log(`  body-group union [${drawn}]: ${bodyBounds(bodyOpaqueBox(set))}; source alpha > ${OPAQUE_ALPHA_ABOVE} only; not an anatomical height`);
+  console.log('  body-group population: drawn group=body (includes hair/head/wings/objects; excludes face/headwear, author and hidden art); before cleanup, resampling or painting registration');
   // Issue #256: a layer the author made is said to be one, so it never reads as See-through's. None, no line.
   for (const l of set.layers) if (l.tag.group === 'author') console.log(`  ${authorLayerLine(l.name)}`);
   // Issue #359: a hidden-art layer is listed apart, never in the drawn table. None, no line.
