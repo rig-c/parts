@@ -286,13 +286,17 @@ follow-up and not in this workflow. The comparison is semver order computed in
 ## Whether the tarball runs
 
 What the package *holds* and whether it *works* are two facts. **The gate is
-the `installs` job in `ci.yml`**, on every pull request and push to `main`: it
+the `installs` job in `ci.yml`**, on every pull request and push to `main`, and
+the *Gate parts output through `@rig-c/play`* step (`bun run smoke -- --case clean`)
+in `release.yml` before `npm publish`: it
 runs `bun run smoke` ([`scripts/install_smoke.ts`](scripts/install_smoke.ts)),
 which packs a tarball from the branch, installs it into an empty directory,
 generates a fixture with the INSTALLED package's own codec and PSD writer, and
 runs `--version`, the installed `rigc --version` (which must name the core
-entry), `layers` on a wrapper directory and on a PSD, `sheet`, and `check` on a
-generated two-part rig from the install. Four packages are broken on purpose —
+entry), `layers` on a wrapper directory and on a PSD, `sheet`, `check` on a
+generated two-part rig from the install, and `build --all-sets` loaded through a
+fresh install of `@rig-c/play` (`--play-version <ver>`, default `latest`,
+`SMOKE_PLAY_LOADS_THE_BUILD`, issue #741). Four packages are broken on purpose —
 `src/layers.ts` out of the pack, `rig-c` out of `dependencies`, `ag-psd`
 out of `dependencies`, `@esotericsoftware/spine-core` added to `dependencies` —
 each patched into an extraction of the tarball, never the checkout; a plant case

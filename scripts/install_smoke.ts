@@ -17,7 +17,8 @@
  *
  * Nothing else in this repository asks that question. `prepublishOnly` gates the
  * SOURCE TREE, the `ships` job in `ci.yml` reads packed PATH LISTS, and
- * `release.yml` publishes and never installs. This is the fact about a program:
+ * `release.yml` gates the packaged build through `@rig-c/play` (`bun run smoke -- --case clean`)
+ * before `npm publish`. This is the fact about a program:
  * `npm pack`, `npm install` into an empty directory, and real commands run from
  * the install — `--version`, the same `--version` from every other command
  * the package's `bin` declares (the former name kept for the transition), the
@@ -31,7 +32,9 @@
  * mesh (`src/contour.ts`) on a generated block, which reaches rig-c's
  * outline functions through the named entry `rig-c/mesh`; and the
  * automatic mesh mode (`src/automesh.ts`, issue #126) through the installed
- * `rig` command and rigc's gate.
+ * `rig` command and rigc's gate; and the installed `build --all-sets` output
+ * (`skeleton.model.json` and `sets.json` with `focus`) loaded through a fresh
+ * install of `@rig-c/play` (`loadModel` and `readSetupMesh`, issue #741).
  *
  * 🔒 **Nothing under this repository is on the fixture's path at run time.** The
  * fixture generator below is authored as text into the install directory and
@@ -424,6 +427,180 @@ writeFileSync(join(DIR, 'config.json'), JSON.stringify({
 }, null, 1));
 `;
 
+// The installed `build --all-sets` output loaded through `@rig-c/play` (issue #741): an 80x80 painting scaled 0.5 to a
+// 40x40 rig with a `cloth` mesh (`full:neckwear`) and a `badge` region (`head:headwear`), plus two attachment sets —
+// `authored` with `focus: [60, 20]` (crop space -> `[10, 30]` in Spine world on the 40x40 rig) and `absent` without
+// `focus`. Built from the installed `rig-parts` CLI, then loaded by a fresh `@rig-c/play` install in `play-consumer`.
+const PLAY_GENERATOR = `import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { encodePngBytes } from '${PACKAGE}/src/raster/png.ts';
+
+const DIR = join(fileURLToPath(new URL('.', import.meta.url)), 'play-character');
+mkdirSync(join(DIR, 'full', 'parts'), { recursive: true });
+mkdirSync(join(DIR, 'head', 'parts'), { recursive: true });
+
+const W = 80;
+const H = 80;
+const solid = (w, h, rgb) => {
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) data.set([...rgb, 255], i * 4);
+  return { width: w, height: h, data };
+};
+
+const painting = solid(W, H, [240, 240, 240]);
+const put = (dst, src, ox, oy) => {
+  for (let y = 0; y < src.height; y++) {
+    for (let x = 0; x < src.width; x++) {
+      const si = (y * src.width + x) * 4;
+      const di = ((oy + y) * dst.width + (ox + x)) * 4;
+      dst.data.set(src.data.subarray(si, si + 4), di);
+    }
+  }
+};
+
+const neckwear = solid(32, 16, [200, 120, 80]);
+const headwear = solid(8, 8, [40, 90, 200]);
+put(painting, neckwear, 20, 20);
+put(painting, headwear, 32, 52);
+
+writeFileSync(join(DIR, 'painting.png'), encodePngBytes(painting));
+writeFileSync(join(DIR, 'full', 'parts', 'neckwear.png'), encodePngBytes(neckwear));
+writeFileSync(join(DIR, 'full', 'layers.json'), JSON.stringify({
+  prefix: 'full',
+  width: W,
+  height: H,
+  layers: [{ name: 'neckwear', filename: 'full_neckwear.png', left: 20, top: 20, right: 52, bottom: 36, depth_median: 0.5 }],
+}, null, 2));
+writeFileSync(join(DIR, 'head', 'parts', 'headwear.png'), encodePngBytes(headwear));
+writeFileSync(join(DIR, 'head', 'layers.json'), JSON.stringify({
+  prefix: 'head',
+  width: W,
+  height: H,
+  layers: [{ name: 'headwear', filename: 'head_headwear.png', left: 32, top: 52, right: 40, bottom: 60, depth_median: 0.2 }],
+}, null, 2));
+
+writeFileSync(join(DIR, 'config.json'), JSON.stringify({
+  key: 'smoke_play',
+  seethrough: { resolution: 80, steps: 20, seed: 1, offload: false, head_box: [0, 0, 80, 80] },
+  assemble: {
+    rig_scale: 0.5,
+    plan: [['cloth', 'full', 'neckwear'], ['badge', 'head', 'headwear']],
+    alternates: [
+      { name: 'authored', source: 'painting.png', full: 'full', head: 'head', focus: [60, 20], parts: ['cloth', 'badge'] },
+      { name: 'absent', source: 'painting.png', full: 'full', head: 'head', parts: ['cloth', 'badge'] },
+    ],
+  },
+  bones: [
+    { name: 'body', parent: 'root', at: [20, 30] },
+    { chain: 'hem', parent: 'body', points: [[14, 14], [22, 14]], tip: [30, 14] },
+    { name: 'badge', parent: 'body', at: [18, 12] },
+  ],
+  meshes: {
+    cloth: {
+      grid: 8,
+      r: 8,
+      segments: ['hem'],
+    },
+  },
+  regions: { badge: 'badge' },
+  motion: { duration: 4, tracks: [{ chain: 'hem', amps: [1, 2], period: 4, phase: 0, lag: 0.1 }] },
+}, null, 1));
+`;
+
+// Runs inside `play-consumer`, where `@rig-c/play` is installed into an isolated node_modules. Loads the installed
+// `rig-parts build --all-sets` output (`skeleton.model.json`, `sets.json`, and page PNGs) through `@rig-c/play`'s
+// `loadModel` and `readSetupMesh`, and verifies a negative control (`planted_unknown` set key refused by `loadModel`).
+const PLAY_PROBE = `import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { loadModel, readSetupMesh } from '@rig-c/play';
+
+const buildDir = process.argv[2];
+console.log('RESOLVED ' + import.meta.resolve('@rig-c/play'));
+
+const setsRaw = JSON.parse(readFileSync(join(buildDir, 'sets.json'), 'utf8'));
+const authoredFocus = setsRaw?.sets?.authored?.focus;
+const absentHasFocus = setsRaw?.sets?.absent !== undefined && 'focus' in setsRaw.sets.absent;
+if (!Array.isArray(authoredFocus) || authoredFocus.length !== 2 || authoredFocus[0] !== 10 || authoredFocus[1] !== 30 || absentHasFocus) {
+  throw new Error('sets.json written by rig-parts build did not carry sets.authored.focus=[10,30] and sets.absent without focus: ' + JSON.stringify(setsRaw?.sets));
+}
+
+globalThis.document = { baseURI: 'https://rig.local/' };
+globalThis.Image = class {
+  crossOrigin;
+  onload = null;
+  onerror = null;
+  width = 64;
+  height = 64;
+  naturalWidth = 64;
+  naturalHeight = 64;
+  set src(u) {
+    const file = join(buildDir, new URL(u).pathname.replace(/^\\//, ''));
+    queueMicrotask(() => {
+      if (existsSync(file)) this.onload?.();
+      else this.onerror?.();
+    });
+  }
+};
+
+const serveFrom = (overrideSetsText = null) => async (url) => {
+  const name = new URL(String(url)).pathname.replace(/^\\//, '');
+  if (name === 'sets.json' && overrideSetsText !== null) {
+    return new Response(overrideSetsText, { status: 200, headers: { 'content-type': 'application/json' } });
+  }
+  const file = join(buildDir, name);
+  if (!existsSync(file)) return new Response('not found', { status: 404 });
+  return new Response(readFileSync(file, 'utf8'), { status: 200, headers: { 'content-type': 'application/json' } });
+};
+
+const assets = await loadModel({
+  modelUrl: 'https://rig.local/skeleton.model.json',
+  regions: 'none',
+  fetch: serveFrom(),
+});
+
+const loadedSetNames = assets.sets.map((s) => s.name);
+const loadedAuthored = assets.sets.find((s) => s.name === 'authored');
+const loadedAbsent = assets.sets.find((s) => s.name === 'absent');
+if (loadedSetNames.join(',') !== 'authored,absent' || loadedAuthored === undefined || loadedAbsent === undefined) {
+  throw new Error('expected @rig-c/play to load sets [authored, absent], got ' + JSON.stringify(loadedSetNames));
+}
+const baseMesh = readSetupMesh(assets, { slot: 'cloth', attachment: 'cloth' });
+const altMesh = readSetupMesh(assets, { slot: 'cloth', attachment: 'authored_cloth' });
+if (baseMesh.vertices.length === 0 || altMesh.vertices.length === 0) {
+  throw new Error('readSetupMesh returned empty vertices');
+}
+assets.dispose();
+
+// Negative control: a planted unknown set key must be refused by @rig-c/play's loadModel.
+const plantedSets = JSON.stringify({
+  ...setsRaw,
+  sets: {
+    ...setsRaw.sets,
+    authored: { ...setsRaw.sets.authored, planted_unknown: true },
+  },
+});
+let plantedRefused = false;
+try {
+  await loadModel({
+    modelUrl: 'https://rig.local/skeleton.model.json',
+    regions: 'none',
+    fetch: serveFrom(plantedSets),
+  });
+} catch (error) {
+  if (error instanceof Error && error.message.includes('unknown key "planted_unknown"')) {
+    plantedRefused = true;
+  } else {
+    throw error;
+  }
+}
+if (!plantedRefused) {
+  throw new Error('@rig-c/play loadModel accepted a planted unknown key "planted_unknown" in sets.json');
+}
+
+console.log('PLAY_LOADED spec=' + assets.spec + ' sets=' + loadedSetNames.join(',') + ' focus=' + JSON.stringify(authoredFocus) + ' vertices=' + baseMesh.vertices.length);
+`;
+
 /** The draw order both inputs must read back in, and the opaque count of each layer. */
 const EXPECT_ORDER = ['back hair', 'face', 'eyebrow-l'];
 const EXPECT_OPAQUE: Record<string, number> = { 'back hair': 300, face: 100, 'eyebrow-l': 5 };
@@ -658,6 +835,7 @@ interface CaseSpec {
   installer: 'npm' | 'bun';
   plant: Plant;
   dirName: string;
+  playVersion: string;
 }
 
 interface CaseResult {
@@ -901,6 +1079,84 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, fetchedTgz?: strin
     );
   } else notes.push(`an auto mesh built from the install, passed the installed rigc's gate and its motion gate: ${autoLine.trim()}`);
 
+  // `@rig-c/play` loading the installed `rig-parts build --all-sets` output (`skeleton.model.json` + `sets.json`),
+  // on the unplanted cases (`clean` and `unusual-path`). A `play` release can turn `parts` CI red on its own, so the
+  // fault line names the `@rig-c/play` version and makes clear the refusal came from `@rig-c/play`.
+  if (spec.plant === 'none') {
+    writeFileSync(join(home, 'make_play.ts'), PLAY_GENERATOR);
+    const playGen = run('bun', [join(home, 'make_play.ts')], home);
+    output += playGen.out;
+    const playChar = join(home, 'play-character');
+    const playOut = join(home, 'play-out');
+    const playBuild =
+      playGen.status === 0
+        ? run(
+            bin,
+            [
+              'build',
+              '--config',
+              join(playChar, 'config.json'),
+              '--source',
+              join(playChar, 'painting.png'),
+              '--full',
+              join(playChar, 'full'),
+              '--head',
+              join(playChar, 'head'),
+              '--out',
+              playOut,
+              '--all-sets',
+            ],
+            home,
+          )
+        : null;
+    if (playBuild !== null) output += playBuild.out;
+    const modelFile = join(playOut, 'check', 'build', 'skeleton.model.json');
+    const setsFile = join(playOut, 'rig', 'sets.json');
+    if (playBuild === null || playBuild.status !== 0 || !existsSync(modelFile) || !existsSync(setsFile)) {
+      fault(
+        'play',
+        `SMOKE_PLAY_LOADS_THE_BUILD: ${
+          playBuild === null
+            ? `\`bun make_play.ts\` exited ${playGen.status}. ${playGen.out.trim().slice(0, 1500)}`
+            : `the installed \`rig-parts build --all-sets\` exited ${playBuild.status} (skeleton.model.json ${existsSync(modelFile) ? 'present' : 'absent'}, sets.json ${existsSync(setsFile) ? 'present' : 'absent'}) before @rig-c/play@${spec.playVersion} could load it. ${playBuild.out.trim().slice(-2000)}`
+        }`,
+      );
+    } else {
+      copyFileSync(setsFile, join(playOut, 'check', 'build', 'sets.json'));
+      const playConsumer = join(home, 'play-consumer');
+      mkdirSync(playConsumer, { recursive: true });
+      writeFileSync(join(playConsumer, 'package.json'), `${JSON.stringify({ name: 'rig-parts-play-smoke', private: true, version: '0.0.0', type: 'module' }, null, 2)}\n`);
+      const playSpec = `@rig-c/play@${spec.playVersion}`;
+      const playInstall =
+        spec.installer === 'npm'
+          ? run('npm', ['install', playSpec, '--no-audit', '--no-fund', '--prefer-online'], playConsumer)
+          : run('bun', ['add', playSpec, '--backend=copyfile'], playConsumer);
+      output += playInstall.out;
+      const playPkgPath = join(playConsumer, 'node_modules', '@rig-c', 'play', 'package.json');
+      if (playInstall.status !== 0 || !existsSync(playPkgPath)) {
+        fault(
+          'play',
+          `SMOKE_PLAY_LOADS_THE_BUILD: ${spec.installer} install of ${playSpec} exited ${playInstall.status} and left no node_modules/@rig-c/play/package.json under ${playConsumer}. ${playInstall.out.trim().slice(0, 2000)}`,
+        );
+      } else {
+        const installedPlayVersion = (JSON.parse(readFileSync(playPkgPath, 'utf8')) as { version?: string }).version ?? spec.playVersion;
+        writeFileSync(join(playConsumer, 'play_probe.ts'), PLAY_PROBE);
+        const playProbe = run('bun', [join(playConsumer, 'play_probe.ts'), join(playOut, 'check', 'build')], playConsumer);
+        output += playProbe.out;
+        const resolvedPlay = [...playProbe.out.matchAll(/^RESOLVED (.+)$/gm)].map((m) => (m[1].startsWith('file://') ? fileURLToPath(m[1]) : m[1]));
+        const outsidePlay = resolvedPlay.filter((p) => !isSmokePathInside(join(playConsumer, 'node_modules'), p));
+        if (playProbe.status !== 0 || !playProbe.out.includes('PLAY_LOADED spec=rigc-compiled/3 sets=authored,absent focus=[10,30]') || resolvedPlay.length !== 1 || outsidePlay.length > 0) {
+          fault(
+            'play',
+            `SMOKE_PLAY_LOADS_THE_BUILD: @rig-c/play@${installedPlayVersion} (requested ${playSpec}) refused the installed rig-parts build output (skeleton.model.json + sets.json) — this refusal came from @rig-c/play's loader, not rig-parts: ${playProbe.out.trim().slice(0, 2000)}`,
+          );
+        } else {
+          notes.push(`@rig-c/play@${installedPlayVersion} loaded the installed build's skeleton.model.json and sets.json (sets: authored focus [10, 30], absent without focus)`);
+        }
+      }
+    }
+  }
+
   // The shim's own promise: with bun off PATH it says so in one sentence.
   const nodePath = onPath('node');
   const entry = installedPkg.bin?.[COMMAND];
@@ -933,6 +1189,7 @@ usage:
   bun run smoke -- --source registry --version 0.1.0 [--wait 15]
   bun run smoke -- --source registry --version 0.1.0 --case clean --alias <name> [--alias <name>…]
   bun run smoke -- --installer bun       install with \`bun add\` instead of \`npm install\`
+  bun run smoke -- --play-version <ver>  @rig-c/play version or dist-tag for the play gate (default: latest)
   bun run smoke -- --keep                leave the install directories where they are
 
 --alias <name> is for \`--source registry\` too, once per alias: after the cases,
@@ -951,7 +1208,7 @@ exit codes:
      --wait (WAIT, naming the alias and how long it waited)
 
 cases:
-  clean            a correct package installs; --version, layers (wrapper and PSD), sheet, check, compose, the contour mesh and an auto-mode rig run from it
+  clean            a correct package installs; --version, layers (wrapper and PSD), sheet, check, compose, the contour mesh, an auto-mode rig, and @rig-c/play loading \`rig-parts build --all-sets\` output run from it
   unusual-path     the same, installed at an absolute path with spaces and non-ASCII in it
   drop-src-module  src/layers.ts out of the packed tree — the smoke has to go RED naming it
   drop-rigc        rig-c out of \`dependencies\` — the smoke has to go RED naming it
@@ -976,6 +1233,18 @@ function main(): number {
   const pkgVersion = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { version?: string }).version ?? '';
   const wanted = flag('version') ?? pkgVersion;
   const source: CaseSpec['source'] = sourceKind === 'registry' ? { kind: 'registry', spec: `${PACKAGE}@${wanted}` } : { kind: 'tree' };
+
+  const playVersionIndices = argv.flatMap((w, i) => (w === '--play-version' ? [i] : []));
+  if (playVersionIndices.length > 1) {
+    console.log('  FAIL  SMOKE_PLAY_LOADS_THE_BUILD: --play-version is given twice');
+    return EXIT_RED;
+  }
+  const playVersionFlag = playVersionIndices.length === 1 ? argv[playVersionIndices[0] + 1] : undefined;
+  if (playVersionIndices.length === 1 && (playVersionFlag === undefined || playVersionFlag.trim() === '' || playVersionFlag.startsWith('--'))) {
+    console.log('  FAIL  SMOKE_PLAY_LOADS_THE_BUILD: --play-version needs a version or dist-tag');
+    return EXIT_RED;
+  }
+  const playVersion = (playVersionFlag ?? process.env.RIG_PARTS_SMOKE_PLAY_VERSION ?? 'latest').trim() || 'latest';
 
   const waitFlag = flag('wait');
   const waitMinutes = waitFlag === null ? DEFAULT_WAIT_MINUTES : Number(waitFlag);
@@ -1053,14 +1322,14 @@ function main(): number {
     }
 
     const battery: CaseSpec[] = [
-      { name: 'clean', source, installer, plant: 'none', dirName: 'empty' },
+      { name: 'clean', source, installer, plant: 'none', dirName: 'empty', playVersion },
       // A CORRECT package at a path nothing in the tree has seen, so a pass is not
       // a pass about this machine's tidy temp directory.
-      { name: 'unusual-path', source, installer, plant: 'none', dirName: 'install smoke ünïcode ñ' },
-      { name: 'drop-src-module', source, installer, plant: 'drop-src-module', dirName: 'planted-src' },
-      { name: 'drop-rigc', source, installer, plant: 'drop-rigc', dirName: 'planted-rigc' },
-      { name: 'drop-psd', source, installer, plant: 'drop-psd', dirName: 'planted-psd' },
-      { name: 'add-spine-core', source, installer, plant: 'add-spine-core', dirName: 'planted-spine-core' },
+      { name: 'unusual-path', source, installer, plant: 'none', dirName: 'install smoke ünïcode ñ', playVersion },
+      { name: 'drop-src-module', source, installer, plant: 'drop-src-module', dirName: 'planted-src', playVersion },
+      { name: 'drop-rigc', source, installer, plant: 'drop-rigc', dirName: 'planted-rigc', playVersion },
+      { name: 'drop-psd', source, installer, plant: 'drop-psd', dirName: 'planted-psd', playVersion },
+      { name: 'add-spine-core', source, installer, plant: 'add-spine-core', dirName: 'planted-spine-core', playVersion },
     ];
     const chosen = only === null ? battery : battery.filter((c) => c.name === only);
     if (chosen.length === 0) {
