@@ -4041,6 +4041,11 @@ function cutLimbs(
       const at = parts.findIndex((q) => q.limb === l && q.segment === k);
       const upAt = parts.findIndex((q) => q.limb === l && q.segment === k - 1);
       const upper = rasters[upAt];
+      if (sg.hybrid !== undefined) {
+        // Geometry only: the band replaces the cap, and never reads hidden fill.
+        parts[at].record.cap = { at: [...line.at], width: w3, radius, box, layer_px: 0, missing_px: 0 };
+        return;
+      }
       // Issue #359: the lower segment's part's hidden-art layer is its cap when the segment names no cap image; with one named, a refusal.
       const hidden = hiddenOf(sg.from);
       if (hidden !== null && sg.cap !== undefined) {
@@ -4204,7 +4209,76 @@ function cutLimbs(
       parts[at].record.cap = cap;
       capFrom[at] = from;
       const c = counts.find((q) => q.of === sg.from);
-      if (c !== undefined) c.joints.push({ limb: l, joint: String(sg.joint), part: sg.part, upper: segs[k - 1].part, cap, from: sg.from, upperFrom: upFrom, half: pyRound(half, 3), shortInHalf });
+      if (c !== undefined && sg.hybrid === undefined) c.joints.push({ limb: l, joint: String(sg.joint), part: sg.part, upper: segs[k - 1].part, cap, from: sg.from, upperFrom: upFrom, half: pyRound(half, 3), shortInHalf });
+    });
+  }
+  refuseIfAny(problems);
+  // Issue #399: transfer the continuous source band after the cut control has
+  // measured its joint. Remove its caps: only immutable source pixels enter the band.
+  for (const l of names) {
+    const segs = limbs[l].segments;
+    segs.forEach((sg, k) => {
+      if (sg.hybrid === undefined || k === 0) return;
+      const object = `config.limbs.${l}.segments[${k}].hybrid`;
+      if (sg.from !== segs[k - 1].from) {
+        problems.push({ code: 'ASSEMBLE_HYBRID_SOURCE', object, detail: `takes "${sg.from}" below and "${segs[k - 1].from}" above; one continuous source layer is required — select the same layer for both rigid neighbours` });
+        return;
+      }
+      const line = (lines.get(l) as Array<JointLine | null>)[k] as JointLine;
+      const source = builtOf(sg.from) as Built;
+      const li = names.indexOf(l), own = owners.get(sg.from) as Int32Array;
+      const art = (x: number, y: number): boolean => x >= 0 && y >= 0 && x < W && y < H && own[y * W + x] === li && source.r.data[(y * W + x) * 4 + 3] > OPAQUE_ALPHA_ABOVE;
+      const run = limbRun(line, art, [0, 0, W - 1, H - 1]);
+      const width = sg.hybrid.width ?? (run === null ? 0 : 2 * halfWidthAbout(run));
+      const upper = places.get(segs[k - 1].bone) as BonePlace;
+      const lower = places.get(sg.bone) as BonePlace;
+      const reach = (p: readonly number[]): number => Math.abs((p[0] - line.at[0]) * line.axis[0] + (p[1] - line.at[1]) * line.axis[1]);
+      const end = lower.end;
+      const prev = k > 1 ? segs[k - 1].hybrid?.width : undefined;
+      if (run === null || !(width > 0) || end === null || width / 2 >= Math.min(reach(upper.at), reach(end)) || (prev !== undefined && (prev + width) / 2 >= reach(upper.at))) {
+        problems.push({ code: 'ASSEMBLE_HYBRID_WIDTH', object, detail: `width ${width} rig px at [${line.at.join(', ')}]; a positive art crossing and a band strictly inside both bone spans, without adjacent-band overlap, are required` });
+        return;
+      }
+      const upAt = parts.findIndex((q) => q.limb === l && q.segment === k - 1 && q.record.band === undefined);
+      const loAt = parts.findIndex((q) => q.limb === l && q.segment === k && q.record.band === undefined);
+      const earlier = parts.filter((q) => q.limb === l && q.record.band !== undefined);
+      const overlap = earlier.find((q) => {
+        const h = q.record.band as NonNullable<LimbRecord['band']>;
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+          if (!art(x, y)) continue;
+          const d = Math.abs((x + 0.5 - h.at[0]) * h.axis[0] + (y + 0.5 - h.at[1]) * h.axis[1]);
+          if (d <= h.width / 2 + 1 && Math.abs(jointOffsets(line, x, y).along) <= width / 2 + 1) return true;
+        }
+        return false;
+      });
+      if (overlap !== undefined) {
+        problems.push({ code: 'ASSEMBLE_HYBRID_OVERLAP', object, detail: `overlaps band "${overlap.part}" on source art; disjoint joint bands are required — reduce their widths` });
+        return;
+      }
+      const r = newRaster(W, H), region = newMask(W, H);
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const p = y * W + x;
+        if (own[p] !== li) continue;
+        const along = jointOffsets(line, x, y).along;
+        // One source pixel of overlap at each boundary keeps bilinear samples
+        // opaque. The overlap is wholly bound to the matching rigid carrier.
+        if (Math.abs(along) <= width / 2 + 1) {
+          r.data.set(source.r.data.subarray(p * 4, p * 4 + 4), p * 4);
+          region.data[p] = source.region === null ? 1 : source.region.data[p];
+        }
+        if (along > -width / 2) { rasters[upAt].data.fill(0, p * 4, p * 4 + 4); regions[upAt].data[p] = 0; }
+        if (along < width / 2) { rasters[loAt].data.fill(0, p * 4, p * 4 + 4); regions[loAt].data[p] = 0; }
+      }
+      const base = parts[loAt].record;
+      const geometry = { upper: segs[k - 1].bone, width, radius: (base.cap as CapRecord).radius, at: [...line.at] as [number, number], axis: [...line.axis] as [number, number] };
+      delete base.cap;
+      base.hybrid = { part: sg.hybrid.part, ...geometry };
+      capFrom[loAt] = null;
+      parts.push({ limb: l, segment: k, part: sg.hybrid.part, of: sg.from, record: { name: l, segment: k, of: base.of, bone: sg.bone, joint: sg.joint, band: geometry } });
+      pieces.push({ ...source, r, region, merged: mergedIn(source, region) });
+      capFrom.push(null);
+      // Existing piece objects refer to the same raster and mask.
+      for (const i of [upAt, loAt]) (pieces[i] as Built).merged = mergedIn(pieces[i] as Built, regions[i]);
     });
   }
   refuseIfAny(problems);

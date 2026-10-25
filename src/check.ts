@@ -3653,7 +3653,7 @@ export function stressPlan(rig: Record<string, unknown>, motion: Record<string, 
   for (const p of parts) {
     // Issue #349: a limb segment is held to its one bone by LIMB_ONE_BONE, read off rig.json, so it turns rigidly by construction.
     if (p.limb !== undefined) {
-      notRead.push({ part: p.name, reason: `a limb segment (config.limbs.${p.limb.name}), held to its one bone "${p.limb.bone}" by ${LIMB_LINE}, so it turns rigidly by construction` });
+      notRead.push({ part: p.name, reason: p.limb.band !== undefined ? `a hybrid joint band (config.limbs.${p.limb.name}), bound to its adjacent carriers by ${LIMB_LINE}; its declared range is read by ${SWEEP_LINE}, with no rigid-stretch promise` : `a limb segment (config.limbs.${p.limb.name}), held to its one bone "${p.limb.bone}" by ${LIMB_LINE}, so it turns rigidly by construction` });
       continue;
     }
     const onSlot = skin[p.name];
@@ -3798,7 +3798,8 @@ export function stressLine(plan: StressPlan, geometry: (animation: string) => Id
  * `LIMB_ONE_BONE` (issue #349): every part a `config.limbs` segment made —
  * `parts.json`'s records that carry `limb` — is bound in `rig.json` to its
  * limb bone alone, with weight 1: a region on a slot whose bone is that bone,
- * or a mesh whose every weight names it. A bend is a rotation at the joint,
+ * or a mesh whose every weight names it. An explicit hybrid band instead
+ * requires both recorded adjacent carriers and no third bone (issue #399). A bend is a rotation at the joint,
  * never a deformed mesh, and a second bone is the pin (a puff held by the
  * chest) or the noodle (a forearm blended along a chain) the cut retires.
  * Under `config.turn` a part rides the leaf twin of its bone
@@ -3831,17 +3832,19 @@ export function limbLine(parts: PartsFile, rig: Record<string, unknown>, problem
   const slots = (Array.isArray(rig.slots) ? rig.slots : []).filter(isRecord);
   const rows: LimbRow[] = limbParts.map((p) => {
     const l = p.limb as NonNullable<PartRecord['limb']>;
-    const own = new Set([l.bone, turnTwin(p.name, l.bone)]);
+    const own = new Set([l.bone, turnTwin(p.name, l.bone), ...(l.band === undefined ? [] : [l.band.upper, turnTwin(p.name, l.band.upper)])]);
     const slot = slots.find((sl) => sl.name === p.name);
     const bound = slot === undefined ? new Set<string>() : boundBones(rig, p.name);
     const others = [...bound].filter((b) => !own.has(b));
-    const fail = others.length > 0 || bound.size === 0;
+    const fail = others.length > 0 || bound.size === 0 || (l.band !== undefined && (![l.bone, turnTwin(p.name, l.bone)].some((b) => bound.has(b)) || ![l.band.upper, turnTwin(p.name, l.band.upper)].some((b) => bound.has(b))));
     if (fail) {
       problems.push({
         code: `CHECK_${LIMB_LINE}`,
         object: `limb part "${p.name}" (config.limbs.${l.name} segment ${l.segment}, bone "${l.bone}")`,
         detail:
-          bound.size === 0
+          l.band !== undefined
+            ? `binds [${[...bound].join(', ')}]; the band requires both "${l.band.upper}" and "${l.bone}" and no other carrier — re-run rig with the recorded joint band`
+            : bound.size === 0
             ? `is bound to no bone in rig.json (no slot of its name, or no attachment); its one bone "${l.bone}", with weight 1, is required`
             : `is weighted to ${others.map((b) => `"${b}"`).join(', ')} besides "${l.bone}"; a limb part rides its one bone with weight 1 — a bend is a rotation at the joint, never a deformed mesh — so a region on "${l.bone}" (config.regions.${p.name}), or a mesh whose segments name "${l.bone}" alone, is required`,
       });
@@ -3885,8 +3888,9 @@ export function sweepJoints(parts: PartsFile): SweepJoint[] {
   const out: SweepJoint[] = [];
   for (const p of parts.parts) {
     const l = p.limb;
-    if (l === undefined || l.range === undefined || l.cap === undefined || l.joint === undefined) continue;
+    if (l === undefined || l.range === undefined || (l.cap === undefined && l.hybrid === undefined) || l.joint === undefined) continue;
     const up = parts.parts.find((q) => q.limb?.name === l.name && q.limb.segment === l.segment - 1)?.limb?.bone ?? null;
+    const geometry = l.cap ?? l.hybrid as NonNullable<typeof l.hybrid>;
     out.push({
       part: p.name,
       limb: l.name,
@@ -3894,11 +3898,11 @@ export function sweepJoints(parts: PartsFile): SweepJoint[] {
       joint: l.joint,
       bone: l.bone,
       range: [l.range[0], l.range[1]],
-      at: [l.cap.at[0], l.cap.at[1]],
-      radius: l.cap.radius,
-      ...(l.cap.shape === undefined ? {} : { shape: l.cap.shape }),
+      at: [...geometry.at],
+      radius: geometry.radius,
+      ...(l.cap?.shape === undefined ? {} : { shape: l.cap.shape }),
       upperBone: up,
-      ...(l.cap.short_px === undefined ? {} : { short: { left: l.cap.short_px.left, right: l.cap.short_px.right } }),
+      ...(l.cap?.short_px === undefined ? {} : { short: { left: l.cap.short_px.left, right: l.cap.short_px.right } }),
     });
   }
   return out;
@@ -7129,7 +7133,7 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
     }
     // Issue #349: a limb segment is rigid on its one bone and turns at its joint; it does not hang, so no tip trails a root.
     if (p.limb !== undefined) {
-      rows.push({ part: p.name, unmeasured: `a limb segment (config.limbs.${p.limb.name}), rigid on its one bone "${p.limb.bone}": it turns at its joint and does not hang, so it is not held to the bar` });
+      rows.push({ part: p.name, unmeasured: p.limb.band !== undefined ? `a hybrid joint band (config.limbs.${p.limb.name}): it bends between adjacent carriers, does not hang, and is not held to a trailing-tip bar` : `a limb segment (config.limbs.${p.limb.name}), rigid on its one bone "${p.limb.bone}": it turns at its joint and does not hang, so it is not held to the bar` });
       continue;
     }
     const rises = excepted.rises.includes(p.name);

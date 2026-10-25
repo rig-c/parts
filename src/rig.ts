@@ -175,7 +175,7 @@ import { coalesceLimbSlots } from './limbslots.ts';
 import { layoutAlias, placeLimbLayouts, type LayoutPlan } from './limblayout.ts';
 import { artCoverage, ART_ALPHA, latticeCells, latticeMesh, latticeStray, ONE_LOOP_PASSES } from './mesh.ts';
 import { bindFaceSurfaceDeform, BLINK, blinkHoldMisses, blinkSpan, CONTROL_SUFFIX, controlledBones, IDLE_FPS, idleMotion, type MotionSpec, moveKeysToControls } from './motion.ts';
-import { type AlternateSetMap, FRONT_SUFFIX, PAINTING_RUN, type PartsFile, readFrom, tagOf } from './parts.ts';
+import { type PartRecord, type AlternateSetMap, FRONT_SUFFIX, PAINTING_RUN, type PartsFile, readFrom, tagOf } from './parts.ts';
 import { readTag } from './tags.ts';
 import { EYE_GROUP_TAGS } from './propose.ts';
 import { alphaAbove, crop, pad, type Raster } from './raster/index.ts';
@@ -1243,6 +1243,15 @@ function pt(p: Point): string {
  * automatic part's reduction, `runReduction` unless a caller hands one that
  * reuses a reduction it already ran on the same input (issue #135).
  */
+/** Issue #399: source-axis shares, used by base and alternate band attachments alike. */
+function limbBandShares(p: PartRecord, point: Point): Influence[] | null {
+  const h = p.limb?.band;
+  if (h === undefined) return null;
+  const axial = (point[0] - h.at[0]) * h.axis[0] + (point[1] - h.at[1]) * h.axis[1];
+  const lower = Math.max(0, Math.min(1, axial / h.width + 0.5));
+  return [{ bone: h.upper, weight: 1 - lower }, { bone: (p.limb as NonNullable<typeof p.limb>).bone, weight: lower }].filter((q) => q.weight > 0);
+}
+
 export function buildRig(
   cfg: CharacterConfig,
   parts: PartsFile,
@@ -1251,10 +1260,28 @@ export function buildRig(
   idleKeys: IdleKeys = DEFAULT_IDLE_KEYS,
   reduce: Reducer = runReduction,
 ): RigOutput {
+  // Generated bands have a fixed one-pixel lattice, with their axial weights
+  // below; config never supplies a second mesh policy for the same source.
+  const bands = parts.parts.filter((p) => p.limb?.band !== undefined);
+  if (bands.length > 0) cfg = { ...cfg, meshes: { ...cfg.meshes, ...Object.fromEntries(bands.map((p) => [p.name, { segments: [(p.limb as NonNullable<typeof p.limb>).band?.upper as string, (p.limb as NonNullable<typeof p.limb>).bone], grid: 1, r: 1 }])) } };
   const problems: Problem[] = [];
   const fail = (code: string, object: string, detail: string): void => {
     problems.push({ code, object, detail });
   };
+  for (const [name, limb] of Object.entries(cfg.limbs ?? {})) limb.segments.forEach((sg, k) => {
+    if (sg.hybrid === undefined) return;
+    const band = parts.parts.find((p) => p.name === sg.hybrid?.part);
+    const joint = parts.parts.find((p) => p.name === sg.part);
+    if (band?.limb?.band === undefined || joint?.limb?.hybrid?.part !== sg.hybrid.part) fail('RIG_HYBRID_SOURCE', `config.limbs.${name}.segments[${k}].hybrid`, `declares band "${sg.hybrid.part}" for "${sg.part}"; assembled band is ${band?.limb?.band === undefined ? 'absent' : 'present'}, joint reference is ${JSON.stringify(joint?.limb?.hybrid?.part ?? null)} — re-run assemble before rig`);
+  });
+  for (const p of bands) {
+    const b = p.limb as NonNullable<typeof p.limb>, h = b.band as NonNullable<typeof b.band>;
+    const segments = cfg.limbs?.[b.name]?.segments;
+    const declared = segments?.[b.segment];
+    if (declared?.hybrid?.part !== p.name || declared.bone !== b.bone || segments?.[b.segment - 1]?.bone !== h.upper || (declared.hybrid.width !== undefined && declared.hybrid.width !== h.width)) fail('RIG_HYBRID_SOURCE', `part "${p.name}"`, 'does not match its declared hybrid joint and two carriers; re-run assemble with the current config');
+    for (const sg of [segments?.[b.segment - 1], declared]) if (sg !== undefined && (!(sg.part in cfg.regions) || sg.part in cfg.meshes)) fail('RIG_HYBRID_RIGID', `part "${sg.part}"`, 'is beside a hybrid band; a rigid region on its own carrier is required');
+  }
+  refuseIfAny(problems);
   const [W, H] = parts.rig_size;
   const CX = W / 2;
   const byPart = new Map(parts.parts.map((p) => [p.name, p]));
@@ -2404,14 +2431,15 @@ export function buildRig(
       const wx = vx0 + ox;
       const wy = vy0 + oy;
       const vSegs = segsAt(wy);
-      const shares = heat === null ? influences([wx, wy], vSegs, mesh.r, limits, mesh.exponent ?? DISTANCE_EXPONENT) : heatInfluences(heat, [vx0, vy0], limits);
+      const hybrid = limbBandShares(p, [wx, wy]);
+      const shares = hybrid ?? (heat === null ? influences([wx, wy], vSegs, mesh.r, limits, mesh.exponent ?? DISTANCE_EXPONENT) : heatInfluences(heat, [vx0, vy0], limits));
       if (shares.length === 0) {
         // issue #284: a declared cut that keeps no bone (nothingKeptProblem says when that can be).
         if (emptied === null) emptied = { vertex: vi, at: [wx, wy], capped: heat === null ? influences([wx, wy], vSegs, mesh.r, { maxInfluences: limits.maxInfluences, minWeight: 0 }, mesh.exponent ?? DISTANCE_EXPONENT) : heatInfluences(heat, [vx0, vy0], { maxInfluences: limits.maxInfluences, minWeight: 0 }) };
         else emptiedMore++;
         continue;
       }
-      rawShares.push(limits.floor === 'continuous' ? roundShares(shares) : latticeShares(shares));
+      rawShares.push(hybrid !== null || limits.floor === 'continuous' ? roundShares(shares) : latticeShares(shares));
     }
     if (emptied !== null) {
       problems.push(nothingKeptProblem(p.name, limits.floor, emptied, emptiedMore));
@@ -2691,11 +2719,12 @@ export function buildRig(
           const wx = vx0 + ox;
           const wy = vy0 + oy;
           const vSegs = segsAt(wy);
-          let shares = influences([wx, wy], vSegs, r, limits, exponent);
+          const hybrid = limbBandShares(p, [wx, wy]);
+          let shares = hybrid ?? influences([wx, wy], vSegs, r, limits, exponent);
           if (shares.length === 0) {
             shares = influences([wx, wy], vSegs, Infinity, { maxInfluences: 1, minWeight: 0 }, exponent);
           }
-          rawShares.push(limits.floor === 'continuous' ? roundShares(shares) : latticeShares(shares));
+          rawShares.push(hybrid !== null || limits.floor === 'continuous' ? roundShares(shares) : latticeShares(shares));
         }
         if (touchesArt !== null) {
           let firstArtBone: string | null = null;

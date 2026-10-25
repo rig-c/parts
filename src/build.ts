@@ -476,6 +476,10 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     const hidesSet = new Set(alt.hides ?? []);
     const declaredSlots = alt.parts !== undefined ? alt.parts.filter((p) => !hidesSet.has(p)) : baseSlots.filter((p) => !hidesSet.has(p));
     const coveredSet = new Set(declaredSlots);
+    const generatedBands: string[] = [];
+    for (const limb of Object.values(fields.limbs ?? {})) if (limb.segments.every((sg) => coveredSet.has(sg.part))) {
+      for (const sg of limb.segments) if (sg.hybrid !== undefined) { coveredSet.add(sg.hybrid.part); generatedBands.push(sg.hybrid.part); }
+    }
     let rawCuts = alt.cuts !== undefined ? alt.cuts : fields.cuts.filter((c) => coveredSet.has(c.into) && coveredSet.has(c.from)).map((c) => ({ ...c, under: undefined }));
     let altLimbs: Record<string, Limb> = {};
     if (fields.limbs !== undefined) {
@@ -688,7 +692,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     altBuilt.push({
       record: {
         name: alt.name,
-        ...(alt.parts === undefined ? {} : { parts: [...alt.parts] }),
+        ...(alt.parts === undefined ? {} : { parts: [...alt.parts, ...generatedBands.filter((n) => !(alt.parts as string[]).includes(n))] }),
         ...(alt.hides === undefined || alt.hides.length === 0 ? (altFront.size === 0 ? {} : { hides: [...altFront] }) : { hides: [...alt.hides, ...[...altFront].filter((p) => !(alt.hides as string[]).includes(p))] }),
         ...(altFront.size === 0 ? {} : { front: [...altFront] }),
         slots,
