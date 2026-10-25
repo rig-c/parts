@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.63.0](https://github.com/rig-c/parts/compare/v1.62.0...v1.63.0) (2026-10-25)
+
+
+### Features
+
+* **engines:** raise the declared Bun floor to 1.4.0 ([#730](https://github.com/rig-c/parts/issues/730)) ([364e99e](https://github.com/rig-c/parts/commit/364e99e2e08e38ac5abe69560d2839f103475aad)), closes [#729](https://github.com/rig-c/parts/issues/729)
+* **explicit:** state a part split across island slots (&lt;part&gt;__island2) ([#738](https://github.com/rig-c/parts/issues/738)) ([6e0d513](https://github.com/rig-c/parts/commit/6e0d5132cab95e0cb082f6eb401362b89fab0312)), closes [#734](https://github.com/rig-c/parts/issues/734)
+* **layout:** let several placements share one stationary target slot ([#737](https://github.com/rig-c/parts/issues/737)) ([c483042](https://github.com/rig-c/parts/commit/c483042007a4d057277852c6e4af1795e97c6ba0)), closes [#657](https://github.com/rig-c/parts/issues/657)
+* **selftest:** write machine-readable summary via --summary-json ([#732](https://github.com/rig-c/parts/issues/732)) ([da2a646](https://github.com/rig-c/parts/commit/da2a6463cba46361312166d62bc194432903dfd7)), closes [#725](https://github.com/rig-c/parts/issues/725)
+
+
+### Bug Fixes
+
+* **selftest:** canonicalise a missing check read through its nearest existing ancestor ([#735](https://github.com/rig-c/parts/issues/735)) ([8e1803f](https://github.com/rig-c/parts/commit/8e1803f4b21610df1fe1ffab9ced61fccb91d0b1)), closes [#733](https://github.com/rig-c/parts/issues/733)
+
 ## [1.62.0](https://github.com/rig-c/parts/compare/v1.61.0...v1.62.0) (2026-10-24)
 
 
