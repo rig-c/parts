@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { runMotionSeamContractCases, runMotionSeamDocumentationCases } from './tools/fixtures/motion_seam_controls.ts';
+import { runMotionSeamContractCases, runMotionSeamDocumentationCases, runStoppedMotionSeamCase } from './tools/fixtures/motion_seam_controls.ts';
 import { runExplicitMeshChecks } from './tools/check_explicitmesh.ts';
 import { runAlternateLayerChecks } from './tools/check_alternate_layers.ts';
 import { runAlternateCutLayerChecks } from './tools/check_alternate_cut_layers.ts';
@@ -17316,14 +17316,25 @@ function runMotionSeamCases(report: FixtureCaseReporter): void {
     writeRun(join(dir, 'head'), FRAMED_HEAD);
     writeFileSync(join(dir, 'painting.png'), encodePngBytes(flatPainting()));
     writeFileSync(join(dir, 'animations.json'), JSON.stringify(SO_BEND));
-    const built = (label: string, limbs: boolean): { status: number; out: string; fig: Record<string, unknown> | null } => {
+    const built = (label: string, limbs: boolean, patch: Record<string, unknown> = {}, fullRun?: string): { status: number; out: string; fig: Record<string, unknown> | null; stage: string } => {
       const cfg = join(dir, `${label}.json`);
-      writeFileSync(cfg, JSON.stringify(soConfig(limbs)));
-      const r = runCli(['build', '--config', cfg, '--source', join(dir, 'painting.png'), '--full', join(dir, limbs ? 'full' : 'full-uncut'), '--head', join(dir, 'head'), '--out', join(dir, label)]);
-      return { ...r, fig: readJsonFile(join(dir, label, 'check', 'check.json')) };
+      writeFileSync(cfg, JSON.stringify({ ...soConfig(limbs), ...patch }));
+      const r = runCli(['build', '--config', cfg, '--source', join(dir, 'painting.png'), '--full', join(dir, fullRun ?? (limbs ? 'full' : 'full-uncut')), '--head', join(dir, 'head'), '--out', join(dir, label)]);
+      return { ...r, stage: join(dir, label), fig: readJsonFile(join(dir, label, 'check', 'check.json')) };
     };
     const cut = built('cut', true);
     const whole = built('whole', false);
+    // Independent authored pieces declare a seam without config.limbs' distinct one-source-bone contract.
+    writeRun(join(dir, 'full-stopped'), [
+      { name: 'author:upperarm', depth: 0.5, rects: [SO_FULL[0].rects[0]] },
+      { name: 'author:forearm', depth: 0.6, rects: [SO_FULL[0].rects[1], { x0: 17, y0: 17, x1: 37, y1: 32, colour: C }] },
+    ]);
+    runStoppedMotionSeamCase(say, patch => built('stopped', true, {
+      ...patch,
+      limbs: undefined,
+      motion_seams: [{ part: 'upperarm_r', neighbour: 'forearm_r' }],
+      assemble: { ...(soConfig(true).assemble as Record<string, unknown>), plan: [['upperarm_r', 'full', 'author:upperarm'], ['forearm_r', 'full', 'author:forearm']] },
+    }, 'full-stopped'));
     const lines = (out: string): string[] => out.split('\n').map((l) => l.replace(/^\[check\] /, ''));
     const line = (fig: Record<string, unknown> | null): MotionSeamLine | null => (fig?.[MOTION_SEAM_LINE] as MotionSeamLine | undefined) ?? null;
     const ln = line(cut.fig);

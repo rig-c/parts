@@ -4,10 +4,11 @@ import { newRaster } from '../../src/raster/types.ts';
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 import { mergeConfigProposal } from '../../src/configwrite.ts';
 import { draftMotionSeams, motionSeamProblems } from '../../src/motionseams.ts';
 import { SEAM_GEOMETRY_COORDINATES, seamJointPose, seamPoseFrame, seamStaticRange, type SeamMatrix } from '../../src/motionseampose.ts';
-import { motionSeamLine, motionSeamSelection, motionSeamWarnText, openingOverFloor, readMotionSeams, enrichMotionSeamPoses, type MotionSeamRow } from '../../src/check.ts';
+import { motionSeamLine, motionSeamSelection, motionSeamWarnText, openingOverFloor, readMotionSeams, enrichMotionSeamPoses, type MotionSeamLine, type MotionSeamRow } from '../../src/check.ts';
 import { parseConfig, parseEarlyConfig, parseProposalSections, type CharacterConfig } from '../../src/config.ts';
 import { readParts, serializeParts, type PartsFile, type PartRecord } from '../../src/parts.ts';
 import { stageFields } from '../../src/assemble.ts';
@@ -136,6 +137,69 @@ export function runMotionSeamContractCases(say: Say, makeTemp: (label: string) =
   const ambiguousPose=seamPoseFrame(geometry,'added',2,0.125,cohort,[{...joints[0],...ambiguousRanges}]);
   say('MSC13_IDENTICAL_RANGES_DEDUP_AND_CONFLICTING_RANGES_STAY_AMBIGUOUS', JSON.stringify(sameRanges.range)==='[-30,90]' && ambiguousRanges.range===null && ambiguousPose.joints[0].reason?.includes('ambiguous declared static ranges')===true && !ambiguousPose.joints[0].reason?.includes('no declared static range'), JSON.stringify({sameRanges,ambiguousPose}), 'Conflicting source limb ranges on one bone are not reported as an absent declaration.');
 
+}
+
+/** Canonical SO arm fixture, built by the check suite's existing registered-temp CLI path. */
+export function runStoppedMotionSeamCase(say: Say, build: (patch: Record<string, unknown>) => { status: number; out: string; stage: string }): void {
+  const result = build({
+    constraints: [{ type: 'physics', name: 'sleeve_spring', bone: 'sleeve_r0', rotate: 1, strength: 100, damping: 0.85, inertia: 0.5, mass: 1, mix: 1 }],
+    stops: [{ chain: 'sleeve_r', links: ['sleeve_r0'], against: 'hip', at: [10, -58], inward: 0, outward: 90 }],
+  });
+  const name = 'MSC16_A_STOPPED_NONROOT_WARN_COMPLETES_WITH_DRAWN_ANCESTRY_AND_THE_OLD_GRAPH_REFUSES';
+  if (result.status !== 0) {
+    say(name, false, `build exit ${result.status}; ${result.out}`, 'A real stopped arm must finish check before its same-render pose can be inspected.');
+    return;
+  }
+  const check = JSON.parse(readFileSync(join(result.stage, 'check', 'check.json'), 'utf8')) as { PASS: boolean; SEAM_OVER_MOTION: MotionSeamLine };
+  const line = check.SEAM_OVER_MOTION;
+  const rigPath = join(result.stage, 'rig', 'rig.json');
+  const rig = JSON.parse(readFileSync(rigPath, 'utf8')) as Record<string, unknown> & {
+    bones: Array<{ name: string; parent?: string }>; slots: Array<{ name: string; bone: string }>;
+  };
+  const parts = readParts(join(result.stage, 'parts.json'));
+  const world = line.worlds?.default.dir;
+  if (world === undefined) {
+    say(name, false, JSON.stringify(line), 'The physics fixture must retain its real default-world seam and geometry sidecars.');
+    return;
+  }
+  const dir = join(result.stage, 'check', world);
+  const rows = readMotionSeams(dir, line.animations, line.fps, line.pairs);
+  // Reproduce the former bone roster on the very same stock sidecars, without editing source or render data.
+  let oldGraphError: PartsError | null = null;
+  try { enrichMotionSeamPoses(dir, { ...rig, stops: undefined }, parts, line.pairs, rows); }
+  catch (e) { if (!(e instanceof PartsError)) throw e; oldGraphError = e; }
+  enrichMotionSeamPoses(dir, rig, parts, line.pairs, rows);
+  const row = line.rows.find(r => r.animation === 'bend' && r.opens.length > 0);
+  const reread = rows.find(r => r.animation === 'bend');
+  const pose = row?.pose_at_worst;
+  const framesPath = join(dir, 'frames.json');
+  const sidecar = JSON.parse(readFileSync(framesPath, 'utf8')) as { sets: Array<{ animation: string; dir: string }> };
+  const set = sidecar.sets.find(s => s.animation === 'bend');
+  if (set === undefined) { say(name, false, 'no bend frame set', 'The emitted added animation must have its actual sidecar.'); return; }
+  const geometryPath = join(dir, set.dir, 'geometry.json');
+  const seamPath = join(dir, set.dir, 'seam.json');
+  const geometry = JSON.parse(readFileSync(geometryPath, 'utf8')) as {
+    bones: Array<{ name: string; parent: string | null }>;
+    setup: { bones: Array<{ name: string } & SeamMatrix> };
+    frames: Array<{ index: number; time: number; bones: Array<{ name: string } & SeamMatrix> }>;
+  };
+  const frame = geometry.frames.find(f => f.index === pose?.index);
+  const oldRefused = oldGraphError?.problems.some(p => p.code === 'CHECK_GEOMETRY_FILE' && p.detail.includes('sleeve_r0_d') && p.detail.includes('one declared bone')) === true;
+  const identity = rig.slots.find(s => s.name === 'upperarm_r')?.bone === 'sleeve_r0_d' &&
+    rig.bones.find(b => b.name === 'sleeve_r1')?.parent === 'sleeve_r0_d' && !rig.bones.some(b => b.name === 'sleeve_r0_d');
+  const drawn = pose?.joints.find(j => j.bone === 'sleeve_r0_d');
+  const descendant = pose?.joints.find(j => j.bone === 'sleeve_r1');
+  const hash = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex');
+  say(name, check.PASS === true && line.status === 'WARN' && line.roots === undefined && line.warnings > 0 &&
+    identity && oldRefused && drawn?.parent === 'sleeve_r_stop' && descendant?.parent === 'sleeve_r0_d' &&
+    drawn.world_x_axis_degrees !== null && descendant.world_x_axis_degrees !== null &&
+    pose !== undefined && frame?.time === pose.time && JSON.stringify(pose) === JSON.stringify(reread?.pose_at_worst) &&
+    pose.joints.every(j => geometry.bones.some(b => b.name === j.bone && b.parent === j.parent)),
+    JSON.stringify({ buildExit: result.status, PASS: check.PASS, status: line.status, warnings: line.warnings, identity,
+      oldGraph: { refused: oldRefused, problems: oldGraphError?.problems }, pose,
+      actualSetup: geometry.setup.bones.filter(b => pose?.joints.some(j => j.bone === b.name)),
+      actualFrame: frame, rawSha256: { rig: hash(rigPath), motion: hash(join(result.stage, 'rig', 'motion.json')), frames: hash(framesPath), geometry: hash(geometryPath), seam: hash(seamPath) } }),
+    'Actual buildRig/applyStops slots and descendant parents name drawn links absent from raw bones. The same rig-c stop expansion resolves the stock setup and posed matrices; omitting expansion throws CHECK_GEOMETRY_FILE, while the native non-root seam remains WARN and check passes.');
 }
 
 /** Source/document checks belong to the tree suite, outside the check worker's generated-input boundary. */

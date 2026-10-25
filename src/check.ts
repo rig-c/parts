@@ -4917,7 +4917,9 @@ export function enrichMotionSeamPoses(dir: string, rig: Record<string, unknown>,
   const sidecar = readJson(join(dir, 'frames.json'), problems);
   refuseIfAny(problems);
   const sets = Array.isArray(sidecar?.sets) ? sidecar.sets.filter(isRecord) : [];
-  const bones = (Array.isArray(rig.bones) ? rig.bones : []).filter(isRecord);
+  // Slots/weights already bind drawn stop links; resolve their ancestry in the same graph rig-c compiles.
+  const expanded = Array.isArray(rig.stops) ? (expandStops(rig as unknown as RigcRigSpec, 'rig.json') as unknown as Record<string, unknown>) : rig;
+  const bones = (Array.isArray(expanded.bones) ? expanded.bones : []).filter(isRecord);
   const skin = isRecord(rig.skins) && isRecord(rig.skins.default) ? rig.skins.default : {};
   const cache = new Map<string, { geometry: Record<string, unknown>; seam: Record<string, unknown>; cohort: FrameSet; parsed: IdleGeometry }>();
   for (const row of wanted) {
