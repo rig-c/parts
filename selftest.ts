@@ -41659,11 +41659,18 @@ function runPublicScenes(green: ReadonlyMap<string, string>, dir: string, say: (
 function meshDraftRun(
   dir: string,
   grid: number,
-  plant: { candidateModel?: (doc: Record<string, unknown>) => void; failFirstBuild?: boolean; finalGeometry?: (geometry: Record<string, unknown>) => void } = {},
+  plant: {
+    candidateModel?: (doc: Record<string, unknown>) => void;
+    failFirstBuild?: boolean;
+    finalGeometry?: (geometry: Record<string, unknown>) => void;
+    unanchoredPathMatch?: boolean;
+  } = {},
   fixture: { config: string; parts: string } = writeDraftFixture(join(dir, 'fx'), grid),
 ): { e: PartsError | null; log: string[]; out: string; fx: { config: string; parts: string }; calls: string[] } {
   const rigc = suiteRigc();
   const calls: string[] = [];
+  const scratch = join(dir, 'scratch');
+  const underScratch = (p: string): string => relative(scratch, p).replaceAll('\\', '/');
   const runner: RigcRunner = (args) => {
     calls.push(args.join(' '));
     if (plant.failFirstBuild === true && args[0] === 'build' && calls.filter((c) => c.startsWith('build ')).length === 1) {
@@ -41671,7 +41678,8 @@ function meshDraftRun(
     }
     const r = spawnSync(rigc, [...args], { encoding: 'utf8', maxBuffer: 1 << 28 });
     const outDir = args[0] === 'build' ? args[args.indexOf('--out') + 1] : '';
-    if (plant.candidateModel !== undefined && r.status === 0 && outDir.includes('compare-candidate')) {
+    const isCandidateBuild = plant.unanchoredPathMatch === true ? outDir.includes('compare-candidate') : underScratch(outDir).startsWith('compare-candidate/');
+    if (plant.candidateModel !== undefined && r.status === 0 && isCandidateBuild) {
       const path = join(outDir, RIGC_MODEL_DOCUMENT);
       const doc = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
       plant.candidateModel(doc);
@@ -41679,7 +41687,8 @@ function meshDraftRun(
     }
     // The drafted config's own check: its idle geometry, as rigc's render wrote it, edited before check reads it.
     const renderOut = args[0] === 'render' ? args[args.indexOf('--out') + 1] : '';
-    if (plant.finalGeometry !== undefined && r.status === 0 && renderOut.includes('final-') && args.includes('--geometry')) {
+    const isFinalRender = plant.unanchoredPathMatch === true ? renderOut.includes('final-') : underScratch(renderOut).startsWith('final-');
+    if (plant.finalGeometry !== undefined && r.status === 0 && isFinalRender && args.includes('--geometry')) {
       for (const set of readdirSync(renderOut)) {
         const path = join(renderOut, set, GEOMETRY_FILE);
         if (!existsSync(path)) continue;
@@ -41692,7 +41701,7 @@ function meshDraftRun(
   };
   const log: string[] = [];
   const out = join(dir, 'out');
-  const e = refusals(() => meshDraftStage({ config: fixture.config, parts: fixture.parts, out }, runner, rigc, join(dir, 'scratch'), (l) => log.push(l)));
+  const e = refusals(() => meshDraftStage({ config: fixture.config, parts: fixture.parts, out }, runner, rigc, scratch, (l) => log.push(l)));
   return { e, log, out, fx: fixture, calls };
 }
 
@@ -41756,39 +41765,66 @@ function runMeshDraftSuite(): number {
     );
 
     // MD03 — the idle reading, planted on the comparison: the candidate build's first vertex moved 5 world units.
-    const moved = meshDraftRun(join(root, 'moved'), DRAFT_COARSE_GRID, {
+    const movedDir = join(root, 'compare-candidate-parent', 'moved');
+    const moved = meshDraftRun(movedDir, DRAFT_COARSE_GRID, {
       candidateModel: (doc) => {
         const skins = doc.skins as Array<{ attachments: Record<string, Record<string, { vertices: { bindings: Array<Array<{ x: number }>> } }>> }>;
         for (const b of skins[0].attachments.strip.strip.vertices.bindings[0]) b.x += 50;
       },
     });
+    const latticeBuild3 = join(movedDir, 'scratch', 'lattice', 'rig', 'build');
     const row3 = draftReport(moved.out)?.parts.find((p) => p.part === 'strip');
     const idle3 = row3?.gate.find((g) => g.reading === 'idle');
     const idleValue3 = Number(/^([0-9.]+) rig px from the lattice/.exec(idle3?.text ?? '')?.[1] ?? NaN);
     const bytes3 = existsSync(join(moved.out, 'config.json')) && readFileSync(join(moved.out, 'config.json'), 'utf8') === readFileSync(moved.fx.config, 'utf8');
     say(
       'MD03_A_CANDIDATE_PLANTED_TO_MOVE_A_VERTEX_50_UNITS_FAILS_THE_IDLE_READING_BY_NAME_AND_KEEPS_THE_LATTICE',
-      moved.e === null && row3?.mode === 'grid' && idle3 !== undefined && !idle3.pass && idleValue3 > IDLE_BOUND_PX && idle3.text.endsWith(`; at most ${IDLE_BOUND_PX} is required`) && bytes3,
+      moved.e === null &&
+        row3?.mode === 'grid' &&
+        idle3 !== undefined &&
+        !idle3.pass &&
+        idleValue3 > IDLE_BOUND_PX &&
+        idle3.text.endsWith(`; at most ${IDLE_BOUND_PX} is required`) &&
+        bytes3 &&
+        latticeBuild3.includes('compare-candidate') &&
+        !relative(join(movedDir, 'scratch'), latticeBuild3).replaceAll('\\', '/').startsWith('compare-candidate/'),
       `${moved.e === null ? 'written' : codes(moved.e)}; ${row3 === undefined ? 'no row' : gateText(row3.gate)}; config bytes as read: ${bytes3}`,
       'the plant rig-c\'s own comparison controls use (an edit inside the allowlist), on the candidate\'s comparison build only: its first hull vertex moved 50 units along each binding\'s bone axis, so every art sample in the triangles round it is carried away from where the lattice carries it — the idle reading names the move, and the part ends on its lattice',
     );
 
-    // MD12 — reading 1 through the stage: the drafted config's check planted to fail TEXTURE_STRETCH on the strip.
-    const stretched = meshDraftRun(join(root, 'stretched'), DRAFT_COARSE_GRID, {
-      finalGeometry: (g) => {
-        const frame = (g.frames as Array<{ attachments: Array<{ slot: string; vertices: number[] }> }>)[1];
-        const strip = frame.attachments.find((a) => a.slot === 'strip');
-        if (strip !== undefined) strip.vertices[0] += 40;
-      },
-    });
+    // MD12 — reading 1 through the stage: the drafted config's check planted to fail TEXTURE_STRETCH on the strip,
+    // under a parent directory naming "final-1" so an unanchored substring match hits the lattice baseline (issue #766).
+    const stretchVertex = (g: Record<string, unknown>): void => {
+      const frame = (g.frames as Array<{ attachments: Array<{ slot: string; vertices: number[] }> }>)[1];
+      const strip = frame.attachments.find((a) => a.slot === 'strip');
+      if (strip !== undefined) strip.vertices[0] += 40;
+    };
+    const stretchedDir = join(root, 'final-1-parent', 'stretched');
+    const stretched = meshDraftRun(stretchedDir, DRAFT_COARSE_GRID, { finalGeometry: stretchVertex });
+    const unanchored12 = meshDraftRun(join(root, 'final-1-parent', 'unanchored'), DRAFT_COARSE_GRID, { finalGeometry: stretchVertex, unanchoredPathMatch: true }, stretched.fx);
+    const finalCall12 = (round: number, c: string): boolean => c.startsWith('render ') && c.includes(join(stretchedDir, 'scratch', `final-${round}`));
+    const unanchoredCalls12 = stretched.calls.some((c) => c.startsWith('render ') && c.includes('final-0')) && !stretched.calls.some((c) => c.includes('final-1'));
     const row12 = draftReport(stretched.out)?.parts.find((p) => p.part === 'strip');
     const failed12 = row12?.gate.filter((g) => !g.pass) ?? [];
     const bytes12 = existsSync(join(stretched.out, 'config.json')) && readFileSync(join(stretched.out, 'config.json'), 'utf8') === readFileSync(stretched.fx.config, 'utf8');
     say(
       'MD12_A_DRAFTED_RIG_WHOSE_CHECK_FAILS_A_BAR_NAMING_THE_PART_KEEPS_THAT_PARTS_LATTICE',
-      stretched.e === null && row12?.mode === 'grid' && failed12.length === 1 && failed12[0].reading === 'bars' && failed12[0].text.includes('CHECK_TEXTURE_STRETCH: mesh "strip"') && bytes12 && stretched.calls.some((c) => c.startsWith('render ') && c.includes('final-0')) && !stretched.calls.some((c) => c.includes('final-1')),
-      `${stretched.e === null ? 'written' : codes(stretched.e)}; ${row12 === undefined ? 'no row' : gateText(row12.gate).slice(0, 600)}; config bytes as read: ${bytes12}`,
-      'reading 1 is check\'s own bars on the config as it would be written: one vertex of the strip moved 40 rig px in one idle frame stretches its edges past TEXTURE_STRETCH\'s ceiling, the problem names mesh "strip", and the part ends on its lattice with no further check needed (nothing is left to draft)',
+      stretched.e === null &&
+        row12?.mode === 'grid' &&
+        failed12.length === 1 &&
+        failed12[0].reading === 'bars' &&
+        failed12[0].text.includes('CHECK_TEXTURE_STRETCH: mesh "strip"') &&
+        bytes12 &&
+        stretched.calls.some((c) => finalCall12(0, c)) &&
+        !stretched.calls.some((c) => finalCall12(1, c)) &&
+        unanchored12.e !== null &&
+        unanchored12.e.problems.length === 1 &&
+        unanchored12.e.problems[0].code === 'MESH_DRAFT_LATTICE_GREEN' &&
+        unanchored12.e.problems[0].detail.includes('CHECK_TEXTURE_STRETCH: mesh "strip"') &&
+        !existsSync(unanchored12.out) &&
+        !unanchoredCalls12,
+      `${stretched.e === null ? 'written' : codes(stretched.e)}; ${row12 === undefined ? 'no row' : gateText(row12.gate).slice(0, 600)}; config bytes as read: ${bytes12}; planted unanchored match under final-1-parent -> ${codes(unanchored12.e)}, unanchored call check ${unanchoredCalls12}`,
+      'reading 1 is check\'s own bars on the config as it would be written: one vertex of the strip moved 40 rig px in one idle frame stretches its edges past TEXTURE_STRETCH\'s ceiling, the problem names mesh "strip", and the part ends on its lattice with no further check needed (nothing is left to draft); under an ancestor directory containing "final-1" (issue #766), the planted unanchored .includes("final-") hits the lattice baseline check and fails MESH_DRAFT_LATTICE_GREEN',
     );
 
     // MD13 — reading 5 through the stage: on a lattice with fewer triangles than the candidate, the part keeps it.
