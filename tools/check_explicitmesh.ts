@@ -341,9 +341,6 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
   for (const row of stoppedIsl2.mesh.explicit.islands[1].weights) for (const w of row) w.bone = 'hem1';
   stoppedIsl2.config.stops = [{ chain: 'hem', against: 'body', at: [0, 0], inward: -45, outward: 45, lower: { inward: -45, outward: 45 } }];
   const stoppedIsl2Err = refused(() => buildRig(parseConfig(stoppedIsl2.config), stoppedIsl2.parts, stoppedIsl2.images));
-  const turnedIsl2 = explicitIslandsFixture();
-  turnedIsl2.config.turn = { pivot: 0.5, depths: { cloth: 0.2, eye: 0.199 } };
-  const turnedIsl2Err = refused(() => buildRig(parseConfig(turnedIsl2.config), turnedIsl2.parts, turnedIsl2.images));
   check(
     'GX26_EXPLICIT_ISLAND_COUNT_AND_SLOT_NAME_REFUSALS',
     missingIslErr?.problems.some(p => p.code === 'RIG_EXPLICIT_ISLAND_COUNT' && p.detail.includes('missing "cloth__island3"')) === true &&
@@ -355,9 +352,108 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
       unknownIslBoneErr?.problems.some(p => p.code === 'CONFIG_NAME_RESOLVES' && p.object === 'config.meshes.cloth.explicit.islands[1].bone') === true &&
       undeclaredIslBoneErr?.problems.some(p => p.code === 'CONFIG_NAME_RESOLVES' && p.object === 'config.meshes.cloth.explicit.islands[1].bone') === true &&
       badBeforeErr?.problems.some(p => p.code === 'RIG_NAME_RESOLVES' && p.object === 'config.meshes.cloth.explicit.islands[1].before') === true &&
-      stoppedIsl2Err?.problems.some(p => p.code === 'RIG_EXPLICIT_BINDING' && p.object === 'config.meshes.cloth.explicit.islands[1].weights') === true &&
-      turnedIsl2Err?.problems.some(p => p.code === 'RIG_EXPLICIT_BINDING' && p.object === 'config.meshes.cloth.explicit.islands[1].weights') === true,
-    `${codes(missingIslErr)}; ${codes(extraIslErr)}; ${codes(wrongSlotErr)}; ${codes(bothModeErr)}; ${codes(oneEntryErr)}; ${codes(beforeOnFirstErr)}; ${codes(unknownIslBoneErr)}; ${codes(undeclaredIslBoneErr)}; ${codes(badBeforeErr)}; ${codes(stoppedIsl2Err)}; ${codes(turnedIsl2Err)}`,
+      stoppedIsl2Err?.problems.some(p => p.code === 'RIG_EXPLICIT_BINDING' && p.object === 'config.meshes.cloth.explicit.islands[1].weights') === true,
+    `${codes(missingIslErr)}; ${codes(extraIslErr)}; ${codes(wrongSlotErr)}; ${codes(bothModeErr)}; ${codes(oneEntryErr)}; ${codes(beforeOnFirstErr)}; ${codes(unknownIslBoneErr)}; ${codes(undeclaredIslBoneErr)}; ${codes(badBeforeErr)}; ${codes(stoppedIsl2Err)}`,
+  );
+  const turnSpec = { pivot: 0.5, depths: { cloth: 0.2, eye: 0.199 } };
+  const turnedSingle = explicitFixture();
+  turnedSingle.config.turn = turnSpec;
+  const turnedSingleBuilt = buildRig(parseConfig(turnedSingle.config), parts, images);
+  const turnedSingleAtt = turnedSingleBuilt.rig.skins.default.cloth.cloth as MeshAttachment;
+  const turnedIsl2 = explicitIslandsFixture();
+  turnedIsl2.config.turn = turnSpec;
+  const turnedIsl2Built = buildRig(parseConfig(turnedIsl2.config), turnedIsl2.parts, turnedIsl2.images);
+  const turnedIsl2Att1 = turnedIsl2Built.rig.skins.default.cloth.cloth as MeshAttachment;
+  const turnedIsl2Att2 = turnedIsl2Built.rig.skins.default.cloth__island2.cloth__island2 as MeshAttachment;
+  const stoppedTurnedGenCfg = structuredClone(stopped);
+  stoppedTurnedGenCfg.turn = turnSpec;
+  const stoppedTurnedGen = buildRig(parseConfig(stoppedTurnedGenCfg), parts, images);
+  const stoppedTurnedCfg = structuredClone(transfer.config);
+  stoppedTurnedCfg.turn = turnSpec;
+  const stoppedTurnedBuilt = buildRig(parseConfig(stoppedTurnedCfg), parts, images);
+  const renderTurnCompare = (
+    label: string,
+    unturnedCfg: Record<string, unknown>,
+    turnedCfg: Record<string, unknown>,
+    fxImages: Map<string, ReturnType<typeof block>>,
+    fxParts: ReturnType<typeof rigParts>,
+  ): { sameRestPng: boolean; turnMovesPx: boolean } => {
+    const baseDir = join(root, label);
+    const unturnedDisk = writeRigFixture(join(baseDir, 'unturned-disk'), unturnedCfg, fxImages, fxParts);
+    const turnedDisk = writeRigFixture(join(baseDir, 'turned-disk'), turnedCfg, fxImages, fxParts);
+    const unturnedRigOut = join(baseDir, 'unturned-rig');
+    const turnedRigOut = join(baseDir, 'turned-rig');
+    rigStage({ config: unturnedDisk.config, parts: unturnedDisk.parts, out: unturnedRigOut }, runner, join(baseDir, 'unturned-scratch'), () => {});
+    rigStage({ config: turnedDisk.config, parts: turnedDisk.parts, out: turnedRigOut }, runner, join(baseDir, 'turned-scratch'), () => {});
+    const unturnedBuild = join(baseDir, 'unturned-build');
+    const turnedBuild = join(baseDir, 'turned-build');
+    const turnedMotion = JSON.parse(readFileSync(join(turnedRigOut, 'motion.json'), 'utf8')) as { animations: Record<string, unknown> };
+    turnedMotion.animations.turn_step = {
+      duration: 1,
+      loop: false,
+      tracks: [{ bone: 'turn', property: 'translate', keys: [{ t: 0, v: [0, 0] }, { t: 1, v: [4, 0] }] }],
+    };
+    const turnedMotionPath = join(baseDir, 'turned-motion.json');
+    writeFileSync(turnedMotionPath, JSON.stringify(turnedMotion));
+    const b0 = runner(['build', '--rig', join(unturnedRigOut, 'rig.json'), '--motion', join(unturnedRigOut, 'motion.json'), '--out', unturnedBuild, '--profile', 'spine']);
+    const b1 = runner(['build', '--rig', join(turnedRigOut, 'rig.json'), '--motion', turnedMotionPath, '--out', turnedBuild, '--profile', 'spine']);
+    if (b0.status !== 0 || b1.status !== 0) throw new Error(`TURN_COMPARE_BUILD_FAILED: ${b0.out}\n${b1.out}`);
+    const unturnedIdleOut = join(baseDir, 'unturned-idle');
+    const turnedIdleOut = join(baseDir, 'turned-idle');
+    const turnedStepOut = join(baseDir, 'turned-step');
+    const r0 = runner(['render', '--candidate', unturnedBuild, '--animation', 'idle', '--fps', '1', '--max', '40', '--viewport', '-20,0,40,40', '--out', unturnedIdleOut]);
+    const r1 = runner(['render', '--candidate', turnedBuild, '--animation', 'idle', '--fps', '1', '--max', '40', '--viewport', '-20,0,40,40', '--out', turnedIdleOut]);
+    const r2 = runner(['render', '--candidate', turnedBuild, '--animation', 'turn_step', '--fps', '1', '--max', '40', '--viewport', '-20,0,40,40', '--out', turnedStepOut]);
+    if (r0.status !== 0 || r1.status !== 0 || r2.status !== 0) throw new Error(`TURN_COMPARE_RENDER_FAILED: ${r0.out}\n${r1.out}\n${r2.out}`);
+    const unturnedSet = readFrameSet(unturnedIdleOut);
+    const turnedSet = readFrameSet(turnedIdleOut);
+    const stepSet = readFrameSet(turnedStepOut);
+    const sameRestPng = readFileSync(join(unturnedSet.dir, unturnedSet.frames[0].name)).equals(readFileSync(join(turnedSet.dir, turnedSet.frames[0].name)));
+    const turnMovesPx = !readFileSync(join(stepSet.dir, stepSet.frames[0].name)).equals(readFileSync(join(stepSet.dir, stepSet.frames[1].name)));
+    return { sameRestPng, turnMovesPx };
+  };
+  const singleTurnRender = renderTurnCompare('turn-single', fixture.config, turnedSingle.config, images, parts);
+  const islTurnRender = renderTurnCompare('turn-islands', islFix.config, turnedIsl2.config, islFix.images, islFix.parts);
+  const directTurnTwin = explicitFixture();
+  directTurnTwin.config.turn = turnSpec;
+  directTurnTwin.mesh.segments = ['turn_cloth_body'];
+  for (const row of directTurnTwin.mesh.explicit.weights) for (const w of row) w.bone = 'turn_cloth_body';
+  const directTurnParseErr = refused(() => parseConfig(directTurnTwin.config));
+  const directTurnBuildCfg = parseConfig(turnedSingle.config);
+  const directTurnBuildMesh = directTurnBuildCfg.meshes.cloth as ExplicitMeshSpec;
+  directTurnBuildMesh.segments = ['turn_cloth_body'];
+  for (const row of directTurnBuildMesh.explicit.weights ?? []) for (const w of row) w.bone = 'turn_cloth_body';
+  const directTurnBuildErr = refused(() => buildRig(directTurnBuildCfg, parts, images));
+  const rawStopAndTurn = structuredClone(sourceBindings);
+  rawStopAndTurn.turn = turnSpec;
+  const rawStopAndTurnErr = refused(() => buildRig(parseConfig(rawStopAndTurn), parts, images));
+  const rawStopSlotOnly = explicitFixture();
+  rawStopSlotOnly.config.stops = stopped.stops;
+  rawStopSlotOnly.config.turn = turnSpec;
+  rawStopSlotOnly.mesh.segments = ['hem1', 'body'];
+  const rawStopSlotOnlyErr = refused(() => buildRig(parseConfig(rawStopSlotOnly.config), parts, images));
+  check(
+    'GX27_EXPLICIT_MESH_AND_ISLANDS_COMPOSE_WITH_TURN_DEPTHS',
+    turnedSingleBuilt.rig.slots.find(s => s.name === 'cloth')?.bone === 'turn_cloth_body' &&
+      JSON.stringify(turnedSingleAtt.weights) === JSON.stringify(fixture.mesh.explicit.weights.map(row => row.map(w => ({ bone: `turn_cloth_${w.bone}`, x: w.x, y: w.y, weight: w.weight })))) &&
+      JSON.stringify(turnedSingleBuilt.meshReport[0].bones) === '["turn_cloth_body"]' &&
+      turnedIsl2Built.rig.slots.find(s => s.name === 'cloth')?.bone === 'turn_cloth_body' &&
+      turnedIsl2Built.rig.slots.find(s => s.name === 'cloth__island2')?.bone === 'turn_cloth_eye' &&
+      JSON.stringify(turnedIsl2Att1.weights) === JSON.stringify(islFix.mesh.explicit.islands[0].weights.map(row => row.map(w => ({ bone: `turn_cloth_${w.bone}`, x: w.x, y: w.y, weight: w.weight })))) &&
+      JSON.stringify(turnedIsl2Att2.weights) === JSON.stringify(islFix.mesh.explicit.islands[1].weights.map(row => row.map(w => ({ bone: `turn_cloth_${w.bone}`, x: w.x, y: w.y, weight: w.weight })))) &&
+      JSON.stringify(turnedIsl2Built.meshReport[0].bones) === '["turn_cloth_body","turn_cloth_eye"]' &&
+      JSON.stringify(stoppedTurnedBuilt.rig) === JSON.stringify(stoppedTurnedGen.rig) &&
+      JSON.stringify(stoppedTurnedBuilt.motion) === JSON.stringify(stoppedTurnedGen.motion) &&
+      singleTurnRender.sameRestPng &&
+      singleTurnRender.turnMovesPx &&
+      islTurnRender.sameRestPng &&
+      islTurnRender.turnMovesPx &&
+      directTurnParseErr?.problems.some(p => p.code === 'CONFIG_NAME_RESOLVES' && p.object === 'config.meshes.cloth.segments[0]') === true &&
+      directTurnParseErr?.problems.some(p => p.code === 'CONFIG_NAME_RESOLVES' && p.object === 'config.meshes.cloth.explicit.weights[0][0].bone') === true &&
+      directTurnBuildErr?.problems.some(p => p.code === 'RIG_NAME_RESOLVES' && p.object === 'config.meshes.cloth.explicit' && p.detail.includes('"turn_cloth_body"')) === true &&
+      rawStopAndTurnErr?.problems.some(p => p.code === 'RIG_EXPLICIT_BINDING' && p.object === 'config.meshes.cloth.explicit.weights') === true &&
+      rawStopSlotOnlyErr?.problems.some(p => p.code === 'RIG_EXPLICIT_BINDING' && p.object === 'config.meshes.cloth.explicit.weights') === true,
+    `single=${JSON.stringify(turnedSingleBuilt.meshReport[0].bones)} (restEq=${singleTurnRender.sameRestPng}, turnMoves=${singleTurnRender.turnMovesPx}); islands=${JSON.stringify(turnedIsl2Built.meshReport[0].bones)} (restEq=${islTurnRender.sameRestPng}, turnMoves=${islTurnRender.turnMovesPx}); plants=${codes(directTurnParseErr)} | ${codes(directTurnBuildErr)} | ${codes(rawStopAndTurnErr)} | ${codes(rawStopSlotOnlyErr)}`,
   );
   return failed;
 }
