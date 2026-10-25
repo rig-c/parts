@@ -997,6 +997,8 @@ export interface LimbSegment {
   cap_shape?: 'disc' | 'ball';
   /** Issue #360 (item 14): the half-width, whole rig px, of the band about the joint line the cut is placed in (`placeCut` in `src/limbs.ts`). Absent, the cut is the joint line. */
   cut_band?: number;
+  /** Issue #399: one generated mesh across this joint; width is full axial rig px. */
+  hybrid?: { part: string; width?: number };
 }
 
 /**
@@ -3336,14 +3338,14 @@ function checkLimbs(c: Check, v: Json, made: { parts: string[]; patches: string[
     const bones: Array<string | null> = [];
     segs.forEach((entry, i) => {
       const sat = `${at}.segments[${i}]`;
-      const e = c.object(sat, entry, ['part', 'from', 'bone'], ['joint', 'range', 'cap', 'edge', 'cap_shape', 'cut_band']);
+      const e = c.object(sat, entry, ['part', 'from', 'bone'], ['joint', 'range', 'cap', 'edge', 'cap_shape', 'cut_band', 'hybrid']);
       segParts.push(null);
       froms.push(null);
       bones.push(null);
       if (e === null) return;
       // The upper segment sits below no joint; every other sits below one, which it names.
       if (i === 0) {
-        for (const k of ['joint', 'range', 'cap', 'edge', 'cap_shape', 'cut_band'].filter((q) => q in e)) c.fail('CONFIG_KEY_KNOWN', `${sat}.${k}`, `is not a field on the upper segment; it sits below no joint, so ${k} belongs to the segment below the joint it names (segments[1] and on)`);
+        for (const k of ['joint', 'range', 'cap', 'edge', 'cap_shape', 'cut_band', 'hybrid'].filter((q) => q in e)) c.fail('CONFIG_KEY_KNOWN', `${sat}.${k}`, `is not a field on the upper segment; it sits below no joint, so ${k} belongs to the segment below the joint it names (segments[1] and on)`);
       } else if (!('joint' in e)) c.fail('CONFIG_FIELD_PRESENT', `${sat}.joint`, 'is absent and required; a segment after the first sits below a joint, at its bone\'s origin, and names it');
       if ('part' in e && c.string(`${sat}.part`, e.part)) {
         const name = e.part;
@@ -3356,6 +3358,19 @@ function checkLimbs(c: Check, v: Json, made: { parts: string[]; patches: string[
           segParts[i] = name;
           if ('bone' in e && typeof e.bone === 'string') out.parts.set(name, { bone: e.bone, at: `config.limbs.${limb} segment ${i}` });
         }
+      }
+      if ('hybrid' in e && i > 0) {
+        const h = c.object(`${sat}.hybrid`, e.hybrid, ['part'], ['width']);
+        if (h !== null) {
+          if (c.string(`${sat}.hybrid.part`, h.part)) {
+            if (!partNameOk(h.part)) c.fail('CONFIG_PART_NAME', `${sat}.hybrid.part`, `is ${show(h.part)}; a part filename is required`);
+            else if (firstAt.has(h.part) || [...made.parts, ...made.patches, ...made.cuts].includes(h.part)) c.fail('CONFIG_PART_UNIQUE', `${sat}.hybrid.part`, `names "${h.part}", already produced; a unique band name is required`);
+            else firstAt.set(h.part, `${sat}.hybrid`);
+          }
+          if ('width' in h && !(typeof h.width === 'number' && Number.isFinite(h.width) && h.width > 0)) c.fail('CONFIG_FIELD_TYPE', `${sat}.hybrid.width`, `is ${show(h.width)}; finite full axial width above 0 rig px is required`);
+        }
+        for (const field of ['cap', 'cap_shape', 'edge', 'cut_band']) if (field in e) c.fail('CONFIG_HYBRID_CUT', `${sat}.${field}`, 'is declared with hybrid; the band replaces the cut and cap, so remove the cut option');
+        if (e.from !== froms[i - 1]) c.fail('CONFIG_HYBRID_SOURCE', `${sat}.from`, `is ${show(e.from)}; the upper source ${show(froms[i - 1])} is required for one continuous band`);
       }
       if ('from' in e) {
         if (typeof e.from !== 'string' || !sources.has(e.from)) {

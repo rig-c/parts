@@ -432,3 +432,14 @@ that should keep moving wants an environment at render (`rigc render --environme
 AUTHORING §3, *What moves them*, has a worked schedule for `wind`) or a consumer's
 animation that moves the bone it hangs from. The drafted idle keys no hip: issue #502
 measured a hip sway at the idle's period on every public example, and each failed a bar.
+
+## Opt-in hybrid joint bands (issue #399)
+
+A lower limb segment may declare `hybrid: {part, width?}` to replace its cap
+with one generated two-bone band. Its neighbours remain rigid regions. The
+full axial width is source-derived unless explicitly supplied; no generated
+band attachment entry is added to the config. See AUTHORING's *Hybrid joint
+bands* for the source, name, width and overlap refusals. Existing configs need
+no change. The parts reader gains `limb.hybrid` and `limb.band` records only
+for this mode, and the recorded lower range is measured once. The normal
+one-bone rule and existing range thresholds remain unchanged.

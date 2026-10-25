@@ -89,6 +89,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { type Problem, refuseIfAny } from './errors.ts';
 import { KEYPOINT_NAMES, type PosePoints } from './skeleton.ts';
 import { readLayerTag } from './tags.ts';
+import { edgeLength } from './length.ts';
 import { recordedFocusProblems } from './setfocus.ts';
 
 export interface PartRecord {
@@ -137,6 +138,19 @@ export interface LimbRecord {
   joint?: string;
   range?: [number, number];
   cap?: CapRecord;
+  /** Issue #399: the rigid lower segment references the band instead of a cap. */
+  hybrid?: HybridBandRecord & { part: string };
+  /** Only the generated band has this role; ordinary segments remain rigid. */
+  band?: HybridBandRecord;
+}
+
+/** Source-measured joint geometry, in rig pixels, used for the band's axial weights and the unchanged range disc. */
+export interface HybridBandRecord {
+  upper: string;
+  width: number;
+  radius: number;
+  at: [number, number];
+  axis: [number, number];
 }
 
 /**
@@ -221,7 +235,7 @@ export interface CapRecord {
   stroke_luma_max?: number;
 }
 
-const LIMB_KEYS = ['name', 'segment', 'of', 'bone', 'joint', 'range', 'cap'] as const;
+const LIMB_KEYS = ['name', 'segment', 'of', 'bone', 'joint', 'range', 'cap', 'hybrid', 'band'] as const;
 const CAP_KEYS = [
   'at',
   'width',
@@ -257,7 +271,10 @@ const CUT_KEYS = ['cut_offset', 'cut_at', 'cut_crossed', 'joint_crossed', 'band_
 /** The limb record with its keys in the fixed order, so two runs write the same bytes. */
 function orderedLimb(l: LimbRecord): Record<string, unknown> {
   const cap = l.cap === undefined ? undefined : Object.fromEntries(CAP_KEYS.filter((k) => (l.cap as CapRecord)[k] !== undefined).map((k) => [k, (l.cap as CapRecord)[k]]));
-  return Object.fromEntries(LIMB_KEYS.filter((k) => (k === 'cap' ? cap : l[k]) !== undefined).map((k) => [k, k === 'cap' ? cap : l[k]]));
+  const band = (value: HybridBandRecord & { part?: string }): Record<string, unknown> => Object.fromEntries(
+    (['part', 'upper', 'width', 'radius', 'at', 'axis'] as const).filter((k) => value[k] !== undefined).map((k) => [k, value[k]]));
+  const values = { ...l, cap, ...(l.hybrid === undefined ? {} : { hybrid: band(l.hybrid) }), ...(l.band === undefined ? {} : { band: band(l.band) }) };
+  return Object.fromEntries(LIMB_KEYS.filter((k) => values[k] !== undefined).map((k) => [k, values[k]]));
 }
 
 /** One listed hole: its area, its box in rig pixels, and the parts beside it (`src/assemble.ts` `uncoveredHoles`). */
@@ -661,7 +678,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
       for (const k of ['name', 'of', 'bone'] as const) if (!(typeof q[k] === 'string' && q[k] !== '')) fail('PARTS_FIELD_TYPE', `${object} "${k}"`, `is ${show(q[k])}; a non-empty string is required`);
       if (!isCount(q.segment)) fail('PARTS_FIELD_TYPE', `${object} "segment"`, `is ${show(q.segment)}; the segment's index, a non-negative integer, is required`);
       const below = isCount(q.segment) && q.segment > 0;
-      if (below !== ('joint' in q) || below !== ('cap' in q)) fail('PARTS_FIELD_PRESENT', object, `segment ${show(q.segment)} with${'joint' in q ? '' : 'out'} a joint and with${'cap' in q ? '' : 'out'} a cap; a segment below a joint (index above 0) has both, the upper segment neither`);
+      if (below !== ('joint' in q) || below !== ('cap' in q || 'hybrid' in q || 'band' in q) || ['cap', 'hybrid', 'band'].filter((k) => k in q).length > 1) fail('PARTS_FIELD_PRESENT', object, `segment ${show(q.segment)} with${'joint' in q ? '' : 'out'} a joint and with${'cap' in q ? '' : 'out'} a cap; a segment below a joint requires its joint and exactly one of cap, hybrid, or band; the upper segment has neither`);
       if ('joint' in q && !(typeof q.joint === 'string' && q.joint !== '')) fail('PARTS_FIELD_TYPE', `${object} "joint"`, `is ${show(q.joint)}; the joint's name is required`);
       // Issue #360: a declared range rides below a joint only, and holds the loader's rule — two degrees, rest in it.
       if ('range' in q) {
@@ -671,7 +688,32 @@ function checkParts(raw: unknown, path: string): PartsFile {
           fail('PARTS_FIELD_TYPE', `${object} "range"`, `is ${show(r)}; [min, max], two finite degrees from rest with min <= 0 <= max, is required — config.limbs' rule (CONFIG_LIMB_RANGE)`);
         }
       }
+      for (const field of ['hybrid', 'band']) if (field in q) {
+        const h = q[field];
+        if (!below || typeof h !== 'object' || h === null || Array.isArray(h)) fail('PARTS_FIELD_TYPE', `${object} ${field}`, 'a band below a joint with {upper, width, at, axis} is required');
+        else {
+          const b = h as Record<string, unknown>;
+          const pair = (v: unknown): v is number[] => Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number' && Number.isFinite(n));
+          if (Object.keys(b).sort().join(',') !== (field === 'hybrid' ? 'at,axis,part,radius,upper,width' : 'at,axis,radius,upper,width') || (field === 'hybrid' && (typeof b.part !== 'string' || b.part === '')) || !(typeof b.radius === 'number' && Number.isFinite(b.radius) && b.radius > 0) || typeof b.upper !== 'string' || b.upper === '' || b.upper === q.bone || !(typeof b.width === 'number' && Number.isFinite(b.width) && b.width > 0) || !pair(b.at) || !pair(b.axis) || Math.abs(edgeLength(b.axis[0], b.axis[1]) - 1) > 1e-6 || (field === 'band' && 'range' in q)) fail('PARTS_FIELD_TYPE', `${object} ${field}`, `is ${show(h)}; distinct upper carrier, positive width, finite at, unit axis and no duplicate range are required`);
+        }
+      }
       if ('cap' in q) checkCap(q.cap, `${object} "cap"`, fail);
+    }
+  }
+  if (Array.isArray(o.parts)) {
+    const records = o.parts.filter((p): p is Record<string, unknown> => typeof p === 'object' && p !== null && !Array.isArray(p));
+    for (const r of records) {
+      const limb = r.limb;
+      if (typeof limb !== 'object' || limb === null || Array.isArray(limb)) continue;
+      const l = limb as Record<string, unknown>, h = l.hybrid;
+      if (typeof h !== 'object' || h === null || Array.isArray(h)) continue;
+      const joint = h as Record<string, unknown>;
+      const target = records.find((q) => q.name === joint.part);
+      const record = (v: unknown): Record<string, unknown> | undefined => typeof v === 'object' && v !== null && !Array.isArray(v) ? v as Record<string, unknown> : undefined;
+      const bl = record(target?.limb);
+      const b = record(bl?.band);
+      const same = b !== undefined && ['upper', 'width', 'radius', 'at', 'axis'].every((k) => JSON.stringify(b[k]) === JSON.stringify(joint[k]));
+      if (bl === undefined || bl.name !== l.name || bl.segment !== l.segment || bl.bone !== l.bone || bl.of !== l.of || bl.joint !== l.joint || !same) fail('PARTS_HYBRID_PAIR', `part "${String(r.name)}" hybrid "${String(joint.part)}"`, 'requires its matching band on the same source, joint, carriers and measured geometry');
     }
   }
   if ('scene' in o) {

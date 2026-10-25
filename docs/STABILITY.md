@@ -137,7 +137,8 @@ part name, `[i]` an entry of a list):
 - **limbs.&lt;limb&gt;.front** — required: `parts` (own segment parts, issue #664), `after` (a produced part)
 - **limbs.&lt;limb&gt;.layout** — exactly one of `before`, `after`; optional: `parts` (own consecutive segment-part references, issue #647)
 - **limbs.&lt;limb&gt;.layout.before**, **limbs.&lt;limb&gt;.layout.after** — exactly one typed target: `limb` or `part`
-- **limbs.&lt;limb&gt;.segments[i]** — required: `part`, `from`, `bone`; required below a joint (i > 0): `joint`; optional below a joint: `range`, `cap`, `edge`, `cap_shape`, `cut_band`
+- **limbs.&lt;limb&gt;.segments[i]** — required: `part`, `from`, `bone`; required below a joint (i > 0): `joint`; optional below a joint: `range`, `cap`, `edge`, `cap_shape`, `cut_band`, `hybrid`
+- **limbs.&lt;limb&gt;.segments[i].hybrid** — required: `part`; optional: `width` (issue #399; lower segments only, replaces cut-cap options, one source and two adjacent rigid carriers)
 - **bones[i]**, a single bone — required: `name`, `parent`, `at`; optional: `tip`, `inherit`
 - **bones[i]**, a chain — required: `chain`, `parent`, `points`, `tip`; optional: `link_inherit`
 - **stops[i]** — required: `chain`, `against`, `at`, `inward`, `outward`; optional: `links`, `lower` (issue #404)
@@ -369,3 +370,14 @@ fetched, the `chain` suite builds each of them and holds `parts.json`
 (`CH02`), `rig.json`, `motion.json` and `mesh_report.json` (`CH03`),
 `check.json` (`CH04`) and the gate file (`CH05`) to its tracked `expected/`,
 field by field, with the tolerances `CH07` plants against.
+
+### Opt-in hybrid provenance (issue #399)
+
+A lower rigid limb piece may carry `limb.hybrid` instead of `limb.cap`:
+`{part, upper, width, radius, at, axis}`. Its generated mesh carries
+`limb.band`: `{upper, width, radius, at, axis}`. Their source, joint, lower
+carrier and measured geometry must agree; the lower rigid piece alone carries
+`range`. The default limb records and byte contracts are unchanged. The
+existing `LIMB_ONE_BONE` line checks ordinary segments as before; the band
+requires exactly its two adjacent carriers. `SEAM_OVER_RANGE` uses the stored
+radius and existing rest-art comparison, without changing its bar.
