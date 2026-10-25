@@ -118,7 +118,7 @@ The fields, object by object (a bold path is where the object sits; `<part>` is 
 part name, `[i]` an entry of a list):
 
 <!-- stable:config -->
-- **config** — required by the full loader, in front of rig and build: `key`, `assemble`, `bones`, `meshes`, `regions`, `motion`; optional: `generation`, `seethrough`, `limbs`, `constraints`, `stops`, `turn`, `scene`, `cloth`, `proposed_rig_scale`, `requirements` (issue #556, additive: a path beside the config that build reads in place of its requirements flag, whose behaviour is unchanged)
+- **config** — required by the full loader, in front of rig and build: `key`, `assemble`, `bones`, `meshes`, `regions`, `motion`; optional: `generation`, `seethrough`, `limbs`, `constraints`, `stops`, `turn`, `scene`, `cloth`, `proposed_rig_scale`, `requirements`, `motion_seams` (issue #556, additive: a path beside the config that build reads in place of its requirements flag, whose behaviour is unchanged)
 - **generation** — required: `checkpoint`, `loras`, `trigger`, `identity`, `sampler`, `costume`, `negative_extra`, `style`, `negative_pose`, `latent`, `seed`; optional: `pose`, `control`
 - **generation.loras[i]** — required: `name`, `strength`; optional: `strength_clip`
 - **generation.sampler** — required: `steps`, `cfg`, `sampler`, `scheduler`
@@ -381,3 +381,32 @@ carrier and measured geometry must agree; the lower rigid piece alone carries
 existing `LIMB_ONE_BONE` line checks ordinary segments as before; the band
 requires exactly its two adjacent carriers. `SEAM_OVER_RANGE` uses the stored
 radius and existing rest-art comparison, without changing its bar.
+
+## Explicit motion seam observations (issue #750)
+
+`motion_seams: [{part, neighbour}]` is optional in proposal/config/parts.json.
+Absent leaves the existing declaration path unchanged. Readers refuse unknown
+parts, self-pairs, unordered duplicates, malformed entries and unknown entry
+fields by name. Empty declares no additional pair. Proposal turn/copy/write and
+assemble preserve it; check never infers a removed declaration. A declared pair
+uses the existing non-root WARN floor and unchanged exits, unless independently
+selected by the existing proven body-root FAIL contract.
+
+All played non-root WARN rows may add `worst` and `pose_at_worst`, including
+existing limb rows. Worst is the maximum above-floor raw hit, earliest frame
+on a tie, gap before ghost on a remaining tie. Pose evidence binds the same
+seam geometry's actual setup, frame index, animation, viewport and raw time.
+It records carrier-path world axes, parent-relative setup-axis deltas modulo
+360, unchanged static ranges and explicit unavailable comparison reasons;
+frame0 and source key endpoints are not setup or measured pose substitutes.
+No angle bar or new threshold is added. Missing/mismatched data refuses.
+Without a declaration only optional WARN evidence changes existing check bytes.
+For the declared no-chest control, the exact existing JSON projection excludes
+only the new seam selection/rows/derived status/reason, at identical paths.
+
+The WARN pose reader also requires the published stock coordinate header and
+the required source bone/parent roster. It binds the complete geometry frame
+cohort to the actual PNG frame set through `readFrameSet` and `boneTrackOf`,
+including unselected frames, before reading the worst pose. Identical static
+ranges on a bone deduplicate; conflicting ranges are explicitly ambiguous,
+never described as no declared range.

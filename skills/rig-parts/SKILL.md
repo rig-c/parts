@@ -85,7 +85,7 @@ under that.
    gap See-through left (a skirt split into two legs), fixed in the plan or the layers,
    not in the rig. Then `rig-parts propose --parts work/rig
    --source <painting> --out work` → copy `bones`, `meshes`, `regions`, `limbs`,
-   `motion`, `constraints`, `turn`, `proposed_rig_scale` from `proposal.json` into the config, each it
+   `motion`, `constraints`, `turn`, `motion_seams`, `proposed_rig_scale` from `proposal.json` into the config, each it
    wrote (`limbs` only with `--keypoints`, `constraints` only with `--cloth`, `turn`
    only with `--full`/`--head`; a `limbs` block left out is refused at the next step). `assemble` needs the plan and none of
    those sections; do not stub them to get past it (AUTHORING §4 says what each step

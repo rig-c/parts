@@ -85,6 +85,7 @@
  * a later stage. The writer's key order is fixed, so two runs over the same
  * inputs write the same bytes.
  */
+import { motionSeamProblems, type MotionSeamDeclaration } from './motionseams.ts';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { type Problem, refuseIfAny } from './errors.ts';
 import { KEYPOINT_NAMES, type PosePoints } from './skeleton.ts';
@@ -355,6 +356,8 @@ export interface PartsFile {
   scale_rig_per_source: number;
   parts: PartRecord[];
   ghost_px: Record<string, number>;
+  /** Explicit observations only; check never regenerates a removed declaration. */
+  motion_seams?: MotionSeamDeclaration[];
   /** Absent in a `parts.json` the reference wrote; `assemble` always writes it. */
   recomposite?: RecompositeRecord;
   /** Written only under `config.scene` (issue #242): the recomposite was read inside this figure; absent otherwise. */
@@ -397,8 +400,8 @@ export interface SceneRecord {
   figure_mask: string;
 }
 
-const TOP_KEYS = ['rig_size', 'scale_rig_per_source', 'parts', 'ghost_px', 'recomposite', 'scene', 'single_run_pad', 'alternates'] as const;
-const REQUIRED_TOP_KEYS = TOP_KEYS.filter((k) => k !== 'recomposite' && k !== 'scene' && k !== 'single_run_pad' && k !== 'alternates');
+const TOP_KEYS = ['rig_size', 'scale_rig_per_source', 'parts', 'ghost_px', 'recomposite', 'scene', 'single_run_pad', 'alternates', 'motion_seams'] as const;
+const REQUIRED_TOP_KEYS = TOP_KEYS.filter((k) => k !== 'recomposite' && k !== 'scene' && k !== 'single_run_pad' && k !== 'alternates' && k !== 'motion_seams');
 export const SINGLE_RUN_PAD_KEYS = ['file_size', 'side', 'left', 'top'] as const;
 export const SCENE_KEYS = ['figure_alpha_above', 'figure_px', 'figure_mask'] as const;
 export const RECOMPOSITE_KEYS = ['mean_abs', 'within_limit', 'within_share', 'error_limit', 'error_px', 'covered_alpha', 'uncovered_error_px', 'hole_count', 'holes_listed', 'holes'] as const;
@@ -475,6 +478,7 @@ export function serializeParts(file: PartsFile): string {
     rig_size: file.rig_size,
     scale_rig_per_source: file.scale_rig_per_source,
     parts: serializePartList(file.parts),
+    ...(file.motion_seams === undefined ? {} : { motion_seams: file.motion_seams.map(({ part, neighbour }) => ({ part, neighbour })) }),
     ghost_px: Object.fromEntries(Object.keys(file.ghost_px).sort().map((k) => [k, file.ghost_px[k]])),
     ...(file.recomposite === undefined ? {} : { recomposite: serializeRecomposite(file.recomposite) }),
     ...(file.scene === undefined ? {} : { scene: Object.fromEntries(SCENE_KEYS.map((k) => [k, (file.scene as SceneRecord)[k]])) }),
@@ -663,6 +667,10 @@ function checkParts(raw: unknown, path: string): PartsFile {
     }
   }
   if (Array.isArray(o.parts)) checkLimbRecords(o.parts, '', fail);
+  if ('motion_seams' in o) {
+    const names = new Set((Array.isArray(o.parts) ? o.parts : []).flatMap(p => typeof p === 'object' && p !== null && typeof p.name === 'string' ? [p.name] : []));
+    problems.push(...motionSeamProblems(o.motion_seams, names, `${path} motion_seams`, 'PARTS_MOTION_SEAM'));
+  }
   if ('scene' in o) {
     const sc = o.scene;
     if (typeof sc !== 'object' || sc === null || Array.isArray(sc)) fail('PARTS_FIELD_TYPE', `${path} field "scene"`, `is ${show(sc)}; an object is required`);

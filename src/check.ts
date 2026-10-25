@@ -85,6 +85,8 @@ import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep 
 import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig } from './assemble.ts';
 import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toBoneLocal } from './coords.ts';
 import { capBox, inDisc } from './limbs.ts';
+import { motionSeamProblems } from './motionseams.ts';
+import { seamPoseFrame, seamStaticRange, type SeamPoseAtWorst } from './motionseampose.ts';
 import { coreCompileGuideLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { framesInside, IDLE_FPS, TIME_SLACK } from './motion.ts';
 import {
@@ -4305,6 +4307,8 @@ export interface MotionSeamRow {
   worst?: MotionSeamHit & { kind: 'gap' | 'ghost' | 'gapOpen' | 'underGhost' | 'gapOpen+underGhost' };
   /** Exact stock partitions and the resolved UNDER owner, retained even below the floor. */
   cells?: MotionRootCells[];
+  /** Same-render posed evidence on every played non-root WARN. */
+  pose_at_worst?: SeamPoseAtWorst;
 }
 
 /** Existing pairs warn; new body roots alone can FAIL. Unavailable readings are named SKIP, never measured zero. */
@@ -4353,6 +4357,10 @@ export function motionSeamSelection(parts: PartsFile, seams: ReadonlyArray<{ nam
     }
   }
   for (const r of seams) add(r.part, r.neighbour, `requirement "${r.name}" (seam)`);
+  if (parts.motion_seams !== undefined) {
+    refuseIfAny(motionSeamProblems(parts.motion_seams, new Set(parts.parts.map(p => p.name)), 'parts.json motion_seams', 'CHECK_MOTION_SEAM_DECLARATION'));
+    parts.motion_seams.forEach((r, i) => add(r.part, r.neighbour, `motion_seams[${i}]`));
+  }
   const candidates = rig === undefined ? [] : motionRootCandidates(parts, rig);
   const selected: MotionSeamPair[] = [];
   if (candidates.length > 0) {
@@ -4750,6 +4758,7 @@ function readSeamRows(dir: string, animations: readonly string[], fps: number, p
       }
       const over = new Map<number, number>();
       let rootWorst: MotionSeamRow['worst'];
+      let warnWorst: MotionSeamRow['worst'];
       const rootFrames = new Set<number>();
       const cells: MotionRootCells[] = [];
       const kinds: Record<'gap' | 'ghost', MotionSeamWorldKind> = { gap: { max_px: 0, worst: null }, ghost: { max_px: 0, worst: null } };
@@ -4767,6 +4776,7 @@ function readSeamRows(dir: string, animations: readonly string[], fps: number, p
         // Existing internal pairs retain their original maximum-kind warning and floor.
         for (const h of hits) if (want.root === undefined && (plant.noFloor === true || openingOverFloor(h))) {
           over.set(h.index, Math.max(over.get(h.index) ?? 0, h.px));
+          if (warnWorst === undefined || h.px > warnWorst.px || (h.px === warnWorst.px && h.index < warnWorst.index)) warnWorst = { ...h, kind };
         }
       }
       if (want.root !== undefined && !setup) {
@@ -4842,6 +4852,7 @@ function readSeamRows(dir: string, animations: readonly string[], fps: number, p
         max_px: opens.reduce((m, f) => Math.max(m, over.get(f) ?? 0), 0),
         under_floor: (want.root === undefined ? p.opens : [...rootFrames].filter(f => cells.some(c => c.index === f && c.counted > 0))).filter((f) => !over.has(f)),
         ...(rootWorst === undefined ? {} : { worst: rootWorst }),
+        ...(warnWorst === undefined || setup ? {} : { worst: warnWorst }),
         ...(want.root === undefined ? {} : { cells }),
       });
     });
@@ -4898,9 +4909,97 @@ export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fp
   };
 }
 
+/** Enrich active non-root WARNs only, using the SAME seam render and raw hit time. */
+export function enrichMotionSeamPoses(dir: string, rig: Record<string, unknown>, parts: PartsFile | null, pairs: readonly MotionSeamPair[], rows: MotionSeamRow[]): void {
+  const wanted = rows.filter(row => row.opens.length > 0 && pairs.some(pair => pair.pair === row.pair && pair.root === undefined));
+  if (wanted.length === 0) return;
+  const problems: Problem[] = [];
+  const sidecar = readJson(join(dir, 'frames.json'), problems);
+  refuseIfAny(problems);
+  const sets = Array.isArray(sidecar?.sets) ? sidecar.sets.filter(isRecord) : [];
+  const bones = (Array.isArray(rig.bones) ? rig.bones : []).filter(isRecord);
+  const skin = isRecord(rig.skins) && isRecord(rig.skins.default) ? rig.skins.default : {};
+  const cache = new Map<string, { geometry: Record<string, unknown>; seam: Record<string, unknown>; cohort: FrameSet; parsed: IdleGeometry }>();
+  for (const row of wanted) {
+    const h = row.worst;
+    if (h === undefined) geometryProblem(row.pair, 'above-floor WARN has no worst raw hit');
+    const matches = sets.filter(set => set.animation === row.animation);
+    const set = matches[0];
+    if (matches.length !== 1 || typeof set.dir !== 'string' || isAbsolute(set.dir) || set.dir.split(/[\\/]/).includes('..')) geometryProblem(row.animation, 'one local same-animation frame set required for WARN pose');
+    let data = cache.get(row.animation);
+    if (data === undefined) {
+      const geometry = readJson(join(dir, String(set.dir), GEOMETRY_FILE), problems);
+      const seam = readJson(join(dir, String(set.dir), SEAM_READING_FILE), problems);
+      refuseIfAny(problems);
+      if (geometry === null || seam === null || !Array.isArray(geometry.frames) || geometry.frames.length !== set.written) geometryProblem(row.animation, 'stock seam geometry frame count differs from frames.json');
+      const cohort = readFrameSet(join(dir, String(set.dir)));
+      const parsed = readGeometry(join(dir, String(set.dir), GEOMETRY_FILE), cohort.written);
+      if (parsed === null) geometryProblem(row.animation, 'same-render geometry is missing');
+      data = { geometry, seam, cohort, parsed };
+      cache.set(row.animation, data);
+    }
+    const rawPairs = Array.isArray(data.seam.pairs) ? data.seam.pairs.filter(isRecord) : [];
+    const pair = pairs.find(p => p.pair === row.pair);
+    const raw = rawPairs.find(p => p.a === pair?.a && p.b === pair?.b);
+    const kind = raw?.[h.kind];
+    const hits = isRecord(kind) && Array.isArray(kind.frames) ? kind.frames.filter(isRecord) : [];
+    const hitsAt = hits.filter(hit => hit.index === h.index && hit.px === h.px && hit.cell === h.cell && JSON.stringify(hit.box) === JSON.stringify(h.box));
+    const time = hitsAt[0]?.time;
+    if (hitsAt.length !== 1 || typeof time !== 'number' || !Number.isFinite(time)) geometryProblem(row.pair, 'one matching worst raw hit with actual finite time required');
+    const rawFrames = (data.geometry.frames as unknown[]).filter(isRecord);
+    const frame = rawFrames.find(f => f.index === h.index);
+    const shown = Array.isArray(frame?.attachments) ? frame.attachments.filter(isRecord) : [];
+    const carriers = new Set<string>();
+    for (const name of [pair?.a, pair?.b]) {
+      const active = shown.filter(a => a.slot === name);
+      const onValue = typeof name === 'string' ? skin[name] : undefined;
+      const on = isRecord(onValue) ? onValue : {};
+      const attachment = active.length === 1 && typeof active[0].attachment === 'string' ? on[active[0].attachment] : undefined;
+      if (!isRecord(attachment)) geometryProblem(row.pair, `slot "${String(name)}": active default-skin drawing unavailable at worst frame`);
+      if (Array.isArray(attachment.weights)) {
+        const weights = attachment.weights.flatMap(v => Array.isArray(v) ? v.filter(isRecord) : []);
+        for (const w of weights) if (typeof w.bone === 'string' && typeof w.weight === 'number' && w.weight > 0) carriers.add(w.bone);
+      } else {
+        const slot = (Array.isArray(rig.slots) ? rig.slots : []).filter(isRecord).find(sl => sl.name === name);
+        if (typeof slot?.bone !== 'string') geometryProblem(row.pair, `slot "${String(name)}": no declared bone`);
+        carriers.add(slot.bone);
+      }
+    }
+    if (carriers.size === 0) geometryProblem(row.pair, 'no positive-weight or rigid carrier at worst frame');
+    const ancestry = new Set<string>();
+    for (const carrier of carriers) {
+      const seen = new Set<string>();
+      let next: string | undefined = carrier;
+      while (next !== undefined) {
+        if (seen.has(next)) geometryProblem(row.pair, `cycle in carrier path at "${next}"`);
+        seen.add(next);
+        ancestry.add(next);
+        const named = bones.filter(b => b.name === next);
+        if (named.length !== 1) geometryProblem(row.pair, `carrier "${next}": one declared bone required`);
+        next = typeof named[0].parent === 'string' ? named[0].parent : undefined;
+      }
+    }
+    const joints = bones.filter(b => typeof b.name === 'string' && ancestry.has(b.name)).map(b => {
+      const ranges = parts?.parts.flatMap(p => {
+        const limb = p.limb;
+        return limb !== undefined && limb.bone === b.name && limb.range !== undefined ? [limb.range] : [];
+      }) ?? [];
+      return { bone: String(b.name), parent: typeof b.parent === 'string' ? b.parent : null,
+        inherit: typeof b.inherit === 'string' ? b.inherit : 'normal', ...seamStaticRange(ranges) };
+    });
+    for (const joint of joints) {
+      const track = boneTrackOf(data.parsed, join(dir, String(set.dir), GEOMETRY_FILE), data.cohort, joint.bone);
+      if (typeof track === 'string') geometryProblem(row.pair, track);
+    }
+    row.pose_at_worst = seamPoseFrame(data.geometry, row.animation, h.index, time, data.cohort, joints);
+  }
+}
+
 /** One warning as the console prints it (issue #493's form, the floor's clause after it). */
 export function motionSeamWarnText(r: MotionSeamRow): string {
-  return `WARN seam "${r.pair}" opens on ${r.opens.length} frame(s) ${frameRuns(r.opens)} max ${r.max_px} px in "${r.animation}" — over the one-cell floor${r.under_floor.length === 0 ? '' : `, ${r.under_floor.length} more frame(s) one cell thick not reported`}`;
+  const pose = r.pose_at_worst;
+  const evidence = pose === undefined ? '' : `; worst frame ${pose.index} (t = ${pose.time}s), ${pose.joints.map(j => `bone "${j.bone}" parent ${JSON.stringify(j.parent)} world ${j.world_x_axis_degrees === null ? 'unavailable' : round3(j.world_x_axis_degrees) + 'deg'}; relative setup axis ${j.parent_relative_setup_axis_delta_degrees_mod360 === null ? 'unavailable' : round3(j.parent_relative_setup_axis_delta_degrees_mod360) + 'deg modulo360'}, static range ${JSON.stringify(j.static_range)} (${j.comparison}${j.reason === undefined ? '' : ': ' + j.reason})`).join(' | ')}`;
+  return `WARN seam "${r.pair}" opens on ${r.opens.length} frame(s) ${frameRuns(r.opens)} max ${r.max_px} px in "${r.animation}" — over the one-cell floor${r.under_floor.length === 0 ? '' : `, ${r.under_floor.length} more frame(s) one cell thick not reported`}${evidence}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -6136,10 +6235,11 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         const activeDest = stripped === null ? seamMotionDir : join(seamMotionDir, env === null ? 'default' : 'active');
         const renderedWorlds = new Set<'default' | 'still'>();
         const hasRoots = read.some(p => p.root !== undefined);
-        const r = measured(['render', '--candidate', buildDir, '--seam', list, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), ...(hasRoots ? ['--geometry'] : []), '--out', activeDest]);
+        const r = measured(['render', '--candidate', buildDir, '--seam', list, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--geometry', '--out', activeDest]);
         if (r.status !== 0) refuseIfAny(rigcFailed(`render --seam ${list} --fps ${fps}`, r, r.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
         const activeWorldRows: MotionSeamWorldRow[] = [];
         motionSeam = motionSeamLine(pairs, animationNames, fps, readMotionSeams(activeDest, animationNames, fps, read, {}, stripped !== null && env === null ? activeWorldRows : undefined, hasRoots ? motionRootDrawOrderReader(activeDest) : undefined), undefined, motionRootProblems, unmeasuredRoots);
+        enrichMotionSeamPoses(activeDest, inp.rig, inp.parts, pairs, motionSeam.rows);
         if (stripped !== null) {
           const response = environmentResponse(readFileSync(join(buildDir, 'skeleton.json'), 'utf8'));
           motionSeam.worlds = motionSeamWorlds(true, response.wind.length > 0, world => {
