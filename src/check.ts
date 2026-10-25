@@ -164,7 +164,10 @@ import {
 import { RIG_BONE_INHERIT, type RigSpec as RigcRigSpec } from 'rig-c/src/rig.ts';
 import { expandStops } from 'rig-c/src/stop.ts';
 import { ENVIRONMENT_SPEC, EnvironmentError, environmentResponse, readEnvironmentSchedule } from 'rig-c/src/environment.ts';
+import { ART_ALPHA } from './mesh.ts';
+import { connectedComponents } from './raster/components.ts';
 import { alphaComposite } from './raster/composite.ts';
+import { alphaAbove } from './raster/index.ts';
 import { readPng, writePng } from './raster/png.ts';
 import { newFloatImage, newRaster, type Raster } from './raster/types.ts';
 import type { BaseTag } from './tags.ts';
@@ -1241,15 +1244,179 @@ export interface SeamFigures {
 }
 
 /**
- * The flat stack of parts over the background, in rig pixels: PIL's
- * `alpha_composite` of every part at its `x, y`, in parts.json order, over an
- * opaque canvas of the render's own background colour.
+ * Partition a multi-island part's raster into one raster per declared island
+ * slot (`<part>`, `<part>__island2..<part>__island<N>`), ordered by descending
+ * `alpha > ART_ALPHA` 4-connected component area (tie-broken by ascending
+ * row-major label). Anti-aliased fringe pixels (`1 <= alpha <= ART_ALPHA`)
+ * propagate from their connected island seed via 4-connected BFS over
+ * `alpha > 0`, with any disconnected sub-threshold pixel assigned to the
+ * nearest seed centroid so every non-transparent pixel of `image` lands in
+ * exactly one island raster.
  */
-export function flatComposite(parts: PartsFile, partsDir: string, background: readonly [number, number, number, number]): Raster {
+export function splitPartIslands(image: Raster, count: number): Raster[] {
+  if (count <= 1) return [image];
+  const { width, height, data } = image;
+  const cc = connectedComponents(alphaAbove(image, ART_ALPHA), 4);
+  const seeds = cc.stats
+    .slice(1)
+    .sort((a, b) => b.area - a.area || a.label - b.label)
+    .slice(0, count);
+  if (seeds.length <= 1) return [image];
+  const owner = new Int16Array(width * height).fill(-1);
+  const labelToSeed = new Int16Array(cc.count + 1).fill(-1);
+  seeds.forEach((s, idx) => {
+    labelToSeed[s.label] = idx;
+  });
+  const queue = new Int32Array(width * height);
+  let head = 0;
+  let tail = 0;
+  for (let i = 0; i < width * height; i++) {
+    const seedIdx = labelToSeed[cc.labels[i]];
+    if (seedIdx >= 0) {
+      owner[i] = seedIdx;
+      queue[tail++] = i;
+    }
+  }
+  while (head < tail) {
+    const cur = queue[head++];
+    const seedIdx = owner[cur];
+    const x = cur % width;
+    const y = (cur - x) / width;
+    if (x > 0) {
+      const n = cur - 1;
+      if (owner[n] < 0 && data[n * 4 + 3] > 0) {
+        owner[n] = seedIdx;
+        queue[tail++] = n;
+      }
+    }
+    if (x + 1 < width) {
+      const n = cur + 1;
+      if (owner[n] < 0 && data[n * 4 + 3] > 0) {
+        owner[n] = seedIdx;
+        queue[tail++] = n;
+      }
+    }
+    if (y > 0) {
+      const n = cur - width;
+      if (owner[n] < 0 && data[n * 4 + 3] > 0) {
+        owner[n] = seedIdx;
+        queue[tail++] = n;
+      }
+    }
+    if (y + 1 < height) {
+      const n = cur + width;
+      if (owner[n] < 0 && data[n * 4 + 3] > 0) {
+        owner[n] = seedIdx;
+        queue[tail++] = n;
+      }
+    }
+  }
+  const out = Array.from({ length: count }, () => newRaster(width, height));
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = y * width + x;
+      const p = i * 4;
+      if (data[p + 3] === 0) continue;
+      let idx = owner[i];
+      if (idx < 0) {
+        let best = 0;
+        let bestD2 = Infinity;
+        seeds.forEach((s, si) => {
+          const dx = x - s.cx;
+          const dy = y - s.cy;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < bestD2) {
+            bestD2 = d2;
+            best = si;
+          }
+        });
+        idx = best;
+      }
+      out[idx].data.set(data.subarray(p, p + 4), p);
+    }
+  }
+  return out;
+}
+
+export interface ReferencePlacement {
+  name: string;
+  png: string;
+  box: PartRecord;
+  islandIndex?: number;
+  islandCount?: number;
+}
+
+function partIslandSlots(part: string, slotOrder?: readonly string[]): string[] {
+  if (slotOrder === undefined || !slotOrder.includes(`${part}__island2`)) return [part];
+  const out = [part];
+  for (let k = 2; slotOrder.includes(`${part}__island${k}`); k++) {
+    out.push(`${part}__island${k}`);
+  }
+  return out;
+}
+
+export function resolvePlacedAlpha(placements: readonly ReferencePlacement[], partsDir: string): PlacedAlpha[] {
+  const rawCache = new Map<string, Raster>();
+  const splitCache = new Map<string, Raster[]>();
+  const readRaw = (png: string): Raster => {
+    const hit = rawCache.get(png);
+    if (hit !== undefined) return hit;
+    const img = readPng(join(partsDir, `${png}.png`));
+    rawCache.set(png, img);
+    return img;
+  };
+  return placements.map((pl) => {
+    const raw = readRaw(pl.png);
+    if (pl.islandCount !== undefined && pl.islandCount > 1 && pl.islandIndex !== undefined) {
+      const key = `${pl.png}:${pl.islandCount}`;
+      let islands = splitCache.get(key);
+      if (islands === undefined) {
+        islands = splitPartIslands(raw, pl.islandCount);
+        splitCache.set(key, islands);
+      }
+      return { name: pl.name, from: pl.box.from, x: pl.box.x, y: pl.box.y, image: islands[pl.islandIndex] ?? raw };
+    }
+    return { name: pl.name, from: pl.box.from, x: pl.box.x, y: pl.box.y, image: raw };
+  });
+}
+
+export function basePlacements(parts: PartsFile, slotOrder?: readonly string[]): ReferencePlacement[] {
+  return setPlacements(
+    parts,
+    {
+      name: '',
+      slots: {},
+      records: [],
+      ghost_px: {},
+      recomposite: parts.recomposite ?? {
+        mean_abs: 0,
+        within_limit: 0,
+        within_share: 1,
+        error_limit: 0,
+        error_px: 0,
+        covered_alpha: 0,
+        uncovered_error_px: 0,
+        hole_count: 0,
+        holes_listed: 0,
+        holes: [],
+      },
+    },
+    slotOrder,
+  );
+}
+
+/**
+ * The flat stack of parts over the background, in rig pixels: PIL's
+ * `alpha_composite` of every part at its `x, y`, in parts.json order (with
+ * multi-island explicit slots placed at their declared `slotOrder` positions
+ * when `slotOrder` is supplied), over an opaque canvas of the render's own
+ * background colour.
+ */
+export function flatComposite(parts: PartsFile, partsDir: string, background: readonly [number, number, number, number], slotOrder?: readonly string[]): Raster {
   const [W, H] = parts.rig_size;
   let canvas = newRaster(W, H);
   for (let i = 0; i < W * H; i++) canvas.data.set(background, i * 4);
-  for (const p of parts.parts) canvas = alphaComposite(canvas, readPng(join(partsDir, `${p.name}.png`)), p.x, p.y);
+  for (const p of resolvePlacedAlpha(basePlacements(parts, slotOrder), partsDir)) canvas = alphaComposite(canvas, p.image, p.x, p.y);
   return canvas;
 }
 
@@ -1260,9 +1427,11 @@ export function flatComposite(parts: PartsFile, partsDir: string, background: re
  * slot (`alt.front`) is drawn from its record although `alt.hides` names it (the
  * hide is its base slot's) — with `slotOrder`, the rig's final setup slot names,
  * right after the nearest part slot before `<part>_front` there; without it (or
- * with no such slot), in its own place, as the base slot would draw it.
+ * with no such slot), in its own place, as the base slot would draw it. When
+ * `slotOrder` names multi-island explicit slots (`<part>__island2..<part>__island<N>`),
+ * each island's placement follows its declared slot position in `slotOrder`.
  */
-export function setPlacements(parts: PartsFile, alt: AlternatePartsRecord, slotOrder?: readonly string[]): Array<{ name: string; png: string; box: PartRecord }> {
+export function setPlacements(parts: PartsFile, alt: AlternatePartsRecord, slotOrder?: readonly string[]): ReferencePlacement[] {
   const hides = new Set(alt.hides ?? []);
   const front = new Set(alt.front ?? []);
   const byName = new Map(alt.records.map((r) => [r.name, r]));
@@ -1281,18 +1450,73 @@ export function setPlacements(parts: PartsFile, alt: AlternatePartsRecord, slotO
     }
   }
   const moved = [...after.keys()].sort((a, b) => (slotOrder as readonly string[]).indexOf(`${a}${FRONT_SUFFIX}`) - (slotOrder as readonly string[]).indexOf(`${b}${FRONT_SUFFIX}`));
-  const out: Array<{ name: string; png: string; box: PartRecord }> = [];
+  type PlacedIslandEntry = ReferencePlacement & { at: number };
+  const inlineIslands = new Map<string, PlacedIslandEntry[]>();
+  const beforeTarget = new Map<string | null, PlacedIslandEntry[]>();
+  if (slotOrder !== undefined) {
+    for (const p of parts.parts) {
+      if (byName.has(p.name)) continue;
+      const islandSlots = partIslandSlots(p.name, slotOrder);
+      if (islandSlots.length <= 1) continue;
+      const baseIdx = slotOrder.indexOf(p.name);
+      for (let k = 1; k < islandSlots.length; k++) {
+        const islSlot = islandSlots[k];
+        if ((hides.has(p.name) && !front.has(p.name)) || hides.has(islSlot)) continue;
+        const at = slotOrder.indexOf(islSlot);
+        let reordered = at < baseIdx;
+        if (!reordered) {
+          for (let j = baseIdx + 1; j < at; j++) {
+            if (partNames.has(slotOrder[j]) && !after.has(slotOrder[j])) {
+              reordered = true;
+              break;
+            }
+          }
+        }
+        const entry: PlacedIslandEntry = { name: islSlot, png: p.name, box: p, islandIndex: k, islandCount: islandSlots.length, at };
+        if (!reordered) {
+          const list = inlineIslands.get(p.name) ?? [];
+          list.push(entry);
+          inlineIslands.set(p.name, list);
+        } else {
+          let target: string | null = null;
+          for (let j = at + 1; j < slotOrder.length; j++) {
+            if (partNames.has(slotOrder[j]) && !after.has(slotOrder[j])) {
+              target = slotOrder[j];
+              break;
+            }
+          }
+          const list = beforeTarget.get(target) ?? [];
+          list.push(entry);
+          beforeTarget.set(target, list);
+        }
+      }
+    }
+    for (const list of inlineIslands.values()) list.sort((a, b) => a.at - b.at);
+    for (const list of beforeTarget.values()) list.sort((a, b) => a.at - b.at);
+  }
+  const out: ReferencePlacement[] = [];
+  const pushIsland = ({ at: _at, ...pl }: PlacedIslandEntry): void => {
+    out.push(pl);
+  };
   const draw = (name: string, base: PartRecord): void => {
     if (hides.has(name) && !front.has(name)) return;
     const rec = byName.get(name);
+    const islandSlots = rec === undefined ? partIslandSlots(name, slotOrder) : [name];
+    if (islandSlots.length > 1) {
+      out.push({ name, png: name, box: base, islandIndex: 0, islandCount: islandSlots.length });
+      for (const isl of inlineIslands.get(name) ?? []) pushIsland(isl);
+      return;
+    }
     out.push({ name, png: rec === undefined ? name : `${alt.name}_${rec.name}`, box: rec ?? base });
   };
   const baseOf = new Map(parts.parts.map((p) => [p.name, p]));
   for (const p of parts.parts) {
     if (after.has(p.name)) continue;
+    for (const isl of beforeTarget.get(p.name) ?? []) pushIsland(isl);
     draw(p.name, p);
     for (const m of moved) if (after.get(m) === p.name) draw(m, baseOf.get(m) as PartRecord);
   }
+  for (const isl of beforeTarget.get(null) ?? []) pushIsland(isl);
   return out;
 }
 
@@ -1328,16 +1552,17 @@ export function flatCompositeForSet(parts: PartsFile, alt: AlternatePartsRecord,
   const [W, H] = parts.rig_size;
   let canvas = newRaster(W, H);
   for (let i = 0; i < W * H; i++) canvas.data.set(background, i * 4);
-  for (const { png, box } of setPlacements(parts, alt, slotOrder)) canvas = alphaComposite(canvas, readPng(join(partsDir, `${png}.png`)), box.x, box.y);
+  for (const p of resolvePlacedAlpha(setPlacements(parts, alt, slotOrder), partsDir)) canvas = alphaComposite(canvas, p.image, p.x, p.y);
   return canvas;
 }
 
 /**
  * The setup-pose rig spec with an alternate set applied (issues #454, #465):
- * hidden slots (and `<slot>_still` for any hidden or covered slot) have no
- * setup attachment, covered slots have `alt.slots[slot]`, and when the set
- * carries `drawn` bone rotations its bones are posed at those world rotations
- * so the throwaway still renders the alternate in the pose it was painted in.
+ * hidden slots (and `<slot>_still` or `<slot>__island<k>` for any hidden or
+ * covered slot) have no setup attachment, covered slots have `alt.slots[slot]`,
+ * and when the set carries `drawn` bone rotations its bones are posed at those
+ * world rotations so the throwaway still renders the alternate in the pose it
+ * was painted in.
  */
 export function stillRigForSet(
   rig: Record<string, unknown>,
@@ -1348,7 +1573,13 @@ export function stillRigForSet(
   const slots = (Array.isArray(rig.slots) ? rig.slots : []).map((s) => {
     if (!isRecord(s) || typeof s.name !== 'string') return s;
     const stillBase = s.name.endsWith('_still') ? s.name.slice(0, -'_still'.length) : null;
-    if (hides.has(s.name) || (stillBase !== null && (hides.has(stillBase) || Object.hasOwn(alt.slots, stillBase)))) {
+    const islandMatch = /^(.+)__island[2-9]\d*$/.exec(s.name);
+    const islandBase = islandMatch !== null ? islandMatch[1] : null;
+    if (
+      hides.has(s.name) ||
+      (stillBase !== null && (hides.has(stillBase) || Object.hasOwn(alt.slots, stillBase))) ||
+      (islandBase !== null && (hides.has(islandBase) || Object.hasOwn(alt.slots, islandBase)))
+    ) {
       return { ...s, attachment: null };
     }
     if (Object.hasOwn(alt.slots, s.name)) return { ...s, attachment: alt.slots[s.name] };
@@ -5110,7 +5341,15 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       const checkedAlt = set !== undefined && !allSets && inp.parts !== null ? (inp.parts.alternates ?? []).find((a) => a.name === set) : undefined;
       const subsetFoldSlots =
         checkedAlt !== undefined && checkedAlt.parts !== undefined
-          ? new Set<string>([...Object.keys(checkedAlt.slots), ...(checkedAlt.hides ?? [])])
+          ? (() => {
+              const baseSet = new Set<string>([...Object.keys(checkedAlt.slots), ...(checkedAlt.hides ?? [])]);
+              for (const sl of (Array.isArray(inp.rig.slots) ? inp.rig.slots : []).filter(isRecord)) {
+                if (typeof sl.name !== 'string') continue;
+                const m = /^(.+)__island[2-9]\d*$/.exec(sl.name);
+                if (m !== null && baseSet.has(m[1])) baseSet.add(sl.name);
+              }
+              return baseSet;
+            })()
           : null;
       const filterFolds = (map: Map<string, FoldingMesh[]>): Map<string, FoldingMesh[]> => {
         if (subsetFoldSlots === null) return map;
@@ -5526,9 +5765,10 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         const canonicalSet = canonical(join(stillDir, 'build'), join(stillDir, 'seam'));
         seamViewport = canonicalSet.viewport;
         if (keepStills) cpSync(join(stillDir, 'seam'), keptDir, { recursive: true });
-        const composite = flatComposite(inp.parts, inp.partsDir, stillSet.background);
+        const rigSlotOrder = (Array.isArray(inp.rig.slots) ? inp.rig.slots : []).filter(isRecord).map((sl) => String(sl.name));
+        const composite = flatComposite(inp.parts, inp.partsDir, stillSet.background, rigSlotOrder);
         const autoSeam = seamFigures(composite, stillSet.frames[0].image, inp.stage, stillSet.viewport, stillSet.background, undefined, inp.parts.scene !== undefined);
-        const placed = inp.parts.parts.map(p => ({ name: p.name, from: p.from, x: p.x, y: p.y, image: readPng(join(inp.partsDir, `${p.name}.png`)) }));
+        const placed = resolvePlacedAlpha(basePlacements(inp.parts, rigSlotOrder), inp.partsDir);
         const basePopulation = createSeamPopulation(placed, inp.parts.rig_size, canonicalSet.viewport);
         seam = seamFigures(composite, canonicalSet.frames[0].image, inp.stage, canonicalSet.viewport, canonicalSet.background, undefined, inp.parts.scene !== undefined, undefined, true, basePopulation.observe);
         seamScope = { mode: 'source-grid/base', domain, denominator_px: canonicalDenominator(seam), auto_frame_raw: seamReading(autoSeam, stillSet.viewport), whole: seamReading(seam, canonicalSet.viewport), population: basePopulation.finish() };
@@ -5547,11 +5787,10 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
             if (asr.status !== 0) refuseIfAny(rigcFailed(`render (the setup-pose still of set "${alt.name}")`, asr, asr.out.split('\n').filter((l) => l.includes('FAIL'))));
             const altStillSet = readFrameSet(join(setDir, 'render'));
             if (keepStills) cpSync(join(setDir, 'render'), join(out, 'setup_still_auto', alt.name), { recursive: true });
-            const rigSlotOrder = (Array.isArray(inp.rig.slots) ? inp.rig.slots : []).filter(isRecord).map((sl) => String(sl.name));
             const altComposite = flatCompositeForSet(inp.parts, alt, inp.partsDir, altStillSet.background, rigSlotOrder);
             const altCanonical = canonical(join(setDir, 'build'), join(setDir, 'seam'));
             if (keepStills) cpSync(join(setDir, 'seam'), join(keptDir, alt.name), { recursive: true });
-            const altPlaced = setPlacements(inp.parts, alt, rigSlotOrder).map(({ name, png, box }) => ({ name, from: box.from, x: box.x, y: box.y, image: readPng(join(inp.partsDir, `${png}.png`)) }));
+            const altPlaced = resolvePlacedAlpha(setPlacements(inp.parts, alt, rigSlotOrder), inp.partsDir);
             const altSupport = seamSupport(join(setDir, 'build'), join(setDir, 'rig.json'), altCanonical, altPlaced, seamStacks, inp.stage);
             const effects = seamEffectSelection(baseSupport, altSupport);
             const autoAltSeam = seamFigures(altComposite, altStillSet.frames[0].image, inp.stage, altStillSet.viewport, altStillSet.background, undefined, alt.scene !== undefined);

@@ -1,15 +1,18 @@
 #!/usr/bin/env bun
 /** #658 controls: named field, immutable payload, and actual image/placement binding. */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { explicitFixture, stoppedLimbFixture } from '../fixtures/explicitmesh.ts';
-import { rigConfig, rigImages, rigParts, writeRigFixture } from '../fixtures/rig.ts';
+import { explicitFixture, explicitIslandsFixture, type IslandsExplicitMeshSpec, type SingleExplicitMeshSpec, stoppedLimbFixture } from '../fixtures/explicitmesh.ts';
+import { block, islandImages, rigConfig, rigImages, rigParts, writeRigFixture } from '../fixtures/rig.ts';
 import { parseConfig, partBoundBones, type ExplicitMeshSpec, type Limb } from '../src/config.ts';
 import { PartsError } from '../src/errors.ts';
 import { buildRig, rigJsonText, type MeshAttachment } from '../src/rig.ts';
 import { explicitImageHash, explicitRegionHash } from '../src/explicitmesh.ts';
-import { readRigInputs, rigStage } from '../src/build.ts';
+import { gateThroughRigc, readRigInputs, rigStage } from '../src/build.ts';
+import { DEFAULT_PACK_MODE, flatComposite, flatCompositeForSet, packageRigc, readFrameSet, runCheck, SEAM_MEAN_BAR, SEAM_PX_BAR, seamFigures, setPlacements, STILL_DIR, stillRigForSet } from '../src/check.ts';
+import { composeFromFiles, SCENE_SPEC } from '../src/scene.ts';
+import { processRigcRunner } from './build-process.ts';
 import { notCompared } from '../src/meshdraft.ts';
 import { meshStatsRows } from '../src/meshstats.ts';
 import { configRoles } from '../src/structure.ts';
@@ -91,7 +94,7 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
     const original = buildRig(parseConfig(f.config), f.parts, f.images), raw = structuredClone(f.config);
     const accepted = original.rig.skins.default[part][part] as MeshAttachment;
     const record = f.parts.parts.find(p => p.name === part)!;
-    const mesh: ExplicitMeshSpec = { segments: [...new Set([original.rig.slots.find(s => s.name === part)!.bone, ...accepted.weights.flatMap(row => row.map(w => w.bone))])], explicit: {
+    const mesh: SingleExplicitMeshSpec = { segments: [...new Set([original.rig.slots.find(s => s.name === part)!.bone, ...accepted.weights.flatMap(row => row.map(w => w.bone))])], explicit: {
       image_sha256: explicitImageHash(f.images.get(part)!), region_sha256: explicitRegionHash(f.parts.rig_size, record),
       uvs: accepted.uvs, triangles: accepted.triangles, hull: accepted.hull, weights: accepted.weights,
     } };
@@ -109,7 +112,7 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
   subset.config.stops = [{ chain: 'leg', links: ['leg1'], against: 'body', at: [0, 0], inward: -45, outward: 45 }];
   const selected = transferPart(subset, 'rider'), selectedBuilt = buildRig(parseConfig(selected.raw), subset.parts, subset.images);
   check('GX21_ONLY_THE_DECLARED_STOP_LINKS_GAIN_OWNERSHIP_ALIASES', JSON.stringify(selected.mesh.segments) === '["leg1_d"]' && order(selectedBuilt.rig) === order(selected.original.rig), order(selectedBuilt.rig));
-  const undeclared = structuredClone(selected.raw), undeclaredMesh = (undeclared.meshes as Record<string, ExplicitMeshSpec>).rider;
+  const undeclared = structuredClone(selected.raw), undeclaredMesh = (undeclared.meshes as Record<string, SingleExplicitMeshSpec>).rider;
   undeclaredMesh.segments = ['leg0_d'];
   for (const row of undeclaredMesh.explicit.weights) for (const w of row) w.bone = 'leg0_d';
   const unknownAlias = refused(() => buildRig(parseConfig(undeclared), subset.parts, subset.images));
@@ -123,6 +126,239 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
   if (lower.layout === undefined) throw new Error('GENERATED_STOPPED_LAYOUT_REQUIRED');
   const replay = refreshLimbLayout(lower.layout, lower.rig), companion = layoutCompanion(replay, lower.rig, rigJsonText(lower.rig));
   check('GX24_STOPPED_LAYOUT_REPLAY_AND_COMPANION_KEEP_ALIAS_PROVENANCE', JSON.stringify(companion.setup_slots) === order(lower.rig) && JSON.stringify(replay.placements[0].slots) === '["rider","lower"]' && JSON.stringify(lower.rig.skins.default.lower.lower) === JSON.stringify(acceptedLower.accepted), JSON.stringify(companion.placements));
+  const islFix = explicitIslandsFixture(), islCfg = parseConfig(islFix.config), islBuilt = buildRig(islCfg, islFix.parts, islFix.images);
+  const att1 = islBuilt.rig.skins.default.cloth.cloth as MeshAttachment;
+  const att2 = islBuilt.rig.skins.default.cloth__island2.cloth__island2 as MeshAttachment;
+  const islTransferred = explicitIslandsFixture();
+  islTransferred.mesh = {
+    segments: ['body', 'eye'],
+    explicit: {
+      image_sha256: explicitImageHash(islFix.images.get('cloth')!),
+      region_sha256: explicitRegionHash(islFix.parts.rig_size, islFix.parts.parts[0]),
+      islands: [
+        { slot: 'cloth', uvs: [...att1.uvs], triangles: [...att1.triangles], hull: att1.hull, weights: structuredClone(att1.weights) },
+        { slot: 'cloth__island2', bone: islBuilt.rig.slots.find(s => s.name === 'cloth__island2')!.bone, uvs: [...att2.uvs], triangles: [...att2.triangles], hull: att2.hull, weights: structuredClone(att2.weights) },
+      ],
+    },
+  } satisfies IslandsExplicitMeshSpec;
+  islTransferred.config.meshes = { cloth: islTransferred.mesh };
+  const islRebuilt = buildRig(parseConfig(islTransferred.config), islFix.parts, islFix.images);
+  const genTwoIsl = buildRig(parseConfig(rigConfig()), islFix.parts, islFix.images);
+  const genTwoIslAtt = genTwoIsl.rig.skins.default.cloth.cloth as MeshAttachment;
+  const singleOnTwoIslands = explicitFixture();
+  singleOnTwoIslands.mesh = {
+    segments: [...new Set([genTwoIsl.rig.slots.find(s => s.name === 'cloth')!.bone, ...genTwoIslAtt.weights.flatMap(row => row.map(w => w.bone))])],
+    explicit: {
+      image_sha256: explicitImageHash(islFix.images.get('cloth')!),
+      region_sha256: explicitRegionHash(islFix.parts.rig_size, islFix.parts.parts[0]),
+      uvs: [...genTwoIslAtt.uvs],
+      triangles: [...genTwoIslAtt.triangles],
+      hull: genTwoIslAtt.hull,
+      weights: structuredClone(genTwoIslAtt.weights),
+    },
+  };
+  singleOnTwoIslands.config.meshes = { cloth: singleOnTwoIslands.mesh };
+  const singleOnTwoBuilt = buildRig(parseConfig(singleOnTwoIslands.config), islFix.parts, islFix.images);
+  const islBeforeFix = explicitIslandsFixture();
+  const midImg = block(10, 10);
+  for (let i = 0; i < 100; i++) midImg.data.set([40, 90, 220, 255], i * 4);
+  islBeforeFix.parts.parts.splice(1, 0, {
+    ...islBeforeFix.parts.parts[1],
+    name: 'mid',
+    from: 'full:bottomwear',
+    x: 18,
+    y: 9,
+    w: 10,
+    h: 10,
+    opaque_px: 100,
+  });
+  islBeforeFix.images.set('mid', midImg);
+  (islBeforeFix.config.assemble as { plan: string[][] }).plan.splice(1, 0, ['mid', 'full', 'bottomwear']);
+  (islBeforeFix.config.regions as Record<string, string>).mid = 'body';
+  islBeforeFix.mesh.explicit.islands[1].before = 'eye';
+  const islBeforeBuilt = buildRig(parseConfig(islBeforeFix.config), islBeforeFix.parts, islBeforeFix.images);
+  const islDisk = writeRigFixture(join(root, 'isl-disk'), islFix.config, islFix.images, islFix.parts);
+  const islBuildDir = join(root, 'isl-build');
+  const islRigOut = join(islBuildDir, 'rig');
+  const runner = processRigcRunner(packageRigc(resolve(import.meta.dir, '..')));
+  rigStage({ config: islDisk.config, parts: islDisk.parts, out: islRigOut }, runner, join(root, 'isl-rig-scratch'), () => {});
+  cpSync(islDisk.parts, islBuildDir, { recursive: true });
+  mkdirSync(join(islBuildDir, 'check'), { recursive: true });
+  writeFileSync(join(islBuildDir, 'check', 'check.json'), JSON.stringify({ PASS: true, gate_spine_html_green: true }));
+  const scenePath = join(root, 'isl-scene.json');
+  writeFileSync(scenePath, JSON.stringify({
+    spec: SCENE_SPEC,
+    canvas: { width: 40, height: 40 },
+    characters: [{ id: 'ch', build: islBuildDir, offset: [0, 0] }],
+    order: ['ch'],
+  }));
+  const composed = composeFromFiles(scenePath);
+  const composedIsl2 = composed.rig.skins.default['ch:cloth__island2']['ch:cloth__island2'] as MeshAttachment;
+  const composeGate = gateThroughRigc(composed.images, [['rig.json', rigJsonText(composed.rig)], ['motion.json', rigJsonText(composed.motion)]], runner, join(root, 'isl-compose-scratch'), DEFAULT_PACK_MODE);
+  const islBeforeDisk = writeRigFixture(join(root, 'isl-before-disk'), islBeforeFix.config, islBeforeFix.images, islBeforeFix.parts);
+  const islBeforeRigOut = join(root, 'isl-before-rig');
+  const islBeforeCheckOut = join(root, 'isl-before-check');
+  rigStage({ config: islBeforeDisk.config, parts: islBeforeDisk.parts, out: islBeforeRigOut }, runner, join(root, 'isl-before-scratch'), () => {});
+  const islBeforeCheck = runCheck(islBeforeRigOut, islBeforeCheckOut, runner, islBeforeDisk.parts, DEFAULT_PACK_MODE, undefined, undefined, false, true);
+  const beforeStill = readFrameSet(join(islBeforeCheckOut, STILL_DIR));
+  const plantedOrderRef = flatComposite(islBeforeFix.parts, join(islBeforeDisk.parts, 'parts'), beforeStill.background);
+  const plantedOrderSeam = seamFigures(plantedOrderRef, beforeStill.frames[0].image, islBeforeBuilt.rig.skeleton, beforeStill.viewport, beforeStill.background);
+  const islHideFix = explicitIslandsFixture();
+  (islHideFix.config.assemble as Record<string, unknown>).alternates = [{ name: 'no_cloth', parts: ['eye'], hides: ['cloth'] }];
+  const directIslHideCfg = structuredClone(islHideFix.config);
+  ((directIslHideCfg.assemble as { alternates: Array<{ hides: string[] }> }).alternates[0]).hides = ['cloth__island2'];
+  parseConfig(directIslHideCfg);
+  const altNoCloth = {
+    name: 'no_cloth',
+    parts: ['eye'],
+    hides: ['cloth'],
+    slots: { eye: 'no_cloth_eye' },
+    records: [{ ...islHideFix.parts.parts[1] }],
+    ghost_px: {},
+    recomposite: {
+      mean_abs: 0,
+      within_limit: 8,
+      within_share: 1,
+      error_limit: 40,
+      error_px: 0,
+      covered_alpha: 128,
+      uncovered_error_px: 0,
+      hole_count: 0,
+      holes_listed: 0,
+      holes: [],
+    },
+  };
+  islHideFix.parts.alternates = [altNoCloth];
+  islHideFix.images.set('no_cloth_eye', islHideFix.images.get('eye')!);
+  const islHideBuilt = buildRig(parseConfig(islHideFix.config), islHideFix.parts, islHideFix.images);
+  const islHideSlotOrder = islHideBuilt.rig.slots.map(s => s.name);
+  const islHideStillRig = stillRigForSet(islHideBuilt.rig as unknown as Record<string, unknown>, altNoCloth);
+  const islHideStillSlots = (islHideStillRig.slots as Array<{ name: string; attachment: string | null }>);
+  const islHideDisk = writeRigFixture(join(root, 'isl-hide-disk'), islHideFix.config, islHideFix.images, islHideFix.parts);
+  writeFileSync(join(islHideDisk.parts, 'parts', 'no_cloth_eye.png'), readFileSync(join(islHideDisk.parts, 'parts', 'eye.png')));
+  const islHideRigOut = join(root, 'isl-hide-rig');
+  const islHideCheckOut = join(root, 'isl-hide-check');
+  rigStage({ config: islHideDisk.config, parts: islHideDisk.parts, out: islHideRigOut }, runner, join(root, 'isl-hide-scratch'), () => {});
+  const islHideCheck = runCheck(islHideRigOut, islHideCheckOut, runner, islHideDisk.parts, DEFAULT_PACK_MODE, undefined, undefined, false, true, 'no_cloth');
+  const hideStill = readFrameSet(join(islHideCheckOut, STILL_DIR, 'no_cloth'));
+  const hideImg = hideStill.frames[0].image;
+  const hideBg = hideStill.background;
+  let hiddenIslandsClean = true;
+  for (let y = 10; y < 18; y++) {
+    for (const x of [10, 11, 12, 13, 22, 23, 24, 25]) {
+      const p = (y * hideImg.width + x) * 4;
+      if (hideImg.data[p] !== hideBg[0] || hideImg.data[p + 1] !== hideBg[1] || hideImg.data[p + 2] !== hideBg[2]) {
+        hiddenIslandsClean = false;
+      }
+    }
+  }
+  const baseHideStill = readFrameSet(join(islHideCheckOut, STILL_DIR));
+  const hideRef = flatCompositeForSet(islHideFix.parts, altNoCloth, join(islHideDisk.parts, 'parts'), baseHideStill.background, islHideSlotOrder);
+  const plantedHideSeam = seamFigures(hideRef, baseHideStill.frames[0].image, islHideBuilt.rig.skeleton, baseHideStill.viewport, baseHideStill.background);
+  const islRep = islBuilt.meshReport[0];
+  check(
+    'GX25_EXPLICIT_TWO_ISLAND_ROUND_TRIP_AND_SLOT_ORDER',
+    order(islBuilt.rig) === '["cloth","cloth__island2","eye"]' &&
+      order(islBeforeBuilt.rig) === '["cloth","mid","cloth__island2","eye"]' &&
+      rigJsonText(buildRig(islCfg, islFix.parts, islFix.images).rig) === rigJsonText(islBuilt.rig) &&
+      rigJsonText(islRebuilt.rig) === rigJsonText(islBuilt.rig) &&
+      rigJsonText(singleOnTwoBuilt.rig) === rigJsonText(genTwoIsl.rig) &&
+      readFileSync(join(islRigOut, 'rig.json'), 'utf8') === rigJsonText(islBuilt.rig) &&
+      composedIsl2.path === 'ch.cloth' &&
+      composedIsl2.image === 'ch.cloth.png' &&
+      composeGate.every(g => g.status === 0) &&
+      !islBeforeCheck.problems.some(p => p.code === 'CHECK_SEAM_WITHIN_BAR') &&
+      islBeforeCheck.figures.seam_px_over_40 === 0 &&
+      (islBeforeCheck.figures.seam_mean ?? 99) <= SEAM_MEAN_BAR &&
+      plantedOrderSeam.over40 === 32 &&
+      plantedOrderSeam.mean > SEAM_MEAN_BAR &&
+      JSON.stringify(islHideBuilt.sets?.sets.no_cloth.hides) === '["cloth","cloth__island2"]' &&
+      islHideStillSlots.find(s => s.name === 'cloth')?.attachment === null &&
+      islHideStillSlots.find(s => s.name === 'cloth__island2')?.attachment === null &&
+      JSON.stringify(setPlacements(islHideFix.parts, altNoCloth, islHideSlotOrder).map(p => p.name)) === '["eye"]' &&
+      !islHideCheck.problems.some(p => p.code === 'CHECK_SEAM_WITHIN_BAR') &&
+      islHideCheck.figures.sets?.no_cloth.PASS === true &&
+      islHideCheck.figures.sets?.no_cloth.seam_px_over_40 === 0 &&
+      hiddenIslandsClean &&
+      plantedHideSeam.over40 === 64 &&
+      (plantedHideSeam.over40 > SEAM_PX_BAR || plantedHideSeam.mean > SEAM_MEAN_BAR) &&
+      islBuilt.rig.slots[0].bone === 'body' &&
+      islBuilt.rig.slots[1].bone === 'eye' &&
+      att1.path === undefined &&
+      att1.image === 'cloth.png' &&
+      att2.path === 'cloth' &&
+      att2.image === 'cloth.png' &&
+      JSON.stringify(att1.weights) === JSON.stringify(islFix.mesh.explicit.islands[0].weights) &&
+      JSON.stringify(att2.weights) === JSON.stringify(islFix.mesh.explicit.islands[1].weights) &&
+      islRep.vertices === 8 &&
+      islRep.triangles === 4 &&
+      islRep.hull === 8 &&
+      JSON.stringify(islRep.bones) === '["body","eye"]' &&
+      islRep.art_coverage === 1 &&
+      JSON.stringify(partBoundBones(islCfg).get('cloth')) === '["body","eye"]',
+    `${order(islBuilt.rig)} -> ${order(islBeforeBuilt.rig)}; beforeSeamOver40=${islBeforeCheck.figures.seam_px_over_40} (planted=${plantedOrderSeam.over40}); hideSet=${JSON.stringify(islHideBuilt.sets?.sets.no_cloth.hides)} (planted=${plantedHideSeam.over40})`,
+  );
+  const threeIslandCloth = block(16, 8);
+  for (let y = 0; y < 8; y++) {
+    for (const x of [4, 5, 10, 11]) threeIslandCloth.data.set([0, 0, 0, 0], (y * 16 + x) * 4);
+  }
+  const threeIslandsImages = islandImages();
+  threeIslandsImages.set('cloth', threeIslandCloth);
+  const twoOnThreeIslands = explicitIslandsFixture();
+  twoOnThreeIslands.mesh.explicit.image_sha256 = explicitImageHash(threeIslandCloth);
+  const missingIslErr = refused(() => buildRig(parseConfig(twoOnThreeIslands.config), twoOnThreeIslands.parts, threeIslandsImages));
+  const twoOnOneIsland = explicitIslandsFixture();
+  twoOnOneIsland.mesh.explicit.image_sha256 = explicitImageHash(images.get('cloth')!);
+  const extraIslErr = refused(() => buildRig(parseConfig(twoOnOneIsland.config), parts, images));
+  const wrongSlot = explicitIslandsFixture();
+  wrongSlot.mesh.explicit.islands[1].slot = 'cloth_piece2';
+  const wrongSlotErr = refused(() => parseConfig(wrongSlot.config));
+  const bothMode = explicitIslandsFixture();
+  (bothMode.mesh.explicit as Record<string, unknown>).uvs = [0, 0, 0, 1, 1, 1, 1, 0];
+  const bothModeErr = refused(() => parseConfig(bothMode.config));
+  const oneEntry = explicitIslandsFixture();
+  oneEntry.mesh.explicit.islands = [oneEntry.mesh.explicit.islands[0]];
+  const oneEntryErr = refused(() => parseConfig(oneEntry.config));
+  const beforeOnFirst = explicitIslandsFixture();
+  beforeOnFirst.mesh.explicit.islands[0].before = 'eye';
+  const beforeOnFirstErr = refused(() => parseConfig(beforeOnFirst.config));
+  const unknownIslBone = explicitIslandsFixture();
+  unknownIslBone.mesh.segments = ['body'];
+  for (const row of unknownIslBone.mesh.explicit.islands[1].weights) for (const w of row) w.bone = 'body';
+  unknownIslBone.mesh.explicit.islands[1].bone = 'absent';
+  const unknownIslBoneErr = refused(() => parseConfig(unknownIslBone.config));
+  const undeclaredIslBone = explicitIslandsFixture();
+  undeclaredIslBone.mesh.segments = ['body'];
+  for (const row of undeclaredIslBone.mesh.explicit.islands[1].weights) for (const w of row) w.bone = 'body';
+  undeclaredIslBone.mesh.explicit.islands[1].bone = 'eye';
+  const undeclaredIslBoneErr = refused(() => parseConfig(undeclaredIslBone.config));
+  const badBeforeTarget = explicitIslandsFixture();
+  badBeforeTarget.mesh.explicit.islands[1].before = 'absent_part';
+  const badBeforeErr = refused(() => buildRig(parseConfig(badBeforeTarget.config), badBeforeTarget.parts, badBeforeTarget.images));
+  const stoppedIsl2 = explicitIslandsFixture();
+  stoppedIsl2.mesh.segments = ['body', 'hem1'];
+  stoppedIsl2.mesh.explicit.islands[1].bone = 'hem1';
+  for (const row of stoppedIsl2.mesh.explicit.islands[1].weights) for (const w of row) w.bone = 'hem1';
+  stoppedIsl2.config.stops = [{ chain: 'hem', against: 'body', at: [0, 0], inward: -45, outward: 45, lower: { inward: -45, outward: 45 } }];
+  const stoppedIsl2Err = refused(() => buildRig(parseConfig(stoppedIsl2.config), stoppedIsl2.parts, stoppedIsl2.images));
+  const turnedIsl2 = explicitIslandsFixture();
+  turnedIsl2.config.turn = { pivot: 0.5, depths: { cloth: 0.2, eye: 0.199 } };
+  const turnedIsl2Err = refused(() => buildRig(parseConfig(turnedIsl2.config), turnedIsl2.parts, turnedIsl2.images));
+  check(
+    'GX26_EXPLICIT_ISLAND_COUNT_AND_SLOT_NAME_REFUSALS',
+    missingIslErr?.problems.some(p => p.code === 'RIG_EXPLICIT_ISLAND_COUNT' && p.detail.includes('missing "cloth__island3"')) === true &&
+      extraIslErr?.problems.some(p => p.code === 'RIG_EXPLICIT_ISLAND_COUNT' && p.detail.includes('extra "cloth__island2"')) === true &&
+      wrongSlotErr?.problems.some(p => p.code === 'CONFIG_EXPLICIT_ISLAND_SLOT' && p.object === 'config.meshes.cloth.explicit.islands[1].slot') === true &&
+      bothModeErr?.problems.some(p => p.code === 'CONFIG_EXPLICIT_ISLANDS' && p.object === 'config.meshes.cloth.explicit.uvs') === true &&
+      oneEntryErr?.problems.some(p => p.code === 'CONFIG_EXPLICIT_ISLANDS' && p.object === 'config.meshes.cloth.explicit.islands') === true &&
+      beforeOnFirstErr?.problems.some(p => p.code === 'CONFIG_EXPLICIT_ISLANDS' && p.object === 'config.meshes.cloth.explicit.islands[0].before') === true &&
+      unknownIslBoneErr?.problems.some(p => p.code === 'CONFIG_NAME_RESOLVES' && p.object === 'config.meshes.cloth.explicit.islands[1].bone') === true &&
+      undeclaredIslBoneErr?.problems.some(p => p.code === 'CONFIG_NAME_RESOLVES' && p.object === 'config.meshes.cloth.explicit.islands[1].bone') === true &&
+      badBeforeErr?.problems.some(p => p.code === 'RIG_NAME_RESOLVES' && p.object === 'config.meshes.cloth.explicit.islands[1].before') === true &&
+      stoppedIsl2Err?.problems.some(p => p.code === 'RIG_EXPLICIT_BINDING' && p.object === 'config.meshes.cloth.explicit.islands[1].weights') === true &&
+      turnedIsl2Err?.problems.some(p => p.code === 'RIG_EXPLICIT_BINDING' && p.object === 'config.meshes.cloth.explicit.islands[1].weights') === true,
+    `${codes(missingIslErr)}; ${codes(extraIslErr)}; ${codes(wrongSlotErr)}; ${codes(bothModeErr)}; ${codes(oneEntryErr)}; ${codes(beforeOnFirstErr)}; ${codes(unknownIslBoneErr)}; ${codes(undeclaredIslBoneErr)}; ${codes(badBeforeErr)}; ${codes(stoppedIsl2Err)}; ${codes(turnedIsl2Err)}`,
+  );
   return failed;
 }
 

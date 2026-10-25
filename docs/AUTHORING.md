@@ -1046,6 +1046,21 @@ influence counts and art coverage and records the verified guards. It does not
 carry an earlier generator's report. Consumer provenance, formatting and files
 written by other tools are not reproduced by declaring a mesh payload.
 
+When an accepted rig splits one part across island slots (`<part>` and
+`<part>__island2`, `<part>__island3`, …; issue #734), state `explicit.islands`
+(at least two entries) in place of top-level `uvs`, `triangles`, `hull` and
+`weights` (`CONFIG_EXPLICIT_ISLANDS`). Entry `i` (`0`-based) carries `slot`
+(`"<part>"` at `i = 0`, `"<part>__island<i+1>"` at `i >= 1`;
+`CONFIG_EXPLICIT_ISLAND_SLOT`), optional `bone` (defaulting to `segments[0]`;
+must be declared in `segments`), optional `before` on `i >= 1` (the base part
+slot in `rig.json` to splice `<part>__island<i+1>` immediately before; when
+omitted, `<part>__island<i+1>` sits immediately after the part's previous
+island slot), and that island's `uvs`, `triangles`, `hull` and `weights`. On
+`<part>__island2` and later, `rig` writes `"path": "<part>"` alongside
+`"image": "<part>.png"` so the slot name and atlas region stay distinct, and
+refuses when the declared island count disagrees with the non-dust 4-connected
+art islands in `parts/<part>.png` (`RIG_EXPLICIT_ISLAND_COUNT`).
+
 ### The weight cut (`meshes.<part>.influences`, issue #284)
 
 This section and the mesh sections after it are for parts with no joints; a limb is cut at
@@ -1740,6 +1755,8 @@ exactly a value rig-c accepts, a field the mode does not have (`CONFIG_FIELD_PRE
 | <a id="CONFIG_EXPLICIT_MODE"></a>`CONFIG_EXPLICIT_MODE` | a generator field beside `explicit`; remove it to transfer the accepted payload without generation |
 | <a id="CONFIG_EXPLICIT_HASH"></a>`CONFIG_EXPLICIT_HASH` | an explicit image or region guard is not 64 lowercase hexadecimal SHA-256 digits; derive both from the immutable accepted input as stated in §3 |
 | <a id="CONFIG_EXPLICIT_SHAPE"></a>`CONFIG_EXPLICIT_SHAPE` | unpaired UVs, non-triple or out-of-range triangle indices, a hull past the vertex count or a weights row count unlike the vertices; transfer the whole accepted payload together |
+| <a id="CONFIG_EXPLICIT_ISLANDS"></a>`CONFIG_EXPLICIT_ISLANDS` | `explicit.islands` declared beside top-level `uvs`, `triangles`, `hull` or `weights`, or with fewer than 2 entries, or `before` declared on island 1 (`<part>`); state either a single-slot payload or at least two `islands` entries |
+| <a id="CONFIG_EXPLICIT_ISLAND_SLOT"></a>`CONFIG_EXPLICIT_ISLAND_SLOT` | `explicit.islands[i].slot` is not `"<part>"` for `i = 0` or `"<part>__island<i+1>"` for `i >= 1` |
 | <a id="CONFIG_MESH_MODE"></a>`CONFIG_MESH_MODE` | two of `grid`, `contour`, `auto`, `influence` and `explicit`, or no mode at all |
 | <a id="CONFIG_REGION_NAME_UNIQUE"></a>`CONFIG_REGION_NAME_UNIQUE` | a region named twice in one mesh's `regions` (or `bust_r` / `bust_l` declared in `contour.regions` alongside `contour.bust`) — every one named in one run |
 | <a id="CONFIG_REGION_BAND_NEEDS_BONE"></a><a id="CONFIG_REGION_BONE_NEEDS_BAND"></a>`CONFIG_REGION_BAND_NEEDS_BONE`, `CONFIG_REGION_BONE_NEEDS_BAND` | a region with a `band` and no `bone`, or a `bone` and no `band`: write both for a region that weights its bone, neither for a density-only region (issue #155) |
@@ -3827,6 +3844,7 @@ says why each requirement exists and what breaks without it.
 | <a id="RIG_EXPLICIT_BINDING"></a>`RIG_EXPLICIT_BINDING` | the declared stops or turn would change the accepted payload's bindings | transfer the accepted final emitted bone names and local coordinates, or use a generated mesh; no normalization is applied |
 | <a id="RIG_EXPLICIT_IMAGE_HASH"></a>`RIG_EXPLICIT_IMAGE_HASH` | the decoded part RGBA differs from `explicit.image_sha256`; both digests are named | restore the accepted image or transfer its matching accepted payload and guard; nothing is written |
 | <a id="RIG_EXPLICIT_REGION_HASH"></a>`RIG_EXPLICIT_REGION_HASH` | the canvas or placed part rectangle differs from `explicit.region_sha256`; both digests are named | restore the accepted region or transfer a payload bound to this placement; nothing is written |
+| <a id="RIG_EXPLICIT_ISLAND_COUNT"></a>`RIG_EXPLICIT_ISLAND_COUNT` | `explicit.islands.length` differs from the non-dust 4-connected art island count of `parts/<part>.png`; the missing or extra `<part>__island<N>` slot names and island pixel counts are named | supply one `explicit.islands` entry per non-dust art island (`<part>`, `<part>__island2`, …); nothing is written |
 | <a id="RIG_EXPLICIT_ALTERNATE"></a>`RIG_EXPLICIT_ALTERNATE` | an alternate set replaces a part bound to one accepted explicit payload | use a generated mesh for alternate artwork; no alternate is inferred from a base payload |
 | <a id="RIG_INFLUENCE_REACH"></a>`RIG_INFLUENCE_REACH` | an influence mesh's `radius` is at or under the distance from its farthest lattice vertex to that vertex's nearest link (issue #378): a link pulls only when it is nearer than `radius`, so that vertex would be pulled by none. The vertex, where it is and the distance are named | a `radius` above the distance named, or a segment nearer that part of the art |
 | <a id="RIG_INFLUENCE_LATTICE"></a>`RIG_INFLUENCE_LATTICE` | rig-c's segments lattice refused the part at the declared `cell` (no pixel of the part holds art, or the cell is not a whole number of at least 1); rig-c's message is quoted | a part with art, or a whole `cell` of at least 1 |

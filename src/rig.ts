@@ -1,4 +1,4 @@
-import { explicitBoneNames, regionBone } from './config.ts';
+import { explicitBoneNames, explicitSlotBones, explicitWeightRows, regionBone } from './config.ts';
 import { explicitAttachment, type ExplicitMeshReport } from './explicitmesh.ts';
 /**
  * The rig stage: a character config and its assembled parts in, a rig spec
@@ -492,6 +492,7 @@ export interface WeightEntry {
 
 export interface MeshAttachment {
   type: 'mesh';
+  path?: string;
   image: string;
   width: number;
   height: number;
@@ -679,6 +680,7 @@ function applyTurn(
   skin: RigSpec['skins']['default'],
   constraints: readonly ConfigConstraint[],
   frontSlots: ReadonlySet<string> = new Set(),
+  slotFamilies: ReadonlyMap<string, readonly string[]> = new Map(),
 ): { constraints: Array<Record<string, unknown>>; detached: DetachedRule[]; rows: TurnRow[] } {
   const problems: Problem[] = [];
   const taken = new Set(bones.map((b) => b.name));
@@ -689,8 +691,9 @@ function applyTurn(
     const row: TurnRow = { ...f, twins: [] };
     rows.push(row);
     if (f.fraction === 0) continue;
+    const family = new Set(slotFamilies.get(f.part) ?? [f.part]);
     // A declared front slot (issue #664) rides its part; a part merely named `<part>_front` is a part of its own.
-    const mine = slots.filter((sl) => sl.name === f.part || sl.name === `${f.part}${STILL_SUFFIX}` || (sl.name === `${f.part}${FRONT_SUFFIX}` && frontSlots.has(sl.name)));
+    const mine = slots.filter((sl) => family.has(sl.name) || sl.name === `${f.part}${STILL_SUFFIX}` || (sl.name === `${f.part}${FRONT_SUFFIX}` && frontSlots.has(sl.name)));
     const bound: string[] = [];
     const bind = (b: string): void => {
       if (!bound.includes(b)) bound.push(b);
@@ -714,10 +717,11 @@ function applyTurn(
   const detached: DetachedRule[] = [];
   for (const row of rows) {
     if (row.twins.length === 0) continue;
+    const family = new Set(slotFamilies.get(row.part) ?? [row.part]);
     const twinOf = new Map(row.twins.map((t) => [t.bone, t.twin]));
     for (const t of row.twins) bones.push({ name: t.twin, parent: t.bone, x: 0, y: 0 });
     for (const sl of slots) {
-      if (sl.name !== row.part && sl.name !== `${row.part}${STILL_SUFFIX}` && !(sl.name === `${row.part}${FRONT_SUFFIX}` && frontSlots.has(sl.name))) continue;
+      if (!family.has(sl.name) && sl.name !== `${row.part}${STILL_SUFFIX}` && !(sl.name === `${row.part}${FRONT_SUFFIX}` && frontSlots.has(sl.name))) continue;
       sl.bone = twinOf.get(sl.bone) as string;
       const atts = skin[sl.name] ?? {};
       for (const [k, att] of Object.entries(atts)) {
@@ -1381,7 +1385,7 @@ export function buildRig(
   const explicitNames = explicitBoneNames(new Set(B.keys()), new Map([...chains].map(([k, v]) => [k, v.length])), cfg.stops);
   for (const [part, m] of Object.entries(cfg.meshes)) {
     if ('explicit' in m) {
-      for (const bone of [...m.segments.map(s => typeof s === 'string' ? s : s[0]), ...m.explicit.weights.flatMap(row => row.map(w => w.bone))]) {
+      for (const bone of [...m.segments.map(s => typeof s === 'string' ? s : s[0]), ...explicitSlotBones(m), ...explicitWeightRows(m).flatMap(row => row.map(w => w.bone))]) {
         if (!explicitNames.has(bone)) fail('RIG_NAME_RESOLVES', `config.meshes.${part}.explicit`, `names the bone "${bone}", which config.bones does not declare`);
       }
       continue;
@@ -1520,7 +1524,7 @@ export function buildRig(
   // to its control under `ctl` as theirs do. A config with no contour region adds nothing here.
   for (const m of Object.values(cfg.meshes)) if ('contour' in m) for (const rg of contourRegionsOf(m.contour)) meshBones.add(rg.bone);
   for (const m of Object.values(cfg.meshes)) if ('auto' in m) for (const rg of m.auto.regions ?? []) if (weightsABone(rg)) meshBones.add(rg.bone);
-  for (const m of Object.values(cfg.meshes)) if ('explicit' in m) for (const row of m.explicit.weights) for (const w of row) meshBones.add(w.bone);
+  for (const m of Object.values(cfg.meshes)) if ('explicit' in m) for (const row of explicitWeightRows(m)) for (const w of row) meshBones.add(w.bone);
   // Accepted final bindings may already name a stop's drawn link. Its source link still needs the idle control.
   for (const stop of cfg.stops ?? []) for (const link of stop.links ?? chains.get(stop.chain) ?? []) {
     if (meshBones.has(`${link}_d`)) meshBones.add(link);
@@ -1777,6 +1781,7 @@ export function buildRig(
   // ---- attachments -------------------------------------------------------
   const slots: RigSpec['slots'] = [];
   const slotFamilies = new Map<string, string[]>();
+  const pendingIslandSlots: Array<{ part: string; index: number; prevSlot: string; before?: string; row: RigSpec['slots'][number] }> = [];
   const addSlots = (part: string, ...rows: RigSpec['slots']): void => {
     slots.push(...rows);
     slotFamilies.set(part, [...(slotFamilies.get(part) ?? []), ...rows.map((s) => s.name)]);
@@ -2318,8 +2323,19 @@ export function buildRig(
     if ('explicit' in mesh) {
       const row = explicitAttachment(p, images.get(p.name) as Raster, parts.rig_size, mesh);
       if (Array.isArray(row)) { problems.push(...row); continue; }
-      skin[p.name] = { [p.name]: row.attachment };
-      addSlots(p.name, { name: p.name, bone: mesh.segments[0] as string, attachment: p.name });
+      for (const isl of row.islandSlots) skin[isl.slot] = { [isl.slot]: isl.attachment };
+      const first = row.islandSlots[0];
+      addSlots(p.name, { name: first.slot, bone: first.bone, attachment: first.slot });
+      for (let i = 1; i < row.islandSlots.length; i++) {
+        const isl = row.islandSlots[i];
+        pendingIslandSlots.push({
+          part: p.name,
+          index: i,
+          prevSlot: row.islandSlots[i - 1].slot,
+          before: isl.before,
+          row: { name: isl.slot, bone: isl.bone, attachment: isl.slot },
+        });
+      }
       meshReport.push(row.report);
       continue;
     }
@@ -2442,6 +2458,25 @@ export function buildRig(
       ...(heat === null ? {} : { heat: heatRow(heat) }),
     });
   }
+  const basePartNames = new Set(parts.parts.map((p) => p.name));
+  for (const item of pendingIslandSlots) {
+    if (item.before !== undefined) {
+      if (item.before === item.part || !basePartNames.has(item.before)) {
+        fail(
+          'RIG_NAME_RESOLVES',
+          `config.meshes.${item.part}.explicit.islands[${item.index}].before`,
+          `names "${item.before}", which is ${item.before === item.part ? `the part "${item.part}" itself` : 'not a part slot in the rig'}; name another part slot in the rig`,
+        );
+        continue;
+      }
+      const targetIdx = slots.findIndex((s) => s.name === item.before);
+      slots.splice(targetIdx, 0, item.row);
+    } else {
+      const prevIdx = slots.findIndex((s) => s.name === item.prevSlot);
+      slots.splice(prevIdx + 1, 0, item.row);
+    }
+    slotFamilies.set(item.part, [...(slotFamilies.get(item.part) ?? []), item.row.name]);
+  }
   refuseIfAny(problems);
   // ---- front slots (issue #664) ------------------------------------------
   // Only when a limb declares `front`: each named segment part gets `<part>_front` on its base slot's bone, showing
@@ -2503,7 +2538,10 @@ export function buildRig(
           for (const s of meshSegments.get(pName) ?? []) coveredBones.add(s.bone);
           const m = cfg.meshes[pName];
           if (m !== undefined) {
-            if ('explicit' in m) for (const row of m.explicit.weights) for (const w of row) coveredBones.add(w.bone);
+            if ('explicit' in m) {
+              if (m.explicit.islands !== undefined) for (const bName of explicitSlotBones(m)) coveredBones.add(bName);
+              for (const row of explicitWeightRows(m)) for (const w of row) coveredBones.add(w.bone);
+            }
             if ('contour' in m) for (const rg of contourRegionsOf(m.contour)) coveredBones.add(rg.bone);
             if ('auto' in m) for (const rg of m.auto.regions ?? []) if (weightsABone(rg)) coveredBones.add(rg.bone);
           }
@@ -2691,7 +2729,9 @@ export function buildRig(
       for (const [slotName, att] of Object.entries(alt.slots)) slotMap[slotName] = att;
       const hideList: string[] = [];
       for (const h of alt.hides ?? []) {
-        if (!hideList.includes(h)) hideList.push(h);
+        for (const member of slotFamilies.get(h) ?? [h]) {
+          if (!hideList.includes(member)) hideList.push(member);
+        }
         if (stills[h] !== undefined && !hideList.includes(`${h}${STILL_SUFFIX}`)) hideList.push(`${h}${STILL_SUFFIX}`);
       }
       for (const slotName of Object.keys(alt.slots)) {
@@ -2737,18 +2777,45 @@ export function buildRig(
   // ---- the turn control (issue #251) -------------------------------------
   // Only when the config has `turn`: every other build adds nothing here, so no byte moves.
   if (cfg.turn !== undefined) refuseIfAny(turnRiderProblems(cfg.turn, cfg, parts.parts));
-  const turned = cfg.turn === undefined ? null : applyTurn(cfg.turn, parts.parts.map((p) => p.name), bones, rebound, skin, cfg.constraints ?? [], declaredFront);
+  const turned = cfg.turn === undefined ? null : applyTurn(cfg.turn, parts.parts.map((p) => p.name), bones, rebound, skin, cfg.constraints ?? [], declaredFront, slotFamilies);
   for (const row of turned?.rows ?? []) for (const t of row.twins) layoutAlias(explicitLayout.plan, t.bone, t.twin);
   // issue #536: every row names the bones the emitted attachment binds, read once the turn and the stops have
   // rebound the weights; a rig with neither rebinds nothing, so this reads back the names each row already holds.
   for (const row of meshReport) {
+    const m = cfg.meshes[row.part];
+    if (m !== undefined && 'explicit' in m && m.explicit.islands !== undefined) {
+      const bound = new Set<string>();
+      for (const isl of m.explicit.islands) {
+        const att = skin[isl.slot]?.[isl.slot];
+        if (att !== undefined && 'type' in att) for (const b of meshBoundBones(att)) bound.add(b);
+      }
+      row.bones = [...bound].sort();
+      continue;
+    }
     const att = skin[row.part]?.[row.part];
     if (att !== undefined && 'type' in att) row.bones = meshBoundBones(att);
   }
 
   for (const [part, mesh] of Object.entries(cfg.meshes)) if ('explicit' in mesh) {
+    const defaultBone = typeof mesh.segments[0] === 'string' ? mesh.segments[0] : mesh.segments[0][0];
+    if (mesh.explicit.islands !== undefined) {
+      mesh.explicit.islands.forEach((isl, i) => {
+        const att = skin[isl.slot]?.[isl.slot];
+        const slotEntry = slots.find((s) => s.name === isl.slot);
+        const expectedBone = isl.bone ?? defaultBone;
+        const weightsChanged =
+          att !== undefined &&
+          'type' in att &&
+          JSON.stringify(att.weights) !== JSON.stringify(isl.weights.map(row => row.map(w => ({ bone: w.bone, x: w.x, y: w.y, weight: w.weight }))));
+        const boneChanged = slotEntry !== undefined && slotEntry.bone !== expectedBone;
+        if (weightsChanged || boneChanged) {
+          fail('RIG_EXPLICIT_BINDING', `config.meshes.${part}.explicit.islands[${i}].weights`, 'the declared stops or turn would change these accepted bindings; supply the accepted final emitted bone names and bind coordinates, or use a generated mesh; no payload is normalized');
+        }
+      });
+      continue;
+    }
     const att = skin[part]?.[part];
-    if (att !== undefined && 'type' in att && JSON.stringify(att.weights) !== JSON.stringify(mesh.explicit.weights.map(row => row.map(w => ({ bone: w.bone, x: w.x, y: w.y, weight: w.weight }))))) {
+    if (att !== undefined && 'type' in att && JSON.stringify(att.weights) !== JSON.stringify((mesh.explicit.weights ?? []).map(row => row.map(w => ({ bone: w.bone, x: w.x, y: w.y, weight: w.weight }))))) {
       fail('RIG_EXPLICIT_BINDING', `config.meshes.${part}.explicit.weights`, 'the declared stops or turn would change these accepted bindings; supply the accepted final emitted bone names and bind coordinates, or use a generated mesh; no payload is normalized');
     }
   }

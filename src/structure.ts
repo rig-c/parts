@@ -1,4 +1,4 @@
-import { regionBone } from './config.ts';
+import { explicitWeightRows, regionBone } from './config.ts';
 /**
  * A structural comparison of two skeletons (issue #85).
  *
@@ -180,7 +180,7 @@ export function configRoles(s: SkeletonSections & { constraints?: readonly Confi
   const bound = new Map<string, string[]>();
   for (const [part, m] of Object.entries(s.meshes)) {
     if ('explicit' in m) {
-      for (const row of m.explicit.weights) for (const w of row) push(bound, w.bone, `meshes.${part}.explicit.weights`);
+      for (const row of explicitWeightRows(m)) for (const w of row) push(bound, w.bone, `meshes.${part}.explicit.weights`);
       continue;
     }
     m.segments.forEach((sp, i) => {
