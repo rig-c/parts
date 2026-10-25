@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.64.0](https://github.com/rig-c/parts/compare/v1.63.0...v1.64.0) (2026-10-25)
+
+
+### Features
+
+* **release:** gate a cut on the parts output loading in the current @rig-c/play ([#743](https://github.com/rig-c/parts/issues/743)) ([4bfd3c5](https://github.com/rig-c/parts/commit/4bfd3c53cc49c92cc7928ea943b1a7ee72283808))
+
+
+### Bug Fixes
+
+* **explicit:** let meshes.&lt;part&gt;.explicit compose with turn.depths ([#742](https://github.com/rig-c/parts/issues/742)) ([5a43dff](https://github.com/rig-c/parts/commit/5a43dff338ec6de3bb7b4fab446070414e4a949c)), closes [#740](https://github.com/rig-c/parts/issues/740)
+
 ## [1.63.0](https://github.com/rig-c/parts/compare/v1.62.0...v1.63.0) (2026-10-25)
 
 
