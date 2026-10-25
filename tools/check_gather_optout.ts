@@ -148,10 +148,21 @@ export function runGatherOptOutChecks(dir: string, say: Say, runner: RigcRunner,
     const alternate = buildRig(opted, alt, altImages);
     say(`${label}_ALTERNATE_ATTACHMENTS_RETAINED`, equal(alternate.rig.slots.map((s) => s.name), parts.parts.map((p) => p.name)) && Object.hasOwn(alternate.rig.skins.default.shawl_r, 'alternate_shawl_r'), 'all alternate bindings are still classified; attachment and set mapping preserved');
     const shared = structuredClone(opted); shared.limbs!.arm_r.layout = { parts: ['forearm_r'], after: { part: 'torso' } }; shared.limbs!.arm_l.layout = { parts: ['forearm_l'], after: { part: 'torso' } };
-    say(`${label}_SHARED_TARGET_STILL_REFUSED`, refusal(() => buildRig(shared, parts, images)).includes('RIG_LAYOUT_CONFLICT'), '#657 remains separate; gather does not change placement conflict rules');
+    const sharedBuilt = buildRig(shared, parts, images), sharedOrder = sharedBuilt.rig.slots.map((s) => s.name);
+    say(
+      `${label}_SHARED_TARGET_PRESERVES_OPT_OUT`,
+      sharedBuilt.layout !== undefined &&
+        !sharedBuilt.layout.placements.some((p) => p.slots.includes('shawl_r')) &&
+        sharedOrder.at(-1) === 'shawl_r' &&
+        sharedOrder.indexOf('torso') + 1 === sharedOrder.indexOf('forearm_r') &&
+        sharedOrder.indexOf('forearm_r') + 1 === sharedOrder.indexOf('forearm_l'),
+      JSON.stringify(sharedBuilt.layout?.placements),
+    );
+    const chained = structuredClone(opted); chained.limbs!.arm_r.layout = { parts: ['forearm_r'], after: { part: 'torso' } }; chained.limbs!.arm_l.layout = { parts: ['forearm_l'], after: { part: 'forearm_r' } };
+    say(`${label}_CHAINED_TARGET_STILL_REFUSED`, refusal(() => buildRig(chained, parts, images)).includes('RIG_LAYOUT_CONFLICT'), 'gather does not change mover-as-target placement conflict rules');
     // One source arm starts behind the torso; the other is authored in front.
     // Move only the rear forearm in front: both forearms now draw in front of
-    // one torso, with one placement. Two explicit declarations still refuse.
+    // one torso, with one placement.
     const oneHome = join(home, 'single-placement'), onePath = writeGatherFixture(oneHome, region);
     const one = structuredClone(base);
     ((one.assemble as Json).plan as unknown[][]).splice(0, 2, ['source_r', 'full', 'handwear-r'], ['torso', 'full', 'topwear']);

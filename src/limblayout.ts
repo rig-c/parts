@@ -55,11 +55,12 @@ function bindings(slot: RigSpec['slots'][number], skin: RigSpec['skins']['defaul
 function bindingDetail(slots: RigSpec['slots'], skin: RigSpec['skins']['default'], sources: LayoutPlan['sources']): string {
   return JSON.stringify(slots.map((s) => ({ slot: s.name, attachments: Object.entries(skin[s.name] ?? {}).map(([attachment, a]) => ({ attachment, bones: ('type' in a ? a.weights.flatMap((v) => v.map((w) => w.bone)) : [s.bone]).map((bone) => ({ bone, sources: sources.get(bone) ?? [] })) })) })));
 }
-function owned(slot: RigSpec['slots'][number], skin: RigSpec['skins']['default'], sources: LayoutPlan['sources'], limb: string, parts: readonly string[]): boolean {
+function owned(slot: RigSpec['slots'][number], skin: RigSpec['skins']['default'], sources: LayoutPlan['sources'], limb: string, parts: readonly string[], moving?: ReadonlyMap<string, readonly string[]>): boolean {
   const bs = bindings(slot, skin);
   return bs.length > 0 && bs.every((b) => b.length > 0 && b.every((n) => {
     const s = sources.get(n) ?? [];
-    return s.length === 1 && s[0].limb === limb && parts.includes(s[0].part);
+    if (s.length === 1) return s[0].limb === limb && parts.includes(s[0].part);
+    return moving !== undefined && s.some((x) => x.limb === limb && parts.includes(x.part)) && s.every((x) => moving.get(x.limb)?.includes(x.part) === true);
   }));
 }
 /** A crossing target may be outside every limb, but may not mix owners. */
@@ -86,11 +87,15 @@ export function placeLimbLayouts(limbs: Readonly<Record<string, Limb>> | undefin
   if (limbs === undefined || !Object.values(limbs).some((l) => l.layout !== undefined)) return { slots: base.slots };
   const sources = inheritedSources ?? segmentSources(limbs, bones), problems: Problem[] = [], placements: LayoutPlacement[] = [];
   const names = base.slots.map((s) => s.name);
+  const movingByLimb = new Map<string, string[]>();
+  for (const [limb, l] of Object.entries(limbs)) {
+    if (l.layout !== undefined) movingByLimb.set(limb, l.segments.map((s) => s.part).filter((p) => l.layout?.parts === undefined || l.layout.parts.includes(p)));
+  }
   for (const [limb, l] of Object.entries(limbs)) {
     const d = l.layout;
     if (d === undefined) continue;
-    const at = `config.limbs.${limb}.layout`, parts = l.segments.map((s) => s.part).filter((p) => d.parts === undefined || d.parts.includes(p));
-    const subject = base.slots.filter((s) => !base.ungathered?.includes(s.name) && owned(s, skin, sources, limb, parts));
+    const at = `config.limbs.${limb}.layout`, parts = movingByLimb.get(limb) ?? [];
+    const subject = base.slots.filter((s) => !base.ungathered?.includes(s.name) && owned(s, skin, sources, limb, parts, movingByLimb));
     const authored = d.before ?? d.after as LimbLayoutTarget;
     const target: LimbLayoutTarget = authored.limb === undefined ? { part: authored.part } : { limb: authored.limb };
     let targets: RigSpec['slots'];
@@ -114,14 +119,37 @@ export function placeLimbLayouts(limbs: Readonly<Record<string, Limb>> | undefin
     if (idx.some((v, i) => i > 0 && v !== idx[i - 1] + 1)) problems.push({ code: 'RIG_LAYOUT_UNREPRESENTABLE', object: at, detail: `target slots ${targets.map((s) => s.name).join(', ')} do not form one contiguous block; no unrelated slot is absorbed` });
     placements.push({ limb, parts, ...(d.before === undefined ? { after: target } : { before: target }), slots: subject.map((s) => s.name), target_slots: targets.map((s) => s.name) });
   }
-  const participating = new Map<string, string>();
-  for (const p of placements) for (const n of [...p.slots, ...p.target_slots]) {
-    const at = `config.limbs.${p.limb}.layout`, other = participating.get(n);
-    if (other !== undefined) problems.push({ code: 'RIG_LAYOUT_CONFLICT', object: at, detail: `slot "${n}" also participates in ${other}; self, reciprocal, chained and shared-slot declarations are refused, so declare one disjoint pair` });
-    else participating.set(n, at);
+  const movedBy = new Map<string, string>();
+  const targetedBy = new Map<string, { at: string; targetKey: string; targetSlots: readonly string[] }>();
+  for (const p of placements) {
+    const at = `config.limbs.${p.limb}.layout`, targetKey = p.target_slots.join('\u0000');
+    const localTargets = new Set(p.target_slots);
+    for (const n of p.slots) {
+      const otherMover = movedBy.get(n), otherTarget = targetedBy.get(n);
+      if (localTargets.has(n)) {
+        problems.push({ code: 'RIG_LAYOUT_CONFLICT', object: at, detail: `slot "${n}" is both a moving slot and a target in ${at}; self, reciprocal, chained and mover-as-target declarations are refused — only a stationary target may be shared` });
+      } else if (otherMover !== undefined) {
+        problems.push({ code: 'RIG_LAYOUT_CONFLICT', object: at, detail: `slot "${n}" is a moving slot in both ${otherMover} and ${at}; a slot may move in only one placement — only a stationary target may be shared` });
+      } else if (otherTarget !== undefined) {
+        problems.push({ code: 'RIG_LAYOUT_CONFLICT', object: at, detail: `slot "${n}" is a moving slot in ${at} and a target in ${otherTarget.at}; self, reciprocal, chained and mover-as-target declarations are refused — only a stationary target may be shared` });
+      } else {
+        movedBy.set(n, at);
+      }
+    }
+    for (const n of p.target_slots) {
+      if (localTargets.has(n) && p.slots.includes(n)) continue;
+      const otherMover = movedBy.get(n), otherTarget = targetedBy.get(n);
+      if (otherMover !== undefined) {
+        problems.push({ code: 'RIG_LAYOUT_CONFLICT', object: at, detail: `slot "${n}" is a target in ${at} and a moving slot in ${otherMover}; self, reciprocal, chained and mover-as-target declarations are refused — only a stationary target may be shared` });
+      } else if (otherTarget !== undefined && otherTarget.targetKey !== targetKey) {
+        problems.push({ code: 'RIG_LAYOUT_CONFLICT', object: at, detail: `target slot "${n}" in ${at} ([${p.target_slots.join(', ')}]) partially overlaps ${otherTarget.at} ([${otherTarget.targetSlots.join(', ')}]); shared targets must resolve to the same target slot block` });
+      } else if (otherTarget === undefined) {
+        targetedBy.set(n, { at, targetKey, targetSlots: p.target_slots });
+      }
+    }
   }
   refuseIfAny(problems);
-  placements.sort((a, b) => names.indexOf(a.target_slots[0]) - names.indexOf(b.target_slots[0]));
+  placements.sort((a, b) => names.indexOf(a.target_slots[0]) - names.indexOf(b.target_slots[0]) || names.indexOf(a.slots[0]) - names.indexOf(b.slots[0]));
   const moving = new Set(placements.flatMap((p) => p.slots));
   const result: RigSpec['slots'] = [];
   for (const s of base.slots) {
@@ -157,8 +185,22 @@ export function validateLimbLayout(plan: LayoutPlan, rig: Pick<RigSpec, 'slots' 
     const at = `config.limbs.${p.limb}.layout`, target = p.before ?? p.after as LimbLayoutTarget;
     const read = (ns: readonly string[]) => rig.slots.filter((s) => ns.includes(s.name));
     const ss = read(p.slots), ts = read(p.target_slots);
+    const targetKey = p.target_slots.join('\u0000');
+    const coMovers = plan.placements
+      .filter((q) => (q.before !== undefined) === (p.before !== undefined) && q.target_slots.join('\u0000') === targetKey)
+      .sort((a, b) => plan.originalOrder.indexOf(a.slots[0]) - plan.originalOrder.indexOf(b.slots[0]));
+    const groupSlots = coMovers.flatMap((q) => q.slots);
     const contiguous = (ns: string[]) => ns.length > 0 && ns.every((n, i) => i === 0 || names.indexOf(n) === names.indexOf(ns[i - 1]) + 1);
-    if (ss.length !== p.slots.length || ts.length !== p.target_slots.length || !contiguous(p.slots) || !contiguous(p.target_slots) || (p.before !== undefined ? names.indexOf(p.slots[p.slots.length - 1]) + 1 !== names.indexOf(p.target_slots[0]) : names.indexOf(p.target_slots[p.target_slots.length - 1]) + 1 !== names.indexOf(p.slots[0]))) {
+    if (
+      ss.length !== p.slots.length ||
+      ts.length !== p.target_slots.length ||
+      !contiguous(p.slots) ||
+      !contiguous(p.target_slots) ||
+      !contiguous(groupSlots) ||
+      (p.before !== undefined
+        ? names.indexOf(groupSlots[groupSlots.length - 1]) + 1 !== names.indexOf(p.target_slots[0])
+        : names.indexOf(p.target_slots[p.target_slots.length - 1]) + 1 !== names.indexOf(groupSlots[0]))
+    ) {
       problems.push({ code: 'RIG_LAYOUT_UNREPRESENTABLE', object: at, detail: `accepted setup slots do not preserve the exact declared adjacency: ${JSON.stringify(p)}` });
     }
     if (ss.some((s) => !owned(s, rig.skins.default, plan.sources, p.limb, p.parts)) || !targetSafe(ts, rig.skins.default, plan.sources) || (target.limb !== undefined && ts.some((s) => !owned(s, rig.skins.default, plan.sources, target.limb as string, plan.limbs[target.limb as string].segments.map((s) => s.part))))) {
