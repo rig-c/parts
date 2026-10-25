@@ -157,10 +157,11 @@ function entryEdits(
       V === null
         ? `it holds ${held} where ${draftSays}`
         : `it equals neither the draft, the draft without the recipe, nor the previous recipe's draft: it holds ${held} where ${prev === undefined ? 'the previous recipe\'s draft has no such entry' : `the previous recipe's draft writes ${field === null ? shown(prev) : fieldOf(prev, field)}`} and ${draftSays}`;
+    const kind = section === 'motion.tracks' ? 'track' : section === 'bones' ? 'bone' : 'constraint';
     conflicts.push({
       code: 'PROPOSE_WRITE_CONFIG_CONFLICT',
       object: `config.${section}[${i}] "${k}"`,
-      detail: `${section} entry "${k}" is the recipe's, and it was changed by hand: ${says}, so the write would drop the hand edit; take the draft by removing the hand edit (or the entry), or leave the recipe out for that part (its config.cloth block)`,
+      detail: `${section} entry "${k}" is the recipe's, and it was changed by hand: ${says}, so the write would drop the hand edit; to take the recipe's draft, remove the hand-edited ${kind} "${k}" from config.${section} (or revert the hand edit) and run propose --cloth again, or leave the recipe out for that part (its config.cloth block)`,
     });
   };
   for (const k of [...owned, ...removed]) {
@@ -288,7 +289,7 @@ export function clothConfigEdits(drafted: Proposal, plain: Proposal, input: unkn
     conflicts.push({
       code: 'PROPOSE_WRITE_CONFIG_CONFLICT',
       object: where,
-      detail: `${path.join('.')} is the previous recipe's, the recipe now leaves it to the draft without the recipe, and it was changed by hand: it equals neither the draft nor the previous recipe's draft: it holds ${field === null ? shown(mine) : at(mine, field)} where the previous recipe's draft writes ${c === undefined ? 'no such entry' : field === null ? shown(c) : at(c, field)} and the draft writes ${b === undefined ? 'no such entry' : field === null ? shown(b) : at(b, field)}, so the write would drop the hand edit; take the draft by removing the hand edit (or the entry), or keep the recipe for that part (its config.cloth block)`,
+      detail: `${path.join('.')} is the previous recipe's, the recipe now leaves it to the draft without the recipe, and it was changed by hand: it equals neither the draft nor the previous recipe's draft: it holds ${field === null ? shown(mine) : at(mine, field)} where the previous recipe's draft writes ${c === undefined ? 'no such entry' : field === null ? shown(c) : at(c, field)} and the draft writes ${b === undefined ? 'no such entry' : field === null ? shown(b) : at(b, field)}, so the write would drop the hand edit; to take the draft, remove the hand-edited ${path.join('.')} (or revert the hand edit) and run propose --cloth again, or keep the recipe for that part (its config.cloth block)`,
     });
   };
   const prevKeys = (section: string, have: readonly string[]): string[] => {
