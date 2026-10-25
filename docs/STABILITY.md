@@ -403,14 +403,26 @@ No angle bar or new threshold is added. Missing/mismatched data refuses.
 Without a declaration only optional WARN evidence changes existing check bytes.
 For the declared no-chest control at identical paths, the exact byte projection
 of an existing seam container excludes only its selection, rows, derived status
-and reason. If the baseline JSON omits `SEAM_OVER_MOTION` entirely because it
-selects no pair or root, the new optional container may be excluded only after
-independent audits prove its exact required-key schema (`status`, `fps`, `floor`,
-`pairs`, `animations`, `warnings`, `rows`), `CLEAR` with no `reason`, fps 12, the
-exact source floor and compiled animation roster, zero warnings, the exact
-generated selection, and readable clean rows for every selected pair in every
-animation. All bytes outside that projection stay identical; an existing
-baseline container keeps the narrower field exclusions above.
+and reason. The historical optional-container bar required exactly seven keys,
+`CLEAR` and zero warnings across every animation. Its measured raw exit 1 stays
+red: the added greeting keys only the head, but the original idle also keys the
+chest and reports an above-floor opening at frames 8–12. The source type also
+permits informational `worlds`; neither finding changes the product contract.
+
+[HQ's post-verdict restatement](https://github.com/rig-c/parts/issues/750#issuecomment-6398631279)
+corrects that premise. When the baseline omits `SEAM_OVER_MOTION` entirely, audit
+the new container against the complete `MotionSeamLine` source type, including
+its required and optional fields and referenced types, rather than a hand-kept
+key list. Independently verify fps 12, the exact source floor, compiled animation
+roster, generated selection and every row against the raw readings. All added
+greeting rows must be readable and clean. Any WARN must name an animation that
+actually keys a joint on the pair's carrier ancestry, witnessed by the original
+authored motion, compiled tracks and actual drawing carriers. The original idle
+WARN remains reported with the unchanged floor and exit behavior. Only after
+those audits may lossless removal of the new container establish exact equality
+of every outside byte. An existing baseline container keeps the narrower field
+exclusions above. The original red and the separate post-verdict re-evaluation
+are retained together; no input, animation selector or threshold is changed.
 
 The WARN pose reader also requires the published stock coordinate header and
 the required source bone/parent roster. It binds the complete geometry frame
