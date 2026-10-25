@@ -360,22 +360,53 @@ export type MeshSpec = (LatticeMeshSpec | ContourMeshSpec | AutoMeshSpec | Influ
  * `hold_tip: true` (issue #615, optional, written by `propose --cloth` from the recipe's `split.hold_tip`) smooths the
  * pulled shares by the lattice's held-fork passes, capped at `max`; absent, the shares are rig-c's as pulled.
  */
-/** An accepted mesh transferred without regenerating topology or bone-local bind positions (issue #658). */
+/** One island slot of a multi-island explicit mesh payload (issue #734). */
+export interface ExplicitMeshIslandSpec {
+  slot: string;
+  bone?: string;
+  before?: string;
+  uvs: number[];
+  triangles: number[];
+  hull: number;
+  weights: Array<Array<{ bone: string; x: number; y: number; weight: number }>>;
+}
+
+/** An accepted mesh transferred without regenerating topology or bone-local bind positions (issue #658, #734). */
 export interface ExplicitMeshSpec {
-  /** Direct bone names: the first is the slot bone; all weighted bones must be declared here. No segment geometry is regenerated. */
+  /** Direct bone names: the first is the default slot bone; all weighted and island slot bones must be declared here. No segment geometry is regenerated. */
   segments: Segment[];
   explicit: {
     /** SHA-256 over the unpadded part's decoded RGBA bytes. */
     image_sha256: string;
     /** SHA-256 of JSON.stringify([rig width, rig height, x, y, w, h]). */
     region_sha256: string;
-    /** Normalized UVs over the ordinary PAD-padded rig image, as rig-c reads them. */
-    uvs: number[];
-    triangles: number[];
-    hull: number;
-    /** rig-c by-name weights, in bone-local Spine pixels, copied without rounding. */
-    weights: Array<Array<{ bone: string; x: number; y: number; weight: number }>>;
+    /** Normalized UVs over the ordinary PAD-padded rig image, as rig-c reads them (single-slot payload). */
+    uvs?: number[];
+    triangles?: number[];
+    hull?: number;
+    /** rig-c by-name weights, in bone-local Spine pixels, copied without rounding (single-slot payload). */
+    weights?: Array<Array<{ bone: string; x: number; y: number; weight: number }>>;
+    /** Per-island payloads when a part splits across <part> and <part>__island2..<part>__island<N> (issue #734). */
+    islands?: ExplicitMeshIslandSpec[];
   };
+}
+
+/** Every vertex weight row of an explicit mesh, across either its single-slot payload or its `islands` (issue #734). */
+export function explicitWeightRows(m: ExplicitMeshSpec): Array<Array<{ bone: string; x: number; y: number; weight: number }>> {
+  if (m.explicit.islands !== undefined) return m.explicit.islands.flatMap((isl) => isl.weights);
+  return m.explicit.weights ?? [];
+}
+
+/** Every slot bone an explicit mesh attaches to: `segments[0]` when single-slot, or each island's `bone ?? segments[0]` (issue #734). */
+export function explicitSlotBones(m: ExplicitMeshSpec): string[] {
+  const seg0 = typeof m.segments[0] === 'string' ? m.segments[0] : m.segments[0][0];
+  if (m.explicit.islands === undefined) return [seg0];
+  const out: string[] = [];
+  for (const isl of m.explicit.islands) {
+    const b = isl.bone ?? seg0;
+    if (!out.includes(b)) out.push(b);
+  }
+  return out;
 }
 
 export interface InfluenceMeshSpec {
@@ -764,7 +795,8 @@ export function partBoundBones(b: PartBinding): Map<string, string[]> {
   };
   for (const [part, m] of Object.entries(b.meshes)) {
     if ('explicit' in m) {
-      for (const row of m.explicit.weights) for (const w of row) bind(part, w.bone);
+      for (const row of explicitWeightRows(m)) for (const w of row) bind(part, w.bone);
+      for (const bName of explicitSlotBones(m)) bind(part, bName);
       continue;
     }
     for (const sg of m.segments) {
@@ -2572,7 +2604,7 @@ function checkMeshes(c: Check, v: Json, bones: Set<string>, chains: Map<string, 
     if (m === null) continue;
     checkGather(c, at, m);
     if ('explicit' in m) {
-      checkExplicit(c, at, m, explicitBoneNames(bones, chains, stops));
+      checkExplicit(c, at, m, explicitBoneNames(bones, chains, stops), part);
       continue;
     }
     // issue #378: the influence mode weights by rig-c's own pull, so `r` (the distance rule's softening) is not one of its
@@ -2625,21 +2657,8 @@ function checkMeshes(c: Check, v: Json, bones: Set<string>, chains: Map<string, 
   }
 }
 
-/** The loader checks the payload's shape and names; rig-c's mandatory gate owns mesh validity. */
-function checkExplicit(c: Check, at: string, m: Record<string, Json>, bones: Set<string>): void {
-  for (const k of ['grid', 'r', 'contour', 'auto', 'exponent', 'rule', 'ribs', 'influences', 'stray', 'influence']) {
-    if (k in m) c.fail('CONFIG_EXPLICIT_MODE', `${at}.${k}`, 'is declared beside explicit, which transfers an accepted payload without generation; remove the generator field');
-  }
-  if (!('segments' in m)) c.fail('CONFIG_FIELD_PRESENT', `${at}.segments`, 'is absent and required: direct bone names, first the slot bone');
-  else if (c.array(`${at}.segments`, m.segments, true)) m.segments.forEach((bone, i) => {
-    if (c.string(`${at}.segments[${i}]`, bone) && !bones.has(bone)) c.fail('CONFIG_NAME_RESOLVES', `${at}.segments[${i}]`, `names "${bone}", which is not a bone; explicit segments name bones directly, not chains`);
-  });
-  const where = `${at}.explicit`;
-  const o = c.object(where, m.explicit, ['image_sha256', 'region_sha256', 'uvs', 'triangles', 'hull', 'weights'], []);
-  if (o === null) return;
-  for (const k of ['image_sha256', 'region_sha256']) if (k in o && !(typeof o[k] === 'string' && /^[0-9a-f]{64}$/.test(o[k] as string))) {
-    c.fail('CONFIG_EXPLICIT_HASH', `${where}.${k}`, 'requires exactly 64 lowercase hexadecimal SHA-256 digits; derive it from the accepted part image and region');
-  }
+/** Checks one explicit mesh payload (`uvs`, `triangles`, `hull`, `weights`), either on `explicit` or on `explicit.islands[i]`. */
+function checkExplicitPayload(c: Check, where: string, o: Record<string, Json>, m: Record<string, Json>, bones: Set<string>): void {
   const uvs = Array.isArray(o.uvs) ? o.uvs : [];
   if ('uvs' in o && c.array(`${where}.uvs`, o.uvs, true)) {
     uvs.forEach((v, i) => c.number(`${where}.uvs[${i}]`, v));
@@ -2668,6 +2687,57 @@ function checkExplicit(c: Check, at: string, m: Record<string, Json>, bones: Set
       });
     });
   }
+}
+
+/** The loader checks the payload's shape and names; rig-c's mandatory gate owns mesh validity. */
+function checkExplicit(c: Check, at: string, m: Record<string, Json>, bones: Set<string>, part: string): void {
+  for (const k of ['grid', 'r', 'contour', 'auto', 'exponent', 'rule', 'ribs', 'influences', 'stray', 'influence']) {
+    if (k in m) c.fail('CONFIG_EXPLICIT_MODE', `${at}.${k}`, 'is declared beside explicit, which transfers an accepted payload without generation; remove the generator field');
+  }
+  if (!('segments' in m)) c.fail('CONFIG_FIELD_PRESENT', `${at}.segments`, 'is absent and required: direct bone names, first the slot bone');
+  else if (c.array(`${at}.segments`, m.segments, true)) m.segments.forEach((bone, i) => {
+    if (c.string(`${at}.segments[${i}]`, bone) && !bones.has(bone)) c.fail('CONFIG_NAME_RESOLVES', `${at}.segments[${i}]`, `names "${bone}", which is not a bone; explicit segments name bones directly, not chains`);
+  });
+  const where = `${at}.explicit`;
+  const o = c.object(where, m.explicit, ['image_sha256', 'region_sha256'], ['uvs', 'triangles', 'hull', 'weights', 'islands']);
+  if (o === null) return;
+  for (const k of ['image_sha256', 'region_sha256']) if (k in o && !(typeof o[k] === 'string' && /^[0-9a-f]{64}$/.test(o[k] as string))) {
+    c.fail('CONFIG_EXPLICIT_HASH', `${where}.${k}`, 'requires exactly 64 lowercase hexadecimal SHA-256 digits; derive it from the accepted part image and region');
+  }
+  const singleKeys = ['uvs', 'triangles', 'hull', 'weights'].filter((k) => k in o);
+  if ('islands' in o) {
+    for (const k of singleKeys) {
+      c.fail('CONFIG_EXPLICIT_ISLANDS', `${where}.${k}`, 'is declared beside islands; state either a single-slot payload (uvs, triangles, hull, weights) or islands, not both');
+    }
+    if (!Array.isArray(o.islands)) {
+      c.fail('CONFIG_FIELD_TYPE', `${where}.islands`, `is ${show(o.islands)}; an array of at least 2 island payloads is required`);
+      return;
+    }
+    if (o.islands.length < 2) {
+      c.fail('CONFIG_EXPLICIT_ISLANDS', `${where}.islands`, `has ${o.islands.length} entry; at least 2 islands ("${part}", "${part}__island2", ...) are required — use uvs, triangles, hull, weights directly for a single-slot part`);
+    }
+    o.islands.forEach((entry, i) => {
+      const atIsl = `${where}.islands[${i}]`;
+      const isl = c.object(atIsl, entry, ['slot', 'uvs', 'triangles', 'hull', 'weights'], ['bone', 'before']);
+      if (isl === null) return;
+      const expectedSlot = i === 0 ? part : `${part}__island${i + 1}`;
+      if ('slot' in isl && c.string(`${atIsl}.slot`, isl.slot) && isl.slot !== expectedSlot) {
+        c.fail('CONFIG_EXPLICIT_ISLAND_SLOT', `${atIsl}.slot`, `is "${isl.slot}"; island ${i + 1} of "${part}" must be named "${expectedSlot}"`);
+      }
+      if ('bone' in isl && c.string(`${atIsl}.bone`, isl.bone)) {
+        if (!bones.has(isl.bone)) c.fail('CONFIG_NAME_RESOLVES', `${atIsl}.bone`, `names "${isl.bone}", which is not a bone`);
+        else if (Array.isArray(m.segments) && !m.segments.includes(isl.bone)) c.fail('CONFIG_NAME_RESOLVES', `${atIsl}.bone`, `names "${isl.bone}", which this explicit mesh's segments do not declare`);
+      }
+      if ('before' in isl) {
+        if (i === 0) c.fail('CONFIG_EXPLICIT_ISLANDS', `${atIsl}.before`, `is declared on island 1 ("${part}"), which takes its draw position from assemble.plan; only "${part}__island2" and later may declare before`);
+        else c.string(`${atIsl}.before`, isl.before);
+      }
+      checkExplicitPayload(c, atIsl, isl, m, bones);
+    });
+    return;
+  }
+  for (const k of ['uvs', 'triangles', 'hull', 'weights']) if (!(k in o)) c.fail('CONFIG_FIELD_PRESENT', `${where}.${k}`, 'is absent and required');
+  checkExplicitPayload(c, where, o, m, bones);
 }
 
 /** The fields of the distance rule and of the other modes, which an influence mesh does not read (issue #378). */

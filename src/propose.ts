@@ -1,4 +1,4 @@
-import { regionBone, type RegionSpec } from './config.ts';
+import { explicitWeightRows, regionBone, type RegionSpec } from './config.ts';
 /**
  * The propose stage: bone origins, mesh candidate lists, regions and a default
  * idle, read off the assembled parts — and the overlay a person or an agent
@@ -5428,7 +5428,7 @@ function lintCoverage(
       const partless: string[] = [];
       for (const [mname, m] of Object.entries(spec.meshes)) {
         if ('explicit' in m) {
-          if (m.explicit.weights.some(row => row.some(w => w.bone === bone))) why.push(`bound by meshes.${mname}.explicit.weights: the segment-origin checks do not read an accepted payload`);
+          if (explicitWeightRows(m).some(row => row.some(w => w.bone === bone))) why.push(`bound by meshes.${mname}.explicit.weights: the segment-origin checks do not read an accepted payload`);
           continue;
         }
         m.segments.forEach((sp, i) => {
