@@ -136,6 +136,10 @@ function matrixChecks(say: Say): void {
   const swappedSlots = swappedNames.map((n) => starAfterA.slots.find((s) => s.name === n)!);
   const swappedRefused = refused(() => validateLimbLayout(starAfterA.plan!, { slots: swappedSlots, skins: { default: sAfter.skin } }));
   say('SHARED_TARGET_SWAPPED_MOVER_ORDER_REFUSED', swappedRefused.includes('RIG_LAYOUT_UNREPRESENTABLE'), swappedRefused);
+  const splitGroupNames = ['a0', 'a2', 'upper', 'span', 'panel', 'a1', 'lower', 'mixed', 'b0', 'b1', 'switch'];
+  const splitGroupSlots = splitGroupNames.map((n) => starAfterA.slots.find((s) => s.name === n)!);
+  const splitGroupRefused = refused(() => validateLimbLayout(starAfterA.plan!, { slots: splitGroupSlots, skins: { default: sAfter.skin } }));
+  say('SHARED_TARGET_SPLIT_CO_MOVER_GROUP_REFUSED', splitGroupRefused.includes('RIG_LAYOUT_UNREPRESENTABLE'), splitGroupRefused);
   const mTwice = matrix();
   const dupLimbs: Record<string, Limb> = {
     unit: { ...mTwice.limbs.unit, layout: { parts: ['a1'], after: { part: 'panel' } } },
