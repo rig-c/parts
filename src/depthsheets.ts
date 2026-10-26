@@ -256,6 +256,111 @@ export function padDepthSheet(source: Raster, pad: number): Raster {
   return result;
 }
 
+/**
+ * Extend a part's depth sheet across its transparent and semi-transparent
+ * margin from the nearest opaque texel (`alpha === 255`, falling back to
+ * `alpha > 0` when a part has no fully opaque texel), before `padDepthSheet`
+ * edge-clamps into the `PAD` border.
+ *
+ * A `grid` generator spans the part's rectangular bounding box, so any vertex
+ * outside the opaque silhouette would otherwise sample the monocular estimator's
+ * background cliff and fold the border triangles at small turn angles.
+ *
+ * Exact Euclidean nearest seed, ties broken deterministically by row-major seed
+ * index. Any interior seed whose 8-neighbours are all seeds is strictly farther
+ * from every non-seed texel than its step neighbour toward that texel, so
+ * scanning 8-boundary seeds yields the identical minimum and tie-break as
+ * scanning all seeds.
+ */
+export function extendDepthSilhouette(source: Raster, art: Raster): Raster {
+  if (source.width !== art.width || source.height !== art.height) {
+    throw new PartsError([{
+      code: 'DEPTH_SILHOUETTE_SIZE_MISMATCH',
+      object: 'depth silhouette extension',
+      detail: `source sheet is ${source.width}x${source.height}; art is ${art.width}x${art.height}`,
+    }]);
+  }
+  const w = source.width, h = source.height, n = w * h;
+  const seedMask = new Uint8Array(n);
+  let seedCount = 0;
+  for (let i = 0; i < n; i++) {
+    if (art.data[i * 4 + 3] === 255) {
+      seedMask[i] = 1;
+      seedCount++;
+    }
+  }
+  if (seedCount === 0) {
+    for (let i = 0; i < n; i++) {
+      if (art.data[i * 4 + 3] > 0) {
+        seedMask[i] = 1;
+        seedCount++;
+      }
+    }
+  }
+  const result = newRaster(w, h);
+  result.data.set(source.data);
+  if (seedCount === 0 || seedCount === n) return result;
+
+  const bx: number[] = [];
+  const by: number[] = [];
+  const bLevel: number[] = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = y * w + x;
+      if (seedMask[idx] === 0) continue;
+      let boundary = x === 0 || x === w - 1 || y === 0 || y === h - 1;
+      if (!boundary) {
+        for (let dy = -1; dy <= 1 && !boundary; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            if (seedMask[(y + dy) * w + (x + dx)] === 0) {
+              boundary = true;
+              break;
+            }
+          }
+        }
+      }
+      if (boundary) {
+        bx.push(x);
+        by.push(y);
+        bLevel.push(source.data[idx * 4]);
+      }
+    }
+  }
+  const bCount = bx.length;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = y * w + x;
+      if (seedMask[idx] !== 0) continue;
+      let bestDist = Infinity;
+      let bestLevel = source.data[idx * 4];
+      for (let i = 0; i < bCount; i++) {
+        const dx = x - bx[i];
+        const dy = y - by[i];
+        const d2 = dx * dx + dy * dy;
+        if (d2 < bestDist) {
+          bestDist = d2;
+          bestLevel = bLevel[i];
+        }
+      }
+      const off = idx * 4;
+      result.data[off] = bestLevel;
+      result.data[off + 1] = bestLevel;
+      result.data[off + 2] = bestLevel;
+      result.data[off + 3] = 255;
+    }
+  }
+  return result;
+}
+
+/**
+ * Pad a turn-bound surface part's depth sheet: extend the opaque silhouette
+ * across the unpadded box first, then edge-clamp into the `pad`-pixel border.
+ */
+export function padTurnDepthSheet(source: Raster, art: Raster, pad: number): Raster {
+  return padDepthSheet(extendDepthSilhouette(source, art), pad);
+}
+
 
 /** Bind units once, before the existing art operators. Their scalar copies
  * retain the ORIGINAL source rectangle/readings instead of remeasuring it.

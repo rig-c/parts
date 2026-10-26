@@ -50,10 +50,10 @@ function segmentSources(limbs: Readonly<Record<string, Limb>>, bones: RigSpec['b
 }
 
 function bindings(slot: RigSpec['slots'][number], skin: RigSpec['skins']['default']): string[][] {
-  return Object.values(skin[slot.name] ?? {}).map((a) => 'type' in a ? a.weights.flatMap((v) => v.map((w) => w.bone)) : [slot.bone]);
+  return Object.values(skin[slot.name] ?? {}).map((a) => 'type' in a && 'weights' in a && a.weights !== undefined ? a.weights.flatMap((v) => v.map((w) => w.bone)) : [slot.bone]);
 }
 function bindingDetail(slots: RigSpec['slots'], skin: RigSpec['skins']['default'], sources: LayoutPlan['sources']): string {
-  return JSON.stringify(slots.map((s) => ({ slot: s.name, attachments: Object.entries(skin[s.name] ?? {}).map(([attachment, a]) => ({ attachment, bones: ('type' in a ? a.weights.flatMap((v) => v.map((w) => w.bone)) : [s.bone]).map((bone) => ({ bone, sources: sources.get(bone) ?? [] })) })) })));
+  return JSON.stringify(slots.map((s) => ({ slot: s.name, attachments: Object.entries(skin[s.name] ?? {}).map(([attachment, a]) => ({ attachment, bones: ('type' in a && 'weights' in a && a.weights !== undefined ? a.weights.flatMap((v) => v.map((w) => w.bone)) : [s.bone]).map((bone) => ({ bone, sources: sources.get(bone) ?? [] })) })) })));
 }
 function owned(slot: RigSpec['slots'][number], skin: RigSpec['skins']['default'], sources: LayoutPlan['sources'], limb: string, parts: readonly string[], moving?: ReadonlyMap<string, readonly string[]>): boolean {
   const bs = bindings(slot, skin);

@@ -29,7 +29,9 @@
  * one piece. Pure: no file, no clock.
  */
 import { computeWorldTransforms, toBoneLocalVector, toWorld, type BoneTransform } from './coords.ts';
+import { extendDepthSilhouette, type PartDepthReference } from './depthsheets.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
+import type { Raster } from './raster/index.ts';
 import { pyRound } from './round.ts';
 
 /**
@@ -220,15 +222,64 @@ export const DEFAULT_HEAD_TURN_PARTS: readonly string[] = [
   'topknot',
 ];
 
-/** `config.turn`: the pivot depth, each carried part's See-through `depth_median`, optional head-only pivot override, optional curved-surface cylinder radius, optional rated band, and optional face surface deform overrides. */
+export const TURN_ROLES = ['surface', 'unit', 'rear'] as const;
+export type TurnRole = (typeof TURN_ROLES)[number];
+
+export const DEFAULT_TURN_PIVOT_25D = 55;
+export const DEFAULT_TURN_COUNTER_25D = 0.1;
+export const DEFAULT_TURN_GRID_25D: readonly [number, number] = [13, 16];
+export const FACESHIFT_BONE = 'faceshift';
+export const REAR_SHIFT_BONE = 'rear_shift';
+export const YAW_DIAL_BONE = 'yaw_dial';
+export const PITCH_DIAL_BONE = 'pitch_dial';
+export const TURN_DIAL_SCALE = 0.0625;
+export const TURN_GRID_MAX_TRIANGLES_PER_SLOT = 2400;
+export const TURN_GRID_MAX_TRIANGLES_TOTAL = 4000;
+
+/** The slot bone that carries a 2.5D `'surface'` grid mesh (`<part>_surface`), centred on the part's window at world rotation 0. */
+export function turnSurfaceBone(part: string): string {
+  return `${part}_surface`;
+}
+
+/** `config.turn`: either the legacy `{ pivot, depths }` turn spec or the 2.5D depth-sampled `{ roles, pivot?, counter?, grid?, unitDepths?, band? }` spec (#763). */
 export interface TurnSpec {
-  pivot: number;
-  depths: Record<string, number>;
+  pivot?: number;
+  depths?: Record<string, number>;
+  roles?: Record<string, TurnRole>;
+  counter?: number;
+  grid?: [number, number] | Record<string, [number, number]>;
+  unitDepths?: Record<string, number>;
   head?: { pivot?: number; radius?: number };
   surface?: { radius?: number };
   radius?: number;
   band?: number | { yaw?: number; pitch?: number };
   deform?: Partial<FaceDeformFractions>;
+}
+
+/** Resolve `[cols, rows]` for a `'surface'` part under `config.turn`. */
+export function resolveTurnGrid(spec: TurnSpec | null | undefined, part: string): [number, number] {
+  const g = spec?.grid;
+  if (Array.isArray(g) && g.length === 2) return [g[0], g[1]];
+  if (g !== undefined && !Array.isArray(g) && Object.hasOwn(g, part)) {
+    const entry = g[part];
+    return [entry[0], entry[1]];
+  }
+  return [DEFAULT_TURN_GRID_25D[0], DEFAULT_TURN_GRID_25D[1]];
+}
+
+/** Resolve `[yawBand, pitchBand]` from `config.turn.band`, defaulting to `[FACE_RATED_YAW_BAND, FACE_RATED_PITCH_BAND]`. */
+export function resolveTurnBands(spec: TurnSpec | null | undefined): { yaw: number; pitch: number } {
+  const b = spec?.band;
+  if (typeof b === 'number' && Number.isFinite(b) && b > 0) {
+    return { yaw: b, pitch: FACE_RATED_PITCH_BAND };
+  }
+  if (b !== undefined && typeof b === 'object' && b !== null) {
+    return {
+      yaw: typeof b.yaw === 'number' && Number.isFinite(b.yaw) && b.yaw > 0 ? b.yaw : FACE_RATED_YAW_BAND,
+      pitch: typeof b.pitch === 'number' && Number.isFinite(b.pitch) && b.pitch > 0 ? b.pitch : FACE_RATED_PITCH_BAND,
+    };
+  }
+  return { yaw: FACE_RATED_YAW_BAND, pitch: FACE_RATED_PITCH_BAND };
 }
 
 /**
@@ -285,9 +336,12 @@ export function turnFraction(pivot: number, nearest: number, depth: number): num
 
 /** Every carried part's fraction, in `order` (parts.json's draw order); a name in `order` the spec does not list is not carried. */
 export function turnFractions(spec: TurnSpec, order: readonly string[]): TurnFraction[] {
-  const nearest = turnNearest(spec.depths);
+  if (spec.depths === undefined || spec.pivot === undefined) return [];
+  const depths = spec.depths;
+  const pivot = spec.pivot;
+  const nearest = turnNearest(depths);
   if (nearest === null) return [];
-  return order.filter((p) => Object.hasOwn(spec.depths, p)).map((part) => ({ part, depth: spec.depths[part], fraction: turnFraction(spec.pivot, nearest.depth, spec.depths[part]) }));
+  return order.filter((p) => Object.hasOwn(depths, p)).map((part) => ({ part, depth: depths[part], fraction: turnFraction(pivot, nearest.depth, depths[part]) }));
 }
 
 /**
@@ -319,6 +373,7 @@ export function headTurnPivot(
   if (typeof spec.head?.pivot === 'number' && Number.isFinite(spec.head.pivot)) {
     return pyRound(spec.head.pivot, TURN_PLACES);
   }
+  if (spec.depths === undefined) return null;
   const headEntries = Object.entries(spec.depths).filter(([part, d]) => headParts.has(part) && typeof d === 'number' && Number.isFinite(d));
   const entries = headEntries.length > 0 ? headEntries : Object.entries(spec.depths).filter(([, d]) => typeof d === 'number' && Number.isFinite(d));
   return turnPivot(entries.map(([part, depth]) => ({ depth, area: partAreas?.[part] ?? 1 })));
@@ -335,6 +390,7 @@ export function headTurnFraction(
   headParts: ReadonlySet<string> = new Set(DEFAULT_HEAD_TURN_PARTS),
   partAreas?: Readonly<Record<string, number>>,
 ): number | null {
+  if (spec.depths === undefined) return null;
   const depth = spec.depths[part];
   if (typeof depth !== 'number' || !Number.isFinite(depth)) return null;
   const pivot = headTurnPivot(spec, headParts, partAreas);
@@ -617,7 +673,7 @@ export function applyFaceSurfaceDeform(
         object: 'config.turn',
         detail: 'is absent and required when motion.animations_from carries a turn or tilt slider animation with derive keys; copy the turn block propose drafted into config.turn so the head pivot and each head part\'s depth are declared',
       });
-    } else {
+    } else if (opts.turn.depths !== undefined) {
       for (const reqPart of ['face', 'hair_front', 'hair_back'] as const) {
         if (rig.skins.default[reqPart]?.[reqPart] !== undefined && !(reqPart in opts.turn.depths)) {
           preProblems.push({
@@ -1359,4 +1415,386 @@ export function applyFaceSurfaceDeform(
     }
     turnAnim.deform = turnDeform;
   }
+}
+
+/** Convert an 8-bit grey level `0..255` to a scalar depth in `[0, zScale]` using `ref.near` and `ref.zScale`. */
+export function levelToDepthZ(level: number, ref: PartDepthReference): number {
+  const u = ref.near === 'white' ? level / 255 : (255 - level) / 255;
+  return u * ref.zScale;
+}
+
+/**
+ * Sample a `'unit'` part's single scalar depth from its unpadded depth sheet
+ * (`scalar`) over opaque art texels (`alpha >= 128`, falling back to `alpha > 0`).
+ */
+export function sampleUnitPartDepth(scalar: Raster, art: Raster, ref: PartDepthReference): number {
+  const levels: number[] = [];
+  const total = scalar.width * scalar.height;
+  for (let i = 0; i < total; i++) {
+    if (art.data[i * 4 + 3] >= 128) levels.push(scalar.data[i * 4]);
+  }
+  if (levels.length === 0) {
+    for (let i = 0; i < total; i++) {
+      if (art.data[i * 4 + 3] > 0) levels.push(scalar.data[i * 4]);
+    }
+  }
+  if (levels.length === 0) return 0;
+  levels.sort((a, b) => a - b);
+  const mid = Math.floor(levels.length / 2);
+  const medLevel = levels.length % 2 === 1 ? levels[mid] : 0.5 * (levels[mid - 1] + levels[mid]);
+  return pyRound(levelToDepthZ(medLevel, ref), 4);
+}
+
+export interface Depth25DTurnOptions {
+  turn: TurnSpec;
+  parts: ReadonlyArray<{ name: string; x: number; y: number; w: number; h: number; depth?: PartDepthReference }>;
+  images: ReadonlyMap<string, Raster>;
+  regions: Readonly<Record<string, string | { bone: string; gather?: false }>>;
+  stills: Readonly<Record<string, { row: number; bone: string }>>;
+  boneLandmarks: ReadonlyMap<string, readonly [number, number]>;
+  hasAlternateFaceSet: boolean;
+}
+
+/**
+ * Issue #763 (Stage 2): build the 2.5D head-turn `turn` and `tilt` animations
+ * and `yaw` / `pitch` slider constraints using Core's native `derive` and
+ * `deform` `transform` (`depth: true, narrowing: false`).
+ */
+export function buildDepth25DTurn(
+  rig: {
+    bones: Array<{ name: string; parent?: string; x: number; y: number; rotation?: number; length?: number }>;
+    slots: Array<{ name: string; bone: string; attachment: string | null }>;
+    constraints?: Array<Record<string, unknown>>;
+  },
+  motion: {
+    groups?: Record<string, string[]>;
+    animations: Record<string, unknown>;
+  },
+  opts: Depth25DTurnOptions,
+): void {
+  const roles = opts.turn.roles;
+  if (roles === undefined) return;
+  const problems: Problem[] = [];
+  const partMap = new Map(opts.parts.map((p) => [p.name, p]));
+
+  // Gap 3 check: all turn-bound parts that carry a depth sheet must share one near and one zScale.
+  let sharedNear: PartDepthReference['near'] | null = null;
+  let sharedZScale: number | null = null;
+  let sharedFirstPart: string | null = null;
+  for (const part of Object.keys(roles)) {
+    const rec = partMap.get(part);
+    if (rec?.depth === undefined) continue;
+    if (sharedNear === null || sharedZScale === null) {
+      sharedNear = rec.depth.near;
+      sharedZScale = rec.depth.zScale;
+      sharedFirstPart = part;
+    } else if (rec.depth.near !== sharedNear || rec.depth.zScale !== sharedZScale) {
+      problems.push({
+        code: 'RIG_TURN_SHARED_DEPTH_SCALE',
+        object: `parts.json part "${part}".depth`,
+        detail: `states near="${rec.depth.near}", zScale=${rec.depth.zScale}, which disagrees with "${sharedFirstPart}" (near="${sharedNear}", zScale=${sharedZScale}); all parts bound to one head turn must share one near polarity and one zScale so Core's sampled z values are in one coordinate space`,
+      });
+    }
+  }
+
+  // Prepare extended surface sheets and reference depths.
+  const surfaceSheets = new Map<
+    string,
+    {
+      rec: { name: string; x: number; y: number; w: number; h: number; depth: PartDepthReference };
+      ext: Raster;
+      zRef: number;
+    }
+  >();
+  for (const [part, role] of Object.entries(roles)) {
+    if (role !== 'surface') continue;
+    const rec = partMap.get(part);
+    const art = opts.images.get(part);
+    const scalar = rec?.depth === undefined ? undefined : opts.images.get(rec.depth.image);
+    if (rec === undefined || rec.depth === undefined || art === undefined || scalar === undefined) {
+      problems.push({
+        code: 'RIG_TURN_SURFACE_DEPTH_REQUIRED',
+        object: `config.turn.roles.${part}`,
+        detail: `declares role "surface" for "${part}", which requires a depth sheet in parts.json; run assemble with config.depth or provide "${part}_depth.png"`,
+      });
+      continue;
+    }
+    const ext = extendDepthSilhouette(scalar, art);
+    const padX = Math.floor((ext.width - rec.w) / 2);
+    const padY = Math.floor((ext.height - rec.h) / 2);
+    const sampleExtAtCrop = (cx: number, cy: number): number => {
+      const lx = Math.max(0, Math.min(ext.width - 1, Math.round(cx - rec.x + padX)));
+      const ly = Math.max(0, Math.min(ext.height - 1, Math.round(cy - rec.y + padY)));
+      return levelToDepthZ(ext.data[(ly * ext.width + lx) * 4], rec.depth as PartDepthReference);
+    };
+    const eyeR = opts.boneLandmarks.get('eye_r');
+    const eyeL = opts.boneLandmarks.get('eye_l');
+    let zRef: number;
+    if (eyeR !== undefined && eyeL !== undefined) {
+      zRef = pyRound(0.5 * (sampleExtAtCrop(eyeR[0], eyeR[1]) + sampleExtAtCrop(eyeL[0], eyeL[1])), 4);
+    } else {
+      zRef = sampleUnitPartDepth(ext, art, rec.depth);
+    }
+    surfaceSheets.set(part, { rec: rec as { name: string; x: number; y: number; w: number; h: number; depth: PartDepthReference }, ext, zRef });
+  }
+  refuseIfAny(problems);
+
+  const primarySurface = surfaceSheets.get('face') ?? [...surfaceSheets.values()][0];
+  const pivot = pyRound(opts.turn.pivot ?? DEFAULT_TURN_PIVOT_25D, 4);
+  const counter = opts.turn.counter ?? DEFAULT_TURN_COUNTER_25D;
+  const rearDepth = pyRound(-counter * pivot, 4);
+  const hasRear = Object.values(roles).includes('rear');
+
+  // Collect unit bones that sit directly under faceshift and resolve one scalar depth per unit bone.
+  const faceshiftChildren = new Set(rig.bones.filter((b) => b.parent === FACESHIFT_BONE).map((b) => b.name));
+  const unitDepthMap: Record<string, number> = {};
+  const unitBones: string[] = [];
+  const addUnitBone = (bone: string, depth: number): void => {
+    if (!faceshiftChildren.has(bone)) return;
+    if (!unitBones.includes(bone)) unitBones.push(bone);
+    unitDepthMap[bone] = pyRound(depth, 4);
+  };
+
+  for (const [part, role] of Object.entries(roles)) {
+    if (role !== 'unit') continue;
+    const regSpec = opts.regions[part];
+    if (regSpec === undefined) continue;
+    const baseBone = typeof regSpec === 'string' ? regSpec : regSpec.bone;
+    const stillBone = opts.stills[part]?.bone;
+    const candidateBones = [baseBone, ...(stillBone === undefined ? [] : [stillBone])].filter((b) => faceshiftChildren.has(b));
+    if (candidateBones.length === 0) continue;
+
+    for (const bName of candidateBones) {
+      const explicitPartDepth = opts.turn.unitDepths?.[part];
+      const explicitBoneDepth = opts.turn.unitDepths?.[bName];
+      let resolved: number | null = null;
+      if (typeof explicitPartDepth === 'number' && Number.isFinite(explicitPartDepth)) {
+        resolved = explicitPartDepth;
+      } else if (typeof explicitBoneDepth === 'number' && Number.isFinite(explicitBoneDepth)) {
+        resolved = explicitBoneDepth;
+      } else if (primarySurface !== undefined) {
+        const pt = opts.boneLandmarks.get(bName) ?? opts.boneLandmarks.get(baseBone);
+        if (pt !== undefined) {
+          const { rec, ext, zRef } = primarySurface;
+          const padX = Math.floor((ext.width - rec.w) / 2);
+          const padY = Math.floor((ext.height - rec.h) / 2);
+          const lx = Math.max(0, Math.min(ext.width - 1, Math.round(pt[0] - rec.x + padX)));
+          const ly = Math.max(0, Math.min(ext.height - 1, Math.round(pt[1] - rec.y + padY)));
+          const zUnit = levelToDepthZ(ext.data[(ly * ext.width + lx) * 4], rec.depth);
+          resolved = pyRound(pivot + (zUnit - zRef), 4);
+        }
+      }
+      if (resolved === null) {
+        const rec = partMap.get(part);
+        const art = opts.images.get(part);
+        const scalar = rec?.depth === undefined ? undefined : opts.images.get(rec.depth.image);
+        if (rec?.depth !== undefined && art !== undefined && scalar !== undefined) {
+          resolved = sampleUnitPartDepth(scalar, art, rec.depth);
+        }
+      }
+      if (resolved === null) {
+        problems.push({
+          code: 'RIG_TURN_UNIT_DEPTH_REQUIRED',
+          object: `config.turn.roles.${part}`,
+          detail: `declares role "unit" for "${part}" (bone "${bName}"), and neither a surface depth sheet nor a part depth sheet nor config.turn.unitDepths.${part} provides its depth`,
+        });
+        continue;
+      }
+      if ((bName === 'ear_r' || bName === 'ear_l') && primarySurface !== undefined) {
+        const pt = opts.boneLandmarks.get(bName);
+        if (pt !== undefined) {
+          const { rec, ext, zRef } = primarySurface;
+          const padX = Math.floor((ext.width - rec.w) / 2);
+          const padY = Math.floor((ext.height - rec.h) / 2);
+          const cheekX = pt[0] < rec.x + rec.w / 2 ? 0 : ext.width - 1;
+          const cheekY = Math.max(0, Math.min(ext.height - 1, Math.round(pt[1] - rec.y + padY)));
+          const cheekDepth = pyRound(pivot + (levelToDepthZ(ext.data[(cheekY * ext.width + cheekX) * 4], rec.depth) - zRef), 4);
+          if (resolved > cheekDepth) {
+            problems.push({
+              code: 'RIG_TURN_EAR_DEPTH_BEHIND_CHEEK',
+              object: `config.turn.unitDepths.${part}`,
+              detail: `places "${bName}" at depth ${pyRound(resolved, 4)}, which is in front of the adjacent cheek edge (${cheekDepth}); an ear depth at or behind ${cheekDepth} is required so the ear recedes behind the cheek`,
+            });
+            continue;
+          }
+        }
+      }
+      addUnitBone(bName, resolved);
+    }
+  }
+  refuseIfAny(problems);
+
+  // Order unitBones in rig.bones declaration order for determinism.
+  const boneIndex = new Map(rig.bones.map((b, i) => [b.name, i]));
+  unitBones.sort((a, b) => (boneIndex.get(a) ?? 0) - (boneIndex.get(b) ?? 0));
+  const orderedUnitDepthMap: Record<string, number> = {};
+  for (const b of unitBones) orderedUnitDepthMap[b] = unitDepthMap[b];
+
+  if (unitBones.length > 0) {
+    motion.groups ??= {};
+    motion.groups.turn_units = unitBones;
+  }
+
+  const { yaw: yawMax, pitch: pitchMax } = resolveTurnBands(opts.turn);
+  const buildAxisAnim = (kind: 'yaw' | 'pitch', maxDeg: number): void => {
+    const animName = kind === 'yaw' ? 'turn' : 'tilt';
+    const prop = kind === 'yaw' ? 'translatex' : 'translatey';
+    const duration = pyRound(2 * maxDeg * TURN_DIAL_SCALE, 6);
+    const step = maxDeg / 2;
+    const angles = [-maxDeg, -step, 0, step, maxDeg];
+    const keyList = angles.map((deg) => ({
+      t: pyRound((deg + maxDeg) * TURN_DIAL_SCALE, 6),
+      deg: pyRound(deg, 6),
+    }));
+
+    const tracks: Array<{
+      bone?: string;
+      group?: string;
+      property: string;
+      keys: Array<{
+        t: number;
+        v?: number[] | Record<string, number[]>;
+        derive?: {
+          kind: 'yaw' | 'pitch';
+          degrees: number;
+          about?: number;
+          carried?: number;
+          depth?: number | Record<string, number>;
+          narrowing?: boolean;
+        };
+      }>;
+    }> = [
+      {
+        bone: FACESHIFT_BONE,
+        property: prop,
+        keys: keyList.map(({ t, deg }) =>
+          deg === 0
+            ? { t, v: [0] }
+            : { t, derive: { kind, degrees: deg, depth: pivot, narrowing: false } },
+        ),
+      },
+    ];
+    if (hasRear && rearDepth !== 0) {
+      tracks.push({
+        bone: REAR_SHIFT_BONE,
+        property: prop,
+        keys: keyList.map(({ t, deg }) =>
+          deg === 0
+            ? { t, v: [0] }
+            : { t, derive: { kind, degrees: deg, depth: rearDepth, narrowing: false } },
+        ),
+      });
+    }
+    for (const [part, { zRef }] of surfaceSheets) {
+      const surfShift = pyRound(-zRef, 4);
+      if (surfShift !== 0) {
+        tracks.push({
+          bone: turnSurfaceBone(part),
+          property: prop,
+          keys: keyList.map(({ t, deg }) =>
+            deg === 0
+              ? { t, v: [0] }
+              : { t, derive: { kind, degrees: deg, depth: surfShift, narrowing: false } },
+          ),
+        });
+      }
+    }
+    if (unitBones.length > 0) {
+      tracks.push({
+        group: 'turn_units',
+        property: prop,
+        keys: keyList.map(({ t, deg }) =>
+          deg === 0
+            ? { t, v: [0] }
+            : {
+                t,
+                derive: {
+                  kind,
+                  degrees: deg,
+                  carried: pivot,
+                  depth: { ...orderedUnitDepthMap },
+                  narrowing: false,
+                },
+              },
+        ),
+      });
+    }
+
+    const deform: Array<{
+      slot: string;
+      attachment: string;
+      keys: Array<{
+        t: number;
+        vertices?: number[];
+        transform?: {
+          kind: 'yaw' | 'pitch';
+          degrees: number;
+          depth?: boolean;
+          narrowing?: boolean;
+        };
+      }>;
+    }> = [];
+    for (const part of surfaceSheets.keys()) {
+      deform.push({
+        slot: part,
+        attachment: part,
+        keys: keyList.map(({ t, deg }) =>
+          deg === 0
+            ? { t }
+            : {
+                t,
+                transform: {
+                  kind,
+                  degrees: deg,
+                  depth: true,
+                  narrowing: false,
+                },
+              },
+        ),
+      });
+    }
+
+    motion.animations[animName] = {
+      duration,
+      loop: false,
+      tracks,
+      ...(deform.length > 0 ? { deform } : {}),
+    };
+  };
+
+  buildAxisAnim('yaw', yawMax);
+  buildAxisAnim('pitch', pitchMax);
+
+  rig.constraints ??= [];
+  const upsertSlider = (name: string, animName: string, dialBone: string, maxDeg: number): void => {
+    const existing = rig.constraints?.find((c) => c.type === 'slider' && c.animation === animName);
+    if (existing !== undefined) {
+      existing.bone = dialBone;
+      existing.property = 'rotate';
+      existing.from = -maxDeg;
+      existing.to = 0;
+      existing.scale = TURN_DIAL_SCALE;
+      existing.max = maxDeg;
+      existing.local = true;
+      existing.additive = true;
+      existing.mix = 1;
+    } else {
+      rig.constraints?.push({
+        name,
+        type: 'slider',
+        animation: animName,
+        bone: dialBone,
+        property: 'rotate',
+        from: -maxDeg,
+        to: 0,
+        scale: TURN_DIAL_SCALE,
+        max: maxDeg,
+        local: true,
+        additive: true,
+        mix: 1,
+      });
+    }
+  };
+  upsertSlider('yaw', 'turn', YAW_DIAL_BONE, yawMax);
+  upsertSlider('pitch', 'tilt', PITCH_DIAL_BONE, pitchMax);
 }

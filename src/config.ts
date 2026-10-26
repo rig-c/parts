@@ -98,7 +98,7 @@ import { edgeLength } from './length.ts';
 import { setFocusProblems } from './setfocus.ts';
 import { isSkeletonName, KEYPOINT_NAMES, type KeypointName, type PosePoints, scaledPoints, SKELETON_NAMES, type SkeletonName } from './skeleton.ts';
 import { acceptedTagNames, AUTHOR_LABEL_RULE, AUTHOR_PREFIX, readLayerTag } from './tags.ts';
-import { EAR_DEPTH_RANGE, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, type FaceDeformKey, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, TURN_BONE, type TurnSpec, turnNearest } from './turn.ts';
+import { EAR_DEPTH_RANGE, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, type FaceDeformKey, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, FACESHIFT_BONE, REAR_SHIFT_BONE, TURN_BONE, TURN_ROLES, type TurnSpec, turnNearest, turnSurfaceBone } from './turn.ts';
 import { FLOOR_FORMS, type FloorForm, type MeshInfluences } from './weights.ts';
 
 export type Point = [number, number];
@@ -1676,7 +1676,7 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
   const attached = attachedParts(t.meshes, t.regions);
   if ('motion_seams' in t) c.problems.push(...motionSeamProblems(t.motion_seams, attached, 'config.motion_seams', 'CONFIG_MOTION_SEAM'));
   const hasAltFace = hasAlternateFaceSet(t.assemble, [...parts, ...cuts]);
-  if ('turn' in t) checkTurn(c, t.turn, attached, names.bones, hasAltFace);
+  if ('turn' in t) checkTurn(c, t.turn, attached, names.bones, hasAltFace, parts);
   if ('scene' in t) checkScene(c, t.scene);
   if ('cloth' in t) checkCloth(c, t.cloth);
   if ('requirements' in t && c.string('config.requirements', t.requirements) && base !== null) checkRequirementsFile(c, resolve(base, t.requirements));
@@ -4196,7 +4196,7 @@ function checkFaceAnimationBand(c: Check, animations: AnimationsFrom, hasAltFace
         'config.turn',
         "is absent and required when motion.animations_from carries a turn or tilt slider animation with derive keys; copy the turn block propose drafted into config.turn so the head pivot and each head part's depth are declared",
       );
-    } else if (isPlainObject(turn) && isPlainObject(turn.depths) && attached !== undefined) {
+    } else if (isPlainObject(turn) && isPlainObject(turn.depths) && !isPlainObject(turn.roles) && attached !== undefined) {
       for (const reqPart of ['face', 'hair_front', 'hair_back'] as const) {
         if (attached.has(reqPart) && !(reqPart in turn.depths)) {
           c.fail(
@@ -4360,11 +4360,98 @@ function checkAnimationSetKeys(
   }
 }
 
-function checkTurn(c: Check, v: Json, attached: Set<string>, bones: Set<string>, hasAltFace: boolean): void {
+function checkTurn(c: Check, v: Json, attached: Set<string>, bones: Set<string>, hasAltFace: boolean, parts: readonly string[] = []): void {
   const at = 'config.turn';
-  const o = c.object(at, v, ['pivot', 'depths'], ['head', 'deform', 'band', 'radius', 'surface']);
+  const hasRoles = isPlainObject(v) && 'roles' in v;
+  const o = hasRoles
+    ? c.object(at, v, ['roles'], ['pivot', 'depths', 'counter', 'grid', 'unitDepths', 'head', 'deform', 'band', 'radius', 'surface'])
+    : c.object(at, v, ['pivot', 'depths'], ['roles', 'counter', 'grid', 'unitDepths', 'head', 'deform', 'band', 'radius', 'surface']);
   if (o === null) return;
   const pivot = 'pivot' in o && c.number(`${at}.pivot`, o.pivot) ? (o.pivot as number) : null;
+  if ('counter' in o && c.number(`${at}.counter`, o.counter)) {
+    const cnt = o.counter as number;
+    if (cnt < 0 || cnt > 1) {
+      c.fail('CONFIG_TURN_COUNTER_RANGE', `${at}.counter`, `is ${cnt}; a rear counter fraction in [0, 1] is required`);
+    }
+  }
+  if ('grid' in o) {
+    const checkGridPair = (gAt: string, gv: Json): void => {
+      if (!Array.isArray(gv) || gv.length !== 2 || !gv.every((n) => typeof n === 'number' && Number.isInteger(n) && n >= 2)) {
+        c.fail('CONFIG_FIELD_TYPE', gAt, `is ${show(gv)}; a [cols, rows] pair of integers >= 2 is required`);
+      }
+    };
+    if (Array.isArray(o.grid)) {
+      checkGridPair(`${at}.grid`, o.grid);
+    } else if (isPlainObject(o.grid)) {
+      for (const [part, gv] of Object.entries(o.grid)) {
+        if (isRecordKey(part)) continue;
+        if (!attached.has(part)) {
+          c.fail('CONFIG_NAME_RESOLVES', `${at}.grid.${part}`, `names "${part}", which neither config.meshes nor config.regions attaches`);
+        }
+        checkGridPair(`${at}.grid.${part}`, gv);
+      }
+    } else {
+      c.fail('CONFIG_FIELD_TYPE', `${at}.grid`, `is ${show(o.grid)}; a [cols, rows] pair or object of part -> [cols, rows] is required`);
+    }
+  }
+  if ('unitDepths' in o) {
+    if (!isPlainObject(o.unitDepths)) {
+      c.fail('CONFIG_FIELD_TYPE', `${at}.unitDepths`, `is ${show(o.unitDepths)}; an object of part or bone name -> scalar depth is required`);
+    } else {
+      for (const [k, dv] of Object.entries(o.unitDepths)) {
+        if (isRecordKey(k)) continue;
+        if (!attached.has(k) && !bones.has(k)) {
+          c.fail('CONFIG_NAME_RESOLVES', `${at}.unitDepths.${k}`, `names "${k}", which is neither an attached part nor a declared bone`);
+        }
+        c.number(`${at}.unitDepths.${k}`, dv);
+      }
+    }
+  }
+  if ('roles' in o) {
+    const r = o.roles;
+    if (!isPlainObject(r) || Object.keys(r).length === 0) {
+      c.fail('CONFIG_FIELD_TYPE', `${at}.roles`, `is ${show(r)}; a non-empty object of part name -> ("surface" | "unit" | "rear") is required`);
+    } else {
+      const surfaceParts: string[] = [];
+      const earParts: string[] = [];
+      for (const [part, role] of Object.entries(r)) {
+        if (isRecordKey(part)) continue;
+        if (!attached.has(part)) {
+          c.fail('CONFIG_NAME_RESOLVES', `${at}.roles.${part}`, `names "${part}", which neither config.meshes nor config.regions attaches; a part the rig draws is required`);
+        }
+        if (typeof role !== 'string' || !(TURN_ROLES as readonly string[]).includes(role)) {
+          c.fail('CONFIG_TURN_ROLE_UNKNOWN', `${at}.roles.${part}`, `is ${show(role)}; expected one of ${TURN_ROLES.map((x) => `"${x}"`).join(', ')}`);
+        } else {
+          if (role === 'surface') surfaceParts.push(part);
+          if (role === 'unit' && (part === 'ear_r' || part === 'ear_l')) earParts.push(part);
+        }
+      }
+      if (surfaceParts.length === 0) {
+        c.fail('CONFIG_TURN_SURFACE_REQUIRED', `${at}.roles`, 'declares no part with role "surface"; at least one surface part (such as "face") is required for 2.5D head turn');
+      }
+      for (const ear of earParts) {
+        const earIdx = parts.indexOf(ear);
+        for (const surf of surfaceParts) {
+          const surfIdx = parts.indexOf(surf);
+          if (earIdx !== -1 && surfIdx !== -1 && earIdx > surfIdx) {
+            c.fail(
+              'CONFIG_TURN_EAR_DRAW_ORDER',
+              `${at}.roles.${ear}`,
+              `draws "${ear}" (plan index ${earIdx}) after surface part "${surf}" (plan index ${surfIdx}); place "${ear}" before "${surf}" in config.assemble.plan so the ear is occluded behind the face`,
+            );
+          }
+        }
+      }
+      if (!bones.has('head')) {
+        c.fail('CONFIG_TURN_HEAD_BONE', `${at}.roles`, 'requires a declared "head" bone in config.bones to parent the 2.5D turn carriers');
+      }
+      for (const reserved of [FACESHIFT_BONE, REAR_SHIFT_BONE, ...surfaceParts.map(turnSurfaceBone)]) {
+        if (bones.has(reserved)) {
+          c.fail('CONFIG_TURN_BONE_FREE', `bone "${reserved}"`, `is a carrier bone the rig stage adds under head for config.turn.roles, and config.bones already declares a bone of that name; rename it`);
+        }
+      }
+    }
+  }
   if ('radius' in o) c.number(`${at}.radius`, o.radius, 'positive');
   if ('surface' in o) {
     const so = c.object(`${at}.surface`, o.surface, [], ['radius']);
@@ -4460,7 +4547,7 @@ function checkTurn(c: Check, v: Json, attached: Set<string>, bones: Set<string>,
       }
     }
   }
-  if (pivot !== null && depthsOk) {
+  if (!hasRoles && pivot !== null && depthsOk) {
     const nearest = turnNearest(depths);
     if (nearest !== null && !(pivot > nearest.depth)) {
       c.fail(
@@ -4470,7 +4557,7 @@ function checkTurn(c: Check, v: Json, attached: Set<string>, bones: Set<string>,
       );
     }
   }
-  if (headPivot !== null && depthsOk) {
+  if (!hasRoles && headPivot !== null && depthsOk) {
     const nearest = turnNearest(depths);
     if (nearest !== null && !(headPivot > nearest.depth)) {
       c.fail(
@@ -4480,7 +4567,7 @@ function checkTurn(c: Check, v: Json, attached: Set<string>, bones: Set<string>,
       );
     }
   }
-  if (bones.has(TURN_BONE)) {
+  if (!hasRoles && bones.has(TURN_BONE)) {
     c.fail('CONFIG_TURN_BONE_FREE', `bone "${TURN_BONE}"`, `is the control the rig stage adds under root for config.turn, and config.bones already declares a bone of that name; rename it`);
   }
 }

@@ -12,9 +12,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join, resolve } from 'node:path';
 import { PartsError } from '../src/errors.ts';
 import { parseConfig } from '../src/config.ts';
-import { bindDepthRun, copyDepthMaterial, depthReading, depthSheetProblems, padDepthSheet, registerDepthRun, sampleDepthLevel, transportPartDepth, type RegisteredDepth } from '../src/depthsheets.ts';
+import { bindDepthRun, copyDepthMaterial, depthReading, depthSheetProblems, extendDepthSilhouette, padDepthSheet, padTurnDepthSheet, registerDepthRun, sampleDepthLevel, transportPartDepth, type RegisteredDepth } from '../src/depthsheets.ts';
 import { exportLayers, readWrapperLayers, type LayerSet } from '../src/layers.ts';
-import { writeParts, readParts } from '../src/parts.ts';
+import { writeParts, readParts, type PartsFile, type PartRecord } from '../src/parts.ts';
 import { encodePngBytes, readPng, writePng } from '../src/raster/png.ts';
 import { newRaster, type Raster } from '../src/raster/types.ts';
 import { pad } from '../src/raster/index.ts';
@@ -238,6 +238,219 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
   const restored = measure();
   say('DZ29_SYNTHETIC_INPUT_RESTORED', JSON.stringify(restored) === JSON.stringify(measured), 'generated test sheet/direction restored after explicit plants; no repository source mutation');
 
+  // #763: 2.5D head-turn producer positive and negative controls through buildRig + Core gate.
+  const make25DFixture = () => {
+    const W = 64, H = 64;
+    const solid = (w: number, h: number, r: number, g: number, b: number): Raster => {
+      const img = newRaster(w, h);
+      for (let i = 0; i < w * h; i++) img.data.set([r, g, b, 255], i * 4);
+      return img;
+    };
+    const faceArt = newRaster(24, 24);
+    for (let y = 0; y < 24; y++) {
+      for (let x = 0; x < 24; x++) {
+        // Leave a 1px transparent border around the face so silhouette extension is exercised.
+        const a = x >= 1 && x <= 22 && y >= 1 && y <= 22 ? 255 : 0;
+        faceArt.data.set([240, 210, 195, a], (y * 24 + x) * 4);
+      }
+    }
+    // Smooth dome on opaque face pixels (centre ~210, edges ~160) and background drop (10) on the 1px transparent border.
+    const faceDepth = grey(24, 24, (x, y) => {
+      if (x < 1 || x > 22 || y < 1 || y > 22) return 10;
+      const dx = (x - 11.5) / 11;
+      const dy = (y - 11.5) / 11;
+      return Math.round(210 - 35 * Math.min(1, dx * dx + dy * dy));
+    });
+    const depthSha = createHash('sha256').update(encodePngBytes(faceDepth)).digest('hex');
+    const baseCounts = { projected_core_px: 0, source_px_taken: 0, refused_drift_px: 0, merged_px: 0, seam_override_px: 0 };
+    const pf: PartsFile = {
+      scale_rig_per_source: 1,
+      rig_size: [W, H] as [number, number],
+      parts: [
+        { ...baseCounts, name: 'hair_back', from: 'full:back hair', x: 16, y: 12, w: 32, h: 36, opaque_px: 32 * 36 },
+        { ...baseCounts, name: 'ear_r', from: 'head:ears-r', x: 16, y: 24, w: 4, h: 6, opaque_px: 24 },
+        { ...baseCounts, name: 'ear_l', from: 'head:ears-l', x: 44, y: 24, w: 4, h: 6, opaque_px: 24 },
+        {
+          ...baseCounts,
+          name: 'face',
+          from: 'head:face',
+          x: 20,
+          y: 16,
+          w: 24,
+          h: 24,
+          opaque_px: 22 * 22,
+          depth: {
+            image: 'face_depth.png',
+            near: 'white' as const,
+            zScale: 40,
+            sources: [{ from: 'head:face', image: 'face_depth_src.png', sha256: depthSha, crop: [20, 16, 44, 40] as [number, number, number, number], reading: depthReading(faceDepth, faceArt, null) }],
+          },
+        },
+        { ...baseCounts, name: 'eyewhite_r', from: 'head:eyewhite-r', x: 24, y: 24, w: 4, h: 4, opaque_px: 16 },
+        { ...baseCounts, name: 'eyewhite_l', from: 'head:eyewhite-l', x: 36, y: 24, w: 4, h: 4, opaque_px: 16 },
+        { ...baseCounts, name: 'mouth', from: 'head:mouth', x: 30, y: 34, w: 4, h: 2, opaque_px: 8 },
+        { ...baseCounts, name: 'hair_front', from: 'head:front hair', x: 18, y: 12, w: 28, h: 16, opaque_px: 28 * 16 },
+      ] satisfies PartRecord[],
+      ghost_px: {},
+      recomposite: { mean_abs: 0, within_limit: 0, within_share: 1, error_limit: 0, error_px: 0, covered_alpha: 8, uncovered_error_px: 0, hole_count: 0, holes_listed: 0, holes: [] },
+    };
+    const imgs = new Map<string, Raster>([
+      ['hair_back', solid(32, 36, 60, 50, 70)],
+      ['ear_r', solid(4, 6, 235, 200, 185)],
+      ['ear_l', solid(4, 6, 235, 200, 185)],
+      ['face', faceArt],
+      ['face_depth.png', faceDepth],
+      ['eyewhite_r', solid(4, 4, 250, 250, 250)],
+      ['eyewhite_l', solid(4, 4, 250, 250, 250)],
+      ['mouth', solid(4, 2, 200, 90, 90)],
+      ['hair_front', solid(28, 16, 70, 60, 85)],
+    ]);
+    const rawCfg: Record<string, unknown> = {
+      key: 'turn25d',
+      seethrough: { resolution: 64, steps: 1, seed: 0, offload: false },
+      assemble: {
+        rig_scale: 1,
+        plan: [
+          ['hair_back', 'full', 'back hair'],
+          ['ear_r', 'head', 'ears-r'],
+          ['ear_l', 'head', 'ears-l'],
+          ['face', 'head', 'face'],
+          ['eyewhite_r', 'head', 'eyewhite-r'],
+          ['eyewhite_l', 'head', 'eyewhite-l'],
+          ['mouth', 'head', 'mouth'],
+          ['hair_front', 'head', 'front hair'],
+        ],
+      },
+      bones: [
+        { name: 'hip', parent: 'root', at: [32, 56] },
+        { name: 'head', parent: 'hip', at: [32, 36] },
+        { name: 'eye_r', parent: 'head', at: [26, 26] },
+        { name: 'eye_l', parent: 'head', at: [38, 26] },
+        { name: 'mouth', parent: 'head', at: [32, 35] },
+        { name: 'ear_r', parent: 'head', at: [18, 27] },
+        { name: 'ear_l', parent: 'head', at: [46, 27] },
+        { chain: 'bang_c', parent: 'head', points: [[32, 16], [32, 22]], tip: [32, 27] },
+        { chain: 'hb_c', parent: 'head', points: [[32, 24], [32, 36]], tip: [32, 46] },
+      ],
+      meshes: {
+        hair_front: { grid: 8, r: 20, segments: [['head', [32, 36], [32, 14]], 'bang_c'] },
+        hair_back: { grid: 8, r: 20, segments: [['head', [32, 36], [32, 14]], 'hb_c'] },
+      },
+      regions: {
+        ear_r: 'ear_r',
+        ear_l: 'ear_l',
+        face: 'head',
+        eyewhite_r: 'eye_r',
+        eyewhite_l: 'eye_l',
+        mouth: 'mouth',
+      },
+      motion: {
+        duration: 2,
+        tracks: [{ bone: 'head', prop: 'rotate', amp: 1, period: 2, phase: 0 }],
+      },
+      turn: {
+        pivot: 20,
+        counter: 0.1,
+        grid: [5, 5],
+        roles: {
+          hair_back: 'rear',
+          ear_r: 'unit',
+          ear_l: 'unit',
+          face: 'surface',
+          eyewhite_r: 'unit',
+          eyewhite_l: 'unit',
+          mouth: 'unit',
+          hair_front: 'unit',
+        },
+        unitDepths: {
+          ear_r: -4,
+          ear_l: -4,
+        },
+      },
+    };
+    return { pf, imgs, rawCfg };
+  };
+
+  const f25 = make25DFixture();
+  const built25 = buildRig(parseConfig(f25.rawCfg), f25.pf, f25.imgs);
+  const t25Dir = join(dir, 'turn25d');
+  mkdirSync(join(t25Dir, 'images'), { recursive: true });
+  for (const [name, img] of built25.images) writePng(join(t25Dir, 'images', name), img);
+  for (const [name, text] of rigOutputTexts(built25, null)) writeFileSync(join(t25Dir, name), text);
+  const run25 = spawnSync(process.execPath, [resolve('node_modules/rig-c/cli.ts'), 'build', '--rig', join(t25Dir, 'rig.json'), '--motion', join(t25Dir, 'motion.json'), '--out', join(t25Dir, 'built'), '--profile', 'rig-play'], { encoding: 'utf8' });
+  const boneParents25 = new Map(built25.rig.bones.map((b) => [b.name, b.parent]));
+  const faceAtt25 = built25.rig.skins.default.face?.face;
+  const hfWeights25 = built25.rig.skins.default.hair_front?.hair_front;
+  const hbWeights25 = built25.rig.skins.default.hair_back?.hair_back;
+  const hfUsesFaceshift = hfWeights25 !== undefined && 'type' in hfWeights25 && hfWeights25.weights.some((r) => r.some((w) => w.bone === 'faceshift'));
+  const hbUsesRearShift = hbWeights25 !== undefined && 'type' in hbWeights25 && hbWeights25.weights.some((r) => r.some((w) => w.bone === 'rear_shift'));
+  say(
+    'DZ51_TURN_25D_PRODUCER_PROMOTES_SURFACE_REPARENTS_CARRIERS_AND_GATES_CORE',
+    run25.status === 0 &&
+      faceAtt25 !== undefined &&
+      'type' in faceAtt25 &&
+      faceAtt25.generator?.kind === 'grid' &&
+      faceAtt25.generator.cols === 5 &&
+      faceAtt25.generator.rows === 5 &&
+      boneParents25.get('faceshift') === 'head' &&
+      boneParents25.get('rear_shift') === 'head' &&
+      boneParents25.get('face_surface') === 'faceshift' &&
+      boneParents25.get('eye_r') === 'faceshift' &&
+      boneParents25.get('ear_r') === 'faceshift' &&
+      boneParents25.get('bang_c0') === 'faceshift' &&
+      boneParents25.get('hb_c0') === 'rear_shift' &&
+      hfUsesFaceshift &&
+      hbUsesRearShift &&
+      built25.motion.animations.turn !== undefined &&
+      built25.motion.animations.tilt !== undefined,
+    `Core build exit=${run25.status}; generator=${JSON.stringify(faceAtt25 && 'type' in faceAtt25 ? faceAtt25.generator : null)}; parents: faceshift->${boneParents25.get('faceshift')}, rear_shift->${boneParents25.get('rear_shift')}, eye_r->${boneParents25.get('eye_r')}, bang_c0->${boneParents25.get('bang_c0')}, hb_c0->${boneParents25.get('hb_c0')}; hfUsesFaceshift=${hfUsesFaceshift}, hbUsesRearShift=${hbUsesRearShift}`,
+  );
+
+  const badRole = make25DFixture();
+  (badRole.rawCfg.turn as { roles: Record<string, unknown> }).roles.face = 'bogus';
+  const badNoSurface = make25DFixture();
+  (badNoSurface.rawCfg.turn as { roles: Record<string, unknown> }).roles.face = 'unit';
+  const badEarOrder = make25DFixture();
+  badEarOrder.rawCfg.assemble = {
+    rig_scale: 1,
+    plan: [
+      ['hair_back', 'full', 'back hair'],
+      ['face', 'head', 'face'],
+      ['ear_r', 'head', 'ears-r'],
+      ['ear_l', 'head', 'ears-l'],
+      ['eyewhite_r', 'head', 'eyewhite-r'],
+      ['eyewhite_l', 'head', 'eyewhite-l'],
+      ['mouth', 'head', 'mouth'],
+      ['hair_front', 'head', 'front hair'],
+    ],
+  };
+  const badReservedBone = make25DFixture();
+  (badReservedBone.rawCfg.bones as unknown[]).push({ name: 'faceshift', parent: 'head', at: [32, 36] });
+  const badNoDepth = make25DFixture();
+  delete (badNoDepth.pf.parts.find((p) => p.name === 'face') as { depth?: unknown }).depth;
+  const badGridBudget = make25DFixture();
+  (badGridBudget.rawCfg.turn as { grid: unknown }).grid = [40, 40];
+  const badEarFront = make25DFixture();
+  (badEarFront.rawCfg.turn as { unitDepths: Record<string, number> }).unitDepths = { ear_r: 40, ear_l: -4 };
+
+  const cRole = errors(() => parseConfig(badRole.rawCfg));
+  const cNoSurf = errors(() => parseConfig(badNoSurface.rawCfg));
+  const cEarOrd = errors(() => parseConfig(badEarOrder.rawCfg));
+  const cResBone = errors(() => parseConfig(badReservedBone.rawCfg));
+  const cNoDepth = errors(() => buildRig(parseConfig(badNoDepth.rawCfg), badNoDepth.pf, badNoDepth.imgs));
+  const cGrid = errors(() => buildRig(parseConfig(badGridBudget.rawCfg), badGridBudget.pf, badGridBudget.imgs));
+  const cEarFront = errors(() => buildRig(parseConfig(badEarFront.rawCfg), badEarFront.pf, badEarFront.imgs));
+  say(
+    'DZ52_TURN_25D_CONFIG_AND_RIG_REFUSALS_NAMED',
+    cRole.includes('CONFIG_TURN_ROLE_UNKNOWN') &&
+      cNoSurf.includes('CONFIG_TURN_SURFACE_REQUIRED') &&
+      cEarOrd.includes('CONFIG_TURN_EAR_DRAW_ORDER') &&
+      cResBone.includes('CONFIG_TURN_BONE_FREE') &&
+      cNoDepth.includes('RIG_TURN_SURFACE_DEPTH_REQUIRED') &&
+      cGrid.includes('RIG_TURN_GRID_BUDGET') &&
+      cEarFront.includes('RIG_TURN_EAR_DEPTH_BEHIND_CHEEK'),
+    `role=${cRole.join(',')}; noSurf=${cNoSurf.join(',')}; earOrder=${cEarOrd.join(',')}; resBone=${cResBone.join(',')}; noDepth=${cNoDepth.join(',')}; grid=${cGrid.join(',')}; earFront=${cEarFront.join(',')}`,
+  );
 }
 
 
@@ -297,6 +510,30 @@ export function runDepthSheetStillChecks(say: Say): void {
   delete measuredPart.depth;
   const plainUnique = buildRig(config, namespaceParts, namespaceImages);
   say('DZ48_NAMESPACE_CHECK_PRESERVES_NO_DEPTH_OUTPUT', JSON.stringify(unique.rig) === JSON.stringify(plainUnique.rig) && JSON.stringify(unique.motion) === JSON.stringify(plainUnique.motion) && JSON.stringify(unique.meshReport) === JSON.stringify(plainUnique.meshReport) && plainUnique.images.every(([name, image]) => Buffer.from(image.data).equals(Buffer.from(uniqueImages.get(name)?.data ?? []))) && plainUnique.depthReferences === undefined, 'exact rig/motion/report and all5 art RGBA match with/without the noncolliding sheet; no-depth adds no output');
+  const silArt = newRaster(4, 3);
+  for (let y = 0; y < 3; y++) for (let x = 0; x < 4; x++) {
+    const a = x >= 1 && x <= 2 && y === 1 ? 255 : x === 0 && y === 1 ? 128 : 0;
+    silArt.data.set([200, 100, 50, a], (y * 4 + x) * 4);
+  }
+  const silSource = grey(4, 3, (x, y) => (x === 1 && y === 1 ? 180 : x === 2 && y === 1 ? 220 : 10));
+  const rawPadded = padDepthSheet(silSource, 2);
+  const turnPadded = padTurnDepthSheet(silSource, silArt, 2);
+  say(
+    'DZ49_TURN_SILHOUETTE_EXTENSION_CONTINUOUS',
+    rawPadded.data[0] === 10 &&
+      turnPadded.width === 8 &&
+      turnPadded.height === 7 &&
+      turnPadded.data[0] === 180 &&
+      turnPadded.data[(3 * 8 + 3) * 4] === 180 &&
+      turnPadded.data[(3 * 8 + 4) * 4] === 220 &&
+      turnPadded.data[(3 * 8 + 7) * 4] === 220,
+    'raw padDepthSheet keeps background 10 at (0,0); padTurnDepthSheet extends nearest opaque (1,1)->180 left and (2,1)->220 right across fringe and PAD=2 border',
+  );
+  say(
+    'DZ50_SILHOUETTE_SIZE_MISMATCH_REFUSED',
+    errors(() => extendDepthSilhouette(silSource, newRaster(3, 3))).includes('DEPTH_SILHOUETTE_SIZE_MISMATCH'),
+    'extendDepthSilhouette refuses mismatched source/art dimensions with DEPTH_SILHOUETTE_SIZE_MISMATCH',
+  );
 }
 
 if (import.meta.main && process.argv[2] === '--adapter-probe') {
