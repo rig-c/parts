@@ -4350,8 +4350,12 @@ function checkTurn(c: Check, v: Json, attached: Set<string>, bones: Set<string>,
   const pivot = 'pivot' in o && c.number(`${at}.pivot`, o.pivot) ? (o.pivot as number) : null;
   if ('radius' in o) c.number(`${at}.radius`, o.radius, 'positive');
   if ('surface' in o) {
-    const so = c.object(`${at}.surface`, o.surface, [], ['radius']);
+    const so = c.object(`${at}.surface`, o.surface, [], ['radius', 'depth']);
     if (so !== null && 'radius' in so) c.number(`${at}.surface.radius`, so.radius, 'positive');
+    if (so !== null && 'depth' in so) {
+      c.string(`${at}.surface.depth`, so.depth);
+      if ('radius' in so || 'radius' in o || 'deform' in o || (isPlainObject(o.head) && 'radius' in o.head)) c.fail('CONFIG_DEPTH_INPUT', `${at}.surface.depth`, 'depth replaces the cylinder and legacy deform law; remove radius/deform overrides');
+    }
   }
   let headPivot: number | null = null;
   if ('head' in o) {

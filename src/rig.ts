@@ -183,6 +183,8 @@ import { pyRound } from './round.ts';
 import { boneHeat, type HeatDust, heatInfluences, HEAT_LIMITS, heatRow, type HeatRow, latticeSilhouette, tracedSilhouette } from './heat.ts';
 import type { PosePoints } from './skeleton.ts';
 import { applyFaceSurfaceDeform, FACE_RATED_BAND, TURN_BONE, TURN_CARRIER_TAG, TURN_PLACES, TURN_RIDER_APART, TURN_RIDER_TAGS, turnRiderDepth, type TurnSpec, turnConstraintName, turnFractions, turnNearest, turnTwin } from './turn.ts';
+import { DEPTH_EYE_CHECK_LABEL, depthRefuse, validateDepthTargets, type PreparedDepth } from './depthinput.ts';
+import type { DepthReport } from './depthsurface.ts';
 import { DISTANCE_EXPONENT, type FloorForm, type Influence, influences, type InfluenceLimits, type MeshInfluences, meshLimits, type Segment } from './weights.ts';
 
 /** Transparent pixels added round every part image — the reference's `PAD`. */
@@ -1110,6 +1112,7 @@ export interface AttachmentSetsFile {
 }
 
 export interface RigOutput {
+  depthReport?: DepthReport;
   rig: RigSpec;
   /** Internal explicit-layout provenance; serialized only as an external companion. */
   layout?: LayoutPlan;
@@ -1276,7 +1279,10 @@ export function buildRig(
   idleKeys: IdleKeys = DEFAULT_IDLE_KEYS,
   reduce: Reducer = runReduction,
   turnOrderByDeclaration: boolean = true,
+  depth?: PreparedDepth,
 ): RigOutput {
+  if (cfg.turn?.surface?.depth !== undefined && depth === undefined) depthRefuse('RIG_DEPTH_BINDING', 'config.turn.surface.depth', 'prepared input is required; use readRigInputs or pass the explicitly prepared surface');
+  if (depth !== undefined && cfg.turn?.surface?.depth === undefined) depthRefuse('RIG_DEPTH_BINDING', 'depth input', 'config.turn.surface.depth must explicitly opt in');
   // Generated bands have a fixed one-pixel lattice, with their axial weights
   // below; config never supplies a second mesh policy for the same source.
   const bands = parts.parts.filter((p) => p.limb?.band !== undefined);
@@ -1562,6 +1568,7 @@ export function buildRig(
   refuseIfAny(problems);
 
   const motion = idleMotion(cfg, chains);
+  if (depth?.manifest.pilot) motion.archetype = DEPTH_EYE_CHECK_LABEL;
   const meshBones = new Set<string>();
   for (const segs of meshSegments.values()) for (const s of segs) meshBones.add(s.bone);
   // A contour region's control bone is weighted to like a segment's bone (issue #84), so the idle's keys on it move
@@ -2851,8 +2858,9 @@ export function buildRig(
   }
   // ---- the turn control (issue #251) -------------------------------------
   // Only when the config has `turn`: every other build adds nothing here, so no byte moves.
-  if (cfg.turn !== undefined) refuseIfAny(turnRiderProblems(cfg.turn, cfg, parts.parts));
-  const turned = cfg.turn === undefined ? null : applyTurn(cfg.turn, parts.parts.map((p) => p.name), bones, rebound, skin, cfg.constraints ?? [], declaredFront, slotFamilies, stops, turnOrderByDeclaration);
+  if (cfg.turn !== undefined && depth === undefined) refuseIfAny(turnRiderProblems(cfg.turn, cfg, parts.parts));
+  const turned = cfg.turn === undefined || depth !== undefined ? null : applyTurn(cfg.turn, parts.parts.map((p) => p.name), bones, rebound, skin, cfg.constraints ?? [], declaredFront, slotFamilies, stops, turnOrderByDeclaration);
+
   for (const row of turned?.rows ?? []) for (const t of row.twins) layoutAlias(explicitLayout.plan, t.bone, t.twin);
   // issue #536: every row names the bones the emitted attachment binds, read once the turn and the stops have
   // rebound the weights; a rig with neither rebinds nothing, so this reads back the names each row already holds.
@@ -2871,7 +2879,7 @@ export function buildRig(
     if (att !== undefined && 'type' in att) row.bones = meshBoundBones(att);
   }
   refuseIfAny(problems);
-  const name = `${cfg.key}_painting`;
+  const name = depth?.manifest.pilot ? DEPTH_EYE_CHECK_LABEL : `${cfg.key}_painting`;
   const rig: RigSpec = {
     spec: 'rigc-rig/1',
     name,
@@ -2894,12 +2902,14 @@ export function buildRig(
   const axes = [faceAxis.axis, faceAxis.tipAxis].flatMap((x) => (x === null ? [] : [x]));
   if (axes.length > 0) rig.invariants = { ...rig.invariants, axes };
   const faceImg = outImages.find(([k]) => k === 'face.png')?.[1];
+  if (depth !== undefined) validateDepthTargets(depth, outImages);
   const facePart = parts.parts.find((p) => p.name === 'face');
   const partAreas: Record<string, number> = {};
   for (const p of parts.parts) partAreas[p.name] = p.opaque_px;
   bindFaceSurfaceDeform(motion, (merged) => {
     expandSetAttachmentKeys(rig, sets, merged);
     applyFaceSurfaceDeform(rig, merged, {
+      ...(depth === undefined ? {} : { depth }),
       imageWidth: faceImg?.width,
       imageHeight: faceImg?.height,
       opaqueWidth: facePart?.w,
@@ -2919,6 +2929,7 @@ export function buildRig(
     }
   });
   return {
+    ...(depth === undefined ? {} : { depthReport: depth.report }),
     rig,
     motion,
     meshReport,

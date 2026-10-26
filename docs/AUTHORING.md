@@ -3624,6 +3624,15 @@ row in this page's `rule` and `line` tables; the selftest holds that (`TY16`).
 
 | rule | means | change |
 | --- | --- | --- |
+| <a id="CONFIG_DEPTH_INPUT"></a>`CONFIG_DEPTH_INPUT` | Missing/unknown/malformed manifest field, unreadable file or conflicting legacy override | Supply the explicit schema and remove the competing law. |
+| <a id="RIG_DEPTH_BINDING"></a>`RIG_DEPTH_BINDING` | Source digest/region/bounds/target RGBA mismatch, missing prepared input, unsupported attachment/layout or conflicting shared driver | Bind the actual source and one supported owner. |
+| <a id="RIG_DEPTH_MASK_REQUIRED"></a>`RIG_DEPTH_MASK_REQUIRED` | A binding has no mask | Declare UV/alpha ownership; no rectangle fallback exists. |
+| <a id="RIG_DEPTH_FIELD_SOLVE"></a>`RIG_DEPTH_FIELD_SOLVE` | Missing source-area objective, invalid convex system or solver termination failure | Read the reported numerical residuals; no constant fallback is used. |
+| <a id="RIG_DEPTH_FIELD_PRECISION"></a>`RIG_DEPTH_FIELD_PRECISION` | The field/triangle cannot certify the actual export precision | Supply representable geometry; gain or cap is not adjusted automatically. |
+| <a id="RIG_DEPTH_FIELD_SAMPLE"></a>`RIG_DEPTH_FIELD_SAMPLE` | A core target is outside represented material or a duplicate source UV is inconsistent | Correct source registration; no sample is silently discarded. |
+| <a id="RIG_DEPTH_MESH_PRECISION"></a>`RIG_DEPTH_MESH_PRECISION` | Invalid seed or mandatory neutral geometry at Float32 export precision | Supply representable seed/constraints; admitted triangles are not removed. |
+| <a id="RIG_DEPTH_SAMPLE_UNSUPPORTED"></a>`RIG_DEPTH_SAMPLE_UNSUPPORTED` | Ineligible core (see the pilot eligibility policy), unsupported shared anchor or continuation beyond its bound | Supply supported coverage or an explicit valid host. |
+| <a id="RIG_DEPTH_TRIANGLE_FLIP"></a>`RIG_DEPTH_TRIANGLE_FLIP` | Projected triangle or local tangent changes orientation at a tested pose | Supply a geometrically supported relief/gain; a render alone cannot clear it. |
 | <a id="CONFIG_HYBRID_SOURCE"></a>`CONFIG_HYBRID_SOURCE` | the two hybrid neighbours name different source parts | use a single continuous source layer for the joint band |
 | <a id="CONFIG_HYBRID_CUT"></a>`CONFIG_HYBRID_CUT` | a hybrid joint also declares a cut-cap option | remove cap, cap_shape, edge and cut_band at that joint |
 | <a id="ASSEMBLE_HYBRID_SOURCE"></a>`ASSEMBLE_HYBRID_SOURCE` | effective alternate layer selection gives a band different upper and lower source layers | select the same continuous layer for both rigid neighbours |
@@ -5247,3 +5256,176 @@ missing a path, given twice, or combined with `--shard`):
   enter `holes`; check names or indented detail lines containing `HOLE` or `SKIP` (such as
   `RG82_BLINK_NO_HOLE_…` or `SO21_ZERO_SETUP_BANDS_REMAIN_NAMED_SKIPS_…`) are counted as `PASS` or
   `FAIL` controls and never as `skips` or `holes` (`RT16`, `RT17`).
+
+## Optional depth surface (producer pilot)
+
+`turn.surface.depth` names a `rig-parts-depth/2` JSON manifest relative to the
+config. It replaces managed yaw/pitch with source-only displacement. Revision 1
+is refused: its layer constants, per-field references and tangent-driver law
+are not aliases for this contract. Without the opt-in the existing path stays
+unchanged. Do not combine depth with radius/deform overrides. Roll remains an
+independent in-plane animation; this contract does not author hair physics.
+
+All fields below are required; no authoring values are inferred:
+
+| Field | Contract |
+| --- | --- |
+| `spec` | `rig-parts-depth/2` |
+| `source` | `file`, lowercase `sha256`, decoded integer `width`/`height`, `format` (`png` or `jpeg-rgb8`), `channel: "red"`, explicit `polarity` (`white-near` or `black-near`), `processed: true` |
+| `atlas` | Source atlas `file`/`sha256`; `page` with `file`, `sha256`, `width`, `height`; source `skeleton` JSON with `file`, `sha256` |
+| `sampling` | `resampler: "triangle-bilinear-v1"`, integer `alphaMin` in 1..255, nonnegative integer `erode`, `continuation: {kind, maxDistance}` with `kind` `refuse` or `nearest-core`, finite nonnegative source-texel distance |
+| `model` | `projection: "depth-displacement"`, explicit neutral `pivotBone`, nonnegative `reliefGain`, positive `gamma`, `yawSign`/`pitchSign` each -1 or 1, `legacy: "replace-managed"` |
+| `reference` | One `field` naming a directly sampled nonempty binding, `kind: "core-median"`; its valid-core median is shared by every field |
+| `groups` | Explicit control group to bone-name arrays |
+| `coverage` | Integer `alphaMin` in 1..255; explicit `overlaps` array (possibly empty), each `{subject, coverer}` naming one bound later covering owner for that subject |
+| `bindings` | Nonempty attachment-name table. Each states `region`, exact source-atlas `bounds: [x,y,w,h]`, `mask: "uv-alpha"`, `targetRgbaSha256` over straight RGBA and integer `triangles` in 1..2048. A follower additionally names its direct `host`. |
+
+Paths resolve beside the manifest. One unrotated, untrimmed atlas page is
+supported. Digests, dimensions, source schema, finite UVs/indices and source
+registration are checked before use. Readers collect independent manifest
+problems and throw once. Missing masks never become rectangular/brightness
+masks. Owned source triangles intersect opaque alpha before core erosion.
+
+**Pilot eligibility policy:** a directly sampled binding requires at least
+**64 eroded UV-owned opaque core texels**. This fixed number provides an
+independent 8-by-8 **sample-count** support budget for local relief-plane plus
+residual estimation, excluding tiny surviving stroke cores. It does not prove
+an actual contiguous 8-by-8 layout, plane rank, relief quality or calibration;
+the eligibility check itself does not fit a plane. At most 63 core texels must
+use an explicitly authored host supporting the whole material or receive
+`RIG_DEPTH_SAMPLE_UNSUPPORTED`; no automatic binding switch is made. Every
+direct field retains the same explicit primary reference.
+
+A shared follower can have no usable core of its own; every promoted material
+point must map into its original host geometry. Outside-host material refuses;
+no anchor relocation or extrapolated UV is inferred.
+
+The red channel is resampled over the whole page by a half-pixel-centred
+separable triangle filter, widened for downsampling, in Float64. JPEG decoding
+uses the pinned `jpeg-js` dependency. These are explicit filter/decoder semantics,
+not a bit-exact claim about another library. Bounded continuation samples only
+the named field's valid core, with row/column tie order. An ineligible direct core,
+refused continuation or excessive distance is a named refusal. The static
+nearest-search index changes lookup cost only; exhaustive synthetic controls
+hold its values, distances and ties to the original definition.
+
+Adaptive subdivision uses one topology-specific signed-side predicate for
+sample ownership, affected triangles, shared-edge splitting and redistribution.
+Ambiguous signs use exact dyadic arithmetic over binary64 UVs. Original seed
+edges, UVs and premultiplied skin weights are preserved. Before an optional
+split is admitted, its children are skinned through the actual setup frames
+with Float32 binding coordinates/weights and UVs, and the same declared-source/export-rounding determinant reserve used before field fitting. A positive-area but uncertifiable optional child is also ineligible. An unrepresentable child
+rejects only that unadmitted split; its sample, source error and reason are
+reported, and the next largest eligible residual is considered. Rejected
+source errors remain in dense RMS/max. Invalid original/mandatory geometry
+refuses; admitted triangles are never removed or snapped.
+
+The raw target law remains `reliefGain * (near^gamma - referenceNear^gamma)`
+using the declared polarity and one primary reference. The emitted scalar field
+is labelled **source-only coupled constrained approximation**. Its sole data
+objective is source-area-weighted squared RAW CORE error; a neutral pixel's
+area is its original UV-to-neutral Jacobian divided by source width/height.
+Continued samples and reference/quiet slopes do not enter the objective. There
+are no per-part calibration constants, smoothing coefficients or gain changes.
+HOST and protected vertices are barycentric expressions of their **final**
+host/covering fields, so the least-squares fit is coupled rather than copying
+an unmodified owner or fitting independent transport laws.
+
+The sparse convex solver uses column-scaled ADMM with unit numerical penalty,
+Jacobi-preconditioned conjugate gradients, deterministic binding/vertex/sample
+order and zero-nullspace initialization. PCG uses relative residual `2^-40`
+and at most `min(4096, 4*n+64)` iterations. ADMM uses normalized primal,
+stationarity and complementarity tolerance `2^-30` and at most 2000 sweeps.
+Nonconvergence is `RIG_DEPTH_FIELD_SOLVE`, never a constant-field fallback.
+No-fold halfspaces cover all signs of the rated yaw/pitch sine coefficients.
+Their precision reserve is derived from actual frames, Float32 storage and the
+producer's four-decimal deformation emission. The rounding magnitude envelope
+is the declared source scalar domain `[0,1]` after its fixed remap, not the
+observed centre-sample extrema; a solved value outside that envelope refuses
+without clipping. The same symmetric envelope `-M <= Z <= M`, with `M`
+derived from those two remap endpoints, is imposed on every emitted vertex
+as linear QP constraints before solving; the final range check verifies the
+numerical certificate rather than rejecting an otherwise feasible unbounded
+fit. A missing precision certificate
+is `RIG_DEPTH_FIELD_PRECISION`; actual rounded combined-pose orientations are
+also checked before output. Mathematical field feasibility is not a native
+compiler or renderer verdict.
+
+The only yaw/pitch displacement remains `deltaX = Z sin(yaw)` and
+`deltaY = Z sin(pitch)` in the declared neutral pivot frame. No cosine,
+cylinder, legacy layer offset, head spin or shared bone tangent is emitted.
+Roll remains separate. Processed depth tones are relative visual relief, not
+calibrated fragment distances; source approximation error remains observable.
+Explicit zero gain bypasses remeshing and preserves setup bytes. No-depth uses
+the existing producer path.
+
+Coverage uses one explicitly ordered later owner. Subject and owner alpha at
+least the authored threshold define protected material. Neutral-visible means
+subject alpha times **all later layers' transmittance** meets that same
+threshold. For the pilot threshold, owner alpha at most 127/255 can be visible
+and at least 128/255 is protected. Certified plateaus use that semantic gap,
+never an authored or fitted spatial width. Whole-host field transfer is a
+separate geometric binding contract, not an opacity-mask replacement.
+
+Mixed-alpha ownership partition is unfinished and strict mode refuses it as
+`RIG_DEPTH_COVERAGE_ALPHA_UNSUPPORTED`. The preserved prototype of certified
+fine alpha subdivision is not a shippable implementation or accepted result.
+
+For a temporary owner eye check ONLY, the manifest may explicitly contain
+`"pilot": { "mode": "mixed-alpha-final-coverer", "label": "EYE-CHECK PILOT, not shippable" }`.
+Both strings are exact; unknown or incomplete annotations refuse. No
+configuration default or environment variable enables this mode. A geometric
+mixed-alpha overlap cell then uses the **final emitted covering spatial
+field**, with no independent subject relief inside that cell. This deliberately
+also carries visible padding in the mixed cell. It is never a claim that fine
+alpha ownership is complete, and it must never be merged or shipped.
+
+Every temporary fallback reports its subject/owner, original seed and covering
+triangle, stable cell ID, vertex count, neutral source area, material UV area
+and source texel area. These geometric areas are not opaque-pixel counts.
+The rig/model name, report and adjacent `PILOT.json` carry the exact label
+`EYE-CHECK PILOT, not shippable`; the owner page must show the same banner.
+The Core rig/motion schemas receive no unknown metadata fields. Existing
+projection, source-area core objective, reference, mask, gain, no-fold,
+export-precision and 2048-triangle gates remain unchanged. Neutral pixels,
+targeted no-depth bytes, compiled corners and owner LIVE review remain
+mandatory. The pilot label does not waive an unsupported HOST frame or budget
+failure. Broader population/fullsuite verification is still separate.
+
+The report names before/after vertex/triangle counts, cap and exhaustion,
+effective carried-field dense RMS/max and aggregate RAW source RMS/max. RAW
+HOST support is a dependency, not physical neutral occlusion. Coverage rows
+distinguish `host-support` from later `covering-ownership`. Protected RAW samples
+use only an explicit later owner and the original neutral bilinear-alpha
+operator; without one protection is unavailable. HOST samples can be visible
+and carried, but are not thereby protected. RAW
+errors also have separate sample counts, RMS and maxima for source core,
+continued boundary, neutral-visible material, neutral-protected material and
+carried cells. Empty sample sets have null errors. Neutral-visible uses all
+later bound neutral drawables and straight-RGBA bilinear alpha; if later
+unbound drawables are not owned, visibility is marked unavailable instead of
+claiming samples. Actual packed-page alpha conformance remains pending. Compare
+an old CORE measurement only against the new RAW source-core population;
+continued samples and intentional coverage-field replacement are not a silent
+core-quality improvement.
+
+Nine model-space single/combined extrema refuse folds before output meshes
+are installed. Compiled poses, actual neutral PNG equality, source RGBA
+identity, coverage exposure, complete alpha-partition support and owner live
+acceptance remain separate gates. Remeshing changes topology/weight arrays.
+Mathematical neutral equivalence is not a pixel-byte proof. No-depth population
+byte identity remains required.
+
+For comparisons across topology, freeze the original material control UVs and
+normalization before remeshing, evaluate those points on actual new posed
+triangles, and run the unchanged quiet metric. Averaging every new vertex or
+reusing coarse triangle displacement changes the operator. The measurement
+bridge requires an unchanged-source equality proof and a subdivided analytic
+field control with a wrong-coarse-triangle plant. Slopes, signs, ordering and
+ratios are reported, not gated; an actual owner live check remains final.
+
+Relief retention uses exactly the objective's source-area-weighted RAW CORE
+samples. With weighted means and centred sums `R2`, `F2` and covariance `C`,
+report `sqrt(F2/R2)` and regression scale `C/R2` beside weighted RAW RMS error.
+A flat fitted field has retention zero; zero RAW variance gives null. These
+are observations, not gates or permission to emit a constant fallback.

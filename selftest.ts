@@ -202,6 +202,8 @@ import { type ClothRecipes, draftTrees, INFLUENCE_RADIUS_CELLS, linkRows } from 
 import { BARE_CROWN_PARTS, CUT_BASE_PARTS, CUT_PARTS, eyeParts, FACELESS_PARTS, IRIS_NO_EYEWHITE_PARTS, LEVEL_FRINGE_PARTS, LONG_ROBE_PARTS, LONG_ROBE_RIG, MIXED_STRAND_PARTS, NO_BROW_PARTS, NO_EYE_PARTS, ONE_EYEWHITE_PARTS, PROPOSE_PARTS, PROPOSE_RIG, type ProposeFixturePart, STRAND_PARTS, STRAND_RIG, TILTED_FRINGE_PARTS, TWO_LOCK_PARTS, writeProposeFixture } from './fixtures/propose.ts';
 // The runtime's own posing, for the one control that measures where a mesh's pixels go (PR14): a second opinion about a weighted vertex is what a measurement must not carry.
 import { type BoneSnapshot, type Frame, loadPosable, type Mesh, sampleAnimation, sampleSetupPose } from 'rig-c/src/render.ts';
+import { runDepthSurfaceChecks, runCompiledDepthChecks, runDepthPilotChecks, runPilotCompiledDepthChecks } from './tools/check_depthsurface.ts';
+import { runDepthMeshChecks } from './tools/check_depthmesh.ts';
 import { loadCandidate as loadRootCandidate, throughPoser as throughRootPoser, sampleAnimation as sampleRootAnimation } from 'rig-c/render-shared';
 import { CANVAS, flatName, layerRaster, minimalConfig, WRAPPER_LAYERS, writePsdFixture, writeWrapperFixture } from './fixtures/synthetic.ts';
 import { MANNEQUIN_BLOCKS, MANNEQUIN_FIGURE_PX, MANNEQUIN_KEYPOINTS, MANNEQUIN_PARTS, MANNEQUIN_PLAN, MANNEQUIN_SIDE, writeMannequinFixture } from './fixtures/mannequin.ts';
@@ -2748,7 +2750,7 @@ function runConfigSuite(): number {
           radUnkSurf90,
           'CONFIG_KEY_KNOWN',
           'config.turn.surface.extra',
-          'is not a field here; known: radius — a project\'s own record goes under a key beginning "x-" (any JSON, read by nothing), a remark under note or <name>_note (a string)',
+          'is not a field here; known: radius, depth — a project\'s own record goes under a key beginning "x-" (any JSON, read by nothing), a remark under note or <name>_note (a string)',
         ),
       `radius 53 -> ${show75(radOkTop90)}; surface.radius 106.5 -> ${show75(radOkSurf90)}; head.radius 80 -> ${show75(radOkHead90)}; radius 0 -> ${show75(radZero90)}; surface.radius -10 -> ${show75(radNegSurf90)}; surface.extra -> ${show75(radUnkSurf90)}`,
       'issue #479: config.turn accepts positive radius, surface.radius and head.radius for the cylinder face projection and refuses non-positive values (CONFIG_FIELD_TYPE) or unknown surface keys (CONFIG_KEY_KNOWN)',
@@ -6644,6 +6646,15 @@ function flatFormLine(r: FlatFormRender | string): string {
 function runRigSuite(): number {
   section('rig: bones, lattice meshes, weights, regions and the idle');
   const { say, bad } = counter();
+  const depthDir = temp('depth-surface');
+  try {
+    let depthCase = 0;
+    runDepthPilotChecks(join(depthDir, 'pilot'), (name, pass, detail) => say(`DP${String(++depthCase).padStart(2, '0')}_${name}`, pass, detail, 'explicit labelled temporary pilot; never shippable'));
+    runPilotCompiledDepthChecks(join(depthDir, 'pilot-native'), (name, pass, detail) => say(`DP${String(++depthCase).padStart(2, '0')}_${name}`, pass, detail, 'actual package gate and coupled hand plane'), rigcRunnerAt(suiteRigc(), spawnRigc));
+    runDepthSurfaceChecks(depthDir, (name, pass, detail) => say(`DP${String(++depthCase).padStart(2, '0')}_${name}`, pass, detail, 'explicit single-Z input, independent analytic projection/ownership/zero controls and planted defects'));
+    runDepthMeshChecks(join(depthDir, 'mesh'), (name, pass, detail) => say(`DM${String(++depthCase).padStart(2, '0')}_${name}`, pass, detail, 'independent analytic adaptive mesh, weight and ordered material coverage controls'));
+    runCompiledDepthChecks(join(depthDir, 'compiled'), (name, pass, detail) => say(`DP${String(++depthCase).padStart(2, '0')}_${name}`, pass, detail, 'actual rig-c compilation and spine-core timeline/pose, independent synthetic geometry'), rigcRunnerAt(suiteRigc(), spawnRigc));
+  } finally { rmSync(depthDir, { recursive: true, force: true }); }
   const r = buildRig(rigCfg(), rigParts(), rigImages());
   const cloth = r.rig.skins.default.cloth.cloth as MeshAttachment;
   const eye = r.rig.skins.default.eye.eye as RegionAttachment;

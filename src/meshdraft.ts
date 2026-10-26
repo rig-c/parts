@@ -887,6 +887,7 @@ function attachmentOf(rig: RigSpec, part: string): MeshAttachment {
 export function meshDraftStage(input: MeshDraftInput, rigc: RigcRunner, checkBin: string, scratch: string, log: Log): MeshDraftResult {
   const text = readFileSync(input.config, 'utf8');
   const { config: cfg, animations } = loadConfigAndAnimations(input.config);
+  if (cfg.turn?.surface?.depth !== undefined) throw new PartsError([{ code: 'RIG_DEPTH_BINDING', object: 'mesh-draft', detail: 'depth surfaces require a frozen source topology; use rig/build for this opt-in rather than drafting a different mesh' }]);
   const raw = JSON.parse(text) as Json;
   const parts = readParts(join(input.parts, 'parts.json'));
   const rules = figureRules(parts);

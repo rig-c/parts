@@ -180,7 +180,7 @@ part name, `[i]` an entry of a list):
 - **turn.depths.&lt;part&gt;** — a See-through depth
 - **turn.deform.&lt;key&gt;** — a per-degree fraction or coupling share (FACE_DEFORM_FRACTIONS, issue #436)
 - **turn.band**, when an object — optional: `yaw`, `pitch` (issue #472)
-- **turn.surface**, when an object — optional: `radius` (issue #479)
+- **turn.surface**, when an object — optional: `radius`, `depth` (issue #479)
 - **turn.head**, when an object — optional: `pivot`, `radius` (issues #478, #479)
 - **scene** — no field (`{}`; a record or an annotation only)
 - **proposal.json**, the file propose writes — `bones`, `meshes`, `regions`, `limbs` under `--keypoints` where an arm or a leg is drafted from its joints (issue #349), `stops` when supplied, `motion` under the rules above, `turn` with `--full`/`--head`, `proposed_rig_scale` (issue #354), and `notes`
@@ -381,3 +381,18 @@ carrier and measured geometry must agree; the lower rigid piece alone carries
 existing `LIMB_ONE_BONE` line checks ordinary segments as before; the band
 requires exactly its two adjacent carriers. `SEAM_OVER_RANGE` uses the stored
 radius and existing rest-art comparison, without changing its bar.
+
+### Opt-in processed depth
+
+`turn.surface.depth` is an explicit producer pilot. Its `rig-parts-depth/2`
+manifest defines source-only displacement, one shared source-bound reference,
+constrained adaptive meshes and covering ownership; see AUTHORING. Revision 1
+is refused rather than silently retaining its old layer/cosine/tangent law.
+This opt-in changes topology and nonzero motion. Zero-gain setup and no-depth
+outputs retain their respective identity obligations. Neutral raster bytes,
+compiled folds, dense approximation, source-bound coverage and actual owner
+live acceptance require separate evidence; a build/report is not visual
+acceptance. Processed source tones are relative relief, not metric depth.
+
+Mixed-alpha coverage cells currently refuse before emission. The fail-closed
+guard is not completed general alpha-aware meshing or real-input support.

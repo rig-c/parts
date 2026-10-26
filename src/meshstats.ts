@@ -50,8 +50,8 @@ export interface MeshStatsInput {
  * stands at its bone's origin and no mesh is weighted to it. Throws the rig stage's own `PartsError` on a refusal.
  */
 export function meshStatsStage(input: MeshStatsInput, log: (line: string) => void): MeshStatsRow[] {
-  const { cfg, parts, images } = readRigInputs(input.config, input.parts);
-  const rows = meshStatsRows(buildRig(cfg, parts, images, undefined, DEFAULT_IDLE_KEYS).meshReport);
+  const { cfg, parts, images, depth } = readRigInputs(input.config, input.parts);
+  const rows = meshStatsRows(buildRig(cfg, parts, images, undefined, DEFAULT_IDLE_KEYS, undefined, true, depth).meshReport);
   for (const l of meshStatsLines(rows)) log(l);
   return rows;
 }

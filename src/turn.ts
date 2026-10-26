@@ -31,6 +31,8 @@
 import { computeWorldTransforms, toBoneLocalVector, toWorld, type BoneTransform } from './coords.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
 import { pyRound } from './round.ts';
+import { applyDepthSurface } from './depthsurface.ts';
+import { depthRefuse } from './depthinput.ts';
 
 /**
  * The layers that ride on the face (issue #271): See-through makes no depth
@@ -225,7 +227,7 @@ export interface TurnSpec {
   pivot: number;
   depths: Record<string, number>;
   head?: { pivot?: number; radius?: number };
-  surface?: { radius?: number };
+  surface?: { radius?: number; depth?: string };
   radius?: number;
   band?: number | { yaw?: number; pitch?: number };
   deform?: Partial<FaceDeformFractions>;
@@ -425,6 +427,8 @@ export function evalYawFaceSurface(
 }
 
 export interface FaceSurfaceDeformOptions {
+  /** Prepared explicit surface input; no file reads in the projection. */
+  depth?: import('./depthinput.ts').PreparedDepth;
   /** Padded `face.png` width in rig px (defaults to the mesh width or 114). */
   imageWidth?: number;
   /** Padded `face.png` height in rig px (defaults to the mesh height or 136). */
@@ -475,7 +479,7 @@ interface DeformWeight {
   weight: number;
 }
 
-interface DeformMeshAttachment {
+export interface DeformMeshAttachment {
   type: 'mesh';
   image: string;
   width: number;
@@ -486,7 +490,7 @@ interface DeformMeshAttachment {
   weights: DeformWeight[][];
 }
 
-interface DeformRegionAttachment {
+export interface DeformRegionAttachment {
   image: string;
   x: number;
   y: number;
@@ -507,7 +511,7 @@ interface SliderKey {
   derive?: DeriveSpec;
 }
 
-interface SliderTrack {
+export interface SliderTrack {
   bone?: string;
   group?: string;
   property: string;
@@ -520,7 +524,7 @@ interface DeformTimelineEntry {
   keys: Array<{ t: number; vertices?: number[] }>;
 }
 
-interface SliderAnimation {
+export interface SliderAnimation {
   duration: number;
   tracks: SliderTrack[];
   deform?: DeformTimelineEntry[];
@@ -569,32 +573,26 @@ function buildFaceGrid(width: number, height: number): { points: Array<[number, 
  * (issues #436, #477, #478). When `motion` holds neither `tilt` nor `turn` with
  * slider `derive` keys, neither `rig` nor `motion` is touched.
  */
-export function applyFaceSurfaceDeform(
-  rig: {
-    bones: Array<{ name: string; parent?: string; x: number; y: number; rotation?: number; length?: number; inherit?: string }>;
-    slots?: Array<{ name: string; bone: string }>;
+export interface SurfaceRig {
+    bones: Array<{ name: string; parent?: string; x: number; y: number; rotation?: number; length?: number; scaleX?: number; scaleY?: number; shearX?: number; shearY?: number; inherit?: string }>;
+    slots?: Array<{ name: string; bone: string; attachment?: string | null }>;
     skins: { default: Record<string, Record<string, DeformMeshAttachment | DeformRegionAttachment>> };
     constraints?: Array<Record<string, unknown>>;
     invariants?: Record<string, unknown>;
-  },
+}
+
+export function applyFaceSurfaceDeform(
+  rig: SurfaceRig,
   motion: {
     groups?: Record<string, string[]>;
     animations: Record<string, unknown>;
   },
   options?: FaceSurfaceDeformOptions | Readonly<Partial<FaceDeformFractions>> | null,
 ): void {
-  const rawTilt = motion.animations.tilt as SliderAnimation | undefined;
-  const rawTurn = motion.animations.turn as SliderAnimation | undefined;
-  if (rawTilt === undefined && rawTurn === undefined) return;
-  const hasDerive =
-    (rawTilt?.tracks?.some((tr) => tr.keys?.some((k) => k.derive !== undefined)) ?? false) ||
-    (rawTurn?.tracks?.some((tr) => tr.keys?.some((k) => k.derive !== undefined)) ?? false);
-  if (!hasDerive) return;
-
   const isOpts =
     options !== undefined &&
     options !== null &&
-    ('imageWidth' in options ||
+    ('depth' in options || 'imageWidth' in options ||
       'imageHeight' in options ||
       'opaqueWidth' in options ||
       'opaqueHeight' in options ||
@@ -607,6 +605,17 @@ export function applyFaceSurfaceDeform(
       'surfaceRadius' in options ||
       'flatYawTableMutant' in options);
   const opts: FaceSurfaceDeformOptions = isOpts ? (options as FaceSurfaceDeformOptions) : { overrides: options as Readonly<Partial<FaceDeformFractions>> | null | undefined };
+
+  const rawTilt = motion.animations.tilt as SliderAnimation | undefined;
+  const rawTurn = motion.animations.turn as SliderAnimation | undefined;
+  if (rawTilt === undefined && rawTurn === undefined) { if (opts.depth) depthRefuse('RIG_DEPTH_BINDING', 'depth controls', 'turn and tilt derive controls are required'); return; }
+  const hasDerive =
+    (rawTilt?.tracks?.some((tr) => tr.keys?.some((k) => k.derive !== undefined)) ?? false) ||
+    (rawTurn?.tracks?.some((tr) => tr.keys?.some((k) => k.derive !== undefined)) ?? false);
+  if (!hasDerive) { if (opts.depth) depthRefuse('RIG_DEPTH_BINDING', 'depth controls', 'explicit derive degrees are required; opt-in cannot silently fall back'); return; }
+
+
+  if (opts.depth !== undefined) { Object.assign(opts.depth.report, applyDepthSurface(rig, motion, opts.depth, FACE_RATED_BAND)); return; }
 
   // Issue #477 & #478: refuse an out-of-range ear derive.depth or missing config.turn by name before touching rig or motion.
   const preProblems: Problem[] = [];
@@ -725,6 +734,7 @@ export function applyFaceSurfaceDeform(
     }
     rig.constraints = nextConstraints;
   }
+
 
   const faceSlot = rig.skins.default.face;
   if (faceSlot === undefined || faceSlot.face === undefined) return;

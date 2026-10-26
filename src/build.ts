@@ -94,6 +94,7 @@ import { type AutoMeshReport, buildRig, DEFAULT_IDLE_KEYS, type FaceAxis, type I
 import { KEYPOINT_NAMES, type KeypointName, type PosePoints } from './skeleton.ts';
 import { AUTHOR_NO_ROLE, isAuthorTag } from './tags.ts';
 import { TURN_BONE } from './turn.ts';
+import { readDepthInput } from './depthinput.ts';
 import { pyRound } from './round.ts';
 import { LAYOUT_FILE, layoutCompanion, refreshLimbLayout } from './limblayout.ts';
 
@@ -1343,6 +1344,7 @@ function multiIntervalRun(
  */
 /** What the rig stage reads before it builds anything: the config with its `animations_from` table, parts.json, and each part's PNG (and each alternate set's) that exists. */
 export interface RigInputs {
+  depth?: import('./depthinput.ts').PreparedDepth;
   cfg: ReturnType<typeof loadConfigAndAnimations>['config'];
   from: ReturnType<typeof loadConfigAndAnimations>['animations'];
   parts: ReturnType<typeof readParts>;
@@ -1369,7 +1371,8 @@ export function readRigInputs(config: string, partsDir: string): RigInputs {
       if (existsSync(png)) images.set(attName, readPng(png));
     }
   }
-  return { cfg, from, parts, images };
+  const depth = cfg.turn?.surface?.depth === undefined ? undefined : readDepthInput(resolve(dirname(config), cfg.turn.surface.depth));
+  return { cfg, from, parts, images, ...(depth === undefined ? {} : { depth }) };
 }
 
 /** Final candidate serialization shared by initial and settled motion replay. */
@@ -1380,13 +1383,15 @@ export function rigOutputTexts(r: RigOutput, animations: Parameters<typeof withA
       ['rig.json', rigJsonText(r.rig)],
       ['motion.json', rigJsonText(mergedMotion)],
       ['mesh_report.json', rigJsonText(r.meshReport)],
+      ...(r.depthReport === undefined ? [] : [['depth_report.json', rigJsonText(r.depthReport)] as [string, string]]),
+      ...(r.depthReport?.pilot === undefined ? [] : [['PILOT.json', rigJsonText({ ...r.depthReport.pilot, input: r.depthReport.input, requiredPageBanner: r.depthReport.pilot.label, acceptance: 'Owner LIVE check pending; never merge or ship this pilot' })] as [string, string]]),
       ...(r.sets === undefined ? [] : [[SETS_FILE, rigJsonText(r.sets)] as [string, string]]),
     ];
 }
 
 export function rigStage(input: RigStageInput, rigc: RigcRunner, scratch: string, log: Log): RigOutput {
-  const { cfg, from, parts, images } = readRigInputs(input.config, input.parts);
-  const first = buildRig(cfg, parts, images, undefined, input.idleKeys ?? DEFAULT_IDLE_KEYS, input.reduce);
+  const { cfg, from, parts, images, depth } = readRigInputs(input.config, input.parts);
+  const first = buildRig(cfg, parts, images, undefined, input.idleKeys ?? DEFAULT_IDLE_KEYS, input.reduce, true, depth);
   const textsOf = (r: RigOutput): Array<[string, string]> => rigOutputTexts(r, from === null ? null : from.table);
   const firstTexts = textsOf(first);
   // The gate runs before the lines are printed, and its lines print where they always did: an automatic part's motion

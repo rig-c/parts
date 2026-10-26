@@ -115,6 +115,13 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { initializeCanvas, writePsd } from 'ag-psd';
 import { encodePngBytes } from '${PACKAGE}/src/raster/png.ts';
+import { decodeDepth } from '${PACKAGE}/src/raster/depth.ts';
+import { encode as encodeJpeg } from 'jpeg-js';
+
+const jpegPixels = new Uint8Array(4 * 4 * 4);
+for (let i = 0; i < 16; i++) jpegPixels.set([96, 96, 96, 255], i * 4);
+const jpegProbe = decodeDepth(encodeJpeg({ width: 4, height: 4, data: jpegPixels }, 100).data, 'jpeg-rgb8', 'synthetic package control');
+if (jpegProbe.width !== 4 || jpegProbe.height !== 4 || Math.abs(jpegProbe.data[0] - 96) > 1) throw new Error('SMOKE_DEPTH_JPEG');
 
 // \`fileURLToPath\` and not \`new URL(...).pathname\`: a URL path is
 // percent-encoded, so the unusual-path case would write into a directory with
@@ -150,6 +157,8 @@ writeFileSync(join(HERE, 'fixture.psd'), new Uint8Array(writePsd(psd, { noBackgr
 
 console.log('RESOLVED ' + import.meta.resolve('${PACKAGE}/src/raster/png.ts'));
 console.log('RESOLVED ' + import.meta.resolve('ag-psd'));
+console.log('RESOLVED ' + import.meta.resolve('${PACKAGE}/src/raster/depth.ts'));
+console.log('RESOLVED ' + import.meta.resolve('jpeg-js'));
 `;
 
 // A rig directory as the rig stage writes one, for \`check\`: a 48x80 canvas, one bone, two region parts
@@ -936,9 +945,9 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, fetchedTgz?: strin
   } else {
     const resolved = [...gen.out.matchAll(/^RESOLVED (.+)$/gm)].map((m) => (m[1].startsWith('file://') ? fileURLToPath(m[1]) : m[1]));
     const outsideInstall = resolved.filter((p) => !isSmokePathInside(join(home, 'node_modules'), p));
-    if (resolved.length !== 2 || outsideInstall.length > 0) {
-      fault('fixture', `SMOKE_FIXTURE_FROM_THE_PACKAGE: the generator's imports resolved to ${resolved.join(', ') || '(nothing)'}; both were required under ${join(home, 'node_modules')}`);
-    } else notes.push(`the fixture's codec and PSD writer resolved inside the install`);
+    if (resolved.length !== 4 || outsideInstall.length > 0) {
+      fault('fixture', `SMOKE_FIXTURE_FROM_THE_PACKAGE: the generator's imports resolved to ${resolved.join(', ') || '(nothing)'}; all four were required under ${join(home, 'node_modules')}`);
+    } else notes.push(`the fixture's PNG/JPEG codecs and PSD writer resolved inside the install`);
   }
 
   // `layers`, twice: the wrapper form and the PSD form must read back the same
