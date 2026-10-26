@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.68.0](https://github.com/rig-c/parts/compare/v1.67.0...v1.68.0) (2026-10-26)
+
+
+### Features
+
+* **depth:** read See-through per-layer depth sheets into core depth references ([#774](https://github.com/rig-c/parts/issues/774)) ([9a488d0](https://github.com/rig-c/parts/commit/9a488d0e918edaeb74d1d767caa5ef6e7873b920))
+* **turn:** a 2.5D head turn from depth sheets — grid surfaces, yaw/pitch dials, core projects ([#777](https://github.com/rig-c/parts/issues/777)) ([56aa2dd](https://github.com/rig-c/parts/commit/56aa2ddbeab5d7239916f8acbec0f206af0bb3e5)), closes [#763](https://github.com/rig-c/parts/issues/763)
+
+
+### Performance Improvements
+
+* **automotion:** compare candidates against one prepared motion reference (rig-c ^2.72.0) ([#778](https://github.com/rig-c/parts/issues/778)) ([91f0935](https://github.com/rig-c/parts/commit/91f09357404f0c3e4cacecd7c5c300c14cde745d)), closes [#776](https://github.com/rig-c/parts/issues/776)
+
 ## [1.67.0](https://github.com/rig-c/parts/compare/v1.66.0...v1.67.0) (2026-10-25)
 
 
