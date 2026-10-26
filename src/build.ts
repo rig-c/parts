@@ -50,7 +50,7 @@ import { type AnimFrame, EncodeError, encodeApng, encodeIndexedApng, INDEXED_DEF
 import { assemble, type AssembleResult, cutLines, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, holeKindsLine, holeLines, measureRecomposite, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine } from './assemble.ts';
 import { allocationClause, type Reducer, stageBClause, unboundedClause } from './automesh.ts';
 import { residualClause } from './autoenvelope.ts';
-import { type AutoMotionCase, failingRows, idleSchedule, localRow, motionClause, motionDeformation, motionDocument, motionInput, motionRowText, motionStimulus, motionVerdict, noStimulusProblem, type ReplayCandidate, runComparison, sourceSelfFailure, stimulusMotion, withStimulus } from './automotion.ts';
+import { type AutoMotionCase, failingRows, idleSchedule, localRow, motionClause, motionDeformation, motionDocument, motionInput, motionRowText, motionStimulus, motionVerdict, noStimulusProblem, prepareComparison, type ReplayCandidate, runComparison, runPreparedComparison, sourceSelfFailure, stimulusMotion, withStimulus } from './automotion.ts';
 import {
   bisectAccepted,
   budgetProblem,
@@ -1232,6 +1232,9 @@ export function replaySearch(
   }
   const selection = motion.selection;
   if (selection !== undefined && selection.maxProbes < maxReplays(N, I)) return refuse(budgetProblem(c.object, selection.maxProbes, N, I));
+  const { candidates: _unused, ...referenceInput } = motionInput(c, motion, refModel, refModel, probeSchedule);
+  const prepared = prepareComparison(c.object, referenceInput);
+  if ('code' in prepared) return refuse(prepared);
   const kept = new Map<number, ReplayCandidate>();
   const probeFrames: string[] = [];
   let fatal: Problem | null = null;
@@ -1260,7 +1263,7 @@ export function replaySearch(
       };
       return refused(`rigc exit ${gate.status}`);
     }
-    const cmp = runComparison(c.object, motionInput(c, motion, refModel, model, probeSchedule));
+    const cmp = runPreparedComparison(c.object, prepared, motionInput(c, motion, refModel, model, probeSchedule));
     if ('code' in cmp) {
       fatal = cmp;
       return refused(cmp.code);

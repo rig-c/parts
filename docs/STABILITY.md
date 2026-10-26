@@ -296,7 +296,7 @@ in the package.
 
 ## rig-c
 
-`dependencies` takes `rig-c` `^2.71.0`: 2.71.0 or any later 2.x. Bun 1.4 or later
+`dependencies` takes `rig-c` `^2.72.0`: 2.72.0 or any later 2.x. Bun 1.4 or later
 is the declared floor (`engines.bun` `>=1.4.0`; older 1.4 releases are not tested in
 CI, which runs `latest`, and compatibility with an older 1.4 release is handled when
 reported as an issue). What this package relies on in rig-c, every import
@@ -355,6 +355,22 @@ documents). On CI (`ubuntu-latest`), the last two green runs on `main` took 4 mi
 42 s and 41 s for the install smoke (6 cases; limit 10 minutes), at `8be4cd1` and
 `22b2c5a` respectively. None of these figures is a promise: they are what the named
 runs measured.
+
+The following measurement used the unreleased [core#1595](https://github.com/rig-c/core/issues/1595)
+prepared-reference implementation, packaged locally with `rig-c` metadata version
+`2.70.0` (tarball SHA-256 `dac8c10631e9c0fbd30b9361155b26cba5526ece618c623e87e8dd20cc3dd92c`).
+Its grid-selection replays bind one exact reference and schedule, then compare each
+fresh gated candidate.
+The number of candidate probes, gated builds and packed-page checks is
+unchanged; a changed bound or reference input is refused. In one exclusive Nova
+WSL ABBA invocation, using the same rig-c tarball in both arms and two runs per
+arm, the strict switched `bottomwear` input derived from public `reference-demo` took 56.00–56.28 s
+with one-shot comparison and 50.55–51.40 s with preparation included; the similarly switched public
+`reference-sample` input took 18.96–20.41 s and 16.39–18.71 s respectively.
+The paired differences were 4.59–5.74 s and 1.70–2.57 s. These are observed
+wall times for those inputs, not an execution limit or a machine-wide idle
+measurement; load outside the Nova pool was not measured. The prior count
+bounds remain the termination guarantee.
 
 ## Determinism
 

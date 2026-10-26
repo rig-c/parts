@@ -108,6 +108,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, 
 import { availableParallelism, tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { inflateSync } from 'node:zlib';
+import { isDeepStrictEqual } from 'node:util';
 import ts from 'typescript';
 import { runNamedCutSkirtChecks } from './tools/check_named_cut_skirt.ts';
 import { runChainInheritChecks } from './tools/check_chain_inherit.ts';
@@ -472,7 +473,7 @@ import { AUTO_CASES, densityOnly, DIAGONAL_POCKET_SIDE, diagonalPocketMask, exam
 import { BLOCKED_LABEL, barsOf, basisOf, cappedReducer, classify, costLine, countingRunner, type Counts as MatrixCounts, countsCell, deadlineRunner, emptyCost, fromWire, geometryRow, lossAgainstOriginal, pinnedExamplesCommit, quietLabel, rerunSection, STOPPED_CODE, stretchOf, toWire, verdictText } from './tools/auto_matrix.ts';
 import { withPolicyMotion } from './fixtures/automotion.ts';
 import { type BStar, bStar, type CellRow as ToolCellRow, nearestRank, parseArgs as parseBoundaryArgs, pendingRow, policyAt, render as renderBoundary, sagittas, sagittaSummary } from './tools/auto_boundary_survey.ts';
-import { type AutoMotionCase, explicitFrameId, idleSchedule, localRow, motionInput, motionStimulus, motionVerdict, runComparison, stimulusAnimations, withStimulus } from './src/automotion.ts';
+import { type AutoMotionCase, explicitFrameId, idleSchedule, localRow, motionInput, motionStimulus, motionVerdict, prepareComparison, runComparison, runPreparedComparison, stimulusAnimations, withStimulus } from './src/automotion.ts';
 import { clothLines, foldsLines, loopCheckLine, loopStage, motionGates, motionSeamLines, type MotionGateRun, replaySearch, stimulusTexts, strayClause } from './src/build.ts';
 import {
   bisectAccepted,
@@ -47645,6 +47646,27 @@ function runAutoMotionSuite(): number {
       pos.builds.length === 2 && strip(rigOf(0)) === strip(rigOf(1)) && differs && second !== null && 'code' in second && second.code === 'AUTO_MESH_MOTION_INPUT' && second.detail.includes('COMPARE_INPUTS_DIFFER') && second.detail.includes('bones["body"].x'),
       `rig.json outside skins.default.cloth identical: ${strip(rigOf(0)) === strip(rigOf(1))}; cloth differs: ${differs}; a moved body bone -> ${second === null ? 'not run' : 'code' in second ? problemLine(second).slice(0, 400) : 'a report'}`,
       'correction 5: one RigSpec with one attachment swapped; anything else confounds the comparison and rigc refuses it by name',
+    );
+
+    const input776 = case9 === null ? null : motionInput(case9, { maxLocalDeformation: 1 }, ref, cand);
+    const bound776 = input776 === null ? null : (({ candidates: _unused, ...bound }) => bound)(input776);
+    const prepared776 = bound776 === null ? null : prepareComparison(AT, bound776);
+    const preparedReport776 = input776 === null || prepared776 === null || 'code' in prepared776 ? null : runPreparedComparison(AT, prepared776, input776);
+    const oneShot776 = input776 === null ? null : runComparison(AT, input776);
+    say(
+      'MO776_PREPARED_REFERENCE_PRESERVES_THE_ONE_SHOT_REPORT_EXACTLY',
+      preparedReport776 !== null && !('code' in preparedReport776) && oneShot776 !== null && !('code' in oneShot776) && isDeepStrictEqual(preparedReport776, oneShot776) && JSON.stringify(preparedReport776) === JSON.stringify(oneShot776),
+      `prepared ${preparedReport776 === null ? 'not run' : 'code' in preparedReport776 ? problemLine(preparedReport776) : 'report'}; one-shot ${oneShot776 === null ? 'not run' : 'code' in oneShot776 ? problemLine(oneShot776) : 'report'}`,
+      'issue #776: the installed prepared-reference API produces the same complete report as one-shot comparison, with exact numbers and serialized bytes',
+    );
+    const mismatch776 = input776 === null || prepared776 === null || 'code' in prepared776 ? null : runPreparedComparison(AT, prepared776, { ...input776, bounds: { ...input776.bounds, maxLocalDeformation: 2 } });
+    const malformed776 = bound776 === null ? null : prepareComparison(AT, { ...bound776, reference: { ...bound776.reference, model: '{}' } });
+    const refused776 = (value: typeof mismatch776, code: string): boolean => value !== null && 'code' in value && value.code === 'AUTO_MESH_MOTION_INPUT' && value.object === AT && value.detail.includes(code);
+    say(
+      'MO776_PREPARE_AND_REUSE_REFUSALS_KEEP_THE_PARTS_INPUT_ERROR_BOUNDARY',
+      refused776(mismatch776, 'COMPARE_PREPARED_MISMATCH') && malformed776 !== null && 'code' in malformed776 && malformed776.code === 'AUTO_MESH_MOTION_INPUT' && malformed776.object === AT,
+      `changed bound: ${mismatch776 === null ? 'not run' : 'code' in mismatch776 ? problemLine(mismatch776) : 'report'}; malformed reference: ${malformed776 === null ? 'not run' : 'code' in malformed776 ? problemLine(malformed776) : 'handle'}`,
+      'issue #776: the same installed MeshReductionError identity reaches both wrappers; a changed bound and malformed reference are named input refusals',
     );
 
     // MO13 — a reference that fails its own art bounds is rigc's COMPARE_REFERENCE_FAILS, carried.

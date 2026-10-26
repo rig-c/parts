@@ -84,7 +84,7 @@
  * Pure: no clock, no randomness, nothing read or written.
  */
 import { type AcceptedOperation, MeshReductionError, type AlphaMask, type ArtFitBounds, type MeasureRow, type MeshQualityReport, type MotionAmplitude, type MotionBounds, type MotionSchedule, writeMeshQualityReport } from 'rig-c/mesh';
-import { compareMeshesInMotion, type MotionComparisonInput } from 'rig-c/meshcompare';
+import { compareMeshesInMotion, comparePreparedMotion, prepareMotionReference, type MotionComparisonInput, type MotionReferenceInput, type PreparedMotionReference } from 'rig-c/meshcompare';
 import type { AutoMotionSpec } from './config.ts';
 import type { Problem } from './errors.ts';
 import { IDLE_FPS, type MotionSpec, type MotionTrack } from './motion.ts';
@@ -328,6 +328,26 @@ export function motionInput(c: AutoMotionCase, motion: AutoMotionSpec, reference
 export function runComparison(object: string, input: MotionComparisonInput): MeshQualityReport | Problem {
   try {
     return compareMeshesInMotion(input);
+  } catch (err) {
+    if (!(err instanceof MeshReductionError)) throw err;
+    return { code: 'AUTO_MESH_MOTION_INPUT', object, detail: `rig-c's compareMeshesInMotion refused the comparison's input (${err.code}): ${err.message}; nothing is built in the part's place` };
+  }
+}
+
+/** Bind the exact reference-side input for the sequential replay candidates. */
+export function prepareComparison(object: string, input: MotionReferenceInput): PreparedMotionReference | Problem {
+  try {
+    return prepareMotionReference(input);
+  } catch (err) {
+    if (!(err instanceof MeshReductionError)) throw err;
+    return { code: 'AUTO_MESH_MOTION_INPUT', object, detail: `rig-c's compareMeshesInMotion refused the comparison's input (${err.code}): ${err.message}; nothing is built in the part's place` };
+  }
+}
+
+/** Compare a fresh gated candidate under the prepared reference and its bound schedule/art/options. */
+export function runPreparedComparison(object: string, handle: PreparedMotionReference, input: MotionComparisonInput): MeshQualityReport | Problem {
+  try {
+    return comparePreparedMotion(handle, input);
   } catch (err) {
     if (!(err instanceof MeshReductionError)) throw err;
     return { code: 'AUTO_MESH_MOTION_INPUT', object, detail: `rig-c's compareMeshesInMotion refused the comparison's input (${err.code}): ${err.message}; nothing is built in the part's place` };
