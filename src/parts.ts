@@ -1,3 +1,4 @@
+import { partDepthProblems, type PartDepthReference } from './depthsheets.ts';
 /**
  * The output contract of the assemble stage: `parts.json`, one record per
  * part, beside `parts/<name>.png`.
@@ -94,6 +95,8 @@ import { edgeLength } from './length.ts';
 import { recordedFocusProblems } from './setfocus.ts';
 
 export interface PartRecord {
+  /** Optional #773 input reference; production geometry does not consume it yet. */
+  depth?: PartDepthReference;
   name: string;
   from: string;
   /**
@@ -427,6 +430,7 @@ export const PART_KEYS = [
   'seam_override_px',
   'fringe_pushed_back',
   'limb',
+  'depth',
 ] as const;
 /** The one part field that is not a count: a list of `{part, px}`, written only when it is not empty. */
 const FRINGE_KEY = 'fringe_pushed_back';
@@ -434,10 +438,10 @@ const FRINGE_KEY = 'fringe_pushed_back';
 const CUT_FROM_KEY = 'cut_from';
 /** The one part field that is a record of its own: a limb segment's provenance (issue #349), written only on one. */
 const LIMB_KEY = 'limb';
-const COUNT_KEYS = PART_KEYS.slice(2).filter((k) => k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY) as ReadonlyArray<(typeof PART_KEYS)[number]>;
+const COUNT_KEYS = PART_KEYS.slice(2).filter((k) => k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth') as ReadonlyArray<(typeof PART_KEYS)[number]>;
 /** The port's own counts: all three or none (none = a record the reference wrote). */
 export const VISIBILITY_KEYS = ['visible_px', 'occluded_px', 'visible_not_projected_px'] as const;
-const REQUIRED_KEYS = PART_KEYS.filter((k) => !(VISIBILITY_KEYS as readonly string[]).includes(k) && k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY);
+const REQUIRED_KEYS = PART_KEYS.filter((k) => !(VISIBILITY_KEYS as readonly string[]).includes(k) && k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth');
 
 /** Where a part came from: a See-through run and a v3 tag or an author-made layer's `author:<label>` (issue #256), or the painting itself for a patch. */
 export type From = { run: 'full' | 'head'; tag: string } | { run: 'painting'; patch: string };
@@ -572,6 +576,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
         return;
       }
       const r = p as Record<string, unknown>;
+      if ('depth' in r) problems.push(...partDepthProblems(r.depth, `${path} part depth`));
       const label = typeof r.name === 'string' ? `part "${r.name}"` : at;
       for (const k of Object.keys(r)) if (!(PART_KEYS as readonly string[]).includes(k)) fail('PARTS_KEY_KNOWN', `${label} key "${k}"`, `is not a part field; known: ${PART_KEYS.join(', ')}`);
       for (const k of REQUIRED_KEYS) if (!(k in r)) fail('PARTS_FIELD_PRESENT', `${label} field "${k}"`, 'is absent and required');

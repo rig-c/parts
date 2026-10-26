@@ -1,3 +1,4 @@
+import type { DepthConfig } from './depthsheets.ts';
 /**
  * The character config: everything character-specific the CPU stages read,
  * plus the optional blocks for the two GPU stages.
@@ -1039,6 +1040,7 @@ export type LimbLayout = { parts?: string[] } & (
 );
 
 export interface CharacterConfig {
+  depth?: DepthConfig;
   key: string;
   note?: string;
   generation?: Generation;
@@ -1378,6 +1380,7 @@ export interface PaintConfig {
  * bones, meshes, regions and motion that are written only after them.
  */
 export interface EarlyConfig {
+  depth?: DepthConfig;
   key: string;
   seethrough: SeeThrough;
   assemble: { rig_scale: number; head_face_underfill?: boolean };
@@ -1385,6 +1388,7 @@ export interface EarlyConfig {
 
 /** What plain `assemble` reads: the early config plus the plan `--propose-plan` printed. */
 export interface AssembleConfig {
+  depth?: DepthConfig;
   key: string;
   seethrough: SeeThrough;
   assemble: Assemble;
@@ -1397,7 +1401,7 @@ export interface AssembleConfig {
   proposed_rig_scale?: number;
 }
 
-const TOP_KEYS = ['key', 'generation', 'seethrough', 'assemble', 'limbs', 'bones', 'meshes', 'regions', 'motion', 'constraints', 'stops', 'turn', 'scene', 'cloth', 'proposed_rig_scale', 'requirements', 'motion_seams'] as const;
+const TOP_KEYS = ['key', 'generation', 'seethrough', 'assemble', 'limbs', 'bones', 'meshes', 'regions', 'motion', 'constraints', 'stops', 'turn', 'scene', 'cloth', 'proposed_rig_scale', 'requirements', 'motion_seams', 'depth'] as const;
 
 /**
  * The one partial entry point. It validates exactly what its door requires —
@@ -1428,6 +1432,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
   const top = c.object('config', raw, required, TOP_KEYS.filter((k) => !required.includes(k)));
   if (top === null) refuseIfAny(c.problems);
   const t = top as Record<string, Json>;
+  if ('depth' in t) checkDepthConfig(c, t.depth);
   if ('key' in t) c.string('config.key', t.key);
   if ('generation' in t) checkGeneration(c, t.generation);
   else if (needed.includes('generation')) {
@@ -1651,6 +1656,7 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
   const top = c.object('config', raw, required, TOP_KEYS.filter((k) => !required.includes(k)));
   if (top === null) refuseIfAny(c.problems);
   const t = top as Record<string, Json>;
+  if ('depth' in t) checkDepthConfig(c, t.depth);
   if ('key' in t) c.string('config.key', t.key);
   if ('generation' in t) checkGeneration(c, t.generation);
   if ('seethrough' in t) checkSeeThrough(c, t.seethrough);
@@ -4125,6 +4131,7 @@ export function loadClothConfig(path: string): { key: string; cloth: ClothRecipe
   const top = c.object('config', raw, required, TOP_KEYS.filter((k) => !required.includes(k)));
   if (top === null) refuseIfAny(c.problems);
   const t = top as Record<string, Json>;
+  if ('depth' in t) checkDepthConfig(c, t.depth);
   if ('key' in t) c.string('config.key', t.key);
   if ('cloth' in t) checkCloth(c, t.cloth);
   refuseIfAny(c.problems);
@@ -4475,5 +4482,32 @@ function checkTurn(c: Check, v: Json, attached: Set<string>, bones: Set<string>,
   }
   if (bones.has(TURN_BONE)) {
     c.fail('CONFIG_TURN_BONE_FREE', `bone "${TURN_BONE}"`, `is the control the rig stage adds under root for config.turn, and config.bones already declares a bone of that name; rename it`);
+  }
+}
+
+/** #773: all scalar units and user polarity are authored, never inferred. */
+function checkDepthConfig(c: Check, raw: Json): void {
+  const d = c.object('config.depth', raw, [], ['zScale', 'full', 'head']);
+  if (d === null) return;
+  const scale = (path: string, v: Json | undefined): void => {
+    if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) c.fail('DEPTH_ZSCALE_REQUIRED', path, `is ${show(v)}; positive finite authored world units are required`);
+  };
+  if ('zScale' in d) scale('config.depth.zScale', d.zScale);
+  const sheet = (path: string, value: Json): void => {
+    const q = c.object(path, value, ['image'], ['near', 'zScale']);
+    if (q === null) return;
+    if ('image' in q) c.string(`${path}.image`, q.image);
+    if (q.near !== 'black' && q.near !== 'white') c.fail('DEPTH_NEAR_REQUIRED', `${path}.near`, `is ${show(q.near)}; a user sheet must declare black or white, with no guessed convention`);
+    scale(`${path}.zScale`, q.zScale);
+  };
+  for (const run of ['full', 'head']) if (run in d) {
+    const path = `config.depth.${run}`, q = c.object(path, d[run], [], ['layers', 'atlas']);
+    if (q === null) continue;
+    if ('atlas' in q) sheet(`${path}.atlas`, q.atlas);
+    if ('layers' in q) {
+      if (!isPlainObject(q.layers)) c.fail('CONFIG_FIELD_TYPE', `${path}.layers`, 'requires an object keyed by exact source layer name');
+      else for (const [layer, value] of Object.entries(q.layers)) sheet(`${path}.layers.${layer}`, value);
+    }
+    if ('atlas' in q && isPlainObject(q.layers) && Object.keys(q.layers).length > 0) c.fail('DEPTH_SOURCE_AMBIGUOUS', path, 'declares canvas and per-layer sheets together; choose one fallback explicitly');
   }
 }

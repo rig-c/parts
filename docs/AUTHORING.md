@@ -4343,6 +4343,25 @@ and stay absent).
 | <a id="GUIDE_RULE_KNOWN"></a>`GUIDE_RULE_KNOWN` | `rig-parts guide <RULE>`: no row of this guide names the rule. The line, on stderr, lists the three nearest names the guide does hold; nothing is printed in their place | one of the names listed, spelled as the line printed it |
 | <a id="GUIDE_SECTION_KNOWN"></a>`GUIDE_SECTION_KNOWN` | `rig-parts guide §<n>`, `§<n>.<m>` or `§<n>.<m>.<k>`: there is no such section, or no such subsection under the one it names; the line, on stderr, names the deepest section that exists and lists its sections | a number the detail lists |
 
+### Depth sheet refusals (#773)
+
+| rule | means | change |
+| --- | --- | --- |
+| <a id="DEPTH_SHEET_PRESENT"></a>`DEPTH_SHEET_PRESENT` | an active source or authored part-reference file is missing | restore it; legacy hints are inactive without config.depth, but active declarations never fall back |
+| <a id="DEPTH_SHEET_DECODES"></a>`DEPTH_SHEET_DECODES` | declared bytes are not a readable PNG | supply the actual grayscale PNG |
+| <a id="DEPTH_SHEET_SIZE"></a>`DEPTH_SHEET_SIZE` | sheet dimensions differ from the declared layer/canvas | supply a sheet on that exact source grid |
+| <a id="DEPTH_SHEET_GREYSCALE"></a>`DEPTH_SHEET_GREYSCALE` | some R/G/B values differ | use scalar data, not a tinted preview; RGB-encoded gray is valid |
+| <a id="DEPTH_SHEET_OPAQUE"></a>`DEPTH_SHEET_OPAQUE` | some alpha is not255 | provide an opaque declared sheet; alpha is not an unknown-depth fallback |
+| <a id="DEPTH_SHEET_FILENAME"></a>`DEPTH_SHEET_FILENAME` | writer depth filename is not a plain file for a drawn layer | correct the manifest filename; hidden-art sheets are not drawn-layer inputs |
+| <a id="DEPTH_SHEET_UNAMBIGUOUS"></a>`DEPTH_SHEET_UNAMBIGUOUS` | duplicate locations differ, or a sheet collides with art | retain one byte-identical source and noncolliding output names |
+| <a id="DEPTH_ZSCALE_REQUIRED"></a>`DEPTH_ZSCALE_REQUIRED` | units are absent, nonfinite or not positive | author positive finite world units |
+| <a id="DEPTH_NEAR_REQUIRED"></a>`DEPTH_NEAR_REQUIRED` | user convention is absent or invalid | declare black or white; no detector chooses one |
+| <a id="DEPTH_SOURCE_AMBIGUOUS"></a>`DEPTH_SOURCE_AMBIGUOUS` | writer/user or layer/canvas declarations overlap | select one authoritative route explicitly |
+| <a id="DEPTH_SOURCE_RESOLVES"></a>`DEPTH_SOURCE_RESOLVES` | user key names no source layer | use the exact source tag in the selected run |
+| <a id="DEPTH_SOURCE_BASE"></a>`DEPTH_SOURCE_BASE` | a direct assembler caller supplied user paths without config base | pass the actual config-directory base |
+| <a id="DEPTH_PART_SUPPORT"></a>`DEPTH_PART_SUPPORT` | exact copied/generated material lacks source depth or compatible units | provide a declared scalar source/registration; do not infer or fill depth |
+| <a id="PARTS_DEPTH_REFERENCE"></a>`PARTS_DEPTH_REFERENCE` | persisted fields/provenance violate the reference shape | restore image, near, positive zScale and exact source records |
+
 ## 7. The bars `check` enforces, and what only an eye answers today
 
 `check.json`'s `PASS` is true exactly when all of these hold (the reference
@@ -5326,3 +5345,65 @@ cohort to the actual PNG frame set through `readFrameSet` and `boneTrackOf`,
 including unselected frames, before reading the worst pose. Identical static
 ranges on a bone deduplicate; conflicting ranges are explicitly ambiguous,
 never described as no declared range.
+
+## Per-layer depth sheets (#773)
+
+`depth_filename` is a legacy source hint. Only an explicit `config.depth` block
+activates sheet binding. Without it, hints are retained internally with their
+original source directory but trigger no depth-file I/O, validation/refusal,
+fetch or output, whether files or in-memory sheets exist. Original manifests
+are not rewritten. The ordering median and art reading remain unchanged. An
+active drawn-layer sheet must match its own box, have R=G=B and alpha255 everywhere. The pinned See-through
+writer stores far as high (ComfyUI-See-through commit
+`98d754bf04f668647919ab750eccb0e0640faa81`, nodes.py261–281); its later ordering
+adjustments at875–884 do not rewrite the sheet. Accordingly `near` is explicitly
+`black`, not inferred from its median. `depth_median` still controls draw order.
+Per-layer same/opposite/indeterminate readings use a half-u8-level bound and are
+not gates or inversion certificates; constants and symmetric ramps are ambiguous.
+
+The explicit `depth` block declares `zScale` for writer sheets, positive finite
+world units, never derived from eight bits. User fallback sheets are declared
+under `depth.full` or `depth.head`, either `layers` keyed by exact source layer
+name, or `atlas` (one sheet on that run's manifest canvas). Each user sheet states
+`image`, `near` (`black`/`white`) and its positive finite `zScale`. Relative paths
+resolve beside config. A packed atlas is not a run canvas; no packed-region crop
+is inferred. Writer declarations are authoritative; overlapping user declarations
+refuse, and active missing declared files never trigger fallback. An empty
+`depth: {}` activates the hints but cannot supply their missing units. Without
+the block, existing hint-only public inputs remain art-only inputs.
+
+The reader/export APIs accept an explicit `DepthBinding` context
+`{config: config.depth, run: "full" | "head", base: configDirectory}`. With no
+context, raw export writes the legacy art-only manifest/files even if its input
+has already-bound in-memory sheets. `layers --export` retains that default.
+`comfy seethrough --config <file> --depth-run <full|head>` uses the early layers
+config loader before contacting the box. The config depth block and named run
+select binding; the run is never guessed from the uploaded image. Without the
+block no depth hints are checked or fetched, including fresh wrapper outputs.
+With it, declared downloads and the staging reader must pass before emission.
+Relative fallback paths use the actual config directory. `--depth-run` without
+a depth block is a usage error; a block without a named run is also refused.
+
+Assembly uses the actual run registration, source-copy/composite coordinates,
+merge ownership and final crop. Scalar bilinear sampling at pixel centres is
+quantized half up at each intermediate copy/composite grid, then again at
+final part registration. PAD4 repeats the resulting u8 edge values. There is no
+universal half-level total-error bound across those operators. No art-color
+premultiplication or local min/max rescaling is applied. The rig sheet receives the drawing's PAD4 with
+explicit rectangular edge clamping. Original source hashes, rectangles, medians
+and declared units accompany the optional `parts.json` part `depth` reference.
+A synthesized merge rim or replacement under-art without scalar provenance is a
+named support refusal. It is not assigned a background or host depth.
+
+`rig` writes padded sheets in `images/` and a `depth_sheets.json` companion
+(`rig-parts-depth-sheets/1`). Each companion row names the output `part`, its
+actual padded drawing `size` [width,height], and its `depth` reference. A blink
+still split has separate lower/upper scalar slices at the same row as the art;
+both keep original source provenance. Its references describe inputs for Core's
+`generator.depth = {image, near, zScale}`; sources are provenance, not Core
+fields. Existing authored weighted meshes are unchanged and do not consume the
+reference yet (#763 owns generators/turns). Measurement sheets are not packed
+art. An authored `parts.json` depth reference remains an active standalone
+`rig` declaration even without config opt-in: its file/size/color/opacity
+guards still apply. With binding inactive there is no added reference, file or
+legacy-byte change. #773 adds no image generation, geometry or motion model.

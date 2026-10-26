@@ -1,3 +1,4 @@
+import { bindDepthRun, copyDepthMaterial, registerDepthRun, transportPartDepth, type DepthConfig, type RegisteredDepth } from './depthsheets.ts';
 /**
  * The assemble stage: two See-through runs over one painting — a FULL-body run
  * and a HEAD-crop run — merged into one set of rig-space parts, each part one
@@ -101,7 +102,7 @@
  */
 import { sourceLimbTarget, nearestTargetPart } from './limbownership.ts';
 import { type ArmSplit, type BoneEntry, type CharacterConfig, type ControlSkeleton, controlSkeletonOf, type Cut, type EarlyConfig, type Extend, type Limb, type Patch, type PlanEntry, type Run, type SeeThrough } from './config.ts';
-import { type Problem, refuseIfAny } from './errors.ts';
+import { PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { CORE_ALPHA, figuresPhrase, implausibleRules, type Layer, type LayerFigures, layerFigures, type LayerSet, NEAR_WHITE_MIN, OPAQUE_ALPHA_ABOVE, ruleSummary } from './layers.ts';
 import { padToSquare, squarePad } from './inputs.ts';
 import type { MotionSeamDeclaration } from './motionseams.ts';
@@ -308,6 +309,9 @@ export function singleRunPadRecord(single: boolean, sourceW: number, sourceH: nu
 }
 
 export interface AssembleInput {
+  depth?: DepthConfig;
+  /** Config-relative user sheet paths; caller supplies its actual base. */
+  depthBase?: string;
   /** The painting. Its alpha is ignored, as the reference's `convert("RGB")` drops it. */
   source: Raster;
   full: LayerSet;
@@ -1360,10 +1364,11 @@ export function applyArmSplit(set: LayerSet, resolution: number, armSplit: ArmSp
     ]);
   }
   const combinedRaw = newRaster(resolution, resolution);
-  for (const l of handLayers) {
+  const scalarOwners = handLayers.some(l => l.depthSheet !== undefined) ? new Int32Array(resolution * resolution).fill(-1) : null;
+  for (const [layerIndex, l] of handLayers.entries()) {
     const { canvas } = cleanGhosts(placeLayer(l, resolution));
     for (let p = 0; p < resolution * resolution; p++) {
-      if (canvas.data[p * 4 + 3] > 0) combinedRaw.data.set(canvas.data.subarray(p * 4, p * 4 + 4), p * 4);
+      if (canvas.data[p * 4 + 3] > 0) { combinedRaw.data.set(canvas.data.subarray(p * 4, p * 4 + 4), p * 4); if (scalarOwners !== null) scalarOwners[p] = layerIndex; }
     }
   }
   const { canvas: combined } = cleanGhosts(combinedRaw);
@@ -1470,7 +1475,7 @@ export function applyArmSplit(set: LayerSet, resolution: number, armSplit: ArmSp
     }
   }
   const refLayer = handLayers.reduce((best, l) => (l.opaquePx > best.opaquePx ? l : best), handLayers[0]);
-  const makeLayer = (name: 'handwear-r' | 'handwear-l', canvas: Raster, m: ReturnType<typeof maskOf>): Layer => ({
+  const makeLayer = (name: 'handwear-r' | 'handwear-l', canvas: Raster, m: ReturnType<typeof maskOf>): Layer => copyDepthMaterial({
     name,
     tag: readLayerTag(name) as LayerTagReading,
     file: refLayer.file,
@@ -1482,7 +1487,7 @@ export function applyArmSplit(set: LayerSet, resolution: number, armSplit: ArmSp
     depth: refLayer.depth,
     drawOrder: 0,
     opaquePx: m.opaque,
-  });
+  }, handLayers, (x, y) => { const owner = scalarOwners?.[Math.floor(y) * resolution + Math.floor(x)] ?? -1; return owner < 0 ? [] : [{ layer: handLayers[owner], x, y, weight: 1 }]; });
   const byTag = {
     'handwear-r': makeLayer('handwear-r', rightCanvas, mr),
     'handwear-l': makeLayer('handwear-l', leftCanvas, ml),
@@ -1779,7 +1784,7 @@ export function splitMergedArmRunsWithNotes(
         }
       }
       if (opaque === 0 || x1 < x0) return null;
-      return {
+      return copyDepthMaterial({
         name,
         tag: readLayerTag(name) as LayerTagReading,
         file: hwLayer.file,
@@ -1791,7 +1796,7 @@ export function splitMergedArmRunsWithNotes(
         depth: hwLayer.depth,
         drawOrder: 0,
         opaquePx: opaque,
-      };
+      }, [hwLayer], (x, y) => [{ layer: hwLayer, x, y, weight: 1 }]);
     };
     const drapeLayer = buildSplitLayer(`drape-${s}`, drapeCanvas);
     const sleeveLayer = buildSplitLayer(tag, sleeveCanvas);
@@ -2085,9 +2090,14 @@ function prepareHeadFace(
         bottom: y1 + 1,
         opaquePx: compOpaquePx,
       };
+      const copiedLayer = copyDepthMaterial(replacedLayer, [headFaceLayer, fullFaceLayer], (x, y) => {
+        const ta = cleanedHead.canvas.data[(Math.floor(y) * resolution + Math.floor(x)) * 4 + 3] / 255;
+        const sx = f32(frame.fullK / frame.headK), tx = f32(-(frame.headBox[0] + frame.fullPad) / frame.headK), ty = frame.fullPadTop === 0 && frame.headBox[1] === 0 ? 0 : f32(-(frame.headBox[1] + frame.fullPadTop) / frame.headK);
+        return [{ layer: headFaceLayer, x, y, weight: ta }, { layer: fullFaceLayer, x: (x - 0.5 - tx) / sx + 0.5, y: (y - 0.5 - ty) / sx + 0.5, weight: 1 - ta }];
+      });
       activeHead = {
         ...head,
-        layers: head.layers.map((l) => (l.name === 'face' ? replacedLayer : l)),
+        layers: head.layers.map((l) => (l.name === 'face' ? copiedLayer : l)),
       };
       if (underfillPx > 0) {
         underfillNote = `face: head_face_underfill composited full:face under head:face on the head canvas, filling ${underfillPx} transparent px (${rawStats.headOv} / ${fullPx} px, ${(rawStats.cov * 100).toFixed(1)}% -> ${postStats.headOv} / ${fullPx} px, ${(postStats.cov * 100).toFixed(1)}%)`;
@@ -2559,6 +2569,7 @@ export function figureSilhouette(srcr: Raster): Mask {
 }
 
 export interface PlacedPart {
+  depthImage?: Raster;
   record: PartRecord;
   image: Raster;
 }
@@ -4313,6 +4324,7 @@ export interface AssembleResult {
   hidden: HiddenArtUse[];
   seamRule: SeamRule;
   projectRule: ProjectRule;
+  depthReadings?: Array<{ from: string; reading: import('./depthsheets.ts').DepthReading }>;
   /** Issue #492: head-canvas pixels filled by `config.assemble.head_face_underfill: true` when > 0. */
   headFaceUnderfillPx?: number;
   /** Issue #587: what each `exclude` entry took, in entry order; empty without one. */
@@ -4475,8 +4487,17 @@ export function assemble(input: AssembleInput): AssembleResult {
     { sourceW: source.width, sourceH: source.height, resolution: input.resolution, headBox: input.headBox, rigScale: input.rigScale, ...(single ? { single: true } : {}) },
     { full: input.full, head: input.head },
   );
+  if (input.depthBase === undefined && (input.depth?.full !== undefined || input.depth?.head !== undefined)) refuseIfAny([{ code: 'DEPTH_SOURCE_BASE', object: 'assemble depthBase', detail: 'user sheet paths require the actual config-directory base; no process-cwd guess is made' }]);
+  const depthInputProblems: Problem[] = [];
+  const bind = (set: LayerSet, run: 'full' | 'head'): LayerSet => {
+    try { return bindDepthRun(set, run, input.depth, input.depthBase ?? ''); }
+    catch (error) { if (error instanceof PartsError) { depthInputProblems.push(...error.problems); return set; } throw error; }
+  };
+  const depthFullInput = bind(input.full, 'full');
+  const depthHeadInput = single ? depthFullInput : bind(input.head, 'head');
+  refuseIfAny(depthInputProblems);
   // Issue #366: one run's file, padded to the resolution square; read as both runs, as before.
-  const fullPadded = single ? padSingleRun(input.full, frame, input.resolution) : input.full;
+  const fullPadded = single ? padSingleRun(depthFullInput, frame, input.resolution) : depthFullInput;
   // Issue #439: when seethrough.arm_split is declared, split the full run's overlapping handwear into handwear-r and handwear-l.
   const fullArmSplit = input.armSplit === undefined ? fullPadded : applyArmSplit(fullPadded, input.resolution, input.armSplit);
   // Issue #490: when generation.control.skeleton is present, split merged arm layers (or refuse when sleeve and drape share one colour).
@@ -4494,10 +4515,13 @@ export function assemble(input: AssembleInput): AssembleResult {
     !single &&
     (plan.some(([, r, t]) => r === 'head' && t === 'face') || (plan.some(([, r]) => r === 'full') && plan.some(([, r]) => r === 'head')));
   const headFacePrep = checkHeadFace
-    ? prepareHeadFace(full, input.head, frame, input.resolution, input.headFaceUnderfill === true)
-    : { head: single ? full : input.head, underfillPx: 0, underfillNote: null };
+    ? prepareHeadFace(full, depthHeadInput, frame, input.resolution, input.headFaceUnderfill === true)
+    : { head: single ? full : depthHeadInput, underfillPx: 0, underfillNote: null };
   const head = headFacePrep.head;
   const padRecord = singleRunPadRecord(single, source.width, source.height, input.resolution, frame);
+  const depthFull = registerDepthRun(full, 'full', input.depth, input.depthBase ?? '');
+  const depthHead = single ? new Map<string, RegisteredDepth>() : registerDepthRun(head, 'head', input.depth, input.depthBase ?? '');
+  const registeredDepth = new Map([...depthFull, ...depthHead]);
   if (single) checkSingleRun(full, plan, extend);
   checkPlanAgainstRuns(sourcePlan, extend, full, head);
   const { W, H } = frame;
@@ -5074,10 +5098,30 @@ export function assemble(input: AssembleInput): AssembleResult {
     };
     if (pushedHere.length > 0) record.fringe_pushed_back = pushedHere;
     if (limb !== undefined) record.limb = limb;
-    set({ record, image: crop(r, x0, y0, record.w, record.h) });
+    const image = crop(r, x0, y0, record.w, record.h);
+    const limbIndex = limb === undefined ? -1 : lim.parts.findIndex(q => q.record.name === limb.name && q.record.segment === limb.segment);
+    const upperIndex = limb === undefined ? -1 : lim.parts.findIndex(q => q.record.name === limb.name && q.record.segment === limb.segment - 1);
+    const capSource = limbIndex < 0 ? null : lim.capFrom[limbIndex];
+    const scalar = transportPartDepth(record, image, registeredDepth, {
+      map: run => runMap(frame, run), width: W, extend: extendKeys, owner: trace.from,
+      ring: trace.ring.data, region: region?.data ?? null,
+      copiedSource: (x, y) => {
+        if (capSource === null || upperIndex < 0) return null;
+        const [bx, by, bw, bh] = capSource.box;
+        if (x < bx || y < by || x >= bx + bw || y >= by + bh || capSource.codes[(y - by) * bw + x - bx] !== CAP_FROM_UPPER) return null;
+        const upper = limbPieces[upperIndex], p = y * W + x, e = upper.trace.from[p];
+        return { key: e < 0 ? upper.key : upper.extendKeys[e], ring: upper.trace.ring.data[p] !== 0 };
+      },
+      ...((limb?.cap?.image_px ?? 0) > 0 || (limb?.cap?.lower_px ?? 0) > 0 ? { unsupported: `cap copies ${(limb?.cap?.image_px ?? 0) + (limb?.cap?.lower_px ?? 0)} pixels from a separate cap image whose scalar grid is undeclared` } : {}),
+    });
+    if (scalar !== undefined) record.depth = scalar.reference;
+    set({ record, image, ...(scalar === undefined ? {} : { depthImage: scalar.image }) });
   });
   refuseIfAny(empty);
   const placed: PlacedPart[] = order.map((d) => ('plan' in d ? planned[d.plan] : 'cut' in d ? cutPlaced[d.cut] : 'limb' in d ? limbPlaced[d.limb] : cut[d.patch]) as PlacedPart);
+  const artFiles = new Set(placed.map(p => `${p.record.name}.png`));
+  for (const p of placed) if (p.record.depth !== undefined && artFiles.has(p.record.depth.image)) refuseIfAny([{ code: 'DEPTH_SHEET_UNAMBIGUOUS', object: p.record.depth.image, detail: 'collides with a part artwork filename; choose noncolliding part names before sheet emission' }]);
+
 
   seamOverride(placed, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, keepInOrder);
   const can = recomposite(placed, W, H);
@@ -5115,6 +5159,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       ...(padRecord === null ? {} : { single_run_pad: padRecord }),
     },
     images: placed,
+    ...(registeredDepth.size === 0 ? {} : { depthReadings: ([['full', depthFullInput], ...(single ? [] : [['head', depthHeadInput]])] as Array<['full' | 'head', LayerSet]>).flatMap(([run, set]) => set.layers.flatMap(layer => layer.depthSheet === undefined ? [] : [{ from: `${run}:${layer.name}`, reading: layer.depthSheet.reading }])) }),
     recomposite: can,
     errorMap: recompositeErrorMap(can, srcr, placed, inside),
     figure: inside === null ? null : figureImage(inside, W, H),

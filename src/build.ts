@@ -1,3 +1,4 @@
+import { readSourceDepth } from './depthsheets.ts';
 import { alternateLayerSources, alternateLayerIslands, alternateLayerOthers } from './alternatelayers.ts';
 import { setFocusProblems } from './setfocus.ts';
 /**
@@ -321,7 +322,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const fields = stageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
   const under = readUnders(input.config, fields.cuts);
   const caps = fields.limbs === undefined ? undefined : readCaps(input.config, fields.limbs);
-  const result = assemble({ source: src, full: runs.full, head: runs.head, ...fields, under, ...(caps === undefined ? {} : { caps }), seamRule: input.seam, projectRule: input.project });
+  const result = assemble({ source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under, ...(caps === undefined ? {} : { caps }), seamRule: input.seam, projectRule: input.project });
 
   // Issue #454: alternate painting sets, assembled before any file is written.
   const configDir = dirname(resolve(input.config));
@@ -635,6 +636,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     try {
       altRes = assemble({
         source: altSrc,
+        depth: cfg.depth, depthBase: configDir,
         limbUnderCover: alt.parts !== undefined && input.setCover !== 'painting',
         ...(altTips === undefined ? {} : { boneTips: altTips }),
         capOwnership: input.setCapOwnership ?? 'target',
@@ -674,8 +676,8 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     }
     const keptImages = altRes.images
       .filter(({ record }) => coveredSet.has(record.name))
-      .map(({ record, image }) => ({ name: `${alt.name}_${record.name}`, image }));
-    const keptRecords = altRes.parts.parts.filter((p) => coveredSet.has(p.name));
+      .flatMap(({ record, image, depthImage }) => [{ name: `${alt.name}_${record.name}`, image }, ...(depthImage === undefined || record.depth === undefined ? [] : [{ name: `${alt.name}_${record.depth.image.slice(0, -4)}`, image: depthImage }])]);
+    const keptRecords = altRes.parts.parts.filter((p) => coveredSet.has(p.name)).map(p => p.depth === undefined ? p : { ...p, depth: { ...p.depth, image: `${alt.name}_${p.depth.image}` } });
     const slots: Record<string, string> = {};
     for (const r of keptRecords) slots[altFront.has(r.name) ? `${r.name}${FRONT_SUFFIX}` : r.name] = `${alt.name}_${r.name}`;
     let altRecomposite = altRes.parts.recomposite as RecompositeRecord;
@@ -726,7 +728,11 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   mkdirSync(dirname(outs.recomposite), { recursive: true });
   mkdirSync(dirname(outs.errorMap), { recursive: true });
   writeParts(outs.partsJson, result.parts);
-  for (const { record, image } of result.images) writePng(join(outs.partsDir, `${record.name}.png`), image);
+  for (const { record, image, depthImage } of result.images) {
+    writePng(join(outs.partsDir, `${record.name}.png`), image);
+    if (depthImage !== undefined && record.depth !== undefined) writePng(join(outs.partsDir, record.depth.image), depthImage);
+  }
+  for (const row of result.depthReadings ?? []) log(`  depth reading ${row.from}: ${row.reading.relation}; ordering median ${row.reading.orderingMedian}, source-sheet median ${row.reading.sheetMedian} (half-level quantization; reading only, polarity declared)`);
   for (const b of altBuilt) {
     for (const { name, image } of b.images) writePng(join(outs.partsDir, `${name}.png`), image);
   }
@@ -1358,17 +1364,21 @@ export function readRigInputs(config: string, partsDir: string): RigInputs {
   const { config: cfg, animations: from } = loadConfigAndAnimations(config);
   const parts = readParts(join(partsDir, 'parts.json'));
   const images = new Map<string, Raster>();
+  const depthProblems: Problem[] = [];
   for (const p of parts.parts) {
     const png = join(partsDir, 'parts', `${p.name}.png`);
     if (existsSync(png)) images.set(p.name, readPng(png));
+    if (p.depth !== undefined && images.has(p.name)) { try { images.set(p.depth.image, readSourceDepth(join(partsDir, 'parts', p.depth.image), images.get(p.name) as Raster, null).pixels); } catch (error) { if (error instanceof PartsError) depthProblems.push(...error.problems); else throw error; } }
   }
   for (const alt of parts.alternates ?? []) {
     for (const p of alt.records) {
       const attName = `${alt.name}_${p.name}`;
       const png = join(partsDir, 'parts', `${attName}.png`);
       if (existsSync(png)) images.set(attName, readPng(png));
+      if (p.depth !== undefined && images.has(attName)) { try { images.set(p.depth.image, readSourceDepth(join(partsDir, 'parts', p.depth.image), images.get(attName) as Raster, null).pixels); } catch (error) { if (error instanceof PartsError) depthProblems.push(...error.problems); else throw error; } }
     }
   }
+  refuseIfAny(depthProblems);
   return { cfg, from, parts, images };
 }
 
@@ -1380,6 +1390,7 @@ export function rigOutputTexts(r: RigOutput, animations: Parameters<typeof withA
       ['rig.json', rigJsonText(r.rig)],
       ['motion.json', rigJsonText(mergedMotion)],
       ['mesh_report.json', rigJsonText(r.meshReport)],
+      ...(r.depthReferences === undefined ? [] : [['depth_sheets.json', rigJsonText({ spec: 'rig-parts-depth-sheets/1', parts: r.depthReferences })] as [string, string]]),
       ...(r.sets === undefined ? [] : [[SETS_FILE, rigJsonText(r.sets)] as [string, string]]),
     ];
 }

@@ -53,7 +53,7 @@ defaults are the help's too, and none is guessed from the art.
 | `sheet` | `--source`, `--layers` (repeatable), `--out`; optional `--cell`, `--cols` |
 | `inputs` | `--source`, `--config`, `--out` |
 | `comfy` | `paint`: `--config`, `--out`; optional `--seeds`, `--seed0`, `--host`, `--wait`, `--timeout`, `--poll` |
-| `comfy` | `seethrough`: `--image`, `--out`; optional `--resolution`, `--steps`, `--seed`, `--prefix`, `--offload`, `--lama`, `--nf4`, `--host`, `--wait`, `--timeout`, `--poll` |
+| `comfy` | `seethrough`: `--image`, `--out`; optional `--resolution`, `--steps`, `--seed`, `--prefix`, `--offload`, `--lama`, `--nf4`, `--host`, `--wait`, `--timeout`, `--poll`, `--config` (optional depth block), `--depth-run` (`full` or `head`, required with the block) |
 | `assemble` | `--propose-plan` with `--source`, `--full`, `--config`, optional `--head`, `--write-config` (must name `--config` itself, issue #356); or `--source`, `--full`, `--config`, `--out`, optional `--head` (without it, one run: issue #359), `--seam` (near-white, silhouette), `--project` (core, visible), `--alt` (repeatable `<name>=<source>:<full>[:<head>]`, issue #454) |
 | `propose` | `--head-box` with `--full`, `--canvas`; optional `--no-back-hair`, `--write-config` (existing config, issue #356) |
 | `propose` | `--parts`, `--source`, `--out`; optional `--compare` or `--from-config` (one of them), `--keypoints`, `--person` and `--wrist-snap` (each with `--keypoints`), `--full`, `--head` (the turn control's depths; not with `--from-config`), `--grid-rule` (`figure` or `part`, the drafted lattice's spacing; not with `--from-config`), `--cloth` (a config whose `cloth` block is the recipe, issue #364; not with `--from-config`), `--write-config` (existing config for an ordinary proposal, issue #356; a new file with `--cloth`, issue #537; not with `--from-config` — additive: without it nothing `propose` writes changes), `--from` (the config the recipe is changed from, only with `--write-config`, issue #571 — additive: without it nothing `--write-config` writes changes), `--only-missing` (only with `--parts` and `--write-config`, not with `--cloth` or `--from-config`, issue #671 — additive: without it nothing `--write-config` writes changes) |
@@ -118,7 +118,7 @@ The fields, object by object (a bold path is where the object sits; `<part>` is 
 part name, `[i]` an entry of a list):
 
 <!-- stable:config -->
-- **config** — required by the full loader, in front of rig and build: `key`, `assemble`, `bones`, `meshes`, `regions`, `motion`; optional: `generation`, `seethrough`, `limbs`, `constraints`, `stops`, `turn`, `scene`, `cloth`, `proposed_rig_scale`, `requirements` (issue #556, additive: a path beside the config that build reads in place of its requirements flag, whose behaviour is unchanged), `motion_seams`
+- **config** — required by the full loader, in front of rig and build: `key`, `assemble`, `bones`, `meshes`, `regions`, `motion`; optional: `generation`, `seethrough`, `limbs`, `constraints`, `stops`, `turn`, `scene`, `cloth`, `proposed_rig_scale`, `requirements` (issue #556, additive: a path beside the config that build reads in place of its requirements flag, whose behaviour is unchanged), `motion_seams`, `depth`
 - **generation** — required: `checkpoint`, `loras`, `trigger`, `identity`, `sampler`, `costume`, `negative_extra`, `style`, `negative_pose`, `latent`, `seed`; optional: `pose`, `control`
 - **generation.loras[i]** — required: `name`, `strength`; optional: `strength_clip`
 - **generation.sampler** — required: `steps`, `cfg`, `sampler`, `scheduler`
@@ -184,6 +184,9 @@ part name, `[i]` an entry of a list):
 - **turn.head**, when an object — optional: `pivot`, `radius` (issues #478, #479)
 - **scene** — no field (`{}`; a record or an annotation only)
 - **proposal.json**, the file propose writes — `bones`, `meshes`, `regions`, `limbs` under `--keypoints` where an arm or a leg is drafted from its joints (issue #349), `stops` when supplied, `motion` under the rules above, `turn` with `--full`/`--head`, `proposed_rig_scale` (issue #354), and `notes`
+- **depth** — optional: `zScale`, `full`, `head` (#773)
+- **depth.full**, **depth.head** — optional: `layers`, `atlas` (one fallback route)
+- **depth.full.layers.&lt;layer&gt;**, **depth.head.layers.&lt;layer&gt;**, **depth.full.atlas**, **depth.head.atlas** — required: `image`, `near`, `zScale`
 <!-- /stable:config -->
 
 `TY14` holds the set of field names in backticks above to the set of names the
@@ -430,3 +433,24 @@ cohort to the actual PNG frame set through `readFrameSet` and `boneTrackOf`,
 including unselected frames, before reading the worst pose. Identical static
 ranges on a bone deduplicate; conflicting ranges are explicitly ambiguous,
 never described as no declared range.
+
+
+## Optional depth sheets (#773)
+
+A wrapper `depth_filename` is a legacy hint. Without explicit `config.depth`,
+no depth file is read, validated, fetched or emitted, even when files or
+in-memory sheets exist; art/order and legacy output stay unchanged. With the
+block, a drawn layer source must be opaque grayscale on its exact grid.
+Reader/export APIs take explicit config/run/base context; raw export defaults
+to art only. Comfy CLI adds `--config` and `--depth-run full|head`; the block
+requires a named run and a named run requires the block. Active download and
+source errors remain refusals, never missing-file fallback.
+Assembly's optional part `depth` reference holds `image`, `near`, `zScale` and
+`sources` (each original `from`, `image`, `sha256`, `crop`, and `reading` with
+`orderingMedian`, `sheetMedian`, `relation`). These fields are omitted without
+active binding. Persisted authored part references remain active for standalone
+rig reading regardless of config opt-in. `rig` adds padded measurement PNGs and the `rig-parts-depth-sheets/1`
+`depth_sheets.json` companion only with references (each output `part`, actual
+padded `size`, and `depth`; a still split names both slices). Current weighted meshes do
+not acquire a Core field or change geometry; #763 owns the generator consumer.
+The separate ordering scalar is unchanged. No-image outputs retain legacy bytes.

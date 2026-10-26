@@ -1,0 +1,284 @@
+/** #773 controls: hand-computable scalar grids, actual readers and Core gate. */
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { compile, f32 } from 'rig-c/compile';
+import { parseMotionSpec } from 'rig-c/src/motion.ts';
+import { CompileError } from 'rig-c/src/errors.ts';
+import type { MotionSpec } from 'rig-c/src/types.ts';
+import { parseRigSpec, type RigSpec } from 'rig-c/src/rig.ts';
+import { buildRig } from '../src/rig.ts';
+import { readRigInputs, rigOutputTexts } from '../src/build.ts';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { PartsError } from '../src/errors.ts';
+import { parseConfig } from '../src/config.ts';
+import { bindDepthRun, copyDepthMaterial, depthReading, depthSheetProblems, padDepthSheet, registerDepthRun, sampleDepthLevel, transportPartDepth, type RegisteredDepth } from '../src/depthsheets.ts';
+import { exportLayers, readWrapperLayers, type LayerSet } from '../src/layers.ts';
+import { writeParts, readParts } from '../src/parts.ts';
+import { encodePngBytes, readPng, writePng } from '../src/raster/png.ts';
+import { newRaster, type Raster } from '../src/raster/types.ts';
+import { pad } from '../src/raster/index.ts';
+import { lashConfig, lashImages, lashParts, rigConfig, rigImages, rigParts, writeRigFixture } from '../fixtures/rig.ts';
+
+type Say = (name: string, ok: boolean, detail: string) => void;
+const errors = (f: () => unknown): string[] => { try { f(); return []; } catch (e) { if (e instanceof PartsError) return e.problems.map(p => p.code); throw e; } };
+function grey(w: number, h: number, level: (x: number, y: number) => number): Raster {
+  const p = newRaster(w, h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const v = level(x, y); p.data.set([v, v, v, 255], (y * w + x) * 4); }
+  return p;
+}
+function input(dir: string, level = (x: number, y: number): number => 20 * x + 40 * y): LayerSet {
+  mkdirSync(dir, { recursive: true });
+  writePng(join(dir, 'art.png'), grey(4, 4, () => 180));
+  writePng(join(dir, 'depth.png'), grey(4, 4, level));
+  writeFileSync(join(dir, 'layers.json'), JSON.stringify({ width: 4, height: 4, layers: [{ name: 'face', filename: 'art.png', left: 0, top: 0, right: 4, bottom: 4, depth_median: 90 / 255, depth_filename: 'depth.png' }] }));
+  return readWrapperLayers(dir);
+}
+
+export function runDepthSheetChecks(dir: string, say: Say): void {
+  const home = join(dir, 'valid'), raw = input(home), binding = { config: { zScale: 12 }, run: 'full' as const, base: home };
+  const set = bindDepthRun(raw, 'full', binding.config, home), layer = set.layers[0], scalar = layer.depthSheet;
+  say('DS01_WRITER_SHEET_IS_SEPARATE_FROM_ORDER', scalar !== undefined && scalar.reading.relation === 'same' && scalar.reading.sheetMedian === 90 / 255 && layer.depth === 90 / 255, JSON.stringify(scalar?.reading));
+  const exported = join(dir, 'export'); exportLayers(set, exported, binding); const reread = readWrapperLayers(exported, binding);
+  say('DS02_EXPORT_RETAINS_PIXELS_AND_ORDER', Buffer.from(reread.layers[0].depthSheet?.pixels.data ?? []).equals(Buffer.from(scalar?.pixels.data ?? [])) && reread.layers[0].depth === layer.depth, 'actual wrapper export/read; source PNG re-encoding may change file hash, decoded scalar does not');
+  const m = JSON.parse(readFileSync(join(home, 'layers.json'), 'utf8')) as { layers: Array<Record<string, unknown>> };
+  const missing = () => { m.layers[0].depth_filename = 'missing.png'; writeFileSync(join(home, 'layers.json'), JSON.stringify(m)); return readWrapperLayers(home, binding); };
+  say('DS03_MISSING_FILE_RED', errors(missing).includes('DEPTH_SHEET_PRESENT'), 'declared missing file never becomes a median plate');
+  m.layers[0].depth_filename = 'depth.png'; writeFileSync(join(home, 'layers.json'), JSON.stringify(m));
+  const original = grey(4, 4, (x, y) => 20 * x + 40 * y);
+  writePng(join(home, 'depth.png'), grey(3, 4, () => 20));
+  say('DS04_WRONG_SIZE_RED', errors(() => readWrapperLayers(home, binding)).includes('DEPTH_SHEET_SIZE'), '3x4 depth on 4x4 layer');
+  const bad = grey(4, 4, () => 20); bad.data[1] = 21; bad.data[3] = 254; writePng(join(home, 'depth.png'), bad);
+  const codes = errors(() => readWrapperLayers(home, binding));
+  say('DS05_COLOR_AND_ALPHA_COLLECTED', codes.includes('DEPTH_SHEET_GREYSCALE') && codes.includes('DEPTH_SHEET_OPAQUE'), codes.join(','));
+  writePng(join(home, 'depth.png'), original);
+  say('DS06_ZSCALE_MISSING_RED', errors(() => registerDepthRun(raw, 'full', {}, home)).includes('DEPTH_ZSCALE_REQUIRED'), 'explicit empty block activates the writer hint but supplies no units');
+  const invalid = rigConfig(); invalid.depth = { zScale: -1, full: { layers: { face: { image: 'depth.png', zScale: 0 } } } };
+  const invalidCodes = errors(() => parseConfig(invalid));
+  say('DS07_NEAR_AND_UNITS_COLLECTED', invalidCodes.includes('DEPTH_NEAR_REQUIRED') && invalidCodes.filter(c => c === 'DEPTH_ZSCALE_REQUIRED').length === 2, invalidCodes.join(','));
+  const adjusted = depthReading(grey(4, 4, () => 220), layer.pixels, 0.4);
+  say('DS08_ORDER_ADJUSTMENT_NOT_A_POLARITY_GATE', adjusted.relation === 'indeterminate' && errors(() => { m.layers[0].depth_median = 0.4; writeFileSync(join(home, 'layers.json'), JSON.stringify(m)); readWrapperLayers(home, binding); }).length === 0, JSON.stringify(adjusted));
+  m.layers[0].depth_median = 90 / 255; writeFileSync(join(home, 'layers.json'), JSON.stringify(m));
+  const sym = grey(2, 1, x => x * 255), symArt = grey(2, 1, () => 180);
+  say('DS09_SYMMETRIC_AND_CONSTANT_ARE_NOT_CERTIFICATES', depthReading(sym, symArt, 0.5).relation === 'indeterminate' && depthReading(grey(2, 1, () => 128), symArt, 0.5).relation === 'indeterminate', 'both directions can match within half-level; relation is only a reading');
+  say('DS10_OPPOSITE_READING_DOES_NOT_REFUSE', depthReading(grey(2, 1, () => 204), symArt, 0.2).relation === 'opposite', '0.8 versus ordering0.2 reads opposite, without an inversion gate');
+  const bilinear = grey(2, 2, (x, y) => 20 * x + 40 * y);
+  say('DS11_SCALAR_BILINEAR_PIXEL_CENTRES', sampleDepthLevel(bilinear, 1, 1) === 30 && sampleDepthLevel(bilinear, 0.5, 0.5) === 0 && sampleDepthLevel(bilinear, -3, -3) === 0, 'centre average(0,20,40,60)=30; corner/edge clamp=0');
+  const padded = padDepthSheet(bilinear, 4);
+  say('DS12_PAD4_ALIGNMENT', padded.width === 10 && padded.height === 10 && padded.data[(4 * 10 + 4) * 4] === 0 && padded.data[(5 * 10 + 5) * 4] === 60 && padded.data[(9 * 10 + 9) * 4] === 60, 'original texels land at padded4/5; far pad repeats60');
+  const registered = registerDepthRun(set, 'full', { zScale: 12 }, home);
+  const record = { name: 'panel', from: 'full:face', x: 1, y: 1, w: 2, h: 2 };
+  const transport = { map: () => ({ sx: 1, tx: 0, ty: 0 }), width: 4, extend: [] as string[], owner: new Int32Array(16).fill(-1), ring: new Uint8Array(16), region: null };
+  const crop = transportPartDepth(record, grey(2, 2, () => 180), registered, transport);
+  say('DS13_FINAL_CROP_REGISTRATION', crop !== undefined && [0, 1, 2, 3].map(i => crop.image.data[i * 4]).join(',') === '60,80,100,120' && crop.reference.near === 'black' && crop.reference.zScale === 12, 'crop x1..2,y1..2 => 60,80/100,120, authored world units12 unchanged');
+  const headHome = join(dir, 'head-independent');
+  const head = bindDepthRun(input(headHome, () => 200), 'head', { zScale: 12 }, headHome);
+  const merge = new Map([...registered, ...registerDepthRun(head, 'head', { zScale: 12 }, headHome)]);
+  const owner = new Int32Array(16).fill(-1); owner[5] = 0;
+  const merged = transportPartDepth(record, grey(2, 2, () => 180), merge, { ...transport, extend: ['head:face'], owner });
+  const mergedLevels = [0, 1, 2, 3].map(i => merged?.image.data[i * 4]), mergedSources = merged?.reference.sources;
+  say('DS14_MERGE_USES_ACTUAL_LAST_WRITER', mergedLevels.join(',') === '200,80,100,120' && mergedSources?.length === 2 && mergedSources.some(s => s.from === 'full:face') && mergedSources.some(s => s.from === 'head:face') && mergedSources[0].sha256 !== mergedSources[1].sha256, `actual levels${JSON.stringify(mergedLevels)}; independently read/bound source provenance${JSON.stringify(mergedSources)}`);
+  const ring = new Uint8Array(16); ring[5] = 1;
+  say('DS15_SYNTHESIZED_RIM_RED', errors(() => transportPartDepth(record, grey(2, 2, () => 180), merge, { ...transport, ring })).includes('DEPTH_PART_SUPPORT'), 'visible merge ring has no depth source');
+  say('DS16_UNSOURCED_COPY_RED', errors(() => transportPartDepth(record, grey(2, 2, () => 180), registered, { ...transport, extend: ['head:face'], owner })).includes('DEPTH_PART_SUPPORT'), 'a missing extend sheet does not borrow the base');
+  const region = new Uint8Array(16).fill(1); region[5] = 0;
+  say('DS17_REPLACEMENT_UNDER_ART_RED', errors(() => transportPartDepth(record, grey(2, 2, () => 180), registered, { ...transport, region })).includes('DEPTH_PART_SUPPORT'), 'visible filled under-art cannot claim original layer depth');
+  const bare = { ...raw, layers: raw.layers.map(({ depthSheet: _sheet, depthHint: _hint, ...l }) => l) };
+  const user = registerDepthRun(bare, 'full', { full: { layers: { face: { image: 'depth.png', near: 'white', zScale: 7 } } } }, home).get('full:face');
+  say('DS18_USER_DECLARED_NEAR_AND_UNITS', user?.near === 'white' && user.zScale === 7, 'explicit user convention is retained');
+  say('DS19_DECLARATION_CONFLICT_RED', errors(() => registerDepthRun(raw, 'full', { zScale: 12, full: { layers: { face: { image: 'depth.png', near: 'white', zScale: 7 } } } }, home)).includes('DEPTH_SOURCE_AMBIGUOUS'), 'writer filename plus user source never silently selects one');
+  const pf = rigParts(); if (crop !== undefined) pf.parts[0].depth = crop.reference;
+  const file = join(dir, 'parts.json'); writeParts(file, pf);
+  say('DS20_REFERENCE_ROUNDTRIP_AND_NO_DEPTH_OMISSION', JSON.stringify(readParts(file).parts[0].depth) === JSON.stringify(crop?.reference) && !JSON.stringify(rigParts()).includes('"depth"'), 'strict optional reference preserved; no-depth record has no added field');
+  const corrupt = JSON.parse(readFileSync(file, 'utf8')) as { parts: Array<{ depth: Record<string, unknown> }> }; corrupt.parts[0].depth.near = 'guessed'; writeFileSync(file, JSON.stringify(corrupt));
+  say('DS21_REFERENCE_MUTANT_RED', errors(() => readParts(file)).includes('PARTS_DEPTH_REFERENCE'), 'an invalid persisted convention does not reach output');
+  say('DS22_NO_DATA_IS_NOT_ACTIVATED', registerDepthRun(bare, 'full', undefined, home).size === 0, 'no metadata or fallback => no sheet/ref');
+  say('DS23_OPAQUE_GRAY_RGB_VALID', depthSheetProblems(original, [4, 4], 'analytic').length === 0, 'R=G=B on an RGBA encoding is valid scalar data');
+  const bound = bindDepthRun(set, 'full', { zScale: 12 }, home);
+  const source = bound.layers[0];
+  const copied = copyDepthMaterial({ ...source, name: 'author:crop', left: 1, top: 1, right: 3, bottom: 3, pixels: grey(2, 2, () => 180) }, [source], (x, y) => [{ layer: source, x, y, weight: 1 }]);
+  say('DS27_SOURCE_COPY_RETAINS_ORIGINAL_PROVENANCE', copied.depthSheet?.pixels.data[0] === 60 && copied.depthSheet.sources?.[0].crop.join(',') === '0,0,4,4', 'actual copied crop, original source rectangle retained');
+  const shifted = { ...source, left: 3, top: 2, right: 7, bottom: 6 };
+  const copiedPad = copyDepthMaterial(shifted, [shifted], (x, y) => [{ layer: shifted, x, y, weight: 1 }]);
+  say('DS28_TRANSLATED_SOURCE_GRID_PRESERVED', Buffer.from(copiedPad.depthSheet?.pixels.data ?? []).equals(Buffer.from(source.depthSheet?.pixels.data ?? [])), 'single-run pad shifts domain, not scalar/art pixels');
+  const other = { ...source, depthSheet: { ...source.depthSheet!, pixels: grey(4, 4, () => 200) } };
+  const composite = copyDepthMaterial({ ...source, pixels: grey(4, 4, () => 180) }, [source, other], (x, y) => [{ layer: source, x, y, weight: 0.25 }, { layer: other, x, y, weight: 0.75 }]);
+  say('DS29_KNOWN_COMPOSITE_USES_ACTUAL_WEIGHTS', composite.depthSheet?.pixels.data[0] === 150 && composite.depthSheet.pixels.data[3 * 4] === 165, '0.25*raw(0 or60)+0.75*200=150 or165; no depth fit');
+
+  const enlarged = transportPartDepth({ ...record, x: 0, y: 0 }, grey(2, 2, () => 180), registered, { ...transport, map: () => ({ sx: 2, tx: 0, ty: 0 }) });
+  say('DS30_CV_PIXEL_REGISTRATION_AT_SCALE2', [0, 1, 2, 3].map(i => enlarged?.image.data[i * 4]).join(',') === '0,10,20,30', 'existing runMap maps pixel indices; scalar sampler adds the half-centre after inversion');
+
+  const legacyManifest = JSON.stringify(m);
+  m.layers[0].depth_filename = 'missing.png'; writeFileSync(join(home, 'layers.json'), JSON.stringify(m));
+  const inactiveMissing = readWrapperLayers(home);
+  say('DS31_SAME_MISSING_HINT_INACTIVE_VALID_ACTIVE_RED', inactiveMissing.layers[0].depthSheet === undefined && inactiveMissing.layers[0].depthHint?.filename === 'missing.png' && errors(() => readWrapperLayers(home, binding)).includes('DEPTH_SHEET_PRESENT'), 'same untouched manifest; no activation versus explicit config.depth');
+  m.layers[0].depth_filename = '../unreadable_hint'; writeFileSync(join(home, 'layers.json'), JSON.stringify(m));
+  say('DS32_INACTIVE_HINT_HAS_NO_DEPTH_VALIDATION', errors(() => readWrapperLayers(home)).length === 0 && errors(() => readWrapperLayers(home, binding)).includes('DEPTH_SHEET_FILENAME'), 'inactive raw metadata is preserved, not interpreted as a path');
+  writeFileSync(join(home, 'layers.json'), legacyManifest);
+  const presentInactive = readWrapperLayers(home), memoryInactive = bindDepthRun(set, 'full', undefined, home);
+  const offExport = join(dir, 'export-off'), memoryExport = join(dir, 'export-memory-off');
+  exportLayers(presentInactive, offExport); exportLayers(set, memoryExport);
+  say('DS33_PRESENT_OR_IN_MEMORY_SHEET_CANNOT_ACTIVATE', presentInactive.layers[0].depthSheet === undefined && memoryInactive.layers[0].depthSheet === undefined && registerDepthRun(set, 'full', undefined, home).size === 0 && readdirSync(offExport).length === 2 && readdirSync(memoryExport).length === 2 && !readFileSync(join(offExport, 'layers.json'), 'utf8').includes('depth_filename'), 'physical file and previously bound in-memory data both require explicit config; raw export stays art-only');
+  say('DS34_ACTIVE_EXPORT_PRESERVES_SCALAR', readdirSync(exported).length === 3 && reread.layers[0].depthSheet !== undefined && readdirSync(offExport).every(f => Buffer.from(readFileSync(join(offExport, f))).equals(readFileSync(join(memoryExport, f)))), 'active export includes scalar; both inactive exports have identical legacy bytes');
+  const aliasDir = join(home, 'parts'); mkdirSync(aliasDir); writePng(join(aliasDir, 'face_depth.png'), grey(4, 4, () => 1));
+  say('DS35_DUPLICATE_ALIAS_ONLY_ACTIVE_RED', errors(() => readWrapperLayers(home)).length === 0 && errors(() => readWrapperLayers(home, binding)).includes('DEPTH_SHEET_UNAMBIGUOUS'), 'conflicting physical sources are ignored only when inactive');
+  const authored = rigParts(); authored.parts[1].depth = { image: 'eye_depth.png', near: 'black', zScale: 12, sources: [{ from: 'head:face', image: 'source_depth.png', sha256: '0'.repeat(64), crop: [16, 26, 20, 28], reading: { orderingMedian: null, sheetMedian: 0, relation: 'indeterminate' } }] };
+  const paths = writeRigFixture(join(dir, 'authored'), rigConfig(), rigImages(), authored);
+  say('DS36_PERSISTED_REFERENCE_ALWAYS_ACTIVE', errors(() => readRigInputs(paths.config, paths.parts)).includes('DEPTH_SHEET_PRESENT'), 'standalone rig config has no depth block; authored part reference still requires its file');
+  writePng(join(paths.parts, 'parts/eye_depth.png'), grey(4, 2, () => 0));
+  say('DS37_PERSISTED_REFERENCE_READS_DECLARED_FILE', readRigInputs(paths.config, paths.parts).images.has('eye_depth.png'), 'same standalone reader loads valid explicit part data without reactivation flags');
+  const badDir = join(dir, 'invalid-inactive'), badRaw = input(badDir), invalidSheet = grey(4, 4, () => 70); invalidSheet.data[1] = 71; invalidSheet.data[3] = 0; writePng(join(badDir, 'depth.png'), invalidSheet);
+  say('DS38_INVALID_PHYSICAL_DATA_IS_IGNORED_ONLY_OFF', readWrapperLayers(badDir).layers[0].depthSheet === undefined && errors(() => bindDepthRun(badRaw, 'full', { zScale: 12 }, badDir)).includes('DEPTH_SHEET_GREYSCALE') && errors(() => bindDepthRun(badRaw, 'full', { zScale: 12 }, badDir)).includes('DEPTH_SHEET_OPAQUE'), 'inactive performs no scalar validation; active refuses color and nonopaque pixels');
+  const invalidMemory = { ...set, layers: [{ ...layer, depthSheet: { ...scalar!, zScale: 0 } }] };
+  say('DS39_BOUND_MEMORY_STILL_REQUIRES_VALID_ACTIVE_UNITS', registerDepthRun(invalidMemory, 'full', undefined, home).size === 0 && errors(() => registerDepthRun(invalidMemory, 'full', {}, home)).includes('DEPTH_ZSCALE_REQUIRED'), 'in-memory data cannot activate itself or evade positive finite units once active');
+
+}
+
+/** Real pinned Core generator consumer; production weighted meshes stay unchanged. */
+export function runDepthSheetCoreChecks(dir: string, say: Say): void {
+  mkdirSync(join(dir, 'images'), { recursive: true });
+  const source = input(join(dir, 'source'));
+  const registered = registerDepthRun(source, 'full', { zScale: 4 }, dir);
+  const part = transportPartDepth({ name: 'panel', from: 'full:face', x: 0, y: 0, w: 4, h: 4 }, grey(4, 4, () => 180), registered, { map: () => ({ sx: 1, tx: 0, ty: 0 }), width: 4, extend: [], owner: new Int32Array(16).fill(-1), ring: new Uint8Array(16), region: null });
+  if (part === undefined) throw new Error('analytic source must emit its registered sheet');
+  writePng(join(dir, 'images/panel.png'), pad(grey(4, 4, () => 180), 4, 4, 4, 4, [0, 0, 0, 0]));
+  writePng(join(dir, 'images/panel_depth.png'), padDepthSheet(part.image, 4));
+  // Core cols/rows count positions:9 vertices and2*(3-1)*(3-1)=8 triangles.
+  const rig = { spec: 'rigc-rig/1', name: 'depth_fixture', images: 'images', skeleton: { width: 16, height: 16 }, bones: [{ name: 'root' }, { name: 'clock', parent: 'root' }], slots: [{ name: 'panel', bone: 'root', attachment: 'panel' }], skins: { default: { panel: { panel: { type: 'mesh', image: 'panel.png', generator: { kind: 'grid', cols: 3, rows: 3, depth: { image: 'panel_depth.png', near: 'black' as 'black' | 'white', zScale: 4 } } } } } }, invariants: { meshSlots: 1, meshTriangles: 8 } } satisfies RigSpec;
+  const parsedRig = parseRigSpec(rig, 'analytic depth fixture rig');
+  say('DZ32_TYPED_RIG_PASSES_ACTUAL_READER', parsedRig.invariants?.meshSlots === 1 && parsedRig.invariants.meshTriangles === 8, 'published RigSpec and parseRigSpec; hand-derived3x3 positions =>1slot/8triangles');
+  const motion = { spec: 'rigc-motion/1', archetype: rig.name, cut: 'painting', easings: {}, animations: { idle: { duration: 1, loop: true, tracks: [{ bone: 'clock', property: 'translate', keys: [{ t: 0, v: [0, 0] }, { t: 1, v: [0, 0] }] }] } } } satisfies MotionSpec;
+  const parsedMotion = parseMotionSpec(motion, 'analytic depth fixture motion');
+  say('DZ30_TYPED_MOTION_PASSES_ACTUAL_READER', parsedMotion.archetype === rig.name && Object.keys(parsedMotion.easings).length === 0, 'satisfies published MotionSpec; parseMotionSpec checks the same object before CLI build');
+  const missingEasings: Record<string, unknown> = { ...motion }; delete missingEasings.easings;
+  let missingCode: string | undefined;
+  try { parseMotionSpec(missingEasings, 'analytic missing easings plant'); } catch (error) { if (!(error instanceof CompileError)) throw error; missingCode = error.code; }
+  say('DZ31_MISSING_EASINGS_READER_RED', missingCode === 'CE_MOTION_FIELD_SHAPE', `actual reader refuses the previous missing-field input with ${missingCode}`);
+  writeFileSync(join(dir, 'motion.json'), JSON.stringify(motion));
+  writeFileSync(join(dir, 'rig.json'), JSON.stringify(rig));
+  const run = spawnSync(process.execPath, [resolve('node_modules/rig-c/cli.ts'), 'build', '--rig', join(dir, 'rig.json'), '--motion', join(dir, 'motion.json'), '--out', join(dir, 'built'), '--profile', 'rig-play', '--pack'], { encoding: 'utf8' });
+  writeFileSync(join(dir, 'core.log'), run.stdout + run.stderr);
+  say('DZ24_ACTUAL_CORE_GENERATOR_GATE', run.status === 0, `actual Core build --profile rig-play --pack exit${run.status}; raw=${JSON.stringify({ stdout: run.stdout, stderr: run.stderr })}`);
+  if (run.status !== 0) return;
+  const atlas = readFileSync(join(dir, 'built/skeleton.atlas'), 'utf8');
+  say('DZ25_DEPTH_SHEET_NOT_PACKED_ART', atlas.includes('panel') && !atlas.includes('panel_depth'), 'only drawing attachment is packed; measurement sheet remains a compile-time input');
+  const emitted = readPng(join(dir, 'images/panel_depth.png'));
+  // Core CompileOptions (2.69.0 compile.ts:1850) reads these actual paths;
+  // meshes[].depth is the compiler-produced report (types.ts:1710), not a
+  // local sampler standing in for it. The CLI above performs the real gate.
+  const measure = () => compile({ rigPath: join(dir, 'rig.json'), motionPath: join(dir, 'motion.json'), outDir: join(dir, 'sdk') }).meshes[0]?.depth;
+  const measured = measure();
+  const expectedLevels = Uint8Array.from({ length: 144 }, (_, i) => 20 * Math.max(0, Math.min(3, i % 12 - 4)) + 40 * Math.max(0, Math.min(3, Math.floor(i / 12) - 4)));
+  const header = Buffer.alloc(8); header.writeUInt32BE(12, 0); header.writeUInt32BE(12, 4);
+  const digest = createHash('sha256').update(header).update(expectedLevels).digest('hex').slice(0, 16);
+  say('DZ26_CORE_REPORT_DIGEST_AND_SAMPLED_RANGE', emitted.width === 12 && measured?.digest === digest && measured.near === 'black' && measured.zScale === 4 && measured.range[0] === f32(20 / 17) && measured.range[1] === 4, `Core ${JSON.stringify(measured)}; independent definition:12x12 levels20*clamp(x-4)+40*clamp(y-4), digest${digest}, range[f32(20/17),4]`);
+  writePng(join(dir, 'images/panel_depth.png'), grey(12, 12, (x, y) => 255 - expectedLevels[y * 12 + x]));
+  const wrongMap = measure();
+  say('DZ27_WRONG_MAP_PLANT_CHANGES_CORE_EVIDENCE', wrongMap?.digest !== digest && wrongMap?.range[0] === 0 && wrongMap.range[1] === f32(48 / 17), `actual inverted-map Core report ${JSON.stringify(wrongMap)}; original digest/range expectation rejects it`);
+  writePng(join(dir, 'images/panel_depth.png'), padDepthSheet(part.image, 4));
+  rig.skins.default.panel.panel.generator.depth.near = 'white'; writeFileSync(join(dir, 'rig.json'), JSON.stringify(rig));
+  const wrongNear = measure();
+  say('DZ28_DECLARED_DIRECTION_PLANT_CHANGES_CORE_Z', wrongNear?.digest === digest && wrongNear.near === 'white' && wrongNear.range[0] === 0 && wrongNear.range[1] === f32(48 / 17), `same sheet, explicit nearwhite gives Core ${JSON.stringify(wrongNear)}; units/map are unchanged`);
+  rig.skins.default.panel.panel.generator.depth.near = 'black'; writeFileSync(join(dir, 'rig.json'), JSON.stringify(rig));
+  const restored = measure();
+  say('DZ29_SYNTHETIC_INPUT_RESTORED', JSON.stringify(restored) === JSON.stringify(measured), 'generated test sheet/direction restored after explicit plants; no repository source mutation');
+
+}
+
+
+/** Independent row-ramp and actual lash fixture; art/geometry stay unchanged. */
+export function runDepthSheetStillChecks(say: Say): void {
+  const plain = buildRig(parseConfig(lashConfig()), lashParts(), lashImages());
+  const parts = lashParts(), images = lashImages(), lash = parts.parts.find(p => p.name === 'lash');
+  if (lash === undefined) throw new Error('hand-authored lash part is required');
+  const scalar = grey(16, 9, (x, y) => x + 10 * y);
+  lash.depth = { image: 'lash_depth.png', near: 'black', zScale: 12, sources: [{ from: 'head:eyelash-r', image: 'source_depth.png', sha256: createHash('sha256').update(encodePngBytes(scalar)).digest('hex'), crop: [14, 17, 30, 26], reading: depthReading(scalar, images.get('lash') as Raster, null) }] };
+  const provenance = JSON.stringify(lash.depth.sources);
+  images.set(lash.depth.image, scalar);
+  const split = buildRig(parseConfig(lashConfig()), parts, images), actual = new Map(split.images);
+  const artNames = ['face.png', 'eyewhite.png', 'lash.png', 'lash_still.png'];
+  const expected = [...artNames, 'lash_depth.png', 'lash_still_depth.png'];
+  say('DZ40_STILL_ASSETS_HAVE_SEPARATE_IDENTITIES', actual.size === 6 && split.images.length === 6 && expected.every(n => actual.has(n)) && JSON.stringify(plain.images.map(([n]) => n)) === JSON.stringify(artNames), `plain${plain.images.map(([n]) => n)}; depth${split.images.map(([n]) => n)}`);
+  const lower = actual.get('lash_depth.png'), upper = actual.get('lash_still_depth.png');
+  const correct = (p: Raster | undefined, height: number, offset: number): boolean => p !== undefined && p.width === 24 && p.height === height + 8 && [...p.data].every((v, i) => { const pixel = Math.floor(i / 4), channel = i % 4; return v === (channel === 3 ? 255 : Math.max(0, Math.min(15, pixel % 24 - 4)) + 10 * (offset + Math.max(0, Math.min(height - 1, Math.floor(pixel / 24) - 4)))); });
+  say('DZ41_STILL_SCALAR_ROWS_MATCH_ACTUAL_ART_CUT', correct(lower, 6, 3) && correct(upper, 3, 0) && actual.get('lash.png')?.height === 14 && actual.get('lash_still.png')?.height === 11, 'source row3 at rig20: lower rows3..8 on24x14; still rows0..2 on24x11, all padded scalar texels checked');
+  const refs = split.depthReferences ?? [];
+  say('DZ42_STILL_REFERENCES_NAME_EXACT_DRAWING_GRIDS', refs.length === 2 && refs.some(r => r.part === 'lash' && r.depth.image === 'lash_depth.png' && r.size.join(',') === '24,14') && refs.some(r => r.part === 'lash_still' && r.depth.image === 'lash_still_depth.png' && r.size.join(',') === '24,11') && refs.every(r => JSON.stringify(r.depth.sources) === provenance), JSON.stringify(refs));
+  const unchanged = JSON.stringify(split.rig) === JSON.stringify(plain.rig) && JSON.stringify(split.motion) === JSON.stringify(plain.motion) && JSON.stringify(split.meshReport) === JSON.stringify(plain.meshReport) && plain.images.every(([name, p]) => Buffer.from(p.data).equals(Buffer.from(actual.get(name)?.data ?? [])));
+  say('DZ43_DEPTH_PRESERVES_ALL_STILL_ART_AND_RIG_BYTES', unchanged && plain.depthReferences === undefined, 'with/without sheet: exact rig/motion/mesh-report and every art RGBA; no-depth has only original4 assets and no companion');
+  const text = rigOutputTexts(split, null).find(([name]) => name === 'depth_sheets.json')?.[1];
+  say('DZ44_STILL_COMPANION_SERIALIZES_ACTUAL_REFERENCES', text !== undefined && JSON.stringify((JSON.parse(text) as { parts: unknown }).parts) === JSON.stringify(refs), 'actual rig output serializer carries both drawing-sized references; sources remain original');
+
+  // Two base regions and a later alternate deliberately share a possible
+  // filename spelling. Distinct input keys supply distinct art/scalar bytes.
+  const namespaceParts = rigParts(), namespaceImages = rigImages();
+  const eye = namespaceParts.parts.find(p => p.name === 'eye');
+  if (eye === undefined) throw new Error('hand-authored eye region is required');
+  const measuredPart = { ...eye, name: 'warm_lash', from: 'head:eyelash-r' };
+  const alternateBase = { ...eye, name: 'lash_depth', from: 'head:eyewhite-r' };
+  namespaceParts.parts.push(measuredPart, alternateBase);
+  const art = namespaceImages.get('eye') as Raster;
+  namespaceImages.set('warm_lash', art); namespaceImages.set('lash_depth', art);
+  const namespaceConfig = rigConfig();
+  namespaceConfig.assemble = { rig_scale: 0.5, plan: [['cloth', 'full', 'topwear'], ['eye', 'head', 'face'], ['warm_lash', 'head', 'eyelash-r'], ['lash_depth', 'head', 'eyewhite-r']] };
+  namespaceConfig.regions = { eye: 'eye', warm_lash: 'eye', lash_depth: 'eye' };
+  const config = parseConfig(namespaceConfig);
+  const setAlternate = (name: string): void => {
+    namespaceParts.alternates = [{ name, parts: ['lash_depth'], slots: { lash_depth: `${name}_lash_depth` }, records: [{ ...alternateBase }], ghost_px: {}, recomposite: { mean_abs: 0, within_limit: 0, within_share: 1, error_limit: 0, error_px: 0, covered_alpha: 8, uncovered_error_px: 0, hole_count: 0, holes_listed: 0, holes: [] } }];
+    namespaceImages.set(`${name}_lash_depth`, art);
+  };
+  setAlternate('warm');
+  const noSheet = buildRig(config, namespaceParts, namespaceImages);
+  say('DZ45_FUTURE_ART_NAME_VALID_WITHOUT_SHEET', noSheet.images.length === 5 && new Set(noSheet.images.map(([name]) => name)).size === 5 && noSheet.depthReferences === undefined, 'actual build: warm_lash.png plus later warm_lash_depth.png are distinct valid art assets');
+  const namespaceScalar = grey(4, 2, (x, y) => 10 * x + 40 * y);
+  measuredPart.depth = { image: 'warm_lash_depth.png', near: 'black', zScale: 12, sources: [{ from: measuredPart.from, image: 'source_depth.png', sha256: createHash('sha256').update(encodePngBytes(namespaceScalar)).digest('hex'), crop: [16, 26, 20, 28], reading: depthReading(namespaceScalar, art, null) }] };
+  namespaceImages.set(measuredPart.depth.image, namespaceScalar);
+  let collision: PartsError | undefined;
+  try { buildRig(config, namespaceParts, namespaceImages); } catch (error) { if (!(error instanceof PartsError)) throw error; collision = error; }
+  say('DZ46_FUTURE_ALTERNATE_ART_COLLISION_RED', collision?.problems.some(p => p.code === 'DEPTH_SHEET_UNAMBIGUOUS' && p.object === 'warm_lash_depth.png' && p.detail.includes('output assets[')) === true, JSON.stringify(collision?.problems));
+  setAlternate('cool');
+  const unique = buildRig(config, namespaceParts, namespaceImages), uniqueImages = new Map(unique.images);
+  say('DZ47_NONCOLLIDING_ALTERNATE_AND_SHEET_RETAINED', unique.images.length === 6 && uniqueImages.size === 6 && uniqueImages.has('cool_lash_depth.png') && Buffer.from(uniqueImages.get('warm_lash_depth.png')?.data ?? []).equals(Buffer.from(padDepthSheet(namespaceScalar, 4).data)) && uniqueImages.get('cool_lash_depth.png')?.data[(4 * 12 + 4) * 4 + 1] === 120, `actual final inventory: ${unique.images.map(([name]) => name).join(',')}; padded sheet and coloured alternate remain distinct`);
+  delete measuredPart.depth;
+  const plainUnique = buildRig(config, namespaceParts, namespaceImages);
+  say('DZ48_NAMESPACE_CHECK_PRESERVES_NO_DEPTH_OUTPUT', JSON.stringify(unique.rig) === JSON.stringify(plainUnique.rig) && JSON.stringify(unique.motion) === JSON.stringify(plainUnique.motion) && JSON.stringify(unique.meshReport) === JSON.stringify(plainUnique.meshReport) && plainUnique.images.every(([name, image]) => Buffer.from(image.data).equals(Buffer.from(uniqueImages.get(name)?.data ?? []))) && plainUnique.depthReferences === undefined, 'exact rig/motion/report and all5 art RGBA match with/without the noncolliding sheet; no-depth adds no output');
+}
+
+if (import.meta.main && process.argv[2] === '--adapter-probe') {
+  const { startFakeComfy, fakePainting } = await import('../fixtures/fakecomfy.ts');
+  const { ComfyClient } = await import('../src/comfy/client.ts');
+  const { runSeeThrough } = await import('../src/comfy/seethrough.ts');
+  const dir = process.argv[3]; mkdirSync(dir, { recursive: true });
+  const file = join(dir, 'input.png'); writePng(file, fakePainting(4, 4));
+  const results: Array<{ mode: string; active?: boolean; ok: boolean; sheets?: number; fetched?: number; codes?: string[]; exit?: number; raw?: { stdout: string; stderr: string } }> = [];
+  for (const active of [false, true]) for (const mode of ['ok', 'missing-depth'] as const) {
+    const fake = startFakeComfy(mode);
+    try {
+      const out = join(dir, `${mode}-${active}`), binding = { config: { zScale: 12 }, run: 'full' as const, base: dir };
+      try {
+        await runSeeThrough(new ComfyClient(fake.url, { request: 5, poll: 0.01 }), { image: file, out, prefix: 'depth_fixture', resolution: 512, steps: 1, seed: 0, offload: false, lama: false, quant: 'none', wait: 1, timeout: 5, ...(active ? { depth: binding } : {}) }, () => {});
+        const set = readWrapperLayers(out, active ? binding : undefined), sheets = set.layers.filter(l => l.depthSheet !== undefined).length;
+        const fetched = fake.views.filter(f => f.endsWith('_depth.png')).length;
+        const saved = readdirSync(join(out, 'parts')).filter(f => f.endsWith('_depth.png')).length;
+        results.push({ mode, active, ok: active ? mode === 'ok' && sheets === 5 && fetched === 5 && saved === 5 : sheets === 0 && fetched === 0 && saved === 0, sheets, fetched });
+      } catch (error) {
+        if (!(error instanceof PartsError)) throw error;
+        results.push({ mode, active, ok: active && mode === 'missing-depth' && fake.views.some(f => f.endsWith('_depth.png')) && error.problems.some(p => p.code === 'COMFY_VIEW_PRESENT' && p.object.includes('_depth.png')), codes: error.problems.map(p => p.code) });
+      }
+    } finally { fake.stop(); }
+  }
+  const configFile = join(dir, 'config.json'), config = { ...rigConfig(), seethrough: { resolution: 512, steps: 1, seed: 0, offload: false }, depth: { zScale: 12 } };
+  writeFileSync(configFile, JSON.stringify(config));
+  const { depth: _depth, ...noDepthConfig } = config, noDepthFile = join(dir, 'no-depth-config.json'); writeFileSync(noDepthFile, JSON.stringify(noDepthConfig));
+  for (const test of [{ name: 'active-cli', mode: 'ok', args: ['--config', configFile, '--depth-run', 'full'], exit: 0, fetched: 5 }, { name: 'missing-cli', mode: 'missing-depth', args: ['--config', configFile, '--depth-run', 'full'], exit: 1, fetched: 1 }, { name: 'inactive-cli', mode: 'missing-depth', args: [], exit: 0, fetched: 0 }, { name: 'inactive-config-cli', mode: 'missing-depth', args: ['--config', noDepthFile], exit: 0, fetched: 0 }, { name: 'no-run-cli', mode: 'ok', args: ['--config', configFile], exit: 2, fetched: 0 }, { name: 'run-without-block-cli', mode: 'ok', args: ['--config', noDepthFile, '--depth-run', 'full'], exit: 2, fetched: 0 }] as const) {
+    const fake = startFakeComfy(test.mode);
+    try {
+      const proc = Bun.spawn([process.execPath, resolve('cli.ts'), 'comfy', 'seethrough', '--image', file, '--out', join(dir, test.name), '--host', fake.url, '--steps', '1', '--resolution', '512', '--wait', '1', '--timeout', '5', '--poll', '0.01', ...test.args], { stdout: 'pipe', stderr: 'pipe' });
+      const [stdout, stderr, exit] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+      writeFileSync(join(dir, `${test.name}.log`), stdout + stderr);
+      const fetched = fake.views.filter(f => f.endsWith('_depth.png')).length;
+      results.push({ mode: test.name, exit, fetched, ok: exit === test.exit && fetched === test.fetched && (test.exit !== 1 || (stdout + stderr).includes('COMFY_VIEW_PRESENT')) && (test.exit !== 2 || fake.requests.length === 0), ...(test.exit === 1 ? { raw: { stdout, stderr } } : {}) });
+    } finally { fake.stop(); }
+  }
+  console.log(JSON.stringify(results)); process.exit(results.every(r => r.ok) ? 0 : 1);
+}

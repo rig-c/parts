@@ -25,7 +25,7 @@ import { encodePngBytes } from '../src/raster/png.ts';
 import { newRaster, type Raster } from '../src/raster/types.ts';
 import { CANVAS, layerRaster, WRAPPER_LAYERS } from './synthetic.ts';
 
-export type FakeMode = 'ok' | 'busy' | 'no-outputs' | 'no-seethrough' | 'stale-manifest';
+export type FakeMode = 'ok' | 'busy' | 'no-outputs' | 'no-seethrough' | 'stale-manifest' | 'missing-depth';
 
 /** The checkpoint and LoRA names the fake box lists. */
 export const FAKE_CHECKPOINT = 'fixture_base.safetensors';
@@ -37,6 +37,8 @@ export interface FakeRequest {
 }
 
 export interface FakeComfy {
+  /** Exact /view filenames, including failed reads, for activation controls. */
+  views: string[];
   url: string;
   requests: FakeRequest[];
   uploads: Map<string, Uint8Array>;
@@ -98,6 +100,7 @@ export function fakePainting(w: number, h: number): Raster {
 type Node = { class_type: string; inputs: Record<string, unknown> };
 
 export function startFakeComfy(mode: FakeMode): FakeComfy {
+  const views: string[] = [];
   const requests: FakeRequest[] = [];
   const uploads = new Map<string, Uint8Array>();
   const prompts: unknown[] = [];
@@ -116,6 +119,12 @@ export function startFakeComfy(mode: FakeMode): FakeComfy {
       const layers = WRAPPER_LAYERS.map((l) => {
         const filename = `${prefix}_${stamp}_${l.name}.png`;
         files.set(filename, encodePngBytes(layerRaster(l)));
+        // Hand-analytic mock writer: opaque scalar data, independently encoded
+        // from the fixture's declared median. No image estimation is involved.
+        const depth = newRaster(l.width, l.height), level = Math.floor(l.depth * 255 + 0.5);
+        for (let i = 0; i < l.width * l.height; i++) depth.data.set([level, level, level, 255], i * 4);
+        if (mode !== 'missing-depth') files.set(`${prefix}_${stamp}_${l.name}_depth.png`, encodePngBytes(depth));
+
         return { name: l.name, filename, left: l.left, top: l.top, right: l.left + l.width, bottom: l.top + l.height, depth_median: l.depth, depth_filename: `${prefix}_${stamp}_${l.name}_depth.png` };
       });
       const manifestName = `${prefix}_${stamp}_layers.json`;
@@ -168,11 +177,12 @@ export function startFakeComfy(mode: FakeMode): FakeComfy {
         return json(history.has(id) ? { [id]: history.get(id) } : {});
       }
       if (u.pathname === '/view') {
+        views.push(u.searchParams.get('filename') ?? '');
         const bytes = files.get(u.searchParams.get('filename') ?? '');
         return bytes === undefined ? new Response('not found', { status: 404 }) : new Response(bytes);
       }
       return new Response('not found', { status: 404 });
     },
   });
-  return { url: `http://127.0.0.1:${server.port}`, requests, uploads, prompts, files, stop: () => server.stop(true) };
+  return { url: `http://127.0.0.1:${server.port}`, views, requests, uploads, prompts, files, stop: () => server.stop(true) };
 }
