@@ -717,6 +717,26 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       capSplits: altRes.capSplits,
     });
   }
+  const emittedAssets = [
+    ...result.images.flatMap(({ record, depthImage }) => [
+      `${record.name}.png`,
+      ...(depthImage !== undefined && record.depth !== undefined ? [record.depth.image] : []),
+    ]),
+    ...altBuilt.flatMap((b) => b.images.map(({ name }) => `${name}.png`)),
+  ];
+  const assetIndices = new Map<string, number>();
+  emittedAssets.forEach((file, index) => {
+    const previous = assetIndices.get(file);
+    if (previous !== undefined) {
+      altProblems.push({
+        code: 'DEPTH_SHEET_UNAMBIGUOUS',
+        object: file,
+        detail: `output assets[${previous}] and [${index}] require the same filename; choose distinct base, alternate and sheet names`,
+      });
+    } else {
+      assetIndices.set(file, index);
+    }
+  });
   refuseIfAny(altProblems);
   if (altBuilt.length > 0) {
     result.parts.alternates = altBuilt.map((b) => b.record);

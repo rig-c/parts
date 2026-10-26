@@ -7,8 +7,8 @@ import { CompileError } from 'rig-c/src/errors.ts';
 import type { MotionSpec } from 'rig-c/src/types.ts';
 import { parseRigSpec, type RigSpec } from 'rig-c/src/rig.ts';
 import { buildRig } from '../src/rig.ts';
-import { readRigInputs, rigOutputTexts } from '../src/build.ts';
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { assembleStage, readRigInputs, rigOutputTexts } from '../src/build.ts';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { PartsError } from '../src/errors.ts';
 import { parseConfig } from '../src/config.ts';
@@ -131,6 +131,61 @@ export function runDepthSheetChecks(dir: string, say: Say): void {
   say('DS38_INVALID_PHYSICAL_DATA_IS_IGNORED_ONLY_OFF', readWrapperLayers(badDir).layers[0].depthSheet === undefined && errors(() => bindDepthRun(badRaw, 'full', { zScale: 12 }, badDir)).includes('DEPTH_SHEET_GREYSCALE') && errors(() => bindDepthRun(badRaw, 'full', { zScale: 12 }, badDir)).includes('DEPTH_SHEET_OPAQUE'), 'inactive performs no scalar validation; active refuses color and nonopaque pixels');
   const invalidMemory = { ...set, layers: [{ ...layer, depthSheet: { ...scalar!, zScale: 0 } }] };
   say('DS39_BOUND_MEMORY_STILL_REQUIRES_VALID_ACTIVE_UNITS', registerDepthRun(invalidMemory, 'full', undefined, home).size === 0 && errors(() => registerDepthRun(invalidMemory, 'full', {}, home)).includes('DEPTH_ZSCALE_REQUIRED'), 'in-memory data cannot activate itself or evade positive finite units once active');
+  const singleDir = join(dir, 'single-atlas'), singleFull = join(singleDir, 'full');
+  mkdirSync(singleFull, { recursive: true });
+  writePng(join(singleDir, 'painting.png'), grey(10, 6, () => 180));
+  writePng(join(singleDir, 'atlas.png'), grey(10, 6, (x, y) => 10 * x + 20 * y));
+  writePng(join(singleDir, 'bad-atlas.png'), grey(9, 6, () => 20));
+  writePng(join(singleFull, 'face.png'), grey(10, 6, () => 180));
+  writePng(join(singleFull, 'lash.png'), grey(10, 6, () => 160));
+  writePng(join(singleFull, 'eye_r.png'), grey(10, 6, () => 180));
+  writePng(join(singleFull, 'eye_l.png'), grey(10, 6, () => 180));
+  writeFileSync(join(singleFull, 'layers.json'), JSON.stringify({ width: 10, height: 6, layers: [
+    { name: 'face', filename: 'face.png', left: 0, top: 0, right: 10, bottom: 6, depth_median: 90 / 255 },
+    { name: 'eyelash-r', filename: 'lash.png', left: 0, top: 0, right: 10, bottom: 6, depth_median: 80 / 255 },
+    { name: 'eyewhite-r', filename: 'eye_r.png', left: 0, top: 0, right: 10, bottom: 6, depth_median: 70 / 255 },
+    { name: 'eyewhite-l', filename: 'eye_l.png', left: 0, top: 0, right: 10, bottom: 6, depth_median: 70 / 255 },
+  ] }));
+  const runSingleStage = (tag: string, cfgBody: Record<string, unknown>) => {
+    const cfgPath = join(singleDir, `${tag}.config.json`), outDir = join(singleDir, tag);
+    writeFileSync(cfgPath, JSON.stringify(cfgBody));
+    return assembleStage({ source: join(singleDir, 'painting.png'), full: singleFull, head: null, config: cfgPath, seam: 'near-white', project: 'core' }, { partsJson: join(outDir, 'parts.json'), partsDir: join(outDir, 'parts'), recomposite: join(outDir, 'recomposite_rig.png'), errorMap: join(outDir, 'recomposite_error_rig.png') }, () => {});
+  };
+  const singleBaseCfg = { key: 'single_atlas', seethrough: { resolution: 10, steps: 1, seed: 0, offload: false }, assemble: { rig_scale: 1, plan: [['face', 'full', 'face']] } };
+  const singleAtlas = runSingleStage('atlas-ok', { ...singleBaseCfg, depth: { full: { atlas: { image: 'atlas.png', near: 'black', zScale: 12 } } } });
+  const singleAtlasDepth = singleAtlas.images[0]?.depthImage;
+  const expectedSingleAtlas = grey(10, 6, (x, y) => 10 * x + 20 * y);
+  const badSingleAtlas = errors(() => runSingleStage('atlas-bad', { ...singleBaseCfg, depth: { full: { atlas: { image: 'bad-atlas.png', near: 'black', zScale: 12 } } } }));
+  say('DS40_SINGLE_RUN_NON_SQUARE_ATLAS_PADS_GREEN', singleAtlas.parts.single_run_pad?.file_size.join('x') === '10x6' && singleAtlas.parts.single_run_pad.side === 10 && singleAtlas.parts.parts[0]?.depth?.sources[0]?.crop.join(',') === '0,0,10,6' && singleAtlasDepth !== undefined && Buffer.from(singleAtlasDepth.data).equals(Buffer.from(expectedSingleAtlas.data)) && badSingleAtlas.includes('DEPTH_SHEET_SIZE') && !existsSync(join(singleDir, 'atlas-bad')), `10x6 single run padded to 10x10: pad=${JSON.stringify(singleAtlas.parts.single_run_pad)}, bad 9x6 atlas=${badSingleAtlas.join(',')}`);
+  const altStageDir = join(dir, 'alt-stage'), altStageFull = join(altStageDir, 'full'), expectedAltSheet = grey(8, 8, (x, y) => 10 * x + 20 * y);
+  mkdirSync(altStageFull, { recursive: true });
+  writePng(join(altStageDir, 'painting.png'), grey(8, 8, () => 180));
+  writePng(join(altStageDir, 'sheet.png'), expectedAltSheet);
+  for (const f of ['face.png', 'lash.png', 'eye_r.png', 'eye_l.png']) writePng(join(altStageFull, f), grey(8, 8, () => 180));
+  writeFileSync(join(altStageFull, 'layers.json'), JSON.stringify({ width: 8, height: 8, layers: [
+    { name: 'face', filename: 'face.png', left: 0, top: 0, right: 8, bottom: 8, depth_median: 90 / 255 },
+    { name: 'eyelash-r', filename: 'lash.png', left: 0, top: 0, right: 8, bottom: 8, depth_median: 80 / 255 },
+    { name: 'eyewhite-r', filename: 'eye_r.png', left: 0, top: 0, right: 8, bottom: 8, depth_median: 70 / 255 },
+    { name: 'eyewhite-l', filename: 'eye_l.png', left: 0, top: 0, right: 8, bottom: 8, depth_median: 70 / 255 },
+  ] }));
+  const runAltStage = (tag: string, altName: string) => {
+    const cfgPath = join(altStageDir, `${tag}.config.json`), outDir = join(altStageDir, tag);
+    writeFileSync(cfgPath, JSON.stringify({
+      key: 'alt_collision',
+      seethrough: { resolution: 8, steps: 1, seed: 0, offload: false },
+      depth: { full: { layers: { 'eyelash-r': { image: 'sheet.png', near: 'black', zScale: 12 } } } },
+      assemble: {
+        rig_scale: 1,
+        plan: [['face', 'full', 'face'], ['warm_lash', 'full', 'eyelash-r'], ['lash_depth', 'full', 'eyewhite-r']],
+        alternates: [{ name: altName, source: 'painting.png', full: 'full', parts: ['lash_depth'] }],
+      },
+    }));
+    return assembleStage({ source: join(altStageDir, 'painting.png'), full: altStageFull, head: null, config: cfgPath, seam: 'near-white', project: 'core' }, { partsJson: join(outDir, 'parts.json'), partsDir: join(outDir, 'parts'), recomposite: join(outDir, 'recomposite_rig.png'), errorMap: join(outDir, 'recomposite_error_rig.png') }, () => {});
+  };
+  let stageCollision: PartsError | undefined;
+  try { runAltStage('alt-collision', 'warm'); } catch (error) { if (!(error instanceof PartsError)) throw error; stageCollision = error; }
+  runAltStage('alt-distinct', 'cool');
+  say('DS41_ASSEMBLE_STAGE_BASE_SHEET_VS_ALTERNATE_ART_COLLISION_RED', stageCollision?.problems.some(p => p.code === 'DEPTH_SHEET_UNAMBIGUOUS' && p.object === 'warm_lash_depth.png' && p.detail.includes('output assets[')) === true && !existsSync(join(altStageDir, 'alt-collision')) && Buffer.from(readPng(join(altStageDir, 'alt-distinct/parts/warm_lash_depth.png')).data).equals(Buffer.from(expectedAltSheet.data)) && readPng(join(altStageDir, 'alt-distinct/parts/cool_lash_depth.png')).width === 8, JSON.stringify(stageCollision?.problems));
 
 }
 

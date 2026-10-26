@@ -150,7 +150,7 @@ export function registerDepthRun(set: LayerSet, run: 'full' | 'head', cfg: Depth
   if (user?.atlas !== undefined && user.layers !== undefined && Object.keys(user.layers).length > 0) problems.push({ code: 'DEPTH_SOURCE_AMBIGUOUS', object: `config.depth.${run}`, detail: 'declares both a canvas atlas and per-layer sheets; choose one fallback route explicitly' });
   for (const name of Object.keys(user?.layers ?? {})) if (!set.layers.some(l => l.name === name)) problems.push({ code: 'DEPTH_SOURCE_RESOLVES', object: `config.depth.${run}.layers.${name}`, detail: 'names no source layer in this run; use an exact layer name' });
   let atlas: SourceDepthSheet | null = null;
-  if (user?.atlas !== undefined) {
+  if (user?.atlas !== undefined && (set.layers.length === 0 || set.layers.some(l => l.depthSheet?.sources === undefined || l.depthSheet.near === undefined || l.depthSheet.zScale === undefined))) {
     try { atlas = readSourceDepth(resolve(base, user.atlas.image), newRaster(set.canvas.w, set.canvas.h), null); } catch (e) { if (e instanceof PartsError) problems.push(...e.problems); else throw e; }
   }
   for (const layer of set.layers) {
