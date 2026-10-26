@@ -102,8 +102,9 @@
 import { sourceLimbTarget, nearestTargetPart } from './limbownership.ts';
 import { type ArmSplit, type BoneEntry, type CharacterConfig, type ControlSkeleton, controlSkeletonOf, type Cut, type EarlyConfig, type Extend, type Limb, type Patch, type PlanEntry, type Run, type SeeThrough } from './config.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
-import { figuresPhrase, implausibleRules, type Layer, type LayerFigures, layerFigures, type LayerSet, NEAR_WHITE_MIN, OPAQUE_ALPHA_ABOVE, ruleSummary } from './layers.ts';
+import { CORE_ALPHA, figuresPhrase, implausibleRules, type Layer, type LayerFigures, layerFigures, type LayerSet, NEAR_WHITE_MIN, OPAQUE_ALPHA_ABOVE, ruleSummary } from './layers.ts';
 import { padToSquare, squarePad } from './inputs.ts';
+import type { MotionSeamDeclaration } from './motionseams.ts';
 import { type CapRecord, type LimbRecord, PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, type SceneRecord, type SingleRunPad } from './parts.ts';
 import { assignCrossedLimbs, assignOverlappingHands, type BonePlace, bonePlaces, capBox, coveredRadius, type CutPlacement, featherWeight, halfWidthAbout, inDisc, jointLine, type JointLine, jointOffsets, limbPolyline, limbRun, luma601, nearestLimb, nearestOnLine, offLineFigure, pastJoint, placeCut, polylineDist2, segmentOf } from './limbs.ts';
 import {
@@ -133,8 +134,6 @@ const f32 = Math.fround;
 // the reference's constants, each named once
 // ---------------------------------------------------------------------------
 
-/** Alpha at or above this is "opaque" for ownership, projection cores and the seam override. `>= 250`, not `== 255`: See-through leaves alpha-254 speckle. */
-export const CORE_ALPHA = 250;
 /** A ghost component is kept when its area is at least this many pixels … */
 export const GHOST_MIN_AREA = 40;
 /** … and at least this fraction of the layer's largest component. */
@@ -160,7 +159,7 @@ export const CROP_PROBE_ALPHA = 128;
 /** Alpha at or above this in a later plan part keeps `growRim`'s ring off the pixel. */
 export const FRONT_ALPHA = 128;
 /** A painting pixel whose min channel is above this is "near-white" (the faithful rim and seam guard). Defined beside the layer reader, which applies the same test to a layer's colour (`layerFigures`). */
-export { NEAR_WHITE_MIN };
+export { CORE_ALPHA, NEAR_WHITE_MIN };
 /** The seam override acts where the flat composite differs from the painting by more than this, max channel. */
 export const SEAM_LIMIT = 60;
 /** `--propose-plan` drops a tag with fewer run-space opaque pixels than this after ghost clean-up. */
@@ -322,6 +321,7 @@ export interface AssembleInput {
   patches: Patch[];
   /** `assemble.cuts`: plan parts' pixels taken into new parts by polygon (`cutPart`), placed per their `draw`. */
   cuts: Cut[];
+  motion_seams?: MotionSeamDeclaration[];
   /** Internal alternate selection: piece layer by cut output; polygon subtraction and under stay on from. */
   cutLayers?: ReadonlyMap<string, string>;
   /**
@@ -5107,6 +5107,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     parts: {
       rig_size: [W, H],
       scale_rig_per_source: frame.S,
+      ...(input.motion_seams === undefined ? {} : { motion_seams: input.motion_seams.map(({ part, neighbour }) => ({ part, neighbour })) }),
       parts: placed.map((p) => p.record),
       ghost_px: ghost,
       recomposite: recompositeRecord(figures),
@@ -5877,7 +5878,7 @@ function unplannedNotes(
  * full-loader config, where it is optional.
  */
 export function stageFields(
-  cfg: Pick<CharacterConfig, 'seethrough' | 'assemble' | 'scene'> & { limbs?: Record<string, Limb>; bones?: BoneEntry[] },
+  cfg: Pick<CharacterConfig, 'seethrough' | 'assemble' | 'scene' | 'motion_seams'> & { limbs?: Record<string, Limb>; bones?: BoneEntry[] },
   single: { w: number; h: number } | null = null,
 ): {
   resolution: number;
@@ -5887,6 +5888,7 @@ export function stageFields(
   extend: Extend[];
   patches: Patch[];
   cuts: Cut[];
+  motion_seams?: MotionSeamDeclaration[];
   scene?: boolean;
   limbs?: Record<string, Limb>;
   bones?: BoneEntry[];
@@ -5917,6 +5919,7 @@ export function stageFields(
     extend: cfg.assemble.extend_below_crop ?? [],
     patches: cfg.assemble.patches ?? [],
     cuts: cfg.assemble.cuts ?? [],
+    ...(cfg.motion_seams === undefined ? {} : { motion_seams: cfg.motion_seams }),
     ...(cfg.scene === undefined ? {} : { scene: true }),
     ...(cfg.limbs === undefined ? {} : { limbs: cfg.limbs, bones: cfg.bones ?? [] }),
   };

@@ -9,7 +9,7 @@ import { DEPTH_EYE_CHECK_LABEL, depthOwnership, parseDepthManifest, readDepthInp
 import { coverageConstraints, type CoverageSurface } from '../src/depthcoverage.ts';
 import { rigOutputTexts } from '../src/build.ts';
 import type { RigOutput } from '../src/rig.ts';
-import { refineDepthMesh } from '../src/depthmesh.ts';
+import { refineDepthMesh, depthRowNorm, DepthLeastSquares } from '../src/depthmesh.ts';
 import { applyDepthSurface, depthZ, projectDepth } from '../src/depthsurface.ts';
 import { applyFaceSurfaceDeform, type SurfaceRig, type SliderAnimation } from '../src/turn.ts';
 import { PartsError } from '../src/errors.ts';
@@ -71,6 +71,10 @@ export function runDepthSurfaceChecks(dir: string, say: DepthSay): void {
     }
   }
   say('DISPLACEMENT_ONLY', projectDepth(3, 4, 2, 90, 90).join(',') === '5,6' && projectDepth(3, 4, 0, 90, 90).join(',') === '3,4' && projectDepth(3, 4, 2, 0, 0).join(',') === '3,4', 'hand analytic sine displacement; zero Z and zero angles exact; cosine plant would move (3,4)');
+  say('PORTABLE_ROW_NORM', depthRowNorm([3, 4]) === 5 && depthRowNorm([-3, 0, 4]) === 5 && depthRowNorm([]) === 0, 'hand Euclidean 3-4-5, sign and empty controls; deterministic multiply/add/sqrt');
+  say('ROW_NORM_RANGE', Math.abs(depthRowNorm([3e300, 4e300]) / 5e300 - 1) <= 4 * Number.EPSILON && Math.abs(depthRowNorm([3e-300, 4e-300]) / 5e-300 - 1) <= 4 * Number.EPSILON && depthRowNorm([Number.MIN_VALUE]) === Number.MIN_VALUE, 'scaled hand 3-4-5 controls avoid square overflow/underflow, including a subnormal component');
+  const invalidNorm = (values: number[]): string => { const q = new DepthLeastSquares(1); q.add({ ids: [0], values: [1] }, 1, 1); return depthRefusal(() => q.solve([{ ids: values.map(() => 0), values, upper: 1, object: 'public row' }])); };
+  say('ROW_NORM_REFUSALS', [[0], [Infinity], [NaN], [Number.MAX_VALUE, Number.MAX_VALUE]].every(v => invalidNorm(v).includes('RIG_DEPTH_FIELD_SOLVE')), 'zero, nonfinite and mathematically out-of-range row norms refuse by name, never normalize to silent zeros');
   say('SOURCE_Z', near(depthZ(192 / 255, m.model, 'white-near', 64 / 255), 256 / 255), 'gain2 times source difference128/255; no scalar layer carry');
   say('POLARITY_PLANT', depthZ(192 / 255, m.model, 'white-near', 64 / 255) > 0 && !(depthZ(192 / 255, m.model, 'black-near', 64 / 255) > 0), 'inversion reverses the hand-known near-point response');
   const mask = depthOwnership(4, 4, [0, 0, 1, 0, 0, 1], [0, 1, 2], new Uint8Array(16).fill(255), 128, 0);
@@ -133,7 +137,7 @@ export function runDepthSurfaceChecks(dir: string, say: DepthSay): void {
 }
 
 /** Mandatory real compile/gate then actual posed vertices, never model-only folds. */
-export function runCompiledDepthChecks(dir: string, say: DepthSay, runner: RigcRunner, readersOnly = false, size = 10, curved = false, single = false): void {
+export function runCompiledDepthChecks(dir: string, say: DepthSay, runner: RigcRunner, readersOnly = false, size = 10, curved = false, single = false, interiorHost = false): void {
   if (!single && !curved) { runCompiledDepthChecks(join(dir, 'flat'), say, runner, readersOnly, 10, false, true); runCompiledDepthChecks(join(dir, 'coupled'), say, runner, readersOnly, 16, true, true); return; }
   let worst = 0, folds = 0, compiled = 0, zeroExact = true;
   for (const rotation of [270, -270]) {
@@ -147,7 +151,7 @@ export function runCompiledDepthChecks(dir: string, say: DepthSay, runner: RigcR
       rig.skins.default.panel.panel = refineDepthMesh(seed, [{ uv: [0.5, 0.5], z: 1 }], centre, 4).mesh;
     }
     rig.bones[0] = { name: 'root', x: 3, y: 5, rotation: 30, scaleX: 1.2, scaleY: 0.8, shearY: 7 };
-    rig.bones.push({ name: 'feature', parent: 'root', x: 0, y: 0, rotation, scaleX: rotation < 0 ? -1 : 1 }); rig.slots?.push({ name: 'overlay', bone: 'feature', attachment: 'overlay' }); rig.skins.default.overlay = { overlay: { image: 'art.png', x: 0, y: 0 } }; input.manifest.bindings.overlay = { ...input.manifest.bindings.panel, host: 'panel' }; input.images.set('overlay', input.images.get('panel')!);
+    rig.bones.push({ name: 'feature', parent: 'root', x: 0, y: 0, rotation, scaleX: rotation < 0 ? -1 : 1 }); rig.slots?.push({ name: 'overlay', bone: 'feature', attachment: 'overlay' }); rig.skins.default.overlay = { overlay: { image: 'art.png', x: 0, y: 0, ...(interiorHost ? { x: 0.5, y: 1.25, scaleX: 0.4, scaleY: 0.2 } : {}) } }; input.manifest.bindings.overlay = { ...input.manifest.bindings.panel, host: 'panel' }; input.images.set('overlay', input.images.get('panel')!);
     const corners: Array<[number, number]> = [-15, 0, 15].flatMap(yaw => [-12, 0, 12].map(pitch => [yaw, pitch] as [number, number])); corners.push([-0.1, 0], [0.1, 0]);
     const motion = { spec: 'rigc-motion/1', archetype: 'depth-control', cut: 'depth-control', easings: {}, groups: input.manifest.groups, animations: { ...depthMotion().animations, probe: { duration: corners.length - 1, tracks: ['yaw_dial', 'pitch_dial'].map((bone, axis) => ({ bone, property: 'rotate', keys: corners.map((pair, t) => ({ t, v: [pair[axis]] })) })) } } };
     applyFaceSurfaceDeform(rig, motion, { depth: input }); if (!curved && !input.report.regions.some(r => r.part === 'panel' && r.vertices === 5)) throw Error('Independent adaptive shared-edge geometry absent'); const spec = { spec: 'rigc-rig/1', name: 'depth-control', images: '.', skeleton: { x: -64, y: -64, width: 128, height: 128 }, ...rig };
@@ -186,7 +190,7 @@ export function runCompiledDepthChecks(dir: string, say: DepthSay, runner: RigcR
     }
     }
   }
-  say(readersOnly ? 'COMPILED_READERS' : 'COMPILED_FIELD', readersOnly || (compiled === 4 && worst < 0.002 && folds === 0 && zeroExact), readersOnly ? 'both complete fixtures passed actual rig/motion readers; no compile claim' : `${compiled} mandatory compiles (package rig-play packed + explicit Spine, identical corrected inputs); nonunit/sheared translated frames, setup +/-270, ${curved ? 'coupled constrained source peak' : 'independent adaptive shared-edge constant field'}, 9 corners plus near-zero. Max displacement error ${worst}, folds ${folds}, neutral geometry bytes ${zeroExact}; feature bone remains unchanged.`);
+  say(readersOnly ? 'COMPILED_READERS' : 'COMPILED_FIELD', readersOnly || (compiled === 4 && worst < 0.002 && folds === 0 && zeroExact), readersOnly ? 'both complete fixtures passed actual rig/motion readers; no compile claim' : `${compiled} mandatory compiles (package rig-play packed + explicit Spine, identical corrected inputs); ${interiorHost ? 'independent authored interior4x2 HOST; original boundary regression NOT cleared; ' : ''}nonunit/sheared translated frames, setup +/-270, ${curved ? 'coupled constrained source peak' : 'independent adaptive shared-edge constant field'}, 9 corners plus near-zero. Max displacement error ${worst}, folds ${folds}, neutral geometry bytes ${zeroExact}; feature bone remains unchanged.`);
 }
 
 /** Explicit temporary pilot controls; independent public source, no private art. */
@@ -242,6 +246,12 @@ export function writePilotNativeFixture(folder: string): { spec: unknown; motion
   writeFileSync(join(folder,'rig.json'),JSON.stringify(spec));writeFileSync(join(folder,'motion.json'),JSON.stringify(motion));writeFileSync(join(folder,'PILOT.json'),JSON.stringify(input.report.pilot));writeFileSync(join(folder,'final-field.json'),JSON.stringify(input.report));return{spec,motion,report:input.report};
 }
 export function runPilotCompiledDepthChecks(folder:string,say:DepthSay,runner:RigcRunner,readersOnly=false):void{
+  // Independent positive: an authored 4x2 material at (1/2,5/4) lies inside
+  // the 10x10 host, away from its centre and coincident source boundaries.
+  // It still uses the original +/-270 child, reflection, root shear and region
+  // promotion. This does NOT replace or clear the original coincident-boundary
+  // fixture, whose generated Float32 sliver remains a separate regression.
+  if (!readersOnly) runCompiledDepthChecks(join(folder, 'interior-quarter-turn'), say, runner, false, 10, false, true, true);
   const fixture=writePilotNativeFixture(folder),follower=fixture.report.regions.find(r=>r.part==='overlay');
   say('PILOT_HOST_VISIBLE_REPORT',follower?.rawNeutralVisible.samples===255&&follower.rawNeutralProtected.samples===0&&follower.rawCarried.samples===255&&fixture.report.coverage.some(c=>c.subject==='overlay'&&c.kind==='host-support'&&c.protectedTexels===0),'hand16x16 follower with one transparent corner, drawn after its fully supporting host:255visible/carried,0physicalprotected; HOST support separately labelled');
   if(readersOnly){say('PILOT_NATIVE_READERS',true,'actual labelled rig/motion/PNG/depth readers; core compile still pending');return;}

@@ -147,6 +147,8 @@ import { type Mask, newMask, newRaster, type Raster } from './raster/types.ts';
 import { npMean, npMedian, npPercentile, pyFixed, pyInt, pyIntList, pyRepr, pyRound, pyStrList } from './pyfmt.ts';
 import type { JointState, RigJoint, RigJoints } from './keypoints.ts';
 import { IDLE_FPS } from './motion.ts';
+import { draftMotionSeams, type MotionSeamDeclaration } from './motionseams.ts';
+export { draftMotionSeams } from './motionseams.ts';
 import { FORK_SMOOTH_MAX_INFLUENCES, influenceFarthest } from './rig.ts';
 import { type Segment as WeightSegment } from './weights.ts';
 import { pyRound as roundTo } from './round.ts';
@@ -278,6 +280,8 @@ export interface Proposal {
   regions: Record<string, string>;
   /** Only under `--keypoints`, where an arm or a leg is drafted from its joints (issue #349): absent otherwise, so a proposal without one is the one written before it. */
   limbs?: Record<string, Limb>;
+  /** Source-bound torso/sleeve observations, written only when the structure resolves. */
+  motion_seams?: MotionSeamDeclaration[];
   motion: {
     duration: number;
     tracks: Array<ProposedSingleTrack | ProposedChainTrack>;
@@ -304,7 +308,7 @@ export interface Proposal {
  * {@link Proposal} key it does not hold, and the selftest's `TY18` holds every
  * paste sentence in the documents to it.
  */
-export const PROPOSAL_CONFIG_SECTIONS = ['bones', 'meshes', 'regions', 'limbs', 'motion', 'constraints', 'turn', 'proposed_rig_scale'] as const satisfies ReadonlyArray<Exclude<keyof Proposal, 'notes'>>;
+export const PROPOSAL_CONFIG_SECTIONS = ['bones', 'meshes', 'regions', 'limbs', 'motion', 'constraints', 'turn', 'motion_seams', 'proposed_rig_scale'] as const satisfies ReadonlyArray<Exclude<keyof Proposal, 'notes'>>;
 
 /** A {@link Proposal} key that is neither `notes` nor in {@link PROPOSAL_CONFIG_SECTIONS}; `never` while the list is whole. */
 type UnlistedProposalSection = Exclude<keyof Proposal, 'notes' | (typeof PROPOSAL_CONFIG_SECTIONS)[number]>;
@@ -661,7 +665,7 @@ export function withTurn(p: Proposal, draft: { turn: TurnSpec | null; notes: str
     }
     turn = { pivot: turn.pivot, depths };
   }
-  return { bones: p.bones, meshes: p.meshes, regions: p.regions, ...(p.limbs === undefined ? {} : { limbs: p.limbs }), motion: p.motion, ...(p.constraints === undefined ? {} : { constraints: p.constraints }), ...(turn === null ? {} : { turn }), proposed_rig_scale: p.proposed_rig_scale, notes: [...p.notes, ...draft.notes] };
+  return { bones: p.bones, meshes: p.meshes, regions: p.regions, ...(p.limbs === undefined ? {} : { limbs: p.limbs }), ...(p.motion_seams === undefined ? {} : { motion_seams: p.motion_seams }), motion: p.motion, ...(p.constraints === undefined ? {} : { constraints: p.constraints }), ...(turn === null ? {} : { turn }), proposed_rig_scale: p.proposed_rig_scale, notes: [...p.notes, ...draft.notes] };
 }
 
 // ---------------------------------------------------------------------------
@@ -3493,8 +3497,10 @@ export function proposeWithBasis(
     meshes[name] = { influence: { cell, radius, across: decl.across, max, shape: decl.shape, ...(held ? { hold_tip: true as const } : {}) }, segments };
   }
   const constrained = clothConstraints.length === 0 ? {} : { constraints: clothConstraints };
+  const motionSeams = draftMotionSeams({ bones, meshes, regions, ...drafted }, P.recs);
+  const observed = motionSeams.length === 0 ? {} : { motion_seams: motionSeams };
   return {
-    proposal: draftPassingChainSigns(P, { bones, meshes, regions, ...drafted, motion: blink === undefined ? { duration: IDLE_SECONDS, tracks: idleTracks } : { duration: IDLE_SECONDS, tracks: idleTracks, blink }, ...constrained, proposed_rig_scale: P.rigScale, notes }),
+    proposal: draftPassingChainSigns(P, { bones, meshes, regions, ...drafted, ...observed, motion: blink === undefined ? { duration: IDLE_SECONDS, tracks: idleTracks } : { duration: IDLE_SECONDS, tracks: idleTracks, blink }, ...constrained, proposed_rig_scale: P.rigScale, notes }),
     basis: { frame, bones: records },
     draftLint: [...jointsOffArt, ...radii],
   };

@@ -240,6 +240,15 @@ export function refineDepthMesh(seed: DeformMeshAttachment, samples: readonly De
 export interface DepthLinear { ids: number[]; values: number[]; }
 export interface DepthHalfspace extends DepthLinear { upper: number; object: string; }
 export interface DepthSolveReport { variables: number; observations: number; sourceArea: number; iterations: number; cgIterations: number; primal: number; stationarity: number; complementarity: number; objective: number; method: string; }
+/** Portable Euclidean row norm: fixed-order multiply/add/sqrt, as length.ts.
+ * Scale first so finite large/small components do not overflow/underflow their
+ * squares. This is mathematical row scaling, not a solver tolerance or gain.
+ */
+export function depthRowNorm(values: readonly number[]): number {
+  const scale = values.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+  if (!(scale > 0) || !Number.isFinite(scale)) return scale;
+  return scale * Math.sqrt(values.reduce((sum, v) => sum + (v / scale) * (v / scale), 0));
+}
 export class DepthLeastSquares {
   private h: Array<Map<number, number>>;
   private rhs: Float64Array;
@@ -258,7 +267,7 @@ export class DepthLeastSquares {
     const scale = Array.from({ length: n }, (_, i) => Math.sqrt((this.h[i].get(i) ?? 0) / this.area) || 1);
     const h = this.h.map((row, i) => [...row].sort(([a], [b]) => a - b).map(([j, v]) => [j, v / this.area / scale[i] / scale[j]] as const));
     const rhs = Float64Array.from(this.rhs, (v, i) => v / this.area / scale[i]);
-    const a = halfspaces.map(row => { const values = row.values.map((v, k) => v / scale[row.ids[k]]), norm = Math.hypot(...values); if (!(norm > 0)) return depthRefuse('RIG_DEPTH_FIELD_SOLVE', row.object, 'empty or nonfinite no-fold row'); return { ids: row.ids, values: values.map(v => v / norm), upper: row.upper / norm }; });
+    const a = halfspaces.map(row => { const values = row.values.map((v, k) => v / scale[row.ids[k]]), norm = depthRowNorm(values); if (!(norm > 0) || !Number.isFinite(norm)) return depthRefuse('RIG_DEPTH_FIELD_SOLVE', row.object, 'empty or nonfinite no-fold row'); return { ids: row.ids, values: values.map(v => v / norm), upper: row.upper / norm }; });
     const dot = (row: DepthLinear, x: ArrayLike<number>): number => row.ids.reduce((s, id, k) => s + row.values[k] * x[id], 0);
     const mulH = (x: ArrayLike<number>): Float64Array => Float64Array.from(h, row => row.reduce((s, [j, v]) => s + v * x[j], 0));
     const transpose = (y: ArrayLike<number>): Float64Array => { const out = new Float64Array(n); a.forEach((row, i) => row.ids.forEach((id, k) => { out[id] += row.values[k] * y[i]; })); return out; };

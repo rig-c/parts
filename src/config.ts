@@ -88,6 +88,7 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { RIG_BONE_INHERIT, RIG_SKIN_CONSTRAINT_KEYS, type RigBoneInherit, type RigConstraint, type RigSkinConstraintKey, type RigStop } from 'rig-c/src/rig.ts';
 import { pyRound } from './round.ts';
+import { motionSeamProblems, type MotionSeamDeclaration } from './motionseams.ts';
 import { REQUIREMENTS_SPEC } from './requirements.ts';
 import { CLOTH_TARGETS, type ClothRecipes, RECIPE_STRENGTH, RIGC_DEFAULT_DAMPING, springStable } from './cloth.ts';
 import { GRID, MAX_SIDE } from './contour.ts';
@@ -1069,6 +1070,8 @@ export interface CharacterConfig {
    * is read and no byte of any output moves.
    */
   requirements?: string;
+  /** Explicit motion observations, propagated to parts.json; absent means no added pair. */
+  motion_seams?: MotionSeamDeclaration[];
 }
 
 /** `config.scene` (issue #242): the declaration that the painting is a scene. It holds no field today. */
@@ -1389,11 +1392,12 @@ export interface AssembleConfig {
   /** Issue #349: read with `bones` (the joints are the bones' origins) when present. */
   limbs?: Record<string, Limb>;
   bones?: BoneEntry[];
+  motion_seams?: MotionSeamDeclaration[];
   /** Issue #354: the `rig_scale` `propose` drafted the rig sections at, held equal to `assemble.rig_scale` when present. */
   proposed_rig_scale?: number;
 }
 
-const TOP_KEYS = ['key', 'generation', 'seethrough', 'assemble', 'limbs', 'bones', 'meshes', 'regions', 'motion', 'constraints', 'stops', 'turn', 'scene', 'cloth', 'proposed_rig_scale', 'requirements'] as const;
+const TOP_KEYS = ['key', 'generation', 'seethrough', 'assemble', 'limbs', 'bones', 'meshes', 'regions', 'motion', 'constraints', 'stops', 'turn', 'scene', 'cloth', 'proposed_rig_scale', 'requirements', 'motion_seams'] as const;
 
 /**
  * The one partial entry point. It validates exactly what its door requires —
@@ -1463,6 +1467,10 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
     }
     if (isPlainObject(t.assemble) && 'alternates' in t.assemble) {
       checkAlternates(c, t.assemble.alternates, made, limbs, names?.bones ?? null, names?.chains ?? null, t.regions, t.meshes);
+    }
+    if ('motion_seams' in t) {
+      const output = new Set([...made.parts.filter(n => !limbs?.consumed.has(n)), ...made.patches, ...made.cuts, ...(limbs?.parts.keys() ?? [])]);
+      c.problems.push(...motionSeamProblems(t.motion_seams, output, 'config.motion_seams', 'CONFIG_MOTION_SEAM'));
     }
   }
   if ('cloth' in t) checkCloth(c, t.cloth);
@@ -1660,6 +1668,7 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
   if ('constraints' in t) checkConstraints(c, t.constraints, names.bones, names.parents);
   if ('stops' in t) checkStops(c, t.stops, names.bones, names.chains);
   const attached = attachedParts(t.meshes, t.regions);
+  if ('motion_seams' in t) c.problems.push(...motionSeamProblems(t.motion_seams, attached, 'config.motion_seams', 'CONFIG_MOTION_SEAM'));
   const hasAltFace = hasAlternateFaceSet(t.assemble, [...parts, ...cuts]);
   if ('turn' in t) checkTurn(c, t.turn, attached, names.bones, hasAltFace);
   if ('scene' in t) checkScene(c, t.scene);
@@ -1890,9 +1899,9 @@ export interface SkeletonSections {
  * both before writing (`checkProposal`). A key the loader would not take is
  * refused by name, as in a config. Refusals name the fields `proposal.…`.
  */
-export function parseProposalSections(raw: Json): SkeletonSections & { limbs?: Record<string, Limb>; constraints?: ConfigConstraint[]; stops?: ConfigStop[]; proposed_rig_scale?: number } {
+export function parseProposalSections(raw: Json): SkeletonSections & { limbs?: Record<string, Limb>; constraints?: ConfigConstraint[]; stops?: ConfigStop[]; proposed_rig_scale?: number; motion_seams?: MotionSeamDeclaration[] } {
   const c = new Check();
-  const top = c.object('config', raw, ['bones', 'meshes', 'regions', 'motion'], ['notes', 'limbs', 'constraints', 'stops', 'proposed_rig_scale']);
+  const top = c.object('config', raw, ['bones', 'meshes', 'regions', 'motion'], ['notes', 'limbs', 'constraints', 'stops', 'proposed_rig_scale', 'motion_seams']);
   if (top !== null) {
     const names = 'bones' in top ? checkBones(c, top.bones) : { bones: new Set<string>([ROOT_BONE]), chains: new Map<string, number>(), parents: new Map<string, string>() };
     if ('limbs' in top) {
@@ -1903,6 +1912,7 @@ export function parseProposalSections(raw: Json): SkeletonSections & { limbs?: R
     }
     if ('meshes' in top) checkMeshes(c, top.meshes, names.bones, names.chains, top.stops);
     if ('regions' in top) checkRegions(c, top.regions, names.bones);
+    if ('motion_seams' in top) c.problems.push(...motionSeamProblems(top.motion_seams, attachedParts(top.meshes, top.regions), 'config.motion_seams', 'CONFIG_MOTION_SEAM'));
     if ('motion' in top) checkMotion(c, top.motion, names.bones, names.chains, 'regions' in top ? top.regions : undefined);
     if ('constraints' in top) checkConstraints(c, top.constraints, names.bones, names.parents);
     if ('stops' in top) checkStops(c, top.stops, names.bones, names.chains);
@@ -1910,7 +1920,7 @@ export function parseProposalSections(raw: Json): SkeletonSections & { limbs?: R
     if ('notes' in top && c.array('config.notes', top.notes, false)) (top.notes as Json[]).forEach((n, i) => c.string(`config.notes[${i}]`, n, false));
   }
   refuseIfAny(c.problems.map((p) => ({ ...p, object: p.object.replace(/^config\b/, 'proposal') })));
-  return raw as SkeletonSections & { limbs?: Record<string, Limb>; constraints?: ConfigConstraint[]; stops?: ConfigStop[]; proposed_rig_scale?: number };
+  return raw as SkeletonSections & { limbs?: Record<string, Limb>; constraints?: ConfigConstraint[]; stops?: ConfigStop[]; proposed_rig_scale?: number; motion_seams?: MotionSeamDeclaration[] };
 }
 
 /**

@@ -41,9 +41,14 @@ a stale or unrecorded input stops that suite on that one named FAIL; re-running
 `bun run fetch-examples` replaces a stale file and names it.
 
 The suites run concurrently, one worker process per suite, as many at once as
-the machine's available parallelism (`RIG_PARTS_SELFTEST_JOBS=<n>` sets the
+min(available cores, 2), the measured operating point for one 6 GiB slot
+(`RIG_PARTS_SELFTEST_JOBS=<n>` sets the
 number; the former `SPINE_PARTS_SELFTEST_JOBS` is read when it is not set). What the run prints is the same either way: each suite's lines, in
-the suites' own order, one suite after another.
+the suites' own order, one suite after another. The run's own sampled family
+RSS peak must fit 6 GiB; above it is a failed run-tally control. A platform
+without Linux `/proc` reports that measurement as SKIP, never PASS. Shard
+records carry their own peak lines into the merge. The peak is sampled,
+counts shared pages once per PID, and does not replace a kernel memory limit.
 
 CI runs the same suites in three jobs (issue #395): each job runs one shard
 (`bun selftest.ts --shard <name> --record <file>`), and the `test` job merges

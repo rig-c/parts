@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runMotionSeamContractCases, runMotionSeamDocumentationCases, runStoppedMotionSeamCase } from './tools/fixtures/motion_seam_controls.ts';
 import { runExplicitMeshChecks } from './tools/check_explicitmesh.ts';
 import { runAlternateLayerChecks } from './tools/check_alternate_layers.ts';
 import { runAlternateCutLayerChecks } from './tools/check_alternate_cut_layers.ts';
@@ -10,6 +11,7 @@ import { runSetFocusChecks } from './tools/check_set_focus.ts';
 import { runRevisionChainChecks } from './tools/check_revision_chain.ts';
 import { runConfigWriteChecks } from './tools/check_configwrite.ts';
 import { runCorePointerChecks } from './tools/check_corepointer.ts';
+import { runLayerBoundsChecks } from './tools/check_layer_bounds.ts';
 /**
  * rig-parts selftest — proof that every gate here can go RED.
  *
@@ -67,7 +69,7 @@ import { runCorePointerChecks } from './tools/check_corepointer.ts';
  *
  * Each suite runs in a worker process of its own — this file again, under
  * `--suite-worker <key>` — several at a time (`RIG_PARTS_SELFTEST_JOBS`, or
- * the machine's available parallelism). The parent prints what each worker
+ * at most two workers by default for a 6 GiB slot). The parent prints what each worker
  * printed, in the suites' own order and one suite after another, through the
  * same `RunTally.of` as before, so the case lines and the counts are what a
  * sequential run prints. A worker that cannot account for its suite is that
@@ -1608,6 +1610,7 @@ function runWrapperSuite(): number {
     return d;
   };
   try {
+    runLayerBoundsChecks(fresh('layer-bounds'), (name, ok, detail) => say(name, ok, detail, 'original alpha > 8, input-canvas offsets and the existing body group; analytical controls before acceptance measurements'));
     const dir = fresh('wrapper');
     writeWrapperFixture(dir);
     const set = readWrapperLayers(dir);
@@ -11014,7 +11017,7 @@ function runProposeSuite(): number {
         tNote.includes('Pivot depth 0.657258') &&
         JSON.stringify(draft.notes.slice(-TURN_DEPTH_CAVEAT.length)) === JSON.stringify(TURN_DEPTH_CAVEAT) &&
         tNote.includes('skirt -0.227723 (depth 0.75), sleeve_a 0.386139 (depth 0.5), sleeve_b -0.534654 (depth 0.875), face 1 (depth 0.25)') &&
-        JSON.stringify(Object.keys(turned)) === JSON.stringify(['bones', 'meshes', 'regions', 'motion', 'turn', 'proposed_rig_scale', 'notes']) &&
+        JSON.stringify(Object.keys(turned)) === JSON.stringify(['bones', 'meshes', 'regions', ...(tprop.motion_seams === undefined ? [] : ['motion_seams']), 'motion', 'turn', 'proposed_rig_scale', 'notes']) &&
         serializeProposal(withTurn(tprop, { turn: null, notes: [] })) === serializeProposal(tprop) &&
         tLoad === null,
       `turn ${JSON.stringify(draft.turn)}; note "${tNote}"; keys ${Object.keys(turned).join(', ')}; the proposal with it ${tLoad === null ? 'loads' : `is refused: ${codes(tLoad)}`}`,
@@ -17315,6 +17318,7 @@ function runMotionSeamWorldIntegration(dir: string, say: (name: string, ok: bool
 
 function runMotionSeamCases(report: FixtureCaseReporter): void {
   const { say, runCli } = fixtureChildDiagnostics(report);
+  runMotionSeamContractCases(say, temp);
   runMotionRootSeamCases(say);
   const dir = temp('motion-seam');
   try {
@@ -17323,14 +17327,25 @@ function runMotionSeamCases(report: FixtureCaseReporter): void {
     writeRun(join(dir, 'head'), FRAMED_HEAD);
     writeFileSync(join(dir, 'painting.png'), encodePngBytes(flatPainting()));
     writeFileSync(join(dir, 'animations.json'), JSON.stringify(SO_BEND));
-    const built = (label: string, limbs: boolean): { status: number; out: string; fig: Record<string, unknown> | null } => {
+    const built = (label: string, limbs: boolean, patch: Record<string, unknown> = {}, fullRun?: string): { status: number; out: string; fig: Record<string, unknown> | null; stage: string } => {
       const cfg = join(dir, `${label}.json`);
-      writeFileSync(cfg, JSON.stringify(soConfig(limbs)));
-      const r = runCli(['build', '--config', cfg, '--source', join(dir, 'painting.png'), '--full', join(dir, limbs ? 'full' : 'full-uncut'), '--head', join(dir, 'head'), '--out', join(dir, label)]);
-      return { ...r, fig: readJsonFile(join(dir, label, 'check', 'check.json')) };
+      writeFileSync(cfg, JSON.stringify({ ...soConfig(limbs), ...patch }));
+      const r = runCli(['build', '--config', cfg, '--source', join(dir, 'painting.png'), '--full', join(dir, fullRun ?? (limbs ? 'full' : 'full-uncut')), '--head', join(dir, 'head'), '--out', join(dir, label)]);
+      return { ...r, stage: join(dir, label), fig: readJsonFile(join(dir, label, 'check', 'check.json')) };
     };
     const cut = built('cut', true);
     const whole = built('whole', false);
+    // Independent authored pieces declare a seam without config.limbs' distinct one-source-bone contract.
+    writeRun(join(dir, 'full-stopped'), [
+      { name: 'author:upperarm', depth: 0.5, rects: [SO_FULL[0].rects[0]] },
+      { name: 'author:forearm', depth: 0.6, rects: [SO_FULL[0].rects[1], { x0: 17, y0: 17, x1: 37, y1: 32, colour: C }] },
+    ]);
+    runStoppedMotionSeamCase(say, patch => built('stopped', true, {
+      ...patch,
+      limbs: undefined,
+      motion_seams: [{ part: 'upperarm_r', neighbour: 'forearm_r' }],
+      assemble: { ...(soConfig(true).assemble as Record<string, unknown>), plan: [['upperarm_r', 'full', 'author:upperarm'], ['forearm_r', 'full', 'author:forearm']] },
+    }, 'full-stopped'));
     const lines = (out: string): string[] => out.split('\n').map((l) => l.replace(/^\[check\] /, ''));
     const line = (fig: Record<string, unknown> | null): MotionSeamLine | null => (fig?.[MOTION_SEAM_LINE] as MotionSeamLine | undefined) ?? null;
     const ln = line(cut.fig);
@@ -32653,11 +32668,15 @@ function authorLayerControls(say: (name: string, ok: boolean, detail: string, wh
     const lyA = runCli(['layers', join(authored, 'full')]);
     const lyP = runCli(['layers', join(plain, 'full')]);
     const rowA = /^ {2}4 +author:hand +author +31,46 +44,59 +13x13 +169 /m.test(lyA.out);
+    const hasAuthorOutput = (out: string): boolean => /^(?: {2}\d+ +.+ +author +| {2}author-made: layer )/m.test(out);
+    const plainHasAuthorOutput = hasAuthorOutput(lyP.out);
+    const authorRowPlant = `${lyP.out}\n  99  author:plant  author  0,0  1,1  1x1  1\n`;
+    const authorLinePlant = `${lyP.out}\n  ${authorLayerLine('author:plant')}\n`;
     say(
       'AS225_LAYERS_PRINTS_AN_AUTHOR_MADE_LAYER_IN_GROUP_AUTHOR_AND_SAYS_IT_HAS_NO_ROLE',
-      lyA.status === 0 && rowA && hasLine(lyA.out, `  ${authorLayerLine('author:hand')}`) && lyP.status === 0 && !lyP.out.includes('author-made') && !lyP.out.includes(' author '),
-      `exit ${lyA.status}; row "4 author:hand author 31,46 44,59 13x13 169": ${rowA}; the line: ${lyA.out.split('\n').find((l) => l.includes('author-made:'))?.trim() ?? 'absent'}; the plain run (exit ${lyP.status}) prints an author group or line ${lyP.out.includes('author-made') || lyP.out.includes(' author ') ? 'SOMEWHERE' : 'nowhere'}`,
-      'issue #256: the layer table is the first place an agent reads a run, so a layer the author made is printed as one there — its group column says author, never body or head — and a run with none prints what it printed before',
+      lyA.status === 0 && rowA && hasLine(lyA.out, `  ${authorLayerLine('author:hand')}`) && lyP.status === 0 && !plainHasAuthorOutput && hasAuthorOutput(authorRowPlant) && hasAuthorOutput(authorLinePlant),
+      `exit ${lyA.status}; row "4 author:hand author 31,46 44,59 13x13 169": ${rowA}; the line: ${lyA.out.split('\n').find((l) => l.includes('author-made:'))?.trim() ?? 'absent'}; the plain run (exit ${lyP.status}) prints an author group or provenance line ${plainHasAuthorOutput ? 'SOMEWHERE' : 'nowhere'}; planted row/line detected: ${hasAuthorOutput(authorRowPlant)}/${hasAuthorOutput(authorLinePlant)}`,
+      'issue #256: the original row prefix and author-made provenance line still identify the layer; a run with none has neither output, while a generic population exclusion may name author without declaring an author layer',
     );
 
     // assemble --propose-plan
@@ -33181,7 +33200,8 @@ function runPlausibilitySuite(): number {
         warnLines[0].startsWith('  WARN  PLAN_LAYER_TRANSLUCENT: layer "wings" — 80.0% translucent, 100.0% background-coloured, 2.000x the rest of the figure; ') &&
         warnLines[1].startsWith('  WARN  PLAN_LAYER_BACKGROUND: layer "wings" — ') &&
         warned.out.includes('  2 WARN line(s)') &&
-        /80\.0%\s+100\.0%\s+2\.000x$/.test(wingsRow) &&
+        // 2780 = 43 * 64 + 28 drawn pixels, spanning 64x44; the haze's alpha 200/40 is all below CORE_ALPHA.
+        /80\.0%\s+100\.0%\s+2\.000x\s+0,0\s+64,44\s+64x44\s+none\s+none\s+none$/.test(wingsRow) &&
         quiet.status === 0 &&
         quiet.out.includes('  0 WARN line(s)'),
       `hazed run -> exit ${warned.status}, ${warnLines.length} WARN line(s), first "${warnLines[0]?.trim() ?? ''}"; wings row "${wingsRow.trim()}"; the fixture's run -> exit ${quiet.status}, ${quiet.out.includes('  0 WARN line(s)') ? '0 WARN lines' : 'WARN lines'}`,
@@ -38228,6 +38248,7 @@ function runContourWiringSuite(): number {
 function runTreeSuite(): number {
   section('tree: the rules CLAUDE.md states, held to the files');
   const { say, bad } = counter();
+  runMotionSeamDocumentationCases(say);
   const patterns = ignorePatterns();
   const readerFaults = ignoreReaderFaults(patterns);
   const files = treeFiles();
@@ -38414,12 +38435,12 @@ function runTreeSuite(): number {
   const plants18 = [
     pasteListFaults(withDoc('README.md', (t) => t.replace(readmeLine, OLD_README_PASTE_LINE)), sections18),
     pasteListFaults(withDoc('skills/rig-parts/SKILL.md', (t) => t.replace(/\bcopy `bones`/, 'take `bones`')), sections18),
-    pasteListFaults([...text, ['examples/plant/README.md', 'Copy `motion`, `bones`, `meshes`, `regions`, `limbs`, `constraints`, `turn` and `proposed_rig_scale` into the config.\n']], sections18),
-    pasteListFaults([...text, ['examples/plant/README.md', 'Paste `bones`, `meshes`, `regions`, `limbs`, `motion`, `constraints`, `turn`, `proposed_rig_scale` and `notes` into the config.\n']], sections18),
+    pasteListFaults([...text, ['examples/plant/README.md', 'Copy `motion`, `bones`, `meshes`, `regions`, `limbs`, `constraints`, `turn`, `motion_seams` and `proposed_rig_scale` into the config.\n']], sections18),
+    pasteListFaults([...text, ['examples/plant/README.md', 'Paste `bones`, `meshes`, `regions`, `limbs`, `motion`, `constraints`, `turn`, `motion_seams`, `proposed_rig_scale` and `notes` into the config.\n']], sections18),
     pasteListFaults([...text.filter(([f]) => f !== 'CHANGELOG.md'), ['CHANGELOG.md', `${OLD_README_PASTE_LINE}\n`], ['examples/plant/README.md', 'paste `plan` and `extend_below_crop` into `config.assemble`\n']], sections18),
   ];
   const plantsHit18 =
-    plants18[0].length === 1 && new RegExp(`^README\\.md:${readmeSite?.line ?? -1} copies bones, meshes, regions, motion; .* \\(missing limbs, constraints, turn, proposed_rig_scale\\)$`).test(plants18[0][0]) &&
+    plants18[0].length === 1 && new RegExp(`^README\\.md:${readmeSite?.line ?? -1} copies bones, meshes, regions, motion; .* \\(missing limbs, constraints, turn, motion_seams, proposed_rig_scale\\)$`).test(plants18[0][0]) &&
     plants18[1].join() === 'skills/rig-parts/SKILL.md holds no sentence saying which proposal sections to copy into the config' &&
     plants18[2].length === 1 && plants18[2][0].startsWith('examples/plant/README.md:1 copies motion, bones,') && plants18[2][0].endsWith('(another order)') &&
     plants18[3].length === 1 && plants18[3][0].endsWith('(not a section: notes)') && !plants18[3][0].includes('(missing') &&
@@ -38613,6 +38634,66 @@ function runTreeSuite(): number {
       !holdingFromConfigDoc(plantPre759Loop),
     `AUTHORING --write-config + PROPOSE_WRITE_CONFIG_FRESH hold both rules and cited sections: ${holdingWriteConfigDoc(wcBlock, freshRow) ? 'yes' : 'NO'}; README loop + Commands row + AUTHORING step 8 list 6 accepted and 8 refused --from-config flags: ${holdingFromConfigDoc(loopBlock28) && holdingFromConfigDoc(cmdRow28) && holdingFromConfigDoc(step8Block) ? 'yes' : 'NO'}; planted pre-#759 --write-config block -> ${holdingWriteConfigDoc(plantPre759Wc, freshRow) ? 'PASSES' : 'caught'}; planted pre-#759 README loop line -> ${holdingFromConfigDoc(plantPre759Loop) ? 'PASSES' : 'caught'}`,
     'issue #759: the two --write-config destination rules (in-place existing config vs fresh file for --cloth) and the accepted flags of propose --from-config are stated at each doc and refusal site',
+  );
+
+  // TY29 — issue #769: AUTHORING states the cloth recipe's count units (explicit back-hair chains per emitted side,
+  // front-hair chains per qualifying hanging strand vs the fringe's two-link columns, omitted back-hair chains derived
+  // from visible hair masses rather than a universal default of 1 or 2, and the fixture example not recommending two
+  // trees on a one-mass side) and points mesh-stats / soft-region readers at mesh_report.json's per-region report.
+  const clothRecipeStart29 = guide21.indexOf('### Recipe: cloth and hair that answer the world');
+  const clothRecipeBlock29 = clothRecipeStart29 < 0 ? '' : guide21.slice(clothRecipeStart29, guide21.indexOf('\n**A keyed sibling left behind', clothRecipeStart29));
+  const contourReportStart29 = guide21.indexOf("**What it reports.** `mesh_report.json`'s row for a contour mesh");
+  const contourReportBlock29 = contourReportStart29 < 0 ? '' : guide21.slice(contourReportStart29, guide21.indexOf('\n**Refusals**', contourReportStart29));
+  const softRegionStart29 = guide21.indexOf('**Choose region spacing against the triangle budget.**');
+  const softRegionBlock29 = softRegionStart29 < 0 ? '' : guide21.slice(softRegionStart29, guide21.indexOf('\nA bounded calibration', softRegionStart29));
+  const meshStatsStart29 = guide21.indexOf('### Counting the triangles before a build (`mesh-stats`, issue #566)');
+  const meshStatsBlock29 = meshStatsStart29 < 0 ? '' : guide21.slice(meshStatsStart29, guide21.indexOf('\n### For artists:', meshStatsStart29));
+  const holdingClothUnitsDoc29 = (s: string): boolean => {
+    const flat = s.replace(/\s+/g, ' ');
+    return (
+      flat.includes('not a recommendation to declare two trees on a one-mass side') &&
+      flat.includes('an explicit `chains: N` is passed to **each emitted side of the eye axis**') &&
+      flat.includes('not a combined total across both sides') &&
+      flat.includes("the recipe's `chains`, `links` and `split` are applied separately to each qualifying hanging strand and do not replace the fringe's fixed three two-link columns") &&
+      flat.includes("applied **separately to each qualifying hanging strand** and does not replace the fringe's fixed two-link columns") &&
+      flat.includes('**not** a universal default of 1 or 2 trees for every painting')
+    );
+  };
+  const holdingMeshStatsRegionDoc29 = (ms: string, sr: string, cr: string): boolean => {
+    const flatMs = ms.replace(/\s+/g, ' ');
+    const flatSr = sr.replace(/\s+/g, ' ');
+    const flatCr = cr.replace(/\s+/g, ' ');
+    return (
+      flatMs.includes('projects its `meshReport` via `meshStatsRows` to `{part, mode, vertices, triangles}` and the total (`meshStatsLines`)') &&
+      flatMs.includes('writes no `mesh_report.json` or skeleton data and runs no `rigc` or `check`') &&
+      flatMs.includes('it takes `--config` and `--parts` alone (no `--candidate`, `--regions`, `--report`') &&
+      flatMs.includes('regions: [{ name, bone, reached, whole }, ...]') &&
+      flatMs.includes('nonzero region contribution, `g > 0`, and `whole` counts vertices where `g >= 1`') &&
+      flatMs.includes('see §3, *A contour mesh*, *What it reports*') &&
+      flatMs.includes(
+        "Neither `mesh-stats`'s dry totals nor `mesh_report.json`'s static `regions[].{reached, whole}` setup-weight counts are a rendered `> 0.5 px` counterfactual-motion count or a claim that the config passed the compiler, coverage, motion or visual `check` gates",
+      ) &&
+      flatSr.includes('see *A contour mesh*, *What it reports*, above, which `mesh-stats` does not print') &&
+      flatCr.includes('regions: [{ name, bone, reached, whole }, ...]') &&
+      flatCr.includes('where `g >= 1`') &&
+      flatCr.includes('static setup-weight vertex counts, not a rendered frame-to-frame or `> 0.5 px` counterfactual-motion count')
+    );
+  };
+  const plantPre769Cloth = clothRecipeBlock29.replaceAll('an explicit `chains: N` is passed to **each emitted side of the eye axis**', 'chains are across the piece');
+  const plantPre769MeshStats =
+    '(`demo` as tracked, nine lattices.) The package holds no triangle budget: a budget is the consumer\'s, and the command prints no line against one. One line per mesh, in parts.json\'s order, the row order of `mesh_report.json`; the mode is `lattice` for a `grid` entry, `contour`, `auto` or `influence`.';
+  const plantPre769SoftRegion = "Read the part's `mesh_report.json` row first, and use `mesh-stats` for the candidate rather than waiting for a rendered build.";
+  const plantPre769ContourReport = 'and, per region, the vertices its bone reaches (`g > 0`) and holds alone (`g = 1`).';
+  say(
+    'TY29_AUTHORING_CLOTH_COUNT_UNITS_AND_MESH_STATS_REGION_REPORT_POINTER_HOLD_THE_CODE_FACTS',
+    holdingClothUnitsDoc29(clothRecipeBlock29) &&
+      holdingMeshStatsRegionDoc29(meshStatsBlock29, softRegionBlock29, contourReportBlock29) &&
+      !holdingClothUnitsDoc29(plantPre769Cloth) &&
+      !holdingMeshStatsRegionDoc29(plantPre769MeshStats, softRegionBlock29, contourReportBlock29) &&
+      !holdingMeshStatsRegionDoc29(meshStatsBlock29, plantPre769SoftRegion, contourReportBlock29) &&
+      !holdingMeshStatsRegionDoc29(meshStatsBlock29, softRegionBlock29, plantPre769ContourReport),
+    `AUTHORING cloth recipe count units: ${holdingClothUnitsDoc29(clothRecipeBlock29) ? 'yes' : 'NO'}; mesh-stats + soft-region + contour report cross-references: ${holdingMeshStatsRegionDoc29(meshStatsBlock29, softRegionBlock29, contourReportBlock29) ? 'yes' : 'NO'}; planted pre-#769 cloth block -> ${holdingClothUnitsDoc29(plantPre769Cloth) ? 'PASSES' : 'caught'}; planted pre-#769 mesh-stats / soft-region / contour-report lines -> ${holdingMeshStatsRegionDoc29(plantPre769MeshStats, softRegionBlock29, contourReportBlock29) || holdingMeshStatsRegionDoc29(meshStatsBlock29, plantPre769SoftRegion, contourReportBlock29) || holdingMeshStatsRegionDoc29(meshStatsBlock29, softRegionBlock29, plantPre769ContourReport) ? 'PASSES' : 'caught'}`,
+    'issue #769: the cloth recipe states its count units at the where/trees rows (back-hair chains per emitted side, front-hair chains per qualifying hanging strand vs the fringe, omitted back-hair chains derived from visible masses), and mesh-stats / soft-region docs point to mesh_report.json\'s regions[].{name, bone, reached, whole} static setup-weight counts',
   );
 
   const self = readFileSync(join(ROOT, 'selftest.ts'), 'utf8');
@@ -39881,7 +39962,7 @@ function staleFormerNameLines(files: ReadonlyArray<readonly [string, string]>): 
 // the tally's own controls
 // ---------------------------------------------------------------------------
 
-function runTallySuite(live: RunTally): number {
+function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | null = null): number {
   section('run-tally: the floor, planted');
   // What the run had printed when this suite began: this suite's own cases are
   // not in a block until it returns, so the live check reads the run up to here.
@@ -40346,6 +40427,45 @@ function runTallySuite(live: RunTally): number {
       `flags: no value -> ${Array.isArray(flagNoVal) ? flagNoVal.join(', ') : 'ACCEPTED'}, empty -> ${Array.isArray(flagEmptyVal) ? flagEmptyVal.join(', ') : 'ACCEPTED'}, twice -> ${Array.isArray(flagTwice) ? flagTwice.join(', ') : 'ACCEPTED'}, with --shard -> ${shardSummaryRefusal.length === 0 ? 'exit 2, named, no section opened' : shardSummaryRefusal.join(', ')}`,
     'issue #725: a gate nobody has seen fail is not a gate — planted per-suite count drift, total/failure drift, dropped HOLEs, a forged BLINK_NO_HOLE entry, a partial run claiming exit 0/partial=false, and invalid --summary-json flags are each refused by name',
   );
+  const peakLine = (bytes: number): string => `selftest peak (stderr, never tallied): self_max_rss_kib=1; family_rss_bytes=${bytes}; interval_ms=200; samples=2; unreadable_proc_entries=0; method=linux-proc-status-summed-rss`;
+  const unavailablePeak = 'selftest peak (stderr, never tallied): self_max_rss_kib=1; family RSS unavailable; Linux /proc is required';
+  say('RT18_THE_FAMILY_PEAK_BOUNDARY_IS_INCLUSIVE_AND_UNAVAILABLE_IS_NEVER_PASS',
+    selftestPeakVerdict([peakLine(SELFTEST_FAMILY_LIMIT_BYTES)]).status === 'pass' &&
+      selftestPeakVerdict([peakLine(SELFTEST_FAMILY_LIMIT_BYTES + 1)]).status === 'fail' &&
+      selftestPeakVerdict([unavailablePeak]).status === 'skip' &&
+      selftestPeakVerdict([]).status === 'skip' &&
+      selftestPeakVerdict(['family_rss_bytes=1']).status === 'fail' &&
+      selftestPeakVerdict([unavailablePeak, peakLine(SELFTEST_FAMILY_LIMIT_BYTES + 1)]).status === 'fail' &&
+      defaultSelftestWorkers(1) === 1 && defaultSelftestWorkers(20) === 2,
+    '6 GiB equality PASS; +1 B FAIL; missing /proc SKIP; malformed FAIL; one over-limit shard stays red even beside an unavailable shard; default min(cores,2)',
+    'issue #762: the run reads its family receipt, including every shard, rather than treating parent-only RSS or an unavailable measurement as green');
+
+  if (process.platform !== 'linux' || !existsSync('/proc/self/stat')) {
+    console.log('  SKIP  RT19_A_TOUCHED_CHILD_MAKES_THE_FIXTURE_PEAK_VERDICT_RED: Linux /proc is required');
+  } else {
+    // Fixture-only ceiling: this tests the production verdict path, not the machine's 6 GiB limit.
+    const fixtureCeiling = 64 * 1024 ** 2;
+    const fixtureAllocation = 128 * 1024 ** 2;
+    // An isolated small sampler avoids this large file's own resident code dominating the fixture.
+    const fixture = `import {existsSync,readFileSync,readdirSync} from 'node:fs';\n` +
+      `import {spawn} from 'node:child_process';\n` +
+      selftestFamilyRss.toString() + '\n' + selftestPeakFinish.toString() + '\n' + startSelftestPeak.toString() + '\n' +
+      `const healthy=startSelftestPeak(); await new Promise(r=>setTimeout(r,450)); healthy();\n` +
+      `const planted=startSelftestPeak(); const child=spawn(process.execPath,['-e',${JSON.stringify(`const held=new Uint8Array(${fixtureAllocation}); held.fill(7); console.log('TOUCHED_128_MIB'); setTimeout(()=>console.log(held[0]+held[held.length-1]),650);`)}],{stdio:['ignore','pipe','inherit']});\n` +
+      `let touched=''; child.stdout.on('data',b=>touched+=b); const code=await new Promise(r=>child.on('close',r)); planted(); if(code!==0||!touched.includes('TOUCHED_128_MIB'))process.exit(1);\n`;
+    const plantedRun = spawnSync(process.execPath, ['-e', fixture], { encoding: 'utf8', timeout: 15000 });
+    const receipts = plantedRun.stderr.split('\n').filter((line) => line.startsWith('selftest peak (stderr, never tallied):'));
+    const healthyVerdict = selftestPeakVerdict(receipts.slice(0, 1), fixtureCeiling);
+    const plantedVerdict = selftestPeakVerdict(receipts.slice(1), fixtureCeiling);
+    say('RT19_A_TOUCHED_CHILD_MAKES_THE_FIXTURE_PEAK_VERDICT_RED',
+      plantedRun.status === 0 && receipts.length === 2 && healthyVerdict.status === 'pass' && plantedVerdict.status === 'fail',
+      `fixture-only ceiling ${fixtureCeiling} B, touched child ${fixtureAllocation} B held 650 ms; healthy: ${healthyVerdict.status} ${healthyVerdict.detail}; plant: ${plantedVerdict.status} ${plantedVerdict.detail}; child exit ${plantedRun.status}`,
+      'same sampler, emitted peak-line reader and verdict as the real run; a real child allocation crosses a fixture-only ceiling without consuming the 6 GiB slot; this is not a >6 GiB allocation test');
+  }
+  const verdict = selftestPeakVerdict(peakLines?.() ?? []);
+  if (verdict.status === 'skip') console.log(`  SKIP  RT20_THE_RUNS_OWN_FAMILY_PEAK_FITS_ITS_SIX_GIB_SLOT: ${verdict.detail}`);
+  else say('RT20_THE_RUNS_OWN_FAMILY_PEAK_FITS_ITS_SIX_GIB_SLOT', verdict.status === 'pass', verdict.detail,
+    'the sampled family peak belongs to this run or every recorded shard; above 6 GiB is red; no Linux /proc measurement is SKIP, never PASS');
   return bad();
 }
 
@@ -41624,11 +41744,18 @@ function runPublicScenes(green: ReadonlyMap<string, string>, dir: string, say: (
 function meshDraftRun(
   dir: string,
   grid: number,
-  plant: { candidateModel?: (doc: Record<string, unknown>) => void; failFirstBuild?: boolean; finalGeometry?: (geometry: Record<string, unknown>) => void } = {},
+  plant: {
+    candidateModel?: (doc: Record<string, unknown>) => void;
+    failFirstBuild?: boolean;
+    finalGeometry?: (geometry: Record<string, unknown>) => void;
+    unanchoredPathMatch?: boolean;
+  } = {},
   fixture: { config: string; parts: string } = writeDraftFixture(join(dir, 'fx'), grid),
 ): { e: PartsError | null; log: string[]; out: string; fx: { config: string; parts: string }; calls: string[] } {
   const rigc = suiteRigc();
   const calls: string[] = [];
+  const scratch = join(dir, 'scratch');
+  const underScratch = (p: string): string => relative(scratch, p).replaceAll('\\', '/');
   const runner: RigcRunner = (args) => {
     calls.push(args.join(' '));
     if (plant.failFirstBuild === true && args[0] === 'build' && calls.filter((c) => c.startsWith('build ')).length === 1) {
@@ -41636,7 +41763,8 @@ function meshDraftRun(
     }
     const r = spawnSync(rigc, [...args], { encoding: 'utf8', maxBuffer: 1 << 28 });
     const outDir = args[0] === 'build' ? args[args.indexOf('--out') + 1] : '';
-    if (plant.candidateModel !== undefined && r.status === 0 && outDir.includes('compare-candidate')) {
+    const isCandidateBuild = plant.unanchoredPathMatch === true ? outDir.includes('compare-candidate') : underScratch(outDir).startsWith('compare-candidate/');
+    if (plant.candidateModel !== undefined && r.status === 0 && isCandidateBuild) {
       const path = join(outDir, RIGC_MODEL_DOCUMENT);
       const doc = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
       plant.candidateModel(doc);
@@ -41644,7 +41772,8 @@ function meshDraftRun(
     }
     // The drafted config's own check: its idle geometry, as rigc's render wrote it, edited before check reads it.
     const renderOut = args[0] === 'render' ? args[args.indexOf('--out') + 1] : '';
-    if (plant.finalGeometry !== undefined && r.status === 0 && renderOut.includes('final-') && args.includes('--geometry')) {
+    const isFinalRender = plant.unanchoredPathMatch === true ? renderOut.includes('final-') : underScratch(renderOut).startsWith('final-');
+    if (plant.finalGeometry !== undefined && r.status === 0 && isFinalRender && args.includes('--geometry')) {
       for (const set of readdirSync(renderOut)) {
         const path = join(renderOut, set, GEOMETRY_FILE);
         if (!existsSync(path)) continue;
@@ -41657,7 +41786,7 @@ function meshDraftRun(
   };
   const log: string[] = [];
   const out = join(dir, 'out');
-  const e = refusals(() => meshDraftStage({ config: fixture.config, parts: fixture.parts, out }, runner, rigc, join(dir, 'scratch'), (l) => log.push(l)));
+  const e = refusals(() => meshDraftStage({ config: fixture.config, parts: fixture.parts, out }, runner, rigc, scratch, (l) => log.push(l)));
   return { e, log, out, fx: fixture, calls };
 }
 
@@ -41721,39 +41850,66 @@ function runMeshDraftSuite(): number {
     );
 
     // MD03 — the idle reading, planted on the comparison: the candidate build's first vertex moved 5 world units.
-    const moved = meshDraftRun(join(root, 'moved'), DRAFT_COARSE_GRID, {
+    const movedDir = join(root, 'compare-candidate-parent', 'moved');
+    const moved = meshDraftRun(movedDir, DRAFT_COARSE_GRID, {
       candidateModel: (doc) => {
         const skins = doc.skins as Array<{ attachments: Record<string, Record<string, { vertices: { bindings: Array<Array<{ x: number }>> } }>> }>;
         for (const b of skins[0].attachments.strip.strip.vertices.bindings[0]) b.x += 50;
       },
     });
+    const latticeBuild3 = join(movedDir, 'scratch', 'lattice', 'rig', 'build');
     const row3 = draftReport(moved.out)?.parts.find((p) => p.part === 'strip');
     const idle3 = row3?.gate.find((g) => g.reading === 'idle');
     const idleValue3 = Number(/^([0-9.]+) rig px from the lattice/.exec(idle3?.text ?? '')?.[1] ?? NaN);
     const bytes3 = existsSync(join(moved.out, 'config.json')) && readFileSync(join(moved.out, 'config.json'), 'utf8') === readFileSync(moved.fx.config, 'utf8');
     say(
       'MD03_A_CANDIDATE_PLANTED_TO_MOVE_A_VERTEX_50_UNITS_FAILS_THE_IDLE_READING_BY_NAME_AND_KEEPS_THE_LATTICE',
-      moved.e === null && row3?.mode === 'grid' && idle3 !== undefined && !idle3.pass && idleValue3 > IDLE_BOUND_PX && idle3.text.endsWith(`; at most ${IDLE_BOUND_PX} is required`) && bytes3,
+      moved.e === null &&
+        row3?.mode === 'grid' &&
+        idle3 !== undefined &&
+        !idle3.pass &&
+        idleValue3 > IDLE_BOUND_PX &&
+        idle3.text.endsWith(`; at most ${IDLE_BOUND_PX} is required`) &&
+        bytes3 &&
+        latticeBuild3.includes('compare-candidate') &&
+        !relative(join(movedDir, 'scratch'), latticeBuild3).replaceAll('\\', '/').startsWith('compare-candidate/'),
       `${moved.e === null ? 'written' : codes(moved.e)}; ${row3 === undefined ? 'no row' : gateText(row3.gate)}; config bytes as read: ${bytes3}`,
       'the plant rig-c\'s own comparison controls use (an edit inside the allowlist), on the candidate\'s comparison build only: its first hull vertex moved 50 units along each binding\'s bone axis, so every art sample in the triangles round it is carried away from where the lattice carries it — the idle reading names the move, and the part ends on its lattice',
     );
 
-    // MD12 — reading 1 through the stage: the drafted config's check planted to fail TEXTURE_STRETCH on the strip.
-    const stretched = meshDraftRun(join(root, 'stretched'), DRAFT_COARSE_GRID, {
-      finalGeometry: (g) => {
-        const frame = (g.frames as Array<{ attachments: Array<{ slot: string; vertices: number[] }> }>)[1];
-        const strip = frame.attachments.find((a) => a.slot === 'strip');
-        if (strip !== undefined) strip.vertices[0] += 40;
-      },
-    });
+    // MD12 — reading 1 through the stage: the drafted config's check planted to fail TEXTURE_STRETCH on the strip,
+    // under a parent directory naming "final-1" so an unanchored substring match hits the lattice baseline (issue #766).
+    const stretchVertex = (g: Record<string, unknown>): void => {
+      const frame = (g.frames as Array<{ attachments: Array<{ slot: string; vertices: number[] }> }>)[1];
+      const strip = frame.attachments.find((a) => a.slot === 'strip');
+      if (strip !== undefined) strip.vertices[0] += 40;
+    };
+    const stretchedDir = join(root, 'final-1-parent', 'stretched');
+    const stretched = meshDraftRun(stretchedDir, DRAFT_COARSE_GRID, { finalGeometry: stretchVertex });
+    const unanchored12 = meshDraftRun(join(root, 'final-1-parent', 'unanchored'), DRAFT_COARSE_GRID, { finalGeometry: stretchVertex, unanchoredPathMatch: true }, stretched.fx);
+    const finalCall12 = (round: number, c: string): boolean => c.startsWith('render ') && c.includes(join(stretchedDir, 'scratch', `final-${round}`));
+    const unanchoredCalls12 = stretched.calls.some((c) => c.startsWith('render ') && c.includes('final-0')) && !stretched.calls.some((c) => c.includes('final-1'));
     const row12 = draftReport(stretched.out)?.parts.find((p) => p.part === 'strip');
     const failed12 = row12?.gate.filter((g) => !g.pass) ?? [];
     const bytes12 = existsSync(join(stretched.out, 'config.json')) && readFileSync(join(stretched.out, 'config.json'), 'utf8') === readFileSync(stretched.fx.config, 'utf8');
     say(
       'MD12_A_DRAFTED_RIG_WHOSE_CHECK_FAILS_A_BAR_NAMING_THE_PART_KEEPS_THAT_PARTS_LATTICE',
-      stretched.e === null && row12?.mode === 'grid' && failed12.length === 1 && failed12[0].reading === 'bars' && failed12[0].text.includes('CHECK_TEXTURE_STRETCH: mesh "strip"') && bytes12 && stretched.calls.some((c) => c.startsWith('render ') && c.includes('final-0')) && !stretched.calls.some((c) => c.includes('final-1')),
-      `${stretched.e === null ? 'written' : codes(stretched.e)}; ${row12 === undefined ? 'no row' : gateText(row12.gate).slice(0, 600)}; config bytes as read: ${bytes12}`,
-      'reading 1 is check\'s own bars on the config as it would be written: one vertex of the strip moved 40 rig px in one idle frame stretches its edges past TEXTURE_STRETCH\'s ceiling, the problem names mesh "strip", and the part ends on its lattice with no further check needed (nothing is left to draft)',
+      stretched.e === null &&
+        row12?.mode === 'grid' &&
+        failed12.length === 1 &&
+        failed12[0].reading === 'bars' &&
+        failed12[0].text.includes('CHECK_TEXTURE_STRETCH: mesh "strip"') &&
+        bytes12 &&
+        stretched.calls.some((c) => finalCall12(0, c)) &&
+        !stretched.calls.some((c) => finalCall12(1, c)) &&
+        unanchored12.e !== null &&
+        unanchored12.e.problems.length === 1 &&
+        unanchored12.e.problems[0].code === 'MESH_DRAFT_LATTICE_GREEN' &&
+        unanchored12.e.problems[0].detail.includes('CHECK_TEXTURE_STRETCH: mesh "strip"') &&
+        !existsSync(unanchored12.out) &&
+        !unanchoredCalls12,
+      `${stretched.e === null ? 'written' : codes(stretched.e)}; ${row12 === undefined ? 'no row' : gateText(row12.gate).slice(0, 600)}; config bytes as read: ${bytes12}; planted unanchored match under final-1-parent -> ${codes(unanchored12.e)}, unanchored call check ${unanchoredCalls12}`,
+      'reading 1 is check\'s own bars on the config as it would be written: one vertex of the strip moved 40 rig px in one idle frame stretches its edges past TEXTURE_STRETCH\'s ceiling, the problem names mesh "strip", and the part ends on its lattice with no further check needed (nothing is left to draft); under an ancestor directory containing "final-1" (issue #766), the planted unanchored .includes("final-") hits the lattice baseline check and fails MESH_DRAFT_LATTICE_GREEN',
     );
 
     // MD13 — reading 5 through the stage: on a lattice with fewer triangles than the candidate, the part keeps it.
@@ -50761,17 +50917,18 @@ function selftestFamilyRss(rows: readonly SelftestRssRow[], known: Map<number, s
  * The own-process kernel high-water mark and the sampled descendants answer different questions.
  * https://nodejs.org/api/process.html#processresourceusage
  */
-function selftestPeakFinish(familyText: () => string, write: (text: string) => void = (text) => { process.stderr.write(text); }): () => void {
-  let finished = false;
-  return (): void => {
-    if (finished) return;
-    finished = true;
+function selftestPeakFinish(familyText: () => string, write: (text: string) => void = (text) => { process.stderr.write(text); }): () => string {
+  let line: string | null = null;
+  return (): string => {
+    if (line !== null) return line;
     let own = 'self_max_rss_kib=unavailable';
     try { own = 'self_max_rss_kib=' + process.resourceUsage().maxRSS; } catch { /* not supported by every runtime */ }
-    write('selftest peak (stderr, never tallied): ' + own + '; ' + familyText() + '\n');
+    line = 'selftest peak (stderr, never tallied): ' + own + '; ' + familyText() + '\n';
+    write(line);
+    return line;
   };
 }
-function startSelftestPeak(): () => void {
+function startSelftestPeak(): () => string {
   if (process.platform !== 'linux' || !existsSync('/proc/self/stat')) {
     return selftestPeakFinish(() => 'family RSS unavailable; Linux /proc is required');
   }
@@ -50808,6 +50965,36 @@ function startSelftestPeak(): () => void {
     return 'family_rss_bytes=' + peak + '; interval_ms=200; samples=' + samples + '; unreadable_proc_entries=' + unreadable + '; method=linux-proc-status-summed-rss';
   });
 }
+
+/** The selftest family's slot budget; this does not change check's raster-union budget. */
+const SELFTEST_FAMILY_LIMIT_BYTES = 6 * 1024 ** 3;
+
+interface SelftestPeakVerdict { status: 'pass' | 'fail' | 'skip'; detail: string }
+
+/** Read the emitted receipt, never substitute the parent's maxRSS for its descendants. */
+function selftestPeakVerdict(lines: readonly string[], ceiling = SELFTEST_FAMILY_LIMIT_BYTES): SelftestPeakVerdict {
+  if (lines.length === 0) return { status: 'skip', detail: 'no family peak receipt; Linux /proc measurement is unavailable' };
+  const missing: string[] = [];
+  const peaks: number[] = [];
+  for (const [i, text] of lines.entries()) {
+    const line = text.trim();
+    if (/^selftest peak \(stderr, never tallied\): self_max_rss_kib=(?:\d+|unavailable); family RSS unavailable(?:; Linux \/proc is required)?$/.test(line)) {
+      missing.push(`receipt ${i + 1}: Linux /proc family RSS unavailable`);
+      continue;
+    }
+    const m = /^selftest peak \(stderr, never tallied\): self_max_rss_kib=(?:\d+|unavailable); family_rss_bytes=(\d+); interval_ms=200; samples=([1-9]\d*); unreadable_proc_entries=\d+; method=linux-proc-status-summed-rss$/.exec(line);
+    if (m === null || !Number.isSafeInteger(Number(m[1])) || Number(m[1]) <= 0) return { status: 'fail', detail: `receipt ${i + 1}: malformed or empty family peak line` };
+    peaks.push(Number(m[1]));
+  }
+  const peak = Math.max(0, ...peaks);
+  // An unavailable shard cannot conceal a measured failure from another shard.
+  if (peak > ceiling) return { status: 'fail', detail: `family_rss_bytes=${peak} exceeds ceiling_bytes=${ceiling}` };
+  if (missing.length > 0) return { status: 'skip', detail: missing.join('; ') };
+  return { status: 'pass', detail: `family_rss_bytes=${peak} <= ceiling_bytes=${ceiling}; ${peaks.length} measured receipt(s)` };
+}
+
+/** The measured operating point for one 6 GiB slot, bounded by the cores actually available. */
+function defaultSelftestWorkers(cores: number): number { return Math.min(cores, 2); }
 
 const WORKER_FLAG = '--suite-worker';
 
@@ -50881,7 +51068,7 @@ const quietSay = (): void => {};
 /**
  * The environment variables renamed with the package: each pair is the name
  * read first and the former name it falls back to. `jobs` sets how many workers
- * run at once (the machine's available parallelism when neither is set);
+ * run at once (min(available cores, 2) when neither is set);
  * `corpus` names the extra suite's corpus when `--corpus` does not.
  */
 const ENV_TWINS = {
@@ -50995,10 +51182,10 @@ function workerMain(argv: readonly string[]): void {
   writeFileSync(result, JSON.stringify(record));
 }
 
-/** How many workers run at once: `ENV_TWINS.jobs` when set, a positive whole number or the run exits 2; else the machine's available parallelism. */
+/** How many workers run at once: `ENV_TWINS.jobs` when set, a positive whole number or the run exits 2; else min(available cores, 2) for a 6 GiB slot. */
 function workerCount(): number {
   const set = envTwin(process.env, ENV_TWINS.jobs);
-  if (set === null) return availableParallelism();
+  if (set === null) return defaultSelftestWorkers(availableParallelism());
   if (!/^[1-9]\d*$/.test(set.value)) {
     console.error(`selftest: ${set.name} is ${JSON.stringify(set.value)}; a positive whole number of workers is required`);
     process.exit(2);
@@ -51088,6 +51275,7 @@ interface ShardRecord {
   shard: string;
   jobs: number;
   cores: number;
+  peakLine?: string;
   units: RecordedUnit[];
 }
 
@@ -51105,6 +51293,7 @@ function parseShardRecord(text: string): ShardRecord | string {
   const r = raw as Partial<ShardRecord>;
   if (r.spec !== SHARD_RECORD_SPEC) return `spec ${JSON.stringify(r.spec ?? null)}; "${SHARD_RECORD_SPEC}" is required`;
   if (typeof r.shard !== 'string' || typeof r.jobs !== 'number' || typeof r.cores !== 'number' || !Array.isArray(r.units)) return 'shard, jobs, cores or units is absent or of the wrong type';
+  if (r.peakLine !== undefined && typeof r.peakLine !== 'string') return 'peakLine is not a string';
   for (const u of r.units as unknown[]) {
     const x = (typeof u === 'object' && u !== null ? u : {}) as Partial<RecordedUnit>;
     const ok =
@@ -51614,6 +51803,7 @@ async function reportRun(
   cleanup: () => void,
   only: ReadonlySet<string> | null = null,
   summaryJson: string | null = null,
+  shardPeakLines: readonly string[] | null = null,
 ): Promise<void> {
   const tally = new RunTally();
   const printLine = console.log;
@@ -51652,7 +51842,7 @@ async function reportRun(
   printErr(clockText());
   if (only !== null && !only.has(TALLY_SUITE)) skip(TALLY_SUITE, ONLY_FLAG);
   else if (only !== null && !tally.blocks.some((b) => b.controls > 0)) skip(TALLY_SUITE, `it measures the run it is part of, and no suite before it printed a case; name one beside it in ${ONLY_FLAG}`);
-  else tally.of(TALLY_SUITE, () => runTallySuite(tally));
+  else tally.of(TALLY_SUITE, () => runTallySuite(tally, () => shardPeakLines ?? [finishSelftestPeak?.() ?? '']));
   console.log = printLine;
 
   console.log('');
@@ -51723,13 +51913,17 @@ async function shardMain(shard: string, record: string): Promise<void> {
   for (const u of ordered) process.stdout.write(u.stdout);
   process.stderr.write(workerClockText(mine, clock, jobs, performance.now() - t0));
   mkdirSync(dirname(record), { recursive: true });
-  const text: ShardRecord = { spec: SHARD_RECORD_SPEC, shard, jobs, cores: availableParallelism(), units: done };
+  const peakLine = finishSelftestPeak?.() ?? '';
+  const peakVerdict = selftestPeakVerdict([peakLine]);
+  const text: ShardRecord = { spec: SHARD_RECORD_SPEC, shard, jobs, cores: availableParallelism(), peakLine, units: done };
   writeFileSync(record, `${JSON.stringify(text)}\n`);
   const red = done.filter((u) => {
     if (u.status !== 0 || u.result === null) return true;
     const r = JSON.parse(u.result) as { returned?: unknown; crash?: unknown };
     return typeof r.crash === 'string' || (typeof r.returned === 'number' && r.returned > 0);
   });
+  if (peakVerdict.status !== 'pass') console.error(`rig-parts selftest: shard ${shard} family peak ${peakVerdict.status.toUpperCase()}: ${peakVerdict.detail}`);
+  if (peakVerdict.status === 'fail') process.exit(1);
   if (red.length > 0) {
     console.error(`rig-parts selftest: shard ${shard}: ${red.map((u) => u.key).join(', ')} did not run green; the merge names what failed`);
     process.exit(1);
@@ -51776,7 +51970,7 @@ async function mergeMain(
     }
     return `${lines.join('\n')}\n`;
   };
-  await reportRun(keys, (key) => suiteUnits(key, examples), async (unit) => byUnit.get(unit)?.run, clockText, () => {}, null, summaryJson);
+  await reportRun(keys, (key) => suiteUnits(key, examples), async (unit) => byUnit.get(unit)?.run, clockText, () => {}, null, summaryJson, records.map((r) => r.peakLine ?? 'selftest peak (stderr, never tallied): self_max_rss_kib=unavailable; family RSS unavailable'));
 }
 
 async function main(): Promise<void> {

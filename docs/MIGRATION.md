@@ -301,7 +301,7 @@ either (the examples' `expected/` and every existing control are unchanged).
 
 What to do: nothing. To draft a skirt or hair that the consumer's wind and gravity move,
 add a `cloth` block and propose with `--cloth`; copy each of `bones`, `meshes`, `regions`,
-`limbs`, `motion`, `constraints`, `turn` and `proposed_rig_scale` the proposal wrote into the config, as before
+`limbs`, `motion`, `constraints`, `turn`, `motion_seams` and `proposed_rig_scale` the proposal wrote into the config, as before
 (`constraints` is the one `--cloth` adds).
 
 ## After 1.20.0: the seam over a joint's range
@@ -443,3 +443,32 @@ bands* for the source, name, width and overlap refusals. Existing configs need
 no change. The parts reader gains `limb.hybrid` and `limb.band` records only
 for this mode, and the recorded lower range is measured once. The normal
 one-bone rule and existing range thresholds remain unchanged.
+
+## Explicit motion seam declarations and posed WARN evidence (issue #750)
+
+New proposals can include optional `motion_seams: [{part, neighbour}]` alongside
+the other proposed config sections. Carry it through assemble into parts.json.
+Each pair names two existing output parts, once regardless of direction; the
+strict readers name malformed, self, duplicate and unresolved declarations.
+Check observes declared pairs in every supplied animation with the existing
+non-root WARN floor; bars and exit status are unchanged. Existing body-root
+FAIL semantics remain in force for independently selected root pairs.
+
+Older authored configs acquire no declaration automatically. Keep the originals
+and use exported `draftMotionSeams(config, parts)` on the frozen authored
+structure and source-provenance parts, preserving every other config value in
+a derived input and recording the added declaration. Check does not run that
+generator; removing a declaration silences its independently declared pair.
+
+Existing played limb WARNs as well as newly declared WARNs gain same-render
+worst-frame pose evidence. Read relative angles as setup-axis deltas modulo
+360, alongside unchanged static ranges; unsupported comparisons carry an
+unavailable reason. The geometry setup, actual raw frame/time and parent
+matrices replace no source motion keys and introduce no angle threshold.
+
+The WARN pose reader also requires the published stock coordinate header and
+the required source bone/parent roster. It binds the complete geometry frame
+cohort to the actual PNG frame set through `readFrameSet` and `boneTrackOf`,
+including unselected frames, before reading the worst pose. Identical static
+ranges on a bone deduplicate; conflicting ranges are explicitly ambiguous,
+never described as no declared range.

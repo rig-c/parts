@@ -272,7 +272,7 @@ Use the graph's node classes and the host's `/object_info` when checking the ada
 ```sh
 rig-parts inputs --source painting.png --config config.json --out inputs   # st_input_full.png; the config needs assemble.rig_scale
 #    See-through on st_input_full.png (external, or `rig-parts comfy seethrough`) -> layers/full
-rig-parts layers layers/full                      # every layer: box, opaque px, depth, plausibility figures; WARN lines
+rig-parts layers layers/full                      # drawn(a>8)/opaque(a>=250) boxes, CORE body-group height in input-canvas px, WARNs
 rig-parts propose --head-box --full layers/full --canvas 1664x2432
 #    -> seethrough.head_box into config.json
 rig-parts inputs --source painting.png --config config.json --out inputs   # now st_input_head.png too
@@ -287,7 +287,7 @@ rig-parts assemble --source painting.png --full layers/full --head layers/head -
 #    -> a large red hole neither run holds? add an assemble.patches entry (cut from the painting) and assemble again
 rig-parts propose --parts work/rig --source painting.png --out work
 #    -> proposal.json, basis.json (what each bone rests on) and render/landmarks.png; per-bone coverage lines;
-#       correct it, copy bones/meshes/regions/limbs/motion/constraints/turn/proposed_rig_scale into config.json, each it wrote
+#       correct it, copy bones/meshes/regions/limbs/motion/constraints/turn/motion_seams/proposed_rig_scale into config.json, each it wrote
 #       (limbs only with --keypoints, constraints only with --cloth, turn only with --full/--head;
 #       a limbs block left out is refused next)
 rig-parts propose --parts work/rig --source painting.png --out work --from-config config.json
@@ -334,7 +334,7 @@ agent skill.
 | `inputs --source <png> --config <json> --out <dir>` | the two images See-through is fed: the painting on a white square, and the head box's crop once the config has one |
 | `comfy paint --config --out [--host]` | optional: generate the painting on a ComfyUI box from the config's `generation` block |
 | `comfy seethrough --image --out [--host]` | optional: run the ComfyUI See-through wrapper on one image and write the form `layers` reads |
-| `layers <dir \| layers.json \| file.psd>` | print every layer of a decomposition: draw order, name, tag group, box, size, opaque pixels, depth, and its translucent, background and area figures; a `WARN` line for a layer `--propose-plan` will leave out |
+| `layers <dir \| layers.json \| file.psd>` | keep the existing columns (`opaque_px` still means alpha >8) and append source-alpha boxes `drawn(a>8)` / `opaque(a>=250)` with exclusive right/bottom; name absent boxes, report the existing body-group union height at **CORE_ALPHA (>=250)** in **input-canvas px**, and show its >8 union separately; no anatomical height, ownership/erosion or painting registration is inferred ([units and rig-scale guidance](docs/AUTHORING.md#4-the-command-order)) |
 | `sheet --source <png> --layers <path>… --out <png>` | a labelled contact sheet of the painting and every layer or part |
 | `assemble --propose-plan … [--write-config <config>]` | propose `assemble.plan` and `extend_below_crop` from the two runs, leaving out an implausible layer with a note naming the rule, naming in a note any full-run body no planned part covers, and naming every layer no row takes with why (empty, taken from the other run only, a plausibility rule; `nose`, never planned, with the row that lets `propose` read the head's pitch) |
 | `assemble --source --full --head --config --out [--seam] [--project]` | merge the two runs into rig-space parts, `parts.json`, the recomposite and its error map, and list the uncovered holes |
