@@ -71,7 +71,7 @@ export function coalesceLimbSlots(
   const owners: LimbSlotOwner[] = slots.map((slot) => {
     const bindings = Object.entries(skin[slot.name] ?? {}).map(([attachment, att]) => ({
       attachment,
-      bones: 'type' in att ? [...new Set(att.weights.flatMap((v) => v.map((w) => w.bone)))] : [slot.bone],
+      bones: 'type' in att && 'weights' in att && att.weights !== undefined ? [...new Set(att.weights.flatMap((v) => v.map((w) => w.bone)))] : [slot.bone],
     }));
     const mine = new Set<string>();
     const outside = new Set<string>();

@@ -142,7 +142,10 @@ export interface MotionSpec {
   cut: string;
   easings: Record<string, [number, number, number, number]>;
   groups: Record<string, string[]>;
-  animations: { idle: { duration: number; loop: true; note: string; tracks: MotionTrack[] } };
+  animations: {
+    idle: { duration: number; loop: true; note: string; tracks: MotionTrack[] };
+    [name: string]: unknown;
+  };
 }
 
 const FACE_DEFORM_HOOK = new WeakMap<MotionSpec, (merged: MotionSpec & { animations: Record<string, unknown> }) => void>();

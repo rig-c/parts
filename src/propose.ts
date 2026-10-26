@@ -291,7 +291,7 @@ export interface Proposal {
   /** Only with `propose --cloth` (issue #364, `src/cloth.ts`): the physics (and a skirt swing's transforms) of the trees it drafted; absent otherwise, so a proposal without it is the one written before it. */
   constraints?: ConfigConstraint[];
   /** Only with `propose --full`/`--head` (issue #251, {@link draftTurn}); absent otherwise, so a proposal without them is the one written before it. */
-  turn?: TurnSpec;
+  turn?: TurnSpec & { pivot: number; depths: Record<string, number> };
   /** The `assemble.rig_scale` (`parts.json`'s `scale_rig_per_source`) its coordinates were drafted at (issue #354). */
   proposed_rig_scale: number;
   notes: string[];
@@ -524,7 +524,7 @@ export type TurnRuns = Partial<Record<'full' | 'head', LayerSet>>;
  * each carrier the other run places more than {@link TURN_RUN_APART} of the
  * span away.
  */
-export function draftTurn(P: PartSet, runs: TurnRuns, binds?: PartBinding): { turn: TurnSpec | null; notes: string[] } {
+export function draftTurn(P: PartSet, runs: TurnRuns, binds?: PartBinding): { turn: (TurnSpec & { pivot: number; depths: Record<string, number> }) | null; notes: string[] } {
   P = P.beforeLimbs();
   const problems: Problem[] = [];
   const read: Array<{ part: string; run: 'full' | 'head'; tag: string; base: string | null; own: number; area: number; order: number; piece: boolean }> = [];
@@ -615,7 +615,7 @@ export function draftTurn(P: PartSet, runs: TurnRuns, binds?: PartBinding): { tu
     notes.push(`turn: every carried part lies at depth ${nearest.depth}, so none is nearer than the pivot and no turn control is drafted`);
     return { turn: null, notes };
   }
-  const turn: TurnSpec = { pivot, depths };
+  const turn = { pivot, depths };
   const fr = turnFractions(turn, rows.map((r) => r.part));
   notes.push(
     `turn: control "${TURN_BONE}" under root, keyed by nothing — its x is the dial. Pivot depth ${pivot}: the mean of the ${rows.length} carried parts' depths weighted by opaque_px, the one depth at which the painted pixels' centroid does not slide (correct it in turn.pivot). ` +
@@ -651,7 +651,7 @@ export const TURN_DEPTH_CAVEAT: readonly string[] = [
 ];
 
 /** The proposal with `turn` written after `motion` and `notes` extended; the proposal itself when `turn` is null. */
-export function withTurn(p: Proposal, draft: { turn: TurnSpec | null; notes: string[] }): Proposal {
+export function withTurn(p: Proposal, draft: { turn: (TurnSpec & { pivot: number; depths: Record<string, number> }) | null; notes: string[] }): Proposal {
   // Issue #349: a part a limb takes is not made; each of its limb parts carries its depth instead.
   let turn = draft.turn;
   if (turn !== null && p.limbs !== undefined) {
@@ -663,7 +663,7 @@ export function withTurn(p: Proposal, draft: { turn: TurnSpec | null; notes: str
       if (parts === undefined) depths[part] = d;
       else for (const q of parts) depths[q] = d;
     }
-    turn = { pivot: turn.pivot, depths };
+    turn = { ...turn, pivot: turn.pivot, depths };
   }
   return { bones: p.bones, meshes: p.meshes, regions: p.regions, ...(p.limbs === undefined ? {} : { limbs: p.limbs }), ...(p.motion_seams === undefined ? {} : { motion_seams: p.motion_seams }), motion: p.motion, ...(p.constraints === undefined ? {} : { constraints: p.constraints }), ...(turn === null ? {} : { turn }), proposed_rig_scale: p.proposed_rig_scale, notes: [...p.notes, ...draft.notes] };
 }

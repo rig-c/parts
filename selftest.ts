@@ -10439,14 +10439,14 @@ function runWindRiderCases(say: (name: string, ok: boolean, detail: string, why:
   const images = new Map(parts.parts.map((q) => [q.name, readPng(join(pdir, 'parts', `${q.name}.png`))] as const));
   // A drafted depth of a part a limb takes is carried by each of its limb parts (withTurn's mapping, on the config's limbs).
   const limbs = (cfg.limbs ?? {}) as Record<string, { segments: Array<{ part: string; from: string }> }>;
-  const forConfig = (t: TurnSpec): TurnSpec => {
+  const forConfig = (t: TurnSpec & { pivot: number; depths: Record<string, number> }): TurnSpec & { pivot: number; depths: Record<string, number> } => {
     const into = new Map<string, string[]>();
     for (const l of Object.values(limbs)) for (const sg of l.segments) into.set(sg.from, [...(into.get(sg.from) ?? []), sg.part]);
     const depths: Record<string, number> = {};
     for (const [q, d] of Object.entries(t.depths)) for (const x of into.get(q) ?? [q]) depths[x] = d;
     return { pivot: t.pivot, depths };
   };
-  const rigOf = (t: TurnSpec): RigOutput | PartsError => refusals(() => buildRig(parseConfig({ ...raw, turn: forConfig(t) }), parts, images)) ?? buildRig(parseConfig({ ...raw, turn: forConfig(t) }), parts, images);
+  const rigOf = (t: TurnSpec & { pivot: number; depths: Record<string, number> }): RigOutput | PartsError => refusals(() => buildRig(parseConfig({ ...raw, turn: forConfig(t) }), parts, images)) ?? buildRig(parseConfig({ ...raw, turn: forConfig(t) }), parts, images);
   const turnConstraints = (r: RigOutput | PartsError): Map<string, string> => (r instanceof PartsError ? new Map() : new Map((r.rig.constraints ?? []).filter((c) => c.type === 'transform' && String(c.name).startsWith(`${TURN_BONE}_`)).map((c) => [String(c.name), JSON.stringify(c)] as const)));
   const scaleOf = (r: RigOutput | PartsError, part: string): number | null => {
     const c = turnConstraints(r).get(`${TURN_BONE}_${part}`);

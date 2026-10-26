@@ -176,8 +176,10 @@ part name, `[i]` an entry of a list):
 - **motion.blink** — required: `t`, `eyes`, `squash`; optional: `brows`, `brow_drop`, `still`
 - **motion.blink.still.&lt;part&gt;** — required: `row`, `bone`
 - **motion.animations_from**, the file it names — required: `spec`, `animations`
-- **turn** — required: `pivot`, `depths`; optional: `deform`, `band`, `radius`, `surface`, `head`
+- **turn** — required: `pivot`, `depths` (or `roles`, issue #763); optional: `deform`, `band`, `radius`, `surface`, `head`, `roles`, `counter`, `grid`, `unitDepths`
 - **turn.depths.&lt;part&gt;** — a See-through depth
+- **turn.roles.&lt;part&gt;** — `"surface"`, `"unit"` or `"rear"` (issue #763)
+- **turn.unitDepths.&lt;part&gt;** — a calibrated world depth in rig pixels (issue #763)
 - **turn.deform.&lt;key&gt;** — a per-degree fraction or coupling share (FACE_DEFORM_FRACTIONS, issue #436)
 - **turn.band**, when an object — optional: `yaw`, `pitch` (issue #472)
 - **turn.surface**, when an object — optional: `radius` (issue #479)
@@ -294,7 +296,7 @@ in the package.
 
 ## rig-c
 
-`dependencies` takes `rig-c` `^2.69.0`: 2.69.0 or any later 2.x. Bun 1.4 or later
+`dependencies` takes `rig-c` `^2.71.0`: 2.71.0 or any later 2.x. Bun 1.4 or later
 is the declared floor (`engines.bun` `>=1.4.0`; older 1.4 releases are not tested in
 CI, which runs `latest`, and compatibility with an older 1.4 release is handled when
 reported as an issue). What this package relies on in rig-c, every import
