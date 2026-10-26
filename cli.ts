@@ -779,6 +779,7 @@ usage:
   rig-parts comfy seethrough --image <png> --out <dir> [--host <url>]
                     [--resolution 1024] [--steps 30] [--seed 42] [--offload] [--lama] [--nf4]
                     [--prefix spine_parts] [--wait 1800] [--timeout 3600] [--poll 3]
+                    [--config <config.json> --depth-run <full|head>]
       Optional. Run See-through on a ComfyUI box with the jtydhr88/ComfyUI-See-through
       wrapper installed, and write the wrapper form \`layers\` reads into <out>
       (absent or empty): layers.json, parts/<tag>.png, meta.json, previews/.
@@ -788,6 +789,9 @@ usage:
       writes <out> only after the layer reader accepts what came back.
       --lama turns the wrapper's LaMa inpainting on and --nf4 its nf4
       quantisation; both are off unless given, as --offload is.
+      Depth hints are inactive by default. --config reads its optional depth
+      block; with that block --depth-run explicitly selects full or head.
+      Active declared sheets are fetched and validated, never inferred.
 
   rig-parts comfy paint --config <config.json> --out <dir> [--host <url>]
                     [--seeds 1] [--seed0 <generation.seed>] [--wait 1800] [--timeout 3600] [--poll 3]
@@ -1055,7 +1059,7 @@ const TAKES = {
   check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--requirements', '--set', '--environment', '--wind-band'], switches: ['--seam-pairs', '--keep-stills', '--all-sets'] },
   loop: { valued: ['--frames', '--out'], switches: ['--palette'] },
   assemble: { valued: ['--source', '--full', '--head', '--config', '--out', '--seam', '--project', '--alt', '--write-config'], switches: ['--propose-plan'] },
-  'comfy seethrough': { valued: ['--image', '--out', '--resolution', '--steps', '--seed', '--prefix', '--host', '--wait', '--timeout', '--poll'], switches: ['--offload', '--lama', '--nf4'] },
+  'comfy seethrough': { valued: ['--image', '--out', '--resolution', '--steps', '--seed', '--prefix', '--host', '--wait', '--timeout', '--poll', '--config', '--depth-run'], switches: ['--offload', '--lama', '--nf4'] },
   'comfy paint': { valued: ['--config', '--out', '--seeds', '--seed0', '--host', '--wait', '--timeout', '--poll'], switches: [] },
   inputs: { valued: ['--source', '--config', '--out'], switches: [] },
   build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set', '--environment', '--wind-band'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets'] },
@@ -1761,6 +1765,10 @@ async function cmdComfy(args: string[]): Promise<number> {
     // config comfy paint cannot paint from is refused with no box named.
     const paint = sub === 'paint' ? loadPaintConfig(configPath as string) : null;
     const cfg = paint === null ? null : paint.config;
+    const depthConfig = sub === 'seethrough' && configPath !== undefined ? loadEarlyConfig(configPath, 'layers').depth : undefined;
+    const depthRun = v.get('--depth-run');
+    if (sub === 'seethrough' && depthConfig !== undefined && depthRun !== 'full' && depthRun !== 'head') return usage('active config.depth requires --depth-run <full|head>; the source run is not inferred');
+    if (sub === 'seethrough' && depthConfig === undefined && depthRun !== undefined) return usage('--depth-run requires --config with an explicit depth block');
     const host = resolveHost(v.get('--host'), process.env.COMFY_HOST);
     const client = new ComfyClient(host, { poll: poll as number, request: 30 });
     if (sub === 'seethrough') {
@@ -1784,6 +1792,7 @@ async function cmdComfy(args: string[]): Promise<number> {
         quant: on.has('--nf4') ? ('nf4' as const) : ('none' as const),
         wait: wait as number,
         timeout: timeout as number,
+        ...(depthConfig === undefined ? {} : { depth: { config: depthConfig, run: depthRun as 'full' | 'head', base: dirname(resolve(configPath as string)) } }),
       };
       console.log(`rig-parts comfy seethrough: ${image} -> ${out}`);
       console.log(`  resolution ${run.resolution}, steps ${run.steps}, seed ${run.seed}, offload ${run.offload}, lama ${run.lama}, quant ${run.quant}; wait <= ${run.wait} s, timeout ${run.timeout} s`);

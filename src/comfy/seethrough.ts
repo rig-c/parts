@@ -31,6 +31,7 @@ import { basename, dirname, join } from 'node:path';
 import { refuseIfAny } from '../errors.ts';
 import { checkGraph, fillSeeThrough, type SeeThroughParams } from '../graphs.ts';
 import { readWrapperLayers } from '../layers.ts';
+import type { DepthBinding } from '../depthsheets.ts';
 import { decodePngBytes } from '../raster/png.ts';
 import { ComfyClient, historyImages, refuse } from './client.ts';
 
@@ -50,6 +51,8 @@ export interface SeeThroughRun {
   quant: 'none' | 'nf4';
   wait: number;
   timeout: number;
+  /** Explicit config/run context; absent means legacy art-only capture. */
+  depth?: DepthBinding;
 }
 
 export interface SeeThroughResult {
@@ -73,6 +76,7 @@ function safeName(name: string): boolean {
 }
 
 export async function runSeeThrough(client: ComfyClient, run: SeeThroughRun, say: (line: string) => void): Promise<SeeThroughResult> {
+  const depth = run.depth?.config === undefined ? undefined : run.depth;
   if (!existsSync(run.image)) refuse('COMFY_IMAGE_PRESENT', run.image, 'no such file; the PNG See-through is to decompose is required');
   const bytes = new Uint8Array(readFileSync(run.image));
   const img = decodePngBytes(bytes, run.image);
@@ -122,7 +126,7 @@ export async function runSeeThrough(client: ComfyClient, run: SeeThroughRun, say
   }
   const layers = Array.isArray(manifest.layers) ? (manifest.layers as Array<Record<string, unknown>>) : [];
   if (layers.length === 0) refuse('COMFY_MANIFEST_NAMED', `output/${infoLog}`, 'lists no layers; a See-through run writes one per tag');
-  const bad = layers.filter((l) => typeof l.name !== 'string' || !safeName(l.name) || typeof l.filename !== 'string' || !safeName(l.filename));
+  const bad = layers.filter((l) => typeof l.name !== 'string' || !safeName(l.name) || typeof l.filename !== 'string' || !safeName(l.filename) || (depth !== undefined && 'depth_filename' in l && (typeof l.depth_filename !== 'string' || !safeName(l.depth_filename))));
   if (bad.length > 0) {
     refuse('COMFY_LAYER_NAME', `output/${infoLog}`, `names ${bad.length} layer(s) whose name or filename is not a plain file name (first ${JSON.stringify(bad[0]).slice(0, 200)}); each becomes parts/<name>.png`);
   }
@@ -135,8 +139,9 @@ export async function runSeeThrough(client: ComfyClient, run: SeeThroughRun, say
   try {
     for (const p of previews) writeFileSync(join(stage, 'previews', basename(p.filename)), await client.view(p.filename, p.subfolder, p.type));
     for (const l of layers) writeFileSync(join(stage, 'parts', `${l.name as string}.png`), await client.view(l.filename as string));
+    if (depth !== undefined) for (const l of layers) if ('depth_filename' in l) writeFileSync(join(stage, 'parts', `${l.name as string}_depth.png`), await client.view(l.depth_filename as string));
     writeFileSync(join(stage, 'layers.json'), manifestBytes);
-    const set = readWrapperLayers(stage);
+    const set = readWrapperLayers(stage, depth);
     const meta = {
       prompt_id: id,
       image: run.image,

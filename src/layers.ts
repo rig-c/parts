@@ -31,6 +31,7 @@
  * (`src/tags.ts`, `AUTHOR_PREFIX`): read with `group` "author", it has no
  * role, and its place in the draw order is read like any other layer's.
  */
+import { bindDepthRun, type DepthBinding, type DeferredDepthSource, type SourceDepthSheet } from './depthsheets.ts';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { initializeCanvas, type Layer as PsdLayer, readPsd, writePsd } from 'ag-psd';
@@ -65,6 +66,10 @@ export interface Layer {
   bottom: number;
   /** See-through's `depth_median` (larger = further back), or null where the input carries none. */
   depth: number | null;
+  /** Optional scalar source; ordering remains the separate depth_median. */
+  depthSheet?: SourceDepthSheet;
+  /** An unbound legacy hint; reading art must not touch its file. */
+  depthHint?: DeferredDepthSource;
   /** 0 is drawn first (furthest back). */
   drawOrder: number;
   /** Pixels with alpha above `OPAQUE_ALPHA_ABOVE`. */
@@ -77,6 +82,8 @@ export interface Layer {
  * so it carries no tag reading, no depth and no draw order.
  */
 export interface HiddenLayer {
+  /** Legacy hint, retained but never interpreted while depth is inactive. */
+  depthHint?: DeferredDepthSource;
   /** `<of>:hidden`. */
   name: string;
   /** The drawn layer of the same input it belongs to. */
@@ -210,7 +217,7 @@ const DEPTH_RULE = 'a finite number (See-through\'s depth, larger = further back
  * order, a scale) that silently ignoring would get wrong — so the reader says
  * which key it does not know and stops.
  */
-export function readWrapperLayers(path: string): LayerSet {
+export function readWrapperLayers(path: string, binding?: DepthBinding): LayerSet {
   const manifestPath = existsSync(path) && statSync(path).isDirectory() ? join(path, 'layers.json') : path;
   const dir = dirname(manifestPath);
   const problems: Problem[] = [];
@@ -362,7 +369,7 @@ export function readWrapperLayers(path: string): LayerSet {
       return;
     }
     if (hiddenOf !== null) {
-      hidden.push({ name, of: hiddenOf.of, file: present[0], pixels, left, top, right, bottom, opaquePx: opaque(pixels) });
+      hidden.push({ name, of: hiddenOf.of, file: present[0], pixels, left, top, right, bottom, opaquePx: opaque(pixels), ...(!('depth_filename' in e) ? {} : { depthHint: { filename: e.depth_filename, base: dir } }) });
       return;
     }
     read.push({
@@ -370,6 +377,7 @@ export function readWrapperLayers(path: string): LayerSet {
       tag: tag as LayerTagReading,
       file: present[0],
       pixels,
+      ...(!('depth_filename' in e) ? {} : { depthHint: { filename: e.depth_filename, base: dir } }),
       left,
       top,
       right,
@@ -390,13 +398,14 @@ export function readWrapperLayers(path: string): LayerSet {
   // Stable: Array.prototype.sort is stable, so equal depths keep manifest order — and with no depth at all (every
   // depth null), the manifest's own order is the draw order.
   const ordered = withDepth.length === 0 ? read : [...read].sort((a, b) => (b.depth as number) - (a.depth as number));
-  return {
+  const set: LayerSet = {
     form: 'wrapper',
     source: manifestPath,
     canvas: { w: W, h: H },
     layers: ordered.map(({ index: _index, ...rest }, drawOrder) => ({ ...rest, drawOrder })),
     hidden,
   };
+  return binding === undefined ? set : bindDepthRun(set, binding.run, binding.config, binding.base);
 }
 
 /** Every hidden-art layer must belong to a drawn layer the same input holds (issue #359): `LAYERS_HIDDEN_OF_PRESENT`. */
@@ -556,9 +565,9 @@ export function readPsdLayers(path: string): LayerSet {
 }
 
 /** Read whichever form `path` is: a `.psd` file, or a wrapper directory / `layers.json`. */
-export function readLayers(path: string): LayerSet {
-  if (/\.psd$/i.test(path)) return readPsdLayers(path);
-  if (existsSync(path) && (statSync(path).isDirectory() || basename(path) === 'layers.json')) return readWrapperLayers(path);
+export function readLayers(path: string, binding?: DepthBinding): LayerSet {
+  if (/\.psd$/i.test(path)) { const set = readPsdLayers(path); return binding === undefined ? set : bindDepthRun(set, binding.run, binding.config, binding.base); }
+  if (existsSync(path) && (statSync(path).isDirectory() || basename(path) === 'layers.json')) return readWrapperLayers(path, binding);
   refuseIfAny([
     {
       code: 'LAYERS_INPUT_KIND',
@@ -588,15 +597,16 @@ export function exportFileName(index: number, count: number, name: string): stri
 }
 
 /** The wrapper manifest `exportLayers` writes, as text: fixed key order, two-space indent, a trailing newline. */
-export function exportManifestText(set: LayerSet): string {
-  const all: Array<{ name: string; left: number; top: number; right: number; bottom: number; depth: number | null }> = [
-    ...set.layers.map((l) => ({ name: l.name, left: l.left, top: l.top, right: l.right, bottom: l.bottom, depth: l.depth })),
+export function exportManifestText(set: LayerSet, binding?: DepthBinding): string {
+  set = bindDepthRun(set, binding?.run ?? 'full', binding?.config, binding?.base ?? '');
+  const all: Array<{ name: string; left: number; top: number; right: number; bottom: number; depth: number | null; depthSheet?: SourceDepthSheet }> = [
+    ...set.layers.map((l) => ({ name: l.name, left: l.left, top: l.top, right: l.right, bottom: l.bottom, depth: l.depth, ...(l.depthSheet === undefined ? {} : { depthSheet: l.depthSheet }) })),
     ...set.hidden.map((h) => ({ name: h.name, left: h.left, top: h.top, right: h.right, bottom: h.bottom, depth: null })),
   ];
   const manifest = {
     width: set.canvas.w,
     height: set.canvas.h,
-    layers: all.map((l, i) => ({ name: l.name, filename: exportFileName(i, all.length, l.name), left: l.left, top: l.top, right: l.right, bottom: l.bottom, depth_median: l.depth })),
+    layers: all.map((l, i) => ({ name: l.name, filename: exportFileName(i, all.length, l.name), left: l.left, top: l.top, right: l.right, bottom: l.bottom, depth_median: l.depth, ...(l.depthSheet === undefined ? {} : { depth_filename: exportFileName(i, all.length, `${l.name}_depth`) }) })),
   };
   return `${JSON.stringify(manifest, null, 2)}\n`;
 }
@@ -617,7 +627,7 @@ export function exportManifestText(set: LayerSet): string {
  * `parts/<name>.png` the reader also looks for — could be read in place of
  * the one written now. Writes nothing until that has passed.
  */
-export function exportLayers(set: LayerSet, dir: string): { manifest: string; files: string[] } {
+export function exportLayers(set: LayerSet, dir: string, binding?: DepthBinding): { manifest: string; files: string[] } {
   if (existsSync(dir) && (!statSync(dir).isDirectory() || readdirSync(dir).length > 0)) {
     refuseIfAny([
       {
@@ -627,7 +637,8 @@ export function exportLayers(set: LayerSet, dir: string): { manifest: string; fi
       },
     ]);
   }
-  const text = exportManifestText(set);
+  set = bindDepthRun(set, binding?.run ?? 'full', binding?.config, binding?.base ?? '');
+  const text = exportManifestText(set, binding);
   const entries = (JSON.parse(text) as { layers: Array<{ filename: string }> }).layers;
   const pixels = [...set.layers.map((l) => l.pixels), ...set.hidden.map((h) => h.pixels)];
   mkdirSync(dir, { recursive: true });
@@ -636,6 +647,7 @@ export function exportLayers(set: LayerSet, dir: string): { manifest: string; fi
     writeFileSync(path, encodePngBytes(pixels[i]));
     return path;
   });
+  set.layers.forEach((l, i) => { if (l.depthSheet !== undefined) { const file = join(dir, exportFileName(i, set.layers.length + set.hidden.length, `${l.name}_depth`)); writeFileSync(file, encodePngBytes(l.depthSheet.pixels)); files.push(file); } });
   const manifest = join(dir, 'layers.json');
   writeFileSync(manifest, text);
   return { manifest, files };

@@ -1,3 +1,4 @@
+import { padDepthSheet, depthSheetProblems, type PartDepthReference } from './depthsheets.ts';
 import { explicitBoneNames, explicitSlotBones, explicitWeightRows, regionBone } from './config.ts';
 import { explicitAttachment, type ExplicitMeshReport } from './explicitmesh.ts';
 /**
@@ -1110,6 +1111,7 @@ export interface AttachmentSetsFile {
 }
 
 export interface RigOutput {
+  depthReferences?: Array<{ part: string; size: [number, number]; depth: PartDepthReference }>;
   rig: RigSpec;
   /** Internal explicit-layout provenance; serialized only as an external companion. */
   layout?: LayoutPlan;
@@ -1833,6 +1835,17 @@ export function buildRig(
   const skin: RigSpec['skins']['default'] = {};
   const meshReport: MeshReport[] = [];
   const outImages: Array<[string, Raster]> = [];
+  const depthReferences: NonNullable<RigOutput['depthReferences']> = [];
+  const emitDepth = (part: string, reference: PartDepthReference, scalar: Raster): void => {
+    if (outImages.some(([file]) => file === reference.image)) {
+      fail('DEPTH_SHEET_UNAMBIGUOUS', reference.image, 'collides with an emitted asset; choose noncolliding part/sheet names');
+      return;
+    }
+    const image = padDepthSheet(scalar, PAD);
+    outImages.push([reference.image, image]);
+    depthReferences.push({ part, size: [image.width, image.height], depth: reference });
+  };
+
   const loopPasses: Record<string, number> = {};
   const autoMotion: AutoMotionCase[] = [];
   // A region's centre in its bone's setup frame; on a turned bone the image
@@ -2333,7 +2346,18 @@ export function buildRig(
   for (const p of parts.parts) {
     const img = pad(images.get(p.name) as Raster, PAD, PAD, PAD, PAD, [0, 0, 0, 0]);
     const file = `${p.name}.png`;
+    const artIndex = outImages.length;
     outImages.push([file, img]);
+    const scalar = p.depth === undefined ? undefined : images.get(p.depth.image);
+    if (p.depth !== undefined) {
+      if (scalar === undefined) fail('DEPTH_SHEET_PRESENT', p.depth.image, `part "${p.name}" declares a sheet; the unpadded source sheet must be handed to buildRig`);
+      else {
+        problems.push(...depthSheetProblems(scalar, [p.w, p.h], p.depth.image));
+        if (parts.parts.some(q => `${q.name}.png` === p.depth?.image)) fail('DEPTH_SHEET_UNAMBIGUOUS', p.depth.image, 'collides with artwork; use noncolliding part names');
+        else if (cfg.meshes[p.name] !== undefined || stills[p.name] === undefined) emitDepth(p.name, p.depth, scalar);
+      }
+    }
+
     const mesh = cfg.meshes[p.name];
     if (mesh === undefined) {
       const bone = B.get(regionBone(cfg.regions[p.name])) as Bone;
@@ -2350,8 +2374,15 @@ export function buildRig(
         const lower = pad(crop(src, 0, r, p.w, p.h - r), PAD, PAD, PAD, PAD, [0, 0, 0, 0]);
         const upper = pad(crop(src, 0, 0, p.w, r), PAD, PAD, PAD, PAD, [0, 0, 0, 0]);
         const sb = B.get(st.bone) as Bone;
-        outImages[outImages.length - 1] = [file, lower];
+        outImages[artIndex] = [file, lower];
         outImages.push([stillFile, upper]);
+        if (p.depth !== undefined && scalar !== undefined) {
+          // The SAME source row r as the art; each drawing owns a distinct
+          // padded scalar grid, while original-source provenance stays intact.
+          emitDepth(p.name, p.depth, crop(scalar, 0, r, p.w, p.h - r));
+          emitDepth(still, { ...p.depth, image: `${still}_depth.png` }, crop(scalar, 0, 0, p.w, r));
+        }
+
         const cyLow = st.row + (p.h - r) / 2;
         const cyUp = p.y + r / 2;
         skin[p.name] = { [p.name]: region(file, bone.name, cx, cyLow) };
@@ -2646,6 +2677,12 @@ export function buildRig(
         const img = pad(rawImg, PAD, PAD, PAD, PAD, [0, 0, 0, 0]);
         const file = `${attName}.png`;
         outImages.push([file, img]);
+        if (p.depth !== undefined) {
+          const scalar = images.get(p.depth.image);
+          if (scalar === undefined) fail('DEPTH_SHEET_PRESENT', p.depth.image, `alternate "${attName}" requires its declared source sheet`);
+          else { problems.push(...depthSheetProblems(scalar, [p.w, p.h], p.depth.image)); emitDepth(attName, p.depth, scalar); }
+        }
+
         const mesh = cfg.meshes[p.name];
         if (mesh === undefined) {
           const bone = B.get(regionBone(cfg.regions[p.name])) as Bone;
@@ -2870,6 +2907,15 @@ export function buildRig(
     const att = skin[row.part]?.[row.part];
     if (att !== undefined && 'type' in att) row.bones = meshBoundBones(att);
   }
+  // Check the complete namespace: an alternate's art can arrive after a base
+  // sheet (or a still asset) with the same filename. Never let write order
+  // decide which drawing or measurement survives on disk.
+  const assetIndices = new Map<string, number>();
+  outImages.forEach(([file], index) => {
+    const previous = assetIndices.get(file);
+    if (previous !== undefined) fail('DEPTH_SHEET_UNAMBIGUOUS', file, `output assets[${previous}] and [${index}] require the same filename; choose distinct base, still, alternate and sheet names`);
+    else assetIndices.set(file, index);
+  });
   refuseIfAny(problems);
   const name = `${cfg.key}_painting`;
   const rig: RigSpec = {
@@ -2923,6 +2969,7 @@ export function buildRig(
     motion,
     meshReport,
     images: outImages,
+    ...(depthReferences.length === 0 ? {} : { depthReferences }),
     controls,
     meshKeyed,
     idleKeys,

@@ -407,8 +407,8 @@ These are limits of the approach, stated so nobody reads more into a green run:
 - **rig-parts generates no images.** The painting and See-through layers are made
   by models the user runs on their GPU or a web demo. No weights ship here; the
   optional `comfy` adapter drives the user's own ComfyUI host and models.
-- **One depth value per layer.** See-through gives each layer a single depth, so a
-  layer that is in front of another in one place and behind it in another is drawn
+- **Legacy turns use one ordering depth per layer.** See-through also supplies per-pixel
+  sheets, now preserved as inputs for the subsequent generator consumer (#773/#763). A layer that is in front of another in one place and behind it in another is drawn
   right in the still (the painting's own pixels are projected onto it) and wrong once
   it moves.
 - **No expression or lip-sync, and no jiggle.** The mouth is one layer; there is no
@@ -572,3 +572,22 @@ the interface it holds.
 ## Licence
 
 MIT — see [LICENSE](LICENSE). Third-party terms: [NOTICE.md](NOTICE.md).
+
+
+### Per-layer depth input
+
+`config.depth` explicitly enables scalar input. Without it, `depth_filename`
+is a legacy hint: no depth-file I/O, validation, fetch, reference or output is
+activated, even when files or in-memory sheets exist. Active See-through sheets
+are read as opaque grayscale source data. Declare positive finite `depth.zScale`;
+eight bits do not supply world units. See-through far-high encoding is explicitly `near: "black"`. User
+per-layer/run-canvas fallbacks declare image, near and zScale themselves; a
+missing declared file is an error, not a fallback. The ordering median remains
+separate, and its agreement reading cannot certify an image's polarity.
+
+Assembly emits registered part sheets and references; rig emits PAD4 sheets and
+`depth_sheets.json`. Existing weighted meshes do not use them yet: production
+Core grid/contour generators and turns belong to #763. No-image builds keep the
+legacy output bytes. `comfy seethrough --config <file> --depth-run <full|head>`
+uses the same opt-in; its default captures art only. Standalone authored part
+references remain active declarations. See [the input contract and refusals](docs/AUTHORING.md#per-layer-depth-sheets-773).

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runDepthSheetChecks, runDepthSheetCoreChecks, runDepthSheetStillChecks } from './tools/check_depthsheets.ts';
 import { runMotionSeamContractCases, runMotionSeamDocumentationCases, runStoppedMotionSeamCase } from './tools/fixtures/motion_seam_controls.ts';
 import { runExplicitMeshChecks } from './tools/check_explicitmesh.ts';
 import { runAlternateLayerChecks } from './tools/check_alternate_layers.ts';
@@ -1608,6 +1609,7 @@ function runWrapperSuite(): number {
     return d;
   };
   try {
+    runDepthSheetChecks(fresh('depth-sheets'), (name, ok, detail) => say(name, ok, detail, 'independent authored scalar grids; #773 input/ref contract, no production geometry claim'));
     runLayerBoundsChecks(fresh('layer-bounds'), (name, ok, detail) => say(name, ok, detail, 'original alpha > 8, input-canvas offsets and the existing body group; analytical controls before acceptance measurements'));
     const dir = fresh('wrapper');
     writeWrapperFixture(dir);
@@ -6647,6 +6649,8 @@ function flatFormLine(r: FlatFormRender | string): string {
 function runRigSuite(): number {
   section('rig: bones, lattice meshes, weights, regions and the idle');
   const { say, bad } = counter();
+  runDepthSheetStillChecks((name, ok, detail) => say(name, ok, detail, 'actual source-row split and companion, independent synthetic ramp; no broad no-depth verdict'));
+  { const dir = temp('depth-core'); try { runDepthSheetCoreChecks(dir, (name, ok, detail) => say(name, ok, detail, 'actual pinned Core generator, mandatory rig-play gate')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   const r = buildRig(rigCfg(), rigParts(), rigImages());
   const cloth = r.rig.skins.default.cloth.cloth as MeshAttachment;
   const eye = r.rig.skins.default.eye.eye as RegionAttachment;
@@ -34064,6 +34068,9 @@ function runComfySuite(): number {
   const { say, bad } = counter();
   const dir = temp('comfy');
   try {
+    const depthProbe = spawnSync(process.execPath, [join(ROOT, 'tools/check_depthsheets.ts'), '--adapter-probe', join(dir, 'depth-probe')], { cwd: ROOT, encoding: 'utf8' });
+    say('CY_DEPTH_FETCH_AND_MISSING_FILE_PLANT', depthProbe.status === 0, `exit ${depthProbe.status}; ${depthProbe.stdout} ${depthProbe.stderr}`, 'API and CLI: inactive hints never fetch or activate; explicit config/run captures5 valid sheets and preserves the actual404 missing-file refusal');
+
     const h = spawnSync('bun', [join(ROOT, 'fixtures', 'comfyharness.ts'), dir], { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 26 });
     let parsed: { image: string; results: Record<string, HarnessResult> } | null = null;
     try {
