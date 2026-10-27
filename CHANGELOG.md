@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.70.1](https://github.com/rig-c/parts/compare/v1.70.0...v1.70.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **docs:** the depth-sheet 2.5D head turn shipped in 1.68.0; say so where the docs still called it future work ([#785](https://github.com/rig-c/parts/issues/785)) ([87fe191](https://github.com/rig-c/parts/commit/87fe1914cf80b1182c2f78c1768bac55ea71fb81))
+
 ## [1.70.0](https://github.com/rig-c/parts/compare/v1.69.0...v1.70.0) (2026-10-27)
 
 
