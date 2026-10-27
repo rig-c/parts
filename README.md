@@ -408,7 +408,7 @@ These are limits of the approach, stated so nobody reads more into a green run:
   by models the user runs on their GPU or a web demo. No weights ship here; the
   optional `comfy` adapter drives the user's own ComfyUI host and models.
 - **Legacy turns use one ordering depth per layer.** See-through also supplies per-pixel
-  sheets, now preserved as inputs for the subsequent generator consumer (#773/#763). A layer that is in front of another in one place and behind it in another is drawn
+  sheets, consumed by the shipped 2.5D head-turn producer through [config.turn.roles](docs/AUTHORING.md#3-configjson-field-by-field). A layer that is in front of another in one place and behind it in another is drawn
   right in the still (the painting's own pixels are projected onto it) and wrong once
   it moves.
 - **No expression or lip-sync, and no jiggle.** The mouth is one layer; there is no
@@ -586,8 +586,11 @@ missing declared file is an error, not a fallback. The ordering median remains
 separate, and its agreement reading cannot certify an image's polarity.
 
 Assembly emits registered part sheets and references; rig emits PAD4 sheets and
-`depth_sheets.json`. Existing weighted meshes do not use them yet: production
-Core grid/contour generators and turns belong to #763. No-image builds keep the
+`depth_sheets.json`. Since 1.68.0 (#777), [config.turn.roles](docs/AUTHORING.md#3-configjson-field-by-field)
+uses depth sheets for 2.5D head turns with grid surfaces and `yaw_dial`/`pitch_dial`
+controls; see [`CONFIG_TURN_ROLE_UNKNOWN`](docs/AUTHORING.md#CONFIG_TURN_ROLE_UNKNOWN)
+and [`CONFIG_TURN_SURFACE_REQUIRED`](docs/AUTHORING.md#CONFIG_TURN_SURFACE_REQUIRED).
+Authored weighted body meshes do not consume depth sheets. No-image builds keep the
 legacy output bytes. `comfy seethrough --config <file> --depth-run <full|head>`
 uses the same opt-in; its default captures art only. Standalone authored part
 references remain active declarations. See [the input contract and refusals](docs/AUTHORING.md#per-layer-depth-sheets-773).
