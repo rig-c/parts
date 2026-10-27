@@ -1,3 +1,4 @@
+import { baseAnchorProblems, orderedBaseAnchor, baseAnchorMoves, type AnchorRegion } from './baseanchor.ts';
 import { padDepthSheet, padTurnDepthSheet, depthSheetProblems, type PartDepthReference } from './depthsheets.ts';
 import { explicitBoneNames, explicitSlotBones, explicitWeightRows, regionBone } from './config.ts';
 import { explicitAttachment, type ExplicitMeshReport } from './explicitmesh.ts';
@@ -1321,11 +1322,27 @@ export function buildRig(
   const CX = W / 2;
   const byPart = new Map(parts.parts.map((p) => [p.name, p]));
 
+  const configuredAlts = cfg.assemble.alternates ?? cfg.alternates ?? [];
+  const anchorRegions = new Set(Object.keys(cfg.regions).filter(n => !(n in cfg.meshes)));
+  for (const a of configuredAlts) {
+    if (a.base_anchor === undefined) continue;
+    const covered = new Set((a.parts ?? parts.parts.map(p => p.name)).filter(n => !(a.hides ?? []).includes(n)));
+    problems.push(...baseAnchorProblems(a.base_anchor, `config alternate set "${a.name}".base_anchor`, covered, new Set((cfg.assemble.patches ?? []).map(p => p.name)), anchorRegions, 'RIG_ALT_BASE_ANCHOR'));
+  }
   for (const a of parts.alternates ?? []) {
+    if (a.base_anchor !== undefined) problems.push(...baseAnchorProblems(a.base_anchor, `parts.json alternate set "${a.name}".base_anchor`, new Set(a.records.map(p => p.name)), new Set(a.records.filter(p => p.from.startsWith('painting:')).map(p => p.name)), anchorRegions, 'RIG_ALT_BASE_ANCHOR'));
+  }
+  // Direct callers need the same shape checks as serialized readers. Collect
+  // both sides before any canonical ordering can inspect their axes or pairs.
+  refuseIfAny(problems);
+  for (const a of parts.alternates ?? []) {
+    const configured = configuredAlts.find(c => c.name === a.name)?.base_anchor;
+    if (JSON.stringify(configured === undefined ? null : orderedBaseAnchor(configured)) !== JSON.stringify(a.base_anchor === undefined ? null : orderedBaseAnchor(a.base_anchor))) fail('RIG_ALT_BASE_ANCHOR_MATCH_CONFIG', `alternate set "${a.name}" base_anchor`, 'config and parts.json declare different base anchors; re-run assemble before rig');
     problems.push(...recordedFocusProblems(a, `parts.json alternate set "${a.name}".focus`, parts.rig_size, parts.scale_rig_per_source));
   }
   for (const a of cfg.assemble.alternates ?? cfg.alternates ?? []) {
     const record = parts.alternates?.find((p) => p.name === a.name);
+    if (a.base_anchor !== undefined && record === undefined) fail('RIG_ALT_BASE_ANCHOR_MATCH_CONFIG', `alternate set "${a.name}" base_anchor`, 'has no assembled set; re-run assemble before rig');
     if ((a.focus !== undefined || record?.focus !== undefined)
       && JSON.stringify(a.focus) !== JSON.stringify(record?.focus)) {
       fail('CONFIG_SET_FOCUS', `config.assemble alternate set "${a.name}".focus`, 'does not match the assembled painting point; re-run assemble after changing or removing focus');
@@ -2867,6 +2884,22 @@ export function buildRig(
         for (const [x, y] of lm.vertices) uvs.push(pyRound(x / w, 6), pyRound(y / h, 6));
         skin[skinSlot][attName] = { type: 'mesh', image: file, width: w, height: h, uvs, triangles: lm.triangles, hull: lm.hull, weights };
       }
+      if (alt.base_anchor !== undefined) {
+        const baseRegions = new Map<string, AnchorRegion>(), altRegions = new Map<string, AnchorRegion>();
+        for (const p of alt.records) {
+          if (cfg.meshes[p.name] !== undefined || cfg.regions[p.name] === undefined) continue;
+          const bone = regionBone(cfg.regions[p.name]), slot = altFront.has(p.name) ? `${p.name}${FRONT_SUFFIX}` : p.name;
+          const original = skin[p.name]?.[p.name], art = skin[slot]?.[`${alt.name}_${p.name}`];
+          if (original !== undefined && !('type' in original)) baseRegions.set(p.name, { bone, x: original.x, y: original.y });
+          if (art !== undefined && !('type' in art)) altRegions.set(p.name, { bone, x: art.x, y: art.y });
+        }
+        const moves = baseAnchorMoves(alt.base_anchor, baseRegions, altRegions, altWorld);
+        for (const [name, move] of moves) {
+          const slot = altFront.has(name) ? `${name}${FRONT_SUFFIX}` : name;
+          const attachment = skin[slot][`${alt.name}_${name}`] as RegionAttachment;
+          skin[slot][`${alt.name}_${name}`] = { ...attachment, x: places(attachment.x + move.local[0]), y: places(attachment.y + move.local[1]) };
+        }
+      }
       const slotMap: Record<string, string> = {};
       for (const [slotName, att] of Object.entries(alt.slots)) slotMap[slotName] = att;
       const hideList: string[] = [];
@@ -2882,6 +2915,7 @@ export function buildRig(
       const coversFace = Object.hasOwn(slotMap, 'face');
       setEntries[alt.name] = {
         slots: slotMap,
+        ...(alt.base_anchor === undefined ? {} : { base_anchor: orderedBaseAnchor(alt.base_anchor) }),
         ...(alt.focus === undefined ? {} : { focus: paintingToSetupPoint(alt.focus, alt.focus_source_size as [number, number], parts.rig_size) }),
         ...(hideList.length > 0 ? { hides: hideList } : {}),
         ...(drawn === undefined ? {} : { drawn }),

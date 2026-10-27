@@ -1,3 +1,4 @@
+import { baseAnchorMoves, type AnchorRegion } from './baseanchor.ts';
 /**
  * The check stage: build a rig through rig-c, gate it under both
  * profiles, render its idle, and measure the two things the gate cannot see —
@@ -1379,6 +1380,25 @@ export function resolvePlacedAlpha(placements: readonly ReferencePlacement[], pa
       return { name: pl.name, from: pl.box.from, x: pl.box.x, y: pl.box.y, image: islands[pl.islandIndex] ?? raw };
     }
     return { name: pl.name, from: pl.box.from, x: pl.box.x, y: pl.box.y, image: raw };
+  }).map(placed => {
+    if (Number.isInteger(placed.x) && Number.isInteger(placed.y)) return placed;
+    // Explicit anchored placement can be subpixel. Preserve premultiplied edge
+    // colour while moving it onto the integer reference grid, never the PNG.
+    const { image } = placed, premult = newFloatImage(image.width, image.height, 4);
+    for (let i = 0; i < image.width * image.height; i++) {
+      const alpha = image.data[i * 4 + 3];
+      for (let c = 0; c < 3; c++) premult.data[i * 4 + c] = image.data[i * 4 + c] * alpha / 255;
+      premult.data[i * 4 + 3] = alpha;
+    }
+    const x = Math.floor(placed.x) - 1, y = Math.floor(placed.y) - 1;
+    const warped = warpAffine(premult, { sx: 1, sy: 1, tx: placed.x - x, ty: placed.y - y }, image.width + 2, image.height + 2, 'bilinear');
+    const shifted = newRaster(warped.width, warped.height);
+    for (let i = 0; i < shifted.width * shifted.height; i++) {
+      const alpha = warped.data[i * 4 + 3];
+      for (let c = 0; c < 3; c++) shifted.data[i * 4 + c] = alpha > 0 ? warped.data[i * 4 + c] * 255 / alpha : 0;
+      shifted.data[i * 4 + 3] = alpha;
+    }
+    return { ...placed, x, y, image: shifted };
   });
 }
 
@@ -1543,6 +1563,29 @@ export function armSplitSetHint(parts: PartsFile, alt: AlternatePartsRecord): st
   }
   if (open.length === 0) return null;
   return ` — the set covers a sleeve whose merged arm layer 1.37.0 split (issue #490), and it neither covers nor hides ${open.map((n) => `"${n}"`).join(', ')}, so the base draws ${open.length === 1 ? 'that part' : 'those parts'} beside the set's own art; a set made before 1.37.0 hides it: add ${open.map((n) => `"${n}"`).join(', ')} to the set's hides (see ${ARM_SPLIT_MIGRATION})`;
+}
+
+/** Expected placement from the authored rule and base, never the candidate alternate's offset. */
+export function baseAnchoredReference(parts: PartsFile, alt: AlternatePartsRecord, rig: Record<string, unknown>, drawn?: Record<string, number>): AlternatePartsRecord {
+  if (alt.base_anchor === undefined) return alt;
+  const posed = setupWorld(stillRigForSet(rig, alt, drawn ?? alt.drawn));
+  const slots = new Map((Array.isArray(rig.slots) ? rig.slots : []).filter(isRecord).map(s => [String(s.name), String(s.bone)]));
+  const skins = isRecord(rig.skins) && isRecord(rig.skins.default) ? rig.skins.default : {};
+  const source = new Map<string, AnchorRegion>(), base = new Map<string, AnchorRegion>();
+  for (const record of alt.records) {
+    const slot = (alt.front ?? []).includes(record.name) ? `${record.name}${FRONT_SUFFIX}` : record.name;
+    const bone = slots.get(slot), frame = bone === undefined ? undefined : posed.get(bone);
+    const list = skins[record.name], original = isRecord(list) ? list[record.name] : null;
+    if (bone === undefined || frame === undefined) continue;
+    const local = toBoneLocal(frame, record.x + record.w / 2 - parts.rig_size[0] / 2, cropToSpineY(record.y + record.h / 2, parts.rig_size[1]));
+    source.set(record.name, { bone, x: local[0], y: local[1] });
+    if (isRecord(original) && typeof original.x === 'number' && typeof original.y === 'number' && (original.type === undefined || original.type === 'region')) base.set(record.name, { bone, x: original.x, y: original.y });
+  }
+  const moves = baseAnchorMoves(alt.base_anchor, base, source, posed);
+  return { ...alt, records: alt.records.map(record => {
+    const move = moves.get(record.name);
+    return move === undefined ? record : { ...record, x: record.x + move.world[0], y: record.y - move.world[1] };
+  }) };
 }
 
 /**
@@ -6349,7 +6392,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           writeFileSync(join(dir, 'motion.json'), JSON.stringify({ ...inp.motion, animations: setStillAnimations }));
           const built = rigc(['build', '--rig', join(dir, 'rig.json'), '--motion', join(dir, 'motion.json'), '--out', join(dir, 'build'), '--profile', 'spine']);
           if (built.status !== 0) refuseIfAny(rigcFailed(`build (the setup-pose still of set "${alt.name}")`, built, buildGateLines(built.out)));
-          return { alt, dir };
+          return { alt, reference: baseAnchoredReference(inp.parts!, alt, inp.rig, drawn), dir };
         });
         const states: SeamStateBounds[] = [seamStateBounds(join(stillDir, 'build'), 'base')];
         for (const { alt, dir } of staged) states.push(seamStateBounds(join(dir, 'build'), alt.name));
@@ -6382,15 +6425,15 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         }
         if (set !== undefined || allSets) {
           const baseSupport = seamSupport(join(stillDir, 'build'), join(stillDir, 'rig.json'), canonicalSet, placed, seamStacks, inp.stage);
-          for (const { alt, dir: setDir } of staged) {
+          for (const { alt, reference, dir: setDir } of staged) {
             const asr = rigc(['render', '--candidate', join(setDir, 'build'), '--animation', 'still', '--fps', String(STILL_FPS), '--max', String(maxSide), '--out', join(setDir, 'render')]);
             if (asr.status !== 0) refuseIfAny(rigcFailed(`render (the setup-pose still of set "${alt.name}")`, asr, asr.out.split('\n').filter((l) => l.includes('FAIL'))));
             const altStillSet = readFrameSet(join(setDir, 'render'));
             if (keepStills) cpSync(join(setDir, 'render'), join(out, 'setup_still_auto', alt.name), { recursive: true });
-            const altComposite = flatCompositeForSet(inp.parts, alt, inp.partsDir, altStillSet.background, rigSlotOrder);
+            const altComposite = flatCompositeForSet(inp.parts, reference, inp.partsDir, altStillSet.background, rigSlotOrder);
             const altCanonical = canonical(join(setDir, 'build'), join(setDir, 'seam'));
             if (keepStills) cpSync(join(setDir, 'seam'), join(keptDir, alt.name), { recursive: true });
-            const altPlaced = resolvePlacedAlpha(setPlacements(inp.parts, alt, rigSlotOrder), inp.partsDir);
+            const altPlaced = resolvePlacedAlpha(setPlacements(inp.parts, reference, rigSlotOrder), inp.partsDir);
             const altSupport = seamSupport(join(setDir, 'build'), join(setDir, 'rig.json'), altCanonical, altPlaced, seamStacks, inp.stage);
             const effects = seamEffectSelection(baseSupport, altSupport);
             const autoAltSeam = seamFigures(altComposite, altStillSet.frames[0].image, inp.stage, altStillSet.viewport, altStillSet.background, undefined, alt.scene !== undefined);

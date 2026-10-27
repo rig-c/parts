@@ -1,3 +1,4 @@
+import { baseAnchorProblems, orderedBaseAnchor, type BaseAnchor } from './baseanchor.ts';
 import { partDepthProblems, type PartDepthReference } from './depthsheets.ts';
 /**
  * The output contract of the assemble stage: `parts.json`, one record per
@@ -305,6 +306,7 @@ export interface RecompositeRecord {
 }
 
 export interface AlternateSetMap {
+  base_anchor?: BaseAnchor;
   /** Authored point in setup-world coordinates, only when supplied (issue #719). */
   focus?: [number, number];
   slots: Record<string, string>;
@@ -325,6 +327,7 @@ export const FRONT_SUFFIX = '_front';
 
 export interface AlternatePartsRecord {
   name: string;
+  base_anchor?: BaseAnchor;
   /** Original authored painting point and its source size, only when supplied. */
   focus?: [number, number];
   focus_source_size?: [number, number];
@@ -492,6 +495,7 @@ export function serializeParts(file: PartsFile): string {
       : {
           alternates: file.alternates.map((a) => ({
             name: a.name,
+            ...(a.base_anchor === undefined ? {} : { base_anchor: orderedBaseAnchor(a.base_anchor) }),
             ...(a.parts === undefined ? {} : { parts: a.parts }),
             ...(a.hides === undefined ? {} : { hides: a.hides }),
             ...(a.front === undefined ? {} : { front: a.front }),
@@ -702,6 +706,11 @@ function checkParts(raw: unknown, path: string): PartsFile {
       if (typeof a !== 'object' || a === null || Array.isArray(a)) return;
       const set = a as Record<string, unknown>;
       const at = `${path} alternates[${i}]${typeof set.name === 'string' ? ` (set "${set.name}")` : ''}`;
+      if ('base_anchor' in set) {
+        const names = new Set(Array.isArray(set.records) ? set.records.flatMap(v => typeof v === 'object' && v !== null && typeof v.name === 'string' ? [v.name] : []) : []);
+        const patches = new Set(Array.isArray(set.records) ? set.records.flatMap(v => typeof v === 'object' && v !== null && typeof v.name === 'string' && typeof v.from === 'string' && v.from.startsWith('painting:') ? [v.name] : []) : []);
+        problems.push(...baseAnchorProblems(set.base_anchor, `${at}.base_anchor`, names, patches, undefined, 'PARTS_ALT_BASE_ANCHOR'));
+      }
       if (sizeOk && typeof scale === 'number') problems.push(...recordedFocusProblems(set, `${at}.focus`, size as number[], scale));
       if ('tips' in set || 'tips_source_size' in set) {
         const sourceSize = set.tips_source_size;

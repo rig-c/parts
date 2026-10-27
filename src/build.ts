@@ -1,4 +1,5 @@
 import { readSourceDepth } from './depthsheets.ts';
+import { orderedBaseAnchor } from './baseanchor.ts';
 import { alternateLayerSources, alternateLayerIslands, alternateLayerOthers } from './alternatelayers.ts';
 import { setFocusProblems } from './setfocus.ts';
 /**
@@ -332,6 +333,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   for (const a of cliAlts) cliByName.set(a.name, a);
   const mergedAlts: Array<{
     name: string;
+    base_anchor?: NonNullable<typeof cfg.assemble.alternates>[number]['base_anchor'];
     at: string;
     source?: string;
     full?: string;
@@ -352,6 +354,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     if (cli !== undefined) cliByName.delete(a.name);
     return {
       name: a.name,
+      base_anchor: a.base_anchor,
       at: `config.assemble.alternates[${i}] (set "${a.name}")`,
       source: cli?.source ?? (a.source === undefined ? undefined : resolve(configDir, a.source)),
       full: cli?.full ?? (a.full === undefined ? undefined : resolve(configDir, a.full)),
@@ -694,6 +697,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     altBuilt.push({
       record: {
         name: alt.name,
+        ...(alt.base_anchor === undefined ? {} : { base_anchor: orderedBaseAnchor(alt.base_anchor) }),
         ...(alt.parts === undefined ? {} : { parts: [...alt.parts, ...generatedBands.filter((n) => !(alt.parts as string[]).includes(n))] }),
         ...(alt.hides === undefined || alt.hides.length === 0 ? (altFront.size === 0 ? {} : { hides: [...altFront] }) : { hides: [...alt.hides, ...[...altFront].filter((p) => !(alt.hides as string[]).includes(p))] }),
         ...(altFront.size === 0 ? {} : { front: [...altFront] }),
