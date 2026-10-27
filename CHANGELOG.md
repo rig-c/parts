@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.70.0](https://github.com/rig-c/parts/compare/v1.69.0...v1.70.0) (2026-10-27)
+
+
+### Features
+
+* **rig:** a weighted waist — an explicit `waist` declaration skins the topwear hem to hip by height, not radius ([#783](https://github.com/rig-c/parts/issues/783)) ([4614896](https://github.com/rig-c/parts/commit/46148966794e8fee419117e9a929e4df46a96de3))
+
 ## [1.69.0](https://github.com/rig-c/parts/compare/v1.68.0...v1.69.0) (2026-10-27)
 
 
