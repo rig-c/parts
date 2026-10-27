@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runBaseAnchorChecks } from './tools/check_base_anchor.ts';
 import { runDepthSheetChecks, runDepthSheetCoreChecks, runDepthSheetStillChecks } from './tools/check_depthsheets.ts';
 import { runMotionSeamContractCases, runMotionSeamDocumentationCases, runStoppedMotionSeamCase } from './tools/fixtures/motion_seam_controls.ts';
 import { runExplicitMeshChecks } from './tools/check_explicitmesh.ts';
@@ -50560,6 +50561,7 @@ function runAlternateLayersSuite(): number {
   const dir = temp('alternate-layers');
   let index = 0;
   try {
+    runBaseAnchorChecks(join(dir, 'base-anchor'), (name, pass, detail) => say(`BA${String(++index).padStart(2, '0')}_${name}`, pass, detail, 'issue #780: explicit base region axes, paired patches, unchanged source bytes and named base-offset mutants'), rigcRunnerAt(suiteRigc(), spawnRigc));
     runAlternateCutLayerChecks(dir, (name, pass, detail) => say(`AZ${String(++index).padStart(2, '0')}_${name}`, pass, detail,
       'issues #714, #726: independent cut-piece pixels never re-source or retain the parent polygon, and check --set raised measures all 10 of 10 bars with planted failure mutants'), rigcRunnerAt(suiteRigc(), spawnRigc));
     runAlternateLayerChecks(dir, (name, pass, detail) => say(`AZ${String(++index).padStart(2, '0')}_${name}`, pass, detail,

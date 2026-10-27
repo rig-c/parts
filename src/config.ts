@@ -1,3 +1,4 @@
+import { baseAnchorProblems, type BaseAnchor } from './baseanchor.ts';
 import type { DepthConfig } from './depthsheets.ts';
 /**
  * The character config: everything character-specific the CPU stages read,
@@ -267,6 +268,8 @@ export interface Cut {
 
 export interface AlternateSetConfig {
   name: string;
+  /** Opt-in base region offsets on explicitly selected local axes, with paired painting patches. */
+  base_anchor?: BaseAnchor;
   /** Authored point on this painting, x right/y down; omitted means no focus. */
   focus?: Point;
   source?: string;
@@ -2267,7 +2270,7 @@ function checkAlternates(
   const seenNames = new Map<string, number>();
   (v as Json[]).forEach((entry, i) => {
     const at = `${p}[${i}]`;
-    const e = c.object(at, entry, ['name'], ['source', 'full', 'head', 'parts', 'hides', 'head_box', 'cuts', 'skeleton', 'anchor', 'drawn', 'tips', 'front', 'layers', 'focus']);
+    const e = c.object(at, entry, ['name'], ['source', 'full', 'head', 'parts', 'hides', 'head_box', 'cuts', 'skeleton', 'anchor', 'drawn', 'tips', 'front', 'layers', 'focus', 'base_anchor']);
     if (e === null) return;
     if ('name' in e && c.string(`${at}.name`, e.name)) {
       if (!partNameOk(e.name)) c.fail('CONFIG_PART_NAME', `${at}.name`, `names the set ${show(e.name)}; a set name is a file prefix, so it may not be empty, start with "." or hold a slash`);
@@ -2380,6 +2383,7 @@ function checkAlternates(
         if (typeof layer !== 'string' || readLayerTag(layer) === null) c.fail('CONFIG_TAG_KNOWN', path, `is ${show(layer)}; a See-through v3 tag or "${AUTHOR_PREFIX}<label>" is required; ${AUTHOR_LABEL_RULE}`);
       }
     }
+    if ('base_anchor' in e) c.problems.push(...baseAnchorProblems(e.base_anchor, `${at}.base_anchor`, new Set([...('parts' in e ? seenParts : baseSlots)].filter(n => !seenHides.has(n))), new Set(made.patches), isPlainObject(regions) ? new Set(Object.keys(regions).filter(n => !isPlainObject(meshes) || !Object.hasOwn(meshes, n))) : undefined));
     // Issue #664: a part the set draws on its front slot is one the set covers and a limb declares a front slot for.
     if ('front' in e) {
       if (!Array.isArray(e.front) || e.front.length === 0) {
