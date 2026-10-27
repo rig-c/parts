@@ -1042,7 +1042,18 @@ export type LimbLayout = { parts?: string[] } & (
   { before: LimbLayoutTarget; after?: never } | { after: LimbLayoutTarget; before?: never }
 );
 
+export interface WaistDeclaration {
+  top: string;
+  bottom: string;
+  upper: string;
+  lower: string;
+  bone: string;
+  constraint: string;
+}
+
 export interface CharacterConfig {
+  /** Explicit shared-waist construction. Absent, no pair is detected or altered. */
+  waist?: WaistDeclaration;
   depth?: DepthConfig;
   key: string;
   note?: string;
@@ -1404,7 +1415,7 @@ export interface AssembleConfig {
   proposed_rig_scale?: number;
 }
 
-const TOP_KEYS = ['key', 'generation', 'seethrough', 'assemble', 'limbs', 'bones', 'meshes', 'regions', 'motion', 'constraints', 'stops', 'turn', 'scene', 'cloth', 'proposed_rig_scale', 'requirements', 'motion_seams', 'depth'] as const;
+const TOP_KEYS = ['key', 'generation', 'seethrough', 'assemble', 'limbs', 'bones', 'meshes', 'regions', 'motion', 'constraints', 'stops', 'turn', 'scene', 'cloth', 'proposed_rig_scale', 'requirements', 'motion_seams', 'depth', 'waist'] as const;
 
 /**
  * The one partial entry point. It validates exactly what its door requires —
@@ -1436,6 +1447,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
   if (top === null) refuseIfAny(c.problems);
   const t = top as Record<string, Json>;
   if ('depth' in t) checkDepthConfig(c, t.depth);
+  if ('waist' in t) checkWaistDeclaration(c, t.waist);
   if ('key' in t) c.string('config.key', t.key);
   if ('generation' in t) checkGeneration(c, t.generation);
   else if (needed.includes('generation')) {
@@ -1660,6 +1672,7 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
   if (top === null) refuseIfAny(c.problems);
   const t = top as Record<string, Json>;
   if ('depth' in t) checkDepthConfig(c, t.depth);
+  if ('waist' in t) checkWaistDeclaration(c, t.waist);
   if ('key' in t) c.string('config.key', t.key);
   if ('generation' in t) checkGeneration(c, t.generation);
   if ('seethrough' in t) checkSeeThrough(c, t.seethrough);
@@ -1676,6 +1689,11 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
   if ('motion' in t) checkMotion(c, t.motion, names.bones, names.chains, 'regions' in t ? t.regions : undefined);
   if ('constraints' in t) checkConstraints(c, t.constraints, names.bones, names.parents);
   if ('stops' in t) checkStops(c, t.stops, names.bones, names.chains);
+  if ('waist' in t && isPlainObject(t.waist)) {
+    for (const field of ['upper', 'lower'] as const) if (typeof t.waist[field] === 'string' && !names.bones.has(t.waist[field])) c.fail('CONFIG_WAIST_BINDING', `config.waist.${field}`, `names ${JSON.stringify(t.waist[field])}; a declared bone is required`);
+    for (const [field, map] of [['top', t.meshes], ['bottom', t.regions]] as const) if (typeof t.waist[field] === 'string' && (!isPlainObject(map) || !Object.hasOwn(map, t.waist[field]))) c.fail('CONFIG_WAIST_BINDING', `config.waist.${field}`, `names ${JSON.stringify(t.waist[field])}; ${field === 'top' ? 'a declared mesh' : 'a declared region'} is required`);
+    if (typeof t.waist.bone === 'string' && names.bones.has(t.waist.bone)) c.fail('CONFIG_WAIST_NAME_FREE', 'config.waist.bone', `bone ${JSON.stringify(t.waist.bone)} already exists; an unused generated name is required`);
+  }
   const attached = attachedParts(t.meshes, t.regions);
   if ('motion_seams' in t) c.problems.push(...motionSeamProblems(t.motion_seams, attached, 'config.motion_seams', 'CONFIG_MOTION_SEAM'));
   const hasAltFace = hasAlternateFaceSet(t.assemble, [...parts, ...cuts]);
@@ -4136,6 +4154,7 @@ export function loadClothConfig(path: string): { key: string; cloth: ClothRecipe
   if (top === null) refuseIfAny(c.problems);
   const t = top as Record<string, Json>;
   if ('depth' in t) checkDepthConfig(c, t.depth);
+  if ('waist' in t) checkWaistDeclaration(c, t.waist);
   if ('key' in t) c.string('config.key', t.key);
   if ('cloth' in t) checkCloth(c, t.cloth);
   refuseIfAny(c.problems);
@@ -4601,4 +4620,13 @@ function checkDepthConfig(c: Check, raw: Json): void {
     }
     if ('atlas' in q && isPlainObject(q.layers) && Object.keys(q.layers).length > 0) c.fail('DEPTH_SOURCE_AMBIGUOUS', path, 'declares canvas and per-layer sheets together; choose one fallback explicitly');
   }
+}
+
+/** The operation has no implicit selector, fitted position or tuning coefficient. */
+function checkWaistDeclaration(c: Check, raw: Json): void {
+  const fields = ['top', 'bottom', 'upper', 'lower', 'bone', 'constraint'] as const;
+  const o = c.object('config.waist', raw, ['top', 'bottom', 'upper', 'lower', 'bone', 'constraint'], []);
+  if (o === null) return;
+  for (const field of fields) if (field in o) c.string(`config.waist.${field}`, o[field]);
+  for (const [a, b] of [['top', 'bottom'], ['upper', 'lower']] as const) if (typeof o[a] === 'string' && o[a] === o[b]) c.fail('CONFIG_WAIST_BINDING', `config.waist.${a}`, `matches ${b} ${JSON.stringify(o[b])}; two distinct names are required`);
 }

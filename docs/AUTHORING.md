@@ -1184,6 +1184,80 @@ lattice and contour modes a mesh may declare it:
 "bottomwear": { "grid": 25, "r": 10, "segments": [["hip", [232, 425], [601, 425]], "skirt_r", "skirt_c", "skirt_l"], "influences": { "maxInfluences": 6, "floor": "continuous" } }
 ```
 
+**A topwear hem over a rigid bottomwear (issue #650).** Only an explicit `waist`
+declaration enables this construction. Without it, even an eligible pair keeps
+the original bindings, rigid region, graph, motion, reports and images. A distance lattice whose
+`topwear` provenance declares exactly two distinct segment bones receives a waist
+driver only when one is the explicit region binding of a `bottomwear` part and the
+other is its descendant in the declared bone graph. Part and bone spellings do not
+select this rule. More than one eligible bottomwear partner, or multiple topwear
+drivers of one bottomwear region, is `RIG_WAIST_PAIR`;
+an explicit declaration without that qualifying pair is refused by name.
+The declaration selects one pair; no other pair is changed.
+
+Call the region bone H and the descendant C. The existing lattice art criterion is
+strictly alpha above 8, after any declared stray removal. The last such pixel row
+is the painted hem, rather than the padded image boundary. The lattice splits its
+original triangles at C's image-space origin, the H-only plateau and the hem row, retaining the
+original diagonal partition and rebuilding
+the outline, triangles, UVs and bindings together. At and above C's row, distance
+weights stay unchanged. Below it, the H-only plateau starts one source texel before the painted hem,
+with `t = min(1, (y - C.y) / (plateau - C.y))`. The
+uncut distance share `h` becomes `h + (1 - h) * t` for H and its complement for C;
+the declared cap and floor are then applied once. The whole last art pixel and the
+padding below it bind fully to H. `RIG_WAIST_HEIGHT` names a missing hem or a C
+origin not strictly above the plateau; `RIG_WAIST_BINDING` names a missing member of the
+declared pair. Alternate drawings use their own art and posed C origin. Heat,
+contour, automatic, influence and meshes with other binding sets keep their rules.
+The original triangle's native setup position and UV field are interpolated at
+each new point. Bind coordinates are inverted through the runtime frame, written
+with the existing six decimal places, then stored by the runtime as float32;
+UVs retain the interpolated value and the runtime's existing page-float32 step.
+This is the nearest representable field under those storage rules, not a promise
+of exact mathematical setup coordinates or universally identical raster pixels.
+Setup RGBA differences must be measured on the actual input, reporting differing
+pixels and the maximum absolute difference per channel. The waist acceptance
+allows at most one per channel. Literal whole-hem support is checked separately
+in the actual stored UV field; nominal source rows are not that proof.
+The stored-space check reads native page UVs through the promised renderer entry,
+requires integral unscaled page/source metadata at most 2048 on each edge, and
+intersects every complete last-row alpha>8 pixel cell with the UV triangles.
+Exact coverage and absence of positive non-H support are required; duplicate
+coverage cannot compensate for a hole, and an empty or missing read is refused.
+A source-coordinate rounding envelope alone is not an acceptance result.
+Paired alternate drawings retain their selected base or front slots, including
+hidden-base-slot semantics and deform target identities.
+
+
+Only the paired bottomwear region becomes a mesh. Its whole existing padded
+image is partitioned by the top's actual triangle arrangement. Inside that domain
+each bone receives the barycentric stored moments `w`, `w*x`, `w*y`, divided by
+the resulting positive weight to recover local coordinates; cap/floor is not
+applied again. Common vertices copy complete bindings. Outside the top domain,
+the supplied region rectangle's nodes retain H, and the arrangement connects the
+fields. The bottom's mesh report names the top driver's grid and measures the
+resulting geometry and art coverage. Alternate sets select their own paired
+field; a subset without a new bottom drawing receives a derived attachment on
+the existing bottom slot/image. A set hiding the top retains the rigid bottom.
+Explicit still pieces remain separate and retain their own binding.
+
+External numeric deforms on the changed top topology are expanded in the **old
+per-influence** index space, including sparse runs, odd `offset`, odd lengths,
+`fromVertex` and null setup keys. Per-bone delta moments are transferred by the
+same old-to-new barycentric correspondence. `RIG_WAIST_DEFORM_RUN` names an old
+run outside its array; `RIG_WAIST_DEFORM_SUPPORT` refuses a nonzero moment whose
+bone the new field no longer contains. Such a moment cannot be carried by another
+bone under arbitrary motion. `RIG_WAIST_DEFORM_REBIND` refuses nonzero numeric
+offsets after stops/turn changed those local binding frames without a proven
+correspondence. A whole-attachment transform is `RIG_WAIST_DEFORM_MODEL`: evaluating
+a nonlinear model at new nodes is not proven equivalent to its old piecewise
+field. `RIG_WAIST_DEFORM_REGION` refuses an authored timeline on the original
+bottom region, which had no mesh deform array. Refusals occur when external
+animations are merged, before the build gate or output. Other attachments,
+including unrelated face deforms, retain their existing path and are not refused.
+This changes the rig's response to motion; the consumer's motion and an owner's
+viewing of the result remain separate checks.
+
 **When to reach for it:** a part that folds where two chains meet, or at the end of a curl.
 The default does not move; a fold is today found by looking at a build that passes every
 bar, and this field is what there is to turn once one is seen.
@@ -3997,6 +4071,29 @@ says why each requirement exists and what breaks without it.
 | <a id="RIG_PNG_PRESENT"></a><a id="RIG_PNG_MATCHES_BOX"></a><a id="RIG_PART_HAS_ART"></a>`RIG_PNG_PRESENT`, `RIG_PNG_MATCHES_BOX`, `RIG_PART_HAS_ART` | a part's PNG is missing, the wrong size, or has no art pixel | re-run assemble |
 | <a id="RIG_NAME_RESOLVES"></a><a id="RIG_SEGMENT_DEFINED"></a><a id="RIG_CHAIN_POINTS"></a>`RIG_NAME_RESOLVES`, `RIG_SEGMENT_DEFINED`, `RIG_CHAIN_POINTS` | a segment names an undeclared bone, a bone with no `tip` and no next link, or a chain too short to make a link | that bone's `tip`, or write the segment out as `[bone, [x0,y0], [x1,y1]]` |
 | <a id="RIG_INFLUENCES_KEPT"></a>`RIG_INFLUENCES_KEPT` | a mesh's declared `influences` leaves a vertex with no bone: every capped share is under 0.03 (at or under it, for the continuous floor). The largest of k shares is at least 1/k, so this needs 34 or more kept bones; the default cap of 4 never reaches it (issue #284). The detail names the first vertex, how many more, and its largest share | declare `maxInfluences` 33 or less, or name fewer bones in `segments` |
+| <a id="RIG_LATTICE_STATION"></a>`RIG_LATTICE_STATION` | a requested lattice subdivision row is not finite | supply finite source-image row coordinates |
+| <a id="RIG_WAIST_PIVOT_SOURCE"></a>`RIG_WAIST_PIVOT_SOURCE` | paired original mesh layout/masks are absent, contact is empty/disjoint, or no bilateral lower station precedes the painted hem | retain the source layout and nonempty contiguous alpha support; do not guess a band height |
+| <a id="RIG_WAIST_PIVOT_NAME"></a>`RIG_WAIST_PIVOT_NAME` | the appended bone name exists, or the constraint name is empty | choose a new explicit bone and nonempty constraint name; do not replace a graph node |
+| <a id="RIG_WAIST_PIVOT_FRAME"></a>`RIG_WAIST_PIVOT_FRAME` | exact authored upper/lower rest frames are not unturned unit frames, or the source graph has constraints, turn or stops | retain the unconstrained original graph; authored eligibility uses exact frames, while inverse binding uses runtime frames; no epsilon or graph rewrite |
+| <a id="RIG_WAIST_COPY_SOURCE"></a>`RIG_WAIST_COPY_SOURCE` | supplied paired meshes/images or an existing upper source row are missing, a triangle crosses that row, or original upper support is lost | retain the stored source topology and an existing row above the annotated copy boundary; no replacement lattice or upper refinement |
+| <a id="RIG_WAIST_COPY_FRAME"></a>`RIG_WAIST_COPY_FRAME` | the supplied waist frame is absent, already drives the original top, has an incompatible graph/property contract or authored non-unit rest frame | supply the existing upper-parented world rotate-only frame; do not rewrite graph or motion |
+| <a id="RIG_WAIST_COPY_DEFORM"></a>`RIG_WAIST_COPY_DEFORM` | a targeted original top deform carries a nonzero numeric run or attachment transform whose per-bone moment cannot be transferred to the new waist frame | retain the original field or provide a proved composition; no silent deformation reinterpretation |
+| <a id="RIG_WAIST_COPY_COVERAGE"></a>`RIG_WAIST_COPY_COVERAGE` | a mixed-support triangle has positive source area below the copy boundary, or actual native UV/support correspondence is unavailable | retain the constrained source arrangement and native whole-area proof; inserted points alone are insufficient |
+| <a id="RIG_WAIST_PAIR"></a>`RIG_WAIST_PAIR` | a topwear has multiple eligible bottomwear partners, or a bottomwear has multiple topwear drivers | declare one unambiguous binding pair; no first-match selection |
+| <a id="RIG_WAIST_HEIGHT"></a>`RIG_WAIST_HEIGHT` | the painted hem is missing, or the upper origin does not precede its one-texel plateau | retain nonempty art and an upper origin strictly above the plateau |
+| <a id="RIG_WAIST_BINDING"></a>`RIG_WAIST_BINDING` | the uncut distance field does not retain both declared waist bones | declare both members of the eligible binding pair |
+| <a id="RIG_WAIST_GEOMETRY"></a>`RIG_WAIST_GEOMETRY` | a waist arrangement coordinate is not finite | supply finite source geometry |
+| <a id="RIG_WAIST_TOPOLOGY"></a>`RIG_WAIST_TOPOLOGY` | the arrangement has an invalid edge incidence, a pinched boundary or multiple boundary loops | supply one coherent closed mesh domain |
+| <a id="RIG_WAIST_CORRESPONDENCE"></a>`RIG_WAIST_CORRESPONDENCE` | a subdivision point lies outside the original supplied triangle domain | preserve the source triangle domain and its correspondence |
+| <a id="RIG_WAIST_SET_BINDING"></a>`RIG_WAIST_SET_BINDING` | a selected set no longer resolves the paired source meshes on their declared slots | preserve the selected top and bottom attachment identities |
+| <a id="RIG_WAIST_STORED_METADATA"></a>`RIG_WAIST_STORED_METADATA` | native atlas metadata is not integral, unscaled, size-bounded and consistent with the original drawing | read back the actual page and region metadata; require matching original dimensions and page edges at most2048 |
+| <a id="RIG_WAIST_STORED_UV"></a>`RIG_WAIST_STORED_UV` | native UVs, support or triangles are missing, nonfinite, not float32 or inconsistent | supply complete native float32 UVs with parallel support and valid triangles |
+| <a id="RIG_WAIST_STORED_EMPTY"></a>`RIG_WAIST_STORED_EMPTY` | the stored-hem drawing has no painted row | supply nonempty original art; an empty read cannot pass |
+| <a id="RIG_WAIST_DEFORM_REGION"></a>`RIG_WAIST_DEFORM_REGION` | an authored deform targets the original rigid bottomwear region | remove the invalid region deform; conversion cannot reinterpret it as a mesh timeline |
+| <a id="RIG_WAIST_DEFORM_MODEL"></a>`RIG_WAIST_DEFORM_MODEL` | an unproved whole-attachment transform targets a subdivided waist mesh | supply a representable numeric old-topology run |
+| <a id="RIG_WAIST_DEFORM_RUN"></a>`RIG_WAIST_DEFORM_RUN` | an old-topology deform run has invalid values, offsets or array bounds | supply a finite numeric run within the original per-influence array |
+| <a id="RIG_WAIST_DEFORM_REBIND"></a>`RIG_WAIST_DEFORM_REBIND` | a nonzero old local deform follows a stop or turn that changed the waist binding frames | retain an established correspondence for the rebound field before supplying nonzero local deltas |
+| <a id="RIG_WAIST_DEFORM_SUPPORT"></a>`RIG_WAIST_DEFORM_SUPPORT` | a nonzero old bone moment has no corresponding influence on the new vertex | preserve that bone support; another bone cannot carry its moment under arbitrary motion |
 | <a id="RIG_LATTICE_ONE_LOOP"></a>`RIG_LATTICE_ONE_LOOP` | the lattice over a part does not close into one outline even after the repair passes | that mesh's `grid` |
 | <a id="RIG_CONTROL_NAME_FREE"></a>`RIG_CONTROL_NAME_FREE` | a keyed, mesh-weighted bone needs `<bone>_ctl` and that name is taken | rename the declared bone |
 | <a id="RIG_HEAD_UP_NAME_FREE"></a>`RIG_HEAD_UP_NAME_FREE` | `config.bones` declares `head_up`, the bone the rig stage adds under `head` to carry the face's up axis (issue #250) | rename that bone |
@@ -5470,3 +5567,122 @@ art. An authored `parts.json` depth reference remains an active standalone
 `rig` declaration even without config opt-in: its file/size/color/opacity
 guards still apply. With binding inactive there is no added reference, file or
 legacy-byte change. #773 adds no image generation, geometry or motion model.
+### Explicit source-derived waist pivot stage
+
+`withWaistPivot` is a pure, explicit candidate-stage operation over an already
+built paired waist. It leaves the ordinary builder unchanged. The complete top
+attachment, original bones, limb attachments, images and motion object remain
+unchanged; one bone is appended under the declared upper chain. Its translation
+is the parent-upper frame evaluated at the source band TOP centre. This is an
+explicit definition, not a claim that a spatially blended top field equals that
+single parent frame. The candidate's native readings must report their difference.
+
+The source profile uses the existing alpha-above-eight masks: one contiguous
+shared column run, its central bottom upper cell edge, then the first later row
+whose bottom silhouette expands beyond both original side supports. That is the
+lower station, a conservative source boundary rather than an inferred semantic
+colour seam. The last painted bottom row is the end of a fixed linear waist-to-
+lower blend. Original triangles are split at those two rows, original UVs are
+interpolated through their original correspondence, and old stored setup points
+are inverse-bound through the fixed rest frames. The whole upper band uses the
+waist bone; the last painted hem has only lower-frame support. No coefficient,
+colour classifier, image edit or animation fitting is involved.
+
+The generated core transform explicitly declares `rotate` to `rotate`,
+`mixRotate: 1`, and every translation, scale and shear mix zero. A mix without
+its matching property is dead data in the native 4.3 contract. With no declared
+destination property, the native gate rejects the constraint as
+`A48_TRANSFORM_CONSTRAINT_NOT_MUTED_THROUGHOUT`: it drives no property. The
+planted missing-property control requires that exact refusal for its named
+constraint as the only failed assertion; an arbitrary exit 1 or a skipped check
+does not pass. It does not build successfully and then reach a no-op angle
+probe. The positive control still reads native rotation and translation. Both
+controls carry their commands, full stdout/stderr and SHA-256 hashes in their
+case details or errors before temporary cleanup. Native gating is mandatory
+before this stage can be called a compiled candidate; it does not
+establish visual or motion acceptance. Nonzero bottom deformation remains subject
+to the original region/deform refusal; the operation adds no motion adapter.
+
+The refusal rows are in the waist registry in section6. Eligibility measures
+authored unit frames with the core exact-frame evaluator; inverse binding keeps
+the core runtime-frame evaluator. No tolerance is applied to authored rotations.
+An existing constrained, turned or stopped graph remains ineligible.
+
+`withWaistSharedCopy` is a separate explicit operation on a supplied pivot
+output. It preserves that output's bottom attachment, bones, constraints, limb
+attachments, art and motion. Its copy boundary is an operational annotation:
+the existing shared source columns' first bottom alpha cells, connected at
+column centres and continued at each end across the top hull. It is not a
+semantic cloth detector. The upper anchor is the last existing stored UV row
+strictly above that boundary, including its stored rounding rather than a
+nominal regenerated row. The fixed smoothstep between those source boundaries
+transfers original per-bone weights and first moments into the existing waist
+frame. Each new waist moment inverse-binds the original corresponding rest
+point; no geometry is snapped to the band's edge.
+
+The lower original triangles are constrained along the boundary segments and
+existing edges. Boundary-interface points are propagated only below the upper
+anchor; original upper vertex UV/binding records and triangle fields are exact
+under the hull's required index permutation. Every triangle with positive area
+below the copy boundary must have only waist support, including side
+extensions. The native control repeats this test with actual runtime source
+UVs using exact binary arithmetic. A planted crossing triangle demonstrates why
+checking just inserted vertices is insufficient. Nonzero targeted top deforms
+and attachment transforms are refused by name until a composition into the new
+per-bone support is proved; original motion is never silently rewritten. A
+passing gate still does not establish picture, seam or motion acceptance.
+
+The rigid copy support starts conservatively above that annotated boundary by
+`(source height + max absolute boundary slope * source width) * 2^-23` source
+pixels. This is a storage guard, not an authored height or fit coefficient:
+rig-c's `f32` writes the shortest decimal naming the same float32 as its input,
+and Spine retains that decimal. A complete float32 rounding cell on normalized
+UVs `[0,1]` is bounded by `2^-23`. Each actual new UV is checked with exact
+arithmetic against that source-coordinate bound, including arithmetic before
+the conversion. The boundary's slope bound then keeps the represented mixed
+triangles above the **original** boundary. Native whole-area coverage still
+tests the original boundary without tolerance; its failure remains a failure.
+
+### Opting into the accepted shared waist
+
+```json
+"waist": {
+  "top": "shirt", "bottom": "skirt",
+  "upper": "chest", "lower": "hip",
+  "bone": "skirt_waist", "constraint": "skirt_waist_rotation"
+}
+```
+
+All six nonempty names are required. `top` names a two-bone distance lattice
+with topwear provenance; `bottom` names a rigid region with bottomwear
+provenance bound to `lower`. `upper` is the other segment bone and a descendant
+of `lower`. `bone` is a new generated name; `constraint` names its rotate-only
+constraint. Origins and the canvas come from the actual parts, including their
+existing padding. There are no authored offsets, gains or search parameters.
+`buildRig` and the `rig`/`build` commands compose the preserved pair, pivot and
+shared-copy stages. The pure `buildWaistPairSource` intermediate is for stage
+composition and controls; `buildRig` is the complete declared construction.
+
+This bounded construction requires one base pair without alternate or limb-owned
+replacements, unit rest frames and an unconstrained, unturned, unstopped graph.
+Unsupported input is refused, never silently changed to a different construction.
+Imported original keys remain unchanged; nonzero targeted top deforms or tracks
+driving the generated waist frame are refused before gated emission.
+
+The accepted integrated-walk artifact in
+[the final issue disposition](https://github.com/rig-c/parts/issues/650#issuecomment-6408838090)
+reported native seam ghost 0 and gap 0 over 380 samples. Its maximum raster jut
+was **7 metric pixels at frame 1 against the previous limit of 6**: the raw bar
+failed and acceptance explicitly retained that exception. The separate fixed
+emission audit at frame 57 counted 375 all-bracketed background pixels, including
+26 in the dropping half. Native seam gap 0 is not a whole-picture no-background
+claim. These figures belong to the preserved artifact and its recorded toolchain;
+they do not certify a new toolchain, input or packaging build. No tuning to meet
+6 pixels is part of this declaration.
+
+| rule | means | change |
+| --- | --- | --- |
+| <a id="CONFIG_WAIST_BINDING"></a>`CONFIG_WAIST_BINDING` | A declaration names an absent mesh/region/bone or repeats a pair member; supply the actual distinct bound objects | supply the actual distinct bound objects |
+| <a id="CONFIG_WAIST_NAME_FREE"></a>`CONFIG_WAIST_NAME_FREE` | The generated bone name already exists; declare an unused name | declare an unused name |
+| <a id="RIG_WAIST_DECLARATION"></a>`RIG_WAIST_DECLARATION` | Actual provenance, pair bindings or drawing ownership do not match the bounded declaration; supply the declared base two-bone mesh/rigid-region pair | supply the declared base pair |
+| <a id="RIG_WAIST_MOTION"></a>`RIG_WAIST_MOTION` | Imported tracks drive the generated waist frame; retain their original authored targets | retain the original authored targets |
