@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
 import { runBaseAnchorChecks } from './tools/check_base_anchor.ts';
 import { runDepthSheetChecks, runDepthSheetCoreChecks, runDepthSheetStillChecks } from './tools/check_depthsheets.ts';
+import { runWaistChecks } from './tools/check_waist.ts';
+import { runWaistDeclarationChecks } from './tools/check_waist_declaration.ts';
 import { runMotionSeamContractCases, runMotionSeamDocumentationCases, runStoppedMotionSeamCase } from './tools/fixtures/motion_seam_controls.ts';
 import { runExplicitMeshChecks } from './tools/check_explicitmesh.ts';
 import { runAlternateLayerChecks } from './tools/check_alternate_layers.ts';
@@ -50824,6 +50826,17 @@ function runCorePointerSuite(): number {
   return bad();
 }
 
+function runWaistSuite(): number {
+  section('waist: generated paired geometry and native package gates');
+  const { say, bad } = counter();
+  const dir = temp('waist');
+  try {
+    runWaistChecks(dir, (name, ok, detail) => say(name, ok, detail, 'generated flat controls; actual consumer storage and walk remain separate acceptance checks'));
+    runWaistDeclarationChecks(dir, (name, ok, detail) => say(name, ok, detail, 'explicit opt-in; generated controls do not establish visual acceptance'));
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+  return bad();
+}
+
 const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number | null]> = [
   ['raster-components', runComponentsSuite],
   ['raster-morph', runMorphSuite],
@@ -50842,6 +50855,7 @@ const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number 
   ['sheet', runSheetSuite],
   ['cli', runCliSuite],
   ['rig', runRigSuite],
+  ['waist', runWaistSuite],
   ['chain-inherit', runChainInheritSuite],
   ['contour', runContourSuite],
   ['contour-wiring', runContourWiringSuite],
@@ -51058,7 +51072,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
  */
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['check']],
-  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'subset-cover', 'foot-ownership', 'limb-slots', 'limb-layout', 'hybrid-limb', 'front-slot', 'arm-split-upgrade', 'alternate-tips', 'alternate-layers', 'contour-wiring', 'config', 'config-write', 'core-pointer', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
+  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'waist', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'subset-cover', 'foot-ownership', 'limb-slots', 'limb-layout', 'hybrid-limb', 'front-slot', 'arm-split-upgrade', 'alternate-tips', 'alternate-layers', 'contour-wiring', 'config', 'config-write', 'core-pointer', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
   ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'mesh-stats', 'remesh', 'retune', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
 ];
 
