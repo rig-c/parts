@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.69.0](https://github.com/rig-c/parts/compare/v1.68.0...v1.69.0) (2026-10-27)
+
+
+### Features
+
+* **alternates:** opt-in base_anchor keeps the base attachment's placement and takes only the alternate's art ([#781](https://github.com/rig-c/parts/issues/781)) ([770dad4](https://github.com/rig-c/parts/commit/770dad49445faf6e52271ef91cfff83ef973b24f)), closes [#780](https://github.com/rig-c/parts/issues/780)
+
 ## [1.68.0](https://github.com/rig-c/parts/compare/v1.67.0...v1.68.0) (2026-10-26)
 
 
