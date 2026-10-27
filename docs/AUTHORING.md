@@ -5561,8 +5561,11 @@ actual padded drawing `size` [width,height], and its `depth` reference. A blink
 still split has separate lower/upper scalar slices at the same row as the art;
 both keep original source provenance. Its references describe inputs for Core's
 `generator.depth = {image, near, zScale}`; sources are provenance, not Core
-fields. Existing authored weighted meshes are unchanged and do not consume the
-reference yet (#763 owns generators/turns). Measurement sheets are not packed
+fields. Since 1.68.0 (#777), [config.turn.roles](#3-configjson-field-by-field) consumes
+depth sheets for 2.5D head turns with grid surfaces and `yaw_dial`/`pitch_dial`
+controls; see [`CONFIG_TURN_ROLE_UNKNOWN`](#CONFIG_TURN_ROLE_UNKNOWN) and
+[`CONFIG_TURN_SURFACE_REQUIRED`](#CONFIG_TURN_SURFACE_REQUIRED).
+Authored weighted body meshes are unchanged and do not consume depth sheets. Measurement sheets are not packed
 art. An authored `parts.json` depth reference remains an active standalone
 `rig` declaration even without config opt-in: its file/size/color/opacity
 guards still apply. With binding inactive there is no added reference, file or
