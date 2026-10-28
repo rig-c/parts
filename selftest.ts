@@ -2982,8 +2982,10 @@ function runConfigSuite(): number {
   }
 
   // CF93 — issue #791: turnMovingPartPair(cfg) returns null when cfg.turn is absent and, when present, classifies
-  // moving pairs (surface vs unit/rear/physics, different unitDepths or bones, physics chain over another part, or
-  // different 1D depths) vs still pairs (two non-turn parts on the same bone, or two "unit" parts bound to the same bone).
+  // moving pairs (surface vs unit/rear/physics, two "unit" meshes on their own <part>_unit carriers even when both
+  // bind only "head", different unitDepths or bones, physics chain over another part, or different 1D depths) vs
+  // still pairs (two non-turn parts on the same bone, or two "unit" regions bound to the same bone), while treating
+  // an incomplete assemble-door mesh entry without bindings as binding nothing rather than throwing.
   const noTurnPred93 = turnMovingPartPair({});
   const rolePred93 = turnMovingPartPair({
     bones: [
@@ -3003,6 +3005,8 @@ function runConfigSuite(): number {
     },
     meshes: {
       hair_front: { grid: 8, r: 4, segments: ['bang'] },
+      ahoge: { grid: 8, r: 4, segments: ['head'] },
+      ribbon: { grid: 8, r: 4, segments: ['head'] },
     },
     constraints: [{ type: 'physics', name: 'bang0_phys', bone: 'bang0', rotate: 1, strength: 50 }],
     turn: {
@@ -3013,9 +3017,16 @@ function runConfigSuite(): number {
         lash_r: 'unit',
         eyewhite_l: 'unit',
         hair_front: 'unit',
+        ahoge: 'unit',
+        ribbon: 'unit',
         hair_back: 'rear',
       },
     },
+  });
+  const incompleteMeshPred93 = turnMovingPartPair({
+    regions: { face: 'head' },
+    meshes: { hair_front: {} as never },
+    turn: { roles: { face: 'surface', hair_front: 'unit' } },
   });
   const depthPred93 = turnMovingPartPair({
     regions: { face: 'head', hair_back: 'head', brow_r: 'head' },
@@ -3029,15 +3040,18 @@ function runConfigSuite(): number {
       rolePred93('face', 'eyewhite_r') === true &&
       rolePred93('face', 'hair_back') === true &&
       rolePred93('hair_front', 'topwear') === true &&
+      rolePred93('ahoge', 'ribbon') === true &&
       rolePred93('eyewhite_r', 'eyewhite_l') === true &&
       rolePred93('eyewhite_r', 'lash_r') === false &&
       rolePred93('topwear', 'neckwear') === false &&
       rolePred93('face', 'face') === false &&
+      incompleteMeshPred93 !== null &&
+      incompleteMeshPred93('face', 'hair_front') === true &&
       depthPred93 !== null &&
       depthPred93('face', 'hair_back') === true &&
       depthPred93('face', 'brow_r') === false,
-    `no turn -> ${String(noTurnPred93)}; surface/unit=${String(rolePred93?.('face', 'hair_front'))}, surface/rear=${String(rolePred93?.('face', 'hair_back'))}, physics/still=${String(rolePred93?.('hair_front', 'topwear'))}, unit(eye_r)/unit(eye_l)=${String(rolePred93?.('eyewhite_r', 'eyewhite_l'))}, unit(eye_r)/unit(eye_r)=${String(rolePred93?.('eyewhite_r', 'lash_r'))}, still/still=${String(rolePred93?.('topwear', 'neckwear'))}; 1D depths 0.4 vs 0.7=${String(depthPred93?.('face', 'hair_back'))}, 0.4 vs 0.4=${String(depthPred93?.('face', 'brow_r'))}`,
-    'issue #791: which part pairs move relative to each other in a turn is defined in one place from the config sections the rig stage reads (turn roles/depths and physics chains), returning null when no turn is declared',
+    `no turn -> ${String(noTurnPred93)}; surface/unit=${String(rolePred93?.('face', 'hair_front'))}, surface/rear=${String(rolePred93?.('face', 'hair_back'))}, physics/still=${String(rolePred93?.('hair_front', 'topwear'))}, unitMesh(head)/unitMesh(head)=${String(rolePred93?.('ahoge', 'ribbon'))}, unit(eye_r)/unit(eye_l)=${String(rolePred93?.('eyewhite_r', 'eyewhite_l'))}, unit(eye_r)/unit(eye_r)=${String(rolePred93?.('eyewhite_r', 'lash_r'))}, still/still=${String(rolePred93?.('topwear', 'neckwear'))}, incomplete mesh={} -> ${String(incompleteMeshPred93?.('face', 'hair_front'))}; 1D depths 0.4 vs 0.7=${String(depthPred93?.('face', 'hair_back'))}, 0.4 vs 0.4=${String(depthPred93?.('face', 'brow_r'))}`,
+    'issue #791: which part pairs move relative to each other in a turn is defined in one place from the config sections the rig stage reads (turn roles/depths, per-part <part>_unit mesh carriers and physics chains), returning null when no turn is declared',
   );
 
   // CF125 — issue #242: config.scene is an object with no field. {} and one holding only a record and an annotation
@@ -31292,6 +31306,31 @@ function runAssembleSuite(): number {
             },
           },
         });
+        const incompleteTurn791 = runTurnCase('incomplete-turn', {
+          bones: [
+            { name: 'head', parent: 'root', at: [20, 20] },
+            { name: 'eye_r', parent: 'head', at: [38, 15] },
+          ],
+          regions: {
+            handwear_l: 'root',
+            topwear: 'root',
+            face: 'head',
+            eyewhite_r: 'eye_r',
+            lash_r: 'eye_r',
+          },
+          meshes: {
+            hair_front: {},
+          },
+          turn: {
+            pivot: 55,
+            roles: {
+              face: 'surface',
+              eyewhite_r: 'unit',
+              lash_r: 'unit',
+              hair_front: 'unit',
+            },
+          },
+        });
         const partRec = (r: ReturnType<typeof assemble>, name: string): PartRecord =>
           r.parts.parts.find((p) => p.name === name) as PartRecord;
         const faceBefore = partRec(noTurn791, 'face');
@@ -31302,6 +31341,8 @@ function runAssembleSuite(): number {
         const hfAfter = partRec(withTurn791, 'hair_front');
         const lashAfter = partRec(withTurn791, 'lash_r');
         const twAfter = partRec(withTurn791, 'topwear');
+        const hfIncomplete = partRec(incompleteTurn791, 'hair_front');
+        const faceIncomplete = partRec(incompleteTurn791, 'face');
         const faceImgBefore = noTurn791.images.find((p) => p.record.name === 'face') as PlacedPart;
         const faceImgAfter = withTurn791.images.find((p) => p.record.name === 'face') as PlacedPart;
         const pxAt = (p: PlacedPart, rx: number, ry: number): string => {
@@ -31317,11 +31358,13 @@ function runAssembleSuite(): number {
             hfAfter.opaque_px === hfBefore.opaque_px + 10 &&
             faceAfter.seam_override_px === 0 &&
             pxAt(faceImgAfter, 18, 15) === '100,60,250,255' &&
+            hfIncomplete.fringe_pushed_back === undefined &&
+            faceIncomplete.seam_override_px === 0 &&
             JSON.stringify(lashBefore.fringe_pushed_back) === '[{"part":"eyewhite_r","px":10}]' &&
             JSON.stringify(lashAfter.fringe_pushed_back) === '[{"part":"eyewhite_r","px":10}]' &&
             JSON.stringify(twBefore.fringe_pushed_back) === '[{"part":"handwear_l","px":20}]' &&
             JSON.stringify(twAfter.fringe_pushed_back) === '[{"part":"handwear_l","px":20}]',
-          `before turn: hair_front fringe_pushed_back=${JSON.stringify(hfBefore.fringe_pushed_back)}, face seam_override_px=${faceBefore.seam_override_px} (pixel 18,15 ${pxAt(faceImgBefore, 18, 15)}); with turn: hair_front fringe_pushed_back=${JSON.stringify(hfAfter.fringe_pushed_back ?? null)} (opaque_px ${hfBefore.opaque_px} -> ${hfAfter.opaque_px}), face seam_override_px=${faceAfter.seam_override_px} (pixel 18,15 ${pxAt(faceImgAfter, 18, 15)}); still pairs lash_r=${JSON.stringify(lashAfter.fringe_pushed_back)}, topwear=${JSON.stringify(twAfter.fringe_pushed_back)}`,
+          `before turn: hair_front fringe_pushed_back=${JSON.stringify(hfBefore.fringe_pushed_back)}, face seam_override_px=${faceBefore.seam_override_px} (pixel 18,15 ${pxAt(faceImgBefore, 18, 15)}); with turn: hair_front fringe_pushed_back=${JSON.stringify(hfAfter.fringe_pushed_back ?? null)} (opaque_px ${hfBefore.opaque_px} -> ${hfAfter.opaque_px}), face seam_override_px=${faceAfter.seam_override_px} (pixel 18,15 ${pxAt(faceImgAfter, 18, 15)}); incomplete mesh={}: hair_front fringe_pushed_back=${JSON.stringify(hfIncomplete.fringe_pushed_back ?? null)}, face seam_override_px=${faceIncomplete.seam_override_px}; still pairs lash_r=${JSON.stringify(lashAfter.fringe_pushed_back)}, topwear=${JSON.stringify(twAfter.fringe_pushed_back)}`,
           'issue #791: when a turn moves two parts relative to each other (surface vs unit/physics), clearing the upper fringe carves a gap and baking the upper composite colour into the lower part leaves dark streaks when the parts slide apart; still pairs keep the still-stack cleanup',
         );
       } finally {

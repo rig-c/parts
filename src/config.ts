@@ -792,27 +792,86 @@ export interface PartBinding {
  */
 export function partBoundBones(b: PartBinding): Map<string, string[]> {
   const chains = new Map<string, string[]>();
-  for (const e of b.bones) if ('chain' in e) chains.set(e.chain, e.points.map((_, k) => `${e.chain}${k}`));
+  for (const e of Array.isArray(b.bones) ? b.bones : []) {
+    if (isPlainObject(e) && 'chain' in e && typeof e.chain === 'string' && Array.isArray(e.points)) {
+      chains.set(e.chain, e.points.map((_, k) => `${e.chain}${k}`));
+    }
+  }
   const out = new Map<string, string[]>();
   const bind = (part: string, bone: string): void => {
     const list = out.get(part) ?? [];
     if (!list.includes(bone)) list.push(bone);
     out.set(part, list);
   };
-  for (const [part, m] of Object.entries(b.meshes)) {
-    if ('explicit' in m) {
-      for (const row of explicitWeightRows(m)) for (const w of row) bind(part, w.bone);
-      if (m.explicit.islands !== undefined) for (const bName of explicitSlotBones(m)) bind(part, bName);
-      continue;
+  if (isPlainObject(b.meshes)) {
+    for (const [part, m] of Object.entries(b.meshes)) {
+      if (isRecordKey(part) || !isPlainObject(m)) continue;
+      if ('explicit' in m && isPlainObject(m.explicit)) {
+        const addWeights = (ws: Json): void => {
+          if (!Array.isArray(ws)) return;
+          for (const row of ws) {
+            if (!Array.isArray(row)) continue;
+            for (const w of row) {
+              if (isPlainObject(w) && typeof w.bone === 'string') bind(part, w.bone);
+            }
+          }
+        };
+        if (Array.isArray(m.explicit.islands)) {
+          for (const isl of m.explicit.islands) {
+            if (isPlainObject(isl)) addWeights(isl.weights);
+          }
+          const seg0 =
+            Array.isArray(m.segments) && m.segments.length > 0
+              ? typeof m.segments[0] === 'string'
+                ? m.segments[0]
+                : Array.isArray(m.segments[0]) && typeof m.segments[0][0] === 'string'
+                  ? m.segments[0][0]
+                  : undefined
+              : undefined;
+          for (const isl of m.explicit.islands) {
+            if (!isPlainObject(isl)) continue;
+            const bName = typeof isl.bone === 'string' ? isl.bone : seg0;
+            if (bName !== undefined) bind(part, bName);
+          }
+        } else {
+          addWeights(m.explicit.weights);
+        }
+        continue;
+      }
+      if (Array.isArray(m.segments)) {
+        for (const sg of m.segments) {
+          if (typeof sg === 'string') {
+            for (const l of chains.get(sg) ?? [sg]) bind(part, l);
+          } else if (Array.isArray(sg) && typeof sg[0] === 'string') {
+            bind(part, sg[0]);
+          }
+        }
+      }
+      if ('contour' in m && isPlainObject(m.contour)) {
+        if (Array.isArray(m.contour.regions)) {
+          for (const rg of m.contour.regions) {
+            if (isPlainObject(rg) && typeof rg.bone === 'string') bind(part, rg.bone);
+          }
+        }
+        if (isPlainObject(m.contour.bust)) {
+          bind(part, typeof m.contour.bust.bone_r === 'string' ? m.contour.bust.bone_r : DEFAULT_BUST_BONE_R);
+          bind(part, typeof m.contour.bust.bone_l === 'string' ? m.contour.bust.bone_l : DEFAULT_BUST_BONE_L);
+        }
+      }
+      if ('auto' in m && isPlainObject(m.auto) && Array.isArray(m.auto.regions)) {
+        for (const rg of m.auto.regions) {
+          if (isPlainObject(rg) && typeof rg.bone === 'string') bind(part, rg.bone);
+        }
+      }
     }
-    for (const sg of m.segments) {
-      if (typeof sg !== 'string') bind(part, sg[0]);
-      else for (const l of chains.get(sg) ?? [sg]) bind(part, l);
-    }
-    if ('contour' in m) for (const rg of contourRegionsOf(m.contour)) bind(part, rg.bone);
-    if ('auto' in m) for (const rg of m.auto.regions ?? []) if (weightsABone(rg)) bind(part, rg.bone);
   }
-  for (const [part, region] of Object.entries(b.regions)) bind(part, regionBone(region));
+  if (isPlainObject(b.regions)) {
+    for (const [part, region] of Object.entries(b.regions)) {
+      if (isRecordKey(part)) continue;
+      const bone = rawRegionBone(region);
+      if (typeof bone === 'string') bind(part, bone);
+    }
+  }
   return out;
 }
 
@@ -890,6 +949,11 @@ export function turnMovingPartPair(
     }
   }
 
+  const meshParts = isPlainObject(cfg.meshes)
+    ? new Set(Object.keys(cfg.meshes).filter((k) => !isRecordKey(k)))
+    : new Set<string>();
+  const isMeshPart = (p: string): boolean => meshParts.has(p) || meshParts.has(baseName(p));
+
   const bound =
     isPlainObject(cfg.meshes) || isPlainObject(cfg.regions)
       ? partBoundBones({
@@ -944,6 +1008,7 @@ export function turnMovingPartPair(
       if (rA === undefined && rB === undefined) continue;
       if (rA !== rB) return true;
       if (rA === 'surface') return true;
+      if (rA === 'unit' && (isMeshPart(a) || isMeshPart(b) || !sameNonEmptyBones(bA, bB))) return true;
       const ud = g.unitDepths;
       if (ud !== undefined) {
         const dA = ud[a] ?? ud[baseName(a)] ?? (bA.length === 1 ? ud[bA[0]] : undefined);
