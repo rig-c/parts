@@ -604,7 +604,7 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
       cEarOrd.includes('CONFIG_TURN_EAR_DRAW_ORDER') &&
       cResBone.includes('CONFIG_TURN_BONE_FREE') &&
       cResUnitBone.includes('CONFIG_TURN_BONE_FREE') &&
-      cSurfMesh.includes('CONFIG_TURN_SURFACE_REGION') &&
+      cSurfMesh.length === 0 &&
       cUnitMeshOutside.includes('CONFIG_TURN_UNIT_MESH_BONES') &&
       cUnitMeshSharedOk &&
       cNoDepth.includes('RIG_TURN_SURFACE_DEPTH_REQUIRED') &&
@@ -877,7 +877,7 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
       cbRigUnattached.includes('RIG_NAME_RESOLVES') &&
       cbSliderHead.includes('CONFIG_TURN_SLIDER_NAME_FREE') &&
       cbSliderCst.includes('CONFIG_TURN_SLIDER_NAME_FREE') &&
-      cbSurfMesh.includes('CONFIG_TURN_SURFACE_REGION') &&
+      cbSurfMesh.length === 0 &&
       cbUnitMeshBones.includes('CONFIG_TURN_UNIT_MESH_BONES'),
     `noDepth=${cbNoDepth.join(',')}; partMissing=${cbPartMissing.join(',')}; unattached=${cbUnattached.join(',')}; rigUnattached=${cbRigUnattached.join(',')}; sliderHead=${cbSliderHead.join(',')}; sliderCst=${cbSliderCst.join(',')}; surfMesh=${cbSurfMesh.join(',')}; unitMeshBones=${cbUnitMeshBones.join(',')}`,
   );

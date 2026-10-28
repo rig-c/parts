@@ -28,8 +28,8 @@
  * that the depth maps do not carry relief inside a layer, so a part moves as
  * one piece. Pure: no file, no clock.
  */
-import { computeWorldTransforms, toBoneLocalVector, toWorld, type BoneTransform } from './coords.ts';
-import { extendDepthSilhouette, type PartDepthReference } from './depthsheets.ts';
+import { computeWorldTransforms, setupToPaintingPoint, toBoneLocalVector, toWorld, type BoneTransform } from './coords.ts';
+import { extendDepthSilhouette, sampleDepthFloat, type PartDepthReference } from './depthsheets.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
 import type { Raster } from './raster/index.ts';
 import { pyRound } from './round.ts';
@@ -1480,6 +1480,14 @@ export interface Depth25DTurnOptions {
   stills: Readonly<Record<string, { row: number; bone: string }>>;
   boneLandmarks: ReadonlyMap<string, readonly [number, number]>;
   hasAlternateFaceSet: boolean;
+  /** Existing weighted attachments; offsets are emitted per binding, never per UV. */
+  surfaceMeshes?: ReadonlyArray<{
+    part: string;
+    slot: string;
+    attachment: string;
+    weights: ReadonlyArray<ReadonlyArray<{ bone: string; x: number; y: number; weight: number }>>;
+    canvas: readonly [number, number];
+  }>;
 }
 
 interface Depth25DGroupSpec {
@@ -1752,6 +1760,7 @@ function buildDepth25DTurnGroup(
       });
     }
     for (const [part, { zRef }] of surfaceSheets) {
+      if (opts.surfaceMeshes?.some((m) => m.part === part)) continue;
       const surfShift = pyRound(-zRef, 4);
       if (surfShift !== 0) {
         tracks.push({
@@ -1800,7 +1809,59 @@ function buildDepth25DTurnGroup(
         };
       }>;
     }> = [];
-    for (const part of surfaceSheets.keys()) {
+    for (const [part, { rec, ext, zRef }] of surfaceSheets) {
+      const authored = opts.surfaceMeshes?.filter((m) => m.part === part) ?? [];
+      if (authored.length > 0) {
+        const world = computeWorldTransforms(rig.bones);
+        for (const mesh of authored) {
+          const vertices = mesh.weights.map((row, index) => {
+            let wx = 0, wy = 0, total = 0;
+            for (const w of row) {
+              const frame = world.get(w.bone);
+              if (frame === undefined) {
+                problems.push({ code: 'RIG_TURN_SURFACE_MESH_BINDINGS', object: `surface mesh "${mesh.slot}/${mesh.attachment}" vertex ${index}`, detail: `names missing bone "${w.bone}"; every influence must resolve in the final setup` });
+                continue;
+              }
+              // A unit/rear mesh sharing this root would move our bindings too.
+              let ancestor = rig.bones.find((b) => b.name === w.bone);
+              while (ancestor !== undefined) {
+                if ([FACESHIFT_BONE, REAR_SHIFT_BONE, BODYSHIFT_BONE, BODY_REAR_SHIFT_BONE].includes(ancestor.name)) {
+                  problems.push({ code: 'RIG_TURN_SURFACE_MESH_BINDINGS', object: `${group.fieldPrefix}.roles.${part}`, detail: `binds "${w.bone}" through turn carrier "${ancestor.name}" shared with another role; surface mesh bindings must retain their authored frame` });
+                  break;
+                }
+                ancestor = rig.bones.find((b) => b.name === ancestor?.parent);
+              }
+              const [x, y] = toWorld(frame, w.x, w.y);
+              wx += x * w.weight; wy += y * w.weight; total += w.weight;
+            }
+            if (!Number.isFinite(total) || Math.abs(total - 1) > 0.0001) {
+              problems.push({ code: 'RIG_TURN_SURFACE_MESH_BINDINGS', object: `surface mesh "${mesh.slot}/${mesh.attachment}" vertex ${index}`, detail: `has influence sum ${total}; weights closing at 1 are required to sample a setup position` });
+            }
+            const [cx, cy] = setupToPaintingPoint([wx, wy], mesh.canvas, mesh.canvas);
+            const z = levelToDepthZ(sampleDepthFloat(ext, cx - rec.x, cy - rec.y), rec.depth);
+            return { row, depth: pivot + z - zRef };
+          });
+          if (problems.length > startProblems) continue;
+          deform.push({
+            slot: mesh.slot,
+            attachment: mesh.attachment,
+            keys: keyList.map(({ t, deg }) => deg === 0 ? { t } : {
+              t,
+              // Spine's weighted deform is one bind-space pair per influence.
+              // Do not multiply by weight: the runtime performs that sum once.
+              vertices: vertices.flatMap(({ row, depth }) => {
+                const d = -depth * Math.sin(deg * Math.PI / 180);
+                return row.flatMap((w) => {
+                  const frame = world.get(w.bone)!; // every influence resolved before emitting keys
+                  const [x, y] = toBoneLocalVector(frame, kind === 'yaw' ? d : 0, kind === 'pitch' ? d : 0);
+                  return [pyRound(x, 6), pyRound(y, 6)];
+                });
+              }),
+            }),
+          });
+        }
+        continue;
+      }
       deform.push({
         slot: part,
         attachment: part,

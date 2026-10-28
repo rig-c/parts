@@ -2435,12 +2435,8 @@ export function buildWaistPairSource(
     const isBodySurface = cfg.turn?.body?.roles?.[p.name] === 'surface';
     if (isHeadSurface || isBodySurface) {
       const roleField = isHeadSurface ? `config.turn.roles.${p.name}` : `config.turn.body.roles.${p.name}`;
-      if (cfg.meshes[p.name] !== undefined) {
-        fail(
-          'CONFIG_TURN_SURFACE_REGION',
-          roleField,
-          `declares "${p.name}" as "surface", and config.meshes.${p.name} also declares a mesh for "${p.name}"; a 2.5D turn "surface" part must be attached in config.regions so the rig stage can promote it to a depth-backed grid mesh`,
-        );
+      if (cfg.meshes[p.name] !== undefined && configuredAlts.some((a) => (a.parts === undefined || a.parts.includes(p.name)) && !(a.hides ?? []).includes(p.name))) {
+        fail('RIG_TURN_SURFACE_MESH_ATTACHMENT', roleField, `declares an alternate drawing for surface mesh "${p.name}"; alternate drawings need their own registered depth sampling frame`);
         continue;
       }
       if (p.depth === undefined || scalar === undefined) {
@@ -3134,7 +3130,7 @@ export function buildWaistPairSource(
             unitMeshBones.push({ name: turnUnitBone(p.name), parent: FACESHIFT_BONE, x: 0, y: 0 });
             continue;
           }
-          if (roles[p.name] !== 'surface') continue;
+          if (roles[p.name] !== 'surface' || cfg.meshes[p.name] !== undefined) continue;
           const [cols, rows] = resolveTurnGrid(cfg.turn, p.name);
           totalGridTriangles += 2 * (cols - 1) * (rows - 1);
           const cx = p.x + p.w / 2;
@@ -3324,7 +3320,7 @@ export function buildWaistPairSource(
             unitMeshBones.push({ name: turnUnitBone(p.name), parent: BODYSHIFT_BONE, x: 0, y: 0 });
             continue;
           }
-          if (bodyRoles[p.name] !== 'surface') continue;
+          if (bodyRoles[p.name] !== 'surface' || cfg.meshes[p.name] !== undefined) continue;
           const [cols, rows] = resolveTurnGrid(bodySpec, p.name, cfg.turn);
           totalGridTriangles += 2 * (cols - 1) * (rows - 1);
           const cx = p.x + p.w / 2;
@@ -3665,6 +3661,7 @@ export function buildWaistPairSource(
       stills,
       boneLandmarks,
       hasAlternateFaceSet,
+      surfaceMeshes: turnSurfaceMeshes(cfg, rig, parts.rig_size),
     });
   }
   bindFaceSurfaceDeform(motion, (merged) => {
@@ -3680,6 +3677,7 @@ export function buildWaistPairSource(
         stills,
         boneLandmarks,
         hasAlternateFaceSet,
+        surfaceMeshes: turnSurfaceMeshes(cfg, rig, parts.rig_size),
       });
     }
     if (cfg.turn?.roles === undefined && (cfg.turn === undefined || cfg.turn.body === undefined || cfg.turn.depths !== undefined)) {
@@ -4176,4 +4174,25 @@ function refuseSharedWaistMotion(motion: MotionSpec, top: string, bone: string):
     const value: unknown = entry;
     if (record(value) && Array.isArray(value.tracks) && value.tracks.some((track) => record(track) && track.bone === bone)) refuse('RIG_WAIST_MOTION', `animation "${animation}" drives generated waist bone "${bone}"; original tracks must retain their authored targets`);
   }
+}
+
+/** Final named bindings, including explicit islands; grid surfaces keep their Core path. */
+function turnSurfaceMeshes(cfg: CharacterConfig, rig: RigSpec, canvas: readonly [number, number]) {
+  const meshes = [];
+  for (const part of Object.keys(cfg.meshes)) {
+    if (cfg.turn?.roles?.[part] !== 'surface' && cfg.turn?.body?.roles?.[part] !== 'surface') continue;
+    for (const slot of rig.slots) {
+      if (slot.name !== part && !slot.name.startsWith(`${part}__island`)) continue;
+      for (const [attachment, att] of Object.entries(rig.skins.default[slot.name] ?? {})) {
+        if (!('type' in att) || att.weights === undefined || att.weights.length === 0) {
+          throw new PartsError([{ code: 'RIG_TURN_SURFACE_MESH_BINDINGS', object: `surface mesh "${slot.name}/${attachment}"`, detail: 'requires an authored weighted mesh with named bindings; a region or unresolved generator cannot carry weighted depth offsets' }]);
+        }
+        if (attachment !== part && !slot.name.startsWith(`${part}__island`)) {
+          throw new PartsError([{ code: 'RIG_TURN_SURFACE_MESH_ATTACHMENT', object: `surface mesh "${slot.name}/${attachment}"`, detail: `requires the base drawing "${part}"; alternate drawings need their own registered depth sampling frame` }]);
+        }
+        meshes.push({ part, slot: slot.name, attachment, weights: att.weights, canvas });
+      }
+    }
+  }
+  return meshes;
 }
