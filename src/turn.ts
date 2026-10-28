@@ -1512,12 +1512,25 @@ interface Depth25DGroupSpec {
   }>;
 }
 
+interface Depth25DTurnRig {
+  bones: Array<{ name: string; parent?: string; x: number; y: number; rotation?: number; length?: number }>;
+  slots: Array<{ name: string; bone: string; attachment: string | null }>;
+  constraints?: Array<Record<string, unknown>>;
+  stops?: ReadonlyArray<{ links: readonly string[] }>;
+}
+
+/** Stop draw bones share their link's setup frame; Core emits them later. */
+function surfaceSetupGraph(rig: Depth25DTurnRig) {
+  const aliases = new Map<string, string>();
+  for (const stop of rig.stops ?? []) for (const link of stop.links) aliases.set(`${link}_d`, link);
+  const resolve = (name: string): string => aliases.get(name) ?? name;
+  // Like flattenRig: resolve parents as well as weights, without changing the rig.
+  const bones = rig.bones.map(b => b.parent === undefined ? b : { ...b, parent: resolve(b.parent) });
+  return { bones, resolve };
+}
+
 function buildDepth25DTurnGroup(
-  rig: {
-    bones: Array<{ name: string; parent?: string; x: number; y: number; rotation?: number; length?: number }>;
-    slots: Array<{ name: string; bone: string; attachment: string | null }>;
-    constraints?: Array<Record<string, unknown>>;
-  },
+  rig: Depth25DTurnRig,
   motion: {
     groups?: Record<string, string[]>;
     animations: Record<string, unknown>;
@@ -1814,7 +1827,8 @@ function buildDepth25DTurnGroup(
     for (const [part, { rec, ext, zRef }] of surfaceSheets) {
       const authored = opts.surfaceMeshes?.filter((m) => m.part === part) ?? [];
       if (authored.length > 0) {
-        const world = computeWorldTransforms(rig.bones);
+        const setup = surfaceSetupGraph(rig);
+        const world = computeWorldTransforms(setup.bones);
         for (const mesh of authored) {
           // An all-zero timeline can overwrite another slider's deform (Core A40).
           // A sibling with no positive binding in this group owns no timeline here.
@@ -1822,19 +1836,19 @@ function buildDepth25DTurnGroup(
           const vertices = mesh.weights.map((row, index) => {
             let wx = 0, wy = 0, total = 0;
             for (const w of row) {
-              const frame = world.get(w.bone);
+              const frame = world.get(setup.resolve(w.bone));
               if (frame === undefined) {
                 problems.push({ code: 'RIG_TURN_SURFACE_MESH_BINDINGS', object: `surface mesh "${mesh.slot}/${mesh.attachment}" vertex ${index}`, detail: `names missing bone "${w.bone}"; every influence must resolve in the final setup` });
                 continue;
               }
               // A unit/rear mesh sharing this root would move our bindings too.
-              let ancestor = rig.bones.find((b) => b.name === w.bone);
+              let ancestor = setup.bones.find((b) => b.name === setup.resolve(w.bone));
               while (ancestor !== undefined) {
                 if ([FACESHIFT_BONE, REAR_SHIFT_BONE, BODYSHIFT_BONE, BODY_REAR_SHIFT_BONE].includes(ancestor.name)) {
                   problems.push({ code: 'RIG_TURN_SURFACE_MESH_BINDINGS', object: `${group.fieldPrefix}.roles.${part}`, detail: `binds "${w.bone}" through turn carrier "${ancestor.name}" shared with another role; surface mesh bindings must retain their authored frame` });
                   break;
                 }
-                ancestor = rig.bones.find((b) => b.name === ancestor?.parent);
+                ancestor = setup.bones.find((b) => b.name === ancestor?.parent);
               }
               const [x, y] = toWorld(frame, w.x, w.y);
               wx += x * w.weight; wy += y * w.weight; total += w.weight;
@@ -1858,7 +1872,7 @@ function buildDepth25DTurnGroup(
                 const d = -depth * Math.sin(deg * Math.PI / 180);
                 return row.flatMap((w) => {
                   if (mesh.groups !== undefined && (w.weight === 0 || mesh.groups.get(w.bone) !== (group.fieldPrefix === 'config.turn' ? 'head' : 'body'))) return [0, 0];
-                  const frame = world.get(w.bone)!; // every influence resolved before emitting keys
+                  const frame = world.get(setup.resolve(w.bone))!; // every influence resolved before emitting keys
                   const [x, y] = toBoneLocalVector(frame, kind === 'yaw' ? d : 0, kind === 'pitch' ? d : 0);
                   return [pyRound(x, 6), pyRound(y, 6)];
                 });
@@ -1947,11 +1961,7 @@ function buildDepth25DTurnGroup(
  * `derive` and `deform` `transform` (`depth: true, narrowing: false`).
  */
 export function buildDepth25DTurn(
-  rig: {
-    bones: Array<{ name: string; parent?: string; x: number; y: number; rotation?: number; length?: number }>;
-    slots: Array<{ name: string; bone: string; attachment: string | null }>;
-    constraints?: Array<Record<string, unknown>>;
-  },
+  rig: Depth25DTurnRig,
   motion: {
     groups?: Record<string, string[]>;
     animations: Record<string, unknown>;
@@ -1963,11 +1973,12 @@ export function buildDepth25DTurn(
 
   // Only a surface opt-in spanning both authored subtrees changes paths (#796).
   // Single-group meshes keep #795's role and bytes, including explicit islands.
-  const parents = new Map(rig.bones.map((b) => [b.name, b.parent]));
+  const setup = surfaceSetupGraph(rig);
+  const parents = new Map(setup.bones.map((b) => [b.name, b.parent]));
   const bodyRoot = opts.turn.body?.bone ?? (parents.has('chest') ? 'chest' : 'hip');
   const descends = (bone: string, root: string): boolean => {
     const seen = new Set<string>();
-    for (let cur: string | undefined = bone; cur !== undefined && !seen.has(cur); cur = parents.get(cur)) {
+    for (let cur: string | undefined = setup.resolve(bone); cur !== undefined && !seen.has(cur); cur = parents.get(cur)) {
       if (cur === root) return true;
       seen.add(cur);
     }
