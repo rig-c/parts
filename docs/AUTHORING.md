@@ -41,7 +41,7 @@ with `flattenRig(built)`, not with the built file.
 | what | why | how |
 | --- | --- | --- |
 | [Bun](https://bun.sh) 1.2 or later | rig-parts and rig-c are Bun programs | `npm install -g @rig-c/parts` installs the command; it says so if Bun is missing |
-| [rig-c](https://www.npmjs.com/package/rig-c) | compiles, gates, packs and renders every rig; rig-parts writes no Spine data itself | installed with rig-parts as a dependency (`node_modules/.bin/rigc`); with no Spine runtime beside it, it gates with its own validator, and `rigc --version` says `entry: cli_core.ts` |
+| [@rig-c/core](https://www.npmjs.com/package/@rig-c/core) | compiles, gates, packs and renders every rig; rig-parts writes no Spine data itself | installed with rig-parts as the literal dependency `rig-c` (`node_modules/.bin/rigc`); with no Spine runtime beside it, it gates with its own validator, and `rigc --version` says `entry: cli_core.ts` |
 | [See-through](https://github.com/shitagaki-lab/see-through), somewhere | the layer decomposition is the input | any route in README *Getting See-through layers*; it runs twice per character, outside this tool |
 | a GPU, wherever See-through runs | See-through is a diffusion model | nothing in rig-parts itself uses a GPU |
 

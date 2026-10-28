@@ -1,4 +1,4 @@
-# rig-parts
+# @rig-c/parts — CLI `rig-parts`
 
 **AI-authored 2D character rigs from one anime painting, verified before they
 are written.** rig-parts generates no images. The painting and See-through layers
@@ -157,7 +157,7 @@ atlas written by anything else would have no oracle behind it.
 | stage | tool | what it owns |
 | --- | --- | --- |
 | painting + See-through layers → parts and specs | **rig-parts** (npm `@rig-c/parts`) | the merge of two runs, the measurements, the rig spec and motion spec |
-| specs → Spine skeleton data | **[rig-c](https://github.com/rig-c/core)** (npm `rig-c`) | compile, the gate (rigc's own validator in an install; the round trip through `spine-core` where the runtime is beside it, as in this repository's CI), the named assertions, the packer, the renderer |
+| specs → Spine skeleton data | **[@rig-c/core](https://github.com/rig-c/core)** (canonical npm `@rig-c/core`; this package's dependency is literally `rig-c`) | compile, the gate (rigc's own validator in an install; the round trip through `spine-core` where the runtime is beside it, as in this repository's CI), the named assertions, the packer, the renderer |
 | skeleton data → a page | **[rig-play](https://github.com/rig-c/play)** (npm `@rig-c/play`; formerly spine-html), a sibling project | a DOM renderer; rigc's `rig-play` profile is its policy, and every build here is gated under that profile as well as under `spine` |
 
 rig-parts never writes Spine data itself. Everything on disk under `check/build/`
@@ -512,11 +512,11 @@ as this port wrote it in issue #227).
 [Bun](https://bun.sh) 1.2 or later. `npm i -D @rig-c/parts` installs the
 `rig-parts` command (`npm install -g @rig-c/parts` puts it on `PATH`); it hands off
 to Bun and says so in one sentence if Bun is not on `PATH`. **`@rig-c/parts` is the
-package's name; versions 1.0.0-rc.1 to 1.5.3 were published as `rig-parts`, and
+package's canonical name; versions 1.0.0-rc.1 to 1.5.3 were published as `rig-parts`, the convenience install name, and
 versions up to 0.16.0
-as `spine-parts`, its former name**, and the install keeps a `spine-parts` command
+as `spine-parts`, the legacy install name**, and the install keeps a `spine-parts` command
 beside `rig-parts` for the transition, the same launcher under both names. On npm
-both former names stay published beside `@rig-c/parts` at every version, as aliases
+both compatibility names stay published beside `@rig-c/parts` at every version, as aliases
 carrying the same files with only the `name` in `package.json` changed, so a
 project that depends on either keeps receiving every release; a new
 install names `@rig-c/parts` ([RELEASING.md](RELEASING.md), *The registry side*). rig-c
