@@ -4518,7 +4518,7 @@ and stay absent).
 | <a id="CONFIG_TURN_HEAD_BONE"></a>`CONFIG_TURN_HEAD_BONE` | `config.turn.roles` is declared without a single bone `"head"` in `config.bones`, or `config.turn.body` without a single bone `"chest"` / `"hip"` (or its declared `bone`) | declare `"head"` (or the body turn root bone) as a single bone in `config.bones` |
 | <a id="CONFIG_TURN_SLIDER_NAME_FREE"></a>`CONFIG_TURN_SLIDER_NAME_FREE` | `config.turn.body.slider` (or the default `"body_yaw_dial"`) collides with a head turn dial (`"yaw"`, `"pitch"`, `"yaw_dial"`, `"pitch_dial"`) or an existing slider constraint in `config.constraints` (#787) | choose a distinct slider name in `config.turn.body.slider` |
 | <a id="RIG_TURN_SURFACE_MESH_GROUPS"></a>`RIG_TURN_SURFACE_MESH_GROUPS` | a surface part contains a blended attachment but lacks one 2.5D group, includes an ungrouped positive influence in any attachment, or also declares a unit/rear role | declare both `turn.roles` and `turn.body`, a body root outside head, surface in one or both groups, and bindings wholly inside those two subtrees |
-| <a id="RIG_TURN_SURFACE_MESH_BINDINGS"></a>`RIG_TURN_SURFACE_MESH_BINDINGS` | an authored surface mesh has unresolved/nonclosing weights or shares a frame moved by a unit/rear turn carrier | provide weighted bindings closing at 1 in the authored frame; use independent chains for parts with different roles |
+| <a id="RIG_TURN_SURFACE_MESH_BINDINGS"></a>`RIG_TURN_SURFACE_MESH_BINDINGS` | an authored surface mesh has unresolved/nonclosing weights or shares a frame moved by a unit/rear turn carrier; declared stop draw aliases resolve to their links for setup sampling | provide weighted bindings closing at 1 in the authored frame; `<link>_d` resolves only for links declared in `config.stops`; use independent chains for parts with different roles |
 | <a id="RIG_TURN_SURFACE_MESH_ATTACHMENT"></a>`RIG_TURN_SURFACE_MESH_ATTACHMENT` | a surface mesh has an alternate drawing without its own registered depth sampling frame | use the base attachment; explicit islands retain their own slot, attachment and bindings |
 | <a id="RIG_TURN_SURFACE_DEPTH_REQUIRED"></a>`RIG_TURN_SURFACE_DEPTH_REQUIRED` | a part with role `"surface"` in `config.turn.roles` or `config.turn.body.roles` carries no depth sheet in `parts.json` | run `assemble` with `config.depth` or provide `<part>_depth.png` in `parts.json` |
 | <a id="RIG_TURN_GRID_BUDGET"></a>`RIG_TURN_GRID_BUDGET` | a `"surface"` grid exceeds 2,400 triangles on one slot or 4,000 triangles across all `"surface"` slots | lower `config.turn.grid` / `config.turn.body.grid` `[cols, rows]` within the per-slot and total budgets |
@@ -5575,6 +5575,13 @@ dial; see [`CONFIG_TURN_ROLE_UNKNOWN`](#CONFIG_TURN_ROLE_UNKNOWN),
 [`RIG_TURN_SURFACE_MESH_BINDINGS`](#RIG_TURN_SURFACE_MESH_BINDINGS),
 [`CONFIG_TURN_UNIT_MESH_BONES`](#CONFIG_TURN_UNIT_MESH_BONES) and
 [`CONFIG_TURN_SLIDER_NAME_FREE`](#CONFIG_TURN_SLIDER_NAME_FREE).
+Weighted surfaces may bind chains declared in `config.stops` (#800). The
+sampler resolves each declared `<link>_d` draw alias and any child parent using
+it to the original link's setup frame, as `flattenRig` does. Weights, child
+parents and stops keep their emitted names; Core creates the draw bones later.
+A name ending in `_d` alone is not an alias: a missing non-stop bone still
+raises `RIG_TURN_SURFACE_MESH_BINDINGS`. No new config field is required.
+
 A weighted surface spanning the head and body subtrees (#796) takes both
 fields. Declare it as `"surface"` in `turn.roles` or `turn.body.roles` (both is
 also accepted), with both 2.5D groups present. Head descendants belong to the
