@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.73.0](https://github.com/rig-c/parts/compare/v1.72.1...v1.73.0) (2026-10-28)
+
+
+### Features
+
+* **turn:** a blended surface's rim under a single-group neighbour takes that neighbour's turn deform, so the neck stops sliding past the collar ([#806](https://github.com/rig-c/parts/issues/806)) ([f90e32f](https://github.com/rig-c/parts/commit/f90e32f30f34e0d8f45bbaad7e2367855b722996)), closes [#804](https://github.com/rig-c/parts/issues/804)
+
 ## [1.72.1](https://github.com/rig-c/parts/compare/v1.72.0...v1.72.1) (2026-10-28)
 
 
