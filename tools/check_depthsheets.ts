@@ -426,6 +426,9 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
   };
   const badReservedBone = make25DFixture();
   (badReservedBone.rawCfg.bones as unknown[]).push({ name: 'faceshift', parent: 'head', at: [32, 36] });
+  const badHeadSurfaceMesh = make25DFixture();
+  delete (badHeadSurfaceMesh.rawCfg.regions as Record<string, unknown>).face;
+  (badHeadSurfaceMesh.rawCfg.meshes as Record<string, unknown>).face = { grid: 8, r: 20, segments: [['head', [32, 36], [32, 14]]] };
   const badNoDepth = make25DFixture();
   delete (badNoDepth.pf.parts.find((p) => p.name === 'face') as { depth?: unknown }).depth;
   const badGridBudget = make25DFixture();
@@ -437,6 +440,7 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
   const cNoSurf = errors(() => parseConfig(badNoSurface.rawCfg));
   const cEarOrd = errors(() => parseConfig(badEarOrder.rawCfg));
   const cResBone = errors(() => parseConfig(badReservedBone.rawCfg));
+  const cSurfMesh = errors(() => parseConfig(badHeadSurfaceMesh.rawCfg));
   const cNoDepth = errors(() => buildRig(parseConfig(badNoDepth.rawCfg), badNoDepth.pf, badNoDepth.imgs));
   const cGrid = errors(() => buildRig(parseConfig(badGridBudget.rawCfg), badGridBudget.pf, badGridBudget.imgs));
   const cEarFront = errors(() => buildRig(parseConfig(badEarFront.rawCfg), badEarFront.pf, badEarFront.imgs));
@@ -446,10 +450,11 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
       cNoSurf.includes('CONFIG_TURN_SURFACE_REQUIRED') &&
       cEarOrd.includes('CONFIG_TURN_EAR_DRAW_ORDER') &&
       cResBone.includes('CONFIG_TURN_BONE_FREE') &&
+      cSurfMesh.includes('CONFIG_TURN_SURFACE_REGION') &&
       cNoDepth.includes('RIG_TURN_SURFACE_DEPTH_REQUIRED') &&
       cGrid.includes('RIG_TURN_GRID_BUDGET') &&
       cEarFront.includes('RIG_TURN_EAR_DEPTH_BEHIND_CHEEK'),
-    `role=${cRole.join(',')}; noSurf=${cNoSurf.join(',')}; earOrder=${cEarOrd.join(',')}; resBone=${cResBone.join(',')}; noDepth=${cNoDepth.join(',')}; grid=${cGrid.join(',')}; earFront=${cEarFront.join(',')}`,
+    `role=${cRole.join(',')}; noSurf=${cNoSurf.join(',')}; earOrder=${cEarOrd.join(',')}; resBone=${cResBone.join(',')}; surfMesh=${cSurfMesh.join(',')}; noDepth=${cNoDepth.join(',')}; grid=${cGrid.join(',')}; earFront=${cEarFront.join(',')}`,
   );
 
   // #787: 2.5D body-turn dial projecting torso surface grids through the head's turn path.
@@ -625,9 +630,35 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
     (topPosDeform[12 * 2] ?? 0);
   const bodyRearDxPos = compiledSkel.animations.body_turn?.bones?.body_rear_shift?.translatex?.[4]?.value ?? 0;
   const sliderNames = (builtBody25.rig.constraints ?? []).filter((c) => c.type === 'slider').map((c) => c.name);
+  const fbPreChest = makeBody25DFixture();
+  fbPreChest.rawCfg.bones = [
+    { name: 'hip', parent: 'root', at: [32, 56] },
+    { name: 'badge_b', parent: 'hip', at: [28, 42] },
+    { name: 'chest', parent: 'hip', at: [32, 44] },
+    { name: 'head', parent: 'chest', at: [32, 36] },
+    { name: 'eye_r', parent: 'head', at: [26, 26] },
+    { name: 'eye_l', parent: 'head', at: [38, 26] },
+    { name: 'mouth', parent: 'head', at: [32, 35] },
+    { name: 'ear_r', parent: 'head', at: [18, 27] },
+    { name: 'ear_l', parent: 'head', at: [46, 27] },
+    { chain: 'bang_c', parent: 'head', points: [[32, 16], [32, 22]], tip: [32, 27] },
+    { chain: 'hb_c', parent: 'head', points: [[32, 24], [32, 36]], tip: [32, 46] },
+  ];
+  const builtPreChest = buildRig(parseConfig(fbPreChest.rawCfg), fbPreChest.pf, fbPreChest.imgs);
+  const badgePreIdx = builtPreChest.rig.bones.findIndex((b) => b.name === 'badge_b');
+  const shiftPreIdx = builtPreChest.rig.bones.findIndex((b) => b.name === 'bodyshift');
+  const tbPreDir = join(dir, 'turn_body25d_prechest');
+  mkdirSync(join(tbPreDir, 'images'), { recursive: true });
+  for (const [name, img] of builtPreChest.images) writePng(join(tbPreDir, 'images', name), img);
+  for (const [name, text] of rigOutputTexts(builtPreChest, null)) writeFileSync(join(tbPreDir, name), text);
+  const runPreChest = spawnSync(process.execPath, [resolve('node_modules/rig-c/cli.ts'), 'build', '--rig', join(tbPreDir, 'rig.json'), '--motion', join(tbPreDir, 'motion.json'), '--out', join(tbPreDir, 'built'), '--profile', 'rig-play'], { encoding: 'utf8' });
   say(
     'DZ53_BODY_TURN_25D_PROJECTS_TORSO_GRIDS_INDEPENDENT_OF_HEAD_AND_GATES_CORE',
     runBody25.status === 0 &&
+      runPreChest.status === 0 &&
+      shiftPreIdx !== -1 &&
+      badgePreIdx > shiftPreIdx &&
+      builtPreChest.rig.bones[badgePreIdx]?.parent === 'bodyshift' &&
       bodyParents.get('bodyshift') === 'chest' &&
       bodyParents.get('body_rear_shift') === 'chest' &&
       bodyParents.get('topwear_surface') === 'bodyshift' &&
@@ -647,7 +678,7 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
       sliderNames.includes('body_yaw_dial') &&
       topDepthRep?.ceiling !== undefined &&
       botDepthRep?.ceiling !== undefined,
-    `Core exit=${runBody25.status}; headDeform=${headDeformSlots.join(',')}; bodyDeform=${bodyDeformSlots.join(',')}; faceCentreDxPos=${faceCentreDxPos.toFixed(4)}; topCentreDxPos=${topCentreDxPos.toFixed(4)}; bodyRearDxPos=${bodyRearDxPos.toFixed(4)}; sliders=${sliderNames.join(',')}; topCeiling=${JSON.stringify(topDepthRep?.ceiling)}; botCeiling=${JSON.stringify(botDepthRep?.ceiling)}`,
+    `Core exit=${runBody25.status} (preChest=${runPreChest.status}, bodyshift@${shiftPreIdx}<badge_b@${badgePreIdx}); headDeform=${headDeformSlots.join(',')}; bodyDeform=${bodyDeformSlots.join(',')}; faceCentreDxPos=${faceCentreDxPos.toFixed(4)}; topCentreDxPos=${topCentreDxPos.toFixed(4)}; bodyRearDxPos=${bodyRearDxPos.toFixed(4)}; sliders=${sliderNames.join(',')}; topCeiling=${JSON.stringify(topDepthRep?.ceiling)}; botCeiling=${JSON.stringify(botDepthRep?.ceiling)}`,
   );
 
   const badBodyNoDepth = makeBody25DFixture();
@@ -667,6 +698,9 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
     { type: 'slider', name: 'custom_body_yaw', animation: 'idle', bone: 'hip', property: 'x' },
   ];
   ((badBodySliderConstraintCollision.rawCfg.turn as { body: Record<string, unknown> }).body).slider = 'custom_body_yaw';
+  const badBodySurfaceMesh = makeBody25DFixture();
+  delete (badBodySurfaceMesh.rawCfg.regions as Record<string, unknown>).topwear;
+  (badBodySurfaceMesh.rawCfg.meshes as Record<string, unknown>).topwear = { grid: 8, r: 20, segments: [['chest', [32, 44], [32, 36]]] };
 
   const cbNoDepth = errors(() => buildRig(parseConfig(badBodyNoDepth.rawCfg), badBodyNoDepth.pf, badBodyNoDepth.imgs));
   const cbPartMissing = errors(() => buildRig(parseConfig(badBodyPartMissing.rawCfg), badBodyPartMissing.pf, badBodyPartMissing.imgs));
@@ -674,6 +708,7 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
   const cbRigUnattached = errors(() => buildRig(parsedRigUnattached, badBodyRigUnattached.pf, badBodyRigUnattached.imgs));
   const cbSliderHead = errors(() => parseConfig(badBodySliderCollision.rawCfg));
   const cbSliderCst = errors(() => parseConfig(badBodySliderConstraintCollision.rawCfg));
+  const cbSurfMesh = errors(() => parseConfig(badBodySurfaceMesh.rawCfg));
   say(
     'DZ54_BODY_TURN_25D_REFUSALS_NAMED',
     cbNoDepth.includes('RIG_TURN_SURFACE_DEPTH_REQUIRED') &&
@@ -681,8 +716,9 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
       cbUnattached.includes('CONFIG_NAME_RESOLVES') &&
       cbRigUnattached.includes('RIG_NAME_RESOLVES') &&
       cbSliderHead.includes('CONFIG_TURN_SLIDER_NAME_FREE') &&
-      cbSliderCst.includes('CONFIG_TURN_SLIDER_NAME_FREE'),
-    `noDepth=${cbNoDepth.join(',')}; partMissing=${cbPartMissing.join(',')}; unattached=${cbUnattached.join(',')}; rigUnattached=${cbRigUnattached.join(',')}; sliderHead=${cbSliderHead.join(',')}; sliderCst=${cbSliderCst.join(',')}`,
+      cbSliderCst.includes('CONFIG_TURN_SLIDER_NAME_FREE') &&
+      cbSurfMesh.includes('CONFIG_TURN_SURFACE_REGION'),
+    `noDepth=${cbNoDepth.join(',')}; partMissing=${cbPartMissing.join(',')}; unattached=${cbUnattached.join(',')}; rigUnattached=${cbRigUnattached.join(',')}; sliderHead=${cbSliderHead.join(',')}; sliderCst=${cbSliderCst.join(',')}; surfMesh=${cbSurfMesh.join(',')}`,
   );
 }
 

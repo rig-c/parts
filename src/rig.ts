@@ -1648,16 +1648,21 @@ export function buildWaistPairSource(
   moveKeysToControls(motion, controls);
   // Parents first: a depth-first walk over the table in insertion order, each
   // bone after its parent — which puts every control directly above its bone.
-  const ordered: Bone[] = [];
-  const done = new Set<string>();
-  const visit = (n: string): void => {
-    if (done.has(n)) return;
-    const b = B.get(n) as Bone;
-    if (b.parent !== null) visit(b.parent);
-    done.add(n);
-    ordered.push(b);
+  const orderParentsFirst = <T extends { name: string; parent?: string | null }>(table: ReadonlyMap<string, T>): T[] => {
+    const out: T[] = [];
+    const done = new Set<string>();
+    const visit = (n: string): void => {
+      if (done.has(n)) return;
+      const b = table.get(n);
+      if (b === undefined) return;
+      if (b.parent !== null && b.parent !== undefined) visit(b.parent);
+      done.add(n);
+      out.push(b);
+    };
+    for (const n of table.keys()) visit(n);
+    return out;
   };
-  for (const n of B.keys()) visit(n);
+  const ordered = orderParentsFirst(B);
 
   const spineX = (x: number): number => x - CX;
   const spineY = (y: number): number => cropToSpineY(y, H);
@@ -2430,6 +2435,14 @@ export function buildWaistPairSource(
     const isBodySurface = cfg.turn?.body?.roles?.[p.name] === 'surface';
     if (isHeadSurface || isBodySurface) {
       const roleField = isHeadSurface ? `config.turn.roles.${p.name}` : `config.turn.body.roles.${p.name}`;
+      if (cfg.meshes[p.name] !== undefined) {
+        fail(
+          'CONFIG_TURN_SURFACE_REGION',
+          roleField,
+          `declares "${p.name}" as "surface", and config.meshes.${p.name} also declares a mesh for "${p.name}"; a 2.5D turn "surface" part must be attached in config.regions so the rig stage can promote it to a depth-backed grid mesh`,
+        );
+        continue;
+      }
       if (p.depth === undefined || scalar === undefined) {
         fail(
           'RIG_TURN_SURFACE_DEPTH_REQUIRED',
@@ -3116,7 +3129,7 @@ export function buildWaistPairSource(
         const headTurnDeg = turn.get('head') ?? 0;
         const surfBones: RigBone[] = [];
         for (const p of parts.parts) {
-          if (roles[p.name] !== 'surface' || cfg.meshes[p.name] !== undefined) continue;
+          if (roles[p.name] !== 'surface') continue;
           const [cols, rows] = resolveTurnGrid(cfg.turn, p.name);
           totalGridTriangles += 2 * (cols - 1) * (rows - 1);
           const cx = p.x + p.w / 2;
@@ -3175,7 +3188,7 @@ export function buildWaistPairSource(
         };
 
         for (const [part, role] of Object.entries(roles)) {
-          if (role === 'unit' || (role === 'surface' && cfg.meshes[part] !== undefined)) {
+          if (role === 'unit') {
             if (cfg.regions[part] !== undefined) {
               const bName = regionBone(cfg.regions[part]);
               if (bName === 'head') {
@@ -3218,7 +3231,7 @@ export function buildWaistPairSource(
         const bodyTurnDeg = turn.get(bodyRoot) ?? 0;
         const surfBones: RigBone[] = [];
         for (const p of parts.parts) {
-          if (bodyRoles[p.name] !== 'surface' || cfg.meshes[p.name] !== undefined) continue;
+          if (bodyRoles[p.name] !== 'surface') continue;
           const [cols, rows] = resolveTurnGrid(bodySpec, p.name, cfg.turn);
           totalGridTriangles += 2 * (cols - 1) * (rows - 1);
           const cx = p.x + p.w / 2;
@@ -3307,7 +3320,7 @@ export function buildWaistPairSource(
         };
 
         for (const [part, role] of Object.entries(bodyRoles)) {
-          if (role === 'unit' || (role === 'surface' && cfg.meshes[part] !== undefined)) {
+          if (role === 'unit') {
             if (cfg.regions[part] !== undefined) {
               const bName = regionBone(cfg.regions[part]);
               if (torsoRoots.has(bName)) {
@@ -3362,6 +3375,10 @@ export function buildWaistPairSource(
           }
         }
       }
+    }
+
+    if (cfg.turn.roles !== undefined || cfg.turn.body !== undefined) {
+      bones.splice(0, bones.length, ...orderParentsFirst(new Map(bones.map((b) => [b.name, b]))));
     }
 
     if (totalGridTriangles > TURN_GRID_MAX_TRIANGLES_TOTAL) {

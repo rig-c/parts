@@ -1705,7 +1705,8 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
       }
     }
   }
-  if ('turn' in t) checkTurn(c, t.turn, attached, names.bones, hasAltFace, parts, declaredSliders);
+  const meshParts = isPlainObject(t.meshes) ? new Set(Object.keys(t.meshes).filter((k) => !isRecordKey(k))) : new Set<string>();
+  if ('turn' in t) checkTurn(c, t.turn, attached, names.bones, hasAltFace, parts, declaredSliders, meshParts);
   if ('scene' in t) checkScene(c, t.scene);
   if ('cloth' in t) checkCloth(c, t.cloth);
   if ('requirements' in t && c.string('config.requirements', t.requirements) && base !== null) checkRequirementsFile(c, resolve(base, t.requirements));
@@ -4399,6 +4400,7 @@ function checkTurn(
   hasAltFace: boolean,
   parts: readonly string[] = [],
   declaredSliders: ReadonlySet<string> = new Set(),
+  meshParts: ReadonlySet<string> = new Set(),
 ): void {
   const at = 'config.turn';
   const hasRoles = isPlainObject(v) && 'roles' in v;
@@ -4467,7 +4469,16 @@ function checkTurn(
         if (typeof role !== 'string' || !(TURN_ROLES as readonly string[]).includes(role)) {
           c.fail('CONFIG_TURN_ROLE_UNKNOWN', `${at}.roles.${part}`, `is ${show(role)}; expected one of ${TURN_ROLES.map((x) => `"${x}"`).join(', ')}`);
         } else {
-          if (role === 'surface') surfaceParts.push(part);
+          if (role === 'surface') {
+            if (meshParts.has(part)) {
+              c.fail(
+                'CONFIG_TURN_SURFACE_REGION',
+                `${at}.roles.${part}`,
+                `declares "${part}" as "surface", and config.meshes.${part} also declares a mesh for "${part}"; a 2.5D turn "surface" part must be attached in config.regions so the rig stage can promote it to a depth-backed grid mesh`,
+              );
+            }
+            surfaceParts.push(part);
+          }
           if (role === 'unit' && (part === 'ear_r' || part === 'ear_l')) earParts.push(part);
         }
       }
@@ -4553,6 +4564,13 @@ function checkTurn(
           if (typeof role !== 'string' || !(TURN_ROLES as readonly string[]).includes(role)) {
             c.fail('CONFIG_TURN_ROLE_UNKNOWN', `${bAt}.roles.${part}`, `is ${show(role)}; expected one of ${TURN_ROLES.map((x) => `"${x}"`).join(', ')}`);
           } else if (role === 'surface') {
+            if (meshParts.has(part)) {
+              c.fail(
+                'CONFIG_TURN_SURFACE_REGION',
+                `${bAt}.roles.${part}`,
+                `declares "${part}" as "surface", and config.meshes.${part} also declares a mesh for "${part}"; a 2.5D turn "surface" part must be attached in config.regions so the rig stage can promote it to a depth-backed grid mesh`,
+              );
+            }
             bodySurfaceParts.push(part);
           }
         }
