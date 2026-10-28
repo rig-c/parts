@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.71.1](https://github.com/rig-c/parts/compare/v1.71.0...v1.71.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **assemble:** keep the fringe and skip the seam bake between parts a turn moves relative to each other ([#794](https://github.com/rig-c/parts/issues/794)) ([eac4c00](https://github.com/rig-c/parts/commit/eac4c006d03a06f77b9659e906499b66426a1d25))
+* **turn:** carry a unit part attached through config.meshes on its own carrier bone instead of skipping it ([#792](https://github.com/rig-c/parts/issues/792)) ([de9f747](https://github.com/rig-c/parts/commit/de9f74754d5d86ff44f1cd9bae0c7259f987d536))
+
 ## [1.71.0](https://github.com/rig-c/parts/compare/v1.70.1...v1.71.0) (2026-10-28)
 
 
