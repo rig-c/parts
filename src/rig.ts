@@ -138,6 +138,7 @@ import { explicitAttachment, type ExplicitMeshReport } from './explicitmesh.ts';
  * order the objects are built in, and every number is rounded by `pyRound`).
  */
 import { type AutoSpec, type BoneEntry, type InfluenceMeshSpec, type WeightRule, type CharacterConfig, type ConfigConstraint, type ConfigStop, CONSTRAINT_FOLLOWS, constraintForRig, contourRegionsOf, type ContourSpec, DEFAULT_BUST_BONE_L, DEFAULT_BUST_BONE_R, type Point, type RibsSpec, ROOT_BONE, stopForRig, turnRidersByBone, weightsABone } from './config.ts';
+import { RUNTIME_PI } from 'rig-c/src/core/world.ts';
 import { type BoneTransform, computeExactFrameTransforms, computeWorldTransforms, cropToSpineY, normaliseDegrees, paintingToSetupPoint, setupToPaintingPoint, toBoneLocal, toWorld } from './coords.ts';
 import { type Problem, refuseIfAny, PartsError } from './errors.ts';
 import { recordedFocusProblems } from './setfocus.ts';
@@ -3662,7 +3663,7 @@ export function buildWaistPairSource(
       boneLandmarks,
       hasAlternateFaceSet,
       surfaceMeshes: turnSurfaceMeshes(cfg, rig, parts.rig_size),
-      neighbourMeshes: turnNeighbourMeshes(cfg, rig, parts),
+      neighbourMeshes: turnNeighbourMeshes(cfg, rig, parts, new Map(outImages)),
     });
   }
   bindFaceSurfaceDeform(motion, (merged) => {
@@ -3679,7 +3680,7 @@ export function buildWaistPairSource(
         boneLandmarks,
         hasAlternateFaceSet,
         surfaceMeshes: turnSurfaceMeshes(cfg, rig, parts.rig_size),
-        neighbourMeshes: turnNeighbourMeshes(cfg, rig, parts),
+        neighbourMeshes: turnNeighbourMeshes(cfg, rig, parts, new Map(outImages)),
       });
     }
     if (cfg.turn?.roles === undefined && (cfg.turn === undefined || cfg.turn.body === undefined || cfg.turn.depths !== undefined)) {
@@ -4200,7 +4201,7 @@ function turnSurfaceMeshes(cfg: CharacterConfig, rig: RigSpec, canvas: readonly 
 }
 
 /** Actual shown support; Core's own grid topology is inspection metadata only. */
-function turnNeighbourMeshes(cfg: CharacterConfig, rig: RigSpec, parts: PartsFile) {
+export function turnNeighbourMeshes(cfg: CharacterConfig, rig: RigSpec, parts: PartsFile, emittedImages: ReadonlyMap<string, Raster>) {
   const meshes: NonNullable<Parameters<typeof buildDepth25DTurn>[2]['neighbourMeshes']>[number][] = [];
   const canvas = parts.rig_size;
   const aliases = new Map<string, string>((rig.stops ?? []).flatMap(s => s.links.map(link => [`${link}_d`, link])));
@@ -4209,8 +4210,17 @@ function turnNeighbourMeshes(cfg: CharacterConfig, rig: RigSpec, parts: PartsFil
     if (cfg.meshes[part] !== undefined && [cfg.turn?.roles?.[part], cfg.turn?.body?.roles?.[part]].includes('surface')) continue;
     const record = parts.parts.find(p => p.name === part);
     if (record === undefined) continue;
+    const split = cfg.regions[part] !== undefined && cfg.motion.blink?.still?.[part] !== undefined
+      && [cfg.turn?.roles?.[part], cfg.turn?.body?.roles?.[part]].includes('unit');
+    const splitSlots = [part, `${part}${STILL_SUFFIX}`];
+    const failSupport = (name: string, detail: string): never => { throw new PartsError([{ code: 'RIG_TURN_SURFACE_OVERLAP_SUPPORT', object: `turn neighbour "${name}"`, detail }]); };
+    if (split) for (const name of splitSlots) {
+      const shown = rig.slots.find(slot => slot.name === name);
+      if (shown === undefined) failSupport(name, 'has no emitted split slot; supply both lower and still slots from the region build');
+      else if (shown.attachment !== null && rig.skins.default[name]?.[shown.attachment] === undefined) failSupport(`${name}/${shown.attachment}`, 'has no shown attachment in the default skin; supply the emitted split drawing');
+    }
     for (const slot of rig.slots) {
-      if (slot.name !== part && !slot.name.startsWith(`${part}__island`)) continue;
+      if (slot.name !== part && !slot.name.startsWith(`${part}__island`) && !(split && slot.name === splitSlots[1])) continue;
       for (const [attachment, att] of Object.entries(rig.skins.default[slot.name] ?? {})) {
         if (attachment !== slot.attachment) continue;
         if ('type' in att && att.weights !== undefined && att.weights.length > 0) { meshes.push({ part, slot: slot.name, attachment, weights: att.weights, triangles: att.triangles, canvas }); continue; }
@@ -4226,6 +4236,22 @@ function turnNeighbourMeshes(cfg: CharacterConfig, rig: RigSpec, parts: PartsFil
           meshes.push({ part, slot: slot.name, attachment, canvas, triangles: geometry.triangles,
             weights: bound.bindings.map(row => row.map(w => ({ bone: w.bone, x: f32(w.x), y: f32(w.y), weight: f32(w.weight) }))),
             gridSamples: geometry.points.map(([x, y]) => setupToPaintingPoint(place(x, y), canvas, canvas)),
+          });
+        } else if (!('type' in att) && split) {
+          const image = emittedImages.get(att.image) ?? failSupport(`${slot.name}/${attachment}`, `has no emitted image "${att.image}"; supply the split region PNG to measure its support`);
+          if (!Number.isFinite(att.x) || !Number.isFinite(att.y) || (att.rotation !== undefined && !Number.isFinite(att.rotation))
+            || !Number.isSafeInteger(image.width) || !Number.isSafeInteger(image.height) || image.width <= 2 * PAD || image.height <= 2 * PAD) failSupport(`${slot.name}/${attachment}`, `has offsets (${att.x}, ${att.y}), rotation ${att.rotation ?? 0} and image ${image.width}x${image.height}; require finite offsets/rotation and positive integer source dimensions after padding ${PAD} on each side`);
+          // Core stores the region offsets/angle as float32. Its region
+          // rotation uses RUNTIME_PI, not the bone matrix's y-column angle.
+          const angle = f32(att.rotation ?? 0) * RUNTIME_PI / 180, cos = Math.cos(angle), sin = Math.sin(angle);
+          const x = f32(att.x), y = f32(att.y), halfWidth = image.width / 2 - PAD, halfHeight = image.height / 2 - PAD;
+          // Transparent PAD belongs to neither piece's alpha support. Keeping
+          // both padded rectangles would let the lower lend its field to the
+          // upper rows (and vice versa) beside the cut. Source alpha still
+          // decides ownership inside each piece's own emitted crop rectangle.
+          const corners = [[-halfWidth, -halfHeight], [-halfWidth, halfHeight], [halfWidth, halfHeight], [halfWidth, -halfHeight]];
+          meshes.push({ part, slot: slot.name, attachment, canvas, triangles: [0, 1, 2, 0, 2, 3],
+            weights: corners.map(([px, py]) => [{ bone: slot.bone, x: px * cos + x - py * sin, y: py * cos + y + px * sin, weight: 1 }]),
           });
         } else if (!('type' in att)) {
           const points = [[record.x - PAD, record.y - PAD], [record.x - PAD, record.y + record.h + PAD], [record.x + record.w + PAD, record.y + record.h + PAD], [record.x + record.w + PAD, record.y - PAD]];

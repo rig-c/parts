@@ -1,4 +1,5 @@
 /** Independent scalar-field controls on an alpha-overlapped sloping neck. */
+import { runTurnSplitUnitChecks } from './check_turn_split_unit.ts';
 import { overlapTurnFixture, differingDepthTurnFixture, roleNeighbourTurnFixture } from '../fixtures/turn_overlap.ts';
 import { blendedTurnIslandsFixture } from '../fixtures/turn_blend.ts';
 import { buildRig, type MeshAttachment, type RigOutput } from '../src/rig.ts';
@@ -168,6 +169,7 @@ function triangleFieldError(b: RigOutput, twice = false, aliases = new Map<strin
 }
 
 export function runTurnOverlapChecks(say: Say): void {
+  runTurnSplitUnitChecks(say);
   const f = overlapTurnFixture(), b = buildRig(parseConfig(f.config), f.parts, f.images);
   const error = overlapFieldError(b);
   say('BO01_RIM_TAKES_BODY_FIELD_OUTSIDE_KEEPS_SKIN_SPLIT', error.rim < 0.000003 && error.outside < 0.000003, JSON.stringify(error));
