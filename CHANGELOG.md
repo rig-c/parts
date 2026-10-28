@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.72.1](https://github.com/rig-c/parts/compare/v1.72.0...v1.72.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **turn:** a surface mesh bound to a stopped chain resolves the stop's draw bones to their links for its setup frames ([#803](https://github.com/rig-c/parts/issues/803)) ([7e829f6](https://github.com/rig-c/parts/commit/7e829f68c9200f3492df191d667c61756b204a83)), closes [#800](https://github.com/rig-c/parts/issues/800)
+
 ## [1.72.0](https://github.com/rig-c/parts/compare/v1.71.1...v1.72.0) (2026-10-28)
 
 
