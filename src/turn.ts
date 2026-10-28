@@ -1487,6 +1487,8 @@ export interface Depth25DTurnOptions {
     attachment: string;
     weights: ReadonlyArray<ReadonlyArray<{ bone: string; x: number; y: number; weight: number }>>;
     canvas: readonly [number, number];
+    /** Every attachment of a part containing a blended mesh carries its own group mask. */
+    groups?: ReadonlyMap<string, 'head' | 'body'>;
   }>;
 }
 
@@ -1814,6 +1816,9 @@ function buildDepth25DTurnGroup(
       if (authored.length > 0) {
         const world = computeWorldTransforms(rig.bones);
         for (const mesh of authored) {
+          // An all-zero timeline can overwrite another slider's deform (Core A40).
+          // A sibling with no positive binding in this group owns no timeline here.
+          const active = mesh.groups === undefined || [...mesh.groups.values()].includes(group.fieldPrefix === 'config.turn' ? 'head' : 'body');
           const vertices = mesh.weights.map((row, index) => {
             let wx = 0, wy = 0, total = 0;
             for (const w of row) {
@@ -1841,7 +1846,7 @@ function buildDepth25DTurnGroup(
             const z = levelToDepthZ(sampleDepthFloat(ext, cx - rec.x, cy - rec.y), rec.depth);
             return { row, depth: pivot + z - zRef };
           });
-          if (problems.length > startProblems) continue;
+          if (problems.length > startProblems || !active) continue;
           deform.push({
             slot: mesh.slot,
             attachment: mesh.attachment,
@@ -1852,6 +1857,7 @@ function buildDepth25DTurnGroup(
               vertices: vertices.flatMap(({ row, depth }) => {
                 const d = -depth * Math.sin(deg * Math.PI / 180);
                 return row.flatMap((w) => {
+                  if (mesh.groups !== undefined && (w.weight === 0 || mesh.groups.get(w.bone) !== (group.fieldPrefix === 'config.turn' ? 'head' : 'body'))) return [0, 0];
                   const frame = world.get(w.bone)!; // every influence resolved before emitting keys
                   const [x, y] = toBoneLocalVector(frame, kind === 'yaw' ? d : 0, kind === 'pitch' ? d : 0);
                   return [pyRound(x, 6), pyRound(y, 6)];
@@ -1954,6 +1960,60 @@ export function buildDepth25DTurn(
 ): void {
   const problems: Problem[] = [];
   const { yaw: yawMax, pitch: pitchMax } = resolveTurnBands(opts.turn);
+
+  // Only a surface opt-in spanning both authored subtrees changes paths (#796).
+  // Single-group meshes keep #795's role and bytes, including explicit islands.
+  const parents = new Map(rig.bones.map((b) => [b.name, b.parent]));
+  const bodyRoot = opts.turn.body?.bone ?? (parents.has('chest') ? 'chest' : 'hip');
+  const descends = (bone: string, root: string): boolean => {
+    const seen = new Set<string>();
+    for (let cur: string | undefined = bone; cur !== undefined && !seen.has(cur); cur = parents.get(cur)) {
+      if (cur === root) return true;
+      seen.add(cur);
+    }
+    return false;
+  };
+  const blended = new Set<string>();
+  const classified = opts.surfaceMeshes?.map((mesh) => {
+    const groups = new Map<string, 'head' | 'body'>();
+    const outside = new Set<string>();
+    for (const w of mesh.weights.flat()) {
+      if (w.weight <= 0) continue;
+      if (descends(w.bone, 'head')) groups.set(w.bone, 'head');
+      else if (descends(w.bone, bodyRoot)) groups.set(w.bone, 'body');
+      else outside.add(w.bone);
+    }
+    if (new Set(groups.values()).size === 2) blended.add(mesh.part);
+    return { mesh, groups, outside };
+  });
+  // A part's role covers every island, but each attachment keeps its own mask.
+  // Without a blended attachment the explicit role still owns the legacy path.
+  const surfaceMeshes = classified?.map(({ mesh, groups, outside }) => {
+    if (!blended.has(mesh.part)) return mesh;
+    if (opts.turn.roles === undefined || opts.turn.body === undefined || outside.size > 0 || descends(bodyRoot, 'head')) {
+      problems.push({
+        code: 'RIG_TURN_SURFACE_MESH_GROUPS', object: `surface mesh "${mesh.slot}/${mesh.attachment}"`,
+        detail: `belongs to a part with blended head and body bindings${outside.size === 0 ? '' : ` with ungrouped bone(s) ${[...outside].map(b => `"${b}"`).join(', ')}`}; declare both config.turn.roles and config.turn.body with a body root outside head, and bind every influence to one of those subtrees`,
+      });
+      return mesh;
+    }
+    // A second declaration cannot ask the same attachment to be both a sampled
+    // surface and a unit/rear carrier. No binding is reparented here.
+    const roles = [opts.turn.roles[mesh.part], opts.turn.body.roles[mesh.part]];
+    if (roles.some(role => role !== undefined && role !== 'surface')) {
+      problems.push({ code: 'RIG_TURN_SURFACE_MESH_GROUPS', object: `surface mesh "${mesh.slot}/${mesh.attachment}"`, detail: 'declares a unit/rear role as well as surface across the head and body groups; declare surface in one or both groups so its authored frames are retained' });
+      return mesh;
+    }
+    return { ...mesh, groups };
+  });
+  refuseIfAny(problems);
+  if (blended.size > 0) {
+    const surfaceRoles = Object.fromEntries([...blended].map(part => [part, 'surface' as const]));
+    opts = { ...opts, surfaceMeshes, turn: { ...opts.turn,
+      roles: { ...opts.turn.roles, ...surfaceRoles },
+      body: { ...opts.turn.body!, roles: { ...opts.turn.body!.roles, ...surfaceRoles } },
+    } };
+  }
 
   if (opts.turn.roles !== undefined) {
     buildDepth25DTurnGroup(
