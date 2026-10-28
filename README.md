@@ -592,10 +592,17 @@ controls; see [`CONFIG_TURN_ROLE_UNKNOWN`](docs/AUTHORING.md#CONFIG_TURN_ROLE_UN
 and [`CONFIG_TURN_SURFACE_REQUIRED`](docs/AUTHORING.md#CONFIG_TURN_SURFACE_REQUIRED).
 `turn.body.roles` adds independent body yaw. A weighted mesh declared as
 `"surface"` in either group and blending head and torso bones receives both
-fields in proportion to its skin weights. Each sibling island takes only its
+fields in proportion to its skin weights. Inside the existing setup alpha
+overlap with a single-group neighbour, a blended attachment's vertex takes
+that neighbour's existing emitted triangle field at its setup position (#804), without changing skin weights,
+setup or idle. Conflicting neighbour groups are refused by name. Each sibling island takes only its
 own group; parts without a blended attachment keep their existing role behavior
 and output bytes. Unlisted meshes do not consume turn depth sheets. See the
 [blended surface contract](docs/AUTHORING.md#per-layer-depth-sheets-773).
+This copies the field at vertices; different triangle partitions can still
+differ between vertices. The [corrected #804 acceptance](https://github.com/rig-c/parts/issues/804#issuecomment-6478778123)
+checks vertex correspondence and reports those residuals per fixture; the
+contract records the measured grid residual and preserves its seam readings.
 No-image builds keep the legacy output bytes. `comfy seethrough --config <file> --depth-run <full|head>`
 uses the same opt-in; its default captures art only. Standalone authored part
 references remain active declarations. See [the input contract and refusals](docs/AUTHORING.md#per-layer-depth-sheets-773).

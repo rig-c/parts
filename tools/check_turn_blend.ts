@@ -48,7 +48,7 @@ function oracle(b: RigOutput, plant: 'none' | 'all' | 'twice' | 'swapped' = 'non
 }
 
 /** Signed triangle areas across a Cartesian slider grid, using emitted offsets and skinning. */
-function folds(b: RigOutput, slot = 'neck') {
+export function blendSliderFolds(b: RigOutput, slot = 'neck') {
   const att=b.rig.skins.default[slot][slot] as MeshAttachment, world=computeWorldTransforms(b.rig.bones);
   const key=(animation:string,index:number)=>(b.motion.animations[animation] as unknown as Animation).deform?.find(d=>d.slot===slot)?.keys[index].vertices??[];
   const points=(indices:number[])=>{
@@ -102,7 +102,7 @@ export function runTurnBlendChecks(say: Say): void {
   const plain=blendedTurnFixture('none'); delete plain.config.turn;
   const p=buildRig(parseConfig(plain.config),plain.parts,plain.images);
   say('BT02_AUTHORED_BINDINGS_IDLE_AND_PHYSICS_UNCHANGED',JSON.stringify(mesh(b))===JSON.stringify(mesh(p))&&JSON.stringify(b.motion.animations.idle)===JSON.stringify(p.motion.animations.idle)&&JSON.stringify(b.rig.constraints?.filter(c=>c.type==='physics'))===JSON.stringify(p.rig.constraints)&&input===JSON.stringify(f.config)&&['turn','tilt','body_turn'].every(n=>JSON.stringify((b.motion.animations[n] as unknown as Animation).deform?.find(d=>d.slot==='neck')?.keys[2])===JSON.stringify({t:(b.motion.animations[n] as unknown as Animation).duration/2})), 'topology, UVs, weights, all idle keys and physics constraint bytes retained; all neutral turn deforms are empty; config not mutated');
-  const crossed=folds(b);
+  const crossed=blendSliderFolds(b);
   say('BT03_COMBINED_SLIDER_GRID_HAS_NO_FOLDS',crossed.count===0&&crossed.flat===0,JSON.stringify(crossed));
   const body=blendedTurnFixture();
   body.config.turn={pivot:16,roles:{face:'surface'},body:{pivot:24,roles:{topwear:'surface',neck:'surface'}}};
@@ -126,16 +126,20 @@ export function runTurnBlendChecks(say: Say): void {
   const rotated=structuredClone(b);
   rotated.rig.bones.find(b=>b.name==='torso')!.rotation=37;
   rotated.rig.bones.find(b=>b.name==='crown')!.rotation=-23;
-  buildDepth25DTurn(rotated.rig,rotated.motion,{turn:parseConfig(f.config).turn!,parts:f.parts.parts,images:f.images,regions:{topwear:'torso',face:'crown'},stills:{},boneLandmarks:new Map(),hasAlternateFaceSet:false,surfaceMeshes:[{part:'neck',slot:'neck',attachment:'neck',weights:mesh(rotated).weights,canvas:f.parts.rig_size}]});
+  const isolatedTurn = parseConfig(f.config).turn!;
+  isolatedTurn.roles = { neck: 'surface' }; isolatedTurn.body!.roles = { neck: 'surface' };
+  buildDepth25DTurn(rotated.rig,rotated.motion,{turn:isolatedTurn,parts:f.parts.parts,images:f.images,regions:{topwear:'torso',face:'crown'},stills:{},boneLandmarks:new Map(),hasAlternateFaceSet:false,surfaceMeshes:[{part:'neck',slot:'neck',attachment:'neck',weights:mesh(rotated).weights,canvas:f.parts.rig_size}]});
   const rotatedRead=oracle(rotated);
   say('BT08_TURNED_BINDING_FRAMES_USE_INVERSE_VECTORS',rotatedRead.max<0.000003&&rotatedRead.summed<0.000003&&rotatedRead.missing===0,`torso +37, crown -23 degrees; ${JSON.stringify(rotatedRead)}`);
   const grid=blendedTurnFixture();
+  // This control isolates the #796 split; overlap ownership has its own suite.
+  grid.parts.parts[0].y = 46; grid.parts.parts[2].y = 4;
   grid.config.meshes={neck:{grid:4,r:8,segments:[['torso',[32,44],[32,40]],['crown',[32,28],[32,24]]]}};
   const gridBuild=buildRig(parseConfig(grid.config),grid.parts,grid.images),gridRead=oracle(gridBuild);
   say('BT09_GENERATED_WEIGHTED_MESH_USES_THE_SAME_SPLIT',gridRead.max<0.000003&&gridRead.summed<0.000003&&gridRead.missing===0,JSON.stringify(gridRead));
   const islands = blendedTurnIslandsFixture(), islandBuild = buildRig(parseConfig(islands.config), islands.parts, islands.images);
   const islandSlots = islands.islands.map(i => i.slot), islandReads = islandSlots.map(slot => oracle(islandBuild, 'none', slot));
-  const islandFolds = islandSlots.map(slot => folds(islandBuild, slot));
+  const islandFolds = islandSlots.map(slot => blendSliderFolds(islandBuild, slot));
   const realAreas = connectedComponents(alphaAbove(islands.images.get('neck')!, 8), 4).stats.slice(1).map(s => s.area);
   const siblingPlant = Math.max(oracle(islandBuild, 'all', 'neck__island2').summed, oracle(islandBuild, 'all', 'neck__island3').summed);
   const samePayload = islands.islands.every(i => { const att = islandBuild.rig.skins.default[i.slot][i.slot] as MeshAttachment; return JSON.stringify(att.weights) === JSON.stringify(i.weights) && JSON.stringify(att.uvs) === JSON.stringify(i.uvs) && JSON.stringify(att.triangles) === JSON.stringify(i.triangles) && att.hull === i.hull; });
