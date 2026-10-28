@@ -101,7 +101,7 @@ import { bindDepthRun, copyDepthMaterial, registerDepthRun, transportPartDepth, 
  * Pure: no clock, no randomness, no file access. The CLI reads and writes.
  */
 import { sourceLimbTarget, nearestTargetPart } from './limbownership.ts';
-import { type ArmSplit, type BoneEntry, type CharacterConfig, type ControlSkeleton, controlSkeletonOf, type Cut, type EarlyConfig, type Extend, type Limb, type Patch, type PlanEntry, type Run, type SeeThrough } from './config.ts';
+import { type ArmSplit, type BoneEntry, type CharacterConfig, type ConfigConstraint, type ControlSkeleton, controlSkeletonOf, type Cut, type EarlyConfig, type Extend, type Limb, type MeshSpec, type Patch, type PlanEntry, type RegionSpec, type Run, type SeeThrough, turnMovingPartPair, type TurnSpec } from './config.ts';
 import { PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { CORE_ALPHA, figuresPhrase, implausibleRules, type Layer, type LayerFigures, layerFigures, type LayerSet, NEAR_WHITE_MIN, OPAQUE_ALPHA_ABOVE, ruleSummary } from './layers.ts';
 import { padToSquare, squarePad } from './inputs.ts';
@@ -398,6 +398,8 @@ export interface AssembleInput {
   limbUnderCover?: boolean;
   /** Issue #637: `source` is the pre-fix test mutant that skips source-transparent cap ownership; stages use target. */
   capOwnership?: 'target' | 'source';
+  /** Issue #791: pairs of parts a turn moves relative to each other, whose fringe and seam colour stay untouched. */
+  turnMovingPair?: ((a: string, b: string) => boolean) | null;
 }
 
 /**
@@ -2791,7 +2793,15 @@ function keepArtWhole(part: PlacedPart, cleared: Cleared[], holderAt: (q: number
  * hold the pixel after it); and every pixel at alpha >= `CORE_ALPHA`, which
  * is the seam override's.
  */
-export function pushBackFringe(parts: PlacedPart[], srcr: Raster, rule: SeamRule, silhouette: Mask | null, feathered: ReadonlyArray<Mask | null> | null = null, keep: ReadonlyArray<Mask | null> | null = null): FringePushed[][] {
+export function pushBackFringe(
+  parts: PlacedPart[],
+  srcr: Raster,
+  rule: SeamRule,
+  silhouette: Mask | null,
+  feathered: ReadonlyArray<Mask | null> | null = null,
+  keep: ReadonlyArray<Mask | null> | null = null,
+  turnMovingPair: ((a: string, b: string) => boolean) | null = null,
+): FringePushed[][] {
   const { width: W } = srcr;
   const { holder, cand } = seamCandidates(parts, srcr, rule, silhouette);
   const at = (i: number, d: number): number => {
@@ -2810,6 +2820,7 @@ export function pushBackFringe(parts: PlacedPart[], srcr: Raster, rule: SeamRule
     if (cand[d] === 0 || !shows(d)) continue;
     for (let i = holder[d] + 1; i < parts.length; i++) {
       if (feathered?.[i]?.data[d] === 1 || keep?.[i]?.data[d] === 1) continue;
+      if (turnMovingPair !== null && turnMovingPair(parts[i].record.name, parts[holder[d]].record.name)) continue;
       const s = at(i, d);
       if (s < 0) continue;
       const img = parts[i].image.data;
@@ -2820,7 +2831,8 @@ export function pushBackFringe(parts: PlacedPart[], srcr: Raster, rule: SeamRule
   }
   parts.forEach((part, i) => keepArtWhole(part, cleared[i], (q) => {
     const d = (part.record.y + Math.floor(q / part.record.w)) * W + part.record.x + (q % part.record.w);
-    return holder[d];
+    const h = holder[d];
+    return h >= 0 && turnMovingPair !== null && turnMovingPair(part.record.name, parts[h].record.name) ? -1 : h;
   }));
   const counts: Array<Map<number, number>> = parts.map(() => new Map());
   cleared.forEach((list, i) => {
@@ -2855,16 +2867,48 @@ export function pushBackFringe(parts: PlacedPart[], srcr: Raster, rule: SeamRule
  * under a subset set's actual cover instead of recolouring it to the painting.
  * (`assemble_parts.py` `main`, "5. seam override".)
  */
-export function seamOverride(parts: PlacedPart[], srcr: Raster, rule: SeamRule, silhouette: Mask | null, keep: ReadonlyArray<Mask | null> | null = null): void {
+export function seamOverride(
+  parts: PlacedPart[],
+  srcr: Raster,
+  rule: SeamRule,
+  silhouette: Mask | null,
+  keep: ReadonlyArray<Mask | null> | null = null,
+  turnMovingPair: ((a: string, b: string) => boolean) | null = null,
+): void {
   const { width: W } = srcr;
   const { top, cand } = seamCandidates(parts, srcr, rule, silhouette);
+  const r = (CORE_KERNEL - 1) >> 1;
   parts.forEach(({ record: p, image }, i) => {
+    const movingPeers =
+      turnMovingPair === null
+        ? []
+        : parts.map((_, j) => j).filter((j) => j !== i && turnMovingPair(p.name, parts[j].record.name));
     let n = 0;
     for (let y = 0; y < p.h; y++) {
       for (let x = 0; x < p.w; x++) {
-        const d = (p.y + y) * W + p.x + x;
+        const rx = p.x + x;
+        const ry = p.y + y;
+        const d = ry * W + rx;
         const s = (y * p.w + x) * 4;
         if (keep?.[i]?.data[d] === 1 || cand[d] === 0 || top[d] !== i || image.data[s + 3] < CORE_ALPHA) continue;
+        if (
+          movingPeers.some((j) => {
+            const pj = parts[j].record;
+            const imgJ = parts[j].image.data;
+            const x0 = Math.max(pj.x, rx - r);
+            const x1 = Math.min(pj.x + pj.w - 1, rx + r);
+            const y0 = Math.max(pj.y, ry - r);
+            const y1 = Math.min(pj.y + pj.h - 1, ry + r);
+            for (let ny = y0; ny <= y1; ny++) {
+              for (let nx = x0; nx <= x1; nx++) {
+                if (imgJ[((ny - pj.y) * pj.w + (nx - pj.x)) * 4 + 3] > 0) return true;
+              }
+            }
+            return false;
+          })
+        ) {
+          continue;
+        }
         image.data[s] = srcr.data[d * 4];
         image.data[s + 1] = srcr.data[d * 4 + 1];
         image.data[s + 2] = srcr.data[d * 4 + 2];
@@ -4999,7 +5043,7 @@ export function assemble(input: AssembleInput): AssembleResult {
   });
   const featheredInOrder: Array<Mask | null> = order.map((d) => ('patch' in d ? null : (pieceAt(d).b.feathered ?? null)));
   const keepInOrder = order.map((d) => ('limb' in d ? limbKeep[d.limb] : null));
-  const pushedBy = pushBackFringe(stack, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, featheredInOrder, keepInOrder);
+  const pushedBy = pushBackFringe(stack, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, featheredInOrder, keepInOrder, input.turnMovingPair ?? null);
   // Issue #255: a part's drift refusals in a body, and who holds the body in the draw order (the push-back clears
   // only fringe below CORE_ALPHA, and the seam override only recolours, so the holders read here are final).
   const holderAt = new Int32Array(W * H).fill(-1);
@@ -5123,7 +5167,7 @@ export function assemble(input: AssembleInput): AssembleResult {
   for (const p of placed) if (p.record.depth !== undefined && artFiles.has(p.record.depth.image)) refuseIfAny([{ code: 'DEPTH_SHEET_UNAMBIGUOUS', object: p.record.depth.image, detail: 'collides with a part artwork filename; choose noncolliding part names before sheet emission' }]);
 
 
-  seamOverride(placed, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, keepInOrder);
+  seamOverride(placed, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, keepInOrder, input.turnMovingPair ?? null);
   const can = recomposite(placed, W, H);
   // Issue #242: on a scene painting the figure is read off the full run, and every recomposite figure inside it.
   const inside = input.scene === true ? sceneFigure([...rig.entries()].filter(([k]) => k.startsWith('full:')).map(([, r]) => r), W, H) : null;
@@ -5923,7 +5967,14 @@ function unplannedNotes(
  * full-loader config, where it is optional.
  */
 export function stageFields(
-  cfg: Pick<CharacterConfig, 'seethrough' | 'assemble' | 'scene' | 'motion_seams'> & { limbs?: Record<string, Limb>; bones?: BoneEntry[] },
+  cfg: Pick<CharacterConfig, 'seethrough' | 'assemble' | 'scene' | 'motion_seams'> & {
+    limbs?: Record<string, Limb>;
+    bones?: BoneEntry[];
+    meshes?: Record<string, MeshSpec>;
+    regions?: Record<string, RegionSpec>;
+    constraints?: ConfigConstraint[];
+    turn?: TurnSpec;
+  },
   single: { w: number; h: number } | null = null,
 ): {
   resolution: number;
@@ -5941,6 +5992,7 @@ export function stageFields(
   armSplit?: ArmSplit;
   keySkeleton?: ControlSkeleton;
   headFaceUnderfill?: boolean;
+  turnMovingPair?: (a: string, b: string) => boolean;
 } {
   const problems: Problem[] = [];
   if (cfg.seethrough === undefined) {
@@ -5952,6 +6004,7 @@ export function stageFields(
   refuseIfAny(problems);
   const st = cfg.seethrough as SeeThrough;
   const keySkeleton = controlSkeletonOf(cfg);
+  const turnMovingPair = turnMovingPartPair(cfg);
   return {
     resolution: st.resolution,
     headBox: single !== null ? singleRunHeadBox(single.w, single.h, st.resolution) : (st.head_box as [number, number, number, number]),
@@ -5959,6 +6012,7 @@ export function stageFields(
     ...(st.arm_split === undefined ? {} : { armSplit: st.arm_split }),
     ...(keySkeleton === undefined ? {} : { keySkeleton }),
     ...(cfg.assemble.head_face_underfill === undefined ? {} : { headFaceUnderfill: cfg.assemble.head_face_underfill }),
+    ...(turnMovingPair === null ? {} : { turnMovingPair }),
     rigScale: cfg.assemble.rig_scale,
     plan: cfg.assemble.plan,
     extend: cfg.assemble.extend_below_crop ?? [],
