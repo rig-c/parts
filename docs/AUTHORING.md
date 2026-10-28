@@ -4517,6 +4517,7 @@ and stay absent).
 | <a id="CONFIG_TURN_EAR_DRAW_ORDER"></a>`CONFIG_TURN_EAR_DRAW_ORDER` | an ear part in `config.turn.roles` is drawn after `face` with role `"surface"` in `assemble.plan` | place `ear_r` and `ear_l` before `face` in `assemble.plan` so the turning cheek occludes the far ear |
 | <a id="CONFIG_TURN_HEAD_BONE"></a>`CONFIG_TURN_HEAD_BONE` | `config.turn.roles` is declared without a single bone `"head"` in `config.bones`, or `config.turn.body` without a single bone `"chest"` / `"hip"` (or its declared `bone`) | declare `"head"` (or the body turn root bone) as a single bone in `config.bones` |
 | <a id="CONFIG_TURN_SLIDER_NAME_FREE"></a>`CONFIG_TURN_SLIDER_NAME_FREE` | `config.turn.body.slider` (or the default `"body_yaw_dial"`) collides with a head turn dial (`"yaw"`, `"pitch"`, `"yaw_dial"`, `"pitch_dial"`) or an existing slider constraint in `config.constraints` (#787) | choose a distinct slider name in `config.turn.body.slider` |
+| <a id="RIG_TURN_SURFACE_MESH_GROUPS"></a>`RIG_TURN_SURFACE_MESH_GROUPS` | a surface part contains a blended attachment but lacks one 2.5D group, includes an ungrouped positive influence in any attachment, or also declares a unit/rear role | declare both `turn.roles` and `turn.body`, a body root outside head, surface in one or both groups, and bindings wholly inside those two subtrees |
 | <a id="RIG_TURN_SURFACE_MESH_BINDINGS"></a>`RIG_TURN_SURFACE_MESH_BINDINGS` | an authored surface mesh has unresolved/nonclosing weights or shares a frame moved by a unit/rear turn carrier | provide weighted bindings closing at 1 in the authored frame; use independent chains for parts with different roles |
 | <a id="RIG_TURN_SURFACE_MESH_ATTACHMENT"></a>`RIG_TURN_SURFACE_MESH_ATTACHMENT` | a surface mesh has an alternate drawing without its own registered depth sampling frame | use the base attachment; explicit islands retain their own slot, attachment and bindings |
 | <a id="RIG_TURN_SURFACE_DEPTH_REQUIRED"></a>`RIG_TURN_SURFACE_DEPTH_REQUIRED` | a part with role `"surface"` in `config.turn.roles` or `config.turn.body.roles` carries no depth sheet in `parts.json` | run `assemble` with `config.depth` or provide `<part>_depth.png` in `parts.json` |
@@ -5574,7 +5575,43 @@ dial; see [`CONFIG_TURN_ROLE_UNKNOWN`](#CONFIG_TURN_ROLE_UNKNOWN),
 [`RIG_TURN_SURFACE_MESH_BINDINGS`](#RIG_TURN_SURFACE_MESH_BINDINGS),
 [`CONFIG_TURN_UNIT_MESH_BONES`](#CONFIG_TURN_UNIT_MESH_BONES) and
 [`CONFIG_TURN_SLIDER_NAME_FREE`](#CONFIG_TURN_SLIDER_NAME_FREE).
-Authored weighted body meshes not named in `config.turn.body.roles` are unchanged and do not consume depth sheets. Measurement sheets are not packed
+A weighted surface spanning the head and body subtrees (#796) takes both
+fields. Declare it as `"surface"` in `turn.roles` or `turn.body.roles` (both is
+also accepted), with both 2.5D groups present. Head descendants belong to the
+head group; the body root (`turn.body.bone`, otherwise `chest`, otherwise `hip`)
+and its descendants outside head belong to the body group. Each vertex's
+setup position samples that part's own extended sheet; each group's pivot and
+reference-depth rule produce its offset. A vertex with 0.7 torso and 0.3 head
+weights receives `0.7 * bodyOffset + 0.3 * headOffset`. Each influence stores
+only its group's inverse-frame offset; Spine applies its weight once. Head yaw
+and pitch and body yaw remain independent and additive. No bone is rebound,
+no topology is regenerated, and the neutral keys are empty. The split is
+enabled only when a part contains an attachment with positive bindings to
+both groups. Every attachment of that part then carries its own
+group mask: a head-only sibling island receives head yaw/pitch only; a
+body-only sibling receives body yaw only. An inactive group's timeline is
+omitted, so a zero timeline cannot overwrite the active slider's deform.
+Their authored topology and binding order remain unchanged. A part with no blended attachment keeps its explicit
+role behavior and output bytes, even if separate single-group islands bind
+different subtrees. Generated meshes and explicit mixed attachments use the
+same split.
+
+An unlisted mesh does not opt in merely by spanning the subtrees. A blended
+surface requires its own depth sheet (`RIG_TURN_SURFACE_DEPTH_REQUIRED`) and
+both groups, with every positive influence in one of their subtrees, including
+on sibling attachments (`RIG_TURN_SURFACE_MESH_GROUPS`). Zero weights do not
+make an attachment blended or require the other group; on the split path
+their deform pairs are zero and retain their place in the binding stream.
+Every binding name must still resolve and weights must still close at one,
+even for an inactive sibling. Do not use `"unit"` to opt in: its existing
+`CONFIG_TURN_UNIT_MESH_BONES` rule still requires one carrier subtree.
+Shared unit/rear carriers that move a surface's binding frame remain refused
+by `RIG_TURN_SURFACE_MESH_BINDINGS`; a blended surface does not add a second
+carrier translation to compensate. Alternate drawings still need their own
+registered sampling frame (`RIG_TURN_SURFACE_MESH_ATTACHMENT`).
+
+Authored weighted body meshes absent from both surface-role tables are unchanged
+and do not consume depth sheets. Measurement sheets are not packed
 art. An authored `parts.json` depth reference remains an active standalone
 `rig` declaration even without config opt-in: its file/size/color/opacity
 guards still apply. With binding inactive there is no added reference, file or

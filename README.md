@@ -587,10 +587,15 @@ separate, and its agreement reading cannot certify an image's polarity.
 
 Assembly emits registered part sheets and references; rig emits PAD4 sheets and
 `depth_sheets.json`. Since 1.68.0 (#777), [config.turn.roles](docs/AUTHORING.md#3-configjson-field-by-field)
-uses depth sheets for 2.5D head turns with grid surfaces and `yaw_dial`/`pitch_dial`
+uses depth sheets for 2.5D head turns with grid or authored weighted surfaces and `yaw_dial`/`pitch_dial`
 controls; see [`CONFIG_TURN_ROLE_UNKNOWN`](docs/AUTHORING.md#CONFIG_TURN_ROLE_UNKNOWN)
 and [`CONFIG_TURN_SURFACE_REQUIRED`](docs/AUTHORING.md#CONFIG_TURN_SURFACE_REQUIRED).
-Authored weighted body meshes do not consume depth sheets. No-image builds keep the
-legacy output bytes. `comfy seethrough --config <file> --depth-run <full|head>`
+`turn.body.roles` adds independent body yaw. A weighted mesh declared as
+`"surface"` in either group and blending head and torso bones receives both
+fields in proportion to its skin weights. Each sibling island takes only its
+own group; parts without a blended attachment keep their existing role behavior
+and output bytes. Unlisted meshes do not consume turn depth sheets. See the
+[blended surface contract](docs/AUTHORING.md#per-layer-depth-sheets-773).
+No-image builds keep the legacy output bytes. `comfy seethrough --config <file> --depth-run <full|head>`
 uses the same opt-in; its default captures art only. Standalone authored part
 references remain active declarations. See [the input contract and refusals](docs/AUTHORING.md#per-layer-depth-sheets-773).

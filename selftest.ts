@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runTurnBlendChecks } from './tools/check_turn_blend.ts';
 import { runTurnSurfaceChecks } from './tools/check_turn_surface.ts';
 import { runBaseAnchorChecks } from './tools/check_base_anchor.ts';
 import { runDepthSheetChecks, runDepthSheetCoreChecks, runDepthSheetStillChecks } from './tools/check_depthsheets.ts';
@@ -6728,6 +6729,7 @@ function runRigSuite(): number {
   section('rig: bones, lattice meshes, weights, regions and the idle');
   const { say, bad } = counter();
   { const dir = temp('turn-surface'); try { runTurnSurfaceChecks(dir, (name, ok, detail) => say(name, ok, detail, 'weighted surface depth offsets on synthetic flat blocks')); } finally { rmSync(dir, { recursive: true, force: true }); } }
+  runTurnBlendChecks((name, ok, detail) => say(name, ok, detail, 'two scalar turn fields, independent analytic controls on a synthetic neck'));
   runDepthSheetStillChecks((name, ok, detail) => say(name, ok, detail, 'actual source-row split and companion, independent synthetic ramp; no broad no-depth verdict'));
   { const dir = temp('depth-core'); try { runDepthSheetCoreChecks(dir, (name, ok, detail) => say(name, ok, detail, 'actual pinned Core generator, mandatory rig-play gate')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   const r = buildRig(rigCfg(), rigParts(), rigImages());
