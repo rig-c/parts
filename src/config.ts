@@ -4797,13 +4797,6 @@ function checkTurn(
           c.fail('CONFIG_TURN_ROLE_UNKNOWN', `${at}.roles.${part}`, `is ${show(role)}; expected one of ${TURN_ROLES.map((x) => `"${x}"`).join(', ')}`);
         } else {
           if (role === 'surface') {
-            if (meshParts.has(part)) {
-              c.fail(
-                'CONFIG_TURN_SURFACE_REGION',
-                `${at}.roles.${part}`,
-                `declares "${part}" as "surface", and config.meshes.${part} also declares a mesh for "${part}"; a 2.5D turn "surface" part must be attached in config.regions so the rig stage can promote it to a depth-backed grid mesh`,
-              );
-            }
             surfaceParts.push(part);
           }
           if (role === 'unit') {
@@ -4853,7 +4846,7 @@ function checkTurn(
       }
       for (const ear of earParts) {
         const earIdx = parts.indexOf(ear);
-        for (const surf of surfaceParts) {
+        for (const surf of surfaceParts.filter((p) => p === 'face')) {
           const surfIdx = parts.indexOf(surf);
           if (earIdx !== -1 && surfIdx !== -1 && earIdx > surfIdx) {
             c.fail(
@@ -4867,7 +4860,7 @@ function checkTurn(
       if (!bones.has('head')) {
         c.fail('CONFIG_TURN_HEAD_BONE', `${at}.roles`, 'requires a declared "head" bone in config.bones to parent the 2.5D turn carriers');
       }
-      for (const reserved of [FACESHIFT_BONE, REAR_SHIFT_BONE, ...surfaceParts.map(turnSurfaceBone), ...unitMeshParts.map(turnUnitBone)]) {
+      for (const reserved of [FACESHIFT_BONE, REAR_SHIFT_BONE, ...surfaceParts.filter((p) => !meshParts.has(p)).map(turnSurfaceBone), ...unitMeshParts.map(turnUnitBone)]) {
         if (bones.has(reserved)) {
           c.fail('CONFIG_TURN_BONE_FREE', `bone "${reserved}"`, `is a carrier bone the rig stage adds under head for config.turn.roles, and config.bones already declares a bone of that name; rename it`);
         }
@@ -4935,13 +4928,6 @@ function checkTurn(
           if (typeof role !== 'string' || !(TURN_ROLES as readonly string[]).includes(role)) {
             c.fail('CONFIG_TURN_ROLE_UNKNOWN', `${bAt}.roles.${part}`, `is ${show(role)}; expected one of ${TURN_ROLES.map((x) => `"${x}"`).join(', ')}`);
           } else if (role === 'surface') {
-            if (meshParts.has(part)) {
-              c.fail(
-                'CONFIG_TURN_SURFACE_REGION',
-                `${bAt}.roles.${part}`,
-                `declares "${part}" as "surface", and config.meshes.${part} also declares a mesh for "${part}"; a 2.5D turn "surface" part must be attached in config.regions so the rig stage can promote it to a depth-backed grid mesh`,
-              );
-            }
             bodySurfaceParts.push(part);
           } else if (role === 'unit' && meshParts.has(part)) {
             bodyUnitMeshParts.push(part);
@@ -4984,7 +4970,7 @@ function checkTurn(
         if (bodySurfaceParts.length === 0) {
           c.fail('CONFIG_TURN_SURFACE_REQUIRED', `${bAt}.roles`, 'declares no part with role "surface"; at least one surface part is required for 2.5D body turn');
         }
-        for (const reserved of [BODYSHIFT_BONE, BODY_REAR_SHIFT_BONE, ...bodySurfaceParts.map(turnSurfaceBone), ...bodyUnitMeshParts.map(turnUnitBone)]) {
+        for (const reserved of [BODYSHIFT_BONE, BODY_REAR_SHIFT_BONE, ...bodySurfaceParts.filter((p) => !meshParts.has(p)).map(turnSurfaceBone), ...bodyUnitMeshParts.map(turnUnitBone)]) {
           if (bones.has(reserved)) {
             c.fail('CONFIG_TURN_BONE_FREE', `bone "${reserved}"`, `is a carrier bone the rig stage adds for config.turn.body.roles, and config.bones already declares a bone of that name; rename it`);
           }
