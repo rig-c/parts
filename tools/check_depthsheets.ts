@@ -533,6 +533,21 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
     r: 20,
     segments: [['hip', [32, 56], [32, 36]], 'bang_c'],
   };
+  const badHeadUnitMeshShared = make25DFixture();
+  (badHeadUnitMeshShared.rawCfg.meshes as Record<string, unknown>).hair_back = {
+    grid: 8,
+    r: 20,
+    segments: ['bang_c'],
+  };
+  ((badHeadUnitMeshShared.rawCfg.turn as { roles: Record<string, unknown> }).roles).hair_back = 'unit';
+  const badHeadUnitMeshSharedRig = make25DFixture();
+  (badHeadUnitMeshSharedRig.rawCfg.meshes as Record<string, unknown>).hair_back = {
+    grid: 8,
+    r: 20,
+    segments: [['bang_c1', [32, 22], [32, 27]]],
+  };
+  const parsedSharedRig = parseConfig(badHeadUnitMeshSharedRig.rawCfg);
+  (parsedSharedRig.turn?.roles as Record<string, string>).hair_back = 'unit';
   const badNoDepth = make25DFixture();
   delete (badNoDepth.pf.parts.find((p) => p.name === 'face') as { depth?: unknown }).depth;
   const badGridBudget = make25DFixture();
@@ -547,6 +562,38 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
   const cResUnitBone = errors(() => parseConfig(badReservedUnitBone.rawCfg));
   const cSurfMesh = errors(() => parseConfig(badHeadSurfaceMesh.rawCfg));
   const cUnitMeshOutside = errors(() => parseConfig(badHeadUnitMeshOutside.rawCfg));
+  let sharedCfgErr: PartsError | undefined;
+  try {
+    parseConfig(badHeadUnitMeshShared.rawCfg);
+  } catch (e) {
+    if (e instanceof PartsError) sharedCfgErr = e;
+    else throw e;
+  }
+  let sharedRigErr: PartsError | undefined;
+  try {
+    buildRig(parsedSharedRig, badHeadUnitMeshSharedRig.pf, badHeadUnitMeshSharedRig.imgs);
+  } catch (e) {
+    if (e instanceof PartsError) sharedRigErr = e;
+    else throw e;
+  }
+  const cUnitMeshSharedOk =
+    sharedCfgErr?.problems.some(
+      (p) =>
+        p.code === 'CONFIG_TURN_UNIT_MESH_BONES' &&
+        p.object === 'config.turn.roles.hair_front' &&
+        p.detail.includes('"hair_front"') &&
+        p.detail.includes('"hair_back"') &&
+        p.detail.includes('"bang_c0"'),
+    ) === true &&
+    sharedRigErr?.problems.some(
+      (p) =>
+        p.code === 'CONFIG_TURN_UNIT_MESH_BONES' &&
+        p.object === 'config.turn.roles.hair_front' &&
+        p.detail.includes('"hair_front"') &&
+        p.detail.includes('"hair_back"') &&
+        p.detail.includes('"bang_c0"') &&
+        p.detail.includes('"bang_c1"'),
+    ) === true;
   const cNoDepth = errors(() => buildRig(parseConfig(badNoDepth.rawCfg), badNoDepth.pf, badNoDepth.imgs));
   const cGrid = errors(() => buildRig(parseConfig(badGridBudget.rawCfg), badGridBudget.pf, badGridBudget.imgs));
   const cEarFront = errors(() => buildRig(parseConfig(badEarFront.rawCfg), badEarFront.pf, badEarFront.imgs));
@@ -559,10 +606,11 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
       cResUnitBone.includes('CONFIG_TURN_BONE_FREE') &&
       cSurfMesh.includes('CONFIG_TURN_SURFACE_REGION') &&
       cUnitMeshOutside.includes('CONFIG_TURN_UNIT_MESH_BONES') &&
+      cUnitMeshSharedOk &&
       cNoDepth.includes('RIG_TURN_SURFACE_DEPTH_REQUIRED') &&
       cGrid.includes('RIG_TURN_GRID_BUDGET') &&
       cEarFront.includes('RIG_TURN_EAR_DEPTH_BEHIND_CHEEK'),
-    `role=${cRole.join(',')}; noSurf=${cNoSurf.join(',')}; earOrder=${cEarOrd.join(',')}; resBone=${cResBone.join(',')}; resUnitBone=${cResUnitBone.join(',')}; surfMesh=${cSurfMesh.join(',')}; unitMeshOutside=${cUnitMeshOutside.join(',')}; noDepth=${cNoDepth.join(',')}; grid=${cGrid.join(',')}; earFront=${cEarFront.join(',')}`,
+    `role=${cRole.join(',')}; noSurf=${cNoSurf.join(',')}; earOrder=${cEarOrd.join(',')}; resBone=${cResBone.join(',')}; resUnitBone=${cResUnitBone.join(',')}; surfMesh=${cSurfMesh.join(',')}; unitMeshOutside=${cUnitMeshOutside.join(',')}; unitMeshShared=${cUnitMeshSharedOk}; noDepth=${cNoDepth.join(',')}; grid=${cGrid.join(',')}; earFront=${cEarFront.join(',')}`,
   );
 
   // #787: 2.5D body-turn dial projecting torso surface grids through the head's turn path.

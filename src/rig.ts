@@ -3162,7 +3162,14 @@ export function buildWaistPairSource(
         if (!existingNames.has(PITCH_DIAL_BONE)) bones.push({ name: PITCH_DIAL_BONE, parent: ROOT_BONE, x: 0, y: 0 });
 
         const boneByName = new Map(bones.map((b) => [b.name, b]));
+        const headCarriers = new Set<string>(carriers.map((b) => b.name));
+        const assertNotHeadTurnCarrier = (boneName: string, targetParent: string): void => {
+          if (headCarriers.has(boneName)) {
+            throw new Error(`turn invariant violated: turn carrier "${boneName}" must never be reparented (target "${targetParent}")`);
+          }
+        };
         const reparentFromHead = (boneName: string, targetParent: string): void => {
+          assertNotHeadTurnCarrier(boneName, targetParent);
           const b = boneByName.get(boneName);
           if (b !== undefined && b.parent === 'head') b.parent = targetParent;
         };
@@ -3186,10 +3193,13 @@ export function buildWaistPairSource(
                     w.bone = carrierBone;
                   } else {
                     let cur = boneByName.get(w.bone);
-                    while (cur !== undefined && cur.parent !== undefined && cur.parent !== 'head' && cur.parent !== carrierBone) {
+                    while (cur !== undefined && cur.parent !== undefined && cur.parent !== 'head' && !headCarriers.has(cur.parent)) {
                       cur = boneByName.get(cur.parent);
                     }
-                    if (cur !== undefined && cur.parent === 'head') cur.parent = carrierBone;
+                    if (cur !== undefined && cur.parent === 'head') {
+                      assertNotHeadTurnCarrier(cur.name, carrierBone);
+                      cur.parent = carrierBone;
+                    }
                   }
                 }
               }
@@ -3197,6 +3207,7 @@ export function buildWaistPairSource(
           }
         };
 
+        const headUnitRootOwner = new Map<string, { part: string; bone: string; rootLabel: string }>();
         const rebindUnitMeshToHeadCarrier = (part: string): void => {
           const unitBone = turnUnitBone(part);
           const bound: string[] = [];
@@ -3220,14 +3231,36 @@ export function buildWaistPairSource(
           const stillSl = slotByName.get(`${part}${STILL_SUFFIX}`);
           if (stillSl !== undefined) addBound(stillSl.bone);
           const uncarried: string[] = [];
+          const sharedRoots = new Set<string>();
+          let hasShared = false;
           for (const bName of bound) {
             if (bName === 'head' || bName === unitBone) continue;
             let cur = boneByName.get(bName);
-            while (cur !== undefined && cur.parent !== undefined && cur.parent !== 'head' && cur.parent !== unitBone && cur.parent !== FACESHIFT_BONE) {
+            while (cur !== undefined && cur.parent !== undefined && cur.parent !== 'head' && !headCarriers.has(cur.parent)) {
               cur = boneByName.get(cur.parent);
             }
-            if (cur === undefined || (cur.parent !== 'head' && cur.parent !== unitBone && cur.parent !== FACESHIFT_BONE) || cur.name === REAR_SHIFT_BONE) {
+            if (cur === undefined || cur.parent === undefined || (cur.parent !== 'head' && !headCarriers.has(cur.parent)) || headCarriers.has(cur.name)) {
               uncarried.push(bName);
+              continue;
+            }
+            const rootLabel = cur.name.endsWith(CONTROL_SUFFIX) ? cur.name.slice(0, -CONTROL_SUFFIX.length) : cur.name;
+            const owner = headUnitRootOwner.get(cur.name);
+            if (owner !== undefined && owner.part !== part) {
+              hasShared = true;
+              if (!sharedRoots.has(cur.name)) {
+                sharedRoots.add(cur.name);
+                const sharedDetail =
+                  owner.bone === bName
+                    ? `bone "${bName}"${bName === owner.rootLabel ? '' : ` (under "${owner.rootLabel}")`}`
+                    : `chain root "${owner.rootLabel}" ("${owner.part}" binds "${owner.bone}", "${part}" binds "${bName}")`;
+                fail(
+                  'CONFIG_TURN_UNIT_MESH_BONES',
+                  `config.turn.roles.${part}`,
+                  `declares "${part}" as "unit", and config.meshes.${part} shares ${sharedDetail} with "unit" mesh "${owner.part}" (config.turn.roles.${owner.part}); each "unit" mesh reparents its bound chain root under its own "<part>_unit" carrier, so two "unit" meshes cannot share a bone or chain under "head"`,
+                );
+              }
+            } else if (owner === undefined) {
+              headUnitRootOwner.set(cur.name, { part, bone: bName, rootLabel });
             }
           }
           if (uncarried.length > 0) {
@@ -3238,6 +3271,7 @@ export function buildWaistPairSource(
             );
             return;
           }
+          if (hasShared) return;
           rebindPartToCarrier(part, unitBone);
         };
 
@@ -3319,21 +3353,29 @@ export function buildWaistPairSource(
         }
 
         const boneByName = new Map(bones.map((b) => [b.name, b]));
+        const bodyCarriers = new Set<string>(carriers.map((b) => b.name));
+        const assertNotBodyTurnCarrier = (boneName: string, targetParent: string): void => {
+          if (bodyCarriers.has(boneName)) {
+            throw new Error(`turn invariant violated: turn carrier "${boneName}" must never be reparented (target "${targetParent}")`);
+          }
+        };
         const torsoRoots = new Set<string>([bodyRoot, 'chest', 'hip', `${bodyRoot}${CONTROL_SUFFIX}`, `chest${CONTROL_SUFFIX}`, `hip${CONTROL_SUFFIX}`]);
         const headExclusion = new Set<string>(['head', `head${CONTROL_SUFFIX}`, 'neck', `neck${CONTROL_SUFFIX}`, FACESHIFT_BONE, REAR_SHIFT_BONE]);
         const reparentFromTorso = (boneName: string, targetParent: string): void => {
+          assertNotBodyTurnCarrier(boneName, targetParent);
           if (torsoRoots.has(boneName) || headExclusion.has(boneName)) return;
           let cur = boneByName.get(boneName);
           while (
             cur !== undefined &&
             cur.parent !== undefined &&
             !torsoRoots.has(cur.parent) &&
-            cur.parent !== targetParent &&
+            !bodyCarriers.has(cur.parent) &&
             !headExclusion.has(cur.parent)
           ) {
             cur = boneByName.get(cur.parent);
           }
           if (cur !== undefined && cur.parent !== undefined && torsoRoots.has(cur.parent) && !torsoRoots.has(cur.name) && !headExclusion.has(cur.name)) {
+            assertNotBodyTurnCarrier(cur.name, targetParent);
             const oldParent = cur.parent;
             if (oldParent !== bodyRoot) {
               const oldTr = world.get(oldParent);
@@ -3383,6 +3425,7 @@ export function buildWaistPairSource(
           }
         };
 
+        const bodyUnitRootOwner = new Map<string, { part: string; bone: string; rootLabel: string }>();
         const rebindBodyUnitMeshToCarrier = (part: string): void => {
           const unitBone = turnUnitBone(part);
           const bound: string[] = [];
@@ -3406,6 +3449,8 @@ export function buildWaistPairSource(
           const stillSl = slotByName.get(`${part}${STILL_SUFFIX}`);
           if (stillSl !== undefined) addBound(stillSl.bone);
           const uncarried: string[] = [];
+          const sharedRoots = new Set<string>();
+          let hasShared = false;
           for (const bName of bound) {
             if (headExclusion.has(bName)) {
               uncarried.push(bName);
@@ -3417,8 +3462,7 @@ export function buildWaistPairSource(
               cur !== undefined &&
               cur.parent !== undefined &&
               !torsoRoots.has(cur.parent) &&
-              cur.parent !== unitBone &&
-              cur.parent !== BODYSHIFT_BONE &&
+              !bodyCarriers.has(cur.parent) &&
               !headExclusion.has(cur.parent)
             ) {
               cur = boneByName.get(cur.parent);
@@ -3426,12 +3470,32 @@ export function buildWaistPairSource(
             if (
               cur === undefined ||
               cur.parent === undefined ||
-              (!torsoRoots.has(cur.parent) && cur.parent !== unitBone && cur.parent !== BODYSHIFT_BONE) ||
+              (!torsoRoots.has(cur.parent) && !bodyCarriers.has(cur.parent)) ||
               torsoRoots.has(cur.name) ||
               headExclusion.has(cur.name) ||
-              cur.name === BODY_REAR_SHIFT_BONE
+              bodyCarriers.has(cur.name)
             ) {
               uncarried.push(bName);
+              continue;
+            }
+            const rootLabel = cur.name.endsWith(CONTROL_SUFFIX) ? cur.name.slice(0, -CONTROL_SUFFIX.length) : cur.name;
+            const owner = bodyUnitRootOwner.get(cur.name);
+            if (owner !== undefined && owner.part !== part) {
+              hasShared = true;
+              if (!sharedRoots.has(cur.name)) {
+                sharedRoots.add(cur.name);
+                const sharedDetail =
+                  owner.bone === bName
+                    ? `bone "${bName}"${bName === owner.rootLabel ? '' : ` (under "${owner.rootLabel}")`}`
+                    : `chain root "${owner.rootLabel}" ("${owner.part}" binds "${owner.bone}", "${part}" binds "${bName}")`;
+                fail(
+                  'CONFIG_TURN_UNIT_MESH_BONES',
+                  `config.turn.body.roles.${part}`,
+                  `declares "${part}" as "unit", and config.meshes.${part} shares ${sharedDetail} with "unit" mesh "${owner.part}" (config.turn.body.roles.${owner.part}); each "unit" mesh reparents its bound chain root under its own "<part>_unit" carrier, so two "unit" meshes cannot share a bone or chain under "${bodyRoot}"`,
+                );
+              }
+            } else if (owner === undefined) {
+              bodyUnitRootOwner.set(cur.name, { part, bone: bName, rootLabel });
             }
           }
           if (uncarried.length > 0) {
@@ -3442,6 +3506,7 @@ export function buildWaistPairSource(
             );
             return;
           }
+          if (hasShared) return;
           rebindBodyPartToCarrier(part, unitBone);
         };
 

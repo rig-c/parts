@@ -4444,34 +4444,54 @@ function checkTurn(
         if (isPlainObject(rg) && typeof rg.bone === 'string') add(rg.bone);
       }
     }
+    if (isPlainObject(m.explicit)) {
+      const addWeights = (ws: Json): void => {
+        if (!Array.isArray(ws)) return;
+        for (const row of ws) {
+          if (!Array.isArray(row)) continue;
+          for (const w of row) {
+            if (isPlainObject(w) && typeof w.bone === 'string') add(w.bone);
+          }
+        }
+      };
+      addWeights(m.explicit.weights);
+      if (Array.isArray(m.explicit.islands)) {
+        for (const isl of m.explicit.islands) {
+          if (isPlainObject(isl)) addWeights(isl.weights);
+        }
+      }
+    }
     return out;
   };
-  const canCarryHeadUnitBone = (boneName: string): boolean => {
-    if (boneName === 'head') return true;
+  const headSubtreeRoot = (boneName: string): string | null => {
+    if (boneName === 'head') return 'head';
     let cur: string | undefined = boneName;
     const seen = new Set<string>();
     while (cur !== undefined && !seen.has(cur)) {
       seen.add(cur);
       const p = parents.get(cur);
-      if (p === 'head') return true;
+      if (p === 'head') return cur;
       cur = p;
     }
-    return false;
+    return null;
   };
-  const canCarryBodyUnitBone = (boneName: string, torsoRoots: ReadonlySet<string>, headExclusion: ReadonlySet<string>): boolean => {
-    if (headExclusion.has(boneName)) return false;
-    if (torsoRoots.has(boneName)) return true;
+  const canCarryHeadUnitBone = (boneName: string): boolean => headSubtreeRoot(boneName) !== null;
+  const bodySubtreeRoot = (boneName: string, torsoRoots: ReadonlySet<string>, headExclusion: ReadonlySet<string>): string | null => {
+    if (headExclusion.has(boneName)) return null;
+    if (torsoRoots.has(boneName)) return boneName;
     let cur: string | undefined = boneName;
     const seen = new Set<string>();
     while (cur !== undefined && !seen.has(cur)) {
       seen.add(cur);
       const p = parents.get(cur);
-      if (p === undefined || headExclusion.has(p)) return false;
-      if (torsoRoots.has(p)) return !torsoRoots.has(cur) && !headExclusion.has(cur);
+      if (p === undefined || headExclusion.has(p)) return null;
+      if (torsoRoots.has(p)) return !torsoRoots.has(cur) && !headExclusion.has(cur) ? cur : null;
       cur = p;
     }
-    return false;
+    return null;
   };
+  const canCarryBodyUnitBone = (boneName: string, torsoRoots: ReadonlySet<string>, headExclusion: ReadonlySet<string>): boolean =>
+    bodySubtreeRoot(boneName, torsoRoots, headExclusion) !== null;
   const hasRoles = isPlainObject(v) && 'roles' in v;
   const hasBody = isPlainObject(v) && 'body' in v;
   const hasDepths = isPlainObject(v) && 'depths' in v;
@@ -4531,6 +4551,7 @@ function checkTurn(
       const surfaceParts: string[] = [];
       const unitMeshParts: string[] = [];
       const earParts: string[] = [];
+      const headUnitRootOwner = new Map<string, { part: string; bone: string }>();
       for (const [part, role] of Object.entries(r)) {
         if (isRecordKey(part)) continue;
         if (!attached.has(part)) {
@@ -4562,6 +4583,29 @@ function checkTurn(
                     `${at}.roles.${part}`,
                     `declares "${part}" as "unit", and config.meshes.${part} binds bone(s) ${uncarried.map((b) => `"${b}"`).join(', ')} outside the "head" subtree, which cannot be carried by "${turnUnitBone(part)}" under "${FACESHIFT_BONE}"; bind a head "unit" mesh only to "head" or bones and chains under "head"`,
                   );
+                }
+                const reportedRoots = new Set<string>();
+                for (const b of bound) {
+                  if (b === 'head') continue;
+                  const rootBone = headSubtreeRoot(b);
+                  if (rootBone === null) continue;
+                  const owner = headUnitRootOwner.get(rootBone);
+                  if (owner !== undefined && owner.part !== part) {
+                    if (!reportedRoots.has(rootBone)) {
+                      reportedRoots.add(rootBone);
+                      const sharedDetail =
+                        owner.bone === b
+                          ? `bone "${b}"${b === rootBone ? '' : ` (under "${rootBone}")`}`
+                          : `chain root "${rootBone}" ("${owner.part}" binds "${owner.bone}", "${part}" binds "${b}")`;
+                      c.fail(
+                        'CONFIG_TURN_UNIT_MESH_BONES',
+                        `${at}.roles.${part}`,
+                        `declares "${part}" as "unit", and config.meshes.${part} shares ${sharedDetail} with "unit" mesh "${owner.part}" (${at}.roles.${owner.part}); each "unit" mesh reparents its bound chain root under its own "<part>_unit" carrier, so two "unit" meshes cannot share a bone or chain under "head"`,
+                      );
+                    }
+                  } else if (owner === undefined) {
+                    headUnitRootOwner.set(rootBone, { part, bone: b });
+                  }
                 }
               }
             }
@@ -4646,6 +4690,7 @@ function checkTurn(
         const bodyRoot = typeof bo.bone === 'string' && bones.has(bo.bone) ? bo.bone : bones.has('chest') ? 'chest' : 'hip';
         const torsoRoots = new Set<string>([bodyRoot, 'chest', 'hip']);
         const headExclusion = new Set<string>(['head', 'neck']);
+        const bodyUnitRootOwner = new Map<string, { part: string; bone: string }>();
         for (const [part, role] of Object.entries(br)) {
           if (isRecordKey(part)) continue;
           if (!attached.has(part)) {
@@ -4673,6 +4718,29 @@ function checkTurn(
                   `${bAt}.roles.${part}`,
                   `declares "${part}" as "unit", and config.meshes.${part} binds bone(s) ${uncarried.map((b) => `"${b}"`).join(', ')} outside the "${bodyRoot}" torso subtree, which cannot be carried by "${turnUnitBone(part)}" under "${BODYSHIFT_BONE}"; bind a body "unit" mesh only to the torso root or bones and chains under it`,
                 );
+              }
+              const reportedRoots = new Set<string>();
+              for (const b of bound) {
+                if (torsoRoots.has(b)) continue;
+                const rootBone = bodySubtreeRoot(b, torsoRoots, headExclusion);
+                if (rootBone === null) continue;
+                const owner = bodyUnitRootOwner.get(rootBone);
+                if (owner !== undefined && owner.part !== part) {
+                  if (!reportedRoots.has(rootBone)) {
+                    reportedRoots.add(rootBone);
+                    const sharedDetail =
+                      owner.bone === b
+                        ? `bone "${b}"${b === rootBone ? '' : ` (under "${rootBone}")`}`
+                        : `chain root "${rootBone}" ("${owner.part}" binds "${owner.bone}", "${part}" binds "${b}")`;
+                    c.fail(
+                      'CONFIG_TURN_UNIT_MESH_BONES',
+                      `${bAt}.roles.${part}`,
+                      `declares "${part}" as "unit", and config.meshes.${part} shares ${sharedDetail} with "unit" mesh "${owner.part}" (${bAt}.roles.${owner.part}); each "unit" mesh reparents its bound chain root under its own "<part>_unit" carrier, so two "unit" meshes cannot share a bone or chain under "${bodyRoot}"`,
+                    );
+                  }
+                } else if (owner === undefined) {
+                  bodyUnitRootOwner.set(rootBone, { part, bone: b });
+                }
               }
             }
           }
