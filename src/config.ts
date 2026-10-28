@@ -99,7 +99,7 @@ import { edgeLength } from './length.ts';
 import { setFocusProblems } from './setfocus.ts';
 import { isSkeletonName, KEYPOINT_NAMES, type KeypointName, type PosePoints, scaledPoints, SKELETON_NAMES, type SkeletonName } from './skeleton.ts';
 import { acceptedTagNames, AUTHOR_LABEL_RULE, AUTHOR_PREFIX, readLayerTag } from './tags.ts';
-import { EAR_DEPTH_RANGE, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, type FaceDeformKey, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, FACESHIFT_BONE, REAR_SHIFT_BONE, TURN_BONE, TURN_ROLES, type TurnSpec, turnNearest, turnSurfaceBone } from './turn.ts';
+import { BODY_REAR_SHIFT_BONE, BODY_YAW_DIAL_BONE, BODYSHIFT_BONE, EAR_DEPTH_RANGE, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, type FaceDeformKey, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, FACESHIFT_BONE, PITCH_DIAL_BONE, REAR_SHIFT_BONE, TURN_BONE, TURN_ROLES, type TurnSpec, turnNearest, turnSurfaceBone, YAW_DIAL_BONE } from './turn.ts';
 import { FLOOR_FORMS, type FloorForm, type MeshInfluences } from './weights.ts';
 
 export type Point = [number, number];
@@ -1697,7 +1697,16 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
   const attached = attachedParts(t.meshes, t.regions);
   if ('motion_seams' in t) c.problems.push(...motionSeamProblems(t.motion_seams, attached, 'config.motion_seams', 'CONFIG_MOTION_SEAM'));
   const hasAltFace = hasAlternateFaceSet(t.assemble, [...parts, ...cuts]);
-  if ('turn' in t) checkTurn(c, t.turn, attached, names.bones, hasAltFace, parts);
+  const declaredSliders = new Set<string>();
+  if (Array.isArray(t.constraints)) {
+    for (const entry of t.constraints) {
+      if (isPlainObject(entry) && entry.type === 'slider' && typeof entry.name === 'string' && entry.name.length > 0) {
+        declaredSliders.add(entry.name);
+      }
+    }
+  }
+  const meshParts = isPlainObject(t.meshes) ? new Set(Object.keys(t.meshes).filter((k) => !isRecordKey(k))) : new Set<string>();
+  if ('turn' in t) checkTurn(c, t.turn, attached, names.bones, hasAltFace, parts, declaredSliders, meshParts);
   if ('scene' in t) checkScene(c, t.scene);
   if ('cloth' in t) checkCloth(c, t.cloth);
   if ('requirements' in t && c.string('config.requirements', t.requirements) && base !== null) checkRequirementsFile(c, resolve(base, t.requirements));
@@ -4383,53 +4392,68 @@ function checkAnimationSetKeys(
   }
 }
 
-function checkTurn(c: Check, v: Json, attached: Set<string>, bones: Set<string>, hasAltFace: boolean, parts: readonly string[] = []): void {
+function checkTurn(
+  c: Check,
+  v: Json,
+  attached: Set<string>,
+  bones: Set<string>,
+  hasAltFace: boolean,
+  parts: readonly string[] = [],
+  declaredSliders: ReadonlySet<string> = new Set(),
+  meshParts: ReadonlySet<string> = new Set(),
+): void {
   const at = 'config.turn';
   const hasRoles = isPlainObject(v) && 'roles' in v;
+  const hasBody = isPlainObject(v) && 'body' in v;
+  const hasDepths = isPlainObject(v) && 'depths' in v;
   const o = hasRoles
-    ? c.object(at, v, ['roles'], ['pivot', 'depths', 'counter', 'grid', 'unitDepths', 'head', 'deform', 'band', 'radius', 'surface'])
-    : c.object(at, v, ['pivot', 'depths'], ['roles', 'counter', 'grid', 'unitDepths', 'head', 'deform', 'band', 'radius', 'surface']);
+    ? c.object(at, v, ['roles'], ['pivot', 'depths', 'counter', 'grid', 'unitDepths', 'head', 'deform', 'band', 'radius', 'surface', 'body'])
+    : hasBody && !hasDepths
+      ? c.object(at, v, ['body'], ['pivot', 'depths', 'roles', 'counter', 'grid', 'unitDepths', 'head', 'deform', 'band', 'radius', 'surface'])
+      : c.object(at, v, ['pivot', 'depths'], ['roles', 'counter', 'grid', 'unitDepths', 'head', 'deform', 'band', 'radius', 'surface', 'body']);
   if (o === null) return;
   const pivot = 'pivot' in o && c.number(`${at}.pivot`, o.pivot) ? (o.pivot as number) : null;
+  const checkGridField = (gAt: string, gv: Json): void => {
+    const checkGridPair = (pAt: string, pv: Json): void => {
+      if (!Array.isArray(pv) || pv.length !== 2 || !pv.every((n) => typeof n === 'number' && Number.isInteger(n) && n >= 2)) {
+        c.fail('CONFIG_FIELD_TYPE', pAt, `is ${show(pv)}; a [cols, rows] pair of integers >= 2 is required`);
+      }
+    };
+    if (Array.isArray(gv)) {
+      checkGridPair(gAt, gv);
+    } else if (isPlainObject(gv)) {
+      for (const [part, pv] of Object.entries(gv)) {
+        if (isRecordKey(part)) continue;
+        if (!attached.has(part)) {
+          c.fail('CONFIG_NAME_RESOLVES', `${gAt}.${part}`, `names "${part}", which neither config.meshes nor config.regions attaches`);
+        }
+        checkGridPair(`${gAt}.${part}`, pv);
+      }
+    } else {
+      c.fail('CONFIG_FIELD_TYPE', gAt, `is ${show(gv)}; a [cols, rows] pair or object of part -> [cols, rows] is required`);
+    }
+  };
+  const checkUnitDepthsField = (uAt: string, uv: Json): void => {
+    if (!isPlainObject(uv)) {
+      c.fail('CONFIG_FIELD_TYPE', uAt, `is ${show(uv)}; an object of part or bone name -> scalar depth is required`);
+    } else {
+      for (const [k, dv] of Object.entries(uv)) {
+        if (isRecordKey(k)) continue;
+        if (!attached.has(k) && !bones.has(k)) {
+          c.fail('CONFIG_NAME_RESOLVES', `${uAt}.${k}`, `names "${k}", which is neither an attached part nor a declared bone`);
+        }
+        c.number(`${uAt}.${k}`, dv);
+      }
+    }
+  };
   if ('counter' in o && c.number(`${at}.counter`, o.counter)) {
     const cnt = o.counter as number;
     if (cnt < 0 || cnt > 1) {
       c.fail('CONFIG_TURN_COUNTER_RANGE', `${at}.counter`, `is ${cnt}; a rear counter fraction in [0, 1] is required`);
     }
   }
-  if ('grid' in o) {
-    const checkGridPair = (gAt: string, gv: Json): void => {
-      if (!Array.isArray(gv) || gv.length !== 2 || !gv.every((n) => typeof n === 'number' && Number.isInteger(n) && n >= 2)) {
-        c.fail('CONFIG_FIELD_TYPE', gAt, `is ${show(gv)}; a [cols, rows] pair of integers >= 2 is required`);
-      }
-    };
-    if (Array.isArray(o.grid)) {
-      checkGridPair(`${at}.grid`, o.grid);
-    } else if (isPlainObject(o.grid)) {
-      for (const [part, gv] of Object.entries(o.grid)) {
-        if (isRecordKey(part)) continue;
-        if (!attached.has(part)) {
-          c.fail('CONFIG_NAME_RESOLVES', `${at}.grid.${part}`, `names "${part}", which neither config.meshes nor config.regions attaches`);
-        }
-        checkGridPair(`${at}.grid.${part}`, gv);
-      }
-    } else {
-      c.fail('CONFIG_FIELD_TYPE', `${at}.grid`, `is ${show(o.grid)}; a [cols, rows] pair or object of part -> [cols, rows] is required`);
-    }
-  }
-  if ('unitDepths' in o) {
-    if (!isPlainObject(o.unitDepths)) {
-      c.fail('CONFIG_FIELD_TYPE', `${at}.unitDepths`, `is ${show(o.unitDepths)}; an object of part or bone name -> scalar depth is required`);
-    } else {
-      for (const [k, dv] of Object.entries(o.unitDepths)) {
-        if (isRecordKey(k)) continue;
-        if (!attached.has(k) && !bones.has(k)) {
-          c.fail('CONFIG_NAME_RESOLVES', `${at}.unitDepths.${k}`, `names "${k}", which is neither an attached part nor a declared bone`);
-        }
-        c.number(`${at}.unitDepths.${k}`, dv);
-      }
-    }
-  }
+  if ('grid' in o) checkGridField(`${at}.grid`, o.grid);
+  if ('unitDepths' in o) checkUnitDepthsField(`${at}.unitDepths`, o.unitDepths);
   if ('roles' in o) {
     const r = o.roles;
     if (!isPlainObject(r) || Object.keys(r).length === 0) {
@@ -4445,7 +4469,16 @@ function checkTurn(c: Check, v: Json, attached: Set<string>, bones: Set<string>,
         if (typeof role !== 'string' || !(TURN_ROLES as readonly string[]).includes(role)) {
           c.fail('CONFIG_TURN_ROLE_UNKNOWN', `${at}.roles.${part}`, `is ${show(role)}; expected one of ${TURN_ROLES.map((x) => `"${x}"`).join(', ')}`);
         } else {
-          if (role === 'surface') surfaceParts.push(part);
+          if (role === 'surface') {
+            if (meshParts.has(part)) {
+              c.fail(
+                'CONFIG_TURN_SURFACE_REGION',
+                `${at}.roles.${part}`,
+                `declares "${part}" as "surface", and config.meshes.${part} also declares a mesh for "${part}"; a 2.5D turn "surface" part must be attached in config.regions so the rig stage can promote it to a depth-backed grid mesh`,
+              );
+            }
+            surfaceParts.push(part);
+          }
           if (role === 'unit' && (part === 'ear_r' || part === 'ear_l')) earParts.push(part);
         }
       }
@@ -4471,6 +4504,83 @@ function checkTurn(c: Check, v: Json, attached: Set<string>, bones: Set<string>,
       for (const reserved of [FACESHIFT_BONE, REAR_SHIFT_BONE, ...surfaceParts.map(turnSurfaceBone)]) {
         if (bones.has(reserved)) {
           c.fail('CONFIG_TURN_BONE_FREE', `bone "${reserved}"`, `is a carrier bone the rig stage adds under head for config.turn.roles, and config.bones already declares a bone of that name; rename it`);
+        }
+      }
+    }
+  }
+  if ('body' in o) {
+    const bAt = `${at}.body`;
+    const bo = c.object(bAt, o.body, ['roles'], ['pivot', 'bone', 'slider', 'counter', 'grid', 'unitDepths']);
+    if (bo !== null) {
+      if ('pivot' in bo) {
+        c.number(`${bAt}.pivot`, bo.pivot);
+      } else if (pivot === null) {
+        c.fail('CONFIG_FIELD_PRESENT', `${bAt}.pivot`, 'is absent and required when config.turn.pivot is not declared');
+      }
+      if ('counter' in bo && c.number(`${bAt}.counter`, bo.counter)) {
+        const cnt = bo.counter as number;
+        if (cnt < 0 || cnt > 1) {
+          c.fail('CONFIG_TURN_COUNTER_RANGE', `${bAt}.counter`, `is ${cnt}; a rear counter fraction in [0, 1] is required`);
+        }
+      }
+      if ('grid' in bo) checkGridField(`${bAt}.grid`, bo.grid);
+      if ('unitDepths' in bo) checkUnitDepthsField(`${bAt}.unitDepths`, bo.unitDepths);
+      if ('bone' in bo) {
+        if (c.string(`${bAt}.bone`, bo.bone) && !bones.has(bo.bone as string)) {
+          c.fail('CONFIG_NAME_RESOLVES', `${bAt}.bone`, `names "${bo.bone}", which config.bones does not declare`);
+        }
+      } else if (!bones.has('chest') && !bones.has('hip')) {
+        c.fail('CONFIG_TURN_HEAD_BONE', `${bAt}.roles`, 'requires a declared "chest" or "hip" bone (or config.turn.body.bone) in config.bones to parent the 2.5D body turn carriers');
+      }
+      let sliderName = BODY_YAW_DIAL_BONE;
+      if ('slider' in bo) {
+        if (c.string(`${bAt}.slider`, bo.slider)) sliderName = bo.slider as string;
+      }
+      const headSliders = new Set(['yaw', 'pitch', YAW_DIAL_BONE, PITCH_DIAL_BONE]);
+      if (declaredSliders.has(sliderName) || headSliders.has(sliderName)) {
+        c.fail(
+          'CONFIG_TURN_SLIDER_NAME_FREE',
+          `${bAt}.slider`,
+          `is "${sliderName}", which collides with an existing slider constraint "${sliderName}"; choose a distinct slider name`,
+        );
+      }
+      if (bones.has(sliderName)) {
+        c.fail(
+          'CONFIG_TURN_BONE_FREE',
+          `bone "${sliderName}"`,
+          `is the dial bone the rig stage adds under root for config.turn.body, and config.bones already declares a bone of that name; rename it`,
+        );
+      }
+      const br = bo.roles;
+      if (!isPlainObject(br) || Object.keys(br).length === 0) {
+        c.fail('CONFIG_FIELD_TYPE', `${bAt}.roles`, `is ${show(br)}; a non-empty object of part name -> ("surface" | "unit" | "rear") is required`);
+      } else {
+        const bodySurfaceParts: string[] = [];
+        for (const [part, role] of Object.entries(br)) {
+          if (isRecordKey(part)) continue;
+          if (!attached.has(part)) {
+            c.fail('CONFIG_NAME_RESOLVES', `${bAt}.roles.${part}`, `names "${part}", which neither config.meshes nor config.regions attaches; a part the rig draws is required`);
+          }
+          if (typeof role !== 'string' || !(TURN_ROLES as readonly string[]).includes(role)) {
+            c.fail('CONFIG_TURN_ROLE_UNKNOWN', `${bAt}.roles.${part}`, `is ${show(role)}; expected one of ${TURN_ROLES.map((x) => `"${x}"`).join(', ')}`);
+          } else if (role === 'surface') {
+            if (meshParts.has(part)) {
+              c.fail(
+                'CONFIG_TURN_SURFACE_REGION',
+                `${bAt}.roles.${part}`,
+                `declares "${part}" as "surface", and config.meshes.${part} also declares a mesh for "${part}"; a 2.5D turn "surface" part must be attached in config.regions so the rig stage can promote it to a depth-backed grid mesh`,
+              );
+            }
+            bodySurfaceParts.push(part);
+          }
+        }
+        if (bodySurfaceParts.length === 0) {
+          c.fail('CONFIG_TURN_SURFACE_REQUIRED', `${bAt}.roles`, 'declares no part with role "surface"; at least one surface part is required for 2.5D body turn');
+        }
+        for (const reserved of [BODYSHIFT_BONE, BODY_REAR_SHIFT_BONE, ...bodySurfaceParts.map(turnSurfaceBone)]) {
+          if (bones.has(reserved)) {
+            c.fail('CONFIG_TURN_BONE_FREE', `bone "${reserved}"`, `is a carrier bone the rig stage adds for config.turn.body.roles, and config.bones already declares a bone of that name; rename it`);
+          }
         }
       }
     }
@@ -4590,7 +4700,7 @@ function checkTurn(c: Check, v: Json, attached: Set<string>, bones: Set<string>,
       );
     }
   }
-  if (!hasRoles && bones.has(TURN_BONE)) {
+  if (!hasRoles && (!hasBody || hasDepths) && bones.has(TURN_BONE)) {
     c.fail('CONFIG_TURN_BONE_FREE', `bone "${TURN_BONE}"`, `is the control the rig stage adds under root for config.turn, and config.bones already declares a bone of that name; rename it`);
   }
 }
