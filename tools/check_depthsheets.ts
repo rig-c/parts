@@ -383,10 +383,91 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
   const hfWeights25 = built25.rig.skins.default.hair_front?.hair_front;
   const hbWeights25 = built25.rig.skins.default.hair_back?.hair_back;
   const hfUsesFaceshift = hfWeights25 !== undefined && 'type' in hfWeights25 && hfWeights25.weights.some((r) => r.some((w) => w.bone === 'faceshift'));
+  const hfUsesUnitCarrier =
+    hfWeights25 !== undefined &&
+    'type' in hfWeights25 &&
+    hfWeights25.weights.some((r) => r.some((w) => w.bone === 'hair_front_unit'));
+  const hfUsesBangChain =
+    hfWeights25 !== undefined &&
+    'type' in hfWeights25 &&
+    hfWeights25.weights.some((r) => r.some((w) => w.bone === 'bang_c0' || w.bone === 'bang_c1')) &&
+    hfWeights25.weights.every(
+      (r) => r.length > 0 && r.every((w) => w.bone === 'hair_front_unit' || w.bone === 'bang_c0' || w.bone === 'bang_c1'),
+    );
   const hbUsesRearShift = hbWeights25 !== undefined && 'type' in hbWeights25 && hbWeights25.weights.some((r) => r.some((w) => w.bone === 'rear_shift'));
+  const turnUnits25 = built25.motion.groups?.turn_units ?? [];
+  const skel25 = JSON.parse(readFileSync(join(t25Dir, 'built/skeleton.json'), 'utf8')) as {
+    animations: Record<string, {
+      bones?: Record<string, {
+        translatex?: Array<{ time?: number; value?: number }>;
+        translatey?: Array<{ time?: number; value?: number }>;
+      }>;
+    }>;
+  };
+  const faceshiftYawPos25 = skel25.animations.turn?.bones?.faceshift?.translatex?.[3]?.value ?? 0;
+  const unitYawPos25 = skel25.animations.turn?.bones?.hair_front_unit?.translatex?.[3]?.value ?? 0;
+  const worldUnitYawPos25 = faceshiftYawPos25 + unitYawPos25;
+  const faceshiftPitchPos25 = skel25.animations.tilt?.bones?.faceshift?.translatey?.[3]?.value ?? 0;
+  const unitPitchPos25 = skel25.animations.tilt?.bones?.hair_front_unit?.translatey?.[3]?.value ?? 0;
+  const worldUnitPitchPos25 = faceshiftPitchPos25 + unitPitchPos25;
+
+  // Compare against a region unit part on bang_c0 to prove identical unit depth translation.
+  const f25Region = make25DFixture();
+  delete (f25Region.rawCfg.meshes as Record<string, unknown>).hair_front;
+  (f25Region.rawCfg.regions as Record<string, unknown>).hair_front = 'bang_c0';
+  const built25Region = buildRig(parseConfig(f25Region.rawCfg), f25Region.pf, f25Region.imgs);
+  const t25RegDir = join(dir, 'turn25d_reg');
+  mkdirSync(join(t25RegDir, 'images'), { recursive: true });
+  for (const [name, img] of built25Region.images) writePng(join(t25RegDir, 'images', name), img);
+  for (const [name, text] of rigOutputTexts(built25Region, null)) writeFileSync(join(t25RegDir, name), text);
+  const run25Reg = spawnSync(process.execPath, [resolve('node_modules/rig-c/cli.ts'), 'build', '--rig', join(t25RegDir, 'rig.json'), '--motion', join(t25RegDir, 'motion.json'), '--out', join(t25RegDir, 'built'), '--profile', 'rig-play'], { encoding: 'utf8' });
+  const skel25Reg = JSON.parse(readFileSync(join(t25RegDir, 'built/skeleton.json'), 'utf8')) as typeof skel25;
+  const regBang0YawPos25 = skel25Reg.animations.turn?.bones?.bang_c0?.translatex?.[3]?.value ?? 0;
+  const regBang0PitchPos25 = skel25Reg.animations.tilt?.bones?.bang_c0?.translatey?.[3]?.value ?? 0;
+
+  // Verify parent-first bone order holds: faceshift < hair_front_unit < bang_c0 < bang_c1.
+  const faceshiftIdx = built25.rig.bones.findIndex((b) => b.name === 'faceshift');
+  const unitIdx = built25.rig.bones.findIndex((b) => b.name === 'hair_front_unit');
+  const bang0Idx = built25.rig.bones.findIndex((b) => b.name === 'bang_c0');
+  const bang1Idx = built25.rig.bones.findIndex((b) => b.name === 'bang_c1');
+
+  // Verify a demo-shaped multi-chain "unit" mesh (binding "head" directly plus two chains bang_r, bang_l).
+  const f25Demo = make25DFixture();
+  (f25Demo.rawCfg.bones as unknown[]).push(
+    { chain: 'bang_r', parent: 'head', points: [[24, 16], [24, 22]], tip: [24, 27] },
+    { chain: 'bang_l', parent: 'head', points: [[40, 16], [40, 22]], tip: [40, 27] },
+  );
+  (f25Demo.rawCfg.meshes as Record<string, unknown>).hair_front = {
+    grid: 8,
+    r: 20,
+    segments: [['head', [32, 36], [32, 14]], 'bang_r', 'bang_c', 'bang_l'],
+  };
+  const built25Demo = buildRig(parseConfig(f25Demo.rawCfg), f25Demo.pf, f25Demo.imgs);
+  const t25DemoDir = join(dir, 'turn25d_demo');
+  mkdirSync(join(t25DemoDir, 'images'), { recursive: true });
+  for (const [name, img] of built25Demo.images) writePng(join(t25DemoDir, 'images', name), img);
+  for (const [name, text] of rigOutputTexts(built25Demo, null)) writeFileSync(join(t25DemoDir, name), text);
+  const run25Demo = spawnSync(process.execPath, [resolve('node_modules/rig-c/cli.ts'), 'build', '--rig', join(t25DemoDir, 'rig.json'), '--motion', join(t25DemoDir, 'motion.json'), '--out', join(t25DemoDir, 'built'), '--profile', 'rig-play'], { encoding: 'utf8' });
+  const demoParents = new Map(built25Demo.rig.bones.map((b) => [b.name, b.parent]));
+  const demoWeights = built25Demo.rig.skins.default.hair_front?.hair_front;
+  const demoAllUnderUnit =
+    demoParents.get('hair_front_unit') === 'faceshift' &&
+    demoParents.get('bang_r0') === 'hair_front_unit' &&
+    demoParents.get('bang_c0') === 'hair_front_unit' &&
+    demoParents.get('bang_l0') === 'hair_front_unit' &&
+    demoWeights !== undefined &&
+    'type' in demoWeights &&
+    demoWeights.weights.every((r) =>
+      r.every((w) =>
+        ['hair_front_unit', 'bang_r0', 'bang_r1', 'bang_c0', 'bang_c1', 'bang_l0', 'bang_l1'].includes(w.bone),
+      ),
+    );
+
   say(
     'DZ51_TURN_25D_PRODUCER_PROMOTES_SURFACE_REPARENTS_CARRIERS_AND_GATES_CORE',
     run25.status === 0 &&
+      run25Reg.status === 0 &&
+      run25Demo.status === 0 &&
       faceAtt25 !== undefined &&
       'type' in faceAtt25 &&
       faceAtt25.generator?.kind === 'grid' &&
@@ -395,15 +476,30 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
       boneParents25.get('faceshift') === 'head' &&
       boneParents25.get('rear_shift') === 'head' &&
       boneParents25.get('face_surface') === 'faceshift' &&
+      boneParents25.get('hair_front_unit') === 'faceshift' &&
       boneParents25.get('eye_r') === 'faceshift' &&
       boneParents25.get('ear_r') === 'faceshift' &&
-      boneParents25.get('bang_c0') === 'faceshift' &&
+      boneParents25.get('bang_c0') === 'hair_front_unit' &&
+      boneParents25.get('bang_c1') === 'bang_c0' &&
       boneParents25.get('hb_c0') === 'rear_shift' &&
-      hfUsesFaceshift &&
+      !hfUsesFaceshift &&
+      hfUsesUnitCarrier &&
+      hfUsesBangChain &&
       hbUsesRearShift &&
+      demoAllUnderUnit &&
+      turnUnits25.includes('hair_front_unit') &&
+      !turnUnits25.includes('bang_c0') &&
+      unitYawPos25 > 0 &&
+      unitYawPos25 === regBang0YawPos25 &&
+      unitPitchPos25 > 0 &&
+      unitPitchPos25 === regBang0PitchPos25 &&
+      faceshiftIdx !== -1 &&
+      unitIdx > faceshiftIdx &&
+      bang0Idx > unitIdx &&
+      bang1Idx > bang0Idx &&
       built25.motion.animations.turn !== undefined &&
       built25.motion.animations.tilt !== undefined,
-    `Core build exit=${run25.status}; generator=${JSON.stringify(faceAtt25 && 'type' in faceAtt25 ? faceAtt25.generator : null)}; parents: faceshift->${boneParents25.get('faceshift')}, rear_shift->${boneParents25.get('rear_shift')}, eye_r->${boneParents25.get('eye_r')}, bang_c0->${boneParents25.get('bang_c0')}, hb_c0->${boneParents25.get('hb_c0')}; hfUsesFaceshift=${hfUsesFaceshift}, hbUsesRearShift=${hbUsesRearShift}`,
+    `Core build exit=${run25.status} (demo=${run25Demo.status}); generator=${JSON.stringify(faceAtt25 && 'type' in faceAtt25 ? faceAtt25.generator : null)}; parents: faceshift->${boneParents25.get('faceshift')}, rear_shift->${boneParents25.get('rear_shift')}, hair_front_unit->${boneParents25.get('hair_front_unit')}, bang_c0->${boneParents25.get('bang_c0')}, bang_c1->${boneParents25.get('bang_c1')}, hb_c0->${boneParents25.get('hb_c0')}; hfUsesFaceshift=${hfUsesFaceshift}, hfUsesUnitCarrier=${hfUsesUnitCarrier}, hfUsesBangChain=${hfUsesBangChain}, hbUsesRearShift=${hbUsesRearShift}, demoAllUnderUnit=${demoAllUnderUnit}; unitYawPos=${unitYawPos25} (world=${worldUnitYawPos25.toFixed(6)} vs faceshift=${faceshiftYawPos25}, reg=${regBang0YawPos25}); unitPitchPos=${unitPitchPos25} (world=${worldUnitPitchPos25.toFixed(6)} vs faceshift=${faceshiftPitchPos25}, reg=${regBang0PitchPos25}); faceshift@${faceshiftIdx}<hair_front_unit@${unitIdx}<bang_c0@${bang0Idx}<bang_c1@${bang1Idx}`,
   );
 
   const badRole = make25DFixture();
@@ -426,9 +522,17 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
   };
   const badReservedBone = make25DFixture();
   (badReservedBone.rawCfg.bones as unknown[]).push({ name: 'faceshift', parent: 'head', at: [32, 36] });
+  const badReservedUnitBone = make25DFixture();
+  (badReservedUnitBone.rawCfg.bones as unknown[]).push({ name: 'hair_front_unit', parent: 'head', at: [32, 36] });
   const badHeadSurfaceMesh = make25DFixture();
   delete (badHeadSurfaceMesh.rawCfg.regions as Record<string, unknown>).face;
   (badHeadSurfaceMesh.rawCfg.meshes as Record<string, unknown>).face = { grid: 8, r: 20, segments: [['head', [32, 36], [32, 14]]] };
+  const badHeadUnitMeshOutside = make25DFixture();
+  (badHeadUnitMeshOutside.rawCfg.meshes as Record<string, unknown>).hair_front = {
+    grid: 8,
+    r: 20,
+    segments: [['hip', [32, 56], [32, 36]], 'bang_c'],
+  };
   const badNoDepth = make25DFixture();
   delete (badNoDepth.pf.parts.find((p) => p.name === 'face') as { depth?: unknown }).depth;
   const badGridBudget = make25DFixture();
@@ -440,7 +544,9 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
   const cNoSurf = errors(() => parseConfig(badNoSurface.rawCfg));
   const cEarOrd = errors(() => parseConfig(badEarOrder.rawCfg));
   const cResBone = errors(() => parseConfig(badReservedBone.rawCfg));
+  const cResUnitBone = errors(() => parseConfig(badReservedUnitBone.rawCfg));
   const cSurfMesh = errors(() => parseConfig(badHeadSurfaceMesh.rawCfg));
+  const cUnitMeshOutside = errors(() => parseConfig(badHeadUnitMeshOutside.rawCfg));
   const cNoDepth = errors(() => buildRig(parseConfig(badNoDepth.rawCfg), badNoDepth.pf, badNoDepth.imgs));
   const cGrid = errors(() => buildRig(parseConfig(badGridBudget.rawCfg), badGridBudget.pf, badGridBudget.imgs));
   const cEarFront = errors(() => buildRig(parseConfig(badEarFront.rawCfg), badEarFront.pf, badEarFront.imgs));
@@ -450,11 +556,13 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
       cNoSurf.includes('CONFIG_TURN_SURFACE_REQUIRED') &&
       cEarOrd.includes('CONFIG_TURN_EAR_DRAW_ORDER') &&
       cResBone.includes('CONFIG_TURN_BONE_FREE') &&
+      cResUnitBone.includes('CONFIG_TURN_BONE_FREE') &&
       cSurfMesh.includes('CONFIG_TURN_SURFACE_REGION') &&
+      cUnitMeshOutside.includes('CONFIG_TURN_UNIT_MESH_BONES') &&
       cNoDepth.includes('RIG_TURN_SURFACE_DEPTH_REQUIRED') &&
       cGrid.includes('RIG_TURN_GRID_BUDGET') &&
       cEarFront.includes('RIG_TURN_EAR_DEPTH_BEHIND_CHEEK'),
-    `role=${cRole.join(',')}; noSurf=${cNoSurf.join(',')}; earOrder=${cEarOrd.join(',')}; resBone=${cResBone.join(',')}; surfMesh=${cSurfMesh.join(',')}; noDepth=${cNoDepth.join(',')}; grid=${cGrid.join(',')}; earFront=${cEarFront.join(',')}`,
+    `role=${cRole.join(',')}; noSurf=${cNoSurf.join(',')}; earOrder=${cEarOrd.join(',')}; resBone=${cResBone.join(',')}; resUnitBone=${cResUnitBone.join(',')}; surfMesh=${cSurfMesh.join(',')}; unitMeshOutside=${cUnitMeshOutside.join(',')}; noDepth=${cNoDepth.join(',')}; grid=${cGrid.join(',')}; earFront=${cEarFront.join(',')}`,
   );
 
   // #787: 2.5D body-turn dial projecting torso surface grids through the head's turn path.
@@ -701,6 +809,9 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
   const badBodySurfaceMesh = makeBody25DFixture();
   delete (badBodySurfaceMesh.rawCfg.regions as Record<string, unknown>).topwear;
   (badBodySurfaceMesh.rawCfg.meshes as Record<string, unknown>).topwear = { grid: 8, r: 20, segments: [['chest', [32, 44], [32, 36]]] };
+  const badBodyUnitMeshBones = makeBody25DFixture();
+  delete (badBodyUnitMeshBones.rawCfg.regions as Record<string, unknown>).badge;
+  (badBodyUnitMeshBones.rawCfg.meshes as Record<string, unknown>).badge = { grid: 4, r: 10, segments: [['head', [32, 36], [28, 42]]] };
 
   const cbNoDepth = errors(() => buildRig(parseConfig(badBodyNoDepth.rawCfg), badBodyNoDepth.pf, badBodyNoDepth.imgs));
   const cbPartMissing = errors(() => buildRig(parseConfig(badBodyPartMissing.rawCfg), badBodyPartMissing.pf, badBodyPartMissing.imgs));
@@ -709,6 +820,7 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
   const cbSliderHead = errors(() => parseConfig(badBodySliderCollision.rawCfg));
   const cbSliderCst = errors(() => parseConfig(badBodySliderConstraintCollision.rawCfg));
   const cbSurfMesh = errors(() => parseConfig(badBodySurfaceMesh.rawCfg));
+  const cbUnitMeshBones = errors(() => parseConfig(badBodyUnitMeshBones.rawCfg));
   say(
     'DZ54_BODY_TURN_25D_REFUSALS_NAMED',
     cbNoDepth.includes('RIG_TURN_SURFACE_DEPTH_REQUIRED') &&
@@ -717,8 +829,9 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
       cbRigUnattached.includes('RIG_NAME_RESOLVES') &&
       cbSliderHead.includes('CONFIG_TURN_SLIDER_NAME_FREE') &&
       cbSliderCst.includes('CONFIG_TURN_SLIDER_NAME_FREE') &&
-      cbSurfMesh.includes('CONFIG_TURN_SURFACE_REGION'),
-    `noDepth=${cbNoDepth.join(',')}; partMissing=${cbPartMissing.join(',')}; unattached=${cbUnattached.join(',')}; rigUnattached=${cbRigUnattached.join(',')}; sliderHead=${cbSliderHead.join(',')}; sliderCst=${cbSliderCst.join(',')}; surfMesh=${cbSurfMesh.join(',')}`,
+      cbSurfMesh.includes('CONFIG_TURN_SURFACE_REGION') &&
+      cbUnitMeshBones.includes('CONFIG_TURN_UNIT_MESH_BONES'),
+    `noDepth=${cbNoDepth.join(',')}; partMissing=${cbPartMissing.join(',')}; unattached=${cbUnattached.join(',')}; rigUnattached=${cbRigUnattached.join(',')}; sliderHead=${cbSliderHead.join(',')}; sliderCst=${cbSliderCst.join(',')}; surfMesh=${cbSurfMesh.join(',')}; unitMeshBones=${cbUnitMeshBones.join(',')}`,
   );
 }
 
