@@ -39830,7 +39830,7 @@ function aliasSpans(): RegExp[] {
 const FORMER_NAME_LINES: ReadonlyArray<readonly [string, string, string]> = [
   ['package.json', `    "${FORMER_PACKAGE_NAME}": "./bin/${COMMAND_NAME}.cjs"`, 'the transition bin: the former command on the same launcher'],
   ['.gitignore', `/${FORMER_PACKAGE_NAME}-*.tgz`, 'npm pack in a checkout of a tag before the rename writes the tarball under the former name'],
-  ['README.md', `as \`${FORMER_PACKAGE_NAME}\`, its former name**, and the install keeps a \`${FORMER_PACKAGE_NAME}\` command`, 'the install section says what the former name was and that its command is kept'],
+  ['README.md', `as \`${FORMER_PACKAGE_NAME}\`, the legacy install name**, and the install keeps a \`${FORMER_PACKAGE_NAME}\` command`, 'the install section names the legacy install name and says its command is kept'],
   ['scripts/alias_tarball.ts', `export const ALIASES: readonly string[] = ['${COMMAND_NAME}', '${FORMER_PACKAGE_NAME}'];`, 'the one place a program reads the aliases the package is also published as (AL01)'],
 ];
 
