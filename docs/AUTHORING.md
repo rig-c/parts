@@ -5644,7 +5644,16 @@ Two same-group fields with incompatible emitted offsets raise
 [`RIG_TURN_SURFACE_OVERLAP_DEPTH`](#RIG_TURN_SURFACE_OVERLAP_DEPTH).
 
 Unit/rear neighbours contribute their actual emitted rigid carrier motion,
-including its resolved unit depth or rear counter field. Their own sheet is
+including its resolved unit depth or rear counter field. A unit region split by
+`motion.blink.still` supplies both emitted drawings: the lower slot and
+`<part>_still`, each with its own bone and resolved unit depth (#807). Support
+uses the shown region's image size, offsets and rotation, with transparent
+padding excluded from each piece's crop rectangle. The original source-alpha
+condition still applies; the lower piece cannot lend its depth to upper art
+through its transparent padding. A missing split slot, shown attachment,
+image or setup frame raises
+[`RIG_TURN_SURFACE_OVERLAP_SUPPORT`](#RIG_TURN_SURFACE_OVERLAP_SUPPORT);
+a slot explicitly showing nothing supplies no attachment. Their own sheet is
 not resampled to invent a spatial bend or a new refusal. Generated surface
 grids keep their Core generator: Core's grid builder and transform evaluator
 provide inspection metadata for the same existing topology and vertex field.

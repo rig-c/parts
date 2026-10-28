@@ -595,7 +595,10 @@ and [`CONFIG_TURN_SURFACE_REQUIRED`](docs/AUTHORING.md#CONFIG_TURN_SURFACE_REQUI
 fields in proportion to its skin weights. Inside the existing setup alpha
 overlap with a single-group neighbour, a blended attachment's vertex takes
 that neighbour's existing emitted triangle field at its setup position (#804), without changing skin weights,
-setup or idle. Conflicting neighbour groups are refused by name. Each sibling island takes only its
+setup or idle. A `motion.blink.still` unit neighbour supplies both emitted
+pieces, each on its own bone and resolved depth; transparent padding does not
+let either piece lend its field to the other's art (#807). Missing emitted
+split support is refused by name. Conflicting neighbour groups are refused by name. Each sibling island takes only its
 own group; parts without a blended attachment keep their existing role behavior
 and output bytes. Unlisted meshes do not consume turn depth sheets. See the
 [blended surface contract](docs/AUTHORING.md#per-layer-depth-sheets-773).
