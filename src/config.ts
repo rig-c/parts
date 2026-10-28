@@ -99,7 +99,8 @@ import { edgeLength } from './length.ts';
 import { setFocusProblems } from './setfocus.ts';
 import { isSkeletonName, KEYPOINT_NAMES, type KeypointName, type PosePoints, scaledPoints, SKELETON_NAMES, type SkeletonName } from './skeleton.ts';
 import { acceptedTagNames, AUTHOR_LABEL_RULE, AUTHOR_PREFIX, readLayerTag } from './tags.ts';
-import { BODY_REAR_SHIFT_BONE, BODY_YAW_DIAL_BONE, BODYSHIFT_BONE, EAR_DEPTH_RANGE, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, type FaceDeformKey, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, FACESHIFT_BONE, PITCH_DIAL_BONE, REAR_SHIFT_BONE, TURN_BONE, TURN_ROLES, type TurnSpec, turnNearest, turnSurfaceBone, turnUnitBone, YAW_DIAL_BONE } from './turn.ts';
+import { BODYSHIFT_BONE, BODY_REAR_SHIFT_BONE, BODY_YAW_DIAL_BONE, EAR_DEPTH_RANGE, FACESHIFT_BONE, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, type FaceDeformKey, PITCH_DIAL_BONE, REAR_SHIFT_BONE, TURN_BONE, TURN_ROLES, type TurnRole, type TurnSpec, YAW_DIAL_BONE, turnNearest, turnSurfaceBone, turnUnitBone } from './turn.ts';
+export type { TurnSpec };
 import { FLOOR_FORMS, type FloorForm, type MeshInfluences } from './weights.ts';
 
 export type Point = [number, number];
@@ -791,28 +792,242 @@ export interface PartBinding {
  */
 export function partBoundBones(b: PartBinding): Map<string, string[]> {
   const chains = new Map<string, string[]>();
-  for (const e of b.bones) if ('chain' in e) chains.set(e.chain, e.points.map((_, k) => `${e.chain}${k}`));
+  for (const e of Array.isArray(b.bones) ? b.bones : []) {
+    if (isPlainObject(e) && 'chain' in e && typeof e.chain === 'string' && Array.isArray(e.points)) {
+      chains.set(e.chain, e.points.map((_, k) => `${e.chain}${k}`));
+    }
+  }
   const out = new Map<string, string[]>();
   const bind = (part: string, bone: string): void => {
     const list = out.get(part) ?? [];
     if (!list.includes(bone)) list.push(bone);
     out.set(part, list);
   };
-  for (const [part, m] of Object.entries(b.meshes)) {
-    if ('explicit' in m) {
-      for (const row of explicitWeightRows(m)) for (const w of row) bind(part, w.bone);
-      if (m.explicit.islands !== undefined) for (const bName of explicitSlotBones(m)) bind(part, bName);
-      continue;
+  if (isPlainObject(b.meshes)) {
+    for (const [part, m] of Object.entries(b.meshes)) {
+      if (isRecordKey(part) || !isPlainObject(m)) continue;
+      if ('explicit' in m && isPlainObject(m.explicit)) {
+        const addWeights = (ws: Json): void => {
+          if (!Array.isArray(ws)) return;
+          for (const row of ws) {
+            if (!Array.isArray(row)) continue;
+            for (const w of row) {
+              if (isPlainObject(w) && typeof w.bone === 'string') bind(part, w.bone);
+            }
+          }
+        };
+        if (Array.isArray(m.explicit.islands)) {
+          for (const isl of m.explicit.islands) {
+            if (isPlainObject(isl)) addWeights(isl.weights);
+          }
+          const seg0 =
+            Array.isArray(m.segments) && m.segments.length > 0
+              ? typeof m.segments[0] === 'string'
+                ? m.segments[0]
+                : Array.isArray(m.segments[0]) && typeof m.segments[0][0] === 'string'
+                  ? m.segments[0][0]
+                  : undefined
+              : undefined;
+          for (const isl of m.explicit.islands) {
+            if (!isPlainObject(isl)) continue;
+            const bName = typeof isl.bone === 'string' ? isl.bone : seg0;
+            if (bName !== undefined) bind(part, bName);
+          }
+        } else {
+          addWeights(m.explicit.weights);
+        }
+        continue;
+      }
+      if (Array.isArray(m.segments)) {
+        for (const sg of m.segments) {
+          if (typeof sg === 'string') {
+            for (const l of chains.get(sg) ?? [sg]) bind(part, l);
+          } else if (Array.isArray(sg) && typeof sg[0] === 'string') {
+            bind(part, sg[0]);
+          }
+        }
+      }
+      if ('contour' in m && isPlainObject(m.contour)) {
+        if (Array.isArray(m.contour.regions)) {
+          for (const rg of m.contour.regions) {
+            if (isPlainObject(rg) && typeof rg.bone === 'string') bind(part, rg.bone);
+          }
+        }
+        if (isPlainObject(m.contour.bust)) {
+          bind(part, typeof m.contour.bust.bone_r === 'string' ? m.contour.bust.bone_r : DEFAULT_BUST_BONE_R);
+          bind(part, typeof m.contour.bust.bone_l === 'string' ? m.contour.bust.bone_l : DEFAULT_BUST_BONE_L);
+        }
+      }
+      if ('auto' in m && isPlainObject(m.auto) && Array.isArray(m.auto.regions)) {
+        for (const rg of m.auto.regions) {
+          if (isPlainObject(rg) && typeof rg.bone === 'string') bind(part, rg.bone);
+        }
+      }
     }
-    for (const sg of m.segments) {
-      if (typeof sg !== 'string') bind(part, sg[0]);
-      else for (const l of chains.get(sg) ?? [sg]) bind(part, l);
-    }
-    if ('contour' in m) for (const rg of contourRegionsOf(m.contour)) bind(part, rg.bone);
-    if ('auto' in m) for (const rg of m.auto.regions ?? []) if (weightsABone(rg)) bind(part, rg.bone);
   }
-  for (const [part, region] of Object.entries(b.regions)) bind(part, regionBone(region));
+  if (isPlainObject(b.regions)) {
+    for (const [part, region] of Object.entries(b.regions)) {
+      if (isRecordKey(part)) continue;
+      const bone = rawRegionBone(region);
+      if (typeof bone === 'string') bind(part, bone);
+    }
+  }
   return out;
+}
+
+/**
+ * Issue #791: whether a turn moves two parts relative to each other — two parts
+ * with different turn roles or carriers (`config.turn.roles`,
+ * `config.turn.body.roles`, `config.turn.depths`), or a part with a physics
+ * chain (`config.constraints` with `type: "physics"`) over another part.
+ * Returns null when `config.turn` is absent, so a rig without a turn block is
+ * untouched.
+ */
+export function turnMovingPartPair(
+  cfg: {
+    assemble?: CharacterConfig['assemble'];
+    turn?: TurnSpec;
+    bones?: BoneEntry[];
+    meshes?: Record<string, MeshSpec>;
+    regions?: Record<string, RegionSpec>;
+    limbs?: Record<string, Limb>;
+    constraints?: ConfigConstraint[];
+  },
+): ((a: string, b: string) => boolean) | null {
+  const turn = cfg.turn;
+  if (!isPlainObject(turn)) return null;
+
+  const sourceOf = new Map<string, string>();
+  for (const c of cfg.assemble?.cuts ?? []) {
+    if (isPlainObject(c) && typeof c.into === 'string' && typeof c.from === 'string') sourceOf.set(c.into, c.from);
+  }
+  if (isPlainObject(cfg.limbs)) {
+    for (const limb of Object.values(cfg.limbs)) {
+      if (!isPlainObject(limb) || !Array.isArray(limb.segments)) continue;
+      for (const sg of limb.segments) {
+        if (!isPlainObject(sg) || typeof sg.part !== 'string' || typeof sg.from !== 'string') continue;
+        sourceOf.set(sg.part, sg.from);
+        if (isPlainObject(sg.hybrid) && typeof sg.hybrid.part === 'string') sourceOf.set(sg.hybrid.part, sg.from);
+      }
+    }
+  }
+  const baseName = (p: string): string => {
+    let cur = p;
+    const seen = new Set<string>();
+    while (sourceOf.has(cur) && !seen.has(cur)) {
+      seen.add(cur);
+      cur = sourceOf.get(cur) as string;
+    }
+    return cur;
+  };
+
+  const boneEntries = Array.isArray(cfg.bones) ? cfg.bones.filter(isPlainObject) : [];
+  const parentOf = new Map<string, string>();
+  for (const e of boneEntries) {
+    if ('chain' in e && typeof e.chain === 'string' && Array.isArray(e.points)) {
+      e.points.forEach((_, k) => parentOf.set(`${e.chain}${k}`, k === 0 ? e.parent : `${e.chain}${k - 1}`));
+    } else if ('name' in e && typeof e.name === 'string' && typeof e.parent === 'string') {
+      parentOf.set(e.name, e.parent);
+    }
+  }
+  const physicsBones = new Set<string>();
+  if (Array.isArray(cfg.constraints)) {
+    for (const c of cfg.constraints) {
+      if (isPlainObject(c) && c.type === 'physics' && typeof c.bone === 'string') physicsBones.add(c.bone);
+    }
+  }
+  for (const b of parentOf.keys()) {
+    let cur: string | undefined = b;
+    const seen = new Set<string>();
+    while (cur !== undefined && !seen.has(cur)) {
+      if (physicsBones.has(cur)) {
+        physicsBones.add(b);
+        break;
+      }
+      seen.add(cur);
+      cur = parentOf.get(cur);
+    }
+  }
+
+  const meshParts = isPlainObject(cfg.meshes)
+    ? new Set(Object.keys(cfg.meshes).filter((k) => !isRecordKey(k)))
+    : new Set<string>();
+  const isMeshPart = (p: string): boolean => meshParts.has(p) || meshParts.has(baseName(p));
+
+  const bound =
+    isPlainObject(cfg.meshes) || isPlainObject(cfg.regions)
+      ? partBoundBones({
+          bones: boneEntries as BoneEntry[],
+          meshes: isPlainObject(cfg.meshes) ? (cfg.meshes as Record<string, MeshSpec>) : {},
+          regions: isPlainObject(cfg.regions) ? (cfg.regions as Record<string, RegionSpec>) : {},
+        })
+      : new Map<string, string[]>();
+  if (isPlainObject(cfg.limbs)) {
+    for (const limb of Object.values(cfg.limbs)) {
+      if (!isPlainObject(limb) || !Array.isArray(limb.segments)) continue;
+      for (const sg of limb.segments) {
+        if (!isPlainObject(sg) || typeof sg.part !== 'string' || typeof sg.bone !== 'string') continue;
+        if (!bound.has(sg.part)) bound.set(sg.part, [sg.bone]);
+        if (isPlainObject(sg.hybrid) && typeof sg.hybrid.part === 'string' && !bound.has(sg.hybrid.part)) {
+          bound.set(sg.hybrid.part, [sg.bone]);
+        }
+      }
+    }
+  }
+  const bonesOf = (p: string): readonly string[] => bound.get(p) ?? bound.get(baseName(p)) ?? [];
+  const sameNonEmptyBones = (a: readonly string[], b: readonly string[]): boolean =>
+    a.length > 0 && a.length === b.length && a.every((x, i) => x === b[i]);
+
+  const roleGroups: Array<{ roles: Readonly<Record<string, TurnRole>>; unitDepths?: Readonly<Record<string, number>> }> = [];
+  if (isPlainObject(turn.roles)) {
+    roleGroups.push({
+      roles: turn.roles as Readonly<Record<string, TurnRole>>,
+      ...(isPlainObject(turn.unitDepths) ? { unitDepths: turn.unitDepths as Readonly<Record<string, number>> } : {}),
+    });
+  }
+  if (isPlainObject(turn.body) && isPlainObject(turn.body.roles)) {
+    roleGroups.push({
+      roles: turn.body.roles as Readonly<Record<string, TurnRole>>,
+      ...(isPlainObject(turn.body.unitDepths) ? { unitDepths: turn.body.unitDepths as Readonly<Record<string, number>> } : {}),
+    });
+  }
+  const depths = isPlainObject(turn.depths) ? (turn.depths as Readonly<Record<string, number>>) : null;
+  const pivot = typeof turn.pivot === 'number' && Number.isFinite(turn.pivot) ? turn.pivot : null;
+
+  return (a: string, b: string): boolean => {
+    if (a === b) return false;
+    const bA = bonesOf(a);
+    const bB = bonesOf(b);
+    const hasPhysA = bA.some((x) => physicsBones.has(x));
+    const hasPhysB = bB.some((x) => physicsBones.has(x));
+    if ((hasPhysA || hasPhysB) && !(bA.length === 1 && sameNonEmptyBones(bA, bB))) return true;
+
+    for (const g of roleGroups) {
+      const rA = g.roles[a] ?? g.roles[baseName(a)];
+      const rB = g.roles[b] ?? g.roles[baseName(b)];
+      if (rA === undefined && rB === undefined) continue;
+      if (rA !== rB) return true;
+      if (rA === 'surface') return true;
+      if (rA === 'unit' && (isMeshPart(a) || isMeshPart(b) || !sameNonEmptyBones(bA, bB))) return true;
+      const ud = g.unitDepths;
+      if (ud !== undefined) {
+        const dA = ud[a] ?? ud[baseName(a)] ?? (bA.length === 1 ? ud[bA[0]] : undefined);
+        const dB = ud[b] ?? ud[baseName(b)] ?? (bB.length === 1 ? ud[bB[0]] : undefined);
+        if (dA !== dB) return true;
+      }
+      if ((bA.length > 0 || bB.length > 0) && !sameNonEmptyBones(bA, bB)) return true;
+    }
+
+    if (depths !== null) {
+      const rawA = depths[a] ?? depths[baseName(a)];
+      const rawB = depths[b] ?? depths[baseName(b)];
+      const effA = typeof rawA === 'number' && Number.isFinite(rawA) && rawA !== pivot ? rawA : null;
+      const effB = typeof rawB === 'number' && Number.isFinite(rawB) && rawB !== pivot ? rawB : null;
+      if (effA !== effB) return true;
+    }
+
+    return false;
+  };
 }
 
 /**
@@ -1410,6 +1625,12 @@ export interface AssembleConfig {
   /** Issue #349: read with `bones` (the joints are the bones' origins) when present. */
   limbs?: Record<string, Limb>;
   bones?: BoneEntry[];
+  /** Issue #791: read with `turn` so `assemble` leaves moving pairs' fringes and seams alone. */
+  meshes?: Record<string, MeshSpec>;
+  regions?: Record<string, RegionSpec>;
+  constraints?: ConfigConstraint[];
+  motion?: Motion;
+  turn?: TurnSpec;
   motion_seams?: MotionSeamDeclaration[];
   /** Issue #354: the `rig_scale` `propose` drafted the rig sections at, held equal to `assemble.rig_scale` when present. */
   proposed_rig_scale?: number;
@@ -1488,9 +1709,24 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
     if (isPlainObject(t.assemble) && 'alternates' in t.assemble) {
       checkAlternates(c, t.assemble.alternates, made, limbs, names?.bones ?? null, names?.chains ?? null, t.regions, t.meshes);
     }
+    const output = new Set([...made.parts.filter(n => !limbs?.consumed.has(n)), ...made.patches, ...made.cuts, ...(limbs?.parts.keys() ?? [])]);
     if ('motion_seams' in t) {
-      const output = new Set([...made.parts.filter(n => !limbs?.consumed.has(n)), ...made.patches, ...made.cuts, ...(limbs?.parts.keys() ?? [])]);
       c.problems.push(...motionSeamProblems(t.motion_seams, output, 'config.motion_seams', 'CONFIG_MOTION_SEAM'));
+    }
+    if ('turn' in t) {
+      if ('bones' in t && names === null) names = checkBones(c, t.bones);
+      const attached = 'meshes' in t || 'regions' in t ? attachedParts(t.meshes, t.regions) : output;
+      const hasAltFace = hasAlternateFaceSet(t.assemble, [...made.parts, ...made.cuts]);
+      const declaredSliders = new Set<string>();
+      if (Array.isArray(t.constraints)) {
+        for (const entry of t.constraints) {
+          if (isPlainObject(entry) && entry.type === 'slider' && typeof entry.name === 'string' && entry.name.length > 0) {
+            declaredSliders.add(entry.name);
+          }
+        }
+      }
+      const meshParts = isPlainObject(t.meshes) ? new Set(Object.keys(t.meshes).filter((k) => !isRecordKey(k))) : new Set<string>();
+      checkTurn(c, t.turn, attached, names?.bones ?? new Set(['root', 'head', 'chest', 'hip']), hasAltFace, made.parts, declaredSliders, meshParts);
     }
   }
   if ('cloth' in t) checkCloth(c, t.cloth);
