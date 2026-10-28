@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.73.1](https://github.com/rig-c/parts/compare/v1.73.0...v1.73.1) (2026-10-28)
+
+
+### Bug Fixes
+
+* **turn:** a split (blink-still) unit neighbour supplies both emitted pieces, so a rim over its upper piece takes the upper piece's field ([#809](https://github.com/rig-c/parts/issues/809)) ([9eb7849](https://github.com/rig-c/parts/commit/9eb78496fe2a0396abe9dd1f77005e8bf66394db)), closes [#807](https://github.com/rig-c/parts/issues/807)
+
 ## [1.73.0](https://github.com/rig-c/parts/compare/v1.72.1...v1.73.0) (2026-10-28)
 
 
