@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.71.0](https://github.com/rig-c/parts/compare/v1.70.1...v1.71.0) (2026-10-28)
+
+
+### Features
+
+* **turn:** the body gets depth too — a body-yaw dial projecting torso surface grids through the head's turn path ([#788](https://github.com/rig-c/parts/issues/788)) ([fa44b9a](https://github.com/rig-c/parts/commit/fa44b9a683a7dde5c2401fd872dd630880c26ad3))
+
 ## [1.70.1](https://github.com/rig-c/parts/compare/v1.70.0...v1.70.1) (2026-10-27)
 
 
