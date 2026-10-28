@@ -245,6 +245,11 @@ export function turnSurfaceBone(part: string): string {
   return `${part}_surface`;
 }
 
+/** The carrier bone that carries a 2.5D `'unit'` mesh part (`<part>_unit`) under `faceshift` / `bodyshift` (#790). */
+export function turnUnitBone(part: string): string {
+  return `${part}_unit`;
+}
+
 /** Optional 2.5D body-yaw turn block under `config.turn.body` (#787). */
 export interface TurnBodySpec {
   pivot?: number;
@@ -1596,10 +1601,16 @@ function buildDepth25DTurnGroup(
   for (const [part, role] of Object.entries(roles)) {
     if (role !== 'unit') continue;
     const regSpec = opts.regions[part];
-    if (regSpec === undefined) continue;
-    const baseBone = typeof regSpec === 'string' ? regSpec : regSpec.bone;
-    const stillBone = opts.stills[part]?.bone;
-    const candidateBones = [baseBone, ...(stillBone === undefined ? [] : [stillBone])].filter((b) => carrierChildren.has(b));
+    let baseBone: string | undefined;
+    let candidateBones: string[] = [];
+    if (regSpec !== undefined) {
+      baseBone = typeof regSpec === 'string' ? regSpec : regSpec.bone;
+      const stillBone = opts.stills[part]?.bone;
+      candidateBones = [baseBone, ...(stillBone === undefined ? [] : [stillBone])].filter((b) => carrierChildren.has(b));
+    } else {
+      const uBone = turnUnitBone(part);
+      if (carrierChildren.has(uBone)) candidateBones = [uBone];
+    }
     if (candidateBones.length === 0) continue;
 
     for (const bName of candidateBones) {
@@ -1611,7 +1622,26 @@ function buildDepth25DTurnGroup(
       } else if (typeof explicitBoneDepth === 'number' && Number.isFinite(explicitBoneDepth)) {
         resolved = explicitBoneDepth;
       } else if (primarySurface !== undefined) {
-        const pt = opts.boneLandmarks.get(bName) ?? opts.boneLandmarks.get(baseBone);
+        let pt: readonly [number, number] | undefined =
+          opts.boneLandmarks.get(bName) ??
+          (baseBone === undefined ? undefined : opts.boneLandmarks.get(baseBone));
+        if (pt === undefined && regSpec === undefined) {
+          const childPts: Array<readonly [number, number]> = [];
+          for (const child of rig.bones) {
+            if (child.parent !== bName) continue;
+            const bare = child.name.endsWith('_ctl') ? child.name.slice(0, -4) : child.name;
+            const cp = opts.boneLandmarks.get(child.name) ?? opts.boneLandmarks.get(bare);
+            if (cp !== undefined) childPts.push(cp);
+          }
+          if (childPts.length > 0) {
+            const sx = childPts.reduce((acc, p) => acc + p[0], 0) / childPts.length;
+            const sy = childPts.reduce((acc, p) => acc + p[1], 0) / childPts.length;
+            pt = [sx, sy];
+          } else {
+            const partRec = partMap.get(part);
+            if (partRec !== undefined) pt = [partRec.x + partRec.w / 2, partRec.y + partRec.h / 2];
+          }
+        }
         if (pt !== undefined) {
           const { rec, ext, zRef } = primarySurface;
           const padX = Math.floor((ext.width - rec.w) / 2);

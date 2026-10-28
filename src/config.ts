@@ -99,7 +99,7 @@ import { edgeLength } from './length.ts';
 import { setFocusProblems } from './setfocus.ts';
 import { isSkeletonName, KEYPOINT_NAMES, type KeypointName, type PosePoints, scaledPoints, SKELETON_NAMES, type SkeletonName } from './skeleton.ts';
 import { acceptedTagNames, AUTHOR_LABEL_RULE, AUTHOR_PREFIX, readLayerTag } from './tags.ts';
-import { BODY_REAR_SHIFT_BONE, BODY_YAW_DIAL_BONE, BODYSHIFT_BONE, EAR_DEPTH_RANGE, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, type FaceDeformKey, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, FACESHIFT_BONE, PITCH_DIAL_BONE, REAR_SHIFT_BONE, TURN_BONE, TURN_ROLES, type TurnSpec, turnNearest, turnSurfaceBone, YAW_DIAL_BONE } from './turn.ts';
+import { BODY_REAR_SHIFT_BONE, BODY_YAW_DIAL_BONE, BODYSHIFT_BONE, EAR_DEPTH_RANGE, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, type FaceDeformKey, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, FACESHIFT_BONE, PITCH_DIAL_BONE, REAR_SHIFT_BONE, TURN_BONE, TURN_ROLES, type TurnSpec, turnNearest, turnSurfaceBone, turnUnitBone, YAW_DIAL_BONE } from './turn.ts';
 import { FLOOR_FORMS, type FloorForm, type MeshInfluences } from './weights.ts';
 
 export type Point = [number, number];
@@ -1706,7 +1706,7 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
     }
   }
   const meshParts = isPlainObject(t.meshes) ? new Set(Object.keys(t.meshes).filter((k) => !isRecordKey(k))) : new Set<string>();
-  if ('turn' in t) checkTurn(c, t.turn, attached, names.bones, hasAltFace, parts, declaredSliders, meshParts);
+  if ('turn' in t) checkTurn(c, t.turn, attached, names.bones, hasAltFace, parts, declaredSliders, meshParts, t.meshes, names.chains, names.parents);
   if ('scene' in t) checkScene(c, t.scene);
   if ('cloth' in t) checkCloth(c, t.cloth);
   if ('requirements' in t && c.string('config.requirements', t.requirements) && base !== null) checkRequirementsFile(c, resolve(base, t.requirements));
@@ -4401,8 +4401,97 @@ function checkTurn(
   parts: readonly string[] = [],
   declaredSliders: ReadonlySet<string> = new Set(),
   meshParts: ReadonlySet<string> = new Set(),
+  rawMeshes: Json = undefined,
+  chains: ReadonlyMap<string, number> = new Map(),
+  parents: ReadonlyMap<string, string> = new Map(),
 ): void {
   const at = 'config.turn';
+  const meshBoundBones = (part: string): string[] => {
+    if (!isPlainObject(rawMeshes) || !isPlainObject(rawMeshes[part])) return [];
+    const m = rawMeshes[part] as Record<string, Json>;
+    const out: string[] = [];
+    const add = (rawBone: string): void => {
+      const b = rawBone.endsWith('_d') && bones.has(rawBone.slice(0, -2)) ? rawBone.slice(0, -2) : rawBone;
+      if (bones.has(b) && !out.includes(b)) out.push(b);
+    };
+    if (Array.isArray(m.segments)) {
+      for (const s of m.segments) {
+        if (typeof s === 'string') {
+          const linkCount = chains.get(s);
+          if (linkCount !== undefined) {
+            for (let lk = 0; lk < linkCount; lk++) add(`${s}${lk}`);
+          } else {
+            add(s);
+          }
+        } else if (Array.isArray(s) && typeof s[0] === 'string') {
+          add(s[0]);
+        }
+      }
+    }
+    if (isPlainObject(m.contour)) {
+      if (Array.isArray(m.contour.regions)) {
+        for (const rg of m.contour.regions) {
+          if (isPlainObject(rg) && typeof rg.bone === 'string') add(rg.bone);
+        }
+      }
+      if (isPlainObject(m.contour.bust)) {
+        add(typeof m.contour.bust.bone_r === 'string' ? m.contour.bust.bone_r : DEFAULT_BUST_BONE_R);
+        add(typeof m.contour.bust.bone_l === 'string' ? m.contour.bust.bone_l : DEFAULT_BUST_BONE_L);
+      }
+    }
+    if (isPlainObject(m.auto) && Array.isArray(m.auto.regions)) {
+      for (const rg of m.auto.regions) {
+        if (isPlainObject(rg) && typeof rg.bone === 'string') add(rg.bone);
+      }
+    }
+    if (isPlainObject(m.explicit)) {
+      const addWeights = (ws: Json): void => {
+        if (!Array.isArray(ws)) return;
+        for (const row of ws) {
+          if (!Array.isArray(row)) continue;
+          for (const w of row) {
+            if (isPlainObject(w) && typeof w.bone === 'string') add(w.bone);
+          }
+        }
+      };
+      addWeights(m.explicit.weights);
+      if (Array.isArray(m.explicit.islands)) {
+        for (const isl of m.explicit.islands) {
+          if (isPlainObject(isl)) addWeights(isl.weights);
+        }
+      }
+    }
+    return out;
+  };
+  const headSubtreeRoot = (boneName: string): string | null => {
+    if (boneName === 'head') return 'head';
+    let cur: string | undefined = boneName;
+    const seen = new Set<string>();
+    while (cur !== undefined && !seen.has(cur)) {
+      seen.add(cur);
+      const p = parents.get(cur);
+      if (p === 'head') return cur;
+      cur = p;
+    }
+    return null;
+  };
+  const canCarryHeadUnitBone = (boneName: string): boolean => headSubtreeRoot(boneName) !== null;
+  const bodySubtreeRoot = (boneName: string, torsoRoots: ReadonlySet<string>, headExclusion: ReadonlySet<string>): string | null => {
+    if (headExclusion.has(boneName)) return null;
+    if (torsoRoots.has(boneName)) return boneName;
+    let cur: string | undefined = boneName;
+    const seen = new Set<string>();
+    while (cur !== undefined && !seen.has(cur)) {
+      seen.add(cur);
+      const p = parents.get(cur);
+      if (p === undefined || headExclusion.has(p)) return null;
+      if (torsoRoots.has(p)) return !torsoRoots.has(cur) && !headExclusion.has(cur) ? cur : null;
+      cur = p;
+    }
+    return null;
+  };
+  const canCarryBodyUnitBone = (boneName: string, torsoRoots: ReadonlySet<string>, headExclusion: ReadonlySet<string>): boolean =>
+    bodySubtreeRoot(boneName, torsoRoots, headExclusion) !== null;
   const hasRoles = isPlainObject(v) && 'roles' in v;
   const hasBody = isPlainObject(v) && 'body' in v;
   const hasDepths = isPlainObject(v) && 'depths' in v;
@@ -4460,7 +4549,9 @@ function checkTurn(
       c.fail('CONFIG_FIELD_TYPE', `${at}.roles`, `is ${show(r)}; a non-empty object of part name -> ("surface" | "unit" | "rear") is required`);
     } else {
       const surfaceParts: string[] = [];
+      const unitMeshParts: string[] = [];
       const earParts: string[] = [];
+      const headUnitRootOwner = new Map<string, { part: string; bone: string }>();
       for (const [part, role] of Object.entries(r)) {
         if (isRecordKey(part)) continue;
         if (!attached.has(part)) {
@@ -4479,7 +4570,46 @@ function checkTurn(
             }
             surfaceParts.push(part);
           }
-          if (role === 'unit' && (part === 'ear_r' || part === 'ear_l')) earParts.push(part);
+          if (role === 'unit') {
+            if (part === 'ear_r' || part === 'ear_l') earParts.push(part);
+            if (meshParts.has(part)) {
+              unitMeshParts.push(part);
+              if (bones.has('head')) {
+                const bound = meshBoundBones(part);
+                const uncarried = bound.filter((b) => !canCarryHeadUnitBone(b));
+                if (bound.length > 0 && uncarried.length > 0) {
+                  c.fail(
+                    'CONFIG_TURN_UNIT_MESH_BONES',
+                    `${at}.roles.${part}`,
+                    `declares "${part}" as "unit", and config.meshes.${part} binds bone(s) ${uncarried.map((b) => `"${b}"`).join(', ')} outside the "head" subtree, which cannot be carried by "${turnUnitBone(part)}" under "${FACESHIFT_BONE}"; bind a head "unit" mesh only to "head" or bones and chains under "head"`,
+                  );
+                }
+                const reportedRoots = new Set<string>();
+                for (const b of bound) {
+                  if (b === 'head') continue;
+                  const rootBone = headSubtreeRoot(b);
+                  if (rootBone === null) continue;
+                  const owner = headUnitRootOwner.get(rootBone);
+                  if (owner !== undefined && owner.part !== part) {
+                    if (!reportedRoots.has(rootBone)) {
+                      reportedRoots.add(rootBone);
+                      const sharedDetail =
+                        owner.bone === b
+                          ? `bone "${b}"${b === rootBone ? '' : ` (under "${rootBone}")`}`
+                          : `chain root "${rootBone}" ("${owner.part}" binds "${owner.bone}", "${part}" binds "${b}")`;
+                      c.fail(
+                        'CONFIG_TURN_UNIT_MESH_BONES',
+                        `${at}.roles.${part}`,
+                        `declares "${part}" as "unit", and config.meshes.${part} shares ${sharedDetail} with "unit" mesh "${owner.part}" (${at}.roles.${owner.part}); each "unit" mesh reparents its bound chain root under its own "<part>_unit" carrier, so two "unit" meshes cannot share a bone or chain under "head"`,
+                      );
+                    }
+                  } else if (owner === undefined) {
+                    headUnitRootOwner.set(rootBone, { part, bone: b });
+                  }
+                }
+              }
+            }
+          }
         }
       }
       if (surfaceParts.length === 0) {
@@ -4501,7 +4631,7 @@ function checkTurn(
       if (!bones.has('head')) {
         c.fail('CONFIG_TURN_HEAD_BONE', `${at}.roles`, 'requires a declared "head" bone in config.bones to parent the 2.5D turn carriers');
       }
-      for (const reserved of [FACESHIFT_BONE, REAR_SHIFT_BONE, ...surfaceParts.map(turnSurfaceBone)]) {
+      for (const reserved of [FACESHIFT_BONE, REAR_SHIFT_BONE, ...surfaceParts.map(turnSurfaceBone), ...unitMeshParts.map(turnUnitBone)]) {
         if (bones.has(reserved)) {
           c.fail('CONFIG_TURN_BONE_FREE', `bone "${reserved}"`, `is a carrier bone the rig stage adds under head for config.turn.roles, and config.bones already declares a bone of that name; rename it`);
         }
@@ -4556,6 +4686,11 @@ function checkTurn(
         c.fail('CONFIG_FIELD_TYPE', `${bAt}.roles`, `is ${show(br)}; a non-empty object of part name -> ("surface" | "unit" | "rear") is required`);
       } else {
         const bodySurfaceParts: string[] = [];
+        const bodyUnitMeshParts: string[] = [];
+        const bodyRoot = typeof bo.bone === 'string' && bones.has(bo.bone) ? bo.bone : bones.has('chest') ? 'chest' : 'hip';
+        const torsoRoots = new Set<string>([bodyRoot, 'chest', 'hip']);
+        const headExclusion = new Set<string>(['head', 'neck']);
+        const bodyUnitRootOwner = new Map<string, { part: string; bone: string }>();
         for (const [part, role] of Object.entries(br)) {
           if (isRecordKey(part)) continue;
           if (!attached.has(part)) {
@@ -4572,12 +4707,48 @@ function checkTurn(
               );
             }
             bodySurfaceParts.push(part);
+          } else if (role === 'unit' && meshParts.has(part)) {
+            bodyUnitMeshParts.push(part);
+            if (bones.has(bodyRoot)) {
+              const bound = meshBoundBones(part);
+              const uncarried = bound.filter((b) => !canCarryBodyUnitBone(b, torsoRoots, headExclusion));
+              if (bound.length > 0 && uncarried.length > 0) {
+                c.fail(
+                  'CONFIG_TURN_UNIT_MESH_BONES',
+                  `${bAt}.roles.${part}`,
+                  `declares "${part}" as "unit", and config.meshes.${part} binds bone(s) ${uncarried.map((b) => `"${b}"`).join(', ')} outside the "${bodyRoot}" torso subtree, which cannot be carried by "${turnUnitBone(part)}" under "${BODYSHIFT_BONE}"; bind a body "unit" mesh only to the torso root or bones and chains under it`,
+                );
+              }
+              const reportedRoots = new Set<string>();
+              for (const b of bound) {
+                if (torsoRoots.has(b)) continue;
+                const rootBone = bodySubtreeRoot(b, torsoRoots, headExclusion);
+                if (rootBone === null) continue;
+                const owner = bodyUnitRootOwner.get(rootBone);
+                if (owner !== undefined && owner.part !== part) {
+                  if (!reportedRoots.has(rootBone)) {
+                    reportedRoots.add(rootBone);
+                    const sharedDetail =
+                      owner.bone === b
+                        ? `bone "${b}"${b === rootBone ? '' : ` (under "${rootBone}")`}`
+                        : `chain root "${rootBone}" ("${owner.part}" binds "${owner.bone}", "${part}" binds "${b}")`;
+                    c.fail(
+                      'CONFIG_TURN_UNIT_MESH_BONES',
+                      `${bAt}.roles.${part}`,
+                      `declares "${part}" as "unit", and config.meshes.${part} shares ${sharedDetail} with "unit" mesh "${owner.part}" (${bAt}.roles.${owner.part}); each "unit" mesh reparents its bound chain root under its own "<part>_unit" carrier, so two "unit" meshes cannot share a bone or chain under "${bodyRoot}"`,
+                    );
+                  }
+                } else if (owner === undefined) {
+                  bodyUnitRootOwner.set(rootBone, { part, bone: b });
+                }
+              }
+            }
           }
         }
         if (bodySurfaceParts.length === 0) {
           c.fail('CONFIG_TURN_SURFACE_REQUIRED', `${bAt}.roles`, 'declares no part with role "surface"; at least one surface part is required for 2.5D body turn');
         }
-        for (const reserved of [BODYSHIFT_BONE, BODY_REAR_SHIFT_BONE, ...bodySurfaceParts.map(turnSurfaceBone)]) {
+        for (const reserved of [BODYSHIFT_BONE, BODY_REAR_SHIFT_BONE, ...bodySurfaceParts.map(turnSurfaceBone), ...bodyUnitMeshParts.map(turnUnitBone)]) {
           if (bones.has(reserved)) {
             c.fail('CONFIG_TURN_BONE_FREE', `bone "${reserved}"`, `is a carrier bone the rig stage adds for config.turn.body.roles, and config.bones already declares a bone of that name; rename it`);
           }
