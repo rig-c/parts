@@ -138,14 +138,14 @@ import { explicitAttachment, type ExplicitMeshReport } from './explicitmesh.ts';
  * order the objects are built in, and every number is rounded by `pyRound`).
  */
 import { type AutoSpec, type BoneEntry, type InfluenceMeshSpec, type WeightRule, type CharacterConfig, type ConfigConstraint, type ConfigStop, CONSTRAINT_FOLLOWS, constraintForRig, contourRegionsOf, type ContourSpec, DEFAULT_BUST_BONE_L, DEFAULT_BUST_BONE_R, type Point, type RibsSpec, ROOT_BONE, stopForRig, turnRidersByBone, weightsABone } from './config.ts';
-import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, normaliseDegrees, paintingToSetupPoint, toBoneLocal, toWorld } from './coords.ts';
+import { type BoneTransform, computeExactFrameTransforms, computeWorldTransforms, cropToSpineY, normaliseDegrees, paintingToSetupPoint, setupToPaintingPoint, toBoneLocal, toWorld } from './coords.ts';
 import { type Problem, refuseIfAny, PartsError } from './errors.ts';
 import { recordedFocusProblems } from './setfocus.ts';
 import { eyeLineDegrees } from './headframe.ts';
 import type { RigBoneInherit, RigStop } from 'rig-c/src/rig.ts';
 import { f32 } from 'rig-c/compile';
 import type { MeshCounts, MeshQualityReport, MeshReductionInput, MotionAmplitude, ReducedMesh, Termination } from 'rig-c/mesh';
-import { buildSegmentsLattice, type EntrySegment, influenceShares, segmentDistance as rigcSegmentDistance, type SegmentsLattice, type SegmentsLatticeReport } from 'rig-c/mesh';
+import { bindWeightedVertices, buildGridMesh, buildSegmentsLattice, type EntrySegment, influenceShares, segmentDistance as rigcSegmentDistance, type SegmentsLattice, type SegmentsLatticeReport } from 'rig-c/mesh';
 import { type AmplitudeRow, amplitudeRow, partAmplitude, withAmplitude } from './autoamplitude.ts';
 import { type ResidualRow, residualRow, slotEnvelope, withSkinning } from './autoenvelope.ts';
 import { type AutoMotionCase, type AutoSearch, DEFORM_MAY_FOLD_WHY, type MotionDeformation, type StimulusPose, stimulusAnimationNames } from './automotion.ts';
@@ -3662,6 +3662,7 @@ export function buildWaistPairSource(
       boneLandmarks,
       hasAlternateFaceSet,
       surfaceMeshes: turnSurfaceMeshes(cfg, rig, parts.rig_size),
+      neighbourMeshes: turnNeighbourMeshes(cfg, rig, parts),
     });
   }
   bindFaceSurfaceDeform(motion, (merged) => {
@@ -3678,6 +3679,7 @@ export function buildWaistPairSource(
         boneLandmarks,
         hasAlternateFaceSet,
         surfaceMeshes: turnSurfaceMeshes(cfg, rig, parts.rig_size),
+        neighbourMeshes: turnNeighbourMeshes(cfg, rig, parts),
       });
     }
     if (cfg.turn?.roles === undefined && (cfg.turn === undefined || cfg.turn.body === undefined || cfg.turn.depths !== undefined)) {
@@ -4190,7 +4192,45 @@ function turnSurfaceMeshes(cfg: CharacterConfig, rig: RigSpec, canvas: readonly 
         if (attachment !== part && !slot.name.startsWith(`${part}__island`)) {
           throw new PartsError([{ code: 'RIG_TURN_SURFACE_MESH_ATTACHMENT', object: `surface mesh "${slot.name}/${attachment}"`, detail: `requires the base drawing "${part}"; alternate drawings need their own registered depth sampling frame` }]);
         }
-        meshes.push({ part, slot: slot.name, attachment, weights: att.weights, canvas });
+        meshes.push({ part, slot: slot.name, attachment, weights: att.weights, triangles: att.triangles, canvas });
+      }
+    }
+  }
+  return meshes;
+}
+
+/** Actual shown support; Core's own grid topology is inspection metadata only. */
+function turnNeighbourMeshes(cfg: CharacterConfig, rig: RigSpec, parts: PartsFile) {
+  const meshes: NonNullable<Parameters<typeof buildDepth25DTurn>[2]['neighbourMeshes']>[number][] = [];
+  const canvas = parts.rig_size;
+  const aliases = new Map<string, string>((rig.stops ?? []).flatMap(s => s.links.map(link => [`${link}_d`, link])));
+  const world = computeWorldTransforms(rig.bones.map(b => b.parent === undefined ? b : { ...b, parent: aliases.get(b.parent) ?? b.parent }));
+  for (const part of new Set([...Object.keys(cfg.turn?.roles ?? {}), ...Object.keys(cfg.turn?.body?.roles ?? {})])) {
+    if (cfg.meshes[part] !== undefined && [cfg.turn?.roles?.[part], cfg.turn?.body?.roles?.[part]].includes('surface')) continue;
+    const record = parts.parts.find(p => p.name === part);
+    if (record === undefined) continue;
+    for (const slot of rig.slots) {
+      if (slot.name !== part && !slot.name.startsWith(`${part}__island`)) continue;
+      for (const [attachment, att] of Object.entries(rig.skins.default[slot.name] ?? {})) {
+        if (attachment !== slot.attachment) continue;
+        if ('type' in att && att.weights !== undefined && att.weights.length > 0) { meshes.push({ part, slot: slot.name, attachment, weights: att.weights, triangles: att.triangles, canvas }); continue; }
+        const frame = world.get(aliases.get(slot.bone) ?? slot.bone);
+        if (frame === undefined) throw new PartsError([{ code: 'RIG_TURN_SURFACE_OVERLAP_SUPPORT', object: `turn neighbour "${slot.name}/${attachment}"`, detail: `has no resolved setup frame for "${slot.bone}"; supply the actual attachment frame` }]);
+        if ('type' in att && att.generator?.kind === 'grid') {
+          const gen = att.generator, cols = gen.cols, rows = gen.rows;
+          const us = Array.from({ length: cols }, (_, i) => i / (cols - 1));
+          const vs = Array.from({ length: rows }, (_, i) => i / (rows - 1));
+          const geometry = buildGridMesh({ size: [att.width, att.height], us, vs });
+          const place = (x: number, y: number): [number, number] => [frame.worldX + x - att.width / 2, frame.worldY + cropToSpineY(y, att.height) - att.height / 2];
+          const bound = bindWeightedVertices(geometry, place, { anchor: { name: slot.bone, toBind: (x, y) => toBoneLocal(frame, x, y) }, controls: [] });
+          meshes.push({ part, slot: slot.name, attachment, canvas, triangles: geometry.triangles,
+            weights: bound.bindings.map(row => row.map(w => ({ bone: w.bone, x: f32(w.x), y: f32(w.y), weight: f32(w.weight) }))),
+            gridSamples: geometry.points.map(([x, y]) => setupToPaintingPoint(place(x, y), canvas, canvas)),
+          });
+        } else if (!('type' in att)) {
+          const points = [[record.x - PAD, record.y - PAD], [record.x - PAD, record.y + record.h + PAD], [record.x + record.w + PAD, record.y + record.h + PAD], [record.x + record.w + PAD, record.y - PAD]];
+          meshes.push({ part, slot: slot.name, attachment, canvas, triangles: [0, 1, 2, 0, 2, 3], weights: points.map(p => { const q = paintingToSetupPoint(p, canvas, canvas), local = toBoneLocal(frame, q[0], q[1]); return [{ bone: slot.bone, x: f32(local[0]), y: f32(local[1]), weight: 1 }]; }) });
+        } else throw new PartsError([{ code: 'RIG_TURN_SURFACE_OVERLAP_SUPPORT', object: `turn neighbour "${slot.name}/${attachment}"`, detail: 'has neither final weighted geometry nor a supported Core grid; supply actual setup support, not a source rectangle' }]);
       }
     }
   }

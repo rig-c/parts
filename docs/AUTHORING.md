@@ -4518,6 +4518,9 @@ and stay absent).
 | <a id="CONFIG_TURN_HEAD_BONE"></a>`CONFIG_TURN_HEAD_BONE` | `config.turn.roles` is declared without a single bone `"head"` in `config.bones`, or `config.turn.body` without a single bone `"chest"` / `"hip"` (or its declared `bone`) | declare `"head"` (or the body turn root bone) as a single bone in `config.bones` |
 | <a id="CONFIG_TURN_SLIDER_NAME_FREE"></a>`CONFIG_TURN_SLIDER_NAME_FREE` | `config.turn.body.slider` (or the default `"body_yaw_dial"`) collides with a head turn dial (`"yaw"`, `"pitch"`, `"yaw_dial"`, `"pitch_dial"`) or an existing slider constraint in `config.constraints` (#787) | choose a distinct slider name in `config.turn.body.slider` |
 | <a id="RIG_TURN_SURFACE_MESH_GROUPS"></a>`RIG_TURN_SURFACE_MESH_GROUPS` | a surface part contains a blended attachment but lacks one 2.5D group, includes an ungrouped positive influence in any attachment, or also declares a unit/rear role | declare both `turn.roles` and `turn.body`, a body root outside head, surface in one or both groups, and bindings wholly inside those two subtrees |
+| <a id="RIG_TURN_SURFACE_OVERLAP_GROUPS"></a>`RIG_TURN_SURFACE_OVERLAP_GROUPS` | a blended surface vertex overlaps incompatible single-group neighbours, or a neighbour without a blended attachment declares both turn groups | keep one neighbour group at that source-alpha overlap, or separate the overlapping art; the refusal names the vertex and neighbours |
+| <a id="RIG_TURN_SURFACE_OVERLAP_SUPPORT"></a>`RIG_TURN_SURFACE_OVERLAP_SUPPORT` | a selected neighbour has missing/invalid geometry, unresolved emitted vectors, or no triangle covering the requested setup point | supply its actual shown setup triangles and existing emitted field; no nearest triangle, extrapolation or target-field fallback is used; an unrelated disconnected drawing with no actual overlap is not selected |
+| <a id="RIG_TURN_SURFACE_OVERLAP_DEPTH"></a>`RIG_TURN_SURFACE_OVERLAP_DEPTH` | same-group overlap neighbours demand incompatible emitted offsets at one target setup point | separate the conflicting support or provide coincident neighbour fields; the refusal names the fields and target vertex |
 | <a id="RIG_TURN_SURFACE_MESH_BINDINGS"></a>`RIG_TURN_SURFACE_MESH_BINDINGS` | an authored surface mesh has unresolved/nonclosing weights or shares a frame moved by a unit/rear turn carrier; declared stop draw aliases resolve to their links for setup sampling | provide weighted bindings closing at 1 in the authored frame; `<link>_d` resolves only for links declared in `config.stops`; use independent chains for parts with different roles |
 | <a id="RIG_TURN_SURFACE_MESH_ATTACHMENT"></a>`RIG_TURN_SURFACE_MESH_ATTACHMENT` | a surface mesh has an alternate drawing without its own registered depth sampling frame | use the base attachment; explicit islands retain their own slot, attachment and bindings |
 | <a id="RIG_TURN_SURFACE_DEPTH_REQUIRED"></a>`RIG_TURN_SURFACE_DEPTH_REQUIRED` | a part with role `"surface"` in `config.turn.roles` or `config.turn.body.roles` carries no depth sheet in `parts.json` | run `assemble` with `config.depth` or provide `<part>_depth.png` in `parts.json` |
@@ -5602,6 +5605,78 @@ Their authored topology and binding order remain unchanged. A part with no blend
 role behavior and output bytes, even if separate single-group islands bind
 different subtrees. Generated meshes and explicit mixed attachments use the
 same split.
+
+Inside the setup alpha overlap with a single-group neighbour (#804), a
+vertex of an individually blended attachment takes that neighbour's existing
+triangle field, interpolated barycentrically at the target's setup position.
+Direct sheet sampling is a different operator from the field the neighbour mesh actually emits.
+The band is the undilated intersection at alpha 128, the
+half-opacity threshold used by Core's seam reader: both registered source
+drawings must cover the source cell containing the vertex's setup position.
+Weighted neighbour attachments additionally require that setup point inside
+their own triangles, including triangle edges; disconnected siblings do not
+lend one another a mask. This includes weighted unit/rear neighbours: their
+actual shown setup attachments are supplied separately as support, never
+promoted to surface targets. Missing weighted geometry is refused rather than
+treated as a region. A mixed neighbour supplies no single-group anchor.
+Multiple neighbours must agree on their emitted field; conflicting groups, or a pure
+neighbour declaring both fields, raise
+[`RIG_TURN_SURFACE_OVERLAP_GROUPS`](#RIG_TURN_SURFACE_OVERLAP_GROUPS).
+
+For a body-owned overlap, head yaw/pitch offsets are zero and body yaw is
+written into every positive binding's inverse frame. Spine still applies each
+original weight once, so the full body field replaces the skin-weight split.
+The symmetric rule holds for a head-owned overlap. Zero-weight entries retain
+zero offsets. A wholly inactive timeline is omitted. Outside the band the
+original split stands, including transparent padding; no distance, bounding
+box, dilation or nearest-neighbour fallback enlarges it. Exact support is read
+from the existing setup frames without a classification tolerance. Each
+neighbour field is frozen before overlap targets are rewritten: the producer's
+sheet-derived per-binding offsets are composed into one world vector per
+neighbour vertex, with its original skin weights applied once. The existing
+setup triangles interpolate those vectors at the target point. Different
+triangulations keep their different fields; a sheet resample, a bounding-box
+interpolator or an updated target cannot replace that source. The lowest-index
+triangle owns a shared edge. A selected point outside every neighbour triangle
+raises [`RIG_TURN_SURFACE_OVERLAP_SUPPORT`](#RIG_TURN_SURFACE_OVERLAP_SUPPORT).
+An unrelated disconnected sibling with no actual overlap stays unselected.
+Two same-group fields with incompatible emitted offsets raise
+[`RIG_TURN_SURFACE_OVERLAP_DEPTH`](#RIG_TURN_SURFACE_OVERLAP_DEPTH).
+
+Unit/rear neighbours contribute their actual emitted rigid carrier motion,
+including its resolved unit depth or rear counter field. Their own sheet is
+not resampled to invent a spatial bend or a new refusal. Generated surface
+grids keep their Core generator: Core's grid builder and transform evaluator
+provide inspection metadata for the same existing topology and vertex field.
+The original role's depth requirements and the mandatory Core gate remain.
+The target's own sheet and the #796 split remain in use outside the overlap.
+
+This operator matches the neighbour field at each selected vertex. It does
+not make two different triangle partitions represent the same field between
+vertices. The [corrected acceptance for #804](https://github.com/rig-c/parts/issues/804#issuecomment-6478778123)
+replaces the earlier inference of per-frame seam non-regression: an independent
+actual-Core rim vertex oracle must agree within 1.1e-6 px, and the
+differing-depth synthetic scanline must coincide on all 87 sampled turn,
+tilt and body-turn frames. Between-vertex residuals are reported per fixture;
+they do not add a topology refusal or change the existing mesh.
+
+For the synthetic generated-grid neighbour, 65 evenly spaced setup points
+along rim segment 2--3 over 31 body-turn frames measured a maximum field
+difference of 0.16825740877976836 px between vertices; the endpoint discrepancy
+was at most 1.022663678185154e-6 px. On that same fixture the seam's worst
+ghost count decreased from 5 to 2 cells, but six individual frames increased
+by one cell; pair gap stayed zero. Those readings remain reported residuals.
+The authored differing-depth neighbour measured 3.059309099384677e-7 px on
+the same segment and sampling schedule. These are fixture-specific sampled
+maxima, not a continuous-mesh bound, a universal tolerance, or a repair claim
+for other drawings. The original red measurement is retained beside the
+corrected acceptance result.
+
+There is no new config field. Only turn deform changes: skin weights, setup,
+idle, physics, art and topology are preserved. Parts without a blended
+attachment retain their existing emitted bytes. Synthetic overlap controls
+establish this rule; they do not establish an all-frame repair of a consumer
+demo.
 
 An unlisted mesh does not opt in merely by spanning the subtrees. A blended
 surface requires its own depth sheet (`RIG_TURN_SURFACE_DEPTH_REQUIRED`) and

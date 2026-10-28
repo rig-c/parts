@@ -33,6 +33,11 @@ import { extendDepthSilhouette, sampleDepthFloat, type PartDepthReference } from
 import { type Problem, refuseIfAny } from './errors.ts';
 import type { Raster } from './raster/index.ts';
 import { pyRound } from './round.ts';
+import { turnOverlapOwners } from './turnoverlap.ts';
+import { sampleTurnTriangleField, turnTriangleCoordinates } from './turnfield.ts';
+import { PartsError } from './errors.ts';
+import { f32 } from 'rig-c/compile';
+import { evaluateDeformTransform } from 'rig-c/src/deformgen.ts';
 
 /**
  * The layers that ride on the face (issue #271): See-through makes no depth
@@ -1487,9 +1492,17 @@ export interface Depth25DTurnOptions {
     attachment: string;
     weights: ReadonlyArray<ReadonlyArray<{ bone: string; x: number; y: number; weight: number }>>;
     canvas: readonly [number, number];
+    /** Existing setup topology resolves neighbour islands without a part-wide bbox. */
+    triangles?: readonly number[];
+    /** Core-generated grid sample positions, support only; never authored bindings. */
+    gridSamples?: ReadonlyArray<readonly [number, number]>;
+    /** Derived only from existing setup alpha overlap; never an authored switch. */
+    overlapOwners?: ReadonlyArray<{ group: 'head' | 'body'; neighbours: readonly string[] } | undefined>;
     /** Every attachment of a part containing a blended mesh carries its own group mask. */
     groups?: ReadonlyMap<string, 'head' | 'body'>;
   }>;
+  /** Final weighted unit/rear drawings are support only, never surface targets. */
+  neighbourMeshes?: Depth25DTurnOptions['surfaceMeshes'];
 }
 
 interface Depth25DGroupSpec {
@@ -1832,7 +1845,8 @@ function buildDepth25DTurnGroup(
         for (const mesh of authored) {
           // An all-zero timeline can overwrite another slider's deform (Core A40).
           // A sibling with no positive binding in this group owns no timeline here.
-          const active = mesh.groups === undefined || [...mesh.groups.values()].includes(group.fieldPrefix === 'config.turn' ? 'head' : 'body');
+          const field = group.fieldPrefix === 'config.turn' ? 'head' : 'body';
+          const active = mesh.groups === undefined || mesh.weights.some((row, i) => row.some(w => w.weight > 0 && (mesh.overlapOwners?.[i] === undefined ? mesh.groups?.get(w.bone) === field : mesh.overlapOwners[i]?.group === field)));
           const vertices = mesh.weights.map((row, index) => {
             let wx = 0, wy = 0, total = 0;
             for (const w of row) {
@@ -1871,7 +1885,7 @@ function buildDepth25DTurnGroup(
               vertices: vertices.flatMap(({ row, depth }) => {
                 const d = -depth * Math.sin(deg * Math.PI / 180);
                 return row.flatMap((w) => {
-                  if (mesh.groups !== undefined && (w.weight === 0 || mesh.groups.get(w.bone) !== (group.fieldPrefix === 'config.turn' ? 'head' : 'body'))) return [0, 0];
+                  if (mesh.groups !== undefined && (w.weight === 0 || mesh.groups.get(w.bone) !== field)) return [0, 0];
                   const frame = world.get(setup.resolve(w.bone))!; // every influence resolved before emitting keys
                   const [x, y] = toBoneLocalVector(frame, kind === 'yaw' ? d : 0, kind === 'pitch' ? d : 0);
                   return [pyRound(x, 6), pyRound(y, 6)];
@@ -1899,6 +1913,103 @@ function buildDepth25DTurnGroup(
               },
         ),
       });
+    }
+
+    // Snapshot the emitted fields BEFORE any overlap target is rewritten.
+    // Mixed targets never become another target's source by traversal order.
+    if (opts.surfaceMeshes?.some(m => m.overlapOwners !== undefined)) {
+      const setup = surfaceSetupGraph(rig), world = computeWorldTransforms(setup.bones);
+      const parents = new Map(setup.bones.map(b => [b.name, b.parent]));
+      const field = group.fieldPrefix === 'config.turn' ? 'head' : 'body';
+      const supports = [...(opts.surfaceMeshes ?? []), ...(opts.neighbourMeshes ?? [])];
+      const raw = deform.map(d => ({ ...d, keys: d.keys.map(k => ({ ...k, vertices: k.vertices?.slice() })) }));
+      const points = (mesh: typeof supports[number]) => mesh.weights.map(row => {
+        let x = 0, y = 0;
+        for (const w of row) { const frame = world.get(setup.resolve(w.bone)); if (frame === undefined) return [NaN, NaN]; const q = toWorld(frame, w.x, w.y); x += q[0] * w.weight; y += q[1] * w.weight; }
+        return [x, y];
+      });
+      for (const [ki, { deg }] of keyList.entries()) {
+        if (deg === 0) continue;
+        // All tracks this producer emits are local translations. Sum their
+        // actual emitted world vectors along each binding's ancestor chain.
+        const translations = new Map<string, [number, number]>();
+        for (const track of tracks) {
+          const names = track.bone === undefined ? motion.groups?.[track.group!] : [track.bone];
+          if (names === undefined) { problems.push({ code: 'RIG_TURN_SURFACE_OVERLAP_SUPPORT', object: `animation "${animName}"`, detail: `emitted group "${track.group}" has no resolved bones; an unresolved track is not a zero field` }); continue; }
+          for (const bone of names) {
+          const key = track.keys[ki], derived = key.derive;
+          const depth = typeof derived?.depth === 'number' ? derived.depth : derived?.depth?.[bone];
+          const stated = Array.isArray(key.v) ? key.v[0] : depth === undefined ? undefined : -(depth - (derived?.carried ?? 0)) * Math.sin(deg * Math.PI / 180);
+          if (stated === undefined || !Number.isFinite(stated)) { problems.push({ code: 'RIG_TURN_SURFACE_OVERLAP_SUPPORT', object: `animation "${animName}" bone "${bone}"`, detail: 'has no finite emitted translation; unresolved depth is not replaced by zero' }); continue; }
+          const value = f32(stated);
+          const parent = parents.get(bone), frame = parent === undefined ? undefined : world.get(setup.resolve(parent));
+          if (parent !== undefined && frame === undefined) { problems.push({ code: 'RIG_TURN_SURFACE_OVERLAP_SUPPORT', object: `animation "${animName}" bone "${bone}"`, detail: `has no resolved parent frame "${parent}"; supply its setup transform` }); continue; }
+          translations.set(bone, frame === undefined ? [track.property === 'translatex' ? value : 0, track.property === 'translatey' ? value : 0]
+            : track.property === 'translatex' ? [frame.a * value, frame.c * value] : [frame.b * value, frame.d * value]);
+          }
+        }
+        const carried = (bone: string): [number, number] => {
+          let x = 0, y = 0; const seen = new Set<string>();
+          for (let b: string | undefined = setup.resolve(bone); b !== undefined && !seen.has(b); b = parents.get(b)) { seen.add(b); const v = translations.get(b); if (v !== undefined) { x += v[0]; y += v[1]; } }
+          return [x, y];
+        };
+        const snapshots = supports.filter(m => roles[m.part] !== undefined && (m.groups === undefined || [...m.groups.values()].includes(field))).map(mesh => {
+          const positions = points(mesh), key = raw.find(d => d.slot === mesh.slot && d.attachment === mesh.attachment)?.keys[ki];
+          let generated: number[] | undefined;
+          if (key?.transform !== undefined && mesh.gridSamples !== undefined) {
+            const sheet = surfaceSheets.get(mesh.part);
+            if (sheet !== undefined) generated = evaluateDeformTransform(key.transform, positions.flat(), f32, `turn neighbour "${mesh.slot}/${mesh.attachment}"`, mesh.gridSamples.map(([x, y]) => levelToDepthZ(sampleDepthFloat(sheet.ext, x - sheet.rec.x, y - sheet.rec.y), sheet.rec.depth))).offsets;
+          }
+          let at = 0;
+          const vectors = mesh.weights.map((row, vi) => {
+            let x = 0, y = 0;
+            for (const w of row) {
+              const frame = world.get(setup.resolve(w.bone));
+              if (frame === undefined) return [NaN, NaN];
+              const v = generated === undefined ? [key?.vertices?.[at], key?.vertices?.[at + 1]] : toBoneLocalVector(frame, generated[2 * vi], generated[2 * vi + 1]);
+              // Surface fields require an emitted vertex run (or Core's grid
+              // transform); absence is never interpreted as target depth.
+              if (roles[mesh.part] === 'surface' && (v[0] === undefined || v[1] === undefined)) return [NaN, NaN];
+              const dx = f32(v[0] ?? 0), dy = f32(v[1] ?? 0), c = carried(w.bone);
+              x += (frame.a * dx + frame.b * dy + c[0]) * w.weight;
+              y += (frame.c * dx + frame.d * dy + c[1]) * w.weight; at += 2;
+            }
+            return [x, y];
+          });
+          return { mesh, label: `${mesh.part}/${mesh.slot}/${mesh.attachment}`, points: positions, triangles: mesh.triangles ?? [], vectors };
+        });
+        for (const mesh of opts.surfaceMeshes ?? []) {
+          if (mesh.overlapOwners === undefined) continue;
+          const target = deform.find(d => d.slot === mesh.slot && d.attachment === mesh.attachment)?.keys[ki];
+          if (target?.vertices === undefined) continue;
+          let at = 0; const positions = points(mesh);
+          for (const [vi, row] of mesh.weights.entries()) {
+            const owner = mesh.overlapOwners[vi];
+            if (owner === undefined) { at += 2 * row.length; continue; }
+            const encode = (v: readonly number[]) => row.flatMap(w => { if (w.weight === 0) return [0, 0]; const q = toBoneLocalVector(world.get(setup.resolve(w.bone))!, v[0], v[1]); return q.map(n => pyRound(n, 6)); });
+            let values: number[] = Array<number>(2 * row.length).fill(0);
+            if (owner.group === field) {
+              const samples: Array<{ name: string; values: number[] }> = [];
+              for (const name of owner.neighbours) {
+                const candidates = snapshots.filter(s => s.mesh.part === name), point = positions[vi];
+                const covering = candidates.filter(s => turnTriangleCoordinates(s.points, s.triangles, point[0], point[1]) !== null);
+                const chosen = covering.length === 0 ? candidates.slice(0, 1) : covering;
+                if (chosen.length === 0) problems.push({ code: 'RIG_TURN_SURFACE_OVERLAP_SUPPORT', object: `surface mesh "${mesh.slot}/${mesh.attachment}" vertex ${vi}`, detail: `selected neighbour "${name}" has no existing triangle field; supply actual setup support; target depth is not a fallback` });
+                for (const source of chosen) {
+                  try { samples.push({ name: source.label, values: encode(sampleTurnTriangleField(source, point, `surface mesh "${mesh.slot}/${mesh.attachment}" vertex ${vi}`)) }); }
+                  catch (e) { if (e instanceof PartsError) problems.push(...e.problems); else throw e; }
+                }
+              }
+              if (samples.length > 0) {
+                values = samples[0].values;
+                if (samples.some(s => s.values.some((v, i) => v !== values[i]))) problems.push({ code: 'RIG_TURN_SURFACE_OVERLAP_DEPTH', object: `surface mesh "${mesh.slot}/${mesh.attachment}" vertex ${vi}`, detail: `neighbours ${samples.map(s => `"${s.name}"`).join(', ')} require incompatible emitted fields at this setup point; separate the conflicting support or supply coincident fields` });
+              }
+            }
+            target.vertices.splice(at, 2 * row.length, ...values); at += 2 * row.length;
+          }
+        }
+      }
+      for (let i = deform.length - 1; i >= 0; i--) if (opts.surfaceMeshes.some(m => m.slot === deform[i].slot && m.attachment === deform[i].attachment && m.overlapOwners !== undefined) && deform[i].keys.every(k => k.vertices === undefined || k.vertices.every(v => v === 0))) deform.splice(i, 1);
     }
 
     motion.animations[animName] = {
@@ -1970,6 +2081,8 @@ export function buildDepth25DTurn(
 ): void {
   const problems: Problem[] = [];
   const { yaw: yawMax, pitch: pitchMax } = resolveTurnBands(opts.turn);
+  // Ownership is derived here, never accepted as an authored producer switch.
+  opts = { ...opts, surfaceMeshes: opts.surfaceMeshes?.map(({ overlapOwners: _owners, groups: _groups, ...mesh }) => mesh) };
 
   // Only a surface opt-in spanning both authored subtrees changes paths (#796).
   // Single-group meshes keep #795's role and bytes, including explicit islands.
@@ -2019,8 +2132,14 @@ export function buildDepth25DTurn(
   });
   refuseIfAny(problems);
   if (blended.size > 0) {
+    const owners = turnOverlapOwners(rig, opts, classified ?? [], blended, problems);
+    refuseIfAny(problems);
+    const overlapped = surfaceMeshes?.map((mesh, i) => {
+      const overlapOwners = owners.get(classified![i].mesh);
+      return overlapOwners === undefined ? mesh : { ...mesh, overlapOwners };
+    });
     const surfaceRoles = Object.fromEntries([...blended].map(part => [part, 'surface' as const]));
-    opts = { ...opts, surfaceMeshes, turn: { ...opts.turn,
+    opts = { ...opts, surfaceMeshes: overlapped, turn: { ...opts.turn,
       roles: { ...opts.turn.roles, ...surfaceRoles },
       body: { ...opts.turn.body!, roles: { ...opts.turn.body!.roles, ...surfaceRoles } },
     } };
