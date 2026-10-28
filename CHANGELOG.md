@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.72.0](https://github.com/rig-c/parts/compare/v1.71.1...v1.72.0) (2026-10-28)
+
+
+### Features
+
+* **turn:** a mesh blended across the head and body groups takes each group's turn deform by its skin weights ([#802](https://github.com/rig-c/parts/issues/802)) ([0c211ee](https://github.com/rig-c/parts/commit/0c211eed60edc13ce8b76ab49f77a53543f4b36c)), closes [#796](https://github.com/rig-c/parts/issues/796)
+* **turn:** a surface role on a weighted mesh part — depth deform on top of skinning, so physics hair also turns with its depth ([#798](https://github.com/rig-c/parts/issues/798)) ([07cdd59](https://github.com/rig-c/parts/commit/07cdd59676e5f879b8b42e0b8dfdfdb7879218d4)), closes [#795](https://github.com/rig-c/parts/issues/795)
+
+
+### Bug Fixes
+
+* **docs:** name @rig-c/parts and @rig-c/core as the canonical packages in the README and the authoring guide ([#799](https://github.com/rig-c/parts/issues/799)) ([25047b4](https://github.com/rig-c/parts/commit/25047b4c3e205d5826bb44777fbf187139a91cd5))
+
 ## [1.71.1](https://github.com/rig-c/parts/compare/v1.71.0...v1.71.1) (2026-10-28)
 
 
