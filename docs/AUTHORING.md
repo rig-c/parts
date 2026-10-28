@@ -4510,16 +4510,17 @@ and stay absent).
 | <a id="DEPTH_PART_SUPPORT"></a>`DEPTH_PART_SUPPORT` | exact copied/generated material lacks source depth or compatible units | provide a declared scalar source/registration; do not infer or fill depth |
 | <a id="PARTS_DEPTH_REFERENCE"></a>`PARTS_DEPTH_REFERENCE` | persisted fields/provenance violate the reference shape | restore image, near, positive zScale and exact source records |
 | <a id="DEPTH_SILHOUETTE_SIZE_MISMATCH"></a>`DEPTH_SILHOUETTE_SIZE_MISMATCH` | `extendDepthSilhouette` or `padTurnDepthSheet` received a source depth sheet and artwork raster of different dimensions | supply the part's matching unpadded depth sheet and artwork raster |
-| <a id="CONFIG_TURN_COUNTER_RANGE"></a>`CONFIG_TURN_COUNTER_RANGE` | `config.turn.counter` is outside `[0, 1]` | supply a non-negative rear counter-translation fraction in `[0, 1]` |
-| <a id="CONFIG_TURN_ROLE_UNKNOWN"></a>`CONFIG_TURN_ROLE_UNKNOWN` | `config.turn.roles.<part>` is not `"surface"`, `"unit"` or `"rear"` | declare `"surface"`, `"unit"` or `"rear"` |
-| <a id="CONFIG_TURN_SURFACE_REQUIRED"></a>`CONFIG_TURN_SURFACE_REQUIRED` | `config.turn.roles` declares no `"surface"` part | declare at least one part (such as `face`) as `"surface"` |
+| <a id="CONFIG_TURN_COUNTER_RANGE"></a>`CONFIG_TURN_COUNTER_RANGE` | `config.turn.counter` (or `config.turn.body.counter`) is outside `[0, 1]` | supply a non-negative rear counter-translation fraction in `[0, 1]` |
+| <a id="CONFIG_TURN_ROLE_UNKNOWN"></a>`CONFIG_TURN_ROLE_UNKNOWN` | `config.turn.roles.<part>` (or `config.turn.body.roles.<part>`) is not `"surface"`, `"unit"` or `"rear"` | declare `"surface"`, `"unit"` or `"rear"` |
+| <a id="CONFIG_TURN_SURFACE_REQUIRED"></a>`CONFIG_TURN_SURFACE_REQUIRED` | `config.turn.roles` (or `config.turn.body.roles`) declares no `"surface"` part | declare at least one part as `"surface"` |
 | <a id="CONFIG_TURN_EAR_DRAW_ORDER"></a>`CONFIG_TURN_EAR_DRAW_ORDER` | an ear part in `config.turn.roles` is drawn after a `"surface"` part in `assemble.plan` | place `ear_r` and `ear_l` before `face` in `assemble.plan` so the turning cheek occludes the far ear |
-| <a id="CONFIG_TURN_HEAD_BONE"></a>`CONFIG_TURN_HEAD_BONE` | `config.turn.roles` is declared without a single bone `"head"` in `config.bones` | declare `"head"` as a single bone in `config.bones` |
-| <a id="RIG_TURN_SURFACE_DEPTH_REQUIRED"></a>`RIG_TURN_SURFACE_DEPTH_REQUIRED` | a part with role `"surface"` in `config.turn.roles` carries no depth sheet in `parts.json` | run `assemble` with `config.depth` or provide `<part>_depth.png` in `parts.json` |
-| <a id="RIG_TURN_GRID_BUDGET"></a>`RIG_TURN_GRID_BUDGET` | a `"surface"` grid exceeds 2,400 triangles on one slot or 4,000 triangles across all `"surface"` slots | lower `config.turn.grid` `[cols, rows]` within the per-slot and total budgets |
-| <a id="RIG_TURN_HEAD_BONE"></a>`RIG_TURN_HEAD_BONE` | `buildRig` found no `"head"` bone when emitting 2.5D turn carriers | declare `"head"` in `config.bones` |
-| <a id="RIG_TURN_SHARED_DEPTH_SCALE"></a>`RIG_TURN_SHARED_DEPTH_SCALE` | `"surface"` parts bound to one head turn declare different `near` polarities or `zScale` values | use one shared `near` and `zScale` across all `"surface"` parts in the turn |
-| <a id="RIG_TURN_UNIT_DEPTH_REQUIRED"></a>`RIG_TURN_UNIT_DEPTH_REQUIRED` | a `"unit"` bone has neither a `config.turn.unitDepths` entry nor a readable `"surface"` depth sheet | provide a `"surface"` depth sheet or an explicit `config.turn.unitDepths.<part>` value |
+| <a id="CONFIG_TURN_HEAD_BONE"></a>`CONFIG_TURN_HEAD_BONE` | `config.turn.roles` is declared without a single bone `"head"` in `config.bones`, or `config.turn.body` without a single bone `"chest"` / `"hip"` (or its declared `bone`) | declare `"head"` (or the body turn root bone) as a single bone in `config.bones` |
+| <a id="CONFIG_TURN_SLIDER_NAME_FREE"></a>`CONFIG_TURN_SLIDER_NAME_FREE` | `config.turn.body.slider` (or the default `"body_yaw_dial"`) collides with a head turn dial (`"yaw"`, `"pitch"`, `"yaw_dial"`, `"pitch_dial"`) or an existing slider constraint in `config.constraints` (#787) | choose a distinct slider name in `config.turn.body.slider` |
+| <a id="RIG_TURN_SURFACE_DEPTH_REQUIRED"></a>`RIG_TURN_SURFACE_DEPTH_REQUIRED` | a part with role `"surface"` in `config.turn.roles` or `config.turn.body.roles` carries no depth sheet in `parts.json` | run `assemble` with `config.depth` or provide `<part>_depth.png` in `parts.json` |
+| <a id="RIG_TURN_GRID_BUDGET"></a>`RIG_TURN_GRID_BUDGET` | a `"surface"` grid exceeds 2,400 triangles on one slot or 4,000 triangles across all `"surface"` slots | lower `config.turn.grid` / `config.turn.body.grid` `[cols, rows]` within the per-slot and total budgets |
+| <a id="RIG_TURN_HEAD_BONE"></a>`RIG_TURN_HEAD_BONE` | `buildRig` found no `"head"` (or body turn root) bone when emitting 2.5D turn carriers | declare `"head"` (or the body turn root bone) in `config.bones` |
+| <a id="RIG_TURN_SHARED_DEPTH_SCALE"></a>`RIG_TURN_SHARED_DEPTH_SCALE` | `"surface"` parts bound to one head or body turn declare different `near` polarities or `zScale` values | use one shared `near` and `zScale` across all `"surface"` parts in the turn group |
+| <a id="RIG_TURN_UNIT_DEPTH_REQUIRED"></a>`RIG_TURN_UNIT_DEPTH_REQUIRED` | a `"unit"` bone has neither a `unitDepths` entry nor a readable `"surface"` depth sheet | provide a `"surface"` depth sheet or an explicit `unitDepths.<part>` value |
 | <a id="RIG_TURN_EAR_DEPTH_BEHIND_CHEEK"></a>`RIG_TURN_EAR_DEPTH_BEHIND_CHEEK` | an ear bone in `config.turn.roles` has a calibrated depth at or in front of the cheek surface depth | place the ear behind the cheek surface (for example via `config.turn.unitDepths`) |
 
 ## 7. The bars `check` enforces, and what only an eye answers today
@@ -5563,9 +5564,12 @@ both keep original source provenance. Its references describe inputs for Core's
 `generator.depth = {image, near, zScale}`; sources are provenance, not Core
 fields. Since 1.68.0 (#777), [config.turn.roles](#3-configjson-field-by-field) consumes
 depth sheets for 2.5D head turns with grid surfaces and `yaw_dial`/`pitch_dial`
-controls; see [`CONFIG_TURN_ROLE_UNKNOWN`](#CONFIG_TURN_ROLE_UNKNOWN) and
-[`CONFIG_TURN_SURFACE_REQUIRED`](#CONFIG_TURN_SURFACE_REQUIRED).
-Authored weighted body meshes are unchanged and do not consume depth sheets. Measurement sheets are not packed
+controls, and `config.turn.body` (#787) extends the same 2.5D turn pipeline to
+torso/body parts under an independent `body_yaw_dial` (or `turn.body.slider`)
+dial; see [`CONFIG_TURN_ROLE_UNKNOWN`](#CONFIG_TURN_ROLE_UNKNOWN),
+[`CONFIG_TURN_SURFACE_REQUIRED`](#CONFIG_TURN_SURFACE_REQUIRED) and
+[`CONFIG_TURN_SLIDER_NAME_FREE`](#CONFIG_TURN_SLIDER_NAME_FREE).
+Authored weighted body meshes not named in `config.turn.body.roles` are unchanged and do not consume depth sheets. Measurement sheets are not packed
 art. An authored `parts.json` depth reference remains an active standalone
 `rig` declaration even without config opt-in: its file/size/color/opacity
 guards still apply. With binding inactive there is no added reference, file or

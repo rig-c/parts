@@ -176,10 +176,13 @@ part name, `[i]` an entry of a list):
 - **motion.blink** — required: `t`, `eyes`, `squash`; optional: `brows`, `brow_drop`, `still`
 - **motion.blink.still.&lt;part&gt;** — required: `row`, `bone`
 - **motion.animations_from**, the file it names — required: `spec`, `animations`
-- **turn** — required: `pivot`, `depths` (or `roles`, issue #763); optional: `deform`, `band`, `radius`, `surface`, `head`, `roles`, `counter`, `grid`, `unitDepths`
+- **turn** — required: `pivot`, `depths` (or `roles` / `body`, issues #763, #787); optional: `deform`, `band`, `radius`, `surface`, `head`, `roles`, `counter`, `grid`, `unitDepths`, `body`
 - **turn.depths.&lt;part&gt;** — a See-through depth
 - **turn.roles.&lt;part&gt;** — `"surface"`, `"unit"` or `"rear"` (issue #763)
 - **turn.unitDepths.&lt;part&gt;** — a calibrated world depth in rig pixels (issue #763)
+- **turn.body**, when an object — required: `roles`, `pivot` (when `turn.pivot` is absent); optional: `bone`, `slider`, `counter`, `grid`, `unitDepths` (issue #787)
+- **turn.body.roles.&lt;part&gt;** — `"surface"`, `"unit"` or `"rear"` (issue #787)
+- **turn.body.unitDepths.&lt;part&gt;** — a calibrated world depth in rig pixels (issue #787)
 - **turn.deform.&lt;key&gt;** — a per-degree fraction or coupling share (FACE_DEFORM_FRACTIONS, issue #436)
 - **turn.band**, when an object — optional: `yaw`, `pitch` (issue #472)
 - **turn.surface**, when an object — optional: `radius` (issue #479)

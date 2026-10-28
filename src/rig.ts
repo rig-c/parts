@@ -187,7 +187,7 @@ import { alphaAbove, crop, pad, type Raster } from './raster/index.ts';
 import { pyRound } from './round.ts';
 import { boneHeat, type HeatDust, heatInfluences, HEAT_LIMITS, heatRow, type HeatRow, latticeSilhouette, tracedSilhouette } from './heat.ts';
 import type { PosePoints } from './skeleton.ts';
-import { applyFaceSurfaceDeform, buildDepth25DTurn, FACE_RATED_BAND, FACESHIFT_BONE, PITCH_DIAL_BONE, REAR_SHIFT_BONE, resolveTurnGrid, TURN_BONE, TURN_CARRIER_TAG, TURN_GRID_MAX_TRIANGLES_PER_SLOT, TURN_GRID_MAX_TRIANGLES_TOTAL, TURN_PLACES, TURN_RIDER_APART, TURN_RIDER_TAGS, turnRiderDepth, type TurnSpec, turnConstraintName, turnFractions, turnNearest, turnSurfaceBone, turnTwin, YAW_DIAL_BONE } from './turn.ts';
+import { applyFaceSurfaceDeform, BODY_REAR_SHIFT_BONE, BODY_YAW_DIAL_BONE, BODYSHIFT_BONE, buildDepth25DTurn, FACE_RATED_BAND, FACESHIFT_BONE, PITCH_DIAL_BONE, REAR_SHIFT_BONE, resolveTurnGrid, TURN_BONE, TURN_CARRIER_TAG, TURN_GRID_MAX_TRIANGLES_PER_SLOT, TURN_GRID_MAX_TRIANGLES_TOTAL, TURN_PLACES, TURN_RIDER_APART, TURN_RIDER_TAGS, turnRiderDepth, type TurnRole, type TurnSpec, turnConstraintName, turnFractions, turnNearest, turnSurfaceBone, turnTwin, YAW_DIAL_BONE } from './turn.ts';
 import { DISTANCE_EXPONENT, type FloorForm, type Influence, influences, type InfluenceLimits, type MeshInfluences, meshLimits, type Segment } from './weights.ts';
 
 /** Transparent pixels added round every part image — the reference's `PAD`. */
@@ -1537,6 +1537,18 @@ export function buildWaistPairSource(
       if (!B.has(s.against)) fail('RIG_NAME_RESOLVES', `${at}.against`, `names the bone "${s.against}", which config.bones does not declare`);
     });
   }
+  if (cfg.turn?.roles !== undefined) {
+    for (const part of Object.keys(cfg.turn.roles)) {
+      if (!byPart.has(part)) fail('RIG_PART_PRESENT', `config.turn.roles.${part}`, `names the part "${part}", which is not in parts.json; ${where(part)}`);
+      else if (!(part in cfg.meshes) && !(part in cfg.regions)) fail('RIG_NAME_RESOLVES', `config.turn.roles.${part}`, `names "${part}", which neither config.meshes nor config.regions attaches`);
+    }
+  }
+  if (cfg.turn?.body !== undefined) {
+    for (const part of Object.keys(cfg.turn.body.roles)) {
+      if (!byPart.has(part)) fail('RIG_PART_PRESENT', `config.turn.body.roles.${part}`, `names the part "${part}", which is not in parts.json; ${where(part)}`);
+      else if (!(part in cfg.meshes) && !(part in cfg.regions)) fail('RIG_NAME_RESOLVES', `config.turn.body.roles.${part}`, `names "${part}", which neither config.meshes nor config.regions attaches`);
+    }
+  }
   for (const p of parts.parts) {
     const inM = p.name in cfg.meshes;
     const inR = p.name in cfg.regions;
@@ -1878,8 +1890,9 @@ export function buildWaistPairSource(
       return;
     }
     const art = images.get(part);
+    const isTurnPart = cfg.turn?.roles?.[part] !== undefined || cfg.turn?.body?.roles?.[part] !== undefined;
     const image =
-      cfg.turn?.roles?.[part] !== undefined && art !== undefined && art.width === scalar.width && art.height === scalar.height
+      isTurnPart && art !== undefined && art.width === scalar.width && art.height === scalar.height
         ? padTurnDepthSheet(scalar, art, PAD)
         : padDepthSheet(scalar, PAD);
     outImages.push([reference.image, image]);
@@ -2413,29 +2426,38 @@ export function buildWaistPairSource(
       }
     }
 
+    const isHeadSurface = cfg.turn?.roles?.[p.name] === 'surface';
+    const isBodySurface = cfg.turn?.body?.roles?.[p.name] === 'surface';
+    if (isHeadSurface || isBodySurface) {
+      const roleField = isHeadSurface ? `config.turn.roles.${p.name}` : `config.turn.body.roles.${p.name}`;
+      if (p.depth === undefined || scalar === undefined) {
+        fail(
+          'RIG_TURN_SURFACE_DEPTH_REQUIRED',
+          roleField,
+          `declares role "surface" for "${p.name}", which requires a depth sheet in parts.json; run assemble with config.depth or provide "${p.name}_depth.png"`,
+        );
+        continue;
+      }
+    }
+
     const mesh = cfg.meshes[p.name];
     if (mesh === undefined) {
-      if (cfg.turn?.roles?.[p.name] === 'surface') {
-        if (p.depth === undefined || scalar === undefined) {
-          fail(
-            'RIG_TURN_SURFACE_DEPTH_REQUIRED',
-            `config.turn.roles.${p.name}`,
-            `declares role "surface" for "${p.name}", which requires a depth sheet in parts.json; run assemble with config.depth or provide "${p.name}_depth.png"`,
-          );
-          continue;
-        }
-        const [cols, rows] = resolveTurnGrid(cfg.turn, p.name);
+      if (isHeadSurface || isBodySurface) {
+        const [cols, rows] = isHeadSurface
+          ? resolveTurnGrid(cfg.turn!, p.name)
+          : resolveTurnGrid(cfg.turn!.body!, p.name, cfg.turn);
         const triCount = 2 * (cols - 1) * (rows - 1);
+        const gridField = isHeadSurface ? `config.turn.grid (${p.name})` : `config.turn.body.grid (${p.name})`;
         if (triCount > TURN_GRID_MAX_TRIANGLES_PER_SLOT) {
           fail(
             'RIG_TURN_GRID_BUDGET',
-            `config.turn.grid (${p.name})`,
+            gridField,
             `specifies a ${cols}x${rows} grid (${triCount} triangles), which exceeds the per-slot budget of ${TURN_GRID_MAX_TRIANGLES_PER_SLOT} triangles`,
           );
           continue;
         }
         const surfBone = turnSurfaceBone(p.name);
-        const { sources: _sources, ...coreDepth } = p.depth;
+        const { sources: _sources, ...coreDepth } = p.depth!;
         const gridAtt: Omit<MeshAttachment, 'uvs' | 'triangles' | 'hull' | 'weights'> = {
           type: 'mesh',
           image: file,
@@ -3076,135 +3098,296 @@ export function buildWaistPairSource(
   // ---- the turn control (issue #251) -------------------------------------
   // Only when the config has `turn`: every other build adds nothing here, so no byte moves.
   if (cfg.turn !== undefined) refuseIfAny(turnRiderProblems(cfg.turn, cfg, parts.parts));
-  const turned = cfg.turn === undefined || cfg.turn.roles !== undefined ? null : applyTurn(cfg.turn, parts.parts.map((p) => p.name), bones, rebound, skin, cfg.constraints ?? [], declaredFront, slotFamilies, stops, turnOrderByDeclaration);
+  const turned = cfg.turn === undefined || cfg.turn.roles !== undefined || cfg.turn.depths === undefined ? null : applyTurn(cfg.turn, parts.parts.map((p) => p.name), bones, rebound, skin, cfg.constraints ?? [], declaredFront, slotFamilies, stops, turnOrderByDeclaration);
   for (const row of turned?.rows ?? []) for (const t of row.twins) layoutAlias(explicitLayout.plan, t.bone, t.twin);
   const finalSlots = frontSlots.length === 0 ? explicitLayout.slots : spliceFrontSlots(explicitLayout.slots, frontSlots, frontTargets, slotFamilies);
   let generatedMeshBudget: { meshSlots: number; meshTriangles: number } | null = null;
-  if (cfg.turn?.roles !== undefined) {
-    const roles = cfg.turn.roles;
+  if (cfg.turn?.roles !== undefined || cfg.turn?.body !== undefined) {
     let totalGridTriangles = 0;
-    const headIdx = bones.findIndex((b) => b.name === 'head');
-    if (headIdx === -1) {
-      fail('RIG_TURN_HEAD_BONE', 'config.turn.roles', 'requires a declared "head" bone in config.bones to parent the 2.5D turn carriers');
-    } else {
-      const headTransform = world.get('head') as BoneTransform;
-      const headTurnDeg = turn.get('head') ?? 0;
-      const surfBones: RigBone[] = [];
-      for (const p of parts.parts) {
-        if (roles[p.name] !== 'surface' || cfg.meshes[p.name] !== undefined) continue;
-        const [cols, rows] = resolveTurnGrid(cfg.turn, p.name);
-        totalGridTriangles += 2 * (cols - 1) * (rows - 1);
-        const cx = p.x + p.w / 2;
-        const cy = p.y + p.h / 2;
-        const [lx, ly] = toBoneLocal(headTransform, spineX(cx), spineY(cy));
-        const rot = places(normaliseDegrees(-headTurnDeg));
-        surfBones.push({
-          name: turnSurfaceBone(p.name),
-          parent: FACESHIFT_BONE,
-          x: places(lx),
-          y: places(ly),
-          ...(rot === 0 ? {} : { rotation: rot }),
-        });
-      }
-      if (totalGridTriangles > TURN_GRID_MAX_TRIANGLES_TOTAL) {
-        fail(
-          'RIG_TURN_GRID_BUDGET',
-          'config.turn.grid',
-          `allocates ${totalGridTriangles} total grid triangles across surface slots, which exceeds the total budget of ${TURN_GRID_MAX_TRIANGLES_TOTAL} triangles`,
-        );
-      }
-      const hasRear = Object.values(roles).includes('rear');
-      const carriers: RigBone[] = [
-        { name: FACESHIFT_BONE, parent: 'head', x: 0, y: 0 },
-        ...(hasRear ? [{ name: REAR_SHIFT_BONE, parent: 'head', x: 0, y: 0 }] : []),
-        ...surfBones,
-      ];
-      bones.splice(headIdx + 1, 0, ...carriers);
-      const existingNames = new Set(bones.map((b) => b.name));
-      if (!existingNames.has(YAW_DIAL_BONE)) bones.push({ name: YAW_DIAL_BONE, parent: ROOT_BONE, x: 0, y: 0 });
-      if (!existingNames.has(PITCH_DIAL_BONE)) bones.push({ name: PITCH_DIAL_BONE, parent: ROOT_BONE, x: 0, y: 0 });
+    const slotByName = new Map(finalSlots.map((s) => [s.name, s]));
 
-      const boneByName = new Map(bones.map((b) => [b.name, b]));
-      const slotByName = new Map(finalSlots.map((s) => [s.name, s]));
-      const reparentFromHead = (boneName: string, targetParent: string): void => {
-        const b = boneByName.get(boneName);
-        if (b !== undefined && b.parent === 'head') b.parent = targetParent;
-      };
-      const rebindPartToCarrier = (part: string, carrierBone: string): void => {
-        const sl = slotByName.get(part);
-        if (sl !== undefined && sl.bone === 'head') sl.bone = carrierBone;
-        const stillSl = slotByName.get(`${part}${STILL_SUFFIX}`);
-        if (stillSl !== undefined) {
-          if (stillSl.bone === 'head') stillSl.bone = carrierBone;
-          else reparentFromHead(stillSl.bone, carrierBone);
+    if (cfg.turn.roles !== undefined) {
+      const roles = cfg.turn.roles;
+      const headIdx = bones.findIndex((b) => b.name === 'head');
+      if (headIdx === -1) {
+        fail('RIG_TURN_HEAD_BONE', 'config.turn.roles', 'requires a declared "head" bone in config.bones to parent the 2.5D turn carriers');
+      } else {
+        const headTransform = world.get('head') as BoneTransform;
+        const headTurnDeg = turn.get('head') ?? 0;
+        const surfBones: RigBone[] = [];
+        for (const p of parts.parts) {
+          if (roles[p.name] !== 'surface' || cfg.meshes[p.name] !== undefined) continue;
+          const [cols, rows] = resolveTurnGrid(cfg.turn, p.name);
+          totalGridTriangles += 2 * (cols - 1) * (rows - 1);
+          const cx = p.x + p.w / 2;
+          const cy = p.y + p.h / 2;
+          const [lx, ly] = toBoneLocal(headTransform, spineX(cx), spineY(cy));
+          const rot = places(normaliseDegrees(-headTurnDeg));
+          surfBones.push({
+            name: turnSurfaceBone(p.name),
+            parent: FACESHIFT_BONE,
+            x: places(lx),
+            y: places(ly),
+            ...(rot === 0 ? {} : { rotation: rot }),
+          });
         }
-        const atts = skin[part] ?? {};
-        for (const att of Object.values(atts)) {
-          if (!('type' in att) || att.weights === undefined) continue;
-          for (const row of att.weights) {
-            for (const w of row) {
-              if (w.bone === 'head') {
-                w.bone = carrierBone;
-              } else {
-                // Find the ancestor of w.bone that hangs directly under head and reparent it to carrierBone.
-                let cur = boneByName.get(w.bone);
-                while (cur !== undefined && cur.parent !== undefined && cur.parent !== 'head' && cur.parent !== carrierBone) {
-                  cur = boneByName.get(cur.parent);
+        const hasRear = Object.values(roles).includes('rear');
+        const carriers: RigBone[] = [
+          { name: FACESHIFT_BONE, parent: 'head', x: 0, y: 0 },
+          ...(hasRear ? [{ name: REAR_SHIFT_BONE, parent: 'head', x: 0, y: 0 }] : []),
+          ...surfBones,
+        ];
+        bones.splice(headIdx + 1, 0, ...carriers);
+        const existingNames = new Set(bones.map((b) => b.name));
+        if (!existingNames.has(YAW_DIAL_BONE)) bones.push({ name: YAW_DIAL_BONE, parent: ROOT_BONE, x: 0, y: 0 });
+        if (!existingNames.has(PITCH_DIAL_BONE)) bones.push({ name: PITCH_DIAL_BONE, parent: ROOT_BONE, x: 0, y: 0 });
+
+        const boneByName = new Map(bones.map((b) => [b.name, b]));
+        const reparentFromHead = (boneName: string, targetParent: string): void => {
+          const b = boneByName.get(boneName);
+          if (b !== undefined && b.parent === 'head') b.parent = targetParent;
+        };
+        const rebindPartToCarrier = (part: string, carrierBone: string): void => {
+          const sl = slotByName.get(part);
+          if (sl !== undefined && sl.bone === 'head') sl.bone = carrierBone;
+          const stillSl = slotByName.get(`${part}${STILL_SUFFIX}`);
+          if (stillSl !== undefined) {
+            if (stillSl.bone === 'head') stillSl.bone = carrierBone;
+            else reparentFromHead(stillSl.bone, carrierBone);
+          }
+          const atts = skin[part] ?? {};
+          for (const att of Object.values(atts)) {
+            if (!('type' in att) || att.weights === undefined) continue;
+            for (const row of att.weights) {
+              for (const w of row) {
+                if (w.bone === 'head') {
+                  w.bone = carrierBone;
+                } else {
+                  let cur = boneByName.get(w.bone);
+                  while (cur !== undefined && cur.parent !== undefined && cur.parent !== 'head' && cur.parent !== carrierBone) {
+                    cur = boneByName.get(cur.parent);
+                  }
+                  if (cur !== undefined && cur.parent === 'head') cur.parent = carrierBone;
                 }
-                if (cur !== undefined && cur.parent === 'head') cur.parent = carrierBone;
               }
             }
           }
-        }
-      };
+        };
 
-      for (const [part, role] of Object.entries(roles)) {
-        if (role === 'unit') {
-          if (cfg.regions[part] !== undefined) {
-            const bName = regionBone(cfg.regions[part]);
-            if (bName === 'head') {
-              const sl = slotByName.get(part);
-              if (sl !== undefined) sl.bone = FACESHIFT_BONE;
-            } else {
-              reparentFromHead(bName, FACESHIFT_BONE);
+        for (const [part, role] of Object.entries(roles)) {
+          if (role === 'unit' || (role === 'surface' && cfg.meshes[part] !== undefined)) {
+            if (cfg.regions[part] !== undefined) {
+              const bName = regionBone(cfg.regions[part]);
+              if (bName === 'head') {
+                const sl = slotByName.get(part);
+                if (sl !== undefined) sl.bone = FACESHIFT_BONE;
+              } else {
+                reparentFromHead(bName, FACESHIFT_BONE);
+              }
+              const st = stills[part];
+              if (st !== undefined) reparentFromHead(st.bone, FACESHIFT_BONE);
+            } else if (cfg.meshes[part] !== undefined) {
+              rebindPartToCarrier(part, FACESHIFT_BONE);
             }
-            const st = stills[part];
-            if (st !== undefined) reparentFromHead(st.bone, FACESHIFT_BONE);
-          } else if (cfg.meshes[part] !== undefined) {
-            rebindPartToCarrier(part, FACESHIFT_BONE);
-          }
-        } else if (role === 'rear' && hasRear) {
-          if (cfg.regions[part] !== undefined) {
-            const bName = regionBone(cfg.regions[part]);
-            if (bName === 'head') {
-              const sl = slotByName.get(part);
-              if (sl !== undefined) sl.bone = REAR_SHIFT_BONE;
-            } else {
-              reparentFromHead(bName, REAR_SHIFT_BONE);
+          } else if (role === 'rear' && hasRear) {
+            if (cfg.regions[part] !== undefined) {
+              const bName = regionBone(cfg.regions[part]);
+              if (bName === 'head') {
+                const sl = slotByName.get(part);
+                if (sl !== undefined) sl.bone = REAR_SHIFT_BONE;
+              } else {
+                reparentFromHead(bName, REAR_SHIFT_BONE);
+              }
+            } else if (cfg.meshes[part] !== undefined) {
+              rebindPartToCarrier(part, REAR_SHIFT_BONE);
             }
-          } else if (cfg.meshes[part] !== undefined) {
-            rebindPartToCarrier(part, REAR_SHIFT_BONE);
           }
         }
       }
-
-      let meshSlots = 0;
-      let meshTriangles = 0;
-      for (const atts of Object.values(skin)) {
-        let slotHasMesh = false;
-        for (const att of Object.values(atts)) {
-          if (!('type' in att)) continue;
-          slotHasMesh = true;
-          const tris =
-            att.generator?.kind === 'grid'
-              ? 2 * (att.generator.cols - 1) * (att.generator.rows - 1)
-              : (att.triangles?.length ?? 0) / 3;
-          if (tris > meshTriangles) meshTriangles = tris;
-        }
-        if (slotHasMesh) meshSlots++;
-      }
-      generatedMeshBudget = { meshSlots, meshTriangles };
     }
+
+    if (cfg.turn.body !== undefined) {
+      const bodySpec = cfg.turn.body;
+      const bodyRoles = bodySpec.roles;
+      const bodyRoot = bodySpec.bone ?? (bones.some((b) => b.name === 'chest') ? 'chest' : 'hip');
+      const bodyIdx = bones.findIndex((b) => b.name === bodyRoot);
+      if (bodyIdx === -1) {
+        fail('RIG_TURN_HEAD_BONE', 'config.turn.body', `requires a declared "${bodyRoot}" bone in config.bones to parent the 2.5D body turn carriers`);
+      } else {
+        const bodyTransform = world.get(bodyRoot) as BoneTransform;
+        const bodyTurnDeg = turn.get(bodyRoot) ?? 0;
+        const surfBones: RigBone[] = [];
+        for (const p of parts.parts) {
+          if (bodyRoles[p.name] !== 'surface' || cfg.meshes[p.name] !== undefined) continue;
+          const [cols, rows] = resolveTurnGrid(bodySpec, p.name, cfg.turn);
+          totalGridTriangles += 2 * (cols - 1) * (rows - 1);
+          const cx = p.x + p.w / 2;
+          const cy = p.y + p.h / 2;
+          const [lx, ly] = toBoneLocal(bodyTransform, spineX(cx), spineY(cy));
+          const rot = places(normaliseDegrees(-bodyTurnDeg));
+          surfBones.push({
+            name: turnSurfaceBone(p.name),
+            parent: BODYSHIFT_BONE,
+            x: places(lx),
+            y: places(ly),
+            ...(rot === 0 ? {} : { rotation: rot }),
+          });
+        }
+        const hasRear = Object.values(bodyRoles).includes('rear');
+        const carriers: RigBone[] = [
+          { name: BODYSHIFT_BONE, parent: bodyRoot, x: 0, y: 0 },
+          ...(hasRear ? [{ name: BODY_REAR_SHIFT_BONE, parent: bodyRoot, x: 0, y: 0 }] : []),
+          ...surfBones,
+        ];
+        bones.splice(bodyIdx + 1, 0, ...carriers);
+        const bodyDialBone = bodySpec.slider ?? BODY_YAW_DIAL_BONE;
+        if (!bones.some((b) => b.name === bodyDialBone)) {
+          bones.push({ name: bodyDialBone, parent: ROOT_BONE, x: 0, y: 0 });
+        }
+
+        const boneByName = new Map(bones.map((b) => [b.name, b]));
+        const torsoRoots = new Set<string>([bodyRoot, 'chest', 'hip', `${bodyRoot}${CONTROL_SUFFIX}`, `chest${CONTROL_SUFFIX}`, `hip${CONTROL_SUFFIX}`]);
+        const headExclusion = new Set<string>(['head', `head${CONTROL_SUFFIX}`, 'neck', `neck${CONTROL_SUFFIX}`, FACESHIFT_BONE, REAR_SHIFT_BONE]);
+        const reparentFromTorso = (boneName: string, targetParent: string): void => {
+          if (torsoRoots.has(boneName) || headExclusion.has(boneName)) return;
+          let cur = boneByName.get(boneName);
+          while (
+            cur !== undefined &&
+            cur.parent !== undefined &&
+            !torsoRoots.has(cur.parent) &&
+            cur.parent !== targetParent &&
+            !headExclusion.has(cur.parent)
+          ) {
+            cur = boneByName.get(cur.parent);
+          }
+          if (cur !== undefined && cur.parent !== undefined && torsoRoots.has(cur.parent) && !torsoRoots.has(cur.name) && !headExclusion.has(cur.name)) {
+            const oldParent = cur.parent;
+            if (oldParent !== bodyRoot) {
+              const oldTr = world.get(oldParent);
+              if (oldTr !== undefined) {
+                const [wx, wy] = toWorld(oldTr, cur.x, cur.y);
+                const [lx, ly] = toBoneLocal(bodyTransform, wx, wy);
+                cur.x = places(lx);
+                cur.y = places(ly);
+              }
+            }
+            cur.parent = targetParent;
+          }
+        };
+        const rebindBodyPartToCarrier = (part: string, carrierBone: string): void => {
+          const sl = slotByName.get(part);
+          if (sl !== undefined && torsoRoots.has(sl.bone)) sl.bone = carrierBone;
+          const stillSl = slotByName.get(`${part}${STILL_SUFFIX}`);
+          if (stillSl !== undefined) {
+            if (torsoRoots.has(stillSl.bone)) stillSl.bone = carrierBone;
+            else reparentFromTorso(stillSl.bone, carrierBone);
+          }
+          const atts = skin[part] ?? {};
+          for (const att of Object.values(atts)) {
+            if (!('type' in att) || att.weights === undefined) continue;
+            for (const row of att.weights) {
+              for (const w of row) {
+                if (torsoRoots.has(w.bone)) {
+                  if (w.bone !== bodyRoot) {
+                    const oldTr = world.get(w.bone);
+                    if (oldTr !== undefined) {
+                      const [wx, wy] = toWorld(oldTr, w.x, w.y);
+                      const [lx, ly] = toBoneLocal(bodyTransform, wx, wy);
+                      w.x = places(lx);
+                      w.y = places(ly);
+                    }
+                  }
+                  w.bone = carrierBone;
+                } else {
+                  reparentFromTorso(w.bone, carrierBone);
+                }
+              }
+            }
+          }
+        };
+
+        for (const [part, role] of Object.entries(bodyRoles)) {
+          if (role === 'unit' || (role === 'surface' && cfg.meshes[part] !== undefined)) {
+            if (cfg.regions[part] !== undefined) {
+              const bName = regionBone(cfg.regions[part]);
+              if (torsoRoots.has(bName)) {
+                const sl = slotByName.get(part);
+                if (sl !== undefined) sl.bone = BODYSHIFT_BONE;
+                if (bName !== bodyRoot) {
+                  const oldTr = world.get(bName);
+                  if (oldTr !== undefined) {
+                    for (const att of Object.values(skin[part] ?? {})) {
+                      if (!('type' in att)) {
+                        const [wx, wy] = toWorld(oldTr, att.x, att.y);
+                        const [lx, ly] = toBoneLocal(bodyTransform, wx, wy);
+                        att.x = places(lx);
+                        att.y = places(ly);
+                      }
+                    }
+                  }
+                }
+              } else {
+                reparentFromTorso(bName, BODYSHIFT_BONE);
+              }
+              const st = stills[part];
+              if (st !== undefined) reparentFromTorso(st.bone, BODYSHIFT_BONE);
+            } else if (cfg.meshes[part] !== undefined) {
+              rebindBodyPartToCarrier(part, BODYSHIFT_BONE);
+            }
+          } else if (role === 'rear' && hasRear) {
+            if (cfg.regions[part] !== undefined) {
+              const bName = regionBone(cfg.regions[part]);
+              if (torsoRoots.has(bName)) {
+                const sl = slotByName.get(part);
+                if (sl !== undefined) sl.bone = BODY_REAR_SHIFT_BONE;
+                if (bName !== bodyRoot) {
+                  const oldTr = world.get(bName);
+                  if (oldTr !== undefined) {
+                    for (const att of Object.values(skin[part] ?? {})) {
+                      if (!('type' in att)) {
+                        const [wx, wy] = toWorld(oldTr, att.x, att.y);
+                        const [lx, ly] = toBoneLocal(bodyTransform, wx, wy);
+                        att.x = places(lx);
+                        att.y = places(ly);
+                      }
+                    }
+                  }
+                }
+              } else {
+                reparentFromTorso(bName, BODY_REAR_SHIFT_BONE);
+              }
+            } else if (cfg.meshes[part] !== undefined) {
+              rebindBodyPartToCarrier(part, BODY_REAR_SHIFT_BONE);
+            }
+          }
+        }
+      }
+    }
+
+    if (totalGridTriangles > TURN_GRID_MAX_TRIANGLES_TOTAL) {
+      fail(
+        'RIG_TURN_GRID_BUDGET',
+        'config.turn.grid',
+        `allocates ${totalGridTriangles} total grid triangles across surface slots, which exceeds the total budget of ${TURN_GRID_MAX_TRIANGLES_TOTAL} triangles`,
+      );
+    }
+
+    let meshSlots = 0;
+    let meshTriangles = 0;
+    for (const atts of Object.values(skin)) {
+      let slotHasMesh = false;
+      for (const att of Object.values(atts)) {
+        if (!('type' in att)) continue;
+        slotHasMesh = true;
+        const tris =
+          att.generator?.kind === 'grid'
+            ? 2 * (att.generator.cols - 1) * (att.generator.rows - 1)
+            : (att.triangles?.length ?? 0) / 3;
+        if (tris > meshTriangles) meshTriangles = tris;
+      }
+      if (slotHasMesh) meshSlots++;
+    }
+    generatedMeshBudget = { meshSlots, meshTriangles };
   }
   // issue #536: every row names the bones the emitted attachment binds, read once the turn and the stops have
   // rebound the weights; a rig with neither rebinds nothing, so this reads back the names each row already holds.
@@ -3265,7 +3448,7 @@ export function buildWaistPairSource(
   for (const [bName, bEntry] of B) {
     boneLandmarks.set(bName, [bEntry.x, bEntry.y]);
   }
-  if (cfg.turn?.roles !== undefined) {
+  if (cfg.turn?.roles !== undefined || cfg.turn?.body !== undefined) {
     buildDepth25DTurn(rig, motion, {
       turn: cfg.turn,
       parts: parts.parts,
@@ -3280,7 +3463,7 @@ export function buildWaistPairSource(
     if (cfg.waist !== undefined) refuseSharedWaistMotion(merged, cfg.waist.top, cfg.waist.bone);
     remapWaistDeforms(merged, waistTargets, waistRegionTargets, waistBindingsBeforeRebind);
     expandSetAttachmentKeys(rig, sets, merged);
-    if (cfg.turn?.roles !== undefined) {
+    if (cfg.turn?.roles !== undefined || cfg.turn?.body !== undefined) {
       buildDepth25DTurn(rig, merged, {
         turn: cfg.turn,
         parts: parts.parts,
@@ -3290,7 +3473,8 @@ export function buildWaistPairSource(
         boneLandmarks,
         hasAlternateFaceSet,
       });
-    } else {
+    }
+    if (cfg.turn?.roles === undefined && (cfg.turn === undefined || cfg.turn.body === undefined || cfg.turn.depths !== undefined)) {
       applyFaceSurfaceDeform(rig, merged, {
         imageWidth: faceImg?.width,
         imageHeight: faceImg?.height,

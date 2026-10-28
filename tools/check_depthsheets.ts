@@ -451,6 +451,239 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
       cEarFront.includes('RIG_TURN_EAR_DEPTH_BEHIND_CHEEK'),
     `role=${cRole.join(',')}; noSurf=${cNoSurf.join(',')}; earOrder=${cEarOrd.join(',')}; resBone=${cResBone.join(',')}; noDepth=${cNoDepth.join(',')}; grid=${cGrid.join(',')}; earFront=${cEarFront.join(',')}`,
   );
+
+  // #787: 2.5D body-turn dial projecting torso surface grids through the head's turn path.
+  const makeBody25DFixture = () => {
+    const base = make25DFixture();
+    const baseCounts = { projected_core_px: 0, source_px_taken: 0, refused_drift_px: 0, merged_px: 0, seam_override_px: 0 };
+    const makeDome = (w: number, h: number, r: number, g: number, b: number) => {
+      const art = newRaster(w, h);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const a = x >= 1 && x <= w - 2 && y >= 1 && y <= h - 2 ? 255 : 0;
+          art.data.set([r, g, b, a], (y * w + x) * 4);
+        }
+      }
+      const cx = (w - 1) / 2;
+      const cy = (h - 1) / 2;
+      const rx = Math.max(1, cx - 0.5);
+      const ry = Math.max(1, cy - 0.5);
+      const depth = grey(w, h, (x, y) => {
+        if (x < 1 || x > w - 2 || y < 1 || y > h - 2) return 10;
+        const dx = (x - cx) / rx;
+        const dy = (y - cy) / ry;
+        return Math.round(215 - 40 * Math.min(1, dx * dx + 0.5 * dy * dy));
+      });
+      const sha = createHash('sha256').update(encodePngBytes(depth)).digest('hex');
+      return { art, depth, sha };
+    };
+    const topDome = makeDome(24, 16, 80, 130, 210);
+    const botDome = makeDome(26, 14, 50, 75, 145);
+    const capeArt = newRaster(30, 24);
+    for (let i = 0; i < 30 * 24; i++) capeArt.data.set([40, 35, 55, 255], i * 4);
+    const badgeArt = newRaster(4, 4);
+    for (let i = 0; i < 16; i++) badgeArt.data.set([245, 200, 60, 255], i * 4);
+
+    base.pf.parts.splice(
+      1,
+      0,
+      { ...baseCounts, name: 'cape', from: 'full:wings', x: 17, y: 36, w: 30, h: 24, opaque_px: 30 * 24 },
+      {
+        ...baseCounts,
+        name: 'bottomwear',
+        from: 'full:bottomwear',
+        x: 19,
+        y: 48,
+        w: 26,
+        h: 14,
+        opaque_px: 24 * 12,
+        depth: {
+          image: 'bottomwear_depth.png',
+          near: 'white' as const,
+          zScale: 36,
+          sources: [{ from: 'full:bottomwear', image: 'bottomwear_depth_src.png', sha256: botDome.sha, crop: [19, 48, 45, 62] as [number, number, number, number], reading: depthReading(botDome.depth, botDome.art, null) }],
+        },
+      },
+      {
+        ...baseCounts,
+        name: 'topwear',
+        from: 'full:topwear',
+        x: 20,
+        y: 36,
+        w: 24,
+        h: 16,
+        opaque_px: 22 * 14,
+        depth: {
+          image: 'topwear_depth.png',
+          near: 'white' as const,
+          zScale: 36,
+          sources: [{ from: 'full:topwear', image: 'topwear_depth_src.png', sha256: topDome.sha, crop: [20, 36, 44, 52] as [number, number, number, number], reading: depthReading(topDome.depth, topDome.art, null) }],
+        },
+      },
+      { ...baseCounts, name: 'badge', from: 'full:neckwear', x: 26, y: 40, w: 4, h: 4, opaque_px: 16 },
+    );
+    base.imgs.set('cape', capeArt);
+    base.imgs.set('bottomwear', botDome.art);
+    base.imgs.set('bottomwear_depth.png', botDome.depth);
+    base.imgs.set('topwear', topDome.art);
+    base.imgs.set('topwear_depth.png', topDome.depth);
+    base.imgs.set('badge', badgeArt);
+
+    (base.rawCfg.assemble as { plan: unknown[][] }).plan.splice(
+      1,
+      0,
+      ['cape', 'full', 'wings'],
+      ['bottomwear', 'full', 'bottomwear'],
+      ['topwear', 'full', 'topwear'],
+      ['badge', 'full', 'neckwear'],
+    );
+    base.rawCfg.bones = [
+      { name: 'hip', parent: 'root', at: [32, 56] },
+      { name: 'chest', parent: 'hip', at: [32, 44] },
+      { name: 'badge_b', parent: 'chest', at: [28, 42] },
+      { name: 'head', parent: 'chest', at: [32, 36] },
+      { name: 'eye_r', parent: 'head', at: [26, 26] },
+      { name: 'eye_l', parent: 'head', at: [38, 26] },
+      { name: 'mouth', parent: 'head', at: [32, 35] },
+      { name: 'ear_r', parent: 'head', at: [18, 27] },
+      { name: 'ear_l', parent: 'head', at: [46, 27] },
+      { chain: 'bang_c', parent: 'head', points: [[32, 16], [32, 22]], tip: [32, 27] },
+      { chain: 'hb_c', parent: 'head', points: [[32, 24], [32, 36]], tip: [32, 46] },
+    ];
+    const regs = base.rawCfg.regions as Record<string, string>;
+    regs.cape = 'chest';
+    regs.bottomwear = 'hip';
+    regs.topwear = 'chest';
+    regs.badge = 'badge_b';
+    (base.rawCfg.turn as Record<string, unknown>).body = {
+      pivot: 18,
+      bone: 'chest',
+      counter: 0.12,
+      grid: { topwear: [5, 5], bottomwear: [4, 4] },
+      roles: {
+        cape: 'rear',
+        bottomwear: 'surface',
+        topwear: 'surface',
+        badge: 'unit',
+      },
+      unitDepths: {
+        badge: 10,
+      },
+    };
+    return base;
+  };
+
+  const fb25 = makeBody25DFixture();
+  const builtBody25 = buildRig(parseConfig(fb25.rawCfg), fb25.pf, fb25.imgs);
+  const tb25Dir = join(dir, 'turn_body25d');
+  mkdirSync(join(tb25Dir, 'images'), { recursive: true });
+  for (const [name, img] of builtBody25.images) writePng(join(tb25Dir, 'images', name), img);
+  for (const [name, text] of rigOutputTexts(builtBody25, null)) writeFileSync(join(tb25Dir, name), text);
+  const runBody25 = spawnSync(process.execPath, [resolve('node_modules/rig-c/cli.ts'), 'build', '--rig', join(tb25Dir, 'rig.json'), '--motion', join(tb25Dir, 'motion.json'), '--out', join(tb25Dir, 'built'), '--profile', 'rig-play'], { encoding: 'utf8' });
+  const compiledBody25 = compile({ rigPath: join(tb25Dir, 'rig.json'), motionPath: join(tb25Dir, 'motion.json'), outDir: join(tb25Dir, 'sdk') });
+  const topDepthRep = compiledBody25.meshes.find((m) => m.slot === 'topwear')?.depth;
+  const botDepthRep = compiledBody25.meshes.find((m) => m.slot === 'bottomwear')?.depth;
+  const bodyParents = new Map(builtBody25.rig.bones.map((b) => [b.name, b.parent]));
+  const bodySlots = new Map(builtBody25.rig.slots.map((s) => [s.name, s.bone]));
+  type AnimTrack = {
+    bone?: string;
+    group?: string;
+    property: string;
+    keys: Array<{ t: number; v?: number[]; derive?: { kind: string; degrees: number; depth?: number | Record<string, number> } }>;
+  };
+  type AnimDeform = {
+    slot: string;
+    attachment: string;
+    keys: Array<{ t: number; transform?: { kind: string; degrees: number; depth?: boolean; narrowing?: boolean } }>;
+  };
+  type AnimShape = {
+    tracks?: AnimTrack[];
+    deform?: AnimDeform[];
+  };
+  const headTurnAnim = builtBody25.motion.animations.turn as AnimShape | undefined;
+  const bodyTurnAnim = builtBody25.motion.animations.body_turn as AnimShape | undefined;
+  const headDeformSlots = (headTurnAnim?.deform ?? []).map((d) => d.slot);
+  const bodyDeformSlots = (bodyTurnAnim?.deform ?? []).map((d) => d.slot);
+  const headTrackBones = (headTurnAnim?.tracks ?? []).map((t) => t.bone ?? t.group ?? '');
+  const bodyTrackBones = (bodyTurnAnim?.tracks ?? []).map((t) => t.bone ?? t.group ?? '');
+  // Read compiled Spine skeleton.json emitted by Core to verify actual projected deform vertices and carrier translations at +30 deg (key index 4, t=2).
+  const compiledSkel = JSON.parse(readFileSync(join(tb25Dir, 'built/skeleton.json'), 'utf8')) as {
+    animations: Record<string, {
+      bones?: Record<string, { translatex?: Array<{ time?: number; value?: number }> }>;
+      attachments?: { default?: Record<string, Record<string, { deform?: Array<{ time?: number; vertices?: number[] }> }>> };
+    }>;
+  };
+  const facePosDeform = compiledSkel.animations.turn?.attachments?.default?.face?.face?.deform?.[4]?.vertices ?? [];
+  const topPosDeform = compiledSkel.animations.body_turn?.attachments?.default?.topwear?.topwear?.deform?.[4]?.vertices ?? [];
+  const faceCentreDxPos =
+    (compiledSkel.animations.turn?.bones?.faceshift?.translatex?.[4]?.value ?? 0) +
+    (compiledSkel.animations.turn?.bones?.face_surface?.translatex?.[4]?.value ?? 0) +
+    (facePosDeform[12 * 2] ?? 0);
+  const topCentreDxPos =
+    (compiledSkel.animations.body_turn?.bones?.bodyshift?.translatex?.[4]?.value ?? 0) +
+    (compiledSkel.animations.body_turn?.bones?.topwear_surface?.translatex?.[4]?.value ?? 0) +
+    (topPosDeform[12 * 2] ?? 0);
+  const bodyRearDxPos = compiledSkel.animations.body_turn?.bones?.body_rear_shift?.translatex?.[4]?.value ?? 0;
+  const sliderNames = (builtBody25.rig.constraints ?? []).filter((c) => c.type === 'slider').map((c) => c.name);
+  say(
+    'DZ53_BODY_TURN_25D_PROJECTS_TORSO_GRIDS_INDEPENDENT_OF_HEAD_AND_GATES_CORE',
+    runBody25.status === 0 &&
+      bodyParents.get('bodyshift') === 'chest' &&
+      bodyParents.get('body_rear_shift') === 'chest' &&
+      bodyParents.get('topwear_surface') === 'bodyshift' &&
+      bodyParents.get('bottomwear_surface') === 'bodyshift' &&
+      bodyParents.get('badge_b') === 'bodyshift' &&
+      (bodyParents.get('head') === 'chest' || (bodyParents.get('head') === 'head_ctl' && bodyParents.get('head_ctl') === 'chest')) &&
+      bodySlots.get('cape') === 'body_rear_shift' &&
+      JSON.stringify(headDeformSlots) === JSON.stringify(['face']) &&
+      JSON.stringify([...bodyDeformSlots].sort()) === JSON.stringify(['bottomwear', 'topwear']) &&
+      !headTrackBones.some((b) => b === 'bodyshift' || b === 'body_rear_shift' || b === 'badge_b') &&
+      !bodyTrackBones.some((b) => b === 'faceshift' || b === 'rear_shift' || b === 'eye_r' || b === 'ear_r') &&
+      facePosDeform.length > 0 &&
+      topPosDeform.length > 0 &&
+      faceCentreDxPos < 0 &&
+      topCentreDxPos < 0 &&
+      bodyRearDxPos > 0 &&
+      sliderNames.includes('body_yaw_dial') &&
+      topDepthRep?.ceiling !== undefined &&
+      botDepthRep?.ceiling !== undefined,
+    `Core exit=${runBody25.status}; headDeform=${headDeformSlots.join(',')}; bodyDeform=${bodyDeformSlots.join(',')}; faceCentreDxPos=${faceCentreDxPos.toFixed(4)}; topCentreDxPos=${topCentreDxPos.toFixed(4)}; bodyRearDxPos=${bodyRearDxPos.toFixed(4)}; sliders=${sliderNames.join(',')}; topCeiling=${JSON.stringify(topDepthRep?.ceiling)}; botCeiling=${JSON.stringify(botDepthRep?.ceiling)}`,
+  );
+
+  const badBodyNoDepth = makeBody25DFixture();
+  delete (badBodyNoDepth.pf.parts.find((p) => p.name === 'topwear') as { depth?: unknown }).depth;
+  const badBodyPartMissing = makeBody25DFixture();
+  badBodyPartMissing.pf.parts = badBodyPartMissing.pf.parts.filter((p) => p.name !== 'badge');
+  const badBodyPartUnattached = makeBody25DFixture();
+  ((badBodyPartUnattached.rawCfg.turn as { body: { roles: Record<string, unknown> } }).body.roles).unattached_part = 'unit';
+  const badBodyRigUnattached = makeBody25DFixture();
+  const parsedRigUnattached = parseConfig(badBodyRigUnattached.rawCfg);
+  (parsedRigUnattached.turn?.body?.roles as Record<string, string>).unattached_part = 'unit';
+  badBodyRigUnattached.pf.parts.push({ ...badBodyRigUnattached.pf.parts[0], name: 'unattached_part', from: 'full:objects' });
+  const badBodySliderCollision = makeBody25DFixture();
+  ((badBodySliderCollision.rawCfg.turn as { body: Record<string, unknown> }).body).slider = 'yaw';
+  const badBodySliderConstraintCollision = makeBody25DFixture();
+  badBodySliderConstraintCollision.rawCfg.constraints = [
+    { type: 'slider', name: 'custom_body_yaw', animation: 'idle', bone: 'hip', property: 'x' },
+  ];
+  ((badBodySliderConstraintCollision.rawCfg.turn as { body: Record<string, unknown> }).body).slider = 'custom_body_yaw';
+
+  const cbNoDepth = errors(() => buildRig(parseConfig(badBodyNoDepth.rawCfg), badBodyNoDepth.pf, badBodyNoDepth.imgs));
+  const cbPartMissing = errors(() => buildRig(parseConfig(badBodyPartMissing.rawCfg), badBodyPartMissing.pf, badBodyPartMissing.imgs));
+  const cbUnattached = errors(() => parseConfig(badBodyPartUnattached.rawCfg));
+  const cbRigUnattached = errors(() => buildRig(parsedRigUnattached, badBodyRigUnattached.pf, badBodyRigUnattached.imgs));
+  const cbSliderHead = errors(() => parseConfig(badBodySliderCollision.rawCfg));
+  const cbSliderCst = errors(() => parseConfig(badBodySliderConstraintCollision.rawCfg));
+  say(
+    'DZ54_BODY_TURN_25D_REFUSALS_NAMED',
+    cbNoDepth.includes('RIG_TURN_SURFACE_DEPTH_REQUIRED') &&
+      cbPartMissing.includes('RIG_PART_PRESENT') &&
+      cbUnattached.includes('CONFIG_NAME_RESOLVES') &&
+      cbRigUnattached.includes('RIG_NAME_RESOLVES') &&
+      cbSliderHead.includes('CONFIG_TURN_SLIDER_NAME_FREE') &&
+      cbSliderCst.includes('CONFIG_TURN_SLIDER_NAME_FREE'),
+    `noDepth=${cbNoDepth.join(',')}; partMissing=${cbPartMissing.join(',')}; unattached=${cbUnattached.join(',')}; rigUnattached=${cbRigUnattached.join(',')}; sliderHead=${cbSliderHead.join(',')}; sliderCst=${cbSliderCst.join(',')}`,
+  );
 }
 
 
