@@ -23,6 +23,17 @@ A path this page names that the installed package does not hold — anything und
 `bun run` names — is in the repository, https://github.com/rig-c/parts; the package holds the files
 `package.json` lists under `files` (`npm pack --dry-run` prints them).
 
+For repository changes, run `bun run selftest:pre` on an ordinary Nova slot,
+beside the change's targeted suites (or add them with
+`bun run selftest:pre -- --only rig,propose`). Its fixed minimum forms are demo's
+AE02, TY12/TY16, one demo build with CH04/CH05 goldens, and declaration ownership
+plus RT14, accounting and the family-memory check. It uses one worker and needs
+demo's pinned inputs. Missing inputs, SKIPs and HOLEs cannot pass. Its result
+covers those forms only: **the full forms and full-tree verdict belong to PR CI**.
+[CONTRIBUTING](../CONTRIBUTING.md#before-you-open-a-pull-request) records their
+historical derivation, the selected forms and the separate pre/ordinary-PARTIAL
+exit contracts.
+
 The examples' names: `reference-sample` and `reference-demo` are the two characters
 the reference implementation ran (published as `sample` and `demo` until issue #227),
 kept as fixtures because their `expected/` is that implementation's own output; every

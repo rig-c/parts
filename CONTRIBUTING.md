@@ -28,8 +28,53 @@ as written.
 ```bash
 bun run typecheck    # tsc --noEmit, strict
 bun run lint         # one rule: @typescript-eslint/no-explicit-any, as an error
-bun run selftest     # every gate's negative controls, on fixtures it generates
+bun run selftest:pre # always-include cross-cutting set; one worker
+# Add a lane's targeted suites without replacing the always-include set:
+bun run selftest:pre -- --only rig,propose
 ```
+
+Run targeted checks plus `selftest:pre` on an ordinary Nova slot. The full-tree
+verdict and the **full forms of every suite** belong to PR CI's sharded selftest.
+The pre command uses these fixed minimum forms, with one worker at a time:
+
+| Member | Fixed pre form |
+| --- | --- |
+| `assemble-examples` | pinned demo inputs, then AE02 on demo through the existing stage runner and replay |
+| `tree` | the shared TY12 and TY16 cases only |
+| `chain` | one demo build through check, then the shared CH04 and CH05 golden comparators; CH01 verifies that the producer succeeded |
+| `run-tally` | declaration ownership across registered suites, RT14's positive/negative prefix rule, live accounting and the existing six GiB family-memory check |
+
+Only demo's pinned inputs are required for these default forms
+(`bun run fetch-examples` fetches the full public set). A missing required input,
+SKIP, HOLE, empty member or unaccounted worker record cannot pass. Additional
+`--only` suites run in full beside these minimum forms. There is no general
+individual-case filter; the fixed profile reuses the full suites' case bodies,
+worker transport and tally. CI retains all examples and all cases.
+
+The selection comes from recorded failures, not assumed coverage:
+
+| Member | Historical evidence it catches |
+| --- | --- |
+| `assemble-examples` | [PR #826](https://github.com/rig-c/parts/pull/826): five AE02 failures in its reported pre-PR pool full run after the targeted source/config checks were green. Its PR CI was green; this is a pool-run report, not a red Actions run. |
+| `tree` | [CI run 40707470817, job 122905577299](https://github.com/rig-c/parts/actions/runs/40707470817/job/122905577299): TY12, a README wording change broke an anchored transition sentence. |
+| `run-tally` | [CI run 39279030133, job 118152893112](https://github.com/rig-c/parts/actions/runs/39279030133/job/118152893112): RT05 named prefixes shared by different suites (AM, PR, CK, CH, SC, EX). RT14 holds the prefix rule itself. |
+| `chain` | [CI run 38186999073](https://github.com/rig-c/parts/actions/runs/38186999073): CH04's `check.json` golden changed. [CI run 38168410487](https://github.com/rig-c/parts/actions/runs/38168410487): CH05's gate golden changed its bone count. The pre minimum is one demo build with CH04/CH05 check and gate comparators; the full chain on every example belongs to PR CI. |
+
+The pre-check also inspects literal case reporters declared in `selftest.ts`,
+following local helper calls from every registered suite, with the live tally's
+prefix rule. This catches collisions in omitted suites without executing them.
+It prints its declaration coverage; imported helpers and computed names remain
+PR CI's live-tally responsibility. The existing `comfy` fallback
+`CF00_THE_HARNESS_RAN` is exempt only with a literal `false` verdict: it reports
+a crashed harness, never a successful case. No existing case is renamed.
+
+`selftest:pre` returns 0 only for its fixed targeted forms and prints that scope
+explicitly. `--summary-json <file>` writes `rig-parts-pre/1`, with the selected
+forms, case counts, per-member wall time and `partial: true`; this is not a
+full-suite summary. Worker exit 0 alone is never a verdict: the existing replay
+reader and tally must account for the emitted case lines and returned failures.
+Ordinary `selftest -- --only ...` is unchanged: 2 when green and 1 when red,
+with PARTIAL output and no full-tree green summary.
 
 `bun run selftest` needs no arguments and no assets. Without `--corpus`, and
 without the public examples' inputs fetched (`bun run fetch-examples`, which

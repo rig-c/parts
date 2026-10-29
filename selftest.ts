@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { sourceCaseNames } from './scripts/selftest_prefixes.ts';
 import { runExtremesChecks } from './tools/check_extremes.ts';
 import { selftestCliArgs } from './fixtures/check_options.ts';
 import { softOcclusionLine } from './src/assemble.ts';
@@ -875,6 +876,15 @@ function tallyFaults(blocks: readonly SuiteBlock[], gutter: ReadonlyMap<string, 
   if (controls === 0) faults.push('not one PASS or FAIL line was recognised in this whole run, so the scan matched nothing');
   // Issue #516: one case prefix, one suite. A prefix two suites print lets the same ID name two cases (#378's suite
   // first printed IN01–IN05 beside inputs' IN01–IN10), and nothing else in the run sees it.
+  faults.push(...casePrefixFaults(blocks));
+  const summed = blocks.reduce((sum, b) => sum + b.controls, 0);
+  if (summed !== controls) faults.push(`${controls - summed} case line(s) were printed outside every tallied suite`);
+  return faults;
+}
+
+/** Shared by the live tally and the pre-check's static supplement. */
+function casePrefixFaults(blocks: readonly Pick<SuiteBlock, 'key' | 'names'>[]): string[] {
+  const faults: string[] = [];
   const owners = new Map<string, Map<string, string>>();
   for (const b of blocks) {
     for (const n of b.names) {
@@ -889,8 +899,6 @@ function tallyFaults(blocks: readonly SuiteBlock[], gutter: ReadonlyMap<string, 
     if (by.size < 2) continue;
     faults.push(`the case prefix "${p}" is printed by ${by.size} suites — ${[...by].map(([k, n]) => `${k} (first ${n.split('_')[0]})`).join(', ')}; one prefix belongs to one suite, so rename the cases of every suite but one`);
   }
-  const summed = blocks.reduce((sum, b) => sum + b.controls, 0);
-  if (summed !== controls) faults.push(`${controls - summed} case line(s) were printed outside every tallied suite`);
   return faults;
 }
 
@@ -28146,11 +28154,36 @@ function autoTurnExampleBytes(asm: string, rig: string, key: string): { ok: bool
   };
 }
 
-function runChainSuite(): number | null {
+function chainCheckGoldenCase(ex: string, out: string, key: string, say: ReturnType<typeof counter>['say']) {
+      const exp = join(ex, 'expected');
+      const expectedCheck = readJsonAt(join(exp, 'check.json'));
+      const check = jsonDiffs(expectedCheck, readJsonAt(join(out, 'check', 'check.json')), chainTolerance('check.json', expectedCheck));
+      say(
+        `CH04_CHECK_JSON_IS_THE_EXPECTED_FIELD_BY_FIELD[${key}]`,
+        check.over.length === 0,
+        summarise(check),
+        'gates, loop, both seam pixel counts and every judgement figure exact; seam_mean ±0.005, the measured size of the parts difference against the reference (see chainTolerance)',
+      );
+
+}
+function chainGateGoldenCase(ex: string, out: string, key: string, partCount: number, say: ReturnType<typeof counter>['say']) {
+      const exp = join(ex, 'expected');
+      const gates = ['gate_spine-html.txt'].map((f) => [f, firstLineDiff(readFileSync(join(exp, f), 'utf8'), readFileSync(join(out, 'check', f), 'utf8'))] as const);
+      const pack = parsePackLines(readFileSync(join(out, 'check', 'gate_spine-html.txt'), 'utf8').split('\n'));
+      say(
+        `CH05_THE_GATE_FILE_IS_THE_EXPECTED_LINE_BY_LINE_AND_THE_PACK_HOLDS_EVERY_PART[${key}]`,
+        gates.every(([, d]) => d === null) && pack.length === 1 && pack[0].regions === partCount,
+        `${gates.map(([f, d]) => `${f}: ${d ?? 'identical'}`).join('; ')}; ${pack.map((p) => p.line).join(', ') || 'no pack line'} for ${partCount} part(s)`,
+        "issue #2's control: the pack line is one of the gate lines, so its page size, region count and coverage are held exactly (tolerance 0), and one region per part is asserted by itself",
+      );
+
+}
+
+function runChainSuite(_corpus: string | null = null, pre = false): number | null {
   // Issue #395: split into one unit per example and a closing unit (SPLIT_SUITES); the first opens the section.
   const part = splitPart('chain');
   if (part.head) section('chain: build on every fetched example, against its expected/');
-  const found = exampleDirs().filter((d) => existsSync(join(d, 'inputs', 'layers', 'head')));
+  const found = exampleDirs().filter(d => (!pre || relative(EXAMPLES_DIR, d) === 'demo') && existsSync(join(d, 'inputs', 'layers', 'head')));
   if (found.length === 0) {
     if (!part.head) return null;
     console.log('  SKIP  no fetched example (examples/<key>/config.json + inputs/painting.png + inputs/layers/{full,head}), so the chain assemble -> rig -> check ran on no real painting');
@@ -28189,6 +28222,12 @@ function runChainSuite(): number | null {
       greenBuilds.set(key, out);
       if (planted === null) planted = { key, out, exp };
       if (!mine) continue;
+
+      if (pre) {
+        chainCheckGoldenCase(ex, out, key, say);
+        chainGateGoldenCase(ex, out, key, readParts(join(exp, 'parts.json')).parts.length, say);
+        continue;
+      }
 
       const autoTurnBytes = autoTurnExampleBytes(out, join(out, 'rig'), key);
       say(`CH844_AUTO_DEPTH_REFUSAL_KEEPS_PUBLIC_EXAMPLE_BYTES[${key}]`, autoTurnBytes.ok, autoTurnBytes.detail,
@@ -28343,14 +28382,7 @@ function runChainSuite(): number | null {
         `issue #73: no world position moves, so the turned rig draws what the reference's flat one draws; measured on both examples at 1 level everywhere but sample's idle frame 30 (one opaque pixel, 2 levels in blue), with every vertex within 8.21e-5 units — the ceiling is that measurement (FLAT_FORM_RENDER_CEILING = ${FLAT_FORM_RENDER_CEILING}), and the pixels above 1 are counted so a new one shows; both forms are rendered with their physics constraints left out (issue #224: the flat form keeps no bone length, so a rotate drive has no lever there), and without the blink's eyes scaley track, which since issue #239 squashes across the eye line — an axis the flat form, every bone unturned, cannot draw (the rig suite's face-axis cases hold the blink)`,
       );
 
-      const expectedCheck = readJsonAt(join(exp, 'check.json'));
-      const check = jsonDiffs(expectedCheck, readJsonAt(join(out, 'check', 'check.json')), chainTolerance('check.json', expectedCheck));
-      say(
-        `CH04_CHECK_JSON_IS_THE_EXPECTED_FIELD_BY_FIELD[${key}]`,
-        check.over.length === 0,
-        summarise(check),
-        'gates, loop, both seam pixel counts and every judgement figure exact; seam_mean ±0.005, the measured size of the parts difference against the reference (see chainTolerance)',
-      );
+      chainCheckGoldenCase(ex, out, key, say);
 
       // Issue #501: the cloth reading on real art — the console's lines are check.json's block as printed, with figures.
       const clothBlock = (readJsonAt(join(out, 'check', 'check.json')) as Record<string, unknown>)[CLOTH_LINE] as ClothLine | undefined;
@@ -28514,14 +28546,7 @@ function runChainSuite(): number | null {
         "issue #32: the loop is encoded from these frames, so a blink no frame lands in is a blink the idle frames, the contact sheet and the README's animation never show; with BLINK.hold at one frame or more (RG493) every example's blink.t has one",
       );
 
-      const gates = ['gate_spine-html.txt'].map((f) => [f, firstLineDiff(readFileSync(join(exp, f), 'utf8'), readFileSync(join(out, 'check', f), 'utf8'))] as const);
-      const pack = parsePackLines(readFileSync(join(out, 'check', 'gate_spine-html.txt'), 'utf8').split('\n'));
-      say(
-        `CH05_THE_GATE_FILE_IS_THE_EXPECTED_LINE_BY_LINE_AND_THE_PACK_HOLDS_EVERY_PART[${key}]`,
-        gates.every(([, d]) => d === null) && pack.length === 1 && pack[0].regions === expParts.parts.length,
-        `${gates.map(([f, d]) => `${f}: ${d ?? 'identical'}`).join('; ')}; ${pack.map((p) => p.line).join(', ') || 'no pack line'} for ${expParts.parts.length} part(s)`,
-        "issue #2's control: the pack line is one of the gate lines, so its page size, region count and coverage are held exactly (tolerance 0), and one region per part is asserted by itself",
-      );
+      chainGateGoldenCase(ex, out, key, expParts.parts.length, say);
 
       // The one gate: rigc's build under rig-play measures every rule validate under spine would. Run here,
       // where spine-core is present (the full entry), on this example's own rig; validate is not a stage any more.
@@ -28612,7 +28637,7 @@ function runChainSuite(): number | null {
       runFacelessExample(key, ex, out, dir, say);
       runExampleDiagnostics(key, ex, out, say, dir);
     }
-    if (!part.tail) return bad();
+    if (pre || !part.tail) return bad();
 
     // Issue #74's public scenes, composed from the builds above (each built once, here; in a sharded run, by the
     // closing unit).
@@ -34579,11 +34604,11 @@ function runAssembleExampleStage(ex: string, stage: AssembleStage): number {
   return bad();
 }
 
-function runAssembleExamplesSuite(): number | null {
+function runAssembleExamplesSuite(_corpus: string | null = null, pre = false): number | null {
   // Issue #395: split into one unit per example (SPLIT_SUITES); the first opens the section and checks the inputs.
   const part = splitPart('assemble-examples');
   if (part.head) section('assemble: the public examples (examples/<key>/inputs)');
-  const found = exampleDirs().filter((d) => existsSync(join(d, 'inputs', 'layers', 'head')));
+  const found = exampleDirs().filter(d => (!pre || relative(EXAMPLES_DIR, d) === 'demo') && existsSync(join(d, 'inputs', 'layers', 'head')));
   if (found.length === 0) {
     if (!part.head) return null;
     console.log('  SKIP  no fetched example (examples/<key>/config.json + inputs/painting.png + inputs/layers/{full,head}); run bun run fetch-examples');
@@ -34598,7 +34623,7 @@ function runAssembleExamplesSuite(): number | null {
     for (const ex of found) {
       const name = relative(join(ROOT, 'examples'), ex);
       if (!part.has(name)) continue;
-      for (const stage of ASSEMBLE_STAGES) {
+      for (const stage of (pre ? ['AE02'] as const : ASSEMBLE_STAGES)) {
         const key = assembleStageKey(name, stage);
         const result = join(results, name + '-' + stage + '.json');
         const child = spawnSync(process.execPath, [import.meta.path, ASSEMBLE_STAGE_FLAG, name, stage, '--result', result], { encoding: 'utf8', maxBuffer: 1 << 26 });
@@ -39070,9 +39095,112 @@ function runContourWiringSuite(): number {
   return bad();
 }
 
-function runTreeSuite(): number {
+function treeGuideCase(text: ReadonlyArray<readonly [string, string]>, say: ReturnType<typeof counter>['say']) {
+  // TY16 — issue #343: every rule the source can print has exactly one row in the guide's rule/line tables, the row's
+  // first cell starts with one anchor per name, and no row names a rule the source cannot print.
+  const guideSources = runtimeRuleSources(text);
+  const guideText = readFileSync(join(ROOT, GUIDE_DOC), 'utf8');
+  const rigc16 = rigcSources();
+  const drift16 = ledgerDrift(guideSources, guideText, rigc16);
+  const rowLine = (name: string): string => guideText.split('\n').find((l) => l.includes(`<a id="${name}"></a>`)) ?? '';
+  const loopRow = rowLine('CHECK_LOOP_CLOSES');
+  const usageRow = rowLine('USAGE');
+  const plants16 = [
+    ledgerDrift(guideSources, guideText.replace(`${rowLine('CHECK_RIGC_PACKAGE')}\n`, ''), rigc16).faults,
+    ledgerDrift(guideSources, guideText.replace(`${loopRow}\n`, `${loopRow}\n${loopRow}\n`), rigc16).faults,
+    ledgerDrift(guideSources, guideText.replace(`${usageRow}\n`, `${usageRow}\n| <a id="DEAD_RULE"></a>\`DEAD_RULE\` | planted | nothing |\n`), rigc16).faults,
+    ledgerDrift(guideSources, guideText.replace(loopRow, loopRow.replace('<a id="CHECK_LOOP_CLOSES"></a>', '')), rigc16).faults,
+    ledgerDrift([...guideSources, ['src/plant.ts', "export const p = { code: 'PLANTED_RULE', object: 'x', detail: 'y' };\n// code: 'COMMENT_RULE'\n"]], guideText, rigc16).faults,
+    ledgerDrift([...guideSources, ['src/plant.ts', 'export const q = (n: string) => ({ code: `CHECK_${NOWHERE_DECLARED}`, object: n, detail: n });\n']], guideText, rigc16).faults,
+    ledgerDrift(guideSources, guideText, [...rigc16, ['src/plant.ts', "function refuse(code: string, m: string): never { throw new MeshReductionError(code, m); }\nrefuse('PLANTED_MESH_CODE', 'x');\n"]]).faults,
+    ledgerDrift(guideSources.map(([f, s]) => [f, s.replaceAll('instanceof MeshReductionError', 'instanceof Error')] as const), guideText, rigc16).faults,
+  ];
+  const discovery16 = runtimeRuleSources([
+    ['cli.ts', "import './tools/adapter.ts'; import type { Shape } from './tools/types.ts';"],
+    ['tools/adapter.ts', "export { rule } from './nested.ts';"],
+    ['tools/nested.ts', "export const rule = 'PLANTED_RUNTIME_RULE'; // COMMENT_RULE"],
+    ['tools/types.ts', "export type Shape = 'TYPE_ONLY_RULE';"],
+    ['tools/check_adapter.ts', "export const rule = 'TEST_ONLY_RULE';"],
+  ]);
+  const discovered16 = emittableRules(discovery16);
+  const discoveryHit16 = discovery16.map(([f]) => f).join(',') === 'cli.ts,tools/adapter.ts,tools/nested.ts' &&
+    [...discovered16.names.keys()].join(',') === 'PLANTED_RUNTIME_RULE' && discovered16.unread.length === 0;
+  const plantsHit16 =
+    plants16[0].length === 1 && plants16[0][0].startsWith('CHECK_RIGC_PACKAGE is printed by src/check.ts:') &&
+    plants16[1].length === 1 && /^CHECK_LOOP_CLOSES is named by 2 rows/.test(plants16[1][0]) &&
+    plants16[2].length === 1 && /^DEAD_RULE is named by the row at line \d+ and the source cannot print it$/.test(plants16[2][0]) &&
+    plants16[3].length === 1 && plants16[3][0].includes('names CHECK_LOOP_CLOSES and its first cell starts with the anchor(s) none') &&
+    plants16[4].join() === 'PLANTED_RULE is printed by src/plant.ts:1 and no row names it' &&
+    plants16[5].length === 1 && plants16[5][0].startsWith('a name template whose constant does not resolve: src/plant.ts:1') &&
+    plants16[6].join() === 'PLANTED_MESH_CODE is printed by rig-c src/plant.ts:2 and no row names it' &&
+    plants16[7].length === drift16.quoted && plants16[7].every((f) => / is named by the row at line \d+ and the source cannot print it$/.test(f));
+  say(
+    'TY16_EVERY_RULE_THE_SOURCE_CAN_PRINT_HAS_EXACTLY_ONE_ANCHORED_ROW_IN_THE_GUIDE',
+    drift16.emitted > 0 && drift16.quoted > 0 && drift16.faults.length === 0 && plantsHit16 && discoveryHit16,
+    `${GUIDE_DOC}: ${drift16.faults.length === 0 ? `the ${drift16.emitted} name(s) the source can print are the ${drift16.named} its ${drift16.rows} rule/line row(s) name, each on one row with its anchor (${drift16.quoted} of them rig-c's mesh codes, which this package quotes in its lines)` : drift16.faults.join('; ')}` +
+      `; runtime dependency discovery ${discoveryHit16 ? 'caught the transitive rule and excluded type-only/test/comment rules' : 'FAILED'}; planted: a row dropped -> ${plants16[0].join('; ') || 'not found'} | a row twice -> ${plants16[1].join('; ') || 'not found'} | a row for a dead name -> ${plants16[2].join('; ') || 'not found'} | an anchor dropped -> ${plants16[3].join('; ') || 'not found'} | a new code in the source (and one in a comment) -> ${plants16[4].join('; ') || 'not found'} | a name template on an undeclared constant -> ${plants16[5].join('; ') || 'not found'} | a new code rig-c's mesh library throws -> ${plants16[6].join('; ') || 'not found'} | no source catching MeshReductionError -> ${plants16[7].length} row(s) named as for a code nothing prints`,
+    "issue #343: the guide is the one ledger, and a FAIL line's pointer prints the row naming its rule; a rule with no row sends the pointer nowhere, a rule on two rows prints two answers, and a row for a rule nothing prints is advice about a line no build shows. Read in both directions from the syntax tree of src/, cli.ts and their local runtime dependencies, so a comment never counts",
+  );
+
+  return { guideSources, guideText, rowLine };
+}
+function treeNamesCase(text: ReadonlyArray<readonly [string, string]>, say: ReturnType<typeof counter>['say']) {
+  // TY12 — this package was renamed to rig-parts, on rig-c's precedent (TY11), and then to the scoped @rig-c/parts
+  // (#222) with rig-parts kept as its command and as an alias. The first former name stays only where the transition
+  // keeps it (FORMER_NAME_SPANS, FORMER_NAME_LINES, CHANGELOG.md); the second is refused only on an install line
+  // (installLineHits), since it is still the command. Spelled here only in pieces, as TY11 does.
+  const ourPkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name?: string; bin?: Record<string, string>; files?: string[] };
+  const staleNameLines = (f: string, t: string): string[] => [...formerNameLines(f, t), ...installLineHits(f, t)];
+  const formerHits = text.flatMap(([f, t]) => staleNameLines(f, t));
+  const staleAllowances = staleFormerNameLines(text);
+  const bins = ourPkg.bin ?? {};
+  const launcher = bins[COMMAND_NAME];
+  const binsOk =
+    ourPkg.name === PACKAGE_NAME &&
+    Object.keys(bins).sort().join() === [COMMAND_NAME, FORMER_PACKAGE_NAME].sort().join() &&
+    launcher !== undefined &&
+    bins[FORMER_PACKAGE_NAME] === launcher &&
+    existsSync(join(ROOT, launcher)) &&
+    (ourPkg.files ?? []).includes(launcher.replace(/^\.\//, ''));
+  const plantFormer = [
+    staleNameLines('plant.md', `run \`${FORMER_PACKAGE_NAME} build\` here`),
+    staleNameLines('plant.md', `the [${FORMER_PACKAGE_NAME}-examples](https://github.com/firejune/${FORMER_PACKAGE_NAME}-examples) repository`),
+    staleNameLines('plant.ts', `const spec = '${FORMER_PACKAGE_NAME}-scene/1';`),
+    staleNameLines('CHANGELOG.md', `* ${FORMER_PACKAGE_NAME} 0.1.0`),
+    staleNameLines('README.md', `npm install -g ${FORMER_PACKAGE_NAME}`),
+    staleNameLines('README.md', `\`npm install -g ${COMMAND_NAME}\` installs the`),
+    staleNameLines('SKILL.md', `(bunx ${COMMAND_NAME}, or bun add -d ${COMMAND_NAME})`),
+    staleNameLines('README.md', `run \`${COMMAND_NAME} build --config config.json\``),
+    staleNameLines('README.md', `\`npm i -D ${PACKAGE_NAME}\` installs the`),
+    staleNameLines('CHANGELOG.md', `* npm install -g ${COMMAND_NAME}`),
+  ].map((h) => h.length);
+  const aliasLine = FORMER_NAME_LINES[0][1];
+  const plantStaleAllowance = staleFormerNameLines(text.map(([f, t]) => [f, f === 'package.json' ? t.split('\n').filter((l) => l !== aliasLine).join('\n') : t] as const));
+  const env = ENV_TWINS.corpus;
+  const twins = [envTwin({ [env[0]]: 'new', [env[1]]: 'old' }, env), envTwin({ [env[1]]: 'old' }, env), envTwin({ [env[0]]: '', [env[1]]: 'old' }, env), envTwin({}, env)];
+  const twinsOk = twins[0]?.name === env[0] && twins[0]?.value === 'new' && twins[1]?.name === env[1] && twins[2]?.name === env[1] && twins[3] === null;
+  const twinNames = Object.values(ENV_TWINS).every(([now, former]) => now.startsWith('RIG_PARTS_') && former === `SPINE_PARTS_${now.slice('RIG_PARTS_'.length)}`);
+  say(
+    'TY12_THE_FORMER_PACKAGE_NAME_ONLY_WHERE_THE_TRANSITION_KEEPS_IT',
+    formerHits.length === 0 && staleAllowances.length === 0 && binsOk && plantFormer.join() === '1,0,0,0,1,1,1,0,0,0' && plantStaleAllowance.length === 1 && twinsOk && twinNames,
+    `${text.length} text file(s): ${formerHits.length === 0 ? `none names ${FORMER_PACKAGE_NAME} outside CHANGELOG.md, the ${FORMER_NAME_SPANS.length} kept span(s) and the ${FORMER_NAME_LINES.length} kept line(s), and no install line names ${COMMAND_NAME} as the package` : formerHits.slice(0, 6).join('; ')}` +
+      `${staleAllowances.length === 0 ? '' : `; kept line(s) no longer found: ${staleAllowances.join('; ')}`}; package.json ${ourPkg.name ?? '(no name)'}${ourPkg.name === PACKAGE_NAME ? '' : ` (${PACKAGE_NAME} was required)`}, bin ${JSON.stringify(bins)}${binsOk ? '' : ` (${COMMAND_NAME} and ${FORMER_PACKAGE_NAME} on one launcher that exists and is in files were required)`}` +
+      `; planted: a command line, an examples link, a spec id, a changelog line, a README install line, then for ${COMMAND_NAME}: an npm install line, a line holding a bunx and a bun add, a command line, the scoped install line, a changelog install line -> ${plantFormer.join(', ')} hit(s) (1, 0, 0, 0, 1, 1, 1, 0, 0, 0 required); the alias bin line dropped -> ${plantStaleAllowance.join('; ') || 'not reported'}` +
+      `; ${env[0]} and ${env[1]} set, the former alone, the new one empty, neither -> ${twins.map((t) => (t === null ? 'none' : t.name)).join(', ')}${twinNames ? '' : '; a twin is not RIG_PARTS_<x> over SPINE_PARTS_<x>'}`,
+    "the package went from its first npm name to rig-parts beside rig-c's own rename, then to the toolchain's scope (#222); a sentence or command still naming the first one sends an agent to a name kept only for the transition, an install line naming the second installs an alias rather than the package, and an allowance that outlived its line would widen the rule unseen",
+  );
+
+}
+
+function runTreeSuite(_corpus: string | null = null, pre = false): number {
   section('tree: the rules CLAUDE.md states, held to the files');
   const { say, bad } = counter();
+  if (pre) {
+    const text = treeFiles().filter(f => TEXT_FILE.test(f)).map(f => [f, readFileSync(join(ROOT, f), 'utf8')] as const);
+    treeNamesCase(text, say);
+    treeGuideCase(text, say);
+    return bad();
+  }
   runMotionSeamDocumentationCases(say);
   const patterns = ignorePatterns();
   const readerFaults = ignoreReaderFaults(patterns);
@@ -39187,51 +39315,7 @@ function runTreeSuite(): number {
     "issue #279: Math.hypot's last bit differs between Bun on macOS and on Linux, which split one check.json between two CI machines on bit-identical geometry (#276); a written byte may not depend on the platform, so the one length is sqrt(dx*dx + dy*dy) and the call is refused by name",
   );
 
-  // TY16 — issue #343: every rule the source can print has exactly one row in the guide's rule/line tables, the row's
-  // first cell starts with one anchor per name, and no row names a rule the source cannot print.
-  const guideSources = runtimeRuleSources(text);
-  const guideText = readFileSync(join(ROOT, GUIDE_DOC), 'utf8');
-  const rigc16 = rigcSources();
-  const drift16 = ledgerDrift(guideSources, guideText, rigc16);
-  const rowLine = (name: string): string => guideText.split('\n').find((l) => l.includes(`<a id="${name}"></a>`)) ?? '';
-  const loopRow = rowLine('CHECK_LOOP_CLOSES');
-  const usageRow = rowLine('USAGE');
-  const plants16 = [
-    ledgerDrift(guideSources, guideText.replace(`${rowLine('CHECK_RIGC_PACKAGE')}\n`, ''), rigc16).faults,
-    ledgerDrift(guideSources, guideText.replace(`${loopRow}\n`, `${loopRow}\n${loopRow}\n`), rigc16).faults,
-    ledgerDrift(guideSources, guideText.replace(`${usageRow}\n`, `${usageRow}\n| <a id="DEAD_RULE"></a>\`DEAD_RULE\` | planted | nothing |\n`), rigc16).faults,
-    ledgerDrift(guideSources, guideText.replace(loopRow, loopRow.replace('<a id="CHECK_LOOP_CLOSES"></a>', '')), rigc16).faults,
-    ledgerDrift([...guideSources, ['src/plant.ts', "export const p = { code: 'PLANTED_RULE', object: 'x', detail: 'y' };\n// code: 'COMMENT_RULE'\n"]], guideText, rigc16).faults,
-    ledgerDrift([...guideSources, ['src/plant.ts', 'export const q = (n: string) => ({ code: `CHECK_${NOWHERE_DECLARED}`, object: n, detail: n });\n']], guideText, rigc16).faults,
-    ledgerDrift(guideSources, guideText, [...rigc16, ['src/plant.ts', "function refuse(code: string, m: string): never { throw new MeshReductionError(code, m); }\nrefuse('PLANTED_MESH_CODE', 'x');\n"]]).faults,
-    ledgerDrift(guideSources.map(([f, s]) => [f, s.replaceAll('instanceof MeshReductionError', 'instanceof Error')] as const), guideText, rigc16).faults,
-  ];
-  const discovery16 = runtimeRuleSources([
-    ['cli.ts', "import './tools/adapter.ts'; import type { Shape } from './tools/types.ts';"],
-    ['tools/adapter.ts', "export { rule } from './nested.ts';"],
-    ['tools/nested.ts', "export const rule = 'PLANTED_RUNTIME_RULE'; // COMMENT_RULE"],
-    ['tools/types.ts', "export type Shape = 'TYPE_ONLY_RULE';"],
-    ['tools/check_adapter.ts', "export const rule = 'TEST_ONLY_RULE';"],
-  ]);
-  const discovered16 = emittableRules(discovery16);
-  const discoveryHit16 = discovery16.map(([f]) => f).join(',') === 'cli.ts,tools/adapter.ts,tools/nested.ts' &&
-    [...discovered16.names.keys()].join(',') === 'PLANTED_RUNTIME_RULE' && discovered16.unread.length === 0;
-  const plantsHit16 =
-    plants16[0].length === 1 && plants16[0][0].startsWith('CHECK_RIGC_PACKAGE is printed by src/check.ts:') &&
-    plants16[1].length === 1 && /^CHECK_LOOP_CLOSES is named by 2 rows/.test(plants16[1][0]) &&
-    plants16[2].length === 1 && /^DEAD_RULE is named by the row at line \d+ and the source cannot print it$/.test(plants16[2][0]) &&
-    plants16[3].length === 1 && plants16[3][0].includes('names CHECK_LOOP_CLOSES and its first cell starts with the anchor(s) none') &&
-    plants16[4].join() === 'PLANTED_RULE is printed by src/plant.ts:1 and no row names it' &&
-    plants16[5].length === 1 && plants16[5][0].startsWith('a name template whose constant does not resolve: src/plant.ts:1') &&
-    plants16[6].join() === 'PLANTED_MESH_CODE is printed by rig-c src/plant.ts:2 and no row names it' &&
-    plants16[7].length === drift16.quoted && plants16[7].every((f) => / is named by the row at line \d+ and the source cannot print it$/.test(f));
-  say(
-    'TY16_EVERY_RULE_THE_SOURCE_CAN_PRINT_HAS_EXACTLY_ONE_ANCHORED_ROW_IN_THE_GUIDE',
-    drift16.emitted > 0 && drift16.quoted > 0 && drift16.faults.length === 0 && plantsHit16 && discoveryHit16,
-    `${GUIDE_DOC}: ${drift16.faults.length === 0 ? `the ${drift16.emitted} name(s) the source can print are the ${drift16.named} its ${drift16.rows} rule/line row(s) name, each on one row with its anchor (${drift16.quoted} of them rig-c's mesh codes, which this package quotes in its lines)` : drift16.faults.join('; ')}` +
-      `; runtime dependency discovery ${discoveryHit16 ? 'caught the transitive rule and excluded type-only/test/comment rules' : 'FAILED'}; planted: a row dropped -> ${plants16[0].join('; ') || 'not found'} | a row twice -> ${plants16[1].join('; ') || 'not found'} | a row for a dead name -> ${plants16[2].join('; ') || 'not found'} | an anchor dropped -> ${plants16[3].join('; ') || 'not found'} | a new code in the source (and one in a comment) -> ${plants16[4].join('; ') || 'not found'} | a name template on an undeclared constant -> ${plants16[5].join('; ') || 'not found'} | a new code rig-c's mesh library throws -> ${plants16[6].join('; ') || 'not found'} | no source catching MeshReductionError -> ${plants16[7].length} row(s) named as for a code nothing prints`,
-    "issue #343: the guide is the one ledger, and a FAIL line's pointer prints the row naming its rule; a rule with no row sends the pointer nowhere, a rule on two rows prints two answers, and a row for a rule nothing prints is advice about a line no build shows. Read in both directions from the syntax tree of src/, cli.ts and their local runtime dependencies, so a comment never counts",
-  );
+  const { guideSources, guideText, rowLine } = treeGuideCase(text, say);
 
   const sourceSection817 = guideText.split('### Source before scissors\n')[1]?.split('**Patching')[0] ?? '';
   const remedyNames817 = ['SEETHROUGH_ARM_RUN_MERGED', 'SEETHROUGH_HEAD_RUN_HOLLOW', 'CHECK_SEAM_WITHIN_BAR', 'CHECK_SEAM_OVER_RANGE', 'SEAM_OVER_MOTION', 'CHECK_SEAM_OVER_MOTION'];
@@ -39590,50 +39674,7 @@ function runTreeSuite(): number {
     'npm renamed the upstream package to rig-c at 2.20.4 with the same exports map; an import of the old name resolves only while a stale node_modules still holds it, and a sentence naming it sends an agent to a package that is no longer published',
   );
 
-  // TY12 — this package was renamed to rig-parts, on rig-c's precedent (TY11), and then to the scoped @rig-c/parts
-  // (#222) with rig-parts kept as its command and as an alias. The first former name stays only where the transition
-  // keeps it (FORMER_NAME_SPANS, FORMER_NAME_LINES, CHANGELOG.md); the second is refused only on an install line
-  // (installLineHits), since it is still the command. Spelled here only in pieces, as TY11 does.
-  const ourPkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name?: string; bin?: Record<string, string>; files?: string[] };
-  const staleNameLines = (f: string, t: string): string[] => [...formerNameLines(f, t), ...installLineHits(f, t)];
-  const formerHits = text.flatMap(([f, t]) => staleNameLines(f, t));
-  const staleAllowances = staleFormerNameLines(text);
-  const bins = ourPkg.bin ?? {};
-  const launcher = bins[COMMAND_NAME];
-  const binsOk =
-    ourPkg.name === PACKAGE_NAME &&
-    Object.keys(bins).sort().join() === [COMMAND_NAME, FORMER_PACKAGE_NAME].sort().join() &&
-    launcher !== undefined &&
-    bins[FORMER_PACKAGE_NAME] === launcher &&
-    existsSync(join(ROOT, launcher)) &&
-    (ourPkg.files ?? []).includes(launcher.replace(/^\.\//, ''));
-  const plantFormer = [
-    staleNameLines('plant.md', `run \`${FORMER_PACKAGE_NAME} build\` here`),
-    staleNameLines('plant.md', `the [${FORMER_PACKAGE_NAME}-examples](https://github.com/firejune/${FORMER_PACKAGE_NAME}-examples) repository`),
-    staleNameLines('plant.ts', `const spec = '${FORMER_PACKAGE_NAME}-scene/1';`),
-    staleNameLines('CHANGELOG.md', `* ${FORMER_PACKAGE_NAME} 0.1.0`),
-    staleNameLines('README.md', `npm install -g ${FORMER_PACKAGE_NAME}`),
-    staleNameLines('README.md', `\`npm install -g ${COMMAND_NAME}\` installs the`),
-    staleNameLines('SKILL.md', `(bunx ${COMMAND_NAME}, or bun add -d ${COMMAND_NAME})`),
-    staleNameLines('README.md', `run \`${COMMAND_NAME} build --config config.json\``),
-    staleNameLines('README.md', `\`npm i -D ${PACKAGE_NAME}\` installs the`),
-    staleNameLines('CHANGELOG.md', `* npm install -g ${COMMAND_NAME}`),
-  ].map((h) => h.length);
-  const aliasLine = FORMER_NAME_LINES[0][1];
-  const plantStaleAllowance = staleFormerNameLines(text.map(([f, t]) => [f, f === 'package.json' ? t.split('\n').filter((l) => l !== aliasLine).join('\n') : t] as const));
-  const env = ENV_TWINS.corpus;
-  const twins = [envTwin({ [env[0]]: 'new', [env[1]]: 'old' }, env), envTwin({ [env[1]]: 'old' }, env), envTwin({ [env[0]]: '', [env[1]]: 'old' }, env), envTwin({}, env)];
-  const twinsOk = twins[0]?.name === env[0] && twins[0]?.value === 'new' && twins[1]?.name === env[1] && twins[2]?.name === env[1] && twins[3] === null;
-  const twinNames = Object.values(ENV_TWINS).every(([now, former]) => now.startsWith('RIG_PARTS_') && former === `SPINE_PARTS_${now.slice('RIG_PARTS_'.length)}`);
-  say(
-    'TY12_THE_FORMER_PACKAGE_NAME_ONLY_WHERE_THE_TRANSITION_KEEPS_IT',
-    formerHits.length === 0 && staleAllowances.length === 0 && binsOk && plantFormer.join() === '1,0,0,0,1,1,1,0,0,0' && plantStaleAllowance.length === 1 && twinsOk && twinNames,
-    `${text.length} text file(s): ${formerHits.length === 0 ? `none names ${FORMER_PACKAGE_NAME} outside CHANGELOG.md, the ${FORMER_NAME_SPANS.length} kept span(s) and the ${FORMER_NAME_LINES.length} kept line(s), and no install line names ${COMMAND_NAME} as the package` : formerHits.slice(0, 6).join('; ')}` +
-      `${staleAllowances.length === 0 ? '' : `; kept line(s) no longer found: ${staleAllowances.join('; ')}`}; package.json ${ourPkg.name ?? '(no name)'}${ourPkg.name === PACKAGE_NAME ? '' : ` (${PACKAGE_NAME} was required)`}, bin ${JSON.stringify(bins)}${binsOk ? '' : ` (${COMMAND_NAME} and ${FORMER_PACKAGE_NAME} on one launcher that exists and is in files were required)`}` +
-      `; planted: a command line, an examples link, a spec id, a changelog line, a README install line, then for ${COMMAND_NAME}: an npm install line, a line holding a bunx and a bun add, a command line, the scoped install line, a changelog install line -> ${plantFormer.join(', ')} hit(s) (1, 0, 0, 0, 1, 1, 1, 0, 0, 0 required); the alias bin line dropped -> ${plantStaleAllowance.join('; ') || 'not reported'}` +
-      `; ${env[0]} and ${env[1]} set, the former alone, the new one empty, neither -> ${twins.map((t) => (t === null ? 'none' : t.name)).join(', ')}${twinNames ? '' : '; a twin is not RIG_PARTS_<x> over SPINE_PARTS_<x>'}`,
-    "the package went from its first npm name to rig-parts beside rig-c's own rename, then to the toolchain's scope (#222); a sentence or command still naming the first one sends an agent to a name kept only for the transition, an install line naming the second installs an alias rather than the package, and an allowance that outlived its line would widen the rule unseen",
-  );
+  treeNamesCase(text, say);
 
   // TY13 — docs/STABILITY.md's command table, held to the commands cli.ts dispatches and the flags it spells.
   const cliText = readFileSync(join(ROOT, 'cli.ts'), 'utf8');
@@ -40835,6 +40876,47 @@ function staleFormerNameLines(files: ReadonlyArray<readonly [string, string]>): 
 // the tally's own controls
 // ---------------------------------------------------------------------------
 
+function tallyPrefixCase(say: ReturnType<typeof counter>['say']): void {
+  const block = (over: Partial<SuiteBlock>): SuiteBlock => ({ key: 'alpha', ran: true, controls: 3, quiet: 0, headers: 1, fails: 0, returned: 0, names: [], skips: [], ...over });
+  const gutter = (...words: string[]): Map<string, number> => {
+    const m = new Map<string, number>();
+    for (const w of words) m.set(w, (m.get(w) ?? 0) + 1);
+    return m;
+  };
+  // RT14 — issue #516: one case prefix, one suite. Planted: beta prints IN01 beside alpha's IN01 and IN02 (#378's
+  // collision). Clean: alpha prints IF01 and IF02, beta IN01, and a crash line with no number (SUITE_CRASHED[beta])
+  // has no prefix. RT05 holds the live tally of every suite run before this one to the same rule.
+  const shared = tallyFaults([block({ names: ['IN01_A', 'IN02_B'] }), block({ key: 'beta', controls: 1, names: ['IN01_C'] })], gutter('PASS', 'PASS', 'PASS', 'PASS'), 4);
+  const apart = tallyFaults([block({ names: ['IF01_A', 'IF02_B'] }), block({ key: 'beta', controls: 2, names: ['IN01_C', 'SUITE_CRASHED[beta]'] })], gutter('PASS', 'PASS', 'PASS', 'PASS', 'PASS'), 5);
+  say(
+    'RT14_A_CASE_PREFIX_TWO_SUITES_PRINT_FAULTS_NAMING_BOTH_AND_PREFIXES_EACH_SUITE_OWNS_DO_NOT',
+    shared.length === 1 &&
+      shared[0] === 'the case prefix "IN" is printed by 2 suites — alpha (first IN01), beta (first IN01); one prefix belongs to one suite, so rename the cases of every suite but one' &&
+      apart.length === 0 &&
+      casePrefix('PR525_X') === 'PR' &&
+      casePrefix('SUITE_CRASHED[x]') === null,
+    `planted: ${shared.join('; ') || 'no fault'}; clean: ${apart.length === 0 ? 'no fault' : apart.join('; ')}`,
+    'issue #516: #378\'s suite first printed IN01–IN05 beside the inputs suite\'s IN01–IN10, and only a rename after the full run found it; the tally is the one place that reads every suite\'s case lines, so it refuses a prefix two suites print, by name, with no exception kept by hand',
+  );
+
+}
+
+function runPreTallySuite(live: RunTally): number {
+  section('run-tally: pre ownership rule, accounting and memory');
+  const { say, bad } = counter();
+  const faults = tallyFaults(live.blocks, live.gutter, live.total);
+  say('RT05_THE_LIVE_TALLY_ACCOUNTS_FOR_EVERY_SUITE_SO_FAR_AND_REFUSES_AN_UNKNOWN_KEY',
+    faults.length === 0 && live.blocks.length > 0,
+    faults.join('; ') || 'selected pre forms account for their emitted case lines',
+    'the same tally checks worker return counts, prefixes, gutter words and per-member floors');
+  tallyPrefixCase(say);
+  const peak = selftestPeakVerdict([finishSelftestPeak?.() ?? '']);
+  if (peak.status === 'skip') console.log(`  SKIP  RT20_THE_RUNS_OWN_FAMILY_PEAK_FITS_ITS_SIX_GIB_SLOT: ${peak.detail}`);
+  else say('RT20_THE_RUNS_OWN_FAMILY_PEAK_FITS_ITS_SIX_GIB_SLOT', peak.status === 'pass', peak.detail,
+    'sampled test family RSS must fit the same six GiB limit; unavailable is never PASS');
+  return bad();
+}
+
 function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | null = null): number {
   section('run-tally: the floor, planted');
   // What the run had printed when this suite began: this suite's own cases are
@@ -41110,21 +41192,7 @@ function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | nu
     'issue #500: a partial green is a true statement about the suites it named and none about the tree, so it must never end the way the whole run ends — and a red found in part is still a red',
   );
 
-  // RT14 — issue #516: one case prefix, one suite. Planted: beta prints IN01 beside alpha's IN01 and IN02 (#378's
-  // collision). Clean: alpha prints IF01 and IF02, beta IN01, and a crash line with no number (SUITE_CRASHED[beta])
-  // has no prefix. RT05 holds the live tally of every suite run before this one to the same rule.
-  const shared = tallyFaults([block({ names: ['IN01_A', 'IN02_B'] }), block({ key: 'beta', controls: 1, names: ['IN01_C'] })], gutter('PASS', 'PASS', 'PASS', 'PASS'), 4);
-  const apart = tallyFaults([block({ names: ['IF01_A', 'IF02_B'] }), block({ key: 'beta', controls: 2, names: ['IN01_C', 'SUITE_CRASHED[beta]'] })], gutter('PASS', 'PASS', 'PASS', 'PASS', 'PASS'), 5);
-  say(
-    'RT14_A_CASE_PREFIX_TWO_SUITES_PRINT_FAULTS_NAMING_BOTH_AND_PREFIXES_EACH_SUITE_OWNS_DO_NOT',
-    shared.length === 1 &&
-      shared[0] === 'the case prefix "IN" is printed by 2 suites — alpha (first IN01), beta (first IN01); one prefix belongs to one suite, so rename the cases of every suite but one' &&
-      apart.length === 0 &&
-      casePrefix('PR525_X') === 'PR' &&
-      casePrefix('SUITE_CRASHED[x]') === null,
-    `planted: ${shared.join('; ') || 'no fault'}; clean: ${apart.length === 0 ? 'no fault' : apart.join('; ')}`,
-    'issue #516: #378\'s suite first printed IN01–IN05 beside the inputs suite\'s IN01–IN10, and only a rename after the full run found it; the tally is the one place that reads every suite\'s case lines, so it refuses a prefix two suites print, by name, with no exception kept by hand',
-  );
+  tallyPrefixCase(say);
 
   // RT15–RT17 — issue #725: `--summary-json <file>` writes a machine-readable summary derived from the same RunTally
   // that prints the console summary, with per-suite counts, skips, holes, partial flag and exit code.
@@ -41339,6 +41407,37 @@ function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | nu
   if (verdict.status === 'skip') console.log(`  SKIP  RT20_THE_RUNS_OWN_FAMILY_PEAK_FITS_ITS_SIX_GIB_SLOT: ${verdict.detail}`);
   else say('RT20_THE_RUNS_OWN_FAMILY_PEAK_FITS_ITS_SIX_GIB_SLOT', verdict.status === 'pass', verdict.detail,
     'the sampled family peak belongs to this run or every recorded shard; above 6 GiB is red; no Linux /proc measurement is SKIP, never PASS');
+  const preFixture = (kind: 'pass' | 'fail' | 'skip' | 'lie'): RunTally => {
+    const t = new RunTally();
+    t.of('alpha', () => {
+      t.observe('── alpha ──');
+      if (kind === 'skip') { t.observe('  SKIP  no input'); return null; }
+      t.observe(`  ${kind === 'pass' ? 'PASS' : 'FAIL'}  AA01_CONTROL`);
+      return kind === 'fail' ? 1 : 0;
+    });
+    return t;
+  };
+  say('RT21_PRE_CHECK_REQUIRES_ACCOUNTED_SELECTED_CASES_WITHOUT_SKIPS_OR_HOLES',
+    preRunExit(preFixture('pass'), ['alpha']) === 0 && preRunExit(preFixture('fail'), ['alpha']) === 1 &&
+      preRunExit(preFixture('skip'), ['alpha']) === 2 && preRunExit(preFixture('lie'), ['alpha']) === 2 &&
+      preRunExit(preFixture('pass'), ['alpha', 'missing']) === 2,
+    'positive exit 0; named FAIL exit 1; SKIP, mismatched return count and missing selected member exit 2',
+    'issue #842: minimum forms are a separate targeted result, never a promotion of an arbitrary partial exit code');
+  const prefixFixture = "function alpha(): void { say('AA01_FIRST', true); helper(); }\n" +
+    "function helper(): void { say('HH01_HELPER', true); }\n" +
+    "function omitted(): void { /* say('AA02_COMMENT', true) */ say(`BB01_${1}`, true); }\n" +
+    "function comfy(): void { say('CF00_THE_HARNESS_RAN', false); }\n";
+  const declarations = (source: string): Pick<SuiteBlock, 'key' | 'names'>[] => [...sourceCaseNames(source,
+    [['alpha', 'alpha'], ['omitted', 'omitted'], ['comfy', 'comfy']])].map(([key, names]) => ({ key, names }));
+  const cleanDeclarations = declarations(prefixFixture);
+  const omittedCollision = casePrefixFaults(declarations(prefixFixture.replace('BB01_', 'AA03_')));
+  const unexempted = declarations(prefixFixture.replace("'CF00_THE_HARNESS_RAN', false", "'CF00_THE_HARNESS_RAN', true"));
+  say('RT22_LITERAL_PREFIX_DECLARATIONS_INCLUDE_OMITTED_SUITES_AND_LOCAL_HELPERS',
+    casePrefixFaults(cleanDeclarations).length === 0 && cleanDeclarations[0].names.includes('HH01_HELPER') &&
+      omittedCollision.length === 1 && omittedCollision[0].includes('omitted') &&
+      cleanDeclarations[2].names.length === 0 && unexempted[2].names.includes('CF00_THE_HARNESS_RAN'),
+    `clean: ${casePrefixFaults(cleanDeclarations).length} faults; omitted-suite plant: ${omittedCollision.join('; ')}; harness exception applies only to the existing literal-false reporter`,
+    'issue #842: the selected live tally cannot see omitted suites; local literal declarations supplement it, comments do not; imported and computed names remain the full CI tally responsibility');
   return bad();
 }
 
@@ -52110,13 +52209,13 @@ function suiteSetFaults(tallied: readonly string[], expected: readonly string[])
  * The worker's whole job: run the one suite, or the one unit of a split suite, named after `WORKER_FLAG`, let it
  * print, and write what it handed back under that name.
  */
-function workerMain(argv: readonly string[]): void {
-  const key = argv[argv.indexOf(WORKER_FLAG) + 1];
+function workerMain(argv: readonly string[], pre = false): void {
+  const key = argv[argv.indexOf(pre ? PRE_WORKER_FLAG : WORKER_FLAG) + 1];
   const at = argv.indexOf('--result');
   const result = at === -1 ? undefined : argv[at + 1];
   const mark = key === undefined ? -1 : key.indexOf(UNIT_MARK);
   const suiteKey = mark === -1 ? key : key.slice(0, mark);
-  const suite = SUITES.find(([k]) => k === suiteKey);
+  const suite = pre ? PRE_WORKERS.find(([k]) => k === suiteKey) : SUITES.find(([k]) => k === suiteKey);
   const units = runUnits(SUITES.map(([k]) => k), exampleKeys().all);
   const known = mark === -1 || (typeof units !== 'string' && units.includes(key));
   if (suite === undefined || !known || result === undefined) {
@@ -52144,9 +52243,9 @@ function workerCount(): number {
   return Number(set.value);
 }
 
-function launchWorker(key: string, corpus: string | null, dir: string): Promise<WorkerRun> {
+function launchWorker(key: string, corpus: string | null, dir: string, pre = false): Promise<WorkerRun> {
   const result = join(dir, `${key}.json`);
-  const args = [import.meta.path, WORKER_FLAG, key, '--result', result, ...(corpus === null ? [] : ['--corpus', corpus])];
+  const args = [import.meta.path, pre ? PRE_WORKER_FLAG : WORKER_FLAG, key, '--result', result, ...(corpus === null ? [] : ['--corpus', corpus])];
   return new Promise((done) => {
     const out: Buffer[] = [];
     const err: Buffer[] = [];
@@ -52323,6 +52422,92 @@ const SUMMARY_JSON_FLAG = '--summary-json';
 const SUMMARY_JSON_SPEC = 'rig-selftest-summary/1';
 const SUMMARY_JSON_TOOL = 'rig-parts';
 
+/** Always included beside a lane's targeted suites; derivation: CONTRIBUTING.md. */
+const PRE_SUITES: readonly string[] = ['assemble-examples', 'tree', 'chain', 'run-tally'];
+const PRE_WORKER_FLAG = '--pre-worker';
+const PRE_WORKERS: ReadonlyArray<readonly [string, (corpus: string | null) => number | null]> = [
+  ['assemble-examples', () => runAssembleExamplesSuite(null, true)],
+  ['tree', () => runTreeSuite(null, true)],
+  ['chain', () => runChainSuite(null, true)],
+];
+const PRE_FORMS: Readonly<Record<string, string>> = { 'assemble-examples': 'demo/AE02', tree: 'TY12,TY16', chain: 'demo/CH01,CH04,CH05', 'run-tally': 'declaration ownership,RT05,RT14,RT20' };
+
+function preRunFaults(tally: RunTally, selected: readonly string[]): string[] {
+  return [...tallyFaults(tally.blocks, tally.gutter, tally.total),
+    ...suiteSetFaults(tally.blocks.map(b => b.key), selected),
+    ...tally.blocks.filter(b => !b.ran || b.controls === 0 || b.skips.length > 0).map(b => `${b.key}: pre form is incomplete (SKIP/HOLE/empty)`)];
+}
+function preRunExit(tally: RunTally, selected: readonly string[]): 0 | 1 | 2 {
+  return preRunFaults(tally, selected).length > 0 ? 2 : tally.failures > 0 ? 1 : 0;
+}
+
+/** The actual selector, also used by focused regression controls. */
+function preSuiteSelection(targeted: readonly string[]): string[] {
+  const keys = [...SUITES.map(([key]) => key), TALLY_SUITE];
+  const selected = [...new Set([...PRE_SUITES, ...targeted])];
+  const unknown = selected.filter(key => !keys.includes(key));
+  if (unknown.length > 0) throw new Error(`selftest:pre: unknown suites [${unknown.join(', ')}]`);
+  if (selected.length === keys.length) throw new Error('selftest:pre cannot select the full tree; its full verdict belongs to PR CI');
+  return selected;
+}
+
+async function preMain(argv: readonly string[]): Promise<void> {
+  const args = readRunArgs(argv, [[ONLY_FLAG, '<suite>[,<suite>…]'], [SUMMARY_JSON_FLAG, '<file>']]);
+  if (Array.isArray(args)) refuseArgs(args);
+  const keys = [...SUITES.map(([key]) => key), TALLY_SUITE];
+  const read = readOnlyList(args.get(ONLY_FLAG) ?? PRE_SUITES.join(','), keys);
+  if (Array.isArray(read)) refuseArgs(read);
+  const selected = [...preSuiteSelection([...read]).filter(k => k !== TALLY_SUITE), TALLY_SUITE];
+  if (!exampleKeys().fetched.includes('demo')) {
+    console.error('selftest:pre: INCOMPLETE — missing demo example inputs; run bun run fetch-examples. Full forms and full verdict: PR CI.');
+    process.exitCode = 2;
+    return;
+  }
+  const names = sourceCaseNames(readFileSync(import.meta.path, 'utf8'), [...SUITES.map(([key, fn]) => [key, fn.name] as const), [TALLY_SUITE, runTallySuite.name]]);
+  const prefixes = casePrefixFaults([...names].map(([key, names]) => ({ key, names })));
+  console.log(`selftest:pre: literal reporter declarations in ${[...names.values()].filter(n => n.length > 0).length}/${names.size} suites; imported/computed names remain CI's live-tally responsibility.`);
+  if (prefixes.length > 0) {
+    for (const fault of prefixes) console.error(`selftest:pre: FAIL source case-prefix: ${fault}`);
+    process.exitCode = 1;
+    return;
+  }
+  console.log('selftest:pre: fixed minimum forms, one worker; full forms and full-tree verdict: PR CI.');
+  const dir = temp('pre');
+  const tally = new RunTally();
+  const printLine = console.log;
+  const clock: Record<string, number> = {};
+  console.log = (...values: unknown[]): void => {
+    tally.observe(values.map(String).join(' '));
+    printLine(...values);
+  };
+  try {
+    for (const key of selected.filter(k => k !== TALLY_SUITE)) {
+      const began = performance.now();
+      const run = await launchWorker(key, null, dir, PRE_WORKERS.some(([k]) => k === key));
+      tally.of(key, () => replayWorker(key, run, line => console.log(line), text => process.stderr.write(text)));
+      clock[key] = (performance.now() - began) / 1000;
+    }
+    const began = performance.now();
+    tally.of(TALLY_SUITE, () => runPreTallySuite(tally));
+    clock[TALLY_SUITE] = (performance.now() - began) / 1000;
+  } finally {
+    console.log = printLine;
+    rmSync(dir, { recursive: true, force: true });
+  }
+  for (const key of selected) console.error(`selftest:pre clock ${key}: ${clock[key]?.toFixed(3)} s`);
+  const faults = preRunFaults(tally, selected);
+  const code = preRunExit(tally, selected);
+  const summary = args.get(SUMMARY_JSON_FLAG);
+  if (summary !== undefined) writeFileSync(resolve(summary), JSON.stringify({
+    ...buildSummaryJson(tally, new Set(selected), faults, code),
+    spec: 'rig-parts-pre/1', scope: 'fixed minimum forms', partial: true,
+    forms: Object.fromEntries(selected.map(k => [k, PRE_FORMS[k] ?? 'full targeted suite'])), full_verdict: 'PR CI', wall_seconds: clock,
+  }, null, 2) + '\n');
+  for (const fault of faults) console.error(`selftest:pre: INCOMPLETE ${fault}`);
+  console.log(`selftest:pre: ${code === 0 ? 'PASS' : code === 1 ? 'FAIL' : 'INCOMPLETE'} — ${tally.total} case lines in fixed minimum forms only; full forms and full-tree verdict: PR CI.`);
+  process.exitCode = code;
+}
+
 type SummarySuiteStatus = 'pass' | 'fail' | 'hole' | 'skipped';
 
 interface SummarySuiteEntry {
@@ -52456,7 +52641,7 @@ function partialVerdict(ran: readonly string[], skipped: readonly string[], case
   if (skipped.length === 0) return null;
   const out =
     `rig-parts selftest: PARTIAL run (${ONLY_FLAG}) — not a verdict on the tree. ${ran.length} suite(s) ran [${ran.join(', ')}] over ${cases} case line(s); ` +
-    `${skipped.length} suite(s) were not run [${skipped.join(', ')}]. Run \`bun run selftest\` without ${ONLY_FLAG} before a pull request.`;
+    `${skipped.length} suite(s) were not run [${skipped.join(', ')}]. The full verdict belongs to PR CI's sharded run.`;
   return failures > 0 ? { code: 1, err: `rig-parts selftest: ${failures} control(s) failed`, out } : { code: 2, err: null, out };
 }
 
@@ -52925,6 +53110,12 @@ async function mergeMain(
 }
 
 async function main(): Promise<void> {
+  if (process.argv[2] === '--pre') {
+    try { await preMain(process.argv.slice(3)); }
+    catch (err) { console.error(`selftest:pre: INCOMPLETE — ${(err as Error).message}`); process.exitCode = 2; }
+    return;
+  }
+  if (process.argv.includes(PRE_WORKER_FLAG)) { workerMain(process.argv, true); return; }
   if (process.argv.includes(ASSEMBLE_STAGE_FLAG)) {
     assembleStageMain(process.argv.slice(2));
     return;
@@ -52996,7 +53187,11 @@ async function main(): Promise<void> {
   );
 }
 
-const finishSelftestPeak = process.argv.includes(WORKER_FLAG) || process.argv.includes(ASSEMBLE_STAGE_FLAG) ? null : startSelftestPeak();
-if (finishSelftestPeak !== null) process.on('exit', finishSelftestPeak);
-await main();
-finishSelftestPeak?.();
+// Importing the selector/verdict for focused controls must not launch a run.
+export { preSuiteSelection, preRunFaults, preRunExit, summaryAgreementFaults };
+const finishSelftestPeak = !import.meta.main || process.argv.includes(WORKER_FLAG) || process.argv.includes(PRE_WORKER_FLAG) || process.argv.includes(ASSEMBLE_STAGE_FLAG) ? null : startSelftestPeak();
+if (import.meta.main) {
+  if (finishSelftestPeak !== null) process.on('exit', finishSelftestPeak);
+  await main();
+  finishSelftestPeak?.();
+}
