@@ -20,7 +20,27 @@
    "visible_not_projected_px": 27821,
    "refused_drift_px": 306,
    "merged_px": 0,
-   "seam_override_px": 48
+   "seam_override_px": 48,
+    "provenance": {
+      "unchanged_layer_px": 135349,
+      "hand_px": 0,
+      "automatic_px": 95529,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "sourceProjection",
+          "px": 92936
+        },
+        {
+          "stage": "seamOverride",
+          "px": 48
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 2545
+        }
+      ]
+    }
   },
   {
    "name": "earring",
@@ -43,7 +63,23 @@
      "part": "hair_back",
      "px": 153
     }
-   ]
+   ],
+    "provenance": {
+      "unchanged_layer_px": 512,
+      "hand_px": 0,
+      "automatic_px": 104,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "seamOverride",
+          "px": 25
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 79
+        }
+      ]
+    }
   },
   {
    "name": "legwear",
@@ -60,7 +96,19 @@
    "visible_not_projected_px": 0,
    "refused_drift_px": 0,
    "merged_px": 0,
-   "seam_override_px": 0
+   "seam_override_px": 0,
+    "provenance": {
+      "unchanged_layer_px": 45082,
+      "hand_px": 0,
+      "automatic_px": 692,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "ghostCleanup",
+          "px": 692
+        }
+      ]
+    }
   },
   {
    "name": "neck",
@@ -83,7 +131,19 @@
      "part": "hair_back",
      "px": 3
     }
-   ]
+   ],
+    "provenance": {
+      "unchanged_layer_px": 2168,
+      "hand_px": 0,
+      "automatic_px": 22,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "ghostCleanup",
+          "px": 22
+        }
+      ]
+    }
   },
   {
    "name": "bottomwear",
@@ -106,7 +166,27 @@
      "part": "hair_back",
      "px": 3
     }
-   ]
+   ],
+    "provenance": {
+      "unchanged_layer_px": 34784,
+      "hand_px": 0,
+      "automatic_px": 315532,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "sourceProjection",
+          "px": 314585
+        },
+        {
+          "stage": "seamOverride",
+          "px": 92
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 855
+        }
+      ]
+    }
   },
   {
    "name": "shoes",
@@ -129,7 +209,27 @@
      "part": "bottomwear",
      "px": 12
     }
-   ]
+   ],
+    "provenance": {
+      "unchanged_layer_px": 4209,
+      "hand_px": 0,
+      "automatic_px": 11999,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "sourceProjection",
+          "px": 11601
+        },
+        {
+          "stage": "seamOverride",
+          "px": 93
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 305
+        }
+      ]
+    }
   },
   {
    "name": "topwear",
@@ -160,7 +260,27 @@
      "part": "bottomwear",
      "px": 1
     }
-   ]
+   ],
+    "provenance": {
+      "unchanged_layer_px": 17189,
+      "hand_px": 0,
+      "automatic_px": 26776,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "sourceProjection",
+          "px": 25834
+        },
+        {
+          "stage": "seamOverride",
+          "px": 449
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 493
+        }
+      ]
+    }
   },
   {
    "name": "sleeves",
@@ -191,7 +311,27 @@
      "part": "bottomwear",
      "px": 62
     }
-   ]
+   ],
+    "provenance": {
+      "unchanged_layer_px": 8678,
+      "hand_px": 0,
+      "automatic_px": 32712,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "sourceProjection",
+          "px": 27356
+        },
+        {
+          "stage": "seamOverride",
+          "px": 4615
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 741
+        }
+      ]
+    }
   },
   {
    "name": "ear_r",
@@ -214,7 +354,23 @@
      "part": "hair_back",
      "px": 2
     }
-   ]
+   ],
+    "provenance": {
+      "unchanged_layer_px": 393,
+      "hand_px": 0,
+      "automatic_px": 15,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "seamOverride",
+          "px": 3
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 12
+        }
+      ]
+    }
   },
   {
    "name": "ear_l",
@@ -237,7 +393,23 @@
      "part": "hair_back",
      "px": 7
     }
-   ]
+   ],
+    "provenance": {
+      "unchanged_layer_px": 548,
+      "hand_px": 0,
+      "automatic_px": 16,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "sourceProjection",
+          "px": 1
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 15
+        }
+      ]
+    }
   },
   {
    "name": "hairpin",
@@ -260,7 +432,27 @@
      "part": "hair_back",
      "px": 24
     }
-   ]
+   ],
+    "provenance": {
+      "unchanged_layer_px": 4555,
+      "hand_px": 0,
+      "automatic_px": 6818,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "sourceProjection",
+          "px": 6502
+        },
+        {
+          "stage": "seamOverride",
+          "px": 154
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 162
+        }
+      ]
+    }
   },
   {
    "name": "face",
@@ -299,7 +491,27 @@
      "part": "ear_r",
      "px": 2
     }
-   ]
+   ],
+    "provenance": {
+      "unchanged_layer_px": 8388,
+      "hand_px": 0,
+      "automatic_px": 2425,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "sourceProjection",
+          "px": 2325
+        },
+        {
+          "stage": "seamOverride",
+          "px": 54
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 46
+        }
+      ]
+    }
   },
   {
    "name": "brow_l",
@@ -316,7 +528,19 @@
    "visible_not_projected_px": 0,
    "refused_drift_px": 0,
    "merged_px": 0,
-   "seam_override_px": 0
+   "seam_override_px": 0,
+    "provenance": {
+      "unchanged_layer_px": 68,
+      "hand_px": 0,
+      "automatic_px": 5,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "ghostCleanup",
+          "px": 5
+        }
+      ]
+    }
   },
   {
    "name": "brow_r",
@@ -339,7 +563,19 @@
      "part": "face",
      "px": 25
     }
-   ]
+   ],
+    "provenance": {
+      "unchanged_layer_px": 58,
+      "hand_px": 0,
+      "automatic_px": 4,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "ghostCleanup",
+          "px": 4
+        }
+      ]
+    }
   },
   {
    "name": "eyewhite_r",
@@ -356,7 +592,27 @@
    "visible_not_projected_px": 132,
    "refused_drift_px": 0,
    "merged_px": 0,
-   "seam_override_px": 4
+   "seam_override_px": 4,
+    "provenance": {
+      "unchanged_layer_px": 253,
+      "hand_px": 0,
+      "automatic_px": 18,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "sourceProjection",
+          "px": 10
+        },
+        {
+          "stage": "seamOverride",
+          "px": 4
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 4
+        }
+      ]
+    }
   },
   {
    "name": "eyewhite_l",
@@ -373,7 +629,23 @@
    "visible_not_projected_px": 158,
    "refused_drift_px": 1,
    "merged_px": 0,
-   "seam_override_px": 35
+   "seam_override_px": 35,
+    "provenance": {
+      "unchanged_layer_px": 313,
+      "hand_px": 0,
+      "automatic_px": 47,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "seamOverride",
+          "px": 35
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 12
+        }
+      ]
+    }
   },
   {
    "name": "mouth",
@@ -390,7 +662,23 @@
    "visible_not_projected_px": 279,
    "refused_drift_px": 0,
    "merged_px": 0,
-   "seam_override_px": 0
+   "seam_override_px": 0,
+    "provenance": {
+      "unchanged_layer_px": 371,
+      "hand_px": 0,
+      "automatic_px": 156,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "sourceProjection",
+          "px": 134
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 22
+        }
+      ]
+    }
   },
   {
    "name": "iris_l",
@@ -413,7 +701,27 @@
      "part": "eyewhite_l",
      "px": 5
     }
-   ]
+   ],
+    "provenance": {
+      "unchanged_layer_px": 126,
+      "hand_px": 0,
+      "automatic_px": 83,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "sourceProjection",
+          "px": 48
+        },
+        {
+          "stage": "seamOverride",
+          "px": 26
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 9
+        }
+      ]
+    }
   },
   {
    "name": "lash_l",
@@ -436,7 +744,23 @@
      "part": "face",
      "px": 24
     }
-   ]
+   ],
+    "provenance": {
+      "unchanged_layer_px": 309,
+      "hand_px": 0,
+      "automatic_px": 31,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "seamOverride",
+          "px": 13
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 18
+        }
+      ]
+    }
   },
   {
    "name": "iris_r",
@@ -459,7 +783,27 @@
      "part": "eyewhite_r",
      "px": 2
     }
-   ]
+   ],
+    "provenance": {
+      "unchanged_layer_px": 119,
+      "hand_px": 0,
+      "automatic_px": 51,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "sourceProjection",
+          "px": 33
+        },
+        {
+          "stage": "seamOverride",
+          "px": 12
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 6
+        }
+      ]
+    }
   },
   {
    "name": "lash_r",
@@ -494,7 +838,27 @@
      "part": "iris_r",
      "px": 1
     }
-   ]
+   ],
+    "provenance": {
+      "unchanged_layer_px": 301,
+      "hand_px": 0,
+      "automatic_px": 30,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "sourceProjection",
+          "px": 1
+        },
+        {
+          "stage": "seamOverride",
+          "px": 8
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 21
+        }
+      ]
+    }
   },
   {
    "name": "hair_front",
@@ -537,7 +901,27 @@
      "part": "lash_l",
      "px": 1
     }
-   ]
+   ],
+    "provenance": {
+      "unchanged_layer_px": 2049,
+      "hand_px": 0,
+      "automatic_px": 7037,
+      "edits": [],
+      "automatic": [
+        {
+          "stage": "sourceProjection",
+          "px": 6746
+        },
+        {
+          "stage": "seamOverride",
+          "px": 197
+        },
+        {
+          "stage": "ghostCleanup",
+          "px": 94
+        }
+      ]
+    }
   }
  ],
  "ghost_px": {

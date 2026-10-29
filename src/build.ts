@@ -1,3 +1,4 @@
+import { ownershipLines, provenanceLines } from './provenance.ts';
 import { readSourceDepth } from './depthsheets.ts';
 import { orderedBaseAnchor } from './baseanchor.ts';
 import { alternateLayerSources, alternateLayerIslands, alternateLayerOthers } from './alternatelayers.ts';
@@ -705,6 +706,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         ...(altFront.size === 0 ? {} : { front: [...altFront] }),
         slots,
         records: keptRecords,
+        ...(altRes.parts.cut_ownership === undefined ? {} : { cut_ownership: altRes.parts.cut_ownership }),
         ghost_px: altRes.parts.ghost_px,
         recomposite: altRecomposite,
         ...(altRes.parts.scene === undefined ? {} : { scene: altRes.parts.scene }),
@@ -782,6 +784,9 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         `unproj=${String(p.visible_not_projected_px).padStart(5)} drift=${String(p.refused_drift_px).padStart(5)} ${driftShare(p.refused_drift_px, p.projected_core_px)} merged=${p.merged_px} seam=${p.seam_override_px}${underfillSuffix}`,
     );
   }
+  for (const line of provenanceLines(result.parts.parts)) log(line);
+  for (const line of ownershipLines(result.parts.cut_ownership ?? [])) log(line);
+  for (const alt of altBuilt) for (const line of [...provenanceLines(alt.record.records), ...ownershipLines(alt.record.cut_ownership ?? [])]) log(`  set "${alt.record.name}" ${line.trimStart()}`);
   // Issue #256: one line per part from an author-made layer, so it never reads as See-through's. None without one.
   for (const l of authorPartLines(result.parts.parts)) log(l);
   // One line per plan part an assemble.cuts entry cut, before the fringe lines: the cut is made first. None without cuts.

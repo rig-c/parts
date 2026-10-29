@@ -1,3 +1,4 @@
+import { AUTOMATIC_WRITERS as AW, compactValueBaseline, pixelProvenance, rgbaEqual, type ValueBaseline } from './provenance.ts';
 import { bindDepthRun, copyDepthMaterial, registerDepthRun, transportPartDepth, type DepthConfig, type RegisteredDepth } from './depthsheets.ts';
 /**
  * The assemble stage: two See-through runs over one painting — a FULL-body run
@@ -2257,7 +2258,7 @@ export function pixelOwners(rigLayers: readonly Raster[], rank: readonly number[
  * masks mark own-layer art under a subset set's actual cover (alpha above 8);
  * those pixels are occluded, outside every projection core, and never recoloured.
  */
-export function projectSource(rigLayers: Raster[], srcr: Raster, frame: Frame, run: Run, rule: ProjectRule = DEFAULT_PROJECT_RULE, rank: readonly number[] | null = null, keep: ReadonlyArray<Mask | null> | null = null): ProjectionStats[] {
+export function projectSource(rigLayers: Raster[], srcr: Raster, frame: Frame, run: Run, rule: ProjectRule = DEFAULT_PROJECT_RULE, rank: readonly number[] | null = null, keep: ReadonlyArray<Mask | null> | null = null, changed?: (layer: number, rigPixel: number) => void): ProjectionStats[] {
   const { W, H } = frame;
   const owner = pixelOwners(rigLayers, rank);
   const inFront = (o: number, i: number): boolean => frontOf(o, i, rank);
@@ -2320,10 +2321,14 @@ export function projectSource(rigLayers: Raster[], srcr: Raster, frame: Frame, r
       if (core.data[p] === 0) continue;
       const w = blurred.data[p];
       const rest = f32(1 - w);
+      let different = false;
       for (let c = 0; c < 3; c++) {
         const v = f32(f32(w * srcr.data[p * 4 + c]) + f32(rest * r.data[p * 4 + c]));
-        r.data[p * 4 + c] = Math.trunc(v < 0 ? 0 : v > 255 ? 255 : v);
+        const next = Math.trunc(v < 0 ? 0 : v > 255 ? 255 : v);
+        different ||= next !== r.data[p * 4 + c];
+        r.data[p * 4 + c] = next;
       }
+      if (different) changed?.(i, p);
     }
     return { core: coreN, taken, refused, clear, takenMask, coreMask: core, refusedMask };
   });
@@ -2437,7 +2442,7 @@ export function growRim(part: Raster, sel: Mask, srcr: Raster, front: Mask | nul
  * overwriting an earlier one — the layer whose run says whether the pixel is
  * visible — and `trace.ring` set when the last write was the ring's.
  */
-export function mergeBelowCrop(part: Raster, extras: Raster[], front: Mask, srcr: Raster, headBottom: number, trace?: MergeTrace): number {
+export function mergeBelowCrop(part: Raster, extras: Raster[], front: Mask, srcr: Raster, headBottom: number, trace?: MergeTrace, changed?: (rigPixel: number, stage: 'extend' | 'growRim') => void): number {
   let merged = 0;
   extras.forEach((extra, e) => {
     const sel = belowCrop(part, extra, headBottom);
@@ -2445,6 +2450,7 @@ export function mergeBelowCrop(part: Raster, extras: Raster[], front: Mask, srcr
     for (let p = 0; p < sel.data.length; p++) {
       if (sel.data[p] === 0) continue;
       copied++;
+      if (!rgbaEqual(part.data, p * 4, extra.data, p * 4)) changed?.(p, 'extend');
       part.data.set(extra.data.subarray(p * 4, p * 4 + 4), p * 4);
       if (trace !== undefined) {
         trace.from[p] = e;
@@ -2458,6 +2464,7 @@ export function mergeBelowCrop(part: Raster, extras: Raster[], front: Mask, srcr
       trace.lastRing = ring;
       for (let p = 0; p < ring.data.length; p++) {
         if (ring.data[p] === 1) {
+          changed?.(p, 'growRim');
           trace.from[p] = e;
           trace.ring.data[p] = 1;
         }
@@ -2805,6 +2812,7 @@ export function pushBackFringe(
   feathered: ReadonlyArray<Mask | null> | null = null,
   keep: ReadonlyArray<Mask | null> | null = null,
   turnMovingPair: ((a: string, b: string) => boolean) | null = null,
+  restored?: (part: number, rigPixel: number) => void,
 ): FringePushed[][] {
   const { width: W } = srcr;
   const { holder, cand } = seamCandidates(parts, srcr, rule, silhouette);
@@ -2840,7 +2848,10 @@ export function pushBackFringe(
   }));
   const counts: Array<Map<number, number>> = parts.map(() => new Map());
   cleared.forEach((list, i) => {
-    for (const c of list) if (c.on) counts[i].set(c.h, (counts[i].get(c.h) ?? 0) + 1);
+    for (const c of list) {
+      if (c.on) counts[i].set(c.h, (counts[i].get(c.h) ?? 0) + 1);
+      else restored?.(i, (parts[i].record.y + Math.floor(c.q / parts[i].record.w)) * W + parts[i].record.x + c.q % parts[i].record.w);
+    }
   });
   return counts.map((m) =>
     [...m.entries()]
@@ -2878,6 +2889,7 @@ export function seamOverride(
   silhouette: Mask | null,
   keep: ReadonlyArray<Mask | null> | null = null,
   turnMovingPair: ((a: string, b: string) => boolean) | null = null,
+  written?: (part: number, rigPixel: number) => void,
 ): void {
   const { width: W } = srcr;
   const { top, cand } = seamCandidates(parts, srcr, rule, silhouette);
@@ -2913,9 +2925,11 @@ export function seamOverride(
         ) {
           continue;
         }
+        const different = image.data[s] !== srcr.data[d * 4] || image.data[s + 1] !== srcr.data[d * 4 + 1] || image.data[s + 2] !== srcr.data[d * 4 + 2];
         image.data[s] = srcr.data[d * 4];
         image.data[s + 1] = srcr.data[d * 4 + 1];
         image.data[s + 2] = srcr.data[d * 4 + 2];
+        if (different) written?.(i, d);
         n++;
       }
     }
@@ -3415,6 +3429,8 @@ export interface CutCount {
   band: number;
   /** With `under` only (issue #193): the base pixels filled from the under image (`fillUnder`); absent without it. */
   under?: number;
+  /** Filled pixels with final alpha above the opaque threshold (report-only). */
+  underOpaque?: number;
   /** With `under` only: the removed pixels the image left empty (its alpha below the alpha removed); `under + underEmpty` is the removed count. */
   underEmpty?: number;
   /** With `under_fill: "colour"` only (issue #360): the `under` pixels took the image's colour at the alpha the cut removed; absent without it. */
@@ -3518,6 +3534,8 @@ export function cutBand(polygonMask: Mask, overlap: number): Mask {
 
 /** One layer's part as the stage builds it, before it is placed: its key, pixels, projection figures, merge trace and, when the layer is cut, the rig pixels it owns. */
 interface Built {
+  /** Report-only last writer at each rig coordinate; never read by raster arithmetic. */
+  writers?: Int32Array;
   key: string;
   r: Raster;
   st: ProjectionStats;
@@ -4031,7 +4049,8 @@ function cutLimbs(
       problems.push({ code: 'ASSEMBLE_COUNTS_ADD_UP', object: `part "${src}" (config.limbs)`, detail: `opaque px: ${before} before the limbs, ${sum} over their parts; equal is required (a bug in the assembler, not in the inputs)` });
     }
     for (const { q, i } of shares) {
-      pieces[i] = { ...b, r: rasters[i], region: regions[i], merged: mergedIn(b, regions[i]) };
+      const writers = b.writers?.slice();
+      pieces[i] = { ...b, writers, r: rasters[i], region: regions[i], merged: mergedIn(b, regions[i]) };
       if (count(regions[i], regions[i]) === 0 && opaqueOf(rasters[i]) === 0) {
         problems.push({
           code: 'ASSEMBLE_LIMB_PIXELS',
@@ -4125,6 +4144,10 @@ function cutLimbs(
         return;
       }
       const lower = rasters[at];
+      const capWrite = (p: number, data: Uint8ClampedArray, offset: number): void => {
+        const ids = (pieces[at] as Built).writers;
+        if (ids !== undefined && !rgbaEqual(lower.data, p * 4, data, offset)) ids[p] = AW.limbCap;
+      };
       const lowerSrc = builtOf(sg.from) as Built;
       // Issue #360 (cut_band): the cap's pixels are the disc's on the upper side of the cut, wherever it was placed.
       const cut = (cutLines.get(l) as Array<JointLine | null>)[k] as JointLine;
@@ -4147,6 +4170,7 @@ function cutLimbs(
       const from: CapFrom = { box, codes: new Uint8Array(Math.max(0, box[2]) * Math.max(0, box[3])) };
       const mark = (x: number, y: number, code: number): void => {
         from.codes[(y - box[1]) * box[2] + (x - box[0])] = code;
+
       };
       for (let y = Math.max(0, box[1]); y < Math.min(H, box[1] + box[3]); y++) {
         for (let x = Math.max(0, box[0]); x < Math.min(W, box[0] + box[2]); x++) {
@@ -4161,6 +4185,7 @@ function cutLimbs(
               lowerKept++;
               mark(x, y, CAP_FROM_LOWER_KEPT);
             } else if (img !== null && img.data[u + 3] > 0) {
+              capWrite(p, img.data, u);
               lower.data.set(img.data.subarray(u, u + 4), p * 4);
               lowerPx++;
               mark(x, y, CAP_FROM_LOWER);
@@ -4173,10 +4198,12 @@ function cutLimbs(
             continue;
           }
           if (img !== null && img.data[u + 3] > 0) {
-            lower.data.set(img.data.subarray(u, u + 4), p * 4);
+            capWrite(p, img.data, u);
+              lower.data.set(img.data.subarray(u, u + 4), p * 4);
             imagePx++;
             mark(x, y, CAP_FROM_IMAGE);
           } else if (ownLower[p] === li && lowerSrc.r.data[p * 4 + 3] > 0) {
+            capWrite(p, lowerSrc.r.data, p * 4);
             lower.data.set(lowerSrc.r.data.subarray(p * 4, p * 4 + 4), p * 4);
             layerPx++;
             mark(x, y, CAP_FROM_LAYER);
@@ -4184,6 +4211,7 @@ function cutLimbs(
             // Issue #360: the disc is filled from the art — the upper segment's, where the lower's layer has none.
             // Issue #557: under either shape — the half-disc too takes the neighbouring segment's pixels, so a cap is
             // short only where no layer of the limb gives a pixel.
+            capWrite(p, upper.data, p * 4);
             lower.data.set(upper.data.subarray(p * 4, p * 4 + 4), p * 4);
             upperPx++;
             mark(x, y, CAP_FROM_UPPER);
@@ -4230,6 +4258,7 @@ function cutLimbs(
             // piece's region and its remaining ramp is marked feathered so pushBackFringe does not clear the fade.
             if (na <= OPAQUE_ALPHA_ABOVE) upperRegion.data[p] = 0;
             else featheredMask.data[p] = 1;
+            if (upPiece.writers !== undefined) upPiece.writers[p] = AW.limbFeather;
             featheredPx++;
           }
         }
@@ -4334,7 +4363,8 @@ function cutLimbs(
       base.hybrid = { part: sg.hybrid.part, ...geometry };
       capFrom[loAt] = null;
       parts.push({ limb: l, segment: k, part: sg.hybrid.part, of: sg.from, record: { name: l, segment: k, of: base.of, bone: sg.bone, joint: sg.joint, band: geometry } });
-      pieces.push({ ...source, r, region, merged: mergedIn(source, region) });
+      const writers = source.writers?.slice();
+      pieces.push({ ...source, writers, r, region, merged: mergedIn(source, region) });
       capFrom.push(null);
       // Existing piece objects refer to the same raster and mask.
       for (const i of [upAt, loAt]) (pieces[i] as Built).merged = mergedIn(pieces[i] as Built, regions[i]);
@@ -4621,6 +4651,19 @@ export function assemble(input: AssembleInput): AssembleResult {
   const coverFootprints = new Map<string, Mask>();
   const limbSources = new Set(Object.values(input.limbs ?? {}).flatMap((l) => l.segments.map((sg) => sg.from)));
   const limbPlans = new Set([...limbSources, ...cuts.filter((c) => limbSources.has(c.into)).map((c) => c.from)]);
+  const editNames: string[] = [];
+  const editId = (name: string): number => {
+    const old = editNames.indexOf(name);
+    if (old >= 0) return old + 1;
+    editNames.push(name);
+    return editNames.length;
+  };
+  const cutIds = cuts.map((_, i) => editId(`cuts[${i}]`));
+  const patchIds = patches.map((_, i) => editId(`patches[${i}]`));
+  const layerWriters = new Map<string, Int32Array>();
+  const valueBaselines = new Map<string, ValueBaseline | null>();
+  // Extend-only rasters are still projected/merged, but are never emitted as own sources.
+  const readKeys = new Set(sourcePlan.map(([, run, tag]) => `${run}:${tag}`));
   const rig = new Map<string, Raster>();
   const stats = new Map<string, ProjectionStats>();
   const ghost: Record<string, number> = {};
@@ -4645,7 +4688,59 @@ export function assemble(input: AssembleInput): AssembleResult {
       coverFootprints.set(`${run}:${l.tag}`, cover);
       return mask;
     });
-    const st = projectSource(rigLayers, srcr, frame, run, projectRule, rank, keep);
+    // Normalize the unedited input to the same rig grid. Cleanup effects on
+    // retained samples are named; split/underfill outputs are prepared writes.
+    const writes = layers.map((l, i): Int32Array | null => {
+      const key = `${run}:${l.tag}`;
+      if (!readKeys.has(key)) return null;
+      const ids = new Int32Array(W * H);
+      const originalSet = run === 'full' ? fullPadded : depthHeadInput;
+      const original = originalSet.layers.find(q => q.name === l.tag);
+      const prepared = set.layers.find(q => q.name === l.tag);
+      let preparedWriter = 0;
+      if (run === 'head' && prepared?.pixels !== original?.pixels) preparedWriter = AW.headFaceUnderfill;
+      if (run === 'full') {
+        const arm = fullArmSplit.layers.find(q => q.name === l.tag);
+        if (prepared?.pixels !== arm?.pixels || arm?.pixels !== original?.pixels) preparedWriter = AW.armSplit;
+      }
+      const author = l.tag.startsWith('author:') ? editId(key) : 0;
+      // Split-generated tags retain their actual original run contributors,
+      // never the prepared/split raster as their baseline. arm_split copies
+      // hand layers in input order; the merged-arm split inherits that source.
+      const splitTag = /^(handwear|drape|hand)-[rl]$/.test(l.tag);
+      const parentTag = l.tag.replace(/^(drape|hand)-/, 'handwear-');
+      const sourceLayers = run === 'full' && splitTag && preparedWriter === AW.armSplit
+        ? input.armSplit === undefined ? fullPadded.layers.filter(q => q.name === parentTag) : fullPadded.layers.filter(q => q.name === 'handwear-r' || q.name === 'handwear-l')
+        : original === undefined ? [] : [original];
+      let raw: Raster | null = null;
+      if (author === 0 && sourceLayers.length > 0) {
+        // A sole layer needs no composite copy: layerToRig premultiplies,
+        // so discarded RGB at alpha 0 has exactly the same float32 input.
+        const canvas = sourceLayers.length === 1 ? placeLayer(sourceLayers[0], input.resolution) : newRaster(input.resolution, input.resolution);
+        if (sourceLayers.length > 1) for (const originalLayer of sourceLayers) {
+          const sourceCanvas = placeLayer(originalLayer, input.resolution);
+          for (let p = 0; p < input.resolution * input.resolution; p++) if (sourceCanvas.data[p * 4 + 3] > 0) canvas.data.set(sourceCanvas.data.subarray(p * 4, p * 4 + 4), p * 4);
+        }
+        raw = layerToRig(canvas, frame, run);
+      }
+      // Reuse only a proved identical placed input, never wrapper identity.
+      const samePlacedSource = raw !== null && sourceLayers.length === 1 && prepared !== undefined &&
+        sourceLayers[0].pixels === prepared.pixels && sourceLayers[0].left === prepared.left && sourceLayers[0].top === prepared.top;
+      const preparedRig = samePlacedSource ? raw : prepared === undefined ? null : layerToRig(placeLayer(prepared, input.resolution), frame, run);
+      for (let p = 0; p < W * H; p++) {
+        if (rigLayers[i].data[p * 4 + 3] === 0) continue;
+        ids[p] = author;
+        if (preparedWriter !== 0 && (raw === null || preparedRig !== null && !rgbaEqual(raw.data, p * 4, preparedRig.data, p * 4))) ids[p] = preparedWriter;
+        if (preparedRig !== null && !rgbaEqual(preparedRig.data, p * 4, rigLayers[i].data, p * 4)) ids[p] = AW.ghostCleanup;
+      }
+      // Keep only samples that could equal a final opaque pixel; full raw and
+      // prepared normalization temporaries end with this layer's callback.
+      valueBaselines.set(key, raw === null ? null : compactValueBaseline(raw));
+      return ids;
+    });
+    const st = projectSource(rigLayers, srcr, frame, run, projectRule, rank, keep, (i, p) => { if (writes[i] !== null) (writes[i] as Int32Array)[p] = AW.sourceProjection; });
+    writes.forEach((ids, i) => { if (ids !== null) layerWriters.set(`${run}:${layers[i].tag}`, ids); });
+    writes.length = 0;
     layers.forEach((l, i) => {
       rig.set(`${run}:${l.tag}`, rigLayers[i]);
       stats.set(`${run}:${l.tag}`, st[i]);
@@ -4775,6 +4870,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     const extendKeys = extend.filter((e) => e.part === name).map((e) => `${e.run}:${e.tag}`);
     const extras = extendKeys.map((k) => rig.get(k) as Raster);
     let merged = 0;
+    const writers = (layerWriters.get(key) as Int32Array).slice();
     const trace: MergeTrace = { from: new Int32Array(W * H).fill(-1), ring: newMask(W, H) };
     if (extras.length > 0) {
       const front = newMask(W, H);
@@ -4782,7 +4878,7 @@ export function assemble(input: AssembleInput): AssembleResult {
         const f = rig.get(`${run2}:${tag2}`) as Raster;
         for (let p = 0; p < W * H; p++) if (f.data[p * 4 + 3] >= FRONT_ALPHA) front.data[p] = 1;
       }
-      merged = mergeBelowCrop(r, extras, front, srcr, frame.headBottom, trace);
+      merged = mergeBelowCrop(r, extras, front, srcr, frame.headBottom, trace, (p, stage) => { writers[p] = AW[stage]; });
     }
     const { x1, opaque } = measureBox(r);
     if (opaque === 0) {
@@ -4793,7 +4889,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       });
       return null;
     }
-    return { key, r, st, extendKeys, trace, merged, region: null };
+    return { key, r, st, extendKeys, trace, merged, region: null, writers };
   };
   plan.forEach(([name, run, tag], pi) => { built[pi] = buildSource(name, run, tag, pi); });
   // Snapshot independent piece pixels before any parent's subtraction or under fill.
@@ -4802,6 +4898,9 @@ export function assemble(input: AssembleInput): AssembleResult {
     const row = plan[pi], tag = input.cutLayers?.get(c.into);
     return tag === undefined ? null : buildSource(c.from, row[1], tag, pi);
   });
+  // Every Built owns its writer slice. No source-map lookup follows this
+  // last cut-layer build; drop originals before cut/limb working sets grow.
+  layerWriters.clear();
   const silhouette = seamRule === 'silhouette' || patches.some((q) => q.alpha === 'silhouette') ? figureSilhouette(srcr) : null;
   const cut = patches.map((q, i) => {
     const c = cutPatch(q, srcr, silhouette);
@@ -4863,7 +4962,9 @@ export function assemble(input: AssembleInput): AssembleResult {
           if (band.data[p] === 1) nb++;
         }
       }
-      pieces[i] = { ...b, r, region: m, merged: mergedIn(b, m) };
+      const writers = (b.writers as Int32Array).slice();
+      // A retained base band is not written: it keeps its earlier writer.
+      pieces[i] = { ...b, r, writers, region: m, merged: mergedIn(b, m) };
       bands.push(nb);
       return n;
     });
@@ -4912,6 +5013,10 @@ export function assemble(input: AssembleInput): AssembleResult {
       // Filled where the image is at least as opaque as the layer was; left empty elsewhere (`fillUnder`).
       // With under_fill "colour" (issue #360) a filled pixel keeps the alpha the cut removed and takes the image's colour only.
       const f = fillUnder(b.r, (pieces[i] as Built).r, cutBand(cutMasks[i], cuts[i].overlap), u, underBox(cuts[i].polygon), cuts[i].under_fill);
+      const band = cutBand(cutMasks[i], cuts[i].overlap);
+      let opaqueFilled = 0;
+      // The under operation wrote only removed pixels it actually filled.
+      for (let p = 0; p < W * H; p++) if (cutMasks[i].data[p] === 1 && band.data[p] === 0 && (pieces[i] as Built).r.data[p * 4 + 3] > 0 && b.r.data[p * 4 + 3] > 0) { (b.writers as Int32Array)[p] = cutIds[i]; if (b.r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) opaqueFilled++; }
       // A hidden-art layer (issue #359) is the whole layer's covered art, read by every cut of its part: a cut it holds nothing
       // under fills 0, which the cut line counts, and is not refused as a file made for this one cut would be.
       if (f.filled === 0 && input.cuts[i].under !== undefined) {
@@ -4921,13 +5026,14 @@ export function assemble(input: AssembleInput): AssembleResult {
           detail: `${cuts[i].under} fills 0 of the ${f.empty} pixel(s) the cut removed from "${name}": at every one its alpha is below the alpha removed (an all-transparent image, or another file); an image that fills at least one is required — to leave the whole hole, drop under`,
         });
       }
-      return f;
+      return { ...f, opaqueFilled };
     });
     mine.forEach((i, k) => {
       const c: CutCount = { from: name, into: cuts[i].into, before, kept, taken: taken[k], band: bands[k] };
       const f = filled[k];
       if (f !== undefined) {
         c.under = f.filled;
+        c.underOpaque = f.opaqueFilled;
         c.underEmpty = f.empty;
         if (cuts[i].under_fill === 'colour') c.underFill = 'colour';
       }
@@ -4941,7 +5047,8 @@ export function assemble(input: AssembleInput): AssembleResult {
     const m = cutMasks[i], r = newRaster(W, H);
     for (let p = 0; p < W * H; p++) if (m.data[p] === 1) r.data.set(source.r.data.subarray(p * 4, p * 4 + 4), p * 4);
     if (opaqueOf(r) === 0) empty.push({ code: 'ASSEMBLE_CUT_PIXELS', object: `config.assemble.cuts[${i}] (part "${cuts[i].into}")`, detail: `takes 0 opaque pixels from selected ${source.key}; draw its polygon over that layer's art` });
-    pieces[i] = { ...source, r, region: m, merged: mergedIn(source, m) };
+    const writers = (source.writers as Int32Array).slice();
+    pieces[i] = { ...source, r, writers, region: m, merged: mergedIn(source, m) };
   });
   refuseIfAny(empty);
   // In cut order, as the config lists them.
@@ -5064,7 +5171,9 @@ export function assemble(input: AssembleInput): AssembleResult {
   });
   const featheredInOrder: Array<Mask | null> = order.map((d) => ('patch' in d ? null : (pieceAt(d).b.feathered ?? null)));
   const keepInOrder = order.map((d) => ('limb' in d ? limbKeep[d.limb] : null));
-  const pushedBy = pushBackFringe(stack, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, featheredInOrder, keepInOrder, input.turnMovingPair ?? null);
+  const patchWriters = patches.map((_, i) => new Int32Array(W * H).fill(patchIds[i]));
+  const writersInOrder = order.map(d => 'patch' in d ? patchWriters[d.patch] : pieceAt(d).b.writers as Int32Array);
+  const pushedBy = pushBackFringe(stack, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, featheredInOrder, keepInOrder, input.turnMovingPair ?? null, (i, p) => { writersInOrder[i][p] = AW.fringeRestore; });
   // Issue #255: a part's drift refusals in a body, and who holds the body in the draw order (the push-back clears
   // only fringe below CORE_ALPHA; these are the holders before the opt-in yield, and the seam override only recolours).
   const holderAt = new Int32Array(W * H).fill(-1);
@@ -5242,7 +5351,14 @@ export function assemble(input: AssembleInput): AssembleResult {
   for (const p of placed) if (p.record.depth !== undefined && artFiles.has(p.record.depth.image)) refuseIfAny([{ code: 'DEPTH_SHEET_UNAMBIGUOUS', object: p.record.depth.image, detail: 'collides with a part artwork filename; choose noncolliding part names before sheet emission' }]);
 
 
-  seamOverride(placed, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, keepInOrder, input.turnMovingPair ?? null);
+  seamOverride(placed, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, keepInOrder, input.turnMovingPair ?? null, (i, p) => { writersInOrder[i][p] = AW.seamOverride; });
+  placed.forEach((p, i) => { p.record.provenance = pixelProvenance(p.image, p.record.x, p.record.y, W, writersInOrder[i], editNames, 0, valueBaselines.get(p.record.from) ?? null); });
+  // Provenance is now numbers/labels only. No later raster/figure operation
+  // reads report buffers; release all aliases before recomposite/error work.
+  valueBaselines.clear();
+  writersInOrder.length = 0;
+  patchWriters.length = 0;
+  for (const group of [built, pieces, cutSources, limbPieces]) for (const b of group) if (b !== null) b.writers = undefined;
   const can = recomposite(placed, W, H);
   // Issue #242: on a scene painting the figure is read off the full run, and every recomposite figure inside it.
   const inside = input.scene === true ? sceneFigure([...rig.entries()].filter(([k]) => k.startsWith('full:')).map(([, r]) => r), W, H) : null;
@@ -5272,6 +5388,9 @@ export function assemble(input: AssembleInput): AssembleResult {
       scale_rig_per_source: frame.S,
       ...(input.motion_seams === undefined ? {} : { motion_seams: input.motion_seams.map(({ part, neighbour }) => ({ part, neighbour })) }),
       parts: placed.map((p) => p.record),
+      ...(cutCounts.length === 0 ? {} : { cut_ownership: cutCounts.map((c, i) => ({ edit: `cuts[${i}]`, from: c.from, into: c.into, moved_in_opaque_px: c.taken,
+        retained_band_opaque_px: c.band, cleared_opaque_px: c.taken - c.band, under_filled_px: c.under ?? 0,
+        under_filled_opaque_px: c.underOpaque ?? 0, net_cleared_opaque_px: c.taken - c.band - (c.underOpaque ?? 0) })) }),
       ghost_px: ghost,
       recomposite: recompositeRecord(figures),
       ...(sceneRecord === null ? {} : { scene: sceneRecord }),

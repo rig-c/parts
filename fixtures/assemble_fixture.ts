@@ -67,6 +67,13 @@
  * - `topwear` 600 - 416 = 184; `bottomwear` 336 - 0 = 336; `shoes`
  *   120 - 32 = 88; `face` 144 - 56 = 88.
  *
+ * Value provenance (#817): hair retains its original 8 x 22 = 176 samples;
+ * the 72 new extension samples and 37 new rim samples differ from transparent
+ * raw hair. Topwear's 600, shoes' 120 and face's 144 equal their raw layers,
+ * including projection assignments of identical C. Every bottomwear sample
+ * changes Z to C at seamOverride (14 x 24 = 336). No hand edit is declared,
+ * so all five hand subtotals are zero. Landscape padding maps the same samples.
+ *
  * ## The recomposite block, derived
  *
  * Every part pixel is opaque and ends exactly `C` (projected, copied, a rim
@@ -294,11 +301,11 @@ export const EXPECTED_PARTS = {
   rig_size: [64, 64] as [number, number],
   scale_rig_per_source: 0.5,
   parts: [
-    { name: 'hair_back', from: 'head:back hair', x: 37, y: 10, w: 9, h: 35, opaque_px: 285, visible_px: 285, occluded_px: 0, projected_core_px: 72, source_px_taken: 68, visible_not_projected_px: 193, refused_drift_px: 0, merged_px: 133, seam_override_px: 0 },
-    { name: 'topwear', from: 'full:topwear', x: 10, y: 20, w: 20, h: 30, opaque_px: 600, visible_px: 600, occluded_px: 0, projected_core_px: 416, source_px_taken: 416, visible_not_projected_px: 184, refused_drift_px: 0, merged_px: 0, seam_override_px: 0 },
-    { name: 'bottomwear', from: 'full:bottomwear', x: 48, y: 30, w: 14, h: 24, opaque_px: 336, visible_px: 336, occluded_px: 0, projected_core_px: 200, source_px_taken: 0, visible_not_projected_px: 336, refused_drift_px: 200, merged_px: 0, seam_override_px: 336 },
-    { name: 'shoes', from: 'full:footwear', x: 10, y: 54, w: 20, h: 6, opaque_px: 120, visible_px: 120, occluded_px: 0, projected_core_px: 32, source_px_taken: 32, visible_not_projected_px: 88, refused_drift_px: 0, merged_px: 0, seam_override_px: 0 },
-    { name: 'face', from: 'head:face', x: 16, y: 8, w: 12, h: 12, opaque_px: 144, visible_px: 144, occluded_px: 0, projected_core_px: 64, source_px_taken: 56, visible_not_projected_px: 88, refused_drift_px: 0, merged_px: 0, seam_override_px: 0 },
+    { name: 'hair_back', from: 'head:back hair', x: 37, y: 10, w: 9, h: 35, opaque_px: 285, visible_px: 285, occluded_px: 0, projected_core_px: 72, source_px_taken: 68, visible_not_projected_px: 193, refused_drift_px: 0, merged_px: 133, seam_override_px: 0, provenance: { unchanged_layer_px: 176, hand_px: 0, automatic_px: 109, edits: [], automatic: [{ stage: 'extend' as const, px: 72 }, { stage: 'growRim' as const, px: 37 }] } },
+    { name: 'topwear', from: 'full:topwear', x: 10, y: 20, w: 20, h: 30, opaque_px: 600, visible_px: 600, occluded_px: 0, projected_core_px: 416, source_px_taken: 416, visible_not_projected_px: 184, refused_drift_px: 0, merged_px: 0, seam_override_px: 0, provenance: { unchanged_layer_px: 600, hand_px: 0, automatic_px: 0, edits: [], automatic: [] } },
+    { name: 'bottomwear', from: 'full:bottomwear', x: 48, y: 30, w: 14, h: 24, opaque_px: 336, visible_px: 336, occluded_px: 0, projected_core_px: 200, source_px_taken: 0, visible_not_projected_px: 336, refused_drift_px: 200, merged_px: 0, seam_override_px: 336, provenance: { unchanged_layer_px: 0, hand_px: 0, automatic_px: 336, edits: [], automatic: [{ stage: 'seamOverride' as const, px: 336 }] } },
+    { name: 'shoes', from: 'full:footwear', x: 10, y: 54, w: 20, h: 6, opaque_px: 120, visible_px: 120, occluded_px: 0, projected_core_px: 32, source_px_taken: 32, visible_not_projected_px: 88, refused_drift_px: 0, merged_px: 0, seam_override_px: 0, provenance: { unchanged_layer_px: 120, hand_px: 0, automatic_px: 0, edits: [], automatic: [] } },
+    { name: 'face', from: 'head:face', x: 16, y: 8, w: 12, h: 12, opaque_px: 144, visible_px: 144, occluded_px: 0, projected_core_px: 64, source_px_taken: 56, visible_not_projected_px: 88, refused_drift_px: 0, merged_px: 0, seam_override_px: 0, provenance: { unchanged_layer_px: 144, hand_px: 0, automatic_px: 0, edits: [], automatic: [] } },
   ],
   ghost_px: {
     'full:back hair': 0,
