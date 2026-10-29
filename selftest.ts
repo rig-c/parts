@@ -39562,19 +39562,32 @@ function runTreeSuite(): number {
     commandDrift(cliText.replace("  if (command === 'compose') return cmdCompose(rest);", "  if (command === 'compose') return cmdCompose(rest);\n  if (command === 'serve') return cmdServe(['--port']);"), stabilityText),
     commandDrift(cliText, stabilityText.replace('| `rig` | `--config`', '| rig | `--config`')),
     commandDrift(cliText, stabilityText.replace('<!-- /stable:commands -->', '')),
+    commandDrift(cliText, stabilityText.replace(rowOf('sheet'), rowOf('sheet').replace('`--source`, ', ''))),
+    commandDrift(cliText, stabilityText.replace(rowOf('inputs'), rowOf('inputs').replace('`--out`', '`--out`, `--palette`'))),
+    commandDrift(cliText, stabilityText.replace(rowOf('comfy'), rowOf('comfy').replace('`--host`, ', ''))),
+    commandDrift(cliText.replace('const TAKES = {', 'const OTHER_TAKES = {'), stabilityText),
+    commandDrift(cliText.replace("layers: { valued:", "layers: { unknown:"), stabilityText),
+    commandDrift(cliText, stabilityText.replace(rowOf('layers'), rowOf('layers').replace('`--full`, ', ''))),
   ];
   const plantsHit13 =
-    plants13[0].join() === 'command inputs is in cli.ts and not in the table' &&
+    plants13[0].includes('command inputs is in cli.ts and not in the table') &&
     plants13[1].join() === 'command serve is in the table and not in cli.ts,flag --port is in the table and not in cli.ts' &&
     plants13[2].join() === 'command serve is in cli.ts and not in the table,flag --port is in cli.ts and not in the table' &&
     plants13[3].some((p) => p.startsWith('a row the reader cannot read:')) &&
-    plants13[4].join() === `${STABILITY_DOC} holds no block between <!-- stable:commands --> and <!-- /stable:commands -->`;
+    plants13[4].join() === `${STABILITY_DOC} holds no block between <!-- stable:commands --> and <!-- /stable:commands -->` &&
+    plants13[5].includes('command sheet accepts --source and its row does not list it') &&
+    plants13[6].includes('command inputs lists --palette and does not accept it') &&
+    plants13[7].includes('command comfy paint accepts --host and its row does not list it') &&
+    plants13[8].includes('cli.ts holds no readable TAKES table') &&
+    plants13[9].some(p => p.startsWith('a TAKES row the reader cannot read:')) &&
+    plants13[10].includes('command layers accepts --full and its row does not list it');
   say(
     'TY13_THE_STABILITY_COMMAND_TABLE_IS_THE_COMMANDS_CLI_TS_DISPATCHES_AND_THE_FLAGS_IT_SPELLS',
     surface.commands.length > 0 && surface.flags.length > 0 && drift13.length === 0 && plantsHit13,
     `${STABILITY_DOC}: ${drift13.length === 0 ? `the table names the ${surface.commands.length} command(s) cli.ts dispatches (${surface.commands.join(', ')}) and the ${surface.flags.length} flag(s) it spells` : drift13.join('; ')}` +
-      `; planted: a row dropped -> ${plants13[0].join('; ') || 'not found'} | a row cli.ts lacks -> ${plants13[1].join('; ') || 'not found'} | a command and flag only cli.ts has -> ${plants13[2].join('; ') || 'not found'} | a command cell not in backticks -> ${plants13[3].join('; ') || 'not found'} | the closing marker gone -> ${plants13[4].join('; ') || 'not found'}`,
-    "issue #126 item 7: the stability statement is a promise about the CLI, so it is read off the CLI and held to it in both directions — a command or flag the page omits is a surface nobody promised, and one it names that cli.ts does not is a promise the package cannot keep. It holds the names; which command takes which flag is the CLI's, and the cli suite reads it from the help",
+      `; planted: a row dropped -> ${plants13[0].join('; ') || 'not found'} | a row cli.ts lacks -> ${plants13[1].join('; ') || 'not found'} | a command and flag only cli.ts has -> ${plants13[2].join('; ') || 'not found'} | a command cell not in backticks -> ${plants13[3].join('; ') || 'not found'} | the closing marker gone -> ${plants13[4].join('; ') || 'not found'}` +
+      `; per-command plants: sheet --source dropped -> ${plants13[5].join('; ') || 'not found'} | inputs --palette added -> ${plants13[6].join('; ') || 'not found'} | comfy paint --host dropped -> ${plants13[7].join('; ') || 'not found'} | TAKES marker gone -> ${plants13[8].join('; ') || 'not found'} | unread TAKES row -> ${plants13[9].join('; ') || 'not found'} | layers --full dropped -> ${plants13[10].join('; ') || 'not found'}`,
+    "issue #126 item 7: the stability statement is a promise about the CLI, so it is read off the CLI and held to it in both directions — a command or flag the page omits is a surface nobody promised, and one it names that cli.ts does not is a promise the package cannot keep. Command flag unions are also held to the parser's TAKES rows, with comfy subcommands separate; mode combinations remain the CLI's and the cli suite reads them from the help",
   );
 
   // TY14 — docs/STABILITY.md's config field list, held to the names the loader's object checks spell.
@@ -40613,7 +40626,30 @@ function commandDrift(cli: string, doc: string): string[] {
   const commands = sortedUnique(rows.map((l) => /^\| `([a-z][a-z-]*)` \|/.exec(l)?.[1]).filter((c): c is string => c !== undefined));
   const flags = sortedUnique([...block.matchAll(/`(--[a-z0-9][a-z0-9-]*)`/g)].map((m) => m[1]));
   const cliSide = cliSurface(cli);
+  // TAKES is the parser's own flag table. Repeated modes share a command;
+  // comfy's two subcommands keep separate rows.
+  const listed = new Map<string, string[]>();
+  for (const row of rows) {
+    const command = /^\| `([a-z][a-z-]*)` \|/.exec(row)?.[1];
+    if (command === undefined) continue;
+    const key = command === 'comfy' ? `comfy ${/^\| `comfy` \| `([^`]+)`/.exec(row)?.[1] ?? ''}` : command;
+    listed.set(key, sortedUnique([...(listed.get(key) ?? []), ...[...row.matchAll(/`(--[a-z0-9][a-z0-9-]*)`/g)].map(m => m[1])]));
+  }
+  const takes = /const TAKES = \{([\s\S]*?)\n\} as const/.exec(cli)?.[1];
+  const pairFaults: string[] = takes === undefined ? ['cli.ts holds no readable TAKES table'] : [];
+  for (const row of takes?.split('\n').filter(l => l.trim() !== '') ?? []) {
+    const parsed = /^\s*(?:'([^']+)'|([a-z][a-z-]*)): \{ valued: \[([^\]]*)\], switches: \[([^\]]*)\] \},$/.exec(row);
+    if (parsed === null) { pairFaults.push(`a TAKES row the reader cannot read: ${row.trim().slice(0, 60)}`); continue; }
+    const command = parsed[1] ?? parsed[2];
+    const accepted = sortedUnique([...`${parsed[3]},${parsed[4]}`.matchAll(/'(--[a-z0-9][a-z0-9-]*)'/g)].map(m => m[1]));
+    const named = listed.get(command) ?? [];
+    pairFaults.push(
+      ...oneWay(accepted, named, f => `command ${command} accepts ${f} and its row does not list it`),
+      ...oneWay(named, accepted, f => `command ${command} lists ${f} and does not accept it`),
+    );
+  }
   return [
+    ...pairFaults,
     ...unread.map((l) => `a row the reader cannot read: ${l.slice(0, 60)}`),
     ...oneWay(cliSide.commands, commands, (c) => `command ${c} is in cli.ts and not in the table`),
     ...oneWay(commands, cliSide.commands, (c) => `command ${c} is in the table and not in cli.ts`),
