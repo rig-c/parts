@@ -199,7 +199,7 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
   const islBeforeRigOut = join(root, 'isl-before-rig');
   const islBeforeCheckOut = join(root, 'isl-before-check');
   rigStage({ config: islBeforeDisk.config, parts: islBeforeDisk.parts, out: islBeforeRigOut }, runner, join(root, 'isl-before-scratch'), () => {});
-  const islBeforeCheck = runCheck(islBeforeRigOut, islBeforeCheckOut, runner, islBeforeDisk.parts, DEFAULT_PACK_MODE, undefined, undefined, false, true);
+  const islBeforeCheck = runCheck(islBeforeRigOut, islBeforeCheckOut, runner, islBeforeDisk.parts, DEFAULT_PACK_MODE, undefined, undefined, false, true, undefined, undefined, undefined, undefined, undefined, undefined, true);
   const beforeStill = readFrameSet(join(islBeforeCheckOut, STILL_DIR));
   const plantedOrderRef = flatComposite(islBeforeFix.parts, join(islBeforeDisk.parts, 'parts'), beforeStill.background);
   const plantedOrderSeam = seamFigures(plantedOrderRef, beforeStill.frames[0].image, islBeforeBuilt.rig.skeleton, beforeStill.viewport, beforeStill.background);
@@ -239,7 +239,7 @@ export function runExplicitMeshChecks(root: string, report: (name: string, ok: b
   const islHideRigOut = join(root, 'isl-hide-rig');
   const islHideCheckOut = join(root, 'isl-hide-check');
   rigStage({ config: islHideDisk.config, parts: islHideDisk.parts, out: islHideRigOut }, runner, join(root, 'isl-hide-scratch'), () => {});
-  const islHideCheck = runCheck(islHideRigOut, islHideCheckOut, runner, islHideDisk.parts, DEFAULT_PACK_MODE, undefined, undefined, false, true, 'no_cloth');
+  const islHideCheck = runCheck(islHideRigOut, islHideCheckOut, runner, islHideDisk.parts, DEFAULT_PACK_MODE, undefined, undefined, false, true, 'no_cloth', undefined, undefined, undefined, undefined, undefined, true);
   const hideStill = readFrameSet(join(islHideCheckOut, STILL_DIR, 'no_cloth'));
   const hideImg = hideStill.frames[0].image;
   const hideBg = hideStill.background;

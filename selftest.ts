@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { runExtremesChecks } from './tools/check_extremes.ts';
+import { selftestCliArgs } from './fixtures/check_options.ts';
 import { softOcclusionLine } from './src/assemble.ts';
 import { softOccluderFixture, softTrailDiff, yieldLimbCoverFixture, SOFT_SKIN } from './fixtures/soft_occluder.ts';
 import { writeHybridFixture } from './fixtures/hybrid_limb.ts';
@@ -4360,7 +4362,7 @@ function runBlinkConfigCases(say: (name: string, ok: boolean, detail: string, wh
     const rigCalls = calls.length;
     const lines: string[] = [];
     const built = build(
-      { config: join(dir, 'forged.json'), source: join(dir, 'painting.png'), full: join(dir, 'absent-full'), head: join(dir, 'absent-head'), out: join(dir, 'build-out'), seam: 'near-white', project: 'core', loop: false, pageEdges: DEFAULT_PAGE_EDGES },
+      { config: join(dir, 'forged.json'), source: join(dir, 'painting.png'), full: join(dir, 'absent-full'), head: join(dir, 'absent-head'), out: join(dir, 'build-out'), seam: 'near-white', project: 'core', loop: false, pageEdges: DEFAULT_PAGE_EDGES, noExtremes: true },
       { rig: counting('build-rig'), check: counting('build-check'), checkBin: 'counting', scratch },
       (l) => lines.push(l),
     );
@@ -4393,7 +4395,7 @@ function runBlinkConfigCases(say: (name: string, ok: boolean, detail: string, wh
     const twiceRigCalls = calls.length - before;
     const twiceLines: string[] = [];
     const twiceBuilt = build(
-      { config: join(dir, 'twice.json'), source: join(dir, 'painting.png'), full: join(dir, 'absent-full'), head: join(dir, 'absent-head'), out: join(dir, 'twice-build'), seam: 'near-white', project: 'core', loop: false, pageEdges: DEFAULT_PAGE_EDGES },
+      { config: join(dir, 'twice.json'), source: join(dir, 'painting.png'), full: join(dir, 'absent-full'), head: join(dir, 'absent-head'), out: join(dir, 'twice-build'), seam: 'near-white', project: 'core', loop: false, pageEdges: DEFAULT_PAGE_EDGES, noExtremes: true },
       { rig: counting('twice-build-rig'), check: counting('twice-build-check'), checkBin: 'counting', scratch },
       (l) => twiceLines.push(l),
     );
@@ -4424,7 +4426,7 @@ function runBlinkConfigCases(say: (name: string, ok: boolean, detail: string, wh
     const sharedRigCalls = calls.length - sharedBefore;
     const sharedLines: string[] = [];
     const sharedBuilt = build(
-      { config: join(dir, 'shared.json'), source: join(dir, 'painting.png'), full: join(dir, 'absent-full'), head: join(dir, 'absent-head'), out: join(dir, 'shared-build'), seam: 'near-white', project: 'core', loop: false, pageEdges: DEFAULT_PAGE_EDGES },
+      { config: join(dir, 'shared.json'), source: join(dir, 'painting.png'), full: join(dir, 'absent-full'), head: join(dir, 'absent-head'), out: join(dir, 'shared-build'), seam: 'near-white', project: 'core', loop: false, pageEdges: DEFAULT_PAGE_EDGES, noExtremes: true },
       { rig: counting('shared-build-rig'), check: counting('shared-build-check'), checkBin: 'counting', scratch },
       (l) => sharedLines.push(l),
     );
@@ -4951,8 +4953,8 @@ function runSheetSuite(): number {
 interface FixtureChildDiagnostic { argv: string[]; status: number; stdout: string; stderr: string }
 type FixtureCaseReporter = (name: string, ok: boolean, detail: string, why: string) => void;
 
-function runCli(args: string[], capture?: (child: FixtureChildDiagnostic) => void): { status: number; out: string } {
-  const argv = [join(ROOT, 'cli.ts'), ...args];
+function runCli(args: string[], capture?: (child: FixtureChildDiagnostic) => void, keepDefaultExtremes = false): { status: number; out: string } {
+  const argv = [join(ROOT, 'cli.ts'), ...selftestCliArgs(args, keepDefaultExtremes)];
   const r = spawnSync('bun', argv, { cwd: ROOT, encoding: 'utf8' });
   capture?.({ argv: ['bun', ...argv], status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' });
   return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
@@ -5013,6 +5015,22 @@ function usageDrift(run: (args: string[]) => { status: number; out: string }, su
 function runCliSuite(): number {
   section('cli: the command surface');
   const { say, bad } = counter();
+  const measureArgs829 = ['check', '--rig', 'fixture', '--out', 'result'];
+  const buildArgs829 = ['build', '--config', 'fixture.json', '--out', 'result'];
+  const missingArgs829 = ['check', '--rig'];
+  const quietArgs829 = selftestCliArgs(measureArgs829);
+  say('CL829_ONLY_TEST_MEASUREMENT_CALLS_OPT_OUT_AND_DEFAULT_CONTROLS_CAN_KEEP_EXTREMES',
+    quietArgs829.join('|') === [measureArgs829[0], '--no-extremes', ...measureArgs829.slice(1)].join('|') &&
+      selftestCliArgs(buildArgs829)[1] === '--no-extremes' &&
+      selftestCliArgs(quietArgs829).filter(a => a === '--no-extremes').length === 1 &&
+      selftestCliArgs(measureArgs829, true).join('|') === measureArgs829.join('|') &&
+      selftestCliArgs(['check', '--not-a-flag']).join('|') === 'check|--not-a-flag' &&
+      selftestCliArgs(['retune', '--rig', 'fixture']).join('|') === 'retune|--rig|fixture' &&
+      selftestCliArgs(missingArgs829).join('|') === missingArgs829.join('|') &&
+      selftestCliArgs([...buildArgs829, '--idle-keys']).at(-1) === '--idle-keys' &&
+      [...buildArgs829, '--idle-keys', '--no-extremes'].at(-1) !== '--idle-keys',
+    'check/build adapters insert the opt-out after the command; terminal missing-value flags remain terminal (the appended plant does not); CK01 keeps the default',
+    'HQ follow-up to issue #829: existing-bar tests need no extra pictures; actual default-on controls must remain explicit');
   const altLexCases = [
     {
       "value": "side=C:\\x\\y:C:\\x\\full:abc1234",
@@ -17446,11 +17464,11 @@ function runMotionSeamWorldIntegration(dir: string, say: (name: string, ok: bool
     }
     return r;
   };
-  const defaults = runCheck(spec, join(dir, 'world-default'), tap, join(dir, 'cut'));
+  const defaults = runCheck(spec, join(dir, 'world-default'), tap, join(dir, 'cut'), undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, true);
   const defaultCalls = calls.splice(0);
-  const custom = runCheck(spec, join(dir, 'world-custom'), tap, join(dir, 'cut'), DEFAULT_PACK_MODE, undefined, undefined, false, false, undefined, false, env);
+  const custom = runCheck(spec, join(dir, 'world-custom'), tap, join(dir, 'cut'), DEFAULT_PACK_MODE, undefined, undefined, false, false, undefined, false, env, undefined, undefined, undefined, true);
   const customCalls = calls.splice(0);
-  const plain = runCheck(join(dir, 'cut', 'rig'), join(dir, 'world-plain'), tap, join(dir, 'cut'));
+  const plain = runCheck(join(dir, 'cut', 'rig'), join(dir, 'world-plain'), tap, join(dir, 'cut'), undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, true);
   const plainCalls = calls.splice(0);
   const worlds = custom.motionSeam.worlds;
   const sourceMatches = worlds !== undefined && JSON.stringify(worlds.default.rows) === JSON.stringify(customCalls[1]?.rows) && JSON.stringify(worlds.still.rows) === JSON.stringify(customCalls[2]?.rows);
@@ -18379,11 +18397,12 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
   let finishInputContract = (): void => { throw new Error('CHECK_TEMP_INPUTS: the generated input contract was not reached'); };
   const dir = temp('check');
   try {
+    runExtremesChecks(join(dir, 'extremes-controls'), (name, pass, detail) => say(name, pass, detail, 'issue #829: observations and opt-out preserve the gated check'), rigcRunnerAt(suiteRigc(), spawnRigc));
     const rig = join(dir, 'rig');
     writeCheckRig(rig);
     const before = listing(rig);
     const out = join(dir, 'out');
-    const ok = runCli(['check', '--rig', rig, '--out', out]);
+    const ok = runCli(['check', '--rig', rig, '--out', out], undefined, true);
     const fig = readJsonFile(join(out, 'check.json'));
     const pack = parsePackLines(existsSync(join(out, 'gate_spine-html.txt')) ? readFileSync(join(out, 'gate_spine-html.txt'), 'utf8').split('\n') : []);
     const outputs = ['gate_spine-html.txt', 'contact.png', 'motion_heat.png', 'check.json', 'build/skeleton.json', 'build/skeleton.atlas', 'build/skeleton.png', 'idle_frames/frames.json', 'idle_frames/idle/f0000.png'];
@@ -18396,6 +18415,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         Object.keys(fig).join(',') === CHECK_KEYS.join(',') &&
         fig.PASS === true &&
         missing.length === 0 &&
+        existsSync(join(out, 'extremes', 'idle', 'extremes.png')) && ok.out.includes('EXTREMES \"idle\" geometry pair') &&
         pack.length === 1 &&
         pack[0].regions === CHECK_PARTS.length &&
         ok.out.includes(SPINEBOY_YARDSTICK) &&
@@ -18415,7 +18435,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     );
     say(
       'CK02_TWO_RUNS_WRITE_THE_SAME_BYTES',
-      again.status === 0 && same.length === 5,
+      again.status === 0 && same.length === 5 && !existsSync(join(dir, 'out2', 'extremes')) && !again.out.includes('EXTREMES '),
       `second run exit ${again.status}; ${same.length} of 5 outputs byte-identical (${same.join(', ')})`,
       'determinism is a contract: the same rig must write the same check.json, heat map and gate file, or no diff of them means anything',
     );
@@ -19143,7 +19163,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       if (request[0] === 'render' && request.includes('--animation') && request[request.indexOf('--animation') + 1] === 'still' && !request.includes('--viewport')) request[request.indexOf('--max') + 1] = '192';
       scopeCalls705.push(request); return live705(request);
     };
-    const scopeResult705 = runCheck(scopeHome705, join(scopeHome705, 'out'), tap705, undefined, DEFAULT_PACK_MODE, undefined, undefined, true, true, undefined, true);
+    const scopeResult705 = runCheck(scopeHome705, join(scopeHome705, 'out'), tap705, undefined, DEFAULT_PACK_MODE, undefined, undefined, true, true, undefined, true, undefined, undefined, undefined, undefined, true);
     const scopeFigures705 = scopeResult705.figures;
     const canonicalCalls705 = scopeCalls705.filter(args => args[0] === 'render' && args.includes('--viewport'));
     const canonicalBuiltOnce705 = canonicalCalls705.every(args => scopeCalls705.filter(call => call[0] === 'build' && call[call.indexOf('--out') + 1] === args[args.indexOf('--candidate') + 1]).length === 1);
@@ -19186,7 +19206,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       JSON.stringify({ actualEdgeFrameWidth: edgeFrame705.width, actualBaseA: scopeFigures705.seam_scope?.denominator_px, sourceRightCells: scopeRightCells705, sourceTexel: [95, 46], sourceRgba: edgeRgba705, stockFrameRgba: edgeRead705, actualBoundsAndCommonU: scopeFigures705.seam_scope?.domain, pinned: edgeSidecar705.pinned }),
       'the existing CK708 stock run: transparent last two columns extend the actual quad outside authored96, base bounds reach98, while selected extent40/52 reach100/112 and grow common U to112 without denominator dilution; opaque95,46 remains exact. CK709 separately counts actual opaque outside art as error, not a clipped PASS.');
 
-    const failedScope705 = runCheck(failHome705, join(failHome705, 'out'), live705, undefined, DEFAULT_PACK_MODE, undefined, undefined, true, true, undefined, true);
+    const failedScope705 = runCheck(failHome705, join(failHome705, 'out'), live705, undefined, DEFAULT_PACK_MODE, undefined, undefined, true, true, undefined, true, undefined, undefined, undefined, undefined, true);
     const inheritedSets705 = ['extent40', 'extent52'].map(name => failedScope705.figures.sets?.[name]);
     const measuredBounds705 = failedScope705.figures.seam_scope?.domain;
     const failedRightCells705 = ['base', 'extent40', 'extent52'].map(state => sourceRightCells705(measuredBounds705, state));
@@ -20325,7 +20345,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       calls.push(args.join(' '));
       return args[0] === '--version' ? { status: 0, out: '1.3.0\n' } : { status: 1, out: 'this stub builds nothing' };
     };
-    const old = refusals(() => runCheck(rig, join(dir, 'old-rigc-out'), oldRigc));
+    const old = refusals(() => runCheck(rig, join(dir, 'old-rigc-out'), oldRigc, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, true));
     const accepts = (out: string): boolean => refusals(() => requireRigcVersion(() => ({ status: 0, out }))) === null;
     say(
       'CK35_A_RIGC_BELOW_THE_GEOMETRY_VERSION_IS_REFUSED_BY_VERSION_BEFORE_ANYTHING_IS_BUILT',
@@ -21949,8 +21969,8 @@ function runRigcIdentityCases(say: (name: string, ok: boolean, detail: string, w
     writeCheckRig(rig);
     const walked = findRigc(nested, '');
     const pinned = refusals(() => packageRigc(nested));
-    const oldCheck = refusals(() => runCheck(rig, join(dir, 'out-old'), rigcRunnerAt(old, spawnRigc)));
-    const olderCheck = refusals(() => runCheck(rig, join(dir, 'out-older'), rigcRunnerAt(older, spawnRigc)));
+    const oldCheck = refusals(() => runCheck(rig, join(dir, 'out-old'), rigcRunnerAt(old, spawnRigc), undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, true));
+    const olderCheck = refusals(() => runCheck(rig, join(dir, 'out-older'), rigcRunnerAt(older, spawnRigc), undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, true));
     const own = packageRigc(ROOT);
     // TY10 holds this actual CLI version to the installed manifest; check reads generated data only.
     const ownVersionCall = spawnRigc(own, ['--version']);
@@ -24312,8 +24332,9 @@ function runBuildSuite(): number {
   const { say: caseSay, bad } = counter();
   const captured: Array<{ args: string[]; status: number | null; stdout: string | null; stderr: string | null; error?: string }> = [];
   const runBuildCli = (args: string[]): { status: number; out: string } => {
-    const r = spawnSync('bun', [join(ROOT, 'cli.ts'), ...args], { cwd: ROOT, encoding: 'utf8' });
-    captured.push({ args, status: r.status, stdout: r.stdout, stderr: r.stderr, error: r.error?.message });
+    const forwarded = selftestCliArgs(args);
+    const r = spawnSync('bun', [join(ROOT, 'cli.ts'), ...forwarded], { cwd: ROOT, encoding: 'utf8' });
+    captured.push({ args: forwarded, status: r.status, stdout: r.stdout, stderr: r.stderr, error: r.error?.message });
     return { status: r.status ?? 1, out: (r.stdout ?? '') + (r.stderr ?? '') };
   };
   const say = (name: string, ok: boolean, detail: string, why: string): void => {
@@ -24539,7 +24560,7 @@ function runBuildSuite(): number {
 
     // Reuse the green generated build above: this is the real check function's report, not a hand-shaped stand-in.
     const reportRunner = rigcRunnerAt(suiteRigc(), spawnRigc);
-    const realReport = checkStage({ rig: join(out, 'rig'), parts: out, out: join(dir, 'receipt-check') }, reportRunner, suiteRigc(), () => {});
+    const realReport = checkStage({ rig: join(out, 'rig'), parts: out, out: join(dir, 'receipt-check'), noExtremes: true }, reportRunner, suiteRigc(), () => {});
     const noMapReport = { ...realReport };
     delete noMapReport.sweepSteps;
     const withMapReport = { ...realReport, sweepSteps: new Map([['fixture 0', { left: 2, right: 3 }], ['fixture 1', { left: 5, right: 7 }]]) };
@@ -25030,7 +25051,7 @@ function runBuildSuite(): number {
       return name;
     };
     const runIn = (args: string[]): { status: number; out: string } => {
-      const r = spawnSync('bun', [join(ROOT, 'cli.ts'), ...args], { cwd: dir, encoding: 'utf8' });
+      const r = spawnSync('bun', [join(ROOT, 'cli.ts'), ...selftestCliArgs(args)], { cwd: dir, encoding: 'utf8' });
       return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
     };
     const flagOut = join(dir, 'req-flag');
@@ -50814,7 +50835,7 @@ function runBuildCostSuite(): number {
       const r = spawnSync(bin, [...args], { encoding: 'utf8', maxBuffer: 1 << 28 });
       return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
     };
-    const ce = existsSync(join(pos.out, 'rig.json')) ? refusals(() => checkStage({ rig: pos.out, parts: pos.parts, out: join(root, 'pos-check') }, runner10, bin, () => {})) : null;
+    const ce = existsSync(join(pos.out, 'rig.json')) ? refusals(() => checkStage({ rig: pos.out, parts: pos.parts, out: join(root, 'pos-check'), noExtremes: true }, runner10, bin, () => {})) : null;
     const renders = checkCalls.filter((c) => c[0] === 'render');
     const keys10 = renders.map(renderKey);
     const sizeChanged = renders.length === 0 ? [] : renders[0].map((a, i) => (renders[0][i - 1] === '--max' ? String(Number(a) + 1) : a));
@@ -50822,7 +50843,7 @@ function runBuildCostSuite(): number {
       'BC10_THE_RIG_STAGE_RENDERS_NOTHING_CHECKS_RENDERS_ARE_PAIRWISE_DISTINCT_AND_A_SIZE_CHANGE_IS_NOT_THE_SAME_RENDER',
       ce === null &&
         pos.calls.every((c) => c.args[0] !== 'render') &&
-        renders.length > 0 &&
+        renders.length > 0 && renders.every(args => !args.includes('--extremes')) &&
         new Set(keys10).size === keys10.length &&
         renderKey(sizeChanged) !== keys10[0] &&
         renderKey([...renders[0]]) === keys10[0],
@@ -51407,7 +51428,7 @@ function runFrontSlotSuite(): number {
     sharedSets.sets.second = { ...sharedSets.sets.chest, slots: second.slots };
     writeFileSync(setsPath, JSON.stringify(sharedSets));
     const report = runCheck(join(shared, 'rig'), join(shared, 'zero-band-check'), rigcRunnerAt(suiteRigc(), spawnRigc), shared,
-      undefined, undefined, undefined, false, true, undefined, true);
+      undefined, undefined, undefined, false, true, undefined, true, undefined, undefined, undefined, undefined, true);
     const root = report.motionSeam.roots;
     const unmeasured = root?.unmeasured?.[0];
     const names = motionSeamLines(report.motionSeam);

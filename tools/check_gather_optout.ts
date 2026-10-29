@@ -103,7 +103,7 @@ export function runGatherOptOutChecks(dir: string, say: Say, runner: RigcRunner,
     const result = rigStage({ config: path, parts: home, out: join(home, 'rig') }, runner, join(home, 'scratch'), () => {});
     say(`${label}_AUTHORED_ORDER`, equal(result.rig.slots.map((s) => s.name), parts.parts.map((p) => p.name)), JSON.stringify(result.rig.slots.map((s) => s.name)));
     say(`${label}_ONLY_SLOT_ORDER_CHANGES`, equal(gatherOutputBytes({ ...result, rig: { ...result.rig, slots: original.rig.slots } }), gatherOutputBytes(original)), 'all transforms, bindings, motion, images and reports unchanged');
-    const report = runCheck(join(home, 'rig'), join(home, 'check'), runner, home, undefined, undefined, undefined, true, true);
+    const report = runCheck(join(home, 'rig'), join(home, 'check'), runner, home, undefined, undefined, undefined, true, true, undefined, undefined, undefined, undefined, undefined, undefined, true);
     say(`${label}_ACTUAL_SEAM_GATE`, !report.problems.some((p) => p.code === 'CHECK_SEAM_WITHIN_BAR') && typeof report.figures.seam_px_over_40 === 'number', JSON.stringify({ seam: report.figures.seam_px_over_40, unrelated: [...new Set(report.problems.map((p) => p.code))] }));
     const unit = setup(home, runner, result.rig, parts);
     say(`${label}_SETUP_EQUALS_FLAT_RGBA`, unit.different === 0 && unit.mean === 0, JSON.stringify(unit));

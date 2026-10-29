@@ -1631,6 +1631,8 @@ export interface CheckStageInput {
   seamPairs?: boolean;
   /** `check --keep-stills` (issue #209): leave the setup-pose still and its `frames.json` under {@link STILL_DIR}. */
   keepStills?: boolean;
+  /** Skip the extra extremes renders and remove stale extremes outputs (issue #829). */
+  noExtremes?: boolean;
   /** `check --set <name>` (issue #454): measure one declared alternate set's setup-pose seam and recomposite figures. */
   set?: string;
   /** `check --all-sets` (issue #454): measure every declared alternate set's setup-pose seam and recomposite figures. */
@@ -1873,11 +1875,12 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   const entryLine = versionLines.find((l) => l.startsWith('entry:'));
   log(`  ${rigcIdentity(bin, v)}${entryLine === undefined ? '' : `; ${entryLine}`}`);
   const mode: PackMode = { pageEdges: input.pageEdges ?? DEFAULT_PAGE_EDGES, packShape: input.packShape ?? DEFAULT_PACK_SHAPE };
-  const r = runCheck(input.rig, input.out, rigc, input.parts, mode, input.source, input.requirements, input.seamPairs === true, input.keepStills === true, input.set, input.allSets === true, input.environment, input.requirementsAs, input.config, input.windBand);
+  const r = runCheck(input.rig, input.out, rigc, input.parts, mode, input.source, input.requirements, input.seamPairs === true, input.keepStills === true, input.set, input.allSets === true, input.environment, input.requirementsAs, input.config, input.windBand, input.noExtremes === true);
   if (r.figures.environment !== undefined) log(`  ${environmentLine(r.figures.environment)}`);
   log(`  gate rig-play (rigc ${packedBuildLabel(mode)}), verbatim:`);
   for (const l of r.gateHtml) log(l);
   for (const l of packLines(r)) log(`  ${l}`);
+  for (const line of r.extremes ?? []) log(`  ${line}`);
   const fig = r.figures;
   if (r.idle === null) log(`  loop: SKIP — ${fig.skipped?.loop ?? ''}`);
   else log(`  ${loopCheckLine(r.idle, fig.loop_max_diff, fig.loop_physics?.length ?? 0)}`);
@@ -2213,6 +2216,8 @@ export interface BuildInput {
   seamPairs?: boolean;
   /** `--keep-stills`, forwarded to the check as `check` takes it (issue #257): the setup-pose still under `check/setup_still/`; absent, nothing moves. */
   keepStills?: boolean;
+  /** Skip the extra extremes renders and remove stale extremes outputs (issue #829). */
+  noExtremes?: boolean;
   /** `--alt`, forwarded to the assemble stage as `assemble` takes it (issue #454). */
   alts?: readonly AlternateCliInput[];
   /** `--set <name>`, forwarded to the check as `check` takes it (issue #454). */
@@ -2249,6 +2254,7 @@ export const CHECK_FLAGS_IN_BUILD: Readonly<Record<string, CheckFlagInBuild>> = 
   '--all-sets': { as: 'forwarded' },
   '--seam-pairs': { as: 'forwarded' },
   '--keep-stills': { as: 'forwarded' },
+  '--no-extremes': { as: 'forwarded' },
   '--environment': { as: 'forwarded' },
   '--wind-band': { as: 'forwarded' },
 };
@@ -2414,7 +2420,7 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
 
   let report: CheckReport;
   try {
-    report = stages.check({ rig: join(out, 'rig'), parts: out, out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(req === null ? {} : { requirements: req.read, requirementsAs: req.recorded }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }), ...(input.windBand === undefined ? {} : { windBand: input.windBand }), ...(configRecord === null ? {} : { config: configRecord }) }, run.check, run.checkBin, prefixed('check'));
+    report = stages.check({ rig: join(out, 'rig'), parts: out, out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(req === null ? {} : { requirements: req.read, requirementsAs: req.recorded }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, noExtremes: input.noExtremes === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }), ...(input.windBand === undefined ? {} : { windBand: input.windBand }), ...(configRecord === null ? {} : { config: configRecord }) }, run.check, run.checkBin, prefixed('check'));
   } catch (err) {
     return refused('check', err);
   }
