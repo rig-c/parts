@@ -28,6 +28,9 @@ jobs:
   # a core for 1027.5 s. So the selftest's units — a suite, or one public
   # example of a suite that builds every example — run across three jobs, as
   # `selftest.ts`'s SHARDS assigns them, and `test` below merges their records.
+  # Issue #849 rebalances that assignment from three recent CI runs' unit clocks;
+  # its derivation is beside SHARDS. The timeout and two-worker default stay as
+  # measured; three post-change CI runs must confirm every job is under 20 min.
   # A shard judges nothing: its record holds every line its units printed, and
   # the merge prints and counts them as one whole run would.
   #
