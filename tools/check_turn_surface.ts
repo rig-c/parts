@@ -1,4 +1,5 @@
 /** Weighted surface controls: flat art, analytic ramps, and the mandatory Core gate. */
+import { runTurnUnitChecks } from './check_turn_units.ts';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
@@ -64,6 +65,7 @@ function displacementError(built: RigOutput, plant: 'none' | 'plate' | 'weight-t
 }
 
 export function runTurnSurfaceChecks(dir: string, say: Say): void {
+  runTurnUnitChecks(say);
   const f = weightedSurfaceFixture(), before = JSON.stringify(f.config), built = buildRig(parseConfig(f.config), f.parts, f.images);
   const old = weightedSurfaceFixture(false), plain = buildRig(parseConfig(old.config), old.parts, old.images);
   const sameMeshes = f.parts.parts.every(p => JSON.stringify(meshOf(built, p.name)) === JSON.stringify(meshOf(plain, p.name)));

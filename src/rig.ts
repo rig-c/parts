@@ -1132,6 +1132,8 @@ export interface AttachmentSetsFile {
 }
 
 export interface RigOutput {
+  /** Sample-support warnings for the build report only; no emitted-file field. */
+  turnWarnings?: Problem[];
   depthReferences?: Array<{ part: string; size: [number, number]; depth: PartDepthReference }>;
   rig: RigSpec;
   /** Internal explicit-layout provenance; serialized only as an external companion. */
@@ -3653,8 +3655,10 @@ export function buildWaistPairSource(
   for (const [bName, bEntry] of B) {
     boneLandmarks.set(bName, [bEntry.x, bEntry.y]);
   }
+  const turnWarnings: Problem[] = [];
   if (cfg.turn?.roles !== undefined || cfg.turn?.body !== undefined) {
     buildDepth25DTurn(rig, motion, {
+      warnings: turnWarnings,
       turn: cfg.turn,
       parts: parts.parts,
       images,
@@ -3717,6 +3721,7 @@ export function buildWaistPairSource(
     autoMotion,
     faceAxis,
     turn: turned?.rows ?? null,
+    ...(turnWarnings.length === 0 ? {} : { turnWarnings }),
     ...(sets === undefined ? {} : { sets }),
     ...(explicitLayout.plan === undefined ? {} : { layout: explicitLayout.plan }),
   };

@@ -1478,6 +1478,8 @@ export function sampleUnitPartDepth(scalar: Raster, art: Raster, ref: PartDepthR
 }
 
 export interface Depth25DTurnOptions {
+  /** Report-only diagnostics; never serialized into the rig or motion. */
+  warnings?: Problem[];
   turn: TurnSpec;
   parts: ReadonlyArray<{ name: string; x: number; y: number; w: number; h: number; depth?: PartDepthReference }>;
   images: ReadonlyMap<string, Raster>;
@@ -1684,6 +1686,23 @@ function buildDepth25DTurnGroup(
           const padY = Math.floor((ext.height - rec.h) / 2);
           const lx = Math.max(0, Math.min(ext.width - 1, Math.round(pt[0] - rec.x + padX)));
           const ly = Math.max(0, Math.min(ext.height - 1, Math.round(pt[1] - rec.y + padY)));
+          // The scalar extension has opaque alpha even where the source art
+          // supplies no opaque support. Report that extrapolation, not its value.
+          if (opts.warnings !== undefined) {
+            const art = opts.images.get(rec.name);
+            const rawX = pt[0] - rec.x, rawY = pt[1] - rec.y;
+            const outside = rawX < 0 || rawY < 0 || rawX > rec.w - 1 || rawY > rec.h - 1;
+            const artX = Math.max(0, Math.min(rec.w - 1, lx - padX));
+            const artY = Math.max(0, Math.min(rec.h - 1, ly - padY));
+            const alpha = art?.data[(artY * rec.w + artX) * 4 + 3];
+            if (alpha !== undefined && (outside || alpha !== 255)) {
+              opts.warnings.push({
+                code: 'RIG_TURN_UNIT_DEPTH_SUPPORT',
+                object: `${group.fieldPrefix}.roles.${part}`,
+                detail: `unit part "${part}" (bone "${bName}") samples surface "${rec.name}" sheet "${rec.depth.image}" at raw crop [${pt[0]}, ${pt[1]}] (${outside ? 'outside' : 'inside'} source sample bounds [${rec.x}, ${rec.y}]..[${rec.x + rec.w - 1}, ${rec.y + rec.h - 1}]); sampled art [${artX}, ${artY}] has art alpha ${alpha}, expected 255 without clamping; the existing extended scalar sample is retained; author ${group.fieldPrefix}.unitDepths.${part} for an explicit calibrated depth`,
+              });
+            }
+          }
           const zUnit = levelToDepthZ(ext.data[(ly * ext.width + lx) * 4], rec.depth);
           resolved = pyRound(pivot + (zUnit - zRef), 4);
         }
