@@ -47,7 +47,7 @@ function build(dir: string, runner: RigcRunner): string {
 /** `check --set chest --keep-stills` over a built directory; returns the check directory. */
 function check(out: string, runner: RigcRunner, set: string | undefined = 'chest'): { dir: string; sets: Json } {
   const dir = join(out, 'check');
-  const report = runCheck(join(out, 'rig'), dir, runner, out, undefined, undefined, undefined, false, true, set) as unknown as Json;
+  const report = runCheck(join(out, 'rig'), dir, runner, out, undefined, undefined, undefined, false, true, set, undefined, undefined, undefined, undefined, undefined, true) as unknown as Json;
   const figures = (report.figures ?? {}) as Json;
   return { dir, sets: (figures.sets ?? report.sets ?? {}) as Json };
 }

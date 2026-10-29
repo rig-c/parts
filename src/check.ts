@@ -36,6 +36,7 @@ import { baseAnchorMoves, type AnchorRegion } from './baseanchor.ts';
  * | `idle_frames/` | `rigc render --animation idle --fps 12 --max 640 --geometry`: `frames.json` + `idle/f*.png` + `idle/geometry.json` (each mesh's skinned vertices, which `TEXTURE_STRETCH` reads, every attachment's posed triangles, which `TIP_OVER_ROOT` and both halves of `STILL_REGIONS_DARK` read since issues #118 and #123, and every bone's world transform, which the face half reads its head bone from) |
  * | `contact.png` | rigc's own contact sheet of that render, copied out |
  * | `motion_heat.png` | frame 0 in grey with each pixel's largest change across the idle in red |
+ * | `extremes/<anim>/extremes.png`, `extremes.json` | core min/max/diff observations at 12 fps, scale 1; static geometry writes a named SKIP and JSON only; `--no-extremes` removes stale diagnostics and runs no extra render |
  * | `check.json` | the figures below and `PASS` |
  * | `requirements/` | under `--requirements` only (issue #93): `as-declared/<animation>/`, and per follow `released/<name>/` and `full/<name>/` — rigc renders with `--geometry` ({@link measureRequirements}) |
  *
@@ -2960,6 +2961,8 @@ export function requirementsNotPass(fig: Readonly<Record<string, unknown>>): str
 }
 
 export interface CheckReport {
+  /** Core EXTREMES summaries and named SKIPs; diagnostics, never check.json or a bar. */
+  extremes?: string[];
   figures: CheckFigures;
   gateHtml: string[];
   pack: PackLine[];
@@ -5741,6 +5744,56 @@ export function windBandLines(line: WindBandLine, plant: WindBandPlant = {}): st
 }
 
 /**
+ * Issue #829: observations only. The fitted world box belongs to rigc; changing
+ * its grid to one pixel per world unit makes the panels native, without a
+ * second framing implementation. Each animation is rendered separately to
+ * release its sampled poses before the next. Only the two observation files
+ * survive; the ordinary frames and contact sheets are scratch.
+ */
+function renderExtremes(build: string, out: string, animations: readonly string[], frames: unknown, render: RigcRunner): string[] {
+  if (animations.length === 0) return ['EXTREMES SKIP: CHECK_EXTREMES_NO_ANIMATIONS — no animation in motion.json'];
+  const scratch = join(out, '_extremes');
+  const dest = join(out, 'extremes');
+  try {
+    if (!isRecord(frames) || !isRecord(frames.viewport)) throw new Error('the existing render has no fitted viewport');
+    const vp = frames.viewport;
+    for (const key of ['x', 'y', 'width', 'height']) {
+      const value = vp[key];
+      if (typeof value !== 'number' || !Number.isFinite(value) || ((key === 'width' || key === 'height') && value <= 0)) throw new Error(`fitted viewport.${key} is ${JSON.stringify(value)}`);
+    }
+    mkdirSync(scratch, { recursive: true });
+    const grid = join(scratch, 'native.json');
+    writeFileSync(grid, JSON.stringify({ spec: 'rigc-frames/1', viewport: { ...vp, scale: 1, pixelWidth: Math.max(1, Math.round(vp.width as number)), pixelHeight: Math.max(1, Math.round(vp.height as number)) } }));
+    const lines: string[] = [];
+    for (const animation of animations) {
+      const rendered = join(scratch, 'render');
+      const call = render(['render', '--candidate', build, '--animation', animation, '--fps', String(IDLE_FPS), '--viewport-from', grid, '--extremes', '--out', rendered]);
+      if (call.status !== 0) throw new Error(`render --extremes ${JSON.stringify(animation)} exited ${call.status}: ${call.out.trim()}${rigcRanClause(call)}`);
+      const summaries = call.out.split('\n').map(line => line.trim().replace(/^\.\.\s+/, '')).filter(line => line.startsWith('EXTREMES '));
+      if (summaries.length === 0) throw new Error(`render --extremes ${JSON.stringify(animation)} printed no EXTREMES summary`);
+      // The sidecar owns directory naming, including core's escaping of names.
+      const sidecar = JSON.parse(readFileSync(join(rendered, 'frames.json'), 'utf8')) as { sets: Array<{ animation: string; dir: string }> };
+      const set = sidecar.sets.find(row => row.animation === animation);
+      if (set === undefined) throw new Error(`render --extremes has no set for ${JSON.stringify(animation)}`);
+      const source = join(rendered, set.dir), target = join(dest, set.dir);
+      mkdirSync(target, { recursive: true });
+      copyFileSync(join(source, 'extremes.json'), join(target, 'extremes.json'));
+      if (existsSync(join(source, 'extremes.png'))) copyFileSync(join(source, 'extremes.png'), join(target, 'extremes.png'));
+      lines.push(...summaries);
+      rmSync(rendered, { recursive: true, force: true });
+    }
+    return lines;
+  } catch (err) {
+    // Diagnostics never add a measured bar or change the gate's verdict. An
+    // incomplete observation is explicitly unavailable, not a partial sheet set.
+    rmSync(dest, { recursive: true, force: true });
+    return [`EXTREMES SKIP: CHECK_EXTREMES_RENDER_FAILED — ${err instanceof Error ? err.message : String(err)}`];
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+/**
  * Run the whole check. Refuses (throws a PartsError) when the inputs are
  * unreadable or a rigc step that everything after it depends on is red — the
  * gate file is written first, so the refusal's evidence is on disk. Otherwise
@@ -5766,7 +5819,7 @@ export function windBandLines(line: WindBandLine, plant: WindBandPlant = {}): st
  * MEASURABLE is a problem. Without it nothing here reads, writes or prints
  * anything it did not before.
  */
-export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string): CheckReport {
+export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string, noExtremes = false): CheckReport {
   let inp: CheckInputs;
   let reqFile: RequirementsFile | null = null;
   let reqRecord: RequirementsFileRecord | null = null;
@@ -5851,7 +5904,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const foldDir = join(out, FOLD_SCRATCH);
   const seamMotionDir = join(out, MOTION_SEAM_SCRATCH);
   const windBandDir = join(out, WIND_BAND_SCRATCH);
-  for (const d of [buildDir, idleDir, stillDir, isoDir, loopDir, seamDir, keptDir, join(out, 'setup_still_auto'), foldDir, seamMotionDir, windBandDir]) rmSync(d, { recursive: true, force: true });
+  for (const d of [join(out, 'extremes'), join(out, '_extremes'), buildDir, idleDir, stillDir, isoDir, loopDir, seamDir, keptDir, join(out, 'setup_still_auto'), foldDir, seamMotionDir, windBandDir]) rmSync(d, { recursive: true, force: true });
   const written: string[] = [];
   const write = (name: string, data: string): void => {
     writeFileSync(join(out, name), data);
@@ -5917,6 +5970,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       rmSync(windBandDir, { recursive: true, force: true });
     }
   }
+  let extremesFrames: unknown = null;
   let folds: FoldsLine | null = null;
   const foldProblems: Problem[] = [];
   // Issue #348: the feet the level line reads, off parts.json and rig.json; none, and nothing below moves.
@@ -6046,6 +6100,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
             level = levelLine(feet, inp.rig, levelReadings, fps, stripped.physics.length, levelProblems);
           }
         }
+        if (!noExtremes && idle === null) extremesFrames = readJson(join(stripped === null ? foldDir : join(foldDir, 'on'), 'frames.json'), []);
       } finally {
         rmSync(foldDir, { recursive: true, force: true });
       }
@@ -6611,6 +6666,8 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const publishCheck = (): void => write('check.json', `${JSON.stringify(figures, null, 1)}\n`);
   if (motionSeam.worlds === undefined) publishCheck();
   else publishMotionSeamWorlds(out, seamMotionDir, motionSeam.worlds, publishCheck);
+  const extremes = noExtremes ? [] : renderExtremes(buildDir, out, animationNames, idle === null ? extremesFrames : readJson(join(idleDir, 'frames.json'), []), measured);
+  if (existsSync(join(out, 'extremes'))) written.push('extremes/');
   const bars: CheckReport['bars'] = { measured: ['gate'], skipped: [] };
   const tally = (bar: string, reason: string | null): void => {
     if (reason === null) bars.measured.push(bar);
@@ -6636,6 +6693,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   return {
     figures,
     gateHtml,
+    extremes,
     pack,
     packOpaque,
     idle: idle === null || loop === null ? null : { frames: idle.frames.length, fps: idle.fps, duration: idle.duration, lastIndex: idle.frames[idle.frames.length - 1].index, loopAt: { x: loop.x, y: loop.y } },

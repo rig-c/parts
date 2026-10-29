@@ -105,7 +105,7 @@ export function runAlternateCutLayerChecks(dir: string, say: Say, runner: RigcRu
     const out = assembleLayerFixture(md, 'out');
     rigStage({ config: join(md, 'config.json'), parts: out, out: join(out, 'rig') }, runner, join(md, 'scratch'), () => {});
     if (mutateOut !== undefined) mutateOut(out);
-    return runCheck(join(out, 'rig'), join(out, 'check'), runner, out, undefined, undefined, undefined, false, false, 'raised');
+    return runCheck(join(out, 'rig'), join(out, 'check'), runner, out, undefined, undefined, undefined, false, false, 'raised', undefined, undefined, undefined, undefined, undefined, true);
   };
   const green = runSetCheck('set-check-green');
   say(

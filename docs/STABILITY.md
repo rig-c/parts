@@ -59,9 +59,9 @@ defaults are the help's too, and none is guessed from the art.
 | `propose` | `--parts`, `--source`, `--out`; optional `--compare` or `--from-config` (one of them), `--keypoints`, `--person` and `--wrist-snap` (each with `--keypoints`), `--full`, `--head` (the turn control's depths; not with `--from-config`), `--grid-rule` (`figure` or `part`, the drafted lattice's spacing; not with `--from-config`), `--cloth` (a config whose `cloth` block is the recipe, issue #364; not with `--from-config`), `--write-config` (existing config for an ordinary proposal, issue #356; a new file with `--cloth`, issue #537; not with `--from-config` — additive: without it nothing `propose` writes changes), `--from` (the config the recipe is changed from, only with `--write-config`, issue #571 — additive: without it nothing `--write-config` writes changes), `--only-missing` (only with `--parts` and `--write-config`, not with `--cloth` or `--from-config`, issue #671 — additive: without it nothing `--write-config` writes changes) |
 | `compare` | `--left`, `--right`; optional `--map` |
 | `rig` | `--config`, `--parts`, `--out`; optional `--idle-keys` (ctl, direct), `--page-edges` (pot, free), `--pack-shape` (rect, polygon) |
-| `check` | `--rig`, `--out`; optional `--parts`, `--source`, `--page-edges`, `--pack-shape`, `--requirements`, `--seam-pairs`, `--keep-stills`, `--set` or `--all-sets` (issue #454), `--environment` (issue #538, additive), `--wind-band` (issue #590, additive) |
+| `check` | `--rig`, `--out`; optional `--parts`, `--source`, `--page-edges`, `--pack-shape`, `--requirements`, `--seam-pairs`, `--keep-stills`, `--no-extremes` (issue #829), `--set` or `--all-sets` (issue #454), `--environment` (issue #538, additive), `--wind-band` (issue #590, additive) |
 | `loop` | `--frames`, `--out`; optional `--palette` |
-| `build` | `--config`, `--source`, `--full`, `--out`; optional `--head` (as for `assemble`), `--seam`, `--project`, `--page-edges`, `--pack-shape`, `--loop`, `--lead-in`, `--requirements`, `--idle-keys`, `--seam-pairs`, `--keep-stills`, `--alt` (as for `assemble`, issue #454), `--set` or `--all-sets` (as for `check`, issue #454), `--environment` (as for `check`, issue #538, additive), `--wind-band` (as for `check`, issue #590, additive) |
+| `build` | `--config`, `--source`, `--full`, `--out`; optional `--head` (as for `assemble`), `--seam`, `--project`, `--page-edges`, `--pack-shape`, `--loop`, `--lead-in`, `--requirements`, `--idle-keys`, `--seam-pairs`, `--keep-stills`, `--no-extremes` (issue #829), `--alt` (as for `assemble`, issue #454), `--set` or `--all-sets` (as for `check`, issue #454), `--environment` (as for `check`, issue #538, additive), `--wind-band` (as for `check`, issue #590, additive) |
 | `compose` | `--scene`, `--out`; optional `--requirements`, `--accept` |
 | `mesh-draft` | `--config`, `--parts`, `--out`; optional `--requirements`, `--idle-keys` (ctl, direct), `--page-edges` (pot, free), `--pack-shape` (rect, polygon), `--more-triangles` |
 | `mesh-stats` | `--config`, `--parts` (issue #566, additive: prints, writes nothing) |
@@ -300,7 +300,7 @@ in the package.
 
 ## rig-c
 
-`dependencies` takes `@rig-c/core` `^2.72.0`: 2.72.0 or any later 2.x. Bun 1.4 or later
+`dependencies` takes `@rig-c/core` `^2.81.0`: 2.81.0 or any later 2.x. Bun 1.4 or later
 is the declared floor (`engines.bun` `>=1.4.0`; older 1.4 releases are not tested in
 CI, which runs `latest`, and compatibility with an older 1.4 release is handled when
 reported as an issue). What this package relies on in rig-c, every import

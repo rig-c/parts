@@ -54,7 +54,7 @@ installed the former upstream name beside this package installs nothing more:
 
 ### Scoped core dependency
 
-The current dependency is `@rig-c/core` at `^2.72.0`, replacing the literal
+The current dependency is `@rig-c/core` at `^2.81.0`, replacing the literal
 `rig-c` dependency described for earlier versions above. The alias remains
 published. Imports retain their subpaths: `rig-c/mesh` becomes
 `@rig-c/core/mesh`, and `rig-c/core` becomes `@rig-c/core/core`. The command
