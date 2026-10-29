@@ -240,6 +240,8 @@ export interface Geometry {
   keySkeleton?: ControlSkeleton;
   /** `assemble.head_face_underfill` (issue #492): composite `full:face` under `head:face` on the head canvas to fill transparent bare-skin holes. */
   headFaceUnderfill?: boolean;
+  /** `assemble.yield_refused`, default false; alpha-only ownership transfer from original refused core pixels. */
+  yieldRefused?: boolean;
 }
 
 /**
@@ -357,6 +359,8 @@ export interface AssembleInput {
   keySkeleton?: ControlSkeleton;
   /** `assemble.head_face_underfill` (issue #492): composite `full:face` under `head:face` on the head canvas to fill transparent bare-skin holes. */
   headFaceUnderfill?: boolean;
+  /** `assemble.yield_refused`, default false; alpha-only ownership transfer from original refused core pixels. */
+  yieldRefused?: boolean;
   /**
    * Issue #587: rig pixels taken out of named parts once the cuts and the limbs are made, before the fringe pass and
    * every figure a part's record holds — each entry clears `part`'s pixels (alpha, colour and region) where `mask` is
@@ -4344,6 +4348,21 @@ function cutLimbs(
 // the stage
 // ---------------------------------------------------------------------------
 
+/** Opt-in ownership accounting, separate from source projection and authored provenance. */
+export interface DriftYieldReading {
+  part: string;
+  from: string;
+  refusedCandidates: number;
+  yielded: number;
+  /** Yielded refusals also accepted by projection closing; removed from the written projected count. */
+  yieldedTaken: number;
+  skipped: { merge: number; ring: number; notOpaque: number; noMatchingBehind: number };
+  /** Informational only: no fixed global-holder eligibility guard is used. */
+  originalGlobalHolderWouldSkip: number;
+  originalHolders: Array<{ part: string | null; px: number }>;
+  finalHolders: Array<{ part: string | null; px: number }>;
+}
+
 export interface AssembleResult {
   parts: PartsFile;
   /** In plan order, each cropped to its record's box. */
@@ -4364,6 +4383,8 @@ export interface AssembleResult {
   holeKinds: HoleKinds;
   /** The parts whose `DRIFT_LIMIT` refusals hold a body another part holds in the draw order (`driftBodies`), in draw order; empty otherwise. */
   drift: DriftBodies[];
+  /** Present only under the opt-in; includes skipped original-source populations and actual holders. */
+  yieldReadings?: DriftYieldReading[];
   /** Every hidden-art layer of the runs read (issue #359) and what read it (`hiddenLines`); empty when the runs hold none. */
   hidden: HiddenArtUse[];
   seamRule: SeamRule;
@@ -5045,13 +5066,14 @@ export function assemble(input: AssembleInput): AssembleResult {
   const keepInOrder = order.map((d) => ('limb' in d ? limbKeep[d.limb] : null));
   const pushedBy = pushBackFringe(stack, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, featheredInOrder, keepInOrder, input.turnMovingPair ?? null);
   // Issue #255: a part's drift refusals in a body, and who holds the body in the draw order (the push-back clears
-  // only fringe below CORE_ALPHA, and the seam override only recolours, so the holders read here are final).
+  // only fringe below CORE_ALPHA; these are the holders before the opt-in yield, and the seam override only recolours).
   const holderAt = new Int32Array(W * H).fill(-1);
   stack.forEach(({ image }, i) => {
     for (let p = 0; p < W * H; p++) if (image.data[p * 4 + 3] >= CORE_ALPHA) holderAt[p] = i;
   });
   const stackNames = stack.map((q) => q.record.name);
   const drift: DriftBodies[] = [];
+  const yields = new Map<string, { mask: Mask; reading: DriftYieldReading }>();
   order.forEach((d, orderIdx) => {
     if ('patch' in d) return;
     const { name, b } = pieceAt(d);
@@ -5063,6 +5085,9 @@ export function assemble(input: AssembleInput): AssembleResult {
       const under = stack[j].image.data;
       for (let p = 0; p < W * H; p++) {
         if (under[p * 4 + 3] < CORE_ALPHA) continue;
+        // The opt-in resolves the actual exposed opaque holder before comparing its colour.
+        // Keep the legacy matching-holder diagnostic unchanged when the setting is off.
+        if (input.yieldRefused === true) { behindAt[p] = j; continue; }
         const dMax = Math.max(
           Math.abs(under[p * 4] - srcr.data[p * 4]),
           Math.abs(under[p * 4 + 1] - srcr.data[p * 4 + 1]),
@@ -5071,9 +5096,59 @@ export function assemble(input: AssembleInput): AssembleResult {
         if (dMax <= DRIFT_LIMIT) behindAt[p] = j;
       }
     }
-    const found = driftBodies(name, b.key, refused, bodyMinPx(frame), holderAt, stackNames, behindAt);
+    if (input.yieldRefused === true) {
+      for (let p = 0; p < W * H; p++) {
+        if (behindAt[p] < 0) continue;
+        const under = stack[behindAt[p]].image.data;
+        const dMax = Math.max(
+          Math.abs(under[p * 4] - srcr.data[p * 4]),
+          Math.abs(under[p * 4 + 1] - srcr.data[p * 4 + 1]),
+          Math.abs(under[p * 4 + 2] - srcr.data[p * 4 + 2]),
+        );
+        if (dMax > DRIFT_LIMIT) behindAt[p] = -1;
+      }
+    }
+    // The refusal belongs to b.key. A copied/ring replacement cannot inherit that source's refusal.
+    // "Front" is relative to behindAt, not the fixed global top holder: another run may cover this source.
+    let yielded = 0;
+    if (input.yieldRefused === true) {
+      const mask = newMask(W, H);
+      const reading: DriftYieldReading = { part: name, from: b.key, refusedCandidates: 0, yielded: 0, yieldedTaken: 0, skipped: { merge: 0, ring: 0, notOpaque: 0, noMatchingBehind: 0 }, originalGlobalHolderWouldSkip: 0, originalHolders: [], finalHolders: [] };
+      const holders = new Map<string | null, number>();
+      for (let p = 0; p < W * H; p++) {
+        if (refused.data[p] !== 1) continue;
+        reading.refusedCandidates++;
+        if (b.trace.from[p] >= 0) { reading.skipped.merge++; continue; }
+        if (b.trace.ring.data[p] !== 0) { reading.skipped.ring++; continue; }
+        if (b.r.data[p * 4 + 3] < CORE_ALPHA) { reading.skipped.notOpaque++; continue; }
+        if (behindAt[p] < 0) { reading.skipped.noMatchingBehind++; continue; }
+        if (holderAt[p] !== orderIdx) reading.originalGlobalHolderWouldSkip++;
+        const holder = holderAt[p] < 0 ? null : stackNames[holderAt[p]];
+        holders.set(holder, (holders.get(holder) ?? 0) + 1);
+        mask.data[p] = 1;
+        if (b.st.takenMask.data[p] === 1) reading.yieldedTaken++;
+        b.r.data[p * 4 + 3] = 0;
+        yielded++;
+      }
+      reading.yielded = yielded;
+      reading.originalHolders = [...holders].map(([part, px]) => ({ part, px }));
+      yields.set(name, { mask, reading });
+    }
+    const found = driftBodies(name, b.key, refused, bodyMinPx(frame), holderAt, stackNames, behindAt, input.yieldRefused === true ? yielded : undefined);
     if (found !== null) drift.push(found);
   });
+  if (input.yieldRefused === true) {
+    const finalAt = new Int32Array(W * H).fill(-1);
+    stack.forEach(({ image }, i) => { for (let p = 0; p < W * H; p++) if (image.data[p * 4 + 3] >= CORE_ALPHA) finalAt[p] = i; });
+    for (const { mask, reading } of yields.values()) {
+      const holders = new Map<string | null, number>();
+      for (let p = 0; p < W * H; p++) if (mask.data[p] === 1) {
+        const part = finalAt[p] < 0 ? null : stackNames[finalAt[p]];
+        holders.set(part, (holders.get(part) ?? 0) + 1);
+      }
+      reading.finalHolders = [...holders].map(([part, px]) => ({ part, px }));
+    }
+  }
   const pushedOf: FringePushed[][] = plan.map(() => []);
   const pushedOfCut: FringePushed[][] = cuts.map(() => []);
   const pushedOfLimb: FringePushed[][] = lim.parts.map(() => []);
@@ -5109,7 +5184,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       const own = e < 0 ? st : (stats.get(extendKeys[e]) as ProjectionStats);
       // A pixel outside the piece's region is a base pixel filled from a cut's under image (issue #193): occluded, never visible.
       if (r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE && own.clear.data[p] === 1 && (region === null || region.data[p] === 1)) visible.data[p] = 1;
-      if (trace.ring.data[p] === 0 && own.takenMask.data[p] === 1 && (region === null || region.data[p] === 1)) projected.data[p] = 1;
+      if (yields.get(name)?.mask.data[p] !== 1 && trace.ring.data[p] === 0 && own.takenMask.data[p] === 1 && (region === null || region.data[p] === 1)) projected.data[p] = 1;
     }
     const { x0, y0, x1, y1, opaque } = measureBox(r);
     if (opaque === 0) {
@@ -5134,7 +5209,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       visible_px: vc.visible_px,
       occluded_px: vc.occluded_px,
       projected_core_px: region === null ? st.core : count(st.coreMask, region),
-      source_px_taken: region === null ? st.taken : count(st.takenMask, region),
+      source_px_taken: (region === null ? st.taken : count(st.takenMask, region)) - (yields.get(name)?.reading.yieldedTaken ?? 0),
       visible_not_projected_px: vc.visible_not_projected_px,
       refused_drift_px: region === null ? st.refused : count(st.refusedMask, region),
       merged_px: merged,
@@ -5213,6 +5288,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     uncovered,
     holeKinds: kinds,
     drift,
+    ...(input.yieldRefused === true ? { yieldReadings: [...yields.values()].map(q => q.reading) } : {}),
     hidden: [...hiddenUses].map(([layer, readBy]) => ({ layer, readBy })),
     seamRule,
     projectRule,
@@ -5235,6 +5311,8 @@ export interface DriftBodies {
   from: string;
   /** The part's `refused_drift_px`, in a body or not. */
   refusedPx: number;
+  /** Original refused front pixels cleared under the opt-in; absent when it is off. */
+  yieldedPx?: number;
   /** The bar the bodies were held to (`bodyMinPx`, the uncovered line's). */
   minPx: number;
   /** The bodies, largest first (`bodiesOf`). */
@@ -5269,15 +5347,15 @@ export interface DriftBodies {
  * holder. `behindAt` (optional) is, per rig pixel, the index into `names` of
  * the top-most part drawn behind `part` at alpha >= `CORE_ALPHA` whose colour
  * is within `DRIFT_LIMIT` of the painting (-1: none). The result is non-null
- * exactly when the bodies hold a pixel whose holder is another part or whose
+ * also retained for a nonzero opt-in `yieldedPx`, including refusals smaller than the body bar; otherwise exactly when the bodies hold a pixel whose holder is another part or whose
  * `behindAt` names a part drawn behind `part` that matches the painting.
  */
-export function driftBodies(part: string, from: string, refused: Mask, minPx: number, holderAt: Int32Array, names: readonly string[], behindAt?: Int32Array): DriftBodies | null {
+export function driftBodies(part: string, from: string, refused: Mask, minPx: number, holderAt: Int32Array, names: readonly string[], behindAt?: Int32Array, yieldedPx?: number): DriftBodies | null {
   let refusedPx = 0;
   for (let p = 0; p < refused.data.length; p++) refusedPx += refused.data[p];
   if (refusedPx === 0) return null;
   const { bodies, pixels } = bodiesWithPixels(refused, minPx);
-  if (bodies.length === 0) return null;
+  if (bodies.length === 0 && (yieldedPx ?? 0) === 0) return null;
   const count = new Map<string, number>();
   const behindCount = new Map<string, number>();
   for (let p = 0; p < pixels.data.length; p++) {
@@ -5292,10 +5370,10 @@ export function driftBodies(part: string, from: string, refused: Mask, minPx: nu
     }
   }
   const hasFront = [...count.keys()].some((n) => n !== part);
-  if (!hasFront && behindCount.size === 0) return null;
+  if (!hasFront && behindCount.size === 0 && (yieldedPx ?? 0) === 0) return null;
   const holders = [...count.entries()].map(([q, px]) => ({ part: q, px })).sort((a, b) => b.px - a.px || (a.part < b.part ? -1 : a.part > b.part ? 1 : 0));
   const behind = [...behindCount.entries()].map(([q, px]) => ({ part: q, px })).sort((a, b) => b.px - a.px || (a.part < b.part ? -1 : a.part > b.part ? 1 : 0));
-  return { part, from, refusedPx, minPx, bodies, holders, ...(behind.length > 0 ? { behind } : {}) };
+  return { part, from, refusedPx, minPx, bodies, holders, ...(behind.length > 0 ? { behind } : {}), ...(yieldedPx === undefined ? {} : { yieldedPx }) };
 }
 
 /**
@@ -5317,7 +5395,7 @@ export function driftBodies(part: string, from: string, refused: Mask, minPx: nu
 export function driftLine(d: DriftBodies): string {
   const total = d.bodies.reduce((a, b) => a + b.px, 0);
   const big = d.bodies[0];
-  const held = d.bodies.length > 1 ? `${d.bodies.length} bodies of ${total} px, the largest ${big.px} px at ${bodyBox(big)}` : `a body of ${big.px} px at ${bodyBox(big)}`;
+  const held = d.bodies.length === 0 ? 'no body at this bar' : d.bodies.length > 1 ? `${d.bodies.length} bodies of ${total} px, the largest ${big.px} px at ${bodyBox(big)}` : `a body of ${big.px} px at ${bodyBox(big)}`;
   const others = d.holders.filter((h) => h.part !== d.part).map((h) => `"${h.part}"`);
   const frontClause = others.length > 0 ? `, ${others.join(', ')} drawn in front of "${d.part}"` : '';
   const behindClause =
@@ -5327,7 +5405,10 @@ export function driftLine(d: DriftBodies): string {
   return (
     `drift: "${d.part}" refuses ${d.refusedPx} px of ${d.from} (its colour more than ${DRIFT_LIMIT} off the painting, max channel), in ${held} (at least ${fmtPx(d.minPx)} px past a ${BODY_KERNEL}x${BODY_KERNEL} opening); ` +
     `by the plan's draw order ${d.holders.map((h) => `"${h.part}" holds ${h.px} px`).join(', ')} of it (the top-most part at alpha >= ${CORE_ALPHA})${frontClause}${behindClause}; ` +
-    "informational: no gate reads this. Swapping the plan order of the parts named here can clear it (when only the front one differs from the painting) or move it to the other part (when both do): swap, rebuild and read this line again; if it moves, removing it needs different input layers. At rest, the seam pass repaints the holder's pixels that pass its rule from the painting"
+    "informational: no gate reads this. Swapping the plan order of the parts named here can clear it (when only the front one differs from the painting) or move it to the other part (when both do): swap, rebuild and read this line again; if it moves, removing it needs different input layers. At rest, the seam pass repaints the holder's pixels that pass its rule from the painting" +
+    (d.yieldedPx === undefined
+      ? '; set assemble.yield_refused: true to yield original refused front pixels only where the top-most opaque behind holder matches the painting, before considering a cut'
+      : `; yielded ${d.yieldedPx} px to top-most opaque behind holders matching the painting (assemble.yield_refused: true; alpha only)`)
   );
 }
 
@@ -5992,6 +6073,8 @@ export function stageFields(
   armSplit?: ArmSplit;
   keySkeleton?: ControlSkeleton;
   headFaceUnderfill?: boolean;
+  /** `assemble.yield_refused`, default false; alpha-only ownership transfer from original refused core pixels. */
+  yieldRefused?: boolean;
   turnMovingPair?: (a: string, b: string) => boolean;
 } {
   const problems: Problem[] = [];
@@ -6012,6 +6095,7 @@ export function stageFields(
     ...(st.arm_split === undefined ? {} : { armSplit: st.arm_split }),
     ...(keySkeleton === undefined ? {} : { keySkeleton }),
     ...(cfg.assemble.head_face_underfill === undefined ? {} : { headFaceUnderfill: cfg.assemble.head_face_underfill }),
+    ...(cfg.assemble.yield_refused === undefined ? {} : { yieldRefused: cfg.assemble.yield_refused }),
     ...(turnMovingPair === null ? {} : { turnMovingPair }),
     rigScale: cfg.assemble.rig_scale,
     plan: cfg.assemble.plan,
