@@ -2885,6 +2885,67 @@ support. This warning retains the extended scalar sample, all motion arithmetic
 and existing refusal behavior; it is not a gate. Explicit `unitDepths` entries
 bypass that sample and its warning, including an explicit zero.
 
+### A neck that moves on its own
+
+If the head run carries a collar contour in its neck, select a clean `full:neck`
+first. `PLAN_HEAD_GARMENT_OVERLAP` is a source-alpha warning, not a semantic
+collar classifier: any alpha >=250 intersection with a planned full-run
+`topwear`, `neckwear` or `collar` layer is reported on the registered head-crop
+canvas. The half-open box and count locate pixels to inspect. A normal underlap
+may also warn; inspect the source, setup and moving boundaries.
+
+For an existing config with `turn.body`, one neck plan row and named `neck` /
+`head` landmarks, run:
+
+```sh
+rig-parts layers head/ --full full/ --source painting.png --config config.json
+rig-parts propose --parts assembled/rig --source painting.png --full full/ --head head/ --out neck-draft/ --write-config config.json
+rig-parts rig --parts neck-draft/rig --config config.json --out neck-rig/
+```
+
+The existing config is the explicit body-turn context. Choose a fresh output
+whose `rig/` subdirectory does not exist. The draft preserves its
+authored rig and sampled turn, changes the neck's plan row to the full run,
+reassembles source pixels under `neck-draft/rig`, and creates `<part>_part` as a
+sibling of the anatomical neck under the body carrier. One segment binds the
+neck rigidly; its head role is removed and its body role is `unit`.
+Full-run provenance avoids the head-crop warning; alpha overlap does not
+certify semantic cleanliness, because a clean neck may still underlap a garment.
+Inspect the full source and the rendered extremes. If it still carries collar
+art, select another run or rerun See-through; no mask or cut is applied.
+Existing structural operations on other parts are replayed unchanged. A neck
+cut, neck limb split, neck extension or alternate sets require a separate
+assemble/config step; this bounded draft names that refusal. Reassembly uses the
+CLI defaults `seam=near-white` and `project=core`, explicitly stated in its note
+because `parts.json` does not record the source command's selected rules.
+
+The `note:` line derives `turn.body.unitDepths.<part>` as
+`round4(bodyPivot + neckWorldMedian - firstBodySurfaceWorldMedian)`, using the
+existing scalar sheet, declared `near` polarity and `zScale`. If the new source
+has no sheet, only new opaque art overlapping the previous registered neck
+sheet is sampled. An absent sheet, empty overlap, missing body reference or
+missing pivot is refused by name; legacy `depth_median` is never converted to
+world units. Other proposal modes (`--keypoints`, `--compare`, `--grid-rule`,
+`--only-missing`) must run separately and are refused in this mode.
+
+| rule | means | change |
+| --- | --- | --- |
+| <a id="PROPOSE_NECK_BODY_TURN"></a>`PROPOSE_NECK_BODY_TURN` | no authored sampled body turn | follow this recipe and supply the named input; the refusal writes no config |
+| <a id="PROPOSE_NECK_PLAN"></a>`PROPOSE_NECK_PLAN` | no unique neck plan row | follow this recipe and supply the named input; the refusal writes no config |
+| <a id="PROPOSE_NECK_FULL_SOURCE"></a>`PROPOSE_NECK_FULL_SOURCE` | no full-run neck source | follow this recipe and supply the named input; the refusal writes no config |
+| <a id="PROPOSE_NECK_DEPTH_INPUT"></a>`PROPOSE_NECK_DEPTH_INPUT` | missing scalar sheet, body reference, pivot or registered overlap | follow this recipe and supply the named input; the refusal writes no config |
+| <a id="PROPOSE_NECK_CARRIER"></a>`PROPOSE_NECK_CARRIER` | missing neck/head landmarks or body carrier | follow this recipe and supply the named input; the refusal writes no config |
+| <a id="PROPOSE_NECK_BONE_UNIQUE"></a>`PROPOSE_NECK_BONE_UNIQUE` | generated sibling name already belongs to another bone | follow this recipe and supply the named input; the refusal writes no config |
+| <a id="PROPOSE_NECK_REASSEMBLY"></a>`PROPOSE_NECK_REASSEMBLY` | neck structural operations or alternate sets require separate assembly | follow this recipe and supply the named input; the refusal writes no config |
+| <a id="PROPOSE_NECK_RUNS"></a>`PROPOSE_NECK_RUNS` | full/head runs not both supplied | follow this recipe and supply the named input; the refusal writes no config |
+| <a id="PROPOSE_NECK_OUT_FRESH"></a>`PROPOSE_NECK_OUT_FRESH` | output rig directory already exists or aliases input parts | choose a fresh output directory |
+| <a id="PROPOSE_NECK_MODE"></a>`PROPOSE_NECK_MODE` | incompatible proposal mode requested | follow this recipe and supply the named input; the refusal writes no config |
+
+Build through the normal gate, then use `rigc render --extremes` on `body_turn`,
+`turn` and `tilt`. Read setup, min, max and absolute diff at native scale, then
+inspect neck boundaries at native and 4x nearest-neighbour scale for tears or
+ghosts. A green build alone does not certify the source art.
+
 ## 4. The command order
 
 Two steps are external: the See-through runs (by any route; the optional `comfy seethrough` adapter is only a client for a ComfyUI box). Everything else is this tool.
@@ -3318,7 +3379,8 @@ loads, with `check/contact.png` and the idle frames to look at.
 ### Source before scissors (issue #819)
 
 For a tear, ghost, smudge, outline or seam, first select an appropriate existing
-See-through layer/run or alternate; then measure a tighter See-through resolution,
+See-through layer/run or alternate (for a collar baked into the neck, see
+[A neck that moves on its own](#a-neck-that-moves-on-its-own)); then measure a tighter See-through resolution,
 crop or settings if needed. Next measure the declared depth/turn role and, for a
 `drift:` line with a matching opaque behind holder, opt in with
 `assemble.yield_refused: true`. This config step only clears the original refused
@@ -3664,7 +3726,8 @@ changes draw order. A tear, ghost, smudge, stray outline or seam is a source
 problem. Follow this repair ladder, recording what each step measured:
 
 1. Choose another See-through layer or run (`full` versus `head`, another tag,
-   or `alternates`).
+   or `alternates`). For a collar baked into the neck, follow
+   [A neck that moves on its own](#a-neck-that-moves-on-its-own).
 2. Re-run See-through with a tighter resolution or crop.
 3. Correct the declared depth or role in config.
 
@@ -3981,6 +4044,7 @@ over the whole union: a layer is part of it, so it could never be more than 1x.
 
 | rule | crossed when | [observed] on the two examples' 116 layers (four runs) |
 | --- | --- | --- |
+| <a id="PLAN_HEAD_GARMENT_OVERLAP"></a>`PLAN_HEAD_GARMENT_OVERLAP` | WARN: a planned head-run part has opaque crop pixels (alpha >=250) in common with a planned full-run garment after registration; count and half-open head-canvas box are named. It reports source overlap, not semantic line art | take the part from a clean full run; [A neck that moves on its own](#a-neck-that-moves-on-its-own) |
 | <a id="PLAN_LAYER_TRANSLUCENT"></a>`PLAN_LAYER_TRANSLUCENT` | judged, and `translucent` above 50 % | the most translucent judged layer is 17.8 % (reference-sample, full run, `front hair`) |
 | <a id="PLAN_LAYER_BACKGROUND"></a>`PLAN_LAYER_BACKGROUND` | judged, `background` above 50 %, and `translucent` above 25 % | the most background-coloured judged layer is 21.9 % (reference-demo, head run, `topwear`, a white dress); of judged layers above 10 % background, the most translucent is 5.6 % (reference-demo, full run, `handwear-r`) |
 | <a id="PLAN_LAYER_OVERSIZED"></a>`PLAN_LAYER_OVERSIZED` | `area` above 4x | the largest is 1.681x (reference-demo, head run, `back hair`, which fills the crop) |

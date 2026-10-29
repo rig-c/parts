@@ -5916,6 +5916,42 @@ function fmt0(v: number): string {
  * before; each gains one such note per tag left out (demo 6, scarf 9,
  * reference-demo 7, reference-sample 9).
  */
+/** Source alpha intersection, not an art classifier. One opaque texel can carry a second contour. */
+export interface HeadGarmentOverlap { part: string; layer: string; px: number; box: [number, number, number, number] }
+
+/** #812: register full garments onto the declared crop; count only planned source pairs. */
+export function headGarmentOverlaps(full: LayerSet, head: LayerSet, g: Geometry, plan: readonly PlanEntry[]): HeadGarmentOverlap[] {
+  if (g.single === true) return [];
+  const frame = checkGeometry(g, { full, head });
+  const garments = plan.filter(([, run, tag]) => run === 'full' && ['topwear', 'neckwear', 'collar'].includes(tag));
+  const out: HeadGarmentOverlap[] = [];
+  for (const [part, run, tag] of plan) {
+    if (run !== 'head') continue;
+    const layer = head.layers.find(l => l.name === tag);
+    if (layer === undefined) continue;
+    const a = placeLayer(layer, g.resolution);
+    for (const [, , name] of garments) {
+      const garment = full.layers.find(l => l.name === name);
+      if (garment === undefined) continue;
+      const b = fullLayerToHead(placeLayer(garment, g.resolution), frame, g.resolution);
+      let px = 0, left = g.resolution, top = g.resolution, right = 0, bottom = 0;
+      for (let y = 0; y < g.resolution; y++) for (let x = 0; x < g.resolution; x++) {
+        const k = (y * g.resolution + x) * 4 + 3;
+        if (a.data[k] < CORE_ALPHA || b.data[k] < CORE_ALPHA) continue;
+        px++; left = Math.min(left, x); top = Math.min(top, y); right = Math.max(right, x + 1); bottom = Math.max(bottom, y + 1);
+      }
+      if (px > 0) out.push({ part, layer: name, px, box: [left, top, right, bottom] });
+    }
+  }
+  return out;
+}
+
+export const HEAD_GARMENT_WARNING = 'PLAN_HEAD_GARMENT_OVERLAP';
+
+export function headGarmentWarning(w: HeadGarmentOverlap): string {
+  return `WARN  ${HEAD_GARMENT_WARNING}: part "${w.part}" (head run) overlaps full-run layer "${w.layer}" — ${w.px} opaque crop px (alpha >= ${CORE_ALPHA}), box [${w.box.join(', ')}] (right/bottom exclusive, head-canvas px); take this part from the full run, then inspect the source and rebuild (AUTHORING: A neck that moves on its own)`;
+}
+
 export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx = PROPOSE_MIN_PX): PlanProposal {
   const frame = checkGeometry(g, { full: full0, head: head0 });
   // Issue #366: one run's file, padded to the resolution square as the stage pads it.
@@ -6055,7 +6091,7 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
   const bodyNotes = left.map((u) => uncoveredNote(u, plan, minBody));
   const unplanned = unplannedNotes(runs, plan, extend, noted, figures, minPx, (run, tag) => (find(run, tag)?.opaqueRunPx ?? 0) * (run === 'head' ? headArea : fullArea), new Set(left.map((u) => u.tag)));
   // The reference's notes, then the uncovered bodies, then the layers in no row (issue #308), then the plausibility drops — a drop note is last, as it was.
-  return { plan, extend_below_crop: extend, notes: [...notes, ...bodyNotes, ...unplanned, ...dropNotes] };
+  return { plan, extend_below_crop: extend, notes: [...notes, ...bodyNotes, ...unplanned, ...dropNotes, ...headGarmentOverlaps(full, head, g, plan).map(headGarmentWarning)] };
 }
 
 /**

@@ -16,7 +16,8 @@ import { runBuildProcess, processRigcRunner as rigcRunner } from './tools/build-
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
-import { DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE, HOLES_LISTED, PROJECT_RULES, type ProjectRule, proposeFields, proposePlan, proposeSinglePlan, SEAM_RULES, type SeamRule } from './src/assemble.ts';
+import { DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE, headGarmentOverlaps, headGarmentWarning, HOLES_LISTED, PROJECT_RULES, type ProjectRule, proposeFields, proposePlan, proposeSinglePlan, SEAM_RULES, type SeamRule } from './src/assemble.ts';
+import { proposeNeck } from './tools/neck-propose.ts';
 import { parseAltArg } from './tools/alternate-cli.ts';
 import { type AlternateCliInput, assembleStage, build, checkStage, ERROR_MAP_FILE, loopStage, readRuns, readSource, rigStage, suppliedCheckFlag } from './src/build.ts';
 import { ACCEPTABLE_BARS, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, findRigc, PACK_SHAPES, rigcRunnerAt, type PackShape, PAGE_EDGES, type PageEdges, PARTS_HOME_SENTENCE, RIGC_GEOMETRY_VERSION, rigcRanClause, type RigcRunner, NO_PARTS_SENTENCE, SEAM_MEAN_BAR, SOURCE_SENTENCE, SEAM_PX_BAR, SEAM_PX_LEVEL, SPINEBOY_YARDSTICK, TEXTURE_STRETCH_CEILING } from './src/check.ts';
@@ -87,6 +88,11 @@ usage:
       Refuses, by name, a missing file, an unknown tag, a PNG whose
       size is not its box, and anything else outside the input contract —
       never a WARN.
+
+  rig-parts layers <head-run> --full <full-run> --source <painting.png> --config <config.json>
+      Read PLAN_HEAD_GARMENT_OVERLAP on planned head parts against full-run
+      garments registered into the declared crop. Alpha >=250, any overlap;
+      names part, garment, count, half-open head-canvas box and source remedy.
 
   rig-parts layers --export <dir> <dir | layers.json | file.psd>
       Print the table, then write the input as the wrapper form into <dir>
@@ -202,6 +208,13 @@ usage:
       and is named in a note. A part from a run not given, a tag the run lacks
       or a layer with no depth is refused by name. Without either flag nothing
       changes.
+
+  rig-parts propose … --full <run> --head <run> --write-config <existing.json>
+      When the target declares turn.body and one neck plan row, preserve its
+      sampled turn and authored rig, take a clean full-run neck, and draft one
+      rigid sibling unit under the body carrier. Reassembled art is written to
+      <out>/rig; depth comes from the existing scalar input, named in note:.
+      Missing depth, landmarks or clean source is refused, never invented.
 
   rig-parts propose … [--grid-rule figure|part]
       How each drafted lattice's spacing (meshes.<part>.grid) is chosen.
@@ -1051,7 +1064,7 @@ function printLayerTable(set: LayerSet): void {
  * no row; `layers` takes one positional path beside its flags (issue #359).
  */
 const TAKES = {
-  layers: { valued: ['--export', '--template', '--canvas'], switches: [] },
+  layers: { valued: ['--export', '--template', '--canvas', '--full', '--source', '--config'], switches: [] },
   sheet: { valued: ['--source', '--layers', '--out', '--cell', '--cols'], switches: [] },
   rig: { valued: ['--config', '--parts', '--out', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
   propose: { valued: ['--parts', '--source', '--out', '--from-config', '--compare', '--full', '--head', '--canvas', '--keypoints', '--person', '--wrist-snap', '--grid-rule', '--cloth', '--write-config', '--from'], switches: ['--head-box', '--no-back-hair', '--only-missing'] },
@@ -1109,7 +1122,7 @@ function cmdLayers(args: string[]): number {
   }
   const template = flags.get('--template');
   if (template !== undefined) {
-    if (flags.has('--export') || paths.length > 0) return usage(`--template writes a PSD and reads nothing; it takes --canvas only, and got ${[...[...flags.keys()].filter((f) => f !== '--template' && f !== '--canvas'), ...paths].join(', ')}`);
+    if (flags.has('--export') || paths.length > 0 || ['--full', '--source', '--config'].some(f => flags.has(f))) return usage(`--template writes a PSD and reads nothing; it takes --canvas only, and got ${[...[...flags.keys()].filter((f) => f !== '--template' && f !== '--canvas'), ...paths].join(', ')}`);
     const canvasArg = flags.get('--canvas');
     if (canvasArg === undefined) return usage('--template needs --canvas <W>x<H>, the canvas size in px (with one run, a square of seethrough.resolution)');
     const canvas = parseCanvas(canvasArg);
@@ -1127,6 +1140,14 @@ function cmdLayers(args: string[]): number {
   try {
     const set = readLayers(paths[0]);
     printLayerTable(set);
+    const context = ['--full', '--source', '--config'];
+    if (context.some(f => flags.has(f))) {
+      if (!context.every(f => flags.has(f))) return usage('layers crop overlap inspection requires --full, --source and --config together; the positional path is the head run');
+      const full = readLayers(flags.get('--full')!), source = readSource(flags.get('--source')!);
+      const cfg = loadEarlyConfig(flags.get('--config')!, 'assemble');
+      const g = { sourceW: source.width, sourceH: source.height, ...proposeFields(cfg) };
+      for (const w of headGarmentOverlaps(full, set, g, cfg.assemble.plan)) console.log(`  ${headGarmentWarning(w)}`);
+    }
     const dir = flags.get('--export');
     if (dir !== undefined) {
       const w = exportLayers(set, dir);
@@ -1478,6 +1499,16 @@ function cmdPropose(args: string[]): number {
     const partsDir = existsSync(partsArg) && statSync(partsArg).isFile() ? dirname(partsArg) : partsArg;
     if (!existsSync(source)) {
       throw new PartsError([{ code: 'PROPOSE_SOURCE_PRESENT', object: source, detail: 'no such file; the painting is drawn under the overlay' }]);
+    }
+    if (target !== null && typeof target.raw === 'object' && target.raw !== null && 'turn' in target.raw) {
+      const turn = target.raw.turn;
+      if (typeof turn === 'object' && turn !== null && 'body' in turn && (loadEarlyConfig(target.path, 'assemble').assemble.plan.some(([, , tag]) => tag === 'neck'))) {
+        const unsupported = [...flags.keys()].filter(f => !['--parts', '--source', '--out', '--full', '--head', '--write-config'].includes(f));
+        if (unsupported.length > 0) throw new PartsError([{ code: 'PROPOSE_NECK_MODE', object: unsupported.join(', '), detail: 'cannot be combined with the authored sampled-turn neck draft; use --parts, --source, --out, --full, --head and --write-config only; run comparison or landmark drafting separately' }]);
+        if (onlyMissing) throw new PartsError([{ code: 'PROPOSE_NECK_MODE', object: '--only-missing', detail: 'cannot replace an attached neck; omit --only-missing for the explicit sampled body-turn neck draft' }]);
+        proposeNeck(target, { source, parts: partsDir, out, full: flags.get('--full'), head: flags.get('--head') });
+        return EXIT_OK;
+      }
     }
     const P = readPartSet(partsDir);
     const painting = readPng(source);
