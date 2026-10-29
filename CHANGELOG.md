@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.77.0](https://github.com/rig-c/parts/compare/v1.76.0...v1.77.0) (2026-10-29)
+
+
+### Features
+
+* **propose:** warn when a head-run part carries garment pixels, and draft the neck as its own body unit ([#826](https://github.com/rig-c/parts/issues/826)) ([e81aac7](https://github.com/rig-c/parts/commit/e81aac71377731a4915c2fca702c0fbccc2751c9))
+
 ## [1.76.0](https://github.com/rig-c/parts/compare/v1.75.0...v1.76.0) (2026-10-29)
 
 
