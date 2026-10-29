@@ -118,6 +118,7 @@ import {
   erode,
   fillHoles,
   gaussianBlur,
+  gaussianKernelSize,
   type Mask,
   morphClose,
   newFloatImage,
@@ -241,7 +242,7 @@ export interface Geometry {
   keySkeleton?: ControlSkeleton;
   /** `assemble.head_face_underfill` (issue #492): composite `full:face` under `head:face` on the head canvas to fill transparent bare-skin holes. */
   headFaceUnderfill?: boolean;
-  /** `assemble.yield_refused`, default false; alpha-only transfer of refused cores and their connected non-core rims. */
+  /** `assemble.yield_refused`, default false; transfer of refused cores/rims, finishing nearby accepted projection RGB. */
   yieldRefused?: boolean;
   /** Plan parts whose own samples survive source re-take beneath soft front cover. */
   keepUnderOccluders?: readonly string[];
@@ -362,7 +363,7 @@ export interface AssembleInput {
   keySkeleton?: ControlSkeleton;
   /** `assemble.head_face_underfill` (issue #492): composite `full:face` under `head:face` on the head canvas to fill transparent bare-skin holes. */
   headFaceUnderfill?: boolean;
-  /** `assemble.yield_refused`, default false; alpha-only transfer of refused cores and their connected non-core rims. */
+  /** `assemble.yield_refused`, default false; transfer of refused cores/rims, finishing nearby accepted projection RGB. */
   yieldRefused?: boolean;
   /** Plan parts whose own samples survive source re-take beneath soft front cover. */
   keepUnderOccluders?: readonly string[];
@@ -2167,6 +2168,30 @@ export interface ProjectionStats {
   /** The pixels counted in `core`, and in `refused`; null when the layer has no top-most pixel (both counts 0). A cut splits the counts by these. */
   coreMask: Mask | null;
   refusedMask: Mask | null;
+}
+
+/** Finish accepted source RGB near an actually yielded core (#841).
+ * The caller freezes the Gaussian footprint before clearing any rim, and passes
+ * only the original connected support. Recheck material ownership at the write:
+ * a copied sample or another derived piece never inherits the source's acceptance.
+ * Alpha and the projection counts are unchanged; the callback records RGB writes.
+ */
+export function finishYieldedProjection(
+  image: Raster, source: Raster, projection: ProjectionStats, footprint: Mask,
+  support: Int32Array,
+  own: { kept: Mask | null; region: Mask | null; merged: Int32Array; ring: Mask; behind: Int32Array },
+  changed?: (pixel: number) => void,
+): number {
+  let finished = 0;
+  for (const p of support) {
+    if (footprint.data[p] !== 1 || projection.coreMask?.data[p] !== 1 || projection.takenMask.data[p] !== 1 || projection.refusedMask?.data[p] !== 0 || image.data[p * 4 + 3] < CORE_ALPHA || own.behind[p] < 0) continue;
+    if (own.kept?.data[p] === 1 || (own.region !== null && own.region.data[p] !== 1) || own.merged[p] >= 0 || own.ring.data[p] !== 0) continue;
+    if (maxDiff(image.data, p * 4, source.data, p * 4) === 0) continue;
+    for (let c = 0; c < 3; c++) image.data[p * 4 + c] = source.data[p * 4 + c];
+    changed?.(p);
+    finished++;
+  }
+  return finished;
 }
 
 function maxDiff(a: Uint8ClampedArray, i: number, b: Uint8ClampedArray, j: number): number {
@@ -4392,6 +4417,8 @@ export interface DriftYieldReading {
   yieldedRim: number;
   /** Yielded refusals also accepted by projection closing; removed from the written projected count. */
   yieldedTaken: number;
+  /** Accepted own-core samples finished to painting RGB near a yielded core (#841); alpha is unchanged. */
+  finishedProjection?: number;
   /** Original refused pixels explicitly kept from their own layer (#825). */
   preserved?: number;
   skipped: { merge: number; ring: number; notOpaque: number; noMatchingBehind: number };
@@ -5339,6 +5366,9 @@ export function assemble(input: AssembleInput): AssembleResult {
         yielded++;
       }
       if (yielded > 0) {
+        // The same finite support as projectSource's Gaussian: only original
+        // yielded cores seed this neighbourhood, never a subsequently cleared rim.
+        const finish = dilate(mask, gaussianKernelSize(FEATHER_SIGMA));
         // Connectivity reads the original part support, including the opaque
         // band outside the eroded projection core. Only non-core rim pixels
         // may additionally yield: traversing an opaque pixel never clears it.
@@ -5369,6 +5399,10 @@ export function assemble(input: AssembleInput): AssembleResult {
             yielded++;
           }
         }
+        const finished = finishYieldedProjection(b.r, srcr, b.st, finish, queue.subarray(0, end),
+          { kept: keptRetake[orderIdx], region: b.region, merged: b.trace.from, ring: b.trace.ring, behind: behindAt },
+          p => { writersInOrder[orderIdx][p] = AW.sourceProjection; });
+        if (finished > 0) reading.finishedProjection = finished;
       }
       reading.yielded = yielded;
       reading.originalHolders = [...holders].map(([part, px]) => ({ part, px }));
@@ -6363,7 +6397,7 @@ export function stageFields(
   armSplit?: ArmSplit;
   keySkeleton?: ControlSkeleton;
   headFaceUnderfill?: boolean;
-  /** `assemble.yield_refused`, default false; alpha-only transfer of refused cores and their connected non-core rims. */
+  /** `assemble.yield_refused`, default false; transfer of refused cores/rims, finishing nearby accepted projection RGB. */
   yieldRefused?: boolean;
   /** Plan parts whose own samples survive source re-take beneath soft front cover. */
   keepUnderOccluders?: readonly string[];
