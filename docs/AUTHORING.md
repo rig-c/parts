@@ -4727,6 +4727,7 @@ and stay absent).
 | <a id="CONFIG_TURN_COUNTER_RANGE"></a>`CONFIG_TURN_COUNTER_RANGE` | `config.turn.counter` (or `config.turn.body.counter`) is outside `[0, 1]` | supply a non-negative rear counter-translation fraction in `[0, 1]` |
 | <a id="CONFIG_TURN_ROLE_UNKNOWN"></a>`CONFIG_TURN_ROLE_UNKNOWN` | `config.turn.roles.<part>` (or `config.turn.body.roles.<part>`) is not `"surface"`, `"unit"` or `"rear"` | declare `"surface"`, `"unit"` or `"rear"` |
 | <a id="CONFIG_TURN_SURFACE_REQUIRED"></a>`CONFIG_TURN_SURFACE_REQUIRED` | `config.turn.roles` (or `config.turn.body.roles`) declares no `"surface"` part | declare at least one part as `"surface"` |
+| <a id="CONFIG_TURN_SURFACE_AUTO"></a>`CONFIG_TURN_SURFACE_AUTO` | a part with role `"surface"` in `config.turn.roles` or `config.turn.body.roles` uses `meshes.<part>.auto`; its emitted-mesh deform cannot also key the unreduced reference used by the auto motion gate | use `grid` or `contour` for the named part to keep the depth turn |
 | <a id="CONFIG_TURN_UNIT_MESH_BONES"></a>`CONFIG_TURN_UNIT_MESH_BONES` | `config.turn.roles.<part>` (or `config.turn.body.roles.<part>`) declares `"unit"` for a mesh part in `config.meshes` that binds a bone outside the `"head"` subtree (or outside the torso carrier subtree for `turn.body`), or shares a bound bone or chain with another `"unit"` mesh part, so its bones cannot be moved under `<part>_unit` (#790) | bind each `"unit"` mesh only to `"head"` and its own child bones or chains under `"head"` (or to the torso root bone and its own non-head descendants for `turn.body`), or give the part role `"rear"` |
 | <a id="CONFIG_TURN_EAR_DRAW_ORDER"></a>`CONFIG_TURN_EAR_DRAW_ORDER` | an ear part in `config.turn.roles` is drawn after `face` with role `"surface"` in `assemble.plan` | place `ear_r` and `ear_l` before `face` in `assemble.plan` so the turning cheek occludes the far ear |
 | <a id="CONFIG_TURN_HEAD_BONE"></a>`CONFIG_TURN_HEAD_BONE` | `config.turn.roles` is declared without a single bone `"head"` in `config.bones`, or `config.turn.body` without a single bone `"chest"` / `"hip"` (or its declared `bone`) | declare `"head"` (or the body turn root bone) as a single bone in `config.bones` |
@@ -5807,6 +5808,18 @@ it to the original link's setup frame, as `flattenRig` does. Weights, child
 parents and stops keep their emitted names; Core creates the draw bones later.
 A name ending in `_d` alone is not an alias: a missing non-stop bone still
 raises `RIG_TURN_SURFACE_MESH_BINDINGS`. No new config field is required.
+
+Depth-turn `"surface"` parts may use authored weighted `grid`, `contour`,
+`influence` or `explicit` meshes, or the turn-generated grid when attached as
+a region. `auto` cannot combine with `"surface"` in either `turn.roles` or
+`turn.body.roles`: [`CONFIG_TURN_SURFACE_AUTO`](#CONFIG_TURN_SURFACE_AUTO)
+refuses the config before mesh generation or any build output. The turn keys
+the emitted mesh's vertices and influence order, while the auto motion gate
+also substitutes its unreduced source attachment with the same motion. Those
+topologies need separate deform keys even when the reduced candidate itself
+passes the gate. Use `grid` or `contour` for that part to retain depth turning.
+This restriction does not apply to `"unit"` or `"rear"` parts, which use bone
+carriers, or to the legacy scalar-depth turn without `roles`.
 
 A weighted surface spanning the head and body subtrees (#796) takes both
 fields. Declare it as `"surface"` in `turn.roles` or `turn.body.roles` (both is

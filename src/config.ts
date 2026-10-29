@@ -4676,6 +4676,18 @@ function checkTurn(
   parents: ReadonlyMap<string, string> = new Map(),
 ): void {
   const at = 'config.turn';
+  // The auto motion gate swaps in the unreduced source but retains the motion.
+  // A depth surface's numeric deform belongs to the emitted topology and its
+  // influence order; it cannot also describe that reference attachment.
+  const checkSurfaceMeshMode = (part: string, roleAt: string): void => {
+    if (isPlainObject(rawMeshes) && isPlainObject(rawMeshes[part]) && 'auto' in rawMeshes[part]) {
+      c.fail(
+        'CONFIG_TURN_SURFACE_AUTO',
+        roleAt,
+        `declares "${part}" as "surface", but config.meshes.${part} uses auto; depth-turn deform keys target the emitted mesh, while auto's motion gate also builds its unreduced source with the same motion; use grid or contour for config.meshes.${part} to keep the depth turn`,
+      );
+    }
+  };
   const meshBoundBones = (part: string): string[] => {
     if (!isPlainObject(rawMeshes) || !isPlainObject(rawMeshes[part])) return [];
     const m = rawMeshes[part] as Record<string, Json>;
@@ -4832,6 +4844,7 @@ function checkTurn(
         } else {
           if (role === 'surface') {
             surfaceParts.push(part);
+            checkSurfaceMeshMode(part, `${at}.roles.${part}`);
           }
           if (role === 'unit') {
             if (part === 'ear_r' || part === 'ear_l') earParts.push(part);
@@ -4963,6 +4976,7 @@ function checkTurn(
             c.fail('CONFIG_TURN_ROLE_UNKNOWN', `${bAt}.roles.${part}`, `is ${show(role)}; expected one of ${TURN_ROLES.map((x) => `"${x}"`).join(', ')}`);
           } else if (role === 'surface') {
             bodySurfaceParts.push(part);
+            checkSurfaceMeshMode(part, `${bAt}.roles.${part}`);
           } else if (role === 'unit' && meshParts.has(part)) {
             bodyUnitMeshParts.push(part);
             if (bones.has(bodyRoot)) {

@@ -2353,6 +2353,45 @@ function runConfigSuite(): number {
   }
   runAnimationsFromDocControls(say);
 
+  // Issue #844: numeric surface deforms cannot key both auto topologies.
+  {
+    const turnAutoConfig = (group: 'head' | 'body', role = 'surface', mode = 'auto'): Record<string, unknown> => {
+      const raw = minimalConfig();
+      const part = group === 'head' ? 'hair_back' : 'robe';
+      const mesh = (raw.meshes as Record<string, Record<string, unknown>>)[part];
+      if (mode !== 'grid') delete mesh.grid;
+      if (mode === 'auto') mesh.auto = withPolicyMotion(syntheticPolicy(4));
+      if (mode === 'contour') mesh.contour = { tolerance: 0, margin: 1, spacing: 4 };
+      raw.turn = group === 'head'
+        ? { pivot: 20, roles: { face: 'surface', [part]: role } }
+        : { body: { pivot: 20, roles: { face: 'surface', [part]: role } } };
+      return raw;
+    };
+    for (const group of ['head', 'body'] as const) {
+      const part = group === 'head' ? 'hair_back' : 'robe';
+      const field = group === 'head' ? `config.turn.roles.${part}` : `config.turn.body.roles.${part}`;
+      const red = refusals(() => parseConfig(turnAutoConfig(group)));
+      const modes = ['grid', 'contour'].map(mode => refusals(() => parseConfig(turnAutoConfig(group, 'surface', mode))));
+      const carriers = ['unit', 'rear'].map(role => refusals(() => parseConfig(turnAutoConfig(group, role))));
+      say(
+        `CF844_${group.toUpperCase()}_AUTO_SURFACE_IS_REFUSED_WITH_A_WORKING_MESH_MODE`,
+        red !== null && red.problems.length === 1 && red.problems[0].code === 'CONFIG_TURN_SURFACE_AUTO'
+          && red.problems[0].object === field && [part, 'auto', 'grid', 'contour', 'unreduced source'].every(word => red.problems[0].detail.includes(word))
+          && modes.every(e => e === null) && carriers.every(e => e === null),
+        `auto surface: ${codes(red)}; grid/contour: ${modes.map(codes).join(', ')}; auto unit/rear: ${carriers.map(codes).join(', ')}`,
+        'the candidate deform uses emitted vertices and influence order; the automatic motion gate also substitutes its unreduced reference with that motion',
+      );
+    }
+    const legacy = turnAutoConfig('head');
+    legacy.turn = { pivot: 1, depths: { face: 0.5, hair_back: 0.9 } };
+    const plain = turnAutoConfig('body'); delete plain.turn;
+    const legacyError = refusals(() => parseConfig(legacy));
+    const plainError = refusals(() => parseConfig(plain));
+    say('CF844_AUTO_WITHOUT_A_DEPTH_SURFACE_RETAINS_ITS_CONFIG_CONTRACT', legacyError === null && plainError === null,
+      `legacy scalar turn: ${codes(legacyError)}; no turn: ${codes(plainError)}`,
+      'only numeric depth-surface deforms require two topology-specific timelines; legacy bone carriers and absent turns do not');
+  }
+
   // CF75 — issue #188: meshes.<part>.ribs.<chain>.stations is a whole number, 0 or more, and required; a contour or an
   // automatic mesh with ribs on a chain its segments name loads, and each malformed entry is refused at its field.
   const ribbed = (ribs: unknown, mode: 'contour' | 'auto' | 'grid' = 'contour'): Record<string, unknown> => {
@@ -28066,6 +28105,46 @@ function withIdleHipKey(motion: Record<string, unknown>): Record<string, unknown
   return { ...motion, animations: { ...anims, idle: { ...idle, tracks: [...tracks, { bone: 'hip', property: 'rotate', keys: [{ time: 0, value: 0 }, { time: 0.5, value: 0.2 }] }] } } };
 }
 
+/**
+ * Issue #844: emitted assemble/rig bytes from public 1.79.1 (core 2.81.0),
+ * examples at fetch-examples' ba99e403d4058fc1cfe40699bdcde8aaf00a90c0.
+ * SHA-256 of treeDigest over assemble/ and rig/, excluding gate scratch.
+ * These examples declare no auto depth surface; the new refusal moves no byte.
+ */
+const AUTO_TURN_EXAMPLE_BYTES: Readonly<Record<string, string>> = {
+  'demo': '8570429964b9cdbc75a177382e78fd3287db6d43a3d9f29fc3e4388780595ece',
+  'reference-demo': 'c57b5d748d3dd9c7869e415d59b4654433fc154dcbebca4f7fdc03890f089d44',
+  'reference-sample': '0472fe3d2859440c083d41c5194bd44f7891a0643b93669460ea8b4028cd658f',
+  'scarf': '635d92d4fdfc94fe9f633bc2c3c19c0eb12f8aedebb0bfe47b702feb1b1334a2',
+  'wind': '808c2fcc3687586511d2894538b795370fd457f882f95facb564ade58e929216',
+};
+
+/** Reuse the chain's completed build: hashing and a restored output plant only. */
+function autoTurnExampleBytes(asm: string, rig: string, key: string): { ok: boolean; detail: string } {
+  const digest = (): string => {
+    const rows: string[] = [];
+    for (const file of ['parts', 'parts.json', 'recomposite_error_rig.png', 'recomposite_rig.png']) {
+      if (file === 'parts') rows.push(...treeDigest(join(asm, file)).split('\n').map(line => `assemble/parts/${line}`));
+      else rows.push(`assemble/${file} ${createHash('sha256').update(readFileSync(join(asm, file))).digest('hex')}`);
+    }
+    rows.push(...treeDigest(rig).split('\n').map(line => `rig/${line}`));
+    return createHash('sha256').update(rows.join('\n')).digest('hex');
+  };
+  const before = digest();
+  const file = join(rig, 'motion.json'), original = readFileSync(file);
+  let changed: string;
+  try {
+    // Plant in this fixture's output only: whitespace changes bytes, not JSON.
+    writeFileSync(file, Buffer.concat([original, Buffer.from(' ')]));
+    changed = digest();
+  } finally { writeFileSync(file, original); }
+  const restored = digest();
+  return {
+    ok: before === AUTO_TURN_EXAMPLE_BYTES[key] && changed !== before && restored === before,
+    detail: `sha256 ${before}; 1.79.1 ${AUTO_TURN_EXAMPLE_BYTES[key] ?? 'missing baseline'}; whitespace plant ${changed !== before ? 'detected' : 'MISSED'}; restore ${restored === before ? 'exact' : 'CHANGED'}`,
+  };
+}
+
 function runChainSuite(): number | null {
   // Issue #395: split into one unit per example and a closing unit (SPLIT_SUITES); the first opens the section.
   const part = splitPart('chain');
@@ -28109,6 +28188,10 @@ function runChainSuite(): number | null {
       greenBuilds.set(key, out);
       if (planted === null) planted = { key, out, exp };
       if (!mine) continue;
+
+      const autoTurnBytes = autoTurnExampleBytes(out, join(out, 'rig'), key);
+      say(`CH844_AUTO_DEPTH_REFUSAL_KEEPS_PUBLIC_EXAMPLE_BYTES[${key}]`, autoTurnBytes.ok, autoTurnBytes.detail,
+        'public 1.79.1 baseline over every assemble/rig output, reusing this completed build; a whitespace-only output plant is detected and restored exactly');
 
       const expParts = readParts(join(exp, 'parts.json'));
       const parts = jsonDiffs(readJsonAt(join(exp, 'parts.json')), readJsonAt(join(out, 'parts.json')), chainTolerance('parts.json'));
