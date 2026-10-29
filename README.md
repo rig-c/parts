@@ -341,6 +341,7 @@ agent skill.
 | `propose --head-box --full <run> --canvas WxH [--no-back-hair] [--write-config <config>]` | propose `seethrough.head_box` from the full run, held inside the painting; `--no-back-hair` leaves the back-hair layer out of that proposal |
 | `propose --parts --source --out [--compare <config>] [--write-config <config> [--only-missing]]` | propose bones, meshes, regions and an idle; draw the overlay; print, per bone, which check read it or that none did and why (its role, its kind of segment), and write `basis.json` beside the proposal — what each bone rests on (a joint, a part's mask, a ratio, other bones) and, with `--compare`, whether the config's bone differs |
 | `propose … --keypoints <file> [--person <id>]` | read a posed figure's joints from one explicit file (space, image size, people, each joint observed, occluded or missing, its source): a joint with a position places the neck, hip, chest or a sleeve chain as given, a note says how every joint was used or which rule stood in, and LINT reads the torso and sleeves along the joints instead of by screen y ([AUTHORING §3](docs/AUTHORING.md)) |
+| `propose … --full <run> --head <run> --write-config <config>` | [draft an independent neck](docs/AUTHORING.md#a-neck-that-moves-on-its-own) in an existing sampled body turn and reassemble its full-run source under `<out>/rig` |
 | `propose … --grid-rule figure\|part` | how each drafted lattice's spacing is chosen: `figure` (the default) one spacing for the figure, round(H / 37) rig px, a part already coarser keeping its own, with a note on its calibration and cost; `part` the reference's rule, a tenth of the part's short side (the oracle examples are proposed under it) |
 | `propose --parts --source --out --from-config <config> [--keypoints <file> [--person <id>]]` | draw and LINT the config's current bones (by the joints too, given `--keypoints`); proposes nothing, so takes only these flags (not `--full`, `--head`, `--cloth`, `--write-config`, `--wrist-snap`, `--grid-rule`, `--only-missing` or `--compare`) |
 | `compare --left <file> --right <file> [--map <bonemap.json>]` | compare two skeletons — a config, a proposal or a `rig.json` — bone by bone: origin, parent, tip, length and direction per pair, the bones neither side pairs, the required ones missing, and each side's roles read off the spec; no frame is guessed, and nothing pairs by resemblance (`propose --compare` reads origins only) |
@@ -349,6 +350,11 @@ agent skill.
 | `loop --frames <dir> --out <file.gif \| file.png> [--palette]` | encode a rendered idle as a looping GIF, lossless APNG, or indexed APNG (`--palette`) |
 | `build --config --source --full --head --out [--seam] [--project] [--loop] [--lead-in <periods>] [--requirements] [--seam-pairs] [--keep-stills] [--idle-keys ctl\|direct]` | assemble, rig and check in one process, stopping at the first refusal; `--requirements`, `--seam-pairs` and `--keep-stills` are forwarded to check, `--idle-keys` to rig; `--lead-in` (with `--loop`) encodes the loop from the last of n + 1 idle periods played back to back, for a rig whose physics does not end where the render starts it |
 | `compose --scene <scene.json> --out [--requirements] [--accept]` | bind several characters' green builds into one rig (or, under `--accept`, builds failing only the bars named — for looking, not shipping): every name prefixed `<id>:` under one shared root, each character's offset added at its first-level bones, an optional background plate (its provenance recorded, judged by nothing) drawn first, and the draw order between the characters' slots as the scene file declares it — nothing inferred, nothing scaled; gated through rig-c as `rig` is, then checked ([AUTHORING §7](docs/AUTHORING.md), *Composing several characters*) |
+| `mesh-draft --config <json> --parts <dir> --out <dir>` | draft contour meshes for configured lattices, keeping each only where it holds against its lattice through rig-c; write the revised config and measurement report |
+| `mesh-stats --config <json> --parts <dir>` | print each configured mesh's vertex and triangle counts and their total through the rig stage's construction; write nothing |
+| `painting --keypoints <json> [--person <id>] <png>` | before See-through, read the painting against its declared joints and refuse named background, joint or limb-gap problems; write nothing |
+| `remesh --rig <dir> --config <json> --parts <dir> --part <name> --out <dir>` | with exactly one of `--mesh <entry.json>` or `--delta <mesh-edit.json>`, re-fit one part of a gated rig into a fresh revision, preserving the input |
+| `retune --rig <dir> --config <json> --parts <dir> --out <dir>` | splice the config's constraints and idle onto a gated rig in a fresh revision, carrying its attachments over as bytes |
 | `guide <RULE \| §<n> \| §<n>.<m> \| §<n>.<m>.<k>>` | print the one row of [docs/AUTHORING.md](docs/AUTHORING.md) that names a rule (a refusal and the bar it enforces, `CHECK_<LINE>` and `<LINE>`, print together), or one section, `###` subsection or `####` under it, read from the installed file when it runs |
 
 `rig-parts --help` has every flag. Exit codes: 0 done, 1 input refused (every
@@ -362,10 +368,14 @@ fields, the files a build writes and their spec ids, the environment, and what t
 package relies on in rig-c — and what is not, is [docs/STABILITY.md](docs/STABILITY.md).
 Coming from 0.16.0: [docs/MIGRATION.md](docs/MIGRATION.md).
 
-`--write-config <config.json>` saves the three proposals above into an existing
+`--write-config <config.json>` saves the proposals above into an existing
 regular config file: `seethrough.head_box`, `assemble.plan` plus
 `assemble.extend_below_crop`, or the present config sections of an ordinary
-proposal. For `assemble --propose-plan`, the destination must name `--config`
+proposal. The [neck draft](docs/AUTHORING.md#a-neck-that-moves-on-its-own)
+(`propose … --full --head --write-config`) is another writer: for an existing
+`turn.body` config with one neck plan row, it selects the full-run neck, drafts a
+rigid unit and its depth, and reassembles parts under `<out>/rig`.
+For `assemble --propose-plan`, the destination must name `--config`
 itself; a different destination is a usage error. Other fields and absent optional
 sections remain; proposal notes are not copied. Changed whole values are spliced
 into the original text, preserving untouched bytes. Stage loaders validate the candidate, including `proposed_rig_scale`,
@@ -509,7 +519,7 @@ as this port wrote it in issue #227).
 
 ## Requirements
 
-[Bun](https://bun.sh) 1.2 or later. `npm i -D @rig-c/parts` installs the
+[Bun](https://bun.sh) 1.4 or later (`engines.bun >=1.4.0`; CI tests latest only). `npm i -D @rig-c/parts` installs the
 `rig-parts` command (`npm install -g @rig-c/parts` puts it on `PATH`); it hands off
 to Bun and says so in one sentence if Bun is not on `PATH`. **`@rig-c/parts` is the
 package's canonical name; versions 1.0.0-rc.1 to 1.5.3 were published as `rig-parts`, the convenience install name, and
@@ -519,8 +529,8 @@ beside `rig-parts` for the transition, the same launcher under both names. On np
 both compatibility names stay published beside `@rig-c/parts` at every version, as aliases
 carrying the same files with only the `name` in `package.json` changed, so a
 project that depends on either keeps receiving every release; a new
-install names `@rig-c/parts` ([RELEASING.md](RELEASING.md), *The registry side*). rig-c
-comes with it as a dependency. No Spine runtime does: since
+install names `@rig-c/parts` ([RELEASING.md](RELEASING.md), *The registry side*). `@rig-c/core`
+comes with it as a dependency, providing the `rigc` command. No Spine runtime does: since
 rig-c 2.0 the installed `rigc` gates every build with its own validator over the
 compiled model document, and `rigc --version` says `entry: cli_core.ts —
 @esotericsoftware/spine-core absent`. With `@esotericsoftware/spine-core` installed

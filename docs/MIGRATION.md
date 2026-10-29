@@ -151,7 +151,7 @@ nothing else.
 | --- | --- | --- |
 | npm package | `rig-parts` | `@rig-c/parts`; `rig-parts` and the alias `spine-parts` are published beside it at every version as aliases, the same files with only the `name` in `package.json` changed |
 | command | `rig-parts`, and the alias `spine-parts` on the same launcher | unchanged |
-| repository | `firejune/rig-parts` (GitHub redirects it) | `rig-c/parts`, beside `rig-c/core` (npm `rig-c`) and `rig-c/play` |
+| repository | `firejune/rig-parts` (GitHub redirects it) | `rig-c/parts`, beside `rig-c/core` (npm `@rig-c/core`, alias `rig-c`) and `rig-c/play` |
 | spec ids, the config, the bytes a build writes | | unchanged |
 
 What to do: install with `npm i -D @rig-c/parts` (or `npm install -g @rig-c/parts`);
@@ -337,7 +337,7 @@ bent wants a cap that covers the turn.
 Issue #493 reads every declared neighbour pair — each limb's two segments at a joint
 (`config.limbs`), and each `--requirements` `seam`'s two parts — in every animation
 `motion.json` holds, the idle included, by rig-c's seam reading (`rigc render --seam`,
-rig-c 2.60.0, now the dependency's floor). It is a warning, never a bar: a seam that
+rig-c 2.60.0, then the dependency's floor). It is a warning, never a bar: a seam that
 opens in motion may be intended, so no exit status, no `check: PASS` and no bar count
 moves (AUTHORING §6, `SEAM_OVER_MOTION`).
 

@@ -315,7 +315,7 @@ rig-parts build: scratch/outfits/config.json -> scratch/outfits/out, seam rule n
 [rig] rig-parts rig: outfit-fixture, rig 64x64, 11 part(s)
 [rig]   mesh bottomwear   v=  24 t=  30 hull= 16 grid=6 bones=2 infl max 1 mean 1.00 cover 1.00000 loop passes 1
 [rig]   bones 14 (2 control) slots 11 meshes 1 regions 10 vertices 24; idle 1 s, 6 track(s), 51 key(s)
-[rig]   animations beside the idle, from /Users/firejune/Workspace/Firejune/rig-parts/scratch/outfits/speak.json as written: speak
+[rig]   animations beside the idle, from <project>/scratch/outfits/speak.json as written: speak
 [rig]   face axis: 0 degrees, the line through the eye bones eye_r and eye_l (on eyewhite_r and eyewhite_l); eye_r, eye_l, mouth turned to it; invariants.axes "face" holds eye_r, eye_l, mouth to the line through eye_r -> eye_l, tolerance 0.000001 degrees (rigc's A51); head_up under head along the face's up axis, 90 degrees, 5 px (head's origin to the eye midpoint along it)
 [rig]   idle keys ctl: 2 mesh-driving bone(s) keyed by the idle, each keyed through a same-origin <bone>_ctl parent
 [rig]   rigc build --profile rig-play --pack --page-edges free --pack-shape polygon: exit 0
@@ -323,7 +323,7 @@ rig-parts build: scratch/outfits/config.json -> scratch/outfits/out, seam rule n
 [rig]     ..    50 assertions: 24 measured (24 passed, 0 failed), 26 skipped, 0 not in profile "rig-play"
 [rig] rig-parts rig: wrote scratch/outfits/out/rig/rig.json, motion.json, mesh_report.json and 19 image(s) under scratch/outfits/out/rig/images
 [check] rig-parts check: scratch/outfits/out/rig -> scratch/outfits/out/check
-[check]   rigc 2.59.0 at /Users/firejune/Workspace/Firejune/rig-parts/node_modules/.bin/rigc; entry: cli.ts — @esotericsoftware/spine-core 4.3.13 present
+[check]   rigc 2.59.0 at <project>/node_modules/.bin/rigc; entry: cli.ts — @esotericsoftware/spine-core 4.3.13 present
 [check]   gate rig-play (rigc build --profile rig-play --pack --page-edges free --pack-shape polygon), verbatim:
 [check]   ..    50 assertions: 23 measured (23 passed, 0 failed), 27 skipped, 0 not in profile "rig-play"
 [check]   ..    pages=19 regions=19 bones=14 slots=11 animations=2 version=4.3.13 regionAttachments=17 meshAttachments=2 physicsConstraints=0 rig=outfit-fixture_painting profile=rig-play
@@ -377,12 +377,12 @@ Verbatim output of `rigc render` on the `speak` animation:
 
 ```text
 rigc render
-  ..    skeleton /Users/firejune/Workspace/Firejune/rig-parts/scratch/outfits/out/check/build/skeleton.json
-  ..    atlas    /Users/firejune/Workspace/Firejune/rig-parts/scratch/outfits/out/check/build/skeleton.atlas
-  ..    poser    rigc core — /Users/firejune/Workspace/Firejune/rig-parts/scratch/outfits/out/check/build/skeleton.model.json
-  ..    60x64px at 12 fps, 1 set(s) -> /Users/firejune/Workspace/Firejune/rig-parts/scratch/outfits/speak_frames
-  ..    speak            13 frame(s), 1.000s + contact.png -> /Users/firejune/Workspace/Firejune/rig-parts/scratch/outfits/speak_frames/speak
-rigc: wrote /Users/firejune/Workspace/Firejune/rig-parts/scratch/outfits/speak_frames/frames.json
+  ..    skeleton <project>/scratch/outfits/out/check/build/skeleton.json
+  ..    atlas    <project>/scratch/outfits/out/check/build/skeleton.atlas
+  ..    poser    rigc core — <project>/scratch/outfits/out/check/build/skeleton.model.json
+  ..    60x64px at 12 fps, 1 set(s) -> <project>/scratch/outfits/speak_frames
+  ..    speak            13 frame(s), 1.000s + contact.png -> <project>/scratch/outfits/speak_frames/speak
+rigc: wrote <project>/scratch/outfits/speak_frames/frames.json
 ```
 
 The selftest control `BU173_OUTFIT_TRANSACTION_KEEPS_BONES_DRAWN_FACE_AXIS_IDLE_RE_RUNS_CLOTHING_MESH_COMPOSES_VISEMES_AND_REFUSES_SLEEVE_TRAPS` in `selftest.ts` gates every digest, set binding, precedence rule, and wide-sleeve refusal in this document on every run.
