@@ -243,6 +243,8 @@ export interface Geometry {
   headFaceUnderfill?: boolean;
   /** `assemble.yield_refused`, default false; alpha-only ownership transfer from original refused core pixels. */
   yieldRefused?: boolean;
+  /** Plan parts whose own samples survive source re-take beneath soft front cover. */
+  keepUnderOccluders?: readonly string[];
 }
 
 /**
@@ -362,6 +364,8 @@ export interface AssembleInput {
   headFaceUnderfill?: boolean;
   /** `assemble.yield_refused`, default false; alpha-only ownership transfer from original refused core pixels. */
   yieldRefused?: boolean;
+  /** Plan parts whose own samples survive source re-take beneath soft front cover. */
+  keepUnderOccluders?: readonly string[];
   /**
    * Issue #587: rig pixels taken out of named parts once the cuts and the limbs are made, before the fringe pass and
    * every figure a part's record holds — each entry clears `part`'s pixels (alpha, colour and region) where `mask` is
@@ -4386,6 +4390,8 @@ export interface DriftYieldReading {
   yielded: number;
   /** Yielded refusals also accepted by projection closing; removed from the written projected count. */
   yieldedTaken: number;
+  /** Original refused pixels explicitly kept from their own layer (#825). */
+  preserved?: number;
   skipped: { merge: number; ring: number; notOpaque: number; noMatchingBehind: number };
   /** Informational only: no fixed global-holder eligibility guard is used. */
   originalGlobalHolderWouldSkip: number;
@@ -4393,7 +4399,24 @@ export interface DriftYieldReading {
   finalHolders: Array<{ part: string | null; px: number }>;
 }
 
+export interface SoftOcclusionReading {
+  part: string;
+  /** Config accepts original plan names, not derived cut/limb output names. */
+  sourcePart?: string;
+  from: string;
+  changed: number;
+  kept: number;
+  front: Array<{ part: string; px: number }>;
+}
+
+/** Informational source/layer disagreement under actual soft front cover; no gate. */
+export function softOcclusionLine(r: SoftOcclusionReading): string {
+  return `drift: "${r.part}" source re-take changed ${r.changed} own-layer px of ${r.from} under soft front cover (${r.front.map(q => `"${q.part}" ${q.px} px`).join(', ')}; alpha > 0 and < ${CORE_ALPHA}); ${r.kept > 0 ? `kept ${r.kept} original own-layer px (assemble.keep_under_occluders)` : `inspect its own amodal layer and motion extremes; to retain those samples ${r.sourcePart === undefined ? `resolve ${r.from} to its original assemble.plan part before setting assemble.keep_under_occluders` : `set assemble.keep_under_occluders: ["${r.sourcePart}"]`}`}; informational, not a drift-refusal or uncovered-hole gate`;
+}
+
 export interface AssembleResult {
+  /** Report-only source re-take under actual soft front support (#825). */
+  softOcclusion?: SoftOcclusionReading[];
   parts: PartsFile;
   /** In plan order, each cropped to its record's box. */
   images: PlacedPart[];
@@ -4662,6 +4685,7 @@ export function assemble(input: AssembleInput): AssembleResult {
   const patchIds = patches.map((_, i) => editId(`patches[${i}]`));
   const layerWriters = new Map<string, Int32Array>();
   const valueBaselines = new Map<string, ValueBaseline | null>();
+  const cleanedSoftCover = new Map<string, Mask>();
   // Extend-only rasters are still projected/merged, but are never emitted as own sources.
   const readKeys = new Set(sourcePlan.map(([, run, tag]) => `${run}:${tag}`));
   const rig = new Map<string, Raster>();
@@ -4735,6 +4759,17 @@ export function assemble(input: AssembleInput): AssembleResult {
       }
       // Keep only samples that could equal a final opaque pixel; full raw and
       // prepared normalization temporaries end with this layer's callback.
+      // A low-alpha source fringe removed by cleanGhosts still contributed to
+      // the painting. Retain its source footprint only for explicit opt-in;
+      // final piece regions below still decide which side of a cut owns it.
+      if ((input.keepUnderOccluders?.length ?? 0) > 0 && raw !== null && preparedWriter === 0) {
+        let footprint: Mask | null = null;
+        for (let p = 0; p < W * H; p++) if (raw.data[p * 4 + 3] > 0 && raw.data[p * 4 + 3] <= OPAQUE_ALPHA_ABOVE && rigLayers[i].data[p * 4 + 3] === 0) {
+          footprint ??= newMask(W, H);
+          footprint.data[p] = 1;
+        }
+        if (footprint !== null) cleanedSoftCover.set(key, footprint);
+      }
       valueBaselines.set(key, raw === null ? null : compactValueBaseline(raw));
       return ids;
     });
@@ -5170,7 +5205,66 @@ export function assemble(input: AssembleInput): AssembleResult {
     return { record: whole, image: b.r };
   });
   const featheredInOrder: Array<Mask | null> = order.map((d) => ('patch' in d ? null : (pieceAt(d).b.feathered ?? null)));
-  const keepInOrder = order.map((d) => ('limb' in d ? limbKeep[d.limb] : null));
+  // #825: decide ownership on the final draw stack, after merges, cuts,
+  // limb splits and exclusions. Restore only original own-layer samples:
+  // no merge/ring, under-fill, cap, patch or authored replacement is borrowed.
+  const wanted = new Set(input.keepUnderOccluders ?? []);
+  refuseIfAny([...wanted].filter(name => !input.plan.some(([n]) => n === name)).map(name => ({ code: 'CONFIG_NAME_RESOLVES', object: 'config.assemble.keep_under_occluders', detail: `names "${name}"; a source part in assemble.plan is required` })));
+  const sourceKeys = new Set(input.plan.filter(([name]) => wanted.has(name)).map(([, run, tag]) => `${run}:${tag}`));
+  const keptRetake: Array<Mask | null> = order.map(() => null);
+  const softOcclusion: SoftOcclusionReading[] = [];
+  const keepInOrder = order.map((d, i): Mask | null => {
+    const limb = 'limb' in d ? limbKeep[d.limb] : null;
+    if ('patch' in d) return limb;
+    const b = pieceAt(d).b, baseline = valueBaselines.get(b.key);
+    if (baseline === undefined || baseline === null) return limb;
+    const enabled = sourceKeys.has(b.key);
+    const mask = enabled ? newMask(W, H) : limb;
+    if (enabled && limb !== null) mask!.data.set(limb.data);
+    const restored = enabled ? newMask(W, H) : null;
+    const sourcePart = input.plan.find(([, run, tag]) => `${run}:${tag}` === b.key)?.[0];
+    const reading: SoftOcclusionReading = { part: pieceAt(d).name, ...(sourcePart === undefined ? {} : { sourcePart }), from: b.key, changed: 0, kept: 0, front: [] };
+    const holders = new Map<string, number>();
+    for (let by = 0; by < baseline.image.height; by++) for (let bx = 0; bx < baseline.image.width; bx++) {
+      const p = (baseline.y + by) * W + baseline.x + bx;
+      if (b.trace.from[p] >= 0 || b.trace.ring.data[p] !== 0 || (b.region !== null && b.region.data[p] === 0)) continue;
+      const x = p % W - baseline.x, y = Math.floor(p / W) - baseline.y;
+      if (x < 0 || y < 0 || x >= baseline.image.width || y >= baseline.image.height) continue;
+      const q = (y * baseline.image.width + x) * 4, raw = baseline.image.data;
+      if (raw[q + 3] < CORE_ALPHA || b.r.data[p * 4 + 3] !== raw[q + 3]) continue;
+      const writer = b.writers?.[p] ?? 0;
+      if (!enabled && (writer !== AW.sourceProjection || rgbaEqual(b.r.data, p * 4, raw, q))) continue;
+      if (writer !== AW.sourceProjection && !rgbaEqual(b.r.data, p * 4, raw, q)) continue;
+      for (let j = stack.length - 1; j > i; j--) {
+        let alpha = stack[j].image.data[p * 4 + 3];
+        const frontSlot = order[j];
+        if (alpha === 0 && enabled && !('patch' in frontSlot)) {
+          const cover = pieceAt(frontSlot).b;
+          if ((cover.region === null || cover.region.data[p] === 1) && cover.trace.from[p] < 0 && cover.trace.ring.data[p] === 0 && cleanedSoftCover.get(cover.key)?.data[p] === 1) alpha = OPAQUE_ALPHA_ABOVE;
+        }
+        if (alpha === 0) continue;
+        if (alpha < CORE_ALPHA) {
+          const different = !rgbaEqual(b.r.data, p * 4, raw, q);
+          if (different) reading.changed++;
+          if (different || enabled) holders.set(stack[j].record.name, (holders.get(stack[j].record.name) ?? 0) + 1);
+          if (enabled) {
+            b.r.data.set(raw.subarray(q, q + 4), p * 4);
+            mask!.data[p] = 1;
+            restored!.data[p] = 1;
+            reading.kept++;
+          }
+        }
+        break;
+      }
+    }
+    keptRetake[i] = restored;
+    if (reading.changed > 0 || reading.kept > 0) {
+      reading.front = [...holders].map(([part, px]) => ({ part, px }));
+      softOcclusion.push(reading);
+    }
+    return mask;
+  });
+  const retakeByName = new Map(order.flatMap((d, i) => 'patch' in d ? [] : [[pieceAt(d).name, keptRetake[i]] as const]));
   const patchWriters = patches.map((_, i) => new Int32Array(W * H).fill(patchIds[i]));
   const writersInOrder = order.map(d => 'patch' in d ? patchWriters[d.patch] : pieceAt(d).b.writers as Int32Array);
   const pushedBy = pushBackFringe(stack, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, featheredInOrder, keepInOrder, input.turnMovingPair ?? null, (i, p) => { writersInOrder[i][p] = AW.fringeRestore; });
@@ -5227,6 +5321,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       for (let p = 0; p < W * H; p++) {
         if (refused.data[p] !== 1) continue;
         reading.refusedCandidates++;
+        if (keptRetake[orderIdx]?.data[p] === 1) { reading.preserved = (reading.preserved ?? 0) + 1; continue; }
         if (b.trace.from[p] >= 0) { reading.skipped.merge++; continue; }
         if (b.trace.ring.data[p] !== 0) { reading.skipped.ring++; continue; }
         if (b.r.data[p * 4 + 3] < CORE_ALPHA) { reading.skipped.notOpaque++; continue; }
@@ -5293,7 +5388,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       const own = e < 0 ? st : (stats.get(extendKeys[e]) as ProjectionStats);
       // A pixel outside the piece's region is a base pixel filled from a cut's under image (issue #193): occluded, never visible.
       if (r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE && own.clear.data[p] === 1 && (region === null || region.data[p] === 1)) visible.data[p] = 1;
-      if (yields.get(name)?.mask.data[p] !== 1 && trace.ring.data[p] === 0 && own.takenMask.data[p] === 1 && (region === null || region.data[p] === 1)) projected.data[p] = 1;
+      if (retakeByName.get(name)?.data[p] !== 1 && yields.get(name)?.mask.data[p] !== 1 && trace.ring.data[p] === 0 && own.takenMask.data[p] === 1 && (region === null || region.data[p] === 1)) projected.data[p] = 1;
     }
     const { x0, y0, x1, y1, opaque } = measureBox(r);
     if (opaque === 0) {
@@ -5318,7 +5413,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       visible_px: vc.visible_px,
       occluded_px: vc.occluded_px,
       projected_core_px: region === null ? st.core : count(st.coreMask, region),
-      source_px_taken: (region === null ? st.taken : count(st.takenMask, region)) - (yields.get(name)?.reading.yieldedTaken ?? 0),
+      source_px_taken: (region === null ? st.taken : count(st.takenMask, region)) - (yields.get(name)?.reading.yieldedTaken ?? 0) - (retakeByName.get(name) == null ? 0 : count(st.takenMask, retakeByName.get(name)!)),
       visible_not_projected_px: vc.visible_not_projected_px,
       refused_drift_px: region === null ? st.refused : count(st.refusedMask, region),
       merged_px: merged,
@@ -5383,6 +5478,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     bodyMinPx(frame),
   );
   return {
+    ...(softOcclusion.length === 0 ? {} : { softOcclusion }),
     parts: {
       rig_size: [W, H],
       scale_rig_per_source: frame.S,
@@ -6230,6 +6326,8 @@ export function stageFields(
   headFaceUnderfill?: boolean;
   /** `assemble.yield_refused`, default false; alpha-only ownership transfer from original refused core pixels. */
   yieldRefused?: boolean;
+  /** Plan parts whose own samples survive source re-take beneath soft front cover. */
+  keepUnderOccluders?: readonly string[];
   turnMovingPair?: (a: string, b: string) => boolean;
 } {
   const problems: Problem[] = [];
@@ -6251,6 +6349,7 @@ export function stageFields(
     ...(keySkeleton === undefined ? {} : { keySkeleton }),
     ...(cfg.assemble.head_face_underfill === undefined ? {} : { headFaceUnderfill: cfg.assemble.head_face_underfill }),
     ...(cfg.assemble.yield_refused === undefined ? {} : { yieldRefused: cfg.assemble.yield_refused }),
+    ...(cfg.assemble.keep_under_occluders === undefined ? {} : { keepUnderOccluders: cfg.assemble.keep_under_occluders }),
     ...(turnMovingPair === null ? {} : { turnMovingPair }),
     rigScale: cfg.assemble.rig_scale,
     plan: cfg.assemble.plan,

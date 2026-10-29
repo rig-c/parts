@@ -49,7 +49,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { type AnimFrame, EncodeError, encodeApng, encodeIndexedApng, INDEXED_DEFAULTS } from './apng.ts';
-import { assemble, type AssembleResult, cutLines, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, holeKindsLine, holeLines, measureRecomposite, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine } from './assemble.ts';
+import { assemble, type AssembleResult, cutLines, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, holeKindsLine, holeLines, measureRecomposite, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine } from './assemble.ts';
 import { allocationClause, type Reducer, stageBClause, unboundedClause } from './automesh.ts';
 import { residualClause } from './autoenvelope.ts';
 import { type AutoMotionCase, failingRows, idleSchedule, localRow, motionClause, motionDeformation, motionDocument, motionInput, motionRowText, motionStimulus, motionVerdict, noStimulusProblem, prepareComparison, type ReplayCandidate, runComparison, runPreparedComparison, sourceSelfFailure, stimulusMotion, withStimulus } from './automotion.ts';
@@ -646,6 +646,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         capOwnership: input.setCapOwnership ?? 'target',
         full: altRuns.full,
         head: altRuns.head,
+        ...(fields.keepUnderOccluders === undefined ? {} : { keepUnderOccluders: fields.keepUnderOccluders.filter(name => altPlanNames.has(name)) }),
         resolution: fields.resolution,
         headBox: altHeadBox,
         rigScale: fields.rigScale,
@@ -811,6 +812,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   if (result.figures.uncoveredErrorPx > 0) log(holeKindsLine(result.holeKinds, scene));
   for (const u of result.uncovered) log(uncoveredLine(u, scene));
   for (const d of result.drift) log(driftLine(d));
+  for (const d of result.softOcclusion ?? []) log(softOcclusionLine(d));
   // Issue #588: per subset set, one line per limb part cut from a layer of more than one island, then (issue #587) one
   // per limb part and base part over it that took a pixel. None otherwise.
   // Issue #609: then one per limb part cut from a layer of one island that also holds a limb the set does not carry.

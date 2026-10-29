@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { softOcclusionLine } from './src/assemble.ts';
+import { softOccluderFixture, softTrailDiff, yieldLimbCoverFixture, SOFT_SKIN } from './fixtures/soft_occluder.ts';
 import { writeHybridFixture } from './fixtures/hybrid_limb.ts';
 import { AUTOMATIC_WRITERS as AW817, compactValueBaseline, pixelProvenance, provenanceAddsUp, provenanceLines } from './src/provenance.ts';
 import { runTurnBlendChecks } from './tools/check_turn_blend.ts';
@@ -32449,6 +32451,100 @@ function runAssembleSuite(): number {
       const input = { ...yieldFixture819(label, opt), seamRule: 'near-white' as const, yieldRefused: enabled };
       return assemble(input);
     };
+    // #825: an independent max-min ROI outside the stationary hem catches
+    // source ink travelling on the rotating amodal layer, without rewarding holes.
+    const softOff825 = assemble(softOccluderFixture());
+    const softOn825 = assemble({ ...softOccluderFixture(), keepUnderOccluders: ['under'] });
+    const under825 = (r: ReturnType<typeof assemble>) => r.images.find(p => p.record.name === 'under')!;
+    const offDiff825 = softTrailDiff(under825(softOff825)), onDiff825 = softTrailDiff(under825(softOn825));
+    say('AS825_SOFT_HEM_RED_FIRST_AND_OWN_AMODAL_PIXELS_REMOVE_THE_MAX_MIN_TRAIL_WITHOUT_HOLES',
+      offDiff825.count > 0 && onDiff825.count === 0 && onDiff825.population > 0 && onDiff825.alphaHoles === 0 && under825(softOn825).image.data.every((v, i) => v === SOFT_SKIN[i % 4]),
+      `off abs(max-min) ROI=${JSON.stringify(offDiff825)}; on=${JSON.stringify(onDiff825)}; off provenance=${JSON.stringify(under825(softOff825).record.provenance)}`,
+      'the nearest-centre inverse-rotation oracle reads actual output pixels; the ROI is outside the fixed hem and inside both poses, so uniform skin has exactly zero residual and transparent holes are a failure');
+    const edge825 = (['opaque', 'none'] as const).map(edge => {
+      const off = assemble(softOccluderFixture(edge)), on = assemble({ ...softOccluderFixture(edge), keepUnderOccluders: ['under'] });
+      return { edge, equal: JSON.stringify(off.parts) === JSON.stringify(on.parts) && off.images.every((p, i) => Buffer.compare(Buffer.from(encodePngBytes(p.image)), Buffer.from(encodePngBytes(on.images[i].image))) === 0) };
+    });
+    say('AS825_OPAQUE_EDGE_AND_NO_FRONT_OCCLUDER_ARE_BYTE_IDENTICAL', edge825.every(p => p.equal), JSON.stringify(edge825), 'a fully opaque edge and absent front cover both take the old path');
+    const reordered825 = (enabled: boolean) => assemble({ ...softOccluderFixture(), keepUnderOccluders: enabled ? ['under'] : [], cuts: [{ from: 'cover', into: 'rear_hem', polygon: [[16, 34], [72, 34], [72, 42], [16, 42]], overlap: 0, draw: 'back' }] });
+    const rearOff825 = reordered825(false), rearOn825 = reordered825(true);
+    say('AS825_CUT_MOVED_BEHIND_THE_UNDER_PART_IS_NOT_A_FRONT_OCCLUDER',
+      JSON.stringify(rearOff825.parts) === JSON.stringify(rearOn825.parts) && rearOff825.images.every((p, i) => Buffer.compare(Buffer.from(encodePngBytes(p.image)), Buffer.from(encodePngBytes(rearOn825.images[i].image))) === 0) && (rearOn825.softOcclusion?.length ?? 0) === 0,
+      `final stack=${rearOn825.images.map(p => p.record.name)}; soft readings=${rearOn825.softOcclusion?.length ?? 0}`, 'the final cut draw order, not its source layer order, determines which part covers the under-part');
+    const cutRemedy825 = assemble({ ...softOccluderFixture(), cuts: [{ from: 'under', into: 'piece', polygon: [[32, 34], [44, 34], [44, 42], [32, 42]], overlap: 0, draw: { before: 'cover' } }] });
+    const pieceReading825 = cutRemedy825.softOcclusion?.find(q => q.part === 'piece');
+    say('AS825_DERIVED_CUT_REMEDY_NAMES_THE_CONFIGURABLE_ORIGINAL_PLAN_PART', pieceReading825?.sourcePart === 'under' && softOcclusionLine(pieceReading825).includes('assemble.keep_under_occluders: ["under"]') && !softOcclusionLine(pieceReading825).includes('assemble.keep_under_occluders: ["piece"]'),
+      JSON.stringify(pieceReading825), 'a cut name identifies the output, while the remedy names the original source part accepted by the loader; no guessed or unresolvable config name is suggested');
+    const cross825 = softOccluderFixture();
+    cross825.head = { ...cross825.head, layers: [cross825.full.layers[1]] };
+    cross825.full = { ...cross825.full, layers: [cross825.full.layers[0]] };
+    cross825.plan = [['under', 'full', 'neck'], ['cover', 'head', 'topwear']];
+    const crossOn825 = assemble({ ...cross825, keepUnderOccluders: ['under'] });
+    say('AS825_SOFT_FRONT_IN_THE_OTHER_RUN_RETAINS_THE_SAME_OWN_PIXELS', softTrailDiff(under825(crossOn825)).count === 0 && Array.from({ length: 8 * 24 }, (_, i) => [32 + i % 24, 34 + Math.floor(i / 24)]).every(([x, y]) => { const p = under825(crossOn825); const q = ((y - p.record.y) * p.record.w + x - p.record.x) * 4; return SOFT_SKIN.every((v, c) => p.image.data[q + c] === v); }), JSON.stringify(crossOn825.softOcclusion), 'the final stack is shared by both runs; projection-run-local ownership cannot make the head cover invisible to the full-run under-part');
+    say('AS825_DERIVED_RETAKE_READING_NAMES_THE_REMEDY_WITHOUT_CLAIMING_A_DRIFT_REFUSAL',
+      softOff825.softOcclusion?.find(q => q.part === 'under')?.changed === 100 && softOff825.softOcclusion.some(q => softOcclusionLine(q).includes('assemble.keep_under_occluders: ["under"]')) && softOn825.softOcclusion?.some(q => q.kept > 0 && softOcclusionLine(q).includes('kept')) === true,
+      JSON.stringify({ off: softOff825.softOcclusion, on: softOn825.softOcclusion }), 'source-projection writer plus changed original RGBA plus actual soft front support derives the informational report; no observation of motion or defect is invented');
+    try {
+      const alt825 = (enabled: boolean) => {
+        const d = join(dir, 'soft-alternate825-' + enabled), f = softOccluderFixture();
+        mkdirSync(d, { recursive: true });
+        writeFileSync(join(d, 'painting.png'), encodePngBytes(f.source));
+        exportLayers(f.full, join(d, 'full')); writeRun(join(d, 'head'), FRAMED_HEAD, 96);
+        const cfg = assembleConfig({ plan: f.plan, extend: [], resolution: 96, rigScale: 1, headBox: f.headBox });
+        const ac = cfg.assemble as Record<string, unknown>; ac.keep_under_occluders = enabled ? ['under'] : [];
+        ac.alternates = [{ name: 'mirror', source: 'painting.png', full: 'full', head: 'head' }];
+        writeFileSync(join(d, 'config.json'), JSON.stringify(cfg));
+        const o = join(d, 'out'), logs: string[] = [];
+        const r = assembleStage({ source: join(d, 'painting.png'), full: join(d, 'full'), head: join(d, 'head'), config: join(d, 'config.json'), seam: 'near-white', project: 'core' }, { partsJson: join(o, 'parts.json'), partsDir: join(o, 'parts'), recomposite: join(o, 'recomposite.png'), errorMap: join(o, 'error.png') }, l => logs.push(l));
+        const base = under825(r), alternate = readPng(join(o, 'parts', 'mirror_under.png'));
+        return { base: softTrailDiff(base), alternate: softTrailDiff({ ...base, image: alternate }), same: Buffer.compare(Buffer.from(encodePngBytes(base.image)), Buffer.from(encodePngBytes(alternate))) === 0, remedy: logs.some(l => l.includes('assemble.keep_under_occluders')) };
+      };
+      const off = alt825(false), on = alt825(true);
+      say('AS825_REAL_STAGE_AND_FULL_ALTERNATE_FORWARD_THE_HANDLE', off.base.count > 0 && off.alternate.count > 0 && on.base.count === 0 && on.alternate.count === 0 && off.same && on.same && off.remedy && on.remedy,
+        JSON.stringify({ off, on }), 'both actual build.ts branches receive the authored handle; the logged remedy and emitted PNGs are read back');
+    } catch (error) { say('AS825_REAL_STAGE_AND_FULL_ALTERNATE_FORWARD_THE_HANDLE', false, String(error), 'fixture/reader refusal is not a completed pixel test'); }
+    const pixel825 = (r: ReturnType<typeof assemble>, name: string, x: number, y: number): number[] => {
+      const p = r.images.find(q => q.record.name === name)!;
+      const at = ((y - p.record.y) * p.record.w + x - p.record.x) * 4;
+      return Array.from(p.image.data.subarray(at, at + 4));
+    };
+    const marker825 = [10, 220, 20, 255];
+    const filled825 = (enabled: boolean) => assemble({ ...softOccluderFixture(), keepUnderOccluders: enabled ? ['under'] : [], cuts: [{ from: 'under', into: 'piece', polygon: [[32, 34], [44, 34], [44, 42], [32, 42]], overlap: 0, draw: 'front', under: 'amodal-under.png' }], under: [paint(12, 8, [10, 220, 20], [])] });
+    const fillOff825 = filled825(false), fillOn825 = filled825(true);
+    say('AS825_AUTHORED_UNDER_FILL_AND_FRONT_CUT_KEEP_THEIR_OWN_PROVENANCE',
+      JSON.stringify(pixel825(fillOff825, 'under', 36, 38)) === JSON.stringify(marker825) && JSON.stringify(pixel825(fillOn825, 'under', 36, 38)) === JSON.stringify(marker825) && under825(fillOff825).record.provenance?.hand_px === under825(fillOn825).record.provenance?.hand_px && Buffer.compare(Buffer.from(encodePngBytes(fillOff825.images.find(p => p.record.name === 'piece')!.image)), Buffer.from(encodePngBytes(fillOn825.images.find(p => p.record.name === 'piece')!.image))) === 0,
+      `under-fill off=${pixel825(fillOff825, 'under', 36, 38)}, on=${pixel825(fillOn825, 'under', 36, 38)}; hand=${under825(fillOff825).record.provenance?.hand_px}/${under825(fillOn825).record.provenance?.hand_px}`, 'a filled base pixel is outside the original region; a cut drawn in front of the cover has no front occluder; neither may be replaced by the original source layer');
+    const merged825 = (enabled: boolean) => {
+      const f = softOccluderFixture(), marker = newRaster(96, 96);
+      for (let p = 0; p < 96 * 96; p++) if (f.full.layers[0].pixels.data[p * 4 + 3] > 0) marker.data.set(marker825, p * 4);
+      return assemble({ ...f, full: { ...f.full, layers: [{ ...f.full.layers[0], pixels: marker }, f.full.layers[1]] }, head: { ...f.head, layers: [f.full.layers[0]] }, headBox: [0, 0, 96, 40], plan: [['under', 'head', 'neck'], ['cover', 'full', 'topwear']], extend: [{ part: 'under', run: 'full', tag: 'neck' }], keepUnderOccluders: enabled ? ['under'] : [] });
+    };
+    const mergeOff825 = merged825(false), mergeOn825 = merged825(true);
+    say('AS825_MERGED_SOURCE_SAMPLES_ARE_NOT_REPLACED_BY_THE_HEAD_LAYER_BASELINE',
+      JSON.stringify(pixel825(mergeOff825, 'under', 40, 38)) === JSON.stringify(marker825) && JSON.stringify(pixel825(mergeOn825, 'under', 40, 38)) === JSON.stringify(marker825) && under825(mergeOff825).record.merged_px > 0 && under825(mergeOff825).record.merged_px === under825(mergeOn825).record.merged_px,
+      `merged off=${pixel825(mergeOff825, 'under', 40, 38)}, on=${pixel825(mergeOn825, 'under', 40, 38)}; merged px=${under825(mergeOff825).record.merged_px}/${under825(mergeOn825).record.merged_px}`, 'trace.from and ring retain extension provenance; a matching coordinate in the original head layer does not authorize replacing a full-run sample');
+    const combinedAbsent825 = assemble(yieldLimbCoverFixture()), combinedEmpty825 = assemble({ ...yieldLimbCoverFixture(), keepUnderOccluders: [] });
+    const combinedYields825 = combinedAbsent825.yieldReadings ?? [];
+    say('AS825_DEFAULT_OFF_COMBINED_YIELD_AND_LIMB_COVER_KEEP_THE_HISTORICAL_PATH',
+      combinedYields825.some(q => q.yielded > 0) && combinedYields825.every(q => q.preserved === undefined) && JSON.stringify(combinedAbsent825.parts) === JSON.stringify(combinedEmpty825.parts) && combinedAbsent825.images.every((p, i) => Buffer.compare(Buffer.from(encodePngBytes(p.image)), Buffer.from(encodePngBytes(combinedEmpty825.images[i].image))) === 0),
+      JSON.stringify(combinedYields825), 'with the new handle absent/empty no new keptRetake pixel may skip a historical yield; the lower cap exercises the existing limb-cover protection independently');
+    const rawProv825 = under825(softOn825).record.provenance;
+    const forcedProjectionWriters825 = new Int32Array(96 * 96).fill(AW817.sourceProjection);
+    const independentlyClassified825 = pixelProvenance(under825(softOn825).image, under825(softOn825).record.x, under825(softOn825).record.y, 96, forcedProjectionWriters825, [], 0, softOccluderFixture().full.layers[0].pixels);
+    say('AS825_RESTORED_VALUES_ARE_CLASSIFIED_AS_OWN_LAYER_DESPITE_RETAINED_PROJECTION_WRITERS',
+      rawProv825?.unchanged_layer_px === 24 * 72 && rawProv825.automatic_px === 0 && rawProv825.hand_px === 0 && independentlyClassified825.unchanged_layer_px === 24 * 72 && independentlyClassified825.automatic_px === 0,
+      JSON.stringify({ actual: rawProv825, forcedProjectionWriters: independentlyClassified825 }), 'RGBA equality with immutable raw baseline has precedence over writer IDs; the real restored output and an independently forced AW.sourceProjection population must both classify as own layer');
+    const softConfig825 = (value: unknown) => {
+      const cfg = assembleConfig({ plan: [['under', 'full', 'neck'], ['cover', 'full', 'topwear']], extend: [] });
+      (cfg.assemble as Record<string, unknown>).keep_under_occluders = value;
+      return cfg;
+    };
+    const values825: unknown[] = [[], ['under'], false, 'under', [1], ['under', 'under'], ['absent']];
+    const doors825 = values825.map(value => ({ value, errors: [refusals(() => parseConfig(softConfig825(value))), refusals(() => parseEarlyConfig(softConfig825(value), 'assemble')), refusals(() => parseEarlyConfig(softConfig825(value), 'layers'))] }));
+    say('AS825_CONFIG_TYPE_NAMES_AND_DUPLICATES_ARE_CHECKED_AT_THE_REAL_DOORS',
+      doors825.every((q, i) => q.errors.every((e, d) => (i < 2 || (i === 6 && d === 2)) ? e === null : e !== null)),
+      doors825.map(q => `${JSON.stringify(q.value)}:${q.errors.map(codes).join('/')}`).join('; '),
+      'the early layers door checks shape and duplicates without assuming it has a plan; assemble/full resolve each named source part');
     const off819 = yieldRun819('off', false), on819 = yieldRun819('on', true);
     const image819 = (r: ReturnType<typeof assemble>, name: string) => r.images.find(p => p.record.name === name)!;
     const remaining819 = (r: ReturnType<typeof assemble>) => {
