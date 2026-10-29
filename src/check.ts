@@ -5748,9 +5748,9 @@ export function windBandLines(line: WindBandLine, plant: WindBandPlant = {}): st
  * its grid to one pixel per world unit makes the panels native, without a
  * second framing implementation. Each animation is rendered separately to
  * release its sampled poses before the next. Only the two observation files
- * survive; the ordinary frames and contact sheets are scratch.
+ * survive; core's extremes-only mode omits ordinary frames and contact sheets.
  */
-function renderExtremes(build: string, out: string, animations: readonly string[], frames: unknown, render: RigcRunner): string[] {
+function renderExtremes(build: string, out: string, animations: readonly string[], frames: unknown, frameSets: unknown, render: RigcRunner): string[] {
   if (animations.length === 0) return ['EXTREMES SKIP: CHECK_EXTREMES_NO_ANIMATIONS — no animation in motion.json'];
   const scratch = join(out, '_extremes');
   const dest = join(out, 'extremes');
@@ -5767,15 +5767,18 @@ function renderExtremes(build: string, out: string, animations: readonly string[
     const lines: string[] = [];
     for (const animation of animations) {
       const rendered = join(scratch, 'render');
-      const call = render(['render', '--candidate', build, '--animation', animation, '--fps', String(IDLE_FPS), '--viewport-from', grid, '--extremes', '--out', rendered]);
-      if (call.status !== 0) throw new Error(`render --extremes ${JSON.stringify(animation)} exited ${call.status}: ${call.out.trim()}${rigcRanClause(call)}`);
+      const call = render(['render', '--candidate', build, '--animation', animation, '--fps', String(IDLE_FPS), '--viewport-from', grid, '--extremes-only', '--out', rendered]);
+      if (call.status !== 0) throw new Error(`render --extremes-only ${JSON.stringify(animation)} exited ${call.status}: ${call.out.trim()}${rigcRanClause(call)}`);
       const summaries = call.out.split('\n').map(line => line.trim().replace(/^\.\.\s+/, '')).filter(line => line.startsWith('EXTREMES '));
-      if (summaries.length === 0) throw new Error(`render --extremes ${JSON.stringify(animation)} printed no EXTREMES summary`);
-      // The sidecar owns directory naming, including core's escaping of names.
-      const sidecar = JSON.parse(readFileSync(join(rendered, 'frames.json'), 'utf8')) as { sets: Array<{ animation: string; dir: string }> };
-      const set = sidecar.sets.find(row => row.animation === animation);
-      if (set === undefined) throw new Error(`render --extremes has no set for ${JSON.stringify(animation)}`);
-      const source = join(rendered, set.dir), target = join(dest, set.dir);
+      if (summaries.length === 0) throw new Error(`render --extremes-only ${JSON.stringify(animation)} printed no EXTREMES summary`);
+      // The earlier ordinary render already named every animation's directory.
+      // Observation-only renders deliberately write no new frames.json index.
+      const sets = isRecord(frameSets) && Array.isArray(frameSets.sets) ? frameSets.sets.filter(isRecord).filter(row => row.animation === animation) : [];
+      const dir = sets.length === 1 ? sets[0].dir : undefined;
+      if (typeof dir !== 'string' || dir.length === 0 || isAbsolute(dir) || dir.split(/[\\/]/).includes('..')) throw new Error(`the existing render has no local set for ${JSON.stringify(animation)}`);
+      const source = join(rendered, dir), target = join(dest, dir);
+      const observation: unknown = JSON.parse(readFileSync(join(source, 'extremes.json'), 'utf8'));
+      if (!isRecord(observation) || observation.animation !== animation) throw new Error(`render --extremes-only has no set for ${JSON.stringify(animation)}`);
       mkdirSync(target, { recursive: true });
       copyFileSync(join(source, 'extremes.json'), join(target, 'extremes.json'));
       if (existsSync(join(source, 'extremes.png'))) copyFileSync(join(source, 'extremes.png'), join(target, 'extremes.png'));
@@ -6100,7 +6103,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
             level = levelLine(feet, inp.rig, levelReadings, fps, stripped.physics.length, levelProblems);
           }
         }
-        if (!noExtremes && idle === null) extremesFrames = readJson(join(stripped === null ? foldDir : join(foldDir, 'on'), 'frames.json'), []);
+        if (!noExtremes) extremesFrames = readJson(join(stripped === null ? foldDir : join(foldDir, 'on'), 'frames.json'), []);
       } finally {
         rmSync(foldDir, { recursive: true, force: true });
       }
@@ -6666,7 +6669,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const publishCheck = (): void => write('check.json', `${JSON.stringify(figures, null, 1)}\n`);
   if (motionSeam.worlds === undefined) publishCheck();
   else publishMotionSeamWorlds(out, seamMotionDir, motionSeam.worlds, publishCheck);
-  const extremes = noExtremes ? [] : renderExtremes(buildDir, out, animationNames, idle === null ? extremesFrames : readJson(join(idleDir, 'frames.json'), []), measured);
+  const extremes = noExtremes ? [] : renderExtremes(buildDir, out, animationNames, idle === null ? extremesFrames : readJson(join(idleDir, 'frames.json'), []), extremesFrames, measured);
   if (existsSync(join(out, 'extremes'))) written.push('extremes/');
   const bars: CheckReport['bars'] = { measured: ['gate'], skipped: [] };
   const tally = (bar: string, reason: string | null): void => {

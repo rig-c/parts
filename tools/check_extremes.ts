@@ -1,6 +1,6 @@
 /** Issue #829: generated controls for optional observations, independent of check's bars. */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeCheckRig, writeMergedCheckRig } from '../fixtures/checkrig.ts';
 import { checkStage } from '../src/build.ts';
@@ -8,6 +8,7 @@ import type { RigcRunner } from '../src/check.ts';
 import { PartsError } from '../src/errors.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
+const isExtremes = (args: readonly string[]): boolean => args.includes('--extremes') || args.includes('--extremes-only');
 const json = (path: string): Record<string, unknown> => JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
 const bytes = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex');
 function tree(dir: string, prefix = ''): string[] {
@@ -28,21 +29,24 @@ export function runExtremesChecks(root: string, say: Say, rigc: RigcRunner): voi
   anims.hold = { duration: 1, loop: true, tracks: [{ bone: 'root', property: 'translatex', keys: [{ t: 0, v: [0] }, { t: 1, v: [0] }] }] };
   writeFileSync(motionPath, JSON.stringify(motion));
   const run = (out: string, noExtremes = false, runner: RigcRunner = rigc, home = input) => {
-    const calls: string[][] = [], lines: string[] = [], native: boolean[] = [];
+    const calls: string[][] = [], lines: string[] = [], native: boolean[] = [], observationFiles: string[][] = [];
+    const files = (dir: string, prefix = ''): string[] => readdirSync(dir, { withFileTypes: true }).flatMap(e => e.isDirectory() ? files(join(dir, e.name), prefix + e.name + '/') : [prefix + e.name]);
     const tap: RigcRunner = args => {
       calls.push([...args]);
       const result = runner(args);
-      if (args.includes('--extremes') && result.status === 0) {
-        const rendered = json(join(args[args.indexOf('--out') + 1], 'frames.json'));
-        native.push((rendered.viewport as Record<string, unknown>).scale === 1);
+      if (isExtremes(args) && result.status === 0) {
+        const grid = json(args[args.indexOf('--viewport-from') + 1]);
+        native.push((grid.viewport as Record<string, unknown>).scale === 1);
+        observationFiles.push(files(args[args.indexOf('--out') + 1]));
       }
       return result;
     };
     const report = checkStage({ rig: home, out, noExtremes }, tap, 'fixture-rigc', line => lines.push(line));
-    return { report, calls, lines, native };
+    return { report, calls, lines, native, observationFiles };
   };
   const onDir = join(root, 'on'), offDir = join(root, 'off');
   const on = run(onDir), off = run(offDir, true);
+  say('CK839_EXTREMES_ONLY_OMITS_DISCARDED_RENDER_OUTPUTS', on.calls.filter(isExtremes).length === 3 && on.calls.filter(isExtremes).every(args => args.includes('--extremes-only') && !args.includes('--extremes')) && on.observationFiles.length === 3 && on.observationFiles.every(files => files.length > 0 && files.every(file => /(^|\/)extremes\.(json|png)$/.test(file))), JSON.stringify(on.observationFiles));
   const paths = ['idle', 'wave'].map(name => join(onDir, 'extremes', name));
   const pairs = paths.map(dir => existsSync(join(dir, 'extremes.json')) ? json(join(dir, 'extremes.json')).geometryPair : null);
   const exact = pairs.every(pair => {
@@ -54,7 +58,7 @@ export function runExtremesChecks(root: string, say: Say, rigc: RigcRunner): voi
   const hold = existsSync(holdPath) ? json(holdPath) : null;
   say('CK830_CORE_STATIC_SKIP_IS_NAMED_AND_HAS_NO_SHEET', hold?.status === 'SKIP' && !existsSync(join(onDir, 'extremes', 'hold', 'extremes.png')) && on.lines.some(l => l.includes('EXTREMES "hold" SKIP:')), JSON.stringify({ status: hold?.status, reason: hold?.reason }));
   const renders = (calls: string[][]) => calls.filter(args => args[0] === 'render');
-  say('CK831_OPT_OUT_ADDS_NO_RENDER_OR_DIRECTORY_AND_PRESERVES_BYTES', !existsSync(join(offDir, 'extremes')) && !off.calls.some(args => args.includes('--extremes')) && renders(on.calls).length === renders(off.calls).length + 3 && tree(onDir).join('|') === tree(offDir).join('|') && on.report.figures.PASS === off.report.figures.PASS, JSON.stringify({ on: renders(on.calls).length, off: renders(off.calls).length, same: tree(onDir).join('|') === tree(offDir).join('|') }));
+  say('CK831_OPT_OUT_ADDS_NO_RENDER_OR_DIRECTORY_AND_PRESERVES_BYTES', !existsSync(join(offDir, 'extremes')) && !off.calls.some(args => isExtremes(args)) && renders(on.calls).length === renders(off.calls).length + 3 && tree(onDir).join('|') === tree(offDir).join('|') && on.report.figures.PASS === off.report.figures.PASS, JSON.stringify({ on: renders(on.calls).length, off: renders(off.calls).length, same: tree(onDir).join('|') === tree(offDir).join('|') }));
   mkdirSync(join(offDir, 'extremes'), { recursive: true });
   writeFileSync(join(offDir, 'extremes', 'stale.png'), 'stale');
   writeFileSync(join(offDir, 'sentinel'), 'keep');
@@ -71,7 +75,7 @@ export function runExtremesChecks(root: string, say: Say, rigc: RigcRunner): voi
   } catch (e) { if (e instanceof PartsError) gateRefused = true; else throw e; }
   say('CK833_FAILED_GATE_RUNS_NO_EXTREMES_AND_LEAVES_NO_STALE_DIAGNOSTICS', gateRefused && gateCalls === 0 && !existsSync(join(failedDir, 'extremes')), JSON.stringify({ gateRefused, gateCalls }));
   const diagDir = join(root, 'diagnostic-red');
-  const diag = run(diagDir, false, args => args.includes('--extremes') ? { status: 17, out: 'fixture render failure' } : rigc(args));
+  const diag = run(diagDir, false, args => isExtremes(args) ? { status: 17, out: 'fixture render failure' } : rigc(args));
   say('CK834_DIAGNOSTIC_FAILURE_IS_NAMED_WITH_UNCHANGED_VERDICT', bytes(join(diagDir, 'check.json')) === bytes(join(onDir, 'check.json')) && diag.report.figures.PASS === on.report.figures.PASS && diag.lines.some(l => l.includes('EXTREMES') && l.includes('SKIP') && l.includes('17')) && !existsSync(join(diagDir, 'extremes')), diag.lines.filter(l => l.includes('EXTREMES')).join(' | '));
   const namedHome = join(root, 'no-idle');
   writeCheckRig(namedHome);
@@ -83,8 +87,40 @@ export function runExtremesChecks(root: string, say: Say, rigc: RigcRunner): voi
   const namedOut = join(root, 'no-idle-out');
   const named = run(namedOut, false, rigc, namedHome);
   say('CK836_WITHOUT_IDLE_THE_NAMED_ANIMATION_STILL_GETS_NATIVE_EXTREMES', named.native.length === 1 && named.native[0] && existsSync(join(namedOut, 'extremes', 'wave', 'extremes.png')), JSON.stringify({ native: named.native, lines: named.lines.filter(l => l.includes('EXTREMES')) }));
+  const renamedOut = join(root, 'core-owned-directory');
+  const renamed = run(renamedOut, false, args => {
+    const result = rigc(args);
+    if (result.status === 0 && (isExtremes(args) || args.includes('--folds'))) {
+      const out = args[args.indexOf('--out') + 1];
+      mkdirSync(join(out, 'core-owned'), { recursive: true });
+      renameSync(join(out, 'wave'), join(out, 'core-owned', 'nested set'));
+      if (!isExtremes(args)) {
+        const sidecar = json(join(out, 'frames.json'));
+        const sets = sidecar.sets as Array<{ animation: string; dir: string }>;
+        const wave = sets.find(row => row.animation === 'wave');
+        if (wave === undefined) throw new Error('fixture ordinary render has no wave set');
+        wave.dir = 'core-owned/nested set';
+        writeFileSync(join(out, 'frames.json'), JSON.stringify(sidecar));
+      }
+    }
+    return result;
+  }, namedHome);
+  say('CK840_EXISTING_METADATA_OWNS_DIRECTORY_WITHOUT_A_NEW_FRAME_SIDECAR', existsSync(join(renamedOut, 'extremes', 'core-owned', 'nested set', 'extremes.png')) && !existsSync(join(renamedOut, 'extremes', 'wave')) && !renamed.lines.some(line => line.includes('CHECK_EXTREMES_RENDER_FAILED')), renamed.lines.filter(line => line.includes('EXTREMES')).join(' | '));
+  for (const defect of ['missing', 'wrong-animation'] as const) {
+    const badOut = join(root, 'observation-' + defect);
+    const bad = run(badOut, false, args => {
+      const result = rigc(args);
+      if (isExtremes(args) && result.status === 0) {
+        const out = args[args.indexOf('--out') + 1], observation = join(out, 'wave');
+        if (defect === 'missing') rmSync(observation, { recursive: true });
+        else writeFileSync(join(observation, 'extremes.json'), JSON.stringify({ ...json(join(observation, 'extremes.json')), animation: 'another' }));
+      }
+      return result;
+    }, namedHome);
+    say('CK841_INCOMPLETE_OBSERVATION_' + defect.toUpperCase().replace('-', '_'), !existsSync(join(badOut, 'extremes')) && bytes(join(badOut, 'check.json')) === bytes(join(namedOut, 'check.json')) && bad.lines.some(line => line.includes('CHECK_EXTREMES_RENDER_FAILED')), bad.lines.filter(line => line.includes('EXTREMES')).join(' | '));
+  }
   const staticHome = join(root, 'no-animations');
   writeMergedCheckRig(staticHome, { idle: false, plate: true });
   const none = run(join(root, 'no-animations-out'), false, rigc, staticHome);
-  say('CK835_NO_ANIMATION_IS_NAMED_WITH_NO_EXTRA_RENDER', !none.calls.some(args => args.includes('--extremes')) && none.lines.some(l => l.includes('EXTREMES') && l.includes('SKIP') && l.includes('no animation')), none.lines.filter(l => l.includes('EXTREMES')).join(' | '));
+  say('CK835_NO_ANIMATION_IS_NAMED_WITH_NO_EXTRA_RENDER', !none.calls.some(args => isExtremes(args)) && none.lines.some(l => l.includes('EXTREMES') && l.includes('SKIP') && l.includes('no animation')), none.lines.filter(l => l.includes('EXTREMES')).join(' | '));
 }

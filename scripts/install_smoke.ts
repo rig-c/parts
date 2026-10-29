@@ -673,7 +673,7 @@ export function checkCoreInstall(): void {
   const add = (home: string, name: string): string => {
     const pkg = join(home, 'node_modules', name);
     mkdirSync(join(pkg, 'bin'), { recursive: true });
-    writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name, version: '2.81.0', bin: { rigc: 'bin/rigc.cjs' } }));
+    writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name, version: '2.82.0', bin: { rigc: 'bin/rigc.cjs' } }));
     const entry = join(pkg, 'bin', 'rigc.cjs');
     writeFileSync(entry, '#!/usr/bin/env node\n');
     return entry;

@@ -303,7 +303,7 @@ in the package.
 
 ## rig-c
 
-`dependencies` takes `@rig-c/core` `^2.81.0`: 2.81.0 or any later 2.x. Bun 1.4 or later
+`dependencies` takes `@rig-c/core` `2.82.0` exactly. Bun 1.4 or later
 is the declared floor (`engines.bun` `>=1.4.0`; older 1.4 releases are not tested in
 CI, which runs `latest`, and compatibility with an older 1.4 release is handled when
 reported as an issue). What this package relies on in rig-c, every import
