@@ -1,12 +1,14 @@
 /** Public source blocks: an 8x2 collar strip, absent from the full-run neck. */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { writePng } from '../src/raster/png.ts';
+import { readPng, writePng } from '../src/raster/png.ts';
 import { newRaster, type Raster } from '../src/raster/types.ts';
 import { readLayerTag } from '../src/tags.ts';
 import type { Layer, LayerSet } from '../src/layers.ts';
 import type { Geometry } from '../src/assemble.ts';
 import type { PlanEntry } from '../src/config.ts';
+import { armSplitConfigText } from './arm_split_upgrade.ts';
+import { MERGED_ARM_KEY_SKELETON, MERGED_ARM_SLEEVE_RGB, MERGED_ARM_HAND_RGB, MERGED_ARM_DISTINCT_DRAPE_RGB } from './assemble_fixture.ts';
 
 export function neckDraftFixture(strip = true) {
   const N = 64;
@@ -55,4 +57,35 @@ export function writeNeckDraftFixture(dir: string, strip = true) {
   };
   const configPath = join(dir, 'config.json'); writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
   return { ...f, source, config, configPath, fullDir, headDir };
+}
+
+/** File-backed pose plus the existing hand-counted merged arm, registered on the 64px run. */
+export function writeNeckDraftReviewFixture(dir: string) {
+  const f = writeNeckDraftFixture(dir);
+  const arm = newRaster(64, 64);
+  for (const [x, y, w, h, rgb] of [
+    [8, 4, 14, 16, MERGED_ARM_SLEEVE_RGB],
+    [10, 20, 10, 6, MERGED_ARM_HAND_RGB],
+    [8, 26, 14, 16, MERGED_ARM_DISTINCT_DRAPE_RGB],
+  ] as const) {
+    for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) arm.data.set([...rgb, 255], (j * 64 + i) * 4);
+  }
+  writePng(join(f.fullDir, 'handwear-r.png'), arm);
+  const manifest = JSON.parse(readFileSync(join(f.fullDir, 'layers.json'), 'utf8'));
+  manifest.layers.push({ name: 'handwear-r', filename: 'handwear-r.png', left: 0, top: 0, right: 64, bottom: 64, depth_median: 0.35 });
+  writeFileSync(join(f.fullDir, 'layers.json'), JSON.stringify(manifest));
+  const painting = newRaster(64, 64);
+  painting.data.set(readPng(f.source).data);
+  for (let i = 0; i < 64 * 64; i++) if (arm.data[i * 4 + 3] > 0) painting.data.set(arm.data.subarray(i * 4, i * 4 + 4), i * 4);
+  writePng(f.source, painting);
+  const config = JSON.parse(readFileSync(f.configPath, 'utf8'));
+  config.generation = JSON.parse(armSplitConfigText()).generation;
+  config.generation.control.skeleton = 'poses/control.json';
+  config.assemble.plan.push(['sleeves', 'full', 'handwear-r']);
+  config.regions.sleeves = 'chest';
+  mkdirSync(join(dir, 'poses'), { recursive: true });
+  const posePath = join(dir, 'poses', 'control.json');
+  writeFileSync(posePath, JSON.stringify({ width: 128, height: 128, points: MERGED_ARM_KEY_SKELETON.points }));
+  writeFileSync(f.configPath, JSON.stringify(config, null, 2) + '\n');
+  return { ...f, posePath };
 }

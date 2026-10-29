@@ -2,13 +2,14 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { neckDraftFixture, writeNeckDraftFixture } from '../fixtures/neck_draft.ts';
+import { neckDraftFixture, writeNeckDraftFixture, writeNeckDraftReviewFixture } from '../fixtures/neck_draft.ts';
+import { MERGED_ARM_EXPECTED_SPLIT_PARTS, MERGED_ARM_KEY_SKELETON } from '../fixtures/assemble_fixture.ts';
 import { assembleStage, readRigInputs, readRuns } from '../src/build.ts';
-import { headGarmentOverlaps, headGarmentWarning, proposePlan } from '../src/assemble.ts';
-import { loadConfig, parseConfig } from '../src/config.ts';
+import { assemble, headGarmentOverlaps, headGarmentWarning, proposePlan, stageFields } from '../src/assemble.ts';
+import { controlSkeletonOf, loadConfig, parseConfig } from '../src/config.ts';
 import { draftIndependentNeck } from '../src/neckdraft.ts';
 import { PartsError } from '../src/errors.ts';
-import { readPng } from '../src/raster/png.ts';
+import { encodePngBytes, readPng } from '../src/raster/png.ts';
 import { proposeNeck } from './neck-propose.ts';
 import { readConfigWriteTarget } from './configwrite.ts';
 
@@ -77,6 +78,60 @@ export function runNeckDraftChecks(dir: string, say: Say): void {
   try { proposeNeck(readConfigWriteTarget(files.configPath), { source: files.source, full: files.fullDir, head: files.headDir, parts: out, out: dest }); } catch (e) { repeated = e instanceof PartsError && e.problems.some(p => p.code === 'PROPOSE_NECK_OUT_FRESH'); }
   say('ND21_OUTPUT_FRESH', repeated, 'existing draft rejected before overwriting its parts');
   say('ND17_LAYERS_FULL_SOURCE_CLEAR', cli.status === 0 && !cli.stdout.includes('PLAN_HEAD_GARMENT_OVERLAP'), 'real CLI parsed contextual layers flags and read source/config/runs');
+  runNeckDraftReviewChecks(join(dir, 'review'), say);
+}
+
+/** Review regressions: real FILE-backed loader state and whole-map body depth fallback. No rendering. */
+export function runNeckDraftReviewChecks(dir: string, say: Say): void {
+  const files = writeNeckDraftReviewFixture(join(dir, 'file-pose')), out = join(dir, 'baseline');
+  const baseline = assembleStage({ source: files.source, full: files.fullDir, head: files.headDir, config: files.configPath, seam: 'near-white', project: 'core' }, { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, () => {});
+  const config = loadConfig(files.configPath), source = readPng(files.source), runs = readRuns(files.fullDir, files.headDir);
+  const points = JSON.stringify(MERGED_ARM_KEY_SKELETON);
+  say('ND29_FILE_POSE_LOADED', JSON.stringify(controlSkeletonOf(config)) === points && JSON.stringify(stageFields(config).keySkeleton) === points, 'relative poses/control.json read through loadConfig, all points and latent preserved');
+  const splitParts = (parts: typeof baseline.parts) => MERGED_ARM_EXPECTED_SPLIT_PARTS.every(([name, from, px]) => parts.parts.some(p => p.name === name && p.from === from && p.opaque_px === px));
+  say('ND30_BASELINE_ACTUALLY_SPLITS', splitParts(baseline.parts), JSON.stringify(baseline.parts.parts.map(p => [p.name, p.from, p.opaque_px])));
+  const { keySkeleton: _pose, ...withoutPose } = stageFields(config);
+  const unsplit = assemble({ source, ...runs, ...withoutPose, depth: config.depth, depthBase: dirname(files.configPath), seamRule: 'near-white', projectRule: 'core' });
+  say('ND31_NO_POSE_MUTANT_UNSPLIT', !splitParts(unsplit.parts) && unsplit.parts.parts.some(p => p.name === 'sleeves' && p.opaque_px === 508), 'removing keySkeleton leaves one 224+60+224=508px arm, proving this fixture is not a no-op');
+  // Loaded state, not a second relative-file lookup, must survive the clone.
+  rmSync(files.posePath);
+  const drafted = draftIndependentNeck({ config, source, ...runs, base: dirname(files.configPath) });
+  say('ND32_DRAFT_CONFIG_CARRIES_POSE', JSON.stringify(controlSkeletonOf(drafted.config)) === points && JSON.stringify(stageFields(drafted.config).keySkeleton) === points, 'returned config retains every resolved point after generated pose file removal');
+  say('ND33_DRAFT_ACTUALLY_SPLITS', splitParts(drafted.assembled.parts), JSON.stringify(drafted.assembled.parts.parts.map(p => [p.name, p.from, p.opaque_px])));
+  const changed: string[] = [];
+  const nonNeck = baseline.images.filter(p => p.record.name !== 'throat');
+  for (const old of nonNeck) {
+    const next = drafted.assembled.images.find(p => p.record.name === old.record.name);
+    if (next === undefined) { changed.push(`${old.record.name}:missing`); continue; }
+    if (!Buffer.from(encodePngBytes(next.image)).equals(readFileSync(join(out, 'parts', `${old.record.name}.png`)))) changed.push(`${old.record.name}:art`);
+    if (JSON.stringify(next.record) !== JSON.stringify(old.record)) changed.push(`${old.record.name}:record`);
+    if (old.depthImage !== undefined && (next.depthImage === undefined || !Buffer.from(encodePngBytes(next.depthImage)).equals(readFileSync(join(out, 'parts', old.record.depth!.image))))) changed.push(`${old.record.name}:depth`);
+  }
+  for (const next of drafted.assembled.images) if (next.record.name !== 'throat' && !nonNeck.some(p => p.record.name === next.record.name)) changed.push(`${next.record.name}:extra`);
+  say('ND34_NON_NECK_BYTES_IDENTICAL', changed.length === 0, `${nonNeck.length} non-neck art/depth PNGs and records compared to actual non-draft assemble; changed=${JSON.stringify(changed)}`);
+  say('ND35_INPUT_POSE_UNCHANGED', JSON.stringify(controlSkeletonOf(config)) === points, 'draft does not consume or mutate loader state on the input');
+
+  const depthFiles = writeNeckDraftFixture(join(dir, 'unit-depths'));
+  const authored = JSON.parse(readFileSync(depthFiles.configPath, 'utf8'));
+  authored.assemble.plan.push(['pin', 'full', 'face']); authored.regions.pin = 'chest';
+  authored.turn.body.roles.pin = 'unit';
+  authored.turn.unitDepths = { pin: -7.25, throat: 99, portrait: 6.5 };
+  const draftDepths = (bodyMap?: Record<string, number>) => {
+    const raw = structuredClone(authored);
+    if (bodyMap !== undefined) raw.turn.body.unitDepths = bodyMap;
+    writeFileSync(depthFiles.configPath, JSON.stringify(raw));
+    const cfg = loadConfig(depthFiles.configPath), before = JSON.stringify(cfg);
+    const effective = cfg.turn!.body!.unitDepths ?? cfg.turn!.unitDepths!;
+    const result = draftIndependentNeck({ config: cfg, source: readPng(depthFiles.source), ...readRuns(depthFiles.fullDir, depthFiles.headDir), base: dirname(depthFiles.configPath) });
+    return { cfg: result.config, effective, inputUnchanged: before === JSON.stringify(cfg) };
+  };
+  const fallback = draftDepths(), fallbackMap = fallback.cfg.turn!.body!.unitDepths!;
+  say('ND36_BODY_FALLBACK_UNIT_DEPTH', JSON.stringify(fallbackMap.pin) === JSON.stringify(fallback.effective.pin) && fallbackMap.pin === -7.25, `other body unit pin: before=${fallback.effective.pin}, after=${fallbackMap.pin}`);
+  say('ND37_EFFECTIVE_MAP_SNAPSHOT', fallbackMap.portrait === 6.5 && fallbackMap.throat === 2 && fallback.cfg.turn!.unitDepths!.throat === undefined && fallback.inputUnchanged, `previous effective entries retained, legacy neck removed only on clone; body=${JSON.stringify(fallbackMap)}`);
+  const explicit = draftDepths({ pin: 3.25 }), explicitMap = explicit.cfg.turn!.body!.unitDepths!;
+  say('ND38_BODY_WHOLE_MAP_OVERRIDE', explicitMap.pin === 3.25 && !Object.hasOwn(explicitMap, 'portrait') && explicitMap.throat === 2 && explicit.inputUnchanged, JSON.stringify(explicitMap));
+  const empty = draftDepths({}), emptyMap = empty.cfg.turn!.body!.unitDepths!;
+  say('ND39_EMPTY_BODY_MAP_OVERRIDE', Object.keys(emptyMap).length === 1 && emptyMap.throat === 2 && empty.inputUnchanged, 'authored empty body map suppresses every fallback entry, only newly derived neck is added');
 }
 
 import { mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
@@ -185,6 +240,7 @@ if (import.meta.main) {
   else if (mode === '--produce') produceNeckDraftPacket(dir);
   else if (mode === '--measure') measureNeckDraftPacket(dir, say);
   else if (mode === '--checks') runNeckDraftChecks(dir, say);
+  else if (mode === '--review-checks') runNeckDraftReviewChecks(dir, say);
   else if (mode === '--render') runNeckDraftRenderChecks(dir, say);
   else throw new Error('unknown neck control mode');
 }

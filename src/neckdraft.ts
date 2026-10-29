@@ -1,6 +1,6 @@
 /** #812: source-first drafting into an explicitly authored sampled body turn. */
 import { assemble, checkGeometry, fullLayerToHead, headGarmentOverlaps, headGarmentWarning, placeLayer, stageFields, type AssembleResult, type AssembleInput } from './assemble.ts';
-import type { CharacterConfig } from './config.ts';
+import { cloneConfig, type CharacterConfig } from './config.ts';
 import { type LayerSet } from './layers.ts';
 import { PartsError } from './errors.ts';
 import { extendDepthSilhouette } from './depthsheets.ts';
@@ -15,8 +15,10 @@ export interface NeckDraft { config: CharacterConfig; assembled: AssembleResult;
 
 /** No inference of a body turn, depth units, source art or anatomical endpoints. */
 export function draftIndependentNeck(input: { config: CharacterConfig; source: Raster; full: LayerSet; head: LayerSet; base: string; under?: AssembleInput['under']; caps?: AssembleInput['caps']; previous?: { parts: PartsFile; images: ReadonlyMap<string, Raster> } }): NeckDraft {
-  const cfg = structuredClone(input.config), body = cfg.turn?.body;
+  const cfg = cloneConfig(input.config), body = cfg.turn?.body;
   if (body === undefined) return refuse('PROPOSE_NECK_BODY_TURN', 'config.turn.body', 'is absent; declare the sampled body turn before drafting an independent neck');
+  // Body overrides the entire fallback map; snapshot before removing the legacy neck entry.
+  const unitDepths = { ...(body.unitDepths ?? cfg.turn?.unitDepths) };
   const rows = cfg.assemble.plan.filter(([, , tag]) => tag === 'neck');
   if (rows.length !== 1) return refuse('PROPOSE_NECK_PLAN', 'config.assemble.plan', `has ${rows.length} neck rows; one unambiguous neck source is required`);
   const [part] = rows[0];
@@ -73,7 +75,7 @@ export function draftIndependentNeck(input: { config: CharacterConfig; source: R
   const zNeck = sampleUnitPartDepth(scalar, art, ref);
   const zRef = sampleUnitPartDepth(extendDepthSilhouette(surf.depthImage, surf.image), surf.image, surf.record.depth);
   const value = pyRound(pivot + zNeck - zRef, 4);
-  body.unitDepths = { ...body.unitDepths, [part]: value };
+  body.unitDepths = { ...unitDepths, [part]: value };
   notes.push(`neck: "${part}" takes full:neck; sibling bone "${unit}" under "${carrier}", one rigid segment from neck to head; reassembled with the CLI defaults seam=near-white/project=core (source rules are not recorded in parts.json); turn.body.roles.${part} = unit (no head role)`);
   notes.push(`neck depth: turn.body.unitDepths.${part} = ${value} = round4(body pivot ${pivot} + neck world median ${zNeck} - first body surface "${surface}" world median ${zRef}); median over ${population}, sheet "${ref.image}", near=${ref.near}, zScale=${ref.zScale}; levelToDepthZ applies the declared polarity, not depth_median`);
   return { config: cfg, assembled, notes };

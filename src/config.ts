@@ -1794,6 +1794,14 @@ export function controlSkeletonOf(cfg: object): ControlSkeleton | undefined {
   return resolveControlSkeleton(gen, null);
 }
 
+/** Clone a config and its already resolved control pose, without reading a relative file again. */
+export function cloneConfig<T extends object>(cfg: T): T {
+  const clone = structuredClone(cfg);
+  const skeleton = controlSkeletonOf(cfg);
+  if (skeleton !== undefined) controlSkeletons.set(clone, structuredClone(skeleton));
+  return clone;
+}
+
 /** The pose file a checked `generation` block's control names, read relative to `base`; null for a built-in, an absent control, or a block already refused. */
 function poseBeside(c: Check, gen: Json, base: string): ControlPose | null {
   if (!isPlainObject(gen) || !isPlainObject(gen.control)) return null;
