@@ -309,6 +309,8 @@ export interface Assemble {
   head_face_underfill?: boolean;
   /** Opt-in: yield original drift-refused front pixels to an opaque behind holder matching the painting. */
   yield_refused?: boolean;
+  /** Named plan parts retain their own pixels beneath a drawn-in-front soft occluder. */
+  keep_under_occluders?: string[];
 }
 
 export interface SingleBone {
@@ -1614,7 +1616,7 @@ export interface EarlyConfig {
   depth?: DepthConfig;
   key: string;
   seethrough: SeeThrough;
-  assemble: { rig_scale: number; head_face_underfill?: boolean; yield_refused?: boolean };
+  assemble: { rig_scale: number; head_face_underfill?: boolean; yield_refused?: boolean; keep_under_occluders?: string[] };
 }
 
 /** What plain `assemble` reads: the early config plus the plan `--propose-plan` printed. */
@@ -1683,12 +1685,13 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
   if (door === 'layers') {
     if ('seethrough' in t) checkSeeThrough(c, t.seethrough);
     if ('assemble' in t) {
-      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused']);
+      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders']);
       if (a !== null) {
         if ('rig_scale' in a) c.number('config.assemble.rig_scale', a.rig_scale, 'positive');
         if ('head_face_underfill' in a && typeof a.head_face_underfill !== 'boolean') {
           c.fail('CONFIG_FIELD_TYPE', 'config.assemble.head_face_underfill', `is ${show(a.head_face_underfill)}; true or false is required`);
         }
+        checkKeepUnderOccluders(c, a, null);
         if ('yield_refused' in a && typeof a.yield_refused !== 'boolean') {
           c.fail('CONFIG_FIELD_TYPE', 'config.assemble.yield_refused', `is ${show(a.yield_refused)}; true or false is required`);
         }
@@ -2396,9 +2399,23 @@ function checkRunTag(c: Check, path: string, run: Json, tag: Json): void {
  * out of the generic presence check so that its absence says which command
  * writes one — the step a config without a plan has most likely skipped.
  */
+/** Validate at the early door too; resolve against the plan once that door reads it. */
+function checkKeepUnderOccluders(c: Check, a: Record<string, Json>, plan: readonly string[] | null): void {
+  if (!('keep_under_occluders' in a)) return;
+  const at = 'config.assemble.keep_under_occluders';
+  if (!c.array(at, a.keep_under_occluders, false)) return;
+  const seen = new Set<string>();
+  (a.keep_under_occluders as Json[]).forEach((name, i) => {
+    if (!c.string(`${at}[${i}]`, name)) return;
+    if (seen.has(name)) c.fail('CONFIG_PART_UNIQUE', `${at}[${i}]`, `names "${name}" again; each part is named once`);
+    seen.add(name);
+    if (plan !== null && !plan.includes(name)) c.fail('CONFIG_NAME_RESOLVES', `${at}[${i}]`, `names "${name}"; a part named in assemble.plan is required — name the source part before cuts or limb splitting`);
+  });
+}
+
 function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: string[]; patches: string[]; cuts: string[] } {
   const required = sectionRequired(door, 'assemble');
-  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused']);
+  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders']);
   if (a === null) return { parts: [], patches: [], cuts: [] };
   if (required.includes('plan') && !('plan' in a)) {
     c.fail('CONFIG_FIELD_PRESENT', 'config.assemble.plan', 'is absent and required; `assemble --propose-plan` prints one from the two runs — paste its plan and extend_below_crop into config.assemble');
@@ -2432,6 +2449,7 @@ function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: s
       parts.push(name);
     });
   }
+  checkKeepUnderOccluders(c, a, parts);
   if ('extend_below_crop' in a && c.array(`${p}.extend_below_crop`, a.extend_below_crop, false)) {
     (a.extend_below_crop as Json[]).forEach((entry, i) => {
       const at = `${p}.extend_below_crop[${i}]`;
