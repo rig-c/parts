@@ -7,7 +7,7 @@ import { crop, type Raster } from './raster/index.ts';
 export const AUTOMATIC_WRITERS = {
   sourceProjection: -1, extend: -2, growRim: -3, limbSplit: -4,
   limbCap: -5, limbHybrid: -6, limbFeather: -7, fringeRestore: -8,
-  seamOverride: -9, armSplit: -10, headFaceUnderfill: -11, ghostCleanup: -12, unattributed: -13,
+  seamOverride: -9, armSplit: -10, headFaceUnderfill: -11, ghostCleanup: -12, unattributed: -13, paintingExtension: -14,
 } as const;
 export type AutomaticWriter = keyof typeof AUTOMATIC_WRITERS;
 export interface PixelProvenance {
@@ -77,6 +77,7 @@ export function provenanceLines(parts: readonly PartRecord[]): string[] {
   const edits = new Map<string, number>(), stages = new Map<string, number>();
   const detail = (e: ReadonlyMap<string, number>): string => [...e].map(([name, px]) => `${name} ${px}`).join(', ') || 'none';
   for (const p of parts) {
+    if (p.painting_extension_px !== undefined) lines.push(`  painting extension: part "${p.name}" gained ${p.painting_extension_px} opaque painting samples; source RGB copied exactly in rig space; ownership count independent of final raw-value equality`);
     const v = p.provenance;
     if (v === undefined) continue;
     opaque += p.opaque_px; unchanged += v.unchanged_layer_px; automatic += v.automatic_px; hand += v.hand_px;

@@ -99,6 +99,8 @@ import { recordedFocusProblems } from './setfocus.ts';
 export interface PartRecord {
   /** Report-only final last-writer census (#817); absent on older records. */
   provenance?: PixelProvenance;
+  /** Painting ownership gained by #848, independent of final raw-value equality. */
+  painting_extension_px?: number;
   /** Optional #773 input reference; production geometry does not consume it yet. */
   depth?: PartDepthReference;
   name: string;
@@ -430,6 +432,7 @@ export const PART_KEYS = [
   'h',
   'opaque_px',
   'provenance',
+  'painting_extension_px',
   'visible_px',
   'occluded_px',
   'projected_core_px',
@@ -451,7 +454,7 @@ const LIMB_KEY = 'limb';
 const COUNT_KEYS = PART_KEYS.slice(2).filter((k) => k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth' && k !== 'provenance') as ReadonlyArray<(typeof PART_KEYS)[number]>;
 /** The port's own counts: all three or none (none = a record the reference wrote). */
 export const VISIBILITY_KEYS = ['visible_px', 'occluded_px', 'visible_not_projected_px'] as const;
-const REQUIRED_KEYS = PART_KEYS.filter((k) => !(VISIBILITY_KEYS as readonly string[]).includes(k) && k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth' && k !== 'provenance');
+const REQUIRED_KEYS = PART_KEYS.filter((k) => k !== 'painting_extension_px' && !(VISIBILITY_KEYS as readonly string[]).includes(k) && k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth' && k !== 'provenance');
 
 /** Where a part came from: a See-through run and a v3 tag or an author-made layer's `author:<label>` (issue #256), or the painting itself for a patch. */
 export type From = { run: 'full' | 'head'; tag: string } | { run: 'painting'; patch: string };
@@ -571,6 +574,14 @@ export function readParts(path: string): PartsFile {
   return checkParts(raw, path);
 }
 
+/** Additive ownership census; not another term in the value partition. */
+function checkPaintingExtensionCount(r: Record<string, unknown>, label: string, fail: (code: string, object: string, detail: string) => void): void {
+  if (!('painting_extension_px' in r)) return;
+  const n = r.painting_extension_px;
+  if (!Number.isSafeInteger(n) || (n as number) < 0) fail('PARTS_FIELD_TYPE', label + ' painting_extension_px', `is ${show(n)}; a nonnegative safe integer is required`);
+  else if (!Number.isSafeInteger(r.opaque_px) || (n as number) > (r.opaque_px as number)) fail('PARTS_COUNTS_ADD_UP', label + ' painting_extension_px', `is ${show(n)}; at most opaque_px ${show(r.opaque_px)} is required`);
+}
+
 function show(v: unknown): string {
   return v === undefined ? 'absent' : JSON.stringify(v);
 }
@@ -660,6 +671,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
       }
       const count = (k: string): number | null => (Number.isInteger(r[k]) && (r[k] as number) >= 0 ? (r[k] as number) : null);
       if ('provenance' in r) checkProvenance(r.provenance, r.opaque_px, label + ' provenance', fail);
+      checkPaintingExtensionCount(r, label, fail);
       const [op, vis, occ, vnp] = ['opaque_px', 'visible_px', 'occluded_px', 'visible_not_projected_px'].map(count);
       if (held.length === VISIBILITY_KEYS.length && op !== null && vis !== null && occ !== null && vnp !== null) {
         if (vis + occ !== op) fail('PARTS_COUNTS_ADD_UP', `${label}`, `visible_px ${vis} + occluded_px ${occ} = ${vis + occ}; opaque_px ${op} is required`);
@@ -812,6 +824,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
         const r = p as Record<string, unknown>;
         const part817 = typeof r.name === 'string' ? `part "${r.name}"` : `records[${j}]`;
         if ('provenance' in r) checkProvenance(r.provenance, r.opaque_px, `${at} ${part817} provenance`, fail);
+        checkPaintingExtensionCount(r, `${at} ${part817}`, fail);
         const l = r[LIMB_KEY];
         if (typeof l !== 'object' || l === null || Array.isArray(l) || !('cap' in l)) return;
         const part = typeof r.name === 'string' ? `part "${r.name}"` : `records[${j}]`;
