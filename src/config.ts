@@ -307,6 +307,8 @@ export interface Assemble {
   alternates?: AlternateSetConfig[];
   /** Issue #492: composite full:face under head:face on the head canvas to fill transparent holes inside the face silhouette. */
   head_face_underfill?: boolean;
+  /** Opt-in: yield original drift-refused front pixels to an opaque behind holder matching the painting. */
+  yield_refused?: boolean;
 }
 
 export interface SingleBone {
@@ -1612,7 +1614,7 @@ export interface EarlyConfig {
   depth?: DepthConfig;
   key: string;
   seethrough: SeeThrough;
-  assemble: { rig_scale: number; head_face_underfill?: boolean };
+  assemble: { rig_scale: number; head_face_underfill?: boolean; yield_refused?: boolean };
 }
 
 /** What plain `assemble` reads: the early config plus the plan `--propose-plan` printed. */
@@ -1681,11 +1683,14 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
   if (door === 'layers') {
     if ('seethrough' in t) checkSeeThrough(c, t.seethrough);
     if ('assemble' in t) {
-      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill']);
+      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused']);
       if (a !== null) {
         if ('rig_scale' in a) c.number('config.assemble.rig_scale', a.rig_scale, 'positive');
         if ('head_face_underfill' in a && typeof a.head_face_underfill !== 'boolean') {
           c.fail('CONFIG_FIELD_TYPE', 'config.assemble.head_face_underfill', `is ${show(a.head_face_underfill)}; true or false is required`);
+        }
+        if ('yield_refused' in a && typeof a.yield_refused !== 'boolean') {
+          c.fail('CONFIG_FIELD_TYPE', 'config.assemble.yield_refused', `is ${show(a.yield_refused)}; true or false is required`);
         }
       }
     }
@@ -2385,7 +2390,7 @@ function checkRunTag(c: Check, path: string, run: Json, tag: Json): void {
  */
 function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: string[]; patches: string[]; cuts: string[] } {
   const required = sectionRequired(door, 'assemble');
-  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill']);
+  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused']);
   if (a === null) return { parts: [], patches: [], cuts: [] };
   if (required.includes('plan') && !('plan' in a)) {
     c.fail('CONFIG_FIELD_PRESENT', 'config.assemble.plan', 'is absent and required; `assemble --propose-plan` prints one from the two runs — paste its plan and extend_below_crop into config.assemble');
@@ -2394,6 +2399,9 @@ function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: s
   if ('rig_scale' in a) c.number(`${p}.rig_scale`, a.rig_scale, 'positive');
   if ('head_face_underfill' in a && typeof a.head_face_underfill !== 'boolean') {
     c.fail('CONFIG_FIELD_TYPE', `${p}.head_face_underfill`, `is ${show(a.head_face_underfill)}; true or false is required`);
+  }
+  if ('yield_refused' in a && typeof a.yield_refused !== 'boolean') {
+    c.fail('CONFIG_FIELD_TYPE', `${p}.yield_refused`, `is ${show(a.yield_refused)}; true or false is required`);
   }
   const parts: string[] = [];
   if ('plan' in a && c.array(`${p}.plan`, a.plan, true)) {
