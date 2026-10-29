@@ -82,7 +82,7 @@
  *
  * Pure: no clock, no randomness, nothing read or written.
  */
-import { type BoneMotionRange, type EnvelopeBoneRanges, MeshReductionError, type MeshQualityReport, type MeshReductionInput, type SkinningEnvelope, type SkinningEnvelopeBone, skinningEnvelopeBone } from 'rig-c/mesh';
+import { type BoneMotionRange, type EnvelopeBoneRanges, MeshReductionError, type MeshQualityReport, type MeshReductionInput, type SkinningEnvelope, type SkinningEnvelopeBone, skinningEnvelopeBone } from '@rig-c/core/mesh';
 import type { ConfigConstraint } from './config.ts';
 import type { MotionKey, MotionSpec } from './motion.ts';
 import { edgeLength } from './length.ts';

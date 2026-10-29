@@ -52,7 +52,7 @@
  * ## The one poser
  *
  * Every reading is rig-c's: the bars are `check`'s, through the injected {@link RigcRunner}; readings 2–4 are
- * `compareMeshesInMotion` (`rig-c/meshcompare`) over the model documents of three unpacked gate builds — the drafted
+ * `compareMeshesInMotion` (`@rig-c/core/meshcompare`) over the model documents of three unpacked gate builds — the drafted
  * rig with every candidate part's attachment set to its lattice, to its candidate and to its dense reference, and
  * nothing else different — whose motion carries the bend animations. This module poses nothing.
  *
@@ -61,9 +61,9 @@
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import type { AlphaMask, MeasureRow, MeshQualityReport, MotionSchedule } from 'rig-c/mesh';
-import { compareMeshesInMotion, type MotionComparisonInput } from 'rig-c/meshcompare';
-import { MeshReductionError } from 'rig-c/mesh';
+import type { AlphaMask, MeasureRow, MeshQualityReport, MotionSchedule } from '@rig-c/core/mesh';
+import { compareMeshesInMotion, type MotionComparisonInput } from '@rig-c/core/meshcompare';
+import { MeshReductionError } from '@rig-c/core/mesh';
 import { explicitFrameId, idleSchedule } from './automotion.ts';
 import { checkStage, gateThroughRigc, type Log, RIGC_MODEL_DOCUMENT, rigStage } from './build.ts';
 import { BARS, type CheckReport, type PackShape, type PageEdges, type RigcRunner } from './check.ts';

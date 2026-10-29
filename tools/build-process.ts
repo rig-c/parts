@@ -14,11 +14,11 @@ export function selectedRigcCommand(bin: string, platform: NodeJS.Platform = pro
     const selected = resolve(bin);
     // findRigc selected this exact local .bin path; do not resolve an ambient package.
     if (basename(selected) !== 'rigc' || basename(dirname(selected)) !== '.bin') return fail('unknown or custom script shim');
-    const packageRoot = join(dirname(dirname(selected)), 'rig-c');
+    const packageRoot = join(dirname(dirname(selected)), '@rig-c', 'core');
     const manifest = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as { name?: unknown; bin?: unknown };
     const binMap = manifest.bin;
     const declared = typeof binMap === 'string' ? binMap : binMap !== null && typeof binMap === 'object' ? (binMap as Record<string, unknown>).rigc : undefined;
-    if (manifest.name !== 'rig-c' || typeof declared !== 'string') return fail('the selected package does not declare rigc');
+    if (manifest.name !== '@rig-c/core' || typeof declared !== 'string') return fail('the selected package does not declare rigc');
     const entry = resolve(packageRoot, declared);
     const within = relative(realpathSync.native(packageRoot), realpathSync.native(entry));
     if (within === '..' || within.startsWith('..' + sep) || isAbsolute(within) || !statSync(entry).isFile()) return fail('bin target is outside the selected package');

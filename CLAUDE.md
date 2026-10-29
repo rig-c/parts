@@ -143,20 +143,20 @@ paintings, their See-through runs, the parts and configs the reference produced
   ComfyUI adapter; `TY06` scans every other file under `src/`.
 - **The y flip has one door.** Parts and configs are in crop pixels, y down,
   origin top-left; Spine's world is y up. The conversion is rig-c's
-  (`rig-c/src/transform.ts`), re-exported by `src/coords.ts`, and `TY07`
+  (`@rig-c/core/src/transform.ts`), re-exported by `src/coords.ts`, and `TY07`
   refuses any other importer. Do not open-code `height - y` anywhere.
 - **rig-c's deep paths are an interface.** rig-c's `exports` map
-  carries `./*.ts`, so `rig-c/tools/plate.ts` (PNG codec),
-  `rig-c/src/png.ts`, `rig-c/tools/font5x7.ts` and
-  `rig-c/src/transform.ts` are imported by path. The mesh functions come
-  through the named entry `rig-c/mesh` (from 2.16.0): the outline
+  carries `./*.ts`, so `@rig-c/core/tools/plate.ts` (PNG codec),
+  `@rig-c/core/src/png.ts`, `@rig-c/core/tools/font5x7.ts` and
+  `@rig-c/core/src/transform.ts` are imported by path. The mesh functions come
+  through the named entry `@rig-c/core/mesh` (from 2.16.0): the outline
   functions `src/contour.ts` reuses, every one on the entry's promised list,
   and `reduceMesh` with its `mesh-quality-report/1` types (2.19.0), which
   `src/automesh.ts` calls, and `skinningEnvelopeBone` (2.30.0), which
   `src/autoenvelope.ts` calls. `f32` comes through the named entry
-  `rig-c/compile` (2.40.0): the float32 rigc stores a bone's numbers as,
+  `@rig-c/core/compile` (2.40.0): the float32 rigc stores a bone's numbers as,
   which `src/rig.ts` poses the face bones through to measure the
-  `invariants.axes` tolerance. `reduceMeshWith` and `rig-c/src/meshrasters.ts`
+  `invariants.axes` tolerance. `reduceMeshWith` and `@rig-c/core/src/meshrasters.ts`
   are rig-c internals; only `tools/veto_tally.ts` reads them, to count the
   residual's vetoes, and it checks its run against `reduceMesh`'s bytes
   before it counts. A rig-c release that moves them, or narrows

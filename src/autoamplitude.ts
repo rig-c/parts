@@ -68,7 +68,7 @@
  *
  * Pure: no clock, no randomness, nothing read or written.
  */
-import type { MeshReductionInput, MotionAmplitude, TrackAmplitude } from 'rig-c/mesh';
+import type { MeshReductionInput, MotionAmplitude, TrackAmplitude } from '@rig-c/core/mesh';
 import type { MotionKey, MotionSpec } from './motion.ts';
 
 /**

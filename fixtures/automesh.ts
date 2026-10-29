@@ -18,7 +18,7 @@
  * (`minWeight` 0, P19); a budget of 2000 candidates; one art sample (P9: a
  * value admissible for an explicitly chosen geometry investigation).
  */
-import { type AlphaMask, CONTOUR_MIN_COVERAGE } from 'rig-c/mesh';
+import { type AlphaMask, CONTOUR_MIN_COVERAGE } from '@rig-c/core/mesh';
 import type { AutoDensityRegionSpec, AutoSpec, AutoWeightRegionSpec } from '../src/config.ts';
 import { blocks, CONCAVE, CONVEX, HOLE, ISLANDS, SPIKE } from './contour.ts';
 
@@ -163,7 +163,7 @@ export const SPECK_RULE_PX = 4;
 
 /**
  * The permissive policy's coverage floor: rig-c's own
- * `CONTOUR_MIN_COVERAGE` (`rig-c/mesh`, 0.995) — the share of the art
+ * `CONTOUR_MIN_COVERAGE` (`@rig-c/core/mesh`, 0.995) — the share of the art
  * rigc's contour generator requires of a mesh it builds, and the share its
  * largest island must hold before strays beside it are accepted. Imported,
  * not copied, so a change in rigc shows here.

@@ -47,7 +47,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import type { MeasureRow, SourceMesh } from 'rig-c/mesh';
+import type { MeasureRow, SourceMesh } from '@rig-c/core/mesh';
 import { terminationText } from '../src/automesh.ts';
 import { findRigc } from '../src/check.ts';
 import { examplePolicy } from '../fixtures/automesh.ts';

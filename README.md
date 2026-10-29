@@ -157,7 +157,7 @@ atlas written by anything else would have no oracle behind it.
 | stage | tool | what it owns |
 | --- | --- | --- |
 | painting + See-through layers → parts and specs | **rig-parts** (npm `@rig-c/parts`) | the merge of two runs, the measurements, the rig spec and motion spec |
-| specs → Spine skeleton data | **[@rig-c/core](https://github.com/rig-c/core)** (canonical npm `@rig-c/core`; this package's dependency is literally `rig-c`) | compile, the gate (rigc's own validator in an install; the round trip through `spine-core` where the runtime is beside it, as in this repository's CI), the named assertions, the packer, the renderer |
+| specs → Spine skeleton data | **[@rig-c/core](https://github.com/rig-c/core)** (npm dependency `@rig-c/core`) | compile, the gate (rigc's own validator in an install; the round trip through `spine-core` where the runtime is beside it, as in this repository's CI), the named assertions, the packer, the renderer |
 | skeleton data → a page | **[rig-play](https://github.com/rig-c/play)** (npm `@rig-c/play`; formerly spine-html), a sibling project | a DOM renderer; rigc's `rig-play` profile is its policy, and every build here is gated under that profile as well as under `spine` |
 
 rig-parts never writes Spine data itself. Everything on disk under `check/build/`

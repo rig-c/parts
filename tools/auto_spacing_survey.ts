@@ -64,7 +64,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { type AlphaMask, artOf, type MeshReductionInput, rasteriseTriangles } from 'rig-c/mesh';
+import { type AlphaMask, artOf, type MeshReductionInput, rasteriseTriangles } from '@rig-c/core/mesh';
 import { reductionKey, terminationText } from '../src/automesh.ts';
 import { findRigc } from '../src/check.ts';
 import type { AutoSpec } from '../src/config.ts';
@@ -643,7 +643,7 @@ export function renderLadder(rows: readonly LadderRow[], rigcVersion: string, pi
     );
   }
   out.push(
-    'Overdraw: of the pixels the written mesh draws over, those that are transparent (alpha below 1), over the art pixels (alpha 1 and above), on the part\'s padded image grid the reduction was handed. Rasteriser: rig-c\'s `rasteriseTriangles` (the `rig-c/mesh` entry), a pixel inside when its centre (x + 0.5, y + 0.5) is in or on a triangle, the union of the triangles, degenerate triangles skipped; the mesh is the one the stage wrote (the full result, or the replayed step the acceptance loop chose), read off the stage\'s own reduction. This package\'s `src/raster/poly.ts` `fillPoly` is cv2\'s fill on integer vertices, not a centre rule, so it is not used here.',
+    'Overdraw: of the pixels the written mesh draws over, those that are transparent (alpha below 1), over the art pixels (alpha 1 and above), on the part\'s padded image grid the reduction was handed. Rasteriser: rig-c\'s `rasteriseTriangles` (the `@rig-c/core/mesh` entry), a pixel inside when its centre (x + 0.5, y + 0.5) is in or on a triangle, the union of the triangles, degenerate triangles skipped; the mesh is the one the stage wrote (the full result, or the replayed step the acceptance loop chose), read off the stage\'s own reduction. This package\'s `src/raster/poly.ts` `fillPoly` is cv2\'s fill on integer vertices, not a centre rule, so it is not used here.',
     '',
   );
   out.push('## The cells', '');

@@ -82,7 +82,7 @@ export function runTurnSurfaceStopChecks(dir: string, say: Say): void {
   const out = join(dir, 'stopped-surface'); mkdirSync(join(out, 'images'), { recursive: true });
   for (const [name, text] of rigOutputTexts(built, null)) writeFileSync(join(out, name), text);
   for (const [name, image] of built.images) writePng(join(out, 'images', name), image);
-  const gate = spawnSync(process.execPath, [resolve('node_modules/rig-c/cli.ts'), 'build', '--rig', join(out, 'rig.json'), '--motion', join(out, 'motion.json'), '--out', join(out, 'built'), '--profile', 'rig-play'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+  const gate = spawnSync(process.execPath, [resolve('node_modules/@rig-c/core/cli.ts'), 'build', '--rig', join(out, 'rig.json'), '--motion', join(out, 'motion.json'), '--out', join(out, 'built'), '--profile', 'rig-play'], { encoding: 'utf8', maxBuffer: 1 << 26 });
   writeFileSync(join(out, 'gate.log'), gate.stdout + gate.stderr);
   const skeleton = gate.status === 0 ? JSON.parse(readFileSync(join(out, 'built/skeleton.json'), 'utf8')) as { bones: Array<{ name: string }>; animations: Record<string, { attachments?: Record<string, Record<string, Record<string, { deform?: Array<{ vertices?: number[] }> }>>> }> } : null;
   const aliases = built.rig.stops!.flatMap(s => s.links.map(link => `${link}_d`));

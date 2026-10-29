@@ -1,5 +1,5 @@
 /** Posed-axis evidence from one stock seam render, never sampled source keys. */
-import type { GeometryFile, GeometryFrame } from 'rig-c/render';
+import type { GeometryFile, GeometryFrame } from '@rig-c/core/render';
 import type { FrameSet } from './check.ts';
 import { PartsError } from './errors.ts';
 

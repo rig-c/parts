@@ -76,7 +76,7 @@ import {
   type MeshReductionInput,
   type ReducedMesh,
   reduceMesh,
-} from 'rig-c/mesh';
+} from '@rig-c/core/mesh';
 import { pinnedExamplesCommit } from '../scripts/example_inputs.ts';
 import { DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE } from '../src/assemble.ts';
 import { type AmplitudeBasis, partAmplitude, withAmplitude } from '../src/autoamplitude.ts';
@@ -949,7 +949,7 @@ function main(argv: string[]): void {
     console.log(`auto_matrix: ${keys.length === 0 ? 'no fetched example' : `${missing.join(', ')} not fetched`}; run bun run fetch-examples`);
     process.exit(2);
   }
-  const rigcVersion = (JSON.parse(readFileSync(join(ROOT, 'node_modules', 'rig-c', 'package.json'), 'utf8')) as { version: string }).version;
+  const rigcVersion = (JSON.parse(readFileSync(join(ROOT, 'node_modules', '@rig-c', 'core', 'package.json'), 'utf8')) as { version: string }).version;
   // The commit: `--commit` when given (a copy of the tree with no .git, as the remote runner uploads), else git's own reading.
   const head = args.commit ?? (spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout ?? '').trim();
   const dirty = args.commit === null && (spawnSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: ROOT, encoding: 'utf8' }).stdout ?? '').trim() !== '';

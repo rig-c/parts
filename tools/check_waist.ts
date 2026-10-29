@@ -1,7 +1,7 @@
-import 'rig-c/render';
+import '@rig-c/core/render';
 import { TextureAtlas } from '@esotericsoftware/spine-core';
-import { loadCandidate, throughPoser, sampleSetupPose } from 'rig-c/render-shared';
-import { readModel, documentPageLookup, meshPageUvs } from 'rig-c/core';
+import { loadCandidate, throughPoser, sampleSetupPose } from '@rig-c/core/render-shared';
+import { readModel, documentPageLookup, meshPageUvs } from '@rig-c/core/core';
 /** Generated literal-hem controls. Real consumer motion is a separate, source-bound gate. */
 import { mock } from 'bun:test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';

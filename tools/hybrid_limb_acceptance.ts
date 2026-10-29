@@ -2,12 +2,12 @@
 import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
-import { parseRigSpec } from 'rig-c/src/rig.ts';
-import { parseMotionSpec } from 'rig-c/src/motion.ts';
-import { loadCandidate, type GeometryFile } from 'rig-c/src/render_shared.ts';
-import type { SeamFile } from 'rig-c/src/seam.ts';
-import type { FoldsFile } from 'rig-c/src/folds.ts';
-import { Plate } from 'rig-c/tools/plate.ts';
+import { parseRigSpec } from '@rig-c/core/src/rig.ts';
+import { parseMotionSpec } from '@rig-c/core/src/motion.ts';
+import { loadCandidate, type GeometryFile } from '@rig-c/core/src/render_shared.ts';
+import type { SeamFile } from '@rig-c/core/src/seam.ts';
+import type { FoldsFile } from '@rig-c/core/src/folds.ts';
+import { Plate } from '@rig-c/core/tools/plate.ts';
 import { prepareHybrid, prepareHybridAlternate } from './check_hybrid_limb.ts';
 import { processRigcRunner } from './build-process.ts';
 import { readFrameSet, sweepAngles, sweepAnimationName, sweepCopy, sweepJoints, sweepLine, sweepUnderlay, type FrameSet } from '../src/check.ts';

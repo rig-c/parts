@@ -112,7 +112,7 @@ jobs:
   # but node builtins for the same reason.
   #
   # 🌱 The plants run here too, and that is the point of running them: three
-  # packages broken on purpose — `src/layers.ts` out of the pack, `rig-c`
+  # packages broken on purpose — `src/layers.ts` out of the pack, `@rig-c/core`
   # out of `dependencies`, `ag-psd` out of `dependencies` — each of which has to
   # make the smoke RED naming what went missing. Without them this job is a gate
   # nobody has seen fail.

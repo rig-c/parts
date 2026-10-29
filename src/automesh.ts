@@ -18,7 +18,7 @@
  *    author's `influences` — no 0.03 floor unless the author wrote it (P19) —
  *    unrounded, so a vertex that survives can be compared bit for bit.
  * 2. **The call** ({@link autoReductionInput}) — rig-c's `reduceMesh`
- *    (`rig-c/mesh`, 2.28.x), refinement inside the declared regions then
+ *    (`@rig-c/core/mesh`, 2.28.x), refinement inside the declared regions then
  *    reduction, every input from the config or from the source, as the
  *    contract types it (docs/MESH_REDUCTION.md §1): `art` the padded image's
  *    alpha at threshold 1 in the part-local frame with `pageScale` 1 (the
@@ -82,7 +82,7 @@ import {
   type SourceMesh,
   type Termination,
   writeMeshQualityReport,
-} from 'rig-c/mesh';
+} from '@rig-c/core/mesh';
 import { type AutoRegionSpec, type AutoSpec, type AutoWeightRegionSpec, type Point, weightsABone } from './config.ts';
 import { type ContourChainRibs, type ContourMesh, contourMesh, type ContourReport, GRID } from './contour.ts';
 import { type HeatField, heatInfluences } from './heat.ts';

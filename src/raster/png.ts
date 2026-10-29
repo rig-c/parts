@@ -18,8 +18,8 @@
  * map to omit these paths, this import is what breaks, by name, and
  * `bun run smoke` is where that is seen first.
  */
-import { assertPng } from 'rig-c/src/png.ts';
-import { decodePng, encodePng } from 'rig-c/tools/plate.ts';
+import { assertPng } from '@rig-c/core/src/png.ts';
+import { decodePng, encodePng } from '@rig-c/core/tools/plate.ts';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { type FloatImage, newFloatImage, newRaster, type Raster, RasterError } from './types.ts';
 

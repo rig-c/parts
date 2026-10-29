@@ -212,8 +212,8 @@ import { RIDER_RIG, RIDER_STRIP, riderParts, riderRecipe } from './fixtures/ride
 import { type ClothRecipes, draftTrees, INFLUENCE_RADIUS_CELLS, linkRows } from './src/cloth.ts';
 import { BARE_CROWN_PARTS, CUT_BASE_PARTS, CUT_PARTS, eyeParts, FACELESS_PARTS, IRIS_NO_EYEWHITE_PARTS, LEVEL_FRINGE_PARTS, LONG_ROBE_PARTS, LONG_ROBE_RIG, MIXED_STRAND_PARTS, NO_BROW_PARTS, NO_EYE_PARTS, ONE_EYEWHITE_PARTS, PROPOSE_PARTS, PROPOSE_RIG, type ProposeFixturePart, STRAND_PARTS, STRAND_RIG, TILTED_FRINGE_PARTS, TWO_LOCK_PARTS, writeProposeFixture } from './fixtures/propose.ts';
 // The runtime's own posing, for the one control that measures where a mesh's pixels go (PR14): a second opinion about a weighted vertex is what a measurement must not carry.
-import { type BoneSnapshot, type Frame, loadPosable, type Mesh, sampleAnimation, sampleSetupPose } from 'rig-c/src/render.ts';
-import { loadCandidate as loadRootCandidate, throughPoser as throughRootPoser, sampleAnimation as sampleRootAnimation } from 'rig-c/render-shared';
+import { type BoneSnapshot, type Frame, loadPosable, type Mesh, sampleAnimation, sampleSetupPose } from '@rig-c/core/src/render.ts';
+import { loadCandidate as loadRootCandidate, throughPoser as throughRootPoser, sampleAnimation as sampleRootAnimation } from '@rig-c/core/render-shared';
 import { CANVAS, flatName, layerRaster, minimalConfig, WRAPPER_LAYERS, writePsdFixture, writeWrapperFixture } from './fixtures/synthetic.ts';
 import { MANNEQUIN_BLOCKS, MANNEQUIN_FIGURE_PX, MANNEQUIN_KEYPOINTS, MANNEQUIN_PARTS, MANNEQUIN_PLAN, MANNEQUIN_SIDE, writeMannequinFixture } from './fixtures/mannequin.ts';
 import { ARTIST_PATCH, ARTIST_PLAN, ARTIST_PORTRAIT_SHIFT, ARTIST_PORTRAIT_W, ARTIST_SIDE, artistCanvas, artistConfig, artistLayers, EYE as ARTIST_EYE, writeArtistFixture } from './fixtures/artist.ts';
@@ -426,7 +426,7 @@ import {
   withoutPhysics,
 } from './src/check.ts';
 import { chainsLeftBehind, clothConfigEdits, writtenClothConfig } from './src/clothconfig.ts';
-import { EnvironmentError, readEnvironmentSchedule } from 'rig-c/src/environment.ts';
+import { EnvironmentError, readEnvironmentSchedule } from '@rig-c/core/src/environment.ts';
 import { baseTagOf, blinkFigures, breathHeat, heatField, type BoneTrack, type BoneWorld, chainToward, edgeLength, frameBox, type GeometryPose, halfTravels, type MeshRest, stretchFigures, stretchSeverity, lagStep, readSine, setupToFrame, stillReading, stillTolerance, STILL_ROUNDINGS, SWING_TAGS, ulpOf } from './src/instruments.ts';
 import {
   aimLine,
@@ -467,14 +467,14 @@ import { blobId, checkExampleInputs, type Copier, FETCH_RECORD, recordText, runS
 import { BLINK, blinkHoldMisses, CONTROL_SUFFIX, framesInside, IDLE_FPS, type MotionKey, type MotionSpec, sineTrack, TIME_SLACK } from './src/motion.ts';
 import { type BoneEntry, type CharacterConfig, CONFIG_REQUIRES, type ConfigDoor, CONSTRAINT_BONE_FIELDS, type ContourRegionSpec, contourRegionsOf, type Cut, DEFAULT_BUST_ALPHA, DEFAULT_BUST_CLEARANCE, deriveBustRegions, type Extend, type Generation, isDoorKey, type Limb, loadClothConfig, loadConfig, loadConfigAndAnimations, loadEarlyConfig, loadPaintConfig, type Patch, type PlanEntry, type Point, parseConfig, parseEarlyConfig, parseProposalSections, type SkeletonSections, turnMovingPartPair } from './src/config.ts';
 import { BUST_FIT_ALPHA, BUST_FIT_CLEARANCE, BUST_RESIDUAL_BOUND_PX, CALIBRATED_BUST_FIXTURES, midlineFallbackCleavage } from './fixtures/bust.ts';
-import { RIG_BONE_INHERIT, RIG_KEYS, RIG_SKIN_CONSTRAINT_KEYS } from 'rig-c/src/rig.ts';
-import { expandStops } from 'rig-c/src/stop.ts';
+import { RIG_BONE_INHERIT, RIG_KEYS, RIG_SKIN_CONSTRAINT_KEYS } from '@rig-c/core/src/rig.ts';
+import { expandStops } from '@rig-c/core/src/stop.ts';
 import { applyFaceSurfaceDeform, cylinderYawDx, DEFAULT_HEAD_TURN_PARTS, EAR_DEPTH_RANGE, evalYawFaceSurface, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, FACE_RATED_BAND, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, headTurnFraction, headTurnPivot, resolveFaceDeformFractions, TURN_BONE, TURN_RIDER_APART, turnFractions, turnRiderDepth, turnTwin, turnConstraintName, type TurnSpec, turnSurfaceRadius } from './src/turn.ts';
 import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, toWorld } from './src/coords.ts';
 import { artMask, contourFit, type ContourMesh, contourMesh, FAINT_ALPHA, contourOutline, type ContourParams, type ContourRegion, contourTopologyProblems, delaunayViolations, GRID, growSilhouette, inCircle, keepPoints, MAX_SIDE, marginDisc, outlineInRegions, withinMarginSquared } from './src/contour.ts';
 import { BASE, blockOutline, blocks, BOTTLE, BUILDING, CONCAVE, type ContourCase, CONVEX, EMPTY, FAINT, FAINT_AT_LINE, FAR, FEATHERED, FEATHERED_CORE, FULL, HOLE, ISLANDS, NEAR, NOTCH, NOTCH_CUT, NOTCHED, PAIR, PINCH, REGION, REGION_FAR_BACKGROUND, SPIKE, STRAND, STRAND_CHAIN, STRIP } from './fixtures/contour.ts';
 import { ART_ALPHA, counterClockwiseInSpineWorld, latticeMesh, latticeStray } from './src/mesh.ts';
-import { type AcceptedOperation, type AlphaMask, checkHullOrder, type TrackAmplitude, earClip, findSelfIntersection, measureAuthoredMeshFit, measureMeshQuality, type MeshQualityReport, type MeshReductionInput, offsetPolygon, type ReducedMesh, type ReductionSkinning, simplifyClosedPolygon, traceAlphaOutline, traceOutline, windCounterClockwiseInSpineWorld, writeMeshQualityReport } from 'rig-c/mesh';
+import { type AcceptedOperation, type AlphaMask, checkHullOrder, type TrackAmplitude, earClip, findSelfIntersection, measureAuthoredMeshFit, measureMeshQuality, type MeshQualityReport, type MeshReductionInput, offsetPolygon, type ReducedMesh, type ReductionSkinning, simplifyClosedPolygon, traceAlphaOutline, traceOutline, windCounterClockwiseInSpineWorld, writeMeshQualityReport } from '@rig-c/core/mesh';
 import { allocationClause, AUTO_SOURCE_FIT_CONNECTIVITY, AUTO_THRESHOLD, autoReductionInput, autoSource, type AutoVerdict, autoVerdict, CIRCLE_CLEARANCE, circlePolygon, type Reducer, type ReductionResult, reductionKey, type Residual, residuals, reuseReductions, runReduction, sourceWeights, stageBClause, legacyArtCoverage, terminationText, unboundedClause, worstRegion, worstResidual } from './src/automesh.ts';
 import { AUTO_CASES, densityOnly, DIAGONAL_POCKET_SIDE, diagonalPocketMask, examplePolicy, finerSourcePolicy, matrixRegion, permissivePolicy, permissiveSyntheticPolicy, SMALL_STRIP_MASK, SPECK_RULE_PX, speckMask, squareRegion, STRIP_MASK, syntheticPolicy, TWO_PIECES_MASK } from './fixtures/automesh.ts';
 import { BLOCKED_LABEL, barsOf, basisOf, cappedReducer, classify, costLine, countingRunner, type Counts as MatrixCounts, countsCell, deadlineRunner, emptyCost, fromWire, geometryRow, lossAgainstOriginal, pinnedExamplesCommit, quietLabel, rerunSection, STOPPED_CODE, stretchOf, toWire, verdictText } from './tools/auto_matrix.ts';
@@ -533,7 +533,7 @@ import { affineFit, boneHeat, capFloor, columnsOf, footprintRegion, HEAT as WX_H
 import { exampleTotals, figuresOf, gridFrame, policyEcho, TrialLedger, trialPolicy } from './tools/production_trial.ts';
 import { assertUnchanged, crumbsLeft, lossOf, lossTotal, maskMd5, strayCleared } from './tools/production_trial_stray.ts';
 import { ART_ARM_ALPHA, ARMS, armSpec, clearFaint, finalPassOf, rowOf, specPaths, strayFor } from './tools/auto_policy_survey.ts';
-import { IRR_OFFSET } from 'rig-c/src/core/animation.ts';
+import { IRR_OFFSET } from '@rig-c/core/src/core/animation.ts';
 import type { AutoSpec, ConfigConstraint, LatticeMeshSpec, Segment } from './src/config.ts';
 import { DEFAULT_LIMITS, meshLimits, MIN_WEIGHT } from './src/weights.ts';
 import type { AutoMeshReport, MeshReport } from './src/rig.ts';
@@ -6893,7 +6893,7 @@ function runRigSuite(): number {
       const err = refusals(() => rigStage({ config: dead.config, parts: dead.parts, out: join(dir, 'dead', 'out') }, () => ({ status: 1, out }), deadScratch, () => {}));
       return err === null ? 'no refusal' : err.problems.map((q) => `${q.code}: ${q.object} — ${q.detail}`).join(' / ');
     };
-    const importError = "error: Cannot find module '@esotericsoftware/spine-core' from '/x/node_modules/rig-c/src/render.ts'";
+    const importError = "error: Cannot find module '@esotericsoftware/spine-core' from '/x/node_modules/@rig-c/core/src/render.ts'";
     const died = deadRun(`${importError}\n\nBun v1.3.11 (macOS arm64)\n`);
     const headerOnly = deadRun('rigc build /x/rig.json\n  ..    rig    /x/rig.json\n  ..    motion /x/motion.json\n  ..    22 part page(s):\n');
     const silent = deadRun('');
@@ -24304,11 +24304,11 @@ function runBuildSuite(): number {
 
     const identityRoot = join(dir, 'selected package with spaces');
     const identityBin = join(identityRoot, 'node_modules', '.bin', 'rigc');
-    const identityPackage = join(identityRoot, 'node_modules', 'rig-c');
+    const identityPackage = join(identityRoot, 'node_modules', '@rig-c', 'core');
     const declaredEntry = join(identityPackage, 'unusual entry', 'chosen.cjs');
     mkdirSync(dirname(identityBin), { recursive: true });
     mkdirSync(dirname(declaredEntry), { recursive: true });
-    writeFileSync(join(identityPackage, 'package.json'), JSON.stringify({ name: 'rig-c', bin: { rigc: 'unusual entry/chosen.cjs' } }));
+    writeFileSync(join(identityPackage, 'package.json'), JSON.stringify({ name: '@rig-c/core', bin: { rigc: 'unusual entry/chosen.cjs' } }));
     writeFileSync(declaredEntry, "#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({argv:process.argv.slice(2),root:__dirname}));");
     const relEntry = relative(dirname(identityBin), declaredEntry).split(sep).join('/');
     const shimPrelude = '#!/bin/sh\n' + 'basedir=$(dirname "$(echo "$0" | sed -e \'s,\\\\,/,g\')")\n' +
@@ -24332,7 +24332,7 @@ function runBuildSuite(): number {
     writeFileSync(identityBin, validShim);
     writeFileSync(join(identityPackage, 'package.json'), JSON.stringify({ name: 'other-package', bin: { rigc: 'unusual entry/chosen.cjs' } }));
     const wrongPackageRejected = threw(() => selectedRigcCommand(identityBin, 'win32'));
-    writeFileSync(join(identityPackage, 'package.json'), JSON.stringify({ name: 'rig-c', bin: { rigc: 'missing.cjs' } }));
+    writeFileSync(join(identityPackage, 'package.json'), JSON.stringify({ name: '@rig-c/core', bin: { rigc: 'missing.cjs' } }));
     const missingEntryRejected = threw(() => selectedRigcCommand(identityBin, 'win32'));
     say('BU268_UNKNOWN_CUSTOM_MISMATCHED_AND_MISSING_LAUNCHERS_CANNOT_MAP_TO_ANOTHER_PACKAGE',
       [customRejected, wrongTargetRejected, wrongPackageRejected, missingEntryRejected].every(message => message?.includes('RIGC_LAUNCHER_IDENTITY')) &&
@@ -35691,12 +35691,12 @@ function summaryOnlyConstants(source: string, from: number, to: number): string[
 // The runtime version in CK51's named-entry positive fixture; TY10 holds the live pin to it.
 const ENTRY_FIXTURE_SPINE_CORE = '4.3.13';
 const SPINE_CORE = '@esotericsoftware/spine-core';
-/** The upstream compiler's npm name (renamed at 2.20.4; the bin stays `rigc`). */
-const RIGC_PACKAGE = 'rig-c';
+/** The upstream compiler's canonical npm name; the command remains `rigc`. */
+const RIGC_PACKAGE = '@rig-c/core';
 
 /** Where this repository's spine-core devDependency pin and the installed rig-c's devDependency pin disagree, or null when they are equal. */
 function pinDrift(ours: { devDependencies?: Record<string, string> }, theirs: { version?: string; devDependencies?: Record<string, string> } | null): string | null {
-  if (theirs === null) return 'node_modules/rig-c/package.json is not there; run `bun install`';
+  if (theirs === null) return 'node_modules/@rig-c/core/package.json is not there; run `bun install`';
   const a = ours.devDependencies?.[SPINE_CORE];
   const b = theirs.devDependencies?.[SPINE_CORE];
   if (a === undefined) return `package.json declares no ${SPINE_CORE} devDependency`;
@@ -38558,11 +38558,11 @@ function runTreeSuite(): number {
     'determinism is a contract: a stage that read the clock or the network could not promise the same bytes twice',
   );
 
-  const importers = sources.filter(([, t]) => t.includes("'rig-c/src/transform.ts'")).map(([f]) => f);
+  const importers = sources.filter(([, t]) => t.includes("'@rig-c/core/src/transform.ts'")).map(([f]) => f);
   say(
     'TY07_ONLY_SRC_COORDS_IMPORTS_THE_Y_FLIP',
     importers.join(',') === 'src/coords.ts' && cropToSpineY(10, 100) === 90,
-    `importers of rig-c/src/transform.ts: ${importers.join(', ') || 'none'}; cropToSpineY(10, 100) through the door = ${cropToSpineY(10, 100)}`,
+    `importers of @rig-c/core/src/transform.ts: ${importers.join(', ') || 'none'}; cropToSpineY(10, 100) through the door = ${cropToSpineY(10, 100)}`,
     "rig-c forbids a second copy of its coordinate conversion; one door keeps every later stage on rigc's",
   );
 
@@ -40003,7 +40003,7 @@ function quotedRigcCodes(rigc: ReadonlyArray<readonly [string, string]>, sources
 
 /** The installed rig-c's source files, as `[path under src/, text]`. */
 function rigcSources(): Array<readonly [string, string]> {
-  const dir = join(ROOT, 'node_modules', 'rig-c', 'src');
+  const dir = join(ROOT, 'node_modules', '@rig-c', 'core', 'src');
   const out: Array<readonly [string, string]> = [];
   const walk = (d: string): void => {
     for (const e of readdirSync(d).sort()) {
@@ -47965,7 +47965,7 @@ function runAutoMotionSuite(): number {
     // MO17 — the row: the motion rows, the schedule, and the whole compare document after quality_report, keys in order.
     const keys17 = row === undefined ? [] : Object.keys(row);
     const doc17 = row?.motion_report as { operation?: string; motionRequired?: boolean; poser?: { kind?: string; rigcVersion?: string } } | undefined;
-    const rigcVersion = (JSON.parse(readFileSync(join(ROOT, 'node_modules', 'rig-c', 'package.json'), 'utf8')) as { version: string }).version;
+    const rigcVersion = (JSON.parse(readFileSync(join(ROOT, 'node_modules', '@rig-c', 'core', 'package.json'), 'utf8')) as { version: string }).version;
     say(
       'MO17_THE_ROW_CARRIES_THE_MOTION_ROWS_THE_SCHEDULE_AND_THE_COMPARE_DOCUMENT_AFTER_QUALITY_REPORT',
       keys17.slice(-3).join() === 'deformation,quality_report,motion_report' &&
@@ -48224,7 +48224,7 @@ function runAutoReplayCases(say: (name: string, ok: boolean, detail: string, why
   );
 
   // MO29 — the loaded rig-c is 2.24.0 or later and reads stopAfterAccepted; a planted bad value is its refusal, carried.
-  const ver = (JSON.parse(readFileSync(join(ROOT, 'node_modules', 'rig-c', 'package.json'), 'utf8')) as { version: string }).version;
+  const ver = (JSON.parse(readFileSync(join(ROOT, 'node_modules', '@rig-c', 'core', 'package.json'), 'utf8')) as { version: string }).version;
   const [maj, min] = ver.split('.').map(Number);
   const bad29 = in25 === null ? null : runReduction(AT, { ...in25, stopAfterAccepted: 1.5 });
   const neg29 = in25 === null ? null : runReduction(AT, { ...in25, stopAfterAccepted: -1 });
@@ -48449,7 +48449,7 @@ function runAutoStageBCases(say: (name: string, ok: boolean, detail: string, why
   if (last35 !== undefined) last35.kind = 'boundary-run';
   const v35 = forged35 === null ? null : replayVerdict(AT, k35, acc35, forged35);
   const clean35 = rep35 === null || 'code' in rep35 ? null : replayVerdict(AT, k35, acc35, rep35);
-  const ver35 = (JSON.parse(readFileSync(join(ROOT, 'node_modules', 'rig-c', 'package.json'), 'utf8')) as { version: string }).version;
+  const ver35 = (JSON.parse(readFileSync(join(ROOT, 'node_modules', '@rig-c', 'core', 'package.json'), 'utf8')) as { version: string }).version;
   const [maj35, min35] = ver35.split('.').map(Number);
   say(
     'MO35_ACCEPTEDAT_IS_READ_PER_OPERATION_BY_STEP_AND_KIND_AND_A_REPLAY_WHOSE_OPERATION_DIFFERS_IS_REFUSED_BY_NAME',
@@ -48886,7 +48886,7 @@ function runAutoAmplitudeCases(
 
   // MO45 — rig-c 2.29 loaded; the stage sends the amplitude with gradation null when the author leaves it out, and the author's
   // number when written; rig-c echoes it, and the row's settings carry that echo.
-  const ver45 = (JSON.parse(readFileSync(join(ROOT, 'node_modules', 'rig-c', 'package.json'), 'utf8')) as { version: string }).version;
+  const ver45 = (JSON.parse(readFileSync(join(ROOT, 'node_modules', '@rig-c', 'core', 'package.json'), 'utf8')) as { version: string }).version;
   const [maj45, min45] = ver45.split('.').map(Number);
   const sentNull = sent41?.motionAmplitude;
   const sentHalf = inputOf(withGradation(0.5))?.motionAmplitude;

@@ -142,8 +142,8 @@ only after three things are written down:
    `npm deprecate`: a banner on every install is a retirement wearing an
    alias's name.
 
-The same policy holds for every package of the toolchain: `rig-c` (renamed on
-npm at 2.20.4; its former name is spelled only in `CHANGELOG.md`, `TY11`),
+The same policy holds for every package of the toolchain: `@rig-c/core` with
+`rig-c` kept as an alias (the earlier unscoped rename was at 2.20.4; its former name is spelled only in `CHANGELOG.md`, `TY11`),
 `@rig-c/parts` with `rig-parts` and the alias `spine-parts` beside it, and
 `spine-html` → `rig-play` (npm `@rig-c/play`).
 
@@ -297,7 +297,7 @@ entry), `layers` on a wrapper directory and on a PSD, `sheet`, `check` on a
 generated two-part rig from the install, and `build --all-sets` loaded through a
 fresh install of `@rig-c/play` (`--play-version <ver>`, default `latest`,
 `SMOKE_PLAY_LOADS_THE_BUILD`, issue #741). Four packages are broken on purpose —
-`src/layers.ts` out of the pack, `rig-c` out of `dependencies`, `ag-psd`
+`src/layers.ts` out of the pack, `@rig-c/core` out of `dependencies`, `ag-psd`
 out of `dependencies`, `@esotericsoftware/spine-core` added to `dependencies` —
 each patched into an extraction of the tarball, never the checkout; a plant case
 is green only when the smoke went red at the step it names, naming what went

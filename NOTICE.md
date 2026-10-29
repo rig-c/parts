@@ -59,7 +59,7 @@ from them beyond the layers See-through itself writes for the user's own image.
 
 ## 2. Spine Runtimes, through rig-c
 
-rig-parts depends on [`rig-c`](https://www.npmjs.com/package/rig-c)
+rig-parts depends on [`@rig-c/core`](https://www.npmjs.com/package/@rig-c/core)
 (MIT, same author), which compiles and validates Spine skeleton data. Its round
 trip runs through `@esotericsoftware/spine-core`, part of the
 [Spine Runtimes](https://github.com/EsotericSoftware/spine-runtimes), under the
@@ -158,7 +158,7 @@ function's comment says which call it stands in for and what was measured.
 
 | Package | Licence | Why |
 | --- | --- | --- |
-| [`rig-c`](https://www.npmjs.com/package/rig-c) | MIT | compile, gate, render and check; its PNG codec, font and coordinate conversion |
+| [`@rig-c/core`](https://www.npmjs.com/package/@rig-c/core) | MIT | compile, gate, render and check; its PNG codec, font and coordinate conversion |
 | [`ag-psd`](https://www.npmjs.com/package/ag-psd) | MIT | reading an upstream See-through `.psd` |
 | ↳ [`pako`](https://www.npmjs.com/package/pako) | MIT AND Zlib | ag-psd's deflate |
 | ↳ [`base64-js`](https://www.npmjs.com/package/base64-js) | MIT | ag-psd's base64 |

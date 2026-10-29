@@ -2,7 +2,7 @@
 /** Issue #160: current-toolchain reading. Bars are fixed in issuecomment-6394715413. */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type AlphaMask, type MeshReductionInput, type NamedLine, type ReducedMesh, validateLines } from 'rig-c/mesh';
+import { type AlphaMask, type MeshReductionInput, type NamedLine, type ReducedMesh, validateLines } from '@rig-c/core/mesh';
 import { autoSource, autoReductionInput, runReduction, autoVerdict, terminationText } from '../src/automesh.ts';
 import { fillHoles, newMask } from '../src/raster/index.ts';
 import { type ContourMesh } from '../src/contour.ts';

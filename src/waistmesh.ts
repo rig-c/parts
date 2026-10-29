@@ -4,7 +4,7 @@ import { PartsError } from './errors.ts';
 import { counterClockwiseInSpineWorld, type LatticeMesh } from './mesh.ts';
 import type { MeshAttachment, RegionAttachment, RigBone, WeightEntry } from './rig.ts';
 import { pyRound } from './round.ts';
-import { f32 } from 'rig-c/compile';
+import { f32 } from '@rig-c/core/compile';
 
 type Q = readonly [bigint, bigint];
 type P = readonly [Q, Q];

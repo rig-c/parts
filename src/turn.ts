@@ -36,8 +36,8 @@ import { pyRound } from './round.ts';
 import { turnOverlapOwners } from './turnoverlap.ts';
 import { sampleTurnTriangleField, turnTriangleCoordinates } from './turnfield.ts';
 import { PartsError } from './errors.ts';
-import { f32 } from 'rig-c/compile';
-import { evaluateDeformTransform } from 'rig-c/src/deformgen.ts';
+import { f32 } from '@rig-c/core/compile';
+import { evaluateDeformTransform } from '@rig-c/core/src/deformgen.ts';
 
 /**
  * The layers that ride on the face (issue #271): See-through makes no depth

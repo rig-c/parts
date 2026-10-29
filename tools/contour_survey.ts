@@ -32,7 +32,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { measureAuthoredMeshFit, type AlphaMask } from 'rig-c/mesh';
+import { measureAuthoredMeshFit, type AlphaMask } from '@rig-c/core/mesh';
 import { contourMesh, type ContourParams, triangleQuality } from '../src/contour.ts';
 import { ART_ALPHA, latticeMesh } from '../src/mesh.ts';
 import { connectedComponents, readPng } from '../src/raster/index.ts';

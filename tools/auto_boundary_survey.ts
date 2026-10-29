@@ -86,7 +86,7 @@ import {
   rasteriseTriangles,
   squaredDistanceToSet,
   windCounterClockwiseInSpineWorld,
-} from 'rig-c/mesh';
+} from '@rig-c/core/mesh';
 import { terminationText } from '../src/automesh.ts';
 import { findRigc } from '../src/check.ts';
 import { type AutoSpec, loadConfig } from '../src/config.ts';

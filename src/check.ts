@@ -80,7 +80,7 @@ import { baseAnchorMoves, type AnchorRegion } from './baseanchor.ts';
  */
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import type { Viewport as RootCoverageViewport } from 'rig-c/render-shared';
+import type { Viewport as RootCoverageViewport } from '@rig-c/core/render-shared';
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig } from './assemble.ts';
@@ -164,9 +164,9 @@ import {
   type SeamPair,
   stretchRequirementLine,
 } from './requirements.ts';
-import { RIG_BONE_INHERIT, type RigSpec as RigcRigSpec } from 'rig-c/src/rig.ts';
-import { expandStops } from 'rig-c/src/stop.ts';
-import { ENVIRONMENT_SPEC, EnvironmentError, environmentResponse, readEnvironmentSchedule } from 'rig-c/src/environment.ts';
+import { RIG_BONE_INHERIT, type RigSpec as RigcRigSpec } from '@rig-c/core/src/rig.ts';
+import { expandStops } from '@rig-c/core/src/stop.ts';
+import { ENVIRONMENT_SPEC, EnvironmentError, environmentResponse, readEnvironmentSchedule } from '@rig-c/core/src/environment.ts';
 import { ART_ALPHA } from './mesh.ts';
 import { connectedComponents } from './raster/components.ts';
 import { alphaComposite } from './raster/composite.ts';
@@ -531,7 +531,7 @@ export function findRigc(from: string, pathVar: string, platform: 'win32' | 'pos
       object: 'the rig-c CLI `rigc`',
       detail: platform === 'win32'
         ? 'found at none of ' + looked.join(', ') + ' nor PATH candidates [' + onPath.join(', ') + ']; executable shapes rigc, rigc.exe were looked for; rigc.bunx alone is not executable; bun install supplies this dependency'
-        : `found at none of ${directories} node_modules/.bin/rigc path(s) from ${resolve(from)} up (nearest ${looked[0]}) nor on PATH; rig-c is this package's dependency — \`bun install\` puts it at node_modules/.bin/rigc`,
+        : `found at none of ${directories} node_modules/.bin/rigc path(s) from ${resolve(from)} up (nearest ${looked[0]}) nor on PATH; @rig-c/core is this package's dependency — \`bun install\` puts it at node_modules/.bin/rigc`,
     },
   ]);
   return '';
@@ -1919,14 +1919,14 @@ export interface SeamStateBounds {
  * follows rigc's own package-root resolution. No candidate error selects a
  * different API. Importing check, or constructing a root-free reader, loads none.
  */
-type OfficialRenderer = typeof import('rig-c/render-shared');
+type OfficialRenderer = typeof import('@rig-c/core/render-shared');
 function officialRenderer(): OfficialRenderer {
   const require = createRequire(import.meta.url);
-  const coreRoot = dirname(require.resolve('rig-c/package.json'));
+  const coreRoot = dirname(require.resolve('@rig-c/core/package.json'));
   let runtimePresent = false;
   try { require.resolve('@esotericsoftware/spine-core/package.json', { paths: [coreRoot] }); runtimePresent = true; } catch { /* Optional runtime is absent, as in rigc's launcher. */ }
-  if (runtimePresent) require('rig-c/render');
-  return require('rig-c/render-shared') as OfficialRenderer;
+  if (runtimePresent) require('@rig-c/core/render');
+  return require('@rig-c/core/render-shared') as OfficialRenderer;
 }
 
 /** One decoder/poser lifetime per state; retain only finite bounds and identities, never atlas pages or rasters. */
