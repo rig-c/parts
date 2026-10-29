@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.78.0](https://github.com/rig-c/parts/compare/v1.77.0...v1.78.0) (2026-10-29)
+
+
+### Features
+
+* **assemble:** opt-in keep_under_occluders, so a part under a soft-edged cover keeps its own layer pixels ([#828](https://github.com/rig-c/parts/issues/828)) ([fe24321](https://github.com/rig-c/parts/commit/fe24321a7d1e881cddc7677f331a759b666369e2)), closes [#825](https://github.com/rig-c/parts/issues/825)
+
 ## [1.77.0](https://github.com/rig-c/parts/compare/v1.76.0...v1.77.0) (2026-10-29)
 
 
