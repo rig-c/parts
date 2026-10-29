@@ -307,7 +307,7 @@ export interface Assemble {
   alternates?: AlternateSetConfig[];
   /** Issue #492: composite full:face under head:face on the head canvas to fill transparent holes inside the face silhouette. */
   head_face_underfill?: boolean;
-  /** Opt-in: yield original drift-refused front pixels to an opaque behind holder matching the painting. */
+  /** Opt-in: yield original drift-refused front cores and connected non-core rims to an opaque behind holder matching the painting. */
   yield_refused?: boolean;
   /** Named plan parts retain their own pixels beneath a drawn-in-front soft occluder. */
   keep_under_occluders?: string[];

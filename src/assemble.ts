@@ -241,7 +241,7 @@ export interface Geometry {
   keySkeleton?: ControlSkeleton;
   /** `assemble.head_face_underfill` (issue #492): composite `full:face` under `head:face` on the head canvas to fill transparent bare-skin holes. */
   headFaceUnderfill?: boolean;
-  /** `assemble.yield_refused`, default false; alpha-only ownership transfer from original refused core pixels. */
+  /** `assemble.yield_refused`, default false; alpha-only transfer of refused cores and their connected non-core rims. */
   yieldRefused?: boolean;
   /** Plan parts whose own samples survive source re-take beneath soft front cover. */
   keepUnderOccluders?: readonly string[];
@@ -362,7 +362,7 @@ export interface AssembleInput {
   keySkeleton?: ControlSkeleton;
   /** `assemble.head_face_underfill` (issue #492): composite `full:face` under `head:face` on the head canvas to fill transparent bare-skin holes. */
   headFaceUnderfill?: boolean;
-  /** `assemble.yield_refused`, default false; alpha-only ownership transfer from original refused core pixels. */
+  /** `assemble.yield_refused`, default false; alpha-only transfer of refused cores and their connected non-core rims. */
   yieldRefused?: boolean;
   /** Plan parts whose own samples survive source re-take beneath soft front cover. */
   keepUnderOccluders?: readonly string[];
@@ -4388,6 +4388,8 @@ export interface DriftYieldReading {
   from: string;
   refusedCandidates: number;
   yielded: number;
+  /** Non-core pixels on an original 8-connected part body seeded by a yielded core. Included in yielded. */
+  yieldedRim: number;
   /** Yielded refusals also accepted by projection closing; removed from the written projected count. */
   yieldedTaken: number;
   /** Original refused pixels explicitly kept from their own layer (#825). */
@@ -5316,7 +5318,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     let yielded = 0;
     if (input.yieldRefused === true) {
       const mask = newMask(W, H);
-      const reading: DriftYieldReading = { part: name, from: b.key, refusedCandidates: 0, yielded: 0, yieldedTaken: 0, skipped: { merge: 0, ring: 0, notOpaque: 0, noMatchingBehind: 0 }, originalGlobalHolderWouldSkip: 0, originalHolders: [], finalHolders: [] };
+      const reading: DriftYieldReading = { part: name, from: b.key, refusedCandidates: 0, yielded: 0, yieldedRim: 0, yieldedTaken: 0, skipped: { merge: 0, ring: 0, notOpaque: 0, noMatchingBehind: 0 }, originalGlobalHolderWouldSkip: 0, originalHolders: [], finalHolders: [] };
       const holders = new Map<string | null, number>();
       for (let p = 0; p < W * H; p++) {
         if (refused.data[p] !== 1) continue;
@@ -5333,6 +5335,38 @@ export function assemble(input: AssembleInput): AssembleResult {
         if (b.st.takenMask.data[p] === 1) reading.yieldedTaken++;
         b.r.data[p * 4 + 3] = 0;
         yielded++;
+      }
+      if (yielded > 0) {
+        // Connectivity reads the original part support, including the opaque
+        // band outside the eroded projection core. Only non-core rim pixels
+        // may additionally yield: traversing an opaque pixel never clears it.
+        // Merge/ring replacements, kept samples and another piece's region
+        // cannot connect a rim to this source's refused body.
+        const seen = new Uint8Array(W * H), queue = new Int32Array(W * H);
+        let end = 0;
+        for (let p = 0; p < W * H; p++) if (mask.data[p] === 1) { seen[p] = 1; queue[end++] = p; }
+        for (let at = 0; at < end; at++) {
+          const p = queue[at], x = p % W, y = Math.floor(p / W);
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+            const q = ny * W + nx;
+            if (seen[q] === 1) continue;
+            seen[q] = 1;
+            const alpha = b.r.data[q * 4 + 3];
+            if (alpha === 0 || (b.region !== null && b.region.data[q] === 0) || keptRetake[orderIdx]?.data[q] === 1 || b.trace.from[q] >= 0 || b.trace.ring.data[q] !== 0) continue;
+            queue[end++] = q;
+            if (alpha >= CORE_ALPHA || behindAt[q] < 0) continue;
+            const holder = holderAt[q] < 0 ? null : stackNames[holderAt[q]];
+            holders.set(holder, (holders.get(holder) ?? 0) + 1);
+            if (holderAt[q] !== orderIdx) reading.originalGlobalHolderWouldSkip++;
+            mask.data[q] = 1;
+            if (b.st.takenMask.data[q] === 1) reading.yieldedTaken++;
+            b.r.data[q * 4 + 3] = 0;
+            reading.yieldedRim++;
+            yielded++;
+          }
+        }
       }
       reading.yielded = yielded;
       reading.originalHolders = [...holders].map(([part, px]) => ({ part, px }));
@@ -5622,7 +5656,7 @@ export function driftLine(d: DriftBodies): string {
     `by the plan's draw order ${d.holders.map((h) => `"${h.part}" holds ${h.px} px`).join(', ')} of it (the top-most part at alpha >= ${CORE_ALPHA})${frontClause}${behindClause}; ` +
     "informational: no gate reads this. Swapping the plan order of the parts named here can clear it (when only the front one differs from the painting) or move it to the other part (when both do): swap, rebuild and read this line again; if it moves, removing it needs different input layers. At rest, the seam pass repaints the holder's pixels that pass its rule from the painting" +
     (d.yieldedPx === undefined
-      ? '; set assemble.yield_refused: true to yield original refused front pixels only where the top-most opaque behind holder matches the painting, before considering a cut'
+      ? '; set assemble.yield_refused: true to yield original refused front pixels and their connected non-core rims only where the top-most opaque behind holder matches the painting, before considering a cut'
       : `; yielded ${d.yieldedPx} px to top-most opaque behind holders matching the painting (assemble.yield_refused: true; alpha only)`)
   );
 }
@@ -6324,7 +6358,7 @@ export function stageFields(
   armSplit?: ArmSplit;
   keySkeleton?: ControlSkeleton;
   headFaceUnderfill?: boolean;
-  /** `assemble.yield_refused`, default false; alpha-only ownership transfer from original refused core pixels. */
+  /** `assemble.yield_refused`, default false; alpha-only transfer of refused cores and their connected non-core rims. */
   yieldRefused?: boolean;
   /** Plan parts whose own samples survive source re-take beneath soft front cover. */
   keepUnderOccluders?: readonly string[];
