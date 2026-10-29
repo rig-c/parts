@@ -3,6 +3,7 @@ import { runExtremesChecks } from './tools/check_extremes.ts';
 import { selftestCliArgs } from './fixtures/check_options.ts';
 import { softOcclusionLine } from './src/assemble.ts';
 import { softOccluderFixture, softTrailDiff, yieldLimbCoverFixture, SOFT_SKIN } from './fixtures/soft_occluder.ts';
+import { yieldRimFixture, rimCount, rimPixel } from './fixtures/yield_rim.ts';
 import { writeHybridFixture } from './fixtures/hybrid_limb.ts';
 import { AUTOMATIC_WRITERS as AW817, compactValueBaseline, pixelProvenance, provenanceAddsUp, provenanceLines } from './src/provenance.ts';
 import { runTurnBlendChecks } from './tools/check_turn_blend.ts';
@@ -32566,6 +32567,54 @@ function runAssembleSuite(): number {
       doors825.every((q, i) => q.errors.every((e, d) => (i < 2 || (i === 6 && d === 2)) ? e === null : e !== null)),
       doors825.map(q => `${JSON.stringify(q.value)}:${q.errors.map(codes).join('/')}`).join('; '),
       'the early layers door checks shape and duplicates without assuming it has a plan; assemble/full resolve each named source part');
+    // #832: the four alpha bands contain 40^2 - 32^2 = 576 pixels.
+    // The eroded opaque core contains 28^2 = 784 refused seeds; the opaque
+    // 2-pixel border is traversed for body connectivity but is never yielded.
+    const rimResult832 = (opt: Parameters<typeof yieldRimFixture>[0] = {}, enabled = true) => assemble({ ...yieldRimFixture(opt), yieldRefused: enabled });
+    const rimFront832 = (r: ReturnType<typeof assemble>) => r.images.find(p => p.record.name === 'front')!;
+    const rimOff832 = rimResult832({}, false), rimOn832 = rimResult832();
+    const rimReading832 = rimOn832.yieldReadings?.find(p => p.part === 'front');
+    let rimRgbChanges832 = 0, rimAlphaChanges832 = 0, holes832 = 0, croppedRim832 = 0;
+    const raw832 = yieldRimFixture().full.layers[1].pixels;
+    const back832 = rimOn832.images.find(p => p.record.name === 'under')!;
+    for (let y = 12; y < 52; y++) for (let x = 12; x < 52; x++) {
+      if (Math.min(x - 12, 51 - x, y - 12, 51 - y) >= 4) continue;
+      const got = rimPixel(rimFront832(rimOn832), x, y), q = (y * 64 + x) * 4;
+      const box = rimFront832(rimOn832).record;
+      if (x < box.x || y < box.y || x >= box.x + box.w || y >= box.y + box.h) croppedRim832++;
+      else if (got.slice(0, 3).some((v, c) => v !== raw832.data[q + c])) rimRgbChanges832++;
+      if (got[3] !== raw832.data[q + 3]) rimAlphaChanges832++;
+      if (rimPixel(back832, x, y)[3] !== 255) holes832++;
+    }
+    say('AS832_REFUSED_BODY_RIM_RED_CONTROL_AND_ALPHA_ONLY_YIELD_WITHOUT_HOLES',
+      rimCount(rimFront832(rimOff832)) === 576 && rimCount(rimFront832(rimOn832)) === 0 && rimReading832?.yieldedRim === 576 && rimReading832.yielded === 784 + 576 && rimRgbChanges832 === 0 && rimAlphaChanges832 === 576 && holes832 === 0,
+      `rim off=${rimCount(rimFront832(rimOff832))}, on=${rimCount(rimFront832(rimOn832))}; ${JSON.stringify(rimReading832)}; RGB changes in emitted box=${rimRgbChanges832}, cropped-away rim=${croppedRim832}, alpha changes=${rimAlphaChanges832}, holes=${holes832}`,
+      'hand-derived square bands; the off branch plants the defect, every cleared rim pixel retains an opaque back sample; alpha-zero rim outside the new crop has no emitted RGB sample');
+    const controlCases832 = [
+      { name: 'mismatch', opt: { mismatch: true }, expected: 576 },
+      { name: 'nonopaque249', opt: { holderAlpha: 249 }, expected: 576 },
+      { name: 'opaque250', opt: { holderAlpha: 250 }, expected: 0 },
+      { name: 'topmostMismatch', opt: { blocker: true }, expected: 576 },
+    ].map(q => ({ ...q, result: rimResult832(q.opt) }));
+    say('AS832_MATCH_AND_OPACITY_ARE_CHECKED_ON_THE_EXPOSED_TOPMOST_HOLDER',
+      controlCases832.every(q => rimCount(rimFront832(q.result)) === q.expected),
+      controlCases832.map(q => `${q.name}=${rimCount(rimFront832(q.result))}/${q.expected}`).join('; '),
+      'the mismatching opaque middle blocks the matching bottom; the existing 249/250 holder boundary and the 100-channel mismatch are independent negatives');
+    const diagonal832 = rimResult832({ diagonal: true });
+    let isolatedDiff832 = 0;
+    for (let y = 54; y < 60; y++) for (let x = 24; x < 40; x++) if (JSON.stringify(rimPixel(rimFront832(rimOff832), x, y)) !== JSON.stringify(rimPixel(rimFront832(rimOn832), x, y))) isolatedDiff832++;
+    say('AS832_EIGHT_CONNECTED_RIM_REACHES_A_DIAGONAL_BUT_LEAVES_THE_ISOLATED_ISLAND_AND_OPAQUE_BORDER',
+      rimPixel(rimFront832(diagonal832), 11, 11)[3] === 0 && diagonal832.yieldReadings?.find(q => q.part === 'front')?.yieldedRim === 577 && isolatedDiff832 === 0 && rimPixel(rimFront832(rimOn832), 24, 56)[3] === 100 && rimPixel(rimFront832(rimOn832), 16, 24)[3] === 255 && rimPixel(rimFront832(rimOn832), 17, 24)[3] === 255,
+      `diagonal alpha=${rimPixel(rimFront832(diagonal832), 11, 11)[3]}, isolated RGBA changes=${isolatedDiff832}, opaque band=${rimPixel(rimFront832(rimOn832), 16, 24)[3]}/${rimPixel(rimFront832(rimOn832), 17, 24)[3]}`,
+      'a four-neighbour flood would miss (11,11); an all-fringe clear would destroy the separate 16x6 island; the two-pixel erosion band is connectivity support, not a new refusal');
+    const partial832 = yieldRimFixture();
+    partial832.keepUnderOccluders = ['under'];
+    // Left rim has a mismatching holder, while the interior still seeds yield.
+    for (let y = 20; y < 44; y++) for (let x = 12; x < 16; x++) partial832.full.layers[0].pixels.data[(y * 64 + x) * 4] = 0;
+    const partialOn832 = assemble(partial832);
+    say('AS832_RIM_MATCH_IS_PER_PIXEL_AFTER_THE_CORE_HAS_ALREADY_YIELDED',
+      rimReading832?.yielded === 1360 && partialOn832.yieldReadings?.find(q => q.part === 'front')?.yieldedRim === 576 - 96 && rimPixel(rimFront832(partialOn832), 12, 24)[3] === 40 && rimPixel(rimFront832(partialOn832), 51, 24)[3] === 0,
+      JSON.stringify(partialOn832.yieldReadings), 'a valid seed cannot authorize a mismatching rim pixel; the opposite rim remains eligible');
     const off819 = yieldRun819('off', false), on819 = yieldRun819('on', true);
     const image819 = (r: ReturnType<typeof assemble>, name: string) => r.images.find(p => p.record.name === name)!;
     const remaining819 = (r: ReturnType<typeof assemble>) => {
