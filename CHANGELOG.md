@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.74.1](https://github.com/rig-c/parts/compare/v1.74.0...v1.74.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **deps:** depend on @rig-c/core instead of the literal rig-c ([#818](https://github.com/rig-c/parts/issues/818)) ([c274963](https://github.com/rig-c/parts/commit/c27496338388751444142da424c50cd4299fffca)), closes [#814](https://github.com/rig-c/parts/issues/814)
+
 ## [1.74.0](https://github.com/rig-c/parts/compare/v1.73.1...v1.74.0) (2026-10-29)
 
 
