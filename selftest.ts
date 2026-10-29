@@ -3,6 +3,7 @@ import { runExtremesChecks } from './tools/check_extremes.ts';
 import { selftestCliArgs } from './fixtures/check_options.ts';
 import { softOcclusionLine } from './src/assemble.ts';
 import { softOccluderFixture, softTrailDiff, yieldLimbCoverFixture, SOFT_SKIN } from './fixtures/soft_occluder.ts';
+import { runYieldContourChecks } from './tools/check_yield_contour.ts';
 import { yieldRimFixture, rimCount, rimPixel } from './fixtures/yield_rim.ts';
 import { writeHybridFixture } from './fixtures/hybrid_limb.ts';
 import { AUTOMATIC_WRITERS as AW817, compactValueBaseline, pixelProvenance, provenanceAddsUp, provenanceLines } from './src/provenance.ts';
@@ -32450,6 +32451,8 @@ function runAssembleSuite(): number {
       `behind drift: ${behindLines[0] ?? 'none'}; holeKinds on flat fixture: noLayer=${result.holeKinds.noLayer.px} + betweenLayers=${result.holeKinds.betweenLayers.px} = ${result.figures.uncoveredErrorPx}`,
       'issue #351: when a part drawn in front refuses a body whose painting colour matches a part drawn behind it, driftLine names that behind part; and holeKindsLine splits uncoveredErrorPx into pixels where no See-through layer has alpha > 8 (only assemble.patches can cover) vs pixels on a layer',
     );
+
+    runYieldContourChecks((name, pass, detail) => say(name, pass, detail, 'issue #841: public synthetic source projection and protected ownership controls'));
 
     // Issue #819: independent flat-colour controls. A 48x48 front square's 5x5-eroded core is 44x44 = 1936.
     // Moving peers keep the existing seam/fringe passes from repainting the planted source defect.
