@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.76.0](https://github.com/rig-c/parts/compare/v1.75.0...v1.76.0) (2026-10-29)
+
+
+### Features
+
+* **assemble:** report how each part's pixels departed from See-through, per stage and per hand edit ([#823](https://github.com/rig-c/parts/issues/823)) ([252ebb2](https://github.com/rig-c/parts/commit/252ebb2d9da22aed69c119376ce44f2103e760c1)), closes [#817](https://github.com/rig-c/parts/issues/817)
+
 ## [1.75.0](https://github.com/rig-c/parts/compare/v1.74.1...v1.75.0) (2026-10-29)
 
 
