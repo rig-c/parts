@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { writeHybridFixture } from './fixtures/hybrid_limb.ts';
+import { AUTOMATIC_WRITERS as AW817, compactValueBaseline, pixelProvenance, provenanceAddsUp, provenanceLines } from './src/provenance.ts';
 import { runTurnBlendChecks } from './tools/check_turn_blend.ts';
 import { runTurnOverlapChecks } from './tools/check_turn_overlap.ts';
 import { runTurnSurfaceChecks } from './tools/check_turn_surface.ts';
@@ -239,6 +241,7 @@ import {
   holeLines,
   HOLES_LISTED,
   layerToRig,
+  placeLayer,
   MAP_MISMATCHED,
   MAP_UNCOVERED,
   measureRecomposite,
@@ -4761,6 +4764,75 @@ function runPartsSuite(): number {
     // upper segment's record (no cap) read as before, and a file without alternates keeps its bytes.
     const altRecomposite: RecompositeRecord = { mean_abs: 0, within_limit: 0, within_share: 1, error_limit: 0, error_px: 0, covered_alpha: 0, uncovered_error_px: 0, hole_count: 0, holes_listed: 0, holes: [] };
     const altSet = (records: unknown[], name = 'three_quarter'): Record<string, unknown> => ({ name, slots: { forearm_r: `${name}_forearm_r` }, records, ghost_px: {}, recomposite: altRecomposite });
+    // #817: exercise the actual reader/serializer on base and alternate records.
+    const provenance817: NonNullable<PartRecord['provenance']> = {
+      unchanged_layer_px: 20, hand_px: 30, automatic_px: 50,
+      edits: [{ edit: 'cuts[0]', px: 10 }, { edit: 'patches[1]', px: 10 }, { edit: 'full:author:structure', px: 10 }],
+      automatic: [{ stage: 'sourceProjection', px: 20 }, { stage: 'seamOverride', px: 30 }],
+    };
+    const measured817: PartsFile = { ...file, parts: file.parts.map(p => ({ ...p, provenance: structuredClone(provenance817) })),
+      alternates: [{ name: 'census', slots: { face: 'census_face' }, records: file.parts.map(p => ({ ...p, provenance: structuredClone(provenance817) })), ghost_px: {}, recomposite: altRecomposite }] };
+    writeParts(path, measured817);
+    const measuredText817 = readFileSync(path, 'utf8');
+    const measuredBack817 = readParts(path);
+    const legacy817 = structuredClone(measured817);
+    for (const p of [...legacy817.parts, ...(legacy817.alternates?.flatMap(a => a.records) ?? [])]) delete p.provenance;
+    writeParts(path, legacy817);
+    const legacyBack817 = readParts(path);
+    say('PT817_BASE_AND_ALTERNATE_PROVENANCE_ROUNDTRIP_AND_LEGACY_OMISSION',
+      serializeParts(measuredBack817) === measuredText817 && serializeParts(legacyBack817) === serializeParts(legacy817) &&
+      !serializeParts(legacyBack817).includes('"provenance"') && measuredBack817.alternates?.[0].records[0].provenance?.automatic_px === 50,
+      `base and alternate exact roundtrip: ${serializeParts(measuredBack817) === measuredText817}; legacy metadata absent; legacy record exact full-field roundtrip: ${serializeParts(legacyBack817) === serializeParts(legacy817)}`,
+      'optional metadata must roundtrip in both record populations; legacy omission and current full-field records each roundtrip without suppressing a field from either expected record');
+    type ProvenanceForge817 = (p: Record<string, unknown>) => void;
+    const readerPlants817: Array<[string, string, ProvenanceForge817]> = [
+      ['null record', 'PARTS_FIELD_TYPE', p => { p.provenance = null; }],
+      ['missing stage list', 'PARTS_FIELD_TYPE', p => { delete (p.provenance as Record<string, unknown>).automatic; }],
+      ['unknown record field', 'PARTS_FIELD_TYPE', p => { (p.provenance as Record<string, unknown>).invented = 1; }],
+      ['negative count', 'PARTS_FIELD_TYPE', p => { (p.provenance as Record<string, unknown>).hand_px = -1; }],
+      ['unknown stage', 'PARTS_FIELD_TYPE', p => { ((p.provenance as Record<string, unknown>).automatic as Array<Record<string, unknown>>)[0].stage = 'invented'; }],
+      ['duplicate stage', 'PARTS_FIELD_TYPE', p => { ((p.provenance as Record<string, unknown>).automatic as Array<Record<string, unknown>>)[1].stage = 'sourceProjection'; }],
+      ['malformed cut index', 'PARTS_FIELD_TYPE', p => { ((p.provenance as Record<string, unknown>).edits as Array<Record<string, unknown>>)[0].edit = 'cuts[-1]'; }],
+      ['malformed author label', 'PARTS_FIELD_TYPE', p => { ((p.provenance as Record<string, unknown>).edits as Array<Record<string, unknown>>)[2].edit = 'full:author: bad'; }],
+      ['duplicate edit', 'PARTS_FIELD_TYPE', p => { ((p.provenance as Record<string, unknown>).edits as Array<Record<string, unknown>>)[1].edit = 'cuts[0]'; }],
+      ['edit subtotal +1', 'PARTS_COUNTS_ADD_UP', p => { ((p.provenance as Record<string, unknown>).edits as Array<{ px: number }>)[0].px++; }],
+      ['automatic subtotal +1', 'PARTS_COUNTS_ADD_UP', p => { ((p.provenance as Record<string, unknown>).automatic as Array<{ px: number }>)[0].px++; }],
+      ['opaque total +1', 'PARTS_COUNTS_ADD_UP', p => { (p.provenance as { unchanged_layer_px: number }).unchanged_layer_px++; }],
+    ];
+    const readerResults817 = readerPlants817.flatMap(([what, code, forge]) => ['base', 'alternate'].map(population => {
+      const raw = structuredClone(measured817);
+      const record = population === 'base' ? raw.parts[0] : raw.alternates![0].records[0];
+      forge(record as unknown as Record<string, unknown>);
+      writeFileSync(path, JSON.stringify(raw));
+      const err = refusals(() => readParts(path));
+      const problem = err?.problems[0];
+      return { what, population, ok: err?.problems.length === 1 && problem?.code === code && problem.object.includes(population === 'base' ? 'part "face"' : 'alternates[0] (set "census") part "face"') &&
+        problem.detail.includes('required') && (problem.detail.startsWith('is ') || problem.detail.includes(' = ')),
+        problems: err?.problems ?? [] };
+    }));
+    say('PT817_MALFORMED_DUPLICATE_AND_MISCOUNT_REFUSALS_NAME_FOUND_AND_REQUIRED',
+      readerResults817.every(r => r.ok), JSON.stringify(readerResults817),
+      'each fault is planted separately in a base record and an alternate record; refusal must name the population, part, observed value and required shape or sums');
+
+    const cutOwnership817 = { edit: 'cuts[0]', from: 'parent', into: 'face', moved_in_opaque_px: 100, retained_band_opaque_px: 10, cleared_opaque_px: 90, under_filled_px: 55, under_filled_opaque_px: 50, net_cleared_opaque_px: 40 };
+    const ownFile817 = { ...measured817, cut_ownership: [{ ...cutOwnership817 }], alternates: measured817.alternates?.map(a => ({ ...a, cut_ownership: [{ ...cutOwnership817 }] })) };
+    writeParts(path, ownFile817);
+    const ownText817 = readFileSync(path, 'utf8');
+    const ownGood817 = serializeParts(readParts(path)) === ownText817 && readParts(path).alternates?.[0].cut_ownership?.[0].net_cleared_opaque_px === 40;
+    const ownPlants817 = ['duplicate', 'moved +1', 'fill +1', 'net +1'].flatMap(what => ['base', 'alternate'].map(population => {
+      const raw = structuredClone(ownFile817), rows = population === 'base' ? raw.cut_ownership : raw.alternates![0].cut_ownership;
+      if (what === 'duplicate') rows.push({ ...rows[0] });
+      else if (what === 'moved +1') rows[0].moved_in_opaque_px++;
+      else if (what === 'fill +1') rows[0].under_filled_opaque_px++;
+      else rows[0].net_cleared_opaque_px++;
+      writeFileSync(path, JSON.stringify(raw));
+      const err = refusals(() => readParts(path));
+      return { what, population, ok: err?.problems.length === 1 && err.problems[0].code === (what === 'duplicate' ? 'PARTS_FIELD_TYPE' : 'PARTS_COUNTS_ADD_UP') && err.problems[0].detail.includes('required'), problems: err?.problems ?? [] };
+    }));
+    say('PT817_CUT_OWNERSHIP_ROUNDTRIP_AND_PLANTED_MOVE_FILL_NET_MUTANTS',
+      ownGood817 && ownPlants817.every(p => p.ok), JSON.stringify({ ownGood817, plants: ownPlants817 }),
+      'ownership is independent of colour equality; base and alternate records share the same indexed move/gross/fill/net arithmetic; legacy oracle stripping removes only the two new report fields');
+
     const altText131 = serializeParts({ ...file, alternates: [altSet([baseRec, upper, lower])] } as unknown as PartsFile);
     writeFileSync(path, altText131);
     const altOk = refusals(() => readParts(path));
@@ -29166,6 +29238,12 @@ function runLimbCases(say: (name: string, ok: boolean, detail: string, why: stri
 
     const green = stage('green', limbConfig());
     const rec = (n: string): PartRecord | undefined => green.r.parts.parts.find((q) => q.name === n);
+    say('AS817_REAL_LIMB_SPLIT_AND_CAP_VALUE_LINEAGE',
+      rec('upperarm_r')?.provenance?.unchanged_layer_px === 120 && rec('forearm_r')?.provenance?.unchanged_layer_px === 228 &&
+      rec('foot_r')?.provenance?.automatic.find(e => e.stage === 'limbCap')?.px === 36 &&
+      green.r.parts.parts.every(p => p.provenance !== undefined && provenanceAddsUp(p.provenance, p.opaque_px) && !p.provenance.automatic.some(e => e.stage === 'unattributed')),
+      JSON.stringify(green.r.parts.parts.map(p => ({ name: p.name, ...p.provenance }))),
+      'the real split copies 120 upper-arm and 228 lower-arm/cap pixels unchanged from one layer; the footwear layer has no art in the 36 shin-copy cap pixels, so those values are limbCap, not limbSplit');
     const wantLines = [
       '  limb cut: "arm" opaque 320 = "upperarm_r" 120 + "forearm_r" 200',
       '  limb cap: "arm_r" joint "elbow" at [15, 30], on "forearm_r": a disc of radius 5 px (the limb 10 px across the joint line), box [10, 25, 10, 10] — on the upper side of the line 28 px from the layer, 12 px missing — the layer has no pixel there (hidden in the painting, or past the limb\'s outline), and the tool invents none: paint them into a 10x10 image whose pixel (i, j) is rig pixel (10 + i, 25 + j), and name it in the segment\'s "cap"',
@@ -29435,6 +29513,11 @@ function runLimbCases(say: (name: string, ok: boolean, detail: string, why: stri
       }
     }
     const sameAlpha = [...wantAlpha].filter(([, a]) => a > 0).every(([k, a]) => gotAlpha.get(k) === a) && [...gotAlpha].every(([k, a]) => wantAlpha.get(k) === a);
+    say('AS817_REAL_LIMB_FEATHER_CHANGES_ONLY_DERIVED_ALPHA_PIXELS',
+      upperRec.provenance?.automatic.find(e => e.stage === 'limbFeather')?.px === [...wantAlpha.values()].filter(a => a > 8).length &&
+      provenanceAddsUp(upperRec.provenance!, upperRec.opaque_px),
+      `value ${JSON.stringify(upperRec.provenance)}; independently derived surviving changed alphas ${[...wantAlpha.values()].filter(a => a > 8).length}`,
+      'AS442 derives every changed alpha from the feather formula; actual hook coverage must agree, not a fabricated writer-ID vector');
     const recompositeOf = (label: string): string => readFileSync(join(root, label, 'out', 'recomposite_rig.png')).toString('base64');
     say(
       'AS442_EDGE_FEATHER_FADES_THE_UPPER_PART_ACROSS_THE_DISC_THE_LOWER_COVERS_AT_EVERY_TURN_AND_THE_REST_COMPOSITE_KEEPS_ITS_BYTES',
@@ -29460,7 +29543,16 @@ function runLimbCases(say: (name: string, ok: boolean, detail: string, why: stri
     const movedFiles = [...plainFiles.keys()].filter((f) => kneeFiles.get(f) !== plainFiles.get(f));
     const plainRecs = readParts(join(root, 'green', 'out', 'parts.json')).parts;
     const kneeRecs = readParts(join(root, 'knee', 'out', 'parts.json')).parts;
-    const movedRecs = plainRecs.filter((q) => JSON.stringify(kneeRecs.find((k) => k.name === q.name)) !== JSON.stringify(q)).map((q) => q.name);
+    // The old fields remain identical except shin_l's declared cap fields.
+    // The thigh's new metadata explicitly expects 12 changed alpha samples:
+    // the first missing disc sample is (3.5, 2.5) from the knee, so the
+    // safe radius is round(sqrt(18.5) - sqrt(2), 3) = 2.887. The three
+    // upper rows hold 6 + 4 + 2 sample centres, all surviving alpha > 8.
+    const expectedKneeRecs = plainRecs.map(q => q.name === 'thigh_l' ? { ...q, provenance: {
+      unchanged_layer_px: q.opaque_px - 12, hand_px: 0, automatic_px: 12,
+      edits: [], automatic: [{ stage: 'limbFeather' as const, px: 12 }],
+    } } : q);
+    const movedRecs = expectedKneeRecs.filter((q) => JSON.stringify(kneeRecs.find(k => k.name === q.name)) !== JSON.stringify(q)).map((q) => q.name);
     const thighL = readPng(join(root, 'knee', 'out', 'parts', 'thigh_l.png'));
     const faded = Array.from({ length: thighL.width * thighL.height }, (_, q) => thighL.data[q * 4 + 3]).filter((a) => a > 0 && a < 255);
     say(
@@ -30744,6 +30836,103 @@ function runAssembleSuite(): number {
       'fixtures/assemble_fixture.ts derives every count in its doc comment: exact resamples, a flat painting, rectangles whose erosions and rims are counted by hand',
     );
 
+    // #817 lifetime controls: keep exact raw equality without retaining a full
+    // source grid or a narrow view backed by that grid.
+    const sparse817 = newRaster(6, 5);
+    sparse817.data.set([10, 20, 30, 255], (1 * 6 + 2) * 4);
+    sparse817.data.set([40, 50, 60, 9], (3 * 6 + 4) * 4);
+    sparse817.data.set([200, 100, 50, 8], (4 * 6) * 4);
+    const dense817 = { ...sparse817, data: new Uint8ClampedArray(sparse817.data) };
+    const compact817 = compactValueBaseline(sparse817);
+    const opaqueEdge817 = { ...dense817, data: new Uint8ClampedArray(dense817.data) };
+    opaqueEdge817.data[(4 * 6) * 4 + 3] = 9;
+    const denseValue817 = pixelProvenance(opaqueEdge817, 0, 0, 6, null, [], 0, dense817);
+    const compactValue817 = pixelProvenance(opaqueEdge817, 0, 0, 6, null, [], 0, compact817);
+    sparse817.data.fill(0);
+    const cutEdge817 = { ...compact817, image: crop(compact817.image, 0, 0, compact817.image.width - 1, compact817.image.height) };
+    const emptyBaseline817 = compactValueBaseline(newRaster(6, 5));
+    say('AS817_COMPACT_BASELINE_OWNS_ONLY_ITS_OPAQUE_BBOX_AND_PRESERVES_RGBA_EQUALITY',
+      compact817.x === 2 && compact817.y === 1 && compact817.image.width === 3 && compact817.image.height === 3 &&
+      compact817.image.data.byteLength === 36 && compact817.image.data.buffer.byteLength === 36 &&
+      denseValue817.unchanged_layer_px === 2 && denseValue817.automatic_px === 1 &&
+      JSON.stringify(denseValue817) === JSON.stringify(compactValue817) &&
+      JSON.stringify(pixelProvenance(opaqueEdge817, 0, 0, 6, null, [], 0, compact817)) === JSON.stringify(denseValue817) &&
+      pixelProvenance(opaqueEdge817, 0, 0, 6, null, [], 0, cutEdge817).unchanged_layer_px === 1 &&
+      emptyBaseline817.image.data.byteLength === 0,
+      `raw grid 120 B -> independent bbox ${compact817.image.data.byteLength} B; two unchanged pixels incl alpha 9 edge, alpha 8 -> 9 outside cannot match; clearing original changes nothing; planted dropped edge changes unchanged count to 1`,
+      'a compact baseline stores exact copied RGBA only where it can equal final alpha above 8; buffer.byteLength catches a subarray retaining the whole grid, a source mutation catches aliasing, and a truncated-edge mutant catches lost equality');
+    const dirty817 = newRaster(64, 64);
+    for (let p = 0; p < 64 * 64; p++) dirty817.data.set([237, 91, 53, 0], p * 4);
+    dirty817.data.set([10, 20, 30, 255], (20 * 64 + 20) * 4);
+    dirty817.data.set([40, 50, 60, 9], (21 * 64 + 21) * 4);
+    const zero817 = { ...dirty817, data: new Uint8ClampedArray(dirty817.data) };
+    for (let p = 0; p < 64 * 64; p++) if (zero817.data[p * 4 + 3] === 0) zero817.data.fill(0, p * 4, p * 4 + 3);
+    const mapping817 = checkGeometry({ sourceW: 128, sourceH: 128, resolution: 64, headBox: HEAD_BOX, rigScale: 0.75 });
+    say('AS817_SOLE_SOURCE_NORMALIZATION_REUSE_PRESERVES_PREMULTIPLIED_FLOAT32_INPUT',
+      (['full', 'head'] as const).every(run => Buffer.compare(Buffer.from(layerToRig(dirty817, mapping817, run).data), Buffer.from(layerToRig(zero817, mapping817, run).data)) === 0),
+      'dirty RGB at alpha 0 vs zeroed RGB: exact mapped RGBA under 1.5x bicubic full and 0.75x bilinear head maps',
+      'the old single-source composite discarded only zero-alpha RGB, which premultiplication makes exactly zero; reuse requires the same pixels object and offsets, never layer-wrapper identity or a prepared projection baseline');
+
+    // #817 controls use the final images and the actual source-projection write mask.
+    const counts817 = result.parts.parts.map(p => p.provenance);
+    const final817 = result.parts.parts.find(p => p.name === 'bottomwear');
+    const top817 = result.parts.parts.find(p => p.name === 'topwear');
+    say('AS817_FINAL_VALUE_PARTITION_AND_NO_HAND_POSITIVE',
+      result.parts.parts.every(p => p.provenance !== undefined && provenanceAddsUp(p.provenance, p.opaque_px)) &&
+      counts817.every(v => v?.hand_px === 0) && final817?.provenance?.automatic.find(e => e.stage === 'seamOverride')?.px === 336 &&
+      top817?.provenance?.automatic_px === 0 && top817.provenance.unchanged_layer_px === 600 &&
+      provenanceLines(result.parts.parts).length === result.parts.parts.length + 1,
+      JSON.stringify(result.parts.parts.map(p => ({ name: p.name, ...p.provenance }))),
+      'bottomwear has 14*24=336 Z pixels changed to C; topwear has 600 C pixels equal to its raw mapped layer even where projection assigned identical C. Historical assignment-only accounting called 416 of these automatic; value equality wins now');
+    const cut817 = { from: 'topwear', into: 'piece817', polygon: [[10, 20], [20, 20], [20, 50], [10, 50]] as Array<[number, number]>, overlap: 1, draw: 'front' as const };
+    const cutResult817 = assemble({ ...base, cuts: [cut817], seamRule: 'near-white' });
+    const piece817 = cutResult817.parts.parts.find(p => p.name === 'piece817');
+    const kept817 = cutResult817.parts.parts.find(p => p.name === 'topwear');
+    const v817 = piece817?.provenance;
+    const mutant817 = v817 === undefined ? null : { ...v817, edits: [{ edit: 'cuts[0]', px: 1 }] };
+    say('AS817_CUT_INDEX_RETAINED_BAND_AND_PLANTED_MISCOUNT',
+      v817?.unchanged_layer_px === 300 && v817.hand_px === 0 && cutResult817.parts.cut_ownership?.[0].edit === 'cuts[0]' && cutResult817.parts.cut_ownership[0].moved_in_opaque_px === 300 && cutResult817.parts.cut_ownership[0].cleared_opaque_px === 224 &&
+      kept817?.opaque_px === 376 && kept817.provenance?.hand_px === 0 &&
+      cutResult817.parts.parts.every(p => p.provenance !== undefined && provenanceAddsUp(p.provenance, p.opaque_px)) && mutant817 !== null && !provenanceAddsUp(mutant817, 300),
+      `piece ${JSON.stringify(v817)}, ownership ${JSON.stringify(cutResult817.parts.cut_ownership)}, base ${JSON.stringify(kept817?.provenance)}; +1 edit mutant adds up: ${mutant817 === null ? 'unavailable' : provenanceAddsUp(mutant817, 300)}`,
+      'ownership counts 300 pixels moved by cuts[0], 76 retained-band pixels and 224 gross cleared before refill; all copied RGBA equals the raw layer, so the separate VALUE partition reports 300 unchanged; +1 hand-changed pixel still breaks the value subtotal');
+    const under817 = newRaster(10, 30);
+    for (let p = 0; p < 300; p++) under817.data.set([...C, 255], p * 4);
+    const filled817 = assemble({ ...base, cuts: [{ ...cut817, under: 'under.png' }], under: [under817], seamRule: 'near-white' });
+    const filledBase817 = filled817.parts.parts.find(p => p.name === 'topwear');
+    const patched817 = assemble({ ...base, patches: [{ name: 'patch817', box: [0, 40, 8, 48], alpha: 'box', draw: 'front' }], seamRule: 'near-white' });
+    const patch817 = patched817.parts.parts.find(p => p.name === 'patch817');
+    const layer817 = base.full.layers.find(l => l.name === 'topwear') as Layer;
+    const author817 = assemble({ ...base, full: withLayer({ ...base.full, layers: base.full.layers.filter(l => l.name !== 'topwear') }, { ...layer817, name: 'author:structure', tag: readLayerTag('author:structure') as NonNullable<ReturnType<typeof readLayerTag>> }),
+      plan: base.plan.map(([name, run, tag]) => [name, run, name === 'topwear' ? 'author:structure' : tag]), seamRule: 'near-white' });
+    const authored817 = author817.parts.parts.find(p => p.name === 'topwear');
+    say('AS817_UNDER_PATCH_AUTHOR_AND_LATER_AUTOMATION',
+      filledBase817?.provenance?.unchanged_layer_px === 600 && filledBase817.provenance.hand_px === 0 && filled817.parts.cut_ownership?.[0].under_filled_px === 224 && filled817.parts.cut_ownership[0].net_cleared_opaque_px === 0 && patch817?.provenance?.hand_px === 64 && patch817.provenance.edits[0].edit === 'patches[0]' &&
+      authored817?.provenance?.hand_px === 600 && authored817.provenance.edits[0].edit === 'full:author:structure' && authored817.provenance.automatic_px === 0 &&
+      [filled817, patched817, author817].every(r => r.parts.parts.every(p => p.provenance !== undefined && provenanceAddsUp(p.provenance, p.opaque_px))),
+      `filled base ${JSON.stringify(filledBase817?.provenance)}; patch ${JSON.stringify(patch817?.provenance)}; author ${JSON.stringify(authored817?.provenance)}`,
+      'the under fills 224 pixels, restoring raw-layer C: VALUE unchanged, OWNERSHIP refill 224, net clear 0. Patch 8*8 and author 20*30 have no See-through baseline; same-value projection cannot steal their IDs');
+    const seamCut817 = assemble({ ...base, cuts: [{ ...cut817, from: 'bottomwear', polygon: [[48, 30], [55, 30], [55, 54], [48, 54]] }], seamRule: 'near-white' });
+    const seamPiece817 = seamCut817.parts.parts.find(p => p.name === 'piece817');
+    say('AS817_LATER_SEAM_WRITE_SUPERSEDES_REAL_CUT',
+      seamPiece817?.provenance?.hand_px === 0 && seamPiece817.provenance.automatic.find(e => e.stage === 'seamOverride')?.px === 168,
+      JSON.stringify(seamPiece817?.provenance),
+      'the bottomwear half is 7*24=168 Z pixels copied by cuts[0], then all recoloured C by seamOverride: the last automatic stage owns them, not the earlier edit');
+    const projectedFull817 = { ...base.full, layers: base.full.layers.map(l => {
+      if (l.name !== 'topwear') return l;
+      const pixels = { ...l.pixels, data: new Uint8ClampedArray(l.pixels.data) };
+      for (let p = 0; p < pixels.width * pixels.height; p++) if (pixels.data[p * 4 + 3] > 0) pixels.data[p * 4] += 10;
+      return { ...l, pixels };
+    }) };
+    const projectedCut817 = assemble({ ...base, full: projectedFull817, cuts: [cut817], seamRule: 'near-white' });
+    const projectedPiece817 = projectedCut817.parts.parts.find(p => p.name === 'piece817');
+    say('AS817_PROJECTED_SOURCE_TO_CUT_INHERITS_VALUE_LINEAGE_AND_REPORTS_MOVE',
+      projectedPiece817?.provenance?.automatic.find(e => e.stage === 'sourceProjection')?.px === 208 && projectedPiece817.provenance.unchanged_layer_px === 92 && projectedPiece817.provenance.hand_px === 0 &&
+      projectedCut817.parts.cut_ownership?.[0].moved_in_opaque_px === 300,
+      `piece value ${JSON.stringify(projectedPiece817?.provenance)}; ownership ${JSON.stringify(projectedCut817.parts.cut_ownership)}`,
+      'the original generated rectangle is shifted +10 red, within projection drift. Its half contains 8*26=208 genuinely recoloured core pixels and 92 unchanged edge pixels. Cutting copies their existing lineage; it moves 300 pixels on the independent ownership axis');
+
+    runGhostProvenanceCases(say);
     const covered = EXPECTED_PARTS.parts.reduce((s, p) => s + p.opaque_px, 0);
     const [W, H] = EXPECTED_PARTS.rig_size;
     const f = result.figures;
@@ -31134,8 +31323,9 @@ function runAssembleSuite(): number {
           const withSleeve = sleeveRun.r;
           const alone = aloneRun.r;
           // The fringe line sits between the part lines and the pixel totals.
-          const printed = sleeveRun.lines.findIndex((l) => l.startsWith('  fringe pushed back: '));
-          const printedAt = printed > 0 && sleeveRun.lines[printed - 1].startsWith('  topwear ') && sleeveRun.lines[printed + 1].startsWith('  pixels: ');
+          const legacyLines817 = sleeveRun.lines.filter(l => !l.startsWith('  provenance') && !l.startsWith('  ownership:'));
+          const printed = legacyLines817.findIndex((l) => l.startsWith('  fringe pushed back: '));
+          const printedAt = printed > 0 && legacyLines817[printed - 1].startsWith('  topwear ') && legacyLines817[printed + 1].startsWith('  pixels: ');
           const tw = (r: ReturnType<typeof assemble>): PartRecord => r.parts.parts.find((p) => p.name === 'topwear') as PartRecord;
           const a = tw(withSleeve);
           const b = tw(alone);
@@ -31156,7 +31346,7 @@ function runAssembleSuite(): number {
               [b.x, b.y, b.w, b.h].join(',') === '19,10,21,30' &&
               fringeLines(alone.parts.parts).length === 0 &&
               printedAt &&
-              sleeveRun.lines[printed] === lines[0] &&
+              legacyLines817[printed] === lines[0] &&
               !aloneRun.lines.some((l) => l.includes('fringe pushed back')) &&
               !serializeParts(alone.parts).includes('fringe_pushed_back'),
             `with the sleeve: topwear ${JSON.stringify(a.fringe_pushed_back)}, opaque ${a.opaque_px}, visible ${a.visible_px}, box ${a.x},${a.y} ${a.w}x${a.h}, error px ${withSleeve.figures.errorPx}, uncovered ${withSleeve.figures.uncoveredErrorPx}; line ${lines.join(' | ') || 'none'}, printed by the stage ${printed < 0 ? 'NOWHERE' : printedAt ? 'between the part lines and the totals' : `at line ${printed}`}; alone: field ${b.fringe_pushed_back === undefined ? 'absent' : 'WRITTEN'}, opaque ${b.opaque_px}, box ${b.x},${b.y} ${b.w}x${b.h}, ${fringeLines(alone.parts.parts).length} line(s)`,
@@ -31220,8 +31410,16 @@ function runAssembleSuite(): number {
       ];
       const kpaint = kfill(() => [...BEIGE, 255]);
       const islandsBefore = islands(kbody());
-      const kpushed = pushBackFringe(kstack, kpaint, 'near-white', null);
+      const restored817: number[] = [];
+      const kpushed = pushBackFringe(kstack, kpaint, 'near-white', null, null, null, null, (i, p) => { if (i === 1) restored817.push(p); });
       const ki = kstack[1].image;
+      const restoreWriters817 = new Int32Array(KW * FH);
+      for (const p of restored817) restoreWriters817[p] = AW817.fringeRestore;
+      const restoredValue817 = pixelProvenance(ki, 0, 0, KW, restoreWriters817, [], 0, kbody());
+      say('AS817_REAL_FRINGE_RESTORE_HOOK_AND_FINAL_VALUE_PRIORITY',
+        restored817.join(',') === '24' && restoredValue817.unchanged_layer_px === 19 && restoredValue817.automatic_px === 0,
+        `actual restored rig pixels ${restored817.join(',')}; final value ${JSON.stringify(restoredValue817)}`,
+        'AS47 restores the bridge (4,2), index 24; it equals the original own layer, so the value partition remains unchanged while the real restore hook is observed');
       const ka = (x: number, y: number): number => ki.data[(y * KW + x) * 4 + 3];
       say(
         'AS47_A_PUSH_BACK_CLEARS_THE_CRUMB_IT_CUTS_OFF_AND_PUTS_BACK_THE_BRIDGE_TO_OPAQUE_ART',
@@ -31810,7 +32008,7 @@ function runAssembleSuite(): number {
         say(
           'AS450_UNDER_FILL_COLOUR_FILLS_THE_REMOVED_PIXELS_WITH_THE_UNDER_S_COLOUR_AND_THE_PART_S_ALPHA_IS_THE_UNCUT_LAYER_S_BYTE_FOR_BYTE',
           fixtureOk && removedTally(c0) === '19x(0,0,255,128) 171x(0,0,255,255)' && colourAlphaDiff.length === 0 && cl === colourLine &&
-            JSON.stringify(colour.r.cuts) === '[{"from":"topwear","into":"tie","before":600,"kept":410,"taken":190,"band":0,"under":190,"underEmpty":0,"underFill":"colour"}]',
+            JSON.stringify(colour.r.cuts) === '[{"from":"topwear","into":"tie","before":600,"kept":410,"taken":190,"band":0,"under":190,"underOpaque":190,"underEmpty":0,"underFill":"colour"}]',
           `fixture: ${removed.length} removed px, ${softRow.length} at alpha 128 in the uncut base (by hand 190 and 19) ${fixtureOk ? 'as built' : 'NOT as built'}; colour only: the removed pixels hold ${removedTally(c0)} (by hand 19x(0,0,255,128) 171x(0,0,255,255)); alpha bytes differing from the uncut base over the 64x64 rig: ${colourAlphaDiff.length} (by hand 0); ${cl}`,
           'issue #360 item 11: an opaque cap made a soft edge opaque and stepped the contour even at rest; the colour-only fill takes what lies under the piece and keeps the silhouette the layer had, so the part\'s alpha is the uncut layer\'s exactly where the under fills',
         );
@@ -31823,7 +32021,7 @@ function runAssembleSuite(): number {
           'AS451_A_PLANTED_MODE_MIX_UP_THE_ALPHA_FILLED_TOO_TURNS_AS450_S_BAR_RED_AND_WITHOUT_UNDER_FILL_ONLY_THAT_ALPHA_MOVES',
           removedTally(b0) === '190x(0,0,255,255)' && bothAlphaDiff.length === 19 && bothAlphaDiff.every((q) => softRow.includes(q)) &&
             rgbDiff.length === 0 && alphaVsColour.join() === softRow.join() && bl === bothLine &&
-            JSON.stringify(both.r.cuts) === '[{"from":"topwear","into":"tie","before":600,"kept":410,"taken":190,"band":0,"under":190,"underEmpty":0}]',
+            JSON.stringify(both.r.cuts) === '[{"from":"topwear","into":"tie","before":600,"kept":410,"taken":190,"band":0,"under":190,"underOpaque":190,"underEmpty":0}]',
           `under_fill absent (colour and alpha, issue #193): the removed pixels hold ${removedTally(b0)} (by hand 190x(0,0,255,255)); alpha bytes differing from the uncut base: ${bothAlphaDiff.length} (by hand 19, row 10's soft pixels: ${bothAlphaDiff.every((q) => softRow.includes(q)) ? 'all of them' : 'NOT those'}) — AS450's bar reads RED on it; against the colour-only run: ${rgbDiff.length} RGB bytes differ, alpha differs at ${alphaVsColour.length} px (by hand 0 and 19, the soft row); ${bl}`,
           'the bar has to see the one mistake it exists for: an under that also fills the alpha grows the silhouette over a soft edge, and here it is 19 bytes the comparison names; the absent field writes #193\'s pixels (AS54–AS55) and its cut record carries no new key',
         );
@@ -32622,7 +32820,7 @@ function runAssembleSuite(): number {
       const boxed = assemble({ ...hemIn, patches: [{ name: 'hem', box: HEM_BOX, alpha: 'box', draw: 'back' }], seamRule: 'near-white' });
       const rec = boxed.parts.parts[0];
       const [bx0, by0, bx1, by1] = HEM_BOX;
-      const want = { name: 'hem', from: 'painting:hem', x: bx0, y: by0, w: bx1 - bx0, h: by1 - by0, opaque_px: HEM_BOX_PX, visible_px: HEM_BOX_PX, occluded_px: 0, projected_core_px: HEM_BOX_PX, source_px_taken: HEM_BOX_PX, visible_not_projected_px: 0, refused_drift_px: 0, merged_px: 0, seam_override_px: 0 };
+      const want = { name: 'hem', from: 'painting:hem', x: bx0, y: by0, w: bx1 - bx0, h: by1 - by0, opaque_px: HEM_BOX_PX, visible_px: HEM_BOX_PX, occluded_px: 0, projected_core_px: HEM_BOX_PX, source_px_taken: HEM_BOX_PX, visible_not_projected_px: 0, refused_drift_px: 0, merged_px: 0, seam_override_px: 0, provenance: { unchanged_layer_px: 0, hand_px: HEM_BOX_PX, automatic_px: 0, edits: [{ edit: 'patches[0]', px: HEM_BOX_PX }], automatic: [] } };
       // The part records only: the recomposite block (issue #25) measures the stack, which the patch changes by design.
       const others = JSON.stringify(boxed.parts.parts.slice(1)) === JSON.stringify(before.parts.parts) && JSON.stringify(boxed.parts.ghost_px) === JSON.stringify(before.parts.ghost_px);
       const dropU = before.figures.uncoveredErrorPx - boxed.figures.uncoveredErrorPx;
@@ -33166,6 +33364,11 @@ function authorLayerControls(say: (name: string, ok: boolean, detail: string, wh
     const zigzagRefusal = refusals(() => proposePlan(fullGathered, headP, { ...geometry, armSplit: { line: [[14, 8], [30, 8], [14, 8]], order: ['handwear-r', 'handwear-l'] } }));
     const emptySideRefusal = refusals(() => proposePlan(fullGathered, headP, { ...geometry, armSplit: { x: 5, order: ['handwear-r', 'handwear-l'] } }));
     const xArmParts = splitXOut.parts.parts.filter((p) => p.from.startsWith('full:handwear-'));
+    say('AS817_REAL_ARM_SPLIT_INHERITS_RAW_CONTRIBUTOR_VALUES',
+      splitXOut.parts.parts.every(p => p.provenance !== undefined && provenanceAddsUp(p.provenance, p.opaque_px) && !p.provenance.automatic.some(e => e.stage === 'armSplit' || e.stage === 'unattributed')) &&
+      xArmParts.every(p => p.provenance?.unchanged_layer_px === p.opaque_px),
+      JSON.stringify(xArmParts.map(p => ({ name: p.name, ...p.provenance }))),
+      'AS255 copies the original gathered arm at the same rig coordinates; both generated tags compare with the immutable original hand-layer contributors, not a new transparent buffer or prepared tag');
     const lineArmParts = splitLineOut.parts.parts.filter((p) => p.from.startsWith('full:handwear-'));
     const unsplitArmParts = unsplitOut.parts.parts.filter((p) => p.from.startsWith('full:handwear-'));
     say(
@@ -33256,6 +33459,12 @@ function authorLayerControls(say: (name: string, ok: boolean, detail: string, wh
       extend: hollowUnderfillPlan.extend_below_crop,
     });
     const hollowFacePart = hollowUnderfillOut.parts.parts.find((p) => p.name === 'face');
+    say('AS817_REAL_HEAD_UNDERFILL_CHANGED_VALUES_ONLY',
+      hollowFacePart?.provenance?.unchanged_layer_px === HOLLOW_HEAD_EXPECTED.mutantFaceRigPx &&
+      hollowFacePart.provenance.automatic.find(e => e.stage === 'headFaceUnderfill')?.px === HOLLOW_HEAD_EXPECTED.repairedFaceRigPx - HOLLOW_HEAD_EXPECTED.mutantFaceRigPx &&
+      provenanceAddsUp(hollowFacePart.provenance, hollowFacePart.opaque_px),
+      JSON.stringify(hollowFacePart?.provenance),
+      'AS257 composites every face sample, but existing opaque C stays equal to raw head:face; only the repaired transparent portion has changed values and retains headFaceUnderfill');
     // Mutant: bypass the hollow check and underfill by shrinking full:face below PROPOSE_MIN_PX (150 px) so head:face stays hollow.
     const mutantSmallFull = runIn('full-hollow-mutant', [
       ...FULL_LAYERS,
@@ -34027,9 +34236,12 @@ function runAssembleExampleStage(ex: string, stage: AssembleStage): number {
       };
       const a = assemble({ ...input, seamRule: DEFAULT_SEAM_RULE, projectRule: DEFAULT_PROJECT_RULE });
       const b = assemble({ ...input, seamRule: DEFAULT_SEAM_RULE, projectRule: DEFAULT_PROJECT_RULE });
+      for (const line of provenanceLines(a.parts.parts)) console.log(line);
+      const provenanceOk = a.parts.parts.every(p => p.provenance !== undefined && provenanceAddsUp(p.provenance, p.opaque_px) &&
+        !provenanceAddsUp({ ...p.provenance, edits: [...p.provenance.edits, { edit: 'cuts[999]', px: 1 }] }, p.opaque_px));
       const same = serializeParts(a.parts) === serializeParts(b.parts) && a.images.every((p, i) => Buffer.compare(Buffer.from(encodePngBytes(p.image)), Buffer.from(encodePngBytes(b.images[i].image))) === 0);
-      ok = same && a.parts.parts.every((p) => p.opaque_px > 0);
-      detail = `${a.parts.parts.length} parts, two runs identical: ${same}; ${figuresLine(a.figures)}`;
+      ok = same && provenanceOk && a.parts.parts.every((p) => p.opaque_px > 0);
+      detail = `${a.parts.parts.length} parts, two runs identical: ${same}; final provenance sums and each planted +1 edit refusal: ${provenanceOk}; ${figuresLine(a.figures)}`;
     } catch (err) {
       detail = `refused or crashed: ${(err as Error).message.split('\n')[0]}`;
     }
@@ -38763,6 +38975,18 @@ function runTreeSuite(): number {
       `; runtime dependency discovery ${discoveryHit16 ? 'caught the transitive rule and excluded type-only/test/comment rules' : 'FAILED'}; planted: a row dropped -> ${plants16[0].join('; ') || 'not found'} | a row twice -> ${plants16[1].join('; ') || 'not found'} | a row for a dead name -> ${plants16[2].join('; ') || 'not found'} | an anchor dropped -> ${plants16[3].join('; ') || 'not found'} | a new code in the source (and one in a comment) -> ${plants16[4].join('; ') || 'not found'} | a name template on an undeclared constant -> ${plants16[5].join('; ') || 'not found'} | a new code rig-c's mesh library throws -> ${plants16[6].join('; ') || 'not found'} | no source catching MeshReductionError -> ${plants16[7].length} row(s) named as for a code nothing prints`,
     "issue #343: the guide is the one ledger, and a FAIL line's pointer prints the row naming its rule; a rule with no row sends the pointer nowhere, a rule on two rows prints two answers, and a row for a rule nothing prints is advice about a line no build shows. Read in both directions from the syntax tree of src/, cli.ts and their local runtime dependencies, so a comment never counts",
   );
+
+  const sourceSection817 = guideText.split('### Source before scissors\n')[1]?.split('**Patching')[0] ?? '';
+  const remedyNames817 = ['SEETHROUGH_ARM_RUN_MERGED', 'SEETHROUGH_HEAD_RUN_HOLLOW', 'CHECK_SEAM_WITHIN_BAR', 'CHECK_SEAM_OVER_RANGE', 'SEAM_OVER_MOTION', 'CHECK_SEAM_OVER_MOTION'];
+  const configRemedies817 = ['assemble.patches', 'assemble.cuts'];
+  const configLinked817 = (g: string): boolean => configRemedies817.every(name => (g.split('\n').find(l => l.startsWith('| `' + name + '` |')) ?? '').includes('[Source before scissors](#source-before-scissors)'));
+  const remediesLinked817 = (g: string): boolean => remedyNames817.every(name => (g.split('\n').find(l => l.includes(`<a id="${name}"></a>`)) ?? '').includes('[Source before scissors](#source-before-scissors)'));
+  say('TY817_SOURCE_BEFORE_SCISSORS_AND_LAST_WRITER_REMEDIES',
+    sourceSection817.includes('Scissors are for structure, never for repair') && sourceSection817.includes('last stage that changed a value wins') &&
+    Object.keys(AW817).every(name => sourceSection817.includes('`' + name + '`')) && remediesLinked817(guideText) && configLinked817(guideText) &&
+    !remediesLinked817(guideText.replace(rowLine('CHECK_SEAM_WITHIN_BAR'), rowLine('CHECK_SEAM_WITHIN_BAR').replace('[Source before scissors](#source-before-scissors)', 'unlinked'))),
+    `${remedyNames817.length} changed refusal/WARN remedies and ${configRemedies817.length} config rows link the source ladder; all automatic stage names are documented; planted missing link is rejected`,
+    'issue #817: source-first repair guidance; separate value and structural ownership axes, with raw equality first and only actual value changes replacing lineage');
 
   // TY17 — issue #343: every FAIL line the source prints ends with the guide's pointer, written by one function.
   const bare17 = pointerless(guideSources);
@@ -50944,12 +51168,56 @@ function runAlternateTipsSuite(): number {
   return bad();
 }
 
+function runHybridProvenanceCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const dir = temp('hybrid-value-provenance');
+  try {
+    writeHybridFixture(dir);
+    const r = assemble({ ...fixtureInput(dir), seamRule: 'near-white' });
+    const band = r.parts.parts.find(p => p.limb?.band !== undefined);
+    say('HY817_REAL_HYBRID_COPIES_INHERIT_VALUE_LINEAGE',
+      band !== undefined && band.provenance?.unchanged_layer_px === band.opaque_px &&
+      r.parts.parts.every(p => p.provenance !== undefined && provenanceAddsUp(p.provenance, p.opaque_px) && !p.provenance.automatic.some(e => e.stage === 'limbHybrid' || e.stage === 'limbSplit' || e.stage === 'unattributed')),
+      JSON.stringify(r.parts.parts.map(p => ({ name: p.name, ...p.provenance }))),
+      'the existing source-bound hybrid fixture transfers the same RGBA at the same coordinates into the band and rigid neighbours; the value axis must not relabel copies as automatic colour changes');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
+function runGhostProvenanceCases(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const dir = temp('ghost-value-provenance');
+  try {
+    const runs = FULL_LAYERS.map(l => l.name === 'footwear' ? { ...l, rects: [...l.rects, { x0: 31, y0: 55, x1: 32, y1: 56, colour: C }] } : l);
+    const cfg = assembleConfig(); (cfg.assemble as Record<string, unknown>).rig_scale = 1;
+    writeAssembleFixture(dir, cfg, flatPainting(), { full: runs, head: HEAD_LAYERS });
+    const input = fixtureInput(dir), r = assemble({ ...input, seamRule: 'near-white' });
+    const frame = checkGeometry({ sourceW: input.source.width, sourceH: input.source.height, ...input });
+    const original = layerToRig(placeLayer(input.full.layers.find(l => l.name === 'footwear') as Layer, input.resolution), frame, 'full');
+    const shoes = r.images.find(p => p.record.name === 'shoes') as PlacedPart;
+    let changed = 0;
+    for (let y = 0; y < shoes.image.height; y++) for (let x = 0; x < shoes.image.width; x++) {
+      const p = (y * shoes.image.width + x) * 4, q = ((y + shoes.record.y) * original.width + x + shoes.record.x) * 4;
+      if (shoes.image.data[p + 3] > 8 && [0, 1, 2, 3].some(c => shoes.image.data[p + c] !== original.data[q + c])) changed++;
+    }
+    say('AS817_REAL_GHOST_CLEANUP_RETAINED_RESAMPLE_VALUES',
+      changed > 0 && shoes.record.provenance?.automatic.find(e => e.stage === 'ghostCleanup')?.px === changed && provenanceAddsUp(shoes.record.provenance, shoes.record.opaque_px),
+      `independent raw-to-final changed sample census ${changed}; ${JSON.stringify(shoes.record.provenance)}`,
+      'a one-pixel ghost beside the existing footwear rectangle is removed before a 2x cubic map; its filter footprint changes retained alpha values at the real edge. Count raw-normalized versus final RGBA independently, without fabricated writer IDs');
+    const plain = fixtureInput(dir);
+    const wrapper = { ...plain, full: { ...plain.full, layers: plain.full.layers.map(l => ({ ...l })) }, head: { ...plain.head, layers: plain.head.layers.map(l => ({ ...l })) } };
+    const copied = assemble({ ...wrapper, seamRule: 'near-white' });
+    say('AS817_LAYER_WRAPPER_IDENTITY_DOES_NOT_RELABEL_VALUES',
+      JSON.stringify(copied.parts.parts.map(p => p.provenance)) === JSON.stringify(r.parts.parts.map(p => p.provenance)),
+      `${r.parts.parts.length} provenance records identical after recreating layer/set wrappers`,
+      'wrapper identities do not establish an RGB operation; normalization compares actual raw/prepared sample values');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
 function runHybridLimbSuite(): number {
   section('hybrid-limb: source-bound joint bands and unchanged absent mode');
   const { say, bad } = counter();
   const dir = temp('hybrid-limb');
   let index = 0;
   try {
+    runHybridProvenanceCases(say);
     runHybridLimbChecks(dir, (name, pass, detail) => say(`HY${String(++index).padStart(2, '0')}_${name}`, pass, detail,
       'issue #399: a continuous source band on exactly two carriers, with rigid outer pieces and named refusals; renderer acceptance is measured separately'));
   } finally { rmSync(dir, { recursive: true, force: true }); }

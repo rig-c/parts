@@ -1,3 +1,4 @@
+import { AUTOMATIC_WRITERS, provenanceAddsUp, type PixelProvenance, type CutOwnership } from './provenance.ts';
 import { baseAnchorProblems, orderedBaseAnchor, type BaseAnchor } from './baseanchor.ts';
 import { partDepthProblems, type PartDepthReference } from './depthsheets.ts';
 /**
@@ -96,6 +97,8 @@ import { edgeLength } from './length.ts';
 import { recordedFocusProblems } from './setfocus.ts';
 
 export interface PartRecord {
+  /** Report-only final last-writer census (#817); absent on older records. */
+  provenance?: PixelProvenance;
   /** Optional #773 input reference; production geometry does not consume it yet. */
   depth?: PartDepthReference;
   name: string;
@@ -326,6 +329,7 @@ export interface AlternateSetMap {
 export const FRONT_SUFFIX = '_front';
 
 export interface AlternatePartsRecord {
+  cut_ownership?: CutOwnership[];
   name: string;
   base_anchor?: BaseAnchor;
   /** Original authored painting point and its source size, only when supplied. */
@@ -358,6 +362,8 @@ export interface AlternatePartsRecord {
 }
 
 export interface PartsFile {
+  /** Structural moves, independent of per-pixel value equality. */
+  cut_ownership?: CutOwnership[];
   rig_size: [number, number];
   scale_rig_per_source: number;
   parts: PartRecord[];
@@ -406,8 +412,8 @@ export interface SceneRecord {
   figure_mask: string;
 }
 
-const TOP_KEYS = ['rig_size', 'scale_rig_per_source', 'parts', 'ghost_px', 'recomposite', 'scene', 'single_run_pad', 'alternates', 'motion_seams'] as const;
-const REQUIRED_TOP_KEYS = TOP_KEYS.filter((k) => k !== 'recomposite' && k !== 'scene' && k !== 'single_run_pad' && k !== 'alternates' && k !== 'motion_seams');
+const TOP_KEYS = ['rig_size', 'scale_rig_per_source', 'parts', 'ghost_px', 'recomposite', 'scene', 'single_run_pad', 'alternates', 'motion_seams', 'cut_ownership'] as const;
+const REQUIRED_TOP_KEYS = TOP_KEYS.filter((k) => k !== 'recomposite' && k !== 'scene' && k !== 'single_run_pad' && k !== 'alternates' && k !== 'motion_seams' && k !== 'cut_ownership');
 export const SINGLE_RUN_PAD_KEYS = ['file_size', 'side', 'left', 'top'] as const;
 export const SCENE_KEYS = ['figure_alpha_above', 'figure_px', 'figure_mask'] as const;
 export const RECOMPOSITE_KEYS = ['mean_abs', 'within_limit', 'within_share', 'error_limit', 'error_px', 'covered_alpha', 'uncovered_error_px', 'hole_count', 'holes_listed', 'holes'] as const;
@@ -423,6 +429,7 @@ export const PART_KEYS = [
   'w',
   'h',
   'opaque_px',
+  'provenance',
   'visible_px',
   'occluded_px',
   'projected_core_px',
@@ -441,10 +448,10 @@ const FRINGE_KEY = 'fringe_pushed_back';
 const CUT_FROM_KEY = 'cut_from';
 /** The one part field that is a record of its own: a limb segment's provenance (issue #349), written only on one. */
 const LIMB_KEY = 'limb';
-const COUNT_KEYS = PART_KEYS.slice(2).filter((k) => k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth') as ReadonlyArray<(typeof PART_KEYS)[number]>;
+const COUNT_KEYS = PART_KEYS.slice(2).filter((k) => k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth' && k !== 'provenance') as ReadonlyArray<(typeof PART_KEYS)[number]>;
 /** The port's own counts: all three or none (none = a record the reference wrote). */
 export const VISIBILITY_KEYS = ['visible_px', 'occluded_px', 'visible_not_projected_px'] as const;
-const REQUIRED_KEYS = PART_KEYS.filter((k) => !(VISIBILITY_KEYS as readonly string[]).includes(k) && k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth');
+const REQUIRED_KEYS = PART_KEYS.filter((k) => !(VISIBILITY_KEYS as readonly string[]).includes(k) && k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth' && k !== 'provenance');
 
 /** Where a part came from: a See-through run and a v3 tag or an author-made layer's `author:<label>` (issue #256), or the painting itself for a patch. */
 export type From = { run: 'full' | 'head'; tag: string } | { run: 'painting'; patch: string };
@@ -467,9 +474,34 @@ export function tagOf(from: string): string | null {
   return f === null || f.run === 'painting' ? null : f.tag;
 }
 
+const OWNERSHIP_KEYS = ['edit', 'from', 'into', 'moved_in_opaque_px', 'retained_band_opaque_px', 'cleared_opaque_px', 'under_filled_px', 'under_filled_opaque_px', 'net_cleared_opaque_px'] as const;
+function orderedOwnership(rows: readonly CutOwnership[]): Array<Record<string, unknown>> {
+  return rows.map(r => Object.fromEntries(OWNERSHIP_KEYS.map(k => [k, r[k]])));
+}
+function checkOwnership(raw: unknown, object: string, fail: (code: string, object: string, detail: string) => void): void {
+  if (!Array.isArray(raw)) { fail('PARTS_FIELD_TYPE', object, `is ${show(raw)}; an array of indexed cut ownership records is required`); return; }
+  const seen = new Set<string>();
+  raw.forEach((row, i) => {
+    const r = row as CutOwnership | null;
+    const shape = r !== null && typeof r === 'object' && !Array.isArray(r) && Object.keys(r).sort().join(',') === [...OWNERSHIP_KEYS].sort().join(',') &&
+      typeof r.edit === 'string' && /^cuts\[\d+\]$/.test(r.edit) && !seen.has(r.edit) && typeof r.from === 'string' && r.from !== '' && typeof r.into === 'string' && r.into !== '' &&
+      OWNERSHIP_KEYS.slice(3).every(k => Number.isSafeInteger(r[k]) && (k === 'net_cleared_opaque_px' || (r[k] as number) >= 0));
+    if (!shape) { fail('PARTS_FIELD_TYPE', `${object}[${i}]`, `is ${show(row)}; a distinct cuts[i] with from/into names, nonnegative move/clear/fill counts and signed net_cleared_opaque_px is required`); return; }
+    const q = r as CutOwnership; seen.add(q.edit);
+    if (q.moved_in_opaque_px - q.retained_band_opaque_px !== q.cleared_opaque_px || q.cleared_opaque_px - q.under_filled_opaque_px !== q.net_cleared_opaque_px || q.under_filled_opaque_px > q.under_filled_px) {
+      fail('PARTS_COUNTS_ADD_UP', `${object}[${i}]`, `moved ${q.moved_in_opaque_px} - retained ${q.retained_band_opaque_px} = ${q.moved_in_opaque_px - q.retained_band_opaque_px} (gross cleared ${q.cleared_opaque_px} required); cleared - opaque fill ${q.under_filled_opaque_px} = ${q.cleared_opaque_px - q.under_filled_opaque_px} (net ${q.net_cleared_opaque_px} required); opaque fill must be at most total fill ${q.under_filled_px}`);
+    }
+  });
+}
+
+function orderedProvenance(p: PixelProvenance): PixelProvenance {
+  return { unchanged_layer_px: p.unchanged_layer_px, hand_px: p.hand_px, automatic_px: p.automatic_px,
+    edits: p.edits.map(e => ({ edit: e.edit, px: e.px })), automatic: p.automatic.map(e => ({ stage: e.stage, px: e.px })) };
+}
+
 function serializePartList(parts: readonly PartRecord[]): Array<Record<string, unknown>> {
   return parts.map((p) =>
-    Object.fromEntries(PART_KEYS.filter((k) => p[k] !== undefined).map((k) => [k, k === FRINGE_KEY ? (p.fringe_pushed_back ?? []).map((q) => ({ part: q.part, px: q.px })) : k === LIMB_KEY ? orderedLimb(p.limb as LimbRecord) : p[k]])),
+    Object.fromEntries(PART_KEYS.filter((k) => p[k] !== undefined).map((k) => [k, k === FRINGE_KEY ? (p.fringe_pushed_back ?? []).map((q) => ({ part: q.part, px: q.px })) : k === LIMB_KEY ? orderedLimb(p.limb as LimbRecord) : k === 'provenance' ? orderedProvenance(p.provenance as PixelProvenance) : p[k]])),
   );
 }
 
@@ -485,6 +517,7 @@ export function serializeParts(file: PartsFile): string {
     rig_size: file.rig_size,
     scale_rig_per_source: file.scale_rig_per_source,
     parts: serializePartList(file.parts),
+    ...(file.cut_ownership === undefined ? {} : { cut_ownership: orderedOwnership(file.cut_ownership) }),
     ...(file.motion_seams === undefined ? {} : { motion_seams: file.motion_seams.map(({ part, neighbour }) => ({ part, neighbour })) }),
     ghost_px: Object.fromEntries(Object.keys(file.ghost_px).sort().map((k) => [k, file.ghost_px[k]])),
     ...(file.recomposite === undefined ? {} : { recomposite: serializeRecomposite(file.recomposite) }),
@@ -501,6 +534,7 @@ export function serializeParts(file: PartsFile): string {
             ...(a.front === undefined ? {} : { front: a.front }),
             slots: a.slots,
             records: serializePartList(a.records),
+            ...(a.cut_ownership === undefined ? {} : { cut_ownership: orderedOwnership(a.cut_ownership) }),
             ghost_px: Object.fromEntries(Object.keys(a.ghost_px).sort().map((k) => [k, a.ghost_px[k]])),
             recomposite: serializeRecomposite(a.recomposite),
             ...(a.scene === undefined ? {} : { scene: Object.fromEntries(SCENE_KEYS.map((k) => [k, (a.scene as SceneRecord)[k]])) }),
@@ -539,6 +573,30 @@ export function readParts(path: string): PartsFile {
 
 function show(v: unknown): string {
   return v === undefined ? 'absent' : JSON.stringify(v);
+}
+
+/** The same optional measurement contract for base and alternate records. */
+function checkProvenance(raw: unknown, opaque: unknown, object: string, fail: (code: string, object: string, detail: string) => void): void {
+  const v = raw as PixelProvenance | null;
+  const count = (n: unknown): boolean => Number.isSafeInteger(n) && (n as number) >= 0;
+  const edit = (name: string): boolean => /^(cuts\[\d+\]|patches\[\d+\])$/.test(name) ||
+    (/^(full|head):author:/.test(name) && readFrom(name) !== null);
+  const shape = v !== null && typeof v === 'object' && !Array.isArray(v) &&
+    Object.keys(v).sort().join(',') === 'automatic,automatic_px,edits,hand_px,unchanged_layer_px' &&
+    [v.unchanged_layer_px, v.hand_px, v.automatic_px].every(count) && Array.isArray(v.edits) && Array.isArray(v.automatic) &&
+    v.edits.every(e => e !== null && typeof e === 'object' && Object.keys(e).sort().join(',') === 'edit,px' && typeof e.edit === 'string' && edit(e.edit) && count(e.px) && e.px > 0) &&
+    v.automatic.every(e => e !== null && typeof e === 'object' && Object.keys(e).sort().join(',') === 'px,stage' && typeof e.stage === 'string' && Object.hasOwn(AUTOMATIC_WRITERS, e.stage) && count(e.px) && e.px > 0) &&
+    new Set(v.edits.map(e => e.edit)).size === v.edits.length && new Set(v.automatic.map(e => e.stage)).size === v.automatic.length;
+  if (!shape) {
+    fail('PARTS_FIELD_TYPE', object, `is ${show(raw)}; unchanged_layer_px, hand_px and automatic_px as nonnegative safe integers, edits as distinct cuts[i]/patches[i]/<run>:author:<label> entries, and automatic as distinct known stage entries, each with a positive integer px, are required`);
+  } else if (!count(opaque)) {
+    fail('PARTS_FIELD_TYPE', object, `opaque_px is ${show(opaque)}; a nonnegative safe integer opaque_px is required beside provenance`);
+  } else if (!provenanceAddsUp(v as PixelProvenance, opaque as number)) {
+    const p = v as PixelProvenance;
+    const total = p.unchanged_layer_px + p.hand_px + p.automatic_px;
+    const hand = p.edits.reduce((n, e) => n + e.px, 0), automatic = p.automatic.reduce((n, e) => n + e.px, 0);
+    fail('PARTS_COUNTS_ADD_UP', object, `unchanged_layer_px ${p.unchanged_layer_px} + hand_px ${p.hand_px} + automatic_px ${p.automatic_px} = ${total}; opaque_px ${opaque} is required; edit subtotal ${hand} (hand_px ${p.hand_px} required), stage subtotal ${automatic} (automatic_px ${p.automatic_px} required)`);
+  }
 }
 
 function checkParts(raw: unknown, path: string): PartsFile {
@@ -601,6 +659,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
         if (k in r && !(Number.isInteger(r[k]) && (r[k] as number) >= 0)) fail('PARTS_FIELD_TYPE', `${label} field "${k}"`, `is ${show(r[k])}; a non-negative integer is required`);
       }
       const count = (k: string): number | null => (Number.isInteger(r[k]) && (r[k] as number) >= 0 ? (r[k] as number) : null);
+      if ('provenance' in r) checkProvenance(r.provenance, r.opaque_px, label + ' provenance', fail);
       const [op, vis, occ, vnp] = ['opaque_px', 'visible_px', 'occluded_px', 'visible_not_projected_px'].map(count);
       if (held.length === VISIBILITY_KEYS.length && op !== null && vis !== null && occ !== null && vnp !== null) {
         if (vis + occ !== op) fail('PARTS_COUNTS_ADD_UP', `${label}`, `visible_px ${vis} + occluded_px ${occ} = ${vis + occ}; opaque_px ${op} is required`);
@@ -692,6 +751,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
       if (!('recomposite' in o)) fail('PARTS_FIELD_PRESENT', `${path} field "recomposite"`, 'is absent; a scene block says how the recomposite block beside it was measured, so it is required with one');
     }
   }
+  if ('cut_ownership' in o) checkOwnership(o.cut_ownership, `${path} cut_ownership`, fail);
   if ('single_run_pad' in o) checkSingleRunPad(o.single_run_pad, path, sizeOk ? (size as [number, number]) : null, typeof scale === 'number' ? scale : null, fail);
   if ('recomposite' in o && sizeOk) {
     const names = Array.isArray(o.parts) ? new Set(o.parts.map((p) => (typeof p === 'object' && p !== null ? (p as Record<string, unknown>).name : undefined)).filter((n): n is string => typeof n === 'string')) : new Set<string>();
@@ -706,6 +766,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
       if (typeof a !== 'object' || a === null || Array.isArray(a)) return;
       const set = a as Record<string, unknown>;
       const at = `${path} alternates[${i}]${typeof set.name === 'string' ? ` (set "${set.name}")` : ''}`;
+      if ('cut_ownership' in set) checkOwnership(set.cut_ownership, `${at} cut_ownership`, fail);
       if ('base_anchor' in set) {
         const names = new Set(Array.isArray(set.records) ? set.records.flatMap(v => typeof v === 'object' && v !== null && typeof v.name === 'string' ? [v.name] : []) : []);
         const patches = new Set(Array.isArray(set.records) ? set.records.flatMap(v => typeof v === 'object' && v !== null && typeof v.name === 'string' && typeof v.from === 'string' && v.from.startsWith('painting:') ? [v.name] : []) : []);
@@ -749,6 +810,8 @@ function checkParts(raw: unknown, path: string): PartsFile {
       set.records.forEach((p, j) => {
         if (typeof p !== 'object' || p === null || Array.isArray(p)) return;
         const r = p as Record<string, unknown>;
+        const part817 = typeof r.name === 'string' ? `part "${r.name}"` : `records[${j}]`;
+        if ('provenance' in r) checkProvenance(r.provenance, r.opaque_px, `${at} ${part817} provenance`, fail);
         const l = r[LIMB_KEY];
         if (typeof l !== 'object' || l === null || Array.isArray(l) || !('cap' in l)) return;
         const part = typeof r.name === 'string' ? `part "${r.name}"` : `records[${j}]`;
