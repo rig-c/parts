@@ -207,6 +207,10 @@ export interface DepthTransport {
 }
 /** Resample on the FINAL unpadded part grid. Visible synthesized/unsupported
  * material refuses; transparent cells and later PAD4 use explicit edge clamp.
+ * Registered art filtering can reach less than one source pixel beyond its
+ * crop. Keep that edge texel; a visible sample >=1px outside still refuses.
+ * clampedSamples counts visible samples outside the half-open crop, once per
+ * output pixel even at a corner. It is a reading, not emitted provenance.
  * No geometry, art pixels, source field or calibration are changed here.
  */
 export function transportPartDepth(
@@ -214,13 +218,14 @@ export function transportPartDepth(
   art: Raster,
   registered: ReadonlyMap<string, RegisteredDepth>,
   transport: DepthTransport,
-): { reference: PartDepthReference; image: Raster } | undefined {
+): { reference: PartDepthReference; image: Raster; clampedSamples: number } | undefined {
   const keys = [part.from, ...transport.extend];
   const initial = keys.map(k => registered.get(k)).find((s): s is RegisteredDepth => s !== undefined);
   if (initial === undefined) return undefined;
   const fail = (detail: string): never => { throw new PartsError([{ code: 'DEPTH_PART_SUPPORT', object: `part "${part.name}"`, detail }]); };
   if (transport.unsupported !== undefined) fail(`${transport.unsupported}; an exact source-bound scalar transport is required`);
   const image = newRaster(part.w, part.h), used = new Map<string, RegisteredDepth>();
+  let clampedSamples = 0;
   for (let y = 0; y < part.h; y++) for (let x = 0; x < part.w; x++) {
     const rx = part.x + x, ry = part.y + y, pos = ry * transport.width + rx;
     const visible = art.data[(y * part.w + x) * 4 + 3] > 0;
@@ -233,12 +238,13 @@ export function transportPartDepth(
     const sourceKey = source === undefined ? keys.find(k => registered.get(k) === initial) as string : key;
     const run = sourceKey.startsWith('head:') ? 'head' : 'full';
     const m = transport.map(run), px = (rx - m.tx) / m.sx - input.layer.left + 0.5, py = (ry - m.ty) / m.sx - input.layer.top + 0.5;
-    if (visible && (px < 0 || py < 0 || px > input.sheet.pixels.width || py > input.sheet.pixels.height)) fail(`rig pixel (${rx},${ry}) maps to source (${px},${py}) outside ${input.sheet.pixels.width}x${input.sheet.pixels.height}; source art filtering/generated material has no declared depth there`);
+    if (visible && (px <= -1 || py <= -1 || px >= input.sheet.pixels.width + 1 || py >= input.sheet.pixels.height + 1)) fail(`rig pixel (${rx},${ry}) maps to source (${px},${py}) outside ${input.sheet.pixels.width}x${input.sheet.pixels.height}; source art filtering/generated material has no declared depth there`);
+    if (visible && (px < 0 || py < 0 || px >= input.sheet.pixels.width || py >= input.sheet.pixels.height)) clampedSamples++;
     const level = sampleDepthLevel(input.sheet.pixels, px, py);
     image.data.set([level, level, level, 255], (y * part.w + x) * 4);
     if (visible && source !== undefined) used.set(key, source);
   }
-  return { image, reference: {
+  return { image, clampedSamples, reference: {
     image: `${part.name}_depth.png`, near: initial.near, zScale: initial.zScale,
     sources: [...new Map([...used].flatMap(([from, s]) => s.sheet.sources ?? [{ from, image: s.sheet.file, sha256: s.sheet.sha256, crop: [s.layer.left, s.layer.top, s.layer.right, s.layer.bottom] as [number, number, number, number], reading: s.sheet.reading }]).map(s => [`${s.from}:${s.sha256}`, s])).values()],
   } };

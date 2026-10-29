@@ -5772,7 +5772,14 @@ Assembly uses the actual run registration, source-copy/composite coordinates,
 merge ownership and final crop. Scalar bilinear sampling at pixel centres is
 quantized half up at each intermediate copy/composite grid, then again at
 final part registration. PAD4 repeats the resulting u8 edge values. There is no
-universal half-level total-error bound across those operators. No art-color
+universal half-level total-error bound across those operators. The drawing warp rounds its inverse coordinates to
+1/32 px and uses bilinear or bicubic support; scalar sampling keeps its existing
+unrounded inverse map plus the half-pixel centre. Visible final-grid samples
+less than one source pixel outside a registered crop retain the edge texel.
+At one pixel or more outside on either axis, `DEPTH_PART_SUPPORT` still refuses.
+Assembly logs and neck-draft notes report the clamped visible sample count per
+part, counting a corner once. Transparent cells are excluded from that count.
+No source sheet is padded or inferred. No art-color
 premultiplication or local min/max rescaling is applied. The rig sheet receives the drawing's PAD4 with
 explicit rectangular edge clamping. Original source hashes, rectangles, medians
 and declared units accompany the optional `parts.json` part `depth` reference.

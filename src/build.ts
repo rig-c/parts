@@ -384,7 +384,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   }
 
   const altProblems: Problem[] = [];
-  const altBuilt: Array<{ record: AlternatePartsRecord; images: Array<{ name: string; image: Raster }>; excluded: ExcludedCount[]; islands: IslandCount[]; splits: SplitCount[]; capSplits: SplitCount[] }> = [];
+  const altBuilt: Array<{ record: AlternatePartsRecord; images: Array<{ name: string; image: Raster }>; excluded: ExcludedCount[]; islands: IslandCount[]; splits: SplitCount[]; capSplits: SplitCount[]; depthClamps: AssembleResult['depthClamps'] }> = [];
   const baseSlots = result.parts.parts.map((p) => p.name);
   // Issue #664: each limb segment part with a declared front slot -> the part its front slot follows.
   const frontAfter = new Map<string, string>();
@@ -724,6 +724,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       islands: altRes.islands,
       splits: altRes.splits,
       capSplits: altRes.capSplits,
+      depthClamps: altRes.depthClamps,
     });
   }
   const emittedAssets = [
@@ -762,6 +763,8 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     if (depthImage !== undefined && record.depth !== undefined) writePng(join(outs.partsDir, record.depth.image), depthImage);
   }
   for (const row of result.depthReadings ?? []) log(`  depth reading ${row.from}: ${row.reading.relation}; ordering median ${row.reading.orderingMedian}, source-sheet median ${row.reading.sheetMedian} (half-level quantization; reading only, polarity declared)`);
+  for (const row of result.depthClamps ?? []) log(`  depth edge clamp ${row.part}: ${row.samples} visible samples less than 1 source pixel outside the crop; edge texels retained`);
+  for (const b of altBuilt) for (const row of b.depthClamps ?? []) log(`  set "${b.record.name}" depth edge clamp ${row.part}: ${row.samples} visible samples less than 1 source pixel outside the crop; edge texels retained`);
   for (const b of altBuilt) {
     for (const { name, image } of b.images) writePng(join(outs.partsDir, `${name}.png`), image);
   }

@@ -10,6 +10,7 @@ import { controlSkeletonOf, loadConfig, parseConfig } from '../src/config.ts';
 import { draftIndependentNeck } from '../src/neckdraft.ts';
 import { PartsError } from '../src/errors.ts';
 import { encodePngBytes, readPng } from '../src/raster/png.ts';
+import { crop } from '../src/raster/index.ts';
 import { proposeNeck } from './neck-propose.ts';
 import { readConfigWriteTarget } from './configwrite.ts';
 
@@ -79,6 +80,43 @@ export function runNeckDraftChecks(dir: string, say: Say): void {
   say('ND21_OUTPUT_FRESH', repeated, 'existing draft rejected before overwriting its parts');
   say('ND17_LAYERS_FULL_SOURCE_CLEAR', cli.status === 0 && !cli.stdout.includes('PLAN_HEAD_GARMENT_OVERLAP'), 'real CLI parsed contextual layers flags and read source/config/runs');
   runNeckDraftReviewChecks(join(dir, 'review'), say);
+  // A cropped 16x16 face under the real registration and art filtering.
+  const edgeFiles = writeNeckDraftFixture(join(dir, 'registered-edge'));
+  const edgeConfig = loadConfig(edgeFiles.configPath);
+  edgeConfig.assemble.rig_scale = 1.5;
+  const edgeRuns = readRuns(edgeFiles.fullDir, edgeFiles.headDir);
+  // Head-only face: no second face outline invokes the independent hollow-face
+  // coverage contract when this control changes the head registration.
+  edgeRuns.full.layers = edgeRuns.full.layers.filter(l => l.name !== 'face');
+  const face = edgeRuns.head.layers.find(l => l.name === 'face')!;
+  face.pixels = crop(face.pixels, 24, 8, 16, 16);
+  face.left = 24; face.top = 8; face.right = 40; face.bottom = 24;
+  face.depthSheet = { file: 'analytic.png', sha256: '0'.repeat(64), pixels: newRaster(16, 16), reading: { orderingMedian: null, sheetMedian: null, relation: 'indeterminate' } };
+  for (let i = 0; i < 256; i++) face.depthSheet.pixels.data.set([102, 102, 102, 255], i * 4);
+  delete face.depthHint;
+  let edgeDraft: ReturnType<typeof draftIndependentNeck> | undefined, edgeError = '';
+  // Bicubic corner lobes can reach >=1px outside: those still refuse.
+  let wideSupport = false;
+  try { draftIndependentNeck({ config: edgeConfig, source: readPng(edgeFiles.source), ...edgeRuns, base: dirname(edgeFiles.configPath) }); }
+  catch (e) {
+    if (!(e instanceof PartsError)) throw e;
+    wideSupport = e.problems.some(p => {
+      const pos = /maps to source \(([^,]+),([^)]+)\)/.exec(p.detail);
+      return p.code === 'DEPTH_PART_SUPPORT' && pos !== null && [Number(pos[1]), Number(pos[2])].some(v => v <= -1 || v >= 17);
+    });
+  }
+  say('ND42_BICUBIC_WIDE_SUPPORT_REFUSED', wideSupport, '1.5x bicubic support is not a license to invent scalar material >=1px outside');
+  // A 47/64 bilinear head map with offset (1,1): rig x18 samples
+  // run x=17*64/47, so the crop-centred coordinate is -0.3510638298.
+  edgeConfig.assemble.rig_scale = 1;
+  edgeConfig.seethrough!.head_box = [1, 1, 48, 48];
+  try { edgeDraft = draftIndependentNeck({ config: edgeConfig, source: readPng(edgeFiles.source), ...edgeRuns, base: dirname(edgeFiles.configPath) }); }
+  catch (e) { if (!(e instanceof PartsError)) throw e; edgeError = e.message; }
+  say('ND40_REGISTERED_CROP_EDGE_DRAFT', edgeDraft !== undefined && edgeDraft.config.turn!.body!.unitDepths!.throat === 2, edgeDraft === undefined ? edgeError : edgeDraft.notes.join('; '));
+  const clamp = edgeDraft?.assembled.depthClamps?.find(r => r.part === 'portrait');
+  // Bilinear art support is rig x18..30, y7..18. Only column x18 maps
+  // outside the scalar crop: one column of twelve visible samples.
+  say('ND41_EDGE_CLAMP_REPORTED', clamp?.samples === 12 && edgeDraft!.notes.includes('depth edge clamp portrait: 12 visible samples less than 1 source pixel outside the crop; edge texels retained'), JSON.stringify(edgeDraft?.assembled.depthClamps));
 }
 
 /** Review regressions: real FILE-backed loader state and whole-map body depth fallback. No rendering. */

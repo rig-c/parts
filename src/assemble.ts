@@ -4445,6 +4445,8 @@ export interface AssembleResult {
   seamRule: SeamRule;
   projectRule: ProjectRule;
   depthReadings?: Array<{ from: string; reading: import('./depthsheets.ts').DepthReading }>;
+  /** Visible registered samples clamped within <1 source pixel of a crop. */
+  depthClamps?: Array<{ part: string; samples: number }>;
   /** Issue #492: head-canvas pixels filled by `config.assemble.head_face_underfill: true` when > 0. */
   headFaceUnderfillPx?: number;
   /** Issue #587: what each `exclude` entry took, in entry order; empty without one. */
@@ -5397,6 +5399,7 @@ export function assemble(input: AssembleInput): AssembleResult {
   });
 
   const planned: Array<PlacedPart | null> = plan.map(() => null);
+  const depthClamps: NonNullable<AssembleResult['depthClamps']> = [];
   const cutPlaced: Array<PlacedPart | null> = cuts.map(() => null);
   // A cut's piece records the plan part it was cut from (issue #230): parts.json is in draw order, so a piece drawn
   // "back" comes before its base, and nothing else in the file says which of the two is the piece.
@@ -5472,6 +5475,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       ...((limb?.cap?.image_px ?? 0) > 0 || (limb?.cap?.lower_px ?? 0) > 0 ? { unsupported: `cap copies ${(limb?.cap?.image_px ?? 0) + (limb?.cap?.lower_px ?? 0)} pixels from a separate cap image whose scalar grid is undeclared` } : {}),
     });
     if (scalar !== undefined) record.depth = scalar.reference;
+    if (scalar !== undefined && scalar.clampedSamples > 0) depthClamps.push({ part: name, samples: scalar.clampedSamples });
     set({ record, image, ...(scalar === undefined ? {} : { depthImage: scalar.image }) });
   });
   refuseIfAny(empty);
@@ -5528,6 +5532,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     },
     images: placed,
     ...(registeredDepth.size === 0 ? {} : { depthReadings: ([['full', depthFullInput], ...(single ? [] : [['head', depthHeadInput]])] as Array<['full' | 'head', LayerSet]>).flatMap(([run, set]) => set.layers.flatMap(layer => layer.depthSheet === undefined ? [] : [{ from: `${run}:${layer.name}`, reading: layer.depthSheet.reading }])) }),
+    ...(depthClamps.length === 0 ? {} : { depthClamps }),
     recomposite: can,
     errorMap: recompositeErrorMap(can, srcr, placed, inside),
     figure: inside === null ? null : figureImage(inside, W, H),

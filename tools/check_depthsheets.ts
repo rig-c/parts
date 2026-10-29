@@ -71,6 +71,20 @@ export function runDepthSheetChecks(dir: string, say: Say): void {
   const transport = { map: () => ({ sx: 1, tx: 0, ty: 0 }), width: 4, extend: [] as string[], owner: new Int32Array(16).fill(-1), ring: new Uint8Array(16), region: null };
   const crop = transportPartDepth(record, grey(2, 2, () => 180), registered, transport);
   say('DS13_FINAL_CROP_REGISTRATION', crop !== undefined && [0, 1, 2, 3].map(i => crop.image.data[i * 4]).join(',') === '60,80,100,120' && crop.reference.near === 'black' && crop.reference.zScale === 12, 'crop x1..2,y1..2 => 60,80/100,120, authored world units12 unchanged');
+  const edgeSample = (x: number, y: number, alpha = 255) => {
+    const art = grey(1, 1, () => 180); art.data[3] = alpha;
+    return transportPartDepth({ ...record, x: 0, y: 0, w: 1, h: 1 }, art, registered, { ...transport, map: () => ({ sx: 1, tx: 0.5 - x, ty: 0.5 - y }) });
+  };
+  const edges: Array<[number, number, number]> = [[-0.25, 2, 60], [4.25, 2, 120], [2, -0.25, 30], [2, 4.25, 150], [-0.999, -0.999, 0], [4.999, 4.999, 180]];
+  const edgeRows = edges.map(([x, y, expected]) => { const p = edgeSample(x, y); return { x, y, expected, level: p?.image.data[0], clamped: p?.clampedSamples, sources: p?.reference.sources }; });
+  say('DS42_SUBPIXEL_FOUR_EDGES_AND_CORNERS', edgeRows.every(r => r.level === r.expected && r.clamped === 1 && JSON.stringify(r.sources) === JSON.stringify(crop?.reference.sources)), JSON.stringify(edgeRows));
+  const exact = [[-1, 2], [5, 2], [2, -1], [2, 5]], farther = [[-1.001, 2], [5.001, 2], [2, -1.001], [2, 5.001]];
+  say('DS43_EXACT_ONE_PIXEL_RED', exact.every(([x, y]) => errors(() => edgeSample(x, y)).includes('DEPTH_PART_SUPPORT')), 'exactly 1 source pixel outside on each of four axes keeps DEPTH_PART_SUPPORT');
+  say('DS44_OVER_ONE_PIXEL_RED', farther.every(([x, y]) => errors(() => edgeSample(x, y)).includes('DEPTH_PART_SUPPORT')), '1.001 source pixels outside on each of four axes keeps DEPTH_PART_SUPPORT');
+  const boundary = [[0, 2, 60, 0], [4, 2, 120, 1], [2, 0, 30, 0], [2, 4, 150, 1]];
+  say('DS45_HALF_OPEN_BOUNDARY', boundary.every(([x, y, expected, count]) => { const p = edgeSample(x, y); return p?.image.data[0] === expected && p.clampedSamples === count; }), '0 is inside; width/height is clamped with zero overrun, identical edge level');
+  say('DS46_TRANSPARENT_CLAMP_NOT_COUNTED', edgeSample(-2, -2, 0)?.clampedSamples === 0 && edgeSample(-2, -2, 0)?.image.data[0] === 0, 'transparent cells retain existing rectangular edge clamp without visible counts');
+  say('DS47_IN_RANGE_BYTES_UNCHANGED', crop?.clampedSamples === 0 && edgeSample(2, 2)?.image.data[0] === 90 && edgeSample(2, 2)?.clampedSamples === 0, 'independent linear grid: 20*1.5 + 40*1.5 = 90, no clamped samples');
   const headHome = join(dir, 'head-independent');
   const head = bindDepthRun(input(headHome, () => 200), 'head', { zScale: 12 }, headHome);
   const merge = new Map([...registered, ...registerDepthRun(head, 'head', { zScale: 12 }, headHome)]);

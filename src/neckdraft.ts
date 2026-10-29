@@ -51,6 +51,7 @@ export function draftIndependentNeck(input: { config: CharacterConfig; source: R
   body.roles[part] = 'unit';
   // Stage fields now see the new role before any color/fringe ownership operation.
   const assembled = assemble({ source: input.source, full: input.full, head: input.head, ...stageFields(cfg), under: input.under, caps: input.caps, seamRule: 'near-white', projectRule: 'core', depth: cfg.depth, depthBase: input.base });
+  for (const row of assembled.depthClamps ?? []) notes.push(`depth edge clamp ${row.part}: ${row.samples} visible samples less than 1 source pixel outside the crop; edge texels retained`);
   const rec = assembled.parts.parts.find(p => p.name === part)!;
   const image = assembled.images.find(p => p.record.name === part)!.image;
   const own = assembled.images.find(p => p.record.name === part)!;
