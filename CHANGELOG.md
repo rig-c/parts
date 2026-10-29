@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.79.0](https://github.com/rig-c/parts/compare/v1.78.0...v1.79.0) (2026-10-29)
+
+
+### Features
+
+* **assemble:** yield_refused also clears the anti-aliased rim of a yielded inpaint body ([#835](https://github.com/rig-c/parts/issues/835)) ([34197b6](https://github.com/rig-c/parts/commit/34197b6c9eb8df2a447fb9dc9b84983096c65371)), closes [#832](https://github.com/rig-c/parts/issues/832)
+* **check:** write each animation's min · max · diff sheet, so the pre-review look is one command ([#831](https://github.com/rig-c/parts/issues/831)) ([97a1233](https://github.com/rig-c/parts/commit/97a123395b83f5bee9ebce6407735f2a408855a6)), closes [#829](https://github.com/rig-c/parts/issues/829)
+
+
+### Bug Fixes
+
+* **docs:** bring README, AUTHORING, STABILITY and MIGRATION current with 1.74–1.78 ([#836](https://github.com/rig-c/parts/issues/836)) ([e183bf7](https://github.com/rig-c/parts/commit/e183bf76d2d6810be183caeb0065107b54be9671)), closes [#833](https://github.com/rig-c/parts/issues/833)
+
 ## [1.78.0](https://github.com/rig-c/parts/compare/v1.77.0...v1.78.0) (2026-10-29)
 
 
