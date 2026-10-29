@@ -1528,6 +1528,7 @@ export function rigStage(input: RigStageInput, rigc: RigcRunner, scratch: string
   if (from !== null) log(`  animations beside the idle, from ${from.file} as written: ${Object.keys(from.table).join(', ') || 'none'}`);
   log(faceAxisLine(rig.faceAxis));
   if (rig.turn !== null) log(turnLine(rig.turn));
+  for (const w of rig.turnWarnings ?? []) log(`  WARN  ${w.code}: ${w.object} — ${w.detail}`);
   log(
     rig.idleKeys === 'ctl'
       ? `  idle keys ctl: ${rig.meshKeyed.length} mesh-driving bone(s) keyed by the idle, each keyed through a same-origin <bone>_ctl parent`

@@ -2854,6 +2854,36 @@ shin's tip against the stage point it stands on.
   with `exponent` 6 on `legwear`, 1.6. The same dance on `demo` as tracked, whose legs ride the
   hip, reads 18.36.
 
+
+### Equal-depth units in a sampled turn
+
+With `turn.roles`, `turn.depths` remains a legacy layer-order table; it does
+not override sampled unit motion. Its See-through values (larger means farther
+back) are not interchangeable with `turn.unitDepths`, whose values are calibrated
+scalar depths in rig pixels (larger means nearer the viewer).
+
+To make a mirrored pair of `"unit"` parts travel equally, author equal
+`turn.unitDepths.<part>` values. A part entry wins over a bone entry, including
+zero. Otherwise the producer samples the primary surface at each unit's setup
+landmark, calibrating `pivot + sampledZ - surfaceZRef`; mirrored landmarks on an
+asymmetric depth sheet can therefore travel differently. Only when that sample
+is unavailable does it fall back to the unit's own sheet. No symmetry is inferred
+from part names or positions, and equal legacy `depths` do not establish it.
+
+Equal unit depths yield the same signed translation within a frame on both yaw
+and pitch; the sign reverses between negative and positive angles. Their local
+keys compensate for the parent carrier, so compare the complete inherited pose
+when measuring screen travel. For ears, the existing behind-cheek depth check
+still applies to an explicit override; use a depth at or behind both cheeks.
+
+The build report prints `WARN RIG_TURN_UNIT_DEPTH_SUPPORT` when an implicit unit
+sample lies outside the surface's source pixel-index bounds or its sampled art
+alpha is below 255. It names the unit, source surface and sheet, raw crop
+coordinate, clamped art index and support alpha. Scalar-sheet alpha is not art
+support. This warning retains the extended scalar sample, all motion arithmetic
+and existing refusal behavior; it is not a gate. Explicit `unitDepths` entries
+bypass that sample and its warning, including an explicit zero.
+
 ## 4. The command order
 
 Two steps are external: the See-through runs (by any route; the optional `comfy seethrough` adapter is only a client for a ComfyUI box). Everything else is this tool.
@@ -4528,6 +4558,7 @@ and stay absent).
 | <a id="RIG_TURN_HEAD_BONE"></a>`RIG_TURN_HEAD_BONE` | `buildRig` found no `"head"` (or body turn root) bone when emitting 2.5D turn carriers | declare `"head"` (or the body turn root bone) in `config.bones` |
 | <a id="RIG_TURN_SHARED_DEPTH_SCALE"></a>`RIG_TURN_SHARED_DEPTH_SCALE` | `"surface"` parts bound to one head or body turn declare different `near` polarities or `zScale` values | use one shared `near` and `zScale` across all `"surface"` parts in the turn group |
 | <a id="RIG_TURN_UNIT_DEPTH_REQUIRED"></a>`RIG_TURN_UNIT_DEPTH_REQUIRED` | a `"unit"` bone has neither a `unitDepths` entry nor a readable `"surface"` depth sheet | provide a `"surface"` depth sheet or an explicit `unitDepths.<part>` value |
+| <a id="RIG_TURN_UNIT_DEPTH_SUPPORT"></a>`RIG_TURN_UNIT_DEPTH_SUPPORT` | WARN only: an implicit unit depth sample is outside the source surface pixel-index bounds or its sampled art alpha is below 255 | author an explicit calibrated `unitDepths.<part>` value when this cross-part extrapolation is unintended; existing scalar sampling and refusal behavior are retained |
 | <a id="RIG_TURN_EAR_DEPTH_BEHIND_CHEEK"></a>`RIG_TURN_EAR_DEPTH_BEHIND_CHEEK` | an ear bone in `config.turn.roles` has a calibrated depth at or in front of the cheek surface depth | place the ear behind the cheek surface (for example via `config.turn.unitDepths`) |
 
 ## 7. The bars `check` enforces, and what only an eye answers today
