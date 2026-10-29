@@ -20,7 +20,7 @@ import { regionBone } from '../src/config.ts';
  *    rule with cap 8, and two tool rules — bone heat and bone heat with cap 4.
  * 2. **The posed displacement** ({@link skinPoint}, {@link localOffset}, {@link nearestRank}): every rule-weighted mesh
  *    against the authored-weighted mesh, both skinned from the same bone world transforms, which rig-c's public
- *    `rig-c/render` entry (`spinePoser`) poses through spine-core over every animation of the export.
+ *    `@rig-c/core/render` entry (`spinePoser`) poses through spine-core over every animation of the export.
  * 3. **The footprint region on the public sample** ({@link footprintRegion}, {@link lidReading}): the sample's face
  *    under the plain rule, the plain rule plus a bone-and-band region per lash whose polygon is that lash's footprint
  *    on the face (src/localweights.ts), and bone heat — each against issue #160's lid field, with #160's measure.
@@ -35,7 +35,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { Plate, type RGBA } from 'rig-c/tools/plate.ts';
+import { Plate, type RGBA } from '@rig-c/core/tools/plate.ts';
 import { type CharacterConfig, loadConfig } from '../src/config.ts';
 import { growSilhouette } from '../src/contour.ts';
 import { localInfluences, type WeightRegion } from '../src/localweights.ts';
@@ -806,9 +806,9 @@ function faceRun(cfg: CharacterConfig, parts: readonly PlacedPart[], r: number):
   };
 }
 
-/** Parts 1 and 2: the export. The poser comes from rig-c's public `rig-c/render` entry, imported here so the selftest's import of this file does not load the Spine runtime. */
+/** Parts 1 and 2: the export. The poser comes from rig-c's public `@rig-c/core/render` entry, imported here so the selftest's import of this file does not load the Spine runtime. */
 async function exportRun(exportsDir: string, imagesDir: string, r: number): Promise<{ runs: MeshRun[]; ladder: Array<{ r: number; columns: Columns; within: number; p95: number[] }>; selfCheck: { max: number; compared: number; skipped: number }; animations: Array<{ name: string; frames: number }>; strips: Strip[] }> {
-  const { loadPosedSkeleton, spinePoser } = await import('rig-c/render');
+  const { loadPosedSkeleton, spinePoser } = await import('@rig-c/core/render');
   const doc = JSON.parse(readFileSync(join(exportsDir, SKELETON), 'utf8')) as SkeletonJson;
   const data = loadPosedSkeleton(join(exportsDir, SKELETON), join(exportsDir, ATLAS), 'weight_rule_survey reads the bones');
   const poser = spinePoser(data);
@@ -1092,7 +1092,7 @@ export function page(p: PageInput): string[] {
   out.push('');
   out.push('## Per mesh — posed displacement against the authored weights', '');
   out.push(
-    `Both meshes are skinned (linear blend, Spine's weighted vertex) from the same bone world transforms, which rig-c's public \`rig-c/render\` entry poses through spine-core (\`spinePoser\`: \`AnimationState\`, one \`update(1/fps)\` per frame from the setup pose) at ${FPS} fps — the rate of rig-c's reference frames for this skeleton — frames 0..round(duration × ${FPS}) of each animation, which is the reference's own frame count for every one of the eleven. A rule's vertex keeps the authored mesh's setup position: its offset in each of its bones' frames is that position read in the bone's setup frame, so the two meshes coincide at the setup pose and differ only by how the weights share the motion. A mesh is measured only in the frames where its slot shows it. Displacement is the distance between the two meshes' same vertex, px of the export's scale; p95 is the nearest-rank 95th percentile over every vertex of every frame shown, and "within 2 px" is p95 <= ${BOUND}.`,
+    `Both meshes are skinned (linear blend, Spine's weighted vertex) from the same bone world transforms, which rig-c's public \`@rig-c/core/render\` entry poses through spine-core (\`spinePoser\`: \`AnimationState\`, one \`update(1/fps)\` per frame from the setup pose) at ${FPS} fps — the rate of rig-c's reference frames for this skeleton — frames 0..round(duration × ${FPS}) of each animation, which is the reference's own frame count for every one of the eleven. A rule's vertex keeps the authored mesh's setup position: its offset in each of its bones' frames is that position read in the bone's setup frame, so the two meshes coincide at the setup pose and differ only by how the weights share the motion. A mesh is measured only in the frames where its slot shows it. Displacement is the distance between the two meshes' same vertex, px of the export's scale; p95 is the nearest-rank 95th percentile over every vertex of every frame shown, and "within 2 px" is p95 <= ${BOUND}.`,
     '',
     `The skinning is checked against the runtime: the authored mesh as skinned here against spine-core's own world vertices for it, in every frame no deform timeline keys that attachment — ${ex.selfCheck.compared} mesh-frames, largest difference ${ex.selfCheck.max.toExponential(2)} px; ${ex.selfCheck.skipped} mesh-frames carry a deform timeline (the feet, in \`hoverboard\`), which neither side applies here.`,
     '',

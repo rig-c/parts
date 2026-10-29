@@ -30,7 +30,7 @@
  * copies of a generated character the installed `check` passed, with a plate
  * and an interleaved order (issue #74); and the contour
  * mesh (`src/contour.ts`) on a generated block, which reaches rig-c's
- * outline functions through the named entry `rig-c/mesh`; and the
+ * outline functions through the named entry `@rig-c/core/mesh`; and the
  * automatic mesh mode (`src/automesh.ts`, issue #126) through the installed
  * `rig` command and rigc's gate; and the installed `build --all-sets` output
  * (`skeleton.model.json` and `sets.json` with `focus`) loaded through a fresh
@@ -85,9 +85,9 @@ import { runWithoutBun } from './smoke_without_bun.ts';
 import { checkSmokeWithoutBun } from './check_smoke_without_bun.ts';
 import { findSmokeExecutable, isSmokePathInside, runSmokeCommand } from './smoke_process.ts';
 import { checkSmokeProcess } from './check_smoke_process.ts';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AliasTarballError, compareTarballs } from './alias_tarball.ts';
 
@@ -376,7 +376,7 @@ writeFileSync(join(HOME, 'scene.json'), JSON.stringify({
 const EXPECT_SCENE_SLOTS = ['plate', 'a:back', 'b:back', 'a:front', 'b:front'];
 
 // The contour mesh from the install (issue #84): the package's \`src/contour.ts\` imports rigc's outline functions through
-// the named entry \`rig-c/mesh\`, which nothing on the CLI's contour-free paths runs, so this is where a rigc that
+// the named entry \`@rig-c/core/mesh\`, which nothing on the CLI's contour-free paths runs, so this is where a rigc that
 // moved or narrowed them shows. A 24x16 block at (4, 4) in 32x24, tolerance 0, margin 1, spacing 8: by hand, the block
 // grown by its four neighbours' rows and columns, a 12-vertex outline, 6 interior points and 2·18 − 12 − 2 = 22
 // triangles (the selftest's CT01).
@@ -386,14 +386,14 @@ const alpha = new Uint8Array(32 * 24);
 for (let y = 4; y < 20; y++) for (let x = 4; x < 28; x++) alpha[y * 32 + x] = 255;
 const m = contourMesh('probe', { width: 32, height: 24, alpha }, { threshold: 8, tolerance: 0, margin: 1, spacing: 8, regions: [] });
 console.log('RESOLVED ' + import.meta.resolve('${PACKAGE}/src/contour.ts'));
-console.log('RESOLVED ' + import.meta.resolve('rig-c/mesh'));
+console.log('RESOLVED ' + import.meta.resolve('@rig-c/core/mesh'));
 console.log(Array.isArray(m) ? 'REFUSED ' + JSON.stringify(m) : 'CONTOUR ' + m.hull + ' ' + (m.vertices.length - m.hull) + ' ' + m.triangles.length / 3);
 `;
 const EXPECT_CONTOUR = 'CONTOUR 12 6 22';
 
 // The automatic mesh mode from the install (issue #126): the rig fixture's two parts — an opaque 16x8 cloth and a 4x2 eye region (one region alone on a page is rigc's A27) — on a 40x40 rig, its
 // mesh in \`auto\`, through the installed \`rig-parts rig\` — the contour source, rig-c's \`reduceMesh\` through
-// \`rig-c/mesh\`, and the installed rigc's gate, whose launcher runs its core entry in an install with no Spine
+// \`@rig-c/core/mesh\`, and the installed rigc's gate, whose launcher runs its core entry in an install with no Spine
 // runtime (the rigc-entry step above holds that). Green means the gate passed, the motion gate (rig-c/meshcompare, no runtime) passed, and \`mesh_report.json\` says \`auto\`.
 const AUTO_GENERATOR = `import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -614,7 +614,7 @@ interface Ran {
   out: string;
 }
 
-const smokePackages: Record<string, string> = { npm: 'npm', rigc: 'rig-c' };
+const smokePackages: Record<string, string> = { npm: 'npm', rigc: '@rig-c/core' };
 
 function run(cmd: string, args: string[], cwd: string, env?: Record<string, string | undefined>): Ran {
   return runSmokeCommand(cmd, args, cwd, env, smokePackages);
@@ -622,6 +622,81 @@ function run(cmd: string, args: string[], cwd: string, env?: Record<string, stri
 
 function onPath(cmd: string): string | null {
   return findSmokeExecutable(cmd);
+}
+
+/** Inspect actual installed package owners; equal versions under two names are still two cores. */
+export function coreInstallFault(home: string): string | null {
+  const cores: Array<{ name: unknown; root: string; entry: unknown }> = [];
+  const owners: string[] = [];
+  const seen = new Set<string>();
+  const modules = (directory: string): void => {
+    if (!existsSync(directory)) return;
+    for (const item of readdirSync(directory, { withFileTypes: true })) {
+      if (item.name.startsWith('.')) continue;
+      const path = join(directory, item.name);
+      if (item.name.startsWith('@')) { modules(path); continue; }
+      const manifest = join(path, 'package.json');
+      if (!existsSync(manifest)) continue;
+      const root = realpathSync.native(path);
+      if (seen.has(root)) continue;
+      seen.add(root);
+      const pkg = JSON.parse(readFileSync(manifest, 'utf8')) as { name?: unknown; bin?: Record<string, unknown> };
+      const entry = pkg.bin?.rigc;
+      if (entry !== undefined) owners.push(root);
+      if (pkg.name === 'rig-c' || pkg.name === '@rig-c/core') cores.push({ name: pkg.name, root, entry });
+      modules(join(path, 'node_modules'));
+    }
+  };
+  modules(join(home, 'node_modules'));
+  if (cores.length !== 1 || cores[0].name !== '@rig-c/core' || owners.length !== 1 || owners[0] !== cores[0].root)
+    return 'SMOKE_ONE_CORE: required exactly one @rig-c/core and one rigc package owner; found cores ' + JSON.stringify(cores.map(c => c.name)) + ', rigc owners ' + owners.length;
+  const core = cores[0];
+  if (typeof core.entry !== 'string' || !isSmokePathInside(core.root, resolve(core.root, core.entry)))
+    return 'SMOKE_ONE_CORE: @rig-c/core must declare a rigc entry inside its package';
+  // POSIX installers link the selected command directly. Windows script/native launcher shapes
+  // remain covered by the existing process and selected-launcher controls plus rigc --version.
+  if (process.platform !== 'win32') {
+    const bin = join(home, 'node_modules', '.bin', 'rigc');
+    if (!existsSync(bin) || realpathSync.native(bin) !== realpathSync.native(resolve(core.root, core.entry)))
+      return 'SMOKE_ONE_CORE: selected .bin/rigc does not target the unique @rig-c/core launcher';
+  }
+  return null;
+}
+
+/** Small generated controls; none of these mutations touches the source tree. */
+export function checkCoreInstall(): void {
+  const root = mkdtempSync(join(tmpdir(), 'parts-core-identity-'));
+  const expect = (ok: boolean, name: string): void => {
+    if (!ok) throw new Error(name);
+    console.log('  PASS  ' + name);
+  };
+  const add = (home: string, name: string): string => {
+    const pkg = join(home, 'node_modules', name);
+    mkdirSync(join(pkg, 'bin'), { recursive: true });
+    writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name, version: '2.72.0', bin: { rigc: 'bin/rigc.cjs' } }));
+    const entry = join(pkg, 'bin', 'rigc.cjs');
+    writeFileSync(entry, '#!/usr/bin/env node\n');
+    return entry;
+  };
+  const link = (home: string, entry: string): void => {
+    if (process.platform === 'win32') return;
+    const bin = join(home, 'node_modules', '.bin');
+    mkdirSync(bin, { recursive: true });
+    symlinkSync(relative(bin, entry), join(bin, 'rigc'));
+  };
+  try {
+    const positive = join(root, 'scoped'); link(positive, add(positive, '@rig-c/core'));
+    expect(coreInstallFault(positive) === null, 'SMOKE_ONE_CORE_SCOPED_CONTROL');
+    const legacy = join(root, 'legacy'); link(legacy, add(legacy, 'rig-c'));
+    expect(coreInstallFault(legacy)?.includes('SMOKE_ONE_CORE') === true, 'SMOKE_ONE_CORE_LEGACY_REFUSED');
+    const both = join(root, 'both'); link(both, add(both, '@rig-c/core')); add(both, 'rig-c');
+    expect(coreInstallFault(both)?.includes('SMOKE_ONE_CORE') === true, 'SMOKE_ONE_CORE_BOTH_NAMES_REFUSED');
+    if (process.platform !== 'win32') {
+      const wrong = join(root, 'wrong-bin'); add(wrong, '@rig-c/core');
+      const foreign = join(wrong, 'foreign.cjs'); writeFileSync(foreign, ''); link(wrong, foreign);
+      expect(coreInstallFault(wrong)?.includes('does not target') === true, 'SMOKE_ONE_CORE_WRONG_BIN_REFUSED');
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 }
 
 export const EXIT_GREEN = 0;
@@ -724,9 +799,9 @@ const PLANTED: Record<Exclude<Plant, 'none'>, { names: string[]; steps: string[]
     what: '`src/layers.ts` removed from the packed tree. `files` names the `src` DIRECTORY, so a module leaves the package by leaving the tree, and the install is where `layers` cannot find its reader',
   },
   'drop-rigc': {
-    names: ['rig-c'],
+    names: ['@rig-c/core'],
     steps: ['fixture', 'layers', 'contour', 'auto'],
-    what: '`rig-c` removed from `dependencies`. A checkout would not notice — it is already in node_modules — and the install is where the PNG codec, the coordinate door and the contour mesh outline functions have nothing to import',
+    what: '`@rig-c/core` removed from `dependencies`. A checkout would not notice — it is already in node_modules — and the install is where the PNG codec, the coordinate door and the contour mesh outline functions have nothing to import',
   },
   'drop-psd': {
     names: ['ag-psd'],
@@ -783,7 +858,7 @@ function tarballFor(work: string, source: { kind: 'tree' } | { kind: 'registry';
   }
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { dependencies?: Record<string, string> };
   if (plant === 'drop-rigc' || plant === 'drop-psd') {
-    delete (pkg.dependencies ?? {})[plant === 'drop-rigc' ? 'rig-c' : 'ag-psd'];
+    delete (pkg.dependencies ?? {})[plant === 'drop-rigc' ? '@rig-c/core' : 'ag-psd'];
     writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`);
   } else if (plant === 'add-spine-core') {
     pkg.dependencies = { ...(pkg.dependencies ?? {}), [SPINE_CORE]: SPINE_CORE_PIN };
@@ -815,7 +890,7 @@ function tarballFor(work: string, source: { kind: 'tree' } | { kind: 'registry';
     if (gone.length === 0) faults.push(`SMOKE_PLANT_APPLIED: the plant left the packed path list unchanged at ${after.length} path(s)`);
     else evidence = `the plant took ${gone.join(', ')} out of the pack`;
   } else {
-    const dep = plant === 'drop-rigc' ? 'rig-c' : plant === 'drop-psd' ? 'ag-psd' : SPINE_CORE;
+    const dep = plant === 'drop-rigc' ? '@rig-c/core' : plant === 'drop-psd' ? 'ag-psd' : SPINE_CORE;
     const shipped = run('tar', ['-xzOf', second, 'package/package.json'], work);
     const deps = shipped.status === 0 ? ((JSON.parse(shipped.out) as { dependencies?: Record<string, string> }).dependencies ?? {}) : {};
     const applied = plant === 'add-spine-core' ? dep in deps : !(dep in deps);
@@ -888,9 +963,25 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, fetchedTgz?: strin
     if (!keep) rmSync(home, { recursive: true, force: true });
     return { faults, steps, notes, output };
   }
-  const installedPkg = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8')) as { version?: string; bin?: Record<string, string> };
+  const installedPkg = JSON.parse(readFileSync(join(pkgRoot, 'package.json'), 'utf8')) as { version?: string; bin?: Record<string, string>; dependencies?: Record<string, string> };
   for (const name of Object.keys(installedPkg.bin ?? {})) smokePackages[name] = PACKAGE;
   const installedVersion = installedPkg.version ?? '';
+  const coreFault = coreInstallFault(home);
+  if (coreFault !== null) fault('core-identity', coreFault);
+  else notes.push('exactly one @rig-c/core owns rigc in the fresh install');
+  if (spec.plant === 'none' && coreFault === null) {
+    const range = installedPkg.dependencies?.['@rig-c/core'];
+    const coreSpec = '@rig-c/core@' + range;
+    const beside = typeof range !== 'string' ? null : spec.installer === 'npm'
+      ? run('npm', ['install', coreSpec, '--no-audit', '--no-fund'], home)
+      : run('bun', ['add', coreSpec, '--backend=copyfile'], home);
+    if (beside !== null) output += beside.out;
+    const after = coreInstallFault(home);
+    if (beside === null || beside.status !== 0 || after !== null)
+      fault('core-identity', after ?? 'SMOKE_ONE_CORE: installing the declared canonical core beside parts failed');
+    else notes.push('a direct @rig-c/core dependency beside parts still has one core and one rigc owner');
+  }
+
 
   // --version, from the install, against the installed package.json.
   const version = run(bin, ['--version'], home);
@@ -1211,7 +1302,7 @@ cases:
   clean            a correct package installs; --version, layers (wrapper and PSD), sheet, check, compose, the contour mesh, an auto-mode rig, and @rig-c/play loading \`rig-parts build --all-sets\` output run from it
   unusual-path     the same, installed at an absolute path with spaces and non-ASCII in it
   drop-src-module  src/layers.ts out of the packed tree — the smoke has to go RED naming it
-  drop-rigc        rig-c out of \`dependencies\` — the smoke has to go RED naming it
+  drop-rigc        @rig-c/core out of \`dependencies\` — the smoke has to go RED naming it
   drop-psd         ag-psd out of \`dependencies\` — the smoke has to go RED naming it
   add-spine-core   @esotericsoftware/spine-core INTO \`dependencies\` — RED at the rigc entry
 `;
@@ -1293,6 +1384,7 @@ function main(): number {
     }
   }
 
+  checkCoreInstall();
   checkSmokeProcess();
   checkSmokeWithoutBun();
 

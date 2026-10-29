@@ -25,7 +25,7 @@ import { regionBone } from '../src/config.ts';
  *    posed, drawn on rig-c's `tools/plate.ts` (whose text is `tools/font5x7.ts`).
  *
  * Nothing under `src/` is changed or extended: every build goes through the package's own `autoSource`,
- * `contourMesh`, `autoReductionInput`, `runReduction` and `autoVerdict`, and rig-c's public `rig-c/mesh` entry.
+ * `contourMesh`, `autoReductionInput`, `runReduction` and `autoVerdict`, and rig-c's public `@rig-c/core/mesh` entry.
  *
  * Output: Markdown on standard output; each build's wall time on standard error. Exit 1 when the inputs are missing
  * or a build that must be measured was not; 0 otherwise.
@@ -43,8 +43,8 @@ import {
   type SkinningEnvelope,
   skinningEnvelopeBone,
   traceAlphaOutline,
-} from 'rig-c/mesh';
-import { Plate, type RGBA } from 'rig-c/tools/plate.ts';
+} from '@rig-c/core/mesh';
+import { Plate, type RGBA } from '@rig-c/core/tools/plate.ts';
 import { autoReductionInput, autoSource, autoVerdict, runReduction, terminationText } from '../src/automesh.ts';
 import { type BoneEntry, type CharacterConfig, loadConfig, type AutoSpec } from '../src/config.ts';
 import { type ContourMesh, contourMesh, type ContourRegion, growSilhouette } from '../src/contour.ts';
@@ -1157,7 +1157,7 @@ export function page(census: readonly CensusRow[], blink: CaseRun, face: CaseRun
   out.push(
     `Read off the installed rig-c ${installedRigc()} (\`src/meshreduce.ts\`, \`src/mesh.ts\`) and this package's \`src/contour.ts\`:`,
     '',
-    "- `reduceMesh` (`rig-c/mesh`): `protect.edges` takes any pair of source indices that is an edge of a source triangle (`REDUCE_INPUT_MISSING` otherwise) — interior edges included — and a step that leaves a protected edge no longer an edge is refused (`protect (a)`); the Delaunay post-pass never flips one. Both ends of a protected edge join the protected vertices (`protectionOf`), so a protected line keeps every vertex it has: nothing along it is thinned, and nothing holds a line's vertices to a deviation bound the way `MQ_BOUNDARY_DEVIATION` holds the hull's (build (iii)).",
+    "- `reduceMesh` (`@rig-c/core/mesh`): `protect.edges` takes any pair of source indices that is an edge of a source triangle (`REDUCE_INPUT_MISSING` otherwise) — interior edges included — and a step that leaves a protected edge no longer an edge is refused (`protect (a)`); the Delaunay post-pass never flips one. Both ends of a protected edge join the protected vertices (`protectionOf`), so a protected line keeps every vertex it has: nothing along it is thinned, and nothing holds a line's vertices to a deviation bound the way `MQ_BOUNDARY_DEVIATION` holds the hull's (build (iii)).",
     '- The source must be one loop (`REDUCE_SOURCE_NOT_ONE_LOOP`, `unsupported-topology`): an interior opening has to be spanned by triangles, as the filled-silhouette source spans it.',
     "- No contour builder takes an interior line. rig-c's `buildContourMesh` triangulates the traced outline alone (`earClip`). This package's `contourMesh` places declared interior points (regions, the background lattice) and triangulates them constrained-Delaunay against the outline only; a polygon region's boundary gets points on it, and its edges are not constraints — at the case's spacing the triangulation contains only part of each ring (the search above), and two footprints whose outlines cross (a lash over an eyewhite) cannot both be lines without a vertex at each crossing, which nothing places.",
     '- The gap, in two halves: (a) a source builder that takes named interior polylines as constrained edges with their vertices — crossings resolved into vertices; (b) in `reduceMesh`, a declaration that keeps a line as a line while its vertices are thinned under a deviation bound, as the hull is. `protect.edges` is the all-or-nothing half of (b).',

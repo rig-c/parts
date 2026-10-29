@@ -37,9 +37,9 @@
  */
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import { Plate, type RGBA } from 'rig-c/tools/plate.ts';
-import type { AlphaMask, MeshQualityReport, MotionSchedule } from 'rig-c/mesh';
-import { compareMeshesInMotion, type MotionComparisonInput } from 'rig-c/meshcompare';
+import { Plate, type RGBA } from '@rig-c/core/tools/plate.ts';
+import type { AlphaMask, MeshQualityReport, MotionSchedule } from '@rig-c/core/mesh';
+import { compareMeshesInMotion, type MotionComparisonInput } from '@rig-c/core/meshcompare';
 import { idleSchedule } from '../src/automotion.ts';
 import { checkStage, gateThroughRigc, RIGC_MODEL_DOCUMENT, rigStage } from '../src/build.ts';
 import { type CheckReport, findRigc, type RigcRunner } from '../src/check.ts';

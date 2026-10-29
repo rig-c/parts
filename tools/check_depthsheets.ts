@@ -1,11 +1,11 @@
 /** #773 controls: hand-computable scalar grids, actual readers and Core gate. */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { compile, f32 } from 'rig-c/compile';
-import { parseMotionSpec } from 'rig-c/src/motion.ts';
-import { CompileError } from 'rig-c/src/errors.ts';
-import type { MotionSpec } from 'rig-c/src/types.ts';
-import { parseRigSpec, type RigSpec } from 'rig-c/src/rig.ts';
+import { compile, f32 } from '@rig-c/core/compile';
+import { parseMotionSpec } from '@rig-c/core/src/motion.ts';
+import { CompileError } from '@rig-c/core/src/errors.ts';
+import type { MotionSpec } from '@rig-c/core/src/types.ts';
+import { parseRigSpec, type RigSpec } from '@rig-c/core/src/rig.ts';
 import { buildRig } from '../src/rig.ts';
 import { assembleStage, readRigInputs, rigOutputTexts } from '../src/build.ts';
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -211,7 +211,7 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
   say('DZ31_MISSING_EASINGS_READER_RED', missingCode === 'CE_MOTION_FIELD_SHAPE', `actual reader refuses the previous missing-field input with ${missingCode}`);
   writeFileSync(join(dir, 'motion.json'), JSON.stringify(motion));
   writeFileSync(join(dir, 'rig.json'), JSON.stringify(rig));
-  const run = spawnSync(process.execPath, [resolve('node_modules/rig-c/cli.ts'), 'build', '--rig', join(dir, 'rig.json'), '--motion', join(dir, 'motion.json'), '--out', join(dir, 'built'), '--profile', 'rig-play', '--pack'], { encoding: 'utf8' });
+  const run = spawnSync(process.execPath, [resolve('node_modules/@rig-c/core/cli.ts'), 'build', '--rig', join(dir, 'rig.json'), '--motion', join(dir, 'motion.json'), '--out', join(dir, 'built'), '--profile', 'rig-play', '--pack'], { encoding: 'utf8' });
   writeFileSync(join(dir, 'core.log'), run.stdout + run.stderr);
   say('DZ24_ACTUAL_CORE_GENERATOR_GATE', run.status === 0, `actual Core build --profile rig-play --pack exit${run.status}; raw=${JSON.stringify({ stdout: run.stdout, stderr: run.stderr })}`);
   if (run.status !== 0) return;
@@ -377,7 +377,7 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
   mkdirSync(join(t25Dir, 'images'), { recursive: true });
   for (const [name, img] of built25.images) writePng(join(t25Dir, 'images', name), img);
   for (const [name, text] of rigOutputTexts(built25, null)) writeFileSync(join(t25Dir, name), text);
-  const run25 = spawnSync(process.execPath, [resolve('node_modules/rig-c/cli.ts'), 'build', '--rig', join(t25Dir, 'rig.json'), '--motion', join(t25Dir, 'motion.json'), '--out', join(t25Dir, 'built'), '--profile', 'rig-play'], { encoding: 'utf8' });
+  const run25 = spawnSync(process.execPath, [resolve('node_modules/@rig-c/core/cli.ts'), 'build', '--rig', join(t25Dir, 'rig.json'), '--motion', join(t25Dir, 'motion.json'), '--out', join(t25Dir, 'built'), '--profile', 'rig-play'], { encoding: 'utf8' });
   const boneParents25 = new Map(built25.rig.bones.map((b) => [b.name, b.parent]));
   const faceAtt25 = built25.rig.skins.default.face?.face;
   const hfWeights25 = built25.rig.skins.default.hair_front?.hair_front;
@@ -420,7 +420,7 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
   mkdirSync(join(t25RegDir, 'images'), { recursive: true });
   for (const [name, img] of built25Region.images) writePng(join(t25RegDir, 'images', name), img);
   for (const [name, text] of rigOutputTexts(built25Region, null)) writeFileSync(join(t25RegDir, name), text);
-  const run25Reg = spawnSync(process.execPath, [resolve('node_modules/rig-c/cli.ts'), 'build', '--rig', join(t25RegDir, 'rig.json'), '--motion', join(t25RegDir, 'motion.json'), '--out', join(t25RegDir, 'built'), '--profile', 'rig-play'], { encoding: 'utf8' });
+  const run25Reg = spawnSync(process.execPath, [resolve('node_modules/@rig-c/core/cli.ts'), 'build', '--rig', join(t25RegDir, 'rig.json'), '--motion', join(t25RegDir, 'motion.json'), '--out', join(t25RegDir, 'built'), '--profile', 'rig-play'], { encoding: 'utf8' });
   const skel25Reg = JSON.parse(readFileSync(join(t25RegDir, 'built/skeleton.json'), 'utf8')) as typeof skel25;
   const regBang0YawPos25 = skel25Reg.animations.turn?.bones?.bang_c0?.translatex?.[3]?.value ?? 0;
   const regBang0PitchPos25 = skel25Reg.animations.tilt?.bones?.bang_c0?.translatey?.[3]?.value ?? 0;
@@ -447,7 +447,7 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
   mkdirSync(join(t25DemoDir, 'images'), { recursive: true });
   for (const [name, img] of built25Demo.images) writePng(join(t25DemoDir, 'images', name), img);
   for (const [name, text] of rigOutputTexts(built25Demo, null)) writeFileSync(join(t25DemoDir, name), text);
-  const run25Demo = spawnSync(process.execPath, [resolve('node_modules/rig-c/cli.ts'), 'build', '--rig', join(t25DemoDir, 'rig.json'), '--motion', join(t25DemoDir, 'motion.json'), '--out', join(t25DemoDir, 'built'), '--profile', 'rig-play'], { encoding: 'utf8' });
+  const run25Demo = spawnSync(process.execPath, [resolve('node_modules/@rig-c/core/cli.ts'), 'build', '--rig', join(t25DemoDir, 'rig.json'), '--motion', join(t25DemoDir, 'motion.json'), '--out', join(t25DemoDir, 'built'), '--profile', 'rig-play'], { encoding: 'utf8' });
   const demoParents = new Map(built25Demo.rig.bones.map((b) => [b.name, b.parent]));
   const demoWeights = built25Demo.rig.skins.default.hair_front?.hair_front;
   const demoAllUnderUnit =
@@ -740,7 +740,7 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
   mkdirSync(join(tb25Dir, 'images'), { recursive: true });
   for (const [name, img] of builtBody25.images) writePng(join(tb25Dir, 'images', name), img);
   for (const [name, text] of rigOutputTexts(builtBody25, null)) writeFileSync(join(tb25Dir, name), text);
-  const runBody25 = spawnSync(process.execPath, [resolve('node_modules/rig-c/cli.ts'), 'build', '--rig', join(tb25Dir, 'rig.json'), '--motion', join(tb25Dir, 'motion.json'), '--out', join(tb25Dir, 'built'), '--profile', 'rig-play'], { encoding: 'utf8' });
+  const runBody25 = spawnSync(process.execPath, [resolve('node_modules/@rig-c/core/cli.ts'), 'build', '--rig', join(tb25Dir, 'rig.json'), '--motion', join(tb25Dir, 'motion.json'), '--out', join(tb25Dir, 'built'), '--profile', 'rig-play'], { encoding: 'utf8' });
   const compiledBody25 = compile({ rigPath: join(tb25Dir, 'rig.json'), motionPath: join(tb25Dir, 'motion.json'), outDir: join(tb25Dir, 'sdk') });
   const topDepthRep = compiledBody25.meshes.find((m) => m.slot === 'topwear')?.depth;
   const botDepthRep = compiledBody25.meshes.find((m) => m.slot === 'bottomwear')?.depth;
@@ -807,7 +807,7 @@ export function runDepthSheetCoreChecks(dir: string, say: Say): void {
   mkdirSync(join(tbPreDir, 'images'), { recursive: true });
   for (const [name, img] of builtPreChest.images) writePng(join(tbPreDir, 'images', name), img);
   for (const [name, text] of rigOutputTexts(builtPreChest, null)) writeFileSync(join(tbPreDir, name), text);
-  const runPreChest = spawnSync(process.execPath, [resolve('node_modules/rig-c/cli.ts'), 'build', '--rig', join(tbPreDir, 'rig.json'), '--motion', join(tbPreDir, 'motion.json'), '--out', join(tbPreDir, 'built'), '--profile', 'rig-play'], { encoding: 'utf8' });
+  const runPreChest = spawnSync(process.execPath, [resolve('node_modules/@rig-c/core/cli.ts'), 'build', '--rig', join(tbPreDir, 'rig.json'), '--motion', join(tbPreDir, 'motion.json'), '--out', join(tbPreDir, 'built'), '--profile', 'rig-play'], { encoding: 'utf8' });
   say(
     'DZ53_BODY_TURN_25D_PROJECTS_TORSO_GRIDS_INDEPENDENT_OF_HEAD_AND_GATES_CORE',
     runBody25.status === 0 &&

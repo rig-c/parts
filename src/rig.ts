@@ -138,15 +138,15 @@ import { explicitAttachment, type ExplicitMeshReport } from './explicitmesh.ts';
  * order the objects are built in, and every number is rounded by `pyRound`).
  */
 import { type AutoSpec, type BoneEntry, type InfluenceMeshSpec, type WeightRule, type CharacterConfig, type ConfigConstraint, type ConfigStop, CONSTRAINT_FOLLOWS, constraintForRig, contourRegionsOf, type ContourSpec, DEFAULT_BUST_BONE_L, DEFAULT_BUST_BONE_R, type Point, type RibsSpec, ROOT_BONE, stopForRig, turnRidersByBone, weightsABone } from './config.ts';
-import { RUNTIME_PI } from 'rig-c/src/core/world.ts';
+import { RUNTIME_PI } from '@rig-c/core/src/core/world.ts';
 import { type BoneTransform, computeExactFrameTransforms, computeWorldTransforms, cropToSpineY, normaliseDegrees, paintingToSetupPoint, setupToPaintingPoint, toBoneLocal, toWorld } from './coords.ts';
 import { type Problem, refuseIfAny, PartsError } from './errors.ts';
 import { recordedFocusProblems } from './setfocus.ts';
 import { eyeLineDegrees } from './headframe.ts';
-import type { RigBoneInherit, RigStop } from 'rig-c/src/rig.ts';
-import { f32 } from 'rig-c/compile';
-import type { MeshCounts, MeshQualityReport, MeshReductionInput, MotionAmplitude, ReducedMesh, Termination } from 'rig-c/mesh';
-import { bindWeightedVertices, buildGridMesh, buildSegmentsLattice, type EntrySegment, influenceShares, segmentDistance as rigcSegmentDistance, type SegmentsLattice, type SegmentsLatticeReport } from 'rig-c/mesh';
+import type { RigBoneInherit, RigStop } from '@rig-c/core/src/rig.ts';
+import { f32 } from '@rig-c/core/compile';
+import type { MeshCounts, MeshQualityReport, MeshReductionInput, MotionAmplitude, ReducedMesh, Termination } from '@rig-c/core/mesh';
+import { bindWeightedVertices, buildGridMesh, buildSegmentsLattice, type EntrySegment, influenceShares, segmentDistance as rigcSegmentDistance, type SegmentsLattice, type SegmentsLatticeReport } from '@rig-c/core/mesh';
 import { type AmplitudeRow, amplitudeRow, partAmplitude, withAmplitude } from './autoamplitude.ts';
 import { type ResidualRow, residualRow, slotEnvelope, withSkinning } from './autoenvelope.ts';
 import { type AutoMotionCase, type AutoSearch, DEFORM_MAY_FOLD_WHY, type MotionDeformation, type StimulusPose, stimulusAnimationNames } from './automotion.ts';

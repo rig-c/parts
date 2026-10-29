@@ -34,7 +34,7 @@
  * bitstream encoder, and none ships here.
  */
 import { deflateSync } from 'node:zlib';
-import { PNG_SIGNATURE, pngChunk } from 'rig-c/tools/plate.ts';
+import { PNG_SIGNATURE, pngChunk } from '@rig-c/core/tools/plate.ts';
 import { histogram, mapToPalette, medianCut, type PaletteError, paletteError, type Rgba } from './palette.ts';
 import type { Raster } from './raster/types.ts';
 

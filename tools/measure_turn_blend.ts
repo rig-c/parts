@@ -1,7 +1,7 @@
 /** Reproducible synthetic seam receipt. Rendering is an explicit Nova-only invocation. */
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { readModel, poseRawAnimation, poseRawSetup } from 'rig-c/core';
+import { readModel, poseRawAnimation, poseRawSetup } from '@rig-c/core/core';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +17,7 @@ if (args.includes('--help')) {
 }
 const at = args.indexOf('--out'), out = at < 0 ? undefined : args[at + 1];
 if (!out || args.some((a,i) => i !== at && i !== at + 1 && a !== '--render')) throw new Error('supply --out <private-directory> [--render]');
-const cli = fileURLToPath(import.meta.resolve('rig-c/cli'));
+const cli = fileURLToPath(import.meta.resolve('@rig-c/core/cli'));
 function run(argv: string[], log: string): void {
   const r = spawnSync(process.execPath, [cli, ...argv], {encoding:'utf8',maxBuffer:1<<26});
   writeFileSync(log,r.stdout+r.stderr); console.log(JSON.stringify({command:[process.execPath,cli,...argv],exit:r.status,log}));

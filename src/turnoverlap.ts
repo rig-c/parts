@@ -1,5 +1,5 @@
 /** Source-alpha overlap selects turn fields, never skin bindings. */
-import { DRAWN_ALPHA } from 'rig-c/src/passthrough.ts';
+import { DRAWN_ALPHA } from '@rig-c/core/src/passthrough.ts';
 import { computeWorldTransforms, setupToPaintingPoint, toWorld } from './coords.ts';
 import type { Depth25DTurnOptions } from './turn.ts';
 import type { Problem } from './errors.ts';

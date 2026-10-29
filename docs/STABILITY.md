@@ -241,7 +241,7 @@ keeps complete canonical raw pair data (boxes/cut metadata included), omitting
 `picture` unless its image exists. Semantic signatures preserve original source
 attachment UVs/topology/weights, own image content and world vertices/colour,
 not atlas pages/UVs or global piece ordinals. Unknown/no-art support stays conservative.
-Renderer metadata and exact raster reads use the promised `rig-c/render-shared` entry (rig-c >=2.69.0 <3.0.0). It registers no Spine runtime; where that runtime resolves from rig-c's own package root, the existing `rig-c/render` entry registers the official Spine side explicitly. An install without Spine keeps rig-c's own candidate chooser and gate; candidate or loader failures never select a guessed fallback.
+Renderer metadata and exact raster reads use the promised `@rig-c/core/render-shared` entry (rig-c >=2.69.0 <3.0.0). It registers no Spine runtime; where that runtime resolves from rig-c's own package root, the existing `@rig-c/core/render` entry registers the official Spine side explicitly. An install without Spine keeps rig-c's own candidate chooser and gate; candidate or loader failures never select a guessed fallback.
 
 An unavailable, nonfinite, unrepresentable or oversized union, or nonempty official pinned.outside, refuses `CHECK_SEAM_DOMAIN`. Geometry margins outside the authored canvas are included in U, not treated as opaque-clip evidence. State-by-state geometry reads retain bounds/identities rather than all decoded pages or poses. `--keep-stills` keeps
 canonical frames in `setup_still/` and fitted diagnostics in `setup_still_auto/`.
@@ -300,20 +300,20 @@ in the package.
 
 ## rig-c
 
-`dependencies` takes `rig-c` `^2.72.0`: 2.72.0 or any later 2.x. Bun 1.4 or later
+`dependencies` takes `@rig-c/core` `^2.72.0`: 2.72.0 or any later 2.x. Bun 1.4 or later
 is the declared floor (`engines.bun` `>=1.4.0`; older 1.4 releases are not tested in
 CI, which runs `latest`, and compatibility with an older 1.4 release is handled when
 reported as an issue). What this package relies on in rig-c, every import
 read off `src/` and `cli.ts`:
 
-- the named entries `rig-c/mesh` (the outline functions, `measureAuthoredMeshFit`,
+- the named entries `@rig-c/core/mesh` (the outline functions, `measureAuthoredMeshFit`,
   `reduceMesh`, `skinningEnvelopeBone`, `writeMeshQualityReport` and their types)
-  and `rig-c/meshcompare` (`compareMeshesInMotion`);
-- the deep paths its `exports` map carries: `rig-c/src/rig.ts` (`parseRigSpec`,
-  `RIG_SPEC_VERSION`, the constraint keys), `rig-c/src/errors.ts`,
-  `rig-c/src/png.ts`, `rig-c/src/transform.ts` (the y flip, through
-  `src/coords.ts` only), `rig-c/tools/plate.ts` (the PNG codec) and
-  `rig-c/tools/font5x7.ts`;
+  and `@rig-c/core/meshcompare` (`compareMeshesInMotion`);
+- the deep paths its `exports` map carries: `@rig-c/core/src/rig.ts` (`parseRigSpec`,
+  `RIG_SPEC_VERSION`, the constraint keys), `@rig-c/core/src/errors.ts`,
+  `@rig-c/core/src/png.ts`, `@rig-c/core/src/transform.ts` (the y flip, through
+  `src/coords.ts` only), `@rig-c/core/tools/plate.ts` (the PNG codec) and
+  `@rig-c/core/tools/font5x7.ts`;
 - the `rigc` command: `build` and `render`, and `--version`, whose `entry:` line
   says which validator gated a build (`check.json`'s `rigc_entry`).
 

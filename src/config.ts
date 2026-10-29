@@ -88,7 +88,7 @@ import type { DepthConfig } from './depthsheets.ts';
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { RIG_BONE_INHERIT, RIG_SKIN_CONSTRAINT_KEYS, type RigBoneInherit, type RigConstraint, type RigSkinConstraintKey, type RigStop } from 'rig-c/src/rig.ts';
+import { RIG_BONE_INHERIT, RIG_SKIN_CONSTRAINT_KEYS, type RigBoneInherit, type RigConstraint, type RigSkinConstraintKey, type RigStop } from '@rig-c/core/src/rig.ts';
 import { pyRound } from './round.ts';
 import { motionSeamProblems, type MotionSeamDeclaration } from './motionseams.ts';
 import { REQUIREMENTS_SPEC } from './requirements.ts';
@@ -360,7 +360,7 @@ export type MeshSpec = (LatticeMeshSpec | ContourMeshSpec | AutoMeshSpec | Influ
 /**
  * One mesh in the influence mode (issue #378): rig-c's `segments` lattice over the part at `cell` px, every vertex
  * pulled by every chain link within `radius` px of it, falling to zero there (`shape`), the strongest `max` kept —
- * `buildSegmentsLattice` and `influenceShares` from `rig-c/mesh`, promised for this call (rig-c/core#1450), so the
+ * `buildSegmentsLattice` and `influenceShares` from `@rig-c/core/mesh`, promised for this call (rig-c/core#1450), so the
  * rule is core's and the mesh is written with explicit weights like every other mode (`src/rig.ts`). `segments`
  * names the links as in every mode; each entry is one of rig-c's `bones` entries, which `across: false` keeps apart.
  * `hold_tip: true` (issue #615, optional, written by `propose --cloth` from the recipe's `split.hold_tip`) smooths the
@@ -582,7 +582,7 @@ export type ContourRegionSpec =
 /**
  * One mesh in the automatic mode (issue #126, item 2): the contour mesh over
  * the part at alpha 1 and above is the source, and rig-c's `reduceMesh`
- * (`rig-c/mesh`, 2.28.x) refines it inside the declared regions and
+ * (`@rig-c/core/mesh`, 2.28.x) refines it inside the declared regions and
  * removes what the declared bounds allow (`src/automesh.ts`); the result is
  * kept only when its motion passes `motion` (`src/automotion.ts`). Every quality
  * input is a number the author wrote, named as rig-c's contract

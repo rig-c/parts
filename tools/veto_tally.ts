@@ -3,7 +3,7 @@
  * (issue #126, rig-c 2.31.0, rigc#1295). rig-c's report does not carry the
  * count: `changes.acceptedAt` lists the operations taken, the termination the
  * last refusal, and `changes.retriangulation.refusedBy` the post-pass's. So
- * this tool re-runs the very input through `reduceMeshWith` — on `rig-c/mesh`
+ * this tool re-runs the very input through `reduceMeshWith` — on `@rig-c/core/mesh`
  * by `export *` and documented there as *internal, not promised* — with an
  * attempt observer, and counts the removal-phase attempts whose refusal is
  * named `MQ_SKINNING_RESIDUAL`. `reduceMeshWith` over the input's own rasters
@@ -16,8 +16,8 @@
  * rig-c's promised surface, and the row says the count is not in rig-c's
  * report rather than carrying it.
  */
-import { type AttemptRecord, type MeshReductionInput, reduceMesh, reduceMeshWith, writeMeshQualityReport } from 'rig-c/mesh';
-import { artRastersOf, stepRastersOf } from 'rig-c/src/meshrasters.ts';
+import { type AttemptRecord, type MeshReductionInput, reduceMesh, reduceMeshWith, writeMeshQualityReport } from '@rig-c/core/mesh';
+import { artRastersOf, stepRastersOf } from '@rig-c/core/src/meshrasters.ts';
 
 /** One reduction's vetoes: removal-phase attempts refused by the residual, by kind, and the post-pass's refusal when it names the residual. */
 export interface VetoTally {

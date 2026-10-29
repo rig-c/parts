@@ -52,6 +52,15 @@ The upstream package was renamed on npm at 2.20.4 with the same `exports` map
 installed the former upstream name beside this package installs nothing more:
 `rig-c` comes as a dependency. No Spine runtime is a dependency, as in 0.16.0.
 
+### Scoped core dependency
+
+The current dependency is `@rig-c/core` at `^2.72.0`, replacing the literal
+`rig-c` dependency described for earlier versions above. The alias remains
+published. Imports retain their subpaths: `rig-c/mesh` becomes
+`@rig-c/core/mesh`, and `rig-c/core` becomes `@rig-c/core/core`. The command
+remains `rigc`. Installing the canonical core beside this package no longer
+adds the legacy package as a second compiler and command owner.
+
 ### The config
 
 **A config that built on 0.16.0 loads unchanged.** The loader's only change between

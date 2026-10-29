@@ -34,7 +34,7 @@ import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
-import { Plate, type RGBA } from 'rig-c/tools/plate.ts';
+import { Plate, type RGBA } from '@rig-c/core/tools/plate.ts';
 import { DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE } from '../src/assemble.ts';
 import { build, type BuildResult, RIGC_MODEL_DOCUMENT } from '../src/build.ts';
 import { DEFAULT_PAGE_EDGES, findRigc, type RigcRunner } from '../src/check.ts';
@@ -535,7 +535,7 @@ export function gridFrame(id: string | null, fps: number = IDLE_FPS): number | n
 /**
  * The picture of one example: per mesh part a row — the tracked mesh and the automatic one, wires over the part's
  * padded image as each build packed it, counts under each — then the idle's worst grid frame for the example's three
- * parts with the largest motion reading, posed through rig-c's `rig-c/render` (`spinePoser`, spine-core) from the kept
+ * parts with the largest motion reading, posed through rig-c's `@rig-c/core/render` (`spinePoser`, spine-core) from the kept
  * builds: the tracked mesh in grey and the automatic one in blue at that frame, the frame's reading under it.
  */
 export async function examplePicture(ex: ExampleRow, cells: readonly CellRow[], keepDir: string): Promise<Plate> {
@@ -603,7 +603,7 @@ function jsonIn(dir: string): string {
 /** Both kept builds posed at each part's worst grid frame through rig-c's spine-core poser; the part's world vertices, y down. */
 async function worstFrames(key: string, parts: ReadonlyArray<{ part: string; cell: CellRow }>, tDir: string, aDir: string): Promise<Array<{ tracked: Wire; auto: Wire; x0: number; y0: number; w: number; h: number; caption: string[] }>> {
   if (parts.length === 0) return [];
-  const { loadPosedSkeleton, spinePoser } = await import('rig-c/render');
+  const { loadPosedSkeleton, spinePoser } = await import('@rig-c/core/render');
   const atlas = (dir: string): string => join(dir, readdirSync(dir).find((n) => n.endsWith('.atlas')) as string);
   const poseAt = (dir: string, frame: number): Map<string, number[]> => {
     const poser = spinePoser(loadPosedSkeleton(join(dir, jsonIn(dir)), atlas(dir), `production_trial poses ${key}`));
@@ -721,7 +721,7 @@ export function page(cells: readonly CellRow[], examples: readonly ExampleRow[],
   L.push('');
   for (const p of pictures) L.push(`- [${basename(p)}](${basename(p)})`);
   L.push('');
-  L.push('Each: per mesh part, the tracked mesh (grey wires) beside the automatic one (blue; grey when the part was left on its tracked mesh), over the part\'s padded image as each build packed it, counts under each; then, for the example\'s three automatic parts with the largest motion reading, both builds posed through rig-c\'s `rig-c/render` (`spinePoser`, spine-core) at the part\'s worst grid frame of the idle (tracked grey, automatic blue). The motion reading is the automatic mesh against its own unreduced source, not against the tracked mesh.');
+  L.push('Each: per mesh part, the tracked mesh (grey wires) beside the automatic one (blue; grey when the part was left on its tracked mesh), over the part\'s padded image as each build packed it, counts under each; then, for the example\'s three automatic parts with the largest motion reading, both builds posed through rig-c\'s `@rig-c/core/render` (`spinePoser`, spine-core) at the part\'s worst grid frame of the idle (tracked grey, automatic blue). The motion reading is the automatic mesh against its own unreduced source, not against the tracked mesh.');
   L.push('');
   L.push('## Re-running this evidence');
   L.push('');

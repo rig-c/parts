@@ -69,7 +69,7 @@ import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import type { MeasureRow, MeshQualityReport, MeshReductionInput } from 'rig-c/mesh';
+import type { MeasureRow, MeshQualityReport, MeshReductionInput } from '@rig-c/core/mesh';
 import { DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE } from '../src/assemble.ts';
 import { type Reducer, type ReductionResult, reductionKey, reuseReductions, runReduction } from '../src/automesh.ts';
 import { motionInput, motionVerdict, runComparison } from '../src/automotion.ts';
@@ -287,7 +287,7 @@ export const cell = (x: MeasureRow | undefined): string => (x === undefined || x
 
 /** The installed rig-c's version, as its package says. */
 export function installedRigc(): string {
-  return (JSON.parse(readFileSync(join(ROOT, 'node_modules', 'rig-c', 'package.json'), 'utf8')) as { version: string }).version;
+  return (JSON.parse(readFileSync(join(ROOT, 'node_modules', '@rig-c', 'core', 'package.json'), 'utf8')) as { version: string }).version;
 }
 
 /** The stage's verdict on one part in a few words: accepted outright, accepted at a replayed step, or the refusal's code. */

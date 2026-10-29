@@ -161,7 +161,7 @@ import {
   simplifyClosedPolygon,
   traceAlphaOutline,
   traceOutline,
-} from 'rig-c/mesh';
+} from '@rig-c/core/mesh';
 
 /** Grid units per pixel: every coordinate this module writes is an integer multiple of 1/GRID px. */
 export const GRID = 256;

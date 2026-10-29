@@ -52,7 +52,7 @@
  * (`src/build.ts`), the one place this package runs rigc. Pure: no clock, no
  * randomness, nothing read or written.
  */
-import type { AcceptedOperation, MeasureRow, MeshQualityReport, MotionSchedule, ReducedMesh } from 'rig-c/mesh';
+import type { AcceptedOperation, MeasureRow, MeshQualityReport, MotionSchedule, ReducedMesh } from '@rig-c/core/mesh';
 import { autoVerdict, terminationText } from './automesh.ts';
 import { idleSchedule, localRow, motionRowText } from './automotion.ts';
 import type { Problem } from './errors.ts';

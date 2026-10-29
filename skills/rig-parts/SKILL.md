@@ -218,4 +218,4 @@ leaves to you:
 
 A `RIG_RIGC_GREEN` or `CHECK_RIGC_GREEN`
 line quotes rig-c's own assertion; rig-c's guide for those is
-`node_modules/rig-c/docs/AUTHORING.md`, and its `rigc` skill covers the compiler.
+`node_modules/@rig-c/core/docs/AUTHORING.md`, and its `rigc` skill covers the compiler.

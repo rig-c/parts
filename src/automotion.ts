@@ -2,7 +2,7 @@
  * The motion gate of the automatic mesh mode (issue #126, item 3): a reduced
  * mesh is written only when it moves like the mesh it was reduced from, on the
  * rig's own idle, measured by rig-c's `compareMeshesInMotion`
- * (`rig-c/meshcompare`, 2.29.x) and held to the bounds the author wrote in
+ * (`@rig-c/core/meshcompare`, 2.29.x) and held to the bounds the author wrote in
  * `meshes.<part>.auto.motion` (`AutoMotionSpec`, `src/config.ts`).
  *
  * ## What is compared
@@ -83,8 +83,8 @@
  *
  * Pure: no clock, no randomness, nothing read or written.
  */
-import { type AcceptedOperation, MeshReductionError, type AlphaMask, type ArtFitBounds, type MeasureRow, type MeshQualityReport, type MotionAmplitude, type MotionBounds, type MotionSchedule, writeMeshQualityReport } from 'rig-c/mesh';
-import { compareMeshesInMotion, comparePreparedMotion, prepareMotionReference, type MotionComparisonInput, type MotionReferenceInput, type PreparedMotionReference } from 'rig-c/meshcompare';
+import { type AcceptedOperation, MeshReductionError, type AlphaMask, type ArtFitBounds, type MeasureRow, type MeshQualityReport, type MotionAmplitude, type MotionBounds, type MotionSchedule, writeMeshQualityReport } from '@rig-c/core/mesh';
+import { compareMeshesInMotion, comparePreparedMotion, prepareMotionReference, type MotionComparisonInput, type MotionReferenceInput, type PreparedMotionReference } from '@rig-c/core/meshcompare';
 import type { AutoMotionSpec } from './config.ts';
 import type { Problem } from './errors.ts';
 import { IDLE_FPS, type MotionSpec, type MotionTrack } from './motion.ts';

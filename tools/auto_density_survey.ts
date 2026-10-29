@@ -64,7 +64,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import type { MeshReductionInput, ReducedMesh } from 'rig-c/mesh';
+import type { MeshReductionInput, ReducedMesh } from '@rig-c/core/mesh';
 import { runReduction, terminationText } from '../src/automesh.ts';
 import { findRigc } from '../src/check.ts';
 import { type AutoDensityRegionSpec, type AutoSpec, loadConfig, type Point } from '../src/config.ts';

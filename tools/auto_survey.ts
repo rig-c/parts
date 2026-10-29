@@ -34,7 +34,7 @@
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import type { AlphaMask } from 'rig-c/mesh';
+import type { AlphaMask } from '@rig-c/core/mesh';
 import { autoReductionInput, autoSource, autoVerdict, gatedFailures, runReduction, terminationText, worstResidual, residuals } from '../src/automesh.ts';
 import { parseConfig } from '../src/config.ts';
 import { contourMesh } from '../src/contour.ts';

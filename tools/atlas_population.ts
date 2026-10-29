@@ -102,7 +102,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { AtlasAttachmentLoader, Physics, Skeleton, SkeletonJson, TextureAtlas, Vector2 } from '@esotericsoftware/spine-core';
-import { headerBoxNumber } from 'rig-c/src/compile.ts';
+import { headerBoxNumber } from '@rig-c/core/src/compile.ts';
 import { opaqueShare, SPINEBOY_YARDSTICK } from '../src/check.ts';
 import { readPng } from '../src/raster/png.ts';
 
