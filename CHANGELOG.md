@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.79.2](https://github.com/rig-c/parts/compare/v1.79.1...v1.79.2) (2026-10-29)
+
+
+### Bug Fixes
+
+* **assemble:** under yield_refused, finish the accepted core ring around a yielded component to the painting ([#843](https://github.com/rig-c/parts/issues/843)) ([ec9279b](https://github.com/rig-c/parts/commit/ec9279bf736e31d34df284cc649adb57511334c8))
+
 ## [1.79.1](https://github.com/rig-c/parts/compare/v1.79.0...v1.79.1) (2026-10-29)
 
 
