@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.79.1](https://github.com/rig-c/parts/compare/v1.79.0...v1.79.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* **depth:** keep the edge texel for visible samples less than one source pixel outside a crop ([#838](https://github.com/rig-c/parts/issues/838)) ([faef876](https://github.com/rig-c/parts/commit/faef87636ddb80ce08a97371d428ff6e2e4064f5))
+
 ## [1.79.0](https://github.com/rig-c/parts/compare/v1.78.0...v1.79.0) (2026-10-29)
 
 
