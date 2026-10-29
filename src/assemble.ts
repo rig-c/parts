@@ -1,3 +1,4 @@
+import { paintingExtensionMasks, paintingExtensionProblems, type PaintingExtension } from './paintingextension.ts';
 import { AUTOMATIC_WRITERS as AW, compactValueBaseline, pixelProvenance, rgbaEqual, type ValueBaseline } from './provenance.ts';
 import { bindDepthRun, copyDepthMaterial, registerDepthRun, transportPartDepth, type DepthConfig, type RegisteredDepth } from './depthsheets.ts';
 /**
@@ -318,7 +319,7 @@ export interface AssembleInput {
   depth?: DepthConfig;
   /** Config-relative user sheet paths; caller supplies its actual base. */
   depthBase?: string;
-  /** The painting. Its alpha is ignored, as the reference's `convert("RGB")` drops it. */
+  /** The painting. Legacy RGB stages ignore alpha; explicit paintingExtension requires opaque source alpha. */
   source: Raster;
   full: LayerSet;
   head: LayerSet;
@@ -367,6 +368,8 @@ export interface AssembleInput {
   yieldRefused?: boolean;
   /** Plan parts whose own samples survive source re-take beneath soft front cover. */
   keepUnderOccluders?: readonly string[];
+  /** Base painting only; named final parts, explicit band and path bound (#848). */
+  paintingExtension?: readonly PaintingExtension[];
   /**
    * Issue #587: rig pixels taken out of named parts once the cuts and the limbs are made, before the fringe pass and
    * every figure a part's record holds — each entry clears `part`'s pixels (alpha, colour and region) where `mask` is
@@ -4631,6 +4634,7 @@ export function checkSingleRun(full: LayerSet, plan: readonly PlanEntry[] | null
  */
 export function assemble(input: AssembleInput): AssembleResult {
   const { source, extend, patches, seamRule, projectRule } = input;
+  if (input.paintingExtension !== undefined) refuseIfAny(paintingExtensionProblems(input.paintingExtension));
   const single = input.single === true;
   const frame = checkGeometry(
     { sourceW: source.width, sourceH: source.height, resolution: input.resolution, headBox: input.headBox, rigScale: input.rigScale, ...(single ? { single: true } : {}) },
@@ -5423,6 +5427,32 @@ export function assemble(input: AssembleInput): AssembleResult {
       reading.finalHolders = [...holders].map(([part, px]) => ({ part, px }));
     }
   }
+  // #848: read one frozen final stack after every ownership-changing pass.
+  // The ordinary RGB painting still ignores alpha, as before. Only this opt-in
+  // stage reads separately resampled painting alpha; its RGB is never used.
+  const paintingAlpha = (input.paintingExtension?.length ?? 0) === 0 ? null : resize(source, W, H, 'lanczos3');
+  const paintingGains = paintingAlpha === null ? new Map<string, Mask>()
+    : paintingExtensionMasks(input.paintingExtension!, stack.map(p => ({ name: p.record.name, image: p.image, x: p.record.x, y: p.record.y, canExtend: !p.record.from.startsWith('painting:') })), paintingAlpha);
+  stack.forEach(({ record, image }, i) => {
+    const gain = paintingGains.get(record.name);
+    if (gain === undefined) return;
+    const d = order[i];
+    if (!('patch' in d)) {
+      const b = pieceAt(d).b;
+      if (gain.data.some(v => v === 1) && [b.key, ...b.extendKeys].some(k => registeredDepth.has(k))) {
+        refuseIfAny([{ code: 'DEPTH_PART_SUPPORT', object: `part "${record.name}"`, detail: 'painting extension has no declared painting depth material; remove this extension or the target layer depth, never extrapolate a layer sheet onto new painting samples' }]);
+      }
+    }
+    for (let p = 0; p < W * H; p++) if (gain.data[p] === 1) {
+      image.data.set(srcr.data.subarray(p * 4, p * 4 + 3), p * 4);
+      image.data[p * 4 + 3] = paintingAlpha!.data[p * 4 + 3];
+      writersInOrder[i][p] = AW.paintingExtension;
+      if (!('patch' in d)) {
+        const region = pieceAt(d).b.region;
+        if (region !== null) region.data[p] = 1;
+      }
+    }
+  });
   const pushedOf: FringePushed[][] = plan.map(() => []);
   const pushedOfCut: FringePushed[][] = cuts.map(() => []);
   const pushedOfLimb: FringePushed[][] = lim.parts.map(() => []);
@@ -5459,7 +5489,8 @@ export function assemble(input: AssembleInput): AssembleResult {
       const own = e < 0 ? st : (stats.get(extendKeys[e]) as ProjectionStats);
       // A pixel outside the piece's region is a base pixel filled from a cut's under image (issue #193): occluded, never visible.
       if (r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE && own.clear.data[p] === 1 && (region === null || region.data[p] === 1)) visible.data[p] = 1;
-      if (retakeByName.get(name)?.data[p] !== 1 && yields.get(name)?.mask.data[p] !== 1 && trace.ring.data[p] === 0 && own.takenMask.data[p] === 1 && (region === null || region.data[p] === 1)) projected.data[p] = 1;
+      if (paintingGains.get(name)?.data[p] === 1) visible.data[p] = 1;
+      if (paintingGains.get(name)?.data[p] !== 1 && retakeByName.get(name)?.data[p] !== 1 && yields.get(name)?.mask.data[p] !== 1 && trace.ring.data[p] === 0 && own.takenMask.data[p] === 1 && (region === null || region.data[p] === 1)) projected.data[p] = 1;
     }
     const { x0, y0, x1, y1, opaque } = measureBox(r);
     if (opaque === 0) {
@@ -5484,12 +5515,14 @@ export function assemble(input: AssembleInput): AssembleResult {
       visible_px: vc.visible_px,
       occluded_px: vc.occluded_px,
       projected_core_px: region === null ? st.core : count(st.coreMask, region),
-      source_px_taken: (region === null ? st.taken : count(st.takenMask, region)) - (yields.get(name)?.reading.yieldedTaken ?? 0) - (retakeByName.get(name) == null ? 0 : count(st.takenMask, retakeByName.get(name)!)),
+      source_px_taken: (region === null ? st.taken : count(st.takenMask, region)) - (yields.get(name)?.reading.yieldedTaken ?? 0) - (retakeByName.get(name) == null ? 0 : count(st.takenMask, retakeByName.get(name)!)) - (paintingGains.has(name) ? count(st.takenMask, paintingGains.get(name)!) : 0),
       visible_not_projected_px: vc.visible_not_projected_px,
       refused_drift_px: region === null ? st.refused : count(st.refusedMask, region),
       merged_px: merged,
       seam_override_px: 0,
     };
+    const paintingGain = paintingGains.get(name);
+    if (paintingGain !== undefined) record.painting_extension_px = paintingGain.data.reduce((sum, value) => sum + value, 0);
     if (pushedHere.length > 0) record.fringe_pushed_back = pushedHere;
     if (limb !== undefined) record.limb = limb;
     const image = crop(r, x0, y0, record.w, record.h);
@@ -6401,6 +6434,8 @@ export function stageFields(
   yieldRefused?: boolean;
   /** Plan parts whose own samples survive source re-take beneath soft front cover. */
   keepUnderOccluders?: readonly string[];
+  /** Base painting only; named final parts, explicit band and path bound (#848). */
+  paintingExtension?: readonly PaintingExtension[];
   turnMovingPair?: (a: string, b: string) => boolean;
 } {
   const problems: Problem[] = [];
@@ -6423,6 +6458,7 @@ export function stageFields(
     ...(cfg.assemble.head_face_underfill === undefined ? {} : { headFaceUnderfill: cfg.assemble.head_face_underfill }),
     ...(cfg.assemble.yield_refused === undefined ? {} : { yieldRefused: cfg.assemble.yield_refused }),
     ...(cfg.assemble.keep_under_occluders === undefined ? {} : { keepUnderOccluders: cfg.assemble.keep_under_occluders }),
+    ...(cfg.assemble.extend_painting === undefined ? {} : { paintingExtension: cfg.assemble.extend_painting }),
     ...(turnMovingPair === null ? {} : { turnMovingPair }),
     rigScale: cfg.assemble.rig_scale,
     plan: cfg.assemble.plan,

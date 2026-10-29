@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { sourceCaseNames } from './scripts/selftest_prefixes.ts';
+import { runPaintingExtensionChecks } from './tools/check_painting_extension.ts';
 import { runExtremesChecks } from './tools/check_extremes.ts';
 import { selftestCliArgs } from './fixtures/check_options.ts';
 import { softOcclusionLine } from './src/assemble.ts';
@@ -30960,6 +30961,7 @@ function runAssembleSuite(): number {
   const { say, bad } = counter();
   const dir = temp('assemble');
   try {
+    runPaintingExtensionChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #848: public generated controls; explicit ownership, bounds and exact painting samples'));
     writeAssembleFixture(dir);
     const base = fixtureInput(dir);
     const result = assemble({ ...base, seamRule: 'near-white' });
