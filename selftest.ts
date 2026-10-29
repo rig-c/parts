@@ -32296,6 +32296,60 @@ function runAssembleSuite(): number {
     say('AS819_CONFIG_BOOLEAN_IS_READ_AT_EVERY_CONFIG_DOOR', configEdges819.every(q => typeof q.value === 'boolean' ? q.error === null : q.error?.problems.some(p => p.code === 'CONFIG_FIELD_TYPE' && p.object === 'config.assemble.yield_refused')),
       configEdges819.map(q => `${q.door}:${JSON.stringify(q.value)}=${q.error === null ? 'loads' : codes(q.error)}`).join('; '), 'both declared boolean values load; each malformed declaration is a planted named refusal at full and early doors');
 
+    // PR #821: the front and middle share a run. Its owner mask gives the inner refusal only to front.
+    // A 32x32 front square eroded by5x5 has28x28=784 original refused pixels, independent of the lookup.
+    const exposed819 = (label: string, alpha: number | null) => {
+      const d = join(dir, 'exposed-holder819-' + label);
+      const plan: Array<[string, 'full', string]> = [['under', 'full', 'neck'], ...(alpha === null ? [] : [['middle', 'full', 'bottomwear'] as [string, 'full', string]]), ['front', 'full', 'topwear']];
+      writeAssembleFixture(d, assembleConfig({ plan, extend: [], headBox: [0, 0, 64, 64], rigScale: 1 }), paint(64, 64, [100, 100, 100], []), {
+        full: [{ name: 'neck', depth: .8, rects: [{ x0: 0, y0: 0, x1: 64, y1: 64, colour: [100, 100, 100] }] },
+          ...(alpha === null ? [] : [{ name: 'bottomwear', depth: .5, rects: [{ x0: 8, y0: 8, x1: 56, y1: 56, colour: [200, 100, 100] as [number, number, number] }] }]),
+          { name: 'topwear', depth: .2, rects: [{ x0: 16, y0: 16, x1: 48, y1: 48, colour: [210, 100, 100] }] }], head: FRAMED_HEAD,
+      });
+      if (alpha !== null && alpha !== 255) {
+        const path = join(d, 'full', 'parts', 'bottomwear.png'), im = readPng(path);
+        // The loader requires nonempty parts: keep8x8 outside the front in the zero-alpha control.
+        for (let k = 3; k < im.data.length; k += 4) im.data[k] = alpha === 0 && ((k - 3) / 4) % im.width < 8 && Math.floor((k - 3) / 4 / im.width) < 8 ? 255 : alpha;
+        writeFileSync(path, encodePngBytes(im));
+      }
+      const r = assemble({ ...fixtureInput(d), seamRule: 'near-white', turnMovingPair: () => true, yieldRefused: true });
+      const front = image819(r, 'front'); let retained = 0;
+      for (let y = 18; y < 46; y++) for (let x = 18; x < 46; x++) if (front.image.data[((y - front.record.y) * front.record.w + x - front.record.x) * 4 + 3] > 0) retained++;
+      return { alpha, retained, yielded: r.yieldReadings?.find(q => q.part === 'front')?.yielded ?? 0, centreRed: r.recomposite.data[(24 * 64 + 24) * 4] };
+    };
+    const exposedRows819 = [255, 250, 249, 0, null].map((alpha, i) => exposed819(String(i), alpha));
+    say('AS819_EXPOSED_OPAQUE_SAME_RUN_MIDDLE_MUST_MATCH_BEFORE_FRONT_YIELDS',
+      exposedRows819.every(q => q.alpha !== null && q.alpha >= 250 ? q.retained === 784 && q.yielded === 0 && q.centreRed === 210 : q.retained === 0 && q.yielded === 784),
+      exposedRows819.map(q => `middleAlpha=${q.alpha}, front retained=${q.retained}, yielded=${q.yielded}, compositeRed=${q.centreRed}`).join('; '),
+      'opaque mismatch must block the matching bottom; absent/zero-alpha middle and the real249/250 core edge are controls; the previous cross-run yielding-middle control remains unchanged');
+
+    // Exercise build.ts's actual alternate assembly door; two identical input sets must agree at every emitted pixel.
+    try {
+      const altYield819 = (enabled: boolean) => {
+        const d = join(dir, 'alternate-yield819-' + enabled), input = yieldFixture819('alternate-input-' + enabled);
+        const cfg = assembleConfig({ plan: [['under', 'full', 'neck'], ['front', 'full', 'topwear']], extend: [], headBox: [0, 0, 64, 64], rigScale: 1 });
+        cfg.turn = { pivot: .5, depths: { under: .6, front: .2 } };
+        const ac = cfg.assemble as Record<string, unknown>; ac.yield_refused = enabled;
+        ac.alternates = [{ name: 'mirror', source: join(dir, 'yield-alternate-input-' + enabled, 'painting.png'), full: join(dir, 'yield-alternate-input-' + enabled, 'full'), head: join(dir, 'yield-alternate-input-' + enabled, 'head') }];
+        mkdirSync(d, { recursive: true }); writeFileSync(join(d, 'config.json'), JSON.stringify(cfg));
+        const o = join(d, 'out'), logs: string[] = [];
+        const r = assembleStage({ source: join(dir, 'yield-alternate-input-' + enabled, 'painting.png'), full: join(dir, 'yield-alternate-input-' + enabled, 'full'), head: join(dir, 'yield-alternate-input-' + enabled, 'head'), config: join(d, 'config.json'), seam: 'near-white', project: 'core' },
+          { partsJson: join(o, 'parts.json'), partsDir: join(o, 'parts'), recomposite: join(o, 'recomposite.png'), errorMap: join(o, 'error.png') }, l => logs.push(l));
+        const base = image819(r, 'front'), alternate = readPng(join(o, 'parts', 'mirror_front.png'));
+        const cleared = (im: Raster): number => { let n = 0; for (let y = 10; y < 54; y++) for (let x = 10; x < 54; x++) if (im.data[((y - base.record.y) * im.width + x - base.record.x) * 4 + 3] === 0) n++; return n; };
+        return { base: cleared(base.image), alternate: cleared(alternate), baseYielded: yielded819(r), frontSame: Buffer.compare(Buffer.from(encodePngBytes(base.image)), Buffer.from(encodePngBytes(alternate))) === 0,
+          back: readFileSync(join(o, 'parts', 'under.png')), altBack: readFileSync(join(o, 'parts', 'mirror_under.png')), inputs: input.plan.length };
+      };
+      const offAlt819 = altYield819(false), onAlt819 = altYield819(true);
+      say('AS819_REAL_FULL_ALTERNATE_FORWARDS_YIELD_REFUSED_WITH_IDENTICAL_ART_AND_BACK_PIXELS',
+        offAlt819.base === 0 && offAlt819.alternate === 0 && offAlt819.frontSame && onAlt819.base === 1936 && onAlt819.alternate === 1936 && onAlt819.baseYielded === 1936 && onAlt819.frontSame &&
+        Buffer.compare(offAlt819.back, onAlt819.back) === 0 && Buffer.compare(onAlt819.back, onAlt819.altBack) === 0,
+        `actual assembleStage/full alternate: OFF cleared base=${offAlt819.base}, alternate=${offAlt819.alternate}; ON cleared base=${onAlt819.base}, alternate=${onAlt819.alternate}, base yielded=${onAlt819.baseYielded}; identical front=${onAlt819.frontSame}, back=${Buffer.compare(onAlt819.back, onAlt819.altBack) === 0}`,
+        'the OFF run is the planted visible defect; ON must clear the independently expected44x44 core through both actual build.ts branches without repainting the back');
+    } catch (error) {
+      say('AS819_REAL_FULL_ALTERNATE_FORWARDS_YIELD_REFUSED_WITH_IDENTICAL_ART_AND_BACK_PIXELS', false, String(error), 'fixture/reader failure is reported separately from an executed pixel mismatch');
+    }
+
     // Issue #314: the per-part line's drift= carries its scale — refused_drift_px against the part's projection
     // candidates (projected_core_px), which it is a subset of. By hand: 13 of 77 is 16.883 %, one decimal 16.9; a part
     // with no candidate has nothing to refuse. From the CLI, AS62's topwear row prints its record's two counts so.

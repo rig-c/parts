@@ -5085,12 +5085,27 @@ export function assemble(input: AssembleInput): AssembleResult {
       const under = stack[j].image.data;
       for (let p = 0; p < W * H; p++) {
         if (under[p * 4 + 3] < CORE_ALPHA) continue;
+        // The opt-in resolves the actual exposed opaque holder before comparing its colour.
+        // Keep the legacy matching-holder diagnostic unchanged when the setting is off.
+        if (input.yieldRefused === true) { behindAt[p] = j; continue; }
         const dMax = Math.max(
           Math.abs(under[p * 4] - srcr.data[p * 4]),
           Math.abs(under[p * 4 + 1] - srcr.data[p * 4 + 1]),
           Math.abs(under[p * 4 + 2] - srcr.data[p * 4 + 2]),
         );
         if (dMax <= DRIFT_LIMIT) behindAt[p] = j;
+      }
+    }
+    if (input.yieldRefused === true) {
+      for (let p = 0; p < W * H; p++) {
+        if (behindAt[p] < 0) continue;
+        const under = stack[behindAt[p]].image.data;
+        const dMax = Math.max(
+          Math.abs(under[p * 4] - srcr.data[p * 4]),
+          Math.abs(under[p * 4 + 1] - srcr.data[p * 4 + 1]),
+          Math.abs(under[p * 4 + 2] - srcr.data[p * 4 + 2]),
+        );
+        if (dMax > DRIFT_LIMIT) behindAt[p] = -1;
       }
     }
     // The refusal belongs to b.key. A copied/ring replacement cannot inherit that source's refusal.
@@ -5392,8 +5407,8 @@ export function driftLine(d: DriftBodies): string {
     `by the plan's draw order ${d.holders.map((h) => `"${h.part}" holds ${h.px} px`).join(', ')} of it (the top-most part at alpha >= ${CORE_ALPHA})${frontClause}${behindClause}; ` +
     "informational: no gate reads this. Swapping the plan order of the parts named here can clear it (when only the front one differs from the painting) or move it to the other part (when both do): swap, rebuild and read this line again; if it moves, removing it needs different input layers. At rest, the seam pass repaints the holder's pixels that pass its rule from the painting" +
     (d.yieldedPx === undefined
-      ? '; set assemble.yield_refused: true to yield original refused front pixels only where an opaque behind holder matches the painting, before considering a cut'
-      : `; yielded ${d.yieldedPx} px to opaque behind holders matching the painting (assemble.yield_refused: true; alpha only)`)
+      ? '; set assemble.yield_refused: true to yield original refused front pixels only where the top-most opaque behind holder matches the painting, before considering a cut'
+      : `; yielded ${d.yieldedPx} px to top-most opaque behind holders matching the painting (assemble.yield_refused: true; alpha only)`)
   );
 }
 
