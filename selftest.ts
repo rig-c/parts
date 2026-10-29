@@ -6,6 +6,7 @@ import { runTurnOverlapChecks } from './tools/check_turn_overlap.ts';
 import { runTurnSurfaceChecks } from './tools/check_turn_surface.ts';
 import { runTurnSurfaceStopChecks } from './tools/check_turn_surface_stops.ts';
 import { runBaseAnchorChecks } from './tools/check_base_anchor.ts';
+import { runNeckDraftChecks, runNeckDraftRenderChecks } from './tools/check_neck_draft.ts';
 import { runDepthSheetChecks, runDepthSheetCoreChecks, runDepthSheetStillChecks } from './tools/check_depthsheets.ts';
 import { runWaistChecks } from './tools/check_waist.ts';
 import { runWaistDeclarationChecks } from './tools/check_waist_declaration.ts';
@@ -1621,6 +1622,7 @@ function runWrapperSuite(): number {
     return d;
   };
   try {
+    runNeckDraftChecks(fresh('neck-draft'), (name, ok, detail) => say(name, ok, detail, 'public registered collar strip, explicit body-turn context and real config/source readers'));
     runDepthSheetChecks(fresh('depth-sheets'), (name, ok, detail) => say(name, ok, detail, 'independent authored scalar grids; #773 input/ref contract, no production geometry claim'));
     runLayerBoundsChecks(fresh('layer-bounds'), (name, ok, detail) => say(name, ok, detail, 'original alpha > 8, input-canvas offsets and the existing body group; analytical controls before acceptance measurements'));
     const dir = fresh('wrapper');
@@ -6803,6 +6805,7 @@ function flatFormLine(r: FlatFormRender | string): string {
 function runRigSuite(): number {
   section('rig: bones, lattice meshes, weights, regions and the idle');
   const { say, bad } = counter();
+  { const dir = temp('neck-draft-render'); try { runNeckDraftRenderChecks(dir, (name, ok, detail) => say(name, ok, detail, 'public source-first neck, mandatory Core gate and rendered extreme ROI')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   { const dir = temp('turn-surface'); try { runTurnSurfaceChecks(dir, (name, ok, detail) => say(name, ok, detail, 'weighted surface depth offsets on synthetic flat blocks')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   { const dir = temp('turn-surface-stops'); try { runTurnSurfaceStopChecks(dir, (name, ok, detail) => say(name, ok, detail, 'declared stop aliases on public synthetic weighted surfaces')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   runTurnBlendChecks((name, ok, detail) => say(name, ok, detail, 'two scalar turn fields, independent analytic controls on a synthetic neck'));
@@ -34264,7 +34267,8 @@ function runAssembleExampleStage(ex: string, stage: AssembleStage): number {
       const hazed = rest === undefined ? null : proposePlan(withLayer(full, hazeLayer('wings', side, 2 * rest.restPx)), head, g);
       const topwear = full.layers.find((l) => l.name === 'topwear');
       const copied = topwear === undefined ? null : proposePlan(withLayer(full, { ...topwear, name: 'wings', tag: readTag('wings') as TagReading }), head, g);
-      const note = hazed?.notes.at(-1) ?? '';
+      const hazeNotes = hazed?.notes.filter((n) => n.startsWith('wings: full run layer ')) ?? [];
+      const note = hazeNotes[0] ?? '';
       pOk =
         crossed.length === 0 &&
         !clean.notes.some((n) => n.includes('PLAN_LAYER_')) &&
@@ -34272,7 +34276,8 @@ function runAssembleExampleStage(ex: string, stage: AssembleStage): number {
         JSON.stringify(hazed.plan) === JSON.stringify(clean.plan) &&
         JSON.stringify(hazed.extend_below_crop) === JSON.stringify(clean.extend_below_crop) &&
         // Issue #308: the wings' in-no-row note follows the full run's layer from empty to the haze; every other note is as before.
-        hazed.notes.slice(0, -1).filter((n) => !n.startsWith('wings: in no plan row — ')).join('|') === clean.notes.filter((n) => !n.startsWith('wings: in no plan row — ')).join('|') &&
+        hazeNotes.length === 1 &&
+        hazed.notes.filter((n) => n !== note && !n.startsWith('wings: in no plan row — ')).join('|') === clean.notes.filter((n) => !n.startsWith('wings: in no plan row — ')).join('|') &&
         hazed.notes.filter((n) => n.startsWith('wings: in no plan row — full run: ') && n.includes(', crosses PLAN_LAYER_TRANSLUCENT, PLAN_LAYER_BACKGROUND (named with its figures in the note below)')).length === 1 &&
         note.startsWith('wings: full run layer 80.0% translucent, 100.0% background-coloured, 2.000x the rest of the figure -> not proposed by PLAN_LAYER_TRANSLUCENT') &&
         copied !== null &&

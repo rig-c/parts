@@ -10,6 +10,7 @@
  */
 import type { PlanProposal } from './assemble.ts';
 import type { HeadBoxProposal } from './headbox.ts';
+import type { CharacterConfig } from './config.ts';
 import type { Proposal, PROPOSAL_CONFIG_SECTIONS } from './propose.ts';
 import { PartsError } from './errors.ts';
 import { parseProposalSections } from './config.ts';
@@ -18,6 +19,7 @@ import type { ConfigEdit } from './meshdraft.ts';
 export type ConfigJson = null | boolean | number | string | ConfigJson[] | ConfigObject;
 export interface ConfigObject { [key: string]: ConfigJson }
 export type ConfigWritePatch =
+  | { kind: 'neck-unit'; config: CharacterConfig }
   | { kind: 'head-box'; head_box: HeadBoxProposal['head_box'] }
   | { kind: 'assemble-plan'; plan: PlanProposal['plan']; extend_below_crop: PlanProposal['extend_below_crop'] }
   | { kind: 'proposal'; proposal: Proposal; sections: typeof PROPOSAL_CONFIG_SECTIONS }
@@ -91,6 +93,18 @@ export function mergeConfigProposal(raw: unknown, patch: ConfigWritePatch): Conf
   const config = clone(before, 'config') as ConfigObject;
   const edits: ConfigEdit[] = [];
   switch (patch.kind) {
+    case 'neck-unit': {
+      const values = { bones: patch.config.bones, meshes: patch.config.meshes, regions: patch.config.regions, turn: patch.config.turn };
+      for (const [key, value] of Object.entries(values)) {
+        config[key] = clone(value, `neck.${key}`);
+        if (!equal(before[key], config[key])) edits.push({ path: [key], value: config[key] });
+      }
+      if (!object(config.assemble)) return refuse('config.assemble', 'must be an object before drafting the neck source');
+      config.assemble.plan = clone(patch.config.assemble.plan, 'neck.plan');
+      if (!equal((before.assemble as ConfigObject).plan, config.assemble.plan)) edits.push({ path: ['assemble', 'plan'], value: config.assemble.plan });
+      break;
+    }
+
     case 'head-box': {
       if (!object(config.seethrough)) return refuse('config.seethrough', 'is absent or not an object; the existing See-through settings are required before writing head_box');
       const previous = config.seethrough.head_box;

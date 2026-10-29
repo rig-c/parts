@@ -42,6 +42,7 @@
     "tools/configwrite.ts",
     "tools/build-process.ts",
     "tools/alternate-cli.ts",
+    "tools/neck-propose.ts",
     "src",
     "workflows",
     "docs/AUTHORING.md",
