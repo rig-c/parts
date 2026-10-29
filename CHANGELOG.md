@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.74.0](https://github.com/rig-c/parts/compare/v1.73.1...v1.74.0) (2026-10-29)
+
+
+### Features
+
+* **turn:** warn when an implicit unit depth samples outside its surface's art ([#815](https://github.com/rig-c/parts/issues/815)) ([f3b95e8](https://github.com/rig-c/parts/commit/f3b95e811067b58b0b45f88265636a5d8e3d7941)), closes [#813](https://github.com/rig-c/parts/issues/813)
+
 ## [1.73.1](https://github.com/rig-c/parts/compare/v1.73.0...v1.73.1) (2026-10-28)
 
 
