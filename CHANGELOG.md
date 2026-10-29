@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.75.0](https://github.com/rig-c/parts/compare/v1.74.1...v1.75.0) (2026-10-29)
+
+
+### Features
+
+* **assemble:** opt-in yield of drift-refused front pixels to a matching part behind ([#821](https://github.com/rig-c/parts/issues/821)) ([f3cda92](https://github.com/rig-c/parts/commit/f3cda9260dcead1a22ab79959bc79f74ea3dcf20))
+
 ## [1.74.1](https://github.com/rig-c/parts/compare/v1.74.0...v1.74.1) (2026-10-29)
 
 
