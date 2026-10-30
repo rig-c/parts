@@ -1,7 +1,7 @@
 /** Assembly controls for #848; expectations are derived from public rectangles. */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { paintingExtensionConfig, paintingExtensionFixture, faintPaintingExtensionFixture, PAINTING_EXTENSION } from '../fixtures/painting_extension.ts';
+import { paintingExtensionConfig, paintingExtensionFixture, faintPaintingExtensionFixture, interleavingPaintingExtensionFixture, PAINTING_EXTENSION } from '../fixtures/painting_extension.ts';
 import { assemble, stageFields, type AssembleResult } from '../src/assemble.ts';
 import { assembleStage } from '../src/build.ts';
 import { parseConfig, parseEarlyConfig } from '../src/config.ts';
@@ -12,6 +12,7 @@ import { provenanceAddsUp } from '../src/provenance.ts';
 import { writePng, readPng, encodePngBytes } from '../src/raster/png.ts';
 import { alphaComposite } from '../src/raster/composite.ts';
 import { newRaster } from '../src/raster/types.ts';
+import { GUIDE_DOC, guideRule } from '../src/guide.ts';
 
 export function sampleExtensionPart(result: AssembleResult, name: string, x: number, y: number): number[] {
   const part = result.images.find(p => p.record.name === name);
@@ -328,6 +329,110 @@ export function runPaintingExtensionChecks(dir: string, say: (name: string, ok: 
     sampleExtensionPart(protectedBase,'upper',11,18)[3]===250 && sampleExtensionPart(protectedFloor,'upper',11,18)[3]===250 &&
     sampleExtensionPart(protectedBase,'upper',10,18)[3]===249 && sampleExtensionPart(protectedFloor,'upper',10,18)[3]===255,
     `target at/above 250: ${protectedTargetCount}, exact RGBA ${protectedTarget}; every other holder PNG byte/placement exact ${exactOtherHolders}; own 249 raised, own 250 retained`);
+
+  // #855: explicit precedence is measured against independently hand-counted
+  // columns, not against another invocation of the production algorithm.
+  const shared = interleavingPaintingExtensionFixture();
+  const ordered = shared.declarations.map((e, order) => ({ ...e, order }));
+  const snapshot = shared.parts.map(p => Buffer.from(encodePngBytes(p.image)));
+  say('PE30_INTERLEAVING_TARGETS_REFUSE_WITHOUT_PRECEDENCE',
+    refused(() => paintingExtensionMasks(shared.declarations, shared.parts, shared.painting), 'ASSEMBLE_PAINTING_EXTENSION_CONFLICT') &&
+    refused(() => paintingExtensionMasks([...shared.declarations].reverse(), shared.parts, shared.painting), 'ASSEMBLE_PAINTING_EXTENSION_CONFLICT'),
+    'two targets reach columns 1 and 2 in one band; no order declaration, both array orders refuse');
+  const claims = paintingExtensionMasks(ordered, shared.parts, shared.painting);
+  const reverseClaims = paintingExtensionMasks([...ordered].reverse(), [...shared.parts].reverse(), shared.painting);
+  let mapExact = true, sharedResidual = 0, protectedExact = true;
+  const assigned = shared.parts.map(p => ({ ...p, image: { ...p.image, data: new Uint8ClampedArray(p.image.data) } }));
+  for (let y = 0; y < 3; y++) for (let x = 0; x < 7; x++) {
+    const q = y * 7 + x;
+    for (const name of ['first', 'second']) {
+      const expected = name === 'first' ? x >= 1 && x <= 2 : x >= 3 && x <= 5;
+      mapExact &&= claims.get(name)!.data[q] === Number(expected) && reverseClaims.get(name)!.data[q] === Number(expected);
+      const before = shared.parts.find(p => p.name === name)!, after = assigned.find(p => p.name === name)!;
+      if (claims.get(name)!.data[q]) after.image.data.set(shared.painting.data.subarray(q*4,q*4+4),q*4);
+      if (before.image.data[q*4+3] >= 250) protectedExact &&= before.image.data.subarray(q*4,q*4+4).every((v,i) => v === after.image.data[q*4+i]);
+    }
+    if (assigned.filter(p => p.name !== 'holder').every(p => p.image.data[q*4+3] < 250)) sharedResidual++;
+  }
+  say('PE31_EXPLICIT_ORDER_HAS_EXACT_DETERMINISTIC_CLAIMS_AND_ZERO_RESIDUAL', mapExact && sharedResidual === 0 &&
+    claims.get('first')!.data.reduce((n,v)=>n+v,0) === 6 && claims.get('second')!.data.reduce((n,v)=>n+v,0) === 9,
+    `hand-derived first columns 1..2 = 6, second columns 3..5 = 9; residual ${sharedResidual}; declaration/stack reversal exact ${mapExact}`);
+  say('PE32_ORDER_PRESERVES_FROZEN_INPUTS_NON_TARGET_BYTES_AND_FLOOR_SAMPLES', protectedExact &&
+    shared.parts.every((p,i)=>snapshot[i].equals(Buffer.from(encodePngBytes(p.image)))) &&
+    snapshot[2].equals(Buffer.from(encodePngBytes(assigned[2].image))),
+    `both targets' alpha >=250 exact ${protectedExact}; cropped alpha-1 non-target PNG exact; every input PNG unchanged`);
+
+  // A restriction to the second target's own faint alpha is NOT disjoint:
+  // first's general candidate already reaches those original alpha-8 holders.
+  const individual = shared.declarations.map(e=>paintingExtensionMasks([e],shared.parts,shared.painting).get(e.part)!);
+  // Re-run reachability after restricting candidates, rather than merely
+  // filtering an unrestricted final mask (which could retain a broken path).
+  const restrictOwn = (entry: typeof shared.declarations[number], image: typeof shared.painting, unrestricted: Uint8Array): Uint8Array => {
+    const distance=new Int32Array(21).fill(-1), queue:number[]=[], result=new Uint8Array(21);
+    const adjacent=(q:number)=>[q%7>0?q-1:-1,q%7<6?q+1:-1,q>=7?q-7:-1,q<14?q+7:-1].filter(n=>n>=0);
+    const allowed=(q:number)=>unrestricted[q]===1 && image.data[q*4+3]>0;
+    for(let q=0;q<21;q++)if(allowed(q)&&adjacent(q).some(n=>image.data[n*4+3]>8)){distance[q]=1;queue.push(q);}
+    for(let i=0;i<queue.length;i++){const q=queue[i];result[q]=1;if(distance[q]>=entry.max_distance)continue;
+      for(const n of adjacent(q))if(allowed(n)&&distance[n]<0){distance[n]=distance[q]+1;queue.push(n);}}
+    return result;
+  };
+  const ownSecond=restrictOwn(shared.declarations[1],shared.parts[1].image,individual[1].data);
+  let ownOnlyOverlap = 0;
+  for(let q=0;q<21;q++) if(individual[0].data[q] && ownSecond[q]) ownOnlyOverlap++;
+  const coheld = interleavingPaintingExtensionFixture();
+  coheld.parts[0].image.data.set([20,30,40,200],2*4);
+  coheld.parts[0].image.data.set([20,30,40,8],(1*7+2)*4);
+  coheld.parts[1].image.data.set([50,60,70,1],(1*7+2)*4);
+  coheld.parts[1].image.data.set([50,60,70,80],(1*7+3)*4);
+  const coheldClaims=coheld.declarations.map(e=>paintingExtensionMasks([e],coheld.parts,coheld.painting).get(e.part)!);
+  const coheldOwn=coheldClaims.map((m,i)=>restrictOwn(coheld.declarations[i],coheld.parts[i].image,m.data));
+  say('PE33_OWN_FAINT_RESTRICTION_ALONE_IS_AMBIGUOUS_INCLUDING_ALPHA_EIGHT', ownOnlyOverlap===2 &&
+    coheldOwn.every(m=>m[1*7+2]===1) &&
+    refused(()=>paintingExtensionMasks(coheld.declarations,coheld.parts,coheld.painting),'ASSEMBLE_PAINTING_EXTENSION_CONFLICT'),
+    `own-faint candidate restriction plus new BFS still overlaps ${ownOnlyOverlap} alpha-8 samples; co-held alpha 8/1 reachable under both own restrictions and still refuses without explicit order`);
+  let orderPlants=0;
+  const badOrders: Array<[unknown,string]> = [
+    [[{...PAINTING_EXTENSION,order:-1}],'CONFIG_FIELD_TYPE'],
+    ...[0.5, '0', null, true, Number.MAX_SAFE_INTEGER+1].map(v=>[[{...PAINTING_EXTENSION,order:v}],'CONFIG_FIELD_TYPE'] as [unknown,string]),
+    [[{...PAINTING_EXTENSION,order:0},{...PAINTING_EXTENSION,part:'lower',order:0}],'CONFIG_ORDER_UNIQUE'],
+    [[{...PAINTING_EXTENSION,order:0},{...PAINTING_EXTENSION,part:'lower'}],'CONFIG_FIELD_PRESENT'],
+  ];
+  for(const [entries,code] of badOrders) {
+    for(const door of ['layers','assemble','full'] as const) {
+      const cfg=paintingExtensionConfig(entries);
+      if(refused(()=>door==='full'?parseConfig(cfg):door==='layers'?parseEarlyConfig(cfg,'layers'):parseEarlyConfig(cfg,'assemble'),code)) orderPlants++;
+    }
+    if(refused(()=>paintingExtensionMasks(entries as typeof ordered,shared.parts,shared.painting),code)) orderPlants++;
+  }
+  const validOrder=stageFields(parseEarlyConfig(paintingExtensionConfig([{...PAINTING_EXTENSION,order:0}]),'assemble')).paintingExtension?.[0].order;
+  say('PE34_ORDER_VALIDATION_IS_SHARED_BY_ALL_READERS_AND_DIRECT_API',orderPlants===badOrders.length*4 && validOrder===0,
+    `${orderPlants}/${badOrders.length*4} malformed, duplicate and mixed-order plants refused; valid zero preserved through stageFields`);
+
+  // Earlier gains are barriers, not traversal bridges or new seeds. A later
+  // target outside the band cannot tunnel across the earlier vertical claim.
+  const corridor=newRaster(5,2), left=newRaster(5,2), right=newRaster(5,2);
+  for(let x=0;x<5;x++)corridor.data.set([40,60,80,255],(5+x)*4);
+  left.data.set([1,2,3,255],2*4);right.data.set([4,5,6,255],9*4);
+  const barrierEntries=[{part:'left',band:[2,1,3,2] as [number,number,number,number],max_distance:1,order:1},
+    {part:'right',band:[0,1,4,2] as [number,number,number,number],max_distance:4,order:2}];
+  const barrier=paintingExtensionMasks(barrierEntries,[{name:'left',image:left},{name:'right',image:right}],corridor);
+  say('PE35_PRECEDENCE_GAINS_BLOCK_LATER_PATHS_WITH_ORIGINAL_SEEDS_ONLY',
+    Array.from(barrier.get('left')!.data).join(',')==='0,0,0,0,0,0,0,1,0,0' &&
+    Array.from(barrier.get('right')!.data).join(',')==='0,0,0,0,0,0,0,0,1,0',
+    'earlier x2,y1 blocks later path from original x4,y1; unclaimed x0..1 stay unreachable at distance4; no gain becomes a new seed');
+  const asmEntries=[{...floorDeclaration,order:0},{...floorDeclaration,part:'lower',order:1}];
+  const orderedAssembly=assemble({...faint,paintingExtension:asmEntries});
+  const reversedAssembly=assemble({...faint,paintingExtension:[...asmEntries].reverse()});
+  say('PE36_REAL_ASSEMBLY_ORDER_IS_ARRAY_INVARIANT_WITH_EXACT_NON_TARGET_OUTPUT',residual(orderedAssembly).total===0 &&
+    serializeParts(orderedAssembly.parts)===serializeParts(reversedAssembly.parts) &&
+    orderedAssembly.images.every((p,i)=>Buffer.from(encodePngBytes(p.image)).equals(Buffer.from(encodePngBytes(reversedAssembly.images[i].image)))),
+    'two floor declarations run through actual assembly and provenance; residual zero; records and every PNG exact after array reversal');
+
+  const guideText = readFileSync(GUIDE_DOC, 'utf8');
+  say('PE37_ORDER_REFUSALS_HAVE_GUIDE_ROWS_AND_MISSING_ROW_CONTROL',
+    ['CONFIG_ORDER_UNIQUE', 'CONFIG_FIELD_PRESENT', 'CONFIG_FIELD_TYPE', 'ASSEMBLE_PAINTING_EXTENSION_CONFLICT'].every(code =>
+      'lines' in guideRule(guideText, code) && !('lines' in guideRule(guideText.split('\n').filter(l=>!l.includes(`<a id="${code}"></a>`)).join('\n'),code))),
+    'all order and conflict refusals have exact guide rows; deleting each anchor row refuses the lookup');
 
   // Native public-fixture panels: painting, default, declared bound, |change|.
   // A separate nearest-neighbour enlargement preserves every boundary sample.

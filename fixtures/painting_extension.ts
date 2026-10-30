@@ -51,3 +51,22 @@ export function faintPaintingExtensionFixture(): AssembleInput {
   }
   return f;
 }
+
+/** Public interleaving claims: two seeds border a five-column shared gap. */
+export function interleavingPaintingExtensionFixture() {
+  const painting = newRaster(7, 3), first = newRaster(7, 3), second = newRaster(7, 3), holder = newRaster(1, 1);
+  for (let y = 0; y < 3; y++) for (let x = 0; x < 7; x++) {
+    const p = (y * 7 + x) * 4;
+    painting.data.set([80 + x, 90 + y, 100, 255], p);
+    if (x === 0) first.data.set([10, 20, 30, 255], p);
+    if (x === 6) second.data.set([40, 50, 60, 255], p);
+    if (x > 0 && x < 6 && (y === 0 || (x + y) % 2 === 0)) second.data.set([70, 80, 90, 8], p);
+  }
+  holder.data.set([210, 40, 90, 1]);
+  const parts = [{ name: 'first', image: first }, { name: 'second', image: second }, { name: 'holder', image: holder, x: 2, y: 1 }];
+  const declarations: PaintingExtension[] = [
+    { part: 'first', band: [0, 0, 7, 3], max_distance: 2, min_held_alpha: 250 },
+    { part: 'second', band: [0, 0, 7, 3], max_distance: 5, min_held_alpha: 250 },
+  ];
+  return { painting, parts, declarations };
+}
