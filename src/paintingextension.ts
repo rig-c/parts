@@ -12,6 +12,8 @@ export interface PaintingExtension {
   max_distance: number;
   /** Optional coverage floor, 1..255. Absent keeps the alpha >0 blocker. */
   min_held_alpha?: number;
+  /** Optional explicit total precedence; lower orders claim first. */
+  order?: number;
 }
 
 /** Shared by every config door and the callable assemble API. */
@@ -22,15 +24,25 @@ export function paintingExtensionProblems(value: unknown, names: ReadonlySet<str
     fail('CONFIG_FIELD_TYPE', at, 'requires an array of {part, band, max_distance}; omit it for no extension');
     return out;
   }
-  const seen = new Set<string>();
+  const seen = new Set<string>(), orders = new Set<number>();
+  const ordered = value.some(entry => typeof entry === 'object' && entry !== null && 'order' in entry);
   value.forEach((entry: unknown, i) => {
     const path = `${at}[${i}]`;
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
       fail('CONFIG_FIELD_TYPE', path, 'requires {part, band, max_distance}'); return;
     }
     const e = entry as Record<string, unknown>;
-    for (const key of Object.keys(e)) if (!['part', 'band', 'max_distance', 'min_held_alpha'].includes(key)) fail('CONFIG_KEY_KNOWN', `${path}.${key}`, 'is unknown; only part, band, max_distance and min_held_alpha are read');
+    for (const key of Object.keys(e)) if (!['part', 'band', 'max_distance', 'min_held_alpha', 'order'].includes(key)) fail('CONFIG_KEY_KNOWN', `${path}.${key}`, 'is unknown; only part, band, max_distance, min_held_alpha and order are read');
     for (const key of ['part', 'band', 'max_distance']) if (!(key in e)) fail('CONFIG_FIELD_PRESENT', `${path}.${key}`, 'is absent and required; no bound or target is inferred');
+    if (ordered && !('order' in e)) fail('CONFIG_FIELD_PRESENT', `${path}.order`, 'is absent; when precedence is declared, every entry requires a unique nonnegative safe integer order');
+    if ('order' in e) {
+      if (!(Number.isSafeInteger(e.order) && (e.order as number) >= 0)) fail('CONFIG_FIELD_TYPE', `${path}.order`, `is ${JSON.stringify(e.order)}; a nonnegative safe integer is required; lower orders claim first`);
+      else {
+        const order = e.order as number;
+        if (orders.has(order)) fail('CONFIG_ORDER_UNIQUE', `${path}.order`, `is ${order} again; a unique order per entry is required, no array-order tie break is applied`);
+        orders.add(order);
+      }
+    }
     if ('part' in e) {
       if (typeof e.part !== 'string' || e.part === '') fail('CONFIG_FIELD_TYPE', `${path}.part`, `is ${JSON.stringify(e.part)}; a nonempty final layer-derived output part name is required`);
       else {
@@ -57,9 +69,11 @@ export function paintingExtensionProblems(value: unknown, names: ReadonlySet<str
  * Absent a floor, alpha >0 on ANY assembled part blocks a candidate. With a
  * floor, exact alpha-over union below that floor is eligible; equality blocks.
  * Only original target alpha >8 seeds paths. A path stays in-band on painting alpha >=250;
- * its first pixel is distance 1. Conflicting claims refuse, never pick a part.
+ * its first pixel is distance 1. Without order, conflicting claims refuse.
+ * With unique explicit orders on every entry, lower orders claim first; their
+ * gains block later candidates and paths, but never become original seeds.
  * The caller assigns painting RGBA to target gains, including its own faint
- * samples. Other holders are never modified; their draw order still matters.
+ * samples. Non-target holders are never modified; their draw order still matters.
  */
 export function paintingExtensionMasks(
   declarations: readonly PaintingExtension[],
@@ -79,7 +93,9 @@ export function paintingExtensionMasks(
     else for (let j = 0; j < image.height; j++) for (let i = 0; i < image.width; i++) if (image.data[(j * image.width + i) * 4 + 3] > 0) held[(y + j) * W + x + i] = 1;
   }
   refuseIfAny(problems);
-  for (const e of declarations) {
+  const ordered = declarations.some(e => e.order !== undefined);
+  const entries = ordered ? [...declarations].sort((a, b) => a.order! - b.order!) : declarations;
+  for (const e of entries) {
     const target = parts.find(p => p.name === e.part)!;
     const [x0, y0, x1, y1] = e.band, bw = x1 - x0, bh = y1 - y0;
     const distance = new Uint32Array(bw * bh), queue = new Int32Array(bw * bh), gain = newMask(W, H);
@@ -93,7 +109,7 @@ export function paintingExtensionMasks(
     const candidates = new Uint8Array(bw * bh);
     for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
       const p = y * W + x, alpha = painting.data[p * 4 + 3];
-      if (alpha < CORE_ALPHA || targetAlpha(x, y) >= alpha) continue;
+      if (alpha < CORE_ALPHA || targetAlpha(x, y) >= alpha || (ordered && claimed.has(p))) continue;
       let eligible = held[p] === 0;
       if (!eligible && e.min_held_alpha !== undefined) {
         let remaining = 1n, scale = 1n;
