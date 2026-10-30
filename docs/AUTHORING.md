@@ -70,6 +70,29 @@ model stack. The wrapper README and the adapter graph use different node names
 and depth-model identifiers; [the adapter notes](../README.md#the-optional-comfyui-adapter)
 name the graph actually sent.
 
+### See-through head-run source reading
+
+**The head run is needed on every route that was read.** See-through's model
+already separates the head in a second stage of its own: it crops the head the
+first stage found, runs the face tags on that crop at the same `resolution`, and
+pastes the result back **resized to the full image's scale**. So the face comes
+back at the full run's pixel density whichever route ran it, and the separate
+head run on `st_input_head.png` is what gives the eyes more pixels
+(read on 2026-09-28 at see-through `a25a549` and wrapper 0.5.0 `98d754b`):
+
+- *Hugging Face Space* — the same two-stage code, with `resolution` capped at
+  1280 (768 by default): the head run is still needed.
+- *ModelScope demo* — its code was not read, so what the head run adds on that
+  route has not been measured.
+- *Upstream CLI* — the `.psd` frame is the `resolution`-sided square the first
+  stage ran on (1280 by default), and the head stage is pasted into it at that
+  scale: the head run is still needed.
+- *ComfyUI wrapper* — `SeeThrough_GenerateLayers` runs both stages with no input
+  to change the second, at most `resolution` 2048, which on the examples' 2432 px
+  square is 1.19 source px per layer px against 0.77 and 0.47 for their head
+  crops; at the 1024 the examples ran, the full run's right eye white is 22×13 px
+  and the head run's 60×38: the head run is still needed.
+
 ## 2. The folder
 
 Nothing in rig-parts requires a layout; every command takes paths. The one the
@@ -3608,6 +3631,90 @@ artifacts under `--out`: `proposal.json`, `basis.json`, `render/landmarks.png` a
 existing hardlinks are refused before artifact output; the ordinary mode names
 `CONFIG_WRITE_TARGET`, and the cloth mode `PROPOSE_WRITE_CONFIG_FRESH`.
 
+### Command reference
+
+| command | does |
+| --- | --- |
+| `inputs --source <png> --config <json> --out <dir>` | the two images See-through is fed: the painting on a white square, and the head box's crop once the config has one |
+| `comfy paint --config --out [--host]` | optional: generate the painting on a ComfyUI box from the config's `generation` block |
+| `comfy seethrough --image --out [--host]` | optional: run the ComfyUI See-through wrapper on one image and write the form `layers` reads |
+| `layers <dir \| layers.json \| file.psd>` | keep the existing columns (`opaque_px` still means alpha >8) and append source-alpha boxes `drawn(a>8)` / `opaque(a>=250)` with exclusive right/bottom; name absent boxes, report the existing body-group union height at **CORE_ALPHA (>=250)** in **input-canvas px**, and show its >8 union separately; no anatomical height, ownership/erosion or painting registration is inferred ([units and rig-scale guidance](AUTHORING.md#4-the-command-order)) |
+| `sheet --source <png> --layers <path>… --out <png>` | a labelled contact sheet of the painting and every layer or part |
+| `assemble --propose-plan … [--write-config <config>]` | propose `assemble.plan` and `extend_below_crop` from the two runs, leaving out an implausible layer with a note naming the rule, naming in a note any full-run body no planned part covers, and naming every layer no row takes with why (empty, taken from the other run only, a plausibility rule; `nose`, never planned, with the row that lets `propose` read the head's pitch) |
+| `assemble --source --full --head --config --out [--seam] [--project]` | merge the two runs into rig-space parts, `parts.json`, the recomposite and its error map, and list the uncovered holes |
+| `propose --head-box --full <run> --canvas WxH [--no-back-hair] [--write-config <config>]` | propose `seethrough.head_box` from the full run, held inside the painting; `--no-back-hair` leaves the back-hair layer out of that proposal |
+| `propose --parts --source --out [--compare <config>] [--write-config <config> [--only-missing]]` | propose bones, meshes, regions and an idle; draw the overlay; print, per bone, which check read it or that none did and why (its role, its kind of segment), and write `basis.json` beside the proposal — what each bone rests on (a joint, a part's mask, a ratio, other bones) and, with `--compare`, whether the config's bone differs |
+| `propose … --keypoints <file> [--person <id>]` | read a posed figure's joints from one explicit file (space, image size, people, each joint observed, occluded or missing, its source): a joint with a position places the neck, hip, chest or a sleeve chain as given, a note says how every joint was used or which rule stood in, and LINT reads the torso and sleeves along the joints instead of by screen y ([AUTHORING §3](AUTHORING.md)) |
+| `propose … --full <run> --head <run> --write-config <config>` | [draft an independent neck](AUTHORING.md#a-neck-that-moves-on-its-own) in an existing sampled body turn and reassemble its full-run source under `<out>/rig` |
+| `propose … --grid-rule figure\|part` | how each drafted lattice's spacing is chosen: `figure` (the default) one spacing for the figure, round(H / 37) rig px, a part already coarser keeping its own, with a note on its calibration and cost; `part` the reference's rule, a tenth of the part's short side (the oracle examples are proposed under it) |
+| `propose --parts --source --out --from-config <config> [--keypoints <file> [--person <id>]]` | draw and LINT the config's current bones (by the joints too, given `--keypoints`); proposes nothing, so takes only these flags (not `--full`, `--head`, `--cloth`, `--write-config`, `--wrist-snap`, `--grid-rule`, `--only-missing` or `--compare`) |
+| `compare --left <file> --right <file> [--map <bonemap.json>]` | compare two skeletons — a config, a proposal or a `rig.json` — bone by bone: origin, parent, tip, length and direction per pair, the bones neither side pairs, the required ones missing, and each side's roles read off the spec; no frame is guessed, and nothing pairs by resemblance (`propose --compare` reads origins only) |
+| `rig --config --parts --out [--idle-keys ctl\|direct]` | author `rig.json` + `motion.json`, written only after rig-c's gate is green; each mesh is in the mode its config entry names — `grid` (the lattice, what `propose` writes), `contour` (the traced outline with declared interior points) or `auto` (the contour mesh at alpha 1 and above, reduced and locally refined by rig-c's `reduceMesh` under the author's declared bounds, written only when its motion against the unreduced source on the idle passes the author's `motion` bounds through rig-c's `compareMeshesInMotion`; [AUTHORING §3](AUTHORING.md)); every chain link is turned along its chain and carries its `length`, so a physics constraint added later has a lever, with every offset under it in the turned frame so nothing moves; `--idle-keys` says whether the idle's keys on mesh-driving bones go through `<bone>_ctl` parents (default) or stay on the bones with `invariants.idleDrivesMeshes` declared; the config's `constraints` go to rigc as written, and a two-bone ik over keyed links needs `--idle-keys direct` (on `rig` or `build`) |
+| `check --rig --out [--parts] [--source] [--requirements]` | build packed, gated under `rig-play`, render the idle, measure seam, loop and the six judgement lines (mesh texture stretch among them, from the idle's `render --geometry`), and report the recomposite's holes from `parts.json`; on a rig spec with no `parts.json` or no `idle` (a merged rig, issue #77) the gate still runs and every line that needs the missing input says SKIP by name; `--source <painting.png>` adds `SETUP_POSE_VS_SOURCE`, the setup pose against the painting by assemble's recomposite figures; `--requirements <scene.json>` measures what a scene declares of the motion — a contact, a follow fraction, an aim, a joint range, a mesh's stretch, the seam between two parts over the motion — each against the author's own bar, from rig-c's posed frames, one line each, PASS, FAIL or NOT MEASURABLE (AUTHORING §7, *Declared requirements*) |
+| `loop --frames <dir> --out <file.gif \| file.png> [--palette]` | encode a rendered idle as a looping GIF, lossless APNG, or indexed APNG (`--palette`) |
+| `build --config --source --full --head --out [--seam] [--project] [--loop] [--lead-in <periods>] [--requirements] [--seam-pairs] [--keep-stills] [--idle-keys ctl\|direct]` | assemble, rig and check in one process, stopping at the first refusal; `--requirements`, `--seam-pairs` and `--keep-stills` are forwarded to check, `--idle-keys` to rig; `--lead-in` (with `--loop`) encodes the loop from the last of n + 1 idle periods played back to back, for a rig whose physics does not end where the render starts it |
+| `compose --scene <scene.json> --out [--requirements] [--accept]` | bind several characters' green builds into one rig (or, under `--accept`, builds failing only the bars named — for looking, not shipping): every name prefixed `<id>:` under one shared root, each character's offset added at its first-level bones, an optional background plate (its provenance recorded, judged by nothing) drawn first, and the draw order between the characters' slots as the scene file declares it — nothing inferred, nothing scaled; gated through rig-c as `rig` is, then checked ([AUTHORING §7](AUTHORING.md), *Composing several characters*) |
+| `mesh-draft --config <json> --parts <dir> --out <dir>` | draft contour meshes for configured lattices, keeping each only where it holds against its lattice through rig-c; write the revised config and measurement report |
+| `mesh-stats --config <json> --parts <dir>` | print each configured mesh's vertex and triangle counts and their total through the rig stage's construction; write nothing |
+| `painting --keypoints <json> [--person <id>] <png>` | before See-through, read the painting against its declared joints and refuse named background, joint or limb-gap problems; write nothing |
+| `remesh --rig <dir> --config <json> --parts <dir> --part <name> --out <dir>` | with exactly one of `--mesh <entry.json>` or `--delta <mesh-edit.json>`, re-fit one part of a gated rig into a fresh revision, preserving the input |
+| `retune --rig <dir> --config <json> --parts <dir> --out <dir>` | splice the config's constraints and idle onto a gated rig in a fresh revision, carrying its attachments over as bytes |
+| `guide <RULE \| §<n> \| §<n>.<m> \| §<n>.<m>.<k>>` | print the one row of [docs/AUTHORING.md](AUTHORING.md) that names a rule (a refusal and the bar it enforces, `CHECK_<LINE>` and `<LINE>`, print together), or one section, `###` subsection or `####` under it, read from the installed file when it runs |
+
+`rig-parts --help` has every flag. Exit codes: 0 done, 1 input refused (every
+reason is a FAIL line), 2 a usage error or a command this version does not implement.
+Every FAIL line ends with `(see rig-parts guide <RULE>)`, the command that prints the
+guide's row for that rule, and each row is anchored on the web as
+`docs/AUTHORING.md#<RULE>`.
+
+What 1.0.0 holds stable — these commands and their flags, the config
+fields, the files a build writes and their spec ids, the environment, and what this
+package relies on in rig-c — and what is not, is [docs/STABILITY.md](STABILITY.md).
+Coming from 0.16.0: [docs/MIGRATION.md](MIGRATION.md).
+
+### Writing proposed config fields
+
+`--write-config <config.json>` saves the proposals above into an existing
+regular config file: `seethrough.head_box`, `assemble.plan` plus
+`assemble.extend_below_crop`, or the present config sections of an ordinary
+proposal. The [neck draft](AUTHORING.md#a-neck-that-moves-on-its-own)
+(`propose … --full --head --write-config`) is another writer: for an existing
+`turn.body` config with one neck plan row, it selects the full-run neck, drafts a
+rigid unit and its depth, and reassembles parts under `<out>/rig`.
+For `assemble --propose-plan`, the destination must name `--config`
+itself; a different destination is a usage error. Other fields and absent optional
+sections remain; proposal notes are not copied. Changed whole values are spliced
+into the original text, preserving untouched bytes. Stage loaders validate the candidate, including `proposed_rig_scale`,
+before atomic replacement. Relative paths keep the config's directory as their
+base. Changes are listed on stderr; the head-box and plan JSON on stdout remain.
+An identical update leaves bytes and mtime untouched. Without the flag no config
+is changed. This commits the config file, not a transaction across the proposal
+artifacts.
+
+With `--cloth <config.json>`, the flag requires a **new** destination and applies
+the recipe's entry ownership: recipe-owned entries are spliced into the cloth
+config while hand entries and unrelated text survive; conflicts are refused.
+The destination must also be separate from all four artifacts under `--out`:
+`proposal.json`, `basis.json`, `render/landmarks.png`, `render/landmarks_head.png`.
+Aliases, including directory symlinks and hardlinks, count as collisions too.
+Fresh output is published without overwriting a file created while the command
+runs. Its already-checked splice text may be a partial config; it is not passed
+through the full-config loader. If removing the staged temporary fails after
+publication, the error may accompany an already-published complete config.
+`--from <previous.json>` retains the previous-recipe comparison.
+With `--only-missing` (issue #671), an ordinary proposal's `--write-config` adds
+only `meshes.<part>` or `regions.<part>` for each proposed part the config
+attaches by neither, entry by entry, and, for a part the 1.37.0 arm split makes
+(`full:drape-<s>`, `full:hand-<s>`) that `assemble.plan` does not name, its plan
+row beside the arm's row; every existing row and entry and every other byte
+stays as read, and nothing else of the proposal is written. The candidate passes
+the full loader first, so an entry on a bone the config does not declare is
+refused naming the part and the bone; nothing missing leaves bytes and mtime
+untouched. It is the upgrade path for a config proposed before the 1.37.0 arm
+split ([MIGRATION](MIGRATION.md#after-1370-merged-arm-layers-are-split-issue-490)),
+and a usage error with `--head-box`, `--cloth` or `--from-config`.
+`--from-config` proposes nothing and cannot be combined with `--write-config`.
+[AUTHORING §4](AUTHORING.md#4-the-command-order) describes all four modes.
 ## 5. After each stage: what to read
 
 | stage | read | green looks like | a common red |
@@ -6370,3 +6477,51 @@ they do not certify a new toolchain, input or packaging build. No tuning to meet
 | <a id="CONFIG_WAIST_NAME_FREE"></a>`CONFIG_WAIST_NAME_FREE` | The generated bone name already exists; declare an unused name | declare an unused name |
 | <a id="RIG_WAIST_DECLARATION"></a>`RIG_WAIST_DECLARATION` | Actual provenance, pair bindings or drawing ownership do not match the bounded declaration; supply the declared base two-bone mesh/rigid-region pair | supply the declared base pair |
 | <a id="RIG_WAIST_MOTION"></a>`RIG_WAIST_MOTION` | Imported tracks drive the generated waist frame; retain their original authored targets | retain the original authored targets |
+
+### Depth-driven rigging
+
+Registered per-part depth sheets drive sampled head yaw/pitch through
+`turn.roles` and independent body yaw through `turn.body.roles`. Region
+surfaces use depth-bearing grids; authored weighted surfaces keep their
+skinning and receive per-influence deform offsets sampled at setup positions.
+These controls are exercised on public synthetic fixtures. Unit parts use the
+[documented depth precedence](AUTHORING.md#unit-depth-precedence), so a
+recorded unit sheet does not by itself promise different turn geometry.
+See the [authoring contract](AUTHORING.md#per-layer-depth-sheets-773)
+and the [getting-started guide](https://github.com/rig-c/getting-started).
+
+### Per-layer depth input
+
+`config.depth` explicitly enables scalar input. Without it, `depth_filename`
+is a legacy hint: no depth-file I/O, validation, fetch, reference or output is
+activated, even when files or in-memory sheets exist. Active See-through sheets
+are read as opaque grayscale source data. Declare positive finite `depth.zScale`;
+eight bits do not supply world units. See-through far-high encoding is explicitly `near: "black"`. User
+per-layer/run-canvas fallbacks declare image, near and zScale themselves; a
+missing declared file is an error, not a fallback. The ordering median remains
+separate, and its agreement reading cannot certify an image's polarity.
+
+Assembly emits registered part sheets and references; rig emits PAD4 sheets and
+`depth_sheets.json`. Since 1.68.0 (#777), [config.turn.roles](AUTHORING.md#3-configjson-field-by-field)
+uses depth sheets for 2.5D head turns with grid or authored weighted surfaces and `yaw_dial`/`pitch_dial`
+controls; see [`CONFIG_TURN_ROLE_UNKNOWN`](AUTHORING.md#CONFIG_TURN_ROLE_UNKNOWN)
+and [`CONFIG_TURN_SURFACE_REQUIRED`](AUTHORING.md#CONFIG_TURN_SURFACE_REQUIRED).
+`turn.body.roles` adds independent body yaw. A weighted mesh declared as
+`"surface"` in either group and blending head and torso bones receives both
+fields in proportion to its skin weights. Inside the existing setup alpha
+overlap with a single-group neighbour, a blended attachment's vertex takes
+that neighbour's existing emitted triangle field at its setup position (#804), without changing skin weights,
+setup or idle. A `motion.blink.still` unit neighbour supplies both emitted
+pieces, each on its own bone and resolved depth; transparent padding does not
+let either piece lend its field to the other's art (#807). Missing emitted
+split support is refused by name. Conflicting neighbour groups are refused by name. Each sibling island takes only its
+own group; parts without a blended attachment keep their existing role behavior
+and output bytes. Unlisted meshes do not consume turn depth sheets. See the
+[blended surface contract](AUTHORING.md#per-layer-depth-sheets-773).
+This copies the field at vertices; different triangle partitions can still
+differ between vertices. The [corrected #804 acceptance](https://github.com/rig-c/parts/issues/804#issuecomment-6478778123)
+checks vertex correspondence and reports those residuals per fixture; the
+contract records the measured grid residual and preserves its seam readings.
+No-image builds keep the legacy output bytes. `comfy seethrough --config <file> --depth-run <full|head>`
+uses the same opt-in; its default captures art only. Standalone authored part
+references remain active declarations. See [the input contract and refusals](AUTHORING.md#per-layer-depth-sheets-773).
