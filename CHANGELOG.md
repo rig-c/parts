@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.82.0](https://github.com/rig-c/parts/compare/v1.81.0...v1.82.0) (2026-10-30)
+
+
+### Features
+
+* **assemble:** extend_painting order lets two entries share a band with declared precedence ([#858](https://github.com/rig-c/parts/issues/858)) ([6f3bebf](https://github.com/rig-c/parts/commit/6f3bebf3652ba31750079247891b77d59b9b010a)), closes [#855](https://github.com/rig-c/parts/issues/855)
+
 ## [1.81.0](https://github.com/rig-c/parts/compare/v1.80.0...v1.81.0) (2026-10-30)
 
 
