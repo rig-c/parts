@@ -494,3 +494,19 @@ neighbour field rules in [AUTHORING](AUTHORING.md#per-layer-depth-sheets-773).
 The unit-depth precedence and its primary-surface sampling are documented in
 [AUTHORING](AUTHORING.md#unit-depth-precedence).
 The separate ordering scalar is unchanged. No-image outputs retain legacy bytes.
+
+### Declared setup-painting regions
+
+The optional `setup_painting` key in `spine-parts-requirements/1` adds a
+`SETUP_MATCHES_PAINTING` observation only when declared. It requires authored
+`rgb_tolerance` and named native-stage boxes. Each optional `max_pixels` is
+that whole region's limit; omission is SKIP, never PASS. Existing files without
+the key retain their output bytes and renderer calls. Other requirement fields
+remain independent. The [authoring contract](AUTHORING.md#setup-against-the-painting)
+defines white compositing, the figure domain, strict RGB comparison, top
+contributor attribution and named measurement refusals. The check observes the
+actual renderer setup at scale 1; it neither fits the art nor duplicates core
+validation. Only this declared check composites source RGBA over white at its
+original resolution **before** existing Lanczos3 stage resampling. Setup RGBA
+is composited on the native stage grid. Source readers preserve alpha; the
+global RGB-only source helper and checks without this declaration are unchanged.

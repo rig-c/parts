@@ -4934,6 +4934,9 @@ documents do not ship). Each is an input this package built; none is an author's
 | <a id="CHECK_INPUT_PRESENT"></a><a id="CHECK_INPUT_IS_JSON"></a><a id="CHECK_PART_PNG_PRESENT"></a><a id="CHECK_PART_PNG_MATCHES_BOX"></a><a id="CHECK_PART_SLOT_PRESENT"></a><a id="CHECK_RIG_STAGE_PRESENT"></a><a id="CHECK_RIG_STAGE_IS_THE_CANVAS"></a><a id="CHECK_RIG_ROOT_BONE"></a><a id="CHECK_IDLE_PRESENT"></a>`CHECK_INPUT_PRESENT`, `CHECK_INPUT_IS_JSON`, `CHECK_PART_PNG_PRESENT`, `CHECK_PART_PNG_MATCHES_BOX`, `CHECK_PART_SLOT_PRESENT`, `CHECK_RIG_STAGE_PRESENT`, `CHECK_RIG_STAGE_IS_THE_CANVAS`, `CHECK_RIG_ROOT_BONE`, `CHECK_IDLE_PRESENT` | the rig directory is incomplete or disagrees with `parts.json` (`CHECK_PART_SLOT_PRESENT`: a part with no slot of its own name, which the judgement lines render it by; `CHECK_INPUT_PRESENT` on `--set` / `--all-sets`: no `parts.json`, no `alternates`, or the named set is not in `alternates`). `motion.json` is required even with no animation in it, because `rigc build` takes `--motion` (a spec with `"animations": {}` builds green); `CHECK_IDLE_PRESENT` is an `idle` that is there with no positive `duration` — an absent `idle` is measured around (§7). `CHECK_INPUT_PRESENT` on `…/parts.json`: `--parts` named a directory without `parts.json` — most often `parts/` itself — or, without `--parts`, the rig directory has none while the directory above it does (build's layout, `<out>/rig` under `<out>/parts.json`). The detail says it: "--parts names the directory holding parts.json and parts/, not parts/ itself (after build, that is build's --out, whose rig is <out>/rig); without --parts it is --rig", and names the parent when the parent holds `parts.json`. With neither (no `--parts`, and no `parts.json` beside `rig.json` or above it), the rig is measured without parts and nothing is refused (§7) | re-run rig (`build` does both); for `…/parts.json`, `--parts` — the directory above `parts/` |
 | <a id="CHECK_SOURCE_SIZE"></a>`CHECK_SOURCE_SIZE` | the painting `--source` names is not this rig's: no single `rig_scale` takes its width and height to the stage's (assemble makes the canvas `trunc(w × rig_scale)` x `trunc(h × rig_scale)`), or, with `parts.json` read, its `scale_rig_per_source` does not; or the stage is not whole pixels. Refused before anything is built | the painting the rig was made from — the stage's own size, or the painting `assemble` was given |
 | <a id="CHECK_SOURCE_PNG"></a>`CHECK_SOURCE_PNG` | `--source` names a file that does not read as a PNG | a PNG |
+| <a id="CHECK_SETUP_MATCHES_PAINTING"></a>`CHECK_SETUP_MATCHES_PAINTING` | region, slot, failing-pixel box, slot pixelcount, complete region pixelcount and declared limit | compare the source painting beside the actual setup; follow [Source before scissors](#source-before-scissors), then rerun with the same authored limit |
+| <a id="CHECK_SETUP_PAINTING_SOURCE"></a>`CHECK_SETUP_PAINTING_SOURCE` | a declaration without a source painting | supply `--source`; the assembled composite is not an independent reference |
+| <a id="CHECK_SETUP_PAINTING_MEASURED"></a>`CHECK_SETUP_PAINTING_MEASURED` | missing native setup/ownership or unsupported clipping | supply observable textured setup geometry; an unavailable instrument never passes |
 | <a id="CHECK_SOURCE_GRID"></a>`CHECK_SOURCE_GRID` | the setup-pose still and its black-tinted twin (the coverage `SETUP_POSE_VS_SOURCE` reads) did not come back on one grid over one opaque background | a rigc problem; report it |
 | <a id="CHECK_RIGC_VERSION"></a>`CHECK_RIGC_VERSION` | `rigc --version` is below 1.4.0, or prints no version: its `render` has no `--geometry`, which `TEXTURE_STRETCH` reads. Refused before anything is built | `bun install` (this package depends on rig-c ^2.20.4), or put a newer `rigc` first on `PATH` |
 | <a id="CHECK_RIGC_ENTRY"></a><a id="CHECK_RIGC_ENTRY_READS"></a>`CHECK_RIGC_ENTRY`, `CHECK_RIGC_ENTRY_READS` | `rigc --version` names no entry (a rigc below 2.0.0), or names one in neither launcher form (`entry: cli.ts — @esotericsoftware/spine-core <v> present`, `entry: cli_core.ts — @esotericsoftware/spine-core absent — …`); `check.json`'s `rigc_entry` records the one that gated the build | `bun install` |
@@ -5548,6 +5551,7 @@ Under `--source <painting.png>`, a second reported line, also never a FAIL
 | line | reports | bar | `reference-demo` | `reference-sample` | SKIP when |
 | --- | --- | --- | --- | --- | --- |
 | <a id="SETUP_POSE_VS_SOURCE"></a>`SETUP_POSE_VS_SOURCE` | the setup pose against the painting, by `assemble`'s own `measureRecomposite` over the stage's pixels — `mean_abs` and `within_share` (mean channel, within 8), `error_px` (max channel over 40), `uncovered_error_px` (of those, where the pose has alpha 128 or less), `hole_count` and the largest hole's box — with `painting_px`, `stage_px`, `render_px` and `render_scale` beside them. The painting is resampled onto the stage as assemble resamples it (lanczos3, alpha dropped). rigc renders onto an opaque grey, so the pose over white and its alpha are read off a second still of the same pose with every slot tinted black; both are carried onto the stage with the seam's map turned round (bilinear) | none — status `REPORTED`; assemble applies no bar to the figures it measures, so none is derived here | 3.146 / 93.43 % / 12,399 / 1,732, 518 holes, the largest 61 px at 351,157 6x20 (assemble's recomposite: 2.391 / 95.81 % / 11,050 / 1,564, 453) | 1.095 / 97.30 % / 5,348 / 1,239, 313 holes, the largest 88 px at 479,416 6x29 (assemble's: 0.835 / 97.95 % / 4,512 / 1,185, 259) | not written without `--source` |
+| <a id="SETUP_MATCHES_PAINTING"></a>`SETUP_MATCHES_PAINTING` | declared region count, native box, limit and actual top contributor rows | PASS/FAIL against authored limits; no limit is SKIP; undeclared regions are not judged |
 
 The figures are assemble's by construction, not a second definition beside them;
 what differs is what they are taken of — the pose rigc draws, not the flat stack —
@@ -6084,6 +6088,66 @@ Unknown fields are refused.
 | line | measures | bar | SKIP |
 | --- | --- | --- | --- |
 | <a id="ART_JOINT_DISTANCE"></a>`ART_JOINT_DISTANCE` | Each independently measured art joint versus its explicitly named bone's renderer setup origin, in stage pixels; printed and recorded per joint | distance <= the declared `fixed_skeleton.within_px`, with no rounding slack | no limit declared: every row and the block retain their distances as SKIP, never a pass; no declaration: no line |
+
+### Setup against the painting
+
+`check --source <painting> --requirements <file>` can declare
+`setup_painting` in the existing `spine-parts-requirements/1` file:
+
+```json
+{
+  "spec": "spine-parts-requirements/1",
+  "fps": 12,
+  "requirements": [],
+  "setup_painting": {
+    "rgb_tolerance": 60,
+    "regions": [
+      { "name": "torso", "box": [10, 20, 40, 60], "max_pixels": 0 }
+    ]
+  }
+}
+```
+
+These are authored limits, not defaults or calibrated figures. A region's
+`box` is `[x, y, width, height]` in the declared stage's native pixel grid,
+x right and y down, with exclusive far edges. Regions must fit the stage.
+`rgb_tolerance` is an integer from 0 through 255. Count a pixel once when its
+maximum absolute RGB-channel difference is **strictly greater** than that
+value. The region passes when its total count is at most its authored
+nonnegative integer `max_pixels`. Without that limit the region reports
+**SKIP**, including a zero-count region. An undeclared region has no verdict.
+Without `setup_painting`, existing output bytes and rendering remain unchanged.
+
+The observation is the actual renderer's setup pose, without animation or
+physics advancement, from the already gated setup candidate. Its viewport is
+the declared stage, scale 1; no fitted alignment or flat part composite is
+substituted. Source PNG readers preserve straight RGBA. This optional check
+first composites the painting over opaque white at its **original source
+resolution**, rounding each RGB channel to RGBA8, then passes that opaque
+image through the existing `sourceInRig` Lanczos3 resampling onto the stage.
+The rendered setup is composited over white on the native stage grid. This
+ordering excludes hidden RGB from both resampling taps and figure detection;
+the global `sourceInRig` and legacy checks retain their existing RGB semantics.
+The figure domain is the union of rendered
+alpha above zero and the painting's existing `figureSilhouette`: border-median
+background difference, morphological opening and hole filling. This includes
+missing output over source figure and extra rendered support. It is not an
+independent segmentation oracle for arbitrary backgrounds.
+
+`SETUP_MATCHES_PAINTING` reports each region's box, pixel count and limit.
+Diagnostic slot rows partition that count and report their failing-pixel box.
+The slot is the **last actual textured drawing with sampled alpha above zero**
+at that pixel, measured by rig-c's rasterizer, or explicit `(uncovered)`.
+For translucent stacks this names the top contributor, not the exclusive
+material owner or the cause of the difference. Overlapping region declarations
+are measured independently. Clipped drawings whose ownership cannot be observed
+are refused rather than attributed by a part's bounding box.
+
+Invalid limits, repeated names, unknown fields and out-of-stage boxes use the existing `REQUIREMENTS_FIELD` refusal; no value is guessed.
+
+This optional declaration is independent of motion requirements and
+`fixed_skeleton`; it does not replace their schemas or validation. The named
+refusals are in the check/build rule table and the observation in the line table.
 
 ## 8. What one character costs
 
