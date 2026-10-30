@@ -23634,7 +23634,7 @@ function runRequirementsSuite(): number {
         rsDetail[1].startsWith(' field "rests"[1]: names "hem" a second time') &&
         rsDetail[2].startsWith(' field "rests"[0]: names "hem", which "not_swinging" names too') &&
         rsDetail[3].startsWith(' field "rest": is not a field this format reads') &&
-        (rsBad[3]?.problems[0].detail ?? '').includes('rises, rests, may_fold, fixed_skeleton, cut_material;'),
+        (rsBad[3]?.problems[0].detail ?? '').includes('rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting;'),
       `read ${JSON.stringify([rsRead.rises, rsRead.rests])}; absent ${JSON.stringify(npAbsent.rests)}; refused: ${rsDetail.join(' | ')}`,
       'issue #245: rests is declared per part like its siblings — a list of names, each once, empty refused rather than read as none, a misspelt key refused by the format; a resting tip may also rise (a raised hand resting on something), but a part declared not swinging has no reading to hold at rest',
     );
