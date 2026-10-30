@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { runTurnUnitPrecedenceChecks } from './tools/check_turn_unit_precedence.ts';
+import { runAuthoredUnitDepthChecks } from './tools/check_authored_unit_depth.ts';
 import { runTakeLayerChecks } from './tools/check_take_layers.ts';
 import { runReadmePolicyChecks } from './scripts/readme_policy.ts';
 import { sourceCaseNames } from './scripts/selftest_prefixes.ts';
@@ -1642,6 +1643,7 @@ function runWrapperSuite(): number {
   try {
     runNeckDraftChecks(fresh('neck-draft'), (name, ok, detail) => say(name, ok, detail, 'public registered collar strip, explicit body-turn context and real config/source readers'));
     runDepthSheetChecks(fresh('depth-sheets'), (name, ok, detail) => say(name, ok, detail, 'independent authored scalar grids; #773 input/ref contract, no production geometry claim'));
+    runAuthoredUnitDepthChecks(fresh('authored-unit-depth'), (name, ok, detail) => say(name, ok, detail, 'explicit unit declarations only; actual under-art assembly and scalar refusal controls'));
     runLayerBoundsChecks(fresh('layer-bounds'), (name, ok, detail) => say(name, ok, detail, 'original alpha > 8, input-canvas offsets and the existing body group; analytical controls before acceptance measurements'));
     const dir = fresh('wrapper');
     writeWrapperFixture(dir);

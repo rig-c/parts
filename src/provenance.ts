@@ -1,6 +1,7 @@
 /** Report-only last-writer accounting over final output pixels (#817). */
 import { OPAQUE_ALPHA_ABOVE } from './layers.ts';
 import type { PartRecord } from './parts.ts';
+import type { AuthoredUnitDepth } from './authoredunit.ts';
 import { crop, type Raster } from './raster/index.ts';
 
 /** Negative IDs distinguish automatic writes from positive, config-indexed hand edits. */
@@ -11,6 +12,8 @@ export const AUTOMATIC_WRITERS = {
 } as const;
 export type AutomaticWriter = keyof typeof AUTOMATIC_WRITERS;
 export interface PixelProvenance {
+  /** Scalar transport omitted only for fully explicit unit consumers (#877). */
+  depth?: AuthoredUnitDepth;
   unchanged_layer_px: number;
   hand_px: number;
   automatic_px: number;
@@ -83,7 +86,7 @@ export function provenanceLines(parts: readonly PartRecord[]): string[] {
     opaque += p.opaque_px; unchanged += v.unchanged_layer_px; automatic += v.automatic_px; hand += v.hand_px;
     for (const e of v.edits) edits.set(e.edit, (edits.get(e.edit) ?? 0) + e.px);
     for (const e of v.automatic) stages.set(e.stage, (stages.get(e.stage) ?? 0) + e.px);
-    lines.push(`  provenance: part "${p.name}" (${p.from}) opaque ${p.opaque_px} = unchanged layer ${v.unchanged_layer_px} + hand ${v.hand_px} + automatic ${v.automatic_px}; edits ${detail(new Map(v.edits.map(e => [e.edit, e.px])))}; stages ${detail(new Map(v.automatic.map(e => [e.stage, e.px])))}`);
+    lines.push(`  provenance: part "${p.name}" (${p.from}) opaque ${p.opaque_px} = unchanged layer ${v.unchanged_layer_px} + hand ${v.hand_px} + automatic ${v.automatic_px}; edits ${detail(new Map(v.edits.map(e => [e.edit, e.px])))}; stages ${detail(new Map(v.automatic.map(e => [e.stage, e.px])))}${v.depth === undefined ? '' : `; depth authored-unit ${v.depth.values.map(d => `${d.group}/${d.bone ?? p.name}=${d.value}`).join(', ')}`}`);
   }
   lines.push(`  provenance total: opaque ${opaque} = unchanged layer ${unchanged} + hand ${hand} + automatic ${automatic}; edits ${detail(edits)}; stages ${detail(stages)}; output pixels, including copies in separate parts; value equality first; last value-changing stage wins`);
   return lines;

@@ -503,7 +503,8 @@ function checkOwnership(raw: unknown, object: string, fail: (code: string, objec
 
 function orderedProvenance(p: PixelProvenance): PixelProvenance {
   return { unchanged_layer_px: p.unchanged_layer_px, hand_px: p.hand_px, automatic_px: p.automatic_px,
-    edits: p.edits.map(e => ({ edit: e.edit, px: e.px })), automatic: p.automatic.map(e => ({ stage: e.stage, px: e.px })) };
+    edits: p.edits.map(e => ({ edit: e.edit, px: e.px })), automatic: p.automatic.map(e => ({ stage: e.stage, px: e.px })),
+    ...(p.depth === undefined ? {} : { depth: { kind: p.depth.kind, values: p.depth.values.map(v => ({ group: v.group, ...(v.bone === undefined ? {} : { bone: v.bone }), value: v.value })) } }) };
 }
 
 function serializePartList(parts: readonly PartRecord[]): Array<Record<string, unknown>> {
@@ -591,13 +592,13 @@ function show(v: unknown): string {
 }
 
 /** The same optional measurement contract for base and alternate records. */
-function checkProvenance(raw: unknown, opaque: unknown, object: string, fail: (code: string, object: string, detail: string) => void): void {
+function checkProvenance(raw: unknown, opaque: unknown, object: string, fail: (code: string, object: string, detail: string) => void, hasScalar = false): void {
   const v = raw as PixelProvenance | null;
   const count = (n: unknown): boolean => Number.isSafeInteger(n) && (n as number) >= 0;
   const edit = (name: string): boolean => /^(cuts\[\d+\]|patches\[\d+\])$/.test(name) ||
     (/^(full|head):author:/.test(name) && readFrom(name) !== null);
   const shape = v !== null && typeof v === 'object' && !Array.isArray(v) &&
-    Object.keys(v).sort().join(',') === 'automatic,automatic_px,edits,hand_px,unchanged_layer_px' &&
+    Object.keys(v).filter(k => k !== 'depth').sort().join(',') === 'automatic,automatic_px,edits,hand_px,unchanged_layer_px' &&
     [v.unchanged_layer_px, v.hand_px, v.automatic_px].every(count) && Array.isArray(v.edits) && Array.isArray(v.automatic) &&
     v.edits.every(e => e !== null && typeof e === 'object' && Object.keys(e).sort().join(',') === 'edit,px' && typeof e.edit === 'string' && edit(e.edit) && count(e.px) && e.px > 0) &&
     v.automatic.every(e => e !== null && typeof e === 'object' && Object.keys(e).sort().join(',') === 'px,stage' && typeof e.stage === 'string' && Object.hasOwn(AUTOMATIC_WRITERS, e.stage) && count(e.px) && e.px > 0) &&
@@ -611,6 +612,18 @@ function checkProvenance(raw: unknown, opaque: unknown, object: string, fail: (c
     const total = p.unchanged_layer_px + p.hand_px + p.automatic_px;
     const hand = p.edits.reduce((n, e) => n + e.px, 0), automatic = p.automatic.reduce((n, e) => n + e.px, 0);
     fail('PARTS_COUNTS_ADD_UP', object, `unchanged_layer_px ${p.unchanged_layer_px} + hand_px ${p.hand_px} + automatic_px ${p.automatic_px} = ${total}; opaque_px ${opaque} is required; edit subtotal ${hand} (hand_px ${p.hand_px} required), stage subtotal ${automatic} (automatic_px ${p.automatic_px} required)`);
+  }
+  if (v !== null && typeof v === 'object' && 'depth' in v) {
+    const d = v.depth;
+    const valid = !hasScalar && d !== null && typeof d === 'object' && !Array.isArray(d) &&
+      Object.keys(d).sort().join(',') === 'kind,values' && d.kind === 'authored-unit' && Array.isArray(d.values) && d.values.length > 0 &&
+      d.values.every(q => q !== null && typeof q === 'object' && !Array.isArray(q) &&
+        Object.keys(q).sort().join(',') === (Object.hasOwn(q, 'bone') ? 'bone,group,value' : 'group,value') &&
+        (q.group === 'head' || q.group === 'body') && typeof q.value === 'number' && Number.isFinite(q.value) &&
+        (!Object.hasOwn(q, 'bone') || (typeof q.bone === 'string' && q.bone.length > 0))) &&
+      new Set(d.values.map(q => `${q.group}:${q.bone ?? ''}`)).size === d.values.length &&
+      d.values.every(q => q.bone !== undefined || d.values.filter(r => r.group === q.group).length === 1);
+    if (!valid) fail('PARTS_FIELD_TYPE', object + ' depth', 'requires authored-unit with nonempty distinct head/body finite values, optional nonempty bone names, and no transported scalar reference');
   }
 }
 
@@ -675,7 +688,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
         if (k in r && !(Number.isInteger(r[k]) && (r[k] as number) >= 0)) fail('PARTS_FIELD_TYPE', `${label} field "${k}"`, `is ${show(r[k])}; a non-negative integer is required`);
       }
       const count = (k: string): number | null => (Number.isInteger(r[k]) && (r[k] as number) >= 0 ? (r[k] as number) : null);
-      if ('provenance' in r) checkProvenance(r.provenance, r.opaque_px, label + ' provenance', fail);
+      if ('provenance' in r) checkProvenance(r.provenance, r.opaque_px, label + ' provenance', fail, 'depth' in r);
       checkPaintingExtensionCount(r, label, fail);
       const [op, vis, occ, vnp] = ['opaque_px', 'visible_px', 'occluded_px', 'visible_not_projected_px'].map(count);
       if (held.length === VISIBILITY_KEYS.length && op !== null && vis !== null && occ !== null && vnp !== null) {
@@ -828,7 +841,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
         if (typeof p !== 'object' || p === null || Array.isArray(p)) return;
         const r = p as Record<string, unknown>;
         const part817 = typeof r.name === 'string' ? `part "${r.name}"` : `records[${j}]`;
-        if ('provenance' in r) checkProvenance(r.provenance, r.opaque_px, `${at} ${part817} provenance`, fail);
+        if ('provenance' in r) checkProvenance(r.provenance, r.opaque_px, `${at} ${part817} provenance`, fail, 'depth' in r);
         checkPaintingExtensionCount(r, `${at} ${part817}`, fail);
         const l = r[LIMB_KEY];
         if (typeof l !== 'object' || l === null || Array.isArray(l) || !('cap' in l)) return;
