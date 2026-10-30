@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runCutMaterialChecks } from './tools/check_cut_material.ts';
 import { runArtJointChecks } from './tools/check_art_joints.ts';
 import { runTurnUnitPrecedenceChecks } from './tools/check_turn_unit_precedence.ts';
 import { runAuthoredUnitDepthChecks } from './tools/check_authored_unit_depth.ts';
@@ -5505,7 +5506,7 @@ function runCliSuite(): number {
     const helpText = runCli(['--help']).out;
     say(
       'CL20_THE_HELP_NAMES_REQUIREMENTS_UNDER_CHECK_AND_UNDER_BUILD',
-      helpText.split('\n').filter((l) => l.includes('[--requirements <file.json>]')).length === 6 && helpText.split('\n').some((l) => l.trim().startsWith('rig-parts compose') && l.includes('[--requirements <file.json>]')) && helpText.split('\n').some((l) => l.trim().startsWith('rig-parts mesh-draft') && l.includes('[--requirements <file.json>]')) && helpText.split('\n').some((l) => l.trim().startsWith('--mesh <entry.json>') && l.includes('[--requirements <file.json>]')) && helpText.split('\n').some((l, i, all) => l.trim().startsWith('rig-parts retune') && (all[i + 1] ?? '').trim().startsWith('[--requirements <file.json>]')) && helpText.includes('--requirements is forwarded to check') && helpText.includes('CHECK_REQUIREMENT_MEASURABLE'),
+      helpText.split('\n').filter((l) => l.includes('[--requirements <file.json>]')).length === 7 && helpText.split('\n').some((l) => l.trim().startsWith('rig-parts compose') && l.includes('[--requirements <file.json>]')) && helpText.split('\n').some((l) => l.trim().startsWith('rig-parts mesh-draft') && l.includes('[--requirements <file.json>]')) && helpText.split('\n').some((l) => l.trim().startsWith('--mesh <entry.json>') && l.includes('[--requirements <file.json>]')) && helpText.split('\n').some((l, i, all) => l.trim().startsWith('rig-parts retune') && (all[i + 1] ?? '').trim().startsWith('[--requirements <file.json>]')) && helpText.includes('--requirements is forwarded to check') && helpText.includes('CHECK_REQUIREMENT_MEASURABLE'),
       `${helpText.split('\n').filter((l) => l.includes('[--requirements <file.json>]')).map((l) => l.trim()).join(' | ')}`,
       'an agent learns a flag from --help: check, build, compose (issue #74), mesh-draft (issue #265, which forwards it to its checks), remesh (issue #495, likewise) and retune (issue #527, likewise) each show it, and the check text names the two codes a requirement line can be refused with',
     );
@@ -22913,6 +22914,7 @@ function runRequirementsSuite(): number {
   const { say, bad } = counter();
   const dir = temp('requirements');
   try {
+    runCutMaterialChecks(join(dir, 'cut-material'), (name, pass, detail) => say(name, pass, detail, 'issue #888: fixed public source-support controls, no calibrated threshold'), rigcRunnerAt(suiteRigc(), spawnRigc));
     const file = (name: string, body: Record<string, unknown>): string => {
       const p = join(dir, `${name}.json`);
       writeFileSync(p, `${JSON.stringify(body, null, 2)}\n`);
@@ -23631,7 +23633,7 @@ function runRequirementsSuite(): number {
         rsDetail[1].startsWith(' field "rests"[1]: names "hem" a second time') &&
         rsDetail[2].startsWith(' field "rests"[0]: names "hem", which "not_swinging" names too') &&
         rsDetail[3].startsWith(' field "rest": is not a field this format reads') &&
-        (rsBad[3]?.problems[0].detail ?? '').includes('rises, rests, may_fold, fixed_skeleton;'),
+        (rsBad[3]?.problems[0].detail ?? '').includes('rises, rests, may_fold, fixed_skeleton, cut_material;'),
       `read ${JSON.stringify([rsRead.rises, rsRead.rests])}; absent ${JSON.stringify(npAbsent.rests)}; refused: ${rsDetail.join(' | ')}`,
       'issue #245: rests is declared per part like its siblings — a list of names, each once, empty refused rather than read as none, a misspelt key refused by the format; a resting tip may also rise (a raised hand resting on something), but a part declared not swinging has no reading to hold at rest',
     );
