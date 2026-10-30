@@ -1,3 +1,5 @@
+import { writeMaterialSources } from './cutmaterialio.ts';
+import { CUT_MATERIAL_LINE, CUT_MATERIAL_SOURCES, materialLines } from './cutmaterial.ts';
 import { ART_JOINT_LINE, artJointLines } from './artjoints.ts';
 import { applyTakenLayers } from './takelayers.ts';
 import { ownershipLines, provenanceLines } from './provenance.ts';
@@ -154,6 +156,8 @@ export interface AlternateCliInput {
 }
 
 export interface AssembleStageInput {
+  /** Write source-edge evidence only when cut_material is explicitly declared. */
+  requirements?: string;
   source: string;
   full: string;
   /** The head run, or null for one run that holds the face (issue #359). */
@@ -318,6 +322,7 @@ export function frontOrdered<T extends { record: { name: string } }>(items: read
 
 /** Read, assemble, and write only after every refusal has had its chance. Throws a PartsError on a refusal, having written nothing. */
 export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, log: Log): AssembleResult {
+  const materialAsked = input.requirements === undefined ? false : readRequirements(input.requirements).cut_material !== undefined;
   // The early door: assemble runs before propose has drafted bones, meshes,
   // regions and motion, so it requires only what it reads (issue #20).
   const cfg = loadEarlyConfig(input.config, 'assemble');
@@ -772,6 +777,8 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   for (const b of altBuilt) {
     for (const { name, image } of b.images) writePng(join(outs.partsDir, `${name}.png`), image);
   }
+  if (materialAsked) writeMaterialSources(outs.partsJson, outs.partsDir, result.parts, result.materialSources);
+  else rmSync(join(dirname(outs.partsJson), CUT_MATERIAL_SOURCES), { force: true });
   writePng(outs.recomposite, result.recomposite);
   writePng(outs.errorMap, result.errorMap);
   // Issue #242: under config.scene, the figure the recomposite was read inside, beside the recomposite.
@@ -799,6 +806,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   for (const l of authorPartLines(result.parts.parts)) log(l);
   // One line per plan part an assemble.cuts entry cut, before the fringe lines: the cut is made first. None without cuts.
   for (const l of cutLines(result.cuts)) log(l);
+  if (materialAsked) for (const line of materialLines({ status: 'SKIP', rows: result.cutMaterial, reason: 'assemble source readings only; check --requirements judges declared joint material' })) log(`  ${line}`);
   // Issue #349: one line per part a limb took, and one per joint with its cap's pixels. None without limbs.
   for (const l of limbLines(result.limbs)) log(l);
   for (const l of fringeLines(result.parts.parts)) log(l);
@@ -1942,6 +1950,8 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   if (vsSource !== undefined) log(`  ${judgementLine(SOURCE_LINE, vsSource)}`);
   const windBand = fig[WIND_BAND_LINE];
   if (windBand !== undefined) for (const l of windBandLines(windBand)) log(`  ${l}`);
+  const cutMaterial = fig[CUT_MATERIAL_LINE];
+  if (cutMaterial !== undefined) for (const line of materialLines(cutMaterial)) log(`  ${line}`);
   const artJoints = fig[ART_JOINT_LINE];
   if (artJoints !== undefined) for (const line of artJointLines(artJoints)) log(`  ${line}`);
   if (r.requirements !== null) {
@@ -2388,6 +2398,8 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
   const out = input.out;
   mkdirSync(out, { recursive: true });
   for (const p of BUILD_OWNS) rmSync(join(out, p), { recursive: true, force: true });
+  // Optional source evidence is cleared separately; BUILD_OWNS is the legacy complete output tree.
+  rmSync(join(out, CUT_MATERIAL_SOURCES), { force: true });
   // Issue #242: the figure mask is written only under config.scene; one left by an earlier scene build is not this build's.
   rmSync(join(out, FIGURE_MASK_FILE), { force: true });
   // The idle-keys value is named only when it is not the default, so a build without the flag, or with the default, prints the line it printed before issue #95.
@@ -2413,7 +2425,7 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
     // And the steady-wind band spec (issue #590), as check reads it.
     if (input.windBand !== undefined) readWindBand(input.windBand);
     stages.assemble(
-      { source: input.source, full: input.full, head: input.head, config: input.config, seam: input.seam, project: input.project, ...(input.alts === undefined ? {} : { alts: input.alts }) },
+      { source: input.source, full: input.full, head: input.head, config: input.config, seam: input.seam, project: input.project, ...(req === null ? {} : { requirements: req.read }), ...(input.alts === undefined ? {} : { alts: input.alts }) },
       { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, ERROR_MAP_FILE) },
       prefixed('assemble'),
     );

@@ -54,7 +54,7 @@ defaults are the help's too, and none is guessed from the art.
 | `inputs` | `--source`, `--config`, `--out` |
 | `comfy` | `paint`: `--config`, `--out`; optional `--seeds`, `--seed0`, `--host`, `--wait`, `--timeout`, `--poll` |
 | `comfy` | `seethrough`: `--image`, `--out`; optional `--resolution`, `--steps`, `--seed`, `--prefix`, `--offload`, `--no-offload`, `--lama`, `--nf4`, `--host`, `--wait`, `--timeout`, `--poll`, `--config` (See-through settings and optional depth block), `--depth-run` (`full` or `head`, required with the block) |
-| `assemble` | `--propose-plan` with `--source`, `--full`, `--config`, optional `--head`, `--write-config` (must name `--config` itself, issue #356); or `--source`, `--full`, `--config`, `--out`, optional `--head` (without it, one run: issue #359), `--seam` (near-white, silhouette), `--project` (core, visible), `--alt` (repeatable `<name>=<source>:<full>[:<head>]`, issue #454) |
+| `assemble` | `--propose-plan` with `--source`, `--full`, `--config`, optional `--head`, `--write-config` (must name `--config` itself, issue #356); or `--source`, `--full`, `--config`, `--out`, optional `--head` (without it, one run: issue #359), `--seam` (near-white, silhouette), `--project` (core, visible), `--alt` (repeatable `<name>=<source>:<full>[:<head>]`, issue #454), `--requirements` (source-bound cut-material evidence only when the file declares `cut_material`, issue #888) |
 | `propose` | `--head-box` with `--full`, `--canvas`; optional `--no-back-hair`, `--write-config` (existing config, issue #356) |
 | `propose` | `--parts`, `--source`, `--out`; optional `--compare` or `--from-config` (one of them), `--keypoints`, `--person` and `--wrist-snap` (each with `--keypoints`), `--full`, `--head` (the turn control's depths; not with `--from-config`), `--grid-rule` (`figure` or `part`, the drafted lattice's spacing; not with `--from-config`), `--cloth` (a config whose `cloth` block is the recipe, issue #364; not with `--from-config`), `--write-config` (existing config for an ordinary proposal, issue #356; a new file with `--cloth`, issue #537; not with `--from-config` — additive: without it nothing `propose` writes changes), `--from` (the config the recipe is changed from, only with `--write-config`, issue #571 — additive: without it nothing `--write-config` writes changes), `--only-missing` (only with `--parts` and `--write-config`, not with `--cloth` or `--from-config`, issue #671 — additive: without it nothing `--write-config` writes changes) |
 | `propose` | `--parts`, `--source`, `--out`, `--full`, `--head`, `--write-config` together: the [neck draft](AUTHORING.md#a-neck-that-moves-on-its-own) for an existing config with `turn.body` and one neck plan row; reassembles under `<out>/rig`, preserves the sampled turn and drafts a rigid neck unit (issue #826) |
@@ -501,3 +501,11 @@ no role or depth and changes no emitted file bytes.
 The unit-depth precedence and its primary-surface sampling are documented in
 [AUTHORING](AUTHORING.md#unit-depth-precedence).
 The separate ordering scalar is unchanged. No-image outputs retain legacy bytes.
+
+The optional `cut_material` block in `--requirements` declares a part, joint,
+independent stage-pixel centre, inward axis, reach and continuous bend interval.
+`assemble --requirements` and `build --requirements` write source-edge evidence
+only for that explicit block; `check --requirements` refuses unavailable or
+stale evidence rather than reconstructing original art from emitted siblings.
+Without the block the API reading is SKIP; CLI stdout and emitted bytes remain unchanged.
+See [Source before scissors](AUTHORING.md#source-before-scissors).
