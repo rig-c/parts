@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.83.1](https://github.com/rig-c/parts/compare/v1.83.0...v1.83.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **assemble:** --propose-plan emits a mixed-run order its take reader accepts ([#870](https://github.com/rig-c/parts/issues/870)) ([cdb0958](https://github.com/rig-c/parts/commit/cdb0958f034c670c695c3eb94b7cfb580fbf5472)), closes [#869](https://github.com/rig-c/parts/issues/869)
+
 ## [1.83.0](https://github.com/rig-c/parts/compare/v1.82.2...v1.83.0) (2026-10-30)
 
 
