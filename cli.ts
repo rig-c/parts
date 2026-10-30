@@ -723,6 +723,8 @@ usage:
   rig-parts assemble --source <painting.png> --full <dir|psd> [--head <dir|psd>]
                        --config <config.json> --out <dir> [--seam near-white|silhouette]
                        [--project core|visible] [--alt <name>=<source>:<full>[:<head>]]
+                       [--requirements <file.json>]
+      With cut_material declared, records original source edges bound to emitted parts for check.
       Merge the full-body and head-crop See-through runs into rig-space parts:
       <out>/rig/parts/<name>.png (each cropped to its alpha box), <out>/rig/parts.json,
       <out>/render/recomposite_rig.png and <out>/render/${ERROR_MAP_FILE} (the error
@@ -1082,7 +1084,7 @@ const TAKES = {
   compare: { valued: ['--left', '--right', '--map'], switches: [] },
   check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--requirements', '--set', '--environment', '--wind-band'], switches: ['--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes'] },
   loop: { valued: ['--frames', '--out'], switches: ['--palette'] },
-  assemble: { valued: ['--source', '--full', '--head', '--config', '--out', '--seam', '--project', '--alt', '--write-config'], switches: ['--propose-plan'] },
+  assemble: { valued: ['--source', '--full', '--head', '--config', '--out', '--seam', '--project', '--alt', '--write-config', '--requirements'], switches: ['--propose-plan'] },
   'comfy seethrough': { valued: ['--image', '--out', '--resolution', '--steps', '--seed', '--prefix', '--host', '--wait', '--timeout', '--poll', '--config', '--depth-run'], switches: ['--offload', '--no-offload', '--lama', '--nf4'] },
   'comfy paint': { valued: ['--config', '--out', '--seeds', '--seed0', '--host', '--wait', '--timeout', '--poll'], switches: [] },
   inputs: { valued: ['--source', '--config', '--out'], switches: [] },
@@ -1707,6 +1709,7 @@ function cmdAssemble(args: string[]): number {
   }
   // --head is optional (issue #359): without it the full run is the one run, and it must hold the face.
   for (const f of ['--source', '--full', '--config']) if (!flags.has(f)) return usage(`assemble needs ${f}`);
+  if (propose && flags.has('--requirements')) return usage('--requirements belongs to assemble output, not --propose-plan');
   if (propose && (flags.has('--out') || flags.has('--seam') || flags.has('--project') || alts.length > 0)) return usage('--propose-plan prints to the console; it takes none of --out, --seam, --project, --alt');
   if (!propose && flags.has('--write-config')) return usage('--write-config belongs to assemble --propose-plan');
   if (!propose && !flags.has('--out')) return usage('assemble needs --out <dir>');
@@ -1739,7 +1742,7 @@ function cmdAssemble(args: string[]): number {
     }
     const out = flags.get('--out') as string;
     assembleStage(
-      { source, full, head, config, seam: seam as SeamRule, project: project as ProjectRule, ...(alts.length === 0 ? {} : { alts }) },
+      { source, full, head, config, ...(flags.has('--requirements') ? { requirements: flags.get('--requirements') as string } : {}), seam: seam as SeamRule, project: project as ProjectRule, ...(alts.length === 0 ? {} : { alts }) },
       { partsJson: join(out, 'rig', 'parts.json'), partsDir: join(out, 'rig', 'parts'), recomposite: join(out, 'render', 'recomposite_rig.png'), errorMap: join(out, 'render', ERROR_MAP_FILE) },
       console.log,
     );
