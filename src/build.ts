@@ -1,3 +1,4 @@
+import { applyTakenLayers } from './takelayers.ts';
 import { ownershipLines, provenanceLines } from './provenance.ts';
 import { readSourceDepth } from './depthsheets.ts';
 import { orderedBaseAnchor } from './baseanchor.ts';
@@ -320,7 +321,8 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   // regions and motion, so it requires only what it reads (issue #20).
   const cfg = loadEarlyConfig(input.config, 'assemble');
   const src = readSource(input.source);
-  const runs = readRuns(input.full, input.head);
+  const runs = applyTakenLayers(readRuns(input.full, input.head), src, cfg, input.config);
+  for (const note of runs.notes) log(`note: ${note}`);
   const fields = stageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
   const under = readUnders(input.config, fields.cuts);
   const caps = fields.limbs === undefined ? undefined : readCaps(input.config, fields.limbs);

@@ -1,3 +1,4 @@
+import { takenSourceProblems, type TakenLayerSource } from './takesource.ts';
 import { AUTOMATIC_WRITERS, provenanceAddsUp, type PixelProvenance, type CutOwnership } from './provenance.ts';
 import { baseAnchorProblems, orderedBaseAnchor, type BaseAnchor } from './baseanchor.ts';
 import { partDepthProblems, type PartDepthReference } from './depthsheets.ts';
@@ -97,6 +98,8 @@ import { edgeLength } from './length.ts';
 import { recordedFocusProblems } from './setfocus.ts';
 
 export interface PartRecord {
+  /** Verified donor sources, including sources of cuts, limbs and extensions. */
+  taken_layers?: TakenLayerSource[];
   /** Report-only final last-writer census (#817); absent on older records. */
   provenance?: PixelProvenance;
   /** Painting ownership gained by #848, independent of final raw-value equality. */
@@ -426,6 +429,7 @@ export const PART_KEYS = [
   'name',
   'from',
   'cut_from',
+  'taken_layers',
   'x',
   'y',
   'w',
@@ -451,10 +455,10 @@ const FRINGE_KEY = 'fringe_pushed_back';
 const CUT_FROM_KEY = 'cut_from';
 /** The one part field that is a record of its own: a limb segment's provenance (issue #349), written only on one. */
 const LIMB_KEY = 'limb';
-const COUNT_KEYS = PART_KEYS.slice(2).filter((k) => k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth' && k !== 'provenance') as ReadonlyArray<(typeof PART_KEYS)[number]>;
+const COUNT_KEYS = PART_KEYS.slice(2).filter((k) => k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth' && k !== 'provenance' && k !== 'taken_layers') as ReadonlyArray<(typeof PART_KEYS)[number]>;
 /** The port's own counts: all three or none (none = a record the reference wrote). */
 export const VISIBILITY_KEYS = ['visible_px', 'occluded_px', 'visible_not_projected_px'] as const;
-const REQUIRED_KEYS = PART_KEYS.filter((k) => k !== 'painting_extension_px' && !(VISIBILITY_KEYS as readonly string[]).includes(k) && k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth' && k !== 'provenance');
+const REQUIRED_KEYS = PART_KEYS.filter((k) => k !== 'painting_extension_px' && !(VISIBILITY_KEYS as readonly string[]).includes(k) && k !== FRINGE_KEY && k !== CUT_FROM_KEY && k !== LIMB_KEY && k !== 'depth' && k !== 'provenance' && k !== 'taken_layers');
 
 /** Where a part came from: a See-through run and a v3 tag or an author-made layer's `author:<label>` (issue #256), or the painting itself for a patch. */
 export type From = { run: 'full' | 'head'; tag: string } | { run: 'painting'; patch: string };
@@ -504,7 +508,7 @@ function orderedProvenance(p: PixelProvenance): PixelProvenance {
 
 function serializePartList(parts: readonly PartRecord[]): Array<Record<string, unknown>> {
   return parts.map((p) =>
-    Object.fromEntries(PART_KEYS.filter((k) => p[k] !== undefined).map((k) => [k, k === FRINGE_KEY ? (p.fringe_pushed_back ?? []).map((q) => ({ part: q.part, px: q.px })) : k === LIMB_KEY ? orderedLimb(p.limb as LimbRecord) : k === 'provenance' ? orderedProvenance(p.provenance as PixelProvenance) : p[k]])),
+    Object.fromEntries(PART_KEYS.filter((k) => p[k] !== undefined).map((k) => [k, k === FRINGE_KEY ? (p.fringe_pushed_back ?? []).map((q) => ({ part: q.part, px: q.px })) : k === LIMB_KEY ? orderedLimb(p.limb as LimbRecord) : k === 'taken_layers' ? p.taken_layers?.map(t => ({ run: t.run, tag: t.tag, run_dir: t.run_dir, st_input: t.st_input, prompt_id: t.prompt_id, seed: t.seed, support_px: t.support_px, checked_px: t.checked_px, differing_px: t.differing_px })) : k === 'provenance' ? orderedProvenance(p.provenance as PixelProvenance) : p[k]])),
   );
 }
 
@@ -649,6 +653,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
         return;
       }
       const r = p as Record<string, unknown>;
+      if ('taken_layers' in r) problems.push(...takenSourceProblems(r.taken_layers, `${at}.taken_layers`));
       if ('depth' in r) problems.push(...partDepthProblems(r.depth, `${path} part depth`));
       const label = typeof r.name === 'string' ? `part "${r.name}"` : at;
       for (const k of Object.keys(r)) if (!(PART_KEYS as readonly string[]).includes(k)) fail('PARTS_KEY_KNOWN', `${label} key "${k}"`, `is not a part field; known: ${PART_KEYS.join(', ')}`);

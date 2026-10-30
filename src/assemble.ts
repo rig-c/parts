@@ -1,3 +1,4 @@
+import { unionTakenSources } from './takesource.ts';
 import { paintingExtensionMasks, paintingExtensionProblems, type PaintingExtension } from './paintingextension.ts';
 import { AUTOMATIC_WRITERS as AW, compactValueBaseline, pixelProvenance, rgbaEqual, type ValueBaseline } from './provenance.ts';
 import { bindDepthRun, copyDepthMaterial, registerDepthRun, transportPartDepth, type DepthConfig, type RegisteredDepth } from './depthsheets.ts';
@@ -1494,6 +1495,7 @@ export function applyArmSplit(set: LayerSet, resolution: number, armSplit: ArmSp
     name,
     tag: readLayerTag(name) as LayerTagReading,
     file: refLayer.file,
+    takenLayers: unionTakenSources(handLayers.map(l => l.takenLayers)),
     pixels: crop(canvas, m.x0, m.y0, m.x1 - m.x0 + 1, m.y1 - m.y0 + 1),
     left: m.x0,
     top: m.y0,
@@ -1803,6 +1805,7 @@ export function splitMergedArmRunsWithNotes(
         name,
         tag: readLayerTag(name) as LayerTagReading,
         file: hwLayer.file,
+        ...(hwLayer.takenLayers === undefined ? {} : { takenLayers: hwLayer.takenLayers }),
         pixels: crop(canvas, x0, y0, x1 - x0 + 1, y1 - y0 + 1),
         left: x0,
         top: y0,
@@ -2098,6 +2101,7 @@ function prepareHeadFace(
       const postStats = measureCoverage(comp);
       const replacedLayer: Layer = {
         ...headFaceLayer,
+        takenLayers: unionTakenSources([headFaceLayer.takenLayers, fullFaceLayer.takenLayers]),
         pixels: crop(comp, x0, y0, x1 - x0 + 1, y1 - y0 + 1),
         left: x0,
         top: y0,
@@ -5522,6 +5526,13 @@ export function assemble(input: AssembleInput): AssembleResult {
       merged_px: merged,
       seam_override_px: 0,
     };
+    const sourceKeys = new Set([key, ...extendKeys.filter((_, i) => trace.from.some(v => v === i))]);
+    const takenLayers = unionTakenSources([...sourceKeys].map(k => {
+      const colon = k.indexOf(':');
+      const run = k.slice(0, colon) as Run;
+      return (run === 'full' ? full : head).layers.find(l => l.name === k.slice(colon + 1))?.takenLayers;
+    }));
+    if (takenLayers.length > 0) record.taken_layers = takenLayers;
     const paintingGain = paintingGains.get(name);
     if (paintingGain !== undefined) record.painting_extension_px = paintingGain.data.reduce((sum, value) => sum + value, 0);
     if (pushedHere.length > 0) record.fringe_pushed_back = pushedHere;
@@ -5542,6 +5553,15 @@ export function assemble(input: AssembleInput): AssembleResult {
       },
       ...((limb?.cap?.image_px ?? 0) > 0 || (limb?.cap?.lower_px ?? 0) > 0 ? { unsupported: `cap copies ${(limb?.cap?.image_px ?? 0) + (limb?.cap?.lower_px ?? 0)} pixels from a separate cap image whose scalar grid is undeclared` } : {}),
     });
+    if (capSource !== null && upperIndex >= 0 && capSource.codes.some(code => code === CAP_FROM_UPPER)) {
+      const upper = limbPieces[upperIndex];
+      const keys = [upper.key, ...upper.extendKeys.filter((_, i) => upper.trace.from.some(v => v === i))];
+      const sources = unionTakenSources([record.taken_layers, ...keys.map(k => {
+        const colon = k.indexOf(':');
+        return (k.slice(0, colon) === 'full' ? full : head).layers.find(l => l.name === k.slice(colon + 1))?.takenLayers;
+      })]);
+      if (sources.length > 0) record.taken_layers = sources;
+    }
     if (scalar !== undefined) record.depth = scalar.reference;
     if (scalar !== undefined && scalar.clampedSamples > 0) depthClamps.push({ part: name, samples: scalar.clampedSamples });
     set({ record, image, ...(scalar === undefined ? {} : { depthImage: scalar.image }) });

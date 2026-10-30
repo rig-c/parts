@@ -615,6 +615,88 @@ remain separate authoring decisions; a shifted shoe can still require work on
 its neighbouring shin. A walk built from eight generated keyframes motivated
 the opt-in placement; it does not change the default for existing inputs.
 
+### Taking named layers from another run (`assemble.take`, issue #866)
+
+A run of the same painting, or a different painting with the same pixels under
+some layers, can supply those tags without editing either run directory:
+
+```json
+"take": [{
+  "run": "full",
+  "run_dir": "runs/other",
+  "st_input": "inputs/other_full.png",
+  "tags": ["front hair", "mouth"]
+}]
+```
+
+This array belongs in `assemble`. Every entry requires all four fields. `run`
+is the **target** `full` or `head` run; `head` requires `--head`. `run_dir` and
+`st_input` resolve relative to the config, for assemble, build and
+`assemble --propose-plan` alike. Each target run/tag may be selected once. Empty
+`take` and absent `take` leave the existing output unchanged. This selects base
+run layers; alternate painting sets keep their own existing declarations.
+
+`st_input` is the author's explicit declaration of the original PNG fed to the
+donor. The tool reads `run_dir/layers.json`
+and `run_dir/meta.json`, requiring a nonempty `prompt_id` and a nonnegative safe
+integer `seed`; it never infers either from the target config. Existing metadata
+does **not** bind that PNG's bytes to the prompt or layers. This checks the
+supplied evidence's pixel identity, not cryptographic provenance of a remote
+execution. Keep the original run, its metadata and original input together;
+renaming a supplied image does not establish that it was the donor's input.
+
+The target input is derived from the painting by the existing input model:
+`full` uses the exact centred white `squarePad`, and `head` the configured
+`head_box`. A nonsquare single-run file uses the painting at its original file
+size before the assembler's existing padding. Donor and target run canvases must
+have equal dimensions; donor and target input PNGs must also have equal
+dimensions. Incompatible canvases or input sizes are refused, never resized to
+make the comparison pass.
+
+For each selected layer, support means its **original** alpha > 8, including
+specks before ghost cleanup. Grow that support by the existing projection-core
+`CORE_KERNEL` (5 x 5, radius 2 run pixels), clipped to the run canvas. Map each
+covered run cell to **every intersecting** original input pixel cell. Compare
+all four RGBA bytes exactly, with no filtering or tolerance. Checking each
+layer's grown support checks their union too; the note reports both per-layer
+and union counts. A mismatch names the donor run, tag, number of differing
+pixels and `[left, top, right, bottom]` bbox in input pixels, right/bottom
+exclusive. A tag absent from the donor, or with no alpha > 8 support, is refused.
+An input difference outside that union is permitted.
+
+Taken layers replace the target's tag, keeping the donor's tag and
+`depth_median`, so existing hair/blink classification continues to read `from`.
+Larger depth draws behind smaller depth. Numeric ties keep manifest order only
+inside one original run. Equal or null depths **across** runs are ambiguous
+and refused, even if the plan gives an order. A supplied plan reversing the
+mixed-run depth order is also refused; `--propose-plan` drafts the depth order.
+Replacing a layer with hidden companion art is refused because independent
+hidden-art identity has not been declared. Active scalar depth sheets (`depth`
+opt-in or already bound sheets) are also refused: selecting donor art does not
+rebind a target atlas or invent donor scalar units. Inactive `depth_filename`
+hints remain inactive; numeric `depth_median` ordering is preserved.
+
+The proposal's `notes` and assemble/build log name every taken layer's run
+directory, prompt ID, seed and input path, plus support/checked/differing counts.
+`parts.json` adds `taken_layers` only to affected parts: each entry records
+`run`, `tag`, `run_dir`, `st_input`, `prompt_id`, `seed`, `support_px` (run cells),
+`checked_px` (original input cells), and `differing_px` (zero). Cuts, generated
+arm layers, limb segments and copied extension sources retain these receipts.
+The strict parts reader refuses partial, unknown, duplicate or nonzero-difference
+receipts. These source identities are separate from pixel-writer counts.
+
+Motivation, from the recorded 2026-10-30 decomposition measurements: a side-view
+control held 62,627 front-hair, 36,643 headwear and 595 mouth pixels at
+**alpha >= 250**. Three body repaints reported zero pixels at that threshold
+for front hair and mouth at seed 42; their alpha > 8 counts were nonzero.
+Six further runs at seeds 43, 101 and 2027 reported no run retaining both front
+hair and headwear. These are recorded measurements, not a new pixel audit:
+the retained run receipts contain no original layer PNGs. The records report
+identical head input pixels and body-dependent limb results; this feature makes
+identity an executable check on supplied original inputs instead of trusting
+that claim or hand-editing `layers.json`. Seed and painting selection remain
+the author's decisions.
+
 ### Alternate part layers (`assemble.alternates[i].layers`, issue #666)
 
 A gesture run may hold a raised arm only in a layer the author added, while
@@ -4365,6 +4447,19 @@ those settings. Changing a config seed alone cannot change a no-config run.
 
 | rule | means | change |
 | --- | --- | --- |
+| <a id="ASSEMBLE_TAKE_INPUT_IDENTITY"></a>`ASSEMBLE_TAKE_INPUT_IDENTITY` | original input RGBA differs under a taken tag's grown support; detail gives run/tag, count and exclusive input bbox | select a compatible donor and its actual original `st_input`; no tolerance or repaint is applied |
+| <a id="ASSEMBLE_TAKE_TAG_IN_RUN"></a>`ASSEMBLE_TAKE_TAG_IN_RUN` | selected donor does not hold the tag | choose a tag present in that donor |
+| <a id="ASSEMBLE_TAKE_SUPPORT"></a>`ASSEMBLE_TAKE_SUPPORT` | selected layer has zero alpha > 8 pixels | choose a nonempty donor layer |
+| <a id="ASSEMBLE_TAKE_DEPTH_AMBIGUOUS"></a>`ASSEMBLE_TAKE_DEPTH_AMBIGUOUS` | different original runs have equal or null depths | use a run with distinct numeric depths; do not invent an inter-run tie order |
+| <a id="ASSEMBLE_TAKE_PLAN_ORDER"></a>`ASSEMBLE_TAKE_PLAN_ORDER` | supplied plan reverses mixed-run depth order | use the depth order drafted by `assemble --propose-plan` |
+| <a id="ASSEMBLE_TAKE_GEOMETRY"></a>`ASSEMBLE_TAKE_GEOMETRY` | missing target head, unequal run canvases or unequal original input dimensions | supply matching geometry; the check does not resize inputs |
+| <a id="ASSEMBLE_TAKE_META"></a>`ASSEMBLE_TAKE_META` | donor `meta.json` lacks a readable prompt ID or seed | retain the original run metadata |
+| <a id="ASSEMBLE_TAKE_INPUT"></a>`ASSEMBLE_TAKE_INPUT` | declared donor input PNG cannot be read | name its original PNG relative to the config |
+| <a id="ASSEMBLE_TAKE_DEPTH_SHEET"></a>`ASSEMBLE_TAKE_DEPTH_SHEET` | taking layers with an active depth opt-in or bound scalar sheets has no declared mixed-run binding | keep scalar depth inactive; numeric ordering depth is retained, and a target sheet is never attached silently |
+| <a id="ASSEMBLE_TAKE_HIDDEN"></a>`ASSEMBLE_TAKE_HIDDEN` | a replaced tag has hidden companion art | independent hidden-art identity is undeclared; choose a run without that companion |
+| <a id="ASSEMBLE_TAKE_UNIQUE"></a>`ASSEMBLE_TAKE_UNIQUE` | repeated donor for one target tag at runtime | declare each target run/tag once |
+| <a id="CONFIG_TAKE_UNIQUE"></a>`CONFIG_TAKE_UNIQUE` | config selects the same target run/tag more than once | retain one donor per target tag |
+| <a id="PARTS_TAKEN_LAYERS"></a>`PARTS_TAKEN_LAYERS` | a taken-layer receipt is partial, unknown, duplicated, malformed or claims differing pixels | regenerate parts with assemble; never patch source receipts by hand |
 | <a id="ASSEMBLE_FIELD_PRESENT"></a>`ASSEMBLE_FIELD_PRESENT` | `seethrough.head_box` is missing | `propose --head-box` proposes it (§3) |
 | <a id="ASSEMBLE_RIG_SIZE"></a>`ASSEMBLE_RIG_SIZE` | `rig_scale` makes an empty rig | `assemble.rig_scale` |
 | <a id="ASSEMBLE_HEAD_BOX_INSIDE"></a>`ASSEMBLE_HEAD_BOX_INSIDE` | the head box is outside the painting | `head_box` — `propose --head-box` holds it inside |

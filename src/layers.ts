@@ -1,3 +1,4 @@
+import type { TakenLayerSource } from './takesource.ts';
 /**
  * The input contract: one See-through decomposition as a `LayerSet`.
  *
@@ -53,6 +54,8 @@ export const CORE_ALPHA = 250;
 export const NEAR_WHITE_MIN = 235;
 
 export interface Layer {
+  /** Verified donor identities retained through generated splits. */
+  takenLayers?: TakenLayerSource[];
   /** As the input names it: a v3 tag, possibly with a `-r`/`-l` side, or an author-made layer's `author:<label>`. */
   name: string;
   tag: LayerTagReading;
