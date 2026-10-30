@@ -33719,15 +33719,15 @@ function authorLayerControls(say: (name: string, ok: boolean, detail: string, wh
     );
 
     // AS257 — issue #492: when full:face has >= 150 opaque run px and head:face covers < 75% of fullLayerToHead(full:face),
-    // both proposePlan and assemble refuse with SEETHROUGH_HEAD_RUN_HOLLOW unless headFaceUnderfill: true is set;
+    // explicit head:face assembly refuses unless headFaceUnderfill: true is set; the proposer falls back (#863);
     // with headFaceUnderfill: true and head:face present, transparent head:face pixels inside full:face's footprint are
     // filled from fullLayerToHead(full:face), restoring the face part from 72 rig px (the un-underfilled mutant) to 168 rig px;
-    // when head:face is absent (0 px), SEETHROUGH_HEAD_RUN_HOLLOW fires even under headFaceUnderfill: true;
+    // when head:face is absent (0 px), explicit head:face still refuses, and the proposer takes full:face;
     // config.assemble.head_face_underfill accepts booleans and refuses non-booleans with CONFIG_FIELD_TYPE.
     const fullHollow = runIn('full-hollow-head', HOLLOW_HEAD_FULL);
     const headHollow = runIn('head-hollow-face', HOLLOW_HEAD_LAYERS);
     const headMissingFace = runIn('head-missing-face', MISSING_FACE_HEAD_LAYERS);
-    const hollowRefusedPlan = refusals(() => proposePlan(fullHollow, headHollow, geometry));
+    const hollowFallbackPlan = proposePlan(fullHollow, headHollow, geometry);
     const hollowUnderfillPlan = proposePlan(fullHollow, headHollow, { ...geometry, headFaceUnderfill: true });
     const hollowRefusedAssemble = refusals(() =>
       assemble({ ...baseAssemble, full: fullHollow, head: headHollow, plan: hollowUnderfillPlan.plan, extend: hollowUnderfillPlan.extend_below_crop }),
@@ -33760,10 +33760,12 @@ function authorLayerControls(say: (name: string, ok: boolean, detail: string, wh
       extend: hollowUnderfillPlan.extend_below_crop,
     });
     const hollowMutantFacePart = hollowMutantOut.parts.parts.find((p) => p.name === 'face');
-    const missingRefusedPlan = refusals(() => proposePlan(fullHollow, headMissingFace, { ...geometry, headFaceUnderfill: true }));
+    const missingFallbackPlan = proposePlan(fullHollow, headMissingFace, { ...geometry, headFaceUnderfill: true });
     const missingRefusedAssemble = refusals(() =>
       assemble({ ...baseAssemble, full: fullHollow, head: headMissingFace, headFaceUnderfill: true, plan: hollowUnderfillPlan.plan, extend: hollowUnderfillPlan.extend_below_crop }),
     );
+    const fullFaceFallbackOut = assemble({ ...baseAssemble, full: fullHollow, head: headHollow, plan: hollowFallbackPlan.plan, extend: hollowFallbackPlan.extend_below_crop });
+    const missingFaceFallbackOut = assemble({ ...baseAssemble, full: fullHollow, head: headMissingFace, plan: missingFallbackPlan.plan, extend: missingFallbackPlan.extend_below_crop });
     const cfgUnderfillTrue = refusals(() => {
       const c = assembleConfig();
       (c.assemble as Record<string, unknown>).head_face_underfill = true;
@@ -33783,11 +33785,10 @@ function authorLayerControls(say: (name: string, ok: boolean, detail: string, wh
     });
     say(
       'AS257_SEETHROUGH_HOLLOW_HEAD_RUN_FACE_REFUSES_WITH_SEETHROUGH_HEAD_RUN_HOLLOW_OR_UNDERFILLS_FROM_FULL_FACE',
-      hollowRefusedPlan !== null &&
-        hollowRefusedPlan.problems.length === 1 &&
-        hollowRefusedPlan.problems[0].code === 'SEETHROUGH_HEAD_RUN_HOLLOW' &&
-        hollowRefusedPlan.problems[0].object.endsWith('layer "face"') &&
-        hollowRefusedPlan.problems[0].detail.includes(`covers ${HOLLOW_HEAD_EXPECTED.hollowOverlapPx} / ${HOLLOW_HEAD_EXPECTED.fullMappedPx} px (41.4%, upper half 0.0%, lower half 85.7%)`) &&
+      fullFaceFallbackOut.parts.parts.some(p => p.from === 'full:face') && (fullFaceFallbackOut.headFaceUnderfillPx ?? 0) === 0 &&
+        missingFaceFallbackOut.parts.parts.some(p => p.from === 'full:face') && (missingFaceFallbackOut.headFaceUnderfillPx ?? 0) === 0 &&
+        hollowFallbackPlan.plan.some(([, r, t]) => r === 'full' && t === 'face') &&
+        hollowFallbackPlan.notes.some(n => n.includes('SEETHROUGH_HEAD_RUN_HOLLOW') && n.includes(`covers ${HOLLOW_HEAD_EXPECTED.hollowOverlapPx} / ${HOLLOW_HEAD_EXPECTED.fullMappedPx} px (41.4%, upper half 0.0%, lower half 85.7%)`)) &&
         hollowRefusedAssemble !== null &&
         hollowRefusedAssemble.problems.length === 1 &&
         hollowRefusedAssemble.problems[0].code === 'SEETHROUGH_HEAD_RUN_HOLLOW' &&
@@ -33801,10 +33802,8 @@ function authorLayerControls(say: (name: string, ok: boolean, detail: string, wh
         hollowMutantFacePart?.opaque_px === HOLLOW_HEAD_EXPECTED.mutantFaceRigPx &&
         hollowUnderfillOut.figures.uncoveredErrorPx === 2563 &&
         hollowMutantOut.figures.uncoveredErrorPx === 2635 &&
-        missingRefusedPlan !== null &&
-        missingRefusedPlan.problems.length === 1 &&
-        missingRefusedPlan.problems[0].code === 'SEETHROUGH_HEAD_RUN_HOLLOW' &&
-        missingRefusedPlan.problems[0].detail.includes(`holds no layer "face", covering 0 / ${HOLLOW_HEAD_EXPECTED.fullMappedPx} px (0.0%, upper half 0.0%, lower half 0.0%)`) &&
+        missingFallbackPlan.plan.some(([, r, t]) => r === 'full' && t === 'face') &&
+        missingFallbackPlan.notes.some(n => n.includes('SEETHROUGH_HEAD_RUN_HOLLOW') && n.includes(`holds no layer "face", covering 0 / ${HOLLOW_HEAD_EXPECTED.fullMappedPx} px`)) &&
         missingRefusedAssemble !== null &&
         missingRefusedAssemble.problems.length === 1 &&
         missingRefusedAssemble.problems[0].code === 'SEETHROUGH_HEAD_RUN_HOLLOW' &&
@@ -33817,8 +33816,8 @@ function authorLayerControls(say: (name: string, ok: boolean, detail: string, wh
         cfgEarlyBad.problems.length === 1 &&
         cfgEarlyBad.problems[0].code === 'CONFIG_FIELD_TYPE' &&
         cfgEarlyBad.problems[0].object === 'config.assemble.head_face_underfill',
-      `hollow head:face (288/696 = 41.4%): default -> ${codes(hollowRefusedPlan)} / ${codes(hollowRefusedAssemble)}; head_face_underfill: true -> underfillPx=${hollowUnderfillOut.headFaceUnderfillPx ?? 0}, face=${hollowFacePart?.opaque_px ?? 0} rig px vs mutant ${hollowMutantFacePart?.opaque_px ?? 0} rig px (uncoveredErrorPx ${hollowUnderfillOut.figures.uncoveredErrorPx} vs ${hollowMutantOut.figures.uncoveredErrorPx}); 0-px head:face with underfill -> ${codes(missingRefusedPlan)} / ${codes(missingRefusedAssemble)}; config type check -> ${codes(cfgUnderfillBad)} / ${codes(cfgEarlyBad)}`,
-      'issue #492: a head run whose face covers under 75% of full:face mapped into the head canvas is refused by SEETHROUGH_HEAD_RUN_HOLLOW in both proposePlan and assemble unless head_face_underfill: true fills the missing head-run face pixels from full:face; a 0-px head:face still refuses even under head_face_underfill: true',
+      `hollow head:face (288/696 = 41.4%): default -> ${JSON.stringify(hollowFallbackPlan.plan.find(([, , t]) => t === 'face'))} / ${codes(hollowRefusedAssemble)}; head_face_underfill: true -> underfillPx=${hollowUnderfillOut.headFaceUnderfillPx ?? 0}, face=${hollowFacePart?.opaque_px ?? 0} rig px vs mutant ${hollowMutantFacePart?.opaque_px ?? 0} rig px (uncoveredErrorPx ${hollowUnderfillOut.figures.uncoveredErrorPx} vs ${hollowMutantOut.figures.uncoveredErrorPx}); 0-px head:face with underfill -> ${JSON.stringify(missingFallbackPlan.plan.find(([, , t]) => t === 'face'))} / ${codes(missingRefusedAssemble)}; config type check -> ${codes(cfgUnderfillBad)} / ${codes(cfgEarlyBad)}`,
+      'issue #492: explicit head:face plans retain the hollow refusal and underfill opt-in; issue #863: the proposer instead selects a valid full:face after a hollow refusal, including an absent head:face',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -33951,6 +33950,88 @@ function runPlausibilitySuite(): number {
     writeAssembleFixture(dir);
     const base = fixtureInput(dir);
     const g = { sourceW: SOURCE_SIDE, sourceH: SOURCE_SIDE, resolution: RESOLUTION, headBox: HEAD_BOX, rigScale: RIG_SCALE };
+    // Issue #863: flat rectangles, independent of private art. Identity registration makes rig/run px equal.
+    const fallbackGeometry = { sourceW: 64, sourceH: 64, resolution: 64, headBox: [0, 0, 64, 64] as [number, number, number, number], rigScale: 1 };
+    const solid = (tag: string, box: [number, number, number, number], order: number): Layer => paintedLayer(tag, box, () => [100, 60, 40, 255], order);
+    const fallbackFull: LayerSet = { form: 'wrapper', hidden: [], source: 'generated-full', canvas: { w: 64, h: 64 }, layers: [
+      solid('back hair', [0, 0, 20, 20], 0), solid('topwear', [10, 30, 20, 20], 1),
+      solid('face', [10, 10, 20, 20], 2), solid('front hair', [10, 0, 20, 10], 3),
+    ] };
+    // Face 4096 / mouth 256 = 16x, above the unchanged 4x guard; both hair tags are absent.
+    const fallbackHead: LayerSet = { ...fallbackFull, source: 'generated-head', layers: [
+      solid('face', [0, 0, 64, 64], 0), solid('mouth', [16, 16, 16, 16], 1),
+    ] };
+    const fallbackPlan = proposePlan(fallbackFull, fallbackHead, fallbackGeometry);
+    const fallbackRows = fallbackPlan.plan.filter(([, , t]) => ['back hair', 'face', 'front hair'].includes(t));
+    say('PU86301_MISSING_HAIR_AND_GUARD_REFUSED_FACE_FALL_BACK_IN_DRAW_ORDER',
+      JSON.stringify(fallbackRows) === '[["hair_back","full","back hair"],["face","full","face"],["hair_front","full","front hair"]]' &&
+      fallbackPlan.extend_below_crop.length === 0 &&
+      ['back hair', 'face', 'front hair'].every(t => fallbackPlan.notes.some(n => n.startsWith(`${t}: head run `) && n.includes('-> full-run layer, drawn '))) &&
+      layerFigures(fallbackHead).find(f => f.name === 'face')?.areaRatio === 16,
+      `rows ${JSON.stringify(fallbackRows)}; notes ${fallbackPlan.notes.join(' | ')}`,
+      'a head run losing its hair makes a valid full-run face disappear too; the candidate guards must still reject the 16x head face while selecting valid full-run parts');
+    const suitableHead: LayerSet = { ...fallbackFull, source: 'generated-suitable-head', layers: fallbackFull.layers.filter(l => l.name !== 'topwear') };
+    const suitable = proposePlan(fallbackFull, suitableHead, fallbackGeometry);
+    say('PU86302_SUITABLE_HEAD_LAYERS_KEEP_THEIR_RUN_AND_ORDER',
+      suitable.plan.filter(([, , t]) => ['back hair', 'face', 'front hair'].includes(t)).every(([, r]) => r === 'head') &&
+      JSON.stringify(suitable.plan.map(([, , t]) => t)) === '["back hair","topwear","face","front hair"]' &&
+      !suitable.notes.some(n => n.includes('-> full-run layer')),
+      `plan ${JSON.stringify(suitable.plan)}`,
+      'the fallback is for unusable head hair/face, not an area preference that replaces a suitable head layer');
+    // Each reason and tag independently, including rejected full candidates and the exact hair floor.
+    const tags863 = ['back hair', 'face', 'front hair'];
+    const trials863: string[] = [];
+    for (const tag of tags863) {
+      for (const mode of ['missing', 'below floor', 'translucent', 'background', 'oversized']) {
+        const altered = mode === 'missing' ? suitableHead.layers.filter(l => l.name !== tag)
+          : withLayer(suitableHead, mode === 'below floor' ? solid(tag, [10, 10, 10, 10], 0)
+            : mode === 'oversized' ? solid(tag, [0, 0, 64, 64], 0)
+            : paintedLayer(tag, [10, 10, 20, 20], i => mode === 'translucent' ? [100, 60, 40, 100] : [245, 245, 245, i % 5 < 2 ? 100 : 255])).layers;
+        const hp = { ...suitableHead, layers: altered };
+        const p = proposePlan(fallbackFull, hp, fallbackGeometry);
+        if (p.plan.find(([, , t]) => t === tag)?.[1] !== 'full') trials863.push(`${tag}/${mode}`);
+      }
+      const noHead = { ...suitableHead, layers: suitableHead.layers.filter(l => l.name !== tag) };
+      const noFull = { ...fallbackFull, layers: fallbackFull.layers.filter(l => l.name !== tag) };
+      const absent = proposePlan(noFull, noHead, fallbackGeometry);
+      if (absent.plan.some(([, , t]) => t === tag)) trials863.push(`${tag}/absent full`);
+      // The full candidate itself fails the unchanged translucency guard; it cannot rescue a missing head layer.
+      const dimFull = withLayer(fallbackFull, paintedLayer(tag, [10, 10, 20, 20], () => [100, 60, 40, 100]));
+      const rejected = refusals(() => {
+        const p = proposePlan(dimFull, noHead, fallbackGeometry);
+        if (p.plan.some(([, , t]) => t === tag)) throw new Error(`invalid full ${tag} accepted`);
+      });
+      if (tag === 'face' ? rejected?.problems[0]?.code !== 'SEETHROUGH_HEAD_RUN_HOLLOW' : rejected !== null) trials863.push(`${tag}/rejected full`);
+    }
+    const floorHair = withLayer(suitableHead, solid('front hair', [10, 0, 15, 10], 3));
+    const floorPlan = proposePlan(fallbackFull, floorHair, fallbackGeometry);
+    say('PU86303_EVERY_FALLBACK_REASON_REQUIRES_A_VALID_FULL_LAYER_AND_RETAINS_THE_FLOOR',
+      trials863.length === 0 && floorPlan.plan.find(([, , t]) => t === 'front hair')?.[1] === 'head',
+      `failed variants ${JSON.stringify(trials863)}; front hair at the 150-px floor (full 200 px) -> ${JSON.stringify(floorPlan.plan)}`,
+      'missing, below-floor, translucent, background and oversized head layers each fall back; absent or guard-refused full layers never do; a suitable 150-px head hair stays despite being below 0.8 of full');
+    const generatedSource = newRaster(64, 64);
+    for (let i = 0; i < 64 * 64; i++) generatedSource.data.set([100, 60, 40, 255], i * 4);
+    const assembled863 = (plan: PlanEntry[]): ReturnType<typeof assemble> => assemble({
+      ...base, ...fallbackGeometry, source: generatedSource, full: fallbackFull, head: fallbackHead,
+      plan, extend: [], patches: [], cuts: [], seamRule: 'near-white',
+    });
+    const dropped863 = assembled863(fallbackPlan.plan.filter(([, , t]) => !tags863.includes(t)));
+    const restored863 = assembled863(fallbackPlan.plan);
+    // Independent raw masks: the head-tag rectangles' union is 800 px. Body + mouth covers 196 of them.
+    const rawMissing863 = (r: Raster): number => {
+      let n = 0;
+      for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+        const target = (x < 20 && y < 20) || (x >= 10 && x < 30 && y >= 10 && y < 30) || (x >= 10 && x < 30 && y < 10);
+        if (target && r.data[(y * 64 + x) * 4] !== 100) n++;
+      }
+      return n;
+    };
+    say('PU86304_RAW_RECOMPOSITE_RESTORES_THE_GENERATED_HEAD_MASK_WITHOUT_REPAIR_PIXELS',
+      rawMissing863(dropped863.recomposite) === 604 && rawMissing863(restored863.recomposite) === 0 &&
+      restored863.parts.parts.filter(p => tags863.some(t => p.from === `full:${t}`)).length === 3 &&
+      (restored863.headFaceUnderfillPx ?? 0) === 0,
+      `raw missing target px ${rawMissing863(dropped863.recomposite)} -> ${rawMissing863(restored863.recomposite)} (target union 800 px); uncovered error ${dropped863.figures.uncoveredErrorPx} -> ${restored863.figures.uncoveredErrorPx}; parts ${JSON.stringify(restored863.parts.parts.map(p => [p.name, p.from]))}`,
+      'the oracle counts generated rectangle coverage directly from recomposite RGB; full:face bypasses preparation of an unused head face even while head:mouth remains planned');
     const clean = proposePlan(base.full, base.head, g);
     const expectedNotes = EXPECTED_PROPOSAL.notes;
     const samePlan = (p: { plan: unknown; extend_below_crop: unknown }): boolean => JSON.stringify(p.plan) === JSON.stringify(EXPECTED_PROPOSAL.plan) && JSON.stringify(p.extend_below_crop) === JSON.stringify(EXPECTED_PROPOSAL.extend_below_crop);

@@ -4663,10 +4663,11 @@ export function assemble(input: AssembleInput): AssembleResult {
   });
   const sourcePlan = plan.flatMap(row => [row, ...cutLayerPlan.filter(([name]) => input.cuts.some(c => c.into === name && c.from === row[0]))]);
   // Issue #492: in two-run mode, check that head:face covers >= 75% of full:face's silhouette on the head canvas
-  // (after applying head_face_underfill when declared). Skip only on a single-run subset (a mouth-only or clothes-only alternate).
+  // (after applying head_face_underfill when declared). A plan selecting full:face does not consume head:face (#863).
   const checkHeadFace =
     !single &&
-    (plan.some(([, r, t]) => r === 'head' && t === 'face') || (plan.some(([, r]) => r === 'full') && plan.some(([, r]) => r === 'head')));
+    (plan.some(([, r, t]) => r === 'head' && t === 'face') ||
+      (!plan.some(([, r, t]) => r === 'full' && t === 'face') && plan.some(([, r]) => r === 'full') && plan.some(([, r]) => r === 'head')));
   const headFacePrep = checkHeadFace
     ? prepareHeadFace(full, depthHeadInput, frame, input.resolution, input.headFaceUnderfill === true)
     : { head: single ? full : depthHeadInput, underfillPx: 0, underfillNote: null };
@@ -6027,6 +6028,9 @@ export const PROPOSE_HEAD_TAGS: readonly string[] = [
   'eyebrow-l',
 ];
 
+/** #863: prefer suitable head layers; only unusable head candidates may fall back for these tags. */
+const HEAD_FALLBACK_TAGS: readonly string[] = ['back hair', 'face', 'front hair'];
+
 /** The part name the reference proposes for a tag; any other tag becomes its own name with spaces and hyphens as underscores. */
 export const PROPOSE_ALIAS: Readonly<Record<string, string>> = {
   'back hair': 'hair_back',
@@ -6075,7 +6079,12 @@ function fmt0(v: number): string {
  * head run, the rest from the full run. Order, back to front: `back hair`;
  * the body layers in the full run's draw order, with `neck` placed just before
  * the first of topwear, bottomwear or neckwear; then the remaining head layers
- * in the head run's draw order. A `headwear`/`earwear` the head run drops or
+ * in the head run's draw order. Missing, below-floor or guard-refused head
+ * `back hair`, `face` and `front hair` use a full-run candidate only if it
+ * passes the same floor and plausibility guards (#863); back hair stays
+ * behind the body, face before head details, front hair in front of the face.
+ * A suitable head candidate is retained. Every fallback names the two rig
+ * areas and the reason. A `headwear`/`earwear` the head run drops or
  * shrinks (its rig-pixel area below 0.8 of the full run's) is taken from the
  * full run instead, drawn right after `back hair` — noted. `front hair` and
  * `back hair` taken from the head run are extended below the crop from the
@@ -6163,15 +6172,27 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
   // Issue #490: when generation.control.skeleton is present, split merged arm layers (or refuse when sleeve and drape share one colour).
   const mergedSplit = g.keySkeleton === undefined ? { set: fullArmSplit, notes: [] as string[] } : splitMergedArmRunsWithNotes(fullArmSplit, g.resolution, frame, g.sourceW, g.sourceH, g.keySkeleton);
   const full = mergedSplit.set;
-  // Issue #492: check (and when head_face_underfill: true, repair) a hollow head-run face against full:face mapped into the head canvas.
-  const headFacePrep =
-    g.single === true
-      ? { head: full, underfillPx: 0, underfillNote: null as string | null }
-      : prepareHeadFace(full, head0, frame, g.resolution, g.headFaceUnderfill === true, minPx);
+  const fullLayers = runLayers(full, g.resolution);
+  const fullFigures = layerFigures(full);
+  // A hollow head face must not block a usable full-run candidate before selection (#863).
+  // Preserve every other preparation refusal, and preserve this one when the full candidate fails.
+  let headFaceRefusal: Problem | null = null;
+  let headFacePrep = { head: g.single === true ? full : head0, underfillPx: 0, underfillNote: null as string | null };
+  if (g.single !== true) {
+    try {
+      headFacePrep = prepareHeadFace(full, head0, frame, g.resolution, g.headFaceUnderfill === true, minPx);
+    } catch (err) {
+      const face = fullLayers.find(l => l.tag === 'face');
+      const f = fullFigures.find(l => l.name === 'face');
+      if (!(err instanceof PartsError) || err.problems.length !== 1 || err.problems[0].code !== 'SEETHROUGH_HEAD_RUN_HOLLOW' ||
+          face === undefined || face.opaqueRunPx < minPx || f === undefined || implausibleRules(f).length > 0) throw err;
+      headFaceRefusal = err.problems[0];
+    }
+  }
   const head = headFacePrep.head;
-  const runs = { full: runLayers(full, g.resolution), head: runLayers(head, g.resolution) };
+  const runs = { full: fullLayers, head: runLayers(head, g.resolution) };
   const find = (run: Run, tag: string): RunLayer | undefined => runs[run].find((l) => l.tag === tag);
-  const figures: Record<Run, LayerFigures[]> = { full: layerFigures(full), head: layerFigures(head) };
+  const figures: Record<Run, LayerFigures[]> = { full: fullFigures, head: layerFigures(head) };
   const dropNotes: string[] = [];
   const noted = new Set<string>();
   /** The plausibility rules `run:tag` crosses; the first time a consulted layer crosses any, a note says so. */
@@ -6188,13 +6209,20 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
   const ok = (run: Run, tag: string): boolean => {
     const l = find(run, tag);
     const floor = ARM_MERGED_SPLIT_TAGS.some((p) => tag === `${p}-r` || tag === `${p}-l`) ? 1 : minPx;
-    return tag !== 'nose' && l !== undefined && l.opaqueRunPx >= floor && !implausible(run, tag, 'not proposed');
+    return tag !== 'nose' && !(run === 'head' && tag === 'face' && headFaceRefusal !== null) &&
+      l !== undefined && l.opaqueRunPx >= floor && !implausible(run, tag, 'not proposed');
   };
   const body = runs.full.filter((l) => !PROPOSE_HEAD_TAGS.includes(l.tag) && ok('full', l.tag)).map((l) => l.tag);
   // Issue #256: an author-made layer is proposed from the run that holds it, at its place in that run's draw order,
   // like any layer; one both runs hold is proposed once, from the full run when the full run's is proposed, and the note says so.
   const authorBoth = runs.head.filter((l) => readAuthorTag(l.tag) !== null && body.includes(l.tag)).map((l) => l.tag);
   const heads = runs.head.filter((l) => (PROPOSE_HEAD_TAGS.includes(l.tag) || (readAuthorTag(l.tag) !== null && !authorBoth.includes(l.tag))) && ok('head', l.tag)).map((l) => l.tag);
+  const fallback = new Set(HEAD_FALLBACK_TAGS.filter(t => !ok('head', t) && ok('full', t)));
+  // Full-run back hair stays behind the body; face precedes head details, front hair follows the face.
+  if (fallback.has('back hair')) heads.unshift('back hair');
+  if (fallback.has('face')) heads.unshift('face');
+  if (fallback.has('front hair')) heads.push('front hair');
+  const headRun = (t: string): Run => fallback.has(t) ? 'full' : 'head';
   const hw = body.filter((t) => t.startsWith('handwear'));
   const plan: PlanEntry[] = [];
   const drop = (t: string): void => {
@@ -6202,7 +6230,7 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
     if (i >= 0) heads.splice(i, 1);
   };
   if (heads.includes('back hair')) {
-    plan.push([PROPOSE_ALIAS['back hair'], 'head', 'back hair']);
+    plan.push([PROPOSE_ALIAS['back hair'], headRun('back hair'), 'back hair']);
     drop('back hair');
   }
   let neckDone = !heads.includes('neck');
@@ -6217,6 +6245,20 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
   const notes: string[] = [...mergedSplit.notes, ...(headFacePrep.underfillNote === null ? [] : [headFacePrep.underfillNote])];
   const headArea = (frame.headK * frame.S) ** 2;
   const fullArea = (frame.fullK * frame.S) ** 2;
+  for (const t of HEAD_FALLBACK_TAGS) {
+    if (!fallback.has(t)) continue;
+    const hl = find('head', t);
+    const hp = (hl?.opaqueRunPx ?? 0) * headArea;
+    const fp = (find('full', t)?.opaqueRunPx ?? 0) * fullArea;
+    const f = figures.head.find(l => l.name === t);
+    const reason = t === 'face' && headFaceRefusal !== null
+      ? `${headFaceRefusal.code}: ${headFaceRefusal.detail}`
+      : hl === undefined ? 'missing layer'
+      : hl.opaqueRunPx < minPx ? `${hl.opaqueRunPx} run px below ${minPx} (PROPOSE_MIN_PX)`
+      : (f === undefined ? [] : implausibleRules(f)).join(', ');
+    const draw = t === 'back hair' ? 'behind the body and face' : t === 'face' ? 'before head details and front hair' : 'in front of the face';
+    notes.push(`${t}: head run ${fmt0(hp)} rig px (${reason}); full run ${fmt0(fp)} rig px -> full-run layer, drawn ${draw}`);
+  }
   for (const t of ['headwear', 'earwear']) {
     const hl = find('head', t);
     const fl = find('full', t);
@@ -6229,7 +6271,7 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
       notes.push(`${t}: head run ${fmt0(hp)} rig px < 0.8 x full run ${fmt0(fp)} -> full-run layer, drawn behind the face`);
     }
   }
-  for (const t of heads) plan.push([aliasOf(t), 'head', t]);
+  for (const t of heads) plan.push([aliasOf(t), headRun(t), t]);
   for (const [part, run, tag] of plan) {
     if (readAuthorTag(tag) !== null) notes.push(`${tag}: ${AUTHOR_NO_ROLE}; proposed as "${part}" from the ${run} run, at its place in that run's draw order`);
   }
@@ -6373,7 +6415,7 @@ function unplannedNotes(
       if (l === undefined) return `${run} run: no layer`;
       const px = `${run} run: ${l.opaqueRunPx} px`;
       const headTag = PROPOSE_HEAD_TAGS.includes(tag);
-      const fallback = tag === 'headwear' || tag === 'earwear';
+      const fallback = tag === 'headwear' || tag === 'earwear' || HEAD_FALLBACK_TAGS.includes(tag);
       if (run === 'full' && headTag && !fallback) return `${px}, but the proposer takes ${tag} from the head run only (PROPOSE_HEAD_TAGS, src/assemble.ts)`;
       if (run === 'head' && !headTag && readAuthorTag(tag) === null) return `${px}, but the proposer takes ${tag} from the full run only (it is not one of PROPOSE_HEAD_TAGS, src/assemble.ts)`;
       if (l.opaqueRunPx < minPx) return `${px}, empty: below ${floor}`;
@@ -6381,6 +6423,7 @@ function unplannedNotes(
         const f = figures[run].find((x) => x.name === tag) as LayerFigures;
         return `${px}, crosses ${implausibleRules(f).join(', ')} (named with its figures in the note below)`;
       }
+      if (run === 'full' && HEAD_FALLBACK_TAGS.includes(tag)) return `${px}, but the proposer retains a suitable head-run layer; full-run fallback requires a missing, below-floor or guard-refused head layer`;
       if (run === 'full' && fallback) {
         return `${px}, but the proposer takes ${tag} from the full run only when the head run's is below 0.8 of it in rig px (head run ${fmt0(rigPx('head', tag))}, full run ${fmt0(rigPx('full', tag))})`;
       }
