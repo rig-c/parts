@@ -1,3 +1,4 @@
+import { fixedSkeletonProblems, type FixedSkeleton } from './artjoints.ts';
 /**
  * What a scene requires of a rig's motion, declared in a file `check` is given
  * (`--requirements`, issue #93, increment 2 of #87) and measured from the
@@ -190,6 +191,8 @@ export interface RequirementsFile {
    * not declared: no fold in a named animation is meant.
    */
   may_fold: MayFold[];
+  /** Issue #880: an explicit fixed-skeleton art comparison, absent on other rigs. */
+  fixed_skeleton?: FixedSkeleton;
 }
 
 /** One declared fold (issue #320): a slot, a named animation, and why the fold is the art's. */
@@ -280,7 +283,8 @@ export function readRequirements(path: string): RequirementsFile {
     problems.push({ code: 'REQUIREMENTS_SELF_TARGET', object: `${label} field "target"`, detail });
   };
   if (raw.spec !== REQUIREMENTS_SPEC) field(`${at} field "spec"`, `is ${JSON.stringify(raw.spec)}; ${JSON.stringify(REQUIREMENTS_SPEC)} is required`);
-  for (const k of Object.keys(raw)) if (!['spec', 'fps', 'targets', 'requirements', ...EXCEPTION_LISTS, 'may_fold'].includes(k) && !freeKey(k, raw[k])) field(`${at} field "${k}"`, 'is not a field this format reads (spec, fps, targets, requirements, not_planted, not_swinging, rises, rests, may_fold; note or *_note as a string; x-<name> as a record)');
+  for (const k of Object.keys(raw)) if (!['spec', 'fps', 'targets', 'requirements', ...EXCEPTION_LISTS, 'may_fold', 'fixed_skeleton'].includes(k) && !freeKey(k, raw[k])) field(`${at} field "${k}"`, 'is not a field this format reads (spec, fps, targets, requirements, not_planted, not_swinging, rises, rests, may_fold, fixed_skeleton; note or *_note as a string; x-<name> as a record)');
+  if ('fixed_skeleton' in raw) problems.push(...fixedSkeletonProblems(raw.fixed_skeleton, `${at} fixed_skeleton`));
   let fps = NaN;
   if (!(finite(raw.fps) && raw.fps > 0)) field(`${at} field "fps"`, `is ${JSON.stringify(raw.fps)}; a positive number of frames per second is required — every named animation is sampled at it, and there is no default`);
   else fps = raw.fps;
@@ -464,7 +468,7 @@ export function readRequirements(path: string): RequirementsFile {
     }
   }
   refuseIfAny(problems);
-  return { path: at, fps, targets, requirements, not_planted: lists.not_planted, not_swinging: lists.not_swinging, rises: lists.rises, rests: lists.rests, may_fold: mayFold };
+  return { path: at, fps, targets, requirements, not_planted: lists.not_planted, not_swinging: lists.not_swinging, rises: lists.rises, rests: lists.rests, may_fold: mayFold, ...(raw.fixed_skeleton === undefined ? {} : { fixed_skeleton: raw.fixed_skeleton as FixedSkeleton }) };
 }
 
 // ---------------------------------------------------------------------------
@@ -542,6 +546,7 @@ export function resolveRequirements(file: RequirementsFile, rig: Record<string, 
   const target = (object: string, t: TargetRef): void => {
     if ('bone' in t) bone(`${object} target`, t.bone);
   };
+  for (const j of file.fixed_skeleton?.joints ?? []) bone(`fixed_skeleton joint "${j.name}"`, j.bone);
   for (const r of file.requirements) {
     const object = `requirement "${r.name}" (${r.kind})`;
     animation(object, r.animation);

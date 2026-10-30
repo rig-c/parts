@@ -1,3 +1,4 @@
+import { ART_JOINT_LINE, artJointLines } from './artjoints.ts';
 import { applyTakenLayers } from './takelayers.ts';
 import { ownershipLines, provenanceLines } from './provenance.ts';
 import { readSourceDepth } from './depthsheets.ts';
@@ -1941,6 +1942,8 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   if (vsSource !== undefined) log(`  ${judgementLine(SOURCE_LINE, vsSource)}`);
   const windBand = fig[WIND_BAND_LINE];
   if (windBand !== undefined) for (const l of windBandLines(windBand)) log(`  ${l}`);
+  const artJoints = fig[ART_JOINT_LINE];
+  if (artJoints !== undefined) for (const line of artJointLines(artJoints)) log(`  ${line}`);
   if (r.requirements !== null) {
     for (const [name, line] of Object.entries(r.requirements.lines)) log(`  ${requirementText(name, line)}`);
     log(`  ${summaryText(r.requirements.summary)}`);
