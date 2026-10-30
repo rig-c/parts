@@ -32399,7 +32399,7 @@ function runAssembleSuite(): number {
       'AS231_PROPOSE_PLAN_NAMES_EVERY_LAYER_IN_NO_ROW_ONCE_WITH_WHY',
       JSON.stringify(inNoRow(baseProp)) === JSON.stringify(EXPECTED_UNPLANNED_NOTES) &&
         namedOnce(baseProp, base.full, base.head).length === 0 &&
-        JSON.stringify(grown.plan.map((e) => e[0])) === JSON.stringify(['hair_back', 'hairpin', 'bottomwear', 'topwear', 'shoes', 'face']) &&
+        JSON.stringify(grown.plan.map((e) => e[0])) === JSON.stringify(['hair_back', 'bottomwear', 'topwear', 'shoes', 'hairpin', 'face']) &&
         JSON.stringify(inNoRow(grown)) === JSON.stringify([EXPECTED_UNPLANNED_NOTES[1]]) &&
         namedOnce(grown, grownFull, base.head).length === 0 &&
         JSON.stringify(eyed.plan) === JSON.stringify(EXPECTED_PROPOSAL.plan) &&
@@ -33547,7 +33547,7 @@ function authorLayerControls(say: (name: string, ok: boolean, detail: string, wh
         partRow.startsWith('  hand        full:author:hand 13x13     @  31,  46 op=   169 ') &&
         hasLine(asA.out, asLine) &&
         asP.status === 0 && !asP.out.includes('author-made') &&
-        refused.status === 1 && /^ {2}FAIL {2}CONFIG_TAG_KNOWN: config\.assemble\.plan\[4\] tag — is "author:"/m.test(refused.out) && !existsSync(join(authored, 'refused')),
+        refused.status === 1 && /^ {2}FAIL {2}CONFIG_TAG_KNOWN: config\.assemble\.plan\[3\] tag — is "author:"/m.test(refused.out) && !existsSync(join(authored, 'refused')),
       `exit ${asA.status}; ${partRow.trim()}; the line: ${asA.out.split('\n').find((l) => l.includes('author-made:'))?.trim() ?? 'absent'}; parts.json hand ${handRec === undefined ? 'absent' : `${handRec.from} ${handRec.x},${handRec.y} ${handRec.w}x${handRec.h} ${handRec.opaque_px} px`}, ghost full:author:hand ${String(recA?.ghost_px['full:author:hand'])}, draw order ${recA?.parts.map((q) => q.name).join(', ') ?? '-'}; the plain twin prints "author-made" ${asP.out.includes('author-made') ? 'SOMEWHERE' : 'nowhere'}; a plan taking "author:" -> exit ${refused.status}, ${refused.out.split('\n')[0].trim()}`,
       'issue #256: the part records where it came from, author-made, and its draw position is its place in the plan; a label that is no part name is refused before anything is written',
     );
@@ -51672,7 +51672,7 @@ function runTakeLayersSuite(): number {
   const { say, bad } = counter();
   const dir = temp('take-layers');
   let index = 0;
-  try { runTakeLayerChecks(dir, (name, pass, detail) => say(`TK${String(++index).padStart(2, '0')}_${name}`, pass, detail, 'issue #866: generated rectangles, exact input identity and preserved See-through roles')); }
+  try { runTakeLayerChecks(dir, (name, pass, detail) => say(`TK${String(++index).padStart(2, '0')}_${name}`, pass, detail, 'issues #866, #869: generated rectangles, exact input identity and preserved See-through roles')); }
   finally { rmSync(dir, { recursive: true, force: true }); }
   return bad();
 }

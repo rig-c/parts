@@ -12,6 +12,7 @@ import { writeRun, paint, C, WHITE } from '../fixtures/assemble_fixture.ts';
 import { spawnSync } from 'node:child_process';
 import { PartsError } from '../src/errors.ts';
 import { readPng, encodePngBytes } from '../src/raster/png.ts';
+import { runTakePlanOrderChecks } from './check_take_plan_order.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
 export function runTakeLayerChecks(dir: string, say: Say): void {
@@ -148,5 +149,5 @@ export function runTakeLayerChecks(dir: string, say: Say): void {
   say('NO_HEAD_TARGET_IS_REFUSED', absentHeadMessage.includes('ASSEMBLE_TAKE_GEOMETRY'), absentHeadMessage);
   const hints = fresh('inactive-hint'); const hp = join(hints.d, 'donor', 'layers.json'), hi = JSON.parse(readFileSync(hp, 'utf8')) as { layers: Array<Record<string, unknown>> }; hi.layers[0].depth_filename = 'absent-depth.png'; writeFileSync(hp, JSON.stringify(hi));
   say('INACTIVE_DEPTH_HINT_STAYS_INACTIVE', run(hints.d).parts.parts.some(p => p.name === 'hair' && p.depth === undefined && p.taken_layers?.length === 1), 'missing legacy depth file is not read while depth is inactive; no target sheet survives replacement');
-
+  runTakePlanOrderChecks(join(dir, 'fallback-order'), say);
 }

@@ -6048,6 +6048,18 @@ export const PROPOSE_HEAD_TAGS: readonly string[] = [
   'eyebrow-l',
 ];
 
+/** #869: two-run full rows are body rows or head fallbacks, regardless of part spelling.
+ * Within one band the run's depth order survives; the bands encode the proposer's roles.
+ */
+export function fullPlanBand(tag: string): number {
+  if (tag === 'back hair') return 0;
+  if (!PROPOSE_HEAD_TAGS.includes(tag)) return 1;
+  if (tag === 'headwear' || tag === 'earwear') return 2;
+  if (tag === 'face') return 3;
+  if (tag === 'front hair') return 5;
+  return 4;
+}
+
 /** #863: prefer suitable head layers; only unusable head candidates may fall back for these tags. */
 const HEAD_FALLBACK_TAGS: readonly string[] = ['back hair', 'face', 'front hair'];
 
@@ -6106,7 +6118,7 @@ function fmt0(v: number): string {
  * A suitable head candidate is retained. Every fallback names the two rig
  * areas and the reason. A `headwear`/`earwear` the head run drops or
  * shrinks (its rig-pixel area below 0.8 of the full run's) is taken from the
- * full run instead, drawn right after `back hair` — noted. `front hair` and
+ * full run instead, drawn after the body and before the face — noted. `front hair` and
  * `back hair` taken from the head run are extended below the crop from the
  * full run when the full run's layer reaches more than 8 rig pixels below the
  * crop line. A lone `handwear` layer is named `sleeves`.
@@ -6232,7 +6244,7 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
     return tag !== 'nose' && !(run === 'head' && tag === 'face' && headFaceRefusal !== null) &&
       l !== undefined && l.opaqueRunPx >= floor && !implausible(run, tag, 'not proposed');
   };
-  const body = runs.full.filter((l) => !PROPOSE_HEAD_TAGS.includes(l.tag) && ok('full', l.tag)).map((l) => l.tag);
+  const body = runs.full.filter((l) => fullPlanBand(l.tag) === 1 && ok('full', l.tag)).map((l) => l.tag);
   // Issue #256: an author-made layer is proposed from the run that holds it, at its place in that run's draw order,
   // like any layer; one both runs hold is proposed once, from the full run when the full run's is proposed, and the note says so.
   const authorBoth = runs.head.filter((l) => readAuthorTag(l.tag) !== null && body.includes(l.tag)).map((l) => l.tag);
@@ -6279,15 +6291,15 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
     const draw = t === 'back hair' ? 'behind the body and face' : t === 'face' ? 'before head details and front hair' : 'in front of the face';
     notes.push(`${t}: head run ${fmt0(hp)} rig px (${reason}); full run ${fmt0(fp)} rig px -> full-run layer, drawn ${draw}`);
   }
-  for (const t of ['headwear', 'earwear']) {
+  // Keep the full run's order inside the accessory band, including mixed donors.
+  for (const { tag: t } of runs.full.filter(l => fullPlanBand(l.tag) === 2)) {
     const hl = find('head', t);
     const fl = find('full', t);
     const hp = hl !== undefined ? hl.opaqueRunPx * headArea : 0;
     const fp = fl !== undefined ? fl.opaqueRunPx * fullArea : 0;
     if (ok('full', t) && hp < 0.8 * fp) {
       drop(t);
-      const at = plan.length > 0 && plan[0][2] === 'back hair' ? 1 : 0;
-      plan.splice(at, 0, [PROPOSE_ALIAS[t], 'full', t]);
+      plan.push([PROPOSE_ALIAS[t], 'full', t]);
       notes.push(`${t}: head run ${fmt0(hp)} rig px < 0.8 x full run ${fmt0(fp)} -> full-run layer, drawn behind the face`);
     }
   }

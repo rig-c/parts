@@ -366,9 +366,9 @@ export const EXPECTED_HEADWEAR_NOTE = 'headwear: head run 0 rig px < 0.8 x full 
 export const EXPECTED_PROPOSAL = {
   plan: [
     ['hair_back', 'head', 'back hair'],
-    ['hairpin', 'full', 'headwear'],
     ['bottomwear', 'full', 'bottomwear'],
     ['topwear', 'full', 'topwear'],
+    ['hairpin', 'full', 'headwear'],
     ['face', 'head', 'face'],
   ],
   extend_below_crop: [{ part: 'hair_back', run: 'full', tag: 'back hair' }],
@@ -395,7 +395,7 @@ export const AUTHOR_PART = { name: 'hand', x: 31, y: 46, w: 13, h: 13, opaque_px
 /** The flat fixture's proposed plan with the author layer's part where the proposer puts it: after topwear, before the head run's face. */
 export function authorPlan(tag = 'author:hand'): Array<[string, 'full' | 'head', string]> {
   const p = EXPECTED_PROPOSAL.plan as Array<[string, 'full' | 'head', string]>;
-  return [...p.slice(0, 4), [AUTHOR_PART.name, 'full', tag], p[4]];
+  return [...p.slice(0, 3), [AUTHOR_PART.name, 'full', tag], ...p.slice(3)];
 }
 
 /** The full run with the back hair a bob and a tail that does not touch it (issue #233), as the module doc derives it. */
