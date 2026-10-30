@@ -1,3 +1,4 @@
+import { SETUP_PAINTING_LINE, setupPaintingBounds, setupPaintingLine, type SetupPainting, type SetupPaintingLine } from './setuppainting.ts';
 import { readMaterialSources } from './cutmaterialio.ts';
 import { CUT_MATERIAL_LINE, checkJointMaterial, type MaterialLine } from './cutmaterial.ts';
 import { ART_JOINT_LINE, artJointLine, type ArtJointLine } from './artjoints.ts';
@@ -87,7 +88,7 @@ import { createRequire } from 'node:module';
 import type { Viewport as RootCoverageViewport } from '@rig-c/core/render-shared';
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig } from './assemble.ts';
+import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig, figureSilhouette } from './assemble.ts';
 import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toBoneLocal } from './coords.ts';
 import { capBox, inDisc } from './limbs.ts';
 import { motionSeamProblems } from './motionseams.ts';
@@ -1933,6 +1934,35 @@ function officialRenderer(): OfficialRenderer {
   return require('@rig-c/core/render-shared') as OfficialRenderer;
 }
 
+/** Observe the actual setup on the declared stage grid. No frame-zero motion,
+ * fitted alignment, flat recomposite or duplicate core validation. */
+export function measureSetupPainting(build: string, stage: StageBox, source: Raster, declared: SetupPainting, problems: Problem[]): SetupPaintingLine {
+  const api = officialRenderer();
+  const skeleton = join(build, 'skeleton.json'), atlas = join(build, 'skeleton.atlas');
+  const candidate = api.loadCandidate({ skeletonText: readFileSync(skeleton, 'utf8'), atlasText: readFileSync(atlas, 'utf8'), atlasDir: build, label: 'setup versus painting' }, { skeleton, atlas }, undefined);
+  const pose = api.throughPoser(candidate.choice, p => api.sampleSetupPose(p, { geometry: true, texture: true })).value[0];
+  if (pose === undefined || pose.pieces.some(p => 'source' in p)) {
+    refuseIfAny([{ code: 'CHECK_SETUP_PAINTING_MEASURED', object: SETUP_PAINTING_LINE, detail: 'actual textured setup pieces are unavailable or include clipping; no guessed ownership is substituted' }]);
+  }
+  const W = stage.width, H = stage.height;
+  if (!Number.isSafeInteger(W) || !Number.isSafeInteger(H) || W <= 0 || H <= 0) refuseIfAny([{ code: 'CHECK_SETUP_PAINTING_MEASURED', object: SETUP_PAINTING_LINE, detail: 'requires positive integer stage width/height for a native source-grid observation' }]);
+  const vp = { minX: stage.x, minY: stage.y, maxX: stage.x + W, maxY: stage.y + H, scale: 1, width: W, height: H };
+  const project = api.projector(vp), owners = new Int32Array(W * H).fill(-1);
+  pose.pieces.forEach((piece, i) => api.rasterisePiece(api.pageFor(candidate.pages, piece), piece, project, vp, (x, y, _r, _g, _b, a) => { if (a > 0) owners[y * W + x] = i; }));
+  // sourceInRig intentionally reads opaque RGB, discarding source alpha before
+  // resizing. This optional comparison declares source-over white instead:
+  // flatten at ORIGINAL source resolution first, so hidden RGB cannot reach
+  // Lanczos taps or the figure silhouette. Do not change the legacy helper.
+  const whiteSource = newRaster(source.width, source.height);
+  for (let p = 0; p < source.width * source.height; p++) {
+    for (let c = 0; c < 3; c++) whiteSource.data[p * 4 + c] = Math.round(source.data[p * 4 + c] * source.data[p * 4 + 3] / 255 + 255 * (1 - source.data[p * 4 + 3] / 255));
+    whiteSource.data[p * 4 + 3] = 255;
+  }
+  const painting = sourceInRig(whiteSource, W, H);
+  const setup = api.renderFrame(pose, candidate.pages, vp, [0, 0, 0, 0]);
+  return setupPaintingLine(declared, painting, { width: W, height: H, data: new Uint8ClampedArray(setup.data) }, figureSilhouette(painting).data, owners, pose.pieces.map(p => p.slot), problems);
+}
+
 /** One decoder/poser lifetime per state; retain only finite bounds and identities, never atlas pages or rasters. */
 export function seamStateBounds(build: string, state: string): SeamStateBounds {
   try {
@@ -2699,6 +2729,8 @@ export interface CheckFigures {
   requirements?: RequirementsBlock;
   /** Issue #880: only when requirements declares fixed_skeleton. */
   [ART_JOINT_LINE]?: ArtJointLine;
+  /** Only when setup_painting is explicitly declared. */
+  [SETUP_PAINTING_LINE]?: SetupPaintingLine;
   [CUT_MATERIAL_LINE]?: MaterialLine;
   PASS: boolean;
 }
@@ -3055,7 +3087,7 @@ export function checkStatuses(fig: CheckFigures): Record<string, CheckStatus> {
   const bar = (name: string, measured: boolean): CheckStatus => (!measured ? 'SKIP' : notMet.includes(name) ? 'FAIL' : 'PASS');
   const out: Record<string, CheckStatus> = { gate: bar('gate', true), loop: bar('loop', fig.loop_max_diff !== null), seam: bar('seam', fig.seam_mean !== null) };
   for (const n of JUDGEMENT_LINES) out[n] = fig[n].status;
-  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, ...REPORTED_LINES, SOURCE_LINE, WIND_BAND_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE] as const) {
+  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, ...REPORTED_LINES, SOURCE_LINE, WIND_BAND_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, SETUP_PAINTING_LINE] as const) {
     const l = fig[n];
     if (l !== undefined) out[n] = l.status;
   }
@@ -5865,6 +5897,10 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     const file = reqFile as RequirementsFile;
     const ready = inp;
     take(() => resolveRequirements(file, ready.rig, ready.motion, ready.rootBone));
+    if (file.setup_painting !== undefined) take(() => {
+      refuseIfAny(setupPaintingBounds(file.setup_painting as SetupPainting, ready.stage.width, ready.stage.height));
+      if (ready.source === null) refuseIfAny([{ code: 'CHECK_SETUP_PAINTING_SOURCE', object: 'requirements.setup_painting', detail: 'requires --source naming the painting; the assembled composite is not an independent source painting' }]);
+    });
     take(() => refuseIfAny(exceptionProblems(file, ready.parts, ready.noParts)));
     // A seam's pairs are read off parts.json's art (issue #111); both resolvers' problems are named in one refusal.
     if (file.requirements.some((r) => r.kind === 'seam')) {
@@ -6415,6 +6451,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const setHints = new Map<string, string>();
   const fixedSkeleton = reqFile?.fixed_skeleton;
   let artJoints: ArtJointLine | null = null;
+  let setupPainting: SetupPaintingLine | null = null;
   if (inp.parts !== null || inp.source !== null || fixedSkeleton !== undefined) {
     try {
       mkdirSync(stillDir, { recursive: true });
@@ -6442,6 +6479,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       const sr = rigc(['render', '--candidate', join(stillDir, 'build'), '--animation', 'still', '--fps', String(STILL_FPS), '--max', String(maxSide), ...(fixedSkeleton === undefined ? [] : ['--geometry']), '--out', join(stillDir, 'render')]);
       if (sr.status !== 0) refuseIfAny(rigcFailed('render (the setup-pose still)', sr, sr.out.split('\n').filter((l) => l.includes('FAIL'))));
       const stillSet = readFrameSet(join(stillDir, 'render'));
+      if (reqFile?.setup_painting !== undefined && inp.source !== null) setupPainting = measureSetupPainting(join(stillDir, 'build'), inp.stage, inp.source.painting, reqFile.setup_painting, problems);
       if (fixedSkeleton !== undefined) {
         const geometryPath = join(stillSet.dir, GEOMETRY_FILE);
         const geometry = readGeometry(geometryPath, stillSet.written);
@@ -6644,6 +6682,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(Object.keys(setsFigures).length === 0 ? {} : { sets: setsFigures }),
     ...(config === undefined ? {} : { config }),
     ...(artJoints === null ? {} : { [ART_JOINT_LINE]: artJoints }),
+    ...(setupPainting === null ? {} : { [SETUP_PAINTING_LINE]: setupPainting }),
     ...(cutMaterial === null ? {} : { [CUT_MATERIAL_LINE]: cutMaterial }),
     ...(reqBlock === null ? {} : { requirements: reqBlock }),
     PASS: false,
@@ -6710,6 +6749,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   if (folds !== null) tally(FOLD_LINE, null);
   if (cutMaterial !== null) tally(CUT_MATERIAL_LINE, null);
   if (artJoints !== null) tally(ART_JOINT_LINE, artJoints.status === 'SKIP' ? (artJoints.reason ?? 'no declared limit') : null);
+  if (setupPainting !== null) tally(SETUP_PAINTING_LINE, setupPainting.status === 'SKIP' ? (setupPainting.reason ?? 'no declared limit') : null);
   // Issue #348: the level bar where it is written; a line whose every foot no frame posed says SKIP and is not measured.
   if (level !== null) tally(LEVEL_LINE, level.status === 'SKIP' ? (level.reason ?? '') : null);
   // Issue #347: the stress bar is counted where it is written — on every rig with a handwear part and an idle.

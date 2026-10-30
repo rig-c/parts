@@ -1,3 +1,4 @@
+import { setupPaintingProblems, type SetupPainting } from './setuppainting.ts';
 import { jointMaterialProblems, type JointMaterial } from './cutmaterial.ts';
 import { fixedSkeletonProblems, type FixedSkeleton } from './artjoints.ts';
 /**
@@ -194,6 +195,8 @@ export interface RequirementsFile {
   may_fold: MayFold[];
   /** Issue #880: an explicit fixed-skeleton art comparison, absent on other rigs. */
   fixed_skeleton?: FixedSkeleton;
+  /** Issue #887: authored source-painting limits over native renderer setup. */
+  setup_painting?: SetupPainting;
   /** Explicit source-support declarations (#888), absent otherwise. */
   cut_material?: JointMaterial[];
 }
@@ -286,7 +289,8 @@ export function readRequirements(path: string): RequirementsFile {
     problems.push({ code: 'REQUIREMENTS_SELF_TARGET', object: `${label} field "target"`, detail });
   };
   if (raw.spec !== REQUIREMENTS_SPEC) field(`${at} field "spec"`, `is ${JSON.stringify(raw.spec)}; ${JSON.stringify(REQUIREMENTS_SPEC)} is required`);
-  for (const k of Object.keys(raw)) if (!['spec', 'fps', 'targets', 'requirements', ...EXCEPTION_LISTS, 'may_fold', 'fixed_skeleton', 'cut_material'].includes(k) && !freeKey(k, raw[k])) field(`${at} field "${k}"`, 'is not a field this format reads (spec, fps, targets, requirements, not_planted, not_swinging, rises, rests, may_fold, fixed_skeleton, cut_material; note or *_note as a string; x-<name> as a record)');
+  for (const k of Object.keys(raw)) if (!['spec', 'fps', 'targets', 'requirements', ...EXCEPTION_LISTS, 'may_fold', 'fixed_skeleton', 'cut_material', 'setup_painting'].includes(k) && !freeKey(k, raw[k])) field(`${at} field "${k}"`, 'is not a field this format reads (spec, fps, targets, requirements, not_planted, not_swinging, rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting; note or *_note as a string; x-<name> as a record)');
+  if ('setup_painting' in raw) problems.push(...setupPaintingProblems(raw.setup_painting, `${at} setup_painting`));
   if ('cut_material' in raw) problems.push(...jointMaterialProblems(raw.cut_material, `${at} cut_material`));
   if ('fixed_skeleton' in raw) problems.push(...fixedSkeletonProblems(raw.fixed_skeleton, `${at} fixed_skeleton`));
   let fps = NaN;
@@ -472,7 +476,7 @@ export function readRequirements(path: string): RequirementsFile {
     }
   }
   refuseIfAny(problems);
-  return { path: at, fps, targets, requirements, not_planted: lists.not_planted, not_swinging: lists.not_swinging, rises: lists.rises, rests: lists.rests, may_fold: mayFold, ...(raw.fixed_skeleton === undefined ? {} : { fixed_skeleton: raw.fixed_skeleton as FixedSkeleton }), ...(raw.cut_material === undefined ? {} : { cut_material: raw.cut_material as JointMaterial[] }) };
+  return { path: at, fps, targets, requirements, not_planted: lists.not_planted, not_swinging: lists.not_swinging, rises: lists.rises, rests: lists.rests, may_fold: mayFold, ...(raw.fixed_skeleton === undefined ? {} : { fixed_skeleton: raw.fixed_skeleton as FixedSkeleton }), ...(raw.cut_material === undefined ? {} : { cut_material: raw.cut_material as JointMaterial[] }), ...(raw.setup_painting === undefined ? {} : { setup_painting: raw.setup_painting as SetupPainting }) };
 }
 
 // ---------------------------------------------------------------------------
