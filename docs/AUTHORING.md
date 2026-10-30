@@ -5101,7 +5101,7 @@ and stay absent).
 | <a id="DEPTH_SOURCE_AMBIGUOUS"></a>`DEPTH_SOURCE_AMBIGUOUS` | writer/user or layer/canvas declarations overlap | select one authoritative route explicitly |
 | <a id="DEPTH_SOURCE_RESOLVES"></a>`DEPTH_SOURCE_RESOLVES` | user key names no source layer | use the exact source tag in the selected run |
 | <a id="DEPTH_SOURCE_BASE"></a>`DEPTH_SOURCE_BASE` | a direct assembler caller supplied user paths without config base | pass the actual config-directory base |
-| <a id="DEPTH_PART_SUPPORT"></a>`DEPTH_PART_SUPPORT` | exact copied/generated material lacks source depth or compatible units | provide a declared scalar source/registration; do not infer or fill depth |
+| <a id="DEPTH_PART_SUPPORT"></a>`DEPTH_PART_SUPPORT` | exact copied/generated material lacks source depth or compatible units | provide a declared scalar source/registration; do not infer or fill depth; declare the part `unit` with an explicit authored `unitDepths` value when its material includes authored under-art |
 | <a id="PARTS_DEPTH_REFERENCE"></a>`PARTS_DEPTH_REFERENCE` | persisted fields/provenance violate the reference shape | restore image, near, positive zScale and exact source records |
 | <a id="DEPTH_SILHOUETTE_SIZE_MISMATCH"></a>`DEPTH_SILHOUETTE_SIZE_MISMATCH` | `extendDepthSilhouette` or `padTurnDepthSheet` received a source depth sheet and artwork raster of different dimensions | supply the part's matching unpadded depth sheet and artwork raster |
 | <a id="CONFIG_TURN_COUNTER_RANGE"></a>`CONFIG_TURN_COUNTER_RANGE` | `config.turn.counter` (or `config.turn.body.counter`) is outside `[0, 1]` | supply a non-negative rear counter-translation fraction in `[0, 1]` |
@@ -6326,10 +6326,11 @@ legacy-byte change. #773 adds no image generation, geometry or motion model.
 
 ### Unit depth precedence
 
-For `"unit"` roles, a part's sheet is recorded and validated but is not
+For `"unit"` roles, a transported part's sheet is recorded and validated but is not
 necessarily the depth used to move its bone. `turn.unitDepths` (and the body
 map `turn.body.unitDepths`, which inherits the head map when omitted) uses
 calibrated world depths. An explicit `0` is a value, not a request to sample.
+With active depth binding, assembly skips scalar transport only when every declared turn group makes the part `unit` with explicit part or carried-bone `unitDepths` covering every still piece, records the resolved values in `provenance.depth` as `{kind: "authored-unit", values: [...]}`, and retains input-sheet validation and every implicit-unit or sampled-surface refusal.
 For each carried unit bone, the existing producer resolves depth in this order:
 
 1. `unitDepths.<part>`; when both names are present, the part entry wins.

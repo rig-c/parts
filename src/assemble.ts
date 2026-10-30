@@ -1,4 +1,5 @@
 import { unionTakenSources } from './takesource.ts';
+import { authoredUnitDepths, type AuthoredUnitDepth } from './authoredunit.ts';
 import { paintingExtensionMasks, paintingExtensionProblems, type PaintingExtension } from './paintingextension.ts';
 import { AUTOMATIC_WRITERS as AW, compactValueBaseline, pixelProvenance, rgbaEqual, type ValueBaseline } from './provenance.ts';
 import { bindDepthRun, copyDepthMaterial, registerDepthRun, transportPartDepth, type DepthConfig, type RegisteredDepth } from './depthsheets.ts';
@@ -317,6 +318,11 @@ export function singleRunPadRecord(single: boolean, sourceW: number, sourceH: nu
 }
 
 export interface AssembleInput {
+  /** Turn context for the exact part/carrier declarations, never an exemption flag. */
+  turn?: TurnSpec;
+  regions?: Record<string, RegionSpec>;
+  meshes?: Record<string, MeshSpec>;
+  motion?: CharacterConfig['motion'];
   depth?: DepthConfig;
   /** Config-relative user sheet paths; caller supplies its actual base. */
   depthBase?: string;
@@ -4638,6 +4644,7 @@ export function checkSingleRun(full: LayerSet, plan: readonly PlanEntry[] | null
  */
 export function assemble(input: AssembleInput): AssembleResult {
   const { source, extend, patches, seamRule, projectRule } = input;
+  const authoredDepths = input.depth === undefined ? new Map<string, AuthoredUnitDepth>() : authoredUnitDepths(input);
   if (input.paintingExtension !== undefined) refuseIfAny(paintingExtensionProblems(input.paintingExtension));
   const single = input.single === true;
   const frame = checkGeometry(
@@ -5541,7 +5548,8 @@ export function assemble(input: AssembleInput): AssembleResult {
     const limbIndex = limb === undefined ? -1 : lim.parts.findIndex(q => q.record.name === limb.name && q.record.segment === limb.segment);
     const upperIndex = limb === undefined ? -1 : lim.parts.findIndex(q => q.record.name === limb.name && q.record.segment === limb.segment - 1);
     const capSource = limbIndex < 0 ? null : lim.capFrom[limbIndex];
-    const scalar = transportPartDepth(record, image, registeredDepth, {
+    const authoredDepth = authoredDepths.get(name);
+    const scalar = authoredDepth === undefined ? transportPartDepth(record, image, registeredDepth, {
       map: run => runMap(frame, run), width: W, extend: extendKeys, owner: trace.from,
       ring: trace.ring.data, region: region?.data ?? null,
       copiedSource: (x, y) => {
@@ -5552,7 +5560,7 @@ export function assemble(input: AssembleInput): AssembleResult {
         return { key: e < 0 ? upper.key : upper.extendKeys[e], ring: upper.trace.ring.data[p] !== 0 };
       },
       ...((limb?.cap?.image_px ?? 0) > 0 || (limb?.cap?.lower_px ?? 0) > 0 ? { unsupported: `cap copies ${(limb?.cap?.image_px ?? 0) + (limb?.cap?.lower_px ?? 0)} pixels from a separate cap image whose scalar grid is undeclared` } : {}),
-    });
+    }) : undefined;
     if (capSource !== null && upperIndex >= 0 && capSource.codes.some(code => code === CAP_FROM_UPPER)) {
       const upper = limbPieces[upperIndex];
       const keys = [upper.key, ...upper.extendKeys.filter((_, i) => upper.trace.from.some(v => v === i))];
@@ -5573,7 +5581,11 @@ export function assemble(input: AssembleInput): AssembleResult {
 
 
   seamOverride(placed, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, keepInOrder, input.turnMovingPair ?? null, (i, p) => { writersInOrder[i][p] = AW.seamOverride; });
-  placed.forEach((p, i) => { p.record.provenance = pixelProvenance(p.image, p.record.x, p.record.y, W, writersInOrder[i], editNames, 0, valueBaselines.get(p.record.from) ?? null); });
+  placed.forEach((p, i) => {
+    p.record.provenance = pixelProvenance(p.image, p.record.x, p.record.y, W, writersInOrder[i], editNames, 0, valueBaselines.get(p.record.from) ?? null);
+    const depth = authoredDepths.get(p.record.name);
+    if (depth !== undefined) p.record.provenance.depth = depth;
+  });
   // Provenance is now numbers/labels only. No later raster/figure operation
   // reads report buffers; release all aliases before recomposite/error work.
   valueBaselines.clear();
@@ -6487,6 +6499,7 @@ export function stageFields(
     regions?: Record<string, RegionSpec>;
     constraints?: ConfigConstraint[];
     turn?: TurnSpec;
+    motion?: CharacterConfig['motion'];
   },
   single: { w: number; h: number } | null = null,
 ): {
@@ -6512,6 +6525,10 @@ export function stageFields(
   /** Base painting only; named final parts, explicit band and path bound (#848). */
   paintingExtension?: readonly PaintingExtension[];
   turnMovingPair?: (a: string, b: string) => boolean;
+  turn?: TurnSpec;
+  regions?: Record<string, RegionSpec>;
+  meshes?: Record<string, MeshSpec>;
+  motion?: CharacterConfig['motion'];
 } {
   const problems: Problem[] = [];
   if (cfg.seethrough === undefined) {
@@ -6535,6 +6552,7 @@ export function stageFields(
     ...(cfg.assemble.keep_under_occluders === undefined ? {} : { keepUnderOccluders: cfg.assemble.keep_under_occluders }),
     ...(cfg.assemble.extend_painting === undefined ? {} : { paintingExtension: cfg.assemble.extend_painting }),
     ...(turnMovingPair === null ? {} : { turnMovingPair }),
+    ...(cfg.turn === undefined ? {} : { turn: cfg.turn, regions: cfg.regions, meshes: cfg.meshes, motion: cfg.motion }),
     rigScale: cfg.assemble.rig_scale,
     plan: cfg.assemble.plan,
     extend: cfg.assemble.extend_below_crop ?? [],
