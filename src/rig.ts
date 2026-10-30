@@ -1,3 +1,4 @@
+import { addUnderPieces, orderedUnderPiece, underOrderProblems } from './underpieces.ts';
 import { baseAnchorProblems, orderedBaseAnchor, baseAnchorMoves, type AnchorRegion } from './baseanchor.ts';
 import { padDepthSheet, padTurnDepthSheet, depthSheetProblems, type PartDepthReference } from './depthsheets.ts';
 import { explicitBoneNames, explicitSlotBones, explicitWeightRows, regionBone } from './config.ts';
@@ -1302,6 +1303,20 @@ export function buildWaistPairSource(
   reduce: Reducer = runReduction,
   turnOrderByDeclaration: boolean = true,
 ): RigOutput {
+  const under = cfg.assemble.under_pieces;
+  if (under !== undefined || parts.parts.some(p => p.under_piece !== undefined)) {
+    const base = parts.parts.filter(p => p.under_piece === undefined).map(record => ({ record, image: images.get(record.name)! }));
+    const expected = addUnderPieces(under, base, cfg, parts.rig_size);
+    const problems: Problem[] = [];
+    for (const p of parts.parts.filter(p => p.under_piece !== undefined)) if (!under?.some(d => d.name === p.name)) problems.push({ code: 'RIG_UNDER_PROVENANCE', object: `part "${p.name}"`, detail: 'has under-piece provenance without the matching config declaration; re-run assemble' });
+    for (const d of under ?? []) {
+      const actual = parts.parts.find(p => p.name === d.name), want = expected.find(p => p.record.name === d.name), image = images.get(d.name);
+      if (actual?.under_piece === undefined || JSON.stringify(orderedUnderPiece(actual.under_piece)) !== JSON.stringify(orderedUnderPiece(d)) || want === undefined || image === undefined || actual.x !== want.record.x || actual.y !== want.record.y || actual.w !== want.record.w || actual.h !== want.record.h || actual.from !== want.record.from || image.data.length !== want.image.data.length || !image.data.every((v, i) => v === want.image.data[i])) problems.push({ code: 'RIG_UNDER_PROVENANCE', object: `under-piece "${d.name}"`, detail: 'record and complete RGBA bytes must equal the declared donor crop, including transparent RGB; re-run assemble' });
+      if (cfg.regions[d.name] !== undefined || cfg.meshes[d.name] !== undefined) problems.push({ code: 'RIG_UNDER_PROVENANCE', object: `under-piece "${d.name}"`, detail: 'its region is generated on the declared carrier; remove explicit mesh/region entries' });
+    }
+    refuseIfAny(problems);
+    cfg = { ...cfg, regions: { ...cfg.regions, ...Object.fromEntries((under ?? []).map(d => [d.name, d.carrier])) } };
+  }
   // Generated bands have a fixed one-pixel lattice, with their axial weights
   // below; config never supplies a second mesh policy for the same source.
   const bands = parts.parts.filter((p) => p.limb?.band !== undefined);
@@ -3707,7 +3722,9 @@ export function buildWaistPairSource(
         }
       }
     }
+    refuseIfAny(underOrderProblems(under, rig.slots));
   });
+  refuseIfAny(underOrderProblems(under, rig.slots));
   return {
     rig,
     motion,

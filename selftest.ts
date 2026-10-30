@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runUnderPieceChecks } from './fixtures/underpieces.ts';
 import { runTurnUnitPrecedenceChecks } from './tools/check_turn_unit_precedence.ts';
 import { runAuthoredUnitDepthChecks } from './tools/check_authored_unit_depth.ts';
 import { runTakeLayerChecks } from './tools/check_take_layers.ts';
@@ -51664,7 +51665,9 @@ function runLimbSlotSuite(): number {
   const { say, bad } = counter();
   const dir = temp('limb-slots');
   let index = 0;
+  let underIndex = 0;
   try {
+    runUnderPieceChecks(join(dir, 'under-pieces'), (name, pass, detail) => say(`UP879${String(++underIndex).padStart(2, '0')}_${name}`, pass, detail, 'issue #879: explicit fixed-skeleton seam geometry, exact RGBA, final slot order and unchanged undeclared output'));
     runLimbSlotChecks(dir, (name, pass, detail) => say(`LS${String(++index).padStart(2, '0')}_${name.toUpperCase()}`, pass, detail,
       'issue #646: explicit all-attachment ownership, stable local slot closure, in-memory identity fault with native restoration, mixed-binding limits and unchanged no-limbs output'));
     runGatherOptOutChecks(join(dir, 'gather-optout'), (name, pass, detail) => say(`RGO${String(++index).padStart(2, '0')}_${name.toUpperCase()}`, pass, detail,

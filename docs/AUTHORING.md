@@ -4355,6 +4355,87 @@ off; every other pixel is the painting in light grey (`192 + luma / 4`, so 192 t
 falls in at contact-sheet size, and grey so no painting pixel can be either flag
 colour. Opaque, and the same bytes on every run.
 
+### An explicit rigid under-piece at a fixed seam
+
+`assemble.under_pieces` copies a declared **assembled donor part**, after its
+ordinary assembly passes, into an extra rigid slot beneath both named neighbours.
+It does not select a donor or change the skeleton. This is an explicit structural
+piece on an existing joint, not a general seam-repair or painting operation;
+follow [Source before scissors](#source-before-scissors) for source defects.
+
+```json
+{
+  "under_pieces": [{
+    "name": "joint_under",
+    "seam": {
+      "neighbours": ["upper", "lower"],
+      "at": [32, 31],
+      "normal": [0, 1]
+    },
+    "carrier": "upper",
+    "side": "negative",
+    "donor": "lower",
+    "box": [25, 24, 39, 31]
+  }]
+}
+```
+
+All coordinates are rig pixels, x right/y down. `box` is an integer rectangle
+with exclusive right/bottom limits, entirely inside the donor PNG's recorded
+rig box and the rig canvas. The copy preserves **every RGBA byte**, including
+RGB under alpha zero and partial alpha; it neither pads, resizes, feathers nor
+repaints. The donor is the final assembled PNG, not an original input-layer
+sample: select the intended layer through `assemble.plan` first. Artwork filenames must also remain distinct from every part depth filename
+after generated parts are added (`DEPTH_SHEET_UNAMBIGUOUS`). A donor with
+a depth sheet is refused; there is no implicit scalar-depth transport.
+
+`seam.neighbours` names two existing rigid output parts on adjacent, explicitly
+positioned single bones. Limb output regions on such bones are accepted; chain
+links and mesh neighbours (including generated hybrid bands) are outside this route. `seam.at` must equal the child
+bone's origin, and unit `seam.normal` must point from the parent origin to the
+child origin. `carrier` names one of those two bones. `side` explicitly declares
+its half-plane: `negative` for the parent, `positive` for the child. For a pixel
+centre `p`, the signed side is `(p - seam.at) dot seam.normal`; zero is allowed
+on either side. Every crop pixel with alpha above zero must lie on the declared
+side. This is a geometric ownership check, not an inference of painted meaning.
+The crop must also contain a pixel with alpha above 8 within one rig pixel of
+`seam.at` (centre-to-point Euclidean distance).
+
+The tool creates the slot and its region attachment on `carrier`; do not add
+`regions.<name>` or `meshes.<name>`. The output name must be unused, and generated
+under-pieces cannot donate to or neighbour one another. `parts.json` records
+`under_piece` with the complete declaration: seam neighbours, point and normal,
+carrier, side, donor and crop box. The record inherits the donor's `from` and
+verified taken-layer identities. The slot is inserted immediately before the
+first neighbour, then checked **after** limb gathering, stop and turn rewrites.
+A layout that moves it above either neighbour is refused, never silently
+reordered. Rig also rechecks the complete crop bytes against its donor, so a
+stale or hand-edited intermediate cannot acquire this provenance.
+
+Use a limb cap when the lower segment should carry the joint overlap:
+`cap_shape: "ball"` still writes its lower half into that lower segment only.
+Use an under-piece when explicitly supplied carrier-side art must ride another
+existing bone and occupy a distinct slot below both neighbours. `cuts.under`
+only refills pixels removed from its base; a painting patch takes painting RGB
+and writes opaque alpha. A cut with enough retained `overlap` can also duplicate a structural piece
+without clearing its donor. Its output is trimmed to its alpha box, however; it
+has no declared seam/side or final under-both-neighbours check. These existing
+routes do not promise the exact rectangle and named checks described here.
+No declaration changes no existing cap or ordinary build path. Test the declared
+motion range: a valid crop and slot order alone do not prove every pose is closed.
+
+| rule | Meaning and remedy |
+| --- | --- |
+| <a id="CONFIG_UNDER_PIECE"></a>`CONFIG_UNDER_PIECE` | Unknown/missing fields, malformed geometry, duplicate/generated output names, unknown donor/neighbour/carrier, or an explicit attachment for the generated part. Supply the complete declaration and existing output names; remove its explicit mesh/region entry. |
+| <a id="ASSEMBLE_UNDER_GEOMETRY"></a>`ASSEMBLE_UNDER_GEOMETRY` | Neighbours are not rigid parts on adjacent single bones, or point/normal/carrier/side disagrees with that joint. Correct the declared geometry or use another supported route. |
+| <a id="ASSEMBLE_UNDER_NAME"></a>`ASSEMBLE_UNDER_NAME` | The output name already exists. Choose an unused part name. |
+| <a id="ASSEMBLE_UNDER_DONOR"></a>`ASSEMBLE_UNDER_DONOR` | The named assembled donor is absent or has a depth sheet. Supply an existing donor without scalar-depth requirements. |
+| <a id="ASSEMBLE_UNDER_BOX"></a>`ASSEMBLE_UNDER_BOX` | The crop leaves the rig or donor box. Supply an interior crop; no padding or resize is implicit. |
+| <a id="ASSEMBLE_UNDER_FOREIGN_SIDE"></a>`ASSEMBLE_UNDER_FOREIGN_SIDE` | Nontransparent crop pixels lie on the opposite half-plane. Select only carrier-side art; pixels are never masked to conceal this refusal. |
+| <a id="PARTS_UNDER_PIECE"></a>`PARTS_UNDER_PIECE` | Serialized under-piece identity disagrees with its part name. Re-run assemble. Malformed serialized declarations use `CONFIG_UNDER_PIECE`. |
+| <a id="RIG_UNDER_PROVENANCE"></a>`RIG_UNDER_PROVENANCE` | Declaration, record or complete RGBA crop differs, or generated metadata has no matching declaration. Re-run assemble from the intended config and donor. |
+| <a id="RIG_UNDER_DRAW_ORDER"></a>`RIG_UNDER_DRAW_ORDER` | The final emitted slot is absent, on another carrier, or not strictly below both neighbours. Use a compatible limb/turn layout and verify the final order. |
+
 ## 6. Refusals: the rule, and what has to change
 
 Every refusal is `FAIL  RULE: object — detail (see rig-parts guide RULE)`, and the
@@ -4603,7 +4684,7 @@ those settings. Changing a config seed alone cannot change a no-config run.
 | <a id="ASSEMBLE_CUT_CROSSES_LIMB"></a>`ASSEMBLE_CUT_CROSSES_LIMB` | a cut whose `from` a limb takes takes a pixel inside the limb: between the joint above its segments that take the part and the joint below them, or in the upper joint's cap disc (the detail gives the limb, the count, the first `x,y`, the segment's band or the cap, and the line it must lie past) | the polygon: past the lower joint's line or before the upper's and outside its cap — or leave the pixels to the limb's segments (§5, *Limbs*) |
 | <a id="ASSEMBLE_UNDER_PRESENT"></a><a id="ASSEMBLE_UNDER_DECODES"></a>`ASSEMBLE_UNDER_PRESENT`, `ASSEMBLE_UNDER_DECODES` | a cut's `under` names no file (relative to the config's directory), or a file that is not a PNG; every cut's is named in one refusal | that cut's `under` |
 | <a id="ASSEMBLE_UNDER_SIZE"></a>`ASSEMBLE_UNDER_SIZE` | a cut's `under` image is not the size of its polygon's bounding box (the detail gives both, and the box's corner) | the image: `max x − min x` by `max y − min y` of the polygon, in rig pixels |
-| <a id="ASSEMBLE_UNDER_EMPTY"></a>`ASSEMBLE_UNDER_EMPTY` | a cut's `under` image fills none of the pixels the cut removed: its alpha is below the alpha removed at every one (all transparent there, or another file) | the image or its path; to leave the whole hole, drop `under` |
+| <a id="ASSEMBLE_UNDER_EMPTY"></a>`ASSEMBLE_UNDER_EMPTY` | a cut's `under` image fills none of the pixels the cut removed: its alpha is below the alpha removed at every one (all transparent there, or another file); or an `under_pieces` crop contains no donor pixel with alpha above 8 within one rig pixel of its declared seam point | for a cut, the image or its path; to leave the whole hole, drop `under`; for an under-piece, choose a donor and crop containing actual seam art |
 | <a id="ASSEMBLE_UNDER_FILL_SOURCE"></a>`ASSEMBLE_UNDER_FILL_SOURCE` | a cut declares `under_fill` and has no under to fill with: it names no `under` file and its part has no hidden-art layer (issue #360) | name the cut's `under`, or drop `under_fill` |
 | <a id="ASSEMBLE_UNDER_DRAW"></a>`ASSEMBLE_UNDER_DRAW` | a cut with `under` draws its piece behind its part, which the fill would hide it under | that cut's `draw`: `"front"`, or `{"before": …}` the plan part after its `from` |
 | <a id="ASSEMBLE_LIMB_TAKES"></a><a id="ASSEMBLE_LIMB_PIXELS"></a>`ASSEMBLE_LIMB_TAKES`, `ASSEMBLE_LIMB_PIXELS` | a part a limb takes has no opaque pixel, or a limb segment gets none of it — the joint lines through the bones' origins put none of the limb's pixels on it, or another limb's polyline is nearer every one (issue #349) | the bones: their origins on the limb's art, each joint where the limb bends |

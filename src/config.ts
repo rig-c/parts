@@ -1,3 +1,4 @@
+import { underPieceProblems, type UnderPiece } from './underpieces.ts';
 import type { TakeLayers } from './takelayers.ts';
 import { paintingExtensionProblems, type PaintingExtension } from './paintingextension.ts';
 import { baseAnchorProblems, type BaseAnchor } from './baseanchor.ts';
@@ -308,6 +309,7 @@ export interface Assemble {
   extend_below_crop?: Extend[];
   /** Bounded base-painting samples assigned to named final output parts (#848). */
   extend_painting?: PaintingExtension[];
+  under_pieces?: UnderPiece[];
   patches?: Patch[];
   cuts?: Cut[];
   alternates?: AlternateSetConfig[];
@@ -1691,7 +1693,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
   if (door === 'layers') {
     if ('seethrough' in t) checkSeeThrough(c, t.seethrough);
     if ('assemble' in t) {
-      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take']);
+      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take', 'under_pieces']);
       if (a !== null) {
         if ('rig_scale' in a) c.number('config.assemble.rig_scale', a.rig_scale, 'positive');
         if ('head_face_underfill' in a && typeof a.head_face_underfill !== 'boolean') {
@@ -1950,7 +1952,14 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
   }
   if ('meshes' in t) checkMeshes(c, t.meshes, names.bones, names.chains, t.stops);
   if ('regions' in t) checkRegions(c, t.regions, names.bones);
-  if ('meshes' in t && 'regions' in t && 'assemble' in t) checkCoverage(c, [...parts, ...cuts], patches, t.meshes, t.regions, limbs);
+  const under = isPlainObject(t.assemble) && underPieceProblems(t.assemble.under_pieces).length === 0 ? t.assemble.under_pieces as UnderPiece[] : [];
+  for (const d of under) {
+    if (!names.bones.has(d.carrier)) c.fail('CONFIG_UNDER_PIECE', `under-piece "${d.name}".carrier`, `bone "${d.carrier}" is not declared`);
+    if (isPlainObject(t.regions) && d.name in t.regions || isPlainObject(t.meshes) && d.name in t.meshes) c.fail('CONFIG_UNDER_PIECE', `under-piece "${d.name}"`, 'its attachment is generated; remove the explicit region/mesh entry');
+    const output = new Set([...parts.filter(n => !limbs?.consumed.has(n)), ...patches, ...cuts, ...(limbs?.parts.keys() ?? [])]);
+    for (const n of [...d.seam.neighbours, d.donor]) if (!output.has(n) || under.some(u => u.name === n)) c.fail('CONFIG_UNDER_PIECE', `under-piece "${d.name}"`, `part "${n}" is not an existing non-generated output`);
+  }
+  if ('meshes' in t && 'regions' in t && 'assemble' in t) checkCoverage(c, [...parts, ...cuts], patches, t.meshes, isPlainObject(t.regions) ? { ...t.regions, ...Object.fromEntries(under.map(d => [d.name, d.carrier])) } : t.regions, limbs);
   if ('motion' in t) checkMotion(c, t.motion, names.bones, names.chains, 'regions' in t ? t.regions : undefined);
   if ('constraints' in t) checkConstraints(c, t.constraints, names.bones, names.parents);
   if ('stops' in t) checkStops(c, t.stops, names.bones, names.chains);
@@ -2459,7 +2468,7 @@ function checkTakeLayers(c: Check, value: Json): void {
 
 function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: string[]; patches: string[]; cuts: string[] } {
   const required = sectionRequired(door, 'assemble');
-  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take']);
+  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take', 'under_pieces']);
   if (a === null) return { parts: [], patches: [], cuts: [] };
   if (required.includes('plan') && !('plan' in a)) {
     c.fail('CONFIG_FIELD_PRESENT', 'config.assemble.plan', 'is absent and required; `assemble --propose-plan` prints one from the two runs — paste its plan and extend_below_crop into config.assemble');
@@ -2509,6 +2518,14 @@ function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: s
   }
   const patches = 'patches' in a ? checkPatches(c, a.patches, parts) : [];
   const cuts = 'cuts' in a ? checkCuts(c, a.cuts, parts, patches) : [];
+  if ('under_pieces' in a) {
+    const problems = underPieceProblems(a.under_pieces);
+    c.problems.push(...problems);
+    if (problems.length === 0) for (const d of a.under_pieces as UnderPiece[]) {
+      if ([...parts, ...patches, ...cuts].includes(d.name)) c.fail('CONFIG_UNDER_PIECE', `${p}.under_pieces`, `output name \"${d.name}\" already exists`);
+      parts.push(d.name);
+    }
+  }
   return { parts, patches, cuts };
 }
 

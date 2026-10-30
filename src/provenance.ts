@@ -80,6 +80,10 @@ export function provenanceLines(parts: readonly PartRecord[]): string[] {
   const edits = new Map<string, number>(), stages = new Map<string, number>();
   const detail = (e: ReadonlyMap<string, number>): string => [...e].map(([name, px]) => `${name} ${px}`).join(', ') || 'none';
   for (const p of parts) {
+    if (p.under_piece !== undefined) {
+      const d = p.under_piece;
+      lines.push(`  under-piece: part \"${p.name}\" seam ${d.seam.neighbours.map(n => `\"${n}\"`).join('/')} at ${JSON.stringify(d.seam.at)} normal ${JSON.stringify(d.seam.normal)} carrier \"${d.carrier}\" side ${d.side}; donor \"${d.donor}\" crop ${JSON.stringify(d.box)}; exact assembled RGBA, including transparent RGB`);
+    }
     if (p.painting_extension_px !== undefined) lines.push(`  painting extension: part "${p.name}" gained ${p.painting_extension_px} opaque painting samples; source RGB copied exactly in rig space; ownership count independent of final raw-value equality`);
     const v = p.provenance;
     if (v === undefined) continue;
