@@ -491,6 +491,13 @@ inverse-bind deform offsets in motion, without adding a Core attachment depth
 field. Head yaw/pitch and independent body yaw use their existing turn groups.
 Blended surfaces retain the documented per-group masks and setup-overlap
 neighbour field rules in [AUTHORING](AUTHORING.md#per-layer-depth-sheets-773).
+`RIG_TURN_BODY_UNCOVERED` is a report-only warning for a shown torso part
+without a body role that has opaque setup-triangle overlap with a moved body
+surface and different emitted endpoint displacement. It names the part, surface,
+times, vectors and relative travel. Head/neck bindings, transparent/excluded
+alpha, explicit/inherited body roles and identical inherited motion are excluded as
+described in [AUTHORING](AUTHORING.md#missing-body-turn-coverage). It assigns
+no role or depth and changes no emitted file bytes.
 The unit-depth precedence and its primary-surface sampling are documented in
 [AUTHORING](AUTHORING.md#unit-depth-precedence).
 The separate ordering scalar is unchanged. No-image outputs retain legacy bytes.
