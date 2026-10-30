@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.83.0](https://github.com/rig-c/parts/compare/v1.82.2...v1.83.0) (2026-10-30)
+
+
+### Features
+
+* **assemble:** take named layers from a second See-through run where the inputs are identical under them ([#867](https://github.com/rig-c/parts/issues/867)) ([8981d72](https://github.com/rig-c/parts/commit/8981d72c871f5f37d80ae0920f911637421a0176))
+
 ## [1.82.2](https://github.com/rig-c/parts/compare/v1.82.1...v1.82.2) (2026-10-30)
 
 
