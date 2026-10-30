@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.85.0](https://github.com/rig-c/parts/compare/v1.84.0...v1.85.0) (2026-10-30)
+
+
+### Features
+
+* **check:** gate setup pieces against the painting in a declared box ([#892](https://github.com/rig-c/parts/issues/892)) ([be89631](https://github.com/rig-c/parts/commit/be896318dc413946a9f258261e46f0871d06cd0b))
+* **check:** refuse a structural cut with no material past its joint ([#889](https://github.com/rig-c/parts/issues/889)) ([6258252](https://github.com/rig-c/parts/commit/625825252f0a30a48a12301585d7af3e47864a30))
+
+
+### Bug Fixes
+
+* **release:** publish only the names a tag dispatch finds missing ([#893](https://github.com/rig-c/parts/issues/893)) ([4101a54](https://github.com/rig-c/parts/commit/4101a545bb2f52da01d9fe08af4ac96abb10107d))
+
 ## [1.84.0](https://github.com/rig-c/parts/compare/v1.83.2...v1.84.0) (2026-10-30)
 
 
