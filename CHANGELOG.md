@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.84.0](https://github.com/rig-c/parts/compare/v1.83.2...v1.84.0) (2026-10-30)
+
+
+### Features
+
+* **check:** name art joints that sit off their bones on a fixed skeleton ([#881](https://github.com/rig-c/parts/issues/881)) ([96ee67d](https://github.com/rig-c/parts/commit/96ee67d96904ab048a7a68e68d6bdf7fdf717d23))
+* **turn:** name a part left uncovered over a moved body surface ([#886](https://github.com/rig-c/parts/issues/886)) ([f382330](https://github.com/rig-c/parts/commit/f382330ebfedce571ea0a726c356c6752cd42f6d))
+
 ## [1.83.2](https://github.com/rig-c/parts/compare/v1.83.1...v1.83.2) (2026-10-30)
 
 
