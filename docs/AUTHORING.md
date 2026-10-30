@@ -5118,6 +5118,7 @@ and stay absent).
 | <a id="RIG_TURN_SURFACE_OVERLAP_DEPTH"></a>`RIG_TURN_SURFACE_OVERLAP_DEPTH` | same-group overlap neighbours demand incompatible emitted offsets at one target setup point | separate the conflicting support or provide coincident neighbour fields; the refusal names the fields and target vertex |
 | <a id="RIG_TURN_SURFACE_MESH_BINDINGS"></a>`RIG_TURN_SURFACE_MESH_BINDINGS` | an authored surface mesh has unresolved/nonclosing weights or shares a frame moved by a unit/rear turn carrier; declared stop draw aliases resolve to their links for setup sampling | provide weighted bindings closing at 1 in the authored frame; `<link>_d` resolves only for links declared in `config.stops`; use independent chains for parts with different roles |
 | <a id="RIG_TURN_SURFACE_MESH_ATTACHMENT"></a>`RIG_TURN_SURFACE_MESH_ATTACHMENT` | a surface mesh has an alternate drawing without its own registered depth sampling frame | use the base attachment; explicit islands retain their own slot, attachment and bindings |
+| <a id="RIG_TURN_BODY_UNCOVERED"></a>`RIG_TURN_BODY_UNCOVERED` | **Warning:** a shown part without a body role overlaps a moved `turn.body` surface at setup alpha >= 128 and has different emitted endpoint displacement | declare the intended body role and inspect both endpoints; no role or depth is inferred |
 | <a id="RIG_TURN_SURFACE_DEPTH_REQUIRED"></a>`RIG_TURN_SURFACE_DEPTH_REQUIRED` | a part with role `"surface"` in `config.turn.roles` or `config.turn.body.roles` carries no depth sheet in `parts.json` | run `assemble` with `config.depth` or provide `<part>_depth.png` in `parts.json` |
 | <a id="RIG_TURN_GRID_BUDGET"></a>`RIG_TURN_GRID_BUDGET` | a `"surface"` grid exceeds 2,400 triangles on one slot or 4,000 triangles across all `"surface"` slots | lower `config.turn.grid` / `config.turn.body.grid` `[cols, rows]` within the per-slot and total budgets |
 | <a id="RIG_TURN_HEAD_BONE"></a>`RIG_TURN_HEAD_BONE` | `buildRig` found no `"head"` (or body turn root) bone when emitting 2.5D turn carriers | declare `"head"` (or the body turn root bone) in `config.bones` |
@@ -6323,6 +6324,26 @@ art. An authored `parts.json` depth reference remains an active standalone
 `rig` declaration even without config opt-in: its file/size/color/opacity
 guards still apply. With binding inactive there is no added reference, file or
 legacy-byte change. #773 adds no image generation, geometry or motion model.
+
+### Missing body-turn coverage
+
+`RIG_TURN_BODY_UNCOVERED` warns when a shown part without a
+`turn.body.roles` entry overlaps a moved body surface. It names both parts,
+both endpoint times, their actual emitted displacement vectors and the maximum
+relative displacement at a setup painting-pixel centre. Both drawings require
+alpha >= 128 and actual covering setup triangles; bounding boxes and transparent
+pixels alone do not count. Excluded alpha does not count. The diagnostic reads
+positive bindings in the declared torso subtree, excluding head/neck subtrees.
+Explicit body roles and bindings wholly inheriting an emitted body-turn carrier
+count as declared coverage; identical inherited motion needs no second role. Differences no larger than the producer's six-place
+encoding unit (0.000001 rig px) are ignored. This is a warning about a missing
+declaration, not an automatic seam verdict or a rule for limb crossings.
+
+Warnings belong to the stage report only. They add no rig, motion or PNG field
+and never assign a role, depth, binding or draw order. A part already bound to
+`chest` does not inherit a weighted topwear surface's per-vertex deform. Declare
+its actual intended role, then inspect setup, both turn endpoints and their diff;
+an explicit role alone does not establish that two drawings remain coincident.
 
 ### Unit depth precedence
 

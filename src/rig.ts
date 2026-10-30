@@ -3668,6 +3668,7 @@ export function buildWaistPairSource(
       hasAlternateFaceSet,
       surfaceMeshes: turnSurfaceMeshes(cfg, rig, parts.rig_size),
       neighbourMeshes: turnNeighbourMeshes(cfg, rig, parts, new Map(outImages)),
+      coverageMeshes: cfg.turn.body === undefined ? undefined : turnNeighbourMeshes(cfg, rig, parts, new Map(outImages), true),
     });
   }
   bindFaceSurfaceDeform(motion, (merged) => {
@@ -4206,13 +4207,13 @@ function turnSurfaceMeshes(cfg: CharacterConfig, rig: RigSpec, canvas: readonly 
 }
 
 /** Actual shown support; Core's own grid topology is inspection metadata only. */
-export function turnNeighbourMeshes(cfg: CharacterConfig, rig: RigSpec, parts: PartsFile, emittedImages: ReadonlyMap<string, Raster>) {
+export function turnNeighbourMeshes(cfg: CharacterConfig, rig: RigSpec, parts: PartsFile, emittedImages: ReadonlyMap<string, Raster>, coverage = false) {
   const meshes: NonNullable<Parameters<typeof buildDepth25DTurn>[2]['neighbourMeshes']>[number][] = [];
   const canvas = parts.rig_size;
   const aliases = new Map<string, string>((rig.stops ?? []).flatMap(s => s.links.map(link => [`${link}_d`, link])));
   const world = computeWorldTransforms(rig.bones.map(b => b.parent === undefined ? b : { ...b, parent: aliases.get(b.parent) ?? b.parent }));
-  for (const part of new Set([...Object.keys(cfg.turn?.roles ?? {}), ...Object.keys(cfg.turn?.body?.roles ?? {})])) {
-    if (cfg.meshes[part] !== undefined && [cfg.turn?.roles?.[part], cfg.turn?.body?.roles?.[part]].includes('surface')) continue;
+  for (const part of new Set([...Object.keys(cfg.turn?.roles ?? {}), ...Object.keys(cfg.turn?.body?.roles ?? {}), ...(coverage ? parts.parts.map(p => p.name) : [])])) {
+    if (!coverage && cfg.meshes[part] !== undefined && [cfg.turn?.roles?.[part], cfg.turn?.body?.roles?.[part]].includes('surface')) continue;
     const record = parts.parts.find(p => p.name === part);
     if (record === undefined) continue;
     const split = cfg.regions[part] !== undefined && cfg.motion.blink?.still?.[part] !== undefined
