@@ -478,6 +478,15 @@ Assembly's optional part `depth` reference holds `image`, `near`, `zScale` and
 active binding. Persisted authored part references remain active for standalone
 rig reading regardless of config opt-in. `rig` adds padded measurement PNGs and the `rig-parts-depth-sheets/1`
 `depth_sheets.json` companion only with references (each output `part`, actual
-padded `size`, and `depth`; a still split names both slices). Current weighted meshes do
-not acquire a Core field or change geometry; #763 owns the generator consumer.
+padded `size`, and `depth`; a still split names both slices). Passive references
+add these companions without changing weighted geometry. Active `"surface"`
+roles in `turn.roles` and `turn.body.roles` consume registered sheets:
+region surfaces emit Core grid generators with `generator.depth`; authored
+weighted surfaces keep their topology and bindings and emit sampled per-influence
+inverse-bind deform offsets in motion, without adding a Core attachment depth
+field. Head yaw/pitch and independent body yaw use their existing turn groups.
+Blended surfaces retain the documented per-group masks and setup-overlap
+neighbour field rules in [AUTHORING](AUTHORING.md#per-layer-depth-sheets-773).
+The unit-depth precedence and its primary-surface sampling are documented in
+[AUTHORING](AUTHORING.md#unit-depth-precedence).
 The separate ordering scalar is unchanged. No-image outputs retain legacy bytes.
