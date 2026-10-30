@@ -58,6 +58,7 @@
   "scripts": {
     "fetch-examples": "bash scripts/fetch-examples.sh",
     "selftest": "bun selftest.ts",
+    "check:readme": "bun scripts/readme_policy.ts",
     "selftest:pre": "bun selftest.ts --pre",
     "smoke": "bun scripts/install_smoke.ts",
     "typecheck": "bunx tsc --noEmit",

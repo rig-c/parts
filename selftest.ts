@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { runTurnUnitPrecedenceChecks } from './tools/check_turn_unit_precedence.ts';
 import { runTakeLayerChecks } from './tools/check_take_layers.ts';
+import { runReadmePolicyChecks } from './scripts/readme_policy.ts';
 import { sourceCaseNames } from './scripts/selftest_prefixes.ts';
 import { runPaintingExtensionChecks } from './tools/check_painting_extension.ts';
 import { runExtremesChecks } from './tools/check_extremes.ts';
@@ -39653,7 +39654,7 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
   );
 
   // TY28 — issue #759: AUTHORING §4 (--write-config) and §6 (PROPOSE_WRITE_CONFIG_FRESH) state both --write-config
-  // destination rules side by side with their cited tree sections, and README.md + AUTHORING §4 step 8 list the
+  // destination rules side by side with their cited tree sections; the README loop and AUTHORING command reference/step 8 list the
   // accepted and refused flags of `propose --from-config`.
   const readme28 = text.find(([file]) => file === 'README.md')?.[1] ?? '';
   const wcStart = guide21.indexOf('**Saving proposed config fields (`--write-config`, issue #356).**');
@@ -39676,7 +39677,7 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
   const loopStart28 = readme28.indexOf('## The loop, for an agent');
   const loopEnd28 = loopStart28 < 0 ? -1 : readme28.indexOf('\n```', readme28.indexOf('```sh\n', loopStart28) + 6);
   const loopBlock28 = loopStart28 < 0 || loopEnd28 < 0 ? '' : readme28.slice(loopStart28, loopEnd28);
-  const cmdRow28 = readme28.split('\n').find((l) => l.startsWith('| `propose ') && l.includes('--from-config')) ?? '';
+  const cmdRow28 = guide21.split('\n').find((l) => l.startsWith('| `propose ') && l.includes('--from-config')) ?? '';
   const acceptedFlags28 = ['--parts', '--source', '--out', '--from-config', '--keypoints', '--person'];
   const refusedFlags28 = ['--full', '--head', '--cloth', '--write-config', '--wrist-snap', '--grid-rule', '--only-missing', '--compare'];
   const holdingFromConfigDoc = (s: string): boolean => {
@@ -39692,10 +39693,13 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
       holdingFromConfigDoc(cmdRow28) &&
       holdingFromConfigDoc(step8Block) &&
       !holdingWriteConfigDoc(plantPre759Wc, freshRow) &&
-      !holdingFromConfigDoc(plantPre759Loop),
-    `AUTHORING --write-config + PROPOSE_WRITE_CONFIG_FRESH hold both rules and cited sections: ${holdingWriteConfigDoc(wcBlock, freshRow) ? 'yes' : 'NO'}; README loop + Commands row + AUTHORING step 8 list 6 accepted and 8 refused --from-config flags: ${holdingFromConfigDoc(loopBlock28) && holdingFromConfigDoc(cmdRow28) && holdingFromConfigDoc(step8Block) ? 'yes' : 'NO'}; planted pre-#759 --write-config block -> ${holdingWriteConfigDoc(plantPre759Wc, freshRow) ? 'PASSES' : 'caught'}; planted pre-#759 README loop line -> ${holdingFromConfigDoc(plantPre759Loop) ? 'PASSES' : 'caught'}`,
+      !holdingFromConfigDoc(plantPre759Loop) &&
+      !holdingFromConfigDoc(cmdRow28.replace('--person', '')),
+    `AUTHORING --write-config + PROPOSE_WRITE_CONFIG_FRESH hold both rules and cited sections: ${holdingWriteConfigDoc(wcBlock, freshRow) ? 'yes' : 'NO'}; README loop + AUTHORING Commands row + step 8 list 6 accepted and 8 refused --from-config flags: ${holdingFromConfigDoc(loopBlock28) && holdingFromConfigDoc(cmdRow28) && holdingFromConfigDoc(step8Block) ? 'yes' : 'NO'}; planted pre-#759 --write-config block -> ${holdingWriteConfigDoc(plantPre759Wc, freshRow) ? 'PASSES' : 'caught'}; planted pre-#759 README loop line -> ${holdingFromConfigDoc(plantPre759Loop) ? 'PASSES' : 'caught'}; planted moved command row without --person -> ${holdingFromConfigDoc(cmdRow28.replace('--person', '')) ? 'PASSES' : 'caught'}`,
     'issue #759: the two --write-config destination rules (in-place existing config vs fresh file for --cloth) and the accepted flags of propose --from-config are stated at each doc and refusal site',
   );
+
+  runReadmePolicyChecks(readme28, (name, ok, detail) => say(name, ok, detail, 'issue #873: README scope is enforced by the same check as CI, including planted failures'));
 
   // TY29 — issue #769: AUTHORING states the cloth recipe's count units (explicit back-hair chains per emitted side,
   // front-hair chains per qualifying hanging strand vs the fringe's two-link columns, omitted back-hair chains derived

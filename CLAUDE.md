@@ -176,6 +176,23 @@ paintings, their See-through runs, the parts and configs the reference produced
   a release are the sub-commander's call, delegated by the owner; the
   publishing credentials and npm trusted publishing stay the owner's.
 
+### README scope
+
+The README is for deciding whether to use the package and getting a first result:
+what it is, installation, one first run with its output shown, one line per
+command with a reference link, and links. It holds no flag lists, refusal
+catalogues, dated or machine-specific figures, version history, or licence text
+beyond a pointer. A feature PR adds at most one line to it. Put reference detail
+in AUTHORING or STABILITY; move existing content mechanically and preserve every
+inbound heading as a one-sentence link stub. Repoint content-reading tests in the
+same change. Link documents outside the package's `files` with absolute GitHub
+URLs so npm readers can reach them.
+
+`bun run check:readme` enforces the word cap, second-level heading allowlist and
+dated-measurement rules, with automated planted failures. The cap is the post-cut
+whitespace-delimited word count plus 10%, rounded up to 50; an earlier lower cap
+wins. Do not raise it in a feature PR to fit new reference prose.
+
 ## Working with the command post
 
 This repository is commanded by one session at a time, and a command post (HQ)

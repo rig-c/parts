@@ -80,6 +80,10 @@ command's flag union; `comfy paint` and `comfy seethrough` are checked separatel
 Required combinations within a mode remain the CLI's; the `cli` suite's controls
 read them from the help.
 
+The [command reference](AUTHORING.md#command-reference) describes each mode;
+[writing proposed config fields](AUTHORING.md#writing-proposed-config-fields)
+records the existing-file and fresh-file destinations and byte-preservation rules.
+
 ## The config contract
 
 `src/config.ts` is the schema and the loader, and
