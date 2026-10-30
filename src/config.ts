@@ -2413,7 +2413,7 @@ function checkRunTag(c: Check, path: string, run: Json, tag: Json): void {
 function checkPaintingExtensions(c: Check, value: Json, names: ReadonlySet<string> | null = null): void {
   const at = 'config.assemble.extend_painting';
   if (c.array(at, value, false)) (value as Json[]).forEach((entry, i) => {
-    c.object(`${at}[${i}]`, entry, ['part', 'band', 'max_distance'], []);
+    c.object(`${at}[${i}]`, entry, ['part', 'band', 'max_distance'], ['min_held_alpha']);
   });
   for (const p of paintingExtensionProblems(value, names)) {
     if (!c.problems.some(old => old.code === p.code && old.object === p.object)) c.problems.push(p);

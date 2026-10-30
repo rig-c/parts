@@ -10,6 +10,8 @@ export interface PaintingExtension {
   band: [number, number, number, number];
   /** Maximum four-neighbour path length from the original target silhouette. */
   max_distance: number;
+  /** Optional coverage floor, 1..255. Absent keeps the alpha >0 blocker. */
+  min_held_alpha?: number;
 }
 
 /** Shared by every config door and the callable assemble API. */
@@ -27,7 +29,7 @@ export function paintingExtensionProblems(value: unknown, names: ReadonlySet<str
       fail('CONFIG_FIELD_TYPE', path, 'requires {part, band, max_distance}'); return;
     }
     const e = entry as Record<string, unknown>;
-    for (const key of Object.keys(e)) if (!['part', 'band', 'max_distance'].includes(key)) fail('CONFIG_KEY_KNOWN', `${path}.${key}`, 'is unknown; only part, band and max_distance are read');
+    for (const key of Object.keys(e)) if (!['part', 'band', 'max_distance', 'min_held_alpha'].includes(key)) fail('CONFIG_KEY_KNOWN', `${path}.${key}`, 'is unknown; only part, band, max_distance and min_held_alpha are read');
     for (const key of ['part', 'band', 'max_distance']) if (!(key in e)) fail('CONFIG_FIELD_PRESENT', `${path}.${key}`, 'is absent and required; no bound or target is inferred');
     if ('part' in e) {
       if (typeof e.part !== 'string' || e.part === '') fail('CONFIG_FIELD_TYPE', `${path}.part`, `is ${JSON.stringify(e.part)}; a nonempty final layer-derived output part name is required`);
@@ -40,6 +42,9 @@ export function paintingExtensionProblems(value: unknown, names: ReadonlySet<str
     if ('band' in e && !(Array.isArray(e.band) && e.band.length === 4 && e.band.every(n => Number.isSafeInteger(n) && n >= 0) && e.band[0] < e.band[2] && e.band[1] < e.band[3])) {
       fail('CONFIG_FIELD_TYPE', `${path}.band`, `is ${JSON.stringify(e.band)}; [x0,y0,x1,y1] as nonnegative safe integers with x0 < x1 and y0 < y1 is required, rig pixels, upper bounds exclusive`);
     }
+    if ('min_held_alpha' in e && !(Number.isSafeInteger(e.min_held_alpha) && (e.min_held_alpha as number) >= 1 && (e.min_held_alpha as number) <= 255)) {
+      fail('CONFIG_FIELD_TYPE', `${path}.min_held_alpha`, `is ${JSON.stringify(e.min_held_alpha)}; an integer alpha-over coverage floor from 1 through 255 is required; omit it to block every nonzero holder`);
+    }
     if ('max_distance' in e && !(Number.isSafeInteger(e.max_distance) && (e.max_distance as number) > 0)) {
       fail('CONFIG_FIELD_TYPE', `${path}.max_distance`, `is ${JSON.stringify(e.max_distance)}; a positive safe integer of four-neighbour rig-pixel steps is required`);
     }
@@ -49,10 +54,12 @@ export function paintingExtensionProblems(value: unknown, names: ReadonlySet<str
 
 /**
  * Returns disjoint gain masks from one frozen final stack, without changing it.
- * Alpha >0 on ANY assembled part blocks a candidate. Only original target
- * alpha >8 seeds paths. A path stays in-band on unheld painting alpha >=250;
+ * Absent a floor, alpha >0 on ANY assembled part blocks a candidate. With a
+ * floor, exact alpha-over union below that floor is eligible; equality blocks.
+ * Only original target alpha >8 seeds paths. A path stays in-band on painting alpha >=250;
  * its first pixel is distance 1. Conflicting claims refuse, never pick a part.
- * RGB copying is the caller's job, from its existing RGB painting resample.
+ * The caller assigns painting RGBA to target gains, including its own faint
+ * samples. Other holders are never modified; their draw order still matters.
  */
 export function paintingExtensionMasks(
   declarations: readonly PaintingExtension[],
@@ -76,7 +83,33 @@ export function paintingExtensionMasks(
     const target = parts.find(p => p.name === e.part)!;
     const [x0, y0, x1, y1] = e.band, bw = x1 - x0, bh = y1 - y0;
     const distance = new Uint32Array(bw * bh), queue = new Int32Array(bw * bh), gain = newMask(W, H);
-    const eligible = (x: number, y: number): boolean => held[y * W + x] === 0 && painting.data[(y * W + x) * 4 + 3] >= CORE_ALPHA;
+    const targetAlpha = (x: number, y: number): number => {
+      const tx = x - (target.x ?? 0), ty = y - (target.y ?? 0);
+      return tx >= 0 && ty >= 0 && tx < target.image.width && ty < target.image.height ? target.image.data[(ty * target.image.width + tx) * 4 + 3] : 0;
+    };
+    // Cache only this declaration's band. Integer products compare the exact
+    // alpha-over union 255 * (1 - product(1 - a/255)) without byte rounding,
+    // float boundary error, or dependence on the stack's enumeration order.
+    const candidates = new Uint8Array(bw * bh);
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+      const p = y * W + x, alpha = painting.data[p * 4 + 3];
+      if (alpha < CORE_ALPHA || targetAlpha(x, y) >= alpha) continue;
+      let eligible = held[p] === 0;
+      if (!eligible && e.min_held_alpha !== undefined) {
+        let remaining = 1n, scale = 1n;
+        for (const { image, x: px = 0, y: py = 0 } of parts) {
+          const tx = x - px, ty = y - py;
+          if (tx < 0 || ty < 0 || tx >= image.width || ty >= image.height) continue;
+          const a = image.data[(ty * image.width + tx) * 4 + 3];
+          if (a === 0) continue;
+          remaining *= BigInt(255 - a); scale *= 255n;
+          if (a === 255) break;
+        }
+        eligible = 255n * remaining > BigInt(255 - e.min_held_alpha) * scale;
+      }
+      if (eligible) candidates[(y - y0) * bw + x - x0] = 1;
+    }
+    const eligible = (x: number, y: number): boolean => candidates[(y - y0) * bw + x - x0] === 1;
     const seed = (x: number, y: number): boolean => {
       const tx = x - (target.x ?? 0), ty = y - (target.y ?? 0);
       return tx >= 0 && ty >= 0 && tx < target.image.width && ty < target.image.height && target.image.data[(ty * target.image.width + tx) * 4 + 3] > OPAQUE_ALPHA_ABOVE;
