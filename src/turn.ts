@@ -37,6 +37,7 @@ import { turnOverlapOwners } from './turnoverlap.ts';
 import { sampleTurnTriangleField, turnTriangleCoordinates } from './turnfield.ts';
 import { PartsError } from './errors.ts';
 import { f32 } from '@rig-c/core/compile';
+import { warnUncoveredBodyTurn } from './turncoverage.ts';
 import { evaluateDeformTransform } from '@rig-c/core/src/deformgen.ts';
 
 /**
@@ -1505,6 +1506,8 @@ export interface Depth25DTurnOptions {
   }>;
   /** Final weighted unit/rear drawings are support only, never surface targets. */
   neighbourMeshes?: Depth25DTurnOptions['surfaceMeshes'];
+  /** Shown setup geometry for coverage diagnostics only; never a role opt-in. */
+  coverageMeshes?: Depth25DTurnOptions['surfaceMeshes'];
 }
 
 interface Depth25DGroupSpec {
@@ -2216,4 +2219,5 @@ export function buildDepth25DTurn(
   }
 
   refuseIfAny(problems);
+  if (opts.warnings !== undefined) warnUncoveredBodyTurn(rig, motion, opts);
 }
