@@ -1,4 +1,6 @@
 import { SETUP_PAINTING_LINE, setupPaintingBounds, setupPaintingLine, type SetupPainting, type SetupPaintingLine } from './setuppainting.ts';
+import { readMaterialSources } from './cutmaterialio.ts';
+import { CUT_MATERIAL_LINE, checkJointMaterial, type MaterialLine } from './cutmaterial.ts';
 import { ART_JOINT_LINE, artJointLine, type ArtJointLine } from './artjoints.ts';
 import { baseAnchorMoves, type AnchorRegion } from './baseanchor.ts';
 /**
@@ -2729,6 +2731,7 @@ export interface CheckFigures {
   [ART_JOINT_LINE]?: ArtJointLine;
   /** Only when setup_painting is explicitly declared. */
   [SETUP_PAINTING_LINE]?: SetupPaintingLine;
+  [CUT_MATERIAL_LINE]?: MaterialLine;
   PASS: boolean;
 }
 
@@ -2975,7 +2978,7 @@ export function barsNotMet(fig: Readonly<Record<string, unknown>>): string[] {
     isRecord(fig.sets) &&
     Object.values(fig.sets).some((s) => isRecord(s) && typeof s.seam_mean === 'number' && typeof s.seam_px_over_40 === 'number' && seamFails(s.seam_mean, s.seam_px_over_40, typeof s.seam_frame_scale === 'number' ? s.seam_frame_scale : 1));
   if ((typeof fig.seam_mean === 'number' && typeof fig.seam_px_over_40 === 'number' && seamFails(fig.seam_mean, fig.seam_px_over_40, scale)) || setFailed) out.push('seam');
-  for (const n of [...JUDGEMENT_LINES, FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, ART_JOINT_LINE]) {
+  for (const n of [...JUDGEMENT_LINES, FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE]) {
     const l = fig[n];
     if (typeof l === 'object' && l !== null && (l as { status?: unknown }).status === 'FAIL') out.push(n);
   }
@@ -3084,7 +3087,7 @@ export function checkStatuses(fig: CheckFigures): Record<string, CheckStatus> {
   const bar = (name: string, measured: boolean): CheckStatus => (!measured ? 'SKIP' : notMet.includes(name) ? 'FAIL' : 'PASS');
   const out: Record<string, CheckStatus> = { gate: bar('gate', true), loop: bar('loop', fig.loop_max_diff !== null), seam: bar('seam', fig.seam_mean !== null) };
   for (const n of JUDGEMENT_LINES) out[n] = fig[n].status;
-  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, ...REPORTED_LINES, SOURCE_LINE, WIND_BAND_LINE, ART_JOINT_LINE, SETUP_PAINTING_LINE] as const) {
+  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, ...REPORTED_LINES, SOURCE_LINE, WIND_BAND_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, SETUP_PAINTING_LINE] as const) {
     const l = fig[n];
     if (l !== undefined) out[n] = l.status;
   }
@@ -5915,6 +5918,11 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   if (env !== null && !(isRecord(inp.motion.animations) && Object.keys(inp.motion.animations).length > 0)) {
     throw environmentRefused(env.path, `${inp.motionPath} holds no animation, so check renders no frame a schedule could pose — the setup-pose stills take none; rigc render reads a schedule only over an animation's frames`);
   }
+  // Read source support before rendering; no output/sidecar for undeclared builds.
+  if (reqFile?.cut_material !== undefined && (set !== undefined || allSets)) refuseIfAny([{code: 'CHECK_CUT_MATERIAL_MEASURED', object: 'cut_material', detail: 'source evidence binds base assembly only; run check on its base parts without --set/--all-sets; alternate-set coverage requires its own original source instrument'}]);
+  const cutMaterialProblems: Problem[] = [];
+  const cutMaterial = reqFile?.cut_material === undefined ? null : checkJointMaterial(reqFile.cut_material, inp.parts, name => readPng(join(inp.partsDir, `${name}.png`)), cutMaterialProblems, inp.parts === null ? undefined : readMaterialSources(dirname(inp.partsDir), inp.parts));
+  // A measured material failure is a check bar; unavailable data is a refusal.
   const rigcEntry = readRigcEntry(requireRigcVersion(rigc));
   /**
    * Issue #538: a render whose frames a bar or a warning reads, with the physics on — posed under the schedule when
@@ -6675,6 +6683,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(config === undefined ? {} : { config }),
     ...(artJoints === null ? {} : { [ART_JOINT_LINE]: artJoints }),
     ...(setupPainting === null ? {} : { [SETUP_PAINTING_LINE]: setupPainting }),
+    ...(cutMaterial === null ? {} : { [CUT_MATERIAL_LINE]: cutMaterial }),
     ...(reqBlock === null ? {} : { requirements: reqBlock }),
     PASS: false,
   };
@@ -6718,7 +6727,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const rank = (q: Problem): number => JUDGEMENT_LINES.findIndex((n) => q.code === `CHECK_${n}`);
   problems.sort((a, b) => rank(a) - rank(b));
   problems.unshift(...barProblems);
-  problems.push(...foldProblems, ...levelProblems, ...stressProblems, ...limbProblems, ...sweepProblems, ...motionRootProblems, ...reqProblems);
+  problems.push(...cutMaterialProblems, ...foldProblems, ...levelProblems, ...stressProblems, ...limbProblems, ...sweepProblems, ...motionRootProblems, ...reqProblems);
   figures.PASS = problems.length === 0;
   const publishCheck = (): void => write('check.json', `${JSON.stringify(figures, null, 1)}\n`);
   if (motionSeam.worlds === undefined) publishCheck();
@@ -6738,6 +6747,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   }
   // Issues #320, #333: the fold bar is counted where it is written — on every rig whose motion holds an animation.
   if (folds !== null) tally(FOLD_LINE, null);
+  if (cutMaterial !== null) tally(CUT_MATERIAL_LINE, null);
   if (artJoints !== null) tally(ART_JOINT_LINE, artJoints.status === 'SKIP' ? (artJoints.reason ?? 'no declared limit') : null);
   if (setupPainting !== null) tally(SETUP_PAINTING_LINE, setupPainting.status === 'SKIP' ? (setupPainting.reason ?? 'no declared limit') : null);
   // Issue #348: the level bar where it is written; a line whose every foot no frame posed says SKIP and is not measured.

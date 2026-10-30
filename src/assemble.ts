@@ -1,3 +1,5 @@
+import { edgeLength } from './length.ts';
+import { materialSource, type MaterialSource, materialRows, polygonMaterialEdges, type MaterialRow, type MaterialEdge, type PlacedArt } from './cutmaterial.ts';
 import { unionTakenSources } from './takesource.ts';
 import { authoredUnitDepths, type AuthoredUnitDepth } from './authoredunit.ts';
 import { paintingExtensionMasks, paintingExtensionProblems, type PaintingExtension } from './paintingextension.ts';
@@ -3934,10 +3936,10 @@ function cutLimbs(
   readHidden: (layer: string, by: string) => void = () => undefined,
   tips?: Record<string, [number, number]>,
   sourceGroups: ReadonlyMap<string, string> = new Map(),
-): { parts: LimbPart[]; pieces: Built[]; counts: LimbCount[]; capFrom: Array<CapFrom | null> } {
+): { parts: LimbPart[]; pieces: Built[]; counts: LimbCount[]; capFrom: Array<CapFrom | null>; material: MaterialRow[]; sources: MaterialSource[] } {
   const logical = (source: string): string => sourceGroups.get(source) ?? source;
   const names = Object.keys(limbs);
-  if (names.length === 0) return { parts: [], pieces: [], counts: [], capFrom: [] };
+  if (names.length === 0) return { parts: [], pieces: [], counts: [], capFrom: [], material: [], sources: [] };
   const problems: Problem[] = [];
   const places = bonePlaces(bones, tips);
   const parts: LimbPart[] = [];
@@ -4413,7 +4415,30 @@ function cutLimbs(
     });
   }
   refuseIfAny(problems);
-  return { parts, pieces: pieces as Built[], counts, capFrom };
+  const material: MaterialRow[] = [];
+  const sourceReadings: MaterialSource[] = [];
+  for (const l of names) limbs[l].segments.forEach((sg, k) => {
+    if (k === 0) return;
+    const line = (lines.get(l) as Array<JointLine | null>)[k];
+    if (line === null) return;
+    const lo = parts.findIndex(p => p.part === sg.part);
+    const source = [...new Set([limbs[l].segments[k - 1].from, sg.from])].flatMap(name => {
+      const b = builtOf(name);
+      if (b === null) return [];
+      // Match segmentation and cap source ownership, after crossing/hand reassignment.
+      // Evidence must never borrow another limb's island or mutate its source raster.
+      const image = { ...b.r, data: b.r.data.slice() };
+      const owned = owners.get(name), li = names.indexOf(l);
+      for (let p = 0; p < W * H; p++) if (owned?.[p] !== li) image.data.fill(0, p * 4, p * 4 + 4);
+      return [{ x: 0, y: 0, image }];
+    });
+    const own = [lo, ...(sg.hybrid === undefined ? [] : [parts.findIndex(p => p.part === sg.hybrid?.part)])].filter(i => i >= 0).map(i => ({ x: 0, y: 0, image: (pieces[i] as Built).r }));
+    const t: [number, number] = [-line.axis[1], line.axis[0]], r = edgeLength(W, H);
+    const edge: MaterialEdge = { a: [line.at[0] - r * t[0], line.at[1] - r * t[1]], b: [line.at[0] + r * t[0], line.at[1] + r * t[1]], inward: line.axis };
+    sourceReadings.push(materialSource(sg.part, [...new Set([limbs[l].segments[k - 1].from, sg.from])], [edge], source));
+    material.push(...materialRows(sg.part, undefined, [edge], source, own).map(row => ({ ...row, joint: String(sg.joint) })));
+  });
+  return { parts, pieces: pieces as Built[], counts, capFrom, material, sources: sourceReadings };
 }
 
 // ---------------------------------------------------------------------------
@@ -4470,6 +4495,9 @@ export interface AssembleResult {
   figures: RecompositeFigures;
   /** What each `assemble.cuts` entry took, counted when it was made (`cutLines`); empty without cuts. */
   cuts: CutCount[];
+  /** Console-only source-edge support (#888); never serialized into parts.json. */
+  cutMaterial: MaterialRow[];
+  materialSources: MaterialSource[];
   /** What each `config.limbs` limb cut, per part it took and per joint (`limbLines`); empty without limbs (issue #349). */
   limbs: LimbCount[];
   /** The full-run layers the plan does not take from the full run whose uncovered error holds a body (`uncoveredErrorLayers`); empty otherwise. */
@@ -5016,11 +5044,14 @@ export function assemble(input: AssembleInput): AssembleResult {
   const mergedIn = (b: Built, region: Mask): number => count(b.trace.lastSel ?? null, region) + count(b.trace.lastRing ?? null, region);
   const pieces: Array<Built | null> = cuts.map(() => null);
   const cutCounts: CutCount[] = [];
+  const cutMaterial: MaterialRow[] = [];
+  const materialSources: MaterialSource[] = [];
   plan.forEach(([name], pi) => {
     const mine = cuts.map((q, i) => i).filter((i) => cuts[i].from === name);
     const b = built[pi];
     if (mine.length === 0 || b === null) return;
     const before = opaqueOf(b.r);
+    const sourceBeforeCuts: PlacedArt = { x: 0, y: 0, image: { ...b.r, data: b.r.data.slice() } };
     const rest = newMask(W, H);
     rest.data.fill(1);
     // The base's own pixels: `rest`, and every cut's band, which it keeps as well as the piece.
@@ -5120,6 +5151,8 @@ export function assemble(input: AssembleInput): AssembleResult {
         if (cuts[i].under_fill === 'colour') c.underFill = 'colour';
       }
       cutCounts.push(c);
+      const piece = pieces[i];
+      if (piece !== null) { materialSources.push(materialSource(cuts[i].into, [b.key], polygonMaterialEdges(cuts[i].polygon), [sourceBeforeCuts])); cutMaterial.push(...materialRows(cuts[i].into, undefined, polygonMaterialEdges(cuts[i].polygon), [sourceBeforeCuts], [{ x: 0, y: 0, image: piece.r }])); }
     });
   });
   // Parent partition counts and under use the removed parent art above. Only
@@ -5131,6 +5164,10 @@ export function assemble(input: AssembleInput): AssembleResult {
     if (opaqueOf(r) === 0) empty.push({ code: 'ASSEMBLE_CUT_PIXELS', object: `config.assemble.cuts[${i}] (part "${cuts[i].into}")`, detail: `takes 0 opaque pixels from selected ${source.key}; draw its polygon over that layer's art` });
     const writers = (source.writers as Int32Array).slice();
     pieces[i] = { ...source, r, writers, region: m, merged: mergedIn(source, m) };
+    for (let j = materialSources.length - 1; j >= 0; j--) if (materialSources[j].part === cuts[i].into) materialSources.splice(j, 1);
+    materialSources.push(materialSource(cuts[i].into, [source.key], polygonMaterialEdges(cuts[i].polygon), [{ x: 0, y: 0, image: source.r }]));
+    for (let j = cutMaterial.length - 1; j >= 0; j--) if (cutMaterial[j].part === cuts[i].into) cutMaterial.splice(j, 1);
+    cutMaterial.push(...materialRows(cuts[i].into, undefined, polygonMaterialEdges(cuts[i].polygon), [{ x: 0, y: 0, image: source.r }], [{ x: 0, y: 0, image: r }]));
   });
   refuseIfAny(empty);
   // In cut order, as the config lists them.
@@ -5638,6 +5675,8 @@ export function assemble(input: AssembleInput): AssembleResult {
     figure: inside === null ? null : figureImage(inside, W, H),
     figures,
     cuts: cutCounts,
+    cutMaterial: [...cutMaterial, ...lim.material],
+    materialSources: [...materialSources, ...lim.sources],
     limbs: lim.counts,
     uncovered,
     holeKinds: kinds,

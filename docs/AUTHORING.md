@@ -4067,6 +4067,93 @@ consumer acceptance work; assembly provenance does not establish motion quality.
 
 <a id="source-before-scissors-issue-819"></a>
 
+A hand polygon ending at a joint supplies no material for that joint's turn
+(issue #888). An `overlap` keeps pixels on the **parent**; it does not grow
+the cut piece. No source for material past the joint means stop and name the
+tool gap, following the source ladder below; do not hide a tear with crops or
+under-pieces. With an explicit `cut_material` declaration, `assemble` prints
+each original polygon edge's length through
+opaque source art (`alpha > 8`) and contiguous material past it on the piece.
+The same reading covers a limb's original structural joint line and the
+lower segment together with its generated hybrid band, when present.
+Assembly readings are SKIP-class observations; only check judges the declared bend.
+Without a declaration the API reading is SKIP and the CLI keeps its existing output.
+Limb source intersections use the final segmentation ownership map separately
+for each adjacent source; another limb's island is excluded before capture.
+
+To enforce a bend, add `cut_material` to the existing
+`spine-parts-requirements/1` file (the other fields remain required):
+
+```json
+{
+  "spec": "spine-parts-requirements/1", "fps": 12, "requirements": [],
+  "cut_material": [{
+    "part": "hand", "joint": "wrist", "at": [8, 12], "axis": [0, 1],
+    "reach_px": 3, "bend_degrees": [-30, 30]
+  }]
+}
+```
+
+These are hand-computable fixture coordinates, not recommended rig values.
+`at` is an independently supplied joint centre in stage pixels (y down);
+`axis` identifies an original opaque cut inward within reach, checked against
+the source evidence. Every polygon edge retains its own canonical inward
+normal; a declaration matching none of the eligible edges is refused.
+Correspondence accepts exact perpendicularity to the original edge direction
+(zero dot product), or exact collinearity with its stored canonical inward
+(zero cross product); the inward cross-product sign must also agree.
+Positive scalar multiples such as `[1,1]` and `[2,2]` are equivalent; rounded
+unit components are never compared. Orientation arithmetic must be finite and
+the direction magnitude representable, otherwise the declaration is refused.
+`reach_px` is the author's explicit joint reach, and `bend_degrees` is the
+continuous interval in stage coordinates, positive clockwise, inside
+`[-180, 180]`. Nothing is inferred from a name or an animation. A limb's joint
+name and centre must match its recorded lower segment; segment0 and a
+standalone generated band have no lower structural cut to read.
+
+Run `assemble --requirements <file>` (or `build --requirements <file>`)
+first, then `check --requirements <file>` against that assembly. Only an
+explicit `cut_material` declaration writes `cut_material_sources.json`
+beside `parts.json`: original edge endpoints, inward direction, opaque
+source intervals split at pixel-cell boundaries (ordered, nonoverlapping
+`opaque_t` spans inside `[0,1]` on their actual edge), source labels and
+transformed RGBA digests including placement and size, bound to the emitted `parts.json` and every base PNG by SHA-256.
+`check` also verifies the complete source payload digest, the interval census
+and canonical perpendiculars. Listed source edges must contain positive
+opaque intervals; an empty array cannot hide an edge beside another one.
+`check` never reconstructs discarded source pixels or polygons from siblings.
+Missing or stale evidence is unavailable, not zero support. Assemble again to
+refresh it. Alternate-set source evidence is not interchangeable with the base
+assembly; this instrument currently reads the base parts only.
+
+The gate clips every original opaque edge interval to the declared reach.
+Let its tangent be `(-ny, nx)` for inward normal `n`. A point relative to the
+joint has **both** coordinates `(t, d)`, where `d` is the actual cut plane's
+normal offset. Inverse rotation gives `(t*cos(theta) - d*sin(theta),
+t*sin(theta) + d*cos(theta))`. Required outward material, measured from the
+actual cut plane, is `max(0, d*(1-cos(theta)) - t*sin(theta))`; the normal offset
+is never dropped or projected onto the joint plane.
+
+The entire actual line segment is tested against every relevant transparent
+pixel cell's outward normal shadow. Segment/polygon incidence can change only
+when a rotating endpoint crosses an edge, the rotating source line crosses a
+vertex, or edges become parallel. All critical angles are solved analytically;
+interval interiors and boundary angles cover the whole declared continuous
+range, including a fixed angle. A strict intersection supplies a witness and
+its contiguous depth, ending at the first transparent cell. Midpoint rays are
+additional diagnostics, never the coverage proof. No angular sampling rate or
+calibrated tolerance is used. Controls plant a between-ray hole and translated
+and oblique cut edges whose inverse rotations are computed by hand.
+
+`CHECK_CUT_JOINT_MATERIAL` names part, joint, original edge length, length
+within reach and found/required depth on the same deficient ray. The interval
+and pixel-cell geometry are measured; subpixel texture filtering, another
+motion, material outside the declared reach and consumer compositing remain
+outside this gate. An absent source crossing or unrepresentable arithmetic is
+`CHECK_CUT_MATERIAL_MEASURED`, never PASS. Without a declaration the API reading
+is SKIP; the CLI preserves its existing stdout and adds no sidecar, `parts.json` field,
+`check.json` field or counted bar to an undeclared build.
+
 **Scissors are for structure, never for repair.** `cuts`, `patches` and
 `author:<label>` layers separate something that must move independently and
 that See-through has no layer for: a joint, an accessory, or a rear piece that
@@ -4990,6 +5077,8 @@ documents do not ship). Each is an input this package built; none is an author's
 | <a id="REQUIREMENTS_TARGET"></a>`REQUIREMENTS_TARGET` | a scene target places one bone twice for one animation, places it for an animation no requirement measures, has a key outside the animation's `[0, duration]`, or sits in a group the animation translates | one placement per bone and animation, inside it, for an animation a requirement reads |
 | <a id="REQUIREMENTS_SELF_TARGET"></a>`REQUIREMENTS_SELF_TARGET` | a `contact` whose `target` is its own `bone` and `point` (0 apart by construction), or an `aim` whose `target` is a point of the aimed bone itself — its tip lies on its own axis (0 degrees by construction), its origin gives no line at all (issue #540): a PASS would say nothing. Refused before anything is built, beside the file's other refusals; a bone's tip against its own origin is a contact like any other (it reads the bone's length), and a stage target is never one | a different bone (or a stage point, for an aim), or for a contact the bone's other point |
 | <a id="CHECK_REQUIREMENTS_FRAMES"></a>`CHECK_REQUIREMENTS_FRAMES` | a requirement render did not write every frame rigc sampled, or the as-declared, released and full renders of a follow sampled different frames | a rigc problem; report it |
+| <a id="CHECK_CUT_JOINT_MATERIAL"></a>`CHECK_CUT_JOINT_MATERIAL` | A declared `cut_material` source ray within reach needs more depth during its continuous bend interval than its final piece supplies; the message names part, joint, original opaque edge length, found and required material | follow [Source before scissors](#source-before-scissors); obtain source material past the joint, or explicitly declare the consumer's smaller required bend; no crop or under-piece repair |
+| <a id="CHECK_CUT_MATERIAL_MEASURED"></a>`CHECK_CUT_MATERIAL_MEASURED` | Original source evidence is missing, malformed or stale, a part/joint correspondence is unresolved, the inward axis disagrees, or no opaque crossing lies within reach | rerun `assemble --requirements <file>` or `build --requirements <file>` to bind original source readings to the actual emitted parts; correct an independently declared correspondence/reach; never infer original art from emitted siblings |
 | <a id="CHECK_REQUIREMENT_MET"></a>`CHECK_REQUIREMENT_MET` | a declared requirement measured outside its bar; the figure, its frame and the bar are quoted | the rig or its motion (§7, *Declared requirements*) — or the bar, if the scene asks less |
 | <a id="CHECK_REQUIREMENT_MEASURABLE"></a>`CHECK_REQUIREMENT_MEASURABLE` | a declared requirement is NOT MEASURABLE: what it asks is undefined in the frames, and the reason is quoted. Not a pass | the declaration (a bone with a length, a target off the bone's origin, a least drive the constraint reaches) or the rig |
 | <a id="REQUIREMENTS_MAY_FOLD"></a>`REQUIREMENTS_MAY_FOLD` | a `may_fold` entry names a slot with no mesh attachment — a region is one quad and cannot fold (issue #320). Refused before anything is built. Before issue #333 an entry naming the idle was refused here too; the bar reads the idle now, and `idle` is an animation name like any other | a mesh slot |
@@ -5121,6 +5210,7 @@ and stay absent).
 | <a id="RIG_TURN_SURFACE_OVERLAP_DEPTH"></a>`RIG_TURN_SURFACE_OVERLAP_DEPTH` | same-group overlap neighbours demand incompatible emitted offsets at one target setup point | separate the conflicting support or provide coincident neighbour fields; the refusal names the fields and target vertex |
 | <a id="RIG_TURN_SURFACE_MESH_BINDINGS"></a>`RIG_TURN_SURFACE_MESH_BINDINGS` | an authored surface mesh has unresolved/nonclosing weights or shares a frame moved by a unit/rear turn carrier; declared stop draw aliases resolve to their links for setup sampling | provide weighted bindings closing at 1 in the authored frame; `<link>_d` resolves only for links declared in `config.stops`; use independent chains for parts with different roles |
 | <a id="RIG_TURN_SURFACE_MESH_ATTACHMENT"></a>`RIG_TURN_SURFACE_MESH_ATTACHMENT` | a surface mesh has an alternate drawing without its own registered depth sampling frame | use the base attachment; explicit islands retain their own slot, attachment and bindings |
+| <a id="RIG_TURN_BODY_UNCOVERED"></a>`RIG_TURN_BODY_UNCOVERED` | **Warning:** a shown part without a body role overlaps a moved `turn.body` surface at setup alpha >= 128 and has different emitted endpoint displacement | declare the intended body role and inspect both endpoints; no role or depth is inferred |
 | <a id="RIG_TURN_SURFACE_DEPTH_REQUIRED"></a>`RIG_TURN_SURFACE_DEPTH_REQUIRED` | a part with role `"surface"` in `config.turn.roles` or `config.turn.body.roles` carries no depth sheet in `parts.json` | run `assemble` with `config.depth` or provide `<part>_depth.png` in `parts.json` |
 | <a id="RIG_TURN_GRID_BUDGET"></a>`RIG_TURN_GRID_BUDGET` | a `"surface"` grid exceeds 2,400 triangles on one slot or 4,000 triangles across all `"surface"` slots | lower `config.turn.grid` / `config.turn.body.grid` `[cols, rows]` within the per-slot and total budgets |
 | <a id="RIG_TURN_HEAD_BONE"></a>`RIG_TURN_HEAD_BONE` | `buildRig` found no `"head"` (or body turn root) bone when emitting 2.5D turn carriers | declare `"head"` (or the body turn root bone) in `config.bones` |
@@ -6087,6 +6177,7 @@ Unknown fields are refused.
 
 | line | measures | bar | SKIP |
 | --- | --- | --- | --- |
+| <a id="CUT_JOINT_MATERIAL"></a>`CUT_JOINT_MATERIAL` | Original source edge intervals versus final opaque pixel-cell material over each explicit `cut_material` joint reach and continuous bend interval; full two-coordinate swept-segment coverage plus contiguous normal support | every required source interval has material through its inverse-rotation sweep; a hole between diagnostic rays also fails | no declaration: API SKIP, unchanged CLI stdout, no JSON key or counted bar; missing/stale source evidence or no crossing within reach: named unavailable refusal |
 | <a id="ART_JOINT_DISTANCE"></a>`ART_JOINT_DISTANCE` | Each independently measured art joint versus its explicitly named bone's renderer setup origin, in stage pixels; printed and recorded per joint | distance <= the declared `fixed_skeleton.within_px`, with no rounding slack | no limit declared: every row and the block retain their distances as SKIP, never a pass; no declaration: no line |
 
 ### Setup against the painting
@@ -6452,6 +6543,26 @@ art. An authored `parts.json` depth reference remains an active standalone
 `rig` declaration even without config opt-in: its file/size/color/opacity
 guards still apply. With binding inactive there is no added reference, file or
 legacy-byte change. #773 adds no image generation, geometry or motion model.
+
+### Missing body-turn coverage
+
+`RIG_TURN_BODY_UNCOVERED` warns when a shown part without a
+`turn.body.roles` entry overlaps a moved body surface. It names both parts,
+both endpoint times, their actual emitted displacement vectors and the maximum
+relative displacement at a setup painting-pixel centre. Both drawings require
+alpha >= 128 and actual covering setup triangles; bounding boxes and transparent
+pixels alone do not count. Excluded alpha does not count. The diagnostic reads
+positive bindings in the declared torso subtree, excluding head/neck subtrees.
+Explicit body roles and bindings wholly inheriting an emitted body-turn carrier
+count as declared coverage; identical inherited motion needs no second role. Differences no larger than the producer's six-place
+encoding unit (0.000001 rig px) are ignored. This is a warning about a missing
+declaration, not an automatic seam verdict or a rule for limb crossings.
+
+Warnings belong to the stage report only. They add no rig, motion or PNG field
+and never assign a role, depth, binding or draw order. A part already bound to
+`chest` does not inherit a weighted topwear surface's per-vertex deform. Declare
+its actual intended role, then inspect setup, both turn endpoints and their diff;
+an explicit role alone does not establish that two drawings remain coincident.
 
 ### Unit depth precedence
 
