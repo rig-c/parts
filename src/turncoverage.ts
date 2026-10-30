@@ -4,6 +4,7 @@ import { DRAWN_ALPHA } from '@rig-c/core/src/passthrough.ts';
 import { evaluateDeformTransform, type DeformTransform } from '@rig-c/core/src/deformgen.ts';
 import { computeWorldTransforms, paintingToSetupPoint, toWorld } from './coords.ts';
 import { extendDepthSilhouette, sampleDepthFloat } from './depthsheets.ts';
+import { edgeLength } from './length.ts';
 import type { Depth25DTurnOptions } from './turn.ts';
 import { rasterTurnTriangleOwnership, type TurnTriangleQuery } from './turnfield.ts';
 
@@ -141,8 +142,8 @@ export function warnUncoveredBodyTurn(
           if (a === null || b === null) continue;
           for (const [endpoint, reading] of readings.entries()) {
             const av = sample(target, a, endpoint), bv = sample(support, b, endpoint);
-            const relative = Math.hypot(av[0] - bv[0], av[1] - bv[1]);
-            if (Math.hypot(...bv) > 0.000001 && relative > reading.relative) Object.assign(reading, { relative, point: [px, py], part: av, surface: bv });
+            const relative = edgeLength(av[0] - bv[0], av[1] - bv[1]);
+            if (edgeLength(bv[0], bv[1]) > 0.000001 && relative > reading.relative) Object.assign(reading, { relative, point: [px, py], part: av, surface: bv });
           }
         }
       }
