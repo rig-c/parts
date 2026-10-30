@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.82.2](https://github.com/rig-c/parts/compare/v1.82.1...v1.82.2) (2026-10-30)
+
+
+### Bug Fixes
+
+* **assemble:** propose-plan falls back to the full run for hair and face the head run lost ([#864](https://github.com/rig-c/parts/issues/864)) ([fc0fdc2](https://github.com/rig-c/parts/commit/fc0fdc205d209f4d6b115c1d66581faa4413f4ad)), closes [#863](https://github.com/rig-c/parts/issues/863)
+
 ## [1.82.1](https://github.com/rig-c/parts/compare/v1.82.0...v1.82.1) (2026-10-30)
 
 
