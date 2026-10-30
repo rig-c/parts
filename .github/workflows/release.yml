@@ -53,8 +53,9 @@ on:
   #     land. Release-please never runs on a dispatch, so a dispatch cannot cut
   #     a tag or a GitHub release; it refuses a tag not of the form vX.Y.Z
   #     (RELEASE_TAG_FORM), a tag with no GitHub release
-  #     (RELEASE_TAG_UNRELEASED) and a version the registry already serves
-  #     under @rig-c/parts (RELEASE_ALREADY_PUBLISHED), and a version below
+  #     (RELEASE_TAG_UNRELEASED), a version served under all three names
+  #     (RELEASE_ALREADY_PUBLISHED), a failed registry query
+  #     (RELEASE_REGISTRY_QUERY), and a version below
   #     the registry's latest (RELEASE_TAG_BELOW_LATEST): npm refuses to put
   #     latest on it implicitly, so it goes out under a dist-tag or not at all.
   workflow_dispatch:
@@ -110,7 +111,7 @@ jobs:
 
       # What to publish: on a push, the tag release-please just cut, if it cut
       # one; on a dispatch, the `tag` input once it is a cut tag the registry
-      # does not serve yet. Each refusal is one `::error::` line naming its rule.
+      # does not serve under every name yet. Each refusal is one `::error::` line naming its rule.
       # The inputs reach the script through the environment, never interpolated.
       - name: Resolve the tag to publish
         id: target
@@ -133,22 +134,56 @@ jobs:
             if [[ ! "$tag_sha" =~ ^[0-9a-f]{40}$ ]]; then echo "::error::RELEASE_TAG_UNRESOLVED: $CUT_TAG did not resolve to a full commit SHA"; exit 1; fi
             if [ "$GITHUB_SHA" != "$tag_sha" ]; then echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA $GITHUB_SHA is not $CUT_TAG's commit $tag_sha; the tag remains cut; recover with gh workflow run release.yml --ref $CUT_TAG -f tag=$CUT_TAG"; exit 1; fi
             echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$CUT_TAG" >> "$GITHUB_OUTPUT"; echo "sha=$tag_sha" >> "$GITHUB_OUTPUT"
+            echo "canonical=true" >> "$GITHUB_OUTPUT"; echo "rig_parts=true" >> "$GITHUB_OUTPUT"; echo "spine_parts=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ -n "$INPUT_TAG" ] && [ -n "$INPUT_VERSION" ]; then echo "::error::RELEASE_DISPATCH_INPUT: both tag \"$INPUT_TAG\" and version \"$INPUT_VERSION\" were given; a dispatch takes tag (publish a cut tag) or version (re-run a confirmation), one of them"; exit 1; fi
           if [ -z "$INPUT_TAG" ]; then echo "::error::RELEASE_DISPATCH_INPUT: neither tag nor version was given; a dispatch takes tag (publish a cut tag) or version (re-run a confirmation), one of them"; exit 1; fi
           if ! printf '%s' "$INPUT_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then echo "::error::RELEASE_TAG_FORM: \"$INPUT_TAG\" is not vX.Y.Z (or vX.Y.Z-<prerelease>)"; exit 1; fi
+          if [ "${GITHUB_REF:-}" != "refs/tags/$INPUT_TAG" ]; then echo "::error::RELEASE_DISPATCH_REF: workflow ref ${GITHUB_REF:-<unset>} is not refs/tags/$INPUT_TAG; dispatch release.yml at that tag, never main or another tag"; exit 1; fi
           if ! gh release view "$INPUT_TAG" --repo "$REPO" >/dev/null 2>&1; then echo "::error::RELEASE_TAG_UNRELEASED: $INPUT_TAG has no GitHub release in $REPO; only a tag release-please cut is published"; exit 1; fi
+          # A tag-ref dispatch must use that tag's workflow AND commit. Resolve
+          # the immutable checkout SHA before the registry plan, as on a push.
+          if ! dispatch_sha="$(gh api "repos/$REPO/commits/refs%2Ftags%2F$INPUT_TAG" --jq .sha)"; then echo "::error::RELEASE_TAG_UNRESOLVED: cannot resolve $INPUT_TAG to a commit"; exit 1; fi
+          if [[ ! "$dispatch_sha" =~ ^[0-9a-f]{40}$ ]]; then echo "::error::RELEASE_TAG_UNRESOLVED: $INPUT_TAG did not resolve to a full commit SHA"; exit 1; fi
+          if [ "$GITHUB_SHA" != "$dispatch_sha" ]; then echo "::error::PROVENANCE_SHA_MISMATCH: the run's GITHUB_SHA $GITHUB_SHA is not $INPUT_TAG's commit $dispatch_sha; the tag remains cut; recover with gh workflow run release.yml --ref $INPUT_TAG -f tag=$INPUT_TAG"; exit 1; fi
           version="${INPUT_TAG#v}"
-          if served="$(npm view "@rig-c/parts@$version" version 2>/dev/null)" && [ "$served" = "$version" ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves @rig-c/parts@$version; the aliases publish after it, so a version up under the package name is not dispatched again (RELEASING.md)"; exit 1; fi
+          # Only a failed query with npm's structured E404 means absent. A
+          # transport/auth error, malformed success or wrong version is not a gap.
+          registry_version() {
+            local spec="$1" reply value
+            if reply="$(npm view "$spec" version --json 2>/dev/null)"; then
+              if value="$(REGISTRY_REPLY="$reply" node -e '
+                try { const v = JSON.parse(process.env.REGISTRY_REPLY); if (typeof v !== "string" || !/^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(\+[0-9A-Za-z.]+)?$/.test(v)) process.exit(1); process.stdout.write(v); } catch { process.exit(1); }
+              ')"; then printf '%s' "$value"; return 0; fi
+            else
+              if REGISTRY_REPLY="$reply" node -e '
+                try { const v = JSON.parse(process.env.REGISTRY_REPLY); process.exit(v?.error?.code === "E404" ? 0 : 1); } catch { process.exit(1); }
+              '; then return 0; fi
+            fi
+            echo "::error::RELEASE_REGISTRY_QUERY: npm view $spec version did not return a version or a structured E404; registry failure is not absence" >&2
+            return 1
+          }
+          canonical=false; rig_parts=false; spine_parts=false
+          for name in @rig-c/parts rig-parts spine-parts; do
+            if ! served="$(registry_version "$name@$version")"; then exit 1; fi
+            if [ -z "$served" ]; then
+              case "$name" in @rig-c/parts) canonical=true;; rig-parts) rig_parts=true;; spine-parts) spine_parts=true;; esac
+            elif [ "$served" != "$version" ]; then
+              echo "::error::RELEASE_REGISTRY_QUERY: $name@$version returned a different version; refusing an unverified publish plan"; exit 1
+            fi
+          done
+          if [ "$canonical" = false ] && [ "$rig_parts" = false ] && [ "$spine_parts" = false ]; then echo "::error::RELEASE_ALREADY_PUBLISHED: the registry already serves $version under all three names; no name is missing"; exit 1; fi
+          if ! latest="$(registry_version "@rig-c/parts")"; then exit 1; fi
           # Semver order with a prerelease below its release, in node rather than `sort -V`, which sorts 1.0.0-rc.1 after 1.0.0.
-          if latest="$(npm view "@rig-c/parts" version 2>/dev/null)" && [ -n "$latest" ] && [ "$(VERSION="$version" LATEST="$latest" node -e '
+          if [ -n "$latest" ] && [ "$(VERSION="$version" LATEST="$latest" node -e '
             const parse = (v) => { const [core, pre] = v.split("-", 2); return { core: core.split(".").map(Number), pre: pre === undefined ? null : pre.split(".") }; };
             const ids = (a, b) => { for (let i = 0; i < Math.max(a.length, b.length); i++) { if (a[i] === undefined) return -1; if (b[i] === undefined) return 1; const na = /^[0-9]+$/.test(a[i]), nb = /^[0-9]+$/.test(b[i]); if (na && nb && Number(a[i]) !== Number(b[i])) return Number(a[i]) - Number(b[i]); if (na !== nb) return na ? -1 : 1; if (!na && a[i] !== b[i]) return a[i] < b[i] ? -1 : 1; } return 0; };
             const cmp = (x, y) => { const a = parse(x), b = parse(y); for (let i = 0; i < 3; i++) if (a.core[i] !== b.core[i]) return a.core[i] - b.core[i]; if (a.pre === null || b.pre === null) return a.pre === b.pre ? 0 : a.pre === null ? 1 : -1; return ids(a.pre, b.pre); };
             process.stdout.write(cmp(process.env.VERSION, process.env.LATEST) < 0 ? "below" : "not-below");
           ')" = below ]; then echo "::error::RELEASE_TAG_BELOW_LATEST: $INPUT_TAG is below the registry's latest @rig-c/parts@$latest; republish under a dist-tag with a \`--tag\` variant of this dispatch (a follow-up), not under latest; npm refuses that implicitly"; exit 1; fi
-          echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+          echo "publish=true" >> "$GITHUB_OUTPUT"; echo "tag=$INPUT_TAG" >> "$GITHUB_OUTPUT"; echo "sha=$dispatch_sha" >> "$GITHUB_OUTPUT"
+          echo "canonical=$canonical" >> "$GITHUB_OUTPUT"; echo "rig_parts=$rig_parts" >> "$GITHUB_OUTPUT"; echo "spine_parts=$spine_parts" >> "$GITHUB_OUTPUT"
 
       # Everything below runs only when a tag is to be published: the push that
       # merged the release PR, or a dispatched tag the step above resolved.
@@ -200,8 +235,16 @@ jobs:
       # same clause.
       - name: Publish to npm
         if: ${{ steps.target.outputs.publish == 'true' }}
+        env:
+          PUBLISH_NAME: ${{ steps.target.outputs.canonical }}
         run: |
           set -euo pipefail
+          if [ "$PUBLISH_NAME" != true ]; then
+            echo "Skipping @rig-c/parts: the resolver snapshot already serves this version"
+            # Alias recovery still gates the tagged tree when prepublishOnly is skipped.
+            bun run typecheck && bun run lint && bun run selftest || exit $?
+            exit 0
+          fi
           tag=""
           case "$(node -p "require('./package.json').version")" in *-*) tag="--tag rc";; esac
           npm publish --provenance --access public $tag
@@ -211,7 +254,7 @@ jobs:
       # receiving every version. One step per alias, in the order `ALIASES`
       # in scripts/alias_tarball.ts lists them, each spelling its name out.
       # `scripts/alias_tarball.ts` packs this checkout — the
-      # tagged commit the step above published from — into the runner's temp
+      # tagged commit the step above gated — into the runner's temp
       # directory, rewrites the one `"name"` line of the extracted
       # package.json, packs that again, and prints the path only after holding
       # the result to the package tarball file by file. The checkout is never
@@ -228,8 +271,14 @@ jobs:
       # workflow filename, like the package's; the steps stay in this file.
       - name: Publish the alias rig-parts
         if: ${{ steps.target.outputs.publish == 'true' }}
+        env:
+          PUBLISH_NAME: ${{ steps.target.outputs.rig_parts }}
         run: |
           set -euo pipefail
+          if [ "$PUBLISH_NAME" != true ]; then
+            echo "Skipping rig-parts: the resolver snapshot already serves this version"
+            exit 0
+          fi
           tag=""
           case "$(node -p "require('./package.json').version")" in *-*) tag="--tag rc";; esac
           alias_tgz="$(bun scripts/alias_tarball.ts pack --name rig-parts --out "$RUNNER_TEMP/alias")"
@@ -237,8 +286,14 @@ jobs:
 
       - name: Publish the alias spine-parts
         if: ${{ steps.target.outputs.publish == 'true' }}
+        env:
+          PUBLISH_NAME: ${{ steps.target.outputs.spine_parts }}
         run: |
           set -euo pipefail
+          if [ "$PUBLISH_NAME" != true ]; then
+            echo "Skipping the alias spine-parts: the resolver snapshot already serves this version"
+            exit 0
+          fi
           tag=""
           case "$(node -p "require('./package.json').version")" in *-*) tag="--tag rc";; esac
           alias_tgz="$(bun scripts/alias_tarball.ts pack --name spine-parts --out "$RUNNER_TEMP/alias")"
