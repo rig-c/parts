@@ -1,7 +1,7 @@
 /** Assembly controls for #848; expectations are derived from public rectangles. */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { paintingExtensionConfig, paintingExtensionFixture, PAINTING_EXTENSION } from '../fixtures/painting_extension.ts';
+import { paintingExtensionConfig, paintingExtensionFixture, faintPaintingExtensionFixture, PAINTING_EXTENSION } from '../fixtures/painting_extension.ts';
 import { assemble, stageFields, type AssembleResult } from '../src/assemble.ts';
 import { assembleStage } from '../src/build.ts';
 import { parseConfig, parseEarlyConfig } from '../src/config.ts';
@@ -9,7 +9,8 @@ import { PartsError } from '../src/errors.ts';
 import { paintingExtensionMasks } from '../src/paintingextension.ts';
 import { readParts, serializeParts } from '../src/parts.ts';
 import { provenanceAddsUp } from '../src/provenance.ts';
-import { writePng, readPng } from '../src/raster/png.ts';
+import { writePng, readPng, encodePngBytes } from '../src/raster/png.ts';
+import { alphaComposite } from '../src/raster/composite.ts';
 import { newRaster } from '../src/raster/types.ts';
 
 export function sampleExtensionPart(result: AssembleResult, name: string, x: number, y: number): number[] {
@@ -204,6 +205,129 @@ export function runPaintingExtensionChecks(dir: string, say: (name: string, ok: 
   say('PE20_PAINTING_OWNERSHIP_COUNT_IS_READER_CHECKED_AND_ZERO_IS_EXPLICIT',refusedCounts===6 &&
     record.painting_extension_px===24 && emptyReach.parts.parts.find(p=>p.name==='upper')?.painting_extension_px===0,
     `${refusedCounts}/6 invalid count plants refused on base and alternate records; writer records 24 gained or explicit zero`);
+
+  // #854: normal/defect/edge controls are public flat pixels, not art-derived.
+  const faint = faintPaintingExtensionFixture();
+  const withoutFloor = assemble({ ...faint, paintingExtension: [{ ...PAINTING_EXTENSION, max_distance: 7 }] });
+  const floorDeclaration = { ...PAINTING_EXTENSION, max_distance: 7, min_held_alpha: 250 };
+  const withFloor = assemble({ ...faint, paintingExtension: [floorDeclaration] });
+  const residual = (r: AssembleResult): { total: number; largest: number } => {
+    const pixels = new Set<number>();
+    for (let y = 18; y < 25; y++) for (let x = 10; x < 18; x++) {
+      let remaining = 1;
+      for (const p of r.images) remaining *= 1 - sampleExtensionPart(r, p.record.name, x, y)[3] / 255;
+      if (255 * (1 - remaining) < 250) pixels.add(y * 64 + x);
+    }
+    const total = pixels.size; let largest = 0;
+    while (pixels.size > 0) {
+      const queue = [pixels.values().next().value!]; pixels.delete(queue[0]);
+      for (let at = 0; at < queue.length; at++) for (const d of [-65,-64,-63,-1,1,63,64,65]) {
+        const p = queue[at] + d;
+        if (pixels.delete(p)) queue.push(p);
+      }
+      largest = Math.max(largest, queue.length);
+    }
+    return { total, largest };
+  };
+  const redFaint = residual(withoutFloor), greenFaint = residual(withFloor);
+  say('PE21_FAINT_EDGE_RESIDUAL_IS_ZERO_ONLY_WITH_EXPLICIT_FLOOR', redFaint.total === 16 && redFaint.largest === 8 && greenFaint.total === 0,
+    `without floor ${JSON.stringify(redFaint)}; floor 250 ${JSON.stringify(greenFaint)}; by hand two separated 8-pixel rows`);
+  const faintBase = assemble(faint); let floorGains = 0, floorRGB = true, floorPreserved = true, ownFaint = 0;
+  for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+    const before = sampleExtensionPart(faintBase, 'upper', x, y), after = sampleExtensionPart(withFloor, 'upper', x, y);
+    if (after[3] > before[3]) {
+      floorGains++; if (before[3] > 0) ownFaint++;
+      floorRGB &&= after.join(',') === Array.from(faint.source.data.subarray((y*64+x)*4,(y*64+x)*4+4)).join(',');
+    } else floorPreserved &&= before.join(',') === after.join(',');
+    floorPreserved &&= sampleExtensionPart(faintBase, 'lower', x, y).join(',') === sampleExtensionPart(withFloor, 'lower', x, y).join(',');
+  }
+  say('PE22_TARGET_OWN_FAINT_REPLACEMENT_AND_OTHER_HOLDERS_PRESERVATION', floorGains === 56 && ownFaint === 8 && floorRGB && floorPreserved &&
+    withFloor.parts.parts.every(p => provenanceAddsUp(p.provenance!,p.opaque_px)) && withFloor.parts.parts.find(p => p.name==='upper')?.painting_extension_px===56,
+    `gains ${floorGains}, target own faint ${ownFaint}, exact painting RGBA ${floorRGB}, all other samples preserved ${floorPreserved}; provenance sums checked`);
+
+  const tinySource = newRaster(3,1), tinyTarget = newRaster(3,1);
+  for(let x=0;x<3;x++) tinySource.data.set([40,80,120,255],x*4);
+  tinyTarget.data.set([10,20,30,255],0);
+  const tinyDeclaration = {part:'upper',band:[1,0,2,1] as [number,number,number,number],max_distance:1};
+  const unionGain = (alphas: number[], floor: number, reverse = false): number => {
+    const holders = alphas.map((a,i) => { const image = newRaster(1,1); image.data.set([200-i,40+i,90,a]); return {name:'holder'+i,image,x:1,y:0}; });
+    const stack = [{name:'upper',image:tinyTarget},...holders];
+    return paintingExtensionMasks([{...tinyDeclaration,min_held_alpha:floor}],reverse?stack.reverse():stack,tinySource).get('upper')!.data[1];
+  };
+  // 128 over 128 = 191 + 191/255, below 192 (sum would block),
+  // but above 191 (max would allow). 51 over 85 = exactly 119.
+  const unionCases: Array<[number[],number,number]> = [[[128,128],192,1],[[128,128],191,0],[[51,85],119,0],[[51,85],120,1],[[35],35,0],[[34],35,1],[[1,1],2,1],[[1,1],1,0],[[254,254,254,254,254,254,254],255,1],[[255],255,0],[[249],250,1],[[250],250,0],[[251],250,0],[[239,170],250,1],[[240,170],250,0],[[241,170],250,0]];
+  say('PE23_EXACT_ALPHA_OVER_UNION_BOUNDARY_NOT_MAX_SUM_OR_ROUNDED', unionCases.every(([a,f,w])=>unionGain(a,f)===w && unionGain(a,f,true)===w),
+    'hand-derived union controls: 128/128 below 192 and above 191; 51/85 exactly 119; single 34/35; 1/1 below 2; seven 254s below 255; opaque 255 blocks; 240/170 exactly 250, 239/170 below and 241/170 above; single 249/250/251, both stack orders');
+  let floorShapes=0;
+  for(const value of [0,256,-1,1.5,'128',null,true]) {
+    for(const door of ['layers','assemble','full'] as const) {
+      const cfg=paintingExtensionConfig([{...PAINTING_EXTENSION,min_held_alpha:value}]);
+      if(refused(()=>door==='full'?parseConfig(cfg):door==='layers'?parseEarlyConfig(cfg,'layers'):parseEarlyConfig(cfg,'assemble'),'CONFIG_FIELD_TYPE')) floorShapes++;
+    }
+    if(refused(()=>paintingExtensionMasks([{...tinyDeclaration,min_held_alpha:value} as unknown as typeof floorDeclaration],[{name:'upper',image:tinyTarget}],tinySource),'CONFIG_FIELD_TYPE'))floorShapes++;
+  }
+  const fullFloor=parseConfig(paintingExtensionConfig([floorDeclaration]));
+  say('PE24_FLOOR_VALIDATION_AT_EVERY_DOOR_AND_DIRECT_API', floorShapes===28 && fullFloor.assemble.extend_painting?.[0].min_held_alpha===250 &&
+    stageFields(parseEarlyConfig(paintingExtensionConfig([floorDeclaration]),'assemble')).paintingExtension?.[0].min_held_alpha===250,
+    `${floorShapes}/28 malformed-floor plants refused; valid 250 reaches stageFields through actual readers`);
+  const one=assemble({...faint,paintingExtension:[{...PAINTING_EXTENSION,max_distance:7,min_held_alpha:1}]});
+  say('PE25_FLOOR_ONE_RETAINS_LEGACY_BYTES',serializeParts(one.parts)===serializeParts(withoutFloor.parts) &&
+    one.images.every((p,i)=>p.image.data.every((v,j)=>v===withoutFloor.images[i].image.data[j])), 'absent and explicit 1 preserve records and all part image bytes on the faint fixture');
+
+  // Different RGB holders stay untouched both above and below the gain.
+  const colourHolder=newRaster(3,1);colourHolder.data.set([220,20,60,64],4);
+  const drawResults: number[][]=[];
+  for(const front of [false,true]) {
+    const parts=[{name:'upper',image:tinyTarget},{name:'held',image:colourHolder}];
+    if(!front)parts.reverse();
+    const gain=paintingExtensionMasks([{...tinyDeclaration,min_held_alpha:128}],parts,tinySource).get('upper')!;
+    const repaired={...tinyTarget,data:new Uint8ClampedArray(tinyTarget.data)};
+    if(gain.data[1]===1)repaired.data.set(tinySource.data.subarray(4,8),4);
+    const can=front?alphaComposite(repaired,colourHolder):alphaComposite(colourHolder,repaired);
+    drawResults.push(Array.from(can.data.subarray(4,8)));
+  }
+  say('PE26_GAIN_RGB_IS_PAINTING_AND_COMPOSITE_RESPECTS_DRAW_ORDER',
+    drawResults[0].join(',')==='40,80,120,255' && drawResults[1].join(',')==='85,65,105,255' && Array.from(colourHolder.data.subarray(4,8)).join(',')==='220,20,60,64',
+    `holder behind ${drawResults[0]}; holder above ${drawResults[1]}; manual alpha-over of 64/255 red holder onto painting; holder RGBA unchanged`);
+  const frozenParts=[{name:'upper',image:faint.full.layers[0].pixels},{name:'lower',image:faint.full.layers[1].pixels}];
+  const frozenBefore=frozenParts.map(p=>Array.from(p.image.data).join(','));
+  const competing=[floorDeclaration,{...floorDeclaration,part:'lower',min_held_alpha:128}];
+  const disjoint=[{...floorDeclaration,band:[10,18,14,25] as [number,number,number,number]}, {...floorDeclaration,part:'lower',band:[14,18,18,25] as [number,number,number,number]}];
+  const forward=paintingExtensionMasks(disjoint,frozenParts,faint.source), backward=paintingExtensionMasks([...disjoint].reverse(),frozenParts,faint.source);
+  say('PE27_FROZEN_STACK_CONFLICTS_AND_DISJOINT_ORDER_INVARIANCE',
+    refused(()=>paintingExtensionMasks(competing,frozenParts,faint.source),'ASSEMBLE_PAINTING_EXTENSION_CONFLICT') &&
+    refused(()=>paintingExtensionMasks([...competing].reverse(),frozenParts,faint.source),'ASSEMBLE_PAINTING_EXTENSION_CONFLICT') &&
+    [...forward].every(([name,m])=>m.data.every((v,i)=>v===backward.get(name)!.data[i])) &&
+    frozenParts.every((p,i)=>Array.from(p.image.data).join(',')===frozenBefore[i]),
+    'different per-declaration floors conflict in both orders; disjoint gain masks identical by name in reversed declarations; original rasters untouched');
+  const softSource={...tinySource,data:new Uint8ClampedArray(tinySource.data)}, strongerTarget={...tinyTarget,data:new Uint8ClampedArray(tinyTarget.data)};
+  softSource.data[7]=250;strongerTarget.data.set([10,20,30,254],4);
+  const noLoss=paintingExtensionMasks([{...tinyDeclaration,min_held_alpha:255}],[{name:'upper',image:strongerTarget}],softSource).get('upper')!;
+  say('PE28_FLOOR_NEVER_WEAKENS_MORE_OPAQUE_TARGET',noLoss.data[1]===0 && strongerTarget.data[7]===254,
+    'painting alpha 250 cannot replace target alpha 254 even below declared floor 255');
+
+  // The floor authorizes replacement only of the target's BELOW-floor samples.
+  // Actual gate assertions hold every other holder byte and the target's
+  // at/above-floor RGBA; counts alone cannot certify preservation.
+  const protectedFixture = faintPaintingExtensionFixture();
+  for (const [x,a] of [[10,249],[11,250],[12,251],[13,255]]) protectedFixture.full.layers[0].pixels.data.set([190,30,50,a],(18*64+x)*4);
+  const protectedBase = assemble(protectedFixture), protectedFloor = assemble({...protectedFixture,paintingExtension:[floorDeclaration]});
+  let protectedTarget = true, protectedTargetCount = 0;
+  for(let y=0;y<64;y++)for(let x=0;x<64;x++) {
+    const before=sampleExtensionPart(protectedBase,'upper',x,y),after=sampleExtensionPart(protectedFloor,'upper',x,y);
+    if(before[3]>=250){protectedTargetCount++;protectedTarget &&= before.join(',')===after.join(',');}
+  }
+  const exactOtherHolders = protectedBase.images.filter(p=>p.record.name!=='upper').every(p=>{
+    const after=protectedFloor.images.find(q=>q.record.name===p.record.name)!;
+    return p.record.x===after.record.x && p.record.y===after.record.y &&
+      Buffer.from(encodePngBytes(p.image)).equals(Buffer.from(encodePngBytes(after.image)));
+  });
+  say('PE29_TARGET_AT_OR_ABOVE_FLOOR_AND_ALL_OTHER_HOLDERS_ARE_EXACT_GATES',
+    protectedTargetCount===67 && protectedTarget && exactOtherHolders &&
+    sampleExtensionPart(protectedBase,'upper',11,18)[3]===250 && sampleExtensionPart(protectedFloor,'upper',11,18)[3]===250 &&
+    sampleExtensionPart(protectedBase,'upper',10,18)[3]===249 && sampleExtensionPart(protectedFloor,'upper',10,18)[3]===255,
+    `target at/above 250: ${protectedTargetCount}, exact RGBA ${protectedTarget}; every other holder PNG byte/placement exact ${exactOtherHolders}; own 249 raised, own 250 retained`);
 
   // Native public-fixture panels: painting, default, declared bound, |change|.
   // A separate nearest-neighbour enlargement preserves every boundary sample.

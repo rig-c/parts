@@ -41,3 +41,13 @@ export function paintingExtensionConfig(extension: unknown = [PAINTING_EXTENSION
     meshes: {}, regions: { upper: 'upper', lower: 'lower' }, motion: { duration: 1,
       tracks: [{ bone: 'upper', prop: 'rotate', amp: 0, period: 1, phase: 0 }] } };
 }
+
+/** Public faint-edge regression: two connected 8-pixel rows cross the gap. */
+export function faintPaintingExtensionFixture(): AssembleInput {
+  const f = paintingExtensionFixture();
+  for (let x = 10; x < 18; x++) {
+    f.full.layers[0].pixels.data.set([190, 30, 50, 35], (18 * 64 + x) * 4);
+    f.full.layers[1].pixels.data.set([20, 180, 80, 35], (24 * 64 + x) * 4);
+  }
+  return f;
+}
