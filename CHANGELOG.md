@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.83.2](https://github.com/rig-c/parts/compare/v1.83.1...v1.83.2) (2026-10-30)
+
+
+### Bug Fixes
+
+* **docs:** move commands and --write-config prose out of the README and hold its cap ([#876](https://github.com/rig-c/parts/issues/876)) ([d639f15](https://github.com/rig-c/parts/commit/d639f15699a2eb0c152b4839d22cf3b1bd6fac9a)), closes [#873](https://github.com/rig-c/parts/issues/873)
+* **docs:** state the unit depth precedence and name depth-driven rigging (B1 of [#871](https://github.com/rig-c/parts/issues/871)) ([#874](https://github.com/rig-c/parts/issues/874)) ([5ae26d9](https://github.com/rig-c/parts/commit/5ae26d915e5a2a5ddbd46251a49a8672edfcfb0f))
+* skip unused scalar transport for authored unit depths ([#878](https://github.com/rig-c/parts/issues/878)) ([309645f](https://github.com/rig-c/parts/commit/309645fb3f9cbe964db671139d7e9cf291850269)), closes [#877](https://github.com/rig-c/parts/issues/877)
+
 ## [1.83.1](https://github.com/rig-c/parts/compare/v1.83.0...v1.83.1) (2026-10-30)
 
 
