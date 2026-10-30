@@ -36,5 +36,15 @@ export function runTurnUnitPrecedenceChecks(say: Say): void {
   try { parseConfig(f.config); } catch (e) { if (!(e instanceof PartsError)) throw e; refusal = e.problems.map(p => p.code).join(','); }
   say('UDP06_REMOVING_REQUIRED_SURFACES_DOES_NOT_SELECT_FALLBACK', refusal.includes('CONFIG_TURN_SURFACE_REQUIRED'), refusal);
   const stability = readFileSync(resolve('docs/STABILITY.md'), 'utf8');
-  say('UDP07_STABILITY_NAMES_ACTIVE_WEIGHTED_AND_BODY_CONSUMERS', !/Current weighted meshes do\s+not acquire a Core field or change geometry/.test(stability) && stability.includes('turn.body') && stability.includes('per-influence'), 'passive companions distinguished from active surface geometry; stale blanket planted by the pre-edit source is refused');
+  say('UDP07_STABILITY_NAMES_ACTIVE_WEIGHTED_AND_BODY_CONSUMERS', stabilityNamesActiveConsumers(stability), 'passive companions distinguished from active surface geometry');
+  const planted = [
+    ['stale blanket restored', stability + '\nCurrent weighted meshes do not acquire a Core field or change geometry.\n'],
+    ['turn.body removed', stability.replaceAll('turn.body', 'turn')],
+    ['per-influence removed', stability.replaceAll('per-influence', 'per-mesh')],
+  ] as const;
+  const accepted = planted.filter(([, text]) => stabilityNamesActiveConsumers(text)).map(([name]) => name);
+  say('UDP08_STABILITY_GATE_REFUSES_PLANTED_DOCUMENTS', accepted.length === 0, accepted.length ? `accepted: ${accepted.join(', ')}` : `refused all ${planted.length} planted documents`);
+}
+export function stabilityNamesActiveConsumers(text: string): boolean {
+  return !/Current weighted meshes do\s+not acquire a Core field or change geometry/.test(text) && text.includes('turn.body') && text.includes('per-influence');
 }
