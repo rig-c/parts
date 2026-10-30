@@ -12,7 +12,7 @@ export function cutMaterialReaderRed(dir: string): void {
 if (process.argv.includes('--reader-red')) cutMaterialReaderRed(process.argv[process.argv.length - 1]);
 
 import { mkdirSync, readFileSync, existsSync } from 'node:fs';
-import { writeHybridFixture } from '../fixtures/hybrid_limb.ts';
+import { hybridConfig, writeHybridFixture } from '../fixtures/hybrid_limb.ts';
 import { assembleStage, rigStage, checkStage } from '../src/build.ts';
 import { readMaterialSources, writeMaterialSources } from '../src/cutmaterialio.ts';
 import { spawnSync } from 'node:child_process';
@@ -22,6 +22,8 @@ import { checkJointMaterial, materialRows, polygonMaterialEdges, bendDepth, join
 import { type Problem, PartsError } from '../src/errors.ts';
 import type { PartRecord, PartsFile } from '../src/parts.ts';
 import { prepareHybrid } from './check_hybrid_limb.ts';
+
+import { writeAssembleFixture, flatPainting, HEAD_LAYERS, C } from '../fixtures/assemble_fixture.ts';
 
 export const bareJoint: JointMaterial = { part:'hand',joint:'wrist',at:[8,12],axis:[0,1],reach_px:3,bend_degrees:[-30,30] };
 function rect(x0:number,y0:number,x1:number,y1:number):Raster {
@@ -43,9 +45,9 @@ export function prepareBareCut(dir:string,declared=true,edgeY=30,bend:[number,nu
   writeFileSync(config,JSON.stringify(raw));
   const req:JointMaterial={part:'hand',joint:'wrist',at:[30,30],axis:[0,1],reach_px:3,bend_degrees:bend};
   const requirements=join(dir,'requirements.json');writeFileSync(requirements,JSON.stringify({spec:'spine-parts-requirements/1',fps:12,requirements:[],cut_material:[req]}));
-  const out=join(dir,'assembled');
-  const a=assembleStage({source:join(dir,'painting.png'),full:join(dir,'full'),head:join(dir,'head'),config,seam:'near-white',project:'core',...(declared?{requirements}:{})},{partsJson:join(out,'parts.json'),partsDir:join(out,'parts'),recomposite:join(out,'recomposite.png'),errorMap:join(out,'error.png')},()=>{});
-  return {a,out,config,requirements,req};
+  const out=join(dir,'assembled'),lines:string[]=[];
+  const a=assembleStage({source:join(dir,'painting.png'),full:join(dir,'full'),head:join(dir,'head'),config,seam:'near-white',project:'core',...(declared?{requirements}:{})},{partsJson:join(out,'parts.json'),partsDir:join(out,'parts'),recomposite:join(out,'recomposite.png'),errorMap:join(out,'error.png')},l=>lines.push(l));
+  return {a,out,config,requirements,req,lines};
 }
 export function prepareDiagonalCut(dir:string,tilted=false){
   const f=prepareBareCut(dir),cfg=JSON.parse(readFileSync(f.config,'utf8')) as {assemble:{cuts:Array<{polygon:unknown}>}};
@@ -55,8 +57,42 @@ export function prepareDiagonalCut(dir:string,tilted=false){
     {partsJson:join(f.out,'parts.json'),partsDir:join(f.out,'parts'),recomposite:join(f.out,'recomposite.png'),errorMap:join(f.out,'error.png')},()=>{});
   return {...f,a};
 }
+/** Fixed oracle: at +90 degrees x24..36/y30 maps into x30/y24..36.
+ * The neighbour x44..52 maps into x30/y8..16, outside the 24px hybrid band.
+ * Distinct sources use the stock cap (hybrids require one source); both must
+ * preserve the original 12px interval, regardless of the neighbour's art.
+ */
+export function limbOwnershipControl(dir:string, neighbourCrosses:boolean, differentSources=false){
+  const cfg=hybridConfig(!differentSources,24) as Record<string,unknown>;
+  const bones=cfg.bones as Array<Record<string,unknown>>;
+  bones.push({name:'other_upper',parent:'root',at:[48,40],tip:[48,48]},{name:'other_lower',parent:'other_upper',at:[48,48],tip:[48,56]});
+  const limbs=cfg.limbs as Record<string,{segments:Array<Record<string,unknown>>}>;
+  limbs.other={segments:[{part:'other_proximal',from:'sleeve',bone:'other_upper'},{part:'other_distal',from:'sleeve',bone:'other_lower',joint:'elbow',range:[-30,30]}]};
+  (cfg.regions as Record<string,string>).other_proximal='other_upper';(cfg.regions as Record<string,string>).other_distal='other_lower';
+  const rects=[{x0:24,y0:8,x1:36,y1:56,colour:C},{x0:44,y0:neighbourCrosses?22:40,x1:52,y1:56,colour:C}];
+  const full=[{name:'handwear-r',depth:0.5,rects}];
+  if(differentSources){
+    (cfg.assemble as {plan:unknown[]}).plan.push(['lower_source','full','handwear-l']);
+    full.push({name:'handwear-l',depth:0.6,rects});
+    limbs.arm.segments[1].from='lower_source';limbs.other.segments[1].from='lower_source';
+  }
+  writeAssembleFixture(dir,cfg,flatPainting(),{full,head:HEAD_LAYERS});
+  const out=join(dir,'assembled'),requirements=join(dir,'requirements.json');
+  const req:JointMaterial={part:'distal',joint:'elbow',at:[30,30],axis:[0,1],reach_px:24,bend_degrees:[90,90]};
+  writeFileSync(requirements,JSON.stringify({spec:'spine-parts-requirements/1',fps:12,requirements:[],cut_material:[req]}));
+  const a=assembleStage({source:join(dir,'painting.png'),full:join(dir,'full'),head:join(dir,'head'),config:join(dir,'config.json'),requirements,seam:'near-white',project:'core'},
+    {partsJson:join(out,'parts.json'),partsDir:join(out,'parts'),recomposite:join(out,'recomposite.png'),errorMap:join(out,'error.png')},()=>{});
+  const problems:Problem[]=[];
+  const reading=checkJointMaterial([req],a.parts,n=>a.images.find(i=>i.record.name===n)!.image,problems,readMaterialSources(out,a.parts));
+  return {reading,problems,png:readFileSync(join(out,'parts','distal.png'))};
+}
 export function runCutMaterialChecks(dir:string,say:(name:string,pass:boolean,detail:string)=>void,rigc?:RigcRunner):void{
   mkdirSync(dir,{recursive:true});
+  for(const different of [false,true]){
+    const baseline=limbOwnershipControl(join(dir,different?'distinct-alone':'shared-alone'),false,different);
+    const added=limbOwnershipControl(join(dir,different?'distinct-added':'shared-added'),true,different);
+    say(different?'JC50_DISTINCT_SOURCES_KEEP_LIMB_OWNERSHIP':'JC49_SHARED_SOURCE_NEIGHBOUR_CANNOT_CHANGE_JOINT',baseline.reading.status==='PASS'&&added.reading.status==='PASS'&&baseline.png.equals(added.png)&&JSON.stringify(baseline.reading)===JSON.stringify(added.reading),JSON.stringify({baseline:baseline.reading,added:added.reading,identicalPiece:baseline.png.equals(added.png),problems:added.problems}));
+  }
   cutMaterialReaderRed(dir);
   say('JC00_REQUIREMENTS_READER_ACCEPTS_EXPLICIT_DECLARATION',true,'every field supplied; no defaults');
   const f=bareMaterialFixture(),problems:Problem[]=[];
@@ -161,6 +197,7 @@ export function runCutMaterialChecks(dir:string,say:(name:string,pass:boolean,de
     say('JC41_SIDECAR_REMOVED_EDGE_DIGEST_REFUSES',fail(()=>readMaterialSources(actual.out,actual.a.parts)),'whole source payload binding catches a removed edge');
   }finally{writeFileSync(sidecar,originalSidecar);}
   const undeclared=prepareBareCut(join(dir,'actual-undeclared'),false);
+  say('JC51_UNDECLARED_STDOUT_HAS_NO_NEW_MATERIAL_LINE',!undeclared.lines.some(l=>l.includes('CUT_JOINT_MATERIAL'))&&actual.lines.some(l=>l.includes('CUT_JOINT_MATERIAL')),'observations are explicit-declaration only; API absence remains SKIP');
   say('JC26_UNDECLARED_ASSEMBLE_HAS_NO_NEW_BYTES',!existsSync(join(undeclared.out,'cut_material_sources.json'))&&readFileSync(join(actual.out,'parts.json')).equals(readFileSync(join(undeclared.out,'parts.json')))&&readFileSync(join(actual.out,'parts','hand.png')).equals(readFileSync(join(undeclared.out,'parts','hand.png'))),'opted and undeclared assemblies share existing parts/PNG bytes; undeclared emits no sidecar');
   const cliOut=join(dir,'cli-assembled');
   const cli=spawnSync('bun',['cli.ts','assemble','--config',actual.config,'--source',join(dir,'actual-bare','painting.png'),'--full',join(dir,'actual-bare','full'),'--head',join(dir,'actual-bare','head'),'--out',cliOut,'--requirements',actual.requirements],{encoding:'utf8'});
@@ -172,6 +209,9 @@ export function runCutMaterialChecks(dir:string,say:(name:string,pass:boolean,de
     const lines:string[]=[];
     const checked=checkStage({rig,parts:actual.out,out:join(dir,'actual-check'),requirements:actual.requirements,noExtremes:true},rigc,'fixture rigc',l=>lines.push(l));
     say('JC21_CHECK_REQUIREMENTS_EMITS_NAMED_BARE_FAILURE',!checked.figures.PASS&&checked.problems.some(p=>p.code==='CHECK_CUT_JOINT_MATERIAL')&&lines.some(l=>l.includes('CHECK_CUT_JOINT_MATERIAL')&&l.includes('material found 0')),lines.filter(l=>l.includes('CUT_JOINT_MATERIAL')).join(' | '));
+    const undeclaredLines:string[]=[];
+    const unchecked=checkStage({rig,parts:actual.out,out:join(dir,'undeclared-check'),noExtremes:true},rigc,'fixture rigc',l=>undeclaredLines.push(l));
+    say('JC52_UNDECLARED_CHECK_STDOUT_AND_JSON_REMAIN_UNEXTENDED',unchecked.figures.CUT_JOINT_MATERIAL===undefined&&!undeclaredLines.some(l=>l.includes('CUT_JOINT_MATERIAL')),'existing source sidecar does not opt check into a declaration; no printed or counted material bar');
   }
   for(const hybrid of [false,true]){
     const p=prepareHybrid(join(dir,hybrid?'hybrid':'cap'),hybrid);

@@ -806,7 +806,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   for (const l of authorPartLines(result.parts.parts)) log(l);
   // One line per plan part an assemble.cuts entry cut, before the fringe lines: the cut is made first. None without cuts.
   for (const l of cutLines(result.cuts)) log(l);
-  for (const line of materialLines({ status: 'SKIP', rows: result.cutMaterial, reason: 'assemble source readings only; check --requirements judges declared joint material' })) log(`  ${line}`);
+  if (materialAsked) for (const line of materialLines({ status: 'SKIP', rows: result.cutMaterial, reason: 'assemble source readings only; check --requirements judges declared joint material' })) log(`  ${line}`);
   // Issue #349: one line per part a limb took, and one per joint with its cap's pixels. None without limbs.
   for (const l of limbLines(result.limbs)) log(l);
   for (const l of fringeLines(result.parts.parts)) log(l);
@@ -1951,7 +1951,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   const windBand = fig[WIND_BAND_LINE];
   if (windBand !== undefined) for (const l of windBandLines(windBand)) log(`  ${l}`);
   const cutMaterial = fig[CUT_MATERIAL_LINE];
-  for (const line of materialLines(cutMaterial ?? { status: 'SKIP', rows: [], reason: 'no declared cut_material requirement' })) log(`  ${line}`);
+  if (cutMaterial !== undefined) for (const line of materialLines(cutMaterial)) log(`  ${line}`);
   const artJoints = fig[ART_JOINT_LINE];
   if (artJoints !== undefined) for (const line of artJointLines(artJoints)) log(`  ${line}`);
   if (r.requirements !== null) {
@@ -2342,7 +2342,7 @@ export interface BuildRunners {
 }
 
 /** Every path `build` writes under `--out`, relative — and so every path it clears first. */
-export const BUILD_OWNS: readonly string[] = ['parts', 'parts.json', 'recomposite_rig.png', ERROR_MAP_FILE, 'rig', 'check', 'idle.gif', 'idle.png', 'idle-indexed.png', 'cut_material_sources.json'];
+export const BUILD_OWNS: readonly string[] = ['parts', 'parts.json', 'recomposite_rig.png', ERROR_MAP_FILE, 'rig', 'check', 'idle.gif', 'idle.png', 'idle-indexed.png'];
 
 export type BuildStage = 'assemble' | 'rig' | 'check' | 'loop' | 'artifact';
 
@@ -2398,6 +2398,8 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
   const out = input.out;
   mkdirSync(out, { recursive: true });
   for (const p of BUILD_OWNS) rmSync(join(out, p), { recursive: true, force: true });
+  // Optional source evidence is cleared separately; BUILD_OWNS is the legacy complete output tree.
+  rmSync(join(out, CUT_MATERIAL_SOURCES), { force: true });
   // Issue #242: the figure mask is written only under config.scene; one left by an earlier scene build is not this build's.
   rmSync(join(out, FIGURE_MASK_FILE), { force: true });
   // The idle-keys value is named only when it is not the default, so a build without the flag, or with the default, prints the line it printed before issue #95.

@@ -507,5 +507,5 @@ independent stage-pixel centre, inward axis, reach and continuous bend interval.
 `assemble --requirements` and `build --requirements` write source-edge evidence
 only for that explicit block; `check --requirements` refuses unavailable or
 stale evidence rather than reconstructing original art from emitted siblings.
-Without the block the new reading is console SKIP and adds no emitted bytes.
+Without the block the API reading is SKIP; CLI stdout and emitted bytes remain unchanged.
 See [Source before scissors](AUTHORING.md#source-before-scissors).

@@ -4071,11 +4071,15 @@ A hand polygon ending at a joint supplies no material for that joint's turn
 (issue #888). An `overlap` keeps pixels on the **parent**; it does not grow
 the cut piece. No source for material past the joint means stop and name the
 tool gap, following the source ladder below; do not hide a tear with crops or
-under-pieces. `assemble` prints each original polygon edge's length through
+under-pieces. With an explicit `cut_material` declaration, `assemble` prints
+each original polygon edge's length through
 opaque source art (`alpha > 8`) and contiguous material past it on the piece.
 The same reading covers a limb's original structural joint line and the
 lower segment together with its generated hybrid band, when present.
-These console readings are SKIP-class observations without a declaration.
+Assembly readings are SKIP-class observations; only check judges the declared bend.
+Without a declaration the API reading is SKIP and the CLI keeps its existing output.
+Limb source intersections use the final segmentation ownership map separately
+for each adjacent source; another limb's island is excluded before capture.
 
 To enforce a bend, add `cut_material` to the existing
 `spine-parts-requirements/1` file (the other fields remain required):
@@ -4146,8 +4150,8 @@ within reach and found/required depth on the same deficient ray. The interval
 and pixel-cell geometry are measured; subpixel texture filtering, another
 motion, material outside the declared reach and consumer compositing remain
 outside this gate. An absent source crossing or unrepresentable arithmetic is
-`CHECK_CUT_MATERIAL_MEASURED`, never PASS. No declaration prints
-`CUT_JOINT_MATERIAL: SKIP`; it adds no sidecar, `parts.json` field,
+`CHECK_CUT_MATERIAL_MEASURED`, never PASS. Without a declaration the API reading
+is SKIP; the CLI preserves its existing stdout and adds no sidecar, `parts.json` field,
 `check.json` field or counted bar to an undeclared build.
 
 **Scissors are for structure, never for repair.** `cuts`, `patches` and
@@ -6169,7 +6173,7 @@ Unknown fields are refused.
 
 | line | measures | bar | SKIP |
 | --- | --- | --- | --- |
-| <a id="CUT_JOINT_MATERIAL"></a>`CUT_JOINT_MATERIAL` | Original source edge intervals versus final opaque pixel-cell material over each explicit `cut_material` joint reach and continuous bend interval; full two-coordinate swept-segment coverage plus contiguous normal support | every required source interval has material through its inverse-rotation sweep; a hole between diagnostic rays also fails | no declaration: console SKIP, no JSON key or counted bar; missing/stale source evidence or no crossing within reach: named unavailable refusal |
+| <a id="CUT_JOINT_MATERIAL"></a>`CUT_JOINT_MATERIAL` | Original source edge intervals versus final opaque pixel-cell material over each explicit `cut_material` joint reach and continuous bend interval; full two-coordinate swept-segment coverage plus contiguous normal support | every required source interval has material through its inverse-rotation sweep; a hole between diagnostic rays also fails | no declaration: API SKIP, unchanged CLI stdout, no JSON key or counted bar; missing/stale source evidence or no crossing within reach: named unavailable refusal |
 | <a id="ART_JOINT_DISTANCE"></a>`ART_JOINT_DISTANCE` | Each independently measured art joint versus its explicitly named bone's renderer setup origin, in stage pixels; printed and recorded per joint | distance <= the declared `fixed_skeleton.within_px`, with no rounding slack | no limit declared: every row and the block retain their distances as SKIP, never a pass; no declaration: no line |
 
 ## 8. What one character costs

@@ -4423,7 +4423,14 @@ function cutLimbs(
     if (line === null) return;
     const lo = parts.findIndex(p => p.part === sg.part);
     const source = [...new Set([limbs[l].segments[k - 1].from, sg.from])].flatMap(name => {
-      const b = builtOf(name); return b === null ? [] : [{ x: 0, y: 0, image: b.r }];
+      const b = builtOf(name);
+      if (b === null) return [];
+      // Match segmentation and cap source ownership, after crossing/hand reassignment.
+      // Evidence must never borrow another limb's island or mutate its source raster.
+      const image = { ...b.r, data: b.r.data.slice() };
+      const owned = owners.get(name), li = names.indexOf(l);
+      for (let p = 0; p < W * H; p++) if (owned?.[p] !== li) image.data.fill(0, p * 4, p * 4 + 4);
+      return [{ x: 0, y: 0, image }];
     });
     const own = [lo, ...(sg.hybrid === undefined ? [] : [parts.findIndex(p => p.part === sg.hybrid?.part)])].filter(i => i >= 0).map(i => ({ x: 0, y: 0, image: (pieces[i] as Built).r }));
     const t: [number, number] = [-line.axis[1], line.axis[0]], r = edgeLength(W, H);
