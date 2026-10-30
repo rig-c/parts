@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.80.0](https://github.com/rig-c/parts/compare/v1.79.2...v1.80.0) (2026-10-29)
+
+
+### Features
+
+* **assemble:** extend_painting gives painted pixels no See-through layer covers to a declared adjacent part ([#850](https://github.com/rig-c/parts/issues/850)) ([e8a135f](https://github.com/rig-c/parts/commit/e8a135f3be29c51f93d95e057f568b92dea6afd5))
+
+
+### Bug Fixes
+
+* **config:** refuse a turn surface on auto mesh mode up front, naming the part and the modes that work ([#846](https://github.com/rig-c/parts/issues/846)) ([4c89dca](https://github.com/rig-c/parts/commit/4c89dcae52d718b4fae874211391eaec27771cbc))
+* **test:** selftest:pre, a one-minute always-include set so a lane's targeted pick stops missing the suites that fail the full run ([#845](https://github.com/rig-c/parts/issues/845)) ([4bde354](https://github.com/rig-c/parts/commit/4bde354b24241d7ff34fa75991f33ac6fc4a3412))
+
+
+### Performance Improvements
+
+* **check:** render the extremes with rig-c 2.82.0's --extremes-only, halving a default check with every output byte unchanged ([#853](https://github.com/rig-c/parts/issues/853)) ([2e35aa4](https://github.com/rig-c/parts/commit/2e35aa4477a0d374e28652245ad94ab3c112287e))
+
 ## [1.79.2](https://github.com/rig-c/parts/compare/v1.79.1...v1.79.2) (2026-10-29)
 
 
