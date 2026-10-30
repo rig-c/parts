@@ -1,3 +1,4 @@
+import { addUnderPieces, type UnderPiece } from './underpieces.ts';
 import { unionTakenSources } from './takesource.ts';
 import { authoredUnitDepths, type AuthoredUnitDepth } from './authoredunit.ts';
 import { paintingExtensionMasks, paintingExtensionProblems, type PaintingExtension } from './paintingextension.ts';
@@ -336,6 +337,7 @@ export interface AssembleInput {
   plan: PlanEntry[];
   extend: Extend[];
   /** `assemble.patches`: extra parts cut from the painting, placed per their `draw` (`placePatches`). */
+  underPieces?: readonly UnderPiece[];
   patches: Patch[];
   /** `assemble.cuts`: plan parts' pixels taken into new parts by polygon (`cutPart`), placed per their `draw`. */
   cuts: Cut[];
@@ -5575,7 +5577,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     set({ record, image, ...(scalar === undefined ? {} : { depthImage: scalar.image }) });
   });
   refuseIfAny(empty);
-  const placed: PlacedPart[] = order.map((d) => ('plan' in d ? planned[d.plan] : 'cut' in d ? cutPlaced[d.cut] : 'limb' in d ? limbPlaced[d.limb] : cut[d.patch]) as PlacedPart);
+  let placed: PlacedPart[] = order.map((d) => ('plan' in d ? planned[d.plan] : 'cut' in d ? cutPlaced[d.cut] : 'limb' in d ? limbPlaced[d.limb] : cut[d.patch]) as PlacedPart);
   const artFiles = new Set(placed.map(p => `${p.record.name}.png`));
   for (const p of placed) if (p.record.depth !== undefined && artFiles.has(p.record.depth.image)) refuseIfAny([{ code: 'DEPTH_SHEET_UNAMBIGUOUS', object: p.record.depth.image, detail: 'collides with a part artwork filename; choose noncolliding part names before sheet emission' }]);
 
@@ -5586,6 +5588,13 @@ export function assemble(input: AssembleInput): AssembleResult {
     const depth = authoredDepths.get(p.record.name);
     if (depth !== undefined) p.record.provenance.depth = depth;
   });
+  if (input.underPieces !== undefined) {
+    const donorWriters = new Map(placed.map((p, i) => [p.record.name, writersInOrder[i]]));
+    placed = addUnderPieces(input.underPieces, placed, input, [W, H], (d, image, donor) =>
+      pixelProvenance(image, d.box[0], d.box[1], W, donorWriters.get(d.donor) ?? null, editNames, 0, valueBaselines.get(donor.from) ?? null));
+    const finalArtFiles = new Set(placed.map(p => `${p.record.name}.png`));
+    for (const p of placed) if (p.record.depth !== undefined && finalArtFiles.has(p.record.depth.image)) refuseIfAny([{ code: 'DEPTH_SHEET_UNAMBIGUOUS', object: p.record.depth.image, detail: 'collides with a final part artwork filename, including a generated under-piece; choose noncolliding output names before sheet emission' }]);
+  }
   // Provenance is now numbers/labels only. No later raster/figure operation
   // reads report buffers; release all aliases before recomposite/error work.
   valueBaselines.clear();
@@ -6508,6 +6517,7 @@ export function stageFields(
   rigScale: number;
   plan: PlanEntry[];
   extend: Extend[];
+  underPieces?: readonly UnderPiece[];
   patches: Patch[];
   cuts: Cut[];
   motion_seams?: MotionSeamDeclaration[];
@@ -6556,6 +6566,7 @@ export function stageFields(
     rigScale: cfg.assemble.rig_scale,
     plan: cfg.assemble.plan,
     extend: cfg.assemble.extend_below_crop ?? [],
+    ...(cfg.assemble.under_pieces === undefined ? {} : { underPieces: cfg.assemble.under_pieces, bones: cfg.bones ?? [], regions: cfg.regions, meshes: cfg.meshes }),
     patches: cfg.assemble.patches ?? [],
     cuts: cfg.assemble.cuts ?? [],
     ...(cfg.motion_seams === undefined ? {} : { motion_seams: cfg.motion_seams }),
