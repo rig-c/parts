@@ -6020,6 +6020,71 @@ on a bone of length 0 are NOT MEASURABLE and the run is not PASS (`CK68`–`CK79
 frame the slide peaks; a seam on a rig with no `parts.json` is refused before anything
 is built (`CK83`–`CK85`, `RQ30`–`RQ35`).
 
+### Art joints on a fixed skeleton
+
+When art is fitted to a skeleton whose setup must stay fixed, declare
+`fixed_skeleton` in the existing `--requirements` file (issue #880):
+
+```json
+{
+  "spec": "spine-parts-requirements/1",
+  "fps": 12,
+  "requirements": [],
+  "fixed_skeleton": {
+    "source": "independent joint measurements on the fitted art",
+    "within_px": 4,
+    "joints": [
+      { "name": "shoulder", "bone": "upper_arm", "at": [26, 57] }
+    ]
+  }
+}
+```
+
+The block explicitly identifies this as a fixed-skeleton comparison; a generation
+control pose does not. `source` is required nonempty provenance text, recorded
+without interpretation. Each `at` is an independently measured point on the art
+**as placed on the rig's stage**, in stage pixels from its top-left, x right and y
+down, the same space as a requirement's `target.stage`. Convert painting/source
+coordinates through the actual placement before declaring them: raw source pixels,
+bone-local offsets and normalized coordinates are not stage pixels. Each nonempty
+`name` is unique and each `bone` explicitly names its matching bone origin in
+`rig.json`. No anatomical names, hidden joints, correspondences or positions are
+inferred; only the listed measurements are covered. An unmeasured joint must not
+be supplied as the bone's own position.
+
+`check` uses the existing setup-still renderer, requesting `--geometry`, and reads
+`geometry.json`'s `setup.bones` through its existing geometry reader. It converts
+the renderer's setup-world origin to stage pixels through the coordinate door;
+it never substitutes an animation's first frame or a bone's parent-local `x,y`.
+This also works for an external `rig.json` with no `parts.json` or idle. The
+Euclidean distance, art point and setup origin are printed **for every declared
+joint** and written to `check.json`'s `ART_JOINT_DISTANCE`, along with `source`,
+`instrument` and `within_px`. This is a setup-placement check, not a motion check
+or automatic detection of joints in an image.
+
+`within_px` is optional and, when present, must be finite and nonnegative. The
+example's `4` is an authored demonstration, not a calibrated or default tolerance.
+Distance **greater than** the declared limit fails; equality passes. Without a
+limit, the block and every joint are **SKIP**, with the measured distances and
+`within_px: null`; this line is excluded from measured bars and contributes no
+PASS. Other independent checks may still pass. With no `fixed_skeleton` block,
+this measurement adds no output or render call. `fps` and `requirements` remain
+required by the enclosing file; they do not change this setup measurement.
+
+| rule | change |
+| --- | --- |
+| <a id="CHECK_ART_JOINT_DISTANCE"></a>`CHECK_ART_JOINT_DISTANCE` | The named joint is farther from its setup bone origin than `fixed_skeleton.within_px`; the message gives distance and limit. Correct a wrong art measurement or bone correspondence, or supply art aligned to the fixed skeleton. Choose any changed limit explicitly from the consumer's requirement; bones and art are never moved by this check. |
+| <a id="CHECK_ART_JOINT_MEASURED"></a>`CHECK_ART_JOINT_MEASURED` | Supply a finite renderer setup origin and a finite measurable distance; missing geometry is never taken as zero. The existing `CHECK_GEOMETRY_FILE` refusal names missing/malformed geometry. |
+
+`REQUIREMENTS_FIELD` and `REQUIREMENTS_RESOLVES` cover malformed declarations:
+supply nonempty provenance and a nonempty joint list, unique joint names, finite
+`[x, y]` points, known bone names and an explicit valid limit or omit the limit.
+Unknown fields are refused.
+
+| line | measures | bar | SKIP |
+| --- | --- | --- | --- |
+| <a id="ART_JOINT_DISTANCE"></a>`ART_JOINT_DISTANCE` | Each independently measured art joint versus its explicitly named bone's renderer setup origin, in stage pixels; printed and recorded per joint | distance <= the declared `fixed_skeleton.within_px`, with no rounding slack | no limit declared: every row and the block retain their distances as SKIP, never a pass; no declaration: no line |
+
 ## 8. What one character costs
 
 | step | reference-sample | reference-demo | source |

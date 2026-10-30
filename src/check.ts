@@ -1,3 +1,4 @@
+import { ART_JOINT_LINE, artJointLine, type ArtJointLine } from './artjoints.ts';
 import { baseAnchorMoves, type AnchorRegion } from './baseanchor.ts';
 /**
  * The check stage: build a rig through rig-c, gate it under both
@@ -2694,6 +2695,8 @@ export interface CheckFigures {
   config?: InputFileRecord;
   /** Written only under `--requirements` (issue #93): the file's fps, the summary, and one line per declared requirement, by name. */
   requirements?: RequirementsBlock;
+  /** Issue #880: only when requirements declares fixed_skeleton. */
+  [ART_JOINT_LINE]?: ArtJointLine;
   PASS: boolean;
 }
 
@@ -2940,7 +2943,7 @@ export function barsNotMet(fig: Readonly<Record<string, unknown>>): string[] {
     isRecord(fig.sets) &&
     Object.values(fig.sets).some((s) => isRecord(s) && typeof s.seam_mean === 'number' && typeof s.seam_px_over_40 === 'number' && seamFails(s.seam_mean, s.seam_px_over_40, typeof s.seam_frame_scale === 'number' ? s.seam_frame_scale : 1));
   if ((typeof fig.seam_mean === 'number' && typeof fig.seam_px_over_40 === 'number' && seamFails(fig.seam_mean, fig.seam_px_over_40, scale)) || setFailed) out.push('seam');
-  for (const n of [...JUDGEMENT_LINES, FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE]) {
+  for (const n of [...JUDGEMENT_LINES, FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, ART_JOINT_LINE]) {
     const l = fig[n];
     if (typeof l === 'object' && l !== null && (l as { status?: unknown }).status === 'FAIL') out.push(n);
   }
@@ -3049,7 +3052,7 @@ export function checkStatuses(fig: CheckFigures): Record<string, CheckStatus> {
   const bar = (name: string, measured: boolean): CheckStatus => (!measured ? 'SKIP' : notMet.includes(name) ? 'FAIL' : 'PASS');
   const out: Record<string, CheckStatus> = { gate: bar('gate', true), loop: bar('loop', fig.loop_max_diff !== null), seam: bar('seam', fig.seam_mean !== null) };
   for (const n of JUDGEMENT_LINES) out[n] = fig[n].status;
-  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, ...REPORTED_LINES, SOURCE_LINE, WIND_BAND_LINE] as const) {
+  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, ...REPORTED_LINES, SOURCE_LINE, WIND_BAND_LINE, ART_JOINT_LINE] as const) {
     const l = fig[n];
     if (l !== undefined) out[n] = l.status;
   }
@@ -6402,7 +6405,9 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const setsFigures: Record<string, SetCheckFigures> = {};
   // Issue #671: a failing set's hint, read with its seam; never written to check.json.
   const setHints = new Map<string, string>();
-  if (inp.parts !== null || inp.source !== null) {
+  const fixedSkeleton = reqFile?.fixed_skeleton;
+  let artJoints: ArtJointLine | null = null;
+  if (inp.parts !== null || inp.source !== null || fixedSkeleton !== undefined) {
     try {
       mkdirSync(stillDir, { recursive: true });
       const images = typeof inp.rig.images === 'string' ? resolve(inp.rigDir, inp.rig.images) : inp.rig.images;
@@ -6426,9 +6431,18 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       if (sb.status !== 0) refuseIfAny(rigcFailed('build (the setup-pose still)', sb, buildGateLines(sb.out)));
       // The stage is the parts' canvas wherever parts.json is read (CHECK_RIG_STAGE_IS_THE_CANVAS), so this is its longest side.
       const maxSide = Math.ceil(Math.max(inp.stage.width, inp.stage.height));
-      const sr = rigc(['render', '--candidate', join(stillDir, 'build'), '--animation', 'still', '--fps', String(STILL_FPS), '--max', String(maxSide), '--out', join(stillDir, 'render')]);
+      const sr = rigc(['render', '--candidate', join(stillDir, 'build'), '--animation', 'still', '--fps', String(STILL_FPS), '--max', String(maxSide), ...(fixedSkeleton === undefined ? [] : ['--geometry']), '--out', join(stillDir, 'render')]);
       if (sr.status !== 0) refuseIfAny(rigcFailed('render (the setup-pose still)', sr, sr.out.split('\n').filter((l) => l.includes('FAIL'))));
       const stillSet = readFrameSet(join(stillDir, 'render'));
+      if (fixedSkeleton !== undefined) {
+        const geometryPath = join(stillSet.dir, GEOMETRY_FILE);
+        const geometry = readGeometry(geometryPath, stillSet.written);
+        artJoints = artJointLine(fixedSkeleton, inp.stage, bone => {
+          const track = boneTrackOf(geometry, geometryPath, stillSet, bone);
+          if (typeof track === 'string') return geometryProblem(geometryPath, track);
+          return track.setup;
+        }, problems);
+      }
       seamViewport = stillSet.viewport;
       if (keepStills) cpSync(join(stillDir, 'render'), inp.parts === null ? keptDir : join(out, 'setup_still_auto'), { recursive: true });
       if (inp.parts !== null) {
@@ -6621,6 +6635,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(Object.keys(skipped).length === 0 ? {} : { skipped }),
     ...(Object.keys(setsFigures).length === 0 ? {} : { sets: setsFigures }),
     ...(config === undefined ? {} : { config }),
+    ...(artJoints === null ? {} : { [ART_JOINT_LINE]: artJoints }),
     ...(reqBlock === null ? {} : { requirements: reqBlock }),
     PASS: false,
   };
@@ -6684,6 +6699,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   }
   // Issues #320, #333: the fold bar is counted where it is written — on every rig whose motion holds an animation.
   if (folds !== null) tally(FOLD_LINE, null);
+  if (artJoints !== null) tally(ART_JOINT_LINE, artJoints.status === 'SKIP' ? (artJoints.reason ?? 'no declared limit') : null);
   // Issue #348: the level bar where it is written; a line whose every foot no frame posed says SKIP and is not measured.
   if (level !== null) tally(LEVEL_LINE, level.status === 'SKIP' ? (level.reason ?? '') : null);
   // Issue #347: the stress bar is counted where it is written — on every rig with a handwear part and an idle.

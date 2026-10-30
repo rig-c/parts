@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runArtJointChecks } from './tools/check_art_joints.ts';
 import { runTurnUnitPrecedenceChecks } from './tools/check_turn_unit_precedence.ts';
 import { runAuthoredUnitDepthChecks } from './tools/check_authored_unit_depth.ts';
 import { runTakeLayerChecks } from './tools/check_take_layers.ts';
@@ -23630,7 +23631,7 @@ function runRequirementsSuite(): number {
         rsDetail[1].startsWith(' field "rests"[1]: names "hem" a second time') &&
         rsDetail[2].startsWith(' field "rests"[0]: names "hem", which "not_swinging" names too') &&
         rsDetail[3].startsWith(' field "rest": is not a field this format reads') &&
-        (rsBad[3]?.problems[0].detail ?? '').includes('rises, rests, may_fold;'),
+        (rsBad[3]?.problems[0].detail ?? '').includes('rises, rests, may_fold, fixed_skeleton;'),
       `read ${JSON.stringify([rsRead.rises, rsRead.rests])}; absent ${JSON.stringify(npAbsent.rests)}; refused: ${rsDetail.join(' | ')}`,
       'issue #245: rests is declared per part like its siblings — a list of names, each once, empty refused rather than read as none, a misspelt key refused by the format; a resting tip may also rise (a raised hand resting on something), but a part declared not swinging has no reading to hold at rest',
     );
@@ -51700,6 +51701,16 @@ function runAlternateLayersSuite(): number {
   return bad();
 }
 
+function runArtJointSuite(): number {
+  section('fixed-skeleton: declared art joints versus setup bone origins');
+  const { say, bad } = counter();
+  const dir = temp('fixed-skeleton');
+  try { runArtJointChecks(dir, (name, pass, detail) => say(name, pass, detail,
+    'issue #880: independent stage-pixel measurements, declared limits and unchanged nonfixed rigs'), rigcRunnerAt(suiteRigc(), spawnRigc)); }
+  finally { rmSync(dir, { recursive: true, force: true }); }
+  return bad();
+}
+
 function runAlternateTipsSuite(): number {
   section('alternate-tips: explicit source-crop endpoints with recorded rig provenance');
   const { say, bad } = counter();
@@ -52044,6 +52055,7 @@ const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number 
   ['diagnostics', runDiagnosticsSuite],
   ['check', runCheckSuite],
   ['requirements', runRequirementsSuite],
+  ['fixed-skeleton', runArtJointSuite],
   ['loop', runLoopSuite],
   ['assemble', runAssembleSuite],
   ['subset-cover', runSubsetCoverSuite],
@@ -52248,7 +52260,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
  */
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['check', 'chain@wind', 'chain@scarf', 'assemble-examples@wind', 'assemble-examples@reference-sample', 'scene', 'mesh-stats', 'auto-mesh-examples', 'config', 'inputs-examples', 'contour-wiring', 'waist', 'propose-corpus', 'arm-split-upgrade', 'comfy', 'diagnostics', 'structure', 'inputs', 'winding', 'raster-morph', 'raster-resize', 'raster-components', 'raster-warp', 'png']],
-  ['2', ['cli', 'build', 'remesh', 'rig', 'chain@reference-sample', 'readme-loop@reference-demo', 'chain@reference-demo', 'propose', 'assemble-examples@reference-demo', 'readme-loop@reference-sample', 'auto-motion', 'tree', 'auto-mesh', 'config-write', 'limb-slots', 'loop', 'corpus', 'limb-layout', 'requirements', 'foot-ownership', 'layers-wrapper', 'painting', 'skeleton', 'core-pointer', 'assemble-examples@end', 'parts', 'prompt', 'sheet']],
+  ['2', ['cli', 'build', 'remesh', 'rig', 'chain@reference-sample', 'readme-loop@reference-demo', 'chain@reference-demo', 'propose', 'assemble-examples@reference-demo', 'readme-loop@reference-sample', 'auto-motion', 'tree', 'auto-mesh', 'config-write', 'limb-slots', 'loop', 'corpus', 'limb-layout', 'requirements', 'fixed-skeleton', 'foot-ownership', 'layers-wrapper', 'painting', 'skeleton', 'core-pointer', 'assemble-examples@end', 'parts', 'prompt', 'sheet']],
   ['3', ['readme-loop@wind', 'chain@end', 'readme-loop@demo', 'retune', 'chain@demo', 'assemble-examples@scarf', 'assemble-examples@demo', 'readme-loop@scarf', 'mesh-draft', 'alternate-layers', 'take-layers', 'influence', 'front-slot', 'assemble', 'readme-loop@end', 'build-cost', 'alternate-tips', 'chain-inherit', 'keypoints', 'contour', 'subset-cover', 'hybrid-limb', 'plausibility', 'raster-blur', 'fetch-examples', 'layers-psd', 'raster-poly', 'raster-composite']],
 ];
 
@@ -52903,6 +52915,7 @@ const SUMMARY_CLAUSE_SUITES: ReadonlyArray<readonly [string, readonly string[]]>
   ['auto-mesh', ['auto-mesh']],
   ['check', ['check']],
   ['requirements', ['requirements']],
+  ['fixed-skeleton', ['fixed-skeleton']],
   ['loop-encoder', ['loop']],
   ['skeleton', ['skeleton']],
   ['inputs', ['inputs']],
@@ -53080,7 +53093,7 @@ function printGreenSummary(tally: RunTally, log: (line: string) => void = consol
   log(
     `rig-parts selftest: green — ${tally.total} control(s) over ${ran} suite(s): ${raster} raster-op, + ${n('png')} codec, ` +
       `+ ${n('layers-wrapper')} wrapper-reader, + ${n('layers-psd')} PSD-reader, + ${n('config')} config, + ${n('parts')} parts.json, ` +
-      `+ ${n('sheet')} sheet, + ${n('cli')} CLI, + ${n('assemble')} assemble, + ${n('plausibility')} plausibility, + ${n('propose')} propose, + ${n('keypoints')} keypoints, + ${n('painting')} painting, + ${n('structure')} structure, + ${n('diagnostics')} diagnostics, + ${n('rig')} rig, + ${n('chain-inherit')} chain-inherit, + ${n('contour')} contour-mesh, + ${n('contour-wiring')} contour-wiring, + ${n('auto-mesh')} auto-mesh, + ${n('check')} check, + ${n('requirements')} requirements, + ${n('loop')} loop-encoder, + ${n('skeleton')} skeleton, + ${n('inputs')} inputs, + ${n('fetch-examples')} fetch-examples, + ${n('prompt')} prompt, + ${n('comfy')} comfy-adapter, + ${n('build')} build, + ${n('scene')} scene, + ${n('tree')} tree, + ${n('run-tally')} tally${corpusClause}${proposeClause}${assembleExamplesClause}${inputsClause}${autoExamplesClause}${chainClause}${readmeLoopClause}`,
+      `+ ${n('sheet')} sheet, + ${n('cli')} CLI, + ${n('assemble')} assemble, + ${n('plausibility')} plausibility, + ${n('propose')} propose, + ${n('keypoints')} keypoints, + ${n('painting')} painting, + ${n('structure')} structure, + ${n('diagnostics')} diagnostics, + ${n('rig')} rig, + ${n('chain-inherit')} chain-inherit, + ${n('contour')} contour-mesh, + ${n('contour-wiring')} contour-wiring, + ${n('auto-mesh')} auto-mesh, + ${n('check')} check, + ${n('requirements')} requirements, + ${n('fixed-skeleton')} fixed-skeleton, + ${n('loop')} loop-encoder, + ${n('skeleton')} skeleton, + ${n('inputs')} inputs, + ${n('fetch-examples')} fetch-examples, + ${n('prompt')} prompt, + ${n('comfy')} comfy-adapter, + ${n('build')} build, + ${n('scene')} scene, + ${n('tree')} tree, + ${n('run-tally')} tally${corpusClause}${proposeClause}${assembleExamplesClause}${inputsClause}${autoExamplesClause}${chainClause}${readmeLoopClause}`,
   );
   if (holes.length > 0) log(`  ⚠️ HOLE: ${holes.join(', ')} did not run, so this run does not cover ${holes.length === 1 ? 'it' : 'them'}.`);
   // the summary ends here
