@@ -1751,7 +1751,7 @@ export function splitMergedArmRunsWithNotes(
         object: `the full run (${set.source}) layer "${tag}"`,
         detail:
           `merges the sleeve, the hand (${handPx} skin px around ${s}_wrist at (${Math.round(wr.x)}, ${Math.round(wr.y)}), rows y=${handMinY}..${handMaxY}) and the overgarment into one arm layer: non-skin pixels reach y=${nonSkinMaxY}, ${spanBelowWrist.toFixed(1)} px (${(spanBelowWrist / forearm).toFixed(2)}x the forearm length ${forearm.toFixed(1)} px from ${s}_elbow to ${s}_wrist) below ${s}_wrist, and the sleeve above ${s}_wrist (rgb(${sleeveRGB.join(', ')})) and the drape below ${s}_wrist (rgb(${drapeShown.join(', ')})) have Euclidean RGB distance ${bestDist.toFixed(1)} (< ${ARM_DRAPE_COLOR_DISTANCE}); ` +
-          `non-skin pixels reaching at most 1.0x the forearm length (${forearm.toFixed(1)} px) below ${s}_wrist, or a sleeve-to-drape Euclidean RGB distance of at least ${ARM_DRAPE_COLOR_DISTANCE} so the stage can split "${tag}" into "drape-${s}", "${tag}" and "hand-${s}", is required — re-seed config.seethrough.seed, split the merged layer into author: layers in the full run, or cut the overgarment from the sleeve in config.assemble.cuts`,
+          `non-skin pixels reaching at most 1.0x the forearm length (${forearm.toFixed(1)} px) below ${s}_wrist, or a sleeve-to-drape Euclidean RGB distance of at least ${ARM_DRAPE_COLOR_DISTANCE} so the stage can split "${tag}" into "drape-${s}", "${tag}" and "hand-${s}", is required — change config.seethrough.seed and re-run comfy seethrough --config <config.json> (or pass --seed <n>), split the merged layer into author: layers in the full run, or cut the overgarment from the sleeve in config.assemble.cuts`,
       });
       continue;
     }
@@ -2126,8 +2126,8 @@ function prepareHeadFace(
     const floorStr = `${(HEAD_FACE_COVERAGE_FLOOR * 100).toFixed(1)}% (HEAD_FACE_COVERAGE_FLOOR = ${HEAD_FACE_COVERAGE_FLOOR})`;
     const detail =
       headFaceLayer === undefined || headRawOpaquePx < minPx
-        ? `${headFaceLayer === undefined ? 'holds no layer "face"' : `holds ${headRawOpaquePx} opaque px (alpha > ${OPAQUE_ALPHA_ABOVE}, below PROPOSE_MIN_PX = ${minPx})`}, covering ${covStr} of the full run's "face" silhouette on the head canvas (${fullOpaqueRunPx} full-run px); at least ${floorStr} is required — the head run omitted the face layer (so config.assemble.head_face_underfill cannot supply a jawline); re-run See-through with a different config.seethrough.seed`
-        : `covers ${covStr} of the full run's "face" silhouette on the head canvas (${headRawOpaquePx} head-run px vs ${fullOpaqueRunPx} full-run px) — See-through left bare skin inside the face silhouette transparent; at least ${floorStr} is required — re-run See-through with a different config.seethrough.seed, or set "head_face_underfill": true in config.assemble to composite full:face under head:face on the head canvas`;
+        ? `${headFaceLayer === undefined ? 'holds no layer "face"' : `holds ${headRawOpaquePx} opaque px (alpha > ${OPAQUE_ALPHA_ABOVE}, below PROPOSE_MIN_PX = ${minPx})`}, covering ${covStr} of the full run's "face" silhouette on the head canvas (${fullOpaqueRunPx} full-run px); at least ${floorStr} is required — the head run omitted the face layer (so config.assemble.head_face_underfill cannot supply a jawline); change config.seethrough.seed and re-run comfy seethrough --config <config.json> (or pass --seed <n>)`
+        : `covers ${covStr} of the full run's "face" silhouette on the head canvas (${headRawOpaquePx} head-run px vs ${fullOpaqueRunPx} full-run px) — See-through left bare skin inside the face silhouette transparent; at least ${floorStr} is required — change config.seethrough.seed and re-run comfy seethrough --config <config.json> (or pass --seed <n>), or set "head_face_underfill": true in config.assemble to composite full:face under head:face on the head canvas`;
     refuseIfAny([
       {
         code: 'SEETHROUGH_HEAD_RUN_HOLLOW',

@@ -34980,6 +34980,60 @@ function runComfySuite(): number {
       'the positive control: the refusals below are only worth something if a box that answers correctly yields a layer set the next stage reads',
     );
 
+    // Issue #860: inspect the submitted graph AND the written metadata, not only stdout.
+    for (const [name, resolution, steps, seed, offload, source] of [
+      ['st-guide', 1024, 30, 42, false, 'default'],
+      ['st-config', 1024, 30, 43, true, 'config'],
+      ['st-mixed', 1024, 30, 0, true, 'mixed'],
+      ['st-config-low', 64, 1, 0, false, 'config'],
+      ['st-config1-cli64', 64, 1, 0, false, 'resolution-cli'],
+      ['st-flags-low', 64, 1, 0, false, 'cli'],
+      ['st-flags-high', 512, 3, 7, true, 'cli'],
+    ] as const) {
+      const r = R[name];
+      const sent = JSON.parse(readFileSync(join(dir, `${name}.prompts.json`), 'utf8')) as Array<Record<string, { inputs: Record<string, unknown> }>>;
+      const m = readJsonFile(join(dir, name, 'meta.json'));
+      const settings = { resolution, steps, seed, offload };
+      const sourcesRight = Object.entries(settings).every(([key, value]) => {
+        const from = source === 'mixed' ? (key === 'seed' ? 'cli' : 'config') : source === 'resolution-cli' ? (key === 'resolution' ? 'cli' : 'config') : source;
+        return r.out.includes(`${key} ${value} (source=${from === 'config' ? `config.seethrough.${key}` : from})`);
+      });
+      const sentRight = sent.length === 1 && sent[0]['3'].inputs.resolution === resolution && sent[0]['3'].inputs.num_inference_steps === steps && sent[0]['3'].inputs.seed === seed && sent[0]['5'].inputs.seed === seed && sent[0]['4'].inputs.group_offload === offload && sent[0]['2'].inputs.group_offload === offload;
+      say(
+        'CY15_SEETHROUGH_SETTINGS_REACH_THE_GRAPH_AND_META_WITH_THEIR_SOURCES',
+        r.status === 0 && sentRight && Object.entries(settings).every(([key, value]) => m?.[key] === value) && sourcesRight && (name !== 'st-guide' || r.out.includes('--config <config.json> to use config.seethrough settings')),
+        `${name}: exit ${r.status}; expected ${JSON.stringify(settings)} from ${source}; graph ${JSON.stringify(sent[0]?.['3'].inputs)}, offload ${JSON.stringify(sent[0]?.['2'].inputs.group_offload)}; meta ${JSON.stringify(m)}; output ${JSON.stringify(r.out.trim().slice(0, 650))}`,
+        'flags win over config in both numeric directions, including zero seed and false offload; unchanged guide commands explicitly name default values and the config route',
+      );
+    }
+    for (const [name, message] of [
+      ['st-conflicting-offload', '--offload and --no-offload cannot be combined'],
+      ['st-invalid-config', 'CONFIG_FIELD_TYPE: config.seethrough.seed'],
+      ['st-invalid-seed', '--seed -1 is not an integer of at least 0'],
+    ]) {
+      const r = R[name];
+      say(
+        'CY16_SEETHROUGH_INVALID_SETTINGS_REFUSE_BEFORE_CONTACTING_THE_BOX',
+        r.status !== 0 && r.out.includes(message) && r.paths.length === 0 && nothingSent(r) && leftovers(name).length === 0,
+        `${name}: exit ${r.status}; requests ${r.paths.length}; ${JSON.stringify(r.out.trim())}`,
+        'conflicting booleans and invalid CLI/config seeds cannot silently fall back or submit a graph',
+      );
+    }
+
+    for (const [name, field, value] of [
+      ['st-config1', 'config.seethrough.resolution', 1],
+      ['st-config63', 'config.seethrough.resolution', 63],
+      ['st-cli-resolution1', '--resolution', 1],
+    ] as const) {
+      const r = R[name];
+      say(
+        'CY17_SEETHROUGH_RESOLVED_RESOLUTION_ENFORCES_THE_ADAPTER_FLOOR',
+        r.status === 2 && r.out.includes(`${field} ${value} is not an integer of at least 64`) && r.paths.length === 0 && nothingSent(r) && leftovers(name).length === 0,
+        `${name}: exit ${r.status}; requests ${r.paths.length}; prompts ${r.prompts}; output ${JSON.stringify(r.out.trim())}`,
+        'config resolution 1 and 63 are valid canvas declarations but cannot reach the adapter host; explicit CLI 64 may override them after config validation',
+      );
+    }
+
     const busy = R['st-busy'];
     say(
       'CY02_A_QUEUE_THAT_NEVER_EMPTIES_IS_REFUSED_BY_NAME_BEFORE_ANYTHING_IS_SENT',

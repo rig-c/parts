@@ -13,7 +13,7 @@
  * `COMFY_HOST` is removed from the child's environment, so no scenario can
  * reach a real box.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { encodePngBytes } from '../src/raster/png.ts';
 import { FAKE_CHECKPOINT, FAKE_LORA, type FakeMode, startFakeComfy } from './fakecomfy.ts';
@@ -101,11 +101,22 @@ writeFileSync(
   })()),
 );
 
+// Issue #860: use the existing early config door, without a finished rig.
+for (const [name, seethrough] of Object.entries({
+  high: { resolution: 1024, steps: 30, seed: 43, offload: true },
+  low: { resolution: 64, steps: 1, seed: 0, offload: false },
+  resolution1: { resolution: 1, steps: 1, seed: 0, offload: false },
+  resolution63: { resolution: 63, steps: 1, seed: 0, offload: false },
+  invalid: { resolution: 1024, steps: 30, seed: -1, offload: true },
+})) writeFileSync(join(work, `st-${name}.json`), JSON.stringify({ key: 'fixture', seethrough, assemble: { rig_scale: 1 } }));
+
+writeFileSync(join(work, 'config.json'), readFileSync(join(work, 'st-high.json')));
+
 const env: Record<string, string> = {};
 for (const [k, v] of Object.entries(process.env)) if (k !== 'COMFY_HOST' && v !== undefined) env[k] = v;
 
 async function cli(args: string[]): Promise<{ status: number; out: string }> {
-  const p = Bun.spawn(['bun', join(ROOT, 'cli.ts'), ...args], { cwd: ROOT, env, stdout: 'pipe', stderr: 'pipe' });
+  const p = Bun.spawn(['bun', join(ROOT, 'cli.ts'), ...args], { cwd: work, env, stdout: 'pipe', stderr: 'pipe' });
   const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
   return { status: await p.exited, out: out + err };
 }
@@ -122,6 +133,20 @@ const st = (url: string, out: string, wait = '2'): string[] => [
 ];
 const scenarios: Scenario[] = [
   { name: 'st-ok', mode: 'ok', args: (u, o) => st(u, o) },
+  // The guide supplies image/out/host only: a config beside the command is not discovered.
+  { name: 'st-guide', mode: 'ok', args: (u, o) => ['comfy', 'seethrough', '--image', image, '--out', o, '--host', u] },
+  { name: 'st-config', mode: 'ok', args: (u, o) => ['comfy', 'seethrough', '--image', image, '--out', o, '--host', u, '--config', join(work, 'st-high.json')] },
+  { name: 'st-config1', mode: 'ok', args: (u, o) => ['comfy', 'seethrough', '--image', image, '--out', o, '--host', u, '--config', join(work, 'st-resolution1.json')] },
+  { name: 'st-config63', mode: 'ok', args: (u, o) => ['comfy', 'seethrough', '--image', image, '--out', o, '--host', u, '--config', join(work, 'st-resolution63.json')] },
+  { name: 'st-config1-cli64', mode: 'ok', args: (u, o) => ['comfy', 'seethrough', '--image', image, '--out', o, '--host', u, '--config', join(work, 'st-resolution1.json'), '--resolution', '64'] },
+  { name: 'st-cli-resolution1', mode: 'ok', args: (u, o) => ['comfy', 'seethrough', '--image', image, '--out', o, '--host', u, '--resolution', '1'] },
+  { name: 'st-mixed', mode: 'ok', args: (u, o) => ['comfy', 'seethrough', '--image', image, '--out', o, '--host', u, '--config', join(work, 'st-high.json'), '--seed', '0'] },
+  { name: 'st-config-low', mode: 'ok', args: (u, o) => ['comfy', 'seethrough', '--image', image, '--out', o, '--host', u, '--config', join(work, 'st-low.json')] },
+  { name: 'st-flags-low', mode: 'ok', args: (u, o) => ['comfy', 'seethrough', '--image', image, '--out', o, '--host', u, '--config', join(work, 'st-high.json'), '--resolution', '64', '--steps', '1', '--seed', '0', '--no-offload'] },
+  { name: 'st-flags-high', mode: 'ok', args: (u, o) => [...st(u, o), '--config', join(work, 'st-low.json')] },
+  { name: 'st-conflicting-offload', mode: 'ok', args: (u, o) => [...st(u, o), '--no-offload'] },
+  { name: 'st-invalid-config', mode: 'ok', args: (u, o) => [...st(u, o), '--config', join(work, 'st-invalid.json')] },
+  { name: 'st-invalid-seed', mode: 'ok', args: (u, o) => ['comfy', 'seethrough', '--image', image, '--out', o, '--host', u, '--config', join(work, 'st-high.json'), '--seed', '-1'] },
   { name: 'st-busy', mode: 'busy', args: (u, o) => st(u, o, '0.3') },
   { name: 'st-no-outputs', mode: 'no-outputs', args: (u, o) => st(u, o) },
   { name: 'st-no-seethrough', mode: 'no-seethrough', args: (u, o) => st(u, o) },
