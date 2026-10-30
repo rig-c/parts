@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.81.0](https://github.com/rig-c/parts/compare/v1.80.0...v1.81.0) (2026-10-30)
+
+
+### Features
+
+* **assemble:** extend_painting min_held_alpha lets a declaration fill under faint holders ([#856](https://github.com/rig-c/parts/issues/856)) ([21380ef](https://github.com/rig-c/parts/commit/21380ef8109244dcdc81594150418ba0f775c7b1)), closes [#854](https://github.com/rig-c/parts/issues/854)
+
 ## [1.80.0](https://github.com/rig-c/parts/compare/v1.79.2...v1.80.0) (2026-10-29)
 
 
