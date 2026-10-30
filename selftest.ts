@@ -52082,16 +52082,19 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
 }
 
 /**
- * The CI shards (issue #395): each is one job of `.github/workflows/ci.yml` running `--shard <name>`, and `test`
- * merges their records. Every unit of the run is in exactly one shard (`RT09`), and a shard starts its units in the
- * order listed here, longest first. The assignment balances the per-unit worker times the run's clock line printed;
- * the table and the estimate are in the pull request that closed issue #395. A new example adds a unit to each split
- * suite, and every run fails `RT09` until each of them is placed here.
+ * The CI shards (issues #395, #849): each is one job of `.github/workflows/ci.yml` running `--shard <name>`, and
+ * `test` merges their records. Every unit is in exactly one shard (`RT09`); each shard starts units in listed order.
+ * Rebalanced from CI runs 40950565569, 40950635084 and 40946705361 (2026-10-29): weight each unit by its maximum
+ * worker wall time across those runs, then place longest first on the earliest free worker across three two-worker
+ * jobs (ties: shard, then worker index). The estimated longest worker lane is 1054.1 s; adding the largest observed
+ * job overhead, 22.3 s rounded up, leaves 123.6 s below 20 minutes and 423.6 s below the unchanged 25-minute limit.
+ * These are scheduling estimates from recorded times, not post-change CI measurements. The per-unit table and
+ * derivation accompany issue #849's change. A new example adds a unit to each split suite; `RT09` requires each here.
  */
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
-  ['1', ['check']],
-  ['2', ['readme-loop@wind', 'chain@scarf', 'chain@wind', 'rig', 'waist', 'influence', 'chain-inherit', 'readme-loop@reference-demo', 'readme-loop@reference-sample', 'readme-loop@scarf', 'assemble-examples@demo', 'assemble-examples@reference-demo', 'assemble-examples@reference-sample', 'auto-motion', 'propose', 'readme-loop@end', 'auto-mesh-examples', 'inputs-examples', 'build-cost', 'loop', 'assemble', 'subset-cover', 'foot-ownership', 'limb-slots', 'limb-layout', 'hybrid-limb', 'front-slot', 'arm-split-upgrade', 'alternate-tips', 'alternate-layers', 'contour-wiring', 'config', 'config-write', 'core-pointer', 'structure', 'inputs', 'plausibility', 'skeleton', 'assemble-examples@end', 'winding', 'fetch-examples', 'prompt', 'layers-psd', 'parts', 'raster-components', 'raster-morph', 'raster-blur', 'raster-poly', 'raster-composite', 'requirements']],
-  ['3', ['readme-loop@demo', 'chain@end', 'build', 'chain@demo', 'chain@reference-demo', 'chain@reference-sample', 'cli', 'assemble-examples@scarf', 'assemble-examples@wind', 'mesh-draft', 'mesh-stats', 'remesh', 'retune', 'scene', 'tree', 'auto-mesh', 'corpus', 'propose-corpus', 'keypoints', 'contour', 'comfy', 'diagnostics', 'painting', 'sheet', 'layers-wrapper', 'raster-resize', 'raster-warp', 'png']],
+  ['1', ['check', 'chain@wind', 'chain@scarf', 'assemble-examples@wind', 'assemble-examples@reference-sample', 'scene', 'mesh-stats', 'auto-mesh-examples', 'config', 'inputs-examples', 'contour-wiring', 'waist', 'propose-corpus', 'arm-split-upgrade', 'comfy', 'diagnostics', 'structure', 'inputs', 'winding', 'raster-morph', 'raster-resize', 'raster-components', 'raster-warp', 'png']],
+  ['2', ['cli', 'build', 'remesh', 'rig', 'chain@reference-sample', 'readme-loop@reference-demo', 'chain@reference-demo', 'propose', 'assemble-examples@reference-demo', 'readme-loop@reference-sample', 'auto-motion', 'tree', 'auto-mesh', 'config-write', 'limb-slots', 'loop', 'corpus', 'limb-layout', 'requirements', 'foot-ownership', 'layers-wrapper', 'painting', 'skeleton', 'core-pointer', 'assemble-examples@end', 'parts', 'prompt', 'sheet']],
+  ['3', ['readme-loop@wind', 'chain@end', 'readme-loop@demo', 'retune', 'chain@demo', 'assemble-examples@scarf', 'assemble-examples@demo', 'readme-loop@scarf', 'mesh-draft', 'alternate-layers', 'influence', 'front-slot', 'assemble', 'readme-loop@end', 'build-cost', 'alternate-tips', 'chain-inherit', 'keypoints', 'contour', 'subset-cover', 'hybrid-limb', 'plausibility', 'raster-blur', 'fetch-examples', 'layers-psd', 'raster-poly', 'raster-composite']],
 ];
 
 /**
