@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import type { EarlyConfig, PlanEntry, Run } from './config.ts';
-import { CORE_KERNEL } from './assemble.ts';
+import { CORE_KERNEL, fullPlanBand } from './assemble.ts';
 import { makeInputs } from './inputs.ts';
 import { OPAQUE_ALPHA_ABOVE, readLayers, type Layer, type LayerSet } from './layers.ts';
 import { PartsError, refuseIfAny, type Problem } from './errors.ts';
@@ -50,6 +50,16 @@ function identity(layer: Layer, canvas: LayerSet['canvas'], donor: Raster, targe
 }
 export function takeLayerNote(source: TakenLayerSource): string {
   return `take ${source.run}:${source.tag} from ${source.run_dir}; prompt_id ${source.prompt_id}; seed ${source.seed}; st_input ${source.st_input}; support ${source.support_px} run px; checked ${source.checked_px} input px; differing ${source.differing_px}; alpha > ${OPAQUE_ALPHA_ABOVE}, ${CORE_KERNEL}x${CORE_KERNEL} margin`;
+}
+/** Intersection of original alpha supports in the common target-run canvas; no bbox or dilation proxy. */
+function supportOverlap(a: Layer, b: Layer): number {
+  let px = 0;
+  for (let y = Math.max(a.top, b.top); y < Math.min(a.bottom, b.bottom); y++)
+    for (let x = Math.max(a.left, b.left); x < Math.min(a.right, b.right); x++) {
+      if (a.pixels.data[((y - a.top) * a.pixels.width + x - a.left) * 4 + 3] > OPAQUE_ALPHA_ABOVE &&
+          b.pixels.data[((y - b.top) * b.pixels.width + x - b.left) * 4 + 3] > OPAQUE_ALPHA_ABOVE) px++;
+    }
+  return px;
 }
 /** Apply every declaration together, so replacing all tied layers from one run can retain its known order. */
 export function applyTakenLayers(runs: { full: LayerSet; head: LayerSet; single: boolean }, painting: Raster, cfg: Pick<EarlyConfig, 'seethrough' | 'depth'> & { assemble: { take?: TakeLayers[]; plan?: PlanEntry[] } }, configPath: string): { full: LayerSet; head: LayerSet; single: boolean; notes: string[] } {
@@ -99,7 +109,14 @@ export function applyTakenLayers(runs: { full: LayerSet; head: LayerSet; single:
     const selected = (cfg.assemble.plan ?? []).filter(p => p[1] === run).map(p => ({ part: p[0], layer: list.find(l => l.name === p[2]) }));
     for (let i = 0; i < selected.length; i++) for (let j = i + 1; j < selected.length; j++) {
       const a = selected[i], b = selected[j];
-      if (a.layer !== undefined && b.layer !== undefined && origin(a.layer) !== origin(b.layer) && list.indexOf(a.layer) > list.indexOf(b.layer)) problems.push({ code: 'ASSEMBLE_TAKE_PLAN_ORDER', object: `${run} plan parts "${a.part}" / "${b.part}"`, detail: `plan order reverses mixed-run depths ${a.layer.depth} / ${b.layer.depth}; put the larger depth behind, as in assemble --propose-plan` });
+      if (a.layer === undefined || b.layer === undefined || origin(a.layer) === origin(b.layer)) continue;
+      const overlap = supportOverlap(a.layer, b.layer);
+      if (overlap === 0) continue;
+      // Only full rows in a two-run plan have the proposer's fallback roles.
+      // Head rows and one-run plans retain the scalar order, as do peers in a band.
+      const band = !runs.single && run === 'full' ? fullPlanBand(a.layer.name) - fullPlanBand(b.layer.name) : 0;
+      const reversed = band === 0 ? list.indexOf(a.layer) > list.indexOf(b.layer) : band > 0;
+      if (reversed) problems.push({ code: 'ASSEMBLE_TAKE_PLAN_ORDER', object: `${run} plan parts "${a.part}" / "${b.part}"`, detail: `plan order reverses ${band === 0 ? `mixed-run depths ${a.layer.depth} / ${b.layer.depth}; put the larger depth behind` : `two-run full-layer roles "${a.layer.name}" / "${b.layer.name}"; order back hair, body, headwear/earwear, face, head details, front hair`}; supports overlap at ${overlap} run px (alpha > ${OPAQUE_ALPHA_ABOVE}); use assemble --propose-plan` });
     }
     refuseIfAny(problems);
     const replaced = new Set(declarations.filter(d => d.run === run).flatMap(d => d.tags));

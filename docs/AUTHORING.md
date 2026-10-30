@@ -668,8 +668,19 @@ Taken layers replace the target's tag, keeping the donor's tag and
 `depth_median`, so existing hair/blink classification continues to read `from`.
 Larger depth draws behind smaller depth. Numeric ties keep manifest order only
 inside one original run. Equal or null depths **across** runs are ambiguous
-and refused, even if the plan gives an order. A supplied plan reversing the
-mixed-run depth order is also refused; `--propose-plan` drafts the depth order.
+and refused, even if the plan gives an order. Plan-order checks compare only
+different original runs' layers whose original supports intersect (both alpha
+> 8, in the target-run canvas, without dilation). Disjoint supports have no
+visible order; intersecting bounding boxes alone do not establish overlap.
+Within one role band, larger depth must draw behind smaller depth. In a two-run
+plan, full-run rows follow the proposer's head-fallback roles before scalar
+depth: back hair, body, headwear/earwear, face, head details, front hair. Thus
+fallback headwear is after the body and before the face, and fallback front
+hair stays over the face even when its donor depth is larger. Roles come from
+source tags, never part names. Head-run rows and single-run plans keep scalar
+depth order. A supplied plan reversing an overlapping mixed-run pair under
+these rules is refused; `--propose-plan` drafts the same order. Null/tied depth
+ambiguity remains a refusal even for disjoint supports.
 Replacing a layer with hidden companion art is refused because independent
 hidden-art identity has not been declared. Active scalar depth sheets (`depth`
 opt-in or already bound sheets) are also refused: selecting donor art does not
@@ -4451,7 +4462,7 @@ those settings. Changing a config seed alone cannot change a no-config run.
 | <a id="ASSEMBLE_TAKE_TAG_IN_RUN"></a>`ASSEMBLE_TAKE_TAG_IN_RUN` | selected donor does not hold the tag | choose a tag present in that donor |
 | <a id="ASSEMBLE_TAKE_SUPPORT"></a>`ASSEMBLE_TAKE_SUPPORT` | selected layer has zero alpha > 8 pixels | choose a nonempty donor layer |
 | <a id="ASSEMBLE_TAKE_DEPTH_AMBIGUOUS"></a>`ASSEMBLE_TAKE_DEPTH_AMBIGUOUS` | different original runs have equal or null depths | use a run with distinct numeric depths; do not invent an inter-run tie order |
-| <a id="ASSEMBLE_TAKE_PLAN_ORDER"></a>`ASSEMBLE_TAKE_PLAN_ORDER` | supplied plan reverses mixed-run depth order | use the depth order drafted by `assemble --propose-plan` |
+| <a id="ASSEMBLE_TAKE_PLAN_ORDER"></a>`ASSEMBLE_TAKE_PLAN_ORDER` | supplied plan reverses an overlapping mixed-run pair: two-run full-layer head roles first, scalar depth within a role band (head-run and single-run rows use scalar depth); names the parts and support intersection | use the order drafted by `assemble --propose-plan`; fallback headwear follows the body and precedes the face, front hair follows the face; disjoint supports impose no plan-order constraint |
 | <a id="ASSEMBLE_TAKE_GEOMETRY"></a>`ASSEMBLE_TAKE_GEOMETRY` | missing target head, unequal run canvases or unequal original input dimensions | supply matching geometry; the check does not resize inputs |
 | <a id="ASSEMBLE_TAKE_META"></a>`ASSEMBLE_TAKE_META` | donor `meta.json` lacks a readable prompt ID or seed | retain the original run metadata |
 | <a id="ASSEMBLE_TAKE_INPUT"></a>`ASSEMBLE_TAKE_INPUT` | declared donor input PNG cannot be read | name its original PNG relative to the config |
