@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.82.1](https://github.com/rig-c/parts/compare/v1.82.0...v1.82.1) (2026-10-30)
+
+
+### Bug Fixes
+
+* **comfy:** seethrough reads config.seethrough settings under --config ([#860](https://github.com/rig-c/parts/issues/860)) ([#861](https://github.com/rig-c/parts/issues/861)) ([29fb705](https://github.com/rig-c/parts/commit/29fb705c3419c98e633fb9e084ffedb47ccea139))
+
 ## [1.82.0](https://github.com/rig-c/parts/compare/v1.81.0...v1.82.0) (2026-10-30)
 
 
