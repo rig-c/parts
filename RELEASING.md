@@ -29,7 +29,7 @@ Every push to `main` runs `release.yml`, which hands the new commits to
 - **That pull request is merged** → the merge is a push to `main`, so the
   workflow runs again: release-please tags `vX.Y.Z`, cuts the GitHub release,
   and the same run publishes.
-  A version with a hyphen (`1.0.0-rc.1`) is a prerelease: prereleases go out under the `rc` dist-tag; promotion to `latest` is the owner's, by `npm dist-tag add`, never automatic (both publish steps in `release.yml` read the version and pass `--tag rc` only then, `AL07`).
+  A version with a hyphen (`1.0.0-rc.1`) is a prerelease: prereleases go out under the `rc` dist-tag; promotion to `latest` is the owner's, by `npm dist-tag add`, never automatic (every publish step in `release.yml` reads the version and passes `--tag rc` only then, `AL07`).
 
 Squash-merge the release pull request, so the commit on `main` keeps its
 `release: vX.Y.Z` subject.
@@ -102,17 +102,18 @@ The two aliases are kept so an install or a dependant that names one keeps
 receiving every release. All three carry the same files; the one difference is
 the `name` line of `package.json`.
 
-- **Each alias is published from a tarball, after the gated publish, in the same
+- **Each alias is published from a tarball, after the tagged-tree gate, in the same
   job.** `release.yml` has one step per alias, *Publish the alias rig-parts* and
   the next, and each runs
   [`scripts/alias_tarball.ts`](scripts/alias_tarball.ts)` pack`, which packs the
-  checkout the gated publish just published from into the runner's temp
+  gated checkout into the runner's temp
   directory, rewrites the one `"name"` line of the extracted `package.json`,
   packs it again, and prints the path only after `compare` reads it as the
   package's files byte for byte but for that line. `npm publish <that tarball>`
   publishes it. The checkout is never modified.
 - **No lifecycle script runs on an alias, by design.** `npm publish <tarball>`
-  runs none, so `prepublishOnly` gates the first publish and only that one.
+  runs none, so `prepublishOnly` gates the canonical publish; recovery runs the
+  same gates explicitly when that name is skipped.
   Another gated publish would need the package renamed in the checkout, and the
   gate would then pass a modified tree rather than the tagged commit; each alias
   is that commit's files, which is what the gate's verdict is about.
@@ -231,7 +232,12 @@ A push re-run can cut a tag at a newer commit than its `GITHUB_SHA`. Before
 publishing, the workflow resolves the full tag ref through the commits API,
 requires a full commit SHA, and compares it with `GITHUB_SHA`. A mismatch
 refuses `PROVENANCE_SHA_MISMATCH`, names both SHAs, and leaves the tag cut.
-A normal matching push checks out the verified SHA.
+A normal matching push checks out the verified SHA. A dispatch likewise
+requires `GITHUB_REF` to equal `refs/tags/<tag>` (`RELEASE_DISPATCH_REF`),
+resolves that explicit tag ref to a full commit SHA, and requires the run SHA
+to match before any registry plan or publish. Both paths check out the verified
+SHA; a run/tag mismatch is refused, and checkout does not resolve the mutable
+tag again.
 
 The tag is published by a dispatch of the same workflow at the tag ref, so
 provenance names the tag commit:
@@ -243,16 +249,20 @@ gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z
 The `release` job then skips release-please — a dispatch never cuts a tag or a
 release — and its *Resolve the tag to publish* step checks the tag; every step
 after it is the push path's own (checkout of the tag, the gate in
-`prepublishOnly`, the publish under all three names, the registry
+`prepublishOnly`, publishing only registry-missing names, the registry
 confirmation), run under the same condition, from the same file. The resolve
 step refuses, each as one `::error::` line naming its rule:
 
 | refusal | when |
 | --- | --- |
 | `RELEASE_DISPATCH_INPUT` | the dispatch gave both `tag` and `version`, or neither |
+| `RELEASE_DISPATCH_REF` | the workflow run ref is not exactly `refs/tags/<tag>`; `main`, another tag and a same-named branch cannot publish the input tag |
+| `RELEASE_TAG_UNRESOLVED` | the explicit tag ref cannot be resolved to a full commit SHA |
+| `PROVENANCE_SHA_MISMATCH` | the run SHA differs from the resolved tag commit; the tag remains cut |
 | `RELEASE_TAG_FORM` | the tag is not `vX.Y.Z` (or `vX.Y.Z-<prerelease>`) |
 | `RELEASE_TAG_UNRELEASED` | the tag has no GitHub release: only a tag release-please cut is published |
-| `RELEASE_ALREADY_PUBLISHED` | the registry already serves that version of `@rig-c/parts` |
+| `RELEASE_ALREADY_PUBLISHED` | the registry already serves that version under all three names; nothing is missing |
+| `RELEASE_REGISTRY_QUERY` | a registry lookup fails without a structured npm `E404`, returns malformed data, or serves a different version than requested |
 | `RELEASE_TAG_BELOW_LATEST` | the version is below the registry's `latest` for `@rig-c/parts` (a prerelease is below its release) |
 
 **Two inputs, one per dispatch.** `tag` publishes a cut tag; `version` re-runs
@@ -262,14 +272,31 @@ as empty. The `confirm` job runs only on a dispatch with `version` and no `tag`;
 any other dispatch runs the `release` job, where the resolve step publishes a
 `tag` alone and refuses the rest.
 
-**Half-published.** The aliases are published after `@rig-c/parts`, in the same
-job, so a failure between those steps leaves the version up under the package
-name and missing under one alias or both. `RELEASE_ALREADY_PUBLISHED` reads the
-package name only, so such a version is refused rather than published again:
-a second `npm publish` of the package's version is refused by the registry
-anyway, and the alias steps run only after it. The missing alias version is
-published by hand from the tag with the tarball commands in *The first publish*
-(without provenance), or left for the next cut, which publishes every name.
+**Half-published.** A failure between publish steps can leave a version up
+under some names and missing under others. The tag resolver queries the exact
+version under all three names and records a snapshot publish flag for each; it refuses
+`RELEASE_ALREADY_PUBLISHED` only when every name serves it. Each publish step
+skips a name served in that snapshot before packing or publishing, so a missing alias can
+be recovered without republishing `@rig-c/parts`. With no names served, all
+three publish as on a fresh cut. This is a resolver-time snapshot, not a
+concurrent external publisher guarantee. The final confirmation still checks
+all three.
+
+Only a failed registry query carrying npm's structured `E404` means absent.
+Transport and authentication failures, malformed responses and a successful
+query returning another version refuse `RELEASE_REGISTRY_QUERY`; they never
+become permission to publish. The `latest` lookup uses the same rule. When the
+canonical name is skipped, its step explicitly runs `bun run typecheck && bun
+run lint && bun run selftest` on the tagged checkout before any missing alias
+is packed: skipping `npm publish` must not skip its `prepublishOnly` gates.
+
+**The workflow is at the tag.** Dispatch uses the `release.yml` stored at the
+selected tag, not the current file on `main`. Partial recovery is available
+only for tags containing this registry plan and skip logic. The immutable
+`v1.84.0` workflow still refuses once `@rig-c/parts` is served, so it cannot
+recover its missing alias under this contract. Landing this change does not
+repair that old tag. Do not move a tag or dispatch `main` to backfill it; an
+older workflow needs a separate authorized recovery route, or the next cut.
 
 **Below latest.** `npm publish` refuses to put `latest` on a version lower than
 the highest one published unless a `--tag` is given (read in the publish
