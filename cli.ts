@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { applyTakenLayers } from './src/takelayers.ts';
 /**
  * rig-parts — one painting and its See-through layers in, Spine-ready parts
  * and rig specs out, verified through rig-c.
@@ -1722,10 +1723,12 @@ function cmdAssemble(args: string[]): number {
     if (propose) {
       const target = writePath === undefined ? null : readConfigWriteTarget(writePath);
       const src = readSource(source);
-      const runs = readRuns(full, head);
-      const g = proposeFields(loadEarlyConfig(config, 'layers'), runs.single ? { w: src.width, h: src.height } : null);
+      const cfg = loadEarlyConfig(config, 'layers');
+      const runs = applyTakenLayers(readRuns(full, head), src, { ...cfg, assemble: { ...cfg.assemble, plan: undefined } }, config);
+      const g = proposeFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
       const geometry = { sourceW: src.width, sourceH: src.height, ...g };
       const proposal = runs.single ? proposeSinglePlan(runs.full, geometry) : proposePlan(runs.full, runs.head, geometry);
+      proposal.notes.unshift(...runs.notes);
       if (target !== null) {
         staged = stageConfigWrite(target, { kind: 'assemble-plan', plan: proposal.plan, extend_below_crop: proposal.extend_below_crop });
         staged.commit();

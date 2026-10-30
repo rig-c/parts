@@ -1,3 +1,4 @@
+import type { TakeLayers } from './takelayers.ts';
 import { paintingExtensionProblems, type PaintingExtension } from './paintingextension.ts';
 import { baseAnchorProblems, type BaseAnchor } from './baseanchor.ts';
 import type { DepthConfig } from './depthsheets.ts';
@@ -299,6 +300,8 @@ export interface AlternateSetConfig {
 }
 
 export interface Assemble {
+  /** Verified named replacements from another See-through run (#866). */
+  take?: TakeLayers[];
   /** Rig pixels per source pixel. */
   rig_scale: number;
   plan: PlanEntry[];
@@ -1619,7 +1622,7 @@ export interface EarlyConfig {
   depth?: DepthConfig;
   key: string;
   seethrough: SeeThrough;
-  assemble: { rig_scale: number; head_face_underfill?: boolean; yield_refused?: boolean; keep_under_occluders?: string[]; extend_painting?: PaintingExtension[] };
+  assemble: { rig_scale: number; take?: TakeLayers[]; head_face_underfill?: boolean; yield_refused?: boolean; keep_under_occluders?: string[]; extend_painting?: PaintingExtension[] };
 }
 
 /** What plain `assemble` reads: the early config plus the plan `--propose-plan` printed. */
@@ -1688,7 +1691,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
   if (door === 'layers') {
     if ('seethrough' in t) checkSeeThrough(c, t.seethrough);
     if ('assemble' in t) {
-      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting']);
+      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take']);
       if (a !== null) {
         if ('rig_scale' in a) c.number('config.assemble.rig_scale', a.rig_scale, 'positive');
         if ('head_face_underfill' in a && typeof a.head_face_underfill !== 'boolean') {
@@ -1696,6 +1699,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
         }
         checkKeepUnderOccluders(c, a, null);
         if ('extend_painting' in a) checkPaintingExtensions(c, a.extend_painting);
+        if ('take' in a) checkTakeLayers(c, a.take);
         if ('yield_refused' in a && typeof a.yield_refused !== 'boolean') {
           c.fail('CONFIG_FIELD_TYPE', 'config.assemble.yield_refused', `is ${show(a.yield_refused)}; true or false is required`);
         }
@@ -2433,9 +2437,29 @@ function checkKeepUnderOccluders(c: Check, a: Record<string, Json>, plan: readon
   });
 }
 
+function checkTakeLayers(c: Check, value: Json): void {
+  const at = 'config.assemble.take';
+  if (!c.array(at, value, false)) return;
+  const seen = new Set<string>();
+  (value as Json[]).forEach((v, i) => {
+    const p = `${at}[${i}]`, o = c.object(p, v, ['run', 'run_dir', 'st_input', 'tags'], []);
+    if (o === null) return;
+    if (o.run !== 'full' && o.run !== 'head') c.fail('CONFIG_FIELD_TYPE', p + '.run', '"full" or "head" is required');
+    for (const k of ['run_dir', 'st_input']) c.string(`${p}.${k}`, o[k]);
+    if (!c.array(p + '.tags', o.tags, true)) return;
+    (o.tags as Json[]).forEach((tag, j) => {
+      const reading = typeof tag === 'string' ? readLayerTag(tag) : null;
+      if (reading === null || reading.group === 'author') c.fail('CONFIG_TAG_KNOWN', `${p}.tags[${j}]`, 'a See-through tag is required; author layers do not carry a See-through role');
+      const key = `${String(o.run)}:${String(tag)}`;
+      if (seen.has(key)) c.fail('CONFIG_TAKE_UNIQUE', `${p}.tags[${j}]`, `names ${key} again; one donor per target tag is required`);
+      seen.add(key);
+    });
+  });
+}
+
 function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: string[]; patches: string[]; cuts: string[] } {
   const required = sectionRequired(door, 'assemble');
-  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting']);
+  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take']);
   if (a === null) return { parts: [], patches: [], cuts: [] };
   if (required.includes('plan') && !('plan' in a)) {
     c.fail('CONFIG_FIELD_PRESENT', 'config.assemble.plan', 'is absent and required; `assemble --propose-plan` prints one from the two runs — paste its plan and extend_below_crop into config.assemble');
@@ -2471,6 +2495,7 @@ function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: s
   }
   checkKeepUnderOccluders(c, a, parts);
   if ('extend_painting' in a) checkPaintingExtensions(c, a.extend_painting);
+  if ('take' in a) checkTakeLayers(c, a.take);
   if ('extend_below_crop' in a && c.array(`${p}.extend_below_crop`, a.extend_below_crop, false)) {
     (a.extend_below_crop as Json[]).forEach((entry, i) => {
       const at = `${p}.extend_below_crop[${i}]`;
