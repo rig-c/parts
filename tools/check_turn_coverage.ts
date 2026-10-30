@@ -1,4 +1,5 @@
 /** Missing declarations are warnings, never inferred roles or depth values. */
+import { runTurnOwnershipChecks } from './check_turn_ownership.ts';
 import { weightedSurfaceFixture } from '../fixtures/turn_surface.ts';
 import { block } from '../fixtures/rig.ts';
 import { parseConfig } from '../src/config.ts';
@@ -17,6 +18,7 @@ function fixture() {
   return f;
 }
 export function runTurnCoverageChecks(say: Say): void {
+  runTurnOwnershipChecks(say);
   const build = (f: ReturnType<typeof fixture>) => buildRig(parseConfig(f.config), f.parts, f.images);
   const defect = build(fixture());
   const warning = defect.turnWarnings?.find(p => p.code === 'RIG_TURN_BODY_UNCOVERED' && p.object === 'part "patch"');

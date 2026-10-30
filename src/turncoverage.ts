@@ -5,7 +5,7 @@ import { evaluateDeformTransform, type DeformTransform } from '@rig-c/core/src/d
 import { computeWorldTransforms, paintingToSetupPoint, toWorld } from './coords.ts';
 import { extendDepthSilhouette, sampleDepthFloat } from './depthsheets.ts';
 import type { Depth25DTurnOptions } from './turn.ts';
-import { turnTriangleCoordinates } from './turnfield.ts';
+import { rasterTurnTriangleOwnership, type TurnTriangleQuery } from './turnfield.ts';
 
 type Mesh = NonNullable<Depth25DTurnOptions['coverageMeshes']>[number];
 type Rig = Parameters<typeof computeWorldTransforms>[0];
@@ -99,6 +99,7 @@ export function warnUncoveredBodyTurn(
     return [0, 1].map(axis => c[axis] + u * (a[axis] - c[axis]) + v * (b[axis] - c[axis]));
   };
   const keyedBones = new Set(anim.tracks.flatMap(tr => tr.bone === undefined ? motion.groups?.[tr.group!] ?? [] : [tr.bone]));
+  const pairs: Array<{ part: Depth25DTurnOptions['parts'][number]; surface: string; source: Depth25DTurnOptions['parts'][number]; targets: Mesh[]; supports: Mesh[] }> = [];
   for (const part of opts.parts) {
     if (body.roles[part.name] !== undefined) continue;
     const targets = meshes.filter(m => m.part === part.name && torso(m));
@@ -107,28 +108,48 @@ export function warnUncoveredBodyTurn(
       if (role !== 'surface') continue;
       const source = opts.parts.find(p => p.name === surface)!;
       const supports = meshes.filter(m => m.part === surface);
-      const readings = [0, 1].map(() => ({ relative: 0, point: [0, 0], part: [0, 0], surface: [0, 0] }));
-      for (let y = Math.max(part.y, source.y); y < Math.min(part.y + part.h, source.y + source.h); y++) {
-        for (let x = Math.max(part.x, source.x); x < Math.min(part.x + part.w, source.x + source.w); x++) {
-          const px = x + 0.5, py = y + 0.5;
-          if (!opaque(part.name, px, py) || !opaque(surface, px, py)) continue;
-          for (const target of targets) for (const support of supports) {
-            const p = paintingToSetupPoint([px, py], target.canvas, target.canvas);
-            const a = turnTriangleCoordinates(positions.get(target)!, target.triangles ?? [], p[0], p[1]);
-            const b = turnTriangleCoordinates(positions.get(support)!, support.triangles ?? [], p[0], p[1]);
-            if (a === null || b === null) continue;
-            for (const [endpoint, reading] of readings.entries()) {
-              const av = sample(target, a, endpoint), bv = sample(support, b, endpoint);
-              const relative = Math.hypot(av[0] - bv[0], av[1] - bv[1]);
-              if (Math.hypot(...bv) > 0.000001 && relative > reading.relative) Object.assign(reading, { relative, point: [px, py], part: av, surface: bv });
-            }
+      pairs.push({ part, surface, source, targets, supports });
+    }
+  }
+  const requested = new Map<Mesh, Map<string, TurnTriangleQuery>>();
+  for (const { part, source, targets, supports } of pairs) {
+    for (let y = Math.max(part.y, source.y); y < Math.min(part.y + part.h, source.y + source.h); y++) {
+      for (let x = Math.max(part.x, source.x); x < Math.min(part.x + part.w, source.x + source.w); x++) {
+        if (!opaque(part.name, x + 0.5, y + 0.5) || !opaque(source.name, x + 0.5, y + 0.5)) continue;
+        for (const target of targets) {
+          const point = paintingToSetupPoint([x + 0.5, y + 0.5], target.canvas, target.canvas), key = `${point[0]},${point[1]}`;
+          for (const mesh of [target, ...supports]) {
+            let cells = requested.get(mesh);
+            if (cells === undefined) { cells = new Map(); requested.set(mesh, cells); }
+            if (!cells.has(key)) cells.set(key, { x: point[0], y: point[1], point });
           }
         }
       }
-      if (readings.some(r => r.relative > 0.000001)) opts.warnings.push({
-        code: 'RIG_TURN_BODY_UNCOVERED', object: `part "${part.name}"`,
-        detail: `overlaps moved body surface "${surface}" at alpha >= ${DRAWN_ALPHA} without a config.turn.body role; body_turn endpoints ${readings.map((r, i) => `t=${i === 0 ? times[0].t : times[times.length - 1].t}: part displacement [${r.part.join(', ')}], surface displacement [${r.surface.join(', ')}], relative ${r.relative} rig px at setup painting [${r.point.join(', ')}]`).join('; ')}; declare the intended body role and inspect both endpoints; no role or depth is inferred`,
-      });
     }
+  }
+  const ownership = new Map([...requested].map(([mesh, cells]) => [mesh, rasterTurnTriangleOwnership(positions.get(mesh)!, mesh.triangles ?? [], [...cells.values()])]));
+  for (const { part, surface, source, targets, supports } of pairs) {
+    const readings = [0, 1].map(() => ({ relative: 0, point: [0, 0], part: [0, 0], surface: [0, 0] }));
+    for (let y = Math.max(part.y, source.y); y < Math.min(part.y + part.h, source.y + source.h); y++) {
+      for (let x = Math.max(part.x, source.x); x < Math.min(part.x + part.w, source.x + source.w); x++) {
+        const px = x + 0.5, py = y + 0.5;
+        if (!opaque(part.name, px, py) || !opaque(surface, px, py)) continue;
+        for (const target of targets) for (const support of supports) {
+          const p = paintingToSetupPoint([px, py], target.canvas, target.canvas);
+          const a = ownership.get(target)?.at(p[0], p[1]) ?? null;
+          const b = ownership.get(support)?.at(p[0], p[1]) ?? null;
+          if (a === null || b === null) continue;
+          for (const [endpoint, reading] of readings.entries()) {
+            const av = sample(target, a, endpoint), bv = sample(support, b, endpoint);
+            const relative = Math.hypot(av[0] - bv[0], av[1] - bv[1]);
+            if (Math.hypot(...bv) > 0.000001 && relative > reading.relative) Object.assign(reading, { relative, point: [px, py], part: av, surface: bv });
+          }
+        }
+      }
+    }
+    if (readings.some(r => r.relative > 0.000001)) opts.warnings.push({
+      code: 'RIG_TURN_BODY_UNCOVERED', object: `part "${part.name}"`,
+      detail: `overlaps moved body surface "${surface}" at alpha >= ${DRAWN_ALPHA} without a config.turn.body role; body_turn endpoints ${readings.map((r, i) => `t=${i === 0 ? times[0].t : times[times.length - 1].t}: part displacement [${r.part.join(', ')}], surface displacement [${r.surface.join(', ')}], relative ${r.relative} rig px at setup painting [${r.point.join(', ')}]`).join('; ')}; declare the intended body role and inspect both endpoints; no role or depth is inferred`,
+    });
   }
 }
