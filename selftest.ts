@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runTurnUnitPrecedenceChecks } from './tools/check_turn_unit_precedence.ts';
 import { runTakeLayerChecks } from './tools/check_take_layers.ts';
 import { sourceCaseNames } from './scripts/selftest_prefixes.ts';
 import { runPaintingExtensionChecks } from './tools/check_painting_extension.ts';
@@ -6877,6 +6878,7 @@ function runRigSuite(): number {
   section('rig: bones, lattice meshes, weights, regions and the idle');
   const { say, bad } = counter();
   { const dir = temp('neck-draft-render'); try { runNeckDraftRenderChecks(dir, (name, ok, detail) => say(name, ok, detail, 'public source-first neck, mandatory Core gate and rendered extreme ROI')); } finally { rmSync(dir, { recursive: true, force: true }); } }
+  runTurnUnitPrecedenceChecks((name, ok, detail) => say(name, ok, detail, 'public unit-depth precedence controls; no forced own-sheet fallback'));
   { const dir = temp('turn-surface'); try { runTurnSurfaceChecks(dir, (name, ok, detail) => say(name, ok, detail, 'weighted surface depth offsets on synthetic flat blocks')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   { const dir = temp('turn-surface-stops'); try { runTurnSurfaceStopChecks(dir, (name, ok, detail) => say(name, ok, detail, 'declared stop aliases on public synthetic weighted surfaces')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   runTurnBlendChecks((name, ok, detail) => say(name, ok, detail, 'two scalar turn fields, independent analytic controls on a synthetic neck'));

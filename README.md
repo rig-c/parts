@@ -584,6 +584,18 @@ the interface it holds.
 MIT — see [LICENSE](LICENSE). Third-party terms: [NOTICE.md](NOTICE.md).
 
 
+## Depth-driven rigging
+
+Registered per-part depth sheets drive sampled head yaw/pitch through
+`turn.roles` and independent body yaw through `turn.body.roles`. Region
+surfaces use depth-bearing grids; authored weighted surfaces keep their
+skinning and receive per-influence deform offsets sampled at setup positions.
+These controls are exercised on public synthetic fixtures. Unit parts use the
+[documented depth precedence](docs/AUTHORING.md#unit-depth-precedence), so a
+recorded unit sheet does not by itself promise different turn geometry.
+See the [authoring contract](docs/AUTHORING.md#per-layer-depth-sheets-773)
+and the [getting-started guide](https://github.com/rig-c/getting-started).
+
 ### Per-layer depth input
 
 `config.depth` explicitly enables scalar input. Without it, `depth_filename`

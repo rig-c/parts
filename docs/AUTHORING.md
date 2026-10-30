@@ -6216,6 +6216,41 @@ art. An authored `parts.json` depth reference remains an active standalone
 `rig` declaration even without config opt-in: its file/size/color/opacity
 guards still apply. With binding inactive there is no added reference, file or
 legacy-byte change. #773 adds no image generation, geometry or motion model.
+
+### Unit depth precedence
+
+For `"unit"` roles, a part's sheet is recorded and validated but is not
+necessarily the depth used to move its bone. `turn.unitDepths` (and the body
+map `turn.body.unitDepths`, which inherits the head map when omitted) uses
+calibrated world depths. An explicit `0` is a value, not a request to sample.
+For each carried unit bone, the existing producer resolves depth in this order:
+
+1. `unitDepths.<part>`; when both names are present, the part entry wins.
+2. `unitDepths.<bone>`, using the carried bone's name.
+3. The primary surface's extended sheet at the unit's setup landmark. The
+   head group prefers the `face` surface, otherwise the first declared surface;
+   the body group uses its first declared surface. This depth is relative to
+   that surface's reference and the group's pivot. A unit mesh uses its child
+   landmarks, or its part centre when those landmarks are absent.
+4. Only if still unresolved, the unit's own sheet's opaque-art median. This
+   lower-level fallback is not an authoring switch: the documented config
+   reader requires a surface in each active group and supplies declared region
+   landmarks or a mesh sampling position. No documented configuration is
+   provided here to bypass primary sampling and select the own sheet instead.
+
+Outside or nonopaque primary support produces
+[`RIG_TURN_UNIT_DEPTH_SUPPORT`](#RIG_TURN_UNIT_DEPTH_SUPPORT), retains the
+extended primary sample, and does not select the own sheet. Removing all
+surfaces is refused by
+[`CONFIG_TURN_SURFACE_REQUIRED`](#CONFIG_TURN_SURFACE_REQUIRED).
+Consequently, removing `unitDepths` alone does not make an own-sheet change
+move a unit: primary-surface sampling can still mask it. In that case the own
+sheet remains in `depth_sheets.json` and its padded PNG, but is not consumed
+for that unit's turn geometry. Author an explicit calibrated `unitDepths`
+entry to control its rigid depth; change the primary surface only when that
+shared sampled field is what should change. A `"surface"` part's own sampled
+geometry is a separate consumer described above.
+
 ### Explicit source-derived waist pivot stage
 
 `withWaistPivot` is a pure, explicit candidate-stage operation over an already
