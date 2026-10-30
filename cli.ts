@@ -794,9 +794,9 @@ usage:
       outside the painting, by name.
 
   rig-parts comfy seethrough --image <png> --out <dir> [--host <url>]
-                    [--resolution 1024] [--steps 30] [--seed 42] [--offload] [--lama] [--nf4]
+                    [--resolution 1024] [--steps 30] [--seed 42] [--offload | --no-offload] [--lama] [--nf4]
                     [--prefix spine_parts] [--wait 1800] [--timeout 3600] [--poll 3]
-                    [--config <config.json> --depth-run <full|head>]
+                    [--config <config.json>] [--depth-run <full|head>]
       Optional. Run See-through on a ComfyUI box with the jtydhr88/ComfyUI-See-through
       wrapper installed, and write the wrapper form \`layers\` reads into <out>
       (absent or empty): layers.json, parts/<tag>.png, meta.json, previews/.
@@ -805,9 +805,14 @@ usage:
       queue (at most --wait s), polls /history (at most --timeout s), and
       writes <out> only after the layer reader accepts what came back.
       --lama turns the wrapper's LaMa inpainting on and --nf4 its nf4
-      quantisation; both are off unless given, as --offload is.
-      Depth hints are inactive by default. --config reads its optional depth
-      block; with that block --depth-run explicitly selects full or head.
+      quantisation; both are off unless given. Resolution, steps, seed and offload
+      use explicit flags first, then --config's seethrough block, then defaults
+      1024, 30, 42 and false. The resolved resolution must be an integer of at
+      least 64, including config values. --no-offload overrides a config's true; it cannot
+      be combined with --offload. Each value prints its source. No config is
+      discovered automatically: give --config <config.json> to use its settings.
+      Depth hints are inactive by default. --config also reads its optional
+      depth block; with that block --depth-run explicitly selects full or head.
       Active declared sheets are fetched and validated, never inferred.
 
   rig-parts comfy paint --config <config.json> --out <dir> [--host <url>]
@@ -1077,7 +1082,7 @@ const TAKES = {
   check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--requirements', '--set', '--environment', '--wind-band'], switches: ['--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes'] },
   loop: { valued: ['--frames', '--out'], switches: ['--palette'] },
   assemble: { valued: ['--source', '--full', '--head', '--config', '--out', '--seam', '--project', '--alt', '--write-config'], switches: ['--propose-plan'] },
-  'comfy seethrough': { valued: ['--image', '--out', '--resolution', '--steps', '--seed', '--prefix', '--host', '--wait', '--timeout', '--poll', '--config', '--depth-run'], switches: ['--offload', '--lama', '--nf4'] },
+  'comfy seethrough': { valued: ['--image', '--out', '--resolution', '--steps', '--seed', '--prefix', '--host', '--wait', '--timeout', '--poll', '--config', '--depth-run'], switches: ['--offload', '--no-offload', '--lama', '--nf4'] },
   'comfy paint': { valued: ['--config', '--out', '--seeds', '--seed0', '--host', '--wait', '--timeout', '--poll'], switches: [] },
   inputs: { valued: ['--source', '--config', '--out'], switches: [] },
   build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set', '--environment', '--wind-band'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes'] },
@@ -1768,12 +1773,11 @@ function comfyFlags(args: string[], command: 'comfy seethrough' | 'comfy paint')
   return { v, on };
 }
 
-/** An integer flag at or above `min`, or its stated default; a string is a usage error. */
-function intFlag(v: Map<string, string>, flag: string, fallback: number, min: number): number | string {
+/** The resolved flag or fallback must be an integer at or above `min`; a string is a usage error. */
+function intFlag(v: Map<string, string>, flag: string, fallback: number, min: number, fallbackSource = flag): number | string {
   const raw = v.get(flag);
-  if (raw === undefined) return fallback;
-  const n = Number(raw);
-  return Number.isInteger(n) && n >= min ? n : `${flag} ${raw} is not an integer of at least ${min}`;
+  const n = raw === undefined ? fallback : Number(raw);
+  return Number.isInteger(n) && n >= min ? n : `${raw === undefined ? fallbackSource : flag} ${raw ?? fallback} is not an integer of at least ${min}`;
 }
 
 /** A seconds flag above 0, or its stated default. */
@@ -1790,6 +1794,7 @@ async function cmdComfy(args: string[]): Promise<number> {
   const f = comfyFlags(rest, `comfy ${sub}`);
   if (typeof f === 'string') return usage(f);
   const { v, on } = f;
+  if (on.has('--offload') && on.has('--no-offload')) return usage('--offload and --no-offload cannot be combined');
   const wait = secondsFlag(v, '--wait', 1800);
   const timeout = secondsFlag(v, '--timeout', 3600);
   const poll = secondsFlag(v, '--poll', 3);
@@ -1803,7 +1808,8 @@ async function cmdComfy(args: string[]): Promise<number> {
     // config comfy paint cannot paint from is refused with no box named.
     const paint = sub === 'paint' ? loadPaintConfig(configPath as string) : null;
     const cfg = paint === null ? null : paint.config;
-    const depthConfig = sub === 'seethrough' && configPath !== undefined ? loadEarlyConfig(configPath, 'layers').depth : undefined;
+    const early = sub === 'seethrough' && configPath !== undefined ? loadEarlyConfig(configPath, 'layers') : undefined;
+    const depthConfig = early?.depth;
     const depthRun = v.get('--depth-run');
     if (sub === 'seethrough' && depthConfig !== undefined && depthRun !== 'full' && depthRun !== 'head') return usage('active config.depth requires --depth-run <full|head>; the source run is not inferred');
     if (sub === 'seethrough' && depthConfig === undefined && depthRun !== undefined) return usage('--depth-run requires --config with an explicit depth block');
@@ -1812,9 +1818,9 @@ async function cmdComfy(args: string[]): Promise<number> {
     if (sub === 'seethrough') {
       const image = v.get('--image');
       if (image === undefined) return usage('comfy seethrough needs --image <png>');
-      const resolution = intFlag(v, '--resolution', 1024, 64);
-      const steps = intFlag(v, '--steps', 30, 1);
-      const seed = intFlag(v, '--seed', 42, 0);
+      const resolution = intFlag(v, '--resolution', early?.seethrough.resolution ?? 1024, 64, 'config.seethrough.resolution');
+      const steps = intFlag(v, '--steps', early?.seethrough.steps ?? 30, 1);
+      const seed = intFlag(v, '--seed', early?.seethrough.seed ?? 42, 0);
       for (const x of [resolution, steps, seed]) if (typeof x === 'string') return usage(x);
       const prefix = v.get('--prefix') ?? 'spine_parts';
       if (!/^[A-Za-z0-9_-]+$/.test(prefix)) return usage(`--prefix ${prefix} is not letters, digits, "_" and "-"`);
@@ -1825,7 +1831,7 @@ async function cmdComfy(args: string[]): Promise<number> {
         resolution: resolution as number,
         steps: steps as number,
         seed: seed as number,
-        offload: on.has('--offload'),
+        offload: on.has('--offload') ? true : on.has('--no-offload') ? false : (early?.seethrough.offload ?? false),
         lama: on.has('--lama'),
         quant: on.has('--nf4') ? ('nf4' as const) : ('none' as const),
         wait: wait as number,
@@ -1833,7 +1839,10 @@ async function cmdComfy(args: string[]): Promise<number> {
         ...(depthConfig === undefined ? {} : { depth: { config: depthConfig, run: depthRun as 'full' | 'head', base: dirname(resolve(configPath as string)) } }),
       };
       console.log(`rig-parts comfy seethrough: ${image} -> ${out}`);
-      console.log(`  resolution ${run.resolution}, steps ${run.steps}, seed ${run.seed}, offload ${run.offload}, lama ${run.lama}, quant ${run.quant}; wait <= ${run.wait} s, timeout ${run.timeout} s`);
+      const source = (key: 'resolution' | 'steps' | 'seed' | 'offload'): string =>
+        v.has(`--${key}`) || (key === 'offload' && (on.has('--offload') || on.has('--no-offload'))) ? 'cli' : early === undefined ? 'default' : `config.seethrough.${key}`;
+      console.log(`  resolution ${run.resolution} (source=${source('resolution')}), steps ${run.steps} (source=${source('steps')}), seed ${run.seed} (source=${source('seed')}), offload ${run.offload} (source=${source('offload')}); lama ${run.lama}, quant ${run.quant}; wait <= ${run.wait} s, timeout ${run.timeout} s`);
+      if (early === undefined) console.log('  no config loaded; give --config <config.json> to use config.seethrough settings; explicit CLI flags override them');
       const r = await runSeeThrough(client, run, (l) => console.log(l));
       console.log(`  ${r.layers.length} layer(s) on a ${r.canvas[0]}x${r.canvas[1]} canvas, read back green by the layer reader: ${r.layers.join(', ')}`);
       console.log(`  wrote ${join(out, 'layers.json')}, meta.json, parts/ (${r.layers.length} PNG) and previews/ (${r.previews.length} PNG); GPU job ended`);
