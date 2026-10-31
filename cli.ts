@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { applyTakenLayers } from './src/takelayers.ts';
+import { applyDepth, prepareDepth } from './src/depthworkflow.ts';
 /**
  * rig-parts — one painting and its See-through layers in, Spine-ready parts
  * and rig specs out, verified through rig-c.
@@ -67,6 +68,16 @@ const LATER: ReadonlyArray<[string, string]> = [];
 const HELP = `rig-parts ${version()} — Spine-ready parts from one painting and its See-through layers
 
 usage:
+  rig-parts depth-prepare --parts <assembled-dir> --config <depth-recipe.json> --out <empty-dir>
+      Write per-part inference PNGs on neutral gray, upscaled and padded as
+      declared, plus a source-hashed manifest. No model is bundled or called.
+
+  rig-parts depth-apply --parts <assembled-dir> --manifest <manifest.json> --config <depth-recipe.json> --rig-config <config.json> --out <empty-dir>
+      Register floating-point JSON depth or signed normals, normalize inside
+      alpha >=128, apply declared median/relief and group near/zScale/pivot,
+      extend past alpha, and write parts, relocated config and depth-report.json.
+      Normals require one closed convex island. See AUTHORING for the schemas.
+
   rig-parts layers <dir | layers.json | file.psd>
       Read a See-through decomposition — the ComfyUI wrapper form (a directory
       holding layers.json and one PNG per layer) or an upstream .psd — and print
@@ -1077,6 +1088,8 @@ function printLayerTable(set: LayerSet): void {
  * no row; `layers` takes one positional path beside its flags (issue #359).
  */
 const TAKES = {
+  'depth-prepare': { valued: ['--parts', '--config', '--out'], switches: [] },
+  'depth-apply': { valued: ['--parts', '--manifest', '--config', '--rig-config', '--out'], switches: [] },
   layers: { valued: ['--export', '--template', '--canvas', '--full', '--source', '--config'], switches: [] },
   sheet: { valued: ['--source', '--layers', '--out', '--cell', '--cols'], switches: [] },
   rig: { valued: ['--config', '--parts', '--out', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
@@ -2181,6 +2194,27 @@ function cmdPainting(args: string[]): number {
   }
 }
 
+function cmdDepthPrepare(args: string[]): number {
+  const f = flags(args, 'depth-prepare', ['--parts', '--config', '--out']);
+  if (typeof f === 'string') return usage(f);
+  try {
+    const result = prepareDepth({ parts: f.get('--parts')!, config: f.get('--config')!, out: f.get('--out')! });
+    console.log(`depth-prepare: ${result.parts.length} part(s); manifest.json binds crop, padding and source/input hashes`);
+    return EXIT_OK;
+  } catch (error) { return printRefusal(error); }
+}
+
+function cmdDepthApply(args: string[]): number {
+  const f = flags(args, 'depth-apply', ['--parts', '--manifest', '--config', '--rig-config', '--out']);
+  if (typeof f === 'string') return usage(f);
+  try {
+    const result = applyDepth({ parts: f.get('--parts')!, manifest: f.get('--manifest')!, config: f.get('--config')!, rigConfig: f.get('--rig-config')!, out: f.get('--out')! });
+    for (const row of result.parts as Array<Record<string, unknown>>) console.log(`depth-apply: ${row.part} levels=${row.levels} clip=${row.clipFraction} reliefRigPixels=${row.reliefRigPixels} sign=${row.sign}`);
+    console.log('depth-apply: wrote registered parts, config.json and depth-report.json; run rig for the core gate');
+    return EXIT_OK;
+  } catch (error) { return printRefusal(error); }
+}
+
 function main(argv: string[]): number | Promise<number> {
   const [command, ...rest] = argv;
   if (command === undefined || command === '--help' || command === '-h' || command === 'help') {
@@ -2192,6 +2226,8 @@ function main(argv: string[]): number | Promise<number> {
     return EXIT_OK;
   }
   if (command === 'layers') return cmdLayers(rest);
+  if (command === 'depth-prepare') return cmdDepthPrepare(rest);
+  if (command === 'depth-apply') return cmdDepthApply(rest);
   if (command === 'sheet') return cmdSheet(rest);
   if (command === 'rig') return cmdRig(rest);
   if (command === 'propose') return cmdPropose(rest);
