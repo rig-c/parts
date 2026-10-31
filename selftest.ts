@@ -20,6 +20,7 @@ import { writeHybridFixture } from './fixtures/hybrid_limb.ts';
 import { AUTOMATIC_WRITERS as AW817, compactValueBaseline, pixelProvenance, provenanceAddsUp, provenanceLines } from './src/provenance.ts';
 import { runTurnBlendChecks } from './tools/check_turn_blend.ts';
 import { runTurnOverlapChecks } from './tools/check_turn_overlap.ts';
+import { runTurnRollChecks } from './tools/check_turn_roll.ts';
 import { runTurnSurfaceChecks } from './tools/check_turn_surface.ts';
 import { runTurnSurfaceStopChecks } from './tools/check_turn_surface_stops.ts';
 import { runBaseAnchorChecks } from './tools/check_base_anchor.ts';
@@ -6885,6 +6886,7 @@ function flatFormLine(r: FlatFormRender | string): string {
 function runRigSuite(): number {
   section('rig: bones, lattice meshes, weights, regions and the idle');
   const { say, bad } = counter();
+  runTurnRollChecks((name, ok, detail) => say(name, ok, detail, 'report-only head roll; fixed public separation limit and analytic planted angles'));
   { const dir = temp('neck-draft-render'); try { runNeckDraftRenderChecks(dir, (name, ok, detail) => say(name, ok, detail, 'public source-first neck, mandatory Core gate and rendered extreme ROI')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   runTurnUnitPrecedenceChecks((name, ok, detail) => say(name, ok, detail, 'public unit-depth precedence controls; no forced own-sheet fallback'));
   { const dir = temp('turn-surface'); try { runTurnSurfaceChecks(dir, (name, ok, detail) => say(name, ok, detail, 'weighted surface depth offsets on synthetic flat blocks')); } finally { rmSync(dir, { recursive: true, force: true }); } }

@@ -116,6 +116,18 @@ rules that make the contract:
 - **`turn`** (issue #251) adds a control bone `turn` under `root` that nothing
   keys, and carries each part in `depths` by `(pivot − depth) / (pivot − nearest
   depth)` of its x. Without the field no byte of any output moves.
+  A declared head turn (`depths` or `roles`) reports `RIG_TURN_HEAD_ROLL`
+  when the absolute setup eye-line roll exceeds the limit displayed as
+  18.485385 degrees
+  (issue #903). This empirical limit is the midpoint of the measured public
+  control maximum, 4.864514 degrees, and `three-quarter`,
+  32.106256 degrees (the comparison uses the unrounded midpoint). The warning
+  names the face/eye parts, the eye
+  bones, signed roll and limit. It is report-only: no refusal, field, pose or
+  emitted-byte change. No head turn, a body-only turn, or an unreadable eye
+  line adds no warning; unreadable retains the existing face-axis reason.
+  See [Head roll before a declared turn](AUTHORING.md#head-roll-before-a-declared-turn)
+  for the measurement scope and its limits.
 - **`scene`** (issue #242) declares the painting a scene — the figure and what
   is round it — and takes no field: `{}`. With it `assemble` reads the
   recomposite inside the figure (the union of the full run's layers at alpha
