@@ -540,3 +540,9 @@ encoding, convexity sign and refusal remedies are in
 calls these stages; no-config builds retain their existing behavior and bytes.
 Group numbers and unit depths are explicit; no provider or absolute scale is
 inferred. A new depth stage never replaces Core's rig gate.
+`relief` is an explicit rig-pixel value, not an implicit width multiplier.
+Part-width and head-referenced calibrations are authored recipe choices;
+changing a calibration requires preparing its recipe again. Compare the same
+provider maps and preserve their provenance. Each report row names the part,
+declared relief, group `zScale` and clipping over original alpha>=128 support;
+it remains a measurement rather than a shape-quality gate.

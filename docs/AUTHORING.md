@@ -6682,6 +6682,26 @@ The trial's role relief/width ratios (face 0.1264803, front hair 0.1018772,
 back hair 0.0857722, ornament 0.0375868, garment 0.0990473) came from one
 head-turn demo's p5..p95 depth and part widths. They are measured starting
 points for declared proportions, not anatomical laws or default calibration.
+For a head-referenced calibration, declare
+`relief = referenceRoleRelief * targetFaceWidth / referenceFaceWidth`, using
+the assembled target face width and the same declared reference head measure
+for every role. This keeps head relief on one scale when a hair silhouette
+is much wider than the face. In contrast, `roleRatio * targetPartWidth`
+increases relief with that silhouette while the group's `zScale` stays fixed.
+An ornament narrower than its reference can gain relief under the head rule;
+inspect it as well as the widest part. The command derives neither rule:
+write the resulting rig-pixel `relief` explicitly in each recipe entry.
+
+Compare calibrations on identical prepared inputs and numeric maps, with the
+same medians, group pivot and `zScale`; only the declared relief changes.
+Read each named report row's `relief`, `zScale` and `clipFraction` before
+judging its render. The clipping denominator is every original part pixel
+with alpha >=128, including boundary support, never the padded input area.
+A low clipped fraction does not establish shape quality. Inspect setup,
+both yaw endpoints and their difference at native scale, then enlarge the
+same pixels with nearest-neighbour sampling. Neither clipping nor agreement
+with a reference map substitutes for that inspection.
+
 The owner's preference for per-part volume is subjective provenance, not an
 automated quality conclusion. Model licence posture remains the owner's choice.
 
