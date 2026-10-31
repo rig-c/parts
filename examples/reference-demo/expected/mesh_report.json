@@ -15,7 +15,7 @@
   ],
   "max_influences": 4,
   "mean_influences": 3.52,
-  "art_coverage": 1.0,
+  "art_coverage": 1,
   "grid": 36
  },
  {
@@ -27,8 +27,8 @@
    "earring"
   ],
   "max_influences": 1,
-  "mean_influences": 1.0,
-  "art_coverage": 1.0,
+  "mean_influences": 1,
+  "art_coverage": 1,
   "grid": 5
  },
  {
@@ -42,7 +42,7 @@
   ],
   "max_influences": 2,
   "mean_influences": 1.88,
-  "art_coverage": 1.0,
+  "art_coverage": 1,
   "grid": 5
  },
  {
@@ -65,7 +65,7 @@
   ],
   "max_influences": 4,
   "mean_influences": 3.74,
-  "art_coverage": 1.0,
+  "art_coverage": 1,
   "grid": 36
  },
  {
@@ -79,13 +79,13 @@
   ],
   "max_influences": 2,
   "mean_influences": 1.76,
-  "art_coverage": 1.0,
+  "art_coverage": 1,
   "grid": 16
  },
  {
   "part": "sleeves",
-  "vertices": 160,
-  "triangles": 234,
+  "vertices": 159,
+  "triangles": 232,
   "hull": 84,
   "bones": [
    "chest",
@@ -98,7 +98,7 @@
   ],
   "max_influences": 4,
   "mean_influences": 3.64,
-  "art_coverage": 1.0,
+  "art_coverage": 1,
   "grid": 24
  },
  {
@@ -113,7 +113,7 @@
   ],
   "max_influences": 3,
   "mean_influences": 2.5,
-  "art_coverage": 1.0,
+  "art_coverage": 1,
   "grid": 13
  },
  {
@@ -132,7 +132,7 @@
   ],
   "max_influences": 4,
   "mean_influences": 3.8,
-  "art_coverage": 1.0,
+  "art_coverage": 1,
   "grid": 12
  }
 ]

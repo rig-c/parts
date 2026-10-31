@@ -43,14 +43,14 @@
       "maxX": 318.00003808688587,
       "maxY": 1200.00001779268
      },
-     "pose_sha256": "af944d4c003648156a0d520371e8d28261b0cb8ea3e78b87f62cea3efdd17d5e"
+     "pose_sha256": "97037cc83c98805fe7ead4ad73172d03094fe182372c045177fdc4ab6b86c009"
     }
    ]
   },
   "denominator_px": 1011712,
   "auto_frame_raw": {
-   "mean": 0.2345606013594274,
-   "display_mean": 0.235,
+   "mean": 0.23382830321041861,
+   "display_mean": 0.234,
    "denominator_px": 868224,
    "px_over_40": 2,
    "px_over_80": 0,
@@ -66,7 +66,7 @@
    }
   },
   "whole": {
-   "mean": 0.000022733742408906884,
+   "mean": 0.00002668743674089069,
    "display_mean": 0,
    "denominator_px": 1011712,
    "px_over_40": 0,
@@ -92,8 +92,8 @@
       "hair_back",
       "earring"
      ],
-     "whole_sample_px": 804,
-     "scope_sample_px": 804,
+     "whole_sample_px": 802,
+     "scope_sample_px": 802,
      "inherited_sample_px": 0
     },
     {
@@ -137,8 +137,8 @@
       "hair_back",
       "topwear"
      ],
-     "whole_sample_px": 26124,
-     "scope_sample_px": 26124,
+     "whole_sample_px": 26348,
+     "scope_sample_px": 26348,
      "inherited_sample_px": 0
     },
     {
@@ -182,8 +182,8 @@
       "topwear",
       "sleeves"
      ],
-     "whole_sample_px": 16623,
-     "scope_sample_px": 16623,
+     "whole_sample_px": 16399,
+     "scope_sample_px": 16399,
      "inherited_sample_px": 0
     },
     {
@@ -299,8 +299,8 @@
       "face",
       "eyewhite_l"
      ],
-     "whole_sample_px": 42,
-     "scope_sample_px": 42,
+     "whole_sample_px": 43,
+     "scope_sample_px": 43,
      "inherited_sample_px": 0
     },
     {
@@ -326,8 +326,8 @@
       "face",
       "lash_l"
      ],
-     "whole_sample_px": 134,
-     "scope_sample_px": 134,
+     "whole_sample_px": 135,
+     "scope_sample_px": 135,
      "inherited_sample_px": 0
     },
     {
@@ -335,8 +335,8 @@
       "eyewhite_l",
       "lash_l"
      ],
-     "whole_sample_px": 109,
-     "scope_sample_px": 109,
+     "whole_sample_px": 107,
+     "scope_sample_px": 107,
      "inherited_sample_px": 0
     },
     {
@@ -478,8 +478,8 @@
    "single_art": [
     {
      "part": "hair_back",
-     "whole_sample_px": 116048,
-     "scope_sample_px": 116048,
+     "whole_sample_px": 116050,
+     "scope_sample_px": 116050,
      "inherited_sample_px": 0
     },
     {
@@ -608,9 +608,9 @@
    },
    {
     "part": "sleeves",
-    "root_rig_px": 0.831,
-    "tip_rig_px": 3.921,
-    "ratio": 4.721
+    "root_rig_px": 0.824,
+    "tip_rig_px": 3.922,
+    "ratio": 4.762
    }
   ],
   "ratio_floor": 1.4725
@@ -666,7 +666,7 @@
  "TEXTURE_STRETCH": {
   "status": "PASS",
   "meshes": 8,
-  "triangles": 2478,
+  "triangles": 2476,
   "frames": 49,
   "severity": 1.388,
   "severity_ceiling": 1.926544,
@@ -735,11 +735,11 @@
    },
    {
     "slot": "sleeves",
-    "triangles": 234,
+    "triangles": 232,
     "max_ratio": 1.254,
-    "max_at": "triangle 225 (vertices 157 158 159), edge 158-159, idle frame 5",
+    "max_at": "triangle 223 (vertices 156 157 158), edge 157-158, idle frame 5",
     "min_ratio": 0.764,
-    "min_at": "triangle 225 (vertices 157 158 159), edge 158-159, idle frame 29",
+    "min_at": "triangle 223 (vertices 156 157 158), edge 157-158, idle frame 29",
     "severity": 1.309
    },
    {
@@ -780,7 +780,7 @@
  },
  "RECOMPOSITE_HOLES": {
   "status": "REPORTED",
-  "error_px": 10340,
+  "error_px": 8644,
   "uncovered_error_px": 1564,
   "hole_count": 453,
   "largest": {
@@ -794,7 +794,7 @@
  },
  "config": {
   "path": "examples/reference-demo/config.json",
-  "sha256": "e554ac162e70d5d337a90239e1db25a0547c45d5cf7b14e5172f08eacd6884be"
+  "sha256": "e1b569d472bb28c9c04de3487007869a852a9e96965c115504d5bb8b86c5191f"
  },
  "PASS": true
 }
