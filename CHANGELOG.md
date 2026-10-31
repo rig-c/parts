@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/rig-c/parts/compare/v1.88.0...v2.0.0) (2026-10-31)
+
+
+### ⚠ BREAKING CHANGES
+
+* **core:** @rig-c/parts 2.0.0 requires @rig-c/core 3.0.0, which removes the legacy `--profile spine-html` alias and `./*.ts` deep-path wildcard exports in favour of named export entries.
+
+### Features
+
+* **core:** move to @rig-c/core 3.0.0 and release parts 2.0.0 ([#911](https://github.com/rig-c/parts/issues/911)) ([a0205f1](https://github.com/rig-c/parts/commit/a0205f1049faa2ebf4dc3cbc3e04309ca6c191ce))
+
 ## [1.88.0](https://github.com/rig-c/parts/compare/v1.87.0...v1.88.0) (2026-10-31)
 
 
