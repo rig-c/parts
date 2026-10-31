@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.86.0](https://github.com/rig-c/parts/compare/v1.85.0...v1.86.0) (2026-10-31)
+
+
+### Features
+
+* **check:** report joint contact over motion from core ([#895](https://github.com/rig-c/parts/issues/895)) ([1638b0c](https://github.com/rig-c/parts/commit/1638b0c5ac6d6f7354f29a2ef445fdc097e52139))
+
 ## [1.85.0](https://github.com/rig-c/parts/compare/v1.84.0...v1.85.0) (2026-10-30)
 
 
