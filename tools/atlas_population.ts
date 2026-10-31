@@ -34,7 +34,7 @@
  *   and sequence frames included. `check`'s pack line prints rigc's figure for
  *   the same thing.
  * - **covered %**: Σ bounds w·h over Σ page area. rigc's pack line "covered" is
- *   the same sum (`rig-c/src/atlas.ts`, `occupancy`), rounded the same way
+ *   the same sum (rig-c's `occupancy`), rounded the same way
  *   (on the two public examples under `--pack-shape polygon`, rig-c 2.1.3 and 2.10.1,
  *   both read 95.0 %). It is a sum of rectangles, not a union: under
  *   `--pack-shape polygon` a region may sit inside a mesh region's rectangle
@@ -61,7 +61,7 @@
  *   crop, and this column read spine-core instead). So a build row's block is
  *   held to spine-core's `Skeleton.getBounds` at the setup pose (default skin,
  *   `Physics.reset`): each of the four must equal rigc's own writing of that
- *   bound, `headerBoxNumber` (`rig-c/src/compile.ts`: the 1e-6 grid at
+ *   bound, `headerBoxNumber` (`@rig-c/core/compile`: the 1e-6 grid at
  *   float32), with nothing tolerated past it, and a block that does not is
  *   refused as `BUILD_HEADER_IS_SETUP_BOUNDS`, quoting both boxes — which is
  *   also what a build from rigc before 2.2.0 gets, its header being the stage
@@ -102,7 +102,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { AtlasAttachmentLoader, Physics, Skeleton, SkeletonJson, TextureAtlas, Vector2 } from '@esotericsoftware/spine-core';
-import { headerBoxNumber } from '@rig-c/core/src/compile.ts';
+import { headerBoxNumber } from '@rig-c/core/compile';
 import { opaqueShare, SPINEBOY_YARDSTICK } from '../src/check.ts';
 import { readPng } from '../src/raster/png.ts';
 

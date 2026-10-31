@@ -14,7 +14,7 @@
  *   `computeWorldVertices` writes), and the idle's timelines.
  * - **dynamic**: wall time per frame over `--runs` runs of `--seconds` at
  *   `--fps`, after one warm-up run of every build that is not counted. A frame
- *   is the calls `rig-c/src/render.ts` makes to pose one, minus
+ *   is the calls `@rig-c/core/render` makes to pose one, minus
  *   rasterising: `state.update`, `state.apply`, `skeleton.update`,
  *   `updateWorldTransform(Physics.update)`, then `computeWorldVertices` for
  *   every mesh the draw order shows. The runs are interleaved — run 1 of every

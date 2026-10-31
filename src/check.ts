@@ -170,9 +170,9 @@ import {
   type SeamPair,
   stretchRequirementLine,
 } from './requirements.ts';
-import { RIG_BONE_INHERIT, type RigSpec as RigcRigSpec } from '@rig-c/core/src/rig.ts';
-import { expandStops } from '@rig-c/core/src/stop.ts';
-import { ENVIRONMENT_SPEC, EnvironmentError, environmentResponse, readEnvironmentSchedule } from '@rig-c/core/src/environment.ts';
+import { RIG_BONE_INHERIT, type RigSpec as RigcRigSpec } from '@rig-c/core/rig';
+import { expandStops } from '@rig-c/core/stop';
+import { ENVIRONMENT_SPEC, EnvironmentError, environmentResponse, readEnvironmentSchedule } from '@rig-c/core/environment';
 import { ART_ALPHA } from './mesh.ts';
 import { connectedComponents } from './raster/components.ts';
 import { alphaComposite } from './raster/composite.ts';
@@ -329,8 +329,8 @@ export const DEFAULT_PACK_MODE: PackMode = { pageEdges: DEFAULT_PAGE_EDGES, pack
 /**
  * The profile every rigc build this package runs is gated under. rig-c 2.50.0
  * renamed `spine-html` to `rig-play` and runs the same rules under it; the old
- * name is accepted only until a later minor release and prints a deprecation
- * line on stderr (selftest `CK20` holds every stage's build to the new name).
+ * name was removed in rig-c 3.0.0 (selftest `CK20` holds every stage's build to
+ * the new name and verifies the old one is refused).
  */
 export const GATE_PROFILE = 'rig-play';
 
@@ -5309,7 +5309,7 @@ function environmentRefused(given: string, sentence: string): PartsError {
 
 /**
  * `--environment <file>` read once, before anything is built (issue #538): the file's bytes hashed and handed to
- * rig-c's own reader, `readEnvironmentSchedule` (`rig-c/src/environment.ts`), which refuses every malformed schedule
+ * rig-c's own reader, `readEnvironmentSchedule` (`@rig-c/core/environment`), which refuses every malformed schedule
  * — a `spec` other than {@link ENVIRONMENT_SPEC}, a key it does not read, no step, a `t` that is not finite, at or
  * above 0 and after the step before, a `wind` or `gravity` that is not a pair of finite numbers, a step that changes
  * nothing — by entry, field, the value found and the value required. Nothing here reads the schedule's meaning: its

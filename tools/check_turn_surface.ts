@@ -4,6 +4,7 @@ import { runTurnUnitChecks } from './check_turn_units.ts';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { weightedSurfaceEarFixture, weightedSurfaceFixture } from '../fixtures/turn_surface.ts';
 import { explicitFixture, explicitIslandsFixture } from '../fixtures/explicitmesh.ts';
 import { block, rigImages, rigParts } from '../fixtures/rig.ts';
@@ -80,7 +81,7 @@ export function runTurnSurfaceChecks(dir: string, say: Say): void {
   const out = join(dir, 'weighted-surface'); mkdirSync(join(out, 'images'), { recursive: true });
   for (const [name, text] of rigOutputTexts(built, null)) writeFileSync(join(out, name), text);
   for (const [name, image] of built.images) writePng(join(out, 'images', name), image);
-  const gate = spawnSync(process.execPath, [resolve('node_modules/@rig-c/core/cli.ts'), 'build', '--rig', join(out, 'rig.json'), '--motion', join(out, 'motion.json'), '--out', join(out, 'built'), '--profile', 'rig-play'], { encoding: 'utf8', maxBuffer: 1 << 26 });
+  const gate = spawnSync(process.execPath, [fileURLToPath(import.meta.resolve('@rig-c/core/cli')), 'build', '--rig', join(out, 'rig.json'), '--motion', join(out, 'motion.json'), '--out', join(out, 'built'), '--profile', 'rig-play'], { encoding: 'utf8', maxBuffer: 1 << 26 });
   writeFileSync(join(out, 'gate.log'), gate.stdout + gate.stderr);
   const skeleton = gate.status === 0 ? JSON.parse(readFileSync(join(out, 'built/skeleton.json'), 'utf8')) as { animations: Record<string, { attachments?: Record<string, Record<string, Record<string, { deform: Array<{ vertices?: number[] }> }>>> }> } : null;
   say('WTS04_CORE_ROUNDTRIP_GATE_ACCEPTS_WEIGHTED_DEFORM', gate.status === 0 && skeleton?.animations.turn.attachments?.default?.hair_back?.hair_back?.deform.some(k => (k.vertices?.length ?? 0) > 72) === true, `Core exit ${gate.status}; weighted deform is longer than one pair per UV; ${gate.status === 0 ? 'mandatory rig-play gate accepted' : gate.stdout + gate.stderr}`);

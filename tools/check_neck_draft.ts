@@ -173,10 +173,11 @@ export function runNeckDraftReviewChecks(dir: string, say: Say): void {
 }
 
 import { mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { buildRig } from '../src/rig.ts';
 import { compile } from '@rig-c/core/compile';
-import { parseRigSpec } from '@rig-c/core/src/rig.ts';
-import { parseMotionSpec } from '@rig-c/core/src/motion.ts';
+import { parseRigSpec } from '@rig-c/core/rig';
+import { parseMotionSpec } from '@rig-c/core/motion';
 import { createHash } from 'node:crypto';
 import { newRaster } from '../src/raster/types.ts';
 import { writePng } from '../src/raster/png.ts';
@@ -209,7 +210,7 @@ export function produceNeckDraftPacket(dir: string): void {
   for (const [kind, config, parts] of [['old', p.original, p.old], ['clean', p.config, join(p.clean, 'rig')]]) {
     const rig = join(dir, `${kind}-rig`), candidate = join(dir, `${kind}-candidate`);
     command([resolve('cli.ts'), 'rig', '--config', config, '--parts', parts, '--out', rig]);
-    command([resolve('node_modules/@rig-c/core/cli.ts'), 'build', '--rig', join(rig, 'rig.json'), '--motion', join(rig, 'motion.json'), '--out', candidate, '--profile', 'rig-play', '--pack']);
+    command([fileURLToPath(import.meta.resolve('@rig-c/core/cli')), 'build', '--rig', join(rig, 'rig.json'), '--motion', join(rig, 'motion.json'), '--out', candidate, '--profile', 'rig-play', '--pack']);
   }
 }
 
@@ -220,7 +221,7 @@ export function runNeckDraftRenderChecks(dir: string, say: Say): void {
 }
 
 export function measureNeckDraftPacket(dir: string, say: Say): void {
-  const renderCli = process.env.RIG_PARTS_EXTREMES_RIGC ?? resolve('node_modules/@rig-c/core/cli.ts');
+  const renderCli = process.env.RIG_PARTS_EXTREMES_RIGC ?? fileURLToPath(import.meta.resolve('@rig-c/core/cli'));
   const help = spawnSync(process.execPath, [renderCli, 'render', '--help'], { encoding: 'utf8' });
   if (help.status !== 0) throw new Error(`render help refused: ${help.stderr}`);
   const hasExtremes = help.stdout.includes('--extremes');

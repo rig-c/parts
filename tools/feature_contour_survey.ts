@@ -44,7 +44,7 @@ import {
   skinningEnvelopeBone,
   traceAlphaOutline,
 } from '@rig-c/core/mesh';
-import { Plate, type RGBA } from '@rig-c/core/tools/plate.ts';
+import { Plate, type RGBA } from '@rig-c/core/plate';
 import { autoReductionInput, autoSource, autoVerdict, runReduction, terminationText } from '../src/automesh.ts';
 import { type BoneEntry, type CharacterConfig, loadConfig, type AutoSpec } from '../src/config.ts';
 import { type ContourMesh, contourMesh, type ContourRegion, growSilhouette } from '../src/contour.ts';

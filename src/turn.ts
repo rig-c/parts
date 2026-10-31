@@ -38,7 +38,7 @@ import { sampleTurnTriangleField, turnTriangleCoordinates } from './turnfield.ts
 import { PartsError } from './errors.ts';
 import { f32 } from '@rig-c/core/compile';
 import { warnUncoveredBodyTurn } from './turncoverage.ts';
-import { evaluateDeformTransform } from '@rig-c/core/src/deformgen.ts';
+import { evaluateDeformTransform } from '@rig-c/core/deformgen';
 
 /**
  * The layers that ride on the face (issue #271): See-through makes no depth

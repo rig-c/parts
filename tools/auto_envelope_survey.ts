@@ -49,7 +49,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { MeshReductionInput, SkinningEnvelopeBone } from '@rig-c/core/mesh';
-import { Plate, type RGBA } from '@rig-c/core/tools/plate.ts';
+import { Plate, type RGBA } from '@rig-c/core/plate';
 import { type Reducer, type ReductionResult, runReduction } from '../src/automesh.ts';
 import { deriveEnvelope, type EnvelopeBasis, type EnvelopeDerivation, type EnvelopeStop, lowestCommonAncestor, residualRow, withSkinning } from '../src/autoenvelope.ts';
 import { findRigc } from '../src/check.ts';

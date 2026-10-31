@@ -4,7 +4,7 @@
  *
  * Pure: bytes in, bytes out, no clock, no file system. The only thing it leans
  * on is `node:zlib` for DEFLATE, which is also all rig-c's own PNG codec
- * (`rig-c/tools/plate.ts`) leans on; the chunk framing and CRC are that
+ * (`@rig-c/core/plate`) leans on; the chunk framing and CRC are that
  * codec's `pngChunk`, so there is one PNG chunk writer in the dependency tree,
  * not two.
  *
@@ -34,7 +34,7 @@
  * bitstream encoder, and none ships here.
  */
 import { deflateSync } from 'node:zlib';
-import { PNG_SIGNATURE, pngChunk } from '@rig-c/core/tools/plate.ts';
+import { PNG_SIGNATURE, pngChunk } from '@rig-c/core/plate';
 import { histogram, mapToPalette, medianCut, type PaletteError, paletteError, type Rgba } from './palette.ts';
 import type { Raster } from './raster/types.ts';
 

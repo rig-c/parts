@@ -50,8 +50,8 @@ import { fixedSkeletonProblems, type FixedSkeleton } from './artjoints.ts';
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { CompileError } from '@rig-c/core/src/errors.ts';
-import { splitRigSkin, type RigSkin } from '@rig-c/core/src/rig.ts';
+import { CompileError } from '@rig-c/core/errors';
+import { splitRigSkin, type RigSkin } from '@rig-c/core/rig';
 import { cropToSpineY } from './coords.ts';
 import type { Problem } from './errors.ts';
 import { refuseIfAny } from './errors.ts';

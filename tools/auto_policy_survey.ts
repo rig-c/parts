@@ -58,8 +58,8 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { type AttemptRecord, type MeshReductionInput, reduceMeshWith, writeMeshQualityReport } from '@rig-c/core/mesh';
-import { artRastersOf, stepRastersOf } from '@rig-c/core/src/meshrasters.ts';
-import { Plate, type RGBA } from '@rig-c/core/tools/plate.ts';
+import { artRastersOf, stepRastersOf } from '@rig-c/core/meshrasters';
+import { Plate, type RGBA } from '@rig-c/core/plate';
 import { DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE } from '../src/assemble.ts';
 import { type ReductionResult, runReduction } from '../src/automesh.ts';
 import { assembleStage, checkStage, rigStage } from '../src/build.ts';

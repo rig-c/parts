@@ -30,7 +30,7 @@ import { createHash } from 'node:crypto';
 import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { Plate, type RGBA } from '@rig-c/core/tools/plate.ts';
+import { Plate, type RGBA } from '@rig-c/core/plate';
 import type { AlphaMask } from '@rig-c/core/mesh';
 import { DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE } from '../src/assemble.ts';
 import { AUTO_THRESHOLD } from '../src/automesh.ts';

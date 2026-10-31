@@ -131,7 +131,7 @@ import { explicitWeightRows, regionBone, type RegionSpec } from './config.ts';
  */
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { drawText, GLYPH_H } from '@rig-c/core/tools/font5x7.ts';
+import { drawText, GLYPH_H } from '@rig-c/core/font5x7';
 import { type BoneEntry, type CharacterConfig, type ConfigConstraint, type ConfigStop, contourRegionsOf, deriveBustRegions, type Limb, type MeshSpec, type PartBinding, parseConfig, type Point, type Segment, type SkeletonSections, turnRidersByBone } from './config.ts';
 export { contourRegionsOf, deriveBustRegions };
 import { computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toWorld } from './coords.ts';

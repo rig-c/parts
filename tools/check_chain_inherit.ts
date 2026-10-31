@@ -14,7 +14,7 @@ import { PartsError } from '../src/errors.ts';
 import { withAnimations } from '../src/motion.ts';
 import { encodePngBytes } from '../src/raster/png.ts';
 import { buildRig, rigJsonText, OFFSET_PLACES, PAD, type RigOutput } from '../src/rig.ts';
-import { RIG_BONE_INHERIT } from '@rig-c/core/src/rig.ts';
+import { RIG_BONE_INHERIT } from '@rig-c/core/rig';
 
 const ROOT = resolve(import.meta.dir, '..');
 /** Report every dedicated control through its caller's own tally. Throws on an execution failure. */

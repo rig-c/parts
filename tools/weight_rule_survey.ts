@@ -35,7 +35,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { Plate, type RGBA } from '@rig-c/core/tools/plate.ts';
+import { Plate, type RGBA } from '@rig-c/core/plate';
 import { type CharacterConfig, loadConfig } from '../src/config.ts';
 import { growSilhouette } from '../src/contour.ts';
 import { localInfluences, type WeightRegion } from '../src/localweights.ts';

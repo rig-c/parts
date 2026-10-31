@@ -1,9 +1,9 @@
 /** Material-contact controls: synthetic rectangles with a hand-derived quarter-turn. */
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Plate } from '@rig-c/core/tools/plate.ts';
-import { seamsOf } from '@rig-c/core/src/seam.ts';
-import type { Piece, AttachmentRest } from '@rig-c/core/src/render_shared.ts';
+import { Plate } from '@rig-c/core/plate';
+import { seamsOf } from '@rig-c/core/seam';
+import type { Piece, AttachmentRest } from '@rig-c/core/render-shared';
 import { readMotionSeams, motionSeamLine, motionSeamPairs, barsNotMet } from '../src/check.ts';
 import { motionSeamLines } from '../src/build.ts';
 import type { PartsFile } from '../src/parts.ts';

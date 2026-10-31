@@ -71,8 +71,8 @@ import { explicitWeightRows, regionBone } from './config.ts';
  * Pure but for reading the three files it is handed.
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { CompileError } from '@rig-c/core/src/errors.ts';
-import { parseRigSpec, RIG_SPEC_VERSION, type RigBone as RigcBone, type RigSpec as RigcSpec, splitRigSkin } from '@rig-c/core/src/rig.ts';
+import { CompileError } from '@rig-c/core/errors';
+import { parseRigSpec, RIG_SPEC_VERSION, type RigBone as RigcBone, type RigSpec as RigcSpec, splitRigSkin } from '@rig-c/core/rig';
 import { type ConfigConstraint, CONSTRAINT_FOLLOWS, contourRegionsOf, parseConfig, parseProposalSections, type Point, ROOT_BONE, type SkeletonSections, weightsABone } from './config.ts';
 import { computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toWorld } from './coords.ts';
 import { PartsError, type Problem, refuseIfAny } from './errors.ts';

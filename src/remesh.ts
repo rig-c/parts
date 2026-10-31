@@ -75,8 +75,8 @@ import { applyMeshEdit, type DeltaApplied, type DeltaPlant, deltaSourceProblems,
 import { DEFAULT_IDLE_KEYS, type IdleKeys, type MeshAttachment, meshBoundBones, rigJsonText, type RigSpec } from './rig.ts';
 import { readRequirements } from './requirements.ts';
 import { pyRound } from './round.ts';
-import { type RigSpec as RigcRigSpec } from '@rig-c/core/src/rig.ts';
-import { expandStops } from '@rig-c/core/src/stop.ts';
+import { type RigSpec as RigcRigSpec } from '@rig-c/core/rig';
+import { expandStops } from '@rig-c/core/stop';
 
 /** The provenance file's spec. */
 export const REMESH_SPEC = 'rig-parts-remesh/1';
