@@ -1,3 +1,4 @@
+import { type SeamRule } from './seamrule.ts';
 import { edgeLength } from './length.ts';
 import { materialSource, type MaterialSource, materialRows, polygonMaterialEdges, type MaterialRow, type MaterialEdge, type PlacedArt } from './cutmaterial.ts';
 import { unionTakenSources } from './takesource.ts';
@@ -188,16 +189,7 @@ export const SILHOUETTE_BORDER = 8;
 /** `figureSilhouette`: a pixel is figure where it differs from that median by more than this, max channel. */
 export const SILHOUETTE_LIMIT = 40;
 
-export type SeamRule = 'near-white' | 'silhouette';
-export const SEAM_RULES: readonly SeamRule[] = ['near-white', 'silhouette'];
-
-/**
- * The seam rule a run uses when none is named. Set by measurement, not taste:
- * the silhouette rule ships as the default only if it lowers the error pixel
- * count on every oracle character without raising mean |d| on any
- * (ORACLE_assemble.md, *faithful vs silhouette*).
- */
-export const DEFAULT_SEAM_RULE: SeamRule = 'near-white';
+export { DEFAULT_SEAM_RULE, SEAM_RULES, type SeamRule } from './seamrule.ts';
 
 /**
  * Where a layer may take the painting's pixel (`projectSource`). `core` is the

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runSeamConfigChecks } from './tools/check_seam_config.ts';
 import { runJointContactChecks } from './tools/check_joint_contact.ts';
 import { runSetupPaintingChecks } from './tools/check_setup_painting.ts';
 import { runCutMaterialChecks } from './tools/check_cut_material.ts';
@@ -1987,6 +1988,10 @@ function runPsdSuite(): number {
 function runConfigSuite(): number {
   section('config: the character config loader');
   const { say, bad } = counter();
+  const seamDir = temp('seam-config-905');
+  try { runSeamConfigChecks(seamDir, (name, ok, detail) => say(name, ok, detail, 'issue #905: CLI > config > unchanged default, with real readers and CLI controls')); }
+  finally { rmSync(seamDir, { recursive: true, force: true }); }
+
   const explicitDir = temp('explicit-658');
   try { runExplicitMeshChecks(explicitDir, (name, ok, detail) => say(name, ok, detail, 'issue #658: guarded accepted payload transfer, not regeneration')); }
   finally { rmSync(explicitDir, { recursive: true, force: true }); }
