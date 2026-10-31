@@ -18,7 +18,7 @@
  */
 import { existsSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { drawText, GLYPH_H } from '@rig-c/core/tools/font5x7.ts';
+import { drawText, GLYPH_H } from '@rig-c/core/font5x7';
 import { type Problem, refuseIfAny } from './errors.ts';
 import { type LayerSet, OPAQUE_ALPHA_ABOVE, readLayers } from './layers.ts';
 import { readParts } from './parts.ts';

@@ -41,7 +41,7 @@ import type { DepthConfig } from './depthsheets.ts';
  *
  * Coordinates in `bones`, `meshes` and `motion` are RIG pixels, y down, origin
  * top-left — the parts' own space. The y flip to Spine happens once, in
- * `rig-c/src/transform.ts` (see `src/coords.ts`), when the rig is built.
+ * `@rig-c/core/transform` (see `src/coords.ts`), when the rig is built.
  *
  * 🔗 **`constraints` is rig-c's, verbatim (issue #92).** An optional list
  * of constraint objects in rig-c's own rig-spec shape (`RigConstraint`:
@@ -91,7 +91,7 @@ import type { DepthConfig } from './depthsheets.ts';
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { RIG_BONE_INHERIT, RIG_SKIN_CONSTRAINT_KEYS, type RigBoneInherit, type RigConstraint, type RigSkinConstraintKey, type RigStop } from '@rig-c/core/src/rig.ts';
+import { RIG_BONE_INHERIT, RIG_SKIN_CONSTRAINT_KEYS, type RigBoneInherit, type RigConstraint, type RigSkinConstraintKey, type RigStop } from '@rig-c/core/rig';
 import { pyRound } from './round.ts';
 import { motionSeamProblems, type MotionSeamDeclaration } from './motionseams.ts';
 import { REQUIREMENTS_SPEC } from './requirements.ts';

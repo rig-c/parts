@@ -34,7 +34,7 @@ import { spawnSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
-import { Plate, type RGBA } from '@rig-c/core/tools/plate.ts';
+import { Plate, type RGBA } from '@rig-c/core/plate';
 import { DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE } from '../src/assemble.ts';
 import { build, type BuildResult, RIGC_MODEL_DOCUMENT } from '../src/build.ts';
 import { DEFAULT_PAGE_EDGES, findRigc, type RigcRunner } from '../src/check.ts';

@@ -11,7 +11,7 @@
  *   feathered blend weight).
  *
  * Nothing here knows about Spine's y-up world. The only conversion between the
- * two lives in `rig-c/src/transform.ts`, re-exported by `src/coords.ts`.
+ * two lives in `@rig-c/core/transform`, re-exported by `src/coords.ts`.
  */
 export interface Raster {
   readonly width: number;

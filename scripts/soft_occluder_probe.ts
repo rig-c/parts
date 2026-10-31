@@ -1,6 +1,6 @@
 /** Reproducible synthetic #825 pixel attribution. Run on the render pool. */
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { assemble, projectSource, checkGeometry, layerToRig, sourceInRig, planRanks } from '../src/assemble.ts';
@@ -33,7 +33,7 @@ console.log(JSON.stringify({ band: SOFT_BAND, changed: rows.filter(p => p.change
 
 if (process.argv.includes('--render')) {
   const run = (args: string[]) => {
-    const r = spawnSync('bun', [resolve('node_modules/@rig-c/core/cli.ts'), ...args], { encoding: 'utf8' });
+    const r = spawnSync('bun', [fileURLToPath(import.meta.resolve('@rig-c/core/cli')), ...args], { encoding: 'utf8' });
     writeFileSync(join(out, `command-${command++}.log`), `${JSON.stringify(args)}\n${r.stdout}${r.stderr}`);
     if (r.status !== 0) throw new Error(`rigc ${args[0]} exit ${r.status}: ${r.stderr || r.stdout}`);
   };

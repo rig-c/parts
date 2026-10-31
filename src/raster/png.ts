@@ -12,14 +12,14 @@
  * refuses by name rather than misreading. So adding `pngjs` would have been a
  * second codec for the same bytes, and two codecs are two answers.
  *
- * 🔌 **The deep path is the interface.** rig-c's `exports` map carries
- * `./*.ts`, so `rig-c/tools/plate.ts` is how a consumer reaches the codec
- * and it is what the installed package resolves. If a rigc release narrows the
- * map to omit these paths, this import is what breaks, by name, and
- * `bun run smoke` is where that is seen first.
+ * 🔌 **The named entries are the interface.** `@rig-c/core/plate` and
+ * `@rig-c/core/png` are how a consumer reaches the codec and what the
+ * installed package resolves. If a rigc release moves or drops these entries,
+ * this import is what breaks, by name, and `bun run smoke` is where that is
+ * seen first.
  */
-import { assertPng } from '@rig-c/core/src/png.ts';
-import { decodePng, encodePng } from '@rig-c/core/tools/plate.ts';
+import { assertPng } from '@rig-c/core/png';
+import { decodePng, encodePng } from '@rig-c/core/plate';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { type FloatImage, newFloatImage, newRaster, type Raster, RasterError } from './types.ts';
 

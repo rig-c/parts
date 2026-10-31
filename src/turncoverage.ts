@@ -1,7 +1,7 @@
 /** Report missing body-turn declarations from shown setup alpha and emitted fields. */
 import { f32 } from '@rig-c/core/compile';
-import { DRAWN_ALPHA } from '@rig-c/core/src/passthrough.ts';
-import { evaluateDeformTransform, type DeformTransform } from '@rig-c/core/src/deformgen.ts';
+import { DRAWN_ALPHA } from '@rig-c/core/passthrough';
+import { evaluateDeformTransform, type DeformTransform } from '@rig-c/core/deformgen';
 import { computeWorldTransforms, paintingToSetupPoint, toWorld } from './coords.ts';
 import { extendDepthSilhouette, sampleDepthFloat } from './depthsheets.ts';
 import { edgeLength } from './length.ts';

@@ -235,7 +235,7 @@ import { RIDER_RIG, RIDER_STRIP, riderParts, riderRecipe } from './fixtures/ride
 import { type ClothRecipes, draftTrees, INFLUENCE_RADIUS_CELLS, linkRows } from './src/cloth.ts';
 import { BARE_CROWN_PARTS, CUT_BASE_PARTS, CUT_PARTS, eyeParts, FACELESS_PARTS, IRIS_NO_EYEWHITE_PARTS, LEVEL_FRINGE_PARTS, LONG_ROBE_PARTS, LONG_ROBE_RIG, MIXED_STRAND_PARTS, NO_BROW_PARTS, NO_EYE_PARTS, ONE_EYEWHITE_PARTS, PROPOSE_PARTS, PROPOSE_RIG, type ProposeFixturePart, STRAND_PARTS, STRAND_RIG, TILTED_FRINGE_PARTS, TWO_LOCK_PARTS, writeProposeFixture } from './fixtures/propose.ts';
 // The runtime's own posing, for the one control that measures where a mesh's pixels go (PR14): a second opinion about a weighted vertex is what a measurement must not carry.
-import { type BoneSnapshot, type Frame, loadPosable, type Mesh, sampleAnimation, sampleSetupPose } from '@rig-c/core/src/render.ts';
+import { type BoneSnapshot, type Frame, loadPosable, type Mesh, sampleAnimation, sampleSetupPose } from '@rig-c/core/render';
 import { loadCandidate as loadRootCandidate, throughPoser as throughRootPoser, sampleAnimation as sampleRootAnimation } from '@rig-c/core/render-shared';
 import { CANVAS, flatName, layerRaster, minimalConfig, WRAPPER_LAYERS, writePsdFixture, writeWrapperFixture } from './fixtures/synthetic.ts';
 import { MANNEQUIN_BLOCKS, MANNEQUIN_FIGURE_PX, MANNEQUIN_KEYPOINTS, MANNEQUIN_PARTS, MANNEQUIN_PLAN, MANNEQUIN_SIDE, writeMannequinFixture } from './fixtures/mannequin.ts';
@@ -450,7 +450,7 @@ import {
   withoutPhysics,
 } from './src/check.ts';
 import { chainsLeftBehind, clothConfigEdits, writtenClothConfig } from './src/clothconfig.ts';
-import { EnvironmentError, readEnvironmentSchedule } from '@rig-c/core/src/environment.ts';
+import { EnvironmentError, readEnvironmentSchedule } from '@rig-c/core/environment';
 import { baseTagOf, blinkFigures, breathHeat, heatField, type BoneTrack, type BoneWorld, chainToward, edgeLength, frameBox, type GeometryPose, halfTravels, type MeshRest, stretchFigures, stretchSeverity, lagStep, readSine, setupToFrame, stillReading, stillTolerance, STILL_ROUNDINGS, SWING_TAGS, ulpOf } from './src/instruments.ts';
 import {
   aimLine,
@@ -491,8 +491,8 @@ import { blobId, checkExampleInputs, type Copier, FETCH_RECORD, recordText, runS
 import { BLINK, blinkHoldMisses, CONTROL_SUFFIX, framesInside, IDLE_FPS, type MotionKey, type MotionSpec, sineTrack, TIME_SLACK } from './src/motion.ts';
 import { type BoneEntry, type CharacterConfig, CONFIG_REQUIRES, type ConfigDoor, CONSTRAINT_BONE_FIELDS, type ContourRegionSpec, contourRegionsOf, type Cut, DEFAULT_BUST_ALPHA, DEFAULT_BUST_CLEARANCE, deriveBustRegions, type Extend, type Generation, isDoorKey, type Limb, loadClothConfig, loadConfig, loadConfigAndAnimations, loadEarlyConfig, loadPaintConfig, type Patch, type PlanEntry, type Point, parseConfig, parseEarlyConfig, parseProposalSections, type SkeletonSections, turnMovingPartPair } from './src/config.ts';
 import { BUST_FIT_ALPHA, BUST_FIT_CLEARANCE, BUST_RESIDUAL_BOUND_PX, CALIBRATED_BUST_FIXTURES, midlineFallbackCleavage } from './fixtures/bust.ts';
-import { RIG_BONE_INHERIT, RIG_KEYS, RIG_SKIN_CONSTRAINT_KEYS } from '@rig-c/core/src/rig.ts';
-import { expandStops } from '@rig-c/core/src/stop.ts';
+import { RIG_BONE_INHERIT, RIG_KEYS, RIG_SKIN_CONSTRAINT_KEYS } from '@rig-c/core/rig';
+import { expandStops } from '@rig-c/core/stop';
 import { applyFaceSurfaceDeform, cylinderYawDx, DEFAULT_HEAD_TURN_PARTS, EAR_DEPTH_RANGE, evalYawFaceSurface, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, FACE_RATED_BAND, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, headTurnFraction, headTurnPivot, resolveFaceDeformFractions, TURN_BONE, TURN_RIDER_APART, turnFractions, turnRiderDepth, turnTwin, turnConstraintName, type TurnSpec, turnSurfaceRadius } from './src/turn.ts';
 import { type BoneTransform, computeExactFrameTransforms, cropToSpineY, toWorld } from './src/coords.ts';
 import { artMask, contourFit, type ContourMesh, contourMesh, FAINT_ALPHA, contourOutline, type ContourParams, type ContourRegion, contourTopologyProblems, delaunayViolations, GRID, growSilhouette, inCircle, keepPoints, MAX_SIDE, marginDisc, outlineInRegions, withinMarginSquared } from './src/contour.ts';
@@ -557,7 +557,7 @@ import { affineFit, boneHeat, capFloor, columnsOf, footprintRegion, HEAT as WX_H
 import { exampleTotals, figuresOf, gridFrame, policyEcho, TrialLedger, trialPolicy } from './tools/production_trial.ts';
 import { assertUnchanged, crumbsLeft, lossOf, lossTotal, maskMd5, strayCleared } from './tools/production_trial_stray.ts';
 import { ART_ARM_ALPHA, ARMS, armSpec, clearFaint, finalPassOf, rowOf, specPaths, strayFor } from './tools/auto_policy_survey.ts';
-import { IRR_OFFSET } from '@rig-c/core/src/core/animation.ts';
+import { IRR_OFFSET } from '@rig-c/core/core';
 import type { AutoSpec, ConfigConstraint, LatticeMeshSpec, Segment } from './src/config.ts';
 import { DEFAULT_LIMITS, meshLimits, MIN_WEIGHT } from './src/weights.ts';
 import type { AutoMeshReport, MeshReport } from './src/rig.ts';
@@ -3678,7 +3678,7 @@ function runProposedRigScaleConfigControls(say: (name: string, ok: boolean, deta
 }
 
 /**
- * Issue #404: `config.stops`, rig-c's `RigStop` declarations (`rig-c/src/stop.ts`) carried in the character config and
+ * Issue #404: `config.stops`, rig-c's `RigStop` declarations (`@rig-c/core/stop`) carried in the character config and
  * proposal sections. CF490 loads an entry with explicit `links`, `lower`, `note` and `x-` and one that defaults `links`
  * to its chain's links, at both `parseConfig` and `parseProposalSections`, and refuses each planted structural or
  * resolution fault once by name at both doors.
@@ -7057,7 +7057,7 @@ function runRigSuite(): number {
       const err = refusals(() => rigStage({ config: dead.config, parts: dead.parts, out: join(dir, 'dead', 'out') }, () => ({ status: 1, out }), deadScratch, () => {}));
       return err === null ? 'no refusal' : err.problems.map((q) => `${q.code}: ${q.object} — ${q.detail}`).join(' / ');
     };
-    const importError = "error: Cannot find module '@esotericsoftware/spine-core' from '/x/node_modules/@rig-c/core/src/render.ts'";
+    const importError = `error: Cannot find module '@esotericsoftware/spine-core' from '/x/node_modules/${RIGC_PACKAGE}/${['src', 'render.ts'].join('/')}'`;
     const died = deadRun(`${importError}\n\nBun v1.3.11 (macOS arm64)\n`);
     const headerOnly = deadRun('rigc build /x/rig.json\n  ..    rig    /x/rig.json\n  ..    motion /x/motion.json\n  ..    22 part page(s):\n');
     const silent = deadRun('');
@@ -18508,31 +18508,31 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       'determinism is a contract: the same rig must write the same check.json, heat map and gate file, or no diff of them means anything',
     );
 
-    // rig-c 2.50.0 renamed the gate's profile from spine-html to rig-play. The former name still builds, under the
-    // same rules, with a deprecation line on stderr, until a later minor release drops it — which a fresh install
-    // inside this package's range can resolve. Every rigc build a stage runs takes its profile from packedBuildArgs
-    // or REFERENCE_BUILD_ARGS; each is run here as the stages run it and must leave stderr without that line. The
-    // planted build passes the former name and must print it, so the reader is shown to see the line when it is there.
-    const profileBuild = (name: string, args: readonly string[]): { status: number | null; deprecated: string[] } => {
+    // rig-c 2.50.0 renamed the gate's profile from spine-html to rig-play, and rig-c 3.0.0 removed the former name
+    // (exit 2, USAGE). Every rigc build a stage runs takes its profile from packedBuildArgs or REFERENCE_BUILD_ARGS;
+    // each is run here as the stages run it and must exit 0 without any deprecation line on stderr. The planted build
+    // passes the removed name and must be refused at the CLI door (exit 2, naming --profile "spine-html").
+    const profileBuild = (name: string, args: readonly string[]): { status: number | null; stderr: string; deprecated: string[] } => {
       const r = spawnSync(suiteRigc(), ['build', '--rig', join(rig, 'rig.json'), '--motion', join(rig, 'motion.json'), '--out', join(dir, 'profile', name, 'build'), ...args], { encoding: 'utf8', maxBuffer: 1 << 26 });
-      return { status: r.status, deprecated: (r.stderr ?? '').split('\n').filter((l) => /deprecated/i.test(l)) };
+      const stderr = (r.stderr ?? '').trim();
+      return { status: r.status, stderr, deprecated: stderr.split('\n').filter((l) => /deprecated/i.test(l)) };
     };
     const packedProfile = profileBuild('packed', packedBuildArgs(DEFAULT_PACK_MODE));
     const referenceProfile = profileBuild('reference', REFERENCE_BUILD_ARGS);
     const formerProfile = profileBuild('former', ['--profile', 'spine-html', ...packedBuildArgs(DEFAULT_PACK_MODE).slice(2)]);
     const profileText = (r: { status: number | null; deprecated: string[] }): string => `exit ${r.status}, ${r.deprecated.length === 0 ? 'no deprecated line' : `"${r.deprecated[0]}"`}`;
     say(
-      'CK20_EVERY_PROFILE_THIS_PACKAGE_PASSES_TO_RIGC_IS_CURRENT_AND_THE_FORMER_NAME_IS_SEEN_DEPRECATED',
+      'CK20_EVERY_PROFILE_THIS_PACKAGE_PASSES_TO_RIGC_IS_CURRENT_AND_THE_FORMER_NAME_IS_REFUSED',
       packedBuildArgs(DEFAULT_PACK_MODE)[1] === GATE_PROFILE &&
         REFERENCE_BUILD_ARGS[1] === GATE_PROFILE &&
         packedProfile.status === 0 &&
         packedProfile.deprecated.length === 0 &&
         referenceProfile.status === 0 &&
         referenceProfile.deprecated.length === 0 &&
-        formerProfile.status === 0 &&
-        formerProfile.deprecated.some((l) => l.includes('--profile spine-html')),
-      `profile ${GATE_PROFILE}; the packed build (${packedBuildArgs(DEFAULT_PACK_MODE).join(' ')}): ${profileText(packedProfile)}; the reference build (${REFERENCE_BUILD_ARGS.join(' ')}): ${profileText(referenceProfile)}; planted, --profile spine-html: ${profileText(formerProfile)}`,
-      'rig-c accepts the former profile name only until a later minor release and says so on stderr, which no stage prints; a package still passing it builds green today and is refused by name on the release that drops it, so the deprecation is read here, where it can be fixed before then. The planted half goes red when rig-c drops the former name: that is the rename finished, and the plant is retired with it',
+        formerProfile.status === 2 &&
+        formerProfile.stderr.includes('--profile "spine-html"'),
+      `profile ${GATE_PROFILE}; the packed build (${packedBuildArgs(DEFAULT_PACK_MODE).join(' ')}): ${profileText(packedProfile)}; the reference build (${REFERENCE_BUILD_ARGS.join(' ')}): ${profileText(referenceProfile)}; planted, --profile spine-html: exit ${formerProfile.status}, "${formerProfile.stderr.split('\n')[0] ?? ''}"`,
+      'rig-c 2.50.0 renamed spine-html to rig-play and rig-c 3.0.0 removed the former profile name (exit 2); every build this package runs uses GATE_PROFILE and passes, while the removed name is refused at the CLI door',
     );
 
     const loopRig = join(dir, 'loop');
@@ -21240,7 +21240,7 @@ function runEnvironmentCheckCases(say: (name: string, ok: boolean, detail: strin
         gust.text !== null &&
         gust.text === gust2.text,
       `no flag: exit ${none.status}, environment key ${'environment' in fig(none.text)}; initial world [1, 0] / [0, 1]: exit ${initial.status}, check.json minus environment ${withoutEnv(initial.text) === none.text ? 'byte-identical' : 'DIFFERS'}, ${idleHashes(initial.dir).length} idle PNG(s) ${JSON.stringify(idleHashes(initial.dir)) === JSON.stringify(noneHashes) ? 'identical' : 'DIFFER'}, record ${JSON.stringify(initialRecord === undefined ? null : { ...initialRecord, path: '<schedule>' })}; calm wind [0, 0]: TEXTURE_STRETCH ${stretchOf(none.text)} -> ${stretchOf(calm.text)}, TIP_OVER_ROOT ratio ${tipOf(none.text)} -> ${tipOf(calm.text)}; the gust twice: check.json ${gust.text !== null && gust.text === gust2.text ? 'byte-identical' : 'DIFFERS'}`,
-      "issue #538 bar 1, as the card's own world says it: rigc's initial world is wind [1, 0] and gravity [0, 1] (rig-c/src/environment.ts), so the still schedule is the one stating it — wind [0, 0] is a calm the chains answer; the schedule reaches the renders and moves no byte the readings did not read, and without the flag no key is written",
+      "issue #538 bar 1, as the card's own world says it: rigc's initial world is wind [1, 0] and gravity [0, 1] (@rig-c/core/environment), so the still schedule is the one stating it — wind [0, 0] is a calm the chains answer; the schedule reaches the renders and moves no byte the readings did not read, and without the flag no key is written",
     );
     say(
       'CK515_A_GUST_CHANGES_THE_FOLD_AND_STRETCH_READINGS_AND_THE_LINE_AND_CHECK_JSON_NAME_ITS_DIGEST',
@@ -39457,12 +39457,79 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
     'determinism is a contract: a stage that read the clock or the network could not promise the same bytes twice',
   );
 
-  const importers = sources.filter(([, t]) => t.includes("'@rig-c/core/src/transform.ts'")).map(([f]) => f);
+  const importers = sources.filter(([, t]) => t.includes("'@rig-c/core/transform'")).map(([f]) => f);
   say(
     'TY07_ONLY_SRC_COORDS_IMPORTS_THE_Y_FLIP',
     importers.join(',') === 'src/coords.ts' && cropToSpineY(10, 100) === 90,
-    `importers of @rig-c/core/src/transform.ts: ${importers.join(', ') || 'none'}; cropToSpineY(10, 100) through the door = ${cropToSpineY(10, 100)}`,
+    `importers of @rig-c/core/transform: ${importers.join(', ') || 'none'}; cropToSpineY(10, 100) through the door = ${cropToSpineY(10, 100)}`,
     "rig-c forbids a second copy of its coordinate conversion; one door keeps every later stage on rigc's",
+  );
+
+  // TY39 — issue #910: @rig-c/core 3.0.0 removed `./*.ts` from its exports map. No deep @rig-c/core/... file path
+  // remains in the tree, and every @rig-c/core/... specifier in .ts sources resolves through a named entry in
+  // @rig-c/core's exports map. Deep paths are assembled in pieces here so this file is scanned like every other.
+  const rigcPkg39Path = join(ROOT, 'node_modules', RIGC_PACKAGE, 'package.json');
+  const rigcExports39 = existsSync(rigcPkg39Path)
+    ? ((JSON.parse(readFileSync(rigcPkg39Path, 'utf8')) as { exports?: Record<string, string> }).exports ?? {})
+    : {};
+  const allowedRigc39 = new Set<string>([
+    `${RIGC_PACKAGE}/package.json`,
+    ...Object.keys(rigcExports39)
+      .filter((k) => k.startsWith('./') && !k.includes('*'))
+      .map((k) => `${RIGC_PACKAGE}/${k.slice(2)}`),
+  ]);
+  const deepRigcRe39 = new RegExp(`${RIGC_PACKAGE}\\/(?:(?:src|tools)\\/[^\\s'"\`)]+|[^\\s'"\`)]*\\.ts\\b)|rig-c\\/(?:src|tools)\\/[^\\s'"\`)]+`);
+  const specRigcRe39 = new RegExp(`['"](\\@rig-c\\/core\\/[^'"]+)['"]`, 'g');
+  const deepRigcPathFaults = (files: ReadonlyArray<readonly [string, string]>, allowed: ReadonlySet<string>): string[] => {
+    const faults: string[] = [];
+    for (const [f, content] of files) {
+      if (f === 'CHANGELOG.md') continue;
+      const lines = content.split('\n');
+      lines.forEach((line, idx) => {
+        const hit = deepRigcRe39.exec(line);
+        if (hit !== null) {
+          faults.push(`${f}:${idx + 1} names deep path ${hit[0]}`);
+          return;
+        }
+        if (f.endsWith('.ts')) {
+          for (const m of line.matchAll(specRigcRe39)) {
+            if (!allowed.has(m[1])) faults.push(`${f}:${idx + 1} imports unexported ${m[1]}`);
+          }
+        }
+      });
+    }
+    return faults;
+  };
+  const deepFaults39 = deepRigcPathFaults(text, allowedRigc39);
+  const plantSrcDeep39 = `${RIGC_PACKAGE}/${['src', 'rig.ts'].join('/')}`;
+  const plantToolsDeep39 = `${RIGC_PACKAGE}/${['tools', 'plate.ts'].join('/')}`;
+  const plantCliDeep39 = `${RIGC_PACKAGE}/${['cli', 'ts'].join('.')}`;
+  const plantUnexported39 = `${RIGC_PACKAGE}/unexported-entry`;
+  const plants39 = [
+    deepRigcPathFaults([['src/plant.ts', `import { parseRigSpec } from '${plantSrcDeep39}';\n`]], allowedRigc39),
+    deepRigcPathFaults([['tools/plant.ts', `import { encodePng } from '${plantToolsDeep39}';\n`]], allowedRigc39),
+    deepRigcPathFaults([['docs/plant.md', `Read \`${plantCliDeep39}\` directly.\n`]], allowedRigc39),
+    deepRigcPathFaults([['src/plant.ts', `import { x } from '${plantUnexported39}';\n`]], allowedRigc39),
+    deepRigcPathFaults(
+      [
+        ['CHANGELOG.md', `* moved off ${plantSrcDeep39}\n`],
+        ['src/plant.ts', `import { parseRigSpec } from '${RIGC_PACKAGE}/rig';\n`],
+      ],
+      allowedRigc39,
+    ),
+  ];
+  say(
+    'TY39_NO_DEEP_RIG_C_CORE_FILE_PATHS_REMAIN_IN_THE_TREE',
+    !('./*.ts' in rigcExports39) &&
+      allowedRigc39.size > 1 &&
+      deepFaults39.length === 0 &&
+      plants39[0].join() === `src/plant.ts:1 names deep path ${plantSrcDeep39}` &&
+      plants39[1].join() === `tools/plant.ts:1 names deep path ${plantToolsDeep39}` &&
+      plants39[2].join() === `docs/plant.md:1 names deep path ${plantCliDeep39}` &&
+      plants39[3].join() === `src/plant.ts:1 imports unexported ${plantUnexported39}` &&
+      plants39[4].length === 0,
+    `${text.length} text file(s) scanned against ${allowedRigc39.size - 1} named export(s) in ${RIGC_PACKAGE} ('./*.ts' present: ${'./*.ts' in rigcExports39}): ${deepFaults39.length === 0 ? 'no deep path or unexported specifier' : deepFaults39.join('; ')}; planted: ${plants39.slice(0, 4).map((p) => p.join(', ') || 'MISSED').join(' | ')}; changelog + named entry -> ${plants39[4].join(', ') || 'quiet'}`,
+    'issue #910: @rig-c/core 3.0.0 removed `./*.ts` from its exports map, so every import and doc reference must use a named entry',
   );
 
   const declareCall = /(^|[^.\w$])declare\s*\(/;

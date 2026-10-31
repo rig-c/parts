@@ -17,7 +17,7 @@
  * report rather than carrying it.
  */
 import { type AttemptRecord, type MeshReductionInput, reduceMesh, reduceMeshWith, writeMeshQualityReport } from '@rig-c/core/mesh';
-import { artRastersOf, stepRastersOf } from '@rig-c/core/src/meshrasters.ts';
+import { artRastersOf, stepRastersOf } from '@rig-c/core/meshrasters';
 
 /** One reduction's vetoes: removal-phase attempts refused by the residual, by kind, and the post-pass's refusal when it names the residual. */
 export interface VetoTally {

@@ -8,10 +8,10 @@ import { buildRig } from '../src/rig.ts';
 import { writeParts } from '../src/parts.ts';
 import { readPng, writePng } from '../src/raster/png.ts';
 import { newRaster } from '../src/raster/types.ts';
-import { parseRigSpec } from '@rig-c/core/src/rig.ts';
-import { parseMotionSpec } from '@rig-c/core/src/motion.ts';
+import { parseRigSpec } from '@rig-c/core/rig';
+import { parseMotionSpec } from '@rig-c/core/motion';
 import { readModel, poseRawSetup, poseRawAnimation } from '@rig-c/core/core';
-import { loadCandidate } from '@rig-c/core/src/render_shared.ts';
+import { loadCandidate } from '@rig-c/core/render-shared';
 import { emittedUnitDepths, runTurnUnitPrecedenceChecks } from './check_turn_unit_precedence.ts';
 
 const [mode, input, output] = process.argv.slice(2);
