@@ -5233,6 +5233,7 @@ and stay absent).
 | <a id="RIG_TURN_SURFACE_MESH_BINDINGS"></a>`RIG_TURN_SURFACE_MESH_BINDINGS` | an authored surface mesh has unresolved/nonclosing weights or shares a frame moved by a unit/rear turn carrier; declared stop draw aliases resolve to their links for setup sampling | provide weighted bindings closing at 1 in the authored frame; `<link>_d` resolves only for links declared in `config.stops`; use independent chains for parts with different roles |
 | <a id="RIG_TURN_SURFACE_MESH_ATTACHMENT"></a>`RIG_TURN_SURFACE_MESH_ATTACHMENT` | a surface mesh has an alternate drawing without its own registered depth sampling frame | use the base attachment; explicit islands retain their own slot, attachment and bindings |
 | <a id="RIG_TURN_BODY_UNCOVERED"></a>`RIG_TURN_BODY_UNCOVERED` | **Warning:** a shown part without a body role overlaps a moved `turn.body` surface at setup alpha >= 128 and has different emitted endpoint displacement | declare the intended body role and inspect both endpoints; no role or depth is inferred |
+| <a id="RIG_TURN_HEAD_ROLL"></a>`RIG_TURN_HEAD_ROLL` | **Warning:** a declared head turn has an absolute authored-eye-origin roll above the empirical limit displayed as 18.485385 degrees; names the face/eye parts, both eye bones, signed roll and limit | inspect the neck at both extremes; this proxy does not detect the painting independently, correct tilt or change emitted bytes; see [Head roll before a declared turn](#head-roll-before-a-declared-turn) |
 | <a id="RIG_TURN_SURFACE_DEPTH_REQUIRED"></a>`RIG_TURN_SURFACE_DEPTH_REQUIRED` | a part with role `"surface"` in `config.turn.roles` or `config.turn.body.roles` carries no depth sheet in `parts.json` | run `assemble` with `config.depth` or provide `<part>_depth.png` in `parts.json` |
 | <a id="RIG_TURN_GRID_BUDGET"></a>`RIG_TURN_GRID_BUDGET` | a `"surface"` grid exceeds 2,400 triangles on one slot or 4,000 triangles across all `"surface"` slots | lower `config.turn.grid` / `config.turn.body.grid` `[cols, rows]` within the per-slot and total budgets |
 | <a id="RIG_TURN_HEAD_BONE"></a>`RIG_TURN_HEAD_BONE` | `buildRig` found no `"head"` (or body turn root) bone when emitting 2.5D turn carriers | declare `"head"` (or the body turn root bone) in `config.bones` |
@@ -6565,6 +6566,47 @@ art. An authored `parts.json` depth reference remains an active standalone
 `rig` declaration even without config opt-in: its file/size/color/opacity
 guards still apply. With binding inactive there is no added reference, file or
 legacy-byte change. #773 adds no image generation, geometry or motion model.
+
+### Head roll before a declared turn
+
+`rig` and `build` report `WARN RIG_TURN_HEAD_ROLL` when a declared head
+turn (`turn.depths` or `turn.roles`, including the depth-sampled producer)
+has an absolute setup eye-line roll above 18.485385 degrees (six-place display).
+The line names the face part (or the eye parts without a face), the signed
+roll, its absolute value, the limit, and both eye bones and parts. It reads
+the existing `eyeLineDegrees` on the authored `eye_r` and `eye_l` origins,
+image-left to image-right in Spine degrees, counter-clockwise; it does not
+detect the painting's tilt independently of those authored origins, estimate
+tilt from a bounding box, or invent a reading without both eye parts
+and bones or when their origins share a column.
+
+The limit is the midpoint between the maximum absolute roll of the measured
+public controls, 4.864514 degrees, and the tilted `three-quarter`
+input from issue #900, 32.106256 degrees. The comparison uses the unrounded
+midpoint. The controls are the five
+parts examples plus the published dancer config and head-turn demo's compiled
+setup eye origins. The named quiet controls read 3.239700 degrees
+(`reference-demo`), -1.941486 degrees (`dancer`), and
+0.520856 degrees (head-turn demo). This is an empirical separation
+of these inputs, not an anatomical limit or a visual-quality verdict.
+
+The parts configs were read at
+[`38e5f574`](https://github.com/rig-c/parts/tree/38e5f574a88b2e6753a982b0ee0952dbf273a12e/examples),
+the [dancer config](https://github.com/rig-c/examples/blob/564285414fccf7b47df32501c0b3c2968db77691/dancer/config.json)
+at `56428541`, and the
+[head-turn model](https://github.com/rig-c/rig-c.github.io/blob/989cebbd6733a58142923cec96fe2333da08194a/demos/head-turn/bundle/skeleton.model.json)
+at `989cebbd`. The [issue #900](https://github.com/rig-c/parts/issues/900)
+bootstrap used public `three-quarter` inputs at examples commit
+`ba99e403d4058fc1cfe40699bdcde8aaf00a90c0`; its authored crop-pixel eye origins
+are `[236, 136]` and `[287, 104]`. The compiled demo is a setup metric control,
+not a rebuild of its unavailable parts config.
+
+An already rolled head is turned about upright yaw/pitch axes; inspect its
+neck at both extremes before accepting that motion. This warning does not
+refuse the build, correct the tilt, add a roll axis, or change any pose or
+emitted file. With no head turn, including a body-only turn, it adds no warning.
+With an unreadable eye line the existing face-axis report retains its reason;
+silence is not a measured zero. The warning lives only in the stage report.
 
 ### Missing body-turn coverage
 
