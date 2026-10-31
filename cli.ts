@@ -778,7 +778,7 @@ usage:
       extends below a crop (ASSEMBLE_SINGLE_RUN_PLAN), and the config sets no
       seethrough.head_box (ASSEMBLE_SINGLE_RUN_HEAD_BOX).
       Writes nothing unless every check passed.
-      --seam defaults to ${DEFAULT_SEAM_RULE}. --project says where a layer takes
+      --seam overrides config.assemble.seam, otherwise ${DEFAULT_SEAM_RULE}. --project says where a layer takes
       the painting's pixel: core (the reference's) erodes every layer's top-most
       opaque area by 5x5 first, so a part a few pixels wide takes none; visible
       erodes only along a rim where a later layer is in front. It defaults to
@@ -862,7 +862,7 @@ usage:
       green build ends with the pack line beside the spineboy yardstick and the
       three artifact paths — skeleton .json, .atlas and the packed page: the
       packed atlas is the result, the loose parts are the intermediate it was
-      made from. --seam defaults to ${DEFAULT_SEAM_RULE}, --project to
+      made from. --seam overrides config.assemble.seam, otherwise ${DEFAULT_SEAM_RULE}; --project to
       ${DEFAULT_PROJECT_RULE} (both as for assemble), --page-edges to ${DEFAULT_PAGE_EDGES} and
       --pack-shape to ${DEFAULT_PACK_SHAPE} (as for check; both packed builds, rig's gate
       and check's artifact, take them). --requirements is forwarded to check
@@ -1730,8 +1730,8 @@ function cmdAssemble(args: string[]): number {
   if (propose && (flags.has('--out') || flags.has('--seam') || flags.has('--project') || alts.length > 0)) return usage('--propose-plan prints to the console; it takes none of --out, --seam, --project, --alt');
   if (!propose && flags.has('--write-config')) return usage('--write-config belongs to assemble --propose-plan');
   if (!propose && !flags.has('--out')) return usage('assemble needs --out <dir>');
-  const seam = flags.get('--seam') ?? DEFAULT_SEAM_RULE;
-  if (!(SEAM_RULES as readonly string[]).includes(seam)) return usage(`--seam ${seam}; one of ${SEAM_RULES.join(', ')} is required`);
+  const seam = flags.get('--seam');
+  if (seam !== undefined && !(SEAM_RULES as readonly string[]).includes(seam)) return usage(`--seam ${seam}; one of ${SEAM_RULES.join(', ')} is required`);
   const project = flags.get('--project') ?? DEFAULT_PROJECT_RULE;
   if (!(PROJECT_RULES as readonly string[]).includes(project)) return usage(`--project ${project}; one of ${PROJECT_RULES.join(', ')} is required`);
   const [source, full, config] = ['--source', '--full', '--config'].map((f) => flags.get(f) as string);
@@ -1759,7 +1759,7 @@ function cmdAssemble(args: string[]): number {
     }
     const out = flags.get('--out') as string;
     assembleStage(
-      { source, full, head, config, ...(flags.has('--requirements') ? { requirements: flags.get('--requirements') as string } : {}), seam: seam as SeamRule, project: project as ProjectRule, ...(alts.length === 0 ? {} : { alts }) },
+      { source, full, head, config, ...(flags.has('--requirements') ? { requirements: flags.get('--requirements') as string } : {}), ...(seam === undefined ? {} : { seam: seam as SeamRule }), project: project as ProjectRule, ...(alts.length === 0 ? {} : { alts }) },
       { partsJson: join(out, 'rig', 'parts.json'), partsDir: join(out, 'rig', 'parts'), recomposite: join(out, 'render', 'recomposite_rig.png'), errorMap: join(out, 'render', ERROR_MAP_FILE) },
       console.log,
     );
@@ -1950,8 +1950,8 @@ function cmdBuild(args: string[]): number {
   // --head is optional (issue #359), as for assemble.
   for (const f of ['--config', '--source', '--full', '--out']) if (!flags.has(f)) return usage(`build needs ${f}`);
   if (on.has('--all-sets') && flags.has('--set')) return usage('--set and --all-sets are two modes; give one');
-  const seam = flags.get('--seam') ?? DEFAULT_SEAM_RULE;
-  if (!(SEAM_RULES as readonly string[]).includes(seam)) return usage(`--seam ${seam}; one of ${SEAM_RULES.join(', ')} is required`);
+  const seam = flags.get('--seam');
+  if (seam !== undefined && !(SEAM_RULES as readonly string[]).includes(seam)) return usage(`--seam ${seam}; one of ${SEAM_RULES.join(', ')} is required`);
   const project = flags.get('--project') ?? DEFAULT_PROJECT_RULE;
   if (!(PROJECT_RULES as readonly string[]).includes(project)) return usage(`--project ${project}; one of ${PROJECT_RULES.join(', ')} is required`);
   const edges = pageEdgesOf(flags.get('--page-edges'));
@@ -1975,7 +1975,7 @@ function cmdBuild(args: string[]): number {
   const scratch = mkdtempSync(join(tmpdir(), 'rig-parts-build-'));
   try {
     const r = build(
-      { config, source, full, head, out, seam: seam as SeamRule, project: project as ProjectRule, loop, pageEdges: edges, packShape: shape, ...(flags.has('--requirements') ? { requirements: flags.get('--requirements') as string } : {}), idleKeys: keys, ...(leadText === undefined ? {} : { leadIn: Number(leadText) }), seamPairs: on.has('--seam-pairs'), keepStills: on.has('--keep-stills'), noExtremes: on.has('--no-extremes'), ...(alts.length === 0 ? {} : { alts }), ...(flags.has('--set') ? { set: flags.get('--set') as string } : {}), allSets: on.has('--all-sets'), ...(flags.has('--environment') ? { environment: flags.get('--environment') as string } : {}), ...(flags.has('--wind-band') ? { windBand: flags.get('--wind-band') as string } : {}) },
+      { config, source, full, head, out, ...(seam === undefined ? {} : { seam: seam as SeamRule }), project: project as ProjectRule, loop, pageEdges: edges, packShape: shape, ...(flags.has('--requirements') ? { requirements: flags.get('--requirements') as string } : {}), idleKeys: keys, ...(leadText === undefined ? {} : { leadIn: Number(leadText) }), seamPairs: on.has('--seam-pairs'), keepStills: on.has('--keep-stills'), noExtremes: on.has('--no-extremes'), ...(alts.length === 0 ? {} : { alts }), ...(flags.has('--set') ? { set: flags.get('--set') as string } : {}), allSets: on.has('--all-sets'), ...(flags.has('--environment') ? { environment: flags.get('--environment') as string } : {}), ...(flags.has('--wind-band') ? { windBand: flags.get('--wind-band') as string } : {}) },
       { rig: rigcRunner(bin), check: rigcRunner(bin), checkBin: bin, scratch: join(scratch, 'rig-gate'), stages: {
         assemble: (input, outputs) => runBuildProcess({ stage: 'assemble', bin, input, outputs }, join(scratch, 'workers')),
         rig: (input, _rigc, gateScratch) => runBuildProcess({ stage: 'rig', bin, input, scratch: gateScratch }, join(scratch, 'workers')),

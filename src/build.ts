@@ -1,3 +1,4 @@
+import { DEFAULT_SEAM_RULE } from './seamrule.ts';
 import { SETUP_PAINTING_LINE, setupPaintingLines } from './setuppainting.ts';
 import { writeMaterialSources } from './cutmaterialio.ts';
 import { CUT_MATERIAL_LINE, CUT_MATERIAL_SOURCES, materialLines } from './cutmaterial.ts';
@@ -164,7 +165,7 @@ export interface AssembleStageInput {
   /** The head run, or null for one run that holds the face (issue #359). */
   head: string | null;
   config: string;
-  seam: SeamRule;
+  seam?: SeamRule;
   project: ProjectRule;
   /** `--alt` entries, merged with `config.assemble.alternates` by set name (issue #454). */
   alts?: readonly AlternateCliInput[];
@@ -327,13 +328,14 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   // The early door: assemble runs before propose has drafted bones, meshes,
   // regions and motion, so it requires only what it reads (issue #20).
   const cfg = loadEarlyConfig(input.config, 'assemble');
+  const seam = input.seam ?? cfg.assemble.seam ?? DEFAULT_SEAM_RULE;
   const src = readSource(input.source);
   const runs = applyTakenLayers(readRuns(input.full, input.head), src, cfg, input.config);
   for (const note of runs.notes) log(`note: ${note}`);
   const fields = stageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
   const under = readUnders(input.config, fields.cuts);
   const caps = fields.limbs === undefined ? undefined : readCaps(input.config, fields.limbs);
-  const result = assemble({ source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under, ...(caps === undefined ? {} : { caps }), seamRule: input.seam, projectRule: input.project });
+  const result = assemble({ source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under, ...(caps === undefined ? {} : { caps }), seamRule: seam, projectRule: input.project });
 
   // Issue #454: alternate painting sets, assembled before any file is written.
   const configDir = dirname(resolve(input.config));
@@ -673,7 +675,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         ...(fields.yieldRefused === undefined ? {} : { yieldRefused: fields.yieldRefused }),
         ...(fields.turnMovingPair === undefined ? {} : { turnMovingPair: fields.turnMovingPair }),
         ...(fields.turn === undefined ? {} : { turn: fields.turn, regions: fields.regions, meshes: fields.meshes, motion: fields.motion }),
-        seamRule: input.seam,
+        seamRule: seam,
         projectRule: input.project,
         ...(altExclude.length === 0 ? {} : { exclude: altExclude }),
         ...(altIslands.length === 0 ? {} : { limbIslands: altIslands }),
@@ -2218,7 +2220,7 @@ export interface BuildInput {
   /** The head run, or null for one run that holds the face (issue #359). */
   head: string | null;
   out: string;
-  seam: SeamRule;
+  seam?: SeamRule;
   project: ProjectRule;
   loop: boolean;
   /** `--page-edges` for both packed builds, the rig stage's gate and the check's artifact. */
@@ -2409,7 +2411,6 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
   rmSync(join(out, FIGURE_MASK_FILE), { force: true });
   // The idle-keys value is named only when it is not the default, so a build without the flag, or with the default, prints the line it printed before issue #95.
   const idleKeys = input.idleKeys ?? DEFAULT_IDLE_KEYS;
-  log(`rig-parts build: ${input.config} -> ${out}, seam rule ${input.seam}, projection rule ${input.project}, page edges ${input.pageEdges}, pack shape ${input.packShape ?? DEFAULT_PACK_SHAPE}${idleKeys === DEFAULT_IDLE_KEYS ? '' : `, idle keys ${idleKeys}`}${input.loop ? `, with the idle loop${input.leadIn === undefined ? '' : ` after a lead-in of ${input.leadIn} period(s)`}` : ''}`);
 
   let req: BuildRequirements | null = null;
   let configRecord: InputFileRecord | null = null;
@@ -2421,6 +2422,8 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
     // Issue #556: the flag, or the config's declaration when there is none; both naming other bytes is refused here.
     // Issue #607: the bytes this read parsed are the ones check.json's config record hashes, under the path as typed.
     const loaded = loadConfigWithBytes(input.config);
+    const seam = input.seam ?? loaded.config.assemble.seam ?? DEFAULT_SEAM_RULE;
+    log(`rig-parts build: ${input.config} -> ${out}, seam rule ${seam}, projection rule ${input.project}, page edges ${input.pageEdges}, pack shape ${input.packShape ?? DEFAULT_PACK_SHAPE}${idleKeys === DEFAULT_IDLE_KEYS ? '' : `, idle keys ${idleKeys}`}${input.loop ? `, with the idle loop${input.leadIn === undefined ? '' : ` after a lead-in of ${input.leadIn} period(s)`}` : ''}`);
     configRecord = inputFileRecord(loaded.bytes, input.config);
     req = buildRequirements(input.requirements, loaded.config.requirements, input.config);
     // The same for the requirements file's own shape; its names resolve against the rig, in the check, before it builds.
@@ -2430,7 +2433,7 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
     // And the steady-wind band spec (issue #590), as check reads it.
     if (input.windBand !== undefined) readWindBand(input.windBand);
     stages.assemble(
-      { source: input.source, full: input.full, head: input.head, config: input.config, seam: input.seam, project: input.project, ...(req === null ? {} : { requirements: req.read }), ...(input.alts === undefined ? {} : { alts: input.alts }) },
+      { source: input.source, full: input.full, head: input.head, config: input.config, seam, project: input.project, ...(req === null ? {} : { requirements: req.read }), ...(input.alts === undefined ? {} : { alts: input.alts }) },
       { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, ERROR_MAP_FILE) },
       prefixed('assemble'),
     );

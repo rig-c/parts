@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runSeamConfigChecks } from './tools/check_seam_config.ts';
 import { runJointContactChecks } from './tools/check_joint_contact.ts';
 import { runSetupPaintingChecks } from './tools/check_setup_painting.ts';
 import { runCutMaterialChecks } from './tools/check_cut_material.ts';
@@ -1988,6 +1989,10 @@ function runPsdSuite(): number {
 function runConfigSuite(): number {
   section('config: the character config loader');
   const { say, bad } = counter();
+  const seamDir = temp('seam-config-905');
+  try { runSeamConfigChecks(seamDir, (name, ok, detail) => say(name, ok, detail, 'issue #905: CLI > config > unchanged default, with real readers and CLI controls')); }
+  finally { rmSync(seamDir, { recursive: true, force: true }); }
+
   const explicitDir = temp('explicit-658');
   try { runExplicitMeshChecks(explicitDir, (name, ok, detail) => say(name, ok, detail, 'issue #658: guarded accepted payload transfer, not regeneration')); }
   finally { rmSync(explicitDir, { recursive: true, force: true }); }
@@ -28143,8 +28148,13 @@ const AUTO_TURN_EXAMPLE_BYTES: Readonly<Record<string, string>> = {
   'wind': '808c2fcc3687586511d2894538b795370fd457f882f95facb564ade58e929216',
 };
 
-/** Reuse the chain's completed build: hashing and a restored output plant only. */
-function autoTurnExampleBytes(asm: string, rig: string, key: string): { ok: boolean; detail: string } {
+/** Issue #905: current silhouette recipe, CLI build with core 2.84.0; separate from the public 1.79.1 control. */
+const SILHOUETTE_EXAMPLE_BYTES: Readonly<Record<string, string>> = {
+  'reference-demo': '52a96e8296aedd10378b2bced07476ceff8630216bd69a461a27ccb52c54cdb1',
+};
+
+/** Hash a completed build against its named recipe: a restored whitespace plant proves byte sensitivity. */
+function autoTurnExampleBytes(asm: string, rig: string, key: string, baseline: Readonly<Record<string, string>> = AUTO_TURN_EXAMPLE_BYTES, origin = '1.79.1'): { ok: boolean; detail: string } {
   const digest = (): string => {
     const rows: string[] = [];
     for (const file of ['parts', 'parts.json', 'recomposite_error_rig.png', 'recomposite_rig.png']) {
@@ -28164,8 +28174,8 @@ function autoTurnExampleBytes(asm: string, rig: string, key: string): { ok: bool
   } finally { writeFileSync(file, original); }
   const restored = digest();
   return {
-    ok: before === AUTO_TURN_EXAMPLE_BYTES[key] && changed !== before && restored === before,
-    detail: `sha256 ${before}; 1.79.1 ${AUTO_TURN_EXAMPLE_BYTES[key] ?? 'missing baseline'}; whitespace plant ${changed !== before ? 'detected' : 'MISSED'}; restore ${restored === before ? 'exact' : 'CHANGED'}`,
+    ok: before === baseline[key] && changed !== before && restored === before,
+    detail: `sha256 ${before}; ${origin} ${baseline[key] ?? 'missing baseline'}; whitespace plant ${changed !== before ? 'detected' : 'MISSED'}; restore ${restored === before ? 'exact' : 'CHANGED'}`,
   };
 }
 
@@ -28244,9 +28254,25 @@ function runChainSuite(_corpus: string | null = null, pre = false): number | nul
         continue;
       }
 
-      const autoTurnBytes = autoTurnExampleBytes(out, join(out, 'rig'), key);
+      // Issue #905 changes the current reference-demo recipe. Keep #844's public 1.79.1 control on its
+      // exact historical config, pinned to parts commit 3ec9cfd52c9d1ba98145dc87d9a5ccf01f34f7fd.
+      let historicalOut = out;
+      let historicalReady = true;
+      if (key === 'reference-demo') {
+        const historicalConfig = join(ROOT, 'fixtures', 'reference-demo-auto-turn-1.79.1.config.json');
+        historicalOut = join(dir, `${key}-auto-turn-1.79.1`);
+        const pinnedConfig = createHash('sha256').update(readFileSync(historicalConfig)).digest('hex') === 'e554ac162e70d5d337a90239e1db25a0547c45d5cf7b14e5172f08eacd6884be';
+        const historical = runCli(['build', '--config', historicalConfig, '--source', join(inputs, 'painting.png'), '--full', join(inputs, 'layers', 'full'), '--head', join(inputs, 'layers', 'head'), '--out', historicalOut]);
+        historicalReady = pinnedConfig && historical.status === 0;
+      }
+      const autoTurnBytes = historicalReady ? autoTurnExampleBytes(historicalOut, join(historicalOut, 'rig'), key) : { ok: false, detail: 'pinned public 1.79.1 config hash or historical build failed' };
       say(`CH844_AUTO_DEPTH_REFUSAL_KEEPS_PUBLIC_EXAMPLE_BYTES[${key}]`, autoTurnBytes.ok, autoTurnBytes.detail,
-        'public 1.79.1 baseline over every assemble/rig output, reusing this completed build; a whitespace-only output plant is detected and restored exactly');
+        'public 1.79.1 baseline over every assemble/rig output; reference-demo uses its API-pinned historical config, other examples reuse their unchanged recipe; a whitespace-only output plant is detected and restored exactly');
+      if (key === 'reference-demo') {
+        const currentBytes = autoTurnExampleBytes(out, join(out, 'rig'), key, SILHOUETTE_EXAMPLE_BYTES, 'issue #905 silhouette recipe');
+        say('CH905_SILHOUETTE_EXAMPLE_BYTES_MATCH_REGENERATED_CURRENT_BASELINE', currentBytes.ok, currentBytes.detail,
+          'current config silhouette build, separately regenerated through the CLI with core 2.84.0; this digest is not the historical public 1.79.1 baseline');
+      }
 
       const expParts = readParts(join(exp, 'parts.json'));
       const parts = jsonDiffs(readJsonAt(join(exp, 'parts.json')), readJsonAt(join(out, 'parts.json')), chainTolerance('parts.json'));

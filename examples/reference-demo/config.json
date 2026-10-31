@@ -41,6 +41,7 @@
     "head_box_note": "proposed [448, -118, 1238, 672] runs 118 px above the canvas and the crop fills that band black; shifted down to y0=0, same 790 px side"
   },
   "assemble": {
+    "seam": "silhouette",
     "rig_scale": 0.5,
     "plan": [
       [

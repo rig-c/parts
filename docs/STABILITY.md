@@ -147,7 +147,7 @@ part name, `[i]` an entry of a list):
 - **generation.control.skeleton**, the pose file it names when it is no built-in — required: `width`, `height`, `points`
 - **seethrough** — required: `resolution`, `steps`, `seed`, `offload`; optional: `head_box`, `arm_split`
 - **seethrough.arm_split** — required: `order`, and one of `x` or `line` (issue #439)
-- **assemble** — required: `rig_scale`, `plan` (from plain `assemble` on); optional: `extend_below_crop`, `patches`, `cuts`, `alternates`, `head_face_underfill`, `yield_refused`, `keep_under_occluders`, `extend_painting`, `take`
+- **assemble** — required: `rig_scale`, `plan` (from plain `assemble` on); optional: `seam`, `extend_below_crop`, `patches`, `cuts`, `alternates`, `head_face_underfill`, `yield_refused`, `keep_under_occluders`, `extend_painting`, `take`
 - **assemble.alternates[i]** — required: `name`; optional: `source`, `full`, `head`, `parts`, `hides`, `head_box`, `cuts`, `skeleton`, `anchor`, `base_anchor`, `drawn`, `tips`, `front`, `layers`, `focus` (issues #454, #465, #543, #652, #664, #666, #719, #780). `focus` is an authored finite `[x, y]` in painting pixels, within its canvas (edges included), refused as CONFIG_SET_FOCUS before assemble output when invalid; only when present, `parts.json` records it with focus_source_size and `sets.json` emits it in setup-world coordinates through the actual rig resize and `src/coords.ts`. Absent focus emits no field or inferred value; changing/removing it requires reassembly
 - **assemble.extend_below_crop[i]** — required: `part`, `run`, `tag`
 - **assemble.extend_painting[i]** — required: `part`, `band`, `max_distance`; optional: `min_held_alpha`, `order` (issues #848, #854, #855; explicit final layer-derived part, half-open rig band and positive four-neighbour path bound; base painting only). The optional integer floor 1–255 admits exact original alpha-over coverage strictly below it; absent or 1 blocks every nonzero holder. Only selected target samples below the floor may take painting RGBA; target samples at/above the floor and every non-target holder remain exact. By default overlapping reachable claims refuse. With `order` on every entry (unique nonnegative safe integers), lower values claim first and their gains block later candidates and paths; array order never breaks ties or supplies missing precedence
@@ -217,6 +217,11 @@ part name, `[i]` an entry of a list):
 - **depth.full.layers.&lt;layer&gt;**, **depth.head.layers.&lt;layer&gt;**, **depth.full.atlas**, **depth.head.atlas** — required: `image`, `near`, `zScale`
 - **waist** — required: `top`, `bottom`, `upper`, `lower`, `bone`, `constraint` (#650; absent keeps the ordinary bindings and graph)
 <!-- /stable:config -->
+
+`assemble.seam` accepts `near-white` or `silhouette` (issue #905). CLI
+`--seam` overrides config, then the existing `near-white` default applies.
+Invalid values refuse as `CONFIG_FIELD_TYPE` at `config.assemble.seam`;
+an absent field preserves existing output bytes.
 
 `TY14` holds the set of field names in backticks above to the set of names the
 loader's object checks spell (every `c.object(…)` in `src/config.ts`, with the lists
