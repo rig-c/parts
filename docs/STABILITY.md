@@ -49,6 +49,8 @@ defaults are the help's too, and none is guessed from the art.
 <!-- stable:commands -->
 | command | flags |
 | --- | --- |
+| `depth-prepare` | `--parts`, `--config`, `--out` (issue #897; separate numeric-depth recipe) |
+| `depth-apply` | `--parts`, `--manifest`, `--config`, `--rig-config`, `--out` (issue #897; original character config is read-only) |
 | `layers` | one positional path: a wrapper directory, a `layers.json` or a `.psd`; with it, optional `--export` (a directory to write the wrapper form into, issue #359); or `--template` with `--canvas` and no path; or a positional head run with `--full`, `--source`, `--config` together for `PLAN_HEAD_GARMENT_OVERLAP` (issue #826) |
 | `sheet` | `--source`, `--layers` (repeatable), `--out`; optional `--cell`, `--cols` |
 | `inputs` | `--source`, `--config`, `--out` |
@@ -525,3 +527,16 @@ only for that explicit block; `check --requirements` refuses unavailable or
 stale evidence rather than reconstructing original art from emitted siblings.
 Without the block the API reading is SKIP; CLI stdout and emitted bytes remain unchanged.
 See [Source before scissors](AUTHORING.md#source-before-scissors).
+
+## Provider-map depth stages (#897)
+
+The opt-in `depth-prepare` and `depth-apply` commands accept the separate
+`rig-parts-depth/1` recipe and finite floating-point `rig-parts-map/1` JSON.
+Prepared provenance is `rig-parts-depth-inputs/1`; application writes
+`rig-parts-depth-report/1`, standard part depth references and a relocated
+character config. Their schemas, frames, alpha threshold, normalization,
+encoding, convexity sign and refusal remedies are in
+[AUTHORING](AUTHORING.md#per-part-provider-maps-897). No existing build path
+calls these stages; no-config builds retain their existing behavior and bytes.
+Group numbers and unit depths are explicit; no provider or absolute scale is
+inferred. A new depth stage never replaces Core's rig gate.

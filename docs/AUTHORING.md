@@ -6586,6 +6586,120 @@ and never assign a role, depth, binding or draw order. A part already bound to
 its actual intended role, then inspect setup, both turn endpoints and their diff;
 an explicit role alone does not establish that two drawings remain coincident.
 
+### Per-part provider maps (#897)
+
+`depth-prepare` and `depth-apply` are explicit stages after `assemble`, before
+`rig`. They carry no model, weights, provider service or downloads. Prepare
+writes one inference PNG per selected assembled part, composited onto gray 128,
+with integer LANCZOS upscaling and padding. A `rig-parts-depth-inputs/1` manifest
+binds the original parts.json hash, part PNG hash, rig crop `[x,y,w,h]`, native
+and upscaled sizes, padding, recipe hash and inference PNG hash. Map registration
+is declared, never inferred from a filename or guessed from art.
+
+```sh
+rig-parts depth-prepare --parts assembled --config depth.json --out inference
+# A provider reads inference/*.png and writes the declared floating-point maps.
+rig-parts depth-apply --parts assembled --manifest inference/manifest.json --config depth.json --rig-config config.json --out mapped
+rig-parts rig --parts mapped --config mapped/config.json --out compiled
+```
+
+The separate recipe is not a new field on character config:
+
+```json
+{
+  "spec": "rig-parts-depth/1",
+  "prepare": {"longSide": 1024, "paddingFraction": 0.08, "padding": 4},
+  "groups": {"head": {"near": "white", "zScale": 30, "pivot": 15}},
+  "parts": {
+    "face": {"map": "face.json", "source": "depth", "frame": "part", "group": "head", "median": 21, "relief": 13}
+  },
+  "clear": []
+}
+```
+
+All displayed numbers are authored example choices, not defaults. `longSide`
+and additive `padding` are integers; upscale is `max(1,ceil(longSide/max(w,h)))`
+and pad is `floor(max(upscaledSize)*paddingFraction)+padding`. Each part declares
+`median` and nonnegative `relief` in rig pixels. Each group (`head` or `body`)
+declares `near`, positive `zScale` and `pivot`; optional `unitDepths` explicitly
+replaces that group's rigid depths. `clear` explicitly lists part references to
+remove, including any small units intended to sample the surface. Unselected
+parts retain their artwork and depth references. The output config copies the
+original, sets the declared group pivots/unit depths, and relocates animation
+and control-skeleton file paths. Roles and draw order stay the author's.
+
+Maps are UTF-8 JSON `{"spec":"rig-parts-map/1","width":2,"height":2,
+"channels":1,"data":[0.125,0.25,0.5,0.875]}`: row-major finite numeric values,
+with channels interleaved for signed XYZ normals (`channels:3`). JSON is open,
+lossless for binary64 numbers, and requires no numeric-array dependency; an
+8-bit preview cannot preserve the raw map's normalization. Paths resolve beside
+the recipe. `frame:"part"` requires native part dimensions; `"upscaled"` requires
+the prepared art's enlarged dimensions without padding; `"input"` requires the
+whole prepared image and crops its declared padding before reduction. Scalar
+maps use float32 BOX reduction. Normal sources require signed image-axis XYZ
+(x right, y down), not an RGB normal preview.
+
+Apply computes `u=(raw-median(raw))/(p95-p5)` inside original alpha >=128,
+using linear percentiles, then `Z=median+relief*u`. A flat map requires explicit
+relief 0. Encode `Z/zScale` for near white, `1-Z/zScale` for near black, clip to
+[0,1], and round to the nearest 8-bit level with even ties. Extend every
+non-support pixel with the Euclidean nearest support value, with row-major ties.
+The resulting opaque gray sheet carries no background cliff. The report names
+levels, clip fraction (Z <=0 or >=zScale on support), declared relief in rig
+pixels, group pivot, sign, raw median/p5/p95 and source/input/map/sheet hashes.
+It reports measurements, not a depth-quality pass mark. `rig` still runs Core's
+gate; apply writes parts and configuration, never a skeleton or a gate verdict.
+Outputs must be absent or empty; all declared inputs validate before emitting.
+
+`source:"normals"` is optional and limited to one closed convex part. It refuses
+multiple four-connected alpha islands both before and after stride2 sampling.
+At half resolution it integrates adjacent gradients `-nx/max(abs(nz),0.15*norm)`
+and `-ny/max(abs(nz),0.15*norm)` with step2 trapezoids and matrix-free LSQR
+(maximum 3000 iterations, atol/btol 1e-6, condition limit 1e8). Cross erosion
+finds an interior core (max(3,floor(0.12*sqrt(area))) steps) and a three-step rim.
+The sign makes mean core depth greater than mean rim depth; no reference is
+read. An empty core or unresolved sign refuses. Float32 BOX brings the integrated
+field back to the native grid before the same normalization. Iterations and
+residual are reported. One connected silhouette does not certify convexity or
+exclude internal occlusion edges; choose scalar depth for strands and collars.
+
+The [provider trial](https://github.com/rig-c/parts/issues/897) measured Depth
+Anything V2 Large and Small, DA3MONO-LARGE, DepthPro, Lotus depth/normal G,
+Marigold depth, and bundled MiDaS/Zoe/LeReS/Metric3D routes. DA3 and Small rows
+were added after the initial report. The stage2 reproduction uses V2 Large
+with the Lotus-normal face, not DA3. No model is required by these commands.
+The trial's role relief/width ratios (face 0.1264803, front hair 0.1018772,
+back hair 0.0857722, ornament 0.0375868, garment 0.0990473) came from one
+head-turn demo's p5..p95 depth and part widths. They are measured starting
+points for declared proportions, not anatomical laws or default calibration.
+The owner's preference for per-part volume is subjective provenance, not an
+automated quality conclusion. Model licence posture remains the owner's choice.
+
+`depth.full.layers` and `depth.head.layers` still accept authored source-grid
+sheets. They bind the See-through layer before assembly transports/scales/crops
+it; they do not bind an already assembled part's post-merge image. Use them
+when a sheet genuinely occupies that source grid. The commands above bind the
+final assembled grid and preserve the existing `parts.json` reference consumed
+by `rig`, so their output requires no alternate compiler or dependency pin.
+
+| rule | refused input | remedy |
+| --- | --- | --- |
+| <a id="DEPTH_RECIPE"></a>`DEPTH_RECIPE` | unknown, absent or wrongly typed recipe field, group, source or frame | use the documented explicit recipe schema; no guessed field |
+| <a id="DEPTH_RECIPE_NUMBER"></a>`DEPTH_RECIPE_NUMBER` | missing/nonfinite median, relief, near-scale pivot or prepare number; invalid range/integer | declare every numeric field in its documented units and range |
+| <a id="DEPTH_INPUT_PRESENT"></a>`DEPTH_INPUT_PRESENT` | declared JSON input missing or not a file | restore the named file |
+| <a id="DEPTH_INPUT_JSON"></a>`DEPTH_INPUT_JSON` | malformed numeric or configuration JSON | write valid finite JSON |
+| <a id="DEPTH_PART_RESOLVES"></a>`DEPTH_PART_RESOLVES` | selected or cleared name absent from parts.json | use the assembled part name |
+| <a id="DEPTH_OUTPUT_EMPTY"></a>`DEPTH_OUTPUT_EMPTY` | nonempty output or output containing an input | choose a separate absent or empty directory |
+| <a id="DEPTH_INPUT_BINDING"></a>`DEPTH_INPUT_BINDING` | changed recipe, art, part record, crop, padding or inference PNG | prepare again for these exact inputs |
+| <a id="DEPTH_MAP_FORMAT"></a>`DEPTH_MAP_FORMAT` | wrong numeric schema, channels, shape, count, unknown field or nonfinite element | provide the declared float JSON map, not a preview |
+| <a id="DEPTH_MAP_SIZE"></a>`DEPTH_MAP_SIZE` | map dimensions differ from its explicit frame | use the registered part, enlarged art or padded input grid |
+| <a id="DEPTH_MAP_SUPPORT"></a>`DEPTH_MAP_SUPPORT` | no alpha>=128 support | provide a supported part |
+| <a id="DEPTH_MAP_SPREAD"></a>`DEPTH_MAP_SPREAD` | p5=p95 with nonzero relief | supply a nonflat map or declare relief 0 |
+| <a id="DEPTH_NORMAL_ISLANDS"></a>`DEPTH_NORMAL_ISLANDS` | zero/multiple connected components at native or integration resolution | scalar source, or a larger registered normal input that preserves one island |
+| <a id="DEPTH_NORMAL_VECTOR"></a>`DEPTH_NORMAL_VECTOR` | a sampled support normal is zero | provide nonzero signed XYZ normals |
+| <a id="DEPTH_NORMAL_CONVEXITY"></a>`DEPTH_NORMAL_CONVEXITY` | core/rim or its convexity sign is unresolved | larger closed convex mask or scalar source |
+| <a id="DEPTH_GROUP_BINDING"></a>`DEPTH_GROUP_BINDING` | part outside declared turn roles, mixed retained near/zScale, or filename collision | register exact roles and one shared scale/polarity, replace/clear conflicting sheets, use distinct names |
+
 ### Unit depth precedence
 
 For `"unit"` roles, a transported part's sheet is recorded and validated but is not
