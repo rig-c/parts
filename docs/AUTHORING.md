@@ -5120,6 +5120,28 @@ wind (1, 0), then (40, 0) from 0.5 s, reads `TEXTURE_STRETCH` 32.181 (FAIL, `hai
 triangle 258), two meshes folding under `ANIMATIONS_DO_NOT_FOLD` (FAIL; none without the
 flag) and 8 `CLOTH_SETTLES` warnings for 9 (selftest `CK515`).
 
+**Joint material contact** (issue #894). Each played `SEAM_OVER_MOTION.rows[]` adds
+`joint_contact`: `status` (`REPORTED` or `SKIP`), `joints` (declared limb joint
+labels or a proven body root's bone), and, when observed, the frame counts
+`joined`, `separated` and `unavailable`, plus `reasons` with each unavailable
+reason and its observed frame indices. `JOINT_CONTACT` prints one informational
+line per pair and animation; it is never a bar and changes no PASS, warning or
+exit status. It counts core 2.84.0's `jointContact.frames` from the same seam
+render. Core reads edge-connected half-opacity material: initially overlapping
+single-component pieces are joined when their posed union connects by an edge
+or overlap, separated when it does not. A diagonal contact is separated. Missing
+setup overlap, absent drawings, disconnected material or multiple fragments are
+unavailable with core's reason. A pair without a declared named joint is
+unavailable even if its arbitrary slot drawings connect. An absent core contact
+field is unavailable when the frame count is known; absent frame counts or zero
+samples are SKIP with a reason, never invented joined frames. Unavailable is
+never added to joined. No pair or animation is a named SKIP in the output.
+Contact reports material connectivity at core's texel grid, not anatomical
+intent, sub-cell contact or the absence of local holes. Raw gap, ghost, floor
+and body-root verdicts keep their existing producer readings. Core 2.83.0's
+visible-ghost and local-support gap definitions are inherited by the 2.84.0 pin;
+contact counts do not replace or reinterpret them.
+
 **Physics seam environments** (issue #591). Default: wind [1, 0], gravity [0, 1]. Still: wind [0, 0], gravity [0, 1]. In rig-play, environment(null) returns to Default; still air requires an explicit wind [0, 0]. For a physics rig with readable declared pairs and animations, SEAM_OVER_MOTION adds optional `worlds.default` and `worlds.still` readings. They are informational raw gap/ghost cell counts (including cells below the warning floor), never new bars or warnings; neither changes PASS, exit status or the bar count. Each world records its vectors, status and rows; each row names its pair, animation, drawn/banded frames and gap/ghost maximum and worst frame, cell size and world box. Per-frame hits are not embedded in check.json. A rendered world's `dir` is relative to check.json (`seam_motion/default` or `seam_motion/still`): it retains the complete rigc render, including frames.json, frame images and each animation's seam.json with all raw hits. The directories are published with check.json only after the readings are validated; scratch is removed, and an unrendered SKIP has no directory reference. The original reading and any custom `--environment` schedule keep their existing meaning; the two reference worlds are independent of that schedule. A rig with no wind response reports Still as SKIP with its reason; no band is SKIP, never a measured zero. With no readable declared pair or animation no worlds block is written. The same declared pair list is used for both reference worlds: neighbouring limb segments, explicit seam requirements and the proven body-root declarations described below. Thigh/hem pairs are not inferred. Adding reference worlds to a nonphysics reading stays byte-identical, with no extra key, line or render; issue #686 separately adds body-root declarations and their active-reading bar. Reference renders start physics at frame 0 at 12 fps; they do not certify a composed player scene or another sampling rate. Malformed sidecars or renderer failures remain named refusals.
 
 **Steady-wind seam band** (`--wind-band`, issue #590). `check --wind-band <spec.json>` (or `build --wind-band <spec.json>`, forwarded) sweeps steady horizontal wind across a caller-declared grid and reports the contiguous `[x_lo, x_hi]` band in which each declared seam pair holds `gap <= max_gap` and `ghost <= max_ghost` across every animation in `motion.json`. Every field in `{ "spec": "rig-parts-wind-band/1", "min", "max", "step", "fps", "max_gap", "max_ghost", "pairs" }` is required — nothing falls back to `SEAM_OVER_MOTION`'s pairs, one-cell floor, or fps. At each swept step `x = min + k * step`, `check` runs `rigc render --seam <pairs> --fps <fps> --max 16 --environment` with a single-step steady schedule `{ "spec": "rigc-environment/1", "steps": [{ "t": 0, "wind": [x, 0], "gravity": [0, 1] }] }` (`seam.json` cells are in each pair's coarser drawing texels, independent of `--max`). **What it does not measure:** the sweep is steady wind (`wind: [x, 0], gravity: [0, 1]` at `t = 0`), not a time-varying gust (`x ± a` at 0.2 Hz); transient overshoot from a changing wind is not read by a steady sweep, and the band is documented and reported as the steady-wind band (`mode: "steady"`, `gravity: [0, 1]`). It is a reported line (`status: "REPORTED"`), never a bar: it prints one `WIND_BAND:` summary line plus one `WIND_BAND:` line per pair that breaks inside `[min, max]`, and writes `WIND_BAND` in `check.json` before `PASS`.

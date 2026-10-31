@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runJointContactChecks } from './tools/check_joint_contact.ts';
 import { runSetupPaintingChecks } from './tools/check_setup_painting.ts';
 import { runCutMaterialChecks } from './tools/check_cut_material.ts';
 import { runArtJointChecks } from './tools/check_art_joints.ts';
@@ -17615,7 +17616,7 @@ function runMotionSeamCases(report: FixtureCaseReporter): void {
         ln !== null &&
         ln.status === 'WARN' &&
         ln.warnings === 1 &&
-        JSON.stringify(ln.pairs) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', a: 'upperarm_r', b: 'forearm_r', declared: ['config.limbs.arm_r segment 1, joint "elbow"'] }]) &&
+        JSON.stringify(ln.pairs) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', a: 'upperarm_r', b: 'forearm_r', declared: ['config.limbs.arm_r segment 1, joint "elbow"'], joints: ['elbow'] }]) &&
         JSON.stringify(ln.animations) === '["idle","bend"]' &&
         idleRow !== undefined &&
         idleRow.status === 'read' &&
@@ -17682,7 +17683,7 @@ function runMotionSeamCases(report: FixtureCaseReporter): void {
       'SO04_THE_PAIRS_ARE_THE_DECLARED_ONES_ONCE_EACH_AND_THE_FLOOR_IS_ONE_CELL_OF_THICKNESS',
       JSON.stringify(both) ===
         JSON.stringify([
-          { pair: 'upperarm_r|forearm_r', a: 'upperarm_r', b: 'forearm_r', declared: ['config.limbs.arm_r segment 1, joint "elbow"', 'requirement "elbow seam" (seam)'] },
+          { pair: 'upperarm_r|forearm_r', a: 'upperarm_r', b: 'forearm_r', declared: ['config.limbs.arm_r segment 1, joint "elbow"', 'requirement "elbow seam" (seam)'], joints: ['elbow'] },
           { pair: 'upperarm_r|hand', a: 'upperarm_r', b: 'hand', declared: ['requirement "other" (seam)'] },
         ]) &&
         !openingOverFloor({ px: 1, cell: 1, box: box(1, 1) }) &&
@@ -52114,7 +52115,17 @@ function runWaistSuite(): number {
   return bad();
 }
 
+function runJointContactSuite(): number {
+  section('joint-contact: report-only material connectivity');
+  const { say, bad } = counter();
+  const dir = temp('joint-contact');
+  try { runJointContactChecks(dir, (name, ok, detail) => say(name, ok, detail, 'Synthetic material controls and independent raw/verdict preservation.')); }
+  finally { rmSync(dir, { recursive: true, force: true }); }
+  return bad();
+}
+
 const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number | null]> = [
+  ['joint-contact', runJointContactSuite],
   ['raster-components', runComponentsSuite],
   ['raster-morph', runMorphSuite],
   ['raster-blur', runBlurSuite],
@@ -52354,7 +52365,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
  * derivation accompany issue #849's change. A new example adds a unit to each split suite; `RT09` requires each here.
  */
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
-  ['1', ['check', 'chain@wind', 'chain@scarf', 'assemble-examples@wind', 'assemble-examples@reference-sample', 'scene', 'mesh-stats', 'auto-mesh-examples', 'config', 'inputs-examples', 'contour-wiring', 'waist', 'propose-corpus', 'arm-split-upgrade', 'comfy', 'diagnostics', 'structure', 'inputs', 'winding', 'raster-morph', 'raster-resize', 'raster-components', 'raster-warp', 'png']],
+  ['1', ['joint-contact', 'check', 'chain@wind', 'chain@scarf', 'assemble-examples@wind', 'assemble-examples@reference-sample', 'scene', 'mesh-stats', 'auto-mesh-examples', 'config', 'inputs-examples', 'contour-wiring', 'waist', 'propose-corpus', 'arm-split-upgrade', 'comfy', 'diagnostics', 'structure', 'inputs', 'winding', 'raster-morph', 'raster-resize', 'raster-components', 'raster-warp', 'png']],
   ['2', ['cli', 'build', 'remesh', 'rig', 'chain@reference-sample', 'readme-loop@reference-demo', 'chain@reference-demo', 'propose', 'assemble-examples@reference-demo', 'readme-loop@reference-sample', 'auto-motion', 'tree', 'auto-mesh', 'config-write', 'limb-slots', 'loop', 'corpus', 'limb-layout', 'requirements', 'fixed-skeleton', 'setup-painting', 'foot-ownership', 'layers-wrapper', 'painting', 'skeleton', 'core-pointer', 'assemble-examples@end', 'parts', 'prompt', 'sheet']],
   ['3', ['readme-loop@wind', 'chain@end', 'readme-loop@demo', 'retune', 'chain@demo', 'assemble-examples@scarf', 'assemble-examples@demo', 'readme-loop@scarf', 'mesh-draft', 'alternate-layers', 'take-layers', 'influence', 'front-slot', 'assemble', 'readme-loop@end', 'build-cost', 'alternate-tips', 'chain-inherit', 'keypoints', 'contour', 'subset-cover', 'hybrid-limb', 'plausibility', 'raster-blur', 'fetch-examples', 'layers-psd', 'raster-poly', 'raster-composite']],
 ];

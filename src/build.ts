@@ -81,7 +81,7 @@ import {
   splitSchedule,
   untestedIntervals,
 } from './autoreplay.ts';
-import { besideIdleLine, checkSummaryLine, inputFileRecord, type InputFileRecord, CLOTH_LINE, type ClothLine, clothWarnText, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamWarnText, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, environmentLine, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, readCheckEnvironment, readWindBand, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR, WIND_BAND_LINE, windBandLines } from './check.ts';
+import { besideIdleLine, checkSummaryLine, inputFileRecord, type InputFileRecord, CLOTH_LINE, type ClothLine, clothWarnText, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamWarnText, motionJointContactLines, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, environmentLine, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, readCheckEnvironment, readWindBand, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR, WIND_BAND_LINE, windBandLines } from './check.ts';
 import { type Cut, type Extend, type Limb, loadConfigAndAnimations, loadConfigWithBytes, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
 import { coreCompileGuideLine, failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import type { MeshQualityReport, MotionSchedule } from '@rig-c/core/mesh';
@@ -1824,7 +1824,7 @@ export function sweepCheckLines(line: SweepLine, steps: ReadonlyMap<string, { le
 export function motionSeamLines(line: MotionSeamLine, plant: MotionSeamPlant = {}): string[] {
   const unmeasured = (line.roots?.unmeasured ?? []).map(root => `root pair for ${root.limb} (${root.part}, bone "${root.bone}", parent "${root.parent}", candidates ${root.candidates.join('/')}): SKIP — ${root.reason}`);
   const rootStatus = line.roots === undefined ? '' : '; body-root gap-open+under-ghost gate ' + line.roots.status + ' (' + line.roots.pairs.length + ' pair(s)); ghost ownership from resolved draw order' + (line.roots.reason === undefined ? '' : ' — ' + line.roots.reason);
-  if (line.worlds === undefined && line.status === 'SKIP' && line.rows.length === 0 && line.pairs.every((p) => p.unread === undefined)) return [`${MOTION_SEAM_LINE}: SKIP — ${String(line.reason)}${unmeasured.length === 0 ? '' : rootStatus}`, ...unmeasured];
+  if (line.worlds === undefined && line.status === 'SKIP' && line.rows.length === 0 && line.pairs.every((p) => p.unread === undefined)) return [`${MOTION_SEAM_LINE}: SKIP — ${String(line.reason)}${unmeasured.length === 0 ? '' : rootStatus}`, ...unmeasured, ...motionJointContactLines(line)];
   const read = `${line.pairs.length} declared pair(s) in ${line.animations.length} animation(s) (${line.animations.join(', ')}), read by rigc render --seam at ${line.fps} fps on the build as played`;
   const head =
     line.status === 'SKIP'
@@ -1832,6 +1832,7 @@ export function motionSeamLines(line: MotionSeamLine, plant: MotionSeamPlant = {
       : `${MOTION_SEAM_LINE}: ${line.status} — ${read}: ${line.warnings} warning(s), never a bar${rootStatus}; ${line.floor}`;
   return [
     head,
+    ...motionJointContactLines(line),
     ...unmeasured,
     ...line.pairs.filter((p) => p.unread !== undefined).map((p) => `seam "${p.pair}" (${p.declared.join('; ')}): not read — ${String(p.unread)}`),
     ...line.rows.filter((r) => r.status === 'skip').map((r) => `seam "${r.pair}" in "${r.animation}": SKIP — rigc read no band on any of the ${r.drawn} frame(s) both slots draw, so there is no seam to read`),

@@ -83,6 +83,7 @@ import { baseAnchorMoves, type AnchorRegion } from './baseanchor.ts';
  * the last idle frame is refused unless it sits at t = duration (within
  * `TIME_SLACK`, issue #244).
  */
+import { jointContactReading, type JointContactReading } from './jointcontact.ts';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import type { Viewport as RootCoverageViewport } from '@rig-c/core/render-shared';
@@ -4341,6 +4342,8 @@ export interface MotionSeamPair {
   a: string;
   b: string;
   declared: string[];
+  /** Explicit limb joint labels or a proven body root's bone; never inferred for arbitrary seams. */
+  joints?: string[];
   /** Why the pair is not read: a slot `rig.json` does not have. */
   unread?: string;
   /** Issue #686: segment-zero provenance and its immediate named body carrier. */
@@ -4374,6 +4377,8 @@ export interface MotionSeamSelection {
 export interface MotionSeamRow {
   pair: string;
   animation: string;
+  /** Report-only core connectivity, independent of raw counts and verdicts. */
+  joint_contact?: JointContactReading;
   /** rigc's: `skip` when no frame has a band to read — nothing measured, not a seam that held. */
   status: 'read' | 'skip';
   /** Frames both slots draw, and of those the frames read (rigc's `drawn`, `banded`). */
@@ -4426,10 +4431,12 @@ export function motionSeamPairs(parts: PartsFile, seams: ReadonlyArray<{ name: s
 export function motionSeamSelection(parts: PartsFile, seams: ReadonlyArray<{ name: string; part: string; neighbour: string }>, rig?: Record<string, unknown>, readSetup?: (candidates: readonly MotionSeamPair[]) => readonly MotionRootSetupRow[]): MotionSeamSelection {
   const out: MotionSeamPair[] = [];
   const unmeasuredRoots: MotionUnmeasuredRoot[] = [];
-  const add = (a: string, b: string, declared: string): void => {
+  const add = (a: string, b: string, declared: string, joint?: string): void => {
     const hit = out.find((p) => (p.a === a && p.b === b) || (p.a === b && p.b === a));
-    if (hit !== undefined) hit.declared.push(declared);
-    else out.push({ pair: `${a}|${b}`, a, b, declared: [declared] });
+    if (hit !== undefined) {
+      hit.declared.push(declared);
+      if (joint !== undefined && !hit.joints?.includes(joint)) (hit.joints ??= []).push(joint);
+    } else out.push({ pair: `${a}|${b}`, a, b, declared: [declared], ...(joint === undefined ? {} : { joints: [joint] }) });
   };
   const limbs: string[] = [];
   for (const p of parts.parts) if (p.limb !== undefined && !limbs.includes(p.limb.name)) limbs.push(p.limb.name);
@@ -4437,7 +4444,7 @@ export function motionSeamSelection(parts: PartsFile, seams: ReadonlyArray<{ nam
     const segs = parts.parts.filter((p) => p.limb?.name === limb).sort((x, y) => (x.limb as LimbRecord).segment - (y.limb as LimbRecord).segment);
     for (let i = 1; i < segs.length; i++) {
       const lower = segs[i].limb as LimbRecord;
-      add(segs[i - 1].name, segs[i].name, `config.limbs.${limb} segment ${lower.segment}${lower.joint === undefined ? '' : `, joint "${lower.joint}"`}`);
+      add(segs[i - 1].name, segs[i].name, `config.limbs.${limb} segment ${lower.segment}${lower.joint === undefined ? '' : `, joint "${lower.joint}"`}`, lower.joint);
     }
   }
   for (const r of seams) add(r.part, r.neighbour, `requirement "${r.name}" (seam)`);
@@ -4473,7 +4480,7 @@ export function motionSeamSelection(parts: PartsFile, seams: ReadonlyArray<{ nam
     }
   }
   for (const root of selected) {
-    add(root.a, root.b, root.declared[0]);
+    add(root.a, root.b, root.declared[0], root.root?.bone);
     const pair = out.find(p => (p.a === root.a && p.b === root.b) || (p.a === root.b && p.b === root.a));
     if (pair !== undefined) pair.root = root.root;
   }
@@ -4578,7 +4585,7 @@ function motionRootCandidates(parts: PartsFile, rig: Record<string, unknown>): M
     }
     for (const { part: body } of eligible) out.push({ pair: body.name + '|' + root.name, a: body.name, b: root.name,
       declared: ['config.limbs.' + limb + ' segment 0, body carrier "' + parent + '" from ' + body.from],
-      root: { limb, bone: l.bone, parent } });
+      joints: [l.bone], root: { limb, bone: l.bone, parent } });
   }
   refuseIfAny(problems);
   return out;
@@ -4928,6 +4935,7 @@ function readSeamRows(dir: string, animations: readonly string[], fps: number, p
       rows.push({
         pair: want.pair,
         animation,
+        ...(setup ? {} : { joint_contact: jointContactReading(p.jointContact, want.joints ?? [], set.written ?? set.sampled, at) }),
         status: p.status,
         drawn: p.drawn,
         banded: p.banded,
@@ -5079,6 +5087,21 @@ export function enrichMotionSeamPoses(dir: string, rig: Record<string, unknown>,
     }
     row.pose_at_worst = seamPoseFrame(data.geometry, row.animation, h.index, time, data.cohort, joints);
   }
+}
+
+/** One informational line per observed pair/animation; missing readings are named SKIP. */
+export function motionJointContactLines(line: MotionSeamLine): string[] {
+  if (line.rows.length === 0) return ['JOINT_CONTACT: SKIP — ' + (line.reason ?? 'no sampled pair/animation reading')];
+  const lines = line.rows.map(row => {
+    const c = row.joint_contact;
+    const head = 'JOINT_CONTACT: "' + row.pair + '" in "' + row.animation + '"';
+    if (c === undefined || c.status === 'SKIP') return head + ': SKIP — ' + (c?.reason ?? 'no contact observation');
+    return head + ', joint ' + (c.joints.length === 0 ? 'unavailable' : c.joints.map(n => JSON.stringify(n)).join(', ')) +
+      ': joined ' + c.joined + ', separated ' + c.separated + ', unavailable ' + c.unavailable + ' frame(s)' +
+      (c.reasons.length === 0 ? '' : '; ' + c.reasons.map(r => r.reason + (r.frames === undefined ? '' : ' on frames ' + frameRuns(r.frames))).join('; ')) + '; report only';
+  });
+  for (const pair of line.pairs) if (!line.rows.some(row => row.pair === pair.pair)) lines.push('JOINT_CONTACT: "' + pair.pair + '": SKIP — ' + (pair.unread ?? line.reason ?? 'no sampled animation'));
+  return lines;
 }
 
 /** One warning as the console prints it (issue #493's form, the floor's clause after it). */
