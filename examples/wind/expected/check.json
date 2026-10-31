@@ -288,7 +288,7 @@
    }
   },
   "whole": {
-   "mean": 0.00001482635374493927,
+   "mean": 1.482635374493927e-05,
    "display_mean": 0,
    "denominator_px": 1011712,
    "px_over_40": 0,
@@ -1258,6 +1258,9 @@
     "b": "shin_r",
     "declared": [
      "config.limbs.leg_r segment 1, joint \"knee\""
+    ],
+    "joints": [
+     "knee"
     ]
    },
    {
@@ -1266,6 +1269,9 @@
     "b": "foot_r",
     "declared": [
      "config.limbs.leg_r segment 2, joint \"ankle\""
+    ],
+    "joints": [
+     "ankle"
     ]
    },
    {
@@ -1274,6 +1280,9 @@
     "b": "shin_l",
     "declared": [
      "config.limbs.leg_l segment 1, joint \"knee\""
+    ],
+    "joints": [
+     "knee"
     ]
    },
    {
@@ -1282,6 +1291,9 @@
     "b": "foot_l",
     "declared": [
      "config.limbs.leg_l segment 2, joint \"ankle\""
+    ],
+    "joints": [
+     "ankle"
     ]
    },
    {
@@ -1290,6 +1302,9 @@
     "b": "forearm_l",
     "declared": [
      "config.limbs.arm_l segment 1, joint \"elbow\""
+    ],
+    "joints": [
+     "elbow"
     ]
    },
    {
@@ -1298,6 +1313,9 @@
     "b": "forearm_r",
     "declared": [
      "config.limbs.arm_r segment 1, joint \"elbow\""
+    ],
+    "joints": [
+     "elbow"
     ]
    },
    {
@@ -1306,6 +1324,9 @@
     "b": "thigh_r",
     "declared": [
      "config.limbs.leg_r segment 0, body carrier \"hip\" from full:bottomwear"
+    ],
+    "joints": [
+     "leg_r0"
     ],
     "root": {
      "limb": "leg_r",
@@ -1320,6 +1341,9 @@
     "declared": [
      "config.limbs.leg_l segment 0, body carrier \"hip\" from full:bottomwear"
     ],
+    "joints": [
+     "leg_l0"
+    ],
     "root": {
      "limb": "leg_l",
      "bone": "leg_l0",
@@ -1333,6 +1357,9 @@
     "declared": [
      "config.limbs.arm_l segment 0, body carrier \"chest\" from full:topwear"
     ],
+    "joints": [
+     "sleeve_l0"
+    ],
     "root": {
      "limb": "arm_l",
      "bone": "sleeve_l0",
@@ -1345,6 +1372,9 @@
     "b": "upperarm_r",
     "declared": [
      "config.limbs.arm_r segment 0, body carrier \"chest\" from full:topwear"
+    ],
+    "joints": [
+     "sleeve_r0"
     ],
     "root": {
      "limb": "arm_r",
@@ -1361,6 +1391,63 @@
    {
     "pair": "thigh_r|shin_r",
     "animation": "idle",
+    "joint_contact": {
+     "status": "REPORTED",
+     "joints": [
+      "knee"
+     ],
+     "joined": 0,
+     "separated": 0,
+     "unavailable": 41,
+     "reasons": [
+      {
+       "reason": "b setup: multiple edge-connected half-opacity material components; exactly one is required",
+       "frames": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40
+       ]
+      }
+     ]
+    },
     "status": "read",
     "drawn": 41,
     "banded": 41,
@@ -1372,6 +1459,63 @@
    {
     "pair": "shin_r|foot_r",
     "animation": "idle",
+    "joint_contact": {
+     "status": "REPORTED",
+     "joints": [
+      "ankle"
+     ],
+     "joined": 0,
+     "separated": 0,
+     "unavailable": 41,
+     "reasons": [
+      {
+       "reason": "a setup: multiple edge-connected half-opacity material components; exactly one is required",
+       "frames": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40
+       ]
+      }
+     ]
+    },
     "status": "read",
     "drawn": 41,
     "banded": 41,
@@ -1383,6 +1527,63 @@
    {
     "pair": "thigh_l|shin_l",
     "animation": "idle",
+    "joint_contact": {
+     "status": "REPORTED",
+     "joints": [
+      "knee"
+     ],
+     "joined": 0,
+     "separated": 0,
+     "unavailable": 41,
+     "reasons": [
+      {
+       "reason": "b setup: multiple edge-connected half-opacity material components; exactly one is required",
+       "frames": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40
+       ]
+      }
+     ]
+    },
     "status": "read",
     "drawn": 41,
     "banded": 41,
@@ -1394,6 +1595,63 @@
    {
     "pair": "shin_l|foot_l",
     "animation": "idle",
+    "joint_contact": {
+     "status": "REPORTED",
+     "joints": [
+      "ankle"
+     ],
+     "joined": 0,
+     "separated": 0,
+     "unavailable": 41,
+     "reasons": [
+      {
+       "reason": "a setup: multiple edge-connected half-opacity material components; exactly one is required",
+       "frames": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40
+       ]
+      }
+     ]
+    },
     "status": "read",
     "drawn": 41,
     "banded": 41,
@@ -1405,6 +1663,16 @@
    {
     "pair": "upperarm_l|forearm_l",
     "animation": "idle",
+    "joint_contact": {
+     "status": "REPORTED",
+     "joints": [
+      "elbow"
+     ],
+     "joined": 41,
+     "separated": 0,
+     "unavailable": 0,
+     "reasons": []
+    },
     "status": "read",
     "drawn": 41,
     "banded": 41,
@@ -1432,6 +1700,63 @@
    {
     "pair": "upperarm_r|forearm_r",
     "animation": "idle",
+    "joint_contact": {
+     "status": "REPORTED",
+     "joints": [
+      "elbow"
+     ],
+     "joined": 0,
+     "separated": 0,
+     "unavailable": 41,
+     "reasons": [
+      {
+       "reason": "b setup: multiple edge-connected half-opacity material components; exactly one is required",
+       "frames": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40
+       ]
+      }
+     ]
+    },
     "status": "read",
     "drawn": 41,
     "banded": 41,
@@ -1472,15 +1797,70 @@
    {
     "pair": "bottomwear|thigh_r",
     "animation": "idle",
+    "joint_contact": {
+     "status": "REPORTED",
+     "joints": [
+      "leg_r0"
+     ],
+     "joined": 0,
+     "separated": 0,
+     "unavailable": 41,
+     "reasons": [
+      {
+       "reason": "a setup: multiple edge-connected half-opacity material components; exactly one is required",
+       "frames": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40
+       ]
+      }
+     ]
+    },
     "status": "read",
     "drawn": 41,
     "banded": 41,
     "opens": [],
     "px": [],
     "max_px": 0,
-    "under_floor": [
-     5
-    ],
+    "under_floor": [],
     "cells": [
      {
       "index": 2,
@@ -1524,18 +1904,11 @@
       "gapOpen": 0,
       "gapCovered": 0,
       "ghostA": 70,
-      "ghostB": 1,
+      "ghostB": 0,
       "under": "b",
-      "underGhost": 1,
+      "underGhost": 0,
       "overGhost": 70,
-      "counted": 1,
-      "floor": 156,
-      "floor_box": [
-       -116.00002486994737,
-       420.00009004636127,
-       -25.000005359902445,
-       576.0001234921526
-      ]
+      "counted": 0
      },
      {
       "index": 6,
@@ -1551,9 +1924,9 @@
      },
      {
       "index": 7,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 49,
       "ghostB": 0,
       "under": "b",
@@ -1575,9 +1948,9 @@
      },
      {
       "index": 9,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 31,
       "ghostB": 0,
       "under": "b",
@@ -1587,9 +1960,9 @@
      },
      {
       "index": 10,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 28,
       "ghostB": 0,
       "under": "b",
@@ -1599,9 +1972,9 @@
      },
      {
       "index": 11,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 30,
       "ghostB": 0,
       "under": "b",
@@ -1611,9 +1984,9 @@
      },
      {
       "index": 12,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 33,
       "ghostB": 0,
       "under": "b",
@@ -1623,9 +1996,9 @@
      },
      {
       "index": 13,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 33,
       "ghostB": 0,
       "under": "b",
@@ -1635,9 +2008,9 @@
      },
      {
       "index": 14,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1647,9 +2020,9 @@
      },
      {
       "index": 15,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1659,9 +2032,9 @@
      },
      {
       "index": 16,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1671,9 +2044,9 @@
      },
      {
       "index": 17,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1683,9 +2056,9 @@
      },
      {
       "index": 18,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1695,9 +2068,9 @@
      },
      {
       "index": 19,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1707,9 +2080,9 @@
      },
      {
       "index": 20,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1719,9 +2092,9 @@
      },
      {
       "index": 21,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1731,9 +2104,9 @@
      },
      {
       "index": 22,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1743,9 +2116,9 @@
      },
      {
       "index": 23,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1755,9 +2128,9 @@
      },
      {
       "index": 24,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1767,9 +2140,9 @@
      },
      {
       "index": 25,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1779,9 +2152,9 @@
      },
      {
       "index": 26,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1791,9 +2164,9 @@
      },
      {
       "index": 27,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1803,9 +2176,9 @@
      },
      {
       "index": 28,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1815,9 +2188,9 @@
      },
      {
       "index": 29,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1827,9 +2200,9 @@
      },
      {
       "index": 30,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1839,9 +2212,9 @@
      },
      {
       "index": 31,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1851,9 +2224,9 @@
      },
      {
       "index": 32,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1863,9 +2236,9 @@
      },
      {
       "index": 33,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1875,9 +2248,9 @@
      },
      {
       "index": 34,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1887,9 +2260,9 @@
      },
      {
       "index": 35,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1899,9 +2272,9 @@
      },
      {
       "index": 36,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1911,9 +2284,9 @@
      },
      {
       "index": 37,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1923,9 +2296,9 @@
      },
      {
       "index": 38,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1935,9 +2308,9 @@
      },
      {
       "index": 39,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1947,9 +2320,9 @@
      },
      {
       "index": 40,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 35,
       "ghostB": 0,
       "under": "b",
@@ -1962,6 +2335,63 @@
    {
     "pair": "bottomwear|thigh_l",
     "animation": "idle",
+    "joint_contact": {
+     "status": "REPORTED",
+     "joints": [
+      "leg_l0"
+     ],
+     "joined": 0,
+     "separated": 0,
+     "unavailable": 41,
+     "reasons": [
+      {
+       "reason": "a setup: multiple edge-connected half-opacity material components; exactly one is required",
+       "frames": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40
+       ]
+      }
+     ]
+    },
     "status": "read",
     "drawn": 41,
     "banded": 41,
@@ -2044,9 +2474,9 @@
      },
      {
       "index": 8,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 289,
       "ghostB": 0,
       "under": "b",
@@ -2092,9 +2522,9 @@
      },
      {
       "index": 12,
-      "gap": 1,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 1,
+      "gapCovered": 0,
       "ghostA": 321,
       "ghostB": 0,
       "under": "b",
@@ -2104,9 +2534,9 @@
      },
      {
       "index": 13,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 323,
       "ghostB": 0,
       "under": "b",
@@ -2116,9 +2546,9 @@
      },
      {
       "index": 14,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 324,
       "ghostB": 0,
       "under": "b",
@@ -2128,9 +2558,9 @@
      },
      {
       "index": 15,
-      "gap": 3,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 3,
+      "gapCovered": 0,
       "ghostA": 326,
       "ghostB": 0,
       "under": "b",
@@ -2140,9 +2570,9 @@
      },
      {
       "index": 16,
-      "gap": 3,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 3,
+      "gapCovered": 0,
       "ghostA": 327,
       "ghostB": 0,
       "under": "b",
@@ -2152,9 +2582,9 @@
      },
      {
       "index": 17,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 329,
       "ghostB": 0,
       "under": "b",
@@ -2164,9 +2594,9 @@
      },
      {
       "index": 18,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 330,
       "ghostB": 0,
       "under": "b",
@@ -2176,9 +2606,9 @@
      },
      {
       "index": 19,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 330,
       "ghostB": 0,
       "under": "b",
@@ -2188,9 +2618,9 @@
      },
      {
       "index": 20,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 330,
       "ghostB": 0,
       "under": "b",
@@ -2200,9 +2630,9 @@
      },
      {
       "index": 21,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2212,9 +2642,9 @@
      },
      {
       "index": 22,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2224,9 +2654,9 @@
      },
      {
       "index": 23,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2236,9 +2666,9 @@
      },
      {
       "index": 24,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2248,9 +2678,9 @@
      },
      {
       "index": 25,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2260,9 +2690,9 @@
      },
      {
       "index": 26,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2272,9 +2702,9 @@
      },
      {
       "index": 27,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2284,9 +2714,9 @@
      },
      {
       "index": 28,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2296,9 +2726,9 @@
      },
      {
       "index": 29,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2308,9 +2738,9 @@
      },
      {
       "index": 30,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2320,9 +2750,9 @@
      },
      {
       "index": 31,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2332,9 +2762,9 @@
      },
      {
       "index": 32,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2344,9 +2774,9 @@
      },
      {
       "index": 33,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2356,9 +2786,9 @@
      },
      {
       "index": 34,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2368,9 +2798,9 @@
      },
      {
       "index": 35,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2380,9 +2810,9 @@
      },
      {
       "index": 36,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2392,9 +2822,9 @@
      },
      {
       "index": 37,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2404,9 +2834,9 @@
      },
      {
       "index": 38,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2416,9 +2846,9 @@
      },
      {
       "index": 39,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2428,9 +2858,9 @@
      },
      {
       "index": 40,
-      "gap": 2,
+      "gap": 0,
       "gapOpen": 0,
-      "gapCovered": 2,
+      "gapCovered": 0,
       "ghostA": 331,
       "ghostB": 0,
       "under": "b",
@@ -2443,6 +2873,63 @@
    {
     "pair": "topwear|upperarm_l",
     "animation": "idle",
+    "joint_contact": {
+     "status": "REPORTED",
+     "joints": [
+      "sleeve_l0"
+     ],
+     "joined": 0,
+     "separated": 0,
+     "unavailable": 41,
+     "reasons": [
+      {
+       "reason": "a setup: multiple edge-connected half-opacity material components; exactly one is required",
+       "frames": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40
+       ]
+      }
+     ]
+    },
     "status": "read",
     "drawn": 41,
     "banded": 41,
@@ -2489,6 +2976,63 @@
    {
     "pair": "topwear|upperarm_r",
     "animation": "idle",
+    "joint_contact": {
+     "status": "REPORTED",
+     "joints": [
+      "sleeve_r0"
+     ],
+     "joined": 0,
+     "separated": 0,
+     "unavailable": 41,
+     "reasons": [
+      {
+       "reason": "a setup: multiple edge-connected half-opacity material components; exactly one is required",
+       "frames": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        37,
+        38,
+        39,
+        40
+       ]
+      }
+     ]
+    },
     "status": "read",
     "drawn": 41,
     "banded": 41,
@@ -2674,30 +3218,20 @@
       "drawn": 41,
       "banded": 41,
       "gap": {
-       "max_px": 2,
-       "worst": {
-        "index": 7,
-        "px": 2,
-        "cell": 1.0000002143960982,
-        "box": [
-         -29.000006217486828,
-         421.00009026075736,
-         -27.000005788694637,
-         422.00009047515346
-        ]
-       }
+       "max_px": 0,
+       "worst": null
       },
       "ghost": {
-       "max_px": 71,
+       "max_px": 70,
        "worst": {
         "index": 5,
-        "px": 71,
+        "px": 70,
         "cell": 1.0000002143960982,
         "box": [
-         -116.00002486994737,
+         -103.0000220827981,
          420.00009004636127,
          -25.000005359902445,
-         576.0001234921526
+         431.0000924047184
         ]
        }
       }
@@ -2709,18 +3243,8 @@
       "drawn": 41,
       "banded": 41,
       "gap": {
-       "max_px": 3,
-       "worst": {
-        "index": 15,
-        "px": 3,
-        "cell": 1.0000003222791094,
-        "box": [
-         92.00002964967808,
-         416.0001340681095,
-         95.0000306165154,
-         417.0001343903886
-        ]
-       }
+       "max_px": 0,
+       "worst": null
       },
       "ghost": {
        "max_px": 331,
@@ -2922,16 +3446,16 @@
        "worst": null
       },
       "ghost": {
-       "max_px": 178,
+       "max_px": 177,
        "worst": {
         "index": 6,
-        "px": 178,
+        "px": 177,
         "cell": 1.0000002143960982,
         "box": [
-         -116.00002486994737,
+         -110.0000235835708,
          417.000089403173,
          -97.00002079642152,
-         576.0001234921526
+         434.0000930479067
         ]
        }
       }
@@ -3096,7 +3620,7 @@
     "point": "end",
     "settles_at": 2.25,
     "max_rig_px_per_s": 129.7,
-    "min_rig_px_per_s": 3.731e-7
+    "min_rig_px_per_s": 3.731e-07
    },
    {
     "tip": "skirt0b_1",
@@ -3105,7 +3629,7 @@
     "point": "end",
     "settles_at": 2.5,
     "max_rig_px_per_s": 89.11,
-    "min_rig_px_per_s": 2.765e-7
+    "min_rig_px_per_s": 2.765e-07
    },
    {
     "tip": "skirt1a_1",
@@ -3114,7 +3638,7 @@
     "point": "end",
     "settles_at": 1.833,
     "max_rig_px_per_s": 13.93,
-    "min_rig_px_per_s": 5.197e-8
+    "min_rig_px_per_s": 5.197e-08
    },
    {
     "tip": "skirt1b_1",
@@ -3123,7 +3647,7 @@
     "point": "end",
     "settles_at": 1.833,
     "max_rig_px_per_s": 7.533,
-    "min_rig_px_per_s": 3.048e-8
+    "min_rig_px_per_s": 3.048e-08
    },
    {
     "tip": "skirt2a_1",
@@ -3132,7 +3656,7 @@
     "point": "end",
     "settles_at": 2.25,
     "max_rig_px_per_s": 54.6,
-    "min_rig_px_per_s": 1.489e-7
+    "min_rig_px_per_s": 1.489e-07
    },
    {
     "tip": "skirt2b_1",
@@ -3141,7 +3665,7 @@
     "point": "end",
     "settles_at": 2,
     "max_rig_px_per_s": 50.51,
-    "min_rig_px_per_s": 1.637e-7
+    "min_rig_px_per_s": 1.637e-07
    },
    {
     "tip": "skirt3a_1",
@@ -3150,7 +3674,7 @@
     "point": "end",
     "settles_at": 1.833,
     "max_rig_px_per_s": 120.1,
-    "min_rig_px_per_s": 4.347e-7
+    "min_rig_px_per_s": 4.347e-07
    },
    {
     "tip": "skirt3b_1",
@@ -3159,7 +3683,7 @@
     "point": "end",
     "settles_at": 2.75,
     "max_rig_px_per_s": 156.5,
-    "min_rig_px_per_s": 5.316e-7
+    "min_rig_px_per_s": 5.316e-07
    },
    {
     "tip": "skirt_swing",
@@ -3168,7 +3692,7 @@
     "point": "end",
     "settles_at": 1.5,
     "max_rig_px_per_s": 6.566,
-    "min_rig_px_per_s": 1.809e-8
+    "min_rig_px_per_s": 1.809e-08
    }
   ]
  },
