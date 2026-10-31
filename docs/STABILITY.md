@@ -62,7 +62,7 @@ defaults are the help's too, and none is guessed from the art.
 | `propose` | `--parts`, `--source`, `--out`, `--full`, `--head`, `--write-config` together: the [neck draft](AUTHORING.md#a-neck-that-moves-on-its-own) for an existing config with `turn.body` and one neck plan row; reassembles under `<out>/rig`, preserves the sampled turn and drafts a rigid neck unit (issue #826) |
 | `compare` | `--left`, `--right`; optional `--map` |
 | `rig` | `--config`, `--parts`, `--out`; optional `--idle-keys` (ctl, direct), `--page-edges` (pot, free), `--pack-shape` (rect, polygon) |
-| `check` | `--rig`, `--out`; optional `--parts`, `--source`, `--page-edges`, `--pack-shape`, `--requirements`, `--seam-pairs`, `--keep-stills`, `--no-extremes` (issue #829), `--set` or `--all-sets` (issue #454), `--environment` (issue #538, additive), `--wind-band` (issue #590, additive) |
+| `check` | `--rig`, `--out`; optional `--parts`, `--source`, `--page-edges`, `--pack-shape`, `--requirements`, `--seam-pairs`, `--keep-stills`, `--no-extremes` (issue #829), `--set` or `--all-sets` (issue #454), `--environment` (issue #538, additive), `--wind-band` (issue #590, additive), `--json` (issue #904) |
 | `loop` | `--frames`, `--out`; optional `--palette` |
 | `build` | `--config`, `--source`, `--full`, `--out`; optional `--head` (as for `assemble`), `--seam`, `--project`, `--page-edges`, `--pack-shape`, `--loop`, `--lead-in`, `--requirements`, `--idle-keys`, `--seam-pairs`, `--keep-stills`, `--no-extremes` (issue #829), `--alt` (as for `assemble`, issue #454), `--set` or `--all-sets` (as for `check`, issue #454), `--environment` (as for `check`, issue #538, additive), `--wind-band` (as for `check`, issue #590, additive) |
 | `compose` | `--scene`, `--out`; optional `--requirements`, `--accept` |
@@ -116,6 +116,18 @@ rules that make the contract:
 - **`turn`** (issue #251) adds a control bone `turn` under `root` that nothing
   keys, and carries each part in `depths` by `(pivot − depth) / (pivot − nearest
   depth)` of its x. Without the field no byte of any output moves.
+  A declared head turn (`depths` or `roles`) reports `RIG_TURN_HEAD_ROLL`
+  when the absolute setup eye-line roll exceeds the limit displayed as
+  18.485385 degrees
+  (issue #903). This empirical limit is the midpoint of the measured public
+  control maximum, 4.864514 degrees, and `three-quarter`,
+  32.106256 degrees (the comparison uses the unrounded midpoint). The warning
+  names the face/eye parts, the eye
+  bones, signed roll and limit. It is report-only: no refusal, field, pose or
+  emitted-byte change. No head turn, a body-only turn, or an unreadable eye
+  line adds no warning; unreadable retains the existing face-axis reason.
+  See [Head roll before a declared turn](AUTHORING.md#head-roll-before-a-declared-turn)
+  for the measurement scope and its limits.
 - **`scene`** (issue #242) declares the painting a scene — the figure and what
   is round it — and takes no field: `{}`. With it `assemble` reads the
   recomposite inside the figure (the union of the full run's layers at alpha
@@ -512,10 +524,17 @@ The separate ordering scalar is unchanged. No-image outputs retain legacy bytes.
 ### Declared setup-painting regions
 
 The optional `setup_painting` key in `spine-parts-requirements/1` adds a
-`SETUP_MATCHES_PAINTING` observation only when declared. It requires authored
+`SETUP_MATCHES_PAINTING` measurement when declared. It requires authored
 `rgb_tolerance` and named native-stage boxes. Each optional `max_pixels` is
-that whole region's limit; omission is SKIP, never PASS. Existing files without
-the key retain their output bytes and renderer calls. Other requirement fields
+that whole region's limit; omission is SKIP, never PASS. With `--source` but
+no declaration, the console, `check.json` and the report's skipped-bar list now
+say SKIP with the reason and the `--requirements` declaration remedy; exit
+codes stay unchanged. No metric, region or limit is invented. Without source
+and without the key, the line stays absent. Declared output bytes and renderer
+calls remain unchanged. `check --json` prints the completed `check.json` bytes
+to stdout and keeps the ordinary check's exit code; early input refusals and
+usage errors keep their existing named text and exits. `build --json` is refused
+with a `check --json` remedy; build keeps its multi-stage text report. Other requirement fields
 remain independent. The [authoring contract](AUTHORING.md#setup-against-the-painting)
 defines white compositing, the figure domain, strict RGB comparison, top
 contributor attribution and named measurement refusals. The check observes the
@@ -545,3 +564,9 @@ encoding, convexity sign and refusal remedies are in
 calls these stages; no-config builds retain their existing behavior and bytes.
 Group numbers and unit depths are explicit; no provider or absolute scale is
 inferred. A new depth stage never replaces Core's rig gate.
+`relief` is an explicit rig-pixel value, not an implicit width multiplier.
+Part-width and head-referenced calibrations are authored recipe choices;
+changing a calibration requires preparing its recipe again. Compare the same
+provider maps and preserve their provenance. Each report row names the part,
+declared relief, group `zScale` and clipping over original alpha>=128 support;
+it remains a measurement rather than a shape-quality gate.

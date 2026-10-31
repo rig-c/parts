@@ -310,6 +310,14 @@ function lineGap(a: number, b: number): number {
 export const EYE_BONES: readonly [string, string] = ['eye_r', 'eye_l'];
 
 /**
+ * Issue #903: midpoint of absolute setup eye-line rolls measured on the public
+ * controls (maximum 4.864514437760526 degrees across the five parts examples,
+ * dancer and the head-turn demo) and three-quarter (32.106255955117845 degrees).
+ * This separates those inputs; it is not an anatomical or visual-quality bar.
+ */
+const HEAD_TURN_ROLL_LIMIT = (4.864514437760526 + 32.106255955117845) / 2;
+
+/**
  * The eye line (issue #239). It exists when parts.json holds an eye on each
  * side — the first part tagged `eyewhite-r` and the first tagged `eyewhite-l`
  * (a cut's piece is neither), the parts `propose` stands `eye_r` and `eye_l`
@@ -3656,6 +3664,15 @@ export function buildWaistPairSource(
     boneLandmarks.set(bName, [bEntry.x, bEntry.y]);
   }
   const turnWarnings: Problem[] = [];
+  if ((cfg.turn?.depths !== undefined || cfg.turn?.roles !== undefined) && line.degrees !== null && Math.abs(line.degrees) > HEAD_TURN_ROLL_LIMIT) {
+    const faces = parts.parts.filter(p => tagOf(p.from) === 'face' && p.cut_from === undefined).map(p => p.name);
+    const names = faces.length === 0 ? line.parts : faces;
+    turnWarnings.push({
+      code: 'RIG_TURN_HEAD_ROLL',
+      object: `${names.length === 1 ? 'part' : 'parts'} ${names.map(n => `"${n}"`).join(', ')}`,
+      detail: `setup eye-line roll ${pyRound(line.degrees, 6)} degrees (Spine, counter-clockwise), absolute ${pyRound(Math.abs(line.degrees), 6)} exceeds limit ${pyRound(HEAD_TURN_ROLL_LIMIT, 6)} degrees; read through authored ${EYE_BONES.join(' and ')} origins on ${line.parts.map(n => `"${n}"`).join(' and ')} (an eye-origin proxy, not painting detection); the declared head turn uses upright yaw/pitch axes on an already rolled head; inspect the neck at both turn extremes; warning only, no pose or output changed`,
+    });
+  }
   if (cfg.turn?.roles !== undefined || cfg.turn?.body !== undefined) {
     buildDepth25DTurn(rig, motion, {
       warnings: turnWarnings,

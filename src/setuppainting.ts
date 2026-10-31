@@ -74,6 +74,10 @@ export interface SetupPaintingLine {
   reason?: string;
 }
 
+/** An undeclared observation has no measured pixels, inferred regions or limit. */
+export type SetupPaintingObservation = SetupPaintingLine | { status: 'SKIP'; reason: string };
+export const UNDECLARED_SETUP_PAINTING_REASON = 'setup_painting is undeclared; setup-to-painting was not measured. To measure it, give --requirements <file> declaring setup_painting.rgb_tolerance and setup_painting.regions with name, box and authored max_pixels limits';
+
 /** Pixel metric only. Caller supplies the actual renderer's textured setup and
  * its per-pixel drawn-piece owners on precisely the source grid. RGB under
  * zero alpha is ignored: both observations are source-over white first.
@@ -119,7 +123,8 @@ export function setupPaintingLine(
     ...(noLimit ? { reason: 'a region has no declared max_pixels; it is measured as SKIP, never PASS' } : {}) };
 }
 
-export function setupPaintingLines(line: SetupPaintingLine): string[] {
+export function setupPaintingLines(line: SetupPaintingObservation): string[] {
+  if (!('regions' in line)) return [`${SETUP_PAINTING_LINE}: SKIP — ${line.reason}`];
   return [`${SETUP_PAINTING_LINE}: ${line.status}${line.reason === undefined ? '' : ` — ${line.reason}`}; ${line.registration}; ${line.compositing}`,
     ...line.regions.flatMap(r => [`${SETUP_PAINTING_LINE}: region "${r.name}" ${r.status} — box [${r.box.join(', ')}], pixelcount ${r.pixel_count}, limit ${r.limit ?? 'undeclared (SKIP)'}, RGB tolerance ${line.rgb_tolerance}`,
       ...r.slots.map(s => `${SETUP_PAINTING_LINE}: slot "${s.slot}" region "${r.name}" — box [${s.box.join(', ')}], pixelcount ${s.pixel_count}; region total ${r.pixel_count}, limit ${r.limit ?? 'undeclared (SKIP)'}`)])];

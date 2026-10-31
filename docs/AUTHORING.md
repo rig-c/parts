@@ -5234,6 +5234,7 @@ and stay absent).
 | <a id="RIG_TURN_SURFACE_MESH_BINDINGS"></a>`RIG_TURN_SURFACE_MESH_BINDINGS` | an authored surface mesh has unresolved/nonclosing weights or shares a frame moved by a unit/rear turn carrier; declared stop draw aliases resolve to their links for setup sampling | provide weighted bindings closing at 1 in the authored frame; `<link>_d` resolves only for links declared in `config.stops`; use independent chains for parts with different roles |
 | <a id="RIG_TURN_SURFACE_MESH_ATTACHMENT"></a>`RIG_TURN_SURFACE_MESH_ATTACHMENT` | a surface mesh has an alternate drawing without its own registered depth sampling frame | use the base attachment; explicit islands retain their own slot, attachment and bindings |
 | <a id="RIG_TURN_BODY_UNCOVERED"></a>`RIG_TURN_BODY_UNCOVERED` | **Warning:** a shown part without a body role overlaps a moved `turn.body` surface at setup alpha >= 128 and has different emitted endpoint displacement | declare the intended body role and inspect both endpoints; no role or depth is inferred |
+| <a id="RIG_TURN_HEAD_ROLL"></a>`RIG_TURN_HEAD_ROLL` | **Warning:** a declared head turn has an absolute authored-eye-origin roll above the empirical limit displayed as 18.485385 degrees; names the face/eye parts, both eye bones, signed roll and limit | inspect the neck at both extremes; this proxy does not detect the painting independently, correct tilt or change emitted bytes; see [Head roll before a declared turn](#head-roll-before-a-declared-turn) |
 | <a id="RIG_TURN_SURFACE_DEPTH_REQUIRED"></a>`RIG_TURN_SURFACE_DEPTH_REQUIRED` | a part with role `"surface"` in `config.turn.roles` or `config.turn.body.roles` carries no depth sheet in `parts.json` | run `assemble` with `config.depth` or provide `<part>_depth.png` in `parts.json` |
 | <a id="RIG_TURN_GRID_BUDGET"></a>`RIG_TURN_GRID_BUDGET` | a `"surface"` grid exceeds 2,400 triangles on one slot or 4,000 triangles across all `"surface"` slots | lower `config.turn.grid` / `config.turn.body.grid` `[cols, rows]` within the per-slot and total budgets |
 | <a id="RIG_TURN_HEAD_BONE"></a>`RIG_TURN_HEAD_BONE` | `buildRig` found no `"head"` (or body turn root) bone when emitting 2.5D turn carriers | declare `"head"` (or the body turn root bone) in `config.bones` |
@@ -5664,7 +5665,7 @@ Under `--source <painting.png>`, a second reported line, also never a FAIL
 | line | reports | bar | `reference-demo` | `reference-sample` | SKIP when |
 | --- | --- | --- | --- | --- | --- |
 | <a id="SETUP_POSE_VS_SOURCE"></a>`SETUP_POSE_VS_SOURCE` | the setup pose against the painting, by `assemble`'s own `measureRecomposite` over the stage's pixels — `mean_abs` and `within_share` (mean channel, within 8), `error_px` (max channel over 40), `uncovered_error_px` (of those, where the pose has alpha 128 or less), `hole_count` and the largest hole's box — with `painting_px`, `stage_px`, `render_px` and `render_scale` beside them. The painting is resampled onto the stage as assemble resamples it (lanczos3, alpha dropped). rigc renders onto an opaque grey, so the pose over white and its alpha are read off a second still of the same pose with every slot tinted black; both are carried onto the stage with the seam's map turned round (bilinear) | none — status `REPORTED`; assemble applies no bar to the figures it measures, so none is derived here | 3.146 / 93.43 % / 12,399 / 1,732, 518 holes, the largest 61 px at 351,157 6x20 (assemble's recomposite: 2.391 / 95.81 % / 11,050 / 1,564, 453) | 1.095 / 97.30 % / 5,348 / 1,239, 313 holes, the largest 88 px at 479,416 6x29 (assemble's: 0.835 / 97.95 % / 4,512 / 1,185, 259) | not written without `--source` |
-| <a id="SETUP_MATCHES_PAINTING"></a>`SETUP_MATCHES_PAINTING` | declared region count, native box, limit and actual top contributor rows | PASS/FAIL against authored limits; no limit is SKIP; undeclared regions are not judged |
+| <a id="SETUP_MATCHES_PAINTING"></a>`SETUP_MATCHES_PAINTING` | declared region count, native box, limit and actual top contributor rows | PASS/FAIL against authored limits; no limit is SKIP; with `--source`, no declaration is SKIP with its reason and declaration remedy; undeclared regions are not judged |
 
 The figures are assemble's by construction, not a second definition beside them;
 what differs is what they are taken of — the pose rigc draws, not the flat stack —
@@ -6230,7 +6231,22 @@ maximum absolute RGB-channel difference is **strictly greater** than that
 value. The region passes when its total count is at most its authored
 nonnegative integer `max_pixels`. Without that limit the region reports
 **SKIP**, including a zero-count region. An undeclared region has no verdict.
-Without `setup_painting`, existing output bytes and rendering remain unchanged.
+With `--source` but no `setup_painting` declaration, `SETUP_MATCHES_PAINTING`
+is explicitly **SKIP** in the console, `check.json`, the report's skipped-bar
+list and `check --json`. Its reason says the comparison was not measured and
+asks for `--requirements <file>` declaring `setup_painting.rgb_tolerance` and
+named `regions` with `box` and authored `max_pixels` limits. The SKIP changes
+no exit code and invents no metric, region or limit. This applies both without
+a requirements file and with one that omits the key. Without `--source` and
+without the declaration, the line stays absent. Declared observations retain
+their output bytes and renderer calls.
+
+`check --json` prints only the completed `check.json` object to stdout, with
+the same bytes as the file and the same exit code as ordinary `check` (0 or 1).
+Early input refusals and usage errors retain their named text and exits (1 or 2);
+they have no completed check object. `build --json` is refused by name: run
+`check --rig <out>/rig --parts <out> --out <dir> --json` after the build to read
+the completed check object.
 
 The observation is the actual renderer's setup pose, without animation or
 physics advancement, from the already gated setup candidate. Its viewport is
@@ -6567,6 +6583,47 @@ art. An authored `parts.json` depth reference remains an active standalone
 guards still apply. With binding inactive there is no added reference, file or
 legacy-byte change. #773 adds no image generation, geometry or motion model.
 
+### Head roll before a declared turn
+
+`rig` and `build` report `WARN RIG_TURN_HEAD_ROLL` when a declared head
+turn (`turn.depths` or `turn.roles`, including the depth-sampled producer)
+has an absolute setup eye-line roll above 18.485385 degrees (six-place display).
+The line names the face part (or the eye parts without a face), the signed
+roll, its absolute value, the limit, and both eye bones and parts. It reads
+the existing `eyeLineDegrees` on the authored `eye_r` and `eye_l` origins,
+image-left to image-right in Spine degrees, counter-clockwise; it does not
+detect the painting's tilt independently of those authored origins, estimate
+tilt from a bounding box, or invent a reading without both eye parts
+and bones or when their origins share a column.
+
+The limit is the midpoint between the maximum absolute roll of the measured
+public controls, 4.864514 degrees, and the tilted `three-quarter`
+input from issue #900, 32.106256 degrees. The comparison uses the unrounded
+midpoint. The controls are the five
+parts examples plus the published dancer config and head-turn demo's compiled
+setup eye origins. The named quiet controls read 3.239700 degrees
+(`reference-demo`), -1.941486 degrees (`dancer`), and
+0.520856 degrees (head-turn demo). This is an empirical separation
+of these inputs, not an anatomical limit or a visual-quality verdict.
+
+The parts configs were read at
+[`38e5f574`](https://github.com/rig-c/parts/tree/38e5f574a88b2e6753a982b0ee0952dbf273a12e/examples),
+the [dancer config](https://github.com/rig-c/examples/blob/564285414fccf7b47df32501c0b3c2968db77691/dancer/config.json)
+at `56428541`, and the
+[head-turn model](https://github.com/rig-c/rig-c.github.io/blob/989cebbd6733a58142923cec96fe2333da08194a/demos/head-turn/bundle/skeleton.model.json)
+at `989cebbd`. The [issue #900](https://github.com/rig-c/parts/issues/900)
+bootstrap used public `three-quarter` inputs at examples commit
+`ba99e403d4058fc1cfe40699bdcde8aaf00a90c0`; its authored crop-pixel eye origins
+are `[236, 136]` and `[287, 104]`. The compiled demo is a setup metric control,
+not a rebuild of its unavailable parts config.
+
+An already rolled head is turned about upright yaw/pitch axes; inspect its
+neck at both extremes before accepting that motion. This warning does not
+refuse the build, correct the tilt, add a roll axis, or change any pose or
+emitted file. With no head turn, including a body-only turn, it adds no warning.
+With an unreadable eye line the existing face-axis report retains its reason;
+silence is not a measured zero. The warning lives only in the stage report.
+
 ### Missing body-turn coverage
 
 `RIG_TURN_BODY_UNCOVERED` warns when a shown part without a
@@ -6683,6 +6740,26 @@ The trial's role relief/width ratios (face 0.1264803, front hair 0.1018772,
 back hair 0.0857722, ornament 0.0375868, garment 0.0990473) came from one
 head-turn demo's p5..p95 depth and part widths. They are measured starting
 points for declared proportions, not anatomical laws or default calibration.
+For a head-referenced calibration, declare
+`relief = referenceRoleRelief * targetFaceWidth / referenceFaceWidth`, using
+the assembled target face width and the same declared reference head measure
+for every role. This keeps head relief on one scale when a hair silhouette
+is much wider than the face. In contrast, `roleRatio * targetPartWidth`
+increases relief with that silhouette while the group's `zScale` stays fixed.
+An ornament narrower than its reference can gain relief under the head rule;
+inspect it as well as the widest part. The command derives neither rule:
+write the resulting rig-pixel `relief` explicitly in each recipe entry.
+
+Compare calibrations on identical prepared inputs and numeric maps, with the
+same medians, group pivot and `zScale`; only the declared relief changes.
+Read each named report row's `relief`, `zScale` and `clipFraction` before
+judging its render. The clipping denominator is every original part pixel
+with alpha >=128, including boundary support, never the padded input area.
+A low clipped fraction does not establish shape quality. Inspect setup,
+both yaw endpoints and their difference at native scale, then enlarge the
+same pixels with nearest-neighbour sampling. Neither clipping nor agreement
+with a reference map substitutes for that inspection.
+
 The owner's preference for per-part volume is subjective provenance, not an
 automated quality conclusion. Model licence posture remains the owner's choice.
 

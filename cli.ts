@@ -555,7 +555,8 @@ usage:
                     [--page-edges pot|free] [--pack-shape rect|polygon]
                     [--requirements <file.json>] [--seam-pairs] [--keep-stills]
                     [--set <name> | --all-sets] [--environment <schedule.json>]
-                    [--wind-band <spec.json>]
+                    [--wind-band <spec.json>] [--json]
+      --json prints the completed check.json object only, with unchanged exit codes.
       Build, gate, render and measure a rig through rig-c's CLI (the rigc at
       node_modules/.bin/rigc, or on PATH). --rig holds rig.json and motion.json:
       a rig spec, which rigc build compiles, not a compiled skeleton.json.
@@ -1095,7 +1096,7 @@ const TAKES = {
   rig: { valued: ['--config', '--parts', '--out', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
   propose: { valued: ['--parts', '--source', '--out', '--from-config', '--compare', '--full', '--head', '--canvas', '--keypoints', '--person', '--wrist-snap', '--grid-rule', '--cloth', '--write-config', '--from'], switches: ['--head-box', '--no-back-hair', '--only-missing'] },
   compare: { valued: ['--left', '--right', '--map'], switches: [] },
-  check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--requirements', '--set', '--environment', '--wind-band'], switches: ['--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes'] },
+  check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--requirements', '--set', '--environment', '--wind-band'], switches: ['--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes', '--json'] },
   loop: { valued: ['--frames', '--out'], switches: ['--palette'] },
   assemble: { valued: ['--source', '--full', '--head', '--config', '--out', '--seam', '--project', '--alt', '--write-config', '--requirements'], switches: ['--propose-plan'] },
   'comfy seethrough': { valued: ['--image', '--out', '--resolution', '--steps', '--seed', '--prefix', '--host', '--wait', '--timeout', '--poll', '--config', '--depth-run'], switches: ['--offload', '--no-offload', '--lama', '--nf4'] },
@@ -1338,6 +1339,8 @@ function flags(args: string[], command: Command, required: readonly string[]): M
 
 function cmdCheck(args: string[]): number {
   // The switches check takes (issues #202, #209, #454): they carry no value, so they are taken out before the valued flags are read.
+  const json = args.filter((a) => a === '--json').length;
+  if (json > 1) return usage('--json is given twice');
   const seamPairs = args.filter((a) => a === '--seam-pairs').length;
   if (seamPairs > 1) return usage('--seam-pairs is given twice');
   const keepStills = args.filter((a) => a === '--keep-stills').length;
@@ -1347,7 +1350,7 @@ function cmdCheck(args: string[]): number {
   const allSets = args.filter((a) => a === '--all-sets').length;
   if (allSets > 1) return usage('--all-sets is given twice');
   const f = flags(
-    args.filter((a) => a !== '--seam-pairs' && a !== '--keep-stills' && a !== '--all-sets' && a !== '--no-extremes'),
+    args.filter((a) => a !== '--seam-pairs' && a !== '--keep-stills' && a !== '--all-sets' && a !== '--no-extremes' && a !== '--json'),
     'check',
     ['--rig', '--out'],
   );
@@ -1365,8 +1368,9 @@ function cmdCheck(args: string[]): number {
       { rig, parts: f.get('--parts'), source: f.get('--source'), out, pageEdges: edges, packShape: shape, requirements: f.get('--requirements'), seamPairs: seamPairs === 1, keepStills: keepStills === 1, noExtremes: noExtremes === 1, ...(f.has('--set') ? { set: f.get('--set') as string } : {}), allSets: allSets === 1, ...(f.has('--environment') ? { environment: f.get('--environment') as string } : {}), ...(f.has('--wind-band') ? { windBand: f.get('--wind-band') as string } : {}) },
       rigcRunner(bin),
       bin,
-      console.log,
+      json === 1 ? () => {} : console.log,
     );
+    if (json === 1) process.stdout.write(`${JSON.stringify(r.figures, null, 1)}\n`);
     return r.figures.PASS ? EXIT_OK : EXIT_REFUSED;
   } catch (err) {
     return printRefusal(err);
