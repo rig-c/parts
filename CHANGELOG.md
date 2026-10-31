@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.88.0](https://github.com/rig-c/parts/compare/v1.87.0...v1.88.0) (2026-10-31)
+
+
+### Features
+
+* **assemble:** declare the seam in config, and adopt silhouette on reference-demo ([#908](https://github.com/rig-c/parts/issues/908)) ([186e0a3](https://github.com/rig-c/parts/commit/186e0a3b25145b53ab20874eb98c61eafb6ebd7f))
+* **check:** report an undeclared setup-painting rule as SKIP, and add check --json ([#907](https://github.com/rig-c/parts/issues/907)) ([dc11a05](https://github.com/rig-c/parts/commit/dc11a050b6032988a5515070d4e06202811c59cc))
+* **turn:** warn by name when a head turn is declared on a tilted head ([#906](https://github.com/rig-c/parts/issues/906)) ([4d1f1db](https://github.com/rig-c/parts/commit/4d1f1db8c0ea8d8b52b17f44d54f435d318b895d))
+
 ## [1.87.0](https://github.com/rig-c/parts/compare/v1.86.0...v1.87.0) (2026-10-31)
 
 
