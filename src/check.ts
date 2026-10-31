@@ -1,4 +1,4 @@
-import { SETUP_PAINTING_LINE, setupPaintingBounds, setupPaintingLine, type SetupPainting, type SetupPaintingLine } from './setuppainting.ts';
+import { SETUP_PAINTING_LINE, UNDECLARED_SETUP_PAINTING_REASON, setupPaintingBounds, setupPaintingLine, type SetupPainting, type SetupPaintingLine, type SetupPaintingObservation } from './setuppainting.ts';
 import { readMaterialSources } from './cutmaterialio.ts';
 import { CUT_MATERIAL_LINE, checkJointMaterial, type MaterialLine } from './cutmaterial.ts';
 import { ART_JOINT_LINE, artJointLine, type ArtJointLine } from './artjoints.ts';
@@ -2730,8 +2730,8 @@ export interface CheckFigures {
   requirements?: RequirementsBlock;
   /** Issue #880: only when requirements declares fixed_skeleton. */
   [ART_JOINT_LINE]?: ArtJointLine;
-  /** Only when setup_painting is explicitly declared. */
-  [SETUP_PAINTING_LINE]?: SetupPaintingLine;
+  /** Under --source: the declared observation, or an explicit undeclared SKIP. */
+  [SETUP_PAINTING_LINE]?: SetupPaintingObservation;
   [CUT_MATERIAL_LINE]?: MaterialLine;
   PASS: boolean;
 }
@@ -6476,7 +6476,8 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const setHints = new Map<string, string>();
   const fixedSkeleton = reqFile?.fixed_skeleton;
   let artJoints: ArtJointLine | null = null;
-  let setupPainting: SetupPaintingLine | null = null;
+  let setupPainting: SetupPaintingObservation | null = inp.source !== null && reqFile?.setup_painting === undefined
+    ? { status: 'SKIP', reason: UNDECLARED_SETUP_PAINTING_REASON } : null;
   if (inp.parts !== null || inp.source !== null || fixedSkeleton !== undefined) {
     try {
       mkdirSync(stillDir, { recursive: true });

@@ -1,6 +1,7 @@
 /** Independent controls for source-painting setup limits and plan inversions. */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { join, resolve } from 'node:path';
 import { writeCheckRig, CHECK_PARTS, checkPartRaster } from '../fixtures/checkrig.ts';
 import { checkStage, readSource } from '../src/build.ts';
 import { checkStatuses, readCheckInputs, type RigcRunner } from '../src/check.ts';
@@ -47,12 +48,38 @@ export function runSetupPaintingChecks(dir: string, say: Say, rigc: RigcRunner):
   const sourcePath = join(dir, 'painting.png'); writePng(sourcePath, source);
   const real: SetupPainting = { rgb_tolerance: 60, regions: [{ name: 'figure', box: [0, 0, 48, 80], max_pixels: 0 }] };
   const calls: string[][] = [];
-  const run = (name: string, requirement?: string) => checkStage({ rig: input, source: sourcePath, out: join(dir, name), ...(requirement === undefined ? {} : { requirements: requirement }), noExtremes: true }, args => { calls.push([...args]); return rigc(args); }, 'fixture-rigc', () => {});
+  const logs = new Map<string, string[]>();
+  const run = (name: string, requirement?: string) => {
+    const lines: string[] = [];
+    logs.set(name, lines);
+    return checkStage({ rig: input, source: sourcePath, out: join(dir, name), ...(requirement === undefined ? {} : { requirements: requirement }), noExtremes: true }, args => { calls.push([...args]); return rigc(args); }, 'fixture-rigc', line => lines.push(line));
+  };
+  const cli = (name: string, requirement?: string, json = false) => {
+    const out = join(dir, name);
+    const result = spawnSync(process.execPath, [resolve(import.meta.dir, '../cli.ts'), 'check', '--rig', input, '--source', sourcePath, '--out', out, '--no-extremes', ...(requirement === undefined ? [] : ['--requirements', requirement]), ...(json ? ['--json'] : [])], { encoding: 'utf8' });
+    return { ...result, out };
+  };
+  const jsonMatches = (result: ReturnType<typeof cli>): boolean => {
+    try { return result.stdout === readFileSync(join(result.out, 'check.json'), 'utf8'); }
+    catch { return false; }
+  };
   const absent = run('absent');
-  say('ZO11_NO_FIELD_OMITS_NEW_VERDICT', absent.figures[SETUP_PAINTING_LINE] === undefined && !JSON.stringify(absent.figures).includes(SETUP_PAINTING_LINE), 'existing check output has no new block');
+  const absentLine = absent.figures[SETUP_PAINTING_LINE];
+  const remedy = (text: string): boolean => ['setup_painting', '--requirements', 'rgb_tolerance', 'regions', 'max_pixels'].every(field => text.includes(field));
+  say('ZO11_UNDECLARED_SOURCE_NAMES_SKIP_AND_REMEDY', absentLine?.status === 'SKIP' && Object.keys(absentLine).join(',') === 'status,reason' && remedy(absentLine.reason ?? '') && checkStatuses(absent.figures)[SETUP_PAINTING_LINE] === 'SKIP' && absent.figures.PASS && absent.problems.length === 0 && !absent.bars.measured.includes(SETUP_PAINTING_LINE) && absent.bars.skipped.some(b => b.bar === SETUP_PAINTING_LINE && remedy(b.reason)) && logs.get('absent')?.some(line => line.includes(SETUP_PAINTING_LINE + ': SKIP') && remedy(line)) === true && JSON.parse(readFileSync(join(dir, 'absent', 'check.json'), 'utf8'))[SETUP_PAINTING_LINE]?.status === 'SKIP', JSON.stringify({line: absentLine ?? null, bars: absent.bars}));
+  const empty = run('empty-requirements', req('empty-req'));
+  say('ZO21_EMPTY_REQUIREMENTS_NAMES_SAME_SKIP', JSON.stringify(empty.figures[SETUP_PAINTING_LINE]) === JSON.stringify(absentLine) && empty.figures[SETUP_PAINTING_LINE]?.status === 'SKIP' && empty.figures.PASS, JSON.stringify(empty.figures[SETUP_PAINTING_LINE] ?? null));
+  const noSource = checkStage({ rig: input, out: join(dir, 'no-source'), noExtremes: true }, rigc, 'fixture-rigc', () => {});
+  say('ZO22_NO_SOURCE_RETAINS_OMISSION', noSource.figures[SETUP_PAINTING_LINE] === undefined && !noSource.bars.skipped.some(b => b.bar === SETUP_PAINTING_LINE), 'without source no new setup-painting block or bar');
+  const textCli = cli('cli-undeclared');
+  say('ZO23_UNDECLARED_CLI_EXIT_ZERO_WITH_SKIP', textCli.status === 0 && textCli.stdout.split('\n').some(line => line.includes(SETUP_PAINTING_LINE + ': SKIP') && remedy(line)), JSON.stringify({exit: textCli.status, lines: textCli.stdout.split('\n').filter(line => line.includes(SETUP_PAINTING_LINE))}));
+  const jsonCli = cli('json-undeclared', undefined, true);
+  say('ZO24_JSON_UNDECLARED_IS_THE_WRITTEN_REPORT', jsonCli.status === 0 && jsonMatches(jsonCli) && remedy(jsonCli.stdout) && jsonCli.stdout.includes('"status": "SKIP"'), JSON.stringify({exit: jsonCli.status, sameBytes: jsonMatches(jsonCli), stderr: jsonCli.stderr}));
+  const declaredCli = cli('json-clean', req('json-clean-req', real), true);
+  say('ZO25_JSON_DECLARED_PASS_EXIT_ZERO', declaredCli.status === 0 && jsonMatches(declaredCli) && JSON.parse(declaredCli.stdout)[SETUP_PAINTING_LINE]?.status === 'PASS', JSON.stringify({exit: declaredCli.status, sameBytes: jsonMatches(declaredCli)}));
   const clean = run('clean', req('clean-req', real));
   const cleanLine = clean.figures[SETUP_PAINTING_LINE];
-  say('ZO12_REAL_SETUP_CLEAN_CONTROL', cleanLine?.status === 'PASS' && cleanLine.regions[0].pixel_count === 0 && checkStatuses(clean.figures)[SETUP_PAINTING_LINE] === 'PASS', JSON.stringify(cleanLine));
+  say('ZO12_REAL_SETUP_CLEAN_CONTROL', cleanLine?.status === 'PASS' && 'regions' in cleanLine && cleanLine.regions[0].pixel_count === 0 && checkStatuses(clean.figures)[SETUP_PAINTING_LINE] === 'PASS' && logs.get('clean')?.some(line => line.includes(SETUP_PAINTING_LINE + ': PASS')) === true, JSON.stringify(cleanLine));
   // Change the independent painting, never its rig or parts. The front region
   // is opaque at this centre, RGB [40,120,200] versus [0,0,0].
   source.data.set([0, 0, 0, 255], (40 * 48 + 30) * 4); writePng(sourcePath, source);
@@ -60,6 +87,10 @@ export function runSetupPaintingChecks(dir: string, say: Say, rigc: RigcRunner):
   say('ZO13_REAL_PIPELINE_RED_PRINTS_SOURCE_MISMATCH', red.figures[SETUP_PAINTING_LINE]?.status === 'FAIL' && red.problems.some(p => p.code === 'CHECK_SETUP_MATCHES_PAINTING' && p.object.includes('front')) && !red.figures.PASS, JSON.stringify(red.figures[SETUP_PAINTING_LINE]));
   const skip = run('skip', req('skip-req', { ...real, regions: [{ name: 'figure', box: [0, 0, 48, 80] }] }));
   say('ZO14_REAL_PIPELINE_NO_LIMIT_SKIP', skip.figures[SETUP_PAINTING_LINE]?.status === 'SKIP' && !skip.problems.some(p => p.code === 'CHECK_SETUP_MATCHES_PAINTING'), JSON.stringify(skip.figures[SETUP_PAINTING_LINE]));
+  const redCli = cli('json-defect', req('json-defect-req', real), true);
+  say('ZO26_JSON_DECLARED_FAILURE_EXIT_ONE', redCli.status === 1 && jsonMatches(redCli) && JSON.parse(redCli.stdout)[SETUP_PAINTING_LINE]?.status === 'FAIL' && JSON.parse(redCli.stdout).PASS === false, JSON.stringify({exit: redCli.status, sameBytes: jsonMatches(redCli)}));
+  const duplicate = spawnSync(process.execPath, [resolve(import.meta.dir, '../cli.ts'), 'check', '--json', '--json'], { encoding: 'utf8' });
+  say('ZO27_JSON_DUPLICATE_IS_USAGE_ERROR', duplicate.status === 2 && (duplicate.stdout + duplicate.stderr).includes('--json is given twice'), JSON.stringify({exit: duplicate.status}));
   // The own source fixture is read-only through every check.
   say('ZO15_INPUT_RIG_UNCHANGED', readFileSync(join(input, 'rig.json'), 'utf8') === rigBefore && calls.some(a => a[0] === 'build'), 'real gated builds and official setup renderer used; no source repair');
   let gridRefused = false;
@@ -121,7 +152,7 @@ export function runSetupPaintingTransparencyChecks(dir: string, say: Say, rigc: 
   const direct = readSource(source), checked = readCheckInputs(input, undefined, source).source;
   say('ZO19_ACTUAL_SOURCE_READERS_PRESERVE_ALPHA', direct.data[3] === 0 && direct.data[0] === 0 && checked?.painting.data[3] === 0 && checked.painting.data[0] === 0, '96x160 straight RGBA survives readSource and readCheckInputs; stage48x80, declared source scale0.5');
   const opaque = lines.get('opaque-white'), black = lines.get('hidden-black'), magenta = lines.get('hidden-magenta');
-  say('ZO20_ACTUAL_PIPELINE_HIDDEN_RGB_IGNORED_BEFORE_RESIZE', opaque?.status === 'PASS' && opaque.regions[0].pixel_count === 0 && JSON.stringify(black) === JSON.stringify(opaque) && JSON.stringify(magenta) === JSON.stringify(opaque), JSON.stringify({ opaque, black, magenta }));
+  say('ZO20_ACTUAL_PIPELINE_HIDDEN_RGB_IGNORED_BEFORE_RESIZE', opaque?.status === 'PASS' && 'regions' in opaque && opaque.regions[0].pixel_count === 0 && JSON.stringify(black) === JSON.stringify(opaque) && JSON.stringify(magenta) === JSON.stringify(opaque), JSON.stringify({ opaque, black, magenta }));
   const partial = lines.get('alpha60-black'), expected = lines.get('opaque195');
   say('ZO21_ACTUAL_PIPELINE_COMPOSITES_FRACTIONAL_ALPHA_BEFORE_RESIZE', partial !== undefined && expected !== undefined && JSON.stringify(partial) === JSON.stringify(expected), JSON.stringify({ partial, expected, independentExpected: 'black at alpha60 over white is RGB195; precompose at96x160, then existing Lanczos3 to48x80' }));
 }

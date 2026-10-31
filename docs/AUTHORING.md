@@ -5664,7 +5664,7 @@ Under `--source <painting.png>`, a second reported line, also never a FAIL
 | line | reports | bar | `reference-demo` | `reference-sample` | SKIP when |
 | --- | --- | --- | --- | --- | --- |
 | <a id="SETUP_POSE_VS_SOURCE"></a>`SETUP_POSE_VS_SOURCE` | the setup pose against the painting, by `assemble`'s own `measureRecomposite` over the stage's pixels — `mean_abs` and `within_share` (mean channel, within 8), `error_px` (max channel over 40), `uncovered_error_px` (of those, where the pose has alpha 128 or less), `hole_count` and the largest hole's box — with `painting_px`, `stage_px`, `render_px` and `render_scale` beside them. The painting is resampled onto the stage as assemble resamples it (lanczos3, alpha dropped). rigc renders onto an opaque grey, so the pose over white and its alpha are read off a second still of the same pose with every slot tinted black; both are carried onto the stage with the seam's map turned round (bilinear) | none — status `REPORTED`; assemble applies no bar to the figures it measures, so none is derived here | 3.146 / 93.43 % / 12,399 / 1,732, 518 holes, the largest 61 px at 351,157 6x20 (assemble's recomposite: 2.391 / 95.81 % / 11,050 / 1,564, 453) | 1.095 / 97.30 % / 5,348 / 1,239, 313 holes, the largest 88 px at 479,416 6x29 (assemble's: 0.835 / 97.95 % / 4,512 / 1,185, 259) | not written without `--source` |
-| <a id="SETUP_MATCHES_PAINTING"></a>`SETUP_MATCHES_PAINTING` | declared region count, native box, limit and actual top contributor rows | PASS/FAIL against authored limits; no limit is SKIP; undeclared regions are not judged |
+| <a id="SETUP_MATCHES_PAINTING"></a>`SETUP_MATCHES_PAINTING` | declared region count, native box, limit and actual top contributor rows | PASS/FAIL against authored limits; no limit is SKIP; with `--source`, no declaration is SKIP with its reason and declaration remedy; undeclared regions are not judged |
 
 The figures are assemble's by construction, not a second definition beside them;
 what differs is what they are taken of — the pose rigc draws, not the flat stack —
@@ -6230,7 +6230,22 @@ maximum absolute RGB-channel difference is **strictly greater** than that
 value. The region passes when its total count is at most its authored
 nonnegative integer `max_pixels`. Without that limit the region reports
 **SKIP**, including a zero-count region. An undeclared region has no verdict.
-Without `setup_painting`, existing output bytes and rendering remain unchanged.
+With `--source` but no `setup_painting` declaration, `SETUP_MATCHES_PAINTING`
+is explicitly **SKIP** in the console, `check.json`, the report's skipped-bar
+list and `check --json`. Its reason says the comparison was not measured and
+asks for `--requirements <file>` declaring `setup_painting.rgb_tolerance` and
+named `regions` with `box` and authored `max_pixels` limits. The SKIP changes
+no exit code and invents no metric, region or limit. This applies both without
+a requirements file and with one that omits the key. Without `--source` and
+without the declaration, the line stays absent. Declared observations retain
+their output bytes and renderer calls.
+
+`check --json` prints only the completed `check.json` object to stdout, with
+the same bytes as the file and the same exit code as ordinary `check` (0 or 1).
+Early input refusals and usage errors retain their named text and exits (1 or 2);
+they have no completed check object. `build --json` is refused by name: run
+`check --rig <out>/rig --parts <out> --out <dir> --json` after the build to read
+the completed check object.
 
 The observation is the actual renderer's setup pose, without animation or
 physics advancement, from the already gated setup candidate. Its viewport is

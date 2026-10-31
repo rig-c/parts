@@ -15589,13 +15589,13 @@ function runSourceCases(dir: string, say: (name: string, ok: boolean, detail: st
     const l = fig?.[name] as { status?: string; reason?: string } | undefined;
     return l?.status === 'SKIP' ? String(l.reason) : `not SKIP (${l?.status ?? 'absent'})`;
   };
-  const sourceKeys = [...CHECK_KEYS.slice(0, -1).filter(k => k !== 'seam_scope'), SOURCE_LINE, 'skipped', 'PASS'].join(',');
+  const sourceKeys = [...CHECK_KEYS.slice(0, -1).filter(k => k !== 'seam_scope'), SOURCE_LINE, 'skipped', 'SETUP_MATCHES_PAINTING', 'PASS'].join(',');
 
   // The card's shape: two prefixed copies under one root, a plate region at slot 0, no parts.json, an idle.
   const withIdle = merged('merged-idle', { idle: true, plate: true });
   const skippedIdle = withIdle.fig?.skipped as { loop?: string; seam?: string } | undefined;
   // Issue #333: the idle is read for folds, so the fold bar is written and measured beside the gate and the loop.
-  const wantSummary1 = `check: PASS; 3 of ${BARS.length + 1} bar(s) measured, 7 skipped (seam, ${JUDGEMENT_LINES.join(', ')})`;
+  const wantSummary1 = `check: PASS; 3 of ${BARS.length + 2} bar(s) measured, 8 skipped (seam, ${JUDGEMENT_LINES.join(', ')}, SETUP_MATCHES_PAINTING)`;
   say(
     'CK56_A_MERGED_RIG_WITH_NO_PARTS_JSON_GATES_LOOPS_AND_SAYS_SKIP_BY_NAME_FOR_EVERY_LINE_THAT_READS_PARTS',
     withIdle.status === 0 &&
@@ -15623,7 +15623,7 @@ function runSourceCases(dir: string, say: (name: string, ok: boolean, detail: st
 
   const noIdle = merged('merged-no-idle', { idle: false, plate: true });
   const skippedNo = noIdle.fig?.skipped as { loop?: string; seam?: string } | undefined;
-  const wantSummary0 = `check: PASS; 1 of ${BARS.length} bar(s) measured, 8 skipped (loop, seam, ${JUDGEMENT_LINES.join(', ')})`;
+  const wantSummary0 = `check: PASS; 1 of ${BARS.length + 1} bar(s) measured, 9 skipped (loop, seam, ${JUDGEMENT_LINES.join(', ')}, SETUP_MATCHES_PAINTING)`;
   const noIdleFiles = ['idle_frames', 'contact.png', 'motion_heat.png'].filter((f) => existsSync(join(noIdle.root, 'out', f)));
   say(
     'CK57_WITHOUT_AN_IDLE_ONLY_THE_GATE_MEASURES_AND_THE_PASS_LINE_CARRIES_THE_SKIP_COUNT',
