@@ -6625,8 +6625,12 @@ declares `near`, positive `zScale` and `pivot`; optional `unitDepths` explicitly
 replaces that group's rigid depths. `clear` explicitly lists part references to
 remove, including any small units intended to sample the surface. Unselected
 parts retain their artwork and depth references. The output config copies the
-original, sets the declared group pivots/unit depths, and relocates animation
-and control-skeleton file paths. Roles and draw order stay the author's.
+original, sets the declared group pivots/unit depths, and relocates animation,
+requirements and control-skeleton file paths. Built-in skeleton names remain
+names. A selected part whose provenance records `depth.kind: "authored-unit"`
+is refused before output (`DEPTH_AUTHORED_UNIT_CONFLICT`); apply does not invent
+a transition to a transported scalar reference. Unselected authored units keep
+their original representation. Roles and draw order stay the author's.
 
 Maps are UTF-8 JSON `{"spec":"rig-parts-map/1","width":2,"height":2,
 "channels":1,"data":[0.125,0.25,0.5,0.875]}`: row-major finite numeric values,
@@ -6658,8 +6662,14 @@ and `-ny/max(abs(nz),0.15*norm)` with step2 trapezoids and matrix-free LSQR
 (maximum 3000 iterations, atol/btol 1e-6, condition limit 1e8). Cross erosion
 finds an interior core (max(3,floor(0.12*sqrt(area))) steps) and a three-step rim.
 The sign makes mean core depth greater than mean rim depth; no reference is
-read. An empty core or unresolved sign refuses. Float32 BOX brings the integrated
-field back to the native grid before the same normalization. Iterations and
+read. An empty core or unresolved sign refuses. Before float32 BOX, unsupported
+integration-grid samples receive the Euclidean nearest supported float height,
+with row-major ties; supported integrated heights are unchanged. This fill uses
+the stride2 integration mask itself, not the native mask or encoded gray levels,
+so unsupported zeros cannot enter a supported native pixel through BOX. BOX
+then brings the field back to the native grid before the same normalization.
+Normalization still reads all native alpha>=128 support; a boundary repair can
+change its percentiles and therefore interior levels too. Iterations and
 residual are reported. One connected silhouette does not certify convexity or
 exclude internal occlusion edges; choose scalar depth for strands and collars.
 
@@ -6699,6 +6709,7 @@ by `rig`, so their output requires no alternate compiler or dependency pin.
 | <a id="DEPTH_NORMAL_VECTOR"></a>`DEPTH_NORMAL_VECTOR` | a sampled support normal is zero | provide nonzero signed XYZ normals |
 | <a id="DEPTH_NORMAL_CONVEXITY"></a>`DEPTH_NORMAL_CONVEXITY` | core/rim or its convexity sign is unresolved | larger closed convex mask or scalar source |
 | <a id="DEPTH_GROUP_BINDING"></a>`DEPTH_GROUP_BINDING` | part outside declared turn roles, mixed retained near/zScale, or filename collision | register exact roles and one shared scale/polarity, replace/clear conflicting sheets, use distinct names |
+| <a id="DEPTH_AUTHORED_UNIT_CONFLICT"></a>`DEPTH_AUTHORED_UNIT_CONFLICT` | a selected part already records `provenance.depth.kind: "authored-unit"`; adding scalar depth would make its two representations conflict | retain the authored unit or supply an explicitly reassembled scalar-compatible input; apply never replaces the provenance automatically |
 
 ### Unit depth precedence
 

@@ -119,6 +119,34 @@ function registeredMap(map: NumericMap, p: PreparedPart, frame: PartMap['frame']
   for (let y = 0; y < p.upscaled[1]; y++) for (let x = 0; x < p.upscaled[0]; x++) for (let c = 0; c < map.channels; c++) data.push(map.data[((y + p.padding) * map.width + x + p.padding) * map.channels + c]);
   return { ...map, width: p.upscaled[0], height: p.upscaled[1], data };
 }
+
+/** Extend the float field from its OWN stride2 integration support before BOX.
+ * Keep every supported height unchanged; Euclidean nearest seeds use row-major
+ * ties. A nearest seed must be on the four-neighbour boundary: an interior
+ * seed always has a strictly closer axis neighbour toward an unsupported point.
+ * No gray encoding or native-art mask is used on this integration grid.
+ */
+function extendIntegratedHeight(data: Float64Array, art: Raster): Float64Array {
+  const w = Math.ceil(art.width / 2), h = Math.ceil(art.height / 2);
+  const support = Uint8Array.from({ length: w * h }, (_, i) => art.data[((2 * Math.floor(i / w)) * art.width + 2 * (i % w)) * 4 + 3] >= 128 ? 1 : 0);
+  const boundary: number[] = [];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x;
+    if (support[i] && (x === 0 || y === 0 || x === w - 1 || y === h - 1 || !support[i - 1] || !support[i + 1] || !support[i - w] || !support[i + w])) boundary.push(i);
+  }
+  // integrateNormals already refused empty/disconnected support before this call.
+  const filled = data.slice();
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x; if (support[i]) continue;
+    let distance = Infinity, seed = -1;
+    for (const j of boundary) {
+      const dx = x - j % w, dy = y - Math.floor(j / w), d = dx * dx + dy * dy;
+      if (d < distance) { distance = d; seed = j; }
+    }
+    filled[i] = data[seed];
+  }
+  return filled;
+}
 export function applyDepth(input: { parts: string; manifest: string; config: string; rigConfig: string; out: string }): Obj {
   const recipe = parseDepthRecipe(readJson(input.config)), expected = preparedParts(input.parts, recipe);
   const supplied = readJson(input.manifest);
@@ -129,6 +157,7 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
   }
   emptyOutput(input.out, [input.parts, input.config, input.manifest, input.rigConfig, ...Object.values(recipe.parts).map(p => resolve(dirname(input.config), p.map))]);
   const rawParts = object(readJson(join(input.parts, 'parts.json')), 'parts.json'), file = readParts(join(input.parts, 'parts.json'));
+  for (const p of file.parts) if (Object.hasOwn(recipe.parts, p.name) && p.provenance?.depth?.kind === 'authored-unit') fail('DEPTH_AUTHORED_UNIT_CONFLICT', `part "${p.name}"`, 'has provenance.depth.kind "authored-unit"; a transported scalar reference cannot coexist with authored unit depth — retain the unit declaration or supply an explicitly reassembled scalar-compatible input; no automatic transition is made');
   loadConfigAndAnimations(input.rigConfig);
   const raw = object(readJson(input.rigConfig), 'rig config'), turn = object(raw.turn, 'config.turn');
   for (const [name, group] of Object.entries(recipe.groups)) {
@@ -140,6 +169,7 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
   if (typeof motion?.animations_from === 'string') motion.animations_from = relative(resolve(input.out), resolve(dirname(input.rigConfig), motion.animations_from));
   const control = (raw.generation as Obj | undefined)?.control as Obj | undefined;
   if (typeof control?.skeleton === 'string' && !isSkeletonName(control.skeleton)) control.skeleton = relative(resolve(input.out), resolve(dirname(input.rigConfig), control.skeleton));
+  if (typeof raw.requirements === 'string') raw.requirements = relative(resolve(input.out), resolve(dirname(input.rigConfig), raw.requirements));
   parseConfig(raw);
   const writes = new Map<string, Uint8Array>(), rows: Obj[] = [], recs = rawParts.parts as Obj[];
   // Retain auxiliary art (including alternate sets) and diagnostics byte-for-byte.
@@ -175,7 +205,7 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
       if (islands !== 1) fail('DEPTH_NORMAL_ISLANDS', name, `native part has ${islands} alpha>=128 islands; exactly one closed convex part is required`);
       const maskArt = map.width === art.width && map.height === art.height ? art : resize(art, map.width, map.height, 'lanczos3');
       normal = integrateNormals(map, maskArt, name);
-      values = floatBox(normal.data, Math.ceil(map.width / 2), Math.ceil(map.height / 2), art.width, art.height);
+      values = floatBox(extendIntegratedHeight(normal.data, maskArt), Math.ceil(map.width / 2), Math.ceil(map.height / 2), art.width, art.height);
     } else {
       if (map.channels !== 1) fail('DEPTH_MAP_FORMAT', name, 'depth requires one floating-point channel');
       values = floatBox(map.data, map.width, map.height, art.width, art.height);

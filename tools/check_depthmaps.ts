@@ -143,4 +143,53 @@ export function runDepthMapChecks(dir: string, say: Say): void {
   const builtInOut = join(dir, 'builtin-out'); applyDepth({ ...args, rigConfig: builtInPath, out: builtInOut });
   const builtInRead = readRigInputs(join(builtInOut, 'config.json'), builtInOut);
   say('DMP31_BUILTIN_CONTROL_SKELETON_IS_NOT_RELOCATED_AS_A_FILE', builtInRead.cfg.generation?.control?.skeleton === 'stand_clasp', 'actual config reader accepts the relocated output with the built-in name preserved');
+  const requirementsPath = join(dir, 'limits.json'); json(requirementsPath, { spec: 'spine-parts-requirements/1', fps: 12, requirements: [] });
+  const requirementsConfig = join(dir, 'requirements-config.json'); json(requirementsConfig, { ...config, requirements: 'limits.json' });
+  const requirementsOut = join(dir, 'requirements-out'); applyDepth({ ...args, rigConfig: requirementsConfig, out: requirementsOut });
+  let requirementsRead = false;
+  const requirementsCodes = codes(() => { requirementsRead = readRigInputs(join(requirementsOut, 'config.json'), requirementsOut).cfg.requirements !== undefined; });
+  const writtenRequirements = JSON.parse(readFileSync(join(requirementsOut, 'config.json'), 'utf8')) as { requirements: string };
+  say('DMP32_RELATIVE_REQUIREMENTS_RELOCATED_THROUGH_OUTPUT_READER', requirementsRead && requirementsCodes.length === 0 && readFileSync(join(requirementsOut, writtenRequirements.requirements)).equals(readFileSync(requirementsPath)), JSON.stringify({ outputReader: requirementsRead, refusals: requirementsCodes, requirements: writtenRequirements.requirements }));
+  const unitSource = join(dir, 'unit-source'); mkdirSync(join(unitSource, 'parts'), { recursive: true });
+  const unitParts = structuredClone(pf);
+  unitParts.parts[0].provenance = { unchanged_layer_px: unitParts.parts[0].opaque_px, hand_px: 0, automatic_px: 0, edits: [], automatic: [], depth: { kind: 'authored-unit', values: [{ group: 'head', value: 7 }] } };
+  writeParts(join(unitSource, 'parts.json'), unitParts); writePng(join(unitSource, 'parts/face.png'), art);
+  const unitPrepared = join(dir, 'unit-prepared'); prepareDepth({ parts: unitSource, config: configPath, out: unitPrepared });
+  const unitOut = join(dir, 'unit-conflict-out'), unitCodes = codes(() => applyDepth({ ...args, parts: unitSource, manifest: join(unitPrepared, 'manifest.json'), out: unitOut }));
+  const unitReaderCodes = existsSync(join(unitOut, 'parts.json')) ? codes(() => readParts(join(unitOut, 'parts.json'))) : [];
+  say('DMP33_AUTHORED_UNIT_SELECTION_REFUSES_BEFORE_EMISSION', unitCodes.some(c => c.startsWith('DEPTH_AUTHORED_UNIT_CONFLICT:')) && !existsSync(unitOut), JSON.stringify({ refusals: unitCodes, outputExists: existsSync(unitOut), outputReaderRefusals: unitReaderCodes }));
+  const normalRecipe = structuredClone(recipe); normalRecipe.parts.face.source = 'normals'; normalRecipe.parts.face.map = 'normal-map.json';
+  const normalConfig = join(dir, 'normal-recipe.json'); json(normalConfig, normalRecipe); json(join(dir, 'normal-map.json'), map);
+  const normalPrepared = join(dir, 'normal-prepared'); prepareDepth({ parts: source, config: normalConfig, out: normalPrepared });
+  const normalOut = join(dir, 'normal-out'); applyDepth({ ...args, config: normalConfig, manifest: join(normalPrepared, 'manifest.json'), out: normalOut });
+  const integrated = integrateNormals(map, art, 'disk-oracle'), seeds: number[] = [];
+  for (let y = 0; y < 33; y++) for (let x = 0; x < 33; x++) if (art.data[((2 * y) * 65 + 2 * x) * 4 + 3] >= 128) seeds.push(y * 33 + x);
+  const nearest = (x: number, y: number): number => {
+    let best = Infinity, seed = -1;
+    for (const i of seeds) { const d = (i % 33 - x) ** 2 + (Math.floor(i / 33) - y) ** 2; if (d < best) { best = d; seed = i; } }
+    return seed;
+  };
+  // This BOX enlargement has exactly one tap at floor((native+.5)*33/65).
+  const referenceValues = Float64Array.from({ length: 65 * 65 }, (_, i) => integrated.data[nearest(Math.floor((i % 65 + .5) * 33 / 65), Math.floor((Math.floor(i / 65) + .5) * 33 / 65))]);
+  const referenceSheet = mapToSheet(referenceValues, art, 50, 10, 'white', 100, 'disk-oracle').sheet;
+  const actualSheet = readPng(join(normalOut, 'parts/face_depth.png')), pixel = 11 * 65 + 21, expectedLevel = referenceSheet.data[pixel * 4], actualLevel = actualSheet.data[pixel * 4];
+  const contaminatedTap = 5 * 33 + 10, expectedSeed = 6 * 33 + 10;
+  say('DMP34_NORMAL_DISK_BOX_DOES_NOT_PULL_UNSUPPORTED_ZERO_INTO_PIXEL_21_11', art.data[pixel * 4 + 3] >= 128 && !seeds.includes(contaminatedTap) && nearest(10, 5) === expectedSeed && actualLevel === expectedLevel, JSON.stringify({ nativePixel: [21, 11], integrationTap: [10, 5], sourceTapSupported: false, nearestSupported: [10, 6], unsupportedHeight: integrated.data[contaminatedTap], expectedHeight: integrated.data[expectedSeed], actualLevel, expectedLevel }));
+  const legacyValues = floatBox(integrated.data, 33, 33, 65, 65); let preserved = 0, equal = 0;
+  for (let i = 0; i < 65 * 65; i++) {
+    if (art.data[i * 4 + 3] < 128) continue;
+    if (seeds.includes(Math.floor((Math.floor(i / 65) + .5) * 33 / 65) * 33 + Math.floor((i % 65 + .5) * 33 / 65))) { preserved++; if (legacyValues[i] === referenceValues[i]) equal++; }
+  }
+  say('DMP35_DISK_FLOAT_ORACLE_AND_INSIDE_SUPPORT_BOX_PRESERVATION', preserved > 0 && equal === preserved && Array.from(mask).every((v, i) => !v || actualSheet.data[i * 4] === referenceSheet.data[i * 4]), JSON.stringify({ fullySupportedBoxPixels: preserved, unchangedRawBoxValues: equal, normalizedSheetMatchesIndependentNearestSeedOracle: true }));
+  const mixedSource = join(dir, 'mixed-unit-source'); mkdirSync(join(mixedSource, 'parts'), { recursive: true });
+  const mixedParts = structuredClone(twoParts); mixedParts.parts[1].provenance = structuredClone(unitParts.parts[0].provenance);
+  writeParts(join(mixedSource, 'parts.json'), mixedParts); writePng(join(mixedSource, 'parts/face.png'), art); writePng(join(mixedSource, 'parts/badge.png'), art);
+  const mixedConfig = join(dir, 'mixed-unit-config.json'); json(mixedConfig, { ...config, assemble: { rig_scale: .5, plan: [['face', 'full', 'face'], ['badge', 'full', 'headwear']] }, regions: { face: 'head', badge: 'head' }, turn: { pivot: 30, roles: { face: 'surface', badge: 'unit' }, unitDepths: { badge: 7 } } });
+  const mixedPrepared = join(dir, 'mixed-prepared'); prepareDepth({ parts: mixedSource, config: configPath, out: mixedPrepared });
+  const mixedOut = join(dir, 'mixed-out'); applyDepth({ ...args, parts: mixedSource, manifest: join(mixedPrepared, 'manifest.json'), rigConfig: mixedConfig, out: mixedOut });
+  const mixedRead = readRigInputs(join(mixedOut, 'config.json'), mixedOut), retainedUnit = mixedRead.parts.parts.find(p => p.name === 'badge');
+  say('DMP36_UNSELECTED_AUTHORED_UNIT_REMAINS_ONE_REPRESENTATION', retainedUnit?.depth === undefined && JSON.stringify(retainedUnit?.provenance) === JSON.stringify(mixedParts.parts[1].provenance) && readFileSync(join(mixedOut, 'parts/badge.png')).equals(readFileSync(join(mixedSource, 'parts/badge.png'))), 'positive mixed input: face gets scalar depth; unselected badge keeps its authored-unit provenance/art and the actual reader accepts both');
+  const absoluteConfig = join(dir, 'absolute-requirements-config.json'); json(absoluteConfig, { ...config, requirements: requirementsPath });
+  const absoluteOut = join(dir, 'absolute-requirements-out'); applyDepth({ ...args, rigConfig: absoluteConfig, out: absoluteOut });
+  say('DMP37_ABSOLUTE_REQUIREMENTS_REBASE_TO_THE_SAME_FILE', readRigInputs(join(absoluteOut, 'config.json'), absoluteOut).cfg.requirements !== undefined && readFileSync(join(absoluteOut, (JSON.parse(readFileSync(join(absoluteOut, 'config.json'), 'utf8')) as { requirements: string }).requirements)).equals(readFileSync(requirementsPath)), 'positive absolute input reuses the same real requirements reader and bytes');
 }
