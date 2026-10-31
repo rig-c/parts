@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.87.0](https://github.com/rig-c/parts/compare/v1.86.0...v1.87.0) (2026-10-31)
+
+
+### Features
+
+* **depth:** core depth sheets from one monocular map per part ([#898](https://github.com/rig-c/parts/issues/898)) ([d7deb8c](https://github.com/rig-c/parts/commit/d7deb8c7b0ed26ab386338056e1bc0f2c3e05ba8))
+
 ## [1.86.0](https://github.com/rig-c/parts/compare/v1.85.0...v1.86.0) (2026-10-31)
 
 
