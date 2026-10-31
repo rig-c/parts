@@ -4930,12 +4930,14 @@ function readSeamRows(dir: string, animations: readonly string[], fps: number, p
           }
         }
       }
+      const contact = setup ? undefined : jointContactReading(p.jointContact, want.joints ?? [], set.written ?? set.sampled, at, problems);
+      if (contact === null) return;
       worldRows?.push({ pair: want.pair, animation, status: p.status, drawn: p.drawn, banded: p.banded, gap: kinds.gap, ghost: kinds.ghost });
       const opens = [...over.keys()].sort((x, y) => x - y);
       rows.push({
         pair: want.pair,
         animation,
-        ...(setup ? {} : { joint_contact: jointContactReading(p.jointContact, want.joints ?? [], set.written ?? set.sampled, at) }),
+        ...(setup ? {} : { joint_contact: contact }),
         status: p.status,
         drawn: p.drawn,
         banded: p.banded,

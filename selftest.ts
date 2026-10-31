@@ -52119,7 +52119,31 @@ function runJointContactSuite(): number {
   section('joint-contact: report-only material connectivity');
   const { say, bad } = counter();
   const dir = temp('joint-contact');
-  try { runJointContactChecks(dir, (name, ok, detail) => say(name, ok, detail, 'Synthetic material controls and independent raw/verdict preservation.')); }
+  try {
+    runJointContactChecks(dir, (name, ok, detail) => say(name, ok, detail, 'Synthetic material controls and independent raw/verdict preservation.'));
+    const aggregate = join(dir, 'aggregate');
+    const animations = ['first', 'second'];
+    mkdirSync(aggregate, { recursive: true });
+    writeFileSync(join(aggregate, 'frames.json'), JSON.stringify({ sets: animations.map(animation => ({ animation, dir: animation, sampled: 1, written: 1 })) }));
+    for (const animation of animations) {
+      mkdirSync(join(aggregate, animation), { recursive: true });
+      writeFileSync(join(aggregate, animation, 'seam.json'), JSON.stringify({
+        spec: 'rigc-seam/1', animation, fps: animation === 'first' ? 13 : 12,
+        pairs: [{ a: 'parent', b: 'limb', status: 'read', drawn: 1, banded: 1, opens: [],
+          gap: { frames: [] }, ghost: { frames: [] }, jointContact: { frames: [{ index: 0, time: 0, status: 'unavailable', reason: null }] } }],
+      }));
+    }
+    const worlds: MotionSeamWorldRow[] = [];
+    const error = refusals(() => readMotionSeams(aggregate, animations, 12,
+      [{ pair: 'parent|limb', a: 'parent', b: 'limb', declared: ['synthetic elbow'], joints: ['elbow'] }], {}, worlds));
+    const found = error?.problems ?? [];
+    say('JCT14_CONTACT_ERRORS_JOIN_THE_READERS_EXISTING_PROBLEMS',
+      found.length === 3 && found.every(p => p.code === 'FRAMES_SIDECAR') &&
+      found.some(p => p.detail.includes('fps is 13')) &&
+      animations.every(animation => found.some(p => p.object === join(aggregate, animation, 'seam.json') + ' pairs[0]' && p.detail.startsWith('jointContact:'))) && worlds.length === 0,
+      JSON.stringify({ problems: found, world_rows: worlds.length }),
+      'Two malformed observations and one previously collected fps problem are refused together; malformed contact contributes no row or count.');
+  }
   finally { rmSync(dir, { recursive: true, force: true }); }
   return bad();
 }

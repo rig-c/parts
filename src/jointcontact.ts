@@ -1,5 +1,5 @@
 /** Report core's material connectivity; no count here participates in a bar. */
-import { PartsError } from './errors.ts';
+import { PartsError, type Problem } from './errors.ts';
 
 export interface JointContactReading {
   status: 'REPORTED' | 'SKIP';
@@ -12,10 +12,15 @@ export interface JointContactReading {
 }
 const record = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
 
-/** Count only producer observations; an absent observation or joint name is explicitly unavailable. */
-export function jointContactReading(raw: unknown, joints: readonly string[], sampled: unknown, object: string): JointContactReading {
+/** Count only producer observations; invalid input adds a problem and yields no reading when a collector is supplied. */
+export function jointContactReading(raw: unknown, joints: readonly string[], sampled: unknown, object: string, problems?: Problem[]): JointContactReading | null {
   const names = [...new Set(joints)];
-  const fail = (detail: string): never => { throw new PartsError([{ code: 'FRAMES_SIDECAR', object, detail: 'jointContact: ' + detail }]); };
+  const fail = (detail: string): null => {
+    const problem = { code: 'FRAMES_SIDECAR', object, detail: 'jointContact: ' + detail };
+    if (problems === undefined) throw new PartsError([problem]);
+    problems.push(problem);
+    return null;
+  };
   const knownCount = typeof sampled === 'number' && Number.isSafeInteger(sampled) && sampled >= 0 ? sampled : undefined;
   if (raw === undefined) {
     const reason = names.length === 0 ? 'pair has no declared named joint' : 'core seam reading has no jointContact.frames';
