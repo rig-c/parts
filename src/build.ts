@@ -2253,7 +2253,7 @@ export interface BuildInput {
   windBand?: string;
 }
 
-/** What `build` does with one flag `check` takes: hands it to its check stage, takes it as its own, or refuses it because build supplies the value itself. */
+/** What `build` does with one flag `check` takes: hands it to its check stage, takes it as its own, or refuses it because build supplies the value or report itself. */
 export type CheckFlagInBuild =
   | { as: 'forwarded' }
   | { as: 'own'; why: string }
@@ -2280,6 +2280,7 @@ export const CHECK_FLAGS_IN_BUILD: Readonly<Record<string, CheckFlagInBuild>> = 
   '--no-extremes': { as: 'forwarded' },
   '--environment': { as: 'forwarded' },
   '--wind-band': { as: 'forwarded' },
+  '--json': { as: 'supplied', why: 'build supplies its multi-stage text report; run check --rig <out>/rig --parts <out> --out <dir> --json for the completed check object' },
 };
 
 /** The requirements file build's check reads (issue #556): `read` is where it is opened, `recorded` what `check.json` names it by. */
@@ -2315,7 +2316,7 @@ export function buildRequirements(flag: string | undefined, declared: string | u
   ]);
 }
 
-/** The `build` refusal of a `check` flag build supplies itself ({@link CHECK_FLAGS_IN_BUILD}), or null for any other flag. */
+/** The `build` refusal of a `check` flag whose value or report build supplies itself ({@link CHECK_FLAGS_IN_BUILD}), or null for any other flag. */
 export function suppliedCheckFlag(flag: string): string | null {
   const row = Object.hasOwn(CHECK_FLAGS_IN_BUILD, flag) ? CHECK_FLAGS_IN_BUILD[flag] : undefined;
   return row?.as === 'supplied' ? `build does not take "${flag}"; ${row.why}` : null;
