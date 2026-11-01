@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.5](https://github.com/rig-c/parts/compare/v2.0.4...v2.0.5) (2026-11-01)
+
+
+### Bug Fixes
+
+* **deps:** move the core pin to 3.1.0 ([#928](https://github.com/rig-c/parts/issues/928)) ([ca260d0](https://github.com/rig-c/parts/commit/ca260d070de7f5c8e31c59169b128ab44a3e59e8)), closes [#927](https://github.com/rig-c/parts/issues/927)
+
 ## [2.0.4](https://github.com/rig-c/parts/compare/v2.0.3...v2.0.4) (2026-11-01)
 
 
