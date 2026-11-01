@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/rig-c/parts/main/assets/banner.svg" alt="@rig-c/parts — 2D character parts, weighted meshes and bone chains from one painting" width="100%" />
+</p>
+
 # @rig-c/parts — CLI `rig-parts`
 
 **AI-authored 2D character rigs from one anime painting, verified before they

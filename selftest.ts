@@ -36335,7 +36335,7 @@ function treeFiles(): string[] {
   return out;
 }
 
-const TEXT_FILE = /\.(ts|js|cjs|mjs|json|md|yml|yaml|lock|txt|sh)$|(^|\/)(\.gitignore|LICENSE)$/;
+const TEXT_FILE = /\.(ts|js|cjs|mjs|json|md|yml|yaml|lock|txt|sh|svg)$|(^|\/)(\.gitignore|LICENSE)$/;
 /** The binary files the tree may carry: fixture PNGs and PSDs, and the examples' contact sheets and reference renders. */
 const IMAGE_FILE = /\.(png|psd|jpg|webp|gif)$/;
 
