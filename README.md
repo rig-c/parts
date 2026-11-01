@@ -8,7 +8,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-38BDF8.svg?style=flat-square" alt="license" /></a>
 </p>
 
-# @rig-c/parts — CLI `rig-parts`
+# @rig-c/parts
 
 **AI-authored 2D character rigs from one anime painting, verified before they
 are written.** rig-parts generates no images. The painting and See-through layers
