@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.2](https://github.com/rig-c/parts/compare/v2.0.1...v2.0.2) (2026-11-01)
+
+
+### Bug Fixes
+
+* **readme:** show the npm badges ([#917](https://github.com/rig-c/parts/issues/917)) ([4202f1f](https://github.com/rig-c/parts/commit/4202f1f47af665d0340fa60c9798cec67dc2150e)), closes [#916](https://github.com/rig-c/parts/issues/916)
+
 ## [2.0.1](https://github.com/rig-c/parts/compare/v2.0.0...v2.0.1) (2026-11-01)
 
 
