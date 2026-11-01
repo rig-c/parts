@@ -39964,6 +39964,30 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
     "issue #126 item 7: the stability statement is a promise about the CLI, so it is read off the CLI and held to it in both directions — a command or flag the page omits is a surface nobody promised, and one it names that cli.ts does not is a promise the package cannot keep. Command flag unions are also held to the parser's TAKES rows, with comfy subcommands separate; mode combinations remain the CLI's and the cli suite reads them from the help",
   );
 
+  // TY40 — issue #919: skills/rig-parts/SKILL.md is a router whose commands, flags and links are held to cli.ts and the
+  // tracked/shipped docs on disk, with prose ("rig-parts is") ignored without an exception table.
+  const skillAudit40 = skillRouterFaults('skills/rig-parts/SKILL.md', skill24, cliText, text, pkg.files);
+  const skillPlants40 = [
+    skillRouterFaults('skills/rig-parts/SKILL.md', `${skill24}\nRun \`rig-parts noncommand --out work\`.\n`, cliText, text, pkg.files).faults,
+    skillRouterFaults('skills/rig-parts/SKILL.md', `${skill24}\nRun \`rig-parts assemble --no-such-flag\`.\n`, cliText, text, pkg.files).faults,
+    skillRouterFaults('skills/rig-parts/SKILL.md', `${skill24}\nRun \`rig-parts compare --left a --right b --seam silhouette\`.\n`, cliText, text, pkg.files).faults,
+    skillRouterFaults('skills/rig-parts/SKILL.md', `${skill24}\nSee [dead](https://github.com/rig-c/parts/blob/main/docs/AUTHORING.md#no-such-heading) and [gone](https://github.com/rig-c/parts/blob/main/docs/NOWHERE.md).\n`, cliText, text, pkg.files).faults,
+    skillRouterFaults('skills/rig-parts/SKILL.md', `${skill24}\nrig-parts is a router and nothing more.\n`, cliText, text, pkg.files).faults,
+  ];
+  const plantsHit40 =
+    skillPlants40[0].length === 1 && skillPlants40[0][0].includes('spells `rig-parts noncommand`') &&
+    skillPlants40[1].length === 2 && skillPlants40[1][0].includes('spells `--no-such-flag` on `rig-parts assemble`') &&
+    skillPlants40[2].length === 1 && skillPlants40[2][0].includes('spells `--seam` on `rig-parts compare`') &&
+    skillPlants40[3].length === 2 && skillPlants40[3][0].includes('has no heading or anchor `#no-such-heading`') && skillPlants40[3][1].includes('links `docs/NOWHERE.md`') &&
+    skillPlants40[4].length === 0;
+  say(
+    'TY40_THE_SKILL_ROUTER_HOLDS_EVERY_COMMAND_FLAG_AND_LINK_TO_THE_TREE',
+    skillAudit40.commands > 0 && skillAudit40.flags > 0 && skillAudit40.links > 0 && skillAudit40.faults.length === 0 && plantsHit40,
+    `skills/rig-parts/SKILL.md: ${skillAudit40.commands} command mention(s), ${skillAudit40.flags} flag mention(s), ${skillAudit40.links} link(s) — ${skillAudit40.faults.length === 0 ? 'all resolve against cli.ts and shipped docs' : skillAudit40.faults.join('; ')}` +
+      `; planted: unknown command -> ${skillPlants40[0].join('; ') || 'MISSED'} | unknown flag -> ${skillPlants40[1].join('; ') || 'MISSED'} | wrong-command flag -> ${skillPlants40[2].join('; ') || 'MISSED'} | dead anchor and file -> ${skillPlants40[3].join('; ') || 'MISSED'} | prose "rig-parts is" -> ${skillPlants40[4].join('; ') || 'quiet'}`,
+    'issue #919: every rig-parts command, --flag and guide link in skills/rig-parts/SKILL.md is held to cli.ts and the tracked/shipped docs on disk',
+  );
+
   // TY14 — docs/STABILITY.md's config field list, held to the names the loader's object checks spell.
   const loaderText = readFileSync(join(ROOT, 'src', 'config.ts'), 'utf8');
   const loader = loaderFieldNames(loaderText);
@@ -41111,6 +41135,123 @@ function commandDrift(cli: string, doc: string): string[] {
     ...oneWay(cliSide.flags, flags, (f) => `flag ${f} is in cli.ts and not in the table`),
     ...oneWay(flags, cliSide.flags, (f) => `flag ${f} is in the table and not in cli.ts`),
   ];
+}
+
+function githubHeadingSlug(rawHeading: string): string {
+  return rawHeading
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[*_~]/g, '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/\s/g, '-');
+}
+
+function skillRouterFaults(
+  skillFile: string,
+  skillText: string,
+  cli: string,
+  tracked: ReadonlyArray<readonly [string, string]>,
+  shippedAllowlist: readonly string[],
+): { commands: number; flags: number; links: number; faults: string[] } {
+  const faults: string[] = [];
+  const cliSide = cliSurface(cli);
+  const validCommands = new Set<string>(cliSide.commands);
+  const validFlags = new Set<string>(cliSide.flags);
+  const commandFlags = new Map<string, Set<string>>();
+  const takes = /const TAKES = \{([\s\S]*?)\n\} as const/.exec(cli)?.[1] ?? '';
+  for (const row of takes.split('\n').filter((l) => l.trim() !== '')) {
+    const parsed = /^\s*(?:'([^']+)'|([a-z][a-z-]*)): \{ valued: \[([^\]]*)\], switches: \[([^\]]*)\] \},$/.exec(row);
+    if (parsed === null) continue;
+    const key = parsed[1] ?? parsed[2];
+    const accepted = new Set([...`${parsed[3]},${parsed[4]}`.matchAll(/'(--[a-z0-9][a-z0-9-]*)'/g)].map((m) => m[1]));
+    commandFlags.set(key, accepted);
+    validCommands.add(key);
+  }
+  const trackedMap = new Map<string, string>(tracked);
+  const isShipped = (p: string): boolean =>
+    shippedAllowlist.some((entry) => {
+      const clean = entry.replace(/\/+$/, '');
+      return p === clean || p.startsWith(`${clean}/`);
+    });
+
+  // Skip YAML frontmatter on lines 1..closing `---`.
+  const lines = skillText.split('\n');
+  let bodyStart = 0;
+  if (lines[0] === '---') {
+    const closeIdx = lines.indexOf('---', 1);
+    if (closeIdx > 0) bodyStart = closeIdx + 1;
+  }
+  const bodyLines = lines.map((l, i) => (i < bodyStart ? '' : l));
+  const bodyJoined = bodyLines.join('\n');
+
+  let commands = 0;
+  let flags = 0;
+  let links = 0;
+
+  for (const m of bodyJoined.matchAll(/`([^`]+)`/g)) {
+    const idx = m.index ?? 0;
+    const line = bodyJoined.slice(0, idx).split('\n').length;
+    const span = m[1].replace(/\s+/g, ' ').trim();
+    const spelled =
+      /^(?:rig-parts\s+(comfy\s+[a-z][a-z-]*|[a-z][a-z-]*)\b|(comfy\s+[a-z][a-z-]*)\b|(?!rig-parts\b|npm\b|bun\b|bunx\b)([a-z][a-z-]*)(?=\s+--[a-z]))/.exec(
+        span,
+      );
+    const cmd = spelled === null ? null : (spelled[1] ?? spelled[2] ?? spelled[3] ?? null);
+    if (cmd !== null) {
+      commands++;
+      if (!validCommands.has(cmd)) {
+        faults.push(
+          `${skillFile}:${line} spells \`${span.startsWith('rig-parts') ? `rig-parts ${cmd}` : cmd}\`, and cli.ts offers ${[...validCommands].sort().join(', ')}`,
+        );
+      }
+    }
+    for (const fm of span.matchAll(/(?:^|\s)(--[a-z0-9][a-z0-9-]*)\b/g)) {
+      const flag = fm[1];
+      flags++;
+      const cmdSet = cmd !== null ? commandFlags.get(cmd) : undefined;
+      if (cmd !== null && cmdSet !== undefined && !cmdSet.has(flag)) {
+        faults.push(
+          `${skillFile}:${line} spells \`${flag}\` on \`${cmd.startsWith('comfy ') ? cmd : `rig-parts ${cmd}`}\`, which takes ${[...cmdSet].sort().join(', ')}`,
+        );
+      }
+      if (!validFlags.has(flag)) {
+        faults.push(`${skillFile}:${line} spells \`${flag}\`, and no rig-parts command takes that flag`);
+      }
+    }
+  }
+
+  for (const m of bodyJoined.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {
+    const idx = m.index ?? 0;
+    const line = bodyJoined.slice(0, idx).split('\n').length;
+    const href = m[1].trim();
+    const repoMatch = /^https:\/\/github\.com\/rig-c\/parts\/blob\/main\/([^#]+)(?:#(.+))?$/.exec(href);
+    const relMatch = /^https?:\/\//.test(href) ? null : /^([^#]+)(?:#(.+))?$/.exec(href);
+    const resolved = repoMatch ?? relMatch;
+    if (resolved === null) continue;
+    links++;
+    const targetPath = resolved[1];
+    const anchor = resolved[2];
+    const targetContent = trackedMap.get(targetPath);
+    if (targetContent === undefined || !isShipped(targetPath)) {
+      faults.push(`${skillFile}:${line} links \`${targetPath}\`, which is not a tracked and shipped file`);
+      continue;
+    }
+    if (anchor !== undefined) {
+      const slugs = new Set<string>();
+      for (const tl of targetContent.split('\n')) {
+        const hm = /^#{1,6}\s+(.*)$/.exec(tl);
+        if (hm !== null) slugs.add(githubHeadingSlug(hm[1]));
+        for (const am of tl.matchAll(/<a\s+id="([^"]+)"\s*><\/a>/g)) slugs.add(am[1]);
+      }
+      if (!slugs.has(anchor)) {
+        faults.push(`${skillFile}:${line} links \`${targetPath}#${anchor}\`, and \`${targetPath}\` has no heading or anchor \`#${anchor}\``);
+      }
+    }
+  }
+
+  return { commands, flags, links, faults };
 }
 
 /** The quoted identifiers in a piece of source. */

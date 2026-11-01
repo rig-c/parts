@@ -1,6 +1,6 @@
 ---
 name: rig-parts
-description: Turn one anime character painting and its See-through layer decomposition into a verified 2D character rig (Spine 4.3 skeleton data) — measured parts, weighted meshes, bone chains and a looping idle — with rig-parts, which gates everything through rig-c before it is written. Use for a request to rig or animate a single character painting, to check a painting before See-through (rig-parts painting), to run or read rig-parts layers, sheet, assemble, propose, rig, check, loop or build, or to write or fix a rig-parts config.json. Not for cutting art into parts by hand, for authoring a rig from loose PNGs (that is the rigc skill), for lip-sync or swapping a part's image, or for running See-through itself.
+description: Turn one anime character painting and its See-through layer decomposition into a verified 2D character rig (Spine 4.3 skeleton data) — measured parts, weighted meshes, bone chains and a looping idle — with rig-parts, which gates everything through rig-c before it is written. Use for a request to rig or animate a single character painting, to check a painting before See-through (rig-parts painting), to run or read rig-parts layers, sheet, assemble, depth-prepare, depth-apply, propose, rig, check, loop or build, or to write or fix a rig-parts config.json. Not for cutting art into parts by hand, for authoring a rig from loose PNGs (that is the rigc skill), for lip-sync or swapping a part's image, or for running See-through itself.
 license: MIT
 compatibility: Requires Bun 1.4 or later (declared in engines.bun >=1.4.0; CI tests latest only). The tool is the npm package @rig-c/parts (npm i -D @rig-c/parts, or bun add -d @rig-c/parts), whose command is rig-parts; @rig-c/core (the rigc command) is installed with it. See-through is run separately.
 ---
@@ -74,7 +74,10 @@ under that.
    route; the optional `comfy seethrough` adapter only talks to a ComfyUI box.
 2. `rig-parts layers <full run>` — read the table. A `WARN  PLAN_LAYER_…` line names
    a layer See-through invented (a translucent haze, or one out of proportion);
-   the plan step leaves it out and says so in its `notes`.
+   the plan step leaves it out and says so in its `notes`. When an input carries no
+   depth (`depth_median: null` on every layer, or a PSD), `layers` prints one
+   `SKIP  depth:` line (manifest order is then the draw order, and `propose --full`
+   or `--head` prints `turn: SKIP`) — report it as skipped, never as passed.
 3. `rig-parts propose --head-box --full <full run> --canvas <W>x<H>` → put
    `head_box` in the config, run `inputs` again (it now also writes
    `st_input_head.png`, the crop at that box), and run See-through on the crop.
@@ -142,6 +145,12 @@ under that.
    (add `--idle-keys direct` when step 6 said so).
    It stops at the first stage that refuses, printing that stage's lines under
    `[assemble]`, `[rig]` or `[check]`. Fix what the FAIL line names and build again.
+   When a declared head turn (`turn.depths` or `turn.roles`) has an absolute setup
+   eye-line roll above `18.485385` degrees, `rig` and `build` print
+   `WARN RIG_TURN_HEAD_ROLL` naming the face/eye parts, both eye bones, signed roll
+   and limit; it does not refuse the build or change emitted bytes — inspect the neck
+   at both yaw/pitch extremes before accepting the turn
+   ([Head roll before a declared turn](https://github.com/rig-c/parts/blob/main/docs/AUTHORING.md#head-roll-before-a-declared-turn)).
 8. Read `out/check/check.json` — the six judgement lines the same way as the seam
    and the loop: a FAIL names the field to change (AUTHORING §6);
    `TEXTURE_STRETCH` names the worst mesh triangle (slot, triangle, vertices, edge,
@@ -178,6 +187,33 @@ nothing detects or separates people. Report the plate's provenance as you declar
 it and the order as `scene.json` records it (AUTHORING §7, *Composing several
 characters*).
 
+Depth-driven 2.5D turns ([Depth-driven rigging](https://github.com/rig-c/parts/blob/main/docs/AUTHORING.md#depth-driven-rigging)):
+`depth_filename` is a legacy hint and activates nothing on its own. Declare
+`config.depth` with positive finite `zScale` (`near: "black"` for See-through's
+far-high sheets, or user fallbacks under `depth.full` / `depth.head`, and
+`comfy seethrough --config <file> --depth-run <full|head>` when fetching from
+ComfyUI; [Per-layer depth sheets](https://github.com/rig-c/parts/blob/main/docs/AUTHORING.md#per-layer-depth-sheets-773)
+and [Per-layer depth input](https://github.com/rig-c/parts/blob/main/docs/AUTHORING.md#per-layer-depth-input)),
+then map parts in `turn.roles` (head `yaw_dial`/`pitch_dial`) and `turn.body.roles`
+(independent `body_yaw_dial` or `turn.body.slider`) as `"surface"` (grid or authored
+weighted meshes; `auto` is refused by `CONFIG_TURN_SURFACE_AUTO`), `"unit"` or
+`"rear"`. A `"unit"` part's depth resolves by `unitDepths.<part>` →
+`unitDepths.<bone>` → primary surface sheet before the part's own sheet
+([Unit depth precedence](https://github.com/rig-c/parts/blob/main/docs/AUTHORING.md#unit-depth-precedence)).
+When depth comes from external per-part provider maps (`rig-parts-depth/1` recipe
+and `rig-parts-map/1` float JSON maps, run after `assemble` and before `rig`), run
+`rig-parts depth-prepare --parts <assembled> --config <depth.json> --out <inference>`
+and `rig-parts depth-apply --parts <assembled> --manifest <manifest.json> --config <depth.json> --rig-config <config.json> --out <mapped>`;
+non-empty output (`DEPTH_OUTPUT_EMPTY`), stale input bindings (`DEPTH_INPUT_BINDING`),
+`authored-unit` provenance (`DEPTH_AUTHORED_UNIT_CONFLICT`), flat maps with nonzero
+relief (`DEPTH_MAP_SPREAD`) and multi-island or non-convex normal maps
+(`DEPTH_NORMAL_*`) are refused by name
+([Per-part provider maps](https://github.com/rig-c/parts/blob/main/docs/AUTHORING.md#per-part-provider-maps-897)
+and [Depth sheet refusals](https://github.com/rig-c/parts/blob/main/docs/AUTHORING.md#depth-sheet-refusals-773)).
+
+`assemble.seam` (`"near-white"` or `"silhouette"` in `config.json`, overridden by
+`--seam`; [AUTHORING §3](https://github.com/rig-c/parts/blob/main/docs/AUTHORING.md#3-configjson-field-by-field)
+and [§5](https://github.com/rig-c/parts/blob/main/docs/AUTHORING.md#5-after-each-stage-what-to-read)):
 `--seam silhouette` repairs more of the seam on white garments than the default
 `near-white` (reference-demo: 10,340 → 8,644 recomposite error pixels); the default is
 the reference implementation's rule. `--project visible` lets thin visible parts
