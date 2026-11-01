@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.4](https://github.com/rig-c/parts/compare/v2.0.3...v2.0.4) (2026-11-01)
+
+
+### Bug Fixes
+
+* **docs:** add a depth-driven rigging feature page ([#925](https://github.com/rig-c/parts/issues/925)) ([f4be9b9](https://github.com/rig-c/parts/commit/f4be9b90cc4903f6afc850f379ec5090489394e3))
+
 ## [2.0.3](https://github.com/rig-c/parts/compare/v2.0.2...v2.0.3) (2026-11-01)
 
 
