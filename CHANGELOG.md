@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/rig-c/parts/compare/v2.0.0...v2.0.1) (2026-11-01)
+
+
+### Bug Fixes
+
+* show the shared banner ([#914](https://github.com/rig-c/parts/issues/914)) ([2daade8](https://github.com/rig-c/parts/commit/2daade8a02e1091c7f19f6b17576dd413bd1722f)), closes [#913](https://github.com/rig-c/parts/issues/913)
+
 ## [2.0.0](https://github.com/rig-c/parts/compare/v1.88.0...v2.0.0) (2026-10-31)
 
 
