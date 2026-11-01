@@ -75,9 +75,9 @@ and the medians and reliefs you declare for them:
   "prepare": {"longSide": 1024, "paddingFraction": 0.08, "padding": 4},
   "groups": {"head": {"near": "white", "zScale": 30, "pivot": 15}},
   "parts": {
-    "face": {"map": "face.json", "source": "normals", "frame": "part", "group": "head", "median": 21, "relief": 13},
-    "hair_front": {"map": "hair_front.json", "source": "depth", "frame": "part", "group": "head", "median": 21, "relief": 10},
-    "hair_back": {"map": "hair_back.json", "source": "depth", "frame": "part", "group": "head", "median": 15, "relief": 9}
+    "face": {"map": "face.json", "source": "normals", "frame": "input", "group": "head", "median": 21, "relief": 13},
+    "hair_front": {"map": "hair_front.json", "source": "depth", "frame": "input", "group": "head", "median": 21, "relief": 10},
+    "hair_back": {"map": "hair_back.json", "source": "depth", "frame": "input", "group": "head", "median": 15, "relief": 9}
   },
   "clear": []
 }
@@ -110,7 +110,9 @@ belong to these parts and nothing moved in between.
 This is your step, with your model, on your machine or wherever you run it.
 Read `inference/<part>.png`, write one numeric map per part as JSON
 (`rig-parts-map/1`: width, height, channels, and the raw floating-point values
-row by row). Scalar depth is one channel; the face's normals are three signed
+row by row), the same size as the image you read. `"frame": "input"` in the
+recipe is what says so, and the manifest binds it, so choose it before you
+prepare. Scalar depth is one channel; the face's normals are three signed
 channels in image axes. Save the model's actual numbers — a greyscale preview
 has already thrown away the normalisation the next stage needs.
 
