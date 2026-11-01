@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.3](https://github.com/rig-c/parts/compare/v2.0.2...v2.0.3) (2026-11-01)
+
+
+### Bug Fixes
+
+* **readme:** title the README @rig-c/parts ([#923](https://github.com/rig-c/parts/issues/923)) ([e1726ed](https://github.com/rig-c/parts/commit/e1726ed664436673e30dff537b05733cee083a7d)), closes [#922](https://github.com/rig-c/parts/issues/922)
+* **skills:** route depth, seam and head roll, and hold the skill to the tree ([#920](https://github.com/rig-c/parts/issues/920)) ([c56a5e9](https://github.com/rig-c/parts/commit/c56a5e9cf29280c2903cebb9656ff1bd9135c06d)), closes [#919](https://github.com/rig-c/parts/issues/919)
+
 ## [2.0.2](https://github.com/rig-c/parts/compare/v2.0.1...v2.0.2) (2026-11-01)
 
 
