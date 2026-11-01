@@ -2,6 +2,12 @@
   <img src="https://raw.githubusercontent.com/rig-c/parts/main/assets/banner.svg" alt="@rig-c/parts — 2D character parts, weighted meshes and bone chains from one painting" width="100%" />
 </p>
 
+<p align="center">
+  <a href="https://www.npmjs.com/package/@rig-c/parts"><img src="https://img.shields.io/npm/v/@rig-c/parts.svg?style=flat-square&color=FF6B4A" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/@rig-c/parts"><img src="https://img.shields.io/npm/dm/@rig-c/parts.svg?style=flat-square&color=EC4899" alt="npm downloads" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-38BDF8.svg?style=flat-square" alt="license" /></a>
+</p>
+
 # @rig-c/parts — CLI `rig-parts`
 
 **AI-authored 2D character rigs from one anime painting, verified before they
