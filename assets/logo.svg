@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%" role="img" aria-label="@rig-c/parts — 2D character parts, weighted meshes and bone chains from one painting">
+  <defs>
+    <radialGradient id="bg-glow" cx="50%" cy="45%" r="70%">
+      <stop offset="0%" stop-color="#141826" stop-opacity="0.96"/>
+      <stop offset="55%" stop-color="#080a12" stop-opacity="0.98"/>
+      <stop offset="100%" stop-color="#040508" stop-opacity="1"/>
+    </radialGradient>
+    <linearGradient id="seg-1-grad" gradientUnits="userSpaceOnUse" x1="360" y1="110" x2="140" y2="200">
+      <stop offset="0%" stop-color="#FF2D55"/>
+      <stop offset="100%" stop-color="#FF9500"/>
+    </linearGradient>
+    <linearGradient id="seg-2-grad" gradientUnits="userSpaceOnUse" x1="200" y1="120" x2="256" y2="280">
+      <stop offset="0%" stop-color="#FF9500"/>
+      <stop offset="45%" stop-color="#FFCC00"/>
+      <stop offset="100%" stop-color="#30D158"/>
+    </linearGradient>
+    <linearGradient id="seg-3-grad" gradientUnits="userSpaceOnUse" x1="220" y1="240" x2="340" y2="380">
+      <stop offset="0%" stop-color="#30D158"/>
+      <stop offset="50%" stop-color="#00C7BE"/>
+      <stop offset="100%" stop-color="#0A84FF"/>
+    </linearGradient>
+    <linearGradient id="seg-4-grad" gradientUnits="userSpaceOnUse" x1="200" y1="360" x2="400" y2="380">
+      <stop offset="0%" stop-color="#0A84FF"/>
+      <stop offset="50%" stop-color="#5E5CE6"/>
+      <stop offset="100%" stop-color="#BF5AF2"/>
+    </linearGradient>
+    <linearGradient id="joint-void" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#05070d"/>
+      <stop offset="100%" stop-color="#121624"/>
+    </linearGradient>
+    <filter id="chain-depth" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="-2" dy="6" stdDeviation="6" flood-color="#000000" flood-opacity="0.7"/>
+    </filter>
+  </defs>
+  <rect x="2" y="2" width="508" height="508" rx="110" fill="url(#bg-glow)" stroke="#1E2638" stroke-width="2" />
+  <g id="mark-parts">
+    <g filter="url(#chain-depth)">
+      <path d="M 184 184 L 328 184 L 328 328 L 184 328 Z" fill="none" stroke="#242C3D" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="14 18" />
+      <path d="M 256 88 L 256 164" fill="none" stroke="url(#seg-1-grad)" stroke-width="46" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M 88 236 L 168 236" fill="none" stroke="url(#seg-2-grad)" stroke-width="46" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M 344 236 L 424 236" fill="none" stroke="url(#seg-3-grad)" stroke-width="46" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M 192 356 L 256 420 L 320 356" fill="none" stroke="url(#seg-4-grad)" stroke-width="44" stroke-linecap="round" stroke-linejoin="round" />
+      <circle cx="256" cy="88" r="38" fill="#FF2D55" />
+      <circle cx="256" cy="88" r="15" fill="url(#joint-void)" stroke="#090b12" stroke-width="2" />
+      <circle cx="88" cy="236" r="40" fill="#FF9500" />
+      <circle cx="88" cy="236" r="16" fill="url(#joint-void)" stroke="#090b12" stroke-width="2" />
+      <circle cx="256" cy="256" r="52" fill="#30D158" />
+      <circle cx="256" cy="256" r="21" fill="url(#joint-void)" stroke="#090b12" stroke-width="2.5" />
+      <circle cx="256" cy="256" r="7.5" fill="#30D158" />
+      <circle cx="424" cy="236" r="40" fill="#0A84FF" />
+      <circle cx="424" cy="236" r="16" fill="url(#joint-void)" stroke="#090b12" stroke-width="2" />
+      <circle cx="256" cy="420" r="38" fill="#BF5AF2" />
+      <circle cx="256" cy="420" r="15" fill="url(#joint-void)" stroke="#090b12" stroke-width="2" />
+    </g>
+  </g>
+</svg>
