@@ -46,6 +46,7 @@
     "src",
     "workflows",
     "docs/AUTHORING.md",
+    "docs/DEPTH.md",
     "docs/MIGRATION.md",
     "docs/PAINTING.md",
     "docs/STABILITY.md",
