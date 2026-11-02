@@ -3224,7 +3224,9 @@ base: 2.4`; `chest` `scalex` `amp: 0.008, phase: 0, base: 1.008`; `hip` `rotate`
 `amp: 3.0, phase: 0.30`; `head` `rotate` `amp: 3.6, phase: 0.35`, all at
 `period: 3.3333333333333335`), setting `sleeve_*_phys` to `inertia: 1.0, damping: 0.75,
 strength: [45, 30, 20]`, and setting `skirt_*_phys` to `inertia: 0.5, damping: 0.82,
-strength: [200, 165, 130], wind: [0, 15, 40]`. Running `rig` and `check` produces:
+strength: [200, 165, 130], wind: [0, 15, 40]`, and pointing `motion.animations_from`
+at `../examples/demo/animations.json` and `generation.control.skeleton` at
+`../examples/demo/pose.json`, because both resolve against the config's own folder. Running `rig` and `check` produces:
 
 ```
   loop: idle 41 frame(s) at 12 fps, f0000 vs f0040 (t = 3.333333333333333s) with the rig's 29 physics constraint(s) left out (named on the `loop physics:` line; rendered with them, the ends need not meet — `build --loop --lead-in <n>`): max |d| 0 (0 required)
