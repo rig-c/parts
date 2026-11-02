@@ -492,7 +492,7 @@ import { ALIASES, AliasTarballError, compareTarballs, MANIFEST as ALIAS_MANIFEST
 import { confirmAlias, DEFAULT_ALIAS_WAIT_MINUTES, EXIT_ALIAS_WAIT, EXIT_NOT_SERVED } from './scripts/install_smoke.ts';
 import { blobId, checkExampleInputs, type Copier, FETCH_RECORD, recordText, runSync } from './scripts/example_inputs.ts';
 import { BLINK, blinkHoldMisses, CONTROL_SUFFIX, framesInside, IDLE_FPS, type MotionKey, type MotionSpec, sineTrack, TIME_SLACK } from './src/motion.ts';
-import { type BoneEntry, type CharacterConfig, CONFIG_REQUIRES, type ConfigDoor, CONSTRAINT_BONE_FIELDS, type ContourRegionSpec, contourRegionsOf, type Cut, DEFAULT_BUST_ALPHA, DEFAULT_BUST_CLEARANCE, deriveBustRegions, type Extend, type Generation, isDoorKey, type Limb, loadClothConfig, loadConfig, loadConfigAndAnimations, loadEarlyConfig, loadPaintConfig, type Patch, type PlanEntry, type Point, parseConfig, parseEarlyConfig, parseProposalSections, type SkeletonSections, turnMovingPartPair } from './src/config.ts';
+import { type BoneEntry, type CharacterConfig, CONFIG_REQUIRES, CONFIG_SECTIONS, type ConfigDoor, type ConfigSection, CONSTRAINT_BONE_FIELDS, type ContourRegionSpec, contourRegionsOf, type Cut, DEFAULT_BUST_ALPHA, DEFAULT_BUST_CLEARANCE, deriveBustRegions, type Extend, type Generation, isDoorKey, type Limb, loadClothConfig, loadConfig, loadConfigAndAnimations, loadEarlyConfig, loadPaintConfig, type Patch, type PlanEntry, type Point, parseConfig, parseEarlyConfig, parseProposalSections, type SkeletonSections, turnMovingPartPair } from './src/config.ts';
 import { BUST_FIT_ALPHA, BUST_FIT_CLEARANCE, BUST_RESIDUAL_BOUND_PX, CALIBRATED_BUST_FIXTURES, midlineFallbackCleavage } from './fixtures/bust.ts';
 import { RIG_BONE_INHERIT, RIG_KEYS, RIG_SKIN_CONSTRAINT_KEYS } from '@rig-c/core/rig';
 import { expandStops } from '@rig-c/core/stop';
@@ -2017,6 +2017,49 @@ function runConfigSuite(): number {
     e1 !== null && e1.problems.length === 1 && e1.problems[0].code === 'CONFIG_KEY_KNOWN' && e1.problems[0].object === 'config.colour_grade',
     `a top-level "colour_grade" -> ${codes(e1)}`,
     'a key the loader does not know is a value nothing will read, and its author believes something will',
+  );
+
+  // CF948 — issue #948: CONFIG_SECTIONS is exported at runtime from src/config.ts, held equal in both directions to
+  // what parseConfig accepts at the top level, and top-level alternates is refused and absent from CharacterConfig.
+  const topAltRefusal = refusals(() => parseConfig({ ...minimalConfig(), alternates: [] }));
+  const topAltProblem = topAltRefusal?.problems.find((p) => p.code === 'CONFIG_KEY_KNOWN' && p.object === 'config.alternates');
+  const parserKnownTop = /; known: ([^—]+?) — /.exec(topAltProblem?.detail ?? '')?.[1].split(', ').map((k) => k.trim()).filter((k) => k !== '') ?? [];
+  const configTsText948 = readFileSync(join(ROOT, 'src', 'config.ts'), 'utf8');
+  const charConfigBlock948 = /export interface CharacterConfig \{([\s\S]*?)\n\}/.exec(configTsText948)?.[1] ?? '';
+  const charConfigHasTopAlternates = /^\s*alternates\??:/m.test(charConfigBlock948);
+  const configSectionsFaults = (sections: readonly string[]): string[] => {
+    const faults: string[] = [];
+    const seen = new Set<string>();
+    for (const s of sections) {
+      if (seen.has(s)) faults.push(`CONFIG_SECTIONS lists "${s}" more than once`);
+      seen.add(s);
+      const probed = refusals(() => parseConfig({ ...minimalConfig(), [s]: null }));
+      const refusedUnknown = probed?.problems.some((p) => p.code === 'CONFIG_KEY_KNOWN' && p.object === `config.${s}`) === true;
+      if (refusedUnknown || !parserKnownTop.includes(s)) {
+        faults.push(`CONFIG_SECTIONS lists "${s}", which parseConfig refuses at config.${s} with CONFIG_KEY_KNOWN`);
+      }
+    }
+    for (const k of parserKnownTop) {
+      if (!seen.has(k)) faults.push(`parseConfig accepts "${k}" at config.${k}, which CONFIG_SECTIONS omits`);
+    }
+    return faults;
+  };
+  const sectionsClean948 = configSectionsFaults(CONFIG_SECTIONS);
+  const plantExtra948 = configSectionsFaults([...CONFIG_SECTIONS, 'alternates']);
+  const plantMissing948 = configSectionsFaults(CONFIG_SECTIONS.filter((k): k is ConfigSection => k !== 'waist'));
+  const plantDup948 = configSectionsFaults([...CONFIG_SECTIONS, 'key']);
+  say(
+    'CF948_CONFIG_SECTIONS_EQUALS_THE_TOP_LEVEL_KEYS_PARSE_CONFIG_ACCEPTS_AND_TOP_LEVEL_ALTERNATES_IS_REFUSED',
+    CONFIG_SECTIONS.length > 0 &&
+      parserKnownTop.length === CONFIG_SECTIONS.length &&
+      topAltProblem !== undefined &&
+      !charConfigHasTopAlternates &&
+      sectionsClean948.length === 0 &&
+      plantExtra948.join('; ') === 'CONFIG_SECTIONS lists "alternates", which parseConfig refuses at config.alternates with CONFIG_KEY_KNOWN' &&
+      plantMissing948.join('; ') === 'parseConfig accepts "waist" at config.waist, which CONFIG_SECTIONS omits' &&
+      plantDup948.join('; ') === 'CONFIG_SECTIONS lists "key" more than once',
+    `CONFIG_SECTIONS (${CONFIG_SECTIONS.length}): ${CONFIG_SECTIONS.join(', ')} — ${sectionsClean948.length === 0 ? 'equal to parseConfig top-level accept list' : sectionsClean948.join('; ')}; top-level alternates -> ${topAltProblem === undefined ? 'NOT refused' : `${topAltProblem.code} ${topAltProblem.object}`}, in CharacterConfig: ${charConfigHasTopAlternates}; planted extra "alternates" -> ${plantExtra948.join('; ') || 'MISSED'} | planted missing "waist" -> ${plantMissing948.join('; ') || 'MISSED'} | planted duplicate "key" -> ${plantDup948.join('; ') || 'MISSED'}`,
+    'issue #948: consumers import CONFIG_SECTIONS from @rig-c/parts/src/config.ts instead of regex-reading source text, held equal to parseConfig at the top level with planted mismatches in both directions',
   );
 
   const privateEra = {
@@ -41731,7 +41774,8 @@ function loaderFieldNames(src: string): { names: string[]; unread: string[]; cal
   const shapes = [...src.matchAll(/const own = ([^;]*);/g)].flatMap((m) => [...m[1].matchAll(/\[([^\]]*)\]/g)].flatMap((a) => quotedNames(a[1])));
   const requires = /CONFIG_REQUIRES\b[^=]*=\s*\{([^}]*)\}/.exec(src)?.[1] ?? '';
   const required = [...requires.matchAll(/'([A-Za-z_][\w.]*)'/g)].map((m) => m[1].split('.').pop() as string);
-  const resolves: Record<string, string[]> = { TOP_KEYS: arrayOf('TOP_KEYS'), GENERATION_REQUIRED: arrayOf('GENERATION_REQUIRED'), own: shapes, required, sectionRequired: required };
+  const topKeys = arrayOf('CONFIG_SECTIONS').length > 0 ? arrayOf('CONFIG_SECTIONS') : arrayOf('TOP_KEYS');
+  const resolves: Record<string, string[]> = { CONFIG_SECTIONS: topKeys, TOP_KEYS: topKeys, GENERATION_REQUIRED: arrayOf('GENERATION_REQUIRED'), own: shapes, required, sectionRequired: required };
   const glue = new Set(['door', 'filter', 'includes', 'k']);
   const names: string[] = [];
   const unread: string[] = [];
