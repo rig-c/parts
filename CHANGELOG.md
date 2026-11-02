@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.0](https://github.com/rig-c/parts/compare/v2.2.0...v2.3.0) (2026-11-02)
+
+
+### Features
+
+* **config:** export the top-level section list as CONFIG_SECTIONS ([#949](https://github.com/rig-c/parts/issues/949)) ([728c070](https://github.com/rig-c/parts/commit/728c070088ee9ddaa18a39a81bd12d16782a8e50))
+
 ## [2.2.0](https://github.com/rig-c/parts/compare/v2.1.1...v2.2.0) (2026-11-02)
 
 
