@@ -3077,6 +3077,166 @@ max and absolute diff at native scale, then
 inspect neck boundaries at native and 4x nearest-neighbour scale for tears or
 ghosts. A green build alone does not certify the source art.
 
+### Recipe: a Form 1 idle (living illustration, issue #932)
+
+A Form 1 living illustration (an anime character CG with no joint-cut `limbs` block)
+drives **the body with keyframes** and **every cloth and hair chain with `physics`
+constraints**. Plain `propose` (without `--cloth`) drafts keyframed harmonic `chain`
+tracks on every hair, fringe, sleeve, skirt and strap chain and writes no
+`constraints`, while `propose --cloth` replaces only the `cloth`-declared tags
+(`bottomwear`, `back hair`, `front hair`) and leaves `handwear` sleeves and
+`topwear` straps on keyframed chains. To author a Form 1 idle where cloth and hair
+all move by physics instead of keyframed sine chains:
+
+1. **Key only the body carrier in `motion.tracks`.** Keep the torso breath on `chest`
+   (`translatey` and `scalex`), the upper-body sway chain `chest` → `neck` → `head`
+   on `rotate`, and `motion.blink`. Remove every `{ "chain": "…" }` track on hair
+   (`hairback_*`, `bang_*`, `lock*`), sleeves (`sleeve_*`), skirts (`skirt_*`), and
+   straps (`robe_*`). Whether `hip` is also keyed at the root of the sway chain
+   (`hip` → `chest` → `neck` → `head`) depends on what sits below the chest:
+   - Under keyframed `propose` (§3, *A standing cloth is the consumer's to drive*,
+     issue #502), `skirt_*` chains carry keyframed `rotate` tracks at disparate
+     phases (`0.08..0.38`), so keying `hip` in `rotate` puts `hip_ctl` above four
+     keyframed children (`chest_ctl`, `skirt_l0`, `skirt_c0`, `skirt_r0`) whose
+     phases disagree and fails `CHAIN_LAG`. Once `skirt_*` moves to `physics`
+     constraints, `hip`'s only keyframed child is `chest`: a 4-link body chain
+     `hip` → `chest` → `neck` → `head` (`phase: 0.20, 0.25, 0.30, 0.35`, with
+     `amp(hip) <= amp(chest)`) passes `CHAIN_LAG` and drives the skirt from a moving
+     parent (clearing `CLOTH_SETTLES` on the default world with `0` warnings).
+   - Two geometric limits then decide whether `hip` is left still or keyed, and by
+     how much:
+     1. **Standing feet (`shoes` and `legwear`):** On a full-body standing rig where
+        `shoes` sit on `root` (`BREATH_VISIBLE` enforces `feet_heat_max: 0`) and
+        `legwear` rides `hip` as a rigid region (as on `examples/demo`), large `hip`
+        sway slides the shins across the stationary shoes unless the legs use the
+        planted-feet two-bone IK recipe (*Recipe: a two-bone IK chain with a planted
+        target (issue #570)*) or the crop ends above the ankles. Without leg IK on
+        `demo`, either leave `hip` unkeyed or keep `hip` `rotate` `amp <= 0.4°` so
+        ankle shear stays sub-pixel.
+     2. **Waist and upper-skirt binding (`CHECK_TIP_OVER_ROOT` on `bottomwear`):**
+        `TIP_OVER_ROOT` splits `bottomwear`'s box (`y = 400..647` on `demo`, midpoint
+        `y = 523.5`) into its upper half (`root_rig_px`) and lower half
+        (`tip_rig_px`) and requires `tip / root >= 1.4725`. When
+        `meshes.bottomwear.segments` binds the waist to `["hip", [x0, y0], [x1, y0]]`
+        and the root link `skirt_*0` (`y = 432..499` on `demo`) also lies inside the
+        upper half, moving `hip` while applying `"wind"` to `skirt_*0` inflates
+        `root_rig_px` past `tip_rig_px / 1.4725`. To key `hip` when `bottomwear` is
+        bound to it, set `"wind": 0` on the upper-half link `skirt_*0` and concentrate
+        `"wind"` on the lower links (`skirt_*1..2`) so the hem travels at least
+        `1.4725x` further than the waist.
+2. **Drive every cloth and hair link in `constraints`.** Give each link `<chain>0 ..
+   <chain>(n-1)` a `"type": "physics"` entry with `"rotate": 1` and `"mix": 1` on the
+   link bone itself (`sleeve_r0`, never `sleeve_r0_ctl`). A single ornament bone with
+   no `length` (a bow, hairpin or earring) cannot take `"rotate"` (rig-c's `A23`) and
+   takes `"x"` and `"y"` translation springs instead (e.g. `"x": 0.5, "y": 1,
+   "inertia": 0.3, "strength": 160, "damping": 0.88, "mass": 1, "mix": 1`).
+
+**How a physics rig passes `check`'s loop reading, `CHAIN_LAG`, and `STRESS_OFF_CHAIN`:**
+
+- **`CHECK_LOOP_CLOSES` (`loop:` and `loop physics:`):** `check` strips every
+  `physics` constraint (`withoutPhysics` in `src/check.ts`) when rendering the loop
+  comparison frames (`f0000` vs the final frame at `motion.duration` at 12 fps), and
+  lists the stripped constraints on `loop physics: <N> physics constraint(s) left out
+  of the loop's frames, reported, not judged`. Because `physics` is left out of that
+  comparison, the loop bar judges only the keyframed body: when `motion.duration` is
+  a whole number of `1/12` s ticks (`CHECK_LOOP_LAST_FRAME_AT_DURATION`, within
+  `1e-9` s) and every body track's `period` divides `motion.duration`
+  (`CONFIG_PERIOD_DIVIDES_DURATION`), the loop reads `max |d| 0 (0 required)`
+  regardless of how many physics springs are active. When baking a rendered loop file
+  with physics **on** (`rig-parts build --loop` or `rig-parts loop`), frame 0 starts
+  from `rigc render`'s physics reset while the end of cycle 1 carries the springs'
+  motion; pass `--lead-in <n>` (for example `build --loop --lead-in 3`) so `<n>`
+  warm-up cycles run before the final cycle is cut.
+- **`CHAIN_LAG`:** Reads only parent-child pairs of bones that both carry keyframed
+  `rotate` tracks of the same period. Unkeyed physics chains are not read by
+  `CHAIN_LAG`; only the keyframed body rotation chain (`chest_ctl > neck > head_ctl`,
+  or `hip_ctl > chest_ctl > neck > head_ctl` when `hip` is keyed) is checked,
+  requiring a positive lag step in `0.001 .. 0.25` of a cycle and non-decreasing
+  amplitudes (`amp(hip) <= amp(chest) <= amp(neck) <= amp(head)`).
+- **`STRESS_OFF_CHAIN`:** For each `handwear` mesh, walks up the bone hierarchy from
+  its bound sleeve links to find the nearest ancestor on a 2+-link keyframed rotation
+  chain. Because the torso and head form a keyframed rotation chain above the sleeves,
+  `STRESS_OFF_CHAIN` turns that chain's root (`chest_ctl` or `hip_ctl`) by `+90°`,
+  `-90°`, and `180°`; the sleeve links hang wholly under `chest`, so each sleeve
+  rotates rigidly (`ratio 1`, `reading 1 <= bar 1`, `PASS`) without needing keyframed
+  tracks on `sleeve_*`.
+
+**Starting floor (not the target) — getting a first green build from rig measurements:**
+
+The formulas and values in the table below are **starting points that pass the bars
+(the floor), not the target**. A build at the floor clears every check with
+sub-degree sway (`0.7°..1.0°`) and `2.4` rig px of breath (`0.21 %` of figure height
+`H`), which is barely perceptible at full stage scale. Use this table only to reach a
+first green build; size the finished motion from the rig's own ceiling using the
+step-up method below.
+
+| quantity | what to measure on the rig | floor starting value (passes the bars; step up from here) |
+| --- | --- | --- |
+| `motion.duration` and `track.period` | `check`'s 12 fps grid (`1/12` s per frame) | Choose `N` frames (e.g. `N = 40`, `duration = 40 / 12 = 3.3333333333333335` s, or `N = 48`, `duration = 4.0` s) and set every body track's `period = duration`. `CHECK_LOOP_LAST_FRAME_AT_DURATION` requires `duration` to land on a `1/12` s tick, and `CONFIG_PERIOD_DIVIDES_DURATION` requires `duration / period` to be an integer. |
+| Torso breath (`chest` `translatey`, `scalex`) | Figure height `H` (`parts.json` union height, kept near `1,100..1,200` rig px via `assemble.rig_scale`), torso span `L_torso = hypot(hip.x - neck.x, hip.y - neck.y)` from `bones`, and `BREATH_VISIBLE`'s `torso_heat_mean` vs `torso_floor` (pictured in `motion_heat.png`) | Floor: peak-to-peak vertical travel at `1.25 %` of `L_torso` (`amp = round2(0.00625 * L_torso)`, `base = amp`, `phase = 0.0`, i.e. `amp = 1.2` rig px on `demo`), paired with `chest` `scalex` `amp = 0.008`, `base = 1.008`, `phase = 0.0`. `check` scales the reference floor (`2.13` at `render_scale = 0.4211`) by `render_scale / 0.4211` and isolates the breath by posing only `chest`/`hip` `translate` and `scale` tracks. |
+| Upper-body sway (`chest` → `neck` → `head` `rotate`) | Shoulder lever arm `R_shoulder = \|sleeve_s0.x - chest.x\|` in `bones`, and `CHAIN_LAG` / `TIP_OVER_ROOT` on `handwear` | Floor: `amp(chest) = 0.7°`, `amp(neck) = 0.85°`, `amp(head) = 1.0°` with lag `0.05` (`phase: 0.25, 0.30, 0.35`). **Set `chest` `rotate` `phase` to `0.25` (quadrature, 90° from `chest` `translatey`'s `phase: 0.0`), never near `0.0`:** at `phase ≈ 0`, vertical breath `y(t)` and shoulder lift `Δx · θ(t)` reinforce on one shoulder and cancel on the other, inflating `root_rig_px` on the reinforced sleeve and dropping `tip_rig_px / root_rig_px` below `1.4725`. At `phase = 0.25`, vertical breath and rotational sway are orthogonal on both shoulders alike. |
+| Sleeve physics (`sleeve_<s>0..2` under `chest`) | `CHECK_TIP_OVER_ROOT` (`ratio >= 1.4725` on each `handwear` part) and `CHECK_ANIMATIONS_DO_NOT_FOLD` | Set `"rotate": 1, "mix": 1, "inertia": 1.0, "damping": 0.75, "mass": 1` and taper `strength` down the chain: `[45, 30, 20]` for a 3-link sleeve (`1 : 0.67 : 0.44`). Stiff follow-through springs (`strength: 200`, `inertia: 0.2`) barely bend under a `3.333` s idle and move the sleeve as a rigid unit (`ratio ≈ 1.19..1.22`, failing `TIP_OVER_ROOT`); tapering `45 → 30 → 20` lets cumulative link rotation amplify cuff travel past `2.0x` the shoulder travel while keeping `0` folded triangles in `wave` and `hop`. |
+| Hair physics (`hairback_*`, `bang_*` under `head`) | `CLOTH_SETTLES` (`>= 0.01694` rig px/s to the last frame), `CHECK_TEXTURE_STRETCH` (`<= 1.926544`), and `CHECK_ANIMATIONS_DO_NOT_FOLD` | Taper `strength` down each `n`-link chain by `strength_0 * (1 - 0.35 * i / (n - 1))`: on long back-hair chains, `strength_0 = 90` (`[90, 74.25, 58.5]` for 3 links), `inertia = 0.8`, `damping = 0.85`; on shorter fringe chains (`bang_*`), `strength = [130, 105]`, `inertia = 0.2`, `damping = 0.9`. |
+| Skirt / `bottomwear` physics (`skirt_*` under `hip`) | `CHECK_TIP_OVER_ROOT` on `bottomwear` (`ratio >= 1.4725`), `CHECK_ANIMATIONS_DO_NOT_FOLD` on `hop`, and `CLOTH_SETTLES` | Keep high restoration `strength` (`[200, 165, 130]` for 3 links, `inertia = 0.5`, `damping = 0.82`) so `bottomwear` does not fold during `hop`. With `hip` unkeyed, floor `"wind": [0.4, 0.6, 0.8]` passes `TIP_OVER_ROOT` (`ratio 1.83`); with `hip` keyed in `rotate` (`amp <= 0.4°`, `phase: 0.20`), set `"wind": 0` on the upper-half link `skirt_*0` and put `"wind"` on the lower links (`[0, 15, 40]`) so `tip / root` stays above `1.4725` and `CLOTH_SETTLES` clears on the default world. |
+
+**Sizing the motion from the rig's own ceiling (step up until a limit refuses, then back off):**
+
+You do not need an external reference rig to decide how large the breath, sway, and
+cloth motion should be. Once the floor build is green, **raise each motion family in
+steps (`1.3x..1.5x` per step) until the rig's own limits refuse a step, then back off
+one or two steps below that ceiling**:
+
+1. **Gate ceiling (`check`'s upper-bound bars):** Step up the amplitude or physics
+   drive until one of `check`'s upper limits fires — `CHECK_ANIMATIONS_DO_NOT_FOLD`
+   (triangles flipping on `idle`, `wave`, or `hop`), `CHECK_TEXTURE_STRETCH` (an edge
+   stretching or compressing past `1.926544`), `CHECK_TIP_OVER_ROOT` (`ratio < 1.4725`
+   when vertical breath or `hip` sway carries the upper half of a garment faster than
+   its tip swings), or `CHECK_STILL_REGIONS_DARK` (face drift relative to `head`).
+2. **Visual ceiling (`motion_heat.png` and `extremes/`):** Inspect `motion_heat.png`
+   and the extreme-pose renders (`extremes/torso_y_min.png`, `torso_y_max.png`,
+   `head_rot_min.png`, `head_rot_max.png`) at each passing step. Where a rigid region
+   or mesh boundary shears across a neighbour (collar against neck, waist against
+   torso, shin against shoe), the eye stops the sweep before the mesh bars trip.
+3. **Back off to the working size:** Pick the step at roughly `40 %..60 %` of the
+   gate ceiling (one or two steps below the first refusal), where `extremes/` shows no
+   seam shear and `TEXTURE_STRETCH` stays near `1.10..1.30`.
+
+Stepping each motion family on `examples/demo` (`rig 832x1216`, figure height
+`H = 1138` rig px, `L_torso = 192` rig px, `R_shoulder = 95..96` rig px;
+`rig-c 3.1.0`, `@esotericsoftware/spine-core 4.3.13`) measures the floor, the
+backed-off working size, the gate ceiling (last passing step), and the first failing
+step as fractions of `H`:
+
+| motion family on `examples/demo` (`H = 1138` rig px) | floor (first green build) | backed-off working size | gate ceiling (last green step) | first failing step and the limit / frame that stopped it |
+| --- | --- | --- | --- | --- |
+| **Torso breath** (`chest` `translatey` `amp = base`, p2p `2 * amp`, with `scalex` scaled in proportion; sway at `2.0° / 2.5° / 3.0°`) | `amp = 1.2` (`2.4` rig px p2p = **`0.21 %` of `H`**; `torso_heat_mean 18.045` vs `floor 3.809`) | `amp = 2.4..3.6` (`4.8..7.2` rig px p2p = **`0.42..0.63 %` of `H`**; `torso_heat_mean 40.933..50.409`) | `amp = 6.0` (`12.0` rig px p2p = **`1.05 %` of `H`**; `torso_heat_mean 64.77`, `handwear_r` `ratio 1.656`, `TEXTURE_STRETCH 1.192` on `topwear` tri 208, idle frame 10) | `amp = 8.0` (`16.0` rig px p2p = **`1.41 %` of `H`**) — stopped by **`CHECK_TIP_OVER_ROOT` on `handwear_r`** (`root 8.11`, `tip 11.854` rig px, `ratio 1.462 < 1.4725`, `carried_by sleeve_r0, breath_rig_px 8`): vertical breath carries the upper sleeve faster than cuff swing grows. |
+| **Shoulder & head sway** (`chest` / `neck` / `head` `rotate` at `phase 0.25 / 0.30 / 0.35`, `breath amp = 2.4`; shoulder travel = `handwear` `root_rig_px`) | `0.7° / 0.85° / 1.0°` — shoulder `1.856..2.079` rig px (**`0.16..0.18 %` of `H`**), cuff `4.21..4.994` rig px (**`0.37..0.44 %` of `H`**) | `2.5° / 3.0° / 3.6°` — shoulder `6.001..6.479` rig px (**`0.53..0.57 %` of `H`**), cuff `14.577..18.144` rig px (**`1.28..1.59 %` of `H`**), `TEXTURE_STRETCH 1.099` (`hair_back` tri 185, idle frame 16); collar seam visible in `extremes/` above `3.5°` (`0.72..0.77 %` of `H`) | `8.0° / 9.6° / 11.2°` — shoulder `18.648..19.031` rig px (**`1.64..1.67 %` of `H`**), cuff `46.699..58.15` rig px (**`4.10..5.11 %` of `H`**), `TEXTURE_STRETCH 1.643` (`hair_back` tri 225, idle frame 37, `min_ratio 0.609`) | `10.0° / 12.0° / 14.0°` — shoulder `23.322..23.734` rig px (**`2.05..2.09 %` of `H`**), cuff `58.462..72.018` rig px (**`5.14..6.33 %` of `H`**) — stopped by **`CHECK_TEXTURE_STRETCH` on `hair_back` triangle 225 (edge 29–28, idle frame 37)** (`ratio 0.439`, `severity 2.279 > 1.926544`); at `15.0°`, **`CHECK_ANIMATIONS_DO_NOT_FOLD`** also fails on `idle` mesh `hair_back` frame 36 (`1/226` tris). |
+| **Sleeve cuff tip** (`handwear` `tip_rig_px` via `sleeve_*_phys` `inertia` at `2.5° / 3.0° / 3.6°` sway, `strength: [45, 30, 20]`) | Stiff `strength: [200, 165, 130], inertia: 0.2` at `0.7°` sway fails `TIP_OVER_ROOT` (`tip 2.307..2.366` rig px = **`0.20..0.21 %` of `H`**, `ratio 1.19..1.216`) | `inertia = [1.0, 1.0, 1.0]` — cuff `14.577..18.144` rig px (**`1.28..1.59 %` of `H`**, `ratio 2.25..3.023`, `0` folds across all 8 clips) | `inertia = [1.0, 1.0, 1.0]` (cuff **`1.28..1.59 %` of `H`** at `2.5°` sway; reaches **`4.10..5.11 %` of `H`** at the `8.0°` sway ceiling with `0` folds) | `inertia = [1.2, 1.4, 1.6]` — stopped by **`CHECK_ANIMATIONS_DO_NOT_FOLD` on `wave` frame 14**, mesh `handwear_l` (`2/154` triangles on 5 frames; at `[1.5, 1.8, 2.0]`, cuff reaches `36.16..41.449` rig px = **`3.18..3.64 %` of `H`** and folds on `wave` frame 13 and `hop` frame 8). |
+| **Skirt hem tip (`hip` unkeyed)** (`bottomwear` `tip_rig_px` via `skirt_*_phys` `wind = [0.4, 0.6, 0.8] * w`, `strength: [200, 165, 130]`) | `w = 1` (`wind: [0.4, 0.6, 0.8]`) — hem `0.271` rig px (**`0.024 %` of `H`**, `root 0.148`, `ratio 1.83`) | `w = 15..22` (`wind: [6, 9, 12]..[8.8, 13.2, 17.6]`) — hem `3.942..5.64` rig px (**`0.35..0.50 %` of `H`**, `root 2.205..3.261`, `ratio 1.788..1.73`, `TEXTURE_STRETCH 1.126..1.195` on `bottomwear` tri 216, idle frame 6) | `w = 60` (`wind: [24, 36, 48]`) — hem `14.301` rig px (**`1.26 %` of `H`**, `root 9.364` = `0.82 %` of `H`, `ratio 1.527`, `TEXTURE_STRETCH 1.715` on `bottomwear` tri 216, idle frame 6) | `w = 80` (`wind: [32, 48, 64]`) — hem `18.476` rig px (**`1.62 %` of `H`**, `root 12.613`) — stopped by **`CHECK_TIP_OVER_ROOT` on `bottomwear`** (`ratio 1.465 < 1.4725`), **`CHECK_TEXTURE_STRETCH` on `bottomwear` tri 216 (edge 159–144, idle frame 6)** (`ratio 0.474`, `severity 2.108`), and **`CHECK_ANIMATIONS_DO_NOT_FOLD` on `hop` frame 8** (`1/292` tris). |
+| **Lower-body sway (`hip` keyed)** (`hip` `rotate` at `phase: 0.20` leading `chest 0.25 → neck 0.30 → head 0.35`, `skirt_*_phys` `wind` on links `1..2`) | `hip` `amp = 0.4°` with `wind: [0, 15, 40]` — waist `2.742` rig px (**`0.24 %` of `H`**), hem `4.239` rig px (**`0.37 %` of `H`**, `ratio 1.546`), `0` `CLOTH_SETTLES` warnings | `hip` `amp = 0.4°`, `wind: [0, 15, 40]` (waist **`0.24 %` of `H`**, hem **`0.37 %` of `H`**, `TEXTURE_STRETCH 1.259` on `bottomwear` tri 180, idle frame 5) | `hip` `amp = 0.4°`, `wind: [0, 15, 40]` | `hip` `amp = 0.6°` (`wind: [0, 18, 48]`) — stopped by **`CHECK_TIP_OVER_ROOT` on `bottomwear`** (`root 4.128` = `0.36 %` of `H`, `tip 5.263` = `0.46 %` of `H`, `ratio 1.275 < 1.4725`; also fails at `amp = 0.4°` if link `0` carries `wind: [4, 6, 8]`, `ratio 0.786`). |
+
+**Reproducing the backed-off working build on `examples/demo`:**
+
+Write `work/form1_config.json` from `examples/demo/config.json` by replacing
+`motion.tracks` with the six body tracks (`chest` `translatey` `amp: 2.4, phase: 0,
+base: 2.4`; `chest` `scalex` `amp: 0.008, phase: 0, base: 1.008`; `hip` `rotate`
+`amp: 0.4, phase: 0.20`; `chest` `rotate` `amp: 2.5, phase: 0.25`; `neck` `rotate`
+`amp: 3.0, phase: 0.30`; `head` `rotate` `amp: 3.6, phase: 0.35`, all at
+`period: 3.3333333333333335`), setting `sleeve_*_phys` to `inertia: 1.0, damping: 0.75,
+strength: [45, 30, 20]`, and setting `skirt_*_phys` to `inertia: 0.5, damping: 0.82,
+strength: [200, 165, 130], wind: [0, 15, 40]`. Running `rig` and `check` produces:
+
+```
+  loop: idle 41 frame(s) at 12 fps, f0000 vs f0040 (t = 3.333333333333333s) with the rig's 29 physics constraint(s) left out (named on the `loop physics:` line; rendered with them, the ends need not meet — `build --loop --lead-in <n>`): max |d| 0 (0 required)
+  BREATH_VISIBLE: PASS — torso_parts topwear; torso_heat_mean 48.993; torso_floor 3.809; feet_parts shoes; feet_heat_max 0; feet_ceiling 0
+  CHAIN_LAG: PASS — chains hip_ctl > chest_ctl > neck > head_ctl: period 3.333s, phase 0.200 0.250 0.300 0.350, amp 0.400 2.500 3.000 3.600; lags hip_ctl > chest_ctl +0.050 | chest_ctl > neck +0.050 | neck > head_ctl +0.050; min_step 0.05; step_floor 0.001; other_period none; unread none; first_violation null
+  TIP_OVER_ROOT: PASS — instrument geometry; parts part handwear_l, root_rig_px 5.905, tip_rig_px 20.07, ratio 3.399 | part handwear_r, root_rig_px 6.404, tip_rig_px 15.951, ratio 2.491 | part bottomwear, root_rig_px 2.742, tip_rig_px 4.239, ratio 1.546; ratio_floor 1.4725
+  TEXTURE_STRETCH: PASS — meshes 9; triangles 1816; frames 41; severity 1.259; severity_ceiling 1.926544
+  ANIMATIONS_DO_NOT_FOLD: PASS — 8 animation(s) read by rigc render --folds at 12 fps, with its 29 physics constraint(s) on and off (idle, tilt, look_l, look_r, smile, startled, wave, hop): 0 folding mesh(es), 0 not declared in may_fold (<= 0)
+  CLOTH_SETTLES: CLEAR — 12 physics chain(s) read by their tip on the idle as rendered (41 frame(s) at 12 fps over 3.333 s, physics on): 0 of them settle before the loop's length — 0 warning(s), never a bar
+check: PASS; 11 of 11 bar(s) measured, 0 skipped; 0 warning(s) (CLOTH_SETTLES, not a bar)
+```
+
 ## 4. The command order
 
 Two steps are external: the See-through runs (by any route; the optional `comfy seethrough` adapter is only a client for a ComfyUI box). Everything else is this tool.
