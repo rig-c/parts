@@ -47,14 +47,16 @@ Each requirement says what the pipeline needs, what fails without it, and whethe
 ## The check: `rig-parts painting`
 
 ```
-rig-parts painting --keypoints <keypoints.json> [--person <id>] <painting.png>
+rig-parts painting --keypoints <keypoints.json> [--person <id>] [--form standee|illustration] <painting.png>
 ```
 
 It runs on the CPU, before See-through, on the painting and its body-18 joints:
 the same keypoint file `propose --keypoints` reads (AUTHORING §3, *A posed
 figure*), from any estimator or written by hand, measured on this painting (its
-`width` and `height` are the painting's, `KEYPOINTS_IMAGE_SIZE`). It writes
-nothing. It prints the figure, every joint and every gap with its count, then
+`width` and `height` are the painting's, `KEYPOINTS_IMAGE_SIZE`). `--form`
+defaults to `standee` (`standee` or `illustration`). It writes
+nothing. It prints the figure, every joint and every gap (or under
+`--form illustration`, the `SKIP` lines for rules that do not apply), then
 `PASS` and exit 0, or a `FAIL` line per refusal and exit 1. Each `FAIL` line ends
 with `(see rig-parts guide <RULE>)`, which prints the rule's row in
 [AUTHORING §6](AUTHORING.md#6-refusals-the-rule-and-what-has-to-change).
@@ -131,6 +133,63 @@ the face. A green `painting` says
 the joints and the silhouette hold the requirements it reads, not that the
 painting is good. A shadow or a floor enclosed by the background is figure to it;
 the border rule sees it only where it reaches the edge.
+
+### Framed illustrations (`--form illustration`, issue #931)
+
+The default `--form standee` checks a full-body figure on a plain near-white or
+unpainted ground, with gaps for articulated limb cuts (`config.limbs`). Measured
+on the five 1664x2432 public examples (`demo`, `scarf`, `reference-demo`,
+`reference-sample`, `wind` — all five of which build and pass `rig-parts check`),
+only `wind` (the one example that declares `config.limbs`) passes the standee gap
+rules; the four non-limb standees fail `PAINTING_ARM_CLEAR` and
+`PAINTING_HANDS_APART` (on `demo` and `scarf` the wrists are 840 px and 392 px
+apart on opposite sides of the figure, yet the straight wrist-to-wrist line
+crosses the torso in between, so 0 of 841 and 0 of 393 sampled pixels are
+background), and three (`demo`, `reference-demo`, `reference-sample`) fail
+`PAINTING_LEGS_APART`:
+
+| public example (1664x2432) | `borderNotGround` | `r_wrist..r_hip` | `l_wrist..l_hip` | `r_wrist..l_wrist` | `r_knee..l_knee` | `r_ankle..l_ankle` | `--form standee` | `--form illustration` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `demo` (`pose.json` x2) | 0 / 8188 | 0 / 345 (`FAIL`) | 0 / 345 (`FAIL`) | 0 / 841 (`FAIL`) | 0 / 129 (`FAIL`) | 0 / 113 (`FAIL`) | `FAIL` (5) | `PASS` (6 `SKIP`) |
+| `scarf` (`stand_sides` x2) | 0 / 8188 | 0 / 121 (`FAIL`) | 0 / 121 (`FAIL`) | 0 / 393 (`FAIL`) | 34 / 129 (`PASS`) | 32 / 113 (`PASS`) | `FAIL` (3) | `PASS` (6 `SKIP`) |
+| `reference-demo` (`stand_clasp` x2) | 0 / 8188 | 0 / 93 (`FAIL`) | 0 / 93 (`FAIL`) | 0 / 57 (`FAIL`) | 0 / 129 (`FAIL`) | 0 / 113 (`FAIL`) | `FAIL` (5) | `PASS` (6 `SKIP`) |
+| `reference-sample` (`stand_clasp` x2) | 0 / 8188 | 0 / 93 (`FAIL`) | 0 / 93 (`FAIL`) | 0 / 57 (`FAIL`) | 0 / 129 (`FAIL`) | 0 / 113 (`FAIL`) | `FAIL` (5) | `PASS` (6 `SKIP`) |
+| `wind` (`keypoints.json`) | 0 / 8188 | 60 / 429 (`PASS`) | 76 / 415 (`PASS`) | 157 / 1011 (`PASS`) | 137 / 261 (`PASS`) | 248 / 351 (`PASS`) | `PASS` | `PASS` (6 `SKIP`) |
+
+On a framed illustration — a character in a painted room, or framed at the waist
+or thighs so the figure touches the crop border and lower-body joints lie outside
+the canvas — near-white border flood-fill (`backgroundMask`) fails in both
+directions:
+
+1. **A painted room is not near-white ground.** Non-white room walls at the
+   border (`R,G,B <= 235`) are not seeded by `backgroundMask`, so `backgroundPx`
+   is 0 across the painted room and `PAINTING_JOINT_ON_FIGURE` cannot tell a room
+   wall from the figure before See-through runs.
+2. **White clothing touching the crop edge floods into the figure.** Measured on
+   `demo` cropped at `y = 1230` (1664x1230) and `wind` cropped at `y = 1250`
+   (1664x1250) over a painted room (`[80, 70, 65, 255]`): the character's white
+   dress/skirt touches the bottom border at `y = 1229` / `1249` with RGB channel
+   values above 235, so `backgroundMask` floods 31,806 px into `demo`'s dress
+   (covering `r_hip` at `[756, 1224]` RGB `[250, 241, 244]` and `l_hip` at
+   `[908, 1224]` RGB `[250, 239, 242]`) and 36,247 px into `wind`'s skirt
+   (covering `r_hip` at `[748, 1224]` RGB `[244, 245, 250]` and `l_hip` at
+   `[916, 1224]` RGB `[240, 241, 246]`), and `PAINTING_JOINT_ON_FIGURE` falsely
+   refuses both hips on the character.
+
+Under `--form illustration`, every rule is either kept because it still predicts a
+real downstream failure, or skipped with an explicit `SKIP` line naming the reason
+(never a pass):
+
+| rule | under `--form illustration` | why |
+| --- | --- | --- |
+| `PAINTING_SOURCE_PRESENT`, `PAINTING_SOURCE_DECODES` | **applies** | `inputs` and `assemble` read the same PNG; a missing or corrupt file fails every stage |
+| `KEYPOINTS_*` (`KEYPOINTS_FILE_PRESENT`, `KEYPOINTS_IS_JSON`, `KEYPOINTS_SPEC_KNOWN`, `KEYPOINTS_SPACE_STATED`, `KEYPOINTS_IMAGE_SIZE`, `KEYPOINTS_PERSON_CHOSEN`, `KEYPOINTS_POSITION_INSIDE`, …) | **applies** | `propose --keypoints` runs the same reader: a keypoint file measured on an uncropped 1664x2432 canvas fails `KEYPOINTS_IMAGE_SIZE` on a 1664x1230 framed crop, and a joint whose coordinates lie past the crop edge fails `KEYPOINTS_POSITION_INSIDE` |
+| `PAINTING_BACKGROUND_PLAIN` | **`SKIP`** | a painted room or a figure cut by the frame has non-ground border pixels (`5784 / 5784` on `demo` 1664x1230 and `5824 / 5824` on `wind` 1664x1250 over a painted room) |
+| `PAINTING_JOINTS_STATED` | **partial (`SKIP` + check)** | the 8 standee gap-line joints (`r_wrist`, `l_wrist`, `r_hip`, `l_hip`, `r_knee`, `l_knee`, `r_ankle`, `l_ankle`) report `SKIP` because knees, ankles, hips or hands may lie outside the frame or under clothing; the rule still refuses a person that states **0 joints with a position**, because `propose --keypoints` places bones only from joints with a position |
+| `PAINTING_JOINT_ON_FIGURE` | **partial (`SKIP` + check)** | the near-white border flood (`backgroundMask`) reports `SKIP` because a painted room is not near-white ground and white clothing at the crop edge floods into the figure (`r_hip` and `l_hip` on cropped `demo` and `wind`); the rule still checks every joint with a position against unpainted pixels (`alpha <= 8`, `OPAQUE_ALPHA_ABOVE`) and refuses a joint placed on an unpainted border or transparent hole (`inputs` also requires an opaque painting, `INPUTS_PAINTING_OPAQUE`) |
+| `PAINTING_ARM_CLEAR` | **`SKIP`** | arm-to-hip lines cannot cross border-connected near-white background over a painted room, and an illustration without articulated arm cuts (`config.limbs`) does not require an A-pose gap (4 of 5 public examples build and pass `check` with 0 arm-gap pixels) |
+| `PAINTING_HANDS_APART` | **`SKIP`** | the straight wrist-to-wrist line crosses the torso or painted room even when the hands are wide apart (`demo` 840 px apart, `scarf` 392 px apart: 0 background px) |
+| `PAINTING_LEGS_APART` | **`SKIP`** | knees and ankles may lie outside the frame on a waist/thigh crop or under a skirt, and over a painted room there is no border-connected near-white background between the legs |
 
 ## A recipe that is one way, not the only way
 
