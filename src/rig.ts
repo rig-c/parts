@@ -1336,7 +1336,7 @@ export function buildWaistPairSource(
   const CX = W / 2;
   const byPart = new Map(parts.parts.map((p) => [p.name, p]));
 
-  const configuredAlts = cfg.assemble.alternates ?? cfg.alternates ?? [];
+  const configuredAlts = cfg.assemble.alternates ?? [];
   const anchorRegions = new Set(Object.keys(cfg.regions).filter(n => !(n in cfg.meshes)));
   for (const a of configuredAlts) {
     if (a.base_anchor === undefined) continue;
@@ -1354,7 +1354,7 @@ export function buildWaistPairSource(
     if (JSON.stringify(configured === undefined ? null : orderedBaseAnchor(configured)) !== JSON.stringify(a.base_anchor === undefined ? null : orderedBaseAnchor(a.base_anchor))) fail('RIG_ALT_BASE_ANCHOR_MATCH_CONFIG', `alternate set "${a.name}" base_anchor`, 'config and parts.json declare different base anchors; re-run assemble before rig');
     problems.push(...recordedFocusProblems(a, `parts.json alternate set "${a.name}".focus`, parts.rig_size, parts.scale_rig_per_source));
   }
-  for (const a of cfg.assemble.alternates ?? cfg.alternates ?? []) {
+  for (const a of cfg.assemble.alternates ?? []) {
     const record = parts.alternates?.find((p) => p.name === a.name);
     if (a.base_anchor !== undefined && record === undefined) fail('RIG_ALT_BASE_ANCHOR_MATCH_CONFIG', `alternate set "${a.name}" base_anchor`, 'has no assembled set; re-run assemble before rig');
     if ((a.focus !== undefined || record?.focus !== undefined)
@@ -1375,7 +1375,7 @@ export function buildWaistPairSource(
     }
   }
   refuseIfAny(problems);
-  for (const a of cfg.assemble.alternates ?? cfg.alternates ?? []) {
+  for (const a of cfg.assemble.alternates ?? []) {
     const record = parts.alternates?.find((p) => p.name === a.name);
     if (a.tips === undefined) {
       if (record?.tips !== undefined) {
@@ -2738,7 +2738,6 @@ export function buildWaistPairSource(
   if (parts.alternates !== undefined && parts.alternates.length > 0) {
     const setEntries: Record<string, AlternateSetMap> = {};
     for (const [altIdx, alt] of parts.alternates.entries()) {
-      const cfgAlt = cfg.alternates?.find((a) => a.name === alt.name);
       for (const [bone, tip] of Object.entries(alt.tips ?? {})) {
         if (bone === ROOT_BONE || !B.has(bone)) fail('RIG_NAME_RESOLVES', `parts.json alternates[${altIdx}].tips.${bone}`, `names "${bone}", which config.bones does not declare; re-run assemble with declared bone names`);
         if (!Array.isArray(tip) || tip.length !== 2 || !tip.every((n) => typeof n === 'number' && Number.isFinite(n))) {
@@ -2753,8 +2752,8 @@ export function buildWaistPairSource(
       }
       const altFront = new Set(alt.front ?? []);
       refuseIfAny(problems);
-      const explicitDrawn = alt.drawn ?? cfgAlt?.drawn;
-      const isSubsetSet = alt.parts !== undefined || cfgAlt?.parts !== undefined;
+      const explicitDrawn = alt.drawn;
+      const isSubsetSet = alt.parts !== undefined;
       let coveredBones: Set<string> | null = null;
       if (isSubsetSet) {
         coveredBones = new Set<string>();
@@ -2776,7 +2775,7 @@ export function buildWaistPairSource(
       if (explicitDrawn !== undefined) {
         for (const boneName of Object.keys(explicitDrawn)) {
           if (!B.has(boneName)) {
-            fail('RIG_NAME_RESOLVES', `config.alternates[${altIdx}].drawn.${boneName}`, `names the bone "${boneName}", which config.bones does not declare`);
+            fail('RIG_NAME_RESOLVES', `parts.json alternates[${altIdx}].drawn.${boneName}`, `names the bone "${boneName}", which config.bones does not declare`);
           } else if (coveredBones !== null && !coveredBones.has(boneName)) {
             const coveredList = [...coveredBones].map((b) => `"${b}"`).join(', ') || 'none';
             fail(

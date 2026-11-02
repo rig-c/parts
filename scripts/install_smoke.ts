@@ -391,6 +391,20 @@ console.log(Array.isArray(m) ? 'REFUSED ' + JSON.stringify(m) : 'CONTOUR ' + m.h
 `;
 const EXPECT_CONTOUR = 'CONTOUR 12 6 22';
 
+// Consumer import of the top-level config section list from the installed package (issue #948).
+const SECTIONS_PROBE = `import { CONFIG_SECTIONS } from '${PACKAGE}/src/config.ts';
+console.log('RESOLVED ' + import.meta.resolve('${PACKAGE}/src/config.ts'));
+console.log('CONFIG_SECTIONS ' + JSON.stringify(CONFIG_SECTIONS));
+`;
+/**
+ * The section list the installed `src/config.ts` declares, read from its text: the runner must not import
+ * `src/config.ts` itself, since that module loads package dependencies a fresh checkout has not installed.
+ */
+function declaredSections(source: string): string[] {
+  const literal = /export const CONFIG_SECTIONS = \[([^\]]*)\] as const/.exec(source)?.[1] ?? '';
+  return [...literal.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+}
+
 // The automatic mesh mode from the install (issue #126): the rig fixture's two parts — an opaque 16x8 cloth and a 4x2 eye region (one region alone on a page is rigc's A27) — on a 40x40 rig, its
 // mesh in \`auto\`, through the installed \`rig-parts rig\` — the contour source, rig-c's \`reduceMesh\` through
 // \`@rig-c/core/mesh\`, and the installed rigc's gate, whose launcher runs its core entry in an install with no Spine
@@ -1148,6 +1162,24 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, fetchedTgz?: strin
       `SMOKE_CONTOUR_FROM_THE_INSTALL: \`bun contour_probe.ts\` exited ${probe.status}, printed ${JSON.stringify(probe.out.split('\n').find((l) => l.startsWith('CONTOUR') || l.startsWith('REFUSED')) ?? null)} and resolved ${probed.join(', ') || '(nothing)'}; "${EXPECT_CONTOUR}" with both imports under ${join(home, 'node_modules')} was required. ${probe.out.trim().slice(0, 1500)}`,
     );
   } else notes.push(`the contour mesh ran from the install through rig-c/mesh: ${EXPECT_CONTOUR}`);
+
+  // Consumer import of CONFIG_SECTIONS from the installed package (issue #948).
+  const installedConfigSource = existsSync(join(pkgRoot, 'src', 'config.ts')) ? readFileSync(join(pkgRoot, 'src', 'config.ts'), 'utf8') : '';
+  const declared = declaredSections(installedConfigSource);
+  const EXPECT_SECTIONS = `CONFIG_SECTIONS ${JSON.stringify(declared)}`;
+  if (spec.plant === 'none' && (spec.source.kind === 'tree' || declared.length > 0)) {
+    writeFileSync(join(home, 'sections_probe.ts'), SECTIONS_PROBE);
+    const sectionsProbe = run('bun', [join(home, 'sections_probe.ts')], home);
+    output += sectionsProbe.out;
+    const resolvedSections = [...sectionsProbe.out.matchAll(/^RESOLVED (.+)$/gm)].map((m) => (m[1].startsWith('file://') ? fileURLToPath(m[1]) : m[1]));
+    const straySections = resolvedSections.filter((p) => !isSmokePathInside(join(home, 'node_modules'), p));
+    if (declared.length === 0 || sectionsProbe.status !== 0 || !sectionsProbe.out.split('\n').includes(EXPECT_SECTIONS) || resolvedSections.length !== 1 || straySections.length > 0) {
+      fault(
+        'sections',
+        `SMOKE_CONFIG_SECTIONS_FROM_THE_INSTALL: \`bun sections_probe.ts\` exited ${sectionsProbe.status}, printed ${JSON.stringify(sectionsProbe.out.split('\n').find((l) => l.startsWith('CONFIG_SECTIONS')) ?? null)} and resolved ${resolvedSections.join(', ') || '(nothing)'}; "${EXPECT_SECTIONS}" resolved under ${join(home, 'node_modules')} was required. ${sectionsProbe.out.trim().slice(0, 1500)}`,
+      );
+    } else notes.push(`CONFIG_SECTIONS (${declared.length}) imported from ${PACKAGE}/src/config.ts inside the install`);
+  }
 
   // The automatic mesh mode, from the install, through the installed rig command and rigc's gate.
   writeFileSync(join(home, 'make_auto.ts'), AUTO_GENERATOR);

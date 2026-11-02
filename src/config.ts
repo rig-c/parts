@@ -1305,8 +1305,6 @@ export interface CharacterConfig {
   cloth?: ClothRecipes;
   /** The `assemble.rig_scale` (`parts.json`'s `scale_rig_per_source`) `propose` drafted the rig sections at (issue #354): absent on a hand-authored config, held equal to `assemble.rig_scale` when present. */
   proposed_rig_scale?: number;
-  /** Alternate painting sets (issue #454): absent, no alternate sets are assembled or emitted. */
-  alternates?: AlternateSetConfig[];
   /**
    * The requirements file the build's check reads (issue #556), a path relative
    * to the config's directory: `build` reads it when no `--requirements` is
@@ -1649,7 +1647,14 @@ export interface AssembleConfig {
   proposed_rig_scale?: number;
 }
 
-const TOP_KEYS = ['key', 'generation', 'seethrough', 'assemble', 'limbs', 'bones', 'meshes', 'regions', 'motion', 'constraints', 'stops', 'turn', 'scene', 'cloth', 'proposed_rig_scale', 'requirements', 'motion_seams', 'depth', 'waist'] as const;
+/**
+ * The top-level sections `parseConfig` accepts in `config.json` (issue #948),
+ * exported as a runtime tuple so a consumer does not read `src/config.ts` as text.
+ */
+export const CONFIG_SECTIONS = ['key', 'generation', 'seethrough', 'assemble', 'limbs', 'bones', 'meshes', 'regions', 'motion', 'constraints', 'stops', 'turn', 'scene', 'cloth', 'proposed_rig_scale', 'requirements', 'motion_seams', 'depth', 'waist'] as const;
+export type ConfigSection = (typeof CONFIG_SECTIONS)[number];
+
+const TOP_KEYS = CONFIG_SECTIONS;
 
 /**
  * The one partial entry point. It validates exactly what its door requires —
