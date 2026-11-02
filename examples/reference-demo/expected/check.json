@@ -792,6 +792,17 @@
    ]
   }
  },
+ "figure_openings": {
+  "status": "CLEAR",
+  "fps": 12,
+  "cell": 2.358,
+  "pairs": 60,
+  "animations": [
+   "idle"
+  ],
+  "warnings": 0,
+  "openings": []
+ },
  "config": {
   "path": "examples/reference-demo/config.json",
   "sha256": "e1b569d472bb28c9c04de3487007869a852a9e96965c115504d5bb8b86c5191f"
