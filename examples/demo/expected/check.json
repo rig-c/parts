@@ -1257,6 +1257,46 @@
    ]
   }
  },
+ "figure_openings": {
+  "status": "WARN",
+  "fps": 12,
+  "cell": 2.357,
+  "pairs": 67,
+  "animations": [
+   "idle",
+   "tilt",
+   "look_l",
+   "look_r",
+   "smile",
+   "startled",
+   "wave",
+   "hop"
+  ],
+  "warnings": 1,
+  "openings": [
+   {
+    "pair": "hair_back|handwear_r",
+    "under": "hair_back",
+    "above": "handwear_r",
+    "animation": "hop",
+    "frame": 5,
+    "time": 0.417,
+    "opens": [
+     5,
+     6
+    ],
+    "cell": 2.517,
+    "found_cells": 40,
+    "allowed_cells": 28,
+    "box": [
+     -166.629,
+     814.962,
+     -128.877,
+     885.433
+    ]
+   }
+  ]
+ },
  "config": {
   "path": "examples/demo/config.json",
   "sha256": "f2913f67c07e2757d6a35991c31f84c9355a6d1f2ea709694da5b40b6d3ae2ef"
