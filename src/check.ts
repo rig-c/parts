@@ -86,7 +86,9 @@ import { baseAnchorMoves, type AnchorRegion } from './baseanchor.ts';
 import { jointContactReading, type JointContactReading } from './jointcontact.ts';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { loadCandidate, sampleAnimation, throughPoser, type Candidate, type Piece } from '@rig-c/core/render';
 import type { Viewport as RootCoverageViewport } from '@rig-c/core/render-shared';
+import { fillHoles } from './raster/morph.ts';
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { measureRecomposite, type RecompositeFigures, recompositeRecord, scenePhrase, sourceInRig, figureSilhouette } from './assemble.ts';
@@ -2706,6 +2708,8 @@ export interface CheckFigures {
   /** Written only when the rig declares a physics constraint and has an idle (issue #501): {@link ClothLine}, a warning, never a bar. */
   [CLOTH_LINE]?: ClothLine;
   RECOMPOSITE_HOLES: ReportedLine;
+  /** Issue #933: openings inside the figure over motion across undeclared setup-overlapping layer pairs; omitted when SKIP. */
+  figure_openings?: FigureOpeningReading;
   /** Written only under `--source` (issue #77): the setup pose against the painting, REPORTED. */
   SETUP_POSE_VS_SOURCE?: ReportedLine;
   /** Written only under `--wind-band` (issue #590): the steady-wind band each declared seam pair holds, REPORTED. */
@@ -3028,6 +3032,8 @@ export interface CheckReport {
   besideIdle: string[];
   /** `SEAM_OVER_MOTION` (issue #493): a warning, never a bar — in `check.json` only when a pair is declared; its SKIP is printed either way. */
   motionSeam: MotionSeamLine;
+  /** Issue #933: openings inside the figure over motion on undeclared setup-overlapping layer pairs — a warning, never a bar. */
+  figureOpenings: FigureOpeningReading;
   /** `CLOTH_SETTLES` (issue #501): a warning, never a bar — in `check.json` only when the rig declares a physics constraint and has an idle; its SKIP is printed either way. */
   cloth: ClothLine;
   /** `WIND_BAND` (issue #590): the steady-wind band each declared seam pair holds, written under `--wind-band` only. */
@@ -3088,7 +3094,7 @@ export function checkStatuses(fig: CheckFigures): Record<string, CheckStatus> {
   const bar = (name: string, measured: boolean): CheckStatus => (!measured ? 'SKIP' : notMet.includes(name) ? 'FAIL' : 'PASS');
   const out: Record<string, CheckStatus> = { gate: bar('gate', true), loop: bar('loop', fig.loop_max_diff !== null), seam: bar('seam', fig.seam_mean !== null) };
   for (const n of JUDGEMENT_LINES) out[n] = fig[n].status;
-  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, ...REPORTED_LINES, SOURCE_LINE, WIND_BAND_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, SETUP_PAINTING_LINE] as const) {
+  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, ...REPORTED_LINES, 'figure_openings', SOURCE_LINE, WIND_BAND_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, SETUP_PAINTING_LINE] as const) {
     const l = fig[n];
     if (l !== undefined) out[n] = l.status;
   }
@@ -5113,6 +5119,359 @@ export function motionSeamWarnText(r: MotionSeamRow): string {
   return `WARN seam "${r.pair}" opens on ${r.opens.length} frame(s) ${frameRuns(r.opens)} max ${r.max_px} px in "${r.animation}" — over the one-cell floor${r.under_floor.length === 0 ? '' : `, ${r.under_floor.length} more frame(s) one cell thick not reported`}${evidence}`;
 }
 
+/**
+ * Issue #933: one undeclared setup-overlapping layer pair that opens a transparent hole inside the figure (`fillHoles(alpha > 0)`)
+ * over motion, where the hole was covered at setup (`setupAlpha > 0`) and exceeds the one-cell thickness floor of the pair's
+ * setup overlap box. Names the pair, the part under and the part above in draw order, the animation and worst frame, and the
+ * size found against the size allowed.
+ */
+export interface FigureOpeningHit {
+  pair: string;
+  under: string;
+  above: string;
+  animation: string;
+  frame: number;
+  time: number;
+  opens: number[];
+  cell: number;
+  found_cells: number;
+  allowed_cells: number;
+  box: [number, number, number, number];
+}
+
+/** Issue #933: the all-frames reading of opened alpha inside the figure across undeclared setup-overlapping layer pairs. */
+export interface FigureOpeningReading {
+  status: 'WARN' | 'CLEAR' | 'SKIP';
+  reason?: string;
+  fps: number;
+  cell: number;
+  pairs: number;
+  animations: string[];
+  warnings: number;
+  openings: FigureOpeningHit[];
+}
+
+const QUAD_TRIANGLES: readonly number[] = [0, 1, 2, 0, 2, 3];
+
+function rasterizePieceAlphaMask(
+  cand: Candidate,
+  piece: Piece,
+  gw: number,
+  gh: number,
+  xMin: number,
+  yMax: number,
+  cell: number,
+  out: Uint8Array,
+): void {
+  const page = cand.pages.get(piece.page);
+  const alpha = piece.tint[3];
+  if (page === undefined || alpha <= 0) return;
+  const tris = piece.kind === 'region' ? QUAD_TRIANGLES : piece.triangles;
+  const verts = piece.world;
+  const uvs = piece.uvs;
+  const pw = page.width;
+  const ph = page.height;
+  const pdata = page.data;
+  for (let t = 0; t + 2 < tris.length; t += 3) {
+    const i0 = tris[t];
+    const i1 = tris[t + 1];
+    const i2 = tris[t + 2];
+    const x0 = (verts[i0 * 2] - xMin) / cell;
+    const y0 = (yMax - verts[i0 * 2 + 1]) / cell;
+    const x1 = (verts[i1 * 2] - xMin) / cell;
+    const y1 = (yMax - verts[i1 * 2 + 1]) / cell;
+    const x2 = (verts[i2 * 2] - xMin) / cell;
+    const y2 = (yMax - verts[i2 * 2 + 1]) / cell;
+    const minX = Math.max(0, Math.floor(Math.min(x0, x1, x2)));
+    const maxX = Math.min(gw - 1, Math.ceil(Math.max(x0, x1, x2)));
+    const minY = Math.max(0, Math.floor(Math.min(y0, y1, y2)));
+    const maxY = Math.min(gh - 1, Math.ceil(Math.max(y0, y1, y2)));
+    const denom = (y1 - y2) * (x0 - x2) + (x2 - x1) * (y0 - y2);
+    if (Math.abs(denom) < 1e-12) continue;
+    const invDenom = 1 / denom;
+    const u0 = uvs[i0 * 2];
+    const v0 = uvs[i0 * 2 + 1];
+    const u1 = uvs[i1 * 2];
+    const v1 = uvs[i1 * 2 + 1];
+    const u2 = uvs[i2 * 2];
+    const v2 = uvs[i2 * 2 + 1];
+    const dy12 = y1 - y2;
+    const dx21 = x2 - x1;
+    const dy20 = y2 - y0;
+    const dx02 = x0 - x2;
+    for (let py = minY; py <= maxY; py++) {
+      const cy = py + 0.5 - y2;
+      const rowOff = py * gw;
+      const w0Base = dx21 * cy;
+      const w1Base = dx02 * cy;
+      for (let px = minX; px <= maxX; px++) {
+        if (out[rowOff + px] === 1) continue;
+        const cx = px + 0.5 - x2;
+        const w0 = (dy12 * cx + w0Base) * invDenom;
+        const w1 = (dy20 * cx + w1Base) * invDenom;
+        const w2 = 1 - w0 - w1;
+        if (w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6) continue;
+        const u = w0 * u0 + w1 * u1 + w2 * u2;
+        const v = w0 * v0 + w1 * v1 + w2 * v2;
+        const tx = Math.max(0, Math.min(pw - 1, Math.floor(u * pw)));
+        const ty = Math.max(0, Math.min(ph - 1, Math.floor(v * ph)));
+        const a = pdata[(ty * pw + tx) * 4 + 3] * alpha;
+        if (a > ART_ALPHA) out[rowOff + px] = 1;
+      }
+    }
+  }
+}
+
+/**
+ * Issue #933: read openings inside the figure over motion across every undeclared setup-overlapping layer pair (`a|b`).
+ * A gap already transparent at the setup pose (`setupUnion === 0`, such as a deliberate gap between arm and body) is art
+ * and is excluded, and a pocket closed only by a third part is excluded by requiring the opened cells to lie inside the
+ * hole-filled union of the pair's own posed drawings (`fillHoles(a_t ∪ b_t)`). Only cells covered by both layers of a pair
+ * at frame 0 that become transparent interior holes inside both the posed figure silhouette and `fillHoles(a_t ∪ b_t)` above
+ * the pair's one-cell thickness floor are reported, naming the part above (`above`), the frame, the size found and the size
+ * allowed in grid cells.
+ */
+export function readFigurePairOpenings(
+  buildDir: string,
+  animationNames: readonly string[],
+  declaredPairs: ReadonlySet<string> = new Set(),
+  fps = IDLE_FPS,
+): FigureOpeningReading {
+  if (animationNames.length === 0) {
+    return { status: 'SKIP', reason: 'motion.json holds no animation, so there is no motion to read', fps, cell: 0, pairs: 0, animations: [], warnings: 0, openings: [] };
+  }
+  const skelPath = join(buildDir, 'skeleton.json');
+  const atlasPath = join(buildDir, 'skeleton.atlas');
+  if (!existsSync(skelPath)) {
+    return { status: 'SKIP', reason: 'skeleton.json was not written', fps, cell: 0, pairs: 0, animations: [...animationNames], warnings: 0, openings: [] };
+  }
+  const cand = loadCandidate(
+    {
+      skeletonText: readFileSync(skelPath, 'utf8'),
+      atlasText: existsSync(atlasPath) ? readFileSync(atlasPath, 'utf8') : null,
+      atlasDir: buildDir,
+      label: buildDir,
+    },
+    { skeleton: skelPath, atlas: atlasPath },
+    undefined,
+  );
+  const openings: FigureOpeningHit[] = [];
+  let maxPairs = 0;
+  let firstCell = 0;
+  for (const anim of animationNames) {
+    const sampledFrames = throughPoser(cand.choice, (poser) => sampleAnimation(poser, anim, fps)).value;
+    if (sampledFrames.length === 0) continue;
+    let xMin = Infinity;
+    let yMin = Infinity;
+    let xMax = -Infinity;
+    let yMax = -Infinity;
+    for (const f of sampledFrames) {
+      for (const p of f.pieces) {
+        for (let i = 0; i + 1 < p.world.length; i += 2) {
+          const x = p.world[i];
+          const y = p.world[i + 1];
+          if (x < xMin) xMin = x;
+          if (x > xMax) xMax = x;
+          if (y < yMin) yMin = y;
+          if (y > yMax) yMax = y;
+        }
+      }
+    }
+    if (!Number.isFinite(xMin) || xMax <= xMin || yMax <= yMin) continue;
+    const pad = 4;
+    xMin -= pad;
+    yMin -= pad;
+    xMax += pad;
+    yMax += pad;
+    const vpW = xMax - xMin;
+    const vpH = yMax - yMin;
+    const cell = Math.max(0.5, Math.max(vpW, vpH) / 512);
+    const cellRounded = round3(cell);
+    if (firstCell === 0) firstCell = cellRounded;
+    const gw = Math.max(1, Math.ceil(vpW / cell));
+    const gh = Math.max(1, Math.ceil(vpH / cell));
+    const f0 = sampledFrames[0];
+    const slotOrder: string[] = [];
+    const setupMasks = new Map<string, Uint8Array>();
+    const setupUnion = new Uint8Array(gw * gh);
+    for (const p of f0.pieces) {
+      let m = setupMasks.get(p.slot);
+      if (m === undefined) {
+        m = new Uint8Array(gw * gh);
+        setupMasks.set(p.slot, m);
+        slotOrder.push(p.slot);
+      }
+      rasterizePieceAlphaMask(cand, p, gw, gh, xMin, yMax, cell, m);
+    }
+    for (const m of setupMasks.values()) {
+      for (let i = 0; i < gw * gh; i++) if (m[i] === 1) setupUnion[i] = 1;
+    }
+    interface PairSetup {
+      pair: string;
+      under: string;
+      above: string;
+      mu: Uint8Array;
+      mv: Uint8Array;
+      box: [number, number, number, number];
+      allowed_cells: number;
+      opens: number[];
+      worstFrame: number;
+      worstTime: number;
+      worstCells: number;
+    }
+    const pairSetups: PairSetup[] = [];
+    for (let u = 0; u < slotOrder.length; u++) {
+      const under = slotOrder[u];
+      const mu = setupMasks.get(under)!;
+      for (let v = u + 1; v < slotOrder.length; v++) {
+        const above = slotOrder[v];
+        const pair = [under, above].sort().join('|');
+        if (declaredPairs.has(pair)) continue;
+        const mv = setupMasks.get(above)!;
+        let hasOverlap = false;
+        let bx0 = gw;
+        let by0 = gh;
+        let bx1 = -1;
+        let by1 = -1;
+        for (let py = 0; py < gh; py++) {
+          const rowOff = py * gw;
+          for (let px = 0; px < gw; px++) {
+            const idx = rowOff + px;
+            if (mu[idx] === 1 && mv[idx] === 1) {
+              hasOverlap = true;
+              if (px < bx0) bx0 = px;
+              if (px > bx1) bx1 = px;
+              if (py < by0) by0 = py;
+              if (py > by1) by1 = py;
+            }
+          }
+        }
+        if (!hasOverlap) continue;
+        const box: [number, number, number, number] = [
+          round3(xMin + bx0 * cell),
+          round3(yMax - (by1 + 1) * cell),
+          round3(xMin + (bx1 + 1) * cell),
+          round3(yMax - by0 * cell),
+        ];
+        const allowed_cells = Math.round(Math.max(box[2] - box[0], box[3] - box[1]) / cell);
+        pairSetups.push({ pair, under, above, mu, mv, box, allowed_cells, opens: [], worstFrame: -1, worstTime: 0, worstCells: 0 });
+      }
+    }
+    if (pairSetups.length > maxPairs) maxPairs = pairSetups.length;
+    if (pairSetups.length === 0) continue;
+    const frameUnion = new Uint8Array(gw * gh);
+    const pairUnion = new Uint8Array(gw * gh);
+    const openedCells = new Int32Array(gw * gh);
+    for (let fi = 1; fi < sampledFrames.length; fi++) {
+      frameUnion.fill(0);
+      const fr = sampledFrames[fi];
+      for (const p of fr.pieces) {
+        rasterizePieceAlphaMask(cand, p, gw, gh, xMin, yMax, cell, frameUnion);
+      }
+      const filled = fillHoles({ width: gw, height: gh, data: frameUnion });
+      let openedCount = 0;
+      for (let idx = 0; idx < gw * gh; idx++) {
+        if (frameUnion[idx] === 0 && filled.data[idx] === 1 && setupUnion[idx] === 1) {
+          openedCells[openedCount++] = idx;
+        }
+      }
+      if (openedCount === 0) continue;
+      let frameSlotMasks: Map<string, Uint8Array> | null = null;
+      const slotMaskAtFrame = (slot: string): Uint8Array => {
+        if (frameSlotMasks === null) frameSlotMasks = new Map<string, Uint8Array>();
+        let m = frameSlotMasks.get(slot);
+        if (m !== undefined) return m;
+        m = new Uint8Array(gw * gh);
+        for (const p of fr.pieces) {
+          if (p.slot === slot) rasterizePieceAlphaMask(cand, p, gw, gh, xMin, yMax, cell, m);
+        }
+        frameSlotMasks.set(slot, m);
+        return m;
+      };
+      for (const ps of pairSetups) {
+        if (openedCount <= ps.allowed_cells) continue;
+        const mu = ps.mu;
+        const mv = ps.mv;
+        let preFound = 0;
+        for (let k = 0; k < openedCount; k++) {
+          const idx = openedCells[k];
+          if (mu[idx] === 1 && mv[idx] === 1) preFound++;
+        }
+        if (preFound <= ps.allowed_cells) continue;
+        const fmu = slotMaskAtFrame(ps.under);
+        const fmv = slotMaskAtFrame(ps.above);
+        for (let i = 0; i < gw * gh; i++) pairUnion[i] = fmu[i] | fmv[i];
+        const pairFilled = fillHoles({ width: gw, height: gh, data: pairUnion }).data;
+        let found = 0;
+        for (let k = 0; k < openedCount; k++) {
+          const idx = openedCells[k];
+          if (mu[idx] === 1 && mv[idx] === 1 && pairFilled[idx] === 1) found++;
+        }
+        if (found > ps.allowed_cells) {
+          ps.opens.push(fr.index);
+          if (found > ps.worstCells) {
+            ps.worstCells = found;
+            ps.worstFrame = fr.index;
+            ps.worstTime = round3(fr.time);
+          }
+        }
+      }
+    }
+    for (const ps of pairSetups) {
+      if (ps.opens.length > 0) {
+        openings.push({
+          pair: ps.pair,
+          under: ps.under,
+          above: ps.above,
+          animation: anim,
+          frame: ps.worstFrame,
+          time: ps.worstTime,
+          opens: ps.opens,
+          cell: cellRounded,
+          found_cells: ps.worstCells,
+          allowed_cells: ps.allowed_cells,
+          box: ps.box,
+        });
+      }
+    }
+  }
+  if (maxPairs === 0) {
+    return {
+      status: 'SKIP',
+      reason: 'no undeclared layer pair shares a cell at the setup pose, so there is no pair to read',
+      fps,
+      cell: firstCell,
+      pairs: 0,
+      animations: [...animationNames],
+      warnings: 0,
+      openings: [],
+    };
+  }
+  return {
+    status: openings.length > 0 ? 'WARN' : 'CLEAR',
+    fps,
+    cell: firstCell,
+    pairs: maxPairs,
+    animations: [...animationNames],
+    warnings: openings.length,
+    openings,
+  };
+}
+
+/** Issue #933: one console warning line for an undeclared layer pair opening inside the figure over motion. */
+export function figureOpeningWarnText(h: FigureOpeningHit): string {
+  const spanW = Math.max(1, Math.round(h.box[2] - h.box[0]));
+  const spanH = Math.max(1, Math.round(h.box[3] - h.box[1]));
+  return `WARN opening "${h.pair}" above "${h.above}" (under "${h.under}") on ${h.opens.length} frame(s) ${frameRuns(h.opens)}, worst frame ${h.frame} (t = ${h.time}s) in "${h.animation}": found ${h.found_cells} cell(s), <= ${h.allowed_cells} cell(s) allowed in ${spanW}x${spanH} world units at ${h.cell} world units/cell — transparent opening inside the figure over motion on an undeclared layer pair (not a bar)`;
+}
+
+/** Issue #933: the console lines for undeclared layer pair openings inside the figure over motion. */
+export function figureOpeningLines(reading: FigureOpeningReading): string[] {
+  if (reading.status === 'SKIP') return [`figure_openings: SKIP — ${String(reading.reason)}`];
+  const head = `figure_openings: ${reading.status} — ${reading.pairs} undeclared setup-overlapping pair(s) in ${reading.animations.length} animation(s) (${reading.animations.join(', ')}) at ${reading.fps} fps (cell ${reading.cell} world units): ${reading.warnings} warning(s), never a bar`;
+  return [head, ...reading.openings.map(figureOpeningWarnText)];
+}
+
 // ---------------------------------------------------------------------------
 // cloth that comes to rest on the idle (issue #501; the line is {@link CLOTH_LINE}'s)
 // ---------------------------------------------------------------------------
@@ -6441,6 +6800,11 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       }
     }
   }
+  const declaredPairKeys = new Set(motionSeam.pairs.map((p) => [p.a, p.b].sort().join('|')));
+  const figureOpenings: FigureOpeningReading =
+    inp.parts === null
+      ? { status: 'SKIP', reason: inp.noParts ?? 'no parts.json', fps: IDLE_FPS, cell: 0, pairs: 0, animations: [], warnings: 0, openings: [] }
+      : readFigurePairOpenings(buildDir, animationNames, declaredPairKeys, IDLE_FPS);
 
   // 3f. every physics chain read by its tip on the idle as rendered above, physics on (issue #501): a warning, never a
   // bar; SKIP, named, with no idle or no physics constraint
@@ -6702,6 +7066,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(motionSeam.pairs.length === 0 && motionSeam.roots === undefined ? {} : { [MOTION_SEAM_LINE]: motionSeam }),
     ...(stripped === null || idle === null ? {} : { [CLOTH_LINE]: cloth }),
     RECOMPOSITE_HOLES: inp.parts === null ? { status: 'SKIP', reason: inp.noParts ?? '' } : holesLine(inp.parts),
+    ...(figureOpenings.status === 'SKIP' ? {} : { figure_openings: figureOpenings }),
     ...(sourceRead === null ? {} : { [SOURCE_LINE]: sourceRead }),
     ...(windBandRead === null ? {} : { [WIND_BAND_LINE]: windBandRead }),
     ...(Object.keys(skipped).length === 0 ? {} : { skipped }),
@@ -6800,6 +7165,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     requirements: reqBlock,
     besideIdle: named,
     motionSeam,
+    figureOpenings,
     cloth,
     ...(sweepSteps.size === 0 ? {} : { sweepSteps }),
     ...(windBandRead === null ? {} : { windBand: windBandRead }),

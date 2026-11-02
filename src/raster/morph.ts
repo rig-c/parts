@@ -85,30 +85,52 @@ export function fillHoles(m: Mask): Mask {
   assertBinary('fillHoles', m);
   const { width: w, height: h } = m;
   if (w === 0 || h === 0) return newMask(w, h);
+  const data = m.data;
   const outside = new Uint8Array(w * h);
-  const stack: number[] = [];
-  const seed = (i: number): void => {
-    if (m.data[i] === 0 && outside[i] === 0) {
-      outside[i] = 1;
-      stack.push(i);
-    }
-  };
+  const stack = new Int32Array(w * h);
+  let top = 0;
   for (let x = 0; x < w; x++) {
-    seed(x);
-    seed((h - 1) * w + x);
+    if (data[x] === 0 && outside[x] === 0) {
+      outside[x] = 1;
+      stack[top++] = x;
+    }
+    const b = (h - 1) * w + x;
+    if (data[b] === 0 && outside[b] === 0) {
+      outside[b] = 1;
+      stack[top++] = b;
+    }
   }
   for (let y = 0; y < h; y++) {
-    seed(y * w);
-    seed(y * w + w - 1);
+    const l = y * w;
+    if (data[l] === 0 && outside[l] === 0) {
+      outside[l] = 1;
+      stack[top++] = l;
+    }
+    const r = l + w - 1;
+    if (data[r] === 0 && outside[r] === 0) {
+      outside[r] = 1;
+      stack[top++] = r;
+    }
   }
-  while (stack.length > 0) {
-    const i = stack.pop() as number;
+  while (top > 0) {
+    const i = stack[--top];
     const x = i % w;
-    const y = (i - x) / w;
-    if (x > 0) seed(i - 1);
-    if (x < w - 1) seed(i + 1);
-    if (y > 0) seed(i - w);
-    if (y < h - 1) seed(i + w);
+    if (x > 0 && data[i - 1] === 0 && outside[i - 1] === 0) {
+      outside[i - 1] = 1;
+      stack[top++] = i - 1;
+    }
+    if (x < w - 1 && data[i + 1] === 0 && outside[i + 1] === 0) {
+      outside[i + 1] = 1;
+      stack[top++] = i + 1;
+    }
+    if (i >= w && data[i - w] === 0 && outside[i - w] === 0) {
+      outside[i - w] = 1;
+      stack[top++] = i - w;
+    }
+    if (i + w < w * h && data[i + w] === 0 && outside[i + w] === 0) {
+      outside[i + w] = 1;
+      stack[top++] = i + w;
+    }
   }
   const out = newMask(w, h);
   for (let i = 0; i < w * h; i++) out.data[i] = outside[i] === 1 ? 0 : 1;

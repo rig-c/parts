@@ -328,6 +328,8 @@ import {
   ENVIRONMENT_RULE,
   environmentLine,
   findRigc,
+  figureOpeningLines,
+  figureOpeningWarnText,
   flatComposite,
   FOLD_GROUPS_SHOWN,
   FOLD_LINE,
@@ -343,6 +345,7 @@ import {
   GEOMETRY_FILE,
   headBoneOf,
   holesLine,
+  readFigurePairOpenings,
   IDLE_MAX_PX,
   JUDGEMENT_LINES,
   type JudgementLine,
@@ -15697,7 +15700,7 @@ function readJsonFile(path: string): Record<string, unknown> | null {
 }
 
 // Issue #333: the fold bar reads the idle too, so every rig whose motion holds an animation writes it after the judgement lines.
-const CHECK_KEYS = ['gate_spine_html_green', 'rigc_entry', 'pack_mode', 'loop_max_diff', 'seam_mean', 'seam_px_over_40', 'seam_px_over_80', 'seam_frame_scale', 'seam_scope', ...JUDGEMENT_LINES, FOLD_LINE, ...REPORTED_LINES, 'PASS'];
+const CHECK_KEYS = ['gate_spine_html_green', 'rigc_entry', 'pack_mode', 'loop_max_diff', 'seam_mean', 'seam_px_over_40', 'seam_px_over_80', 'seam_frame_scale', 'seam_scope', ...JUDGEMENT_LINES, FOLD_LINE, ...REPORTED_LINES, 'figure_openings', 'PASS'];
 
 /** A judgement line's status in a check.json read back, or null. */
 function lineStatus(fig: Record<string, unknown> | null, name: string): string | null {
@@ -15788,7 +15791,7 @@ function runSourceCases(dir: string, say: (name: string, ok: boolean, detail: st
     const l = fig?.[name] as { status?: string; reason?: string } | undefined;
     return l?.status === 'SKIP' ? String(l.reason) : `not SKIP (${l?.status ?? 'absent'})`;
   };
-  const sourceKeys = [...CHECK_KEYS.slice(0, -1).filter(k => k !== 'seam_scope'), SOURCE_LINE, 'skipped', 'SETUP_MATCHES_PAINTING', 'PASS'].join(',');
+  const sourceKeys = [...CHECK_KEYS.slice(0, -1).filter(k => k !== 'seam_scope' && k !== 'figure_openings'), SOURCE_LINE, 'skipped', 'SETUP_MATCHES_PAINTING', 'PASS'].join(',');
 
   // The card's shape: two prefixed copies under one root, a plate region at slot 0, no parts.json, an idle.
   const withIdle = merged('merged-idle', { idle: true, plate: true });
@@ -17901,6 +17904,244 @@ function runMotionSeamCases(report: FixtureCaseReporter): void {
     );
     runMotionRootRendererCases(dir, cut.out, say);
     runMotionSeamWorldIntegration(dir, say, ln);
+
+    // Issue #933: openings inside the figure over motion on undeclared setup-overlapping layer pairs.
+    // Positive control ("idle"): a deliberate setup gap between arm and body (x 10..15, y 20..39 inside frame_body) is
+    // already transparent at frame 0 (setupUnion === 0), while collar_under (x 18..46, y 18..46 with 2px top/bottom bridges)
+    // and strand_above (x 28..46, y 18..46) share the 8x28 overlap box [28, 18, 36, 46] at setup and move together (+1 px)
+    // to keep the collar window (x 20..43, y 20..43) closed -> 0 openings.
+    // Planted negative ("slide"): collar_under shifts -8 px and strand_above shifts +8 px at t = 0.5 s (frame 6 of 12 at 12 fps),
+    // enclosing the 8x24 tear inside fillHoles(collar_under_t ∪ strand_above_t) (16x48 = 768 cells at 0.5 units/cell)
+    // above the pair's 56-cell thickness floor (28 units / 0.5), naming the part above ("strand_above"),
+    // the frame (frame 6), the size found (768 cells) and the size allowed (56 cells).
+    // Third-part pocket control (foPocketDir): identical "slide" motion, but collar_under and strand_above are plain 18x28
+    // rectangles without top/bottom bridges so the 768-cell pocket is closed at top and bottom only by the third part
+    // (frame_body) and not inside fillHoles(collar_under_t ∪ strand_above_t) -> reads CLEAR (0 warnings).
+    {
+      const foBuildDir = join(dir, 'figure-opening');
+      mkdirSync(foBuildDir, { recursive: true });
+      const page = newRaster(128, 64);
+      const paint = (
+        target: ReturnType<typeof newRaster>,
+        x0: number,
+        y0: number,
+        w: number,
+        h: number,
+        pred: (lx: number, ly: number) => boolean,
+        rgb: [number, number, number],
+      ): void => {
+        for (let ly = 0; ly < h; ly++) {
+          for (let lx = 0; lx < w; lx++) {
+            if (!pred(lx, ly)) continue;
+            const i = ((y0 + ly) * 128 + (x0 + lx)) * 4;
+            target.data[i] = rgb[0];
+            target.data[i + 1] = rgb[1];
+            target.data[i + 2] = rgb[2];
+            target.data[i + 3] = 255;
+          }
+        }
+      };
+      const frameBodyPred = (cx: number, cy: number): boolean => {
+        if (cx < 4 || cx >= 60 || cy < 4 || cy >= 60) return false;
+        const inArmBodyGap = cx >= 10 && cx <= 15 && cy >= 20 && cy <= 39;
+        const inCollarWindow = cx >= 20 && cx <= 43 && cy >= 20 && cy <= 43;
+        return !inArmBodyGap && !inCollarWindow;
+      };
+      paint(page, 0, 0, 64, 64, frameBodyPred, [70, 90, 140]);
+      paint(
+        page,
+        64,
+        0,
+        28,
+        28,
+        (cx, cy) => cx < 18 || (cx < 27 && (cy < 2 || cy >= 26)),
+        [200, 180, 170],
+      );
+      paint(
+        page,
+        96,
+        0,
+        18,
+        28,
+        (cx, cy) => cx < 8 || cx >= 17 || (cy >= 2 && cy < 26),
+        [120, 80, 160],
+      );
+      writeFileSync(join(foBuildDir, 'skeleton.png'), encodePngBytes(page));
+      writeFileSync(
+        join(foBuildDir, 'skeleton.atlas'),
+        [
+          'skeleton.png',
+          'size: 128, 64',
+          'format: RGBA8888',
+          'filter: Linear, Linear',
+          'repeat: none',
+          'frame_body',
+          '  bounds: 0, 0, 64, 64',
+          'collar_under',
+          '  bounds: 64, 0, 28, 28',
+          'strand_above',
+          '  bounds: 96, 0, 18, 28',
+          '',
+        ].join('\n'),
+      );
+      const foSkel = {
+        skeleton: { hash: 'so26', spine: '4.2.0', x: 0, y: 0, width: 64, height: 64 },
+        bones: [
+          { name: 'root' },
+          { name: 'collar_ctl', parent: 'root', x: 32, y: 32 },
+          { name: 'strand_ctl', parent: 'root', x: 37, y: 32 },
+        ],
+        slots: [
+          { name: 'frame_body', bone: 'root', attachment: 'frame_body' },
+          { name: 'collar_under', bone: 'collar_ctl', attachment: 'collar_under' },
+          { name: 'strand_above', bone: 'strand_ctl', attachment: 'strand_above' },
+        ],
+        skins: [
+          {
+            name: 'default',
+            attachments: {
+              frame_body: { frame_body: { type: 'region', x: 32, y: 32, width: 64, height: 64 } },
+              collar_under: { collar_under: { type: 'region', x: 0, y: 0, width: 28, height: 28 } },
+              strand_above: { strand_above: { type: 'region', x: 0, y: 0, width: 18, height: 28 } },
+            },
+          },
+        ],
+        animations: {
+          idle: {
+            bones: {
+              collar_ctl: { translate: [{ time: 0, x: 0, y: 0 }, { time: 0.5, x: 1, y: 0 }, { time: 1, x: 0, y: 0 }] },
+              strand_ctl: { translate: [{ time: 0, x: 0, y: 0 }, { time: 0.5, x: 1, y: 0 }, { time: 1, x: 0, y: 0 }] },
+            },
+          },
+          slide: {
+            bones: {
+              collar_ctl: { translate: [{ time: 0, x: 0, y: 0 }, { time: 0.5, x: -8, y: 0 }, { time: 1, x: 0, y: 0 }] },
+              strand_ctl: { translate: [{ time: 0, x: 0, y: 0 }, { time: 0.5, x: 8, y: 0 }, { time: 1, x: 0, y: 0 }] },
+            },
+          },
+        },
+      };
+      writeFileSync(join(foBuildDir, 'skeleton.json'), `${JSON.stringify(foSkel, null, 2)}\n`);
+
+      const foPocketDir = join(dir, 'figure-opening-third-part-pocket');
+      mkdirSync(foPocketDir, { recursive: true });
+      const pocketPage = newRaster(128, 64);
+      paint(pocketPage, 0, 0, 64, 64, frameBodyPred, [70, 90, 140]);
+      paint(pocketPage, 64, 0, 18, 28, () => true, [200, 180, 170]);
+      paint(pocketPage, 84, 0, 18, 28, () => true, [120, 80, 160]);
+      writeFileSync(join(foPocketDir, 'skeleton.png'), encodePngBytes(pocketPage));
+      writeFileSync(
+        join(foPocketDir, 'skeleton.atlas'),
+        [
+          'skeleton.png',
+          'size: 128, 64',
+          'format: RGBA8888',
+          'filter: Linear, Linear',
+          'repeat: none',
+          'frame_body',
+          '  bounds: 0, 0, 64, 64',
+          'collar_under',
+          '  bounds: 64, 0, 18, 28',
+          'strand_above',
+          '  bounds: 84, 0, 18, 28',
+          '',
+        ].join('\n'),
+      );
+      const foPocketSkel = {
+        ...foSkel,
+        bones: [
+          { name: 'root' },
+          { name: 'collar_ctl', parent: 'root', x: 27, y: 32 },
+          { name: 'strand_ctl', parent: 'root', x: 37, y: 32 },
+        ],
+        skins: [
+          {
+            name: 'default',
+            attachments: {
+              frame_body: { frame_body: { type: 'region', x: 32, y: 32, width: 64, height: 64 } },
+              collar_under: { collar_under: { type: 'region', x: 0, y: 0, width: 18, height: 28 } },
+              strand_above: { strand_above: { type: 'region', x: 0, y: 0, width: 18, height: 28 } },
+            },
+          },
+        ],
+      };
+      writeFileSync(join(foPocketDir, 'skeleton.json'), `${JSON.stringify(foPocketSkel, null, 2)}\n`);
+
+      const foReading = readFigurePairOpenings(foBuildDir, ['idle', 'slide'], new Set(), 12);
+      const foClear = readFigurePairOpenings(foBuildDir, ['idle'], new Set(), 12);
+      const foThirdPartPocket = readFigurePairOpenings(foPocketDir, ['slide'], new Set(), 12);
+      const foDeclaredFiltered = readFigurePairOpenings(foBuildDir, ['idle', 'slide'], new Set(['collar_under|strand_above']), 12);
+      const foDeclaredSkip = readFigurePairOpenings(
+        foBuildDir,
+        ['idle', 'slide'],
+        new Set(['collar_under|frame_body', 'collar_under|strand_above', 'frame_body|strand_above']),
+        12,
+      );
+      const foNoAnimSkip = readFigurePairOpenings(foBuildDir, [], new Set(), 12);
+      const idleHits = foReading.openings.filter((o) => o.animation === 'idle');
+      const slideHits = foReading.openings.filter((o) => o.animation === 'slide');
+      const hit = slideHits[0];
+      const warnLine = hit === undefined ? '' : figureOpeningWarnText(hit);
+      const warnLines = figureOpeningLines(foReading);
+      const clearLines = figureOpeningLines(foClear);
+      const thirdPartPocketLines = figureOpeningLines(foThirdPartPocket);
+      const filteredLines = figureOpeningLines(foDeclaredFiltered);
+      const skipLines = figureOpeningLines(foDeclaredSkip);
+      const noAnimLines = figureOpeningLines(foNoAnimSkip);
+      say(
+        'SO26_UNDECLARED_LAYER_PAIR_OPENINGS_INSIDE_THE_FIGURE_ARE_READ_OVER_MOTION_WHILE_SETUP_GAPS_ARE_ART',
+        foReading.status === 'WARN' &&
+          foReading.cell === 0.5 &&
+          foReading.pairs === 3 &&
+          idleHits.length === 0 &&
+          slideHits.length === 1 &&
+          hit !== undefined &&
+          hit.pair === 'collar_under|strand_above' &&
+          hit.under === 'collar_under' &&
+          hit.above === 'strand_above' &&
+          hit.animation === 'slide' &&
+          hit.frame === 6 &&
+          hit.time === 0.5 &&
+          hit.cell === 0.5 &&
+          hit.found_cells === 768 &&
+          hit.allowed_cells === 56 &&
+          warnLines.length === 2 &&
+          warnLines[0] ===
+            'figure_openings: WARN — 3 undeclared setup-overlapping pair(s) in 2 animation(s) (idle, slide) at 12 fps (cell 0.5 world units): 1 warning(s), never a bar' &&
+          warnLines[1] === warnLine &&
+          warnLine ===
+            'WARN opening "collar_under|strand_above" above "strand_above" (under "collar_under") on 5 frame(s) [4-8], worst frame 6 (t = 0.5s) in "slide": found 768 cell(s), <= 56 cell(s) allowed in 8x28 world units at 0.5 world units/cell — transparent opening inside the figure over motion on an undeclared layer pair (not a bar)' &&
+          foClear.status === 'CLEAR' &&
+          foClear.pairs === 3 &&
+          foClear.warnings === 0 &&
+          clearLines.length === 1 &&
+          clearLines[0] ===
+            'figure_openings: CLEAR — 3 undeclared setup-overlapping pair(s) in 1 animation(s) (idle) at 12 fps (cell 0.5 world units): 0 warning(s), never a bar' &&
+          foThirdPartPocket.status === 'CLEAR' &&
+          foThirdPartPocket.pairs === 3 &&
+          foThirdPartPocket.warnings === 0 &&
+          thirdPartPocketLines.length === 1 &&
+          thirdPartPocketLines[0] ===
+            'figure_openings: CLEAR — 3 undeclared setup-overlapping pair(s) in 1 animation(s) (slide) at 12 fps (cell 0.5 world units): 0 warning(s), never a bar' &&
+          foDeclaredFiltered.status === 'CLEAR' &&
+          foDeclaredFiltered.pairs === 2 &&
+          foDeclaredFiltered.warnings === 0 &&
+          filteredLines.length === 1 &&
+          filteredLines[0] ===
+            'figure_openings: CLEAR — 2 undeclared setup-overlapping pair(s) in 2 animation(s) (idle, slide) at 12 fps (cell 0.5 world units): 0 warning(s), never a bar' &&
+          foDeclaredSkip.status === 'SKIP' &&
+          foDeclaredSkip.warnings === 0 &&
+          skipLines.length === 1 &&
+          skipLines[0] ===
+            'figure_openings: SKIP — no undeclared layer pair shares a cell at the setup pose, so there is no pair to read' &&
+          foNoAnimSkip.status === 'SKIP' &&
+          noAnimLines.length === 1 &&
+          noAnimLines[0] ===
+            'figure_openings: SKIP — motion.json holds no animation, so there is no motion to read',
+        `idle CLEAR (${clearLines[0] ?? 'none'}); slide WARN (${warnLine || 'none'}); third-part pocket CLEAR (${thirdPartPocketLines[0] ?? 'none'}); declared filtered CLEAR (${filteredLines[0] ?? 'none'}); declared SKIP (${skipLines[0] ?? 'none'}); no-animation SKIP (${noAnimLines[0] ?? 'none'})`,
+        'issue #933: a deliberate gap already transparent at the setup pose (setupUnion === 0) is art and reads CLEAR in "idle", a moving pocket closed only by a third part (frame_body) is outside fillHoles(a ∪ b) and reads CLEAR, whereas an undeclared setup-overlapping layer pair ("collar_under|strand_above") that separates in "slide" and exposes a transparent hole inside fillHoles(a ∪ b) warns naming the part above ("strand_above"), the frame (6), the size found (768 cells) and the size allowed (56 cells) at 0.5 world units/cell, and a reading with no undeclared pair or no animation prints a named SKIP',
+      );
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
