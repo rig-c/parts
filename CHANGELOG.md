@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.0](https://github.com/rig-c/parts/compare/v2.1.1...v2.2.0) (2026-11-02)
+
+
+### Features
+
+* **check:** read openings inside the figure over motion on every layer pair ([#938](https://github.com/rig-c/parts/issues/938)) ([2f680ef](https://github.com/rig-c/parts/commit/2f680ef66dc8dcf3f7b5cc008af3f6de065d46c7))
+
 ## [2.1.1](https://github.com/rig-c/parts/compare/v2.1.0...v2.1.1) (2026-11-02)
 
 
