@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.1](https://github.com/rig-c/parts/compare/v2.1.0...v2.1.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* **docs:** how to author a Form 1 idle ([#936](https://github.com/rig-c/parts/issues/936)) ([896e7a9](https://github.com/rig-c/parts/commit/896e7a9281f7bd6a91508b1ad7e40aa03fdf4151))
+
 ## [2.1.0](https://github.com/rig-c/parts/compare/v2.0.5...v2.1.0) (2026-11-02)
 
 
