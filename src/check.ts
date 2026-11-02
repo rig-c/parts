@@ -86,8 +86,7 @@ import { baseAnchorMoves, type AnchorRegion } from './baseanchor.ts';
 import { jointContactReading, type JointContactReading } from './jointcontact.ts';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { loadCandidate, sampleAnimation, throughPoser, type Candidate, type Piece } from '@rig-c/core/render';
-import type { Viewport as RootCoverageViewport } from '@rig-c/core/render-shared';
+import type { Candidate, Piece, Viewport as RootCoverageViewport } from '@rig-c/core/render-shared';
 import { fillHoles } from './raster/morph.ts';
 import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -5245,7 +5244,8 @@ export function readFigurePairOpenings(
   if (!existsSync(skelPath)) {
     return { status: 'SKIP', reason: 'skeleton.json was not written', fps, cell: 0, pairs: 0, animations: [...animationNames], warnings: 0, openings: [] };
   }
-  const cand = loadCandidate(
+  const api = officialRenderer();
+  const cand = api.loadCandidate(
     {
       skeletonText: readFileSync(skelPath, 'utf8'),
       atlasText: existsSync(atlasPath) ? readFileSync(atlasPath, 'utf8') : null,
@@ -5259,7 +5259,7 @@ export function readFigurePairOpenings(
   let maxPairs = 0;
   let firstCell = 0;
   for (const anim of animationNames) {
-    const sampledFrames = throughPoser(cand.choice, (poser) => sampleAnimation(poser, anim, fps)).value;
+    const sampledFrames = api.throughPoser(cand.choice, (poser) => api.sampleAnimation(poser, anim, fps)).value;
     if (sampledFrames.length === 0) continue;
     let xMin = Infinity;
     let yMin = Infinity;
