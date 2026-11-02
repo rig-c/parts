@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.0](https://github.com/rig-c/parts/compare/v2.0.5...v2.1.0) (2026-11-02)
+
+
+### Features
+
+* **painting:** a preflight mode for framed illustrations ([#934](https://github.com/rig-c/parts/issues/934)) ([76b0815](https://github.com/rig-c/parts/commit/76b08153d6c082c807cca2291e9be3fa6d02d5ff)), closes [#931](https://github.com/rig-c/parts/issues/931)
+
 ## [2.0.5](https://github.com/rig-c/parts/compare/v2.0.4...v2.0.5) (2026-11-01)
 
 
