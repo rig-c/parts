@@ -54,6 +54,29 @@
  * - `PAINTING_LEGS_APART` — a gap between the two knees and a gap between the
  *   two ankles. None is legs painted as one column at that joint.
  *
+ * **Framed illustrations (`--form illustration`, issue #931):**
+ *
+ * The default form (`--form standee`) checks a full-body standee on a plain
+ * near-white or unpainted ground. A framed illustration with a painted room or a
+ * figure cut by the crop edge fails the border and gap rules for reasons that do
+ * not touch whether it can be rigged, and near-white border flood-fill
+ * (`backgroundMask`) both fails to mark a painted room as background and floods
+ * from the crop border into white clothing on the character (`r_hip` / `l_hip`
+ * on `demo` cropped at y=1230 and `wind` cropped at y=1250). Under
+ * `--form illustration`:
+ *
+ * - `PAINTING_BACKGROUND_PLAIN`, `PAINTING_ARM_CLEAR`, `PAINTING_HANDS_APART`
+ *   and `PAINTING_LEGS_APART` do not apply and report `SKIP` with the reason,
+ *   never `PASS`.
+ * - `PAINTING_JOINTS_STATED` reports `SKIP` for the eight standee gap-line
+ *   joints (wrists, hips, knees and ankles may lie outside the frame or under
+ *   clothing), and still refuses a person that states zero joints with a
+ *   position (`propose --keypoints` places bones only from joints with a
+ *   position).
+ * - `PAINTING_JOINT_ON_FIGURE` reports `SKIP` for the near-white border flood
+ *   and still refuses any joint with a position whose pixel is unpainted
+ *   (`alpha <= OPAQUE_ALPHA_ABOVE`).
+ *
  * Pure: the caller reads the files and hands over a raster and a person.
  */
 import type { Problem } from './errors.ts';
@@ -62,16 +85,36 @@ import { NEAR_WHITE_MIN, OPAQUE_ALPHA_ABOVE } from './layers.ts';
 import type { Raster } from './raster/types.ts';
 import type { KeypointName } from './skeleton.ts';
 
+/** The forms `painting --form` accepts: a full-body standee on a plain ground (the default) or a framed illustration. */
+export const PAINTING_FORMS = ['standee', 'illustration'] as const;
+export type PaintingForm = (typeof PAINTING_FORMS)[number];
+export const DEFAULT_PAINTING_FORM: PaintingForm = 'standee';
+
+/** Parse `--form`, returning a usage refusal detail when unknown. */
+export function paintingFormOf(value: string | undefined): PaintingForm | string {
+  const f = value ?? DEFAULT_PAINTING_FORM;
+  return (PAINTING_FORMS as readonly string[]).includes(f) ? (f as PaintingForm) : `--form ${f}; one of ${PAINTING_FORMS.join(', ')} is required`;
+}
+
+export function isPaintingForm(v: PaintingForm | string): v is PaintingForm {
+  return (PAINTING_FORMS as readonly string[]).includes(v);
+}
+
 /** The joints the gap rules read, in the order a refusal lists them. */
 export const PAINTING_JOINTS: readonly KeypointName[] = ['r_wrist', 'l_wrist', 'r_hip', 'l_hip', 'r_knee', 'l_knee', 'r_ankle', 'l_ankle'];
 
 /** The joints that may be `occluded` with a position and still be read (issue #372): a skirt hides the hips on most clothed figures. */
 export const PAINTING_OCCLUDABLE: readonly KeypointName[] = ['r_hip', 'l_hip'];
 
-/** Whether the check reads joint `name` as given: observed with a position, or an occludable joint occluded with one. */
+/** Whether the standee check reads joint `name` as given: observed with a position, or an occludable joint occluded with one. */
 function readable(name: KeypointName, j: KeypointPerson['joints'][KeypointName]): j is KeypointPerson['joints'][KeypointName] & { at: [number, number] } {
   if (j.at === null) return false;
   return j.state === 'observed' || (j.state === 'occluded' && PAINTING_OCCLUDABLE.includes(name));
+}
+
+/** Whether the illustration check reads joint `j`: any observed or occluded joint that carries a position. */
+function statedWithPosition(j: KeypointPerson['joints'][KeypointName]): j is KeypointPerson['joints'][KeypointName] & { state: 'observed' | 'occluded'; at: [number, number] } {
+  return j.at !== null && (j.state === 'observed' || j.state === 'occluded');
 }
 
 /** The four gap rules' pairs: the rule, the two joints, and what the pair is called in a line. */
@@ -112,8 +155,10 @@ export interface PaintingReading {
   firstBorderNotGround: [number, number] | null;
   backgroundPx: number;
   figurePx: number;
-  /** Every observed joint and every occluded hip with a position, its state, its pixel, and whether that pixel is figure. */
-  joints: Array<{ name: KeypointName; state: 'observed' | 'occluded'; at: [number, number]; pixel: [number, number]; onFigure: boolean }>;
+  /** Pixels with alpha above {@link OPAQUE_ALPHA_ABOVE}. */
+  opaquePx: number;
+  /** In `standee`, every observed joint and occluded hip with a position (`onFigure` = not border-connected ground); in `illustration`, every joint with a position (`onFigure` = alpha above {@link OPAQUE_ALPHA_ABOVE}). */
+  joints: Array<{ name: KeypointName; state: 'observed' | 'occluded'; at: [number, number]; pixel: [number, number]; alpha: number; onFigure: boolean }>;
   /** The gap readings whose two joints are both read as given (observed with a position, or an occluded hip with one). */
   gaps: GapReading[];
 }
@@ -172,17 +217,20 @@ export function linePixels(a: readonly [number, number], b: readonly [number, nu
 }
 
 /** Read the painting against the person's joints: every figure the rules decide on, before any rule decides. */
-export function readPainting(r: Raster, person: KeypointPerson): PaintingReading {
+export function readPainting(r: Raster, person: KeypointPerson, form: PaintingForm = DEFAULT_PAINTING_FORM): PaintingReading {
   const { width: w, height: h } = r;
   const bg = backgroundMask(r);
   let border = 0;
   let borderNotGround = 0;
   let firstBorderNotGround: [number, number] | null = null;
+  let opaquePx = 0;
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
+      const idx = y * w + x;
+      if (r.data[idx * 4 + 3] > OPAQUE_ALPHA_ABOVE) opaquePx++;
       if (y !== 0 && y !== h - 1 && x !== 0 && x !== w - 1) continue;
       border++;
-      if (!isGround(r, y * w + x)) {
+      if (!isGround(r, idx)) {
         borderNotGround++;
         firstBorderNotGround ??= [x, y];
       }
@@ -192,28 +240,62 @@ export function readPainting(r: Raster, person: KeypointPerson): PaintingReading
   for (const v of bg) backgroundPx += v;
   const joints: PaintingReading['joints'] = [];
   for (const [name, j] of Object.entries(person.joints) as Array<[KeypointName, KeypointPerson['joints'][KeypointName]]>) {
+    if (form === 'illustration') {
+      if (!statedWithPosition(j)) continue;
+      const pixel = pixelOf(j.at, w, h);
+      const alpha = r.data[(pixel[1] * w + pixel[0]) * 4 + 3];
+      joints.push({ name, state: j.state, at: j.at, pixel, alpha, onFigure: alpha > OPAQUE_ALPHA_ABOVE });
+      continue;
+    }
     if (!readable(name, j)) continue;
     const pixel = pixelOf(j.at, w, h);
-    joints.push({ name, state: j.state === 'observed' ? 'observed' : 'occluded', at: j.at, pixel, onFigure: bg[pixel[1] * w + pixel[0]] === 0 });
+    const alpha = r.data[(pixel[1] * w + pixel[0]) * 4 + 3];
+    joints.push({ name, state: j.state === 'observed' ? 'observed' : 'occluded', at: j.at, pixel, alpha, onFigure: bg[pixel[1] * w + pixel[0]] === 0 });
   }
   const gaps: GapReading[] = [];
-  for (const [rule, a, b, what] of PAINTING_GAPS) {
-    const ja = person.joints[a];
-    const jb = person.joints[b];
-    if (!readable(a, ja) || !readable(b, jb)) continue;
-    const line = linePixels(ja.at, jb.at, w, h);
-    let background = 0;
-    for (const [x, y] of line) background += bg[y * w + x];
-    gaps.push({ rule, a, b, what, from: ja.at, to: jb.at, samples: line.length, background });
+  if (form === 'standee') {
+    for (const [rule, a, b, what] of PAINTING_GAPS) {
+      const ja = person.joints[a];
+      const jb = person.joints[b];
+      if (!readable(a, ja) || !readable(b, jb)) continue;
+      const line = linePixels(ja.at, jb.at, w, h);
+      let background = 0;
+      for (const [x, y] of line) background += bg[y * w + x];
+      gaps.push({ rule, a, b, what, from: ja.at, to: jb.at, samples: line.length, background });
+    }
   }
-  return { width: w, height: h, border, borderNotGround, firstBorderNotGround, backgroundPx, figurePx: w * h - backgroundPx, joints, gaps };
+  return { width: w, height: h, border, borderNotGround, firstBorderNotGround, backgroundPx, figurePx: w * h - backgroundPx, opaquePx, joints, gaps };
 }
 
 const pt = (p: readonly [number, number]): string => `[${p[0]}, ${p[1]}]`;
 
 /** The refusals a reading earns, every one at once, in the order the module's comment lists the rules. */
-export function paintingProblems(reading: PaintingReading, person: KeypointPerson, painting: string, keypoints: string): Problem[] {
+export function paintingProblems(
+  reading: PaintingReading,
+  person: KeypointPerson,
+  painting: string,
+  keypoints: string,
+  form: PaintingForm = DEFAULT_PAINTING_FORM,
+): Problem[] {
   const problems: Problem[] = [];
+  if (form === 'illustration') {
+    if (reading.joints.length === 0) {
+      problems.push({
+        code: 'PAINTING_JOINTS_STATED',
+        object: `${keypoints} person "${person.id}"`,
+        detail: 'states 0 joints with a position; at least one observed or occluded joint with a position is required — propose --keypoints places bones only from joints that carry a position',
+      });
+    }
+    for (const j of reading.joints) {
+      if (j.onFigure) continue;
+      problems.push({
+        code: 'PAINTING_JOINT_ON_FIGURE',
+        object: `${keypoints} person "${person.id}" joint ${j.name}`,
+        detail: `is ${j.state === 'occluded' ? 'occluded ' : ''}at ${pt(j.at)}, and pixel ${pt(j.pixel)} is unpainted (alpha ${j.alpha} <= ${OPAQUE_ALPHA_ABOVE}); a joint on painted canvas (alpha above ${OPAQUE_ALPHA_ABOVE}) is required — a file measured on another painting, or a joint placed on an empty border`,
+      });
+    }
+    return problems;
+  }
   if (reading.borderNotGround > 0) {
     const f = reading.firstBorderNotGround as [number, number];
     problems.push({
@@ -253,8 +335,25 @@ export function paintingProblems(reading: PaintingReading, person: KeypointPerso
   return problems;
 }
 
-/** The lines a reading prints, before any refusal: the figure, every joint and every gap, each with its numbers. */
-export function paintingLines(reading: PaintingReading): string[] {
+/** The lines a reading prints, before any refusal: the figure, every joint and every gap (or in `illustration`, the `SKIP` lines), each with its numbers. */
+export function paintingLines(reading: PaintingReading, form: PaintingForm = DEFAULT_PAINTING_FORM): string[] {
+  if (form === 'illustration') {
+    const unpainted = reading.width * reading.height - reading.opaquePx;
+    const on = reading.joints.filter((j) => j.onFigure).length;
+    const observed = reading.joints.filter((j) => j.state === 'observed').length;
+    const occluded = reading.joints.filter((j) => j.state === 'occluded').map((j) => j.name);
+    const occ = occluded.length === 0 ? '' : `, ${occluded.length} occluded with a position (${occluded.join(', ')})`;
+    return [
+      `  painting ${reading.width}x${reading.height} (form: illustration): opaque ${reading.opaquePx} px, unpainted ${unpainted} px; border ${reading.border} px, ${reading.borderNotGround} not near-white or unpainted`,
+      `  joints: ${observed} observed${occ}, ${on} on painted canvas${on === reading.joints.length ? '' : ` (unpainted: ${reading.joints.filter((j) => !j.onFigure).map((j) => j.name).join(', ')})`}`,
+      `  SKIP  PAINTING_BACKGROUND_PLAIN: framed illustration; a painted room or a figure cut by the frame has non-ground border pixels (${reading.borderNotGround} of ${reading.border} border pixels not near-white or unpainted)`,
+      `  SKIP  PAINTING_JOINTS_STATED (standee gap joints): framed illustration; wrists, hips, knees and ankles may lie outside the frame or under clothing (${reading.joints.length} joint(s) stated with a position)`,
+      `  SKIP  PAINTING_JOINT_ON_FIGURE (near-white border flood): framed illustration; a painted room is not near-white ground and white clothing at the crop edge floods into the figure (opaque pixel alpha > ${OPAQUE_ALPHA_ABOVE} is still checked)`,
+      '  SKIP  PAINTING_ARM_CLEAR: framed illustration; arm-to-hip lines do not cross plain border-connected background over a painted room or a pose with arms against the body',
+      '  SKIP  PAINTING_HANDS_APART: framed illustration; the wrist-to-wrist line crosses the torso or painted room rather than plain border-connected background',
+      '  SKIP  PAINTING_LEGS_APART: framed illustration; knees and ankles may lie outside the frame or over a painted room without plain border-connected background',
+    ];
+  }
   const out = [
     `  painting ${reading.width}x${reading.height}: background ${reading.backgroundPx} px, figure ${reading.figurePx} px; border ${reading.border} px, ${reading.borderNotGround} not background-coloured`,
   ];
@@ -271,7 +370,13 @@ export function paintingLines(reading: PaintingReading): string[] {
 }
 
 /** Read and judge: the lines to print and every refusal, which the caller prints before it throws them at once. */
-export function checkPainting(r: Raster, person: KeypointPerson, painting: string, keypoints: string): { lines: string[]; problems: Problem[] } {
-  const reading = readPainting(r, person);
-  return { lines: paintingLines(reading), problems: paintingProblems(reading, person, painting, keypoints) };
+export function checkPainting(
+  r: Raster,
+  person: KeypointPerson,
+  painting: string,
+  keypoints: string,
+  form: PaintingForm = DEFAULT_PAINTING_FORM,
+): { lines: string[]; problems: Problem[] } {
+  const reading = readPainting(r, person, form);
+  return { lines: paintingLines(reading, form), problems: paintingProblems(reading, person, painting, keypoints, form) };
 }

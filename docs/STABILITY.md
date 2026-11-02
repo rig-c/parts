@@ -70,7 +70,7 @@ defaults are the help's too, and none is guessed from the art.
 | `mesh-stats` | `--config`, `--parts` (issue #566, additive: prints, writes nothing) |
 | `remesh` | `--rig`, `--config`, `--parts`, `--part`, `--out`, and one of `--mesh` or `--delta` (issue #526); optional `--requirements`, `--idle-keys` (ctl, direct), `--page-edges` (pot, free), `--pack-shape` (rect, polygon), `--record-input-check` and `--input-check` (issue #617, additive: without them nothing `remesh` prints or writes changes) |
 | `retune` | `--rig`, `--config`, `--parts`, `--out`; optional `--requirements`, `--idle-keys` (ctl, direct), `--page-edges` (pot, free), `--pack-shape` (rect, polygon), `--record-input-check` and `--input-check` (as for `remesh`, issue #617, additive) |
-| `painting` | one positional path, the painting; `--keypoints`; optional `--person` |
+| `painting` | one positional path, the painting; `--keypoints`; optional `--person`, `--form` (`standee` or `illustration`, issue #931) |
 | `guide` | one positional argument: a rule name, `§<n>`, `§<n>.<m>` or `§<n>.<m>.<k>` |
 | (none) | `--version`, `--help` |
 <!-- /stable:commands -->

@@ -664,7 +664,7 @@ import { pyFixed } from './src/pyfmt.ts';
 import { SQUEEZE_AMPS, SQUEEZE_TIPS, squeezeConfig, squeezeImages, squeezeParts } from './fixtures/squeeze.ts';
 import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, checkBasis, coverageLines, legChainChoice, legChainChoiceLine, serializeBasis } from './src/diagnostics.ts';
 import { checkImageSize, choosePerson, KEYPOINTS_SPACE, KEYPOINTS_SPEC, loadKeypoints, parseKeypoints, type RigJoints, toRigJoints } from './src/keypoints.ts';
-import { backgroundMask, checkPainting, linePixels, PAINTING_GAPS, PAINTING_JOINTS, pixelOf } from './src/paintcheck.ts';
+import { backgroundMask, checkPainting, DEFAULT_PAINTING_FORM, isPaintingForm, linePixels, PAINTING_FORMS, PAINTING_GAPS, PAINTING_JOINTS, paintingFormOf, pixelOf } from './src/paintcheck.ts';
 import { CANVAS as PAINT_CANVAS, figureJoints as paintJoints, FIGURE as PAINT_FIGURE, keypointFile as paintKeypointFile, mutant as paintMutant, paint as paintFigure } from './fixtures/painting.ts';
 import { LEGS_APART, LEGS_JOINED, LYING_PARTS, LYING_RIG, type PoseName, POSES, SEATED_PARTS, SEATED_RIG } from './fixtures/poses.ts';
 import { buildSheet, tileImage, tilesFrom } from './src/sheet.ts';
@@ -15060,6 +15060,200 @@ function runPaintingSuite(): number {
         off.problems[0].detail.endsWith("an occluded hip is read only from a point on the figure, or the arm's gap would be the hip's own background"),
       `${codeList(off)}${off.problems[0] === undefined ? '' : ` — ${off.problems[0].detail}`}`,
       'an estimated hip placed in the gap between the arm and the torso would put a background pixel at the end of the arm\'s own line: the arm rule would pass on the estimate, not on the painting',
+    );
+
+    // PG13-PG16 (issue #931): framed illustrations (`--form illustration`).
+    // Build a 120x110 framed illustration cropped above the knees over a painted room ([80, 70, 65, 255]),
+    // with the character's white skirt ([250, 250, 250, 255]) touching the bottom crop border at y = 90..110
+    // under r_hip [52, 95] and l_hip [68, 95], arms against the torso, hands clasped, and knees/ankles missing.
+    const framedW = 120;
+    const framedH = 110;
+    const makeFramedIllustration = (unpaintedAt?: [number, number]): Raster => {
+      const r = newRaster(framedW, framedH);
+      for (let i = 0; i < framedW * framedH; i++) {
+        r.data[i * 4] = 80;
+        r.data[i * 4 + 1] = 70;
+        r.data[i * 4 + 2] = 65;
+        r.data[i * 4 + 3] = 255;
+      }
+      const fill = (x0: number, y0: number, w: number, h: number, rgba: readonly [number, number, number, number]): void => {
+        for (let y = y0; y < y0 + h; y++) {
+          for (let x = x0; x < x0 + w; x++) {
+            const o = (y * framedW + x) * 4;
+            r.data[o] = rgba[0];
+            r.data[o + 1] = rgba[1];
+            r.data[o + 2] = rgba[2];
+            r.data[o + 3] = rgba[3];
+          }
+        }
+      };
+      // Head, torso, arms against the torso, and a white skirt panel on the subject's left touching y = 109 (bottom border).
+      fill(50, 12, 20, 25, [40, 50, 70, 255]);
+      fill(37, 37, 46, 73, [40, 50, 70, 255]);
+      fill(60, 90, 15, 20, [250, 250, 250, 255]);
+      if (unpaintedAt !== undefined) {
+        const o = (unpaintedAt[1] * framedW + unpaintedAt[0]) * 4;
+        r.data[o] = 0;
+        r.data[o + 1] = 0;
+        r.data[o + 2] = 0;
+        r.data[o + 3] = 0;
+      }
+      return r;
+    };
+    const framedJoints: Record<string, unknown> = {
+      ...paintJoints(),
+      r_elbow: { state: 'observed', at: [41, 65] },
+      l_elbow: { state: 'observed', at: [79, 65] },
+      r_wrist: { state: 'observed', at: [56, 88] },
+      l_wrist: { state: 'observed', at: [64, 88] },
+      r_hip: { state: 'occluded', at: [52, 95] },
+      l_hip: { state: 'occluded', at: [68, 95] },
+      r_knee: { state: 'missing' },
+      l_knee: { state: 'missing' },
+      r_ankle: { state: 'missing' },
+      l_ankle: { state: 'missing' },
+    };
+    const framedKpObj = {
+      ...paintKeypointFile(framedJoints as ReturnType<typeof paintJoints>),
+      width: framedW,
+      height: framedH,
+    };
+    const framedPerson = choosePerson(parseKeypoints(framedKpObj, 'framed.json'), undefined, 'framed.json');
+    const framedRaster = makeFramedIllustration();
+    const framedStandee = checkPainting(framedRaster, framedPerson, 'framed.png', 'framed.json', 'standee');
+    const framedIllust = checkPainting(framedRaster, framedPerson, 'framed.png', 'framed.json', 'illustration');
+    const skipLines = framedIllust.lines.filter((l) => l.startsWith('  SKIP  '));
+    const framedPng = join(dir, 'framed.png');
+    const framedKp = join(dir, 'framed.json');
+    writeFileSync(framedPng, encodePngBytes(framedRaster));
+    writeFileSync(framedKp, JSON.stringify(framedKpObj));
+    const cliFramedStandee = runCli(['painting', '--keypoints', framedKp, framedPng]);
+    const cliFramedIllust = runCli(['painting', '--form', 'illustration', '--keypoints', framedKp, framedPng]);
+    say(
+      'PG13_FRAMED_ILLUSTRATION_SKIPS_STANDEE_BORDER_GAP_AND_NEAR_WHITE_FLOOD_RULES_WITH_REASONS',
+      framedStandee.problems.length > 0 &&
+        codeList(framedStandee) ===
+          [
+            'PAINTING_BACKGROUND_PLAIN painting framed.png',
+            'PAINTING_JOINTS_STATED framed.json person "a" joint r_knee',
+            'PAINTING_JOINTS_STATED framed.json person "a" joint l_knee',
+            'PAINTING_JOINTS_STATED framed.json person "a" joint r_ankle',
+            'PAINTING_JOINTS_STATED framed.json person "a" joint l_ankle',
+            'PAINTING_JOINT_ON_FIGURE framed.json person "a" joint l_hip',
+            'PAINTING_ARM_CLEAR painting framed.png right arm (r_wrist to r_hip)',
+            'PAINTING_HANDS_APART painting framed.png hands (r_wrist to l_wrist)',
+          ].join('; ') &&
+        framedIllust.problems.length === 0 &&
+        skipLines.length === 6 &&
+        skipLines[0].startsWith('  SKIP  PAINTING_BACKGROUND_PLAIN: framed illustration;') &&
+        skipLines[1].startsWith('  SKIP  PAINTING_JOINTS_STATED (standee gap joints): framed illustration;') &&
+        skipLines[2].startsWith('  SKIP  PAINTING_JOINT_ON_FIGURE (near-white border flood): framed illustration;') &&
+        skipLines[3].startsWith('  SKIP  PAINTING_ARM_CLEAR: framed illustration;') &&
+        skipLines[4].startsWith('  SKIP  PAINTING_HANDS_APART: framed illustration;') &&
+        skipLines[5].startsWith('  SKIP  PAINTING_LEGS_APART: framed illustration;') &&
+        cliFramedStandee.status === 1 &&
+        cliFramedIllust.status === 0 &&
+        cliFramedIllust.out.includes('rig-parts painting (--form illustration):') &&
+        cliFramedIllust.out.includes('standee background and gap rules reported SKIP above, not passed'),
+      `standee -> ${framedStandee.problems.length} refusal(s) (${codeList(framedStandee)}); illustration -> ${framedIllust.problems.length} refusal(s), ${skipLines.length} SKIP line(s), CLI exit ${cliFramedIllust.status}`,
+      'a framed illustration with a painted room, cropped legs, arms against the torso, and a white skirt panel touching the bottom crop edge fails every standee rule (including false PAINTING_JOINT_ON_FIGURE on l_hip where backgroundMask floods from the crop border into the white skirt); under --form illustration those rules report SKIP with the reason, never PASS',
+    );
+
+    // PG14: planted failures for the paintcheck rules that still apply under --form illustration
+    // (PAINTING_JOINTS_STATED when 0 joints carry a position; PAINTING_JOINT_ON_FIGURE when a joint lands on an unpainted pixel).
+    const emptyJoints: Record<string, unknown> = {};
+    for (const n of KEYPOINT_NAMES) emptyJoints[n] = { state: n === 'r_hip' ? 'occluded' : 'missing' };
+    const emptyKpObj = {
+      ...paintKeypointFile(emptyJoints as ReturnType<typeof paintJoints>),
+      width: framedW,
+      height: framedH,
+    };
+    const emptyPerson = choosePerson(parseKeypoints(emptyKpObj, 'empty.json'), undefined, 'empty.json');
+    const emptyIllust = checkPainting(framedRaster, emptyPerson, 'framed.png', 'empty.json', 'illustration');
+    const emptyKp = join(dir, 'empty.json');
+    writeFileSync(emptyKp, JSON.stringify(emptyKpObj));
+    const cliEmptyIllust = runCli(['painting', '--form', 'illustration', '--keypoints', emptyKp, framedPng]);
+
+    const unpaintedRaster = makeFramedIllustration([60, 22]); // nose is at [60, 22]
+    const unpaintedIllust = checkPainting(unpaintedRaster, framedPerson, 'unpainted.png', 'framed.json', 'illustration');
+    const unpaintedPng = join(dir, 'unpainted.png');
+    writeFileSync(unpaintedPng, encodePngBytes(unpaintedRaster));
+    const cliUnpaintedIllust = runCli(['painting', '--form', 'illustration', '--keypoints', framedKp, unpaintedPng]);
+    say(
+      'PG14_FRAMED_ILLUSTRATION_STILL_REFUSES_EMPTY_JOINTS_AND_JOINTS_ON_UNPAINTED_PIXELS',
+      codeList(emptyIllust) === 'PAINTING_JOINTS_STATED empty.json person "a"' &&
+        emptyIllust.problems[0].detail.includes('states 0 joints with a position') &&
+        cliEmptyIllust.status === 1 &&
+        cliEmptyIllust.out.includes('FAIL  PAINTING_JOINTS_STATED:') &&
+        codeList(unpaintedIllust) === 'PAINTING_JOINT_ON_FIGURE framed.json person "a" joint nose' &&
+        unpaintedIllust.problems[0].detail.includes('pixel [60, 22] is unpainted (alpha 0 <= 8)') &&
+        cliUnpaintedIllust.status === 1 &&
+        cliUnpaintedIllust.out.includes('FAIL  PAINTING_JOINT_ON_FIGURE:'),
+      `0 stated joints -> ${codeList(emptyIllust)} (CLI exit ${cliEmptyIllust.status}); unpainted nose pixel -> ${codeList(unpaintedIllust)} (CLI exit ${cliUnpaintedIllust.status})`,
+      'propose --keypoints places bones only from joints with a position, and inputs refuses a translucent painting (INPUTS_PAINTING_OPAQUE): an empty keypoint person or a joint on an unpainted pixel still predicts a downstream failure on a framed illustration',
+    );
+
+    // PG15: planted failures for the source and keypoint contract rules under --form illustration
+    // (PAINTING_SOURCE_PRESENT, PAINTING_SOURCE_DECODES, KEYPOINTS_IMAGE_SIZE, KEYPOINTS_POSITION_INSIDE, KEYPOINTS_PERSON_CHOSEN).
+    const badPng = join(dir, 'corrupt.png');
+    writeFileSync(badPng, 'not a png');
+    const outOfCropKp = join(dir, 'out_of_crop.json');
+    writeFileSync(
+      outOfCropKp,
+      JSON.stringify({
+        ...framedKpObj,
+        people: [{ id: 'a', joints: { ...framedJoints, r_ankle: { state: 'observed', at: [50, 180] } } }],
+      }),
+    );
+    const twoPeopleKp = join(dir, 'two_people.json');
+    writeFileSync(
+      twoPeopleKp,
+      JSON.stringify({
+        ...framedKpObj,
+        people: [
+          { id: 'a', joints: framedJoints },
+          { id: 'b', joints: framedJoints },
+        ],
+      }),
+    );
+    const missSrc = runCli(['painting', '--form', 'illustration', '--keypoints', framedKp, join(dir, 'no_such.png')]);
+    const badDec = runCli(['painting', '--form', 'illustration', '--keypoints', framedKp, badPng]);
+    const wrongSize = runCli(['painting', '--form', 'illustration', '--keypoints', okKp, framedPng]); // 120x200 kp vs 120x110 cropped png
+    const outOfCrop = runCli(['painting', '--form', 'illustration', '--keypoints', outOfCropKp, framedPng]);
+    const twoPeople = runCli(['painting', '--form', 'illustration', '--keypoints', twoPeopleKp, framedPng]);
+    say(
+      'PG15_FRAMED_ILLUSTRATION_STILL_REFUSES_SOURCE_AND_KEYPOINT_CONTRACT_FAILURES',
+      missSrc.status === 1 && missSrc.out.includes('FAIL  PAINTING_SOURCE_PRESENT:') &&
+        badDec.status === 1 && badDec.out.includes('FAIL  PAINTING_SOURCE_DECODES:') &&
+        wrongSize.status === 1 && wrongSize.out.includes('FAIL  KEYPOINTS_IMAGE_SIZE:') &&
+        outOfCrop.status === 1 && outOfCrop.out.includes('FAIL  KEYPOINTS_POSITION_INSIDE:') &&
+        twoPeople.status === 1 && twoPeople.out.includes('FAIL  KEYPOINTS_PERSON_CHOSEN:'),
+      `missing source -> ${missSrc.status}; corrupt PNG -> ${badDec.status}; 120x200 kp on 120x110 crop -> ${wrongSize.status} (KEYPOINTS_IMAGE_SIZE); ankle at y=180 on h=110 -> ${outOfCrop.status} (KEYPOINTS_POSITION_INSIDE); 2 people without --person -> ${twoPeople.status} (KEYPOINTS_PERSON_CHOSEN)`,
+      'every file and coordinate contract that propose --keypoints and inputs rely on — particularly catching an uncropped standee keypoint file or an uncropped lower-body joint handed to a framed illustration — must still fire under --form illustration',
+    );
+
+    // PG16: --form flag parsing and default equivalence.
+    const explicitStandee = runCli(['painting', '--form', 'standee', '--keypoints', okKp, okPng]);
+    const badForm = runCli(['painting', '--form', 'portrait', '--keypoints', okKp, okPng]);
+    const dupForm = runCli(['painting', '--form', 'standee', '--form', 'illustration', '--keypoints', okKp, okPng]);
+    const bareForm = runCli(['painting', '--keypoints', okKp, okPng, '--form']);
+    say(
+      'PG16_PAINTING_FORM_FLAG_REFUSES_UNKNOWN_DUPLICATE_AND_MISSING_VALUES',
+       DEFAULT_PAINTING_FORM === 'standee' &&
+        PAINTING_FORMS.join(',') === 'standee,illustration' &&
+        isPaintingForm(paintingFormOf(undefined)) &&
+        isPaintingForm(paintingFormOf('illustration')) &&
+        !isPaintingForm(paintingFormOf('portrait')) &&
+        explicitStandee.status === 0 &&
+        explicitStandee.out === ok.out &&
+        badForm.status === 2 &&
+        badForm.out.includes('FAIL  USAGE: --form portrait; one of standee, illustration is required') &&
+        dupForm.status === 2 &&
+        dupForm.out.includes('FAIL  USAGE: --form is given twice') &&
+        bareForm.status === 2 &&
+        bareForm.out.includes('FAIL  USAGE: --form needs a value'),
+      `--form standee === default: ${explicitStandee.out === ok.out}; --form portrait -> exit ${badForm.status}; duplicate --form -> exit ${dupForm.status}; bare --form -> exit ${bareForm.status}`,
+      'default behaviour is unchanged byte for byte when --form is omitted or set to standee, and an unknown, repeated or valueless --form is a usage error (exit 2)',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

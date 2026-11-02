@@ -40,7 +40,7 @@ import { meshStatsStage } from './src/meshstats.ts';
 import { chainsLeftBehind, clothConfigEdits, editPaths, plainCount, previousCount, writtenClothConfig } from './src/clothconfig.ts';
 import { INPUT_CHECK_FILE, INPUT_CHECK_SPEC, PROVENANCE_FILE, REMESH_SPEC, remeshStage } from './src/remesh.ts';
 import { RETUNE_FILE, RETUNE_SPEC, retuneStage } from './src/retune.ts';
-import { checkPainting } from './src/paintcheck.ts';
+import { checkPainting, DEFAULT_PAINTING_FORM, isPaintingForm, PAINTING_FORMS, paintingFormOf } from './src/paintcheck.ts';
 import { readPng, writePng } from './src/raster/png.ts';
 import { REQUIREMENTS_SENTENCE } from './src/requirements.ts';
 import { composeStage, IMAGE_SEP, PLATE, PROVENANCES, SCENE_REPORT_FILE, SCENE_REPORT_SPEC, SCENE_SPEC } from './src/scene.ts';
@@ -947,20 +947,28 @@ usage:
       line and ${SCENE_REPORT_FILE} name what was accepted, and the run exits 1.
       Exit 0 when the check is PASS and nothing was accepted, 1 otherwise.
 
-  rig-parts painting --keypoints <keypoints.json> [--person <id>] <painting.png>
+  rig-parts painting --keypoints <keypoints.json> [--person <id>] [--form standee|illustration] <painting.png>
       Before See-through: read the painting against its body-18 joints (the
       file propose --keypoints reads, measured on this painting) and refuse,
-      by name, what a rig cannot be cut from. Background is near-white
-      (every channel above 235) or unpainted (alpha 8 or less) ground
-      connected to the edge; the figure is the rest; a gap is one background
-      pixel on the line between two joints. PAINTING_BACKGROUND_PLAIN (a
-      border pixel that is not ground), PAINTING_JOINTS_STATED (a wrist,
-      knee or ankle not observed, or a hip neither observed nor occluded
-      with a position), PAINTING_JOINT_ON_FIGURE (an observed joint, or an
-      occluded hip, on the background), PAINTING_ARM_CLEAR (no gap from a
-      wrist to its hip), PAINTING_HANDS_APART (none between the wrists),
-      PAINTING_LEGS_APART (none between the knees, or the ankles). Prints the
-      figure, every joint and every gap with its count; writes nothing.
+      by name, what a rig cannot be cut from. --form defaults to
+      ${DEFAULT_PAINTING_FORM} (${PAINTING_FORMS.join(', ')}). Under standee,
+      background is near-white (every channel above 235) or unpainted (alpha 8
+      or less) ground connected to the edge; the figure is the rest; a gap is
+      one background pixel on the line between two joints.
+      PAINTING_BACKGROUND_PLAIN (a border pixel that is not ground),
+      PAINTING_JOINTS_STATED (a wrist, knee or ankle not observed, or a hip
+      neither observed nor occluded with a position), PAINTING_JOINT_ON_FIGURE
+      (an observed joint, or an occluded hip, on the background),
+      PAINTING_ARM_CLEAR (no gap from a wrist to its hip),
+      PAINTING_HANDS_APART (none between the wrists), PAINTING_LEGS_APART
+      (none between the knees, or the ankles). Under --form illustration (a
+      framed illustration with a painted room or a figure cut by the crop),
+      the source, keypoint canvas and bounds checks still run,
+      PAINTING_JOINTS_STATED requires at least one joint with a position and
+      PAINTING_JOINT_ON_FIGURE requires every stated joint's pixel to be
+      painted (alpha above 8); the standee border, 8-joint and gap rules do
+      not apply and print SKIP with the reason, never PASS. Prints the
+      figure, every joint and every gap or SKIP line; writes nothing.
       docs/PAINTING.md says why each one matters. Exit 0 PASS, 1 refused.
 
   rig-parts guide <RULE | §<n> | §<n>.<m> | §<n>.<m>.<k>>
@@ -1108,7 +1116,7 @@ const TAKES = {
   'mesh-stats': { valued: ['--config', '--parts'], switches: [] },
   remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--delta', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--input-check'], switches: ['--record-input-check'] },
   retune: { valued: ['--rig', '--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--input-check'], switches: ['--record-input-check'] },
-  painting: { valued: ['--keypoints', '--person'], switches: [] },
+  painting: { valued: ['--keypoints', '--person', '--form'], switches: [] },
 } as const satisfies Record<string, { valued: readonly string[]; switches: readonly string[] }>;
 
 type Command = keyof typeof TAKES;
@@ -2153,8 +2161,9 @@ function cmdRetune(args: string[]): number {
 }
 
 /**
- * `painting --keypoints <k.json> [--person <id>] <painting.png>` (issue #350): what the painting must be before
- * See-through runs on it, read off its pixels and the body-18 joints `propose --keypoints` reads. Writes nothing.
+ * `painting --keypoints <k.json> [--person <id>] [--form standee|illustration] <painting.png>` (issues #350, #931):
+ * what the painting must be before See-through runs on it, read off its pixels and the body-18 joints
+ * `propose --keypoints` reads. Writes nothing.
  */
 function cmdPainting(args: string[]): number {
   const flags = new Map<string, string>();
@@ -2174,6 +2183,8 @@ function cmdPainting(args: string[]): number {
   }
   const kpPath = flags.get('--keypoints');
   if (kpPath === undefined) return usage('painting needs --keypoints <file>, the body-18 joints of the figure in painting px (the file propose --keypoints reads)');
+  const form = paintingFormOf(flags.get('--form'));
+  if (!isPaintingForm(form)) return usage(form);
   if (paths.length !== 1) return usage(`painting takes one painting path; got ${paths.length}`);
   const source = paths[0];
   try {
@@ -2187,11 +2198,15 @@ function cmdPainting(args: string[]): number {
     const kp = loadKeypoints(kpPath);
     checkImageSize(kp, painting.width, painting.height, kpPath, source);
     const person = choosePerson(kp, flags.get('--person'), kpPath);
-    console.log(`rig-parts painting: ${source}, joints from ${kpPath} person "${person.id}" (source: ${kp.source})`);
-    const r = checkPainting(painting, person, source, kpPath);
+    console.log(`rig-parts painting${form === 'illustration' ? ' (--form illustration)' : ''}: ${source}, joints from ${kpPath} person "${person.id}" (source: ${kp.source})`);
+    const r = checkPainting(painting, person, source, kpPath, form);
     for (const l of r.lines) console.log(l);
     if (r.problems.length > 0) throw new PartsError(r.problems);
-    console.log('  PASS  the painting holds every requirement this check reads (docs/PAINTING.md); what only an eye reads is listed there');
+    console.log(
+      form === 'illustration'
+        ? '  PASS  the painting holds the framed-illustration checks that apply (source, keypoint canvas and bounds, stated joints on painted pixels); standee background and gap rules reported SKIP above, not passed (docs/PAINTING.md)'
+        : '  PASS  the painting holds every requirement this check reads (docs/PAINTING.md); what only an eye reads is listed there',
+    );
     return EXIT_OK;
   } catch (err) {
     return printRefusal(err);
