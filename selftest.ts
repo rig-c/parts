@@ -674,7 +674,7 @@ import { buildSheet, tileImage, tilesFrom } from './src/sheet.ts';
 import { block, constraintConfig, dustImages, dustParts, FACE_EXPECT, faceConfig, faceImages, faceParts, HEAT_STRIP_EXPECT, heatStripConfig, islandImages, LASH_CREASE, LASH_RIG, LASH_ROW, lashConfig, lashImages, lashParts, RIG_CANVAS, RIG_EXPECT, rigConfig, rigImages, rigParts, SCENE_TARGET, shoeConfig, shoeImages, shoeKick, shoeParts, TURNED_EXPECT, turnedConfig, writeRigFixture } from './fixtures/rig.ts';
 import { FORK_SMOOTH_MAX_INFLUENCES, smoothForkShares } from './src/rig.ts';
 import { type AttachmentSetsFile, blinkHoldProblems, buildRig, influenceReachHolds, DEFAULT_IDLE_KEYS, expandSetAttachmentKeys, FACE_TIPS_AXIS_NAME, HEAD_UP_BONE, flattenRig, IDLE_DRIVES_MESHES_WHY, type MeshAttachment, PAD, type RegionAttachment, rigJsonText, type RigOutput, type RigSpec, roundShares, tipRoundingBound, writtenShares } from './src/rig.ts';
-import { type ComposedScene, composeFromFiles, IMAGE_SEP, PLATE, PLATE_BAND_NO_PLATE, PLATE_BAND_UNDECLARED, PLATE_IMAGE, plateBandProblems, plateBandReading, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames } from './src/scene.ts';
+import { type ComposedScene, composeFromFiles, figureSetupRaster, IMAGE_SEP, PLATE, PLATE_BAND_NO_PLATE, PLATE_BAND_UNDECLARED, PLATE_IMAGE, plateBandProblems, plateBandReading, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames } from './src/scene.ts';
 import { sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild } from './fixtures/scene.ts';
 import { localInfluences, regionWeight } from './src/localweights.ts';
 import { boneHeat as solveBoneHeat, HEAT_MAX_ITERATIONS, HEAT_SOURCE_BAND, HEAT_TOLERANCE, latticeSilhouette } from './src/heat.ts';
@@ -43516,57 +43516,52 @@ function runSceneSuite(): number {
       );
     }
 
-    // ---- the plate band (issue #945) ---------------------------------------------
+    // ---- the plate band (issue #961) ---------------------------------------------
     {
-      // By hand, on a 10x10 canvas: the figure is an opaque 3x3 block of A at x 4..6, y 4..6 and one px of D at
-      // alpha 128 at (5, 7) — 10 drawn px, one colour drawn fully opaque (A; D is not). A 1 px band is the drawn px
-      // dilated by a 3x3 square (x 3..7, y 3..7, and x 4..6 on y 8: 28 px) less the 10 drawn: 18 px.
-      const A: [number, number, number] = [200, 120, 80];
-      const D: [number, number, number] = [10, 20, 30];
-      const fig = newRaster(10, 10);
-      for (let y = 4; y <= 6; y++) for (let x = 4; x <= 6; x++) fig.data.set([...A, 255], (y * 10 + x) * 4);
-      fig.data.set([...D, 128], (7 * 10 + 5) * 4);
-      const flat = (): ReturnType<typeof newRaster> => {
-        const r = newRaster(10, 10);
-        for (let i = 0; i < 100; i++) r.data.set([96, 112, 128, 255], i * 4);
+      // By hand, on a 24x24 canvas: the figure is an opaque 8x8 block at x 8..15, y 8..15 (64 drawn px). At width_px 2
+      // the band (Chebyshev 1..2) is the block grown to 12x12 less the block, 144 - 64 = 80 px; the ring (3..4) is the
+      // block grown to 16x16 less 12x12, 256 - 144 = 112 px. In one 24 px cell both sides are read; in 12 px cells each
+      // quadrant holds a quarter of each, 20 band and 28 ring px.
+      const fig = newRaster(24, 24);
+      for (let y = 8; y <= 15; y++) for (let x = 8; x <= 15; x++) fig.data.set([200, 120, 80, 255], (y * 24 + x) * 4);
+      const base = [96, 112, 128] as const;
+      const plateOf = (alpha = 255): Raster => {
+        const r = newRaster(24, 24);
+        for (let i = 0; i < 576; i++) r.data.set([...base, alpha], i * 4);
         return r;
       };
-      const planted = flat();
-      const put = (x: number, y: number, rgba: readonly number[]): void => planted.data.set(rgba, (y * 10 + x) * 4);
-      put(3, 3, [...A, 255]); // in the band: counted, the first row-major
-      put(7, 5, [...A, 255]); // in the band: counted
-      put(3, 5, [A[0] + 5, A[1], A[2], 255]); // in the band, 5 levels off on R: counted at tolerance 5, not at 4
-      put(5, 3, [...A, 0]); // in the band, not drawn: not counted
-      put(0, 0, [...A, 255]); // outside the band: not counted
-      put(4, 8, [...D, 255]); // in the band, D, which the figure draws only at alpha 128: not counted
-      put(5, 5, [...A, 255]); // under the figure: not counted
-      const at = (tolerance: number, max_px = 0) => ({ width_px: 1, tolerance, max_px });
-      const t0 = plateBandReading(fig, planted, at(0));
-      const t4 = plateBandReading(fig, planted, at(4));
-      const t5 = plateBandReading(fig, planted, at(5));
-      const clean = plateBandReading(fig, flat(), at(0));
-      const every = plateBandReading(fig, flat(), at(255));
-      const residue = plateBandProblems(t0, at(0), 'planted.png');
-      const atLimit = plateBandProblems(t0, at(0, 2), 'planted.png');
-      const empty = plateBandProblems(plateBandReading(newRaster(10, 10), flat(), at(0)), at(0), 'planted.png');
-      const line = residue[0] === undefined ? '' : problemLine(residue[0]);
+      // The planted ghost: the block grown by width_px (under the figure and over the band) darkened by 40 levels.
+      const ghost = plateOf();
+      for (let y = 6; y <= 17; y++) for (let x = 6; x <= 17; x++) for (let c = 0; c < 3; c++) ghost.data[(y * 24 + x) * 4 + c] = base[c] - 40;
+      // A textured clean plate: one ring px (4, 4) — Chebyshev 4 from (8, 8) — 112 levels brighter on R. In the 12 px
+      // cell at (0, 0) the ring's R mean is 96 + 112 / 28 = 100 against the band's 96: departure 4.
+      const bright = plateOf();
+      bright.data[(4 * 24 + 4) * 4] = base[0] + 112;
+      const at = (cell_px: number, min_side_px: number, max_departure: number) => ({ width_px: 2, cell_px, min_side_px, max_departure });
+      const one = plateBandReading(fig, plateOf(), at(24, 16, 0));
+      const g = plateBandReading(fig, ghost, at(24, 16, 39.5));
+      const gProblems = plateBandProblems(g, at(24, 16, 39.5), 'planted.png');
+      const gAt40 = plateBandProblems(plateBandReading(fig, ghost, at(24, 16, 40)), at(24, 16, 40), 'planted.png');
+      const quad = plateBandReading(fig, bright, at(12, 20, 255));
+      const thin = plateBandProblems(plateBandReading(fig, plateOf(), at(12, 21, 255)), at(12, 21, 255), 'planted.png');
+      const clear = plateBandProblems(plateBandReading(fig, plateOf(254), at(24, 16, 255)), at(24, 16, 255), 'planted.png');
+      const line = gProblems[0] === undefined ? '' : problemLine(gProblems[0]);
+      const q0 = quad.worst[0];
       say(
-        'SC47_THE_PLATE_BAND_COUNTS_FIGURE_COLOURED_PLATE_PX_AROUND_THE_FIGURE_AS_COUNTED_BY_HAND',
-        t0.figure_px === 10 && t0.figure_colours === 1 && t0.band_px === 18 && t0.found_px === 2 && JSON.stringify(t0.first) === JSON.stringify({ at: [3, 3], rgb: A }) &&
-          t4.found_px === 2 && t5.found_px === 3 && clean.found_px === 0 && every.found_px === 18 &&
-          residue.length === 1 && residue[0].code === 'SCENE_PLATE_BAND_RESIDUE' && line.includes('scene.plate.image (planted.png)') && line.includes('holds 2 figure-coloured px') && line.includes('at most 0 (scene.plate.band.max_px)') &&
-          atLimit.length === 0 && empty.length === 1 && empty[0].code === 'SCENE_PLATE_BAND_MEASURED',
-        `figure ${t0.figure_px} px, ${t0.figure_colours} opaque colour(s), band ${t0.band_px} px (10, 1, 18 by hand); found at tolerance 0/4/5: ${t0.found_px}/${t4.found_px}/${t5.found_px} (2/2/3 by hand), first ${JSON.stringify(t0.first)}; a flat plate at tolerance 0: ${clean.found_px} (0), at 255, where every colour is within reach: ${every.found_px} (the 18 band px); planted at max_px 0: ${line.slice(0, 160)}; at max_px 2: ${atLimit.length} problem(s); an empty figure: ${empty.map((p) => p.code).join(', ')}`,
-        "issue #945: in the band (not drawn, within width_px of drawn) a drawn plate px within tolerance of a colour the figure draws fully opaque is residue; outside the band, under the figure, transparent, or the colour of a translucent figure px is not; a declared bar with nothing to read is refused, never a pass",
+        'SC47_THE_PLATE_BAND_COMPARES_BAND_WITH_RING_PER_CELL_AS_COUNTED_BY_HAND_AND_REFUSES_THE_PLANTED_GHOST_BY_NAME',
+        one.figure_px === 64 && one.band_px === 80 && one.ring_px === 112 && one.cells_touched === 1 && one.cells_read === 1 && one.worst[0]?.departure === 0 && plateBandProblems(one, at(24, 16, 0), 'clean.png').length === 0 &&
+          g.cells_over === 1 && JSON.stringify(g.worst[0]) === JSON.stringify({ box: [0, 0, 24, 24], band_px: 80, ring_px: 112, band_mean: [56, 72, 88], ring_mean: [96, 112, 128], departure: 40 }) &&
+          gProblems.length === 1 && gProblems[0].code === 'SCENE_PLATE_BAND_DEPARTURE' && line.includes('scene.plate.image (planted.png)') && line.includes('[0, 0, 24, 24] band mean (56, 72, 88) over 80 px against ring mean (96, 112, 128) over 112 px: departure 40') && line.includes('at most 39.5 levels (scene.plate.band.max_departure)') &&
+          gAt40.length === 0 &&
+          quad.cells_touched === 4 && quad.cells_read === 4 && q0 !== undefined && JSON.stringify(q0.box) === '[0,0,12,12]' && q0.band_px === 20 && q0.ring_px === 28 && q0.ring_mean[0] === 100 && q0.departure === 4 && quad.worst.slice(1).every((c) => c.departure === 0) &&
+          thin.length === 1 && thin[0].code === 'SCENE_PLATE_BAND_MEASURED' && clear.length === 1 && clear[0].code === 'SCENE_PLATE_BAND_MEASURED',
+        `figure ${one.figure_px}, band ${one.band_px}, ring ${one.ring_px} px (64, 80, 112 by hand), ${one.cells_read} of ${one.cells_touched} cell(s) read, flat departure ${one.worst[0]?.departure}; planted ghost at max_departure 39.5: ${line.slice(0, 260)}; at 40: ${gAt40.length} problem(s); one bright ring px in 12 px cells: ${quad.cells_read}/${quad.cells_touched} read, worst ${JSON.stringify(q0)} (ring R mean 100, departure 4 by hand); min_side_px 21 over 20 band px per cell: ${thin.map((p) => p.code).join(', ')}; a plate at alpha 254: ${clear.map((p) => p.code).join(', ')}`,
+          "issue #961: a ghost is the band departing from the plate's own ring, cell by cell — a cell whose band mean departs from its ring mean by more than max_departure is refused with its box, both means and the departure; a cell holding fewer than min_side_px of either side is not read, a plate px not opaque is not read, and a declared bar with no cell to read is refused, never a pass",
       );
 
-      // Through the gate: plain's cloth is drawn at exactly its box, canvas x 10..25, y 30..37 (parts.json's box
-      // 10, 10, 16x8 at offset [0, 20]). A 3 px band holds (8, 33) and (27, 30), not (2, 33); (27, 30) is first row-major.
-      const plantedCanvas = newRaster(100, 60);
-      for (let i = 0; i < 6000; i++) plantedCanvas.data.set([96, 112, 128, 255], i * 4);
-      for (const [x, y] of [[8, 33], [27, 30], [2, 33]]) plantedCanvas.data.set([...A, 255], (y * 100 + x) * 4);
-      writeFileSync(join(dir, 'plate-residue.png'), encodePngBytes(plantedCanvas));
-      const band3 = (max_px: number) => ({ width_px: 3, tolerance: 0, max_px });
+      // Through the gate: compose the scene over the flat plate, take the figures' setup pose from its own gate build,
+      // and plant the ghost on that figure: the flat plate darkened by 40 levels over the drawn px grown by width_px.
+      const band = (max_departure: number) => ({ width_px: 2, cell_px: 8, min_side_px: 4, max_departure });
       const bandOut = (name: string): string => join(dir, `band-${name}`);
       const runBand = (name: string, plate: Record<string, unknown> | null): { status: number; out: string } => {
         const body = two();
@@ -43574,28 +43569,38 @@ function runSceneSuite(): number {
         else body.plate = plate;
         return runCli(['compose', '--scene', scene(body), '--out', bandOut(name)]);
       };
-      const red = runBand('red', { image: 'plate-residue.png', provenance: 'unknown', band: band3(0) });
-      const atTwo = runBand('two', { image: 'plate-residue.png', provenance: 'unknown', band: band3(2) });
-      const cleanRun = runBand('clean', { image: 'plate.png', provenance: 'generated', band: band3(0) });
+      const cleanRun = runBand('clean', { image: 'plate.png', provenance: 'generated', band: band(39.5) });
+      const figure = existsSync(join(bandOut('clean'), 'check', 'build', 'skeleton.json')) ? figureSetupRaster(join(bandOut('clean'), 'check', 'build'), { width: 100, height: 60 }) : newRaster(100, 60);
+      const drawn = newMask(100, 60);
+      for (let i = 0; i < 6000; i++) drawn.data[i] = figure.data[i * 4 + 3] > 0 ? 1 : 0;
+      const grown = dilate(drawn, 5);
+      const ghostCanvas = newRaster(100, 60);
+      for (let i = 0; i < 6000; i++) ghostCanvas.data.set(grown.data[i] === 1 ? [56, 72, 88, 255] : [96, 112, 128, 255], i * 4);
+      writeFileSync(join(dir, 'plate-ghost.png'), encodePngBytes(ghostCanvas));
+      const red = runBand('red', { image: 'plate-ghost.png', provenance: 'unknown', band: band(39.5) });
+      const atForty = runBand('forty', { image: 'plate-ghost.png', provenance: 'unknown', band: band(40) });
       const noPlate = runBand('none', null);
       const undeclared = runBand('undeclared', { image: 'plate.png', provenance: 'generated' });
-      const partial = compose(two({ plate: { image: 'plate.png', provenance: 'generated', band: { width_px: 3, tolerance: 256 } } }));
-      const redLine = composeFail(red.out, 'SCENE_PLATE_BAND_RESIDUE') ?? '';
-      const bandLine = (o: string): string => o.split('\n').find((l) => l.startsWith('[compose]   plate band (issue #945): ')) ?? '';
+      const partial = compose(two({ plate: { image: 'plate.png', provenance: 'generated', band: { width_px: 2, cell_px: 8, min_side_px: 0 } } }));
+      const redLine = composeFail(red.out, 'SCENE_PLATE_BAND_DEPARTURE') ?? '';
+      const bandLine = (o: string): string => o.split('\n').find((l) => l.startsWith('[compose]   plate band (issue #961): ')) ?? '';
       const cleanReport = readJsonFile(join(bandOut('clean'), SCENE_REPORT_FILE));
       const cleanBand = (cleanReport?.plate as { band?: Record<string, unknown> } | undefined)?.band;
       const undeclaredReport = readJsonFile(join(bandOut('undeclared'), SCENE_REPORT_FILE));
+      let figurePx = 0;
+      for (let i = 0; i < 6000; i++) figurePx += drawn.data[i];
       say(
-        'SC48_A_PLATE_WITH_FIGURE_COLOURED_RESIDUE_IN_THE_DECLARED_BAND_IS_REFUSED_BY_NAME_AND_WITHOUT_A_PLATE_OR_A_BAND_IT_IS_SKIP',
-        red.status === 1 && redLine.includes('scene.plate.image (plate-residue.png)') && redLine.includes('holds 2 figure-coloured px') && redLine.includes('the first at canvas (27, 30)') &&
+        'SC48_A_PLATE_HOLDING_A_DARK_GHOST_OF_THE_FIGURE_IS_REFUSED_BY_NAME_AND_WITHOUT_A_PLATE_OR_A_BAND_IT_IS_SKIP',
+        figurePx > 0 &&
+          cleanRun.status === 0 && bandLine(cleanRun.out).includes(': PASS — 0 of ') && cleanBand?.cells_over === 0 && typeof cleanBand?.cells_read === 'number' && cleanBand.cells_read > 0 && cleanBand?.max_departure === 39.5 &&
+          red.status === 1 && redLine.includes('scene.plate.image (plate-ghost.png)') && redLine.includes('band mean (56, 72, 88)') && redLine.includes('ring mean (96, 112, 128)') && redLine.includes(': departure 40') &&
           !existsSync(join(bandOut('red'), 'rig')) && !existsSync(join(bandOut('red'), SCENE_REPORT_FILE)) &&
-          atTwo.status === 0 && bandLine(atTwo.out).includes(': PASS — 2 figure-coloured px') &&
-          cleanRun.status === 0 && bandLine(cleanRun.out).includes(': PASS — 0 figure-coloured px') && cleanBand?.found_px === 0 && cleanBand?.max_px === 0 &&
+          atForty.status === 0 && bandLine(atForty.out).includes(': PASS — 0 of ') &&
           noPlate.status === 0 && bandLine(noPlate.out).endsWith(`SKIP — ${PLATE_BAND_NO_PLATE}`) &&
           undeclared.status === 0 && bandLine(undeclared.out).endsWith(`SKIP — ${PLATE_BAND_UNDECLARED}`) && !('band' in ((undeclaredReport?.plate as Record<string, unknown> | undefined) ?? { band: 1 })) &&
-          has(partial.err, 'SCENE_FIELD_PRESENT', 'scene.plate.band.max_px') && has(partial.err, 'SCENE_FIELD_TYPE', 'scene.plate.band.tolerance'),
-        `planted (residue at (8, 33), (27, 30) in the band and (2, 33) outside it), max_px 0: exit ${red.status}, ${redLine.slice(0, 230)}; rig/ written ${existsSync(join(bandOut('red'), 'rig'))}; max_px 2: exit ${atTwo.status}, ${bandLine(atTwo.out).slice(30, 110)}; a flat plate: exit ${cleanRun.status}, ${bandLine(cleanRun.out).slice(30, 110)}, scene.json band ${JSON.stringify(cleanBand)}; no plate: exit ${noPlate.status}, ${bandLine(noPlate.out).slice(30)}; a plate without a band: exit ${undeclared.status}, ${bandLine(undeclared.out).slice(30, 90)}; a band without max_px and tolerance 256 -> ${codes(partial.err)}`,
-        'issue #945: the bar is the scene\'s, opt in on scene.plate.band — declared, it is measured on the composed figures\' setup pose off the green gate build and refused by name before anything is written; declared without a number, the field is named; no plate or no band is SKIP with its reason, and the exit is what it was',
+          has(partial.err, 'SCENE_FIELD_PRESENT', 'scene.plate.band.max_departure') && has(partial.err, 'SCENE_FIELD_TYPE', 'scene.plate.band.min_side_px'),
+        `the figures' setup pose: ${figurePx} px; a flat plate: exit ${cleanRun.status}, ${bandLine(cleanRun.out).slice(30, 140)}; the planted ghost at max_departure 39.5: exit ${red.status}, ${redLine.slice(0, 300)}; rig/ written ${existsSync(join(bandOut('red'), 'rig'))}; at 40: exit ${atForty.status}, ${bandLine(atForty.out).slice(30, 90)}; no plate: exit ${noPlate.status}, ${bandLine(noPlate.out).slice(30)}; a plate without a band: exit ${undeclared.status}, ${bandLine(undeclared.out).slice(30, 90)}; a band without max_departure and min_side_px 0 -> ${codes(partial.err)}`,
+        "issue #961: the bar is the scene's, opt in on scene.plate.band — declared, the plate's band around the composed figures' setup pose is compared with its own ring off the green gate build and a departing cell is refused by name before anything is written; declared without a number, the field is named; no plate or no band is SKIP with its reason, and the exit is what it was",
       );
     }
   } finally {
@@ -43653,9 +43658,10 @@ function runPublicScenes(green: ReadonlyMap<string, string>, dir: string, say: (
   writeFileSync(reqFile, `${JSON.stringify({ spec: 'spine-parts-requirements/1', fps: IDLE_FPS, requirements: reqs }, null, 1)}\n`);
 
   const sideOut = join(sd, 'side');
-  const side = runCli(['compose', '--scene', sceneAt('side', { canvas: { width: W + W2, height: Math.max(H, H2) }, plate: { image: 'plate.png', provenance: 'generated', note: 'a flat colour generated by the selftest', band: { width_px: 4, tolerance: 0, max_px: 0 } }, characters: [{ id: 'demo', build: demo, offset: [0, 0] }, { id: 'sample', build: sample, offset: [W, 0] }], order: ['demo', 'sample'] }), '--out', sideOut, '--requirements', reqFile]);
-  // Issue #945, the public positive control: a flat plate no figure colour equals holds no residue in the band.
-  const sideBand = side.out.split('\n').find((l) => l.startsWith('[compose]   plate band (issue #945): ')) ?? 'no plate band line';
+  const side = runCli(['compose', '--scene', sceneAt('side', { canvas: { width: W + W2, height: Math.max(H, H2) }, plate: { image: 'plate.png', provenance: 'generated', note: 'a flat colour generated by the selftest', band: { width_px: 2, cell_px: 32, min_side_px: 16, max_departure: 39.5 } }, characters: [{ id: 'demo', build: demo, offset: [0, 0] }, { id: 'sample', build: sample, offset: [W, 0] }], order: ['demo', 'sample'] }), '--out', sideOut, '--requirements', reqFile]);
+  // Issue #961, the public positive control at the setting AUTHORING recommends (width 2, cell 32, min side 16,
+  // max_departure 39.5): a flat plate departs from itself by 0 levels in every read cell.
+  const sideBand = side.out.split('\n').find((l) => l.startsWith('[compose]   plate band (issue #961): ')) ?? 'no plate band line';
   const sideRig = existsSync(join(sideOut, 'rig', 'rig.json')) ? (readJsonAt(join(sideOut, 'rig', 'rig.json')) as RigSpec) : null;
   const sideLeft = sideRig === null ? ['no rig.json'] : unprefixedNames(sideRig, readJsonAt(join(sideOut, 'rig', 'motion.json')) as MotionSpec, ['demo', 'sample'], true);
   const sideSlots = compiledSlots(join(sideOut, 'check', 'build'));
@@ -43679,7 +43685,7 @@ function runPublicScenes(green: ReadonlyMap<string, string>, dir: string, say: (
   const sampleSlots = (readJsonAt(join(sample, 'rig', 'rig.json')) as RigSpec).slots.map((s) => `sample:${s.name}`);
   say(
     'CH907_DEMO_AND_SAMPLE_SIDE_BY_SIDE_WITH_A_GENERATED_PLATE_GATE_GREEN_AND_CHECK',
-    side.status === 0 && sideLeft.length === 0 && sideSlots.join(',') === [PLATE, ...demoSlots, ...sampleSlots].join(',') && rootMiss.length === 0 && rootRegions.length > 0 && sideBand.includes(': PASS — 0 figure-coloured px'),
+    side.status === 0 && sideLeft.length === 0 && sideSlots.join(',') === [PLATE, ...demoSlots, ...sampleSlots].join(',') && rootMiss.length === 0 && rootRegions.length > 0 && sideBand.includes(': PASS — 0 of ') && sideBand.includes(': departure 0;'),
     `canvas ${W + W2}x${Math.max(H, H2)}, sample at [${W}, 0]: exit ${side.status}; ${sideBand.replace('[compose]   ', '')}; regions on root ${rootRegions.join(', ') || 'none'} moved by the hand shift ${rootMiss.length === 0 ? '(demo -W2/2 = ' + String(-W2 / 2) + ', sample W/2 = ' + String(W / 2) + ')' : rootMiss.join('; ')}; ${side.out.split('\n').filter((l) => /rigc build --profile|assertions: /.test(l) && l.startsWith('[compose]')).map((l) => l.replace('[compose]', '').trim()).join(' | ')}; ${sideSlots.length} slot(s), the plate first; unprefixed ${sideLeft.length === 0 ? 'none' : sideLeft.slice(0, 3).join('; ')}; ${sceneBarLines(side.out, join(sideOut, 'check'))}`,
     "issue #74 §4: two published characters bound into one rig on one canvas with a generated plate (provenance generated) — rigc's gate on both its runs, and check's every bar measured or named SKIP with its reason (without a parts.json the bars that read See-through tags have nothing to read)",
   );

@@ -897,7 +897,7 @@ usage:
       Bind several finished characters into one rig. The scene file (spec
       "${SCENE_SPEC}") states the canvas {width, height}, an optional plate
       {image, provenance: ${PROVENANCES.join(' | ')}, note?, band?: {width_px,
-      tolerance, max_px}}, the characters
+      cell_px, min_side_px, max_departure}}, the characters
       [{id, build, offset: [x, y], scale?}] — each build the --out of a green
       \`rig-parts build\` (its check/check.json PASS), each offset a
       translation from its rig px to canvas px, each scale (a positive
@@ -927,11 +927,12 @@ usage:
       or never; a constraint, or a --requirements name, that names a bone of
       another character without its prefix (SCENE_NAME_PREFIXED); a plate not
       of the canvas size; idles of different durations; a key in a build's
-      rig or motion compose does not know; under a declared plate band, more
-      than max_px plate px in the width_px band around the figures' setup
-      pose within tolerance levels of a colour the figures draw opaque
-      (SCENE_PLATE_BAND_RESIDUE, read off the green gate build; no plate or
-      no band is SKIP). The result is gated through
+      rig or motion compose does not know; under a declared plate band, a
+      cell_px cell in which the plate's band within width_px of the figures'
+      setup pose departs from its own ring beyond it by more than
+      max_departure levels on any channel — a dark ghost of the figure
+      (SCENE_PLATE_BAND_DEPARTURE, read off the green gate build; no plate or
+      no band is SKIP, no cell to read is SCENE_PLATE_BAND_MEASURED). The result is gated through
       rig-c as rig gates its own (build --profile rig-play --pack, the
       compile and the packed pages on disk); --out receives rig/ (rig.json,
       motion.json, images/) and ${SCENE_REPORT_FILE} (spec "${SCENE_REPORT_SPEC}":

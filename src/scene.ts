@@ -164,28 +164,36 @@ export interface ScenePlate {
   imagePath: string;
   provenance: Provenance;
   note: string | null;
-  /** {@link PlateBand}, the plate-residue bar the author declared (issue #945); null when the plate declares none, and the bar is then SKIP. */
+  /** {@link PlateBand}, the plate-ghost bar the author declared (issue #961); null when the plate declares none, and the bar is then SKIP. */
   band: PlateBand | null;
 }
 
 /**
- * `scene.plate.band` (issue #945): the author's bar over the plate's pixels in
- * a band around the composed figures. Every number is declared; none has a
- * default. `width_px`, a positive integer: the band is every canvas px the
- * figures do not draw (setup-pose alpha 0) within this Chebyshev distance of
- * one they do. `tolerance`, an integer 0..255: a plate px is figure-coloured
- * when each of its R, G and B is within this many levels of a colour the
- * figures draw fully opaque (setup-pose alpha 255). `max_px`, a non-negative
- * integer: the most figure-coloured band px the plate may hold.
+ * `scene.plate.band` (issue #961): the author's bar against a dark silhouette
+ * ghost of a removed figure on the plate — the band around the composed
+ * figures compared with the plate's own ring just outside it. Every number is
+ * declared; none has a default.
+ *
+ * - `width_px`, a positive integer: the band is every canvas px the figures do
+ *   not draw (setup-pose alpha 0) within this Chebyshev distance of one they
+ *   draw; the ring is every px they do not draw at a distance above it and at
+ *   most twice it.
+ * - `cell_px`, a positive integer: the canvas is cut into square cells of this
+ *   side, aligned at canvas (0, 0).
+ * - `min_side_px`, a positive integer: a cell is read when it holds at least
+ *   this many band px and at least this many ring px.
+ * - `max_departure`, a number 0..255 of colour levels: the most a read cell's
+ *   band mean may depart from its ring mean, on its worst channel.
  */
 export interface PlateBand {
   width_px: number;
-  tolerance: number;
-  max_px: number;
+  cell_px: number;
+  min_side_px: number;
+  max_departure: number;
 }
 
 /** The fields of {@link PlateBand}, in the order the scene file and `scene.json` write them. */
-export const PLATE_BAND_FIELDS = ['width_px', 'tolerance', 'max_px'] as const;
+export const PLATE_BAND_FIELDS = ['width_px', 'cell_px', 'min_side_px', 'max_departure'] as const;
 
 export interface SceneFile {
   path: string;
@@ -242,16 +250,16 @@ export function acceptProblems(names: readonly string[], where: string): Problem
 }
 
 /**
- * `scene.plate.band` read and shape-checked (issue #945): a record holding
- * `width_px` (a positive integer), `tolerance` (an integer 0..255) and
- * `max_px` (a non-negative integer), each required — a band declared without
+ * `scene.plate.band` read and shape-checked (issue #961): a record holding
+ * `width_px`, `cell_px` and `min_side_px` (positive integers) and
+ * `max_departure` (a number 0..255), each required — a band declared without
  * one of its numbers is refused naming the field, never filled in. Returns
  * undefined when any problem was collected.
  */
 function readPlateBand(b: unknown, fail: (code: string, object: string, detail: string) => void): PlateBand | undefined {
   const where = 'scene.plate.band';
   if (!isRecord(b)) {
-    fail('SCENE_FIELD_TYPE', where, `is ${show(b)}; {"width_px": <px>, "tolerance": <levels>, "max_px": <px>} is required when the key is present`);
+    fail('SCENE_FIELD_TYPE', where, `is ${show(b)}; {${PLATE_BAND_FIELDS.map((k) => `"${k}": <number>`).join(', ')}} is required when the key is present`);
     return undefined;
   }
   let ok = true;
@@ -261,24 +269,25 @@ function readPlateBand(b: unknown, fail: (code: string, object: string, detail: 
       ok = false;
     }
   }
-  const what: Record<(typeof PLATE_BAND_FIELDS)[number], [number, number, string]> = {
-    width_px: [1, Number.MAX_SAFE_INTEGER, 'a positive integer of canvas px: the band is every px the figures do not draw within this Chebyshev distance of one they do'],
-    tolerance: [0, 255, 'an integer 0..255 of colour levels: a plate px is figure-coloured when each of its R, G, B is within this many levels of a colour the figures draw fully opaque'],
-    max_px: [0, Number.MAX_SAFE_INTEGER, 'a non-negative integer: the most figure-coloured px the plate may hold in the band'],
+  const what: Record<(typeof PLATE_BAND_FIELDS)[number], [number, number, boolean, string]> = {
+    width_px: [1, Number.MAX_SAFE_INTEGER, true, 'a positive integer of canvas px: the band is every px the figures do not draw within this Chebyshev distance of one they draw, the ring every px beyond it up to twice it'],
+    cell_px: [1, Number.MAX_SAFE_INTEGER, true, 'a positive integer of canvas px: the side of the square cells, aligned at canvas (0, 0), in which band and ring are compared'],
+    min_side_px: [1, Number.MAX_SAFE_INTEGER, true, 'a positive integer of px: a cell is read when it holds at least this many band px and as many ring px'],
+    max_departure: [0, 255, false, 'a number 0..255 of colour levels: the most a read cell\'s band mean may depart from its ring mean on any of R, G, B'],
   };
   const out: Record<string, number> = {};
   for (const k of PLATE_BAND_FIELDS) {
-    const [lo, hi, means] = what[k];
+    const [lo, hi, integer, means] = what[k];
     const v = b[k];
     if (!(k in b)) {
       fail('SCENE_FIELD_PRESENT', `${where}.${k}`, `is absent and required; ${means} — a declared band has no default`);
       ok = false;
-    } else if (typeof v !== 'number' || !Number.isInteger(v) || v < lo || v > hi) {
+    } else if (typeof v !== 'number' || !Number.isFinite(v) || (integer && !Number.isInteger(v)) || v < lo || v > hi) {
       fail('SCENE_FIELD_TYPE', `${where}.${k}`, `is ${show(v)}; ${means}, is required`);
       ok = false;
     } else out[k] = v;
   }
-  return ok ? { width_px: out.width_px, tolerance: out.tolerance, max_px: out.max_px } : undefined;
+  return ok ? { width_px: out.width_px, cell_px: out.cell_px, min_side_px: out.min_side_px, max_departure: out.max_departure } : undefined;
 }
 
 /**
@@ -898,7 +907,7 @@ export interface SceneReport {
   canvas: { width: number; height: number };
   rig_name: string;
   pack_mode: { page_edges: string; pack_shape: string };
-  /** `judged_by` names the provenance, which nothing reads; `band` is written only when the scene declares one (issue #945), so a scene without it writes the bytes it wrote before the field existed. */
+  /** `judged_by` names the provenance, which nothing reads; `band` is written only when the scene declares one (issue #961), so a scene without it writes the bytes it wrote before the field existed. */
   plate: { image: string; provenance: Provenance; note: string | null; bone: string; slot: string; size: [number, number]; judged_by: 'nothing'; band?: PlateBand & Partial<PlateBandReading> } | null;
   characters: SceneCharacterReport[];
   order: { declared: string[]; slots: string[]; judged_by: 'nothing' };
@@ -1425,109 +1434,142 @@ export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly 
 }
 
 // ---------------------------------------------------------------------------
-// the plate band (issue #945)
+// the plate band (issue #961)
 // ---------------------------------------------------------------------------
 
-/** What {@link plateBandReading} measured: canvas px, and the first figure-coloured band px in row-major order. */
+/** One read cell of a {@link PlateBandReading}: its box and both sides' means, in colour levels. */
+export interface PlateBandCell {
+  /** canvas [x, y, width, height], y down; a cell at the canvas's right or bottom edge is cut to the canvas. */
+  box: [number, number, number, number];
+  band_px: number;
+  ring_px: number;
+  /** mean R, G, B of the plate's band px in the cell, rounded to 2 places. */
+  band_mean: [number, number, number];
+  /** mean R, G, B of the plate's ring px in the cell, rounded to 2 places. */
+  ring_mean: [number, number, number];
+  /** max over R, G, B of |band mean - ring mean|, rounded to 2 places (the bar compares the unrounded value). */
+  departure: number;
+}
+
+/** What {@link plateBandReading} measured, in canvas px and cells. */
 export interface PlateBandReading {
   /** Canvas px the figures draw (setup-pose alpha above 0). */
   figure_px: number;
-  /** Distinct RGB colours the figures draw fully opaque (setup-pose alpha 255). */
-  figure_colours: number;
-  /** Canvas px in the band: not drawn by the figures, within `width_px` (Chebyshev) of a px they draw. */
+  /** Band px read: not drawn by the figures, within `width_px` (Chebyshev) of a px they draw, and opaque on the plate. */
   band_px: number;
-  /** Band px whose plate px is drawn (alpha above 0) and figure-coloured. */
-  found_px: number;
-  /** The first of them, row-major: canvas [x, y] (y down) and the plate's RGB there; null when there is none. */
-  first: { at: [number, number]; rgb: [number, number, number] } | null;
+  /** Ring px read: not drawn by the figures, above `width_px` and at most 2 x `width_px` from one they draw, and opaque on the plate. */
+  ring_px: number;
+  /** Cells holding at least one band px and one ring px: the cells `min_side_px` chooses among. */
+  cells_touched: number;
+  /** Cells read: at least `min_side_px` band px and as many ring px. */
+  cells_read: number;
+  /** Read cells whose departure is above `max_departure`. */
+  cells_over: number;
+  /** The read cells in order of departure, highest first (row-major among equals), at most {@link PLATE_BAND_LISTED}. */
+  worst: PlateBandCell[];
 }
+
+/** How many of the most departing cells a reading keeps, and a refusal and `scene.json` quote. */
+export const PLATE_BAND_LISTED = 5;
 
 /** The SKIP reason the `[compose]` line prints when the scene has no plate. */
 export const PLATE_BAND_NO_PLATE = 'the scene has no plate';
 /** The SKIP reason the `[compose]` line prints when the plate declares no band. */
-export const PLATE_BAND_UNDECLARED = 'scene.plate.band is not declared — {"width_px", "tolerance", "max_px"} declares the bar; nothing is measured without it';
+export const PLATE_BAND_UNDECLARED = `scene.plate.band is not declared — {${PLATE_BAND_FIELDS.map((k) => `"${k}"`).join(', ')}} declares the bar; nothing is measured without it`;
 
 /**
- * Binary dilation of a 256x256x256 RGB occupancy grid by `t` levels along
- * each channel (a cube, so Chebyshev in RGB), one axis at a time: a cell is
- * set when any cell within `t` of it along that axis was. In place.
- */
-function dilateColours(grid: Uint8Array, t: number): void {
-  if (t === 0) return;
-  const strides = [1 << 16, 1 << 8, 1];
-  const prefix = new Int32Array(257);
-  for (let axis = 0; axis < 3; axis++) {
-    const step = strides[axis];
-    const [p, q] = strides.filter((_, k) => k !== axis);
-    for (let a = 0; a < 256; a++) {
-      for (let b = 0; b < 256; b++) {
-        const base = a * p + b * q;
-        for (let i = 0; i < 256; i++) prefix[i + 1] = prefix[i] + grid[base + i * step];
-        for (let i = 0; i < 256; i++) grid[base + i * step] = prefix[Math.min(255, i + t) + 1] - prefix[Math.max(0, i - t)] > 0 ? 1 : 0;
-      }
-    }
-  }
-}
-
-/**
- * The plate-residue bar's reading (issue #945), on two canvas-size rasters:
+ * The plate-ghost bar's reading (issue #961), on two canvas-size rasters:
  * `figure`, the composed figures' setup pose rendered alone over a
  * transparent canvas (every slot but the plate's), and `plate`, the plate
- * image. Nothing here is chosen: the band's width, the colour tolerance and
- * the limit are the scene's {@link PlateBand}; the figure's colours are the
- * ones its own render draws fully opaque. Throws a PartsError when the two
- * rasters are not one size.
+ * image. A ghost of a removed figure is a local departure of the band around
+ * the figure from the plate's own ring just outside it, so the plate is
+ * compared with itself, cell by cell, never with the figure's colours.
+ *
+ * Band and ring are canvas px the figures do not draw, by Chebyshev distance
+ * d to the nearest px they draw: the band d <= `width_px`, the ring
+ * `width_px` < d <= 2 x `width_px` (the drawn px dilated by squares of side
+ * 2w+1 and 4w+1, {@link dilate}). A plate px enters either only where the
+ * plate is opaque (alpha 255): a px it draws translucent, or not at all,
+ * shows what lies behind it, which this plate does not decide. Nothing here
+ * is chosen: every number is the scene's {@link PlateBand}. Throws a
+ * PartsError when the two rasters are not one size.
  */
 export function plateBandReading(figure: Raster, plate: Raster, band: PlateBand): PlateBandReading {
   const { width: W, height: H } = figure;
   if (plate.width !== W || plate.height !== H) refuseIfAny([{ code: 'SCENE_PLATE_SIZE', object: 'scene.plate.image', detail: `is ${plate.width}x${plate.height}; the figures' render, ${W}x${H}, is required` }]);
   const drawn = alphaAbove(figure, 0);
   const near = dilate(drawn, 2 * band.width_px + 1);
-  const grid = new Uint8Array(1 << 24);
-  let figurePx = 0;
-  for (let i = 0; i < W * H; i++) {
-    figurePx += drawn.data[i];
-    if (figure.data[i * 4 + 3] === 255) grid[(figure.data[i * 4] << 16) | (figure.data[i * 4 + 1] << 8) | figure.data[i * 4 + 2]] = 1;
+  const far = dilate(drawn, 4 * band.width_px + 1);
+  const cell = band.cell_px;
+  const cw = Math.ceil(W / cell), ch = Math.ceil(H / cell);
+  const nb = new Uint32Array(cw * ch), nr = new Uint32Array(cw * ch);
+  const sb = new Float64Array(cw * ch * 3), sr = new Float64Array(cw * ch * 3);
+  let figurePx = 0, bandPx = 0, ringPx = 0;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      if (drawn.data[i] === 1) {
+        figurePx++;
+        continue;
+      }
+      if (far.data[i] === 0 || plate.data[i * 4 + 3] !== 255) continue;
+      const k = Math.floor(y / cell) * cw + Math.floor(x / cell);
+      const inBand = near.data[i] === 1;
+      const n = inBand ? nb : nr, sum = inBand ? sb : sr;
+      if (inBand) bandPx++;
+      else ringPx++;
+      n[k]++;
+      for (let c = 0; c < 3; c++) sum[k * 3 + c] += plate.data[i * 4 + c];
+    }
   }
-  let colours = 0;
-  for (let c = 0; c < grid.length; c++) colours += grid[c];
-  dilateColours(grid, band.tolerance);
-  let bandPx = 0;
-  let found = 0;
-  let first: PlateBandReading['first'] = null;
-  for (let i = 0; i < W * H; i++) {
-    if (drawn.data[i] === 1 || near.data[i] === 0) continue;
-    bandPx++;
-    const r = plate.data[i * 4], g = plate.data[i * 4 + 1], b = plate.data[i * 4 + 2];
-    if (plate.data[i * 4 + 3] === 0 || grid[(r << 16) | (g << 8) | b] === 0) continue;
-    found++;
-    if (first === null) first = { at: [i % W, Math.floor(i / W)], rgb: [r, g, b] };
+  let touched = 0, read = 0, over = 0;
+  const cells: { k: number; d: number }[] = [];
+  for (let k = 0; k < cw * ch; k++) {
+    if (nb[k] > 0 && nr[k] > 0) touched++;
+    if (nb[k] < band.min_side_px || nr[k] < band.min_side_px) continue;
+    read++;
+    let d = 0;
+    for (let c = 0; c < 3; c++) d = Math.max(d, Math.abs(sb[k * 3 + c] / nb[k] - sr[k * 3 + c] / nr[k]));
+    if (d > band.max_departure) over++;
+    cells.push({ k, d });
   }
-  return { figure_px: figurePx, figure_colours: colours, band_px: bandPx, found_px: found, first };
+  cells.sort((p, q) => q.d - p.d || p.k - q.k);
+  const mean = (sum: Float64Array, n: number, k: number): [number, number, number] => [0, 1, 2].map((c) => pyRound(sum[k * 3 + c] / n, 2)) as [number, number, number];
+  const worst = cells.slice(0, PLATE_BAND_LISTED).map(({ k, d }): PlateBandCell => {
+    const x = (k % cw) * cell, y = Math.floor(k / cw) * cell;
+    return { box: [x, y, Math.min(cell, W - x), Math.min(cell, H - y)], band_px: nb[k], ring_px: nr[k], band_mean: mean(sb, nb[k], k), ring_mean: mean(sr, nr[k], k), departure: pyRound(d, 2) };
+  });
+  return { figure_px: figurePx, band_px: bandPx, ring_px: ringPx, cells_touched: touched, cells_read: read, cells_over: over, worst };
+}
+
+/** A cell as a refusal and the `[compose]` line quote it. */
+function cellText(c: PlateBandCell): string {
+  return `[${c.box.join(', ')}] band mean (${c.band_mean.join(', ')}) over ${c.band_px} px against ring mean (${c.ring_mean.join(', ')}) over ${c.ring_px} px: departure ${c.departure}`;
 }
 
 /**
  * The refusals a {@link plateBandReading} holds against its declaration:
- * `SCENE_PLATE_BAND_RESIDUE` when the band holds more figure-coloured px
- * than `max_px`; `SCENE_PLATE_BAND_MEASURED` when there was nothing to read
- * (no band px, or no colour the figures draw fully opaque) — a declared bar
- * with nothing to read is not a pass.
+ * `SCENE_PLATE_BAND_DEPARTURE` when a read cell's band departs from its ring
+ * by more than `max_departure`, quoting the most departing cells;
+ * `SCENE_PLATE_BAND_MEASURED` when no cell was read — a declared bar with
+ * nothing to read is not a pass.
  */
 export function plateBandProblems(r: PlateBandReading, band: PlateBand, image: string): Problem[] {
   const where = `scene.plate.image (${image})`;
-  if (r.band_px === 0 || r.figure_colours === 0) {
-    return [{ code: 'SCENE_PLATE_BAND_MEASURED', object: where, detail: `has ${r.band_px} band px around ${r.figure_px} figure px, and the figures draw ${r.figure_colours} colour(s) fully opaque; at least one of each is required to measure scene.plate.band — a declared bar with nothing to read is not a pass` }];
+  if (r.cells_read === 0) {
+    return [{ code: 'SCENE_PLATE_BAND_MEASURED', object: where, detail: `has no cell to read: ${r.cells_touched} cell(s) of ${band.cell_px} px hold band and ring px (${r.band_px} band px and ${r.ring_px} ring px the plate draws opaque around ${r.figure_px} figure px, width_px ${band.width_px}), none of them at least ${band.min_side_px} (scene.plate.band.min_side_px) of each — a declared bar with nothing to read is not a pass` }];
   }
-  if (r.found_px <= band.max_px) return [];
-  const at = r.first === null ? '' : `, the first at canvas (${r.first.at.join(', ')}), rgb (${r.first.rgb.join(', ')})`;
-  return [{ code: 'SCENE_PLATE_BAND_RESIDUE', object: where, detail: `holds ${r.found_px} figure-coloured px in the ${band.width_px} px band around the figures' setup pose (${r.band_px} band px; figure-coloured: each channel within ${band.tolerance} level(s) of one of the ${r.figure_colours} colour(s) the figures draw fully opaque${at}); at most ${band.max_px} (scene.plate.band.max_px) is required — the figure's residue on the plate, showing around the figure` }];
+  if (r.cells_over === 0) return [];
+  const listed = r.worst.slice(0, r.cells_over);
+  return [{ code: 'SCENE_PLATE_BAND_DEPARTURE', object: where, detail: `departs in ${r.cells_over} of ${r.cells_read} read cell(s) from its own ring around the figures' setup pose — the band within ${band.width_px} px of the figures against the ring from ${band.width_px} to ${2 * band.width_px} px, in ${band.cell_px} px cells; the most departing: ${listed.map(cellText).join('; ')}; at most ${band.max_departure} levels (scene.plate.band.max_departure) is required — a ghost of the figure on the plate, showing around it` }];
 }
 
 /** The `[compose]` line for the bar: SKIP with its reason, or the reading against the declaration. */
 export function plateBandLine(r: PlateBandReading | null, band: PlateBand | null, skip: string): string {
-  if (r === null || band === null) return `plate band (issue #945): SKIP — ${skip}`;
+  if (r === null || band === null) return `plate band (issue #961): SKIP — ${skip}`;
   const verdict = plateBandProblems(r, band, '').length === 0 ? 'PASS' : 'FAIL';
-  return `plate band (issue #945): ${verdict} — ${r.found_px} figure-coloured px of ${r.band_px} in the ${band.width_px} px band (tolerance ${band.tolerance}, ${r.figure_colours} figure colour(s), ${r.figure_px} figure px); at most ${band.max_px}`;
+  const top = r.worst[0] === undefined ? 'no cell read' : `the most departing ${cellText(r.worst[0])}`;
+  return `plate band (issue #961): ${verdict} — ${r.cells_over} of ${r.cells_read} read cell(s) above ${band.max_departure} levels; ${top}; cells read ${r.cells_read} of ${r.cells_touched} holding both sides (width_px ${band.width_px}, cell_px ${band.cell_px}, min_side_px ${band.min_side_px}; ${r.band_px} band px, ${r.ring_px} ring px, ${r.figure_px} figure px)`;
 }
 
 /**
@@ -1654,8 +1696,8 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
     ['rig.json', rigJsonText(composed.rig)],
     ['motion.json', rigJsonText(composed.motion)],
   ];
-  // Issue #945: the plate band is read off the green gate build, before anything is written, so a refusal leaves --out empty.
-  const band = r.plate?.band === undefined ? null : { width_px: r.plate.band.width_px, tolerance: r.plate.band.tolerance, max_px: r.plate.band.max_px };
+  // Issue #961: the plate band is read off the green gate build, before anything is written, so a refusal leaves --out empty.
+  const band = r.plate?.band === undefined ? null : { width_px: r.plate.band.width_px, cell_px: r.plate.band.cell_px, min_side_px: r.plate.band.min_side_px, max_departure: r.plate.band.max_departure };
   let reading: PlateBandReading | null = null;
   let bandError: unknown = null;
   const onGreen = band === null ? undefined : (buildDir: string): void => {

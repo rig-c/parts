@@ -5358,8 +5358,8 @@ and stay absent).
 | <a id="SCENE_FILE"></a><a id="SCENE_SPEC"></a><a id="SCENE_FIELD_PRESENT"></a><a id="SCENE_FIELD_TYPE"></a><a id="SCENE_KEY_KNOWN"></a>`SCENE_FILE`, `SCENE_SPEC`, `SCENE_FIELD_PRESENT`, `SCENE_FIELD_TYPE`, `SCENE_KEY_KNOWN` | the scene file is missing, not a JSON object, not `spine-parts-scene/1`, or a field is missing, of the wrong type or not one the format reads (`canvas` two positive integers; `characters` at least one, each `id`, `build`, `offset` — an offset is never assumed (0, 0) — and an optional `scale`, a positive finite number: 0, a negative number or a non-number is refused at `characters[i].scale`; `order` a list of strings). `note`, `*_note` (strings) and `x-…` (any value) are read by nothing | the field |
 | <a id="SCENE_ID_UNIQUE"></a><a id="SCENE_ID_FORM"></a>`SCENE_ID_UNIQUE`, `SCENE_ID_FORM` | an `id` repeated, empty, or holding `:` — the separator of a prefixed name — or `/`, `\` or a leading `.`, because an id begins every image file of its character | another id |
 | <a id="SCENE_PLATE_PROVENANCE"></a><a id="SCENE_PLATE_PRESENT"></a><a id="SCENE_PLATE_SIZE"></a>`SCENE_PLATE_PROVENANCE`, `SCENE_PLATE_PRESENT`, `SCENE_PLATE_SIZE` | the plate's `provenance` is not `observed`, `generated` or `unknown`; its image is missing or not a PNG; it is not the canvas's size (it is drawn at canvas (0, 0) and never scaled) | the plate |
-| <a id="SCENE_PLATE_BAND_RESIDUE"></a>`SCENE_PLATE_BAND_RESIDUE` | under a declared `plate.band` (issue #945): the plate holds more figure-coloured px in the band around the composed figures than `max_px` — a ghost of a removed figure, a smear of its colours left where it was cut out. The band is every canvas px the figures' setup pose does not draw within `width_px` (Chebyshev) of one it draws; a plate px there is figure-coloured when it is drawn (alpha above 0) and each of its R, G, B is within `tolerance` levels of a colour the figures draw fully opaque. The count, the band's size and the first such px (canvas x, y, y down, and its RGB) are quoted. Measured off rigc's green gate build before anything is written | the plate image the scene names (`scene.plate.image`): repaint the residue. The numbers are the scene's (`scene.plate.band`), not a default to raise until it passes |
-| <a id="SCENE_PLATE_BAND_MEASURED"></a>`SCENE_PLATE_BAND_MEASURED` | a `plate.band` is declared but there is nothing to read: no band px (the figures cover the canvas, or draw nothing) or no colour the figures draw fully opaque. A declared bar with nothing to read is not a pass | the scene: the canvas, or the declaration |
+| <a id="SCENE_PLATE_BAND_DEPARTURE"></a>`SCENE_PLATE_BAND_DEPARTURE` | under a declared `plate.band` (issue #961): in a read cell the plate's band around the composed figures departs from the plate's own ring just outside it by more than `max_departure` levels on R, G or B — a dark silhouette ghost of a removed figure. The band is every canvas px the figures' setup pose does not draw within `width_px` (Chebyshev) of one it draws, the ring every such px above `width_px` and at most 2 x `width_px` away; only px the plate draws opaque are read; a `cell_px` cell is read when it holds at least `min_side_px` of each. The count of cells over the bar and the most departing ones (box, both means, departure, up to five) are quoted. Measured off rigc's green gate build before anything is written. A colour smear is **not** measured by this bar (#945: a band-vs-ring comparison does not separate it) | the plate image the scene names (`scene.plate.image`): repaint the ghost. The numbers are the scene's (`scene.plate.band`), not a default to raise until it passes |
+| <a id="SCENE_PLATE_BAND_MEASURED"></a>`SCENE_PLATE_BAND_MEASURED` | a `plate.band` is declared but no cell holds `min_side_px` band px and as many ring px the plate draws opaque (the figures draw nothing, cover the canvas, the plate is transparent there, or the cells are too small for the minimum). A declared bar with nothing to read is not a pass | the scene: the canvas, or the declaration |
 | <a id="SCENE_BUILD_PRESENT"></a>`SCENE_BUILD_PRESENT` | a build directory, or a file `build` writes in it (`parts.json`, `rig/rig.json`, `rig/motion.json` with an `idle`, an image its skin names, `check/check.json`), is missing | run `build` for that character |
 | <a id="SCENE_BUILD_GREEN"></a>`SCENE_BUILD_GREEN` | the build's own `check/check.json` does not say `PASS` and `gate_spine_html_green`; under an accept list (`--accept`, `characters[].accept`), it failed a bar the list does not name, its gate is red, a declared requirement is not PASS, or it names no failing bar — the bars not met and the ones accepted are listed | finish that character first: compose binds finished characters. To look at the scene meanwhile, name the failing bars (§7, *Composing several characters*) |
 | <a id="SCENE_ACCEPT_KNOWN"></a>`SCENE_ACCEPT_KNOWN` | an `--accept` name, or one in a character's `accept`, is not a bar `check` holds a build to: a problem code (`CHECK_LOOP_CLOSES`) where the bar's name (`loop`) belongs, a misspelling, or `gate`, which is rig-c's and never accepted | one of the names the message lists |
@@ -6010,7 +6010,7 @@ single-character path (§4, steps 0–9) on its own, already isolated input to a
 | --- | --- |
 | `canvas` | the shared stage, canvas px, y down. The composed rig's stage is the canvas, `root` at its bottom centre, as a single character's is its own |
 | `plate` | optional. `image` (relative to the scene file) is a PNG of exactly the canvas's size; `provenance` is `observed` (the painting's own pixels), `generated` or `unknown` (a residual after the people were removed is `unknown` where they stood, and the author says so); `note` is free text. Both are copied into `scene.json` and **judged by nothing** |
-| `plate.band` | optional (issue #945): `{"width_px": <px>, "tolerance": <levels>, "max_px": <px>}`, the plate-residue bar, every number required when the key is present (`SCENE_FIELD_PRESENT`, `SCENE_FIELD_TYPE`). Declared, compose draws the composed figures' setup pose alone (every slot but the plate's, rig-c's renderer, canvas px at scale 1) off rigc's green gate build and counts the plate px in the band around it that are figure-coloured: the band is every px the figures do not draw within `width_px` (a positive integer, Chebyshev) of one they draw; figure-coloured is drawn (alpha above 0) with each of R, G, B within `tolerance` (0..255) levels of a colour the figures draw fully opaque (alpha 255). More than `max_px` (a non-negative integer) is `SCENE_PLATE_BAND_RESIDUE`, refused before anything is written. The `[compose]` line prints the reading, and `scene.json` records the declaration and the reading under `plate.band`. Without a plate, or a plate without `band`, the line says SKIP and why, and nothing else changes. Whether the fill continues the structure behind the figure is not measured: no bar for it is defined |
+| `plate.band` | optional (issue #961): `{"width_px": <px>, "cell_px": <px>, "min_side_px": <px>, "max_departure": <levels>}`, the plate-ghost bar, every number required when the key is present (`SCENE_FIELD_PRESENT`, `SCENE_FIELD_TYPE`); none has a default. Declared, compose draws the composed figures' setup pose alone (every slot but the plate's, rig-c's renderer, canvas px at scale 1) off rigc's green gate build and compares the plate with itself: the **band** is every px the figures do not draw within `width_px` (a positive integer, Chebyshev) of one they draw, the **ring** every such px above `width_px` and at most 2 x `width_px` away, and only px the plate draws opaque (alpha 255) are read. The canvas is cut into square cells of `cell_px` (a positive integer) from canvas (0, 0); a cell is read when it holds at least `min_side_px` (a positive integer) band px and as many ring px; its departure is the largest over R, G, B of the absolute difference between the band's mean and the ring's mean. A read cell above `max_departure` (a number 0..255) is `SCENE_PLATE_BAND_DEPARTURE`, and no cell read is `SCENE_PLATE_BAND_MEASURED`, both refused before anything is written. The `[compose]` line prints the reading — cells over the bar, the most departing cell, and cells read of the cells holding both sides (the coverage) — and `scene.json` records the declaration and the reading under `plate.band`. Without a plate, or a plate without `band`, the line says SKIP and why, and nothing else changes. A colour smear, and whether the fill continues the structure behind the figure, are not measured: no bar for them is defined (#945). See *Choosing the plate band's numbers* below |
 | `characters[].id` | the prefix: every bone, slot, attachment (skin entry), constraint (its name, and every bone and path slot it names), `stops` entry (its `chain`, `links` and `against`, issue #431), `invariants.detached` bone, track, group and easing of that character is renamed `<id>:<name>`. `root` is the one shared root. A name resolves to exactly one character, and nothing resolves across characters without its prefix |
 | `characters[].build` | a `build --out` directory (relative to the scene file) whose own `check/check.json` is green |
 | `characters[].offset` | `[x, y]`, a translation from the build's rig px to canvas px. Every character is built at one `assemble.rig_scale`, so its rig px are canvas px at scale 1 |
@@ -6084,8 +6084,10 @@ What is composed:
 - **`scene.json`** (`spine-parts-scene-report/1`): the scene file's path as given,
   the canvas, the rig's name (the ids joined by `+`), the pack flags, the plate (its
   image, provenance, note, bone, slot, size, `judged_by: "nothing"` — the provenance's —
-  and, only under a declared `band`, `band`: `width_px`, `tolerance`, `max_px`,
-  `figure_px`, `figure_colours`, `band_px`, `found_px`, `first`), per character
+  and, only under a declared `band`, `band`: `width_px`, `cell_px`, `min_side_px`,
+  `max_departure`, `figure_px`, `band_px`, `ring_px`, `cells_touched`, `cells_read`,
+  `cells_over`, `worst` — up to five cells, each `box`, `band_px`, `ring_px`,
+  `band_mean`, `ring_mean`, `departure`, means and departure rounded to 2 places), per character
   its build, offset, `scale` (only when it is not 1), `rig_size`, `rig_scale`, placed bounds (the union of its part
   boxes, canvas px), shift and what it moved (`shifted`: the first-level bones, the
   regions on `root`, the count of weights bound to `root`), its counts and `accepted`
@@ -6109,6 +6111,40 @@ move; person detection, segmentation, isolation or occlusion completion (each
 character's input arrives isolated); a composed `parts.json`, so the bars that
 read See-through tags are measured per character by its own `build`, not over the
 scene; a rig `build` did not write.
+
+#### Choosing the plate band's numbers
+
+Nothing is built in: a declared `plate.band` carries all four numbers. The
+figures below are what a setting was measured to do, so a choice can be made
+from them; they are not defaults.
+
+Probe (issue #945, second probe): the two public examples side by side on a
+1664x1216 canvas (`CH907`'s pair, 768,452 figure px), over a flat plate, a
+gradient and a value-noise texture (16 px lattice, ±24 levels, seed 945), each
+clean and with a planted ghost (the silhouette grown by `width_px`, 40 levels
+darker). Max departure in levels; coverage is cells read over cells holding
+both sides, and depends only on the figures.
+
+| width_px | cell_px | min_side_px | clean max (flat / gradient / texture) | ghost min (flat) | ghost ratio | coverage |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2 | 8 | 16 | 0.0 / 1.0 / 8.1 | 40.0 | 4.93 | 476/1063 (45 %) |
+| 2 | 32 | 16 | 0.0 / 2.0 / 11.9 | 40.0 | 3.35 | 244/276 (88 %) |
+| 2 | 32 | 32 | 0.0 / 1.8 / 11.6 | 40.0 | 3.46 | 217/276 (79 %) |
+| 4 | 32 | 32 | 0.0 / 2.1 / 10.0 | 40.0 | 4.00 | 216/257 (84 %) |
+
+Field (issue #961): the same measure on two plates accepted in review of rigged
+demos (real art, 1920x1080 and 2338x1080, not in this repository), each with its
+own figure's setup pose. Their highest cell departs by 30.29 and 39.11 levels at
+width 2 / cell 32 (either `min_side_px`, coverage 89 % and 90 % at 16); at every
+other width and cell that reads more than 5 % of the cells, at least one of them
+departs by 56.46 levels or more — above the planted ghost.
+
+A setting that passes both accepted plates and still refuses the planted
+40-level ghost is therefore `{"width_px": 2, "cell_px": 32, "min_side_px": 16,
+"max_departure": 39.5}`, and it is the one `CH907` declares. Read the margin
+before relying on it: 0.39 levels above one accepted plate and 0.5 below the
+planted ghost. A ghost fainter than about 40 levels on a flat plate passes it,
+and real art can depart from its own ring by nearly as much without any ghost.
 
 ### Declared requirements (`--requirements`)
 
