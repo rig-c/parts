@@ -73,3 +73,7 @@ it quoted, kept here with the fixture they describe:
   lossless APNG 13,645,503 bytes; the GIF 1,812,288). Frame 29 (2.417 s) is the
   closed eye: the blink holds for 0.084 s, where the reference implementation held
   0.04 s and no frame of its loop showed the eyes shut (issue #32).
+
+## Pinholes at rest
+
+Its flat parts stack holds one pinhole (issue #944; AUTHORING §7, *Pinholes at rest*), so it does not declare the bar and `assemble` prints `ASSEMBLE_PINHOLES: SKIP`: `334,72 1x1` (1 px, beside `hairpin`), whose pixel only the full run's `headwear` holds while the plan takes the head run's ([#956](https://github.com/rig-c/parts/issues/956)); taking it from the full run costs a proposed chain, so it waits on [#953](https://github.com/rig-c/parts/issues/953).

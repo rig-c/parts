@@ -52,3 +52,7 @@ checkpoint, no LoRA, and a rig built from its own proposal with no hand edit at
 all", with `check`'s seam line verbatim —
 `seam: setup pose at 379x1216, scale 1.0116: mean |d| 0.204 (<= 1.0), 2 px over 40, 1.95 rig px (the count / s²; <= 50), 0 px over 80 (reported)`
 — and loop max |d| 0.
+
+## Pinholes at rest
+
+Its flat parts stack holds four pinholes (issue #944; AUTHORING §7, *Pinholes at rest*), so it does not declare the bar and `assemble` prints `ASSEMBLE_PINHOLES: SKIP`: `481,437 2x6` (6 px) and `482,432 1x4` (4 px) on the seam line between `sleeves` and `topwear`, which no layer of either run holds — only the painting does — and `519,270 2x2` (3 px) and `514,267 2x1` (2 px) beside `hair_back`, whose pixels only the full run's `back hair` holds while the plan takes the head run's ([#956](https://github.com/rig-c/parts/issues/956)); they wait on [#953](https://github.com/rig-c/parts/issues/953).

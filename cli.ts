@@ -737,6 +737,8 @@ usage:
                        [--project core|visible] [--alt <name>=<source>:<full>[:<head>]]
                        [--requirements <file.json>]
       With cut_material declared, records original source edges bound to emitted parts for check.
+      With pinholes.required: true declared, refuses every pinhole of the flat parts
+      stack by name, ASSEMBLE_PINHOLES, before writing; otherwise prints its SKIP line.
       Merge the full-body and head-crop See-through runs into rig-space parts:
       <out>/rig/parts/<name>.png (each cropped to its alpha box), <out>/rig/parts.json,
       <out>/render/recomposite_rig.png and <out>/render/${ERROR_MAP_FILE} (the error

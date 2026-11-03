@@ -55,6 +55,7 @@ here (gitignored).
 - `animations.json` — the named animations beside the idle (issue #224), in rig-c's
   motion-spec shape, which `motion.animations_from` names; *Gestures, expressions and
   trailing strands* below.
+- `requirements.json` — declares `assemble`'s pinhole bar, `"pinholes": {"required": true}` (issue #944; AUTHORING §7, *Pinholes at rest*), read by `rig-parts assemble --requirements examples/scarf/requirements.json` and by selftest `AE04`, which holds this example at 0 pinholes (`ASSEMBLE_PINHOLES: PASS`). It declares no motion requirement, and `config.json` does not name it: as `config.requirements` it would reach `check` too, and `check.json` would gain a requirements block `expected/check.json` does not hold.
 - `proposal.json` — what `rig-parts propose --parts <build> --source painting.png`
   writes on the parts of the build in `expected/` (selftest `CH06`, `CH901`). #119
   moved the first two points of the `robe_l` chain by 1 and 2 px from what the

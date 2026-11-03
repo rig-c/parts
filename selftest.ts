@@ -3,6 +3,7 @@ import { runSeamConfigChecks } from './tools/check_seam_config.ts';
 import { runJointContactChecks } from './tools/check_joint_contact.ts';
 import { runSetupPaintingChecks } from './tools/check_setup_painting.ts';
 import { runCutMaterialChecks } from './tools/check_cut_material.ts';
+import { runPinholeChecks } from './tools/check_pinholes.ts';
 import { runArtJointChecks } from './tools/check_art_joints.ts';
 import { runTurnUnitPrecedenceChecks } from './tools/check_turn_unit_precedence.ts';
 import { runAuthoredUnitDepthChecks } from './tools/check_authored_unit_depth.ts';
@@ -15,6 +16,9 @@ import { runPaintingExtensionChecks } from './tools/check_painting_extension.ts'
 import { runExtremesChecks } from './tools/check_extremes.ts';
 import { selftestCliArgs } from './fixtures/check_options.ts';
 import { softOcclusionLine } from './src/assemble.ts';
+import { holeBox as pinholeBox944, measurePinholes, PINHOLES_RULE, sourceInRig as sourceInRig944 } from './src/assemble.ts';
+import { readSource as readSource944 } from './src/build.ts';
+import { pinholesRequired } from './src/requirements.ts';
 import { softOccluderFixture, softTrailDiff, yieldLimbCoverFixture, SOFT_SKIN } from './fixtures/soft_occluder.ts';
 import { runYieldContourChecks } from './tools/check_yield_contour.ts';
 import { yieldRimFixture, rimCount, rimPixel } from './fixtures/yield_rim.ts';
@@ -24122,7 +24126,7 @@ function runRequirementsSuite(): number {
         rsDetail[1].startsWith(' field "rests"[1]: names "hem" a second time') &&
         rsDetail[2].startsWith(' field "rests"[0]: names "hem", which "not_swinging" names too') &&
         rsDetail[3].startsWith(' field "rest": is not a field this format reads') &&
-        (rsBad[3]?.problems[0].detail ?? '').includes('rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting;'),
+        (rsBad[3]?.problems[0].detail ?? '').includes('rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting, pinholes;'),
       `read ${JSON.stringify([rsRead.rises, rsRead.rests])}; absent ${JSON.stringify(npAbsent.rests)}; refused: ${rsDetail.join(' | ')}`,
       'issue #245: rests is declared per part like its siblings — a list of names, each once, empty refused rather than read as none, a misspelt key refused by the format; a resting tip may also rise (a raised hand resting on something), but a part declared not swinging has no reading to hold at rest',
     );
@@ -26614,7 +26618,14 @@ function runBuildSuite(): number {
         drawn: { ...(a.drawn ?? {}), chest: 15 },
       })),
     };
+    // A direct caller that skips the config loader (which refuses `chest` as CONFIG_SET_COVERS_BONE) carries the
+    // uncovered bone on both sides; a record-only forgery is a stale record, RIG_ALT_DRAWN_MATCH_CONFIG (issue #950).
+    const cfgWithUncoveredBone = parseConfig(structuredClone(withGestCfg)); // the parsed config shares objects with its input
+    for (const a of cfgWithUncoveredBone.assemble.alternates ?? []) a.drawn = { ...(a.drawn ?? {}), chest: 15 };
     const rigSetCoversBoneRefusal = refusals(() =>
+      buildRig(cfgWithUncoveredBone, forgedPartsWithUncoveredBone, forgedPartSet.images),
+    );
+    const recordOnlyRefusal = refusals(() =>
       buildRig(parseConfig(withGestCfg), forgedPartsWithUncoveredBone, forgedPartSet.images),
     );
 
@@ -26665,6 +26676,7 @@ function runBuildSuite(): number {
         badBoneRun.out.includes('FAIL  CONFIG_SET_COVERS_BONE:') &&
         entries(join(badBoneDir, 'out')).length === 0 &&
         rigSetCoversBoneRefusal?.problems[0]?.code === 'RIG_SET_COVERS_BONE' &&
+        recordOnlyRefusal?.problems.some((p) => p.code === 'RIG_ALT_DRAWN_MATCH_CONFIG') === true &&
         badLimbPartsRun.status === 1 &&
         badLimbPartsRun.out.includes('FAIL  CONFIG_LIMB_SET_JOINTS:') &&
         entries(join(badLimbPartsDir, 'out')).length === 0 &&
@@ -26672,7 +26684,7 @@ function runBuildSuite(): number {
         badJointArtRun.out.includes('FAIL  ASSEMBLE_LIMB_JOINT_ON_ART:') &&
         badJointArtRun.out.includes('(alternate set "wave")') &&
         entries(join(badJointArtDir, 'out')).length === 0,
-      `wave build exit ${waveRun.status}, body-root named refusal=${waveRootRefused}, root cells=${JSON.stringify(waveRootRow?.cells)}, sets.wave=${JSON.stringify(waveEntry)}, base->wave diff px=${baseToWaveDiffPx}, base->restored maxDiff=${baseToRestoredMaxDiff}, wave vs check --set wave maxDiff=${waveSetStillMatchMaxDiff}, baseRigIdentical=${baseRigIdentical}; +30° forearm mutant turn=${forearmTurnDeg.toFixed(4)}°, non-forearm/hand vertex maxDiff=${nonArmMaxVertexDiff}, forearm diff px=${forearmMutPixelDiffPx}, outside diff max=${outsideForearmHandPixelDiffMax}; refusals: CONFIG_SET_COVERS_BONE exit ${badBoneRun.status}, RIG_SET_COVERS_BONE=${rigSetCoversBoneRefusal?.problems[0]?.code ?? 'none'}, CONFIG_LIMB_SET_JOINTS exit ${badLimbPartsRun.status}, ASSEMBLE_LIMB_JOINT_ON_ART exit ${badJointArtRun.status}`,
+      `wave build exit ${waveRun.status}, body-root named refusal=${waveRootRefused}, root cells=${JSON.stringify(waveRootRow?.cells)}, sets.wave=${JSON.stringify(waveEntry)}, base->wave diff px=${baseToWaveDiffPx}, base->restored maxDiff=${baseToRestoredMaxDiff}, wave vs check --set wave maxDiff=${waveSetStillMatchMaxDiff}, baseRigIdentical=${baseRigIdentical}; +30° forearm mutant turn=${forearmTurnDeg.toFixed(4)}°, non-forearm/hand vertex maxDiff=${nonArmMaxVertexDiff}, forearm diff px=${forearmMutPixelDiffPx}, outside diff max=${outsideForearmHandPixelDiffMax}; refusals: CONFIG_SET_COVERS_BONE exit ${badBoneRun.status}, RIG_SET_COVERS_BONE=${rigSetCoversBoneRefusal?.problems[0]?.code ?? 'none'}, record-only forgery=${recordOnlyRefusal?.problems.map((p) => p.code).join('+') ?? 'none'}, CONFIG_LIMB_SET_JOINTS exit ${badLimbPartsRun.status}, ASSEMBLE_LIMB_JOINT_ON_ART exit ${badJointArtRun.status}`,
       'issue #476: a gesture subset set over a limb chain cuts at the base\'s joints along its drawn bone angles, emits slots and drawn for the covered chain bones in sets.json, poses the chain on set activation and restores the base byte-identically on set: null, leaves the base rig byte-identical, moves only the forearm by 30° when forearm drawn moves 30°, and refuses uncovered drawn bones or off-joint cuts by name; issue #711: the unchanged gesture also exposes UNDER body ghost over its raw-box floor, so the real build must refuse CHECK_SEAM_OVER_MOTION rather than report a green artifact',
     );
 
@@ -33682,6 +33694,7 @@ function runAssembleSuite(): number {
     }
     authorLayerControls(say);
     artistControls(say);
+    runPinholeChecks(join(dir, 'pinholes'), (name, ok, detail) => say(name, ok, detail, 'issue #944: the pinhole bar on hand-computable stacks — an enclosed opening whose every pixel is painted, refused by name only when a requirements file declares it, SKIP otherwise'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -35017,17 +35030,18 @@ function runInputsSuite(): number {
  */
 /** Internal example stages stay inside one suite/unit record and run in print order. */
 const ASSEMBLE_STAGE_FLAG = '--assemble-stage-worker';
-const ASSEMBLE_STAGES = ['AE01', 'AE02', 'AE03'] as const;
+const ASSEMBLE_STAGES = ['AE01', 'AE02', 'AE03', 'AE04'] as const;
 type AssembleStage = typeof ASSEMBLE_STAGES[number];
 const ASSEMBLE_CASES: Readonly<Record<AssembleStage, string>> = {
   AE01: 'AE01_EXAMPLE_ASSEMBLES_GREEN_AND_DETERMINISTIC',
   AE02: 'AE02_EXAMPLE_LAYERS_PASS_EVERY_PLAUSIBILITY_RULE_AND_A_PLANTED_HAZE_DOES_NOT',
   AE03: 'AE03_EVERY_TAG_OF_EITHER_RUN_IS_IN_A_ROW_OR_NAMED_ONCE_IN_NO_ROW',
+  AE04: 'AE04_EXAMPLE_PINHOLES_DECLARED_PASS_AT_0_OR_UNDECLARED_SKIP_WITH_THE_README_NAMING_THEM',
 };
 
 function readAssembleStageArgs(args: readonly string[], examples: readonly string[]): { example: string; stage: AssembleStage; result: string } | string {
   if (args.length !== 5 || args[0] !== ASSEMBLE_STAGE_FLAG || args[3] !== '--result' || !args[4] || args[4].startsWith('--')) {
-    return 'ASSEMBLE_STAGE_SELECTOR: expected ' + ASSEMBLE_STAGE_FLAG + ' <example> <AE01|AE02|AE03> --result <file>; found ' + JSON.stringify(args);
+    return 'ASSEMBLE_STAGE_SELECTOR: expected ' + ASSEMBLE_STAGE_FLAG + ' <example> <' + ASSEMBLE_STAGES.join('|') + '> --result <file>; found ' + JSON.stringify(args);
   }
   if (!examples.includes(args[1])) return 'ASSEMBLE_STAGE_SELECTOR: example ' + JSON.stringify(args[1]) + ' is unknown; expected ' + examples.join(', ');
   const stage = ASSEMBLE_STAGES.find((s) => s === args[2]);
@@ -35071,7 +35085,7 @@ function replayAssembleStage(example: string, stage: AssembleStage, run: WorkerR
 /** Planted stage records exercise the same reader as real ordinary children. */
 function assembleStageControlFaults(): string[] {
   const faults: string[] = [];
-  if (ASSEMBLE_STAGES.join(',') !== 'AE01,AE02,AE03') faults.push('stage sequence missing, duplicated or out of order');
+  if (ASSEMBLE_STAGES.join(',') !== 'AE01,AE02,AE03,AE04') faults.push('stage sequence missing, duplicated or out of order');
   const known = ['demo'];
   const args = [ASSEMBLE_STAGE_FLAG, 'demo', 'AE01', '--result', 'stage.json'];
   const parsed = readAssembleStageArgs(args, known);
@@ -35199,6 +35213,47 @@ function runAssembleExampleStage(ex: string, stage: AssembleStage): number {
       uOk,
       uDetail,
       'issue #308: on a real painting the proposer left seven layers out with notes: [] — a reader of a real run has to be able to account for every layer the decomposition made, nose included',
+    );
+    break;
+  }
+  case 'AE04': {
+    // Issue #944: an example declares the pinhole bar in its tracked requirements.json and must stay green at 0; one
+    // that does not must SKIP, and its README must name every pinhole the stack holds (boxes, and #953 for why).
+    const declaredAt = join(ex, 'requirements.json');
+    let detail = '';
+    let ok = false;
+    const out = temp(`pinholes-${name}`);
+    try {
+      const declared = existsSync(declaredAt) && pinholesRequired(readRequirements(declaredAt));
+      const lines: string[] = [];
+      const r = assembleStage(
+        { source: join(ex, 'inputs', 'painting.png'), full: join(ex, 'inputs', 'layers', 'full'), head: join(ex, 'inputs', 'layers', 'head'), config: join(ex, 'config.json'), project: DEFAULT_PROJECT_RULE, ...(declared ? { requirements: declaredAt } : {}) },
+        { partsJson: join(out, 'rig', 'parts.json'), partsDir: join(out, 'rig', 'parts'), recomposite: join(out, 'render', 'recomposite_rig.png'), errorMap: join(out, 'render', 'recomposite_error_rig.png') },
+        (l) => lines.push(l),
+      );
+      const rule = lines.filter((l) => l.startsWith(`${PINHOLES_RULE}: `));
+      if (declared) {
+        ok = rule.length === 1 && rule[0].startsWith(`${PINHOLES_RULE}: PASS — 0 pinholes`);
+        detail = `declared in requirements.json: ${rule.map((l) => l.slice(0, 100)).join(' | ') || 'no pinhole line'}`;
+      } else {
+        const [W, H] = r.parts.rig_size;
+        const measured = measurePinholes(sourceInRig944(readSource944(join(ex, 'inputs', 'painting.png')), W, H), r.images).map(pinholeBox944).sort();
+        const readmeLines = readFileSync(join(ex, 'README.md'), 'utf8').split('\n').filter((l) => l.includes(`\`${PINHOLES_RULE}: SKIP\``));
+        const named = readmeLines.flatMap((l) => [...l.matchAll(/`(\d+,\d+ \d+x\d+)`/g)].map((m) => m[1])).sort();
+        const linked = readmeLines.some((l) => l.includes('https://github.com/rig-c/parts/issues/953'));
+        ok = rule.length === 1 && rule[0].startsWith(`${PINHOLES_RULE}: SKIP — not measured, not a pass`) && measured.length > 0 && named.join('|') === measured.join('|') && linked;
+        detail = `undeclared: ${rule.map((l) => l.slice(0, 60)).join(' | ') || 'no pinhole line'}; measured ${measured.length} pinhole(s) ${measured.join(', ') || '(none: declare the bar in requirements.json)'}; README names ${named.join(', ') || 'none'}${linked ? ', links #953' : ', does NOT link #953'}`;
+      }
+    } catch (err) {
+      detail = `refused or crashed: ${(err as Error).message.split('\n')[0]}`;
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
+    say(
+      `AE04_EXAMPLE_PINHOLES_DECLARED_PASS_AT_0_OR_UNDECLARED_SKIP_WITH_THE_README_NAMING_THEM[${name}]`,
+      ok,
+      detail,
+      'issue #944: the positive control of the pinhole bar is a public example that declares it and stays at 0; an example that does not declare it SKIPs, and the SKIP is explained by the boxes its README names, held to the measurement so the note cannot go stale',
     );
     break;
   }
