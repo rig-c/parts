@@ -128,6 +128,33 @@ export function runHybridLimbChecks(dir: string, say: Say): void {
     }
     say(`SET_${label}_CARRIES_NEW_ART_AND_AXIS`, blue>0 && other===0 && bandRecord?.limb?.band?.axis[0]!==0, `new source ${blue} blue pixels, ${other} other pixels; nonvertical source-axis provenance carried`);
   }
+  // Issue #950: rig reads a set's drawn and parts from parts.json only, so a config edit since assemble is refused by name.
+  type AltConfig = NonNullable<typeof subset.cfg.assemble.alternates>[number];
+  const staleAlt = (value: typeof subset, edit: (alt: AltConfig) => void): string => {
+    const c = structuredClone(value.cfg);
+    edit(c.assemble.alternates![0]);
+    return refusal(() => buildRig(c, value.parsed, value.images, undefined, 'direct'));
+  };
+  for (const [label, value] of [['AUTO',subset],['EXPLICIT',explicitSet],['FULL',fullSet]] as const) {
+    const clean = refusal(() => buildRig(value.cfg, value.parsed, value.images, undefined, 'direct'));
+    say(`SET_${label}_FRESH_DRAWN_AND_PARTS_ACCEPTED`, clean === '', `config parts ${JSON.stringify(value.cfg.assemble.alternates?.[0].parts ?? null)}, recorded ${JSON.stringify(value.parsed.alternates?.[0].parts ?? null)}${clean === '' ? '' : `: ${clean.split('\n')[0]}`}`);
+  }
+  // The band assemble generates may be listed in config or left out: both assemble to the same record.
+  const omitted = staleAlt(explicitSet, (alt) => { alt.parts = ['proximal', 'distal']; });
+  say('SET_EXPLICIT_BAND_OMITTED_IN_CONFIG_ACCEPTED', omitted === '', omitted === '' ? 'config ["proximal","distal"] against recorded ["proximal","distal","joint_band"]: the band is the generated one' : omitted.split('\n')[0]);
+  const plants: Array<[string, string, typeof subset, (alt: AltConfig) => void]> = [
+    ['DRAWN_VALUE', 'RIG_ALT_DRAWN_MATCH_CONFIG', subset, (alt) => { alt.drawn!.lower = -60; }],
+    ['DRAWN_KEY_ADDED', 'RIG_ALT_DRAWN_MATCH_CONFIG', subset, (alt) => { alt.drawn!.root = 0; }],
+    ['DRAWN_REMOVED', 'RIG_ALT_DRAWN_MATCH_CONFIG', fullSet, (alt) => { delete alt.drawn; }],
+    ['PARTS_NARROWED', 'RIG_ALT_PARTS_MATCH_CONFIG', subset, (alt) => { alt.parts = ['proximal']; }],
+    ['PARTS_REORDERED', 'RIG_ALT_PARTS_MATCH_CONFIG', subset, (alt) => { alt.parts = ['distal', 'proximal']; }],
+    ['PARTS_REMOVED', 'RIG_ALT_PARTS_MATCH_CONFIG', subset, (alt) => { delete alt.parts; }],
+    ['PARTS_ADDED_TO_FULL_SET', 'RIG_ALT_PARTS_MATCH_CONFIG', fullSet, (alt) => { alt.parts = ['proximal', 'distal']; }],
+  ];
+  for (const [label, code, value, edit] of plants) {
+    const message = staleAlt(value, edit);
+    say(`STALE_${label}_REFUSED`, message.includes(code) && message.includes('alternate set "other"') && message.includes('re-run assemble'), message.split('\n').find((l) => l.includes(code)) ?? message.split('\n')[0]);
+  }
   const badAlt = structuredClone(subset.parsed), badAltBand = badAlt.alternates?.[0].records.find(p=>p.limb?.band)?.limb?.band;
   if (!badAltBand) throw new Error('alternate band absent'); badAltBand.width=0;
   writeFileSync(join(dir,'bad-alternate.json'),serializeParts(badAlt));

@@ -1362,6 +1362,28 @@ export function buildWaistPairSource(
       fail('CONFIG_SET_FOCUS', `config.assemble alternate set "${a.name}".focus`, 'does not match the assembled painting point; re-run assemble after changing or removing focus');
     }
   }
+  // Issue #950: the alternate map below reads `drawn` and `parts` from the record only, so a config edit since
+  // assemble is refused by name rather than built from the stale record. assemble copies `drawn` verbatim and
+  // appends the generated hybrid band names to `parts`; only those appended names may stand beyond the config's.
+  const hybridBands = new Set(Object.values(cfg.limbs ?? {}).flatMap((limb) => limb.segments.flatMap((sg) => sg.hybrid === undefined ? [] : [sg.hybrid.part])));
+  const showDrawn = (d: Record<string, number> | undefined): string => d === undefined ? 'absent' : JSON.stringify(Object.fromEntries(Object.keys(d).sort().map((k) => [k, d[k]])));
+  const showParts = (p: readonly string[] | undefined): string => p === undefined ? 'absent' : JSON.stringify(p);
+  type AltFields = { drawn?: Record<string, number>; parts?: string[] };
+  // A set on one side only is not this rule's: a direct caller may pass records with no config set, and a config
+  // set with no record contributes no alternate map at all.
+  for (const record of parts.alternates ?? []) {
+    const configured: AltFields | undefined = configuredAlts.find((c) => c.name === record.name);
+    if (configured === undefined) continue;
+    if (showDrawn(configured.drawn) !== showDrawn(record.drawn)) {
+      fail('RIG_ALT_DRAWN_MATCH_CONFIG', `alternate set "${record.name}" drawn`, `config declares ${showDrawn(configured.drawn)}; parts.json records ${showDrawn(record.drawn)}; re-run assemble before rig`);
+    }
+    const declared = configured.parts;
+    const stripped = record.parts?.filter((n) => !(hybridBands.has(n) && !(declared ?? []).includes(n)));
+    if (showParts(declared) !== showParts(stripped)) {
+      const bands = record.parts !== undefined && stripped !== undefined && stripped.length !== record.parts.length ? `, ${showParts(stripped)} without its generated hybrid bands` : '';
+      fail('RIG_ALT_PARTS_MATCH_CONFIG', `alternate set "${record.name}" parts`, `config declares ${showParts(declared)}; parts.json records ${showParts(record.parts)}${bands}; re-run assemble before rig`);
+    }
+  }
   refuseIfAny(problems);
 
   // Standalone rig checks source-bound normalization, never reconstructing
