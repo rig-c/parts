@@ -93,6 +93,19 @@ A prerelease published by hand takes `--tag rc` on every `npm publish` command,
 as the workflow's do; without it npm 12 refuses the publish and npm 10 puts the
 prerelease on `latest`.
 
+**Reading a release log.** `gh run view --log` stops without a word at a line
+longer than its reader takes: in both v2.4.0 release runs it stopped at a
+108,398-byte selftest line, so the run-tally suite, the green summary and the
+first run's actual refusal after it were missing from what it printed (#977).
+Read a release job whole with `gh api repos/rig-c/parts/actions/jobs/<job-id>/logs`
+(the ids: `gh api repos/rig-c/parts/actions/runs/<run-id>/jobs --jq '.jobs[] |
+"\(.id) \(.name)"'`). The selftest's floor refuses any line over 32 KiB by suite
+and case (`RT23`), and a worker killed by a signal is a `SUITE_CRASHED` FAIL
+naming its suite and the signal (`RT24`). That first run's refusal was npm's,
+after a green gate: `TLOG_CREATE_ENTRY_ERROR` (409, an equivalent entry already
+in the transparency log) on the provenance step; a dispatch of the tag
+published it.
+
 ### Three names, one tree
 
 Every version is published under three names: `@rig-c/parts`, the `name` in

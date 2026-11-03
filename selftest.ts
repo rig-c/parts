@@ -774,9 +774,37 @@ interface SuiteBlock {
   skips: readonly SuiteSkip[];
 }
 
+/**
+ * The longest line, in UTF-8 bytes, a run may print to stdout (issue #977). The v2.4.0 release log read through
+ * `gh run view --log` (gh 2.65.0) stopped at AL09's 108,398-byte detail line in both release runs — every line after it,
+ * the run-tally suite, the peak and the green summary, then npm's own refusal, was missing from what gh printed, while
+ * the job's log (`gh api repos/<repo>/actions/jobs/<id>/logs`) held all of it. gh had read past a 20,564-byte line in the
+ * same step. [Inference] gh splits a log with Go's `bufio.Scanner`, whose default token limit is 64 KiB, and stops
+ * without an error at a longer line. Half of that leaves room for the prefixes a log reader adds to every line.
+ */
+const PRINTED_LINE_LIMIT = 32 * 1024;
+
+/** One line over {@link PRINTED_LINE_LIMIT}: the suite printing it, the last case named before it, and its size. */
+interface LongLine {
+  key: string;
+  after: string;
+  bytes: number;
+}
+
+/** Where a run printed a line no log reader can be trusted to read past (issue #977). Empty is agreement. */
+function longLineFaults(lines: readonly LongLine[]): string[] {
+  return lines.map(
+    (l) =>
+      `the suite "${l.key || '(none)'}" printed a ${l.bytes}-byte line${l.after === '' ? '' : ` after ${l.after}`}, over the ${PRINTED_LINE_LIMIT}-byte limit; a log reader that stops at a long line (gh run view --log stopped at one of 108,398 bytes in release run 41621926246) drops every line after it, the verdict included, so shorten what that case prints`,
+  );
+}
+
 class RunTally {
   readonly blocks: SuiteBlock[] = [];
   readonly gutter = new Map<string, number>();
+  /** Every printed line over {@link PRINTED_LINE_LIMIT} bytes (issue #977). */
+  readonly longLines: LongLine[] = [];
+  private lastCase = '';
   private readonly named: string[] = [];
   private readonly skipped: SuiteSkip[] = [];
   private activeKey = '';
@@ -789,6 +817,11 @@ class RunTally {
   /** Count what one `console.log` printed, line by line. */
   observe(printed: string): void {
     for (const line of printed.split('\n')) {
+      // A UTF-8 byte count is at most three per UTF-16 unit, so only a line this long can be over the limit.
+      if (line.length * 3 > PRINTED_LINE_LIMIT) {
+        const bytes = Buffer.byteLength(line, 'utf8');
+        if (bytes > PRINTED_LINE_LIMIT) this.longLines.push({ key: this.activeKey, after: this.lastCase, bytes });
+      }
       if (isSectionHeader(line)) {
         this.headerLines++;
         continue;
@@ -804,7 +837,10 @@ class RunTally {
       if (VERDICT_GUTTER.includes(word)) {
         this.controlLines++;
         const name = caseName(line);
-        if (name !== null) this.named.push(name);
+        if (name !== null) {
+          this.named.push(name);
+          this.lastCase = name;
+        }
         if (word === FAIL_GUTTER) this.failLines++;
       } else if (QUIET_GUTTER.includes(word)) {
         this.quietLines++;
@@ -41538,7 +41574,10 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
       if (readFileSync(cutFile, 'utf8') !== cut) faults.push(`${scenario.name}: cut tag changed`);
       if (published.some((line) => !line.includes('--provenance'))) faults.push(`${scenario.name}: provenance dropped`);
       if ((scenario.inputTag ?? tag).includes('-') && published.some((line) => !line.endsWith('--tag rc'))) faults.push(`${scenario.name}: rc dist-tag dropped`);
-      rows.push(`${scenario.name}: exit ${exit}, publishes ${published.length}/${wantPublished}, outputs ${JSON.stringify(outputs)}, calls ${JSON.stringify(calls)}, output ${JSON.stringify(output.trim())}`);
+      // Issue #977: one row per scenario, its exit and publishes only. With every scenario's calls and shell output this
+      // detail was one 108,398-byte line, and `gh run view --log` stopped at it; a scenario that disagrees prints its
+      // output in its fault above.
+      rows.push(`${scenario.name}: exit ${exit}, publishes ${published.length}/${wantPublished}`);
     }
     return { faults, rows };
   };
@@ -41573,7 +41612,9 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
       else {
         const found = inspect(plant.text);
         if (found.faults.length === 0) probes.push(`${plant.what}: no fault fired`);
-        rows.push(`${plant.what}: ${found.faults.length} fault(s) — ${found.faults.join('; ')}`);
+        // Issue #977: the scenarios each mutant turned red, by name; their faults carry whole shell outputs.
+        const reds = [...new Set(found.faults.map((f) => scenarios.map((sc) => sc.name).filter((n) => f.startsWith(`${n}: `)).sort((a, b) => b.length - a.length)[0] ?? f.split(': ')[0]))];
+        rows.push(`${plant.what}: ${found.faults.length} fault(s) in ${reds.join(', ')}`);
       }
     }
     say('AL09_PUSH_PROVENANCE_MATCHES_THE_CUT_TAG_COMMIT_BEFORE_ANY_NAME_IS_PUBLISHED', standing.faults.length === 0 && probes.length === 0,
@@ -42681,6 +42722,63 @@ function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | nu
       cleanDeclarations[2].names.length === 0 && unexempted[2].names.includes('CF00_THE_HARNESS_RAN'),
     `clean: ${casePrefixFaults(cleanDeclarations).length} faults; omitted-suite plant: ${omittedCollision.join('; ')}; harness exception applies only to the existing literal-false reporter`,
     'issue #842: the selected live tally cannot see omitted suites; local literal declarations supplement it, comments do not; imported and computed names remain the full CI tally responsibility');
+
+  // RT23 — issue #977: a line over the limit faults the floor by suite, case and bytes; a line at the limit does not;
+  // and the run so far printed none (AL09's 108,398-byte detail was the one that cut the v2.4.0 release log short).
+  {
+    const plant = new RunTally();
+    plant.of('alpha', () => {
+      plant.observe('── alpha ──');
+      plant.observe('  PASS  A01_AT_THE_LIMIT');
+      plant.observe(`          ${'x'.repeat(PRINTED_LINE_LIMIT - 10)}`);
+      plant.observe('  PASS  A02_OVER_IT_IN_BYTES_NOT_IN_CHARACTERS');
+      plant.observe(`          ${'é'.repeat(PRINTED_LINE_LIMIT / 2 - 4)}`);
+      return 0;
+    });
+    const planted = longLineFaults(plant.longLines);
+    const liveLong = longLineFaults(live.longLines);
+    const caught = planted.length === 1 && planted[0].includes('"alpha"') && planted[0].includes('after A02_OVER_IT_IN_BYTES_NOT_IN_CHARACTERS') && planted[0].includes(`a ${PRINTED_LINE_LIMIT + 2}-byte line`);
+    say(
+      'RT23_A_PRINTED_LINE_OVER_THE_LOG_READERS_LIMIT_FAULTS_BY_SUITE_CASE_AND_BYTES_AND_THIS_RUN_PRINTED_NONE',
+      caught && liveLong.length === 0,
+      `limit ${PRINTED_LINE_LIMIT} bytes; planted: a line of exactly the limit -> ${planted.some((f) => f.includes(`a ${PRINTED_LINE_LIMIT}-byte line`)) ? 'FAULTED' : 'no fault'}, one of ${PRINTED_LINE_LIMIT / 2 + 6} characters and ${PRINTED_LINE_LIMIT + 2} bytes -> ${planted[0]?.split(', over')[0] ?? 'NOT faulted'}; this run so far: ${liveLong.length === 0 ? `no line over the limit in ${live.blocks.length} suite(s)` : liveLong.join(' | ')}`,
+      'issue #977: gh run view --log stopped at AL09\'s 108,398-byte line in both v2.4.0 release runs, so the run-tally suite, the peak, the green summary and npm\'s own refusal after it were missing from what gh printed; the job log held them all',
+    );
+  }
+
+  // RT24 — issue #977: a worker killed by a signal is named by its suite and its signal, its lines before the death are
+  // replayed, and RunTally.of turns it into a FAIL line, so the run cannot end green. A real child, killed for real.
+  {
+    const dir = temp('rt24');
+    try {
+      const result = join(dir, 'alpha.json');
+      const child = spawnSync(process.execPath, ['-e', "console.log('── alpha ──\\n  PASS  A01_BEFORE_THE_KILL'); process.kill(process.pid, 'SIGKILL');"], { encoding: 'buffer' });
+      const run = workerRunOf('alpha', child.status, child.signal, [child.stdout], [child.stderr], result);
+      const plant = new RunTally();
+      const lines: string[] = [];
+      const printLine = console.log;
+      console.log = (...values: unknown[]): void => {
+        const text = values.map(String).join(' ');
+        lines.push(text);
+        plant.observe(text);
+      };
+      try {
+        plant.of('alpha', () => replayWorker('alpha', run, (line) => console.log(line), () => {}));
+      } finally {
+        console.log = printLine;
+      }
+      const crash = lines.find((l) => l.startsWith('  FAIL  SUITE_CRASHED[alpha]')) ?? '';
+      const named = crash.includes('the worker for the suite "alpha" exited on SIGKILL without writing its result');
+      say(
+        'RT24_A_WORKER_KILLED_BY_A_SIGNAL_IS_NAMED_BY_SUITE_AND_SIGNAL_AND_FAILS_THE_RUN',
+        child.signal === 'SIGKILL' && named && lines.includes('  PASS  A01_BEFORE_THE_KILL') && plant.failures === 1 && plant.blocks[0]?.fails === 1,
+        `child status ${String(child.status)}, signal ${String(child.signal)}; replayed ${lines.length} line(s); ${crash.split('\n')[0] || 'no SUITE_CRASHED line'}; failures ${plant.failures}`,
+        'issue #977: a worker that dies without its result must say which suite and how it died, in the run\'s own log, and the run must not end green; "exited on a signal" named neither the signal nor anything to look for',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
   return bad();
 }
 
@@ -53504,9 +53602,22 @@ function dispatchOrder(keys: readonly string[], first: readonly string[]): strin
 interface WorkerRun {
   key: string;
   status: number | null;
+  /** The signal that ended the worker, when one did (issue #977); a record written before #977 has none. */
+  signal?: string | null;
   stdout: string;
   stderr: string;
   result: string | null;
+}
+
+/** How a worker ended, as a refusal says it: its exit code, or the signal that killed it (issue #977). */
+function workerExitText(run: Pick<WorkerRun, 'status' | 'signal'>): string {
+  if (run.status !== null) return String(run.status);
+  return typeof run.signal === 'string' && run.signal !== '' ? `on ${run.signal}` : 'on a signal';
+}
+
+/** A finished worker child as the run reads it: what it printed, how it ended, and the result file it left or did not. */
+function workerRunOf(key: string, status: number | null, signal: string | null, out: readonly Buffer[], err: readonly Buffer[], result: string, extra = ''): WorkerRun {
+  return { key, status, signal, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') + extra, result: existsSync(result) ? readFileSync(result, 'utf8') : null };
 }
 
 /**
@@ -53525,7 +53636,7 @@ function replayWorker(key: string, run: WorkerRun | undefined, print: (line: str
   for (const line of lines) print(line);
   if (run.stderr !== '') printErr(run.stderr);
   const tail = run.stderr.trim().split('\n').slice(-3).join(' | ');
-  if (run.result === null) throw new Error(`the worker for the suite "${key}" exited ${run.status ?? 'on a signal'} without writing its result${tail === '' ? '' : `: ${tail}`}`);
+  if (run.result === null) throw new Error(`the worker for the suite "${key}" exited ${workerExitText(run)} without writing its result${tail === '' ? '' : `: ${tail}`}`);
   let record: { key?: unknown; returned?: unknown; crash?: unknown };
   try {
     record = JSON.parse(run.result) as typeof record;
@@ -53538,7 +53649,7 @@ function replayWorker(key: string, run: WorkerRun | undefined, print: (line: str
     err.stack = record.crash;
     throw err;
   }
-  if (run.status !== 0) throw new Error(`the worker for the suite "${key}" wrote its result and exited ${run.status ?? 'on a signal'}${tail === '' ? '' : `: ${tail}`}`);
+  if (run.status !== 0) throw new Error(`the worker for the suite "${key}" wrote its result and exited ${workerExitText(run)}${tail === '' ? '' : `: ${tail}`}`);
   if (record.returned !== null && !(typeof record.returned === 'number' && Number.isInteger(record.returned) && record.returned >= 0)) {
     throw new Error(`the worker for the suite "${key}" handed back ${JSON.stringify(record.returned)}, which is neither a failure count nor null`);
   }
@@ -53608,10 +53719,9 @@ function launchWorker(key: string, corpus: string | null, dir: string, pre = fal
     const child = spawn(process.execPath, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.on('data', (b: Buffer) => out.push(b));
     child.stderr.on('data', (b: Buffer) => err.push(b));
-    const finish = (status: number | null, extra: string): void =>
-      done({ key, status, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') + extra, result: existsSync(result) ? readFileSync(result, 'utf8') : null });
-    child.on('error', (e) => finish(null, `could not start the worker: ${e.message}\n`));
-    child.on('close', (status) => finish(status, ''));
+    const finish = (status: number | null, signal: string | null, extra: string): void => done(workerRunOf(key, status, signal, out, err, result, extra));
+    child.on('error', (e) => finish(null, null, `could not start the worker: ${e.message}\n`));
+    child.on('close', (status, signal) => finish(status, signal, ''));
   });
 }
 
@@ -53705,6 +53815,7 @@ function parseShardRecord(text: string): ShardRecord | string {
     const ok =
       typeof x.key === 'string' &&
       (x.status === null || typeof x.status === 'number') &&
+      (x.signal === undefined || x.signal === null || typeof x.signal === 'string') &&
       typeof x.stdout === 'string' &&
       typeof x.stderr === 'string' &&
       (x.result === null || typeof x.result === 'string') &&
@@ -54341,7 +54452,11 @@ async function reportRun(
   console.log = printLine;
 
   console.log('');
-  const floor = [...tallyFaults(tally.blocks, tally.gutter, tally.total), ...suiteSetFaults(tally.blocks.map((b) => b.key), [...keys, TALLY_SUITE])];
+  const floor = [
+    ...tallyFaults(tally.blocks, tally.gutter, tally.total),
+    ...suiteSetFaults(tally.blocks.map((b) => b.key), [...keys, TALLY_SUITE]),
+    ...longLineFaults(tally.longLines),
+  ];
   if (floor.length > 0) {
     if (summaryJson !== null) writeSummaryJson(summaryJson, buildSummaryJson(tally, only, floor, 2));
     console.error('rig-parts selftest: this run cannot account for itself — that is not a pass, it is an empty gate');
