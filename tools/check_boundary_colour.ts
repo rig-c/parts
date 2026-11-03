@@ -1,12 +1,13 @@
 /** Planted controls for the boundary colour-step bar against the rig's own pieces (#942). */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { CHECK_PARTS, writeCheckRig } from '../fixtures/checkrig.ts';
 import { checkStage } from '../src/build.ts';
-import { BOUNDARY_COLOUR_CODE, BOUNDARY_COLOUR_LINE, BOUNDARY_COLOUR_UNMEASURED_CODE, boundaryColourProblems } from '../src/boundarycolour.ts';
-import { checkStatuses, type RigcRunner } from '../src/check.ts';
+import { BOUNDARY_COLOUR_CODE, BOUNDARY_COLOUR_LINE, BOUNDARY_COLOUR_UNMEASURED_CODE, boundaryColourProblems, measureBoundaryColour } from '../src/boundarycolour.ts';
+import { checkStatuses, officialRenderer, type RigcRunner } from '../src/check.ts';
 import { PartsError, type Problem } from '../src/errors.ts';
+import { readParts } from '../src/parts.ts';
 import { readRequirements } from '../src/requirements.ts';
 import { writePng } from '../src/raster/png.ts';
 import { resize } from '../src/raster/resize.ts';
@@ -138,6 +139,34 @@ export function runBoundaryColourChecks(dir: string, say: Say, rigc: RigcRunner)
   let oddCodes: Problem[] = [];
   try { oddCodes = run('odd-pad', oddRig, declared).problems.filter((p) => p.code === BOUNDARY_COLOUR_UNMEASURED_CODE); } catch (e) { if (e instanceof PartsError) oddCodes = e.problems.filter((p) => p.code === BOUNDARY_COLOUR_UNMEASURED_CODE); else throw e; }
   say('BK11_AN_UNREADABLE_PIECE_IS_NEVER_A_PASS', oddCodes.length === 1 && oddCodes[0].object.startsWith('slot "front"') && oddCodes[0].detail.includes('one even pad'), JSON.stringify(oddCodes));
+
+  // A skin entry whose explicit `name` differs from its key: the renderer reports the drawn attachment by that name, so
+  // the source is found by name (seamSourceAttachment, as the seam's mapping is) — measured, and read as the un-renamed rig.
+  // The gated clean build is renamed by hand (key "front_key", name "ink", the atlas region with it); rig.json alike.
+  const renamedBuild = join(dir, 'renamed', 'build');
+  rmSync(join(dir, 'renamed'), { recursive: true, force: true });
+  cpSync(join(dir, 'declared-clean', 'out', 'build'), renamedBuild, { recursive: true });
+  type Skinned = { slots: Array<{ name: string; attachment?: string }>; skins: unknown };
+  const rename = <T extends Skinned>(doc: T, entries: (d: T) => Record<string, unknown>): T => {
+    const at = entries(doc);
+    const entry = at.front as Record<string, unknown>;
+    delete at.front;
+    at.front_key = { ...entry, name: 'ink' };
+    const slot = doc.slots.find((sl) => sl.name === 'front');
+    if (slot !== undefined) slot.attachment = 'front_key';
+    return doc;
+  };
+  const skeletonPath = join(renamedBuild, 'skeleton.json');
+  const skeleton = rename(JSON.parse(readFileSync(skeletonPath, 'utf8')) as Skinned & { skins: Array<{ attachments: Record<string, Record<string, unknown>> }> }, (d) => d.skins[0].attachments.front);
+  writeFileSync(skeletonPath, JSON.stringify(skeleton));
+  const atlasPath = join(renamedBuild, 'skeleton.atlas');
+  writeFileSync(atlasPath, readFileSync(atlasPath, 'utf8').replace(/^front$/m, 'ink'));
+  const cleanRigJson = JSON.parse(readFileSync(join(cleanRig, 'rig.json'), 'utf8')) as Skinned & { skeleton: { x: number; y: number; width: number; height: number }; skins: { default: Record<string, Record<string, unknown>> } };
+  const measureOn = (build: string, rig: Record<string, unknown>) => measureBoundaryColour(officialRenderer(), { build, stage: cleanRigJson.skeleton, parts: readParts(join(cleanRig, 'parts.json')), partsDir: join(cleanRig, 'parts'), imagesDir: join(cleanRig, 'images'), rig, fps: 12 }, { max_step_excess: ALLOW }, []);
+  const asBuilt = measureOn(join(dir, 'declared-clean', 'out', 'build'), cleanRigJson);
+  const renamed = measureOn(renamedBuild, rename(structuredClone(cleanRigJson), (d) => d.skins.default.front));
+  say('BK13_A_SKIN_ENTRY_NAMED_APART_FROM_ITS_KEY_IS_MEASURED_AND_READS_AS_THE_UNRENAMED_RIG', renamed.unmeasured.length === 0 && renamed.boundary_pairs > 0 && JSON.stringify(renamed) === JSON.stringify(asBuilt),
+    JSON.stringify({ renamed: { status: renamed.status, pairs: renamed.boundary_pairs, worst: renamed.worst, unmeasured: renamed.unmeasured }, asBuilt: { status: asBuilt.status, pairs: asBuilt.boundary_pairs, worst: asBuilt.worst } }));
 
   // 4. The CLI: undeclared exits 0 with the SKIP line; a declared plant exits 1 naming the pair.
   const cli = (name: string, input: string, requirement?: string) => spawnSync(process.execPath, [resolve(import.meta.dir, '../cli.ts'), 'check', '--rig', input, '--out', join(dir, name, 'cli'), '--no-extremes', ...(requirement === undefined ? [] : ['--requirements', requirement])], { encoding: 'utf8' });

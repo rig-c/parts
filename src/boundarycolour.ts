@@ -23,6 +23,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Plate } from '@rig-c/core/plate';
 import type { Frame, Piece } from '@rig-c/core/render-shared';
+import { seamSourceAttachment } from './check.ts';
+import { cropToSpineY } from './coords.ts';
 import type { Problem } from './errors.ts';
 import type { PartsFile } from './parts.ts';
 import { readPng } from './raster/png.ts';
@@ -113,7 +115,6 @@ export function measureBoundaryColour(api: Api, input: BoundaryColourInput, decl
   const vp = { minX: input.stage.x, minY: input.stage.y, maxX: input.stage.x + W, maxY: input.stage.y + H, scale: 1, width: W, height: H };
   const project = api.projector(vp);
   const records = new Map(input.parts.parts.map((p) => [p.name, p]));
-  const skins = isObject(input.rig.skins) && isObject(input.rig.skins.default) ? input.rig.skins.default : {};
   const sources = new Map<string, Source | string>();
   const unmeasured: BoundaryColourUnmeasured[] = [];
   const unmeasuredSeen = new Set<string>();
@@ -127,9 +128,11 @@ export function measureBoundaryColour(api: Api, input: BoundaryColourInput, decl
     if (piece.texture === undefined) return fail('the renderer gave no art UVs for the piece');
     const drawn = (frame.attachments ?? []).filter((a) => a.slot === piece.slot);
     if (drawn.length !== 1) return fail(`the frame draws ${drawn.length} attachment(s) on the slot; one is required`);
-    const slotSkin = skins[piece.slot];
-    const att = isObject(slotSkin) ? slotSkin[String(drawn[0].attachment)] : undefined;
-    const image = isObject(att) && typeof att.image === 'string' ? att.image : `${String(drawn[0].attachment)}.png`;
+    // The drawn attachment is resolved by name the way the seam's source mapping is (an entry's explicit `name`, or
+    // else its key), so a skin entry renamed under another key still reads its own image.
+    let image: string;
+    try { image = String(seamSourceAttachment(input.rig, piece.slot, String(drawn[0].attachment)).image); }
+    catch (e) { return fail(`the skin resolves no single image drawing for attachment "${String(drawn[0].attachment)}" (${e instanceof Error ? e.message : String(e)})`); }
     let got = sources.get(image);
     if (got === undefined) {
       const name = image.replace(/\.png$/, '');
@@ -167,7 +170,7 @@ export function measureBoundaryColour(api: Api, input: BoundaryColourInput, decl
       const page = `boundary-colour:${i}`;
       if (flat) {
         const { x, y, w, h } = s.rec;
-        const wx = (rx: number): number => rx + vp.minX, wy = (ry: number): number => vp.maxY - ry;
+        const wx = (rx: number): number => rx + vp.minX, wy = (ry: number): number => vp.minY + cropToSpineY(ry, H);
         pages.set(page, s.flat);
         // rasteriseQuad reads world/uv pairs 0, 1, 2 as (s=1,t=0), the origin, (s=0,t=1).
         return { kind: 'region', slot: piece.slot, page, tint: piece.tint, ...(piece.dark === undefined ? {} : { dark: piece.dark }), world: [wx(x + w), wy(y), wx(x), wy(y), wx(x), wy(y + h), wx(x + w), wy(y + h)], uvs: [1, 0, 0, 0, 0, 1, 1, 1] };
