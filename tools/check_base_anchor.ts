@@ -52,6 +52,10 @@ export function runBaseAnchorChecks(dir: string, say: Say, runner?: RigcRunner):
   }
   const stale = structuredClone(input.cfg); delete stale.assemble.alternates![0].base_anchor;
   say('STALE_DIRECTIVE_REFUSED', refused(() => buildRig(stale, input.parts, input.images)).includes('RIG_ALT_BASE_ANCHOR_MATCH_CONFIG'), 'removing a declaration requires re-assemble');
+  // Issue #968: a declared set with no record is refused once, by its cause; base_anchor is not the missing thing.
+  const unrecorded = structuredClone(input.parts); unrecorded.alternates = [];
+  const absentLines = refused(() => buildRig(input.cfg, unrecorded, input.images)).split('\n').filter((l) => l !== '');
+  say('ABSENT_SET_REFUSED_ONCE_AS_SET_ASSEMBLED', absentLines.length === 1 && absentLines[0].startsWith('RIG_ALT_SET_ASSEMBLED:'), absentLines.join(' | '));
   const malformed: unknown[] = [null, {}, { sleeve: { axes: [] } }, { sleeve: { axes: ['z'] } }, { sleeve: { axes: ['x', 'x'] } }, { absent: { axes: ['x'] } }, { skirt: { axes: ['x'] } }, { sleeve: { axes: ['x'], paired: ['body'] } }, { sleeve: { axes: ['x'], paired: ['badge', 'badge'] } }, { sleeve: { axes: ['x'], mode: 'guess' } }];
   for (const [i, value] of malformed.entries()) {
     const raw = structuredClone(cfg) as unknown as { assemble: { alternates: Record<string, unknown>[] } }; raw.assemble.alternates[0].base_anchor = value;
