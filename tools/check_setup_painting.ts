@@ -10,7 +10,7 @@ import { readRequirements } from '../src/requirements.ts';
 import { alphaComposite } from '../src/raster/composite.ts';
 import { newRaster } from '../src/raster/types.ts';
 import { writePng } from '../src/raster/png.ts';
-import { SETUP_PAINTING_LINE, setupPaintingLine, setupPaintingProblems, type SetupPainting } from '../src/setuppainting.ts';
+import { SETUP_PAINTING_LINE, SETUP_PAINTING_REQUIRED_CODE, setupPaintingLine, setupPaintingProblems, type SetupPainting } from '../src/setuppainting.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
 export function runSetupPaintingChecks(dir: string, say: Say, rigc: RigcRunner): void {
@@ -77,6 +77,8 @@ export function runSetupPaintingChecks(dir: string, say: Say, rigc: RigcRunner):
   say('ZO24_JSON_UNDECLARED_IS_THE_WRITTEN_REPORT', jsonCli.status === 0 && jsonMatches(jsonCli) && remedy(jsonCli.stdout) && jsonCli.stdout.includes('"status": "SKIP"'), JSON.stringify({exit: jsonCli.status, sameBytes: jsonMatches(jsonCli), stderr: jsonCli.stderr}));
   const declaredCli = cli('json-clean', req('json-clean-req', real), true);
   say('ZO25_JSON_DECLARED_PASS_EXIT_ZERO', declaredCli.status === 0 && jsonMatches(declaredCli) && JSON.parse(declaredCli.stdout)[SETUP_PAINTING_LINE]?.status === 'PASS', JSON.stringify({exit: declaredCli.status, sameBytes: jsonMatches(declaredCli)}));
+  const requiredClean = cli('json-required-clean', req('json-required-clean-req', { ...real, required: true }), true);
+  say('ZO33_REQUIRED_WITH_LIMITS_CLEAN_PASSES_AS_OPTIONAL', requiredClean.status === 0 && jsonMatches(requiredClean) && JSON.stringify(JSON.parse(requiredClean.stdout)[SETUP_PAINTING_LINE]) === JSON.stringify(JSON.parse(declaredCli.stdout)[SETUP_PAINTING_LINE]) && JSON.parse(requiredClean.stdout)[SETUP_PAINTING_LINE]?.status === 'PASS', JSON.stringify({ exit: requiredClean.status, sameBytes: jsonMatches(requiredClean) }));
   const clean = run('clean', req('clean-req', real));
   const cleanLine = clean.figures[SETUP_PAINTING_LINE];
   say('ZO12_REAL_SETUP_CLEAN_CONTROL', cleanLine?.status === 'PASS' && 'regions' in cleanLine && cleanLine.regions[0].pixel_count === 0 && checkStatuses(clean.figures)[SETUP_PAINTING_LINE] === 'PASS' && logs.get('clean')?.some(line => line.includes(SETUP_PAINTING_LINE + ': PASS')) === true, JSON.stringify(cleanLine));
@@ -91,6 +93,27 @@ export function runSetupPaintingChecks(dir: string, say: Say, rigc: RigcRunner):
   say('ZO26_JSON_DECLARED_FAILURE_EXIT_ONE', redCli.status === 1 && jsonMatches(redCli) && JSON.parse(redCli.stdout)[SETUP_PAINTING_LINE]?.status === 'FAIL' && JSON.parse(redCli.stdout).PASS === false, JSON.stringify({exit: redCli.status, sameBytes: jsonMatches(redCli)}));
   const duplicate = spawnSync(process.execPath, [resolve(import.meta.dir, '../cli.ts'), 'check', '--json', '--json'], { encoding: 'utf8' });
   say('ZO27_JSON_DUPLICATE_IS_USAGE_ERROR', duplicate.status === 2 && (duplicate.stdout + duplicate.stderr).includes('--json is given twice'), JSON.stringify({exit: duplicate.status}));
+  // Issue #943: required: true turns every absent limit into a refusal by name, before anything is built.
+  const requiredRefusal = (name: string, value: unknown): readonly Problem[] => {
+    try { readRequirements(req(name, value)); } catch (e) { if (e instanceof PartsError) return e.problems; throw e; }
+    return [];
+  };
+  const bare = requiredRefusal('required-bare', { required: true });
+  say('ZO28_REQUIRED_WITHOUT_LIMITS_REFUSED_BY_FIELD', bare.length === 2 && bare.every(p => p.code === SETUP_PAINTING_REQUIRED_CODE) && bare[0].object.endsWith('setup_painting.rgb_tolerance') && bare[1].object.endsWith('setup_painting.regions') && bare.every(p => p.detail.includes('is absent') && p.detail.includes('required is true')), JSON.stringify(bare));
+  const unlimited = { required: true, rgb_tolerance: 60, regions: [{ name: 'figure', box: [0, 0, 48, 80] }, { name: 'head', box: [0, 0, 48, 20], max_pixels: 0 }] };
+  const region = requiredRefusal('required-region', unlimited);
+  const { required: _drop, ...optional } = unlimited;
+  const optionalSkip = run('required-control-skip', req('required-control-skip-req', optional)).figures[SETUP_PAINTING_LINE];
+  say('ZO29_REQUIRED_REGION_WITHOUT_MAX_PIXELS_REFUSED_WHERE_OPTIONAL_SKIPS', region.length === 1 && region[0].code === SETUP_PAINTING_REQUIRED_CODE && region[0].object.endsWith('setup_painting.regions[0].max_pixels (region "figure")') && optionalSkip?.status === 'SKIP', JSON.stringify({ region, optional: optionalSkip?.status ?? null }));
+  const requiredCli = cli('required-cli', req('required-cli-req', { required: true }));
+  const requiredLines = requiredCli.stdout.split('\n').filter(line => line.includes(SETUP_PAINTING_REQUIRED_CODE));
+  say('ZO30_REQUIRED_CLI_EXIT_ONE_BEFORE_BUILD', requiredCli.status === 1 && requiredLines.length === 2 && requiredLines.every(line => line.includes('FAIL')) && !requiredCli.stdout.includes(SETUP_PAINTING_LINE + ': SKIP'), JSON.stringify({ exit: requiredCli.status, lines: requiredLines }));
+  const requiredDefect = cli('required-defect', req('required-defect-req', { ...real, required: true }), true);
+  const sameBytes = (a: ReturnType<typeof cli>, b: ReturnType<typeof cli>): boolean => a.status === b.status && JSON.stringify(JSON.parse(a.stdout)[SETUP_PAINTING_LINE]) === JSON.stringify(JSON.parse(b.stdout)[SETUP_PAINTING_LINE]);
+  say('ZO31_REQUIRED_WITH_LIMITS_DEFECT_FAILS_AS_OPTIONAL', requiredDefect.status === 1 && sameBytes(requiredDefect, redCli) && JSON.parse(requiredDefect.stdout)[SETUP_PAINTING_LINE]?.status === 'FAIL', JSON.stringify({ required: requiredDefect.status, optional: redCli.status }));
+  const notBoolean = requiredRefusal('required-string', { ...real, required: 'yes' });
+  const optionalFalse = run('required-false', req('required-false-req', { ...real, required: false })).figures[SETUP_PAINTING_LINE];
+  say('ZO32_REQUIRED_IS_BOOLEAN_FALSE_IS_ABSENT', notBoolean.length === 1 && notBoolean[0].code === 'REQUIREMENTS_FIELD' && notBoolean[0].object.endsWith('setup_painting.required') && JSON.stringify(optionalFalse) === JSON.stringify(red.figures[SETUP_PAINTING_LINE]), JSON.stringify({ notBoolean, same: JSON.stringify(optionalFalse) === JSON.stringify(red.figures[SETUP_PAINTING_LINE]) }));
   // The own source fixture is read-only through every check.
   say('ZO15_INPUT_RIG_UNCHANGED', readFileSync(join(input, 'rig.json'), 'utf8') === rigBefore && calls.some(a => a[0] === 'build'), 'real gated builds and official setup renderer used; no source repair');
   let gridRefused = false;

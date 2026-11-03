@@ -534,7 +534,14 @@ The separate ordering scalar is unchanged. No-image outputs retain legacy bytes.
 The optional `setup_painting` key in `spine-parts-requirements/1` adds a
 `SETUP_MATCHES_PAINTING` measurement when declared. It requires authored
 `rgb_tolerance` and named native-stage boxes. Each optional `max_pixels` is
-that whole region's limit; omission is SKIP, never PASS. With `--source` but
+that whole region's limit; omission is SKIP, never PASS. The optional boolean
+`setup_painting.required` (issue #943, additive) is the author's declaration
+that the check may not SKIP: with `true`, an absent `rgb_tolerance`, `regions`
+or region `max_pixels` is refused by name as `SETUP_PAINTING_REQUIRED_LIMIT`
+when the file is read, before anything is built, and no limit is derived; a
+fully limited declaration measures, prints and writes the same bytes as
+without the field. Absent or `false`, every reading in this section is
+unchanged. With `--source` but
 no declaration, the console, `check.json` and the report's skipped-bar list now
 say SKIP with the reason and the `--requirements` declaration remedy; exit
 codes stay unchanged. No metric, region or limit is invented. Without source

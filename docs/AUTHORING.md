@@ -5192,6 +5192,7 @@ documents do not ship). Each is an input this package built; none is an author's
 | <a id="CHECK_SETUP_MATCHES_PAINTING"></a>`CHECK_SETUP_MATCHES_PAINTING` | region, slot, failing-pixel box, slot pixelcount, complete region pixelcount and declared limit | compare the source painting beside the actual setup; follow [Source before scissors](#source-before-scissors), then rerun with the same authored limit |
 | <a id="CHECK_SETUP_PAINTING_SOURCE"></a>`CHECK_SETUP_PAINTING_SOURCE` | a declaration without a source painting | supply `--source`; the assembled composite is not an independent reference |
 | <a id="CHECK_SETUP_PAINTING_MEASURED"></a>`CHECK_SETUP_PAINTING_MEASURED` | missing native setup/ownership or unsupported clipping | supply observable textured setup geometry; an unavailable instrument never passes |
+| <a id="SETUP_PAINTING_REQUIRED_LIMIT"></a>`SETUP_PAINTING_REQUIRED_LIMIT` | `setup_painting.required` is `true` and a limit the check needs is absent: `rgb_tolerance`, `regions`, or a region's `max_pixels` (the object names the region). Refused when the requirements file is read, before anything is built (issue #943) | author the named limit; none is derived from the art. Without `required` the same region reports SKIP |
 | <a id="CHECK_SOURCE_GRID"></a>`CHECK_SOURCE_GRID` | the setup-pose still and its black-tinted twin (the coverage `SETUP_POSE_VS_SOURCE` reads) did not come back on one grid over one opaque background | a rigc problem; report it |
 | <a id="CHECK_RIGC_VERSION"></a>`CHECK_RIGC_VERSION` | `rigc --version` is below 1.4.0, or prints no version: its `render` has no `--geometry`, which `TEXTURE_STRETCH` reads. Refused before anything is built | `bun install` (this package depends on rig-c ^2.20.4), or put a newer `rigc` first on `PATH` |
 | <a id="CHECK_RIGC_ENTRY"></a><a id="CHECK_RIGC_ENTRY_READS"></a>`CHECK_RIGC_ENTRY`, `CHECK_RIGC_ENTRY_READS` | `rigc --version` names no entry (a rigc below 2.0.0), or names one in neither launcher form (`entry: cli.ts — @esotericsoftware/spine-core <v> present`, `entry: cli_core.ts — @esotericsoftware/spine-core absent — …`); `check.json`'s `rigc_entry` records the one that gated the build | `bun install` |
@@ -5847,7 +5848,7 @@ Under `--source <painting.png>`, a second reported line, also never a FAIL
 | line | reports | bar | `reference-demo` | `reference-sample` | SKIP when |
 | --- | --- | --- | --- | --- | --- |
 | <a id="SETUP_POSE_VS_SOURCE"></a>`SETUP_POSE_VS_SOURCE` | the setup pose against the painting, by `assemble`'s own `measureRecomposite` over the stage's pixels — `mean_abs` and `within_share` (mean channel, within 8), `error_px` (max channel over 40), `uncovered_error_px` (of those, where the pose has alpha 128 or less), `hole_count` and the largest hole's box — with `painting_px`, `stage_px`, `render_px` and `render_scale` beside them. The painting is resampled onto the stage as assemble resamples it (lanczos3, alpha dropped). rigc renders onto an opaque grey, so the pose over white and its alpha are read off a second still of the same pose with every slot tinted black; both are carried onto the stage with the seam's map turned round (bilinear) | none — status `REPORTED`; assemble applies no bar to the figures it measures, so none is derived here | 3.146 / 93.43 % / 12,399 / 1,732, 518 holes, the largest 61 px at 351,157 6x20 (assemble's recomposite: 2.391 / 95.81 % / 11,050 / 1,564, 453) | 1.095 / 97.30 % / 5,348 / 1,239, 313 holes, the largest 88 px at 479,416 6x29 (assemble's: 0.835 / 97.95 % / 4,512 / 1,185, 259) | not written without `--source` |
-| <a id="SETUP_MATCHES_PAINTING"></a>`SETUP_MATCHES_PAINTING` | declared region count, native box, limit and actual top contributor rows | PASS/FAIL against authored limits; no limit is SKIP; with `--source`, no declaration is SKIP with its reason and declaration remedy; undeclared regions are not judged |
+| <a id="SETUP_MATCHES_PAINTING"></a>`SETUP_MATCHES_PAINTING` | declared region count, native box, limit and actual top contributor rows | PASS/FAIL against authored limits; no limit is SKIP, or the refusal `SETUP_PAINTING_REQUIRED_LIMIT` under `setup_painting.required: true`; with `--source`, no declaration is SKIP with its reason and declaration remedy; undeclared regions are not judged |
 
 The figures are assemble's by construction, not a second definition beside them;
 what differs is what they are taken of — the pose rigc draws, not the flat stack —
@@ -6414,6 +6415,18 @@ maximum absolute RGB-channel difference is **strictly greater** than that
 value. The region passes when its total count is at most its authored
 nonnegative integer `max_pixels`. Without that limit the region reports
 **SKIP**, including a zero-count region. An undeclared region has no verdict.
+
+An author for whom a SKIP here is not an acceptable outcome declares it:
+`"required": true` inside `setup_painting` (issue #943). The field states the
+requirement, not a kind of rig. With it, every limit must be authored: an
+absent `rgb_tolerance`, an absent `regions`, or a region without `max_pixels`
+is refused by name as
+[`SETUP_PAINTING_REQUIRED_LIMIT`](#SETUP_PAINTING_REQUIRED_LIMIT) when the file
+is read, naming the field (and the region), before anything is built — the
+region SKIP above becomes that refusal. A declaration with every limit
+measures exactly as it does without the field. `required` takes only `true`
+or `false`; `false` is the same as omitting it, and any other value is
+`REQUIREMENTS_FIELD`. Without the field, nothing in this section changes.
 With `--source` but no `setup_painting` declaration, `SETUP_MATCHES_PAINTING`
 is explicitly **SKIP** in the console, `check.json`, the report's skipped-bar
 list and `check --json`. Its reason says the comparison was not measured and
@@ -6456,7 +6469,7 @@ material owner or the cause of the difference. Overlapping region declarations
 are measured independently. Clipped drawings whose ownership cannot be observed
 are refused rather than attributed by a part's bounding box.
 
-Invalid limits, repeated names, unknown fields and out-of-stage boxes use the existing `REQUIREMENTS_FIELD` refusal; no value is guessed.
+Invalid limits, repeated names, unknown fields, a non-boolean `required` and out-of-stage boxes use the existing `REQUIREMENTS_FIELD` refusal; no value is guessed.
 
 This optional declaration is independent of motion requirements and
 `fixed_skeleton`; it does not replace their schemas or validation. The named
