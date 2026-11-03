@@ -93,8 +93,9 @@ import { AliasTarballError, compareTarballs } from './alias_tarball.ts';
 
 /** The repository this script packs — it is the subject, and nothing else reaches the fixture. */
 const ROOT = resolve(import.meta.dir, '..');
+const ROOT_PKG = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string; devDependencies?: Record<string, string> };
 /** The package's name, read from the tree's package.json: the directory an install puts it in, the specifier the fixtures import it by, and the registry spec. */
-const PACKAGE = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string }).name;
+const PACKAGE = ROOT_PKG.name;
 /**
  * The command the install puts on PATH. A scoped package's name is not a command, so the tool's command is its own
  * `bin` entry; every other command the installed package.json declares is run beside it (SMOKE_EVERY_BIN_RUNS_FROM_THE_INSTALL).
@@ -391,11 +392,26 @@ console.log(Array.isArray(m) ? 'REFUSED ' + JSON.stringify(m) : 'CONTOUR ' + m.h
 `;
 const EXPECT_CONTOUR = 'CONTOUR 12 6 22';
 
-// Consumer import of the top-level config section list from the installed package (issue #948).
+// Consumer import of the top-level config section list from the installed package (issues #948, #954).
 const SECTIONS_PROBE = `import { CONFIG_SECTIONS } from '${PACKAGE}/src/config.ts';
 console.log('RESOLVED ' + import.meta.resolve('${PACKAGE}/src/config.ts'));
 console.log('CONFIG_SECTIONS ' + JSON.stringify(CONFIG_SECTIONS));
 `;
+const SECTIONS_TYPECHECK_FILE = 'sections_typecheck.ts';
+const SECTIONS_TYPECHECK_SOURCE = `import { CONFIG_SECTIONS } from '${PACKAGE}/src/config.ts'; console.log(CONFIG_SECTIONS);\n`;
+const SECTIONS_TYPECHECK_DEPS = ['typescript', '@types/bun'] as const;
+const SECTIONS_TSCONFIG = {
+  compilerOptions: {
+    target: 'ESNext',
+    module: 'ESNext',
+    moduleResolution: 'Bundler',
+    allowImportingTsExtensions: true,
+    noEmit: true,
+    strict: true,
+    skipLibCheck: true,
+  },
+  files: [SECTIONS_TYPECHECK_FILE],
+};
 /**
  * The section list the installed `src/config.ts` declares, read from its text: the runner must not import
  * `src/config.ts` itself, since that module loads package dependencies a fresh checkout has not installed.
@@ -403,6 +419,66 @@ console.log('CONFIG_SECTIONS ' + JSON.stringify(CONFIG_SECTIONS));
 function declaredSections(source: string): string[] {
   const literal = /export const CONFIG_SECTIONS = \[([^\]]*)\] as const/.exec(source)?.[1] ?? '';
   return [...literal.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+}
+
+/**
+ * Type-check a one-line file importing `CONFIG_SECTIONS` from the installed package in `home`, with `typescript`
+ * and `@types/bun` added at the versions this repository's `package.json` pins under `devDependencies` and no
+ * `@esotericsoftware/*` installed (issue #954).
+ */
+export function checkInstalledSectionsTypecheck(
+  home: string,
+  installer: 'npm' | 'bun',
+): { fault: string | null; note: string; output: string } {
+  const specs: string[] = [];
+  for (const dep of SECTIONS_TYPECHECK_DEPS) {
+    const pin = ROOT_PKG.devDependencies?.[dep];
+    if (typeof pin !== 'string' || pin.trim() === '') {
+      return {
+        fault: `SMOKE_CONFIG_SECTIONS_TYPECHECK_FROM_THE_INSTALL: package.json devDependencies has no version for ${dep}`,
+        note: '',
+        output: '',
+      };
+    }
+    specs.push(`${dep}@${pin}`);
+  }
+  const addDeps =
+    installer === 'npm'
+      ? run('npm', ['install', ...specs, '--no-audit', '--no-fund'], home)
+      : run('bun', ['add', ...specs, '--backend=copyfile'], home);
+  let output = addDeps.out;
+  const spineScopeDir = join(home, 'node_modules', '@esotericsoftware');
+  if (existsSync(spineScopeDir)) {
+    return {
+      fault: `SMOKE_CONFIG_SECTIONS_TYPECHECK_FROM_THE_INSTALL: ${spineScopeDir} exists in ${home}; the type-check requires no @esotericsoftware/* present`,
+      note: '',
+      output,
+    };
+  }
+  const tscEntry = join(home, 'node_modules', 'typescript', 'bin', 'tsc');
+  if (addDeps.status !== 0 || !existsSync(tscEntry)) {
+    return {
+      fault: `SMOKE_CONFIG_SECTIONS_TYPECHECK_FROM_THE_INSTALL: ${installer} install of ${specs.join(', ')} exited ${addDeps.status} and left no ${tscEntry}. ${addDeps.out.trim().slice(0, 1500)}`,
+      note: '',
+      output,
+    };
+  }
+  writeFileSync(join(home, SECTIONS_TYPECHECK_FILE), SECTIONS_TYPECHECK_SOURCE);
+  writeFileSync(join(home, 'tsconfig.json'), `${JSON.stringify(SECTIONS_TSCONFIG, null, 2)}\n`);
+  const tscCheck = run('bun', [tscEntry, '-p', '.', '--pretty', 'false'], home);
+  output += tscCheck.out;
+  if (tscCheck.status !== 0) {
+    return {
+      fault: `SMOKE_CONFIG_SECTIONS_TYPECHECK_FROM_THE_INSTALL: \`tsc -p .\` on ${SECTIONS_TYPECHECK_FILE} exited ${tscCheck.status}; exit 0 with no @esotericsoftware/* installed was required. ${tscCheck.out.trim().slice(0, 2000)}`,
+      note: '',
+      output,
+    };
+  }
+  return {
+    fault: null,
+    note: `tsc -p . passed on ${SECTIONS_TYPECHECK_FILE} (${specs.join(', ')}, no @esotericsoftware/*)`,
+    output,
+  };
 }
 
 // The automatic mesh mode from the install (issue #126): the rig fixture's two parts — an opaque 16x8 cloth and a 4x2 eye region (one region alone on a page is rigc's A27) — on a 40x40 rig, its
@@ -1178,7 +1254,13 @@ function runCase(spec: CaseSpec, work: string, keep: boolean, fetchedTgz?: strin
         'sections',
         `SMOKE_CONFIG_SECTIONS_FROM_THE_INSTALL: \`bun sections_probe.ts\` exited ${sectionsProbe.status}, printed ${JSON.stringify(sectionsProbe.out.split('\n').find((l) => l.startsWith('CONFIG_SECTIONS')) ?? null)} and resolved ${resolvedSections.join(', ') || '(nothing)'}; "${EXPECT_SECTIONS}" resolved under ${join(home, 'node_modules')} was required. ${sectionsProbe.out.trim().slice(0, 1500)}`,
       );
-    } else notes.push(`CONFIG_SECTIONS (${declared.length}) imported from ${PACKAGE}/src/config.ts inside the install`);
+    } else {
+      notes.push(`CONFIG_SECTIONS (${declared.length}) imported from ${PACKAGE}/src/config.ts inside the install`);
+      const sectionsTypecheck = checkInstalledSectionsTypecheck(home, spec.installer);
+      output += sectionsTypecheck.output;
+      if (sectionsTypecheck.fault !== null) fault('sections', sectionsTypecheck.fault);
+      else notes.push(sectionsTypecheck.note);
+    }
   }
 
   // The automatic mesh mode, from the install, through the installed rig command and rigc's gate.
