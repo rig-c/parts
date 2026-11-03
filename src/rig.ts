@@ -1356,6 +1356,9 @@ export function buildWaistPairSource(
   }
   for (const a of cfg.assemble.alternates ?? []) {
     const record = parts.alternates?.find((p) => p.name === a.name);
+    // Issue #962: assemble writes a record for every declared set or refuses, so a declared set with no record was
+    // added or renamed since assemble, and the alternate map below would build without it and say nothing.
+    if (record === undefined) fail('RIG_ALT_SET_ASSEMBLED', `config.assemble alternate set "${a.name}"`, `has no record in parts.json (recorded sets: ${JSON.stringify((parts.alternates ?? []).map((p) => p.name))}); re-run assemble before rig`);
     if (a.base_anchor !== undefined && record === undefined) fail('RIG_ALT_BASE_ANCHOR_MATCH_CONFIG', `alternate set "${a.name}" base_anchor`, 'has no assembled set; re-run assemble before rig');
     if ((a.focus !== undefined || record?.focus !== undefined)
       && JSON.stringify(a.focus) !== JSON.stringify(record?.focus)) {

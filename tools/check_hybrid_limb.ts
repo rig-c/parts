@@ -155,6 +155,23 @@ export function runHybridLimbChecks(dir: string, say: Say): void {
     const message = staleAlt(value, edit);
     say(`STALE_${label}_REFUSED`, message.includes(code) && message.includes('alternate set "other"') && message.includes('re-run assemble'), message.split('\n').find((l) => l.includes(code)) ?? message.split('\n')[0]);
   }
+  // Issue #962: assemble records every declared set or refuses, so a declared set with no record was added or renamed
+  // since assemble; rig would build without it and say nothing. A record with no config set is a --alt set and builds.
+  const unassembled: Array<[string, string, (c: typeof subset.cfg) => void]> = [
+    ['ADDED', 'added', (c) => { c.assemble.alternates!.push({ ...structuredClone(c.assemble.alternates![0]), name: 'added' }); }],
+    ['RENAMED', 'renamed', (c) => { c.assemble.alternates![0].name = 'renamed'; }],
+  ];
+  for (const [label, name, edit] of unassembled) {
+    const c = structuredClone(subset.cfg);
+    edit(c);
+    const message = refusal(() => buildRig(c, subset.parsed, subset.images, undefined, 'direct'));
+    const line = message === '' ? `accepted: built without set "${name}" and no line names it` : message.split('\n').find((l) => l.includes('RIG_ALT_SET_ASSEMBLED')) ?? message.split('\n')[0];
+    say(`SET_${label}_SINCE_ASSEMBLE_REFUSED`, line.includes('RIG_ALT_SET_ASSEMBLED') && line.includes(`alternate set "${name}"`) && line.includes('re-run assemble'), line);
+  }
+  const altOnly = structuredClone(subset.cfg);
+  delete altOnly.assemble.alternates;
+  const altOnlyRefusal = refusal(() => buildRig(altOnly, subset.parsed, subset.images, undefined, 'direct'));
+  say('SET_RECORDED_WITHOUT_CONFIG_SET_ACCEPTED', altOnlyRefusal === '', altOnlyRefusal === '' ? `config declares no set; parts.json records ${JSON.stringify(subset.parsed.alternates?.map((a) => a.name))} (the --alt shape)` : altOnlyRefusal.split('\n')[0]);
   const badAlt = structuredClone(subset.parsed), badAltBand = badAlt.alternates?.[0].records.find(p=>p.limb?.band)?.limb?.band;
   if (!badAltBand) throw new Error('alternate band absent'); badAltBand.width=0;
   writeFileSync(join(dir,'bad-alternate.json'),serializeParts(badAlt));

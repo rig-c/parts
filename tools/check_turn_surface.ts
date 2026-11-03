@@ -16,11 +16,23 @@ import { depthReading } from '../src/depthsheets.ts';
 import { writePng } from '../src/raster/png.ts';
 import { PartsError } from '../src/errors.ts';
 import { pyRound } from '../src/round.ts';
+import type { Raster } from '../src/raster/types.ts';
 
 type Say = (name: string, ok: boolean, detail: string) => void;
 type Deform = { slot: string; attachment: string; keys: Array<{ t: number; vertices?: number[] }> };
 type Animation = { duration: number; deform: Deform[] };
 const meshOf = (b: RigOutput, name: string): MeshAttachment => b.rig.skins.default[name][name] as MeshAttachment;
+type SurfaceFixture = ReturnType<typeof weightedSurfaceFixture>;
+/** The record assemble writes for a declared set (issue #962: rig refuses a declared set with no record): every covered base part redrawn under its own slot. */
+function withAssembledSet(f: SurfaceFixture, set: { name: string; parts?: string[]; hides?: string[] }): SurfaceFixture {
+  (f.config.assemble as Record<string, unknown>).alternates = [{ ...set, source: 'other.png', full: 'full', head: 'head' }];
+  const covered = f.parts.parts.filter(p => (set.parts ?? f.parts.parts.map(q => q.name)).includes(p.name) && !(set.hides ?? []).includes(p.name));
+  for (const p of covered) f.images.set(`${set.name}_${p.name}`, f.images.get(p.name) as Raster);
+  f.parts.alternates = [{ name: set.name, ...(set.parts === undefined ? {} : { parts: set.parts }), ...(set.hides === undefined ? {} : { hides: set.hides }),
+    slots: Object.fromEntries(covered.map(p => [p.name, `${set.name}_${p.name}`])), records: covered.map(p => ({ ...p, depth: undefined })), ghost_px: {},
+    recomposite: { mean_abs: 0, within_limit: 0, within_share: 1, error_limit: 0, error_px: 0, covered_alpha: 8, uncovered_error_px: 0, hole_count: 0, holes_listed: 0, holes: [] } }];
+  return f;
+}
 const codes = (f: () => unknown): string[] => { try { f(); return []; } catch (e) { if (e instanceof PartsError) return e.problems.map(p => p.code); throw e; } };
 
 /** Analytic oracle: these sheets are level=60+25*part+x+y; art is an opaque rectangle. */
@@ -106,19 +118,17 @@ export function runTurnSurfaceChecks(dir: string, say: Say): void {
   bodyOnHeadRear.config.turn = { pivot: 20, roles: { hair_back: 'rear', hair_front: 'surface' }, body: { pivot: 20, roles: { topwear: 'surface' } } };
   const crossHeadRearConfig = parseConfig(headOnBodyRear.config), crossBodyRearConfig = parseConfig(bodyOnHeadRear.config);
   say('WTS12_CROSS_GROUP_REAR_CARRIERS_REFUSED', [() => buildRig(crossHeadRearConfig, headOnBodyRear.parts, headOnBodyRear.images), () => buildRig(crossBodyRearConfig, bodyOnHeadRear.parts, bodyOnHeadRear.images)].every(f => codes(f).includes('RIG_TURN_SURFACE_MESH_BINDINGS')), 'both rear cross-group configs also parse; another group carrier cannot silently add its depth shift');
-  const alternate = weightedSurfaceFixture();
-  (alternate.config.assemble as Record<string, unknown>).alternates = [{ name: 'other', source: 'other.png', full: 'full', head: 'head', parts: ['hair_back'] }];
+  const alternate = withAssembledSet(weightedSurfaceFixture(), { name: 'other', parts: ['hair_back'] });
   say('WTS10_UNREGISTERED_ALTERNATE_SURFACE_FRAME_REFUSED', codes(() => buildRig(parseConfig(alternate.config), alternate.parts, alternate.images)).includes('RIG_TURN_SURFACE_MESH_ATTACHMENT'), 'another drawing cannot silently reuse the base part depth and setup frame');
-  const omitted = weightedSurfaceFixture();
-  (omitted.config.assemble as Record<string, unknown>).alternates = [{ name: 'other', source: 'other.png', full: 'full', head: 'head' }];
+  const omitted = withAssembledSet(weightedSurfaceFixture(), { name: 'other' });
   say('WTS13_OMITTED_ALTERNATE_PARTS_COVERS_ALL_BASE_PARTS', codes(() => buildRig(parseConfig(omitted.config), omitted.parts, omitted.images)).includes('RIG_TURN_SURFACE_MESH_ATTACHMENT'), 'omitting parts means every base part, so a surface mesh still requires a registered alternate frame');
   const hidden = weightedSurfaceFixture();
   hidden.config.turn = { pivot: 20, roles: { hair_back: 'surface', hair_front: 'unit' } };
-  (hidden.config.assemble as Record<string, unknown>).alternates = [{ name: 'other', source: 'other.png', full: 'full', head: 'head', hides: ['hair_back'] }];
+  withAssembledSet(hidden, { name: 'other', hides: ['hair_back'] });
   say('WTS14_OMITTED_PARTS_WITH_HIDDEN_SURFACE_IS_ACCEPTED', codes(() => buildRig(parseConfig(hidden.config), hidden.parts, hidden.images)).length === 0, 'omitted parts minus hides does not cover this surface; no frame is invented and no unrelated alternate is refused');
   const unrelated = weightedSurfaceFixture();
   unrelated.config.turn = { pivot: 20, roles: { hair_back: 'surface', hair_front: 'unit' } };
-  (unrelated.config.assemble as Record<string, unknown>).alternates = [{ name: 'other', source: 'other.png', full: 'full', head: 'head', parts: ['hair_front'] }];
+  withAssembledSet(unrelated, { name: 'other', parts: ['hair_front'] });
   say('WTS15_UNRELATED_ALTERNATE_SUBSET_IS_ACCEPTED', codes(() => buildRig(parseConfig(unrelated.config), unrelated.parts, unrelated.images)).length === 0, 'an explicit subset not covering the surface keeps the existing path');
   const earOrder = weightedSurfaceEarFixture(), earLate = weightedSurfaceEarFixture(true);
   const earBuild = buildRig(parseConfig(earOrder.config), earOrder.parts, earOrder.images);
