@@ -3580,8 +3580,12 @@ full loader before its assemble stage writes anything.
    `check --seam-pairs` writes on the same rig; `--out` is `build`'s (the check
    writes under `<out>/check`); `--rig` and `--parts` are refused, because the
    check reads the rig and the parts the build wrote (`<out>/rig`, `<out>`);
-   `--source` is the painting assemble reads and is not handed to the check, so
-   `check.json` carries no `SETUP_POSE_VS_SOURCE` — run
+   `--source` is the painting assemble reads; it is handed to the check only
+   when the requirements file (`--requirements` or `config.requirements`)
+   declares `setup_painting`, which cannot be measured without it (issue #978),
+   so that declaration reads the same verdict under `build` as under
+   `check --source`. Without the declaration `check.json` carries no
+   `SETUP_POSE_VS_SOURCE` and no byte moves — run
    `rig-parts check --rig out/rig --parts out --out <dir> --source inputs/painting.png`
    for that line.
    `rig-parts compare --left config.json --right out/rig/rig.json` reads the rig

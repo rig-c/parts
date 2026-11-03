@@ -886,9 +886,12 @@ usage:
       the seam split by pair on a pass too, under check/seam/; the setup-pose
       still under check/setup_still/). check's --rig and --parts are refused:
       build's check reads the rig and the parts it wrote, <out>/rig and <out>.
-      build's --source is the painting assemble reads and is not handed to
-      the check, so check.json carries no SETUP_POSE_VS_SOURCE; run check
-      --rig <out>/rig --parts <out> --source <painting> for that line.
+      build's --source is the painting assemble reads; it is handed to the
+      check only when the requirements file declares setup_painting, which
+      needs it (CHECK_SETUP_PAINTING_SOURCE otherwise), so the verdict is
+      check --source's. Without that declaration check.json carries no
+      SETUP_POSE_VS_SOURCE; run check --rig <out>/rig --parts <out> --source
+      <painting> for that line.
       --idle-keys is forwarded to the rig stage (as for rig) and defaults to
       ctl; the first line names it when it is direct. A config with a
       two-bone ik over chain links the idle keys needs --idle-keys direct:
