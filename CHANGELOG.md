@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.4.1](https://github.com/rig-c/parts/compare/v2.4.0...v2.4.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* **build:** hand the painting to the check when the requirements declare setup_painting ([#980](https://github.com/rig-c/parts/issues/980)) ([e31d20a](https://github.com/rig-c/parts/commit/e31d20a6c427bcbab0b4c49ffcb33b18a1ba1933)), closes [#978](https://github.com/rig-c/parts/issues/978)
+* **deps:** move the core pin to 3.2.0 ([#984](https://github.com/rig-c/parts/issues/984)) ([1b224b8](https://github.com/rig-c/parts/commit/1b224b805fafd70602a43375bdb5ca6f8c1e8483))
+* **selftest:** keep every printed line readable by a log reader, and name a worker's killing signal ([#977](https://github.com/rig-c/parts/issues/977)) ([#983](https://github.com/rig-c/parts/issues/983)) ([d66fc54](https://github.com/rig-c/parts/commit/d66fc5424619eb940165dc96ca81c8d0afafce0b))
+
 ## [2.4.0](https://github.com/rig-c/parts/compare/v2.3.0...v2.4.0) (2026-11-03)
 
 
