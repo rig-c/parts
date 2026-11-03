@@ -95,12 +95,14 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { dirname, join, resolve } from 'node:path';
 import type { RigStop } from '@rig-c/core/rig';
 import { checkStage, gateThroughRigc, type Log } from './build.ts';
-import { ACCEPTABLE_BARS, barsNotMet, type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackMode, requirementsNotPass, type RigcRunner } from './check.ts';
+import { ACCEPTABLE_BARS, barsNotMet, type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, officialRenderer, type PackMode, requirementsNotPass, type RigcRunner } from './check.ts';
 import { CONSTRAINT_BONE_FIELDS, ROOT_BONE } from './config.ts';
 import { cropToSpineY } from './coords.ts';
 import { failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import type { MotionSpec } from './motion.ts';
-import { readPng } from './raster/png.ts';
+import { dilate } from './raster/morph.ts';
+import { decodePngBytes, readPng } from './raster/png.ts';
+import { alphaAbove, type Raster } from './raster/types.ts';
 import { readRequirements, type RequirementsFile } from './requirements.ts';
 import { OFFSET_PLACES, rigJsonText, type RigSpec } from './rig.ts';
 import { pyRound } from './round.ts';
@@ -162,7 +164,28 @@ export interface ScenePlate {
   imagePath: string;
   provenance: Provenance;
   note: string | null;
+  /** {@link PlateBand}, the plate-residue bar the author declared (issue #945); null when the plate declares none, and the bar is then SKIP. */
+  band: PlateBand | null;
 }
+
+/**
+ * `scene.plate.band` (issue #945): the author's bar over the plate's pixels in
+ * a band around the composed figures. Every number is declared; none has a
+ * default. `width_px`, a positive integer: the band is every canvas px the
+ * figures do not draw (setup-pose alpha 0) within this Chebyshev distance of
+ * one they do. `tolerance`, an integer 0..255: a plate px is figure-coloured
+ * when each of its R, G and B is within this many levels of a colour the
+ * figures draw fully opaque (setup-pose alpha 255). `max_px`, a non-negative
+ * integer: the most figure-coloured band px the plate may hold.
+ */
+export interface PlateBand {
+  width_px: number;
+  tolerance: number;
+  max_px: number;
+}
+
+/** The fields of {@link PlateBand}, in the order the scene file and `scene.json` write them. */
+export const PLATE_BAND_FIELDS = ['width_px', 'tolerance', 'max_px'] as const;
 
 export interface SceneFile {
   path: string;
@@ -219,9 +242,50 @@ export function acceptProblems(names: readonly string[], where: string): Problem
 }
 
 /**
+ * `scene.plate.band` read and shape-checked (issue #945): a record holding
+ * `width_px` (a positive integer), `tolerance` (an integer 0..255) and
+ * `max_px` (a non-negative integer), each required — a band declared without
+ * one of its numbers is refused naming the field, never filled in. Returns
+ * undefined when any problem was collected.
+ */
+function readPlateBand(b: unknown, fail: (code: string, object: string, detail: string) => void): PlateBand | undefined {
+  const where = 'scene.plate.band';
+  if (!isRecord(b)) {
+    fail('SCENE_FIELD_TYPE', where, `is ${show(b)}; {"width_px": <px>, "tolerance": <levels>, "max_px": <px>} is required when the key is present`);
+    return undefined;
+  }
+  let ok = true;
+  for (const [k, v] of Object.entries(b)) {
+    if (!(PLATE_BAND_FIELDS as readonly string[]).includes(k) && !freeKey(k, v)) {
+      fail('SCENE_KEY_KNOWN', `${where}.${k}`, `is a key ${SCENE_SPEC} does not read; it reads ${PLATE_BAND_FIELDS.join(', ')} (and "note", "…_note" strings and "x-…" records, which nothing reads)`);
+      ok = false;
+    }
+  }
+  const what: Record<(typeof PLATE_BAND_FIELDS)[number], [number, number, string]> = {
+    width_px: [1, Number.MAX_SAFE_INTEGER, 'a positive integer of canvas px: the band is every px the figures do not draw within this Chebyshev distance of one they do'],
+    tolerance: [0, 255, 'an integer 0..255 of colour levels: a plate px is figure-coloured when each of its R, G, B is within this many levels of a colour the figures draw fully opaque'],
+    max_px: [0, Number.MAX_SAFE_INTEGER, 'a non-negative integer: the most figure-coloured px the plate may hold in the band'],
+  };
+  const out: Record<string, number> = {};
+  for (const k of PLATE_BAND_FIELDS) {
+    const [lo, hi, means] = what[k];
+    const v = b[k];
+    if (!(k in b)) {
+      fail('SCENE_FIELD_PRESENT', `${where}.${k}`, `is absent and required; ${means} — a declared band has no default`);
+      ok = false;
+    } else if (typeof v !== 'number' || !Number.isInteger(v) || v < lo || v > hi) {
+      fail('SCENE_FIELD_TYPE', `${where}.${k}`, `is ${show(v)}; ${means}, is required`);
+      ok = false;
+    } else out[k] = v;
+  }
+  return ok ? { width_px: out.width_px, tolerance: out.tolerance, max_px: out.max_px } : undefined;
+}
+
+/**
  * Read and shape-check a scene file. Every problem is collected before one
  * refusal: the file, `spec`, `canvas` (two positive integers), `plate`
- * (optional: `image`, `provenance`, an optional `note`), `characters` (at
+ * (optional: `image`, `provenance`, an optional `note`, an optional `band` —
+ * {@link PlateBand}), `characters` (at
  * least one; each `id`, `build`, `offset`), `order` (a list of strings), and
  * any key the format does not read. Resolving the ids and slots `order`
  * names is {@link composeScene}'s, which has the builds.
@@ -270,7 +334,8 @@ export function loadScene(path: string): SceneFile {
     const p = o.plate;
     if (!isRecord(p)) fail('SCENE_FIELD_TYPE', 'scene.plate', `is ${show(p)}; {"image": "<png>", "provenance": ${PROVENANCES.map((x) => `"${x}"`).join(' | ')}} is required when the key is present`);
     else {
-      known(p, 'scene.plate', ['image', 'provenance', 'note']);
+      known(p, 'scene.plate', ['image', 'provenance', 'note', 'band']);
+      const band = 'band' in p ? readPlateBand(p.band, fail) : null;
       const image = p.image;
       const prov = p.provenance;
       if (!('image' in p)) fail('SCENE_FIELD_PRESENT', 'scene.plate.image', 'is absent and required; the plate PNG, relative to the scene file');
@@ -278,7 +343,7 @@ export function loadScene(path: string): SceneFile {
       if (!('provenance' in p)) fail('SCENE_FIELD_PRESENT', 'scene.plate.provenance', `is absent and required; one of ${PROVENANCES.join(', ')} — what the plate's pixels are, which the author states and nothing judges`);
       else if (typeof prov !== 'string' || !(PROVENANCES as readonly string[]).includes(prov)) fail('SCENE_PLATE_PROVENANCE', 'scene.plate.provenance', `is ${show(prov)}; one of ${PROVENANCES.join(', ')} is required`);
       if (typeof image === 'string' && image !== '' && typeof prov === 'string' && (PROVENANCES as readonly string[]).includes(prov)) {
-        plate = { image, imagePath: resolve(base, image), provenance: prov as Provenance, note: typeof p.note === 'string' ? p.note : null };
+        if (band !== undefined) plate = { image, imagePath: resolve(base, image), provenance: prov as Provenance, note: typeof p.note === 'string' ? p.note : null, band };
       }
     }
   }
@@ -833,7 +898,8 @@ export interface SceneReport {
   canvas: { width: number; height: number };
   rig_name: string;
   pack_mode: { page_edges: string; pack_shape: string };
-  plate: { image: string; provenance: Provenance; note: string | null; bone: string; slot: string; size: [number, number]; judged_by: 'nothing' } | null;
+  /** `judged_by` names the provenance, which nothing reads; `band` is written only when the scene declares one (issue #945), so a scene without it writes the bytes it wrote before the field existed. */
+  plate: { image: string; provenance: Provenance; note: string | null; bone: string; slot: string; size: [number, number]; judged_by: 'nothing'; band?: PlateBand & Partial<PlateBandReading> } | null;
   characters: SceneCharacterReport[];
   order: { declared: string[]; slots: string[]; judged_by: 'nothing' };
   idle_duration: number;
@@ -1223,7 +1289,7 @@ export function composeScene(
     canvas: { ...canvas },
     rig_name: name,
     pack_mode: { page_edges: mode.pageEdges, pack_shape: mode.packShape },
-    plate: scene.plate === null || plate === null ? null : { image: scene.plate.image, provenance: scene.plate.provenance, note: scene.plate.note, bone: PLATE, slot: PLATE, size: [plate.width, plate.height], judged_by: 'nothing' },
+    plate: scene.plate === null || plate === null ? null : { image: scene.plate.image, provenance: scene.plate.provenance, note: scene.plate.note, bone: PLATE, slot: PLATE, size: [plate.width, plate.height], judged_by: 'nothing', ...(scene.plate.band === null ? {} : { band: { ...scene.plate.band } }) },
     characters: rows,
     order: { declared: [...scene.order], slots: slots.map((s) => s.name), judged_by: 'nothing' },
     idle_duration: durations[0],
@@ -1359,6 +1425,130 @@ export function unprefixedNames(rig: RigSpec, motion: MotionSpec, ids: readonly 
 }
 
 // ---------------------------------------------------------------------------
+// the plate band (issue #945)
+// ---------------------------------------------------------------------------
+
+/** What {@link plateBandReading} measured: canvas px, and the first figure-coloured band px in row-major order. */
+export interface PlateBandReading {
+  /** Canvas px the figures draw (setup-pose alpha above 0). */
+  figure_px: number;
+  /** Distinct RGB colours the figures draw fully opaque (setup-pose alpha 255). */
+  figure_colours: number;
+  /** Canvas px in the band: not drawn by the figures, within `width_px` (Chebyshev) of a px they draw. */
+  band_px: number;
+  /** Band px whose plate px is drawn (alpha above 0) and figure-coloured. */
+  found_px: number;
+  /** The first of them, row-major: canvas [x, y] (y down) and the plate's RGB there; null when there is none. */
+  first: { at: [number, number]; rgb: [number, number, number] } | null;
+}
+
+/** The SKIP reason the `[compose]` line prints when the scene has no plate. */
+export const PLATE_BAND_NO_PLATE = 'the scene has no plate';
+/** The SKIP reason the `[compose]` line prints when the plate declares no band. */
+export const PLATE_BAND_UNDECLARED = 'scene.plate.band is not declared — {"width_px", "tolerance", "max_px"} declares the bar; nothing is measured without it';
+
+/**
+ * Binary dilation of a 256x256x256 RGB occupancy grid by `t` levels along
+ * each channel (a cube, so Chebyshev in RGB), one axis at a time: a cell is
+ * set when any cell within `t` of it along that axis was. In place.
+ */
+function dilateColours(grid: Uint8Array, t: number): void {
+  if (t === 0) return;
+  const strides = [1 << 16, 1 << 8, 1];
+  const prefix = new Int32Array(257);
+  for (let axis = 0; axis < 3; axis++) {
+    const step = strides[axis];
+    const [p, q] = strides.filter((_, k) => k !== axis);
+    for (let a = 0; a < 256; a++) {
+      for (let b = 0; b < 256; b++) {
+        const base = a * p + b * q;
+        for (let i = 0; i < 256; i++) prefix[i + 1] = prefix[i] + grid[base + i * step];
+        for (let i = 0; i < 256; i++) grid[base + i * step] = prefix[Math.min(255, i + t) + 1] - prefix[Math.max(0, i - t)] > 0 ? 1 : 0;
+      }
+    }
+  }
+}
+
+/**
+ * The plate-residue bar's reading (issue #945), on two canvas-size rasters:
+ * `figure`, the composed figures' setup pose rendered alone over a
+ * transparent canvas (every slot but the plate's), and `plate`, the plate
+ * image. Nothing here is chosen: the band's width, the colour tolerance and
+ * the limit are the scene's {@link PlateBand}; the figure's colours are the
+ * ones its own render draws fully opaque. Throws a PartsError when the two
+ * rasters are not one size.
+ */
+export function plateBandReading(figure: Raster, plate: Raster, band: PlateBand): PlateBandReading {
+  const { width: W, height: H } = figure;
+  if (plate.width !== W || plate.height !== H) refuseIfAny([{ code: 'SCENE_PLATE_SIZE', object: 'scene.plate.image', detail: `is ${plate.width}x${plate.height}; the figures' render, ${W}x${H}, is required` }]);
+  const drawn = alphaAbove(figure, 0);
+  const near = dilate(drawn, 2 * band.width_px + 1);
+  const grid = new Uint8Array(1 << 24);
+  let figurePx = 0;
+  for (let i = 0; i < W * H; i++) {
+    figurePx += drawn.data[i];
+    if (figure.data[i * 4 + 3] === 255) grid[(figure.data[i * 4] << 16) | (figure.data[i * 4 + 1] << 8) | figure.data[i * 4 + 2]] = 1;
+  }
+  let colours = 0;
+  for (let c = 0; c < grid.length; c++) colours += grid[c];
+  dilateColours(grid, band.tolerance);
+  let bandPx = 0;
+  let found = 0;
+  let first: PlateBandReading['first'] = null;
+  for (let i = 0; i < W * H; i++) {
+    if (drawn.data[i] === 1 || near.data[i] === 0) continue;
+    bandPx++;
+    const r = plate.data[i * 4], g = plate.data[i * 4 + 1], b = plate.data[i * 4 + 2];
+    if (plate.data[i * 4 + 3] === 0 || grid[(r << 16) | (g << 8) | b] === 0) continue;
+    found++;
+    if (first === null) first = { at: [i % W, Math.floor(i / W)], rgb: [r, g, b] };
+  }
+  return { figure_px: figurePx, figure_colours: colours, band_px: bandPx, found_px: found, first };
+}
+
+/**
+ * The refusals a {@link plateBandReading} holds against its declaration:
+ * `SCENE_PLATE_BAND_RESIDUE` when the band holds more figure-coloured px
+ * than `max_px`; `SCENE_PLATE_BAND_MEASURED` when there was nothing to read
+ * (no band px, or no colour the figures draw fully opaque) — a declared bar
+ * with nothing to read is not a pass.
+ */
+export function plateBandProblems(r: PlateBandReading, band: PlateBand, image: string): Problem[] {
+  const where = `scene.plate.image (${image})`;
+  if (r.band_px === 0 || r.figure_colours === 0) {
+    return [{ code: 'SCENE_PLATE_BAND_MEASURED', object: where, detail: `has ${r.band_px} band px around ${r.figure_px} figure px, and the figures draw ${r.figure_colours} colour(s) fully opaque; at least one of each is required to measure scene.plate.band — a declared bar with nothing to read is not a pass` }];
+  }
+  if (r.found_px <= band.max_px) return [];
+  const at = r.first === null ? '' : `, the first at canvas (${r.first.at.join(', ')}), rgb (${r.first.rgb.join(', ')})`;
+  return [{ code: 'SCENE_PLATE_BAND_RESIDUE', object: where, detail: `holds ${r.found_px} figure-coloured px in the ${band.width_px} px band around the figures' setup pose (${r.band_px} band px; figure-coloured: each channel within ${band.tolerance} level(s) of one of the ${r.figure_colours} colour(s) the figures draw fully opaque${at}); at most ${band.max_px} (scene.plate.band.max_px) is required — the figure's residue on the plate, showing around the figure` }];
+}
+
+/** The `[compose]` line for the bar: SKIP with its reason, or the reading against the declaration. */
+export function plateBandLine(r: PlateBandReading | null, band: PlateBand | null, skip: string): string {
+  if (r === null || band === null) return `plate band (issue #945): SKIP — ${skip}`;
+  const verdict = plateBandProblems(r, band, '').length === 0 ? 'PASS' : 'FAIL';
+  return `plate band (issue #945): ${verdict} — ${r.found_px} figure-coloured px of ${r.band_px} in the ${band.width_px} px band (tolerance ${band.tolerance}, ${r.figure_colours} figure colour(s), ${r.figure_px} figure px); at most ${band.max_px}`;
+}
+
+/**
+ * The composed figures' setup pose drawn alone — every slot but the
+ * plate's — over a transparent canvas at scale 1, by rig-c's official
+ * renderer from the green gate build in `buildDir` (its `skeleton.json` and
+ * `skeleton.atlas`): canvas px, y down, the plate's own grid.
+ */
+export function figureSetupRaster(buildDir: string, canvas: SceneFile['canvas']): Raster {
+  const api = officialRenderer();
+  const skeleton = join(buildDir, 'skeleton.json'), atlas = join(buildDir, 'skeleton.atlas');
+  const candidate = api.loadCandidate({ skeletonText: readFileSync(skeleton, 'utf8'), atlasText: readFileSync(atlas, 'utf8'), atlasDir: buildDir, label: 'plate band' }, { skeleton, atlas }, undefined);
+  const pose = api.throughPoser(candidate.choice, (p) => api.sampleSetupPose(p, { geometry: true, texture: true })).value[0];
+  if (pose === undefined) refuseIfAny([{ code: 'SCENE_PLATE_BAND_MEASURED', object: 'the composed setup pose', detail: 'rig-c\'s renderer sampled no setup frame; one is required to draw the figures the band surrounds' }]);
+  const stage = sceneStage(canvas);
+  const vp = { minX: stage.x, minY: stage.y, maxX: stage.x + canvas.width, maxY: stage.y + canvas.height, scale: 1, width: canvas.width, height: canvas.height };
+  const out = api.renderFrame({ ...pose, pieces: pose.pieces.filter((p) => p.slot !== PLATE) }, candidate.pages, vp, [0, 0, 0, 0]);
+  return { width: canvas.width, height: canvas.height, data: new Uint8ClampedArray(out.data) };
+}
+
+// ---------------------------------------------------------------------------
 // the stage
 // ---------------------------------------------------------------------------
 
@@ -1464,7 +1654,19 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
     ['rig.json', rigJsonText(composed.rig)],
     ['motion.json', rigJsonText(composed.motion)],
   ];
-  const gate = gateThroughRigc(composed.images, texts, run.rig, run.scratch, mode);
+  // Issue #945: the plate band is read off the green gate build, before anything is written, so a refusal leaves --out empty.
+  const band = r.plate?.band === undefined ? null : { width_px: r.plate.band.width_px, tolerance: r.plate.band.tolerance, max_px: r.plate.band.max_px };
+  let reading: PlateBandReading | null = null;
+  let bandError: unknown = null;
+  const onGreen = band === null ? undefined : (buildDir: string): void => {
+    try {
+      const plateBytes = composed.images.find(([f]) => f === PLATE_IMAGE)?.[1] as Uint8Array;
+      reading = plateBandReading(figureSetupRaster(buildDir, r.canvas), decodePngBytes(plateBytes, PLATE_IMAGE), band);
+    } catch (err) {
+      bandError = err;
+    }
+  };
+  const gate = gateThroughRigc(composed.images, texts, run.rig, run.scratch, mode, onGreen);
   for (const g of gate) {
     say(`  rigc ${g.label}: exit ${g.status}`);
     for (const l of g.lines) say(`    ${l.trim()}`);
@@ -1481,6 +1683,14 @@ export function composeStage(input: ComposeInput, run: ComposeRunners, log: Log)
         })),
       ),
     );
+  }
+  if (bandError !== null) return refused('compose', bandError);
+  const measured = reading as PlateBandReading | null;
+  say(`  ${plateBandLine(measured, band, r.plate === null ? PLATE_BAND_NO_PLATE : PLATE_BAND_UNDECLARED)}`);
+  if (measured !== null && band !== null && r.plate?.band !== undefined) {
+    const bad = plateBandProblems(measured, band, r.plate.image);
+    if (bad.length > 0) return refused('compose', new PartsError(bad));
+    r.plate.band = { ...band, ...measured };
   }
   const rigDir = join(input.out, 'rig');
   mkdirSync(join(rigDir, 'images'), { recursive: true });

@@ -1926,8 +1926,8 @@ export interface SeamStateBounds {
  * follows rigc's own package-root resolution. No candidate error selects a
  * different API. Importing check, or constructing a root-free reader, loads none.
  */
-type OfficialRenderer = typeof import('@rig-c/core/render-shared');
-function officialRenderer(): OfficialRenderer {
+export type OfficialRenderer = typeof import('@rig-c/core/render-shared');
+export function officialRenderer(): OfficialRenderer {
   const require = createRequire(import.meta.url);
   const coreRoot = dirname(require.resolve('@rig-c/core/package.json'));
   let runtimePresent = false;

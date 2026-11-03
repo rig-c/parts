@@ -896,7 +896,8 @@ usage:
   rig-parts compose --scene <scene.json> --out <dir> [--requirements <file.json>] [--accept <bar>[,<bar>...]]
       Bind several finished characters into one rig. The scene file (spec
       "${SCENE_SPEC}") states the canvas {width, height}, an optional plate
-      {image, provenance: ${PROVENANCES.join(' | ')}, note?}, the characters
+      {image, provenance: ${PROVENANCES.join(' | ')}, note?, band?: {width_px,
+      tolerance, max_px}}, the characters
       [{id, build, offset: [x, y], scale?}] — each build the --out of a green
       \`rig-parts build\` (its check/check.json PASS), each offset a
       translation from its rig px to canvas px, each scale (a positive
@@ -926,7 +927,11 @@ usage:
       or never; a constraint, or a --requirements name, that names a bone of
       another character without its prefix (SCENE_NAME_PREFIXED); a plate not
       of the canvas size; idles of different durations; a key in a build's
-      rig or motion compose does not know. The result is gated through
+      rig or motion compose does not know; under a declared plate band, more
+      than max_px plate px in the width_px band around the figures' setup
+      pose within tolerance levels of a colour the figures draw opaque
+      (SCENE_PLATE_BAND_RESIDUE, read off the green gate build; no plate or
+      no band is SKIP). The result is gated through
       rig-c as rig gates its own (build --profile rig-play --pack, the
       compile and the packed pages on disk); --out receives rig/ (rig.json,
       motion.json, images/) and ${SCENE_REPORT_FILE} (spec "${SCENE_REPORT_SPEC}":
