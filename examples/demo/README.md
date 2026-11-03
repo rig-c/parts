@@ -42,6 +42,7 @@ here (gitignored).
 - `animations.json` — the named animations beside the idle (issue #224), in rig-c's
   motion-spec shape, which `motion.animations_from` names; *Gestures, expressions and
   trailing strands* below.
+- `requirements.json` — declares `assemble`'s pinhole bar, `"pinholes": {"required": true}` (issue #944; AUTHORING §7, *Pinholes at rest*), read by `rig-parts assemble --requirements examples/demo/requirements.json` and by selftest `AE04`, which holds this example at 0 pinholes (`ASSEMBLE_PINHOLES: PASS`). It declares no motion requirement, and `config.json` does not name it: as `config.requirements` it would reach `check` too, and `check.json` would gain a requirements block `expected/check.json` does not hold.
 - `pose.json` — the pose file `generation.control.skeleton` names, read beside the
   config by `comfy paint`; the copy in parts-examples is the same file.
 - `proposal.json` — what `rig-parts propose --parts <build> --source painting.png`
