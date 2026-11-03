@@ -8,7 +8,7 @@ import { crop, type Raster } from './raster/index.ts';
 export const AUTOMATIC_WRITERS = {
   sourceProjection: -1, extend: -2, growRim: -3, limbSplit: -4,
   limbCap: -5, limbHybrid: -6, limbFeather: -7, fringeRestore: -8,
-  seamOverride: -9, armSplit: -10, headFaceUnderfill: -11, ghostCleanup: -12, unattributed: -13, paintingExtension: -14,
+  seamOverride: -9, armSplit: -10, headFaceUnderfill: -11, ghostCleanup: -12, unattributed: -13, paintingExtension: -14, paintingEdge: -15,
 } as const;
 export type AutomaticWriter = keyof typeof AUTOMATIC_WRITERS;
 export interface PixelProvenance {

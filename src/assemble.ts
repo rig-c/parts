@@ -1,4 +1,6 @@
 import { type SeamRule } from './seamrule.ts';
+import { DEFAULT_PROJECT_RULE, type ProjectRule } from './projectrule.ts';
+import { paintingEdges, type PaintingEdgeSkips } from './paintingedges.ts';
 import { edgeLength } from './length.ts';
 import { materialSource, type MaterialSource, materialRows, polygonMaterialEdges, type MaterialRow, type MaterialEdge, type PlacedArt } from './cutmaterial.ts';
 import { unionTakenSources } from './takesource.ts';
@@ -191,23 +193,7 @@ export const SILHOUETTE_LIMIT = 40;
 
 export { DEFAULT_SEAM_RULE, SEAM_RULES, type SeamRule } from './seamrule.ts';
 
-/**
- * Where a layer may take the painting's pixel (`projectSource`). `core` is the
- * reference's rule: the layer's top-most `alpha >= 250` pixels eroded by a 5x5
- * square, so a part a few pixels wide has no core and none of its visible
- * pixels is projected. `visible` keeps the erosion only where it guards
- * something — along a rim where a later layer of the run is in front — and
- * projects every other top-most `alpha >= 250` pixel of the layer.
- */
-export type ProjectRule = 'core' | 'visible';
-export const PROJECT_RULES: readonly ProjectRule[] = ['core', 'visible'];
-
-/**
- * The projection rule a run uses when none is named: the reference's, so the
- * examples stay comparable with it. `visible` was measured on both public
- * examples against it (the change that added the flag); it is opt-in.
- */
-export const DEFAULT_PROJECT_RULE: ProjectRule = 'core';
+export { DEFAULT_PROJECT_RULE, PROJECT_RULES, type ProjectRule } from './projectrule.ts';
 
 // ---------------------------------------------------------------------------
 // inputs
@@ -4598,6 +4584,8 @@ export interface AssembleResult {
   hidden: HiddenArtUse[];
   seamRule: SeamRule;
   projectRule: ProjectRule;
+  /** Issue #953: what `paintingEdges` resolved, under `projectRule: 'visible'` only. */
+  paintingEdges?: PaintingEdgeReading;
   depthReadings?: Array<{ from: string; reading: import('./depthsheets.ts').DepthReading }>;
   /** Visible registered samples clamped within <1 source pixel of a crop. */
   depthClamps?: Array<{ part: string; samples: number }>;
@@ -4611,6 +4599,14 @@ export interface AssembleResult {
   splits: SplitCount[];
   /** Issue #637: source-transparent cap pixels assigned before preservation, in either source-art door. */
   capSplits: SplitCount[];
+}
+
+/** Issue #953: the edge pixels `paintingEdges` resolved, the part pixels it changed, and the edge pixels it left, by reason. */
+export interface PaintingEdgeReading {
+  resolved: number;
+  unseparated: number;
+  changed: number;
+  skipped: PaintingEdgeSkips;
 }
 
 /** A hidden-art layer of a run (issue #359) and what read it: `cuts[i].under`, or a limb segment's cap; none is said. */
@@ -5588,6 +5584,30 @@ export function assemble(input: AssembleInput): AssembleResult {
       }
     }
   });
+  // Issue #953: under `visible`, the parts' visible edges are the painting's (`paintingEdges`); See-through keeps the hidden surface.
+  const edged = new Map<string, Mask>();
+  let edgeReading: PaintingEdgeReading | null = null;
+  if (projectRule === 'visible') {
+    const e = paintingEdges(stack.map((q) => q.image), srcr, {
+      painted: paintedFigure(srcr),
+      editable: order.map((d) => !('patch' in d)),
+      keep: keepInOrder,
+      feathered: featheredInOrder,
+      movingPair: input.turnMovingPair === undefined || input.turnMovingPair === null ? null : (a, b) => (input.turnMovingPair as (x: string, y: string) => boolean)(stack[a].record.name, stack[b].record.name),
+      written: (i, p) => {
+        writersInOrder[i][p] = AW.paintingEdge;
+        const d = order[i];
+        if (!('patch' in d)) {
+          const region = pieceAt(d).b.region;
+          if (region !== null && stack[i].image.data[p * 4 + 3] > 0) region.data[p] = 1;
+        }
+      },
+    });
+    order.forEach((d, i) => {
+      if (!('patch' in d) && e.changed[i].data.some((v) => v === 1)) edged.set(pieceAt(d).name, e.changed[i]);
+    });
+    edgeReading = { resolved: e.resolved, unseparated: e.unseparated, changed: e.changed.reduce((a, m) => a + m.data.reduce((x, v) => x + v, 0), 0), skipped: e.skipped };
+  }
   const pushedOf: FringePushed[][] = plan.map(() => []);
   const pushedOfCut: FringePushed[][] = cuts.map(() => []);
   const pushedOfLimb: FringePushed[][] = lim.parts.map(() => []);
@@ -5610,6 +5630,18 @@ export function assemble(input: AssembleInput): AssembleResult {
     ...cuts.map((q, i) => ({ name: q.into, b: pieces[i] as Built, pushed: pushedOfCut[i], at: `config.assemble.cuts[${i}]`, cutFrom: q.from, set: (pp: PlacedPart) => (cutPlaced[i] = pp) })),
     ...lim.parts.map((q, i) => ({ name: q.part, b: limbPieces[i] as Built, pushed: pushedOfLimb[i], at: `config.limbs.${q.limb}.segments[${q.segment}]`, cutFrom: null, limb: q.record, set: (pp: PlacedPart) => (limbPlaced[i] = pp) })),
   ].filter((q) => !taken.has(q.name));
+  /** Issue #953: the part's projected pixels `paintingEdges` rewrote, less those an earlier exclusion already took out of `source_px_taken`. */
+  const edgedTaken = (name: string, st: ProjectionStats, region: Mask | null): number => {
+    const m = edged.get(name);
+    if (m === undefined) return 0;
+    let k = 0;
+    for (let p = 0; p < W * H; p++) {
+      if (m.data[p] !== 1 || st.takenMask.data[p] !== 1 || (region !== null && region.data[p] !== 1)) continue;
+      if (paintingGains.get(name)?.data[p] === 1 || retakeByName.get(name)?.data[p] === 1 || yields.get(name)?.mask.data[p] === 1) continue;
+      k++;
+    }
+    return k;
+  };
   pieceList.forEach(({ name, b, pushed: pushedHere, at, cutFrom, limb, set }) => {
     const { key, r, st, extendKeys, trace, merged, region } = b;
     // A pixel the merge wrote is judged in the extend layer's run, every other
@@ -5625,7 +5657,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       // A pixel outside the piece's region is a base pixel filled from a cut's under image (issue #193): occluded, never visible.
       if (r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE && own.clear.data[p] === 1 && (region === null || region.data[p] === 1)) visible.data[p] = 1;
       if (paintingGains.get(name)?.data[p] === 1) visible.data[p] = 1;
-      if (paintingGains.get(name)?.data[p] !== 1 && retakeByName.get(name)?.data[p] !== 1 && yields.get(name)?.mask.data[p] !== 1 && trace.ring.data[p] === 0 && own.takenMask.data[p] === 1 && (region === null || region.data[p] === 1)) projected.data[p] = 1;
+      if (edged.get(name)?.data[p] !== 1 && paintingGains.get(name)?.data[p] !== 1 && retakeByName.get(name)?.data[p] !== 1 && yields.get(name)?.mask.data[p] !== 1 && trace.ring.data[p] === 0 && own.takenMask.data[p] === 1 && (region === null || region.data[p] === 1)) projected.data[p] = 1;
     }
     const { x0, y0, x1, y1, opaque } = measureBox(r);
     if (opaque === 0) {
@@ -5650,7 +5682,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       visible_px: vc.visible_px,
       occluded_px: vc.occluded_px,
       projected_core_px: region === null ? st.core : count(st.coreMask, region),
-      source_px_taken: (region === null ? st.taken : count(st.takenMask, region)) - (yields.get(name)?.reading.yieldedTaken ?? 0) - (retakeByName.get(name) == null ? 0 : count(st.takenMask, retakeByName.get(name)!)) - (paintingGains.has(name) ? count(st.takenMask, paintingGains.get(name)!) : 0),
+      source_px_taken: (region === null ? st.taken : count(st.takenMask, region)) - (yields.get(name)?.reading.yieldedTaken ?? 0) - (retakeByName.get(name) == null ? 0 : count(st.takenMask, retakeByName.get(name)!)) - (paintingGains.has(name) ? count(st.takenMask, paintingGains.get(name)!) : 0) - edgedTaken(name, st, region),
       visible_not_projected_px: vc.visible_not_projected_px,
       refused_drift_px: region === null ? st.refused : count(st.refusedMask, region),
       merged_px: merged,
@@ -5771,6 +5803,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     hidden: [...hiddenUses].map(([layer, readBy]) => ({ layer, readBy })),
     seamRule,
     projectRule,
+    ...(edgeReading === null ? {} : { paintingEdges: edgeReading }),
     ...(headFacePrep.underfillPx > 0 ? { headFaceUnderfillPx: headFacePrep.underfillPx } : {}),
     excluded,
     islands: islandKept.counts,

@@ -148,6 +148,7 @@ read by no CPU stage).
 | `seethrough.head_box` | inputs (cuts the head image there; optional at the first call); assemble — where the head run sits on the painting | **proposed** by `propose --head-box` from the full run, square, source pixels, shifted inside the painting when needed; the head run must then be fed exactly that crop. With one run (no `--head`, issue #359: an artist's own file, §4 *For artists*) it is left out — there is no crop to place — and a config that sets it is refused (`ASSEMBLE_SINGLE_RUN_HEAD_BOX`) |
 | `seethrough.arm_split` | assemble, `assemble --propose-plan` — separates a single full-run `handwear-r` or `handwear-l` layer that holds both overlapping arms into both arm tags | **authored**, optional (issue #439): `{x?: number, line?: [[x, y], …], order: ["handwear-r", "handwear-l"] \| ["handwear-l", "handwear-r"]}` in `seethrough.resolution` full-run pixels. Exactly one of `x` (image column, `0 <= x <= resolution`) or `line` (a polyline of two or more `[x, y]` points in `[0, resolution]`, interpolated in x along y and clamped above/below its endpoints) is required (`CONFIG_FIELD_PRESENT`, `CONFIG_FIELD_TYPE`), and `order` is `[back_tag, front_tag]`, the draw order of the two separated arm layers (`CONFIG_FIELD_PRESENT`, `CONFIG_FIELD_TYPE`). Pixels at `< splitX(y)` go to `handwear-r` (image left, the subject's right arm) and pixels at `>= splitX(y)` go to `handwear-l` (image right, the subject's left arm). A split line that cuts a horizontal opaque run of the arm layer into more than two segments is refused (`ASSEMBLE_ARM_SPLIT_CUTS_ARM`). Without the declaration, when one arm layer's 8-connected component reaches both wrists under `propose --keypoints`, `propose` emits an `overlapping-arms` `LINT` naming the part, both wrists and `seethrough.arm_split`; absent, no byte of any output moves |
 | `assemble.seam` | assemble, build | **authored**, optional `"near-white"` or `"silhouette"` (issue #905). An explicit `--seam` overrides the config; otherwise this field overrides the existing `near-white` default. An invalid value is `CONFIG_FIELD_TYPE` at `config.assemble.seam`, including when a CLI override is given. Absent, existing build bytes are unchanged. |
+| `assemble.project` | assemble, build | **authored**, optional `"core"` or `"visible"` (issue #953): the projection rule for this character. An explicit `--project` overrides the config; otherwise this field overrides the existing `core` default. An invalid value is `CONFIG_FIELD_TYPE` at `config.assemble.project`, including when a CLI override is given. Absent, existing build bytes are unchanged. |
 | `assemble.rig_scale` | assemble — the rig is `trunc(w × rig_scale)` x `trunc(h × rig_scale)`, and every rig-px value after it (`bones`, `meshes`, `motion`, `patches`, `cuts`) is in that rig's pixels; `check --source` (`CHECK_SOURCE_SIZE`) and `compose` (`SCENE_RIG_SCALE_AGREES`) read it back off `parts.json` | authored; rig pixels per source pixel. 0.5 in both examples (a 1664x2432 painting makes an 832x1216 rig). **Keep the figure about 1,100 to 1,200 rig px tall** — the `H` of `propose`'s `mesh spacing:` note, the height of the parts' boxes together — so for another painting, about 1,150 over the figure's height in painting px: that is the size the proposer's spacing divisor was calibrated at (H 1106–1185, the `mesh spacing` note says so) and the size of the two examples `check`'s bars are derived from, and the proposer and `check` also hold fixed rig-px values that do not scale with it (the fringe's 10 px step, the trunk segments' 18, 20, 30 and 100 px, the 15 px wrist tolerance, the 10-row pendant floor, the seam bar's 50 rig px over 40). What else it trades, measured on `demo` with the README loop from a fresh config at 0.25, 0.5 and 1 (issue #345, rig-c 2.47.1): the same plan and the same ten chains; every bar but the one the uncorrected `demo` always fails (`bottomwear` `TIP_OVER_ROOT`, the README loop's `RL01`) passing at all three; the atlas page 418x606, 832x1205 and 1825x2047; the figure's mesh spacing 16, 32 and 64, so 830, 868 and 932 triangles; the breath 2.5 % of a torso that scales with it; and the proposed bones, scaled to 0.5, off the 0.5 proposal's by up to 38 px at 0.25 and 22.5 px at 1 (the hairpin's origin; the skirt roots 20 and 10.5) — the fixed-px values above. `propose` records it on the proposal as `proposed_rig_scale` (issue #354), and changing `assemble.rig_scale` after the rig sections are written is refused (`CONFIG_PROPOSED_RIG_SCALE`): without that refusal `demo`'s tracked config built at 0.25 gated green and `check` failed only `TIP_OVER_ROOT` on both sleeves (`propose --from-config` named 54 `LINT` lines, links off the art) — re-run `assemble` and `propose` at the new scale. Absent: `CONFIG_FIELD_PRESENT`; 0, negative or not a number: `CONFIG_FIELD_TYPE`; a rig under 1x1: `ASSEMBLE_RIG_SIZE` |
 | `assemble.plan` | assemble; also the list every `meshes`/`regions` key must come from | **proposed** by `assemble --propose-plan`. `[part name, "full" \| "head", See-through tag]`, in draw order back to front. Names are free; roles come from the tag. A layer the author made and added to a run takes `author:<label>` in the tag's place, and has no role (§5, *A layer the author made*). When `generation.control.skeleton` is present and a full-run `handwear-r` or `handwear-l` layer merges sleeve, bare hand and overgarment drape into one layer — a skin-coloured hand cluster (`>= 40` run px, `GHOST_MIN_AREA`, measured `516..4,787` run px across the 9-standee corpus) lies within `0.35` forearm lengths of `<s>_wrist` and non-skin pixels reach more than `1.0x` the forearm length (`<s>_elbow -> <s>_wrist`) below `<s>_wrist` (issue #490; measured `-0.15x..0.45x` on the 6 clean standees vs `1.25x..2.02x` on the 3 merged standees, placing `1.0x` inside the `0.45x..1.25x` gap) — the layer is split into `drape-<s>`, `handwear-<s>` and `hand-<s>` (back to front) when the Euclidean RGB distance between the sleeve median colour above `<s>_wrist` and the drape median colour below `<s>_wrist` is at least `80` (`ARM_DRAPE_COLOR_DISTANCE`, measured `103.6..236.0` on the two distinct-colour merged standees vs `20.8..28.2` on the same-colour merged standee, placing `80` between `28.2` and `103.6`), or refused with `SEETHROUGH_ARM_RUN_MERGED` when the distance is under `80` |
 | `assemble.extend_below_crop` | assemble | **proposed** with the plan: `{part, run, tag}` — a head-run part that reaches the bottom of the head crop is continued from a full-run layer, whole connected components |
@@ -4191,7 +4192,34 @@ takes every other top-most `alpha >= 250` pixel; neither rule takes a fringe pix
 projected from 36,227 to 22,476 (`reference-sample`) and 76,801 to 49,672 (`reference-demo`), recomposite
 error pixels from 4,512 to 4,116 and 11,050 to 9,820, and the check seam from 0.207 to
 0.206 and 0.326 to 0.325, with no other check figure changed. The default stays the
-reference's so the examples stay comparable with it. `build` takes both flags.
+reference's so the examples stay comparable with it. `build` takes both flags, and
+`config.assemble.project` sets the rule per character (an explicit `--project` wins).
+
+Under `visible` the parts' edges are also resolved from the painting (issue #953,
+`src/paintingedges.ts`). A See-through run is capped at its resolution, so every run
+layer is enlarged into the rig and its alpha edge is a soft ramp the painting does not
+have; where two parts meet along a painted line each layer repaints the line on its own
+side of its ramp — a doubled line, a stair-step, or the background through a gap where
+neither is opaque. Within 3 rig px of where two parts' half-coverage lines meet (or a
+part's and the background's), the part drawn in front takes the painting's coverage
+along the axis from the colour behind to its own, its colour unmixed from the colour
+behind, and the part behind is made opaque under it in that colour, so the composite
+is the painting and the rim stays the occluding part's. Where a painted line is darker or
+lighter than both colours, the front part's alpha rises until the composite is within 20
+of the painting. A pixel is left as it was where
+a third part with alpha above 8 covers it, where the painting draws no edge between the
+two (contrast below 40, the recomposite's error limit), where either part is a patch,
+keeps the pixel, feathers it, or is a turn's moving pair. A part's art keeps its
+4-connected pieces (`CONTOUR_ONE_ISLAND` reads them so): a write that would split a piece
+or start a new one is left out. The assemble line says how
+many pixels it resolved and why it left the rest; the pixels it writes are
+`provenance.automatic[].stage: "paintingEdge"`. On the five public examples it lowered
+the recomposite's error pixels under `visible` from 11,780 to 765 (`demo`), 7,427 to
+703 (`reference-demo`), 3,965 to 243 (`reference-sample`), 6,749 to 2,211 (`scarf`)
+and 13,872 to 1,110 (`wind`), and the holes from 1,020 to 62, 453 to 40, 259 to 20,
+291 to 24 and 1,118 to 62. `check` passes the same bars as before on four of them; on
+`scarf` the hair's trimmed outline gives a contour mesh that folds 2 of 224 triangles on
+one frame of `hop` with physics on (`CHECK_ANIMATIONS_DO_NOT_FOLD`). `core` is unchanged.
 
 **`rig --idle-keys ctl|direct`** (and `build --idle-keys`, which forwards the
 value to its rig stage; without the flag, or with `ctl`, a build writes and prints
@@ -4492,8 +4520,9 @@ still ends in the unchanged class by the first comparison.
 
 Automatic value changes are named `sourceProjection`, `extend`, `growRim`,
 `limbCap`, `limbFeather`, `fringeRestore`, `seamOverride`, `armSplit`,
-`headFaceUnderfill`, `ghostCleanup` or `paintingExtension`. `limbSplit` and `limbHybrid` remain
+`headFaceUnderfill`, `ghostCleanup`, `paintingExtension` or `paintingEdge`. `limbSplit` and `limbHybrid` remain
 recognized stage names, but their pure copies do not claim a value change.
+`paintingEdge` (under `visible` only) is a part's edge resolved from the painting;
 `paintingExtension` copies unheld painting samples within an explicit band;
 `painting_extension_px` counts that ownership assignment independently, even
 when restoring raw-layer values makes its final value class unchanged.
