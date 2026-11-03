@@ -5299,6 +5299,8 @@ documents do not ship). Each is an input this package built; none is an author's
 | <a id="CHECK_SETUP_MATCHES_PAINTING"></a>`CHECK_SETUP_MATCHES_PAINTING` | region, slot, failing-pixel box, slot pixelcount, complete region pixelcount and declared limit | compare the source painting beside the actual setup; follow [Source before scissors](#source-before-scissors), then rerun with the same authored limit |
 | <a id="CHECK_SETUP_PAINTING_SOURCE"></a>`CHECK_SETUP_PAINTING_SOURCE` | a declaration without a source painting | supply `--source`; the assembled composite is not an independent reference |
 | <a id="CHECK_SETUP_PAINTING_MEASURED"></a>`CHECK_SETUP_PAINTING_MEASURED` | missing native setup/ownership or unsupported clipping | supply observable textured setup geometry; an unavailable instrument never passes |
+| <a id="CHECK_BOUNDARY_COLOUR_STEP"></a>`CHECK_BOUNDARY_COLOUR_STEP` | the requirements file declares `boundary_colour.max_step_excess` and a part boundary's colour step in the rig's render exceeds the same boundary's step in the rig's own pieces by more than it; the part pair, the frame (`setup` or `idle frame <n> (t <s> s)`), the stage pixel, the excess, the declared allowance and both steps are quoted. Unlike [`CHECK_SETUP_MATCHES_PAINTING`](#CHECK_SETUP_MATCHES_PAINTING), which compares the painting per declared region at the setup pose, this compares against the rig's own flat pieces (`parts.json` placement at setup, each piece's rest colour through its art UVs on every idle frame), so a part drawn over its neighbour's line art is not a failure | the pair's rig image or mesh: `rig/images/<part>.png` (a texture stretched into its padded UVs, or a notch cut out of it), or that part's mesh in `config.json` `meshes` when the mesh cuts a corner off the art; see [Boundary colour step](#boundary-colour-step-issue-942) |
+| <a id="CHECK_BOUNDARY_COLOUR_UNMEASURED"></a>`CHECK_BOUNDARY_COLOUR_UNMEASURED` | `boundary_colour` is declared and the step cannot be taken: no `parts.json` or no `idle` (refused before anything is built), or a drawn slot has no `parts.json` piece, is clipped, or its rig image is not its parts PNG with one even pad on every side (the slot and frame are named). Never a pass | make every drawn slot a `parts.json` piece, or drop `boundary_colour` from the requirements file (the bar then reports SKIP) |
 | <a id="SETUP_PAINTING_REQUIRED_LIMIT"></a>`SETUP_PAINTING_REQUIRED_LIMIT` | `setup_painting.required` is `true` and a limit the check needs is absent: `rgb_tolerance`, `regions`, or a region's `max_pixels` (the object names the region). Refused when the requirements file is read, before anything is built (issue #943) | author the named limit; none is derived from the art. Without `required` the same region reports SKIP |
 | <a id="CHECK_SOURCE_GRID"></a>`CHECK_SOURCE_GRID` | the setup-pose still and its black-tinted twin (the coverage `SETUP_POSE_VS_SOURCE` reads) did not come back on one grid over one opaque background | a rigc problem; report it |
 | <a id="CHECK_RIGC_VERSION"></a>`CHECK_RIGC_VERSION` | `rigc --version` is below 1.4.0, or prints no version: its `render` has no `--geometry`, which `TEXTURE_STRETCH` reads. Refused before anything is built | `bun install` (this package depends on rig-c ^2.20.4), or put a newer `rigc` first on `PATH` |
@@ -5347,7 +5349,7 @@ documents do not ship). Each is an input this package built; none is an author's
 | <a id="BUILD_REQUIREMENTS_CONFLICT"></a>`BUILD_REQUIREMENTS_CONFLICT` | `build --requirements <file>` names a file with other bytes than the one `config.requirements` declares (issue #556): the detail names both, each resolved (the flag against the working directory, the declaration against the config's) with its sha256 — or `no such file`. Refused before assemble writes anything. The same file by both, or a copy of its bytes, is not refused: the declaration is read and recorded | drop the flag to build from the config's file, or point `config.requirements` at the flag's |
 | <a id="BUILD_STAGE_REQUEST"></a>`BUILD_STAGE_REQUEST` | an internal build worker was given a missing or malformed request, an unknown stage, or incomplete runner, input, output or scratch paths; the worker refuses before running a stage. This is the internal process protocol, not a public command or option | invoke `rig-parts build` with its documented flags; if that command produces this refusal, report the named request defect rather than constructing or modifying a worker request |
 | <a id="REQUIREMENTS_FILE"></a>`REQUIREMENTS_FILE` | `--requirements` names no file, or one that does not parse as a JSON object. Refused before anything is built (by `build`, before assemble) | the path of a `spine-parts-requirements/1` file |
-| <a id="REQUIREMENTS_FIELD"></a>`REQUIREMENTS_FIELD` | a field of the file is missing, of the wrong type, or not one the format reads: `spec`, `fps` (no default), `requirements`, each requirement's `name` (letters, digits, underscores; once each), `kind`, `animation` and its kind's fields — every bar among them (`within_px`, `fraction`, `tolerance`, `least_drive` above 0, `within_degrees` from 0 to 180, `lo_degrees` ≤ `hi_degrees`, `within_ratio` ≥ 1) — and each target's `bone`, `animation` and exactly one of `at` and `keys` (times strictly increasing), and `not_planted`, `not_swinging`, `rises` and `rests` when given (each a non-empty list of part names, each once; no part both in `not_swinging` and in `rises` or `rests`), and `may_fold` when given (a non-empty list of `{ "slot", "animation", "why" }`, every one a non-blank string, each pair once; issue #320), and `pinholes` when given (an object whose one field, `required`, is `true` or `false`; issue #944). `note`, `*_note` (strings) and `x-…` (any value) are read by nothing, as in the config | write the field; the bar is yours |
+| <a id="REQUIREMENTS_FIELD"></a>`REQUIREMENTS_FIELD` | a field of the file is missing, of the wrong type, or not one the format reads: `spec`, `fps` (no default), `requirements`, each requirement's `name` (letters, digits, underscores; once each), `kind`, `animation` and its kind's fields — every bar among them (`within_px`, `fraction`, `tolerance`, `least_drive` above 0, `within_degrees` from 0 to 180, `lo_degrees` ≤ `hi_degrees`, `within_ratio` ≥ 1) — and each target's `bone`, `animation` and exactly one of `at` and `keys` (times strictly increasing), and `not_planted`, `not_swinging`, `rises` and `rests` when given (each a non-empty list of part names, each once; no part both in `not_swinging` and in `rises` or `rests`), and `may_fold` when given (a non-empty list of `{ "slot", "animation", "why" }`, every one a non-blank string, each pair once; issue #320), and `pinholes` when given (an object whose one field, `required`, is `true` or `false`; issue #944), and `boundary_colour` when given (an object whose one field, `max_step_excess`, is an integer from 0 through 255; issue #942). `note`, `*_note` (strings) and `x-…` (any value) are read by nothing, as in the config | write the field; the bar is yours |
 | <a id="REQUIREMENTS_RESOLVES"></a>`REQUIREMENTS_RESOLVES` | a bone, an `ik` or `transform` constraint (by name and `constraint_type`, as rig-c resolves it), a slot, a mesh attachment or an animation the file names is not in `rig.json` or `motion.json`, or a seam's part or a `not_planted`, `not_swinging`, `rises` or `rests` name is not in `parts.json` — the detail lists the ones that are; or an animation whose name cannot be a directory. Refused before anything is built | the name as the rig spells it |
 | <a id="REQUIREMENTS_CONSTRAINT_DRIVES"></a>`REQUIREMENTS_CONSTRAINT_DRIVES` | a `follow` names a bone its constraint does not constrain, or a property it does not drive: an `ik` drives `rotate` only; a `transform` drives `rotate` when a `to` names `rotate`, `translate` when one names `x` or `y` | the constraint's own bone and property |
 | <a id="REQUIREMENTS_TARGET_PARENT"></a>`REQUIREMENTS_TARGET_PARENT` | a scene target's bone is the root or is not parented to it, or the root is not at rest at the origin, or the animation keys the root — a stage point is a bone's position only under a root that stands still at the origin | a bone under the root for the scene to place |
@@ -5956,6 +5958,7 @@ Under `--source <painting.png>`, a second reported line, also never a FAIL
 | --- | --- | --- | --- | --- | --- |
 | <a id="SETUP_POSE_VS_SOURCE"></a>`SETUP_POSE_VS_SOURCE` | the setup pose against the painting, by `assemble`'s own `measureRecomposite` over the stage's pixels — `mean_abs` and `within_share` (mean channel, within 8), `error_px` (max channel over 40), `uncovered_error_px` (of those, where the pose has alpha 128 or less), `hole_count` and the largest hole's box — with `painting_px`, `stage_px`, `render_px` and `render_scale` beside them. The painting is resampled onto the stage as assemble resamples it (lanczos3, alpha dropped). rigc renders onto an opaque grey, so the pose over white and its alpha are read off a second still of the same pose with every slot tinted black; both are carried onto the stage with the seam's map turned round (bilinear) | none — status `REPORTED`; assemble applies no bar to the figures it measures, so none is derived here | 3.146 / 93.43 % / 12,399 / 1,732, 518 holes, the largest 61 px at 351,157 6x20 (assemble's recomposite: 2.391 / 95.81 % / 11,050 / 1,564, 453) | 1.095 / 97.30 % / 5,348 / 1,239, 313 holes, the largest 88 px at 479,416 6x29 (assemble's: 0.835 / 97.95 % / 4,512 / 1,185, 259) | not written without `--source` |
 | <a id="SETUP_MATCHES_PAINTING"></a>`SETUP_MATCHES_PAINTING` | declared region count, native box, limit and actual top contributor rows | PASS/FAIL against authored limits; no limit is SKIP, or the refusal `SETUP_PAINTING_REQUIRED_LIMIT` under `setup_painting.required: true`; with `--source`, no declaration is SKIP with its reason and declaration remedy; undeclared regions are not judged |
+| <a id="BOUNDARY_COLOUR_STEP"></a>`BOUNDARY_COLOUR_STEP` | the worst colour-step excess over the rig's own pieces at any part boundary of the setup and every idle frame, its part pair, frame and stage pixel, and the declared `max_step_excess` | PASS/FAIL against the declared allowance (FAIL is [`CHECK_BOUNDARY_COLOUR_STEP`](#CHECK_BOUNDARY_COLOUR_STEP), an unreadable piece [`CHECK_BOUNDARY_COLOUR_UNMEASURED`](#CHECK_BOUNDARY_COLOUR_UNMEASURED)); no `boundary_colour` in the requirements file is SKIP with its reason and the declaration to add, never a pass |
 
 The figures are assemble's by construction, not a second definition beside them;
 what differs is what they are taken of — the pose rigc draws, not the flat stack —
@@ -6636,6 +6639,49 @@ the painting holds those pixels
 its own. `demo` and `scarf` read their declaration from a file `config.json` does
 not name: as `config.requirements` it would reach `check` too, and `check.json`
 would gain a requirements block its `expected/` copy does not hold.
+
+### Boundary colour step (issue #942)
+
+`BOUNDARY_COLOUR_STEP` holds the colour step across every part boundary to the
+rig's own pieces, on the setup pose and every frame of the idle, drawn by rig-c's
+renderer (`@rig-c/core/render-shared`) on the gated build. A boundary pair is
+two 4-adjacent stage pixels drawn by different pieces; its step is the largest
+RGB difference across it, over white. The reference is never the painting — a
+part drawn on top legitimately shows its own colour over its neighbour's line
+art:
+
+- the setup pose against each piece's `parts/<name>.png` drawn flat at its
+  `parts.json` rectangle, through the same rasteriser (the layer stack
+  recomposited);
+- each idle frame against the same posed frame with every piece re-seated on
+  its own parts PNG through its own art UVs — the boundary's colours at rest,
+  tracked through the pieces' own UVs.
+
+The reading is the excess of the render's step over the reference's,
+`max(0, s_render - s_reference)`, and the bar is its largest value over every
+pair of every frame. A texture stretched into its padded UVs and a notch cut out
+of a piece both raise it; a correct overlap does not, because both sides draw the
+top piece. The author declares the allowance; no number is built in:
+
+```json
+{ "spec": "spine-parts-requirements/1", "fps": 12, "requirements": [], "boundary_colour": { "max_step_excess": 12 } }
+```
+
+Declared, `check` measures it after rigc's gate, writes the
+`BOUNDARY_COLOUR_STEP` block to `check.json` and refuses every part pair over the
+allowance by name, [`CHECK_BOUNDARY_COLOUR_STEP`](#CHECK_BOUNDARY_COLOUR_STEP):
+`part pair "back|front" — setup, stage pixel (24, 38): step excess 160 >
+declared max_step_excess 8 …`. A reading that cannot be taken is
+[`CHECK_BOUNDARY_COLOUR_UNMEASURED`](#CHECK_BOUNDARY_COLOUR_UNMEASURED), never a
+pass. Undeclared, nothing is measured or written and the console says
+`BOUNDARY_COLOUR_STEP: SKIP — not measured, not a pass`, with the declaration
+remedy; exit codes and `check.json` do not move. Alternate sets are not measured.
+
+The public examples read, clean: `demo` 1, `scarf` 1, `reference-sample` 3,
+`wind` 4, `reference-demo` 4; the stretch and notch plants read 21 and up on
+`demo` and `scarf`. Each example declares 12 in its `requirements.json`, a file
+`config.json` does not name (as for `pinholes`), and the chain suite holds each
+to it (`CH942`); the suite `boundary-colour` holds the plants.
 
 ## 8. What one character costs
 

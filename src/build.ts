@@ -1,5 +1,6 @@
 import { DEFAULT_SEAM_RULE } from './seamrule.ts';
 import { SETUP_PAINTING_LINE, setupPaintingLines } from './setuppainting.ts';
+import { boundaryColourLines } from './boundarycolour.ts';
 import { writeMaterialSources } from './cutmaterialio.ts';
 import { CUT_MATERIAL_LINE, CUT_MATERIAL_SOURCES, materialLines } from './cutmaterial.ts';
 import { ART_JOINT_LINE, artJointLines } from './artjoints.ts';
@@ -1977,6 +1978,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   if (artJoints !== undefined) for (const line of artJointLines(artJoints)) log(`  ${line}`);
   const setupPainting = fig[SETUP_PAINTING_LINE];
   if (setupPainting !== undefined) for (const line of setupPaintingLines(setupPainting)) log(`  ${line}`);
+  for (const line of boundaryColourLines(r.boundaryColour)) log(`  ${line}`);
   if (r.requirements !== null) {
     for (const [name, line] of Object.entries(r.requirements.lines)) log(`  ${requirementText(name, line)}`);
     log(`  ${summaryText(r.requirements.summary)}`);
