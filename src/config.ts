@@ -2471,7 +2471,7 @@ function checkTakeLayers(c: Check, value: Json): void {
 }
 
 /**
- * `config.assemble.editor_receipts` (issue #946): `{receipts, required?}`.
+ * `config.assemble.editor_receipts` (issue #946): `{receipts, required?, trace_parts?}` (`trace_parts`, issue #947).
  * Shape refusals are the loader's own; a receipt whose `from_sha256` equals
  * its `sha256` (no edit), or a `file` receipted twice, is `CONFIG_EDITOR_RECEIPT`.
  * Whether the file exists and hashes to `sha256` is read at assemble
@@ -2479,9 +2479,11 @@ function checkTakeLayers(c: Check, value: Json): void {
  */
 function checkEditorReceipts(c: Check, value: Json): void {
   const at = 'config.assemble.editor_receipts';
-  const o = c.object(at, value, ['receipts'], ['required']);
+  const o = c.object(at, value, ['receipts'], ['required', 'trace_parts']);
   if (o === null) return;
-  if ('required' in o && typeof o.required !== 'boolean') c.fail('CONFIG_FIELD_TYPE', `${at}.required`, `is ${show(o.required)}; true or false is required`);
+  for (const k of ['required', 'trace_parts'] as const) {
+    if (k in o && typeof o[k] !== 'boolean') c.fail('CONFIG_FIELD_TYPE', `${at}.${k}`, `is ${show(o[k])}; true or false is required`);
+  }
   if (!('receipts' in o) || !c.array(`${at}.receipts`, o.receipts, false)) return;
   const seen = new Map<string, number>();
   (o.receipts as Json[]).forEach((v, i) => {
