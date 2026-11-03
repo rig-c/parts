@@ -1,6 +1,6 @@
 import { OPAQUE_ALPHA_ABOVE } from './layers.ts';
 import { connectedComponents } from './raster/components.ts';
-import { type Mask, newMask, type Raster } from './raster/types.ts';
+import { type Mask, newMask, type Raster, RasterError } from './raster/types.ts';
 
 /**
  * Issue #953, under `projectRule: 'visible'` only: the parts' visible edges are
@@ -213,6 +213,10 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
   const W = srcr.width;
   const H = srcr.height;
   const n = parts.length;
+  // Every part is read as the whole rig canvas; a cropped image would be read at the wrong place.
+  parts.forEach((r, i) => {
+    if (r.width !== W || r.height !== H) throw new RasterError(`paintingEdges: part ${i} is ${r.width}x${r.height}; the rig canvas ${W}x${H} is required (place a cropped part on it first)`);
+  });
   const R = EDGE_RADIUS;
   const cap = 2 * R + 2;
   const owner = new Int16Array(W * H).fill(-1);

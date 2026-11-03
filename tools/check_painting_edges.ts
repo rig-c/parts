@@ -190,6 +190,43 @@ export function runPaintingEdgeChecks(say: Say): void {
     );
   }
 
+  // A painting patch reaches the step as its cut, placed at record.x / record.y; the step reads every part as the rig canvas.
+  // Positive: the patch placed on the canvas covers the edge, so FRONT under it is left (0 px changed there).
+  // Planted: the cropped image read as the canvas (its bytes from the canvas's first pixel, as `p * 4` indexes them) misses
+  // the edge, and FRONT under the patch is rewritten; the cropped image itself is refused.
+  {
+    const { painting, stack } = strip(RED, BLUE, RAMP);
+    const px = 7, py = 2, pw = 6, ph = 5;
+    const cut = newRaster(pw, ph);
+    for (let y = 0; y < ph; y++) for (let x = 0; x < pw; x++) cut.data.set([...painting.data.slice(((py + y) * W + px + x) * 4, ((py + y) * W + px + x) * 4 + 3), 255], (y * pw + x) * 4);
+    const placed = newRaster(W, H);
+    for (let y = 0; y < ph; y++) placed.data.set(cut.data.subarray(y * pw * 4, (y + 1) * pw * 4), ((py + y) * W + px) * 4);
+    const misread = newRaster(W, H);
+    misread.data.set(cut.data);
+    const underPatch = (run: Raster[]): number => {
+      let n = 0;
+      for (let y = py; y < py + ph; y++) for (let x = px; x < px + pw; x++) if ([0, 1, 2, 3].some((c) => run[1].data[(y * W + x) * 4 + c] !== stack[1].data[(y * W + x) * 4 + c])) n++;
+      return n;
+    };
+    const opts = options({ editable: [true, true, false] });
+    const good = [...stack, placed].map(copy);
+    paintingEdges(good, painting, opts);
+    const bad = [...stack, misread].map(copy);
+    paintingEdges(bad, painting, opts);
+    let refused = '';
+    try {
+      paintingEdges([...stack, cut].map(copy), painting, opts);
+    } catch (e) {
+      refused = e instanceof Error ? e.message : String(e);
+    }
+    say('ED9542_A_PLACED_PATCH_KEEPS_THE_EDGE_UNDER_IT', underPatch(good) === 0, `patch ${pw}x${ph} at (${px}, ${py}) placed on the canvas: ${underPatch(good)} FRONT px changed under it`);
+    say(
+      'ED9543_PLANTED_A_CROPPED_PATCH_IS_MISREAD_AND_REFUSED',
+      underPatch(bad) > 0 && refused.includes('rig canvas'),
+      `the cut read as the canvas: ${underPatch(bad)} FRONT px changed under the patch; the cut itself: ${refused === '' ? 'accepted' : `refused (${refused})`}`,
+    );
+  }
+
   // Planted: FRONT may not be edited (a painting patch): nothing is written.
   {
     const { painting, stack } = strip(RED, BLUE, RAMP);

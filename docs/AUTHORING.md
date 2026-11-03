@@ -4215,11 +4215,10 @@ or start a new one is left out. The assemble line says how
 many pixels it resolved and why it left the rest; the pixels it writes are
 `provenance.automatic[].stage: "paintingEdge"`. On the five public examples it lowered
 the recomposite's error pixels under `visible` from 11,780 to 765 (`demo`), 7,427 to
-703 (`reference-demo`), 3,965 to 243 (`reference-sample`), 6,749 to 2,211 (`scarf`)
+703 (`reference-demo`), 3,965 to 243 (`reference-sample`), 6,749 to 2,190 (`scarf`)
 and 13,872 to 1,110 (`wind`), and the holes from 1,020 to 62, 453 to 40, 259 to 20,
-291 to 24 and 1,118 to 62. `check` passes the same bars as before on four of them; on
-`scarf` the hair's trimmed outline gives a contour mesh that folds 2 of 224 triangles on
-one frame of `hop` with physics on (`CHECK_ANIMATIONS_DO_NOT_FOLD`). `core` is unchanged.
+291 to 34 and 1,118 to 62; `check` passes the same bars as before on all five. A
+painting patch is read placed on the rig canvas, and is never written. `core` is unchanged.
 
 **`rig --idle-keys ctl|direct`** (and `build --idle-keys`, which forwards the
 value to its rig stage; without the flag, or with `ctl`, a build writes and prints

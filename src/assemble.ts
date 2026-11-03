@@ -5588,7 +5588,25 @@ export function assemble(input: AssembleInput): AssembleResult {
   const edged = new Map<string, Mask>();
   let edgeReading: PaintingEdgeReading | null = null;
   if (projectRule === 'visible') {
-    const e = paintingEdges(stack.map((q) => q.image), srcr, {
+    // paintingEdges reads every image as the whole rig canvas. A plan part's image already is one; a patch is its cut,
+    // placed at record.x / record.y, so it is placed on a canvas here. The step never writes a patch, so a copy is enough.
+    const onRig = (q: PlacedPart): Raster => {
+      const { image, record } = q;
+      if (image.width === W && image.height === H && record.x === 0 && record.y === 0) return image;
+      const whole = newRaster(W, H);
+      for (let y = 0; y < image.height; y++) {
+        const ry = record.y + y;
+        if (ry < 0 || ry >= H) continue;
+        for (let x = 0; x < image.width; x++) {
+          const rx = record.x + x;
+          if (rx < 0 || rx >= W) continue;
+          const s = (y * image.width + x) * 4;
+          whole.data.set(image.data.subarray(s, s + 4), (ry * W + rx) * 4);
+        }
+      }
+      return whole;
+    };
+    const e = paintingEdges(stack.map(onRig), srcr, {
       painted: paintedFigure(srcr),
       editable: order.map((d) => !('patch' in d)),
       keep: keepInOrder,
