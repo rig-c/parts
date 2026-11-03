@@ -11,10 +11,16 @@ export interface SetupPaintingRegion {
   max_pixels?: number;
 }
 export interface SetupPainting {
+  /** Issue #943: the author's declaration that this check may not SKIP. When
+   * true, a missing rgb_tolerance, regions or any region's max_pixels is
+   * refused by name (SETUP_PAINTING_REQUIRED_LIMIT) instead of reported as
+   * SKIP. Absent or false: the pre-#943 reading, unchanged. */
+  required?: boolean;
   /** A pixel counts when its maximum RGB difference is strictly greater. */
   rgb_tolerance: number;
   regions: SetupPaintingRegion[];
 }
+export const SETUP_PAINTING_REQUIRED_CODE = 'SETUP_PAINTING_REQUIRED_LIMIT';
 const object = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const integer = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v);
 const free = (k: string, v: unknown): boolean => (k.startsWith('x-') && k.length > 2) || ((k === 'note' || k.endsWith('_note')) && typeof v === 'string');
@@ -27,9 +33,17 @@ export function setupPaintingProblems(value: unknown, at: string): Problem[] {
     for (const k of Object.keys(v)) if (!allowed.includes(k) && !free(k, v[k])) fail(`${where}.${k}`, `is unknown; fields are ${allowed.join(', ')}`);
   };
   if (!object(value)) return [{ code: 'REQUIREMENTS_FIELD', object: at, detail: 'requires {rgb_tolerance, regions: [{name, box, max_pixels?}]}' }];
-  keys(value, ['rgb_tolerance', 'regions'], at);
-  if (!integer(value.rgb_tolerance) || value.rgb_tolerance < 0 || value.rgb_tolerance > 255) fail(`${at}.rgb_tolerance`, 'requires an authored integer from 0 through 255; difference strictly above it counts');
-  if (!Array.isArray(value.regions) || value.regions.length === 0) fail(`${at}.regions`, 'requires a nonempty list of named source-grid regions');
+  keys(value, ['required', 'rgb_tolerance', 'regions'], at);
+  if ('required' in value && typeof value.required !== 'boolean') fail(`${at}.required`, `is ${JSON.stringify(value.required)}; requires true (the check may not SKIP: every limit must be declared) or false (the same as omitting it)`);
+  // Issue #943: under required: true an absent limit is not a SKIP to report but a refusal naming the field.
+  const required = value.required === true;
+  const missing = (where: string, needed: string): void => {
+    problems.push({ code: SETUP_PAINTING_REQUIRED_CODE, object: where, detail: `is absent; setup_painting.required is true, so SETUP_MATCHES_PAINTING may not SKIP — declare ${needed}. No limit is derived from the art` });
+  };
+  if (required && !('rgb_tolerance' in value)) missing(`${at}.rgb_tolerance`, 'an authored integer from 0 through 255');
+  else if (!integer(value.rgb_tolerance) || value.rgb_tolerance < 0 || value.rgb_tolerance > 255) fail(`${at}.rgb_tolerance`, 'requires an authored integer from 0 through 255; difference strictly above it counts');
+  if (required && !('regions' in value)) missing(`${at}.regions`, 'a nonempty list of named source-grid regions, each with box and an authored max_pixels');
+  else if (!Array.isArray(value.regions) || value.regions.length === 0) fail(`${at}.regions`, 'requires a nonempty list of named source-grid regions');
   else {
     const names = new Set<string>();
     value.regions.forEach((r, i) => {
@@ -40,6 +54,7 @@ export function setupPaintingProblems(value: unknown, at: string): Problem[] {
       else { if (names.has(r.name)) fail(`${where}.name`, `declares region "${r.name}" twice`); names.add(r.name); }
       if (!Array.isArray(r.box) || r.box.length !== 4 || !r.box.every(integer) || r.box[0] < 0 || r.box[1] < 0 || r.box[2] <= 0 || r.box[3] <= 0 || !Number.isSafeInteger(r.box[0] + r.box[2]) || !Number.isSafeInteger(r.box[1] + r.box[3])) fail(`${where}.box`, 'requires nonnegative integer x/y and positive integer width/height in stage pixels, with finite integer far edges');
       if ('max_pixels' in r && (!integer(r.max_pixels) || r.max_pixels < 0)) fail(`${where}.max_pixels`, 'requires a nonnegative authored integer pixel count, or omission for SKIP');
+      else if (required && !('max_pixels' in r)) missing(`${where}.max_pixels${typeof r.name === 'string' ? ` (region "${r.name}")` : ''}`, 'an authored nonnegative integer pixel count for this region; without it the region would report SKIP');
     });
   }
   return problems;
