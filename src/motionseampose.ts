@@ -1,7 +1,9 @@
 /** Posed-axis evidence from one stock seam render, never sampled source keys. */
-import type { GeometryFile, GeometryFrame } from '@rig-c/core/render';
+import type { GeometryFile } from '@rig-c/core/render-shared';
 import type { FrameSet } from './check.ts';
 import { PartsError } from './errors.ts';
+
+type GeometryFrame = GeometryFile['frames'][number];
 
 // Stock rig-c 2.69 geometry header, also exported by rig-c/render. render-shared
 // does not expose its constants; avoid loading the optional Spine side for a header read.
