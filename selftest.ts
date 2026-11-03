@@ -391,6 +391,10 @@ import {
   readFrameSet,
   readGeometry,
   readMotionSeams,
+  readMotionSeamBackground,
+  motionSeamRequired,
+  MOTION_SEAM_REQUIRED_CODE,
+  type MotionSeamRequired,
   readWindBand,
   resolveWindBand,
   measureWindBand,
@@ -17761,6 +17765,138 @@ function runMotionSeamWorldCases(say: (name: string, ok: boolean, detail: string
 
 
 /** Issue #591: the injected runner observes the actual orchestration, including custom schedules. */
+/**
+ * Issue #941: an animation that tears the elbow on frame 7 of 13 alone — the forearm's bone translated 20 rig px
+ * along the arm on that key and on no other, so frames 6 and 8 are the setup pose. A sampler that reads every
+ * second, third or fourth frame from 0 never reads frame 7. `hold` keys the same bone at 0 throughout: the clean twin.
+ */
+const SO_TEAR_FRAME = 7;
+function soTearMotion(along: number): Record<string, unknown> {
+  return { spec: 'rigc-motion/1', animations: { tear: { duration: 1, loop: false, tracks: [{ bone: 'sleeve_r1', property: 'translate', keys: [
+    { t: 0, v: [0, 0] }, { t: (SO_TEAR_FRAME - 1) / 12, v: [0, 0] }, { t: SO_TEAR_FRAME / 12, v: [along, 0] }, { t: (SO_TEAR_FRAME + 1) / 12, v: [0, 0] }, { t: 1, v: [0, 0] }] }] } } };
+}
+
+type SoBuilt = (label: string, limbs: boolean, patch?: Record<string, unknown>, fullRun?: string) => { status: number; out: string; fig: Record<string, unknown> | null; stage: string };
+
+/** Issue #941: `seam_over_motion.required` — every declared pair, every frame, 0 background cells; planted, clean, undeclared and malformed. */
+function runSeamRequiredCases(dir: string, built: SoBuilt, say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  writeFileSync(join(dir, 'anim-tear.json'), JSON.stringify(soTearMotion(20)));
+  writeFileSync(join(dir, 'anim-hold.json'), JSON.stringify(soTearMotion(0)));
+  const reqAt = (name: string, block: unknown): string => {
+    writeFileSync(join(dir, `${name}.json`), `${JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [], ...(block === undefined ? {} : { seam_over_motion: block }) })}\n`);
+    return `${name}.json`;
+  };
+  const required = reqAt('seam-required', { required: true });
+  const motion = (file: string): Record<string, unknown> => ({ motion: { ...(soConfig(true).motion as Record<string, unknown>), animations_from: file } });
+  const explicit = {
+    limbs: undefined,
+    motion_seams: [{ part: 'upperarm_r', neighbour: 'forearm_r' }],
+    assemble: { ...(soConfig(true).assemble as Record<string, unknown>), plan: [['upperarm_r', 'full', 'author:upperarm'], ['forearm_r', 'full', 'author:forearm']] },
+  };
+  const fails = (out: string): string[] => out.split('\n').map((l) => l.replace(/^\[check\] /, '').trim()).filter((l) => l.startsWith(`FAIL  ${MOTION_SEAM_REQUIRED_CODE}: `));
+  const lineOf = (fig: Record<string, unknown> | null): MotionSeamLine | null => (fig?.[MOTION_SEAM_LINE] as MotionSeamLine | undefined) ?? null;
+  // The figure the refusal must quote, read off a fresh stock render of the undeclared build, not off the code under test.
+  const gapOpenOf = (stage: string, label: string): Array<{ index: number; px: number }> => {
+    const again = join(dir, `${label}-again`);
+    const r = spawnRigc(suiteRigc(), ['render', '--candidate', join(stage, 'check', 'build'), '--seam', 'upperarm_r:forearm_r', '--fps', '12', '--max', '16', '--out', again]);
+    if (r.status !== 0) return [];
+    const fr = readJsonFile(join(again, 'frames.json'));
+    const set = (Array.isArray(fr?.sets) ? fr.sets : []).find((s: Record<string, unknown>) => s.animation === 'tear') as Record<string, unknown> | undefined;
+    const seam = set === undefined ? null : readJsonFile(join(again, String(set.dir), 'seam.json'));
+    const pair = (seam?.pairs as Array<{ gapOpen: { frames: Array<{ index: number; px: number }> } }> | undefined)?.[0];
+    return pair === undefined ? [] : pair.gapOpen.frames.map((h) => ({ index: h.index, px: h.px }));
+  };
+  const sampled = (frames: readonly number[]): boolean => [2, 3, 4].some((k) => frames.some((f) => f % k === 0));
+  for (const [cls, label, patch, run] of [['internal-joint', 'tear-joint', {}, undefined], ['explicit', 'tear-explicit', explicit, 'full-stopped']] as const) {
+    const plain = built(`${label}-plain`, true, { ...patch, ...motion('anim-tear.json') }, run);
+    const planted = built(label, true, { ...patch, ...motion('anim-tear.json'), requirements: required }, run);
+    const hits = gapOpenOf(plain.stage, label);
+    const worst = hits.find((h) => h.index === SO_TEAR_FRAME);
+    const f = fails(planted.out);
+    const want = `FAIL  ${MOTION_SEAM_REQUIRED_CODE}: ${cls} seam "upperarm_r|forearm_r" in "tear" at frame ${SO_TEAR_FRAME} (t = ${SO_TEAR_FRAME * (1 / 12)}s) — background on 1 of 13 frame(s) read [${SO_TEAR_FRAME}]: found ${worst?.px ?? 'NONE'} px (rigc gapOpen cells of `;
+    const req = lineOf(planted.fig)?.required;
+    say(
+      `SO27_REQUIRED_REFUSES_BACKGROUND_ON_ONE_UNSAMPLED_FRAME_OF_AN_${cls === 'explicit' ? 'EXPLICIT' : 'INTERNAL_JOINT'}_PAIR_BY_NAME`,
+      plain.status === 0 && plain.fig?.PASS === true && lineOf(plain.fig)?.required === undefined &&
+        hits.length === 1 && worst !== undefined && worst.px > 0 && !sampled(hits.map((h) => h.index)) &&
+        planted.status === 1 && planted.fig?.PASS === false && f.length === 1 && f[0].startsWith(want) && f[0].includes('declares seam_over_motion.required: true') &&
+        req?.status === 'FAIL' && req.failed === 1 && JSON.stringify(req.pairs) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', class: cls, frames: 26, background_frames: 1, max_px: worst.px }]) &&
+        barsNotMet(planted.fig ?? {}).includes(MOTION_SEAM_LINE) && planted.out.includes('build: stopped at check'),
+      `undeclared: exit ${plain.status}, PASS ${String(plain.fig?.PASS)}, required ${lineOf(plain.fig)?.required === undefined ? 'absent' : 'PRESENT'}; stock gapOpen frames ${JSON.stringify(hits)}; declared: exit ${planted.status}, ${f[0] ?? 'no refusal'}; block ${JSON.stringify(req)}`,
+      `issue #941: the defect the card names, background inside the band in motion, on frame ${SO_TEAR_FRAME} of 13 alone — a frame no every-2nd, 3rd or 4th sampler reads. Undeclared it is accepted (today's warning, exit 0); under seam_over_motion.required the ${cls} pair is refused by name with the frame and the cells a fresh stock render finds there, and build emits no artifact`,
+    );
+  }
+
+  // The clean twin, declared: PASS, measured, and check.json is the undeclared twin's but for the two declared blocks.
+  const holdPlain = built('hold-plain', true, motion('anim-hold.json'));
+  const hold = built('hold', true, { ...motion('anim-hold.json'), requirements: required });
+  const strip = (fig: Record<string, unknown> | null): string => {
+    if (fig === null) return 'null';
+    const copy = JSON.parse(JSON.stringify(fig)) as Record<string, unknown>;
+    delete copy.requirements;
+    delete copy.config;
+    const ln = copy[MOTION_SEAM_LINE] as Record<string, unknown> | undefined;
+    if (ln !== undefined) delete ln.required;
+    return JSON.stringify(copy);
+  };
+  const holdReq = lineOf(hold.fig)?.required;
+  say(
+    'SO28_REQUIRED_PASSES_A_SEAM_THAT_HOLDS_ON_EVERY_FRAME_AND_MOVES_NOTHING_ELSE',
+    hold.status === 0 && hold.fig?.PASS === true && fails(hold.out).length === 0 &&
+      holdReq?.status === 'PASS' && holdReq.failed === 0 && JSON.stringify(holdReq.pairs) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', class: 'internal-joint', frames: 26, background_frames: 0, max_px: 0 }]) &&
+      hold.out.includes(`${MOTION_SEAM_LINE} required: PASS — 1 declared pair(s) (0 body-root, 1 internal-joint, 0 explicit), 26 pair-frame(s) read`) &&
+      holdPlain.status === 0 && strip(hold.fig) === strip(holdPlain.fig) && !holdPlain.out.includes(`${MOTION_SEAM_LINE} required`),
+    `declared: exit ${hold.status}, ${JSON.stringify(holdReq)}; undeclared twin: exit ${holdPlain.status}; check.json less the declared blocks ${strip(hold.fig) === strip(holdPlain.fig) ? 'identical' : 'DIFFERENT'}`,
+    'issue #941, the positive control: the same rig, its forearm keyed at 0 on every frame, holds 0 background cells over all 26 pair-frames (13 idle, 13 hold), passes, and its check.json is the undeclared build\'s but for the requirements block and the required block the declaration adds',
+  );
+
+  // Nothing declared to read, and the declaration's own shape.
+  const nothing = built('required-uncut', false, { requirements: required });
+  const f0 = fails(nothing.out);
+  const yes = built('required-yes', true, { ...motion('anim-hold.json'), requirements: reqAt('seam-yes', { required: 'yes' }) });
+  const off = built('required-false', true, { ...motion('anim-tear.json'), requirements: reqAt('seam-false', { required: false }) });
+  say(
+    'SO29_REQUIRED_REFUSES_A_LINE_THAT_MEASURED_NOTHING_AND_ITS_SHAPE_IS_REFUSED_BY_NAME',
+    nothing.status === 1 && f0.length === 1 && f0[0].startsWith(`FAIL  ${MOTION_SEAM_REQUIRED_CODE}: ${MOTION_SEAM_LINE} — is SKIP — no neighbour pair is declared`) && lineOf(nothing.fig)?.required?.status === 'FAIL' &&
+      yes.status !== 0 && yes.out.includes('REQUIREMENTS_FIELD') && yes.out.includes('seam_over_motion.required') && !existsSync(join(yes.stage, 'parts.json')) &&
+      off.status === 0 && off.fig?.PASS === true && lineOf(off.fig)?.required === undefined,
+    `nothing declared: exit ${nothing.status}, ${f0[0] ?? 'no refusal'}; required "yes": exit ${yes.status}, ${yes.out.split('\n').find((l) => l.includes('REQUIREMENTS_FIELD'))?.trim() ?? 'no refusal'}; required false over the tear: exit ${off.status}, required ${lineOf(off.fig)?.required === undefined ? 'absent' : 'PRESENT'}`,
+    'issue #941: a SKIP is never a pass, so a declared bar over a rig with no pair to read is refused naming the SKIP; "yes" is not a boolean and is refused before anything is built; false is the same as no declaration, so the tear passes as it does today',
+  );
+
+  // The reader itself: a strided set and an absent gapOpen are refused by name, never read as zero background.
+  const again = join(dir, 'tear-joint-again');
+  const pairs: MotionSeamPair[] = [{ pair: 'upperarm_r|forearm_r', a: 'upperarm_r', b: 'forearm_r', declared: ['config.limbs.arm_r segment 1, joint "elbow"'] }];
+  const refusalOf = (read: () => unknown): string => { try { read(); return 'accepted'; } catch (e) { return e instanceof PartsError ? e.problems.map((p) => `${p.code} ${p.object} ${p.detail}`).join(' | ') : String(e); } };
+  const whole = refusalOf(() => readMotionSeamBackground(again, ['idle', 'tear'], 12, pairs));
+  const framesPath = join(again, 'frames.json');
+  const framesText = existsSync(framesPath) ? readFileSync(framesPath, 'utf8') : '{}';
+  const frames = JSON.parse(framesText) as { sets?: Array<Record<string, unknown>> };
+  writeFileSync(framesPath, JSON.stringify({ ...frames, sets: (frames.sets ?? []).map((s) => s.animation === 'tear' ? { ...s, written: 7, stride: 2 } : s) }));
+  const strided = refusalOf(() => readMotionSeamBackground(again, ['idle', 'tear'], 12, pairs));
+  writeFileSync(framesPath, framesText);
+  const tearSet = (frames.sets ?? []).find((s) => s.animation === 'tear');
+  const seamPath = join(again, String(tearSet?.dir), 'seam.json');
+  const seamText = existsSync(seamPath) ? readFileSync(seamPath, 'utf8') : '{}';
+  const seam = JSON.parse(seamText) as { pairs?: Array<Record<string, unknown>> };
+  writeFileSync(seamPath, JSON.stringify({ ...seam, pairs: (seam.pairs ?? []).map(({ gapOpen: _g, ...p }) => p) }));
+  const noGapOpen = refusalOf(() => readMotionSeamBackground(again, ['idle', 'tear'], 12, pairs));
+  writeFileSync(seamPath, seamText);
+  const rows = whole === 'accepted' ? readMotionSeamBackground(again, ['idle', 'tear'], 12, pairs) : [];
+  const line: MotionSeamLine = { status: 'CLEAR', fps: 12, floor: '', pairs, animations: ['idle', 'tear'], warnings: 0, rows: [] };
+  const problems: Problem[] = [];
+  const block: MotionSeamRequired = motionSeamRequired(line, rows, 'req.json', problems);
+  say(
+    'SO30_THE_BACKGROUND_READER_REFUSES_A_STRIDED_SET_AND_AN_ABSENT_GAPOPEN_AND_READS_EVERY_FRAME',
+    whole === 'accepted' && rows.length === 2 && rows.every((r) => r.frames === 13) && JSON.stringify(rows.find((r) => r.animation === 'tear')?.hits.map((h) => h.index)) === `[${SO_TEAR_FRAME}]` &&
+      block.status === 'FAIL' && problems.length === 1 && problems[0].object === `internal-joint seam "upperarm_r|forearm_r" in "tear" at frame ${SO_TEAR_FRAME} (t = ${SO_TEAR_FRAME * (1 / 12)}s)` &&
+      strided.startsWith('FRAMES_SIDECAR ') && strided.includes('a sample is not every frame') &&
+      noGapOpen.startsWith('FRAMES_SIDECAR ') && noGapOpen.includes('unavailable is not zero background'),
+    `as rendered: ${whole}, ${rows.length} row(s), frames ${JSON.stringify(rows.map((r) => r.frames))}, tear hits ${JSON.stringify(rows.find((r) => r.animation === 'tear')?.hits.map((h) => h.index))}, block ${block.status}; stride 2: ${strided.slice(0, 160)}; no gapOpen: ${noGapOpen.slice(0, 160)}`,
+    'issue #941: the bar reads every frame or refuses — a set rendered at a stride (a sample) and a pair with no gapOpen are FRAMES_SIDECAR refusals, never a zero; the stock render of the planted rig reads 13 frames per animation and names frame 7 alone',
+  );
+}
+
 function runMotionSeamWorldIntegration(dir: string, say: (name: string, ok: boolean, detail: string, why: string) => void, original: MotionSeamLine | null): void {
   if (original === null) { say('SO09_SEAM_WORLDS_REACH_RIGC_WITHOUT_REPLACING_THE_CUSTOM_READING', false, 'no cut fixture', 'the positive fixture must build'); return; }
   const spec = join(dir, 'physics-spec');
@@ -17959,6 +18095,7 @@ function runMotionSeamCases(report: FixtureCaseReporter): void {
     );
     runMotionRootRendererCases(dir, cut.out, say);
     runMotionSeamWorldIntegration(dir, say, ln);
+    runSeamRequiredCases(dir, built, say);
 
     // Issue #933: openings inside the figure over motion on undeclared setup-overlapping layer pairs.
     // Positive control ("idle"): a deliberate setup gap between arm and body (x 10..15, y 20..39 inside frame_body) is
@@ -24133,7 +24270,7 @@ function runRequirementsSuite(): number {
         rsDetail[1].startsWith(' field "rests"[1]: names "hem" a second time') &&
         rsDetail[2].startsWith(' field "rests"[0]: names "hem", which "not_swinging" names too') &&
         rsDetail[3].startsWith(' field "rest": is not a field this format reads') &&
-        (rsBad[3]?.problems[0].detail ?? '').includes('rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting, pinholes, boundary_colour;'),
+        (rsBad[3]?.problems[0].detail ?? '').includes('rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting, pinholes, seam_over_motion, boundary_colour;'),
       `read ${JSON.stringify([rsRead.rises, rsRead.rests])}; absent ${JSON.stringify(npAbsent.rests)}; refused: ${rsDetail.join(' | ')}`,
       'issue #245: rests is declared per part like its siblings — a list of names, each once, empty refused rather than read as none, a misspelt key refused by the format; a resting tip may also rise (a raised hand resting on something), but a part declared not swinging has no reading to hold at rest',
     );
@@ -29022,6 +29159,30 @@ function runChainSuite(_corpus: string | null = null, pre = false): number | nul
             ? unread
             : `${settledCalm.length} of ${clothBlock.rows.length} chain(s) settle under rigc's default world (check.json); under ${BREEZE_FILE}, ${stillSettling.length} settle${stillSettling.length === 0 ? '' : ` (${stillSettling.map((row) => `${row.tip} at ${String(row.settles_at)} s`).join(', ')})`}, the least of those chains' peaks under it ${settledCalm.length === 0 ? '-' : Math.min(...breezeRows.filter((row) => settledCalm.some((c) => c.tip === row.tip)).map((row) => row.max_rig_px_per_s))} rig px/s; plant — the same predicate over check.json's rows (no schedule): ${plantRefused ? 'refused' : 'ACCEPTED'}; AUTHORING quotes the file ${quoted ? 'verbatim' : 'NOT verbatim'}`,
           "issue #502 (b)'s worked example: what the consumer passes to rigc render --environment to keep a standing skirt alive, measured on the build it is written for and read by CLOTH_SETTLES's definition (clothChains, clothRow) — a guide example that no longer does what it says, or that drifts from the file, goes red",
+        );
+      }
+
+      // Issue #941, the public positive control: every pair wind's check declares — its four body roots and six limb
+      // joints — re-read by the stock seam render over its build, every frame of every animation, through the required
+      // bar's own reader and judgement: 0 background cells on every frame, and the block PASS.
+      if (key === 'wind') {
+        const windLine = (readJsonFile(join(out, 'check', 'check.json'))?.[MOTION_SEAM_LINE] as MotionSeamLine | undefined) ?? null;
+        const bgDir = join(dir, `${key}-seam-required`);
+        const list = (windLine?.pairs ?? []).map((p) => `${p.a}:${p.b}`).join(',');
+        const br = windLine === null ? null : rigcRunnerAt(suiteRigc(), spawnRigc)(['render', '--candidate', join(out, 'check', 'build'), '--seam', list, '--fps', String(IDLE_FPS), '--max', '16', '--out', bgDir]);
+        let bgRows: ReturnType<typeof readMotionSeamBackground> = [];
+        let bgError = windLine === null ? 'check.json holds no SEAM_OVER_MOTION' : br?.status === 0 ? '' : `render exit ${br?.status}: ${lastLines(br?.out ?? '', 2).join(' | ')}`;
+        try { if (bgError === '' && windLine !== null) bgRows = readMotionSeamBackground(bgDir, windLine.animations, IDLE_FPS, windLine.pairs); }
+        catch (e) { bgError = e instanceof PartsError ? e.problems.map((p) => `${p.code} ${p.object}`).join('; ') : String(e); }
+        const bgProblems: Problem[] = [];
+        const block = windLine === null || bgError !== '' ? null : motionSeamRequired(windLine, bgRows, 'a requirements file', bgProblems);
+        const count = (c: string): number => block === null ? 0 : block.pairs.filter((p) => p.class === c).length;
+        say(
+          `CH913_EVERY_DECLARED_SEAM_PAIR_HOLDS_ZERO_BACKGROUND_ON_EVERY_FRAME[${key}]`,
+          block !== null && block.status === 'PASS' && bgProblems.length === 0 && count('body-root') === 4 && count('internal-joint') === 6 && count('explicit') === 0 &&
+            bgRows.length === block.pairs.length * (windLine?.animations.length ?? 0) && bgRows.every((r) => r.status === 'read' && r.hits.length === 0 && r.frames === r.banded),
+          bgError !== '' ? bgError : `${block?.pairs.length ?? 0} pair(s) (${count('body-root')} body-root, ${count('internal-joint')} internal-joint, ${count('explicit')} explicit) over ${windLine?.animations.join(', ')}: frames read ${JSON.stringify(bgRows.map((r) => r.frames))}, background frames ${bgRows.reduce((n, r) => n + r.hits.length, 0)}, block ${block?.status}; ${bgProblems.map((p) => p.object).join('; ') || 'no refusal'}`,
+          "issue #941's public positive control: seam_over_motion.required on wind would pass — every declared pair, body-root and internal-joint (wind declares no explicit one), holds 0 gapOpen cells on all 41 idle frames at 12 fps. A public example that opens here goes red before a consumer's declared build does",
         );
       }
 
