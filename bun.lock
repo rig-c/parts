@@ -5,7 +5,7 @@
     "": {
       "name": "@rig-c/parts",
       "dependencies": {
-        "@rig-c/core": "3.2.0",
+        "@rig-c/core": "3.2.1",
         "ag-psd": "^31.0.2",
       },
       "devDependencies": {
@@ -52,7 +52,7 @@
 
     "@keyv/serialize": ["@keyv/serialize@1.1.1", "", {}, "sha512-dXn3FZhPv0US+7dtJsIi2R+c7qWYiReoEh5zUntWCf4oSpMNib8FDhSoed6m3QyZdx5hK7iLFkYk3rNxwt8vTA=="],
 
-    "@rig-c/core": ["@rig-c/core@3.2.0", "", { "bin": { "rigc": "bin/rigc.cjs" } }, "sha512-2T6nXjmpwa+3zgaQ2uSy01N9rg48nfSCqm/Yxpl6Cf18MTbzVLxsqYfRiRi3AKx8i1fJVI9CQVaCLKo82rGmLA=="],
+    "@rig-c/core": ["@rig-c/core@3.2.1", "", { "bin": { "rigc": "bin/rigc.cjs" } }, "sha512-PPMLincImQIvKdpxXkR4/Vw8ra2pZBf91Q0grQcSVcK0wWzWnoPGGm0mrBqDkxV8y/xaoz8yCBADsd3ktWwpNw=="],
 
     "@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 
