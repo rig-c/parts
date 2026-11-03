@@ -1,9 +1,9 @@
 /** Portable smoke-process controls; no checkout dependencies are required. */
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
-import { findSmokeExecutable, isSmokePathInside, runSmokeCommand } from './smoke_process.ts';
+import { findSmokeExecutable, isSmokePathInside, placeSmokeExecutable, runSmokeCommand } from './smoke_process.ts';
 
 export function checkSmokeProcess(): void {
   const root = mkdtempSync(join(tmpdir(), 'smoke process '));
@@ -74,7 +74,7 @@ export function checkSmokeProcess(): void {
       'SMOKE_PROCESS_CONTAINMENT_REFUSES_OUTSIDE_SYMLINK_PREFIX_AND_MISSING');
     const node = findSmokeExecutable('node');
     if (node === null) throw new Error('SMOKE_PROCESS_NODE_REQUIRED');
-    copyFileSync(node, join(bin, 'node.exe'));
+    placeSmokeExecutable(node, join(bin, 'node.exe'));
     const pkg = join(bin, 'node_modules', 'npm');
     mkdirSync(join(pkg, 'unusual entry'), { recursive: true });
     writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name: 'npm', main: 'unusual entry/start.cjs', bin: { npm: 'unusual entry/start.cjs' } }));

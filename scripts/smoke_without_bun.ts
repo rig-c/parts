@@ -1,8 +1,9 @@
 /** Isolated smoke search environment; this changes no installed-package behavior. */
 import { spawnSync } from 'node:child_process';
-import { closeSync, copyFileSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, sep } from 'node:path';
+import { placeSmokeExecutable } from './smoke_process.ts';
 
 type Env = Record<string, string | undefined>;
 export function nodeOnlySearchEnvironment(original: Env, directory: string): Env {
@@ -53,7 +54,7 @@ export function runWithoutBun(
     const cwd = join(root, 'empty');
     mkdirSync(tools); mkdirSync(cwd);
     const executable = join(tools, process.platform === 'win32' ? 'node.exe' : 'node');
-    copyFileSync(node, executable);
+    placeSmokeExecutable(node, executable);
     const env = nodeOnlySearchEnvironment(original, tools);
     let captureIndex = 0;
     // Capture uses files rather than pipes; every owned descriptor closes before directory cleanup.
