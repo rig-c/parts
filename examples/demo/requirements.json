@@ -7,5 +7,9 @@
  "pinholes": {
   "required": true,
   "note": "Issue #944: this example's flat parts stack holds no pinhole at rest, and assemble refuses one by name."
+ },
+ "boundary_colour": {
+  "max_step_excess": 12,
+  "note": "Issue #942: every part boundary of the setup and every idle frame, against the rig's own parts.json pieces through rig-c's renderer. Clean public readings are 1 (demo, scarf), 3 (reference-sample) and 4 (wind, reference-demo); a texture stretched into its padded UVs or a 4x4 notch read 21 and up on demo and scarf. 12 is three times the largest clean reading and below the smallest plant. Read by the chain suite (CH942), not named by config.requirements, so check.json keeps its bytes."
  }
 }

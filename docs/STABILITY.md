@@ -557,7 +557,16 @@ fps, every frame) with rigc `gapOpen` cells above 0, and a line or pair that
 measured nothing is refused too; `check.json`'s `SEAM_OVER_MOTION` gains
 `required`. The bar is 0 and takes no value. Absent or `false`, nothing is read
 and no exit code, line or byte moves; the existing warnings and the body-root
-bar are unchanged. With `--source` but
+bar are unchanged.
+The optional `boundary_colour` key (issue #942, additive) declares `check`'s
+`BOUNDARY_COLOUR_STEP` bar: with `{"max_step_excess": <0-255>}` (an authored
+integer; no default exists), `check` measures every part boundary of the setup
+and every idle frame against the rig's own pieces, writes the
+`BOUNDARY_COLOUR_STEP` block to `check.json`, and refuses each part pair over
+the allowance as `CHECK_BOUNDARY_COLOUR_STEP`, or a reading it cannot take as
+`CHECK_BOUNDARY_COLOUR_UNMEASURED`. Absent, nothing is measured or written,
+the console's `BOUNDARY_COLOUR_STEP: SKIP` line says so, and no exit code,
+file or other line moves. With `--source` but
 no declaration, the console, `check.json` and the report's skipped-bar list now
 say SKIP with the reason and the `--requirements` declaration remedy; exit
 codes stay unchanged. No metric, region or limit is invented. Without source

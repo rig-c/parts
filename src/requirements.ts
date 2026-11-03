@@ -1,6 +1,7 @@
 import { setupPaintingProblems, type SetupPainting } from './setuppainting.ts';
 import { jointMaterialProblems, type JointMaterial } from './cutmaterial.ts';
 import { fixedSkeletonProblems, type FixedSkeleton } from './artjoints.ts';
+import { boundaryColourProblems, type BoundaryColour } from './boundarycolour.ts';
 /**
  * What a scene requires of a rig's motion, declared in a file `check` is given
  * (`--requirements`, issue #93, increment 2 of #87) and measured from the
@@ -203,6 +204,8 @@ export interface RequirementsFile {
   pinholes?: PinholesDeclaration;
   /** Issue #941: `check`'s background bar over every declared seam pair and every frame, only under `required: true`; absent when the file does not declare it. */
   seam_over_motion?: SeamOverMotionDeclaration;
+  /** Issue #942: the boundary colour-step bar against the rig's own pieces, measured by `check` only when declared. */
+  boundary_colour?: BoundaryColour;
 }
 
 /**
@@ -345,9 +348,10 @@ export function readRequirements(path: string): RequirementsFile {
     problems.push({ code: 'REQUIREMENTS_SELF_TARGET', object: `${label} field "target"`, detail });
   };
   if (raw.spec !== REQUIREMENTS_SPEC) field(`${at} field "spec"`, `is ${JSON.stringify(raw.spec)}; ${JSON.stringify(REQUIREMENTS_SPEC)} is required`);
-  for (const k of Object.keys(raw)) if (!['spec', 'fps', 'targets', 'requirements', ...EXCEPTION_LISTS, 'may_fold', 'fixed_skeleton', 'cut_material', 'setup_painting', 'pinholes', 'seam_over_motion'].includes(k) && !freeKey(k, raw[k])) field(`${at} field "${k}"`, 'is not a field this format reads (spec, fps, targets, requirements, not_planted, not_swinging, rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting, pinholes, seam_over_motion; note or *_note as a string; x-<name> as a record)');
+  for (const k of Object.keys(raw)) if (!['spec', 'fps', 'targets', 'requirements', ...EXCEPTION_LISTS, 'may_fold', 'fixed_skeleton', 'cut_material', 'setup_painting', 'pinholes', 'seam_over_motion', 'boundary_colour'].includes(k) && !freeKey(k, raw[k])) field(`${at} field "${k}"`, 'is not a field this format reads (spec, fps, targets, requirements, not_planted, not_swinging, rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting, pinholes, seam_over_motion, boundary_colour; note or *_note as a string; x-<name> as a record)');
   if ('pinholes' in raw) problems.push(...pinholesProblems(raw.pinholes, `${at} pinholes`));
   if ('seam_over_motion' in raw) problems.push(...seamOverMotionProblems(raw.seam_over_motion, `${at} seam_over_motion`));
+  if ('boundary_colour' in raw) problems.push(...boundaryColourProblems(raw.boundary_colour, `${at} boundary_colour`));
   if ('setup_painting' in raw) problems.push(...setupPaintingProblems(raw.setup_painting, `${at} setup_painting`));
   if ('cut_material' in raw) problems.push(...jointMaterialProblems(raw.cut_material, `${at} cut_material`));
   if ('fixed_skeleton' in raw) problems.push(...fixedSkeletonProblems(raw.fixed_skeleton, `${at} fixed_skeleton`));
@@ -534,7 +538,7 @@ export function readRequirements(path: string): RequirementsFile {
     }
   }
   refuseIfAny(problems);
-  return { path: at, fps, targets, requirements, not_planted: lists.not_planted, not_swinging: lists.not_swinging, rises: lists.rises, rests: lists.rests, may_fold: mayFold, ...(raw.fixed_skeleton === undefined ? {} : { fixed_skeleton: raw.fixed_skeleton as FixedSkeleton }), ...(raw.cut_material === undefined ? {} : { cut_material: raw.cut_material as JointMaterial[] }), ...(raw.setup_painting === undefined ? {} : { setup_painting: raw.setup_painting as SetupPainting }), ...(raw.pinholes === undefined ? {} : { pinholes: { required: (raw.pinholes as PinholesDeclaration).required } }), ...(raw.seam_over_motion === undefined ? {} : { seam_over_motion: { required: (raw.seam_over_motion as SeamOverMotionDeclaration).required } }) };
+  return { path: at, fps, targets, requirements, not_planted: lists.not_planted, not_swinging: lists.not_swinging, rises: lists.rises, rests: lists.rests, may_fold: mayFold, ...(raw.fixed_skeleton === undefined ? {} : { fixed_skeleton: raw.fixed_skeleton as FixedSkeleton }), ...(raw.cut_material === undefined ? {} : { cut_material: raw.cut_material as JointMaterial[] }), ...(raw.setup_painting === undefined ? {} : { setup_painting: raw.setup_painting as SetupPainting }), ...(raw.pinholes === undefined ? {} : { pinholes: { required: (raw.pinholes as PinholesDeclaration).required } }), ...(raw.seam_over_motion === undefined ? {} : { seam_over_motion: { required: (raw.seam_over_motion as SeamOverMotionDeclaration).required } }), ...(raw.boundary_colour === undefined ? {} : { boundary_colour: { max_step_excess: (raw.boundary_colour as BoundaryColour).max_step_excess } }) };
 }
 
 // ---------------------------------------------------------------------------
