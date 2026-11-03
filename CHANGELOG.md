@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.4.0](https://github.com/rig-c/parts/compare/v2.3.0...v2.4.0) (2026-11-03)
+
+
+### Features
+
+* **assemble:** refuse a part carved by a shape drawn in the config under trace_parts ([#947](https://github.com/rig-c/parts/issues/947)) ([#969](https://github.com/rig-c/parts/issues/969)) ([d4a0dbb](https://github.com/rig-c/parts/commit/d4a0dbb6d7fee38ae1d09d7c16d464c50ea214e1))
+* **assemble:** refuse an edited image without a matching editor receipt ([#946](https://github.com/rig-c/parts/issues/946)) ([#964](https://github.com/rig-c/parts/issues/964)) ([787c813](https://github.com/rig-c/parts/commit/787c8131af5b9dac7c08d7f08f3a575d523b0e83))
+* **assemble:** refuse pinholes at rest under a required pinholes declaration ([#963](https://github.com/rig-c/parts/issues/963)) ([c6dba56](https://github.com/rig-c/parts/commit/c6dba5653f67f4363a16a393656f1ecab3c88a22))
+* **check:** refuse a part-boundary colour step over the rig's own pieces under a declared allowance ([#975](https://github.com/rig-c/parts/issues/975)) ([70a2af0](https://github.com/rig-c/parts/commit/70a2af04b87b0c76c031ad4892a92e25b32427be))
+* **check:** refuse a required setup_painting with an undeclared limit ([#959](https://github.com/rig-c/parts/issues/959)) ([a3b51cc](https://github.com/rig-c/parts/commit/a3b51cc607af782ba0ca7bb1e621b889458b0008))
+* **check:** refuse background on any frame of any declared seam pair under seam_over_motion.required ([#941](https://github.com/rig-c/parts/issues/941)) ([#976](https://github.com/rig-c/parts/issues/976)) ([4d338fb](https://github.com/rig-c/parts/commit/4d338fb9c1dac0cb2bc8d5697b91956d1d2e449d))
+
+
+### Bug Fixes
+
+* **rig:** an absent alternate set refuses once, as RIG_ALT_SET_ASSEMBLED ([#971](https://github.com/rig-c/parts/issues/971)) ([6b2ea49](https://github.com/rig-c/parts/commit/6b2ea494f5a2f426518d13f6e4f4b2bec69e3fa5)), closes [#968](https://github.com/rig-c/parts/issues/968)
+* **rig:** refuse a declared alternate set that has no parts.json record ([#967](https://github.com/rig-c/parts/issues/967)) ([6e52db3](https://github.com/rig-c/parts/commit/6e52db3bc81804ccd1a4485c46a86d4705074783))
+* **rig:** refuse a stale alternate set's drawn and parts against config ([#958](https://github.com/rig-c/parts/issues/958)) ([72161e1](https://github.com/rig-c/parts/commit/72161e11793f2d1120a685265e588acbe2572c2b))
+* **smoke:** link the host node into the controls instead of copying it ([#955](https://github.com/rig-c/parts/issues/955)) ([f69755a](https://github.com/rig-c/parts/commit/f69755ac3232eadb0dde6473049cdbad98e80e49)), closes [#952](https://github.com/rig-c/parts/issues/952)
+* **types:** import render types from render-shared so a config import type-checks without Spine ([#954](https://github.com/rig-c/parts/issues/954)) ([#972](https://github.com/rig-c/parts/issues/972)) ([c650929](https://github.com/rig-c/parts/commit/c6509294060ea03da9854e285895b1a3817fb7ba))
+
 ## [2.3.0](https://github.com/rig-c/parts/compare/v2.2.0...v2.3.0) (2026-11-02)
 
 
