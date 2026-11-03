@@ -1,6 +1,6 @@
 /** Smoke-only executable resolution and shell-free package-command dispatch. */
 import { spawnSync } from 'node:child_process';
-import { accessSync, constants, existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { accessSync, constants, copyFileSync, existsSync, readFileSync, realpathSync, statSync, symlinkSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { basename, delimiter, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
@@ -24,6 +24,17 @@ export function findSmokeExecutable(command: string, env: Env = process.env, pla
     } catch { /* Try the next actual PATH candidate. */ }
   }
   return null;
+}
+
+/**
+ * Put the host's executable at a control's own path. A copy of a binary that loads its libraries relative to
+ * itself cannot start: Homebrew's node loads @rpath/libnode via @loader_path/../lib, and the copy aborts in dyld.
+ * A symbolic link is resolved to the real binary before its libraries are looked up, so POSIX links; Windows
+ * copies, because creating a symbolic link there needs a privilege the control cannot assume.
+ */
+export function placeSmokeExecutable(source: string, destination: string, platform: string = process.platform): void {
+  if (platform === 'win32') copyFileSync(source, destination);
+  else symlinkSync(source, destination);
 }
 
 /** Compare existing filesystem identities, including aliases, without accepting lexical siblings. */
