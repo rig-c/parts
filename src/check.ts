@@ -164,6 +164,7 @@ import {
   resolveRequirements,
   rigFacts,
   placedArt,
+  seamOverMotionRequired,
   type PosedAttachment,
   resolveSeams,
   type SeamFrame,
@@ -2987,7 +2988,7 @@ export function barsNotMet(fig: Readonly<Record<string, unknown>>): string[] {
     if (typeof l === 'object' && l !== null && (l as { status?: unknown }).status === 'FAIL') out.push(n);
   }
   const motion = fig[MOTION_SEAM_LINE];
-  if (isRecord(motion) && isRecord(motion.roots) && motion.roots.status === 'FAIL') out.push(MOTION_SEAM_LINE);
+  if (isRecord(motion) && ((isRecord(motion.roots) && motion.roots.status === 'FAIL') || (isRecord(motion.required) && motion.required.status === 'FAIL'))) out.push(MOTION_SEAM_LINE);
   return out;
 }
 
@@ -4420,6 +4421,139 @@ export interface MotionSeamLine {
   worlds?: MotionSeamWorlds;
   /** Selected body-root pairs and named zero-band roots; existing internal seams remain warnings. */
   roots?: { status: 'PASS' | 'FAIL' | 'SKIP'; mode: 'gap-open+under-ghost'; ghost_owner: 'resolved-draw-order'; pairs: string[]; failed: number; reason?: string; unmeasured?: MotionUnmeasuredRoot[] };
+  /** Issue #941: written only under the requirements file's `seam_over_motion.required: true` ({@link motionSeamRequired}). */
+  required?: MotionSeamRequired;
+}
+
+/** Issue #941: the refusal's code — background on a frame of a declared pair, or a pair or line not measured, under `seam_over_motion.required`. */
+export const MOTION_SEAM_REQUIRED_CODE = 'CHECK_SEAM_OVER_MOTION_REQUIRED';
+
+/** The class a declared pair is named by in the required bar: a proven body root, a limb joint below segment 0, or a declaration (`seam` requirement, `motion_seams`). */
+export type MotionSeamClass = 'body-root' | 'internal-joint' | 'explicit';
+
+/** Issue #941: one pair in one animation as the background bar read it — every frame of the set, by rigc's `gapOpen`. */
+export interface MotionBackgroundRow {
+  pair: string;
+  animation: string;
+  /** Frames in the set: every frame `i / fps`, `i = 0..round(duration * fps)` (frames.json `sampled`, stride 1). */
+  frames: number;
+  status: 'read' | 'skip';
+  drawn: number;
+  banded: number;
+  /** rigc's `gapOpen` hits with a cell: background inside the carried setup-overlap band, alpha 0 in the whole skeleton composite. */
+  hits: Array<MotionSeamHit & { time: number }>;
+}
+
+/** Issue #941: `SEAM_OVER_MOTION`'s `required` block. The bar is 0 background cells on every frame read; it never SKIPs. */
+export interface MotionSeamRequired {
+  status: 'PASS' | 'FAIL';
+  mode: 'gap-open';
+  bar_px: 0;
+  /** Every declared pair, its class, and the frames read over every animation. */
+  pairs: Array<{ pair: string; class: MotionSeamClass; frames: number; background_frames: number; max_px: number }>;
+  /** How many refusals the bar added. */
+  failed: number;
+}
+
+/** A declared pair's class: a proven root first, then a limb joint, otherwise its explicit declaration. */
+export function motionSeamClass(p: MotionSeamPair): MotionSeamClass {
+  if (p.root !== undefined) return 'body-root';
+  return p.declared.some((d) => d.startsWith('config.limbs.')) ? 'internal-joint' : 'explicit';
+}
+
+/**
+ * Issue #941: every pair's `gapOpen` over every frame of one `rigc render --seam` run, beside {@link readMotionSeams}
+ * (which keeps its own reading). Refuses (`FRAMES_SIDECAR`), every problem at once, a set that is not every frame at
+ * the rate asked (stride 1, written = sampled), a file that is not the animation's or the rate's, a pair out of the
+ * flag's order, and a `gapOpen` of the wrong shape — unavailable is never a measured zero.
+ */
+export function readMotionSeamBackground(dir: string, animations: readonly string[], fps: number, pairs: readonly MotionSeamPair[]): MotionBackgroundRow[] {
+  const problems: Problem[] = [];
+  const bad = (object: string, detail: string): void => { problems.push({ code: 'FRAMES_SIDECAR', object, detail }); };
+  const sidecar = readJson(join(dir, 'frames.json'), problems);
+  const sets = sidecar !== null && Array.isArray(sidecar.sets) ? sidecar.sets.filter(isRecord) : [];
+  const rows: MotionBackgroundRow[] = [];
+  for (const animation of animations) {
+    const set = sets.find((x) => x.animation === animation);
+    if (set === undefined || typeof set.dir !== 'string') { bad(join(dir, 'frames.json'), `names no frame set for animation ${JSON.stringify(animation)}; \`rigc render --seam\` over the build writes one per animation`); continue; }
+    if (set.fps !== fps || set.stride !== 1 || typeof set.sampled !== 'number' || set.written !== set.sampled || !Number.isSafeInteger(set.sampled) || set.sampled < 1) {
+      bad(join(dir, 'frames.json') + ' set ' + JSON.stringify(animation), `is fps ${JSON.stringify(set.fps)}, sampled ${JSON.stringify(set.sampled)}, written ${JSON.stringify(set.written)}, stride ${JSON.stringify(set.stride)}; every frame at ${fps} fps (stride 1, written = sampled) is required — a sample is not every frame`);
+      continue;
+    }
+    const path = join(dir, set.dir, SEAM_READING_FILE);
+    const file = readJson(path, problems);
+    if (file === null) continue;
+    if (file.spec !== SEAM_READING_SPEC || file.animation !== animation || file.fps !== fps) { bad(path, `is ${JSON.stringify(file.spec)} for ${JSON.stringify(file.animation)} at ${JSON.stringify(file.fps)} fps; "${SEAM_READING_SPEC}" for ${JSON.stringify(animation)} at ${fps} fps is required`); continue; }
+    const read = Array.isArray(file.pairs) ? file.pairs : [];
+    if (read.length !== pairs.length) bad(path, `holds ${read.length} pair(s); the ${pairs.length} asked for, in the flag's order, are required`);
+    pairs.forEach((want, i) => {
+      const p = read[i];
+      const at = `${path} pairs[${i}]`;
+      if (!isRecord(p) || p.a !== want.a || p.b !== want.b) { bad(at, `is ${JSON.stringify(isRecord(p) ? `${String(p.a)}|${String(p.b)}` : p)}; "${want.pair}", the flag's entry ${i}, is required`); return; }
+      const open = p.gapOpen;
+      const frames = isRecord(open) && Array.isArray(open.frames) ? open.frames : null;
+      const hits = frames === null ? [] : frames.flatMap((h) => isRecord(h) && Number.isSafeInteger(h.index) && typeof h.index === 'number' && h.index >= 0 && h.index < (set.sampled as number) &&
+        Number.isSafeInteger(h.px) && typeof h.px === 'number' && h.px > 0 && typeof h.cell === 'number' && h.cell > 0 && typeof h.time === 'number' && Number.isFinite(h.time) &&
+        Array.isArray(h.box) && h.box.length === 4 && h.box.every((v) => typeof v === 'number' && Number.isFinite(v))
+        ? [{ index: h.index, px: h.px, cell: h.cell, time: h.time, box: [h.box[0], h.box[1], h.box[2], h.box[3]] as [number, number, number, number] }] : []);
+      if ((p.status !== 'read' && p.status !== 'skip') || typeof p.drawn !== 'number' || typeof p.banded !== 'number' || frames === null || hits.length !== frames.length || new Set(hits.map((h) => h.index)).size !== hits.length) {
+        bad(`${at} gapOpen`, 'requires { frames: [{ index, time, px > 0, cell, box }…] } on every pair, one hit per frame, as rigc-seam/1 writes it from rig-c 2.69.0 — unavailable is not zero background');
+        return;
+      }
+      rows.push({ pair: want.pair, animation, frames: set.sampled as number, status: p.status, drawn: p.drawn, banded: p.banded, hits });
+    });
+  }
+  refuseIfAny(problems);
+  return rows;
+}
+
+/**
+ * Issue #941: the bar `seam_over_motion.required: true` declares — 0 background cells (rigc's `gapOpen`: gap cells
+ * inside the carried setup-overlap band where the whole skeleton composite has alpha 0) on every frame of every
+ * animation, for every declared pair: body-root, internal-joint and explicit. No floor, no sample. A line or a pair
+ * that measured nothing is refused too, since a SKIP is never a pass. Problems are pushed, one per pair and
+ * animation (with its worst frame) and one per pair or line not measured; the block is returned.
+ */
+export function motionSeamRequired(line: MotionSeamLine, rows: readonly MotionBackgroundRow[], requirements: string, problems: Problem[]): MotionSeamRequired {
+  const before = problems.length;
+  const why = `${requirements} declares seam_over_motion.required: true, so 0 background px is required on every frame of every declared seam pair`;
+  const refuse = (object: string, detail: string): void => { problems.push({ code: MOTION_SEAM_REQUIRED_CODE, object, detail }); };
+  if (line.status === 'SKIP' && line.rows.length === 0 && line.pairs.every((p) => p.unread === undefined)) {
+    refuse(MOTION_SEAM_LINE, `is SKIP — ${String(line.reason)}; nothing was measured, which is not a pass: ${why}. Declare the pairs (config.limbs, config.motion_seams, a --requirements seam) and an animation, or drop the declaration`);
+  }
+  const out: MotionSeamRequired['pairs'] = [];
+  for (const p of line.pairs) {
+    const cls = motionSeamClass(p);
+    const label = `${cls} seam "${p.pair}"`;
+    let frames = 0;
+    let open = 0;
+    let max = 0;
+    if (p.unread !== undefined) refuse(label, `is not read — ${p.unread}; ${why}`);
+    else for (const animation of line.animations) {
+      const r = rows.find((x) => x.pair === p.pair && x.animation === animation);
+      if (r === undefined || r.status !== 'read' || r.banded === 0) {
+        refuse(`${label} in "${animation}"`, `${r === undefined ? 'has no returned reading' : `rigc read no band on any of the ${r.drawn} frame(s) both slots draw (status ${r.status})`}; not measured is not a pass: ${why}`);
+        continue;
+      }
+      frames += r.frames;
+      open += r.hits.length;
+      if (r.hits.length === 0) continue;
+      const worst = r.hits.reduce((b, h) => (h.px > b.px || (h.px === b.px && h.index < b.index) ? h : b));
+      max = Math.max(max, worst.px);
+      refuse(`${label} in "${animation}" at frame ${worst.index} (t = ${worst.time}s)`,
+        `background on ${r.hits.length} of ${r.frames} frame(s) read ${frameRuns(r.hits.map((h) => h.index))}: found ${worst.px} px (rigc gapOpen cells of ${worst.cell} world units, world box [${worst.box.join(', ')}]) on the worst frame, 0 required; ${why}`);
+    }
+    out.push({ pair: p.pair, class: cls, frames, background_frames: open, max_px: max });
+  }
+  const failed = problems.length - before;
+  return { status: failed === 0 ? 'PASS' : 'FAIL', mode: 'gap-open', bar_px: 0, pairs: out, failed };
+}
+
+/** Issue #941: the console line for the required block. */
+export function motionSeamRequiredLine(r: MotionSeamRequired): string {
+  const frames = r.pairs.reduce((n, p) => n + p.frames, 0);
+  const classes = (['body-root', 'internal-joint', 'explicit'] as const).map((c) => `${r.pairs.filter((p) => p.class === c).length} ${c}`).join(', ');
+  return `${MOTION_SEAM_LINE} required: ${r.status} — ${r.pairs.length} declared pair(s) (${classes}), ${frames} pair-frame(s) read, every frame of every animation: ${r.failed === 0 ? '0 background px on every frame' : `${r.failed} refusal(s)`}, bar 0 px (rigc gapOpen, no floor; seam_over_motion.required: true)`;
 }
 
 /**
@@ -6710,6 +6844,9 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   // Read the build as played at the idle's rate; unavailable data is named SKIP.
   let motionSeam: MotionSeamLine;
   const motionRootProblems: Problem[] = [];
+  // Issue #941: under seam_over_motion.required, the same render's gapOpen on every frame of every declared pair.
+  const seamRequired = seamOverMotionRequired(reqFile);
+  let backgroundRows: MotionBackgroundRow[] = [];
   {
     const fps = IDLE_FPS;
     const seamReqs = reqFile === null || seams === null ? [] : reqFile.requirements.flatMap((r) => (r.kind === 'seam' && seams?.has(r.name) === true ? [{ name: r.name, part: r.part, neighbour: r.neighbour }] : []));
@@ -6773,6 +6910,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         if (r.status !== 0) refuseIfAny(rigcFailed(`render --seam ${list} --fps ${fps}`, r, r.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
         const activeWorldRows: MotionSeamWorldRow[] = [];
         motionSeam = motionSeamLine(pairs, animationNames, fps, readMotionSeams(activeDest, animationNames, fps, read, {}, stripped !== null && env === null ? activeWorldRows : undefined, hasRoots ? motionRootDrawOrderReader(activeDest) : undefined), undefined, motionRootProblems, unmeasuredRoots);
+        if (seamRequired) backgroundRows = readMotionSeamBackground(activeDest, animationNames, fps, read);
         enrichMotionSeamPoses(activeDest, inp.rig, inp.parts, pairs, motionSeam.rows);
         if (stripped !== null) {
           const response = environmentResponse(readFileSync(join(buildDir, 'skeleton.json'), 'utf8'));
@@ -6800,6 +6938,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       }
     }
   }
+  if (seamRequired && reqFile !== null) motionSeam.required = motionSeamRequired(motionSeam, backgroundRows, reqFile.path, motionRootProblems);
   const declaredPairKeys = new Set(motionSeam.pairs.map((p) => [p.a, p.b].sort().join('|')));
   const figureOpenings: FigureOpeningReading =
     inp.parts === null
@@ -7063,7 +7202,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(stress === null ? {} : { [STRESS_LINE]: stress }),
     ...(limbs === null ? {} : { [LIMB_LINE]: limbs }),
     ...(sweep === null ? {} : { [SWEEP_LINE]: sweep }),
-    ...(motionSeam.pairs.length === 0 && motionSeam.roots === undefined ? {} : { [MOTION_SEAM_LINE]: motionSeam }),
+    ...(motionSeam.pairs.length === 0 && motionSeam.roots === undefined && motionSeam.required === undefined ? {} : { [MOTION_SEAM_LINE]: motionSeam }),
     ...(stripped === null || idle === null ? {} : { [CLOTH_LINE]: cloth }),
     RECOMPOSITE_HOLES: inp.parts === null ? { status: 'SKIP', reason: inp.noParts ?? '' } : holesLine(inp.parts),
     ...(figureOpenings.status === 'SKIP' ? {} : { figure_openings: figureOpenings }),
@@ -7149,7 +7288,9 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   if (limbs !== null) tally(LIMB_LINE, null);
   // Issue #360: the range bar where it is written; a joint it cannot read fails, so it always measures.
   if (sweep !== null) tally(SWEEP_LINE, null);
-  if (motionSeam.roots !== undefined) tally(MOTION_SEAM_LINE, motionSeam.roots.status === 'SKIP' ? (motionSeam.roots.reason ?? 'no body-root reading') : null);
+  // Issue #941: the required bar never SKIPs (an unmeasured line or pair is its refusal), so it counts the line measured.
+  if (motionSeam.required !== undefined) tally(MOTION_SEAM_LINE, null);
+  else if (motionSeam.roots !== undefined) tally(MOTION_SEAM_LINE, motionSeam.roots.status === 'SKIP' ? (motionSeam.roots.reason ?? 'no body-root reading') : null);
   return {
     figures,
     gateHtml,
