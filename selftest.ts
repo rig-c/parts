@@ -26613,7 +26613,14 @@ function runBuildSuite(): number {
         drawn: { ...(a.drawn ?? {}), chest: 15 },
       })),
     };
+    // A direct caller that skips the config loader (which refuses `chest` as CONFIG_SET_COVERS_BONE) carries the
+    // uncovered bone on both sides; a record-only forgery is a stale record, RIG_ALT_DRAWN_MATCH_CONFIG (issue #950).
+    const cfgWithUncoveredBone = parseConfig(structuredClone(withGestCfg)); // the parsed config shares objects with its input
+    for (const a of cfgWithUncoveredBone.assemble.alternates ?? []) a.drawn = { ...(a.drawn ?? {}), chest: 15 };
     const rigSetCoversBoneRefusal = refusals(() =>
+      buildRig(cfgWithUncoveredBone, forgedPartsWithUncoveredBone, forgedPartSet.images),
+    );
+    const recordOnlyRefusal = refusals(() =>
       buildRig(parseConfig(withGestCfg), forgedPartsWithUncoveredBone, forgedPartSet.images),
     );
 
@@ -26664,6 +26671,7 @@ function runBuildSuite(): number {
         badBoneRun.out.includes('FAIL  CONFIG_SET_COVERS_BONE:') &&
         entries(join(badBoneDir, 'out')).length === 0 &&
         rigSetCoversBoneRefusal?.problems[0]?.code === 'RIG_SET_COVERS_BONE' &&
+        recordOnlyRefusal?.problems.some((p) => p.code === 'RIG_ALT_DRAWN_MATCH_CONFIG') === true &&
         badLimbPartsRun.status === 1 &&
         badLimbPartsRun.out.includes('FAIL  CONFIG_LIMB_SET_JOINTS:') &&
         entries(join(badLimbPartsDir, 'out')).length === 0 &&
@@ -26671,7 +26679,7 @@ function runBuildSuite(): number {
         badJointArtRun.out.includes('FAIL  ASSEMBLE_LIMB_JOINT_ON_ART:') &&
         badJointArtRun.out.includes('(alternate set "wave")') &&
         entries(join(badJointArtDir, 'out')).length === 0,
-      `wave build exit ${waveRun.status}, body-root named refusal=${waveRootRefused}, root cells=${JSON.stringify(waveRootRow?.cells)}, sets.wave=${JSON.stringify(waveEntry)}, base->wave diff px=${baseToWaveDiffPx}, base->restored maxDiff=${baseToRestoredMaxDiff}, wave vs check --set wave maxDiff=${waveSetStillMatchMaxDiff}, baseRigIdentical=${baseRigIdentical}; +30° forearm mutant turn=${forearmTurnDeg.toFixed(4)}°, non-forearm/hand vertex maxDiff=${nonArmMaxVertexDiff}, forearm diff px=${forearmMutPixelDiffPx}, outside diff max=${outsideForearmHandPixelDiffMax}; refusals: CONFIG_SET_COVERS_BONE exit ${badBoneRun.status}, RIG_SET_COVERS_BONE=${rigSetCoversBoneRefusal?.problems[0]?.code ?? 'none'}, CONFIG_LIMB_SET_JOINTS exit ${badLimbPartsRun.status}, ASSEMBLE_LIMB_JOINT_ON_ART exit ${badJointArtRun.status}`,
+      `wave build exit ${waveRun.status}, body-root named refusal=${waveRootRefused}, root cells=${JSON.stringify(waveRootRow?.cells)}, sets.wave=${JSON.stringify(waveEntry)}, base->wave diff px=${baseToWaveDiffPx}, base->restored maxDiff=${baseToRestoredMaxDiff}, wave vs check --set wave maxDiff=${waveSetStillMatchMaxDiff}, baseRigIdentical=${baseRigIdentical}; +30° forearm mutant turn=${forearmTurnDeg.toFixed(4)}°, non-forearm/hand vertex maxDiff=${nonArmMaxVertexDiff}, forearm diff px=${forearmMutPixelDiffPx}, outside diff max=${outsideForearmHandPixelDiffMax}; refusals: CONFIG_SET_COVERS_BONE exit ${badBoneRun.status}, RIG_SET_COVERS_BONE=${rigSetCoversBoneRefusal?.problems[0]?.code ?? 'none'}, record-only forgery=${recordOnlyRefusal?.problems.map((p) => p.code).join('+') ?? 'none'}, CONFIG_LIMB_SET_JOINTS exit ${badLimbPartsRun.status}, ASSEMBLE_LIMB_JOINT_ON_ART exit ${badJointArtRun.status}`,
       'issue #476: a gesture subset set over a limb chain cuts at the base\'s joints along its drawn bone angles, emits slots and drawn for the covered chain bones in sets.json, poses the chain on set activation and restores the base byte-identically on set: null, leaves the base rig byte-identical, moves only the forearm by 30° when forearm drawn moves 30°, and refuses uncovered drawn bones or off-joint cuts by name; issue #711: the unchanged gesture also exposes UNDER body ghost over its raw-box floor, so the real build must refuse CHECK_SEAM_OVER_MOTION rather than report a green artifact',
     );
 
