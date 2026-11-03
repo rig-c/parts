@@ -2291,7 +2291,7 @@ export const CHECK_FLAGS_IN_BUILD: Readonly<Record<string, CheckFlagInBuild>> = 
   '--rig': { as: 'supplied', why: 'its check reads the rig its rig stage writes, <out>/rig; run check --rig to measure another rig' },
   '--out': { as: 'own', why: 'build\'s own --out; its check writes under <out>/check' },
   '--parts': { as: 'supplied', why: 'its check reads the parts its assemble stage writes, <out>; run check --parts to measure against others' },
-  '--source': { as: 'own', why: 'the painting assemble reads; it is not handed to the check, so check.json carries no SETUP_POSE_VS_SOURCE — run check --rig <out>/rig --parts <out> --source <painting> for that line' },
+  '--source': { as: 'own', why: 'the painting assemble reads; it is handed to the check only when the requirements file declares setup_painting (issue #978), so check.json otherwise carries no SETUP_POSE_VS_SOURCE — run check --rig <out>/rig --parts <out> --source <painting> for that line' },
   '--page-edges': { as: 'forwarded' },
   '--pack-shape': { as: 'forwarded' },
   '--requirements': { as: 'forwarded' },
@@ -2434,6 +2434,9 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
 
   let req: BuildRequirements | null = null;
   let configRecord: InputFileRecord | null = null;
+  // Issue #978: the painting is handed to the check only when the requirements file declares setup_painting, which
+  // cannot be measured without it; a build without that declaration hands it nothing, as before, and writes the same bytes.
+  let paintingForCheck: string | null = null;
   try {
     // build runs rig next, which needs the whole config, so the full loader is
     // asked first: a config rig would refuse is refused before assemble writes
@@ -2447,7 +2450,7 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
     configRecord = inputFileRecord(loaded.bytes, input.config);
     req = buildRequirements(input.requirements, loaded.config.requirements, input.config);
     // The same for the requirements file's own shape; its names resolve against the rig, in the check, before it builds.
-    if (req !== null) readRequirements(req.read);
+    if (req !== null && readRequirements(req.read).setup_painting !== undefined) paintingForCheck = input.source;
     // And the schedule (issue #538), by rigc's own reader, as check reads it.
     if (input.environment !== undefined) readCheckEnvironment(input.environment);
     // And the steady-wind band spec (issue #590), as check reads it.
@@ -2469,7 +2472,7 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
 
   let report: CheckReport;
   try {
-    report = stages.check({ rig: join(out, 'rig'), parts: out, out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(req === null ? {} : { requirements: req.read, requirementsAs: req.recorded }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, noExtremes: input.noExtremes === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }), ...(input.windBand === undefined ? {} : { windBand: input.windBand }), ...(configRecord === null ? {} : { config: configRecord }) }, run.check, run.checkBin, prefixed('check'));
+    report = stages.check({ rig: join(out, 'rig'), parts: out, out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(req === null ? {} : { requirements: req.read, requirementsAs: req.recorded }), ...(paintingForCheck === null ? {} : { source: paintingForCheck }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, noExtremes: input.noExtremes === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }), ...(input.windBand === undefined ? {} : { windBand: input.windBand }), ...(configRecord === null ? {} : { config: configRecord }) }, run.check, run.checkBin, prefixed('check'));
   } catch (err) {
     return refused('check', err);
   }
