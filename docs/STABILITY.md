@@ -543,7 +543,11 @@ or region `max_pixels` is refused by name as `SETUP_PAINTING_REQUIRED_LIMIT`
 when the file is read, before anything is built, and no limit is derived; a
 fully limited declaration measures, prints and writes the same bytes as
 without the field. Absent or `false`, every reading in this section is
-unchanged. The optional `pinholes` key (issue #944, additive) declares
+unchanged. `build` hands its `--source` painting to its check when, and only
+when, the requirements file it reads declares `setup_painting` (issue #978),
+so the declaration reads the verdict `check --source` reads on the same output;
+a build whose requirements do not declare it, or that reads none, writes the
+bytes it wrote before. The optional `pinholes` key (issue #944, additive) declares
 `assemble`'s pinhole bar: with `{"required": true}`, `assemble` (and `build`'s
 assemble) refuses every pinhole of the base set's flat parts stack by name as
 `ASSEMBLE_PINHOLES` before anything is written — the bar is 0 and takes no

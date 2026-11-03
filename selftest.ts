@@ -22,6 +22,7 @@ import { softOcclusionLine } from './src/assemble.ts';
 import { holeBox as pinholeBox944, measurePinholes, PINHOLES_RULE, sourceInRig as sourceInRig944 } from './src/assemble.ts';
 import { readSource as readSource944 } from './src/build.ts';
 import { pinholesRequired } from './src/requirements.ts';
+import { SETUP_PAINTING_LINE as SETUP_PAINTING_LINE978 } from './src/setuppainting.ts';
 import { softOccluderFixture, softTrailDiff, yieldLimbCoverFixture, SOFT_SKIN } from './fixtures/soft_occluder.ts';
 import { runYieldContourChecks } from './tools/check_yield_contour.ts';
 import { yieldRimFixture, rimCount, rimPixel } from './fixtures/yield_rim.ts';
@@ -25806,6 +25807,55 @@ function runBuildSuite(): number {
         JSON.stringify(recordOf(sameOut)) === JSON.stringify(recordOf(configOut)),
       `the same file by its absolute path: exit ${same.status}, ${sameDiff.length === 0 ? 'every file byte-identical to the config-only build' : sameDiff.slice(0, 2).join('; ')}; a copy of its bytes: exit ${copy.status}, ${copyDiff.length === 0 ? 'byte-identical' : copyDiff.slice(0, 2).join('; ')}; record ${showRecord(recordOf(sameOut))}`,
       "issue #556, bar 2's other half: one file named twice is one input — the declaration is read and recorded, so a build given both writes what the config alone writes; the record names the file once",
+    );
+
+    // BU978–BU980 — issue #978: build's --source is the painting assemble reads; a requirements file that declares
+    // setup_painting needs that painting in the check, so build hands it on then, and only then. The verdict is held to
+    // check --source run by hand on the build's own rig and parts, not to a figure written here.
+    const paintReqPath = reqFile('req-setup-painting', { requirements: [], setup_painting: { rgb_tolerance: 60, regions: [{ name: 'corner', box: [0, 0, 1, 1], max_pixels: 0 }] } });
+    const paintOut = join(dir, 'req-setup-painting-build');
+    const paintBuild = runBuildCli([...buildArgs(dir, paintOut), '--requirements', paintReqPath]);
+    const paintFig = readJsonFile(join(paintOut, 'check', 'check.json'));
+    const paintByHandOut = join(dir, 'req-setup-painting-check');
+    const paintByHand = runBuildCli(['check', '--rig', join(paintOut, 'rig'), '--parts', paintOut, '--source', join(dir, 'painting.png'), '--requirements', paintReqPath, '--out', paintByHandOut]);
+    const paintByHandFig = readJsonFile(join(paintByHandOut, 'check.json'));
+    const verdictOf = (fig: Record<string, unknown> | null): string => JSON.stringify(fig === null ? null : { PASS: fig.PASS, [SETUP_PAINTING_LINE978]: fig[SETUP_PAINTING_LINE978], [SOURCE_LINE]: fig[SOURCE_LINE] });
+    const refusedFor = (text: string): string => text.split('\n').find((l) => l.includes('CHECK_SETUP_PAINTING_SOURCE'))?.trim().slice(0, 160) ?? 'no CHECK_SETUP_PAINTING_SOURCE line';
+    say(
+      'BU978_A_REQUIREMENTS_FILE_DECLARING_SETUP_PAINTING_READS_THE_SAME_VERDICT_UNDER_BUILD_AS_UNDER_CHECK_SOURCE',
+      paintFig !== null &&
+        paintByHandFig !== null &&
+        paintBuild.status === paintByHand.status &&
+        !paintBuild.out.includes('CHECK_SETUP_PAINTING_SOURCE') &&
+        (paintFig[SETUP_PAINTING_LINE978] as { status?: string } | undefined)?.status !== undefined &&
+        verdictOf(paintFig) === verdictOf(paintByHandFig),
+      `build exit ${paintBuild.status}, check --source exit ${paintByHand.status}; build ${verdictOf(paintFig)}; check ${verdictOf(paintByHandFig)}; ${refusedFor(paintBuild.out)}`,
+      'issue #978 bar 1: build forwarded --requirements but not the painting, so a declared setup_painting refused CHECK_SETUP_PAINTING_SOURCE under build while check --source on the same output measured it; one painting, one verdict',
+    );
+
+    // Without a source: build cannot be run without one (--source is assemble's), so the case is check's on the same
+    // output, which keeps its refusal by name; and build without --source still stops at its own usage line.
+    const paintNoSource = runBuildCli(['check', '--rig', join(paintOut, 'rig'), '--parts', paintOut, '--requirements', paintReqPath, '--out', join(dir, 'req-setup-painting-nosource')]);
+    const paintNoSourceBuild = runBuildCli(['build', '--config', join(dir, 'config.json'), '--full', join(dir, 'full'), '--head', join(dir, 'head'), '--out', join(dir, 'req-setup-painting-nosource-build'), '--requirements', paintReqPath]);
+    say(
+      'BU979_WITHOUT_A_SOURCE_A_DECLARED_SETUP_PAINTING_IS_STILL_REFUSED_CHECK_SETUP_PAINTING_SOURCE_BY_NAME',
+      paintNoSource.status === 1 &&
+        paintNoSource.out.includes('FAIL  CHECK_SETUP_PAINTING_SOURCE: requirements.setup_painting') &&
+        paintNoSourceBuild.status === 2 &&
+        paintNoSourceBuild.out.split('\n')[0] === '  FAIL  USAGE: build needs --source (see rig-parts guide USAGE)',
+      `check without --source: exit ${paintNoSource.status}, ${refusedFor(paintNoSource.out)}; build without --source: exit ${paintNoSourceBuild.status}, "${paintNoSourceBuild.out.split('\n')[0]?.trim()}"`,
+      'issue #978 bar 2: the forward does not stand in for a painting nobody gave; the refusal keeps its name',
+    );
+
+    // No requirements file, or one that does not declare setup_painting: the check is given no painting, as before, so
+    // check.json carries neither line. The green build above (BU01) and BU18's are the two cases.
+    const noPaintingLines = (fig: Record<string, unknown> | null): boolean => fig !== null && !Object.hasOwn(fig, SOURCE_LINE) && !Object.hasOwn(fig, SETUP_PAINTING_LINE978);
+    const greenFig = readJsonFile(join(out, 'check', 'check.json'));
+    say(
+      'BU980_A_BUILD_WHOSE_REQUIREMENTS_DO_NOT_DECLARE_SETUP_PAINTING_HANDS_THE_CHECK_NO_PAINTING',
+      noPaintingLines(greenFig) && noPaintingLines(skirtFig) && paintFig !== null && Object.hasOwn(paintFig, SOURCE_LINE),
+      `no requirements: ${noPaintingLines(greenFig) ? 'neither line' : 'A LINE'}; requirements without setup_painting: ${noPaintingLines(skirtFig) ? 'neither line' : 'A LINE'}; with it: ${SOURCE_LINE} ${paintFig !== null && Object.hasOwn(paintFig, SOURCE_LINE) ? 'written' : 'absent'}`,
+      'issue #978 bar 3: the painting reaches the check only where a declaration needs it, so a build without one writes the bytes it wrote before',
     );
 
     // BU210–BU212 — issue #607: build records the config it read in check.json, beside #556's requirements record and
