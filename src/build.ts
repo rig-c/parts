@@ -86,6 +86,7 @@ import { besideIdleLine, checkSummaryLine, inputFileRecord, type InputFileRecord
 import { type Cut, type Extend, type Limb, loadConfigAndAnimations, loadConfigWithBytes, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
 import { coreCompileGuideLine, failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { editedConfigImages, editedRunImages, missingReceipts, readEditorReceipts } from './editreceipt.ts';
+import { untracedPartSources } from './partsource.ts';
 import type { MeshQualityReport, MotionSchedule } from '@rig-c/core/mesh';
 import { encodeGif } from './gif.ts';
 import { CONTROL_SUFFIX, withAnimations } from './motion.ts';
@@ -337,7 +338,8 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const read = readRuns(input.full, input.head);
   // Issue #946: every declared receipt is held to its file, and under `required` every edited image needs one, before anything is assembled.
   const receipts = readEditorReceipts(cfg.assemble.editor_receipts, input.config);
-  refuseIfAny([...receipts.problems, ...missingReceipts(receipts, [...editedRunImages(read), ...editedConfigImages(input.config, cfg.assemble.cuts ?? [], cfg.limbs)])]);
+  // Issue #947: under `trace_parts`, a shape drawn in the config through a part's pixels is refused with them.
+  refuseIfAny([...receipts.problems, ...missingReceipts(receipts, [...editedRunImages(read), ...editedConfigImages(input.config, cfg.assemble.cuts ?? [], cfg.limbs)]), ...untracedPartSources(cfg)]);
   const runs = applyTakenLayers(read, src, cfg, input.config);
   for (const note of runs.notes) log(`note: ${note}`);
   const fields = stageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);

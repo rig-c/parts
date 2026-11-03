@@ -10,6 +10,7 @@ import { runAuthoredUnitDepthChecks } from './tools/check_authored_unit_depth.ts
 import { runDepthMapChecks } from './tools/check_depthmaps.ts';
 import { runTakeLayerChecks } from './tools/check_take_layers.ts';
 import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
+import { runPartSourceChecks } from './tools/check_part_sources.ts';
 import { runReadmePolicyChecks } from './scripts/readme_policy.ts';
 import { sourceCaseNames } from './scripts/selftest_prefixes.ts';
 import { runPaintingExtensionChecks } from './tools/check_painting_extension.ts';
@@ -52553,6 +52554,16 @@ function runEditorReceiptsSuite(): number {
   return bad();
 }
 
+function runPartSourcesSuite(): number {
+  section('part-sources: every part traces to a layer of the split or an editor receipt');
+  const { say, bad } = counter();
+  const dir = temp('part-sources');
+  let index = 0;
+  try { runPartSourceChecks(dir, (name, pass, detail) => say(`SR${String(++index).padStart(2, '0')}_${name}`, pass, detail, 'issue #947: generated rectangles and the public examples\' configs; a shape drawn through a part is refused only under trace_parts')); }
+  finally { rmSync(dir, { recursive: true, force: true }); }
+  return bad();
+}
+
 function runAlternateLayersSuite(): number {
   section('alternate-layers: covered parts select named run layers');
   const { say, bad } = counter();
@@ -52991,6 +53002,7 @@ const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number 
   ['alternate-layers', runAlternateLayersSuite],
   ['take-layers', runTakeLayersSuite],
   ['editor-receipts', runEditorReceiptsSuite],
+  ['part-sources', runPartSourcesSuite],
   ['plausibility', runPlausibilitySuite],
   ['assemble-examples', runAssembleExamplesSuite],
   ['skeleton', runSkeletonSuite],
@@ -53184,7 +53196,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['depth-maps', 'joint-contact', 'check', 'chain@wind', 'chain@scarf', 'assemble-examples@wind', 'assemble-examples@reference-sample', 'scene', 'mesh-stats', 'auto-mesh-examples', 'config', 'inputs-examples', 'contour-wiring', 'waist', 'propose-corpus', 'arm-split-upgrade', 'comfy', 'diagnostics', 'structure', 'inputs', 'winding', 'raster-morph', 'raster-resize', 'raster-components', 'raster-warp', 'png']],
   ['2', ['cli', 'build', 'remesh', 'rig', 'chain@reference-sample', 'readme-loop@reference-demo', 'chain@reference-demo', 'propose', 'assemble-examples@reference-demo', 'readme-loop@reference-sample', 'auto-motion', 'tree', 'auto-mesh', 'config-write', 'limb-slots', 'loop', 'corpus', 'limb-layout', 'requirements', 'fixed-skeleton', 'setup-painting', 'foot-ownership', 'layers-wrapper', 'painting', 'skeleton', 'core-pointer', 'assemble-examples@end', 'parts', 'prompt', 'sheet']],
-  ['3', ['readme-loop@wind', 'chain@end', 'readme-loop@demo', 'retune', 'chain@demo', 'assemble-examples@scarf', 'assemble-examples@demo', 'readme-loop@scarf', 'mesh-draft', 'alternate-layers', 'take-layers', 'editor-receipts', 'influence', 'front-slot', 'assemble', 'readme-loop@end', 'build-cost', 'alternate-tips', 'chain-inherit', 'keypoints', 'contour', 'subset-cover', 'hybrid-limb', 'plausibility', 'raster-blur', 'fetch-examples', 'layers-psd', 'raster-poly', 'raster-composite']],
+  ['3', ['readme-loop@wind', 'chain@end', 'readme-loop@demo', 'retune', 'chain@demo', 'assemble-examples@scarf', 'assemble-examples@demo', 'readme-loop@scarf', 'mesh-draft', 'alternate-layers', 'take-layers', 'editor-receipts', 'part-sources', 'influence', 'front-slot', 'assemble', 'readme-loop@end', 'build-cost', 'alternate-tips', 'chain-inherit', 'keypoints', 'contour', 'subset-cover', 'hybrid-limb', 'plausibility', 'raster-blur', 'fetch-examples', 'layers-psd', 'raster-poly', 'raster-composite']],
 ];
 
 /**

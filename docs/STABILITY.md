@@ -152,7 +152,7 @@ part name, `[i]` an entry of a list):
 - **assemble.extend_below_crop[i]** — required: `part`, `run`, `tag`
 - **assemble.extend_painting[i]** — required: `part`, `band`, `max_distance`; optional: `min_held_alpha`, `order` (issues #848, #854, #855; explicit final layer-derived part, half-open rig band and positive four-neighbour path bound; base painting only). The optional integer floor 1–255 admits exact original alpha-over coverage strictly below it; absent or 1 blocks every nonzero holder. Only selected target samples below the floor may take painting RGBA; target samples at/above the floor and every non-target holder remain exact. By default overlapping reachable claims refuse. With `order` on every entry (unique nonnegative safe integers), lower values claim first and their gains block later candidates and paths; array order never breaks ties or supplies missing precedence
 - **assemble.take[i]** — required: `run`, `run_dir`, `st_input`, `tags` (issue #866)
-- **assemble.editor_receipts** — required: `receipts`; optional: `required` (issue #946, additive)
+- **assemble.editor_receipts** — required: `receipts`; optional: `required` (issue #946, additive), `trace_parts` (issue #947, additive)
 - **assemble.editor_receipts.receipts[i]** — required: `file`, `sha256`, `from_sha256`, `editor` (issue #946)
 - **assemble.patches[i]** — required: `name`, `box`, `alpha`, `draw`
 - **assemble.patches[i].draw**, when an object — required: `before`
@@ -590,7 +590,14 @@ without one: with `true`, every author-made layer, hidden-art layer, cut
 Absent or `false`, nothing is demanded; a build whose receipts all verify
 writes the same bytes as without the block. No input accepted before the block
 existed changes its exit code: the refusals fire only on a block that input
-could not have held.
+could not have held. The optional boolean `trace_parts` (issue #947, additive)
+is the author's declaration that every part's pixels trace to a layer of the
+split or to a receipted image: with `true`, receipts are demanded as under
+`required`, and every shape the config draws through a part (a cut's
+`polygon`, `seethrough.arm_split`, a limb's `split.line`, a patch's `box`, a
+painting extension's `band`) is refused (`ASSEMBLE_PART_SOURCE`) before
+anything is assembled. Absent or `false`, nothing more is demanded and no byte
+moves.
 
 ## Provider-map depth stages (#897)
 

@@ -57,6 +57,13 @@ export interface EditorReceipt {
 export interface EditorReceipts {
   /** `true`: every edited image the build reads needs a receipt. Absent or `false`: receipts are verified, none is demanded. */
   required?: boolean;
+  /**
+   * Issue #947, `true`: every part's pixels trace to a layer of the split or to
+   * an image a receipt covers — every edited image needs a receipt, as under
+   * `required`, and a shape drawn in the config through a part's pixels is
+   * refused (`src/partsource.ts`). Absent or `false`: nothing more is demanded.
+   */
+  trace_parts?: boolean;
   receipts: EditorReceipt[];
 }
 
@@ -82,6 +89,8 @@ export interface VerifiedReceipt extends EditorReceipt {
 /** The receipts read for one build: those that verified, keyed by sha256, and the refusals of those that did not. */
 export interface ReceiptLedger {
   required: boolean;
+  /** The field that made receipts required, as a refusal names it: `required`, else `trace_parts` (issue #947). */
+  by: 'required' | 'trace_parts';
   bySha: ReadonlyMap<string, VerifiedReceipt>;
   problems: Problem[];
 }
@@ -95,7 +104,7 @@ export interface ReceiptLedger {
 export function readEditorReceipts(spec: EditorReceipts | undefined, configPath: string): ReceiptLedger {
   const problems: Problem[] = [];
   const bySha = new Map<string, VerifiedReceipt>();
-  if (spec === undefined) return { required: false, bySha, problems };
+  if (spec === undefined) return { required: false, by: 'required', bySha, problems };
   const base = dirname(resolve(configPath));
   spec.receipts.forEach((r, i) => {
     const at = `${AT}.receipts[${i}]`;
@@ -112,7 +121,8 @@ export function readEditorReceipts(spec: EditorReceipts | undefined, configPath:
     }
     if (!bySha.has(found)) bySha.set(found, { ...r, at, path });
   });
-  return { required: spec.required === true, bySha, problems };
+  const by = spec.required === true || spec.trace_parts !== true ? 'required' : 'trace_parts';
+  return { required: spec.required === true || spec.trace_parts === true, by, bySha, problems };
 }
 
 /** An image the input itself says was made or edited outside See-through. */
@@ -155,7 +165,7 @@ export function editedConfigImages(configPath: string, cuts: ReadonlyArray<{ int
 }
 
 /**
- * Under `required: true`, every edited image must have a receipt whose
+ * Under `required: true` (or `trace_parts: true`, issue #947), every edited image must have a receipt whose
  * `sha256` is its file's bytes: `ASSEMBLE_EDITOR_RECEIPT_MISSING` names the
  * image, its file and the sha256 found. A file that is not on disk is left to
  * the reader that names it (`ASSEMBLE_UNDER_PRESENT`, `ASSEMBLE_LIMB_CAP_PRESENT`).
@@ -171,7 +181,7 @@ export function missingReceipts(ledger: ReceiptLedger, images: readonly EditedIm
     problems.push({
       code: 'ASSEMBLE_EDITOR_RECEIPT_MISSING',
       object: image.object,
-      detail: `${image.path} (sha256 ${found}) carries no editor receipt; ${AT}.required is true, so a receipt {file, sha256, from_sha256, editor} whose sha256 is this file's is required — edit the image in an image editor and record it, never generate or patch it in code`,
+      detail: `${image.path} (sha256 ${found}) carries no editor receipt; ${AT}.${ledger.by} is true, so a receipt {file, sha256, from_sha256, editor} whose sha256 is this file's is required — edit the image in an image editor and record it, never generate or patch it in code`,
     });
   }
   return problems;
