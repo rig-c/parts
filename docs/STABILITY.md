@@ -541,7 +541,13 @@ or region `max_pixels` is refused by name as `SETUP_PAINTING_REQUIRED_LIMIT`
 when the file is read, before anything is built, and no limit is derived; a
 fully limited declaration measures, prints and writes the same bytes as
 without the field. Absent or `false`, every reading in this section is
-unchanged. With `--source` but
+unchanged. The optional `pinholes` key (issue #944, additive) declares
+`assemble`'s pinhole bar: with `{"required": true}`, `assemble` (and `build`'s
+assemble) refuses every pinhole of the base set's flat parts stack by name as
+`ASSEMBLE_PINHOLES` before anything is written — the bar is 0 and takes no
+value. Absent or `false`, nothing is measured, the console's
+`ASSEMBLE_PINHOLES: SKIP` line says so, and no exit code, file or other line
+moves. With `--source` but
 no declaration, the console, `check.json` and the report's skipped-bar list now
 say SKIP with the reason and the `--requirements` declaration remedy; exit
 codes stay unchanged. No metric, region or limit is invented. Without source

@@ -2596,6 +2596,23 @@ export function visibilityCounts(object: string, part: Raster, visible: Mask, pr
  */
 export function figureSilhouette(srcr: Raster): Mask {
   const { width: W, height: H } = srcr;
+  const fig = newMask(W, H);
+  fig.data.set(paintedFigure(srcr));
+  const opened = dilate(dilate(erode(erode(fig, 3), 3), 3), 3);
+  return fillHoles(opened);
+}
+
+/**
+ * `figureSilhouette`'s own per-pixel test, before its opening and its hole
+ * fill: 1 where the painting (rig-sized) differs from the median colour of its
+ * outer `SILHOUETTE_BORDER`-pixel ring by more than `SILHOUETTE_LIMIT` (max
+ * channel). `figureSilhouette` opens and fills this mask; `measurePinholes`
+ * (issue #944) reads it as it is, so a pixel the painting shows as ground
+ * (between arm and body, between the legs, inside a hair loop) is never
+ * "painted".
+ */
+export function paintedFigure(srcr: Raster): Uint8Array {
+  const { width: W, height: H } = srcr;
   const ring: number[][] = [[], [], []];
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
@@ -2608,13 +2625,12 @@ export function figureSilhouette(srcr: Raster): Mask {
     const n = s.length;
     return n % 2 === 1 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
   });
-  const fig = newMask(W, H);
+  const painted = new Uint8Array(W * H);
   for (let p = 0; p < W * H; p++) {
     const d = Math.max(...[0, 1, 2].map((c) => Math.abs(srcr.data[p * 4 + c] - median[c])));
-    if (d > SILHOUETTE_LIMIT) fig.data[p] = 1;
+    if (d > SILHOUETTE_LIMIT) painted[p] = 1;
   }
-  const opened = dilate(dilate(erode(erode(fig, 3), 3), 3), 3);
-  return fillHoles(opened);
+  return painted;
 }
 
 export interface PlacedPart {
@@ -3071,36 +3087,80 @@ export function uncoveredHoles(can: Raster, srcr: Raster, parts: PlacedPart[], i
   const all = cc.stats.slice(1).filter((s) => s.area > 0);
   all.sort((a, b) => b.area - a.area || a.top - b.top || a.left - b.left);
   const listed = all.slice(0, HOLES_LISTED);
-  const holes = listed.map((s): RecompositeHole => {
-    const borders: HoleBorder[] = [];
-    parts.forEach(({ record: p, image }) => {
-      let n = 0;
-      // A part pixel can touch the hole only inside the hole's box grown by one.
-      const x0 = Math.max(p.x, s.left - 1);
-      const x1 = Math.min(p.x + p.w - 1, s.left + s.width);
-      const y0 = Math.max(p.y, s.top - 1);
-      const y1 = Math.min(p.y + p.h - 1, s.top + s.height);
-      for (let y = y0; y <= y1; y++) {
-        for (let x = x0; x <= x1; x++) {
-          if (image.data[((y - p.y) * p.w + (x - p.x)) * 4 + 3] <= COVERED_ALPHA) continue;
-          let touches = false;
-          for (let dy = -1; dy <= 1 && !touches; dy++) {
-            for (let dx = -1; dx <= 1 && !touches; dx++) {
-              const u = x + dx;
-              const v = y + dy;
-              if (u >= 0 && u < W && v >= 0 && v < H && cc.labels[v * W + u] === s.label) touches = true;
-            }
-          }
-          if (touches) n++;
-        }
-      }
-      if (n > 0) borders.push({ part: p.name, px: n });
-    });
-    // Array.prototype.sort is stable, so equal counts keep plan order.
-    borders.sort((a, b) => b.px - a.px);
-    return { px: s.area, x: s.left, y: s.top, w: s.width, h: s.height, borders };
-  });
+  const holes = listed.map((s): RecompositeHole => ({ px: s.area, x: s.left, y: s.top, w: s.width, h: s.height, borders: holeBorders(parts, cc, s, W, H, COVERED_ALPHA) }));
   return { count: all.length, holes };
+}
+
+/**
+ * The parts bordering one labelled component: every part with a pixel of
+ * alpha above `above` 8-adjacent to one of the component's pixels, each with
+ * the number of such pixels, most first and then in plan order (a pixel two
+ * parts hold counts for both). `uncoveredHoles` reads it at `COVERED_ALPHA`,
+ * `measurePinholes` (issue #944) at 0.
+ */
+function holeBorders(parts: readonly PlacedPart[], cc: Components, s: Components['stats'][number], W: number, H: number, above: number): HoleBorder[] {
+  const borders: HoleBorder[] = [];
+  parts.forEach(({ record: p, image }) => {
+    let n = 0;
+    // A part pixel can touch the hole only inside the hole's box grown by one.
+    const x0 = Math.max(p.x, s.left - 1);
+    const x1 = Math.min(p.x + p.w - 1, s.left + s.width);
+    const y0 = Math.max(p.y, s.top - 1);
+    const y1 = Math.min(p.y + p.h - 1, s.top + s.height);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        if (image.data[((y - p.y) * p.w + (x - p.x)) * 4 + 3] <= above) continue;
+        let touches = false;
+        for (let dy = -1; dy <= 1 && !touches; dy++) {
+          for (let dx = -1; dx <= 1 && !touches; dx++) {
+            const u = x + dx;
+            const v = y + dy;
+            if (u >= 0 && u < W && v >= 0 && v < H && cc.labels[v * W + u] === s.label) touches = true;
+          }
+        }
+        if (touches) n++;
+      }
+    }
+    if (n > 0) borders.push({ part: p.name, px: n });
+  });
+  // Array.prototype.sort is stable, so equal counts keep plan order.
+  borders.sort((a, b) => b.px - a.px);
+  return borders;
+}
+
+/**
+ * The pinholes of the flat parts stack at rest (issue #944): every 8-connected
+ * component of the stack's openings — the pixels no part has any alpha at
+ * (alpha 0 on every part) that the union of the parts' alpha above 0, its
+ * holes filled (`fillHoles`), encloses — of which every pixel is painted
+ * (`paintedFigure`: the painting differs from its border ring's median by more
+ * than `SILHOUETTE_LIMIT`, `figureSilhouette`'s test without its opening and
+ * hole fill). An opening with one pixel the painting shows as ground is a
+ * deliberate gap (between arm and body, between the legs, inside a hair loop)
+ * and is not a pinhole. No size threshold: one pixel is a pinhole.
+ *
+ * ⚖️ Invariant: each pinhole is a `RecompositeHole` — its box is its pixels'
+ * bounding box, its `borders` the parts with a pixel of alpha above 0
+ * 8-adjacent to it (`holeBorders`) — and the list is every pinhole, largest
+ * first, then by top row and left column, so the order is a function of the
+ * pixels. The painting is the rig-sized one assemble reads (`sourceInRig`).
+ */
+export function measurePinholes(srcr: Raster, parts: readonly PlacedPart[]): RecompositeHole[] {
+  const { width: W, height: H } = srcr;
+  const stack = newMask(W, H);
+  for (const { record: p, image } of parts) {
+    for (let y = 0; y < p.h; y++) for (let x = 0; x < p.w; x++) if (image.data[(y * p.w + x) * 4 + 3] > 0) stack.data[(p.y + y) * W + p.x + x] = 1;
+  }
+  const filled = fillHoles(stack);
+  const openings = newMask(W, H);
+  for (let p = 0; p < W * H; p++) if (filled.data[p] === 1 && stack.data[p] === 0) openings.data[p] = 1;
+  const cc = connectedComponents(openings, 8);
+  const painted = paintedFigure(srcr);
+  const allPainted = new Uint8Array(cc.stats.length).fill(1);
+  for (let p = 0; p < W * H; p++) if (cc.labels[p] > 0 && painted[p] === 0) allPainted[cc.labels[p]] = 0;
+  const pins = cc.stats.slice(1).filter((s) => s.area > 0 && allPainted[s.label] === 1);
+  pins.sort((a, b) => b.area - a.area || a.top - b.top || a.left - b.left);
+  return pins.map((s) => ({ px: s.area, x: s.left, y: s.top, w: s.width, h: s.height, borders: holeBorders(parts, cc, s, W, H, 0) }));
 }
 
 /**
@@ -3222,6 +3282,40 @@ export function figuresLine(f: RecompositeFigures, scene: string | null = null):
     `${scene === null ? '' : `${scene}: `}recomposite vs source: mean |d|=${f.meanAbs.toFixed(2)}, within ${WITHIN_LIMIT}: ${(100 * f.within).toFixed(1)}%, ` +
     `error px > ${ERROR_LIMIT}: ${f.errorPx}, uncovered error px: ${f.uncoveredErrorPx}`
   );
+}
+
+/** Issue #944: the name of `assemble`'s pinhole bar — its console line and its refusal. */
+export const PINHOLES_RULE = 'ASSEMBLE_PINHOLES';
+
+/** Issue #944: what a pinhole is, said once for the line and the refusal. */
+const PINHOLE_IS = `an 8-connected opening of the flat parts stack — alpha 0 on every part, enclosed by the parts' alpha above 0 — whose every pixel the painting shows as figure, more than ${SILHOUETTE_LIMIT} off its border ring's median (max channel)`;
+
+/**
+ * Issue #944: one `ASSEMBLE_PINHOLES` refusal per pinhole, largest first — the
+ * pinhole's box, its pixel count and the parts bordering it, against the bar
+ * of 0 the requirements file `requirements` declares required.
+ */
+export function pinholeProblems(pinholes: readonly RecompositeHole[], requirements: string): Problem[] {
+  return pinholes.map((h, i) => ({
+    code: PINHOLES_RULE,
+    object: `pinhole ${i + 1} of ${pinholes.length} at ${holeBox(h)}`,
+    detail:
+      `is ${h.px} px ${h.borders.length === 0 ? 'bordering no part' : `between ${h.borders.map((b) => `"${b.part}" ${b.px} px`).join(', ')}`} — ${PINHOLE_IS}; ` +
+      `${requirements} declares pinholes.required: true, so 0 pinholes are required. Cover it from a layer that holds its pixels (AUTHORING, Source before scissors), or drop the declaration and the bar reports SKIP`,
+  }));
+}
+
+/**
+ * Issue #944: the `ASSEMBLE_PINHOLES` line under the hole lines. `null` is the
+ * bar not declared — SKIP with the reason and the declaration remedy, never a
+ * pass; an empty list is the declared bar met. A non-empty list never reaches
+ * here: it was refused (`pinholeProblems`). Alternate sets are not measured, and
+ * the PASS line names them.
+ */
+export function pinholesLine(pinholes: readonly RecompositeHole[] | null, alternates: readonly string[]): string {
+  if (pinholes === null) return `${PINHOLES_RULE}: SKIP — not measured, not a pass: no requirements file declares pinholes.required: true; declare {"pinholes": {"required": true}} in the --requirements file (config.requirements under build) to refuse every pinhole, ${PINHOLE_IS}`;
+  if (pinholes.length > 0) throw new Error(`pinholesLine: ${pinholes.length} pinhole(s) reached the PASS line; pinholeProblems refuses them`);
+  return `${PINHOLES_RULE}: PASS — 0 pinholes in the base set's flat parts stack, bar 0 (pinholes.required: true)${alternates.length === 0 ? '' : `; alternate set(s) ${alternates.map((a) => `"${a}"`).join(', ')} not measured`}; a pinhole is ${PINHOLE_IS}`;
 }
 
 /** A hole's box as the part lines and refusals print a box: `x,y wxh`. */

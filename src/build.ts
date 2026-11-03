@@ -55,7 +55,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { type AnimFrame, EncodeError, encodeApng, encodeIndexedApng, INDEXED_DEFAULTS } from './apng.ts';
-import { assemble, type AssembleResult, cutLines, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, holeKindsLine, holeLines, measureRecomposite, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine } from './assemble.ts';
+import { assemble, type AssembleResult, cutLines, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine } from './assemble.ts';
 import { allocationClause, type Reducer, stageBClause, unboundedClause } from './automesh.ts';
 import { residualClause } from './autoenvelope.ts';
 import { type AutoMotionCase, failingRows, idleSchedule, localRow, motionClause, motionDeformation, motionDocument, motionInput, motionRowText, motionStimulus, motionVerdict, noStimulusProblem, prepareComparison, type ReplayCandidate, runComparison, runPreparedComparison, sourceSelfFailure, stimulusMotion, withStimulus } from './automotion.ts';
@@ -98,7 +98,7 @@ import { type Mask, newMask } from './raster/types.ts';
 import { type OtherLimbs, splitLines, capOwnershipLines, type SplitCount } from './assemble.ts';
 import type { BoneEntry } from './config.ts';
 import { OPAQUE_ALPHA_ABOVE } from './layers.ts';
-import { readRequirements, type RequirementLine, summaryText } from './requirements.ts';
+import { pinholesRequired, readRequirements, type RequirementLine, summaryText } from './requirements.ts';
 import { type AutoMeshReport, buildRig, DEFAULT_IDLE_KEYS, type FaceAxis, type IdleKeys, type MeshReport, type RigCommand, rigJsonText, type RigOutput, type RigSpec, SETS_FILE, type StrayCleared, type TurnRow } from './rig.ts';
 import { KEYPOINT_NAMES, type KeypointName, type PosePoints } from './skeleton.ts';
 import { AUTHOR_NO_ROLE, isAuthorTag } from './tags.ts';
@@ -324,7 +324,10 @@ export function frontOrdered<T extends { record: { name: string } }>(items: read
 
 /** Read, assemble, and write only after every refusal has had its chance. Throws a PartsError on a refusal, having written nothing. */
 export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, log: Log): AssembleResult {
-  const materialAsked = input.requirements === undefined ? false : readRequirements(input.requirements).cut_material !== undefined;
+  const requirementsFile = input.requirements === undefined ? null : readRequirements(input.requirements);
+  const materialAsked = requirementsFile?.cut_material !== undefined;
+  // Issue #944: the pinhole bar is measured only when the requirements file declares it required.
+  const pinholesAsked = requirementsFile !== null && pinholesRequired(requirementsFile);
   // The early door: assemble runs before propose has drafted bones, meshes,
   // regions and motion, so it requires only what it reads (issue #20).
   const cfg = loadEarlyConfig(input.config, 'assemble');
@@ -759,6 +762,10 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       assetIndices.set(file, index);
     }
   });
+  // Issue #944: under pinholes.required, every pinhole of the base set's flat parts stack is refused by name, with the
+  // alternate sets' refusals, before anything is written.
+  const pinholes = pinholesAsked ? measurePinholes(sourceInRig(src, result.parts.rig_size[0], result.parts.rig_size[1]), result.images) : null;
+  if (pinholes !== null) altProblems.push(...pinholeProblems(pinholes, input.requirements as string));
   refuseIfAny(altProblems);
   if (altBuilt.length > 0) {
     result.parts.alternates = altBuilt.map((b) => b.record);
@@ -829,6 +836,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   for (const l of holeLines(result.figures, scene)) log(l);
   if (result.figures.uncoveredErrorPx > 0) log(holeKindsLine(result.holeKinds, scene));
   for (const u of result.uncovered) log(uncoveredLine(u, scene));
+  log(pinholesLine(pinholes, altBuilt.map((b) => b.record.name)));
   for (const d of result.drift) log(driftLine(d));
   for (const d of result.softOcclusion ?? []) log(softOcclusionLine(d));
   // Issue #588: per subset set, one line per limb part cut from a layer of more than one island, then (issue #587) one

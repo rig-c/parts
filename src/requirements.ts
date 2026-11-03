@@ -199,6 +199,34 @@ export interface RequirementsFile {
   setup_painting?: SetupPainting;
   /** Explicit source-support declarations (#888), absent otherwise. */
   cut_material?: JointMaterial[];
+  /** Issue #944: `assemble`'s pinhole bar, measured only under `required: true`; absent when the file does not declare it. */
+  pinholes?: PinholesDeclaration;
+}
+
+/**
+ * Issue #944: the author's declaration that the flat parts stack may hold no
+ * pinhole at rest (`measurePinholes` in `src/assemble.ts`). `assemble` (and
+ * `build`'s assemble) measures it only when `required` is `true`, and refuses
+ * every pinhole by name (`ASSEMBLE_PINHOLES`); absent or `false`, the bar
+ * reports SKIP. The bar is 0 and is not a field: nothing is the author's to set
+ * but whether it holds.
+ */
+export interface PinholesDeclaration {
+  required: boolean;
+}
+
+/** Issue #944: the shape problems of a `pinholes` block — an object holding exactly the boolean `required` (and notes). */
+export function pinholesProblems(value: unknown, at: string): Problem[] {
+  const problems: Problem[] = [];
+  if (!isRecord(value)) return [{ code: 'REQUIREMENTS_FIELD', object: at, detail: `is ${JSON.stringify(value)?.slice(0, 40)}; requires {"required": true} (assemble refuses every pinhole of the flat parts stack) or {"required": false} (the same as omitting it: the bar reports SKIP)` }];
+  for (const k of Object.keys(value)) if (k !== 'required' && !freeKey(k, value[k])) problems.push({ code: 'REQUIREMENTS_FIELD', object: `${at}.${k}`, detail: 'is not a field this block reads (required; note or *_note as a string; x-<name> as a record) — the bar is 0 and takes no value' });
+  if (typeof value.required !== 'boolean') problems.push({ code: 'REQUIREMENTS_FIELD', object: `${at}.required`, detail: `is ${JSON.stringify(value.required)}; requires true (assemble refuses every pinhole of the flat parts stack) or false (the same as omitting the block: the bar reports SKIP)` });
+  return problems;
+}
+
+/** Issue #944: whether the file declares the pinhole bar required. */
+export function pinholesRequired(file: Pick<RequirementsFile, 'pinholes'>): boolean {
+  return file.pinholes?.required === true;
 }
 
 /** One declared fold (issue #320): a slot, a named animation, and why the fold is the art's. */
@@ -289,7 +317,8 @@ export function readRequirements(path: string): RequirementsFile {
     problems.push({ code: 'REQUIREMENTS_SELF_TARGET', object: `${label} field "target"`, detail });
   };
   if (raw.spec !== REQUIREMENTS_SPEC) field(`${at} field "spec"`, `is ${JSON.stringify(raw.spec)}; ${JSON.stringify(REQUIREMENTS_SPEC)} is required`);
-  for (const k of Object.keys(raw)) if (!['spec', 'fps', 'targets', 'requirements', ...EXCEPTION_LISTS, 'may_fold', 'fixed_skeleton', 'cut_material', 'setup_painting'].includes(k) && !freeKey(k, raw[k])) field(`${at} field "${k}"`, 'is not a field this format reads (spec, fps, targets, requirements, not_planted, not_swinging, rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting; note or *_note as a string; x-<name> as a record)');
+  for (const k of Object.keys(raw)) if (!['spec', 'fps', 'targets', 'requirements', ...EXCEPTION_LISTS, 'may_fold', 'fixed_skeleton', 'cut_material', 'setup_painting', 'pinholes'].includes(k) && !freeKey(k, raw[k])) field(`${at} field "${k}"`, 'is not a field this format reads (spec, fps, targets, requirements, not_planted, not_swinging, rises, rests, may_fold, fixed_skeleton, cut_material, setup_painting, pinholes; note or *_note as a string; x-<name> as a record)');
+  if ('pinholes' in raw) problems.push(...pinholesProblems(raw.pinholes, `${at} pinholes`));
   if ('setup_painting' in raw) problems.push(...setupPaintingProblems(raw.setup_painting, `${at} setup_painting`));
   if ('cut_material' in raw) problems.push(...jointMaterialProblems(raw.cut_material, `${at} cut_material`));
   if ('fixed_skeleton' in raw) problems.push(...fixedSkeletonProblems(raw.fixed_skeleton, `${at} fixed_skeleton`));
@@ -476,7 +505,7 @@ export function readRequirements(path: string): RequirementsFile {
     }
   }
   refuseIfAny(problems);
-  return { path: at, fps, targets, requirements, not_planted: lists.not_planted, not_swinging: lists.not_swinging, rises: lists.rises, rests: lists.rests, may_fold: mayFold, ...(raw.fixed_skeleton === undefined ? {} : { fixed_skeleton: raw.fixed_skeleton as FixedSkeleton }), ...(raw.cut_material === undefined ? {} : { cut_material: raw.cut_material as JointMaterial[] }), ...(raw.setup_painting === undefined ? {} : { setup_painting: raw.setup_painting as SetupPainting }) };
+  return { path: at, fps, targets, requirements, not_planted: lists.not_planted, not_swinging: lists.not_swinging, rises: lists.rises, rests: lists.rests, may_fold: mayFold, ...(raw.fixed_skeleton === undefined ? {} : { fixed_skeleton: raw.fixed_skeleton as FixedSkeleton }), ...(raw.cut_material === undefined ? {} : { cut_material: raw.cut_material as JointMaterial[] }), ...(raw.setup_painting === undefined ? {} : { setup_painting: raw.setup_painting as SetupPainting }), ...(raw.pinholes === undefined ? {} : { pinholes: { required: (raw.pinholes as PinholesDeclaration).required } }) };
 }
 
 // ---------------------------------------------------------------------------

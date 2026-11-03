@@ -187,6 +187,7 @@ gravity (0, 1), so `check.json`'s figures are the idle under that breeze:
 - **No stop at the legs.** The legs are limb chains now, but the skirt's trees do not
   collide with them; the recipe's stop at the legs is not drafted (AUTHORING §3, *Not
   in this recipe*), and a gait's hip motion can carry the hem through a thigh.
+- **One pinhole at rest.** The flat parts stack holds one pinhole (issue #944; AUTHORING §7, *Pinholes at rest*), so this example does not declare the bar and `assemble` prints `ASSEMBLE_PINHOLES: SKIP`: `392,245 1x1` (1 px, between `neck` and `topwear`), whose pixel only the full run's `neck` and the head run's `topwear` hold while the plan takes the other two ([#956](https://github.com/rig-c/parts/issues/956)); taking `neck` from the full run seals a notch into a new pinhole, so it waits on [#953](https://github.com/rig-c/parts/issues/953).
 - **No caps were painted.** `assemble` names the pixels each joint's cap is missing
   (`limb cap:` lines: 66 and 72 px at the elbows, 9 and 19 at the knees, 12 and 20 at
   the ankles); none is painted in, so a bent joint can show a gap that size.
