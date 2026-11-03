@@ -147,11 +147,13 @@ part name, `[i]` an entry of a list):
 - **generation.control.skeleton**, the pose file it names when it is no built-in — required: `width`, `height`, `points`
 - **seethrough** — required: `resolution`, `steps`, `seed`, `offload`; optional: `head_box`, `arm_split`
 - **seethrough.arm_split** — required: `order`, and one of `x` or `line` (issue #439)
-- **assemble** — required: `rig_scale`, `plan` (from plain `assemble` on); optional: `seam`, `extend_below_crop`, `patches`, `cuts`, `alternates`, `head_face_underfill`, `yield_refused`, `keep_under_occluders`, `extend_painting`, `take`
+- **assemble** — required: `rig_scale`, `plan` (from plain `assemble` on); optional: `seam`, `extend_below_crop`, `patches`, `cuts`, `alternates`, `head_face_underfill`, `yield_refused`, `keep_under_occluders`, `extend_painting`, `take`, `editor_receipts`
 - **assemble.alternates[i]** — required: `name`; optional: `source`, `full`, `head`, `parts`, `hides`, `head_box`, `cuts`, `skeleton`, `anchor`, `base_anchor`, `drawn`, `tips`, `front`, `layers`, `focus` (issues #454, #465, #543, #652, #664, #666, #719, #780). `focus` is an authored finite `[x, y]` in painting pixels, within its canvas (edges included), refused as CONFIG_SET_FOCUS before assemble output when invalid; only when present, `parts.json` records it with focus_source_size and `sets.json` emits it in setup-world coordinates through the actual rig resize and `src/coords.ts`. Absent focus emits no field or inferred value; changing/removing it requires reassembly
 - **assemble.extend_below_crop[i]** — required: `part`, `run`, `tag`
 - **assemble.extend_painting[i]** — required: `part`, `band`, `max_distance`; optional: `min_held_alpha`, `order` (issues #848, #854, #855; explicit final layer-derived part, half-open rig band and positive four-neighbour path bound; base painting only). The optional integer floor 1–255 admits exact original alpha-over coverage strictly below it; absent or 1 blocks every nonzero holder. Only selected target samples below the floor may take painting RGBA; target samples at/above the floor and every non-target holder remain exact. By default overlapping reachable claims refuse. With `order` on every entry (unique nonnegative safe integers), lower values claim first and their gains block later candidates and paths; array order never breaks ties or supplies missing precedence
 - **assemble.take[i]** — required: `run`, `run_dir`, `st_input`, `tags` (issue #866)
+- **assemble.editor_receipts** — required: `receipts`; optional: `required` (issue #946, additive)
+- **assemble.editor_receipts.receipts[i]** — required: `file`, `sha256`, `from_sha256`, `editor` (issue #946)
 - **assemble.patches[i]** — required: `name`, `box`, `alpha`, `draw`
 - **assemble.patches[i].draw**, when an object — required: `before`
 - **assemble.cuts[i]** — required: `from`, `into`, `polygon`, `draw`, `overlap`; optional: `under`, `under_fill`
@@ -572,6 +574,23 @@ only for that explicit block; `check --requirements` refuses unavailable or
 stale evidence rather than reconstructing original art from emitted siblings.
 Without the block the API reading is SKIP; CLI stdout and emitted bytes remain unchanged.
 See [Source before scissors](AUTHORING.md#source-before-scissors).
+
+### Editor receipts
+
+The optional `assemble.editor_receipts` block (issue #946, additive) records
+images edited in an image editor. Absent, no file is read and every output is
+byte-identical. Declared, every receipt's `file` must exist and hash to its
+`sha256` (`ASSEMBLE_EDITOR_RECEIPT_FILE`, `ASSEMBLE_EDITOR_RECEIPT_SHA256`);
+`from_sha256` and `editor` are the author's declaration, held to form and to
+`from_sha256` differing from `sha256` (`CONFIG_EDITOR_RECEIPT`). The optional
+boolean `required` is the author's declaration that no edited image may go
+without one: with `true`, every author-made layer, hidden-art layer, cut
+`under` and limb `cap` the build reads needs a receipt matching its bytes
+(`ASSEMBLE_EDITOR_RECEIPT_MISSING`), refused before anything is assembled.
+Absent or `false`, nothing is demanded; a build whose receipts all verify
+writes the same bytes as without the block. No input accepted before the block
+existed changes its exit code: the refusals fire only on a block that input
+could not have held.
 
 ## Provider-map depth stages (#897)
 

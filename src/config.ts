@@ -100,6 +100,7 @@ import { GRID, MAX_SIDE } from './contour.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
 import { edgeLength } from './length.ts';
 import { setFocusProblems } from './setfocus.ts';
+import { type EditorReceipts, SHA256_PATTERN, SHA256_RULE } from './editreceipt.ts';
 import { isSkeletonName, KEYPOINT_NAMES, type KeypointName, type PosePoints, scaledPoints, SKELETON_NAMES, type SkeletonName } from './skeleton.ts';
 import { acceptedTagNames, AUTHOR_LABEL_RULE, AUTHOR_PREFIX, readLayerTag } from './tags.ts';
 import { BODYSHIFT_BONE, BODY_REAR_SHIFT_BONE, BODY_YAW_DIAL_BONE, EAR_DEPTH_RANGE, FACESHIFT_BONE, FACE_DEFORM_FRACTIONS, FACE_DEFORM_RANGES, FACE_RATED_PITCH_BAND, FACE_RATED_YAW_BAND, type FaceDeformKey, PITCH_DIAL_BONE, REAR_SHIFT_BONE, TURN_BONE, TURN_ROLES, type TurnRole, type TurnSpec, YAW_DIAL_BONE, turnNearest, turnSurfaceBone, turnUnitBone } from './turn.ts';
@@ -305,6 +306,8 @@ export interface Assemble {
   seam?: SeamRule;
   /** Verified named replacements from another See-through run (#866). */
   take?: TakeLayers[];
+  /** Issue #946: receipts for images edited in an image editor; absent, no file is read and no byte moves. */
+  editor_receipts?: EditorReceipts;
   /** Rig pixels per source pixel. */
   rig_scale: number;
   plan: PlanEntry[];
@@ -1623,7 +1626,7 @@ export interface EarlyConfig {
   depth?: DepthConfig;
   key: string;
   seethrough: SeeThrough;
-  assemble: { rig_scale: number; seam?: SeamRule; take?: TakeLayers[]; head_face_underfill?: boolean; yield_refused?: boolean; keep_under_occluders?: string[]; extend_painting?: PaintingExtension[] };
+  assemble: { rig_scale: number; seam?: SeamRule; take?: TakeLayers[]; editor_receipts?: EditorReceipts; head_face_underfill?: boolean; yield_refused?: boolean; keep_under_occluders?: string[]; extend_painting?: PaintingExtension[] };
 }
 
 /** What plain `assemble` reads: the early config plus the plan `--propose-plan` printed. */
@@ -1699,7 +1702,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
   if (door === 'layers') {
     if ('seethrough' in t) checkSeeThrough(c, t.seethrough);
     if ('assemble' in t) {
-      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take', 'seam']);
+      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take', 'seam', 'editor_receipts']);
       if (a !== null) {
         checkSeam(c, a);
         if ('rig_scale' in a) c.number('config.assemble.rig_scale', a.rig_scale, 'positive');
@@ -1709,6 +1712,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
         checkKeepUnderOccluders(c, a, null);
         if ('extend_painting' in a) checkPaintingExtensions(c, a.extend_painting);
         if ('take' in a) checkTakeLayers(c, a.take);
+        if ('editor_receipts' in a) checkEditorReceipts(c, a.editor_receipts);
         if ('yield_refused' in a && typeof a.yield_refused !== 'boolean') {
           c.fail('CONFIG_FIELD_TYPE', 'config.assemble.yield_refused', `is ${show(a.yield_refused)}; true or false is required`);
         }
@@ -2466,6 +2470,37 @@ function checkTakeLayers(c: Check, value: Json): void {
   });
 }
 
+/**
+ * `config.assemble.editor_receipts` (issue #946): `{receipts, required?}`.
+ * Shape refusals are the loader's own; a receipt whose `from_sha256` equals
+ * its `sha256` (no edit), or a `file` receipted twice, is `CONFIG_EDITOR_RECEIPT`.
+ * Whether the file exists and hashes to `sha256` is read at assemble
+ * (`src/editreceipt.ts`), where the file is.
+ */
+function checkEditorReceipts(c: Check, value: Json): void {
+  const at = 'config.assemble.editor_receipts';
+  const o = c.object(at, value, ['receipts'], ['required']);
+  if (o === null) return;
+  if ('required' in o && typeof o.required !== 'boolean') c.fail('CONFIG_FIELD_TYPE', `${at}.required`, `is ${show(o.required)}; true or false is required`);
+  if (!('receipts' in o) || !c.array(`${at}.receipts`, o.receipts, false)) return;
+  const seen = new Map<string, number>();
+  (o.receipts as Json[]).forEach((v, i) => {
+    const p = `${at}.receipts[${i}]`;
+    const r = c.object(p, v, ['file', 'sha256', 'from_sha256', 'editor'], []);
+    if (r === null) return;
+    if ('file' in r && c.string(`${p}.file`, r.file)) {
+      const file = r.file as string;
+      if (seen.has(file)) c.fail('CONFIG_EDITOR_RECEIPT', `${p}.file`, `names "${file}" again (first at receipts[${seen.get(file)}]); one receipt per file is required`);
+      else seen.set(file, i);
+    }
+    for (const k of ['sha256', 'from_sha256'] as const) {
+      if (k in r && (typeof r[k] !== 'string' || !SHA256_PATTERN.test(r[k] as string))) c.fail('CONFIG_FIELD_TYPE', `${p}.${k}`, `is ${show(r[k])}; ${SHA256_RULE} is required`);
+    }
+    if ('editor' in r) c.string(`${p}.editor`, r.editor);
+    if (typeof r.sha256 === 'string' && r.sha256 === r.from_sha256) c.fail('CONFIG_EDITOR_RECEIPT', `${p}.from_sha256`, `is ${r.from_sha256}, the receipt's own sha256; the bytes the edit started from are required, and an edit that left the bytes unchanged is not an edit`);
+  });
+}
+
 function checkSeam(c: Check, a: Record<string, Json>): void {
   if ('seam' in a && !(SEAM_RULES as readonly unknown[]).includes(a.seam)) {
     c.fail('CONFIG_FIELD_TYPE', 'config.assemble.seam', `is ${show(a.seam)}; one of ${SEAM_RULES.join(', ')} is required`);
@@ -2474,7 +2509,7 @@ function checkSeam(c: Check, a: Record<string, Json>): void {
 
 function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: string[]; patches: string[]; cuts: string[] } {
   const required = sectionRequired(door, 'assemble');
-  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take', 'seam']);
+  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take', 'seam', 'editor_receipts']);
   if (a === null) return { parts: [], patches: [], cuts: [] };
   checkSeam(c, a);
   if (required.includes('plan') && !('plan' in a)) {
@@ -2512,6 +2547,7 @@ function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: s
   checkKeepUnderOccluders(c, a, parts);
   if ('extend_painting' in a) checkPaintingExtensions(c, a.extend_painting);
   if ('take' in a) checkTakeLayers(c, a.take);
+  if ('editor_receipts' in a) checkEditorReceipts(c, a.editor_receipts);
   if ('extend_below_crop' in a && c.array(`${p}.extend_below_crop`, a.extend_below_crop, false)) {
     (a.extend_below_crop as Json[]).forEach((entry, i) => {
       const at = `${p}.extend_below_crop[${i}]`;

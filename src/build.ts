@@ -85,6 +85,7 @@ import {
 import { besideIdleLine, checkSummaryLine, inputFileRecord, type InputFileRecord, CLOTH_LINE, type ClothLine, clothWarnText, figureOpeningLines, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamWarnText, motionJointContactLines, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, environmentLine, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, readCheckEnvironment, readWindBand, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR, WIND_BAND_LINE, windBandLines } from './check.ts';
 import { type Cut, type Extend, type Limb, loadConfigAndAnimations, loadConfigWithBytes, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
 import { coreCompileGuideLine, failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
+import { editedConfigImages, editedRunImages, missingReceipts, readEditorReceipts } from './editreceipt.ts';
 import type { MeshQualityReport, MotionSchedule } from '@rig-c/core/mesh';
 import { encodeGif } from './gif.ts';
 import { CONTROL_SUFFIX, withAnimations } from './motion.ts';
@@ -333,7 +334,11 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const cfg = loadEarlyConfig(input.config, 'assemble');
   const seam = input.seam ?? cfg.assemble.seam ?? DEFAULT_SEAM_RULE;
   const src = readSource(input.source);
-  const runs = applyTakenLayers(readRuns(input.full, input.head), src, cfg, input.config);
+  const read = readRuns(input.full, input.head);
+  // Issue #946: every declared receipt is held to its file, and under `required` every edited image needs one, before anything is assembled.
+  const receipts = readEditorReceipts(cfg.assemble.editor_receipts, input.config);
+  refuseIfAny([...receipts.problems, ...missingReceipts(receipts, [...editedRunImages(read), ...editedConfigImages(input.config, cfg.assemble.cuts ?? [], cfg.limbs)])]);
+  const runs = applyTakenLayers(read, src, cfg, input.config);
   for (const note of runs.notes) log(`note: ${note}`);
   const fields = stageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
   const under = readUnders(input.config, fields.cuts);
@@ -492,6 +497,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       if (invalidFocus.length > 0) { altProblems.push(...invalidFocus); continue; }
     }
     const altRuns = readRuns(alt.full, alt.head ?? null);
+    altProblems.push(...missingReceipts(receipts, [...editedRunImages(altRuns, `alternate set "${alt.name}" `), ...editedConfigImages(input.config, alt.cuts ?? [], undefined, `${alt.at}.cuts`)]));
     const hidesSet = new Set(alt.hides ?? []);
     const declaredSlots = alt.parts !== undefined ? alt.parts.filter((p) => !hidesSet.has(p)) : baseSlots.filter((p) => !hidesSet.has(p));
     const coveredSet = new Set(declaredSlots);
