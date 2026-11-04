@@ -2652,10 +2652,12 @@ export const GROUND_RING_SHARE_LIMIT = 0.02;
  * Issue #996: the WARN for a ground declared or defaulted `plain` whose border ring
  * is not one colour (more than {@link GROUND_RING_SHARE_LIMIT} of it reads as
  * figure). Report-level only: it never changes the ground and never refuses. Null
- * when the ground is declared `busy` or the share is at or under the limit.
+ * when the ground is declared `busy` or the share is at or under the limit, and under
+ * `project: core`: only the visible rule's paintingEdges reads the ground, so under
+ * core the declaration changes nothing and there is nothing to warn about.
  */
-export function groundWarning(share: number, ground: Ground | undefined): Problem | null {
-  if ((ground ?? DEFAULT_GROUND) !== 'plain' || share <= GROUND_RING_SHARE_LIMIT) return null;
+export function groundWarning(share: number, ground: Ground | undefined, rule: ProjectRule): Problem | null {
+  if (rule !== 'visible' || (ground ?? DEFAULT_GROUND) !== 'plain' || share <= GROUND_RING_SHARE_LIMIT) return null;
   const pct = (100 * share).toFixed(1);
   return { code: 'ASSEMBLE_GROUND_PLAIN', object: 'config.assemble.ground', detail: `${pct} % of the border ring is not one colour: either the ground is not plain or the figure crosses the border; if it is the ground, declare assemble.ground: busy` };
 }

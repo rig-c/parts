@@ -810,8 +810,8 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   if (figurePath !== null) writePng(figurePath, result.figure as Raster);
   const [W, H] = result.parts.rig_size;
   log(`rig-parts assemble: ${result.images.length} part(s) on a ${W}x${H} rig (${result.parts.scale_rig_per_source} rig px per source px), seam rule ${result.seamRule}, projection rule ${result.projectRule}`);
-  // Issue #996: a ground declared or defaulted plain whose border ring is not one colour.
-  const groundWarn = groundWarning(result.groundShare, fields.ground);
+  // Issue #996: a ground declared or defaulted plain whose border ring is not one colour, under project: visible only.
+  const groundWarn = groundWarning(result.groundShare, fields.ground, result.projectRule);
   if (groundWarn !== null) log(`  WARN  ${groundWarn.code}: ${groundWarn.object} — ${groundWarn.detail}`);
   // Issue #953: what the painting's edges resolved, under the visible rule only.
   if (result.paintingEdges !== undefined) {

@@ -73,10 +73,10 @@ export function runGroundConfigChecks(dir: string, say: Say): void {
     }
   }
   writePng(join(dir, 'painting-busy.png'), busyPainting);
-  const run = (name: string, config: Record<string, unknown>, painting: string) => {
+  const run = (name: string, config: Record<string, unknown>, painting: string, project: 'core' | 'visible' = 'visible') => {
     writeFileSync(join(dir, 'config.json'), JSON.stringify(config));
     const out = join(dir, name);
-    const q = spawnSync(process.execPath, [join(ROOT, 'cli.ts'), 'assemble', '--config', join(dir, 'config.json'), '--source', join(dir, painting), '--full', join(dir, 'full'), '--head', join(dir, 'head'), '--out', out, '--project', 'visible'], { encoding: 'utf8', cwd: ROOT });
+    const q = spawnSync(process.execPath, [join(ROOT, 'cli.ts'), 'assemble', '--config', join(dir, 'config.json'), '--source', join(dir, painting), '--full', join(dir, 'full'), '--head', join(dir, 'head'), '--out', out, '--project', project], { encoding: 'utf8', cwd: ROOT });
     const text = (q.stdout ?? '') + (q.stderr ?? '');
     return { status: q.status, warned: text.includes('WARN  ASSEMBLE_GROUND_PLAIN: config.assemble.ground'), text, out };
   };
@@ -91,6 +91,15 @@ export function runGroundConfigChecks(dir: string, say: Say): void {
     'GC9963_GROUND_WARN_FIRES_ON_A_BUSY_RING_UNLESS_DECLARED_BUSY',
     got.every((r) => r.status === 0 && r.warned === r.warn) && plainPainting.width === w,
     JSON.stringify(got.map((r) => ({ name: r.name, status: r.status, warned: r.warned, expected: r.warn, ...(r.status === 0 && r.warned === r.warn ? {} : { text: r.text.slice(-400) }) }))),
+  );
+  // The WARN's reach: under project: visible, where paintingEdges reads the ground. The same striped ring, field absent,
+  // is silent under core (the mutant would be a WARN there) and warns under visible (the positive control).
+  const underCore = run('busy-absent-core', base, 'painting-busy.png', 'core');
+  const underVisible = run('busy-absent-visible', base, 'painting-busy.png', 'visible');
+  say(
+    'GC9965_GROUND_WARN_PRINTS_UNDER_VISIBLE_ONLY',
+    underCore.status === 0 && !underCore.warned && underVisible.status === 0 && underVisible.warned,
+    `striped ring, ground absent: core exit ${underCore.status}, WARN ${underCore.warned}; visible exit ${underVisible.status}, WARN ${underVisible.warned}`,
   );
   // Declared plain is the absent path, byte for byte, under visible.
   const absent = run('plain-absent-again', base, 'painting.png');
@@ -125,14 +134,16 @@ export function runGroundUnitChecks(say: Say): void {
       s0 === 0 &&
       Math.abs(s35 - 35 / 1792) < 1e-12 &&
       Math.abs(s36 - 36 / 1792) < 1e-12 &&
-      groundWarning(s0, undefined) === null &&
-      groundWarning(s35, 'plain') === null &&
-      groundWarning(s36, undefined) !== null &&
-      groundWarning(s36, 'plain') !== null &&
-      groundWarning(s36, 'busy') === null &&
-      groundWarning(0.464, 'busy') === null &&
+      groundWarning(s0, undefined, 'visible') === null &&
+      groundWarning(s35, 'plain', 'visible') === null &&
+      groundWarning(s36, undefined, 'visible') !== null &&
+      groundWarning(s36, 'plain', 'visible') !== null &&
+      groundWarning(s36, 'busy', 'visible') === null &&
+      groundWarning(0.464, 'busy', 'visible') === null &&
+      groundWarning(s36, undefined, 'core') === null &&
+      groundWarning(0.464, 'plain', 'core') === null &&
       GROUND_RING_SHARE_LIMIT === 0.02;
-    const text = groundWarning(s36, undefined)?.detail ?? '';
+    const text = groundWarning(s36, undefined, 'visible')?.detail ?? '';
     say(
       'GU9965_RING_SHARE_AND_CUT_OFF',
       ok && text.startsWith('2.0 % of the border ring is not one colour: either the ground is not plain or the figure crosses the border; if it is the ground, declare assemble.ground: busy'),
@@ -251,7 +262,7 @@ export function runGroundExampleChecks(examples: readonly string[], heavy: strin
   });
   say(
     'GD9970_EXAMPLES_PLAIN_SILENT_AND_PLANTED_BUSY_WARNS',
-    rows.length > 0 && rows.every((r) => groundWarning(r.plain, undefined) === null && groundWarning(r.busy, undefined) !== null && groundWarning(r.busy, 'busy') === null),
+    rows.length > 0 && rows.every((r) => groundWarning(r.plain, undefined, 'visible') === null && groundWarning(r.busy, undefined, 'visible') !== null && groundWarning(r.busy, 'busy', 'visible') === null),
     rows.map((r) => `${r.name}: plain ${r.plain.toFixed(4)}, planted busy ${r.busy.toFixed(4)}`).join('; '),
   );
   if (heavy === null) return;

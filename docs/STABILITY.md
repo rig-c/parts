@@ -235,8 +235,8 @@ painting).
 `assemble.ground` accepts `plain` or `busy` (issue #996). Invalid values refuse
 as `CONFIG_FIELD_TYPE` at `config.assemble.ground`; an absent field and `plain`
 preserve existing output bytes. It is read by `visible` only, whose bytes are
-not promised. The `ASSEMBLE_GROUND_PLAIN` warning is a report line and never
-changes output.
+not promised. The `ASSEMBLE_GROUND_PLAIN` warning prints under `visible` only, is a
+report line and never changes output.
 
 `TY14` holds the set of field names in backticks above to the set of names the
 loader's object checks spell (every `c.object(…)` in `src/config.ts`, with the lists
