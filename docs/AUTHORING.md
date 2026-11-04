@@ -5124,6 +5124,9 @@ those settings. Changing a config seed alone cannot change a no-config run.
 | <a id="ASSEMBLE_PAINTING_EXTENSION_CONFLICT"></a>`ASSEMBLE_PAINTING_EXTENSION_CONFLICT` | two declared final parts can reach the same eligible painting pixel without explicit precedence | make their reachable claims disjoint, or declare a unique nonnegative integer `order` on every entry; lower orders claim first, never array order |
 | <a id="ASSEMBLE_PAINTING_CANVAS"></a>`ASSEMBLE_PAINTING_CANVAS` | a callable extension stage receives a part outside the rig canvas | pass the final in-canvas assembled stack with its crop offsets |
 | <a id="ASSEMBLE_PART_OPAQUE"></a>`ASSEMBLE_PART_OPAQUE` | a part ended with no opaque pixel | drop the entry, or take the tag from the other run |
+| <a id="DIFF_COMPONENTS_INPUT"></a>`DIFF_COMPONENTS_INPUT` | `diff-components` needs readable PNG stack/painting/part images, a writable `--out` target when writing, explicit parts, positive integer floor, a finite threshold in [0,255], matching native dimensions and valid coverage/domain inputs; flags must be unique and known, with nonempty values | Supply the named missing or invalid input; no resampling or inferred figure is performed |
+| <a id="DIFF_COMPONENTS_BINDING"></a>`DIFF_COMPONENTS_BINDING` | The shipped report reader found a stack or painting SHA-256 different from the supplied bytes; found and required digests are printed | Regenerate against the bytes being reviewed |
+| <a id="DIFF_COMPONENTS_REPORT"></a>`DIFF_COMPONENTS_REPORT` | Invalid report JSON/spec, or its exhaustive inventory, definition, paths, domain or coverage differs from remeasurement; capped inventories are refused | Regenerate the complete versioned report against the same input paths, bytes, parts and figure domain |
 | <a id="ASSEMBLE_PINHOLES"></a>`ASSEMBLE_PINHOLES` | the requirements file declares `pinholes.required: true` and the flat parts stack holds a pinhole: an 8-connected opening (alpha 0 on every part, enclosed by the parts' alpha above 0) whose every pixel the painting shows as figure. One refusal per pinhole, largest first, naming its box, its px and the parts bordering it; nothing is written (issue #944, [Pinholes at rest](#pinholes-at-rest-issue-944)) | `assemble.plan` / `assemble.take` / the head pass: take the pinhole's pixels from a layer that holds them ([Source before scissors](#source-before-scissors)); where no layer holds them, the defect is the input's. Without the declaration the bar reports SKIP |
 | <a id="ASSEMBLE_PATCH_BOX_INSIDE"></a>`ASSEMBLE_PATCH_BOX_INSIDE` | a patch's box reaches past the rig (the painting times `rig_scale`; the detail gives the size) | that patch's `box` — it is in rig pixels, not painting pixels |
 | <a id="ASSEMBLE_PATCH_OPAQUE"></a>`ASSEMBLE_PATCH_OPAQUE` | a patch takes no pixel: a `"silhouette"` patch whose box holds none of the figure | move the box onto the figure, or `"alpha": "box"` |
@@ -7715,3 +7718,48 @@ contract records the measured grid residual and preserves its seam readings.
 No-image builds keep the legacy output bytes. `comfy seethrough --config <file> --depth-run <full|head>`
 uses the same opt-in; its default captures art only. Standalone authored part
 references remain active declarations. See [the input contract and refusals](AUTHORING.md#per-layer-depth-sheets-773).
+
+### Whole-figure difference inventory
+
+`rig-parts diff-components --stack stack.png --painting painting.png --parts parts.json --floor 2 --out diff-components.json`
+writes `rig-parts-diff-components/1`. Supply the assembled stack and the painting
+**already in the same native canvas** (for a scaled assembly, use its rig-sized
+painting). Parts are read in manifest order from the `parts/` sibling directory.
+No registration or resampling occurs. For scene assemblies pass
+`--figure figure_rig.png`, the exact opaque black/white figure image used by
+assemble; omitting it explicitly selects the entire canvas.
+
+`--threshold` is caller-given, with the existing recomposite default 40:
+maximum absolute RGB-channel difference **strictly greater** than the threshold;
+alpha is not a difference channel. `--floor` is required, a positive integer;
+a component exactly at it is included. The floor and any supplied threshold must
+contain a number: blank values are refused, never converted to zero. Connectivity is 8. The report's
+`definition` records these values, native coordinates (y down, top-left),
+width/height, no resampling, the existing coverage alpha cut (>128), and the
+SHA-256 of the binary figure domain (`null` for the whole canvas).
+
+`stack` and `painting` each record the supplied path and SHA-256 of the exact
+PNG buffer decoded for measurement. `components` is uncapped and ordered by
+first pixel in row-major scan order. Each entry records `id` (`p<first pixel
+index>-n<pixel count>`), `px`, `box: {x,y,w,h}`, `coverage`, `uncovered_px` and
+`borders`. Coverage is `covered`, `uncovered` or `mixed`: a whole-error component
+can cross a part's edge, so a boolean would lose pixels. Borders use the existing
+hole convention: part pixels above the coverage cut touching a component in
+their 3x3 neighbourhood, counted once per part pixel, sorted by count then
+manifest order. A covered component may therefore name its own covering part.
+
+`below_floor: {count,px,uncovered_px}` accounts for all omitted components.
+Listed `px` plus `below_floor.px` equals `error_px`; listed `uncovered_px` plus
+`below_floor.uncovered_px` equals `uncovered_error_px`. The existing
+`parts.json.recomposite` block, including `holes_listed: 5`, is unchanged.
+
+Replace `--out` with `--verify diff-components.json` to use the shipped reader.
+Use the same paths and floor/threshold flags. It collects both source-binding mismatches before refusing. With matching bindings,
+it recomputes every field against the supplied parts and domain, refusing
+missing, capped or altered components, stale coverage and definition drift. Every
+changed, missing or extra inventory field names its path, the value found and the
+value required; independent differences are collected into one refusal.
+It does not authenticate a caller's chosen threshold or floor: consumers must
+compare those to their own policy. The report does not choose which components
+a consumer accepts. The named refusals are `DIFF_COMPONENTS_INPUT`,
+`DIFF_COMPONENTS_BINDING` and `DIFF_COMPONENTS_REPORT` in the rule table.

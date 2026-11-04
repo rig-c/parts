@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runDiffComponentChecks, runDiffComponentCliChecks, publicDiffControl } from './tools/check_diffcomponents.ts';
 import { runPaintingEdgeChecks } from './tools/check_painting_edges.ts';
 import { runProjectConfigChecks } from './tools/check_project_config.ts';
 import { runGroundConfigChecks, runGroundExampleChecks, runGroundUnitChecks } from './tools/check_ground.ts';
@@ -5192,6 +5193,8 @@ function usageDrift(run: (args: string[]) => { status: number; out: string }, su
 function runCliSuite(): number {
   section('cli: the command surface');
   const { say, bad } = counter();
+  const diffDir1005 = temp('diff-cli');
+  try { runDiffComponentCliChecks(diffDir1005, (name, ok, detail) => say(name, ok, detail, 'issue #1005: shipped command and reader on generated PNG bytes'), join(ROOT, 'cli.ts')); } finally { rmSync(diffDir1005, { recursive: true, force: true }); }
   const measureArgs829 = ['check', '--rig', 'fixture', '--out', 'result'];
   const buildArgs829 = ['build', '--config', 'fixture.json', '--out', 'result'];
   const missingArgs829 = ['check', '--rig'];
@@ -32126,6 +32129,7 @@ function runAssembleSuite(): number {
   const { say, bad } = counter();
   const dir = temp('assemble');
   try {
+    runDiffComponentChecks((name, ok, detail) => say(name, ok, detail, 'issue #1005: hand-counted whole-error components and planted report mutations'));
     runPaintingExtensionChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #848: public generated controls; explicit ownership, bounds and exact painting samples'));
     runPaintingEdgeChecks((name, ok, detail) => say(name, ok, detail, 'issue #953: under visible, a part edge takes the painting\'s line and coverage; every skip reason planted next to a positive strip'));
     runGroundUnitChecks((name, ok, detail) => say(name, ok, detail, 'issue #996: the ring share and its cut-off, and the busy-ground rules on a strip next to the plain mutant that takes the ground'));
@@ -35772,8 +35776,10 @@ function runAssembleExampleStage(ex: string, stage: AssembleStage): number {
       const provenanceOk = a.parts.parts.every(p => p.provenance !== undefined && provenanceAddsUp(p.provenance, p.opaque_px) &&
         !provenanceAddsUp({ ...p.provenance, edits: [...p.provenance.edits, { edit: 'cuts[999]', px: 1 }] }, p.opaque_px));
       const same = serializeParts(a.parts) === serializeParts(b.parts) && a.images.every((p, i) => Buffer.compare(Buffer.from(encodePngBytes(p.image)), Buffer.from(encodePngBytes(b.images[i].image))) === 0);
-      ok = same && provenanceOk && a.parts.parts.every((p) => p.opaque_px > 0);
-      detail = `${a.parts.parts.length} parts, two runs identical: ${same}; final provenance sums and each planted +1 edit refusal: ${provenanceOk}; ${figuresLine(a.figures)}`;
+      const inside1005 = a.figure === null ? null : Uint8Array.from({length:a.figure.width*a.figure.height},(_,p)=>a.figure!.data[p*4]===255?1:0);
+      const dc1005 = publicDiffControl(a.recomposite, sourceInRig(input.source, ...a.parts.rig_size), a.images, inside1005);
+      ok = same && provenanceOk && dc1005.ok && a.parts.parts.every((p) => p.opaque_px > 0);
+      detail = `${a.parts.parts.length} parts, two runs identical: ${same}; final provenance sums and each planted +1 edit refusal: ${provenanceOk}; ${dc1005.detail}; ${figuresLine(a.figures)}`;
     } catch (err) {
       detail = `refused or crashed: ${(err as Error).message.split('\n')[0]}`;
     }

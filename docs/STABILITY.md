@@ -49,6 +49,7 @@ defaults are the help's too, and none is guessed from the art.
 <!-- stable:commands -->
 | command | flags |
 | --- | --- |
+| `diff-components` | `--stack`, `--painting`, `--parts`, `--floor`; optional `--threshold`, `--figure`; exactly one of `--out`, `--verify` (issue #1005; exhaustive native error inventory, with byte-bound reader) |
 | `depth-prepare` | `--parts`, `--config`, `--out` (issue #897; separate numeric-depth recipe) |
 | `depth-apply` | `--parts`, `--manifest`, `--config`, `--rig-config`, `--out` (issue #897; original character config is read-only) |
 | `layers` | one positional path: a wrapper directory, a `layers.json` or a `.psd`; with it, optional `--export` (a directory to write the wrapper form into, issue #359); or `--template` with `--canvas` and no path; or a positional head run with `--full`, `--source`, `--config` together for `PLAN_HEAD_GARMENT_OVERLAP` (issue #826) |
