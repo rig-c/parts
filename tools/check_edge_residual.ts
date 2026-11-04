@@ -52,4 +52,16 @@ export function runEdgeResidualChecks(say: Say): void {
   const mixed = edgePairResiduals(mixedParts, painting, composite(mixedParts), ERROR_LIMIT);
   const row = mixed.pairs.find(p => p.front === 'front' && p.back === 'back')!;
   say('ED9551_ADDITIONAL_ALPHA_CONTRIBUTION_IS_UNAVAILABLE', row.status === 'unavailable' && row.residual_px === null && row.unavailable.some(s => s.includes('partial-alpha')), JSON.stringify(row));
+  const accountingBack = layer(BLUE, () => 255);
+  accountingBack.data[(6 * W + 10) * 4 + 3] = 254;
+  const accountingParts = [part('back', accountingBack), part('front', layer(RED, x => x < 10 ? 255 : 0))];
+  const accountingComposite = composite(accountingParts);
+  const accountingPainting = { ...accountingComposite, data: new Uint8ClampedArray(accountingComposite.data) };
+  for (const y of [2, 6]) accountingPainting.data.set([...RED, 255], (y * W + 10) * 4);
+  const accounting = edgePairResiduals(accountingParts, accountingPainting, accountingComposite, ERROR_LIMIT);
+  const accountingPair = accounting.pairs[0];
+  say('ED9552_UNAVAILABLE_PAIR_RETAINS_BOTH_ERROR_COMPONENTS_IN_HEADLINE',
+    accountingPair.status === 'unavailable' && accountingPair.back_pixels.count === 1 &&
+      accountingPair.residual_px === null && accounting.summary.residual_px === 0 && accounting.summary.unassigned_error_px === 2,
+    JSON.stringify({ pair: accountingPair, summary: accounting.summary }));
 }

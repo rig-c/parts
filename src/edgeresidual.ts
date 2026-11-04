@@ -164,7 +164,12 @@ export function edgePairResiduals(parts: readonly ResidualPart[], painting: Rast
       for (const p of pixels) { const x = p % W, y = Math.floor(p / W); left = Math.min(left, x); top = Math.min(top, y); right = Math.max(right, x + 1); bottom = Math.max(bottom, y + 1); }
       row.box = [left, top, right - left, bottom - top];
     }
-    if (row.unavailable.length > 0) { row.status = 'unavailable'; row.residual_px = null; }
+    if (row.unavailable.length > 0) {
+      row.status = 'unavailable';
+      row.residual_px = null;
+      // Retained candidates still count when this pair's attribution is unavailable.
+      unassigned += pixels.length;
+    }
     else if (row.status === 'measured') row.residual_px = pixels.length;
   }
   const pairs = [...rows.values()];

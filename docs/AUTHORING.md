@@ -755,7 +755,9 @@ Pairs without overlap or an exposed boundary carry an explicit skip reason.
 A hidden observation, a component touching multiple overlapping fronts, or a
 component with partial-alpha/additional foreground contribution is unavailable.
 Its `residual_px` is null. `unavailable_px` preserves the ambiguous population,
-and the summary also counts unassigned error pixels. A measured zero means zero
+and the summary also counts unassigned error pixels, including retained candidates
+from unavailable pairs. Its residual plus unassigned total accounts for every
+observed error pixel. A measured zero means zero
 candidates under this observation model. It does not identify the true painted
 hem or prove source material correct. Under `core` the visible pass and this
 report do not run. Reassembling that output removes a stale report file.
