@@ -3088,7 +3088,7 @@ export function checkSummaryLine(r: Pick<CheckReport, 'figures' | 'problems' | '
 }
 
 /** A block's status as {@link checkStatuses} reads it off `check.json`. */
-export type CheckStatus = 'PASS' | 'FAIL' | 'SKIP' | 'WARN' | 'CLEAR' | 'REPORTED';
+export type CheckStatus = 'PASS' | 'FAIL' | 'SKIP' | 'WARN' | 'CLEAR' | 'REPORTED' | 'UNCLASSIFIED';
 
 /**
  * Every block's status as `check.json` records it (issue #541), read off the figures object `check.json` is written

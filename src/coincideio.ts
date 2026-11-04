@@ -61,6 +61,6 @@ export function observeSupport(build: string, input: CheckInputs, supportSource?
     figure = silhouette;
   }
   report.unowned = unownedSupport(width, height, [{ name: 'setup union', mask: union }], figure);
-  report.status = report.pairs.some(p => (p.boundary_length_px ?? 0) > 0) || (report.unowned.area_px ?? 0) > 0 ? 'WARN' : 'REPORTED';
+  report.status = report.pairs.some(p => (p.boundary_length_px ?? 0) > 0) || (report.unowned.area_px ?? 0) > 0 ? 'WARN' : report.coverage.measured > 0 ? 'REPORTED' : 'UNCLASSIFIED';
   return report;
 }

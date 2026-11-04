@@ -32,6 +32,14 @@ export function runCoincideChecks(dir: string, say: Say): void {
   ] as const;
   for (const [name, ok] of checks) say(name, ok, JSON.stringify({ normal, defect, side, unavailable, unowned }));
 
+  const rawNormal = supportReport(6, 4, parts(whole), [], null);
+  const rawDefect = supportReport(6, 4, parts(left), [], null);
+  const rawSide = supportReport(6, 4, parts(left), [], null);
+  const disjoint = supportReport(6, 4, parts(mask(x => x < 2)), [], null);
+  say('CK1018_SUPPORT_RAW_NORMAL_OVERLAP', rawNormal.raw_pairs[0].overlap_area_px === 12 && rawNormal.status === 'UNCLASSIFIED', JSON.stringify(rawNormal.raw_pairs));
+  say('CK1019_SUPPORT_RAW_OWNERSHIP_UNKNOWN', JSON.stringify(rawDefect) === JSON.stringify(rawSide) && rawDefect.raw_pairs[0].boundary_length_px === 4 && rawDefect.raw_pairs[0].overlap_area_px === 0 && rawDefect.raw_pairs[0].classification === 'ownership unknown, unclassified' && supportLines(rawDefect)[0].includes('1 pairs adjacent, 0 classified (no extent witness)'), JSON.stringify(rawDefect.raw_pairs));
+  say('CK1020_SUPPORT_RAW_DISJOINT_ABSENT', disjoint.raw_pairs.length === 0, JSON.stringify(disjoint.raw_pairs));
+
   const noSource = supportReport(6, 4, parts(whole), [], null);
   say('CK1007_SUPPORT_SOURCE_ABSENCE', noSource.unowned.status === 'unavailable' && noSource.unowned.area_px === null && noSource.unowned.reason?.includes('--source') === true, JSON.stringify(noSource.unowned));
   const unchanged = JSON.stringify(parts(left));
