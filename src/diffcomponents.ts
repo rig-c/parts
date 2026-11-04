@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { COVERED_ALPHA, ERROR_LIMIT, coveredMask, errorMask, holeBorders, type PlacedPart } from './assemble.ts';
-import { PartsError } from './errors.ts';
+import { PartsError, type Problem } from './errors.ts';
 import { readParts } from './parts.ts';
 import { connectedComponents } from './raster/components.ts';
 import { decodePngBytes } from './raster/png.ts';
@@ -46,9 +46,6 @@ function inputFailure(object: string, detail: string): never {
 }
 function reportFailure(detail: string): never {
   throw new PartsError([{ code: 'DIFF_COMPONENTS_REPORT', object: 'diff components report', detail }]);
-}
-function bindingFailure(object: string, found: unknown, required: string): never {
-  throw new PartsError([{ code: 'DIFF_COMPONENTS_BINDING', object, detail: `sha256 is ${String(found)}; ${required} is required for the bytes actually measured` }]);
 }
 
 /** Hash and decode each source from the same buffer. No alignment or resampling. */
@@ -108,21 +105,36 @@ export function readDiffComponents(text: string, input: DiffInputs): DiffCompone
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { return reportFailure('requires valid JSON'); }
   if (!object(raw) || raw.spec !== DIFF_COMPONENTS_SPEC || !object(raw.stack) || !object(raw.painting) || !object(raw.definition)) return reportFailure(`requires ${DIFF_COMPONENTS_SPEC} with stack, painting and definition objects`);
+  const bindings: Problem[] = [];
   for (const key of ['stack', 'painting'] as const) {
     const binding = raw[key] as Record<string, unknown>;
     const required = sha(input[key].bytes);
-    if (binding.sha256 !== required) bindingFailure(key, binding.sha256, required);
+    if (binding.sha256 !== required) bindings.push({ code: 'DIFF_COMPONENTS_BINDING', object: key,
+      detail: `sha256 is ${String(binding.sha256)}; ${required} is required for the bytes actually measured` });
   }
+  if (bindings.length > 0) throw new PartsError(bindings);
   const floor = raw.definition.floor_px, threshold = raw.definition.threshold;
   if (typeof floor !== 'number' || typeof threshold !== 'number') return reportFailure('definition requires numeric floor_px and threshold');
   const expected = measureDiffComponents(input, floor, threshold);
-  // Parse objects recursively with sorted keys: JSON property order is not evidence.
-  const canonical = (v: unknown): string => {
-    if (Array.isArray(v)) return '[' + v.map(canonical).join(',') + ']';
-    if (object(v)) return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + canonical(v[k])).join(',') + '}';
-    return JSON.stringify(v);
+  const differences: Problem[] = [];
+  const shown = (v: unknown): string => v === undefined ? 'missing' : Array.isArray(v) ? `array with ${v.length} entries` : object(v) ? `object with fields ${Object.keys(v).sort().join(', ')}` : JSON.stringify(v);
+  const fail = (path: string, found: unknown, required: unknown): void => {
+    differences.push({ code: 'DIFF_COMPONENTS_REPORT', object: path,
+      detail: `found ${shown(found)}; required ${shown(required)} from the exhaustive measurement; regenerate the report` });
   };
-  if (canonical(raw) !== canonical(expected)) return reportFailure('inventory or definition differs from the exhaustive measurement of the supplied bytes, parts and domain; regenerate the report');
+  const compare = (found: unknown, required: unknown, path: string): void => {
+    if (Array.isArray(required)) {
+      if (!Array.isArray(found)) { fail(path, found, required); return; }
+      if (found.length !== required.length) fail(`${path}.length`, found.length, required.length);
+      for (let i = 0; i < Math.max(found.length, required.length); i++) compare(found[i], required[i], `${path}[${i}]`);
+    } else if (object(required)) {
+      if (!object(found)) { fail(path, found, required); return; }
+      for (const key of Object.keys(required)) compare(found[key], required[key], `${path}.${key}`);
+      for (const key of Object.keys(found).sort()) if (!Object.hasOwn(required, key)) fail(`${path}.${key}`, found[key], undefined);
+    } else if (found !== required) fail(path, found, required);
+  };
+  compare(raw, expected, 'report');
+  if (differences.length > 0) throw new PartsError(differences);
   return expected;
 }
 

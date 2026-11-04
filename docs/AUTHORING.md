@@ -7604,9 +7604,11 @@ Listed `px` plus `below_floor.px` equals `error_px`; listed `uncovered_px` plus
 `parts.json.recomposite` block, including `holes_listed: 5`, is unchanged.
 
 Replace `--out` with `--verify diff-components.json` to use the shipped reader.
-Use the same paths and floor/threshold flags. It binds both source buffers,
-then recomputes every field against the supplied parts and domain, refusing
-missing, capped or altered components, stale coverage and definition drift.
+Use the same paths and floor/threshold flags. It collects both source-binding mismatches before refusing. With matching bindings,
+it recomputes every field against the supplied parts and domain, refusing
+missing, capped or altered components, stale coverage and definition drift. Every
+changed, missing or extra inventory field names its path, the value found and the
+value required; independent differences are collected into one refusal.
 It does not authenticate a caller's chosen threshold or floor: consumers must
 compare those to their own policy. The report does not choose which components
 a consumer accepts. The named refusals are `DIFF_COMPONENTS_INPUT`,
