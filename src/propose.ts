@@ -1,3 +1,4 @@
+import { dustOf } from './mesh.ts';
 import { explicitWeightRows, regionBone, type RegionSpec } from './config.ts';
 /**
  * The propose stage: bone origins, mesh candidate lists, regions and a default
@@ -132,10 +133,11 @@ import { explicitWeightRows, regionBone, type RegionSpec } from './config.ts';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { drawText, GLYPH_H } from '@rig-c/core/font5x7';
-import { type BoneEntry, type CharacterConfig, type ConfigConstraint, type ConfigStop, contourRegionsOf, deriveBustRegions, type Limb, type MeshSpec, type PartBinding, parseConfig, type Point, type Segment, type SkeletonSections, turnRidersByBone } from './config.ts';
+import { type BoneEntry, type CharacterConfig, type ConfigConstraint, type ConfigStop, type ContourBustSpec, type ContourSpec, contourRegionsOf, deriveBustRegions, type Limb, type MeshSpec, type PartBinding, parseConfig, type Point, type Segment, type SkeletonSections, turnRidersByBone } from './config.ts';
 export { contourRegionsOf, deriveBustRegions };
 import { computeExactFrameTransforms, cropToSpineY, normaliseDegrees, toWorld } from './coords.ts';
 import { PartsError, type Problem, refuseIfAny } from './errors.ts';
+import { GRID } from './contour.ts';
 import { eyeLineDegrees, type FrameFeature, headAxes, type HeadAxes, headFrame, type HeadFrame } from './headframe.ts';
 import { type LayerSet, OPAQUE_ALPHA_ABOVE } from './layers.ts';
 import { PAINTING_RUN, type PartRecord, type PartsFile, readParts } from './parts.ts';
@@ -157,7 +159,7 @@ import { configRoles, type RoleOf } from './structure.ts';
 import { AUTHOR_NO_ROLE, isAuthorTag } from './tags.ts';
 import { TURN_BONE, TURN_CARRIER_TAG, TURN_PLACES, TURN_RIDER_OFFSET, TURN_RIDER_TAGS, turnFractions, turnNearest, turnPivot, turnRiderDepth, type TurnSpec } from './turn.ts';
 import { edgeLength } from './length.ts';
-import { bonePlaces, jointLine, type JointLine, limbCrossing, limbPolyline, limbRun, limbWidth, nearestLimb, nearestOnLine, offLineFigure, type Pt } from './limbs.ts';
+import { bonePlaces, jointLine, type JointLine, limbCrossing, limbPolyline, limbRun, limbWidth, nearestLimb, nearestOnLine, offLineFigure, segmentOf, type Pt } from './limbs.ts';
 import { type BranchSqueezeFinding, branchSqueezes, chainSqueezes, type SqueezeFinding } from './squeeze.ts';
 import { backHairMasses, type BackHairMass, backHairMassTrees, INFLUENCE_RADIUS_CELLS, RECIPE_BACK_HAIR_CHAINS, RECIPE_LENGTH_RATIO, chainConstraints, clothNote, type ClothRecipe, type ClothRecipes, type ClothTarget, CLOTH_TARGETS, draftTrees, spanCrosses, swingName, type Tail, tailOverlap, type TailOverlap, type TailSpan, treeConstraints, type TreeChain, type TreeInput, type TreeMassInput } from './cloth.ts';
 import { TEXTURE_STRETCH_CEILING } from './check.ts';
@@ -1403,13 +1405,39 @@ const SIDES = [
   ['l', -1],
 ] as const;
 
+/** Declared bust landmarks in rig pixels, or an explicit omission reason. */
+export interface BustDraft {
+  landmarks?: { apex_r: Point; apex_l: Point; cleavage?: Point };
+  noBust?: string;
+}
+
+/** Read only the declared landmark fields. Geometry is checked by checkProposal's config reader. */
+export function readBustLandmarks(raw: unknown): NonNullable<BustDraft['landmarks']> {
+  const problems: Problem[] = [];
+  const record = typeof raw === 'object' && raw !== null && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : {};
+  for (const key of Object.keys(record)) {
+    if (!['apex_r', 'apex_l', 'cleavage'].includes(key)) problems.push({ code: 'PROPOSE_BUST_INPUT', object: `landmarks.${key}`, detail: 'is unknown. Give apex_r, apex_l and optional cleavage in rig pixels' });
+  }
+  for (const key of ['apex_r', 'apex_l', 'cleavage']) {
+    if (key === 'cleavage' && record[key] === undefined) continue;
+    const value = record[key];
+    if (!Array.isArray(value) || value.length !== 2 || !value.every(n => typeof n === 'number' && Number.isFinite(n))) {
+      problems.push({ code: 'PROPOSE_BUST_INPUT', object: `landmarks.${key}`, detail: `is ${JSON.stringify(value) ?? 'absent'}. A finite [x, y] point in rig pixels is required` });
+    }
+  }
+  refuseIfAny(problems);
+  return record as NonNullable<BustDraft['landmarks']>;
+}
+
 /**
  * Propose bones, meshes, regions and an idle from the parts. With `joints`
  * (`propose --keypoints`, issue #75), a joint the file gives a position is
  * used as given in place of the body-ratio rule for the bone it places, and
  * every joint the proposer could use gets one note saying how it was used or
- * which rule stood in; without it every value and note is the one this
- * function wrote before the parameter existed.
+ * which rule stood in. Bust landmarks are supplied separately through `bust`.
+ * Their absence leaves the contour torso with a missing-landmarks note.
  */
 export function propose(
   P: PartSet,
@@ -1418,8 +1446,9 @@ export function propose(
   gridRule: GridRule = DEFAULT_GRID_RULE,
   cloth: ClothRecipes | null = null,
   chainRule = true,
+  bust: BustDraft = {},
 ): Proposal {
-  return proposeWithBasis(P, joints, wristSnap, gridRule, cloth, chainRule).proposal;
+  return proposeWithBasis(P, joints, wristSnap, gridRule, cloth, chainRule, bust).proposal;
 }
 
 /**
@@ -1439,7 +1468,12 @@ export function proposeWithBasis(
   gridRule: GridRule = DEFAULT_GRID_RULE,
   cloth: ClothRecipes | null = null,
   chainRule = true,
+  bust: BustDraft = {},
 ): { proposal: Proposal; basis: ProposalBasis; draftLint: DraftLintFinding[] } {
+  if (bust.noBust !== undefined && (bust.noBust.trim().length === 0 || bust.landmarks !== undefined)) {
+    throw new PartsError([{ code: 'PROPOSE_BUST_INPUT', object: 'bust draft', detail: 'give either landmarks or a non-blank noBust reason, not both' }]);
+  }
+  if (bust.landmarks !== undefined) readBustLandmarks(bust.landmarks);
   // Issue #230: a piece is not given its base's rule a second time, which
   // needs to know which part is the piece. A file that cannot say is refused
   // here, and only here: every other reader of parts.json still takes it.
@@ -3414,6 +3448,117 @@ export function proposeWithBasis(
         `trunk segments (${laid.join(', ')}): laid along neck -> hip, the line the chest was placed on (${pyFixed((Math.atan2(trunk.u[0], trunk.u[1]) * 180) / Math.PI, 1)} degrees off the screen's downward vertical, positive towards +x): each [bone, from, to] segment the rule drafts down the screen runs along that line instead, and the waist segment across it`,
       );
     }
+  }
+  // Issue #986: only the chest carrier changes mode. Other garments retain their drafting rules.
+  const chestCarriers = figPart === null
+    ? tw.filter(p => isOn(P.alpha(p), chest[0], chest[1]))
+    : [];
+  if (figPart === null && chestCarriers.length > 1) {
+    throw new PartsError([{ code: 'PROPOSE_BUST_INPUT', object: 'chest carrier', detail: `chest at ${fmtAt(chest)} lies on ${chestCarriers.map(p => p.name).join(', ')}. Separate the chest-holding topwear so exactly one part covers it` }]);
+  }
+  const torsoName = figPart === null ? chestCarriers[0]?.name : 'trunk_chest';
+  if (torsoName !== undefined) {
+    const source = figPart ?? chestCarriers[0];
+    const lattice = meshes[torsoName];
+    const recipeTag = clothMeshed.get(torsoName);
+    if (recipeTag !== undefined && recipeOf(recipeTag)?.influence !== undefined) {
+      throw new PartsError([{
+        code: 'PROPOSE_BUST_INPUT', object: `config.cloth.${JSON.stringify(recipeTag)}.influence`,
+        detail: `declares an influence mesh for chest-holding topwear "${torsoName}". This draft requires a contour torso. Remove influence from this recipe or separate the torso from its cloth part`,
+      }]);
+    }
+    let torsoImage = P.images.get(source.name) as Raster;
+    if (figPart !== null) {
+      // Read the future trunk segment, using the same ownership and joint cuts as assemble.
+      const places = bonePlaces(bones);
+      const sharing = Object.entries(limbs).filter(([, limb]) => limb.segments.some(segment => segment.from === source.name));
+      const trunkIndex = sharing.findIndex(([name]) => name === 'trunk');
+      const polylines = sharing.map(([, limb]) => limbPolyline(limb, places));
+      const trunkPoints = polylines[trunkIndex];
+      const lines = [null, jointLine(trunkPoints[0], trunkPoints[1], trunkPoints[2]), jointLine(trunkPoints[1], trunkPoints[2], null)];
+      const data = new Uint8ClampedArray(torsoImage.data);
+      for (let y = 0; y < torsoImage.height; y++) {
+        for (let x = 0; x < torsoImage.width; x++) {
+          const alpha = (y * torsoImage.width + x) * 4 + 3;
+          if (data[alpha] === 0) continue;
+          const wx = source.x + x;
+          const wy = source.y + y;
+          if (nearestLimb(polylines, wx, wy) !== trunkIndex || segmentOf(lines, 0, 2, wx, wy) !== 1) data[alpha] = 0;
+        }
+      }
+      torsoImage = { ...torsoImage, data };
+    }
+    const dust = dustOf(torsoImage);
+    if ('keep' in dust) {
+      throw new PartsError([{ code: 'PROPOSE_TORSO_ISLANDS', object: `chest carrier "${torsoName}"`, detail: `${dust.keep}. Separate the real pieces before drafting a contour torso` }]);
+    }
+    if (dust.stray !== undefined) notes.push(`${torsoName}: contour dust rule leaves out ${dust.dust.length} island(s), ${dust.dust.reduce((sum, pixels) => sum + pixels, 0)} px; contour.stray=${dust.stray}`);
+    const [, radius] = gridR(source);
+    const segments: Segment[] = lattice !== undefined && 'grid' in lattice ? lattice.segments : [['chest', rnd(neckAt), rnd(hip)]];
+    // Same figure formulas as mesh-draft's figureRules (issue #265). Importing meshdraft here would cycle through propose.
+    const tolerance = Math.max(1, Math.round(fig.height / 554));
+    const contour: ContourSpec = {
+      tolerance,
+      margin: tolerance,
+      spacing: fig.grid,
+      maxEdge: fig.grid,
+      ...(dust.stray === undefined ? {} : { stray: dust.stray }),
+    };
+    if (bust.noBust !== undefined) {
+      notes.push(`${torsoName}: contour bust omitted for the declared reason: ${bust.noBust}`);
+    } else if (bust.landmarks === undefined) {
+      throw new PartsError([{ code: 'PROPOSE_BUST_INPUT', object: `chest-holding torso "${torsoName}"`,
+        detail: 'needs a declared bust: give --bust-landmarks <file> or --no-bust "<reason>"' }]);
+    } else {
+      const { apex_r, apex_l } = bust.landmarks;
+      let cleavage = bust.landmarks.cleavage;
+      if (cleavage === undefined) {
+        // #475's clearance identity requires cleavage on the apex segment, between the two apices.
+        const apexDeltaX = apex_l[0] - apex_r[0];
+        const apexDeltaY = apex_l[1] - apex_r[1];
+        const midlineDeltaX = hip[0] - neckAt[0];
+        const midlineDeltaY = hip[1] - neckAt[1];
+        const cross = apexDeltaX * midlineDeltaY - apexDeltaY * midlineDeltaX;
+        const share = ((neckAt[0] - apex_r[0]) * midlineDeltaY - (neckAt[1] - apex_r[1]) * midlineDeltaX) / cross;
+        if (!Number.isFinite(share) || share <= 0 || share >= 1) {
+          throw new PartsError([{
+            code: 'PROPOSE_BUST_INPUT', object: 'landmarks.cleavage',
+            detail: `the neck-to-hip midline ${fmtAt(neckAt)} -> ${fmtAt(hip)} has no unique crossing inside apex_r ${fmtAt(apex_r)} -> apex_l ${fmtAt(apex_l)}. Declare cleavage explicitly or place the apices on opposite sides of the torso midline`,
+          }]);
+        }
+        // Derived coordinates use the same fixed-point grid the contour config reader requires.
+        cleavage = [
+          pyRound((apex_r[0] + share * apexDeltaX) * GRID) / GRID,
+          pyRound((apex_r[1] + share * apexDeltaY) * GRID) / GRID,
+        ];
+      }
+      const landmarks: ContourBustSpec = { apex_r, apex_l, cleavage };
+      contour.bust = landmarks;
+      for (const side of ['r', 'l'] as const) {
+        const name = `boob_${side}`;
+        const apex = landmarks[`apex_${side}`];
+        // Unlike ratio placements, declared landmarks retain their subpixel coordinates.
+        bones.push({ name, parent: 'chest', at: [apex[0], apex[1]] });
+        records.push({ bone: name, entry: name, origin: placement('derived', `declared bust landmark apex_${side} in rig pixels`, {
+          parts: [source.name], bones: ['chest'],
+        }), tip: null });
+      }
+      notes.push(`${torsoName}: contour.bust from declared apex_r/apex_l. Cleavage ${bust.landmarks.cleavage === undefined ? 'derived at the apex segment crossing of the neck-to-hip midline' : 'declared'}. Bones boob_r/boob_l are parented to chest`);
+    }
+    const chains = new Set(bones.flatMap(b => 'chain' in b
+      ? [b.chain, ...b.points.map((_, index) => `${b.chain}${index}`)]
+      : []));
+    const onChain = segments.some(segment => chains.has(typeof segment === 'string' ? segment : segment[0]));
+    meshes[torsoName] = {
+      contour,
+      r: lattice !== undefined && 'grid' in lattice ? lattice.r : radius,
+      segments,
+      ...(onChain ? { influences: { maxInfluences: null, floor: 'continuous' as const } } : {}),
+    };
+    delete regions[torsoName];
+    if (onChain) notes.push(`${torsoName}: contour segments name a chain. Drafted influences.maxInfluences=null and floor=continuous to avoid the influence cut's weight step across short outline edges (issue #991)`);
+  } else if (bust.landmarks !== undefined) {
+    throw new PartsError([{ code: 'PROPOSE_BUST_INPUT', object: 'chest carrier', detail: `no topwear art covers chest at ${fmtAt(chest)}. A chest-holding topwear part is required for the declared bust input` }]);
   }
   if (gridRule === 'figure') {
     const latt = Object.keys(meshes).filter((m) => 'grid' in meshes[m] && ownGrid.has(m));

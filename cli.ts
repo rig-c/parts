@@ -34,7 +34,7 @@ import { makeInputs } from './src/inputs.ts';
 import { idleKeysOf, isIdleKeys } from './src/rig.ts';
 import { bodyCoreBox, bodyOpaqueBox, CORE_ALPHA, depthSkipLine, exportLayers, figuresPhrase, hiddenLayerLine, implausibleRules, layerCoreBox, layerFigures, layerOpaqueBox, type LayerSet, layerSetDiff, type OpaqueBox, OPAQUE_ALPHA_ABOVE, pct, readLayers, readWrapperLayers, ruleSummary, templateLayerNames, templatePsdBytes, times } from './src/layers.ts';
 import { checkImageSize, choosePerson, KEYPOINTS_SPEC, loadKeypoints, type RigJoints, toRigJoints } from './src/keypoints.ts';
-import { basisLines, branchSqueezeLine, checkProposal, compare, compareLines, DEFAULT_GRID_RULE, draftTurn, drawLandmarks, FIGURE_GRID_DIVISOR, FRINGE_STEP_PX, GRID_RULES, type GridRule, HIP_MIN_FRACTION, type DraftLintFinding, lint, lintLine, type PartSet, PROPOSAL_CONFIG_SECTIONS, proposalAsConfig, proposeWithBasis, readPartSet, serializeProposal, withTurn, WRIST_ON_PART_PX } from './src/propose.ts';
+import { basisLines, branchSqueezeLine, checkProposal, compare, compareLines, DEFAULT_GRID_RULE, draftTurn, drawLandmarks, FIGURE_GRID_DIVISOR, FRINGE_STEP_PX, GRID_RULES, type GridRule, type BustDraft, HIP_MIN_FRACTION, type DraftLintFinding, lint, lintLine, type PartSet, PROPOSAL_CONFIG_SECTIONS, proposalAsConfig, proposeWithBasis, readBustLandmarks, readPartSet, serializeProposal, withTurn, WRIST_ON_PART_PX } from './src/propose.ts';
 import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, coverageLines, legChainChoice, serializeBasis } from './src/diagnostics.ts';
 import { BEND_DEGREES, BEND_WORST_SHARE, DUST_MAX_PX, DUST_MAX_SHARE, IDLE_BOUND_PX, MESH_DRAFT_REPORT, MESH_DRAFT_SPEC, meshDraftStage, MORE_TRIANGLES_FLAG, relativeConfigPaths, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
 import { meshStatsStage } from './src/meshstats.ts';
@@ -183,6 +183,10 @@ usage:
       bone differs (origin, tip, parent; how far, in px). No confidence is
       computed. It prints "wrote ${BASIS_FILE} (…)" after the coverage lines.
 
+  rig-parts propose … (--bust-landmarks <landmarks.json> | --no-bust <reason>)
+      Draft the chest-holding topwear as contour. Landmark JSON declares apex_r,
+      apex_l and optional cleavage in rig pixels. Without cleavage, intersect
+      their segment with the neck-to-hip midline. --no-bust needs a stated reason.
   rig-parts propose … [--keypoints <keypoints.json> [--person <id>] [--wrist-snap <px>]]
       Read the figure's pose from one explicit file (spec "${KEYPOINTS_SPEC}"):
       its space (painting-px, origin top-left, y down — another is refused),
@@ -1124,7 +1128,7 @@ const TAKES = {
   layers: { valued: ['--export', '--template', '--canvas', '--full', '--source', '--config'], switches: [] },
   sheet: { valued: ['--source', '--layers', '--out', '--cell', '--cols'], switches: [] },
   rig: { valued: ['--config', '--parts', '--out', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
-  propose: { valued: ['--parts', '--source', '--out', '--from-config', '--compare', '--full', '--head', '--canvas', '--keypoints', '--person', '--wrist-snap', '--grid-rule', '--cloth', '--write-config', '--from'], switches: ['--head-box', '--no-back-hair', '--only-missing'] },
+  propose: { valued: ['--parts', '--source', '--out', '--from-config', '--compare', '--full', '--head', '--canvas', '--keypoints', '--person', '--wrist-snap', '--grid-rule', '--cloth', '--write-config', '--from', '--bust-landmarks', '--no-bust'], switches: ['--head-box', '--no-back-hair', '--only-missing'] },
   compare: { valued: ['--left', '--right', '--map'], switches: [] },
   check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--requirements', '--set', '--environment', '--wind-band'], switches: ['--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes', '--json'] },
   loop: { valued: ['--frames', '--out'], switches: ['--palette'] },
@@ -1572,6 +1576,7 @@ function cmdPropose(args: string[]): number {
         return EXIT_OK;
       }
     }
+    if (flags.has('--from-config') && (flags.has('--bust-landmarks') || flags.has('--no-bust'))) return usage('--bust-landmarks and --no-bust draft a torso. --from-config reads authored meshes');
     const P = readPartSet(partsDir);
     const painting = readPng(source);
     // Issue #75: the keypoint file, held to this painting's size and taken to rig px by the overlay's map.
@@ -1595,7 +1600,23 @@ function cmdPropose(args: string[]): number {
     }
     const cmpPath = flags.get('--compare');
     const cfg = cmpPath === undefined ? null : loadConfig(cmpPath);
-    const { proposal: drafted, basis, draftLint } = proposeWithBasis(P, joints, wristSnap, gridRule, cloth);
+    const noBust = flags.get('--no-bust');
+    const bustPath = flags.get('--bust-landmarks');
+    if (noBust !== undefined && (noBust.trim().length === 0 || bustPath !== undefined)) return usage('--no-bust requires a non-blank reason and cannot accompany --bust-landmarks');
+    const bust: BustDraft = {};
+    if (noBust !== undefined) bust.noBust = noBust;
+    if (bustPath !== undefined) {
+      try {
+        bust.landmarks = readBustLandmarks(JSON.parse(readFileSync(bustPath, 'utf8')) as unknown);
+      } catch (error) {
+        if (error instanceof PartsError) throw error;
+        throw new PartsError([{
+          code: 'PROPOSE_BUST_INPUT', object: '--bust-landmarks',
+          detail: `cannot read the declared JSON file (${error instanceof Error ? error.message : String(error)}). Give an object with apex_r, apex_l and optional cleavage in rig pixels`,
+        }]);
+      }
+    }
+    const { proposal: drafted, basis, draftLint } = proposeWithBasis(P, joints, wristSnap, gridRule, cloth, true, bust);
     const fullRun = flags.get('--full');
     const headRun = flags.get('--head');
     const prop =
@@ -1605,7 +1626,7 @@ function cmdPropose(args: string[]): number {
     // Emit only after green: a proposal the config loader would refuse is not written, nor a basis record that does not hold to it.
     checkProposal(P, prop);
     // The same parts drafted without the recipe: what --write-config measures its edits against, and what issue #572's chain reading compares with.
-    const plain = cloth === null ? null : proposeWithBasis(P, joints, wristSnap, gridRule, null).proposal;
+    const plain = cloth === null ? null : proposeWithBasis(P, joints, wristSnap, gridRule, null, true, bust).proposal;
     // Issue #537: the sections the recipe moves, measured against the same parts drafted without it, spliced before anything is written.
     const written =
       writeArg === undefined || clothArg === undefined || plain === null
@@ -1614,7 +1635,7 @@ function cmdPropose(args: string[]): number {
             const text = readFileSync(clothArg, 'utf8');
             // Issue #552: bones, constraints and motion.tracks entry by entry; a hand edit the recipe would drop is refused by name.
             // Issue #571: with --from, the same parts drafted a third time with the previous recipe.
-            const previous = previousCloth === null ? null : proposeWithBasis(P, joints, wristSnap, gridRule, previousCloth).proposal;
+            const previous = previousCloth === null ? null : proposeWithBasis(P, joints, wristSnap, gridRule, previousCloth, true, bust).proposal;
             const edits = clothConfigEdits(drafted, plain, JSON.parse(text) as unknown, false, previous);
             return { at: writeArg, input: text, text: writtenClothConfig(clothArg, text, edits), paths: editPaths(edits), vouched: previousCount(edits), returned: plainCount(edits), relative: relativeConfigPaths(dirname(resolve(clothArg)), JSON.parse(text) as Record<string, unknown>) };
           })();

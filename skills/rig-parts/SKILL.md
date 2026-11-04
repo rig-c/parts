@@ -86,7 +86,7 @@ under that.
 5. `rig-parts assemble … --out work` — read the `uncovered hole` lines and look at
    `work/render/recomposite_error_rig.png`; a large red hole between two parts is a
    gap See-through left (a skirt split into two legs), fixed in the plan or the layers,
-   not in the rig. Then `rig-parts propose --parts work/rig
+   not in the rig. Then `rig-parts propose --parts work/rig --bust-landmarks bust-landmarks.json
    --source <painting> --out work` → copy `bones`, `meshes`, `regions`, `limbs`,
    `motion`, `constraints`, `turn`, `motion_seams`, `proposed_rig_scale` from `proposal.json` into the config, each it
    wrote (`limbs` only with `--keypoints`, `constraints` only with `--cloth`, `turn`

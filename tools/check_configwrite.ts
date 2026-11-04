@@ -175,19 +175,19 @@ export function runConfigWriteChecks(dir: string, report: (name: string, ok: boo
   save(proposalFile, base);
   const proposalOut = join(dir, 'out');
   const proposeArgs = ['propose', '--parts', parts, '--source', source, '--out', proposalOut];
-  const plainProposal = cli(proposeArgs), savedProposal = cli([...proposeArgs, '--write-config', proposalFile]);
+  const plainProposal = cli([...proposeArgs, '--no-bust', 'historical fixture: no bust landmarks recorded']), savedProposal = cli([...proposeArgs, '--write-config', proposalFile, '--no-bust', 'historical fixture: no bust landmarks recorded']);
   const emitted = read(join(proposalOut, 'proposal.json'));
   const config = read(proposalFile);
   check('CW_CLI_PROPOSAL', plainProposal.status === 0 && savedProposal.status === 0 && plainProposal.stdout === savedProposal.stdout && config.proposed_rig_scale === 1 && same(config.bones, emitted.bones) && same(config['x-kept'], base['x-kept']) && !('notes' in config), `actual proposal CLI saves generated sections and scale: ${savedProposal.stderr}`);
   const unchangedBytes = readFileSync(proposalFile, 'utf8'), unchangedStat = statSync(proposalFile);
-  const again = cli([...proposeArgs, '--write-config', proposalFile]);
+  const again = cli([...proposeArgs, '--write-config', proposalFile, '--no-bust', 'historical fixture: no bust landmarks recorded']);
   check('CW_CLI_IDEMPOTENT', again.status === 0 && again.stderr.includes('unchanged') && readFileSync(proposalFile, 'utf8') === unchangedBytes && statSync(proposalFile).mtimeMs === unchangedStat.mtimeMs, 'actual repeat does not rewrite config');
   const beforeCompare = read(proposalFile);
   const changedBone = (beforeCompare.bones as ConfigObject[]).find(b => 'name' in b);
   if (changedBone === undefined) throw new Error('fixture proposal has no named bone');
   (changedBone.at as number[])[0] += 10;
   save(proposalFile, beforeCompare);
-  const compared = cli([...proposeArgs, '--compare', proposalFile, '--write-config', proposalFile]);
+  const compared = cli([...proposeArgs, '--compare', proposalFile, '--write-config', proposalFile, '--no-bust', 'historical fixture: no bust landmarks recorded']);
   const basis = read(join(proposalOut, 'basis.json')) as unknown as { bones: Array<{ bone: string; config: { origin_px: number; status: string } | null }> };
   const delta = basis.bones.find(b => b.bone === changedBone.name)?.config;
   check('CW_COMPARE_BEFORE', compared.status === 0 && delta?.origin_px === 10 && delta.status === 'differs' && same(read(proposalFile).bones, emitted.bones), 'basis comparison records the original 10px delta before config replacement');
@@ -196,29 +196,29 @@ export function runConfigWriteChecks(dir: string, report: (name: string, ok: boo
     const collisionTarget = join(collisionOut, artifact);
     mkdirSync(resolve(collisionTarget, '..'), { recursive: true }); save(collisionTarget, base);
     const original = readFileSync(collisionTarget, 'utf8');
-    const call = cli(['propose', '--parts', parts, '--source', source, '--out', collisionOut, '--write-config', collisionTarget]);
+    const call = cli(['propose', '--parts', parts, '--source', source, '--out', collisionOut, '--write-config', collisionTarget, '--no-bust', 'historical fixture: no bust landmarks recorded']);
     check(`CW_COLLISION_${artifact}`, call.status === 1 && call.stdout.includes('CONFIG_WRITE_TARGET') && readFileSync(collisionTarget, 'utf8') === original, 'owned artifact cannot overwrite its destination config before refusal');
   }
   const realOut = join(dir, 'alias-out'), aliasOut = join(dir, 'alias-parent');
   mkdirSync(realOut); symlinkSync(realOut, aliasOut);
   const aliasTarget = join(realOut, 'proposal.json'); save(aliasTarget, base);
   const aliasBefore = readFileSync(aliasTarget, 'utf8');
-  const aliased = cli(['propose', '--parts', parts, '--source', source, '--out', aliasOut, '--write-config', aliasTarget]);
+  const aliased = cli(['propose', '--parts', parts, '--source', source, '--out', aliasOut, '--write-config', aliasTarget, '--no-bust', 'historical fixture: no bust landmarks recorded']);
   check('CW_COLLISION_ALIAS', aliased.status === 1 && aliased.stdout.includes('CONFIG_WRITE_TARGET') && readFileSync(aliasTarget, 'utf8') === aliasBefore, 'symlinked output parent cannot hide collision');
   const hardOut = join(dir, 'hard-out'); mkdirSync(hardOut);
   const hardTarget = join(dir, 'hard-config.json'); save(hardTarget, base); linkSync(hardTarget, join(hardOut, 'basis.json'));
   const hardBefore = readFileSync(hardTarget, 'utf8');
-  const hard = cli(['propose', '--parts', parts, '--source', source, '--out', hardOut, '--write-config', hardTarget]);
+  const hard = cli(['propose', '--parts', parts, '--source', source, '--out', hardOut, '--write-config', hardTarget, '--no-bust', 'historical fixture: no bust landmarks recorded']);
   check('CW_COLLISION_HARDLINK', hard.status === 1 && hard.stdout.includes('CONFIG_WRITE_TARGET') && readFileSync(hardTarget, 'utf8') === hardBefore, 'inode alias cannot hide collision');
 
   const artifactOut = join(dir, 'artifact-write-fails'); mkdirSync(join(artifactOut, 'render/landmarks.png'), { recursive: true });
   const artifactConfig = join(dir, 'artifact-config.json'); save(artifactConfig, base);
   const artifactBefore = readFileSync(artifactConfig, 'utf8');
-  const artifactFailure = cli(['propose', '--parts', parts, '--source', source, '--out', artifactOut, '--write-config', artifactConfig]);
+  const artifactFailure = cli(['propose', '--parts', parts, '--source', source, '--out', artifactOut, '--write-config', artifactConfig, '--no-bust', 'historical fixture: no bust landmarks recorded']);
   check('CW_CLI_ARTIFACT_FAILURE', artifactFailure.status === 1 && artifactFailure.stdout.includes('CONFIG_WRITE_FAILED') && !artifactFailure.stdout.includes('wrote proposal.json') && readFileSync(artifactConfig, 'utf8') === artifactBefore && temporaryCount() === 0, 'real output directory/file collision is formatted, original config preserved and staged temp cleaned');
   const mismatched = join(dir, 'scale.json'); save(mismatched, { ...base, assemble: { ...base.assemble, rig_scale: 0.5 } });
   const mismatchedBefore = readFileSync(mismatched, 'utf8');
-  const scaleRefusal = cli([...proposeArgs, '--write-config', mismatched]);
+  const scaleRefusal = cli([...proposeArgs, '--write-config', mismatched, '--no-bust', 'historical fixture: no bust landmarks recorded']);
   check('CW_CLI_SCALE', scaleRefusal.status === 1 && scaleRefusal.stdout.includes('CONFIG_PROPOSED_RIG_SCALE') && readFileSync(mismatched, 'utf8') === mismatchedBefore, 'actual draft scale mismatch refuses before replacing target');
   const fromConfigTakes = 'takes --parts, --source, --out, --from-config and optional --keypoints [--person] only';
   const usageFrom = cli([...proposeArgs, '--from-config', proposalFile, '--write-config', proposalFile]);
@@ -325,7 +325,7 @@ export function runConfigWriteChecks(dir: string, report: (name: string, ok: boo
     cli(['inputs', '--source', painting, '--config', sequenceConfig, '--out', join(dir, 'sequence-inputs')]),
     cli(['assemble', '--propose-plan', '--source', painting, '--full', layers, '--head', layers, '--config', sequenceConfig, '--write-config', sequenceConfig]),
     cli(['assemble', '--source', painting, '--full', layers, '--head', layers, '--config', sequenceConfig, '--out', sequenceWork]),
-    cli(['propose', '--parts', join(sequenceWork, 'rig'), '--source', painting, '--out', sequenceWork, '--write-config', sequenceConfig]),
+    cli(['propose', '--parts', join(sequenceWork, 'rig'), '--source', painting, '--out', sequenceWork, '--write-config', sequenceConfig, '--no-bust', 'historical fixture: no bust landmarks recorded']),
   ];
   const sequence = read(sequenceConfig);
   const sequenceProposalPath = join(sequenceWork, 'proposal.json');
@@ -343,27 +343,27 @@ export function runConfigWriteChecks(dir: string, report: (name: string, ok: boo
   writeFileSync(clothInput, clothText);
   const clothBase = ['propose', '--parts', clothParts, '--source', clothPainting, '--cloth', clothInput];
   const clothOutput = join(dir, 'cloth-written.json');
-  const clothRun = cli([...clothBase, '--out', join(dir, 'cloth-out'), '--write-config', clothOutput]);
+  const clothRun = cli([...clothBase, '--out', join(dir, 'cloth-out'), '--write-config', clothOutput, '--no-bust', 'historical fixture: no bust landmarks recorded']);
   const clothWritten = existsSync(clothOutput) ? read(clothOutput) : null;
   check('CW_CLOTH_PARTIAL', clothRun.status === 0 && clothWritten !== null && clothWritten['x-kept'] === 'authored' && !('assemble' in clothWritten) && readFileSync(clothInput, 'utf8') === clothText, 'cloth still splices a partial config without the in-place full loader');
   const clothBefore = clothWritten === null ? '' : readFileSync(clothOutput, 'utf8');
-  const clothExists = cli([...clothBase, '--out', join(dir, 'cloth-refused'), '--write-config', clothOutput]);
+  const clothExists = cli([...clothBase, '--out', join(dir, 'cloth-refused'), '--write-config', clothOutput, '--no-bust', 'historical fixture: no bust landmarks recorded']);
   check('CW_CLOTH_FRESH', clothExists.status === 1 && clothExists.stdout.includes('PROPOSE_WRITE_CONFIG_FRESH') && clothExists.stdout.includes(freshCrossRule) && readFileSync(clothOutput, 'utf8') === clothBefore && !existsSync(join(dir, 'cloth-refused')), 'cloth never replaces an existing output and states both --write-config rules');
   for (const artifact of ['proposal.json', 'basis.json', 'render/landmarks.png', 'render/landmarks_head.png']) {
     const output = join(dir, 'cloth-collision-' + artifact.replaceAll('/', '-'));
     const target = join(output, artifact);
-    const collision = cli([...clothBase, '--out', output, '--write-config', target]);
+    const collision = cli([...clothBase, '--out', output, '--write-config', target, '--no-bust', 'historical fixture: no bust landmarks recorded']);
     check('CW_CLOTH_COLLISION_' + artifact, collision.status === 1 && collision.stdout.includes('PROPOSE_WRITE_CONFIG_FRESH') && !existsSync(output), 'cloth refuses each owned artifact before creating any output');
   }
   const clothReal = join(dir, 'cloth-real'), clothAlias = join(dir, 'cloth-alias');
   mkdirSync(clothReal); symlinkSync(clothReal, clothAlias);
-  const clothAliased = cli([...clothBase, '--out', clothAlias, '--write-config', join(clothReal, 'render', 'landmarks.png')]);
+  const clothAliased = cli([...clothBase, '--out', clothAlias, '--write-config', join(clothReal, 'render', 'landmarks.png'), '--no-bust', 'historical fixture: no bust landmarks recorded']);
   check('CW_CLOTH_ALIAS', clothAliased.status === 1 && clothAliased.stdout.includes('PROPOSE_WRITE_CONFIG_FRESH') && readdirSync(clothReal).length === 0, 'cloth output parent aliases cannot hide a collision on a not-yet-existing artifact');
   const clothHardOut = join(dir, 'cloth-hard'); mkdirSync(join(clothHardOut, 'render'), { recursive: true });
   const clothHardTarget = join(dir, 'cloth-hard-config.json'); save(clothHardTarget, { key: 'existing' });
   linkSync(clothHardTarget, join(clothHardOut, 'render', 'landmarks.png'));
   const clothHardBefore = readFileSync(clothHardTarget, 'utf8');
-  const clothHard = cli([...clothBase, '--out', clothHardOut, '--write-config', clothHardTarget]);
+  const clothHard = cli([...clothBase, '--out', clothHardOut, '--write-config', clothHardTarget, '--no-bust', 'historical fixture: no bust landmarks recorded']);
   check('CW_CLOTH_HARDLINK', clothHard.status === 1 && clothHard.stdout.includes('PROPOSE_WRITE_CONFIG_FRESH') && readFileSync(clothHardTarget, 'utf8') === clothHardBefore, 'existing inode aliases remain refused by the cloth fresh-file rule');
   check('CW_CLEAN', temporaryCount() === 0, 'no owned staging files left after positives/refusals');
   return failed;

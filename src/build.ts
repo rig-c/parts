@@ -1831,9 +1831,12 @@ export function levelLines(line: LevelLine): string[] {
  * own — its limb, its bone, and on a FAIL every other bone it is bound to.
  */
 export function limbCheckLines(line: LimbLine): string[] {
+  const carriers = line.parts.some(row => row.region_bones !== undefined)
+    ? 'its segment carrier or its declared contour region bones'
+    : 'its one bone with weight 1 (a region on it, or a mesh weighted to it alone)';
   return [
-    `${LIMB_LINE}: ${line.status} — ${line.parts.length} limb part(s), each bound in rig.json to its one bone with weight 1 (a region on it, or a mesh weighted to it alone)`,
-    ...line.parts.map((r) => `limb  "${r.part}" (${r.limb}) on "${r.bone}": ${r.status}${r.others.length === 0 ? '' : `, also weighted to ${r.others.map((b) => `"${b}"`).join(', ')}`}`),
+    `${LIMB_LINE}: ${line.status} — ${line.parts.length} limb part(s), each bound in rig.json to ${carriers}`,
+    ...line.parts.map((r) => `limb  "${r.part}" (${r.limb}) on "${r.bone}": ${r.status}${r.region_bones === undefined ? '' : `, declared contour region bones [${r.region_bones.join(', ')}]`}${r.others.length === 0 ? '' : `, also weighted to ${r.others.map((b) => `"${b}"`).join(', ')}`}`),
   ];
 }
 

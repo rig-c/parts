@@ -44,8 +44,9 @@
  * against.
  */
 import { type Problem } from './errors.ts';
-import { connectedComponents, fillHoles, fillPoly, type Mask, newMask } from './raster/index.ts';
-import { rint } from './round.ts';
+import { alphaAbove, connectedComponents, fillHoles, fillPoly, type Mask, newMask } from './raster/index.ts';
+import type { Raster } from './raster/types.ts';
+import { pyRound, rint } from './round.ts';
 
 /** A pixel counts as art when its alpha is above this — the reference's `im[..., 3] > 8`. */
 export const ART_ALPHA = 8;
@@ -439,4 +440,30 @@ export function latticeStray(art: Mask, stray: number): LatticeStray {
   const data = new Uint8Array(art.data);
   for (let i = 0; i < data.length; i++) if (out[comp.labels[i]] === 1) data[i] = 0;
   return { art: { width: art.width, height: art.height, data }, islands, pixels, artPixels, largest };
+}
+
+/** A part's art islands, largest first, and what the dust rule makes of them. */
+export type DustReading = { stray: number | undefined; islands: number[]; dust: number[] } | { keep: string; islands: number[] };
+
+/**
+ * The dust rule on a part image (its alpha, unpadded or padded alike: the pad adds no art): the 4-connected islands
+ * of alpha above `ART_ALPHA` — the contour mode's own island rule — and whether every island past the largest is
+ * dust ({@link DUST_MAX_PX}, {@link DUST_MAX_SHARE}). A tie for the largest is no single largest island, which the
+ * contour mode refuses, so it keeps the lattice too.
+ */
+export function dustOf(image: Raster): DustReading {
+  const comp = connectedComponents(alphaAbove(image, ART_ALPHA), 4);
+  const islands = comp.stats.slice(1).map((s) => s.area).sort((a, b) => b - a);
+  const art = islands.reduce((a, b) => a + b, 0);
+  if (islands.length === 0) return { keep: `its image has no pixel with alpha above ${ART_ALPHA}`, islands };
+  if (islands.length > 1 && islands[0] === islands[1]) return { keep: `its art is ${islands.length} islands (${islands.join(', ')} px) of which two share the largest count, so no one island is the largest`, islands };
+  const extra = islands.slice(1);
+  const pieces = extra.filter((n) => !isDust(n, art));
+  if (pieces.length > 0) {
+    return {
+      keep: `its art is ${islands.length} islands (${islands.join(', ')} px); ${pieces.length} beside the largest ${pieces.length === 1 ? 'is a real piece' : 'are real pieces'}, not dust (at most ${DUST_MAX_PX} px and at most ${pyRound(DUST_MAX_SHARE * 100, 6)} % of the part's ${art} art px), and the contour mode meshes one island`,
+      islands,
+    };
+  }
+  return { stray: extra.length === 0 ? undefined : extra[0], islands, dust: extra };
 }

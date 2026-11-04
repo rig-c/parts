@@ -14,7 +14,7 @@ for (const key of keys) {
     const root = roots[side], config = join(roots[0], 'examples', key, 'config.json'), inputs = join(resolve(inputArg), key, 'inputs'), out = join(scratch, String(side), key);
     const b = await import(join(root, 'src/build.ts')), p = await import(join(root, 'src/propose.ts')), l = await import(join(root, 'src/layers.ts')), a = await import(join(root, 'src/assemble.ts')), rig = await import(join(root, 'src/rig.ts')), png = await import(join(root, 'src/raster/png.ts')), cfg = await import(join(root, 'src/config.ts'));
     b.assembleStage({ source: join(inputs, 'painting.png'), full: join(inputs, 'layers/full'), head: join(inputs, 'layers/head'), config, seam: 'near-white', project: 'core' }, { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, () => {});
-    const loaded = b.readRigInputs(config, out), built = rig.buildRig(loaded.cfg, loaded.parts, loaded.images), P = p.readPartSet(out), proposal = p.proposeWithBasis(P).proposal;
+    const loaded = b.readRigInputs(config, out), built = rig.buildRig(loaded.cfg, loaded.parts, loaded.images), P = p.readPartSet(out), proposal = p.proposeWithBasis(P, undefined, undefined, undefined, undefined, true, { noBust: 'historical fixture: no bust landmarks recorded' }).proposal;
     const table = new Map<string, string>();
     for (const file of readdirSync(join(out, 'parts')).sort()) table.set(`parts/${file}`, hash(readFileSync(join(out, 'parts', file))));
     for (const file of ['parts.json', 'recomposite.png', 'error.png']) table.set(file, hash(readFileSync(join(out, file))));

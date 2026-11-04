@@ -3919,8 +3919,10 @@ export interface LimbRow {
   limb: string;
   bone: string;
   status: 'PASS' | 'FAIL';
-  /** The bones besides its own the part is bound to, in rig.json's order; empty on a PASS. */
+  /** The bones outside the permitted carriers, in rig.json's order; empty on a PASS. */
   others: string[];
+  /** Additional carriers declared by this part's contour regions in mesh_report.json. */
+  region_bones?: string[];
 }
 
 /** `check.json`'s `LIMB_ONE_BONE`. */
@@ -3930,13 +3932,18 @@ export interface LimbLine {
 }
 
 /** The line from parts.json's limb records and rig.json's slots and skins; each FAIL row adds one `CHECK_LIMB_ONE_BONE` problem naming the part and every second bone. Null when no part is a limb's. */
-export function limbLine(parts: PartsFile, rig: Record<string, unknown>, problems: Problem[]): LimbLine | null {
+export function limbLine(parts: PartsFile, rig: Record<string, unknown>, problems: Problem[], meshReport: unknown = []): LimbLine | null {
   const limbParts = parts.parts.filter((p) => p.limb !== undefined);
   if (limbParts.length === 0) return null;
   const slots = (Array.isArray(rig.slots) ? rig.slots : []).filter(isRecord);
   const rows: LimbRow[] = limbParts.map((p) => {
     const l = p.limb as NonNullable<PartRecord['limb']>;
-    const own = new Set([l.bone, turnTwin(p.name, l.bone), ...(l.band === undefined ? [] : [l.band.upper, turnTwin(p.name, l.band.upper)])]);
+    const regionBones = l.band === undefined && Array.isArray(meshReport)
+      ? [...new Set(meshReport.filter(isRecord).filter(row => row.part === p.name && row.mode === 'contour')
+        .flatMap(row => Array.isArray(row.regions) ? row.regions.filter(isRecord) : [])
+        .flatMap(region => typeof region.bone === 'string' && region.bone.length > 0 ? [region.bone] : []))]
+      : [];
+    const own = new Set([l.bone, turnTwin(p.name, l.bone), ...regionBones.flatMap(bone => [bone, turnTwin(p.name, bone)]), ...(l.band === undefined ? [] : [l.band.upper, turnTwin(p.name, l.band.upper)])]);
     const slot = slots.find((sl) => sl.name === p.name);
     const bound = slot === undefined ? new Set<string>() : boundBones(rig, p.name);
     const others = [...bound].filter((b) => !own.has(b));
@@ -3950,10 +3957,12 @@ export function limbLine(parts: PartsFile, rig: Record<string, unknown>, problem
             ? `binds [${[...bound].join(', ')}]; the band requires both "${l.band.upper}" and "${l.bone}" and no other carrier — re-run rig with the recorded joint band`
             : bound.size === 0
             ? `is bound to no bone in rig.json (no slot of its name, or no attachment); its one bone "${l.bone}", with weight 1, is required`
+            : regionBones.length > 0
+            ? `is weighted to ${others.map(b => `"${b}"`).join(', ')}; only segment bone "${l.bone}" (or its turn twin) and this part's declared contour region bones [${regionBones.join(', ')}] are permitted`
             : `is weighted to ${others.map((b) => `"${b}"`).join(', ')} besides "${l.bone}"; a limb part rides its one bone with weight 1 — a bend is a rotation at the joint, never a deformed mesh — so a region on "${l.bone}" (config.regions.${p.name}), or a mesh whose segments name "${l.bone}" alone, is required`,
       });
     }
-    return { part: p.name, limb: l.name, bone: l.bone, status: fail ? 'FAIL' : 'PASS', others };
+    return { part: p.name, limb: l.name, bone: l.bone, status: fail ? 'FAIL' : 'PASS', others, ...(regionBones.length === 0 ? {} : { region_bones: regionBones }) };
   });
   return { status: rows.some((r) => r.status === 'FAIL') ? 'FAIL' : 'PASS', parts: rows };
 }
@@ -6564,7 +6573,17 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   let level: LevelLine | null = null;
   // Issue #349: the limb parts' bones, off rig.json and parts.json; none, and nothing is written.
   const limbProblems: Problem[] = [];
-  const limbs = inp.parts === null ? null : limbLine(inp.parts, inp.rig, limbProblems);
+  const meshReportPath = join(inp.rigDir, 'mesh_report.json');
+  let meshReport: unknown = [];
+  if (inp.parts?.parts.some(part => part.limb !== undefined) && existsSync(meshReportPath)) {
+    try {
+      meshReport = JSON.parse(readFileSync(meshReportPath, 'utf8')) as unknown;
+    } catch (err) {
+      refuseIfAny([{ code: 'CHECK_INPUT_IS_JSON', object: meshReportPath, detail: `does not parse as JSON: ${(err as Error).message}` }]);
+    }
+    if (!Array.isArray(meshReport)) refuseIfAny([{ code: 'CHECK_INPUT_IS_JSON', object: meshReportPath, detail: 'an array of per-part mesh reports is required' }]);
+  }
+  const limbs = inp.parts === null ? null : limbLine(inp.parts, inp.rig, limbProblems, meshReport);
   const levelProblems: Problem[] = [];
   try {
     if (inp.idleDuration !== null) {
