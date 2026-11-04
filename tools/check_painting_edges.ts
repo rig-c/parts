@@ -314,6 +314,83 @@ export function runPaintingEdgeChecks(say: Say): void {
       `moving-pair gap alphas ${run.map(q => q.data[offset+3]).join(',')}`);
   }
 
+  // Interior translucency uses final four-neighbour ownership, frozen before
+  // any completion writes, and the existing gap distances and draw-order ties.
+  {
+    const p = 4 * W + 16, offset = p * 4;
+    const painting = columns(() => RED, () => 255);
+    const figure = newMask(W, H); figure.data.fill(1);
+    const layer = columns(() => RED, x => x < 18 ? (x === 16 ? 64 : 255) : 0);
+    const run = [copy(layer)];
+    const calls: number[] = [];
+    paintingEdges(run, painting, options({ editable: [true], figure, written: (_i, q) => calls.push(q) }));
+    say('ED9561_OWNED_INTERIOR_TRANSLUCENCY_RECEIVES_THE_PAINTING',
+      [...run[0].data.slice(offset, offset + 4)].join(',') === '200,0,0,255' && calls.filter(q => q === p).length === 1,
+      `completed alpha ${run[0].data[offset + 3]}; writer callbacks ${calls.filter(q => q === p).length}`);
+    const rim = newMask(W, H); rim.data.set(figure.data); rim.data[p - 1] = 0;
+    const keep = newMask(W, H); keep.data[p] = 1;
+    const transparentPainting = copy(painting); transparentPainting.data[(p - W) * 4 + 3] = 0;
+    const guarded = [
+      { opts: options({ editable: [true] }), painting },
+      { opts: options({ editable: [true], figure: rim }), painting },
+      { opts: options({ editable: [false], figure }), painting },
+      { opts: options({ editable: [true], figure, keep: [keep] }), painting },
+      { opts: options({ editable: [true], figure, feathered: [keep] }), painting },
+      { opts: options({ editable: [true], figure, ground: 'busy' }), painting },
+      { opts: options({ editable: [true], figure }), painting: transparentPainting },
+    ];
+    const held = guarded.map(test => {
+      const q = [copy(layer)]; paintingEdges(q, test.painting, test.opts); return q[0].data[offset + 3];
+    });
+    say('ED9562_TRANSLUCENCY_RESPECTS_DOMAIN_LOCK_KEEP_FEATHER_AND_BUSY', held.every(a => a === 64),
+      `omitted figure, rim, locked part, keep, feather, busy, transparent neighbour alphas ${held.join(',')}`);
+
+    const isolated = newRaster(W, H);
+    isolated.data.set([...RED, 255], (p - 3) * 4);
+    isolated.data.set([...RED, 64], offset);
+    const absent = [copy(isolated)];
+    paintingEdges(absent, painting, options({ editable: [true], figure }));
+    const faint = copy(isolated); faint.data.set([...RED, 1], (p - 1) * 4);
+    const witnessed = [faint];
+    paintingEdges(witnessed, painting, options({ editable: [true], figure }));
+    say('ED9563_OWNER_REQUIRES_FINAL_NEIGHBOUR_ALPHA_ABOVE_ZERO',
+      absent[0].data[offset + 3] === 64 && witnessed[0].data[offset + 3] === 255,
+      `no neighbour alpha ${absent[0].data[offset + 3]}; alpha-1 neighbour completes to ${witnessed[0].data[offset + 3]}`);
+
+    const back = columns(() => RED, x => x >= 17 ? 255 : 0);
+    const front = columns(() => RED, x => x < 16 ? 255 : x === 16 ? 64 : 0);
+    const moving = [back, front].map(copy);
+    paintingEdges(moving, painting, options({ figure, movingPair: () => true }));
+    say('ED9564_MOVING_PAIR_INTERIOR_TRANSLUCENCY_IS_LOCKED',
+      moving[0].data[offset + 3] === 0 && moving[1].data[offset + 3] === 64,
+      `moving-pair target alphas ${moving.map(q => q.data[offset + 3]).join(',')}`);
+
+    const tieBack = copy(isolated), tieFront = newRaster(W, H);
+    tieBack.data.set([...RED, 255], (p - 1) * 4);
+    tieFront.data.set([...RED, 255], (p - 1) * 4);
+    const tie = [tieBack, tieFront];
+    paintingEdges(tie, painting, options({ figure }));
+    say('ED9565_FINAL_OWNER_TIES_USE_THE_GAP_FRONT_FIRST_RULE',
+      tie[0].data[offset + 3] === 64 && tie[1].data[offset + 3] === 255,
+      `equal-distance owners, target alphas ${tie.map(q => q.data[offset + 3]).join(',')}`);
+
+    const covered = [columns(() => RED, () => 80), columns(() => RED, () => 80)];
+    const before = covered.map(copy);
+    paintingEdges(covered, painting, options({ figure }));
+    say('ED9566_STACK_COVERAGE_ABOVE_THE_TRANSLUCENT_RANGE_IS_UNCHANGED',
+      covered.every((q, i) => same(q, before[i])),
+      `two alpha-80 layers remain ${covered.map(q => q.data[offset + 3]).join(',')}`);
+
+    const frozen = newRaster(W, H);
+    frozen.data.set([...RED, 255], (p - 2) * 4);
+    frozen.data.set([...RED, 64], offset);
+    const snapshot = [frozen];
+    paintingEdges(snapshot, painting, options({ editable: [true], figure }));
+    say('ED9567_NEW_GAP_WRITES_CANNOT_SUPPLY_AN_INTERIOR_OWNER',
+      snapshot[0].data[(p - 1) * 4 + 3] === 255 && snapshot[0].data[offset + 3] === 64,
+      `new gap alpha ${snapshot[0].data[(p - 1) * 4 + 3]}; originally isolated translucency alpha ${snapshot[0].data[offset + 3]}`);
+  }
+
   // Planted: FRONT may not be edited (a painting patch): nothing is written.
   {
     const { painting, stack } = strip(RED, BLUE, RAMP);

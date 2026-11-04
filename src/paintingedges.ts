@@ -173,7 +173,7 @@ export interface PaintingEdgeOptions {
    * figure there, and taking the behind colour from it would take a painted line.
    */
   painted: Uint8Array;
-  /** Canonical painted figure domain for completing allocated zero-alpha gaps. */
+  /** Canonical painted figure domain for completing allocated gaps and interior translucency. */
   figure?: Mask;
   /** Per part: whether the step may write it (false for a painting patch). */
   editable: readonly boolean[];
@@ -269,9 +269,9 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
     }
   }
   const fill: Array<[number, number]> = [];
+  const near: Uint8Array[] = [];
   // A painted pixel no part covers goes to the nearest part (ties to the one drawn in front); farther than the cap, it stays background.
   {
-    const near: Uint8Array[] = [];
     for (let k = 0; k < n; k++) {
       const set = new Uint8Array(W * H);
       for (let p = 0; p < W * H; p++) if (owner[p] === k) set[p] = 1;
@@ -629,6 +629,40 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
       (p >= W && d[(p - W) * 4 + 3] > OPAQUE_ALPHA_ABOVE) ||
       (p + W < W * H && d[(p + W) * 4 + 3] > OPAQUE_ALPHA_ABOVE);
   });
+  // Freeze the final rest witnesses before filling: a new write cannot supply
+  // another pixel's owner. Keep the existing allocation and all soft boundaries.
+  // Busy-ground figure/support policy is a separate contract.
+  const figure = options.figure;
+  if (!busy && figure !== undefined) {
+    for (let y = 1; y + 1 < H; y++) {
+      for (let x = 1; x + 1 < W; x++) {
+        const p = y * W + x;
+        if (locked[p] === 1 ||
+          options.keep?.some(m => m?.data[p] === 1) || options.feathered?.some(m => m?.data[p] === 1)) continue;
+        const neighbours = [p - 1, p + 1, p - W, p + W];
+        if (![p, ...neighbours].every(q => figure.data[q] === 1 && srcr.data[q * 4 + 3] > 0)) continue;
+        // PIL's integer source-over alpha, including divide-by-255 rounding.
+        let alpha = 0;
+        for (const part of parts) {
+          const a = part.data[p * 4 + 3];
+          const t = a * 255 + alpha * (255 - a) + 128;
+          alpha = ((t >>> 8) + t) >>> 8;
+        }
+        if (alpha === 0 || alpha >= 128) continue;
+        // The gap rule's distances and front-first ties, restricted to owners
+        // with a four-connected witness in the assembled rest output.
+        let front = -1;
+        let distance = cap;
+        for (let k = n - 1; k >= 0; k--) {
+          if (near[k][p] < distance && neighbours.some(q => parts[k].data[q * 4 + 3] > 0)) {
+            front = k;
+            distance = near[k][p];
+          }
+        }
+        if (front >= 0 && options.editable[front]) restore.push([p, front]);
+      }
+    }
+  }
   for (const [p, front] of restore) {
     const s = p * 4;
     parts[front].data.set([srcr.data[s], srcr.data[s + 1], srcr.data[s + 2], 255], s);
