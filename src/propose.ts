@@ -3557,7 +3557,7 @@ export function proposeWithBasis(
     };
     delete regions[torsoName];
     if (onChain) notes.push(`${torsoName}: contour segments name a chain. Drafted influences.maxInfluences=null and floor=continuous to avoid the influence cut's weight step across short outline edges (issue #991)`);
-  } else if (bust.landmarks !== undefined || bust.noBust !== undefined) {
+  } else if (bust.landmarks !== undefined) {
     throw new PartsError([{ code: 'PROPOSE_BUST_INPUT', object: 'chest carrier', detail: `no topwear art covers chest at ${fmtAt(chest)}. A chest-holding topwear part is required for the declared bust input` }]);
   }
   if (gridRule === 'figure') {

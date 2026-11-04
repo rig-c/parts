@@ -10885,7 +10885,7 @@ function runProposeSuite(): number {
     const P = readPartSet(dir);
     const prop = propose(P);
     say('PR767_A_FIXTURE_WITHOUT_A_CHEST_TORSO_NEEDS_NO_BUST_DECLARATION',
-      P.byTag('topwear').length === 0, 'no chest-holding topwear; ordinary proposal succeeds',
+      P.byTag('topwear').length === 0 && serializeProposal(prop) === serializeProposal(propose(P, undefined, null, DEFAULT_GRID_RULE, null, true, { noBust: 'historical fixture: no bust landmarks recorded' })), 'no chest-holding topwear; ordinary proposal and explicit omission agree',
       'the declaration is required only for a chest carrier');
     const bustParts: ProposeFixturePart[] = [...PROPOSE_PARTS, { name: 'bodice', from: 'full:topwear', x: 50, y: 100, w: 100, h: 45, colour: [60, 80, 100] }];
     const bustDir = join(dir, 'bust');
@@ -11018,12 +11018,12 @@ function runProposeSuite(): number {
     const ambiguousDir = join(dir, 'ambiguous-bust');
     writeProposeFixture(ambiguousDir, [...bustParts, { ...bustParts[bustParts.length - 1], name: 'second_bodice', from: 'head:topwear' }]);
     const ambiguousBust = refusals(() => propose(readPartSet(ambiguousDir), undefined, undefined, undefined, undefined, true, { noBust: 'historical fixture: no bust landmarks recorded' }));
-    const absentBust = refusals(() => propose(P, undefined, null, DEFAULT_GRID_RULE, null, true, { noBust: 'plate' }));
+    const absentBust = refusals(() => propose(P, undefined, null, DEFAULT_GRID_RULE, null, true, { landmarks: { apex_r: [75, 125], apex_l: [125, 125] } }));
     say('PR760_CHEST_CARRIER_OWNERSHIP_IS_NAMED_WHEN_ABSENT_OR_AMBIGUOUS',
       ambiguousBust?.problems.some(p => p.code === 'PROPOSE_BUST_INPUT' && p.detail.includes('second_bodice')) === true &&
       absentBust?.problems.some(p => p.code === 'PROPOSE_BUST_INPUT') === true,
       `ambiguous ${codes(ambiguousBust)}; absent ${codes(absentBust)}`,
-      'overlapping topwear is not resolved by iteration order, and a declared omission cannot target a missing torso');
+      'overlapping topwear is not resolved by iteration order, and declared landmarks cannot target a missing torso');
 
     // Hand-derived from fixtures/propose.ts (face 80,40 40x50; skirt 60,150 80x100; sleeves 20,100 and 160,100 20x60):
     //   axis = 80 + 40/2 = 100; chin = 90; no neck part -> neck y = 90 + 0.12*50 = 96; head y = 40 + 0.88*50 = 84.
