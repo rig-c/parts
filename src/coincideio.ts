@@ -1,12 +1,12 @@
 /** Pre-rig pair domains and actual textured setup observations (#998). */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { figureSilhouette, paintedFigure, sourceInRig } from './assemble.ts';
+import { sourceSupportFigure as supportFigure } from './assemble.ts';
 import { officialRenderer, sourceSizeProblem, type CheckInputs } from './check.ts';
 import { supportReport, unownedSupport, SUPPORT_GRID_CODE, type SupportPart, type SupportReport } from './coincide.ts';
 import { refuseIfAny } from './errors.ts';
 import { readPng } from './raster/png.ts';
-import { assertBinary, newRaster, type Mask, type Raster } from './raster/types.ts';
+import { assertBinary, type Mask } from './raster/types.ts';
 import { readSupportDomains } from './supportdomains.ts';
 
 /** The setup candidate is already built by check. Only alpha callbacks are
@@ -59,21 +59,4 @@ export function observeSupport(build: string, input: CheckInputs, supportSource?
   return report;
 }
 
-/** Reuse assembly's rig-sized painting only when its alpha is fully opaque.
- * Transparent inputs retain source-over-white before the Lanczos resize. */
-export function supportFigure(source: Raster, width: number, height: number, opaquePainting?: Raster): Mask {
-  let painting = opaquePainting;
-  for (let p = 3; painting !== undefined && p < source.data.length; p += 4) if (source.data[p] !== 255) painting = undefined;
-  if (painting === undefined) {
-    const white = newRaster(source.width, source.height);
-    for (let p = 0; p < source.width * source.height; p++) {
-      const alpha = source.data[p * 4 + 3] / 255;
-      for (let c = 0; c < 3; c++) white.data[p * 4 + c] = Math.round(source.data[p * 4 + c] * alpha + 255 * (1 - alpha));
-      white.data[p * 4 + 3] = 255;
-    }
-    painting = sourceInRig(white, width, height);
-  }
-  const painted = paintedFigure(painting), figure = figureSilhouette(painting, painted);
-  for (let p = 0; p < painted.length; p++) figure.data[p] &= painted[p];
-  return figure;
-}
+export { sourceSupportFigure as supportFigure } from './assemble.ts';

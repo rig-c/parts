@@ -255,6 +255,65 @@ export function runPaintingEdgeChecks(say: Say): void {
     );
   }
 
+  // A source-visible gap has an existing allocation even when no edge colour
+  // separates. The canonical figure and a four-neighbour witness bound its fill.
+  {
+    const p = 4 * W + 16, offset = p * 4;
+    const painting = columns(() => RED, () => 255);
+    const layer = columns(() => RED, x => x < 18 && x !== 16 ? 255 : 0);
+    const figure = newMask(W, H);
+    figure.data[p] = 1;
+    const run = [copy(layer)];
+    const calls: number[] = [];
+    paintingEdges(run, painting, options({ editable: [true], figure, written: (_i, q) => calls.push(q) }));
+    say('ED9555_ALLOCATED_EMPTY_FIGURE_PIXEL_RECEIVES_THE_PAINTING',
+      [...run[0].data.slice(offset, offset + 4)].join(',') === '200,0,0,255' && calls.filter(q => q === p).length === 1,
+      `allocated gap alpha ${run[0].data[offset + 3]}; writer callbacks ${calls.filter(q => q === p).length}`);
+    const omitted = [copy(layer)], outside = [copy(layer)];
+    paintingEdges(omitted, painting, options({ editable: [true] }));
+    paintingEdges(outside, painting, options({ editable: [true], figure: newMask(W, H) }));
+    say('ED9556_OMITTED_OR_EMPTY_FIGURE_PRESERVES_THE_OPEN_GAP',
+      omitted[0].data[offset + 3] === 0 && same(omitted[0], outside[0]),
+      `omitted alpha ${omitted[0].data[offset + 3]}; outside-domain bytes identical ${same(omitted[0], outside[0])}`);
+    const keep = newMask(W, H); keep.data[p] = 1;
+    const guarded = [
+      options({ editable: [false], figure }),
+      options({ editable: [true], figure, keep: [keep] }),
+      options({ editable: [true], figure, feathered: [keep] }),
+    ];
+    const held = guarded.map(opts => { const q = [copy(layer)]; paintingEdges(q, painting, opts); return q[0].data[offset + 3]; });
+    say('ED9557_GAP_FILL_RESPECTS_EDITABLE_KEEP_AND_FEATHER', held.every(alpha => alpha === 0), `guarded alphas ${held.join(',')}`);
+    const distant = columns(() => RED, x => x < 14 ? 255 : 0);
+    const detached = [copy(distant)];
+    paintingEdges(detached, painting, options({ editable: [true], figure }));
+    say('ED9558_A_GAP_WITHOUT_FOUR_CONNECTED_ART_STAYS_EMPTY', detached[0].data[offset + 3] === 0,
+      `detached gap alpha ${detached[0].data[offset + 3]}`);
+  }
+  {
+    const p = 4 * W + 9, offset = p * 4;
+    const painting = columns(x => x < 9 ? RED : BLUE, () => 255);
+    const layer = columns(() => RED, x => x < 9 ? 255 : x === 9 ? 29 : 0);
+    const figure = newMask(W, H); figure.data[p] = 1;
+    const run = [copy(layer)], bare = [copy(layer)];
+    const calls: number[] = [];
+    paintingEdges(bare, painting, options({ editable: [true], painted: figure.data }));
+    paintingEdges(run, painting, options({ editable: [true], painted: figure.data, figure, written: (_i,q) => calls.push(q) }));
+    say('ED9559_A_ZERO_MATTE_CLEAR_IS_COMPLETED_ON_THE_FIGURE',
+      bare[0].data[offset + 3] === 0 && [...run[0].data.slice(offset,offset+4)].join(',') === '0,0,200,255' && calls.filter(q => q === p).length === 1,
+      `without domain ${bare[0].data[offset + 3]}; restored ${run[0].data[offset + 3]}; callbacks ${calls.filter(q => q === p).length}`);
+  }
+  {
+    const p = 4 * W + 9, offset = p * 4;
+    const painting = columns(x => x < 10 ? RED : BLUE, () => 255);
+    const back = columns(() => BLUE, x => x >= 10 ? 255 : 0);
+    const front = columns(() => RED, x => x < 9 ? 255 : 0);
+    const figure = newMask(W,H); figure.data[p] = 1;
+    const run = [back,front].map(copy);
+    paintingEdges(run,painting,options({ figure,movingPair: () => true }));
+    say('ED9560_A_MOVING_PAIR_GAP_IS_LEFT_FOR_ITS_AUTHORED_SEAM',run.every(q => q.data[offset+3] === 0),
+      `moving-pair gap alphas ${run.map(q => q.data[offset+3]).join(',')}`);
+  }
+
   // Planted: FRONT may not be edited (a painting patch): nothing is written.
   {
     const { painting, stack } = strip(RED, BLUE, RAMP);
