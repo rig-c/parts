@@ -173,6 +173,8 @@ export interface PaintingEdgeOptions {
    * figure there, and taking the behind colour from it would take a painted line.
    */
   painted: Uint8Array;
+  /** Canonical painted figure domain for completing allocated zero-alpha gaps. */
+  figure?: Mask;
   /** Per part: whether the step may write it (false for a painting patch). */
   editable: readonly boolean[];
   keep?: ReadonlyArray<Mask | null>;
@@ -266,6 +268,7 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
       }
     }
   }
+  const fill: Array<[number, number]> = [];
   // A painted pixel no part covers goes to the nearest part (ties to the one drawn in front); farther than the cap, it stays background.
   {
     const near: Uint8Array[] = [];
@@ -274,7 +277,6 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
       for (let p = 0; p < W * H; p++) if (owner[p] === k) set[p] = 1;
       near.push(chebyshev(set, W, H, cap));
     }
-    const fill: Array<[number, number]> = [];
     for (let p = 0; p < W * H; p++) {
       if (owner[p] !== -1 || options.painted[p] !== 1) continue;
       // Busy ground: only where two parts' supports meet, and only to a part whose support holds the pixel.
@@ -307,6 +309,7 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
   const distOf = (label: number): Uint8Array => dist[label < 0 ? n : label];
   const skipped: PaintingEdgeSkips = { cover: 0, contrast: 0, locked: 0, noBehind: 0, pieces: 0, mix: 0, support: 0 };
   const decisions: Decision[] = [];
+  const locked = new Uint8Array(W * H);
   let resolved = 0;
   let unseparated = 0;
   for (let y = 0; y < H; y++) {
@@ -346,6 +349,7 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
         (behind >= 0 && options.feathered?.[behind]?.data[p] === 1) ||
         (behind >= 0 && options.movingPair?.(front, behind) === true)
       ) {
+        locked[p] = 1;
         skipped.locked++;
         continue;
       }
@@ -610,8 +614,29 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
     for (const [p, v] of writes) {
       d.set(v, p * 4);
       changed[i].data[p] = 1;
-      options.written?.(i, p);
     }
   });
+  // Complete the existing allocation only where the final stack draws nothing.
+  // Read every candidate before writes, retaining a four-connected witness in
+  // the receiver's existing art and all authored soft/locked boundaries.
+  const restore = fill.filter(([p, front]) => {
+    if (options.figure?.data[p] !== 1 || !options.editable[front] || locked[p] === 1 ||
+      options.keep?.some(m => m?.data[p] === 1) || options.feathered?.some(m => m?.data[p] === 1) ||
+      (busy && !supports(front, p)) || parts.some(r => r.data[p * 4 + 3] > 0)) return false;
+    const d = parts[front].data, x = p % W;
+    return (x > 0 && d[(p - 1) * 4 + 3] > OPAQUE_ALPHA_ABOVE) ||
+      (x + 1 < W && d[(p + 1) * 4 + 3] > OPAQUE_ALPHA_ABOVE) ||
+      (p >= W && d[(p - W) * 4 + 3] > OPAQUE_ALPHA_ABOVE) ||
+      (p + W < W * H && d[(p + W) * 4 + 3] > OPAQUE_ALPHA_ABOVE);
+  });
+  for (const [p, front] of restore) {
+    const s = p * 4;
+    parts[front].data.set([srcr.data[s], srcr.data[s + 1], srcr.data[s + 2], 255], s);
+    changed[front].data[p] = 1;
+  }
+  planned.forEach((writes, i) => {
+    for (const p of writes.keys()) options.written?.(i, p);
+  });
+  for (const [p, front] of restore) if (!planned[front].has(p)) options.written?.(front, p);
   return { changed, resolved, unseparated, skipped };
 }

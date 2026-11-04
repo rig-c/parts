@@ -2572,6 +2572,25 @@ export function visibilityCounts(object: string, part: Raster, visible: Mask, pr
   return { visible_px: vis, occluded_px: occ, visible_not_projected_px: vis - proj, projected: proj };
 }
 
+/** Reuse assembly's rig-sized painting only when its alpha is fully opaque.
+ * Transparent inputs retain source-over-white before the Lanczos resize. */
+export function sourceSupportFigure(source: Raster, width: number, height: number, opaquePainting?: Raster): Mask {
+  let painting = opaquePainting;
+  for (let p = 3; painting !== undefined && p < source.data.length; p += 4) if (source.data[p] !== 255) painting = undefined;
+  if (painting === undefined) {
+    const white = newRaster(source.width, source.height);
+    for (let p = 0; p < source.width * source.height; p++) {
+      const alpha = source.data[p * 4 + 3] / 255;
+      for (let c = 0; c < 3; c++) white.data[p * 4 + c] = Math.round(source.data[p * 4 + c] * alpha + 255 * (1 - alpha));
+      white.data[p * 4 + 3] = 255;
+    }
+    painting = sourceInRig(white, width, height);
+  }
+  const painted = paintedFigure(painting), figure = figureSilhouette(painting, painted);
+  for (let p = 0; p < painted.length; p++) figure.data[p] &= painted[p];
+  return figure;
+}
+
 // ---------------------------------------------------------------------------
 // step 5 — seam override
 // ---------------------------------------------------------------------------
@@ -5691,6 +5710,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     }
   });
   // Issue #953: under `visible`, the parts' visible edges are the painting's (`paintingEdges`); See-through keeps the hidden surface.
+  const visibleFigure = projectRule === 'visible' ? sourceSupportFigure(source, W, H, srcr) : undefined;
   const edged = new Map<string, Mask>();
   let edgeReading: PaintingEdgeReading | null = null;
   if (projectRule === 'visible') {
@@ -5714,6 +5734,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     };
     const e = paintingEdges(stack.map(onRig), srcr, {
       painted: supportPainted,
+      figure: visibleFigure,
       ...(input.ground === undefined ? {} : { ground: input.ground }),
       editable: order.map((d) => !('patch' in d)),
       keep: keepInOrder,
@@ -5912,8 +5933,8 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   // read for ground coverage without changing the assembly silhouette.
   let opaqueSource = true;
   for (let p = 3; p < source.data.length; p += 4) if (source.data[p] !== 255) { opaqueSource = false; break; }
-  const supportSilhouette = opaqueSource ? silhouette ?? figureSilhouette(srcr, supportPainted) : null;
-  const supportFigure = supportSilhouette === null ? undefined : newMask(W, H);
+  const supportSilhouette = opaqueSource && visibleFigure === undefined ? silhouette ?? figureSilhouette(srcr, supportPainted) : null;
+  const supportFigure = visibleFigure ?? (supportSilhouette === null ? undefined : newMask(W, H));
   if (supportFigure !== undefined && supportSilhouette !== null) for (let p = 0; p < supportPainted.length; p++) supportFigure.data[p] = supportSilhouette.data[p] & supportPainted[p];
   return {
     ...(softOcclusion.length === 0 ? {} : { softOcclusion }),
