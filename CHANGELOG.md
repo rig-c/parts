@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.8.0](https://github.com/rig-c/parts/compare/v2.7.0...v2.8.0) (2026-11-04)
+
+
+### Features
+
+* **assemble:** take a seeded derived region ([#1004](https://github.com/rig-c/parts/issues/1004)) ([28c01ab](https://github.com/rig-c/parts/commit/28c01abcb8d95815e9899dd20e31131de2bab842))
+
+
+### Bug Fixes
+
+* **check:** compare setup over a declared backdrop ([#985](https://github.com/rig-c/parts/issues/985)) ([#1007](https://github.com/rig-c/parts/issues/1007)) ([d439bc6](https://github.com/rig-c/parts/commit/d439bc627a24efad505de100907fd46956c10739))
+
 ## [2.7.0](https://github.com/rig-c/parts/compare/v2.6.0...v2.7.0) (2026-11-04)
 
 
