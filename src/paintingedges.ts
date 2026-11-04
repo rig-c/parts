@@ -659,7 +659,18 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
             distance = near[k][p];
           }
         }
-        if (front >= 0 && options.editable[front]) restore.push([p, front]);
+        // Complete an existing surface in front before adding opaque paint
+        // beneath it. Without a witnessed holder, retain the gap allocation.
+        for (let k = n - 1; k >= 0; k--) {
+          if (parts[k].data[p * 4 + 3] > 0 && neighbours.some(q => parts[k].data[q * 4 + 3] > 0)) {
+            front = k;
+            break;
+          }
+        }
+        if (front < 0 || !options.editable[front]) continue;
+        // A covered edge decision can return before setting locked[p].
+        if (parts.some((part, k) => k !== front && part.data[p * 4 + 3] > 0 && options.movingPair?.(front, k) === true)) continue;
+        restore.push([p, front]);
       }
     }
   }

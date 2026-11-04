@@ -365,14 +365,15 @@ export function runPaintingEdgeChecks(say: Say): void {
       moving[0].data[offset + 3] === 0 && moving[1].data[offset + 3] === 64,
       `moving-pair target alphas ${moving.map(q => q.data[offset + 3]).join(',')}`);
 
-    const tieBack = copy(isolated), tieFront = newRaster(W, H);
+    const tieBack = newRaster(W, H), tieFront = newRaster(W, H), tieVeil = newRaster(W, H);
     tieBack.data.set([...RED, 255], (p - 1) * 4);
-    tieFront.data.set([...RED, 255], (p - 1) * 4);
-    const tie = [tieBack, tieFront];
-    paintingEdges(tie, painting, options({ figure }));
+    tieFront.data.set([...RED, 255], (p + 1) * 4);
+    tieVeil.data.set([...RED, 40], offset);
+    const tie = [tieBack, tieFront, tieVeil];
+    paintingEdges(tie, painting, options({ figure, editable: [true, true, true] }));
     say('ED9565_FINAL_OWNER_TIES_USE_THE_GAP_FRONT_FIRST_RULE',
-      tie[0].data[offset + 3] === 64 && tie[1].data[offset + 3] === 255,
-      `equal-distance owners, target alphas ${tie.map(q => q.data[offset + 3]).join(',')}`);
+      tie[0].data[offset + 3] === 0 && tie[1].data[offset + 3] === 255 && tie[2].data[offset + 3] === 40,
+      `opposite four-neighbour owners at equal distance; unwitnessed veil; target alphas ${tie.map(q => q.data[offset + 3]).join(',')}`);
 
     const covered = [columns(() => RED, () => 80), columns(() => RED, () => 80)];
     const before = covered.map(copy);
@@ -389,6 +390,30 @@ export function runPaintingEdgeChecks(say: Say): void {
     say('ED9567_NEW_GAP_WRITES_CANNOT_SUPPLY_AN_INTERIOR_OWNER',
       snapshot[0].data[(p - 1) * 4 + 3] === 255 && snapshot[0].data[offset + 3] === 64,
       `new gap alpha ${snapshot[0].data[(p - 1) * 4 + 3]}; originally isolated translucency alpha ${snapshot[0].data[offset + 3]}`);
+
+    const torso = columns(() => RED, x => x >= 17 ? 255 : x === 16 ? 20 : 0);
+    const arm = columns(() => RED, x => x < 16 ? 255 : x === 16 ? 40 : 0);
+    const veil = newRaster(W, H); veil.data.set([...RED, 40], offset);
+    const seam = [torso, arm, veil];
+    const seamReading = paintingEdges(seam, painting, options({ figure, editable: [true, true, true],
+      movingPair: (a, b) => (a === 0 && b === 1) || (a === 1 && b === 0) }));
+    say('ED9568_A_THIRD_TRANSLUCENT_HOLDER_CANNOT_BYPASS_MOVING_PAIR_LOCK',
+      seamReading.skipped.cover > 0 && seam.map(q => q.data[offset + 3]).join(',') === '20,40,40',
+      `covered edge decisions ${seamReading.skipped.cover}; moving torso, arm and veil target alphas ${seam.map(q => q.data[offset + 3]).join(',')}`);
+
+    const heldBack = newRaster(W, H), heldFront = newRaster(W, H);
+    heldBack.data.set([...RED, 255], (p - 1) * 4);
+    heldBack.data.set([...RED, 64], offset);
+    heldFront.data.set([...BLUE, 255], (p + 3) * 4);
+    heldFront.data.set([...BLUE, 40], (p + 1) * 4);
+    heldFront.data.set([...BLUE, 40], offset);
+    const surface = [heldBack, heldFront];
+    paintingEdges(surface, painting, options({ figure }));
+    const compositePixel = composite(surface).slice(offset, offset + 4);
+    say('ED9569_THE_FRONTMOST_WITNESSED_HOLDER_COMPLETES_THE_PAINTING',
+      surface[0].data[offset + 3] === 64 && surface[1].data[offset + 3] === 255 &&
+      compositePixel[0] === RED[0] && compositePixel[1] === RED[1] && compositePixel[2] === RED[2] && compositePixel[3] === 1,
+      `witnessed back and front alphas ${surface.map(q => q.data[offset + 3]).join(',')}; composite ${[...compositePixel].join(',')}`);
   }
 
   // Planted: FRONT may not be edited (a painting patch): nothing is written.
