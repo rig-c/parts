@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runSupportDomainChecks } from './tools/check_support_domains.ts';
 import { runCoincideChecks, runCoincideSetupChecks, runCoincideMutants } from './tools/check_coincide.ts';
 import { COINCIDE_LINE, type SupportReport } from './src/coincide.ts';
 import { runPaintingEdgeChecks } from './tools/check_painting_edges.ts';
@@ -19049,6 +19050,7 @@ function runCheckSuite(): number {
     try {
       const report = (name: string, ok: boolean, detail: string) => say(name, ok, detail, 'issue #998: independent support domains, report-only coverage and open-edge unowned pixels; each bar kills an isolated instrument mutant');
       runCoincideChecks(dir, report);
+      runSupportDomainChecks(join(dir, 'domains'), report);
       runCoincideSetupChecks(join(dir, 'setup'), report, rigcRunnerAt(suiteRigc(), spawnRigc));
     }
     finally { rmSync(dir, { recursive: true, force: true }); }
@@ -25511,7 +25513,7 @@ function runBuildSuite(): number {
     const out = join(dir, 'out');
     const green = runBuildCli([...buildArgs(dir, out), '--loop']);
     const tail = lastLines(green.out, 4);
-    const expectedTree = [...BUILD_OWNS].sort();
+    const expectedTree = [...BUILD_OWNS, 'part_support_domains.json'].sort();
     const tree = entries(out);
     const artifacts = tail.slice(1).map((l) => l.trim());
     const expectedArtifacts = ['skeleton.json', 'skeleton.atlas', 'skeleton.png'].map((name) => join(out, 'check', 'build', name));
@@ -25597,7 +25599,15 @@ function runBuildSuite(): number {
     const fwdPairs = pairLinesOf(fwd.out, '[check] ');
     const handPairs = pairLinesOf(hand.out, '');
     const pairsTwice = runBuildCli([...buildArgs(cutDir, join(cutDir, 'out-pairs-twice')), '--seam-pairs', '--seam-pairs']);
-    const fwdSameAsHand = withoutConfigRecord(Buffer.from(JSON.stringify(fwdFig ?? {})), join('check', 'check.json')).equals(Buffer.from(JSON.stringify(handFig ?? {}, null, 1)));
+    const { [COINCIDE_LINE]: forwardedSupport, ...forwardedLegacy } = fwdFig ?? {};
+    const { [COINCIDE_LINE]: handSupport, ...handLegacy } = handFig ?? {};
+    const fwdSameAsHand = withoutConfigRecord(Buffer.from(JSON.stringify(forwardedLegacy)), join('check', 'check.json')).equals(Buffer.from(JSON.stringify(handLegacy, null, 1)));
+    say('BU981_BUILD_PAINTING_REACHES_ONLY_SUPPORT_REPORT',
+      (forwardedSupport as SupportReport | undefined)?.unowned.status === 'measured' &&
+      (handSupport as SupportReport | undefined)?.unowned.status === 'unavailable' &&
+      fwdFig !== null && !(SOURCE_LINE in fwdFig) && handFig !== null && !(SOURCE_LINE in handFig),
+      JSON.stringify({ build: (forwardedSupport as SupportReport | undefined)?.unowned.status, standalone: (handSupport as SupportReport | undefined)?.unowned.status }),
+      'default build measures unowned support with its painting; standalone check without --source is the negative control, and the legacy source comparison stays absent');
     say(
       'BU165_BUILD_SEAM_PAIRS_AND_CHECK_SEAM_PAIRS_ON_THE_SAME_RIG_READ_THE_SAME_SEAM_ROWS',
       fwd.status === 0 &&
@@ -25605,7 +25615,7 @@ function runBuildSuite(): number {
         Array.isArray(fwdRows) &&
         Array.isArray(handRows) &&
         JSON.stringify(fwdRows) === JSON.stringify(handRows) &&
-        // Issue #607: build records its config and check alone reads none, so the build's record is set aside here.
+        // Issue #607: build records its config and check alone reads none, so the build's record and the source-dependent support report are set aside here.
         fwdSameAsHand &&
         handFig !== null &&
         !('config' in handFig) &&
@@ -25726,7 +25736,7 @@ function runBuildSuite(): number {
         rigFail.includes('declares duration 1s but its last key is at 0s') &&
         still.out.includes('build: stopped at rig; no later stage ran') &&
         !still.out.includes('[check]') &&
-        stillTree.join(',') === 'keep.txt,parts,parts.json,recomposite_error_rig.png,recomposite_rig.png',
+        stillTree.join(',') === 'keep.txt,part_support_domains.json,parts,parts.json,recomposite_error_rig.png,recomposite_rig.png',
       `exit ${still.status}; ${rigFail ?? 'no [rig] FAIL line'}; --out afterwards [${stillTree.join(', ')}] (a planted check/check.json and idle.gif were there before, and keep.txt, which build does not own)`,
       'emit only after green, across stages: a red stage stops everything after it, its own refusal is what is printed, and a file an earlier run left where build writes is cleared rather than left beside the refusal looking current',
     );
@@ -26181,7 +26191,9 @@ function runBuildSuite(): number {
     const alone = runIn(['check', '--rig', join(relOut, 'rig'), '--parts', relOut, '--out', aloneOut]);
     const aloneText = existsSync(join(aloneOut, 'check.json')) ? readFileSync(join(aloneOut, 'check.json')) : Buffer.from('');
     const aloneFig = readJsonFile(join(aloneOut, 'check.json'));
-    const sameAsBuild = aloneText.length > 0 && withoutConfigRecord(readFileSync(join(relOut, 'check', 'check.json')), join('check', 'check.json')).equals(Buffer.from(JSON.stringify(JSON.parse(aloneText.toString('utf8')), null, 1)));
+    const { [COINCIDE_LINE]: _buildSupport, ...buildLegacy } = readJsonFile(join(relOut, 'check', 'check.json')) ?? {};
+    const { [COINCIDE_LINE]: _aloneSupport, ...aloneLegacy } = aloneFig ?? {};
+    const sameAsBuild = aloneText.length > 0 && withoutConfigRecord(Buffer.from(JSON.stringify(buildLegacy)), join('check', 'check.json')).equals(Buffer.from(JSON.stringify(aloneLegacy, null, 1)));
     say(
       'BU212_CHECK_ALONE_READS_NO_CONFIG_AND_WRITES_NO_CONFIG_RECORD_AND_OTHERWISE_THE_BUILD_S_CHECK_JSON',
       alone.status === 0 && aloneFig !== null && !('config' in aloneFig) && sameAsBuild,
@@ -33401,7 +33413,7 @@ function runAssembleSuite(): number {
     const readBack = r1.status === 0 ? serializeParts(readParts(join(out1, 'rig', 'parts.json'))) : '';
     say(
       'AS07_THE_CLI_WRITES_THE_SAME_BYTES_TWICE_AND_THE_RECORD_READS_BACK',
-      r1.status === 0 && r2.status === 0 && same && readBack === want && files.length === EXPECTED_PARTS.parts.length + 3 && files.includes('render/recomposite_error_rig.png') && r1.out.includes('recomposite vs source: mean |d|=') && r1.out.includes('  uncovered hole 1: 2611 px at 0,0 64x64 (between "topwear" 86 px, "hair_back" 84 px, "bottomwear" 72 px, "shoes" 48 px, "face" 34 px)'),
+      r1.status === 0 && r2.status === 0 && same && readBack === want && files.length === EXPECTED_PARTS.parts.length + 4 && files.includes('rig/part_support_domains.json') && files.includes('render/recomposite_error_rig.png') && r1.out.includes('recomposite vs source: mean |d|=') && r1.out.includes('  uncovered hole 1: 2611 px at 0,0 64x64 (between "topwear" 86 px, "hair_back" 84 px, "bottomwear" 72 px, "shoes" 48 px, "face" 34 px)'),
       `exit ${r1.status}/${r2.status}; ${files.length} file(s) (${files.join(', ')}), byte-identical across two runs: ${same}; parts.json reads back equal: ${readBack === want}`,
       'determinism is a contract — the error map included — and the parts.json the CLI writes is the one the in-memory control checked; its one hole is printed with the box and the borders the fixture derives',
     );

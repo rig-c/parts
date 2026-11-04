@@ -1,4 +1,5 @@
 import { edgePairResiduals, type EdgeResidualReport } from './edgeresidual.ts';
+import type { SupportDomain } from './coincide.ts';
 import { type SeamRule } from './seamrule.ts';
 import { DEFAULT_GROUND, DEFAULT_PROJECT_RULE, type Ground, type ProjectRule } from './projectrule.ts';
 import { paintingEdges, type PaintingEdgeSkips } from './paintingedges.ts';
@@ -4616,6 +4617,8 @@ export interface AssembleResult {
   /** Console-only source-edge support (#888); never serialized into parts.json. */
   cutMaterial: MaterialRow[];
   materialSources: MaterialSource[];
+  /** Independent authored masks frozen before any art-dependent partition. */
+  supportDomains: SupportDomain[];
   /** What each `config.limbs` limb cut, per part it took and per joint (`limbLines`); empty without limbs (issue #349). */
   limbs: LimbCount[];
   /** The full-run layers the plan does not take from the full run whose uncovered error holds a body (`uncoveredErrorLayers`); empty otherwise. */
@@ -5005,6 +5008,9 @@ export function assemble(input: AssembleInput): AssembleResult {
   // most likely), and two cuts of one part that share a pixel would give it
   // to both. Every pair is named.
   const cutMasks = cuts.map((q) => pixelsInPolygon(q.polygon, W, H));
+  const supportDomains: SupportDomain[] = cuts.map((cut, i) => ({ part: cut.into,
+    mask: { width: W, height: H, data: cutMasks[i].data.slice() },
+    provenance: { kind: 'cut-polygon', entry: `config.assemble.cuts[${i}].polygon` } }));
   cuts.forEach((q, i) => {
     const out = q.polygon.filter(([x, y]) => x > W || y > H);
     if (out.length > 0) {
@@ -5864,6 +5870,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     cuts: cutCounts,
     cutMaterial: [...cutMaterial, ...lim.material],
     materialSources: [...materialSources, ...lim.sources],
+    supportDomains,
     limbs: lim.counts,
     uncovered,
     holeKinds: kinds,

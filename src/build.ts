@@ -1,4 +1,5 @@
 import { EDGE_RESIDUAL_FILE, edgeResidualLines } from './edgeresidual.ts';
+import { SUPPORT_DOMAINS_FILE, writeSupportDomains } from './supportdomains.ts';
 import { COINCIDE_LINE, supportLines } from './coincide.ts';
 import { DEFAULT_SEAM_RULE } from './seamrule.ts';
 import { DEFAULT_PROJECT_RULE } from './projectrule.ts';
@@ -340,6 +341,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   // The early door: assemble runs before propose has drafted bones, meshes,
   // regions and motion, so it requires only what it reads (issue #20).
   const cfg = loadEarlyConfig(input.config, 'assemble');
+  const supportDeclarations = JSON.stringify(cfg.assemble.cuts ?? []);
   const seam = input.seam ?? cfg.assemble.seam ?? DEFAULT_SEAM_RULE;
   const project = input.project ?? cfg.assemble.project ?? DEFAULT_PROJECT_RULE;
   const src = readSource(input.source);
@@ -810,6 +812,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   }
   if (materialAsked) writeMaterialSources(outs.partsJson, outs.partsDir, result.parts, result.materialSources);
   else rmSync(join(dirname(outs.partsJson), CUT_MATERIAL_SOURCES), { force: true });
+  writeSupportDomains(outs.partsJson, outs.partsDir, result.parts, result.supportDomains, supportDeclarations);
   writePng(outs.recomposite, result.recomposite);
   writePng(outs.errorMap, result.errorMap);
   // Issue #242: under config.scene, the figure the recomposite was read inside, beside the recomposite.
@@ -1671,6 +1674,8 @@ export interface CheckStageInput {
   out: string;
   /** The painting `--source` names (issue #77): adds the setup pose against it. */
   source?: string;
+  /** Internal build painting for the report only; does not enable source gates. */
+  supportSource?: string;
   /** The packed build's `--page-edges`; {@link DEFAULT_PAGE_EDGES} when absent. */
   pageEdges?: PageEdges;
   /** The packed build's `--pack-shape`; {@link DEFAULT_PACK_SHAPE} when absent. */
@@ -1934,7 +1939,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   const entryLine = versionLines.find((l) => l.startsWith('entry:'));
   log(`  ${rigcIdentity(bin, v)}${entryLine === undefined ? '' : `; ${entryLine}`}`);
   const mode: PackMode = { pageEdges: input.pageEdges ?? DEFAULT_PAGE_EDGES, packShape: input.packShape ?? DEFAULT_PACK_SHAPE };
-  const r = runCheck(input.rig, input.out, rigc, input.parts, mode, input.source, input.requirements, input.seamPairs === true, input.keepStills === true, input.set, input.allSets === true, input.environment, input.requirementsAs, input.config, input.windBand, input.noExtremes === true);
+  const r = runCheck(input.rig, input.out, rigc, input.parts, mode, input.source, input.requirements, input.seamPairs === true, input.keepStills === true, input.set, input.allSets === true, input.environment, input.requirementsAs, input.config, input.windBand, input.noExtremes === true, input.supportSource);
   if (r.figures.environment !== undefined) log(`  ${environmentLine(r.figures.environment)}`);
   log(`  gate rig-play (rigc ${packedBuildLabel(mode)}), verbatim:`);
   for (const l of r.gateHtml) log(l);
@@ -2454,6 +2459,7 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
   // Optional source evidence is cleared separately; BUILD_OWNS is the legacy complete output tree.
   rmSync(join(out, CUT_MATERIAL_SOURCES), { force: true });
   rmSync(join(out, EDGE_RESIDUAL_FILE), { force: true });
+  rmSync(join(out, SUPPORT_DOMAINS_FILE), { force: true });
   // Issue #242: the figure mask is written only under config.scene; one left by an earlier scene build is not this build's.
   rmSync(join(out, FIGURE_MASK_FILE), { force: true });
   // The idle-keys value is named only when it is not the default, so a build without the flag, or with the default, prints the line it printed before issue #95.
@@ -2500,7 +2506,7 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
 
   let report: CheckReport;
   try {
-    report = stages.check({ rig: join(out, 'rig'), parts: out, out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(req === null ? {} : { requirements: req.read, requirementsAs: req.recorded }), ...(paintingForCheck === null ? {} : { source: paintingForCheck }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, noExtremes: input.noExtremes === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }), ...(input.windBand === undefined ? {} : { windBand: input.windBand }), ...(configRecord === null ? {} : { config: configRecord }) }, run.check, run.checkBin, prefixed('check'));
+    report = stages.check({ rig: join(out, 'rig'), parts: out, supportSource: input.source, out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(req === null ? {} : { requirements: req.read, requirementsAs: req.recorded }), ...(paintingForCheck === null ? {} : { source: paintingForCheck }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, noExtremes: input.noExtremes === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }), ...(input.windBand === undefined ? {} : { windBand: input.windBand }), ...(configRecord === null ? {} : { config: configRecord }) }, run.check, run.checkBin, prefixed('check'));
   } catch (err) {
     return refused('check', err);
   }
