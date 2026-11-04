@@ -851,7 +851,8 @@ shipped `source: true` semantics and prints one
 stage painting for the predicate. A declared but unreadable reference, or a
 hash or painting-dimension mismatch, is refused by name. Only an explicitly
 declared painting reference keeps the selected mask fixed when `--source`
-changes for projection. Its input is derived as for whole-layer take above.
+changes for projection. The reference governs colour only and geometry follows `--source`.
+Its input is derived as for whole-layer take above.
 Both run canvases must agree, and the supplied original donor input
 must match the entire target input in RGBA and dimensions, establishing the same
 crop. Different crops await #973. Painting samples use the existing Lanczos3
