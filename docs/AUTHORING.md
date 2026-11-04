@@ -656,7 +656,7 @@ some layers, can supply those tags without editing either run directory:
 }]
 ```
 
-This array belongs in `assemble`. Every entry requires all four fields. `run`
+This array belongs in `assemble`. Every whole-layer entry requires all four fields. `run`
 is the **target** `full` or `head` run; `head` requires `--head`. `run_dir` and
 `st_input` resolve relative to the config, for assemble, build and
 `assemble --propose-plan` alike. Each target run/tag may be selected once. Empty
@@ -734,6 +734,43 @@ identical head input pixels and body-dependent limb results; this feature makes
 identity an executable check on supplied original inputs instead of trusting
 that claim or hand-editing `layers.json`. Seed and painting selection remain
 the author's decisions.
+
+### Taking a derived region (`assemble.take`, issue #1000)
+
+A region entry names one existing plan part, its target run, one donor run and
+one seed pixel on the target run canvas (integer x right, y down).
+
+```json
+"take": [{
+  "run": "full",
+  "run_dir": "runs/other",
+  "st_input": "inputs/other_full.png",
+  "part": "body",
+  "seed": [120, 240]
+}]
+```
+
+The region is derived from base alpha < 128, donor alpha >= 128, and the
+maximum RGB channel difference after rounding each pixel source-over white.
+The tolerance is exactly `--requirements`' `setup_painting.rgb_tolerance`.
+A missing declaration is refused. The target input is derived as for whole-layer
+take above. Both run canvases must agree, and the supplied original donor input
+must match the entire target input in RGBA and dimensions, establishing the same
+crop. Different crops await #973. Painting samples use the existing Lanczos3
+resize onto the run canvas. Only the 8-connected qualifying component containing
+the seed is copied. The base layer's depth and draw order stay in use.
+
+No polygon, rectangle or brush input is accepted. A drawn bound is scissors.
+The log reports the derived pixel count, run-grid `[left, top, width, height]`
+bounding box, painting-match share and tolerance. The share is 1 because every
+selected pixel passed the painting predicate. An empty region, seed outside its
+components or missing donor tag is refused before output. A target may have one
+region take or one whole-layer take. Hidden companions and active scalar depth
+sheets require separate bindings and are refused. Region donor runs use the same
+`editor_receipts` ledger as the base runs. Under `required` or `trace_parts`,
+every donor author/hidden image requires a valid receipt before pixels are
+copied. A receipted author-layer target is accepted. The plan proposal command
+refuses region entries because their part names depend on an existing plan.
 
 ### Editor receipts (`assemble.editor_receipts`, issue #946)
 
@@ -4982,6 +5019,13 @@ those settings. Changing a config seed alone cannot change a no-config run.
 | <a id="ASSEMBLE_TAKE_SUPPORT"></a>`ASSEMBLE_TAKE_SUPPORT` | selected layer has zero alpha > 8 pixels | choose a nonempty donor layer |
 | <a id="ASSEMBLE_TAKE_DEPTH_AMBIGUOUS"></a>`ASSEMBLE_TAKE_DEPTH_AMBIGUOUS` | different original runs have equal or null depths | use a run with distinct numeric depths; do not invent an inter-run tie order |
 | <a id="ASSEMBLE_TAKE_PLAN_ORDER"></a>`ASSEMBLE_TAKE_PLAN_ORDER` | supplied plan reverses an overlapping mixed-run pair: two-run full-layer head roles first, scalar depth within a role band (head-run and single-run rows use scalar depth); names the parts and support intersection | use the order drafted by `assemble --propose-plan`; fallback headwear follows the body and precedes the face, front hair follows the face; disjoint supports impose no plan-order constraint |
+| <a id="ASSEMBLE_REGION_TAKE_TOLERANCE"></a>`ASSEMBLE_REGION_TAKE_TOLERANCE` | a region take has no authored `setup_painting.rgb_tolerance` | supply the same requirements file to assemble/build and check |
+| <a id="ASSEMBLE_REGION_TAKE_GEOMETRY"></a>`ASSEMBLE_REGION_TAKE_GEOMETRY` | donor and target canvases or original input RGBA differ, or the target head run is absent | supply the same crop and original input PNG. Cropped donors await #973 |
+| <a id="ASSEMBLE_REGION_TAKE_PART"></a>`ASSEMBLE_REGION_TAKE_PART` | the named plan part/run or its base/donor tag is absent, or the target is taken twice | name an existing plan part and one donor holding its tag |
+| <a id="ASSEMBLE_REGION_TAKE_EMPTY"></a>`ASSEMBLE_REGION_TAKE_EMPTY` | the derived qualifying region has 0 pixels | supply material missing from the base that covers and matches the painting |
+| <a id="ASSEMBLE_REGION_TAKE_SEED"></a>`ASSEMBLE_REGION_TAKE_SEED` | the seed touches no qualifying component | name an integer pixel in the derived region on the target run canvas |
+| <a id="ASSEMBLE_REGION_TAKE_BINDING"></a>`ASSEMBLE_REGION_TAKE_BINDING` | active scalar depth or hidden companions have no region binding | supply a part without those companions |
+| <a id="ASSEMBLE_REGION_TAKE_PLAN"></a>`ASSEMBLE_REGION_TAKE_PLAN` | a region entry is present during plan proposal | draft the plan before declaring region takes, then use assemble/build with requirements |
 | <a id="ASSEMBLE_TAKE_GEOMETRY"></a>`ASSEMBLE_TAKE_GEOMETRY` | missing target head, unequal run canvases or unequal original input dimensions | supply matching geometry; the check does not resize inputs |
 | <a id="ASSEMBLE_TAKE_META"></a>`ASSEMBLE_TAKE_META` | donor `meta.json` lacks a readable prompt ID or seed | retain the original run metadata |
 | <a id="ASSEMBLE_TAKE_INPUT"></a>`ASSEMBLE_TAKE_INPUT` | declared donor input PNG cannot be read | name its original PNG relative to the config |

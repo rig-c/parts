@@ -1759,6 +1759,12 @@ function cmdAssemble(args: string[]): number {
       const target = writePath === undefined ? null : readConfigWriteTarget(writePath);
       const src = readSource(source);
       const cfg = loadEarlyConfig(config, 'layers');
+      if (cfg.assemble.take?.some(item => 'part' in item)) {
+        throw new PartsError([{
+          code: 'ASSEMBLE_REGION_TAKE_PLAN', object: 'config.assemble.take',
+          detail: 'region takes require a declared plan and setup_painting requirements at assemble/build; draft the plan before declaring a region take',
+        }]);
+      }
       const runs = applyTakenLayers(readRuns(full, head), src, { ...cfg, assemble: { ...cfg.assemble, plan: undefined } }, config);
       const g = proposeFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
       const geometry = { sourceW: src.width, sourceH: src.height, ...g };

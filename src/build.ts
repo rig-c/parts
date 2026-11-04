@@ -7,6 +7,7 @@ import { writeMaterialSources } from './cutmaterialio.ts';
 import { CUT_MATERIAL_LINE, CUT_MATERIAL_SOURCES, materialLines } from './cutmaterial.ts';
 import { ART_JOINT_LINE, artJointLines } from './artjoints.ts';
 import { applyTakenLayers } from './takelayers.ts';
+import { applyTakenRegions } from './takeregion.ts';
 import { ownershipLines, provenanceLines } from './provenance.ts';
 import { readSourceDepth } from './depthsheets.ts';
 import { orderedBaseAnchor } from './baseanchor.ts';
@@ -345,7 +346,8 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const receipts = readEditorReceipts(cfg.assemble.editor_receipts, input.config);
   // Issue #947: under `trace_parts`, a shape drawn in the config through a part's pixels is refused with them.
   refuseIfAny([...receipts.problems, ...missingReceipts(receipts, [...editedRunImages(read), ...editedConfigImages(input.config, cfg.assemble.cuts ?? [], cfg.limbs)]), ...untracedPartSources(cfg)]);
-  const runs = applyTakenLayers(read, src, cfg, input.config);
+  const takenRuns = applyTakenLayers(read, src, cfg, input.config);
+  const runs = applyTakenRegions(takenRuns, src, cfg, input.config, requirementsFile?.setup_painting, receipts);
   for (const note of runs.notes) log(`note: ${note}`);
   const fields = stageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
   const under = readUnders(input.config, fields.cuts);

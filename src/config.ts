@@ -1,6 +1,6 @@
 import { SEAM_RULES, type SeamRule } from './seamrule.ts';
 import { GROUNDS, type Ground, PROJECT_RULES, type ProjectRule } from './projectrule.ts';
-import type { TakeLayers } from './takelayers.ts';
+import type { TakeDeclaration } from './takeregion.ts';
 import { paintingExtensionProblems, type PaintingExtension } from './paintingextension.ts';
 import { baseAnchorProblems, type BaseAnchor } from './baseanchor.ts';
 import type { DepthConfig } from './depthsheets.ts';
@@ -309,8 +309,8 @@ export interface Assemble {
   project?: ProjectRule;
   /** Optional per-character painting ground (issue #996); absent, `plain`. Read by `visible` only. */
   ground?: Ground;
-  /** Verified named replacements from another See-through run (#866). */
-  take?: TakeLayers[];
+  /** Whole-layer replacements (#866) or seeded, painting-matched region takes (#1000). */
+  take?: TakeDeclaration[];
   /** Issue #946: receipts for images edited in an image editor; absent, no file is read and no byte moves. */
   editor_receipts?: EditorReceipts;
   /** Rig pixels per source pixel. */
@@ -1631,7 +1631,7 @@ export interface EarlyConfig {
   depth?: DepthConfig;
   key: string;
   seethrough: SeeThrough;
-  assemble: { rig_scale: number; seam?: SeamRule; project?: ProjectRule; ground?: Ground; take?: TakeLayers[]; editor_receipts?: EditorReceipts; head_face_underfill?: boolean; yield_refused?: boolean; keep_under_occluders?: string[]; extend_painting?: PaintingExtension[] };
+  assemble: { rig_scale: number; seam?: SeamRule; project?: ProjectRule; ground?: Ground; take?: TakeDeclaration[]; editor_receipts?: EditorReceipts; head_face_underfill?: boolean; yield_refused?: boolean; keep_under_occluders?: string[]; extend_painting?: PaintingExtension[] };
 }
 
 /** What plain `assemble` reads: the early config plus the plan `--propose-plan` printed. */
@@ -2455,15 +2455,32 @@ function checkKeepUnderOccluders(c: Check, a: Record<string, Json>, plan: readon
   });
 }
 
-function checkTakeLayers(c: Check, value: Json): void {
+function checkTakeLayers(c: Check, value: Json, plan: string[] | null = null): void {
   const at = 'config.assemble.take';
   if (!c.array(at, value, false)) return;
   const seen = new Set<string>();
   (value as Json[]).forEach((v, i) => {
-    const p = `${at}[${i}]`, o = c.object(p, v, ['run', 'run_dir', 'st_input', 'tags'], []);
+    const p = `${at}[${i}]`;
+    const region = isPlainObject(v) && ('part' in v || 'seed' in v);
+    const o = region
+      ? c.object(p, v, ['run', 'run_dir', 'st_input', 'part', 'seed'], [])
+      : c.object(p, v, ['run', 'run_dir', 'st_input', 'tags'], []);
     if (o === null) return;
     if (o.run !== 'full' && o.run !== 'head') c.fail('CONFIG_FIELD_TYPE', p + '.run', '"full" or "head" is required');
     for (const k of ['run_dir', 'st_input']) c.string(`${p}.${k}`, o[k]);
+    if (region) {
+      if (c.string(`${p}.part`, o.part) && plan !== null && !plan.includes(o.part)) {
+        c.fail('CONFIG_NAME_RESOLVES', `${p}.part`, `names "${o.part}"; a part named in assemble.plan is required`);
+      }
+      const key = `${String(o.run)}:part:${String(o.part)}`;
+      if (seen.has(key)) c.fail('CONFIG_TAKE_UNIQUE', `${p}.part`, `names ${key} again; one donor per target part is required`);
+      seen.add(key);
+      const seed = o.seed;
+      if (!(Array.isArray(seed) && seed.length === 2 && seed.every(n => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0))) {
+        c.fail('CONFIG_FIELD_TYPE', `${p}.seed`, 'requires [x, y], nonnegative safe integers in target-run canvas pixels');
+      }
+      return;
+    }
     if (!c.array(p + '.tags', o.tags, true)) return;
     (o.tags as Json[]).forEach((tag, j) => {
       const reading = typeof tag === 'string' ? readLayerTag(tag) : null;
@@ -2559,7 +2576,7 @@ function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: s
   }
   checkKeepUnderOccluders(c, a, parts);
   if ('extend_painting' in a) checkPaintingExtensions(c, a.extend_painting);
-  if ('take' in a) checkTakeLayers(c, a.take);
+  if ('take' in a) checkTakeLayers(c, a.take, parts);
   if ('editor_receipts' in a) checkEditorReceipts(c, a.editor_receipts);
   if ('extend_below_crop' in a && c.array(`${p}.extend_below_crop`, a.extend_below_crop, false)) {
     (a.extend_below_crop as Json[]).forEach((entry, i) => {
