@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.0](https://github.com/rig-c/parts/compare/v2.5.0...v2.6.0) (2026-11-04)
+
+
+### Features
+
+* **check:** TIP_OVER_ROOT reads the halves against the bone the part hangs from ([#995](https://github.com/rig-c/parts/issues/995)) ([ee465c9](https://github.com/rig-c/parts/commit/ee465c9c0f8c15284bf03e0344ba912daf7b70be))
+
 ## [2.5.0](https://github.com/rig-c/parts/compare/v2.4.1...v2.5.0) (2026-11-04)
 
 
