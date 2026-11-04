@@ -110,14 +110,14 @@ export function readDiffComponents(text: string, input: DiffInputs): DiffCompone
     const binding = raw[key] as Record<string, unknown>;
     const required = sha(input[key].bytes);
     if (binding.sha256 !== required) bindings.push({ code: 'DIFF_COMPONENTS_BINDING', object: key,
-      detail: `sha256 is ${String(binding.sha256)}; ${required} is required for the bytes actually measured` });
+      detail: `sha256 is ${JSON.stringify(binding.sha256) ?? 'missing'}; ${required} is required for the bytes actually measured` });
   }
   if (bindings.length > 0) throw new PartsError(bindings);
   const floor = raw.definition.floor_px, threshold = raw.definition.threshold;
   if (typeof floor !== 'number' || typeof threshold !== 'number') return reportFailure('definition requires numeric floor_px and threshold');
   const expected = measureDiffComponents(input, floor, threshold);
   const differences: Problem[] = [];
-  const shown = (v: unknown): string => v === undefined ? 'missing' : Array.isArray(v) ? `array with ${v.length} entries` : object(v) ? `object with fields ${Object.keys(v).sort().join(', ')}` : JSON.stringify(v);
+  const shown = (v: unknown): string => v === undefined ? 'missing' : Array.isArray(v) ? `array with ${v.length} entries` : JSON.stringify(v);
   const fail = (path: string, found: unknown, required: unknown): void => {
     differences.push({ code: 'DIFF_COMPONENTS_REPORT', object: path,
       detail: `found ${shown(found)}; required ${shown(required)} from the exhaustive measurement; regenerate the report` });
@@ -130,7 +130,10 @@ export function readDiffComponents(text: string, input: DiffInputs): DiffCompone
     } else if (object(required)) {
       if (!object(found)) { fail(path, found, required); return; }
       for (const key of Object.keys(required)) compare(found[key], required[key], `${path}.${key}`);
-      for (const key of Object.keys(found).sort()) if (!Object.hasOwn(required, key)) fail(`${path}.${key}`, found[key], undefined);
+      for (const key of Object.keys(found).sort()) if (!Object.hasOwn(required, key)) {
+        const field = /^[A-Za-z_$][\w$]*$/.test(key) ? `${path}.${key}` : `${path}[${JSON.stringify(key)}]`;
+        fail(field, found[key], undefined);
+      }
     } else if (found !== required) fail(path, found, required);
   };
   compare(raw, expected, 'report');
