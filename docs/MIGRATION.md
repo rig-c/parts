@@ -481,3 +481,20 @@ cohort to the actual PNG frame set through `readFrameSet` and `boneTrackOf`,
 including unselected frames, before reading the worst pose. Identical static
 ranges on a bone deduplicate; conflicting ranges are explicitly ambiguous,
 never described as no declared range.
+
+## Contour torso drafts (#986)
+
+Fresh `propose` runs draft the chest-holding topwear as a contour mesh, including
+`trunk_chest` when the figure layer is split into limbs. The drafted `proposal.json`
+changes that mesh's mode and its explanatory notes. A torso on chains also declares
+uncapped continuous influences (#991). Non-torso meshes retain their existing modes.
+
+`--bust-landmarks <file>` declares `apex_r`, `apex_l` and optional `cleavage` in rig
+pixels. With these landmarks, `proposal.json` also adds `contour.bust` and the two
+chest-parented bones, `basis.json` records those bones, and the landmark overlays
+show them. Without landmarks the contour remains and a note names the missing
+fields. `--no-bust "<reason>"` records an explicit omission reason.
+
+A config receiving these newly drafted sections, and builds made from it, have
+changed mesh bytes. `--from-config` continues to read authored meshes unchanged.
+See [AUTHORING.md](AUTHORING.md#drafting-the-chest-carrier) for the input contract.

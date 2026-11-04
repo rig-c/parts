@@ -666,6 +666,10 @@ import {
   proposalAsConfig,
   STRAND_LINK_AT,
   proposeWithBasis,
+  readBustLandmarks,
+  gridNote,
+  figureGrid,
+  partGrid,
   readPartSet,
   serializeProposal,
   draftTurn,
@@ -10865,6 +10869,114 @@ function runProposeSuite(): number {
     writeProposeFixture(dir);
     const P = readPartSet(dir);
     const prop = propose(P);
+    const bustParts: ProposeFixturePart[] = [...PROPOSE_PARTS, { name: 'bodice', from: 'full:topwear', x: 50, y: 100, w: 100, h: 45, colour: [60, 80, 100] }];
+    const bustDir = join(dir, 'bust');
+    writeProposeFixture(bustDir, bustParts);
+    const bustSet = readPartSet(bustDir);
+    const missingBust = propose(bustSet);
+    const declaredBust = propose(bustSet, undefined, null, DEFAULT_GRID_RULE, null, true, { landmarks: { apex_r: [75, 125], apex_l: [125, 125] } });
+    const omittedBust = propose(bustSet, undefined, null, DEFAULT_GRID_RULE, null, true, { noBust: 'rigid breastplate' });
+    const bustMesh = declaredBust.meshes.bodice;
+    say('PR752_CHEST_CARRIER_IS_CONTOUR_WITH_DECLARED_BUST_AND_MIDLINE_CLEAVAGE',
+      'contour' in bustMesh && JSON.stringify(bustMesh.contour.bust) === '{"apex_r":[75,125],"apex_l":[125,125],"cleavage":[100,125]}' &&
+      boneAt(declaredBust.bones, 'boob_r') === '[75,125]' && boneAt(declaredBust.bones, 'boob_l') === '[125,125]' &&
+      declaredBust.bones.filter(b => 'name' in b && b.name.startsWith('boob_')).every(b => b.parent === 'chest') &&
+      refusals(() => parseConfig(proposalConfig(bustParts, declaredBust))) === null,
+      JSON.stringify(bustMesh), 'declared landmarks create both named regions through the existing bust shorthand and bones under chest');
+    say('PR753_MISSING_LANDMARKS_AND_REASONED_OMISSION_KEEP_THE_CONTOUR',
+      'contour' in missingBust.meshes.bodice && missingBust.meshes.bodice.contour.bust === undefined &&
+      missingBust.notes.some(n => n.includes('meshes.bodice.contour.bust.apex_r')) &&
+      'contour' in omittedBust.meshes.bodice && omittedBust.meshes.bodice.contour.bust === undefined &&
+      omittedBust.notes.some(n => n.includes('rigid breastplate')) &&
+      JSON.stringify(omittedBust.meshes.skirt) === JSON.stringify(prop.meshes.skirt),
+      JSON.stringify(omittedBust.meshes.bodice), 'a missing declaration names its fields, and omission records the reason without changing other garments');
+    say('PR754_BUST_INPUT_REFUSES_BLANK_CONFLICTING_AND_MALFORMED_DECLARATIONS',
+      refusals(() => propose(bustSet, undefined, null, DEFAULT_GRID_RULE, null, true, { noBust: '  ' }))?.problems.some(p => p.code === 'PROPOSE_BUST_INPUT') === true &&
+      refusals(() => readBustLandmarks({ apex_r: [1, 2], apex_l: [3, NaN] }))?.problems.some(p => p.code === 'PROPOSE_BUST_INPUT') === true &&
+      refusals(() => readBustLandmarks({ apex_r: [1, 2], apex_l: [3, 4], guessed: true }))?.problems.some(p => p.code === 'PROPOSE_BUST_INPUT') === true &&
+      refusals(() => propose(bustSet, undefined, null, DEFAULT_GRID_RULE, null, true, { noBust: 'plate', landmarks: { apex_r: [75,125], apex_l: [125,125] } }))?.problems.some(p => p.code === 'PROPOSE_BUST_INPUT') === true,
+      'blank, non-finite, unknown and conflicting inputs planted', 'no malformed declaration is silently replaced');
+
+
+    const chainBustDir = join(dir, 'chain-bust');
+    writeProposeFixture(chainBustDir, [...PROPOSE_PARTS, { name: 'coat', from: 'full:topwear', x: 50, y: 100, w: 100, h: 160, colour: [60, 80, 100] }]);
+    const chainBust = propose(readPartSet(chainBustDir));
+    say('PR755_ONLY_A_NEW_CONTOUR_TORSO_ON_CHAINS_DRAFTS_THE_CONTINUOUS_UNCAPPED_POLICY',
+      'contour' in chainBust.meshes.coat && chainBust.meshes.coat.segments.some(s => typeof s === 'string' && s.startsWith('robe_')) &&
+      JSON.stringify(chainBust.meshes.coat.influences) === '{"maxInfluences":null,"floor":"continuous"}' &&
+      'contour' in missingBust.meshes.bodice && missingBust.meshes.bodice.influences === undefined &&
+      chainBust.notes.some(n => n.includes("influence cut's weight step")),
+      JSON.stringify(chainBust.meshes.coat), 'issue #991 applies only to a newly drafted contour torso that names chains');
+    const bustLandmarksPath = join(bustDir, 'landmarks.json');
+    writeFileSync(bustLandmarksPath, JSON.stringify({ apex_r: [75, 125], apex_l: [125, 125] }));
+    const bustCliArgs = ['propose', '--parts', bustDir, '--source', join(bustDir, 'painting.png')];
+    const bustCliOut = join(bustDir, 'declared');
+    const bustCli = runCli([...bustCliArgs, '--out', bustCliOut, '--bust-landmarks', bustLandmarksPath]);
+    const omittedCliOut = join(bustDir, 'omitted');
+    const omittedCli = runCli([...bustCliArgs, '--out', omittedCliOut, '--no-bust', 'rigid breastplate']);
+    const blankCliOut = join(bustDir, 'blank');
+    const blankCli = runCli([...bustCliArgs, '--out', blankCliOut, '--no-bust', '  ']);
+    const authoredPath = join(bustDir, 'authored.json');
+    const authoredText = JSON.stringify(proposalConfig(bustParts, declaredBust), null, 3) + '\n';
+    writeFileSync(authoredPath, authoredText);
+    const authoredCli = runCli([...bustCliArgs, '--out', join(bustDir, 'authored-overlay'), '--from-config', authoredPath]);
+    say('PR756_CLI_DRAFTS_BUST_AND_REASON_AND_LEAVES_AN_AUTHORED_CONFIG_BYTE_UNCHANGED',
+      bustCli.status === 0 && omittedCli.status === 0 && blankCli.status === 2 && !existsSync(blankCliOut) &&
+      JSON.parse(readFileSync(join(bustCliOut, 'proposal.json'), 'utf8')).meshes.bodice.contour.bust !== undefined &&
+      JSON.parse(readFileSync(join(omittedCliOut, 'proposal.json'), 'utf8')).notes.some((n: string) => n.includes('rigid breastplate')) &&
+      authoredCli.status === 0 && readFileSync(authoredPath, 'utf8') === authoredText,
+      `landmarks ${bustCli.status}; reason ${omittedCli.status}; blank ${blankCli.status}; authored ${authoredCli.status}, bytes unchanged ${readFileSync(authoredPath, 'utf8') === authoredText}`,
+      'normal CLI entry points emit validated drafts, blank reasons emit nothing, and authored meshes are read without redrafting');
+    writeFileSync(bustLandmarksPath, '{broken');
+    const malformedOut = join(bustDir, 'malformed');
+    const malformedCli = runCli([...bustCliArgs, '--out', malformedOut, '--bust-landmarks', bustLandmarksPath]);
+    const conflictingCli = runCli([...bustCliArgs, '--out', join(bustDir, 'conflict'), '--bust-landmarks', bustLandmarksPath, '--no-bust', 'plate']);
+    say('PR757_MALFORMED_LANDMARK_FILES_AND_CONFLICTING_FLAGS_EMIT_NOTHING',
+      malformedCli.status === 1 && malformedCli.out.includes('PROPOSE_BUST_INPUT') && !existsSync(malformedOut) &&
+      conflictingCli.status === 2 && !existsSync(join(bustDir, 'conflict')),
+      `malformed ${malformedCli.status}; conflicting ${conflictingCli.status}`,
+      'the file is a declared input, so unreadable JSON has a named refusal before output');
+
+    const asymmetricBust = propose(bustSet, undefined, null, DEFAULT_GRID_RULE, null, true, {
+      landmarks: { apex_r: [70, 115], apex_l: [125, 135] },
+    });
+    const asymmetricMesh = asymmetricBust.meshes.bodice;
+    const asymmetricCleavage = 'contour' in asymmetricMesh ? asymmetricMesh.contour.bust?.cleavage : undefined;
+    const outsideMidline = refusals(() => propose(bustSet, undefined, null, DEFAULT_GRID_RULE, null, true, {
+      landmarks: { apex_r: [110, 115], apex_l: [140, 135] },
+    }));
+    const parallelMidline = refusals(() => propose(bustSet, undefined, null, DEFAULT_GRID_RULE, null, true, {
+      landmarks: { apex_r: [80, 110], apex_l: [80, 135] },
+    }));
+    say('PR758_CLEAVAGE_IS_ON_THE_APEX_SEGMENT_AND_TORSO_MIDLINE_AND_AMBIGUOUS_CROSSINGS_REFUSE',
+      asymmetricCleavage !== undefined && asymmetricCleavage[0] === 100 &&
+      asymmetricCleavage[1] === 32233 / 256 &&
+      refusals(() => checkProposal(bustSet, asymmetricBust)) === null &&
+      outsideMidline?.problems.some(p => p.code === 'PROPOSE_BUST_INPUT') === true &&
+      parallelMidline?.problems.some(p => p.code === 'PROPOSE_BUST_INPUT') === true,
+      `asymmetric cleavage ${JSON.stringify(asymmetricCleavage)}; outside ${codes(outsideMidline)}; parallel ${codes(parallelMidline)}`,
+      'issue #475 projects the midline onto the apex segment; projecting its midpoint onto the midline would give the wrong y=125 here');
+
+    const fractionalBust = propose(bustSet, undefined, null, DEFAULT_GRID_RULE, null, true, {
+      landmarks: { apex_r: [75.25, 125.5], apex_l: [125.25, 125.5] },
+    });
+    say('PR759_DECLARED_SUBPIXEL_APICES_ARE_PRESERVED_IN_BOTH_BONES_AND_REGIONS',
+      boneAt(fractionalBust.bones, 'boob_r') === '[75.25,125.5]' &&
+      boneAt(fractionalBust.bones, 'boob_l') === '[125.25,125.5]' &&
+      'contour' in fractionalBust.meshes.bodice && fractionalBust.meshes.bodice.contour.bust?.apex_r[0] === 75.25 &&
+      refusals(() => checkProposal(bustSet, fractionalBust)) === null,
+      `right ${boneAt(fractionalBust.bones, 'boob_r')}; left ${boneAt(fractionalBust.bones, 'boob_l')}`,
+      'declared landmark coordinates are exact inputs, while the derived crossing uses the existing 1/256-pixel config grid');
+    const ambiguousDir = join(dir, 'ambiguous-bust');
+    writeProposeFixture(ambiguousDir, [...bustParts, { ...bustParts[bustParts.length - 1], name: 'second_bodice', from: 'head:topwear' }]);
+    const ambiguousBust = refusals(() => propose(readPartSet(ambiguousDir)));
+    const absentBust = refusals(() => propose(P, undefined, null, DEFAULT_GRID_RULE, null, true, { noBust: 'plate' }));
+    say('PR760_CHEST_CARRIER_OWNERSHIP_IS_NAMED_WHEN_ABSENT_OR_AMBIGUOUS',
+      ambiguousBust?.problems.some(p => p.code === 'PROPOSE_BUST_INPUT' && p.detail.includes('second_bodice')) === true &&
+      absentBust?.problems.some(p => p.code === 'PROPOSE_BUST_INPUT') === true,
+      `ambiguous ${codes(ambiguousBust)}; absent ${codes(absentBust)}`,
+      'overlapping topwear is not resolved by iteration order, and a declared omission cannot target a missing torso');
+
     // Hand-derived from fixtures/propose.ts (face 80,40 40x50; skirt 60,150 80x100; sleeves 20,100 and 160,100 20x60):
     //   axis = 80 + 40/2 = 100; chin = 90; no neck part -> neck y = 90 + 0.12*50 = 96; head y = 40 + 0.88*50 = 84.
     //   hip = (60 + 80/2, 150 + 0.14*50) = (100, 157); chest y = 96 + 0.5*(157 - 96) = 126.5, which Python's round takes to EVEN: 126.
@@ -11636,6 +11748,13 @@ function runSkirtInsideProposeControls(say: (name: string, ok: boolean, detail: 
     // waist line runs at hip + 5 = 169 over 0.09 .. 0.91 of its box's width, 68 + 9.36 -> 77 to 68 + 94.64 -> 163. Two
     // trees with no split are both the edge: strength 50 (the recipe's default edge), wind 1 -> 4, gravity 2 -> 8.
     const named = propose(dress, undefined, null, DEFAULT_GRID_RULE, skirt('dress'));
+    const influenceConflict = refusals(() => propose(dress, undefined, null, DEFAULT_GRID_RULE, {
+      bottomwear: { ...skirt('dress').bottomwear!, influence: { across: true, max: 6, shape: 'smooth' } },
+    }));
+    say('PR761_A_TORSO_RECIPE_CANNOT_SILENTLY_LOSE_AN_EXPLICIT_INFLUENCE_MODE',
+      influenceConflict?.problems.some(p => p.code === 'PROPOSE_BUST_INPUT' && p.object.includes('influence')) === true,
+      codes(influenceConflict), 'a contour torso and a declared influence mode are incompatible, so the input is refused with its field named');
+
     const want: Record<string, string> = { skirt0_: '[[105,184],[94,252]]->[94,286]', skirt1_: '[[134,184],[145,252]]->[145,286]' };
     const wrong = Object.entries(want).filter(([n, v]) => boneAt(named.bones, n) !== v).map(([n, v]) => `${n} ${boneAt(named.bones, n)} (want ${v})`);
     const segs = JSON.stringify(named.meshes.dress?.segments ?? null);
@@ -11647,10 +11766,11 @@ function runSkirtInsideProposeControls(say: (name: string, ok: boolean, detail: 
       wrong.length === 0 &&
         !chainsOf(named).some((c) => c.startsWith('robe')) &&
         segs === '[["chest",[120,102],[120,144]],["hip",[77,169],[163,169]],"skirt0_","skirt1_"]' &&
+        'contour' in named.meshes.dress && JSON.stringify(named.meshes.dress.influences) === '{"maxInfluences":null,"floor":"continuous"}' &&
         JSON.stringify(phys) === '["skirt0_0 50 1/2","skirt0_1 50 4/8","skirt1_0 50 1/2","skirt1_1 50 4/8"]' &&
         note !== undefined && shaped(named.notes).length === 0 && loads === null,
       `${wrong.length === 0 ? 'skirt0_ and skirt1_ as derived' : `wrong: ${wrong.join('; ')}`}; robe chains ${chainsOf(named).filter((c) => c.startsWith('robe')).join(', ') || 'none'}; dress segments ${segs}; physics ${JSON.stringify(phys)}; the recipe's note ${note === undefined ? 'ABSENT' : 'written, naming the field'}; skirt-shape notes ${shaped(named.notes).length}; the proposal loads: ${codes(loads)}`,
-      "issue #402: the author's declaration hands the skirt's rule and recipe to the part — trees from the hip over its art below it, the bodice on the chest segment as the long-robe bottomwear already is — with no mesh split: one lattice, weighted by its segments",
+      "issue #402: the author's declaration hands the skirt's rule and recipe to the part — trees from the hip over its art below it, the bodice on the chest segment as the long-robe bottomwear already is — with no mesh split: one contour torso under issue #986, weighted by the same segments",
     );
 
     const piece = readPartSet(pieceDir);
@@ -14501,12 +14621,29 @@ function runFigureLayerCases(dir: string, say: (name: string, ok: boolean, detai
   const J = joints();
   const one = propose(P, J);
   const bare = propose(P);
+  const figureBust = proposeWithBasis(P, J, null, DEFAULT_GRID_RULE, null, true, {
+    landmarks: { apex_r: [116, 84], apex_l: [140, 84] },
+  });
+  const figureDir = join(dir, 'figure-one');
+  const figureLandmarks = join(figureDir, 'bust-landmarks.json');
+  const figureKeypoints = join(figureDir, 'keypoints.json');
+  writeFileSync(figureLandmarks, JSON.stringify({ apex_r: [116, 84], apex_l: [140, 84] }));
+  writeFileSync(figureKeypoints, JSON.stringify(MANNEQUIN_KEYPOINTS));
+  const figureBustCli = runCli(['propose', '--parts', figureDir, '--source', join(figureDir, 'painting.png'),
+    '--out', join(figureDir, 'bust-out'), '--keypoints', figureKeypoints, '--bust-landmarks', figureLandmarks]);
+  say('PR762_FIGURE_BUST_BASIS_NAMES_THE_SOURCE_LAYER_AND_THE_CLI_EMITS_ITS_DRAFT',
+    'contour' in figureBust.proposal.meshes.trunk_chest &&
+    figureBust.basis.bones.filter(b => b.bone.startsWith('boob_')).every(b => b.origin.parts.join() === 'figure') &&
+    refusals(() => checkBasis(P, figureBust.proposal, figureBust.basis)) === null && figureBustCli.status === 0 &&
+    existsSync(join(figureDir, 'bust-out', 'basis.json')),
+    `figure bust CLI ${figureBustCli.status}; basis ${codes(refusals(() => checkBasis(P, figureBust.proposal, figureBust.basis)))}`,
+    'the source is the figure layer in parts.json, while trunk_chest is a future limb part, so the basis must name the source');
   const wantLimbs =
     'trunk: trunk_hip figure hip | trunk_chest figure chest chest | trunk_neck figure neck neck; ' +
     'arm_r: upperarm_r figure sleeve_r0 | forearm_r figure sleeve_r1 elbow; arm_l: upperarm_l figure sleeve_l0 | forearm_l figure sleeve_l1 elbow; ' +
     'leg_r: thigh_r figure leg_r0 | shin_r figure leg_r1 knee; leg_l: thigh_l figure leg_l0 | shin_l figure leg_l1 knee';
   const note1 = figNote('no handwear part and no legwear part are over 500 px', 'arm_r, arm_l, leg_r, leg_l');
-  const regionsOk = ['trunk_hip:hip', 'trunk_chest:chest', 'trunk_neck:neck', 'upperarm_r:sleeve_r0', 'forearm_r:sleeve_r1', 'thigh_l:leg_l0', 'shin_l:leg_l1'].every((kv) => {
+  const regionsOk = ['trunk_hip:hip', 'trunk_neck:neck', 'upperarm_r:sleeve_r0', 'forearm_r:sleeve_r1', 'thigh_l:leg_l0', 'shin_l:leg_l1'].every((kv) => {
     const [k, v] = kv.split(':');
     return one.regions[k] === v;
   });
@@ -14520,6 +14657,10 @@ function runFigureLayerCases(dir: string, say: (name: string, ok: boolean, detai
       boneAt(one.bones, 'leg_r') === '[[116,126],[116,180]]->[116,224]' &&
       boneAt(one.bones, 'leg_l') === '[[140,126],[140,180]]->[140,224]' &&
       chainNames(one) === 'sleeve_r,sleeve_l,leg_r,leg_l' &&
+      'contour' in one.meshes.trunk_chest &&
+      JSON.stringify(one.meshes.trunk_chest.contour) === '{"tolerance":1,"margin":1,"spacing":6,"maxEdge":6}' &&
+      JSON.stringify(one.meshes.trunk_chest.segments) === '[["chest",[128,62],[128,126]]]' &&
+      !('trunk_chest' in one.regions) &&
       regionsOk &&
       !('figure' in one.meshes) &&
       !('figure' in one.regions) &&
@@ -28756,6 +28897,42 @@ function exampleGridRule(key: string): GridRule {
   return ORACLE_EXAMPLES.includes(key) ? 'part' : DEFAULT_GRID_RULE;
 }
 
+/** Preserve the historical oracle and declare only issue #986's torso-mode and note changes. */
+function expectedContourProposal(ex: string, P: PartSet): Proposal {
+  const original = JSON.parse(readFileSync(join(ex, 'proposal.json'), 'utf8')) as Proposal;
+  const torso = original.meshes.topwear;
+  if (torso === undefined || !('grid' in torso)) throw new Error('the public torso oracle must declare a topwear lattice');
+  const rules = figureRules({ parts: [...P.recs] });
+  if ('code' in rules) throw new PartsError([rules]);
+  const onChain = torso.segments.some(segment => typeof segment === 'string' && original.bones.some(b => 'chain' in b && b.chain === segment));
+  const meshes = {
+    ...original.meshes,
+    topwear: {
+      contour: { tolerance: rules.tolerance, margin: rules.tolerance, spacing: rules.spacing, maxEdge: rules.spacing },
+      r: torso.r,
+      segments: torso.segments,
+      ...(onChain ? { influences: { maxInfluences: null, floor: 'continuous' as const } } : {}),
+    },
+  };
+  const notes = [...original.notes];
+  const gridAt = notes.findIndex(note => note.startsWith('mesh spacing:'));
+  if (gridAt >= 0) {
+    const lattices = Object.keys(original.meshes).filter(name => name !== 'topwear' && 'grid' in original.meshes[name]);
+    const gridParts = lattices.map(name => {
+      const part = P.recs.find(p => p.name === name);
+      if (part === undefined) throw new Error(`the public lattice ${name} must name an assembled part`);
+      return [name, partGrid(part)[0]] as const;
+    });
+    notes.splice(gridAt, 1, ...(gridParts.length === 0 ? [] : [gridNote(figureGrid(P.recs), gridParts)]));
+  }
+  const draftedNotes = [
+    'topwear: contour torso drafted without bust landmarks. Add meshes.topwear.contour.bust.apex_r, apex_l and cleavage in rig pixels, and boob_r/boob_l bones under chest, or re-run with --bust-landmarks <file>. Cleavage may be omitted from that file for midline projection',
+    ...(onChain ? ["topwear: contour segments name a chain. Drafted influences.maxInfluences=null and floor=continuous to avoid the influence cut's weight step across short outline edges (issue #991)"] : []),
+  ];
+  notes.splice(gridAt < 0 ? notes.length : gridAt, 0, ...draftedNotes);
+  return { ...original, meshes, notes };
+}
+
 /**
  * The cloth recipe an example's tracked config declares (issue #372: `wind`, the first example proposed with
  * `propose --cloth`), read through the loader `propose --cloth` reads it with, or null when the config has no `cloth`
@@ -28856,7 +29033,7 @@ function runFacelessExample(key: string, ex: string, out: string, dir: string, s
   try {
     const P = readPartSet(exampleProposalParts(ex, out, dir, key));
     withFace = propose(P, exampleJoints(ex, P), null, exampleGridRule(key), exampleCloth(ex));
-    const tracked = `${JSON.stringify(JSON.parse(readFileSync(join(ex, 'proposal.json'), 'utf8')), null, 2)}\n`;
+    const tracked = serializeProposal(expectedContourProposal(ex, P));
     const built = serializeProposal(withFace);
     exact = built === tracked ? `identical, ${built.length} bytes` : `DIFFERENT from byte ${[...built].findIndex((c, i) => c !== tracked[i])}`;
   } catch (err) {
@@ -28867,7 +29044,7 @@ function runFacelessExample(key: string, ex: string, out: string, dir: string, s
     `CH901_THE_TRACKED_PROPOSAL_IS_WRITTEN_IN_KEY_ORDER_AND_VALUE_AND_THE_FALLBACK_STAYS_OFF[${key}]`,
     exact.startsWith('identical') && withFace !== null && !fallbackNoted,
     `proposal.json re-serialized (two-space indent, its own key order) against serializeProposal on the built parts: ${exact}; fallback note ${fallbackNoted ? 'WRITTEN' : 'absent'}`,
-    "CH06 compares parsed values, which a reordered key passes; the tracked file is the reference's Python output (one-space indent), so the exact comparison is the bytes once both are written the one way this package writes JSON — and the face-less fallback (issue #76) must not fire on an example that has a face",
+    "CH06 compares parsed values, which a reordered key passes; the historical oracle is preserved, and issue #986's expected torso delta is constructed independently before the exact ordered-byte comparison — and the face-less fallback (issue #76) must not fire on an example that has a face",
   );
 
   const cfg = JSON.parse(readFileSync(join(ex, 'config.json'), 'utf8')) as Record<string, unknown> & {
@@ -29509,7 +29686,7 @@ function runChainSuite(_corpus: string | null = null, pre = false): number | nul
         const P = readPartSet(exampleProposalParts(ex, out, dir, key));
         const prop = propose(P, exampleJoints(ex, P), null, exampleGridRule(key), exampleCloth(ex));
         checkProposal(P, prop);
-        const d = jsonDiffs(readJsonAt(join(ex, 'proposal.json')), JSON.parse(serializeProposal(prop)) as unknown, () => null);
+        const d = jsonDiffs(expectedContourProposal(ex, P), JSON.parse(serializeProposal(prop)) as unknown, () => null);
         proposalOk = d.over.length === 0;
         proposal = summarise(d);
       } catch (err) {
@@ -29519,7 +29696,7 @@ function runChainSuite(_corpus: string | null = null, pre = false): number | nul
         `CH06_PROPOSE_ON_THE_BUILT_PARTS_IS_THE_TRACKED_PROPOSAL[${key}]`,
         proposalOk,
         proposal,
-        "the tracked proposal.json is what the reference proposer wrote from the reference's parts (for scarf, which the reference never saw, this port's proposer on this port's build; for wind, with its config's cloth recipe, issue #372); the port's proposer on the port's parts must write the same, which is the proposer's half the examples could not reach before a build existed",
+        "the tracked proposal.json is what the reference proposer wrote from the reference's parts (for scarf, which the reference never saw, this port's proposer on this port's build; for wind, with its config's cloth recipe, issue #372); the port's proposer must retain it except for the explicitly constructed torso contour and notes of issue #986",
       );
 
       // Issue #265: which grid rule the tracked proposal holds, read both ways — the oracle's is the part rule's and the
@@ -29528,7 +29705,7 @@ function runChainSuite(_corpus: string | null = null, pre = false): number | nul
       let ruleOk = false;
       try {
         const P = readPartSet(exampleProposalParts(ex, out, dir, key));
-        const tracked = `${JSON.stringify(JSON.parse(readFileSync(join(ex, 'proposal.json'), 'utf8')), null, 2)}\n`;
+        const tracked = serializeProposal(expectedContourProposal(ex, P));
         const cloth = exampleCloth(ex);
         const joints = exampleJoints(ex, P);
         const asFig = serializeProposal(propose(P, joints, null, DEFAULT_GRID_RULE, cloth)) === tracked;
@@ -29555,7 +29732,7 @@ function runChainSuite(_corpus: string | null = null, pre = false): number | nul
         let clothOk = false;
         try {
           const P = readPartSet(exampleProposalParts(ex, out, dir, key));
-          const tracked = `${JSON.stringify(JSON.parse(readFileSync(join(ex, 'proposal.json'), 'utf8')), null, 2)}\n`;
+          const tracked = serializeProposal(expectedContourProposal(ex, P));
           const joints = exampleJoints(ex, P);
           const withRecipe = propose(P, joints, null, exampleGridRule(key), clothOf);
           const without = propose(P, joints, null, exampleGridRule(key));
