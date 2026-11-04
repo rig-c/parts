@@ -141,14 +141,14 @@ export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleCon
         return refuse('ASSEMBLE_REGION_TAKE_REFERENCE_MATCH', at, `reference sha256 ${referenceHash}, expected ${reference.sha256}; reference ${referencePainting.width}x${referencePainting.height}, source ${painting.width}x${painting.height}; matching hash and painting dimensions are required`);
       }
     }
-    const inputs = makeInputs(referencePainting, cfg, reference === undefined ? 'region take painting' : 'region take reference');
+    const inputs = makeInputs(painting, cfg, 'region take painting (--source must be opaque because geometry follows the run input and inputs refuses see-through paintings, flatten the plate first)');
     const set = runs[declaration.run];
     const donor = readLayers(resolve(dirname(resolve(configPath)), declaration.run_dir));
     refuseIfAny(missingReceipts(receipts, editedRunImages(
       { full: donor, head: donor, single: true },
       `region take "${declaration.run}:${declaration.part}" donor "${declaration.run_dir}" `,
     )));
-    const target = declaration.run === 'head' ? inputs.head : runs.single && set.canvas.w !== set.canvas.h ? referencePainting : inputs.full;
+    const target = declaration.run === 'head' ? inputs.head : runs.single && set.canvas.w !== set.canvas.h ? painting : inputs.full;
     let supplied: Raster;
     try { supplied = readPng(resolve(dirname(resolve(configPath)), declaration.st_input)); }
     catch { return refuse('ASSEMBLE_REGION_TAKE_GEOMETRY', at, `st_input "${declaration.st_input}" must name the original readable donor input PNG so its geometry can be checked`); }
@@ -161,11 +161,13 @@ export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleCon
     if (base.depthSheet !== undefined || material.depthSheet !== undefined || [...set.hidden, ...donor.hidden].some(layer => layer.of === plan[2])) {
       return refuse('ASSEMBLE_REGION_TAKE_BINDING', at, 'hidden companions or active depth sheets require independent region bindings; a part without those companions is required');
     }
-    const source = resize(target, set.canvas.w, set.canvas.h, 'lanczos3');
+    const colourInputs = reference === undefined ? inputs : makeInputs(referencePainting, cfg, 'region take reference');
+    const colourTarget = declaration.run === 'head' ? colourInputs.head! : target === painting ? referencePainting : colourInputs.full;
+    const source = resize(colourTarget, set.canvas.w, set.canvas.h, 'lanczos3');
     const derived = deriveTakenRegion(base, material, source, declaration.seed, tolerance, at);
     lists[declaration.run] = lists[declaration.run].map(layer => layer === base ? derived.layer : layer);
     const reading: RegionReading = { part: declaration.part, run: declaration.run, run_dir: declaration.run_dir, ...derived.reading };
-    const pad = target === referencePainting ? [0, 0] : declaration.run === 'head' ? inputs.headBox! : [-inputs.padLeft, -inputs.padTop];
+    const pad = target === painting ? [0, 0] : declaration.run === 'head' ? inputs.headBox! : [-inputs.padLeft, -inputs.padTop];
     const transform = { scale: [set.canvas.w / target.width, set.canvas.h / target.height], origin: [pad[0], pad[1]], filter: 'lanczos3' };
     if (reference !== undefined) notes.push(`region reference ${reading.run}:${reading.part}: sha256 ${referenceHash}; binding ${'source' in reference ? 'source' : 'painting'}; painting-to-run ${JSON.stringify(transform)}`);
     notes.push(`region take ${reading.run}:${reading.part} from ${reading.run_dir}: ${reading.pixels} run px; box [${reading.box.join(', ')}] (left, top, width, height); painting-match share ${reading.painting_match_share}; RGB tolerance ${reading.rgb_tolerance}; seed [${declaration.seed.join(', ')}], 8-connected`);

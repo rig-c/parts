@@ -158,7 +158,7 @@ part name, `[i]` an entry of a list):
 - **assemble.extend_painting[i]** — required: `part`, `band`, `max_distance`; optional: `min_held_alpha`, `order` (issues #848, #854, #855; explicit final layer-derived part, half-open rig band and positive four-neighbour path bound; base painting only). The optional integer floor 1–255 admits exact original alpha-over coverage strictly below it; absent or 1 blocks every nonzero holder. Only selected target samples below the floor may take painting RGBA; target samples at/above the floor and every non-target holder remain exact. By default overlapping reachable claims refuse. With `order` on every entry (unique nonnegative safe integers), lower values claim first and their gains block later candidates and paths; array order never breaks ties or supplies missing precedence
 - **assemble.take[i]** — required: `run`, `run_dir`, `st_input`; optional: `tags`, `part`, `seed`, `reference`, `crop` (issues #866, #973, #1000, #1031). Whole-layer entries require `tags`; region entries require `part` and `seed`. An absent `reference` preserves the shipped `source: true` predicate and emits one named implicit-reference warning; only an explicitly declared painting reference makes the mask invariant to changes in `--source`
 - **assemble.take[i].crop** — required when present: `box`, `resample` (issue #973, additive, whole-layer entries only). `box` is an inside nonempty integer source-painting `[left, top, right, bottom]` with exclusive right/bottom. `resample: "bilinear"` is required explicitly. Donor input must match the square-padded crop under taken support plus its margin. Unit scale and integer translation copy RGBA exactly; other maps use the declared premultiplied float32 affine filter. Absent, the shipped geometry predicate and refusal message remain unchanged. Region entries reject this field
-- **assemble.take[i].reference** — required: `sha256`; optional: `source`, `painting` (issue #1031). Exactly one of `source: true` or a config-relative `painting` PNG is required
+- **assemble.take[i].reference** — required: `sha256`; optional: `source`, `painting` (issue #1031). Exactly one of `source: true` or a config-relative `painting` PNG is required. The reference governs colour only and geometry follows `--source`. A region take requires an opaque `--source` because its donor must match the run input and the inputs command refuses see-through paintings, so flatten the plate first.
 - **assemble.editor_receipts** — required: `receipts`; optional: `required` (issue #946, additive), `trace_parts` (issue #947, additive)
 - **assemble.editor_receipts.receipts[i]** — required: `file`, `sha256`, `from_sha256`, `editor` (issue #946)
 - **assemble.patches[i]** — required: `name`, `box`, `alpha`, `draw`
@@ -692,3 +692,10 @@ Other maps carry `"bilinear"`. The strict reader refuses incomplete or malformed
 transport records. Absent, the existing receipt fields and bytes are unchanged.
 The output hash describes transport before downstream assembly, independently of
 final part geometry. Existing no-take inputs emit no transport metadata.
+
+### Region take source compatibility (issue #1054)
+
+A see-through `--source` with an opaque explicit painting reference was accepted
+when donor geometry followed the reference and is now refused with
+`INPUTS_PAINTING_OPAQUE` before the donor is read. The reference remains a colour
+binding. The donor continues to be bound to the opaque PNG accepted by `inputs`.

@@ -12,6 +12,8 @@ import { fileSha256, readEditorReceipts } from '../src/editreceipt.ts';
 import { readLayers } from '../src/layers.ts';
 import { readPng, encodePngBytes } from '../src/raster/png.ts';
 import { newRaster } from '../src/raster/types.ts';
+import { crop } from '../src/raster/composite.ts';
+import { makeInputs } from '../src/inputs.ts';
 import { setupPaintingLine } from '../src/setuppainting.ts';
 import { applyTakenRegions, deriveTakenRegion, regionPaintingDelta } from '../src/takeregion.ts';
 
@@ -220,6 +222,8 @@ export function runTakeContainmentChecks(dir: string, say: Say): void {
   const first = applyTakenRegions({ ...runs, notes: [] }, painting, loaded, config, setup, ledger, paintingPath);
   const alternate = { ...painting, data: new Uint8ClampedArray(painting.data) };
   for (let p = 0; p < alternate.data.length; p += 4) for (let c = 0; c < 3; c++) alternate.data[p + c] = 255 - alternate.data[p + c];
+  writeFileSync(join(dir, 'alternate-input.png'), encodePngBytes(alternate));
+  loaded.assemble.take![0].st_input = 'alternate-input.png';
   const second = applyTakenRegions({ ...runs, notes: [] }, alternate, loaded, config, setup, ledger, paintingPath);
   say('REGION_FIXED_REFERENCE_MASK_IS_SOURCE_INDEPENDENT', first.notes.join() === second.notes.join() && first.full.layers.every((p, i) => p.pixels.data.every((v, j) => v === second.full.layers[i].pixels.data[j])), 'same declared painting, inverted projection source, identical selected run bytes and reading');
   const refusal = (mutate: () => void, code: string): boolean => {
@@ -345,4 +349,134 @@ export function runTakeDerivedChecks(dir: string, say: Say): void {
   say('REGION_TRANSITIVE_CUT_LIMB_HYBRID_TARGET_CLOSURE', ['body', 'panel', 'upper', 'lower', 'band'].every(name => closure.has(name)) && !closure.has('painting_patch'), [...closure].join(', '));
   const capClosure = regionTakeTargets(['body'], [], { limb: { segments: [{ part: 'upper', from: 'body', bone: 'a' }, { part: 'lower', from: 'other', bone: 'b', joint: 'joint' }] } });
   say('REGION_UPPER_SOURCE_CAP_DESCENDANT', capClosure.has('lower') && !capClosure.has('other'), 'lower caps can copy taken upper-source art without making the independent source itself a target');
+}
+
+/** Source identity and the independently bound colour predicate use one frame. */
+export function runTakeReferenceGeometryChecks(dir: string, say: Say): void {
+  for (const padded of [false, true]) {
+    const home = join(dir, padded ? 'padded' : 'square');
+    const cfg = writeTakeRegionFixture(home);
+    if (padded) (cfg.seethrough as Record<string, unknown>).head_box = [0, 0, 48, 48];
+    const config = join(home, 'config.json');
+    const paintingPath = join(home, 'painting.png');
+    const platePath = join(home, 'plate.png');
+    const original = readPng(paintingPath);
+    const reference = padded ? crop(original, 8, 0, 48, 64) : original;
+    writeFileSync(paintingPath, encodePngBytes(reference));
+    const plate = { ...reference, data: new Uint8ClampedArray(reference.data) };
+    plate.data[0] ^= 1;
+    const take = (cfg.assemble as { take: Array<Record<string, unknown>> }).take;
+    take[0].st_input = 'plate-input.png';
+    take[0].reference = { painting: 'painting.png', sha256: fileSha256(paintingPath) };
+    const stage = () => {
+      writeFileSync(config, JSON.stringify(cfg));
+      writeFileSync(platePath, encodePngBytes(plate));
+      const inputs = makeInputs(plate, loadEarlyConfig(config, 'assemble'), 'generated plate');
+      writeFileSync(join(home, 'plate-input.png'), encodePngBytes(inputs.full));
+      return assembleStage(
+        { source: platePath, full: join(home, 'full'), head: padded ? join(home, 'full') : null, config, requirements: join(home, 'requirements.json') },
+        { partsJson: join(home, 'out', 'parts.json'), partsDir: join(home, 'out', 'parts'), recomposite: join(home, 'out', 'recomposite.png'), errorMap: join(home, 'out', 'error.png') }, () => {},
+      );
+    };
+    const shift = padded ? 8 : 0;
+    const selected = (result: AssembleResult): number => {
+      const body = result.images.find(part => part.record.name === 'body')!;
+      let pixels = 0;
+      for (let y = 36; y < 44; y++) for (let x = 8 - shift; x < 20 - shift; x++) {
+        if (body.image.data[((y - body.record.y) * body.image.width + x - body.record.x) * 4 + 3] >= 128) pixels++;
+      }
+      return pixels;
+    };
+    const initial = selected(stage());
+    // Uniform colour substitution on half of the generated hole.
+    for (let y = 36; y < 44; y++) for (let x = 14 - shift; x < 20 - shift; x++) reference.data[(y * reference.width + x) * 4] ^= 255;
+    writeFileSync(paintingPath, encodePngBytes(reference));
+    take[0].reference = { painting: 'painting.png', sha256: fileSha256(paintingPath) };
+    const referencePlant = selected(stage());
+    for (let y = 36; y < 44; y++) for (let x = 14 - shift; x < 20 - shift; x++) reference.data[(y * reference.width + x) * 4] ^= 255;
+    writeFileSync(paintingPath, encodePngBytes(reference));
+    take[0].reference = { painting: 'painting.png', sha256: fileSha256(paintingPath) };
+    for (let y = 36; y < 44; y++) for (let x = 14 - shift; x < 20 - shift; x++) plate.data[(y * plate.width + x) * 4] ^= 255;
+    const sourcePlant = selected(stage());
+    say(padded ? 'REGION_PADDED_REFERENCE_COLOUR_AND_SOURCE_GEOMETRY' : 'REGION_REFERENCE_COLOUR_AND_SOURCE_GEOMETRY', initial === 96 && referencePlant === 48 && sourcePlant === 96, `selected cells initial ${initial}, reference-only colour plant ${referencePlant}, source-only colour plant ${sourcePlant}, source ${plate.width}x${plate.height}, run 64x64`);
+  }
+}
+
+/** Native single-run and cropped head-run colour frames stay reference-bound. */
+export function runTakeReferenceBranchChecks(dir: string, say: Say): void {
+  for (const mode of ['native', 'head'] as const) {
+    const home = join(dir, mode);
+    const cfg = writeTakeRegionFixture(home);
+    const original = readPng(join(home, 'painting.png'));
+    const reference = newRaster(96, mode === 'native' ? 64 : 96);
+    reference.data.fill(255);
+    const origin = mode === 'head' ? 16 : 0;
+    for (let y = 0; y < 64; y++) reference.data.set(original.data.subarray(y * 64 * 4, (y + 1) * 64 * 4), ((y + origin) * 96 + origin) * 4);
+    const paintingPath = join(home, 'painting.png');
+    writeFileSync(paintingPath, encodePngBytes(reference));
+    const plate = { ...reference, data: new Uint8ClampedArray(reference.data) };
+    plate.data[0] ^= 1;
+    const platePath = join(home, 'plate.png');
+    writeFileSync(platePath, encodePngBytes(plate));
+    const run = mode === 'head' ? 'head' : 'full';
+    const seethrough = cfg.seethrough as Record<string, unknown>;
+    if (mode === 'head') {
+      seethrough.head_box = [16, 16, 80, 80];
+      (cfg.assemble as Record<string, unknown>).plan = [['body', 'head', 'topwear'], ['face', 'full', 'face']];
+    } else {
+      seethrough.resolution = 96;
+      for (const name of ['full', 'donor']) {
+        const path = join(home, name, 'layers.json');
+        const manifest = JSON.parse(readFileSync(path, 'utf8'));
+        manifest.width = 96;
+        writeFileSync(path, JSON.stringify(manifest));
+      }
+    }
+    const take = (cfg.assemble as { take: Array<Record<string, unknown>> }).take;
+    take[0].run = run;
+    take[0].st_input = 'plate-input.png';
+    const config = join(home, 'config.json');
+    const read = () => {
+      take[0].reference = { painting: 'painting.png', sha256: fileSha256(paintingPath) };
+      writeFileSync(config, JSON.stringify(cfg));
+      const loaded = loadEarlyConfig(config, 'assemble');
+      const inputs = makeInputs(plate, loaded, 'generated plate');
+      writeFileSync(join(home, 'plate-input.png'), encodePngBytes(mode === 'head' ? inputs.head! : plate));
+      const runs = readRuns(join(home, 'full'), mode === 'head' ? join(home, 'full') : null);
+      const taken = applyTakenRegions({ ...runs, notes: [] }, plate, loaded, config, { rgb_tolerance: 0, regions: [] }, readEditorReceipts(undefined, config), platePath);
+      const layer = taken[run].layers.find(item => item.name === 'topwear')!;
+      let selected = 0;
+      for (let y = 36; y < 44; y++) for (let x = 8; x < 20; x++) {
+        if (layer.pixels.data[((y - layer.top) * layer.pixels.width + x - layer.left) * 4 + 3] >= 128) selected++;
+      }
+      return selected;
+    };
+    const initial = read();
+    for (let y = 36; y < 44; y++) for (let x = 14; x < 20; x++) reference.data[((y + origin) * 96 + x + origin) * 4] ^= 255;
+    writeFileSync(paintingPath, encodePngBytes(reference));
+    const planted = read();
+    say(mode === 'native' ? 'REGION_NATIVE_SINGLE_REFERENCE_COLOUR' : 'REGION_HEAD_REFERENCE_COLOUR', initial === 96 && planted === 48, `${mode} selected cells initial ${initial}, reference-only plant ${planted}, required 96 then 48`);
+  }
+}
+
+/** A colour reference does not supply an opaque source for the run producer. */
+export function runTakeSourceOpacityChecks(dir: string, say: Say): void {
+  writeTakeRegionFixture(dir);
+  const plate = readPng(join(dir, 'painting.png'));
+  plate.data[3] = 0;
+  plate.data[7] = 127;
+  const source = join(dir, 'plate.png');
+  writeFileSync(source, encodePngBytes(plate));
+  let message = '';
+  try {
+    assembleStage(
+      { source, full: join(dir, 'full'), head: null, config: join(dir, 'config.json'), requirements: join(dir, 'requirements.json') },
+      { partsJson: join(dir, 'out', 'parts.json'), partsDir: join(dir, 'out', 'parts'), recomposite: join(dir, 'out', 'recomposite.png'), errorMap: join(dir, 'out', 'error.png') }, () => {},
+    );
+  } catch (error) {
+    if (!(error instanceof PartsError)) throw error;
+    message = error.message;
+  }
+  const expected = 'INPUTS_PAINTING_OPAQUE: region take painting (--source must be opaque because geometry follows the run input and inputs refuses see-through paintings, flatten the plate first) — has 2 pixel(s) below alpha 255 (first at 0,0); an opaque painting is required, because neither dropping the alpha nor compositing it is stated by the input';
+  say('REGION_TRANSPARENT_SOURCE_EXPLICIT_REFERENCE_REFUSED', message === expected && !existsSync(join(dir, 'out')), message);
 }
