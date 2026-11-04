@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.9.1](https://github.com/rig-c/parts/compare/v2.9.0...v2.9.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **assemble:** preserve existing behind colour at painting edges ([#1036](https://github.com/rig-c/parts/issues/1036)) ([#1042](https://github.com/rig-c/parts/issues/1042)) ([f3529da](https://github.com/rig-c/parts/commit/f3529dad32ca11f428f2de1b14e14436c5784d16))
+* **selftest:** exit 64 on a refused invocation, apart from a partial run ([#1006](https://github.com/rig-c/parts/issues/1006)) ([#1034](https://github.com/rig-c/parts/issues/1034)) ([5a5f535](https://github.com/rig-c/parts/commit/5a5f535f6af3287ebbb9c9a2759c6769079bd25c))
+
 ## [2.9.0](https://github.com/rig-c/parts/compare/v2.8.1...v2.9.0) (2026-11-04)
 
 
