@@ -20,3 +20,18 @@ export const PROJECT_RULES: readonly ProjectRule[] = ['core', 'visible'];
  * it is opt-in.
  */
 export const DEFAULT_PROJECT_RULE: ProjectRule = 'core';
+
+/**
+ * Issue #996: what lies behind the figure in the painting. `plain` is a ground
+ * of one colour, the assumption `paintedFigure` (src/assemble.ts) makes when it
+ * reads the border ring's median as the ground. `busy` is an opaque ground of
+ * many colours (a wall, a banner), where that test marks the ground as figure
+ * and the painting alone cannot tell a part's painted outline from the ground
+ * next to it. Under `visible`, `paintingEdges` then bounds what a part may take
+ * (see its invariant). The ground is declared by the author, never inferred.
+ */
+export type Ground = 'plain' | 'busy';
+export const GROUNDS: readonly Ground[] = ['plain', 'busy'];
+
+/** The ground when none is declared: `plain`, the code path every build ran before issue #996. */
+export const DEFAULT_GROUND: Ground = 'plain';

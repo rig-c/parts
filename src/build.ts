@@ -58,7 +58,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { type AnimFrame, EncodeError, encodeApng, encodeIndexedApng, INDEXED_DEFAULTS } from './apng.ts';
-import { assemble, type AssembleResult, cutLines, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine } from './assemble.ts';
+import { assemble, type AssembleResult, cutLines, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, groundWarning, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine } from './assemble.ts';
 import { allocationClause, type Reducer, stageBClause, unboundedClause } from './automesh.ts';
 import { residualClause } from './autoenvelope.ts';
 import { type AutoMotionCase, failingRows, idleSchedule, localRow, motionClause, motionDeformation, motionDocument, motionInput, motionRowText, motionStimulus, motionVerdict, noStimulusProblem, prepareComparison, type ReplayCandidate, runComparison, runPreparedComparison, sourceSelfFailure, stimulusMotion, withStimulus } from './automotion.ts';
@@ -689,6 +689,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         ...(fields.armSplit !== undefined && altPlan.some((e) => e[1] === 'full' && (e[2] === 'handwear-r' || e[2] === 'handwear-l')) ? { armSplit: fields.armSplit } : {}),
         ...(fields.headFaceUnderfill === undefined ? {} : { headFaceUnderfill: fields.headFaceUnderfill }),
         ...(fields.yieldRefused === undefined ? {} : { yieldRefused: fields.yieldRefused }),
+        ...(fields.ground === undefined ? {} : { ground: fields.ground }),
         ...(fields.turnMovingPair === undefined ? {} : { turnMovingPair: fields.turnMovingPair }),
         ...(fields.turn === undefined ? {} : { turn: fields.turn, regions: fields.regions, meshes: fields.meshes, motion: fields.motion }),
         seamRule: seam,
@@ -809,10 +810,15 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   if (figurePath !== null) writePng(figurePath, result.figure as Raster);
   const [W, H] = result.parts.rig_size;
   log(`rig-parts assemble: ${result.images.length} part(s) on a ${W}x${H} rig (${result.parts.scale_rig_per_source} rig px per source px), seam rule ${result.seamRule}, projection rule ${result.projectRule}`);
+  // Issue #996: a ground declared or defaulted plain whose border ring is not one colour, under project: visible only.
+  const groundWarn = groundWarning(result.groundShare, fields.ground, result.projectRule);
+  if (groundWarn !== null) log(`  WARN  ${groundWarn.code}: ${groundWarn.object} — ${groundWarn.detail}`);
   // Issue #953: what the painting's edges resolved, under the visible rule only.
   if (result.paintingEdges !== undefined) {
     const e = result.paintingEdges;
     log(`painting edges: ${e.resolved} edge px resolved from the painting (${e.unseparated} against the two reference colours where the window's far sides overlap), ${e.changed} part px changed; left as they were: ${e.skipped.cover} under a part the two-layer model does not carry, ${e.skipped.contrast} where the painting draws no edge (contrast below ${EDGE_CONTRAST}), ${e.skipped.locked} kept, feathered, a patch or a turn's moving pair, ${e.skipped.noBehind} with no behind pixel in the window; ${e.skipped.pieces} part px not written so a part's art keeps its pieces`);
+    // Issue #996: under a declared busy ground, what the two ground rules left.
+    if (fields.ground === 'busy') log(`  busy ground (assemble.ground): ${e.skipped.mix} behind-side px left that are not a mix of the two reference colours, ${e.skipped.support} part px not raised outside the part's own support`);
   }
   // Issue #359: one run, said, so a reader of the lines knows no head run was placed.
   if (runs.single) log(`  one run: ${input.full} holds the face (${SINGLE_RUN_FACE_TAGS.join(', ')}), so no head run is read; every part comes from the full run`);

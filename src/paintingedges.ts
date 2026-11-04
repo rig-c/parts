@@ -1,5 +1,6 @@
 import { OPAQUE_ALPHA_ABOVE } from './layers.ts';
 import { connectedComponents } from './raster/components.ts';
+import { type Ground } from './projectrule.ts';
 import { type Mask, newMask, type Raster, RasterError } from './raster/types.ts';
 
 /**
@@ -100,6 +101,31 @@ import { type Mask, newMask, type Raster, RasterError } from './raster/types.ts'
  * and pixel). Where that leaves out BEHIND's fill under FRONT, FRONT takes the
  * painting's pixel at full alpha instead, under the same rule.
  *
+ * ⚖️ A busy ground (`ground: 'busy'`, issue #996). The two premises above —
+ * `painted` separates figure from ground, and BEHIND is one colour `Cb` across
+ * the window — hold only where the ground is one colour. On an opaque ground of
+ * many colours `paintedFigure` marks the ground as figure, so the gap rule hands
+ * ground pixels to the nearest part, and a ground pixel that is not `Cb`
+ * projects along `Cb -> Cf` as FRONT. Under a busy ground three rules bound what
+ * a part may take:
+ *
+ * - a part's alpha rises at a pixel only where its own alpha before the step is
+ *   above 0 (its support, the reach of See-through's layer through the
+ *   resampling into the rig) — FRONT's coverage, BEHIND's fill and the
+ *   painting's pixel FRONT takes where BEHIND's fill is held back alike;
+ *   a write that would raise one is not made (counted as `support`);
+ * - the gap rule takes a pixel only where the supports of at least two parts
+ *   meet (a gap between two soft rims, which is what it is for), and gives it
+ *   to the nearest of those parts;
+ * - a pixel on BEHIND's side of See-through's line is read only where it is a
+ *   mix of `Cb` and `Cf`: the painting differs from the nearest point of the
+ *   segment `Cb..Cf` by at most half of {@link EDGE_CONTRAST} (max channel, the
+ *   tolerance the composite is held to above); otherwise it is left as it was
+ *   (counted as `mix`).
+ *
+ * Under a plain ground (the default) none of the three applies, and the step is
+ * the one described above, byte for byte.
+ *
  * Every decision is read off the stack as it stood before the step, then
  * applied, so the result does not depend on the order pixels are visited.
  * Deterministic: integer rig arithmetic, medians by sort, no float reduction
@@ -119,6 +145,10 @@ export interface PaintingEdgeSkips {
   noBehind: number;
   /** Part writes left out so a part's art keeps its 4-connected pieces (counted per part and pixel, not per edge pixel). */
   pieces: number;
+  /** Busy ground only (issue #996): BEHIND-side pixels that are not a mix of the two reference colours. */
+  mix: number;
+  /** Busy ground only (issue #996): part writes left out because they would raise a part's alpha outside its own support (per part and pixel). */
+  support: number;
 }
 
 export interface PaintingEdgeResult {
@@ -148,6 +178,8 @@ export interface PaintingEdgeOptions {
   movingPair?: ((a: number, b: number) => boolean) | null;
   /** Called once per part and pixel whose RGBA changed. */
   written?: (part: number, pixel: number) => void;
+  /** Issue #996: the painting's ground; absent, `plain` (see the invariant above {@link EDGE_RADIUS}). */
+  ground?: Ground;
 }
 
 /** Chebyshev distance to the nearest set pixel, capped at `cap` (two-pass, exact for the 8-neighbour metric). */
@@ -219,6 +251,9 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
   });
   const R = EDGE_RADIUS;
   const cap = 2 * R + 2;
+  const busy = options.ground === 'busy';
+  /** A part's support before the step: where its own alpha is above 0. */
+  const supports = (i: number, p: number): boolean => parts[i].data[p * 4 + 3] > 0;
   const owner = new Int16Array(W * H).fill(-1);
   for (let p = 0; p < W * H; p++) {
     for (let i = n - 1; i >= 0; i--) {
@@ -239,9 +274,15 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
     const fill: Array<[number, number]> = [];
     for (let p = 0; p < W * H; p++) {
       if (owner[p] !== -1 || options.painted[p] !== 1) continue;
+      // Busy ground: only where two parts' supports meet, and only to a part whose support holds the pixel.
+      if (busy) {
+        let holders = 0;
+        for (let k = 0; k < n && holders < 2; k++) if (supports(k, p)) holders++;
+        if (holders < 2) continue;
+      }
       let best = -1;
       let bd = cap;
-      for (let k = n - 1; k >= 0; k--) if (near[k][p] < bd) { best = k; bd = near[k][p]; }
+      for (let k = n - 1; k >= 0; k--) if (near[k][p] < bd && (!busy || supports(k, p))) { best = k; bd = near[k][p]; }
       if (best >= 0) fill.push([p, best]);
     }
     for (const [p, k] of fill) owner[p] = k;
@@ -261,7 +302,7 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
     dist.push(any ? chebyshev(set, W, H, cap) : new Uint8Array(W * H).fill(cap));
   }
   const distOf = (label: number): Uint8Array => dist[label < 0 ? n : label];
-  const skipped: PaintingEdgeSkips = { cover: 0, contrast: 0, locked: 0, noBehind: 0, pieces: 0 };
+  const skipped: PaintingEdgeSkips = { cover: 0, contrast: 0, locked: 0, noBehind: 0, pieces: 0, mix: 0, support: 0 };
   const decisions: Decision[] = [];
   let resolved = 0;
   let unseparated = 0;
@@ -363,6 +404,17 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
       const sideHi = sideF.length === 0 ? -Infinity : Math.min(...sideF.map(along));
       const separate = sideHi > sideLo;
       if (!separate) unseparated++;
+      // Busy ground: a pixel on BEHIND's side is read only where it is a mix of Cb and Cf (its distance, max channel, from
+      // the nearest point of the segment Cb..Cf within half the contrast floor); a ground of many colours is not Cb.
+      if (busy && a !== front) {
+        const ax2 = axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2];
+        const t = Math.min(1, Math.max(0, along(p) / ax2));
+        const off = Math.max(...[0, 1, 2].map((c) => Math.abs(srcr.data[p * 4 + c] - (cb[c] + t * axis[c]))));
+        if (2 * off > EDGE_CONTRAST) {
+          skipped.mix++;
+          continue;
+        }
+      }
       const lo = separate ? sideLo : 0;
       const hi = separate ? sideHi : along(ref);
       resolved++;
@@ -428,6 +480,10 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
     const d = parts[i].data;
     const s = p * 4;
     if (d[s] === r && d[s + 1] === g && d[s + 2] === bl && d[s + 3] === al) return;
+    if (busy && al > d[s + 3] && !supports(i, p)) {
+      skipped.support++;
+      return;
+    }
     planned[i].set(p, [r, g, bl, al]);
   };
   /** Per part, the pixels it fills as BEHIND, with the FRONT part over them. */
@@ -444,7 +500,14 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
     if (alpha > 0 && alpha < 255) while (alpha < 255 && 2 * miss(alpha) > EDGE_CONTRAST) alpha++;
     if (alpha >= 255 - OPAQUE_ALPHA_ABOVE) alpha = 255;
     const unmix = (c: number): number => unmixAt(c, alpha);
-    if (alpha === 0) plan(q.front, q.p, 0, 0, 0, 0);
+    // Busy ground: a BEHIND raise outside BEHIND's own support is refused in `plan`, so FRONT is not lowered there either —
+    // FRONT keeps the coverage it had, and a seam whose two supports do not overlap is never left transparent.
+    // The refused BEHIND raise below is the one counted in `skipped.support`.
+    const behindRefused = busy && q.behind >= 0 && alpha < 255 && parts[q.behind].data[s + 3] < 255 && !supports(q.behind, q.p);
+    const keepFront = behindRefused && alpha < parts[q.front].data[s + 3];
+    if (keepFront) {
+      // FRONT keeps its coverage: nothing is planned for it here.
+    } else if (alpha === 0) plan(q.front, q.p, 0, 0, 0, 0);
     else if (alpha === 255) plan(q.front, q.p, P[0], P[1], P[2], 255);
     else plan(q.front, q.p, unmix(0), unmix(1), unmix(2), alpha);
     if (q.behind >= 0 && alpha < 255) {
@@ -526,7 +589,10 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
         // A fill BEHIND cannot take: FRONT takes the painting's pixel whole, so the composite there is still the painting
         // (FRONT is later in draw order, so its own pieces are held after this).
         const front = fills[i].get(p);
-        if (front !== undefined) planned[front].set(p, [srcr.data[p * 4], srcr.data[p * 4 + 1], srcr.data[p * 4 + 2], 255]);
+        if (front !== undefined) {
+          if (busy && !supports(front, p)) skipped.support++;
+          else planned[front].set(p, [srcr.data[p * 4], srcr.data[p * 4 + 1], srcr.data[p * 4 + 2], 255]);
+        }
       }
     }
   });
