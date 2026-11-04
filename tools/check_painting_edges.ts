@@ -83,6 +83,32 @@ export function runPaintingEdgeChecks(say: Say): void {
     `EDGE_OWNER_ALPHA ${EDGE_OWNER_ALPHA} vs COVERED_ALPHA ${COVERED_ALPHA}; EDGE_CONTRAST ${EDGE_CONTRAST} vs ERROR_LIMIT ${ERROR_LIMIT}; EDGE_RADIUS ${EDGE_RADIUS}`,
   );
 
+  // A painted contour on the far BEHIND side must not replace the existing
+  // surface beneath a partially covered FRONT pixel.
+  {
+    const darkBlue: RGB = [0, 0, 100];
+    const mixed: RGB = [100, 0, 50];
+    const painting = columns((x) => x === 9 ? mixed : x < 10 ? RED : darkBlue, () => 255);
+    const stack = [columns(() => BLUE, () => 255), columns(() => RED, RAMP)];
+    const run = stack.map(copy);
+    paintingEdges(run, painting, options());
+    const s = (4 * W + 9) * 4;
+    const colour = [...run[0].data.slice(s, s + 3)];
+    const alpha = run[1].data[s + 3];
+    say(
+      'ED9553_EXISTING_BEHIND_COLOUR_IS_KEPT_UNDER_PARTIAL_FRONT',
+      colour.join(',') === BLUE.join(',') && alpha > 0 && alpha < 255,
+      `BEHIND ${colour.join(',')}, FRONT alpha ${alpha}`,
+    );
+    const blended = composite(run);
+    const error = Math.max(...[0, 1, 2].map((c) => Math.abs(blended[s + c] - painting.data[s + c])));
+    say(
+      'ED9554_FRONT_UNMIX_USES_THE_RETAINED_BEHIND_COLOUR',
+      error <= EDGE_CONTRAST / 2 && blended[s + 3] === 1,
+      `partial pixel composite error ${error}, coverage ${blended[s + 3]}`,
+    );
+  }
+
   // Positive: a sharp painted edge under a soft rim. Before, the ramp past the painting's edge shows FRONT over BEHIND (error above the limit);
   // after, the composite is the painting at every pixel, FRONT's alpha is binary at the painting's edge, and BEHIND stays opaque.
   {
