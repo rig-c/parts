@@ -2537,6 +2537,13 @@ function checkTakeLayers(c: Check, value: Json, plan: string[] | null = null): v
   });
 }
 
+/** Shared receipt shape validation for config and scene input doors. */
+export function editorReceiptProblems(value: unknown, at: string): Problem[] {
+  const c = new Check();
+  checkEditorReceipts(c, value, at);
+  return c.problems;
+}
+
 /**
  * `config.assemble.editor_receipts` (issue #946): `{receipts, required?, trace_parts?}` (`trace_parts`, issue #947).
  * Shape refusals are the loader's own; a receipt whose `from_sha256` equals
@@ -2544,8 +2551,7 @@ function checkTakeLayers(c: Check, value: Json, plan: string[] | null = null): v
  * Whether the file exists and hashes to `sha256` is read at assemble
  * (`src/editreceipt.ts`), where the file is.
  */
-function checkEditorReceipts(c: Check, value: Json): void {
-  const at = 'config.assemble.editor_receipts';
+function checkEditorReceipts(c: Check, value: Json, at = 'config.assemble.editor_receipts'): void {
   const o = c.object(at, value, ['receipts'], ['required', 'trace_parts']);
   if (o === null) return;
   for (const k of ['required', 'trace_parts'] as const) {

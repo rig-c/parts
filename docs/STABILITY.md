@@ -616,6 +616,17 @@ stale evidence rather than reconstructing original art from emitted siblings.
 Without the block the API reading is SKIP; CLI stdout and emitted bytes remain unchanged.
 See [Source before scissors](AUTHORING.md#source-before-scissors).
 
+### Scene plate editor receipts
+
+`scene.plate.editor_receipts` (issue #966, additive) is optional and uses the
+assemble receipt ledger shape, including `required` and `trace_parts`.
+Receipt file paths resolve against the scene file. Declared receipts are
+verified even without `required`; when required, the plate needs a verified
+receipt matching its bytes. Refusals precede all output. Omitting the field
+preserves exit codes and `scene.json` bytes. The existing required
+`provenance` field is preserved. It declares pixel origin, while the receipt
+verifies file identity and records the author's edit declaration.
+
 ### Editor receipts
 
 The optional `assemble.editor_receipts` block (issue #946, additive) records
