@@ -149,6 +149,7 @@ import { TURN_BONE, turnConstraintName, turnTwin } from './turn.ts';
 import { ROOT_BONE, loadConfigWithBytes, type Point } from './config.ts';
 import { influences, meshLimits, type Segment, type Influence, type InfluenceLimits } from './weights.ts';
 import {
+  requirementAnimations,
   aimLine,
   contactLine,
   declareConsumerDriven,
@@ -2767,7 +2768,7 @@ export interface SetCheckFigures {
 /** `check.json`'s `requirements` block: which file was read, the fps every named animation was sampled at, the summary, and each line by its name, in the file's order. */
 export interface RequirementsBlock {
   file: RequirementsFileRecord;
-  fps: number;
+  fps?: number;
   summary: RequirementsSummary;
   lines: Record<string, RequirementLine>;
 }
@@ -7489,12 +7490,11 @@ export function measureRequirements(inp: CheckInputs, file: RequirementsFile, bu
       return p;
     };
     const declared = new Map<string, { poses: Poses; geo: IdleGeometry; path: string }>();
-    for (const r of file.requirements) {
-      if (declared.has(r.animation)) continue;
-      const scene = file.targets.some((t) => t.animation === r.animation);
-      const label = scene ? `as declared, the scene targets of "${r.animation}" placed` : 'as declared';
-      const candidate = scene ? green(buildCopy(placedFor(r.animation).rig, placedFor(r.animation).motion), `the rig ${label}`) : buildDir;
-      declared.set(r.animation, posesOf(candidate, r.animation, join(reqDir, 'as-declared', r.animation), label));
+    for (const animation of requirementAnimations(file.requirements)) {
+      const scene = file.targets.some((t) => t.animation === animation);
+      const label = scene ? `as declared, the scene targets of "${animation}" placed` : 'as declared';
+      const candidate = scene ? green(buildCopy(placedFor(animation).rig, placedFor(animation).motion), `the rig ${label}`) : buildDir;
+      declared.set(animation, posesOf(candidate, animation, join(reqDir, 'as-declared', animation), label));
     }
     for (const r of file.requirements) {
       const d = declared.get(r.animation) as { poses: Poses; geo: IdleGeometry; path: string };

@@ -1,8 +1,6 @@
 {
  "spec": "spine-parts-requirements/1",
  "note": "Read by assemble --requirements (selftest AE04), not named by config.requirements: build would forward it to check, and check.json would gain a requirements block, moving expected/check.json (CH04). It declares no motion requirement.",
- "fps": 12,
- "fps_note": "The format requires fps; no requirement here samples an animation, so 12 is check's own idle rate (IDLE_FPS, src/motion.ts), not a choice.",
  "requirements": [],
  "pinholes": {
   "required": true,
