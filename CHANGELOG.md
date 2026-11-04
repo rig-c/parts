@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.9.0](https://github.com/rig-c/parts/compare/v2.8.1...v2.9.0) (2026-11-04)
+
+
+### Features
+
+* **assemble:** report residual front-back edge candidates ([#1011](https://github.com/rig-c/parts/issues/1011)) ([8e6accb](https://github.com/rig-c/parts/commit/8e6accb893741affbb400ad8a6d3f849bf88213b))
+* **check:** report unowned pixels and unclassified adjacent pairs ([#998](https://github.com/rig-c/parts/issues/998)) ([#1019](https://github.com/rig-c/parts/issues/1019)) ([2fcef3f](https://github.com/rig-c/parts/commit/2fcef3f3e12c0240f1f2ba559cd517dc7df56770))
+* **diff:** report every whole-figure difference component ([#1005](https://github.com/rig-c/parts/issues/1005)) ([#1015](https://github.com/rig-c/parts/issues/1015)) ([992c7bb](https://github.com/rig-c/parts/commit/992c7bb8e94eb53888b0c376b5d0443e6b428c4b))
+* **propose:** draft the chest-holding torso as a contour mesh with a declared bust ([#986](https://github.com/rig-c/parts/issues/986)) ([#1014](https://github.com/rig-c/parts/issues/1014)) ([cae7fa7](https://github.com/rig-c/parts/commit/cae7fa7bca4077bbc2c6f82e28a1f35819affd7c))
+
+
+### Bug Fixes
+
+* **check:** name the weight step on stretch and fold failures ([#991](https://github.com/rig-c/parts/issues/991)) ([#1017](https://github.com/rig-c/parts/issues/1017)) ([39748cd](https://github.com/rig-c/parts/commit/39748cd7e6a343f4eb6468e5540c454fbe06594d))
+
 ## [2.8.1](https://github.com/rig-c/parts/compare/v2.8.0...v2.8.1) (2026-11-04)
 
 
