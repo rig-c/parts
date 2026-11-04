@@ -4346,8 +4346,13 @@ side of its ramp — a doubled line, a stair-step, or the background through a g
 neither is opaque. Within 3 rig px of where two parts' half-coverage lines meet (or a
 part's and the background's), the part drawn in front takes the painting's coverage
 along the axis from the colour behind to its own, its colour unmixed from the colour
-behind, and the part behind is made opaque under it in that colour, so the composite
-is the painting and the rim stays the occluding part's. Where a painted line is darker or
+behind, and the part behind is made opaque under it. Its RGB takes a painting operand
+only when the topmost original config-plan input at alpha >= 128 owns that operand
+for the same part (issue #1028). A direct copy checks that pixel; a separate behind
+median uses only owned operands. Missing or ambiguous original-layer mappings,
+including derived pieces without their own source-plan entry, keep the part's
+pre-step amodal RGB. The original reference colour and all front writes stay unchanged.
+Where a painted line is darker or
 lighter than both colours, the front part's alpha rises until the composite is within 20
 of the painting. A pixel is left as it was where
 a third part with alpha above 8 covers it, where the painting draws no edge between the
@@ -4356,11 +4361,11 @@ keeps the pixel, feathers it, or is a turn's moving pair. A part's art keeps its
 4-connected pieces (`CONTOUR_ONE_ISLAND` reads them so): a write that would split a piece
 or start a new one is left out. The assemble line says how
 many pixels it resolved and why it left the rest; the pixels it writes are
-`provenance.automatic[].stage: "paintingEdge"`. On the five public examples it lowered
-the recomposite's error pixels under `visible` from 11,780 to 765 (`demo`), 7,427 to
+`provenance.automatic[].stage: "paintingEdge"`. At #953's introduction, the five public
+examples' recomposite error pixels under `visible` fell from 11,780 to 765 (`demo`), 7,427 to
 703 (`reference-demo`), 3,965 to 243 (`reference-sample`), 6,749 to 2,190 (`scarf`)
 and 13,872 to 1,110 (`wind`), and the holes from 1,020 to 62, 453 to 40, 259 to 20,
-291 to 34 and 1,118 to 62; `check` passes the same bars as before on all five. A
+291 to 34 and 1,118 to 62. All five passed the same `check` bars as before. A
 painting patch is read placed on the rig canvas, and is never written. `core` is unchanged.
 
 **A busy ground (`assemble.ground`, issue #996).** The step above reads the painting

@@ -75,9 +75,11 @@ import { type Mask, newMask, type Raster, RasterError } from './raster/types.ts'
  * miss the painting by more than half of {@link EDGE_CONTRAST} (a painted line
  * darker or lighter than both colours), FRONT's alpha rises to the least that
  * brings it within. Where FRONT does not cover p fully and BEHIND is a
- * part, BEHIND is made opaque there in `Cb` (in the painting's own colour
- * where FRONT's alpha is 0), so the flat composite at p is the painting, the
- * rim stays FRONT's, and BEHIND's hidden surface past the window is untouched.
+ * part, BEHIND is made opaque there. Its colour takes the painting only from
+ * operands owned by BEHIND in the original config-plan inputs (topmost alpha
+ * >= 128, issue #1028): the pixel itself when FRONT's alpha is 0, otherwise a
+ * separate median of the BEHIND-owned side-window operands. With none, its
+ * pre-step amodal RGB stays. `Cb` and every FRONT calculation are unchanged.
  *
  * A pixel is left as it was — and counted, by reason — when a part drawn in
  * front of FRONT, or between BEHIND and FRONT, has alpha above
@@ -170,6 +172,10 @@ export interface PaintingEdgeOptions {
    * figure there, and taking the behind colour from it would take a painted line.
    */
   painted: Uint8Array;
+  /** Topmost original config-plan input at alpha >= 128, mapped to stack indices.
+   * -1, or an absent map, permits no painting operand for a BEHIND colour write.
+   * Independent of the processed edge-owner map and every FRONT calculation. */
+  inputOwner?: Int32Array;
   /** Per part: whether the step may write it (false for a painting patch). */
   editable: readonly boolean[];
   keep?: ReadonlyArray<Mask | null>;
@@ -238,6 +244,7 @@ interface Decision {
   inside: boolean;
   ring: number;
   cb: [number, number, number];
+  behindColour: [number, number, number] | null;
 }
 
 /** See the invariant above {@link EDGE_RADIUS}. Modifies `parts` (full rig canvases, draw order) in place. */
@@ -439,7 +446,11 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
         if (2 * dOwn <= EDGE_CONTRAST && dOwn < dB) matte = 255;
       }
       const own = parts[front].data[p * 4 + 3];
-      decisions.push({ p, front, behind, matte, own, inside: a === front, ring: bd, cb: [cb[0], cb[1], cb[2]] });
+      const sideBOwn = sideB.filter(q => behind >= 0 && options.inputOwner?.[q] === behind);
+      const behindChannel = (c: number): number[] => sideBOwn.map(q => srcr.data[q * 4 + c]);
+      const behindColour: [number, number, number] | null = sideBOwn.length === 0 ? null
+        : [median(behindChannel(0)), median(behindChannel(1)), median(behindChannel(2))];
+      decisions.push({ p, front, behind, matte, own, inside: a === front, ring: bd, cb: [cb[0], cb[1], cb[2]], behindColour });
     }
   }
   // The ring rule (see the invariant above), resolved ring by ring, the outer ring before the inner one.
@@ -511,8 +522,9 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
     else if (alpha === 255) plan(q.front, q.p, P[0], P[1], P[2], 255);
     else plan(q.front, q.p, unmix(0), unmix(1), unmix(2), alpha);
     if (q.behind >= 0 && alpha < 255) {
-      if (alpha === 0) plan(q.behind, q.p, P[0], P[1], P[2], 255);
-      else plan(q.behind, q.p, q.cb[0], q.cb[1], q.cb[2], 255);
+      const colour = alpha === 0 ? (options.inputOwner?.[q.p] === q.behind ? P : null) : q.behindColour;
+      const amodal = parts[q.behind].data;
+      plan(q.behind, q.p, colour?.[0] ?? amodal[s], colour?.[1] ?? amodal[s + 1], colour?.[2] ?? amodal[s + 2], 255);
       fills[q.behind].set(q.p, q.front);
     }
   });

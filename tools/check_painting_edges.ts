@@ -229,6 +229,61 @@ export function runPaintingEdgeChecks(say: Say): void {
     );
   }
 
+  // Original-input ownership is independent of the processed edge-owner map.
+  // The front input still owns x=9, although the painting puts its edge at x=9.
+  {
+    const amodal: RGB = [0, 160, 0];
+    const painting = columns(x => x < 9 ? RED : BLUE, () => 255);
+    const stack = [columns(() => amodal, () => 255), columns(() => RED, RAMP)];
+    const inputOwner = Int32Array.from({ length: W * H }, (_, p) => p % W <= 9 ? 1 : 0);
+    const run = stack.map(copy);
+    paintingEdges(run, painting, options({ inputOwner }));
+    const foreign = (4 * W + 9) * 4;
+    const own = (4 * W + 10) * 4;
+    say('ED9553_BEHIND_COPY_KEEPS_FOREIGN_PAINT_OUT',
+      amodal.every((v, c) => run[0].data[foreign + c] === v) &&
+      BLUE.every((v, c) => run[0].data[own + c] === v) && run[0].data[foreign + 3] === 255,
+      `foreign operand keeps ${Array.from(run[0].data.subarray(foreign, foreign + 4))}; own operand takes ${Array.from(run[0].data.subarray(own, own + 4))}`);
+    const allowed = stack.map(copy);
+    paintingEdges(allowed, painting, options({ inputOwner: new Int32Array(W * H) }));
+    say('ED9554_BEHIND_OWNERSHIP_DOES_NOT_CHANGE_FRONT_OR_ALPHA',
+      same(run[1], allowed[1]) && run.every((r, i) => r.data.every((v, p) => p % 4 !== 3 || v === allowed[i].data[p])),
+      'changing only original-input owners preserves every FRONT byte and every part alpha');
+  }
+
+  // A mixed pixel needs a median. Missing/foreign original operands keep the
+  // amodal RGB, while an owned median still supplies the painting colour.
+  {
+    const amodal: RGB = [0, 160, 0];
+    const painting = columns(x => x < 9 ? RED : x === 9 ? [100, 0, 100] : BLUE, () => 255);
+    const stack = [columns(() => amodal, () => 255), columns(() => RED, RAMP)];
+    const foreign = stack.map(copy);
+    const missing = stack.map(copy);
+    const own = stack.map(copy);
+    paintingEdges(foreign, painting, options({ inputOwner: new Int32Array(W * H).fill(1) }));
+    paintingEdges(missing, painting, options());
+    paintingEdges(own, painting, options({ inputOwner: new Int32Array(W * H) }));
+    const s = (4 * W + 9) * 4;
+    say('ED9555_BEHIND_MEDIAN_REQUIRES_OWNED_OPERANDS',
+      amodal.every((v, c) => foreign[0].data[s + c] === v && missing[0].data[s + c] === v) &&
+      BLUE.every((v, c) => own[0].data[s + c] === v) &&
+      same(foreign[1], own[1]) && same(missing[1], own[1]),
+      `foreign ${Array.from(foreign[0].data.subarray(s, s + 4))}; missing ${Array.from(missing[0].data.subarray(s, s + 4))}; owned ${Array.from(own[0].data.subarray(s, s + 4))}`);
+    const filtered = stack.map(copy);
+    const inputOwner = new Int32Array(W * H).fill(1);
+    const ownColour: RGB = [0, 100, 200];
+    for (let y = 0; y < H; y++) for (let x = 10; x < W; x++) {
+      if (y < 5) continue;
+      const p = y * W + x;
+      inputOwner[p] = 0;
+      painting.data.set(ownColour, p * 4);
+    }
+    paintingEdges(filtered, painting, options({ inputOwner }));
+    say('ED9556_BEHIND_MEDIAN_FILTERS_FOREIGN_OPERANDS',
+      ownColour.every((v, c) => filtered[0].data[s + c] === v),
+      `owned median ${Array.from(filtered[0].data.subarray(s, s + 4))}; required ${ownColour}`);
+  }
+
   // Planted: FRONT may not be edited (a painting patch): nothing is written.
   {
     const { painting, stack } = strip(RED, BLUE, RAMP);

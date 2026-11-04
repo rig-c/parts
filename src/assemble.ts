@@ -4897,6 +4897,9 @@ export function assemble(input: AssembleInput): AssembleResult {
   const layerWriters = new Map<string, Int32Array>();
   const valueBaselines = new Map<string, ValueBaseline | null>();
   const cleanedSoftCover = new Map<string, Mask>();
+  // Original-input ownership (#1028), ranked by sourcePlan rather than the
+  // processed stack. Only visible reads it; core retains its existing path.
+  const inputOwner = projectRule === 'visible' ? new Int32Array(W * H).fill(-1) : null;
   // Extend-only rasters are still projected/merged, but are never emitted as own sources.
   const readKeys = new Set(sourcePlan.map(([, run, tag]) => `${run}:${tag}`));
   const rig = new Map<string, Raster>();
@@ -4962,7 +4965,9 @@ export function assemble(input: AssembleInput): AssembleResult {
       const samePlacedSource = raw !== null && sourceLayers.length === 1 && prepared !== undefined &&
         sourceLayers[0].pixels === prepared.pixels && sourceLayers[0].left === prepared.left && sourceLayers[0].top === prepared.top;
       const preparedRig = samePlacedSource ? raw : prepared === undefined ? null : layerToRig(placeLayer(prepared, input.resolution), frame, run);
+      const sourceRank = sourcePlan.findLastIndex(([, sourceRun, tag]) => sourceRun === run && tag === l.tag);
       for (let p = 0; p < W * H; p++) {
+        if (inputOwner !== null && raw !== null && raw.data[p * 4 + 3] >= COVERED_ALPHA && sourceRank > inputOwner[p]) inputOwner[p] = sourceRank;
         if (rigLayers[i].data[p * 4 + 3] === 0) continue;
         ids[p] = author;
         if (preparedWriter !== 0 && (raw === null || preparedRig !== null && !rgbaEqual(raw.data, p * 4, preparedRig.data, p * 4))) ids[p] = preparedWriter;
@@ -5663,7 +5668,14 @@ export function assemble(input: AssembleInput): AssembleResult {
       }
       return whole;
     };
+    // A sourcePlan identity maps only to its explicitly named output part.
+    // Cuts with their own layer have a sourcePlan row; derived pieces without
+    // one (including limbs and painting patches) have no allowed operand.
+    const ownerParts = sourcePlan.map(([name]) => sourcePlan.filter(([part]) => part === name).length === 1
+      ? stack.findIndex(q => q.record.name === name) : -1);
+    const originalOwners = Int32Array.from(inputOwner as Int32Array, rank => rank < 0 ? -1 : ownerParts[rank]);
     const e = paintingEdges(stack.map(onRig), srcr, {
+      inputOwner: originalOwners,
       painted: supportPainted,
       ...(input.ground === undefined ? {} : { ground: input.ground }),
       editable: order.map((d) => !('patch' in d)),
