@@ -300,6 +300,8 @@ export function singleRunPadRecord(single: boolean, sourceW: number, sourceH: nu
 }
 
 export interface AssembleInput {
+  /** Counterfactual before seeded takes, with whole-layer takes already applied. */
+  regionTake?: { full: LayerSet; head: LayerSet; targets: string[] };
   /** Turn context for the exact part/carrier declarations, never an exemption flag. */
   turn?: TurnSpec;
   regions?: Record<string, RegionSpec>;
@@ -4052,6 +4054,7 @@ function cutLimbs(
   readHidden: (layer: string, by: string) => void = () => undefined,
   tips?: Record<string, [number, number]>,
   sourceGroups: ReadonlyMap<string, string> = new Map(),
+  emptyTargets?: ReadonlySet<string>,
 ): { parts: LimbPart[]; pieces: Built[]; counts: LimbCount[]; capFrom: Array<CapFrom | null>; material: MaterialRow[]; sources: MaterialSource[] } {
   const logical = (source: string): string => sourceGroups.get(source) ?? source;
   const names = Object.keys(limbs);
@@ -4110,7 +4113,7 @@ function cutLimbs(
     const on = names.filter((l) => limbs[l].segments.some((sg) => logical(sg.from) === logical(src)));
     const own = new Int32Array(W * H).fill(-1);
     const before = opaqueOf(b.r);
-    if (before === 0) {
+    if (before === 0 && !emptyTargets?.has(src)) {
       problems.push({ code: 'ASSEMBLE_LIMB_TAKES', object: `part "${src}" (config.limbs.${on[0]})`, detail: 'has no opaque pixel to cut; a part with art is required — the limb takes its pixels' });
       continue;
     }
@@ -4211,7 +4214,7 @@ function cutLimbs(
     for (const { q, i } of shares) {
       const writers = b.writers?.slice();
       pieces[i] = { ...b, writers, r: rasters[i], region: regions[i], merged: mergedIn(b, regions[i]) };
-      if (count(regions[i], regions[i]) === 0 && opaqueOf(rasters[i]) === 0) {
+      if (count(regions[i], regions[i]) === 0 && opaqueOf(rasters[i]) === 0 && !emptyTargets?.has(q.part)) {
         problems.push({
           code: 'ASSEMBLE_LIMB_PIXELS',
           object: `config.limbs.${q.limb}.segments[${q.segment}] (part "${q.part}")`,
@@ -4251,6 +4254,7 @@ function cutLimbs(
       const hasCoverSplit = names.some((other) => other !== l && limbs[other].split !== undefined && limbs[other].segments.some((osg) => osg.from === upFrom || osg.from === sg.from));
       const object = `config.limbs.${l}.segments[${k}] (joint "${String(sg.joint)}", part "${sg.part}")`;
       const run = limbRun(line, art, [0, 0, W - 1, H - 1]) ?? (hasCoverSplit ? limbRun(line, sharedArt, [0, 0, W - 1, H - 1]) : null);
+      if (run === null && emptyTargets?.has(sg.part)) return;
       if (run === null) {
         problems.push({
           code: 'ASSEMBLE_LIMB_JOINT_ON_ART',
@@ -4383,7 +4387,7 @@ function cutLimbs(
           }
         }
       }
-      if (img !== null && imagePx + lowerPx === 0 && hidden === null) {
+      if (img !== null && imagePx + lowerPx === 0 && hidden === null && !emptyTargets?.has(sg.part)) {
         problems.push({
           code: 'ASSEMBLE_LIMB_CAP_EMPTY',
           object: `${object}.cap`,
@@ -4477,6 +4481,7 @@ function cutLimbs(
       const li = names.indexOf(l), own = owners.get(sg.from) as Int32Array;
       const art = (x: number, y: number): boolean => x >= 0 && y >= 0 && x < W && y < H && own[y * W + x] === li && source.r.data[(y * W + x) * 4 + 3] > OPAQUE_ALPHA_ABOVE;
       const run = limbRun(line, art, [0, 0, W - 1, H - 1]);
+      if (run === null && emptyTargets?.has(sg.hybrid.part)) return;
       const width = sg.hybrid.width ?? (run === null ? 0 : 2 * halfWidthAbout(run));
       const upper = places.get(segs[k - 1].bone) as BonePlace;
       const lower = places.get(sg.bone) as BonePlace;
@@ -4799,12 +4804,56 @@ export function checkSingleRun(full: LayerSet, plan: readonly PlanEntry[] | null
   refuseIfAny(problems);
 }
 
+/** All output pieces that consume a taken source, including cut-to-limb paths.
+ * Painting patches have no source-part edge in the supported Patch schema. */
+export function regionTakeTargets(names: readonly string[], cuts: readonly Cut[], limbs: Readonly<Record<string, Limb>> = {}): ReadonlySet<string> {
+  const targets = new Set(names);
+  const edges = cuts.map(c => ({ from: c.from, into: c.into }));
+  for (const limb of Object.values(limbs)) for (const [index, segment] of limb.segments.entries()) {
+    edges.push({ from: segment.from, into: segment.part });
+    // A lower cap can copy the upper segment's source art.
+    if (index > 0) edges.push({ from: limb.segments[index - 1].from, into: segment.part });
+    if (segment.hybrid !== undefined) edges.push({ from: segment.from, into: segment.hybrid.part });
+  }
+  // Set iteration visits newly added descendants and terminates on cycles.
+  for (const source of targets) for (const edge of edges) if (edge.from === source) targets.add(edge.into);
+  return targets;
+}
+
+/** Retain neighbour pixels and their matching records after every coupled edit. */
+export function retainRegionNeighbours(placed: PlacedPart[], before: readonly PlacedPart[], targets: ReadonlySet<string>): void {
+  const originals = new Map(before.map(p => [p.record.name, p]));
+  for (let i = 0; i < placed.length; i++) {
+    if (targets.has(placed[i].record.name)) continue;
+    const original = originals.get(placed[i].record.name);
+    if (original === undefined) throw new PartsError([{
+      code: 'ASSEMBLE_REGION_TAKE_CONTAINMENT', object: `part "${placed[i].record.name}"`,
+      detail: 'has no pre-take counterpart; unchanged neighbour pixels and their measurements are required',
+    }]);
+    placed[i] = original;
+  }
+  if (before.some(p => !targets.has(p.record.name) && !placed.some(q => q.record.name === p.record.name))) throw new PartsError([{
+    code: 'ASSEMBLE_REGION_TAKE_CONTAINMENT', object: 'config.assemble.take',
+    detail: 'removed a non-target part; unchanged neighbour pixels and their measurements are required',
+  }]);
+}
+
 /**
  * Run the stage in memory. Everything that can be refused is refused before
  * this returns; nothing here writes a file, so a caller that writes only
  * after this returned writes only after green.
  */
 export function assemble(input: AssembleInput): AssembleResult {
+  if (input.regionTake === undefined) return assembleParts(input);
+  const targets = regionTakeTargets(input.regionTake.targets, input.cuts, input.limbs);
+  const before = assembleParts({ ...input, full: input.regionTake.full, head: input.regionTake.head, regionTake: undefined }, targets);
+  return assembleParts(input, targets, before);
+}
+
+/** The counterfactual is internal and is never emitted. Empty taken targets
+ * may be recovered by a take, so only that counterfactual permits them. */
+function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, beforeTake: AssembleResult | null = null): AssembleResult {
+  const emptyTargets = beforeTake === null ? targets : undefined;
   const { source, extend, patches, seamRule, projectRule } = input;
   const authoredDepths = input.depth === undefined ? new Map<string, AuthoredUnitDepth>() : authoredUnitDepths(input);
   if (input.paintingExtension !== undefined) refuseIfAny(paintingExtensionProblems(input.paintingExtension));
@@ -5130,7 +5179,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       merged = mergeBelowCrop(r, extras, front, srcr, frame.headBottom, trace, (p, stage) => { writers[p] = AW[stage]; });
     }
     const { x1, opaque } = measureBox(r);
-    if (opaque === 0) {
+    if (opaque === 0 && !emptyTargets?.has(name)) {
       empty.push({
         code: 'ASSEMBLE_PART_OPAQUE',
         object: `part "${name}" (${key}, config.assemble.plan[${pi}])`,
@@ -5238,7 +5287,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       if (whole !== parts) empty.push({ code: 'ASSEMBLE_COUNTS_ADD_UP', object, detail: `${what}: ${whole} before its cuts, ${parts} over the pieces; equal is required (a bug in the assembler, not in the inputs)` });
     }
     mine.forEach((i, k) => {
-      if (taken[k] === 0) {
+      if (taken[k] === 0 && !emptyTargets?.has(cuts[i].into)) {
         empty.push({
           code: 'ASSEMBLE_CUT_PIXELS',
           object: `config.assemble.cuts[${i}] (part "${cuts[i].into}")`,
@@ -5246,7 +5295,7 @@ export function assemble(input: AssembleInput): AssembleResult {
         });
       }
     });
-    if (kept === 0) {
+    if (kept === 0 && !emptyTargets?.has(name)) {
       empty.push({
         code: 'ASSEMBLE_CUT_PIXELS',
         object,
@@ -5271,7 +5320,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       for (let p = 0; p < W * H; p++) if (cutMasks[i].data[p] === 1 && band.data[p] === 0 && (pieces[i] as Built).r.data[p * 4 + 3] > 0 && b.r.data[p * 4 + 3] > 0) { (b.writers as Int32Array)[p] = cutIds[i]; if (b.r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) opaqueFilled++; }
       // A hidden-art layer (issue #359) is the whole layer's covered art, read by every cut of its part: a cut it holds nothing
       // under fills 0, which the cut line counts, and is not refused as a file made for this one cut would be.
-      if (f.filled === 0 && input.cuts[i].under !== undefined) {
+      if (f.filled === 0 && input.cuts[i].under !== undefined && !emptyTargets?.has(cuts[i].into)) {
         empty.push({
           code: 'ASSEMBLE_UNDER_EMPTY',
           object: `config.assemble.cuts[${i}].under (part "${cuts[i].into}")`,
@@ -5300,7 +5349,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     if (source === null) return;
     const m = cutMasks[i], r = newRaster(W, H);
     for (let p = 0; p < W * H; p++) if (m.data[p] === 1) r.data.set(source.r.data.subarray(p * 4, p * 4 + 4), p * 4);
-    if (opaqueOf(r) === 0) empty.push({ code: 'ASSEMBLE_CUT_PIXELS', object: `config.assemble.cuts[${i}] (part "${cuts[i].into}")`, detail: `takes 0 opaque pixels from selected ${source.key}; draw its polygon over that layer's art` });
+    if (opaqueOf(r) === 0 && !emptyTargets?.has(cuts[i].into)) empty.push({ code: 'ASSEMBLE_CUT_PIXELS', object: `config.assemble.cuts[${i}] (part "${cuts[i].into}")`, detail: `takes 0 opaque pixels from selected ${source.key}; draw its polygon over that layer's art` });
     const writers = (source.writers as Int32Array).slice();
     pieces[i] = { ...source, r, writers, region: m, merged: mergedIn(source, m) };
     for (let j = materialSources.length - 1; j >= 0; j--) if (materialSources[j].part === cuts[i].into) materialSources.splice(j, 1);
@@ -5328,7 +5377,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     const ci = cuts.findIndex((q) => q.into === name);
     return ci >= 0 ? pieces[ci] : null;
   };
-  const lim = cutLimbs(input.limbs ?? {}, input.bones ?? [], input.caps ?? new Map(), W, H, limbSource, opaqueOf, mergedIn, count, (name) => hiddenArt.get(name) ?? null, (layer, by) => hiddenUses.get(layer)?.push(by), input.boneTips, input.limbSourceGroups);
+  const lim = cutLimbs(input.limbs ?? {}, input.bones ?? [], input.caps ?? new Map(), W, H, limbSource, opaqueOf, mergedIn, count, (name) => hiddenArt.get(name) ?? null, (layer, by) => hiddenUses.get(layer)?.push(by), input.boneTips, input.limbSourceGroups, emptyTargets);
   // Issue #564: and the cap a run's own layer fills above its upper joint, read once the limbs are cut.
   if (bands !== null) refuseIfAny(limbBands(cuts, pieces, input.limbs ?? {}, input.bones ?? [], W, H, (l, k) => lim.parts.find((q) => q.limb === l && q.segment === k)?.record.cap, input.boneTips).problems);
   const limbPieces = lim.pieces;
@@ -5736,6 +5785,18 @@ export function assemble(input: AssembleInput): AssembleResult {
       if (edged.get(name)?.data[p] !== 1 && paintingGains.get(name)?.data[p] !== 1 && retakeByName.get(name)?.data[p] !== 1 && yields.get(name)?.mask.data[p] !== 1 && trace.ring.data[p] === 0 && own.takenMask.data[p] === 1 && (region === null || region.data[p] === 1)) projected.data[p] = 1;
     }
     const { x0, y0, x1, y1, opaque } = measureBox(r);
+    if (opaque === 0 && emptyTargets?.has(name)) {
+      set({
+        record: {
+          name, from: key, x: 0, y: 0, w: 1, h: 1,
+          opaque_px: 0, visible_px: 0, occluded_px: 0, projected_core_px: 0,
+          source_px_taken: 0, visible_not_projected_px: 0, refused_drift_px: 0,
+          merged_px: 0, seam_override_px: 0,
+        },
+        image: newRaster(1, 1),
+      });
+      return;
+    }
     if (opaque === 0) {
       const pushed = pushedHere.reduce((a, q) => a + q.px, 0);
       empty.push({
@@ -5817,6 +5878,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     const depth = authoredDepths.get(p.record.name);
     if (depth !== undefined) p.record.provenance.depth = depth;
   });
+  if (beforeTake !== null) retainRegionNeighbours(placed, beforeTake.images, targets!);
   // Provenance is now numbers/labels only. No later raster/figure operation
   // reads report buffers; release all aliases before recomposite/error work.
   valueBaselines.clear();

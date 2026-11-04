@@ -3,6 +3,8 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { writeTakeRegionFixture } from '../fixtures/take_region.ts';
+import { assemble, stageFields, regionTakeTargets, DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE, retainRegionNeighbours, type AssembleResult } from '../src/assemble.ts';
+import type { Mask } from '../src/raster/types.ts';
 import { assembleStage, readRuns } from '../src/build.ts';
 import { parseConfig, parseEarlyConfig, loadEarlyConfig } from '../src/config.ts';
 import { PartsError } from '../src/errors.ts';
@@ -171,4 +173,176 @@ export function runTakeRegionReceiptChecks(dir: string, say: Say): void {
       good.parts.parts.some(part => part.name === 'body' && part.from === 'full:author:material') && fileSha256(join(home, donorReceipt.file)) === donorReceipt.sha256,
       `same donor accepted under ${mode} with a verified receipt, sha256 ${donorReceipt.sha256}`);
   }
+}
+
+/** Count every neighbour RGBA difference outside the declared rig-grid support. */
+export function regionNeighbourChanges(before: AssembleResult, after: AssembleResult, target: string, support: Mask): number {
+  const pixel = (part: AssembleResult['images'][number] | undefined, x: number, y: number, channel: number): number => {
+    if (part === undefined) return 0;
+    const { record, image } = part;
+    if (x < record.x || y < record.y || x >= record.x + image.width || y >= record.y + image.height) return 0;
+    return image.data[((y - record.y) * image.width + x - record.x) * 4 + channel];
+  };
+  const names = new Set([...before.images, ...after.images].map(p => p.record.name));
+  let changed = 0;
+  for (const name of names) {
+    if (name === target) continue;
+    const a = before.images.find(p => p.record.name === name), b = after.images.find(p => p.record.name === name);
+    for (let y = 0; y < support.height; y++) for (let x = 0; x < support.width; x++) {
+      if (support.data[y * support.width + x] === 1) continue;
+      if ([0, 1, 2, 3].some(c => pixel(a, x, y, c) !== pixel(b, x, y, c))) changed++;
+    }
+  }
+  return changed;
+}
+
+export function runTakeContainmentChecks(dir: string, say: Say): void {
+  const cfg = writeTakeRegionFixture(dir);
+  const config = join(dir, 'config.json'), paintingPath = join(dir, 'painting.png');
+  const stageNotes: string[] = [];
+  const stage = (source = paintingPath) => assembleStage(
+    { source, full: join(dir, 'full'), head: null, config, requirements: join(dir, 'requirements.json') },
+    { partsJson: join(dir, 'out', 'parts.json'), partsDir: join(dir, 'out', 'parts'), recomposite: join(dir, 'out', 'recomposite.png'), errorMap: join(dir, 'out', 'error.png') }, line => stageNotes.push(line),
+  );
+  const take = (cfg.assemble as { take: Array<Record<string, unknown>> }).take;
+  const save = () => writeFileSync(config, JSON.stringify(cfg));
+  const declaration = { ...take[0] };
+  take.length = 0; save(); const before = stage();
+  take.push(declaration); save(); const after = stage();
+  const support: Mask = { width: 64, height: 64, data: new Uint8Array(64 * 64) };
+  for (let y = 34; y < 46; y++) for (let x = 6; x < 22; x++) support.data[y * 64 + x] = 1;
+  const observed = regionNeighbourChanges(before, after, 'body', support);
+  const planted = { ...after, images: after.images.map(p => p.record.name === 'face' ? { ...p, image: { ...p.image, data: new Uint8ClampedArray(p.image.data) } } : p) };
+  planted.images.find(p => p.record.name === 'face')!.image.data[0] ^= 1;
+  say('REGION_NEIGHBOUR_CONTAINMENT_AND_PLANTED_SPREAD', observed === 0 && regionNeighbourChanges(before, planted, 'body', support) === 1, `outside component plus 2 px: ${observed}; planted neighbour spread: ${regionNeighbourChanges(before, planted, 'body', support)}`);
+  const loaded = loadEarlyConfig(config, 'assemble'), runs = readRuns(join(dir, 'full'), null), painting = readPng(paintingPath);
+  const ledger = readEditorReceipts(undefined, config), setup = { rgb_tolerance: 0, regions: [] };
+  const first = applyTakenRegions({ ...runs, notes: [] }, painting, loaded, config, setup, ledger, paintingPath);
+  const alternate = { ...painting, data: new Uint8ClampedArray(painting.data) };
+  for (let p = 0; p < alternate.data.length; p += 4) for (let c = 0; c < 3; c++) alternate.data[p + c] = 255 - alternate.data[p + c];
+  const second = applyTakenRegions({ ...runs, notes: [] }, alternate, loaded, config, setup, ledger, paintingPath);
+  say('REGION_FIXED_REFERENCE_MASK_IS_SOURCE_INDEPENDENT', first.notes.join() === second.notes.join() && first.full.layers.every((p, i) => p.pixels.data.every((v, j) => v === second.full.layers[i].pixels.data[j])), 'same declared painting, inverted projection source, identical selected run bytes and reading');
+  const refusal = (mutate: () => void, code: string): boolean => {
+    const previous = readFileSync(join(dir, 'out', 'parts.json'));
+    mutate(); save();
+    try { stage(); return false; }
+    catch (error) {
+      if (error instanceof PartsError) return error.problems.some(p => p.code === code) && previous.equals(readFileSync(join(dir, 'out', 'parts.json')));
+      throw error;
+    }
+  };
+  say('REGION_UNRESOLVABLE_REFERENCE_REFUSED', refusal(() => { take[0].reference = { painting: 'absent-reference.png', sha256: fileSha256(paintingPath) }; }, 'ASSEMBLE_REGION_TAKE_REFERENCE'), 'ASSEMBLE_REGION_TAKE_REFERENCE');
+  say('REGION_MISMATCHED_REFERENCE_REFUSED', refusal(() => { take[0].reference = { painting: 'painting.png', sha256: '0'.repeat(64) }; }, 'ASSEMBLE_REGION_TAKE_REFERENCE_MATCH'), 'ASSEMBLE_REGION_TAKE_REFERENCE_MATCH');
+  take[0].reference = { source: true, sha256: fileSha256(paintingPath) }; save();
+  say('REGION_SOURCE_REFERENCE_ACCEPTED', stage().parts.parts.some(p => p.name === 'body'), 'explicit source binding hashes the stage source PNG');
+  const targets = new Set(['body']);
+  const changedPopulation = (removed: boolean): boolean => {
+    const placed = removed ? after.images.filter(p => p.record.name !== 'face') : [...after.images, { ...after.images[0], record: { ...after.images[0].record, name: 'extra' } }];
+    try {
+      retainRegionNeighbours(placed, before.images, targets);
+      return false;
+    } catch (error) {
+      if (error instanceof PartsError) return error.problems.some(p => p.code === 'ASSEMBLE_REGION_TAKE_CONTAINMENT');
+      throw error;
+    }
+  };
+  say('REGION_NEIGHBOUR_POPULATION_CHANGES_REFUSED', changedPopulation(false) && changedPopulation(true), 'added and removed neighbours each refuse ASSEMBLE_REGION_TAKE_CONTAINMENT');
+  delete take[0].reference;
+  save();
+  stageNotes.length = 0;
+  const implicitResult = stage();
+  const implicitWarnings = stageNotes.filter(line => line.startsWith('WARN  ASSEMBLE_REGION_TAKE_REFERENCE_IMPLICIT:'));
+  const implicitCfg = loadEarlyConfig(config, 'assemble');
+  const implicitRuns = applyTakenRegions({ ...runs, notes: [] }, painting, implicitCfg, config, setup, ledger);
+  const legacyPredicate = deriveTakenRegion(runs.full.layers.find(layer => layer.name === 'topwear')!, readLayers(join(dir, 'donor')).layers[0], painting, [12, 40], 0, 'shipped predicate');
+  const implicitLayer = implicitRuns.full.layers.find(layer => layer.name === 'topwear')!;
+  const implicitMaskMatches = implicitLayer.pixels.data.every((byte, i) => byte === legacyPredicate.layer.pixels.data[i]) && legacyPredicate.reading.pixels === 96;
+  take[0].reference = { source: true, sha256: fileSha256(paintingPath) };
+  save();
+  const basePath = join(dir, 'full', 'parts', 'topwear.png'), empty = readPng(basePath);
+  empty.data.fill(0); writeFileSync(basePath, encodePngBytes(empty));
+  say('REGION_RECOVERS_EMPTY_TARGET_WITH_CONTAINMENT', stage().parts.parts.find(p => p.name === 'body')!.opaque_px > 0, 'counterfactual empty target stays internal; recovered target is measured normally');
+  const rectangular = join(dir, 'rectangular');
+  const rectangularCfg = writeTakeRegionFixture(rectangular);
+  const rectangularPainting = newRaster(96, 64);
+  rectangularPainting.data.fill(255);
+  for (let y = 0; y < 64; y++) rectangularPainting.data.set(painting.data.subarray(y * 64 * 4, (y + 1) * 64 * 4), y * 96 * 4);
+  const rectangularPath = join(rectangular, 'painting.png');
+  writeFileSync(rectangularPath, encodePngBytes(rectangularPainting));
+  for (const run of ['full', 'donor']) {
+    const path = join(rectangular, run, 'layers.json');
+    const manifest = JSON.parse(readFileSync(path, 'utf8'));
+    manifest.width = 96;
+    writeFileSync(path, JSON.stringify(manifest));
+  }
+  (rectangularCfg.assemble as { take: Array<Record<string, unknown>> }).take[0].reference = { painting: 'painting.png', sha256: fileSha256(rectangularPath) };
+  const rectangularConfig = join(rectangular, 'config.json');
+  writeFileSync(rectangularConfig, JSON.stringify(rectangularCfg));
+  const rectangularRuns = readRuns(join(rectangular, 'full'), null);
+  const rectangularReading = applyTakenRegions({ ...rectangularRuns, notes: [] }, rectangularPainting, loadEarlyConfig(rectangularConfig, 'assemble'), rectangularConfig, setup, ledger);
+  say('REGION_RECTANGULAR_SINGLE_REFERENCE_HAS_NO_PADDING_TRANSFORM', rectangularReading.notes.some(line => line.includes('"scale":[1,1],"origin":[0,0]')), 'rectangular single-run predicate reads the unpadded painting; its logged origin is [0,0]');
+  say('REGION_IMPLICIT_REFERENCE_PRESERVES_SHIPPED_MASK', implicitMaskMatches, 'absent reference reads the stage painting; identical run bytes to the shipped predicate, 96 selected cells');
+  say('REGION_IMPLICIT_REFERENCE_WARNS_ONCE', implicitWarnings.length === 1 && !stageNotes.some(line => line.startsWith('FAIL')), implicitWarnings.join(' | '));
+  say('REGION_IMPLICIT_REFERENCE_CONTAINS_NEIGHBOURS', regionNeighbourChanges(before, implicitResult, 'body', support) === 0, 'absent reference has zero neighbour changes beyond the component plus 2 px');
+}
+
+
+/** Target-derived pieces must keep the same post-take material as their source. */
+export function runTakeDerivedChecks(dir: string, say: Say): void {
+  const pixel = (result: AssembleResult, name: string, x: number, y: number, c: number): number => {
+    const p = result.images.find(p => p.record.name === name);
+    if (p === undefined || x < p.record.x || y < p.record.y || x >= p.record.x + p.image.width || y >= p.record.y + p.image.height) return 0;
+    return p.image.data[((y - p.record.y) * p.image.width + x - p.record.x) * 4 + c];
+  };
+  for (const mode of ['cut', 'limb'] as const) {
+    const home = join(dir, mode), raw = writeTakeRegionFixture(home);
+    const a = raw.assemble as Record<string, unknown>;
+    const regions = raw.regions as Record<string, string>;
+    if (mode === 'cut') {
+      a.cuts = [{ from: 'body', into: 'panel', polygon: [[8, 34], [24, 34], [24, 46], [8, 46]], overlap: 0, draw: 'front' }];
+      regions.panel = 'anchor';
+    } else {
+      raw.bones = [{ name: 'anchor', parent: 'root', at: [0, 0] }, { chain: 'arm', parent: 'anchor', points: [[14, 32], [14, 44]], tip: [14, 56] }];
+      raw.limbs = { arm: { segments: [{ part: 'upper', from: 'body', bone: 'arm0' }, { part: 'lower', from: 'body', bone: 'arm1', joint: 'joint' }] } };
+      regions.upper = 'arm0'; regions.lower = 'arm1';
+    }
+    const config = join(home, 'config.json');
+    const save = () => writeFileSync(config, JSON.stringify(raw));
+    const declarations = a.take;
+    const stage = (name: string) => assembleStage(
+      { source: join(home, 'painting.png'), full: join(home, 'full'), head: null, config, requirements: join(home, 'requirements.json') },
+      { partsJson: join(home, name, 'parts.json'), partsDir: join(home, name, 'parts'), recomposite: join(home, name, 'recomposite.png'), errorMap: join(home, name, 'error.png') }, () => {},
+    );
+    a.take = []; save(); const before = stage('before');
+    a.take = declarations; save(); const after = stage('after');
+    const cfg = loadEarlyConfig(config, 'assemble'), source = readPng(join(home, 'painting.png'));
+    const runs = readRuns(join(home, 'full'), null), ledger = readEditorReceipts(undefined, config);
+    const taken = applyTakenRegions({ ...runs, notes: [] }, source, cfg, config, { rgb_tolerance: 0, regions: [] }, ledger);
+    const oracle = assemble({ source, full: taken.full, head: taken.head, ...stageFields(cfg, { w: 64, h: 64 }), seamRule: DEFAULT_SEAM_RULE, projectRule: DEFAULT_PROJECT_RULE });
+    const descendants = mode === 'cut' ? ['panel'] : ['upper', 'lower'];
+    const matches = (result: AssembleResult): boolean => descendants.every(name => {
+      for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) for (let c = 0; c < 4; c++) if (pixel(result, name, x, y, c) !== pixel(oracle, name, x, y, c)) return false;
+      return true;
+    });
+    const mutant = { ...after, images: [...after.images] };
+    retainRegionNeighbours(mutant.images, before.images, new Set(['body']));
+    say(`REGION_${mode.toUpperCase()}_DESCENDANT_AND_OLD_TARGET_MUTANT`, matches(after) && !matches(mutant), `post-take descendant pixels match independently assembled material; old target-name-only restoration fails: ${!matches(mutant)}`);
+    if (mode === 'cut') {
+      const count = after.cuts[0];
+      const piece = after.images.find(p => p.record.name === 'panel')!;
+      const base = after.images.find(p => p.record.name === 'body')!;
+      const ownership = after.parts.cut_ownership![0];
+      say('REGION_CUT_OWNERSHIP_MATCHES_EMITTED_PARTS', count.before === count.kept + count.taken && count.taken === piece.record.opaque_px && count.kept === base.record.opaque_px && ownership.moved_in_opaque_px === piece.record.opaque_px && piece.record.opaque_px === 192, JSON.stringify({ count, piece: piece.record.opaque_px, base: base.record.opaque_px, ownership }));
+      let projectionMatches = true;
+      for (let y = 36; y < 44; y++) for (let x = 8; x < 20; x++) for (let c = 0; c < 4; c++) if (pixel(after, 'panel', x, y, c) !== taken.full.layers.find(l => l.name === 'topwear')!.pixels.data[((y - 32) * 48 + x - 8) * 4 + c]) projectionMatches = false;
+      say('REGION_CUT_CROSSES_SELECTED_COMPONENT', projectionMatches, 'all 96 taken cells inside the polygon retain the post-take source RGBA');
+    }
+    const basePath = join(home, 'full', 'parts', 'topwear.png'), empty = readPng(basePath);
+    empty.data.fill(0); writeFileSync(basePath, encodePngBytes(empty));
+    say(`REGION_EMPTY_TARGET_${mode.toUpperCase()}_DESCENDANTS`, stage('empty').images.filter(p => descendants.includes(p.record.name)).every(p => p.record.opaque_px > 0), 'empty counterfactual descendants are internal; actual recovered pieces remain required to contain art');
+  }
+  const closure = regionTakeTargets(['body'], [{ from: 'body', into: 'panel', polygon: [[0, 0], [1, 0], [1, 1]], overlap: 0, draw: 'front' }], { limb: { segments: [{ part: 'upper', from: 'panel', bone: 'a' }, { part: 'lower', from: 'panel', bone: 'b', joint: 'joint', hybrid: { part: 'band' } }] } });
+  say('REGION_TRANSITIVE_CUT_LIMB_HYBRID_TARGET_CLOSURE', ['body', 'panel', 'upper', 'lower', 'band'].every(name => closure.has(name)) && !closure.has('painting_patch'), [...closure].join(', '));
+  const capClosure = regionTakeTargets(['body'], [], { limb: { segments: [{ part: 'upper', from: 'body', bone: 'a' }, { part: 'lower', from: 'other', bone: 'b', joint: 'joint' }] } });
+  say('REGION_UPPER_SOURCE_CAP_DESCENDANT', capClosure.has('lower') && !capClosure.has('other'), 'lower caps can copy taken upper-source art without making the independent source itself a target');
 }

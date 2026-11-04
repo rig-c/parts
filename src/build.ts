@@ -351,12 +351,13 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   // Issue #947: under `trace_parts`, a shape drawn in the config through a part's pixels is refused with them.
   refuseIfAny([...receipts.problems, ...missingReceipts(receipts, [...editedRunImages(read), ...editedConfigImages(input.config, cfg.assemble.cuts ?? [], cfg.limbs)]), ...untracedPartSources(cfg)]);
   const takenRuns = applyTakenLayers(read, src, cfg, input.config);
-  const runs = applyTakenRegions(takenRuns, src, cfg, input.config, requirementsFile?.setup_painting, receipts);
-  for (const note of runs.notes) log(`note: ${note}`);
+  const runs = applyTakenRegions(takenRuns, src, cfg, input.config, requirementsFile?.setup_painting, receipts, input.source);
+  for (const note of runs.notes) log(note.startsWith('WARN  ') ? note : `note: ${note}`);
   const fields = stageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
   const under = readUnders(input.config, fields.cuts);
   const caps = fields.limbs === undefined ? undefined : readCaps(input.config, fields.limbs);
-  const result = assemble({ source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under, ...(caps === undefined ? {} : { caps }), seamRule: seam, projectRule: project });
+  const result = assemble({ source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under,
+    ...((cfg.assemble.take ?? []).some(t => 'part' in t) ? { regionTake: { full: takenRuns.full, head: takenRuns.head, targets: (cfg.assemble.take ?? []).flatMap(t => 'part' in t ? [t.part] : []) } } : {}), ...(caps === undefined ? {} : { caps }), seamRule: seam, projectRule: project });
 
   // Issue #454: alternate painting sets, assembled before any file is written.
   const configDir = dirname(resolve(input.config));

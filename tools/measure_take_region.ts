@@ -6,6 +6,7 @@ import { cpSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'nod
 import { createHash } from 'node:crypto';
 import { dirname, join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { fileSha256 } from '../src/editreceipt.ts';
 import { assembleStage } from '../src/build.ts';
 import { loadEarlyConfig } from '../src/config.ts';
 import { makeInputs } from '../src/inputs.ts';
@@ -69,7 +70,7 @@ export function measurePublicRegion(example: string, home: string): Record<strin
   // Keep config-relative auxiliary inputs intact while changing only the take declaration.
   const raw = JSON.parse(readFileSync(cfgPath, 'utf8'));
   if (raw.generation?.control?.skeleton) raw.generation.control.skeleton = resolve(example, raw.generation.control.skeleton);
-  raw.assemble.take = [{ run: 'full', run_dir: 'donor', st_input: 'st_input.png', part: plan[0], seed }];
+  raw.assemble.take = [{ run: 'full', run_dir: 'donor', st_input: 'st_input.png', part: plan[0], seed, reference: { painting: sourcePath, sha256: fileSha256(sourcePath) } }];
   const config = join(home, 'config.json');
   writeFileSync(config, JSON.stringify(raw));
   const requirements = join(home, 'requirements.json');

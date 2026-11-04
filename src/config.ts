@@ -2500,12 +2500,20 @@ function checkTakeLayers(c: Check, value: Json, plan: string[] | null = null): v
     const p = `${at}[${i}]`;
     const region = isPlainObject(v) && ('part' in v || 'seed' in v);
     const o = region
-      ? c.object(p, v, ['run', 'run_dir', 'st_input', 'part', 'seed'], [])
+      ? c.object(p, v, ['run', 'run_dir', 'st_input', 'part', 'seed'], ['reference'])
       : c.object(p, v, ['run', 'run_dir', 'st_input', 'tags'], []);
     if (o === null) return;
     if (o.run !== 'full' && o.run !== 'head') c.fail('CONFIG_FIELD_TYPE', p + '.run', '"full" or "head" is required');
     for (const k of ['run_dir', 'st_input']) c.string(`${p}.${k}`, o[k]);
     if (region) {
+      if (o.reference !== undefined) {
+        const r = c.object(`${p}.reference`, o.reference, ['sha256'], ['source', 'painting']);
+        if (r !== null) {
+          if (typeof r.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(r.sha256)) c.fail('CONFIG_FIELD_TYPE', `${p}.reference.sha256`, 'a lowercase SHA-256 of the reference PNG bytes is required');
+          if ((r.source === true) === (typeof r.painting === 'string') || ('source' in r && r.source !== true)) c.fail('CONFIG_FIELD_TYPE', `${p}.reference`, 'exactly one of source: true or painting is required');
+          if ('painting' in r) c.string(`${p}.reference.painting`, r.painting);
+        }
+      }
       if (c.string(`${p}.part`, o.part) && plan !== null && !plan.includes(o.part)) {
         c.fail('CONFIG_NAME_RESOLVES', `${p}.part`, `names "${o.part}"; a part named in assemble.plan is required`);
       }
