@@ -107,6 +107,7 @@ export interface SetupPaintingLine {
   backdrop?: { path: string; sha256: string };
   figure_mask?: { path: string; sha256: string };
   outside_figure?: { slot: '(uncovered)'; pixel_count: number; status: 'UNBARRED' };
+  outside_figure_owned?: { pixel_count: number; status: 'UNBARRED' };
   figure: 'declared figure mask alpha > 0' | 'source figureSilhouette union rendered alpha > 0' | 'source figureSilhouette union rendered alpha > 0 union source-backdrop RGB difference > tolerance';
   ownership: 'last actual drawn piece with sampled alpha > 0; uncovered explicit';
   rgb_tolerance: number;
@@ -149,9 +150,12 @@ export function setupPaintingLine(
     }
     return delta;
   };
-  let outside = 0;
+  let outside = 0, outsideOwned = 0;
   if (figureMask !== undefined) for (let p = 0; p < n; p++) {
-    if (figureMask[p] === 0 && owners[p] < 0 && difference(p) > declared.rgb_tolerance) outside++;
+    if (figureMask[p] === 0 && difference(p) > declared.rgb_tolerance) {
+      if (owners[p] < 0) outside++;
+      else outsideOwned++;
+    }
   }
   const regions = declared.regions.map<SetupPaintingReading>(r => {
     const rows = new Map<string, { pixels: number; x0: number; y0: number; x1: number; y1: number }>();
@@ -174,7 +178,7 @@ export function setupPaintingLine(
     return result;
   });
   const noLimit = regions.some(r => r.status === 'SKIP');
-  return { status: regions.some(r => r.status === 'FAIL') ? 'FAIL' : noLimit ? 'SKIP' : 'PASS', instrument: 'rigc renderer setup textured pieces', registration: 'declared stage grid, scale 1, no fitting', compositing: backdrop === undefined ? 'source-over white, RGBA8' : 'source-over declared backdrop, RGBA8', ...(declared.backdrop === undefined ? {} : { backdrop: { ...declared.backdrop } }), ...(declared.figure_mask === undefined ? {} : { figure_mask: { ...declared.figure_mask }, outside_figure: { slot: '(uncovered)' as const, pixel_count: outside, status: 'UNBARRED' as const } }), figure: figureMask !== undefined ? 'declared figure mask alpha > 0' : backdrop === undefined ? 'source figureSilhouette union rendered alpha > 0' : 'source figureSilhouette union rendered alpha > 0 union source-backdrop RGB difference > tolerance', ownership: 'last actual drawn piece with sampled alpha > 0; uncovered explicit', rgb_tolerance: declared.rgb_tolerance, regions,
+  return { status: regions.some(r => r.status === 'FAIL') ? 'FAIL' : noLimit ? 'SKIP' : 'PASS', instrument: 'rigc renderer setup textured pieces', registration: 'declared stage grid, scale 1, no fitting', compositing: backdrop === undefined ? 'source-over white, RGBA8' : 'source-over declared backdrop, RGBA8', ...(declared.backdrop === undefined ? {} : { backdrop: { ...declared.backdrop } }), ...(declared.figure_mask === undefined ? {} : { figure_mask: { ...declared.figure_mask }, outside_figure: { slot: '(uncovered)' as const, pixel_count: outside, status: 'UNBARRED' as const }, outside_figure_owned: { pixel_count: outsideOwned, status: 'UNBARRED' as const } }), figure: figureMask !== undefined ? 'declared figure mask alpha > 0' : backdrop === undefined ? 'source figureSilhouette union rendered alpha > 0' : 'source figureSilhouette union rendered alpha > 0 union source-backdrop RGB difference > tolerance', ownership: 'last actual drawn piece with sampled alpha > 0; uncovered explicit', rgb_tolerance: declared.rgb_tolerance, regions,
     ...(noLimit ? { reason: 'a region has no declared max_pixels; it is measured as SKIP, never PASS' } : {}) };
 }
 
@@ -182,6 +186,7 @@ export function setupPaintingLines(line: SetupPaintingObservation): string[] {
   if (!('regions' in line)) return [`${SETUP_PAINTING_LINE}: SKIP — ${line.reason}`];
   return [`${SETUP_PAINTING_LINE}: ${line.status}${line.reason === undefined ? '' : ` — ${line.reason}`}; ${line.registration}; ${line.compositing}`,
     ...(line.outside_figure === undefined ? [] : [`${SETUP_PAINTING_LINE}: slot "(uncovered)" outside figure mask — pixelcount ${line.outside_figure.pixel_count}; UNBARRED, outside every region limit`]),
+    ...(line.outside_figure_owned === undefined ? [] : [`${SETUP_PAINTING_LINE}: owned pixels outside figure mask — pixelcount ${line.outside_figure_owned.pixel_count}; UNBARRED, outside every region limit`]),
     ...line.regions.flatMap(r => [`${SETUP_PAINTING_LINE}: region "${r.name}" ${r.status} — box [${r.box.join(', ')}], pixelcount ${r.pixel_count}, limit ${r.limit ?? 'undeclared (SKIP)'}, RGB tolerance ${line.rgb_tolerance}`,
       ...r.slots.map(s => `${SETUP_PAINTING_LINE}: slot "${s.slot}" region "${r.name}" — box [${s.box.join(', ')}], pixelcount ${s.pixel_count}; region total ${r.pixel_count}, limit ${r.limit ?? 'undeclared (SKIP)'}`)])];
 }

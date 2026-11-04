@@ -6978,7 +6978,7 @@ building. Only selected pixels count toward region limits, including missing
 figure material with no rendered owner. The mask replaces the legacy union
 domain, including its backdrop-difference term. Uncovered mismatches outside
 it are reported once across the whole stage as an `UNBARRED` row, independent
-of region boxes and limits. Room and plate fidelity remain outside this gate.
+of region boxes and limits. Owned mismatches outside the mask have a separate stage-wide `UNBARRED` row; the declared region limits apply inside the mask. Room and plate fidelity remain outside this gate.
 The report records the mask path and verified hash. Omitting this field keeps
 the previous domain, output shape and bytes.
 
