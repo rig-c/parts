@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.8.1](https://github.com/rig-c/parts/compare/v2.8.0...v2.8.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **authoring:** document motion seam pair declarations ([#982](https://github.com/rig-c/parts/issues/982)) ([#1010](https://github.com/rig-c/parts/issues/1010)) ([937000f](https://github.com/rig-c/parts/commit/937000f62f11b79749d5b4b045c2133bc2bc7e6f))
+* **check:** a travel floor and a structural first step for TIP_OVER_ROOT ([#1012](https://github.com/rig-c/parts/issues/1012)) ([e7708f1](https://github.com/rig-c/parts/commit/e7708f1efddd35cf9d03d14f30d34e83d4b5480e))
+* **remesh:** preserve loader-relative config files ([#997](https://github.com/rig-c/parts/issues/997)) ([#1009](https://github.com/rig-c/parts/issues/1009)) ([c6f0cc6](https://github.com/rig-c/parts/commit/c6f0cc60d1f19654edd8431e16112b64a59006b7))
+
 ## [2.8.0](https://github.com/rig-c/parts/compare/v2.7.0...v2.8.0) (2026-11-04)
 
 
