@@ -5353,6 +5353,7 @@ documents do not ship). Each is an input this package built; none is an author's
 | <a id="CHECK_SOURCE_SIZE"></a>`CHECK_SOURCE_SIZE` | the painting `--source` names is not this rig's: no single `rig_scale` takes its width and height to the stage's (assemble makes the canvas `trunc(w × rig_scale)` x `trunc(h × rig_scale)`), or, with `parts.json` read, its `scale_rig_per_source` does not; or the stage is not whole pixels. Refused before anything is built | the painting the rig was made from — the stage's own size, or the painting `assemble` was given |
 | <a id="CHECK_SOURCE_PNG"></a>`CHECK_SOURCE_PNG` | `--source` names a file that does not read as a PNG | a PNG |
 | <a id="CHECK_SETUP_MATCHES_PAINTING"></a>`CHECK_SETUP_MATCHES_PAINTING` | region, slot, failing-pixel box, slot pixelcount, complete region pixelcount and declared limit | compare the source painting beside the actual setup; follow [Source before scissors](#source-before-scissors), then rerun with the same authored limit |
+| <a id="CHECK_SETUP_PAINTING_BACKDROP"></a>`CHECK_SETUP_PAINTING_BACKDROP` | declared backdrop PNG cannot be read or decoded, its byte SHA-256 differs, its original painting grid differs, or any alpha is not 255 | supply an opaque plate with the declared lowercase SHA-256, aligned to the original painting; no fitting or white fallback |
 | <a id="CHECK_SETUP_PAINTING_SOURCE"></a>`CHECK_SETUP_PAINTING_SOURCE` | a declaration without a source painting | supply `--source`; the assembled composite is not an independent reference |
 | <a id="CHECK_SETUP_PAINTING_MEASURED"></a>`CHECK_SETUP_PAINTING_MEASURED` | missing native setup/ownership or unsupported clipping | supply observable textured setup geometry; an unavailable instrument never passes |
 | <a id="CHECK_BOUNDARY_COLOUR_STEP"></a>`CHECK_BOUNDARY_COLOUR_STEP` | the requirements file declares `boundary_colour.max_step_excess` and a part boundary's colour step in the rig's render exceeds the same boundary's step in the rig's own pieces by more than it; the part pair, the frame (`setup` or `idle frame <n> (t <s> s)`), the stage pixel, the excess, the declared allowance and both steps are quoted. Unlike [`CHECK_SETUP_MATCHES_PAINTING`](#CHECK_SETUP_MATCHES_PAINTING), which compares the painting per declared region at the setup pose, this compares against the rig's own flat pieces (`parts.json` placement at setup, each piece's rest colour through its art UVs on every idle frame), so a part drawn over its neighbour's line art is not a failure | the pair's rig image or mesh: `rig/images/<part>.png` (a texture stretched into its padded UVs, or a notch cut out of it), or that part's mesh in `config.json` `meshes` when the mesh cuts a corner off the art; see [Boundary colour step](#boundary-colour-step-issue-942) |
@@ -6065,7 +6066,7 @@ Under `--source <painting.png>`, a second reported line, also never a FAIL
 | line | reports | bar | `reference-demo` | `reference-sample` | SKIP when |
 | --- | --- | --- | --- | --- | --- |
 | <a id="SETUP_POSE_VS_SOURCE"></a>`SETUP_POSE_VS_SOURCE` | the setup pose against the painting, by `assemble`'s own `measureRecomposite` over the stage's pixels — `mean_abs` and `within_share` (mean channel, within 8), `error_px` (max channel over 40), `uncovered_error_px` (of those, where the pose has alpha 128 or less), `hole_count` and the largest hole's box — with `painting_px`, `stage_px`, `render_px` and `render_scale` beside them. The painting is resampled onto the stage as assemble resamples it (lanczos3, alpha dropped). rigc renders onto an opaque grey, so the pose over white and its alpha are read off a second still of the same pose with every slot tinted black; both are carried onto the stage with the seam's map turned round (bilinear) | none — status `REPORTED`; assemble applies no bar to the figures it measures, so none is derived here | 3.146 / 93.43 % / 12,399 / 1,732, 518 holes, the largest 61 px at 351,157 6x20 (assemble's recomposite: 2.391 / 95.81 % / 11,050 / 1,564, 453) | 1.095 / 97.30 % / 5,348 / 1,239, 313 holes, the largest 88 px at 479,416 6x29 (assemble's: 0.835 / 97.95 % / 4,512 / 1,185, 259) | not written without `--source` |
-| <a id="SETUP_MATCHES_PAINTING"></a>`SETUP_MATCHES_PAINTING` | declared region count, native box, limit and actual top contributor rows | PASS/FAIL against authored limits; no limit is SKIP, or the refusal `SETUP_PAINTING_REQUIRED_LIMIT` under `setup_painting.required: true`; with `--source`, no declaration is SKIP with its reason and declaration remedy; undeclared regions are not judged |
+| <a id="SETUP_MATCHES_PAINTING"></a>`SETUP_MATCHES_PAINTING` | declared region count, native box, limit and actual top contributor rows; observations source-over white unless `setup_painting.backdrop` declares the opaque plate behind a full-frame painting | PASS/FAIL against authored limits; no limit is SKIP, or the refusal `SETUP_PAINTING_REQUIRED_LIMIT` under `setup_painting.required: true`; with `--source`, no declaration is SKIP with its reason and declaration remedy; undeclared regions are not judged |
 | <a id="BOUNDARY_COLOUR_STEP"></a>`BOUNDARY_COLOUR_STEP` | the worst colour-step excess over the rig's own pieces at any part boundary of the setup and every idle frame, its part pair, frame and stage pixel, and the declared `max_step_excess` | PASS/FAIL against the declared allowance (FAIL is [`CHECK_BOUNDARY_COLOUR_STEP`](#CHECK_BOUNDARY_COLOUR_STEP), an unreadable piece [`CHECK_BOUNDARY_COLOUR_UNMEASURED`](#CHECK_BOUNDARY_COLOUR_UNMEASURED)); no `boundary_colour` in the requirements file is SKIP with its reason and the declaration to add, never a pass |
 
 The figures are assemble's by construction, not a second definition beside them;
@@ -6669,7 +6670,19 @@ substituted. Source PNG readers preserve straight RGBA. This optional check
 first composites the painting over opaque white at its **original source
 resolution**, rounding each RGB channel to RGBA8, then passes that opaque
 image through the existing `sourceInRig` Lanczos3 resampling onto the stage.
-The rendered setup is composited over white on the native stage grid. This
+The rendered setup is composited over white on the native stage grid.
+For a full-frame painting whose figure was painted over an opaque background,
+declare `setup_painting.backdrop: {"path": "backdrop.png", "sha256": "<64 lowercase hex digits>"}`.
+The PNG path resolves relative to the requirements file. The exact bytes read
+are hashed before decoding; the plate must be opaque everywhere and match the
+original painting dimensions. It is never fitted or inferred from the art.
+With the declaration, both observations use that plate instead of white:
+the painting is flattened over it before resampling, and the plate is
+resampled onto the stage before the rendered setup is composited over it.
+The report carries the declared path and verified hash. Pixels where painting
+RGB differs from the plate above the authored tolerance also enter the figure
+domain, even when no setup piece draws there. Missing material remains counted.
+Without the declaration, report bytes and the white comparator are unchanged. This
 ordering excludes hidden RGB from both resampling taps and figure detection;
 the global `sourceInRig` and legacy checks retain their existing RGB semantics.
 The figure domain is the union of rendered
