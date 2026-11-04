@@ -7889,9 +7889,92 @@ const NO_TIP_EXCEPTIONS: TipExceptions = { path: '', not_swinging: [], rises: []
  * the idle's posed geometry, not a render of the part. Until #118 the line
  * read rendered pixels — figures in frame px under `root_px`/`tip_px` — so an
  * old and a new check.json are told apart by this key and by the units in
- * the field names.
+ * the field names. Issue #987: the halves are read in the frame of the bone
+ * the part hangs from ({@link hangBone}), the world reading beside them
+ * (`world_*`), so the key names the frame too.
  */
-export const TIP_INSTRUMENT = 'geometry';
+export const TIP_INSTRUMENT = 'geometry, carrier frame';
+
+/**
+ * The bone a part hangs from (issue #987): the deepest common ancestor-or-self of the bones its attachments are
+ * bound to ({@link boundBones}), walked up while it is a link — a bone of a chain `CHAIN_LAG` reads, or a bone a
+ * physics constraint drives — to the first bone that is not, so a chain-hung part is read against the body that
+ * carries the chain and not against its own first link (no bone is read by its name). When the common bone is a
+ * link's control twin (at its origin, unturned, unscaled, keyed by no idle track), the walk starts from the link; only
+ * there, so a body bone that is its own `_ctl`'s twin (`chest`) is where the walk stops. Null when the part is bound to
+ * nothing or the walk leaves the tree, and the part is then read in the world.
+ */
+export function hangBone(rig: Record<string, unknown>, motion: Record<string, unknown>, part: string): string | null {
+  const bones = (Array.isArray(rig.bones) ? rig.bones : []).filter(isRecord).filter((b) => typeof b.name === 'string');
+  const parent = new Map(bones.map((b) => [String(b.name), typeof b.parent === 'string' ? b.parent : null]));
+  const upFrom = (b: string): string[] => {
+    const path: string[] = [];
+    for (let x: string | null = b; x !== null && !path.includes(x); x = parent.get(x) ?? null) path.push(x);
+    return path;
+  };
+  const bound = [...boundBones(rig, part)];
+  if (bound.length === 0) return null;
+  const paths = bound.map(upFrom);
+  const common = paths[0].find((b) => paths.every((p) => p.includes(b)));
+  if (common === undefined) return null;
+  // A link: a bone of a chain CHAIN_LAG reads, or a bone a physics constraint drives. The rig stage keys a chain's
+  // `<link>_ctl` and binds the mesh to its child the physics drives, and a physics-only chain has no keys at all, so
+  // both are walked up through until the body bone that carries them.
+  const links = new Set(chainFigures(rig, motion).chains.filter((c) => c.length >= 2).flatMap((c) => c.map((l) => l.bone)));
+  for (const c of Array.isArray(rig.constraints) ? rig.constraints : []) if (isRecord(c) && c.type === 'physics' && typeof c.bone === 'string') links.add(c.bone);
+  // The rig stage's control twin: a bone at its link's origin, unturned and unscaled, that nothing keys — the link carries it whole.
+  const idle = isRecord(motion.animations) && isRecord(motion.animations.idle) ? motion.animations.idle : {};
+  const keyedBones = new Set((Array.isArray(idle.tracks) ? idle.tracks : []).filter(isRecord).map((t) => t.bone).filter((b): b is string => typeof b === 'string'));
+  const setup = new Map(bones.map((b) => [String(b.name), b]));
+  const twinOfLink = (b: string): boolean => {
+    const r = setup.get(b);
+    const pa = parent.get(b) ?? null;
+    if (r === undefined || pa === null || !links.has(pa) || keyedBones.has(b)) return false;
+    const zero = (k: string, at: number): boolean => r[k] === undefined || r[k] === at;
+    return zero('x', 0) && zero('y', 0) && zero('rotation', 0) && zero('scaleX', 1) && zero('scaleY', 1) && zero('shearX', 0) && zero('shearY', 0);
+  };
+  const seen = new Set<string>();
+  let at: string | null = twinOfLink(common) ? (parent.get(common) ?? null) : common;
+  while (at !== null && links.has(at) && !seen.has(at)) {
+    seen.add(at);
+    at = parent.get(at) ?? null;
+  }
+  return at;
+}
+
+/**
+ * Each idle frame's posed vertices mapped into the setup place of `bone` (issue #987): world point p on frame i
+ * goes to setup(bone) · frame_i(bone)⁻¹ · p, so what the bone's own motion carries is taken out and what moves
+ * against it is left. Identity when `bone` is null; null when the geometry does not record the bone on every frame.
+ */
+export function carrierFrame(geo: IdleGeometry | null, bone: string | null): ((i: number, posed: readonly number[]) => number[]) | null {
+  if (bone === null) return (_i, posed) => posed.slice();
+  if (geo === null) return null;
+  const world = (bs: unknown): BoneWorld | null => {
+    const b = Array.isArray(bs) ? bs.filter(isRecord).find((x) => x.name === bone) : undefined;
+    if (b === undefined) return null;
+    const f = [b.a, b.b, b.c, b.d, b.worldX, b.worldY];
+    if (!f.every((v) => typeof v === 'number' && Number.isFinite(v))) return null;
+    return { a: b.a as number, b: b.b as number, c: b.c as number, d: b.d as number, worldX: b.worldX as number, worldY: b.worldY as number };
+  };
+  const s = world(geo.setupBones);
+  const fs = geo.frameBones.map(world);
+  if (s === null || fs.some((f) => f === null || f.a * f.d - f.b * f.c === 0)) return null;
+  return (i, posed) => {
+    const m = fs[i] as BoneWorld;
+    const det = m.a * m.d - m.b * m.c;
+    const out = posed.slice();
+    for (let j = 0; j + 1 < out.length; j += 2) {
+      const dx = posed[j] - m.worldX;
+      const dy = posed[j + 1] - m.worldY;
+      const lx = (m.d * dx - m.b * dy) / det;
+      const ly = (-m.c * dx + m.a * dy) / det;
+      out[j] = s.a * lx + s.b * ly + s.worldX;
+      out[j + 1] = s.c * lx + s.d * ly + s.worldY;
+    }
+    return out;
+  };
+}
 
 /**
  * (4) Each swinging part's tip travels further than its root: how far the art
@@ -7915,11 +7998,19 @@ export const TIP_INSTRUMENT = 'geometry';
  * relation: tip / root at most {@link TIP_REST_RATIO_CEILING}. Its row says
  * so first (`declared: "rests"`), the list is the line's first figure after
  * the other two, and the ceiling follows the floor.
+ *
+ * Issue #987: the halves are read against the bone the part hangs from
+ * ({@link hangBone}, through {@link carrierFrame}), so a chain that trails its
+ * body's carry is not scored as a tip that moves less; the row names that bone
+ * (`hang_from`) and keeps the world reading (`world_*`). A half that travels 0
+ * at the line's precision is 0, so a part that rides its carrier whole reads
+ * 0 / 0 and fails, not a ratio of round-off.
  */
 function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems: Problem[], excepted: TipExceptions = NO_TIP_EXCEPTIONS): JudgementLine {
   const swing = partsTagged(inp.parts, SWING_TAGS);
   if (swing.length === 0) return skip(`no part comes from a See-through ${tagWords(SWING_TAGS)} layer, so there is no hem or sleeve to swing`);
   const poses = attachmentPoses(geometryPath, frames);
+  const idleGeo = readGeometry(geometryPath, frames);
   // Issue #231: a part declared `rises` is read up only when the chain carrying it does rise, measured at the setup pose.
   // Issue #322: at its last link, the end the tip half is the art of; the row says what was read.
   const risesRead = new Map<string, string>();
@@ -7964,44 +8055,65 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
     const [rootHalf, tipHalf] = rises ? ['lower', 'upper'] : ['upper', 'lower'];
     const art = placedArt(p.x, p.y, readPng(join(inp.partsDir, `${p.name}.png`)));
     const shown = poses.map((f) => f.get(p.name) ?? null);
-    const t = halfTravels(art, p, inp.stage, shown, rises ? 'up' : 'down');
+    const w = halfTravels(art, p, inp.stage, shown, rises ? 'up' : 'down');
+    // Issue #987: the halves are read in the frame of the bone the part hangs from; the world reading rides beside them.
+    const hangFound = hangBone(inp.rig, inp.motion, p.name);
+    const frameOf = carrierFrame(idleGeo, hangFound);
+    const hang = frameOf === null ? null : hangFound;
+    const toCarrier = frameOf ?? ((_i: number, posed: readonly number[]) => posed.slice());
+    const held = shown.map((f, i) => (f === null ? null : { rest: f.rest, triangles: f.triangles, posed: toCarrier(i, f.posed) }));
+    const c = hang === null ? w : halfTravels(art, p, inp.stage, held, rises ? 'up' : 'down');
     // A part not declared writes the row it wrote before issue #231; a declared one says which half is its tip's.
     const said = { ...(rests ? { declared: 'rests' } : {}), ...(rises ? { tip_half: tipHalf, tip_read: risesRead.get(p.name) as string } : {}) };
-    if (t.root === null || t.tip === null) {
-      rows.push({ part: p.name, ...said, unmeasured: shown[0] === null ? 'its slot shows no attachment on idle frame 0' : `on idle frame 0 the ${t.root === null ? rootHalf : tipHalf} half of its box holds no art its attachment draws` });
+    if (w.root === null || w.tip === null || c.root === null || c.tip === null) {
+      const half = w.root === null || c.root === null ? rootHalf : tipHalf;
+      rows.push({ part: p.name, ...said, unmeasured: shown[0] === null ? 'its slot shows no attachment on idle frame 0' : `on idle frame 0 the ${half} half of its box holds no art its attachment draws` });
       continue;
     }
     measured++;
+    // Issue #987: a half that does not move against its carrier, read at the line's precision, is 0 and not the
+    // arithmetic's residue — a rigid part reads 0 / 0, not a ratio of two round-off figures.
+    const t = { root: round3(c.root) === 0 ? 0 : c.root, tip: round3(c.tip) === 0 ? 0 : c.tip };
     const ratio = t.root > 0 ? round3(t.tip / t.root) : null;
+    const worldRatio = w.root > 0 ? round3(w.tip / w.root) : null;
     // Issue #245: a resting tip is held to the opposite relation — no further than its root, at the line's precision.
-    const ok = rests ? (ratio === null ? round3(t.tip) === 0 : ratio <= TIP_REST_RATIO_CEILING) : ratio === null ? t.tip > 0 : ratio >= TIP_RATIO_FLOOR;
-    rows.push({ part: p.name, ...said, root_rig_px: round3(t.root), tip_rig_px: round3(t.tip), ratio });
+    const ok = rests ? (ratio === null ? t.tip === 0 : ratio <= TIP_REST_RATIO_CEILING) : ratio === null ? t.tip > 0 : ratio >= TIP_RATIO_FLOOR;
+    rows.push({ part: p.name, ...said, hang_from: hang, root_rig_px: round3(t.root), tip_rig_px: round3(t.tip), ratio, world_root_rig_px: round3(w.root), world_tip_rig_px: round3(w.tip), world_ratio: worldRatio });
+    const against = hang === null ? 'in the world' : `against \`${hang}\`, the bone it hangs from`;
+    const inWorld = hang === null ? '' : `; in the world ${round3(w.tip)} and ${round3(w.root)}, ratio ${worldRatio ?? 'undefined'}`;
+    const travels = `the art in its ${tipHalf} half travels ${round3(t.tip)} rig px and in its ${rootHalf} half ${round3(t.root)} rig px ${against}`;
     if (!ok && rests) {
       failed = true;
       problems.push({
         code: 'CHECK_TIP_OVER_ROOT',
         object: `part "${p.name}", box ${p.x},${p.y} ${p.w}x${p.h} rig px, posed by the idle's geometry, declared rests${rises ? ' and rises' : ''}`,
-        detail: `the art in its ${tipHalf} half travels ${round3(t.tip)} rig px and in its ${rootHalf} half ${round3(t.root)} rig px (ratio ${ratio ?? 'undefined: the root does not move'}); the scene file's rests declares its tip at rest, so a ratio <= ${TIP_REST_RATIO_CEILING} is required — the tip swings: the chain's amplitudes grow toward the tip, or the tip of the mesh is weighted to a bone the idle swings`,
+        detail: `${travels} (ratio ${ratio ?? 'undefined: the root does not move'}${inWorld}); the scene file's rests declares its tip at rest, so a ratio <= ${TIP_REST_RATIO_CEILING} is required — the tip swings: the chain's amplitudes grow toward the tip, or the tip of the mesh is weighted to a bone the idle swings`,
       });
     } else if (!ok) {
       failed = true;
       // Issue #262: a root the breath carries is named with its carrier, not blamed on the chain.
       // Issue #351: when the breath carries the root and the chain is also below the bar, or when the mesh is weighted
       // off its chain without a breath carrier, name that too instead of only blaming the chain's amplitudes.
-      const carry = breathCarrier(inp.rig, inp.motion, p.name, geometryPath, frames, { art, box: p, stage: inp.stage, shown, toward: rises ? 'up' : 'down', root: t.root, tip: t.tip });
+      // Issue #987: only a breath under the hang bone moves the root against it; one at or above it is in the frame.
+      const carry = breathCarrier(inp.rig, inp.motion, p.name, geometryPath, frames, { art, box: p, stage: inp.stage, shown, toward: rises ? 'up' : 'down', root: t.root, tip: t.tip, hang, toCarrier });
       if (carry !== null) rows[rows.length - 1] = { ...rows[rows.length - 1], carried_by: carry.bone, breath_rig_px: round3(carry.breath), root_without_breath_rig_px: round3(carry.root), tip_without_breath_rig_px: round3(carry.tip) };
       const offChain = carry === null && round3(t.tip) > 0 ? offChainClause(inp.rig, inp.motion, p.name) : null;
-      const misplaced = rises || carry !== null || offChain !== null ? null : chainRootsBelowArtClause(inp.rig, inp.motion, p, inp.stage, readGeometry(geometryPath, frames)?.setupBones);
+      const misplaced = rises || carry !== null || offChain !== null ? null : chainRootsBelowArtClause(inp.rig, inp.motion, p, inp.stage, idleGeo?.setupBones);
+      const hangName = hang === null ? 'the bone the part hangs from' : `\`${hang}\`, the bone the part hangs from`;
+      const held = carry === null ? '' : `the root travels with the breath (${round3(t.root)} px of ${round3(carry.breath)} px): it is carried by \`${carry.bone}\`, which moves it more than the tip; with \`${carry.keyed}\`'s translate held still the root travels ${round3(carry.root)} rig px and the tip ${round3(carry.tip)}`;
+      const heldRatio = carry === null ? '' : `ratio ${carry.root > 0 ? round3(carry.tip / carry.root) : 'undefined: the root moves only with it'}`;
       const why =
         carry === null
-          ? `the chain's amplitudes do not grow toward the tip, or the mesh is not weighted to the chain${offChain === null ? '' : `; ${offChain}`}`
-          : carry.passes
-            ? `the root travels with the breath (${round3(t.root)} px of ${round3(carry.breath)} px): it is carried by \`${carry.bone}\`, which moves it more than the tip; with \`${carry.keyed}\`'s translate held still the root travels ${round3(carry.root)} rig px and the tip ${round3(carry.tip)}, which the bar passes (ratio ${carry.root > 0 ? round3(carry.tip / carry.root) : 'undefined: the root moves only with it'}) — bind the root to the bone the part hangs from, not to \`${carry.bone}\``
-            : `the root travels with the breath (${round3(t.root)} px of ${round3(carry.breath)} px): it is carried by \`${carry.bone}\`, which moves it more than the tip; with \`${carry.keyed}\`'s translate held still the root travels ${round3(carry.root)} rig px and the tip ${round3(carry.tip)}, which is still below the bar (ratio ${carry.root > 0 ? round3(carry.tip / carry.root) : 'undefined: the root moves only with it'}, < ${TIP_RATIO_FLOOR}) — drop the segment on \`${carry.bone}\` from \`meshes.${p.name}.segments\` (or bind the root to the bone the part hangs from, not to \`${carry.bone}\`) and grow the chain's amplitudes toward the tip`;
+          ? `${t.root === 0 && t.tip === 0 && hang !== null ? `nothing in it moves against \`${hang}\`: it rides that bone whole; ` : ''}the chain's amplitudes do not grow toward the tip, or the mesh is not weighted to the chain${offChain === null ? '' : `; ${offChain}`}`
+          : carry.link
+            ? `${held}, which ${carry.passes ? `the bar passes (${heldRatio})` : `is still below the bar (${heldRatio}, < ${TIP_RATIO_FLOOR})`} — \`${carry.bone}\` is a link of the chain the part hangs on, so its segment stays: key \`${carry.keyed}\`'s translate on ${hangName} or a bone above it, where this reading takes it out, not under it${carry.passes ? '' : ", and grow the chain's amplitudes toward the tip"}`
+            : carry.passes
+              ? `${held}, which the bar passes (${heldRatio}) — bind the root to ${hangName}, not to \`${carry.bone}\``
+              : `${held}, which is still below the bar (${heldRatio}, < ${TIP_RATIO_FLOOR}) — drop the segment on \`${carry.bone}\` from \`meshes.${p.name}.segments\` (or bind the root to ${hangName}, not to \`${carry.bone}\`) and grow the chain's amplitudes toward the tip`;
       problems.push({
         code: 'CHECK_TIP_OVER_ROOT',
         object: `part "${p.name}", box ${p.x},${p.y} ${p.w}x${p.h} rig px, posed by the idle's geometry${rises ? ', declared rises' : ''}`,
-        detail: `the art in its ${tipHalf} half travels ${round3(t.tip)} rig px and in its ${rootHalf} half ${round3(t.root)} rig px (ratio ${ratio ?? 'undefined: nothing moves'}); a ratio >= ${TIP_RATIO_FLOOR} is required — ${misplaced ?? why}`,
+        detail: `${travels} (ratio ${ratio ?? (hang === null ? 'undefined: nothing moves' : `undefined: nothing moves against \`${hang}\``)}${inWorld}); a ratio >= ${TIP_RATIO_FLOOR} is required — ${misplaced ?? why}`,
       });
     }
   }
@@ -8109,7 +8221,13 @@ const BREATH_PROPS: readonly string[] = ['translate', 'translatex', 'translatey'
  * them. The root travels with the breath when the breath adds more to the root's travel than to the tip's and the tip
  * moves above 0 at the line's precision (round3); `passes` records whether, held still, the halves pass the bar
  * (tip >= {@link TIP_RATIO_FLOOR} x root). The carrier named is the bone the part is bound to ({@link boundBones}) at
- * or under `K` that no other such bone is above (the sleeve's links ride `chest`, which is the carrier). Null otherwise.
+ * or under `K` that no other such bone is above. Null otherwise.
+ *
+ * Issue #987: the halves are read in the frame of the bone the part hangs from (`m.hang`), so only a breath keyed
+ * strictly under that bone is read, and the held pose goes through the same frame (`m.toCarrier`). Before #987 a
+ * sleeve whose chain rides `chest` was named carried by the chain's own first link, and the advice told the author to
+ * drop that link's segment; the breath on `chest` is now in the frame and carries nothing. `link` says the carrier
+ * named is a link of a chain `CHAIN_LAG` reads, whose segment the advice must not tell the author to drop.
  */
 function breathCarrier(
   rig: Record<string, unknown>,
@@ -8117,8 +8235,18 @@ function breathCarrier(
   part: string,
   geometryPath: string,
   frames: number,
-  m: { art: ArtMask; box: { x: number; y: number; w: number; h: number }; stage: StageBox; shown: ReadonlyArray<PosedAttachment | null>; toward: 'down' | 'up'; root: number; tip: number },
-): { bone: string; keyed: string; breath: number; root: number; tip: number; passes: boolean } | null {
+  m: {
+    art: ArtMask;
+    box: { x: number; y: number; w: number; h: number };
+    stage: StageBox;
+    shown: ReadonlyArray<PosedAttachment | null>;
+    toward: 'down' | 'up';
+    root: number;
+    tip: number;
+    hang: string | null;
+    toCarrier: (i: number, posed: readonly number[]) => number[];
+  },
+): { bone: string; keyed: string; breath: number; root: number; tip: number; passes: boolean; link: boolean } | null {
   const anims = isRecord(motion.animations) ? motion.animations : {};
   const idle = isRecord(anims.idle) ? anims.idle : {};
   const keyed = [...new Set((Array.isArray(idle.tracks) ? idle.tracks : []).filter(isRecord).filter((t) => typeof t.bone === 'string' && typeof t.property === 'string' && BREATH_PROPS.includes(t.property)).map((t) => String(t.bone)))];
@@ -8154,7 +8282,10 @@ function breathCarrier(
     return { a: b.a as number, b: b.b as number, c: b.c as number, d: b.d as number, worldX: b.worldX as number, worldY: b.worldY as number };
   };
   const bound = [...boundBones(rig, part)];
+  const links = new Set(chainFigures(rig, motion).chains.filter((c) => c.length >= 2).flatMap((c) => c.map((l) => l.bone)));
   for (const k of keyed) {
+    // Issue #987: a breath at or above the hang bone is in the frame the halves are read in, so it carries nothing.
+    if (m.hang !== null && (k === m.hang || !atOrUnder(k, m.hang))) continue;
     const under = bound.filter((b) => atOrUnder(b, k));
     const carrier = under.find((b) => !under.some((o) => o !== b && atOrUnder(b, o)));
     if (carrier === undefined) continue;
@@ -8174,11 +8305,11 @@ function breathCarrier(
     const breath = Math.max(...delta.map(([x, y]) => edgeLength(x, y)));
     if (!(breath > 0)) continue;
     const share = weights.map((v) => v.filter((w) => atOrUnder(String(w.bone), k)).reduce((s, w) => s + (w.weight as number), 0));
-    const held = m.shown.map((f, i) => (f === null ? null : { rest: f.rest, triangles: f.triangles, posed: f.posed.map((v, j) => v - share[j >> 1] * delta[i][j & 1]) }));
+    const held = m.shown.map((f, i) => (f === null ? null : { rest: f.rest, triangles: f.triangles, posed: m.toCarrier(i, f.posed.map((v, j) => v - share[j >> 1] * delta[i][j & 1])) }));
     const t = halfTravels(m.art, m.box, m.stage, held, m.toward);
     if (t.root === null || t.tip === null) continue;
     if (!(m.root - t.root > Math.max(0, m.tip - t.tip)) || round3(t.tip) === 0) continue;
-    return { bone: carrier, keyed: k, breath, root: t.root, tip: t.tip, passes: t.tip >= TIP_RATIO_FLOOR * t.root };
+    return { bone: carrier, keyed: k, breath, root: t.root, tip: t.tip, passes: t.tip >= TIP_RATIO_FLOOR * t.root, link: links.has(carrier) };
   }
   return null;
 }

@@ -142,6 +142,19 @@ export interface CheckRigOptions {
    */
   carried?: { breath: number; sway: number };
   /**
+   * Issue #987: draw the back part as a sleeve hung on a two-link chain under a carried body, in the rig stage's
+   * shape. The body is `chest` (through `chest_ctl`, which the idle keys `translatex` `carry` · sin(2πt), sampled at
+   * eight steps — the sway that carries the sleeve whole). The chain is `s0_ctl` > `s0` > `s1_ctl` > `s1`, each link
+   * turned to point down the sleeve with a length (`s0` to `s1_ctl`, `s1` 10); `swing` keys `s0_ctl` and `s1_ctl`
+   * `rotate` `swing` · sin(2πt) and half that at the same eight steps (a chain `CHAIN_LAG` reads). `swing` 0 writes
+   * no control bones and no rotate keys: `s0` under `chest`, `s1` under `s0`. `physics` puts a physics constraint on `s0` and on `s1` (`rotate` 1, `mix` 1, `strength` and `inertia`
+   * as given) — the physics child the rig stage binds a sleeve to. The part is a four-vertex mesh, its top two
+   * vertices on `s0` and its bottom two on `s1`; the slot rides `chest`. `pivot` `top` puts `s0_ctl` at the sleeve's
+   * top; `mid` at its middle, so the whole sleeve turns about its centre. Not with `stretchMesh`, `carried`,
+   * `blinkSquash` or `head`.
+   */
+  hung?: { carry: number; swing: number; pivot: 'top' | 'mid'; physics?: { strength: number; inertia: number } };
+  /**
    * The idle's duration in seconds, default 1 (issue #244). The root's three
    * `translatex` keys sit at 0, half of it and it. Only with none of
    * `blinkSquash`, `stretchMesh` and `head`, whose keys are written over 1 s.
@@ -169,9 +182,11 @@ export function writeCheckRig(dir: string, opts: CheckRigOptions = {}): void {
   const peak = opts.peak ?? IDLE_PEAK;
   const carried = opts.carried;
   if (carried !== undefined && (opts.stretchMesh !== undefined || opts.blinkSquash !== undefined || opts.head !== undefined)) throw new Error('writeCheckRig: carried is not with stretchMesh, blinkSquash or head');
+  const hung = opts.hung;
+  if (hung !== undefined && (opts.stretchMesh !== undefined || carried !== undefined || opts.blinkSquash !== undefined || opts.head !== undefined)) throw new Error('writeCheckRig: hung is not with stretchMesh, carried, blinkSquash or head');
   const mesh = opts.stretchMesh !== undefined || carried !== undefined;
   const T = opts.duration ?? 1;
-  if (T !== 1 && (blink || mesh || opts.head !== undefined)) throw new Error('writeCheckRig: duration is only for the bare fixture; the blink, mesh and head keys are written over 1 s');
+  if (T !== 1 && (blink || mesh || hung !== undefined || opts.head !== undefined)) throw new Error('writeCheckRig: duration is only for the bare fixture; the blink, mesh and head keys are written over 1 s');
   const back = CHECK_PARTS[0];
   const hemAt = { x: stage.x + back.x + back.w / 2, y: stage.y + cropToSpineY(back.y + back.h, H) };
   const corners = [
@@ -190,6 +205,51 @@ export function writeCheckRig(dir: string, opts: CheckRigOptions = {}): void {
     hull: 4,
     weights: corners.map((c, i) => (i < 2 ? [{ bone: carried === undefined ? 'yoke' : 'chest', x: c.x, y: c.y, weight: 1 }] : [{ bone: 'hem', x: c.x - hemAt.x, y: c.y - hemAt.y, weight: 1 }])),
   };
+  // Issue #987: the hung sleeve — its chain's origins in world units, from the sleeve's top (or middle) to its bottom.
+  const topAt = { x: stage.x + back.x + back.w / 2, y: stage.y + cropToSpineY(back.y, H) };
+  const s0At = hung?.pivot === 'mid' ? { x: topAt.x, y: stage.y + cropToSpineY(back.y + back.h / 2, H) } : topAt;
+  const s1At = hemAt;
+  const s0Len = s0At.y - s1At.y;
+  // The links point down (rotation -90), so a world offset (dx, dy) is (-dy, dx) in a link's frame.
+  const linkLocal = (dx: number, dy: number): { x: number; y: number } => ({ x: -dy, y: dx });
+  const hungMesh = {
+    ...backMesh,
+    weights: corners.map((c, i) => [{ bone: i < 2 ? 's0' : 's1', ...linkLocal(c.x - (i < 2 ? s0At : s1At).x, c.y - (i < 2 ? s0At : s1At).y), weight: 1 }]),
+  };
+  const hungBones =
+    hung === undefined
+      ? []
+      : [
+          { name: 'chest_ctl', parent: 'root', x: 0, y: 0 },
+          { name: 'chest', parent: 'chest_ctl', x: 0, y: 0 },
+          ...(hung.swing === 0
+            ? [
+                { name: 's0', parent: 'chest', x: s0At.x, y: s0At.y, rotation: -90, length: s0Len },
+                { name: 's1', parent: 's0', x: s0Len, y: 0, length: 10 },
+              ]
+            : [
+                { name: 's0_ctl', parent: 'chest', x: s0At.x, y: s0At.y, rotation: -90 },
+                { name: 's0', parent: 's0_ctl', x: 0, y: 0, length: s0Len },
+                { name: 's1_ctl', parent: 's0', x: s0Len, y: 0 },
+                { name: 's1', parent: 's1_ctl', x: 0, y: 0, length: 10 },
+              ]),
+        ];
+  const sine = (amp: number): Array<{ t: number; v: number[] }> => Array.from({ length: 9 }, (_, k) => ({ t: k / 8, v: [k === 8 ? 0 : Math.round(amp * Math.sin((2 * Math.PI * k) / 8) * 1e4) / 1e4] }));
+  const hungTracks =
+    hung === undefined
+      ? []
+      : [
+          { bone: 'chest_ctl', property: 'translatex', keys: sine(hung.carry) },
+          ...(hung.swing === 0
+            ? []
+            : [
+                { bone: 's0_ctl', property: 'rotate', keys: sine(hung.swing) },
+                { bone: 's1_ctl', property: 'rotate', keys: sine(hung.swing / 2) },
+              ]),
+        ];
+  const hungPhysics = hung?.physics;
+  const hungConstraints =
+    hungPhysics === undefined ? [] : ['s0', 's1'].map((b) => ({ type: 'physics', name: `${b}_phys`, bone: b, rotate: 1, inertia: hungPhysics.inertia, strength: hungPhysics.strength, damping: 0.85, mass: 1, mix: 1 }));
   const hemTracks =
     carried !== undefined
       ? [
@@ -222,6 +282,7 @@ export function writeCheckRig(dir: string, opts: CheckRigOptions = {}): void {
         ];
   const attachment = (p: CheckPart, i: number): Record<string, unknown> => {
     const at = { x: stage.x + p.x + p.w / 2, y: stage.y + cropToSpineY(p.y + p.h / 2, H) };
+    if (hung !== undefined && i === 0) return hungMesh;
     if (mesh && i === 0) return backMesh;
     if (head !== undefined) {
       if ((i === 0 && slide) || (i === 1 && bang)) {
@@ -256,9 +317,11 @@ export function writeCheckRig(dir: string, opts: CheckRigOptions = {}): void {
       ...(mesh ? [{ name: 'yoke', parent: 'root', x: 0, y: 0 }, { name: 'hem_ctl', parent: 'root', x: hemAt.x, y: hemAt.y }, { name: 'hem', parent: 'hem_ctl', x: 0, y: 0 }] : []),
       ...(carried !== undefined ? [{ name: 'chest_ctl', parent: 'root', x: 0, y: 0 }, { name: 'chest', parent: 'chest_ctl', x: 0, y: 0 }] : []),
       ...headBones,
+      ...hungBones,
     ],
-    slots: CHECK_PARTS.map((p, i) => ({ name: p.name, bone: head !== undefined ? 'head' : blink && i === 1 ? 'eye' : mesh && i === 0 ? (carried === undefined ? 'yoke' : 'chest') : 'root', attachment: p.name })),
+    slots: CHECK_PARTS.map((p, i) => ({ name: p.name, bone: head !== undefined ? 'head' : blink && i === 1 ? 'eye' : hung !== undefined && i === 0 ? 'chest' : mesh && i === 0 ? (carried === undefined ? 'yoke' : 'chest') : 'root', attachment: p.name })),
     skins: { default: Object.fromEntries(CHECK_PARTS.map((p, i) => [p.name, { [p.name]: attachment(p, i) }])) },
+    ...(hungConstraints.length === 0 ? {} : { constraints: hungConstraints }),
   };
   writeFileSync(join(dir, 'rig.json'), `${JSON.stringify(rig, null, 2)}\n`);
   const motion = {
@@ -271,7 +334,7 @@ export function writeCheckRig(dir: string, opts: CheckRigOptions = {}): void {
       idle: {
         duration: T,
         loop: true,
-        tracks: [{ bone: 'root', property: 'translatex', keys: [{ t: 0, v: [0] }, { t: T / 2, v: [peak] }, { t: T, v: [opts.lastKey ?? 0] }] }, ...blinkTracks, ...hemTracks, ...headTracks],
+        tracks: [{ bone: 'root', property: 'translatex', keys: [{ t: 0, v: [0] }, { t: T / 2, v: [peak] }, { t: T, v: [opts.lastKey ?? 0] }] }, ...blinkTracks, ...hemTracks, ...headTracks, ...hungTracks],
       },
     },
   };

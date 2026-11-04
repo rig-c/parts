@@ -965,7 +965,7 @@
  },
  "TIP_OVER_ROOT": {
   "status": "PASS",
-  "instrument": "geometry",
+  "instrument": "geometry, carrier frame",
   "parts": [
    {
     "part": "forearm_l",
@@ -985,9 +985,13 @@
    },
    {
     "part": "bottomwear",
+    "hang_from": "hip",
     "root_rig_px": 2.463,
     "tip_rig_px": 4.472,
-    "ratio": 1.816
+    "ratio": 1.816,
+    "world_root_rig_px": 2.463,
+    "world_tip_rig_px": 4.472,
+    "world_ratio": 1.816
    }
   ],
   "ratio_floor": 1.4725
