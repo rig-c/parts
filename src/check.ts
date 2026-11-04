@@ -1,3 +1,4 @@
+import { readSetupBackdrop } from './setupbackdrop.ts';
 import { SETUP_PAINTING_LINE, UNDECLARED_SETUP_PAINTING_REASON, setupPaintingBounds, setupPaintingLine, type SetupPainting, type SetupPaintingLine, type SetupPaintingObservation } from './setuppainting.ts';
 import { readMaterialSources } from './cutmaterialio.ts';
 import { CUT_MATERIAL_LINE, checkJointMaterial, type MaterialLine } from './cutmaterial.ts';
@@ -141,9 +142,10 @@ import {
   type WorldBox,
 } from './instruments.ts';
 import { type AlternatePartsRecord, FRONT_SUFFIX, type LimbRecord, type PartRecord, type PartsFile, readParts } from './parts.ts';
-import { ARM_SPLIT_MIGRATION, poseRigBonesForDrawn, type RigBone, SETS_FILE } from './rig.ts';
+import { ARM_SPLIT_MIGRATION, poseRigBonesForDrawn, type RigBone, SETS_FILE, writtenShares } from './rig.ts';
 import { TURN_BONE, turnConstraintName, turnTwin } from './turn.ts';
-import { ROOT_BONE } from './config.ts';
+import { ROOT_BONE, loadConfigWithBytes, type Point } from './config.ts';
+import { influences, meshLimits, type Segment, type Influence, type InfluenceLimits } from './weights.ts';
 import {
   aimLine,
   contactLine,
@@ -235,6 +237,8 @@ export const BLINK_PATCH_LEVEL = SEAM_PX_LEVEL;
 /** The smallest lag the reading resolves, in cycles: phases are written to three places. */
 export const CHAIN_LAG_MIN_STEP = 0.001;
 export const TIP_RATIO_FLOOR = 1.4725;
+/** Issue #994 sets half a rig pixel as the floor on the larger half travel. */
+export const TIP_TRAVEL_FLOOR = 0.5;
 /**
  * Issue #245: the bar a part the scene declares `rests` is held to — its tip
  * half travels no further than its root half, tip / root <= 1, read at the
@@ -1940,7 +1944,7 @@ export function officialRenderer(): OfficialRenderer {
 
 /** Observe the actual setup on the declared stage grid. No frame-zero motion,
  * fitted alignment, flat recomposite or duplicate core validation. */
-export function measureSetupPainting(build: string, stage: StageBox, source: Raster, declared: SetupPainting, problems: Problem[]): SetupPaintingLine {
+export function measureSetupPainting(build: string, stage: StageBox, source: Raster, declared: SetupPainting, problems: Problem[], backdrop?: Raster): SetupPaintingLine {
   const api = officialRenderer();
   const skeleton = join(build, 'skeleton.json'), atlas = join(build, 'skeleton.atlas');
   const candidate = api.loadCandidate({ skeletonText: readFileSync(skeleton, 'utf8'), atlasText: readFileSync(atlas, 'utf8'), atlasDir: build, label: 'setup versus painting' }, { skeleton, atlas }, undefined);
@@ -1954,17 +1958,17 @@ export function measureSetupPainting(build: string, stage: StageBox, source: Ras
   const project = api.projector(vp), owners = new Int32Array(W * H).fill(-1);
   pose.pieces.forEach((piece, i) => api.rasterisePiece(api.pageFor(candidate.pages, piece), piece, project, vp, (x, y, _r, _g, _b, a) => { if (a > 0) owners[y * W + x] = i; }));
   // sourceInRig intentionally reads opaque RGB, discarding source alpha before
-  // resizing. This optional comparison declares source-over white instead:
+  // resizing. This optional comparison declares source-over the plate or white:
   // flatten at ORIGINAL source resolution first, so hidden RGB cannot reach
   // Lanczos taps or the figure silhouette. Do not change the legacy helper.
   const whiteSource = newRaster(source.width, source.height);
   for (let p = 0; p < source.width * source.height; p++) {
-    for (let c = 0; c < 3; c++) whiteSource.data[p * 4 + c] = Math.round(source.data[p * 4 + c] * source.data[p * 4 + 3] / 255 + 255 * (1 - source.data[p * 4 + 3] / 255));
+    for (let c = 0; c < 3; c++) whiteSource.data[p * 4 + c] = Math.round(source.data[p * 4 + c] * source.data[p * 4 + 3] / 255 + (backdrop?.data[p * 4 + c] ?? 255) * (1 - source.data[p * 4 + 3] / 255));
     whiteSource.data[p * 4 + 3] = 255;
   }
   const painting = sourceInRig(whiteSource, W, H);
   const setup = api.renderFrame(pose, candidate.pages, vp, [0, 0, 0, 0]);
-  return setupPaintingLine(declared, painting, { width: W, height: H, data: new Uint8ClampedArray(setup.data) }, figureSilhouette(painting).data, owners, pose.pieces.map(p => p.slot), problems);
+  return setupPaintingLine(declared, painting, { width: W, height: H, data: new Uint8ClampedArray(setup.data) }, figureSilhouette(painting).data, owners, pose.pieces.map(p => p.slot), problems, backdrop === undefined ? undefined : sourceInRig(backdrop, W, H));
 }
 
 /** One decoder/poser lifetime per state; retain only finite bounds and identities, never atlas pages or rasters. */
@@ -3322,7 +3326,7 @@ export const FOLD_TRIANGLES_SHOWN = 6;
  * the skin does not hold, a mesh with no triangle table, or a triangle the table does not reach is said rather than
  * guessed.
  */
-export function foldBonesText(rig: Record<string, unknown>, motion: Record<string, unknown>, slot: string, attachment: string, frame: number, triangles: readonly number[]): string {
+export function foldBonesText(rig: Record<string, unknown>, motion: Record<string, unknown>, slot: string, attachment: string, frame: number, triangles: readonly number[], context?: WeightStepContext): string {
   const head = `at worst frame ${frame}`;
   if (triangles.length === 0) return `${head} rigc lists no folded triangle`;
   const skins = isRecord(rig.skins) ? rig.skins : {};
@@ -3368,7 +3372,8 @@ export function foldBonesText(rig: Record<string, unknown>, motion: Record<strin
     const which = g.triangles.length === 1 ? `triangle ${first}` : `triangles ${g.triangles.slice(0, FOLD_TRIANGLES_SHOWN).join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
     const by = g.bones.length === 0 ? '' : ` dominated by ${quoted(g.bones)}`;
     const spelled = g.triangles.length === 1 ? `vertices ${vs.join(' ')}` : `triangle ${first}, vertices ${vs.join(' ')}`;
-    return `${which}${by} (${spelled}: ${edgeBonesText(rig, motion, slot, attachment, vs)})`;
+    const step = weightStepText(rig, slot, attachment, vs, context);
+    return `${which}${by} (${spelled}: ${edgeBonesText(rig, motion, slot, attachment, vs)}${step === '' ? '' : `; ${step}`})`;
   });
   const rest = groups.slice(FOLD_GROUPS_SHOWN);
   const restText = rest.length === 0 ? '' : `; … and ${rest.length} more group(s), ${rest.reduce((n, g) => n + g.triangles.length, 0)} triangle(s)`;
@@ -3400,6 +3405,7 @@ export function foldsLine(
   rig: Record<string, unknown> = {},
   physicsList: readonly LoopPhysics[] = [],
   motion: Record<string, unknown> = {},
+  context?: WeightStepContext,
 ): FoldsLine {
   const toSide = (m: FoldingMesh | undefined): FoldSide | null =>
     m === undefined ? null : { frames: m.frames, worst_frame: m.worstFrame, worst_triangles: m.worstTriangles, line: m.line };
@@ -3460,7 +3466,7 @@ export function foldsLine(
     problems.push({
       code: `CHECK_${FOLD_LINE}`,
       object: `animation "${r.animation}", mesh "${r.attachment}" (slot "${r.slot}")`,
-      detail: `rigc render --folds at ${fps} fps${physics}${sideClause}: ${r.line}; ${foldBonesText(rig, motion, r.slot, r.attachment, r.worst_frame, worstOf.get(r) ?? [])}; no triangle turned over against the setup pose is required — a fold the art means is declared in the --requirements file's may_fold, { "slot": "${r.slot}", "animation": "${r.animation}", "why": … }`,
+      detail: `rigc render --folds at ${fps} fps${physics}${sideClause}: ${r.line}; ${foldBonesText(rig, motion, r.slot, r.attachment, r.worst_frame, worstOf.get(r) ?? [], context)}; no triangle turned over against the setup pose is required — a fold the art means is declared in the --requirements file's may_fold, { "slot": "${r.slot}", "animation": "${r.animation}", "why": … }`,
     });
   }
   const declaredNotFolding = mayFold.filter((e) => !folding.some((r) => r.slot === e.slot && r.animation === e.animation)).map((e) => ({ slot: e.slot, animation: e.animation }));
@@ -6408,6 +6414,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       return null;
     }
   };
+  let setupBackdrop: Raster | undefined;
   // Issue #538: the schedule is read once, first, by rigc's own reader; refused, nothing is built or written.
   const env = environment === undefined ? null : take(() => readCheckEnvironment(environment));
   // Issue #590: the steady-wind band spec is read and resolved before anything is built or written.
@@ -6432,6 +6439,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     if (file.setup_painting !== undefined) take(() => {
       refuseIfAny(setupPaintingBounds(file.setup_painting as SetupPainting, ready.stage.width, ready.stage.height));
       if (ready.source === null) refuseIfAny([{ code: 'CHECK_SETUP_PAINTING_SOURCE', object: 'requirements.setup_painting', detail: 'requires --source naming the painting; the assembled composite is not an independent source painting' }]);
+      setupBackdrop = readSetupBackdrop(file.setup_painting as SetupPainting, requirements, ready.source?.painting ?? null);
     });
     // Issue #942: a declared boundary_colour reads parts.json's pieces and the idle; without either it cannot be taken.
     if (file.boundary_colour !== undefined) take(() => refuseIfAny([
@@ -6665,7 +6673,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           const fr = measured(['render', '--candidate', buildDir, '--folds', ...geometry, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', foldDir]);
           if (fr.status !== 0) refuseIfAny(rigcFailed(`render --folds${geometry.map((g) => ` ${g}`).join('')} --fps ${fps}`, fr, fr.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
           const readings = filterFolds(readFoldSets(foldDir, animationNames, fps, fr.out));
-          folds = foldsLine(animationNames, fps, 0, readings, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readings, inp.rig, [], inp.motion);
+          folds = foldsLine(animationNames, fps, 0, readings, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readings, inp.rig, [], inp.motion, { config, stage: inp.stage });
           if (feet.length > 0) {
             const sets = readJson(join(foldDir, 'frames.json'), []);
             const listed = sets !== null && Array.isArray(sets.sets) ? sets.sets.filter(isRecord) : [];
@@ -6686,7 +6694,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           if (frOff.status !== 0) refuseIfAny(rigcFailed(`render --folds${geometry.map((g) => ` ${g}`).join('')} --fps ${fps} (physics constraint(s) left out)`, frOff, frOff.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
           const readingsOn = filterFolds(readFoldSets(onDir, animationNames, fps, frOn.out));
           const readingsOff = filterFolds(readFoldSets(offDir, animationNames, fps, frOff.out));
-          folds = foldsLine(animationNames, fps, stripped.physics.length, readingsOn, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readingsOff, inp.rig, stripped.physics, inp.motion);
+          folds = foldsLine(animationNames, fps, stripped.physics.length, readingsOn, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readingsOff, inp.rig, stripped.physics, inp.motion, { config, stage: inp.stage });
           if (feet.length > 0) {
             const sets = readJson(join(offDir, 'frames.json'), []);
             const listed = sets !== null && Array.isArray(sets.sets) ? sets.sets.filter(isRecord) : [];
@@ -6762,7 +6770,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     const geometryPath = join(idle.dir, GEOMETRY_FILE);
     const geometry = readGeometry(geometryPath, idle.written);
     idleGeometry = geometry;
-    stretch = stretchLine(geometry, geometryPath, problems, inp);
+    stretch = stretchLine(geometry, geometryPath, problems, { ...inp, config });
     if (full !== null) still = stillLine(full, idle, geometry, geometryPath, problems, notPlanted);
   }
 
@@ -7037,7 +7045,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       const sr = rigc(['render', '--candidate', join(stillDir, 'build'), '--animation', 'still', '--fps', String(STILL_FPS), '--max', String(maxSide), ...(fixedSkeleton === undefined ? [] : ['--geometry']), '--out', join(stillDir, 'render')]);
       if (sr.status !== 0) refuseIfAny(rigcFailed('render (the setup-pose still)', sr, sr.out.split('\n').filter((l) => l.includes('FAIL'))));
       const stillSet = readFrameSet(join(stillDir, 'render'));
-      if (reqFile?.setup_painting !== undefined && inp.source !== null) setupPainting = measureSetupPainting(join(stillDir, 'build'), inp.stage, inp.source.painting, reqFile.setup_painting, problems);
+      if (reqFile?.setup_painting !== undefined && inp.source !== null) setupPainting = measureSetupPainting(join(stillDir, 'build'), inp.stage, inp.source.painting, reqFile.setup_painting, problems, setupBackdrop);
       if (fixedSkeleton !== undefined) {
         const geometryPath = join(stillSet.dir, GEOMETRY_FILE);
         const geometry = readGeometry(geometryPath, stillSet.written);
@@ -7924,6 +7932,11 @@ export const TIP_INSTRUMENT = 'geometry, carrier frame';
  * nothing or the walk leaves the tree, and the part is then read in the world.
  */
 export function hangBone(rig: Record<string, unknown>, motion: Record<string, unknown>, part: string): string | null {
+  return tipHang(rig, motion, part).bone;
+}
+
+/** The same walk also identifies a link below the carrier for the art-grid policy. */
+function tipHang(rig: Record<string, unknown>, motion: Record<string, unknown>, part: string): { bone: string | null; onLink: boolean } {
   const bones = (Array.isArray(rig.bones) ? rig.bones : []).filter(isRecord).filter((b) => typeof b.name === 'string');
   const parent = new Map(bones.map((b) => [String(b.name), typeof b.parent === 'string' ? b.parent : null]));
   const upFrom = (b: string): string[] => {
@@ -7932,10 +7945,10 @@ export function hangBone(rig: Record<string, unknown>, motion: Record<string, un
     return path;
   };
   const bound = [...boundBones(rig, part)];
-  if (bound.length === 0) return null;
+  if (bound.length === 0) return { bone: null, onLink: false };
   const paths = bound.map(upFrom);
   const common = paths[0].find((b) => paths.every((p) => p.includes(b)));
-  if (common === undefined) return null;
+  if (common === undefined) return { bone: null, onLink: false };
   // A link: a bone of a chain CHAIN_LAG reads, or a bone a physics constraint drives. The rig stage keys a chain's
   // `<link>_ctl` and binds the mesh to its child the physics drives, and a physics-only chain has no keys at all, so
   // both are walked up through until the body bone that carries them.
@@ -7983,7 +7996,8 @@ export function hangBone(rig: Record<string, unknown>, motion: Record<string, un
     seen.add(at);
     at = parent.get(at) ?? null;
   }
-  return at;
+  const onLink = paths.some((path) => path.slice(0, at === null ? path.length : path.indexOf(at)).some((b) => links.has(b)));
+  return { bone: at, onLink };
 }
 
 /**
@@ -8048,7 +8062,8 @@ export function carrierFrame(geo: IdleGeometry | null, bone: string | null): ((i
  * body's carry is not scored as a tip that moves less; the row names that bone
  * (`hang_from`) and keeps the world reading (`world_*`). A half that travels 0
  * at the line's precision is 0, so a part that rides its carrier whole reads
- * 0 / 0 and fails, not a ratio of round-off.
+ * 0 / 0 and fails, not a ratio of round-off. Issue #994 applies the fixed
+ * 0.5 rig px art-grid policy to max(root, tip) of a link part after this guard.
  */
 function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems: Problem[], excepted: TipExceptions = NO_TIP_EXCEPTIONS): JudgementLine {
   const swing = partsTagged(inp.parts, SWING_TAGS);
@@ -8083,6 +8098,7 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
   }
   const rows: Array<Record<string, unknown>> = [];
   let measured = 0;
+  let belowGrid = 0;
   let failed = false;
   for (const p of swing) {
     if (excepted.not_swinging.includes(p.name)) {
@@ -8101,7 +8117,8 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
     const shown = poses.map((f) => f.get(p.name) ?? null);
     const w = halfTravels(art, p, inp.stage, shown, rises ? 'up' : 'down');
     // Issue #987: the halves are read in the frame of the bone the part hangs from; the world reading rides beside them.
-    const hangFound = hangBone(inp.rig, inp.motion, p.name);
+    const hanging = tipHang(inp.rig, inp.motion, p.name);
+    const hangFound = hanging.bone;
     const frameOf = carrierFrame(idleGeo, hangFound);
     const hang = frameOf === null ? null : hangFound;
     const toCarrier = frameOf ?? ((_i: number, posed: readonly number[]) => posed.slice());
@@ -8114,19 +8131,27 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
       rows.push({ part: p.name, ...said, unmeasured: shown[0] === null ? 'its slot shows no attachment on idle frame 0' : `on idle frame 0 the ${half} half of its box holds no art its attachment draws` });
       continue;
     }
-    measured++;
     // Issue #987: a half that does not move against its carrier, read at the line's precision, is 0 and not the
     // arithmetic's residue — a rigid part reads 0 / 0, not a ratio of two round-off figures.
     const t = { root: round3(c.root) === 0 ? 0 : c.root, tip: round3(c.tip) === 0 ? 0 : c.tip };
     const ratio = t.root > 0 ? round3(t.tip / t.root) : null;
     const worldRatio = w.root > 0 ? round3(w.tip / w.root) : null;
     // Issue #245: a resting tip is held to the opposite relation — no further than its root, at the line's precision.
-    const ok = rests ? (ratio === null ? t.tip === 0 : ratio <= TIP_REST_RATIO_CEILING) : ratio === null ? t.tip > 0 : ratio >= TIP_RATIO_FLOOR;
+    const rigid = t.root === 0 && t.tip === 0;
+    const ok = !rigid && (rests ? (ratio === null ? t.tip === 0 : ratio <= TIP_REST_RATIO_CEILING) : ratio === null ? t.tip > 0 : ratio >= TIP_RATIO_FLOOR);
     rows.push({ part: p.name, ...said, hang_from: hang, root_rig_px: round3(t.root), tip_rig_px: round3(t.tip), ratio, world_root_rig_px: round3(w.root), world_tip_rig_px: round3(w.tip), world_ratio: worldRatio });
+    // Structural 0 / 0 stays a failure before the link-only magnitude policy (issue #994).
+    if (!rigid && hanging.onLink && Math.max(c.root, c.tip) < TIP_TRAVEL_FLOOR) {
+      belowGrid++;
+      rows[rows.length - 1] = { ...rows[rows.length - 1], travel_floor_rig_px: TIP_TRAVEL_FLOOR,
+        unmeasured: "below half a rig pixel: the motion does not show on the art's own grid" };
+      continue;
+    }
+    measured++;
     const against = hang === null ? 'in the world' : `against \`${hang}\`, the bone it hangs from`;
     const inWorld = hang === null ? '' : `; in the world ${round3(w.tip)} and ${round3(w.root)}, ratio ${worldRatio ?? 'undefined'}`;
     const travels = `the art in its ${tipHalf} half travels ${round3(t.tip)} rig px and in its ${rootHalf} half ${round3(t.root)} rig px ${against}`;
-    if (!ok && rests) {
+    if (!ok && rests && !rigid) {
       failed = true;
       problems.push({
         code: 'CHECK_TIP_OVER_ROOT',
@@ -8157,7 +8182,7 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
       problems.push({
         code: 'CHECK_TIP_OVER_ROOT',
         object: `part "${p.name}", box ${p.x},${p.y} ${p.w}x${p.h} rig px, posed by the idle's geometry${rises ? ', declared rises' : ''}`,
-        detail: `${travels} (ratio ${ratio ?? (hang === null ? 'undefined: nothing moves' : `undefined: nothing moves against \`${hang}\``)}${inWorld}); a ratio >= ${TIP_RATIO_FLOOR} is required — ${misplaced ?? why}`,
+        detail: `${travels} (ratio ${ratio ?? (hang === null ? 'undefined: nothing moves' : `undefined: nothing moves against \`${hang}\``)}${inWorld}); a ratio >= ${TIP_RATIO_FLOOR} is required — ${misplaced ?? why}${rigid && rests ? '; declare it in `not_swinging` if it is meant to ride rigidly' : ''}`,
       });
     }
   }
@@ -8166,8 +8191,17 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
     ...(excepted.rises.length === 0 ? {} : { declared_rises: swing.filter((p) => excepted.rises.includes(p.name)).map((p) => p.name) }),
     ...(excepted.rests.length === 0 ? {} : { declared_rests: swing.filter((p) => excepted.rests.includes(p.name)).map((p) => p.name) }),
   };
-  if (measured === 0) return { status: 'SKIP', reason: `none of ${quoteParts(swing)} could be measured: ${rows.map((r) => `${String(r.part)}: ${String(r.unmeasured)}`).join('; ')}` };
-  return { status: failed ? 'FAIL' : 'PASS', ...declared, instrument: TIP_INSTRUMENT, parts: rows, ratio_floor: TIP_RATIO_FLOOR, ...(excepted.rests.length === 0 ? {} : { rest_ratio_ceiling: TIP_REST_RATIO_CEILING }) };
+  const figures = { ...declared, instrument: TIP_INSTRUMENT, parts: rows, ratio_floor: TIP_RATIO_FLOOR,
+    ...(excepted.rests.length === 0 ? {} : { rest_ratio_ceiling: TIP_REST_RATIO_CEILING }) };
+  if (measured === 0) {
+    const reasons = rows.map((r) => {
+      const travel = r.travel_floor_rig_px === undefined ? '' : `; root ${String(r.root_rig_px)} rig px, tip ${String(r.tip_rig_px)} rig px, floor ${String(r.travel_floor_rig_px)} rig px`;
+      return `${String(r.part)}: ${String(r.unmeasured)}${travel}`;
+    });
+    return { status: 'SKIP', reason: `none of ${quoteParts(swing)} could be measured: ${reasons.join('; ')}`,
+      ...(belowGrid === 0 ? {} : figures) };
+  }
+  return { status: failed ? 'FAIL' : 'PASS', ...figures };
 }
 
 /**
@@ -9084,6 +9118,120 @@ function stretchAtText(s: { triangle: number; vertices: readonly number[]; edge:
   return `triangle ${s.triangle} (vertices ${s.vertices.join(' ')}), edge ${s.edge.join('-')}, idle frame ${s.frame}`;
 }
 
+/** Config provenance is optional for standalone check and older generated rigs. */
+export interface WeightStepContext {
+  config?: InputFileRecord;
+  stage?: StageBox;
+}
+
+type StepBinding = { bone: string; x: number; y: number; weight: number };
+
+/** Recover only a replay that reproduces every written share on the named vertices. */
+function weightCutReplay(rig: Record<string, unknown>, part: string, rows: ReadonlyMap<number, StepBinding[]>, context?: WeightStepContext): { raw: Map<number, Influence[]>; limits: InfluenceLimits } | null {
+  if (context?.config === undefined || context.stage === undefined) return null;
+  try {
+    const loaded = loadConfigWithBytes(context.config.path);
+    if (inputFileRecord(loaded.bytes, context.config.path).sha256 !== context.config.sha256) return null;
+    const mesh = loaded.config.meshes[part];
+    if (mesh === undefined || !('grid' in mesh || 'contour' in mesh) || (mesh.rule !== undefined && mesh.rule !== 'distance')) return null;
+    const named = new Map<string, Segment[]>();
+    const chains = new Map<string, Segment[]>();
+    for (const bone of loaded.config.bones) {
+      if ('chain' in bone) {
+        const chain = bone.points.map((point, i): Segment => ({ bone: `${bone.chain}${i}`, a: point, b: bone.points[i + 1] ?? bone.tip }));
+        chains.set(bone.chain, chain);
+        for (const segment of chain) named.set(segment.bone, [segment]);
+      } else if (bone.tip !== undefined) named.set(bone.name, [{ bone: bone.name, a: bone.at, b: bone.tip }]);
+    }
+    const segments: Segment[] = [];
+    for (const entry of mesh.segments) {
+      if (typeof entry !== 'string') segments.push({ bone: entry[0], a: entry[1], b: entry[2] });
+      else {
+        const found = chains.get(entry) ?? named.get(entry);
+        if (found === undefined) return null;
+        segments.push(...found);
+      }
+    }
+    const transforms = setupWorld(rig);
+    const limits = meshLimits(mesh.influences);
+    const raw = new Map<number, Influence[]>();
+    for (const [vertex, bindings] of rows) {
+      const first = bindings[0];
+      if (first === undefined) return null;
+      const transform = transforms.get(first.bone);
+      if (transform === undefined) return null;
+      const point: Point = [transform.a * first.x + transform.b * first.y + transform.worldX - context.stage.x,
+        cropToSpineY(transform.c * first.x + transform.d * first.y + transform.worldY - context.stage.y, context.stage.height)];
+      const cut = influences(point, segments, mesh.r, limits, mesh.exponent);
+      const written = writtenShares({ influences: cut, region: -1, g: 0 }, limits.floor);
+      const actual = new Map(bindings.map((binding) => [binding.bone, binding.weight]));
+      if (written.length !== actual.size || written.some((binding) => actual.get(binding.bone) !== binding.weight)) return null;
+      raw.set(vertex, influences(point, segments, mesh.r, { maxInfluences: Number.MAX_SAFE_INTEGER, minWeight: 0 }, mesh.exponent));
+    }
+    return { raw, limits };
+  } catch {
+    // A missing, stale or unsupported config cannot prove the cause of emitted weights.
+    return null;
+  }
+}
+
+/** Show the first differing bone per edge in written-share order; a cut cause needs a matching production replay. */
+export function weightStepText(rig: Record<string, unknown>, slot: string, attachment: string, vertices: readonly number[], context?: WeightStepContext): string {
+  const skins = isRecord(rig.skins) ? rig.skins : {};
+  const skin = isRecord(skins.default) ? skins.default : {};
+  const onSlot = isRecord(skin[slot]) ? skin[slot] : {};
+  const att = onSlot[attachment];
+  if (!isRecord(att) || !Array.isArray(att.weights)) return '';
+  const rows = new Map<number, StepBinding[]>();
+  for (const vertex of vertices) {
+    const row = att.weights[vertex];
+    if (!Array.isArray(row) || row.some((binding) => !isRecord(binding) || typeof binding.bone !== 'string' ||
+      typeof binding.x !== 'number' || typeof binding.y !== 'number' || typeof binding.weight !== 'number')) return '';
+    rows.set(vertex, (row as StepBinding[]).filter((binding) => binding.weight > 0));
+  }
+  const steps: Array<{ a: number; b: number; bone: string; aShare: number; bShare: number }> = [];
+  const ordered = [...rows.keys()];
+  for (let i = 0; i < ordered.length; i++) {
+    for (let j = i + 1; j < ordered.length; j++) {
+      const a = ordered[i], b = ordered[j];
+      const left = new Map(rows.get(a)!.map((binding) => [binding.bone, binding.weight]));
+      const right = new Map(rows.get(b)!.map((binding) => [binding.bone, binding.weight]));
+      for (const bone of new Set([...left.keys(), ...right.keys()])) {
+        if (left.has(bone) !== right.has(bone)) {
+          steps.push({ a, b, bone, aShare: left.get(bone) ?? 0, bShare: right.get(bone) ?? 0 });
+          break;
+        }
+      }
+    }
+  }
+  if (steps.length === 0) return '';
+  const replay = weightCutReplay(rig, slot, rows, context);
+  let madeByCut = false;
+  const text = steps.map((step) => {
+    const observed = `edge ${step.a}-${step.b} bone "${step.bone}": vertex ${step.a} share ${step.aShare}, vertex ${step.b} share ${step.bShare}`;
+    if (replay === null) return observed;
+    const missing = step.aShare === 0 ? step.a : step.b;
+    const raw = replay.raw.get(missing)!;
+    const rank = raw.findIndex((binding) => binding.bone === step.bone);
+    if (rank < 0 || raw[rank].weight <= 0) return observed;
+    const before = `pre-cut share ${round6(raw[rank].weight)} on vertex ${missing}`;
+    if (rank >= replay.limits.maxInfluences) {
+      madeByCut = true;
+      return `${observed}, made by the influence cut (maxInfluences ${replay.limits.maxInfluences}; ${before})`;
+    }
+    const total = raw.slice(0, replay.limits.maxInfluences).reduce((sum, binding) => sum + binding.weight, 0);
+    const capped = raw[rank].weight / total;
+    if ((replay.limits.floor ?? 'cut') === 'cut' && capped < replay.limits.minWeight) {
+      madeByCut = true;
+      return `${observed}, made by the influence cut (floor ${replay.limits.minWeight}; capped share ${round6(capped)}; ${before})`;
+    }
+    return `${observed}, replayed floor "${replay.limits.floor ?? 'cut'}"; ${before}`;
+  });
+  const fix = `meshes.${slot}.influences {"maxInfluences": null, "floor": "continuous"}`;
+  const remedy = replay === null ? `; pre-cut shares unavailable; if the influence cut made this step: ${fix}` : madeByCut ? `; use ${fix}` : '';
+  return `weight step ${text.join('; ')}${remedy}`;
+}
+
 /**
  * Issue #314: what a failing edge's two vertices hang on, read off rig.json and motion.json — so the cause reads off
  * the line rather than off a hand decoding of the weight runs. Each vertex's bones from the default skin's weights,
@@ -9153,7 +9301,7 @@ export function edgeBonesText(rig: Record<string, unknown>, motion: Record<strin
  * bones its two vertices hang on and their chains ({@link edgeBonesText}, issue
  * #314).
  */
-export function stretchLine(geo: IdleGeometry | null, path: string, problems: Problem[], bound?: Pick<CheckInputs, 'rig' | 'motion'>): JudgementLine {
+export function stretchLine(geo: IdleGeometry | null, path: string, problems: Problem[], bound?: Pick<CheckInputs, 'rig' | 'motion'> & WeightStepContext): JudgementLine {
   if (geo === null) return skip(`${path} does not exist; \`rigc render --geometry\` (rig-c ${RIGC_GEOMETRY_VERSION} or later) writes it, and the skinned mesh vertices are read from it`);
   if (geo.meshes.length === 0) return skip('the rig draws no mesh attachment (every slot is a region), so there is no triangle to stretch');
   const figures = stretchFigures(geo.meshes, geo.frames);
@@ -9185,10 +9333,11 @@ export function stretchLine(geo: IdleGeometry | null, path: string, problems: Pr
     rows.push({ slot: m.slot, triangles: m.triangles, max_ratio: round3(m.max.ratio), max_at: stretchAtText(m.max), min_ratio: round3(m.min.ratio), min_at: stretchAtText(m.min), severity });
     if (severity > TEXTURE_STRETCH_CEILING) {
       failed = true;
+      const step = bound === undefined ? '' : weightStepText(bound.rig, m.slot, m.attachment, at.edge, bound);
       problems.push({
         code: 'CHECK_TEXTURE_STRETCH',
         object: `mesh "${m.slot}" ${stretchAtText(at)}`,
-        detail: `the edge is ${round3(at.ratio)} times its rest length (max(ratio, 1/ratio) ${severity}); <= ${TEXTURE_STRETCH_CEILING} is required${bound === undefined ? '' : `; ${edgeBonesText(bound.rig, bound.motion, m.slot, m.attachment, at.edge)}`} — the texture on it is ${at.ratio >= 1 ? 'stretched' : 'squeezed'}: the bones this mesh is weighted to move apart (amplitudes too large down a chain), or a vertex blends bones that move against each other`,
+        detail: `the edge is ${round3(at.ratio)} times its rest length (max(ratio, 1/ratio) ${severity}); <= ${TEXTURE_STRETCH_CEILING} is required${bound === undefined ? '' : `; ${edgeBonesText(bound.rig, bound.motion, m.slot, m.attachment, at.edge)}${step === '' ? '' : `; ${step}`}`} — the texture on it is ${at.ratio >= 1 ? 'stretched' : 'squeezed'}: the bones this mesh is weighted to move apart (amplitudes too large down a chain), or a vertex blends bones that move against each other`,
       });
     }
   }

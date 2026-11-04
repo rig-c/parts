@@ -1,6 +1,6 @@
 import { SEAM_RULES, type SeamRule } from './seamrule.ts';
-import { PROJECT_RULES, type ProjectRule } from './projectrule.ts';
-import type { TakeLayers } from './takelayers.ts';
+import { GROUNDS, type Ground, PROJECT_RULES, type ProjectRule } from './projectrule.ts';
+import type { TakeDeclaration } from './takeregion.ts';
 import { paintingExtensionProblems, type PaintingExtension } from './paintingextension.ts';
 import { baseAnchorProblems, type BaseAnchor } from './baseanchor.ts';
 import type { DepthConfig } from './depthsheets.ts';
@@ -307,8 +307,10 @@ export interface Assemble {
   seam?: SeamRule;
   /** Optional per-character projection rule (issue #953); an explicit CLI flag wins. */
   project?: ProjectRule;
-  /** Verified named replacements from another See-through run (#866). */
-  take?: TakeLayers[];
+  /** Optional per-character painting ground (issue #996); absent, `plain`. Read by `visible` only. */
+  ground?: Ground;
+  /** Whole-layer replacements (#866) or seeded, painting-matched region takes (#1000). */
+  take?: TakeDeclaration[];
   /** Issue #946: receipts for images edited in an image editor; absent, no file is read and no byte moves. */
   editor_receipts?: EditorReceipts;
   /** Rig pixels per source pixel. */
@@ -1432,6 +1434,41 @@ const DOORS = 'a project\'s own record goes under a key beginning "x-" (any JSON
 
 type Json = unknown;
 
+/** The loader's config-relative file fields, also used when relocating a config. */
+const CONFIG_FILE_FIELDS = {
+  requirements: { path: ['requirements'], isFile: (_value: string) => true },
+  animations: { path: ['motion', 'animations_from'], isFile: (_value: string) => true },
+  skeleton: { path: ['generation', 'control', 'skeleton'], isFile: (value: string) => !isSkeletonName(value) },
+} as const;
+
+function configFilePath(field: keyof typeof CONFIG_FILE_FIELDS, base: string, value: string): string | null {
+  return CONFIG_FILE_FIELDS[field].isFile(value) ? resolve(base, value) : null;
+}
+
+/** A file reference in a parsed config and its setter, excluding built-in names. */
+export interface ConfigFileReference {
+  at: string;
+  value: string;
+  set: (value: string) => void;
+}
+
+/** Enumerate the same file fields that the loader resolves, preserving invalid fields for its diagnostics. */
+export function configFileReferences(raw: unknown): ConfigFileReference[] {
+  const out: ConfigFileReference[] = [];
+  for (const field of Object.values(CONFIG_FILE_FIELDS)) {
+    let parent = raw;
+    for (const key of field.path.slice(0, -1)) parent = isPlainObject(parent) ? parent[key] : undefined;
+    const key = field.path[field.path.length - 1];
+    if (!isPlainObject(parent)) continue;
+    const value = parent[key];
+    if (typeof value !== 'string' || value === '' || !field.isFile(value)) continue;
+    const target = parent;
+    out.push({ at: field.path.join('.'), value, set: (next) => { target[key] = next; } });
+  }
+  return out;
+}
+
+
 class Check {
   readonly problems: Problem[] = [];
 
@@ -1629,7 +1666,7 @@ export interface EarlyConfig {
   depth?: DepthConfig;
   key: string;
   seethrough: SeeThrough;
-  assemble: { rig_scale: number; seam?: SeamRule; project?: ProjectRule; take?: TakeLayers[]; editor_receipts?: EditorReceipts; head_face_underfill?: boolean; yield_refused?: boolean; keep_under_occluders?: string[]; extend_painting?: PaintingExtension[] };
+  assemble: { rig_scale: number; seam?: SeamRule; project?: ProjectRule; ground?: Ground; take?: TakeDeclaration[]; editor_receipts?: EditorReceipts; head_face_underfill?: boolean; yield_refused?: boolean; keep_under_occluders?: string[]; extend_painting?: PaintingExtension[] };
 }
 
 /** What plain `assemble` reads: the early config plus the plan `--propose-plan` printed. */
@@ -1705,7 +1742,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
   if (door === 'layers') {
     if ('seethrough' in t) checkSeeThrough(c, t.seethrough);
     if ('assemble' in t) {
-      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take', 'seam', 'project', 'editor_receipts']);
+      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take', 'seam', 'project', 'ground', 'editor_receipts']);
       if (a !== null) {
         checkAssembleRules(c, a);
         if ('rig_scale' in a) c.number('config.assemble.rig_scale', a.rig_scale, 'positive');
@@ -1834,10 +1871,12 @@ export function cloneConfig<T extends object>(cfg: T): T {
 function poseBeside(c: Check, gen: Json, base: string): ControlPose | null {
   if (!isPlainObject(gen) || !isPlainObject(gen.control)) return null;
   const skel = gen.control.skeleton;
-  if (typeof skel !== 'string' || skel === '' || isSkeletonName(skel)) return null;
+  if (typeof skel !== 'string' || skel === '') return null;
+  const file = configFilePath('skeleton', base, skel);
+  if (file === null) return null;
   const l = gen.latent;
   const latent = Array.isArray(l) && l.length === 2 && l.every((n) => typeof n === 'number' && Number.isInteger(n) && n > 0) ? ([l[0], l[1]] as [number, number]) : null;
-  return readControlPose(c, resolve(base, skel), latent);
+  return readControlPose(c, file, latent);
 }
 
 /**
@@ -1990,7 +2029,7 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
   if ('turn' in t) checkTurn(c, t.turn, attached, names.bones, hasAltFace, parts, declaredSliders, meshParts, t.meshes, names.chains, names.parents);
   if ('scene' in t) checkScene(c, t.scene);
   if ('cloth' in t) checkCloth(c, t.cloth);
-  if ('requirements' in t && c.string('config.requirements', t.requirements) && base !== null) checkRequirementsFile(c, resolve(base, t.requirements));
+  if ('requirements' in t && c.string('config.requirements', t.requirements) && base !== null) checkRequirementsFile(c, configFilePath('requirements', base, t.requirements) as string);
   const from = isPlainObject(t.motion) ? t.motion.animations_from : undefined;
   const animations = base !== null && typeof from === 'string' && from !== '' ? readAnimationsFrom(c, base, from) : null;
   if (animations !== null) {
@@ -2072,7 +2111,7 @@ function checkRequirementsFile(c: Check, file: string): void {
  */
 function readAnimationsFrom(c: Check, base: string, from: string): AnimationsFrom | null {
   const field = 'config.motion.animations_from';
-  const file = resolve(base, from);
+  const file = configFilePath('animations', base, from) as string;
   const form = `{"spec": "${ANIMATIONS_FROM_SPEC}", "animations": {"<name>": {"duration": …, "tracks": [...]}}}`;
   const shape = `a file in rig-c's motion-spec shape, ${form}, its path relative to the config's directory`;
   const where = `names ${JSON.stringify(from)}, resolved against the config's directory ${base} (not the working directory) to ${file}`;
@@ -2453,15 +2492,32 @@ function checkKeepUnderOccluders(c: Check, a: Record<string, Json>, plan: readon
   });
 }
 
-function checkTakeLayers(c: Check, value: Json): void {
+function checkTakeLayers(c: Check, value: Json, plan: string[] | null = null): void {
   const at = 'config.assemble.take';
   if (!c.array(at, value, false)) return;
   const seen = new Set<string>();
   (value as Json[]).forEach((v, i) => {
-    const p = `${at}[${i}]`, o = c.object(p, v, ['run', 'run_dir', 'st_input', 'tags'], []);
+    const p = `${at}[${i}]`;
+    const region = isPlainObject(v) && ('part' in v || 'seed' in v);
+    const o = region
+      ? c.object(p, v, ['run', 'run_dir', 'st_input', 'part', 'seed'], [])
+      : c.object(p, v, ['run', 'run_dir', 'st_input', 'tags'], []);
     if (o === null) return;
     if (o.run !== 'full' && o.run !== 'head') c.fail('CONFIG_FIELD_TYPE', p + '.run', '"full" or "head" is required');
     for (const k of ['run_dir', 'st_input']) c.string(`${p}.${k}`, o[k]);
+    if (region) {
+      if (c.string(`${p}.part`, o.part) && plan !== null && !plan.includes(o.part)) {
+        c.fail('CONFIG_NAME_RESOLVES', `${p}.part`, `names "${o.part}"; a part named in assemble.plan is required`);
+      }
+      const key = `${String(o.run)}:part:${String(o.part)}`;
+      if (seen.has(key)) c.fail('CONFIG_TAKE_UNIQUE', `${p}.part`, `names ${key} again; one donor per target part is required`);
+      seen.add(key);
+      const seed = o.seed;
+      if (!(Array.isArray(seed) && seed.length === 2 && seed.every(n => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0))) {
+        c.fail('CONFIG_FIELD_TYPE', `${p}.seed`, 'requires [x, y], nonnegative safe integers in target-run canvas pixels');
+      }
+      return;
+    }
     if (!c.array(p + '.tags', o.tags, true)) return;
     (o.tags as Json[]).forEach((tag, j) => {
       const reading = typeof tag === 'string' ? readLayerTag(tag) : null;
@@ -2513,11 +2569,14 @@ function checkAssembleRules(c: Check, a: Record<string, Json>): void {
   if ('project' in a && !(PROJECT_RULES as readonly unknown[]).includes(a.project)) {
     c.fail('CONFIG_FIELD_TYPE', 'config.assemble.project', `is ${show(a.project)}; one of ${PROJECT_RULES.join(', ')} is required`);
   }
+  if ('ground' in a && !(GROUNDS as readonly unknown[]).includes(a.ground)) {
+    c.fail('CONFIG_FIELD_TYPE', 'config.assemble.ground', `is ${show(a.ground)}; one of ${GROUNDS.join(', ')} is required (busy for an opaque ground of many colours, issue #996)`);
+  }
 }
 
 function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: string[]; patches: string[]; cuts: string[] } {
   const required = sectionRequired(door, 'assemble');
-  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take', 'seam', 'project', 'editor_receipts']);
+  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take', 'seam', 'project', 'ground', 'editor_receipts']);
   if (a === null) return { parts: [], patches: [], cuts: [] };
   checkAssembleRules(c, a);
   if (required.includes('plan') && !('plan' in a)) {
@@ -2554,7 +2613,7 @@ function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: s
   }
   checkKeepUnderOccluders(c, a, parts);
   if ('extend_painting' in a) checkPaintingExtensions(c, a.extend_painting);
-  if ('take' in a) checkTakeLayers(c, a.take);
+  if ('take' in a) checkTakeLayers(c, a.take, parts);
   if ('editor_receipts' in a) checkEditorReceipts(c, a.editor_receipts);
   if ('extend_below_crop' in a && c.array(`${p}.extend_below_crop`, a.extend_below_crop, false)) {
     (a.extend_below_crop as Json[]).forEach((entry, i) => {

@@ -1,5 +1,33 @@
 # Changelog
 
+## [2.8.1](https://github.com/rig-c/parts/compare/v2.8.0...v2.8.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **authoring:** document motion seam pair declarations ([#982](https://github.com/rig-c/parts/issues/982)) ([#1010](https://github.com/rig-c/parts/issues/1010)) ([937000f](https://github.com/rig-c/parts/commit/937000f62f11b79749d5b4b045c2133bc2bc7e6f))
+* **check:** a travel floor and a structural first step for TIP_OVER_ROOT ([#1012](https://github.com/rig-c/parts/issues/1012)) ([e7708f1](https://github.com/rig-c/parts/commit/e7708f1efddd35cf9d03d14f30d34e83d4b5480e))
+* **remesh:** preserve loader-relative config files ([#997](https://github.com/rig-c/parts/issues/997)) ([#1009](https://github.com/rig-c/parts/issues/1009)) ([c6f0cc6](https://github.com/rig-c/parts/commit/c6f0cc60d1f19654edd8431e16112b64a59006b7))
+
+## [2.8.0](https://github.com/rig-c/parts/compare/v2.7.0...v2.8.0) (2026-11-04)
+
+
+### Features
+
+* **assemble:** take a seeded derived region ([#1004](https://github.com/rig-c/parts/issues/1004)) ([28c01ab](https://github.com/rig-c/parts/commit/28c01abcb8d95815e9899dd20e31131de2bab842))
+
+
+### Bug Fixes
+
+* **check:** compare setup over a declared backdrop ([#985](https://github.com/rig-c/parts/issues/985)) ([#1007](https://github.com/rig-c/parts/issues/1007)) ([d439bc6](https://github.com/rig-c/parts/commit/d439bc627a24efad505de100907fd46956c10739))
+
+## [2.7.0](https://github.com/rig-c/parts/compare/v2.6.0...v2.7.0) (2026-11-04)
+
+
+### Features
+
+* **assemble:** declare the ground; a busy ground keeps parts inside their own support ([#1002](https://github.com/rig-c/parts/issues/1002)) ([adc634c](https://github.com/rig-c/parts/commit/adc634cae585871c84686bd3b2a40fd4f4fa3ac3))
+
 ## [2.6.0](https://github.com/rig-c/parts/compare/v2.5.0...v2.6.0) (2026-11-04)
 
 

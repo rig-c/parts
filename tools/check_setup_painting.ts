@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { writeSetupBackdropFixture } from '../fixtures/setupbackdrop.ts';
+import { readSetupBackdrop } from '../src/setupbackdrop.ts';
 /** Independent controls for source-painting setup limits and plan inversions. */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -9,7 +12,7 @@ import { PartsError, type Problem } from '../src/errors.ts';
 import { readRequirements } from '../src/requirements.ts';
 import { alphaComposite } from '../src/raster/composite.ts';
 import { newRaster } from '../src/raster/types.ts';
-import { writePng } from '../src/raster/png.ts';
+import { readPng, writePng } from '../src/raster/png.ts';
 import { SETUP_PAINTING_LINE, SETUP_PAINTING_REQUIRED_CODE, setupPaintingLine, setupPaintingProblems, type SetupPainting } from '../src/setuppainting.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
@@ -130,6 +133,7 @@ export function runSetupPaintingChecks(dir: string, say: Say, rigc: RigcRunner):
   say('ZO17_SOURCE_MISSING_REFUSED_BEFORE_BUILD', missingSource.code.includes('CHECK_SETUP_PAINTING_SOURCE') && missingSource.calls === 0, JSON.stringify(missingSource));
   const outside = early('outside-stage', { ...real, regions: [{ name: 'outside', box: [47, 0, 2, 1], max_pixels: 0 }] }, true);
   say('ZO18_REGION_OUTSIDE_STAGE_REFUSED_BEFORE_BUILD', outside.code.includes('REQUIREMENTS_FIELD') && outside.calls === 0, JSON.stringify(outside));
+  runSetupBackdropChecks(join(dir, 'backdrop'), say, rigc);
   runSetupPaintingTransparencyChecks(join(dir, 'source-alpha'), say, rigc);
 }
 
@@ -178,4 +182,56 @@ export function runSetupPaintingTransparencyChecks(dir: string, say: Say, rigc: 
   say('ZO20_ACTUAL_PIPELINE_HIDDEN_RGB_IGNORED_BEFORE_RESIZE', opaque?.status === 'PASS' && 'regions' in opaque && opaque.regions[0].pixel_count === 0 && JSON.stringify(black) === JSON.stringify(opaque) && JSON.stringify(magenta) === JSON.stringify(opaque), JSON.stringify({ opaque, black, magenta }));
   const partial = lines.get('alpha60-black'), expected = lines.get('opaque195');
   say('ZO21_ACTUAL_PIPELINE_COMPOSITES_FRACTIONAL_ALPHA_BEFORE_RESIZE', partial !== undefined && expected !== undefined && JSON.stringify(partial) === JSON.stringify(expected), JSON.stringify({ partial, expected, independentExpected: 'black at alpha60 over white is RGB195; precompose at96x160, then existing Lanczos3 to48x80' }));
+}
+
+/** The backdrop is independent of the actual renderer; the analytic parts make
+ * the painting. Only synthetic part alpha is planted, in both input copies. */
+function runSetupBackdropChecks(dir: string, say: Say, rigc: RigcRunner): void {
+  const declaration = writeSetupBackdropFixture(dir);
+  const requirements = join(dir, 'requirements.json'), input = join(dir, 'rig'), source = join(dir, 'painting.png');
+  const run = (name: string, value = declaration) => {
+    writeFileSync(requirements, JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [], setup_painting: value }));
+    return checkStage({ rig: input, source, requirements, out: join(dir, name), noExtremes: true }, rigc, 'fixture-rigc', () => {}).figures[SETUP_PAINTING_LINE];
+  };
+  const withPlate = run('with-plate');
+  const { backdrop: _drop, ...white } = declaration;
+  const without = run('without-plate', white);
+  const count = (v: typeof withPlate): number => v !== undefined && 'regions' in v ? v.regions[0].pixel_count : -1;
+  say('ZO34_BACKDROP_ACTUAL_RENDERER_MATCHES_ANALYTIC_PAINTING', withPlate?.status === 'PASS' && count(withPlate) === 0 && without?.status === 'FAIL' && count(without) > 0, JSON.stringify({ withPlate, without }));
+  // A 3x3 patch at global x36..38,y38..40 is outside the back part's box.
+  const front = CHECK_PARTS[1], part = checkPartRaster(front);
+  for (let y = 18; y < 21; y++) for (let x = 18; x < 21; x++) part.data[(y * part.width + x) * 4 + 3] = 0;
+  for (const folder of ['images', 'parts']) writePng(join(input, folder, 'front.png'), part);
+  const hole = run('hole');
+  say('ZO35_BACKDROP_HOLE_COUNTS_UNCOVERED', hole?.status === 'FAIL' && count(hole) === 9 && 'regions' in hole && hole.regions[0].slots.some(s => s.slot === '(uncovered)' && s.pixel_count === 9), JSON.stringify(hole));
+  const painting = readPng(source), plate = readPng(join(dir, 'backdrop.png'));
+  const empty = newRaster(48, 80), noFigure = new Uint8Array(48 * 80), noOwners = new Int32Array(48 * 80).fill(-1);
+  const seen = setupPaintingLine(declaration, painting, empty, noFigure, noOwners, [], [], plate);
+  // Mutant: discard every source pixel with no setup alpha. This is the
+  // opaque-only / setup-edge-exclusion alternative, which hides all holes.
+  const mutantSource = { ...plate, data: new Uint8ClampedArray(plate.data) };
+  const missed = setupPaintingLine(declaration, mutantSource, empty, noFigure, noOwners, [], [], plate);
+  say('ZO36_BACKDROP_DOMAIN_KILLS_SETUP_ALPHA_ONLY_MUTANT', seen.status === 'FAIL' && seen.regions[0].pixel_count > 9 && missed.status === 'PASS' && missed.regions[0].pixel_count === 0 && hole !== undefined && 'regions' in hole && hole.regions[0].slots.filter(s => s.slot !== '(uncovered)').reduce((n, s) => n + s.pixel_count, 0) === 0, `source-plate domain ${seen.regions[0].pixel_count}; setup-alpha-only mutant ${missed.regions[0].pixel_count}; actual 9px hole ignored by ownership-mask mutant`);
+  const bad: unknown[] = [null, {}, { path: '', sha256: 'x' }, { ...declaration.backdrop, other: true }];
+  say('ZO37_BACKDROP_SHAPE_IS_REFUSED', bad.every(backdrop => setupPaintingProblems({ ...declaration, backdrop }, 'setup_painting').some(p => p.code === 'REQUIREMENTS_FIELD')), `${bad.length} malformed backdrop declarations`);
+  const rejects = (value: SetupPainting, native = painting): boolean => {
+    try { readSetupBackdrop(value, requirements, native); } catch (e) { return e instanceof PartsError && e.problems.some(p => p.code === 'CHECK_SETUP_PAINTING_BACKDROP'); }
+    return false;
+  };
+  const goodPlate = readSetupBackdrop(declaration, requirements, painting);
+  say('ZO38_BACKDROP_READER_BINDS_HASH_GRID_OPACITY', goodPlate?.width === 48 && rejects({ ...declaration, backdrop: { path: 'missing.png', sha256: '0'.repeat(64) } }) && rejects({ ...declaration, backdrop: { ...declaration.backdrop!, sha256: '0'.repeat(64) } }) && rejects(declaration, newRaster(24, 40)), 'same decoded bytes are hashed; absent PNG, stale hash and native-grid mismatch refused');
+  const bytes = readFileSync(join(dir, 'backdrop.png'));
+  plate.data[3] = 254; writePng(join(dir, 'backdrop.png'), plate);
+  const translucent = { ...declaration, backdrop: { path: 'backdrop.png', sha256: createHash('sha256').update(readFileSync(join(dir, 'backdrop.png'))).digest('hex') } };
+  say('ZO39_BACKDROP_TRANSLUCENCY_REFUSED', rejects(translucent), 'alpha254 cannot silently choose a second background');
+  writeFileSync(join(dir, 'backdrop.png'), bytes);
+  let builds = 0, earlyRefused = false;
+  writeFileSync(requirements, JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [], setup_painting: { ...declaration, backdrop: { path: 'missing.png', sha256: '0'.repeat(64) } } }));
+  try { checkStage({ rig: input, source, requirements, out: join(dir, 'refused'), noExtremes: true }, args => { if (args[0] === 'build') builds++; return rigc(args); }, 'fixture-rigc', () => {}); }
+  catch (e) { earlyRefused = e instanceof PartsError && e.problems.some(p => p.code === 'CHECK_SETUP_PAINTING_BACKDROP'); }
+  say('ZO40_BACKDROP_REFUSED_BEFORE_BUILD', earlyRefused && builds === 0, `missing declared plate: refusal ${earlyRefused}, build calls ${builds}`);
+  writeFileSync(join(dir, 'backdrop.png'), 'not a PNG');
+  const invalidPng = { ...declaration, backdrop: { path: 'backdrop.png', sha256: createHash('sha256').update('not a PNG').digest('hex') } };
+  say('ZO41_BACKDROP_INVALID_PNG_REFUSED_AFTER_VALID_HASH', rejects(invalidPng), 'matching bytes hash cannot admit a non-PNG');
+  writeFileSync(join(dir, 'backdrop.png'), bytes);
 }

@@ -1,3 +1,4 @@
+import { EDGE_RESIDUAL_FILE, edgeResidualLines } from './edgeresidual.ts';
 import { DEFAULT_SEAM_RULE } from './seamrule.ts';
 import { DEFAULT_PROJECT_RULE } from './projectrule.ts';
 import { EDGE_CONTRAST } from './paintingedges.ts';
@@ -7,6 +8,7 @@ import { writeMaterialSources } from './cutmaterialio.ts';
 import { CUT_MATERIAL_LINE, CUT_MATERIAL_SOURCES, materialLines } from './cutmaterial.ts';
 import { ART_JOINT_LINE, artJointLines } from './artjoints.ts';
 import { applyTakenLayers } from './takelayers.ts';
+import { applyTakenRegions } from './takeregion.ts';
 import { ownershipLines, provenanceLines } from './provenance.ts';
 import { readSourceDepth } from './depthsheets.ts';
 import { orderedBaseAnchor } from './baseanchor.ts';
@@ -58,7 +60,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { type AnimFrame, EncodeError, encodeApng, encodeIndexedApng, INDEXED_DEFAULTS } from './apng.ts';
-import { assemble, type AssembleResult, cutLines, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine } from './assemble.ts';
+import { assemble, type AssembleResult, cutLines, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, groundWarning, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine } from './assemble.ts';
 import { allocationClause, type Reducer, stageBClause, unboundedClause } from './automesh.ts';
 import { residualClause } from './autoenvelope.ts';
 import { type AutoMotionCase, failingRows, idleSchedule, localRow, motionClause, motionDeformation, motionDocument, motionInput, motionRowText, motionStimulus, motionVerdict, noStimulusProblem, prepareComparison, type ReplayCandidate, runComparison, runPreparedComparison, sourceSelfFailure, stimulusMotion, withStimulus } from './automotion.ts';
@@ -345,7 +347,8 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const receipts = readEditorReceipts(cfg.assemble.editor_receipts, input.config);
   // Issue #947: under `trace_parts`, a shape drawn in the config through a part's pixels is refused with them.
   refuseIfAny([...receipts.problems, ...missingReceipts(receipts, [...editedRunImages(read), ...editedConfigImages(input.config, cfg.assemble.cuts ?? [], cfg.limbs)]), ...untracedPartSources(cfg)]);
-  const runs = applyTakenLayers(read, src, cfg, input.config);
+  const takenRuns = applyTakenLayers(read, src, cfg, input.config);
+  const runs = applyTakenRegions(takenRuns, src, cfg, input.config, requirementsFile?.setup_painting, receipts);
   for (const note of runs.notes) log(`note: ${note}`);
   const fields = stageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
   const under = readUnders(input.config, fields.cuts);
@@ -689,6 +692,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         ...(fields.armSplit !== undefined && altPlan.some((e) => e[1] === 'full' && (e[2] === 'handwear-r' || e[2] === 'handwear-l')) ? { armSplit: fields.armSplit } : {}),
         ...(fields.headFaceUnderfill === undefined ? {} : { headFaceUnderfill: fields.headFaceUnderfill }),
         ...(fields.yieldRefused === undefined ? {} : { yieldRefused: fields.yieldRefused }),
+        ...(fields.ground === undefined ? {} : { ground: fields.ground }),
         ...(fields.turnMovingPair === undefined ? {} : { turnMovingPair: fields.turnMovingPair }),
         ...(fields.turn === undefined ? {} : { turn: fields.turn, regions: fields.regions, meshes: fields.meshes, motion: fields.motion }),
         seamRule: seam,
@@ -790,6 +794,9 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   mkdirSync(dirname(outs.recomposite), { recursive: true });
   mkdirSync(dirname(outs.errorMap), { recursive: true });
   writeParts(outs.partsJson, result.parts);
+  const residualPath = join(dirname(outs.partsJson), EDGE_RESIDUAL_FILE);
+  if (result.edgeResiduals === undefined) rmSync(residualPath, { force: true });
+  else writeFileSync(residualPath, JSON.stringify(result.edgeResiduals, null, 2) + '\n');
   for (const { record, image, depthImage } of result.images) {
     writePng(join(outs.partsDir, `${record.name}.png`), image);
     if (depthImage !== undefined && record.depth !== undefined) writePng(join(outs.partsDir, record.depth.image), depthImage);
@@ -809,11 +816,17 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   if (figurePath !== null) writePng(figurePath, result.figure as Raster);
   const [W, H] = result.parts.rig_size;
   log(`rig-parts assemble: ${result.images.length} part(s) on a ${W}x${H} rig (${result.parts.scale_rig_per_source} rig px per source px), seam rule ${result.seamRule}, projection rule ${result.projectRule}`);
+  // Issue #996: a ground declared or defaulted plain whose border ring is not one colour, under project: visible only.
+  const groundWarn = groundWarning(result.groundShare, fields.ground, result.projectRule);
+  if (groundWarn !== null) log(`  WARN  ${groundWarn.code}: ${groundWarn.object} — ${groundWarn.detail}`);
   // Issue #953: what the painting's edges resolved, under the visible rule only.
   if (result.paintingEdges !== undefined) {
     const e = result.paintingEdges;
     log(`painting edges: ${e.resolved} edge px resolved from the painting (${e.unseparated} against the two reference colours where the window's far sides overlap), ${e.changed} part px changed; left as they were: ${e.skipped.cover} under a part the two-layer model does not carry, ${e.skipped.contrast} where the painting draws no edge (contrast below ${EDGE_CONTRAST}), ${e.skipped.locked} kept, feathered, a patch or a turn's moving pair, ${e.skipped.noBehind} with no behind pixel in the window; ${e.skipped.pieces} part px not written so a part's art keeps its pieces`);
+    // Issue #996: under a declared busy ground, what the two ground rules left.
+    if (fields.ground === 'busy') log(`  busy ground (assemble.ground): ${e.skipped.mix} behind-side px left that are not a mix of the two reference colours, ${e.skipped.support} part px not raised outside the part's own support`);
   }
+  if (result.edgeResiduals !== undefined) for (const line of edgeResidualLines(result.edgeResiduals)) log(line);
   // Issue #359: one run, said, so a reader of the lines knows no head run was placed.
   if (runs.single) log(`  one run: ${input.full} holds the face (${SINGLE_RUN_FACE_TAGS.join(', ')}), so no head run is read; every part comes from the full run`);
   // Issue #366: a file that is not the resolution square was padded to it; said, with where parts.json records it. None for a square file.
@@ -2440,6 +2453,7 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
   for (const p of BUILD_OWNS) rmSync(join(out, p), { recursive: true, force: true });
   // Optional source evidence is cleared separately; BUILD_OWNS is the legacy complete output tree.
   rmSync(join(out, CUT_MATERIAL_SOURCES), { force: true });
+  rmSync(join(out, EDGE_RESIDUAL_FILE), { force: true });
   // Issue #242: the figure mask is written only under config.scene; one left by an earlier scene build is not this build's.
   rmSync(join(out, FIGURE_MASK_FILE), { force: true });
   // The idle-keys value is named only when it is not the default, so a build without the flag, or with the default, prints the line it printed before issue #95.

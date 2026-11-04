@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
+import { runDiffComponentChecks, runDiffComponentCliChecks, publicDiffControl } from './tools/check_diffcomponents.ts';
 import { runPaintingEdgeChecks } from './tools/check_painting_edges.ts';
 import { runProjectConfigChecks } from './tools/check_project_config.ts';
+import { runGroundConfigChecks, runGroundExampleChecks, runGroundUnitChecks } from './tools/check_ground.ts';
 import { runSeamConfigChecks } from './tools/check_seam_config.ts';
 import { runJointContactChecks } from './tools/check_joint_contact.ts';
 import { runSetupPaintingChecks } from './tools/check_setup_painting.ts';
@@ -421,6 +423,8 @@ import {
   type RigcSpawn,
   rigToFrameMap,
   runCheck,
+  inputFileRecord,
+  weightStepText,
   SEAM_BOX,
   SEAM_DIR,
   SEAM_MARK,
@@ -464,6 +468,7 @@ import {
   type SweepPose,
   TEXTURE_STRETCH_CEILING,
   TIP_RATIO_FLOOR,
+  TIP_TRAVEL_FLOOR,
   hangBone,
   TIP_INSTRUMENT,
   TIP_REST_RATIO_CEILING,
@@ -489,6 +494,7 @@ import {
   requirementsSummary,
   type RequirementLine,
   type RequirementsFile,
+  type RequirementsSummary,
   resolveRequirements,
   rigFacts,
   displacementOf,
@@ -510,7 +516,7 @@ import { ALIASES, AliasTarballError, compareTarballs, MANIFEST as ALIAS_MANIFEST
 import { confirmAlias, DEFAULT_ALIAS_WAIT_MINUTES, EXIT_ALIAS_WAIT, EXIT_NOT_SERVED } from './scripts/install_smoke.ts';
 import { blobId, checkExampleInputs, type Copier, FETCH_RECORD, recordText, runSync } from './scripts/example_inputs.ts';
 import { BLINK, blinkHoldMisses, CONTROL_SUFFIX, framesInside, IDLE_FPS, type MotionKey, type MotionSpec, sineTrack, TIME_SLACK } from './src/motion.ts';
-import { type BoneEntry, type CharacterConfig, CONFIG_REQUIRES, CONFIG_SECTIONS, type ConfigDoor, type ConfigSection, CONSTRAINT_BONE_FIELDS, type ContourRegionSpec, contourRegionsOf, type Cut, DEFAULT_BUST_ALPHA, DEFAULT_BUST_CLEARANCE, deriveBustRegions, type Extend, type Generation, isDoorKey, type Limb, loadClothConfig, loadConfig, loadConfigAndAnimations, loadEarlyConfig, loadPaintConfig, type Patch, type PlanEntry, type Point, parseConfig, parseEarlyConfig, parseProposalSections, type SkeletonSections, turnMovingPartPair } from './src/config.ts';
+import { ANIMATIONS_FROM_SPEC, type BoneEntry, type CharacterConfig, CONFIG_REQUIRES, CONFIG_SECTIONS, type ConfigDoor, type ConfigSection, CONSTRAINT_BONE_FIELDS, type ContourRegionSpec, contourRegionsOf, type Cut, DEFAULT_BUST_ALPHA, DEFAULT_BUST_CLEARANCE, deriveBustRegions, type Extend, type Generation, isDoorKey, type Limb, loadClothConfig, loadConfig, loadConfigAndAnimations, loadEarlyConfig, loadPaintConfig, type Patch, type PlanEntry, type Point, parseConfig, parseEarlyConfig, parseProposalSections, type SkeletonSections, turnMovingPartPair } from './src/config.ts';
 import { BUST_FIT_ALPHA, BUST_FIT_CLEARANCE, BUST_RESIDUAL_BOUND_PX, CALIBRATED_BUST_FIXTURES, midlineFallbackCleavage } from './fixtures/bust.ts';
 import { RIG_BONE_INHERIT, RIG_KEYS, RIG_SKIN_CONSTRAINT_KEYS } from '@rig-c/core/rig';
 import { expandStops } from '@rig-c/core/stop';
@@ -704,7 +710,7 @@ import { influences } from './src/weights.ts';
 import { apply as applyAffine, type ComparedMesh, contourAtBudget, cost, errors, fieldAt, fieldContour, fieldLattice, locator, pixelErrors, pixelsOver } from './tools/local_compare.ts';
 import { FIELD_LATTICE_GRID, FIELD_POSES, fieldRegion, REGION_SPACINGS } from './fixtures/localfield.ts';
 import { BASE_SPACINGS, CONTROL, describeWorst, displacement, frameOpenings, kindOf, neighbours, pickAtBudget, type PlacedMask, POSE_PHASE, ranked, regionPoses, regionSpacings, resolveSegments, seamOpening, seamPairs, sineAt, SWEEP_TOLERANCES, testRegion, toWorldPx, variantConfig } from './tools/real_compare.ts';
-import { BEND_DEGREES, BEND_WORST_SHARE, bendAnimationNames, bendAnimations, type BendFigure, bendLinks, CALIBRATED_SENTENCE, candidateMesh, carriedBy, islandsJoin, MORE_TRIANGLES_FLAG, RELATIVE_SENTENCE, DUST_MAX_PX, DUST_MAX_SHARE, dustOf, figureRules, type GateLine, gateVerdict, IDLE_BOUND_PX, jsonValueSpan, MEASURED_SENTENCE, MESH_DRAFT_REPORT, meshDraftStage, NOT_COMPARED_SENTENCE, notCompared, partsNamed, type PartReadings, type Reading, READINGS, splicedConfig, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
+import { BEND_DEGREES, BEND_WORST_SHARE, bendAnimationNames, bendAnimations, type BendFigure, bendLinks, CALIBRATED_SENTENCE, candidateMesh, carriedBy, islandsJoin, MORE_TRIANGLES_FLAG, RELATIVE_SENTENCE, DUST_MAX_PX, DUST_MAX_SHARE, dustOf, figureRules, type GateLine, gateVerdict, IDLE_BOUND_PX, jsonValueSpan, MEASURED_SENTENCE, MESH_DRAFT_REPORT, meshDraftStage, NOT_COMPARED_SENTENCE, notCompared, partsNamed, type PartReadings, type Reading, READINGS, scratchConfig, splicedConfig, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
 import { type Built, type CheckSide, checkHeldProblems, deltaRow, PROVENANCE_FILE, type RemeshInput, type RemeshPlant, type RemeshProvenance, type RemeshResult, remeshStage, requestHeldProblems, targetProblems } from './src/remesh.ts';
 import { deltaFrames } from './src/remesh.ts';
 import { INPUT_CHECK_FILE, INPUT_CHECK_SPEC } from './src/remesh.ts';
@@ -2056,6 +2062,9 @@ function runConfigSuite(): number {
   const projectDir = temp('project-config-953');
   try { runProjectConfigChecks(projectDir, (name, ok, detail) => say(name, ok, detail, 'issue #953: CLI > config > unchanged default for the projection rule, with real readers and CLI controls')); }
   finally { rmSync(projectDir, { recursive: true, force: true }); }
+  const groundDir = temp('ground-config-996');
+  try { runGroundConfigChecks(groundDir, (name, ok, detail) => say(name, ok, detail, 'issue #996: assemble.ground through the real readers; the ground WARN through the real CLI, fired and silent; declared plain is the absent bytes')); }
+  finally { rmSync(groundDir, { recursive: true, force: true }); }
 
   const explicitDir = temp('explicit-658');
   try { runExplicitMeshChecks(explicitDir, (name, ok, detail) => say(name, ok, detail, 'issue #658: guarded accepted payload transfer, not regeneration')); }
@@ -5188,6 +5197,8 @@ function usageDrift(run: (args: string[]) => { status: number; out: string }, su
 function runCliSuite(): number {
   section('cli: the command surface');
   const { say, bad } = counter();
+  const diffDir1005 = temp('diff-cli');
+  try { runDiffComponentCliChecks(diffDir1005, (name, ok, detail) => say(name, ok, detail, 'issue #1005: shipped command and reader on generated PNG bytes'), join(ROOT, 'cli.ts')); } finally { rmSync(diffDir1005, { recursive: true, force: true }); }
   const measureArgs829 = ['check', '--rig', 'fixture', '--out', 'result'];
   const buildArgs829 = ['build', '--config', 'fixture.json', '--out', 'result'];
   const missingArgs829 = ['check', '--rig'];
@@ -18054,6 +18065,29 @@ function runSeamRequiredCases(dir: string, built: SoBuilt, say: (name: string, o
       `undeclared: exit ${plain.status}, PASS ${String(plain.fig?.PASS)}, required ${lineOf(plain.fig)?.required === undefined ? 'absent' : 'PRESENT'}; stock gapOpen frames ${JSON.stringify(hits)}; declared: exit ${planted.status}, ${f[0] ?? 'no refusal'}; block ${JSON.stringify(req)}`,
       `issue #941: the defect the card names, background inside the band in motion, on frame ${SO_TEAR_FRAME} of 13 alone — a frame no every-2nd, 3rd or 4th sampler reads. Undeclared it is accepted (today's warning, exit 0); under seam_over_motion.required the ${cls} pair is refused by name with the frame and the cells a fresh stock render finds there, and build emits no artifact`,
     );
+    if (cls === 'explicit') {
+      const clean = built('required-explicit-hold', true, { ...explicit, ...motion('anim-hold.json'), requirements: required }, run);
+      const cleanLine = lineOf(clean.fig);
+      const cleanRequired = cleanLine?.required;
+      const cleanRequirements = clean.fig?.requirements as { summary: RequirementsSummary; lines: Record<string, RequirementLine> } | undefined;
+      const summary = cleanRequirements?.summary;
+      const rows = cleanLine?.rows ?? [];
+      const source = readRequirements(join(dir, required));
+      const parts = readParts(join(clean.stage, 'parts.json'));
+      say(
+        'SO31_MOTION_SEAMS_REQUIRED_READS_EVERY_FRAME_WITH_ZERO_REQUIREMENT_PASSES',
+        clean.status === 0 && clean.fig?.PASS === true && source.requirements.length === 0 && source.seam_over_motion?.required === true &&
+          JSON.stringify(parts.motion_seams) === JSON.stringify(explicit.motion_seams) &&
+          summary?.declared === 0 && summary.measured === 0 && summary.pass === 0 && summary.fail === 0 && summary.not_measurable === 0 &&
+          Object.keys(cleanRequirements?.lines ?? {}).length === 0 && cleanLine?.animations.length === 2 &&
+          rows.length === 2 && rows.every(row => row.pair === 'upperarm_r|forearm_r' && row.status === 'read' && row.drawn === 13 && row.banded === 13) &&
+          cleanRequired?.status === 'PASS' && cleanRequired.failed === 0 &&
+          JSON.stringify(cleanRequired.pairs) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', class: 'explicit', frames: 26, background_frames: 0, max_px: 0 }]) &&
+          planted.status === 1 && req?.status === 'FAIL' && req.failed === 1 && req.pairs[0]?.frames === 26 && req.pairs[0]?.background_frames === 1,
+        `clean exit ${clean.status}, requirements ${JSON.stringify(summary)}, required ${JSON.stringify(cleanRequired)}, rows ${JSON.stringify(rows.map(row => ({ animation: row.animation, drawn: row.drawn, banded: row.banded })))}; planted tear exit ${planted.status}, required ${JSON.stringify(req)}`,
+        'issue #982: config.motion_seams carries an explicit pair with requirements: [] through assemble and build into the required background reading. Both animations are read on every frame with 0 declared requirements and 0 PASS. The existing frame-7 tear is refused through the same carrier.',
+      );
+    }
   }
 
   // The clean twin, declared: PASS, measured, and check.json is the undeclared twin's but for the two declared blocks.
@@ -19209,6 +19243,122 @@ function runBallCheckCases(report: FixtureCaseReporter): void {
   }
 }
 
+/** Issue #991 uses the production weight rule on a synthetic strip with a short hull edge. */
+function runWeightStepChecks991(dir: string, say: ReturnType<typeof counter>['say']): void {
+  const cases = new Map<string, { report: ReturnType<typeof checkStage>; rig: RigSpec; config: { path: string; sha256: string } }>();
+  const bin = suiteRigc();
+  const runner = rigcRunnerAt(bin, spawnRigc);
+  for (const kind of ['cap', 'floor']) {
+    for (const [form, width] of [['cut', 3], ['continuous', 3], ['cut', 30]] as const) {
+      const label = `${kind}-${form}-${width}`;
+      const home = join(dir, label);
+      writeCheckRig(home);
+      const rig = readJsonAt(join(home, 'rig.json')) as RigSpec;
+      const motion = readJsonAt(join(home, 'motion.json')) as { animations: { idle: { tracks: Array<Record<string, unknown>> } } };
+      const points: Array<[string, number, number]> = kind === 'cap'
+        ? [['a', 1.5, 10], ['b', 1.5, 11], ['c', 1.5, 12], ['d', -10, 0], ['e', 13, 0]]
+        : [['a', 1.5, 3], ['b', 1.5, 4], ['c', 1.5, 5], ['d', -15, 0]];
+      const part = { ...CHECK_PARTS[0], w: width };
+      const stage = rig.skeleton;
+      const origins = new Map(points.map(([bone, x, y]) => [bone, { x: stage.x + part.x + x, y: stage.y + cropToSpineY(part.y + y, stage.height) }]));
+      for (const [name] of points) {
+        if (name === 'd') rig.bones.push({ name: 'd_ctl', parent: 'root', ...origins.get(name)! }, { name: 'd', parent: 'd_ctl', x: 0, y: 0 });
+        else rig.bones.push({ name, parent: 'root', ...origins.get(name)! });
+      }
+      const segments = points.map(([bone, x, y]) => ({ bone, a: [x, y] as Point, b: [x, y] as Point }));
+      const corners = [[0, 0], [width, 0], [width, part.h], [0, part.h]];
+      const declared = form === 'continuous' ? { maxInfluences: null, floor: 'continuous' as const } : undefined;
+      const weights = corners.map(([x, y]) => {
+        const shares = writtenShares({ region: -1, g: 0, influences: influences([x, y], segments, 1, meshLimits(declared)) }, declared?.floor);
+        const world = { x: stage.x + part.x + x, y: stage.y + cropToSpineY(part.y + y, stage.height) };
+        return shares.map(({ bone, weight }) => ({ bone, x: world.x - origins.get(bone)!.x, y: world.y - origins.get(bone)!.y, weight }));
+      });
+      rig.slots.find((slot) => slot.name === 'back')!.bone = 'a';
+      rig.skins.default.back.back = { type: 'mesh', image: 'back.png', width, height: part.h, uvs: [0, 0, 1, 0, 1, 1, 0, 1], triangles: [0, 1, 2, 2, 3, 0], hull: 4, weights };
+      motion.animations.idle.tracks.push({ bone: 'd_ctl', property: 'translatex', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [kind === 'cap' ? 11 : 100] }, { t: 1, v: [0] }] });
+      const image = checkPartRaster(part);
+      const bytes = encodePngBytes(image);
+      writeFileSync(join(home, 'images', 'back.png'), bytes);
+      writeFileSync(join(home, 'parts', 'back.png'), bytes);
+      const parts = readParts(join(home, 'parts.json'));
+      Object.assign(parts.parts[0], { w: width, opaque_px: image.data.filter((value, index) => index % 4 === 3 && value > OPAQUE_ALPHA_ABOVE).length });
+      writeFileSync(join(home, 'parts.json'), serializeParts(parts));
+      writeFileSync(join(home, 'rig.json'), JSON.stringify(rig));
+      writeFileSync(join(home, 'motion.json'), JSON.stringify(motion));
+      const configPath = join(home, 'config.json');
+      const configBytes = Buffer.from(JSON.stringify({
+        ...minimalConfig(),
+        assemble: { rig_scale: 1, plan: [['back', 'full', 'topwear'], ['front', 'head', 'face']] },
+        bones: points.map(([name, x, y]) => ({ name, parent: 'root', at: [part.x + x, part.y + y] })),
+        meshes: { back: { grid: width, r: 1, segments: points.map(([bone, x, y]) => [bone, [part.x + x, part.y + y], [part.x + x, part.y + y]]), ...(declared === undefined ? {} : { influences: declared }) } },
+        regions: { front: 'root' },
+        motion: { duration: 1, tracks: [{ bone: 'd', prop: 'translatex', amp: kind === 'cap' ? 11 : 100, period: 1, phase: 0 }] },
+      }));
+      writeFileSync(configPath, configBytes);
+      const config = inputFileRecord(configBytes, configPath);
+      const report = checkStage({ rig: home, out: join(home, 'check'), config, noExtremes: true }, runner, bin, () => {});
+      cases.set(label, { report, rig, config });
+    }
+  }
+  const cap = cases.get('cap-cut-3')!;
+  const floor = cases.get('floor-cut-3')!;
+  const targets = (item: typeof cap): Problem[] => item.report.problems.filter((problem) => ['CHECK_TEXTURE_STRETCH', 'CHECK_ANIMATIONS_DO_NOT_FOLD'].includes(problem.code));
+  const fix = 'meshes.back.influences {"maxInfluences": null, "floor": "continuous"}';
+  // Independent fixture oracle from the point distances at (0, 0), including the written five-place remainder.
+  const capOthers = [10, 11, 12].map((y) => 1 / (Math.sqrt(1.5 * 1.5 + y * y) + 1) ** 2);
+  const capShare = Math.round((1 / 121) / (1 / 121 + capOthers.reduce((sum, weight) => sum + weight, 0)) * 1e5) / 1e5;
+  const floorOthers = [3, 4, 5].map((y) => 1 / (Math.sqrt(1.5 * 1.5 + y * y) + 1) ** 2);
+  const floorTotal = 1 / 256 + floorOthers.reduce((sum, weight) => sum + weight, 0);
+  const floorShare = Math.round((1 - floorOthers.reduce((sum, weight) => sum + Math.round(weight / floorTotal * 1e5) / 1e5, 0)) * 1e5) / 1e5;
+  for (const [id, item, share, cause] of [
+    ['CK1053_CAP_SWAP_ON_A_SHORT_HULL_EDGE_NAMES_BOTH_SHARES_AND_THE_PROVEN_CUT', cap, capShare, 'maxInfluences 4'],
+    ['CK1054_FLOOR_DROP_ON_A_SHORT_HULL_EDGE_NAMES_BOTH_SHARES_AND_THE_PROVEN_CUT', floor, floorShare, 'floor 0.03'],
+  ] as const) {
+    const found = targets(item);
+    say(id, found.length === 2 && found.every((problem) => problem.detail.includes(`edge 0-1 bone "d": vertex 0 share ${share}, vertex 1 share 0`) &&
+      problem.detail.includes(`made by the influence cut (${cause};`) && problem.detail.includes(fix)),
+    JSON.stringify(found), 'issue #991 uses a 3 px hull edge whose cut removes d on the neighbour, and requires both failure lines to name the step and its proved remedy');
+  }
+  const continuous = ['cap-continuous-3', 'floor-continuous-3'].map((key) => cases.get(key)!);
+  say('CK1055_THE_IDENTICAL_STRIPS_WITH_THE_CONTINUOUS_UNCAPPED_RULE_PASS', continuous.every((item) => item.report.figures.PASS && targets(item).length === 0),
+    JSON.stringify(continuous.map((item) => ({ stretch: item.report.figures.TEXTURE_STRETCH, folds: item.report.figures.ANIMATIONS_DO_NOT_FOLD }))),
+    'issue #991 keeps the same four vertices, triangles, segments and driver amplitude and changes only the influence declaration');
+  const long = ['cap-cut-30', 'floor-cut-30'].map((key) => cases.get(key)!);
+  const longMesh = long[0].rig.skins.default.back.back as MeshAttachment;
+  say('CK1056_A_LONG_HULL_EDGE_WITH_THE_CUT_KEEPS_ITS_EXISTING_PASS', long.every((item) => item.report.figures.PASS && targets(item).length === 0) &&
+    longMesh.weights[0].some((binding) => binding.bone === 'd' && binding.weight === capShare) &&
+    !longMesh.weights[1].some((binding) => binding.bone === 'd' && binding.weight > 0),
+    JSON.stringify(long.map((item) => item.report.figures.TEXTURE_STRETCH)), 'issue #991 adds diagnostic evidence without adding a weight-step bar');
+  const missing = weightStepText({ ...cap.rig }, 'back', 'back', [0, 1]);
+  const stale = weightStepText({ ...cap.rig }, 'back', 'back', [0, 1], { stage: cap.rig.skeleton, config: { ...cap.config, sha256: '0'.repeat(64) } });
+  say('CK1057_MISSING_OR_STALE_CONFIG_PROVENANCE_MAKES_THE_REMEDY_CONDITIONAL', [missing, stale].every((text) => text.includes(`vertex 0 share ${capShare}, vertex 1 share 0`) &&
+    text.includes('pre-cut shares unavailable; if the influence cut made this step: ' + fix) && !text.includes('made by the influence cut (')),
+    `missing ${missing}; stale ${stale}`, 'issue #991 refuses to infer a cut cause from emitted weights alone');
+  const changed = JSON.parse(JSON.stringify(cap.rig)) as RigSpec;
+  const changedMesh = changed.skins.default.back.back as MeshAttachment;
+  changedMesh.weights[0].find((binding) => binding.bone === 'd')!.weight = 0.25;
+  changedMesh.weights[0].find((binding) => binding.bone === 'a')!.weight += capShare - 0.25;
+  const mismatch = weightStepText({ ...changed }, 'back', 'back', [0, 1], { stage: cap.rig.skeleton, config: cap.config });
+  const smooth = cases.get('floor-continuous-3')!;
+  const faded = weightStepText({ ...smooth.rig }, 'back', 'back', [0, 1], { stage: smooth.rig.skeleton, config: smooth.config });
+  say('CK1058_REPLAY_REJECTS_CHANGED_WEIGHTS_AND_DISTINGUISHES_A_CONTINUOUS_ZERO', mismatch.includes('pre-cut shares unavailable') &&
+    !mismatch.includes('made by the influence cut (') && faded.includes('replayed floor "continuous"') && !faded.includes('made by the influence cut ('),
+    `changed ${mismatch}; continuous ${faded}`, 'issue #991 needs exact written-share agreement and distinguishes a continuous fade from a discontinuous cut');
+  const manyBones = [{ name: 'root', x: 0, y: 0 }];
+  const manyWeights = Array.from({ length: 9 }, (_, vertex) => Array.from({ length: 31 }, (_, binding) => {
+    const bone = `v${vertex}b${binding}`;
+    manyBones.push({ name: bone, x: vertex % 3 === 0 ? 0 : 3, y: vertex % 3 === 2 ? 80 : 0 });
+    return { bone, x: 0, y: 0, weight: 1 / 31 };
+  }));
+  const manyRig = { bones: manyBones, skins: { default: { cloth: { cloth: { type: 'mesh', weights: manyWeights, triangles: [0, 1, 2, 3, 4, 5, 6, 7, 8] } } } } };
+  const bounded = foldBonesText(manyRig, {}, 'cloth', 'cloth', 0, [0, 1, 2]);
+  const boundedBytes = Buffer.byteLength(bounded);
+  say('CK1059_WEIGHT_STEP_DETAIL_STAYS_WITHIN_THE_EXISTING_PRINTED_LINE_LIMIT', boundedBytes < PRINTED_LINE_LIMIT &&
+    (bounded.match(/weight step /g) ?? []).length === 3 && (bounded.match(/edge \d-\d bone /g) ?? []).length === 9,
+    `${boundedBytes} bytes for three fold groups with 31 disjoint bindings per vertex; limit ${PRINTED_LINE_LIMIT}`,
+    'issue #991 shows one differing bone per edge in written-share order so uncapped weights cannot multiply every fold detail by the binding count');
+}
+
 function runCheckSuite(): number {
   const scope = startCheckReadScope();
   try { return runCheckFixtureCases(scope); } finally { scope.restore(); }
@@ -19336,6 +19486,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
   let finishInputContract = (): void => { throw new Error('CHECK_TEMP_INPUTS: the generated input contract was not reached'); };
   const dir = temp('check');
   try {
+    runWeightStepChecks991(join(dir, 'weight-step-991'), say);
     runExtremesChecks(join(dir, 'extremes-controls'), (name, pass, detail) => say(name, pass, detail, 'issue #829: observations and opt-out preserve the gated check'), rigcRunnerAt(suiteRigc(), spawnRigc));
     const rig = join(dir, 'rig');
     writeCheckRig(rig);
@@ -20759,6 +20910,66 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       "issue #995's guard: a garment the rig holds rigid on purpose must not fail TIP_OVER_ROOT by design. The line reads every handwear and bottomwear part, so the existing declaration (`not_swinging`) is what takes it out, with the reason in the line",
     );
 
+    // Issue #994 fixes the art-grid policy, exercised through the ordinary check command.
+    const gridRun = (label: string, peak: number, linked: boolean) => {
+      const home = join(dir, label);
+      writeCheckRig(home, { from: ['full:topwear', 'full:handwear-r'], peak: 0 });
+      // Transparent margins keep the translating art inside both fixed bands.
+      const image = readPng(join(home, 'parts', 'front.png'));
+      const edgeColumns = [0, 1, image.width - 2, image.width - 1];
+      for (let y = 0; y < image.height; y++) {
+        for (const x of edgeColumns) image.data[(y * image.width + x) * 4 + 3] = 0;
+      }
+      const bytes = encodePngBytes(image);
+      writeFileSync(join(home, 'parts', 'front.png'), bytes);
+      writeFileSync(join(home, 'images', 'front.png'), bytes);
+      const parts = readParts(join(home, 'parts.json'));
+      parts.parts.find((part) => part.name === 'front')!.opaque_px = image.data.filter((value, index) => index % 4 === 3 && value > OPAQUE_ALPHA_ABOVE).length;
+      writeFileSync(join(home, 'parts.json'), serializeParts(parts));
+      const rig = JSON.parse(readFileSync(join(home, 'rig.json'), 'utf8')) as { bones: Array<Record<string, unknown>>; slots: Array<{ name: string; bone: string }> };
+      const motion = JSON.parse(readFileSync(join(home, 'motion.json'), 'utf8')) as { animations: { idle: { tracks: Array<Record<string, unknown>> } } };
+      rig.bones.push({ name: 'swing', parent: 'root', x: 0, y: 0 });
+      rig.slots.find((slot) => slot.name === 'front')!.bone = 'swing';
+      motion.animations.idle.tracks.push({ bone: 'swing', property: 'translatex', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [peak] }, { t: 1, v: [0] }] });
+      // A lone rotate-keyed swing is in #987's link set even with a held rotation.
+      if (linked) motion.animations.idle.tracks.push({ bone: 'swing', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 1, v: [0] }] });
+      writeFileSync(join(home, 'rig.json'), JSON.stringify(rig));
+      writeFileSync(join(home, 'motion.json'), JSON.stringify(motion));
+      const result = runCli(['check', '--rig', home, '--out', join(dir, `${label}-out`)]);
+      const figure = readJsonFile(join(dir, `${label}-out`, 'check.json'));
+      const line = figure?.TIP_OVER_ROOT as { status?: string; parts?: Array<Record<string, unknown>> } | undefined;
+      return { ...result, line, row: line?.parts?.find((row) => row.part === 'front') };
+    };
+    const underGrid = gridRun('tip-grid-under', 0.49, true);
+    const overGrid = gridRun('tip-grid-over', 0.51, true);
+    const stiffGrid = hungRun('tip-grid-stiff', { carry: 4, swing: 0, pivot: 'top', physics: { strength: 400, inertia: 0.1 } });
+    say(
+      'CK1050_LINK_TRAVEL_BELOW_HALF_A_RIG_PIXEL_SKIPS_AND_ABOVE_IT_KEEPS_THE_RATIO_VERDICT',
+      underGrid.line?.status === 'SKIP' && tipNum(underGrid.row, 'tip_rig_px') > 0.48 && tipNum(underGrid.row, 'tip_rig_px') < 0.5 &&
+        underGrid.out.includes('root 0.49 rig px') && underGrid.out.includes('tip 0.49 rig px') && underGrid.out.includes('floor 0.5 rig px') &&
+        underGrid.row?.travel_floor_rig_px === 0.5 && underGrid.row?.unmeasured === "below half a rig pixel: the motion does not show on the art's own grid" &&
+        overGrid.line?.status === 'FAIL' && tipNum(overGrid.row, 'tip_rig_px') > 0.5 && tipNum(overGrid.row, 'tip_rig_px') < 0.52 &&
+        tipNum(overGrid.row, 'ratio') < TIP_RATIO_FLOOR && !('unmeasured' in (overGrid.row ?? {})) &&
+        lineStatus(stiffGrid.fig, 'TIP_OVER_ROOT') === 'SKIP' && stiffGrid.row?.travel_floor_rig_px === 0.5 && stiffGrid.fail === null,
+      `under ${JSON.stringify(underGrid.line)}; over ${JSON.stringify(overGrid.line)}; stiff ${JSON.stringify(stiffGrid.line)}`,
+      'issue #994 fixes the art-grid threshold at 0.5 rig px before measurement; a low-travel link is unmeasured and retains both travels and the floor, including when every row is unmeasured',
+    );
+    const tinyRigid = gridRun('tip-grid-rigid', 0.01, false);
+    const translatedGrid = judged('tip-grid-translate-only', { from: HUNG_FROM, peak: 0, carried: { breath: 0.01, sway: 0.1 } });
+    const tinyLine = tinyRigid.line;
+    const translatedLine = translatedGrid.fig?.TIP_OVER_ROOT as { status?: string; parts?: Array<Record<string, unknown>> } | undefined;
+    const translatedRow = translatedLine?.parts?.find((row) => row.part === 'back');
+    say(
+      'CK1051_RIGID_CARRIAGE_FAILS_BEFORE_THE_FLOOR_AND_TRANSLATE_ONLY_DEFORMATION_KEEPS_ITS_VERDICT',
+      tinyLine?.status === 'FAIL' && tinyLine?.parts?.[0]?.world_tip_rig_px === 0.01 &&
+        tinyLine.parts[0].root_rig_px === 0 && tinyLine.parts[0].tip_rig_px === 0 &&
+        rigidS.fail !== null && rigidS.row?.root_rig_px === 0 && rigidS.row.tip_rig_px === 0 &&
+        translatedLine?.status === 'PASS' && tipNum(translatedRow, 'tip_rig_px') < 0.5 && tipNum(translatedRow, 'ratio') >= TIP_RATIO_FLOOR &&
+        !('unmeasured' in (translatedRow ?? {})),
+      `rigid world 0.01 ${JSON.stringify(tinyLine)}; exact rigid ${JSON.stringify(rigidS.row)}; translate-only ${JSON.stringify(translatedLine)}`,
+      'issue #994 holds rigid carriage first, so world magnitude never hides a carrier-frame 0 / 0 failure, while translate-only deformation is outside the link-only SKIP; CK237 separately holds the existing rests relation',
+    );
+
     // Issue #245: a tip at rest. CK116's skirt with no sway is the case — its waistband rides `chest`, which the idle
     // lifts 4 rig px, its hem on `hem`, which the idle does not move — so the root moves and the tip rests. Read as
     // hanging it fails (CK116); declared rests it is held to the opposite relation, tip / root <= 1, and passes. The
@@ -20782,6 +20993,18 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const restBare = restsRun('rest-still-bare', 0, null);
     const restAtRow = restRow(restAt.fig);
     const restBareRow = restRow(restBare.fig);
+    const rigidRestReq = join(dir, 'tip-grid-rigid-rests.json');
+    writeFileSync(rigidRestReq, JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [], rests: ['front'] }));
+    const rigidRest = runCli(['check', '--rig', join(dir, 'tip-grid-rigid'), '--out', join(dir, 'tip-grid-rigid-rests-out'), '--requirements', rigidRestReq]);
+    const rigidRestFig = readJsonFile(join(dir, 'tip-grid-rigid-rests-out', 'check.json'));
+    say(
+      'CK1052_STRUCTURAL_ZERO_TRAVEL_FAILS_BEFORE_THE_DECLARED_RESTS_RELATION',
+      lineStatus(restAt.fig, 'TIP_OVER_ROOT') === 'PASS' && lineStatus(rigidRestFig, 'TIP_OVER_ROOT') === 'FAIL' &&
+        (failLine(rigidRest.out, 'CHECK_TIP_OVER_ROOT') ?? '').includes('it rides that bone whole') &&
+        (failLine(rigidRest.out, 'CHECK_TIP_OVER_ROOT') ?? '').includes('declare it in `not_swinging` if it is meant to ride rigidly'),
+      `moving root with resting tip ${JSON.stringify(restLine(restAt.fig))}; rigid carriage ${JSON.stringify(restLine(rigidRestFig))}`,
+      'issue #994 puts the structural zero guard first, including a declared rests part, while CK237 keeps the nonzero-root rests relation',
+    );
     say(
       'CK237_A_ROOT_THAT_MOVES_UNDER_A_TIP_AT_REST_PASSES_TIP_OVER_ROOT_DECLARED_RESTS_AND_FAILS_IT_UNDECLARED',
       lineStatus(restAt.fig, 'TIP_OVER_ROOT') === 'PASS' &&
@@ -21231,7 +21454,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       hard.status === 1 &&
         hard.fig?.PASS === false &&
         lineStatus(hard.fig, 'TEXTURE_STRETCH') === 'FAIL' &&
-        hardFail === `  FAIL  CHECK_TEXTURE_STRETCH: mesh "${CHECK_PARTS[0].name}" triangle 0 (vertices 0 1 2), edge 1-2, idle frame ${IDLE_FPS / 2} — the edge is 2 times its rest length (max(ratio, 1/ratio) 2); <= ${TEXTURE_STRETCH_CEILING} is required; vertex 1 is weighted to "yoke" 1 and vertex 2 to "hem" 1; none of these bones hangs on a chain of the idle — the texture on it is stretched: the bones this mesh is weighted to move apart (amplitudes too large down a chain), or a vertex blends bones that move against each other (see rig-parts guide CHECK_TEXTURE_STRETCH)` &&
+        hardFail === `  FAIL  CHECK_TEXTURE_STRETCH: mesh "${CHECK_PARTS[0].name}" triangle 0 (vertices 0 1 2), edge 1-2, idle frame ${IDLE_FPS / 2} — the edge is 2 times its rest length (max(ratio, 1/ratio) 2); <= ${TEXTURE_STRETCH_CEILING} is required; vertex 1 is weighted to "yoke" 1 and vertex 2 to "hem" 1; none of these bones hangs on a chain of the idle; weight step edge 1-2 bone "yoke": vertex 1 share 1, vertex 2 share 0; pre-cut shares unavailable; if the influence cut made this step: meshes.back.influences {"maxInfluences": null, "floor": "continuous"} — the texture on it is stretched: the bones this mesh is weighted to move apart (amplitudes too large down a chain), or a vertex blends bones that move against each other (see rig-parts guide CHECK_TEXTURE_STRETCH)` &&
         others.length === 0,
       `exit ${hard.status}; ${hardFail?.trim().slice(0, 200) ?? 'no CHECK_TEXTURE_STRETCH line'}…; other FAIL lines: ${others.length}`,
       `the side lowered by its own length (${rest} units) doubles; the gate passes it, the loop closes and the seam is the setup pose, so this line is the only one that sees it — and, since issue #314, it names the edge's bones off rig.json: vertex 1 (top-right) is weighted wholly to yoke and vertex 2 (bottom-right) to hem, and the idle keys hem_ctl's translatey and the root's translatex, no rotate, so there is no chain to name`,
@@ -21315,7 +21538,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const sqBones =
       predicted === undefined || predicted.kind !== 'squeeze'
         ? null
-        : `; ${predicted.vertices.map((v, i) => vertexText(v, i === 0)).join(' and ')}; on the idle's chains, the chain from "hairback_r0_ctl" carries "hairback_r2" and the chain from "hairback_l0_ctl" carries "hairback_l2" — the texture on it is squeezed`;
+        : `; ${predicted.vertices.map((v, i) => vertexText(v, i === 0)).join(' and ')}; on the idle's chains, the chain from "hairback_r0_ctl" carries "hairback_r2" and the chain from "hairback_l0_ctl" carries "hairback_l2"; weight step edge ${sqWhere!.edge.join('-')} bone "`;
     squeezeSay(
       'CK241_A_STRETCH_FAIL_NAMES_THE_BONES_ITS_EDGE_HANGS_ON_AND_THEIR_TWO_CHAINS_AND_ONE_SIGN_PASSES',
       mirrored.rig.status === 0 &&
@@ -21331,6 +21554,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         sqFail.startsWith(`  FAIL  CHECK_TEXTURE_STRETCH: mesh "hair" triangle ${sqWhere.triangle} (vertices ${sqWhere.vertices.join(' ')}), edge ${sqWhere.edge.join('-')}, idle frame ${sqWhere.frame} — `) &&
         sqBones !== null &&
         sqFail.includes(sqBones) &&
+        sqFail.includes('pre-cut shares unavailable; if the influence cut made this step: meshes.hair.influences {"maxInfluences": null, "floor": "continuous"} — the texture on it is squeezed') &&
         oneSign.rig.status === 0 &&
         oneSign.check.status === 0 &&
         lineStatus(oneSign.fig, 'TEXTURE_STRETCH') === 'PASS',
@@ -23612,8 +23836,8 @@ function runAnimationFoldCases(say: (name: string, ok: boolean, detail: string, 
     const handText = foldBonesText(handRig, {}, 'legs', 'legs', 6, [0, 1, 2]);
     const handWant =
       'at worst frame 6 the 3 folded triangle(s) hang on, by the bone each vertex weighs most: ' +
-      `triangles 0, 1 dominated by "knee_r", "knee_l" (triangle 0, vertices 0 1 2: vertex 0 is weighted to "knee_r" 0.9, "knee_l" 0.1 and vertex 1 to "knee_l" 0.7, "knee_r" 0.3 and vertex 2 to "knee_r" 0.6, "hip" 0.4; ${none}); ` +
-      `triangle 2 dominated by "hip", "knee_l" (vertices 3 4 5: vertex 3 is weighted to "knee_l" 1 and vertex 4 to "knee_l" 1 and vertex 5 to "hip" 1; ${none})`;
+      `triangles 0, 1 dominated by "knee_r", "knee_l" (triangle 0, vertices 0 1 2: vertex 0 is weighted to "knee_r" 0.9, "knee_l" 0.1 and vertex 1 to "knee_l" 0.7, "knee_r" 0.3 and vertex 2 to "knee_r" 0.6, "hip" 0.4; ${none}; weight step edge 0-2 bone "knee_l": vertex 0 share 0.1, vertex 2 share 0; edge 1-2 bone "knee_l": vertex 1 share 0.7, vertex 2 share 0; pre-cut shares unavailable; if the influence cut made this step: meshes.legs.influences {"maxInfluences": null, "floor": "continuous"}); ` +
+      `triangle 2 dominated by "hip", "knee_l" (vertices 3 4 5: vertex 3 is weighted to "knee_l" 1 and vertex 4 to "knee_l" 1 and vertex 5 to "hip" 1; ${none}; weight step edge 3-5 bone "knee_l": vertex 3 share 1, vertex 5 share 0; edge 4-5 bone "knee_l": vertex 4 share 1, vertex 5 share 0; pre-cut shares unavailable; if the influence cut made this step: meshes.legs.influences {"maxInfluences": null, "floor": "continuous"})`;
     const capVerts = Array.from({ length: 15 }, (_, v) => [w(`b${Math.floor(v / 3)}`, 1)]);
     const capRig = {
       bones: [{ name: 'root' }, ...[0, 1, 2, 3, 4].map((i) => ({ name: `b${i}`, parent: 'root' }))],
@@ -29670,7 +29894,7 @@ function runChainSuite(_corpus: string | null = null, pre = false): number | nul
         const vRig = runCli(['rig', '--config', join(vDir, 'config.json'), '--parts', out, '--out', join(vDir, 'rig')]);
         const vChk = runCli(['check', '--rig', join(vDir, 'rig'), '--parts', out, '--out', join(vDir, 'check')]);
         const vFig = readJsonFile(join(vDir, 'check', 'check.json'));
-        const vTip = vFig?.TIP_OVER_ROOT as { status?: string; instrument?: string; parts?: Array<{ part: string; hang_from?: string | null; ratio: number | null; root_rig_px: number; tip_rig_px: number; world_ratio: number | null }> } | undefined;
+        const vTip = vFig?.TIP_OVER_ROOT as { status?: string; instrument?: string; parts?: Array<{ part: string; hang_from?: string | null; ratio: number | null; root_rig_px: number; tip_rig_px: number; world_ratio: number | null; unmeasured?: string; travel_floor_rig_px?: number }> } | undefined;
         const row = vTip?.parts?.find((p) => p.part === 'bottomwear');
         const vParts = readParts(join(out, 'parts.json'));
         const rec = vParts.parts.find((p) => p.name === 'bottomwear') as PartRecord;
@@ -29684,24 +29908,29 @@ function runChainSuite(_corpus: string | null = null, pre = false): number | nul
           return halfTravels(art, rec, vStage, attachmentPoses(join(set.dir, GEOMETRY_FILE), set.written).map((f) => f.get('bottomwear') ?? null));
         });
         const ratios = atMax.map((t) => (t === null || t.root === null || t.tip === null ? null : Math.round((t.tip / t.root) * 1000) / 1000));
-        const wantFail = key === 'scarf';
-        const byBar = row?.ratio !== null && row?.ratio !== undefined && (wantFail ? row.ratio < TIP_RATIO_FLOOR : row.ratio >= TIP_RATIO_FLOOR);
+        // Issue #994 keeps the pre-#262 chest-segment plant as an explicit SKIP control
+        // when both halves travel under half a rig pixel. Its geometry comparison still holds at both render sizes.
+        const expectSkip = key === 'scarf';
+        const byBar = row?.ratio !== null && row?.ratio !== undefined && (expectSkip ? row.ratio < TIP_RATIO_FLOOR : row.ratio >= TIP_RATIO_FLOOR);
         say(
-          `${wantFail ? 'CH906_A_TIP_THAT_TRULY_DOES_NOT_OUT_TRAVEL_ITS_ROOT_FAILS_TIP_OVER_ROOT_AT_EVERY_RENDER_SIZE' : 'CH905_A_HEM_UNDER_A_FIFTH_OF_A_FRAME_PIXEL_READS_ONE_TIP_OVER_ROOT_AT_EVERY_RENDER_SIZE_AND_PASSES_BY_THE_BAR'}[${key}]`,
+          `${expectSkip ? 'CH906_A_PART_BELOW_HALF_A_RIG_PIXEL_SKIPS_AT_EVERY_RENDER_SIZE_WITH_IDENTICAL_GEOMETRY' : 'CH905_A_HEM_UNDER_A_FIFTH_OF_A_FRAME_PIXEL_READS_ONE_TIP_OVER_ROOT_AT_EVERY_RENDER_SIZE_AND_PASSES_BY_THE_BAR'}[${key}]`,
           vRig.status === 0 &&
-            vChk.status === (wantFail ? 1 : 0) &&
+            vChk.status === 0 &&
             vTip?.instrument === TIP_INSTRUMENT &&
             row?.hang_from === 'hip' &&
-            vTip?.status === (wantFail ? 'FAIL' : 'PASS') &&
+            vTip?.status === 'PASS' &&
             byBar &&
             atMax.every((t) => t !== null) &&
             atMax[0]?.root === atMax[1]?.root &&
             atMax[0]?.tip === atMax[1]?.tip &&
             ratios.every((r) => r === row?.world_ratio) &&
-            (!wantFail || ((failLine(vChk.out, 'CHECK_TIP_OVER_ROOT')?.includes('part "bottomwear"') ?? false) && (failLine(vChk.out, 'CHECK_TIP_OVER_ROOT')?.includes('the root travels with the breath (') ?? false) && (failLine(vChk.out, 'CHECK_TIP_OVER_ROOT')?.includes('it is carried by `chest`') ?? false))),
-          `${variant}: rig exit ${vRig.status}, check exit ${vChk.status}, TIP_OVER_ROOT ${vTip?.status} (instrument ${vTip?.instrument}), bottomwear against ${row?.hang_from} root ${row?.root_rig_px} tip ${row?.tip_rig_px} rig px, ratio ${row?.ratio} against ${TIP_RATIO_FLOOR}, world ratio ${row?.world_ratio}; from the geometry at --max 620 and 660: ${atMax.map((t, i) => `${[620, 660][i]}: root ${t?.root} tip ${t?.tip}`).join('; ')} (${atMax[0]?.root === atMax[1]?.root && atMax[0]?.tip === atMax[1]?.tip ? 'bit-identical' : 'DIFFERENT'})${wantFail ? `; ${failLine(vChk.out, 'CHECK_TIP_OVER_ROOT')?.trim().slice(-330) ?? 'no CHECK_TIP_OVER_ROOT line'}` : ''}`,
-          wantFail
-            ? "the planted negative of CH905, on real art: scarf's short skirt on the proposal's lattice with the chest segment the proposer drafted before issue #262. Its art in the lower half truly travels less than 1.4725 times the upper half's — the part rendered alone at --max 8000 converged on about 1.27 from above at the breath of issue #118 — and the pixel reading had passed it at 640 (4.537) by the grid; the geometric one fails it at every size, naming the part and, since #262, the bone that carries its root (the line's planted positive on real art)"
+            (!expectSkip || (row?.unmeasured === "below half a rig pixel: the motion does not show on the art's own grid" &&
+              row.travel_floor_rig_px === TIP_TRAVEL_FLOOR &&
+              atMax.every((t) => t !== null && t.root !== null && t.tip !== null && Math.max(t.root, t.tip) < TIP_TRAVEL_FLOOR) &&
+              failLine(vChk.out, 'CHECK_TIP_OVER_ROOT') === null)),
+          `${variant}: rig exit ${vRig.status}, check exit ${vChk.status}, TIP_OVER_ROOT ${vTip?.status} (instrument ${vTip?.instrument}), bottomwear against ${row?.hang_from} root ${row?.root_rig_px} tip ${row?.tip_rig_px} rig px, ratio ${row?.ratio} against ${TIP_RATIO_FLOOR}, world ratio ${row?.world_ratio}; from the geometry at --max 620 and 660: ${atMax.map((t, i) => `${[620, 660][i]}: root ${t?.root} tip ${t?.tip}`).join('; ')} (${atMax[0]?.root === atMax[1]?.root && atMax[0]?.tip === atMax[1]?.tip ? 'bit-identical' : 'DIFFERENT'})${expectSkip ? `; unmeasured ${row?.unmeasured}, floor ${row?.travel_floor_rig_px} rig px` : ''}`,
+          expectSkip
+            ? "issue #994 keeps the pre-#262 chest-segment plant as an explicit SKIP control when both halves travel under half a rig pixel. Its geometry comparison still holds at both render sizes, and its below-bar ratio is retained in the unmeasured row"
             : "issue #118's reproduction: the same rig the pixel reading failed at --max 620, 640 and 650 and passed elsewhere; from the geometry the figure is one number at every render size and the bar decides it, not the grid",
         );
       }
@@ -32154,8 +32383,10 @@ function runAssembleSuite(): number {
   const { say, bad } = counter();
   const dir = temp('assemble');
   try {
+    runDiffComponentChecks((name, ok, detail) => say(name, ok, detail, 'issue #1005: hand-counted whole-error components and planted report mutations'));
     runPaintingExtensionChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #848: public generated controls; explicit ownership, bounds and exact painting samples'));
     runPaintingEdgeChecks((name, ok, detail) => say(name, ok, detail, 'issue #953: under visible, a part edge takes the painting\'s line and coverage; every skip reason planted next to a positive strip'));
+    runGroundUnitChecks((name, ok, detail) => say(name, ok, detail, 'issue #996: the ring share and its cut-off, and the busy-ground rules on a strip next to the plain mutant that takes the ground'));
     writeAssembleFixture(dir);
     const base = fixtureInput(dir);
     const result = assemble({ ...base, seamRule: 'near-white' });
@@ -35799,8 +36030,10 @@ function runAssembleExampleStage(ex: string, stage: AssembleStage): number {
       const provenanceOk = a.parts.parts.every(p => p.provenance !== undefined && provenanceAddsUp(p.provenance, p.opaque_px) &&
         !provenanceAddsUp({ ...p.provenance, edits: [...p.provenance.edits, { edit: 'cuts[999]', px: 1 }] }, p.opaque_px));
       const same = serializeParts(a.parts) === serializeParts(b.parts) && a.images.every((p, i) => Buffer.compare(Buffer.from(encodePngBytes(p.image)), Buffer.from(encodePngBytes(b.images[i].image))) === 0);
-      ok = same && provenanceOk && a.parts.parts.every((p) => p.opaque_px > 0);
-      detail = `${a.parts.parts.length} parts, two runs identical: ${same}; final provenance sums and each planted +1 edit refusal: ${provenanceOk}; ${figuresLine(a.figures)}`;
+      const inside1005 = a.figure === null ? null : Uint8Array.from({length:a.figure.width*a.figure.height},(_,p)=>a.figure!.data[p*4]===255?1:0);
+      const dc1005 = publicDiffControl(a.recomposite, sourceInRig(input.source, ...a.parts.rig_size), a.images, inside1005);
+      ok = same && provenanceOk && dc1005.ok && a.parts.parts.every((p) => p.opaque_px > 0);
+      detail = `${a.parts.parts.length} parts, two runs identical: ${same}; final provenance sums and each planted +1 edit refusal: ${provenanceOk}; ${dc1005.detail}; ${figuresLine(a.figures)}`;
     } catch (err) {
       detail = `refused or crashed: ${(err as Error).message.split('\n')[0]}`;
     }
@@ -35921,6 +36154,20 @@ function runAssembleExampleStage(ex: string, stage: AssembleStage): number {
     break;
   }
   }
+  return bad();
+}
+
+function runGroundExamplesSuite(): number | null {
+  section('assemble: a busy ground (issue #996) on the public examples');
+  const found = exampleDirs().filter((d) => existsSync(join(d, 'inputs', 'layers', 'head')));
+  if (found.length === 0) {
+    console.log('  SKIP  no fetched example (examples/<key>/config.json + inputs/painting.png + inputs/layers/{full,head}); run bun run fetch-examples');
+    console.log('          ⚠️ This is a HOLE in this run, not a pass — ground-examples measured no real painting.');
+    return null;
+  }
+  const { say, bad } = counter();
+  const heavy = found.find((d) => relative(EXAMPLES_DIR, d) === 'demo') ?? null;
+  runGroundExampleChecks(found, heavy, (name, ok, detail) => say(name, ok, detail, 'issue #996: every public painting is a plain ground and stays silent; a busy ground planted under it warns; declared busy, visible stays inside the core footprint, next to the undeclared mutant that leaks'));
   return bad();
 }
 
@@ -44500,6 +44747,20 @@ function draftReport(out: string): { parts: Array<{ part: string; mode: string; 
   return existsSync(p) ? (JSON.parse(readFileSync(p, 'utf8')) as ReturnType<typeof draftReport>) : null;
 }
 
+/** Relative config files shared by the two scratch-build entry points (issue #997). */
+function draftPathFixture(dir: string): { config: string; parts: string } {
+  const fx = writeDraftFixture(dir, DRAFT_COARSE_GRID);
+  const cfg = draftConfig(DRAFT_COARSE_GRID);
+  cfg.requirements = 'requirements.json';
+  cfg.motion = { ...(cfg.motion as Record<string, unknown>), animations_from: 'animations.json' };
+  cfg.generation = { ...fixtureGeneration(), latent: [832, 1216], pose: 'standing', control: { skeleton: 'pose.json', strength: 0.8, end_percent: 0.7 } };
+  writeFileSync(fx.config, JSON.stringify(cfg));
+  writeFileSync(join(dir, 'requirements.json'), JSON.stringify({ spec: 'spine-parts-requirements/1', fps: IDLE_FPS, requirements: [] }));
+  writeFileSync(join(dir, 'animations.json'), JSON.stringify({ spec: ANIMATIONS_FROM_SPEC, animations: {} }));
+  writeFileSync(join(dir, 'pose.json'), JSON.stringify({ width: 832, height: 1216, points: scaledPoints('stand_sides', 832, 1216) }));
+  return fx;
+}
+
 function runMeshDraftSuite(): number {
   section('mesh-draft: the traced outline around a coarse grid, held per part to its lattice through rig-c (issue #265)');
   const { say, bad } = counter();
@@ -44535,6 +44796,37 @@ function runMeshDraftSuite(): number {
         readdirSync(join(root, 'pos', 'out')).sort().join() === ['config.json', MESH_DRAFT_REPORT].sort().join(),
       `exit ${run1.status}; strip ${JSON.stringify(strip1.contour ?? null)} r ${String(strip1.r)}; gate ${row1 === undefined ? 'no row' : gateText(row1.gate)}; ${lastLines(run1.out, 1).join('')}`,
       'issue #265, the ruling of 2026-10-12: by hand (fixtures/meshdraft.ts) H = 408, so T = 1 and S = 11; the candidate is contour {T, T, S, maxEdge S} with the lattice\'s r and segments, it passes every reading against a lattice of 10 (164 triangles to its 148), every reading with a number carries its margin to its line inside the line, and nothing but its entry moves in the written config',
+    );
+
+    const paths21 = draftPathFixture(join(root, 'paths21'));
+    const pathRun21 = meshDraftRun(join(root, 'path-run21'), DRAFT_COARSE_GRID, {}, paths21);
+    say(
+      'MD21_RELATIVE_CONFIG_FILES_SURVIVE_EVERY_SCRATCH_BUILD',
+      pathRun21.e === null && draftReport(pathRun21.out)?.draft_check.PASS === true,
+      `stage ${pathRun21.e?.problems.map(problemLine).join(' | ') ?? 'green'}; ${pathRun21.log.slice(-3).join(' | ')}`,
+      'issue #997: requirements, imported animations and a control pose resolve beside the source config through the mesh-draft stage',
+    );
+
+    const absolute22 = JSON.parse(readFileSync(paths21.config, 'utf8')) as Record<string, unknown>;
+    absolute22.requirements = join(dirname(paths21.config), 'requirements.json');
+    (absolute22.motion as Record<string, unknown>).animations_from = join(dirname(paths21.config), 'animations.json');
+    const generation22 = absolute22.generation as { control: { skeleton: string } };
+    generation22.control.skeleton = join(dirname(paths21.config), 'pose.json');
+    const text22 = JSON.stringify(absolute22);
+    const written22 = scratchConfig(paths21.config, text22, join(root, 'absolute22'), new Map());
+    const absoluteExact22 = JSON.stringify(JSON.parse(readFileSync(written22, 'utf8'))) === text22;
+    const builtins22 = ['stand_sides', 'stand_clasp'].map((name) => {
+      generation22.control.skeleton = name;
+      writeFileSync(join(dirname(paths21.config), name), 'a file whose name is also a built-in');
+      const text = JSON.stringify(absolute22);
+      const written = scratchConfig(paths21.config, text, join(root, name), new Map());
+      return JSON.stringify(JSON.parse(readFileSync(written, 'utf8'))) === text && refusals(() => loadConfig(written)) === null;
+    });
+    say(
+      'MD22_ABSOLUTE_PATHS_AND_BUILTIN_SKELETON_NAMES_ARE_PRESERVED',
+      absoluteExact22 && builtins22.every(Boolean),
+      `absolute config unchanged ${absoluteExact22}; built-in names unchanged and loadable ${builtins22.join(', ')}`,
+      'issue #997: absolute file paths keep their text, and built-ins keep their meaning even beside a file with the same name',
     );
 
     // MD02 — the natural negative: on a lattice finer than S, the candidate's worst bend sample reads more than a tenth above the lattice's.
@@ -45673,6 +45965,15 @@ function runRemeshSuite(): number {
     };
     const inputDigest = treeDigest(input);
     const strip = (dir: string): string => JSON.stringify((JSON.parse(readFileSync(join(dir, 'rig.json'), 'utf8')) as { skins: { default: Record<string, Record<string, unknown>> } }).skins.default.strip.strip);
+
+    const paths34 = draftPathFixture(join(root, 'paths34'));
+    const pathRun34 = stage('paths34', request('paths34-grid', REMESH_GRID_REQUEST), { config: paths34.config, parts: paths34.parts });
+    say(
+      'RM34_RELATIVE_CONFIG_FILES_SURVIVE_THE_REMESH_REBUILD',
+      pathRun34.e === null && existsSync(join(pathRun34.out, PROVENANCE_FILE)),
+      `stage ${pathRun34.e?.problems.map(problemLine).join(' | ') ?? 'green'}; ${pathRun34.log.slice(-3).join(' | ')}`,
+      'issue #997: requirements, imported animations and a control pose resolve beside the source config through remesh',
+    );
 
     // RM01 — the positive control, through the CLI: the strip re-fitted on a lattice of 12, everything else the input's.
     const gridReq = request('grid', REMESH_GRID_REQUEST);
@@ -53740,6 +54041,7 @@ const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number 
   ['part-sources', runPartSourcesSuite],
   ['plausibility', runPlausibilitySuite],
   ['assemble-examples', runAssembleExamplesSuite],
+  ['ground-examples', runGroundExamplesSuite],
   ['skeleton', runSkeletonSuite],
   ['inputs', runInputsSuite],
   ['inputs-examples', runInputsExamplesSuite],
@@ -53931,7 +54233,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['depth-maps', 'joint-contact', 'check', 'chain@wind', 'chain@scarf', 'assemble-examples@wind', 'assemble-examples@reference-sample', 'scene', 'mesh-stats', 'auto-mesh-examples', 'config', 'inputs-examples', 'contour-wiring', 'waist', 'propose-corpus', 'arm-split-upgrade', 'comfy', 'diagnostics', 'structure', 'inputs', 'winding', 'raster-morph', 'raster-resize', 'raster-components', 'raster-warp', 'png']],
   ['2', ['cli', 'build', 'remesh', 'rig', 'chain@reference-sample', 'readme-loop@reference-demo', 'chain@reference-demo', 'propose', 'assemble-examples@reference-demo', 'readme-loop@reference-sample', 'auto-motion', 'tree', 'auto-mesh', 'config-write', 'limb-slots', 'loop', 'corpus', 'limb-layout', 'requirements', 'fixed-skeleton', 'setup-painting', 'boundary-colour', 'foot-ownership', 'layers-wrapper', 'painting', 'skeleton', 'core-pointer', 'assemble-examples@end', 'parts', 'prompt', 'sheet']],
-  ['3', ['readme-loop@wind', 'chain@end', 'readme-loop@demo', 'retune', 'chain@demo', 'assemble-examples@scarf', 'assemble-examples@demo', 'readme-loop@scarf', 'mesh-draft', 'alternate-layers', 'take-layers', 'editor-receipts', 'part-sources', 'influence', 'front-slot', 'assemble', 'readme-loop@end', 'build-cost', 'alternate-tips', 'chain-inherit', 'keypoints', 'contour', 'subset-cover', 'hybrid-limb', 'plausibility', 'raster-blur', 'fetch-examples', 'layers-psd', 'raster-poly', 'raster-composite']],
+  ['3', ['readme-loop@wind', 'chain@end', 'readme-loop@demo', 'retune', 'chain@demo', 'assemble-examples@scarf', 'assemble-examples@demo', 'readme-loop@scarf', 'mesh-draft', 'alternate-layers', 'take-layers', 'editor-receipts', 'part-sources', 'influence', 'front-slot', 'assemble', 'ground-examples', 'readme-loop@end', 'build-cost', 'alternate-tips', 'chain-inherit', 'keypoints', 'contour', 'subset-cover', 'hybrid-limb', 'plausibility', 'raster-blur', 'fetch-examples', 'layers-psd', 'raster-poly', 'raster-composite']],
 ];
 
 /**
