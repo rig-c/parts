@@ -14790,6 +14790,24 @@ function runFigureLayerCases(dir: string, say: (name: string, ok: boolean, detai
   const cfg = { ...(JSON.parse(readFileSync(join(md, 'config.json'), 'utf8')) as Record<string, unknown>), ...Object.fromEntries(Object.entries(drafted).filter(([k]) => k !== 'notes')) };
   writeFileSync(join(md, 'built.json'), `${JSON.stringify(cfg, null, 2)}\n`);
   const built = prop.status === 0 ? runCli(['build', '--config', join(md, 'built.json'), '--source', join(md, 'painting.png'), '--full', join(md, 'art.psd'), '--out', join(md, 'build')]) : { status: -1, out: '' };
+  const bustLandmarks = join(md, 'bust-landmarks.json');
+  writeFileSync(bustLandmarks, JSON.stringify({ apex_r: [116, 84], apex_l: [140, 84] }));
+  const bustDraft = runCli(['propose', '--parts', join(md, 'asm', 'rig'), '--source', join(md, 'painting.png'),
+    '--out', join(md, 'bust-prop'), '--keypoints', join(md, 'keypoints.json'), '--bust-landmarks', bustLandmarks]);
+  const bustProposal = readJsonAt(join(md, 'bust-prop', 'proposal.json')) as Record<string, unknown>;
+  const bustConfig = { ...(readJsonAt(join(md, 'config.json')) as Record<string, unknown>),
+    ...Object.fromEntries(Object.entries(bustProposal).filter(([key]) => key !== 'notes')) };
+  writeFileSync(join(md, 'bust-built.json'), JSON.stringify(bustConfig));
+  const bustBuilt = runCli(['build', '--config', join(md, 'bust-built.json'), '--source', join(md, 'painting.png'),
+    '--full', join(md, 'art.psd'), '--out', join(md, 'bust-build'), '--no-extremes']);
+  const bustCheck = readJsonFile(join(md, 'bust-build', 'check', 'check.json'));
+  const bustLimbLine = bustCheck?.[LIMB_LINE] as { status?: string; parts?: Array<{ part: string; region_bones?: string[] }> } | undefined;
+  say('PR765_FIGURE_LAYER_WITH_DECLARED_BUST_LANDMARKS_PASSES_ASSEMBLE_RIG_AND_CHECK',
+    bustDraft.status === 0 && bustBuilt.status === 0 && bustLimbLine?.status === 'PASS' &&
+    JSON.stringify(bustLimbLine.parts?.find(row => row.part === 'trunk_chest')?.region_bones) === '["boob_r","boob_l"]' &&
+    bustBuilt.out.includes('declared contour region bones [boob_r, boob_l]'),
+    `propose ${bustDraft.status}; build ${bustBuilt.status}; LIMB_ONE_BONE ${bustLimbLine?.status}; ${failLines(bustBuilt.out).join(' | ')}`,
+    'a proposal emitted for a figure layer must pass the limb carrier gate through its normal build entry point');
   const cut = built.out.split('\n').find((l) => l.includes('limb cut: "topwear"')) ?? '';
   const summary = built.out.split('\n').find((l) => /\bcheck: (PASS|FAIL)/.test(l)) ?? 'no check line';
   const share = (n: string): number => Number(new RegExp(`"${n}" (\\d+)`).exec(cut)?.[1] ?? -1);
@@ -18931,6 +18949,21 @@ function runLimbCheckCases(say: (name: string, ok: boolean, detail: string, why:
     const p3: Problem[] = [];
     const other = limbLine(parts, rigWith('sleeve_r0'), p3);
     const none = limbLine({ ...parts, parts: [{ ...parts.parts[0], limb: undefined }] } as PartsFile, rigWith('sleeve_r1'), []);
+    const contourReport = [{ part: 'forearm_r', mode: 'contour', regions: [{ name: 'bust_r', bone: 'declared_r' }, { name: 'bust_l', bone: 'declared_l' }] }];
+    const declared = limbLine(parts, rigWith('declared_r'), [], contourReport);
+    const declaredTwin = limbLine(parts, rigWith('turn_forearm_r_declared_r'), [], contourReport);
+    const undeclaredProblems: Problem[] = [];
+    const undeclared = limbLine(parts, rigWith('hip'), undeclaredProblems, contourReport);
+    const wrongPart = limbLine(parts, rigWith('declared_r'), [], [{ ...contourReport[0], part: 'upperarm_r' }]);
+    const latticeReport = limbLine(parts, rigWith('declared_r'), [], [{ ...contourReport[0], mode: 'lattice' }]);
+    const noReport = limbLine(parts, rigWith('declared_r'), []);
+    say('CK414_ONLY_CONTOUR_REGION_BONES_DECLARED_FOR_THIS_LIMB_PART_ARE_ACCEPTED_AND_NAMED',
+      declared?.status === 'PASS' && declaredTwin?.status === 'PASS' && JSON.stringify(declared.parts[0].region_bones) === '["declared_r","declared_l"]' &&
+      undeclared?.status === 'FAIL' && undeclaredProblems[0]?.code === 'CHECK_LIMB_ONE_BONE' && undeclared?.parts[0].others.join() === 'hip' &&
+      wrongPart?.status === 'FAIL' && latticeReport?.status === 'FAIL' && noReport?.status === 'FAIL',
+      `declared ${JSON.stringify(declared)}; undeclared ${undeclared?.status}; other part ${wrongPart?.status}; lattice ${latticeReport?.status}; absent ${noReport?.status}`,
+      'a contour region carrier is declared for one exact part, and every other bone still fires the existing limb gate');
+
     say(
       'CK411_A_LIMB_PART_ON_ITS_BONE_S_TURN_TWIN_PASSES_ON_NO_BONE_OR_ANOTHER_FAILS_AND_WITHOUT_LIMBS_NO_LINE_IS_WRITTEN',
       twin?.status === 'PASS' &&
