@@ -151,9 +151,11 @@ export interface CheckRigOptions {
    * as given) — the physics child the rig stage binds a sleeve to. The part is a four-vertex mesh, its top two
    * vertices on `s0` and its bottom two on `s1`; the slot rides `chest`. `pivot` `top` puts `s0_ctl` at the sleeve's
    * top; `mid` at its middle, so the whole sleeve turns about its centre. Not with `stretchMesh`, `carried`,
-   * `blinkSquash` or `head`.
+   * `blinkSquash` or `head`. `pelvis` (only with `swing` 0, issue #995) writes `s0` under
+   * its control `s0_ctl` (the rig stage's shape for a keyed bone a mesh is bound to) and keys `s0_ctl` `rotate`
+   * `pelvis` · sin(2πt): a body segment that turns with `s1` hanging under it and the part bound whole to the two.
    */
-  hung?: { carry: number; swing: number; pivot: 'top' | 'mid'; physics?: { strength: number; inertia: number } };
+  hung?: { carry: number; swing: number; pivot: 'top' | 'mid'; physics?: { strength: number; inertia: number }; pelvis?: number };
   /**
    * The idle's duration in seconds, default 1 (issue #244). The root's three
    * `translatex` keys sit at 0, half of it and it. Only with none of
@@ -183,6 +185,7 @@ export function writeCheckRig(dir: string, opts: CheckRigOptions = {}): void {
   const carried = opts.carried;
   if (carried !== undefined && (opts.stretchMesh !== undefined || opts.blinkSquash !== undefined || opts.head !== undefined)) throw new Error('writeCheckRig: carried is not with stretchMesh, blinkSquash or head');
   const hung = opts.hung;
+  if (hung?.pelvis !== undefined && hung.swing !== 0) throw new Error('writeCheckRig: hung.pelvis is only with swing 0');
   if (hung !== undefined && (opts.stretchMesh !== undefined || carried !== undefined || opts.blinkSquash !== undefined || opts.head !== undefined)) throw new Error('writeCheckRig: hung is not with stretchMesh, carried, blinkSquash or head');
   const mesh = opts.stretchMesh !== undefined || carried !== undefined;
   const T = opts.duration ?? 1;
@@ -222,7 +225,13 @@ export function writeCheckRig(dir: string, opts: CheckRigOptions = {}): void {
       : [
           { name: 'chest_ctl', parent: 'root', x: 0, y: 0 },
           { name: 'chest', parent: 'chest_ctl', x: 0, y: 0 },
-          ...(hung.swing === 0
+          ...(hung.swing === 0 && hung.pelvis !== undefined
+            ? [
+                { name: 's0_ctl', parent: 'chest', x: s0At.x, y: s0At.y, rotation: -90 },
+                { name: 's0', parent: 's0_ctl', x: 0, y: 0, length: s0Len },
+                { name: 's1', parent: 's0', x: s0Len, y: 0, length: 10 },
+              ]
+            : hung.swing === 0
             ? [
                 { name: 's0', parent: 'chest', x: s0At.x, y: s0At.y, rotation: -90, length: s0Len },
                 { name: 's1', parent: 's0', x: s0Len, y: 0, length: 10 },
@@ -241,7 +250,9 @@ export function writeCheckRig(dir: string, opts: CheckRigOptions = {}): void {
       : [
           { bone: 'chest_ctl', property: 'translatex', keys: sine(hung.carry) },
           ...(hung.swing === 0
-            ? []
+            ? hung.pelvis === undefined
+              ? []
+              : [{ bone: 's0_ctl', property: 'rotate', keys: sine(hung.pelvis) }]
             : [
                 { bone: 's0_ctl', property: 'rotate', keys: sine(hung.swing) },
                 { bone: 's1_ctl', property: 'rotate', keys: sine(hung.swing / 2) },

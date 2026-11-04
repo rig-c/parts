@@ -20512,6 +20512,53 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       "issue #987's ruling: from the deepest common ancestor-or-self of the bound bones, walk up while the bone is a link — of a chain CHAIN_LAG reads (`chest_ctl` alone is not one: a chain is two keyed links), or a bone a physics constraint drives — to the first that is not; no bone is read by its name. The walk starts from the link when the common bone is the link's control twin (at its origin, unturned, unscaled, keyed by no track — Option A, ruled on #987), so the control layer without physics children lands on `chest` too; the twin step is taken only at the start, so `chest`, `chest_ctl`'s twin, is where the walk stops",
     );
 
+    // Issue #995 (ruled on #987): a lone swing is a link too: a rotate-keyed bone with no child bone, or whose only
+    // child is its control twin (a one-link chain's control). A rotate-keyed body segment other bones hang under (a
+    // pelvis carrying legs) is not one. Codex P2: a track that keys a group keys its members, as chainFigures reads it.
+    const lone = hangRig([['root', null], ['skirt', 'root']], ['skirt'], []);
+    const oneLink = hangRig([['root', null], ['skirt0_ctl', 'root'], ['skirt0', 'skirt0_ctl']], ['skirt0'], []);
+    const pelvis = hangRig([['root', null], ['hip', 'root'], ['leg0', 'hip'], ['leg1', 'leg0']], ['hip'], []);
+    const moved = (bone: string, group: boolean): Record<string, unknown> => ({
+      ...(group ? { groups: { g: [bone] } } : {}),
+      animations: { idle: { duration: 1, tracks: [...(keyedMotion(['s0_ctl', 's1_ctl']).animations as { idle: { tracks: unknown[] } }).idle.tracks, { ...(group ? { group: 'g' } : { bone }), property: 'translatex', keys: sinKeys(1) }] } },
+    });
+    const walks995 = {
+      lone: hangBone(lone, keyedMotion(['skirt']), 'sleeve'),
+      oneLink: hangBone(oneLink, keyedMotion(['skirt0_ctl']), 'sleeve'),
+      pelvis: hangBone(pelvis, keyedMotion(['hip']), 'sleeve'),
+      unkeyed: hangBone(lone, { animations: { idle: { duration: 1, tracks: [] } } }, 'sleeve'),
+      direct: hangBone(ctlNoPhys, moved('s0', false), 'sleeve'),
+      group: hangBone(ctlNoPhys, moved('s0', true), 'sleeve'),
+    };
+    say(
+      'CK995_A_LONE_SWING_AND_A_ONE_LINK_CHAIN_ARE_LINKS_A_KEYED_PELVIS_IS_NOT_AND_A_GROUP_TRACK_KEYS_ITS_MEMBERS',
+      walks995.lone === 'root' && walks995.oneLink === 'root' && walks995.pelvis === 'hip' && walks995.unkeyed === 'skirt' && walks995.direct === 's0' && walks995.group === walks995.direct,
+      `lone rotate-keyed bone -> ${walks995.lone}; one-link chain (keyed control, twin under it) -> ${walks995.oneLink}; rotate-keyed pelvis with legs under it -> ${walks995.pelvis}; the lone bone unkeyed -> ${walks995.unkeyed}; s0 keyed by its own track -> ${walks995.direct}; by a group track holding s0 -> ${walks995.group}`,
+      "issue #995's ruling on #987: a rotate-keyed bone with no child bone (or only its control twin) is the swing itself, so a part on it is read against the bone above; a rotate-keyed body segment other bones hang under is not, so a part bound whole to it reads 0 / 0. Codex P2: keyedBones read only `bone` tracks, so a group track on s0 left s0 looking like an unkeyed control twin and the walk went on to chest",
+    );
+    // The guard (issue #995): TIP_OVER_ROOT reads every handwear and bottomwear part (SWING_TAGS), declared or not, so a
+    // fitted garment is declared by the scene file's `not_swinging` and then reads SKIP with the reason; undeclared, it
+    // is read as hanging cloth and the same part bound whole to a turning body segment fails.
+    const pelvisHung = { carry: 4, swing: 0, pivot: 'top' as const, pelvis: 2 };
+    const pelvisCloth = hungRun('tip-pelvis-cloth', pelvisHung);
+    const tightReq = join(dir, 'tip-pelvis-tight.json');
+    writeFileSync(tightReq, JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [], not_swinging: ['back'] }));
+    writeCheckRig(join(dir, 'tip-pelvis-tight'), { from: HUNG_FROM, peak: 0, hung: pelvisHung });
+    const tightRes = runCli(['check', '--rig', join(dir, 'tip-pelvis-tight'), '--out', join(dir, 'tip-pelvis-tight-out'), '--requirements', tightReq]);
+    const tightTip = (readJsonFile(join(dir, 'tip-pelvis-tight-out', 'check.json'))?.TIP_OVER_ROOT ?? {}) as Record<string, unknown>;
+    say(
+      'CK996_A_PART_BOUND_WHOLE_TO_A_TURNING_BODY_SEGMENT_FAILS_AS_CLOTH_AND_SKIPS_DECLARED_NOT_SWINGING',
+      pelvisCloth.fail !== null &&
+        pelvisCloth.row?.hang_from === 's0' &&
+        pelvisCloth.row?.ratio === null &&
+        pelvisCloth.fail.includes('nothing in it moves against `s0`: it rides that bone whole') &&
+        failLine(tightRes.out, 'CHECK_TIP_OVER_ROOT') === null &&
+        tightTip.status === 'SKIP' &&
+        String(tightTip.reason).includes("back: declared not swinging by the scene file's not_swinging"),
+      `as cloth: ${JSON.stringify(pelvisCloth.row ?? null)}; declared not_swinging: exit ${tightRes.status}, ${JSON.stringify(tightTip)}`,
+      "issue #995's guard: a garment the rig holds rigid on purpose must not fail TIP_OVER_ROOT by design. The line reads every handwear and bottomwear part, so the existing declaration (`not_swinging`) is what takes it out, with the reason in the line",
+    );
+
     // Issue #245: a tip at rest. CK116's skirt with no sway is the case — its waistband rides `chest`, which the idle
     // lifts 4 rig px, its hem on `hem`, which the idle does not move — so the root moves and the tip rests. Read as
     // hanging it fails (CK116); declared rests it is held to the opposite relation, tip / root <= 1, and passes. The
@@ -27633,6 +27680,9 @@ function runBuildSuite(): number {
       };
       c.regions = { bottomwear: 'hip', thigh_r: 'leg_r0', shin_r: 'leg_r1', thigh_l: 'leg_l0', shin_l: 'leg_l1' };
       c.motion = { duration: 1, tracks: [{ bone: 'hip', prop: 'rotate', amp: 2, period: 1, phase: 0 }] };
+      // Issue #995: the shorts ride `hip`, which turns with the legs under it, whole: a fitted garment, declared so
+      // (`writeFittedShorts` writes the file beside the config), not cloth TIP_OVER_ROOT would read 0 / 0 against `hip`.
+      c.requirements = SHORTS_FITTED;
       if (withSets) {
         (c.assemble as Record<string, unknown>).alternates = shortsSets.map((q) => ({
           name: q.name,
@@ -27645,9 +27695,12 @@ function runBuildSuite(): number {
       }
       return c;
     };
+    const SHORTS_FITTED = 'fitted.json';
+    const writeFittedShorts = (d: string): void => writeFileSync(join(d, SHORTS_FITTED), `${JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [], not_swinging: ['bottomwear'] }, null, 2)}\n`);
     const shortsFixture = (name: string, cfg: Record<string, unknown>, carry = false): string => {
       const d = join(shortsDir, name);
       writeAssembleFixture(d, cfg, shortsPainting, { full: [{ name: 'legwear', depth: 0.6, rects: [{ x0: 22, y0: 20, x1: 30, y1: 50, colour: C }, { x0: 34, y0: 20, x1: 42, y1: 50, colour: C }] }, shortsLayer], head: HEAD_LAYERS });
+      writeFittedShorts(d);
       // #637: this exclusion control has only the base's cover; a carried cover stays in the set.
       for (const q of shortsSets) writeRun(join(d, `full_${q.name}`), [{ name: 'legwear', depth: 0.6, rects: q.rects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1, colour: C })) }, ...(carry ? [shortsLayer] : [])]);
       return d;
@@ -27774,6 +27827,7 @@ function runBuildSuite(): number {
     const islandFixture = (name: string, sets: typeof islandSets): string => {
       const d = join(islandDir, name);
       writeAssembleFixture(d, islandConfig(sets), shortsPainting, { full: [{ name: 'legwear', depth: 0.6, rects: [{ x0: 22, y0: 20, x1: 30, y1: 50, colour: C }, { x0: 34, y0: 20, x1: 42, y1: 50, colour: C }] }, shortsLayer], head: HEAD_LAYERS });
+      writeFittedShorts(d);
       // #637's actual set-cover case is UC00; this island control retains #587's base-only footprint.
       for (const q of sets) writeRun(join(d, `full_${q.name}`), [{ name: 'legwear', depth: 0.6, rects: q.rects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1, colour: C })) }]);
       return d;
@@ -28406,6 +28460,7 @@ function runBuildSuite(): number {
         ...(by === 'drawn' ? { drawn: q.drawn } : { skeleton: `${q.name}_pose.json` }),
       }));
       writeAssembleFixture(d, c, shortsPainting, { full: [{ name: 'legwear', depth: 0.6, rects: [{ x0: 22, y0: 20, x1: 30, y1: 50, colour: C }, { x0: 34, y0: 20, x1: 42, y1: 50, colour: C }] }, shortsLayer], head: HEAD_LAYERS });
+      writeFittedShorts(d);
       for (const q of sets) {
         // #637's covered overlap is UC10; retain the base-only exclusion in this #609 control.
         writeRun(join(d, `full_${q.name}`), [{ name: 'legwear', depth: 0.6, rects: q.rects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1, colour: C })) }]);

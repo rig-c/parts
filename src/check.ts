@@ -7897,8 +7897,8 @@ export const TIP_INSTRUMENT = 'geometry, carrier frame';
 
 /**
  * The bone a part hangs from (issue #987): the deepest common ancestor-or-self of the bones its attachments are
- * bound to ({@link boundBones}), walked up while it is a link — a bone of a chain `CHAIN_LAG` reads, or a bone a
- * physics constraint drives — to the first bone that is not, so a chain-hung part is read against the body that
+ * bound to ({@link boundBones}), walked up while it is a link — a bone of a chain `CHAIN_LAG` reads, a bone a
+ * physics constraint drives, or a lone swing (a rotate-keyed bone with no child bone but its control twin) — to the first bone that is not, so a chain-hung part is read against the body that
  * carries the chain and not against its own first link (no bone is read by its name). When the common bone is a
  * link's control twin (at its origin, unturned, unscaled, keyed by no idle track), the walk starts from the link; only
  * there, so a body bone that is its own `_ctl`'s twin (`chest`) is where the walk stops. Null when the part is bound to
@@ -7922,16 +7922,41 @@ export function hangBone(rig: Record<string, unknown>, motion: Record<string, un
   // both are walked up through until the body bone that carries them.
   const links = new Set(chainFigures(rig, motion).chains.filter((c) => c.length >= 2).flatMap((c) => c.map((l) => l.bone)));
   for (const c of Array.isArray(rig.constraints) ? rig.constraints : []) if (isRecord(c) && c.type === 'physics' && typeof c.bone === 'string') links.add(c.bone);
-  // The rig stage's control twin: a bone at its link's origin, unturned and unscaled, that nothing keys — the link carries it whole.
+  // Every bone an idle track keys, a group track's members included (as chainFigures reads them); `rotated` keeps
+  // the ones a rotate track keys.
   const idle = isRecord(motion.animations) && isRecord(motion.animations.idle) ? motion.animations.idle : {};
-  const keyedBones = new Set((Array.isArray(idle.tracks) ? idle.tracks : []).filter(isRecord).map((t) => t.bone).filter((b): b is string => typeof b === 'string'));
+  const groups = isRecord(motion.groups) ? motion.groups : {};
+  const keyedBones = new Set<string>();
+  const rotated = new Set<string>();
+  for (const t of (Array.isArray(idle.tracks) ? idle.tracks : []).filter(isRecord)) {
+    const targets = typeof t.bone === 'string' ? [t.bone] : typeof t.group === 'string' && Array.isArray(groups[t.group]) ? (groups[t.group] as unknown[]).filter((m): m is string => typeof m === 'string') : [];
+    for (const b of targets) {
+      keyedBones.add(b);
+      if (t.property === 'rotate') rotated.add(b);
+    }
+  }
   const setup = new Map(bones.map((b) => [String(b.name), b]));
-  const twinOfLink = (b: string): boolean => {
+  const children = new Map<string, string[]>();
+  for (const [b, pa] of parent) if (pa !== null) children.set(pa, [...(children.get(pa) ?? []), b]);
+  const kids = (b: string): string[] => children.get(b) ?? [];
+  // At its parent's origin, unturned and unscaled, keyed by no idle track: the parent carries it whole.
+  const atOrigin = (b: string): boolean => {
     const r = setup.get(b);
-    const pa = parent.get(b) ?? null;
-    if (r === undefined || pa === null || !links.has(pa) || keyedBones.has(b)) return false;
+    if (r === undefined || keyedBones.has(b)) return false;
     const zero = (k: string, at: number): boolean => r[k] === undefined || r[k] === at;
     return zero('x', 0) && zero('y', 0) && zero('rotation', 0) && zero('scaleX', 1) && zero('scaleY', 1) && zero('shearX', 0) && zero('shearY', 0);
+  };
+  // A lone swing (#995): a rotate-keyed bone with no child bones, or whose only child is its control twin with none.
+  // That is a bone that is the swing itself, and a one-link chain's control; a rotate-keyed body segment other bones
+  // hang under (a pelvis carrying legs) is not one, so a part bound whole to it stays read against it.
+  for (const b of rotated) {
+    const k = kids(b);
+    if (k.length === 0 || (k.length === 1 && atOrigin(k[0]) && kids(k[0]).length === 0)) links.add(b);
+  }
+  // The rig stage's control twin: a bone at its link's origin, unturned and unscaled, that nothing keys — the link carries it whole.
+  const twinOfLink = (b: string): boolean => {
+    const pa = parent.get(b) ?? null;
+    return pa !== null && links.has(pa) && atOrigin(b);
   };
   const seen = new Set<string>();
   let at: string | null = twinOfLink(common) ? (parent.get(common) ?? null) : common;
