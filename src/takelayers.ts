@@ -9,6 +9,7 @@ import { PartsError, refuseIfAny, type Problem } from './errors.ts';
 import { dilate } from './raster/morph.ts';
 import { newMask, type Raster } from './raster/types.ts';
 import { readPng } from './raster/png.ts';
+import type { TakeDeclaration } from './takeregion.ts';
 import type { TakenLayerSource } from './takesource.ts';
 
 export interface TakeLayers {
@@ -62,8 +63,8 @@ function supportOverlap(a: Layer, b: Layer): number {
   return px;
 }
 /** Apply every declaration together, so replacing all tied layers from one run can retain its known order. */
-export function applyTakenLayers(runs: { full: LayerSet; head: LayerSet; single: boolean }, painting: Raster, cfg: Pick<EarlyConfig, 'seethrough' | 'depth'> & { assemble: { take?: TakeLayers[]; plan?: PlanEntry[] } }, configPath: string): { full: LayerSet; head: LayerSet; single: boolean; notes: string[] } {
-  const declarations = cfg.assemble.take ?? [];
+export function applyTakenLayers(runs: { full: LayerSet; head: LayerSet; single: boolean }, painting: Raster, cfg: Pick<EarlyConfig, 'seethrough' | 'depth'> & { assemble: { take?: TakeDeclaration[]; plan?: PlanEntry[] } }, configPath: string): { full: LayerSet; head: LayerSet; single: boolean; notes: string[] } {
+  const declarations = (cfg.assemble.take ?? []).filter((item): item is TakeLayers => 'tags' in item);
   if (declarations.length === 0) return { ...runs, notes: [] };
   if (cfg.depth !== undefined || [...runs.full.layers, ...runs.head.layers].some(l => l.depthSheet !== undefined)) return refuse('ASSEMBLE_TAKE_DEPTH_SHEET', 'config.assemble.take', 'active scalar depth sheets have no mixed-run binding; disable the depth opt-in or assemble a separately bound run before taking layers (numeric depth_median ordering is retained)');
   const inputs = makeInputs(painting, cfg, 'take target painting');
