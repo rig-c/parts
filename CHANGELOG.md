@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.5.0](https://github.com/rig-c/parts/compare/v2.4.1...v2.5.0) (2026-11-04)
+
+
+### Features
+
+* **assemble:** visible part edges from the painting; assemble.project config field ([#992](https://github.com/rig-c/parts/issues/992)) ([c17292c](https://github.com/rig-c/parts/commit/c17292cc86e7769819dd1380daef3f154367b1f9))
+
+
+### Bug Fixes
+
+* **deps:** move the core pin to 3.2.1 ([#989](https://github.com/rig-c/parts/issues/989)) ([2233cf3](https://github.com/rig-c/parts/commit/2233cf3dd8e07ec70f47b57ffdbffa14cf465ea0)), closes [#988](https://github.com/rig-c/parts/issues/988)
+
 ## [2.4.1](https://github.com/rig-c/parts/compare/v2.4.0...v2.4.1) (2026-11-03)
 
 
