@@ -96,9 +96,10 @@ import { dirname, join, resolve } from 'node:path';
 import type { RigStop } from '@rig-c/core/rig';
 import { checkStage, gateThroughRigc, type Log } from './build.ts';
 import { ACCEPTABLE_BARS, barsNotMet, type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackMode, requirementsNotPass, type RigcRunner } from './check.ts';
-import { CONSTRAINT_BONE_FIELDS, ROOT_BONE } from './config.ts';
+import { CONSTRAINT_BONE_FIELDS, editorReceiptProblems, ROOT_BONE } from './config.ts';
 import { cropToSpineY } from './coords.ts';
 import { failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
+import { missingReceipts, readEditorReceipts, type EditorReceipts } from './editreceipt.ts';
 import type { MotionSpec } from './motion.ts';
 import { readPng } from './raster/png.ts';
 import { readRequirements, type RequirementsFile } from './requirements.ts';
@@ -161,6 +162,7 @@ export interface ScenePlate {
   image: string;
   imagePath: string;
   provenance: Provenance;
+  editor_receipts?: EditorReceipts;
   note: string | null;
 }
 
@@ -221,7 +223,8 @@ export function acceptProblems(names: readonly string[], where: string): Problem
 /**
  * Read and shape-check a scene file. Every problem is collected before one
  * refusal: the file, `spec`, `canvas` (two positive integers), `plate`
- * (optional: `image`, `provenance`, an optional `note`), `characters` (at
+ * (optional, with required `image` and `provenance` and optional `note`
+ * and `editor_receipts` with the shared ledger shape), `characters` (at
  * least one; each `id`, `build`, `offset`), `order` (a list of strings), and
  * any key the format does not read. Resolving the ids and slots `order`
  * names is {@link composeScene}'s, which has the builds.
@@ -270,7 +273,10 @@ export function loadScene(path: string): SceneFile {
     const p = o.plate;
     if (!isRecord(p)) fail('SCENE_FIELD_TYPE', 'scene.plate', `is ${show(p)}; {"image": "<png>", "provenance": ${PROVENANCES.map((x) => `"${x}"`).join(' | ')}} is required when the key is present`);
     else {
-      known(p, 'scene.plate', ['image', 'provenance', 'note']);
+      known(p, 'scene.plate', ['image', 'provenance', 'note', 'editor_receipts']);
+      if ('editor_receipts' in p) {
+        problems.push(...editorReceiptProblems(p.editor_receipts, 'scene.plate.editor_receipts').map((problem) => ({ ...problem, code: 'SCENE_EDITOR_RECEIPT' })));
+      }
       const image = p.image;
       const prov = p.provenance;
       if (!('image' in p)) fail('SCENE_FIELD_PRESENT', 'scene.plate.image', 'is absent and required; the plate PNG, relative to the scene file');
@@ -278,7 +284,7 @@ export function loadScene(path: string): SceneFile {
       if (!('provenance' in p)) fail('SCENE_FIELD_PRESENT', 'scene.plate.provenance', `is absent and required; one of ${PROVENANCES.join(', ')} — what the plate's pixels are, which the author states and nothing judges`);
       else if (typeof prov !== 'string' || !(PROVENANCES as readonly string[]).includes(prov)) fail('SCENE_PLATE_PROVENANCE', 'scene.plate.provenance', `is ${show(prov)}; one of ${PROVENANCES.join(', ')} is required`);
       if (typeof image === 'string' && image !== '' && typeof prov === 'string' && (PROVENANCES as readonly string[]).includes(prov)) {
-        plate = { image, imagePath: resolve(base, image), provenance: prov as Provenance, note: typeof p.note === 'string' ? p.note : null };
+        plate = { image, imagePath: resolve(base, image), provenance: prov as Provenance, ...('editor_receipts' in p ? { editor_receipts: p.editor_receipts as EditorReceipts } : {}), note: typeof p.note === 'string' ? p.note : null };
       }
     }
   }
@@ -1375,6 +1381,14 @@ export function composeFromFiles(scenePath: string, requirementsPath?: string, m
   const builds = scene.characters.map((c) => readCharacterBuild(c, problems, accept));
   let plate: PlateImage | null = null;
   if (scene.plate !== null) {
+    const ledger = readEditorReceipts(scene.plate.editor_receipts, scene.path, 'scene.plate.editor_receipts', 'scene file');
+    const receiptCodes: Readonly<Record<string, string>> = {
+      ASSEMBLE_EDITOR_RECEIPT_FILE: 'SCENE_EDITOR_RECEIPT_FILE',
+      ASSEMBLE_EDITOR_RECEIPT_SHA256: 'SCENE_EDITOR_RECEIPT_SHA256',
+      ASSEMBLE_EDITOR_RECEIPT_MISSING: 'SCENE_EDITOR_RECEIPT_MISSING',
+    };
+    const receiptProblems = [...ledger.problems, ...missingReceipts(ledger, [{ object: 'scene.plate.image', path: scene.plate.imagePath }])];
+    problems.push(...receiptProblems.map((problem) => ({ ...problem, code: receiptCodes[problem.code] ?? problem.code })));
     const where = `scene.plate.image (${scene.plate.image})`;
     if (!existsSync(scene.plate.imagePath)) problems.push({ code: 'SCENE_PLATE_PRESENT', object: where, detail: `${scene.plate.imagePath} does not exist; a PNG of the canvas's size is required` });
     else {

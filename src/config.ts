@@ -2501,7 +2501,7 @@ function checkTakeLayers(c: Check, value: Json, plan: string[] | null = null): v
     const region = isPlainObject(v) && ('part' in v || 'seed' in v);
     const o = region
       ? c.object(p, v, ['run', 'run_dir', 'st_input', 'part', 'seed'], ['reference'])
-      : c.object(p, v, ['run', 'run_dir', 'st_input', 'tags'], []);
+      : c.object(p, v, ['run', 'run_dir', 'st_input', 'tags'], ['crop']);
     if (o === null) return;
     if (o.run !== 'full' && o.run !== 'head') c.fail('CONFIG_FIELD_TYPE', p + '.run', '"full" or "head" is required');
     for (const k of ['run_dir', 'st_input']) c.string(`${p}.${k}`, o[k]);
@@ -2526,6 +2526,14 @@ function checkTakeLayers(c: Check, value: Json, plan: string[] | null = null): v
       }
       return;
     }
+    if ('crop' in o) {
+      const crop = c.object(`${p}.crop`, o.crop, ['box', 'resample'], []);
+      if (crop !== null) {
+        const box = crop.box;
+        if (!(Array.isArray(box) && box.length === 4 && box.every(n => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0) && box[2] > box[0] && box[3] > box[1])) c.fail('CONFIG_FIELD_TYPE', `${p}.crop.box`, 'requires [left, top, right, bottom], nonnegative safe integers with positive width/height in source-painting pixels');
+        if (crop.resample !== 'bilinear') c.fail('CONFIG_FIELD_TYPE', `${p}.crop.resample`, '"bilinear" is required explicitly');
+      }
+    }
     if (!c.array(p + '.tags', o.tags, true)) return;
     (o.tags as Json[]).forEach((tag, j) => {
       const reading = typeof tag === 'string' ? readLayerTag(tag) : null;
@@ -2537,6 +2545,13 @@ function checkTakeLayers(c: Check, value: Json, plan: string[] | null = null): v
   });
 }
 
+/** Shared receipt shape validation for config and scene input doors. */
+export function editorReceiptProblems(value: unknown, at: string): Problem[] {
+  const c = new Check();
+  checkEditorReceipts(c, value, at);
+  return c.problems;
+}
+
 /**
  * `config.assemble.editor_receipts` (issue #946): `{receipts, required?, trace_parts?}` (`trace_parts`, issue #947).
  * Shape refusals are the loader's own; a receipt whose `from_sha256` equals
@@ -2544,8 +2559,7 @@ function checkTakeLayers(c: Check, value: Json, plan: string[] | null = null): v
  * Whether the file exists and hashes to `sha256` is read at assemble
  * (`src/editreceipt.ts`), where the file is.
  */
-function checkEditorReceipts(c: Check, value: Json): void {
-  const at = 'config.assemble.editor_receipts';
+function checkEditorReceipts(c: Check, value: Json, at = 'config.assemble.editor_receipts'): void {
   const o = c.object(at, value, ['receipts'], ['required', 'trace_parts']);
   if (o === null) return;
   for (const k of ['required', 'trace_parts'] as const) {

@@ -507,9 +507,26 @@ function orderedProvenance(p: PixelProvenance): PixelProvenance {
     ...(p.depth === undefined ? {} : { depth: { kind: p.depth.kind, values: p.depth.values.map(v => ({ group: v.group, ...(v.bone === undefined ? {} : { bone: v.bone }), value: v.value })) } }) };
 }
 
+function orderedTakenSource(source: TakenLayerSource): TakenLayerSource {
+  const transport = source.transport;
+  return {
+    run: source.run, tag: source.tag, run_dir: source.run_dir, st_input: source.st_input,
+    prompt_id: source.prompt_id, seed: source.seed, support_px: source.support_px,
+    checked_px: source.checked_px, differing_px: source.differing_px,
+    ...(transport === undefined ? {} : { transport: {
+      crop: transport.crop, donor_canvas: transport.donor_canvas,
+      target_canvas: transport.target_canvas, scale: transport.scale,
+      translate: transport.translate, filter: transport.filter,
+      input_rgba_sha256: transport.input_rgba_sha256,
+      before_rgba_sha256: transport.before_rgba_sha256,
+      after_rgba_sha256: transport.after_rgba_sha256,
+    } }),
+  };
+}
+
 function serializePartList(parts: readonly PartRecord[]): Array<Record<string, unknown>> {
   return parts.map((p) =>
-    Object.fromEntries(PART_KEYS.filter((k) => p[k] !== undefined).map((k) => [k, k === FRINGE_KEY ? (p.fringe_pushed_back ?? []).map((q) => ({ part: q.part, px: q.px })) : k === LIMB_KEY ? orderedLimb(p.limb as LimbRecord) : k === 'taken_layers' ? p.taken_layers?.map(t => ({ run: t.run, tag: t.tag, run_dir: t.run_dir, st_input: t.st_input, prompt_id: t.prompt_id, seed: t.seed, support_px: t.support_px, checked_px: t.checked_px, differing_px: t.differing_px })) : k === 'provenance' ? orderedProvenance(p.provenance as PixelProvenance) : p[k]])),
+    Object.fromEntries(PART_KEYS.filter((k) => p[k] !== undefined).map((k) => [k, k === FRINGE_KEY ? (p.fringe_pushed_back ?? []).map((q) => ({ part: q.part, px: q.px })) : k === LIMB_KEY ? orderedLimb(p.limb as LimbRecord) : k === 'taken_layers' ? p.taken_layers?.map(orderedTakenSource) : k === 'provenance' ? orderedProvenance(p.provenance as PixelProvenance) : p[k]])),
   );
 }
 

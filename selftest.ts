@@ -707,6 +707,7 @@ import { buildSheet, tileImage, tilesFrom } from './src/sheet.ts';
 import { block, constraintConfig, dustImages, dustParts, FACE_EXPECT, faceConfig, faceImages, faceParts, HEAT_STRIP_EXPECT, heatStripConfig, islandImages, LASH_CREASE, LASH_RIG, LASH_ROW, lashConfig, lashImages, lashParts, RIG_CANVAS, RIG_EXPECT, rigConfig, rigImages, rigParts, SCENE_TARGET, shoeConfig, shoeImages, shoeKick, shoeParts, TURNED_EXPECT, turnedConfig, writeRigFixture as originalWriteRigFixture } from './fixtures/rig.ts';
 import { FORK_SMOOTH_MAX_INFLUENCES, smoothForkShares } from './src/rig.ts';
 import { type AttachmentSetsFile, blinkHoldProblems, buildRig as originalBuildRig, influenceReachHolds, DEFAULT_IDLE_KEYS, expandSetAttachmentKeys, FACE_TIPS_AXIS_NAME, HEAD_UP_BONE, flattenRig, IDLE_DRIVES_MESHES_WHY, type MeshAttachment, PAD, type RegionAttachment, rigJsonText, type RigOutput, type RigSpec, roundShares, tipRoundingBound, writtenShares } from './src/rig.ts';
+import { readEditorReceipts } from './src/editreceipt.ts';
 import { type ComposedScene, composeFromFiles, IMAGE_SEP, PLATE, PLATE_IMAGE, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames } from './src/scene.ts';
 import { sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild } from './fixtures/scene.ts';
 import { localInfluences, regionWeight } from './src/localweights.ts';
@@ -43832,6 +43833,60 @@ function runSceneSuite(): number {
       return { ok, err };
     };
     const has = (err: PartsError | null, code: string, text = ''): boolean => err !== null && err.problems.some((p) => p.code === code && problemLine(p).includes(text));
+
+    // Receipt checks use the public generated scene fixture, never artwork.
+    const plateSha = createHash('sha256').update(readFileSync(join(dir, 'plate.png'))).digest('hex');
+    const receipt = { file: 'plate.png', sha256: plateSha, from_sha256: '0'.repeat(64), editor: 'image editor' };
+    const receipted = (ledger: unknown): Record<string, unknown> => two({ plate: { image: 'plate.png', provenance: 'generated', editor_receipts: ledger } });
+    const missingOut = join(dir, 'receipt-missing');
+    const missingReceipt = runCli(['compose', '--scene', scene(receipted({ required: true, receipts: [] })), '--out', missingOut]);
+    say('SC47_A_REQUIRED_PLATE_RECEIPT_IS_REFUSED_BEFORE_WRITING',
+      missingReceipt.status === 1 && missingReceipt.out.includes('SCENE_EDITOR_RECEIPT_MISSING') && missingReceipt.out.includes('scene.plate.image') && missingReceipt.out.includes('scene.plate.editor_receipts.required') && (!existsSync(missingOut) || readdirSync(missingOut).length === 0),
+      `exit ${missingReceipt.status}; missing named ${missingReceipt.out.includes('SCENE_EDITOR_RECEIPT_MISSING')}; output exists ${existsSync(missingOut)}`,
+      'issue #966: required is opt-in, and a missing plate receipt must refuse before any output');
+    const wrongOut = join(dir, 'receipt-wrong');
+    const wrong = runCli(['compose', '--scene', scene(receipted({ receipts: [{ ...receipt, sha256: '1'.repeat(64) }] })), '--out', wrongOut]);
+    say('SC48_A_PLATE_RECEIPT_HASH_MISMATCH_IS_REFUSED_WITHOUT_REQUIRED',
+      wrong.status === 1 && wrong.out.includes('SCENE_EDITOR_RECEIPT_SHA256') && wrong.out.includes(plateSha) && wrong.out.includes('1'.repeat(64)) && (!existsSync(wrongOut) || readdirSync(wrongOut).length === 0),
+      `exit ${wrong.status}; mismatch named ${wrong.out.includes('SCENE_EDITOR_RECEIPT_SHA256')}; output exists ${existsSync(wrongOut)}`,
+      'issue #966: a declared receipt is verified even without required');
+    const matching = compose(receipted({ required: true, receipts: [receipt] }));
+    const undeclared = compose(two());
+    // Each helper invocation has its own input filename, which the report records.
+    const matchingAtSamePath = matching.ok === null ? null : {
+      ...matching.ok,
+      report: { ...matching.ok.report, scene: undeclared.ok?.report.scene },
+    };
+    const receiptBytesEqual = rigJsonText(matchingAtSamePath) === rigJsonText(undeclared.ok);
+    say('SC49_A_MATCHING_RECEIPT_PRESERVES_THE_UNDECLARED_COMPOSITION',
+      matching.err === null && matching.ok !== null && undeclared.err === null && undeclared.ok !== null && receiptBytesEqual,
+      `matching ${codes(matching.err)}; omitted ${codes(undeclared.err)}; composed bytes equal ${receiptBytesEqual}`,
+      'issue #966: provenance remains the pixel-origin declaration and receipt metadata does not change the report');
+    const malformedReceipts = [null, { receipts: [{ ...receipt, from_sha256: plateSha }] }, { required: 'true', receipts: [] }, { receipts: [{ ...receipt, editor: '' }] }, { receipts: [receipt, receipt] }, { receipts: [{ ...receipt, sha256: 'bad' }] }].map((ledger) => compose(receipted(ledger)));
+    say('SC50_MALFORMED_PLATE_RECEIPTS_USE_THE_SHARED_SHAPE_CHECKER',
+      malformedReceipts.every((r) => has(r.err, 'SCENE_EDITOR_RECEIPT', 'scene.plate.editor_receipts')),
+      `${malformedReceipts.filter((r) => has(r.err, 'SCENE_EDITOR_RECEIPT')).length}/${malformedReceipts.length} malformed ledgers refused`,
+      'issue #966: shape, hashes, changed source, nonempty editor and unique files follow the assemble reader');
+    const absentReceipt = compose(receipted({ receipts: [{ ...receipt, file: 'absent.png' }] }));
+    const wrongRequired = compose(receipted({ required: true, receipts: [{ ...receipt, sha256: '1'.repeat(64) }] }));
+    say('SC51_ABSENT_RECEIPT_FILES_AND_REQUIRED_HASH_MISSES_ARE_NAMED',
+      has(absentReceipt.err, 'SCENE_EDITOR_RECEIPT_FILE', 'absent.png') && has(wrongRequired.err, 'SCENE_EDITOR_RECEIPT_SHA256', plateSha) && has(wrongRequired.err, 'SCENE_EDITOR_RECEIPT_MISSING', plateSha),
+      `absent ${codes(absentReceipt.err)}; required mismatch ${codes(wrongRequired.err)}`,
+      'issue #966: verified receipts match by content, with all problems collected');
+
+    const absentPath = join(dir, 'absent.png');
+    const sceneFileProblem = absentReceipt.err?.problems.find((p) => p.code === 'SCENE_EDITOR_RECEIPT_FILE');
+    const assembleFileProblem = readEditorReceipts({ receipts: [{ ...receipt, file: 'absent.png' }] }, join(dir, 'config.json')).problems;
+    const expectedFileProblem = (code: string, location: string, owner: string): Problem => ({
+      code,
+      object: `${location}.receipts[0] (file "absent.png")`,
+      detail: `names ${absentPath}, which is no such file; the edited image, its path relative to the ${owner}'s directory, is required`,
+    });
+    say('SC52_MISSING_RECEIPT_FILE_MESSAGES_NAME_THE_SCENE_OR_CONFIG_DIRECTORY_EXACTLY',
+      JSON.stringify(sceneFileProblem) === JSON.stringify(expectedFileProblem('SCENE_EDITOR_RECEIPT_FILE', 'scene.plate.editor_receipts', 'scene file')) &&
+        JSON.stringify(assembleFileProblem) === JSON.stringify([expectedFileProblem('ASSEMBLE_EDITOR_RECEIPT_FILE', 'config.assemble.editor_receipts', 'config')]),
+      `scene directory named ${sceneFileProblem?.detail.includes("scene file's directory")}; assemble default text unchanged ${JSON.stringify(assembleFileProblem) === JSON.stringify([expectedFileProblem('ASSEMBLE_EDITOR_RECEIPT_FILE', 'config.assemble.editor_receipts', 'config')])}`,
+      'issue #966: missing files name their declaring input directory, and the assemble diagnostic remains byte-identical');
 
     // ---- the file ---------------------------------------------------------
     const good = compose(two());
