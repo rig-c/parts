@@ -6,6 +6,7 @@ import { writeTakeRegionFixture } from '../fixtures/take_region.ts';
 import { assembleStage, readRuns } from '../src/build.ts';
 import { parseConfig, parseEarlyConfig, loadEarlyConfig } from '../src/config.ts';
 import { PartsError } from '../src/errors.ts';
+import { fileSha256, readEditorReceipts } from '../src/editreceipt.ts';
 import { readLayers } from '../src/layers.ts';
 import { readPng, encodePngBytes } from '../src/raster/png.ts';
 import { newRaster } from '../src/raster/types.ts';
@@ -43,6 +44,7 @@ export function runTakeRegionChecks(dir: string, say: Say): void {
   say('REGION_REPORT_AND_INPUT_IMMUTABILITY', good.notes.some(line => line.includes('96 run px; box [8, 36, 12, 8]') && line.includes('painting-match share 1; RGB tolerance 0')) && before.equals(readFileSync(join(positive.home, 'full', 'parts', 'topwear.png'))), good.notes.filter(line => line.includes('region take')).join(' | '));
 
   const cfg = loadEarlyConfig(join(positive.home, 'config.json'), 'assemble');
+  const ledger = readEditorReceipts(cfg.assemble.editor_receipts, join(positive.home, 'config.json'));
   const runs = readRuns(join(positive.home, 'full'), null);
   const painting = readPng(join(positive.home, 'painting.png'));
   const donor = readLayers(join(positive.home, 'donor')).layers[0];
@@ -89,7 +91,7 @@ export function runTakeRegionChecks(dir: string, say: Say): void {
   say('REGION_ABSENT_DECLARATION_PRESERVES_RUN_IDENTITY', (() => {
     const clean = { ...cfg, assemble: { ...cfg.assemble, take: [] } };
     const input = { ...runs, notes: [] };
-    return applyTakenRegions(input, painting, clean, join(positive.home, 'config.json'), undefined) === input;
+    return applyTakenRegions(input, painting, clean, join(positive.home, 'config.json'), undefined, ledger) === input;
   })(), 'no region declaration returns the exact input runs');
 
   const noRequirement = fresh('no-requirement');
@@ -126,7 +128,47 @@ export function runTakeRegionChecks(dir: string, say: Say): void {
   say('REGION_DUPLICATE_DECLARATIONS_REFUSED', [() => parseEarlyConfig(duplicate, 'layers'), () => parseEarlyConfig(duplicate, 'assemble'), () => parseConfig(duplicate)].every(read => message(read).includes('CONFIG_TAKE_UNIQUE')), 'one region donor per target part at all config doors');
   const setup = { rgb_tolerance: 0, regions: [{ name: 'stage', box: [0, 0, 64, 64] as [number, number, number, number] }] };
   const bound = { ...cfg, depth: { zScale: 1 } };
-  say('REGION_ACTIVE_DEPTH_BINDING_REFUSED', message(() => applyTakenRegions({ ...runs, notes: [] }, painting, bound, join(positive.home, 'config.json'), setup)).includes('ASSEMBLE_REGION_TAKE_BINDING'), 'region samples cannot inherit an unrelated scalar atlas');
+  say('REGION_ACTIVE_DEPTH_BINDING_REFUSED', message(() => applyTakenRegions({ ...runs, notes: [] }, painting, bound, join(positive.home, 'config.json'), setup, ledger)).includes('ASSEMBLE_REGION_TAKE_BINDING'), 'region samples cannot inherit an unrelated scalar atlas');
   const proposed = spawnSync(process.execPath, ['cli.ts', 'assemble', '--source', join(positive.home, 'painting.png'), '--full', join(positive.home, 'full'), '--config', join(positive.home, 'config.json'), '--propose-plan'], { encoding: 'utf8' });
   say('REGION_PLAN_PROPOSAL_REFUSES_BOUND_DECLARATION', proposed.status !== 0 && (proposed.stdout + proposed.stderr).includes('ASSEMBLE_REGION_TAKE_PLAN'), proposed.stdout + proposed.stderr);
+}
+
+/** The same author donor must fail without its receipt and pass with it. */
+export function runTakeRegionReceiptChecks(dir: string, say: Say): void {
+  for (const mode of ['required', 'trace_parts'] as const) {
+    const home = join(dir, mode);
+    const cfg = writeTakeRegionFixture(home);
+    for (const run of ['full', 'donor']) {
+      const path = join(home, run, 'layers.json');
+      const manifest = JSON.parse(readFileSync(path, 'utf8')) as { layers: Array<{ name: string; filename: string }> };
+      const material = manifest.layers.find(layer => layer.name === 'topwear')!;
+      material.name = 'author:material';
+      material.filename = 'parts/topwear.png';
+      writeFileSync(path, JSON.stringify(manifest));
+    }
+    const assemble = cfg.assemble as Record<string, unknown>;
+    assemble.plan = [['body', 'full', 'author:material'], ['face', 'full', 'face']];
+    const receipt = (file: string) => ({ file, sha256: fileSha256(join(home, file)), from_sha256: '0'.repeat(64), editor: 'photocraft-cli' });
+    const baseReceipt = receipt('full/parts/topwear.png');
+    const donorReceipt = receipt('donor/parts/topwear.png');
+    const config = join(home, 'config.json');
+    assemble.editor_receipts = { [mode]: true, receipts: [baseReceipt] };
+    writeFileSync(config, JSON.stringify(cfg));
+    const run = (out: string) => assembleStage(
+      { source: join(home, 'painting.png'), full: join(home, 'full'), head: null, config, requirements: join(home, 'requirements.json') },
+      { partsJson: join(home, out, 'parts.json'), partsDir: join(home, out, 'parts'), recomposite: join(home, out, 'recomposite.png'), errorMap: join(home, out, 'error.png') }, () => {},
+    );
+    let missing = '';
+    try { run('missing'); }
+    catch (error) { if (error instanceof PartsError) missing = error.message; else throw error; }
+    say('REGION_DONOR_RECEIPT_MISSING_' + mode.toUpperCase(),
+      missing.includes('ASSEMBLE_EDITOR_RECEIPT_MISSING') && missing.includes('region take') && missing.includes('author:material') && missing.includes(`editor_receipts.${mode} is true`) && !existsSync(join(home, 'missing')),
+      missing || `unreceipted author donor accepted under ${mode}`);
+    assemble.editor_receipts = { [mode]: true, receipts: [baseReceipt, donorReceipt] };
+    writeFileSync(config, JSON.stringify(cfg));
+    const good = run('receipted');
+    say('REGION_RECEIPTED_AUTHOR_DONOR_ACCEPTED_' + mode.toUpperCase(),
+      good.parts.parts.some(part => part.name === 'body' && part.from === 'full:author:material') && fileSha256(join(home, donorReceipt.file)) === donorReceipt.sha256,
+      `same donor accepted under ${mode} with a verified receipt, sha256 ${donorReceipt.sha256}`);
+  }
 }

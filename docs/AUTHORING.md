@@ -766,7 +766,10 @@ bounding box, painting-match share and tolerance. The share is 1 because every
 selected pixel passed the painting predicate. An empty region, seed outside its
 components or missing donor tag is refused before output. A target may have one
 region take or one whole-layer take. Hidden companions and active scalar depth
-sheets require separate bindings and are refused. The plan proposal command
+sheets require separate bindings and are refused. Region donor runs use the same
+`editor_receipts` ledger as the base runs. Under `required` or `trace_parts`,
+every donor author/hidden image requires a valid receipt before pixels are
+copied. A receipted author-layer target is accepted. The plan proposal command
 refuses region entries because their part names depend on an existing plan.
 
 ### Editor receipts (`assemble.editor_receipts`, issue #946)

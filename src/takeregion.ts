@@ -1,7 +1,8 @@
 /** Seeded, painting-matched additions to one planned part (#1000). */
 import { dirname, resolve } from 'node:path';
 import type { AssembleConfig, Run } from './config.ts';
-import { PartsError } from './errors.ts';
+import { PartsError, refuseIfAny } from './errors.ts';
+import { editedRunImages, missingReceipts, type ReceiptLedger } from './editreceipt.ts';
 import { makeInputs } from './inputs.ts';
 import { OPAQUE_ALPHA_ABOVE, readLayers, type Layer, type LayerSet } from './layers.ts';
 import { connectedComponents } from './raster/components.ts';
@@ -97,7 +98,7 @@ export function deriveTakenRegion(base: Layer, donor: Layer, painting: Raster, s
 }
 
 /** Called beside whole-layer take, before assembly or any output emission. */
-export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleConfig, configPath: string, setup: SetupPainting | undefined): Runs {
+export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleConfig, configPath: string, setup: SetupPainting | undefined, receipts: ReceiptLedger): Runs {
   const declarations = (cfg.assemble.take ?? []).filter((item): item is TakeRegion => 'part' in item);
   if (declarations.length === 0) return runs;
   const tolerance = setup?.rgb_tolerance;
@@ -122,6 +123,10 @@ export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleCon
     seen.add(key);
     const set = runs[declaration.run];
     const donor = readLayers(resolve(dirname(resolve(configPath)), declaration.run_dir));
+    refuseIfAny(missingReceipts(receipts, editedRunImages(
+      { full: donor, head: donor, single: true },
+      `region take "${declaration.run}:${declaration.part}" donor "${declaration.run_dir}" `,
+    )));
     const target = declaration.run === 'head' ? inputs.head : runs.single && set.canvas.w !== set.canvas.h ? painting : inputs.full;
     let supplied: Raster;
     try { supplied = readPng(resolve(dirname(resolve(configPath)), declaration.st_input)); }

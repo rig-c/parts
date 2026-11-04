@@ -347,7 +347,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   // Issue #947: under `trace_parts`, a shape drawn in the config through a part's pixels is refused with them.
   refuseIfAny([...receipts.problems, ...missingReceipts(receipts, [...editedRunImages(read), ...editedConfigImages(input.config, cfg.assemble.cuts ?? [], cfg.limbs)]), ...untracedPartSources(cfg)]);
   const takenRuns = applyTakenLayers(read, src, cfg, input.config);
-  const runs = applyTakenRegions(takenRuns, src, cfg, input.config, requirementsFile?.setup_painting);
+  const runs = applyTakenRegions(takenRuns, src, cfg, input.config, requirementsFile?.setup_painting, receipts);
   for (const note of runs.notes) log(`note: ${note}`);
   const fields = stageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
   const under = readUnders(input.config, fields.cuts);
