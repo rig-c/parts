@@ -662,3 +662,4 @@ The requirements file's `fps` becomes optional when no declared measurement
 reads that rate (issue #965, additive for readers). Measurements in
 `requirements` still require a positive `fps`, with no default. Declarations
 whose instruments use their own rate keep that rate.
+The output `check.json` omits `requirements.fps` when the file supplies no `fps`.

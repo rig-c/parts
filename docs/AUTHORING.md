@@ -4536,7 +4536,8 @@ Limb source intersections use the final segmentation ownership map separately
 for each adjacent source; another limb's island is excluded before capture.
 
 To enforce a bend, add `cut_material` to the existing
-`spine-parts-requirements/1` file (the other fields remain required):
+`spine-parts-requirements/1` file. `requirements` remains required. `fps` is
+required only when a declared measurement reads the file's sampling rate.
 
 ```json
 {
@@ -5557,7 +5558,7 @@ documents do not ship). Each is an input this package built; none is an author's
 | <a id="BUILD_REQUIREMENTS_CONFLICT"></a>`BUILD_REQUIREMENTS_CONFLICT` | `build --requirements <file>` names a file with other bytes than the one `config.requirements` declares (issue #556): the detail names both, each resolved (the flag against the working directory, the declaration against the config's) with its sha256 — or `no such file`. Refused before assemble writes anything. The same file by both, or a copy of its bytes, is not refused: the declaration is read and recorded | drop the flag to build from the config's file, or point `config.requirements` at the flag's |
 | <a id="BUILD_STAGE_REQUEST"></a>`BUILD_STAGE_REQUEST` | an internal build worker was given a missing or malformed request, an unknown stage, or incomplete runner, input, output or scratch paths; the worker refuses before running a stage. This is the internal process protocol, not a public command or option | invoke `rig-parts build` with its documented flags; if that command produces this refusal, report the named request defect rather than constructing or modifying a worker request |
 | <a id="REQUIREMENTS_FILE"></a>`REQUIREMENTS_FILE` | `--requirements` names no file, or one that does not parse as a JSON object. Refused before anything is built (by `build`, before assemble) | the path of a `spine-parts-requirements/1` file |
-| <a id="REQUIREMENTS_FIELD"></a>`REQUIREMENTS_FIELD` | a field of the file is missing, of the wrong type, or not one the format reads: `spec`, `fps` (no default), `requirements`, each requirement's `name` (letters, digits, underscores; once each), `kind`, `animation` and its kind's fields — every bar among them (`within_px`, `fraction`, `tolerance`, `least_drive` above 0, `within_degrees` from 0 to 180, `lo_degrees` ≤ `hi_degrees`, `within_ratio` ≥ 1) — and each target's `bone`, `animation` and exactly one of `at` and `keys` (times strictly increasing), and `not_planted`, `not_swinging`, `rises` and `rests` when given (each a non-empty list of part names, each once; no part both in `not_swinging` and in `rises` or `rests`), and `may_fold` when given (a non-empty list of `{ "slot", "animation", "why" }`, every one a non-blank string, each pair once; issue #320), and `pinholes` when given (an object whose one field, `required`, is `true` or `false`; issue #944), `seam_over_motion` when given (the same shape; issue #941), and `boundary_colour` when given (an object whose one field, `max_step_excess`, is an integer from 0 through 255; issue #942). `note`, `*_note` (strings) and `x-…` (any value) are read by nothing, as in the config | write the field; the bar is yours. For a pair read only by `seam_over_motion.required`, declare `config.motion_seams` `[{part, neighbour}]` and omit a seam requirement. See the [carrier contract](#CONFIG_MOTION_SEAM) and [background over every frame](#background-over-every-frame-issue-941). |
+| <a id="REQUIREMENTS_FIELD"></a>`REQUIREMENTS_FIELD` | a field of the file is missing, of the wrong type, or not one the format reads: `spec`, `fps` (a positive number when supplied, required only when a declared measurement reads the file's sampling rate, with no default), `requirements`, each requirement's `name` (letters, digits, underscores; once each), `kind`, `animation` and its kind's fields — every bar among them (`within_px`, `fraction`, `tolerance`, `least_drive` above 0, `within_degrees` from 0 to 180, `lo_degrees` ≤ `hi_degrees`, `within_ratio` ≥ 1) — and each target's `bone`, `animation` and exactly one of `at` and `keys` (times strictly increasing), and `not_planted`, `not_swinging`, `rises` and `rests` when given (each a non-empty list of part names, each once; no part both in `not_swinging` and in `rises` or `rests`), and `may_fold` when given (a non-empty list of `{ "slot", "animation", "why" }`, every one a non-blank string, each pair once; issue #320), and `pinholes` when given (an object whose one field, `required`, is `true` or `false`; issue #944), `seam_over_motion` when given (the same shape; issue #941), and `boundary_colour` when given (an object whose one field, `max_step_excess`, is an integer from 0 through 255; issue #942). `note`, `*_note` (strings) and `x-…` (any value) are read by nothing, as in the config | write the field; the bar is yours. For a pair read only by `seam_over_motion.required`, declare `config.motion_seams` `[{part, neighbour}]` and omit a seam requirement. See the [carrier contract](#CONFIG_MOTION_SEAM) and [background over every frame](#background-over-every-frame-issue-941). |
 | <a id="REQUIREMENTS_RESOLVES"></a>`REQUIREMENTS_RESOLVES` | a bone, an `ik` or `transform` constraint (by name and `constraint_type`, as rig-c resolves it), a slot, a mesh attachment or an animation the file names is not in `rig.json` or `motion.json`, or a seam's part or a `not_planted`, `not_swinging`, `rises` or `rests` name is not in `parts.json` — the detail lists the ones that are; or an animation whose name cannot be a directory. Refused before anything is built | the name as the rig spells it |
 | <a id="REQUIREMENTS_CONSTRAINT_DRIVES"></a>`REQUIREMENTS_CONSTRAINT_DRIVES` | a `follow` names a bone its constraint does not constrain, or a property it does not drive: an `ik` drives `rotate` only; a `transform` drives `rotate` when a `to` names `rotate`, `translate` when one names `x` or `y` | the constraint's own bone and property |
 | <a id="REQUIREMENTS_TARGET_PARENT"></a>`REQUIREMENTS_TARGET_PARENT` | a scene target's bone is the root or is not parented to it, or the root is not at rest at the origin, or the animation keys the root — a stage point is a bone's position only under a root that stands still at the origin | a bone under the root for the scene to place |
@@ -6719,8 +6720,9 @@ render each requirement on that animation reads: the rig under test's own build,
 copy with its scene targets placed), and, per follow, `requirements/released/<name>/`
 and `requirements/full/<name>/` — each a `rigc render` frame set with its
 `geometry.json`. The copies' specs and builds are scratch, removed before the stage
-returns. `check.json` gains `requirements` — `fps`, the summary and each line by name
-— before `PASS`, and `PASS` needs every declared requirement to PASS.
+returns. `check.json` gains `requirements` — the summary and each line by name,
+with `fps` only when the file supplies it — before `PASS`, and `PASS` needs every
+declared requirement to PASS.
 
 The selftest holds each kind and outcome to a hand value on a generated rig
 (`fixtures/reqrig.ts`): a two-bone ik that reaches its scene target holds its contact
@@ -6782,8 +6784,9 @@ Distance **greater than** the declared limit fails; equality passes. Without a
 limit, the block and every joint are **SKIP**, with the measured distances and
 `within_px: null`; this line is excluded from measured bars and contributes no
 PASS. Other independent checks may still pass. With no `fixed_skeleton` block,
-this measurement adds no output or render call. `fps` and `requirements` remain
-required by the enclosing file; they do not change this setup measurement.
+this measurement adds no output or render call. `requirements` remains required
+by the enclosing file. `fps` is required only when a declared measurement reads
+the file's sampling rate. Neither field changes this setup measurement.
 
 | rule | change |
 | --- | --- |
