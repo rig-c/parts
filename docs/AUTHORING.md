@@ -5579,6 +5579,7 @@ documents do not ship). Each is an input this package built; none is an author's
 | <a id="CHECK_SOURCE_SIZE"></a>`CHECK_SOURCE_SIZE` | the painting `--source` names is not this rig's: no single `rig_scale` takes its width and height to the stage's (assemble makes the canvas `trunc(w × rig_scale)` x `trunc(h × rig_scale)`), or, with `parts.json` read, its `scale_rig_per_source` does not; or the stage is not whole pixels. Refused before anything is built | the painting the rig was made from — the stage's own size, or the painting `assemble` was given |
 | <a id="CHECK_SOURCE_PNG"></a>`CHECK_SOURCE_PNG` | `--source` names a file that does not read as a PNG | a PNG |
 | <a id="CHECK_SETUP_MATCHES_PAINTING"></a>`CHECK_SETUP_MATCHES_PAINTING` | region, slot, failing-pixel box, slot pixelcount, complete region pixelcount and declared limit | compare the source painting beside the actual setup; follow [Source before scissors](#source-before-scissors), then rerun with the same authored limit |
+| <a id="CHECK_SETUP_PAINTING_MASK"></a>`CHECK_SETUP_PAINTING_MASK` | declared figure-mask PNG cannot be read or decoded, its byte SHA-256 or original painting grid differs, or its alpha support is empty | supply independent figure alpha support with the declared hash and source grid; rendering never supplies the missing mask |
 | <a id="CHECK_SETUP_PAINTING_BACKDROP"></a>`CHECK_SETUP_PAINTING_BACKDROP` | declared backdrop PNG cannot be read or decoded, its byte SHA-256 differs, its original painting grid differs, or any alpha is not 255 | supply an opaque plate with the declared lowercase SHA-256, aligned to the original painting; no fitting or white fallback |
 | <a id="CHECK_SETUP_PAINTING_SOURCE"></a>`CHECK_SETUP_PAINTING_SOURCE` | a declaration without a source painting | supply `--source`; the assembled composite is not an independent reference |
 | <a id="CHECK_SETUP_PAINTING_MEASURED"></a>`CHECK_SETUP_PAINTING_MEASURED` | missing native setup/ownership or unsupported clipping | supply observable textured setup geometry; an unavailable instrument never passes |
@@ -6965,6 +6966,21 @@ alpha above zero and the painting's existing `figureSilhouette`: border-median
 background difference, morphological opening and hole filling. This includes
 missing output over source figure and extra rendered support. It is not an
 independent segmentation oracle for arbitrary backgrounds.
+
+For a scene painting with a figure-only rig, optionally declare
+`setup_painting.figure_mask` as `{"path": "figure.png", "sha256": "<64 lowercase hex digits>"}`.
+The PNG is independent figure support on the original painting grid. Its path
+is relative to requirements, its exact bytes are hashed before decoding, and
+its alpha above zero selects figure pixels. RGB is ignored. Each stage pixel
+samples the nearest original pixel centre on each axis, without morphology
+or interpolated support. Empty original or stage support is refused before
+building. Only selected pixels count toward region limits, including missing
+figure material with no rendered owner. The mask replaces the legacy union
+domain, including its backdrop-difference term. Uncovered mismatches outside
+it are reported once across the whole stage as an `UNBARRED` row, independent
+of region boxes and limits. Room and plate fidelity remain outside this gate.
+The report records the mask path and verified hash. Omitting this field keeps
+the previous domain, output shape and bytes.
 
 `SETUP_MATCHES_PAINTING` reports each region's box, pixel count and limit.
 Diagnostic slot rows partition that count and report their failing-pixel box.

@@ -16,6 +16,8 @@ export interface SetupPainting {
    * refused by name (SETUP_PAINTING_REQUIRED_LIMIT) instead of reported as
    * SKIP. Absent or false: the pre-#943 reading, unchanged. */
   required?: boolean;
+  /** Independent alpha support on the original painting grid. */
+  figure_mask?: { path: string; sha256: string };
   /** Opaque plate on the original painting grid; path relative to requirements. */
   backdrop?: { path: string; sha256: string };
   /** A pixel counts when its maximum RGB difference is strictly greater. */
@@ -35,8 +37,17 @@ export function setupPaintingProblems(value: unknown, at: string): Problem[] {
     for (const k of Object.keys(v)) if (!allowed.includes(k) && !free(k, v[k])) fail(`${where}.${k}`, `is unknown; fields are ${allowed.join(', ')}`);
   };
   if (!object(value)) return [{ code: 'REQUIREMENTS_FIELD', object: at, detail: 'requires {rgb_tolerance, regions: [{name, box, max_pixels?}]}' }];
-  keys(value, ['required', 'backdrop', 'rgb_tolerance', 'regions'], at);
+  keys(value, ['required', 'figure_mask', 'backdrop', 'rgb_tolerance', 'regions'], at);
   if ('required' in value && typeof value.required !== 'boolean') fail(`${at}.required`, `is ${JSON.stringify(value.required)}; requires true (the check may not SKIP: every limit must be declared) or false (the same as omitting it)`);
+  if ('figure_mask' in value) {
+    const b = value.figure_mask, where = `${at}.figure_mask`;
+    if (!object(b)) fail(where, 'requires {path, sha256} for an alpha-support PNG on the original painting grid');
+    else {
+      keys(b, ['path', 'sha256'], where);
+      if (typeof b.path !== 'string' || b.path.trim() === '') fail(`${where}.path`, 'requires a nonempty PNG path relative to the requirements file');
+      if (typeof b.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(b.sha256)) fail(`${where}.sha256`, 'requires the lowercase SHA-256 of the PNG bytes');
+    }
+  }
   if ('backdrop' in value) {
     const b = value.backdrop, where = `${at}.backdrop`;
     if (!object(b)) fail(where, 'requires {path, sha256} for an opaque PNG on the original painting grid');
@@ -94,7 +105,9 @@ export interface SetupPaintingLine {
   registration: 'declared stage grid, scale 1, no fitting';
   compositing: 'source-over white, RGBA8' | 'source-over declared backdrop, RGBA8';
   backdrop?: { path: string; sha256: string };
-  figure: 'source figureSilhouette union rendered alpha > 0' | 'source figureSilhouette union rendered alpha > 0 union source-backdrop RGB difference > tolerance';
+  figure_mask?: { path: string; sha256: string };
+  outside_figure?: { slot: '(uncovered)'; pixel_count: number; status: 'UNBARRED' };
+  figure: 'declared figure mask alpha > 0' | 'source figureSilhouette union rendered alpha > 0' | 'source figureSilhouette union rendered alpha > 0 union source-backdrop RGB difference > tolerance';
   ownership: 'last actual drawn piece with sampled alpha > 0; uncovered explicit';
   rgb_tolerance: number;
   regions: SetupPaintingReading[];
@@ -113,7 +126,7 @@ export const UNDECLARED_SETUP_PAINTING_REASON = 'setup_painting is undeclared; s
  */
 export function setupPaintingLine(
   declared: SetupPainting, source: Raster, setup: Raster, figure: Uint8Array,
-  owners: Int32Array, slots: readonly string[], problems: Problem[], backdrop?: Raster,
+  owners: Int32Array, slots: readonly string[], problems: Problem[], backdrop?: Raster, figureMask?: Uint8Array,
 ): SetupPaintingLine {
   refuseIfAny(setupPaintingProblems(declared, 'setup_painting'));
   refuseIfAny(setupPaintingBounds(declared, source.width, source.height));
@@ -124,18 +137,29 @@ export function setupPaintingLine(
   if ((declared.backdrop !== undefined) !== (backdrop !== undefined) || (backdrop !== undefined && (backdrop.width !== W || backdrop.height !== H || backdrop.data.length !== n * 4 || backdrop.data.some((v, i) => i % 4 === 3 && v !== 255)))) {
     refuseIfAny([{ code: 'CHECK_SETUP_PAINTING_BACKDROP', object: 'setup_painting.backdrop', detail: 'requires the declared opaque backdrop pixels on the native stage grid; an absent or mismatched plate is never replaced with white' }]);
   }
+  if ((declared.figure_mask !== undefined) !== (figureMask !== undefined) || (figureMask !== undefined && (figureMask.length !== n || figureMask.some(v => v !== 0 && v !== 1)))) {
+    refuseIfAny([{ code: 'CHECK_SETUP_PAINTING_MASK', object: 'setup_painting.figure_mask', detail: 'requires the verified declared alpha support on the native stage grid; no rendered support or inferred silhouette is substituted' }]);
+  }
+  const difference = (p: number): number => {
+    const q = p * 4;
+    let delta = 0;
+    for (let c = 0; c < 3; c++) {
+      const over = (image: Raster): number => Math.round(image.data[q + c] * image.data[q + 3] / 255 + (backdrop?.data[q + c] ?? 255) * (1 - image.data[q + 3] / 255));
+      delta = Math.max(delta, Math.abs(over(source) - over(setup)));
+    }
+    return delta;
+  };
+  let outside = 0;
+  if (figureMask !== undefined) for (let p = 0; p < n; p++) {
+    if (figureMask[p] === 0 && owners[p] < 0 && difference(p) > declared.rgb_tolerance) outside++;
+  }
   const regions = declared.regions.map<SetupPaintingReading>(r => {
     const rows = new Map<string, { pixels: number; x0: number; y0: number; x1: number; y1: number }>();
     let count = 0;
     for (let y = r.box[1]; y < r.box[1] + r.box[3]; y++) for (let x = r.box[0]; x < r.box[0] + r.box[2]; x++) {
       const p = y * W + x, q = p * 4;
-      if (figure[p] === 0 && setup.data[q + 3] === 0 && (backdrop === undefined || ![0, 1, 2].some(c => Math.abs(source.data[q + c] - backdrop.data[q + c]) > declared.rgb_tolerance))) continue;
-      let delta = 0;
-      for (let c = 0; c < 3; c++) {
-        const white = (image: Raster): number => Math.round(image.data[q + c] * image.data[q + 3] / 255 + (backdrop?.data[q + c] ?? 255) * (1 - image.data[q + 3] / 255));
-        delta = Math.max(delta, Math.abs(white(source) - white(setup)));
-      }
-      if (delta <= declared.rgb_tolerance) continue;
+      if (figureMask !== undefined ? figureMask[p] === 0 : figure[p] === 0 && setup.data[q + 3] === 0 && (backdrop === undefined || ![0, 1, 2].some(c => Math.abs(source.data[q + c] - backdrop.data[q + c]) > declared.rgb_tolerance))) continue;
+      if (difference(p) <= declared.rgb_tolerance) continue;
       count++;
       const slot = owners[p] < 0 ? '(uncovered)' : slots[owners[p]], row = rows.get(slot);
       if (row === undefined) rows.set(slot, { pixels: 1, x0: x, y0: y, x1: x + 1, y1: y + 1 });
@@ -150,13 +174,14 @@ export function setupPaintingLine(
     return result;
   });
   const noLimit = regions.some(r => r.status === 'SKIP');
-  return { status: regions.some(r => r.status === 'FAIL') ? 'FAIL' : noLimit ? 'SKIP' : 'PASS', instrument: 'rigc renderer setup textured pieces', registration: 'declared stage grid, scale 1, no fitting', compositing: backdrop === undefined ? 'source-over white, RGBA8' : 'source-over declared backdrop, RGBA8', ...(declared.backdrop === undefined ? {} : { backdrop: { ...declared.backdrop } }), figure: backdrop === undefined ? 'source figureSilhouette union rendered alpha > 0' : 'source figureSilhouette union rendered alpha > 0 union source-backdrop RGB difference > tolerance', ownership: 'last actual drawn piece with sampled alpha > 0; uncovered explicit', rgb_tolerance: declared.rgb_tolerance, regions,
+  return { status: regions.some(r => r.status === 'FAIL') ? 'FAIL' : noLimit ? 'SKIP' : 'PASS', instrument: 'rigc renderer setup textured pieces', registration: 'declared stage grid, scale 1, no fitting', compositing: backdrop === undefined ? 'source-over white, RGBA8' : 'source-over declared backdrop, RGBA8', ...(declared.backdrop === undefined ? {} : { backdrop: { ...declared.backdrop } }), ...(declared.figure_mask === undefined ? {} : { figure_mask: { ...declared.figure_mask }, outside_figure: { slot: '(uncovered)' as const, pixel_count: outside, status: 'UNBARRED' as const } }), figure: figureMask !== undefined ? 'declared figure mask alpha > 0' : backdrop === undefined ? 'source figureSilhouette union rendered alpha > 0' : 'source figureSilhouette union rendered alpha > 0 union source-backdrop RGB difference > tolerance', ownership: 'last actual drawn piece with sampled alpha > 0; uncovered explicit', rgb_tolerance: declared.rgb_tolerance, regions,
     ...(noLimit ? { reason: 'a region has no declared max_pixels; it is measured as SKIP, never PASS' } : {}) };
 }
 
 export function setupPaintingLines(line: SetupPaintingObservation): string[] {
   if (!('regions' in line)) return [`${SETUP_PAINTING_LINE}: SKIP — ${line.reason}`];
   return [`${SETUP_PAINTING_LINE}: ${line.status}${line.reason === undefined ? '' : ` — ${line.reason}`}; ${line.registration}; ${line.compositing}`,
+    ...(line.outside_figure === undefined ? [] : [`${SETUP_PAINTING_LINE}: slot "(uncovered)" outside figure mask — pixelcount ${line.outside_figure.pixel_count}; UNBARRED, outside every region limit`]),
     ...line.regions.flatMap(r => [`${SETUP_PAINTING_LINE}: region "${r.name}" ${r.status} — box [${r.box.join(', ')}], pixelcount ${r.pixel_count}, limit ${r.limit ?? 'undeclared (SKIP)'}, RGB tolerance ${line.rgb_tolerance}`,
       ...r.slots.map(s => `${SETUP_PAINTING_LINE}: slot "${s.slot}" region "${r.name}" — box [${s.box.join(', ')}], pixelcount ${s.pixel_count}; region total ${r.pixel_count}, limit ${r.limit ?? 'undeclared (SKIP)'}`)])];
 }
