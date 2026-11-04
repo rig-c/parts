@@ -1,11 +1,16 @@
 /** Generated end-to-end controls for #866; the real stage and strict parts reader. */
-import { cpSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeAlternateLayerFixture } from '../fixtures/alternate_layers.ts';
 import { writeTakeFixture } from '../fixtures/take_layers.ts';
 import { assembleStage, readRuns } from '../src/build.ts';
-import { readParts } from '../src/parts.ts';
+import { createHash } from 'node:crypto';
+import { crop } from '../src/raster/composite.ts';
+import { newRaster } from '../src/raster/types.ts';
+import { takenSourceProblems, takenTransportProblems } from '../src/takesource.ts';
+import { readParts, serializeParts } from '../src/parts.ts';
 import { loadEarlyConfig, parseConfig, parseEarlyConfig } from '../src/config.ts';
+import { readLayers } from '../src/layers.ts';
 import { makeInputs } from '../src/inputs.ts';
 import { applyTakenLayers } from '../src/takelayers.ts';
 import { writeRun, paint, C, WHITE } from '../fixtures/assemble_fixture.ts';
@@ -61,7 +66,7 @@ export function runTakeLayerChecks(dir: string, say: Say): void {
   say('PROPOSER_REPAIRS_PREVIOUS_PLAN_ORDER', repairedPlan.status === 0 && repairedPlan.stdout.includes('generated-prompt'), 'existing reversed plan is ignored when drafting its replacement; identity and depth ambiguity still checked');
   const dims = fresh('dimensions'); writeFileSync(join(dims.d, 'donor-input.png'), encodePngBytes(paint(32, 32, WHITE, [])));
   const dimsMessage = message(() => run(dims.d));
-  say('INPUT_DIMENSIONS_REFUSED_WITHOUT_RESAMPLING', dimsMessage.includes('ASSEMBLE_TAKE_GEOMETRY'), dimsMessage);
+  say('INPUT_DIMENSIONS_REFUSED_WITHOUT_RESAMPLING', dimsMessage === 'ASSEMBLE_TAKE_GEOMETRY: config.assemble.take run "donor" (full) — donor canvas 64x64, target canvas 64x64, donor st_input 32x32, target st_input 64x64; equal canvases and equal input dimensions are required (full uses squarePad; head uses head_box)', dimsMessage);
   const canvas = fresh('canvas'); const canvasFile = join(canvas.d, 'donor', 'layers.json'); const canvasMeta = JSON.parse(readFileSync(canvasFile, 'utf8')) as Record<string, unknown>; canvasMeta.width = 65; writeFileSync(canvasFile, JSON.stringify(canvasMeta));
   const canvasMessage = message(() => run(canvas.d));
   say('RUN_CANVAS_MISMATCH_REFUSED', canvasMessage.includes('ASSEMBLE_TAKE_GEOMETRY'), canvasMessage);
@@ -155,4 +160,146 @@ export function runTakeLayerChecks(dir: string, say: Say): void {
   runTakeRegionReceiptChecks(join(dir, 'region-receipts'), say);
   runTakeContainmentChecks(join(dir, 'region-containment'), say);
   runTakeDerivedChecks(join(dir, 'region-derived'), say);
+  runCropTakeChecks(join(dir, 'crop'), say);
+}
+
+/** Suite-local planted controls for the optional source-painting crop declaration. */
+function runCropTakeChecks(dir: string, say: Say): void {
+  mkdirSync(dir, { recursive: true });
+  const source = paint(64, 64, WHITE, [{ x0: 16, y0: 0, x1: 48, y1: 32, colour: C }]);
+  // Break colour symmetry so a one-pixel registration error cannot pass identity.
+  for (let y = 0; y < 32; y++) for (let x = 16; x < 48; x++) source.data[(y * 64 + x) * 4] = x + y;
+  const supplied = crop(source, 16, 0, 32, 32);
+  const inputPath = join(dir, 'input.png');
+  writeFileSync(inputPath, encodePngBytes(supplied));
+  const donorDir = join(dir, 'donor');
+  writeRun(donorDir, [{ name: 'front hair', depth: 0.4, rects: [{ x0: 4, y0: 4, x1: 20, y1: 12, colour: C }] }]);
+  const manifestPath = join(donorDir, 'layers.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { width: number; height: number };
+  manifest.width = 32; manifest.height = 32;
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  writeFileSync(join(donorDir, 'meta.json'), JSON.stringify({ prompt_id: 'generated-crop-control', seed: 43 }));
+  const donor = readLayers(donorDir);
+  const material = donor.layers[0];
+  for (let p = 0; p < material.pixels.data.length; p += 4) {
+    material.pixels.data[p] = 173; material.pixels.data[p + 1] = 99; material.pixels.data[p + 2] = 37; material.pixels.data[p + 3] = 129;
+  }
+  writeFileSync(material.file!, encodePngBytes(material.pixels));
+  const target = { ...donor, source: join(dir, 'target', 'layers.json'), canvas: { w: 64, h: 64 }, layers: [] };
+  const cfg = { seethrough: { resolution: 64, steps: 30, seed: 42, offload: true }, assemble: { take: [{ run: 'full' as const, run_dir: 'donor', st_input: 'input.png', tags: ['front hair'], crop: { box: [16, 0, 48, 32] as [number, number, number, number], resample: 'bilinear' as const } }] } };
+  const invoke = (c = cfg, set = target) => applyTakenLayers({ full: set, head: set, single: true }, source, c, join(dir, 'config.json')).full.layers[0];
+  const error = (f: () => unknown): string => { try { f(); return ''; } catch (e) { if (e instanceof PartsError) return e.message; throw e; } };
+  const exact = invoke();
+  const t = exact.takenLayers![0].transport!;
+  const expected = newRaster(64, 64);
+  for (let y = 0; y < material.pixels.height; y++) expected.data.set(material.pixels.data.subarray(y * material.pixels.width * 4, (y + 1) * material.pixels.width * 4), ((y + material.top) * 64 + material.left + 16) * 4);
+  const hash = (bytes: Uint8ClampedArray): string => createHash('sha256').update(bytes).digest('hex');
+  say('CROP_EXACT_TRANSLUCENT_RGBA_IS_A_BYTE_COPY', t.filter === 'exact' && t.scale.join(',') === '1,1' && t.translate.join(',') === '16,0' && Buffer.from(exact.pixels.data).equals(Buffer.from(expected.data)) && t.after_rgba_sha256 === hash(expected.data), 'unit-scale integer-offset transport preserves [173,99,37,129] without premultiplication');
+  say('CROP_RECEIPT_HAS_VALID_INPUT_AND_OUTPUT_HASHES', takenSourceProblems(exact.takenLayers, 'test').length === 0 && t.input_rgba_sha256 === hash(supplied.data), JSON.stringify(t));
+  const shifted = structuredClone(cfg); shifted.assemble.take[0].crop.box = [17, 0, 49, 32];
+  const shiftedError = error(() => invoke(shifted));
+  say('CROP_WRONG_ORIGIN_REFUSED_BY_INPUT_IDENTITY', shiftedError.includes('ASSEMBLE_TAKE_INPUT_IDENTITY'), shiftedError);
+  const changed = { ...supplied, data: new Uint8ClampedArray(supplied.data) }; changed.data[(6 * 32 + 6) * 4] ^= 1;
+  writeFileSync(inputPath, encodePngBytes(changed));
+  const changedError = error(() => invoke());
+  say('CROP_WRONG_INPUT_REFUSED', changedError.includes('ASSEMBLE_TAKE_INPUT_IDENTITY'), changedError);
+  writeFileSync(inputPath, encodePngBytes(supplied));
+  const schema = writeTakeFixture(join(dir, 'schema'));
+  const schemaTake = (schema.assemble as Record<string, unknown>).take as Array<Record<string, unknown>>;
+  schemaTake[0].crop = { box: [16, 0, 48, 32], resample: 'bilinear' };
+  say('CROP_VALID_OPTIONAL_FIELD_ACCEPTED_AT_ALL_CONFIG_DOORS',
+    [() => parseEarlyConfig(schema, 'layers'), () => parseEarlyConfig(schema, 'assemble'), () => parseConfig(schema)].every(load => error(load) === ''),
+    'the optional whole-layer declaration is accepted by early layers, assemble and full config readers');
+  const records = readParts(join(dir, '..', 'positive', 'out', 'parts.json'));
+  records.parts[0].taken_layers = exact.takenLayers;
+  const recordsPath = join(dir, 'parts.json');
+  writeFileSync(recordsPath, serializeParts(records));
+  say('CROP_TRANSPORT_SURVIVES_ORDERED_PARTS_WRITER_AND_READER',
+    JSON.stringify(readParts(recordsPath).parts[0].taken_layers) === JSON.stringify(exact.takenLayers),
+    'strict parts reader round-trips every transport field through the production ordered writer');
+  for (const mutate of [
+    (value: Record<string, unknown>) => { delete value.scale; },
+    (value: Record<string, unknown>) => { value.extra = true; },
+    (value: Record<string, unknown>) => { value.after_rgba_sha256 = 'invalid'; },
+  ]) {
+    const broken = JSON.parse(serializeParts(records)) as { parts: Array<{ taken_layers: Array<{ transport: Record<string, unknown> }> }> };
+    mutate(broken.parts[0].taken_layers[0].transport);
+    writeFileSync(recordsPath, JSON.stringify(broken));
+    const refusal = error(() => readParts(recordsPath));
+    say('CROP_PARTS_READER_REFUSES_MALFORMED_TRANSPORT', refusal.includes('PARTS_TAKEN_LAYERS'), refusal);
+  }
+  const fractional = structuredClone(cfg); fractional.assemble.take[0].crop.box = [16.5, 0, 48.5, 32];
+  say('CROP_FRACTIONAL_BOX_REFUSED_AT_CONFIG_DOORS', [() => parseEarlyConfig(fractional, 'layers'), () => parseEarlyConfig(fractional, 'assemble')].every(load => error(load).includes('CONFIG_FIELD_TYPE')), 'fractional source registration is never accepted');
+  const scaled = invoke(cfg, { ...target, canvas: { w: 63, h: 63 } });
+  const st = scaled.takenLayers![0].transport!;
+  say('CROP_FRACTIONAL_RUN_PHASE_USES_DECLARED_RESAMPLE', st.filter === 'bilinear' && st.translate[0] === 15.75 && st.scale[0] === 63 / 64 && st.after_rgba_sha256 === hash(scaled.pixels.data), JSON.stringify(st));
+  const altered = new Uint8ClampedArray(scaled.pixels.data); altered[(8 * 63 + 24) * 4] ^= 1;
+  const cleanTransport = takenTransportProblems(st, scaled.pixels, 'resampled fixture');
+  const tamperedTransport = takenTransportProblems(st, { ...scaled.pixels, data: altered }, 'resampled fixture');
+  say('CROP_RESAMPLED_OUTPUT_TAMPER_BREAKS_RECEIPT', cleanTransport.length === 0 && tamperedTransport.length === 1 && tamperedTransport[0].code === 'PARTS_TAKEN_LAYERS',
+    `production verifier clean ${cleanTransport.length}, tampered ${tamperedTransport.map(p => p.code).join(',')}`);
+  const malformed = structuredClone(scaled.takenLayers!); malformed[0].transport!.filter = 'exact';
+  say('CROP_RECEIPT_READER_REFUSES_FALSE_EXACT_MAP', takenSourceProblems(malformed, 'test').some(p => p.code === 'PARTS_TAKEN_LAYERS'), 'fractional phase cannot claim an exact byte copy');
+  for (const mutation of [
+    (c: typeof cfg) => { c.assemble.take[0].crop.box = [16, 0, 80, 32]; },
+    (c: typeof cfg) => { c.assemble.take[0].crop.box = [16, 0, 48, 16]; },
+  ]) {
+    const c = structuredClone(cfg); mutation(c);
+    const refusal = error(() => invoke(c));
+    say('CROP_OUTSIDE_OR_MISMATCHED_INPUT_REFUSED', refusal.includes('ASSEMBLE_TAKE_CROP') || refusal.includes('ASSEMBLE_TAKE_INPUT_IDENTITY'), refusal);
+  }
+  const omitted = structuredClone(cfg) as { seethrough: typeof cfg.seethrough; assemble: { take: Array<Omit<typeof cfg.assemble.take[0], 'crop'> & { crop?: typeof cfg.assemble.take[0]['crop'] }> } };
+  delete omitted.assemble.take[0].crop;
+  const legacy = error(() => applyTakenLayers({ full: target, head: target, single: true }, source, omitted, join(dir, 'config.json')));
+  say('CROP_OMITTED_RETAINS_LEGACY_GEOMETRY_MESSAGE', legacy === `ASSEMBLE_TAKE_GEOMETRY: config.assemble.take run "donor" (full) — donor canvas 32x32, target canvas 64x64, donor st_input 32x32, target st_input 64x64; equal canvases and equal input dimensions are required (full uses squarePad; head uses head_box)`, legacy);
+  const absentFilter = structuredClone(cfg) as unknown as { seethrough: unknown; assemble: { take: Array<{ crop: { resample?: string } }> } };
+  delete absentFilter.assemble.take[0].crop.resample;
+  say('CROP_RESAMPLE_MUST_BE_EXPLICIT', error(() => parseEarlyConfig(absentFilter, 'layers')).includes('CONFIG_FIELD_PRESENT'), 'the crop declaration never guesses a resample');
+  const headCfg = { ...cfg, seethrough: { ...cfg.seethrough, head_box: [16, 0, 48, 32] as [number, number, number, number] }, assemble: { take: cfg.assemble.take.map(item => ({ ...item, run: 'head' as const })) } };
+  const head = applyTakenLayers({ full: target, head: { ...target, canvas: { w: 32, h: 32 } }, single: false }, source, headCfg, join(dir, 'config.json')).head.layers[0];
+  say('CROP_TARGET_HEAD_USES_ITS_DECLARED_ORIGIN', head.takenLayers?.[0].transport?.translate.join(',') === '0,0' && head.pixels.data[(4 * 32 + 4) * 4 + 3] === 129, 'painting crop [16,0,48,32] and the same target head box cancel their origins');
+  const native = applyTakenLayers({ full: { ...target, canvas: { w: 64, h: 48 } }, head: target, single: true }, crop(source, 0, 0, 64, 48), cfg, join(dir, 'config.json')).full.layers[0];
+  say('CROP_NATIVE_RECTANGULAR_TARGET_ADDS_NO_SQUARE_PAD', native.takenLayers?.[0].transport?.translate.join(',') === '16,0' && native.pixels.height === 48, 'the shipped nonsquare single-run target uses original painting coordinates');
+  const shortCfg = structuredClone(cfg); shortCfg.assemble.take[0].crop.box = [16, 0, 48, 16];
+  const shortInput = makeInputs(crop(source, 16, 0, 32, 16), cfg, 'short crop').full;
+  writeFileSync(inputPath, encodePngBytes(shortInput));
+  const outsideError = error(() => invoke(shortCfg));
+  say('CROP_SUPPORTED_MATERIAL_IN_DONOR_PADDING_REFUSED', outsideError.includes('ASSEMBLE_TAKE_CROP'), outsideError);
+  const shortManifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { layers: Array<{ top: number; bottom: number }> };
+  shortManifest.layers[0].top = 12; shortManifest.layers[0].bottom = 20;
+  writeFileSync(manifestPath, JSON.stringify(shortManifest));
+  const unpadded = invoke(shortCfg);
+  say('CROP_NONSQUARE_DONOR_REMOVES_ITS_VERTICAL_PAD', unpadded.takenLayers?.[0].transport?.translate.join(',') === '16,-8' && unpadded.pixels.data[(4 * 64 + 20) * 4 + 3] === 129, '32x16 crop has 8 white rows above and below; supported donor [4,12] maps exactly to target [20,4]');
+  shortManifest.layers[0].top = 4; shortManifest.layers[0].bottom = 12;
+  writeFileSync(manifestPath, JSON.stringify(shortManifest));
+  writeFileSync(inputPath, encodePngBytes(supplied));
+  const region = structuredClone(cfg) as unknown as { seethrough: unknown; assemble: { take: Array<Record<string, unknown>> } };
+  delete region.assemble.take[0].tags; region.assemble.take[0].part = 'hair'; region.assemble.take[0].seed = [1, 1];
+  say('CROP_REGION_DECLARATION_REMAINS_REFUSED', error(() => parseEarlyConfig(region, 'layers')).includes('CONFIG_KEY_KNOWN'), 'crop is only a whole-layer take optional field');
+  const smallHeadCfg = { ...headCfg, seethrough: { ...headCfg.seethrough, head_box: [16, 0, 32, 16] as [number, number, number, number] } };
+  const offTarget = error(() => applyTakenLayers({ full: target, head: { ...target, canvas: { w: 16, h: 16 } }, single: false }, source, smallHeadCfg, join(dir, 'config.json')));
+  say('CROP_SUPPORT_OFF_TARGET_HEAD_CANVAS_IS_REFUSED', offTarget.includes('ASSEMBLE_TAKE_CROP') && offTarget.includes('outside the declared painting crop or target canvas'),
+    offTarget || 'accepted supported donor cells outside the smaller head box');
+
+  for (const [side, canvas] of [[600, 700], [16, 49]]) {
+    const unitDir = join(dir, `nonbinary-unit-${side}-${canvas}`);
+    mkdirSync(unitDir, { recursive: true });
+    const unitSource = paint(side, side, WHITE, []);
+    writeFileSync(join(unitDir, 'input.png'), encodePngBytes(unitSource));
+    writeRun(join(unitDir, 'donor'), [{ name: 'front hair', depth: 0.4, rects: [{ x0: 4, y0: 4, x1: 20, y1: 12, colour: C }] }], canvas);
+    const unitPixels = readPng(join(unitDir, 'donor/parts/front hair.png'));
+    for (let p = 0; p < unitPixels.data.length; p += 4) unitPixels.data.set([173, 99, 37, 129], p);
+    writeFileSync(join(unitDir, 'donor/parts/front hair.png'), encodePngBytes(unitPixels));
+    writeFileSync(join(unitDir, 'donor/meta.json'), JSON.stringify({ prompt_id: 'generated-integer-ratio-control', seed: 0 }));
+    const unitDonor = readLayers(join(unitDir, 'donor'));
+    const unitTarget = { ...unitDonor, source: join(unitDir, 'target/layers.json'), layers: [] };
+    const unitCfg = { ...cfg, seethrough: { ...cfg.seethrough, resolution: canvas }, assemble: { take: [{ ...cfg.assemble.take[0], crop: { box: [0, 0, side, side] as [number, number, number, number], resample: 'bilinear' as const } }] } };
+    const unit = applyTakenLayers({ full: unitTarget, head: unitTarget, single: true }, unitSource, unitCfg, join(unitDir, 'config.json')).full.layers[0];
+    const unitReceipt = unit.takenLayers![0].transport!;
+    const unitExpected = newRaster(canvas, canvas);
+    for (let y = 0; y < unitPixels.height; y++) unitExpected.data.set(unitPixels.data.subarray(y * unitPixels.width * 4, (y + 1) * unitPixels.width * 4), ((y + 4) * canvas + 4) * 4);
+    say('CROP_INTEGER_RATIO_UNIT_MAP_AVOIDS_FLOAT_ROUND_TRIP', unitReceipt.filter === 'exact' && unitReceipt.scale.join(',') === '1,1' &&
+      Buffer.from(unit.pixels.data).equals(Buffer.from(unitExpected.data)),
+      `side ${side}, canvas ${canvas}; integer products equal; chained float ${side / canvas * canvas / side}; filter ${unitReceipt.filter}; output agrees with independent translucent RGBA copy`);
+  }
 }

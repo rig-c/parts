@@ -156,7 +156,8 @@ part name, `[i]` an entry of a list):
 - **assemble.alternates[i]** — required: `name`; optional: `source`, `full`, `head`, `parts`, `hides`, `head_box`, `cuts`, `skeleton`, `anchor`, `base_anchor`, `drawn`, `tips`, `front`, `layers`, `focus` (issues #454, #465, #543, #652, #664, #666, #719, #780). `focus` is an authored finite `[x, y]` in painting pixels, within its canvas (edges included), refused as CONFIG_SET_FOCUS before assemble output when invalid; only when present, `parts.json` records it with focus_source_size and `sets.json` emits it in setup-world coordinates through the actual rig resize and `src/coords.ts`. Absent focus emits no field or inferred value; changing/removing it requires reassembly
 - **assemble.extend_below_crop[i]** — required: `part`, `run`, `tag`
 - **assemble.extend_painting[i]** — required: `part`, `band`, `max_distance`; optional: `min_held_alpha`, `order` (issues #848, #854, #855; explicit final layer-derived part, half-open rig band and positive four-neighbour path bound; base painting only). The optional integer floor 1–255 admits exact original alpha-over coverage strictly below it; absent or 1 blocks every nonzero holder. Only selected target samples below the floor may take painting RGBA; target samples at/above the floor and every non-target holder remain exact. By default overlapping reachable claims refuse. With `order` on every entry (unique nonnegative safe integers), lower values claim first and their gains block later candidates and paths; array order never breaks ties or supplies missing precedence
-- **assemble.take[i]** — required: `run`, `run_dir`, `st_input`; optional: `tags`, `part`, `seed`, `reference` (issues #866, #1000, #1031). Whole-layer entries require `tags`; region entries require `part` and `seed`. An absent `reference` preserves the shipped `source: true` predicate and emits one named implicit-reference warning; only an explicitly declared painting reference makes the mask invariant to changes in `--source`
+- **assemble.take[i]** — required: `run`, `run_dir`, `st_input`; optional: `tags`, `part`, `seed`, `reference`, `crop` (issues #866, #973, #1000, #1031). Whole-layer entries require `tags`; region entries require `part` and `seed`. An absent `reference` preserves the shipped `source: true` predicate and emits one named implicit-reference warning; only an explicitly declared painting reference makes the mask invariant to changes in `--source`
+- **assemble.take[i].crop** — required when present: `box`, `resample` (issue #973, additive, whole-layer entries only). `box` is an inside nonempty integer source-painting `[left, top, right, bottom]` with exclusive right/bottom. `resample: "bilinear"` is required explicitly. Donor input must match the square-padded crop under taken support plus its margin. Unit scale and integer translation copy RGBA exactly; other maps use the declared premultiplied float32 affine filter. Absent, the shipped geometry predicate and refusal message remain unchanged. Region entries reject this field
 - **assemble.take[i].reference** — required: `sha256`; optional: `source`, `painting` (issue #1031). Exactly one of `source: true` or a config-relative `painting` PNG is required
 - **assemble.editor_receipts** — required: `receipts`; optional: `required` (issue #946, additive), `trace_parts` (issue #947, additive)
 - **assemble.editor_receipts.receipts[i]** — required: `file`, `sha256`, `from_sha256`, `editor` (issue #946)
@@ -678,3 +679,16 @@ reads that rate (issue #965, additive for readers). Measurements in
 `requirements` still require a positive `fps`, with no default. Declarations
 whose instruments use their own rate keep that rate.
 The output `check.json` omits `requirements.fps` when the file supplies no `fps`.
+
+### Crop donor transport receipts (issue #973)
+
+Whole-layer `parts[].taken_layers[]` optionally adds `transport` when its config
+entry declares `crop`. The ordered fields are `crop`, `donor_canvas`,
+`target_canvas`, `scale`, `translate`, `filter`, `input_rgba_sha256`,
+`before_rgba_sha256` and `after_rgba_sha256`. Hashes bind whole-canvas row-major
+straight RGBA before and after transport, and the donor input reconstructed from
+the declared crop. `filter: "exact"` requires unit scale and integer translation.
+Other maps carry `"bilinear"`. The strict reader refuses incomplete or malformed
+transport records. Absent, the existing receipt fields and bytes are unchanged.
+The output hash describes transport before downstream assembly, independently of
+final part geometry. Existing no-take inputs emit no transport metadata.

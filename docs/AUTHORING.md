@@ -708,8 +708,8 @@ renaming a supplied image does not establish that it was the donor's input.
 The target input is derived from the painting by the existing input model:
 `full` uses the exact centred white `squarePad`, and `head` the configured
 `head_box`. A nonsquare single-run file uses the painting at its original file
-size before the assembler's existing padding. Donor and target run canvases must
-have equal dimensions; donor and target input PNGs must also have equal
+size before the assembler's existing padding. Without a declared `crop`, donor
+and target run canvases must have equal dimensions; donor and target input PNGs must also have equal
 dimensions. Incompatible canvases or input sizes are refused, never resized to
 make the comparison pass.
 
@@ -767,6 +767,34 @@ identical head input pixels and body-dependent limb results; this feature makes
 identity an executable check on supplied original inputs instead of trusting
 that claim or hand-editing `layers.json`. Seed and painting selection remain
 the author's decisions.
+
+
+With a whole-layer donor made from a crop of the original painting, add
+`"crop": {"box": [left, top, right, bottom], "resample": "bilinear"}` to that
+entry. The box uses integer source-painting pixels with exclusive right/bottom
+bounds. Its input must be the white square-padded crop produced by the same
+`inputs` geometry. The crop must be inside the painting. Donor RGBA under the
+selected support and its existing margin must equal that reconstructed input.
+Containment covers alpha > 8 support only. That support must fit both the crop
+and the target canvas.
+
+The map derives from donor canvas, crop padding/origin and target input geometry.
+Unit scale with integer translation copies straight RGBA exactly. Every other map
+uses one premultiplied float32 bilinear affine pass. The derived map uses pixel
+corners. `warpAffine` samples by pixel index, as `layerToRig` does, with the
+existing cv2-compatible fixed-point sampling and transparent border. The receipt's optional `transport`
+records `crop`, `donor_canvas`, `target_canvas`, `scale`, `translate`, `filter`
+(`exact` or `bilinear`) and `input_rgba_sha256`, `before_rgba_sha256`,
+`after_rgba_sha256`. Hashes cover row-major straight RGBA over the entire named
+canvas, with the donor input dimensions derived from the square-padded crop.
+The production transport verifier checks canvas dimensions and the output hash
+before downstream assembly changes. It refuses a changed canvas as
+`PARTS_TAKEN_LAYERS`.
+Resampling establishes the declared output bytes. It does not establish equality
+between separately generated donor and target art. Omitting `crop` retains the
+existing geometry refusal and its message.
+
+Region take entries retain their existing geometry contract and refuse crop donors.
 
 ### Residual front/back edges (`edge_residuals.json`, issue #999)
 
@@ -5174,7 +5202,8 @@ those settings. Changing a config seed alone cannot change a no-config run.
 | <a id="ASSEMBLE_REGION_TAKE_SEED"></a>`ASSEMBLE_REGION_TAKE_SEED` | the seed touches no qualifying component | name an integer pixel in the derived region on the target run canvas |
 | <a id="ASSEMBLE_REGION_TAKE_BINDING"></a>`ASSEMBLE_REGION_TAKE_BINDING` | active scalar depth or hidden companions have no region binding | supply a part without those companions |
 | <a id="ASSEMBLE_REGION_TAKE_PLAN"></a>`ASSEMBLE_REGION_TAKE_PLAN` | a region entry is present during plan proposal | draft the plan before declaring region takes, then use assemble/build with requirements |
-| <a id="ASSEMBLE_TAKE_GEOMETRY"></a>`ASSEMBLE_TAKE_GEOMETRY` | missing target head, unequal run canvases or unequal original input dimensions | supply matching geometry; the check does not resize inputs |
+| <a id="ASSEMBLE_TAKE_CROP"></a>`ASSEMBLE_TAKE_CROP` | declared crop is outside the source, its square-padded input dimensions differ, or taken support would fall outside the crop or target | supply the original inside integer crop and its exact square-padded input, with explicit `resample: "bilinear"` |
+| <a id="ASSEMBLE_TAKE_GEOMETRY"></a>`ASSEMBLE_TAKE_GEOMETRY` | missing target head, unequal run canvases or unequal original input dimensions | supply matching geometry, or declare the whole-layer donor crop and resample explicitly |
 | <a id="ASSEMBLE_TAKE_META"></a>`ASSEMBLE_TAKE_META` | donor `meta.json` lacks a readable prompt ID or seed | retain the original run metadata |
 | <a id="ASSEMBLE_TAKE_INPUT"></a>`ASSEMBLE_TAKE_INPUT` | declared donor input PNG cannot be read | name its original PNG relative to the config |
 | <a id="ASSEMBLE_TAKE_DEPTH_SHEET"></a>`ASSEMBLE_TAKE_DEPTH_SHEET` | taking layers with an active depth opt-in or bound scalar sheets has no declared mixed-run binding | keep scalar depth inactive; numeric ordering depth is retained, and a target sheet is never attached silently |
