@@ -3266,7 +3266,7 @@ For an existing config with `turn.body`, one neck plan row and named `neck` /
 
 ```sh
 rig-parts layers head/ --full full/ --source painting.png --config config.json
-rig-parts propose --parts assembled/rig --bust-landmarks bust-landmarks.json --source painting.png --full full/ --head head/ --out neck-draft/ --write-config config.json
+rig-parts propose --parts assembled/rig --source painting.png --full full/ --head head/ --out neck-draft/ --write-config config.json
 rig-parts rig --parts neck-draft/rig --config config.json --out neck-rig/
 ```
 
