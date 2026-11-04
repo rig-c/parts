@@ -500,7 +500,14 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
     if (alpha > 0 && alpha < 255) while (alpha < 255 && 2 * miss(alpha) > EDGE_CONTRAST) alpha++;
     if (alpha >= 255 - OPAQUE_ALPHA_ABOVE) alpha = 255;
     const unmix = (c: number): number => unmixAt(c, alpha);
-    if (alpha === 0) plan(q.front, q.p, 0, 0, 0, 0);
+    // Busy ground: a BEHIND raise outside BEHIND's own support is refused in `plan`, so FRONT is not lowered there either —
+    // FRONT keeps the coverage it had, and a seam whose two supports do not overlap is never left transparent.
+    // The refused BEHIND raise below is the one counted in `skipped.support`.
+    const behindRefused = busy && q.behind >= 0 && alpha < 255 && parts[q.behind].data[s + 3] < 255 && !supports(q.behind, q.p);
+    const keepFront = behindRefused && alpha < parts[q.front].data[s + 3];
+    if (keepFront) {
+      // FRONT keeps its coverage: nothing is planned for it here.
+    } else if (alpha === 0) plan(q.front, q.p, 0, 0, 0, 0);
     else if (alpha === 255) plan(q.front, q.p, P[0], P[1], P[2], 255);
     else plan(q.front, q.p, unmix(0), unmix(1), unmix(2), alpha);
     if (q.behind >= 0 && alpha < 255) {

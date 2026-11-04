@@ -219,6 +219,47 @@ export function runGroundUnitChecks(say: Say): void {
     const row = [...Array(W).keys()].map((x) => front.data[(4 * W + x) * 4 + 3]);
     say('GU9969_BUSY_PATH_STILL_RESOLVES_A_SEAM', row.every((a, x) => a === (x < 10 ? 255 : 0)), `FRONT alpha on row 4: ${row.join(',')}`);
   }
+
+  // A seam whose two supports do not overlap (the review's strip): FRONT opaque red at x < 10, BEHIND opaque blue at
+  // x >= 10, the painting's boundary at x = 9. Busy refuses BEHIND's raise at x = 9 (outside its support), so FRONT must
+  // keep its coverage there; lowering FRONT anyway (the mutant) leaves the column transparent. Plain is the reference.
+  {
+    const W = 24;
+    const H = 9;
+    const RED: RGB = [200, 0, 0];
+    const BLUE: RGB = [0, 0, 200];
+    const runOn = (ground: 'plain' | 'busy') => {
+      const painting = newRaster(W, H);
+      const behind = newRaster(W, H);
+      const front = newRaster(W, H);
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const p = (y * W + x) * 4;
+          const c = x < 9 ? RED : BLUE;
+          painting.data.set([c[0], c[1], c[2], 255], p);
+          front.data.set([RED[0], RED[1], RED[2], x < 10 ? 255 : 0], p);
+          behind.data.set([BLUE[0], BLUE[1], BLUE[2], x >= 10 ? 255 : 0], p);
+        }
+      }
+      paintingEdges([behind, front], painting, { painted: new Uint8Array(W * H).fill(1), editable: [true, true], ground });
+      const stack = (p: number): number => {
+        const a = front.data[p * 4 + 3] / 255;
+        const b = behind.data[p * 4 + 3] / 255;
+        return Math.round(255 * (a + b * (1 - a)));
+      };
+      let holes = 0;
+      for (let p = 0; p < W * H; p++) if (stack(p) < 255) holes++;
+      const column = [...Array(H).keys()].map((y) => stack(y * W + 9));
+      return { holes, column };
+    };
+    const plain = runOn('plain');
+    const busy = runOn('busy');
+    say(
+      'GU9970_BUSY_REFUSED_BEHIND_FILL_KEEPS_THE_FRONT_COVERAGE',
+      busy.column.every((a) => a === 255) && busy.holes === 0 && plain.holes === 0,
+      `stack alpha at x = 9 over the rows: busy ${busy.column.join(',')}, plain ${plain.column.join(',')}; px under 255: busy ${busy.holes}, plain ${plain.holes}`,
+    );
+  }
 }
 
 /** Part px with alpha above 8 outside the union of `core`'s parts (alpha above 0), on the rig canvas. */
