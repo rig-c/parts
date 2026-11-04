@@ -19373,13 +19373,32 @@ function runWeightStepChecks991(dir: string, say: ReturnType<typeof counter>['sa
     'issue #991 shows one differing bone per edge in written-share order so uncapped weights cannot multiply every fold detail by the binding count');
 }
 
-function runCheckSuite(): number {
-  const part = splitPart('check');
-  const scope = startCheckReadScope();
-  try {
-    const failures = part.has('fixtures') ? runCheckFixtureCases(scope) : 0;
-    const { say, bad } = counter();
-    if (part.has('coincide')) {
+type CheckCaseGroup = readonly [string, (scope: CheckReadScope, say: ReturnType<typeof counter>['say']) => number | void];
+
+/** The check case groups in replay order. New cases stay with their declaring helper, without a case-ID allowlist. */
+function checkCaseGroups(): readonly CheckCaseGroup[] {
+  return [
+    ['fixtures', (scope) => runCheckFixtureCases(scope)],
+    [runAnimationFoldCases.name, (_scope, say) => runAnimationFoldCases(say)],
+    [runFeetLevelCases.name, (_scope, say) => runFeetLevelCases(say)],
+    [runStressCases.name, (_scope, say) => runStressCases(say)],
+    [runLimbCheckCases.name, (_scope, say) => runLimbCheckCases(say)],
+    [runSweepCheckCases.name, (_scope, say) => runSweepCheckCases(say)],
+    [runContourStepCases.name, (_scope, say) => runContourStepCases(say)],
+    [runPlantedFeetCases.name, (_scope, say) => runPlantedFeetCases(say)],
+    [runMotionSeamWorldCases.name, (_scope, say) => runMotionSeamWorldCases(say)],
+    [runMotionSeamCases.name, (_scope, say) => runMotionSeamCases(say)],
+    [runSweepUnitCases.name, (_scope, say) => runSweepUnitCases(say)],
+    [runDiscCheckCases.name, (_scope, say) => runDiscCheckCases(say)],
+    [runBallCheckCases.name, (_scope, say) => runBallCheckCases(say)],
+    [runRigcIdentityCases.name, (_scope, say) => runRigcIdentityCases(say)],
+    [runClothCheckCases.name, (_scope, say) => runClothCheckCases(say)],
+    [runClothSettlesCases.name, (_scope, say) => runClothSettlesCases(say)],
+    [runRiderCheckCases.name, (_scope, say) => runRiderCheckCases(say)],
+    [runBreathAloneCases.name, (_scope, say) => runBreathAloneCases(say)],
+    [runDressRiderCheckCases.name, (_scope, say) => runDressRiderCheckCases(say)],
+    [runEnvironmentCheckCases.name, (_scope, say) => runEnvironmentCheckCases(say)],
+    ['coincide', (_scope, say) => {
       const dir = temp('coincide');
       try {
         const report = (name: string, ok: boolean, detail: string) => say(name, ok, detail, 'issue #998: independent support domains, report-only coverage and open-edge unowned pixels; each bar kills an isolated instrument mutant');
@@ -19388,6 +19407,18 @@ function runCheckSuite(): number {
         runCoincideSetupChecks(join(dir, 'setup'), report, rigcRunnerAt(suiteRigc(), spawnRigc));
       }
       finally { rmSync(dir, { recursive: true, force: true }); }
+    }],
+  ];
+}
+
+function runCheckSuite(): number {
+  const scope = startCheckReadScope();
+  try {
+    const part = splitPart('check');
+    const { say, bad } = counter();
+    let failures = 0;
+    for (const [key, run] of checkCaseGroups()) {
+      if (part.has(key)) failures += run(scope, say) ?? 0;
     }
     return failures + bad();
   } finally { scope.restore(); }
@@ -22201,25 +22232,6 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     `${windowRows.join(', ')}; printed windows ${windowsAgree ? 'agree with every verdict' : 'DISAGREE with a verdict'}; planted single window ${plantedAgrees ? 'AGREES (no control)' : 'disagrees, as it must'}; parent 0.9, child 0.2: ${wrapDetail.slice(wrapDetail.indexOf('Phases read'))}`,
     'issue #580: the passing range is in the author\'s terms — child phases, modulo 0.5 — and it is held to the bar by probing its edges, not restated: two windows half a cycle apart, a window crossing the cycle\'s end split at 1, and a negated amplitude (read at + 0.5) passing exactly where the positive one does',
   );
-  runAnimationFoldCases(say);
-  runFeetLevelCases(say);
-  runStressCases(say);
-  runLimbCheckCases(say);
-  runSweepCheckCases(say);
-  runContourStepCases(say);
-  runPlantedFeetCases(say);
-  runMotionSeamWorldCases(say);
-  runMotionSeamCases(say);
-  runSweepUnitCases(say);
-  runDiscCheckCases(say);
-  runBallCheckCases(say);
-  runRigcIdentityCases(say);
-  runClothCheckCases(say);
-  runClothSettlesCases(say);
-  runRiderCheckCases(say);
-  runBreathAloneCases(say);
-  runDressRiderCheckCases(say);
-  runEnvironmentCheckCases(say);
   finishInputContract();
   return bad();
 }
@@ -54254,13 +54266,13 @@ const WORKER_FLAG = '--suite-worker';
  * and runs what comes before the examples; the closing unit runs what comes after them. Each unit is its own process,
  * so a unit that needs another example's build (the chain's public scenes) builds it itself. Whole, as `bun run
  * selftest` runs it, such a suite prints those same blocks in that order, so the units' lines put end to end in
- * {@link suiteUnits} order are the whole suite's. Check instead uses CHECK_UNITS to retain its fixture scope and
- * subsequent coincide calls as separate units (issue #1021), without an example loop or closing unit.
+ * {@link suiteUnits} order are the whole suite's. Check instead derives CHECK_UNITS from its case-group registry
+ * (issue #1021), without an example loop or closing unit.
  */
 const SPLIT_SUITES: readonly string[] = ['assemble-examples', 'chain', 'readme-loop', 'check'];
 
-/** Issue #1021: keep the fixture/input-contract scope intact, followed by the independent coincide controls. */
-const CHECK_UNITS: readonly string[] = ['fixtures', 'coincide'];
+/** Issue #1021: every registered check case group is one worker unit. */
+const CHECK_UNITS: readonly string[] = checkCaseGroups().map(([key]) => key);
 
 /** What joins a split suite's key to the example its unit runs, and the closing unit's name. */
 const UNIT_MARK = '@';
@@ -54269,7 +54281,7 @@ const END_UNIT = 'end';
 /**
  * The units of one suite, in the order their lines are printed: the suite itself, or for a split suite one unit per
  * tracked example (`exampleKeys().all`, fetched or not — a unit whose example was not fetched prints nothing) and the
- * closing unit. Check uses its declared fixture and coincide groups instead.
+ * closing unit. Check uses its registered case groups instead.
  */
 function suiteUnits(key: string, examples: readonly string[]): string[] {
   if (key === 'check') return CHECK_UNITS.map((group) => `${key}${UNIT_MARK}${group}`);
@@ -54285,20 +54297,22 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
 }
 
 /**
- * The CI shards (issues #395, #849, #1021), replayed as one run by the merge job. RT09 holds every unit to one shard.
- * Unit weights are their maximum worker times in green main CI runs 41880081978, 41880013373, 41875105299,
- * 41830264618 and 41828187437. The former check unit reached 1281.4 s, so its fixture/input-contract work and
- * subsequent coincide calls now run separately. Their initial weights are equal halves of that maximum, an
- * unmeasured scheduling guess for the first PR CI instrument run. All other weights are measured.
- * Place longest first on the earliest free worker across four two-worker jobs, ties by shard then worker.
- * Three jobs predict 1337.5 s of worker time; four predict 1003.3 s. Observed maximum job overhead is 42.9 s.
- * These are estimates, not CI verdicts. The first PR CI records must measure both new units and each job's margin.
+ * The CI shards (issues #395, #849, #1021), replayed as one run. RT09 holds every unit to one shard.
+ * PR CI run 41887845707 measured check@fixtures at 1232.9 s. Its helper calls now have their own units; the
+ * fixture/guide/boundary controls stay together. All check units open the same input-read scope before dispatch.
+ * Group weights divide that CI fixture time in the proportions of case clocks from capped Nova samples;
+ * these cross-machine estimates need the next PR CI verdict. Each of the twenty resulting fixture/helper units
+ * also gets 8 s startup allowance, rounded above the entire 7.1 s receipt for twenty isolated refusal workers.
+ * Other unit weights, including coincide, are their clocks from that PR run. Place longest first on the earliest
+ * free worker, ties by shard then worker, with lexical unit order for equal weights. Four two-worker shards
+ * predict at most 833.1 s including the largest observed job overhead, 13.8 s; three predict 1106.2 s.
+ * The private report holds the raw clocks, complete case-ID comparison and per-group derivation.
  */
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
-  ['1', ['chain@wind', 'cli', 'assemble-examples@scarf', 'tree', 'boundary-colour', 'influence', 'inputs-examples', 'readme-loop@end', 'build-cost', 'comfy', 'propose-corpus', 'contour', 'inputs', 'depth-maps', 'hybrid-limb', 'joint-contact', 'sheet', 'png', 'raster-blur']],
-  ['2', ['check@coincide', 'check@fixtures', 'chain@reference-sample', 'setup-painting', 'assemble-examples@reference-sample', 'readme-loop@reference-demo', 'auto-motion', 'fixed-skeleton', 'auto-mesh', 'config-write', 'assemble', 'loop', 'arm-split-upgrade', 'painting', 'foot-ownership', 'subset-cover', 'plausibility', 'core-pointer', 'raster-components', 'raster-warp', 'raster-poly']],
-  ['3', ['build', 'readme-loop@wind', 'chain@scarf', 'remesh', 'assemble-examples@reference-demo', 'assemble-examples@demo', 'readme-loop@scarf', 'readme-loop@reference-sample', 'mesh-stats', 'alternate-layers', 'config', 'requirements', 'limb-slots', 'waist', 'limb-layout', 'keypoints', 'diagnostics', 'structure', 'part-sources', 'skeleton', 'prompt', 'parts', 'raster-morph', 'layers-psd']],
-  ['4', ['readme-loop@demo', 'chain@end', 'retune', 'chain@reference-demo', 'assemble-examples@wind', 'rig', 'chain@demo', 'propose', 'mesh-draft', 'ground-examples', 'scene', 'auto-mesh-examples', 'front-slot', 'contour-wiring', 'corpus', 'chain-inherit', 'alternate-tips', 'layers-wrapper', 'take-layers', 'editor-receipts', 'winding', 'assemble-examples@end', 'raster-resize', 'fetch-examples', 'raster-composite']],
+  ['1', ['check@fixtures', 'chain@wind', 'check@runAnimationFoldCases', 'check@runMotionSeamCases', 'tree', 'readme-loop@reference-sample', 'check@runClothSettlesCases', 'auto-mesh-examples', 'check@runLimbCheckCases', 'config', 'check@runDressRiderCheckCases', 'requirements', 'check@runSweepUnitCases', 'readme-loop@end', 'alternate-tips', 'layers-wrapper', 'subset-cover', 'contour', 'hybrid-limb', 'winding', 'skeleton', 'raster-warp', 'parts', 'raster-blur']],
+  ['2', ['cli', 'readme-loop@demo', 'chain@demo', 'rig', 'remesh', 'chain@scarf', 'assemble-examples@scarf', 'check@runClothCheckCases', 'scene', 'check@runFeetLevelCases', 'alternate-layers', 'check@runContourStepCases', 'influence', 'loop', 'check@runRigcIdentityCases', 'limb-slots', 'corpus', 'painting', 'limb-layout', 'diagnostics', 'check@coincide', 'depth-maps', 'part-sources', 'assemble-examples@end', 'joint-contact', 'raster-morph', 'layers-psd', 'png']],
+  ['3', ['readme-loop@wind', 'build', 'chain@reference-sample', 'assemble-examples@wind', 'propose', 'assemble-examples@reference-sample', 'mesh-draft', 'assemble-examples@demo', 'check@runPlantedFeetCases', 'boundary-colour', 'fixed-skeleton', 'check@runDiscCheckCases', 'check@runBallCheckCases', 'check@runSweepCheckCases', 'auto-mesh', 'assemble', 'inputs-examples', 'check@runMotionSeamWorldCases', 'waist', 'arm-split-upgrade', 'propose-corpus', 'take-layers', 'inputs', 'editor-receipts', 'core-pointer', 'raster-poly', 'raster-resize', 'raster-composite']],
+  ['4', ['chain@end', 'chain@reference-demo', 'retune', 'check@runEnvironmentCheckCases', 'readme-loop@reference-demo', 'setup-painting', 'ground-examples', 'assemble-examples@reference-demo', 'readme-loop@scarf', 'auto-motion', 'check@runBreathAloneCases', 'check@runStressCases', 'mesh-stats', 'front-slot', 'config-write', 'check@runRiderCheckCases', 'contour-wiring', 'build-cost', 'comfy', 'chain-inherit', 'keypoints', 'foot-ownership', 'structure', 'plausibility', 'raster-components', 'fetch-examples', 'prompt', 'sheet']],
 ];
 
 /**

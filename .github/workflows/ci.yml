@@ -24,9 +24,9 @@ permissions:
 jobs:
   # The selftest runs in four shards (issues #395, #849, #1021). SHARDS in
   # selftest.ts assigns every unit exactly once; test below merges the records.
-  # Issue #1021 uses five green main runs' maximum unit times and splits check's
-  # fixture and coincide work. Their initial equal weights are unmeasured;
-  # the first PR CI run supplies their unit clocks for the final assignment.
+  # Issue #1021 uses PR CI unit clocks and capped case-timing samples to split
+  # check's fixture helpers into separately scheduled units. SHARDS documents
+  # the measured inputs and the estimates the next PR CI run must confirm.
   # The two-worker default and 25-minute timeout remain unchanged.
   # A shard judges nothing: its record holds every line its units printed, and
   # the merge prints and counts them as one whole run would.
