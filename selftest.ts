@@ -43119,7 +43119,7 @@ function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | nu
   );
 
   // Issue #500: the parent read the flags it knew and ignored every other word, so `--suite assemble` and `--only tree`
-  // each ran every suite. Each command line below is run in a child process, which must refuse it by name and exit 2
+  // each ran every suite. Each command line below is run in a child process, which must refuse it by name and exit EX_USAGE
   // before a single section opens; the judges are held to forged runs of the old behaviour, which they must refuse.
   const child = (args: readonly string[], timeout: number): ChildRun => {
     const c = spawnSync(process.execPath, [join(ROOT, 'selftest.ts'), ...args], { encoding: 'utf8', maxBuffer: 1 << 26, timeout, killSignal: 'SIGKILL' });
@@ -43131,9 +43131,32 @@ function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | nu
     [ASSEMBLE_STAGE_FLAG, 'no-such-example', 'AE01', '--result', 'unused.json'],
     [ASSEMBLE_STAGE_FLAG, 'demo', 'AE01', '--result'],
     [ASSEMBLE_STAGE_FLAG, 'demo', 'AE01', '--result', 'unused.json', '--result', 'again.json'],
-  ].map((args) => refusalFaults(child(args, 30_000), 'ASSEMBLE_STAGE_SELECTOR:'));
+  ].map((args) => refusalFaults(child(args, 30_000), 'ASSEMBLE_STAGE_SELECTOR:', 2));
   const refusedLines: Array<[readonly string[], string]> = [
     [['--unknown-flag'], '"--unknown-flag" is no flag of this run'],
+    [['stray'], '"stray" follows no flag; this run takes no positional argument'],
+    ...RUN_FLAGS.flatMap(([flag]): Array<[readonly string[], string]> => [
+      [[flag], `${flag} needs a value`],
+      [[flag, ''], `${flag} needs a value`],
+      [[flag, ONLY_FLAG, 'png'], `${flag} needs a value`],
+      [[flag, 'one', flag, 'two'], `${flag} was given twice`],
+    ]),
+    [[ONLY_FLAG, 'png', MERGE_FLAG, 'unused'], `${ONLY_FLAG} and ${SHARD_FLAG} or ${MERGE_FLAG}`],
+    [[SHARD_FLAG, 'no-such-shard', RECORD_FLAG, 'unused.json'], 'is no shard; the shards are '],
+    [[SHARD_FLAG, '1'], `${SHARD_FLAG} <name> takes ${RECORD_FLAG}`],
+    [[RECORD_FLAG, 'unused.json'], `${SHARD_FLAG} <name> takes ${RECORD_FLAG}`],
+    [[MERGE_FLAG, 'unused', SHARD_FLAG, '1', RECORD_FLAG, 'unused.json'], `${SHARD_FLAG} <name> takes ${RECORD_FLAG}`],
+    [[MERGE_FLAG, 'unused', RECORD_FLAG, 'unused.json'], `${SHARD_FLAG} <name> takes ${RECORD_FLAG}`],
+    [['--pre', '--unknown-flag'], '"--unknown-flag" is no flag of this run'],
+    [['--pre', ONLY_FLAG, 'no-such-suite'], '"no-such-suite", which is no suite of this run; the suites are '],
+    [['--pre', ONLY_FLAG, [...keys, TALLY_SUITE].join(',')], 'selftest:pre cannot select the full tree; its full verdict belongs to PR CI'],
+    ...[ONLY_FLAG, SUMMARY_JSON_FLAG].flatMap((flag): Array<[readonly string[], string]> => [
+      [['--pre', flag], `${flag} needs a value`],
+      [['--pre', flag, ''], `${flag} needs a value`],
+      [['--pre', flag, 'one', flag, 'two'], `${flag} was given twice`],
+    ]),
+    [[ONLY_FLAG, 'png,,tree'], 'holds an empty name between its commas'],
+    [[ONLY_FLAG, 'png,png'], 'names the suite "png" twice'],
     [['--suite', 'assemble'], '"--suite" is no flag of this run'],
     [[ONLY_FLAG, 'no-such-suite'], '"no-such-suite", which is no suite of this run; the suites are '],
     [[ONLY_FLAG, 'png', SHARD_FLAG, SHARDS[0][0], RECORD_FLAG, 'unused.json'], `${ONLY_FLAG} and ${SHARD_FLAG} or ${MERGE_FLAG} each choose which suites run`],
@@ -43145,6 +43168,7 @@ function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | nu
   // The mutant that drops the refusal: the old parent, which ran every suite and printed green.
   const oldWhole: ChildRun = { status: 0, stdout: '\n── png ──\n  PASS  PN01\n\nrig-parts selftest: green — 1 control(s) over 1 suite(s)\n', stderr: '' };
   const oldRefused = refusalFaults(oldWhole, refusedLines[0][1]);
+  const oldUsageCode = refusalFaults({ status: 2, stdout: '', stderr: refusedLines[0][1] }, refusedLines[0][1]);
   say(
     'RT12_AN_UNKNOWN_FLAG_A_STRAY_WORD_AND_AN_UNKNOWN_SUITE_ARE_REFUSED_BY_NAME_BEFORE_ANY_SUITE_STARTS',
     stageRefusals.every((f) => f.length === 0) &&
@@ -43157,8 +43181,8 @@ function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | nu
       pureWhole.get(ONLY_FLAG) === 'png' &&
       Array.isArray(pureTwice) &&
       pureTwice.some((r) => r.includes('given twice')) &&
-      oldRefused.length > 0,
-    `${refusedRuns.map(([args, , f]) => `${args.join(' ')} -> ${f.length === 0 ? 'exit 2, named, no section opened' : f.join('; ')}`).join('; ')}; read: --suite assemble -> ${Array.isArray(pure) ? pure.join(' | ') : 'ACCEPTED'}; --only twice -> ${Array.isArray(pureTwice) ? pureTwice.join(' | ') : 'ACCEPTED'}; the old parent (every suite run, exit 0) -> ${oldRefused.join('; ') || 'NOT refused'}${stageRefusals.every((f) => f.length === 0) ? '' : '; stage selectors: ' + stageRefusals.flat().join('; ')}`,
+      oldRefused.length > 0 && oldUsageCode.some(fault => fault.includes(`not ${SELFTEST_USAGE_EXIT}`)),
+    `${refusedRuns.map(([args, , f]) => `${args.join(' ')} -> ${f.length === 0 ? `exit ${SELFTEST_USAGE_EXIT}, named, no section opened` : f.join('; ')}`).join('; ')}; read: --suite assemble -> ${Array.isArray(pure) ? pure.join(' | ') : 'ACCEPTED'}; --only twice -> ${Array.isArray(pureTwice) ? pureTwice.join(' | ') : 'ACCEPTED'}; the old parent (every suite run, exit 0) -> ${oldRefused.join('; ') || 'NOT refused'}; former exit 2 -> ${oldUsageCode.join('; ')}${stageRefusals.every((f) => f.length === 0) ? '' : '; stage selectors: ' + stageRefusals.flat().join('; ')}`,
     'issue #500: a word the run does not read is a word the caller meant, and ignoring it ran the whole suite for every request of one — so it is refused by name, before a worker starts, rather than guessed at',
   );
 
@@ -43358,7 +43382,7 @@ function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | nu
       `missing hole plant -> ${plantMissingHoleFaults.join(' | ') || 'NOT refused'}; ` +
       `forged BLINK_NO_HOLE plant -> ${plantForgedBlinkHoleFaults.join(' | ') || 'NOT refused'}; ` +
       `partial exit/flag plant -> ${plantPartialExitFaults.join(' | ') || 'NOT refused'}; ` +
-      `flags: no value -> ${Array.isArray(flagNoVal) ? flagNoVal.join(', ') : 'ACCEPTED'}, empty -> ${Array.isArray(flagEmptyVal) ? flagEmptyVal.join(', ') : 'ACCEPTED'}, twice -> ${Array.isArray(flagTwice) ? flagTwice.join(', ') : 'ACCEPTED'}, with --shard -> ${shardSummaryRefusal.length === 0 ? 'exit 2, named, no section opened' : shardSummaryRefusal.join(', ')}`,
+      `flags: no value -> ${Array.isArray(flagNoVal) ? flagNoVal.join(', ') : 'ACCEPTED'}, empty -> ${Array.isArray(flagEmptyVal) ? flagEmptyVal.join(', ') : 'ACCEPTED'}, twice -> ${Array.isArray(flagTwice) ? flagTwice.join(', ') : 'ACCEPTED'}, with --shard -> ${shardSummaryRefusal.length === 0 ? `exit ${SELFTEST_USAGE_EXIT}, named, no section opened` : shardSummaryRefusal.join(', ')}`,
     'issue #725: a gate nobody has seen fail is not a gate — planted per-suite count drift, total/failure drift, dropped HOLEs, a forged BLINK_NO_HOLE entry, a partial run claiming exit 0/partial=false, and invalid --summary-json flags are each refused by name',
   );
   const peakLine = (bytes: number): string => `selftest peak (stderr, never tallied): self_max_rss_kib=1; family_rss_bytes=${bytes}; interval_ms=200; samples=2; unreadable_proc_entries=0; method=linux-proc-status-summed-rss`;
@@ -43498,10 +43522,10 @@ interface ChildRun {
   stderr: string;
 }
 
-/** Where a child run is not a refusal of its command line (issue #500): it exits 2, names `want` on stderr, and opens no section. Empty is a refusal. */
-function refusalFaults(run: ChildRun, want: string): string[] {
+/** Where a child run is not a refusal of its command line (issue #500): it exits with the expected code, names `want` on stderr, and opens no section. Empty is a refusal. */
+function refusalFaults(run: ChildRun, want: string, exitCode = SELFTEST_USAGE_EXIT): string[] {
   const faults: string[] = [];
-  if (run.status !== 2) faults.push(`exited ${run.status ?? 'on a signal'}, not 2`);
+  if (run.status !== exitCode) faults.push(`exited ${run.status ?? 'on a signal'}, not ${exitCode}`);
   if (!run.stderr.includes(want)) faults.push(`did not print ${JSON.stringify(want)} on stderr`);
   const opened = `${run.stdout}\n${run.stderr}`.split('\n').filter(isSectionHeader).length;
   if (opened > 0) faults.push(`opened ${opened} suite section(s), so suites started`);
@@ -54646,6 +54670,8 @@ const MERGE_FLAG = '--merge';
 
 /** `--only <suite>[,<suite>…]` (issue #500): a PARTIAL run of the named suites, which exits 2 when green and is never a verdict. */
 const ONLY_FLAG = '--only';
+/** EX_USAGE distinguishes refused arguments from a green partial run (2) and a red run (1). */
+const SELFTEST_USAGE_EXIT = 64;
 const CORPUS_FLAG = '--corpus';
 
 /** `--summary-json <file>` (issue #725): write a machine-readable summary derived from the same RunTally that prints the console summary. */
@@ -54688,7 +54714,13 @@ async function preMain(argv: readonly string[]): Promise<void> {
   const keys = [...SUITES.map(([key]) => key), TALLY_SUITE];
   const read = readOnlyList(args.get(ONLY_FLAG) ?? PRE_SUITES.join(','), keys);
   if (Array.isArray(read)) refuseArgs(read);
-  const selected = [...preSuiteSelection([...read]).filter(k => k !== TALLY_SUITE), TALLY_SUITE];
+  let selected: string[];
+  try {
+    selected = [...preSuiteSelection([...read]).filter(k => k !== TALLY_SUITE), TALLY_SUITE];
+  } catch (err) {
+    console.error(`selftest:pre: INCOMPLETE — ${(err as Error).message}`);
+    process.exit(SELFTEST_USAGE_EXIT);
+  }
   if (!exampleKeys().fetched.includes('demo')) {
     console.error('selftest:pre: INCOMPLETE — missing demo example inputs; run bun run fetch-examples. Full forms and full verdict: PR CI.');
     process.exitCode = 2;
@@ -54855,11 +54887,11 @@ function readOnlyList(value: string, suites: readonly string[]): Set<string> | s
   return refusals.length > 0 ? refusals : seen;
 }
 
-/** Print every refusal and exit 2, before any suite has started. */
+/** Print every refusal and exit EX_USAGE, before any suite has started. */
 function refuseArgs(refusals: readonly string[]): never {
   for (const r of refusals) console.error(`selftest: ${r}`);
   console.error(`selftest: the flags are ${runFlagsText(RUN_FLAGS)}; a run with none is the whole run`);
-  process.exit(2);
+  process.exit(SELFTEST_USAGE_EXIT);
 }
 
 /**
@@ -55259,7 +55291,7 @@ async function shardMain(shard: string, record: string): Promise<void> {
   const mine = SHARDS.find(([n]) => n === shard)?.[1];
   if (mine === undefined) {
     console.error(`selftest: ${SHARD_FLAG} ${JSON.stringify(shard)} is no shard; the shards are ${SHARDS.map(([n]) => `"${n}"`).join(', ')}`);
-    process.exit(2);
+    process.exit(SELFTEST_USAGE_EXIT);
   }
   const corpus = corpusDir();
   const jobs = workerCount();
@@ -55380,7 +55412,7 @@ async function main(): Promise<void> {
   if (shard !== null || record !== null || merge !== null) {
     if ((shard === null) !== (record === null) || (merge !== null && shard !== null)) {
       console.error(`selftest: ${SHARD_FLAG} <name> takes ${RECORD_FLAG} <file>, and ${MERGE_FLAG} <dir> stands alone`);
-      process.exit(2);
+      process.exit(SELFTEST_USAGE_EXIT);
     }
     // The partition is held to every unit once before anything starts, in a shard and in the merge alike.
     const examples = exampleKeys().all;
