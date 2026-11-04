@@ -1,6 +1,17 @@
 /** Layer identity receipts, retained independently of part names and derived geometry. */
 import type { Problem } from './errors.ts';
 import { readLayerTag } from './tags.ts';
+export interface TakenLayerTransport {
+  crop: [number, number, number, number];
+  donor_canvas: [number, number];
+  target_canvas: [number, number];
+  scale: [number, number];
+  translate: [number, number];
+  filter: 'exact' | 'bilinear';
+  input_rgba_sha256: string;
+  before_rgba_sha256: string;
+  after_rgba_sha256: string;
+}
 export interface TakenLayerSource {
   run: 'full' | 'head';
   tag: string;
@@ -11,6 +22,7 @@ export interface TakenLayerSource {
   support_px: number;
   checked_px: number;
   differing_px: 0;
+  transport?: TakenLayerTransport;
 }
 export function unionTakenSources(lists: readonly (readonly TakenLayerSource[] | undefined)[]): TakenLayerSource[] {
   const out: TakenLayerSource[] = [];
@@ -28,12 +40,26 @@ export function takenSourceProblems(value: unknown, at: string): Problem[] {
     if (typeof item !== 'object' || item === null || Array.isArray(item)) { fail('each source must be a complete identity receipt'); continue; }
     const o = item as Record<string, unknown>;
     const tag = typeof o.tag === 'string' ? readLayerTag(o.tag) : null;
-    if (Object.keys(o).some(k => !keys.includes(k)) || keys.some(k => !(k in o)) ||
+    if (Object.keys(o).some(k => !keys.includes(k) && k !== 'transport') || keys.some(k => !(k in o)) ||
         (o.run !== 'full' && o.run !== 'head') || tag === null || tag.group === 'author' ||
         ['run_dir', 'st_input', 'prompt_id'].some(k => typeof o[k] !== 'string' || !(o[k] as string).trim()) ||
         !Number.isSafeInteger(o.seed) || (o.seed as number) < 0 ||
         ['support_px', 'checked_px'].some(k => !Number.isSafeInteger(o[k]) || (o[k] as number) <= 0) || o.differing_px !== 0) {
       fail('each source requires exactly run, See-through tag, run_dir, st_input, prompt_id, nonnegative safe integer seed, positive support_px/checked_px and differing_px 0'); continue;
+    }
+    if (o.transport !== undefined) {
+      const t = o.transport as Record<string, unknown> | null;
+      const fields = ['crop', 'donor_canvas', 'target_canvas', 'scale', 'translate', 'filter', 'input_rgba_sha256', 'before_rgba_sha256', 'after_rgba_sha256'];
+      const pair = (v: unknown, positive: boolean, integer: boolean): v is number[] => Array.isArray(v) && v.length === 2 && v.every(n => typeof n === 'number' && Number.isFinite(n) && (!positive || n > 0) && (!integer || Number.isSafeInteger(n)));
+      if (typeof t !== 'object' || t === null || Array.isArray(t) || Object.keys(t).length !== fields.length || fields.some(k => !(k in t)) ||
+          !Array.isArray(t.crop) || t.crop.length !== 4 || !t.crop.every(n => Number.isSafeInteger(n) && n >= 0) || t.crop[2] <= t.crop[0] || t.crop[3] <= t.crop[1] ||
+          !pair(t.donor_canvas, true, true) || !pair(t.target_canvas, true, true) || !pair(t.scale, true, false) || !pair(t.translate, false, false) ||
+          (t.filter !== 'exact' && t.filter !== 'bilinear') ||
+          ['input_rgba_sha256', 'before_rgba_sha256', 'after_rgba_sha256'].some(k => typeof t[k] !== 'string' || !/^[0-9a-f]{64}$/.test(t[k] as string))) {
+        fail('transport requires exactly crop, donor_canvas, target_canvas, scale, translate, filter and three lowercase RGBA SHA-256 hashes');
+      } else if ((t.filter === 'exact') !== (t.scale[0] === 1 && t.scale[1] === 1 && t.translate.every(Number.isSafeInteger))) {
+        fail('transport filter exact requires unit scale and integer translation; every other map requires bilinear');
+      }
     }
     const key = JSON.stringify([o.run, o.tag, o.run_dir]);
     if (seen.has(key)) fail(`duplicate source ${key}; each source must appear once`);
