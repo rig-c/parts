@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { diffComponentsCommand } from './src/diffcomponents.ts';
 import { applyTakenLayers } from './src/takelayers.ts';
 import { applyDepth, prepareDepth } from './src/depthworkflow.ts';
 /**
@@ -68,6 +69,11 @@ const LATER: ReadonlyArray<[string, string]> = [];
 const HELP = `rig-parts ${version()} — Spine-ready parts from one painting and its See-through layers
 
 usage:
+  rig-parts diff-components --stack <png> --painting <png> --parts <parts.json> --floor <px>
+      [--threshold <channel>] [--figure <binary-png>] (--out <json> | --verify <json>)
+      Exhaustive native difference inventory; default max RGB channel > 40.
+
+
   rig-parts depth-prepare --parts <assembled-dir> --config <depth-recipe.json> --out <empty-dir>
       Write per-part inference PNGs on neutral gray, upscaled and padded as
       declared, plus a source-hashed manifest. No model is bundled or called.
@@ -1016,6 +1022,14 @@ function usage(message: string): number {
   return EXIT_USAGE;
 }
 
+function cmdDiffComponents(args: string[]): number {
+  for (let i = 0; i < args.length; i += 2) {
+    if (!takesValued('diff-components', args[i])) return usage(notTaken('diff-components', args[i]));
+    if (args[i + 1] === undefined || args[i + 1].startsWith('--')) return usage(`diff-components ${args[i]} requires a value`);
+  }
+  try { diffComponentsCommand(args); return EXIT_OK; } catch (err) { return printRefusal(err); }
+}
+
 /** `guide`: one argument, a rule name or a section; the slice printed, or the refusal. */
 function cmdGuide(args: string[]): number {
   if (args.length !== 1) return usage(`guide takes one rule name or one §<n> / §<n>.<m> / §<n>.<m>.<k>; got ${args.length} argument(s)`);
@@ -1104,6 +1118,7 @@ function printLayerTable(set: LayerSet): void {
  * no row; `layers` takes one positional path beside its flags (issue #359).
  */
 const TAKES = {
+  'diff-components': { valued: ['--stack', '--painting', '--parts', '--figure', '--floor', '--threshold', '--out', '--verify'], switches: [] },
   'depth-prepare': { valued: ['--parts', '--config', '--out'], switches: [] },
   'depth-apply': { valued: ['--parts', '--manifest', '--config', '--rig-config', '--out'], switches: [] },
   layers: { valued: ['--export', '--template', '--canvas', '--full', '--source', '--config'], switches: [] },
@@ -2257,6 +2272,7 @@ function main(argv: string[]): number | Promise<number> {
     console.log(version());
     return EXIT_OK;
   }
+  if (command === 'diff-components') return cmdDiffComponents(rest);
   if (command === 'layers') return cmdLayers(rest);
   if (command === 'depth-prepare') return cmdDepthPrepare(rest);
   if (command === 'depth-apply') return cmdDepthApply(rest);
