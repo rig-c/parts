@@ -1,4 +1,6 @@
 import { readSetupBackdrop } from './setupbackdrop.ts';
+import { COINCIDE_LINE, type SupportReport } from './coincide.ts';
+import { observeSupport } from './coincideio.ts';
 import { SETUP_PAINTING_LINE, UNDECLARED_SETUP_PAINTING_REASON, setupPaintingBounds, setupPaintingLine, type SetupPainting, type SetupPaintingLine, type SetupPaintingObservation } from './setuppainting.ts';
 import { readMaterialSources } from './cutmaterialio.ts';
 import { CUT_MATERIAL_LINE, checkJointMaterial, type MaterialLine } from './cutmaterial.ts';
@@ -183,7 +185,7 @@ import { connectedComponents } from './raster/components.ts';
 import { alphaComposite } from './raster/composite.ts';
 import { alphaAbove } from './raster/index.ts';
 import { readPng, writePng } from './raster/png.ts';
-import { newFloatImage, newRaster, type Raster } from './raster/types.ts';
+import { type Mask, newFloatImage, newRaster, type Raster } from './raster/types.ts';
 import type { BaseTag } from './tags.ts';
 import { type ScaleTranslate, warpAffine } from './raster/warp.ts';
 import { edgeLength } from './length.ts';
@@ -2712,6 +2714,7 @@ export interface CheckFigures {
   [MOTION_SEAM_LINE]?: MotionSeamLine;
   /** Written only when the rig declares a physics constraint and has an idle (issue #501): {@link ClothLine}, a warning, never a bar. */
   [CLOTH_LINE]?: ClothLine;
+  [COINCIDE_LINE]?: SupportReport;
   RECOMPOSITE_HOLES: ReportedLine;
   /** Issue #933: openings inside the figure over motion across undeclared setup-overlapping layer pairs; omitted when SKIP. */
   figure_openings?: FigureOpeningReading;
@@ -3086,7 +3089,7 @@ export function checkSummaryLine(r: Pick<CheckReport, 'figures' | 'problems' | '
 }
 
 /** A block's status as {@link checkStatuses} reads it off `check.json`. */
-export type CheckStatus = 'PASS' | 'FAIL' | 'SKIP' | 'WARN' | 'CLEAR' | 'REPORTED';
+export type CheckStatus = 'PASS' | 'FAIL' | 'SKIP' | 'WARN' | 'CLEAR' | 'REPORTED' | 'UNCLASSIFIED';
 
 /**
  * Every block's status as `check.json` records it (issue #541), read off the figures object `check.json` is written
@@ -3103,7 +3106,7 @@ export function checkStatuses(fig: CheckFigures): Record<string, CheckStatus> {
   const bar = (name: string, measured: boolean): CheckStatus => (!measured ? 'SKIP' : notMet.includes(name) ? 'FAIL' : 'PASS');
   const out: Record<string, CheckStatus> = { gate: bar('gate', true), loop: bar('loop', fig.loop_max_diff !== null), seam: bar('seam', fig.seam_mean !== null) };
   for (const n of JUDGEMENT_LINES) out[n] = fig[n].status;
-  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, ...REPORTED_LINES, 'figure_openings', SOURCE_LINE, WIND_BAND_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, SETUP_PAINTING_LINE, BOUNDARY_COLOUR_LINE] as const) {
+  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, ...REPORTED_LINES, 'figure_openings', SOURCE_LINE, WIND_BAND_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, SETUP_PAINTING_LINE, BOUNDARY_COLOUR_LINE, COINCIDE_LINE] as const) {
     const l = fig[n];
     if (l !== undefined) out[n] = l.status;
   }
@@ -6398,7 +6401,7 @@ function renderExtremes(build: string, out: string, animations: readonly string[
  * MEASURABLE is a problem. Without it nothing here reads, writes or prints
  * anything it did not before.
  */
-export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string, noExtremes = false): CheckReport {
+export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string, noExtremes = false, supportSource?: string, supportFigure?: Mask): CheckReport {
   let inp: CheckInputs;
   let reqFile: RequirementsFile | null = null;
   let reqRecord: RequirementsFileRecord | null = null;
@@ -7016,6 +7019,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const setHints = new Map<string, string>();
   const fixedSkeleton = reqFile?.fixed_skeleton;
   let artJoints: ArtJointLine | null = null;
+  let partSupport: SupportReport | null = null;
   let setupPainting: SetupPaintingObservation | null = inp.source !== null && reqFile?.setup_painting === undefined
     ? { status: 'SKIP', reason: UNDECLARED_SETUP_PAINTING_REASON } : null;
   if (inp.parts !== null || inp.source !== null || fixedSkeleton !== undefined) {
@@ -7045,6 +7049,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       const sr = rigc(['render', '--candidate', join(stillDir, 'build'), '--animation', 'still', '--fps', String(STILL_FPS), '--max', String(maxSide), ...(fixedSkeleton === undefined ? [] : ['--geometry']), '--out', join(stillDir, 'render')]);
       if (sr.status !== 0) refuseIfAny(rigcFailed('render (the setup-pose still)', sr, sr.out.split('\n').filter((l) => l.includes('FAIL'))));
       const stillSet = readFrameSet(join(stillDir, 'render'));
+      partSupport = observeSupport(join(stillDir, 'build'), inp, supportSource, supportFigure);
       if (reqFile?.setup_painting !== undefined && inp.source !== null) setupPainting = measureSetupPainting(join(stillDir, 'build'), inp.stage, inp.source.painting, reqFile.setup_painting, problems, setupBackdrop);
       if (fixedSkeleton !== undefined) {
         const geometryPath = join(stillSet.dir, GEOMETRY_FILE);
@@ -7252,6 +7257,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(windBandRead === null ? {} : { [WIND_BAND_LINE]: windBandRead }),
     ...(Object.keys(skipped).length === 0 ? {} : { skipped }),
     ...(Object.keys(setsFigures).length === 0 ? {} : { sets: setsFigures }),
+    ...(partSupport === null ? {} : { [COINCIDE_LINE]: partSupport }),
     ...(config === undefined ? {} : { config }),
     ...(artJoints === null ? {} : { [ART_JOINT_LINE]: artJoints }),
     ...(setupPainting === null ? {} : { [SETUP_PAINTING_LINE]: setupPainting }),

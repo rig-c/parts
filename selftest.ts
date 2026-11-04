@@ -1,4 +1,7 @@
 #!/usr/bin/env bun
+import { runSupportDomainChecks } from './tools/check_support_domains.ts';
+import { runCoincideChecks, runCoincideSetupChecks, runCoincideMutants } from './tools/check_coincide.ts';
+import { COINCIDE_LINE, type SupportReport } from './src/coincide.ts';
 import { runDiffComponentChecks, runDiffComponentCliChecks, publicDiffControl } from './tools/check_diffcomponents.ts';
 import { runPaintingEdgeChecks } from './tools/check_painting_edges.ts';
 import { runProjectConfigChecks } from './tools/check_project_config.ts';
@@ -16007,7 +16010,7 @@ function readJsonFile(path: string): Record<string, unknown> | null {
 }
 
 // Issue #333: the fold bar reads the idle too, so every rig whose motion holds an animation writes it after the judgement lines.
-const CHECK_KEYS = ['gate_spine_html_green', 'rigc_entry', 'pack_mode', 'loop_max_diff', 'seam_mean', 'seam_px_over_40', 'seam_px_over_80', 'seam_frame_scale', 'seam_scope', ...JUDGEMENT_LINES, FOLD_LINE, ...REPORTED_LINES, 'figure_openings', 'PASS'];
+const CHECK_KEYS = ['gate_spine_html_green', 'rigc_entry', 'pack_mode', 'loop_max_diff', 'seam_mean', 'seam_px_over_40', 'seam_px_over_80', 'seam_frame_scale', 'seam_scope', ...JUDGEMENT_LINES, FOLD_LINE, ...REPORTED_LINES, 'figure_openings', COINCIDE_LINE, 'PASS'];
 
 /** A judgement line's status in a check.json read back, or null. */
 function lineStatus(fig: Record<string, unknown> | null, name: string): string | null {
@@ -16098,7 +16101,7 @@ function runSourceCases(dir: string, say: (name: string, ok: boolean, detail: st
     const l = fig?.[name] as { status?: string; reason?: string } | undefined;
     return l?.status === 'SKIP' ? String(l.reason) : `not SKIP (${l?.status ?? 'absent'})`;
   };
-  const sourceKeys = [...CHECK_KEYS.slice(0, -1).filter(k => k !== 'seam_scope' && k !== 'figure_openings'), SOURCE_LINE, 'skipped', 'SETUP_MATCHES_PAINTING', 'PASS'].join(',');
+  const sourceKeys = [...CHECK_KEYS.slice(0, -1).filter(k => k !== 'seam_scope' && k !== 'figure_openings' && k !== COINCIDE_LINE), SOURCE_LINE, 'skipped', COINCIDE_LINE, 'SETUP_MATCHES_PAINTING', 'PASS'].join(',');
 
   // The card's shape: two prefixed copies under one root, a plate region at slot 0, no parts.json, an idle.
   const withIdle = merged('merged-idle', { idle: true, plate: true });
@@ -19372,7 +19375,19 @@ function runWeightStepChecks991(dir: string, say: ReturnType<typeof counter>['sa
 
 function runCheckSuite(): number {
   const scope = startCheckReadScope();
-  try { return runCheckFixtureCases(scope); } finally { scope.restore(); }
+  try {
+    const failures = runCheckFixtureCases(scope);
+    const { say, bad } = counter();
+    const dir = temp('coincide');
+    try {
+      const report = (name: string, ok: boolean, detail: string) => say(name, ok, detail, 'issue #998: independent support domains, report-only coverage and open-edge unowned pixels; each bar kills an isolated instrument mutant');
+      runCoincideChecks(dir, report);
+      runSupportDomainChecks(join(dir, 'domains'), report);
+      runCoincideSetupChecks(join(dir, 'setup'), report, rigcRunnerAt(suiteRigc(), spawnRigc));
+    }
+    finally { rmSync(dir, { recursive: true, force: true }); }
+    return failures + bad();
+  } finally { scope.restore(); }
 }
 
 // CK705_TINY_FIXTURE_CONSTRUCTOR_BEGIN
@@ -25832,7 +25847,7 @@ function runBuildSuite(): number {
     const out = join(dir, 'out');
     const green = runBuildCli([...buildArgs(dir, out), '--loop']);
     const tail = lastLines(green.out, 4);
-    const expectedTree = [...BUILD_OWNS].sort();
+    const expectedTree = [...BUILD_OWNS, 'part_support_domains.json'].sort();
     const tree = entries(out);
     const artifacts = tail.slice(1).map((l) => l.trim());
     const expectedArtifacts = ['skeleton.json', 'skeleton.atlas', 'skeleton.png'].map((name) => join(out, 'check', 'build', name));
@@ -25918,7 +25933,15 @@ function runBuildSuite(): number {
     const fwdPairs = pairLinesOf(fwd.out, '[check] ');
     const handPairs = pairLinesOf(hand.out, '');
     const pairsTwice = runBuildCli([...buildArgs(cutDir, join(cutDir, 'out-pairs-twice')), '--seam-pairs', '--seam-pairs']);
-    const fwdSameAsHand = withoutConfigRecord(Buffer.from(JSON.stringify(fwdFig ?? {})), join('check', 'check.json')).equals(Buffer.from(JSON.stringify(handFig ?? {}, null, 1)));
+    const { [COINCIDE_LINE]: forwardedSupport, ...forwardedLegacy } = fwdFig ?? {};
+    const { [COINCIDE_LINE]: handSupport, ...handLegacy } = handFig ?? {};
+    const fwdSameAsHand = withoutConfigRecord(Buffer.from(JSON.stringify(forwardedLegacy)), join('check', 'check.json')).equals(Buffer.from(JSON.stringify(handLegacy, null, 1)));
+    say('BU981_BUILD_PAINTING_REACHES_ONLY_SUPPORT_REPORT',
+      (forwardedSupport as SupportReport | undefined)?.unowned.status === 'measured' &&
+      (handSupport as SupportReport | undefined)?.unowned.status === 'unavailable' &&
+      fwdFig !== null && !(SOURCE_LINE in fwdFig) && handFig !== null && !(SOURCE_LINE in handFig),
+      JSON.stringify({ build: (forwardedSupport as SupportReport | undefined)?.unowned.status, standalone: (handSupport as SupportReport | undefined)?.unowned.status }),
+      'default build measures unowned support with its painting; standalone check without --source is the negative control, and the legacy source comparison stays absent');
     say(
       'BU165_BUILD_SEAM_PAIRS_AND_CHECK_SEAM_PAIRS_ON_THE_SAME_RIG_READ_THE_SAME_SEAM_ROWS',
       fwd.status === 0 &&
@@ -25926,7 +25949,7 @@ function runBuildSuite(): number {
         Array.isArray(fwdRows) &&
         Array.isArray(handRows) &&
         JSON.stringify(fwdRows) === JSON.stringify(handRows) &&
-        // Issue #607: build records its config and check alone reads none, so the build's record is set aside here.
+        // Issue #607: build records its config and check alone reads none, so the build's record and the source-dependent support report are set aside here.
         fwdSameAsHand &&
         handFig !== null &&
         !('config' in handFig) &&
@@ -26047,7 +26070,7 @@ function runBuildSuite(): number {
         rigFail.includes('declares duration 1s but its last key is at 0s') &&
         still.out.includes('build: stopped at rig; no later stage ran') &&
         !still.out.includes('[check]') &&
-        stillTree.join(',') === 'keep.txt,parts,parts.json,recomposite_error_rig.png,recomposite_rig.png',
+        stillTree.join(',') === 'keep.txt,part_support_domains.json,parts,parts.json,recomposite_error_rig.png,recomposite_rig.png',
       `exit ${still.status}; ${rigFail ?? 'no [rig] FAIL line'}; --out afterwards [${stillTree.join(', ')}] (a planted check/check.json and idle.gif were there before, and keep.txt, which build does not own)`,
       'emit only after green, across stages: a red stage stops everything after it, its own refusal is what is printed, and a file an earlier run left where build writes is cleared rather than left beside the refusal looking current',
     );
@@ -26502,7 +26525,9 @@ function runBuildSuite(): number {
     const alone = runIn(['check', '--rig', join(relOut, 'rig'), '--parts', relOut, '--out', aloneOut]);
     const aloneText = existsSync(join(aloneOut, 'check.json')) ? readFileSync(join(aloneOut, 'check.json')) : Buffer.from('');
     const aloneFig = readJsonFile(join(aloneOut, 'check.json'));
-    const sameAsBuild = aloneText.length > 0 && withoutConfigRecord(readFileSync(join(relOut, 'check', 'check.json')), join('check', 'check.json')).equals(Buffer.from(JSON.stringify(JSON.parse(aloneText.toString('utf8')), null, 1)));
+    const { [COINCIDE_LINE]: _buildSupport, ...buildLegacy } = readJsonFile(join(relOut, 'check', 'check.json')) ?? {};
+    const { [COINCIDE_LINE]: _aloneSupport, ...aloneLegacy } = aloneFig ?? {};
+    const sameAsBuild = aloneText.length > 0 && withoutConfigRecord(Buffer.from(JSON.stringify(buildLegacy)), join('check', 'check.json')).equals(Buffer.from(JSON.stringify(aloneLegacy, null, 1)));
     say(
       'BU212_CHECK_ALONE_READS_NO_CONFIG_AND_WRITES_NO_CONFIG_RECORD_AND_OTHERWISE_THE_BUILD_S_CHECK_JSON',
       alone.status === 0 && aloneFig !== null && !('config' in aloneFig) && sameAsBuild,
@@ -29509,7 +29534,19 @@ function autoTurnExampleBytes(asm: string, rig: string, key: string, baseline: R
 function chainCheckGoldenCase(ex: string, out: string, key: string, say: ReturnType<typeof counter>['say']) {
       const exp = join(ex, 'expected');
       const expectedCheck = readJsonAt(join(exp, 'check.json'));
-      const check = jsonDiffs(expectedCheck, readJsonAt(join(out, 'check', 'check.json')), chainTolerance('check.json', expectedCheck));
+      const current = readJsonAt(join(out, 'check', 'check.json')) as Record<string, unknown>;
+      // Historical field-by-field oracle stays intact. The additive report has
+      // its own controls and coverage assertion, with no new acceptance bar.
+      const { [COINCIDE_LINE]: report, ...legacy } = current;
+      const check = jsonDiffs(expectedCheck, legacy, chainTolerance('check.json', expectedCheck));
+      const support = report as SupportReport | undefined;
+      const names = new Set(support?.pairs.flatMap(p => [p.back, p.front]) ?? []);
+      say(`CH943_SUPPORT_COVERAGE_IS_EXPLICIT[${key}]`,
+        support !== undefined && support.coverage.total === names.size * (names.size - 1) / 2 &&
+        support.pairs.length === support.coverage.total && support.coverage.measured === 0 &&
+        new Set(support.pairs.map(p => JSON.stringify([p.back, p.front]))).size === support.coverage.total &&
+        support.pairs.every(p => p.status === 'unavailable' && p.boundary_length_px === null && typeof p.reason === 'string'),
+        JSON.stringify({ coverage: support?.coverage, length_px: support?.pairs.reduce((sum, p) => sum + (p.boundary_length_px ?? 0), 0), unowned: support?.unowned.status, area_px: support?.unowned.area_px }), 'legacy producer has no independent domains; every pair is listed unavailable, never clean');
       say(
         `CH04_CHECK_JSON_IS_THE_EXPECTED_FIELD_BY_FIELD[${key}]`,
         check.over.length === 0,
@@ -33770,7 +33807,7 @@ function runAssembleSuite(): number {
     const readBack = r1.status === 0 ? serializeParts(readParts(join(out1, 'rig', 'parts.json'))) : '';
     say(
       'AS07_THE_CLI_WRITES_THE_SAME_BYTES_TWICE_AND_THE_RECORD_READS_BACK',
-      r1.status === 0 && r2.status === 0 && same && readBack === want && files.length === EXPECTED_PARTS.parts.length + 3 && files.includes('render/recomposite_error_rig.png') && r1.out.includes('recomposite vs source: mean |d|=') && r1.out.includes('  uncovered hole 1: 2611 px at 0,0 64x64 (between "topwear" 86 px, "hair_back" 84 px, "bottomwear" 72 px, "shoes" 48 px, "face" 34 px)'),
+      r1.status === 0 && r2.status === 0 && same && readBack === want && files.length === EXPECTED_PARTS.parts.length + 4 && files.includes('rig/part_support_domains.json') && files.includes('render/recomposite_error_rig.png') && r1.out.includes('recomposite vs source: mean |d|=') && r1.out.includes('  uncovered hole 1: 2611 px at 0,0 64x64 (between "topwear" 86 px, "hair_back" 84 px, "bottomwear" 72 px, "shoes" 48 px, "face" 34 px)'),
       `exit ${r1.status}/${r2.status}; ${files.length} file(s) (${files.join(', ')}), byte-identical across two runs: ${same}; parts.json reads back equal: ${readBack === want}`,
       'determinism is a contract — the error map included — and the parts.json the CLI writes is the one the in-memory control checked; its one hole is printed with the box and the borders the fixture derives',
     );
@@ -40838,6 +40875,9 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
     treeGuideCase(text, say);
     return bad();
   }
+  const supportMutants = temp('support-source-mutants');
+  try { runCoincideMutants(supportMutants, (name, ok, detail) => say(name, ok, detail, 'issue #998: isolated source mutants belong to the tree-reading suite; generated check inputs retain their strict boundary')); }
+  finally { rmSync(supportMutants, { recursive: true, force: true }); }
   runMotionSeamDocumentationCases(say);
   const patterns = ignorePatterns();
   const readerFaults = ignoreReaderFaults(patterns);

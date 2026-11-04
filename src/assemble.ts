@@ -1,4 +1,5 @@
 import { edgePairResiduals, type EdgeResidualReport } from './edgeresidual.ts';
+import type { SupportDomain } from './coincide.ts';
 import { type SeamRule } from './seamrule.ts';
 import { DEFAULT_GROUND, DEFAULT_PROJECT_RULE, type Ground, type ProjectRule } from './projectrule.ts';
 import { paintingEdges, type PaintingEdgeSkips } from './paintingedges.ts';
@@ -2583,10 +2584,10 @@ export function visibilityCounts(object: string, part: Raster, visible: Mask, pr
  *
  * This is NOT in the reference. It is the input of `seamRule: 'silhouette'`.
  */
-export function figureSilhouette(srcr: Raster): Mask {
+export function figureSilhouette(srcr: Raster, painted = paintedFigure(srcr)): Mask {
   const { width: W, height: H } = srcr;
   const fig = newMask(W, H);
-  fig.data.set(paintedFigure(srcr));
+  fig.data.set(painted);
   const opened = dilate(dilate(erode(erode(fig, 3), 3), 3), 3);
   return fillHoles(opened);
 }
@@ -2629,9 +2630,8 @@ export function paintedFigure(srcr: Raster): Uint8Array {
  * ground reads near 0; a ground of many colours, or a figure crossing the
  * border, reads more.
  */
-export function groundRingShare(srcr: Raster): number {
+export function groundRingShare(srcr: Raster, painted = paintedFigure(srcr)): number {
   const { width: W, height: H } = srcr;
-  const painted = paintedFigure(srcr);
   let ring = 0;
   let figure = 0;
   for (let y = 0; y < H; y++) {
@@ -4616,6 +4616,10 @@ export interface AssembleResult {
   /** Console-only source-edge support (#888); never serialized into parts.json. */
   cutMaterial: MaterialRow[];
   materialSources: MaterialSource[];
+  /** Independent authored masks frozen before any art-dependent partition. */
+  supportDomains: SupportDomain[];
+  /** Transient native source observation reused by build, never serialized. */
+  supportFigure?: Mask;
   /** What each `config.limbs` limb cut, per part it took and per joint (`limbLines`); empty without limbs (issue #349). */
   limbs: LimbCount[];
   /** The full-run layers the plan does not take from the full run whose uncovered error holds a body (`uncoveredErrorLayers`); empty otherwise. */
@@ -4849,7 +4853,8 @@ export function assemble(input: AssembleInput): AssembleResult {
   checkPlanAgainstRuns(sourcePlan, extend, full, head);
   const { W, H } = frame;
   const srcr = sourceInRig(source, W, H);
-  const groundShare = groundRingShare(srcr);
+  const supportPainted = paintedFigure(srcr);
+  const groundShare = groundRingShare(srcr, supportPainted);
   // Issue #359: a part's hidden-art layer is the under of a cut that names none — and, with one named, a refusal, since
   // reading either would be a guess. Its uses are counted for `hiddenLines`.
   const hiddenArt = hiddenArtByPart(plan, input.cuts, { full, head }, frame, input.resolution);
@@ -5005,6 +5010,9 @@ export function assemble(input: AssembleInput): AssembleResult {
   // most likely), and two cuts of one part that share a pixel would give it
   // to both. Every pair is named.
   const cutMasks = cuts.map((q) => pixelsInPolygon(q.polygon, W, H));
+  const supportDomains: SupportDomain[] = cuts.map((cut, i) => ({ part: cut.into,
+    mask: { width: W, height: H, data: cutMasks[i].data.slice() },
+    provenance: { kind: 'cut-polygon', entry: `config.assemble.cuts[${i}].polygon` } }));
   cuts.forEach((q, i) => {
     const out = q.polygon.filter(([x, y]) => x > W || y > H);
     if (out.length > 0) {
@@ -5142,7 +5150,7 @@ export function assemble(input: AssembleInput): AssembleResult {
   // Every Built owns its writer slice. No source-map lookup follows this
   // last cut-layer build; drop originals before cut/limb working sets grow.
   layerWriters.clear();
-  const silhouette = seamRule === 'silhouette' || patches.some((q) => q.alpha === 'silhouette') ? figureSilhouette(srcr) : null;
+  const silhouette = seamRule === 'silhouette' || patches.some((q) => q.alpha === 'silhouette') ? figureSilhouette(srcr, supportPainted) : null;
   const cut = patches.map((q, i) => {
     const c = cutPatch(q, srcr, silhouette);
     if (c === null) {
@@ -5656,7 +5664,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       return whole;
     };
     const e = paintingEdges(stack.map(onRig), srcr, {
-      painted: paintedFigure(srcr),
+      painted: supportPainted,
       ...(input.ground === undefined ? {} : { ground: input.ground }),
       editable: order.map((d) => !('patch' in d)),
       keep: keepInOrder,
@@ -5838,6 +5846,13 @@ export function assemble(input: AssembleInput): AssembleResult {
     frame.headBottom,
     bodyMinPx(frame),
   );
+  // This observation belongs to the source painting. Reuse the mask already
+  // read for ground coverage without changing the assembly silhouette.
+  let opaqueSource = true;
+  for (let p = 3; p < source.data.length; p += 4) if (source.data[p] !== 255) { opaqueSource = false; break; }
+  const supportSilhouette = opaqueSource ? silhouette ?? figureSilhouette(srcr, supportPainted) : null;
+  const supportFigure = supportSilhouette === null ? undefined : newMask(W, H);
+  if (supportFigure !== undefined && supportSilhouette !== null) for (let p = 0; p < supportPainted.length; p++) supportFigure.data[p] = supportSilhouette.data[p] & supportPainted[p];
   return {
     ...(softOcclusion.length === 0 ? {} : { softOcclusion }),
     parts: {
@@ -5864,6 +5879,8 @@ export function assemble(input: AssembleInput): AssembleResult {
     cuts: cutCounts,
     cutMaterial: [...cutMaterial, ...lim.material],
     materialSources: [...materialSources, ...lim.sources],
+    supportDomains,
+    ...(supportFigure === undefined ? {} : { supportFigure }),
     limbs: lim.counts,
     uncovered,
     holeKinds: kinds,

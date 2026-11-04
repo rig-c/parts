@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, wr
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { assembleStage, checkStage, rigStage, type AssembleOutputs, type AssembleStageInput, type CheckStageInput, type RigStageInput } from '../src/build.ts';
 import { rigcRunnerAt, type CheckReport, type RigcRunner } from '../src/check.ts';
+import type { Mask } from '../src/raster/types.ts';
 import { PartsError, type Problem } from '../src/errors.ts';
 
 /** Preserve native/custom executables; adapt only a proven package-manager script shim. */
@@ -72,6 +73,20 @@ export type BuildProcessJob =
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
+type AssemblyReading = { supportFigure?: Mask };
+type StageReading = CheckReport | AssemblyReading | void;
+
+/** Private inter-process source observation, never written to build outputs. */
+function encodeSupportFigure(figure: Mask): { width: number; height: number; alpha_base64: string } {
+  return { width: figure.width, height: figure.height, alpha_base64: Buffer.from(figure.data).toString('base64') };
+}
+function decodeSupportFigure(value: unknown): Mask {
+  if (!record(value) || !Number.isSafeInteger(value.width) || !Number.isSafeInteger(value.height) ||
+    typeof value.width !== 'number' || typeof value.height !== 'number' || value.width <= 0 || value.height <= 0 || typeof value.alpha_base64 !== 'string') throw new Error('BUILD_STAGE_SUPPORT_FIGURE: positive native dimensions and encoded alpha are required');
+  const data = Buffer.from(value.alpha_base64, 'base64');
+  if (data.length !== value.width * value.height || data.toString('base64') !== value.alpha_base64 || data.some(p => p !== 0 && p !== 1)) throw new Error('BUILD_STAGE_SUPPORT_FIGURE: canonical binary alpha must fill the native grid');
+  return { width: value.width, height: value.height, data };
+}
 function problems(value: unknown): value is Problem[] {
   return Array.isArray(value) && value.length > 0 && value.every((p) => record(p) && typeof p.code === 'string' && typeof p.object === 'string' && typeof p.detail === 'string');
 }
@@ -93,9 +108,10 @@ function checkReport(value: unknown): value is CheckReport {
 
 /** Decode only a matching successful stage or its original named input refusal. */
 export function readBuildReceipt(stage: 'check', status: number | null, signal: string | null, text: string): CheckReport;
-export function readBuildReceipt(stage: 'assemble' | 'rig', status: number | null, signal: string | null, text: string): void;
-export function readBuildReceipt(stage: Stage, status: number | null, signal: string | null, text: string): CheckReport | void;
-export function readBuildReceipt(stage: Stage, status: number | null, signal: string | null, text: string): CheckReport | void {
+export function readBuildReceipt(stage: 'assemble', status: number | null, signal: string | null, text: string): AssemblyReading | void;
+export function readBuildReceipt(stage: 'rig', status: number | null, signal: string | null, text: string): void;
+export function readBuildReceipt(stage: Stage, status: number | null, signal: string | null, text: string): StageReading;
+export function readBuildReceipt(stage: Stage, status: number | null, signal: string | null, text: string): StageReading {
   if (signal !== null || status === null || (status !== 0 && status !== 1) || (status !== 0 && text === '')) {
     throw new Error('BUILD_STAGE_CHILD: ' + stage + ' child — exit ' + status + ', signal ' + signal + '; no later stage ran');
   }
@@ -110,6 +126,8 @@ export function readBuildReceipt(stage: Stage, status: number | null, signal: st
   if (status !== 0) throw new Error('BUILD_STAGE_CHILD: ' + stage + ' child — exit ' + status + ' with a completion receipt; no later stage ran');
   if (stage !== 'check') {
     if (Object.hasOwn(row, 'report') || Object.hasOwn(row, 'sweepSteps')) return resultError(stage, 'a void stage returned an invented check report');
+    if (stage === 'assemble' && row.supportFigure !== undefined) return { supportFigure: decodeSupportFigure(row.supportFigure) };
+    if (row.supportFigure !== undefined) return resultError(stage, 'only assembly returns a source observation');
     return;
   }
   if (!checkReport(row.report)) return resultError(stage, 'check report is incomplete');
@@ -129,7 +147,7 @@ export function encodeCheckReceipt(report: CheckReport): string {
 }
 
 /** Minimum Bun may attach error to an ordinary nonzero exit; only an unstarted child is a launch failure. */
-export function readBuildChild(stage: Stage, child: { status: number | null; signal: string | null; error?: Error }, text: string): CheckReport | void {
+export function readBuildChild(stage: Stage, child: { status: number | null; signal: string | null; error?: Error }, text: string): StageReading {
   if (!childStarted(child) && child.error !== undefined) throw new Error('BUILD_STAGE_CHILD: ' + stage + ' could not start — ' + child.error.message);
   return readBuildReceipt(stage, child.status ?? null, child.signal ?? null, text);
 }
@@ -142,13 +160,15 @@ export function launchBuildChild(argv: readonly string[]): { status: number | nu
 }
 
 export function runBuildProcess(job: Extract<BuildProcessJob, { stage: 'check' }>, home: string): CheckReport;
-export function runBuildProcess(job: Exclude<BuildProcessJob, { stage: 'check' }>, home: string): void;
-export function runBuildProcess(job: BuildProcessJob, home: string): CheckReport | void {
+export function runBuildProcess(job: Extract<BuildProcessJob, { stage: 'assemble' }>, home: string): AssemblyReading | void;
+export function runBuildProcess(job: Extract<BuildProcessJob, { stage: 'rig' }>, home: string): void;
+export function runBuildProcess(job: BuildProcessJob, home: string): StageReading {
   mkdirSync(home, { recursive: true });
   const request = join(home, job.stage + '.request.json');
   const result = join(home, job.stage + '.result.json');
   rmSync(result, { force: true });
-  writeFileSync(request, JSON.stringify(job));
+  const wire = job.stage === 'check' && job.input.supportFigure !== undefined ? { ...job, input: { ...job.input, supportFigure: encodeSupportFigure(job.input.supportFigure) } } : job;
+  writeFileSync(request, JSON.stringify(wire));
   try {
     const child = launchBuildChild([process.execPath, import.meta.path, request, result]);
     return readBuildChild(job.stage, child, existsSync(result) ? readFileSync(result, 'utf8') : '');
@@ -174,6 +194,7 @@ function readJob(path: string): BuildProcessJob {
     if (!strings(['config', 'parts', 'out']) || typeof job.scratch !== 'string' || Object.hasOwn(input, 'reduce')) return requestError('rig input or scratch is incomplete, or contains a nonserializable reducer');
   } else if (job.stage === 'check') {
     if (!strings(['rig', 'out'])) return requestError('check input paths are incomplete');
+    if (input.supportFigure !== undefined) input.supportFigure = decodeSupportFigure(input.supportFigure);
   } else return requestError('unknown stage ' + JSON.stringify(job.stage));
   return job as unknown as BuildProcessJob;
 }
@@ -185,10 +206,11 @@ function worker(args: string[]): number {
   const log = (line: string): void => { console.log('[' + job.stage + '] ' + line); };
   try {
     let report: CheckReport | undefined;
-    if (job.stage === 'assemble') assembleStage(job.input, job.outputs, log);
+    let supportFigure: Mask | undefined;
+    if (job.stage === 'assemble') supportFigure = assembleStage(job.input, job.outputs, log).supportFigure;
     else if (job.stage === 'rig') rigStage(job.input, runner, job.scratch, log);
     else report = checkStage(job.input, runner, job.bin, log);
-    writeFileSync(args[1], report === undefined ? JSON.stringify({ version: 1, stage: job.stage, kind: 'done' }) : encodeCheckReceipt(report));
+    writeFileSync(args[1], report === undefined ? JSON.stringify({ version: 1, stage: job.stage, kind: 'done', ...(supportFigure === undefined ? {} : { supportFigure: encodeSupportFigure(supportFigure) }) }) : encodeCheckReceipt(report));
     return 0;
   } catch (err) {
     if (!(err instanceof PartsError)) throw err;
