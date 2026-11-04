@@ -21251,7 +21251,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       hard.status === 1 &&
         hard.fig?.PASS === false &&
         lineStatus(hard.fig, 'TEXTURE_STRETCH') === 'FAIL' &&
-        hardFail === `  FAIL  CHECK_TEXTURE_STRETCH: mesh "${CHECK_PARTS[0].name}" triangle 0 (vertices 0 1 2), edge 1-2, idle frame ${IDLE_FPS / 2} — the edge is 2 times its rest length (max(ratio, 1/ratio) 2); <= ${TEXTURE_STRETCH_CEILING} is required; vertex 1 is weighted to "yoke" 1 and vertex 2 to "hem" 1; none of these bones hangs on a chain of the idle — the texture on it is stretched: the bones this mesh is weighted to move apart (amplitudes too large down a chain), or a vertex blends bones that move against each other (see rig-parts guide CHECK_TEXTURE_STRETCH)` &&
+        hardFail === `  FAIL  CHECK_TEXTURE_STRETCH: mesh "${CHECK_PARTS[0].name}" triangle 0 (vertices 0 1 2), edge 1-2, idle frame ${IDLE_FPS / 2} — the edge is 2 times its rest length (max(ratio, 1/ratio) 2); <= ${TEXTURE_STRETCH_CEILING} is required; vertex 1 is weighted to "yoke" 1 and vertex 2 to "hem" 1; none of these bones hangs on a chain of the idle; weight step edge 1-2 bone "yoke": vertex 1 share 1, vertex 2 share 0; pre-cut shares unavailable; if the influence cut made this step: meshes.back.influences {"maxInfluences": null, "floor": "continuous"} — the texture on it is stretched: the bones this mesh is weighted to move apart (amplitudes too large down a chain), or a vertex blends bones that move against each other (see rig-parts guide CHECK_TEXTURE_STRETCH)` &&
         others.length === 0,
       `exit ${hard.status}; ${hardFail?.trim().slice(0, 200) ?? 'no CHECK_TEXTURE_STRETCH line'}…; other FAIL lines: ${others.length}`,
       `the side lowered by its own length (${rest} units) doubles; the gate passes it, the loop closes and the seam is the setup pose, so this line is the only one that sees it — and, since issue #314, it names the edge's bones off rig.json: vertex 1 (top-right) is weighted wholly to yoke and vertex 2 (bottom-right) to hem, and the idle keys hem_ctl's translatey and the root's translatex, no rotate, so there is no chain to name`,
@@ -21335,7 +21335,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const sqBones =
       predicted === undefined || predicted.kind !== 'squeeze'
         ? null
-        : `; ${predicted.vertices.map((v, i) => vertexText(v, i === 0)).join(' and ')}; on the idle's chains, the chain from "hairback_r0_ctl" carries "hairback_r2" and the chain from "hairback_l0_ctl" carries "hairback_l2" — the texture on it is squeezed`;
+        : `; ${predicted.vertices.map((v, i) => vertexText(v, i === 0)).join(' and ')}; on the idle's chains, the chain from "hairback_r0_ctl" carries "hairback_r2" and the chain from "hairback_l0_ctl" carries "hairback_l2"; weight step edge ${sqWhere!.edge.join('-')} bone "`;
     squeezeSay(
       'CK241_A_STRETCH_FAIL_NAMES_THE_BONES_ITS_EDGE_HANGS_ON_AND_THEIR_TWO_CHAINS_AND_ONE_SIGN_PASSES',
       mirrored.rig.status === 0 &&
@@ -21351,6 +21351,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         sqFail.startsWith(`  FAIL  CHECK_TEXTURE_STRETCH: mesh "hair" triangle ${sqWhere.triangle} (vertices ${sqWhere.vertices.join(' ')}), edge ${sqWhere.edge.join('-')}, idle frame ${sqWhere.frame} — `) &&
         sqBones !== null &&
         sqFail.includes(sqBones) &&
+        sqFail.includes('pre-cut shares unavailable; if the influence cut made this step: meshes.hair.influences {"maxInfluences": null, "floor": "continuous"} — the texture on it is squeezed') &&
         oneSign.rig.status === 0 &&
         oneSign.check.status === 0 &&
         lineStatus(oneSign.fig, 'TEXTURE_STRETCH') === 'PASS',
@@ -23632,8 +23633,8 @@ function runAnimationFoldCases(say: (name: string, ok: boolean, detail: string, 
     const handText = foldBonesText(handRig, {}, 'legs', 'legs', 6, [0, 1, 2]);
     const handWant =
       'at worst frame 6 the 3 folded triangle(s) hang on, by the bone each vertex weighs most: ' +
-      `triangles 0, 1 dominated by "knee_r", "knee_l" (triangle 0, vertices 0 1 2: vertex 0 is weighted to "knee_r" 0.9, "knee_l" 0.1 and vertex 1 to "knee_l" 0.7, "knee_r" 0.3 and vertex 2 to "knee_r" 0.6, "hip" 0.4; ${none}); ` +
-      `triangle 2 dominated by "hip", "knee_l" (vertices 3 4 5: vertex 3 is weighted to "knee_l" 1 and vertex 4 to "knee_l" 1 and vertex 5 to "hip" 1; ${none})`;
+      `triangles 0, 1 dominated by "knee_r", "knee_l" (triangle 0, vertices 0 1 2: vertex 0 is weighted to "knee_r" 0.9, "knee_l" 0.1 and vertex 1 to "knee_l" 0.7, "knee_r" 0.3 and vertex 2 to "knee_r" 0.6, "hip" 0.4; ${none}; weight step edge 0-2 bone "knee_l": vertex 0 share 0.1, vertex 2 share 0; edge 1-2 bone "knee_l": vertex 1 share 0.7, vertex 2 share 0; pre-cut shares unavailable; if the influence cut made this step: meshes.legs.influences {"maxInfluences": null, "floor": "continuous"}); ` +
+      `triangle 2 dominated by "hip", "knee_l" (vertices 3 4 5: vertex 3 is weighted to "knee_l" 1 and vertex 4 to "knee_l" 1 and vertex 5 to "hip" 1; ${none}; weight step edge 3-5 bone "knee_l": vertex 3 share 1, vertex 5 share 0; edge 4-5 bone "knee_l": vertex 4 share 1, vertex 5 share 0; pre-cut shares unavailable; if the influence cut made this step: meshes.legs.influences {"maxInfluences": null, "floor": "continuous"})`;
     const capVerts = Array.from({ length: 15 }, (_, v) => [w(`b${Math.floor(v / 3)}`, 1)]);
     const capRig = {
       bones: [{ name: 'root' }, ...[0, 1, 2, 3, 4].map((i) => ({ name: `b${i}`, parent: 'root' }))],
