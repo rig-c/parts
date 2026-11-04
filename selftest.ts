@@ -491,6 +491,7 @@ import {
   requirementsSummary,
   type RequirementLine,
   type RequirementsFile,
+  type RequirementsSummary,
   resolveRequirements,
   rigFacts,
   displacementOf,
@@ -17874,6 +17875,29 @@ function runSeamRequiredCases(dir: string, built: SoBuilt, say: (name: string, o
       `undeclared: exit ${plain.status}, PASS ${String(plain.fig?.PASS)}, required ${lineOf(plain.fig)?.required === undefined ? 'absent' : 'PRESENT'}; stock gapOpen frames ${JSON.stringify(hits)}; declared: exit ${planted.status}, ${f[0] ?? 'no refusal'}; block ${JSON.stringify(req)}`,
       `issue #941: the defect the card names, background inside the band in motion, on frame ${SO_TEAR_FRAME} of 13 alone — a frame no every-2nd, 3rd or 4th sampler reads. Undeclared it is accepted (today's warning, exit 0); under seam_over_motion.required the ${cls} pair is refused by name with the frame and the cells a fresh stock render finds there, and build emits no artifact`,
     );
+    if (cls === 'explicit') {
+      const clean = built('required-explicit-hold', true, { ...explicit, ...motion('anim-hold.json'), requirements: required }, run);
+      const cleanLine = lineOf(clean.fig);
+      const cleanRequired = cleanLine?.required;
+      const cleanRequirements = clean.fig?.requirements as { summary: RequirementsSummary; lines: Record<string, RequirementLine> } | undefined;
+      const summary = cleanRequirements?.summary;
+      const rows = cleanLine?.rows ?? [];
+      const source = readRequirements(join(dir, required));
+      const parts = readParts(join(clean.stage, 'parts.json'));
+      say(
+        'SO31_MOTION_SEAMS_REQUIRED_READS_EVERY_FRAME_WITH_ZERO_REQUIREMENT_PASSES',
+        clean.status === 0 && clean.fig?.PASS === true && source.requirements.length === 0 && source.seam_over_motion?.required === true &&
+          JSON.stringify(parts.motion_seams) === JSON.stringify(explicit.motion_seams) &&
+          summary?.declared === 0 && summary.measured === 0 && summary.pass === 0 && summary.fail === 0 && summary.not_measurable === 0 &&
+          Object.keys(cleanRequirements?.lines ?? {}).length === 0 && cleanLine?.animations.length === 2 &&
+          rows.length === 2 && rows.every(row => row.pair === 'upperarm_r|forearm_r' && row.status === 'read' && row.drawn === 13 && row.banded === 13) &&
+          cleanRequired?.status === 'PASS' && cleanRequired.failed === 0 &&
+          JSON.stringify(cleanRequired.pairs) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', class: 'explicit', frames: 26, background_frames: 0, max_px: 0 }]) &&
+          planted.status === 1 && req?.status === 'FAIL' && req.failed === 1 && req.pairs[0]?.frames === 26 && req.pairs[0]?.background_frames === 1,
+        `clean exit ${clean.status}, requirements ${JSON.stringify(summary)}, required ${JSON.stringify(cleanRequired)}, rows ${JSON.stringify(rows.map(row => ({ animation: row.animation, drawn: row.drawn, banded: row.banded })))}; planted tear exit ${planted.status}, required ${JSON.stringify(req)}`,
+        'issue #982: config.motion_seams carries an explicit pair with requirements: [] through assemble and build into the required background reading. Both animations are read on every frame with 0 declared requirements and 0 PASS. The existing frame-7 tear is refused through the same carrier.',
+      );
+    }
   }
 
   // The clean twin, declared: PASS, measured, and check.json is the undeclared twin's but for the two declared blocks.
