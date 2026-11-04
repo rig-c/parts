@@ -9156,7 +9156,7 @@ function weightCutReplay(rig: Record<string, unknown>, part: string, rows: Reado
   }
 }
 
-/** A differing bone set is observed directly; a cut cause needs a matching production replay. */
+/** Show the first differing bone per edge in written-share order; a cut cause needs a matching production replay. */
 export function weightStepText(rig: Record<string, unknown>, slot: string, attachment: string, vertices: readonly number[], context?: WeightStepContext): string {
   const skins = isRecord(rig.skins) ? rig.skins : {};
   const skin = isRecord(skins.default) ? skins.default : {};
@@ -9178,7 +9178,10 @@ export function weightStepText(rig: Record<string, unknown>, slot: string, attac
       const left = new Map(rows.get(a)!.map((binding) => [binding.bone, binding.weight]));
       const right = new Map(rows.get(b)!.map((binding) => [binding.bone, binding.weight]));
       for (const bone of new Set([...left.keys(), ...right.keys()])) {
-        if (left.has(bone) !== right.has(bone)) steps.push({ a, b, bone, aShare: left.get(bone) ?? 0, bShare: right.get(bone) ?? 0 });
+        if (left.has(bone) !== right.has(bone)) {
+          steps.push({ a, b, bone, aShare: left.get(bone) ?? 0, bShare: right.get(bone) ?? 0 });
+          break;
+        }
       }
     }
   }

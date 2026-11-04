@@ -19141,6 +19141,19 @@ function runWeightStepChecks991(dir: string, say: ReturnType<typeof counter>['sa
   say('CK1058_REPLAY_REJECTS_CHANGED_WEIGHTS_AND_DISTINGUISHES_A_CONTINUOUS_ZERO', mismatch.includes('pre-cut shares unavailable') &&
     !mismatch.includes('made by the influence cut (') && faded.includes('replayed floor "continuous"') && !faded.includes('made by the influence cut ('),
     `changed ${mismatch}; continuous ${faded}`, 'issue #991 needs exact written-share agreement and distinguishes a continuous fade from a discontinuous cut');
+  const manyBones = [{ name: 'root', x: 0, y: 0 }];
+  const manyWeights = Array.from({ length: 9 }, (_, vertex) => Array.from({ length: 31 }, (_, binding) => {
+    const bone = `v${vertex}b${binding}`;
+    manyBones.push({ name: bone, x: vertex % 3 === 0 ? 0 : 3, y: vertex % 3 === 2 ? 80 : 0 });
+    return { bone, x: 0, y: 0, weight: 1 / 31 };
+  }));
+  const manyRig = { bones: manyBones, skins: { default: { cloth: { cloth: { type: 'mesh', weights: manyWeights, triangles: [0, 1, 2, 3, 4, 5, 6, 7, 8] } } } } };
+  const bounded = foldBonesText(manyRig, {}, 'cloth', 'cloth', 0, [0, 1, 2]);
+  const boundedBytes = Buffer.byteLength(bounded);
+  say('CK1059_WEIGHT_STEP_DETAIL_STAYS_WITHIN_THE_EXISTING_PRINTED_LINE_LIMIT', boundedBytes < PRINTED_LINE_LIMIT &&
+    (bounded.match(/weight step /g) ?? []).length === 3 && (bounded.match(/edge \d-\d bone /g) ?? []).length === 9,
+    `${boundedBytes} bytes for three fold groups with 31 disjoint bindings per vertex; limit ${PRINTED_LINE_LIMIT}`,
+    'issue #991 shows one differing bone per edge in written-share order so uncapped weights cannot multiply every fold detail by the binding count');
 }
 
 function runCheckSuite(): number {
