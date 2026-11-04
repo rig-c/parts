@@ -422,6 +422,8 @@ import {
   type RigcSpawn,
   rigToFrameMap,
   runCheck,
+  inputFileRecord,
+  weightStepText,
   SEAM_BOX,
   SEAM_DIR,
   SEAM_MARK,
@@ -19038,6 +19040,109 @@ function runBallCheckCases(report: FixtureCaseReporter): void {
   }
 }
 
+/** Issue #991 uses the production weight rule on a synthetic strip with a short hull edge. */
+function runWeightStepChecks991(dir: string, say: ReturnType<typeof counter>['say']): void {
+  const cases = new Map<string, { report: ReturnType<typeof checkStage>; rig: RigSpec; config: { path: string; sha256: string } }>();
+  const bin = suiteRigc();
+  const runner = rigcRunnerAt(bin, spawnRigc);
+  for (const kind of ['cap', 'floor']) {
+    for (const [form, width] of [['cut', 3], ['continuous', 3], ['cut', 30]] as const) {
+      const label = `${kind}-${form}-${width}`;
+      const home = join(dir, label);
+      writeCheckRig(home);
+      const rig = readJsonAt(join(home, 'rig.json')) as RigSpec;
+      const motion = readJsonAt(join(home, 'motion.json')) as { animations: { idle: { tracks: Array<Record<string, unknown>> } } };
+      const points: Array<[string, number, number]> = kind === 'cap'
+        ? [['a', 1.5, 10], ['b', 1.5, 11], ['c', 1.5, 12], ['d', -10, 0], ['e', 13, 0]]
+        : [['a', 1.5, 3], ['b', 1.5, 4], ['c', 1.5, 5], ['d', -15, 0]];
+      const part = { ...CHECK_PARTS[0], w: width };
+      const stage = rig.skeleton;
+      const origins = new Map(points.map(([bone, x, y]) => [bone, { x: stage.x + part.x + x, y: stage.y + cropToSpineY(part.y + y, stage.height) }]));
+      for (const [name] of points) {
+        if (name === 'd') rig.bones.push({ name: 'd_ctl', parent: 'root', ...origins.get(name)! }, { name: 'd', parent: 'd_ctl', x: 0, y: 0 });
+        else rig.bones.push({ name, parent: 'root', ...origins.get(name)! });
+      }
+      const segments = points.map(([bone, x, y]) => ({ bone, a: [x, y] as Point, b: [x, y] as Point }));
+      const corners = [[0, 0], [width, 0], [width, part.h], [0, part.h]];
+      const declared = form === 'continuous' ? { maxInfluences: null, floor: 'continuous' as const } : undefined;
+      const weights = corners.map(([x, y]) => {
+        const shares = writtenShares({ region: -1, g: 0, influences: influences([x, y], segments, 1, meshLimits(declared)) }, declared?.floor);
+        const world = { x: stage.x + part.x + x, y: stage.y + cropToSpineY(part.y + y, stage.height) };
+        return shares.map(({ bone, weight }) => ({ bone, x: world.x - origins.get(bone)!.x, y: world.y - origins.get(bone)!.y, weight }));
+      });
+      rig.slots.find((slot) => slot.name === 'back')!.bone = 'a';
+      rig.skins.default.back.back = { type: 'mesh', image: 'back.png', width, height: part.h, uvs: [0, 0, 1, 0, 1, 1, 0, 1], triangles: [0, 1, 2, 2, 3, 0], hull: 4, weights };
+      motion.animations.idle.tracks.push({ bone: 'd_ctl', property: 'translatex', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [kind === 'cap' ? 11 : 100] }, { t: 1, v: [0] }] });
+      const image = checkPartRaster(part);
+      const bytes = encodePngBytes(image);
+      writeFileSync(join(home, 'images', 'back.png'), bytes);
+      writeFileSync(join(home, 'parts', 'back.png'), bytes);
+      const parts = readParts(join(home, 'parts.json'));
+      Object.assign(parts.parts[0], { w: width, opaque_px: image.data.filter((value, index) => index % 4 === 3 && value > OPAQUE_ALPHA_ABOVE).length });
+      writeFileSync(join(home, 'parts.json'), serializeParts(parts));
+      writeFileSync(join(home, 'rig.json'), JSON.stringify(rig));
+      writeFileSync(join(home, 'motion.json'), JSON.stringify(motion));
+      const configPath = join(home, 'config.json');
+      const configBytes = Buffer.from(JSON.stringify({
+        ...minimalConfig(),
+        assemble: { rig_scale: 1, plan: [['back', 'full', 'topwear'], ['front', 'head', 'face']] },
+        bones: points.map(([name, x, y]) => ({ name, parent: 'root', at: [part.x + x, part.y + y] })),
+        meshes: { back: { grid: width, r: 1, segments: points.map(([bone, x, y]) => [bone, [part.x + x, part.y + y], [part.x + x, part.y + y]]), ...(declared === undefined ? {} : { influences: declared }) } },
+        regions: { front: 'root' },
+        motion: { duration: 1, tracks: [{ bone: 'd', prop: 'translatex', amp: kind === 'cap' ? 11 : 100, period: 1, phase: 0 }] },
+      }));
+      writeFileSync(configPath, configBytes);
+      const config = inputFileRecord(configBytes, configPath);
+      const report = checkStage({ rig: home, out: join(home, 'check'), config, noExtremes: true }, runner, bin, () => {});
+      cases.set(label, { report, rig, config });
+    }
+  }
+  const cap = cases.get('cap-cut-3')!;
+  const floor = cases.get('floor-cut-3')!;
+  const targets = (item: typeof cap): Problem[] => item.report.problems.filter((problem) => ['CHECK_TEXTURE_STRETCH', 'CHECK_ANIMATIONS_DO_NOT_FOLD'].includes(problem.code));
+  const fix = 'meshes.back.influences {"maxInfluences": null, "floor": "continuous"}';
+  // Independent fixture oracle from the point distances at (0, 0), including the written five-place remainder.
+  const capOthers = [10, 11, 12].map((y) => 1 / (Math.sqrt(1.5 * 1.5 + y * y) + 1) ** 2);
+  const capShare = Math.round((1 / 121) / (1 / 121 + capOthers.reduce((sum, weight) => sum + weight, 0)) * 1e5) / 1e5;
+  const floorOthers = [3, 4, 5].map((y) => 1 / (Math.sqrt(1.5 * 1.5 + y * y) + 1) ** 2);
+  const floorTotal = 1 / 256 + floorOthers.reduce((sum, weight) => sum + weight, 0);
+  const floorShare = Math.round((1 - floorOthers.reduce((sum, weight) => sum + Math.round(weight / floorTotal * 1e5) / 1e5, 0)) * 1e5) / 1e5;
+  for (const [id, item, share, cause] of [
+    ['CK1053_CAP_SWAP_ON_A_SHORT_HULL_EDGE_NAMES_BOTH_SHARES_AND_THE_PROVEN_CUT', cap, capShare, 'maxInfluences 4'],
+    ['CK1054_FLOOR_DROP_ON_A_SHORT_HULL_EDGE_NAMES_BOTH_SHARES_AND_THE_PROVEN_CUT', floor, floorShare, 'floor 0.03'],
+  ] as const) {
+    const found = targets(item);
+    say(id, found.length === 2 && found.every((problem) => problem.detail.includes(`edge 0-1 bone "d": vertex 0 share ${share}, vertex 1 share 0`) &&
+      problem.detail.includes(`made by the influence cut (${cause};`) && problem.detail.includes(fix)),
+    JSON.stringify(found), 'issue #991 uses a 3 px hull edge whose cut removes d on the neighbour, and requires both failure lines to name the step and its proved remedy');
+  }
+  const continuous = ['cap-continuous-3', 'floor-continuous-3'].map((key) => cases.get(key)!);
+  say('CK1055_THE_IDENTICAL_STRIPS_WITH_THE_CONTINUOUS_UNCAPPED_RULE_PASS', continuous.every((item) => item.report.figures.PASS && targets(item).length === 0),
+    JSON.stringify(continuous.map((item) => ({ stretch: item.report.figures.TEXTURE_STRETCH, folds: item.report.figures.ANIMATIONS_DO_NOT_FOLD }))),
+    'issue #991 keeps the same four vertices, triangles, segments and driver amplitude and changes only the influence declaration');
+  const long = ['cap-cut-30', 'floor-cut-30'].map((key) => cases.get(key)!);
+  const longMesh = long[0].rig.skins.default.back.back as MeshAttachment;
+  say('CK1056_A_LONG_HULL_EDGE_WITH_THE_CUT_KEEPS_ITS_EXISTING_PASS', long.every((item) => item.report.figures.PASS && targets(item).length === 0) &&
+    longMesh.weights[0].some((binding) => binding.bone === 'd' && binding.weight === capShare) &&
+    !longMesh.weights[1].some((binding) => binding.bone === 'd' && binding.weight > 0),
+    JSON.stringify(long.map((item) => item.report.figures.TEXTURE_STRETCH)), 'issue #991 adds diagnostic evidence without adding a weight-step bar');
+  const missing = weightStepText({ ...cap.rig }, 'back', 'back', [0, 1]);
+  const stale = weightStepText({ ...cap.rig }, 'back', 'back', [0, 1], { stage: cap.rig.skeleton, config: { ...cap.config, sha256: '0'.repeat(64) } });
+  say('CK1057_MISSING_OR_STALE_CONFIG_PROVENANCE_MAKES_THE_REMEDY_CONDITIONAL', [missing, stale].every((text) => text.includes(`vertex 0 share ${capShare}, vertex 1 share 0`) &&
+    text.includes('pre-cut shares unavailable; if the influence cut made this step: ' + fix) && !text.includes('made by the influence cut (')),
+    `missing ${missing}; stale ${stale}`, 'issue #991 refuses to infer a cut cause from emitted weights alone');
+  const changed = JSON.parse(JSON.stringify(cap.rig)) as RigSpec;
+  const changedMesh = changed.skins.default.back.back as MeshAttachment;
+  changedMesh.weights[0].find((binding) => binding.bone === 'd')!.weight = 0.25;
+  changedMesh.weights[0].find((binding) => binding.bone === 'a')!.weight += capShare - 0.25;
+  const mismatch = weightStepText({ ...changed }, 'back', 'back', [0, 1], { stage: cap.rig.skeleton, config: cap.config });
+  const smooth = cases.get('floor-continuous-3')!;
+  const faded = weightStepText({ ...smooth.rig }, 'back', 'back', [0, 1], { stage: smooth.rig.skeleton, config: smooth.config });
+  say('CK1058_REPLAY_REJECTS_CHANGED_WEIGHTS_AND_DISTINGUISHES_A_CONTINUOUS_ZERO', mismatch.includes('pre-cut shares unavailable') &&
+    !mismatch.includes('made by the influence cut (') && faded.includes('replayed floor "continuous"') && !faded.includes('made by the influence cut ('),
+    `changed ${mismatch}; continuous ${faded}`, 'issue #991 needs exact written-share agreement and distinguishes a continuous fade from a discontinuous cut');
+}
+
 function runCheckSuite(): number {
   const scope = startCheckReadScope();
   try { return runCheckFixtureCases(scope); } finally { scope.restore(); }
@@ -19165,6 +19270,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
   let finishInputContract = (): void => { throw new Error('CHECK_TEMP_INPUTS: the generated input contract was not reached'); };
   const dir = temp('check');
   try {
+    runWeightStepChecks991(join(dir, 'weight-step-991'), say);
     runExtremesChecks(join(dir, 'extremes-controls'), (name, pass, detail) => say(name, pass, detail, 'issue #829: observations and opt-out preserve the gated check'), rigcRunnerAt(suiteRigc(), spawnRigc));
     const rig = join(dir, 'rig');
     writeCheckRig(rig);
