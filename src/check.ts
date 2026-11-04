@@ -142,9 +142,10 @@ import {
   type WorldBox,
 } from './instruments.ts';
 import { type AlternatePartsRecord, FRONT_SUFFIX, type LimbRecord, type PartRecord, type PartsFile, readParts } from './parts.ts';
-import { ARM_SPLIT_MIGRATION, poseRigBonesForDrawn, type RigBone, SETS_FILE } from './rig.ts';
+import { ARM_SPLIT_MIGRATION, poseRigBonesForDrawn, type RigBone, SETS_FILE, writtenShares } from './rig.ts';
 import { TURN_BONE, turnConstraintName, turnTwin } from './turn.ts';
-import { ROOT_BONE } from './config.ts';
+import { ROOT_BONE, loadConfigWithBytes, type Point } from './config.ts';
+import { influences, meshLimits, type Segment, type Influence, type InfluenceLimits } from './weights.ts';
 import {
   aimLine,
   contactLine,
@@ -3325,7 +3326,7 @@ export const FOLD_TRIANGLES_SHOWN = 6;
  * the skin does not hold, a mesh with no triangle table, or a triangle the table does not reach is said rather than
  * guessed.
  */
-export function foldBonesText(rig: Record<string, unknown>, motion: Record<string, unknown>, slot: string, attachment: string, frame: number, triangles: readonly number[]): string {
+export function foldBonesText(rig: Record<string, unknown>, motion: Record<string, unknown>, slot: string, attachment: string, frame: number, triangles: readonly number[], context?: WeightStepContext): string {
   const head = `at worst frame ${frame}`;
   if (triangles.length === 0) return `${head} rigc lists no folded triangle`;
   const skins = isRecord(rig.skins) ? rig.skins : {};
@@ -3371,7 +3372,8 @@ export function foldBonesText(rig: Record<string, unknown>, motion: Record<strin
     const which = g.triangles.length === 1 ? `triangle ${first}` : `triangles ${g.triangles.slice(0, FOLD_TRIANGLES_SHOWN).join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
     const by = g.bones.length === 0 ? '' : ` dominated by ${quoted(g.bones)}`;
     const spelled = g.triangles.length === 1 ? `vertices ${vs.join(' ')}` : `triangle ${first}, vertices ${vs.join(' ')}`;
-    return `${which}${by} (${spelled}: ${edgeBonesText(rig, motion, slot, attachment, vs)})`;
+    const step = weightStepText(rig, slot, attachment, vs, context);
+    return `${which}${by} (${spelled}: ${edgeBonesText(rig, motion, slot, attachment, vs)}${step === '' ? '' : `; ${step}`})`;
   });
   const rest = groups.slice(FOLD_GROUPS_SHOWN);
   const restText = rest.length === 0 ? '' : `; … and ${rest.length} more group(s), ${rest.reduce((n, g) => n + g.triangles.length, 0)} triangle(s)`;
@@ -3403,6 +3405,7 @@ export function foldsLine(
   rig: Record<string, unknown> = {},
   physicsList: readonly LoopPhysics[] = [],
   motion: Record<string, unknown> = {},
+  context?: WeightStepContext,
 ): FoldsLine {
   const toSide = (m: FoldingMesh | undefined): FoldSide | null =>
     m === undefined ? null : { frames: m.frames, worst_frame: m.worstFrame, worst_triangles: m.worstTriangles, line: m.line };
@@ -3463,7 +3466,7 @@ export function foldsLine(
     problems.push({
       code: `CHECK_${FOLD_LINE}`,
       object: `animation "${r.animation}", mesh "${r.attachment}" (slot "${r.slot}")`,
-      detail: `rigc render --folds at ${fps} fps${physics}${sideClause}: ${r.line}; ${foldBonesText(rig, motion, r.slot, r.attachment, r.worst_frame, worstOf.get(r) ?? [])}; no triangle turned over against the setup pose is required — a fold the art means is declared in the --requirements file's may_fold, { "slot": "${r.slot}", "animation": "${r.animation}", "why": … }`,
+      detail: `rigc render --folds at ${fps} fps${physics}${sideClause}: ${r.line}; ${foldBonesText(rig, motion, r.slot, r.attachment, r.worst_frame, worstOf.get(r) ?? [], context)}; no triangle turned over against the setup pose is required — a fold the art means is declared in the --requirements file's may_fold, { "slot": "${r.slot}", "animation": "${r.animation}", "why": … }`,
     });
   }
   const declaredNotFolding = mayFold.filter((e) => !folding.some((r) => r.slot === e.slot && r.animation === e.animation)).map((e) => ({ slot: e.slot, animation: e.animation }));
@@ -6651,7 +6654,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           const fr = measured(['render', '--candidate', buildDir, '--folds', ...geometry, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', foldDir]);
           if (fr.status !== 0) refuseIfAny(rigcFailed(`render --folds${geometry.map((g) => ` ${g}`).join('')} --fps ${fps}`, fr, fr.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
           const readings = filterFolds(readFoldSets(foldDir, animationNames, fps, fr.out));
-          folds = foldsLine(animationNames, fps, 0, readings, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readings, inp.rig, [], inp.motion);
+          folds = foldsLine(animationNames, fps, 0, readings, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readings, inp.rig, [], inp.motion, { config, stage: inp.stage });
           if (feet.length > 0) {
             const sets = readJson(join(foldDir, 'frames.json'), []);
             const listed = sets !== null && Array.isArray(sets.sets) ? sets.sets.filter(isRecord) : [];
@@ -6672,7 +6675,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           if (frOff.status !== 0) refuseIfAny(rigcFailed(`render --folds${geometry.map((g) => ` ${g}`).join('')} --fps ${fps} (physics constraint(s) left out)`, frOff, frOff.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
           const readingsOn = filterFolds(readFoldSets(onDir, animationNames, fps, frOn.out));
           const readingsOff = filterFolds(readFoldSets(offDir, animationNames, fps, frOff.out));
-          folds = foldsLine(animationNames, fps, stripped.physics.length, readingsOn, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readingsOff, inp.rig, stripped.physics, inp.motion);
+          folds = foldsLine(animationNames, fps, stripped.physics.length, readingsOn, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readingsOff, inp.rig, stripped.physics, inp.motion, { config, stage: inp.stage });
           if (feet.length > 0) {
             const sets = readJson(join(offDir, 'frames.json'), []);
             const listed = sets !== null && Array.isArray(sets.sets) ? sets.sets.filter(isRecord) : [];
@@ -6748,7 +6751,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     const geometryPath = join(idle.dir, GEOMETRY_FILE);
     const geometry = readGeometry(geometryPath, idle.written);
     idleGeometry = geometry;
-    stretch = stretchLine(geometry, geometryPath, problems, inp);
+    stretch = stretchLine(geometry, geometryPath, problems, { ...inp, config });
     if (full !== null) still = stillLine(full, idle, geometry, geometryPath, problems, notPlanted);
   }
 
@@ -9096,6 +9099,120 @@ function stretchAtText(s: { triangle: number; vertices: readonly number[]; edge:
   return `triangle ${s.triangle} (vertices ${s.vertices.join(' ')}), edge ${s.edge.join('-')}, idle frame ${s.frame}`;
 }
 
+/** Config provenance is optional for standalone check and older generated rigs. */
+export interface WeightStepContext {
+  config?: InputFileRecord;
+  stage?: StageBox;
+}
+
+type StepBinding = { bone: string; x: number; y: number; weight: number };
+
+/** Recover only a replay that reproduces every written share on the named vertices. */
+function weightCutReplay(rig: Record<string, unknown>, part: string, rows: ReadonlyMap<number, StepBinding[]>, context?: WeightStepContext): { raw: Map<number, Influence[]>; limits: InfluenceLimits } | null {
+  if (context?.config === undefined || context.stage === undefined) return null;
+  try {
+    const loaded = loadConfigWithBytes(context.config.path);
+    if (inputFileRecord(loaded.bytes, context.config.path).sha256 !== context.config.sha256) return null;
+    const mesh = loaded.config.meshes[part];
+    if (mesh === undefined || !('grid' in mesh || 'contour' in mesh) || (mesh.rule !== undefined && mesh.rule !== 'distance')) return null;
+    const named = new Map<string, Segment[]>();
+    const chains = new Map<string, Segment[]>();
+    for (const bone of loaded.config.bones) {
+      if ('chain' in bone) {
+        const chain = bone.points.map((point, i): Segment => ({ bone: `${bone.chain}${i}`, a: point, b: bone.points[i + 1] ?? bone.tip }));
+        chains.set(bone.chain, chain);
+        for (const segment of chain) named.set(segment.bone, [segment]);
+      } else if (bone.tip !== undefined) named.set(bone.name, [{ bone: bone.name, a: bone.at, b: bone.tip }]);
+    }
+    const segments: Segment[] = [];
+    for (const entry of mesh.segments) {
+      if (typeof entry !== 'string') segments.push({ bone: entry[0], a: entry[1], b: entry[2] });
+      else {
+        const found = chains.get(entry) ?? named.get(entry);
+        if (found === undefined) return null;
+        segments.push(...found);
+      }
+    }
+    const transforms = setupWorld(rig);
+    const limits = meshLimits(mesh.influences);
+    const raw = new Map<number, Influence[]>();
+    for (const [vertex, bindings] of rows) {
+      const first = bindings[0];
+      if (first === undefined) return null;
+      const transform = transforms.get(first.bone);
+      if (transform === undefined) return null;
+      const point: Point = [transform.a * first.x + transform.b * first.y + transform.worldX - context.stage.x,
+        cropToSpineY(transform.c * first.x + transform.d * first.y + transform.worldY - context.stage.y, context.stage.height)];
+      const cut = influences(point, segments, mesh.r, limits, mesh.exponent);
+      const written = writtenShares({ influences: cut, region: -1, g: 0 }, limits.floor);
+      const actual = new Map(bindings.map((binding) => [binding.bone, binding.weight]));
+      if (written.length !== actual.size || written.some((binding) => actual.get(binding.bone) !== binding.weight)) return null;
+      raw.set(vertex, influences(point, segments, mesh.r, { maxInfluences: Number.MAX_SAFE_INTEGER, minWeight: 0 }, mesh.exponent));
+    }
+    return { raw, limits };
+  } catch {
+    // A missing, stale or unsupported config cannot prove the cause of emitted weights.
+    return null;
+  }
+}
+
+/** Show the first differing bone per edge in written-share order; a cut cause needs a matching production replay. */
+export function weightStepText(rig: Record<string, unknown>, slot: string, attachment: string, vertices: readonly number[], context?: WeightStepContext): string {
+  const skins = isRecord(rig.skins) ? rig.skins : {};
+  const skin = isRecord(skins.default) ? skins.default : {};
+  const onSlot = isRecord(skin[slot]) ? skin[slot] : {};
+  const att = onSlot[attachment];
+  if (!isRecord(att) || !Array.isArray(att.weights)) return '';
+  const rows = new Map<number, StepBinding[]>();
+  for (const vertex of vertices) {
+    const row = att.weights[vertex];
+    if (!Array.isArray(row) || row.some((binding) => !isRecord(binding) || typeof binding.bone !== 'string' ||
+      typeof binding.x !== 'number' || typeof binding.y !== 'number' || typeof binding.weight !== 'number')) return '';
+    rows.set(vertex, (row as StepBinding[]).filter((binding) => binding.weight > 0));
+  }
+  const steps: Array<{ a: number; b: number; bone: string; aShare: number; bShare: number }> = [];
+  const ordered = [...rows.keys()];
+  for (let i = 0; i < ordered.length; i++) {
+    for (let j = i + 1; j < ordered.length; j++) {
+      const a = ordered[i], b = ordered[j];
+      const left = new Map(rows.get(a)!.map((binding) => [binding.bone, binding.weight]));
+      const right = new Map(rows.get(b)!.map((binding) => [binding.bone, binding.weight]));
+      for (const bone of new Set([...left.keys(), ...right.keys()])) {
+        if (left.has(bone) !== right.has(bone)) {
+          steps.push({ a, b, bone, aShare: left.get(bone) ?? 0, bShare: right.get(bone) ?? 0 });
+          break;
+        }
+      }
+    }
+  }
+  if (steps.length === 0) return '';
+  const replay = weightCutReplay(rig, slot, rows, context);
+  let madeByCut = false;
+  const text = steps.map((step) => {
+    const observed = `edge ${step.a}-${step.b} bone "${step.bone}": vertex ${step.a} share ${step.aShare}, vertex ${step.b} share ${step.bShare}`;
+    if (replay === null) return observed;
+    const missing = step.aShare === 0 ? step.a : step.b;
+    const raw = replay.raw.get(missing)!;
+    const rank = raw.findIndex((binding) => binding.bone === step.bone);
+    if (rank < 0 || raw[rank].weight <= 0) return observed;
+    const before = `pre-cut share ${round6(raw[rank].weight)} on vertex ${missing}`;
+    if (rank >= replay.limits.maxInfluences) {
+      madeByCut = true;
+      return `${observed}, made by the influence cut (maxInfluences ${replay.limits.maxInfluences}; ${before})`;
+    }
+    const total = raw.slice(0, replay.limits.maxInfluences).reduce((sum, binding) => sum + binding.weight, 0);
+    const capped = raw[rank].weight / total;
+    if ((replay.limits.floor ?? 'cut') === 'cut' && capped < replay.limits.minWeight) {
+      madeByCut = true;
+      return `${observed}, made by the influence cut (floor ${replay.limits.minWeight}; capped share ${round6(capped)}; ${before})`;
+    }
+    return `${observed}, replayed floor "${replay.limits.floor ?? 'cut'}"; ${before}`;
+  });
+  const fix = `meshes.${slot}.influences {"maxInfluences": null, "floor": "continuous"}`;
+  const remedy = replay === null ? `; pre-cut shares unavailable; if the influence cut made this step: ${fix}` : madeByCut ? `; use ${fix}` : '';
+  return `weight step ${text.join('; ')}${remedy}`;
+}
+
 /**
  * Issue #314: what a failing edge's two vertices hang on, read off rig.json and motion.json — so the cause reads off
  * the line rather than off a hand decoding of the weight runs. Each vertex's bones from the default skin's weights,
@@ -9165,7 +9282,7 @@ export function edgeBonesText(rig: Record<string, unknown>, motion: Record<strin
  * bones its two vertices hang on and their chains ({@link edgeBonesText}, issue
  * #314).
  */
-export function stretchLine(geo: IdleGeometry | null, path: string, problems: Problem[], bound?: Pick<CheckInputs, 'rig' | 'motion'>): JudgementLine {
+export function stretchLine(geo: IdleGeometry | null, path: string, problems: Problem[], bound?: Pick<CheckInputs, 'rig' | 'motion'> & WeightStepContext): JudgementLine {
   if (geo === null) return skip(`${path} does not exist; \`rigc render --geometry\` (rig-c ${RIGC_GEOMETRY_VERSION} or later) writes it, and the skinned mesh vertices are read from it`);
   if (geo.meshes.length === 0) return skip('the rig draws no mesh attachment (every slot is a region), so there is no triangle to stretch');
   const figures = stretchFigures(geo.meshes, geo.frames);
@@ -9197,10 +9314,11 @@ export function stretchLine(geo: IdleGeometry | null, path: string, problems: Pr
     rows.push({ slot: m.slot, triangles: m.triangles, max_ratio: round3(m.max.ratio), max_at: stretchAtText(m.max), min_ratio: round3(m.min.ratio), min_at: stretchAtText(m.min), severity });
     if (severity > TEXTURE_STRETCH_CEILING) {
       failed = true;
+      const step = bound === undefined ? '' : weightStepText(bound.rig, m.slot, m.attachment, at.edge, bound);
       problems.push({
         code: 'CHECK_TEXTURE_STRETCH',
         object: `mesh "${m.slot}" ${stretchAtText(at)}`,
-        detail: `the edge is ${round3(at.ratio)} times its rest length (max(ratio, 1/ratio) ${severity}); <= ${TEXTURE_STRETCH_CEILING} is required${bound === undefined ? '' : `; ${edgeBonesText(bound.rig, bound.motion, m.slot, m.attachment, at.edge)}`} — the texture on it is ${at.ratio >= 1 ? 'stretched' : 'squeezed'}: the bones this mesh is weighted to move apart (amplitudes too large down a chain), or a vertex blends bones that move against each other`,
+        detail: `the edge is ${round3(at.ratio)} times its rest length (max(ratio, 1/ratio) ${severity}); <= ${TEXTURE_STRETCH_CEILING} is required${bound === undefined ? '' : `; ${edgeBonesText(bound.rig, bound.motion, m.slot, m.attachment, at.edge)}${step === '' ? '' : `; ${step}`}`} — the texture on it is ${at.ratio >= 1 ? 'stretched' : 'squeezed'}: the bones this mesh is weighted to move apart (amplitudes too large down a chain), or a vertex blends bones that move against each other`,
       });
     }
   }
