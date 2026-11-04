@@ -19374,18 +19374,21 @@ function runWeightStepChecks991(dir: string, say: ReturnType<typeof counter>['sa
 }
 
 function runCheckSuite(): number {
+  const part = splitPart('check');
   const scope = startCheckReadScope();
   try {
-    const failures = runCheckFixtureCases(scope);
+    const failures = part.has('fixtures') ? runCheckFixtureCases(scope) : 0;
     const { say, bad } = counter();
-    const dir = temp('coincide');
-    try {
-      const report = (name: string, ok: boolean, detail: string) => say(name, ok, detail, 'issue #998: independent support domains, report-only coverage and open-edge unowned pixels; each bar kills an isolated instrument mutant');
-      runCoincideChecks(dir, report);
-      runSupportDomainChecks(join(dir, 'domains'), report);
-      runCoincideSetupChecks(join(dir, 'setup'), report, rigcRunnerAt(suiteRigc(), spawnRigc));
+    if (part.has('coincide')) {
+      const dir = temp('coincide');
+      try {
+        const report = (name: string, ok: boolean, detail: string) => say(name, ok, detail, 'issue #998: independent support domains, report-only coverage and open-edge unowned pixels; each bar kills an isolated instrument mutant');
+        runCoincideChecks(dir, report);
+        runSupportDomainChecks(join(dir, 'domains'), report);
+        runCoincideSetupChecks(join(dir, 'setup'), report, rigcRunnerAt(suiteRigc(), spawnRigc));
+      }
+      finally { rmSync(dir, { recursive: true, force: true }); }
     }
-    finally { rmSync(dir, { recursive: true, force: true }); }
     return failures + bad();
   } finally { scope.restore(); }
 }
@@ -54251,9 +54254,13 @@ const WORKER_FLAG = '--suite-worker';
  * and runs what comes before the examples; the closing unit runs what comes after them. Each unit is its own process,
  * so a unit that needs another example's build (the chain's public scenes) builds it itself. Whole, as `bun run
  * selftest` runs it, such a suite prints those same blocks in that order, so the units' lines put end to end in
- * {@link suiteUnits} order are the whole suite's.
+ * {@link suiteUnits} order are the whole suite's. Check instead uses CHECK_UNITS to retain its fixture scope and
+ * subsequent coincide calls as separate units (issue #1021), without an example loop or closing unit.
  */
-const SPLIT_SUITES: readonly string[] = ['assemble-examples', 'chain', 'readme-loop'];
+const SPLIT_SUITES: readonly string[] = ['assemble-examples', 'chain', 'readme-loop', 'check'];
+
+/** Issue #1021: keep the fixture/input-contract scope intact, followed by the independent coincide controls. */
+const CHECK_UNITS: readonly string[] = ['fixtures', 'coincide'];
 
 /** What joins a split suite's key to the example its unit runs, and the closing unit's name. */
 const UNIT_MARK = '@';
@@ -54262,9 +54269,10 @@ const END_UNIT = 'end';
 /**
  * The units of one suite, in the order their lines are printed: the suite itself, or for a split suite one unit per
  * tracked example (`exampleKeys().all`, fetched or not — a unit whose example was not fetched prints nothing) and the
- * closing unit.
+ * closing unit. Check uses its declared fixture and coincide groups instead.
  */
 function suiteUnits(key: string, examples: readonly string[]): string[] {
+  if (key === 'check') return CHECK_UNITS.map((group) => `${key}${UNIT_MARK}${group}`);
   return SPLIT_SUITES.includes(key) ? [...examples.map((e) => `${key}${UNIT_MARK}${e}`), `${key}${UNIT_MARK}${END_UNIT}`] : [key];
 }
 
@@ -54277,19 +54285,20 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
 }
 
 /**
- * The CI shards (issues #395, #849): each is one job of `.github/workflows/ci.yml` running `--shard <name>`, and
- * `test` merges their records. Every unit is in exactly one shard (`RT09`); each shard starts units in listed order.
- * Rebalanced from CI runs 40950565569, 40950635084 and 40946705361 (2026-10-29): weight each unit by its maximum
- * worker wall time across those runs, then place longest first on the earliest free worker across three two-worker
- * jobs (ties: shard, then worker index). The estimated longest worker lane is 1054.1 s; adding the largest observed
- * job overhead, 22.3 s rounded up, leaves 123.6 s below 20 minutes and 423.6 s below the unchanged 25-minute limit.
- * These are scheduling estimates from recorded times, not post-change CI measurements. The per-unit table and
- * derivation accompany issue #849's change. A new example adds a unit to each split suite; `RT09` requires each here.
+ * The CI shards (issues #395, #849, #1021), replayed as one run by the merge job. RT09 holds every unit to one shard.
+ * Unit weights are their maximum worker times in green main CI runs 41880081978, 41880013373, 41875105299,
+ * 41830264618 and 41828187437. The former check unit reached 1281.4 s, so its fixture/input-contract work and
+ * subsequent coincide calls now run separately. Their initial weights are equal halves of that maximum, an
+ * unmeasured scheduling guess for the first PR CI instrument run. All other weights are measured.
+ * Place longest first on the earliest free worker across four two-worker jobs, ties by shard then worker.
+ * Three jobs predict 1337.5 s of worker time; four predict 1003.3 s. Observed maximum job overhead is 42.9 s.
+ * These are estimates, not CI verdicts. The first PR CI records must measure both new units and each job's margin.
  */
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
-  ['1', ['depth-maps', 'joint-contact', 'check', 'chain@wind', 'chain@scarf', 'assemble-examples@wind', 'assemble-examples@reference-sample', 'scene', 'mesh-stats', 'auto-mesh-examples', 'config', 'inputs-examples', 'contour-wiring', 'waist', 'propose-corpus', 'arm-split-upgrade', 'comfy', 'diagnostics', 'structure', 'inputs', 'winding', 'raster-morph', 'raster-resize', 'raster-components', 'raster-warp', 'png']],
-  ['2', ['cli', 'build', 'remesh', 'rig', 'chain@reference-sample', 'readme-loop@reference-demo', 'chain@reference-demo', 'propose', 'assemble-examples@reference-demo', 'readme-loop@reference-sample', 'auto-motion', 'tree', 'auto-mesh', 'config-write', 'limb-slots', 'loop', 'corpus', 'limb-layout', 'requirements', 'fixed-skeleton', 'setup-painting', 'boundary-colour', 'foot-ownership', 'layers-wrapper', 'painting', 'skeleton', 'core-pointer', 'assemble-examples@end', 'parts', 'prompt', 'sheet']],
-  ['3', ['readme-loop@wind', 'chain@end', 'readme-loop@demo', 'retune', 'chain@demo', 'assemble-examples@scarf', 'assemble-examples@demo', 'readme-loop@scarf', 'mesh-draft', 'alternate-layers', 'take-layers', 'editor-receipts', 'part-sources', 'influence', 'front-slot', 'assemble', 'ground-examples', 'readme-loop@end', 'build-cost', 'alternate-tips', 'chain-inherit', 'keypoints', 'contour', 'subset-cover', 'hybrid-limb', 'plausibility', 'raster-blur', 'fetch-examples', 'layers-psd', 'raster-poly', 'raster-composite']],
+  ['1', ['chain@wind', 'cli', 'assemble-examples@scarf', 'tree', 'boundary-colour', 'influence', 'inputs-examples', 'readme-loop@end', 'build-cost', 'comfy', 'propose-corpus', 'contour', 'inputs', 'depth-maps', 'hybrid-limb', 'joint-contact', 'sheet', 'png', 'raster-blur']],
+  ['2', ['check@coincide', 'check@fixtures', 'chain@reference-sample', 'setup-painting', 'assemble-examples@reference-sample', 'readme-loop@reference-demo', 'auto-motion', 'fixed-skeleton', 'auto-mesh', 'config-write', 'assemble', 'loop', 'arm-split-upgrade', 'painting', 'foot-ownership', 'subset-cover', 'plausibility', 'core-pointer', 'raster-components', 'raster-warp', 'raster-poly']],
+  ['3', ['build', 'readme-loop@wind', 'chain@scarf', 'remesh', 'assemble-examples@reference-demo', 'assemble-examples@demo', 'readme-loop@scarf', 'readme-loop@reference-sample', 'mesh-stats', 'alternate-layers', 'config', 'requirements', 'limb-slots', 'waist', 'limb-layout', 'keypoints', 'diagnostics', 'structure', 'part-sources', 'skeleton', 'prompt', 'parts', 'raster-morph', 'layers-psd']],
+  ['4', ['readme-loop@demo', 'chain@end', 'retune', 'chain@reference-demo', 'assemble-examples@wind', 'rig', 'chain@demo', 'propose', 'mesh-draft', 'ground-examples', 'scene', 'auto-mesh-examples', 'front-slot', 'contour-wiring', 'corpus', 'chain-inherit', 'alternate-tips', 'layers-wrapper', 'take-layers', 'editor-receipts', 'winding', 'assemble-examples@end', 'raster-resize', 'fetch-examples', 'raster-composite']],
 ];
 
 /**
