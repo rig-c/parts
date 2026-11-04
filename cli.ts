@@ -183,7 +183,7 @@ usage:
       bone differs (origin, tip, parent; how far, in px). No confidence is
       computed. It prints "wrote ${BASIS_FILE} (…)" after the coverage lines.
 
-  rig-parts propose … [--bust-landmarks <landmarks.json> | --no-bust <reason>]
+  rig-parts propose … (--bust-landmarks <landmarks.json> | --no-bust <reason>)
       Draft the chest-holding topwear as contour. Landmark JSON declares apex_r,
       apex_l and optional cleavage in rig pixels. Without cleavage, intersect
       their segment with the neck-to-hip midline. --no-bust needs a stated reason.

@@ -86,7 +86,7 @@ under that.
 5. `rig-parts assemble … --out work` — read the `uncovered hole` lines and look at
    `work/render/recomposite_error_rig.png`; a large red hole between two parts is a
    gap See-through left (a skirt split into two legs), fixed in the plan or the layers,
-   not in the rig. Then `rig-parts propose --parts work/rig
+   not in the rig. Then `rig-parts propose --parts work/rig --bust-landmarks bust-landmarks.json
    --source <painting> --out work` → copy `bones`, `meshes`, `regions`, `limbs`,
    `motion`, `constraints`, `turn`, `motion_seams`, `proposed_rig_scale` from `proposal.json` into the config, each it
    wrote (`limbs` only with `--keypoints`, `constraints` only with `--cloth`, `turn`
@@ -128,7 +128,7 @@ under that.
 6. Correct against `render/landmarks.png` and `note:` lines; a
    `coverage … not checked` line is a bone no check read (the line says why),
    and `basis.json` beside the proposal says what each bone rests on — check
-   the `ratio` bones and any with a `fallback` first. `rig-parts propose --parts work/rig --source <painting> --out work
+   the `ratio` bones and any with a `fallback` first. `rig-parts propose --parts work/rig --bust-landmarks bust-landmarks.json --source <painting> --out work
    --from-config config.json` (with the same `--keypoints`) until it prints no
    `LINT` line. `rig-parts compare
    --left work/proposal.json --right config.json` lists what the correction changed,

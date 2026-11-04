@@ -3507,7 +3507,8 @@ export function proposeWithBasis(
     if (bust.noBust !== undefined) {
       notes.push(`${torsoName}: contour bust omitted for the declared reason: ${bust.noBust}`);
     } else if (bust.landmarks === undefined) {
-      notes.push(`${torsoName}: contour torso drafted without bust landmarks. Add meshes.${torsoName}.contour.bust.apex_r, apex_l and cleavage in rig pixels, and boob_r/boob_l bones under chest, or re-run with --bust-landmarks <file>. Cleavage may be omitted from that file for midline projection`);
+      throw new PartsError([{ code: 'PROPOSE_BUST_INPUT', object: `chest-holding torso "${torsoName}"`,
+        detail: 'needs a declared bust: give --bust-landmarks <file> or --no-bust "<reason>"' }]);
     } else {
       const { apex_r, apex_l } = bust.landmarks;
       let cleavage = bust.landmarks.cleavage;

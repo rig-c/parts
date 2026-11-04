@@ -382,7 +382,7 @@ What to do, keeping every entry you tuned — one command, after `assemble` has 
 the split parts:
 
 ```
-rig-parts propose --parts <work/rig> --source <painting> --out <dir> --write-config config.json --only-missing
+rig-parts propose --parts <work/rig> --bust-landmarks bust-landmarks.json --source <painting> --out <dir> --write-config config.json --only-missing
 ```
 
 For each part the config attaches by neither `meshes` nor `regions`, it adds what is
@@ -492,8 +492,10 @@ uncapped continuous influences (#991). Non-torso meshes retain their existing mo
 `--bust-landmarks <file>` declares `apex_r`, `apex_l` and optional `cleavage` in rig
 pixels. With these landmarks, `proposal.json` also adds `contour.bust` and the two
 chest-parented bones, `basis.json` records those bones, and the landmark overlays
-show them. Without landmarks the contour remains and a note names the missing
-fields. `--no-bust "<reason>"` records an explicit omission reason.
+show them. A chest-holding torso now refuses with `PROPOSE_BUST_INPUT` when neither
+`--bust-landmarks` nor `--no-bust` is supplied. Runs that previously succeeded with
+a missing-landmarks note must now declare the landmarks or give an explicit
+`--no-bust "<reason>"`. Blank omission reasons are refused.
 
 A config receiving these newly drafted sections, and builds made from it, have
 changed mesh bytes. `--from-config` continues to read authored meshes unchanged.

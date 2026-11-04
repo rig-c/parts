@@ -28,7 +28,7 @@ export function runNamedCutSkirtChecks(dir: string, report: (name: string, ok: b
   const recipe = (part?: string): ClothRecipes => ({ bottomwear: { chains: 2, links: 2, wind: [1, 4], gravity: [2, 8], ...(part === undefined ? {} : { part }) } });
   const draft = (out: string, part?: string, withRecipe = true): Proposal => {
     const set = readPartSet(out);
-    const proposal = propose(set, dressHipJoints(), null, DEFAULT_GRID_RULE, withRecipe ? recipe(part) : null);
+    const proposal = propose(set, dressHipJoints(), null, DEFAULT_GRID_RULE, withRecipe ? recipe(part) : null, true, { noBust: 'historical fixture: no bust landmarks recorded' });
     checkProposal(set, proposal);
     return proposal;
   };
@@ -161,7 +161,7 @@ function runNamedCutPoseChecks(out: string, passed: (detail: string) => void): v
     const set = readPartSet(fixture.out);
     const proposal = propose(set, dressHipJoints(), null, DEFAULT_GRID_RULE, {
       bottomwear: { chains: 2, links: 2, wind: [1, 4], gravity: [2, 8], part: cut ? 'skirt_piece' : 'dress' },
-    });
+    }, true, { noBust: 'historical fixture: no bust landmarks recorded' });
     checkProposal(set, proposal);
     const sections = Object.fromEntries(PROPOSAL_CONFIG_SECTIONS.filter((k) => proposal[k] !== undefined).map((k) => [k, proposal[k]]));
     const cfg = parseConfig({ key: 'named-cut-poser', assemble: proposalAssemble(set), ...sections });

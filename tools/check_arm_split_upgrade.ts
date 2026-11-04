@@ -55,7 +55,7 @@ function rigInto(dir: string, out: string, runner: RigcRunner): Problem[] {
 
 /** `propose --only-missing` over a fixture directory's own parts and config. */
 function onlyMissing(dir: string, out: string): ReturnType<typeof cli> {
-  return cli(['propose', '--parts', out, '--source', join(dir, 'painting.png'), '--out', join(dir, 'proposal'), '--write-config', join(dir, 'config.json'), '--only-missing']);
+  return cli(['propose', '--parts', out, '--source', join(dir, 'painting.png'), '--out', join(dir, 'proposal'), '--write-config', join(dir, 'config.json'), '--only-missing', '--no-bust', 'historical fixture: no bust landmarks recorded']);
 }
 
 /**
@@ -245,7 +245,7 @@ export function runArmSplitUpgradeChecks(dir: string, say: Say, runner: RigcRunn
   // loader (its regions name drape_r and hand_r, which that plan does not make), so nothing would be read.
   const whole = fixture('whole-section', { splitPlan: true });
   const wholeOut = assembleInto(whole.at);
-  const wholeRun = cli(['propose', '--parts', wholeOut, '--source', join(whole.at, 'painting.png'), '--out', join(whole.at, 'proposal'), '--write-config', join(whole.at, 'config.json')]);
+  const wholeRun = cli(['propose', '--parts', wholeOut, '--source', join(whole.at, 'painting.png'), '--out', join(whole.at, 'proposal'), '--write-config', join(whole.at, 'config.json'), '--no-bust', 'historical fixture: no bust landmarks recorded']);
   const wholeText = readFileSync(join(whole.at, 'config.json'), 'utf8');
   const wholeCfg = JSON.parse(wholeText) as { meshes: Json; regions: Record<string, string> };
   const wholeFig = spliceFigures(whole.text, wholeText);

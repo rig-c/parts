@@ -68,7 +68,7 @@ export function runNeckDraftChecks(dir: string, say: Say): void {
   say('ND28_RUNS_REQUIRED', missingRuns, 'both exact source runs must be read');
   const beforeCli = spawnSync(process.execPath, [resolve('cli.ts'), 'layers', files.headDir, '--full', files.fullDir, '--source', files.source, '--config', files.configPath], { encoding: 'utf8' });
   say('ND15_LAYERS_CLI', beforeCli.status === 0 && beforeCli.stdout.includes('PLAN_HEAD_GARMENT_OVERLAP') && beforeCli.stdout.includes('16 opaque crop px'), 'real CLI contextual warning');
-  const incompatible = spawnSync(process.execPath, [resolve('cli.ts'), 'propose', '--parts', out, '--source', files.source, '--full', files.fullDir, '--head', files.headDir, '--out', dest, '--write-config', files.configPath, '--grid-rule', 'figure'], { encoding: 'utf8' });
+  const incompatible = spawnSync(process.execPath, [resolve('cli.ts'), 'propose', '--parts', out, '--source', files.source, '--full', files.fullDir, '--head', files.headDir, '--out', dest, '--write-config', files.configPath, '--grid-rule', 'figure', '--no-bust', 'historical fixture: no bust landmarks recorded'], { encoding: 'utf8' });
   say('ND16_INCOMPATIBLE_MODE_NAMED', incompatible.status !== 0 && (incompatible.stdout + incompatible.stderr).includes('PROPOSE_NECK_MODE') && JSON.stringify(JSON.parse(readFileSync(files.configPath, 'utf8'))) === JSON.stringify(before), 'explicit grid option refused without config mutation');
   proposeNeck(readConfigWriteTarget(files.configPath), { source: files.source, full: files.fullDir, head: files.headDir, parts: out, out: dest });
   const after = JSON.parse(readFileSync(files.configPath, 'utf8')), loaded = readRigInputs(files.configPath, join(dest, 'rig'));
@@ -192,7 +192,7 @@ export function prepareNeckDraftPacket(dir: string): { old: string; clean: strin
   const original = join(dir, 'original.json'); writeFileSync(original, readFileSync(f.configPath));
   assembleStage({ source: f.source, full: f.fullDir, head: f.headDir, config: f.configPath, seam: 'near-white', project: 'core' }, { partsJson: join(old, 'parts.json'), partsDir: join(old, 'parts'), recomposite: join(old, 'recomposite.png'), errorMap: join(old, 'error.png') }, () => {});
   // Use the actual CLI, including its dispatch and stage writer.
-  command([resolve('cli.ts'), 'propose', '--parts', old, '--source', f.source, '--full', f.fullDir, '--head', f.headDir, '--out', clean, '--write-config', f.configPath]);
+  command([resolve('cli.ts'), 'propose', '--parts', old, '--source', f.source, '--full', f.fullDir, '--head', f.headDir, '--out', clean, '--write-config', f.configPath, '--no-bust', 'historical fixture: no bust landmarks recorded']);
   for (const [config, parts] of [[original, old], [f.configPath, join(clean, 'rig')]]) {
     const r = readRigInputs(config, parts), built = buildRig(r.cfg, r.parts, r.images);
     parseRigSpec(built.rig, 'neck dry-run rig'); parseMotionSpec(built.motion, 'neck dry-run motion');

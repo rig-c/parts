@@ -200,8 +200,8 @@ The derived point is rounded to the existing 1/256-pixel contour grid. Declared 
 coordinates are preserved exactly in both the regions and their bones.
 The proposal writes `contour.bust` and `boob_r` / `boob_l` under `chest`.
 
-Without landmarks, the torso remains a contour and its note names the exact missing
-config fields and bones. `--no-bust "rigid breastplate"` omits the bust and records the
+A chest-holding torso with neither landmarks nor an explicit omission reason is
+refused with `PROPOSE_BUST_INPUT` before any proposal is written. `--no-bust "rigid breastplate"` omits the bust and records the
 reason. Blank reasons and combining the two flags are refused. Both flags belong to
 drafting and are refused with `--from-config`, which reads authored meshes unchanged.
 Only one topwear part may cover the chest bone when no figure layer supplies its
@@ -3266,7 +3266,7 @@ For an existing config with `turn.body`, one neck plan row and named `neck` /
 
 ```sh
 rig-parts layers head/ --full full/ --source painting.png --config config.json
-rig-parts propose --parts assembled/rig --source painting.png --full full/ --head head/ --out neck-draft/ --write-config config.json
+rig-parts propose --parts assembled/rig --bust-landmarks bust-landmarks.json --source painting.png --full full/ --head head/ --out neck-draft/ --write-config config.json
 rig-parts rig --parts neck-draft/rig --config config.json --out neck-rig/
 ```
 
@@ -3298,7 +3298,7 @@ world units. Other proposal modes (`--keypoints`, `--compare`, `--grid-rule`,
 | rule | means | change |
 | --- | --- | --- |
 | <a id="PROPOSE_TORSO_ISLANDS"></a>`PROPOSE_TORSO_ISLANDS` | the chest carrier has no art, tied largest islands, or an extra island exceeding the existing mesh-draft dust limits | separate real pieces so the torso has one largest art island and only dust beside it |
-| <a id="PROPOSE_BUST_INPUT"></a>`PROPOSE_BUST_INPUT` | a bust landmark is missing, malformed or unknown, the omission reason is blank or conflicts with landmarks, the midline has no unique crossing inside the apex segment, or the chest carrier is absent or ambiguous, or its recipe declares an incompatible influence mode | give finite rig-pixel apex_r/apex_l and optional cleavage, or a non-blank omission reason; separate overlapping chest-holding topwear |
+| <a id="PROPOSE_BUST_INPUT"></a>`PROPOSE_BUST_INPUT` | a chest torso has neither a bust declaration nor an omission reason, a bust landmark is missing, malformed or unknown, the omission reason is blank or conflicts with landmarks, the midline has no unique crossing inside the apex segment, or the chest carrier is absent or ambiguous, or its recipe declares an incompatible influence mode | give finite rig-pixel apex_r/apex_l and optional cleavage, or a non-blank omission reason; separate overlapping chest-holding topwear |
 | <a id="PROPOSE_NECK_BODY_TURN"></a>`PROPOSE_NECK_BODY_TURN` | no authored sampled body turn | follow this recipe and supply the named input; the refusal writes no config |
 | <a id="PROPOSE_NECK_PLAN"></a>`PROPOSE_NECK_PLAN` | no unique neck plan row | follow this recipe and supply the named input; the refusal writes no config |
 | <a id="PROPOSE_NECK_FULL_SOURCE"></a>`PROPOSE_NECK_FULL_SOURCE` | no full-run neck source | follow this recipe and supply the named input; the refusal writes no config |
@@ -3651,7 +3651,7 @@ full loader before its assemble stage writes anything.
 7. `rig-parts assemble … --out work` — read its `uncovered hole` and `uncovered:` lines and look at
    `work/render/recomposite_error_rig.png` (§5): red is painting no part holds, which
    no later stage can see — then
-   `rig-parts propose --parts work/rig --source inputs/painting.png --out work --write-config config.json` →
+   `rig-parts propose --parts work/rig --bust-landmarks bust-landmarks.json --source inputs/painting.png --out work --write-config config.json` →
    `work/proposal.json` and `work/render/landmarks.png` (+ `_head`). The flag saves
    each of `bones`, `meshes`, `regions`, `limbs`, `motion`, `constraints`, `turn`, `motion_seams` and `proposed_rig_scale` it
    wrote into the config: `limbs` is written only with `--keypoints`, `constraints`
@@ -3932,7 +3932,7 @@ everywhere:
 rig-parts layers art.psd
 rig-parts assemble --propose-plan --source painting.png --full art.psd --config config.json
 rig-parts assemble --source painting.png --full art.psd --config config.json --out .
-rig-parts propose --parts rig --source painting.png --out .
+rig-parts propose --parts rig --bust-landmarks bust-landmarks.json --source painting.png --out .
 rig-parts build --config config.json --source painting.png --full art.psd --out build
 ```
 
