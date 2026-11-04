@@ -510,7 +510,7 @@ import { ALIASES, AliasTarballError, compareTarballs, MANIFEST as ALIAS_MANIFEST
 import { confirmAlias, DEFAULT_ALIAS_WAIT_MINUTES, EXIT_ALIAS_WAIT, EXIT_NOT_SERVED } from './scripts/install_smoke.ts';
 import { blobId, checkExampleInputs, type Copier, FETCH_RECORD, recordText, runSync } from './scripts/example_inputs.ts';
 import { BLINK, blinkHoldMisses, CONTROL_SUFFIX, framesInside, IDLE_FPS, type MotionKey, type MotionSpec, sineTrack, TIME_SLACK } from './src/motion.ts';
-import { type BoneEntry, type CharacterConfig, CONFIG_REQUIRES, CONFIG_SECTIONS, type ConfigDoor, type ConfigSection, CONSTRAINT_BONE_FIELDS, type ContourRegionSpec, contourRegionsOf, type Cut, DEFAULT_BUST_ALPHA, DEFAULT_BUST_CLEARANCE, deriveBustRegions, type Extend, type Generation, isDoorKey, type Limb, loadClothConfig, loadConfig, loadConfigAndAnimations, loadEarlyConfig, loadPaintConfig, type Patch, type PlanEntry, type Point, parseConfig, parseEarlyConfig, parseProposalSections, type SkeletonSections, turnMovingPartPair } from './src/config.ts';
+import { ANIMATIONS_FROM_SPEC, type BoneEntry, type CharacterConfig, CONFIG_REQUIRES, CONFIG_SECTIONS, type ConfigDoor, type ConfigSection, CONSTRAINT_BONE_FIELDS, type ContourRegionSpec, contourRegionsOf, type Cut, DEFAULT_BUST_ALPHA, DEFAULT_BUST_CLEARANCE, deriveBustRegions, type Extend, type Generation, isDoorKey, type Limb, loadClothConfig, loadConfig, loadConfigAndAnimations, loadEarlyConfig, loadPaintConfig, type Patch, type PlanEntry, type Point, parseConfig, parseEarlyConfig, parseProposalSections, type SkeletonSections, turnMovingPartPair } from './src/config.ts';
 import { BUST_FIT_ALPHA, BUST_FIT_CLEARANCE, BUST_RESIDUAL_BOUND_PX, CALIBRATED_BUST_FIXTURES, midlineFallbackCleavage } from './fixtures/bust.ts';
 import { RIG_BONE_INHERIT, RIG_KEYS, RIG_SKIN_CONSTRAINT_KEYS } from '@rig-c/core/rig';
 import { expandStops } from '@rig-c/core/stop';
@@ -700,7 +700,7 @@ import { influences } from './src/weights.ts';
 import { apply as applyAffine, type ComparedMesh, contourAtBudget, cost, errors, fieldAt, fieldContour, fieldLattice, locator, pixelErrors, pixelsOver } from './tools/local_compare.ts';
 import { FIELD_LATTICE_GRID, FIELD_POSES, fieldRegion, REGION_SPACINGS } from './fixtures/localfield.ts';
 import { BASE_SPACINGS, CONTROL, describeWorst, displacement, frameOpenings, kindOf, neighbours, pickAtBudget, type PlacedMask, POSE_PHASE, ranked, regionPoses, regionSpacings, resolveSegments, seamOpening, seamPairs, sineAt, SWEEP_TOLERANCES, testRegion, toWorldPx, variantConfig } from './tools/real_compare.ts';
-import { BEND_DEGREES, BEND_WORST_SHARE, bendAnimationNames, bendAnimations, type BendFigure, bendLinks, CALIBRATED_SENTENCE, candidateMesh, carriedBy, islandsJoin, MORE_TRIANGLES_FLAG, RELATIVE_SENTENCE, DUST_MAX_PX, DUST_MAX_SHARE, dustOf, figureRules, type GateLine, gateVerdict, IDLE_BOUND_PX, jsonValueSpan, MEASURED_SENTENCE, MESH_DRAFT_REPORT, meshDraftStage, NOT_COMPARED_SENTENCE, notCompared, partsNamed, type PartReadings, type Reading, READINGS, splicedConfig, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
+import { BEND_DEGREES, BEND_WORST_SHARE, bendAnimationNames, bendAnimations, type BendFigure, bendLinks, CALIBRATED_SENTENCE, candidateMesh, carriedBy, islandsJoin, MORE_TRIANGLES_FLAG, RELATIVE_SENTENCE, DUST_MAX_PX, DUST_MAX_SHARE, dustOf, figureRules, type GateLine, gateVerdict, IDLE_BOUND_PX, jsonValueSpan, MEASURED_SENTENCE, MESH_DRAFT_REPORT, meshDraftStage, NOT_COMPARED_SENTENCE, notCompared, partsNamed, type PartReadings, type Reading, READINGS, scratchConfig, splicedConfig, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
 import { type Built, type CheckSide, checkHeldProblems, deltaRow, PROVENANCE_FILE, type RemeshInput, type RemeshPlant, type RemeshProvenance, type RemeshResult, remeshStage, requestHeldProblems, targetProblems } from './src/remesh.ts';
 import { deltaFrames } from './src/remesh.ts';
 import { INPUT_CHECK_FILE, INPUT_CHECK_SPEC } from './src/remesh.ts';
@@ -44246,6 +44246,20 @@ function draftReport(out: string): { parts: Array<{ part: string; mode: string; 
   return existsSync(p) ? (JSON.parse(readFileSync(p, 'utf8')) as ReturnType<typeof draftReport>) : null;
 }
 
+/** Relative config files shared by the two scratch-build entry points (issue #997). */
+function draftPathFixture(dir: string): { config: string; parts: string } {
+  const fx = writeDraftFixture(dir, DRAFT_COARSE_GRID);
+  const cfg = draftConfig(DRAFT_COARSE_GRID);
+  cfg.requirements = 'requirements.json';
+  cfg.motion = { ...(cfg.motion as Record<string, unknown>), animations_from: 'animations.json' };
+  cfg.generation = { ...fixtureGeneration(), latent: [832, 1216], pose: 'standing', control: { skeleton: 'pose.json', strength: 0.8, end_percent: 0.7 } };
+  writeFileSync(fx.config, JSON.stringify(cfg));
+  writeFileSync(join(dir, 'requirements.json'), JSON.stringify({ spec: 'spine-parts-requirements/1', fps: IDLE_FPS, requirements: [] }));
+  writeFileSync(join(dir, 'animations.json'), JSON.stringify({ spec: ANIMATIONS_FROM_SPEC, animations: {} }));
+  writeFileSync(join(dir, 'pose.json'), JSON.stringify({ width: 832, height: 1216, points: scaledPoints('stand_sides', 832, 1216) }));
+  return fx;
+}
+
 function runMeshDraftSuite(): number {
   section('mesh-draft: the traced outline around a coarse grid, held per part to its lattice through rig-c (issue #265)');
   const { say, bad } = counter();
@@ -44281,6 +44295,37 @@ function runMeshDraftSuite(): number {
         readdirSync(join(root, 'pos', 'out')).sort().join() === ['config.json', MESH_DRAFT_REPORT].sort().join(),
       `exit ${run1.status}; strip ${JSON.stringify(strip1.contour ?? null)} r ${String(strip1.r)}; gate ${row1 === undefined ? 'no row' : gateText(row1.gate)}; ${lastLines(run1.out, 1).join('')}`,
       'issue #265, the ruling of 2026-10-12: by hand (fixtures/meshdraft.ts) H = 408, so T = 1 and S = 11; the candidate is contour {T, T, S, maxEdge S} with the lattice\'s r and segments, it passes every reading against a lattice of 10 (164 triangles to its 148), every reading with a number carries its margin to its line inside the line, and nothing but its entry moves in the written config',
+    );
+
+    const paths21 = draftPathFixture(join(root, 'paths21'));
+    const pathRun21 = meshDraftRun(join(root, 'path-run21'), DRAFT_COARSE_GRID, {}, paths21);
+    say(
+      'MD21_RELATIVE_CONFIG_FILES_SURVIVE_EVERY_SCRATCH_BUILD',
+      pathRun21.e === null && draftReport(pathRun21.out)?.draft_check.PASS === true,
+      `stage ${pathRun21.e?.problems.map(problemLine).join(' | ') ?? 'green'}; ${pathRun21.log.slice(-3).join(' | ')}`,
+      'issue #997: requirements, imported animations and a control pose resolve beside the source config through the mesh-draft stage',
+    );
+
+    const absolute22 = JSON.parse(readFileSync(paths21.config, 'utf8')) as Record<string, unknown>;
+    absolute22.requirements = join(dirname(paths21.config), 'requirements.json');
+    (absolute22.motion as Record<string, unknown>).animations_from = join(dirname(paths21.config), 'animations.json');
+    const generation22 = absolute22.generation as { control: { skeleton: string } };
+    generation22.control.skeleton = join(dirname(paths21.config), 'pose.json');
+    const text22 = JSON.stringify(absolute22);
+    const written22 = scratchConfig(paths21.config, text22, join(root, 'absolute22'), new Map());
+    const absoluteExact22 = JSON.stringify(JSON.parse(readFileSync(written22, 'utf8'))) === text22;
+    const builtins22 = ['stand_sides', 'stand_clasp'].map((name) => {
+      generation22.control.skeleton = name;
+      writeFileSync(join(dirname(paths21.config), name), 'a file whose name is also a built-in');
+      const text = JSON.stringify(absolute22);
+      const written = scratchConfig(paths21.config, text, join(root, name), new Map());
+      return JSON.stringify(JSON.parse(readFileSync(written, 'utf8'))) === text && refusals(() => loadConfig(written)) === null;
+    });
+    say(
+      'MD22_ABSOLUTE_PATHS_AND_BUILTIN_SKELETON_NAMES_ARE_PRESERVED',
+      absoluteExact22 && builtins22.every(Boolean),
+      `absolute config unchanged ${absoluteExact22}; built-in names unchanged and loadable ${builtins22.join(', ')}`,
+      'issue #997: absolute file paths keep their text, and built-ins keep their meaning even beside a file with the same name',
     );
 
     // MD02 — the natural negative: on a lattice finer than S, the candidate's worst bend sample reads more than a tenth above the lattice's.
@@ -45419,6 +45464,15 @@ function runRemeshSuite(): number {
     };
     const inputDigest = treeDigest(input);
     const strip = (dir: string): string => JSON.stringify((JSON.parse(readFileSync(join(dir, 'rig.json'), 'utf8')) as { skins: { default: Record<string, Record<string, unknown>> } }).skins.default.strip.strip);
+
+    const paths34 = draftPathFixture(join(root, 'paths34'));
+    const pathRun34 = stage('paths34', request('paths34-grid', REMESH_GRID_REQUEST), { config: paths34.config, parts: paths34.parts });
+    say(
+      'RM34_RELATIVE_CONFIG_FILES_SURVIVE_THE_REMESH_REBUILD',
+      pathRun34.e === null && existsSync(join(pathRun34.out, PROVENANCE_FILE)),
+      `stage ${pathRun34.e?.problems.map(problemLine).join(' | ') ?? 'green'}; ${pathRun34.log.slice(-3).join(' | ')}`,
+      'issue #997: requirements, imported animations and a control pose resolve beside the source config through remesh',
+    );
 
     // RM01 — the positive control, through the CLI: the strip re-fitted on a lattice of 12, everything else the input's.
     const gridReq = request('grid', REMESH_GRID_REQUEST);

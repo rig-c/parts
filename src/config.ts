@@ -1432,6 +1432,41 @@ const DOORS = 'a project\'s own record goes under a key beginning "x-" (any JSON
 
 type Json = unknown;
 
+/** The loader's config-relative file fields, also used when relocating a config. */
+const CONFIG_FILE_FIELDS = {
+  requirements: { path: ['requirements'], isFile: (_value: string) => true },
+  animations: { path: ['motion', 'animations_from'], isFile: (_value: string) => true },
+  skeleton: { path: ['generation', 'control', 'skeleton'], isFile: (value: string) => !isSkeletonName(value) },
+} as const;
+
+function configFilePath(field: keyof typeof CONFIG_FILE_FIELDS, base: string, value: string): string | null {
+  return CONFIG_FILE_FIELDS[field].isFile(value) ? resolve(base, value) : null;
+}
+
+/** A file reference in a parsed config and its setter, excluding built-in names. */
+export interface ConfigFileReference {
+  at: string;
+  value: string;
+  set: (value: string) => void;
+}
+
+/** Enumerate the same file fields that the loader resolves, preserving invalid fields for its diagnostics. */
+export function configFileReferences(raw: unknown): ConfigFileReference[] {
+  const out: ConfigFileReference[] = [];
+  for (const field of Object.values(CONFIG_FILE_FIELDS)) {
+    let parent = raw;
+    for (const key of field.path.slice(0, -1)) parent = isPlainObject(parent) ? parent[key] : undefined;
+    const key = field.path[field.path.length - 1];
+    if (!isPlainObject(parent)) continue;
+    const value = parent[key];
+    if (typeof value !== 'string' || value === '' || !field.isFile(value)) continue;
+    const target = parent;
+    out.push({ at: field.path.join('.'), value, set: (next) => { target[key] = next; } });
+  }
+  return out;
+}
+
+
 class Check {
   readonly problems: Problem[] = [];
 
@@ -1834,10 +1869,12 @@ export function cloneConfig<T extends object>(cfg: T): T {
 function poseBeside(c: Check, gen: Json, base: string): ControlPose | null {
   if (!isPlainObject(gen) || !isPlainObject(gen.control)) return null;
   const skel = gen.control.skeleton;
-  if (typeof skel !== 'string' || skel === '' || isSkeletonName(skel)) return null;
+  if (typeof skel !== 'string' || skel === '') return null;
+  const file = configFilePath('skeleton', base, skel);
+  if (file === null) return null;
   const l = gen.latent;
   const latent = Array.isArray(l) && l.length === 2 && l.every((n) => typeof n === 'number' && Number.isInteger(n) && n > 0) ? ([l[0], l[1]] as [number, number]) : null;
-  return readControlPose(c, resolve(base, skel), latent);
+  return readControlPose(c, file, latent);
 }
 
 /**
@@ -1990,7 +2027,7 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
   if ('turn' in t) checkTurn(c, t.turn, attached, names.bones, hasAltFace, parts, declaredSliders, meshParts, t.meshes, names.chains, names.parents);
   if ('scene' in t) checkScene(c, t.scene);
   if ('cloth' in t) checkCloth(c, t.cloth);
-  if ('requirements' in t && c.string('config.requirements', t.requirements) && base !== null) checkRequirementsFile(c, resolve(base, t.requirements));
+  if ('requirements' in t && c.string('config.requirements', t.requirements) && base !== null) checkRequirementsFile(c, configFilePath('requirements', base, t.requirements) as string);
   const from = isPlainObject(t.motion) ? t.motion.animations_from : undefined;
   const animations = base !== null && typeof from === 'string' && from !== '' ? readAnimationsFrom(c, base, from) : null;
   if (animations !== null) {
@@ -2072,7 +2109,7 @@ function checkRequirementsFile(c: Check, file: string): void {
  */
 function readAnimationsFrom(c: Check, base: string, from: string): AnimationsFrom | null {
   const field = 'config.motion.animations_from';
-  const file = resolve(base, from);
+  const file = configFilePath('animations', base, from) as string;
   const form = `{"spec": "${ANIMATIONS_FROM_SPEC}", "animations": {"<name>": {"duration": …, "tracks": [...]}}}`;
   const shape = `a file in rig-c's motion-spec shape, ${form}, its path relative to the config's directory`;
   const where = `names ${JSON.stringify(from)}, resolved against the config's directory ${base} (not the working directory) to ${file}`;

@@ -67,7 +67,7 @@ import { MeshReductionError } from '@rig-c/core/mesh';
 import { explicitFrameId, idleSchedule } from './automotion.ts';
 import { checkStage, gateThroughRigc, type Log, RIGC_MODEL_DOCUMENT, rigStage } from './build.ts';
 import { BARS, type CheckReport, type PackShape, type PageEdges, type RigcRunner } from './check.ts';
-import { type CharacterConfig, type ContourMeshSpec, type LatticeMeshSpec, loadConfigAndAnimations, type Segment } from './config.ts';
+import { type CharacterConfig, configFileReferences, type ConfigFileReference, type ContourMeshSpec, type LatticeMeshSpec, loadConfigAndAnimations, type Segment } from './config.ts';
 import { PartsError, type Problem, problemLine } from './errors.ts';
 import { IDLE_FPS } from './motion.ts';
 import { type ContourBridges, FAINT_ALPHA } from './contour.ts';
@@ -743,28 +743,12 @@ export function splicedConfig(text: string, drafted: ReadonlyMap<string, unknown
   return r.text;
 }
 
-/** A path in a config the loader resolves against the config's directory, and how to set it. */
-export interface RelativeConfigPath {
-  at: string;
-  value: string;
-  set: (v: string) => void;
-}
+/** A config-relative file reference supplied by the loader. */
+export type RelativeConfigPath = ConfigFileReference;
 
-/**
- * Each path in `o` (a parsed config) the loader resolves against the config's directory — `motion.animations_from`,
- * `generation.control.skeleton` — where it is relative and names a file there.
- */
-export function relativeConfigPaths(configDir: string, o: Json): RelativeConfigPath[] {
-  const out: RelativeConfigPath[] = [];
-  const motion = o.motion as Json | undefined;
-  if (motion !== undefined && typeof motion.animations_from === 'string' && !isAbsolute(motion.animations_from) && existsSync(resolve(configDir, motion.animations_from))) {
-    out.push({ at: 'motion.animations_from', value: motion.animations_from, set: (v) => (motion.animations_from = v) });
-  }
-  const control = (o.generation as Json | undefined)?.control as Json | undefined;
-  if (control !== undefined && typeof control.skeleton === 'string' && !isAbsolute(control.skeleton) && existsSync(resolve(configDir, control.skeleton))) {
-    out.push({ at: 'generation.control.skeleton', value: control.skeleton, set: (v) => (control.skeleton = v) });
-  }
-  return out;
+/** Each relative file path the loader knows, with built-in skeleton names excluded. */
+export function relativeConfigPaths(_configDir: string, o: Json): RelativeConfigPath[] {
+  return configFileReferences(o).filter((field) => !isAbsolute(field.value));
 }
 
 /**
