@@ -401,3 +401,82 @@ export function runTakeReferenceGeometryChecks(dir: string, say: Say): void {
     say(padded ? 'REGION_PADDED_REFERENCE_COLOUR_AND_SOURCE_GEOMETRY' : 'REGION_REFERENCE_COLOUR_AND_SOURCE_GEOMETRY', initial === 96 && referencePlant === 48 && sourcePlant === 96, `selected cells initial ${initial}, reference-only colour plant ${referencePlant}, source-only colour plant ${sourcePlant}, source ${plate.width}x${plate.height}, run 64x64`);
   }
 }
+
+/** Native single-run and cropped head-run colour frames stay reference-bound. */
+export function runTakeReferenceBranchChecks(dir: string, say: Say): void {
+  for (const mode of ['native', 'head'] as const) {
+    const home = join(dir, mode);
+    const cfg = writeTakeRegionFixture(home);
+    const original = readPng(join(home, 'painting.png'));
+    const reference = newRaster(96, mode === 'native' ? 64 : 96);
+    reference.data.fill(255);
+    const origin = mode === 'head' ? 16 : 0;
+    for (let y = 0; y < 64; y++) reference.data.set(original.data.subarray(y * 64 * 4, (y + 1) * 64 * 4), ((y + origin) * 96 + origin) * 4);
+    const paintingPath = join(home, 'painting.png');
+    writeFileSync(paintingPath, encodePngBytes(reference));
+    const plate = { ...reference, data: new Uint8ClampedArray(reference.data) };
+    plate.data[0] ^= 1;
+    const platePath = join(home, 'plate.png');
+    writeFileSync(platePath, encodePngBytes(plate));
+    const run = mode === 'head' ? 'head' : 'full';
+    const seethrough = cfg.seethrough as Record<string, unknown>;
+    if (mode === 'head') {
+      seethrough.head_box = [16, 16, 80, 80];
+      (cfg.assemble as Record<string, unknown>).plan = [['body', 'head', 'topwear'], ['face', 'full', 'face']];
+    } else {
+      seethrough.resolution = 96;
+      for (const name of ['full', 'donor']) {
+        const path = join(home, name, 'layers.json');
+        const manifest = JSON.parse(readFileSync(path, 'utf8'));
+        manifest.width = 96;
+        writeFileSync(path, JSON.stringify(manifest));
+      }
+    }
+    const take = (cfg.assemble as { take: Array<Record<string, unknown>> }).take;
+    take[0].run = run;
+    take[0].st_input = 'plate-input.png';
+    const config = join(home, 'config.json');
+    const read = () => {
+      take[0].reference = { painting: 'painting.png', sha256: fileSha256(paintingPath) };
+      writeFileSync(config, JSON.stringify(cfg));
+      const loaded = loadEarlyConfig(config, 'assemble');
+      const inputs = makeInputs(plate, loaded, 'generated plate');
+      writeFileSync(join(home, 'plate-input.png'), encodePngBytes(mode === 'head' ? inputs.head! : plate));
+      const runs = readRuns(join(home, 'full'), mode === 'head' ? join(home, 'full') : null);
+      const taken = applyTakenRegions({ ...runs, notes: [] }, plate, loaded, config, { rgb_tolerance: 0, regions: [] }, readEditorReceipts(undefined, config), platePath);
+      const layer = taken[run].layers.find(item => item.name === 'topwear')!;
+      let selected = 0;
+      for (let y = 36; y < 44; y++) for (let x = 8; x < 20; x++) {
+        if (layer.pixels.data[((y - layer.top) * layer.pixels.width + x - layer.left) * 4 + 3] >= 128) selected++;
+      }
+      return selected;
+    };
+    const initial = read();
+    for (let y = 36; y < 44; y++) for (let x = 14; x < 20; x++) reference.data[((y + origin) * 96 + x + origin) * 4] ^= 255;
+    writeFileSync(paintingPath, encodePngBytes(reference));
+    const planted = read();
+    say(mode === 'native' ? 'REGION_NATIVE_SINGLE_REFERENCE_COLOUR' : 'REGION_HEAD_REFERENCE_COLOUR', initial === 96 && planted === 48, `${mode} selected cells initial ${initial}, reference-only plant ${planted}, required 96 then 48`);
+  }
+}
+
+/** A colour reference does not supply an opaque source for the run producer. */
+export function runTakeSourceOpacityChecks(dir: string, say: Say): void {
+  writeTakeRegionFixture(dir);
+  const plate = readPng(join(dir, 'painting.png'));
+  plate.data[3] = 0;
+  plate.data[7] = 127;
+  const source = join(dir, 'plate.png');
+  writeFileSync(source, encodePngBytes(plate));
+  let message = '';
+  try {
+    assembleStage(
+      { source, full: join(dir, 'full'), head: null, config: join(dir, 'config.json'), requirements: join(dir, 'requirements.json') },
+      { partsJson: join(dir, 'out', 'parts.json'), partsDir: join(dir, 'out', 'parts'), recomposite: join(dir, 'out', 'recomposite.png'), errorMap: join(dir, 'out', 'error.png') }, () => {},
+    );
+  } catch (error) {
+    if (!(error instanceof PartsError)) throw error;
+    message = error.message;
+  }
+  const expected = 'INPUTS_PAINTING_OPAQUE: region take painting (--source must be opaque because geometry follows the run input and inputs refuses see-through paintings, flatten the plate first) — has 2 pixel(s) below alpha 255 (first at 0,0); an opaque painting is required, because neither dropping the alpha nor compositing it is stated by the input';
+  say('REGION_TRANSPARENT_SOURCE_EXPLICIT_REFERENCE_REFUSED', message === expected && !existsSync(join(dir, 'out')), message);
+}

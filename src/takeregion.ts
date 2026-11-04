@@ -141,7 +141,7 @@ export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleCon
         return refuse('ASSEMBLE_REGION_TAKE_REFERENCE_MATCH', at, `reference sha256 ${referenceHash}, expected ${reference.sha256}; reference ${referencePainting.width}x${referencePainting.height}, source ${painting.width}x${painting.height}; matching hash and painting dimensions are required`);
       }
     }
-    const inputs = makeInputs(painting, cfg, 'region take painting');
+    const inputs = makeInputs(painting, cfg, 'region take painting (--source must be opaque because geometry follows the run input and inputs refuses see-through paintings, flatten the plate first)');
     const set = runs[declaration.run];
     const donor = readLayers(resolve(dirname(resolve(configPath)), declaration.run_dir));
     refuseIfAny(missingReceipts(receipts, editedRunImages(
