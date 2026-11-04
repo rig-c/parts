@@ -12,7 +12,7 @@ import { writeRun, paint, C, WHITE } from '../fixtures/assemble_fixture.ts';
 import { spawnSync } from 'node:child_process';
 import { PartsError } from '../src/errors.ts';
 import { readPng, encodePngBytes } from '../src/raster/png.ts';
-import { runTakeRegionChecks, runTakeRegionReceiptChecks, runTakeContainmentChecks } from './check_take_region.ts';
+import { runTakeRegionChecks, runTakeRegionReceiptChecks, runTakeContainmentChecks, runTakeDerivedChecks } from './check_take_region.ts';
 import { runTakePlanOrderChecks } from './check_take_plan_order.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
@@ -154,4 +154,5 @@ export function runTakeLayerChecks(dir: string, say: Say): void {
   runTakeRegionChecks(join(dir, 'region'), say);
   runTakeRegionReceiptChecks(join(dir, 'region-receipts'), say);
   runTakeContainmentChecks(join(dir, 'region-containment'), say);
+  runTakeDerivedChecks(join(dir, 'region-derived'), say);
 }

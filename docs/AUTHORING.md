@@ -835,7 +835,10 @@ The origin is the head crop's top-left or the negative full-input padding.
 The recorded filter is Lanczos3.
 
 A region take evaluates the pre-take assembly once as a counterfactual, retaining
-whole-layer takes. Every non-target part keeps that assembly's complete image
+whole-layer takes. The target set includes cut pieces, limb segments and hybrid
+bands consuming a target, transitively. The same set permits empty pieces only
+in the internal counterfactual. Patches consume the painting directly and have
+no source-part relationship. Every non-target part keeps that assembly's complete image
 and record. This contains its changes to zero everywhere, including beyond the
 mapped region plus bicubic's 2 px support, through subsequent seam operations.
 Final recomposite and error measurements use those retained parts together with
