@@ -1,4 +1,5 @@
 import { EDGE_RESIDUAL_FILE, edgeResidualLines } from './edgeresidual.ts';
+import { COINCIDE_LINE, supportLines } from './coincide.ts';
 import { DEFAULT_SEAM_RULE } from './seamrule.ts';
 import { DEFAULT_PROJECT_RULE } from './projectrule.ts';
 import { EDGE_CONTRAST } from './paintingedges.ts';
@@ -1999,6 +2000,8 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   if (cutMaterial !== undefined) for (const line of materialLines(cutMaterial)) log(`  ${line}`);
   const artJoints = fig[ART_JOINT_LINE];
   if (artJoints !== undefined) for (const line of artJointLines(artJoints)) log(`  ${line}`);
+  const partSupport = fig[COINCIDE_LINE];
+  if (partSupport !== undefined) for (const line of supportLines(partSupport)) log(`  ${line}`);
   const setupPainting = fig[SETUP_PAINTING_LINE];
   if (setupPainting !== undefined) for (const line of setupPaintingLines(setupPainting)) log(`  ${line}`);
   for (const line of boundaryColourLines(r.boundaryColour)) log(`  ${line}`);

@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { runCoincideChecks, runCoincideSetupChecks } from './tools/check_coincide.ts';
+import { COINCIDE_LINE, type SupportReport } from './src/coincide.ts';
 import { runPaintingEdgeChecks } from './tools/check_painting_edges.ts';
 import { runProjectConfigChecks } from './tools/check_project_config.ts';
 import { runGroundConfigChecks, runGroundExampleChecks, runGroundUnitChecks } from './tools/check_ground.ts';
@@ -15806,7 +15808,7 @@ function readJsonFile(path: string): Record<string, unknown> | null {
 }
 
 // Issue #333: the fold bar reads the idle too, so every rig whose motion holds an animation writes it after the judgement lines.
-const CHECK_KEYS = ['gate_spine_html_green', 'rigc_entry', 'pack_mode', 'loop_max_diff', 'seam_mean', 'seam_px_over_40', 'seam_px_over_80', 'seam_frame_scale', 'seam_scope', ...JUDGEMENT_LINES, FOLD_LINE, ...REPORTED_LINES, 'figure_openings', 'PASS'];
+const CHECK_KEYS = ['gate_spine_html_green', 'rigc_entry', 'pack_mode', 'loop_max_diff', 'seam_mean', 'seam_px_over_40', 'seam_px_over_80', 'seam_frame_scale', 'seam_scope', ...JUDGEMENT_LINES, FOLD_LINE, ...REPORTED_LINES, 'figure_openings', COINCIDE_LINE, 'PASS'];
 
 /** A judgement line's status in a check.json read back, or null. */
 function lineStatus(fig: Record<string, unknown> | null, name: string): string | null {
@@ -15897,7 +15899,7 @@ function runSourceCases(dir: string, say: (name: string, ok: boolean, detail: st
     const l = fig?.[name] as { status?: string; reason?: string } | undefined;
     return l?.status === 'SKIP' ? String(l.reason) : `not SKIP (${l?.status ?? 'absent'})`;
   };
-  const sourceKeys = [...CHECK_KEYS.slice(0, -1).filter(k => k !== 'seam_scope' && k !== 'figure_openings'), SOURCE_LINE, 'skipped', 'SETUP_MATCHES_PAINTING', 'PASS'].join(',');
+  const sourceKeys = [...CHECK_KEYS.slice(0, -1).filter(k => k !== 'seam_scope' && k !== 'figure_openings' && k !== COINCIDE_LINE), SOURCE_LINE, 'skipped', COINCIDE_LINE, 'SETUP_MATCHES_PAINTING', 'PASS'].join(',');
 
   // The card's shape: two prefixed copies under one root, a plate region at slot 0, no parts.json, an idle.
   const withIdle = merged('merged-idle', { idle: true, plate: true });
@@ -19040,7 +19042,18 @@ function runBallCheckCases(report: FixtureCaseReporter): void {
 
 function runCheckSuite(): number {
   const scope = startCheckReadScope();
-  try { return runCheckFixtureCases(scope); } finally { scope.restore(); }
+  try {
+    const failures = runCheckFixtureCases(scope);
+    const { say, bad } = counter();
+    const dir = temp('coincide');
+    try {
+      const report = (name: string, ok: boolean, detail: string) => say(name, ok, detail, 'issue #998: independent support domains, report-only coverage and open-edge unowned pixels; each bar kills an isolated instrument mutant');
+      runCoincideChecks(dir, report);
+      runCoincideSetupChecks(join(dir, 'setup'), report, rigcRunnerAt(suiteRigc(), spawnRigc));
+    }
+    finally { rmSync(dir, { recursive: true, force: true }); }
+    return failures + bad();
+  } finally { scope.restore(); }
 }
 
 // CK705_TINY_FIXTURE_CONSTRUCTOR_BEGIN
@@ -29136,7 +29149,19 @@ function autoTurnExampleBytes(asm: string, rig: string, key: string, baseline: R
 function chainCheckGoldenCase(ex: string, out: string, key: string, say: ReturnType<typeof counter>['say']) {
       const exp = join(ex, 'expected');
       const expectedCheck = readJsonAt(join(exp, 'check.json'));
-      const check = jsonDiffs(expectedCheck, readJsonAt(join(out, 'check', 'check.json')), chainTolerance('check.json', expectedCheck));
+      const current = readJsonAt(join(out, 'check', 'check.json')) as Record<string, unknown>;
+      // Historical field-by-field oracle stays intact. The additive report has
+      // its own controls and coverage assertion, with no new acceptance bar.
+      const { [COINCIDE_LINE]: report, ...legacy } = current;
+      const check = jsonDiffs(expectedCheck, legacy, chainTolerance('check.json', expectedCheck));
+      const support = report as SupportReport | undefined;
+      const names = new Set(support?.pairs.flatMap(p => [p.back, p.front]) ?? []);
+      say(`CH943_SUPPORT_COVERAGE_IS_EXPLICIT[${key}]`,
+        support !== undefined && support.coverage.total === names.size * (names.size - 1) / 2 &&
+        support.pairs.length === support.coverage.total && support.coverage.measured === 0 &&
+        new Set(support.pairs.map(p => JSON.stringify([p.back, p.front]))).size === support.coverage.total &&
+        support.pairs.every(p => p.status === 'unavailable' && p.boundary_length_px === null && typeof p.reason === 'string'),
+        JSON.stringify(support), 'legacy producer has no independent domains; every pair is listed unavailable, never clean');
       say(
         `CH04_CHECK_JSON_IS_THE_EXPECTED_FIELD_BY_FIELD[${key}]`,
         check.over.length === 0,
