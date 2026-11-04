@@ -5499,7 +5499,7 @@ function runCliSuite(): number {
 
     const parts = join(dir, 'kp-parts');
     writeProposeFixture(parts);
-    const callP = (extra: string[]): { status: number; out: string } => runCli(['propose', '--parts', parts, '--source', join(parts, 'painting.png'), '--out', join(dir, 'kp-out'), ...extra, '--no-bust', 'historical fixture: no bust landmarks recorded']);
+    const callP = (extra: string[]): { status: number; out: string } => runCli(['propose', '--parts', parts, '--source', join(parts, 'painting.png'), '--out', join(dir, 'kp-out'), ...extra]);
     const personAlone = callP(['--person', 'a']);
     say(
       'CL10_PERSON_WITHOUT_KEYPOINTS_IS_A_USAGE_ERROR',
@@ -6142,7 +6142,7 @@ function runWriteConfigFromCases(say: (name: string, ok: boolean, detail: string
   const base = ['propose', '--parts', parts, '--source', painting];
   const write = (cfg: string, name: string, extra: string[] = []): { r: { status: number; out: string }; text: string | null } => {
     const at = join(dir, `wf-${name}.json`);
-    const r = runCli([...base, '--cloth', cfg, '--out', join(dir, `wf-${name}`), '--write-config', at, ...extra, '--no-bust', 'historical fixture: no bust landmarks recorded']);
+    const r = runCli([...base, '--cloth', cfg, '--out', join(dir, `wf-${name}`), '--write-config', at, '--no-bust', 'historical fixture: no bust landmarks recorded', ...extra]);
     return { r, text: existsSync(at) ? readFileSync(at, 'utf8') : null };
   };
   const partial = join(dir, 'wf-partial.json');
@@ -6222,7 +6222,7 @@ function runWriteConfigFromCases(say: (name: string, ok: boolean, detail: string
 
   // CL212: the flag's usage errors.
   const usageRun = (extra: string[], name: string): { status: number; out: string; written: boolean } => {
-    const r = runCli([...base, '--cloth', partial, '--out', join(dir, `wf-u-${name}`), ...extra, '--no-bust', 'historical fixture: no bust landmarks recorded']);
+    const r = runCli([...base, '--cloth', partial, '--out', join(dir, `wf-u-${name}`), '--no-bust', 'historical fixture: no bust landmarks recorded', ...extra]);
     return { ...r, written: existsSync(join(dir, `wf-u-${name}`)) || existsSync(join(dir, `wf-u-${name}.json`)) };
   };
   const noWrite = usageRun(['--from', gen1At], 'nowrite');
@@ -6281,7 +6281,7 @@ function runDroppedRecipeCases(say: (name: string, ok: boolean, detail: string, 
   const base = ['propose', '--parts', parts, '--source', painting];
   const write = (cfg: string, name: string, extra: string[] = []): { r: { status: number; out: string }; text: string | null } => {
     const at = join(dir, `dr-${name}.json`);
-    const r = runCli([...base, '--cloth', cfg, '--out', join(dir, `dr-${name}`), '--write-config', at, ...extra, '--no-bust', 'historical fixture: no bust landmarks recorded']);
+    const r = runCli([...base, '--cloth', cfg, '--out', join(dir, `dr-${name}`), '--write-config', at, '--no-bust', 'historical fixture: no bust landmarks recorded', ...extra]);
     return { r, text: existsSync(at) ? readFileSync(at, 'utf8') : null };
   };
   const partial = join(dir, 'dr-partial.json');
@@ -6432,7 +6432,7 @@ function runWindWriteConfigFromCases(say: (name: string, ok: boolean, detail: st
     const base = ['propose', '--parts', pdir, '--source', join(inputs, 'painting.png'), '--keypoints', join(wind, 'keypoints.json')];
     const write = (cfg: string, name: string, extra: string[]): { r: { status: number; out: string }; at: string; text: string | null } => {
       const at = join(dir, `${name}.json`);
-      const r = runCli([...base, '--cloth', cfg, '--out', join(dir, name), '--write-config', at, ...extra, '--no-bust', 'historical fixture: no bust landmarks recorded']);
+      const r = runCli([...base, '--cloth', cfg, '--out', join(dir, name), '--write-config', at, '--no-bust', 'historical fixture: no bust landmarks recorded', ...extra]);
       return { r, at, text: existsSync(at) ? readFileSync(at, 'utf8') : null };
     };
     const from = write(changed, 'from', ['--from', fromConfig]);
@@ -14979,10 +14979,10 @@ function runWristSnapCases(dir: string, SE: string, Pe: PartSet, Je: RigJoints, 
   const withSnap = runCli([...base, '--out', join(dir, 'snap-21'), '--keypoints', kpFile, '--wrist-snap', '21', '--no-bust', 'historical fixture: no bust landmarks recorded']);
   const without = runCli([...base, '--out', join(dir, 'snap-none'), '--keypoints', kpFile, '--no-bust', 'historical fixture: no bust landmarks recorded']);
   const bad = ['0', '-3', 'abc', '15', '20.5', ''].map((v) => {
-    const r = runCli([...base, '--out', join(dir, 'snap-bad'), '--keypoints', kpFile, '--wrist-snap', v, '--no-bust', 'historical fixture: no bust landmarks recorded']);
+    const r = runCli([...base, '--out', join(dir, 'snap-bad'), '--keypoints', kpFile, '--wrist-snap', v]);
     return { v, ok: r.status === 2 && r.out.includes(`USAGE: --wrist-snap ${v} is not an integer above 15, the px within which a wrist already holds a part`) };
   });
-  const noKp = runCli([...base, '--out', join(dir, 'snap-bad'), '--wrist-snap', '21', '--no-bust', 'historical fixture: no bust landmarks recorded']);
+  const noKp = runCli([...base, '--out', join(dir, 'snap-bad'), '--wrist-snap', '21']);
   const fromCfg = runCli([...base, '--out', join(dir, 'snap-bad'), '--keypoints', kpFile, '--from-config', join(dir, 'no-such-config.json'), '--wrist-snap', '21']);
   say(
     'PR76_WRIST_SNAP_IS_AN_INTEGER_ABOVE_THE_BUILT_IN_15_WITH_KEYPOINTS_AND_IS_REFUSED_BY_NAME_OTHERWISE',
@@ -15802,7 +15802,7 @@ function runKeypointsSuite(): number {
     writeFileSync(off, JSON.stringify(offK));
     const sized = join(dir, 'sized.json');
     writeFileSync(sized, JSON.stringify({ ...POSES.lying.keypoints, width: 600, height: 400 }));
-    const run = (kp: string, out: string, extra: string[] = []): { status: number; out: string } => runCli(['propose', '--parts', LY, '--source', join(LY, 'painting.png'), '--out', join(dir, out), '--keypoints', kp, ...extra, '--no-bust', 'historical fixture: no bust landmarks recorded']);
+    const run = (kp: string, out: string, extra: string[] = []): { status: number; out: string } => runCli(['propose', '--parts', LY, '--source', join(LY, 'painting.png'), '--out', join(dir, out), '--keypoints', kp, '--no-bust', 'historical fixture: no bust landmarks recorded', ...extra]);
     const ok = run(good, 'ok');
     const offRun = run(off, 'off');
     const sizedRun = run(sized, 'sized');
