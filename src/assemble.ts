@@ -1,3 +1,4 @@
+import { edgePairResiduals, type EdgeResidualReport } from './edgeresidual.ts';
 import { type SeamRule } from './seamrule.ts';
 import { DEFAULT_GROUND, DEFAULT_PROJECT_RULE, type Ground, type ProjectRule } from './projectrule.ts';
 import { paintingEdges, type PaintingEdgeSkips } from './paintingedges.ts';
@@ -4597,6 +4598,8 @@ export function softOcclusionLine(r: SoftOcclusionReading): string {
 }
 
 export interface AssembleResult {
+  /** Report-only residual candidates, present after the visible edge pass. */
+  edgeResiduals?: EdgeResidualReport;
   /** Report-only source re-take under actual soft front support (#825). */
   softOcclusion?: SoftOcclusionReading[];
   parts: PartsFile;
@@ -5851,6 +5854,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       ...(padRecord === null ? {} : { single_run_pad: padRecord }),
     },
     images: placed,
+    ...(projectRule === 'visible' ? { edgeResiduals: edgePairResiduals(placed.map(p => ({ name: p.record.name, x: p.record.x, y: p.record.y, image: p.image })), srcr, can, ERROR_LIMIT) } : {}),
     ...(registeredDepth.size === 0 ? {} : { depthReadings: ([['full', depthFullInput], ...(single ? [] : [['head', depthHeadInput]])] as Array<['full' | 'head', LayerSet]>).flatMap(([run, set]) => set.layers.flatMap(layer => layer.depthSheet === undefined ? [] : [{ from: `${run}:${layer.name}`, reading: layer.depthSheet.reading }])) }),
     ...(depthClamps.length === 0 ? {} : { depthClamps }),
     recomposite: can,

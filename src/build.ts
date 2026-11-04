@@ -1,3 +1,4 @@
+import { EDGE_RESIDUAL_FILE, edgeResidualLines } from './edgeresidual.ts';
 import { DEFAULT_SEAM_RULE } from './seamrule.ts';
 import { DEFAULT_PROJECT_RULE } from './projectrule.ts';
 import { EDGE_CONTRAST } from './paintingedges.ts';
@@ -793,6 +794,9 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   mkdirSync(dirname(outs.recomposite), { recursive: true });
   mkdirSync(dirname(outs.errorMap), { recursive: true });
   writeParts(outs.partsJson, result.parts);
+  const residualPath = join(dirname(outs.partsJson), EDGE_RESIDUAL_FILE);
+  if (result.edgeResiduals === undefined) rmSync(residualPath, { force: true });
+  else writeFileSync(residualPath, JSON.stringify(result.edgeResiduals, null, 2) + '\n');
   for (const { record, image, depthImage } of result.images) {
     writePng(join(outs.partsDir, `${record.name}.png`), image);
     if (depthImage !== undefined && record.depth !== undefined) writePng(join(outs.partsDir, record.depth.image), depthImage);
@@ -822,6 +826,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     // Issue #996: under a declared busy ground, what the two ground rules left.
     if (fields.ground === 'busy') log(`  busy ground (assemble.ground): ${e.skipped.mix} behind-side px left that are not a mix of the two reference colours, ${e.skipped.support} part px not raised outside the part's own support`);
   }
+  if (result.edgeResiduals !== undefined) for (const line of edgeResidualLines(result.edgeResiduals)) log(line);
   // Issue #359: one run, said, so a reader of the lines knows no head run was placed.
   if (runs.single) log(`  one run: ${input.full} holds the face (${SINGLE_RUN_FACE_TAGS.join(', ')}), so no head run is read; every part comes from the full run`);
   // Issue #366: a file that is not the resolution square was padded to it; said, with where parts.json records it. None for a square file.
@@ -2445,6 +2450,7 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
   for (const p of BUILD_OWNS) rmSync(join(out, p), { recursive: true, force: true });
   // Optional source evidence is cleared separately; BUILD_OWNS is the legacy complete output tree.
   rmSync(join(out, CUT_MATERIAL_SOURCES), { force: true });
+  rmSync(join(out, EDGE_RESIDUAL_FILE), { force: true });
   // Issue #242: the figure mask is written only under config.scene; one left by an earlier scene build is not this build's.
   rmSync(join(out, FIGURE_MASK_FILE), { force: true });
   // The idle-keys value is named only when it is not the default, so a build without the flag, or with the default, prints the line it printed before issue #95.

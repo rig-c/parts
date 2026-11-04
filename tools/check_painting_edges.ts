@@ -1,3 +1,4 @@
+import { runEdgeResidualChecks } from './check_edge_residual.ts';
 /**
  * Issue #953: `paintingEdges` on hand-computable two-part strips. Each control
  * is read against the definition (the flat composite at a resolved pixel is the
@@ -75,6 +76,7 @@ function strip(front: RGB, behind: RGB, frontAlpha: (x: number) => number, behin
 const RAMP = (x: number): number => (x <= 7 ? 255 : x === 8 ? 200 : x === 9 ? 140 : x === 10 ? 100 : x === 11 ? 50 : 0);
 
 export function runPaintingEdgeChecks(say: Say): void {
+  runEdgeResidualChecks(say);
   say(
     'ED9530_CONSTANTS_ARE_THE_ASSEMBLE_LIMITS',
     EDGE_OWNER_ALPHA === COVERED_ALPHA && EDGE_CONTRAST === ERROR_LIMIT && EDGE_RADIUS === 3,

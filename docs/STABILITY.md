@@ -86,6 +86,10 @@ The [command reference](AUTHORING.md#command-reference) describes each mode;
 [writing proposed config fields](AUTHORING.md#writing-proposed-config-fields)
 records the existing-file and fresh-file destinations and byte-preservation rules.
 
+`assemble --project visible` adds optional `edge_residuals.json` beside
+`parts.json` (issue #999), a report-only front/back residual candidate sidecar.
+Its observations add no acceptance bar to the existing outputs.
+
 ## The config contract
 
 `src/config.ts` is the schema and the loader, and
