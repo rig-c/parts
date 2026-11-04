@@ -1,9 +1,10 @@
+import { createHash } from 'node:crypto';
 /** Generated controls for the exhaustive report; no consumer data. */
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { assemble, stageFields, sourceInRig, measureRecomposite, errorMask, type PlacedPart } from '../src/assemble.ts';
-import { measureDiffComponents, readDiffComponents, serializeDiffComponents, type DiffInputs } from '../src/diffcomponents.ts';
+import { assemble, recomposite, stageFields, sourceInRig, measureRecomposite, errorMask, type PlacedPart } from '../src/assemble.ts';
+import { measureDiffComponents, readDiffComponents, serializeDiffComponents, type DiffInputs, type DiffComponentsReport } from '../src/diffcomponents.ts';
 import { PartsError } from '../src/errors.ts';
 import { encodePngBytes, readPng } from '../src/raster/png.ts';
 import { newRaster } from '../src/raster/types.ts';
@@ -14,13 +15,15 @@ import { writeParts } from '../src/parts.ts';
 import { EXPECTED_PARTS, writeAssembleFixture } from '../fixtures/assemble_fixture.ts';
 type Say = (name: string, pass: boolean, detail: string) => void;
 const refused = (fn: () => unknown, code: string): boolean => { try { fn(); return false; } catch (e) { return e instanceof PartsError && e.problems.some(p => p.code === code); } };
+const caught = (fn: () => unknown): PartsError | null => { try { fn(); return null; } catch (e) { return e instanceof PartsError ? e : null; } };
 export function runDiffComponentChecks(say: Say): void {
-  const stack = newRaster(30, 5), painting = newRaster(30, 5);
-  stack.data.fill(255); painting.data.fill(255);
-  // Seven 2-pixel components, and one 1-pixel component, separated by two columns.
-  for (let i = 0; i < 8; i++) for (let y = 1; y <= (i === 7 ? 1 : 2); y++) stack.data.set([0,0,0,255], (y * 30 + i * 4) * 4);
+  const painting = newRaster(30, 5);
+  painting.data.fill(255);
+  // Seven 2-pixel components and one 1-pixel component, with three empty columns between them.
+  for (let i = 0; i < 8; i++) for (let y = 1; y <= (i === 7 ? 1 : 2); y++) painting.data.set([0,0,0,255], (y * 30 + i * 4) * 4);
   const image = newRaster(1,1); image.data.fill(255);
   const part: PlacedPart = { record: { ...EXPECTED_PARTS.parts[0], name: 'marker', x: 0, y: 1, w: 1, h: 1 }, image };
+  const stack = recomposite([part],30,5);
   const input: DiffInputs = { stack: { path: 'stack.png', bytes: encodePngBytes(stack) }, painting: { path: 'painting.png', bytes: encodePngBytes(painting) }, parts: [part], inside: null };
   const r = measureDiffComponents(input, 2), text = serializeDiffComponents(r);
   say('AS842_DIFF_INVENTORY_IS_UNCAPPED_AND_THE_CAPPED_MUTANT_IS_REFUSED', r.components.length === 7 && refused(() => readDiffComponents(JSON.stringify({...r,components:r.components.slice(0,5)}), input),'DIFF_COMPONENTS_REPORT'), `${r.components.length} listed; capped at five refused`);
@@ -37,9 +40,9 @@ export function runDiffComponentChecks(say: Say): void {
   say('AS846_DIFF_DOMAIN_AND_CUSTOM_THRESHOLD_USE_THE_SHARED_PREDICATE', scoped.error_px === 1 && scoped.uncovered_error_px === 0 && f.errorPx === scoped.error_px && measureDiffComponents(input,1,255).error_px === 0 && measureDiffComponents(changed,1,0).error_px === 16 && refused(()=>readDiffComponents(text,{...input,inside}),'DIFF_COMPONENTS_REPORT'), 'one-pixel domain: 1 covered error; >255: 0; >0 includes the changed pixel; changed domain refused');
   const first = r.components[0];
   say('AS847_DIFF_MIXED_COVERAGE_NATIVE_BOX_AND_BORDERS_ARE_MEASURED', first.coverage === 'mixed' && first.uncovered_px===1 && JSON.stringify(first.box)==='{"x":0,"y":1,"w":1,"h":2}' && first.borders[0]?.part==='marker' && first.borders[0]?.px===1 && r.components[1].coverage==='uncovered' && scoped.components[0].coverage==='covered', JSON.stringify(first));
+  const invalidDefinitions = caught(()=>measureDiffComponents(input,0,256));
   const invalid = [0,-1,1.5,NaN,Infinity].every(v=>refused(()=>measureDiffComponents(input,v),'DIFF_COMPONENTS_INPUT')) && [-1,256,NaN,Infinity].every(v=>refused(()=>measureDiffComponents(input,1,v),'DIFF_COMPONENTS_INPUT'));
-  say('AS848_DIFF_INVALID_DEFINITIONS_SHAPES_AND_REPORTS_ARE_REFUSED', invalid && refused(()=>measureDiffComponents({...input,inside:new Uint8Array(1)},1),'DIFF_COMPONENTS_INPUT') && refused(()=>measureDiffComponents({...input,parts:[part,part]},1),'DIFF_COMPONENTS_INPUT') && refused(()=>measureDiffComponents({...input,stack:{path:'small.png',bytes:encodePngBytes(image)}},1),'DIFF_COMPONENTS_INPUT') && refused(()=>readDiffComponents('{',input),'DIFF_COMPONENTS_REPORT') && refused(()=>readDiffComponents('{}',input),'DIFF_COMPONENTS_REPORT'), 'invalid floor/threshold, domain, duplicate parts, dimensions, JSON and spec refused');
-  const caught = (fn: () => unknown): PartsError | null => { try { fn(); return null; } catch (e) { return e instanceof PartsError ? e : null; } };
+  say('AS848_DIFF_INVALID_DEFINITIONS_SHAPES_AND_REPORTS_ARE_REFUSED', invalidDefinitions?.problems.length===2 && invalidDefinitions.problems.map(p=>p.object).join(',')==='floor_px,threshold' && invalid && refused(()=>measureDiffComponents({...input,parts:[{...part,image:{...image,data:new Uint8ClampedArray(0)}}]},1),'DIFF_COMPONENTS_INPUT') && refused(()=>measureDiffComponents({...input,stack:{path:'not-png',bytes:new Uint8Array([0])}},1),'DIFF_COMPONENTS_INPUT') && refused(()=>measureDiffComponents({...input,painting:{path:'not-png',bytes:new Uint8Array([0])}},1),'DIFF_COMPONENTS_INPUT') && refused(()=>measureDiffComponents({...input,inside:new Uint8Array(150).fill(2)},1),'DIFF_COMPONENTS_INPUT') && refused(()=>measureDiffComponents({...input,inside:new Uint8Array(1)},1),'DIFF_COMPONENTS_INPUT') && refused(()=>measureDiffComponents({...input,parts:[part,part]},1),'DIFF_COMPONENTS_INPUT') && refused(()=>measureDiffComponents({...input,stack:{path:'small.png',bytes:encodePngBytes(image)}},1),'DIFF_COMPONENTS_INPUT') && refused(()=>readDiffComponents('{',input),'DIFF_COMPONENTS_REPORT') && refused(()=>readDiffComponents('{}',input),'DIFF_COMPONENTS_REPORT'), 'invalid floor/threshold, PNG bytes, domain, duplicate parts, dimensions, JSON and spec refused');
   const both = caught(() => readDiffComponents(text, {...changed,painting:paintChanged.painting}));
   const malformedBindings = caught(()=>readDiffComponents(JSON.stringify({...r,stack:{...r.stack,sha256:{toString:0}},painting:{...r.painting,sha256:{toString:0,valueOf:0}}}),input));
   say('AS850_DIFF_READER_COLLECTS_BOTH_SOURCE_BINDING_MISMATCHES', malformedBindings?.problems.length===2 && malformedBindings.problems.every(p=>p.code==='DIFF_COMPONENTS_BINDING') && both?.problems.length===2 && both.problems.every(p=>p.code==='DIFF_COMPONENTS_BINDING') && both.problems.map(p=>p.object).join(',')==='stack,painting' && both.problems.every(p=>p.detail.includes('sha256 is ') && p.detail.includes('is required')), JSON.stringify({both:both?.problems,malformed:malformedBindings?.problems}));
@@ -51,9 +54,11 @@ export function runDiffComponentChecks(say: Say): void {
   const missingFields = caught(()=>readDiffComponents(JSON.stringify(extraMissing),input));
   const escapedKey = 'line\nbreak';
   const escaped = caught(()=>readDiffComponents(JSON.stringify({...r,[escapedKey]:{[escapedKey]:1}}),input));
-  say('AS851_DIFF_READER_NAMES_ALL_CHANGED_MISSING_AND_EXTRA_FIELDS',escaped?.problems.length===1 && escaped.problems[0].object==='report['+JSON.stringify(escapedKey)+']' && !escaped.problems[0].object.includes('\n') && !escaped.problems[0].detail.includes('\n') && fields?.problems.length===2 && fields.problems.map(p=>p.object).join(',')==='report.components[0].px,report.below_floor.px' && fields.problems[0].detail.includes('found 3; required 2') && fields.problems[1].detail.includes('found 2; required 1') && missingFields?.problems.length===2 && missingFields.problems.some(p=>p.object==='report.components[0].box' && p.detail.includes('found missing; required {')) && missingFields.problems.some(p=>p.object==='report.components[0].unexpected' && p.detail.includes('found 7; required missing')), JSON.stringify({changed:fields?.problems,missingExtra:missingFields?.problems,escaped:escaped?.problems}));
-  const empty = measureDiffComponents({...input,stack:input.painting},1);
-  say('AS849_DIFF_EMPTY_INVENTORY_AND_STRICT_THRESHOLD_HAVE_POSITIVE_CONTROLS', empty.error_px===0 && empty.components.length===0 && empty.below_floor.px===0 && readDiffComponents(serializeDiffComponents(empty),{...input,stack:input.painting}).error_px===0 && measureDiffComponents(input,1,254).error_px===15, 'equal bytes: zero inventory; max difference 255 is strictly above 254');
+  const overflow = caught(()=>readDiffComponents(text.replace('"px": 2','"px": 1e400'),input));
+  const overflowNamed = overflow !== null && overflow.problems.every(p=>p.code==='DIFF_COMPONENTS_REPORT') && overflow.problems.some(p=>p.object==='report.components[0].px' ? p.detail.includes('found Infinity; required 2') : p.detail.includes('cannot parse JSON'));
+  say('AS851_DIFF_READER_NAMES_ALL_CHANGED_MISSING_AND_EXTRA_FIELDS',overflowNamed && escaped?.problems.length===1 && escaped.problems[0].object==='report['+JSON.stringify(escapedKey)+']' && !escaped.problems[0].object.includes('\n') && !escaped.problems[0].detail.includes('\n') && fields?.problems.length===2 && fields.problems.map(p=>p.object).join(',')==='report.components[0].px,report.below_floor.px' && fields.problems[0].detail.includes('found 3; required 2') && fields.problems[1].detail.includes('found 2; required 1') && missingFields?.problems.length===2 && missingFields.problems.some(p=>p.object==='report.components[0].box' && p.detail.includes('found missing; required {')) && missingFields.problems.some(p=>p.object==='report.components[0].unexpected' && p.detail.includes('found 7; required missing')), JSON.stringify({changed:fields?.problems,missingExtra:missingFields?.problems,escaped:escaped?.problems,overflow:overflow?.problems}));
+  const empty = measureDiffComponents({...input,painting:input.stack},1);
+  say('AS849_DIFF_EMPTY_INVENTORY_AND_STRICT_THRESHOLD_HAVE_POSITIVE_CONTROLS', empty.error_px===0 && empty.components.length===0 && empty.below_floor.px===0 && readDiffComponents(serializeDiffComponents(empty),{...input,painting:input.stack}).error_px===0 && measureDiffComponents(input,1,254).error_px===15, 'equal bytes: zero inventory; max difference 255 is strictly above 254');
 }
 export function runDiffComponentCliChecks(dir: string, say: Say, cli: string): void {
   const fixture = join(dir,'diff-fixture');
@@ -73,11 +78,35 @@ export function runDiffComponentCliChecks(dir: string, say: Say, cli: string): v
   const verified = good.status===0 ? run([...base,'--verify',out]) : null;
   const report = good.status===0 ? JSON.parse(readFileSync(out,'utf8')) as { error_px:number } : null;
   const emitted = good.status===0 ? readFileSync(out,'utf8') : null;
+  const figure = newRaster(...assembled.parts.rig_size);
+  for (let p=0;p<figure.width*figure.height;p++) figure.data[p*4+3]=255;
+  figure.data.set([255,255,255,255],figure.data.length-4);
+  const figurePath=join(dir,'native-figure.png'),figureOut=join(dir,'native-diff.json');
+  writeFileSync(figurePath,encodePngBytes(figure));
+  const figureWrite=run([...base,'--figure',figurePath,'--out',figureOut]);
+  const figureVerify=figureWrite.status===0?run([...base,'--figure',figurePath,'--verify',figureOut]):null;
+  const figureReport=figureWrite.status===0?JSON.parse(readFileSync(figureOut,'utf8')) as DiffComponentsReport:null;
+  const expectedDomain=new Uint8Array(EXPECTED_PARTS.rig_size[0]*EXPECTED_PARTS.rig_size[1]);
+  expectedDomain[expectedDomain.length-1]=1;
+  const figureOk=figureWrite.status===0 && figureVerify?.status===0 && figureReport?.error_px===1 && figureReport.uncovered_error_px===1 && figureReport.components.length===1 && figureReport.components[0].id===`p${expectedDomain.length-1}-n1` && JSON.stringify(figureReport.components[0].box)===JSON.stringify({x:EXPECTED_PARTS.rig_size[0]-1,y:EXPECTED_PARTS.rig_size[1]-1,w:1,h:1}) && figureReport.definition.inside_sha256===createHash('sha256').update(expectedDomain).digest('hex');
+  const wrongDomain=figureWrite.status===0?run([...base,'--verify',figureOut]):null;
+  const badSize=newRaster(1,1);badSize.data.fill(255);
+  const badSizePath=join(dir,'wrong-size-figure.png');writeFileSync(badSizePath,encodePngBytes(badSize));
+  const wrongSize=run([...base,'--figure',badSizePath,'--out',out]);
+  const badPixels=[[127,127,127,255],[255,255,255,0],[255,0,0,255]].map((rgba,i)=>{
+    const image={...figure,data:new Uint8ClampedArray(figure.data)};image.data.set(rgba,0);
+    const path=join(dir,`wrong-pixel-figure-${i}.png`);writeFileSync(path,encodePngBytes(image));
+    return run([...base,'--figure',path,'--out',out]);
+  });
   const blank = run([...base,'--threshold','','--out',out]);
+  const whitespace = run([...base,'--threshold',' ','--out',out]);
+  const emptyOut = run([...base,'--out','']);
+  const missingParent = run([...base,'--out',join(dir,'missing-parent','diff.json')]);
+  const badPolicy = run([...base,'--threshold','Infinity','--verify',out]);
   const retained = good.status===0 && readFileSync(out,'utf8')===emitted;
   const missing = run(['diff-components','--floor','1']);
   const unknown = run([...base,'--unknown','value','--out',out]);
-  say('CL830_DIFF_COMMAND_WRITES_VERIFIES_AND_REFUSES_MISSING_UNKNOWN_OR_EMPTY_FLAGS',good.status===0 && verified?.status===0 && report?.error_px===assembled.figures.errorPx && report?.error_px===EXPECTED_PARTS.recomposite.error_px && missing.status===1 && missing.stdout.includes('DIFF_COMPONENTS_INPUT') && unknown.status===2 && blank.status===1 && blank.stdout.includes('DIFF_COMPONENTS_INPUT') && retained, `write=${good.status}, verify=${verified?.status}, errors=${report?.error_px}, missing=${missing.status}, unknown=${unknown.status}, blank=${blank.status}, emitted bytes retained=${retained}; ${[good.stdout,good.stderr].join(' ').replace(/\s+/g,' ').trim()}`);
+  say('CL830_DIFF_COMMAND_WRITES_VERIFIES_AND_REFUSES_MISSING_UNKNOWN_OR_EMPTY_FLAGS',figureOk && wrongDomain?.status===1 && wrongDomain.stdout.includes('DIFF_COMPONENTS_REPORT') && wrongSize.status===1 && wrongSize.stdout.includes('is 1x1') && wrongSize.stdout.includes(`painting ${EXPECTED_PARTS.rig_size[0]}x${EXPECTED_PARTS.rig_size[1]} is required`) && badPixels.every(r=>r.status===1 && r.stdout.includes('DIFF_COMPONENTS_INPUT') && r.stdout.includes('pixel 0,0')) && good.status===0 && verified?.status===0 && report?.error_px===assembled.figures.errorPx && report?.error_px===EXPECTED_PARTS.recomposite.error_px && missing.status===1 && missing.stdout.includes('DIFF_COMPONENTS_INPUT') && unknown.status===2 && blank.status===1 && blank.stdout.includes('DIFF_COMPONENTS_INPUT') && whitespace.status===1 && whitespace.stdout.includes('DIFF_COMPONENTS_INPUT') && emptyOut.status===1 && emptyOut.stdout.includes('DIFF_COMPONENTS_INPUT') && missingParent.status===1 && missingParent.stdout.includes('DIFF_COMPONENTS_INPUT') && badPolicy.status===1 && badPolicy.stdout.includes('a finite channel threshold') && retained, `write=${good.status}, verify=${verified?.status}, errors=${report?.error_px}, missing=${missing.status}, unknown=${unknown.status}, blank=${blank.status}, whitespace=${whitespace.status}, native figure=${figureOk}, wrong domain=${wrongDomain?.status}, wrong size=${wrongSize.status}, bad pixels=${badPixels.map(r=>r.status).join(",")}, empty output=${emptyOut.status}, missing parent=${missingParent.status}, invalid verify policy=${badPolicy.status}, emitted bytes retained=${retained}; ${[good.stdout,good.stderr].join(' ').replace(/\s+/g,' ').trim()}`);
 }
 /** Public recipe control: every mask pixel agrees with the count's own RGB predicate and domain. */
 export function publicDiffControl(stack: Parameters<typeof errorMask>[0], painting: Parameters<typeof errorMask>[1], parts: PlacedPart[], inside: Uint8Array | null): { ok: boolean; detail: string } {
