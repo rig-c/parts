@@ -781,7 +781,7 @@
     "world_root_rig_px": 0.04,
     "world_tip_rig_px": 0.139,
     "world_ratio": 3.436,
-    "tip_floor_rig_px": 0.5,
+    "travel_floor_rig_px": 0.5,
     "unmeasured": "below half a rig pixel: the motion does not show on the art's own grid"
    }
   ],
