@@ -223,7 +223,8 @@ export function acceptProblems(names: readonly string[], where: string): Problem
 /**
  * Read and shape-check a scene file. Every problem is collected before one
  * refusal: the file, `spec`, `canvas` (two positive integers), `plate`
- * (optional: `image`, `provenance`, an optional `note`), `characters` (at
+ * (optional, with required `image` and `provenance` and optional `note`
+ * and `editor_receipts` with the shared ledger shape), `characters` (at
  * least one; each `id`, `build`, `offset`), `order` (a list of strings), and
  * any key the format does not read. Resolving the ids and slots `order`
  * names is {@link composeScene}'s, which has the builds.
@@ -1380,7 +1381,7 @@ export function composeFromFiles(scenePath: string, requirementsPath?: string, m
   const builds = scene.characters.map((c) => readCharacterBuild(c, problems, accept));
   let plate: PlateImage | null = null;
   if (scene.plate !== null) {
-    const ledger = readEditorReceipts(scene.plate.editor_receipts, scene.path, 'scene.plate.editor_receipts');
+    const ledger = readEditorReceipts(scene.plate.editor_receipts, scene.path, 'scene.plate.editor_receipts', 'scene file');
     const receiptCodes: Readonly<Record<string, string>> = {
       ASSEMBLE_EDITOR_RECEIPT_FILE: 'SCENE_EDITOR_RECEIPT_FILE',
       ASSEMBLE_EDITOR_RECEIPT_SHA256: 'SCENE_EDITOR_RECEIPT_SHA256',

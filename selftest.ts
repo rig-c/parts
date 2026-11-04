@@ -706,6 +706,7 @@ import { buildSheet, tileImage, tilesFrom } from './src/sheet.ts';
 import { block, constraintConfig, dustImages, dustParts, FACE_EXPECT, faceConfig, faceImages, faceParts, HEAT_STRIP_EXPECT, heatStripConfig, islandImages, LASH_CREASE, LASH_RIG, LASH_ROW, lashConfig, lashImages, lashParts, RIG_CANVAS, RIG_EXPECT, rigConfig, rigImages, rigParts, SCENE_TARGET, shoeConfig, shoeImages, shoeKick, shoeParts, TURNED_EXPECT, turnedConfig, writeRigFixture } from './fixtures/rig.ts';
 import { FORK_SMOOTH_MAX_INFLUENCES, smoothForkShares } from './src/rig.ts';
 import { type AttachmentSetsFile, blinkHoldProblems, buildRig, influenceReachHolds, DEFAULT_IDLE_KEYS, expandSetAttachmentKeys, FACE_TIPS_AXIS_NAME, HEAD_UP_BONE, flattenRig, IDLE_DRIVES_MESHES_WHY, type MeshAttachment, PAD, type RegionAttachment, rigJsonText, type RigOutput, type RigSpec, roundShares, tipRoundingBound, writtenShares } from './src/rig.ts';
+import { readEditorReceipts } from './src/editreceipt.ts';
 import { type ComposedScene, composeFromFiles, IMAGE_SEP, PLATE, PLATE_IMAGE, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames } from './src/scene.ts';
 import { sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild } from './fixtures/scene.ts';
 import { localInfluences, regionWeight } from './src/localweights.ts';
@@ -43782,6 +43783,20 @@ function runSceneSuite(): number {
       has(absentReceipt.err, 'SCENE_EDITOR_RECEIPT_FILE', 'absent.png') && has(wrongRequired.err, 'SCENE_EDITOR_RECEIPT_SHA256', plateSha) && has(wrongRequired.err, 'SCENE_EDITOR_RECEIPT_MISSING', plateSha),
       `absent ${codes(absentReceipt.err)}; required mismatch ${codes(wrongRequired.err)}`,
       'issue #966: verified receipts match by content, with all problems collected');
+
+    const absentPath = join(dir, 'absent.png');
+    const sceneFileProblem = absentReceipt.err?.problems.find((p) => p.code === 'SCENE_EDITOR_RECEIPT_FILE');
+    const assembleFileProblem = readEditorReceipts({ receipts: [{ ...receipt, file: 'absent.png' }] }, join(dir, 'config.json')).problems;
+    const expectedFileProblem = (code: string, location: string, owner: string): Problem => ({
+      code,
+      object: `${location}.receipts[0] (file "absent.png")`,
+      detail: `names ${absentPath}, which is no such file; the edited image, its path relative to the ${owner}'s directory, is required`,
+    });
+    say('SC52_MISSING_RECEIPT_FILE_MESSAGES_NAME_THE_SCENE_OR_CONFIG_DIRECTORY_EXACTLY',
+      JSON.stringify(sceneFileProblem) === JSON.stringify(expectedFileProblem('SCENE_EDITOR_RECEIPT_FILE', 'scene.plate.editor_receipts', 'scene file')) &&
+        JSON.stringify(assembleFileProblem) === JSON.stringify([expectedFileProblem('ASSEMBLE_EDITOR_RECEIPT_FILE', 'config.assemble.editor_receipts', 'config')]),
+      `scene directory named ${sceneFileProblem?.detail.includes("scene file's directory")}; assemble default text unchanged ${JSON.stringify(assembleFileProblem) === JSON.stringify([expectedFileProblem('ASSEMBLE_EDITOR_RECEIPT_FILE', 'config.assemble.editor_receipts', 'config')])}`,
+      'issue #966: missing files name their declaring input directory, and the assemble diagnostic remains byte-identical');
 
     // ---- the file ---------------------------------------------------------
     const good = compose(two());

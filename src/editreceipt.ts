@@ -103,7 +103,7 @@ export interface ReceiptLedger {
  * `file`). A missing file is `ASSEMBLE_EDITOR_RECEIPT_FILE`; bytes that hash
  * to another value are `ASSEMBLE_EDITOR_RECEIPT_SHA256`, naming both values.
  */
-export function readEditorReceipts(spec: EditorReceipts | undefined, configPath: string, at = AT): ReceiptLedger {
+export function readEditorReceipts(spec: EditorReceipts | undefined, configPath: string, at = AT, relativeTo: 'config' | 'scene file' = 'config'): ReceiptLedger {
   const problems: Problem[] = [];
   const bySha = new Map<string, VerifiedReceipt>();
   if (spec === undefined) return { required: false, by: 'required', bySha, problems };
@@ -113,7 +113,7 @@ export function readEditorReceipts(spec: EditorReceipts | undefined, configPath:
     const path = resolve(base, r.file);
     const object = `${receiptAt} (file "${r.file}")`;
     if (!existsSync(path) || !statSync(path).isFile()) {
-      problems.push({ code: 'ASSEMBLE_EDITOR_RECEIPT_FILE', object, detail: `names ${path}, which is no such file; the edited image, its path relative to the config's directory, is required` });
+      problems.push({ code: 'ASSEMBLE_EDITOR_RECEIPT_FILE', object, detail: `names ${path}, which is no such file; the edited image, its path relative to the ${relativeTo}'s directory, is required` });
       return;
     }
     const found = fileSha256(path);
