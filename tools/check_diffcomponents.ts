@@ -78,10 +78,13 @@ export function runDiffComponentCliChecks(dir: string, say: Say, cli: string): v
   const verified = good.status===0 ? run([...base,'--verify',out]) : null;
   const report = good.status===0 ? JSON.parse(readFileSync(out,'utf8')) as { error_px:number } : null;
   const emitted = good.status===0 ? readFileSync(out,'utf8') : null;
-  const halfSize = assembled.parts.rig_size.map(size => size / 2);
-  const halfPartsPath = join(dir,'half-size-parts.json');
-  writeFileSync(halfPartsPath, JSON.stringify({...assembled.parts,rig_size:halfSize}));
-  const halfBase = base.map(value => value === join(dir,'diff-parts.json') ? halfPartsPath : value);
+  const halfSize = assembled.parts.rig_size;
+  const fullSize = halfSize.map(size => size * 2);
+  const fullImage = newRaster(fullSize[0],fullSize[1]);
+  fullImage.data.fill(255);
+  const fullImagePath = join(dir,'full-size.png');
+  writeFileSync(fullImagePath,encodePngBytes(fullImage));
+  const halfBase = base.map(value => value === join(dir,'diff-stack.png') || value === join(dir,'diff-painting.png') ? fullImagePath : value);
   const halfWrite = run([...halfBase,'--out',out]);
   const halfVerify = run([...halfBase,'--verify',out]);
   const repeated = run([...base,'--out',out]);
@@ -90,7 +93,7 @@ export function runDiffComponentCliChecks(dir: string, say: Say, cli: string): v
     painting:{path:join(dir,'diff-painting.png'),bytes:readFileSync(join(dir,'diff-painting.png'))},
     parts:assembled.images,inside:null,
   },1));
-  const sizeRefused = [halfWrite,halfVerify].every(result => result.status === 1 && result.stdout.includes('DIFF_COMPONENTS_INPUT') && result.stdout.includes('parts.rig_size') && result.stdout.includes(`is ${halfSize.join('x')}; painting ${assembled.parts.rig_size.join('x')} is required, with no resampling`));
+  const sizeRefused = [halfWrite,halfVerify].every(result => result.status === 1 && result.stdout.includes('DIFF_COMPONENTS_INPUT') && result.stdout.includes('parts.rig_size') && result.stdout.includes(`is ${halfSize.join('x')}; painting ${fullSize.join('x')} is required, with no resampling`));
   const sameBytes = emitted !== null && repeated.status === 0 && readFileSync(out,'utf8') === emitted && emitted === nativeReport;
   say('CL831_DIFF_COMMAND_REFUSES_OTHER_RIG_SIZE_AND_PRESERVES_NATIVE_BYTES', sizeRefused && sameBytes && verified?.status === 0, `half-size write=${halfWrite.status}, verify=${halfVerify.status}, native verify=${verified?.status}, native bytes identical=${sameBytes}; ${halfWrite.stdout.replace(/\s+/g,' ').trim()}`);
   const figure = newRaster(...assembled.parts.rig_size);
