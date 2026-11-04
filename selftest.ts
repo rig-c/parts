@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+import { runPaintingEdgeChecks } from './tools/check_painting_edges.ts';
+import { runProjectConfigChecks } from './tools/check_project_config.ts';
 import { runSeamConfigChecks } from './tools/check_seam_config.ts';
 import { runJointContactChecks } from './tools/check_joint_contact.ts';
 import { runSetupPaintingChecks } from './tools/check_setup_painting.ts';
@@ -2045,6 +2047,9 @@ function runConfigSuite(): number {
   const seamDir = temp('seam-config-905');
   try { runSeamConfigChecks(seamDir, (name, ok, detail) => say(name, ok, detail, 'issue #905: CLI > config > unchanged default, with real readers and CLI controls')); }
   finally { rmSync(seamDir, { recursive: true, force: true }); }
+  const projectDir = temp('project-config-953');
+  try { runProjectConfigChecks(projectDir, (name, ok, detail) => say(name, ok, detail, 'issue #953: CLI > config > unchanged default for the projection rule, with real readers and CLI controls')); }
+  finally { rmSync(projectDir, { recursive: true, force: true }); }
 
   const explicitDir = temp('explicit-658');
   try { runExplicitMeshChecks(explicitDir, (name, ok, detail) => say(name, ok, detail, 'issue #658: guarded accepted payload transfer, not regeneration')); }
@@ -31768,6 +31773,7 @@ function runAssembleSuite(): number {
   const dir = temp('assemble');
   try {
     runPaintingExtensionChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #848: public generated controls; explicit ownership, bounds and exact painting samples'));
+    runPaintingEdgeChecks((name, ok, detail) => say(name, ok, detail, 'issue #953: under visible, a part edge takes the painting\'s line and coverage; every skip reason planted next to a positive strip'));
     writeAssembleFixture(dir);
     const base = fixtureInput(dir);
     const result = assemble({ ...base, seamRule: 'near-white' });
