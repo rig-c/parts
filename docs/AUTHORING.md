@@ -775,17 +775,21 @@ entry. The box uses integer source-painting pixels with exclusive right/bottom
 bounds. Its input must be the white square-padded crop produced by the same
 `inputs` geometry. The crop must be inside the painting. Donor RGBA under the
 selected support and its existing margin must equal that reconstructed input.
-The complete supported layer must fit both the crop and the target canvas.
+Containment covers alpha > 8 support only. That support must fit both the crop
+and the target canvas.
 
 The map derives from donor canvas, crop padding/origin and target input geometry.
 Unit scale with integer translation copies straight RGBA exactly. Every other map
-uses one premultiplied float32 bilinear affine pass, the existing cv2-compatible
-pixel-centre and transparent-border convention. The receipt's optional `transport`
+uses one premultiplied float32 bilinear affine pass. The derived map uses pixel
+corners. `warpAffine` samples by pixel index, as `layerToRig` does, with the
+existing cv2-compatible fixed-point sampling and transparent border. The receipt's optional `transport`
 records `crop`, `donor_canvas`, `target_canvas`, `scale`, `translate`, `filter`
 (`exact` or `bilinear`) and `input_rgba_sha256`, `before_rgba_sha256`,
 `after_rgba_sha256`. Hashes cover row-major straight RGBA over the entire named
 canvas, with the donor input dimensions derived from the square-padded crop.
-The output hash binds the transported layer before downstream assembly changes.
+The production transport verifier checks canvas dimensions and the output hash
+before downstream assembly changes. It refuses a changed canvas as
+`PARTS_TAKEN_LAYERS`.
 Resampling establishes the declared output bytes. It does not establish equality
 between separately generated donor and target art. Omitting `crop` retains the
 existing geometry refusal and its message.

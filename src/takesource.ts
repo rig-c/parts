@@ -1,4 +1,6 @@
 /** Layer identity receipts, retained independently of part names and derived geometry. */
+import { createHash } from 'node:crypto';
+import type { Raster } from './raster/types.ts';
 import type { Problem } from './errors.ts';
 import { readLayerTag } from './tags.ts';
 export interface TakenLayerTransport {
@@ -11,6 +13,15 @@ export interface TakenLayerTransport {
   input_rgba_sha256: string;
   before_rgba_sha256: string;
   after_rgba_sha256: string;
+}
+/** Verify a transported run canvas against its sealed receipt before downstream assembly. */
+export function takenTransportProblems(transport: TakenLayerTransport, image: Raster, at: string): Problem[] {
+  const actual = createHash('sha256').update(image.data).digest('hex');
+  if (image.width !== transport.target_canvas[0] || image.height !== transport.target_canvas[1] || actual !== transport.after_rgba_sha256) {
+    return [{ code: 'PARTS_TAKEN_LAYERS', object: at,
+      detail: `transported canvas ${image.width}x${image.height}, RGBA sha256 ${actual}; receipt requires ${transport.target_canvas.join('x')}, RGBA sha256 ${transport.after_rgba_sha256}` }];
+  }
+  return [];
 }
 export interface TakenLayerSource {
   run: 'full' | 'head';

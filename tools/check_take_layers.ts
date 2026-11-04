@@ -7,7 +7,7 @@ import { assembleStage, readRuns } from '../src/build.ts';
 import { createHash } from 'node:crypto';
 import { crop } from '../src/raster/composite.ts';
 import { newRaster } from '../src/raster/types.ts';
-import { takenSourceProblems } from '../src/takesource.ts';
+import { takenSourceProblems, takenTransportProblems } from '../src/takesource.ts';
 import { readParts, serializeParts } from '../src/parts.ts';
 import { loadEarlyConfig, parseConfig, parseEarlyConfig } from '../src/config.ts';
 import { readLayers } from '../src/layers.ts';
@@ -234,7 +234,10 @@ function runCropTakeChecks(dir: string, say: Say): void {
   const st = scaled.takenLayers![0].transport!;
   say('CROP_FRACTIONAL_RUN_PHASE_USES_DECLARED_RESAMPLE', st.filter === 'bilinear' && st.translate[0] === 15.75 && st.scale[0] === 63 / 64 && st.after_rgba_sha256 === hash(scaled.pixels.data), JSON.stringify(st));
   const altered = new Uint8ClampedArray(scaled.pixels.data); altered[(8 * 63 + 24) * 4] ^= 1;
-  say('CROP_RESAMPLED_OUTPUT_TAMPER_BREAKS_RECEIPT', hash(altered) !== st.after_rgba_sha256, 'independent hash over altered transported RGBA differs from the sealed output hash');
+  const cleanTransport = takenTransportProblems(st, scaled.pixels, 'resampled fixture');
+  const tamperedTransport = takenTransportProblems(st, { ...scaled.pixels, data: altered }, 'resampled fixture');
+  say('CROP_RESAMPLED_OUTPUT_TAMPER_BREAKS_RECEIPT', cleanTransport.length === 0 && tamperedTransport.length === 1 && tamperedTransport[0].code === 'PARTS_TAKEN_LAYERS',
+    `production verifier clean ${cleanTransport.length}, tampered ${tamperedTransport.map(p => p.code).join(',')}`);
   const malformed = structuredClone(scaled.takenLayers!); malformed[0].transport!.filter = 'exact';
   say('CROP_RECEIPT_READER_REFUSES_FALSE_EXACT_MAP', takenSourceProblems(malformed, 'test').some(p => p.code === 'PARTS_TAKEN_LAYERS'), 'fractional phase cannot claim an exact byte copy');
   for (const mutation of [
@@ -273,4 +276,30 @@ function runCropTakeChecks(dir: string, say: Say): void {
   const region = structuredClone(cfg) as unknown as { seethrough: unknown; assemble: { take: Array<Record<string, unknown>> } };
   delete region.assemble.take[0].tags; region.assemble.take[0].part = 'hair'; region.assemble.take[0].seed = [1, 1];
   say('CROP_REGION_DECLARATION_REMAINS_REFUSED', error(() => parseEarlyConfig(region, 'layers')).includes('CONFIG_KEY_KNOWN'), 'crop is only a whole-layer take optional field');
+  const smallHeadCfg = { ...headCfg, seethrough: { ...headCfg.seethrough, head_box: [16, 0, 32, 16] as [number, number, number, number] } };
+  const offTarget = error(() => applyTakenLayers({ full: target, head: { ...target, canvas: { w: 16, h: 16 } }, single: false }, source, smallHeadCfg, join(dir, 'config.json')));
+  say('CROP_SUPPORT_OFF_TARGET_HEAD_CANVAS_IS_REFUSED', offTarget.includes('ASSEMBLE_TAKE_CROP') && offTarget.includes('outside the declared painting crop or target canvas'),
+    offTarget || 'accepted supported donor cells outside the smaller head box');
+
+  for (const [side, canvas] of [[600, 700], [16, 49]]) {
+    const unitDir = join(dir, `nonbinary-unit-${side}-${canvas}`);
+    mkdirSync(unitDir, { recursive: true });
+    const unitSource = paint(side, side, WHITE, []);
+    writeFileSync(join(unitDir, 'input.png'), encodePngBytes(unitSource));
+    writeRun(join(unitDir, 'donor'), [{ name: 'front hair', depth: 0.4, rects: [{ x0: 4, y0: 4, x1: 20, y1: 12, colour: C }] }], canvas);
+    const unitPixels = readPng(join(unitDir, 'donor/parts/front hair.png'));
+    for (let p = 0; p < unitPixels.data.length; p += 4) unitPixels.data.set([173, 99, 37, 129], p);
+    writeFileSync(join(unitDir, 'donor/parts/front hair.png'), encodePngBytes(unitPixels));
+    writeFileSync(join(unitDir, 'donor/meta.json'), JSON.stringify({ prompt_id: 'generated-integer-ratio-control', seed: 0 }));
+    const unitDonor = readLayers(join(unitDir, 'donor'));
+    const unitTarget = { ...unitDonor, source: join(unitDir, 'target/layers.json'), layers: [] };
+    const unitCfg = { ...cfg, seethrough: { ...cfg.seethrough, resolution: canvas }, assemble: { take: [{ ...cfg.assemble.take[0], crop: { box: [0, 0, side, side] as [number, number, number, number], resample: 'bilinear' as const } }] } };
+    const unit = applyTakenLayers({ full: unitTarget, head: unitTarget, single: true }, unitSource, unitCfg, join(unitDir, 'config.json')).full.layers[0];
+    const unitReceipt = unit.takenLayers![0].transport!;
+    const unitExpected = newRaster(canvas, canvas);
+    for (let y = 0; y < unitPixels.height; y++) unitExpected.data.set(unitPixels.data.subarray(y * unitPixels.width * 4, (y + 1) * unitPixels.width * 4), ((y + 4) * canvas + 4) * 4);
+    say('CROP_INTEGER_RATIO_UNIT_MAP_AVOIDS_FLOAT_ROUND_TRIP', unitReceipt.filter === 'exact' && unitReceipt.scale.join(',') === '1,1' &&
+      Buffer.from(unit.pixels.data).equals(Buffer.from(unitExpected.data)),
+      `side ${side}, canvas ${canvas}; integer products equal; chained float ${side / canvas * canvas / side}; filter ${unitReceipt.filter}; output agrees with independent translucent RGBA copy`);
+  }
 }

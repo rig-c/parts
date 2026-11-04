@@ -13,7 +13,7 @@ import { readPng } from './raster/png.ts';
 import type { TakeDeclaration } from './takeregion.ts';
 import { crop, pad } from './raster/composite.ts';
 import { warpAffine, type ScaleTranslate } from './raster/warp.ts';
-import type { TakenLayerSource, TakenLayerTransport } from './takesource.ts';
+import { takenTransportProblems, type TakenLayerSource, type TakenLayerTransport } from './takesource.ts';
 
 export interface TakeLayers {
   run: Run;
@@ -59,7 +59,7 @@ function rgbaHash(image: Raster): string {
   return createHash('sha256').update(image.data).digest('hex');
 }
 
-function cropGeometry(d: TakeLayers, painting: Raster, target: Raster, donor: LayerSet, set: LayerSet, inputs: ReturnType<typeof makeInputs>, at: string): { expected: Raster; map: ScaleTranslate } {
+function cropGeometry(d: TakeLayers, painting: Raster, target: Raster, donor: LayerSet, set: LayerSet, inputs: ReturnType<typeof makeInputs>, at: string): { expected: Raster; map: ScaleTranslate; exact: boolean } {
   const declaration = d.crop!;
   const [x0, y0, x1, y1] = declaration.box;
   if (declaration.resample !== 'bilinear' || !declaration.box.every(Number.isSafeInteger) || x0 < 0 || y0 < 0 || x1 <= x0 || y1 <= y0 || x1 > painting.width || y1 > painting.height) {
@@ -69,16 +69,22 @@ function cropGeometry(d: TakeLayers, painting: Raster, target: Raster, donor: La
   const donorPad = squarePad(w, h);
   const expected = pad(crop(painting, x0, y0, w, h), donorPad.left, donorPad.top, donorPad.side - w - donorPad.left, donorPad.side - h - donorPad.top, [255, 255, 255, 255]);
   const origin = target === painting ? [0, 0] : d.run === 'head' ? [-inputs.headBox![0], -inputs.headBox![1]] : [inputs.padLeft, inputs.padTop];
-  return { expected, map: {
-    sx: donorPad.side / donor.canvas.w * set.canvas.w / target.width,
-    sy: donorPad.side / donor.canvas.h * set.canvas.h / target.height,
-    tx: (x0 - donorPad.left + origin[0]) * set.canvas.w / target.width,
-    ty: (y0 - donorPad.top + origin[1]) * set.canvas.h / target.height,
+  const scaleXUnit = BigInt(donorPad.side) * BigInt(set.canvas.w) === BigInt(donor.canvas.w) * BigInt(target.width);
+  const scaleYUnit = BigInt(donorPad.side) * BigInt(set.canvas.h) === BigInt(donor.canvas.h) * BigInt(target.height);
+  const offsetX = BigInt(x0 - donorPad.left + origin[0]) * BigInt(set.canvas.w);
+  const offsetY = BigInt(y0 - donorPad.top + origin[1]) * BigInt(set.canvas.h);
+  const integerX = offsetX % BigInt(target.width) === 0n;
+  const integerY = offsetY % BigInt(target.height) === 0n;
+  return { expected, exact: scaleXUnit && scaleYUnit && integerX && integerY, map: {
+    sx: scaleXUnit ? 1 : donorPad.side / donor.canvas.w * set.canvas.w / target.width,
+    sy: scaleYUnit ? 1 : donorPad.side / donor.canvas.h * set.canvas.h / target.height,
+    tx: integerX ? Number(offsetX / BigInt(target.width)) : (x0 - donorPad.left + origin[0]) * set.canvas.w / target.width,
+    ty: integerY ? Number(offsetY / BigInt(target.height)) : (y0 - donorPad.top + origin[1]) * set.canvas.h / target.height,
   } };
 }
 
 /** One full-canvas affine pass, using the same premultiplied float32 convention as layerToRig. */
-function transportLayer(layer: Layer, donor: LayerSet, set: LayerSet, image: Raster, d: TakeLayers, map: ScaleTranslate, at: string): { layer: Layer; transport: TakenLayerTransport } {
+function transportLayer(layer: Layer, donor: LayerSet, set: LayerSet, image: Raster, d: TakeLayers, map: ScaleTranslate, exact: boolean, at: string): { layer: Layer; transport: TakenLayerTransport } {
   const canvas = newRaster(donor.canvas.w, donor.canvas.h);
   for (let y = 0; y < layer.pixels.height; y++) {
     canvas.data.set(layer.pixels.data.subarray(y * layer.pixels.width * 4, (y + 1) * layer.pixels.width * 4), ((y + layer.top) * canvas.width + layer.left) * 4);
@@ -94,7 +100,6 @@ function transportLayer(layer: Layer, donor: LayerSet, set: LayerSet, image: Ras
       return refuse('ASSEMBLE_TAKE_CROP', at, `supported donor cell [${x}, ${y}] falls outside the declared painting crop or target canvas; the whole taken support must be retained`);
     }
   }
-  const exact = map.sx === 1 && map.sy === 1 && Number.isInteger(map.tx) && Number.isInteger(map.ty);
   const out = newRaster(set.canvas.w, set.canvas.h);
   if (exact) {
     for (let y = 0; y < canvas.height; y++) for (let x = 0; x < canvas.width; x++) {
@@ -123,9 +128,15 @@ function transportLayer(layer: Layer, donor: LayerSet, set: LayerSet, image: Ras
   let opaquePx = 0;
   for (let p = 3; p < out.data.length; p += 4) if (out.data[p] > OPAQUE_ALPHA_ABOVE) opaquePx++;
   if (opaquePx === 0) return refuse('ASSEMBLE_TAKE_SUPPORT', at, `has 0 pixels of alpha above ${OPAQUE_ALPHA_ABOVE} after the declared transport; a nonempty taken layer is required`);
+  const transport: TakenLayerTransport = {
+    crop: [...d.crop!.box], donor_canvas: [canvas.width, canvas.height], target_canvas: [out.width, out.height],
+    scale: [map.sx, map.sy], translate: [map.tx, map.ty], filter: exact ? 'exact' : 'bilinear',
+    input_rgba_sha256: rgbaHash(image), before_rgba_sha256: rgbaHash(canvas), after_rgba_sha256: rgbaHash(out),
+  };
+  refuseIfAny(takenTransportProblems(transport, out, at));
   return {
     layer: { ...layer, left: 0, top: 0, right: out.width, bottom: out.height, pixels: out, opaquePx },
-    transport: { crop: [...d.crop!.box], donor_canvas: [canvas.width, canvas.height], target_canvas: [out.width, out.height], scale: [map.sx, map.sy], translate: [map.tx, map.ty], filter: exact ? 'exact' : 'bilinear', input_rgba_sha256: rgbaHash(image), before_rgba_sha256: rgbaHash(canvas), after_rgba_sha256: rgbaHash(out) },
+    transport,
   };
 }
 
@@ -175,7 +186,7 @@ export function applyTakenLayers(runs: { full: LayerSet; head: LayerSet; single:
       const checked = identity(layer, donor.canvas, image, geometry?.expected ?? target, `${at} tag "${tag}"`);
       for (let p = 0; p < union.length; p++) union[p] |= checked.checked[p];
       const source: TakenLayerSource = { run: d.run, tag, run_dir: d.run_dir, st_input: d.st_input, prompt_id: meta.prompt_id, seed: meta.seed, support_px: checked.support, checked_px: checked.checked.reduce((a, b) => a + b, 0), differing_px: 0 };
-      const transported = geometry === undefined ? undefined : transportLayer(layer, donor, set, image, d, geometry.map, `${at} tag "${tag}"`);
+      const transported = geometry === undefined ? undefined : transportLayer(layer, donor, set, image, d, geometry.map, geometry.exact, `${at} tag "${tag}"`);
       if (transported !== undefined) source.transport = transported.transport;
       const replacement: Layer = { ...(transported?.layer ?? layer), takenLayers: [source] };
       lists[d.run] = [...lists[d.run].filter(l => l.name !== tag), replacement];
