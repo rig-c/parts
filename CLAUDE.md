@@ -244,7 +244,7 @@ a session rotated — the reader rule above, measured on ourselves. So it is her
 | `bun run typecheck` | `tsc --noEmit` over the paths `tsconfig.json`'s `include` names |
 | `bun run lint` | one rule: `@typescript-eslint/no-explicit-any` as an error |
 | `bun run selftest` | every suite's positive and negative controls on generated fixtures, and the tree rules; `-- --corpus <dir>`, or fetched `examples/*/inputs` (`bun run fetch-examples`), adds the read-only corpus suite |
-| `bun run selftest -- --only <suite>[,<suite>…]` | one squad's own suite while iterating — a partial run exits 2 when green (1 when red), prints `SKIP` for every suite it did not run and never the summary; the full run is the only verdict on the tree. Any other word on the command line is refused by name, exit 2, before a suite starts. Which of these a lane runs, where, and how often: [Verification tiers](#verification-tiers) |
+| `bun run selftest -- --only <suite>[,<suite>…]` | one squad's own suite while iterating — a partial run exits 2 when green (1 when red), prints `SKIP` for every suite it did not run and never the summary; the full run is the only verdict on the tree. A refused invocation exits 64 (EX_USAGE), distinct from a green partial (2) and a red partial (1), before a suite starts. Which of these a lane runs, where, and how often: [Verification tiers](#verification-tiers) |
 | `bun run smoke` | the **package** rather than the tree: pack, install into an empty directory, run `--version`, the installed `rigc --version` (the core entry), `layers` (wrapper and PSD), `sheet` and `check` on a generated rig from the install, with four planted broken packages that must go red. Needs a network |
 
 ### Verification tiers
@@ -253,7 +253,7 @@ What a lane runs before it reports, where, and how often. The verdict on the tre
 
 | tier | what runs | where | cap | when |
 | --- | --- | --- | --- | --- |
-| V0 pre-flight | `typecheck`, `lint`, `git diff --check`; grep `selftest.ts` for every rule code and message the diff touches and list the exact-message controls that will move; check every `--only` suite name exists (an unknown name exits 2 like a green partial, #1006); check message length against the line ceiling | the lane's machine, no selftest | 2 min | every commit |
+| V0 pre-flight | `typecheck`, `lint`, `git diff --check`; grep `selftest.ts` for every rule code and message the diff touches and list the exact-message controls that will move; check every `--only` suite name exists (an unknown name exits 64 (usage), #1006); check message length against the line ceiling | the lane's machine, no selftest | 2 min | every commit |
 | V1 quick | `bun run selftest -- --only <suites the diff touches>` at `RIG_PARTS_SELFTEST_JOBS=1`, examples fetched in the job when a suite needs them | the remote pool | 10 min per job | each iteration |
 | V2 precise | the full selftest (its shards), build controls, packed installs, `ships`, the merged run tally | PR CI, on a draft PR the tower opens from the worker's branch | CI's own (`.github/workflows/ci.yml`) | once when V1 is green; again only after a fix |
 | V3 measurement | only what the issue's bar names: public-example output hashes, a stage timer, a pixel comparison, a reproduction | the remote pool, narrowest sample | named in the issue, ≤ 15 min | only when the issue names it |
