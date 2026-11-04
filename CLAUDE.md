@@ -253,7 +253,7 @@ What a lane runs before it reports, where, and how often. The verdict on the tre
 
 | tier | what runs | where | cap | when |
 | --- | --- | --- | --- | --- |
-| V0 pre-flight | `typecheck`, `lint`, `git diff --check`; grep `selftest.ts` for every rule code and message the diff touches and list the exact-message controls that will move; check every `--only` suite name exists (an unknown name exits 2 like a green partial, #1006); check message length against the line ceiling | the lane's machine, no selftest | 2 min | every commit |
+| V0 pre-flight | `typecheck`, `lint`, `git diff --check`; grep `selftest.ts` for every rule code and message the diff touches and list the exact-message controls that will move; check every `--only` suite name exists (an unknown name exits 64 (usage), #1006); check message length against the line ceiling | the lane's machine, no selftest | 2 min | every commit |
 | V1 quick | `bun run selftest -- --only <suites the diff touches>` at `RIG_PARTS_SELFTEST_JOBS=1`, examples fetched in the job when a suite needs them | the remote pool | 10 min per job | each iteration |
 | V2 precise | the full selftest (its shards), build controls, packed installs, `ships`, the merged run tally | PR CI, on a draft PR the tower opens from the worker's branch | CI's own (`.github/workflows/ci.yml`) | once when V1 is green; again only after a fix |
 | V3 measurement | only what the issue's bar names: public-example output hashes, a stage timer, a pixel comparison, a reproduction | the remote pool, narrowest sample | named in the issue, ≤ 15 min | only when the issue names it |
