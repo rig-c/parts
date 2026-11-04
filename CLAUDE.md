@@ -266,6 +266,13 @@ What a lane runs before it reports, where, and how often. The verdict on the tre
   - The same failure twice is a STOP.
   - The third red V2 cycle on one issue is a STOP.
   - More than 40 min of remote-pool time (V1 + V3) on one issue is a STOP. The report says what consumed it.
+- **Cost check before an expensive run.** Before a run estimated over 15 min, or one that would take the issue's total past 40 min, the worker sends the tower four things and waits:
+  - the order it was given;
+  - the estimate, with the receipt it comes from;
+  - what the run decides;
+  - a cheaper equivalent.
+
+  The tower answers run, cheaper, or drop, with a reason. "Just run it" is not an answer.
 - **A brief may tighten a tier, never extend it.** When a brief orders something this section forbids, or a bar cannot be resolved by the instrument it names, the worker STOPs before running and reports the conflict and the method it proposes. That is normal operation.
 - **The worker may change this section.** When it finds a cheaper or sounder method, or shows that a rule here is wrong, it commits the change to this section in its own PR and names it in the report. The rule changes when that PR merges.
 
