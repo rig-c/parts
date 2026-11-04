@@ -273,6 +273,18 @@ What a lane runs before it reports, where, and how often. The verdict on the tre
   - a cheaper equivalent.
 
   The tower answers run, cheaper, or drop, with a reason. "Just run it" is not an answer.
+
+  Where the cost check meets the other rules:
+
+  | case | rule |
+  | --- | --- |
+  | C1 the brief already answers it | a brief that names the run, its estimate and its decision needs no question, unless the measured estimate is more than 2× the brief's |
+  | C2 PR CI | exempt: V2 is the tower's run, not the worker's |
+  | C3 the answer | an answer cannot extend the tiers: "run" never lifts a cap or a STOP above |
+  | C4 no receipt | with no receipt for this run shape, the worker first runs one sample capped at 10 min, and estimates from that |
+  | C5 no answer | re-send at 30 min; the tower reports to HQ at 60 min. Silence is not approval |
+  | C6 below the threshold | every run ≤ 15 min and the issue ≤ 40 min: run without asking, and say so in the report |
+  | C7 while waiting | do the cheap work that does not depend on the answer |
 - **A brief may tighten a tier, never extend it.** When a brief orders something this section forbids, or a bar cannot be resolved by the instrument it names, the worker STOPs before running and reports the conflict and the method it proposes. That is normal operation.
 - **The worker may change this section.** When it finds a cheaper or sounder method, or shows that a rule here is wrong, it commits the change to this section in its own PR and names it in the report. The rule changes when that PR merges.
 
