@@ -3066,7 +3066,7 @@ export function recomposite(parts: PlacedPart[], W: number, H: number): Raster {
 }
 
 /** Per rig pixel: 1 where some part has alpha above `COVERED_ALPHA`. */
-function coveredMask(parts: PlacedPart[], W: number, H: number): Uint8Array {
+export function coveredMask(parts: PlacedPart[], W: number, H: number): Uint8Array {
   const covered = new Uint8Array(W * H);
   for (const { record: p, image } of parts) {
     for (let y = 0; y < p.h; y++) for (let x = 0; x < p.w; x++) if (image.data[(y * p.w + x) * 4 + 3] > COVERED_ALPHA) covered[(p.y + y) * W + p.x + x] = 1;
@@ -3075,14 +3075,14 @@ function coveredMask(parts: PlacedPart[], W: number, H: number): Uint8Array {
 }
 
 /** Per rig pixel: 1 where the recomposite's max-channel difference from the painting is above `ERROR_LIMIT` — and, with `inside` (a scene, issue #242), the pixel is the figure's. */
-function errorMask(can: Raster, srcr: Raster, inside: Uint8Array | null = null): Uint8Array {
+export function errorMask(can: Raster, srcr: Raster, inside: Uint8Array | null = null, threshold = ERROR_LIMIT): Uint8Array {
   const n = srcr.width * srcr.height;
   const err = new Uint8Array(n);
   for (let p = 0; p < n; p++) {
     if (inside !== null && inside[p] === 0) continue;
     let m = 0;
     for (let c = 0; c < 3; c++) m = Math.max(m, Math.abs(can.data[p * 4 + c] - srcr.data[p * 4 + c]));
-    if (m > ERROR_LIMIT) err[p] = 1;
+    if (m > threshold) err[p] = 1;
   }
   return err;
 }
@@ -3127,7 +3127,7 @@ export function uncoveredHoles(can: Raster, srcr: Raster, parts: PlacedPart[], i
  * parts hold counts for both). `uncoveredHoles` reads it at `COVERED_ALPHA`,
  * `measurePinholes` (issue #944) at 0.
  */
-function holeBorders(parts: readonly PlacedPart[], cc: Components, s: Components['stats'][number], W: number, H: number, above: number): HoleBorder[] {
+export function holeBorders(parts: readonly PlacedPart[], cc: Components, s: Components['stats'][number], W: number, H: number, above: number): HoleBorder[] {
   const borders: HoleBorder[] = [];
   parts.forEach(({ record: p, image }) => {
     let n = 0;
