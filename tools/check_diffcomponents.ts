@@ -69,9 +69,12 @@ export function runDiffComponentCliChecks(dir: string, say: Say, cli: string): v
   const good = run([...base,'--out',out]);
   const verified = good.status===0 ? run([...base,'--verify',out]) : null;
   const report = good.status===0 ? JSON.parse(readFileSync(out,'utf8')) as { error_px:number } : null;
+  const emitted = good.status===0 ? readFileSync(out,'utf8') : null;
+  const blank = run([...base,'--threshold','','--out',out]);
+  const retained = good.status===0 && readFileSync(out,'utf8')===emitted;
   const missing = run(['diff-components','--floor','1']);
   const unknown = run([...base,'--unknown','value','--out',out]);
-  say('CL830_DIFF_COMMAND_WRITES_VERIFIES_AND_REFUSES_MISSING_OR_UNKNOWN_FLAGS',good.status===0 && verified?.status===0 && report?.error_px===assembled.figures.errorPx && report?.error_px===EXPECTED_PARTS.recomposite.error_px && missing.status===1 && missing.stdout.includes('DIFF_COMPONENTS_INPUT') && unknown.status===2, `write=${good.status}, verify=${verified?.status}, errors=${report?.error_px}, missing=${missing.status}, unknown=${unknown.status}; ${[good.stdout,good.stderr].join(' ').replace(/\s+/g,' ').trim()}`);
+  say('CL830_DIFF_COMMAND_WRITES_VERIFIES_AND_REFUSES_MISSING_UNKNOWN_OR_EMPTY_FLAGS',good.status===0 && verified?.status===0 && report?.error_px===assembled.figures.errorPx && report?.error_px===EXPECTED_PARTS.recomposite.error_px && missing.status===1 && missing.stdout.includes('DIFF_COMPONENTS_INPUT') && unknown.status===2 && blank.status===1 && blank.stdout.includes('DIFF_COMPONENTS_INPUT') && retained, `write=${good.status}, verify=${verified?.status}, errors=${report?.error_px}, missing=${missing.status}, unknown=${unknown.status}, blank=${blank.status}, emitted bytes retained=${retained}; ${[good.stdout,good.stderr].join(' ').replace(/\s+/g,' ').trim()}`);
 }
 /** Public recipe control: every mask pixel agrees with the count's own RGB predicate and domain. */
 export function publicDiffControl(stack: Parameters<typeof errorMask>[0], painting: Parameters<typeof errorMask>[1], parts: PlacedPart[], inside: Uint8Array | null): { ok: boolean; detail: string } {

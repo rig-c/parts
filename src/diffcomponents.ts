@@ -169,7 +169,12 @@ export function diffComponentsCommand(args: string[]): void {
     }
   }
   const input = { stack, painting, parts: placed, inside };
-  const floor = Number(flags.get('--floor')), threshold = flags.has('--threshold') ? Number(flags.get('--threshold')) : ERROR_LIMIT;
+  const numericFlag = (key: string): number => {
+    const value = flags.get(key)!;
+    if (value.trim().length === 0) inputFailure(key, `is ${JSON.stringify(value)}; an explicit number is required`);
+    return Number(value);
+  };
+  const floor = numericFlag('--floor'), threshold = flags.has('--threshold') ? numericFlag('--threshold') : ERROR_LIMIT;
   if (flags.has('--verify')) {
     const path = flags.get('--verify')!;
     const report = readDiffComponents(new TextDecoder().decode(bytes(path).bytes), input);

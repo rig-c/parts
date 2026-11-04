@@ -7583,7 +7583,8 @@ assemble; omitting it explicitly selects the entire canvas.
 `--threshold` is caller-given, with the existing recomposite default 40:
 maximum absolute RGB-channel difference **strictly greater** than the threshold;
 alpha is not a difference channel. `--floor` is required, a positive integer;
-a component exactly at it is included. Connectivity is 8. The report's
+a component exactly at it is included. The floor and any supplied threshold must
+contain a number: blank values are refused, never converted to zero. Connectivity is 8. The report's
 `definition` records these values, native coordinates (y down, top-left),
 width/height, no resampling, the existing coverage alpha cut (>128), and the
 SHA-256 of the binary figure domain (`null` for the whole canvas).
