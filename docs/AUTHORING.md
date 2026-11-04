@@ -735,6 +735,33 @@ identity an executable check on supplied original inputs instead of trusting
 that claim or hand-editing `layers.json`. Seed and painting selection remain
 the author's decisions.
 
+### Residual front/back edges (`edge_residuals.json`, issue #999)
+
+Under `assemble.project: "visible"`, assemble writes `edge_residuals.json` beside
+`parts.json` after the existing painting-edge pass and final seam correction.
+`EDGE_PAIR_RESIDUAL` prints its coverage and one row for every draw-order pair.
+This is a report of candidates. The painting's semantic ownership is unproven.
+It adds no gate or acceptance threshold.
+
+The report uses the existing recomposite `ERROR_LIMIT` for max-channel RGB
+error and `EDGE_OWNER_ALPHA` for visible ownership. It finds 8-connected
+visible-back error components touching a front boundary, where those two parts
+also have actual alpha overlap. There is no new distance cap. A pair gives its
+front/back names, `residual_px`, `[left, top, width, height]` rig-pixel `box`,
+and `back_pixels` as a count and `[y, left, right-exclusive]` row spans. Those
+coordinates reference the existing back PNG at its `parts.json` placement.
+
+Pairs without overlap or an exposed boundary carry an explicit skip reason.
+A hidden observation, a component touching multiple overlapping fronts, or a
+component with partial-alpha/additional foreground contribution is unavailable.
+Its `residual_px` is null. `unavailable_px` preserves the ambiguous population,
+and the summary also counts unassigned error pixels, including retained candidates
+from unavailable pairs. Its residual plus unassigned total accounts for every
+observed error pixel. A measured zero means zero
+candidates under this observation model. It does not identify the true painted
+hem or prove source material correct. Under `core` the visible pass and this
+report do not run. Reassembling that output removes a stale report file.
+
 ### Taking a derived region (`assemble.take`, issue #1000)
 
 A region entry names one existing plan part, its target run, one donor run and
@@ -5019,6 +5046,7 @@ those settings. Changing a config seed alone cannot change a no-config run.
 | <a id="ASSEMBLE_TAKE_SUPPORT"></a>`ASSEMBLE_TAKE_SUPPORT` | selected layer has zero alpha > 8 pixels | choose a nonempty donor layer |
 | <a id="ASSEMBLE_TAKE_DEPTH_AMBIGUOUS"></a>`ASSEMBLE_TAKE_DEPTH_AMBIGUOUS` | different original runs have equal or null depths | use a run with distinct numeric depths; do not invent an inter-run tie order |
 | <a id="ASSEMBLE_TAKE_PLAN_ORDER"></a>`ASSEMBLE_TAKE_PLAN_ORDER` | supplied plan reverses an overlapping mixed-run pair: two-run full-layer head roles first, scalar depth within a role band (head-run and single-run rows use scalar depth); names the parts and support intersection | use the order drafted by `assemble --propose-plan`; fallback headwear follows the body and precedes the face, front hair follows the face; disjoint supports impose no plan-order constraint |
+| <a id="EDGE_PAIR_RESIDUAL"></a>`EDGE_PAIR_RESIDUAL` | report-only front/back residual candidates after visible edge composition, with pixel spans, boxes and coverage | read measured candidates and explicit skipped/unavailable reasons in `edge_residuals.json`. No pass/fail threshold is applied |
 | <a id="ASSEMBLE_REGION_TAKE_TOLERANCE"></a>`ASSEMBLE_REGION_TAKE_TOLERANCE` | a region take has no authored `setup_painting.rgb_tolerance` | supply the same requirements file to assemble/build and check |
 | <a id="ASSEMBLE_REGION_TAKE_GEOMETRY"></a>`ASSEMBLE_REGION_TAKE_GEOMETRY` | donor and target canvases or original input RGBA differ, or the target head run is absent | supply the same crop and original input PNG. Cropped donors await #973 |
 | <a id="ASSEMBLE_REGION_TAKE_PART"></a>`ASSEMBLE_REGION_TAKE_PART` | the named plan part/run or its base/donor tag is absent, or the target is taken twice | name an existing plan part and one donor holding its tag |
