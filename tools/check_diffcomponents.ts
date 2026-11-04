@@ -1,13 +1,17 @@
 /** Generated controls for the exhaustive report; no consumer data. */
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { measureRecomposite, errorMask, type PlacedPart } from '../src/assemble.ts';
+import { assemble, stageFields, sourceInRig, measureRecomposite, errorMask, type PlacedPart } from '../src/assemble.ts';
 import { measureDiffComponents, readDiffComponents, serializeDiffComponents, type DiffInputs } from '../src/diffcomponents.ts';
 import { PartsError } from '../src/errors.ts';
-import { encodePngBytes } from '../src/raster/png.ts';
+import { encodePngBytes, readPng } from '../src/raster/png.ts';
 import { newRaster } from '../src/raster/types.ts';
-import { EXPECTED_PARTS } from '../fixtures/assemble_fixture.ts';
+import { DEFAULT_PROJECT_RULE } from '../src/projectrule.ts';
+import { loadConfig } from '../src/config.ts';
+import { readWrapperLayers } from '../src/layers.ts';
+import { writeParts } from '../src/parts.ts';
+import { EXPECTED_PARTS, writeAssembleFixture } from '../fixtures/assemble_fixture.ts';
 type Say = (name: string, pass: boolean, detail: string) => void;
 const refused = (fn: () => unknown, code: string): boolean => { try { fn(); return false; } catch (e) { return e instanceof PartsError && e.problems.some(p => p.code === code); } };
 export function runDiffComponentChecks(say: Say): void {
@@ -49,13 +53,16 @@ export function runDiffComponentChecks(say: Say): void {
   say('AS849_DIFF_EMPTY_INVENTORY_AND_STRICT_THRESHOLD_HAVE_POSITIVE_CONTROLS', empty.error_px===0 && empty.components.length===0 && empty.below_floor.px===0 && readDiffComponents(serializeDiffComponents(empty),{...input,stack:input.painting}).error_px===0 && measureDiffComponents(input,1,254).error_px===15, 'equal bytes: zero inventory; max difference 255 is strictly above 254');
 }
 export function runDiffComponentCliChecks(dir: string, say: Say, cli: string): void {
-  const stack = newRaster(4,4); stack.data.fill(255);
-  const painting = newRaster(4,4); painting.data.fill(255); painting.data[0]=0;
-  writeFileSync(join(dir,'diff-stack.png'),encodePngBytes(stack));
-  writeFileSync(join(dir,'diff-painting.png'),encodePngBytes(painting));
-  // Empty parts is a valid coverage inventory for this control, supplied through the real parts reader.
-  const parts = {...EXPECTED_PARTS,rig_size:[4,4],parts:[],ghost_px:{}};
-  writeFileSync(join(dir,'diff-parts.json'),JSON.stringify(parts));
+  const fixture = join(dir,'diff-fixture');
+  writeAssembleFixture(fixture);
+  const source = readPng(join(fixture,'painting.png'));
+  const assembled = assemble({source,full:readWrapperLayers(join(fixture,'full')),head:readWrapperLayers(join(fixture,'head')),
+    ...stageFields(loadConfig(join(fixture,'config.json'))),seamRule:'near-white',projectRule:DEFAULT_PROJECT_RULE});
+  writeFileSync(join(dir,'diff-stack.png'),encodePngBytes(assembled.recomposite));
+  writeFileSync(join(dir,'diff-painting.png'),encodePngBytes(sourceInRig(source,...assembled.parts.rig_size)));
+  mkdirSync(join(dir,'parts'),{recursive:true});
+  for (const {record,image} of assembled.images) writeFileSync(join(dir,'parts',`${record.name}.png`),encodePngBytes(image));
+  writeParts(join(dir,'diff-parts.json'),assembled.parts);
   const out = join(dir,'diff.json');
   const base = ['diff-components','--stack',join(dir,'diff-stack.png'),'--painting',join(dir,'diff-painting.png'),'--parts',join(dir,'diff-parts.json'),'--floor','1'];
   const run = (args: string[]) => spawnSync('bun',[cli,...args],{encoding:'utf8'});
@@ -64,7 +71,7 @@ export function runDiffComponentCliChecks(dir: string, say: Say, cli: string): v
   const report = good.status===0 ? JSON.parse(readFileSync(out,'utf8')) as { error_px:number } : null;
   const missing = run(['diff-components','--floor','1']);
   const unknown = run([...base,'--unknown','value','--out',out]);
-  say('CL830_DIFF_COMMAND_WRITES_VERIFIES_AND_REFUSES_MISSING_OR_UNKNOWN_FLAGS',good.status===0 && verified?.status===0 && report?.error_px===1 && missing.status===1 && missing.stdout.includes('DIFF_COMPONENTS_INPUT') && unknown.status===2, `write=${good.status}, verify=${verified?.status}, errors=${report?.error_px}, missing=${missing.status}, unknown=${unknown.status}; ${good.stdout}${good.stderr}`);
+  say('CL830_DIFF_COMMAND_WRITES_VERIFIES_AND_REFUSES_MISSING_OR_UNKNOWN_FLAGS',good.status===0 && verified?.status===0 && report?.error_px===assembled.figures.errorPx && report?.error_px===EXPECTED_PARTS.recomposite.error_px && missing.status===1 && missing.stdout.includes('DIFF_COMPONENTS_INPUT') && unknown.status===2, `write=${good.status}, verify=${verified?.status}, errors=${report?.error_px}, missing=${missing.status}, unknown=${unknown.status}; ${[good.stdout,good.stderr].join(' ').replace(/\s+/g,' ').trim()}`);
 }
 /** Public recipe control: every mask pixel agrees with the count's own RGB predicate and domain. */
 export function publicDiffControl(stack: Parameters<typeof errorMask>[0], painting: Parameters<typeof errorMask>[1], parts: PlacedPart[], inside: Uint8Array | null): { ok: boolean; detail: string } {
