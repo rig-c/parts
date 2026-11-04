@@ -89,6 +89,8 @@ export interface VerifiedReceipt extends EditorReceipt {
 /** The receipts read for one build: those that verified, keyed by sha256, and the refusals of those that did not. */
 export interface ReceiptLedger {
   required: boolean;
+  /** Input location, defaulting to the assemble ledger. */
+  at?: string;
   /** The field that made receipts required, as a refusal names it: `required`, else `trace_parts` (issue #947). */
   by: 'required' | 'trace_parts';
   bySha: ReadonlyMap<string, VerifiedReceipt>;
@@ -101,17 +103,17 @@ export interface ReceiptLedger {
  * `file`). A missing file is `ASSEMBLE_EDITOR_RECEIPT_FILE`; bytes that hash
  * to another value are `ASSEMBLE_EDITOR_RECEIPT_SHA256`, naming both values.
  */
-export function readEditorReceipts(spec: EditorReceipts | undefined, configPath: string): ReceiptLedger {
+export function readEditorReceipts(spec: EditorReceipts | undefined, configPath: string, at = AT, relativeTo: 'config' | 'scene file' = 'config'): ReceiptLedger {
   const problems: Problem[] = [];
   const bySha = new Map<string, VerifiedReceipt>();
   if (spec === undefined) return { required: false, by: 'required', bySha, problems };
   const base = dirname(resolve(configPath));
   spec.receipts.forEach((r, i) => {
-    const at = `${AT}.receipts[${i}]`;
+    const receiptAt = `${at}.receipts[${i}]`;
     const path = resolve(base, r.file);
-    const object = `${at} (file "${r.file}")`;
+    const object = `${receiptAt} (file "${r.file}")`;
     if (!existsSync(path) || !statSync(path).isFile()) {
-      problems.push({ code: 'ASSEMBLE_EDITOR_RECEIPT_FILE', object, detail: `names ${path}, which is no such file; the edited image, its path relative to the config's directory, is required` });
+      problems.push({ code: 'ASSEMBLE_EDITOR_RECEIPT_FILE', object, detail: `names ${path}, which is no such file; the edited image, its path relative to the ${relativeTo}'s directory, is required` });
       return;
     }
     const found = fileSha256(path);
@@ -119,10 +121,10 @@ export function readEditorReceipts(spec: EditorReceipts | undefined, configPath:
       problems.push({ code: 'ASSEMBLE_EDITOR_RECEIPT_SHA256', object, detail: `the file's bytes hash to sha256 ${found}; the receipt's sha256 ${r.sha256} is required — the file changed after its receipt was written, or the receipt names another file` });
       return;
     }
-    if (!bySha.has(found)) bySha.set(found, { ...r, at, path });
+    if (!bySha.has(found)) bySha.set(found, { ...r, at: receiptAt, path });
   });
   const by = spec.required === true || spec.trace_parts !== true ? 'required' : 'trace_parts';
-  return { required: spec.required === true || spec.trace_parts === true, by, bySha, problems };
+  return { required: spec.required === true || spec.trace_parts === true, by, bySha, problems, at };
 }
 
 /** An image the input itself says was made or edited outside See-through. */
@@ -181,7 +183,7 @@ export function missingReceipts(ledger: ReceiptLedger, images: readonly EditedIm
     problems.push({
       code: 'ASSEMBLE_EDITOR_RECEIPT_MISSING',
       object: image.object,
-      detail: `${image.path} (sha256 ${found}) carries no editor receipt; ${AT}.${ledger.by} is true, so a receipt {file, sha256, from_sha256, editor} whose sha256 is this file's is required — edit the image in an image editor and record it, never generate or patch it in code`,
+      detail: `${image.path} (sha256 ${found}) carries no editor receipt; ${ledger.at ?? AT}.${ledger.by} is true, so a receipt {file, sha256, from_sha256, editor} whose sha256 is this file's is required — edit the image in an image editor and record it, never generate or patch it in code`,
     });
   }
   return problems;

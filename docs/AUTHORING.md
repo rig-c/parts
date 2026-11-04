@@ -858,6 +858,20 @@ every donor author/hidden image requires a valid receipt before pixels are
 copied. A receipted author-layer target is accepted. The plan proposal command
 refuses region entries because their part names depend on an existing plan.
 
+### Scene plate editor receipts (issue #966)
+
+Optional `scene.plate.editor_receipts` uses the assemble ledger shape
+`{receipts: [{file, sha256, from_sha256, editor}], required?}`. Paths resolve
+relative to the scene file. Every declared receipt is verified, and under
+`required: true` the plate must match a verified receipt by content before
+compose writes anything. The shared `trace_parts` boolean also requires a
+matching receipt when true, as in assemble. `from_sha256` and `editor` remain
+author declarations held to form and differing hashes. `provenance` remains
+required and describes pixel origin (`observed`, `generated`, `unknown`).
+A receipt verifies file identity and records an edit declaration. Neither
+field judges pixel content. Omitting the ledger preserves output bytes and
+accepted exit codes.
+
 ### Editor receipts (`assemble.editor_receipts`, issue #946)
 
 An image edited in code — a layer re-segmented by a script, a patch
@@ -5703,6 +5717,10 @@ and stay absent).
 | --- | --- | --- |
 | <a id="SCENE_FILE"></a><a id="SCENE_SPEC"></a><a id="SCENE_FIELD_PRESENT"></a><a id="SCENE_FIELD_TYPE"></a><a id="SCENE_KEY_KNOWN"></a>`SCENE_FILE`, `SCENE_SPEC`, `SCENE_FIELD_PRESENT`, `SCENE_FIELD_TYPE`, `SCENE_KEY_KNOWN` | the scene file is missing, not a JSON object, not `spine-parts-scene/1`, or a field is missing, of the wrong type or not one the format reads (`canvas` two positive integers; `characters` at least one, each `id`, `build`, `offset` — an offset is never assumed (0, 0) — and an optional `scale`, a positive finite number: 0, a negative number or a non-number is refused at `characters[i].scale`; `order` a list of strings). `note`, `*_note` (strings) and `x-…` (any value) are read by nothing | the field |
 | <a id="SCENE_ID_UNIQUE"></a><a id="SCENE_ID_FORM"></a>`SCENE_ID_UNIQUE`, `SCENE_ID_FORM` | an `id` repeated, empty, or holding `:` — the separator of a prefixed name — or `/`, `\` or a leading `.`, because an id begins every image file of its character | another id |
+| <a id="SCENE_EDITOR_RECEIPT"></a>`SCENE_EDITOR_RECEIPT` | `scene.plate.editor_receipts` has a malformed ledger or receipt (issue #966) | use `{receipts: [{file, sha256, from_sha256, editor}], required?}` with the same shape rules as assemble editor receipts |
+| <a id="SCENE_EDITOR_RECEIPT_FILE"></a>`SCENE_EDITOR_RECEIPT_FILE` | a plate receipt names a missing file | supply the edited image relative to the scene file |
+| <a id="SCENE_EDITOR_RECEIPT_SHA256"></a>`SCENE_EDITOR_RECEIPT_SHA256` | a plate receipt's file hashes differently from its declared `sha256` | record the current edited file's sha256 |
+| <a id="SCENE_EDITOR_RECEIPT_MISSING"></a>`SCENE_EDITOR_RECEIPT_MISSING` | `scene.plate.editor_receipts.required` is true and no verified receipt matches the plate's bytes | edit the plate in an image editor and record a matching receipt |
 | <a id="SCENE_PLATE_PROVENANCE"></a><a id="SCENE_PLATE_PRESENT"></a><a id="SCENE_PLATE_SIZE"></a>`SCENE_PLATE_PROVENANCE`, `SCENE_PLATE_PRESENT`, `SCENE_PLATE_SIZE` | the plate's `provenance` is not `observed`, `generated` or `unknown`; its image is missing or not a PNG; it is not the canvas's size (it is drawn at canvas (0, 0) and never scaled) | the plate |
 | <a id="SCENE_BUILD_PRESENT"></a>`SCENE_BUILD_PRESENT` | a build directory, or a file `build` writes in it (`parts.json`, `rig/rig.json`, `rig/motion.json` with an `idle`, an image its skin names, `check/check.json`), is missing | run `build` for that character |
 | <a id="SCENE_BUILD_GREEN"></a>`SCENE_BUILD_GREEN` | the build's own `check/check.json` does not say `PASS` and `gate_spine_html_green`; under an accept list (`--accept`, `characters[].accept`), it failed a bar the list does not name, its gate is red, a declared requirement is not PASS, or it names no failing bar — the bars not met and the ones accepted are listed | finish that character first: compose binds finished characters. To look at the scene meanwhile, name the failing bars (§7, *Composing several characters*) |
@@ -6446,7 +6464,7 @@ single-character path (§4, steps 0–9) on its own, already isolated input to a
 | field | what it is |
 | --- | --- |
 | `canvas` | the shared stage, canvas px, y down. The composed rig's stage is the canvas, `root` at its bottom centre, as a single character's is its own |
-| `plate` | optional. `image` (relative to the scene file) is a PNG of exactly the canvas's size; `provenance` is `observed` (the painting's own pixels), `generated` or `unknown` (a residual after the people were removed is `unknown` where they stood, and the author says so); `note` is free text. Both are copied into `scene.json` and **judged by nothing** |
+| `plate` | optional. `image` (relative to the scene file) is a PNG of exactly the canvas's size; `provenance` is `observed` (the painting's own pixels), `generated` or `unknown` (a residual after the people were removed is `unknown` where they stood, and the author says so); `note` is free text. `provenance` and `note` are copied into `scene.json` and **judged by nothing**. Optional `editor_receipts` uses the [editor receipt ledger](#scene-plate-editor-receipts-issue-966), with paths relative to the scene file and verified file hashes; `required: true` demands a matching plate receipt |
 | `characters[].id` | the prefix: every bone, slot, attachment (skin entry), constraint (its name, and every bone and path slot it names), `stops` entry (its `chain`, `links` and `against`, issue #431), `invariants.detached` bone, track, group and easing of that character is renamed `<id>:<name>`. `root` is the one shared root. A name resolves to exactly one character, and nothing resolves across characters without its prefix |
 | `characters[].build` | a `build --out` directory (relative to the scene file) whose own `check/check.json` is green |
 | `characters[].offset` | `[x, y]`, a translation from the build's rig px to canvas px. Every character is built at one `assemble.rig_scale`, so its rig px are canvas px at scale 1 |
