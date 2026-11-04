@@ -32,34 +32,6 @@ export function runCoincideChecks(dir: string, say: Say): void {
   ] as const;
   for (const [name, ok] of checks) say(name, ok, JSON.stringify({ normal, defect, side, unavailable, unowned }));
 
-  // Mutants are written to isolated scratch modules. The measured source stays
-  // untouched. Each is actually imported and executed by a separate Bun process.
-  const sourcePath = resolve(import.meta.dir, '../src/coincide.ts');
-  const original = readFileSync(sourcePath, 'utf8');
-  const imports = (s: string): string => s.replace(/from '(\.\/[^']+)'/g,
-    (_match, relative: string) => `from '${pathToFileURL(resolve(import.meta.dir, '../src', relative)).href}'`);
-  const mutants = [
-    ['CK1002_SUPPORT_NORMAL_MUTANT', 'B.mask.data[b] !== 0 || ', '', 'whole', 'whole', 'r.pairs[0].boundary_length_px === 0'],
-    ['CK1003_SUPPORT_DEFECT_MUTANT', 'length++;', 'length += 0;', 'left', 'whole', 'r.pairs[0].boundary_length_px === 4'],
-    ['CK1004_SUPPORT_SIDE_TOUCH_MUTANT', ' || domain.mask.data[a] === 0 || domain.mask.data[b] === 0', '', 'left', 'left', 'r.pairs[0].boundary_length_px === 0'],
-    ['CK1005_SUPPORT_UNAVAILABLE_MUTANT', 'domains.find(d => d.part === B.name)', 'domains.find(d => d.part === B.name) ?? { mask: B.mask }', 'left', 'none', 'r.pairs[0].status === "unavailable" && r.pairs[0].boundary_length_px === null'],
-    ['CK1006_SUPPORT_UNOWNED_MUTANT', 'missing[p] = 0;', 'missing[p] = missing[p];', 'left', 'unowned', 'r.unowned.area_px === 12'],
-  ];
-  for (const [name, before, after, back, support, predicate] of mutants) {
-    const path = join(dir, name + '.ts');
-    const changed = original.replace(before, after);
-    writeFileSync(path, imports(changed));
-    const script = `import { supportReport } from ${JSON.stringify(pathToFileURL(path).href)};
-      const m = f => ({width:6,height:4,data:Uint8Array.from({length:24},(_,p)=>+f(p%6))});
-      const whole=m(()=>true), left=m(x=>x<3), right=m(x=>x>=3);
-      const parts=${support === 'unowned' ? '[{name:"leg",mask:left}]' : `[{name:"back",mask:${back}},{name:"front",mask:right}]`};
-      const domains=${support === 'none' || support === 'unowned' ? '[]' : `[{part:"back",mask:${support},provenance:{kind:"cut-polygon",entry:"assemble.cuts[0]"}}]`};
-      const r=supportReport(6,4,parts,domains,whole); console.log(JSON.stringify({survives:${predicate},r}));`;
-    const run = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
-    const output: { survives?: boolean } = run.status === 0 ? JSON.parse(run.stdout) : {};
-    say(name, changed !== original && run.status === 0 && output.survives === false,
-      `isolated mutant exit ${run.status}; ${run.stdout.trim()} ${run.stderr.trim()}`);
-  }
   const noSource = supportReport(6, 4, parts(whole), [], null);
   say('CK1007_SUPPORT_SOURCE_ABSENCE', noSource.unowned.status === 'unavailable' && noSource.unowned.area_px === null && noSource.unowned.reason?.includes('--source') === true, JSON.stringify(noSource.unowned));
   const unchanged = JSON.stringify(parts(left));
@@ -96,4 +68,36 @@ export function runCoincideSetupChecks(dir: string, say: Say, rigc: RigcRunner):
   const sceneInput = { ...input, parts: input.parts === null ? null : { ...input.parts, scene: { figure_alpha_above: 127, figure_px: 960, figure_mask: 'omitted-object.png' } } };
   const reread = observeSupport(join(dir, 'build'), sceneInput);
   say('CK1010_SUPPORT_SCENE_OMISSION_CANNOT_HIDE_UNOWNED', JSON.stringify(reading) === JSON.stringify(reread), JSON.stringify(reread.unowned));
+}
+
+export function runCoincideMutants(dir: string, say: Say): void {
+  mkdirSync(dir, { recursive: true });
+  // Mutants are written to isolated scratch modules. The measured source stays
+  // untouched. Each is actually imported and executed by a separate Bun process.
+  const sourcePath = resolve(import.meta.dir, '../src/coincide.ts');
+  const original = readFileSync(sourcePath, 'utf8');
+  const imports = (s: string): string => s.replace(/from '(\.\/[^']+)'/g,
+    (_match, relative: string) => `from '${pathToFileURL(resolve(import.meta.dir, '../src', relative)).href}'`);
+  const mutants = [
+    ['TY818_SUPPORT_NORMAL_MUTANT', 'B.mask.data[b] !== 0 || ', '', 'whole', 'whole', 'r.pairs[0].boundary_length_px === 0'],
+    ['TY819_SUPPORT_DEFECT_MUTANT', 'length++;', 'length += 0;', 'left', 'whole', 'r.pairs[0].boundary_length_px === 4'],
+    ['TY820_SUPPORT_SIDE_TOUCH_MUTANT', ' || domain.mask.data[a] === 0 || domain.mask.data[b] === 0', '', 'left', 'left', 'r.pairs[0].boundary_length_px === 0'],
+    ['TY821_SUPPORT_UNAVAILABLE_MUTANT', 'domains.find(d => d.part === B.name)', 'domains.find(d => d.part === B.name) ?? { mask: B.mask }', 'left', 'none', 'r.pairs[0].status === "unavailable" && r.pairs[0].boundary_length_px === null'],
+    ['TY822_SUPPORT_UNOWNED_MUTANT', 'missing[p] = 0;', 'missing[p] = missing[p];', 'left', 'unowned', 'r.unowned.area_px === 12'],
+  ];
+  for (const [name, before, after, back, support, predicate] of mutants) {
+    const path = join(dir, name + '.ts');
+    const changed = original.replace(before, after);
+    writeFileSync(path, imports(changed));
+    const script = `import { supportReport } from ${JSON.stringify(pathToFileURL(path).href)};
+      const m = f => ({width:6,height:4,data:Uint8Array.from({length:24},(_,p)=>+f(p%6))});
+      const whole=m(()=>true), left=m(x=>x<3), right=m(x=>x>=3);
+      const parts=${support === 'unowned' ? '[{name:"leg",mask:left}]' : `[{name:"back",mask:${back}},{name:"front",mask:right}]`};
+      const domains=${support === 'none' || support === 'unowned' ? '[]' : `[{part:"back",mask:${support},provenance:{kind:"cut-polygon",entry:"assemble.cuts[0]"}}]`};
+      const r=supportReport(6,4,parts,domains,whole); console.log(JSON.stringify({survives:${predicate},r}));`;
+    const run = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8' });
+    const output: { survives?: boolean } = run.status === 0 ? JSON.parse(run.stdout) : {};
+    say(name, changed !== original && run.status === 0 && output.survives === false,
+      `isolated mutant exit ${run.status}; ${run.stdout.trim()} ${run.stderr.trim()}`);
+  }
 }

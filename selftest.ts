@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { runCoincideChecks, runCoincideSetupChecks } from './tools/check_coincide.ts';
+import { runCoincideChecks, runCoincideSetupChecks, runCoincideMutants } from './tools/check_coincide.ts';
 import { COINCIDE_LINE, type SupportReport } from './src/coincide.ts';
 import { runPaintingEdgeChecks } from './tools/check_painting_edges.ts';
 import { runProjectConfigChecks } from './tools/check_project_config.ts';
@@ -29161,7 +29161,7 @@ function chainCheckGoldenCase(ex: string, out: string, key: string, say: ReturnT
         support.pairs.length === support.coverage.total && support.coverage.measured === 0 &&
         new Set(support.pairs.map(p => JSON.stringify([p.back, p.front]))).size === support.coverage.total &&
         support.pairs.every(p => p.status === 'unavailable' && p.boundary_length_px === null && typeof p.reason === 'string'),
-        JSON.stringify(support), 'legacy producer has no independent domains; every pair is listed unavailable, never clean');
+        JSON.stringify({ coverage: support?.coverage, length_px: support?.pairs.reduce((sum, p) => sum + (p.boundary_length_px ?? 0), 0), unowned: support?.unowned.status, area_px: support?.unowned.area_px }), 'legacy producer has no independent domains; every pair is listed unavailable, never clean');
       say(
         `CH04_CHECK_JSON_IS_THE_EXPECTED_FIELD_BY_FIELD[${key}]`,
         check.over.length === 0,
@@ -40467,6 +40467,9 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
     treeGuideCase(text, say);
     return bad();
   }
+  const supportMutants = temp('support-source-mutants');
+  try { runCoincideMutants(supportMutants, (name, ok, detail) => say(name, ok, detail, 'issue #998: isolated source mutants belong to the tree-reading suite; generated check inputs retain their strict boundary')); }
+  finally { rmSync(supportMutants, { recursive: true, force: true }); }
   runMotionSeamDocumentationCases(say);
   const patterns = ignorePatterns();
   const readerFaults = ignoreReaderFaults(patterns);
