@@ -159,7 +159,7 @@ import { configRoles, type RoleOf } from './structure.ts';
 import { AUTHOR_NO_ROLE, isAuthorTag } from './tags.ts';
 import { TURN_BONE, TURN_CARRIER_TAG, TURN_PLACES, TURN_RIDER_OFFSET, TURN_RIDER_TAGS, turnFractions, turnNearest, turnPivot, turnRiderDepth, type TurnSpec } from './turn.ts';
 import { edgeLength } from './length.ts';
-import { bonePlaces, jointLine, type JointLine, limbCrossing, limbPolyline, limbRun, limbWidth, nearestLimb, nearestOnLine, offLineFigure, type Pt } from './limbs.ts';
+import { bonePlaces, jointLine, type JointLine, limbCrossing, limbPolyline, limbRun, limbWidth, nearestLimb, nearestOnLine, offLineFigure, segmentOf, type Pt } from './limbs.ts';
 import { type BranchSqueezeFinding, branchSqueezes, chainSqueezes, type SqueezeFinding } from './squeeze.ts';
 import { backHairMasses, type BackHairMass, backHairMassTrees, INFLUENCE_RADIUS_CELLS, RECIPE_BACK_HAIR_CHAINS, RECIPE_LENGTH_RATIO, chainConstraints, clothNote, type ClothRecipe, type ClothRecipes, type ClothTarget, CLOTH_TARGETS, draftTrees, spanCrosses, swingName, type Tail, tailOverlap, type TailOverlap, type TailSpan, treeConstraints, type TreeChain, type TreeInput, type TreeMassInput } from './cloth.ts';
 import { TEXTURE_STRETCH_CEILING } from './check.ts';
@@ -3467,7 +3467,28 @@ export function proposeWithBasis(
         detail: `declares an influence mesh for chest-holding topwear "${torsoName}". This draft requires a contour torso. Remove influence from this recipe or separate the torso from its cloth part`,
       }]);
     }
-    const dust = dustOf(P.images.get(source.name) as Raster);
+    let torsoImage = P.images.get(source.name) as Raster;
+    if (figPart !== null) {
+      // Read the future trunk segment, using the same ownership and joint cuts as assemble.
+      const places = bonePlaces(bones);
+      const sharing = Object.entries(limbs).filter(([, limb]) => limb.segments.some(segment => segment.from === source.name));
+      const trunkIndex = sharing.findIndex(([name]) => name === 'trunk');
+      const polylines = sharing.map(([, limb]) => limbPolyline(limb, places));
+      const trunkPoints = polylines[trunkIndex];
+      const lines = [null, jointLine(trunkPoints[0], trunkPoints[1], trunkPoints[2]), jointLine(trunkPoints[1], trunkPoints[2], null)];
+      const data = new Uint8ClampedArray(torsoImage.data);
+      for (let y = 0; y < torsoImage.height; y++) {
+        for (let x = 0; x < torsoImage.width; x++) {
+          const alpha = (y * torsoImage.width + x) * 4 + 3;
+          if (data[alpha] === 0) continue;
+          const wx = source.x + x;
+          const wy = source.y + y;
+          if (nearestLimb(polylines, wx, wy) !== trunkIndex || segmentOf(lines, 0, 2, wx, wy) !== 1) data[alpha] = 0;
+        }
+      }
+      torsoImage = { ...torsoImage, data };
+    }
+    const dust = dustOf(torsoImage);
     if ('keep' in dust) {
       throw new PartsError([{ code: 'PROPOSE_TORSO_ISLANDS', object: `chest carrier "${torsoName}"`, detail: `${dust.keep}. Separate the real pieces before drafting a contour torso` }]);
     }
