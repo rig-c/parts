@@ -6628,8 +6628,10 @@ and an entry whose slot does not fold in its animation fails the line
 (`CHECK_ANIMATIONS_DO_NOT_FOLD`, `declared_not_folding`) — an exception that excepts nothing
 is taken out of the file, as rig-c refuses one for `invariants.deformMayFold`.
 
-`fps` and `requirements` are required as always; a file that declares only exceptions
-is `{ "spec": "spine-parts-requirements/1", "fps": 12, "requirements": [], "not_planted": ["shoes"], "not_swinging": ["under"], "rises": ["arm"], "rests": ["hem"] }`.
+`requirements` is required. `fps` is required only when a declared measurement
+reads the file's sampling rate. Instruments using their own rate do not require it.
+A file that declares only exceptions
+is `{ "spec": "spine-parts-requirements/1", "requirements": [], "not_planted": ["shoes"], "not_swinging": ["under"], "rises": ["arm"], "rests": ["hem"] }`.
 
 **Four outcomes, never merged** (#87):
 

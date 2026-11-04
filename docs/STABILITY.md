@@ -657,3 +657,8 @@ changing a calibration requires preparing its recipe again. Compare the same
 provider maps and preserve their provenance. Each report row names the part,
 declared relief, group `zScale` and clipping over original alpha>=128 support;
 it remains a measurement rather than a shape-quality gate.
+
+The requirements file's `fps` becomes optional when no declared measurement
+reads that rate (issue #965, additive for readers). Measurements in
+`requirements` still require a positive `fps`, with no default. Declarations
+whose instruments use their own rate keep that rate.

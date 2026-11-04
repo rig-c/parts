@@ -493,6 +493,7 @@ import {
   rangeLine,
   readRequirements,
   REQUIREMENT_KINDS,
+  requirementAnimations,
   requirementProblem,
   requirementsSummary,
   type RequirementLine,
@@ -24206,6 +24207,23 @@ function runRequirementsSuite(): number {
       codes(noFps) === `REQUIREMENTS_FIELD ${join(dir, 'no-fps.json')} field "fps"` && codes(zeroFps) === `REQUIREMENTS_FIELD ${join(dir, 'zero-fps.json')} field "fps"` && (noFps?.problems[0].detail.includes('there is no default') ?? false),
       `absent: ${codes(noFps)} — ${noFps?.problems[0].detail ?? ''}; 0: ${codes(zeroFps)}`,
       'every named animation is sampled at the file\'s fps; a run that picked one would measure frames nobody asked for',
+    );
+
+    const pinholesOnly = readRequirements(file('pinholes-no-fps', { spec, requirements: [], pinholes: { required: true } }));
+    const invalidIdleRate = refusals(() => readRequirements(file('pinholes-bad-fps', { spec, fps: 0, requirements: [], pinholes: { required: true } })));
+    say(
+      'RQ199_PINHOLES_WITHOUT_FPS_READS_WITHOUT_INVENTING_A_RATE',
+      pinholesOnly.fps === undefined && pinholesOnly.pinholes?.required === true && codes(invalidIdleRate).includes('field "fps"'),
+      `absent rate: ${String(pinholesOnly.fps)}; invalid supplied rate: ${codes(invalidIdleRate)}`,
+      'a setup-only declaration needs no sampling rate, while a supplied rate still has to be positive',
+    );
+    const newSampler = { kind: 'future-sampler', animation: 'new-animation' };
+    const seamNoFps = refusals(() => readRequirements(file('seam-no-fps', { spec, requirements: [{ name: 'JOIN', kind: 'seam', animation: 'idle', part: 'upper', neighbour: 'lower', within_px: 1 }] })));
+    say(
+      'RQ200_AN_ADDED_SAMPLER_ENTERS_THE_SHARED_ANIMATION_SELECTION_WITHOUT_A_KIND_LIST',
+      requirementAnimations([newSampler]).join(',') === 'new-animation' && requirementAnimations([]).length === 0 && codes(seamNoFps).includes('field "fps"'),
+      `new kind: ${requirementAnimations([newSampler]).join(',')}; seam without fps: ${codes(seamNoFps)}`,
+      'reader and renderer share the animation selection, so adding a measurement kind cannot require another sampling-kind list',
     );
 
     const strip = (r: Record<string, unknown>, ...keys: string[]): Record<string, unknown> => Object.fromEntries(Object.entries(r).filter(([k]) => !keys.includes(k)));

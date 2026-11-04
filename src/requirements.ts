@@ -133,6 +133,11 @@ export interface SeamRequirement extends RequirementCommon {
 
 export type Requirement = ContactRequirement | FollowRequirement | AimRequirement | RangeRequirement | StretchRequirement | SeamRequirement;
 
+/** Animations whose measurements consume the requirements file's sampling rate. */
+export function requirementAnimations(requirements: readonly { animation: string }[]): string[] {
+  return [...new Set(requirements.map((requirement) => requirement.animation))];
+}
+
 /** One stage point of a scene target, at a time in seconds (null for a fixed point). */
 export interface TargetPoint {
   t: number | null;
@@ -149,7 +154,7 @@ export interface SceneTarget {
 
 export interface RequirementsFile {
   path: string;
-  fps: number;
+  fps?: number;
   targets: SceneTarget[];
   requirements: Requirement[];
   /**
@@ -314,8 +319,8 @@ const EXCEPTION_ABSENT: Record<ExceptionList, string> = {
 
 /**
  * Read and shape-check a requirements file. Every problem is collected before
- * one refusal: the file, `spec`, `fps` (required, a positive number: no
- * default), `targets` (optional), `requirements` (required, possibly empty)
+ * one refusal: the file, `spec`, `fps` (a positive number required when a measurement reads
+ * the file's sampling rate, with no default), `targets` (optional), `requirements` (required, possibly empty)
  * and `not_planted`, `not_swinging`, `rises` and `rests` (each optional,
  * issues #231 and #245: a non-empty list of distinct part names, no part both
  * in `not_swinging` and in `rises` or `rests`;
@@ -355,9 +360,6 @@ export function readRequirements(path: string): RequirementsFile {
   if ('setup_painting' in raw) problems.push(...setupPaintingProblems(raw.setup_painting, `${at} setup_painting`));
   if ('cut_material' in raw) problems.push(...jointMaterialProblems(raw.cut_material, `${at} cut_material`));
   if ('fixed_skeleton' in raw) problems.push(...fixedSkeletonProblems(raw.fixed_skeleton, `${at} fixed_skeleton`));
-  let fps = NaN;
-  if (!(finite(raw.fps) && raw.fps > 0)) field(`${at} field "fps"`, `is ${JSON.stringify(raw.fps)}; a positive number of frames per second is required — every named animation is sampled at it, and there is no default`);
-  else fps = raw.fps;
 
   const requirements: Requirement[] = [];
   if (!Array.isArray(raw.requirements)) field(`${at} field "requirements"`, `is ${JSON.stringify(raw.requirements)}; an array of requirements is required (an empty one declares none)`);
@@ -537,6 +539,11 @@ export function readRequirements(path: string): RequirementsFile {
       });
     }
   }
+  const samplesAnimation = requirementAnimations(requirements).length > 0;
+  if ((raw.fps !== undefined || samplesAnimation) && !(finite(raw.fps) && raw.fps > 0)) {
+    field(`${at} field "fps"`, `is ${JSON.stringify(raw.fps)}; a positive number of frames per second is required — every named animation is sampled at it, and there is no default`);
+  }
+  const fps = finite(raw.fps) ? raw.fps : undefined;
   refuseIfAny(problems);
   return { path: at, fps, targets, requirements, not_planted: lists.not_planted, not_swinging: lists.not_swinging, rises: lists.rises, rests: lists.rests, may_fold: mayFold, ...(raw.fixed_skeleton === undefined ? {} : { fixed_skeleton: raw.fixed_skeleton as FixedSkeleton }), ...(raw.cut_material === undefined ? {} : { cut_material: raw.cut_material as JointMaterial[] }), ...(raw.setup_painting === undefined ? {} : { setup_painting: raw.setup_painting as SetupPainting }), ...(raw.pinholes === undefined ? {} : { pinholes: { required: (raw.pinholes as PinholesDeclaration).required } }), ...(raw.seam_over_motion === undefined ? {} : { seam_over_motion: { required: (raw.seam_over_motion as SeamOverMotionDeclaration).required } }), ...(raw.boundary_colour === undefined ? {} : { boundary_colour: { max_step_excess: (raw.boundary_colour as BoundaryColour).max_step_excess } }) };
 }
