@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.11.0](https://github.com/rig-c/parts/compare/v2.10.0...v2.11.0) (2026-11-04)
+
+
+### Features
+
+* **scene:** verify plate editor receipts ([#966](https://github.com/rig-c/parts/issues/966)) ([#1048](https://github.com/rig-c/parts/issues/1048)) ([bc57e2c](https://github.com/rig-c/parts/commit/bc57e2cd394a25adda3159a95912ba2e4ccd53c9))
+* **take:** register cropped whole-layer donors ([#973](https://github.com/rig-c/parts/issues/973)) ([#1049](https://github.com/rig-c/parts/issues/1049)) ([0dfdb87](https://github.com/rig-c/parts/commit/0dfdb87408a8e262caf745d0ed8ddff10da7e714))
+
 ## [2.10.0](https://github.com/rig-c/parts/compare/v2.9.1...v2.10.0) (2026-11-04)
 
 
