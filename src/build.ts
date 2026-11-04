@@ -352,7 +352,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   refuseIfAny([...receipts.problems, ...missingReceipts(receipts, [...editedRunImages(read), ...editedConfigImages(input.config, cfg.assemble.cuts ?? [], cfg.limbs)]), ...untracedPartSources(cfg)]);
   const takenRuns = applyTakenLayers(read, src, cfg, input.config);
   const runs = applyTakenRegions(takenRuns, src, cfg, input.config, requirementsFile?.setup_painting, receipts, input.source);
-  for (const note of runs.notes) log(`note: ${note}`);
+  for (const note of runs.notes) log(note.startsWith('WARN  ') ? note : `note: ${note}`);
   const fields = stageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
   const under = readUnders(input.config, fields.cuts);
   const caps = fields.limbs === undefined ? undefined : readCaps(input.config, fields.limbs);

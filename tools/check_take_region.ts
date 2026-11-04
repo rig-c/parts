@@ -199,9 +199,10 @@ export function regionNeighbourChanges(before: AssembleResult, after: AssembleRe
 export function runTakeContainmentChecks(dir: string, say: Say): void {
   const cfg = writeTakeRegionFixture(dir);
   const config = join(dir, 'config.json'), paintingPath = join(dir, 'painting.png');
+  const stageNotes: string[] = [];
   const stage = (source = paintingPath) => assembleStage(
     { source, full: join(dir, 'full'), head: null, config, requirements: join(dir, 'requirements.json') },
-    { partsJson: join(dir, 'out', 'parts.json'), partsDir: join(dir, 'out', 'parts'), recomposite: join(dir, 'out', 'recomposite.png'), errorMap: join(dir, 'out', 'error.png') }, () => {},
+    { partsJson: join(dir, 'out', 'parts.json'), partsDir: join(dir, 'out', 'parts'), recomposite: join(dir, 'out', 'recomposite.png'), errorMap: join(dir, 'out', 'error.png') }, line => stageNotes.push(line),
   );
   const take = (cfg.assemble as { take: Array<Record<string, unknown>> }).take;
   const save = () => writeFileSync(config, JSON.stringify(cfg));
@@ -230,7 +231,7 @@ export function runTakeContainmentChecks(dir: string, say: Say): void {
       throw error;
     }
   };
-  say('REGION_MISSING_REFERENCE_REFUSED', refusal(() => { delete take[0].reference; }, 'ASSEMBLE_REGION_TAKE_REFERENCE'), 'ASSEMBLE_REGION_TAKE_REFERENCE');
+  say('REGION_UNRESOLVABLE_REFERENCE_REFUSED', refusal(() => { take[0].reference = { painting: 'absent-reference.png', sha256: fileSha256(paintingPath) }; }, 'ASSEMBLE_REGION_TAKE_REFERENCE'), 'ASSEMBLE_REGION_TAKE_REFERENCE');
   say('REGION_MISMATCHED_REFERENCE_REFUSED', refusal(() => { take[0].reference = { painting: 'painting.png', sha256: '0'.repeat(64) }; }, 'ASSEMBLE_REGION_TAKE_REFERENCE_MATCH'), 'ASSEMBLE_REGION_TAKE_REFERENCE_MATCH');
   take[0].reference = { source: true, sha256: fileSha256(paintingPath) }; save();
   say('REGION_SOURCE_REFERENCE_ACCEPTED', stage().parts.parts.some(p => p.name === 'body'), 'explicit source binding hashes the stage source PNG');
@@ -246,6 +247,18 @@ export function runTakeContainmentChecks(dir: string, say: Say): void {
     }
   };
   say('REGION_NEIGHBOUR_POPULATION_CHANGES_REFUSED', changedPopulation(false) && changedPopulation(true), 'added and removed neighbours each refuse ASSEMBLE_REGION_TAKE_CONTAINMENT');
+  delete take[0].reference;
+  save();
+  stageNotes.length = 0;
+  const implicitResult = stage();
+  const implicitWarnings = stageNotes.filter(line => line.startsWith('WARN  ASSEMBLE_REGION_TAKE_REFERENCE_IMPLICIT:'));
+  const implicitCfg = loadEarlyConfig(config, 'assemble');
+  const implicitRuns = applyTakenRegions({ ...runs, notes: [] }, painting, implicitCfg, config, setup, ledger);
+  const legacyPredicate = deriveTakenRegion(runs.full.layers.find(layer => layer.name === 'topwear')!, readLayers(join(dir, 'donor')).layers[0], painting, [12, 40], 0, 'shipped predicate');
+  const implicitLayer = implicitRuns.full.layers.find(layer => layer.name === 'topwear')!;
+  const implicitMaskMatches = implicitLayer.pixels.data.every((byte, i) => byte === legacyPredicate.layer.pixels.data[i]) && legacyPredicate.reading.pixels === 96;
+  take[0].reference = { source: true, sha256: fileSha256(paintingPath) };
+  save();
   const basePath = join(dir, 'full', 'parts', 'topwear.png'), empty = readPng(basePath);
   empty.data.fill(0); writeFileSync(basePath, encodePngBytes(empty));
   say('REGION_RECOVERS_EMPTY_TARGET_WITH_CONTAINMENT', stage().parts.parts.find(p => p.name === 'body')!.opaque_px > 0, 'counterfactual empty target stays internal; recovered target is measured normally');
@@ -268,4 +281,7 @@ export function runTakeContainmentChecks(dir: string, say: Say): void {
   const rectangularRuns = readRuns(join(rectangular, 'full'), null);
   const rectangularReading = applyTakenRegions({ ...rectangularRuns, notes: [] }, rectangularPainting, loadEarlyConfig(rectangularConfig, 'assemble'), rectangularConfig, setup, ledger);
   say('REGION_RECTANGULAR_SINGLE_REFERENCE_HAS_NO_PADDING_TRANSFORM', rectangularReading.notes.some(line => line.includes('"scale":[1,1],"origin":[0,0]')), 'rectangular single-run predicate reads the unpadded painting; its logged origin is [0,0]');
+  say('REGION_IMPLICIT_REFERENCE_PRESERVES_SHIPPED_MASK', implicitMaskMatches, 'absent reference reads the stage painting; identical run bytes to the shipped predicate, 96 selected cells');
+  say('REGION_IMPLICIT_REFERENCE_WARNS_ONCE', implicitWarnings.length === 1 && !stageNotes.some(line => line.startsWith('FAIL')), implicitWarnings.join(' | '));
+  say('REGION_IMPLICIT_REFERENCE_CONTAINS_NEIGHBOURS', regionNeighbourChanges(before, implicitResult, 'body', support) === 0, 'absent reference has zero neighbour changes beyond the component plus 2 px');
 }

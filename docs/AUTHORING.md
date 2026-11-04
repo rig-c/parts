@@ -814,18 +814,22 @@ one seed pixel on the target run canvas (integer x right, y down).
 The region is derived from base alpha < 128, donor alpha >= 128, and the
 maximum RGB channel difference after rounding each pixel source-over white.
 The tolerance is exactly `--requirements`' `setup_painting.rgb_tolerance`.
-A missing tolerance declaration is refused. Each region also requires `reference`,
-with exactly one of `"source": true` (the stage's `--source`) or
+A missing tolerance declaration is refused. The optional `reference` declares
+exactly one of `"source": true` (the stage's `--source`) or
 `"painting": "path/to/reference.png"` (config-relative), and `sha256`, the
-lowercase SHA-256 of that PNG's file bytes. A missing/unreadable reference and
-a hash or painting-dimension mismatch are refused by name. The separate painting
-can stay fixed while `--source` changes for projection. Its input is derived as
-for whole-layer take above. Both run canvases must agree, and the supplied original donor input
+lowercase SHA-256 of that PNG's file bytes. An absent `reference` preserves the
+shipped `source: true` semantics and prints one
+`ASSEMBLE_REGION_TAKE_REFERENCE_IMPLICIT` warning per build. It reads the same
+stage painting for the predicate. A declared but unreadable reference, or a
+hash or painting-dimension mismatch, is refused by name. Only an explicitly
+declared painting reference keeps the selected mask fixed when `--source`
+changes for projection. Its input is derived as for whole-layer take above.
+Both run canvases must agree, and the supplied original donor input
 must match the entire target input in RGBA and dimensions, establishing the same
 crop. Different crops await #973. Painting samples use the existing Lanczos3
 resize onto the run canvas. Only the 8-connected qualifying component containing
 the seed is copied. The base layer's depth and draw order stay in use.
-The reference hash, binding and painting-to-run transform are logged. For
+For a declared reference, its hash, binding and painting-to-run transform are logged. For
 `scale` and `origin`, run coordinates are `(painting - origin) * scale`.
 The origin is the head crop's top-left or the negative full-input padding.
 The recorded filter is Lanczos3.
@@ -5141,7 +5145,8 @@ those settings. Changing a config seed alone cannot change a no-config run.
 | <a id="ASSEMBLE_TAKE_DEPTH_AMBIGUOUS"></a>`ASSEMBLE_TAKE_DEPTH_AMBIGUOUS` | different original runs have equal or null depths | use a run with distinct numeric depths; do not invent an inter-run tie order |
 | <a id="ASSEMBLE_TAKE_PLAN_ORDER"></a>`ASSEMBLE_TAKE_PLAN_ORDER` | supplied plan reverses an overlapping mixed-run pair: two-run full-layer head roles first, scalar depth within a role band (head-run and single-run rows use scalar depth); names the parts and support intersection | use the order drafted by `assemble --propose-plan`; fallback headwear follows the body and precedes the face, front hair follows the face; disjoint supports impose no plan-order constraint |
 | <a id="EDGE_PAIR_RESIDUAL"></a>`EDGE_PAIR_RESIDUAL` | report-only front/back residual candidates after visible edge composition, with pixel spans, boxes and coverage | read measured candidates and explicit skipped/unavailable reasons in `edge_residuals.json`. No pass/fail threshold is applied |
-| <a id="ASSEMBLE_REGION_TAKE_REFERENCE"></a>`ASSEMBLE_REGION_TAKE_REFERENCE` | a region reference is absent or unreadable | declare `reference` with `source: true` or `painting` and the PNG byte hash |
+| <a id="ASSEMBLE_REGION_TAKE_REFERENCE_IMPLICIT"></a>`ASSEMBLE_REGION_TAKE_REFERENCE_IMPLICIT` | warning, `reference` is absent and the predicate uses `--source` | declare a painting reference and its PNG hash to keep the mask independent of projection-source changes |
+| <a id="ASSEMBLE_REGION_TAKE_REFERENCE"></a>`ASSEMBLE_REGION_TAKE_REFERENCE` | a declared region reference is unreadable | supply the declared PNG, with `source: true` or `painting` and its byte hash |
 | <a id="ASSEMBLE_REGION_TAKE_REFERENCE_MATCH"></a>`ASSEMBLE_REGION_TAKE_REFERENCE_MATCH` | a reference hash or painting dimensions differ | supply the declared PNG and preserve the source geometry |
 | <a id="ASSEMBLE_REGION_TAKE_CONTAINMENT"></a>`ASSEMBLE_REGION_TAKE_CONTAINMENT` | a non-target part has no pre-take counterpart | retain the same neighbour part population before and after the take |
 | <a id="ASSEMBLE_REGION_TAKE_TOLERANCE"></a>`ASSEMBLE_REGION_TAKE_TOLERANCE` | a region take has no authored `setup_painting.rgb_tolerance` | supply the same requirements file to assemble/build and check |

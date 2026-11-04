@@ -33,6 +33,8 @@ export interface RegionReading {
   painting_match_share: number;
   rgb_tolerance: number;
 }
+const IMPLICIT_REFERENCE_WARNING = 'ASSEMBLE_REGION_TAKE_REFERENCE_IMPLICIT';
+
 type Runs = { full: LayerSet; head: LayerSet; single: boolean; notes: string[] };
 
 function refuse(code: string, object: string, detail: string): never {
@@ -112,6 +114,9 @@ export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleCon
   }
   const lists = { full: [...runs.full.layers], head: [...runs.head.layers] };
   const notes = [...runs.notes];
+  if (declarations.some(item => item.reference === undefined)) {
+    notes.push(`WARN  ${IMPLICIT_REFERENCE_WARNING}: config.assemble.take — reference is absent; uses --source for the colour predicate; declare reference to bind its PNG sha256`);
+  }
   const seen = new Set<string>();
   for (const declaration of declarations) {
     const at = `config.assemble.take part "${declaration.part}" from "${declaration.run_dir}"`;
@@ -123,19 +128,20 @@ export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleCon
     }
     seen.add(key);
     const reference = declaration.reference;
-    if (reference === undefined) return refuse('ASSEMBLE_REGION_TAKE_REFERENCE', at, 'reference must explicitly bind source: true or painting to a PNG sha256');
-    const referencePath = 'source' in reference ? sourcePath : resolve(dirname(resolve(configPath)), reference.painting);
-    let referencePainting: Raster;
-    let referenceHash: string;
-    try {
-      if (referencePath === undefined) throw new Error('source path is absent');
-      referenceHash = fileSha256(referencePath);
-      referencePainting = readPng(referencePath);
-    } catch { return refuse('ASSEMBLE_REGION_TAKE_REFERENCE', at, 'reference must name a readable PNG with its declared sha256; a source binding requires the stage source path'); }
-    if (referenceHash !== reference.sha256 || referencePainting.width !== painting.width || referencePainting.height !== painting.height) {
-      return refuse('ASSEMBLE_REGION_TAKE_REFERENCE_MATCH', at, `reference sha256 ${referenceHash}, expected ${reference.sha256}; reference ${referencePainting.width}x${referencePainting.height}, source ${painting.width}x${painting.height}; matching hash and painting dimensions are required`);
+    let referencePainting = painting;
+    let referenceHash: string | undefined;
+    if (reference !== undefined) {
+      const referencePath = 'source' in reference ? sourcePath : resolve(dirname(resolve(configPath)), reference.painting);
+      try {
+        if (referencePath === undefined) throw new Error('source path is absent');
+        referenceHash = fileSha256(referencePath);
+        referencePainting = readPng(referencePath);
+      } catch { return refuse('ASSEMBLE_REGION_TAKE_REFERENCE', at, 'reference must name a readable PNG with its declared sha256; a source binding requires the stage source path'); }
+      if (referenceHash !== reference.sha256 || referencePainting.width !== painting.width || referencePainting.height !== painting.height) {
+        return refuse('ASSEMBLE_REGION_TAKE_REFERENCE_MATCH', at, `reference sha256 ${referenceHash}, expected ${reference.sha256}; reference ${referencePainting.width}x${referencePainting.height}, source ${painting.width}x${painting.height}; matching hash and painting dimensions are required`);
+      }
     }
-    const inputs = makeInputs(referencePainting, cfg, 'region take reference');
+    const inputs = makeInputs(referencePainting, cfg, reference === undefined ? 'region take painting' : 'region take reference');
     const set = runs[declaration.run];
     const donor = readLayers(resolve(dirname(resolve(configPath)), declaration.run_dir));
     refuseIfAny(missingReceipts(receipts, editedRunImages(
@@ -161,7 +167,7 @@ export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleCon
     const reading: RegionReading = { part: declaration.part, run: declaration.run, run_dir: declaration.run_dir, ...derived.reading };
     const pad = target === referencePainting ? [0, 0] : declaration.run === 'head' ? inputs.headBox! : [-inputs.padLeft, -inputs.padTop];
     const transform = { scale: [set.canvas.w / target.width, set.canvas.h / target.height], origin: [pad[0], pad[1]], filter: 'lanczos3' };
-    notes.push(`region reference ${reading.run}:${reading.part}: sha256 ${referenceHash}; binding ${'source' in reference ? 'source' : 'painting'}; painting-to-run ${JSON.stringify(transform)}`);
+    if (reference !== undefined) notes.push(`region reference ${reading.run}:${reading.part}: sha256 ${referenceHash}; binding ${'source' in reference ? 'source' : 'painting'}; painting-to-run ${JSON.stringify(transform)}`);
     notes.push(`region take ${reading.run}:${reading.part} from ${reading.run_dir}: ${reading.pixels} run px; box [${reading.box.join(', ')}] (left, top, width, height); painting-match share ${reading.painting_match_share}; RGB tolerance ${reading.rgb_tolerance}; seed [${declaration.seed.join(', ')}], 8-connected`);
   }
   const full = { ...runs.full, layers: lists.full };
