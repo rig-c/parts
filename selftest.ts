@@ -21,6 +21,7 @@ import { runTakeLayerChecks } from './tools/check_take_layers.ts';
 import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
 import { runPartSourceChecks } from './tools/check_part_sources.ts';
 import { runReadmePolicyChecks } from './scripts/readme_policy.ts';
+import { beginPhases, finishPhases, measurePhase, phaseRecord, measurementPayloadValid, familyRows, observeFamily, unmeasuredFamily, type PhaseRecord, type FamilyPeak } from './scripts/selftest_measure.ts';
 import { sourceCaseNames } from './scripts/selftest_prefixes.ts';
 import { runPaintingExtensionChecks } from './tools/check_painting_extension.ts';
 import { runExtremesChecks } from './tools/check_extremes.ts';
@@ -243,17 +244,17 @@ import {
 } from './fixtures/assemble_fixture.ts';
 import { type AnimFrame, chunkTypes, encodeApng, encodeIndexedApng } from './src/apng.ts';
 import { assignOverlappingHands, capBox, featherWeight, type JointLine, jointLine, limbWidth, nearestLimb, pastJoint, segmentOf } from './src/limbs.ts';
-import { artifactPaths, assembleStage, build, BUILD_OWNS, CHECK_FLAGS_IN_BUILD, type CheckFlagInBuild, checkStage, ctlRemedies, driftShare, faceAxisLine, fringeLines, turnLine, LEAD_IN_ANIMATION, REFERENCE_BUILD_ARGS, repeatIdle, REFERENCE_BUILD_LABEL, RIGC_MODEL_DOCUMENT, readRuns, rigStage } from './src/build.ts';
-import { CHECK_PARTS, CHECK_RIG, checkPartRaster, IDLE_PEAK, MERGED_STAGE, mergedCores, type MergedRigOptions, mergedStack, SEATED_CHECK_PARTS, shiftRight, writeCheckRig, writeMergedCheckRig, writeSeatedCheckRig } from './fixtures/checkrig.ts';
+import { artifactPaths, assembleStage, build as originalBuild, BUILD_OWNS, CHECK_FLAGS_IN_BUILD, type CheckFlagInBuild, checkStage, ctlRemedies, driftShare, faceAxisLine, fringeLines, turnLine, LEAD_IN_ANIMATION, REFERENCE_BUILD_ARGS, repeatIdle, REFERENCE_BUILD_LABEL, RIGC_MODEL_DOCUMENT, readRuns, rigStage } from './src/build.ts';
+import { CHECK_PARTS, CHECK_RIG, checkPartRaster, IDLE_PEAK, MERGED_STAGE, mergedCores, type MergedRigOptions, mergedStack, SEATED_CHECK_PARTS, shiftRight, writeCheckRig as originalWriteCheckRig, writeMergedCheckRig, writeSeatedCheckRig } from './fixtures/checkrig.ts';
 import { fakePainting } from './fixtures/fakecomfy.ts';
 import { BLOUSE, CLOTH_PARTS, CLOTH_RIG, clothRecipe, DRESS, DRESS_RIG, dressHipJoints, dressParts, FLOOR_SKIRT_EMPTY_COL_PARTS, FLOOR_SKIRT_PARTS, HEM, HEM_BELOW, SHIFT, SPLIT_TAIL_PARTS, SPLIT_TAIL_UNCROSSED, splitTailRecipe } from './fixtures/cloth.ts';
 import { RIDER_RIG, RIDER_STRIP, riderParts, riderRecipe } from './fixtures/rider.ts';
 import { type ClothRecipes, draftTrees, INFLUENCE_RADIUS_CELLS, linkRows } from './src/cloth.ts';
-import { BARE_CROWN_PARTS, CUT_BASE_PARTS, CUT_PARTS, eyeParts, FACELESS_PARTS, IRIS_NO_EYEWHITE_PARTS, LEVEL_FRINGE_PARTS, LONG_ROBE_PARTS, LONG_ROBE_RIG, MIXED_STRAND_PARTS, NO_BROW_PARTS, NO_EYE_PARTS, ONE_EYEWHITE_PARTS, PROPOSE_PARTS, PROPOSE_RIG, type ProposeFixturePart, STRAND_PARTS, STRAND_RIG, TILTED_FRINGE_PARTS, TWO_LOCK_PARTS, writeProposeFixture } from './fixtures/propose.ts';
+import { BARE_CROWN_PARTS, CUT_BASE_PARTS, CUT_PARTS, eyeParts, FACELESS_PARTS, IRIS_NO_EYEWHITE_PARTS, LEVEL_FRINGE_PARTS, LONG_ROBE_PARTS, LONG_ROBE_RIG, MIXED_STRAND_PARTS, NO_BROW_PARTS, NO_EYE_PARTS, ONE_EYEWHITE_PARTS, PROPOSE_PARTS, PROPOSE_RIG, type ProposeFixturePart, STRAND_PARTS, STRAND_RIG, TILTED_FRINGE_PARTS, TWO_LOCK_PARTS, writeProposeFixture as originalWriteProposeFixture } from './fixtures/propose.ts';
 // The runtime's own posing, for the one control that measures where a mesh's pixels go (PR14): a second opinion about a weighted vertex is what a measurement must not carry.
 import { type BoneSnapshot, type Frame, loadPosable, type Mesh, sampleAnimation, sampleSetupPose } from '@rig-c/core/render';
 import { loadCandidate as loadRootCandidate, throughPoser as throughRootPoser, sampleAnimation as sampleRootAnimation } from '@rig-c/core/render-shared';
-import { CANVAS, flatName, layerRaster, minimalConfig, WRAPPER_LAYERS, writePsdFixture, writeWrapperFixture } from './fixtures/synthetic.ts';
+import { CANVAS, flatName, layerRaster, minimalConfig, WRAPPER_LAYERS, writePsdFixture as originalWritePsdFixture, writeWrapperFixture as originalWriteWrapperFixture } from './fixtures/synthetic.ts';
 import { MANNEQUIN_BLOCKS, MANNEQUIN_FIGURE_PX, MANNEQUIN_KEYPOINTS, MANNEQUIN_PARTS, MANNEQUIN_PLAN, MANNEQUIN_SIDE, writeMannequinFixture } from './fixtures/mannequin.ts';
 import { ARTIST_PATCH, ARTIST_PLAN, ARTIST_PORTRAIT_SHIFT, ARTIST_PORTRAIT_W, ARTIST_SIDE, artistCanvas, artistConfig, artistLayers, EYE as ARTIST_EYE, writeArtistFixture } from './fixtures/artist.ts';
 import { arm, armRig, base, baseRenamed, baseWith, roleRig } from './fixtures/structure.ts';
@@ -599,7 +600,7 @@ import { buildPrompts, checkGraph, fillSeeThrough, FRAMING, NEGATIVE_HEAD, paint
 import { proposeHeadBox } from './src/headbox.ts';
 import { makeInputs, squarePad } from './src/inputs.ts';
 import { OPAQUE_ALPHA_ABOVE, exportLayers, implausibleRules, type Layer, layerFigures, type LayerSet, layerSetDiff, PLAUSIBLE_AREA_RATIO_MAX, PLAUSIBLE_JUDGED_AREA_RATIO, PLAUSIBLE_TRANSLUCENT_MAX, PLAUSIBLE_BACKGROUND_MAX, PLAUSIBLE_BACKGROUND_TRANSLUCENT_MIN, readLayers, readPsdLayers, readWrapperLayers, ruleSummary, templateLayerNames, templatePsdBytes } from './src/layers.ts';
-import { PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, readFrom, readParts, serializeParts, tagOf, writeParts } from './src/parts.ts';
+import { PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, readFrom as originalReadFrom, readParts, serializeParts, tagOf, writeParts } from './src/parts.ts';
 import {
   alphaComposite,
   connectedComponents,
@@ -680,7 +681,7 @@ import {
   gridNote,
   figureGrid,
   partGrid,
-  readPartSet,
+  readPartSet as originalReadPartSet,
   serializeProposal,
   draftTurn,
   draftPassingChainSigns,
@@ -703,9 +704,9 @@ import { backgroundMask, checkPainting, DEFAULT_PAINTING_FORM, isPaintingForm, l
 import { CANVAS as PAINT_CANVAS, figureJoints as paintJoints, FIGURE as PAINT_FIGURE, keypointFile as paintKeypointFile, mutant as paintMutant, paint as paintFigure } from './fixtures/painting.ts';
 import { LEGS_APART, LEGS_JOINED, LYING_PARTS, LYING_RIG, type PoseName, POSES, SEATED_PARTS, SEATED_RIG } from './fixtures/poses.ts';
 import { buildSheet, tileImage, tilesFrom } from './src/sheet.ts';
-import { block, constraintConfig, dustImages, dustParts, FACE_EXPECT, faceConfig, faceImages, faceParts, HEAT_STRIP_EXPECT, heatStripConfig, islandImages, LASH_CREASE, LASH_RIG, LASH_ROW, lashConfig, lashImages, lashParts, RIG_CANVAS, RIG_EXPECT, rigConfig, rigImages, rigParts, SCENE_TARGET, shoeConfig, shoeImages, shoeKick, shoeParts, TURNED_EXPECT, turnedConfig, writeRigFixture } from './fixtures/rig.ts';
+import { block, constraintConfig, dustImages, dustParts, FACE_EXPECT, faceConfig, faceImages, faceParts, HEAT_STRIP_EXPECT, heatStripConfig, islandImages, LASH_CREASE, LASH_RIG, LASH_ROW, lashConfig, lashImages, lashParts, RIG_CANVAS, RIG_EXPECT, rigConfig, rigImages, rigParts, SCENE_TARGET, shoeConfig, shoeImages, shoeKick, shoeParts, TURNED_EXPECT, turnedConfig, writeRigFixture as originalWriteRigFixture } from './fixtures/rig.ts';
 import { FORK_SMOOTH_MAX_INFLUENCES, smoothForkShares } from './src/rig.ts';
-import { type AttachmentSetsFile, blinkHoldProblems, buildRig, influenceReachHolds, DEFAULT_IDLE_KEYS, expandSetAttachmentKeys, FACE_TIPS_AXIS_NAME, HEAD_UP_BONE, flattenRig, IDLE_DRIVES_MESHES_WHY, type MeshAttachment, PAD, type RegionAttachment, rigJsonText, type RigOutput, type RigSpec, roundShares, tipRoundingBound, writtenShares } from './src/rig.ts';
+import { type AttachmentSetsFile, blinkHoldProblems, buildRig as originalBuildRig, influenceReachHolds, DEFAULT_IDLE_KEYS, expandSetAttachmentKeys, FACE_TIPS_AXIS_NAME, HEAD_UP_BONE, flattenRig, IDLE_DRIVES_MESHES_WHY, type MeshAttachment, PAD, type RegionAttachment, rigJsonText, type RigOutput, type RigSpec, roundShares, tipRoundingBound, writtenShares } from './src/rig.ts';
 import { type ComposedScene, composeFromFiles, IMAGE_SEP, PLATE, PLATE_IMAGE, PREFIX_SEP, SCENE_REPORT_FILE, SCENE_SPEC, scaledConstraint, scaledStop, unprefixedNames } from './src/scene.ts';
 import { sceneCharacterRig, sceneText, writeFlatPlate, writeSceneBuild } from './fixtures/scene.ts';
 import { localInfluences, regionWeight } from './src/localweights.ts';
@@ -989,11 +990,42 @@ function casePrefixFaults(blocks: readonly Pick<SuiteBlock, 'key' | 'names'>[]):
 // printing a case
 // ---------------------------------------------------------------------------
 
+const writeWrapperFixture = (...args: Parameters<typeof originalWriteWrapperFixture>): ReturnType<typeof originalWriteWrapperFixture> =>
+  measurePhase('fixture', 'writeWrapperFixture', () => originalWriteWrapperFixture(...args));
+
+const writePsdFixture = (...args: Parameters<typeof originalWritePsdFixture>): ReturnType<typeof originalWritePsdFixture> =>
+  measurePhase('fixture', 'writePsdFixture', () => originalWritePsdFixture(...args));
+
+const writeRigFixture = (...args: Parameters<typeof originalWriteRigFixture>): ReturnType<typeof originalWriteRigFixture> =>
+  measurePhase('fixture', 'writeRigFixture', () => originalWriteRigFixture(...args));
+
+const writeCheckRig = (...args: Parameters<typeof originalWriteCheckRig>): ReturnType<typeof originalWriteCheckRig> =>
+  measurePhase('fixture', 'writeCheckRig', () => originalWriteCheckRig(...args));
+
+const writeProposeFixture = (...args: Parameters<typeof originalWriteProposeFixture>): ReturnType<typeof originalWriteProposeFixture> =>
+  measurePhase('fixture', 'writeProposeFixture', () => originalWriteProposeFixture(...args));
+
+const readPartSet = (...args: Parameters<typeof originalReadPartSet>): ReturnType<typeof originalReadPartSet> =>
+  measurePhase('input', 'readPartSet', () => originalReadPartSet(...args));
+
+const readFrom = (...args: Parameters<typeof originalReadFrom>): ReturnType<typeof originalReadFrom> =>
+  measurePhase('input', 'readFrom', () => originalReadFrom(...args));
+
+const build = (...args: Parameters<typeof originalBuild>): ReturnType<typeof originalBuild> =>
+  measurePhase('producer', 'build', () => originalBuild(...args));
+
+const buildRig = (...args: Parameters<typeof originalBuildRig>): ReturnType<typeof originalBuildRig> =>
+  measurePhase('producer', 'buildRig', () => originalBuildRig(...args));
+
 function section(title: string): void {
   console.log(`\n── ${title} ──`);
 }
 
 function reportCase(name: string, ok: boolean, detail: string, why: string): number {
+  return measurePhase('assertion', name, () => reportMeasuredCase(name, ok, detail, why));
+}
+
+function reportMeasuredCase(name: string, ok: boolean, detail: string, why: string): number {
   if (ok) {
     console.log(`  PASS  ${name}`);
     console.log(`          ${detail}`);
@@ -5141,7 +5173,7 @@ type FixtureCaseReporter = (name: string, ok: boolean, detail: string, why: stri
 
 function runCli(args: string[], capture?: (child: FixtureChildDiagnostic) => void, keepDefaultExtremes = false): { status: number; out: string } {
   const argv = [join(ROOT, 'cli.ts'), ...selftestCliArgs(args, keepDefaultExtremes)];
-  const r = spawnSync('bun', argv, { cwd: ROOT, encoding: 'utf8' });
+  const r = measurePhase('producer', 'runCli:' + args[0], () => spawnSync('bun', argv, { cwd: ROOT, encoding: 'utf8' }));
   capture?.({ argv: ['bun', ...argv], status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' });
   return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
 }
@@ -42929,6 +42961,63 @@ function runPreTallySuite(live: RunTally): number {
   return bad();
 }
 
+function runMeasurementControls(say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  const why = 'issue #1045: private unit measurements preserve the case replay; missing coverage is explicit.';
+  const nested = phaseRecord([
+    { phase: 'fixture', label: 'outer', began: 1, ended: 9 },
+    { phase: 'producer', label: 'inner', began: 3, ended: 7 },
+    { phase: 'assertion', label: 'overlap', began: 6, ended: 10 },
+  ], 12);
+  say('RT25_PHASE_OVERLAPS_HAVE_ONE_OWNER_AND_KEEP_UNCLASSIFIED_TIME',
+    nested.exclusiveMs.fixture === 2 && nested.exclusiveMs.producer === 3 && nested.exclusiveMs.assertion === 4 &&
+    nested.exclusiveMs.unclassified === 3 && Object.values(nested.exclusiveMs).reduce((a, b) => a + b, 0) === 12,
+    JSON.stringify(nested.exclusiveMs), why);
+  const empty = phaseRecord([], 12);
+  const legacy = unitMeasurement({ key: 'png', status: 0, stdout: '', stderr: '', result: null });
+  say('RT26_MISSING_PHASE_AND_FAMILY_COVERAGE_IS_UNMEASURED',
+    Object.values(empty.coverage).every(x => x === 'UNMEASURED') && empty.exclusiveMs.unclassified === 12 &&
+    legacy.family.status === 'UNMEASURED' && legacy.family.bytes === null && 'status' in legacy.phases && legacy.phases.status === 'UNMEASURED',
+    JSON.stringify({ coverage: empty.coverage, family: legacy.family.status, phases: legacy.phases }), why);
+  const units = runUnits(SUITES.map(([key]) => key), exampleKeys().all);
+  if (typeof units === 'string') throw new Error(units);
+  const records: ShardRecord[] = SHARDS.map(([shard, keys]) => ({ spec: SHARD_RECORD_SPEC, shard, jobs: 1, cores: 1,
+    units: keys.map(key => ({ key, status: 0, stdout: '', stderr: '', result: null, began: 0, ended: 1,
+      measurement: unitMeasurement({ key, status: 0, stdout: '', stderr: '', result: null }) })) }));
+  const missing = structuredClone(records); missing[0].units.pop();
+  const twice = structuredClone(records); twice[0].units.push(twice[0].units[0]);
+  say('RT27_UNIT_MEASUREMENT_INVENTORY_REQUIRES_EVERY_REGISTERED_UNIT_ONCE',
+    shardFaults(SHARDS, units).length === 0 && recordFaults(records, SHARDS, units).length === 0 &&
+    recordFaults(missing, SHARDS, units).length > 0 && recordFaults(twice, SHARDS, units).length > 0 &&
+    records.flatMap(r => r.units).every(u => u.measurement?.unit === u.key && u.measurement.suite === u.key.split('@')[0]),
+    `${units.length} registered units, ${CHECK_UNITS.length} check groups; missing and duplicate records refused`, why);
+  const legacyRecord = parseShardRecord(JSON.stringify({ spec: SHARD_RECORD_SPEC, shard: '1', jobs: 1, cores: 1, units: records[0].units.map(({ measurement: _measurement, ...unit }) => unit) }));
+  const corrupt = structuredClone(records[0]);
+  corrupt.units[0].measurement!.family.bytes = 0;
+  const invalidRecord = parseShardRecord(JSON.stringify(corrupt));
+  const forged = { ...nested, exclusiveMs: { ...nested.exclusiveMs, fixture: 8 } };
+  const variants = unitMeasurement({ key: 'png', status: 0, stdout: '  PASS  PN01_CASE[a]\n  PASS  PN01_CASE[b]\n  FAIL  PN02_OTHER: error\n', stderr: '', result: null });
+  say('RT29_MEASUREMENT_READER_REJECTS_FORGED_TOTALS_AND_PRESERVES_LEGACY_COVERAGE',
+    variants.caseIds.join(',') === 'PN01_CASE[a],PN01_CASE[b],PN02_OTHER' &&
+    measurementPayloadValid(unmeasuredFamily(), nested) && !measurementPayloadValid(unmeasuredFamily(), forged) &&
+    typeof legacyRecord !== 'string' && legacyRecord.units.every(u => u.measurement?.family.status === 'UNMEASURED') &&
+    typeof invalidRecord === 'string' && invalidRecord.includes('invalid measurement payload'),
+    `case identities ${variants.caseIds.join(",")}; legacy missing coverage retained; forged overlap totals and zero-valued unmeasured memory refused: ${typeof invalidRecord === 'string'}`, why);
+  const dir = temp('unit-measurement');
+  try {
+    if (process.platform !== 'linux') {
+      console.log('  SKIP  RT28_CHILD_HELD_ALLOCATION_RAISES_THE_UNIT_FAMILY_PEAK: UNMEASURED; Linux /proc is required');
+    } else {
+      const control = spawnSync(process.execPath, [join(ROOT, 'scripts/selftest_measure.ts'), '--allocation-control', dir], { encoding: 'utf8', timeout: 15000 });
+      const [low, high] = JSON.parse(control.stdout || '[]') as FamilyPeak[];
+      say('RT28_CHILD_HELD_ALLOCATION_RAISES_THE_UNIT_FAMILY_PEAK',
+        control.status === 0 && low?.status === 'MEASURED' && high?.status === 'MEASURED' &&
+        high.holders.length >= 2 && (high.bytes ?? 0) - (low.bytes ?? 0) > 64 * 1024 ** 2 &&
+        high.holders.some(h => h.bytes > 96 * 1024 ** 2),
+        JSON.stringify({ exit: control.status, low, high }), why);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
 function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | null = null): number {
   section('run-tally: the floor, planted');
   // What the run had printed when this suite began: this suite's own cases are
@@ -43531,6 +43620,7 @@ function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | nu
       rmSync(dir, { recursive: true, force: true });
     }
   }
+  runMeasurementControls(say);
   return bad();
 }
 
@@ -54202,19 +54292,7 @@ interface SelftestRssRow { pid: number; parent: number; start: string; bytes: nu
 
 /** Sum discovered descendants, retaining an orphan only while its identity is unchanged. */
 function selftestFamilyRss(rows: readonly SelftestRssRow[], known: Map<number, string>): number {
-  const family = new Map<number, string>();
-  for (const row of rows) if (known.get(row.pid) === row.start) family.set(row.pid, row.start);
-  let grew = true;
-  while (grew) {
-    grew = false;
-    for (const row of rows) if (!family.has(row.pid) && family.has(row.parent)) {
-      family.set(row.pid, row.start);
-      grew = true;
-    }
-  }
-  known.clear();
-  for (const [pid, start] of family) known.set(pid, start);
-  return rows.reduce((sum, row) => sum + (family.has(row.pid) ? row.bytes : 0), 0);
+  return familyRows(rows, known).reduce((sum, row) => sum + row.bytes, 0);
 }
 
 /** Linux /proc status RSS in KiB; shared pages count once per PID.
@@ -54414,6 +54492,34 @@ function dispatchOrder(keys: readonly string[], first: readonly string[]): strin
 }
 
 /** What one worker left behind: its exit, everything it printed, and the result file it wrote (null when it wrote none). */
+interface UnitMeasurement {
+  spec: 'rig-parts-selftest-unit/1';
+  suite: string;
+  unit: string;
+  caseIds: string[];
+  profile: { platform: string; arch: string; runtime: string; jobs: number; cores: number; intervalMs: number } | { status: 'UNMEASURED' };
+  family: FamilyPeak;
+  phases: PhaseRecord | { status: 'UNMEASURED' };
+}
+
+/** Old records and failed workers retain explicit missing coverage instead of fabricated zeroes. */
+function unitMeasurement(run: WorkerRun, family = unmeasuredFamily(), measuredProfile = false): UnitMeasurement {
+  let phases: UnitMeasurement['phases'] = { status: 'UNMEASURED' };
+  try {
+    const record = JSON.parse(run.result ?? 'null') as { phases?: PhaseRecord } | null;
+    if (record?.phases !== undefined && record.phases !== null) phases = record.phases;
+  } catch { /* Replay owns malformed result diagnostics. */ }
+  return {
+    spec: 'rig-parts-selftest-unit/1', suite: run.key.split(UNIT_MARK)[0], unit: run.key,
+    caseIds: [...new Set(run.stdout.split('\n')
+      .filter(line => VERDICT_GUTTER.includes(gutterWord(line) ?? ''))
+      .map(caseName).filter((name): name is string => name !== null))].sort(),
+    profile: measuredProfile ? { platform: process.platform, arch: process.arch, runtime: Bun.version,
+      jobs: workerCount(), cores: availableParallelism(), intervalMs: family.intervalMs } : { status: 'UNMEASURED' },
+    family, phases,
+  };
+}
+
 interface WorkerRun {
   key: string;
   status: number | null;
@@ -54422,6 +54528,7 @@ interface WorkerRun {
   stdout: string;
   stderr: string;
   result: string | null;
+  measurement?: UnitMeasurement;
 }
 
 /** How a worker ended, as a refusal says it: its exit code, or the signal that killed it (issue #977). */
@@ -54505,13 +54612,14 @@ function workerMain(argv: readonly string[], pre = false): void {
     process.exit(2);
   }
   unitPart = mark === -1 ? null : key.slice(mark + 1);
+  beginPhases();
   let record: { key: string; returned: number | null } | { key: string; crash: string };
   try {
     record = { key, returned: suite[1](corpusDir()) };
   } catch (err) {
     record = { key, crash: (err as Error).stack ?? String(err) };
   }
-  writeFileSync(result, JSON.stringify(record));
+  writeFileSync(result, JSON.stringify({ ...record, phases: finishPhases() }));
 }
 
 /** How many workers run at once: `ENV_TWINS.jobs` when set, a positive whole number or the run exits 2; else min(available cores, 2) for a 6 GiB slot. */
@@ -54534,7 +54642,16 @@ function launchWorker(key: string, corpus: string | null, dir: string, pre = fal
     const child = spawn(process.execPath, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.on('data', (b: Buffer) => out.push(b));
     child.stderr.on('data', (b: Buffer) => err.push(b));
-    const finish = (status: number | null, signal: string | null, extra: string): void => done(workerRunOf(key, status, signal, out, err, result, extra));
+    const finishPeak = child.pid === undefined ? async () => unmeasuredFamily() : observeFamily(child.pid, result + '.rss');
+    let finished = false;
+    const finish = async (status: number | null, signal: string | null, extra: string): Promise<void> => {
+      if (finished) return;
+      finished = true;
+      const family = await finishPeak();
+      const run = workerRunOf(key, status, signal, out, err, result, extra);
+      run.measurement = unitMeasurement(run, family, true);
+      done(run);
+    };
     child.on('error', (e) => finish(null, null, `could not start the worker: ${e.message}\n`));
     child.on('close', (status, signal) => finish(status, signal, ''));
   });
@@ -54637,8 +54754,24 @@ function parseShardRecord(text: string): ShardRecord | string {
       typeof x.began === 'number' &&
       typeof x.ended === 'number';
     if (!ok) return `the unit entry ${JSON.stringify(x.key ?? null)} lacks one of key, status, stdout, stderr, result, began and ended, or holds one of the wrong type`;
+    if (x.measurement === undefined) x.measurement = unitMeasurement(x as RecordedUnit);
+    if (typeof x.measurement !== 'object' || x.measurement === null ||
+      x.measurement.spec !== 'rig-parts-selftest-unit/1' || x.measurement.unit !== x.key ||
+      x.measurement.suite !== x.key?.split(UNIT_MARK)[0] ||
+      !Array.isArray(x.measurement.caseIds) || !x.measurement.caseIds.every(id => typeof id === 'string') ||
+      x.measurement.caseIds.join('\n') !== unitMeasurement(x as RecordedUnit).caseIds.join('\n') ||
+      !validMeasurementProfile(x.measurement.profile) ||
+      !measurementPayloadValid(x.measurement.family, x.measurement.phases)) return `the unit entry ${JSON.stringify(x.key)} has an invalid measurement payload or unit identity`;
   }
   return r as ShardRecord;
+}
+
+function validMeasurementProfile(profile: UnitMeasurement['profile']): boolean {
+  if (typeof profile !== 'object' || profile === null) return false;
+  if ('status' in profile) return profile.status === 'UNMEASURED';
+  return typeof profile.platform === 'string' && typeof profile.arch === 'string' && typeof profile.runtime === 'string' &&
+    Number.isSafeInteger(profile.jobs) && profile.jobs > 0 && Number.isSafeInteger(profile.cores) && profile.cores > 0 &&
+    profile.intervalMs === 200;
 }
 
 /**
@@ -55485,7 +55618,7 @@ async function main(): Promise<void> {
 }
 
 // Importing the selector/verdict for focused controls must not launch a run.
-export { preSuiteSelection, preRunFaults, preRunExit, summaryAgreementFaults };
+export { preSuiteSelection, preRunFaults, preRunExit, summaryAgreementFaults, runMeasurementControls, launchWorker };
 const finishSelftestPeak = !import.meta.main || process.argv.includes(WORKER_FLAG) || process.argv.includes(PRE_WORKER_FLAG) || process.argv.includes(ASSEMBLE_STAGE_FLAG) ? null : startSelftestPeak();
 if (import.meta.main) {
   if (finishSelftestPeak !== null) process.on('exit', finishSelftestPeak);

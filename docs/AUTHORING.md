@@ -7114,6 +7114,39 @@ the load moves the same build by (the pre-change reference-demo build alone took
 45.8 s there). Since issue #123 that build and render are gone again — the still regions read the
 idle's geometry — and the `build` row was not re-measured for it either.
 
+### Private worker measurements (issue #1045)
+
+Each shard unit carries an additive `measurement` record with spec
+`rig-parts-selftest-unit/1`. Its suite, unit, sorted case-ID set and execution
+profile identify the measured work. The profile records Bun, platform,
+architecture, available cores, configured worker count and sampling interval.
+The existing stdout replay and tally remain the source of case verdicts.
+
+On Linux, an independent process samples the worker's descendant family through
+`/proc` at a requested 200 ms interval. PID and kernel start time identify each
+holder, including observed descendants subsequently reparented. `family.bytes`
+is the largest sampled sum of per-process RSS, with the simultaneous `holders`,
+sample count and unreadable-entry count retained. Shared pages count per PID.
+Short-lived children and allocations between samples can be missed. An absent
+observation has `status: "UNMEASURED"` and `bytes: null`.
+
+Worker-result `phases` retain labelled monotonic spans and elapsed milliseconds.
+The hooks cover input readers `readPartSet` and `readFrom`, fixture writers
+`writeWrapperFixture`, `writePsdFixture`, `writeRigFixture`, `writeCheckRig` and
+`writeProposeFixture`, producer calls `build`, `buildRig` and `runCli`, and the
+case reporter. The assertion span measures reporting, while evaluating assertion
+arguments remains outside that hook. Unhooked work stays `unclassified`.
+These are observed boundaries, with no claim of exhaustive phase attribution.
+The requested command owns a `runCli` span, including any subprocess startup.
+
+For overlapping spans, the latest starting span owns the overlap, with later
+registration breaking equal-start ties. Exclusive totals plus `unclassified`
+equal the worker's recorded elapsed time. The phase window excludes module
+loading and parent launch/collection, which the existing unit clocks include.
+A phase with no observed span is `UNMEASURED`. Old shard records remain readable
+and their absent measurements are represented as `UNMEASURED` when parsed.
+Measurements are private records, with no product output or new console line.
+
 ### Machine-readable selftest summary (`--summary-json`, issue #725)
 
 `bun run selftest -- --summary-json <file>` writes a JSON summary beside the normal console output
