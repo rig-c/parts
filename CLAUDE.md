@@ -244,8 +244,30 @@ a session rotated — the reader rule above, measured on ourselves. So it is her
 | `bun run typecheck` | `tsc --noEmit` over the paths `tsconfig.json`'s `include` names |
 | `bun run lint` | one rule: `@typescript-eslint/no-explicit-any` as an error |
 | `bun run selftest` | every suite's positive and negative controls on generated fixtures, and the tree rules; `-- --corpus <dir>`, or fetched `examples/*/inputs` (`bun run fetch-examples`), adds the read-only corpus suite |
-| `bun run selftest -- --only <suite>[,<suite>…]` | one squad's own suite while iterating — a partial run exits 2 when green (1 when red), prints `SKIP` for every suite it did not run and never the summary; the full run is the only verdict on the tree. Any other word on the command line is refused by name, exit 2, before a suite starts |
+| `bun run selftest -- --only <suite>[,<suite>…]` | one squad's own suite while iterating — a partial run exits 2 when green (1 when red), prints `SKIP` for every suite it did not run and never the summary; the full run is the only verdict on the tree. Any other word on the command line is refused by name, exit 2, before a suite starts. Which of these a lane runs, where, and how often: [Verification tiers](#verification-tiers) |
 | `bun run smoke` | the **package** rather than the tree: pack, install into an empty directory, run `--version`, the installed `rigc --version` (the core entry), `layers` (wrapper and PSD), `sheet` and `check` on a generated rig from the install, with four planted broken packages that must go red. Needs a network |
+
+### Verification tiers
+
+What a lane runs before it reports, where, and how often. The verdict on the tree is PR CI, and a lane does not run it twice.
+
+| tier | what runs | where | cap | when |
+| --- | --- | --- | --- | --- |
+| V0 pre-flight | `typecheck`, `lint`, `git diff --check`; grep `selftest.ts` for every rule code and message the diff touches and list the exact-message controls that will move; check every `--only` suite name exists (an unknown name exits 2 like a green partial, #1006); check message length against the line ceiling | the lane's machine, no selftest | 2 min | every commit |
+| V1 quick | `bun run selftest -- --only <suites the diff touches>` at `RIG_PARTS_SELFTEST_JOBS=1`, examples fetched in the job when a suite needs them | the remote pool | 10 min per job | each iteration |
+| V2 precise | the full selftest (its shards), build controls, packed installs, `ships`, the merged run tally | PR CI, on a draft PR the tower opens from the worker's branch | CI's own (`.github/workflows/ci.yml`) | once when V1 is green; again only after a fix |
+| V3 measurement | only what the issue's bar names: public-example output hashes, a stage timer, a pixel comparison, a reproduction | the remote pool, narrowest sample | named in the issue, ≤ 15 min | only when the issue names it |
+
+- A lane does not run the full serial selftest on the remote pool. V2 is that verdict. The exceptions are named in the issue: the issue is about the full run's own time or memory (#1018), or CI is down.
+- Until #1018's derived selector lands, a diff that touches `cli.ts`, `selftest.ts`'s shared machinery, or more than three suites skips V1 and goes to V2.
+- `--exclusive` is only for whole-run timing comparisons. A stage timer against a millisecond bar runs on the ordinary pool, median of 3.
+- Limits:
+  - A re-run on the same head with the same command needs a named change: code, input, or a flake with its evidence.
+  - The same failure twice is a STOP.
+  - The third red V2 cycle on one issue is a STOP.
+  - More than 40 min of remote-pool time (V1 + V3) on one issue is a STOP. The report says what consumed it.
+- **A brief may tighten a tier, never extend it.** When a brief orders something this section forbids, or a bar cannot be resolved by the instrument it names, the worker STOPs before running and reports the conflict and the method it proposes. That is normal operation.
+- **The worker may change this section.** When it finds a cheaper or sounder method, or shows that a rule here is wrong, it commits the change to this section in its own PR and names it in the report. The rule changes when that PR merges.
 
 ## The selftest and its fixtures
 
