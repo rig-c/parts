@@ -19420,6 +19420,10 @@ function runCheckSuite(): number {
     for (const [key, run] of checkCaseGroups()) {
       if (part.has(key)) failures += run(scope, say) ?? 0;
     }
+    const active = scope.active();
+    if (!active || scope.denied.length > 0) {
+      throw new Error(`CHECK_TEMP_INPUTS: check group scope is ${active ? 'active' : 'inactive'}; unverified denied reads: ${scope.denied.join(' | ') || 'none'}`);
+    }
     return failures + bad();
   } finally { scope.restore(); }
 }
@@ -43042,7 +43046,7 @@ function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | nu
       twicePlaced[0].includes(`"${plantUnit}" is placed 2 times`) &&
       noUnit.length === 1 &&
       noUnit[0].includes('"readme_loop@demo"'),
-    `${unitList.length} unit(s) for ${keys.length} suite(s) (${SPLIT_SUITES.join(', ')} one per tracked example and a closing one) over ${SHARDS.length} shard(s): ${placed.length === 0 ? 'every unit once' : placed.join('; ')}; ${plantUnit} taken out of every shard -> ${unplaced.join('; ') || 'no fault'}; placed in a second shard -> ${twicePlaced.join('; ') || 'no fault'}; a unit that does not exist -> ${noUnit.join('; ') || 'no fault'}`,
+    `${unitList.length} unit(s) for ${keys.length} suite(s) (${SPLIT_SUITES.filter((key) => key !== 'check').join(', ')} one per tracked example and a closing one; check uses ${CHECK_UNITS.length} case groups) over ${SHARDS.length} shard(s): ${placed.length === 0 ? 'every unit once' : placed.join('; ')}; ${plantUnit} taken out of every shard -> ${unplaced.join('; ') || 'no fault'}; placed in a second shard -> ${twicePlaced.join('; ') || 'no fault'}; a unit that does not exist -> ${noUnit.join('; ') || 'no fault'}`,
     "issue #395: a unit added to the run — a new example adds one to each split suite — and to no shard would be run by no CI job and leave no line; one in two shards would be counted twice. Every run, whole or sharded, holds the partition to the tree's units",
   );
 
