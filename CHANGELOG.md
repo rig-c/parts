@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.7.0](https://github.com/rig-c/parts/compare/v2.6.0...v2.7.0) (2026-11-04)
+
+
+### Features
+
+* **assemble:** declare the ground; a busy ground keeps parts inside their own support ([#1002](https://github.com/rig-c/parts/issues/1002)) ([adc634c](https://github.com/rig-c/parts/commit/adc634cae585871c84686bd3b2a40fd4f4fa3ac3))
+
 ## [2.6.0](https://github.com/rig-c/parts/compare/v2.5.0...v2.6.0) (2026-11-04)
 
 
