@@ -1,3 +1,4 @@
+import { dustOf } from './mesh.ts';
 import { explicitWeightRows, regionBone, type RegionSpec } from './config.ts';
 /**
  * The propose stage: bone origins, mesh candidate lists, regions and a default
@@ -3466,6 +3467,11 @@ export function proposeWithBasis(
         detail: `declares an influence mesh for chest-holding topwear "${torsoName}". This draft requires a contour torso. Remove influence from this recipe or separate the torso from its cloth part`,
       }]);
     }
+    const dust = dustOf(P.images.get(source.name) as Raster);
+    if ('keep' in dust) {
+      throw new PartsError([{ code: 'PROPOSE_TORSO_ISLANDS', object: `chest carrier "${torsoName}"`, detail: `${dust.keep}. Separate the real pieces before drafting a contour torso` }]);
+    }
+    if (dust.stray !== undefined) notes.push(`${torsoName}: contour dust rule leaves out ${dust.dust.length} island(s), ${dust.dust.reduce((sum, pixels) => sum + pixels, 0)} px; contour.stray=${dust.stray}`);
     const [, radius] = gridR(source);
     const segments: Segment[] = lattice !== undefined && 'grid' in lattice ? lattice.segments : [['chest', rnd(neckAt), rnd(hip)]];
     // Same figure formulas as mesh-draft's figureRules (issue #265). Importing meshdraft here would cycle through propose.
@@ -3475,6 +3481,7 @@ export function proposeWithBasis(
       margin: tolerance,
       spacing: fig.grid,
       maxEdge: fig.grid,
+      ...(dust.stray === undefined ? {} : { stray: dust.stray }),
     };
     if (bust.noBust !== undefined) {
       notes.push(`${torsoName}: contour bust omitted for the declared reason: ${bust.noBust}`);

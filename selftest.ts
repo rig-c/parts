@@ -6410,7 +6410,11 @@ function runWindWriteConfigFromCases(say: (name: string, ok: boolean, detail: st
     const pdir = join(dir, 'asm', 'rig');
     // The config and what it names by a relative path, beside each other, so the written config builds where it is.
     copyFileSync(join(wind, 'pose.json'), join(dir, 'pose.json'));
-    const tracked = readFileSync(join(wind, 'config.json'), 'utf8');
+    const trackedConfig = JSON.parse(readFileSync(join(wind, 'config.json'), 'utf8')) as { meshes: Record<string, unknown> };
+    trackedConfig.meshes.topwear = expectedContourProposal(wind, readPartSet(pdir)).meshes.topwear;
+    const tracked = JSON.stringify(trackedConfig, null, 2);
+    const fromConfig = join(dir, 'previous-config.json');
+    writeFileSync(fromConfig, tracked);
     const changedText = withValueAt(tracked, ['cloth', 'bottomwear', 'links'], 4);
     const changed = join(dir, 'config.json');
     writeFileSync(changed, changedText);
@@ -6420,7 +6424,7 @@ function runWindWriteConfigFromCases(say: (name: string, ok: boolean, detail: st
       const r = runCli([...base, '--cloth', cfg, '--out', join(dir, name), '--write-config', at, ...extra]);
       return { r, at, text: existsSync(at) ? readFileSync(at, 'utf8') : null };
     };
-    const from = write(changed, 'from', ['--from', join(wind, 'config.json')]);
+    const from = write(changed, 'from', ['--from', fromConfig]);
     const without = write(changed, 'without', []);
     const diff = from.text === null ? ['not written'] : wcDiffPaths(JSON.parse(changedText) as unknown, JSON.parse(from.text) as unknown);
     const sections = new Set(diff.map((q) => q.replace(/\/\{[^}]*\}$/, '')));
@@ -6456,7 +6460,7 @@ function runWindWriteConfigFromCases(say: (name: string, ok: boolean, detail: st
     const handText = tip === null ? null : withValueAt(changedText, ['bones', bi, 'tip'], [tip[0] - 4, tip[1]]);
     const handAt = join(dir, 'hand-config.json');
     writeFileSync(handAt, handText ?? '{}');
-    const hand = write(handAt, 'hand', ['--from', join(wind, 'config.json')]);
+    const hand = write(handAt, 'hand', ['--from', fromConfig]);
     const hl = failLines(hand.r.out);
     say(
       'CL214_ON_WIND_A_HAND_EDITED_SKIRT_BONE_IS_REFUSED_BY_NAME_IN_THE_FROM_RUN',
@@ -6475,7 +6479,7 @@ function runWindWriteConfigFromCases(say: (name: string, ok: boolean, detail: st
     const shorterText = withValueAt(tracked, ['cloth', 'bottomwear', 'links'], 2);
     const shorter = join(dir, 'shorter-config.json');
     writeFileSync(shorter, shorterText);
-    const sh = write(shorter, 'shorter', ['--from', join(wind, 'config.json')]);
+    const sh = write(shorter, 'shorter', ['--from', fromConfig]);
     const removed = /spliced in from the draft/.test(sh.r.out) ? ((/text with (.+) spliced in from the draft/.exec(sh.r.out)?.[1] ?? '').split(', ').filter((l) => l.endsWith(' removed'))) : [];
     const shDiff = sh.text === null ? ['not written'] : wcDiffPaths(JSON.parse(shorterText) as unknown, JSON.parse(sh.text) as unknown);
     const shConfined = shDiff.length > 0 && shDiff.every((q) => /^\/(bones|constraints|motion\/tracks)\/\{skirt[^}]*\}$/.test(q));
@@ -6495,8 +6499,8 @@ function runWindWriteConfigFromCases(say: (name: string, ok: boolean, detail: st
     const dropText = withValueAt(tracked, ['cloth'], keptCloth);
     const dropAt = join(dir, 'drop-config.json');
     writeFileSync(dropAt, dropText);
-    const d1 = write(dropAt, 'drop', ['--from', join(wind, 'config.json')]);
-    const d2 = write(dropAt, 'drop-again', ['--from', join(wind, 'config.json')]);
+    const d1 = write(dropAt, 'drop', ['--from', fromConfig]);
+    const d2 = write(dropAt, 'drop-again', ['--from', fromConfig]);
     const dPropAt = join(dir, 'drop', 'proposal.json');
     const dProp = existsSync(dPropAt) ? (JSON.parse(readFileSync(dPropAt, 'utf8')) as Record<string, unknown>) : {};
     const dObj = d1.text === null ? {} : (JSON.parse(d1.text) as Record<string, unknown>);
@@ -10897,6 +10901,28 @@ function runProposeSuite(): number {
       refusals(() => propose(bustSet, undefined, null, DEFAULT_GRID_RULE, null, true, { noBust: 'plate', landmarks: { apex_r: [75,125], apex_l: [125,125] } }))?.problems.some(p => p.code === 'PROPOSE_BUST_INPUT') === true,
       'blank, non-finite, unknown and conflicting inputs planted', 'no malformed declaration is silently replaced');
 
+
+    const torsoIslands = (pixels: number): PartSet => {
+      const image = bustSet.images.get('bodice') as Raster;
+      const data = new Uint8ClampedArray(image.data);
+      for (let y = 0; y < image.height; y++) {
+        data[(y * image.width) * 4 + 3] = y < pixels ? 255 : 0;
+        data[(y * image.width + 1) * 4 + 3] = 0;
+      }
+      const images = new Map(bustSet.images);
+      images.set('bodice', { ...image, data });
+      return new PartSet(JSON.parse(readFileSync(join(bustDir, 'parts.json'), 'utf8')) as PartsFile, images);
+    };
+    const dustTorso = propose(torsoIslands(1));
+    const dustMesh = dustTorso.meshes.bodice;
+    say('PR763_CONTOUR_TORSO_REUSES_THE_DUST_RULE_AND_REPORTS_LEFT_OUT_ISLANDS_AND_PIXELS',
+      'contour' in dustMesh && dustMesh.contour.stray === 1 &&
+      dustTorso.notes.some(note => note.includes('1 island(s), 1 px; contour.stray=1')),
+      JSON.stringify(dustMesh), 'one isolated pixel beside 4410 art pixels meets both existing dust limits');
+    const realTorso = refusals(() => propose(torsoIslands(5)));
+    say('PR764_A_REAL_EXTRA_TORSO_ISLAND_IS_REFUSED_BY_NAME_WITHOUT_A_LATTICE_FALLBACK',
+      realTorso?.problems.some(problem => problem.code === 'PROPOSE_TORSO_ISLANDS' && problem.object.includes('bodice') && problem.detail.includes('4410, 5 px') && problem.detail.includes('real piece')) === true,
+      codes(realTorso), 'a five-pixel island exceeds the existing four-pixel dust limit');
 
     const chainBustDir = join(dir, 'chain-bust');
     writeProposeFixture(chainBustDir, [...PROPOSE_PARTS, { name: 'coat', from: 'full:topwear', x: 50, y: 100, w: 100, h: 160, colour: [60, 80, 100] }]);
@@ -28904,11 +28930,13 @@ function expectedContourProposal(ex: string, P: PartSet): Proposal {
   if (torso === undefined || !('grid' in torso)) throw new Error('the public torso oracle must declare a topwear lattice');
   const rules = figureRules({ parts: [...P.recs] });
   if ('code' in rules) throw new PartsError([rules]);
+  const dust = dustOf(P.images.get('topwear') as Raster);
+  if ('keep' in dust) throw new Error(dust.keep);
   const onChain = torso.segments.some(segment => typeof segment === 'string' && original.bones.some(b => 'chain' in b && b.chain === segment));
   const meshes = {
     ...original.meshes,
     topwear: {
-      contour: { tolerance: rules.tolerance, margin: rules.tolerance, spacing: rules.spacing, maxEdge: rules.spacing },
+      contour: { tolerance: rules.tolerance, margin: rules.tolerance, spacing: rules.spacing, maxEdge: rules.spacing, ...(dust.stray === undefined ? {} : { stray: dust.stray }) },
       r: torso.r,
       segments: torso.segments,
       ...(onChain ? { influences: { maxInfluences: null, floor: 'continuous' as const } } : {}),
@@ -28926,6 +28954,7 @@ function expectedContourProposal(ex: string, P: PartSet): Proposal {
     notes.splice(gridAt, 1, ...(gridParts.length === 0 ? [] : [gridNote(figureGrid(P.recs), gridParts)]));
   }
   const draftedNotes = [
+    ...(dust.stray === undefined ? [] : [`topwear: contour dust rule leaves out ${dust.dust.length} island(s), ${dust.dust.reduce((sum, pixels) => sum + pixels, 0)} px; contour.stray=${dust.stray}`]),
     'topwear: contour torso drafted without bust landmarks. Add meshes.topwear.contour.bust.apex_r, apex_l and cleavage in rig pixels, and boob_r/boob_l bones under chest, or re-run with --bust-landmarks <file>. Cleavage may be omitted from that file for midline projection',
     ...(onChain ? ["topwear: contour segments name a chain. Drafted influences.maxInfluences=null and floor=continuous to avoid the influence cut's weight step across short outline edges (issue #991)"] : []),
   ];
@@ -30246,6 +30275,20 @@ function runReadmeLoopSuite(): number | null {
       const key = relative(join(ROOT, 'examples'), ex);
       const r = runReadmeLoop(lines, ex, join(dir, key), paste);
       plainRuns.set(key, r);
+      if (key === 'reference-demo' || key === 'reference-sample') {
+        const parts = readPartSet(join(dir, key, 'work', 'rig'));
+        const dust = dustOf(parts.images.get('topwear') as Raster);
+        const mesh = (r.proposal?.meshes as Record<string, { contour?: { stray?: number } }> | undefined)?.topwear;
+        const reportPath = join(dir, key, 'out', 'rig', 'mesh_report.json');
+        const report = existsSync(reportPath) ? readJsonAt(reportPath) as Array<{ part: string; contour?: { strayPixels: number; strayIslands: number } }> : [];
+        const torso = report.find(row => row.part === 'topwear')?.contour;
+        const dustPixels = 'keep' in dust ? null : dust.dust.reduce((sum, pixels) => sum + pixels, 0);
+        say(`RL06_CONTOUR_TORSO_DUST_DECLARATION_MATCHES_THE_BUILT_MESH_REPORT[${key}]`,
+          !('keep' in dust) && dust.stray === 1 && mesh?.contour?.stray === dust.stray &&
+          torso?.strayPixels === dustPixels && torso?.strayIslands === dust.islands.length - 1,
+          `islands ${dust.islands.join(', ')} px; contour.stray ${mesh?.contour?.stray}; mesh_report strayIslands ${torso?.strayIslands}, strayPixels ${torso?.strayPixels}`,
+          'the existing mesh-draft dust rule is reused and the build reports exactly the islands and pixels declared');
+      }
       const end = readmeLoopEnd(ex, lines);
       say(
         `RL01_THE_README_LOOP_RUNS_IN_ORDER_ON_A_FRESH_CONFIG[${key}]`,
@@ -30271,6 +30314,7 @@ function runReadmeLoopSuite(): number | null {
       clothRuns.set(key, r);
       const plain = plainRuns.get(key) ?? null;
       const built = existsSync(join(dir, `cloth-${key}`, 'config.json')) ? (readJsonAt(join(dir, `cloth-${key}`, 'config.json')) as Record<string, unknown>) : {};
+      (tracked.meshes as Record<string, unknown>).topwear = expectedContourProposal(ex, readPartSet(join(dir, `cloth-${key}`, 'work', 'rig'))).meshes.topwear;
       const sameAs = (cfg: Record<string, unknown>, keys: readonly string[]): boolean => keys.every((k) => JSON.stringify(cfg[k]) === JSON.stringify(tracked[k]));
       const sections = PROPOSAL_CONFIG_SECTIONS.filter((k) => tracked[k] !== undefined);
       const plainCfg = plain === null ? {} : Object.fromEntries(plain.pasted.map((k) => [k, plain.proposal?.[k]]));

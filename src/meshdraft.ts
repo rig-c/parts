@@ -71,9 +71,8 @@ import { type CharacterConfig, type ContourMeshSpec, type LatticeMeshSpec, loadC
 import { PartsError, type Problem, problemLine } from './errors.ts';
 import { IDLE_FPS } from './motion.ts';
 import { type ContourBridges, FAINT_ALPHA } from './contour.ts';
-import { ART_ALPHA, DUST_MAX_PX, DUST_MAX_SHARE, isDust } from './mesh.ts';
+import { ART_ALPHA, DUST_MAX_PX, DUST_MAX_SHARE, isDust, dustOf, type DustReading } from './mesh.ts';
 import { type PartsFile, readParts } from './parts.ts';
-import { alphaAbove, connectedComponents } from './raster/index.ts';
 import { readPng } from './raster/png.ts';
 import type { Raster } from './raster/types.ts';
 import { buildRig, type IdleKeys, type MeshAttachment, rigJsonText, type RigSpec } from './rig.ts';
@@ -196,31 +195,7 @@ export function figureRules(parts: Pick<PartsFile, 'parts'>): FigureRules | Prob
 // the candidate
 // ---------------------------------------------------------------------------
 
-/** A part's art islands, largest first, and what the dust rule makes of them. */
-export type DustReading = { stray: number | undefined; islands: number[]; dust: number[] } | { keep: string; islands: number[] };
-
-/**
- * The dust rule on a part image (its alpha, unpadded or padded alike: the pad adds no art): the 4-connected islands
- * of alpha above `ART_ALPHA` — the contour mode's own island rule — and whether every island past the largest is
- * dust ({@link DUST_MAX_PX}, {@link DUST_MAX_SHARE}). A tie for the largest is no single largest island, which the
- * contour mode refuses, so it keeps the lattice too.
- */
-export function dustOf(image: Raster): DustReading {
-  const comp = connectedComponents(alphaAbove(image, ART_ALPHA), 4);
-  const islands = comp.stats.slice(1).map((s) => s.area).sort((a, b) => b - a);
-  const art = islands.reduce((a, b) => a + b, 0);
-  if (islands.length === 0) return { keep: `its image has no pixel with alpha above ${ART_ALPHA}`, islands };
-  if (islands.length > 1 && islands[0] === islands[1]) return { keep: `its art is ${islands.length} islands (${islands.join(', ')} px) of which two share the largest count, so no one island is the largest`, islands };
-  const extra = islands.slice(1);
-  const pieces = extra.filter((n) => !isDust(n, art));
-  if (pieces.length > 0) {
-    return {
-      keep: `its art is ${islands.length} islands (${islands.join(', ')} px); ${pieces.length} beside the largest ${pieces.length === 1 ? 'is a real piece' : 'are real pieces'}, not dust (at most ${DUST_MAX_PX} px and at most ${pyRound(DUST_MAX_SHARE * 100, 6)} % of the part's ${art} art px), and the contour mode meshes one island`,
-      islands,
-    };
-  }
-  return { stray: extra.length === 0 ? undefined : extra[0], islands, dust: extra };
-}
+export { dustOf, type DustReading } from './mesh.ts';
 
 /**
  * The candidate for one lattice entry: the outline mesh at the figure's numbers, its weights' fields as the lattice

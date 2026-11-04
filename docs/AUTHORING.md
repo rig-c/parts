@@ -185,6 +185,11 @@ read by no CPU stage).
 
 ### Drafting the chest carrier
 
+The drafted contour torso also uses mesh-draft's existing dust rule. Extra islands
+of at most 4 pixels and at most 0.1% of the part's art set `contour.stray` to the
+largest dust island. The proposal note names the islands and pixels left out.
+A real extra piece is refused by `PROPOSE_TORSO_ISLANDS` and must be separated.
+
 `propose --bust-landmarks <landmarks.json>` reads an object with `apex_r` and `apex_l`,
 and optional `cleavage`, each a finite `[x, y]` in rig pixels (crop origin at top left,
 y down). If `cleavage` is absent, its point is the crossing of the apex segment and the
@@ -3187,6 +3192,7 @@ world units. Other proposal modes (`--keypoints`, `--compare`, `--grid-rule`,
 
 | rule | means | change |
 | --- | --- | --- |
+| <a id="PROPOSE_TORSO_ISLANDS"></a>`PROPOSE_TORSO_ISLANDS` | the chest carrier has no art, tied largest islands, or an extra island exceeding the existing mesh-draft dust limits | separate real pieces so the torso has one largest art island and only dust beside it |
 | <a id="PROPOSE_BUST_INPUT"></a>`PROPOSE_BUST_INPUT` | a bust landmark is missing, malformed or unknown, the omission reason is blank or conflicts with landmarks, the midline has no unique crossing inside the apex segment, or the chest carrier is absent or ambiguous, or its recipe declares an incompatible influence mode | give finite rig-pixel apex_r/apex_l and optional cleavage, or a non-blank omission reason; separate overlapping chest-holding topwear |
 | <a id="PROPOSE_NECK_BODY_TURN"></a>`PROPOSE_NECK_BODY_TURN` | no authored sampled body turn | follow this recipe and supply the named input; the refusal writes no config |
 | <a id="PROPOSE_NECK_PLAN"></a>`PROPOSE_NECK_PLAN` | no unique neck plan row | follow this recipe and supply the named input; the refusal writes no config |
