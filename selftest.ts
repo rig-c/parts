@@ -464,6 +464,8 @@ import {
   type SweepPose,
   TEXTURE_STRETCH_CEILING,
   TIP_RATIO_FLOOR,
+  hangBone,
+  TIP_INSTRUMENT,
   TIP_REST_RATIO_CEILING,
   type Viewport,
   withoutPhysics,
@@ -20038,7 +20040,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       const r = runCli(args);
       return { ...r, fig: readJsonFile(join(dir, `seated-${label}`, 'check.json')) };
     };
-    type TipRow = { part: string; tip_half?: string; root_rig_px?: number; tip_rig_px?: number; ratio?: number | null; unmeasured?: string };
+    type TipRow = { part: string; tip_half?: string; hang_from?: string | null; root_rig_px?: number; tip_rig_px?: number; ratio?: number | null; world_ratio?: number | null; unmeasured?: string };
     const tipOf = (fig: Record<string, unknown> | null): Record<string, unknown> => (fig?.TIP_OVER_ROOT ?? {}) as Record<string, unknown>;
     const tipRowOf = (fig: Record<string, unknown> | null, part: string): TipRow | undefined => ((tipOf(fig).parts ?? []) as TipRow[]).find((r) => r.part === part);
     const consoleOf = (o: string, name: string): string => o.split('\n').find((l) => l.startsWith(`  ${name}: `)) ?? '';
@@ -20054,13 +20056,14 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         (failLine(bare.out, 'CHECK_STILL_REGIONS_DARK') ?? '').includes('slot "shoes" of the feet') &&
         tipFails.length === 2 &&
         tipFails[0].includes('part "under"') &&
-        tipFails[0].includes('(ratio 1)') &&
+        tipFails[0].includes('(ratio undefined: nothing moves against `root`; in the world ') &&
         tipFails[1].includes('part "arm"') &&
         typeof bArm?.ratio === 'number' &&
         bArm.ratio < 1 &&
         JSON.stringify(Object.keys(tipOf(bare.fig))) === JSON.stringify(['status', 'instrument', 'parts', 'ratio_floor']) &&
-        JSON.stringify(Object.keys(bArm)) === JSON.stringify(['part', 'root_rig_px', 'tip_rig_px', 'ratio']) &&
-        bUnder?.ratio === 1 &&
+        JSON.stringify(Object.keys(bArm)) === JSON.stringify(['part', 'hang_from', 'root_rig_px', 'tip_rig_px', 'ratio', 'world_root_rig_px', 'world_tip_rig_px', 'world_ratio']) &&
+        bUnder?.ratio === null &&
+        bUnder?.world_ratio === 1 &&
         !bare.out.includes('declared_'),
       `exit ${bare.status}; bars not met ${JSON.stringify(barsNotMet(bare.fig ?? {}))}; ${tipFails.map((l) => l.trim().slice(0, 170)).join(' | ')}`,
       'issue #231: the four bars hold a standing figure, and the issue puts lowering them out of scope — so a figure that sits fails exactly the four the issue reports until the scene says otherwise: feet that move (twice), a forearm whose upper half out-travels its lower (read down the screen, ratio under 1), and a cut piece slid whole with the root (both halves travel alike, ratio 1 by construction)',
@@ -20160,7 +20163,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         !foldUp.out.includes('REQUIREMENTS_TIP_EXCEPTION') &&
         JSON.stringify(tipOf(foldUp.fig).declared_rises) === '["arm"]' &&
         fuArm !== undefined &&
-        JSON.stringify(Object.keys(fuArm)) === JSON.stringify(['part', 'tip_half', 'tip_read', 'root_rig_px', 'tip_rig_px', 'ratio']) &&
+        JSON.stringify(Object.keys(fuArm)) === JSON.stringify(['part', 'tip_half', 'tip_read', 'hang_from', 'root_rig_px', 'tip_rig_px', 'ratio', 'world_root_rig_px', 'world_tip_rig_px', 'world_ratio']) &&
         fuArm.tip_half === 'upper' &&
         fuArm.tip_read === foldRead &&
         fuArm.root_rig_px === fbArm.tip_rig_px &&
@@ -20370,9 +20373,9 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const tipFail = failLine(slide.out, 'CHECK_TIP_OVER_ROOT');
     say(
       'CK11_A_SLEEVE_THAT_SLIDES_WHOLE_FAILS_TIP_OVER_ROOT',
-      slide.status === 1 && tipFail !== null && /ratio 1\b/.test(tipFail),
+      slide.status === 1 && tipFail !== null && tipFail.includes('(ratio undefined: nothing moves against `root`; in the world ') && /in the world [0-9.]+ and [0-9.]+, ratio 1\)/.test(tipFail),
       `exit ${slide.status}; ${tipFail?.trim() ?? 'no CHECK_TIP_OVER_ROOT line'}`,
-      'a sleeve translated whole has its tip travel exactly as far as its root — the swing a chain is for is absent',
+      'a sleeve translated whole has its tip travel exactly as far as its root — the swing a chain is for is absent; since issue #987 the halves are read against the bone the part hangs from (`root`, which the slide moves), where nothing moves, and the world ratio 1 is beside it',
     );
 
     // Issue #262: the failing line names a root the breath carries. The planted skirt: its waistband on `chest`, which
@@ -20440,6 +20443,122 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       'issue #351: when the breath carries the root and the held-still mesh is also below the bar, breathCarrier previously returned null and blamed only the chain\'s amplitudes; it now names the carrier and the held-still ratio together',
     );
 
+    // Issue #987: the halves are read in the frame of the bone the part hangs from. The planted sleeves hang on a
+    // two-link chain under `chest`, which the idle carries 4 rig px across (fixtures/checkrig.ts `hung`): one rides
+    // it rigid, one turns about its middle (a pendulum), one trails the carry on keyed links with physics children
+    // (the rig stage's control layer), and one trails it on a physics-only chain with no rotate keys.
+    const HUNG_FROM: [string, string] = ['full:handwear-r', 'full:topwear'];
+    const hungRun = (label: string, hung: NonNullable<Parameters<typeof writeCheckRig>[1]>['hung']) => {
+      const res = judged(label, { from: HUNG_FROM, peak: 0, hung });
+      const line = res.fig?.TIP_OVER_ROOT as { instrument?: string; parts?: Array<Record<string, unknown>> } | undefined;
+      return { ...res, line, row: line?.parts?.find((r) => r.part === 'back'), fail: failLine(res.out, 'CHECK_TIP_OVER_ROOT') };
+    };
+    const physics = { strength: 200, inertia: 0.3 };
+    const rigidS = hungRun('tip-hung-rigid', { carry: 4, swing: 0, pivot: 'top' });
+    const pendS = hungRun('tip-hung-pendulum', { carry: 4, swing: 11.5, pivot: 'mid', physics });
+    const trailS = hungRun('tip-hung-trailing', { carry: 4, swing: -2.865, pivot: 'top', physics });
+    const heavyS = hungRun('tip-hung-heavy', { carry: 4, swing: 0, pivot: 'top', physics: { strength: 20, inertia: 1 } });
+    const tipNum = (r: Record<string, unknown> | undefined, k: string): number => (typeof r?.[k] === 'number' ? (r[k] as number) : NaN);
+    say(
+      'CK987_A_SLEEVE_IS_READ_AGAINST_THE_BONE_IT_HANGS_FROM_RIGID_AND_PENDULUM_FAIL_A_TRAILING_ONE_PASSES',
+      rigidS.line?.instrument === TIP_INSTRUMENT &&
+        rigidS.fail !== null &&
+        rigidS.row?.ratio === null &&
+        rigidS.row?.root_rig_px === 0 &&
+        rigidS.row?.tip_rig_px === 0 &&
+        rigidS.row?.world_ratio === 1 &&
+        rigidS.fail.includes('nothing in it moves against `s0`: it rides that bone whole') &&
+        pendS.fail !== null &&
+        pendS.row?.hang_from === 'chest' &&
+        tipNum(pendS.row, 'ratio') < TIP_RATIO_FLOOR &&
+        tipNum(pendS.row, 'world_ratio') >= TIP_RATIO_FLOOR &&
+        trailS.fail === null &&
+        trailS.row?.hang_from === 'chest' &&
+        tipNum(trailS.row, 'ratio') >= TIP_RATIO_FLOOR &&
+        tipNum(trailS.row, 'world_ratio') < 1 &&
+        heavyS.fail === null &&
+        heavyS.row?.hang_from === 'chest' &&
+        tipNum(heavyS.row, 'ratio') >= TIP_RATIO_FLOOR &&
+        tipNum(heavyS.row, 'world_ratio') < 1,
+      [rigidS, pendS, trailS, heavyS].map((r, i) => `${['rigid', 'pendulum', 'trailing (keyed, physics children)', 'heavy (physics only)'][i]}: ${JSON.stringify(r.row ?? null)}`).join(' | '),
+      "issue #987: in the world a sleeve that trails its body's carry reads below the floor — its tip's lag cancels the carry — and a heavier sleeve reads lower, while a pendulum that turns about its middle reads above it. Against the bone the part hangs from, the carry is taken out: the rigid sleeve moves nothing (0 / 0, a still root and tip read as 0 at the line's precision), the pendulum's halves move alike (about 1), and both trailing sleeves pass by their tip. The world reading stays in the row",
+    );
+    // The hang bone's walk, on rig.json alone (issue #987): the rig stage's control layer (`<link>_ctl` keyed, its
+    // child driven by physics, the mesh bound to the child), and a physics-only chain with no rotate keys, each land on
+    // the body bone; a part on a body bone stays there, and a part on a bone nothing drives stays on that bone.
+    const sinKeys = (a: number): Array<{ t: number; v: number[] }> => [0, 1, 2, 3, 4].map((k) => ({ t: k / 4, v: [a * Math.sin((Math.PI * k) / 2)] }));
+    const hangRig = (bones: Array<[string, string | null]>, bound: string[], physicsOn: string[]): Record<string, unknown> => ({
+      bones: bones.map(([name, parent]) => ({ name, ...(parent === null ? {} : { parent }) })),
+      slots: [{ name: 'sleeve', bone: bound[0] }],
+      skins: { default: { sleeve: { sleeve: { type: 'mesh', weights: [bound.map((bone) => ({ bone, x: 0, y: 0, weight: 1 / bound.length }))] } } } },
+      constraints: physicsOn.map((bone) => ({ type: 'physics', name: `${bone}_phys`, bone })),
+    });
+    const keyedMotion = (bones: string[]): Record<string, unknown> => ({ animations: { idle: { duration: 1, tracks: bones.map((bone) => ({ bone, property: 'rotate', keys: sinKeys(2) })) } } });
+    const ctlLayer = hangRig([['root', null], ['chest_ctl', 'root'], ['chest', 'chest_ctl'], ['s0_ctl', 'chest'], ['s0', 's0_ctl'], ['s1_ctl', 's0'], ['s1', 's1_ctl']], ['s0', 's1'], ['s0', 's1']);
+    const ctlNoPhys = { ...ctlLayer, constraints: [] };
+    const physOnly = hangRig([['root', null], ['chest', 'root'], ['arm', 'chest'], ['s0', 'arm'], ['s1', 's0']], ['s0', 's1'], ['s0', 's1']);
+    const onBody = hangRig([['root', null], ['chest', 'root'], ['s0_ctl', 'chest'], ['s0', 's0_ctl']], ['chest', 's0'], []);
+    const walks = {
+      ctl: hangBone(ctlLayer, keyedMotion(['chest_ctl', 's0_ctl', 's1_ctl']), 'sleeve'),
+      ctlNoPhys: hangBone(ctlNoPhys, keyedMotion(['s0_ctl', 's1_ctl']), 'sleeve'),
+      physOnly: hangBone(physOnly, { animations: { idle: { duration: 1, tracks: [] } } }, 'sleeve'),
+      onBody: hangBone(onBody, keyedMotion(['s0_ctl']), 'sleeve'),
+      still: hangBone(physOnly, { animations: { idle: { duration: 1, tracks: [] } } }, 'nothing'),
+    };
+    say(
+      'CK988_THE_HANG_BONE_WALKS_UP_THROUGH_KEYED_LINKS_AND_PHYSICS_LINKS_TO_THE_BODY_BONE',
+      walks.ctl === 'chest' && walks.ctlNoPhys === 'chest' && walks.physOnly === 'arm' && walks.onBody === 'chest' && walks.still === null,
+      `control layer with physics children -> ${walks.ctl}; the same without physics -> ${walks.ctlNoPhys}; physics-only chain -> ${walks.physOnly}; bound to chest and a link -> ${walks.onBody}; a part bound to nothing -> ${walks.still}`,
+      "issue #987's ruling: from the deepest common ancestor-or-self of the bound bones, walk up while the bone is a link — of a chain CHAIN_LAG reads (`chest_ctl` alone is not one: a chain is two keyed links), or a bone a physics constraint drives — to the first that is not; no bone is read by its name. The walk starts from the link when the common bone is the link's control twin (at its origin, unturned, unscaled, keyed by no track — Option A, ruled on #987), so the control layer without physics children lands on `chest` too; the twin step is taken only at the start, so `chest`, `chest_ctl`'s twin, is where the walk stops",
+    );
+
+    // Issue #995 (ruled on #987): a lone swing is a link too: a rotate-keyed bone with no child bone, or whose only
+    // child is its control twin (a one-link chain's control). A rotate-keyed body segment other bones hang under (a
+    // pelvis carrying legs) is not one. Codex P2: a track that keys a group keys its members, as chainFigures reads it.
+    const lone = hangRig([['root', null], ['skirt', 'root']], ['skirt'], []);
+    const oneLink = hangRig([['root', null], ['skirt0_ctl', 'root'], ['skirt0', 'skirt0_ctl']], ['skirt0'], []);
+    const pelvis = hangRig([['root', null], ['hip', 'root'], ['leg0', 'hip'], ['leg1', 'leg0']], ['hip'], []);
+    const moved = (bone: string, group: boolean): Record<string, unknown> => ({
+      ...(group ? { groups: { g: [bone] } } : {}),
+      animations: { idle: { duration: 1, tracks: [...(keyedMotion(['s0_ctl', 's1_ctl']).animations as { idle: { tracks: unknown[] } }).idle.tracks, { ...(group ? { group: 'g' } : { bone }), property: 'translatex', keys: sinKeys(1) }] } },
+    });
+    const walks995 = {
+      lone: hangBone(lone, keyedMotion(['skirt']), 'sleeve'),
+      oneLink: hangBone(oneLink, keyedMotion(['skirt0_ctl']), 'sleeve'),
+      pelvis: hangBone(pelvis, keyedMotion(['hip']), 'sleeve'),
+      unkeyed: hangBone(lone, { animations: { idle: { duration: 1, tracks: [] } } }, 'sleeve'),
+      direct: hangBone(ctlNoPhys, moved('s0', false), 'sleeve'),
+      group: hangBone(ctlNoPhys, moved('s0', true), 'sleeve'),
+    };
+    say(
+      'CK995_A_LONE_SWING_AND_A_ONE_LINK_CHAIN_ARE_LINKS_A_KEYED_PELVIS_IS_NOT_AND_A_GROUP_TRACK_KEYS_ITS_MEMBERS',
+      walks995.lone === 'root' && walks995.oneLink === 'root' && walks995.pelvis === 'hip' && walks995.unkeyed === 'skirt' && walks995.direct === 's0' && walks995.group === walks995.direct,
+      `lone rotate-keyed bone -> ${walks995.lone}; one-link chain (keyed control, twin under it) -> ${walks995.oneLink}; rotate-keyed pelvis with legs under it -> ${walks995.pelvis}; the lone bone unkeyed -> ${walks995.unkeyed}; s0 keyed by its own track -> ${walks995.direct}; by a group track holding s0 -> ${walks995.group}`,
+      "issue #995's ruling on #987: a rotate-keyed bone with no child bone (or only its control twin) is the swing itself, so a part on it is read against the bone above; a rotate-keyed body segment other bones hang under is not, so a part bound whole to it reads 0 / 0. Codex P2: keyedBones read only `bone` tracks, so a group track on s0 left s0 looking like an unkeyed control twin and the walk went on to chest",
+    );
+    // The guard (issue #995): TIP_OVER_ROOT reads every handwear and bottomwear part (SWING_TAGS), declared or not, so a
+    // fitted garment is declared by the scene file's `not_swinging` and then reads SKIP with the reason; undeclared, it
+    // is read as hanging cloth and the same part bound whole to a turning body segment fails.
+    const pelvisHung = { carry: 4, swing: 0, pivot: 'top' as const, pelvis: 2 };
+    const pelvisCloth = hungRun('tip-pelvis-cloth', pelvisHung);
+    const tightReq = join(dir, 'tip-pelvis-tight.json');
+    writeFileSync(tightReq, JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [], not_swinging: ['back'] }));
+    writeCheckRig(join(dir, 'tip-pelvis-tight'), { from: HUNG_FROM, peak: 0, hung: pelvisHung });
+    const tightRes = runCli(['check', '--rig', join(dir, 'tip-pelvis-tight'), '--out', join(dir, 'tip-pelvis-tight-out'), '--requirements', tightReq]);
+    const tightTip = (readJsonFile(join(dir, 'tip-pelvis-tight-out', 'check.json'))?.TIP_OVER_ROOT ?? {}) as Record<string, unknown>;
+    say(
+      'CK996_A_PART_BOUND_WHOLE_TO_A_TURNING_BODY_SEGMENT_FAILS_AS_CLOTH_AND_SKIPS_DECLARED_NOT_SWINGING',
+      pelvisCloth.fail !== null &&
+        pelvisCloth.row?.hang_from === 's0' &&
+        pelvisCloth.row?.ratio === null &&
+        pelvisCloth.fail.includes('nothing in it moves against `s0`: it rides that bone whole') &&
+        failLine(tightRes.out, 'CHECK_TIP_OVER_ROOT') === null &&
+        tightTip.status === 'SKIP' &&
+        String(tightTip.reason).includes("back: declared not swinging by the scene file's not_swinging"),
+      `as cloth: ${JSON.stringify(pelvisCloth.row ?? null)}; declared not_swinging: exit ${tightRes.status}, ${JSON.stringify(tightTip)}`,
+      "issue #995's guard: a garment the rig holds rigid on purpose must not fail TIP_OVER_ROOT by design. The line reads every handwear and bottomwear part, so the existing declaration (`not_swinging`) is what takes it out, with the reason in the line",
+    );
+
     // Issue #245: a tip at rest. CK116's skirt with no sway is the case — its waistband rides `chest`, which the idle
     // lifts 4 rig px, its hem on `hem`, which the idle does not move — so the root moves and the tip rests. Read as
     // hanging it fails (CK116); declared rests it is held to the opposite relation, tip / root <= 1, and passes. The
@@ -20470,7 +20589,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         JSON.stringify(Object.keys(restLine(restAt.fig))) === JSON.stringify(['status', 'declared_rests', 'instrument', 'parts', 'ratio_floor', 'rest_ratio_ceiling']) &&
         JSON.stringify(restLine(restAt.fig).declared_rests) === '["back"]' &&
         restLine(restAt.fig).rest_ratio_ceiling === TIP_REST_RATIO_CEILING &&
-        JSON.stringify(Object.keys(restAtRow ?? {})) === JSON.stringify(['part', 'declared', 'root_rig_px', 'tip_rig_px', 'ratio']) &&
+        JSON.stringify(Object.keys(restAtRow ?? {})) === JSON.stringify(['part', 'declared', 'hang_from', 'root_rig_px', 'tip_rig_px', 'ratio', 'world_root_rig_px', 'world_tip_rig_px', 'world_ratio']) &&
         restAtRow?.declared === 'rests' &&
         typeof restAtRow.ratio === 'number' &&
         restAtRow.ratio <= TIP_REST_RATIO_CEILING &&
@@ -27561,6 +27680,9 @@ function runBuildSuite(): number {
       };
       c.regions = { bottomwear: 'hip', thigh_r: 'leg_r0', shin_r: 'leg_r1', thigh_l: 'leg_l0', shin_l: 'leg_l1' };
       c.motion = { duration: 1, tracks: [{ bone: 'hip', prop: 'rotate', amp: 2, period: 1, phase: 0 }] };
+      // Issue #995: the shorts ride `hip`, which turns with the legs under it, whole: a fitted garment, declared so
+      // (`writeFittedShorts` writes the file beside the config), not cloth TIP_OVER_ROOT would read 0 / 0 against `hip`.
+      c.requirements = SHORTS_FITTED;
       if (withSets) {
         (c.assemble as Record<string, unknown>).alternates = shortsSets.map((q) => ({
           name: q.name,
@@ -27573,9 +27695,12 @@ function runBuildSuite(): number {
       }
       return c;
     };
+    const SHORTS_FITTED = 'fitted.json';
+    const writeFittedShorts = (d: string): void => writeFileSync(join(d, SHORTS_FITTED), `${JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [], not_swinging: ['bottomwear'] }, null, 2)}\n`);
     const shortsFixture = (name: string, cfg: Record<string, unknown>, carry = false): string => {
       const d = join(shortsDir, name);
       writeAssembleFixture(d, cfg, shortsPainting, { full: [{ name: 'legwear', depth: 0.6, rects: [{ x0: 22, y0: 20, x1: 30, y1: 50, colour: C }, { x0: 34, y0: 20, x1: 42, y1: 50, colour: C }] }, shortsLayer], head: HEAD_LAYERS });
+      writeFittedShorts(d);
       // #637: this exclusion control has only the base's cover; a carried cover stays in the set.
       for (const q of shortsSets) writeRun(join(d, `full_${q.name}`), [{ name: 'legwear', depth: 0.6, rects: q.rects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1, colour: C })) }, ...(carry ? [shortsLayer] : [])]);
       return d;
@@ -27702,6 +27827,7 @@ function runBuildSuite(): number {
     const islandFixture = (name: string, sets: typeof islandSets): string => {
       const d = join(islandDir, name);
       writeAssembleFixture(d, islandConfig(sets), shortsPainting, { full: [{ name: 'legwear', depth: 0.6, rects: [{ x0: 22, y0: 20, x1: 30, y1: 50, colour: C }, { x0: 34, y0: 20, x1: 42, y1: 50, colour: C }] }, shortsLayer], head: HEAD_LAYERS });
+      writeFittedShorts(d);
       // #637's actual set-cover case is UC00; this island control retains #587's base-only footprint.
       for (const q of sets) writeRun(join(d, `full_${q.name}`), [{ name: 'legwear', depth: 0.6, rects: q.rects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1, colour: C })) }]);
       return d;
@@ -28334,6 +28460,7 @@ function runBuildSuite(): number {
         ...(by === 'drawn' ? { drawn: q.drawn } : { skeleton: `${q.name}_pose.json` }),
       }));
       writeAssembleFixture(d, c, shortsPainting, { full: [{ name: 'legwear', depth: 0.6, rects: [{ x0: 22, y0: 20, x1: 30, y1: 50, colour: C }, { x0: 34, y0: 20, x1: 42, y1: 50, colour: C }] }, shortsLayer], head: HEAD_LAYERS });
+      writeFittedShorts(d);
       for (const q of sets) {
         // #637's covered overlap is UC10; retain the base-only exclusion in this #609 control.
         writeRun(join(d, `full_${q.name}`), [{ name: 'legwear', depth: 0.6, rects: q.rects.map(([x0, y0, x1, y1]) => ({ x0, y0, x1, y1, colour: C })) }]);
@@ -29304,7 +29431,7 @@ function runChainSuite(_corpus: string | null = null, pre = false): number | nul
         const vRig = runCli(['rig', '--config', join(vDir, 'config.json'), '--parts', out, '--out', join(vDir, 'rig')]);
         const vChk = runCli(['check', '--rig', join(vDir, 'rig'), '--parts', out, '--out', join(vDir, 'check')]);
         const vFig = readJsonFile(join(vDir, 'check', 'check.json'));
-        const vTip = vFig?.TIP_OVER_ROOT as { status?: string; instrument?: string; parts?: Array<{ part: string; ratio: number | null; root_rig_px: number; tip_rig_px: number }> } | undefined;
+        const vTip = vFig?.TIP_OVER_ROOT as { status?: string; instrument?: string; parts?: Array<{ part: string; hang_from?: string | null; ratio: number | null; root_rig_px: number; tip_rig_px: number; world_ratio: number | null }> } | undefined;
         const row = vTip?.parts?.find((p) => p.part === 'bottomwear');
         const vParts = readParts(join(out, 'parts.json'));
         const rec = vParts.parts.find((p) => p.name === 'bottomwear') as PartRecord;
@@ -29324,15 +29451,16 @@ function runChainSuite(_corpus: string | null = null, pre = false): number | nul
           `${wantFail ? 'CH906_A_TIP_THAT_TRULY_DOES_NOT_OUT_TRAVEL_ITS_ROOT_FAILS_TIP_OVER_ROOT_AT_EVERY_RENDER_SIZE' : 'CH905_A_HEM_UNDER_A_FIFTH_OF_A_FRAME_PIXEL_READS_ONE_TIP_OVER_ROOT_AT_EVERY_RENDER_SIZE_AND_PASSES_BY_THE_BAR'}[${key}]`,
           vRig.status === 0 &&
             vChk.status === (wantFail ? 1 : 0) &&
-            vTip?.instrument === 'geometry' &&
+            vTip?.instrument === TIP_INSTRUMENT &&
+            row?.hang_from === 'hip' &&
             vTip?.status === (wantFail ? 'FAIL' : 'PASS') &&
             byBar &&
             atMax.every((t) => t !== null) &&
             atMax[0]?.root === atMax[1]?.root &&
             atMax[0]?.tip === atMax[1]?.tip &&
-            ratios.every((r) => r === row?.ratio) &&
+            ratios.every((r) => r === row?.world_ratio) &&
             (!wantFail || ((failLine(vChk.out, 'CHECK_TIP_OVER_ROOT')?.includes('part "bottomwear"') ?? false) && (failLine(vChk.out, 'CHECK_TIP_OVER_ROOT')?.includes('the root travels with the breath (') ?? false) && (failLine(vChk.out, 'CHECK_TIP_OVER_ROOT')?.includes('it is carried by `chest`') ?? false))),
-          `${variant}: rig exit ${vRig.status}, check exit ${vChk.status}, TIP_OVER_ROOT ${vTip?.status} (instrument ${vTip?.instrument}), bottomwear root ${row?.root_rig_px} tip ${row?.tip_rig_px} rig px, ratio ${row?.ratio} against ${TIP_RATIO_FLOOR}; from the geometry at --max 620 and 660: ${atMax.map((t, i) => `${[620, 660][i]}: root ${t?.root} tip ${t?.tip}`).join('; ')} (${atMax[0]?.root === atMax[1]?.root && atMax[0]?.tip === atMax[1]?.tip ? 'bit-identical' : 'DIFFERENT'})${wantFail ? `; ${failLine(vChk.out, 'CHECK_TIP_OVER_ROOT')?.trim().slice(-330) ?? 'no CHECK_TIP_OVER_ROOT line'}` : ''}`,
+          `${variant}: rig exit ${vRig.status}, check exit ${vChk.status}, TIP_OVER_ROOT ${vTip?.status} (instrument ${vTip?.instrument}), bottomwear against ${row?.hang_from} root ${row?.root_rig_px} tip ${row?.tip_rig_px} rig px, ratio ${row?.ratio} against ${TIP_RATIO_FLOOR}, world ratio ${row?.world_ratio}; from the geometry at --max 620 and 660: ${atMax.map((t, i) => `${[620, 660][i]}: root ${t?.root} tip ${t?.tip}`).join('; ')} (${atMax[0]?.root === atMax[1]?.root && atMax[0]?.tip === atMax[1]?.tip ? 'bit-identical' : 'DIFFERENT'})${wantFail ? `; ${failLine(vChk.out, 'CHECK_TIP_OVER_ROOT')?.trim().slice(-330) ?? 'no CHECK_TIP_OVER_ROOT line'}` : ''}`,
           wantFail
             ? "the planted negative of CH905, on real art: scarf's short skirt on the proposal's lattice with the chest segment the proposer drafted before issue #262. Its art in the lower half truly travels less than 1.4725 times the upper half's — the part rendered alone at --max 8000 converged on about 1.27 from above at the breath of issue #118 — and the pixel reading had passed it at 640 (4.537) by the grid; the geometric one fails it at every size, naming the part and, since #262, the bone that carries its root (the line's planted positive on real art)"
             : "issue #118's reproduction: the same rig the pixel reading failed at --max 620, 640 and 650 and passed elsewhere; from the geometry the figure is one number at every render size and the bar decides it, not the grid",

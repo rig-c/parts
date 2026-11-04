@@ -557,19 +557,27 @@
  },
  "TIP_OVER_ROOT": {
   "status": "PASS",
-  "instrument": "geometry",
+  "instrument": "geometry, carrier frame",
   "parts": [
    {
     "part": "bottomwear",
+    "hang_from": "hip",
     "root_rig_px": 0.486,
     "tip_rig_px": 2.62,
-    "ratio": 5.393
+    "ratio": 5.393,
+    "world_root_rig_px": 0.486,
+    "world_tip_rig_px": 2.62,
+    "world_ratio": 5.393
    },
    {
     "part": "sleeves",
-    "root_rig_px": 0.565,
-    "tip_rig_px": 6.679,
-    "ratio": 11.83
+    "hang_from": "chest",
+    "root_rig_px": 0.249,
+    "tip_rig_px": 6.837,
+    "ratio": 27.482,
+    "world_root_rig_px": 0.565,
+    "world_tip_rig_px": 6.679,
+    "world_ratio": 11.83
    }
   ],
   "ratio_floor": 1.4725

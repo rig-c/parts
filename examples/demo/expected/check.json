@@ -816,25 +816,37 @@
  },
  "TIP_OVER_ROOT": {
   "status": "PASS",
-  "instrument": "geometry",
+  "instrument": "geometry, carrier frame",
   "parts": [
    {
     "part": "handwear_l",
-    "root_rig_px": 1.478,
-    "tip_rig_px": 7.034,
-    "ratio": 4.761
+    "hang_from": "chest",
+    "root_rig_px": 0.574,
+    "tip_rig_px": 5.884,
+    "ratio": 10.249,
+    "world_root_rig_px": 1.478,
+    "world_tip_rig_px": 7.034,
+    "world_ratio": 4.761
    },
    {
     "part": "handwear_r",
-    "root_rig_px": 1.437,
-    "tip_rig_px": 6.948,
-    "ratio": 4.835
+    "hang_from": "chest",
+    "root_rig_px": 0.513,
+    "tip_rig_px": 6.106,
+    "ratio": 11.911,
+    "world_root_rig_px": 1.437,
+    "world_tip_rig_px": 6.948,
+    "world_ratio": 4.835
    },
    {
     "part": "bottomwear",
+    "hang_from": "hip",
     "root_rig_px": 0.392,
     "tip_rig_px": 0.951,
-    "ratio": 2.426
+    "ratio": 2.426,
+    "world_root_rig_px": 0.392,
+    "world_tip_rig_px": 0.951,
+    "world_ratio": 2.426
    }
   ],
   "ratio_floor": 1.4725
