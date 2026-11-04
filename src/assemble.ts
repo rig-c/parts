@@ -300,6 +300,8 @@ export function singleRunPadRecord(single: boolean, sourceW: number, sourceH: nu
 }
 
 export interface AssembleInput {
+  /** Counterfactual before seeded takes, with whole-layer takes already applied. */
+  regionTake?: { full: LayerSet; head: LayerSet; targets: string[] };
   /** Turn context for the exact part/carrier declarations, never an exemption flag. */
   turn?: TurnSpec;
   regions?: Record<string, RegionSpec>;
@@ -4799,12 +4801,39 @@ export function checkSingleRun(full: LayerSet, plan: readonly PlanEntry[] | null
   refuseIfAny(problems);
 }
 
+/** Retain neighbour pixels and their matching records after every coupled edit. */
+export function retainRegionNeighbours(placed: PlacedPart[], before: readonly PlacedPart[], targets: ReadonlySet<string>): void {
+  const originals = new Map(before.map(p => [p.record.name, p]));
+  for (let i = 0; i < placed.length; i++) {
+    if (targets.has(placed[i].record.name)) continue;
+    const original = originals.get(placed[i].record.name);
+    if (original === undefined) throw new PartsError([{
+      code: 'ASSEMBLE_REGION_TAKE_CONTAINMENT', object: `part "${placed[i].record.name}"`,
+      detail: 'has no pre-take counterpart; unchanged neighbour pixels and their measurements are required',
+    }]);
+    placed[i] = original;
+  }
+  if (before.some(p => !targets.has(p.record.name) && !placed.some(q => q.record.name === p.record.name))) throw new PartsError([{
+    code: 'ASSEMBLE_REGION_TAKE_CONTAINMENT', object: 'config.assemble.take',
+    detail: 'removed a non-target part; unchanged neighbour pixels and their measurements are required',
+  }]);
+}
+
 /**
  * Run the stage in memory. Everything that can be refused is refused before
  * this returns; nothing here writes a file, so a caller that writes only
  * after this returned writes only after green.
  */
 export function assemble(input: AssembleInput): AssembleResult {
+  if (input.regionTake === undefined) return assembleParts(input);
+  const targets = new Set(input.regionTake.targets);
+  const before = assembleParts({ ...input, full: input.regionTake.full, head: input.regionTake.head, regionTake: undefined }, targets);
+  return assembleParts(input, undefined, before);
+}
+
+/** The counterfactual is internal and is never emitted. Empty taken targets
+ * may be recovered by a take, so only that counterfactual permits them. */
+function assembleParts(input: AssembleInput, emptyTargets?: ReadonlySet<string>, beforeTake: AssembleResult | null = null): AssembleResult {
   const { source, extend, patches, seamRule, projectRule } = input;
   const authoredDepths = input.depth === undefined ? new Map<string, AuthoredUnitDepth>() : authoredUnitDepths(input);
   if (input.paintingExtension !== undefined) refuseIfAny(paintingExtensionProblems(input.paintingExtension));
@@ -5130,7 +5159,7 @@ export function assemble(input: AssembleInput): AssembleResult {
       merged = mergeBelowCrop(r, extras, front, srcr, frame.headBottom, trace, (p, stage) => { writers[p] = AW[stage]; });
     }
     const { x1, opaque } = measureBox(r);
-    if (opaque === 0) {
+    if (opaque === 0 && !emptyTargets?.has(name)) {
       empty.push({
         code: 'ASSEMBLE_PART_OPAQUE',
         object: `part "${name}" (${key}, config.assemble.plan[${pi}])`,
@@ -5736,6 +5765,18 @@ export function assemble(input: AssembleInput): AssembleResult {
       if (edged.get(name)?.data[p] !== 1 && paintingGains.get(name)?.data[p] !== 1 && retakeByName.get(name)?.data[p] !== 1 && yields.get(name)?.mask.data[p] !== 1 && trace.ring.data[p] === 0 && own.takenMask.data[p] === 1 && (region === null || region.data[p] === 1)) projected.data[p] = 1;
     }
     const { x0, y0, x1, y1, opaque } = measureBox(r);
+    if (opaque === 0 && emptyTargets?.has(name)) {
+      set({
+        record: {
+          name, from: key, x: 0, y: 0, w: 1, h: 1,
+          opaque_px: 0, visible_px: 0, occluded_px: 0, projected_core_px: 0,
+          source_px_taken: 0, visible_not_projected_px: 0, refused_drift_px: 0,
+          merged_px: 0, seam_override_px: 0,
+        },
+        image: newRaster(1, 1),
+      });
+      return;
+    }
     if (opaque === 0) {
       const pushed = pushedHere.reduce((a, q) => a + q.px, 0);
       empty.push({
@@ -5817,6 +5858,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     const depth = authoredDepths.get(p.record.name);
     if (depth !== undefined) p.record.provenance.depth = depth;
   });
+  if (beforeTake !== null) retainRegionNeighbours(placed, beforeTake.images, new Set(input.regionTake!.targets));
   // Provenance is now numbers/labels only. No later raster/figure operation
   // reads report buffers; release all aliases before recomposite/error work.
   valueBaselines.clear();

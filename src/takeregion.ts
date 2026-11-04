@@ -2,7 +2,7 @@
 import { dirname, resolve } from 'node:path';
 import type { AssembleConfig, Run } from './config.ts';
 import { PartsError, refuseIfAny } from './errors.ts';
-import { editedRunImages, missingReceipts, type ReceiptLedger } from './editreceipt.ts';
+import { editedRunImages, fileSha256, missingReceipts, type ReceiptLedger } from './editreceipt.ts';
 import { makeInputs } from './inputs.ts';
 import { OPAQUE_ALPHA_ABOVE, readLayers, type Layer, type LayerSet } from './layers.ts';
 import { connectedComponents } from './raster/components.ts';
@@ -19,6 +19,8 @@ export interface TakeRegion {
   part: string;
   /** One integer pixel on the target run canvas, x right and y down. */
   seed: [number, number];
+  /** PNG bytes, explicitly bound to the stage source or a separate painting. */
+  reference?: { source: true; sha256: string } | { painting: string; sha256: string };
 }
 export type TakeDeclaration = TakeLayers | TakeRegion;
 export interface RegionReading {
@@ -98,7 +100,7 @@ export function deriveTakenRegion(base: Layer, donor: Layer, painting: Raster, s
 }
 
 /** Called beside whole-layer take, before assembly or any output emission. */
-export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleConfig, configPath: string, setup: SetupPainting | undefined, receipts: ReceiptLedger): Runs {
+export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleConfig, configPath: string, setup: SetupPainting | undefined, receipts: ReceiptLedger, sourcePath?: string): Runs {
   const declarations = (cfg.assemble.take ?? []).filter((item): item is TakeRegion => 'part' in item);
   if (declarations.length === 0) return runs;
   const tolerance = setup?.rgb_tolerance;
@@ -108,7 +110,6 @@ export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleCon
   if (cfg.depth !== undefined || [...runs.full.layers, ...runs.head.layers].some(layer => layer.depthSheet !== undefined)) {
     return refuse('ASSEMBLE_REGION_TAKE_BINDING', 'config.assemble.take', 'active scalar depth sheets have no region donor binding; a run without active scalar depth is required');
   }
-  const inputs = makeInputs(painting, cfg, 'region take painting');
   const lists = { full: [...runs.full.layers], head: [...runs.head.layers] };
   const notes = [...runs.notes];
   const seen = new Set<string>();
@@ -121,13 +122,27 @@ export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleCon
       return refuse('ASSEMBLE_REGION_TAKE_PART', at, `target ${key} is taken more than once; one region donor or whole-layer donor per target is required`);
     }
     seen.add(key);
+    const reference = declaration.reference;
+    if (reference === undefined) return refuse('ASSEMBLE_REGION_TAKE_REFERENCE', at, 'reference must explicitly bind source: true or painting to a PNG sha256');
+    const referencePath = 'source' in reference ? sourcePath : resolve(dirname(resolve(configPath)), reference.painting);
+    let referencePainting: Raster;
+    let referenceHash: string;
+    try {
+      if (referencePath === undefined) throw new Error('source path is absent');
+      referenceHash = fileSha256(referencePath);
+      referencePainting = readPng(referencePath);
+    } catch { return refuse('ASSEMBLE_REGION_TAKE_REFERENCE', at, 'reference must name a readable PNG with its declared sha256; a source binding requires the stage source path'); }
+    if (referenceHash !== reference.sha256 || referencePainting.width !== painting.width || referencePainting.height !== painting.height) {
+      return refuse('ASSEMBLE_REGION_TAKE_REFERENCE_MATCH', at, `reference sha256 ${referenceHash}, expected ${reference.sha256}; reference ${referencePainting.width}x${referencePainting.height}, source ${painting.width}x${painting.height}; matching hash and painting dimensions are required`);
+    }
+    const inputs = makeInputs(referencePainting, cfg, 'region take reference');
     const set = runs[declaration.run];
     const donor = readLayers(resolve(dirname(resolve(configPath)), declaration.run_dir));
     refuseIfAny(missingReceipts(receipts, editedRunImages(
       { full: donor, head: donor, single: true },
       `region take "${declaration.run}:${declaration.part}" donor "${declaration.run_dir}" `,
     )));
-    const target = declaration.run === 'head' ? inputs.head : runs.single && set.canvas.w !== set.canvas.h ? painting : inputs.full;
+    const target = declaration.run === 'head' ? inputs.head : runs.single && set.canvas.w !== set.canvas.h ? referencePainting : inputs.full;
     let supplied: Raster;
     try { supplied = readPng(resolve(dirname(resolve(configPath)), declaration.st_input)); }
     catch { return refuse('ASSEMBLE_REGION_TAKE_GEOMETRY', at, `st_input "${declaration.st_input}" must name the original readable donor input PNG so its geometry can be checked`); }
@@ -144,6 +159,9 @@ export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleCon
     const derived = deriveTakenRegion(base, material, source, declaration.seed, tolerance, at);
     lists[declaration.run] = lists[declaration.run].map(layer => layer === base ? derived.layer : layer);
     const reading: RegionReading = { part: declaration.part, run: declaration.run, run_dir: declaration.run_dir, ...derived.reading };
+    const pad = target === referencePainting ? [0, 0] : declaration.run === 'head' ? inputs.headBox! : [-inputs.padLeft, -inputs.padTop];
+    const transform = { scale: [set.canvas.w / target.width, set.canvas.h / target.height], origin: [pad[0], pad[1]], filter: 'lanczos3' };
+    notes.push(`region reference ${reading.run}:${reading.part}: sha256 ${referenceHash}; binding ${'source' in reference ? 'source' : 'painting'}; painting-to-run ${JSON.stringify(transform)}`);
     notes.push(`region take ${reading.run}:${reading.part} from ${reading.run_dir}: ${reading.pixels} run px; box [${reading.box.join(', ')}] (left, top, width, height); painting-match share ${reading.painting_match_share}; RGB tolerance ${reading.rgb_tolerance}; seed [${declaration.seed.join(', ')}], 8-connected`);
   }
   const full = { ...runs.full, layers: lists.full };

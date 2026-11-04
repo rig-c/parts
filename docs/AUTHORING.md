@@ -806,19 +806,38 @@ one seed pixel on the target run canvas (integer x right, y down).
   "run_dir": "runs/other",
   "st_input": "inputs/other_full.png",
   "part": "body",
-  "seed": [120, 240]
+  "seed": [120, 240],
+  "reference": { "painting": "inputs/painting.png", "sha256": "<SHA-256 of PNG bytes>" }
 }]
 ```
 
 The region is derived from base alpha < 128, donor alpha >= 128, and the
 maximum RGB channel difference after rounding each pixel source-over white.
 The tolerance is exactly `--requirements`' `setup_painting.rgb_tolerance`.
-A missing declaration is refused. The target input is derived as for whole-layer
-take above. Both run canvases must agree, and the supplied original donor input
+A missing tolerance declaration is refused. Each region also requires `reference`,
+with exactly one of `"source": true` (the stage's `--source`) or
+`"painting": "path/to/reference.png"` (config-relative), and `sha256`, the
+lowercase SHA-256 of that PNG's file bytes. A missing/unreadable reference and
+a hash or painting-dimension mismatch are refused by name. The separate painting
+can stay fixed while `--source` changes for projection. Its input is derived as
+for whole-layer take above. Both run canvases must agree, and the supplied original donor input
 must match the entire target input in RGBA and dimensions, establishing the same
 crop. Different crops await #973. Painting samples use the existing Lanczos3
 resize onto the run canvas. Only the 8-connected qualifying component containing
 the seed is copied. The base layer's depth and draw order stay in use.
+The reference hash, binding and painting-to-run transform are logged. For
+`scale` and `origin`, run coordinates are `(painting - origin) * scale`.
+The origin is the head crop's top-left or the negative full-input padding.
+The recorded filter is Lanczos3.
+
+A region take evaluates the pre-take assembly once as a counterfactual, retaining
+whole-layer takes. Every non-target part keeps that assembly's complete image
+and record. This contains its changes to zero everywhere, including beyond the
+mapped region plus bicubic's 2 px support, through subsequent seam operations.
+Final recomposite and error measurements use those retained parts together with
+the taken targets. The counterfactual is never written. A take adds this extra
+assembly evaluation. Builds without region takes follow the existing single
+assembly path. Target filter halos are reported separately and have no bar.
 
 No polygon, rectangle or brush input is accepted. A drawn bound is scissors.
 The log reports the derived pixel count, run-grid `[left, top, width, height]`
@@ -5122,6 +5141,9 @@ those settings. Changing a config seed alone cannot change a no-config run.
 | <a id="ASSEMBLE_TAKE_DEPTH_AMBIGUOUS"></a>`ASSEMBLE_TAKE_DEPTH_AMBIGUOUS` | different original runs have equal or null depths | use a run with distinct numeric depths; do not invent an inter-run tie order |
 | <a id="ASSEMBLE_TAKE_PLAN_ORDER"></a>`ASSEMBLE_TAKE_PLAN_ORDER` | supplied plan reverses an overlapping mixed-run pair: two-run full-layer head roles first, scalar depth within a role band (head-run and single-run rows use scalar depth); names the parts and support intersection | use the order drafted by `assemble --propose-plan`; fallback headwear follows the body and precedes the face, front hair follows the face; disjoint supports impose no plan-order constraint |
 | <a id="EDGE_PAIR_RESIDUAL"></a>`EDGE_PAIR_RESIDUAL` | report-only front/back residual candidates after visible edge composition, with pixel spans, boxes and coverage | read measured candidates and explicit skipped/unavailable reasons in `edge_residuals.json`. No pass/fail threshold is applied |
+| <a id="ASSEMBLE_REGION_TAKE_REFERENCE"></a>`ASSEMBLE_REGION_TAKE_REFERENCE` | a region reference is absent or unreadable | declare `reference` with `source: true` or `painting` and the PNG byte hash |
+| <a id="ASSEMBLE_REGION_TAKE_REFERENCE_MATCH"></a>`ASSEMBLE_REGION_TAKE_REFERENCE_MATCH` | a reference hash or painting dimensions differ | supply the declared PNG and preserve the source geometry |
+| <a id="ASSEMBLE_REGION_TAKE_CONTAINMENT"></a>`ASSEMBLE_REGION_TAKE_CONTAINMENT` | a non-target part has no pre-take counterpart | retain the same neighbour part population before and after the take |
 | <a id="ASSEMBLE_REGION_TAKE_TOLERANCE"></a>`ASSEMBLE_REGION_TAKE_TOLERANCE` | a region take has no authored `setup_painting.rgb_tolerance` | supply the same requirements file to assemble/build and check |
 | <a id="ASSEMBLE_REGION_TAKE_GEOMETRY"></a>`ASSEMBLE_REGION_TAKE_GEOMETRY` | donor and target canvases or original input RGBA differ, or the target head run is absent | supply the same crop and original input PNG. Cropped donors await #973 |
 | <a id="ASSEMBLE_REGION_TAKE_PART"></a>`ASSEMBLE_REGION_TAKE_PART` | the named plan part/run or its base/donor tag is absent, or the target is taken twice | name an existing plan part and one donor holding its tag |

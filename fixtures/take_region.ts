@@ -1,6 +1,7 @@
 /** Public generated region-take fixture. Run directories and PNGs are generated, never tracked. */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileSha256 } from '../src/editreceipt.ts';
 import { assembleConfig, C, Z, WHITE, paint, writeRun } from './assemble_fixture.ts';
 import { encodePngBytes, readPng } from '../src/raster/png.ts';
 
@@ -22,7 +23,7 @@ export function writeTakeRegionFixture(dir: string): Record<string, unknown> {
   writeFileSync(join(dir, 'painting.png'), encodePngBytes(paint(64, 64, WHITE, [body, ...face.rects])));
   const cfg = assembleConfig({ plan: [['body', 'full', 'topwear'], ['face', 'full', 'face']], extend: [], rigScale: 1, resolution: 64 });
   delete (cfg.seethrough as Record<string, unknown>).head_box;
-  (cfg.assemble as Record<string, unknown>).take = [{ run: 'full', run_dir: 'donor', st_input: 'painting.png', part: 'body', seed: [12, 40] }];
+  (cfg.assemble as Record<string, unknown>).take = [{ run: 'full', run_dir: 'donor', st_input: 'painting.png', part: 'body', seed: [12, 40], reference: { painting: 'painting.png', sha256: fileSha256(join(dir, 'painting.png')) } }];
   writeFileSync(join(dir, 'config.json'), JSON.stringify(cfg));
   // Authored fixture limit. Production takes the same value from requirements.
   writeFileSync(join(dir, 'requirements.json'), JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 1, targets: [], requirements: [], setup_painting: { rgb_tolerance: 0, regions: [{ name: 'stage', box: [0, 0, 64, 64], max_pixels: 0 }] } }));
