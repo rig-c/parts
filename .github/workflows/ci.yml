@@ -22,15 +22,12 @@ permissions:
   contents: read
 
 jobs:
-  # The selftest, in three shards (issue #395). One job could not finish it under
-  # 15 minutes: main's test job ran 17m49s on 2026-10-14 (0aaf7c7, 4 workers on
-  # 4 cores), about 3926 s of suite time on 4 cores, and readme-loop alone held
-  # a core for 1027.5 s. So the selftest's units — a suite, or one public
-  # example of a suite that builds every example — run across three jobs, as
-  # `selftest.ts`'s SHARDS assigns them, and `test` below merges their records.
-  # Issue #849 rebalances that assignment from three recent CI runs' unit clocks;
-  # its derivation is beside SHARDS. The timeout and two-worker default stay as
-  # measured; three post-change CI runs must confirm every job is under 20 min.
+  # The selftest runs in four shards (issues #395, #849, #1021). SHARDS in
+  # selftest.ts assigns every unit exactly once; test below merges the records.
+  # Issue #1021 uses PR CI unit clocks and capped case-timing samples to split
+  # check's fixture helpers into separately scheduled units. SHARDS documents
+  # the measured inputs and the estimates the next PR CI run must confirm.
+  # The two-worker default and 25-minute timeout remain unchanged.
   # A shard judges nothing: its record holds every line its units printed, and
   # the merge prints and counts them as one whole run would.
   #
@@ -44,7 +41,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ['1', '2', '3']
+        shard: ['1', '2', '3', '4']
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
