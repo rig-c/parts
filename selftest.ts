@@ -465,6 +465,7 @@ import {
   type SweepPose,
   TEXTURE_STRETCH_CEILING,
   TIP_RATIO_FLOOR,
+  TIP_TRAVEL_FLOOR,
   hangBone,
   TIP_INSTRUMENT,
   TIP_REST_RATIO_CEILING,
@@ -20563,6 +20564,66 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       "issue #995's guard: a garment the rig holds rigid on purpose must not fail TIP_OVER_ROOT by design. The line reads every handwear and bottomwear part, so the existing declaration (`not_swinging`) is what takes it out, with the reason in the line",
     );
 
+    // Issue #994 fixes the art-grid policy, exercised through the ordinary check command.
+    const gridRun = (label: string, peak: number, linked: boolean) => {
+      const home = join(dir, label);
+      writeCheckRig(home, { from: ['full:topwear', 'full:handwear-r'], peak: 0 });
+      // Transparent margins keep the translating art inside both fixed bands.
+      const image = readPng(join(home, 'parts', 'front.png'));
+      const edgeColumns = [0, 1, image.width - 2, image.width - 1];
+      for (let y = 0; y < image.height; y++) {
+        for (const x of edgeColumns) image.data[(y * image.width + x) * 4 + 3] = 0;
+      }
+      const bytes = encodePngBytes(image);
+      writeFileSync(join(home, 'parts', 'front.png'), bytes);
+      writeFileSync(join(home, 'images', 'front.png'), bytes);
+      const parts = readParts(join(home, 'parts.json'));
+      parts.parts.find((part) => part.name === 'front')!.opaque_px = image.data.filter((value, index) => index % 4 === 3 && value > OPAQUE_ALPHA_ABOVE).length;
+      writeFileSync(join(home, 'parts.json'), serializeParts(parts));
+      const rig = JSON.parse(readFileSync(join(home, 'rig.json'), 'utf8')) as { bones: Array<Record<string, unknown>>; slots: Array<{ name: string; bone: string }> };
+      const motion = JSON.parse(readFileSync(join(home, 'motion.json'), 'utf8')) as { animations: { idle: { tracks: Array<Record<string, unknown>> } } };
+      rig.bones.push({ name: 'swing', parent: 'root', x: 0, y: 0 });
+      rig.slots.find((slot) => slot.name === 'front')!.bone = 'swing';
+      motion.animations.idle.tracks.push({ bone: 'swing', property: 'translatex', keys: [{ t: 0, v: [0] }, { t: 0.5, v: [peak] }, { t: 1, v: [0] }] });
+      // A lone rotate-keyed swing is in #987's link set even with a held rotation.
+      if (linked) motion.animations.idle.tracks.push({ bone: 'swing', property: 'rotate', keys: [{ t: 0, v: [0] }, { t: 1, v: [0] }] });
+      writeFileSync(join(home, 'rig.json'), JSON.stringify(rig));
+      writeFileSync(join(home, 'motion.json'), JSON.stringify(motion));
+      const result = runCli(['check', '--rig', home, '--out', join(dir, `${label}-out`)]);
+      const figure = readJsonFile(join(dir, `${label}-out`, 'check.json'));
+      const line = figure?.TIP_OVER_ROOT as { status?: string; parts?: Array<Record<string, unknown>> } | undefined;
+      return { ...result, line, row: line?.parts?.find((row) => row.part === 'front') };
+    };
+    const underGrid = gridRun('tip-grid-under', 0.49, true);
+    const overGrid = gridRun('tip-grid-over', 0.51, true);
+    const stiffGrid = hungRun('tip-grid-stiff', { carry: 4, swing: 0, pivot: 'top', physics: { strength: 400, inertia: 0.1 } });
+    say(
+      'CK1050_LINK_TRAVEL_BELOW_HALF_A_RIG_PIXEL_SKIPS_AND_ABOVE_IT_KEEPS_THE_RATIO_VERDICT',
+      underGrid.line?.status === 'SKIP' && tipNum(underGrid.row, 'tip_rig_px') > 0.48 && tipNum(underGrid.row, 'tip_rig_px') < 0.5 &&
+        underGrid.out.includes('root 0.49 rig px') && underGrid.out.includes('tip 0.49 rig px') && underGrid.out.includes('floor 0.5 rig px') &&
+        underGrid.row?.travel_floor_rig_px === 0.5 && underGrid.row?.unmeasured === "below half a rig pixel: the motion does not show on the art's own grid" &&
+        overGrid.line?.status === 'FAIL' && tipNum(overGrid.row, 'tip_rig_px') > 0.5 && tipNum(overGrid.row, 'tip_rig_px') < 0.52 &&
+        tipNum(overGrid.row, 'ratio') < TIP_RATIO_FLOOR && !('unmeasured' in (overGrid.row ?? {})) &&
+        lineStatus(stiffGrid.fig, 'TIP_OVER_ROOT') === 'SKIP' && stiffGrid.row?.travel_floor_rig_px === 0.5 && stiffGrid.fail === null,
+      `under ${JSON.stringify(underGrid.line)}; over ${JSON.stringify(overGrid.line)}; stiff ${JSON.stringify(stiffGrid.line)}`,
+      'issue #994 fixes the art-grid threshold at 0.5 rig px before measurement; a low-travel link is unmeasured and retains both travels and the floor, including when every row is unmeasured',
+    );
+    const tinyRigid = gridRun('tip-grid-rigid', 0.01, false);
+    const translatedGrid = judged('tip-grid-translate-only', { from: HUNG_FROM, peak: 0, carried: { breath: 0.01, sway: 0.1 } });
+    const tinyLine = tinyRigid.line;
+    const translatedLine = translatedGrid.fig?.TIP_OVER_ROOT as { status?: string; parts?: Array<Record<string, unknown>> } | undefined;
+    const translatedRow = translatedLine?.parts?.find((row) => row.part === 'back');
+    say(
+      'CK1051_RIGID_CARRIAGE_FAILS_BEFORE_THE_FLOOR_AND_TRANSLATE_ONLY_DEFORMATION_KEEPS_ITS_VERDICT',
+      tinyLine?.status === 'FAIL' && tinyLine?.parts?.[0]?.world_tip_rig_px === 0.01 &&
+        tinyLine.parts[0].root_rig_px === 0 && tinyLine.parts[0].tip_rig_px === 0 &&
+        rigidS.fail !== null && rigidS.row?.root_rig_px === 0 && rigidS.row.tip_rig_px === 0 &&
+        translatedLine?.status === 'PASS' && tipNum(translatedRow, 'tip_rig_px') < 0.5 && tipNum(translatedRow, 'ratio') >= TIP_RATIO_FLOOR &&
+        !('unmeasured' in (translatedRow ?? {})),
+      `rigid world 0.01 ${JSON.stringify(tinyLine)}; exact rigid ${JSON.stringify(rigidS.row)}; translate-only ${JSON.stringify(translatedLine)}`,
+      'issue #994 holds rigid carriage first, so world magnitude never hides a carrier-frame 0 / 0 failure, while translate-only deformation is outside the link-only SKIP; CK237 separately holds the existing rests relation',
+    );
+
     // Issue #245: a tip at rest. CK116's skirt with no sway is the case — its waistband rides `chest`, which the idle
     // lifts 4 rig px, its hem on `hem`, which the idle does not move — so the root moves and the tip rests. Read as
     // hanging it fails (CK116); declared rests it is held to the opposite relation, tip / root <= 1, and passes. The
@@ -20586,6 +20647,18 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const restBare = restsRun('rest-still-bare', 0, null);
     const restAtRow = restRow(restAt.fig);
     const restBareRow = restRow(restBare.fig);
+    const rigidRestReq = join(dir, 'tip-grid-rigid-rests.json');
+    writeFileSync(rigidRestReq, JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [], rests: ['front'] }));
+    const rigidRest = runCli(['check', '--rig', join(dir, 'tip-grid-rigid'), '--out', join(dir, 'tip-grid-rigid-rests-out'), '--requirements', rigidRestReq]);
+    const rigidRestFig = readJsonFile(join(dir, 'tip-grid-rigid-rests-out', 'check.json'));
+    say(
+      'CK1052_STRUCTURAL_ZERO_TRAVEL_FAILS_BEFORE_THE_DECLARED_RESTS_RELATION',
+      lineStatus(restAt.fig, 'TIP_OVER_ROOT') === 'PASS' && lineStatus(rigidRestFig, 'TIP_OVER_ROOT') === 'FAIL' &&
+        (failLine(rigidRest.out, 'CHECK_TIP_OVER_ROOT') ?? '').includes('it rides that bone whole') &&
+        (failLine(rigidRest.out, 'CHECK_TIP_OVER_ROOT') ?? '').includes('declare it in `not_swinging` if it is meant to ride rigidly'),
+      `moving root with resting tip ${JSON.stringify(restLine(restAt.fig))}; rigid carriage ${JSON.stringify(restLine(rigidRestFig))}`,
+      'issue #994 puts the structural zero guard first, including a declared rests part, while CK237 keeps the nonzero-root rests relation',
+    );
     say(
       'CK237_A_ROOT_THAT_MOVES_UNDER_A_TIP_AT_REST_PASSES_TIP_OVER_ROOT_DECLARED_RESTS_AND_FAILS_IT_UNDECLARED',
       lineStatus(restAt.fig, 'TIP_OVER_ROOT') === 'PASS' &&
@@ -29435,7 +29508,7 @@ function runChainSuite(_corpus: string | null = null, pre = false): number | nul
         const vRig = runCli(['rig', '--config', join(vDir, 'config.json'), '--parts', out, '--out', join(vDir, 'rig')]);
         const vChk = runCli(['check', '--rig', join(vDir, 'rig'), '--parts', out, '--out', join(vDir, 'check')]);
         const vFig = readJsonFile(join(vDir, 'check', 'check.json'));
-        const vTip = vFig?.TIP_OVER_ROOT as { status?: string; instrument?: string; parts?: Array<{ part: string; hang_from?: string | null; ratio: number | null; root_rig_px: number; tip_rig_px: number; world_ratio: number | null }> } | undefined;
+        const vTip = vFig?.TIP_OVER_ROOT as { status?: string; instrument?: string; parts?: Array<{ part: string; hang_from?: string | null; ratio: number | null; root_rig_px: number; tip_rig_px: number; world_ratio: number | null; unmeasured?: string; travel_floor_rig_px?: number }> } | undefined;
         const row = vTip?.parts?.find((p) => p.part === 'bottomwear');
         const vParts = readParts(join(out, 'parts.json'));
         const rec = vParts.parts.find((p) => p.name === 'bottomwear') as PartRecord;
@@ -29449,24 +29522,29 @@ function runChainSuite(_corpus: string | null = null, pre = false): number | nul
           return halfTravels(art, rec, vStage, attachmentPoses(join(set.dir, GEOMETRY_FILE), set.written).map((f) => f.get('bottomwear') ?? null));
         });
         const ratios = atMax.map((t) => (t === null || t.root === null || t.tip === null ? null : Math.round((t.tip / t.root) * 1000) / 1000));
-        const wantFail = key === 'scarf';
-        const byBar = row?.ratio !== null && row?.ratio !== undefined && (wantFail ? row.ratio < TIP_RATIO_FLOOR : row.ratio >= TIP_RATIO_FLOOR);
+        // Issue #994 keeps the pre-#262 chest-segment plant as an explicit SKIP control
+        // when both halves travel under half a rig pixel. Its geometry comparison still holds at both render sizes.
+        const expectSkip = key === 'scarf';
+        const byBar = row?.ratio !== null && row?.ratio !== undefined && (expectSkip ? row.ratio < TIP_RATIO_FLOOR : row.ratio >= TIP_RATIO_FLOOR);
         say(
-          `${wantFail ? 'CH906_A_TIP_THAT_TRULY_DOES_NOT_OUT_TRAVEL_ITS_ROOT_FAILS_TIP_OVER_ROOT_AT_EVERY_RENDER_SIZE' : 'CH905_A_HEM_UNDER_A_FIFTH_OF_A_FRAME_PIXEL_READS_ONE_TIP_OVER_ROOT_AT_EVERY_RENDER_SIZE_AND_PASSES_BY_THE_BAR'}[${key}]`,
+          `${expectSkip ? 'CH906_A_PART_BELOW_HALF_A_RIG_PIXEL_SKIPS_AT_EVERY_RENDER_SIZE_WITH_IDENTICAL_GEOMETRY' : 'CH905_A_HEM_UNDER_A_FIFTH_OF_A_FRAME_PIXEL_READS_ONE_TIP_OVER_ROOT_AT_EVERY_RENDER_SIZE_AND_PASSES_BY_THE_BAR'}[${key}]`,
           vRig.status === 0 &&
-            vChk.status === (wantFail ? 1 : 0) &&
+            vChk.status === 0 &&
             vTip?.instrument === TIP_INSTRUMENT &&
             row?.hang_from === 'hip' &&
-            vTip?.status === (wantFail ? 'FAIL' : 'PASS') &&
+            vTip?.status === 'PASS' &&
             byBar &&
             atMax.every((t) => t !== null) &&
             atMax[0]?.root === atMax[1]?.root &&
             atMax[0]?.tip === atMax[1]?.tip &&
             ratios.every((r) => r === row?.world_ratio) &&
-            (!wantFail || ((failLine(vChk.out, 'CHECK_TIP_OVER_ROOT')?.includes('part "bottomwear"') ?? false) && (failLine(vChk.out, 'CHECK_TIP_OVER_ROOT')?.includes('the root travels with the breath (') ?? false) && (failLine(vChk.out, 'CHECK_TIP_OVER_ROOT')?.includes('it is carried by `chest`') ?? false))),
-          `${variant}: rig exit ${vRig.status}, check exit ${vChk.status}, TIP_OVER_ROOT ${vTip?.status} (instrument ${vTip?.instrument}), bottomwear against ${row?.hang_from} root ${row?.root_rig_px} tip ${row?.tip_rig_px} rig px, ratio ${row?.ratio} against ${TIP_RATIO_FLOOR}, world ratio ${row?.world_ratio}; from the geometry at --max 620 and 660: ${atMax.map((t, i) => `${[620, 660][i]}: root ${t?.root} tip ${t?.tip}`).join('; ')} (${atMax[0]?.root === atMax[1]?.root && atMax[0]?.tip === atMax[1]?.tip ? 'bit-identical' : 'DIFFERENT'})${wantFail ? `; ${failLine(vChk.out, 'CHECK_TIP_OVER_ROOT')?.trim().slice(-330) ?? 'no CHECK_TIP_OVER_ROOT line'}` : ''}`,
-          wantFail
-            ? "the planted negative of CH905, on real art: scarf's short skirt on the proposal's lattice with the chest segment the proposer drafted before issue #262. Its art in the lower half truly travels less than 1.4725 times the upper half's — the part rendered alone at --max 8000 converged on about 1.27 from above at the breath of issue #118 — and the pixel reading had passed it at 640 (4.537) by the grid; the geometric one fails it at every size, naming the part and, since #262, the bone that carries its root (the line's planted positive on real art)"
+            (!expectSkip || (row?.unmeasured === "below half a rig pixel: the motion does not show on the art's own grid" &&
+              row.travel_floor_rig_px === TIP_TRAVEL_FLOOR &&
+              atMax.every((t) => t !== null && t.root !== null && t.tip !== null && Math.max(t.root, t.tip) < TIP_TRAVEL_FLOOR) &&
+              failLine(vChk.out, 'CHECK_TIP_OVER_ROOT') === null)),
+          `${variant}: rig exit ${vRig.status}, check exit ${vChk.status}, TIP_OVER_ROOT ${vTip?.status} (instrument ${vTip?.instrument}), bottomwear against ${row?.hang_from} root ${row?.root_rig_px} tip ${row?.tip_rig_px} rig px, ratio ${row?.ratio} against ${TIP_RATIO_FLOOR}, world ratio ${row?.world_ratio}; from the geometry at --max 620 and 660: ${atMax.map((t, i) => `${[620, 660][i]}: root ${t?.root} tip ${t?.tip}`).join('; ')} (${atMax[0]?.root === atMax[1]?.root && atMax[0]?.tip === atMax[1]?.tip ? 'bit-identical' : 'DIFFERENT'})${expectSkip ? `; unmeasured ${row?.unmeasured}, floor ${row?.travel_floor_rig_px} rig px` : ''}`,
+          expectSkip
+            ? "issue #994 keeps the pre-#262 chest-segment plant as an explicit SKIP control when both halves travel under half a rig pixel. Its geometry comparison still holds at both render sizes, and its below-bar ratio is retained in the unmeasured row"
             : "issue #118's reproduction: the same rig the pixel reading failed at --max 620, 640 and 650 and passed elsewhere; from the geometry the figure is one number at every render size and the bar decides it, not the grid",
         );
       }

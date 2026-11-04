@@ -236,6 +236,8 @@ export const BLINK_PATCH_LEVEL = SEAM_PX_LEVEL;
 /** The smallest lag the reading resolves, in cycles: phases are written to three places. */
 export const CHAIN_LAG_MIN_STEP = 0.001;
 export const TIP_RATIO_FLOOR = 1.4725;
+/** Issue #994 sets half a rig pixel as the floor on the larger half travel. */
+export const TIP_TRAVEL_FLOOR = 0.5;
 /**
  * Issue #245: the bar a part the scene declares `rests` is held to — its tip
  * half travels no further than its root half, tip / root <= 1, read at the
@@ -7908,6 +7910,11 @@ export const TIP_INSTRUMENT = 'geometry, carrier frame';
  * nothing or the walk leaves the tree, and the part is then read in the world.
  */
 export function hangBone(rig: Record<string, unknown>, motion: Record<string, unknown>, part: string): string | null {
+  return tipHang(rig, motion, part).bone;
+}
+
+/** The same walk also identifies a link below the carrier for the art-grid policy. */
+function tipHang(rig: Record<string, unknown>, motion: Record<string, unknown>, part: string): { bone: string | null; onLink: boolean } {
   const bones = (Array.isArray(rig.bones) ? rig.bones : []).filter(isRecord).filter((b) => typeof b.name === 'string');
   const parent = new Map(bones.map((b) => [String(b.name), typeof b.parent === 'string' ? b.parent : null]));
   const upFrom = (b: string): string[] => {
@@ -7916,10 +7923,10 @@ export function hangBone(rig: Record<string, unknown>, motion: Record<string, un
     return path;
   };
   const bound = [...boundBones(rig, part)];
-  if (bound.length === 0) return null;
+  if (bound.length === 0) return { bone: null, onLink: false };
   const paths = bound.map(upFrom);
   const common = paths[0].find((b) => paths.every((p) => p.includes(b)));
-  if (common === undefined) return null;
+  if (common === undefined) return { bone: null, onLink: false };
   // A link: a bone of a chain CHAIN_LAG reads, or a bone a physics constraint drives. The rig stage keys a chain's
   // `<link>_ctl` and binds the mesh to its child the physics drives, and a physics-only chain has no keys at all, so
   // both are walked up through until the body bone that carries them.
@@ -7967,7 +7974,8 @@ export function hangBone(rig: Record<string, unknown>, motion: Record<string, un
     seen.add(at);
     at = parent.get(at) ?? null;
   }
-  return at;
+  const onLink = paths.some((path) => path.slice(0, at === null ? path.length : path.indexOf(at)).some((b) => links.has(b)));
+  return { bone: at, onLink };
 }
 
 /**
@@ -8032,7 +8040,8 @@ export function carrierFrame(geo: IdleGeometry | null, bone: string | null): ((i
  * body's carry is not scored as a tip that moves less; the row names that bone
  * (`hang_from`) and keeps the world reading (`world_*`). A half that travels 0
  * at the line's precision is 0, so a part that rides its carrier whole reads
- * 0 / 0 and fails, not a ratio of round-off.
+ * 0 / 0 and fails, not a ratio of round-off. Issue #994 applies the fixed
+ * 0.5 rig px art-grid policy to max(root, tip) of a link part after this guard.
  */
 function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems: Problem[], excepted: TipExceptions = NO_TIP_EXCEPTIONS): JudgementLine {
   const swing = partsTagged(inp.parts, SWING_TAGS);
@@ -8067,6 +8076,7 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
   }
   const rows: Array<Record<string, unknown>> = [];
   let measured = 0;
+  let belowGrid = 0;
   let failed = false;
   for (const p of swing) {
     if (excepted.not_swinging.includes(p.name)) {
@@ -8085,7 +8095,8 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
     const shown = poses.map((f) => f.get(p.name) ?? null);
     const w = halfTravels(art, p, inp.stage, shown, rises ? 'up' : 'down');
     // Issue #987: the halves are read in the frame of the bone the part hangs from; the world reading rides beside them.
-    const hangFound = hangBone(inp.rig, inp.motion, p.name);
+    const hanging = tipHang(inp.rig, inp.motion, p.name);
+    const hangFound = hanging.bone;
     const frameOf = carrierFrame(idleGeo, hangFound);
     const hang = frameOf === null ? null : hangFound;
     const toCarrier = frameOf ?? ((_i: number, posed: readonly number[]) => posed.slice());
@@ -8098,19 +8109,27 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
       rows.push({ part: p.name, ...said, unmeasured: shown[0] === null ? 'its slot shows no attachment on idle frame 0' : `on idle frame 0 the ${half} half of its box holds no art its attachment draws` });
       continue;
     }
-    measured++;
     // Issue #987: a half that does not move against its carrier, read at the line's precision, is 0 and not the
     // arithmetic's residue — a rigid part reads 0 / 0, not a ratio of two round-off figures.
     const t = { root: round3(c.root) === 0 ? 0 : c.root, tip: round3(c.tip) === 0 ? 0 : c.tip };
     const ratio = t.root > 0 ? round3(t.tip / t.root) : null;
     const worldRatio = w.root > 0 ? round3(w.tip / w.root) : null;
     // Issue #245: a resting tip is held to the opposite relation — no further than its root, at the line's precision.
-    const ok = rests ? (ratio === null ? t.tip === 0 : ratio <= TIP_REST_RATIO_CEILING) : ratio === null ? t.tip > 0 : ratio >= TIP_RATIO_FLOOR;
+    const rigid = t.root === 0 && t.tip === 0;
+    const ok = !rigid && (rests ? (ratio === null ? t.tip === 0 : ratio <= TIP_REST_RATIO_CEILING) : ratio === null ? t.tip > 0 : ratio >= TIP_RATIO_FLOOR);
     rows.push({ part: p.name, ...said, hang_from: hang, root_rig_px: round3(t.root), tip_rig_px: round3(t.tip), ratio, world_root_rig_px: round3(w.root), world_tip_rig_px: round3(w.tip), world_ratio: worldRatio });
+    // Structural 0 / 0 stays a failure before the link-only magnitude policy (issue #994).
+    if (!rigid && hanging.onLink && Math.max(c.root, c.tip) < TIP_TRAVEL_FLOOR) {
+      belowGrid++;
+      rows[rows.length - 1] = { ...rows[rows.length - 1], travel_floor_rig_px: TIP_TRAVEL_FLOOR,
+        unmeasured: "below half a rig pixel: the motion does not show on the art's own grid" };
+      continue;
+    }
+    measured++;
     const against = hang === null ? 'in the world' : `against \`${hang}\`, the bone it hangs from`;
     const inWorld = hang === null ? '' : `; in the world ${round3(w.tip)} and ${round3(w.root)}, ratio ${worldRatio ?? 'undefined'}`;
     const travels = `the art in its ${tipHalf} half travels ${round3(t.tip)} rig px and in its ${rootHalf} half ${round3(t.root)} rig px ${against}`;
-    if (!ok && rests) {
+    if (!ok && rests && !rigid) {
       failed = true;
       problems.push({
         code: 'CHECK_TIP_OVER_ROOT',
@@ -8141,7 +8160,7 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
       problems.push({
         code: 'CHECK_TIP_OVER_ROOT',
         object: `part "${p.name}", box ${p.x},${p.y} ${p.w}x${p.h} rig px, posed by the idle's geometry${rises ? ', declared rises' : ''}`,
-        detail: `${travels} (ratio ${ratio ?? (hang === null ? 'undefined: nothing moves' : `undefined: nothing moves against \`${hang}\``)}${inWorld}); a ratio >= ${TIP_RATIO_FLOOR} is required — ${misplaced ?? why}`,
+        detail: `${travels} (ratio ${ratio ?? (hang === null ? 'undefined: nothing moves' : `undefined: nothing moves against \`${hang}\``)}${inWorld}); a ratio >= ${TIP_RATIO_FLOOR} is required — ${misplaced ?? why}${rigid && rests ? '; declare it in `not_swinging` if it is meant to ride rigidly' : ''}`,
       });
     }
   }
@@ -8150,8 +8169,17 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
     ...(excepted.rises.length === 0 ? {} : { declared_rises: swing.filter((p) => excepted.rises.includes(p.name)).map((p) => p.name) }),
     ...(excepted.rests.length === 0 ? {} : { declared_rests: swing.filter((p) => excepted.rests.includes(p.name)).map((p) => p.name) }),
   };
-  if (measured === 0) return { status: 'SKIP', reason: `none of ${quoteParts(swing)} could be measured: ${rows.map((r) => `${String(r.part)}: ${String(r.unmeasured)}`).join('; ')}` };
-  return { status: failed ? 'FAIL' : 'PASS', ...declared, instrument: TIP_INSTRUMENT, parts: rows, ratio_floor: TIP_RATIO_FLOOR, ...(excepted.rests.length === 0 ? {} : { rest_ratio_ceiling: TIP_REST_RATIO_CEILING }) };
+  const figures = { ...declared, instrument: TIP_INSTRUMENT, parts: rows, ratio_floor: TIP_RATIO_FLOOR,
+    ...(excepted.rests.length === 0 ? {} : { rest_ratio_ceiling: TIP_REST_RATIO_CEILING }) };
+  if (measured === 0) {
+    const reasons = rows.map((r) => {
+      const travel = r.travel_floor_rig_px === undefined ? '' : `; root ${String(r.root_rig_px)} rig px, tip ${String(r.tip_rig_px)} rig px, floor ${String(r.travel_floor_rig_px)} rig px`;
+      return `${String(r.part)}: ${String(r.unmeasured)}${travel}`;
+    });
+    return { status: 'SKIP', reason: `none of ${quoteParts(swing)} could be measured: ${reasons.join('; ')}`,
+      ...(belowGrid === 0 ? {} : figures) };
+  }
+  return { status: failed ? 'FAIL' : 'PASS', ...figures };
 }
 
 /**
