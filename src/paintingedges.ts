@@ -78,6 +78,9 @@ import { type Mask, newMask, type Raster, RasterError } from './raster/types.ts'
  * part, BEHIND is made opaque there in `Cb` (in the painting's own colour
  * where FRONT's alpha is 0), so the flat composite at p is the painting, the
  * rim stays FRONT's, and BEHIND's hidden surface past the window is untouched.
+ * Where BEHIND already has alpha at least {@link EDGE_OWNER_ALPHA}, its own
+ * pre-step RGB is the fill colour. FRONT is unmixed against that same colour,
+ * including the clamping error calculation, to preserve the pair's composite.
  *
  * A pixel is left as it was — and counted, by reason — when a part drawn in
  * front of FRONT, or between BEHIND and FRONT, has alpha above
@@ -491,11 +494,16 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
   decisions.forEach((q, k) => {
     const s = q.p * 4;
     const P = [srcr.data[s], srcr.data[s + 1], srcr.data[s + 2]];
-    const unmixAt = (c: number, a: number): number => Math.min(255, Math.max(0, Math.round(q.cb[c] + ((P[c] - q.cb[c]) * 255) / a)));
+    // An existing BEHIND surface keeps its own colour. Unmix FRONT against
+    // that same surface so the pair still reconstructs the painting.
+    const cb = q.behind >= 0 && parts[q.behind].data[s + 3] >= EDGE_OWNER_ALPHA
+      ? [parts[q.behind].data[s], parts[q.behind].data[s + 1], parts[q.behind].data[s + 2]]
+      : q.cb;
+    const unmixAt = (c: number, a: number): number => Math.min(255, Math.max(0, Math.round(cb[c] + ((P[c] - cb[c]) * 255) / a)));
     // FRONT's colour is clamped to 0..255, so a pixel the two colours cannot mix at that coverage (a painted line darker or
     // lighter than both) would miss the painting: FRONT's coverage rises to the least that brings the composite within half
     // the contrast floor of it (at full coverage it is the painting).
-    const miss = (a: number): number => Math.max(...[0, 1, 2].map((c) => Math.abs(Math.round((unmixAt(c, a) * a + q.cb[c] * (255 - a)) / 255) - P[c])));
+    const miss = (a: number): number => Math.max(...[0, 1, 2].map((c) => Math.abs(Math.round((unmixAt(c, a) * a + cb[c] * (255 - a)) / 255) - P[c])));
     let alpha = alphaOf[k];
     if (alpha > 0 && alpha < 255) while (alpha < 255 && 2 * miss(alpha) > EDGE_CONTRAST) alpha++;
     if (alpha >= 255 - OPAQUE_ALPHA_ABOVE) alpha = 255;
@@ -512,7 +520,7 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
     else plan(q.front, q.p, unmix(0), unmix(1), unmix(2), alpha);
     if (q.behind >= 0 && alpha < 255) {
       if (alpha === 0) plan(q.behind, q.p, P[0], P[1], P[2], 255);
-      else plan(q.behind, q.p, q.cb[0], q.cb[1], q.cb[2], 255);
+      else plan(q.behind, q.p, cb[0], cb[1], cb[2], 255);
       fills[q.behind].set(q.p, q.front);
     }
   });
