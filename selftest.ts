@@ -43116,10 +43116,29 @@ function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | nu
   ].map((args) => refusalFaults(child(args, 30_000), 'ASSEMBLE_STAGE_SELECTOR:', 2));
   const refusedLines: Array<[readonly string[], string]> = [
     [['--unknown-flag'], '"--unknown-flag" is no flag of this run'],
-    [[ONLY_FLAG], `${ONLY_FLAG} needs a value`],
+    [['stray'], '"stray" follows no flag; this run takes no positional argument'],
+    ...RUN_FLAGS.flatMap(([flag]): Array<[readonly string[], string]> => [
+      [[flag], `${flag} needs a value`],
+      [[flag, ''], `${flag} needs a value`],
+      [[flag, ONLY_FLAG, 'png'], `${flag} needs a value`],
+      [[flag, 'one', flag, 'two'], `${flag} was given twice`],
+    ]),
+    [[ONLY_FLAG, 'png', MERGE_FLAG, 'unused'], `${ONLY_FLAG} and ${SHARD_FLAG} or ${MERGE_FLAG}`],
+    [[SHARD_FLAG, 'no-such-shard', RECORD_FLAG, 'unused.json'], 'is no shard; the shards are '],
+    [[SHARD_FLAG, '1'], `${SHARD_FLAG} <name> takes ${RECORD_FLAG}`],
+    [[RECORD_FLAG, 'unused.json'], `${SHARD_FLAG} <name> takes ${RECORD_FLAG}`],
+    [[MERGE_FLAG, 'unused', SHARD_FLAG, '1', RECORD_FLAG, 'unused.json'], `${SHARD_FLAG} <name> takes ${RECORD_FLAG}`],
+    [[MERGE_FLAG, 'unused', RECORD_FLAG, 'unused.json'], `${SHARD_FLAG} <name> takes ${RECORD_FLAG}`],
+    [['--pre', '--unknown-flag'], '"--unknown-flag" is no flag of this run'],
+    [['--pre', ONLY_FLAG, 'no-such-suite'], '"no-such-suite", which is no suite of this run; the suites are '],
+    [['--pre', ONLY_FLAG, [...keys, TALLY_SUITE].join(',')], 'selftest:pre cannot select the full tree; its full verdict belongs to PR CI'],
+    ...[ONLY_FLAG, SUMMARY_JSON_FLAG].flatMap((flag): Array<[readonly string[], string]> => [
+      [['--pre', flag], `${flag} needs a value`],
+      [['--pre', flag, ''], `${flag} needs a value`],
+      [['--pre', flag, 'one', flag, 'two'], `${flag} was given twice`],
+    ]),
     [[ONLY_FLAG, 'png,,tree'], 'holds an empty name between its commas'],
     [[ONLY_FLAG, 'png,png'], 'names the suite "png" twice'],
-    [[ONLY_FLAG, 'png', ONLY_FLAG, 'tree'], `${ONLY_FLAG} was given twice`],
     [['--suite', 'assemble'], '"--suite" is no flag of this run'],
     [[ONLY_FLAG, 'no-such-suite'], '"no-such-suite", which is no suite of this run; the suites are '],
     [[ONLY_FLAG, 'png', SHARD_FLAG, SHARDS[0][0], RECORD_FLAG, 'unused.json'], `${ONLY_FLAG} and ${SHARD_FLAG} or ${MERGE_FLAG} each choose which suites run`],
@@ -54677,7 +54696,13 @@ async function preMain(argv: readonly string[]): Promise<void> {
   const keys = [...SUITES.map(([key]) => key), TALLY_SUITE];
   const read = readOnlyList(args.get(ONLY_FLAG) ?? PRE_SUITES.join(','), keys);
   if (Array.isArray(read)) refuseArgs(read);
-  const selected = [...preSuiteSelection([...read]).filter(k => k !== TALLY_SUITE), TALLY_SUITE];
+  let selected: string[];
+  try {
+    selected = [...preSuiteSelection([...read]).filter(k => k !== TALLY_SUITE), TALLY_SUITE];
+  } catch (err) {
+    console.error(`selftest:pre: INCOMPLETE — ${(err as Error).message}`);
+    process.exit(SELFTEST_USAGE_EXIT);
+  }
   if (!exampleKeys().fetched.includes('demo')) {
     console.error('selftest:pre: INCOMPLETE — missing demo example inputs; run bun run fetch-examples. Full forms and full verdict: PR CI.');
     process.exitCode = 2;
@@ -55248,7 +55273,7 @@ async function shardMain(shard: string, record: string): Promise<void> {
   const mine = SHARDS.find(([n]) => n === shard)?.[1];
   if (mine === undefined) {
     console.error(`selftest: ${SHARD_FLAG} ${JSON.stringify(shard)} is no shard; the shards are ${SHARDS.map(([n]) => `"${n}"`).join(', ')}`);
-    process.exit(2);
+    process.exit(SELFTEST_USAGE_EXIT);
   }
   const corpus = corpusDir();
   const jobs = workerCount();
