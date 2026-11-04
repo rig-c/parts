@@ -186,10 +186,11 @@ export function diffComponentsCommand(args: string[]): void {
   const parts = readParts(partsPath);
   const placed = parts.parts.map(record => ({ record, image: diffPng(bytes(join(dirname(partsPath), 'parts', `${record.name}.png`)).bytes, record.name) }));
   const stack = bytes(flags.get('--stack')!), painting = bytes(flags.get('--painting')!);
+  const reference = diffPng(painting.bytes, painting.path);
+  if (parts.rig_size[0] !== reference.width || parts.rig_size[1] !== reference.height) inputFailure('parts.rig_size', `is ${parts.rig_size[0]}x${parts.rig_size[1]}; painting ${reference.width}x${reference.height} is required, with no resampling`);
   let inside: Uint8Array | null = null;
   if (flags.has('--figure')) {
     const image = diffPng(bytes(flags.get('--figure')!).bytes, '--figure');
-    const reference = diffPng(painting.bytes, painting.path);
     if (image.width !== reference.width || image.height !== reference.height) inputFailure('--figure', `is ${image.width}x${image.height}; painting ${reference.width}x${reference.height} is required, with no resampling`);
     inside = new Uint8Array(image.width * image.height);
     for (let p = 0; p < inside.length; p++) {
