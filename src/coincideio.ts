@@ -6,12 +6,12 @@ import { officialRenderer, sourceSizeProblem, type CheckInputs } from './check.t
 import { supportReport, unownedSupport, SUPPORT_GRID_CODE, type SupportPart, type SupportReport } from './coincide.ts';
 import { refuseIfAny } from './errors.ts';
 import { readPng } from './raster/png.ts';
-import { newRaster, type Mask } from './raster/types.ts';
+import { assertBinary, newRaster, type Mask, type Raster } from './raster/types.ts';
 import { readSupportDomains } from './supportdomains.ts';
 
 /** The setup candidate is already built by check. Only alpha callbacks are
  * sampled here; no additional rigc build/render or renderFrame is run. */
-export function observeSupport(build: string, input: CheckInputs, supportSource?: string): SupportReport {
+export function observeSupport(build: string, input: CheckInputs, supportSource?: string, nativeFigure?: Mask): SupportReport {
   const width = input.stage.width, height = input.stage.height;
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0 ||
     (input.parts !== null && (input.parts.rig_size[0] !== width || input.parts.rig_size[1] !== height))) refuseIfAny([{ code: SUPPORT_GRID_CODE, object: 'support native canvas', detail: `stage ${width}x${height} must match the positive integer parts.json grid ${JSON.stringify(input.parts?.rig_size)}` }]);
@@ -45,22 +45,35 @@ export function observeSupport(build: string, input: CheckInputs, supportSource?
   const project = api.projector(viewport), union: Mask = { width, height, data: new Uint8Array(width * height) };
   for (const piece of pose.pieces) api.rasterisePiece(api.pageFor(candidate.pages, piece), piece, project, viewport,
     (x, y, _r, _g, _b, a) => { if (a >= 128) union.data[y * width + x] = 1; });
-  const source = input.source?.painting ?? (supportSource === undefined ? null : readPng(supportSource));
-  let figure: Mask | null = null;
+  if (nativeFigure !== undefined && (nativeFigure.width !== width || nativeFigure.height !== height || nativeFigure.data.length !== width * height)) refuseIfAny([{ code: SUPPORT_GRID_CODE, object: 'transient support figure', detail: `requires ${width}x${height} native cells` }]);
+  if (nativeFigure !== undefined) assertBinary('transient support figure', nativeFigure);
+  const source = nativeFigure !== undefined ? null : input.source?.painting ?? (supportSource === undefined ? null : readPng(supportSource));
+  let figure: Mask | null = nativeFigure ?? null;
   if (source !== null) {
     const mismatch = sourceSizeProblem(source.width, source.height, input.stage, input.parts?.scale_rig_per_source ?? null);
     if (mismatch !== null) refuseIfAny([{ code: SUPPORT_GRID_CODE, object: 'support painting', detail: mismatch }]);
+    figure = supportFigure(source, width, height);
+  }
+  report.unowned = unownedSupport(width, height, [{ name: 'setup union', mask: union }], figure);
+  report.status = report.pairs.some(p => (p.boundary_length_px ?? 0) > 0) || (report.unowned.area_px ?? 0) > 0 ? 'WARN' : report.coverage.measured > 0 ? 'REPORTED' : 'UNCLASSIFIED';
+  return report;
+}
+
+/** Reuse assembly's rig-sized painting only when its alpha is fully opaque.
+ * Transparent inputs retain source-over-white before the Lanczos resize. */
+export function supportFigure(source: Raster, width: number, height: number, opaquePainting?: Raster): Mask {
+  let painting = opaquePainting;
+  for (let p = 3; painting !== undefined && p < source.data.length; p += 4) if (source.data[p] !== 255) painting = undefined;
+  if (painting === undefined) {
     const white = newRaster(source.width, source.height);
     for (let p = 0; p < source.width * source.height; p++) {
       const alpha = source.data[p * 4 + 3] / 255;
       for (let c = 0; c < 3; c++) white.data[p * 4 + c] = Math.round(source.data[p * 4 + c] * alpha + 255 * (1 - alpha));
       white.data[p * 4 + 3] = 255;
     }
-    const painting = sourceInRig(white, width, height), silhouette = figureSilhouette(painting), painted = paintedFigure(painting);
-    for (let p = 0; p < painted.length; p++) silhouette.data[p] &= painted[p];
-    figure = silhouette;
+    painting = sourceInRig(white, width, height);
   }
-  report.unowned = unownedSupport(width, height, [{ name: 'setup union', mask: union }], figure);
-  report.status = report.pairs.some(p => (p.boundary_length_px ?? 0) > 0) || (report.unowned.area_px ?? 0) > 0 ? 'WARN' : report.coverage.measured > 0 ? 'REPORTED' : 'UNCLASSIFIED';
-  return report;
+  const painted = paintedFigure(painting), figure = figureSilhouette(painting, painted);
+  for (let p = 0; p < painted.length; p++) figure.data[p] &= painted[p];
+  return figure;
 }

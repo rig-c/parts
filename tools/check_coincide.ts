@@ -8,7 +8,8 @@ import { newRaster, type Mask } from '../src/raster/types.ts';
 import { writeCheckRig } from '../fixtures/checkrig.ts';
 import { writePng } from '../src/raster/png.ts';
 import { readCheckInputs, type RigcRunner } from '../src/check.ts';
-import { observeSupport } from '../src/coincideio.ts';
+import { readBuildReceipt } from './build-process.ts';
+import { observeSupport, supportFigure } from '../src/coincideio.ts';
 
 type Say = (name: string, ok: boolean, detail: string) => void;
 export function runCoincideChecks(dir: string, say: Say): void {
@@ -39,6 +40,23 @@ export function runCoincideChecks(dir: string, say: Say): void {
   say('CK1018_SUPPORT_RAW_NORMAL_OVERLAP', rawNormal.raw_pairs[0].overlap_area_px === 12 && rawNormal.status === 'UNCLASSIFIED', JSON.stringify(rawNormal.raw_pairs));
   say('CK1019_SUPPORT_RAW_OWNERSHIP_UNKNOWN', JSON.stringify(rawDefect) === JSON.stringify(rawSide) && rawDefect.raw_pairs[0].boundary_length_px === 4 && rawDefect.raw_pairs[0].overlap_area_px === 0 && rawDefect.raw_pairs[0].classification === 'ownership unknown, unclassified' && supportLines(rawDefect)[0].includes('1 pairs adjacent, 0 classified (no extent witness)'), JSON.stringify(rawDefect.raw_pairs));
   say('CK1020_SUPPORT_RAW_DISJOINT_ABSENT', disjoint.raw_pairs.length === 0, JSON.stringify(disjoint.raw_pairs));
+
+  const opaque = newRaster(24, 24);
+  for (let y = 0; y < 24; y++) for (let x = 0; x < 24; x++) opaque.data.set(x >= 6 && x < 18 && y >= 6 && y < 18 ? [200, 30, 20, 255] : [255, 255, 255, 255], (y * 24 + x) * 4);
+  const opaqueFigure = supportFigure(opaque, 24, 24);
+  say('CK1024_SUPPORT_FIGURE_REUSE', opaqueFigure.data.some(p => p !== 0) && JSON.stringify(opaqueFigure) === JSON.stringify(supportFigure(opaque, 24, 24, opaque)), 'opaque assembly painting retains nonempty source-derived mask bytes');
+  const transparent = { ...opaque, data: opaque.data.slice() };
+  for (let p = 3; p < transparent.data.length; p += 4) transparent.data[p] = 0;
+  const directTransparent = supportFigure(transparent, 24, 24);
+  say('CK1025_SUPPORT_FIGURE_TRANSPARENT_FALLBACK', directTransparent.data.every(p => p === 0) && JSON.stringify(directTransparent) === JSON.stringify(supportFigure(transparent, 24, 24, opaque)), 'transparent source recomputes white ground instead of reusing an opaque colored center');
+
+  const transfer = { width: 2, height: 2, alpha_base64: Buffer.from([0, 1, 1, 0]).toString('base64') };
+  const receipt = (figure: unknown): string => JSON.stringify({ version: 1, stage: 'assemble', kind: 'done', supportFigure: figure });
+  const transferred = readBuildReceipt('assemble', 0, null, receipt(transfer));
+  let badTransfer = false;
+  try { readBuildReceipt('assemble', 0, null, receipt({ ...transfer, alpha_base64: Buffer.from([0, 2, 1, 0]).toString('base64') })); }
+  catch (error) { badTransfer = error instanceof Error && error.message.startsWith('BUILD_STAGE_SUPPORT_FIGURE:'); }
+  say('CK1021_SUPPORT_TRANSIENT_TRANSFER', transferred?.supportFigure?.data.join(',') === '0,1,1,0' && badTransfer, 'private stage receipt preserves binary alpha and refuses a planted nonbinary cell');
 
   const noSource = supportReport(6, 4, parts(whole), [], null);
   say('CK1007_SUPPORT_SOURCE_ABSENCE', noSource.unowned.status === 'unavailable' && noSource.unowned.area_px === null && noSource.unowned.reason?.includes('--source') === true, JSON.stringify(noSource.unowned));
@@ -72,6 +90,9 @@ export function runCoincideSetupChecks(dir: string, say: Say, rigc: RigcRunner):
   const reading = observeSupport(join(dir, 'build'), input);
   say('CK1009_SUPPORT_ACTUAL_SETUP_OPEN_EDGE', reading.unowned.area_px === 960 &&
     JSON.stringify(reading.unowned.regions) === '[{"box":[19,8,15,64],"area_px":960}]', JSON.stringify(reading));
+  const native = supportFigure(input.source!.painting, input.stage.width, input.stage.height);
+  const reused = observeSupport(join(dir, 'build'), input, undefined, native);
+  say('CK1022_SUPPORT_TRANSIENT_EQUALS_SOURCE', JSON.stringify(reused) === JSON.stringify(reading), 'transient assembly observation and fresh source path report identical bytes');
   // A declared scene mask that omits the object must not hide the observation.
   const sceneInput = { ...input, parts: input.parts === null ? null : { ...input.parts, scene: { figure_alpha_above: 127, figure_px: 960, figure_mask: 'omitted-object.png' } } };
   const reread = observeSupport(join(dir, 'build'), sceneInput);

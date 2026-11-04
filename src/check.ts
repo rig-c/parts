@@ -184,7 +184,7 @@ import { connectedComponents } from './raster/components.ts';
 import { alphaComposite } from './raster/composite.ts';
 import { alphaAbove } from './raster/index.ts';
 import { readPng, writePng } from './raster/png.ts';
-import { newFloatImage, newRaster, type Raster } from './raster/types.ts';
+import { type Mask, newFloatImage, newRaster, type Raster } from './raster/types.ts';
 import type { BaseTag } from './tags.ts';
 import { type ScaleTranslate, warpAffine } from './raster/warp.ts';
 import { edgeLength } from './length.ts';
@@ -6389,7 +6389,7 @@ function renderExtremes(build: string, out: string, animations: readonly string[
  * MEASURABLE is a problem. Without it nothing here reads, writes or prints
  * anything it did not before.
  */
-export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string, noExtremes = false, supportSource?: string): CheckReport {
+export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string, noExtremes = false, supportSource?: string, supportFigure?: Mask): CheckReport {
   let inp: CheckInputs;
   let reqFile: RequirementsFile | null = null;
   let reqRecord: RequirementsFileRecord | null = null;
@@ -7027,7 +7027,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       const sr = rigc(['render', '--candidate', join(stillDir, 'build'), '--animation', 'still', '--fps', String(STILL_FPS), '--max', String(maxSide), ...(fixedSkeleton === undefined ? [] : ['--geometry']), '--out', join(stillDir, 'render')]);
       if (sr.status !== 0) refuseIfAny(rigcFailed('render (the setup-pose still)', sr, sr.out.split('\n').filter((l) => l.includes('FAIL'))));
       const stillSet = readFrameSet(join(stillDir, 'render'));
-      partSupport = observeSupport(join(stillDir, 'build'), inp, supportSource);
+      partSupport = observeSupport(join(stillDir, 'build'), inp, supportSource, supportFigure);
       if (reqFile?.setup_painting !== undefined && inp.source !== null) setupPainting = measureSetupPainting(join(stillDir, 'build'), inp.stage, inp.source.painting, reqFile.setup_painting, problems, setupBackdrop);
       if (fixedSkeleton !== undefined) {
         const geometryPath = join(stillSet.dir, GEOMETRY_FILE);

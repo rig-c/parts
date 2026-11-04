@@ -1676,6 +1676,8 @@ export interface CheckStageInput {
   source?: string;
   /** Internal build painting for the report only; does not enable source gates. */
   supportSource?: string;
+  /** Transient source observation passed by assembly, never a public output. */
+  supportFigure?: Mask;
   /** The packed build's `--page-edges`; {@link DEFAULT_PAGE_EDGES} when absent. */
   pageEdges?: PageEdges;
   /** The packed build's `--pack-shape`; {@link DEFAULT_PACK_SHAPE} when absent. */
@@ -1939,7 +1941,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   const entryLine = versionLines.find((l) => l.startsWith('entry:'));
   log(`  ${rigcIdentity(bin, v)}${entryLine === undefined ? '' : `; ${entryLine}`}`);
   const mode: PackMode = { pageEdges: input.pageEdges ?? DEFAULT_PAGE_EDGES, packShape: input.packShape ?? DEFAULT_PACK_SHAPE };
-  const r = runCheck(input.rig, input.out, rigc, input.parts, mode, input.source, input.requirements, input.seamPairs === true, input.keepStills === true, input.set, input.allSets === true, input.environment, input.requirementsAs, input.config, input.windBand, input.noExtremes === true, input.supportSource);
+  const r = runCheck(input.rig, input.out, rigc, input.parts, mode, input.source, input.requirements, input.seamPairs === true, input.keepStills === true, input.set, input.allSets === true, input.environment, input.requirementsAs, input.config, input.windBand, input.noExtremes === true, input.supportSource, input.supportFigure);
   if (r.figures.environment !== undefined) log(`  ${environmentLine(r.figures.environment)}`);
   log(`  gate rig-play (rigc ${packedBuildLabel(mode)}), verbatim:`);
   for (const l of r.gateHtml) log(l);
@@ -2381,9 +2383,9 @@ export function suppliedCheckFlag(flag: string): string | null {
  * rig-c's launcher answers for; they are two fields so a caller can tell
  * the stages' calls apart (the selftest counts them).
  */
-/** Stage implementations may run outside this process; only check has a returned value the driver reads. */
+/** Stage implementations may run outside this process; assembly may return its transient source observation; check returns its report. */
 export interface BuildStages {
-  assemble: (input: AssembleStageInput, outputs: AssembleOutputs, log: Log) => void;
+  assemble: (input: AssembleStageInput, outputs: AssembleOutputs, log: Log) => { supportFigure?: Mask } | void;
   rig: (input: RigStageInput, rigc: RigcRunner, scratch: string, log: Log) => void;
   check: typeof checkStage;
 }
@@ -2470,6 +2472,7 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
   // Issue #978: the painting is handed to the check only when the requirements file declares setup_painting, which
   // cannot be measured without it; a build without that declaration hands it nothing, as before, and writes the same bytes.
   let paintingForCheck: string | null = null;
+  let supportFigure: Mask | undefined;
   try {
     // build runs rig next, which needs the whole config, so the full loader is
     // asked first: a config rig would refuse is refused before assemble writes
@@ -2489,11 +2492,12 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
     if (input.environment !== undefined) readCheckEnvironment(input.environment);
     // And the steady-wind band spec (issue #590), as check reads it.
     if (input.windBand !== undefined) readWindBand(input.windBand);
-    stages.assemble(
+    const assembled = stages.assemble(
       { source: input.source, full: input.full, head: input.head, config: input.config, seam, project, ...(req === null ? {} : { requirements: req.read }), ...(input.alts === undefined ? {} : { alts: input.alts }) },
       { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, ERROR_MAP_FILE) },
       prefixed('assemble'),
     );
+    supportFigure = assembled?.supportFigure;
   } catch (err) {
     return refused('assemble', err);
   }
@@ -2506,7 +2510,7 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
 
   let report: CheckReport;
   try {
-    report = stages.check({ rig: join(out, 'rig'), parts: out, supportSource: input.source, out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(req === null ? {} : { requirements: req.read, requirementsAs: req.recorded }), ...(paintingForCheck === null ? {} : { source: paintingForCheck }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, noExtremes: input.noExtremes === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }), ...(input.windBand === undefined ? {} : { windBand: input.windBand }), ...(configRecord === null ? {} : { config: configRecord }) }, run.check, run.checkBin, prefixed('check'));
+    report = stages.check({ rig: join(out, 'rig'), parts: out, supportSource: input.source, ...(supportFigure === undefined ? {} : { supportFigure }), out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(req === null ? {} : { requirements: req.read, requirementsAs: req.recorded }), ...(paintingForCheck === null ? {} : { source: paintingForCheck }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, noExtremes: input.noExtremes === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }), ...(input.windBand === undefined ? {} : { windBand: input.windBand }), ...(configRecord === null ? {} : { config: configRecord }) }, run.check, run.checkBin, prefixed('check'));
   } catch (err) {
     return refused('check', err);
   }
