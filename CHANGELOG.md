@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.10.0](https://github.com/rig-c/parts/compare/v2.9.1...v2.10.0) (2026-11-04)
+
+
+### Features
+
+* **requirements:** require fps only when a requirement samples at the file rate ([#965](https://github.com/rig-c/parts/issues/965)) ([#1032](https://github.com/rig-c/parts/issues/1032)) ([3a98cf4](https://github.com/rig-c/parts/commit/3a98cf4d42735fd66a966f0f63e094013a7f38c6))
+
+
+### Bug Fixes
+
+* **assemble:** contain region takes and bind their colour reference ([#1031](https://github.com/rig-c/parts/issues/1031)) ([#1039](https://github.com/rig-c/parts/issues/1039)) ([31458a0](https://github.com/rig-c/parts/commit/31458a0b7270b9b706cb3c4c356a77c1d25770de))
+
 ## [2.9.1](https://github.com/rig-c/parts/compare/v2.9.0...v2.9.1) (2026-11-04)
 
 
