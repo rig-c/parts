@@ -21,7 +21,7 @@ import { runTakeLayerChecks } from './tools/check_take_layers.ts';
 import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
 import { runPartSourceChecks } from './tools/check_part_sources.ts';
 import { runReadmePolicyChecks } from './scripts/readme_policy.ts';
-import { beginPhases, finishPhases, measurePhase, phaseRecord, measurementPayloadValid, familyRows, observeFamily, unmeasuredFamily, type PhaseRecord, type FamilyPeak } from './scripts/selftest_measure.ts';
+import { beginPhases, finishPhases, measurePhase, phaseRecord, measurementPayloadValid, familyRows, observerPids, observeFamily, unmeasuredFamily, type PhaseRecord, type FamilyPeak } from './scripts/selftest_measure.ts';
 import { sourceCaseNames } from './scripts/selftest_prefixes.ts';
 import { runPaintingExtensionChecks } from './tools/check_painting_extension.ts';
 import { runExtremesChecks } from './tools/check_extremes.ts';
@@ -42986,12 +42986,26 @@ function runMeasurementControls(say: (name: string, ok: boolean, detail: string,
       measurement: unitMeasurement({ key, status: 0, stdout: '', stderr: '', result: null }) })) }));
   const missing = structuredClone(records); missing[0].units.pop();
   const twice = structuredClone(records); twice[0].units.push(twice[0].units[0]);
+  const attachDir = temp('measurement-attach');
+  let attached: ShardRecord | string;
+  try {
+    const fixture = `import {launchWorker} from ${JSON.stringify(join(ROOT, 'selftest.ts'))};
+const run=await launchWorker('png',null,${JSON.stringify(attachDir)});
+console.log(JSON.stringify({spec:${JSON.stringify(SHARD_RECORD_SPEC)},shard:'1',jobs:1,cores:1,units:[{...run,began:0,ended:1}]}));`;
+    const child = spawnSync(process.execPath, ['-e', fixture], { encoding: 'utf8', timeout: 10000 });
+    attached = child.status === 0 ? parseShardRecord(child.stdout) : 'attachment fixture did not complete';
+  } finally { rmSync(attachDir, { recursive: true, force: true }); }
+  const droppedAttach = structuredClone(records[0]);
+  delete droppedAttach.units[0].measurement;
+  const droppedAttachVerdict = parseShardRecord(JSON.stringify(droppedAttach));
   say('RT27_UNIT_MEASUREMENT_INVENTORY_REQUIRES_EVERY_REGISTERED_UNIT_ONCE',
+    typeof attached !== 'string' && attached.units[0]?.status === 0 && attached.units[0]?.measurement !== undefined &&
+    typeof droppedAttachVerdict === 'string' && droppedAttachVerdict.includes('lacks its required measurement') &&
     shardFaults(SHARDS, units).length === 0 && recordFaults(records, SHARDS, units).length === 0 &&
     recordFaults(missing, SHARDS, units).length > 0 && recordFaults(twice, SHARDS, units).length > 0 &&
     records.flatMap(r => r.units).every(u => u.measurement?.unit === u.key && u.measurement.suite === u.key.split('@')[0]),
-    `${units.length} registered units, ${CHECK_UNITS.length} check groups; missing and duplicate records refused`, why);
-  const legacyRecord = parseShardRecord(JSON.stringify({ spec: SHARD_RECORD_SPEC, shard: '1', jobs: 1, cores: 1, units: records[0].units.map(({ measurement: _measurement, ...unit }) => unit) }));
+    `${units.length} registered units, ${CHECK_UNITS.length} check groups; actual attach ${typeof attached === 'string' ? attached : 'present'}; dropped attach ${typeof droppedAttachVerdict === 'string' ? droppedAttachVerdict : 'ACCEPTED'}; missing and duplicate records refused`, why);
+  const legacyRecord = parseShardRecord(JSON.stringify({ spec: LEGACY_SHARD_RECORD_SPEC, shard: '1', jobs: 1, cores: 1, units: records[0].units.map(({ measurement: _measurement, ...unit }) => unit) }));
   const corrupt = structuredClone(records[0]);
   corrupt.units[0].measurement!.family.bytes = 0;
   const invalidRecord = parseShardRecord(JSON.stringify(corrupt));
@@ -43015,6 +43029,55 @@ function runMeasurementControls(say: (name: string, ok: boolean, detail: string,
         high.holders.length >= 2 && (high.bytes ?? 0) - (low.bytes ?? 0) > 64 * 1024 ** 2 &&
         high.holders.some(h => h.bytes > 96 * 1024 ** 2),
         JSON.stringify({ exit: control.status, low, high }), why);
+    }
+    if (process.platform !== 'linux') {
+      console.log('  SKIP  RT30_MEASUREMENT_THROWS_SETTLE_THE_WORKER_WITH_NAMED_UNMEASURED_COVERAGE: UNMEASURED; Linux /proc is required for the stop-write plant');
+    } else {
+      const finishFixture = `import {mkdirSync} from 'node:fs';
+  import {launchWorker} from ${JSON.stringify(join(ROOT, 'selftest.ts'))};
+  import {observeFamily,observerPids} from ${JSON.stringify(join(ROOT, 'scripts/selftest_measure.ts'))};
+  const rows=[];
+  const deadline=setTimeout(()=>process.exit(9),5000);
+  for (const kind of ['stop','builder']) {
+   const path=${JSON.stringify(dir)}+'/'+kind; mkdirSync(path);
+   const measure=kind==='builder'?()=>{throw new Error('PLANTED_UNIT_MEASUREMENT');}:undefined;
+   const observe=kind==='stop'?(pid,file)=>{const finish=observeFamily(pid,file);mkdirSync(file+'.stop');return finish;}:undefined;
+   const run=await launchWorker('png',null,path,false,measure,observe);
+   rows.push({kind,returned:JSON.parse(run.result??'null')?.returned,measurement:run.measurement});
+  }
+  clearTimeout(deadline); console.log(JSON.stringify({rows,observers:observerPids.size}));`;
+      const completed = spawnSync(process.execPath, ['-e', finishFixture], { encoding: 'utf8', timeout: 10000 });
+      const finished = JSON.parse(completed.stdout || '{}') as { rows?: Array<{ kind: string; returned: number; measurement: UnitMeasurement }>; observers?: number };
+      say('RT30_MEASUREMENT_THROWS_SETTLE_THE_WORKER_WITH_NAMED_UNMEASURED_COVERAGE',
+        completed.status === 0 && finished.observers === 0 && finished.rows?.length === 2 &&
+        finished.rows.every(row => row.returned === 0 && row.measurement.family.status === 'UNMEASURED' &&
+          'status' in row.measurement.phases && row.measurement.phases.status === 'UNMEASURED' &&
+          row.measurement.error?.includes(row.kind === 'stop' ? 'EISDIR' : 'PLANTED_UNIT_MEASUREMENT')),
+        JSON.stringify({ exit: completed.status, ...finished }), why);
+    }
+    if (process.platform !== 'linux') {
+      console.log('  SKIP  RT31_OBSERVERS_ARE_EXCLUDED_FROM_THE_SHARD_PEAK: UNMEASURED; Linux /proc is required');
+    } else {
+      // Fixed before the control's first measurement. Four real observers make an inclusion mutant exceed this band.
+      const noiseBand = 16 * 1024 ** 2;
+      const observerFixture = `import {existsSync,readFileSync,readdirSync} from 'node:fs';
+import {familyRows,observerPids,observeFamily} from ${JSON.stringify(join(ROOT, 'scripts/selftest_measure.ts'))};
+${selftestFamilyRss.toString()}
+${selftestPeakFinish.toString()}
+${startSelftestPeak.toString()}
+const baseline=startSelftestPeak(observerPids); await Bun.sleep(450); baseline();
+const observers=Array.from({length:4},(_,i)=>observeFamily(process.pid,${JSON.stringify(dir)}+'/observer-'+i));
+await Bun.sleep(250);
+const observed=startSelftestPeak(observerPids); await Bun.sleep(650); observed();
+console.log(JSON.stringify({registered:observerPids.size}));
+await Promise.all(observers.map(finish=>finish()));
+if(observerPids.size!==0)process.exit(3);`;
+      const observed = spawnSync(process.execPath, ['-e', observerFixture], { encoding: 'utf8', timeout: 15000 });
+      const peaks = [...observed.stderr.matchAll(/family_rss_bytes=(\d+)/g)].map(m => Number(m[1]));
+      const registration = JSON.parse(observed.stdout || '{}') as { registered?: number };
+      say('RT31_OBSERVERS_ARE_EXCLUDED_FROM_THE_SHARD_PEAK',
+        observed.status === 0 && registration.registered === 4 && peaks.length === 2 && Math.abs(peaks[1] - peaks[0]) <= noiseBand,
+        JSON.stringify({ exit: observed.status, registered: registration.registered, peaks, noiseBand }), why);
     }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
@@ -43162,7 +43225,7 @@ function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | nu
   // plants drop the same unit from its record and record it a second time, at the function and through a real
   // `--merge` run in a child process, which must exit 2 naming the unit before it replays anything.
   const recorded = (shard: string, us: readonly string[]): ShardRecord => ({
-    spec: SHARD_RECORD_SPEC,
+    spec: LEGACY_SHARD_RECORD_SPEC,
     shard,
     jobs: 1,
     cores: 1,
@@ -43516,7 +43579,7 @@ function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | nu
     // An isolated small sampler avoids this large file's own resident code dominating the fixture.
     const fixture = `import {existsSync,readFileSync,readdirSync} from 'node:fs';\n` +
       `import {spawn} from 'node:child_process';\n` +
-      selftestFamilyRss.toString() + '\n' + selftestPeakFinish.toString() + '\n' + startSelftestPeak.toString() + '\n' +
+      familyRows.toString() + '\n' + selftestFamilyRss.toString() + '\n' + selftestPeakFinish.toString() + '\n' + startSelftestPeak.toString() + '\n' +
       `const healthy=startSelftestPeak(); await new Promise(r=>setTimeout(r,450)); healthy();\n` +
       `const planted=startSelftestPeak(); const child=spawn(process.execPath,['-e',${JSON.stringify(`const held=new Uint8Array(${fixtureAllocation}); held.fill(7); console.log('TOUCHED_128_MIB'); setTimeout(()=>console.log(held[0]+held[held.length-1]),650);`)}],{stdio:['ignore','pipe','inherit']});\n` +
       `let touched=''; child.stdout.on('data',b=>touched+=b); const code=await new Promise(r=>child.on('close',r)); planted(); if(code!==0||!touched.includes('TOUCHED_128_MIB'))process.exit(1);\n`;
@@ -54346,8 +54409,8 @@ const STARTED_FIRST: readonly string[] = ['readme-loop', 'chain', 'build', 'chec
 interface SelftestRssRow { pid: number; parent: number; start: string; bytes: number }
 
 /** Sum discovered descendants, retaining an orphan only while its identity is unchanged. */
-function selftestFamilyRss(rows: readonly SelftestRssRow[], known: Map<number, string>): number {
-  return familyRows(rows, known).reduce((sum, row) => sum + row.bytes, 0);
+function selftestFamilyRss(rows: readonly SelftestRssRow[], known: Map<number, string>, excluded: ReadonlyMap<number, string> = new Map()): number {
+  return familyRows(rows.filter(row => excluded.get(row.pid) !== row.start), known).reduce((sum, row) => sum + row.bytes, 0);
 }
 
 /** Linux /proc status RSS in KiB; shared pages count once per PID.
@@ -54369,7 +54432,7 @@ function selftestPeakFinish(familyText: () => string, write: (text: string) => v
     return line;
   };
 }
-function startSelftestPeak(): () => string {
+function startSelftestPeak(excluded: ReadonlyMap<number, string> = new Map()): () => string {
   if (process.platform !== 'linux' || !existsSync('/proc/self/stat')) {
     return selftestPeakFinish(() => 'family RSS unavailable; Linux /proc is required');
   }
@@ -54394,7 +54457,7 @@ function startSelftestPeak(): () => string {
         unreadable++;
       }
     }
-    peak = Math.max(peak, selftestFamilyRss(rows, known));
+    peak = Math.max(peak, selftestFamilyRss(rows, known, excluded));
     samples++;
   };
   sample();
@@ -54555,6 +54618,7 @@ interface UnitMeasurement {
   profile: { platform: string; arch: string; runtime: string; jobs: number; cores: number; intervalMs: number } | { status: 'UNMEASURED' };
   family: FamilyPeak;
   phases: PhaseRecord | { status: 'UNMEASURED' };
+  error?: string;
 }
 
 /** Old records and failed workers retain explicit missing coverage instead of fabricated zeroes. */
@@ -54688,7 +54752,7 @@ function workerCount(): number {
   return Number(set.value);
 }
 
-function launchWorker(key: string, corpus: string | null, dir: string, pre = false): Promise<WorkerRun> {
+function launchWorker(key: string, corpus: string | null, dir: string, pre = false, measure = unitMeasurement, observe = observeFamily): Promise<WorkerRun> {
   const result = join(dir, `${key}.json`);
   const args = [import.meta.path, pre ? PRE_WORKER_FLAG : WORKER_FLAG, key, '--result', result, ...(corpus === null ? [] : ['--corpus', corpus])];
   return new Promise((done) => {
@@ -54697,15 +54761,32 @@ function launchWorker(key: string, corpus: string | null, dir: string, pre = fal
     const child = spawn(process.execPath, args, { cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.on('data', (b: Buffer) => out.push(b));
     child.stderr.on('data', (b: Buffer) => err.push(b));
-    const finishPeak = child.pid === undefined ? async () => unmeasuredFamily() : observeFamily(child.pid, result + '.rss');
+    let finishPeak: () => Promise<FamilyPeak>;
+    try { finishPeak = child.pid === undefined ? async () => unmeasuredFamily() : observe(child.pid, result + '.rss'); }
+    catch (error) { finishPeak = async () => { throw error; }; }
     let finished = false;
     const finish = async (status: number | null, signal: string | null, extra: string): Promise<void> => {
       if (finished) return;
       finished = true;
-      const family = await finishPeak();
-      const run = workerRunOf(key, status, signal, out, err, result, extra);
-      run.measurement = unitMeasurement(run, family, true);
-      done(run);
+      let run: WorkerRun = { key, status, signal, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') + extra, result: null };
+      let readError: unknown = null;
+      try { run = workerRunOf(key, status, signal, out, err, result, extra); }
+      catch (error) { readError = error; }
+      try {
+        const family = await finishPeak();
+        if (readError !== null) throw readError;
+        run.measurement = measure(run, family, true);
+      } catch (error) {
+        run.measurement = {
+          spec: 'rig-parts-selftest-unit/1', suite: key.split(UNIT_MARK)[0], unit: key,
+          caseIds: [...new Set(run.stdout.split('\n').filter(line => VERDICT_GUTTER.includes(gutterWord(line) ?? ''))
+            .map(caseName).filter((name): name is string => name !== null))].sort(),
+          profile: { status: 'UNMEASURED' }, family: unmeasuredFamily(), phases: { status: 'UNMEASURED' },
+          error: error instanceof Error ? error.message : String(error),
+        };
+      } finally {
+        done(run);
+      }
     };
     child.on('error', (e) => finish(null, null, `could not start the worker: ${e.message}\n`));
     child.on('close', (status, signal) => finish(status, signal, ''));
@@ -54782,7 +54863,8 @@ interface ShardRecord {
   units: RecordedUnit[];
 }
 
-const SHARD_RECORD_SPEC = 'rig-parts-selftest-shard/1';
+const SHARD_RECORD_SPEC = 'rig-parts-selftest-shard/2';
+const LEGACY_SHARD_RECORD_SPEC = 'rig-parts-selftest-shard/1';
 
 /** A shard record read from its text, or what is wrong with it. */
 function parseShardRecord(text: string): ShardRecord | string {
@@ -54794,7 +54876,7 @@ function parseShardRecord(text: string): ShardRecord | string {
   }
   if (typeof raw !== 'object' || raw === null) return 'not a JSON object';
   const r = raw as Partial<ShardRecord>;
-  if (r.spec !== SHARD_RECORD_SPEC) return `spec ${JSON.stringify(r.spec ?? null)}; "${SHARD_RECORD_SPEC}" is required`;
+  if (r.spec !== SHARD_RECORD_SPEC && r.spec !== LEGACY_SHARD_RECORD_SPEC) return `spec ${JSON.stringify(r.spec ?? null)}; one of "${LEGACY_SHARD_RECORD_SPEC}" or "${SHARD_RECORD_SPEC}" is required`;
   if (typeof r.shard !== 'string' || typeof r.jobs !== 'number' || typeof r.cores !== 'number' || !Array.isArray(r.units)) return 'shard, jobs, cores or units is absent or of the wrong type';
   if (r.peakLine !== undefined && typeof r.peakLine !== 'string') return 'peakLine is not a string';
   for (const u of r.units as unknown[]) {
@@ -54809,6 +54891,7 @@ function parseShardRecord(text: string): ShardRecord | string {
       typeof x.began === 'number' &&
       typeof x.ended === 'number';
     if (!ok) return `the unit entry ${JSON.stringify(x.key ?? null)} lacks one of key, status, stdout, stderr, result, began and ended, or holds one of the wrong type`;
+    if (x.measurement === undefined && r.spec === SHARD_RECORD_SPEC) return `the unit entry ${JSON.stringify(x.key)} lacks its required measurement`;
     if (x.measurement === undefined) x.measurement = unitMeasurement(x as RecordedUnit);
     if (typeof x.measurement !== 'object' || x.measurement === null ||
       x.measurement.spec !== 'rig-parts-selftest-unit/1' || x.measurement.unit !== x.key ||
@@ -55674,7 +55757,7 @@ async function main(): Promise<void> {
 
 // Importing the selector/verdict for focused controls must not launch a run.
 export { preSuiteSelection, preRunFaults, preRunExit, summaryAgreementFaults, runMeasurementControls, launchWorker };
-const finishSelftestPeak = !import.meta.main || process.argv.includes(WORKER_FLAG) || process.argv.includes(PRE_WORKER_FLAG) || process.argv.includes(ASSEMBLE_STAGE_FLAG) ? null : startSelftestPeak();
+const finishSelftestPeak = !import.meta.main || process.argv.includes(WORKER_FLAG) || process.argv.includes(PRE_WORKER_FLAG) || process.argv.includes(ASSEMBLE_STAGE_FLAG) ? null : startSelftestPeak(observerPids);
 if (import.meta.main) {
   if (finishSelftestPeak !== null) process.on('exit', finishSelftestPeak);
   await main();

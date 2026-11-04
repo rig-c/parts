@@ -7168,6 +7168,9 @@ Each shard unit carries an additive `measurement` record with spec
 profile identify the measured work. The profile records Bun, platform,
 architecture, available cores, configured worker count and sampling interval.
 The existing stdout replay and tally remain the source of case verdicts.
+Shard records now use `rig-parts-selftest-shard/2`, which requires a measurement
+on every unit. A dropped attachment is refused by unit name. Version `/1`
+remains readable, with absent measurements explicitly `UNMEASURED`.
 
 On Linux, an independent process samples the worker's descendant family through
 `/proc` at a requested 200 ms interval. PID and kernel start time identify each
@@ -7176,6 +7179,12 @@ is the largest sampled sum of per-process RSS, with the simultaneous `holders`,
 sample count and unreadable-entry count retained. Shared pages count per PID.
 Short-lived children and allocations between samples can be missed. An absent
 observation has `status: "UNMEASURED"` and `bytes: null`.
+The supervising shard excludes registered observer PID/start-time identities
+from its family peak and RT20 verdict. The exclusion control fixes its noise
+band at 16 MiB before measurement and compares against an observer-free run.
+If observer finalization or unit measurement construction throws, the launcher
+settles with `UNMEASURED` coverage and the named `measurement.error`. A failed
+stop-file write terminates and waits for that observer before settling.
 
 Worker-result `phases` retain labelled monotonic spans and elapsed milliseconds.
 The hooks cover input readers `readPartSet` and `readFrom`, fixture writers

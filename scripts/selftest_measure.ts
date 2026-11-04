@@ -51,6 +51,9 @@ export function measurePhase<T>(phase: Phase, label: string, work: () => T): T {
 
 export interface RssRow { pid: number; parent: number; start: string; bytes: number }
 
+/** Live observer identities in the supervising process, excluded from its workload peak. */
+export const observerPids = new Map<number, string>();
+
 /** Retain reparented descendants only while PID and kernel start time still agree. */
 export function familyRows(rows: readonly RssRow[], known: Map<number, string>): RssRow[] {
   const family = new Map<number, string>();
@@ -125,9 +128,28 @@ export function observeFamily(pid: number, path: string): () => Promise<FamilyPe
   try { [, start] = identity(readFileSync(`/proc/${pid}/stat`, 'utf8')); }
   catch { return async () => unmeasuredFamily(); }
   const child = spawn(process.execPath, [import.meta.path, String(pid), start, path], { stdio: 'ignore' });
-  const closed = new Promise<void>(resolve => { child.once('error', () => resolve()); child.once('close', () => resolve()); });
+  let observerStart: string | undefined;
+  try {
+    if (child.pid !== undefined) {
+      [, observerStart] = identity(readFileSync(`/proc/${child.pid}/stat`, 'utf8'));
+      observerPids.set(child.pid, observerStart);
+    }
+  } catch { /* An observer that already exited cannot contribute to a later sample. */ }
+  const closed = new Promise<void>(resolve => {
+    const finish = (): void => {
+      if (child.pid !== undefined && observerPids.get(child.pid) === observerStart) observerPids.delete(child.pid);
+      resolve();
+    };
+    child.once('error', finish);
+    child.once('close', finish);
+  });
   return async () => {
-    writeFileSync(path + '.stop', '');
+    try { writeFileSync(path + '.stop', ''); }
+    catch (error) {
+      child.kill();
+      await closed;
+      throw error;
+    }
     await closed;
     try { return JSON.parse(readFileSync(path, 'utf8')) as FamilyPeak; }
     catch { return unmeasuredFamily(); }
