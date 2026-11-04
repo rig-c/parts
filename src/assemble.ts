@@ -1,5 +1,5 @@
 import { type SeamRule } from './seamrule.ts';
-import { DEFAULT_PROJECT_RULE, type ProjectRule } from './projectrule.ts';
+import { DEFAULT_GROUND, DEFAULT_PROJECT_RULE, type Ground, type ProjectRule } from './projectrule.ts';
 import { paintingEdges, type PaintingEdgeSkips } from './paintingedges.ts';
 import { edgeLength } from './length.ts';
 import { materialSource, type MaterialSource, materialRows, polygonMaterialEdges, type MaterialRow, type MaterialEdge, type PlacedArt } from './cutmaterial.ts';
@@ -193,7 +193,7 @@ export const SILHOUETTE_LIMIT = 40;
 
 export { DEFAULT_SEAM_RULE, SEAM_RULES, type SeamRule } from './seamrule.ts';
 
-export { DEFAULT_PROJECT_RULE, PROJECT_RULES, type ProjectRule } from './projectrule.ts';
+export { DEFAULT_GROUND, DEFAULT_PROJECT_RULE, GROUNDS, type Ground, PROJECT_RULES, type ProjectRule } from './projectrule.ts';
 
 // ---------------------------------------------------------------------------
 // inputs
@@ -331,6 +331,8 @@ export interface AssembleInput {
   under?: ReadonlyArray<Raster | null>;
   seamRule: SeamRule;
   projectRule: ProjectRule;
+  /** `config.assemble.ground` (issue #996), read by `paintingEdges` under `visible` only; absent, `plain`. */
+  ground?: Ground;
   /** `config.scene` (issue #242): the painting is a scene, so the recomposite is read inside the figure ({@link sceneFigure}). Absent or false: nothing changes. */
   scene?: boolean;
   /** `config.limbs` (issue #349): the parts cut at their joints ({@link LimbCount}). Absent or empty: nothing changes. */
@@ -2619,6 +2621,45 @@ export function paintedFigure(srcr: Raster): Uint8Array {
   return painted;
 }
 
+/**
+ * Issue #996: the share of the border ring that `paintedFigure`'s own one-colour
+ * test reads as figure — the ring's pixels (the outer `SILHOUETTE_BORDER` rig
+ * pixels) whose `paintedFigure` value is 1, over the ring's pixel count. A plain
+ * ground reads near 0; a ground of many colours, or a figure crossing the
+ * border, reads more.
+ */
+export function groundRingShare(srcr: Raster): number {
+  const { width: W, height: H } = srcr;
+  const painted = paintedFigure(srcr);
+  let ring = 0;
+  let figure = 0;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (y >= SILHOUETTE_BORDER && y < H - SILHOUETTE_BORDER && x >= SILHOUETTE_BORDER && x < W - SILHOUETTE_BORDER) continue;
+      ring++;
+      figure += painted[y * W + x];
+    }
+  }
+  return ring === 0 ? 0 : figure / ring;
+}
+
+/**
+ * Share of the border ring that paintedFigure's own one-colour test reads as figure. Plain grounds measured at most 0.001 and the busy fixtures 0.464; 0.02 sits near the geometric middle of that gap, an order of magnitude from each side. A figure crossing the border counts too, so the WARN names both causes and leaves the ground as declared.
+ */
+export const GROUND_RING_SHARE_LIMIT = 0.02;
+
+/**
+ * Issue #996: the WARN for a ground declared or defaulted `plain` whose border ring
+ * is not one colour (more than {@link GROUND_RING_SHARE_LIMIT} of it reads as
+ * figure). Report-level only: it never changes the ground and never refuses. Null
+ * when the ground is declared `busy` or the share is at or under the limit.
+ */
+export function groundWarning(share: number, ground: Ground | undefined): Problem | null {
+  if ((ground ?? DEFAULT_GROUND) !== 'plain' || share <= GROUND_RING_SHARE_LIMIT) return null;
+  const pct = (100 * share).toFixed(1);
+  return { code: 'ASSEMBLE_GROUND_PLAIN', object: 'config.assemble.ground', detail: `${pct} % of the border ring is not one colour: either the ground is not plain or the figure crosses the border; if it is the ground, declare assemble.ground: busy` };
+}
+
 export interface PlacedPart {
   depthImage?: Raster;
   record: PartRecord;
@@ -4586,6 +4627,8 @@ export interface AssembleResult {
   projectRule: ProjectRule;
   /** Issue #953: what `paintingEdges` resolved, under `projectRule: 'visible'` only. */
   paintingEdges?: PaintingEdgeReading;
+  /** Issue #996: {@link groundRingShare} of the painting in the rig, read by the ground WARN. */
+  groundShare: number;
   depthReadings?: Array<{ from: string; reading: import('./depthsheets.ts').DepthReading }>;
   /** Visible registered samples clamped within <1 source pixel of a crop. */
   depthClamps?: Array<{ part: string; samples: number }>;
@@ -4801,6 +4844,7 @@ export function assemble(input: AssembleInput): AssembleResult {
   checkPlanAgainstRuns(sourcePlan, extend, full, head);
   const { W, H } = frame;
   const srcr = sourceInRig(source, W, H);
+  const groundShare = groundRingShare(srcr);
   // Issue #359: a part's hidden-art layer is the under of a cut that names none — and, with one named, a refusal, since
   // reading either would be a guess. Its uses are counted for `hiddenLines`.
   const hiddenArt = hiddenArtByPart(plan, input.cuts, { full, head }, frame, input.resolution);
@@ -5608,6 +5652,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     };
     const e = paintingEdges(stack.map(onRig), srcr, {
       painted: paintedFigure(srcr),
+      ...(input.ground === undefined ? {} : { ground: input.ground }),
       editable: order.map((d) => !('patch' in d)),
       keep: keepInOrder,
       feathered: featheredInOrder,
@@ -5821,6 +5866,7 @@ export function assemble(input: AssembleInput): AssembleResult {
     hidden: [...hiddenUses].map(([layer, readBy]) => ({ layer, readBy })),
     seamRule,
     projectRule,
+    groundShare,
     ...(edgeReading === null ? {} : { paintingEdges: edgeReading }),
     ...(headFacePrep.underfillPx > 0 ? { headFaceUnderfillPx: headFacePrep.underfillPx } : {}),
     excluded,
@@ -6705,6 +6751,8 @@ export function stageFields(
   regions?: Record<string, RegionSpec>;
   meshes?: Record<string, MeshSpec>;
   motion?: CharacterConfig['motion'];
+  /** `assemble.ground` (issue #996); absent, `plain`. */
+  ground?: Ground;
 } {
   const problems: Problem[] = [];
   if (cfg.seethrough === undefined) {
@@ -6726,6 +6774,7 @@ export function stageFields(
     ...(cfg.assemble.head_face_underfill === undefined ? {} : { headFaceUnderfill: cfg.assemble.head_face_underfill }),
     ...(cfg.assemble.yield_refused === undefined ? {} : { yieldRefused: cfg.assemble.yield_refused }),
     ...(cfg.assemble.keep_under_occluders === undefined ? {} : { keepUnderOccluders: cfg.assemble.keep_under_occluders }),
+    ...(cfg.assemble.ground === undefined ? {} : { ground: cfg.assemble.ground }),
     ...(cfg.assemble.extend_painting === undefined ? {} : { paintingExtension: cfg.assemble.extend_painting }),
     ...(turnMovingPair === null ? {} : { turnMovingPair }),
     ...(cfg.turn === undefined ? {} : { turn: cfg.turn, regions: cfg.regions, meshes: cfg.meshes, motion: cfg.motion }),

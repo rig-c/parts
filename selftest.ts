@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { runPaintingEdgeChecks } from './tools/check_painting_edges.ts';
 import { runProjectConfigChecks } from './tools/check_project_config.ts';
+import { runGroundConfigChecks, runGroundExampleChecks, runGroundUnitChecks } from './tools/check_ground.ts';
 import { runSeamConfigChecks } from './tools/check_seam_config.ts';
 import { runJointContactChecks } from './tools/check_joint_contact.ts';
 import { runSetupPaintingChecks } from './tools/check_setup_painting.ts';
@@ -2052,6 +2053,9 @@ function runConfigSuite(): number {
   const projectDir = temp('project-config-953');
   try { runProjectConfigChecks(projectDir, (name, ok, detail) => say(name, ok, detail, 'issue #953: CLI > config > unchanged default for the projection rule, with real readers and CLI controls')); }
   finally { rmSync(projectDir, { recursive: true, force: true }); }
+  const groundDir = temp('ground-config-996');
+  try { runGroundConfigChecks(groundDir, (name, ok, detail) => say(name, ok, detail, 'issue #996: assemble.ground through the real readers; the ground WARN through the real CLI, fired and silent; declared plain is the absent bytes')); }
+  finally { rmSync(groundDir, { recursive: true, force: true }); }
 
   const explicitDir = temp('explicit-658');
   try { runExplicitMeshChecks(explicitDir, (name, ok, detail) => say(name, ok, detail, 'issue #658: guarded accepted payload transfer, not regeneration')); }
@@ -31902,6 +31906,7 @@ function runAssembleSuite(): number {
   try {
     runPaintingExtensionChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #848: public generated controls; explicit ownership, bounds and exact painting samples'));
     runPaintingEdgeChecks((name, ok, detail) => say(name, ok, detail, 'issue #953: under visible, a part edge takes the painting\'s line and coverage; every skip reason planted next to a positive strip'));
+    runGroundUnitChecks((name, ok, detail) => say(name, ok, detail, 'issue #996: the ring share and its cut-off, and the busy-ground rules on a strip next to the plain mutant that takes the ground'));
     writeAssembleFixture(dir);
     const base = fixtureInput(dir);
     const result = assemble({ ...base, seamRule: 'near-white' });
@@ -35667,6 +35672,20 @@ function runAssembleExampleStage(ex: string, stage: AssembleStage): number {
     break;
   }
   }
+  return bad();
+}
+
+function runGroundExamplesSuite(): number | null {
+  section('assemble: a busy ground (issue #996) on the public examples');
+  const found = exampleDirs().filter((d) => existsSync(join(d, 'inputs', 'layers', 'head')));
+  if (found.length === 0) {
+    console.log('  SKIP  no fetched example (examples/<key>/config.json + inputs/painting.png + inputs/layers/{full,head}); run bun run fetch-examples');
+    console.log('          ⚠️ This is a HOLE in this run, not a pass — ground-examples measured no real painting.');
+    return null;
+  }
+  const { say, bad } = counter();
+  const heavy = found.find((d) => relative(EXAMPLES_DIR, d) === 'demo') ?? null;
+  runGroundExampleChecks(found, heavy, (name, ok, detail) => say(name, ok, detail, 'issue #996: every public painting is a plain ground and stays silent; a busy ground planted under it warns; declared busy, visible stays inside the core footprint, next to the undeclared mutant that leaks'));
   return bad();
 }
 
@@ -53486,6 +53505,7 @@ const SUITES: ReadonlyArray<readonly [string, (corpus: string | null) => number 
   ['part-sources', runPartSourcesSuite],
   ['plausibility', runPlausibilitySuite],
   ['assemble-examples', runAssembleExamplesSuite],
+  ['ground-examples', runGroundExamplesSuite],
   ['skeleton', runSkeletonSuite],
   ['inputs', runInputsSuite],
   ['inputs-examples', runInputsExamplesSuite],
@@ -53677,7 +53697,7 @@ function runUnits(keys: readonly string[], examples: readonly string[]): string[
 const SHARDS: ReadonlyArray<readonly [string, readonly string[]]> = [
   ['1', ['depth-maps', 'joint-contact', 'check', 'chain@wind', 'chain@scarf', 'assemble-examples@wind', 'assemble-examples@reference-sample', 'scene', 'mesh-stats', 'auto-mesh-examples', 'config', 'inputs-examples', 'contour-wiring', 'waist', 'propose-corpus', 'arm-split-upgrade', 'comfy', 'diagnostics', 'structure', 'inputs', 'winding', 'raster-morph', 'raster-resize', 'raster-components', 'raster-warp', 'png']],
   ['2', ['cli', 'build', 'remesh', 'rig', 'chain@reference-sample', 'readme-loop@reference-demo', 'chain@reference-demo', 'propose', 'assemble-examples@reference-demo', 'readme-loop@reference-sample', 'auto-motion', 'tree', 'auto-mesh', 'config-write', 'limb-slots', 'loop', 'corpus', 'limb-layout', 'requirements', 'fixed-skeleton', 'setup-painting', 'boundary-colour', 'foot-ownership', 'layers-wrapper', 'painting', 'skeleton', 'core-pointer', 'assemble-examples@end', 'parts', 'prompt', 'sheet']],
-  ['3', ['readme-loop@wind', 'chain@end', 'readme-loop@demo', 'retune', 'chain@demo', 'assemble-examples@scarf', 'assemble-examples@demo', 'readme-loop@scarf', 'mesh-draft', 'alternate-layers', 'take-layers', 'editor-receipts', 'part-sources', 'influence', 'front-slot', 'assemble', 'readme-loop@end', 'build-cost', 'alternate-tips', 'chain-inherit', 'keypoints', 'contour', 'subset-cover', 'hybrid-limb', 'plausibility', 'raster-blur', 'fetch-examples', 'layers-psd', 'raster-poly', 'raster-composite']],
+  ['3', ['readme-loop@wind', 'chain@end', 'readme-loop@demo', 'retune', 'chain@demo', 'assemble-examples@scarf', 'assemble-examples@demo', 'readme-loop@scarf', 'mesh-draft', 'alternate-layers', 'take-layers', 'editor-receipts', 'part-sources', 'influence', 'front-slot', 'assemble', 'ground-examples', 'readme-loop@end', 'build-cost', 'alternate-tips', 'chain-inherit', 'keypoints', 'contour', 'subset-cover', 'hybrid-limb', 'plausibility', 'raster-blur', 'fetch-examples', 'layers-psd', 'raster-poly', 'raster-composite']],
 ];
 
 /**

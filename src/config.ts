@@ -1,5 +1,5 @@
 import { SEAM_RULES, type SeamRule } from './seamrule.ts';
-import { PROJECT_RULES, type ProjectRule } from './projectrule.ts';
+import { GROUNDS, type Ground, PROJECT_RULES, type ProjectRule } from './projectrule.ts';
 import type { TakeLayers } from './takelayers.ts';
 import { paintingExtensionProblems, type PaintingExtension } from './paintingextension.ts';
 import { baseAnchorProblems, type BaseAnchor } from './baseanchor.ts';
@@ -307,6 +307,8 @@ export interface Assemble {
   seam?: SeamRule;
   /** Optional per-character projection rule (issue #953); an explicit CLI flag wins. */
   project?: ProjectRule;
+  /** Optional per-character painting ground (issue #996); absent, `plain`. Read by `visible` only. */
+  ground?: Ground;
   /** Verified named replacements from another See-through run (#866). */
   take?: TakeLayers[];
   /** Issue #946: receipts for images edited in an image editor; absent, no file is read and no byte moves. */
@@ -1629,7 +1631,7 @@ export interface EarlyConfig {
   depth?: DepthConfig;
   key: string;
   seethrough: SeeThrough;
-  assemble: { rig_scale: number; seam?: SeamRule; project?: ProjectRule; take?: TakeLayers[]; editor_receipts?: EditorReceipts; head_face_underfill?: boolean; yield_refused?: boolean; keep_under_occluders?: string[]; extend_painting?: PaintingExtension[] };
+  assemble: { rig_scale: number; seam?: SeamRule; project?: ProjectRule; ground?: Ground; take?: TakeLayers[]; editor_receipts?: EditorReceipts; head_face_underfill?: boolean; yield_refused?: boolean; keep_under_occluders?: string[]; extend_painting?: PaintingExtension[] };
 }
 
 /** What plain `assemble` reads: the early config plus the plan `--propose-plan` printed. */
@@ -1705,7 +1707,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
   if (door === 'layers') {
     if ('seethrough' in t) checkSeeThrough(c, t.seethrough);
     if ('assemble' in t) {
-      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take', 'seam', 'project', 'editor_receipts']);
+      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take', 'seam', 'project', 'ground', 'editor_receipts']);
       if (a !== null) {
         checkAssembleRules(c, a);
         if ('rig_scale' in a) c.number('config.assemble.rig_scale', a.rig_scale, 'positive');
@@ -2513,11 +2515,14 @@ function checkAssembleRules(c: Check, a: Record<string, Json>): void {
   if ('project' in a && !(PROJECT_RULES as readonly unknown[]).includes(a.project)) {
     c.fail('CONFIG_FIELD_TYPE', 'config.assemble.project', `is ${show(a.project)}; one of ${PROJECT_RULES.join(', ')} is required`);
   }
+  if ('ground' in a && !(GROUNDS as readonly unknown[]).includes(a.ground)) {
+    c.fail('CONFIG_FIELD_TYPE', 'config.assemble.ground', `is ${show(a.ground)}; one of ${GROUNDS.join(', ')} is required (busy for an opaque ground of many colours, issue #996)`);
+  }
 }
 
 function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: string[]; patches: string[]; cuts: string[] } {
   const required = sectionRequired(door, 'assemble');
-  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take', 'seam', 'project', 'editor_receipts']);
+  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'extend_painting', 'take', 'seam', 'project', 'ground', 'editor_receipts']);
   if (a === null) return { parts: [], patches: [], cuts: [] };
   checkAssembleRules(c, a);
   if (required.includes('plan') && !('plan' in a)) {
