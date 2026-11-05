@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.14.1](https://github.com/rig-c/parts/compare/v2.14.0...v2.14.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **assemble:** preserve graded silhouette coverage ([#1068](https://github.com/rig-c/parts/issues/1068)) ([#1070](https://github.com/rig-c/parts/issues/1070)) ([8ddaff4](https://github.com/rig-c/parts/commit/8ddaff4a2e3ad892ab11cd2ab546be22e61c22a1))
+
 ## [2.14.0](https://github.com/rig-c/parts/compare/v2.13.1...v2.14.0) (2026-11-05)
 
 
