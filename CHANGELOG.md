@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.16.1](https://github.com/rig-c/parts/compare/v2.16.0...v2.16.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **assemble:** document visible crop-seam reconstruction ([#1087](https://github.com/rig-c/parts/issues/1087)) ([#1088](https://github.com/rig-c/parts/issues/1088)) ([ed8c75a](https://github.com/rig-c/parts/commit/ed8c75a21ff8e8add3caa98a2def9027424f0fe2))
+
 ## [2.16.0](https://github.com/rig-c/parts/compare/v2.15.0...v2.16.0) (2026-11-05)
 
 
