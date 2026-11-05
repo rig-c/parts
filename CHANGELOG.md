@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.16.0](https://github.com/rig-c/parts/compare/v2.15.0...v2.16.0) (2026-11-05)
+
+
+### Features
+
+* **cli:** report head crop edges before the head run ([#1082](https://github.com/rig-c/parts/issues/1082)) ([#1084](https://github.com/rig-c/parts/issues/1084)) ([cef0bb4](https://github.com/rig-c/parts/commit/cef0bb41240bf41727beb5289f9e8004de630a5c))
+
 ## [2.15.0](https://github.com/rig-c/parts/compare/v2.14.2...v2.15.0) (2026-11-05)
 
 
