@@ -7,7 +7,7 @@ import { SETUP_PAINTING_LINE, UNDECLARED_SETUP_PAINTING_REASON, setupPaintingBou
 import { readMaterialSources } from './cutmaterialio.ts';
 import { CUT_MATERIAL_LINE, checkJointMaterial, type MaterialLine } from './cutmaterial.ts';
 import { ART_JOINT_LINE, artJointLine, type ArtJointLine } from './artjoints.ts';
-import { BOUNDARY_COLOUR_LINE, BOUNDARY_COLOUR_UNMEASURED_CODE, measureBoundaryColour, type BoundaryColourMeasured } from './boundarycolour.ts';
+import { BOUNDARY_COLOUR_LINE, BOUNDARY_COLOUR_UNMEASURED_CODE, BOUNDARY_COLOUR_UNMEASURED_SUFFIX, measureBoundaryColour, type BoundaryColourMeasured } from './boundarycolour.ts';
 import { baseAnchorMoves, type AnchorRegion } from './baseanchor.ts';
 /**
  * The check stage: build a rig through rig-c, gate it under both
@@ -1865,28 +1865,34 @@ export function boundaryColourSizeProblems(inp: CheckInputs): Problem[] {
   const imagesDir = typeof inp.rig.images === 'string' ? resolve(inp.rigDir, inp.rig.images) : join(inp.rigDir, 'images');
   const problems: Problem[] = [];
   const seen = new Set<string>();
-  if (!isRecord(inp.rig.skins)) return problems;
-  for (const skin of Object.values(inp.rig.skins)) {
-    if (!isRecord(skin)) continue;
-    for (const [slot, drawings] of Object.entries(skin)) {
-      if (!isRecord(drawings)) continue;
-      for (const source of Object.values(drawings)) {
-        if (!isRecord(source) || typeof source.image !== 'string' || seen.has(source.image)) continue;
-        const image = source.image;
-        seen.add(image);
-        const name = image.replace(/\.png$/, '');
-        const partPng = join(inp.partsDir, `${name}.png`), rigPng = join(imagesDir, image);
-        if (!records.has(name) || !existsSync(partPng) || !existsSync(rigPng)) continue;
-        const src = readPng(partPng), rigImg = readPng(rigPng);
-        const dx = rigImg.width - src.width, dy = rigImg.height - src.height;
-        const reason = dx !== dy || dx < 0 || dx % 2 !== 0
-          ? `the rig image "${image}" is ${rigImg.width}x${rigImg.height}, not parts/${name}.png's ${src.width}x${src.height} with one even pad on every side`
-          : null;
-        if (reason !== null) problems.push({ code: BOUNDARY_COLOUR_UNMEASURED_CODE, object: `slot "${slot}" (image "${image}")`, detail: reason });
-      }
+  const skins = isRecord(inp.rig.skins) ? inp.rig.skins : null;
+  const skin = skins !== null && isRecord(skins.default) ? skins.default : null;
+  if (skin === null) return problems;
+  for (const [slot, drawings] of Object.entries(skin)) {
+    if (!isRecord(drawings)) continue;
+    for (const source of Object.values(drawings)) {
+      if (!seamImageSource(source) || seen.has(source.image)) continue;
+      const image = source.image;
+      seen.add(image);
+      const name = image.replace(/\.png$/, '');
+      const partPng = join(inp.partsDir, `${name}.png`), rigPng = join(imagesDir, image);
+      if (!records.has(name) || !existsSync(partPng) || !existsSync(rigPng)) continue;
+      let src: Raster, rigImg: Raster;
+      try { src = readPng(partPng); rigImg = readPng(rigPng); }
+      catch { continue; }
+      const dx = rigImg.width - src.width, dy = rigImg.height - src.height;
+      const reason = dx !== dy || dx < 0 || dx % 2 !== 0
+        ? `the rig image "${image}" is ${rigImg.width}x${rigImg.height}, not parts/${name}.png's ${src.width}x${src.height} with one even pad on every side`
+        : null;
+      if (reason !== null) problems.push({ code: BOUNDARY_COLOUR_UNMEASURED_CODE, object: `slot "${slot}" (image "${image}")`, detail: `${reason}${BOUNDARY_COLOUR_UNMEASURED_SUFFIX}` });
     }
   }
   return problems;
+}
+
+/** The image mapping supported by seam and boundary-colour source readers. */
+function seamImageSource(source: unknown): source is Record<string, unknown> & { image: string } {
+  return isRecord(source) && ['region', 'mesh'].includes(typeof source.type === 'string' ? source.type : 'region') && typeof source.image === 'string' && source.image.length > 0 && source.sequence === undefined;
 }
 
 /** Resolve only the actually selected default-skin identity, not a filename suffix. */
@@ -1898,7 +1904,7 @@ export function seamSourceAttachment(rig: Record<string, unknown>, slot: string,
   const matches = Object.entries(drawings).filter(([key, value]) => isRecord(value) && (typeof value.name === 'string' ? value.name : key) === attachment);
   if (matches.length !== 1) throw new SeamSupportError({ code: matches.length === 0 ? 'SOURCE_ATTACHMENT_MISSING' : 'SOURCE_ATTACHMENT_AMBIGUOUS', slot, attachment });
   const source = matches[0][1];
-  if (!isRecord(source) || !['region', 'mesh'].includes(typeof source.type === 'string' ? source.type : 'region') || typeof source.image !== 'string' || source.image.length === 0 || source.sequence !== undefined) {
+  if (!seamImageSource(source)) {
     throw new SeamSupportError({ code: 'SOURCE_MAPPING_UNSUPPORTED', slot, attachment, feature: 'sequence-or-non-image-attachment' });
   }
   return source;
