@@ -41740,15 +41740,15 @@ function aliasWorkflowFaults(yml: string, doc: string, packageName: string): str
       for (const call of lines(step).filter((line) => line.startsWith('bun run smoke'))) smokeCalls.push({ job, at, step, call });
     });
   }
-  const firstGated = publishers.find((p) => p.job === 'release' && !lines(p.step).some((l) => l.includes('scripts/alias_tarball.ts pack')));
+  const firstGated = publishers.find((p) => p.job === 'publish' && !lines(p.step).some((l) => l.includes('scripts/alias_tarball.ts pack')));
   const prePublishGates = smokeCalls.filter((c) => !c.call.includes('--source registry'));
   const registryConfirmations = smokeCalls.filter((c) => c.call.includes('--source registry'));
   if (prePublishGates.length !== 1) {
     faults.push(`release.yml: ${prePublishGates.length} pre-publish \`bun run smoke\` gate step(s) without \`--source registry\`, where 1 (\`bun run smoke -- --case clean\` before \`Publish to npm\`) is required`);
   } else {
     const pre = prePublishGates[0];
-    if (pre.job !== 'release' || pre.call !== 'bun run smoke -- --case clean' || firstGated === undefined || pre.at >= firstGated.at || pre.step.if !== firstGated.step.if) {
-      faults.push(`release.yml: the pre-publish smoke gate \`${pre.call}\` in job "${pre.job}" at step ${pre.at + 1} must be \`bun run smoke -- --case clean\` before "Publish to npm" in job "release" under the same condition`);
+    if (pre.job !== 'publish' || pre.call !== 'bun run smoke -- --case clean' || firstGated === undefined || pre.at >= firstGated.at || pre.step.if !== firstGated.step.if) {
+      faults.push(`release.yml: the pre-publish smoke gate \`${pre.call}\` in job "${pre.job}" at step ${pre.at + 1} must be \`bun run smoke -- --case clean\` before "Publish to npm" in job "publish" under the same condition`);
     }
   }
   if (registryConfirmations.length === 0) faults.push('release.yml calls no `bun run smoke -- --source registry`, so nothing confirms any name');
@@ -41762,6 +41762,7 @@ function aliasWorkflowFaults(yml: string, doc: string, packageName: string): str
   for (const name of [packageName, ...ALIASES]) {
     if (!doc.includes(`npm view ${name} version`)) faults.push(`RELEASING.md carries no \`npm view ${name} version\`, so the cut's own confirmation of that name is stated nowhere`);
   }
+  faults.push(...releaseGraphFaults(wf as ReleaseWorkflow));
   return faults;
 }
 
@@ -41838,7 +41839,7 @@ function runAliasControls(say: (name: string, ok: boolean, detail: string, why: 
   const preGateAt = yml.indexOf('      - name: Gate parts output through @rig-c/play\n');
   const preGateStep = preGateAt === -1 ? '' : yml.slice(preGateAt, yml.indexOf('\n\n', preGateAt) + 2);
   const gatedStep = '      - name: Publish to npm\n';
-  const condition = "        if: ${{ steps.target.outputs.publish == 'true' }}\n";
+  const condition = "    if: ${{ needs.target.outputs.publish == 'true' }}\n";
   const plants: Array<{ what: string; yml: string | null; doc?: string | null; quiet?: boolean }> = [
     { what: `the release run stops confirming ${lastAlias}`, yml: edit(yml, `"$version" --wait 15 --case clean${confirmed}`, `"$version" --wait 15 --case clean${confirmed.replace(` --alias ${lastAlias}`, '')}`) },
     { what: `the re-run stops confirming ${firstAlias}`, yml: edit(yml, `"$VERSION" --wait 15 --case clean${confirmed}`, `"$VERSION" --wait 15 --case clean${confirmed.replace(` --alias ${firstAlias}`, '')}`) },
@@ -41847,7 +41848,7 @@ function runAliasControls(say: (name: string, ok: boolean, detail: string, why: 
     { what: 'the alias step is dropped', yml: aliasStep === '' ? null : edit(yml, aliasStep, '') },
     { what: 'the alias is published ahead of the gated publish', yml: aliasStep === '' ? null : edit(yml.replace(aliasStep, ''), gatedStep, `${aliasStep}${gatedStep}`) },
     { what: 'the alias step publishes the checkout instead of the tarball', yml: edit(yml, 'npm publish "$alias_tgz" --provenance', 'npm publish --provenance') },
-    { what: 'the alias step loses the release condition', yml: aliasStep === '' || !aliasStep.includes(condition) ? null : edit(yml, aliasStep, aliasStep.replace(condition, '')) },
+    { what: 'the publish job loses the release condition', yml: edit(yml, condition, '') },
     { what: 'the pre-publish smoke gate step is dropped', yml: preGateStep === '' ? null : edit(yml, preGateStep, '') },
     { what: 'the pre-publish smoke gate is moved after Publish to npm', yml: preGateStep === '' ? null : edit(yml.replace(preGateStep, ''), aliasStep, `${preGateStep}${aliasStep}`) },
     { what: `RELEASING.md stops confirming ${firstAlias}`, yml, doc: edit(doc, `npm view ${firstAlias} version`, `npm view ${firstAlias} dist-tags`) },
@@ -41868,7 +41869,7 @@ function runAliasControls(say: (name: string, ok: boolean, detail: string, why: 
       continue;
     }
     if (raised.length === 0) probes.push(`"${plant.what}" was planted and this gate did not fire`);
-    cases.push(`${plant.what} -> ${raised.length}`);
+    cases.push(`${plant.what} -> ${raised.length}: ${raised[0]?.slice(0, 160) ?? 'no fault'}`);
   }
   say(
     'AL01_RELEASE_YML_PUBLISHES_THE_ALIAS_AFTER_THE_GATED_PUBLISH_FROM_THE_TARBALL_IT_COMPARED_AND_CONFIRMS_THE_SAME_ALIAS',
@@ -42111,8 +42112,8 @@ function runAliasControls(say: (name: string, ok: boolean, detail: string, why: 
 /** The refusals the dispatch's resolve step names, each as `::error::<CODE>:` (#555, ported from rig-c/review#153). */
 const REPUBLISH_REFUSALS = ['RELEASE_DISPATCH_INPUT', 'RELEASE_TAG_FORM', 'RELEASE_TAG_UNRELEASED', 'RELEASE_ALREADY_PUBLISHED', 'RELEASE_TAG_BELOW_LATEST', 'RELEASE_REGISTRY_QUERY', 'RELEASE_DISPATCH_REF', 'RELEASE_TAG_UNRESOLVED', 'PROVENANCE_SHA_MISMATCH'] as const;
 
-/** The condition every step after the resolve step runs under, in the release job. */
-const PUBLISH_CONDITION = "${{ steps.target.outputs.publish == 'true' }}";
+/** The publication job consumes the resolver job's explicit decision. */
+const PUBLISH_CONDITION = "${{ needs.target.outputs.publish == 'true' }}";
 
 /** The line RELEASING.md carries for what a failure after the tag leaves, and the two ways out of it (#555). */
 const UNPUBLISHED_CUT_LINE = 'a release-please failure after the tag leaves a version unpublished; the next cut carries it, or the tag is republished by dispatch';
@@ -42127,15 +42128,50 @@ interface ReleaseStep extends AliasStep {
 
 interface ReleaseWorkflow {
   on?: { workflow_dispatch?: { inputs?: Record<string, { required?: boolean; type?: string }> } };
-  jobs?: Record<string, { if?: string; steps?: ReleaseStep[] }>;
+  jobs?: Record<string, { if?: string; needs?: string | string[]; outputs?: Record<string, string>; steps?: ReleaseStep[] }>;
+}
+
+/** The split keeps the resolver decision, checkout and reader on one explicit publish path. */
+function releaseGraphFaults(wf: ReleaseWorkflow): string[] {
+  const faults: string[] = [];
+  const target = wf.jobs?.target;
+  const publish = wf.jobs?.publish;
+  if (target === undefined) faults.push('release.yml has no target job');
+  if (publish === undefined) return [...faults, 'release.yml has no publish job'];
+  const needs = typeof publish.needs === 'string' ? [publish.needs] : publish.needs ?? [];
+  if (!needs.includes('target')) faults.push('release.yml: publish job does not need target');
+  if (publish.if !== PUBLISH_CONDITION) faults.push(`release.yml: publish job runs under ${JSON.stringify(publish.if ?? null)}, required ${PUBLISH_CONDITION}`);
+  for (const name of ['publish', 'tag', 'sha', 'canonical', 'rig_parts', 'spine_parts']) {
+    if (target?.outputs?.[name] !== `\${{ steps.target.outputs.${name} }}`) faults.push(`release.yml: target job output ${name} does not expose steps.target.outputs.${name}`);
+  }
+  const steps = publish.steps ?? [];
+  for (const step of steps) {
+    const label = step.name ?? step.uses ?? step.id ?? '(unnamed)';
+    if (step.if !== undefined) faults.push(`release.yml: "${label}" runs under ${JSON.stringify(step.if)}, required an unconditional step inside the publish job`);
+    const text = JSON.stringify(step);
+    if (text.includes('steps.target.outputs.')) faults.push(`release.yml: "${label}" reads steps.target.outputs across the job boundary`);
+    if (text.includes('steps.release.outputs.')) faults.push(`release.yml: "${label}" reads steps.release.outputs, which a dispatch never sets`);
+    if ((step.uses ?? '').startsWith('actions/checkout@') && step.with?.ref !== '${{ needs.target.outputs.sha || needs.target.outputs.tag }}') faults.push(`release.yml: publish checkout takes ${JSON.stringify(step.with?.ref ?? null)}, not the resolved tag or verified SHA`);
+  }
+  const proofAt = steps.findIndex((step) => step.id === 'reuse');
+  const proof = steps[proofAt];
+  if (proof === undefined || !/^rig-c\/core\/\.github\/actions\/tree-verdict@[0-9a-f]{40}$/.test(proof.uses ?? '') || proof.if !== undefined || proof['continue-on-error'] !== undefined || proof.with?.purpose !== 'publish' || proof.with?.declaration !== 'scripts/tree-verdict.json') faults.push('release.yml: publication reader has no unconditional pinned publish proof');
+  const readerAt = steps.findIndex((step) => step.id === 'publication-reader');
+  const reader = steps[readerAt];
+  const readerCommand = 'node "$TREE_VERDICT_TOOLS/lifecycle.mjs" --declaration scripts/tree-verdict.json --verdict-path "$TREE_VERDICT_PATH"';
+  if (reader === undefined || reader.run !== readerCommand || reader.if !== undefined || reader['continue-on-error'] !== undefined || readerAt <= proofAt || reader.env?.TREE_VERDICT_TOOLS !== '${{ steps.reuse.outputs.tooling-path }}' || reader.env?.TREE_VERDICT_PATH !== '${{ steps.reuse.outputs.verdict-path }}') faults.push('release.yml: publication reader must run unconditionally after its proof with the exact lifecycle command and evidence');
+  const beforeGate = steps.findIndex((step) => (step.run ?? '').trim() === 'bun run smoke -- --case clean');
+  const publications = steps.flatMap((step, at) => /\bnpm (?:publish|pack)\b|scripts\/alias_tarball\.ts pack/.test(step.run ?? '') ? [at] : []);
+  if (readerAt === -1 || beforeGate === -1 || readerAt >= beforeGate || publications.some((at) => readerAt >= at)) faults.push('release.yml: publication reader must precede smoke and every pack or publish');
+  return faults;
 }
 
 /**
  * What is wrong with how `release.yml` republishes a tag release-please cut whose publish did not land, and with how
  * RELEASING.md says so, one sentence per fault; empty when the dispatch takes an optional `tag` beside an optional
  * `version`, release-please runs on a push only, one `target` step resolves what to publish right after it and names
- * each refusal in `REPUBLISH_REFUSALS`, every later step of the job runs under `PUBLISH_CONDITION` and reads the tag
- * from `steps.target`, the `confirm` job runs on a `version` dispatch alone, and no `run:` block interpolates an input.
+ * each refusal in `REPUBLISH_REFUSALS`, the publication job runs under `PUBLISH_CONDITION` and reads the tag
+ * from `needs.target`, the `confirm` job runs on a `version` dispatch alone, and no `run:` block interpolates an input.
  */
 function republishFaults(yml: string, doc: string, packageName: string): string[] {
   let wf: ReleaseWorkflow;
@@ -42151,18 +42187,18 @@ function republishFaults(yml: string, doc: string, packageName: string): string[
     if (input === undefined) faults.push(`release.yml: workflow_dispatch has no \`${name}\` input`);
     else if (input.required !== false || input.type !== 'string') faults.push(`release.yml: the dispatch input \`${name}\` is ${JSON.stringify({ required: input.required ?? null, type: input.type ?? null })}, where an optional string is what lets a dispatch give the other input alone`);
   }
-  const release = wf.jobs?.release;
-  const steps = release?.steps ?? [];
-  if (release === undefined) faults.push('release.yml has no `release` job');
-  const jobIf = release?.if ?? '';
-  if (!jobIf.includes("github.event_name == 'push'") || !jobIf.includes("inputs.tag != ''")) faults.push(`release.yml: the release job runs under ${JSON.stringify(release?.if ?? null)}, which does not admit both a push and a \`tag\` dispatch`);
+  const targetJob = wf.jobs?.target;
+  const steps = targetJob?.steps ?? [];
+  if (targetJob === undefined) faults.push('release.yml has no target job');
+  const jobIf = targetJob?.if ?? '';
+  if (!jobIf.includes("github.event_name == 'push'") || !jobIf.includes("inputs.tag != ''")) faults.push(`release.yml: the target job runs under ${JSON.stringify(targetJob?.if ?? null)}, which does not admit both a push and a \`tag\` dispatch`);
   const please = steps.findIndex((s) => (s.uses ?? '').startsWith('googleapis/release-please-action@'));
-  if (please === -1) faults.push('release.yml: the release job runs no release-please step');
+  if (please === -1) faults.push('release.yml: the target job runs no release-please step');
   else if (steps[please].if !== "${{ github.event_name == 'push' }}") faults.push(`release.yml: release-please runs under ${JSON.stringify(steps[please].if ?? null)}, so a dispatch could cut a tag or a release`);
   const target = steps.findIndex((s) => s.id === 'target');
-  if (target === -1) faults.push('release.yml: the release job has no step with id `target` resolving the tag to publish');
+  if (target === -1) faults.push('release.yml: the target job has no step with id `target` resolving the tag to publish');
   else {
-    if (target !== please + 1) faults.push(`release.yml: the resolve step is step ${target + 1} of the release job, where it follows release-please directly`);
+    if (target !== please + 1) faults.push(`release.yml: the resolve step is step ${target + 1} of the target job, where it follows release-please directly`);
     if (steps[target].if !== undefined) faults.push(`release.yml: the resolve step runs under ${JSON.stringify(steps[target].if)}, so a dispatch could skip its refusals`);
     const run = steps[target].run ?? '';
     for (const code of REPUBLISH_REFUSALS) if (!run.includes(`::error::${code}:`)) faults.push(`release.yml: the resolve step never prints \`::error::${code}:\`, so that refusal is not made by name`);
@@ -42175,14 +42211,7 @@ function republishFaults(yml: string, doc: string, packageName: string): string[
       if (steps[target].env?.[variable] !== source) faults.push(`release.yml: the resolve step's env does not set ${variable} to ${source}`);
     }
   }
-  steps.forEach((step, at) => {
-    if (target === -1 || at <= target) return;
-    const label = step.name ?? step.uses ?? `step ${at + 1}`;
-    if (step.if !== PUBLISH_CONDITION) faults.push(`release.yml: "${label}" runs under ${JSON.stringify(step.if ?? null)}, where every step after the resolve step runs under ${PUBLISH_CONDITION}`);
-    const text = JSON.stringify(step);
-    if (text.includes('steps.release.outputs.')) faults.push(`release.yml: "${label}" reads steps.release.outputs, which a dispatch never sets; the tag comes from steps.target`);
-    if ((step.uses ?? '').startsWith('actions/checkout@') && step.with?.ref !== '${{ steps.target.outputs.sha || steps.target.outputs.tag }}') faults.push(`release.yml: the release job checks out ${JSON.stringify(step.with?.ref ?? null)}, not the resolved tag or verified SHA`);
-  });
+  faults.push(...releaseGraphFaults(wf));
   const confirmIf = wf.jobs?.confirm?.if ?? '';
   if (!confirmIf.includes("inputs.version != ''") || !confirmIf.includes("inputs.tag == ''")) faults.push(`release.yml: the confirm job runs under ${JSON.stringify(wf.jobs?.confirm?.if ?? null)}, so it can run on a \`tag\` dispatch or with no version`);
   for (const [job, body] of Object.entries(wf.jobs ?? {})) {
@@ -42203,21 +42232,35 @@ function runRepublishControls(say: (name: string, ok: boolean, detail: string, w
   const doc = readFileSync(join(ROOT, 'RELEASING.md'), 'utf8');
   const standing = republishFaults(yml, doc, packageName);
   const edit = (text: string, from: string, to: string): string | null => (text.includes(from) ? text.split(from).join(to) : null);
-  const aliasCondition = `      - name: Publish the alias ${ALIASES[0]}\n        if: ${PUBLISH_CONDITION}\n`;
+  const aliasCondition = `      - name: Publish the alias ${ALIASES[0]}\n`;
+  const publishCondition = `    if: ${PUBLISH_CONDITION}\n`;
+  const readerAt = yml.indexOf('      - name: Gate every publication through the lifecycle reader\n');
+  const readerStep = readerAt === -1 ? '' : yml.slice(readerAt, yml.indexOf('\n\n', readerAt) + 2);
+  const smokeAt = yml.indexOf('      - name: Gate parts output through @rig-c/play\n');
+  const smokeStep = smokeAt === -1 ? '' : yml.slice(smokeAt, yml.indexOf('\n\n', smokeAt) + 2);
   const plants: Array<{ what: string; yml: string | null; doc?: string | null; want: string }> = [
     { what: 'the tag input dropped', yml: edit(yml, '      tag:\n        description:', '      tagged:\n        description:'), want: 'no `tag` input' },
     { what: 'the version input required again', yml: edit(yml, '(leave tag empty)\n        required: false', '(leave tag empty)\n        required: true'), want: 'the dispatch input `version`' },
     { what: 'release-please runs on a dispatch', yml: edit(yml, "        id: release\n        if: ${{ github.event_name == 'push' }}\n", '        id: release\n'), want: 'so a dispatch could cut' },
-    { what: 'an alias publish keyed on release-please again', yml: edit(yml, aliasCondition, aliasCondition.replace(PUBLISH_CONDITION, "${{ steps.release.outputs.release_created == 'true' }}")), want: `"Publish the alias ${ALIASES[0]}" runs under` },
-    { what: 'the confirmation reads the cut tag again', yml: edit(yml, 'TAG_NAME: ${{ steps.target.outputs.tag }}', 'TAG_NAME: ${{ steps.release.outputs.tag_name }}'), want: 'reads steps.release.outputs' },
-    { what: 'the checkout takes the cut tag again', yml: edit(yml, 'ref: ${{ steps.target.outputs.sha || steps.target.outputs.tag }}', 'ref: ${{ steps.release.outputs.tag_name }}'), want: 'not the resolved tag' },
+    { what: 'an alias publish keyed on release-please again', yml: edit(yml, aliasCondition, `${aliasCondition}        if: \${{ steps.release.outputs.release_created == 'true' }}\n`), want: `"Publish the alias ${ALIASES[0]}" runs under` },
+    { what: 'the confirmation reads the cut tag again', yml: edit(yml, 'TAG_NAME: ${{ needs.target.outputs.tag }}', 'TAG_NAME: ${{ steps.release.outputs.tag_name }}'), want: 'reads steps.release.outputs' },
+    { what: 'the checkout takes the cut tag again', yml: edit(yml, 'ref: ${{ needs.target.outputs.sha || needs.target.outputs.tag }}', 'ref: ${{ steps.release.outputs.tag_name }}'), want: 'not the resolved tag' },
+    { what: 'the publish job loses its condition', yml: edit(yml, publishCondition, ''), want: 'publish job runs under' },
+    { what: 'the publish job loses its target dependency', yml: edit(yml, '    needs: target\n', ''), want: 'publish job does not need target' },
+    { what: 'the target job loses a published output', yml: edit(yml, '      canonical: ${{ steps.target.outputs.canonical }}\n', ''), want: 'target job output canonical' },
+    { what: 'the publish step reads another job local output', yml: edit(yml, 'PUBLISH_NAME: ${{ needs.target.outputs.canonical }}', 'PUBLISH_NAME: ${{ steps.target.outputs.canonical }}'), want: 'reads steps.target.outputs across the job boundary' },
+    { what: 'the publication reader becomes conditional', yml: edit(yml, '        id: publication-reader\n', '        id: publication-reader\n        if: false\n'), want: 'publication reader must run unconditionally' },
+    { what: 'the publication reader ignores failure', yml: edit(yml, '        id: publication-reader\n', '        id: publication-reader\n        continue-on-error: true\n'), want: 'publication reader must run unconditionally' },
+    { what: 'the pinned publication proof is dropped', yml: edit(yml, '        id: reuse\n', '        id: other-proof\n'), want: 'publication reader has no unconditional pinned publish proof' },
+    { what: 'the publication reader is dropped', yml: readerStep === '' ? null : edit(yml, readerStep, ''), want: 'publication reader must run unconditionally' },
+    { what: 'the publication reader runs after smoke', yml: readerStep === '' || smokeStep === '' ? null : edit(yml.replace(readerStep, ''), smokeStep, `${smokeStep}${readerStep}`), want: 'publication reader must precede smoke' },
     { what: 'the form refusal dropped', yml: edit(yml, '::error::RELEASE_TAG_FORM:', '::error::'), want: 'RELEASE_TAG_FORM' },
     { what: 'the below-latest refusal dropped', yml: edit(yml, '::error::RELEASE_TAG_BELOW_LATEST:', '::error::'), want: 'RELEASE_TAG_BELOW_LATEST' },
     { what: "the latest read dropped", yml: edit(yml, `registry_version "${packageName}"`, `registry_version "${packageName}-other"`), want: "below the registry's latest is not refused" },
     { what: 'the registry read under another name', yml: edit(yml, `for name in ${[packageName, ...ALIASES].join(' ')}; do`, `for name in ${['other', ...ALIASES].join(' ')}; do`), want: "under the package's name" },
     { what: 'an input interpolated into the script', yml: edit(yml, 'version="${INPUT_TAG#v}"', 'version="${{ inputs.tag }}"'), want: 'interpolates an input' },
     { what: 'the confirm job runs on a tag dispatch', yml: edit(yml, " && inputs.version != '' && inputs.tag == '' }}", ' }}'), want: 'the confirm job runs under' },
-    { what: 'the release job runs on a push only', yml: edit(yml, "    if: ${{ github.event_name == 'push' || inputs.tag != '' || inputs.version == '' }}", "    if: ${{ github.event_name == 'push' }}"), want: 'the release job runs under' },
+    { what: 'the release job runs on a push only', yml: edit(yml, "    if: ${{ github.event_name == 'push' || inputs.tag != '' || inputs.version == '' }}", "    if: ${{ github.event_name == 'push' }}"), want: 'the target job runs under' },
     { what: "RELEASING.md drops HQ's line", yml, doc: edit(doc, UNPUBLISHED_CUT_LINE, 'a failure after the tag is somebody else\'s'), want: 'RELEASING.md does not carry' },
   ];
   const cases = plants.map((p) => {
@@ -42229,8 +42272,8 @@ function runRepublishControls(say: (name: string, ok: boolean, detail: string, w
   say(
     'AL08_A_CUT_TAG_IS_REPUBLISHED_BY_DISPATCH_THROUGH_THE_SAME_STEPS_AND_EACH_REFUSAL_IS_NAMED',
     standing.length === 0 && cases.every((c) => c.ok),
-    `${standing.length === 0 ? `release.yml takes an optional \`tag\` beside \`version\`, runs release-please on a push only, resolves the tag in one step naming ${REPUBLISH_REFUSALS.join(', ')} (below-latest after already-published), runs every later step under ${PUBLISH_CONDITION} from the resolved tag, interpolates no input into a script, and RELEASING.md says how to dispatch it` : standing.join('; ')}` +
-      ` — planted ${plants.length}: ${cases.map((c) => `${c.what} -> ${c.ok ? 'named' : `NOT named (${c.said.slice(0, 160)})`}`).join('; ')}`,
+    `${standing.length === 0 ? `release.yml takes an optional \`tag\` beside \`version\`, runs release-please on a push only, resolves the tag in one step naming ${REPUBLISH_REFUSALS.join(', ')} (below-latest after already-published), runs the publish job under ${PUBLISH_CONDITION} from the resolved tag with an unconditional reader, interpolates no input into a script, and RELEASING.md says how to dispatch it` : standing.join('; ')}` +
+      ` — planted ${plants.length}: ${cases.map((c) => `${c.what} -> ${c.ok ? 'named' : 'NOT named'} (${c.said.slice(0, 160)})`).join('; ')}`,
     'issue #555: release-please cut v1.49.0 and its GitHub release, then failed before the publish, and a re-run skips every publish step because release-please no longer reports a release; the tag is published by a dispatch through the same gate and the same publish steps in this file, so the trusted publisher and provenance hold, and an input reaching a script through anything but env is an injection',
   );
 }
@@ -42247,7 +42290,7 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
   const object = '3'.repeat(40);
   const tag = 'v1.2.3';
   const rule = 'PROVENANCE_SHA_MISMATCH';
-  const pinned = '${{ steps.target.outputs.sha || steps.target.outputs.tag }}';
+  const pinned = '${{ needs.target.outputs.sha || needs.target.outputs.tag }}';
   const bodies: Record<string, string> = {
     gh: "printf \"gh %s\\n\" \"$*\" >> \"$MOCK_TRACE\"\nif [ \"$1\" = api ]; then\n  wanted_tag=\"$CUT_TAG\"\n  if [ \"$EVENT\" = workflow_dispatch ]; then wanted_tag=\"$INPUT_TAG\"; fi\n  case \"$*\" in \"api repos/$REPO/commits/refs%2Ftags%2F$wanted_tag --jq .sha\") printf \"%s\\n\" \"$MOCK_COMMIT\";; \"api repos/$REPO/commits/tags%2F$wanted_tag --jq .sha\") if [ \"$MOCK_KIND\" = tag ]; then exit 1; fi; printf \"%s\\n\" \"$MOCK_COMMIT\";; \"api repos/$REPO/git/ref/tags/$wanted_tag --jq .sha\") if [ \"$MOCK_KIND\" = tag ]; then printf \"%s\\n\" \"$MOCK_OBJECT\"; else printf \"%s\\n\" \"$MOCK_COMMIT\"; fi;; *) exit 94;; esac\n  exit \"$MOCK_API_EXIT\"\nfi\n[ \"$*\" = \"release view $INPUT_TAG --repo mock/parts\" ] || exit 95\nexit \"$MOCK_RELEASE_EXIT\"\n",
     npm: "printf \"npm %s\\n\" \"$*\" >> \"$MOCK_TRACE\"\nif [ \"$1\" = publish ]; then exit 0; fi\n[ \"$1\" = view ] && [ \"$3\" = version ] || exit 92\nif [ \"$2\" = \"$MOCK_QUERY_SPEC\" ]; then printf '%s\\n' \"$MOCK_QUERY_REPLY\"; exit \"$MOCK_QUERY_EXIT\"; fi\ncase \"$2\" in\n  @rig-c/parts) value=\"$MOCK_LATEST\";;\n  *@*)\n    spec=\"$2\"; name=\"${spec%@*}\"\n    case \"$MOCK_NAMES\" in *\"|$name|\"*) ;; *) exit 96;; esac\n    case \"$MOCK_PRESENT\" in *\"|$name|\"*) value=\"$MOCK_TARGET_VERSION\";; *) printf '{\"error\":{\"code\":\"E404\"}}\\n'; exit 1;; esac;;\n  *) exit 96;;\nesac\nif [ \"${4:-}\" = --json ]; then printf '\"%s\"\\n' \"$value\"; else printf '%s\\n' \"$value\"; fi\n",
@@ -42333,15 +42376,17 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
     const faults: string[] = [];
     const rows: string[] = [];
     const wf = Bun.YAML.parse(text) as ReleaseWorkflow;
-    const steps = wf.jobs?.release?.steps ?? [];
+    const steps = wf.jobs?.target?.steps ?? [];
+    const publicationSteps = wf.jobs?.publish?.steps ?? [];
+    faults.push(...releaseGraphFaults(wf));
     const targetAt = steps.findIndex((step) => step.id === 'target');
     const target = steps[targetAt];
     if (target?.run === undefined) return { faults: ['no executable target'], rows };
-    const checkoutAt = steps.findIndex((step) => (step.uses ?? '').startsWith('actions/checkout@'));
-    if (checkoutAt <= targetAt || steps[checkoutAt]?.with?.ref !== pinned) faults.push('checkout must consume the verified push SHA with dispatch tag fallback after target');
+    const checkoutAt = publicationSteps.findIndex((step) => (step.uses ?? '').startsWith('actions/checkout@'));
+    if (checkoutAt === -1 || publicationSteps[checkoutAt]?.with?.ref !== pinned) faults.push('checkout must consume the verified push SHA with dispatch tag fallback after target');
     if (target.if !== undefined || target['continue-on-error'] !== undefined) faults.push('target refusal can be skipped or ignored');
-    const publishes = steps.map((step, at) => ({ step, at })).filter(({ step }) => /\bnpm publish\b/.test(step.run ?? ''));
-    if (publishes.length !== 1 + ALIASES.length || publishes.some(({ step, at }) => at <= checkoutAt || step.if !== PUBLISH_CONDITION)) faults.push('every canonical and alias publish must follow the checked target and checkout under the publish condition');
+    const publishes = publicationSteps.map((step, at) => ({ step, at })).filter(({ step }) => /\bnpm publish\b/.test(step.run ?? ''));
+    if (publishes.length !== 1 + ALIASES.length || publishes.some(({ step, at }) => at <= checkoutAt || step.if !== undefined)) faults.push('every canonical and alias publish must follow the checked target and checkout under the publish condition');
     for (const scenario of scenarios) {
       writeFileSync(trace, '');
       const outputFile = join(mock, 'outputs.txt');
@@ -42369,7 +42414,7 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
       if (exit === 0 && outputs.publish === 'true') {
         for (const { step } of publishes) {
           const stepEnv = Object.fromEntries(Object.entries(step.env ?? {}).map(([key, value]) => {
-            const field = /^\$\{\{ steps\.target\.outputs\.(\w+) \}\}$/.exec(String(value))?.[1];
+            const field = /^\$\{\{ needs\.target\.outputs\.(\w+) \}\}$/.exec(String(value))?.[1];
             return [key, field === undefined ? String(value) : outputs[field] ?? ''];
           }));
           const ran = run(step.run ?? '', stepEnv);
@@ -42427,12 +42472,12 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
       { what: 'short tag commit ref', text: change('commits/refs%2Ftags%2F$CUT_TAG', 'commits/tags%2F$CUT_TAG') },
       { what: 'tag object from refs API', text: change('commits/refs%2Ftags%2F$CUT_TAG', 'git/ref/tags/$CUT_TAG') },
       { what: 'publish output before comparison', text: change('if [ "$GITHUB_SHA" != "$tag_sha" ]; then', 'echo "publish=true" >> "$GITHUB_OUTPUT"; if [ "$GITHUB_SHA" != "$tag_sha" ]; then') },
-      { what: 'checkout resolves mutable tag again', text: change(`ref: ${pinned}`, 'ref: ${{ steps.target.outputs.tag }}') },
+      { what: 'checkout resolves mutable tag again', text: change(`ref: ${pinned}`, 'ref: ${{ needs.target.outputs.tag }}') },
       { what: 'recovery loses tag ref', text: change('release.yml --ref $CUT_TAG -f tag=$CUT_TAG', 'release.yml -f tag=$CUT_TAG') },
       { what: 'target failure ignored', text: change('        id: target\n', '        id: target\n        continue-on-error: true\n') },
       { what: 'skip guards reversed', text: yml.includes('if [ "$PUBLISH_NAME" != true ]; then') ? yml.replaceAll('if [ "$PUBLISH_NAME" != true ]; then', 'if [ "$PUBLISH_NAME" = true ]; then') : null },
       { what: 'alias recovery loses tagged-tree gates', text: change('            bun run typecheck && bun run lint && bun run selftest || exit $?\n', '') },
-      { what: 'alias plan fields swapped', text: change('PUBLISH_NAME: ${{ steps.target.outputs.rig_parts }}', 'PUBLISH_NAME: ${{ steps.target.outputs.spine_parts }}') },
+      { what: 'alias plan fields swapped', text: change('PUBLISH_NAME: ${{ needs.target.outputs.rig_parts }}', 'PUBLISH_NAME: ${{ needs.target.outputs.spine_parts }}') },
       { what: 'registry failure accepted as absent', text: change('process.exit(v?.error?.code === "E404" ? 0 : 1);', 'process.exit(0);') },
       { what: 'dispatch workflow ref guard reversed', text: change('"${GITHUB_REF:-}" != "refs/tags/$INPUT_TAG"', '"${GITHUB_REF:-}" = "refs/tags/$INPUT_TAG"') },
       { what: 'dispatch SHA comparison reversed', text: change('"$GITHUB_SHA" != "$dispatch_sha"', '"$GITHUB_SHA" = "$dispatch_sha"') },
@@ -42450,7 +42495,7 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
         if (found.faults.length === 0) probes.push(`${plant.what}: no fault fired`);
         // Issue #977: the scenarios each mutant turned red, by name; their faults carry whole shell outputs.
         const reds = [...new Set(found.faults.map((f) => scenarios.map((sc) => sc.name).filter((n) => f.startsWith(`${n}: `)).sort((a, b) => b.length - a.length)[0] ?? f.split(': ')[0]))];
-        rows.push(`${plant.what}: ${found.faults.length} fault(s) in ${reds.join(', ')}`);
+        rows.push(`${plant.what}: ${found.faults.length} fault(s) in ${reds.join(', ')}; first=${found.faults[0]?.slice(0, 160) ?? 'no fault'}`);
       }
     }
     say('AL09_PUSH_PROVENANCE_MATCHES_THE_CUT_TAG_COMMIT_BEFORE_ANY_NAME_IS_PUBLISHED', standing.faults.length === 0 && probes.length === 0,
