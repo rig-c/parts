@@ -21,6 +21,14 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same pull request cancels its superseded run, so a stale
+# head stops holding runners (issue #1110). Every other event groups by commit
+# and is never cancelled: each merge commit on main keeps its own verdict.
+# release.yml has no such group — a cancelled publish is worse than a slow one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # The selftest runs in four shards (issues #395, #849, #1021). SHARDS in
   # selftest.ts assigns every unit exactly once; test below merges the records.
