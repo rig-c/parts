@@ -1,4 +1,4 @@
-import { checkRow } from './checkrow.ts';
+import { checkRow, checkSlotRow } from './checkrow.ts';
 /** Authored source-painting limits over actual renderer setup pixels (#887). */
 import { refuseIfAny, type Problem } from './errors.ts';
 import type { Raster } from './raster/types.ts';
@@ -128,7 +128,7 @@ export const UNDECLARED_SETUP_PAINTING_REASON = 'setup_painting is undeclared; s
  */
 export function setupPaintingLine(
   declared: SetupPainting, source: Raster, setup: Raster, figure: Uint8Array,
-  owners: Int32Array, slots: readonly string[], problems: Problem[], backdrop?: Raster, figureMask?: Uint8Array,
+  owners: Int32Array, slots: readonly string[], problems: Problem[], backdrop?: Raster, figureMask?: Uint8Array, slotParts?: ReadonlyMap<string, string>,
 ): SetupPaintingLine {
   refuseIfAny(setupPaintingProblems(declared, 'setup_painting'));
   refuseIfAny(setupPaintingBounds(declared, source.width, source.height));
@@ -172,7 +172,7 @@ export function setupPaintingLine(
     }
     const status = r.max_pixels === undefined ? 'SKIP' : count > r.max_pixels ? 'FAIL' : 'PASS';
     const result: SetupPaintingReading = { ...r, ...checkRow('SETUP_MATCHES_PAINTING.regions', 'rig', status === 'FAIL', []), status, pixel_count: count, limit: r.max_pixels ?? null,
-      slots: [...rows].map(([slot, row]) => ({ ...checkRow('SETUP_MATCHES_PAINTING.regions[].slots', slot === '(uncovered)' ? 'rig' : 'part', false, slot === '(uncovered)' ? [] : [slot]), slot, box: [row.x0, row.y0, row.x1 - row.x0, row.y1 - row.y0], pixel_count: row.pixels })) };
+      slots: [...rows].map(([slot, row]) => ({ ...checkSlotRow('SETUP_MATCHES_PAINTING.regions[].slots', false, slot, slotParts), slot, box: [row.x0, row.y0, row.x1 - row.x0, row.y1 - row.y0], pixel_count: row.pixels })) };
     if (status === 'FAIL') {
       for (const row of result.slots) problems.push({ code: 'CHECK_SETUP_MATCHES_PAINTING', object: `region "${r.name}" slot "${row.slot}"`, detail: `box [${row.box.join(', ')}], pixelcount ${row.pixel_count}; region pixelcount ${count} > declared limit ${r.max_pixels}, RGB tolerance ${declared.rgb_tolerance}; compare the actual setup to the source painting on the declared stage grid` });
     }

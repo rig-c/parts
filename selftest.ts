@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
-import { checkRowFaults, checkRowCombinations } from './tools/check_row_scope.ts';
-import { rowTableFaults } from './tools/check_row_reference.ts';
+import './tools/check_row_guard.ts';
+import { motionSeamFinding } from './src/check.ts';
+import { checkRowFaults, checkRowCombinations, runCheckRowSchemaChecks, runCheckRowGuardChecks } from './tools/check_row_scope.ts';
+import { rowTableFaults, checkRowTypeInventory } from './tools/check_row_reference.ts';
 import { withoutCheckRows } from './src/checkrow.ts';
 import { runCropEdgeChecks } from './fixtures/crop_edge_checks.ts';
 import { runSupportDomainChecks } from './tools/check_support_domains.ts';
@@ -41750,6 +41752,18 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
   finishUnavailable();
   finishUnavailable();
   say('TY26_THE_UNAVAILABLE_FAMILY_PEAK_FINISHES_ONCE_AND_KEEPS_THE_OWN_PROCESS_PEAK', peakLines.length === 1 && peakLines[0].includes('self_max_rss_kib=') && peakLines[0].includes('family RSS unavailable'), `explicit finish plus exit finish writes ${peakLines.length} line(s); own-process field present: ${peakLines[0]?.includes('self_max_rss_kib=')}`, 'the fallback must be idempotent too; a platform without proc still keeps the own-process kernel maximum when its runtime supports it');
+  runCheckRowSchemaChecks(say);
+  runCheckRowGuardChecks(import.meta.dir, say);
+  const motionPredicates1092 = [false, true].flatMap(root => ['read', 'skip'].flatMap(status => [0, 1].flatMap(banded => [0, 1].map(opens => ({ root, status, banded, opens })))));
+  say('TY830_MOTION_ROW_FINDINGS_SHARE_THE_EXISTING_WARNING_AND_ROOT_FAILURE_PREDICATES',
+    motionPredicates1092.every(r => motionSeamFinding(r.root, r.status, r.banded, r.opens) === (r.root ? r.status === 'read' && r.banded > 0 && r.opens > 0 : r.opens > 0)),
+    `${motionPredicates1092.length} combinations; non-root skip/open warns, root read/unbanded/open is not a finding`,
+    'only the row labels change; the existing warning count and root failure logic stay in place');
+  const rowType1092 = checkRowTypeInventory(import.meta.dir);
+  const rowTypePlant1092 = checkRowTypeInventory(import.meta.dir, '\nexport interface CheckFigures { planted_rows: Array<{ measured: number }>; planted_unknown: unknown }\n');
+  say('TY831_SERIALIZED_OBJECT_ARRAY_TYPES_REQUIRE_REGISTERED_PATHS', rowType1092.arrays.length > 0 && rowType1092.faults.length === 0 && rowTypePlant1092.faults.some(f => f === 'planted_rows: object-array type has no registered family') && rowTypePlant1092.faults.some(f => f === 'planted_unknown: unknown output type has no documented schema exclusion'),
+    `${rowType1092.arrays.length} declared object-array paths; ${rowType1092.unknown.length} explicit open-type exclusions; ${rowType1092.faults.join('; ') || 'unlabelled type and unknown-type plants refused'}`,
+    'type coverage is independent of whether a fixture emits a row, and open legacy figure dictionaries remain guarded recursively at serialization');
   const rowDoc1089 = readFileSync(join(import.meta.dir, 'docs/AUTHORING.md'), 'utf8');
   const rowDocFaults1089 = rowTableFaults(import.meta.dir, rowDoc1089);
   const rowDocPlant1089 = rowDoc1089.replace('<!-- check-row-table:begin -->', '<!-- removed row table -->');
