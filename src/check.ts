@@ -1,3 +1,4 @@
+import { checkRow } from './checkrow.ts';
 import { readSetupFigureMask } from './setupfiguremask.ts';
 import { readSetupBackdrop } from './setupbackdrop.ts';
 import { COINCIDE_LINE, type SupportReport } from './coincide.ts';
@@ -1917,7 +1918,7 @@ export function seamEffectSelection(base: SeamSupport, selected: SeamSupport): S
       const b = before.find(d => d.scope === scope && d.name === name), a = after.find(d => d.scope === scope && d.name === name);
       const fields = b === undefined ? ['added'] : a === undefined ? ['hidden/removed'] :
         (['identity', 'order', 'geometry', 'art'] as const).filter(k => b[k] !== a[k]);
-      if (fields.length > 0) changes.push({ scope, drawing: name, reasons: fields });
+      if (fields.length > 0) changes.push({ ...checkRow('seam_scope.changes', 'rig', false, []), scope, drawing: name, reasons: fields });
     }
   }
   return { mask, cellReasons, reasons, changes };
@@ -2002,7 +2003,7 @@ export function seamStateBounds(build: string, state: string): SeamStateBounds {
         }
       }
     }
-    return { state, frames: frames.length, pieces, bounds,
+    return { ...checkRow('seam_scope.domain.states', 'rig', false, []), state, frames: frames.length, pieces, bounds,
       pose_sha256: digest.digest('hex') };
   } catch {
     refuseIfAny([{ code: 'CHECK_SEAM_DOMAIN', object: 'setup seam union state ' + JSON.stringify(state), detail: 'official selected candidate/still drawn-piece bounds are unavailable; no guessed or empty bounds are substituted' }]);
@@ -2373,8 +2374,8 @@ export function createSeamPopulation(parts: readonly PlacedAlpha[], rigSize: rea
       const rows = [...pairs.entries()].sort(([a], [b]) => a - b)
         .flatMap(([, lower]) => [...lower.entries()].sort(([a], [b]) => a - b).map(([, row]) => ({ ...row })));
       return { basis: 'reference-alpha/top-two-of-2x2', measured_sample_px: measured,
-        pair_count: rows.length, pairs: rows,
-        single_art: [...singles.entries()].sort(([a], [b]) => a - b).map(([, row]) => ({ ...row })),
+        pair_count: rows.length, pairs: rows.map(row => ({ ...row, ...checkRow('seam_scope.population.pairs', 'pair', false, row.parts) })),
+        single_art: [...singles.entries()].sort(([a], [b]) => a - b).map(([, row]) => ({ ...row, ...checkRow('seam_scope.population.single_art', 'part', false, [row.part]) })),
         no_reference_art: { ...noArt } };
     },
     rows: (seam: SeamFigures) => seamPairRowsFrom(seam, parts, rigSize, vp, at),
@@ -2438,7 +2439,7 @@ function seamPairRowsFrom(seam: SeamFigures, parts: readonly PlacedAlpha[], rigS
     const pair: [string, string] = acc.a < 0 ? [name(acc.b), SEAM_NO_ART] : [name(acc.a), name(acc.b)];
     const file = `${String(i + 1).padStart(Math.max(2, width), '0')}_${pair.map((n) => (n === SEAM_NO_ART ? 'no-art' : n)).join('_')}.png`;
     const cut = acc.a >= 0 && parts[acc.a].from === parts[acc.b].from ? { cut: { from: parts[acc.a].from, differing_copies_px: acc.differing } } : {};
-    return { row: { parts: pair, px_over_40: acc.over40,
+    return { row: { ...checkRow('seam_pairs', pair[0] === SEAM_NO_ART ? 'rig' : pair[1] === SEAM_NO_ART ? 'part' : 'pair', false, pair.filter(p => p !== SEAM_NO_ART)), parts: pair, px_over_40: acc.over40,
         ...(acc.outside > 0 ? { outside_authored_px: acc.outside } : {}), px_over_80: acc.over80, frame_box: acc.f, rig_box: acc.r, ...cut, picture: `${SEAM_DIR}/${file}` }, pixels: acc.pixels };
   });
 }
@@ -3437,6 +3438,7 @@ export function foldsLine(
       const onlyPhysicsOn = on !== undefined && off === undefined;
       const constraints = onlyPhysicsOn ? meshPhysicsConstraints(rig, slot, attachment, physicsList) : [];
       const row: FoldRow = {
+        ...checkRow('ANIMATIONS_DO_NOT_FOLD.folding', 'part', entry === undefined, [slot]),
         animation: name,
         slot,
         attachment,
@@ -3474,7 +3476,7 @@ export function foldsLine(
       detail: `rigc render --folds at ${fps} fps${physics}${sideClause}: ${r.line}; ${foldBonesText(rig, motion, r.slot, r.attachment, r.worst_frame, worstOf.get(r) ?? [], context)}; no triangle turned over against the setup pose is required — a fold the art means is declared in the --requirements file's may_fold, { "slot": "${r.slot}", "animation": "${r.animation}", "why": … }`,
     });
   }
-  const declaredNotFolding = mayFold.filter((e) => !folding.some((r) => r.slot === e.slot && r.animation === e.animation)).map((e) => ({ slot: e.slot, animation: e.animation }));
+  const declaredNotFolding = mayFold.filter((e) => !folding.some((r) => r.slot === e.slot && r.animation === e.animation)).map((e) => ({ ...checkRow('ANIMATIONS_DO_NOT_FOLD.declared_not_folding', 'part', true, [e.slot]), slot: e.slot, animation: e.animation }));
   for (const e of declaredNotFolding) {
     problems.push({
       code: `CHECK_${FOLD_LINE}`,
@@ -3650,7 +3652,7 @@ export function levelLine(feet: readonly LevelFoot[], rig: Record<string, unknow
         if (row.worst !== null && Math.abs(degrees) <= Math.abs(row.worst.degrees)) return;
         const t = track(turned);
         const through: Array<{ bone: string; inherit: string }> = [];
-        for (let b: string | null = row.bone; b !== null && b !== turned; b = parentOf(b)) through.push({ bone: b, inherit: inheritOf(b) });
+        for (let b: string | null = row.bone; b !== null && b !== turned; b = parentOf(b)) through.push({ ...checkRow('FEET_STAY_LEVEL.feet[].worst.through', 'rig', false, []), bone: b, inherit: inheritOf(b) });
         row.worst = { animation: r.animation, frame: r.set.frames[i].index, time: t.times[i], degrees, turned, turned_degrees: round6(boneTurn(t.setup, t.frames[i])), through };
       });
     }
@@ -3675,7 +3677,7 @@ export function levelLine(feet: readonly LevelFoot[], rig: Record<string, unknow
   }
   const status: LevelLine['status'] = rows.some((r) => r.status === 'FAIL') ? 'FAIL' : rows.some((r) => r.status === 'PASS') ? 'PASS' : 'SKIP';
   const names = readings.map((r) => r.animation);
-  const line: LevelLine = { status, animations: names, fps, physics_left_out: physicsLeftOut, bar_degrees: LEVEL_BAR_DEGREES, bar: LEVEL_BAR_SOURCE, feet: rows };
+  const line: LevelLine = { status, animations: names, fps, physics_left_out: physicsLeftOut, bar_degrees: LEVEL_BAR_DEGREES, bar: LEVEL_BAR_SOURCE, feet: rows.map(row => ({ ...row, ...checkRow('FEET_STAY_LEVEL.feet', 'part', row.status === 'FAIL', [row.part]) })) };
   if (status === 'SKIP') {
     line.reason = `no frame of ${names.map((n) => `"${n}"`).join(', ')} turns a bone above ${rows.map((r) => `"${r.bone}" (which "${r.part}" rides)`).join(', ')}, so no foot was seen while its leg was posed`;
   }
@@ -3851,7 +3853,7 @@ export function stressLine(plan: StressPlan, geometry: (animation: string) => Id
       );
       const seen = m.filter((x) => x.max !== null && x.min !== null);
       if (seen.length === 0) {
-        poses.push({ turn, unmeasured: `the "${name}" render shows no mesh on slot "${r.part}"` });
+        poses.push({ ...checkRow('STRESS_OFF_CHAIN.per_part[].poses', 'part', false, [r.part]), turn, unmeasured: `the "${name}" render shows no mesh on slot "${r.part}"` });
         failed = true;
         problems.push({ code: `CHECK_${STRESS_LINE}`, object: `mesh "${r.part}" with "${r.chain[0]}" turned ${turn}°`, detail: `the "${name}" render shows no mesh on slot "${r.part}", so its stretch was not read; a part not read is not a pass` });
         continue;
@@ -3869,7 +3871,7 @@ export function stressLine(plan: StressPlan, geometry: (animation: string) => Id
       }
       const shown = roundStress(reading);
       const a = at as StretchAt;
-      poses.push({ turn, reading: shown, worst: { triangle: a.triangle, edge: a.edge, ratio: round3(a.ratio) } });
+      poses.push({ ...checkRow('STRESS_OFF_CHAIN.per_part[].poses', 'part', shown > STRESS_RIGID, [r.part]), turn, reading: shown, worst: { triangle: a.triangle, edge: a.edge, ratio: round3(a.ratio) } });
       if (worst === null || reading > worst.reading) worst = { part: r.part, link: r.chain[0], turn, reading };
       if (shown > STRESS_RIGID) {
         failed = true;
@@ -3883,7 +3885,7 @@ export function stressLine(plan: StressPlan, geometry: (animation: string) => Id
         });
       }
     }
-    rows.push({ part: r.part, link: r.chain[0], links: r.chain.length, off_chain: r.off_chain.map((o) => ({ ...o, largest_weight: round3(o.largest_weight) })), poses });
+    rows.push({ ...checkRow('STRESS_OFF_CHAIN.per_part', 'part', poses.some(p => typeof p.reading === 'number' && p.reading > STRESS_RIGID), [r.part]), part: r.part, link: r.chain[0], links: r.chain.length, off_chain: r.off_chain.map((o) => ({ ...o, ...checkRow('STRESS_OFF_CHAIN.per_part[].off_chain', 'part', false, [r.part]), largest_weight: round3(o.largest_weight) })), poses });
   }
   const w = worst as { part: string; link: string; turn: number; reading: number } | null;
   return {
@@ -3895,7 +3897,7 @@ export function stressLine(plan: StressPlan, geometry: (animation: string) => Id
     worst: w === null ? null : { part: w.part, link: w.link, turn: w.turn },
     bar: STRESS_RIGID,
     per_part: rows,
-    not_read: plan.notRead,
+    not_read: plan.notRead.map(r => ({ ...r, ...checkRow('STRESS_OFF_CHAIN.not_read', 'part', false, [r.part]) })),
   };
 }
 
@@ -3967,7 +3969,7 @@ export function limbLine(parts: PartsFile, rig: Record<string, unknown>, problem
             : `is weighted to ${others.map((b) => `"${b}"`).join(', ')} besides "${l.bone}"; a limb part rides its one bone with weight 1 — a bend is a rotation at the joint, never a deformed mesh — so a region on "${l.bone}" (config.regions.${p.name}), or a mesh whose segments name "${l.bone}" alone, is required`,
       });
     }
-    return { part: p.name, limb: l.name, bone: l.bone, status: fail ? 'FAIL' : 'PASS', others, ...(regionBones.length === 0 ? {} : { region_bones: regionBones }) };
+    return { ...checkRow('LIMB_ONE_BONE.parts', 'part', fail, [p.name]), part: p.name, limb: l.name, bone: l.bone, status: fail ? 'FAIL' : 'PASS', others, ...(regionBones.length === 0 ? {} : { region_bones: regionBones }) };
   });
   return { status: rows.some((r) => r.status === 'FAIL') ? 'FAIL' : 'PASS', parts: rows };
 }
@@ -4291,7 +4293,7 @@ export function sweepLine(
     const why = unread[i];
     if (why !== null) {
       problems.push({ code: `CHECK_${SWEEP_LINE}`, object: object(`over its range [${j.range.join(', ')}]`), detail: `is not read: ${why}; a joint not read is not a pass` });
-      return { ...head, status: 'FAIL', poses: [], unread: why };
+      return { ...head, ...checkRow('SEAM_OVER_RANGE.joints', 'part', false, [j.part]), status: 'FAIL', poses: [], unread: why };
     }
     const poses: SweepPose[] = sweepAngles(j.range).map((a) => {
       const { under, bare } = frames(sweepAnimationName(j.part, a));
@@ -4335,9 +4337,9 @@ export function sweepLine(
       // Issue #557: the contour step on the bent frame — a reading, recorded only where the cap is short.
       const st = step(j, bare);
       if (st !== null) printed.set(`${j.part} ${a}`, st);
-      return { degrees: a, status: fail ? 'FAIL' : 'PASS', mean, px_over_40: f.over40, px_over_80: f.over80, rig_px_over_40: Number(seamRigPxText(f.over40, scale)), ...(st === null || j.short === undefined ? {} : { step_px: st }) };
+      return { ...checkRow('SEAM_OVER_RANGE.joints[].poses', 'part', fail, [j.part]), degrees: a, status: fail ? 'FAIL' : 'PASS', mean, px_over_40: f.over40, px_over_80: f.over80, rig_px_over_40: Number(seamRigPxText(f.over40, scale)), ...(st === null || j.short === undefined ? {} : { step_px: st }) };
     });
-    return { ...head, status: poses.some((p) => p.status === 'FAIL') ? 'FAIL' : 'PASS', poses };
+    return { ...head, ...checkRow('SEAM_OVER_RANGE.joints', 'part', poses.some(p => p.status === 'FAIL'), [j.part]), status: poses.some((p) => p.status === 'FAIL') ? 'FAIL' : 'PASS', poses };
   });
   const g = seen.grid;
   return {
@@ -4568,7 +4570,7 @@ export function motionSeamRequired(line: MotionSeamLine, rows: readonly MotionBa
       refuse(`${label} in "${animation}" at frame ${worst.index} (t = ${worst.time}s)`,
         `background on ${r.hits.length} of ${r.frames} frame(s) read ${frameRuns(r.hits.map((h) => h.index))}: found ${worst.px} px (rigc gapOpen cells of ${worst.cell} world units, world box [${worst.box.join(', ')}]) on the worst frame, 0 required; ${why}`);
     }
-    out.push({ pair: p.pair, class: cls, frames, background_frames: open, max_px: max });
+    out.push({ ...checkRow('SEAM_OVER_MOTION.required.pairs', 'pair', open > 0, [p.a, p.b]), pair: p.pair, class: cls, frames, background_frames: open, max_px: max });
   }
   const failed = problems.length - before;
   return { status: failed === 0 ? 'PASS' : 'FAIL', mode: 'gap-open', bar_px: 0, pairs: out, failed };
@@ -5096,12 +5098,13 @@ function readSeamRows(dir: string, animations: readonly string[], fps: number, p
       }
       const contact = setup ? undefined : jointContactReading(p.jointContact, want.joints ?? [], set.written ?? set.sampled, at, problems);
       if (contact === null) return;
-      worldRows?.push({ pair: want.pair, animation, status: p.status, drawn: p.drawn, banded: p.banded, gap: kinds.gap, ghost: kinds.ghost });
+      worldRows?.push({ ...checkRow('SEAM_OVER_MOTION.worlds.*.rows', 'pair', false, [want.a, want.b]), pair: want.pair, animation, status: p.status, drawn: p.drawn, banded: p.banded, gap: kinds.gap, ghost: kinds.ghost });
       const opens = [...over.keys()].sort((x, y) => x - y);
       rows.push({
+        ...checkRow('SEAM_OVER_MOTION.rows', 'pair', p.status === 'read' && opens.length > 0, [want.a, want.b]),
         pair: want.pair,
         animation,
-        ...(setup ? {} : { joint_contact: contact }),
+        ...(setup ? {} : { joint_contact: contact === undefined ? undefined : { ...contact, reasons: contact.reasons.map(r => ({ ...r, ...checkRow('SEAM_OVER_MOTION.rows[].joint_contact.reasons', 'pair', false, [want.a, want.b]) })) } }),
         status: p.status,
         drawn: p.drawn,
         banded: p.banded,
@@ -5111,7 +5114,7 @@ function readSeamRows(dir: string, animations: readonly string[], fps: number, p
         under_floor: (want.root === undefined ? p.opens : [...rootFrames].filter(f => cells.some(c => c.index === f && c.counted > 0))).filter((f) => !over.has(f)),
         ...(rootWorst === undefined ? {} : { worst: rootWorst }),
         ...(warnWorst === undefined || setup ? {} : { worst: warnWorst }),
-        ...(want.root === undefined ? {} : { cells }),
+        ...(want.root === undefined ? {} : { cells: cells.map(r => ({ ...r, ...checkRow('SEAM_OVER_MOTION.rows[].cells', 'pair', false, [want.a, want.b]) })) }),
       });
     });
   }
@@ -5136,7 +5139,7 @@ export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fp
     const row = rows.find(r => r.pair === p.pair && r.animation === a);
     return row?.status === 'read' && row.banded > 0 ? [] : ['"' + p.pair + '" in "' + a + '": ' + (p.unread ?? (row === undefined ? 'no returned reading' : 'no band on any frame'))];
   }));
-  const unmeasured = unmeasuredRoots.map(root => ({ ...root, candidates: [...root.candidates] }));
+  const unmeasured = unmeasuredRoots.map(root => ({ ...root, ...checkRow('SEAM_OVER_MOTION.roots.unmeasured', 'part', false, [root.part]), candidates: [...root.candidates] }));
   const rootReasons = [...missing, ...unmeasured.map(root => 'root pair for ' + root.limb + ': ' + root.reason)];
   const rootGate: MotionSeamLine['roots'] = roots.length === 0 && unmeasured.length === 0 ? undefined : {
     status: failed.length > 0 ? 'FAIL' : rootReasons.length > 0 || reason !== undefined ? 'SKIP' : 'PASS',
@@ -5159,10 +5162,10 @@ export function motionSeamLine(pairs: MotionSeamPair[], animations: string[], fp
     ...(skipWhy === undefined ? {} : { reason: skipWhy }),
     fps,
     floor: MOTION_SEAM_FLOOR,
-    pairs,
+    pairs: pairs.map(p => ({ ...p, ...checkRow('SEAM_OVER_MOTION.pairs', 'pair', false, [p.a, p.b]) })),
     animations,
     warnings,
-    rows,
+    rows: rows.map(r => ({ ...r, ...checkRow('SEAM_OVER_MOTION.rows', 'pair', r.status === 'read' && r.opens.length > 0, pairs.filter(p => p.pair === r.pair).flatMap(p => [p.a, p.b])) })),
     ...(rootGate === undefined ? {} : { roots: rootGate }),
   };
 }
@@ -5579,6 +5582,7 @@ export function readFigurePairOpenings(
     for (const ps of pairSetups) {
       if (ps.opens.length > 0) {
         openings.push({
+          ...checkRow('figure_openings.openings', 'pair', true, [ps.under, ps.above]),
           pair: ps.pair,
           under: ps.under,
           above: ps.above,
@@ -5757,6 +5761,7 @@ export function clothRow(chain: { tip: string; root: string; links: number; leng
   let s = speeds.length;
   while (s > 0 && speeds[s - 1] < floor) s--;
   return {
+    ...checkRow('CLOTH_SETTLES.rows', 'rig', speeds.length > 0 && s < speeds.length, []),
     tip: chain.tip,
     root: chain.root,
     links: chain.links,
@@ -6260,6 +6265,7 @@ export function measureWindBand(
     const worstGhost = perStep.reduce((best, s) => (s.ghostPx > best.ghostPx ? s : best), perStep[0]);
 
     return {
+      ...checkRow('WIND_BAND.pairs', 'pair', false, [p.a, p.b]),
       pair: p.pair,
       a: p.a,
       b: p.b,
@@ -6270,7 +6276,7 @@ export function measureWindBand(
       first_break_above: span === null ? breakAt(0) : span.end < wb.steps.length - 1 ? breakAt(span.end + 1) : null,
       worst_gap: { x: worstGap.x, px: worstGap.gapPx, animation: worstGap.gapAnim, frame: worstGap.gapFrame },
       worst_ghost: { x: worstGhost.x, px: worstGhost.ghostPx, animation: worstGhost.ghostAnim, frame: worstGhost.ghostFrame },
-      steps: perStep.map((s) => ({ x: s.x, holds: s.holds, gap_max_px: s.gapPx, ghost_max_px: s.ghostPx })),
+      steps: perStep.map((s) => ({ ...checkRow('WIND_BAND.pairs[].steps', 'pair', false, [p.a, p.b]), x: s.x, holds: s.holds, gap_max_px: s.gapPx, ghost_max_px: s.ghostPx })),
     };
   });
 
@@ -7144,7 +7150,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
                 const affected = pixels.filter(q => effects.mask[q] !== 0).length;
                 const reasons: Partial<SeamEffects['reasons']> = {};
                 for (const q of pixels) { const reason = SEAM_EFFECT_REASONS[effects.cellReasons[q]]; reasons[reason] = (reasons[reason] ?? 0) + 1; }
-                return { parts: row.parts, whole_px_over_40: row.px_over_40, affected_px_over_40: affected, inherited_px_over_40: row.px_over_40 - affected, reasons };
+                return { ...checkRow('seam_scope.pairs', row.parts[0] === SEAM_NO_ART ? 'rig' : row.parts[1] === SEAM_NO_ART ? 'part' : 'pair', false, row.parts.filter(p => p !== SEAM_NO_ART)), parts: row.parts, whole_px_over_40: row.px_over_40, affected_px_over_40: affected, inherited_px_over_40: row.px_over_40 - affected, reasons };
               }),
             };
             const altMean = round3(altSeam.mean);
@@ -7234,7 +7240,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     pack_mode: { page_edges: mode.pageEdges, pack_shape: mode.packShape },
     ...(env === null ? {} : { environment: env }),
     loop_max_diff: loop === null ? null : loop.max,
-    ...(loopPhysics === null ? {} : { loop_physics: loopPhysics }),
+    ...(loopPhysics === null ? {} : { loop_physics: loopPhysics.map(row => ({ ...row, ...checkRow('loop_physics', 'rig', false, []) })) }),
     seam_mean: seam === null ? null : round3(seam.mean),
     seam_px_over_40: seam === null ? null : seam.over40,
     seam_px_over_80: seam === null ? null : seam.over80,
@@ -7530,7 +7536,7 @@ export function measureRequirements(inp: CheckInputs, file: RequirementsFile, bu
         }
         line = { ...followLine(r, d.poses, released.poses, full.poses), released_copy: door ?? 'built as forced: rig-c\'s gate passed it with no further declaration' };
       }
-      lines[r.name] = line;
+      lines[r.name] = { ...line, ...(r.kind === 'seam' ? checkRow('requirements.lines.* (seam)', 'pair', line.status === 'FAIL', [r.part, r.neighbour]) : r.kind === 'stretch' ? checkRow('requirements.lines.* (stretch)', 'part', line.status === 'FAIL', [r.slot]) : checkRow('requirements.lines.* (bone)', 'rig', line.status === 'FAIL', [])) };
       const p = requirementProblem(r, line);
       if (p !== null) problems.push(p);
     }
@@ -8111,12 +8117,12 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
   let failed = false;
   for (const p of swing) {
     if (excepted.not_swinging.includes(p.name)) {
-      rows.push({ part: p.name, unmeasured: "declared not swinging by the scene file's not_swinging, so it is not held to the bar" });
+      rows.push({ ...checkRow('TIP_OVER_ROOT.parts', 'part', false, [p.name]), part: p.name, unmeasured: "declared not swinging by the scene file's not_swinging, so it is not held to the bar" });
       continue;
     }
     // Issue #349: a limb segment is rigid on its one bone and turns at its joint; it does not hang, so no tip trails a root.
     if (p.limb !== undefined) {
-      rows.push({ part: p.name, unmeasured: p.limb.band !== undefined ? `a hybrid joint band (config.limbs.${p.limb.name}): it bends between adjacent carriers, does not hang, and is not held to a trailing-tip bar` : `a limb segment (config.limbs.${p.limb.name}), rigid on its one bone "${p.limb.bone}": it turns at its joint and does not hang, so it is not held to the bar` });
+      rows.push({ ...checkRow('TIP_OVER_ROOT.parts', 'part', false, [p.name]), part: p.name, unmeasured: p.limb.band !== undefined ? `a hybrid joint band (config.limbs.${p.limb.name}): it bends between adjacent carriers, does not hang, and is not held to a trailing-tip bar` : `a limb segment (config.limbs.${p.limb.name}), rigid on its one bone "${p.limb.bone}": it turns at its joint and does not hang, so it is not held to the bar` });
       continue;
     }
     const rises = excepted.rises.includes(p.name);
@@ -8137,7 +8143,7 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
     const said = { ...(rests ? { declared: 'rests' } : {}), ...(rises ? { tip_half: tipHalf, tip_read: risesRead.get(p.name) as string } : {}) };
     if (w.root === null || w.tip === null || c.root === null || c.tip === null) {
       const half = w.root === null || c.root === null ? rootHalf : tipHalf;
-      rows.push({ part: p.name, ...said, unmeasured: shown[0] === null ? 'its slot shows no attachment on idle frame 0' : `on idle frame 0 the ${half} half of its box holds no art its attachment draws` });
+      rows.push({ ...checkRow('TIP_OVER_ROOT.parts', 'part', false, [p.name]), part: p.name, ...said, unmeasured: shown[0] === null ? 'its slot shows no attachment on idle frame 0' : `on idle frame 0 the ${half} half of its box holds no art its attachment draws` });
       continue;
     }
     // Issue #987: a half that does not move against its carrier, read at the line's precision, is 0 and not the
@@ -8148,7 +8154,7 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
     // Issue #245: a resting tip is held to the opposite relation — no further than its root, at the line's precision.
     const rigid = t.root === 0 && t.tip === 0;
     const ok = !rigid && (rests ? (ratio === null ? t.tip === 0 : ratio <= TIP_REST_RATIO_CEILING) : ratio === null ? t.tip > 0 : ratio >= TIP_RATIO_FLOOR);
-    rows.push({ part: p.name, ...said, hang_from: hang, root_rig_px: round3(t.root), tip_rig_px: round3(t.tip), ratio, world_root_rig_px: round3(w.root), world_tip_rig_px: round3(w.tip), world_ratio: worldRatio });
+    rows.push({ ...checkRow('TIP_OVER_ROOT.parts', 'part', !ok && !(!rigid && hanging.onLink && Math.max(c.root, c.tip) < TIP_TRAVEL_FLOOR), [p.name]), part: p.name, ...said, hang_from: hang, root_rig_px: round3(t.root), tip_rig_px: round3(t.tip), ratio, world_root_rig_px: round3(w.root), world_tip_rig_px: round3(w.tip), world_ratio: worldRatio });
     // Structural 0 / 0 stays a failure before the link-only magnitude policy (issue #994).
     if (!rigid && hanging.onLink && Math.max(c.root, c.tip) < TIP_TRAVEL_FLOOR) {
       belowGrid++;
@@ -8681,12 +8687,12 @@ export function stillLine(inp: FullInputs, idle: FrameSet, geo: IdleGeometry | n
     const tolerance = stillTolerance(coordMax, entryMax);
     for (const { slot, r } of readings) {
       if (r.max === null) {
-        rows.push({ slot, unmeasured: 'no idle frame shows it' });
+        rows.push({ ...checkRow('STILL_REGIONS_DARK.*.still_slots', 'part', false, [slot]), slot, unmeasured: 'no idle frame shows it' });
         continue;
       }
       sumSq += r.sumSq;
       weight += r.weight;
-      rows.push({ slot, max_rig_px: sig4(r.max), rms_rig_px: sig4(r.weight > 0 ? Math.sqrt(r.sumSq / r.weight) : 0) });
+      rows.push({ ...checkRow('STILL_REGIONS_DARK.*.still_slots', 'part', r.max > tolerance, [slot]), slot, max_rig_px: sig4(r.max), rms_rig_px: sig4(r.weight > 0 ? Math.sqrt(r.sumSq / r.weight) : 0) });
       if (worst === null || r.max > worst.max) worst = { slot, max: r.max, frame: frameIndex(r.frame) };
       if (r.max > tolerance) over.push({ slot, max: r.max, frame: frameIndex(r.frame) as number });
     }
@@ -8695,7 +8701,7 @@ export function stillLine(inp: FullInputs, idle: FrameSet, geo: IdleGeometry | n
       if (still.includes(sl.name) || !record.has(sl.name)) continue;
       const c = crossingOf(artOf(sl.name), inp.stage, shownOf(sl.name), maps, region);
       // Art that only touches the region within the arithmetic's tolerance has not entered it.
-      if (c !== null && c.depth > tolerance) crossing.push({ slot: sl.name, depth_rig_px: round3(c.depth), area_rig_px2: round3(c.area), frame: frameIndex(c.frame) });
+      if (c !== null && c.depth > tolerance) crossing.push({ ...checkRow('STILL_REGIONS_DARK.*.crossing', 'part', true, [sl.name]), slot: sl.name, depth_rig_px: round3(c.depth), area_rig_px2: round3(c.area), frame: frameIndex(c.frame) });
     }
     const rms = weight > 0 ? Math.sqrt(sumSq / weight) : 0;
     return {
@@ -9329,7 +9335,7 @@ export function stretchLine(geo: IdleGeometry | null, path: string, problems: Pr
       });
     }
     if (m.max === null || m.min === null) {
-      rows.push({ slot: m.slot, triangles: m.triangles, unmeasured: 'no idle frame shows this attachment' });
+      rows.push({ ...checkRow('TEXTURE_STRETCH.per_mesh', 'part', false, [m.slot]), slot: m.slot, triangles: m.triangles, unmeasured: 'no idle frame shows this attachment' });
       continue;
     }
     const sMax = stretchSeverity(m.max.ratio);
@@ -9339,7 +9345,7 @@ export function stretchLine(geo: IdleGeometry | null, path: string, problems: Pr
     if (worst === null || severity > worst.severity) worst = { mesh: m, at, severity };
     maxAll = maxAll === null ? m.max.ratio : Math.max(maxAll, m.max.ratio);
     minAll = minAll === null ? m.min.ratio : Math.min(minAll, m.min.ratio);
-    rows.push({ slot: m.slot, triangles: m.triangles, max_ratio: round3(m.max.ratio), max_at: stretchAtText(m.max), min_ratio: round3(m.min.ratio), min_at: stretchAtText(m.min), severity });
+    rows.push({ ...checkRow('TEXTURE_STRETCH.per_mesh', 'part', severity > TEXTURE_STRETCH_CEILING, [m.slot]), slot: m.slot, triangles: m.triangles, max_ratio: round3(m.max.ratio), max_at: stretchAtText(m.max), min_ratio: round3(m.min.ratio), min_at: stretchAtText(m.min), severity });
     if (severity > TEXTURE_STRETCH_CEILING) {
       failed = true;
       const step = bound === undefined ? '' : weightStepText(bound.rig, m.slot, m.attachment, at.edge, bound);

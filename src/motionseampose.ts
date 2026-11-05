@@ -1,3 +1,4 @@
+import { checkRow } from './checkrow.ts';
 /** Posed-axis evidence from one stock seam render, never sampled source keys. */
 import type { GeometryFile } from '@rig-c/core/render-shared';
 import type { FrameSet } from './check.ts';
@@ -49,7 +50,7 @@ const regular = (m: SeamMatrix): boolean => {
 /** World axes remain evidence even when local-range equivalence is unavailable. */
 export function seamJointPose(bone: string, parent: string | null, inherit: string, setup: SeamMatrix, posed: SeamMatrix,
   parentSetup: SeamMatrix | null, parentPosed: SeamMatrix | null, range: [number, number] | null, rangeReason?: string): SeamJointPose {
-  const out: SeamJointPose = { bone, parent, world_x_axis_degrees: posed.a === 0 && posed.c === 0 ? null : angle(posed.a, posed.c),
+  const out: SeamJointPose = { ...checkRow('SEAM_OVER_MOTION.rows[].pose_at_worst.joints', 'rig', false, []), bone, parent, world_x_axis_degrees: posed.a === 0 && posed.c === 0 ? null : angle(posed.a, posed.c),
     parent_relative_setup_axis_delta_degrees_mod360: null, static_range: range, comparison: 'unavailable' };
   if (inherit !== 'normal') return { ...out, reason: `inherit ${inherit}: parent-relative local-range comparison unavailable` };
   if (parent === null || parentSetup === null || parentPosed === null) return { ...out, reason: 'no parent frame for a local-range comparison' };

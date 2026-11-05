@@ -1,3 +1,4 @@
+import { withoutCheckRows } from './checkrow.ts';
 import { readSetupFigureMask } from './setupfiguremask.ts';
 import { EDGE_RESIDUAL_FILE, edgeResidualLines } from './edgeresidual.ts';
 import { SUPPORT_DOMAINS_FILE, writeSupportDomains } from './supportdomains.ts';
@@ -1756,7 +1757,7 @@ export function packLines(r: CheckReport): string[] {
 
 function showFigure(v: unknown): string {
   if (Array.isArray(v)) return v.length === 0 ? 'none' : v.map(showFigure).join(' | ');
-  if (typeof v === 'object' && v !== null) return Object.entries(v).map(([k, x]) => `${k} ${showFigure(x)}`).join(', ');
+  if (typeof v === 'object' && v !== null) return Object.entries(v).filter(([key]) => !['row_scope', 'row_kind', 'row_subjects'].includes(key)).map(([k, x]) => `${k} ${showFigure(x)}`).join(', ');
   return String(v);
 }
 
@@ -1950,7 +1951,7 @@ export function clothLines(line: ClothLine, plant: { silent?: boolean } = {}): s
 
 /** A requirement's line as the console prints it: its name and status, the reason first when NOT MEASURABLE, then its figures as check.json holds them. */
 export function requirementText(name: string, line: RequirementLine): string {
-  const rest = Object.entries(line).filter(([k]) => k !== 'status' && k !== 'reason');
+  const rest = Object.entries(withoutCheckRows(line) as Record<string, unknown>).filter(([k]) => k !== 'status' && k !== 'reason');
   return `${name}: ${line.status} — ${[...(line.status === 'NOT MEASURABLE' ? [String(line.reason)] : []), ...rest.map(([k, v]) => `${k} ${showFigure(v)}`)].join('; ')}`;
 }
 
