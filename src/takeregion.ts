@@ -93,10 +93,11 @@ export function deriveTakenRegion(base: Layer, donor: Layer, painting: Raster, s
     const from = offsetAt(donor, x, y)!;
     pixels.data.set(donor.pixels.data.subarray(from, from + 4), ((y - top) * pixels.width + x - left) * 4);
   }
+  for (let p = 0; p < qualifying.data.length; p++) qualifying.data[p] = components.labels[p] === label ? 1 : 0;
   let opaquePx = 0;
   for (let i = 3; i < pixels.data.length; i += 4) if (pixels.data[i] > OPAQUE_ALPHA_ABOVE) opaquePx++;
   return {
-    layer: { ...base, pixels, left, top, right, bottom, opaquePx },
+    layer: { ...base, pixels, left, top, right, bottom, opaquePx, regionSelection: qualifying },
     reading: { pixels: stats.area, box: [stats.left, stats.top, stats.width, stats.height], painting_match_share: 1, rgb_tolerance: tolerance },
   };
 }

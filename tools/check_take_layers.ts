@@ -19,6 +19,7 @@ import { PartsError } from '../src/errors.ts';
 import { readPng, encodePngBytes } from '../src/raster/png.ts';
 import { runTakeRegionChecks, runTakeRegionReceiptChecks, runTakeContainmentChecks, runTakeDerivedChecks, runTakeReferenceGeometryChecks, runTakeReferenceBranchChecks, runTakeSourceOpacityChecks } from './check_take_region.ts';
 import { runTakePlanOrderChecks } from './check_take_plan_order.ts';
+import { runTakeCleanupChecks } from './check_take_cleanup.ts';
 import { runTakeFootprintChecks } from './check_take_footprint.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
@@ -166,6 +167,7 @@ export function runTakeLayerChecks(dir: string, say: Say): void {
   runTakeReferenceBranchChecks(join(dir, 'reference-branches'), say);
   runTakeSourceOpacityChecks(join(dir, 'source-opacity'), say);
   runTakeFootprintChecks(join(dir, 'footprint'), say);
+  runTakeCleanupChecks(join(dir, 'cleanup'), say);
 }
 
 /** Suite-local planted controls for the optional source-painting crop declaration. */

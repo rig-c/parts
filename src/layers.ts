@@ -38,7 +38,7 @@ import { basename, dirname, join } from 'node:path';
 import { initializeCanvas, type Layer as PsdLayer, readPsd, writePsd } from 'ag-psd';
 import { type Problem, refuseIfAny } from './errors.ts';
 import { decodePngBytes, encodePngBytes } from './raster/png.ts';
-import type { Raster } from './raster/types.ts';
+import type { Mask, Raster } from './raster/types.ts';
 import { BODY_TAGS, HEAD_TAGS, HIDDEN_NAME_RULE, type LayerTagReading, layerTagRequirement, readHiddenTag, readLayerTag, SPLIT_TAGS } from './tags.ts';
 
 /** Alpha strictly above this counts as painted. The reference uses the same cut for its ghost clean-up and its sheets. */
@@ -54,6 +54,8 @@ export const CORE_ALPHA = 250;
 export const NEAR_WHITE_MIN = 235;
 
 export interface Layer {
+  /** Exact seeded component in the original run canvas; internal, never serialized. */
+  regionSelection?: Mask;
   /** Verified donor identities retained through generated splits. */
   takenLayers?: TakenLayerSource[];
   /** As the input names it: a v3 tag, possibly with a `-r`/`-l` side, or an author-made layer's `author:<label>`. */
