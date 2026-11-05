@@ -12,7 +12,9 @@ import { fileSha256, readEditorReceipts } from '../src/editreceipt.ts';
 import { readLayers } from '../src/layers.ts';
 import { readPng, encodePngBytes } from '../src/raster/png.ts';
 import { newRaster } from '../src/raster/types.ts';
-import { crop } from '../src/raster/composite.ts';
+import { crop, pad } from '../src/raster/composite.ts';
+import { writeRun, C, Z } from '../fixtures/assemble_fixture.ts';
+import { applyTakenLayers } from '../src/takelayers.ts';
 import { makeInputs } from '../src/inputs.ts';
 import { setupPaintingLine } from '../src/setuppainting.ts';
 import { applyTakenRegions, deriveTakenRegion, regionPaintingDelta } from '../src/takeregion.ts';
@@ -133,6 +135,91 @@ export function runTakeRegionChecks(dir: string, say: Say): void {
   const setup = { rgb_tolerance: 0, regions: [{ name: 'stage', box: [0, 0, 64, 64] as [number, number, number, number] }] };
   const bound = { ...cfg, depth: { zScale: 1 } };
   say('REGION_ACTIVE_DEPTH_BINDING_REFUSED', message(() => applyTakenRegions({ ...runs, notes: [] }, painting, bound, join(positive.home, 'config.json'), setup, ledger)).includes('ASSEMBLE_REGION_TAKE_BINDING'), 'region samples cannot inherit an unrelated scalar atlas');
+  // A non-square crop has white padding; donor y=20 maps to target y=36.
+  const cropped = fresh('crop-donor');
+  const cropPainting = readPng(join(cropped.home, 'painting.png'));
+  for (let y = 36; y < 44; y++) for (let x = 8; x < 20; x++) cropPainting.data[(y * 64 + x) * 4] = x + y;
+  writeFileSync(join(cropped.home, 'painting.png'), encodePngBytes(cropPainting));
+  writeFileSync(join(cropped.home, 'crop.png'), encodePngBytes(pad(crop(cropPainting, 0, 32, 64, 32), 0, 16, 0, 16, [255, 255, 255, 255])));
+  writeRun(join(cropped.home, 'crop-run'), [{ name: 'topwear', depth: 0.7, rects: [
+    { x0: 8, y0: 16, x1: 56, y1: 40, colour: C },
+    { x0: 4, y0: 20, x1: 8, y1: 28, colour: Z },
+  ] }]);
+  const cropMaterialPath = join(cropped.home, 'crop-run', 'parts', 'topwear.png');
+  const cropMaterial = readPng(cropMaterialPath);
+  for (let y = 20; y < 28; y++) for (let x = 8; x < 20; x++) cropMaterial.data[((y - 16) * cropMaterial.width + x - 4) * 4] = x + y + 16;
+  writeFileSync(cropMaterialPath, encodePngBytes(cropMaterial));
+  writeFileSync(join(cropped.home, 'crop-run', 'meta.json'), JSON.stringify({ prompt_id: 'generated-crop', seed: 0 }));
+  const cropCfg = loadEarlyConfig(join(cropped.home, 'config.json'), 'assemble');
+  const cropEntry = { run: 'full' as const, run_dir: 'crop-run', st_input: 'crop.png', part: 'body', seed: [12, 40] as [number, number],
+    reference: { painting: 'painting.png', sha256: fileSha256(join(cropped.home, 'painting.png')) },
+    crop: { box: [0, 32, 64, 64] as [number, number, number, number], resample: 'bilinear' as const } };
+  cropCfg.assemble.take = [cropEntry];
+  save(cropped.home, cropCfg);
+  say('REGION_CROP_ALL_CONFIG_DOORS', [() => parseEarlyConfig(JSON.parse(readFileSync(join(cropped.home, 'config.json'), 'utf8')), 'layers'), () => loadEarlyConfig(join(cropped.home, 'config.json'), 'assemble'), () => parseConfig(JSON.parse(readFileSync(join(cropped.home, 'config.json'), 'utf8')))].every(read => message(read) === ''), 'optional crop accepted by every config reader');
+  const cropRuns = readRuns(join(cropped.home, 'full'), null);
+  const applyCrop = () => applyTakenRegions({ ...cropRuns, notes: [] }, cropPainting, cropCfg, join(cropped.home, 'config.json'), setup, ledger);
+  const regionCrop = applyCrop();
+  const regionLayer = regionCrop.full.layers.find(layer => layer.name === 'topwear')!;
+  const wholeCrop = applyTakenLayers(cropRuns, cropPainting, { ...cropCfg, assemble: { ...cropCfg.assemble, take: [{ run: 'full', run_dir: 'crop-run', st_input: 'crop.png', tags: ['topwear'], crop: cropEntry.crop }] } }, join(cropped.home, 'config.json'));
+  const wholeLayer = wholeCrop.full.layers.find(layer => layer.name === 'topwear')!;
+  const pixel = (layer: typeof base, x: number, y: number): number[] => {
+    const offset = ((y - layer.top) * layer.pixels.width + x - layer.left) * 4;
+    return Array.from(layer.pixels.data.subarray(offset, offset + 4));
+  };
+  const samplePoints = [[8, 36], [12, 40], [19, 43]];
+  say('REGION_CROP_SHARED_TRANSPORT_SAMPLES', samplePoints.every(([x, y]) => JSON.stringify(pixel(regionLayer, x, y)) === JSON.stringify(pixel(wholeLayer, x, y)) && pixel(regionLayer, x, y)[3] === 255), JSON.stringify(samplePoints.map(([x, y]) => ({ target: [x, y], donor: [x, y - 16], region: pixel(regionLayer, x, y), whole: pixel(wholeLayer, x, y) }))));
+  say('REGION_CROP_COMPONENT_AND_OUTSIDE', takenOutside(regionLayer) === 0 && regionCrop.notes.some(line => line.includes('96 run px; box [8, 36, 12, 8]')), regionCrop.notes.join(' | '));
+  save(cropped.home, { ...cropCfg, assemble: { ...cropCfg.assemble, take: [] } });
+  const noCropTake = stage(cropped.home);
+  const floorImages = noCropTake.result.images;
+  save(cropped.home, cropCfg);
+  const withCropTake = stage(cropped.home);
+  const byteIdenticalOutside = floorImages.every(before => {
+    const after = withCropTake.result.images.find(image => image.record.name === before.record.name)!;
+    const at = (image: typeof before, x: number, y: number, c: number): number => x < image.record.x || y < image.record.y || x >= image.record.x + image.image.width || y >= image.record.y + image.image.height ? 0 : image.image.data[((y - image.record.y) * image.image.width + x - image.record.x) * 4 + c];
+    for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+      if (x >= 8 && x < 20 && y >= 36 && y < 44) continue;
+      for (let c = 0; c < 4; c++) if (at(before, x, y, c) !== at(after, x, y, c)) return false;
+    }
+    return true;
+  });
+  say('REGION_CROP_STAGE_OUTSIDE_NO_TAKE_FLOOR', byteIdenticalOutside, 'every emitted part RGBA outside the seeded component, compared with the same no-take config');
+  const cropInputPath = join(cropped.home, 'crop.png');
+  const cropInputBytes = readFileSync(cropInputPath), mismatchInput = readPng(cropInputPath);
+  mismatchInput.data[0] ^= 1;
+  writeFileSync(cropInputPath, encodePngBytes(mismatchInput));
+  const cropInputError = message(applyCrop);
+  say('REGION_CROP_INPUT_IDENTITY_REFUSED', cropInputError.includes('ASSEMBLE_REGION_TAKE_GEOMETRY') && cropInputError.includes('exact declared square-padded crop RGBA 64x64 is required') && Buffer.byteLength(cropInputError) < 32 * 1024, cropInputError);
+  writeFileSync(cropInputPath, cropInputBytes);
+  cropEntry.crop.box = [0, 32, 65, 64];
+  say('REGION_CROP_OUTSIDE_PAINTING_REFUSED', message(applyCrop).includes('ASSEMBLE_TAKE_CROP'), message(applyCrop));
+  cropEntry.crop.box = [0, 32, 64, 64];
+  cropEntry.seed = [12, 8];
+  say('REGION_CROP_SEED_UNCOVERED_REFUSED', message(applyCrop).includes('ASSEMBLE_REGION_TAKE_SEED'), message(applyCrop));
+  cropEntry.seed = [12, 40];
+  const badFilter = { ...cropCfg, assemble: { ...cropCfg.assemble, take: [{ ...cropEntry, crop: { ...cropEntry.crop, resample: 'nearest' } }] } };
+  const filterError = message(() => parseEarlyConfig(JSON.parse(JSON.stringify(badFilter)), 'assemble'));
+  say('REGION_CROP_FILTER_REFUSED', filterError === 'CONFIG_FIELD_TYPE: config.assemble.take[0].crop.resample — "bilinear" is required explicitly', filterError);
+  const mismatchReference = { ...cropPainting, data: new Uint8ClampedArray(cropPainting.data) };
+  mismatchReference.data[(40 * 64 + 12) * 4] ^= 255;
+  writeFileSync(join(cropped.home, 'mismatch.png'), encodePngBytes(mismatchReference));
+  cropEntry.reference = { painting: 'mismatch.png', sha256: fileSha256(join(cropped.home, 'mismatch.png')) };
+  say('REGION_CROP_REFERENCE_TARGET_GRID_MISMATCH', message(applyCrop).includes('ASSEMBLE_REGION_TAKE_SEED'), message(applyCrop));
+  cropEntry.reference = { painting: 'painting.png', sha256: fileSha256(join(cropped.home, 'painting.png')) };
+  const doubled = newRaster(128, 128);
+  for (let y = 0; y < 128; y++) for (let x = 0; x < 128; x++) {
+    const ox = Math.floor(x / 2), oy = Math.floor(y / 2);
+    if (ox < 4 || ox >= 56 || oy < 16 || oy >= 40) continue;
+    const offset = ((oy - 16) * cropMaterial.width + ox - 4) * 4;
+    doubled.data.set(cropMaterial.data.subarray(offset, offset + 4), (y * 128 + x) * 4);
+  }
+  writeFileSync(join(cropped.home, 'crop-run', 'doubled.png'), encodePngBytes(doubled));
+  writeFileSync(cropMaterialPath, encodePngBytes(doubled));
+  writeFileSync(join(cropped.home, 'crop-run', 'layers.json'), JSON.stringify({ width: 128, height: 128, layers: [{ name: 'topwear', filename: 'doubled.png', left: 0, top: 0, right: 128, bottom: 128, depth_median: 0.7 }] }));
+  const resampled = applyCrop().full.layers.find(layer => layer.name === 'topwear')!;
+  const wholeResampled = applyTakenLayers(cropRuns, cropPainting, { ...cropCfg, assemble: { ...cropCfg.assemble, take: [{ run: 'full', run_dir: 'crop-run', st_input: 'crop.png', tags: ['topwear'], crop: cropEntry.crop }] } }, join(cropped.home, 'config.json')).full.layers.find(layer => layer.name === 'topwear')!;
+  say('REGION_CROP_HIGHER_RESOLUTION_SHARED_BILINEAR', wholeResampled.takenLayers![0].transport!.filter === 'bilinear' && wholeResampled.takenLayers![0].transport!.scale.join() === '0.5,0.5' && samplePoints.every(([x, y]) => JSON.stringify(pixel(resampled, x, y)) === JSON.stringify(pixel(wholeResampled, x, y)) && pixel(resampled, x, y)[0] === x + y), JSON.stringify(samplePoints.map(([x, y]) => ({ target: [x, y], donor: [2 * x, 2 * (y - 16)], rgba: pixel(resampled, x, y) }))));
   const proposed = spawnSync(process.execPath, ['cli.ts', 'assemble', '--source', join(positive.home, 'painting.png'), '--full', join(positive.home, 'full'), '--config', join(positive.home, 'config.json'), '--propose-plan'], { encoding: 'utf8' });
   say('REGION_PLAN_PROPOSAL_REFUSES_BOUND_DECLARATION', proposed.status !== 0 && (proposed.stdout + proposed.stderr).includes('ASSEMBLE_REGION_TAKE_PLAN'), proposed.stdout + proposed.stderr);
 }

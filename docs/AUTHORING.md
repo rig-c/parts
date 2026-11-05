@@ -794,7 +794,8 @@ Resampling establishes the declared output bytes. It does not establish equality
 between separately generated donor and target art. Omitting `crop` retains the
 existing geometry refusal and its message.
 
-Region take entries retain their existing geometry contract and refuse crop donors.
+Region take entries accept the same optional `crop` and use this transport before
+selecting the seeded component on the target run canvas.
 
 ### Residual front/back edges (`edge_residuals.json`, issue #999)
 
@@ -854,10 +855,13 @@ declared painting reference keeps the selected mask fixed when `--source`
 changes for projection. The reference governs colour only and geometry follows `--source`.
 A region take requires an opaque `--source` because its donor must match the run input and `inputs` refuses see-through paintings, so flatten the plate first.
 Its input is derived as for whole-layer take above.
-Both run canvases must agree, and the supplied original donor input
-must match the entire target input in RGBA and dimensions, establishing the same
-crop. Different crops await #973. Painting samples use the existing Lanczos3
-resize onto the run canvas. Only the 8-connected qualifying component containing
+Without `crop`, both run canvases must agree, and the supplied original donor
+input must match the entire target input in RGBA and dimensions. With `crop`,
+the supplied input must match the declared square-padded painting crop exactly.
+The whole-layer crop transport maps donor pixels onto the target run canvas
+before selection; the seed remains on that target canvas. Painting samples,
+including a declared reference, use the existing Lanczos3 resize onto the target
+run canvas, never the donor crop grid. Only the 8-connected qualifying component containing
 the seed is copied. The base layer's depth and draw order stay in use.
 For a declared reference, its hash, binding and painting-to-run transform are logged. For
 `scale` and `origin`, run coordinates are `(painting - origin) * scale`.
@@ -5203,7 +5207,7 @@ those settings. Changing a config seed alone cannot change a no-config run.
 | <a id="ASSEMBLE_REGION_TAKE_REFERENCE_MATCH"></a>`ASSEMBLE_REGION_TAKE_REFERENCE_MATCH` | a reference hash or painting dimensions differ | supply the declared PNG and preserve the source geometry |
 | <a id="ASSEMBLE_REGION_TAKE_CONTAINMENT"></a>`ASSEMBLE_REGION_TAKE_CONTAINMENT` | a non-target part has no pre-take counterpart | retain the same neighbour part population before and after the take |
 | <a id="ASSEMBLE_REGION_TAKE_TOLERANCE"></a>`ASSEMBLE_REGION_TAKE_TOLERANCE` | a region take has no authored `setup_painting.rgb_tolerance` | supply the same requirements file to assemble/build and check |
-| <a id="ASSEMBLE_REGION_TAKE_GEOMETRY"></a>`ASSEMBLE_REGION_TAKE_GEOMETRY` | donor and target canvases or original input RGBA differ, or the target head run is absent | supply the same crop and original input PNG. Cropped donors await #973 |
+| <a id="ASSEMBLE_REGION_TAKE_GEOMETRY"></a>`ASSEMBLE_REGION_TAKE_GEOMETRY` | without `crop`, donor and target canvases or entire input RGBA differ; with `crop`, the original input differs from its declared square-padded crop; or the target head run is absent | supply the matching original input PNG and declare `crop` for a crop donor; a head take requires a target head run |
 | <a id="ASSEMBLE_REGION_TAKE_PART"></a>`ASSEMBLE_REGION_TAKE_PART` | the named plan part/run or its base/donor tag is absent, or the target is taken twice | name an existing plan part and one donor holding its tag |
 | <a id="ASSEMBLE_REGION_TAKE_EMPTY"></a>`ASSEMBLE_REGION_TAKE_EMPTY` | the derived qualifying region has 0 pixels | supply material missing from the base that covers and matches the painting |
 | <a id="ASSEMBLE_REGION_TAKE_SEED"></a>`ASSEMBLE_REGION_TAKE_SEED` | the seed touches no qualifying component | name an integer pixel in the derived region on the target run canvas |
