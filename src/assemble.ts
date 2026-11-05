@@ -4704,6 +4704,8 @@ export function softOcclusionLine(r: SoftOcclusionReading): string {
 }
 
 export interface AssembleResult {
+  /** The already-resampled opaque painting used by this assembly. */
+  paintingInRig: Raster;
   /** Report-only residual candidates, present after the visible edge pass. */
   edgeResiduals?: EdgeResidualReport;
   /** Report-only source re-take under actual soft front support (#825). */
@@ -6007,6 +6009,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   return {
     ...(softOcclusion.length === 0 ? {} : { softOcclusion }),
     ...(!single ? { cropClipped: cropClippedLines(plan, extend, (run, tag) => rig.get(`${run}:${tag}`) ?? null, frame) } : {}),
+    paintingInRig: srcr,
     parts: {
       rig_size: [W, H],
       scale_rig_per_source: frame.S,

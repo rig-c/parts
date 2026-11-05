@@ -193,6 +193,7 @@ function oneMaskBuilder(part: string, stray: number | undefined, sink: { cleared
     const rigIn = join(scratch, '..', 'rig-in');
     mkdirSync(join(rigIn, 'parts'), { recursive: true });
     copyFileSync(join(out, 'parts.json'), join(rigIn, 'parts.json'));
+    copyFileSync(join(out, 'painting_in_rig.png'), join(rigIn, 'painting_in_rig.png'));
     for (const n of readdirSync(join(out, 'parts'))) copyFileSync(join(out, 'parts', n), join(rigIn, 'parts', n));
     const img: Raster = readPng(join(out, 'parts', `${part}.png`));
     const alpha = new Uint8Array(img.width * img.height);

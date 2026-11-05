@@ -4703,6 +4703,60 @@ function runPartsSuite(): number {
       'the record is the measurement; if it cannot be read back byte for byte it cannot be compared between runs',
     );
 
+    // The legacy omission above remains valid; declared packages bind the file itself.
+    const imagePath = join(dir, 'painting_in_rig.png');
+    const paint = newRaster(32, 24);
+    for (let i = 3; i < paint.data.length; i += 4) paint.data[i] = 255;
+    const paintBytes = encodePngBytes(paint);
+    mkdirSync(join(dir, 'parts'));
+    writeFileSync(join(dir, 'parts', 'face.png'), encodePngBytes(newRaster(12, 10)));
+    const legacyReaders = readPartSet(dir).recs.length === 1 && tilesFrom(path).length === 1;
+    const bind = (bytes: Uint8Array): PartsFile => ({ ...file, painting_in_rig: {
+      path: 'painting_in_rig.png', sha256: createHash('sha256').update(bytes).digest('hex'), resample: 'lanczos3-rgb-opaque',
+    } });
+    writeFileSync(imagePath, paintBytes);
+    writeParts(path, bind(paintBytes));
+    say('PT818_DECLARED_PAINTING_ROUNDTRIPS_AND_LEGACY_OMISSION_READS',
+      serializeParts(readParts(path)) === serializeParts(bind(paintBytes)) && back.painting_in_rig === undefined &&
+      legacyReaders && readPartSet(dir).recs.length === 1 && tilesFrom(path).length === 1,
+      'declared opaque 32x24 PNG reads; the omitted declaration reads through PT01', 'new packages bind their raster without breaking legacy manifests');
+    const probePainting = (id: string, bytes: Uint8Array | null, manifest: PartsFile, code: string): void => {
+      if (bytes === null) rmSync(imagePath, { force: true }); else writeFileSync(imagePath, bytes);
+      writeFileSync(path, serializeParts(manifest));
+      const readers = [() => readParts(path), () => readPartSet(dir), () => tilesFrom(path)];
+      const errors = readers.map(read => refusals(read));
+      say(id, errors.every(e => e?.problems.length === 1 && e.problems[0].code === code && e.problems[0].object === imagePath),
+        errors.map(codes).join(', '), 'the common package reader refuses the named broken declaration before downstream stages');
+    };
+    probePainting('PT819_PAINTING_HASH_MISMATCH_IS_NAMED', paintBytes,
+      { ...bind(paintBytes), painting_in_rig: { ...bind(paintBytes).painting_in_rig!, sha256: '0'.repeat(64) } }, 'PARTS_PAINTING_SHA256');
+    const wrongSize = newRaster(1, 1); wrongSize.data[3] = 255;
+    const smallBytes = encodePngBytes(wrongSize);
+    probePainting('PT820_PAINTING_SIZE_MISMATCH_IS_NAMED', smallBytes, bind(smallBytes), 'PARTS_PAINTING_SIZE');
+    probePainting('PT821_MISSING_PAINTING_IS_NAMED', null, bind(paintBytes), 'PARTS_PAINTING_PRESENT');
+    const junk = new Uint8Array([0, 1, 2]);
+    probePainting('PT822_INVALID_PAINTING_PNG_IS_NAMED', junk, bind(junk), 'PARTS_PAINTING_PNG');
+    paint.data[3] = 254;
+    const alphaBytes = encodePngBytes(paint);
+    probePainting('PT823_TRANSLUCENT_PAINTING_IS_NAMED', alphaBytes, bind(alphaBytes), 'PARTS_PAINTING_OPAQUE');
+    for (const [key, value] of [['path', '../painting_in_rig.png'], ['resample', 'nearest'], ['sha256', 'no'], ['extra', 1]] as const) {
+      const invalid = bind(paintBytes);
+      Object.assign(invalid.painting_in_rig!, { [key]: value });
+      writeFileSync(path, JSON.stringify(invalid));
+      const e = refusals(() => readParts(path));
+      say(`PT824_MALFORMED_PAINTING_DECLARATION_IS_NAMED[${key}]`,
+        e?.problems.length === 1 && e.problems[0].code === 'PARTS_FIELD_TYPE', codes(e), 'unknown operators and paths cannot silently select another raster');
+    }
+    const hidden = rgba(1, 1, [[17, 29, 41, 0]]);
+    const opaqueRGB = sourceInRig(hidden, 2, 2);
+    const flattened = sourceInRig(rgba(1, 1, [[255, 255, 255, 255]]), 2, 2);
+    say('PT825_OPAQUE_RGB_AND_SOURCE_OVER_WHITE_KEEP_THEIR_DISTINCT_OPERANDS',
+      [...opaqueRGB.data].every((v, i) => v === [17, 29, 41, 255][i % 4]) &&
+      [...flattened.data].every(v => v === 255) && hidden.data[3] === 0,
+      'hidden RGB 17,29,41 survives the opaque RGB path; source-over-white is 255,255,255; source alpha remains 0',
+      'assemble and check intentionally use different operands for non-opaque paintings');
+    writeFileSync(path, first);
+
     const planted = JSON.parse(first) as { parts: Array<Record<string, unknown>> } & Record<string, unknown>;
     delete planted.parts[0].seam_override_px;
     planted.parts[0].from = 'head:hair';
@@ -26023,7 +26077,7 @@ function runBuildSuite(): number {
     const artifacts = tail.slice(1).map((l) => l.trim());
     const expectedArtifacts = ['skeleton.json', 'skeleton.atlas', 'skeleton.png'].map((name) => join(out, 'check', 'build', name));
     const stageOrder = ['[assemble]', '[rig]', '[check]', '[loop]'].map((p) => green.out.indexOf(`\n${p} `));
-    const partsSame = existsSync(join(out, 'parts.json')) && serializeParts(readParts(join(out, 'parts.json'))) === serializeParts(EXPECTED_PARTS);
+    const partsSame = existsSync(join(out, 'parts.json')) && serializeParts({ ...readParts(join(out, 'parts.json')), painting_in_rig: undefined }) === serializeParts(EXPECTED_PARTS);
     say(
       'BU01_A_GREEN_BUILD_WRITES_ITS_TREE_AND_ENDS_WITH_THE_PACK_LINE_AND_THE_THREE_ARTIFACT_PATHS',
       green.status === 0 &&
@@ -26164,7 +26218,7 @@ function runBuildSuite(): number {
     writeAssembleFixture(wideDir, moving, landscapePainting(), { full: LANDSCAPE_FULL_LAYERS, head: HEAD_LAYERS });
     const wideOut = join(wideDir, 'out');
     const wide = runBuildCli(buildArgs(wideDir, wideOut));
-    const wideParts = existsSync(join(wideOut, 'parts.json')) ? serializeParts(readParts(join(wideOut, 'parts.json'))) : 'absent';
+    const wideParts = existsSync(join(wideOut, 'parts.json')) ? serializeParts({ ...readParts(join(wideOut, 'parts.json')), painting_in_rig: undefined }) : 'absent';
     const pngs = entries(join(out, 'parts'));
     const pngSame = pngs.filter((f) => existsSync(join(wideOut, 'parts', f)) && Buffer.compare(readFileSync(join(out, 'parts', f)), readFileSync(join(wideOut, 'parts', f))) === 0);
     say(
@@ -29679,10 +29733,18 @@ const SILHOUETTE_EXAMPLE_BYTES: Readonly<Record<string, string>> = {
 /** Hash a completed build against its named recipe: a restored whitespace plant proves byte sensitivity. */
 function autoTurnExampleBytes(asm: string, rig: string, key: string, baseline: Readonly<Record<string, string>> = AUTO_TURN_EXAMPLE_BYTES, origin = '1.79.1'): { ok: boolean; detail: string } {
   const digest = (): string => {
+    // The historical digest protects old bytes; the common reader separately
+    // verifies the new file against its declared hash and rig dimensions.
+    if (readParts(join(asm, 'parts.json')).painting_in_rig === undefined) throw new Error('assembled painting declaration is absent');
     const rows: string[] = [];
     for (const file of ['parts', 'parts.json', 'recomposite_error_rig.png', 'recomposite_rig.png']) {
       if (file === 'parts') rows.push(...treeDigest(join(asm, file)).split('\n').map(line => `assemble/parts/${line}`));
-      else rows.push(`assemble/${file} ${createHash('sha256').update(readFileSync(join(asm, file))).digest('hex')}`);
+      else {
+        const protectedBytes = file === 'parts.json'
+          ? readFileSync(join(asm, file), 'utf8').replace(/  "painting_in_rig": \{\n    "path": "painting_in_rig\.png",\n    "sha256": "[a-f0-9]{64}",\n    "resample": "lanczos3-rgb-opaque"\n  \},\n/, '')
+          : readFileSync(join(asm, file));
+        rows.push(`assemble/${file} ${createHash('sha256').update(protectedBytes).digest('hex')}`);
+      }
     }
     rows.push(...treeDigest(rig).split('\n').map(line => `rig/${line}`));
     return createHash('sha256').update(rows.join('\n')).digest('hex');
