@@ -175,6 +175,8 @@ export interface PaintingEdgeOptions {
   painted: Uint8Array;
   /** Canonical painted figure domain for completing allocated gaps and interior translucency. */
   figure?: Mask;
+  /** Independently declared support, consumed only on busy ground. */
+  declaredFigure?: Mask;
   /** Per part: whether the step may write it (false for a painting patch). */
   editable: readonly boolean[];
   keep?: ReadonlyArray<Mask | null>;
@@ -257,6 +259,12 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
   const R = EDGE_RADIUS;
   const cap = 2 * R + 2;
   const busy = options.ground === 'busy';
+  const declaredFigure = busy ? options.declaredFigure : undefined;
+  const preSupport = declaredFigure === undefined ? undefined : parts.map(part => {
+    const support = new Uint8Array(W * H);
+    for (let p = 0; p < W * H; p++) support[p] = part.data[p * 4 + 3] > 0 ? 1 : 0;
+    return support;
+  });
   /** A part's support before the step: where its own alpha is above 0. */
   const supports = (i: number, p: number): boolean => parts[i].data[p * 4 + 3] > 0;
   const owner = new Int16Array(W * H).fill(-1);
@@ -672,6 +680,39 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
         if (parts.some((part, k) => k !== front && part.data[p * 4 + 3] > 0 && options.movingPair?.(front, k) === true)) continue;
         restore.push([p, front]);
       }
+    }
+  }
+  // Busy restoration reads frozen pre-step support and pre-restoration art.
+  // Neither owner allocation nor a newly restored pixel supplies a witness.
+  if (declaredFigure !== undefined && preSupport !== undefined) {
+    for (let p = 0; p < W * H; p++) {
+      if (declaredFigure.data[p] !== 1 || srcr.data[p * 4 + 3] === 0 || locked[p] === 1 ||
+        options.keep?.some(m => m?.data[p] === 1) || options.feathered?.some(m => m?.data[p] === 1)) continue;
+      const x = p % W;
+      const neighbours = [
+        ...(x > 0 ? [p - 1] : []), ...(x + 1 < W ? [p + 1] : []),
+        ...(p >= W ? [p - W] : []), ...(p + W < W * H ? [p + W] : []),
+      ];
+      let alpha = 0;
+      for (const part of parts) {
+        const a = part.data[p * 4 + 3];
+        const t = a * 255 + alpha * (255 - a) + 128;
+        alpha = ((t >>> 8) + t) >>> 8;
+      }
+      if (alpha >= 128 || (alpha > 0 && (neighbours.length !== 4 ||
+        !neighbours.every(q => declaredFigure.data[q] === 1 && srcr.data[q * 4 + 3] > 0)))) continue;
+      const qualifies = (k: number): boolean => options.editable[k] &&
+        neighbours.some(q => preSupport[k][q] === 1) && neighbours.some(q => parts[k].data[q * 4 + 3] > 0);
+      let front = -1;
+      let distance = cap;
+      for (let k = n - 1; k >= 0; k--) {
+        if (!qualifies(k)) continue;
+        if (preSupport[k][p] === 1) { front = k; break; }
+        if (near[k][p] < distance) { front = k; distance = near[k][p]; }
+      }
+      if (front < 0 || parts.some((part, k) => k !== front &&
+        (preSupport[k][p] === 1 || part.data[p * 4 + 3] > 0) && options.movingPair?.(front, k) === true)) continue;
+      restore.push([p, front]);
     }
   }
   for (const [p, front] of restore) {

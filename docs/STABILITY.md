@@ -556,7 +556,7 @@ The separate ordering scalar is unchanged. No-image outputs retain legacy bytes.
 
 | Optional field | Additive contract |
 | --- | --- |
-| `setup_painting.figure_mask` | Verified source-grid alpha support restricts region counts; omission preserves the shipped domain and output bytes. |
+| `setup_painting.figure_mask` | Verified source-grid alpha support restricts region counts and opts busy-ground visible assembly into bounded hole and interior-translucency restoration; omission preserves the shipped domain and output bytes. |
 
 The optional `setup_painting.figure_mask` (issue #974, additive) declares a
 `path` and byte `sha256` for independent figure alpha support on the original
@@ -565,7 +565,13 @@ sampled at nearest source pixel centres onto the stage, with empty support
 refused. Region limits count only inside that support. Outside-mask uncovered
 mismatches have their own unbarred stage-wide row. The verified declaration is
 recorded in the report. Omitting it preserves existing output bytes and the
-shipped domain predicate.
+shipped domain predicate. Assemble reads the same requirements declaration through
+the explicit requirements flag or config.requirements. Busy-ground visible
+restoration requires pre-step and assembled four-neighbour support, prefers the
+frontmost pre-step holder, then nearest pre-step owner with frontmost ties.
+Keep, feather, locked and moving-pair boundaries remain excluded. Plain-ground
+assembly keeps its existing path.
+Busy-ground visible assembly validates config.requirements and its flag correspondence, refusing malformed requirements or unverifiable figure masks before writing.
 
 The optional `setup_painting` key in `spine-parts-requirements/1` adds a
 `SETUP_MATCHES_PAINTING` measurement when declared. It requires authored

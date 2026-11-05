@@ -1,3 +1,4 @@
+import { readSetupFigureMask } from './setupfiguremask.ts';
 import { EDGE_RESIDUAL_FILE, edgeResidualLines } from './edgeresidual.ts';
 import { SUPPORT_DOMAINS_FILE, writeSupportDomains } from './supportdomains.ts';
 import { COINCIDE_LINE, supportLines } from './coincide.ts';
@@ -340,10 +341,12 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const pinholesAsked = requirementsFile !== null && pinholesRequired(requirementsFile);
   // The early door: assemble runs before propose has drafted bones, meshes,
   // regions and motion, so it requires only what it reads (issue #20).
-  const cfg = loadEarlyConfig(input.config, 'assemble');
+  const cfg = loadEarlyConfig(input.config, 'assemble', input.project);
   const supportDeclarations = JSON.stringify(cfg.assemble.cuts ?? []);
   const seam = input.seam ?? cfg.assemble.seam ?? DEFAULT_SEAM_RULE;
   const project = input.project ?? cfg.assemble.project ?? DEFAULT_PROJECT_RULE;
+  const requirements = cfg.assemble.ground === 'busy' && project === 'visible'
+    ? buildRequirements(input.requirements, cfg.requirements, input.config) : null;
   const src = readSource(input.source);
   const read = readRuns(input.full, input.head);
   // Issue #946: every declared receipt is held to its file, and under `required` every edited image needs one, before anything is assembled.
@@ -354,9 +357,14 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const runs = applyTakenRegions(takenRuns, src, cfg, input.config, requirementsFile?.setup_painting, receipts, input.source);
   for (const note of runs.notes) log(note.startsWith('WARN  ') ? note : `note: ${note}`);
   const fields = stageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
+  const setupPainting = requirements === null || fields.ground !== 'busy' || project !== 'visible' ? undefined
+    : readRequirements(requirements.read).setup_painting;
+  const figureSupport = setupPainting === undefined ? undefined
+    : readSetupFigureMask(setupPainting, requirements!.read, src, Math.trunc(src.width * fields.rigScale), Math.trunc(src.height * fields.rigScale));
+  const declaredFigure = figureSupport === undefined ? undefined : { width: Math.trunc(src.width * fields.rigScale), height: Math.trunc(src.height * fields.rigScale), data: figureSupport };
   const under = readUnders(input.config, fields.cuts);
   const caps = fields.limbs === undefined ? undefined : readCaps(input.config, fields.limbs);
-  const result = assemble({ source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under,
+  const result = assemble({ source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under, ...(declaredFigure === undefined ? {} : { declaredFigure }),
     ...((cfg.assemble.take ?? []).some(t => 'part' in t) ? { regionTake: { full: takenRuns.full, head: takenRuns.head, targets: (cfg.assemble.take ?? []).flatMap(t => 'part' in t ? [t.part] : []) } } : {}), ...(caps === undefined ? {} : { caps }), seamRule: seam, projectRule: project });
 
   // Issue #454: alternate painting sets, assembled before any file is written.
@@ -422,6 +430,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   // Issue #664: each limb segment part with a declared front slot -> the part its front slot follows.
   const frontAfter = new Map<string, string>();
   for (const limb of Object.values(fields.limbs ?? {})) for (const p of limb.front?.parts ?? []) frontAfter.set(p, (limb.front as { after: string }).after);
+  const primaryPaintingHash = declaredFigure === undefined ? null : createHash('sha256').update(readFileSync(input.source)).digest('hex');
   for (const alt of mergedAlts) {
     if (alt.source === undefined || alt.full === undefined) {
       altProblems.push({
@@ -670,6 +679,16 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         : altFront.size === 0
           ? setExclusions(result.images, exW, exH, altSegParts, replacedSet)
           : altSegParts.flatMap((sp) => setExclusions(altFront.has(sp) ? frontOrdered(result.images, new Set([sp]), frontAfter) : result.images, exW, exH, [sp], replacedSet));
+    const alternateFigure = declaredFigure !== undefined &&
+      createHash('sha256').update(readFileSync(alt.source)).digest('hex') === primaryPaintingHash ? declaredFigure : undefined;
+    if (declaredFigure !== undefined && alternateFigure === undefined) {
+      const notice = {
+        code: 'ASSEMBLE_ALT_FIGURE_MASK_OMITTED',
+        object: `alternate "${alt.name}"`,
+        detail: 'has different painting bytes; the primary figure mask is omitted',
+      };
+      log(`${notice.code}: ${notice.object} ${notice.detail}`);
+    }
     let altRes: ReturnType<typeof assemble>;
     try {
       altRes = assemble({
@@ -697,6 +716,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         ...(fields.headFaceUnderfill === undefined ? {} : { headFaceUnderfill: fields.headFaceUnderfill }),
         ...(fields.yieldRefused === undefined ? {} : { yieldRefused: fields.yieldRefused }),
         ...(fields.ground === undefined ? {} : { ground: fields.ground }),
+        ...(alternateFigure === undefined ? {} : { declaredFigure: alternateFigure }),
         ...(fields.turnMovingPair === undefined ? {} : { turnMovingPair: fields.turnMovingPair }),
         ...(fields.turn === undefined ? {} : { turn: fields.turn, regions: fields.regions, meshes: fields.meshes, motion: fields.motion }),
         seamRule: seam,

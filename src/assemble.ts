@@ -337,6 +337,8 @@ export interface AssembleInput {
   projectRule: ProjectRule;
   /** `config.assemble.ground` (issue #996), read by `paintingEdges` under `visible` only; absent, `plain`. */
   ground?: Ground;
+  /** Verified requirements figure support on the rig grid, for busy visible restoration. */
+  declaredFigure?: Mask;
   /** `config.scene` (issue #242): the painting is a scene, so the recomposite is read inside the figure ({@link sceneFigure}). Absent or false: nothing changes. */
   scene?: boolean;
   /** `config.limbs` (issue #349): the parts cut at their joints ({@link LimbCount}). Absent or empty: nothing changes. */
@@ -5735,6 +5737,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     const e = paintingEdges(stack.map(onRig), srcr, {
       painted: supportPainted,
       figure: visibleFigure,
+      ...(input.declaredFigure === undefined ? {} : { declaredFigure: input.declaredFigure }),
       ...(input.ground === undefined ? {} : { ground: input.ground }),
       editable: order.map((d) => !('patch' in d)),
       keep: keepInOrder,

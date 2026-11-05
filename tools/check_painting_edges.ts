@@ -1,3 +1,11 @@
+import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, relative } from 'node:path';
+import { assembleConfig, writeAssembleFixture } from '../fixtures/assemble_fixture.ts';
+import { assembleStage } from '../src/build.ts';
+import { PartsError } from '../src/errors.ts';
+import { readPng, writePng } from '../src/raster/png.ts';
 import { runEdgeResidualChecks } from './check_edge_residual.ts';
 /**
  * Issue #953: `paintingEdges` on hand-computable two-part strips. Each control
@@ -76,6 +84,179 @@ function strip(front: RGB, behind: RGB, frontAlpha: (x: number) => number, behin
 const RAMP = (x: number): number => (x <= 7 ? 255 : x === 8 ? 200 : x === 9 ? 140 : x === 10 ? 100 : x === 11 ? 50 : 0);
 
 export function runPaintingEdgeChecks(say: Say): void {
+  const directory = mkdtempSync(join(tmpdir(), 'painting-edge-alternate-'));
+  try {
+    const config = assembleConfig();
+    const declaration = config.assemble as Record<string, unknown>;
+    declaration.ground = 'busy';
+    declaration.project = 'visible';
+    writeAssembleFixture(directory, config);
+    const layerFile = join(directory, 'full', 'parts', 'topwear.png');
+    const layer = readPng(layerFile);
+    // The identity full-run warp maps local (10,10) to rig (20,30).
+    layer.data[(10 * layer.width + 10) * 4 + 3] = 0;
+    writePng(layerFile, layer);
+    const mask = newRaster(128, 128);
+    mask.data.fill(255);
+    const maskFile = join(directory, 'mask.png');
+    writePng(maskFile, mask);
+    const requirements = join(directory, 'requirements.json');
+    writeFileSync(requirements, JSON.stringify({
+      spec: 'spine-parts-requirements/1', fps: 12, requirements: [],
+      setup_painting: { rgb_tolerance: 20, regions: [{ name: 'figure', box: [0, 0, 64, 64] }],
+        figure_mask: { path: 'mask.png', sha256: createHash('sha256').update(readFileSync(maskFile)).digest('hex') } },
+    }));
+    const input = { config: join(directory, 'config.json'), source: join(directory, 'painting.png'),
+      full: join(directory, 'full'), head: join(directory, 'head') };
+    const configMask = join(directory, 'config-mask.json');
+    writeFileSync(configMask, JSON.stringify({ ...config, requirements: 'requirements.json' }));
+    const readings = ['omitted', 'declared', 'config-mask'].map(name => {
+      const declared = name !== 'omitted';
+      const out = join(directory, name);
+      const result = assembleStage({ ...input, config: name === 'config-mask' ? configMask : input.config,
+        ...(name === 'declared' ? { requirements } : {}),
+        alts: [{ name: 'same', source: input.source, full: input.full, head: input.head }] },
+      { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),
+        recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, () => {});
+      const base = result.parts.parts.find(part => part.name === 'topwear');
+      const alternate = result.parts.alternates?.[0];
+      const alternatePart = alternate?.records.find(part => part.name === 'topwear');
+      const alpha = (name: string, record: { x: number; y: number }): number => {
+        const image = readPng(join(out, 'parts', name + '.png'));
+        return image.data[((30 - record.y) * image.width + 20 - record.x) * 4 + 3];
+      };
+      return { name, declared, materialOutput: existsSync(join(out, 'cut_material_sources.json')),
+        base: base === undefined ? null : alpha('topwear', base),
+        alternate: alternatePart === undefined || alternate === undefined ? null : alpha(alternate.slots.topwear, alternatePart) };
+    });
+    say('ED9578_SAME_SOURCE_ALTERNATE_SHARES_DECLARED_FIGURE_AND_OMISSION',
+      readings.every(row => row.base === (row.declared ? 255 : 0) && row.alternate === row.base), JSON.stringify(readings));
+    const configMaskReading = readings.find(row => row.name === 'config-mask');
+    say('ED9579_CONFIG_ONLY_MASK_RESTORES_WITHOUT_CUT_MATERIAL_OUTPUT',
+      configMaskReading?.base === 255 && configMaskReading.alternate === 255 && !configMaskReading.materialOutput,
+      JSON.stringify(configMaskReading));
+
+    const paintingCopy = join(directory, 'same-bytes.png');
+    writeFileSync(paintingCopy, readFileSync(input.source));
+    const differentPainting = readPng(input.source);
+    for (let y = 48; y < 80; y++) for (let x = 32; x < 64; x++) {
+      differentPainting.data.set([0, 0, 200, 255], (y * differentPainting.width + x) * 4);
+    }
+    const differentSource = join(directory, 'different.png');
+    writePng(differentSource, differentPainting);
+    const alternateReadings = ['omitted', 'different', 'same-bytes'].map(name => {
+      const out = join(directory, 'alternate-' + name), logs: string[] = [];
+      const result = assembleStage({ ...input, ...(name === 'omitted' ? {} : { requirements }),
+        alts: [{ name: 'variant', source: name === 'same-bytes' ? paintingCopy : differentSource,
+          full: input.full, head: input.head }] },
+      { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),
+        recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, line => logs.push(line));
+      const alternate = result.parts.alternates?.[0];
+      if (alternate === undefined) throw new Error('alternate fixture has no assembled record');
+      const record = alternate.records.find(part => part.name === 'topwear');
+      if (record === undefined) throw new Error('alternate fixture has no topwear');
+      const image = readPng(join(out, 'parts', alternate.slots.topwear + '.png'));
+      const images = Object.values(alternate.slots).sort().map(name =>
+        createHash('sha256').update(readFileSync(join(out, 'parts', name + '.png'))).digest('hex'));
+      return { name, record: JSON.stringify(alternate), images,
+        alpha: image.data[((30 - record.y) * image.width + 20 - record.x) * 4 + 3],
+        notices: logs.filter(line => line.startsWith('ASSEMBLE_ALT_FIGURE_MASK_OMITTED:')) };
+    });
+    say('ED9582_DIFFERENT_PAINTING_ALTERNATE_MATCHES_MASK_OMISSION_AND_NAMES_THE_SET',
+      alternateReadings[0].record === alternateReadings[1].record &&
+      JSON.stringify(alternateReadings[0].images) === JSON.stringify(alternateReadings[1].images) &&
+      alternateReadings[1].notices.length === 1 && alternateReadings[1].notices[0].includes('alternate "variant"'),
+      JSON.stringify(alternateReadings.map(row => ({ name: row.name, alpha: row.alpha, notices: row.notices }))));
+    say('ED9583_IDENTICAL_PAINTING_BYTES_AT_A_DIFFERENT_PATH_SHARE_THE_MASK',
+      alternateReadings[2].alpha === 255 && alternateReadings[2].notices.length === 0,
+      `same bytes at copied path restore alpha ${alternateReadings[2].alpha}; notices ${alternateReadings[2].notices.length}`);
+
+    const compatibilityModes = [
+      { ground: 'plain', project: 'visible' },
+      { ground: 'busy', project: 'core' },
+      { ground: 'busy', project: 'visible', override: 'core' },
+    ] as const;
+    const legacyReadings = compatibilityModes.map((mode, index) => {
+      const manifests = [false, true].map(declared => {
+        const configFile = join(directory, `legacy-${index}-${declared}.json`);
+        writeFileSync(configFile, JSON.stringify({ ...config,
+          assemble: { ...declaration, ground: mode.ground, project: mode.project },
+          ...(declared ? { requirements: 'absent-legacy-requirements.json' } : {}) }));
+        const out = join(directory, `legacy-output-${index}-${declared}`);
+        assembleStage({ ...input, config: configFile, ...('override' in mode ? { project: mode.override } : {}) },
+          { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),
+            recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, () => {});
+        return readdirSync(out, { recursive: true, withFileTypes: true }).filter(entry => entry.isFile())
+          .map(entry => join(entry.parentPath, entry.name)).sort()
+          .map(file => [relative(out, file), createHash('sha256').update(readFileSync(file)).digest('hex')]);
+      });
+      return { mode, identical: JSON.stringify(manifests[0]) === JSON.stringify(manifests[1]) };
+    });
+    say('ED9584_OUTSIDE_BUSY_VISIBLE_MISSING_CONFIG_REQUIREMENTS_PRESERVE_EVERY_OUTPUT_BYTE',
+      legacyReadings.every(row => row.identical), JSON.stringify(legacyReadings));
+    const precedenceConfig = join(directory, 'legacy-precedence.json');
+    writeFileSync(precedenceConfig, JSON.stringify({ ...config,
+      assemble: { ...declaration, ground: 'plain', seam: 'invalid' }, requirements: 'absent-legacy-requirements.json' }));
+    let precedence: string | null = null;
+    try {
+      const out = join(directory, 'precedence-output');
+      assembleStage({ ...input, config: precedenceConfig, requirements: join(directory, 'absent-explicit-requirements.json') },
+        { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),
+          recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, () => {});
+    } catch (error) {
+      if (!(error instanceof PartsError)) throw error;
+      precedence = error.problems[0]?.code ?? null;
+    }
+    say('ED9585_LEGACY_EXPLICIT_REQUIREMENTS_REFUSAL_PRECEDES_BROKEN_CONFIG',
+      precedence === 'REQUIREMENTS_FILE', `first refusal ${precedence}`);
+    const overrideConfig = join(directory, 'visible-override.json');
+    writeFileSync(overrideConfig, JSON.stringify({ ...config,
+      assemble: { ...declaration, project: 'core' }, requirements: 'absent-legacy-requirements.json' }));
+    let overrideRefusal: string | null = null;
+    try {
+      const out = join(directory, 'override-output');
+      assembleStage({ ...input, config: overrideConfig, project: 'visible' },
+        { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),
+          recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, () => {});
+    } catch (error) {
+      if (!(error instanceof PartsError)) throw error;
+      overrideRefusal = error.problems[0]?.code ?? null;
+    }
+    say('ED9586_VISIBLE_OVERRIDE_ACTIVATES_BUSY_REQUIREMENTS_VALIDATION',
+      overrideRefusal === 'CONFIG_FILE_PRESENT', `first refusal ${overrideRefusal}`);
+
+    const materialRequirements = join(directory, 'material-requirements.json');
+    writeFileSync(materialRequirements, JSON.stringify({
+      spec: 'spine-parts-requirements/1', fps: 12, requirements: [],
+      cut_material: [{ part: 'piece', joint: 'wrist', at: [20, 30], axis: [0, 1], reach_px: 3, bend_degrees: [-30, 30] }],
+    }));
+    const cutConfig: Record<string, unknown> = { ...config,
+      assemble: { ...declaration, cuts: [{ from: 'topwear', into: 'piece',
+        polygon: [[0, 30], [64, 30], [64, 64], [0, 64]], overlap: 3, draw: 'front' }] },
+      regions: { ...config.regions as Record<string, unknown>, piece: 'anchor' },
+    };
+    const materialConfig = join(directory, 'material-config.json');
+    const materialReadings = ['baseline', 'config-only', 'explicit'].map(name => {
+      writeFileSync(materialConfig, JSON.stringify({ ...cutConfig,
+        ...(name === 'baseline' ? {} : { requirements: 'material-requirements.json' }) }));
+      const out = join(directory, 'material-' + name);
+      assembleStage({ ...input, config: materialConfig, ...(name === 'explicit' ? { requirements: materialRequirements } : {}) },
+        { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),
+          recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, () => {});
+      const files = readdirSync(out, { recursive: true, withFileTypes: true })
+        .filter(entry => entry.isFile()).map(entry => join(entry.parentPath, entry.name)).sort();
+      return { name, materialOutput: existsSync(join(out, 'cut_material_sources.json')),
+        manifest: files.map(file => [relative(out, file), createHash('sha256').update(readFileSync(file)).digest('hex')]) };
+    });
+    say('ED9580_CONFIG_ONLY_MATERIAL_WITHOUT_MASK_PRESERVES_ALL_OUTPUT_BYTES',
+      !materialReadings[0].materialOutput && !materialReadings[1].materialOutput &&
+      JSON.stringify(materialReadings[0].manifest) === JSON.stringify(materialReadings[1].manifest),
+      JSON.stringify(materialReadings.map(row => ({ name: row.name, files: row.manifest.length, materialOutput: row.materialOutput }))));
+    say('ED9581_EXPLICIT_MATERIAL_REQUIREMENTS_STILL_WRITE_SOURCE_EVIDENCE',
+      materialReadings[2].materialOutput, `explicit material sidecar ${materialReadings[2].materialOutput}`);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
   runEdgeResidualChecks(say);
   say(
     'ED9530_CONSTANTS_ARE_THE_ASSEMBLE_LIMITS',
@@ -414,6 +595,64 @@ export function runPaintingEdgeChecks(say: Say): void {
       surface[0].data[offset + 3] === 64 && surface[1].data[offset + 3] === 255 &&
       compositePixel[0] === RED[0] && compositePixel[1] === RED[1] && compositePixel[2] === RED[2] && compositePixel[3] === 1,
       `witnessed back and front alphas ${surface.map(q => q.data[offset + 3]).join(',')}; composite ${[...compositePixel].join(',')}`);
+  }
+
+  // Declared busy-ground restoration keeps both support snapshots immutable.
+  {
+    const p = 4 * W + 16, offset = p * 4;
+    const painting = columns(() => RED, () => 255);
+    const figure = newMask(W, H); figure.data.fill(1);
+    const run = (layers: Raster[], extra: Partial<PaintingEdgeOptions> = {}) => {
+      const stack = layers.map(copy);
+      paintingEdges(stack, painting, options({ ground: 'busy', figure, declaredFigure: figure,
+        editable: layers.map(() => true), ...extra }));
+      return stack;
+    };
+    const layer = columns(() => RED, x => x < 18 ? (x === 16 ? 64 : 255) : 0);
+    const gap = copy(layer); gap.data[offset + 3] = 0;
+    const filled = [run([gap])[0], run([layer])[0]];
+    say('ED9570_DECLARED_BUSY_HOLE_AND_SINGLE_HOLDER_TRANSLUCENCY_COMPLETE',
+      filled.every(part => [...part.data.slice(offset, offset + 4)].join(',') === '200,0,0,255'),
+      `hole and single-holder alpha ${filled.map(part => part.data[offset + 3]).join(',')}`);
+    const omitted = run([layer], { declaredFigure: undefined });
+    const empty = run([layer], { declaredFigure: newMask(W, H) });
+    const plainDeclared = run([layer], { ground: 'plain' });
+    const plainOmitted = run([layer], { ground: 'plain', declaredFigure: undefined });
+    say('ED9571_BUSY_OMISSION_AND_PLAIN_DECLARATION_KEEP_EXISTING_BYTES',
+      same(omitted[0], layer) && same(empty[0], omitted[0]) && same(plainDeclared[0], plainOmitted[0]),
+      `busy omission ${same(omitted[0], layer)}; empty domain ${same(empty[0], omitted[0])}; plain ${same(plainDeclared[0], plainOmitted[0])}`);
+    const keep = newMask(W, H); keep.data[p] = 1;
+    const guarded = [{ editable: [false] }, { keep: [keep] }, { feathered: [keep] }];
+    say('ED9572_BUSY_RESTORATION_RESPECTS_EDITABLE_KEEP_AND_FEATHER',
+      guarded.every(extra => run([layer], extra)[0].data[offset + 3] === 64),
+      'locked receiver, keep and feather each retain alpha 64');
+    const rim = newMask(W, H); rim.data.set(figure.data); rim.data[p - W] = 0;
+    const detached = newRaster(W, H); detached.data.set([...RED, 64], offset);
+    say('ED9573_BUSY_RIM_AND_UNOWNED_TRANSLUCENCY_STAY_UNCHANGED',
+      run([layer], { declaredFigure: rim })[0].data[offset + 3] === 64 && run([detached])[0].data[offset + 3] === 64,
+      'rim and no four-neighbour art retain alpha 64');
+    const back = newRaster(W, H), front = newRaster(W, H);
+    back.data.set([...RED, 255], (p - 1) * 4);
+    front.data.set([...RED, 255], (p + 1) * 4);
+    const tie = run([back, front]);
+    say('ED9574_BUSY_NO_HOLDER_DISTANCE_TIE_GOES_TO_FRONT',
+      tie[0].data[offset + 3] === 0 && tie[1].data[offset + 3] === 255,
+      `equal-distance receiver alphas ${tie.map(part => part.data[offset + 3]).join(',')}`);
+    const held = copy(back); held.data.set([...RED, 40], offset);
+    const holder = run([held, front]);
+    say('ED9575_BUSY_PRE_STEP_HOLDER_PRECEDES_NEAREST_NONHOLDER',
+      holder[0].data[offset + 3] === 255 && holder[1].data[offset + 3] === 0,
+      `holder behind neighbour-only front alphas ${holder.map(part => part.data[offset + 3]).join(',')}`);
+    const veil = copy(front); veil.data.set([...RED, 20], offset);
+    const moving = run([held, veil], { movingPair: () => true });
+    say('ED9576_BUSY_MOVING_HOLDERS_REMAIN_LOCKED',
+      moving[0].data[offset + 3] === 40 && moving[1].data[offset + 3] === 20,
+      `moving holders ${moving.map(part => part.data[offset + 3]).join(',')}`);
+    const seed = newRaster(W, H); seed.data.set([...RED, 255], (p - 2) * 4);
+    const frozen = run([seed]);
+    say('ED9577_BUSY_RESTORATION_CANNOT_GROW_ITS_OWN_SUPPORT',
+      frozen[0].data[(p - 1) * 4 + 3] === 255 && frozen[0].data[offset + 3] === 0,
+      `adjacent gap ${frozen[0].data[(p - 1) * 4 + 3]}; second gap ${frozen[0].data[offset + 3]}`);
   }
 
   // Planted: FRONT may not be edited (a painting patch): nothing is written.
