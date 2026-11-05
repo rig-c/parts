@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.19.3](https://github.com/rig-c/parts/compare/v2.19.2...v2.19.3) (2026-11-05)
+
+
+### Bug Fixes
+
+* **ci:** reuse verified tree verdicts ([#1112](https://github.com/rig-c/parts/issues/1112)) ([#1119](https://github.com/rig-c/parts/issues/1119)) ([e0c326e](https://github.com/rig-c/parts/commit/e0c326e03cf1d7654ba81eb125fc70f30aa5eb0b))
+
 ## [2.19.2](https://github.com/rig-c/parts/compare/v2.19.1...v2.19.2) (2026-11-05)
 
 
