@@ -3,12 +3,14 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeTakeRegionFixture } from '../fixtures/take_region.ts';
 import { assembleStage } from '../src/build.ts';
-import { FEATHER_SIGMA, type AssembleResult } from '../src/assemble.ts';
+import { CORE_KERNEL, DRIFT_LIMIT, FEATHER_SIGMA, checkGeometry, runMap, stageFields, type AssembleResult } from '../src/assemble.ts';
 import { dilate } from '../src/raster/morph.ts';
 import { gaussianKernelSize } from '../src/raster/blur.ts';
 import { firstTakeWriters, takeFootprintObserver, type FootprintTrace } from './observe_take_footprint.ts';
 import { readLayers } from '../src/layers.ts';
-import { readPng } from '../src/raster/png.ts';
+import { readPng, encodePngBytes } from '../src/raster/png.ts';
+import { loadEarlyConfig } from '../src/config.ts';
+import { fileSha256 } from '../src/editreceipt.ts';
 import { newFloatImage, newMask, newRaster, type Mask, type Raster } from '../src/raster/types.ts';
 import { warpAffine, type ScaleTranslate, type WarpFilter } from '../src/raster/warp.ts';
 import { rint } from '../src/round.ts';
@@ -75,11 +77,43 @@ export function targetOutsideFootprint(before: AssembleResult, after: AssembleRe
   return outside;
 }
 
-/** Gaussian-feather first writes get its actual kernel support; others do not. */
-export function coreFootprintChanges(before: AssembleResult, after: AssembleResult, target: string, support: Mask, writers: Uint8Array): { feather: number; other: number; beyondFeather: number } {
+/** Dependency reach of erode → close (dilate then erode) → Gaussian blur.
+ * projectSource's CORE_KERNEL is anchored at floor(CORE_KERNEL/2) in
+ * morph.ts, with opposite reach CORE_KERNEL-1-anchor. Closing applies that
+ * kernel twice. blur.ts uses (gaussianKernelSize(FEATHER_SIGMA)-1)/2.
+ * Sequential dependency reaches add, including both closing passes.
+ */
+export function projectionChainReach() {
+  const anchor = Math.floor(CORE_KERNEL / 2);
+  const erosion = Math.max(anchor, CORE_KERNEL - 1 - anchor);
+  const closing = erosion + erosion;
+  const blurKernel = gaussianKernelSize(FEATHER_SIGMA);
+  const blur = (blurKernel - 1) / 2;
+  return { coreKernel: CORE_KERNEL, anchor, erosion, closing, blurKernel, blur, total: erosion + closing + blur };
+}
+
+/** A red plant is located by a separate Chebyshev-distance calculation.
+ * It reads only the original footprint and the analytically derived radius.
+ */
+function justBeyondProjectionBound(support: Mask, radius: number): number {
+  const cells: Array<[number, number]> = [];
+  for (let p = 0; p < support.data.length; p++) if (support.data[p] === 1) cells.push([p % support.width, Math.floor(p / support.width)]);
+  for (let p = 0; p < support.data.length; p++) {
+    const x = p % support.width, y = Math.floor(p / support.width);
+    let distance = Infinity;
+    for (const [sx, sy] of cells) distance = Math.min(distance, Math.max(Math.abs(x - sx), Math.abs(y - sy)));
+    if (distance === radius + 1) return p;
+  }
+  throw new Error('projection plant requires a cell just beyond the independently derived reach');
+}
+
+/** Projection first writes use the whole chain; every other writer stays local. */
+export function coreFootprintChanges(before: AssembleResult, after: AssembleResult, target: string, support: Mask, writers: Uint8Array): { projection: number; other: number; beyondProjection: number; beyondBlur: number } {
   const a = takeTargetCanvas(before, target), b = takeTargetCanvas(after, target);
-  const feather = dilate(support, gaussianKernelSize(FEATHER_SIGMA));
-  let featherCount = 0, other = 0, beyondFeather = 0;
+  const reach = projectionChainReach();
+  const projection = dilate(support, reach.total * 2 + 1);
+  const blurOnly = dilate(support, gaussianKernelSize(FEATHER_SIGMA));
+  let projectionCount = 0, other = 0, beyondProjection = 0, beyondBlur = 0;
   for (let p = 0; p < support.data.length; p++) {
     if (support.data[p] === 1) continue;
     let projected = false, differentWriter = false;
@@ -87,11 +121,12 @@ export function coreFootprintChanges(before: AssembleResult, after: AssembleResu
       if (writers[p * 4 + c] === 1) projected = true;
       else differentWriter = true;
     }
-    if (projected) featherCount++;
+    if (projected) projectionCount++;
     if (differentWriter) other++;
-    if (projected && feather.data[p] === 0) beyondFeather++;
+    if (projected && projection.data[p] === 0) beyondProjection++;
+    if (projected && blurOnly.data[p] === 0) beyondBlur++;
   }
-  return { feather: featherCount, other, beyondFeather };
+  return { projection: projectionCount, other, beyondProjection, beyondBlur };
 }
 
 export function runTakeFootprintChecks(dir: string, say: (name: string, pass: boolean, detail: string) => void): void {
@@ -114,12 +149,21 @@ export function runTakeFootprintChecks(dir: string, say: (name: string, pass: bo
   // The unit impulse reaches only (8,8); at 1.5 its nonzero support is [10,14]².
   say('REGION_FOOTPRINT_SECOND_SCALE', unit.data.reduce((n, v) => n + v, 0) === 1 && enlarged.data.reduce((n, v) => n + v, 0) === 25, 'k=1 reaches one cell; k=1.5 reaches the analytic 5x5 support');
 
-  for (const scale of [1, 1.5]) {
-    const home = join(dir, String(scale)), raw = writeTakeRegionFixture(home);
+  for (const fixture of [{ name: '1', scale: 1, drift: false }, { name: '1.5', scale: 1.5, drift: false }, { name: 'drifted', scale: 1.5, drift: true }]) {
+    const { scale } = fixture;
+    const home = join(dir, fixture.name), raw = writeTakeRegionFixture(home);
     const config = join(home, 'config.json');
     const assemble = raw.assemble as Record<string, unknown>;
     assemble.rig_scale = scale;
     const declarations = assemble.take;
+    if (fixture.drift) {
+      const painting = readPng(join(home, 'painting.png'));
+      writeFileSync(join(home, 'reference.png'), encodePngBytes(painting));
+      const delta = Math.floor(DRIFT_LIMIT / 2);
+      for (let p = 0; p < painting.data.length; p += 4) if (painting.data[p] !== 255) for (let c = 0; c < 3; c++) painting.data[p + c] += delta;
+      writeFileSync(join(home, 'painting.png'), encodePngBytes(painting));
+      (declarations as Array<{ reference: unknown }>)[0].reference = { painting: 'reference.png', sha256: fileSha256(join(home, 'reference.png')) };
+    }
     const input = (project: 'core' | 'visible') => ({ source: join(home, 'painting.png'), full: join(home, 'full'), head: null, config, project, requirements: join(home, 'requirements.json') });
     const output = (name: string) => ({ partsJson: join(home, name, 'parts.json'), partsDir: join(home, name, 'parts'), recomposite: join(home, name, 'recomposite.png'), errorMap: join(home, name, 'error.png') });
     const stage = (name: string, project: 'core' | 'visible') => assembleStage(input(project), output(name), () => {});
@@ -128,39 +172,50 @@ export function runTakeFootprintChecks(dir: string, say: (name: string, pass: bo
     const observedBefore = observe(input('core'), output('observed-before'), 'body', 'full:topwear');
     assemble.take = declarations; save(); const after = stage('core-after', 'core');
     const observedAfter = observe(input('core'), output('observed-after'), 'body', 'full:topwear');
-    const base = readLayers(join(home, 'full')).layers.find(layer => layer.name === 'topwear')!;
+    const baseSet = readLayers(join(home, 'full'));
+    const base = baseSet.layers.find(layer => layer.name === 'topwear')!;
     const donor = readLayers(join(home, 'donor')).layers.find(layer => layer.name === 'topwear')!;
-    const derived = deriveTakenRegion(base, donor, readPng(join(home, 'painting.png')), [12, 40], 0, 'generated footprint control');
-    const component = newMask(64, 64);
-    for (let y = base.top; y < base.bottom; y++) for (let x = base.left; x < base.right; x++) {
-      const p = ((y - base.top) * base.pixels.width + x - base.left) * 4;
-      if ([0, 1, 2, 3].some(c => base.pixels.data[p + c] !== derived.layer.pixels.data[p + c])) component.data[y * 64 + x] = 1;
+    const painting = readPng(join(home, 'painting.png'));
+    const reference = fixture.drift ? readPng(join(home, 'reference.png')) : painting;
+    const derived = deriveTakenRegion(base, donor, reference, [12, 40], 0, 'generated footprint control');
+    const component = newMask(baseSet.canvas.w, baseSet.canvas.h);
+    const layer = derived.layer;
+    for (let y = layer.top; y < layer.bottom; y++) for (let x = layer.left; x < layer.right; x++) {
+      const p = ((y - layer.top) * layer.pixels.width + x - layer.left) * 4;
+      const old = x < base.left || x >= base.right || y < base.top || y >= base.bottom ? -1 : ((y - base.top) * base.pixels.width + x - base.left) * 4;
+      if ([0, 1, 2, 3].some(c => layer.pixels.data[p + c] !== (old < 0 ? 0 : base.pixels.data[old + c]))) component.data[y * component.width + x] = 1;
     }
-    const support = takeFootprint(component, { sx: scale, sy: scale, tx: 0, ty: 0 }, ...after.parts.rig_size, 'bicubic');
+    const fields = stageFields(loadEarlyConfig(config, 'assemble'), { w: painting.width, h: painting.height });
+    const frame = checkGeometry({ ...fields, sourceW: painting.width, sourceH: painting.height });
+    const map = runMap(frame, 'full');
+    const support = takeFootprint(component, { sx: map.sx, sy: map.sx, tx: map.tx, ty: map.ty }, ...after.parts.rig_size, map.k < 1 ? 'bilinear' : 'bicubic');
     const writers = firstTakeWriters(observedBefore.trace, observedAfter.trace);
     const reading = coreFootprintChanges(before, after, 'body', support, writers);
     const observedBase = takeTargetCanvas(observedBefore.result, 'body'), observedTake = takeTargetCanvas(observedAfter.result, 'body');
     const neutral = takeTargetCanvas(before, 'body').data.every((value, p) => value === observedBase.data[p]) &&
       takeTargetCanvas(after, 'body').data.every((value, p) => value === observedTake.data[p]);
-    say('REGION_CORE_WRITER_FOOTPRINT_GUARD', neutral && reading.other === 0 && reading.beyondFeather === 0, `k=${scale}; projection-first halo ${reading.feather}; other ${reading.other}; beyond feather ${reading.beyondFeather}; observer neutral ${neutral}`);
-    const feather = dilate(support, gaussianKernelSize(FEATHER_SIGMA));
+    const beforeCanvas = takeTargetCanvas(before, 'body'), afterCanvas = takeTargetCanvas(after, 'body');
+    const insideChanged = support.data.reduce((count, value, p) => count + (value === 1 && [0, 1, 2, 3].some(c => beforeCanvas.data[p * 4 + c] !== afterCanvas.data[p * 4 + c]) ? 1 : 0), 0);
+    const supportCells = support.data.reduce((count, value) => count + value, 0);
+    say('REGION_CORE_WRITER_FOOTPRINT_GUARD', neutral && supportCells > 0 && insideChanged > 0 && reading.other === 0 && reading.beyondProjection === 0, `${fixture.name}; k=${map.k}; support ${supportCells}; changed inside ${insideChanged}; projection-first halo ${reading.projection}; beyond blur ${reading.beyondBlur}; other ${reading.other}; beyond chain ${reading.beyondProjection}; observer neutral ${neutral}`);
+    if (fixture.drift) console.log(`  INFO  drifted projection reach: beyond blur support ${reading.beyondBlur}; chain radius ${projectionChainReach().total}; observed reading only`);
     const inside = support.data.findIndex((value, p) => value === 1 && p % support.width < support.width - 1 && support.data[p + 1] === 0);
-    const outer = feather.data.findIndex((value, p) => value === 1 && p % support.width < support.width - 1 && feather.data[p + 1] === 0) + 1;
-    const plant = (stage: string, pixel: number) => {
+    const outer = justBeyondProjectionBound(support, projectionChainReach().total);
+    const plant = (stage: string, pixel: number, channel = 0) => {
       const trace: FootprintTrace = new Map();
       let writing = false;
       for (const [name, image] of observedAfter.trace) {
         writing ||= name === stage;
         const copy = { ...image, data: image.data.slice() };
-        if (writing) copy.data[pixel * 4] ^= 1;
+        if (writing) copy.data[pixel * 4 + channel] ^= 1;
         trace.set(name, copy);
       }
       const image = trace.get('emit')!;
       const result = { ...after, images: after.images.map(part => part.record.name === 'body' ? { ...part, image, record: { ...part.record, x: 0, y: 0, w: image.width, h: image.height } } : part) };
       return coreFootprintChanges(before, result, 'body', support, firstTakeWriters(observedBefore.trace, trace));
     };
-    const projectedRed = plant('projection', outer), otherRed = plant('postSeam', inside + 1), boundary = plant('postSeam', inside);
-    say('REGION_FOOTPRINT_FEATHER_AND_OTHER_WRITER_REDS', inside >= 0 && outer > 0 && projectedRed.beyondFeather === 1 && otherRed.other === 1 && boundary.other === 0 && boundary.beyondFeather === 0, `k=${scale}; beyond-feather plant ${projectedRed.beyondFeather}; other-writer plant ${otherRed.other}; inside-boundary ${boundary.other}`);
+    const projectedRed = plant('projection', outer), otherRed = plant('postSeam', inside + 1, 3), boundary = plant('postSeam', inside);
+    say('REGION_FOOTPRINT_CHAIN_AND_OTHER_WRITER_REDS', inside >= 0 && outer > 0 && projectedRed.beyondProjection === 1 && otherRed.other === 1 && boundary.other === 0 && boundary.beyondProjection === 0, `${fixture.name}; beyond-chain plant ${projectedRed.beyondProjection}; other-writer plant ${otherRed.other}; inside-boundary ${boundary.other}`);
     assemble.take = []; save(); const visibleBefore = stage('visible-before', 'visible');
     assemble.take = declarations; save(); const visibleAfter = stage('visible-after', 'visible');
     console.log(`  INFO  region target footprint: visible, k=${scale}, outside ${targetOutsideFootprint(visibleBefore, visibleAfter, 'body', support)} RGBA px; report only, tracked on #1033`);
