@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.18.0](https://github.com/rig-c/parts/compare/v2.17.0...v2.18.0) (2026-11-05)
+
+
+### Features
+
+* **check:** refuse a boundary-colour image size mismatch before the build ([#1093](https://github.com/rig-c/parts/issues/1093)) ([#1099](https://github.com/rig-c/parts/issues/1099)) ([a5af3ff](https://github.com/rig-c/parts/commit/a5af3ff9c2ca3aedd46701cc8695ee301e8c957e))
+
 ## [2.17.0](https://github.com/rig-c/parts/compare/v2.16.1...v2.17.0) (2026-11-05)
 
 
