@@ -337,7 +337,7 @@ export function frontOrdered<T extends { record: { name: string } }>(items: read
 export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, log: Log): AssembleResult {
   const cfg = loadEarlyConfig(input.config, 'assemble');
   const requirements = buildRequirements(input.requirements, cfg.requirements, input.config);
-  const requirementsFile = requirements === null ? null : readRequirements(requirements.read);
+  const requirementsFile = input.requirements === undefined ? null : readRequirements(input.requirements);
   const materialAsked = requirementsFile?.cut_material !== undefined;
   // Issue #944: the pinhole bar is measured only when the requirements file declares it required.
   const pinholesAsked = requirementsFile !== null && pinholesRequired(requirementsFile);
@@ -356,8 +356,10 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const runs = applyTakenRegions(takenRuns, src, cfg, input.config, requirementsFile?.setup_painting, receipts, input.source);
   for (const note of runs.notes) log(note.startsWith('WARN  ') ? note : `note: ${note}`);
   const fields = stageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
-  const figureSupport = requirementsFile?.setup_painting === undefined || fields.ground !== 'busy' || project !== 'visible' ? undefined
-    : readSetupFigureMask(requirementsFile.setup_painting, requirements!.read, src, Math.trunc(src.width * fields.rigScale), Math.trunc(src.height * fields.rigScale));
+  const setupPainting = requirements === null || fields.ground !== 'busy' || project !== 'visible' ? undefined
+    : readRequirements(requirements.read).setup_painting;
+  const figureSupport = setupPainting === undefined ? undefined
+    : readSetupFigureMask(setupPainting, requirements!.read, src, Math.trunc(src.width * fields.rigScale), Math.trunc(src.height * fields.rigScale));
   const declaredFigure = figureSupport === undefined ? undefined : { width: Math.trunc(src.width * fields.rigScale), height: Math.trunc(src.height * fields.rigScale), data: figureSupport };
   const under = readUnders(input.config, fields.cuts);
   const caps = fields.limbs === undefined ? undefined : readCaps(input.config, fields.limbs);
@@ -702,6 +704,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         ...(fields.headFaceUnderfill === undefined ? {} : { headFaceUnderfill: fields.headFaceUnderfill }),
         ...(fields.yieldRefused === undefined ? {} : { yieldRefused: fields.yieldRefused }),
         ...(fields.ground === undefined ? {} : { ground: fields.ground }),
+        ...(declaredFigure === undefined ? {} : { declaredFigure }),
         ...(fields.turnMovingPair === undefined ? {} : { turnMovingPair: fields.turnMovingPair }),
         ...(fields.turn === undefined ? {} : { turn: fields.turn, regions: fields.regions, meshes: fields.meshes, motion: fields.motion }),
         seamRule: seam,
@@ -791,7 +794,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   // Issue #944: under pinholes.required, every pinhole of the base set's flat parts stack is refused by name, with the
   // alternate sets' refusals, before anything is written.
   const pinholes = pinholesAsked ? measurePinholes(sourceInRig(src, result.parts.rig_size[0], result.parts.rig_size[1]), result.images) : null;
-  if (pinholes !== null) altProblems.push(...pinholeProblems(pinholes, requirements!.read));
+  if (pinholes !== null) altProblems.push(...pinholeProblems(pinholes, input.requirements as string));
   refuseIfAny(altProblems);
   if (altBuilt.length > 0) {
     result.parts.alternates = altBuilt.map((b) => b.record);
