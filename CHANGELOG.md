@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.19.2](https://github.com/rig-c/parts/compare/v2.19.1...v2.19.2) (2026-11-05)
+
+
+### Bug Fixes
+
+* **selftest:** split fixture checks into independent units ([#1116](https://github.com/rig-c/parts/issues/1116)) ([#1117](https://github.com/rig-c/parts/issues/1117)) ([de90fac](https://github.com/rig-c/parts/commit/de90fac0d32b25a1ba27348dc89e81f63ee8a4f4))
+
 ## [2.19.1](https://github.com/rig-c/parts/compare/v2.19.0...v2.19.1) (2026-11-05)
 
 
