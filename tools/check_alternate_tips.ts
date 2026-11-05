@@ -42,7 +42,7 @@ export function runAlternateTipsChecks(dir: string, say: Say, runner: RigcRunner
       {partsJson:join(out,'parts.json'),partsDir:join(out,'parts'),recomposite:join(out,'recomposite_rig.png'),errorMap:join(out,'recomposite_error_rig.png')},s=>logs.push(s));
     save(join(out,'log.json'),logs);return out;
   };
-  const readRaw = (raw: unknown) => { const p = join(dir, 'generated-reader.json'); save(p, raw); return readParts(p); };
+  const readRaw = (raw: unknown, home: string) => { const p = join(home, 'generated-reader.json'); save(p, raw); return readParts(p); };
   const green=make('schema'), tips: Tips={foot_r:[108,60],foot_l:[92,100]};
   green.cfg.assemble.alternates![0].tips=tips;
   const schema=refused(()=>parseConfig(green.cfg)), early=refused(()=>parseEarlyConfig(green.cfg,'assemble'));
@@ -97,7 +97,7 @@ export function runAlternateTipsChecks(dir: string, say: Say, runner: RigcRunner
     say(`${layout.toUpperCase()}_BOTH_SHOES_HAVE_ZERO_FOREIGN_PIXELS`,owned,JSON.stringify(rows));
     say(`${layout.toUpperCase()}_CAP_LEDGER_MATCHES_PNG`,ledger,JSON.stringify(rows));
     const serialized=serializeParts(pf);
-    say(`${layout.toUpperCase()}_NORMALIZED_RECORD_KEYS_ARE_STABLE_AND_READABLE`,pf.alternates!.every(a=>equal(Object.keys(a.tips!),['foot_l','foot_r'])&&equal(a.tips!.foot_r,[54,30]))&&serializeParts(readRaw(JSON.parse(serialized)))===serialized,'parts records carry rig-crop endpoints, not raw config fallback');
+    say(`${layout.toUpperCase()}_NORMALIZED_RECORD_KEYS_ARE_STABLE_AND_READABLE`,pf.alternates!.every(a=>equal(Object.keys(a.tips!),['foot_l','foot_r'])&&equal(a.tips!.foot_r,[54,30]))&&serializeParts(readRaw(JSON.parse(serialized),out))===serialized,'parts records carry rig-crop endpoints, not raw config fallback');
     for(const b of f.cfg.bones)if('name'in b&&b.name.startsWith('foot_'))delete b.tip;
     persist(f.d,f.cfg);const noGlobal=run(f.d,'no-global');
     say(`${layout.toUpperCase()}_EXPLICIT_ENDPOINT_WITHOUT_GLOBAL_TIP`,readParts(join(noGlobal,'parts.json')).alternates!.every(a=>a.tips!==undefined),'tip overlay must run in this assignment door, not only be recorded');
@@ -174,7 +174,7 @@ export function runAlternateTipsChecks(dir: string, say: Say, runner: RigcRunner
   say('DIRECT_RIG_NONFINITE_RECORD_REFUSED',refused(()=>buildRig(noDeclaredTips,directBad,input.images)).includes('RIG_ALT_TIP_POINT'),'direct builder checks pairs even without a serialized reader');
   for(const [i,value] of [null,{},[],{foot_r:[1]},{foot_r:[NaN,2]}].entries()){
     const raw=JSON.parse(serializeParts(input.parts)) as {alternates:Record<string,unknown>[]};raw.alternates[0].tips=value;
-    say('RECORDED_INVALID_POINT_'+String(i),refused(()=>readRaw(raw)).includes('PARTS_ALT_TIPS'),'malformed normalized provenance refused before rig emission');
+    say('RECORDED_INVALID_POINT_'+String(i),refused(()=>readRaw(raw,out)).includes('PARTS_ALT_TIPS'),'malformed normalized provenance refused before rig emission');
   }
   // A build orchestration plant stops at check after the real rig gate. It is
   // not a full build/check PASS; it proves propagation through the actual path.
@@ -189,10 +189,10 @@ export function runAlternateTipsChecks(dir: string, say: Say, runner: RigcRunner
   const wrongUnits=structuredClone(input.parts);wrongUnits.alternates![0].tips!.foot_r=[108,60];
   say('TAMPERED_SOURCE_UNITS_IN_RIG_RECORD_REFUSED',refused(()=>buildRig(input.cfg,wrongUnits,input.images)).includes('RIG_ALT_TIPS_MATCH_CONFIG'),'source pair is not a rig pair; structural consistency only');
   const missingSize=structuredClone(input.parts);delete missingSize.alternates![0].tips_source_size;
-  say('MISSING_SOURCE_SIZE_REFUSED_BY_READER_AND_RIG',refused(()=>readRaw(missingSize)).includes('PARTS_ALT_TIPS_SOURCE')&&refused(()=>buildRig(input.cfg,missingSize,input.images)).includes('RIG_ALT_TIPS_SOURCE')&&refused(()=>buildRig(noDeclaredTips,missingSize,input.images)).includes('RIG_ALT_TIPS_SOURCE'),'reassemble rather than reconstruct original size from nominal scale');
+  say('MISSING_SOURCE_SIZE_REFUSED_BY_READER_AND_RIG',refused(()=>readRaw(missingSize,out)).includes('PARTS_ALT_TIPS_SOURCE')&&refused(()=>buildRig(input.cfg,missingSize,input.images)).includes('RIG_ALT_TIPS_SOURCE')&&refused(()=>buildRig(noDeclaredTips,missingSize,input.images)).includes('RIG_ALT_TIPS_SOURCE'),'reassemble rather than reconstruct original size from nominal scale');
   for(const [i,value] of [null,[0,128],[128.5,128],[64,64],[128],[128,Infinity]].entries()){
     const raw=JSON.parse(serializeParts(input.parts)) as {alternates:Record<string,unknown>[]};raw.alternates[0].tips_source_size=value;
-    say('INVALID_SOURCE_SIZE_'+i,refused(()=>readRaw(raw)).includes('PARTS_ALT_TIPS_SOURCE'),'positive integer source dimensions must produce accepted rig_size at nominal scale');
+    say('INVALID_SOURCE_SIZE_'+i,refused(()=>readRaw(raw,out)).includes('PARTS_ALT_TIPS_SOURCE'),'positive integer source dimensions must produce accepted rig_size at nominal scale');
   }
   const noEmitPath=join(f.d,'mismatch-output');save(join(out,'parts.json'),wrongUnits);
   const mismatch=refused(()=>rigStage({config:join(f.d,'config.json'),parts:out,out:noEmitPath},runner,join(f.d,'mismatch-scratch'),()=>{}));

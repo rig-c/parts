@@ -83,7 +83,7 @@ export function runAuthoredUnitDepthChecks(dir: string, say: Say): void {
   const wrongValue = run('nonfinite-value', cfg => { cfg.turn!.unitDepths = { token: NaN }; });
   say('AUD18_INVALID_EXPLICIT_VALUE_IS_NOT_SILENTLY_SAMPLED', wrongValue.errors.some(e => e.startsWith('CONFIG_FIELD_TYPE:')), wrongValue.errors.join('; '));
   if (explicit.parts !== null) {
-    const file = join(dir, 'roundtrip.json'); writeParts(file, explicit.parts);
+    const file = join(explicit.out, 'roundtrip.json'); writeParts(file, explicit.parts);
     say('AUD19_AUTHORED_PROVENANCE_EXACT_READER_WRITER_ROUNDTRIP', serializeParts(readParts(file)) === serializeParts(explicit.parts), 'optional authored-unit values survive canonical serialization');
     const plants: Array<[string, (raw: Record<string, unknown>) => void]> = [
       ['wrong kind', d => { d.kind = 'sampled'; }], ['empty values', d => { d.values = []; }],

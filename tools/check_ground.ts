@@ -105,7 +105,7 @@ export function runGroundConfigChecks(dir: string, say: Say): void {
   const absent = run('plain-absent-again', base, 'painting.png');
   const declared = run('plain-declared', cfg('plain'), 'painting.png');
   const rig = (o: string) => join(o, 'rig');
-  const files = existsSync(join(rig(absent.out), 'parts')) ? ['parts.json', ...readdirSync(join(rig(absent.out), 'parts')).map((f) => `parts/${f}`)] : [];
+  const files = existsSync(join(rig(absent.out), 'parts')) ? ['parts.json', 'painting_in_rig.png', ...readdirSync(join(rig(absent.out), 'parts')).map((f) => `parts/${f}`)] : [];
   say(
     'GC9964_DECLARED_PLAIN_WRITES_THE_ABSENT_BYTES',
     absent.status === 0 && declared.status === 0 && files.length > 0 && files.every((f) => existsSync(join(rig(declared.out), f)) && readFileSync(join(rig(absent.out), f)).equals(readFileSync(join(rig(declared.out), f)))),
