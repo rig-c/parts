@@ -13,7 +13,7 @@ import { runEdgeResidualChecks } from './check_edge_residual.ts';
  * painting; a skipped pixel is left as it was), and each skip reason has a
  * planted case next to the positive one.
  */
-import { COVERED_ALPHA, ERROR_LIMIT } from '../src/assemble.ts';
+import { paintedFigure, COVERED_ALPHA, ERROR_LIMIT } from '../src/assemble.ts';
 import { OPAQUE_ALPHA_ABOVE } from '../src/layers.ts';
 import { connectedComponents } from '../src/raster/components.ts';
 import { EDGE_CONTRAST, EDGE_OWNER_ALPHA, EDGE_RADIUS, paintingEdges, type PaintingEdgeOptions } from '../src/paintingedges.ts';
@@ -83,7 +83,81 @@ function strip(front: RGB, behind: RGB, frontAlpha: (x: number) => number, behin
 /** See-through's soft rim: opaque to x = 7, a ramp over 8..11 (its half line between 8 and 9), nothing from 12. */
 const RAMP = (x: number): number => (x <= 7 ? 255 : x === 8 ? 200 : x === 9 ? 140 : x === 10 ? 100 : x === 11 ? 50 : 0);
 
+/** Generated coverage, independent of the edge estimator (#1068). */
+function runKnownCoverageChecks(say: Say): void {
+  const size = 64;
+  const truth = newRaster(size, size);
+  const painting = newRaster(size, size);
+  const foreground = [40, 80, 120];
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      let covered = 0;
+      for (let sy = 0; sy < 32; sy++) {
+        for (let sx = 0; sx < 32; sx++) {
+          const dx = x + (sx + 0.5) / 32 - 31.37;
+          const dy = y + (sy + 0.5) / 32 - 32.11;
+          if (dx * dx + dy * dy <= 20.25 * 20.25) covered++;
+        }
+      }
+      const offset = (y * size + x) * 4;
+      const alpha = Math.round(255 * covered / (32 * 32));
+      truth.data.set([...foreground, alpha], offset);
+      painting.data.set([...foreground.map(c => Math.round((c * alpha + 255 * (255 - alpha)) / 255)), 255], offset);
+    }
+  }
+  const output = copy(truth);
+  paintingEdges([output], painting, { painted: paintedFigure(painting), editable: [true] });
+  const graded: number[] = [];
+  for (let p = 0; p < size * size; p++) {
+    const alpha = truth.data[p * 4 + 3];
+    if (alpha >= 16 && alpha <= 239) graded.push(p);
+  }
+  const quantised = (raster: Raster): number => graded.filter(p => {
+    const alpha = raster.data[p * 4 + 3];
+    return alpha <= 8 || alpha >= 247;
+  }).length;
+  const hard = copy(truth);
+  for (let p = 0; p < size * size; p++) hard.data[p * 4 + 3] = truth.data[p * 4 + 3] >= 128 ? 255 : 0;
+  say('ED9587_KNOWN_COVERAGE_RETAINS_GRADED_SILHOUETTE_ALPHA',
+    graded.length > 0 && graded.every(p => output.data[p * 4 + 3] === truth.data[p * 4 + 3]),
+    `graded ${graded.length}, changed ${graded.filter(p => output.data[p * 4 + 3] !== truth.data[p * 4 + 3]).length}, quantised ${quantised(output)}`);
+  say('ED9588_KNOWN_COVERAGE_METRIC_SEES_HARD_ALPHA_AND_ACCEPTS_TRUTH',
+    graded.length > 0 && quantised(hard) === graded.length && quantised(truth) === 0,
+    `hard ${quantised(hard)}, unchanged ${quantised(truth)}, domain ${graded.length}`);
+  // At retained coverage, rounded opaque RGB only determines straight RGB
+  // within 127.5 / alpha + 0.5 channel units (input and output rounding).
+  const colourMisses = graded.filter(p => foreground.some((channel, c) =>
+    Math.abs(output.data[p * 4 + c] - channel) > 127.5 / truth.data[p * 4 + 3] + 0.5));
+  say('ED9589_GRADED_SILHOUETTE_UNMIXES_THE_PAINTING', colourMisses.length === 0,
+    `outside the independently derived RGB rounding bound ${colourMisses.length}/${graded.length}`);
+
+  // Known-opaque cyan lies off the blue-to-red axis: its raw projection is
+  // zero, yet a deeper cyan sample witnesses an interior colour. At x=9 the
+  // inner ring cannot restore alpha from the original layer by itself.
+  const cyan: RGB = [0, 200, 200];
+  const interior = columns(x => x === 7 || x === 9 ? cyan : RED, x => x < 10 ? 255 : 0);
+  const interiorPainting = columns(x => x < 10 ? (x === 7 || x === 9 ? cyan : RED) : BLUE, () => 255);
+  const restored = copy(interior);
+  paintingEdges([restored], interiorPainting, { painted: paintedFigure(interiorPainting), editable: [true] });
+  const offset = (4 * W + 9) * 4;
+  say('ED9590_OPAQUE_INTERIOR_FOOLED_BY_GROUND_STILL_PROMOTES',
+    restored.data.slice(offset, offset + 4).join(',') === [...cyan, 255].join(','),
+    `opaque cyan at inner ring ${[...restored.data.slice(offset, offset + 4)].join(',')}`);
+
+  // A painted outline has known full coverage, even though its RGB differs
+  // from the red interior. It must remain an opaque line, without a false
+  // graded-alpha alarm at the silhouette.
+  const black: RGB = [0, 0, 0];
+  const outlined = columns(x => x === 9 ? black : RED, x => x < 10 ? 255 : 0);
+  const linePainting = columns(x => x < 10 ? (x === 9 ? black : RED) : [255, 255, 255], () => 255);
+  paintingEdges([outlined], linePainting, { painted: paintedFigure(linePainting), editable: [true] });
+  say('ED9591_A_PAINTED_SILHOUETTE_LINE_REMAINS_OPAQUE',
+    outlined.data.slice(offset, offset + 4).join(',') === '0,0,0,255',
+    `line ${[...outlined.data.slice(offset, offset + 4)].join(',')}`);
+}
+
 export function runPaintingEdgeChecks(say: Say): void {
+  runKnownCoverageChecks(say);
   const directory = mkdtempSync(join(tmpdir(), 'painting-edge-alternate-'));
   try {
     const config = assembleConfig();

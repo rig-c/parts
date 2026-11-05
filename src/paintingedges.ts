@@ -52,7 +52,9 @@ import { type Mask, newMask, type Raster, RasterError } from './raster/types.ts'
  * - on FRONT's side of See-through's line, a pixel whose colour FRONT itself
  *   holds deeper in (within half of {@link EDGE_CONTRAST}, and nearer that
  *   than any BEHIND-side pixel) is FRONT's interior — a lining, a highlight —
- *   and reads 1, however it falls along the axis.
+ *   and reads 1, however it falls along the axis. On the silhouette (BEHIND is
+ *   background), raw integer coverage 16..239 is graded and keeps its estimate:
+ *   proximity to an interior colour does not establish opaque coverage (#1068).
  *
  * A painted pixel no part covers above the owner floor — the gap between two
  * soft rims — is owned by the nearest part (within `2 * EDGE_RADIUS + 2`), so
@@ -436,7 +438,8 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
       let matte = Math.round((255 * Math.min(hi - lo, Math.max(0, along(p) - lo))) / (hi - lo));
       // On FRONT's side of the line, a colour FRONT itself holds deeper in (within half the contrast floor, and nearer FRONT than
       // BEHIND) is FRONT's interior — a light lining, a highlight — not a mix with BEHIND, however it falls along the axis.
-      if (a === front && matte < 255) {
+      const gradedSilhouette = behind === -1 && matte >= 16 && matte <= 239;
+      if (a === front && matte < 255 && !gradedSilhouette) {
         let dF = Infinity;
         let dFdeep = Infinity;
         for (let qy = Math.max(0, y - R); qy <= Math.min(H - 1, y + R); qy++) {
