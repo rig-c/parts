@@ -1,0 +1,650 @@
+{
+  "key": "validation",
+  "seethrough": {
+    "resolution": 128,
+    "steps": 1,
+    "seed": 0,
+    "offload": false,
+    "head_box": [
+      0,
+      0,
+      128,
+      128
+    ]
+  },
+  "assemble": {
+    "rig_scale": 1,
+    "plan": [
+      [
+        "hair_back",
+        "head",
+        "back hair"
+      ],
+      [
+        "handwear_r",
+        "full",
+        "handwear-r"
+      ],
+      [
+        "bottomwear",
+        "full",
+        "bottomwear"
+      ],
+      [
+        "topwear",
+        "full",
+        "topwear"
+      ],
+      [
+        "shoes",
+        "full",
+        "footwear"
+      ],
+      [
+        "handwear_l",
+        "full",
+        "handwear-l"
+      ],
+      [
+        "hairpin",
+        "head",
+        "headwear"
+      ],
+      [
+        "face",
+        "head",
+        "face"
+      ],
+      [
+        "eyewhite_r",
+        "head",
+        "eyewhite-r"
+      ],
+      [
+        "eyewhite_l",
+        "head",
+        "eyewhite-l"
+      ],
+      [
+        "hair_front",
+        "head",
+        "front hair"
+      ]
+    ],
+    "extend_below_crop": []
+  },
+  "bones": [
+    {
+      "name": "hip",
+      "parent": "root",
+      "at": [
+        64,
+        86
+      ]
+    },
+    {
+      "name": "chest",
+      "parent": "hip",
+      "at": [
+        64,
+        67
+      ]
+    },
+    {
+      "name": "neck",
+      "parent": "chest",
+      "at": [
+        64,
+        48
+      ]
+    },
+    {
+      "name": "head",
+      "parent": "neck",
+      "at": [
+        64,
+        40
+      ]
+    },
+    {
+      "name": "eye_r",
+      "parent": "head",
+      "at": [
+        52,
+        27
+      ]
+    },
+    {
+      "name": "eye_l",
+      "parent": "head",
+      "at": [
+        76,
+        27
+      ]
+    },
+    {
+      "chain": "hairback_r",
+      "parent": "head",
+      "points": [
+        [
+          54,
+          27
+        ],
+        [
+          58,
+          40
+        ],
+        [
+          58,
+          54
+        ]
+      ],
+      "tip": [
+        58,
+        76
+      ]
+    },
+    {
+      "chain": "hairback_l",
+      "parent": "head",
+      "points": [
+        [
+          73,
+          27
+        ],
+        [
+          68,
+          40
+        ],
+        [
+          68,
+          54
+        ]
+      ],
+      "tip": [
+        68,
+        76
+      ]
+    },
+    {
+      "chain": "bang_r",
+      "parent": "head",
+      "points": [
+        [
+          52,
+          21
+        ],
+        [
+          42,
+          27
+        ]
+      ],
+      "tip": [
+        34,
+        40
+      ]
+    },
+    {
+      "chain": "bang_c",
+      "parent": "head",
+      "points": [
+        [
+          64,
+          21
+        ],
+        [
+          64,
+          27
+        ]
+      ],
+      "tip": [
+        64,
+        40
+      ]
+    },
+    {
+      "chain": "bang_l",
+      "parent": "head",
+      "points": [
+        [
+          76,
+          21
+        ],
+        [
+          86,
+          27
+        ]
+      ],
+      "tip": [
+        94,
+        40
+      ]
+    },
+    {
+      "name": "hairpin",
+      "parent": "head",
+      "at": [
+        -22,
+        9
+      ],
+      "tip": [
+        14,
+        9
+      ]
+    },
+    {
+      "chain": "sleeve_r",
+      "parent": "chest",
+      "points": [
+        [
+          38,
+          63
+        ],
+        [
+          38,
+          70
+        ],
+        [
+          38,
+          78
+        ]
+      ],
+      "tip": [
+        38,
+        88
+      ]
+    },
+    {
+      "chain": "sleeve_l",
+      "parent": "chest",
+      "points": [
+        [
+          98,
+          63
+        ],
+        [
+          98,
+          70
+        ],
+        [
+          98,
+          78
+        ]
+      ],
+      "tip": [
+        98,
+        88
+      ]
+    },
+    {
+      "chain": "skirt_r",
+      "parent": "hip",
+      "points": [
+        [
+          60,
+          106
+        ],
+        [
+          60,
+          108
+        ],
+        [
+          60,
+          110
+        ]
+      ],
+      "tip": [
+        60,
+        112
+      ]
+    },
+    {
+      "chain": "skirt_c",
+      "parent": "hip",
+      "points": [
+        [
+          64,
+          106
+        ],
+        [
+          64,
+          108
+        ],
+        [
+          64,
+          110
+        ]
+      ],
+      "tip": [
+        64,
+        112
+      ]
+    },
+    {
+      "chain": "skirt_l",
+      "parent": "hip",
+      "points": [
+        [
+          66,
+          106
+        ],
+        [
+          66,
+          108
+        ],
+        [
+          66,
+          110
+        ]
+      ],
+      "tip": [
+        66,
+        112
+      ]
+    }
+  ],
+  "meshes": {
+    "hair_back": {
+      "grid": 8,
+      "r": 3,
+      "segments": [
+        [
+          "head",
+          [
+            64,
+            40
+          ],
+          [
+            64,
+            17
+          ]
+        ],
+        "hairback_r",
+        "hairback_l"
+      ]
+    },
+    "hair_front": {
+      "grid": 5,
+      "r": 3,
+      "segments": [
+        [
+          "head",
+          [
+            64,
+            40
+          ],
+          [
+            64,
+            8
+          ]
+        ],
+        "bang_r",
+        "bang_c",
+        "bang_l"
+      ]
+    },
+    "hairpin": {
+      "grid": 5,
+      "r": 3,
+      "segments": [
+        [
+          "hairpin",
+          [
+            -22,
+            9
+          ],
+          [
+            14,
+            9
+          ]
+        ],
+        [
+          "hairpin",
+          [
+            29,
+            -3
+          ],
+          [
+            -22,
+            27
+          ]
+        ]
+      ]
+    },
+    "handwear_r": {
+      "grid": 5,
+      "r": 3,
+      "segments": [
+        "sleeve_r"
+      ]
+    },
+    "handwear_l": {
+      "grid": 5,
+      "r": 3,
+      "segments": [
+        "sleeve_l"
+      ]
+    },
+    "topwear": {
+      "contour": {
+        "tolerance": 1,
+        "margin": 1,
+        "spacing": 3,
+        "maxEdge": 3,
+        "stray": 1
+      },
+      "r": 3,
+      "segments": [
+        [
+          "chest",
+          [
+            64,
+            40
+          ],
+          [
+            64,
+            66
+          ]
+        ],
+        [
+          "hip",
+          [
+            64,
+            66
+          ],
+          [
+            64,
+            186
+          ]
+        ]
+      ]
+    },
+    "bottomwear": {
+      "grid": 5,
+      "r": 3,
+      "segments": [
+        [
+          "hip",
+          [
+            57,
+            91
+          ],
+          [
+            71,
+            91
+          ]
+        ],
+        "skirt_r",
+        "skirt_c",
+        "skirt_l"
+      ]
+    }
+  },
+  "regions": {
+    "eyewhite_r": "eye_r",
+    "eyewhite_l": "eye_l",
+    "shoes": "root",
+    "face": "head"
+  },
+  "motion": {
+    "duration": 3.3333333333333335,
+    "tracks": [
+      {
+        "bone": "chest",
+        "prop": "translatey",
+        "amp": 0.48,
+        "period": 3.3333333333333335,
+        "phase": 0,
+        "base": 0.48
+      },
+      {
+        "bone": "chest",
+        "prop": "scalex",
+        "amp": 0.004,
+        "period": 3.3333333333333335,
+        "phase": 0,
+        "base": 1.004
+      },
+      {
+        "bone": "head",
+        "prop": "rotate",
+        "amp": 0.9,
+        "period": 3.3333333333333335,
+        "phase": 0.12
+      },
+      {
+        "bone": "neck",
+        "prop": "rotate",
+        "amp": 0.35,
+        "period": 3.3333333333333335,
+        "phase": 0.08
+      },
+      {
+        "chain": "hairback_r",
+        "amps": [
+          0.6,
+          1.4,
+          2.4
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.2,
+        "lag": 0.08
+      },
+      {
+        "chain": "hairback_l",
+        "amps": [
+          -0.6,
+          -1.4,
+          -2.4
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.2,
+        "lag": 0.08
+      },
+      {
+        "chain": "bang_r",
+        "amps": [
+          1,
+          2.2
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.18,
+        "lag": 0.1
+      },
+      {
+        "chain": "bang_c",
+        "amps": [
+          0.8,
+          1.76
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.18,
+        "lag": 0.1
+      },
+      {
+        "chain": "bang_l",
+        "amps": [
+          1,
+          2.2
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.18,
+        "lag": 0.1
+      },
+      {
+        "chain": "sleeve_r",
+        "amps": [
+          0.2,
+          0.6,
+          1.2
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.22,
+        "lag": 0.08
+      },
+      {
+        "chain": "sleeve_l",
+        "amps": [
+          -0.2,
+          -0.6,
+          -1.2
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.27,
+        "lag": 0.08
+      },
+      {
+        "chain": "skirt_r",
+        "amps": [
+          0.15,
+          0.35,
+          0.7
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.3,
+        "lag": 0.07
+      },
+      {
+        "chain": "skirt_c",
+        "amps": [
+          0.15,
+          0.35,
+          0.7
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.34,
+        "lag": 0.07
+      },
+      {
+        "chain": "skirt_l",
+        "amps": [
+          0.15,
+          0.35,
+          0.7
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.38,
+        "lag": 0.07
+      }
+    ],
+    "blink": {
+      "t": 2.3,
+      "eyes": [
+        "eye_r",
+        "eye_l"
+      ],
+      "squash": 0.12
+    }
+  },
+  "motion_seams": [
+    {
+      "part": "topwear",
+      "neighbour": "handwear_r"
+    },
+    {
+      "part": "topwear",
+      "neighbour": "handwear_l"
+    }
+  ],
+  "proposed_rig_scale": 1
+}

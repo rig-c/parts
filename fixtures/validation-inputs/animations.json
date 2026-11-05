@@ -1,0 +1,28 @@
+{
+  "spec": "rigc-motion/1",
+  "animations": {
+    "hold": {
+      "duration": 1,
+      "tracks": [
+        {
+          "bone": "anchor",
+          "property": "rotate",
+          "keys": [
+            {
+              "t": 0,
+              "v": [
+                0
+              ]
+            },
+            {
+              "t": 1,
+              "v": [
+                0
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

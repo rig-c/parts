@@ -1,0 +1,144 @@
+{
+  "spec": "spine-parts-keypoints/1",
+  "space": {
+    "units": "painting-px",
+    "origin": "top-left",
+    "y": "down"
+  },
+  "width": 128,
+  "height": 128,
+  "source": "synthetic rectangle geometry",
+  "people": [
+    {
+      "id": "a",
+      "joints": {
+        "r_eye": {
+          "state": "observed",
+          "at": [
+            52,
+            27
+          ]
+        },
+        "l_eye": {
+          "state": "observed",
+          "at": [
+            76,
+            27
+          ]
+        },
+        "r_ear": {
+          "state": "observed",
+          "at": [
+            40,
+            27
+          ]
+        },
+        "l_ear": {
+          "state": "observed",
+          "at": [
+            88,
+            27
+          ]
+        },
+        "nose": {
+          "state": "observed",
+          "at": [
+            64,
+            34
+          ]
+        },
+        "neck": {
+          "state": "observed",
+          "at": [
+            64,
+            46
+          ]
+        },
+        "r_shoulder": {
+          "state": "observed",
+          "at": [
+            38,
+            48
+          ]
+        },
+        "r_elbow": {
+          "state": "observed",
+          "at": [
+            38,
+            70
+          ]
+        },
+        "r_wrist": {
+          "state": "observed",
+          "at": [
+            38,
+            92
+          ]
+        },
+        "l_shoulder": {
+          "state": "observed",
+          "at": [
+            88,
+            48
+          ]
+        },
+        "l_elbow": {
+          "state": "observed",
+          "at": [
+            100,
+            70
+          ]
+        },
+        "l_wrist": {
+          "state": "observed",
+          "at": [
+            112,
+            92
+          ]
+        },
+        "r_hip": {
+          "state": "observed",
+          "at": [
+            60,
+            82
+          ]
+        },
+        "l_hip": {
+          "state": "observed",
+          "at": [
+            68,
+            82
+          ]
+        },
+        "r_knee": {
+          "state": "observed",
+          "at": [
+            60,
+            100
+          ]
+        },
+        "l_knee": {
+          "state": "observed",
+          "at": [
+            68,
+            100
+          ]
+        },
+        "r_ankle": {
+          "state": "observed",
+          "at": [
+            60,
+            120
+          ]
+        },
+        "l_ankle": {
+          "state": "observed",
+          "at": [
+            68,
+            120
+          ]
+        }
+      }
+    }
+  ]
+}

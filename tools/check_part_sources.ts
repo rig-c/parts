@@ -14,7 +14,7 @@ type Say = (name: string, pass: boolean, detail: string) => void;
 const FROM = 'a'.repeat(64);
 const REQUIRED = "config.assemble.editor_receipts.trace_parts is true, so every part's pixels must trace to a layer of the See-through split or to an image with an editor receipt";
 
-export function runPartSourceChecks(dir: string, say: Say): void {
+export function runPartSourceChecks(dir: string, say: Say, validationConfig?: string): void {
   const run = (d: string, out = 'out') => assembleStage({ source: join(d, 'painting.png'), full: join(d, 'full'), head: null, config: join(d, 'config.json'), seam: 'near-white', project: 'core' },
     { partsJson: join(d, out, 'parts.json'), partsDir: join(d, out, 'parts'), recomposite: join(d, out, 'recomposite.png'), errorMap: join(d, out, 'error.png') }, () => {});
   const message = (action: () => unknown): string => { try { action(); return ''; } catch (e) { if (e instanceof PartsError) return e.message; throw e; } };
@@ -90,19 +90,31 @@ export function runPartSourceChecks(dir: string, say: Say): void {
   const off = untracedPartSources({ seethrough: {}, assemble: { editor_receipts: { receipts: [] }, plan: [], cuts: [SLEEVE] } } as unknown as AssembleConfig).length;
   say('UNDECLARED_REFUSES_NOTHING', off === 0, `a cut with trace_parts absent -> ${off} refusal(s)`);
 
-  // The public examples under trace_parts, read from their configs (no inputs needed: the shapes are config-only):
-  // every example but scarf holds no drawn shape; scarf's patches are named, one per patch.
-  const examples = readdirSync('examples', { withFileTypes: true }).filter(e => e.isDirectory() && existsSync(join('examples', e.name, 'config.json'))).map(e => e.name).sort();
-  const rows = examples.map(name => {
-    const raw = JSON.parse(readFileSync(join('examples', name, 'config.json'), 'utf8')) as Record<string, unknown>;
-    const patches = ((raw.assemble as Record<string, unknown>).patches as Array<{ name: string }> | undefined) ?? [];
+  if (validationConfig !== undefined) {
+    const raw = JSON.parse(readFileSync(validationConfig, 'utf8')) as Record<string, unknown>;
     traced(raw, []);
-    const objects = untracedPartSources(raw as unknown as AssembleConfig).map(p => p.object);
-    return { name, objects, want: patches.map((p, i) => `part "${p.name}" (config.assemble.patches[${i}])`) };
-  });
-  const scarf = rows.find(r => r.name === 'scarf');
-  say('PUBLIC_EXAMPLES_TRACE_BUT_SCARF_PATCHES', rows.length >= 2 && scarf !== undefined && scarf.want.length > 0 && rows.every(r => JSON.stringify(r.objects) === JSON.stringify(r.want)) && rows.filter(r => r.name !== 'scarf').every(r => r.objects.length === 0),
-    rows.map(r => `${r.name} ${r.objects.length}`).join(', '));
+    const clean = untracedPartSources(raw as unknown as AssembleConfig);
+    asm(raw).patches = [{ name: 'unreceipted', box: [0, 0, 1, 1], alpha: 'box', draw: 'back' }];
+    const planted = untracedPartSources(raw as unknown as AssembleConfig);
+    say('PUBLIC_EXAMPLES_TRACE_BUT_SCARF_PATCHES', clean.length === 0 && planted.length === 1 &&
+      planted[0].code === 'ASSEMBLE_PART_SOURCE' && planted[0].object === 'part "unreceipted" (config.assemble.patches[0])',
+      `validation sample trace: ${clean.length} refusal(s); planted patch: ${planted.map(p => `${p.code} ${p.object}`).join('; ')}`);
+  } else {
+    // The public examples under trace_parts, read from their configs (no inputs needed: the shapes are config-only):
+    // every example but scarf holds no drawn shape; scarf's patches are named, one per patch.
+    const examples = readdirSync('examples', { withFileTypes: true }).filter(e => e.isDirectory() && existsSync(join('examples', e.name, 'config.json'))).map(e => e.name).sort();
+    const rows = examples.map(name => {
+      const raw = JSON.parse(readFileSync(join('examples', name, 'config.json'), 'utf8')) as Record<string, unknown>;
+      const patches = ((raw.assemble as Record<string, unknown>).patches as Array<{ name: string }> | undefined) ?? [];
+      traced(raw, []);
+      const objects = untracedPartSources(raw as unknown as AssembleConfig).map(p => p.object);
+      return { name, objects, want: patches.map((p, i) => `part "${p.name}" (config.assemble.patches[${i}])`) };
+    });
+    const scarf = rows.find(r => r.name === 'scarf');
+    say('PUBLIC_EXAMPLES_TRACE_BUT_SCARF_PATCHES', rows.length >= 2 && scarf !== undefined && scarf.want.length > 0 && rows.every(r => JSON.stringify(r.objects) === JSON.stringify(r.want)) && rows.filter(r => r.name !== 'scarf').every(r => r.objects.length === 0),
+      rows.map(r => `${r.name} ${r.objects.length}`).join(', '));
+
+  }
 
   // The loader: trace_parts is a boolean at every door.
   const base = JSON.parse(readFileSync(join(good.d, 'config.json'), 'utf8')) as Record<string, unknown>;
