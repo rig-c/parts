@@ -2475,8 +2475,9 @@ function seamPairRowsFrom(seam: SeamFigures, parts: readonly PlacedAlpha[], rigS
     // A part over no other art is named first, then SEAM_NO_ART.
     const pair: [string, string] = acc.a < 0 ? [name(acc.b), SEAM_NO_ART] : [name(acc.a), name(acc.b)];
     const file = `${String(i + 1).padStart(Math.max(2, width), '0')}_${pair.map((n) => (n === SEAM_NO_ART ? 'no-art' : n)).join('_')}.png`;
+    const subjects = pair.filter(p => p !== SEAM_NO_ART);
     const cut = acc.a >= 0 && parts[acc.a].from === parts[acc.b].from ? { cut: { from: parts[acc.a].from, differing_copies_px: acc.differing } } : {};
-    return { row: { ...checkRow('seam_pairs', pair[1] === SEAM_NO_ART ? 'part' : 'pair', false, pair.filter(p => p !== SEAM_NO_ART)), parts: pair, px_over_40: acc.over40,
+    return { row: { ...checkRow('seam_pairs', subjects.length === 0 ? 'rig' : subjects.length === 1 ? 'part' : 'pair', false, subjects), parts: pair, px_over_40: acc.over40,
         ...(acc.outside > 0 ? { outside_authored_px: acc.outside } : {}), px_over_80: acc.over80, frame_box: acc.f, rig_box: acc.r, ...cut, picture: `${SEAM_DIR}/${file}` }, pixels: acc.pixels };
   });
 }
@@ -7200,7 +7201,8 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
                 const affected = pixels.filter(q => effects.mask[q] !== 0).length;
                 const reasons: Partial<SeamEffects['reasons']> = {};
                 for (const q of pixels) { const reason = SEAM_EFFECT_REASONS[effects.cellReasons[q]]; reasons[reason] = (reasons[reason] ?? 0) + 1; }
-                return { ...checkRow('seam_scope.pairs', row.parts[1] === SEAM_NO_ART ? 'part' : 'pair', false, row.parts.filter(p => p !== SEAM_NO_ART)), parts: row.parts, whole_px_over_40: row.px_over_40, affected_px_over_40: affected, inherited_px_over_40: row.px_over_40 - affected, reasons };
+                const subjects = row.parts.filter(p => p !== SEAM_NO_ART);
+                return { ...checkRow('seam_scope.pairs', subjects.length === 0 ? 'rig' : subjects.length === 1 ? 'part' : 'pair', false, subjects), parts: row.parts, whole_px_over_40: row.px_over_40, affected_px_over_40: affected, inherited_px_over_40: row.px_over_40 - affected, reasons };
               }),
             };
             const altMean = round3(altSeam.mean);

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import './tools/check_row_guard.ts';
 import { motionSeamFinding } from './src/check.ts';
-import { checkRowFaults, checkRowCombinations, runCheckRowSchemaChecks, runCheckRowGuardChecks } from './tools/check_row_scope.ts';
+import { checkRowFaults, checkRowSchemaFaults, checkRowCombinations, runCheckRowSchemaChecks, runCheckRowGuardChecks } from './tools/check_row_scope.ts';
 import { rowTableFaults, checkRowTypeInventory } from './tools/check_row_reference.ts';
 import { withoutCheckRows } from './src/checkrow.ts';
 import { runCropEdgeChecks } from './fixtures/crop_edge_checks.ts';
@@ -20038,6 +20038,14 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       { row_scope: 'pair', row_kind: 'evidence', row_subjects: ['p', 'o'], parts: ['p', 'o'], px_over_40: 2, px_over_80: 0, frame_box: [4, 0, 5, 1], rig_box: [4, 0, 5, 1], picture: `${SEAM_DIR}/02_p_o.png` },
       { row_scope: 'part', row_kind: 'evidence', row_subjects: ['b'], parts: ['b', SEAM_NO_ART], px_over_40: 1, px_over_80: 0, frame_box: [0, 0, 0, 0], rig_box: [0, 0, 1, 1], picture: `${SEAM_DIR}/03_b_no-art.png` },
     ];
+    const noArtRows = seamPairRows(fixtureSeam, [], [6, 2], vp6).map(x => x.row);
+    const noArtExpected = [{ row_scope: 'rig', row_kind: 'evidence', row_subjects: [], parts: [SEAM_NO_ART, SEAM_NO_ART], px_over_40: 5, px_over_80: 1, frame_box: [0, 0, 5, 1], rig_box: [0, 0, 5, 1], picture: `${SEAM_DIR}/01_no-art_no-art.png` }];
+    const noArtDocument = { seam_pairs: noArtRows, seam_scope: { whole_pairs: noArtRows } };
+    const noArtMutant = { seam_pairs: noArtRows.map(row => ({ ...row, row_scope: 'part' })) };
+    say('CK1064_NO_REFERENCE_ART_SEAM_ROWS_HAVE_RIG_SCOPE_AND_THE_PART_SCOPE_MUTANT_IS_REFUSED',
+      JSON.stringify(noArtRows) === JSON.stringify(noArtExpected) && checkRowSchemaFaults(noArtDocument).length === 0 && checkRowSchemaFaults(noArtMutant).some(f => f.includes('invalid row_subjects')),
+      'five counted samples, zero reference contributors: rig/evidence/[]; pair and singleton controls remain beside it; part/[] mutant refused',
+      'the no-art branch is reachable on drift and posed residuals; a counted seam pixel need not have any reference part to name');
     const text = got.length > 0 ? seamPairText(got[0]) : '';
 
     const guidePath = join(dir, 'generated-guide.md');

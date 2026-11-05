@@ -52,7 +52,7 @@ export function checkRowSchemaFaults(value: unknown, requireFamily = true): stri
     if ((requireFamily || family !== undefined) && !candidates.some(([key]) => key === family)) faults.push(`${shown}: family ${String(family)} does not register this path`);
     if (!['part', 'pair', 'rig'].includes(String(v.row_scope)) || !['finding', 'evidence'].includes(String(v.row_kind))) faults.push(`${shown}: missing or invalid row_scope / row_kind`);
     const subjects = v.row_subjects;
-    if (!Array.isArray(subjects) || !subjects.every(s => typeof s === 'string' && s.length > 0) || subjects.length !== (v.row_scope === 'part' ? 1 : v.row_scope === 'pair' ? 2 : 0)) faults.push(`${shown}: invalid row_subjects`);
+    if (!Array.isArray(subjects) || !subjects.every(s => typeof s === 'string' && s.length > 0) || subjects.length !== (v.row_scope === 'part' ? 1 : v.row_scope === 'pair' ? 2 : 0)) faults.push(`${shown}: invalid row_subjects: scope ${String(v.row_scope)} requires ${v.row_scope === 'part' ? 1 : v.row_scope === 'pair' ? 2 : 0} named subject(s); found ${JSON.stringify(subjects)}${Array.isArray(v.parts) ? ` for parts ${JSON.stringify(v.parts)}` : ''}`);
   };
   const walk = (v: unknown, path: string[]): void => {
     if (Array.isArray(v)) v.forEach((entry, i) => {
@@ -148,7 +148,24 @@ export function runCheckRowGuardChecks(root: string, say: (name: string, ok: boo
   };
   const swallowed = probe(invalid, true), child = probe(nested, true), wrongPath = probe(mismatch, true), consumer = probe(invalid, false);
   say('TY832_TEST_ROW_SCHEMA_DENIAL_SURVIVES_SWALLOWING_AND_BUN_DESCENDANTS',
-    [swallowed, child, wrongPath].every(r => r.status !== 0 && r.stderr.includes('check row schema:')) && consumer.status === 0 && consumer.stderr === '' && consumer.stdout === '',
+    [swallowed, child, wrongPath].every(r => r.status !== 0 && r.stderr.includes('check row schema:')) && child.stderr.includes('loop_physics.0: missing or invalid row_scope / row_kind') && consumer.status === 0 && consumer.stderr === '' && consumer.stdout === '',
     `swallowed ${swallowed.status}, descendant ${child.status}, mismatch ${wrongPath.status}; unguarded consumer ${consumer.status} with empty streams`,
     'the test preload enforces the same schema on actual serialization and descendants; consumers acquire no new failure');
+}
+
+/** Census of the fixed no-reference-art labels, after the caller validates the document. */
+export function noArtCheckRowCorrections(value: unknown): Array<{ path: string; parts: unknown; before: { row_scope: 'part'; row_kind: unknown; row_subjects: never[] }; after: { row_scope: unknown; row_kind: unknown; row_subjects: unknown } }> {
+  const rows: ReturnType<typeof noArtCheckRowCorrections> = [];
+  const walk = (v: unknown, path: string): void => {
+    if (Array.isArray(v)) v.forEach((entry, i) => walk(entry, `${path}[${i}]`));
+    else if (object(v)) {
+      const family: unknown = Reflect.get(v, CHECK_ROW_FAMILY);
+      if ((family === 'seam_pairs' || family === 'seam_scope.pairs') && v.row_scope === 'rig' && Array.isArray(v.row_subjects) && v.row_subjects.length === 0 && Array.isArray(v.parts)) {
+        rows.push({ path, parts: v.parts, before: { row_scope: 'part', row_kind: v.row_kind, row_subjects: [] }, after: { row_scope: v.row_scope, row_kind: v.row_kind, row_subjects: v.row_subjects } });
+      }
+      for (const [key, entry] of Object.entries(v)) walk(entry, `${path}.${key}`);
+    }
+  };
+  walk(value, 'check');
+  return rows;
 }
