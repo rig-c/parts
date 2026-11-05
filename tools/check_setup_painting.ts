@@ -1,3 +1,5 @@
+import { writeSetupFigureFixture } from '../fixtures/setupfigure.ts';
+import { readSetupFigureMask } from '../src/setupfiguremask.ts';
 import { createHash } from 'node:crypto';
 import { writeSetupBackdropFixture } from '../fixtures/setupbackdrop.ts';
 import { readSetupBackdrop } from '../src/setupbackdrop.ts';
@@ -13,7 +15,7 @@ import { readRequirements } from '../src/requirements.ts';
 import { alphaComposite } from '../src/raster/composite.ts';
 import { newRaster } from '../src/raster/types.ts';
 import { readPng, writePng } from '../src/raster/png.ts';
-import { SETUP_PAINTING_LINE, SETUP_PAINTING_REQUIRED_CODE, setupPaintingLine, setupPaintingProblems, type SetupPainting } from '../src/setuppainting.ts';
+import { SETUP_PAINTING_LINE, SETUP_PAINTING_REQUIRED_CODE, setupPaintingLine, setupPaintingLines, setupPaintingProblems, type SetupPainting } from '../src/setuppainting.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
 export function runSetupPaintingChecks(dir: string, say: Say, rigc: RigcRunner): void {
@@ -133,6 +135,7 @@ export function runSetupPaintingChecks(dir: string, say: Say, rigc: RigcRunner):
   say('ZO17_SOURCE_MISSING_REFUSED_BEFORE_BUILD', missingSource.code.includes('CHECK_SETUP_PAINTING_SOURCE') && missingSource.calls === 0, JSON.stringify(missingSource));
   const outside = early('outside-stage', { ...real, regions: [{ name: 'outside', box: [47, 0, 2, 1], max_pixels: 0 }] }, true);
   say('ZO18_REGION_OUTSIDE_STAGE_REFUSED_BEFORE_BUILD', outside.code.includes('REQUIREMENTS_FIELD') && outside.calls === 0, JSON.stringify(outside));
+  runSetupFigureChecks(join(dir, 'figure-mask'), say, rigc);
   runSetupBackdropChecks(join(dir, 'backdrop'), say, rigc);
   runSetupPaintingTransparencyChecks(join(dir, 'source-alpha'), say, rigc);
 }
@@ -234,4 +237,79 @@ function runSetupBackdropChecks(dir: string, say: Say, rigc: RigcRunner): void {
   const invalidPng = { ...declaration, backdrop: { path: 'backdrop.png', sha256: createHash('sha256').update('not a PNG').digest('hex') } };
   say('ZO41_BACKDROP_INVALID_PNG_REFUSED_AFTER_VALID_HASH', rejects(invalidPng), 'matching bytes hash cannot admit a non-PNG');
   writeFileSync(join(dir, 'backdrop.png'), bytes);
+}
+
+export function runSetupFigureChecks(dir: string, say: Say, rigc: RigcRunner): void {
+  const declared = writeSetupFigureFixture(dir);
+  const requirements = join(dir, 'requirements.json'), sourcePath = join(dir, 'painting.png'), input = join(dir, 'rig');
+  const run = (name: string, value: SetupPainting) => {
+    writeFileSync(requirements, JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [], setup_painting: value }));
+    const report = checkStage({ rig: input, source: sourcePath, requirements, out: join(dir, name), noExtremes: true }, rigc, 'fixture-rigc', () => {});
+    const line = report.figures[SETUP_PAINTING_LINE];
+    if (line === undefined || !('regions' in line)) throw new Error('fixture did not produce region readings');
+    return line;
+  };
+  const { figure_mask: mask, ...omitted } = declared;
+  const legacy = run('legacy', omitted), clean = run('masked', declared);
+  say('ZO42_ROOM_IS_UNBARRED_FIGURE_IS_CLEAN', legacy.status === 'FAIL' && clean.status === 'PASS' && clean.regions.every(r => r.pixel_count === 0) && (clean.outside_figure?.pixel_count ?? 0) > 0 && clean.outside_figure?.status === 'UNBARRED', JSON.stringify({ legacy, clean }));
+  const frontPath = join(input, 'images', 'front.png'), frontBytes = readFileSync(frontPath);
+  const roomPiece = readPng(frontPath);
+  for (let y = 0; y < 3; y++) for (let x = 23; x < 26; x++) roomPiece.data.set([0, 0, 0, 255], (y * roomPiece.width + x) * 4);
+  for (const folder of ['images', 'parts']) writePng(join(input, folder, 'front.png'), roomPiece);
+  const spill = run('owned-outside', declared);
+  say('ZO49_OWNED_ROOM_MISMATCH_IS_UNBARRED', spill.outside_figure_owned?.pixel_count === 9 && spill.outside_figure_owned.status === 'UNBARRED' && JSON.stringify(spill.regions) === JSON.stringify(clean.regions) && setupPaintingLines(spill).includes('SETUP_MATCHES_PAINTING: owned pixels outside figure mask — pixelcount 9; UNBARRED, outside every region limit'), JSON.stringify({ regions: spill.regions, outside_owned: spill.outside_figure_owned }));
+  for (const folder of ['images', 'parts']) writeFileSync(join(input, folder, 'front.png'), frontBytes);
+  // A room-count reduction can hide a new figure defect in the old
+  // region total. Freeze both baseline budgets before planting either change.
+  const budgets = { ...omitted, regions: legacy.regions.map(r => ({ name: r.name, box: r.box, max_pixels: r.pixel_count })) };
+  const front = checkPartRaster(CHECK_PARTS[1]);
+  for (let q = 3; q < front.data.length; q += 4) if (front.data[q] > 0) front.data[q] = 255;
+  for (let y = 18; y < 21; y++) for (let x = 18; x < 21; x++) front.data[(y * front.width + x) * 4 + 3] = 0;
+  for (const folder of ['images', 'parts']) writePng(join(input, folder, 'front.png'), front);
+  const painting = readPng(sourcePath);
+  const independent = readPng(join(dir, 'figure.png'));
+  for (let y = 8; y < 28; y++) for (let x = 3; x < 12; x++) {
+    const q = (y * painting.width + x) * 4;
+    if (independent.data[q + 3] === 0) painting.data.set([255, 255, 255, 255], q);
+  }
+  writePng(sourcePath, painting);
+  const missed = run('legacy-defect', budgets), caught = run('masked-defect', declared);
+  say('ZO43_FROZEN_ROOM_BUDGET_MISSES_FIGURE_HOLE', missed.status === 'PASS' && caught.status === 'FAIL' && caught.regions.every(r => r.pixel_count === 9) && caught.regions.every(r => r.slots.some(s => s.slot === '(uncovered)' && s.pixel_count === 9)), JSON.stringify({ legacyBaseline: legacy.regions, old: missed, new: caught }));
+  const maskPath = join(dir, 'figure.png'), bytes = readFileSync(maskPath);
+  const expected = createHash('sha256').update(bytes).digest('hex');
+  const failure = (value: SetupPainting, source = painting, width = 48, height = 80): readonly Problem[] => {
+    try { readSetupFigureMask(value, requirements, source, width, height); } catch (e) { if (e instanceof PartsError) return e.problems; throw e; }
+    return [];
+  };
+  const wrongHash = failure({ ...declared, figure_mask: { path: 'figure.png', sha256: '0'.repeat(64) } });
+  const wrongGrid = failure(declared, newRaster(24, 40));
+  say('ZO44_MASK_HASH_AND_GRID_EXACT_REFUSALS', wrongHash.length === 1 && wrongHash[0].code === 'CHECK_SETUP_PAINTING_MASK' && wrongHash[0].object === 'setup_painting.figure_mask' && wrongHash[0].detail === `PNG "figure.png" has sha256 ${expected}; requires declared ${'0'.repeat(64)}` && wrongGrid.length === 1 && wrongGrid[0].code === 'CHECK_SETUP_PAINTING_MASK' && wrongGrid[0].detail === 'PNG "figure.png" is 48x80; requires the original source painting grid 24x40, without fitting', JSON.stringify({ wrongHash, wrongGrid }));
+  const invalid = [null, {}, { path: '', sha256: 'x' }, { ...mask, extra: true }];
+  say('ZO45_MASK_SHAPE_AND_OMISSION', invalid.every(figure_mask => setupPaintingProblems({ ...declared, figure_mask }, 'setup_painting').length > 0) && readSetupFigureMask(omitted, requirements, null, 48, 80) === undefined && createHash('sha256').update(JSON.stringify(legacy)).digest('hex') === '00c62ce943b556413aead282eeecb573ead785f9eb7e838d6cc6583aac66b9ae', 'malformed declarations refused; omitted output matches the ef0f698 actual-renderer synthetic scene golden, SHA-256 00c62ce943b556413aead282eeecb573ead785f9eb7e838d6cc6583aac66b9ae');
+  writePng(maskPath, newRaster(48, 80));
+  const empty = failure({ ...declared, figure_mask: { path: 'figure.png', sha256: createHash('sha256').update(readFileSync(maskPath)).digest('hex') } });
+  say('ZO46_EMPTY_MASK_REFUSED', empty[0]?.detail === 'PNG "figure.png" has empty alpha support; requires at least one figure pixel', JSON.stringify(empty));
+  writeFileSync(maskPath, bytes);
+  let builds = 0, early = false;
+  writeFileSync(requirements, JSON.stringify({ spec: 'spine-parts-requirements/1', fps: 12, requirements: [], setup_painting: { ...declared, figure_mask: { path: 'figure.png', sha256: '0'.repeat(64) } } }));
+  try { checkStage({ rig: input, source: sourcePath, requirements, out: join(dir, 'refused-mask'), noExtremes: true }, args => { if (args[0] === 'build') builds++; return rigc(args); }, 'fixture-rigc', () => {}); }
+  catch (e) { early = e instanceof PartsError && e.problems.some(p => p.code === 'CHECK_SETUP_PAINTING_MASK'); }
+  say('ZO47_MASK_REFUSED_BEFORE_BUILD', early && builds === 0, `refused ${early}, build calls ${builds}`);
+  const support = readSetupFigureMask(declared, requirements, painting, 24, 40);
+  const full = readPng(maskPath);
+  say('ZO48_MASK_NEAREST_CENTRE_RESAMPLING', support !== undefined && support.every((v, p) => v === (full.data[((Math.floor(p / 24) * 2 + 1) * 48 + p % 24 * 2 + 1) * 4 + 3] > 0 ? 1 : 0)), '48x80 alpha-support samples at odd source coordinates map to 24x40 without dilation or rendered-alpha union');
+  const thin = newRaster(48, 80); thin.data.set([0, 0, 0, 255], 0);
+  writePng(maskPath, thin);
+  const thinDecl = { ...declared, figure_mask: { path: 'figure.png', sha256: createHash('sha256').update(readFileSync(maskPath)).digest('hex') } };
+  const vanished = failure(thinDecl, painting, 24, 40);
+  say('ZO50_DOWNSCALED_EMPTY_SUPPORT_EXACT_REFUSAL', vanished.length === 1 && vanished[0].code === 'CHECK_SETUP_PAINTING_MASK' && vanished[0].object === 'setup_painting.figure_mask' && vanished[0].detail === 'PNG "figure.png" has no figure support on the declared stage grid', JSON.stringify(vanished));
+  writeFileSync(maskPath, bytes);
+  const fractional = newRaster(7, 5);
+  for (const [x, y] of [[0, 0], [2, 2], [6, 4]]) fractional.data[(y * 7 + x) * 4 + 3] = 1;
+  const fractionalPath = join(dir, 'fractional.png'); writePng(fractionalPath, fractional);
+  const fractionalDecl = { ...declared, figure_mask: { path: 'fractional.png', sha256: createHash('sha256').update(readFileSync(fractionalPath)).digest('hex') } };
+  const sampled = readSetupFigureMask(fractionalDecl, requirements, newRaster(7, 5), 4, 3);
+  const nearest = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1];
+  say('ZO51_NONINTEGER_SCALE_NEAREST_CENTRES', sampled !== undefined && JSON.stringify([...sampled]) === JSON.stringify(nearest), `7x5 to 4x3 samples source columns [0,2,4,6], rows [0,2,4]; expected ${JSON.stringify(nearest)}, found ${JSON.stringify(sampled === undefined ? null : [...sampled])}`);
+
 }

@@ -1,3 +1,4 @@
+import { readSetupFigureMask } from './setupfiguremask.ts';
 import { readSetupBackdrop } from './setupbackdrop.ts';
 import { COINCIDE_LINE, type SupportReport } from './coincide.ts';
 import { observeSupport } from './coincideio.ts';
@@ -1947,7 +1948,7 @@ export function officialRenderer(): OfficialRenderer {
 
 /** Observe the actual setup on the declared stage grid. No frame-zero motion,
  * fitted alignment, flat recomposite or duplicate core validation. */
-export function measureSetupPainting(build: string, stage: StageBox, source: Raster, declared: SetupPainting, problems: Problem[], backdrop?: Raster): SetupPaintingLine {
+export function measureSetupPainting(build: string, stage: StageBox, source: Raster, declared: SetupPainting, problems: Problem[], backdrop?: Raster, figureMask?: Uint8Array): SetupPaintingLine {
   const api = officialRenderer();
   const skeleton = join(build, 'skeleton.json'), atlas = join(build, 'skeleton.atlas');
   const candidate = api.loadCandidate({ skeletonText: readFileSync(skeleton, 'utf8'), atlasText: readFileSync(atlas, 'utf8'), atlasDir: build, label: 'setup versus painting' }, { skeleton, atlas }, undefined);
@@ -1971,7 +1972,7 @@ export function measureSetupPainting(build: string, stage: StageBox, source: Ras
   }
   const painting = sourceInRig(whiteSource, W, H);
   const setup = api.renderFrame(pose, candidate.pages, vp, [0, 0, 0, 0]);
-  return setupPaintingLine(declared, painting, { width: W, height: H, data: new Uint8ClampedArray(setup.data) }, figureSilhouette(painting).data, owners, pose.pieces.map(p => p.slot), problems, backdrop === undefined ? undefined : sourceInRig(backdrop, W, H));
+  return setupPaintingLine(declared, painting, { width: W, height: H, data: new Uint8ClampedArray(setup.data) }, figureSilhouette(painting).data, owners, pose.pieces.map(p => p.slot), problems, backdrop === undefined ? undefined : sourceInRig(backdrop, W, H), figureMask);
 }
 
 /** One decoder/poser lifetime per state; retain only finite bounds and identities, never atlas pages or rasters. */
@@ -6419,6 +6420,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     }
   };
   let setupBackdrop: Raster | undefined;
+  let setupFigureMask: Uint8Array | undefined;
   // Issue #538: the schedule is read once, first, by rigc's own reader; refused, nothing is built or written.
   const env = environment === undefined ? null : take(() => readCheckEnvironment(environment));
   // Issue #590: the steady-wind band spec is read and resolved before anything is built or written.
@@ -6444,6 +6446,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       refuseIfAny(setupPaintingBounds(file.setup_painting as SetupPainting, ready.stage.width, ready.stage.height));
       if (ready.source === null) refuseIfAny([{ code: 'CHECK_SETUP_PAINTING_SOURCE', object: 'requirements.setup_painting', detail: 'requires --source naming the painting; the assembled composite is not an independent source painting' }]);
       setupBackdrop = readSetupBackdrop(file.setup_painting as SetupPainting, requirements, ready.source?.painting ?? null);
+      setupFigureMask = readSetupFigureMask(file.setup_painting as SetupPainting, requirements, ready.source?.painting ?? null, ready.stage.width, ready.stage.height);
     });
     // Issue #942: a declared boundary_colour reads parts.json's pieces and the idle; without either it cannot be taken.
     if (file.boundary_colour !== undefined) take(() => refuseIfAny([
@@ -7051,7 +7054,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       if (sr.status !== 0) refuseIfAny(rigcFailed('render (the setup-pose still)', sr, sr.out.split('\n').filter((l) => l.includes('FAIL'))));
       const stillSet = readFrameSet(join(stillDir, 'render'));
       partSupport = observeSupport(join(stillDir, 'build'), inp, supportSource, supportFigure);
-      if (reqFile?.setup_painting !== undefined && inp.source !== null) setupPainting = measureSetupPainting(join(stillDir, 'build'), inp.stage, inp.source.painting, reqFile.setup_painting, problems, setupBackdrop);
+      if (reqFile?.setup_painting !== undefined && inp.source !== null) setupPainting = measureSetupPainting(join(stillDir, 'build'), inp.stage, inp.source.painting, reqFile.setup_painting, problems, setupBackdrop, setupFigureMask);
       if (fixedSkeleton !== undefined) {
         const geometryPath = join(stillSet.dir, GEOMETRY_FILE);
         const geometry = readGeometry(geometryPath, stillSet.written);

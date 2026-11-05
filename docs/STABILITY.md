@@ -554,6 +554,19 @@ The separate ordering scalar is unchanged. No-image outputs retain legacy bytes.
 
 ### Declared setup-painting regions
 
+| Optional field | Additive contract |
+| --- | --- |
+| `setup_painting.figure_mask` | Verified source-grid alpha support restricts region counts; omission preserves the shipped domain and output bytes. |
+
+The optional `setup_painting.figure_mask` (issue #974, additive) declares a
+`path` and byte `sha256` for independent figure alpha support on the original
+painting grid. Paths resolve relative to requirements. Alpha above zero is
+sampled at nearest source pixel centres onto the stage, with empty support
+refused. Region limits count only inside that support. Outside-mask uncovered
+mismatches have their own unbarred stage-wide row. The verified declaration is
+recorded in the report. Omitting it preserves existing output bytes and the
+shipped domain predicate.
+
 The optional `setup_painting` key in `spine-parts-requirements/1` adds a
 `SETUP_MATCHES_PAINTING` measurement when declared. It requires authored
 `rgb_tolerance` and named native-stage boxes. Each optional `max_pixels` is
