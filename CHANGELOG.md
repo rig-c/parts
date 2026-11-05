@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.14.2](https://github.com/rig-c/parts/compare/v2.14.1...v2.14.2) (2026-11-05)
+
+
+### Bug Fixes
+
+* **assemble:** restore own pixels only under final soft cover ([#1073](https://github.com/rig-c/parts/issues/1073)) ([#1080](https://github.com/rig-c/parts/issues/1080)) ([951cb14](https://github.com/rig-c/parts/commit/951cb145e54a41200b9cdd72e0271d4128214288))
+
 ## [2.14.1](https://github.com/rig-c/parts/compare/v2.14.0...v2.14.1) (2026-11-05)
 
 
