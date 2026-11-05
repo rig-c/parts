@@ -42081,18 +42081,18 @@ function runAliasControls(say: (name: string, ok: boolean, detail: string, why: 
 
   // AL07 — a prerelease goes out under the `rc` dist-tag on both publishes, and a stable version under none.
   const tagFaults = prereleaseTagFaults(yml);
-  const gatedLine = 'npm publish --provenance --access public $tag';
+  const gatedLine = 'npm publish "$x" --provenance --access public $tag';
   const aliasLine = 'npm publish "$alias_tgz" --provenance --access public $tag';
   const clauseLine = `          ${PRERELEASE_TAG_CASE}\n`;
   const firstClause = yml.indexOf(clauseLine);
   const lastClause = yml.lastIndexOf(clauseLine);
   const cut = (at: number): string | null => (at === -1 ? null : yml.slice(0, at) + yml.slice(at + clauseLine.length));
   const tagPlants: Array<{ what: string; yml: string | null; want: string }> = [
-    { what: 'the gated publish drops $tag', yml: edit(yml, gatedLine, 'npm publish --provenance --access public'), want: 'does not end with $tag' },
+    { what: 'the gated publish drops $tag', yml: edit(yml, gatedLine, 'npm publish "$x" --provenance --access public'), want: 'does not end with $tag' },
     { what: "the alias's clause removed", yml: firstClause === lastClause ? null : cut(lastClause), want: 'Publish the alias' },
     { what: 'the clause matches rc instead of a hyphen', yml: edit(yml, 'in *-*) tag="--tag rc"', 'in *rc*) tag="--tag rc"'), want: 'a prerelease would go out on latest' },
     { what: 'the gated publish always tags rc', yml: yml.includes(`          tag=""\n${clauseLine}`) ? yml.replace(`          tag=""\n${clauseLine}`, '          tag="--tag rc"\n') : null, want: '"Publish to npm": no `case' },
-    { what: 'a hard --tag next beside $tag', yml: edit(yml, gatedLine, 'npm publish --provenance --access public --tag next $tag'), want: 'names a --tag of its own' },
+    { what: 'a hard --tag next beside $tag', yml: edit(yml, gatedLine, 'npm publish "$x" --provenance --access public --tag next $tag'), want: 'names a --tag of its own' },
   ];
   const tagCases = tagPlants.map((p) => {
     if (p.yml === null) return { what: p.what, ok: false, said: 'the edit found nothing to change, so this plant was never made' };
@@ -42293,14 +42293,14 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
   const pinned = '${{ needs.target.outputs.sha || needs.target.outputs.tag }}';
   const bodies: Record<string, string> = {
     gh: "printf \"gh %s\\n\" \"$*\" >> \"$MOCK_TRACE\"\nif [ \"$1\" = api ]; then\n  wanted_tag=\"$CUT_TAG\"\n  if [ \"$EVENT\" = workflow_dispatch ]; then wanted_tag=\"$INPUT_TAG\"; fi\n  case \"$*\" in \"api repos/$REPO/commits/refs%2Ftags%2F$wanted_tag --jq .sha\") printf \"%s\\n\" \"$MOCK_COMMIT\";; \"api repos/$REPO/commits/tags%2F$wanted_tag --jq .sha\") if [ \"$MOCK_KIND\" = tag ]; then exit 1; fi; printf \"%s\\n\" \"$MOCK_COMMIT\";; \"api repos/$REPO/git/ref/tags/$wanted_tag --jq .sha\") if [ \"$MOCK_KIND\" = tag ]; then printf \"%s\\n\" \"$MOCK_OBJECT\"; else printf \"%s\\n\" \"$MOCK_COMMIT\"; fi;; *) exit 94;; esac\n  exit \"$MOCK_API_EXIT\"\nfi\n[ \"$*\" = \"release view $INPUT_TAG --repo mock/parts\" ] || exit 95\nexit \"$MOCK_RELEASE_EXIT\"\n",
-    npm: "printf \"npm %s\\n\" \"$*\" >> \"$MOCK_TRACE\"\nif [ \"$1\" = publish ]; then exit 0; fi\n[ \"$1\" = view ] && [ \"$3\" = version ] || exit 92\nif [ \"$2\" = \"$MOCK_QUERY_SPEC\" ]; then printf '%s\\n' \"$MOCK_QUERY_REPLY\"; exit \"$MOCK_QUERY_EXIT\"; fi\ncase \"$2\" in\n  @rig-c/parts) value=\"$MOCK_LATEST\";;\n  *@*)\n    spec=\"$2\"; name=\"${spec%@*}\"\n    case \"$MOCK_NAMES\" in *\"|$name|\"*) ;; *) exit 96;; esac\n    case \"$MOCK_PRESENT\" in *\"|$name|\"*) value=\"$MOCK_TARGET_VERSION\";; *) printf '{\"error\":{\"code\":\"E404\"}}\\n'; exit 1;; esac;;\n  *) exit 96;;\nesac\nif [ \"${4:-}\" = --json ]; then printf '\"%s\"\\n' \"$value\"; else printf '%s\\n' \"$value\"; fi\n",
+    npm: "printf \"npm %s\\n\" \"$*\" >> \"$MOCK_TRACE\"\nif [ \"$1\" = publish ]; then exit 0; fi\nif [ \"$1\" = pack ]; then printf 'mock-primary.tgz\\n'; exit 0; fi\n[ \"$1\" = view ] && [ \"$3\" = version ] || exit 92\nif [ \"$2\" = \"$MOCK_QUERY_SPEC\" ]; then printf '%s\\n' \"$MOCK_QUERY_REPLY\"; exit \"$MOCK_QUERY_EXIT\"; fi\ncase \"$2\" in\n  @rig-c/parts) value=\"$MOCK_LATEST\";;\n  *@*)\n    spec=\"$2\"; name=\"${spec%@*}\"\n    case \"$MOCK_NAMES\" in *\"|$name|\"*) ;; *) exit 96;; esac\n    case \"$MOCK_PRESENT\" in *\"|$name|\"*) value=\"$MOCK_TARGET_VERSION\";; *) printf '{\"error\":{\"code\":\"E404\"}}\\n'; exit 1;; esac;;\n  *) exit 96;;\nesac\nif [ \"${4:-}\" = --json ]; then printf '\"%s\"\\n' \"$value\"; else printf '%s\\n' \"$value\"; fi\n",
     bun: "printf \"bun %s\\n\" \"$*\" >> \"$MOCK_TRACE\"\nif [ \"$1\" = run ] && [ \"$2\" = \"$MOCK_GATE_FAILURE\" ]; then exit 73; fi\ncase \"$*\" in 'run typecheck'|'run lint'|'run selftest') exit 0;; esac\n[ \"$1\" = scripts/alias_tarball.ts ] && [ \"$2\" = pack ] && [ \"$3\" = --name ] || exit 93\nprintf 'mock-%s.tgz\\n' \"$4\"\n",
   };
   for (const [name, body] of Object.entries(bodies)) writeFileSync(join(bin, name), `#!/bin/bash\nset -euo pipefail\n${body}`, { mode: 0o755 });
   // Only the spelling/semver logic and package version reader use real executables.
   // No service command or credentials are inherited by the child.
   symlinkSync('/usr/bin/grep', join(bin, 'grep'));
-  symlinkSync(process.execPath, join(bin, 'node'));
+  writeFileSync(join(bin, 'node'), `#!/bin/bash\nset -euo pipefail\nif [[ "$1" = */lifecycle.mjs ]]; then\n  bun run typecheck && bun run lint && bun run selftest\n  exit $?\nfi\nexec "$MOCK_NODE_EXECUTABLE" "$@"\n`, { mode: 0o755 });
   writeFileSync(join(mock, 'package.json'), JSON.stringify({ version: '1.2.3' }));
   interface Scenario {
     name: string; event?: string; created?: string; cutTag?: string; inputTag?: string; inputVersion?: string;
@@ -42400,6 +42400,7 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
       const event = scenario.event ?? 'push';
       const sha = scenario.sha ?? commit;
       const env = {
+        MOCK_NODE_EXECUTABLE: process.execPath,
         PATH: bin, MOCK_NAMES: `|${names.join('|')}|`, MOCK_TRACE: trace, MOCK_COMMIT: scenario.commit ?? commit, MOCK_KIND: scenario.kind ?? 'commit', MOCK_OBJECT: object,
         MOCK_API_EXIT: scenario.apiExit ?? '0', MOCK_RELEASE_EXIT: scenario.releaseExit ?? '0', MOCK_PRESENT: `|${(scenario.present ?? (scenario.served ? names : [])).join('|')}|`, MOCK_LATEST: scenario.latest ?? '1.2.2',
         MOCK_GATE_FAILURE: scenario.gateFailure ?? '', MOCK_TARGET_VERSION: (scenario.inputTag ?? tag).slice(1), MOCK_QUERY_SPEC: scenario.querySpec ?? '', MOCK_QUERY_REPLY: scenario.queryReply ?? '', MOCK_QUERY_EXIT: scenario.queryExit ?? '1',
@@ -42412,7 +42413,11 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
       let exit = resolved.status;
       let output = `${resolved.stdout ?? ''}${resolved.stderr ?? ''}${resolved.error === undefined ? '' : String(resolved.error)}`;
       if (exit === 0 && outputs.publish === 'true') {
-        for (const { step } of publishes) {
+        const reader = publicationSteps.find((step) => step.id === 'publication-reader');
+        const gated = run(reader?.run ?? 'exit 97', { TREE_VERDICT_TOOLS: 'mock-tooling', TREE_VERDICT_PATH: '' });
+        exit = gated.status;
+        output += `${gated.stdout ?? ''}${gated.stderr ?? ''}`;
+        for (const { step } of exit === 0 ? publishes : []) {
           const stepEnv = Object.fromEntries(Object.entries(step.env ?? {}).map(([key, value]) => {
             const field = /^\$\{\{ needs\.target\.outputs\.(\w+) \}\}$/.exec(String(value))?.[1];
             return [key, field === undefined ? String(value) : outputs[field] ?? ''];
@@ -42432,14 +42437,17 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
       const wantPublished = wantNames.length;
       const publishedNames = published.map(line => {
         const tarball = /^npm publish mock-(.+)\.tgz /.exec(line)?.[1];
-        return tarball ?? (line.startsWith('npm publish --provenance ') ? names[0] : '(unknown publish)');
+        return tarball === 'primary' ? names[0] : tarball ?? '(folder or unknown publish)';
       });
       if (JSON.stringify(publishedNames) !== JSON.stringify(wantNames)) faults.push(`${scenario.name}: published names ${JSON.stringify(publishedNames)}; required ${JSON.stringify(wantNames)}`);
       const packedNames = calls.filter(line => line.startsWith('bun scripts/alias_tarball.ts pack ')).map(line => /--name (\S+)/.exec(line)?.[1]);
       if (JSON.stringify(packedNames) !== JSON.stringify(wantNames.filter(name => name !== names[0]))) faults.push(`${scenario.name}: packed existing or wrong alias ${JSON.stringify(packedNames)}`);
-      if (wantPublished > 0 && !missing.includes(names[0])) {
+      const canonicalPacks = calls.filter((line) => line === 'npm pack . --pack-destination .');
+      if (canonicalPacks.length !== (wantNames.includes(names[0]) ? 1 : 0)) faults.push(`${scenario.name}: canonical pack count ${canonicalPacks.length}`);
+      if (wantPublished > 0) {
         const gates = ['bun run typecheck', 'bun run lint', 'bun run selftest'];
-        if (gates.some(gate => !calls.includes(gate) || calls.indexOf(gate) > calls.findIndex(line => line.startsWith('npm publish ')))) faults.push(`${scenario.name}: alias recovery skipped the canonical prepublishOnly gates`);
+        const firstPack = calls.findIndex((line) => line.startsWith('npm pack ') || line.startsWith('bun scripts/alias_tarball.ts pack '));
+        if (gates.some((gate) => calls.filter((line) => line === gate).length !== 1 || calls.indexOf(gate) > firstPack)) faults.push(`${scenario.name}: publication reader must run each gate once before packing`);
       }
       if (exit !== wantExit || published.length !== wantPublished) faults.push(`${scenario.name}: exit ${exit}, publishes ${published.length}; required ${wantExit}/${wantPublished}; ${output}`);
       const earlyDispatch = event === 'workflow_dispatch' && ['RELEASE_DISPATCH_INPUT', 'RELEASE_TAG_FORM', 'RELEASE_DISPATCH_REF', 'RELEASE_TAG_UNRELEASED'].includes(scenario.rule ?? '');
@@ -42476,7 +42484,9 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
       { what: 'recovery loses tag ref', text: change('release.yml --ref $CUT_TAG -f tag=$CUT_TAG', 'release.yml -f tag=$CUT_TAG') },
       { what: 'target failure ignored', text: change('        id: target\n', '        id: target\n        continue-on-error: true\n') },
       { what: 'skip guards reversed', text: yml.includes('if [ "$PUBLISH_NAME" != true ]; then') ? yml.replaceAll('if [ "$PUBLISH_NAME" != true ]; then', 'if [ "$PUBLISH_NAME" = true ]; then') : null },
-      { what: 'alias recovery loses tagged-tree gates', text: change('            bun run typecheck && bun run lint && bun run selftest || exit $?\n', '') },
+      { what: 'alias recovery loses tagged-tree gates', text: change('        run: node "$TREE_VERDICT_TOOLS/lifecycle.mjs" --declaration scripts/tree-verdict.json --verdict-path "$TREE_VERDICT_PATH"', '        run: echo removed-reader') },
+      { what: 'canonical publish reverts to a folder', text: change('npm publish "$x" --provenance', 'npm publish --provenance') },
+      { what: 'canonical pack writes another destination', text: change('npm pack . --pack-destination .', 'npm pack . --pack-destination elsewhere') },
       { what: 'alias plan fields swapped', text: change('PUBLISH_NAME: ${{ needs.target.outputs.rig_parts }}', 'PUBLISH_NAME: ${{ needs.target.outputs.spine_parts }}') },
       { what: 'registry failure accepted as absent', text: change('process.exit(v?.error?.code === "E404" ? 0 : 1);', 'process.exit(0);') },
       { what: 'dispatch workflow ref guard reversed', text: change('"${GITHUB_REF:-}" != "refs/tags/$INPUT_TAG"', '"${GITHUB_REF:-}" = "refs/tags/$INPUT_TAG"') },

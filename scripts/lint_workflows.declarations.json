@@ -35,12 +35,17 @@
           "declaration": "scripts/tree-verdict.json",
           "actionUses": "rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3",
           "evidenceEnv": "TREE_VERDICT_PATH",
-          "lifecycle": "prepublishOnly",
-          "readerCommand": "node scripts/prepublish.cjs",
           "invocations": [
             {
               "ordinal": 0,
-              "kind": "folder"
+              "kind": "tarball",
+              "producer": {
+                "step": {
+                  "name": "Publish to npm"
+                },
+                "variable": "x",
+                "command": "npm pack . --pack-destination ."
+              }
             }
           ]
         },

@@ -70,9 +70,11 @@ chain and preserves its exit code. Missing tooling also executes that chain.
 
 The release workflow first resolves a target, then enters a conditional publish
 job. Its unconditional lifecycle reader precedes every pack or publish. Each
-canonical or tarball invocation is declared in the workflow inventory, including
-the exact alias producer command. Folder publication also runs its npm lifecycle
-hook. Dispatch republishing retains the full chain. Registry confirmation runs
+tarball publication is declared in the workflow inventory, including its exact
+producer command. The canonical package and aliases are packed after the reader.
+A miss runs the chain once, and a verified hit skips it. Manual folder publication
+keeps its `prepublishOnly` gate. Dispatch republishing retains the full chain.
+Registry confirmation runs
 after publication because registry state is external to the tested tree.
 
 ## One-time setup (owner, GitHub)

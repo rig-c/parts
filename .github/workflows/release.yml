@@ -193,10 +193,10 @@ jobs:
     runs-on: ubuntu-latest
     # Release run 42111504664 measured Publish to npm at 1629 s, smoke at
     # 30 s, publication setup/post at 9 s and alias publication at 15 s.
-    # Two fallback chains plus three 15-minute confirmation waits require
-    # 2 * 1629 + 30 + 9 + 15 + 3 * 900 = 6012 s (100 min 12 s).
-    # Round up to the next 30-minute boundary for a 120-minute ceiling.
-    timeout-minutes: 120
+    # One fallback chain plus three 15-minute confirmation waits require
+    # 1629 + 30 + 9 + 15 + 3 * 900 = 4383 s (73 min 3 s).
+    # Round up to the next 30-minute boundary for a 90-minute ceiling.
+    timeout-minutes: 90
     permissions:
       contents: read
       actions: read
@@ -222,7 +222,7 @@ jobs:
           npm --version
 
       # The lockfile is bun.lock — there is no package-lock.json for `npm ci`.
-      # Dependencies exist only to let prepublishOnly run its gates.
+      # Dependencies let the lifecycle reader run the declared fallback gates.
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
@@ -248,9 +248,8 @@ jobs:
       - name: Gate parts output through @rig-c/play
         run: bun run smoke -- --case clean
 
-      # Nothing to build — the package ships TypeScript sources and bun runs
-      # them. prepublishOnly runs `typecheck && lint && selftest` against the
-      # tagged tree, so a broken gate fails the publish rather than shipping.
+      # The publication reader gates this checkout before packing. Canonical
+      # and alias publications use tarballs, preserving that single gate.
       #
       # 🏷️ A prerelease never lands on `latest`: a version with a hyphen
       # (1.0.0-rc.1) goes out under the `rc` dist-tag, so a plain install keeps
@@ -268,13 +267,12 @@ jobs:
           set -euo pipefail
           if [ "$PUBLISH_NAME" != true ]; then
             echo "Skipping @rig-c/parts: the resolver snapshot already serves this version"
-            # Alias recovery still gates the tagged tree when prepublishOnly is skipped.
-            bun run typecheck && bun run lint && bun run selftest || exit $?
             exit 0
           fi
           tag=""
           case "$(node -p "require('./package.json').version")" in *-*) tag="--tag rc";; esac
-          npm publish --provenance --access public $tag
+          x="$(npm pack . --pack-destination .)"
+          npm publish "$x" --provenance --access public $tag
 
       # 🪞 The aliases: the same files under each name the package shipped as
       # before, so an install or a dependant that still names one keeps
@@ -287,12 +285,9 @@ jobs:
       # the result to the package tarball file by file. The checkout is never
       # modified, so the confirmation below reads the tree the gate read.
       #
-      # 🔒 No lifecycle script runs here, and that is the design rather than a
-      # gap: `npm publish <tarball>` runs none, so `prepublishOnly` gates the
-      # step above and only that one. Another gated publish would need the
-      # package renamed in this checkout first, and the gate would then pass a
-      # modified tree rather than the commit it passed a step ago; each alias
-      # is this commit's files, which is what that gate's verdict is about.
+      # The unconditional publication reader gates the checkout shared by
+      # these tarballs. Publishing a tarball invokes no prepublishOnly hook.
+      # The alias helper compares each payload with the canonical package.
       #
       # 🔑 Each alias's own trusted publisher on npmjs.com is pinned to this
       # workflow filename, like the package's; the steps stay in this file.
