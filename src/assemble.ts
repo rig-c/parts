@@ -112,7 +112,7 @@ import { bindDepthRun, copyDepthMaterial, registerDepthRun, transportPartDepth, 
  * Pure: no clock, no randomness, no file access. The CLI reads and writes.
  */
 import { sourceLimbTarget, nearestTargetPart } from './limbownership.ts';
-import { type ArmSplit, type BoneEntry, type CharacterConfig, type ConfigConstraint, type ControlSkeleton, controlSkeletonOf, type Cut, type EarlyConfig, type Extend, type Limb, type MeshSpec, type Patch, type PlanEntry, type RegionSpec, type Run, type SeeThrough, turnMovingPartPair, type TurnSpec } from './config.ts';
+import { type ArmSplit, type BoneEntry, type CharacterConfig, type ConfigConstraint, type ControlSkeleton, controlSkeletonOf, type CropEdge, type Cut, type EarlyConfig, type Extend, type Limb, type MeshSpec, type Patch, type PlanEntry, type RegionSpec, type Run, type SeeThrough, turnMovingPartPair, type TurnSpec } from './config.ts';
 import { PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { CORE_ALPHA, figuresPhrase, implausibleRules, type Layer, type LayerFigures, layerFigures, type LayerSet, NEAR_WHITE_MIN, OPAQUE_ALPHA_ABOVE, ruleSummary } from './layers.ts';
 import { padToSquare, squarePad } from './inputs.ts';
@@ -2415,6 +2415,86 @@ export function belowCrop(part: Raster, extra: Raster, headBottom: number): Mask
   return sel;
 }
 
+/** The declared crop rectangle, in rig pixels; the legacy inset bottom is separate. */
+export function cropBounds(frame: Pick<Frame, 'headBox' | 'S'>): [number, number, number, number] {
+  return frame.headBox.map(v => v * frame.S) as [number, number, number, number];
+}
+
+/** Copy full-run alpha >= 128 only where pixel centres lie outside the half-open crop. */
+export function beyondCrop(extra: Raster, box: readonly number[], edges: readonly CropEdge[]): Mask {
+  const sel = newMask(extra.width, extra.height);
+  const [left, top, right, bottom] = box;
+  for (let y = 0; y < extra.height; y++) for (let x = 0; x < extra.width; x++) {
+    const p = y * extra.width + x;
+    if (extra.data[p * 4 + 3] < 128) continue;
+    const cx = x + 0.5, cy = y + 0.5;
+    if (edges.some(edge => edge === 'left' ? cx < left : edge === 'right' ? cx >= right : edge === 'top' ? cy < top : cy >= bottom)) sel.data[p] = 1;
+  }
+  return sel;
+}
+
+/** Keep the original merge byte-for-byte when no explicit edge is declared. */
+function mergeCropEntries(part: Raster, extras: Raster[], front: Mask, srcr: Raster, frame: Frame, entries: Extend[], trace: MergeTrace, changed: (rigPixel: number, stage: 'extend' | 'growRim') => void): number {
+  if (entries.every(e => e.edges === undefined)) return mergeBelowCrop(part, extras, front, srcr, frame.headBottom, trace, changed);
+  let merged = 0;
+  entries.forEach((entry, e) => {
+    if (entry.edges === undefined) {
+      const local: MergeTrace = { from: new Int32Array(part.width * part.height).fill(-1), ring: newMask(part.width, part.height) };
+      merged = mergeBelowCrop(part, [extras[e]], front, srcr, frame.headBottom, local, changed);
+      for (let p = 0; p < local.from.length; p++) if (local.from[p] >= 0) { trace.from[p] = e; trace.ring.data[p] = local.ring.data[p]; }
+      trace.lastSel = local.lastSel;
+      trace.lastRing = local.lastRing;
+      return;
+    }
+    const sel = beyondCrop(extras[e], cropBounds(frame), entry.edges);
+    merged = 0;
+    for (let p = 0; p < sel.data.length; p++) {
+      if (sel.data[p] === 0) continue;
+      if (!rgbaEqual(part.data, p * 4, extras[e].data, p * 4)) changed(p, 'extend');
+      part.data.set(extras[e].data.subarray(p * 4, p * 4 + 4), p * 4);
+      trace.from[p] = e;
+      trace.ring.data[p] = 0;
+      merged++;
+    }
+    trace.lastSel = sel;
+    trace.lastRing = newMask(part.width, part.height);
+  });
+  return merged;
+}
+
+/** Informational line registered by the authoring rule ledger. */
+export const CROP_CLIPPED_LINE = 'ASSEMBLE_CROP_CLIPPED';
+
+/** Name uncovered full-run support outside each head part's crop; no raster writes. */
+export function cropClippedLines(plan: readonly PlanEntry[], extend: readonly Extend[], rigOf: (run: Run, tag: string) => Raster | null, frame: Frame): string[] {
+  const lines: string[] = [];
+  const box = cropBounds(frame);
+  const covered = planCoverage(plan, extend, (run, tag) => rigOf(run, tag)!, frame.headBottom, box);
+  for (const [name, run, tag] of plan) {
+    if (run !== 'head') continue;
+    const extra = rigOf('full', tag), part = rigOf('head', tag);
+    if (extra === null || part === null) continue;
+    const legacy = belowCrop(part, extra, frame.headBottom);
+    const counts: Record<CropEdge, number> = { left: 0, right: 0, top: 0, bottom: 0 };
+    let total = 0, legacyPx = 0;
+    for (let y = 0; y < extra.height; y++) for (let x = 0; x < extra.width; x++) {
+      const p = y * extra.width + x;
+      if (extra.data[p * 4 + 3] < 128 || covered[p] === 1) continue;
+      const edges: CropEdge[] = [];
+      if (x + 0.5 < box[0]) edges.push('left');
+      if (x + 0.5 >= box[2]) edges.push('right');
+      if (y + 0.5 < box[1]) edges.push('top');
+      if (y + 0.5 >= box[3]) edges.push('bottom');
+      if (edges.length === 0) continue;
+      total++;
+      for (const edge of edges) counts[edge]++;
+      if (legacy.data[p] === 1) legacyPx++;
+    }
+    if (total > 0) lines.push(`  ${CROP_CLIPPED_LINE}: part "${name}" (full:${tag}) has ${total} uncovered px at alpha >= 128 outside the head crop; edges ${Object.entries(counts).filter(([, n]) => n > 0).map(([e, n]) => `${e} ${n}`).join(', ')}; legacy extend_below_crop selects ${legacyPx}/${total} (bottom seeded components only; side/top require explicit edges)`);
+  }
+  return lines;
+}
+
 /**
  * Close the half-pixel seam round a merged-in piece: the full run's silhouette
  * is a few pixels narrower than the painting, and a renderer's sub-pixel
@@ -4628,6 +4708,8 @@ export interface AssembleResult {
   edgeResiduals?: EdgeResidualReport;
   /** Report-only source re-take under actual soft front support (#825). */
   softOcclusion?: SoftOcclusionReading[];
+  /** Informational only; never serialized into parts.json. */
+  cropClipped?: string[];
   parts: PartsFile;
   /** In plan order, each cropped to its record's box. */
   images: PlacedPart[];
@@ -5185,7 +5267,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
         const f = rig.get(`${run2}:${tag2}`) as Raster;
         for (let p = 0; p < W * H; p++) if (f.data[p * 4 + 3] >= FRONT_ALPHA) front.data[p] = 1;
       }
-      merged = mergeBelowCrop(r, extras, front, srcr, frame.headBottom, trace, (p, stage) => { writers[p] = AW[stage]; });
+      merged = mergeCropEntries(r, extras, front, srcr, frame, extend.filter(e => e.part === name), trace, (p, stage) => { writers[p] = AW[stage]; });
     }
     const { x1, opaque } = measureBox(r);
     if (opaque === 0 && !emptyTargets?.has(name)) {
@@ -5924,6 +6006,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   if (supportFigure !== undefined && supportSilhouette !== null) for (let p = 0; p < supportPainted.length; p++) supportFigure.data[p] = supportSilhouette.data[p] & supportPainted[p];
   return {
     ...(softOcclusion.length === 0 ? {} : { softOcclusion }),
+    ...(!single ? { cropClipped: cropClippedLines(plan, extend, (run, tag) => rig.get(`${run}:${tag}`) ?? null, frame) } : {}),
     parts: {
       rig_size: [W, H],
       scale_rig_per_source: frame.S,
@@ -6163,13 +6246,14 @@ export function bodyBox(b: UncoveredBody): string {
  * plan takes `tag` from the head run; `why` is the proposer's reason for not
  * proposing an extend entry, when the caller is the proposer.
  *
- * ⚖️ Invariant: exactly one of four cases, decided in this order — the plan
- * takes no part from `tag`; it takes one from the head run and no
+ * ⚖️ Invariant: the legacy path has four cases, decided in this order — the
+ * plan takes no part from `tag`; it takes one from the head run and no
  * `extend_below_crop` entry continues that part from the full run's `tag`;
  * an entry does, and the head-run part has no pixel of alpha above
  * `CROP_PROBE_ALPHA` on the probe row (`headBottom - CROP_PROBE_ROWS`), so
  * `belowCrop` seeds nothing; or it reaches the line and the body is not one
- * of the components `belowCrop` seeds.
+ * of the components `belowCrop` seeds. Explicit-edge entries instead name
+ * their declared edges and alpha threshold; they do not use bottom seeding.
  */
 export function skippedBy(tag: string, plan: readonly PlanEntry[], extend: readonly Extend[], headPart: Raster | null, headBottom: number, why: string | null): string {
   const entry = plan.find((e) => e[2] === tag);
@@ -6178,6 +6262,11 @@ export function skippedBy(tag: string, plan: readonly PlanEntry[], extend: reado
   const taken = `${part} takes the head run's "${tag}"`;
   if (!extend.some((e) => e.part === part && e.run === 'full' && e.tag === tag)) {
     return `${taken}, and no extend_below_crop entry continues it from the full run${why === null ? '' : ` (${why})`}`;
+  }
+  const explicit = extend.filter(e => e.part === part && e.run === 'full' && e.tag === tag && e.edges !== undefined);
+  if (explicit.length > 0) {
+    const edges = [...new Set(explicit.flatMap(e => e.edges ?? []))];
+    return `${taken}; extend_below_crop edges [${edges.join(', ')}] copy full-run pixels at alpha >= 128 beyond the declared crop edges only; this body remains outside their coverage`;
   }
   const probe = headBottom - CROP_PROBE_ROWS;
   let reaches = false;
@@ -6243,7 +6332,7 @@ export function uncoveredLayers(
  * push-back and the seam override add or clear along an outline — a pixel
  * wide, below any body (`BODY_KERNEL`).
  */
-export function planCoverage(plan: readonly PlanEntry[], extend: readonly Extend[], rigOf: (run: Run, tag: string) => Raster, headBottom: number): Uint8Array {
+export function planCoverage(plan: readonly PlanEntry[], extend: readonly Extend[], rigOf: (run: Run, tag: string) => Raster, headBottom: number, box?: readonly number[]): Uint8Array {
   let covered: Uint8Array | null = null;
   const mark = (r: Raster, sel: Mask | null): void => {
     if (covered === null) covered = new Uint8Array(r.width * r.height);
@@ -6255,7 +6344,7 @@ export function planCoverage(plan: readonly PlanEntry[], extend: readonly Extend
     for (const e of extend) {
       if (e.part !== name) continue;
       const extra = rigOf(e.run, e.tag);
-      mark(extra, belowCrop(part, extra, headBottom));
+      mark(extra, e.edges === undefined ? belowCrop(part, extra, headBottom) : beyondCrop(extra, box!, e.edges));
     }
   }
   return covered ?? new Uint8Array(0);
@@ -6669,9 +6758,31 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
     }
     return r;
   };
-  const covered = planCoverage(plan, extend, rigOf, frame.headBottom);
+  // Explicit edges use the actual crop rectangle, never the legacy inset line.
+  const box = cropBounds(frame);
+  const edgeReaches = new Map<string, Record<CropEdge, number>>();
+  for (const [name, run, tag] of plan) {
+    if (run !== 'head' || !['front hair', 'back hair'].includes(tag) || find('full', tag) === undefined || noted.has(`full:${tag}`)) continue;
+    const extra = rigOf('full', tag);
+    const reach: Record<CropEdge, number> = { left: 0, right: 0, top: 0, bottom: 0 };
+    for (let y = 0; y < extra.height; y++) for (let x = 0; x < extra.width; x++) {
+      if (extra.data[(y * extra.width + x) * 4 + 3] < 128) continue;
+      reach.left = Math.max(reach.left, box[0] - (x + 0.5));
+      reach.right = Math.max(reach.right, x + 0.5 - box[2]);
+      reach.top = Math.max(reach.top, box[1] - (y + 0.5));
+      reach.bottom = Math.max(reach.bottom, y + 0.5 - box[3]);
+    }
+    edgeReaches.set(tag, reach);
+    const edges = (['left', 'right', 'top'] as const).filter(edge => reach[edge] > 8);
+    // Legacy bottom entries retain their inset line, seeding, rim and order.
+    // Side/top continuation is additive; it never replaces that entry.
+    if (edges.length > 0) extend.push({ part: name, run: 'full', tag, edges });
+  }
+  const covered = planCoverage(plan, extend, rigOf, frame.headBottom, box);
   const minBody = bodyMinPx(frame, minPx);
   const why = (tag: string): string => {
+    const edge = edgeReaches.get(tag);
+    if (edge !== undefined && (edge.left > 8 || edge.right > 8 || edge.top > 8)) return `the proposer continues ${tag} beyond each crop edge only when its full-run alpha >= 128 reaches more than 8 rig px beyond it; reaches ${Object.entries(edge).map(([name, px]) => `${name} ${px} rig px`).join(', ')}`;
     if (!reaches.has(tag)) return 'the proposer continues only front hair and back hair below the head crop';
     const r = reaches.get(tag);
     return `the proposer continues ${tag} only when its full-run layer reaches more than 8 rig px below the crop line, rig row ${frame.headBottom}; it reaches ${r === null || r === undefined ? 'no row' : `rig row ${fmt0(r)}`}`;
