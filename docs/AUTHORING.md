@@ -875,6 +875,8 @@ Final recomposite and error measurements use those retained parts together with
 the taken targets. The counterfactual is never written. A take adds this extra
 assembly evaluation. Builds without region takes follow the existing single
 assembly path. Target filter halos are reported separately and have no bar.
+The core-mode guard bounds projection-feather-first changes by the exact warp-tap footprint dilated by the Gaussian kernel radius derived from `FEATHER_SIGMA`, and every other first writer by the footprint itself.
+Visible-mode edge plans can change outside a take's exact warp-tap footprint; this is tracked on [#1033](https://github.com/rig-c/parts/issues/1033).
 
 No polygon, rectangle or brush input is accepted. A drawn bound is scissors.
 The log reports the derived pixel count, run-grid `[left, top, width, height]`
