@@ -72,6 +72,31 @@ export function runBoundaryColourChecks(dir: string, say: Say, rigc: RigcRunner)
     writePng(join(input, 'images', 'front.png'), image ?? inkedFront());
     return input;
   };
+  // File-only plants stop at the first build in the controls, counting every build/render invocation.
+  const probe = (name: string, input: string, requirement?: string) => {
+    let builds = 0, renders = 0;
+    const reachedBuild = new Error('size preflight reached build');
+    let problems: readonly Problem[] = [];
+    try {
+      checkStage({ rig: input, out: join(dir, name, 'probe'), ...(requirement === undefined ? {} : { requirements: requirement }), noExtremes: true }, args => {
+        if (args[0] === 'build') { builds++; throw reachedBuild; }
+        if (args[0] === 'render') renders++;
+        return rigc(args);
+      }, 'fixture-rigc', () => {});
+    } catch (e) { if (e instanceof PartsError) problems = e.problems; else if (e !== reachedBuild) throw e; }
+    return { builds, renders, problems };
+  };
+  const sizeReq = req('size-declared', { max_step_excess: 8 });
+  const mismatch = rigFor('size-mismatch', newRaster(CHECK_PARTS[1].w + 1, CHECK_PARTS[1].h + 1));
+  const badSize = probe('size-mismatch', mismatch, sizeReq);
+  say('BK14_SIZE_MISMATCH_REFUSED_WITHOUT_BUILD_OR_RENDER', badSize.builds === 0 && badSize.renders === 0 && badSize.problems.length === 1 && badSize.problems[0].code === BOUNDARY_COLOUR_UNMEASURED_CODE && badSize.problems[0].detail === `the rig image "front.png" is ${CHECK_PARTS[1].w + 1}x${CHECK_PARTS[1].h + 1}, not parts/front.png's ${CHECK_PARTS[1].w}x${CHECK_PARTS[1].h} with one even pad on every side`, JSON.stringify(badSize));
+  const absentSize = probe('size-undeclared', mismatch);
+  const cleanSize = probe('size-clean', rigFor('size-clean'), sizeReq);
+  say('BK15_SIZE_PREFLIGHT_ONLY_WHEN_DECLARED', absentSize.builds === 1 && absentSize.renders === 0 && absentSize.problems.length === 0 && cleanSize.builds === 1 && cleanSize.problems.length === 0, JSON.stringify({ undeclared: absentSize, clean: cleanSize }));
+  const recordMismatch = rigFor('record-mismatch');
+  writePng(join(recordMismatch, 'parts', 'front.png'), newRaster(CHECK_PARTS[1].w + 1, CHECK_PARTS[1].h));
+  const badRecord = probe('record-mismatch', recordMismatch, sizeReq);
+  say('BK16_PART_RECORD_SIZE_REFUSED_WITHOUT_BUILD_OR_RENDER', badRecord.builds === 0 && badRecord.renders === 0 && badRecord.problems.length === 1 && badRecord.problems[0].code === BOUNDARY_COLOUR_UNMEASURED_CODE && badRecord.problems[0].detail === `parts/front.png is ${CHECK_PARTS[1].w + 1}x${CHECK_PARTS[1].h}, its record ${CHECK_PARTS[1].w}x${CHECK_PARTS[1].h}`, JSON.stringify(badRecord));
   const logs = new Map<string, string[]>();
   const run = (name: string, input: string, requirement?: string) => {
     const lines: string[] = [];
@@ -172,6 +197,8 @@ export function runBoundaryColourChecks(dir: string, say: Say, rigc: RigcRunner)
   const cli = (name: string, input: string, requirement?: string) => spawnSync(process.execPath, [resolve(import.meta.dir, '../cli.ts'), 'check', '--rig', input, '--out', join(dir, name, 'cli'), '--no-extremes', ...(requirement === undefined ? [] : ['--requirements', requirement])], { encoding: 'utf8' });
   const cliClean = cli('cli-undeclared', cleanRig);
   const cliNotch = cli('cli-notch', notchRig, declared);
+  const cliMismatch = cli('cli-size-mismatch', mismatch, declared);
+  say('BK17_CLI_SIZE_MISMATCH_EXIT_ONE', cliMismatch.status === 1 && `${cliMismatch.stdout}${cliMismatch.stderr}`.includes(BOUNDARY_COLOUR_UNMEASURED_CODE) && `${cliMismatch.stdout}${cliMismatch.stderr}`.includes('front.png'), JSON.stringify({ exit: cliMismatch.status }));
   say('BK12_CLI_UNDECLARED_EXIT_0_WITH_SKIP_AND_PLANT_EXIT_1_BY_NAME', cliClean.status === 0 && cliClean.stdout.includes(`${BOUNDARY_COLOUR_LINE}: SKIP`) && cliNotch.status === 1 && cliNotch.stdout.split('\n').some((l) => l.includes(`FAIL  ${BOUNDARY_COLOUR_CODE}: part pair "back|front"`)),
     JSON.stringify({ undeclared: cliClean.status, notch: cliNotch.status, lines: cliNotch.stdout.split('\n').filter((l) => l.includes(BOUNDARY_COLOUR_CODE)).map((l) => l.slice(0, 100)) }));
 }

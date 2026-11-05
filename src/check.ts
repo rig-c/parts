@@ -1858,6 +1858,39 @@ export function seamDrawingSignature(input: {
   return JSON.stringify(seamSourceValue({ slot: input.slot, attachment: input.attachment, source, image: input.image, vertices: input.vertices, color: input.color }));
 }
 
+/** File-only boundary-colour size checks; unavailable references remain the late measurement's responsibility. */
+export function boundaryColourSizeProblems(inp: CheckInputs): Problem[] {
+  if (inp.parts === null) return [];
+  const records = new Map(inp.parts.parts.map(p => [p.name, p]));
+  const imagesDir = typeof inp.rig.images === 'string' ? resolve(inp.rigDir, inp.rig.images) : join(inp.rigDir, 'images');
+  const problems: Problem[] = [];
+  const seen = new Set<string>();
+  if (!isRecord(inp.rig.skins)) return problems;
+  for (const skin of Object.values(inp.rig.skins)) {
+    if (!isRecord(skin)) continue;
+    for (const [slot, drawings] of Object.entries(skin)) {
+      if (!isRecord(drawings)) continue;
+      for (const source of Object.values(drawings)) {
+        if (!isRecord(source) || typeof source.image !== 'string' || seen.has(source.image)) continue;
+        const image = source.image;
+        seen.add(image);
+        const name = image.replace(/\.png$/, ''), rec = records.get(name);
+        const partPng = join(inp.partsDir, `${name}.png`), rigPng = join(imagesDir, image);
+        if (rec === undefined || !existsSync(partPng) || !existsSync(rigPng)) continue;
+        const src = readPng(partPng), rigImg = readPng(rigPng);
+        const dx = rigImg.width - src.width, dy = rigImg.height - src.height;
+        const reason = src.width !== rec.w || src.height !== rec.h
+          ? `parts/${name}.png is ${src.width}x${src.height}, its record ${rec.w}x${rec.h}`
+          : dx !== dy || dx < 0 || dx % 2 !== 0
+            ? `the rig image "${image}" is ${rigImg.width}x${rigImg.height}, not parts/${name}.png's ${src.width}x${src.height} with one even pad on every side`
+            : null;
+        if (reason !== null) problems.push({ code: BOUNDARY_COLOUR_UNMEASURED_CODE, object: `slot "${slot}" (image "${image}")`, detail: reason });
+      }
+    }
+  }
+  return problems;
+}
+
 /** Resolve only the actually selected default-skin identity, not a filename suffix. */
 export function seamSourceAttachment(rig: Record<string, unknown>, slot: string, attachment: string): Record<string, unknown> {
   const skins = isRecord(rig.skins) ? rig.skins : null;
@@ -6459,6 +6492,9 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       ...(ready.parts === null ? [{ code: BOUNDARY_COLOUR_UNMEASURED_CODE, object: 'requirements.boundary_colour', detail: `requires parts.json and its parts/ PNGs, the rig's own pieces the step is measured against: ${ready.noParts ?? 'none was read'}; an untaken reading is never a pass` }] : []),
       ...(ready.idleDuration === null ? [{ code: BOUNDARY_COLOUR_UNMEASURED_CODE, object: 'requirements.boundary_colour', detail: `requires an idle animation, whose every frame is measured: ${ready.noIdle ?? 'none was read'}; an untaken reading is never a pass` }] : []),
     ]));
+    if (file.boundary_colour !== undefined && ready.parts !== null && ready.idleDuration !== null) {
+      take(() => refuseIfAny(boundaryColourSizeProblems(ready)));
+    }
     take(() => refuseIfAny(exceptionProblems(file, ready.parts, ready.noParts)));
     // A seam's pairs are read off parts.json's art (issue #111); both resolvers' problems are named in one refusal.
     if (file.requirements.some((r) => r.kind === 'seam')) {
