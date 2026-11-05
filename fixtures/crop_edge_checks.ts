@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import * as assembleOps from '../src/assemble.ts';
 import { assemble, skippedBy, stageFields, type AssembleResult, type PlanProposal } from '../src/assemble.ts';
+import { EDGE_RADIUS } from '../src/paintingedges.ts';
 import { loadConfig } from '../src/config.ts';
 import { readWrapperLayers } from '../src/layers.ts';
 import { encodePngBytes, readPng } from '../src/raster/png.ts';
@@ -59,6 +60,7 @@ function rgbaAt(result: AssembleResult, x: number, y: number): number[] {
 }
 
 export function runCropEdgeChecks(dir: string, say: (name: string, ok: boolean, detail: string) => void): void {
+  runVisibleCropChecks(dir, say);
   const positive = join(dir, 'crop-positive'), negative = join(dir, 'crop-under-eight');
   writeCropEdgeFixture(positive);
   writeCropEdgeFixture(negative, 3);
@@ -141,4 +143,76 @@ export function runCropEdgeChecks(dir: string, say: (name: string, ok: boolean, 
   say('AS268_CROP_PROPOSAL_ADDS_SIDE_WITHOUT_REPLACING_LEGACY_BOTTOM', mixedEntries.length === 2 && mixedEntries[0].edges === undefined && JSON.stringify(mixedEntries[1].edges) === JSON.stringify(['left']), JSON.stringify({ mixedEntries, leftExtentPixels: 20, belowActualCrop: 6, belowLegacyLine: 10 }));
   say('AS263_CROP_NOTICE_NAMES_UNCOVERED_EDGES_ONLY', base.cropClipped?.length === 1 && base.cropClipped[0].includes('3072 uncovered px') && ['left 1024', 'right 1024', 'top 1024', 'bottom 1024'].every(e => base.cropClipped![0].includes(e)) && head.cropClipped?.length === 0,
     JSON.stringify({ omitted: base.cropClipped, declared: head.cropClipped }));
+}
+
+/** Public seam witness: an opaque or soft head edge, over a contrasting page. */
+export function visibleCropWitness(dir: string, soft: boolean): { base: AssembleResult; declared: AssembleResult; coreBase: AssembleResult; coreDeclared: AssembleResult } {
+  writeCropEdgeFixture(dir);
+  const painting = readPng(join(dir, 'painting.png'));
+  for (let y = 0; y < painting.height; y++) for (let x = 0; x < painting.width; x++) {
+    if (x < 28 || x >= 100 || y < 28 || y >= 100) painting.data.set([255, 255, 255, 255], (y * painting.width + x) * 4);
+  }
+  writeFileSync(join(dir, 'painting.png'), encodePngBytes(painting));
+  if (soft) {
+    const file = join(dir, 'head', 'parts', 'back hair.png'), head = readPng(file);
+    // The first sample exceeds the painting-edge owner floor; the ramp is
+    // eight run samples wide (four rig samples on this exact half-scale grid).
+    for (let y = 0; y < head.height; y++) for (let x = 0; x < 8; x++) head.data[(y * head.width + x) * 4 + 3] = Math.round(140 + 115 * x / 8);
+    writeFileSync(file, encodePngBytes(head));
+  }
+  const file = join(dir, 'config-declared.json');
+  const config = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')) as { assemble: { extend_below_crop: unknown } };
+  config.assemble.extend_below_crop = [{ part: 'hair_back', run: 'full', tag: 'back hair', edges: ['left'] }];
+  writeFileSync(file, JSON.stringify(config));
+  const build = (declared: boolean, projectRule: 'core' | 'visible'): AssembleResult => {
+    const cfg = loadConfig(join(dir, declared ? 'config-declared.json' : 'config.json'));
+    return assemble({ source: painting, full: readWrapperLayers(join(dir, 'full')), head: readWrapperLayers(join(dir, 'head')), ...stageFields(cfg), seamRule: 'near-white', projectRule });
+  };
+  return { base: build(false, 'visible'), declared: build(true, 'visible'), coreBase: build(false, 'core'), coreDeclared: build(true, 'core') };
+}
+
+/** Reconstruct every part on the rig; missing support is transparent RGBA. */
+export function visibleCropDifferences(base: AssembleResult, declared: AssembleResult): Array<{ part: string; x: number; y: number; distance: number; alpha: boolean }> {
+  const at = (r: AssembleResult, name: string, x: number, y: number): number[] => {
+    const q = r.images.find(p => p.record.name === name);
+    if (q === undefined) return [0, 0, 0, 0];
+    const b = q.record;
+    if (x < b.x || y < b.y || x >= b.x + b.w || y >= b.y + b.h) return [0, 0, 0, 0];
+    const p = ((y - b.y) * b.w + x - b.x) * 4;
+    return Array.from(q.image.data.subarray(p, p + 4));
+  };
+  const rows: Array<{ part: string; x: number; y: number; distance: number; alpha: boolean }> = [];
+  for (const part of new Set([...base.images, ...declared.images].map(p => p.record.name))) {
+    for (let y = 16; y < 48; y++) for (let x = 16; x < 48; x++) {
+      const a = at(base, part, x, y), b = at(declared, part, x, y);
+      if (a.some((v, c) => v !== b[c])) rows.push({ part, x, y, distance: x + 0.5 - 16, alpha: a[3] !== b[3] });
+    }
+  }
+  return rows;
+}
+
+function runVisibleCropChecks(dir: string, say: (name: string, ok: boolean, detail: string) => void): void {
+  for (const soft of [false, true]) {
+    const witness = visibleCropWitness(join(dir, soft ? 'crop-visible-alpha' : 'crop-visible-rgb'), soft);
+    const rows = visibleCropDifferences(witness.base, witness.declared);
+    const core = visibleCropDifferences(witness.coreBase, witness.coreDeclared);
+    const extra = { width: 64, height: 64, data: new Uint8ClampedArray(64 * 64 * 4).fill(255) };
+    const copy = assembleOps.beyondCrop(extra, [16, 16, 48, 48], ['left']);
+    let copiedInside = 0, copiedOutside = 0;
+    for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
+      if (copy.data[y * 64 + x] === 0) continue;
+      if (x >= 16 && x < 48 && y >= 16 && y < 48) copiedInside++;
+      else copiedOutside++;
+    }
+    const bounded = (r: typeof rows): boolean => r.every(p => p.distance <= EDGE_RADIUS);
+    const alpha = rows.filter(p => p.alpha).length;
+    say(soft ? 'AS271_VISIBLE_SOFT_CROP_COPY_STAYS_OUTSIDE_AND_ALPHA_DIFFS_STAY_NEAR_EDGE' : 'AS270_VISIBLE_CROP_COPY_STAYS_OUTSIDE_AND_RGB_DIFFS_STAY_NEAR_EDGE',
+      copiedInside === 0 && copiedOutside > 0 && core.length === 0 && rows.length > 0 && bounded(rows) && (soft ? alpha > 0 : alpha === 0),
+      JSON.stringify({ copiedInside, copiedOutside, coreInsideChanges: core.length, insideChanges: rows.length, alphaChanges: alpha, maxDistance: Math.max(0, ...rows.map(p => p.distance)), radius: EDGE_RADIUS }));
+    // The same bound oracle must reject a planted interior write; a missing
+    // visible reconstruction must fail the nonempty witness above as well.
+    const planted = [...rows, { part: 'hair_back', x: 32, y: 32, distance: 32.5 - 16, alpha: soft }];
+    say(soft ? 'AS273_VISIBLE_SOFT_CROP_REJECTS_DISTANT_INSIDE_WRITE' : 'AS272_VISIBLE_CROP_REJECTS_DISTANT_INSIDE_WRITE',
+      bounded(rows) && !bounded(planted), `radius ${EDGE_RADIUS}; planted centre distance ${planted[planted.length - 1].distance}`);
+  }
 }
