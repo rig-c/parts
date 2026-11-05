@@ -62,31 +62,89 @@ export function validationBuildSeconds(cache: string): number {
     .map(line => (JSON.parse(line) as { seconds: number }).seconds).reduce((a, b) => a + b, 0);
 }
 
-/** Every extra CLI/stage producer, including a planted refusal, shares the shard budget. */
-export function validationProducerReceipt(cache: string, label: string, seconds: number, exit: number | null): void {
-  mkdirSync(cache, { recursive: true });
-  const stop = join(cache, 'STOP.json');
-  if (existsSync(stop)) throw new Error('validation sample producer already stopped');
-  appendFileSync(join(cache, 'build-times.jsonl'), JSON.stringify({ variant: label, seconds, exit, kind: 'feature-producer' }) + '\n');
-  const total = validationBuildSeconds(cache);
-  console.error(`validation sample producer: ${label} ${seconds.toFixed(3)} s, shard total ${total.toFixed(3)} s, exit ${exit}`);
-  if (seconds > 60 || total > 180) {
-    writeFileSync(stop, JSON.stringify({ label, seconds, total, individualLimit: 60, shardLimit: 180 }));
-    throw new Error('validation sample producer exceeded its fixed 60 s or shard 180 s bar; receipts retained');
-  }
+export interface ValidationProducerReceipt {
+  label?: string;
+  head?: string;
+  key?: string;
+  signal?: string | null;
+  variant: string;
+  kind?: 'sample-build' | 'feature-producer';
+  seconds: number;
+  exit: number | null;
+}
+export interface ValidationStream {
+  shard: string;
+  builds: ValidationProducerReceipt[];
+  sample_count: number;
+  feature_count: number;
+  sample_seconds: number;
+  feature_seconds: number;
+  total_seconds: number;
 }
 
-/** The parent prints actual per-shard receipts, including extra workflow producers. */
-export function validationBuildSummary(cache: string): string {
+/** The stream is observational. Only an individual producer exceeds a time limit. */
+function recordValidationProducer(cache: string, row: ValidationProducerReceipt): void {
+  mkdirSync(cache, { recursive: true });
+  appendFileSync(join(cache, 'build-times.jsonl'), JSON.stringify(row) + '\n');
+  const label = row.label ?? row.variant;
+  const kind = row.kind ?? 'sample-build';
+  console.error(`validation sample producer: ${label} variant ${row.variant} kind ${kind} ${row.seconds.toFixed(3)} s, shard total ${validationBuildSeconds(cache).toFixed(3)} s, exit ${row.exit}`);
+  if (row.seconds > 60) throw new Error(`validation producer exceeds 60 s: label ${label}, variant ${row.variant}, kind ${kind}, seconds ${row.seconds}; receipt retained`);
+}
+
+/** Every extra CLI/stage attempt, including a planted refusal, joins the same stream. */
+export function validationProducerReceipt(cache: string, label: string, seconds: number, exit: number | null): void {
+  recordValidationProducer(cache, { label, variant: label, seconds, exit, kind: 'feature-producer' });
+}
+
+function validationStream(shard: string, builds: ValidationProducerReceipt[]): ValidationStream {
+  const sample = builds.filter(row => row.kind !== 'feature-producer');
+  const feature = builds.filter(row => row.kind === 'feature-producer');
+  const sampleSeconds = sample.reduce((sum, row) => sum + row.seconds, 0);
+  const featureSeconds = feature.reduce((sum, row) => sum + row.seconds, 0);
+  return { shard, builds, sample_count: sample.length, feature_count: feature.length,
+    sample_seconds: sampleSeconds, feature_seconds: featureSeconds, total_seconds: sampleSeconds + featureSeconds };
+}
+
+/** Read complete append-only streams after the shard's workers finish. */
+export function validationStreams(cache: string): ValidationStream[] {
   const directories = [cache, ...readdirSync(cache).filter(name => name.startsWith('shard-')).map(name => join(cache, name))];
-  const shards = directories.flatMap(dir => {
+  return directories.flatMap(dir => {
     const file = join(dir, 'build-times.jsonl');
     if (!existsSync(file)) return [];
-    const rows = readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as { variant: string; seconds: number; exit: number | null });
-    return [{ shard: relative(cache, dir) || 'direct', builds: rows, total_seconds: rows.reduce((sum, row) => sum + row.seconds, 0) }];
+    const rows = readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as ValidationProducerReceipt);
+    return [validationStream(relative(cache, dir) || 'direct', rows)];
   });
-  return 'validation sample producers (stderr, never tallied): ' + JSON.stringify({ shards,
-    individual_limit_seconds: 60, shard_limit_seconds: 180 });
+}
+
+/** Optional on older shard records, but a present stream must account for its rows. */
+export function validValidationStreams(raw: unknown): raw is ValidationStream[] {
+  if (!Array.isArray(raw)) return false;
+  return raw.every((entry: unknown) => {
+    if (typeof entry !== 'object' || entry === null) return false;
+    const stream = entry as Partial<ValidationStream>;
+    if (typeof stream.shard !== 'string' || !Array.isArray(stream.builds)) return false;
+    for (const entry of stream.builds as unknown[]) {
+      if (typeof entry !== 'object' || entry === null) return false;
+      const row = entry as Partial<ValidationProducerReceipt>;
+      if (typeof row.variant !== 'string' || typeof row.seconds !== 'number' || !Number.isFinite(row.seconds) || row.seconds < 0 ||
+          (row.label !== undefined && typeof row.label !== 'string') ||
+          (row.kind !== undefined && row.kind !== 'sample-build' && row.kind !== 'feature-producer') ||
+          (row.exit !== null && (typeof row.exit !== 'number' || !Number.isFinite(row.exit)))) return false;
+    }
+    const expected = validationStream(stream.shard, stream.builds);
+    return stream.sample_count === expected.sample_count && stream.feature_count === expected.feature_count &&
+      stream.sample_seconds === expected.sample_seconds && stream.feature_seconds === expected.feature_seconds && stream.total_seconds === expected.total_seconds;
+  });
+}
+
+export function validationStreamSummary(shards: readonly ValidationStream[]): string {
+  return 'validation sample producers (stderr, never tallied): ' + JSON.stringify({ shards, individual_limit_seconds: 60 });
+}
+
+/** The parent prints its local streams. Merge uses streams carried by shard records. */
+export function validationBuildSummary(cache: string): string {
+  return validationStreamSummary(validationStreams(cache));
 }
 
 /** A null input is a HOLE. A failed/corrupt producer is an error, never a HOLE. */
@@ -97,8 +155,6 @@ export function validationBuild(root: string, cache: string, head: string, varia
   const config = join(input, validationConfigName(variant));
   if (!existsSync(config) || !existsSync(join(input, 'inputs', 'painting.png'))) return null;
   mkdirSync(cache, { recursive: true });
-  const stop = join(cache, 'STOP.json');
-  if (existsSync(stop)) throw new Error('validation sample producer stopped: ' + readFileSync(stop, 'utf8'));
   const inputs = validationDigest(input, true);
   const key = createHash('sha256').update(JSON.stringify({ head, inputs })).digest('hex');
   const entry = join(cache, `${key}-${variant}`);
@@ -119,7 +175,6 @@ export function validationBuild(root: string, cache: string, head: string, varia
       if (!existsSync(lock)) throw error;
       const ready = hit();
       if (ready !== null) return ready;
-      if (existsSync(stop)) throw new Error('validation sample producer stopped while waiting');
       if (performance.now() >= until) throw new Error('validation sample producer did not finish within its bounded wait');
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
     }
@@ -140,15 +195,8 @@ export function validationBuild(root: string, cache: string, head: string, varia
     const log = (r.stdout ?? '') + (r.stderr ?? '');
     writeFileSync(join(stage, 'producer.log'), log);
     writeFileSync(join(stage, 'build.log'), log);
-    appendFileSync(join(cache, 'build-times.jsonl'), JSON.stringify({ head, key, variant, seconds, exit: r.status, signal: r.signal }) + '\n');
-    const total = validationBuildSeconds(cache);
-    console.error(`validation sample build: ${variant} ${seconds.toFixed(3)} s, shard total ${total.toFixed(3)} s, head ${head}, inputs ${inputs}`);
-    if (seconds > 60 || total > 180) {
-      writeFileSync(stop, JSON.stringify({ variant, seconds, total, individualLimit: 60, shardLimit: 180 }));
-      throw new Error('validation sample build exceeded its fixed 60 s or shard 180 s bar; receipts retained');
-    }
+    recordValidationProducer(cache, { label: 'build', kind: 'sample-build', head, key, variant, seconds, exit: r.status, signal: r.signal });
     if (r.status !== 0) {
-      writeFileSync(stop, JSON.stringify({ variant, exit: r.status, signal: r.signal }));
       throw new Error('validation sample build refused: ' + log.split('\n').slice(-16).join('\n'));
     }
     if (validationDigest(input, true) !== inputs) throw new Error('validation sample inputs changed while the producer was reading');

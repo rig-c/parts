@@ -10,7 +10,7 @@ import { checkRowFaults, checkRowCombinations } from './tools/check_row_scope.ts
 import { rowTableFaults } from './tools/check_row_reference.ts';
 import { withoutCheckRows } from './src/checkrow.ts';
 import { runCropEdgeChecks } from './fixtures/crop_edge_checks.ts';
-import { validationBuild, validationBuildSummary, validationProducerReceipt, validationFiles, validationDigest, validationHead, validationInput, validationScope, VALIDATION_VARIANTS, type ValidationBuild } from './fixtures/validation_cache.ts';
+import { validationBuild, validationBuildSummary, validationStreams, validationStreamSummary, validValidationStreams, type ValidationStream, validationProducerReceipt, validationFiles, validationDigest, validationHead, validationInput, validationScope, VALIDATION_VARIANTS, type ValidationBuild } from './fixtures/validation_cache.ts';
 import type { ValidationVariant } from './fixtures/validation.ts';
 import { runSupportDomainChecks } from './tools/check_support_domains.ts';
 import { runCoincideChecks, runCoincideSetupChecks, runCoincideMutants } from './tools/check_coincide.ts';
@@ -43131,6 +43131,54 @@ if(observerPids.size!==0)process.exit(3);`;
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
+/** Synthetic receipt times exercise reporting and refusal without a timed producer. */
+function runValidationProducerControls(say: FixtureCaseReporter): void {
+  const dir = temp('producer-stream-controls');
+  const errors: string[] = [];
+  const printError = console.error;
+  let over: string | null = null;
+  let continued: string | null = null;
+  let streams: ValidationStream[] = [];
+  try {
+    console.error = (...values: unknown[]): void => { errors.push(values.map(String).join(' ')); };
+    const limit = join(dir, 'individual');
+    validationProducerReceipt(limit, 'boundary', 60, 0);
+    over = threw(() => validationProducerReceipt(limit, 'planted-slow', 60.001, 0));
+    continued = threw(() => validationProducerReceipt(limit, 'after-slow', 1, 0));
+    for (const shard of ['1', '2', '3', '4']) {
+      const cache = join(dir, 'shard-' + shard);
+      mkdirSync(cache, { recursive: true });
+      // Recorded sample rows retain the legacy receipt shape as well.
+      writeFileSync(join(cache, 'build-times.jsonl'), JSON.stringify({ variant: 'standard', seconds: 50, exit: 0 }) + '\n');
+      for (const label of ['a', 'b', 'c']) validationProducerReceipt(cache, label, 50, 0);
+    }
+    streams = validationStreams(dir);
+  } finally {
+    console.error = printError;
+    rmSync(dir, { recursive: true, force: true });
+  }
+  say('RT32_ONLY_AN_INDIVIDUAL_PRODUCER_OVER_SIXTY_SECONDS_FAILS_BY_IDENTITY',
+    over?.includes('label planted-slow, variant planted-slow, kind feature-producer, seconds 60.001') === true && continued === null && errors.length === 15,
+    `sixty-second boundary accepted; over-limit refusal ${over}; next receipt ${continued ?? 'accepted'}`,
+    'synthetic receipt durations, with the same individual guard used by sample builds and feature producers');
+  const text = validationStreamSummary(streams);
+  const records = streams.map(stream => parseShardRecord(JSON.stringify({ spec: SHARD_RECORD_SPEC,
+    shard: stream.shard.slice('shard-'.length), jobs: 1, cores: 1, units: [], producerStreams: [stream] })));
+  const replayed = records.flatMap(record => typeof record === 'string' ? [] : record.producerStreams ?? []);
+  const damaged = structuredClone(streams);
+  damaged[0].sample_seconds++;
+  const forged = parseShardRecord(JSON.stringify({ spec: SHARD_RECORD_SPEC, shard: '1', jobs: 1, cores: 1, units: [], producerStreams: [damaged[0]] }));
+  const wrongShard = parseShardRecord(JSON.stringify({ spec: SHARD_RECORD_SPEC, shard: 'other', jobs: 1, cores: 1, units: [], producerStreams: [streams[0]] }));
+  say('RT33_LONG_STREAMS_REMAIN_MEASURED_AND_SURVIVE_SHARD_RECORD_REPLAY',
+    streams.length === 4 && streams.every(stream => stream.sample_count === 1 && stream.feature_count === 3 &&
+      stream.sample_seconds === 50 && stream.feature_seconds === 150 && stream.total_seconds === 200) &&
+      records.every(record => typeof record !== 'string') && validationStreamSummary(replayed) === text &&
+      forged === 'producerStreams does not account for its producer rows' &&
+      wrongShard === 'producerStreams names another shard' && !text.includes('shard_limit'),
+    text,
+    'four recorded synthetic shards each sum past the former stream budget while every producer stays below sixty seconds; changed totals are refused');
+}
+
 function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | null = null): number {
   section('run-tally: the floor, planted');
   // What the run had printed when this suite began: this suite's own cases are
@@ -43734,6 +43782,7 @@ function runTallySuite(live: RunTally, peakLines: (() => readonly string[]) | nu
     }
   }
   runMeasurementControls(say);
+  runValidationProducerControls(say);
   return bad();
 }
 
@@ -54872,6 +54921,7 @@ interface ShardRecord {
   jobs: number;
   cores: number;
   peakLine?: string;
+  producerStreams?: ValidationStream[];
   units: RecordedUnit[];
 }
 
@@ -54891,6 +54941,8 @@ function parseShardRecord(text: string): ShardRecord | string {
   if (r.spec !== SHARD_RECORD_SPEC && r.spec !== LEGACY_SHARD_RECORD_SPEC) return `spec ${JSON.stringify(r.spec ?? null)}; one of "${LEGACY_SHARD_RECORD_SPEC}" or "${SHARD_RECORD_SPEC}" is required`;
   if (typeof r.shard !== 'string' || typeof r.jobs !== 'number' || typeof r.cores !== 'number' || !Array.isArray(r.units)) return 'shard, jobs, cores or units is absent or of the wrong type';
   if (r.peakLine !== undefined && typeof r.peakLine !== 'string') return 'peakLine is not a string';
+  if (r.producerStreams !== undefined && !validValidationStreams(r.producerStreams)) return 'producerStreams does not account for its producer rows';
+  if (r.producerStreams?.some(stream => stream.shard !== 'shard-' + r.shard)) return 'producerStreams names another shard';
   for (const u of r.units as unknown[]) {
     const x = (typeof u === 'object' && u !== null ? u : {}) as Partial<RecordedUnit>;
     const ok =
@@ -55631,7 +55683,7 @@ async function shardMain(shard: string, record: string): Promise<void> {
   mkdirSync(dirname(record), { recursive: true });
   const peakLine = finishSelftestPeak?.() ?? '';
   const peakVerdict = selftestPeakVerdict([peakLine]);
-  const text: ShardRecord = { spec: SHARD_RECORD_SPEC, shard, jobs, cores: availableParallelism(), peakLine, units: done };
+  const text: ShardRecord = { spec: SHARD_RECORD_SPEC, shard, jobs, cores: availableParallelism(), peakLine, producerStreams: validationStreams(validationScope(ROOT).cache), units: done };
   writeFileSync(record, `${JSON.stringify(text)}\n`);
   const red = done.filter((u) => {
     if (u.status !== 0 || u.result === null) return true;
@@ -55675,6 +55727,10 @@ async function mergeMain(
     for (const f of faults) console.error(`  ${f}`);
     process.exit(2);
   }
+  for (const record of records) {
+    if (record.producerStreams === undefined) process.stderr.write(`validation producer stream unavailable: shard ${record.shard}, older record has no producer stream\n`);
+  }
+  process.stderr.write(validationStreamSummary(records.flatMap(record => record.producerStreams ?? [])) + '\n');
   const byUnit = new Map(records.flatMap((r) => r.units.map((u) => [u.key, { shard: r.shard, run: u }] as const)));
   const clockText = (): string => {
     const s = (ms: number): string => (ms / 1000).toFixed(1);
@@ -55784,7 +55840,7 @@ if (import.meta.main && process.argv[2] === VALIDATION_FEATURE_FLAG) {
     process.env.RIG_PARTS_VALIDATION_CACHE = cache;
     process.env.RIG_PARTS_VALIDATION_HEAD = validationHead(ROOT);
     process.on('exit', () => {
-      process.stderr.write(validationBuildSummary(cache) + '\n');
+      if (!process.argv.includes(MERGE_FLAG)) process.stderr.write(validationBuildSummary(cache) + '\n');
       const evidence = process.env.RIG_PARTS_VALIDATION_EVIDENCE;
       if (evidence !== undefined) {
         for (const file of validationFiles(cache)) if (/(?:producer\.log|build\.log|green\.json|build-times\.jsonl|STOP\.json)$/.test(file)) {

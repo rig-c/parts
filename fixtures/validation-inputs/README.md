@@ -21,9 +21,11 @@ reason in the change's report.
 Each selftest invocation owns its cache. Fixed worker units share one immutable
 producer per head, complete input-byte digest and profile **within their CI
 shard**. Other shards and invocations produce independently. Workflow builds and
-planted refused producers join the same append-only timing stream. The fixed
-limits remain 60 seconds per producer and 180 seconds summed per shard. Missing
-inputs are a HOLE; failed, corrupt or over-budget producers are errors.
+planted refused producers join the same append-only timing stream. Each producer
+has a 60-second limit. The stream total is reported without a limit. Shard records
+carry sample/feature counts and seconds, and merge prints every recorded shard.
+Missing inputs are a HOLE; failed, corrupt or individually over-budget producers
+are errors.
 
 Contract and authoring controls preserve original assertion names and diagnostics
 in internal child records, replayed by chain under CH945. SKIP and HOLE diagnostics
