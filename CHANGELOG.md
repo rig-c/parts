@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.19.1](https://github.com/rig-c/parts/compare/v2.19.0...v2.19.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* validate against one synthetic sample ([#1113](https://github.com/rig-c/parts/issues/1113)) ([#1114](https://github.com/rig-c/parts/issues/1114)) ([7b2e61c](https://github.com/rig-c/parts/commit/7b2e61ceff29f6b9ac0bfe344326a9bbd69debff))
+
 ## [2.19.0](https://github.com/rig-c/parts/compare/v2.18.0...v2.19.0) (2026-11-05)
 
 
