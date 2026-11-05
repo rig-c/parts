@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.12.0](https://github.com/rig-c/parts/compare/v2.11.0...v2.12.0) (2026-11-05)
+
+
+### Features
+
+* **selftest:** record worker family peaks and phase spans ([#1045](https://github.com/rig-c/parts/issues/1045)) ([#1056](https://github.com/rig-c/parts/issues/1056)) ([15e5bcb](https://github.com/rig-c/parts/commit/15e5bcb94745588bc30a284c23489d7cf9d55d37))
+
+
+### Bug Fixes
+
+* **assemble:** complete allocated visible figure gaps ([#1043](https://github.com/rig-c/parts/issues/1043)) ([#1050](https://github.com/rig-c/parts/issues/1050)) ([47b6248](https://github.com/rig-c/parts/commit/47b62485f14dd833463163be25ed3897ad394827))
+* **take:** bind region geometry to the stage source ([#1054](https://github.com/rig-c/parts/issues/1054)) ([#1057](https://github.com/rig-c/parts/issues/1057)) ([ef0f698](https://github.com/rig-c/parts/commit/ef0f698cd88ed59643b87c08e24aca589ef1a0a0))
+
 ## [2.11.0](https://github.com/rig-c/parts/compare/v2.10.0...v2.11.0) (2026-11-04)
 
 
