@@ -26,7 +26,7 @@ export function runSubsetCoverChecks(dir: string, say: Say): void {
     writeFileSync(join(out, 'raw.log'), `${log.join('\n')}\n`);
     return out;
   };
-  const files = (d: string): string[] => ['parts.json', 'recomposite_rig.png', 'recomposite_error_rig.png', ...readdirSync(join(d, 'parts')).sort().map((f) => `parts/${f}`)];
+  const files = (d: string): string[] => ['parts.json', 'painting_in_rig.png', 'recomposite_rig.png', 'recomposite_error_rig.png', ...readdirSync(join(d, 'parts')).sort().map((f) => `parts/${f}`)];
   const same = (a: string, b: string, fs = files(a)): boolean => fs.every((f) => readFileSync(join(a, f)).equals(readFileSync(join(b, f))));
   const held = (out: string, set: boolean): { px: number; own: number; cover: number; y: number; end: number } => {
     const pf = readParts(join(out, 'parts.json'));

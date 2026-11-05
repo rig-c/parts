@@ -99,7 +99,7 @@ export function runFootOwnershipChecks(dir: string, say: Say): void {
     return { record, image: readPng(join(out, 'parts', `step_${side}_${name}.png`)) };
   };
   const foot = (out: string, side: string): Image => setPart(out, side, `foot_${side}`);
-  const files = (d: string): string[] => ['parts.json', 'recomposite_rig.png', 'recomposite_error_rig.png', ...readdirSync(join(d, 'parts')).sort().map((f) => `parts/${f}`)];
+  const files = (d: string): string[] => ['parts.json', 'painting_in_rig.png', 'recomposite_rig.png', 'recomposite_error_rig.png', ...readdirSync(join(d, 'parts')).sort().map((f) => `parts/${f}`)];
   const same = (a: string, b: string): boolean => files(a).every((f) => readFileSync(join(a, f)).equals(readFileSync(join(b, f))));
   const isolated = join(dir, 'islands'); writeFootOwnershipFixture(isolated);
   const green = run(isolated, 'nearest');

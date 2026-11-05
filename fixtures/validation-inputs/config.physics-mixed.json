@@ -1,0 +1,455 @@
+{
+  "key": "validation",
+  "requirements": "requirements.json",
+  "generation": {
+    "checkpoint": "fixture.safetensors",
+    "loras": [],
+    "trigger": "",
+    "identity": "synthetic blocks",
+    "pose": "standing, arms at sides",
+    "costume": "flat blocks",
+    "negative_extra": "",
+    "style": "flat colour",
+    "negative_pose": "cropped",
+    "latent": [
+      128,
+      128
+    ],
+    "seed": 1,
+    "sampler": {
+      "steps": 1,
+      "cfg": 1,
+      "sampler": "euler",
+      "scheduler": "normal"
+    },
+    "control": {
+      "skeleton": "pose.json",
+      "strength": 1,
+      "end_percent": 1
+    }
+  },
+  "seethrough": {
+    "resolution": 128,
+    "head_box": [
+      0,
+      0,
+      128,
+      128
+    ],
+    "steps": 1,
+    "seed": 0,
+    "offload": false
+  },
+  "assemble": {
+    "rig_scale": 1,
+    "plan": [
+      [
+        "arm",
+        "full",
+        "handwear-r"
+      ],
+      [
+        "hair_back",
+        "head",
+        "back hair"
+      ],
+      [
+        "bottomwear",
+        "full",
+        "bottomwear"
+      ],
+      [
+        "topwear",
+        "full",
+        "topwear"
+      ],
+      [
+        "footwear",
+        "full",
+        "footwear"
+      ],
+      [
+        "neck",
+        "head",
+        "neck"
+      ],
+      [
+        "face",
+        "head",
+        "face"
+      ],
+      [
+        "eyewhite_r",
+        "head",
+        "eyewhite-r"
+      ],
+      [
+        "eyewhite_l",
+        "head",
+        "eyewhite-l"
+      ],
+      [
+        "brow_r",
+        "head",
+        "eyebrow-r"
+      ],
+      [
+        "brow_l",
+        "head",
+        "eyebrow-l"
+      ],
+      [
+        "mouth",
+        "head",
+        "mouth"
+      ],
+      [
+        "hairpin",
+        "head",
+        "headwear"
+      ],
+      [
+        "hair_front",
+        "head",
+        "front hair"
+      ]
+    ]
+  },
+  "bones": [
+    {
+      "name": "anchor",
+      "parent": "root",
+      "at": [
+        0,
+        0
+      ]
+    },
+    {
+      "name": "hip",
+      "parent": "root",
+      "at": [
+        64,
+        82
+      ]
+    },
+    {
+      "name": "chest",
+      "parent": "hip",
+      "at": [
+        64,
+        50
+      ]
+    },
+    {
+      "name": "head",
+      "parent": "root",
+      "at": [
+        64,
+        40
+      ]
+    },
+    {
+      "chain": "hem",
+      "parent": "hip",
+      "points": [
+        [
+          64,
+          82
+        ],
+        [
+          64,
+          84
+        ]
+      ],
+      "tip": [
+        64,
+        86
+      ]
+    },
+    {
+      "name": "eye_r",
+      "parent": "head",
+      "at": [
+        52,
+        27
+      ]
+    },
+    {
+      "name": "eye_l",
+      "parent": "head",
+      "at": [
+        76,
+        27
+      ]
+    },
+    {
+      "name": "brow_r",
+      "parent": "head",
+      "at": [
+        52,
+        19
+      ]
+    },
+    {
+      "name": "brow_l",
+      "parent": "head",
+      "at": [
+        76,
+        19
+      ]
+    },
+    {
+      "name": "mouth",
+      "parent": "head",
+      "at": [
+        64,
+        39
+      ]
+    },
+    {
+      "chain": "arm_r",
+      "parent": "chest",
+      "points": [
+        [
+          38,
+          48
+        ],
+        [
+          38,
+          70
+        ]
+      ],
+      "tip": [
+        38,
+        92
+      ]
+    },
+    {
+      "name": "hair_carrier",
+      "parent": "head",
+      "at": [
+        35,
+        27
+      ]
+    },
+    {
+      "chain": "hairback_r0_",
+      "parent": "hair_carrier",
+      "points": [
+        [
+          35,
+          27
+        ],
+        [
+          58,
+          60
+        ]
+      ],
+      "tip": [
+        58,
+        76
+      ]
+    },
+    {
+      "chain": "hairback_l0_",
+      "parent": "head",
+      "points": [
+        [
+          92,
+          27
+        ],
+        [
+          68,
+          60
+        ]
+      ],
+      "tip": [
+        68,
+        76
+      ]
+    }
+  ],
+  "meshes": {
+    "topwear": {
+      "contour": {
+        "tolerance": 1,
+        "margin": 2,
+        "spacing": 8,
+        "maxEdge": 8,
+        "stray": 1
+      },
+      "r": 4,
+      "segments": [
+        [
+          "chest",
+          [
+            64,
+            50
+          ],
+          [
+            64,
+            82
+          ]
+        ]
+      ]
+    },
+    "bottomwear": {
+      "grid": 4,
+      "r": 2,
+      "segments": [
+        "hem"
+      ]
+    },
+    "hair_back": {
+      "grid": 8,
+      "r": 3,
+      "segments": [
+        [
+          "head",
+          [
+            64,
+            40
+          ],
+          [
+            64,
+            17
+          ]
+        ],
+        "hairback_r0_",
+        "hairback_l0_"
+      ]
+    }
+  },
+  "regions": {
+    "hairpin": "head",
+    "upperarm_r": "arm_r0",
+    "forearm_r": "arm_r1",
+    "footwear": "root",
+    "neck": "head",
+    "face": "head",
+    "eyewhite_r": "eye_r",
+    "eyewhite_l": "eye_l",
+    "brow_r": "brow_r",
+    "brow_l": "brow_l",
+    "mouth": "mouth",
+    "hair_front": "head"
+  },
+  "limbs": {
+    "arm_r": {
+      "segments": [
+        {
+          "part": "upperarm_r",
+          "from": "arm",
+          "bone": "arm_r0"
+        },
+        {
+          "part": "forearm_r",
+          "from": "arm",
+          "bone": "arm_r1",
+          "joint": "elbow"
+        }
+      ],
+      "front": {
+        "parts": [
+          "forearm_r"
+        ],
+        "after": "face"
+      }
+    }
+  },
+  "cloth": {
+    "back hair": {
+      "chains": 1,
+      "links": 2,
+      "wind": [
+        1,
+        2
+      ],
+      "gravity": [
+        1,
+        2
+      ]
+    }
+  },
+  "motion": {
+    "duration": 4,
+    "animations_from": "animations.json",
+    "tracks": [
+      {
+        "bone": "chest",
+        "prop": "translatey",
+        "amp": 1,
+        "period": 4,
+        "phase": 0
+      },
+      {
+        "chain": "hem",
+        "amps": [
+          4,
+          8
+        ],
+        "period": 4,
+        "phase": 0,
+        "lag": 0.1
+      },
+      {
+        "bone": "hair_carrier",
+        "prop": "rotate",
+        "amp": 1,
+        "period": 4,
+        "phase": 0
+      }
+    ],
+    "blink": {
+      "t": 1,
+      "eyes": [
+        "eye_r",
+        "eye_l"
+      ],
+      "brows": [
+        "brow_r",
+        "brow_l"
+      ],
+      "squash": 0.12,
+      "brow_drop": 1
+    }
+  },
+  "constraints": [
+    {
+      "type": "physics",
+      "name": "hairback_r0_0_physics",
+      "bone": "hairback_r0_0",
+      "rotate": 1,
+      "strength": 50,
+      "wind": 1,
+      "gravity": 1
+    },
+    {
+      "type": "physics",
+      "name": "hairback_r0_1_physics",
+      "bone": "hairback_r0_1",
+      "rotate": 1,
+      "strength": 50,
+      "wind": 2,
+      "gravity": 2
+    },
+    {
+      "type": "physics",
+      "name": "hairback_l0_0_physics",
+      "bone": "hairback_l0_0",
+      "rotate": 1,
+      "strength": 50,
+      "wind": 1,
+      "gravity": 1
+    },
+    {
+      "type": "physics",
+      "name": "hairback_l0_1_physics",
+      "bone": "hairback_l0_1",
+      "rotate": 1,
+      "strength": 50,
+      "wind": 2,
+      "gravity": 2
+    }
+  ]
+}

@@ -59,7 +59,7 @@ function rgbaHash(image: Raster): string {
   return createHash('sha256').update(image.data).digest('hex');
 }
 
-function cropGeometry(d: TakeLayers, painting: Raster, target: Raster, donor: LayerSet, set: LayerSet, inputs: ReturnType<typeof makeInputs>, at: string): { expected: Raster; map: ScaleTranslate; exact: boolean } {
+export function cropGeometry(d: Pick<TakeLayers, 'run' | 'crop'>, painting: Raster, target: Raster, donor: LayerSet, set: LayerSet, inputs: ReturnType<typeof makeInputs>, at: string): { expected: Raster; map: ScaleTranslate; exact: boolean } {
   const declaration = d.crop!;
   const [x0, y0, x1, y1] = declaration.box;
   if (declaration.resample !== 'bilinear' || !declaration.box.every(Number.isSafeInteger) || x0 < 0 || y0 < 0 || x1 <= x0 || y1 <= y0 || x1 > painting.width || y1 > painting.height) {
@@ -84,7 +84,7 @@ function cropGeometry(d: TakeLayers, painting: Raster, target: Raster, donor: La
 }
 
 /** One full-canvas affine pass, using the same premultiplied float32 convention as layerToRig. */
-function transportLayer(layer: Layer, donor: LayerSet, set: LayerSet, image: Raster, d: TakeLayers, map: ScaleTranslate, exact: boolean, at: string): { layer: Layer; transport: TakenLayerTransport } {
+export function transportLayer(layer: Layer, donor: LayerSet, set: LayerSet, image: Raster, d: Pick<TakeLayers, 'crop'>, map: ScaleTranslate, exact: boolean, at: string): { layer: Layer; transport: TakenLayerTransport } {
   const canvas = newRaster(donor.canvas.w, donor.canvas.h);
   for (let y = 0; y < layer.pixels.height; y++) {
     canvas.data.set(layer.pixels.data.subarray(y * layer.pixels.width * 4, (y + 1) * layer.pixels.width * 4), ((y + layer.top) * canvas.width + layer.left) * 4);

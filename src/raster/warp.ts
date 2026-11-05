@@ -1,4 +1,4 @@
-import { type FloatImage, newFloatImage, RasterError } from './types.ts';
+import { type FloatImage, type Mask, newMask, newFloatImage, RasterError } from './types.ts';
 
 /** A forward map `dst = scale * src + translate`, per axis — the only affine the pipeline uses. */
 export interface ScaleTranslate {
@@ -115,6 +115,24 @@ export function warpAffine(src: FloatImage, map: ScaleTranslate, width: number, 
         }
         out.data[(y * width + x) * ch + c] = s;
       }
+    }
+  }
+  return out;
+}
+
+/** Exact nonzero quantized tap support, without cancellation between taps. */
+export function warpSupport(src: Mask, map: ScaleTranslate, width: number, height: number, filter: WarpFilter): Mask {
+  const xs = positions(width, map.sx, map.tx, 'x'), ys = positions(height, map.sy, map.ty, 'y');
+  const out = newMask(width, height);
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const [ix, fx] = xs[x], [iy, fy] = ys[y];
+    const firstX = fx !== 0 && filter === 'bicubic' ? -1 : 0;
+    const firstY = fy !== 0 && filter === 'bicubic' ? -1 : 0;
+    const lastX = fx !== 0 ? filter === 'bicubic' ? 2 : 1 : 0;
+    const lastY = fy !== 0 ? filter === 'bicubic' ? 2 : 1 : 0;
+    for (let dy = firstY; dy <= lastY; dy++) for (let dx = firstX; dx <= lastX; dx++) {
+      const sx = ix + dx, sy = iy + dy;
+      if (sx >= 0 && sy >= 0 && sx < src.width && sy < src.height && src.data[sy * src.width + sx] === 1) out.data[y * width + x] = 1;
     }
   }
   return out;

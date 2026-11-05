@@ -91,6 +91,9 @@ import { partDepthProblems, type PartDepthReference } from './depthsheets.ts';
  */
 import { motionSeamProblems, type MotionSeamDeclaration } from './motionseams.ts';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import { decodePngBytes } from './raster/png.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
 import { KEYPOINT_NAMES, type PosePoints } from './skeleton.ts';
 import { readLayerTag } from './tags.ts';
@@ -366,7 +369,16 @@ export interface AlternatePartsRecord {
   registration?: { offset: [number, number]; scale: number };
 }
 
+export const PAINTING_IN_RIG_FILE = 'painting_in_rig.png';
+export interface PaintingInRig {
+  path: typeof PAINTING_IN_RIG_FILE;
+  sha256: string;
+  resample: 'lanczos3-rgb-opaque';
+}
+
 export interface PartsFile {
+  /** Optional on legacy packages; binds the opaque RGB raster assemble actually read. */
+  painting_in_rig?: PaintingInRig;
   /** Structural moves, independent of per-pixel value equality. */
   cut_ownership?: CutOwnership[];
   rig_size: [number, number];
@@ -417,8 +429,8 @@ export interface SceneRecord {
   figure_mask: string;
 }
 
-const TOP_KEYS = ['rig_size', 'scale_rig_per_source', 'parts', 'ghost_px', 'recomposite', 'scene', 'single_run_pad', 'alternates', 'motion_seams', 'cut_ownership'] as const;
-const REQUIRED_TOP_KEYS = TOP_KEYS.filter((k) => k !== 'recomposite' && k !== 'scene' && k !== 'single_run_pad' && k !== 'alternates' && k !== 'motion_seams' && k !== 'cut_ownership');
+const TOP_KEYS = ['painting_in_rig', 'rig_size', 'scale_rig_per_source', 'parts', 'ghost_px', 'recomposite', 'scene', 'single_run_pad', 'alternates', 'motion_seams', 'cut_ownership'] as const;
+const REQUIRED_TOP_KEYS = TOP_KEYS.filter((k) => k !== 'painting_in_rig' && k !== 'recomposite' && k !== 'scene' && k !== 'single_run_pad' && k !== 'alternates' && k !== 'motion_seams' && k !== 'cut_ownership');
 export const SINGLE_RUN_PAD_KEYS = ['file_size', 'side', 'left', 'top'] as const;
 export const SCENE_KEYS = ['figure_alpha_above', 'figure_px', 'figure_mask'] as const;
 export const RECOMPOSITE_KEYS = ['mean_abs', 'within_limit', 'within_share', 'error_limit', 'error_px', 'covered_alpha', 'uncovered_error_px', 'hole_count', 'holes_listed', 'holes'] as const;
@@ -541,6 +553,9 @@ export function serializeParts(file: PartsFile): string {
   const ordered = {
     rig_size: file.rig_size,
     scale_rig_per_source: file.scale_rig_per_source,
+    ...(file.painting_in_rig === undefined ? {} : { painting_in_rig: {
+      path: file.painting_in_rig.path, sha256: file.painting_in_rig.sha256, resample: file.painting_in_rig.resample,
+    } }),
     parts: serializePartList(file.parts),
     ...(file.cut_ownership === undefined ? {} : { cut_ownership: orderedOwnership(file.cut_ownership) }),
     ...(file.motion_seams === undefined ? {} : { motion_seams: file.motion_seams.map(({ part, neighbour }) => ({ part, neighbour })) }),
@@ -593,7 +608,29 @@ export function readParts(path: string): PartsFile {
   } catch (err) {
     refuseIfAny([{ code: 'PARTS_IS_JSON', object: path, detail: `does not parse as JSON: ${(err as Error).message}` }]);
   }
-  return checkParts(raw, path);
+  const file = checkParts(raw, path);
+  const declared = file.painting_in_rig;
+  if (declared !== undefined) {
+    const imagePath = join(dirname(path), declared.path);
+    const problems: Problem[] = [];
+    const fail = (code: string, detail: string): void => { problems.push({ code, object: imagePath, detail }); };
+    let bytes: Uint8Array | undefined;
+    try { bytes = new Uint8Array(readFileSync(imagePath)); }
+    catch { fail('PARTS_PAINTING_PRESENT', 'declared painting_in_rig file is not readable; re-run assemble'); }
+    if (bytes !== undefined) {
+      const actual = createHash('sha256').update(bytes).digest('hex');
+      if (actual !== declared.sha256) fail('PARTS_PAINTING_SHA256', `sha256 is ${actual}; declared ${declared.sha256} is required`);
+      let image;
+      try { image = decodePngBytes(bytes, imagePath); }
+      catch { fail('PARTS_PAINTING_PNG', 'declared painting_in_rig file is not a decodable PNG'); }
+      if (image !== undefined) {
+        if (image.width !== file.rig_size[0] || image.height !== file.rig_size[1]) fail('PARTS_PAINTING_SIZE', `is ${image.width}x${image.height}; rig_size ${file.rig_size.join('x')} is required`);
+        if (image.data.some((value, index) => index % 4 === 3 && value !== 255)) fail('PARTS_PAINTING_OPAQUE', 'has alpha below 255; lanczos3-rgb-opaque requires alpha 255 everywhere');
+      }
+    }
+    refuseIfAny(problems);
+  }
+  return file;
 }
 
 /** Additive ownership census; not another term in the value partition. */
@@ -656,6 +693,17 @@ function checkParts(raw: unknown, path: string): PartsFile {
   const o = raw as Record<string, unknown>;
   for (const k of Object.keys(o)) if (!(TOP_KEYS as readonly string[]).includes(k)) fail('PARTS_KEY_KNOWN', `${path} key "${k}"`, `is not a parts.json field; known: ${TOP_KEYS.join(', ')}`);
   for (const k of REQUIRED_TOP_KEYS) if (!(k in o)) fail('PARTS_FIELD_PRESENT', `${path} field "${k}"`, 'is absent and required');
+  if ('painting_in_rig' in o) {
+    const p = o.painting_in_rig;
+    if (typeof p !== 'object' || p === null || Array.isArray(p) ||
+        Object.keys(p).sort().join(',') !== 'path,resample,sha256' ||
+        (p as Record<string, unknown>).path !== PAINTING_IN_RIG_FILE ||
+        (p as Record<string, unknown>).resample !== 'lanczos3-rgb-opaque' ||
+        typeof (p as Record<string, unknown>).sha256 !== 'string' ||
+        !/^[a-f0-9]{64}$/.test((p as Record<string, unknown>).sha256 as string)) {
+      fail('PARTS_FIELD_TYPE', `${path} field "painting_in_rig"`, 'requires exactly path "painting_in_rig.png", lowercase 64-hex sha256 and resample "lanczos3-rgb-opaque"');
+    }
+  }
   const size = o.rig_size;
   const sizeOk = Array.isArray(size) && size.length === 2 && size.every((n) => Number.isInteger(n) && (n as number) > 0);
   if ('rig_size' in o && !sizeOk) fail('PARTS_FIELD_TYPE', `${path} field "rig_size"`, `is ${show(size)}; [width, height] in positive integers is required`);

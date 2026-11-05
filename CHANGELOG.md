@@ -1,5 +1,46 @@
 # Changelog
 
+## [2.19.3](https://github.com/rig-c/parts/compare/v2.19.2...v2.19.3) (2026-11-05)
+
+
+### Bug Fixes
+
+* **ci:** reuse verified tree verdicts ([#1112](https://github.com/rig-c/parts/issues/1112)) ([#1119](https://github.com/rig-c/parts/issues/1119)) ([e0c326e](https://github.com/rig-c/parts/commit/e0c326e03cf1d7654ba81eb125fc70f30aa5eb0b))
+
+## [2.19.2](https://github.com/rig-c/parts/compare/v2.19.1...v2.19.2) (2026-11-05)
+
+
+### Bug Fixes
+
+* **selftest:** split fixture checks into independent units ([#1116](https://github.com/rig-c/parts/issues/1116)) ([#1117](https://github.com/rig-c/parts/issues/1117)) ([de90fac](https://github.com/rig-c/parts/commit/de90fac0d32b25a1ba27348dc89e81f63ee8a4f4))
+
+## [2.19.1](https://github.com/rig-c/parts/compare/v2.19.0...v2.19.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* validate against one synthetic sample ([#1113](https://github.com/rig-c/parts/issues/1113)) ([#1114](https://github.com/rig-c/parts/issues/1114)) ([7b2e61c](https://github.com/rig-c/parts/commit/7b2e61ceff29f6b9ac0bfe344326a9bbd69debff))
+
+## [2.19.0](https://github.com/rig-c/parts/compare/v2.18.0...v2.19.0) (2026-11-05)
+
+
+### Features
+
+* **assemble:** accept crop donors for region takes ([#1098](https://github.com/rig-c/parts/issues/1098)) ([#1108](https://github.com/rig-c/parts/issues/1108)) ([021c4f2](https://github.com/rig-c/parts/commit/021c4f29a27f0ba4205575b17f83b9b885d04c59))
+* **assemble:** declare the rig-resolution painting ([#1097](https://github.com/rig-c/parts/issues/1097)) ([#1101](https://github.com/rig-c/parts/issues/1101)) ([2f8daa3](https://github.com/rig-c/parts/commit/2f8daa330f2c59f5bc3081e6bb7bb8d488d6415c))
+
+
+### Bug Fixes
+
+* **assemble:** contain core region cleanup and seam decisions ([#1102](https://github.com/rig-c/parts/issues/1102)) ([#1104](https://github.com/rig-c/parts/issues/1104)) ([7412714](https://github.com/rig-c/parts/commit/741271477607505986d7a91db7d30c75dcad8dc2))
+
+## [2.18.0](https://github.com/rig-c/parts/compare/v2.17.0...v2.18.0) (2026-11-05)
+
+
+### Features
+
+* **check:** refuse a boundary-colour image size mismatch before the build ([#1093](https://github.com/rig-c/parts/issues/1093)) ([#1099](https://github.com/rig-c/parts/issues/1099)) ([a5af3ff](https://github.com/rig-c/parts/commit/a5af3ff9c2ca3aedd46701cc8695ee301e8c957e))
+
 ## [2.17.0](https://github.com/rig-c/parts/compare/v2.16.1...v2.17.0) (2026-11-05)
 
 

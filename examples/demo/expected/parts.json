@@ -4,6 +4,11 @@
     1216
   ],
   "scale_rig_per_source": 0.5,
+  "painting_in_rig": {
+    "path": "painting_in_rig.png",
+    "sha256": "2a0d3f5ffd5ea766afcb3f40558cc9df3438422187060f3f977fe31dd4627657",
+    "resample": "lanczos3-rgb-opaque"
+  },
   "parts": [
     {
       "name": "hair_back",

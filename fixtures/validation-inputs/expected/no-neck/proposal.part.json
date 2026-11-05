@@ -1,0 +1,568 @@
+{
+  "bones": [
+    {
+      "name": "hip",
+      "parent": "root",
+      "at": [
+        64,
+        82
+      ]
+    },
+    {
+      "name": "chest",
+      "parent": "hip",
+      "at": [
+        64,
+        64
+      ]
+    },
+    {
+      "name": "neck",
+      "parent": "chest",
+      "at": [
+        64,
+        46
+      ]
+    },
+    {
+      "name": "head",
+      "parent": "neck",
+      "at": [
+        64,
+        40
+      ]
+    },
+    {
+      "name": "eye_r",
+      "parent": "head",
+      "at": [
+        52,
+        27
+      ]
+    },
+    {
+      "name": "eye_l",
+      "parent": "head",
+      "at": [
+        76,
+        27
+      ]
+    },
+    {
+      "name": "brow_r",
+      "parent": "head",
+      "at": [
+        52,
+        18
+      ]
+    },
+    {
+      "name": "brow_l",
+      "parent": "head",
+      "at": [
+        76,
+        18
+      ]
+    },
+    {
+      "name": "mouth",
+      "parent": "head",
+      "at": [
+        64,
+        38
+      ]
+    },
+    {
+      "chain": "hairback_r",
+      "parent": "head",
+      "points": [
+        [
+          54,
+          27
+        ],
+        [
+          58,
+          40
+        ],
+        [
+          58,
+          54
+        ]
+      ],
+      "tip": [
+        58,
+        76
+      ]
+    },
+    {
+      "chain": "hairback_l",
+      "parent": "head",
+      "points": [
+        [
+          73,
+          27
+        ],
+        [
+          68,
+          40
+        ],
+        [
+          68,
+          54
+        ]
+      ],
+      "tip": [
+        68,
+        76
+      ]
+    },
+    {
+      "chain": "bang_r",
+      "parent": "head",
+      "points": [
+        [
+          52,
+          21
+        ],
+        [
+          42,
+          27
+        ]
+      ],
+      "tip": [
+        34,
+        40
+      ]
+    },
+    {
+      "chain": "bang_c",
+      "parent": "head",
+      "points": [
+        [
+          64,
+          21
+        ],
+        [
+          64,
+          27
+        ]
+      ],
+      "tip": [
+        64,
+        40
+      ]
+    },
+    {
+      "chain": "bang_l",
+      "parent": "head",
+      "points": [
+        [
+          76,
+          21
+        ],
+        [
+          86,
+          27
+        ]
+      ],
+      "tip": [
+        94,
+        40
+      ]
+    },
+    {
+      "name": "hairpin",
+      "parent": "head",
+      "at": [
+        -22,
+        9
+      ],
+      "tip": [
+        14,
+        9
+      ]
+    },
+    {
+      "chain": "sleeve_r",
+      "parent": "chest",
+      "points": [
+        [
+          32,
+          64
+        ],
+        [
+          34,
+          73
+        ],
+        [
+          31,
+          82
+        ]
+      ],
+      "tip": [
+        38,
+        88
+      ]
+    },
+    {
+      "chain": "sleeve_l",
+      "parent": "chest",
+      "points": [
+        [
+          64,
+          64
+        ],
+        [
+          64,
+          73
+        ],
+        [
+          64,
+          82
+        ]
+      ],
+      "tip": [
+        64,
+        88
+      ]
+    },
+    {
+      "chain": "skirt0_",
+      "parent": "hip",
+      "points": [
+        [
+          64,
+          102
+        ],
+        [
+          64,
+          109
+        ]
+      ],
+      "tip": [
+        64,
+        112
+      ]
+    }
+  ],
+  "meshes": {
+    "hair_back": {
+      "grid": 8,
+      "r": 3,
+      "segments": [
+        [
+          "head",
+          [
+            64,
+            40
+          ],
+          [
+            64,
+            17
+          ]
+        ],
+        "hairback_r",
+        "hairback_l"
+      ]
+    },
+    "hair_front": {
+      "grid": 5,
+      "r": 3,
+      "segments": [
+        [
+          "head",
+          [
+            64,
+            40
+          ],
+          [
+            64,
+            8
+          ]
+        ],
+        "bang_r",
+        "bang_c",
+        "bang_l"
+      ]
+    },
+    "hairpin": {
+      "grid": 5,
+      "r": 3,
+      "segments": [
+        [
+          "hairpin",
+          [
+            -22,
+            9
+          ],
+          [
+            14,
+            9
+          ]
+        ],
+        [
+          "hairpin",
+          [
+            29,
+            -3
+          ],
+          [
+            -22,
+            27
+          ]
+        ]
+      ]
+    },
+    "arm": {
+      "grid": 5,
+      "r": 3,
+      "segments": [
+        [
+          "chest",
+          [
+            64,
+            24
+          ],
+          [
+            64,
+            82
+          ]
+        ],
+        "sleeve_r",
+        "sleeve_l"
+      ]
+    },
+    "topwear": {
+      "contour": {
+        "tolerance": 1,
+        "margin": 1,
+        "spacing": 3,
+        "maxEdge": 3,
+        "stray": 1
+      },
+      "r": 3,
+      "segments": [
+        [
+          "chest",
+          [
+            64,
+            40
+          ],
+          [
+            64,
+            62
+          ]
+        ],
+        [
+          "hip",
+          [
+            64,
+            62
+          ],
+          [
+            64,
+            182
+          ]
+        ]
+      ]
+    },
+    "bottomwear": {
+      "grid": 5,
+      "r": 3,
+      "segments": [
+        [
+          "hip",
+          [
+            57,
+            87
+          ],
+          [
+            71,
+            87
+          ]
+        ],
+        "skirt0_"
+      ]
+    }
+  },
+  "regions": {
+    "eyewhite_r": "eye_r",
+    "eyewhite_l": "eye_l",
+    "footwear": "root",
+    "face": "head",
+    "brow_r": "brow_r",
+    "brow_l": "brow_l",
+    "mouth": "mouth"
+  },
+  "motion": {
+    "duration": 3.3333333333333335,
+    "tracks": [
+      {
+        "bone": "chest",
+        "prop": "translatey",
+        "amp": 0.45,
+        "period": 3.3333333333333335,
+        "phase": 0,
+        "base": 0.45
+      },
+      {
+        "bone": "chest",
+        "prop": "scalex",
+        "amp": 0.004,
+        "period": 3.3333333333333335,
+        "phase": 0,
+        "base": 1.004
+      },
+      {
+        "bone": "head",
+        "prop": "rotate",
+        "amp": 0.9,
+        "period": 3.3333333333333335,
+        "phase": 0.12
+      },
+      {
+        "bone": "neck",
+        "prop": "rotate",
+        "amp": 0.35,
+        "period": 3.3333333333333335,
+        "phase": 0.08
+      },
+      {
+        "chain": "hairback_r",
+        "amps": [
+          0.6,
+          1.4,
+          2.4
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.2,
+        "lag": 0.08
+      },
+      {
+        "chain": "hairback_l",
+        "amps": [
+          -0.6,
+          -1.4,
+          -2.4
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.2,
+        "lag": 0.08
+      },
+      {
+        "chain": "bang_r",
+        "amps": [
+          1,
+          2.2
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.18,
+        "lag": 0.1
+      },
+      {
+        "chain": "bang_c",
+        "amps": [
+          0.8,
+          1.76
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.18,
+        "lag": 0.1
+      },
+      {
+        "chain": "bang_l",
+        "amps": [
+          1,
+          2.2
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.18,
+        "lag": 0.1
+      },
+      {
+        "chain": "sleeve_r",
+        "amps": [
+          0.25,
+          0.9,
+          1.8
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.22,
+        "lag": 0.08
+      },
+      {
+        "chain": "sleeve_l",
+        "amps": [
+          -0.25,
+          -0.9,
+          -1.8
+        ],
+        "period": 3.3333333333333335,
+        "phase": 0.27,
+        "lag": 0.08
+      }
+    ],
+    "blink": {
+      "t": 2.3,
+      "eyes": [
+        "eye_r",
+        "eye_l"
+      ],
+      "brows": [
+        "brow_r",
+        "brow_l"
+      ],
+      "squash": 0.12,
+      "brow_drop": 1.2
+    }
+  },
+  "constraints": [
+    {
+      "type": "physics",
+      "name": "skirt0_0_physics",
+      "bone": "skirt0_0",
+      "rotate": 1,
+      "strength": 50,
+      "wind": 1,
+      "gravity": 1
+    },
+    {
+      "type": "physics",
+      "name": "skirt0_1_physics",
+      "bone": "skirt0_1",
+      "rotate": 1,
+      "strength": 50,
+      "wind": 2,
+      "gravity": 2
+    }
+  ],
+  "proposed_rig_scale": 1,
+  "notes": [
+    "head frame: the bar runs through eye_r [52.0, 27.0] and eye_l [76.0, 27.0], the eye bones' origins, 24.000 px; roll 0.000 degrees (Spine's, counter-clockwise) — the line the rig turns the face bones to and declares as invariants.axes; eye midpoint [64.0, 27.0]",
+    "head pitch: the nose sits — (not read: no part tagged nose) of the way from the eye midpoint to the mouth (frontal 0.474..0.630); the stem, eye midpoint -> mouth, is 0.479 of the bar (frontal 0.510..0.675); frontal ranges read on demo, scarf, the rig-c/trailer character; the turn is not reported (src/propose.ts FRONTAL_REFERENCE says why)",
+    "breath: chest translatey 0.90 px peak to peak (amp 0.45, base 0.45) = 2.5 % of the torso's length, 36.0 px (neck [64, 46] -> hip [64, 82]), once per 40-frame idle at 12 fps",
+    "hair_front (head:front hair): bang_r, bang_c, bang_l are a template, not its locks — columns at 0.25, 0.5 and 0.75 of the face box's width, along the head's down axis (the eye line's perpendicular, roll 0.000 degrees), each rooted on the part's art; the opaque shape does not separate the locks painted inside one mass of hair, so a lock that runs elsewhere is not followed — move the chains onto the locks",
+    "figure layer: no legwear part is over 500 px, and no topwear part over 500 px holds within 15 px every joint of leg_r, leg_l and the origins of hip, chest and neck (topwear holds no art within 15 px of r_knee at [60.0, 100.0]), so leg_r, leg_l are not drafted from one layer (issue #577)",
+    "handwear is one blob (arm): both sleeves in one mesh, split at the eye axis x=64",
+    "topwear ends at y=85 (hip 82): no robe chains -- add a sash chain by hand if one hangs",
+    "bottomwear (full:bottomwear): its art starts 18.0 px below chest's origin, so it hangs from the waist — its mesh takes the hip line and its skirt chains, no chest segment, and the breath does not carry its root",
+    "bottomwear (bottomwear): config.cloth.\"bottomwear\" -> 1 tree(s) from hip, rooted 20 px below its y and tipped 4 px above bottomwear's bottom, laid down the screen, 2 link(s) each (skirt0_); 2 constraint(s), physics on every link, wind 1 -> 2 and gravity 1 -> 2 root to tip (multipliers of the consumer's environment; no direction is drafted), no idle key; the recipe's own defaults, measured on its synthetic fixture (AUTHORING §3): length_ratio 0.5, strength 100/100/50",
+    "trunk segments (topwear, bottomwear): laid along neck -> hip, the line the chest was placed on (0.0 degrees off the screen's downward vertical, positive towards +x): each [bone, from, to] segment the rule drafts down the screen runs along that line instead, and the waist segment across it",
+    "topwear: contour dust rule leaves out 1 island(s), 1 px; contour.stray=1",
+    "topwear: contour bust omitted for the declared reason: synthetic fixture has no bust landmarks",
+    "keypoints: person \"a\" from \"synthetic rectangle geometry\", painting 128x128 px to the 128x128 rig by the overlay's map (x * 128/128, y * 128/128); a joint with a position places its bone in place of the rule, a joint without one leaves the bone to its rule, and no bone is authored from a joint that no rule places",
+    "neck observed at [64.0, 46.0]: used as given for bone neck",
+    "r_hip observed at [60.0, 82.0]: used as given for bone hip, the midpoint of r_hip and l_hip — a point between two joints, not a joint",
+    "l_hip observed at [68.0, 82.0]: used as given for bone hip, the midpoint of r_hip and l_hip — a point between two joints, not a joint",
+    "chest: its rule, half way from neck to hip, taken along the line from neck [64.0, 46.0] to hip [64.0, 82.0] rather than down the screen",
+    "r_shoulder observed at [38.0, 48.0]: not used — l_wrist at [112.0, 92.0] lies on the art of no handwear part within 15 px, so it does not say which sleeve it ends; the nearest is arm, 65 px from its art by the larger of the x and y gaps (--wrist-snap 65 would bind it); the one-blob sleeve rule (both chains in one mesh, split at the eye axis x=64) stands in",
+    "r_elbow observed at [38.0, 70.0]: not used — l_wrist at [112.0, 92.0] lies on the art of no handwear part within 15 px, so it does not say which sleeve it ends; the nearest is arm, 65 px from its art by the larger of the x and y gaps (--wrist-snap 65 would bind it); the one-blob sleeve rule (both chains in one mesh, split at the eye axis x=64) stands in",
+    "r_wrist observed at [38.0, 92.0]: not used — l_wrist at [112.0, 92.0] lies on the art of no handwear part within 15 px, so it does not say which sleeve it ends; the nearest is arm, 65 px from its art by the larger of the x and y gaps (--wrist-snap 65 would bind it); the one-blob sleeve rule (both chains in one mesh, split at the eye axis x=64) stands in",
+    "l_shoulder observed at [88.0, 48.0]: not used — l_wrist at [112.0, 92.0] lies on the art of no handwear part within 15 px, so it does not say which sleeve it ends; the nearest is arm, 65 px from its art by the larger of the x and y gaps (--wrist-snap 65 would bind it); the one-blob sleeve rule (both chains in one mesh, split at the eye axis x=64) stands in",
+    "l_elbow observed at [100.0, 70.0]: not used — l_wrist at [112.0, 92.0] lies on the art of no handwear part within 15 px, so it does not say which sleeve it ends; the nearest is arm, 65 px from its art by the larger of the x and y gaps (--wrist-snap 65 would bind it); the one-blob sleeve rule (both chains in one mesh, split at the eye axis x=64) stands in",
+    "l_wrist observed at [112.0, 92.0]: not used — l_wrist at [112.0, 92.0] lies on the art of no handwear part within 15 px, so it does not say which sleeve it ends; the nearest is arm, 65 px from its art by the larger of the x and y gaps (--wrist-snap 65 would bind it); the one-blob sleeve rule (both chains in one mesh, split at the eye axis x=64) stands in",
+    "r_eye observed at [52.0, 27.0]: bone eye_r is measured off eyewhite_r (its box centre [52.0, 27.0]) and is not moved; the joint is 0.0 px from it",
+    "l_eye observed at [76.0, 27.0]: bone eye_l is measured off eyewhite_l (its box centre [76.0, 27.0]) and is not moved; the joint is 0.0 px from it",
+    "no rule reads nose observed at [64.0, 34.0], r_knee observed at [60.0, 100.0], r_ankle observed at [60.0, 120.0], l_knee observed at [68.0, 100.0], l_ankle observed at [68.0, 120.0], r_ear observed at [40.0, 27.0], l_ear observed at [88.0, 27.0] — no bone is authored from them"
+  ]
+}

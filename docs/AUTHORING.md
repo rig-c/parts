@@ -794,7 +794,8 @@ Resampling establishes the declared output bytes. It does not establish equality
 between separately generated donor and target art. Omitting `crop` retains the
 existing geometry refusal and its message.
 
-Region take entries retain their existing geometry contract and refuse crop donors.
+Region take entries accept the same optional `crop` and use this transport before
+selecting the seeded component on the target run canvas.
 
 ### Residual front/back edges (`edge_residuals.json`, issue #999)
 
@@ -854,10 +855,13 @@ declared painting reference keeps the selected mask fixed when `--source`
 changes for projection. The reference governs colour only and geometry follows `--source`.
 A region take requires an opaque `--source` because its donor must match the run input and `inputs` refuses see-through paintings, so flatten the plate first.
 Its input is derived as for whole-layer take above.
-Both run canvases must agree, and the supplied original donor input
-must match the entire target input in RGBA and dimensions, establishing the same
-crop. Different crops await #973. Painting samples use the existing Lanczos3
-resize onto the run canvas. Only the 8-connected qualifying component containing
+Without `crop`, both run canvases must agree, and the supplied original donor
+input must match the entire target input in RGBA and dimensions. With `crop`,
+the supplied input must match the declared square-padded painting crop exactly.
+The whole-layer crop transport maps donor pixels onto the target run canvas
+before selection; the seed remains on that target canvas. Painting samples,
+including a declared reference, use the existing Lanczos3 resize onto the target
+run canvas, never the donor crop grid. Only the 8-connected qualifying component containing
 the seed is copied. The base layer's depth and draw order stay in use.
 For a declared reference, its hash, binding and painting-to-run transform are logged. For
 `scale` and `origin`, run coordinates are `(painting - origin) * scale`.
@@ -5203,7 +5207,7 @@ those settings. Changing a config seed alone cannot change a no-config run.
 | <a id="ASSEMBLE_REGION_TAKE_REFERENCE_MATCH"></a>`ASSEMBLE_REGION_TAKE_REFERENCE_MATCH` | a reference hash or painting dimensions differ | supply the declared PNG and preserve the source geometry |
 | <a id="ASSEMBLE_REGION_TAKE_CONTAINMENT"></a>`ASSEMBLE_REGION_TAKE_CONTAINMENT` | a non-target part has no pre-take counterpart | retain the same neighbour part population before and after the take |
 | <a id="ASSEMBLE_REGION_TAKE_TOLERANCE"></a>`ASSEMBLE_REGION_TAKE_TOLERANCE` | a region take has no authored `setup_painting.rgb_tolerance` | supply the same requirements file to assemble/build and check |
-| <a id="ASSEMBLE_REGION_TAKE_GEOMETRY"></a>`ASSEMBLE_REGION_TAKE_GEOMETRY` | donor and target canvases or original input RGBA differ, or the target head run is absent | supply the same crop and original input PNG. Cropped donors await #973 |
+| <a id="ASSEMBLE_REGION_TAKE_GEOMETRY"></a>`ASSEMBLE_REGION_TAKE_GEOMETRY` | without `crop`, donor and target canvases or entire input RGBA differ; with `crop`, the original input differs from its declared square-padded crop; or the target head run is absent | supply the matching original input PNG and declare `crop` for a crop donor; a head take requires a target head run |
 | <a id="ASSEMBLE_REGION_TAKE_PART"></a>`ASSEMBLE_REGION_TAKE_PART` | the named plan part/run or its base/donor tag is absent, or the target is taken twice | name an existing plan part and one donor holding its tag |
 | <a id="ASSEMBLE_REGION_TAKE_EMPTY"></a>`ASSEMBLE_REGION_TAKE_EMPTY` | the derived qualifying region has 0 pixels | supply material missing from the base that covers and matches the painting |
 | <a id="ASSEMBLE_REGION_TAKE_SEED"></a>`ASSEMBLE_REGION_TAKE_SEED` | the seed touches no qualifying component | name an integer pixel in the derived region on the target run canvas |
@@ -5297,6 +5301,11 @@ those settings. Changing a config seed alone cannot change a no-config run.
 | <a id="KEYPOINTS_JOINT_KNOWN"></a><a id="KEYPOINTS_JOINT_STATE"></a><a id="KEYPOINTS_POSITION_STATED"></a><a id="KEYPOINTS_POSITION_INSIDE"></a>`KEYPOINTS_JOINT_KNOWN`, `KEYPOINTS_JOINT_STATE`, `KEYPOINTS_POSITION_STATED`, `KEYPOINTS_POSITION_INSIDE` | a joint name outside body-18, a state outside observed / occluded / missing, an observed joint with no `at` or a missing one with one, or a position outside the `width`x`height` image | that joint |
 | <a id="KEYPOINTS_PERSON_UNIQUE"></a><a id="KEYPOINTS_PERSON_CHOSEN"></a>`KEYPOINTS_PERSON_UNIQUE`, `KEYPOINTS_PERSON_CHOSEN` | two people share an id; or the file holds more than one person and no `--person` names one, or `--person` names none of them (the message lists the ids) | `--person <id>` |
 | <a id="KEYPOINTS_IMAGE_SIZE"></a>`KEYPOINTS_IMAGE_SIZE` | the file's `width`x`height` is not the `--source` painting's | a file measured on this painting |
+| <a id="PARTS_PAINTING_PRESENT"></a>`PARTS_PAINTING_PRESENT` | The declared rig-resolution painting cannot be read. | Re-run assemble; restore the declared file and manifest together. |
+| <a id="PARTS_PAINTING_SHA256"></a>`PARTS_PAINTING_SHA256` | The declared rig-resolution painting does not match its SHA-256. | Re-run assemble; restore the declared file and manifest together. |
+| <a id="PARTS_PAINTING_PNG"></a>`PARTS_PAINTING_PNG` | The declared rig-resolution painting is not a decodable PNG. | Re-run assemble; restore the declared file and manifest together. |
+| <a id="PARTS_PAINTING_SIZE"></a>`PARTS_PAINTING_SIZE` | The declared rig-resolution painting dimensions differ from rig_size. | Re-run assemble; restore the declared file and manifest together. |
+| <a id="PARTS_PAINTING_OPAQUE"></a>`PARTS_PAINTING_OPAQUE` | The declared rig-resolution painting has alpha below 255. | Re-run assemble; restore the declared file and manifest together. |
 | <a id="PARTS_FILE_PRESENT"></a><a id="PARTS_IS_JSON"></a><a id="PARTS_KEY_KNOWN"></a><a id="PARTS_FIELD_PRESENT"></a><a id="PARTS_FIELD_TYPE"></a><a id="PARTS_NAME_UNIQUE"></a><a id="PARTS_FROM_KNOWN"></a><a id="PARTS_CUT_FROM_KNOWN"></a><a id="PARTS_BOX_INSIDE_RIG"></a><a id="PARTS_COUNTS_ADD_UP"></a><a id="PARTS_HOLES_LARGEST_FIRST"></a><a id="PARTS_HOLE_PART_KNOWN"></a><a id="PARTS_SINGLE_RUN_PAD"></a>`PARTS_*` (`PARTS_FILE_PRESENT`, `PARTS_IS_JSON`, `PARTS_KEY_KNOWN`, `PARTS_FIELD_PRESENT`, `PARTS_FIELD_TYPE`, `PARTS_NAME_UNIQUE`, `PARTS_FROM_KNOWN`, `PARTS_CUT_FROM_KNOWN`, `PARTS_BOX_INSIDE_RIG`, `PARTS_COUNTS_ADD_UP`, `PARTS_HOLES_LARGEST_FIRST`, `PARTS_HOLE_PART_KNOWN`, `PARTS_SINGLE_RUN_PAD`) | the `parts.json` read is not assemble's contract (`PARTS_FILE_PRESENT`: no `parts.json` under `--parts`, which names the directory holding `parts.json` and `parts/` — `work/rig` from `assemble --out work`, or `out` from `build --out out`; `PARTS_COUNTS_ADD_UP`: `visible_px + occluded_px` is not `opaque_px`, `visible_not_projected_px` is above `visible_px`, or the `recomposite` block's figures disagree — more uncovered than error pixels, a hole larger than its box, the wrong number of holes listed, listed areas that do not sum to `uncovered_error_px`; the last two codes are the block's order and its border names; `PARTS_SINGLE_RUN_PAD`: the `single_run_pad` block's margins are not the centring, its file is not smaller than its square, or `rig_size` is not the file at the scale, issue #366 — §5) | pass the directory holding `parts.json` and `parts/` (`work/rig` or `out`), or re-run assemble; do not edit `parts.json`; optional value/ownership report fields follow [Source before scissors](#source-before-scissors) |
 
 ### compare

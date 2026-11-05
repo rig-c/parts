@@ -1,0 +1,70 @@
+{
+  "prefix": "validation",
+  "width": 128,
+  "height": 128,
+  "layers": [
+    {
+      "name": "wings",
+      "filename": "wings.png",
+      "left": 0,
+      "top": 0,
+      "right": 128,
+      "bottom": 128,
+      "depth_median": 1
+    },
+    {
+      "name": "handwear-r",
+      "filename": "handwear-r.png",
+      "left": 28,
+      "top": 48,
+      "right": 48,
+      "bottom": 92,
+      "depth_median": 0.9375
+    },
+    {
+      "name": "back hair",
+      "filename": "back hair.png",
+      "left": 7,
+      "top": 4,
+      "right": 122,
+      "bottom": 80,
+      "depth_median": 0.875
+    },
+    {
+      "name": "bottomwear",
+      "filename": "bottomwear.png",
+      "left": 56,
+      "top": 82,
+      "right": 72,
+      "bottom": 116,
+      "depth_median": 0.8125
+    },
+    {
+      "name": "topwear",
+      "filename": "topwear.png",
+      "left": 40,
+      "top": 40,
+      "right": 89,
+      "bottom": 85,
+      "depth_median": 0.75
+    },
+    {
+      "name": "footwear",
+      "filename": "footwear.png",
+      "left": 48,
+      "top": 116,
+      "right": 80,
+      "bottom": 124,
+      "depth_median": 0.6875
+    },
+    {
+      "name": "face",
+      "filename": "face.png",
+      "left": 40,
+      "top": 12,
+      "right": 88,
+      "bottom": 44,
+      "depth_median": 0.5625
+    }
+  ]
+}

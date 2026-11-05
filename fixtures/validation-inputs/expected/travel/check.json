@@ -1,0 +1,3567 @@
+{
+  "gate_spine_html_green": true,
+  "rigc_entry": {
+    "entry": "cli.ts",
+    "spine_core": "4.3.13"
+  },
+  "pack_mode": {
+    "page_edges": "free",
+    "pack_shape": "polygon"
+  },
+  "loop_max_diff": 0,
+  "seam_mean": 0,
+  "seam_px_over_40": 0,
+  "seam_px_over_80": 0,
+  "seam_frame_scale": 1,
+  "seam_scope": {
+    "mode": "source-grid/base",
+    "domain": {
+      "viewport": {
+        "x": -64,
+        "y": 0,
+        "width": 128,
+        "height": 128,
+        "scale": 1,
+        "pixelWidth": 128,
+        "pixelHeight": 128
+      },
+      "authored": {
+        "x": -64,
+        "y": 0,
+        "width": 128,
+        "height": 128
+      },
+      "numerator": "whole-union",
+      "states": [
+        {
+          "row_scope": "rig",
+          "row_kind": "evidence",
+          "row_subjects": [],
+          "state": "base",
+          "frames": 2,
+          "pieces": 32,
+          "bounds": {
+            "minX": -61.00000389845736,
+            "minY": 0,
+            "maxX": 62,
+            "maxY": 127.99999999999997
+          },
+          "pose_sha256": "a71994f210d4ae42c7dfeffe4ea0cd966178b995145063fd3823efcc654a3d94"
+        }
+      ]
+    },
+    "denominator_px": 16384,
+    "auto_frame_raw": {
+      "mean": 0.41451536349164764,
+      "display_mean": 0.415,
+      "denominator_px": 15744,
+      "px_over_40": 69,
+      "px_over_80": 0,
+      "frame_scale": 0.925925925925926,
+      "viewport": {
+        "x": -66.12000389845736,
+        "y": -5.119999999999999,
+        "width": 133.24000389845736,
+        "height": 138.23999999999998,
+        "scale": 0.925925925925926,
+        "pixelWidth": 123,
+        "pixelHeight": 128
+      }
+    },
+    "whole": {
+      "mean": 0,
+      "display_mean": 0,
+      "denominator_px": 16384,
+      "px_over_40": 0,
+      "px_over_80": 0,
+      "frame_scale": 1,
+      "viewport": {
+        "x": -64,
+        "y": 0,
+        "width": 128,
+        "height": 128,
+        "scale": 1,
+        "pixelWidth": 128,
+        "pixelHeight": 128
+      }
+    },
+    "population": {
+      "basis": "reference-alpha/top-two-of-2x2",
+      "measured_sample_px": 16384,
+      "pair_count": 19,
+      "pairs": [
+        {
+          "parts": [
+            "forearm_r",
+            "upperarm_r"
+          ],
+          "whole_sample_px": 111,
+          "scope_sample_px": 111,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "forearm_r",
+            "upperarm_r"
+          ]
+        },
+        {
+          "parts": [
+            "forearm_r",
+            "topwear"
+          ],
+          "whole_sample_px": 126,
+          "scope_sample_px": 126,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "forearm_r",
+            "topwear"
+          ]
+        },
+        {
+          "parts": [
+            "upperarm_r",
+            "topwear"
+          ],
+          "whole_sample_px": 207,
+          "scope_sample_px": 207,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "upperarm_r",
+            "topwear"
+          ]
+        },
+        {
+          "parts": [
+            "hair_back",
+            "topwear"
+          ],
+          "whole_sample_px": 678,
+          "scope_sample_px": 678,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "hair_back",
+            "topwear"
+          ]
+        },
+        {
+          "parts": [
+            "bottomwear",
+            "topwear"
+          ],
+          "whole_sample_px": 51,
+          "scope_sample_px": 51,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "bottomwear",
+            "topwear"
+          ]
+        },
+        {
+          "parts": [
+            "bottomwear",
+            "footwear"
+          ],
+          "whole_sample_px": 17,
+          "scope_sample_px": 17,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "bottomwear",
+            "footwear"
+          ]
+        },
+        {
+          "parts": [
+            "topwear",
+            "neck"
+          ],
+          "whole_sample_px": 78,
+          "scope_sample_px": 78,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "topwear",
+            "neck"
+          ]
+        },
+        {
+          "parts": [
+            "hair_back",
+            "face"
+          ],
+          "whole_sample_px": 229,
+          "scope_sample_px": 229,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "hair_back",
+            "face"
+          ]
+        },
+        {
+          "parts": [
+            "topwear",
+            "face"
+          ],
+          "whole_sample_px": 180,
+          "scope_sample_px": 180,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "topwear",
+            "face"
+          ]
+        },
+        {
+          "parts": [
+            "neck",
+            "face"
+          ],
+          "whole_sample_px": 46,
+          "scope_sample_px": 46,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "neck",
+            "face"
+          ]
+        },
+        {
+          "parts": [
+            "face",
+            "eyewhite_r"
+          ],
+          "whole_sample_px": 187,
+          "scope_sample_px": 187,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "face",
+            "eyewhite_r"
+          ]
+        },
+        {
+          "parts": [
+            "face",
+            "eyewhite_l"
+          ],
+          "whole_sample_px": 187,
+          "scope_sample_px": 187,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "face",
+            "eyewhite_l"
+          ]
+        },
+        {
+          "parts": [
+            "face",
+            "brow_r"
+          ],
+          "whole_sample_px": 68,
+          "scope_sample_px": 68,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "face",
+            "brow_r"
+          ]
+        },
+        {
+          "parts": [
+            "face",
+            "brow_l"
+          ],
+          "whole_sample_px": 68,
+          "scope_sample_px": 68,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "face",
+            "brow_l"
+          ]
+        },
+        {
+          "parts": [
+            "face",
+            "mouth"
+          ],
+          "whole_sample_px": 63,
+          "scope_sample_px": 63,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "face",
+            "mouth"
+          ]
+        },
+        {
+          "parts": [
+            "hair_back",
+            "hairpin"
+          ],
+          "whole_sample_px": 221,
+          "scope_sample_px": 221,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "hair_back",
+            "hairpin"
+          ]
+        },
+        {
+          "parts": [
+            "hair_back",
+            "hair_front"
+          ],
+          "whole_sample_px": 268,
+          "scope_sample_px": 268,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "hair_back",
+            "hair_front"
+          ]
+        },
+        {
+          "parts": [
+            "face",
+            "hair_front"
+          ],
+          "whole_sample_px": 245,
+          "scope_sample_px": 245,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "face",
+            "hair_front"
+          ]
+        },
+        {
+          "parts": [
+            "topwear",
+            "sleeve"
+          ],
+          "whole_sample_px": 40,
+          "scope_sample_px": 40,
+          "inherited_sample_px": 0,
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "topwear",
+            "sleeve"
+          ]
+        }
+      ],
+      "single_art": [
+        {
+          "part": "forearm_r",
+          "whole_sample_px": 336,
+          "scope_sample_px": 336,
+          "inherited_sample_px": 0,
+          "row_scope": "part",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "forearm_r"
+          ]
+        },
+        {
+          "part": "upperarm_r",
+          "whole_sample_px": 165,
+          "scope_sample_px": 165,
+          "inherited_sample_px": 0,
+          "row_scope": "part",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "upperarm_r"
+          ]
+        },
+        {
+          "part": "hair_back",
+          "whole_sample_px": 774,
+          "scope_sample_px": 774,
+          "inherited_sample_px": 0,
+          "row_scope": "part",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "hair_back"
+          ]
+        },
+        {
+          "part": "bottomwear",
+          "whole_sample_px": 527,
+          "scope_sample_px": 527,
+          "inherited_sample_px": 0,
+          "row_scope": "part",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "bottomwear"
+          ]
+        },
+        {
+          "part": "topwear",
+          "whole_sample_px": 783,
+          "scope_sample_px": 783,
+          "inherited_sample_px": 0,
+          "row_scope": "part",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "topwear"
+          ]
+        },
+        {
+          "part": "footwear",
+          "whole_sample_px": 280,
+          "scope_sample_px": 280,
+          "inherited_sample_px": 0,
+          "row_scope": "part",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "footwear"
+          ]
+        },
+        {
+          "part": "face",
+          "whole_sample_px": 344,
+          "scope_sample_px": 344,
+          "inherited_sample_px": 0,
+          "row_scope": "part",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "face"
+          ]
+        },
+        {
+          "part": "sleeve",
+          "whole_sample_px": 905,
+          "scope_sample_px": 905,
+          "inherited_sample_px": 0,
+          "row_scope": "part",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "sleeve"
+          ]
+        }
+      ],
+      "no_reference_art": {
+        "whole_sample_px": 9200,
+        "scope_sample_px": 9200,
+        "inherited_sample_px": 0
+      }
+    },
+    "whole_pairs": []
+  },
+  "BREATH_VISIBLE": {
+    "status": "PASS",
+    "torso_parts": [
+      "topwear"
+    ],
+    "torso_heat_mean": 41.374,
+    "torso_floor": 3.809,
+    "feet_parts": [
+      "footwear"
+    ],
+    "feet_heat_max": 0,
+    "feet_ceiling": 0
+  },
+  "BLINK_NO_HOLE": {
+    "status": "PASS",
+    "eye_parts": [
+      "eyewhite_r",
+      "eyewhite_l"
+    ],
+    "closed": [
+      "group eyes scaley 0.12 from 1.07s to 1.154s"
+    ],
+    "idle_frames_closed": [
+      13
+    ],
+    "box_px": 380,
+    "hole_px": 0,
+    "hole_bar": 0,
+    "patch_max": 0,
+    "patch_px_over_40": 0
+  },
+  "CHAIN_LAG": {
+    "status": "PASS",
+    "chains": [
+      "hem0_ctl > hem1_ctl: period 4s, phase 0.000 0.100, amp 0.040 0.080",
+      "sleeve0_ctl > sleeve1_ctl: period 4s, phase 0.000 0.100, amp 4.000 8.000"
+    ],
+    "lags": [
+      "hem0_ctl > hem1_ctl +0.100",
+      "sleeve0_ctl > sleeve1_ctl +0.100"
+    ],
+    "min_step": 0.1,
+    "step_floor": 0.001,
+    "other_period": [],
+    "unread": [],
+    "first_violation": null
+  },
+  "TIP_OVER_ROOT": {
+    "status": "PASS",
+    "instrument": "geometry, carrier frame",
+    "parts": [
+      {
+        "row_scope": "part",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "forearm_r"
+        ],
+        "part": "forearm_r",
+        "unmeasured": "a limb segment (config.limbs.arm_r), rigid on its one bone \"arm_r1\": it turns at its joint and does not hang, so it is not held to the bar"
+      },
+      {
+        "row_scope": "part",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "upperarm_r"
+        ],
+        "part": "upperarm_r",
+        "unmeasured": "a limb segment (config.limbs.arm_r), rigid on its one bone \"arm_r0\": it turns at its joint and does not hang, so it is not held to the bar"
+      },
+      {
+        "row_scope": "part",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "bottomwear"
+        ],
+        "part": "bottomwear",
+        "hang_from": "hip",
+        "root_rig_px": 0.023,
+        "tip_rig_px": 0.012,
+        "ratio": 0.507,
+        "world_root_rig_px": 0.023,
+        "world_tip_rig_px": 0.012,
+        "world_ratio": 0.507,
+        "travel_floor_rig_px": 0.5,
+        "unmeasured": "below half a rig pixel: the motion does not show on the art's own grid"
+      },
+      {
+        "row_scope": "part",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve"
+        ],
+        "part": "sleeve",
+        "hang_from": "chest",
+        "root_rig_px": 0.988,
+        "tip_rig_px": 2.727,
+        "ratio": 2.76,
+        "world_root_rig_px": 0.992,
+        "world_tip_rig_px": 2.807,
+        "world_ratio": 2.829
+      }
+    ],
+    "ratio_floor": 1.4725
+  },
+  "STILL_REGIONS_DARK": {
+    "status": "PASS",
+    "face": {
+      "parts": [
+        "face"
+      ],
+      "head_bone": "head",
+      "instrument": "geometry",
+      "still_slots": [
+        {
+          "row_scope": "part",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "face"
+          ],
+          "slot": "face",
+          "max_rig_px": 0,
+          "rms_rig_px": 0
+        },
+        {
+          "row_scope": "part",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "hair_front"
+          ],
+          "slot": "hair_front",
+          "max_rig_px": 0,
+          "rms_rig_px": 0
+        }
+      ],
+      "max_rig_px": 0,
+      "at": null,
+      "rms_rig_px": 0,
+      "tolerance_rig_px": 1.407e-12,
+      "crossing": [],
+      "driven_slots": []
+    },
+    "feet": {
+      "parts": [
+        "footwear"
+      ],
+      "instrument": "geometry",
+      "still_slots": [
+        {
+          "row_scope": "part",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "footwear"
+          ],
+          "slot": "footwear",
+          "max_rig_px": 0,
+          "rms_rig_px": 0
+        }
+      ],
+      "max_rig_px": 0,
+      "at": null,
+      "rms_rig_px": 0,
+      "tolerance_rig_px": 3.517e-13,
+      "crossing": []
+    }
+  },
+  "TEXTURE_STRETCH": {
+    "status": "PASS",
+    "meshes": 3,
+    "triangles": 268,
+    "frames": 49,
+    "severity": 1.017,
+    "severity_ceiling": 1.926544,
+    "worst": {
+      "slot": "sleeve",
+      "triangle": 12,
+      "vertices": [
+        32,
+        37,
+        33
+      ],
+      "edge": [
+        32,
+        37
+      ],
+      "frame": 41,
+      "ratio": 0.983
+    },
+    "max_ratio": 1.012,
+    "min_ratio": 0.983,
+    "per_mesh": [
+      {
+        "row_scope": "part",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "bottomwear"
+        ],
+        "slot": "bottomwear",
+        "triangles": 72,
+        "max_ratio": 1.007,
+        "max_at": "triangle 3 (vertices 2 26 27), edge 27-2, idle frame 12",
+        "min_ratio": 0.992,
+        "min_at": "triangle 3 (vertices 2 26 27), edge 27-2, idle frame 36",
+        "severity": 1.008
+      },
+      {
+        "row_scope": "part",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "topwear"
+        ],
+        "slot": "topwear",
+        "triangles": 86,
+        "max_ratio": 1,
+        "max_at": "triangle 4 (vertices 2 30 3), edge 3-2, idle frame 0",
+        "min_ratio": 1,
+        "min_at": "triangle 9 (vertices 4 31 32), edge 31-32, idle frame 0",
+        "severity": 1
+      },
+      {
+        "row_scope": "part",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve"
+        ],
+        "slot": "sleeve",
+        "triangles": 110,
+        "max_ratio": 1.012,
+        "max_at": "triangle 12 (vertices 32 37 33), edge 32-37, idle frame 17",
+        "min_ratio": 0.983,
+        "min_at": "triangle 12 (vertices 32 37 33), edge 32-37, idle frame 41",
+        "severity": 1.017
+      }
+    ]
+  },
+  "ANIMATIONS_DO_NOT_FOLD": {
+    "status": "PASS",
+    "animations": [
+      "idle",
+      "hold"
+    ],
+    "fps": 12,
+    "physics_left_out": 0,
+    "folding": [],
+    "folding_undeclared": 0,
+    "declared_not_folding": [],
+    "bar": 0
+  },
+  "STRESS_OFF_CHAIN": {
+    "status": "PASS",
+    "tags": [
+      "handwear"
+    ],
+    "turns": [
+      90,
+      -90,
+      180
+    ],
+    "parts_read": 1,
+    "reading": 1,
+    "worst": {
+      "part": "sleeve",
+      "link": "sleeve0_ctl",
+      "turn": 180
+    },
+    "bar": 1,
+    "per_part": [
+      {
+        "row_scope": "part",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve"
+        ],
+        "part": "sleeve",
+        "link": "sleeve0_ctl",
+        "links": 2,
+        "off_chain": [],
+        "poses": [
+          {
+            "row_scope": "part",
+            "row_kind": "evidence",
+            "row_subjects": [
+              "sleeve"
+            ],
+            "turn": 90,
+            "reading": 1,
+            "worst": {
+              "triangle": 27,
+              "edge": [
+                43,
+                39
+              ],
+              "ratio": 1
+            }
+          },
+          {
+            "row_scope": "part",
+            "row_kind": "evidence",
+            "row_subjects": [
+              "sleeve"
+            ],
+            "turn": -90,
+            "reading": 1,
+            "worst": {
+              "triangle": 21,
+              "edge": [
+                29,
+                40
+              ],
+              "ratio": 1
+            }
+          },
+          {
+            "row_scope": "part",
+            "row_kind": "evidence",
+            "row_subjects": [
+              "sleeve"
+            ],
+            "turn": 180,
+            "reading": 1,
+            "worst": {
+              "triangle": 67,
+              "edge": [
+                59,
+                55
+              ],
+              "ratio": 1
+            }
+          }
+        ]
+      }
+    ],
+    "not_read": [
+      {
+        "part": "forearm_r",
+        "reason": "a limb segment (config.limbs.arm_r), held to its one bone \"arm_r1\" by LIMB_ONE_BONE, so it turns rigidly by construction",
+        "row_scope": "part",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "forearm_r"
+        ]
+      },
+      {
+        "part": "upperarm_r",
+        "reason": "a limb segment (config.limbs.arm_r), held to its one bone \"arm_r0\" by LIMB_ONE_BONE, so it turns rigidly by construction",
+        "row_scope": "part",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "upperarm_r"
+        ]
+      }
+    ]
+  },
+  "LIMB_ONE_BONE": {
+    "status": "PASS",
+    "parts": [
+      {
+        "row_scope": "part",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "forearm_r"
+        ],
+        "part": "forearm_r",
+        "limb": "arm_r",
+        "bone": "arm_r1",
+        "status": "PASS",
+        "others": []
+      },
+      {
+        "row_scope": "part",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "upperarm_r"
+        ],
+        "part": "upperarm_r",
+        "limb": "arm_r",
+        "bone": "arm_r0",
+        "status": "PASS",
+        "others": []
+      }
+    ]
+  },
+  "SEAM_OVER_MOTION": {
+    "status": "CLEAR",
+    "fps": 12,
+    "floor": "a frame opens when its gap or its ghost holds more cells than its box is long (rig-c's cell, its box's longer side) — thicker than one cell; a crack one cell deep is the half-opacity cut moving by less than a cell, and is not reported",
+    "pairs": [
+      {
+        "pair": "upperarm_r|forearm_r",
+        "a": "upperarm_r",
+        "b": "forearm_r",
+        "declared": [
+          "config.limbs.arm_r segment 1, joint \"elbow\""
+        ],
+        "joints": [
+          "elbow"
+        ],
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "upperarm_r",
+          "forearm_r"
+        ]
+      },
+      {
+        "pair": "topwear|upperarm_r",
+        "a": "topwear",
+        "b": "upperarm_r",
+        "declared": [
+          "config.limbs.arm_r segment 0, body carrier \"chest\" from full:topwear"
+        ],
+        "joints": [
+          "arm_r0"
+        ],
+        "root": {
+          "limb": "arm_r",
+          "bone": "arm_r0",
+          "parent": "chest"
+        },
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "topwear",
+          "upperarm_r"
+        ]
+      }
+    ],
+    "animations": [
+      "idle",
+      "hold"
+    ],
+    "warnings": 0,
+    "rows": [
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "upperarm_r",
+          "forearm_r"
+        ],
+        "pair": "upperarm_r|forearm_r",
+        "animation": "idle",
+        "joint_contact": {
+          "status": "REPORTED",
+          "joints": [
+            "elbow"
+          ],
+          "joined": 49,
+          "separated": 0,
+          "unavailable": 0,
+          "reasons": []
+        },
+        "status": "read",
+        "drawn": 49,
+        "banded": 49,
+        "opens": [],
+        "px": [],
+        "max_px": 0,
+        "under_floor": []
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "topwear",
+          "upperarm_r"
+        ],
+        "pair": "topwear|upperarm_r",
+        "animation": "idle",
+        "joint_contact": {
+          "status": "REPORTED",
+          "joints": [
+            "arm_r0"
+          ],
+          "joined": 0,
+          "separated": 0,
+          "unavailable": 49,
+          "reasons": [
+            {
+              "reason": "a setup: multiple edge-connected half-opacity material components; exactly one is required",
+              "frames": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                30,
+                31,
+                32,
+                33,
+                34,
+                35,
+                36,
+                37,
+                38,
+                39,
+                40,
+                41,
+                42,
+                43,
+                44,
+                45,
+                46,
+                47,
+                48
+              ],
+              "row_scope": "pair",
+              "row_kind": "evidence",
+              "row_subjects": [
+                "topwear",
+                "upperarm_r"
+              ]
+            }
+          ]
+        },
+        "status": "read",
+        "drawn": 49,
+        "banded": 49,
+        "opens": [],
+        "px": [],
+        "max_px": 0,
+        "under_floor": [],
+        "cells": []
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "upperarm_r",
+          "forearm_r"
+        ],
+        "pair": "upperarm_r|forearm_r",
+        "animation": "hold",
+        "joint_contact": {
+          "status": "REPORTED",
+          "joints": [
+            "elbow"
+          ],
+          "joined": 13,
+          "separated": 0,
+          "unavailable": 0,
+          "reasons": []
+        },
+        "status": "read",
+        "drawn": 13,
+        "banded": 13,
+        "opens": [],
+        "px": [],
+        "max_px": 0,
+        "under_floor": []
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "topwear",
+          "upperarm_r"
+        ],
+        "pair": "topwear|upperarm_r",
+        "animation": "hold",
+        "joint_contact": {
+          "status": "REPORTED",
+          "joints": [
+            "arm_r0"
+          ],
+          "joined": 0,
+          "separated": 0,
+          "unavailable": 13,
+          "reasons": [
+            {
+              "reason": "a setup: multiple edge-connected half-opacity material components; exactly one is required",
+              "frames": [
+                0,
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12
+              ],
+              "row_scope": "pair",
+              "row_kind": "evidence",
+              "row_subjects": [
+                "topwear",
+                "upperarm_r"
+              ]
+            }
+          ]
+        },
+        "status": "read",
+        "drawn": 13,
+        "banded": 13,
+        "opens": [],
+        "px": [],
+        "max_px": 0,
+        "under_floor": [],
+        "cells": []
+      }
+    ],
+    "roots": {
+      "status": "PASS",
+      "mode": "gap-open+under-ghost",
+      "ghost_owner": "resolved-draw-order",
+      "pairs": [
+        "topwear|upperarm_r"
+      ],
+      "failed": 0
+    },
+    "required": {
+      "status": "PASS",
+      "mode": "gap-open",
+      "bar_px": 0,
+      "pairs": [
+        {
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "upperarm_r",
+            "forearm_r"
+          ],
+          "pair": "upperarm_r|forearm_r",
+          "class": "internal-joint",
+          "frames": 62,
+          "background_frames": 0,
+          "max_px": 0
+        },
+        {
+          "row_scope": "pair",
+          "row_kind": "evidence",
+          "row_subjects": [
+            "topwear",
+            "upperarm_r"
+          ],
+          "pair": "topwear|upperarm_r",
+          "class": "body-root",
+          "frames": 62,
+          "background_frames": 0,
+          "max_px": 0
+        }
+      ],
+      "failed": 0
+    }
+  },
+  "RECOMPOSITE_HOLES": {
+    "status": "REPORTED",
+    "error_px": 64,
+    "uncovered_error_px": 0,
+    "hole_count": 0,
+    "largest": null
+  },
+  "figure_openings": {
+    "status": "CLEAR",
+    "fps": 12,
+    "cell": 0.5,
+    "pairs": 24,
+    "animations": [
+      "idle",
+      "hold"
+    ],
+    "warnings": 0,
+    "openings": []
+  },
+  "PART_SUPPORT_REPORT": {
+    "status": "UNCLASSIFIED",
+    "grid": [
+      128,
+      128
+    ],
+    "alpha": "alpha >= 128",
+    "pair_registration": "pre-rig parts.json placements, setup slot order",
+    "unowned_registration": "official renderer setup, native stage grid",
+    "boundary": "4-neighbour unit pixel-cell edges, exact coincidence",
+    "pairs": [
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "upperarm_r",
+          "forearm_r"
+        ],
+        "front": "upperarm_r",
+        "back": "forearm_r",
+        "status": "unavailable",
+        "reason": "forearm_r: limb segment \"forearm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_back",
+          "forearm_r"
+        ],
+        "front": "hair_back",
+        "back": "forearm_r",
+        "status": "unavailable",
+        "reason": "forearm_r: limb segment \"forearm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "bottomwear",
+          "forearm_r"
+        ],
+        "front": "bottomwear",
+        "back": "forearm_r",
+        "status": "unavailable",
+        "reason": "forearm_r: limb segment \"forearm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "topwear",
+          "forearm_r"
+        ],
+        "front": "topwear",
+        "back": "forearm_r",
+        "status": "unavailable",
+        "reason": "forearm_r: limb segment \"forearm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "footwear",
+          "forearm_r"
+        ],
+        "front": "footwear",
+        "back": "forearm_r",
+        "status": "unavailable",
+        "reason": "forearm_r: limb segment \"forearm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "neck",
+          "forearm_r"
+        ],
+        "front": "neck",
+        "back": "forearm_r",
+        "status": "unavailable",
+        "reason": "forearm_r: limb segment \"forearm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "face",
+          "forearm_r"
+        ],
+        "front": "face",
+        "back": "forearm_r",
+        "status": "unavailable",
+        "reason": "forearm_r: limb segment \"forearm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_r",
+          "forearm_r"
+        ],
+        "front": "eyewhite_r",
+        "back": "forearm_r",
+        "status": "unavailable",
+        "reason": "forearm_r: limb segment \"forearm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_l",
+          "forearm_r"
+        ],
+        "front": "eyewhite_l",
+        "back": "forearm_r",
+        "status": "unavailable",
+        "reason": "forearm_r: limb segment \"forearm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_r",
+          "forearm_r"
+        ],
+        "front": "brow_r",
+        "back": "forearm_r",
+        "status": "unavailable",
+        "reason": "forearm_r: limb segment \"forearm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_l",
+          "forearm_r"
+        ],
+        "front": "brow_l",
+        "back": "forearm_r",
+        "status": "unavailable",
+        "reason": "forearm_r: limb segment \"forearm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "mouth",
+          "forearm_r"
+        ],
+        "front": "mouth",
+        "back": "forearm_r",
+        "status": "unavailable",
+        "reason": "forearm_r: limb segment \"forearm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hairpin",
+          "forearm_r"
+        ],
+        "front": "hairpin",
+        "back": "forearm_r",
+        "status": "unavailable",
+        "reason": "forearm_r: limb segment \"forearm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_front",
+          "forearm_r"
+        ],
+        "front": "hair_front",
+        "back": "forearm_r",
+        "status": "unavailable",
+        "reason": "forearm_r: limb segment \"forearm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve",
+          "forearm_r"
+        ],
+        "front": "sleeve",
+        "back": "forearm_r",
+        "status": "unavailable",
+        "reason": "forearm_r: limb segment \"forearm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_back",
+          "upperarm_r"
+        ],
+        "front": "hair_back",
+        "back": "upperarm_r",
+        "status": "unavailable",
+        "reason": "upperarm_r: limb segment \"upperarm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "bottomwear",
+          "upperarm_r"
+        ],
+        "front": "bottomwear",
+        "back": "upperarm_r",
+        "status": "unavailable",
+        "reason": "upperarm_r: limb segment \"upperarm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "topwear",
+          "upperarm_r"
+        ],
+        "front": "topwear",
+        "back": "upperarm_r",
+        "status": "unavailable",
+        "reason": "upperarm_r: limb segment \"upperarm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "footwear",
+          "upperarm_r"
+        ],
+        "front": "footwear",
+        "back": "upperarm_r",
+        "status": "unavailable",
+        "reason": "upperarm_r: limb segment \"upperarm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "neck",
+          "upperarm_r"
+        ],
+        "front": "neck",
+        "back": "upperarm_r",
+        "status": "unavailable",
+        "reason": "upperarm_r: limb segment \"upperarm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "face",
+          "upperarm_r"
+        ],
+        "front": "face",
+        "back": "upperarm_r",
+        "status": "unavailable",
+        "reason": "upperarm_r: limb segment \"upperarm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_r",
+          "upperarm_r"
+        ],
+        "front": "eyewhite_r",
+        "back": "upperarm_r",
+        "status": "unavailable",
+        "reason": "upperarm_r: limb segment \"upperarm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_l",
+          "upperarm_r"
+        ],
+        "front": "eyewhite_l",
+        "back": "upperarm_r",
+        "status": "unavailable",
+        "reason": "upperarm_r: limb segment \"upperarm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_r",
+          "upperarm_r"
+        ],
+        "front": "brow_r",
+        "back": "upperarm_r",
+        "status": "unavailable",
+        "reason": "upperarm_r: limb segment \"upperarm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_l",
+          "upperarm_r"
+        ],
+        "front": "brow_l",
+        "back": "upperarm_r",
+        "status": "unavailable",
+        "reason": "upperarm_r: limb segment \"upperarm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "mouth",
+          "upperarm_r"
+        ],
+        "front": "mouth",
+        "back": "upperarm_r",
+        "status": "unavailable",
+        "reason": "upperarm_r: limb segment \"upperarm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hairpin",
+          "upperarm_r"
+        ],
+        "front": "hairpin",
+        "back": "upperarm_r",
+        "status": "unavailable",
+        "reason": "upperarm_r: limb segment \"upperarm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_front",
+          "upperarm_r"
+        ],
+        "front": "hair_front",
+        "back": "upperarm_r",
+        "status": "unavailable",
+        "reason": "upperarm_r: limb segment \"upperarm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve",
+          "upperarm_r"
+        ],
+        "front": "sleeve",
+        "back": "upperarm_r",
+        "status": "unavailable",
+        "reason": "upperarm_r: limb segment \"upperarm_r\" has joint lines but no authored radial width; the art-derived cap radius is not an independent witness",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "bottomwear",
+          "hair_back"
+        ],
+        "front": "bottomwear",
+        "back": "hair_back",
+        "status": "unavailable",
+        "reason": "hair_back: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "topwear",
+          "hair_back"
+        ],
+        "front": "topwear",
+        "back": "hair_back",
+        "status": "unavailable",
+        "reason": "hair_back: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "footwear",
+          "hair_back"
+        ],
+        "front": "footwear",
+        "back": "hair_back",
+        "status": "unavailable",
+        "reason": "hair_back: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "neck",
+          "hair_back"
+        ],
+        "front": "neck",
+        "back": "hair_back",
+        "status": "unavailable",
+        "reason": "hair_back: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "face",
+          "hair_back"
+        ],
+        "front": "face",
+        "back": "hair_back",
+        "status": "unavailable",
+        "reason": "hair_back: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_r",
+          "hair_back"
+        ],
+        "front": "eyewhite_r",
+        "back": "hair_back",
+        "status": "unavailable",
+        "reason": "hair_back: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_l",
+          "hair_back"
+        ],
+        "front": "eyewhite_l",
+        "back": "hair_back",
+        "status": "unavailable",
+        "reason": "hair_back: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_r",
+          "hair_back"
+        ],
+        "front": "brow_r",
+        "back": "hair_back",
+        "status": "unavailable",
+        "reason": "hair_back: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_l",
+          "hair_back"
+        ],
+        "front": "brow_l",
+        "back": "hair_back",
+        "status": "unavailable",
+        "reason": "hair_back: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "mouth",
+          "hair_back"
+        ],
+        "front": "mouth",
+        "back": "hair_back",
+        "status": "unavailable",
+        "reason": "hair_back: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hairpin",
+          "hair_back"
+        ],
+        "front": "hairpin",
+        "back": "hair_back",
+        "status": "unavailable",
+        "reason": "hair_back: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_front",
+          "hair_back"
+        ],
+        "front": "hair_front",
+        "back": "hair_back",
+        "status": "unavailable",
+        "reason": "hair_back: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve",
+          "hair_back"
+        ],
+        "front": "sleeve",
+        "back": "hair_back",
+        "status": "unavailable",
+        "reason": "hair_back: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "topwear",
+          "bottomwear"
+        ],
+        "front": "topwear",
+        "back": "bottomwear",
+        "status": "unavailable",
+        "reason": "bottomwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "footwear",
+          "bottomwear"
+        ],
+        "front": "footwear",
+        "back": "bottomwear",
+        "status": "unavailable",
+        "reason": "bottomwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "neck",
+          "bottomwear"
+        ],
+        "front": "neck",
+        "back": "bottomwear",
+        "status": "unavailable",
+        "reason": "bottomwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "face",
+          "bottomwear"
+        ],
+        "front": "face",
+        "back": "bottomwear",
+        "status": "unavailable",
+        "reason": "bottomwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_r",
+          "bottomwear"
+        ],
+        "front": "eyewhite_r",
+        "back": "bottomwear",
+        "status": "unavailable",
+        "reason": "bottomwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_l",
+          "bottomwear"
+        ],
+        "front": "eyewhite_l",
+        "back": "bottomwear",
+        "status": "unavailable",
+        "reason": "bottomwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_r",
+          "bottomwear"
+        ],
+        "front": "brow_r",
+        "back": "bottomwear",
+        "status": "unavailable",
+        "reason": "bottomwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_l",
+          "bottomwear"
+        ],
+        "front": "brow_l",
+        "back": "bottomwear",
+        "status": "unavailable",
+        "reason": "bottomwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "mouth",
+          "bottomwear"
+        ],
+        "front": "mouth",
+        "back": "bottomwear",
+        "status": "unavailable",
+        "reason": "bottomwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hairpin",
+          "bottomwear"
+        ],
+        "front": "hairpin",
+        "back": "bottomwear",
+        "status": "unavailable",
+        "reason": "bottomwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_front",
+          "bottomwear"
+        ],
+        "front": "hair_front",
+        "back": "bottomwear",
+        "status": "unavailable",
+        "reason": "bottomwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve",
+          "bottomwear"
+        ],
+        "front": "sleeve",
+        "back": "bottomwear",
+        "status": "unavailable",
+        "reason": "bottomwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "footwear",
+          "topwear"
+        ],
+        "front": "footwear",
+        "back": "topwear",
+        "status": "unavailable",
+        "reason": "topwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "neck",
+          "topwear"
+        ],
+        "front": "neck",
+        "back": "topwear",
+        "status": "unavailable",
+        "reason": "topwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "face",
+          "topwear"
+        ],
+        "front": "face",
+        "back": "topwear",
+        "status": "unavailable",
+        "reason": "topwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_r",
+          "topwear"
+        ],
+        "front": "eyewhite_r",
+        "back": "topwear",
+        "status": "unavailable",
+        "reason": "topwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_l",
+          "topwear"
+        ],
+        "front": "eyewhite_l",
+        "back": "topwear",
+        "status": "unavailable",
+        "reason": "topwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_r",
+          "topwear"
+        ],
+        "front": "brow_r",
+        "back": "topwear",
+        "status": "unavailable",
+        "reason": "topwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_l",
+          "topwear"
+        ],
+        "front": "brow_l",
+        "back": "topwear",
+        "status": "unavailable",
+        "reason": "topwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "mouth",
+          "topwear"
+        ],
+        "front": "mouth",
+        "back": "topwear",
+        "status": "unavailable",
+        "reason": "topwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hairpin",
+          "topwear"
+        ],
+        "front": "hairpin",
+        "back": "topwear",
+        "status": "unavailable",
+        "reason": "topwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_front",
+          "topwear"
+        ],
+        "front": "hair_front",
+        "back": "topwear",
+        "status": "unavailable",
+        "reason": "topwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve",
+          "topwear"
+        ],
+        "front": "sleeve",
+        "back": "topwear",
+        "status": "unavailable",
+        "reason": "topwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "neck",
+          "footwear"
+        ],
+        "front": "neck",
+        "back": "footwear",
+        "status": "unavailable",
+        "reason": "footwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "face",
+          "footwear"
+        ],
+        "front": "face",
+        "back": "footwear",
+        "status": "unavailable",
+        "reason": "footwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_r",
+          "footwear"
+        ],
+        "front": "eyewhite_r",
+        "back": "footwear",
+        "status": "unavailable",
+        "reason": "footwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_l",
+          "footwear"
+        ],
+        "front": "eyewhite_l",
+        "back": "footwear",
+        "status": "unavailable",
+        "reason": "footwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_r",
+          "footwear"
+        ],
+        "front": "brow_r",
+        "back": "footwear",
+        "status": "unavailable",
+        "reason": "footwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_l",
+          "footwear"
+        ],
+        "front": "brow_l",
+        "back": "footwear",
+        "status": "unavailable",
+        "reason": "footwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "mouth",
+          "footwear"
+        ],
+        "front": "mouth",
+        "back": "footwear",
+        "status": "unavailable",
+        "reason": "footwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hairpin",
+          "footwear"
+        ],
+        "front": "hairpin",
+        "back": "footwear",
+        "status": "unavailable",
+        "reason": "footwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_front",
+          "footwear"
+        ],
+        "front": "hair_front",
+        "back": "footwear",
+        "status": "unavailable",
+        "reason": "footwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve",
+          "footwear"
+        ],
+        "front": "sleeve",
+        "back": "footwear",
+        "status": "unavailable",
+        "reason": "footwear: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "face",
+          "neck"
+        ],
+        "front": "face",
+        "back": "neck",
+        "status": "unavailable",
+        "reason": "neck: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_r",
+          "neck"
+        ],
+        "front": "eyewhite_r",
+        "back": "neck",
+        "status": "unavailable",
+        "reason": "neck: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_l",
+          "neck"
+        ],
+        "front": "eyewhite_l",
+        "back": "neck",
+        "status": "unavailable",
+        "reason": "neck: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_r",
+          "neck"
+        ],
+        "front": "brow_r",
+        "back": "neck",
+        "status": "unavailable",
+        "reason": "neck: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_l",
+          "neck"
+        ],
+        "front": "brow_l",
+        "back": "neck",
+        "status": "unavailable",
+        "reason": "neck: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "mouth",
+          "neck"
+        ],
+        "front": "mouth",
+        "back": "neck",
+        "status": "unavailable",
+        "reason": "neck: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hairpin",
+          "neck"
+        ],
+        "front": "hairpin",
+        "back": "neck",
+        "status": "unavailable",
+        "reason": "neck: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_front",
+          "neck"
+        ],
+        "front": "hair_front",
+        "back": "neck",
+        "status": "unavailable",
+        "reason": "neck: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve",
+          "neck"
+        ],
+        "front": "sleeve",
+        "back": "neck",
+        "status": "unavailable",
+        "reason": "neck: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_r",
+          "face"
+        ],
+        "front": "eyewhite_r",
+        "back": "face",
+        "status": "unavailable",
+        "reason": "face: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_l",
+          "face"
+        ],
+        "front": "eyewhite_l",
+        "back": "face",
+        "status": "unavailable",
+        "reason": "face: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_r",
+          "face"
+        ],
+        "front": "brow_r",
+        "back": "face",
+        "status": "unavailable",
+        "reason": "face: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_l",
+          "face"
+        ],
+        "front": "brow_l",
+        "back": "face",
+        "status": "unavailable",
+        "reason": "face: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "mouth",
+          "face"
+        ],
+        "front": "mouth",
+        "back": "face",
+        "status": "unavailable",
+        "reason": "face: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hairpin",
+          "face"
+        ],
+        "front": "hairpin",
+        "back": "face",
+        "status": "unavailable",
+        "reason": "face: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_front",
+          "face"
+        ],
+        "front": "hair_front",
+        "back": "face",
+        "status": "unavailable",
+        "reason": "face: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve",
+          "face"
+        ],
+        "front": "sleeve",
+        "back": "face",
+        "status": "unavailable",
+        "reason": "face: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_l",
+          "eyewhite_r"
+        ],
+        "front": "eyewhite_l",
+        "back": "eyewhite_r",
+        "status": "unavailable",
+        "reason": "eyewhite_r: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_r",
+          "eyewhite_r"
+        ],
+        "front": "brow_r",
+        "back": "eyewhite_r",
+        "status": "unavailable",
+        "reason": "eyewhite_r: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_l",
+          "eyewhite_r"
+        ],
+        "front": "brow_l",
+        "back": "eyewhite_r",
+        "status": "unavailable",
+        "reason": "eyewhite_r: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "mouth",
+          "eyewhite_r"
+        ],
+        "front": "mouth",
+        "back": "eyewhite_r",
+        "status": "unavailable",
+        "reason": "eyewhite_r: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hairpin",
+          "eyewhite_r"
+        ],
+        "front": "hairpin",
+        "back": "eyewhite_r",
+        "status": "unavailable",
+        "reason": "eyewhite_r: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_front",
+          "eyewhite_r"
+        ],
+        "front": "hair_front",
+        "back": "eyewhite_r",
+        "status": "unavailable",
+        "reason": "eyewhite_r: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve",
+          "eyewhite_r"
+        ],
+        "front": "sleeve",
+        "back": "eyewhite_r",
+        "status": "unavailable",
+        "reason": "eyewhite_r: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_r",
+          "eyewhite_l"
+        ],
+        "front": "brow_r",
+        "back": "eyewhite_l",
+        "status": "unavailable",
+        "reason": "eyewhite_l: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_l",
+          "eyewhite_l"
+        ],
+        "front": "brow_l",
+        "back": "eyewhite_l",
+        "status": "unavailable",
+        "reason": "eyewhite_l: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "mouth",
+          "eyewhite_l"
+        ],
+        "front": "mouth",
+        "back": "eyewhite_l",
+        "status": "unavailable",
+        "reason": "eyewhite_l: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hairpin",
+          "eyewhite_l"
+        ],
+        "front": "hairpin",
+        "back": "eyewhite_l",
+        "status": "unavailable",
+        "reason": "eyewhite_l: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_front",
+          "eyewhite_l"
+        ],
+        "front": "hair_front",
+        "back": "eyewhite_l",
+        "status": "unavailable",
+        "reason": "eyewhite_l: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve",
+          "eyewhite_l"
+        ],
+        "front": "sleeve",
+        "back": "eyewhite_l",
+        "status": "unavailable",
+        "reason": "eyewhite_l: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_l",
+          "brow_r"
+        ],
+        "front": "brow_l",
+        "back": "brow_r",
+        "status": "unavailable",
+        "reason": "brow_r: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "mouth",
+          "brow_r"
+        ],
+        "front": "mouth",
+        "back": "brow_r",
+        "status": "unavailable",
+        "reason": "brow_r: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hairpin",
+          "brow_r"
+        ],
+        "front": "hairpin",
+        "back": "brow_r",
+        "status": "unavailable",
+        "reason": "brow_r: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_front",
+          "brow_r"
+        ],
+        "front": "hair_front",
+        "back": "brow_r",
+        "status": "unavailable",
+        "reason": "brow_r: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve",
+          "brow_r"
+        ],
+        "front": "sleeve",
+        "back": "brow_r",
+        "status": "unavailable",
+        "reason": "brow_r: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "mouth",
+          "brow_l"
+        ],
+        "front": "mouth",
+        "back": "brow_l",
+        "status": "unavailable",
+        "reason": "brow_l: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hairpin",
+          "brow_l"
+        ],
+        "front": "hairpin",
+        "back": "brow_l",
+        "status": "unavailable",
+        "reason": "brow_l: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_front",
+          "brow_l"
+        ],
+        "front": "hair_front",
+        "back": "brow_l",
+        "status": "unavailable",
+        "reason": "brow_l: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve",
+          "brow_l"
+        ],
+        "front": "sleeve",
+        "back": "brow_l",
+        "status": "unavailable",
+        "reason": "brow_l: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hairpin",
+          "mouth"
+        ],
+        "front": "hairpin",
+        "back": "mouth",
+        "status": "unavailable",
+        "reason": "mouth: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_front",
+          "mouth"
+        ],
+        "front": "hair_front",
+        "back": "mouth",
+        "status": "unavailable",
+        "reason": "mouth: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve",
+          "mouth"
+        ],
+        "front": "sleeve",
+        "back": "mouth",
+        "status": "unavailable",
+        "reason": "mouth: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_front",
+          "hairpin"
+        ],
+        "front": "hair_front",
+        "back": "hairpin",
+        "status": "unavailable",
+        "reason": "hairpin: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve",
+          "hairpin"
+        ],
+        "front": "sleeve",
+        "back": "hairpin",
+        "status": "unavailable",
+        "reason": "hairpin: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve",
+          "hair_front"
+        ],
+        "front": "sleeve",
+        "back": "hair_front",
+        "status": "unavailable",
+        "reason": "hair_front: no authored spatial cut domain; config.regions is only a bone binding",
+        "boundary_length_px": null,
+        "box": null,
+        "continuation_candidate_area_px": null
+      }
+    ],
+    "raw_pairs": [
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "upperarm_r",
+          "forearm_r"
+        ],
+        "front": "upperarm_r",
+        "back": "forearm_r",
+        "boundary_length_px": 0,
+        "box": [
+          28,
+          60,
+          20,
+          10
+        ],
+        "overlap_area_px": 158,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "topwear",
+          "forearm_r"
+        ],
+        "front": "topwear",
+        "back": "forearm_r",
+        "boundary_length_px": 0,
+        "box": [
+          40,
+          60,
+          8,
+          24
+        ],
+        "overlap_area_px": 171,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "topwear",
+          "upperarm_r"
+        ],
+        "front": "topwear",
+        "back": "upperarm_r",
+        "boundary_length_px": 0,
+        "box": [
+          40,
+          48,
+          8,
+          22
+        ],
+        "overlap_area_px": 176,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "topwear",
+          "hair_back"
+        ],
+        "front": "topwear",
+        "back": "hair_back",
+        "boundary_length_px": 0,
+        "box": [
+          54,
+          40,
+          20,
+          40
+        ],
+        "overlap_area_px": 800,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "neck",
+          "hair_back"
+        ],
+        "front": "neck",
+        "back": "hair_back",
+        "boundary_length_px": 0,
+        "box": [
+          58,
+          38,
+          12,
+          12
+        ],
+        "overlap_area_px": 144,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "face",
+          "hair_back"
+        ],
+        "front": "face",
+        "back": "hair_back",
+        "boundary_length_px": 0,
+        "box": [
+          40,
+          12,
+          48,
+          32
+        ],
+        "overlap_area_px": 752,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_r",
+          "hair_back"
+        ],
+        "front": "eyewhite_r",
+        "back": "hair_back",
+        "boundary_length_px": 0,
+        "box": [
+          54,
+          22,
+          6,
+          10
+        ],
+        "overlap_area_px": 60,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_l",
+          "hair_back"
+        ],
+        "front": "eyewhite_l",
+        "back": "hair_back",
+        "boundary_length_px": 0,
+        "box": [
+          68,
+          22,
+          6,
+          10
+        ],
+        "overlap_area_px": 60,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_r",
+          "hair_back"
+        ],
+        "front": "brow_r",
+        "back": "hair_back",
+        "boundary_length_px": 0,
+        "box": [
+          54,
+          17,
+          6,
+          3
+        ],
+        "overlap_area_px": 18,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_l",
+          "hair_back"
+        ],
+        "front": "brow_l",
+        "back": "hair_back",
+        "boundary_length_px": 0,
+        "box": [
+          68,
+          17,
+          6,
+          3
+        ],
+        "overlap_area_px": 18,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "mouth",
+          "hair_back"
+        ],
+        "front": "mouth",
+        "back": "hair_back",
+        "boundary_length_px": 0,
+        "box": [
+          60,
+          36,
+          8,
+          6
+        ],
+        "overlap_area_px": 48,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hairpin",
+          "hair_back"
+        ],
+        "front": "hairpin",
+        "back": "hair_back",
+        "boundary_length_px": 0,
+        "box": [
+          14,
+          4,
+          16,
+          12
+        ],
+        "overlap_area_px": 192,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_front",
+          "hair_back"
+        ],
+        "front": "hair_front",
+        "back": "hair_back",
+        "boundary_length_px": 0,
+        "box": [
+          36,
+          8,
+          56,
+          8
+        ],
+        "overlap_area_px": 448,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "topwear",
+          "bottomwear"
+        ],
+        "front": "topwear",
+        "back": "bottomwear",
+        "boundary_length_px": 0,
+        "box": [
+          56,
+          82,
+          16,
+          2
+        ],
+        "overlap_area_px": 32,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "footwear",
+          "bottomwear"
+        ],
+        "front": "footwear",
+        "back": "bottomwear",
+        "boundary_length_px": 16,
+        "box": [
+          56,
+          116,
+          16,
+          0
+        ],
+        "overlap_area_px": 0,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "neck",
+          "topwear"
+        ],
+        "front": "neck",
+        "back": "topwear",
+        "boundary_length_px": 0,
+        "box": [
+          58,
+          40,
+          12,
+          10
+        ],
+        "overlap_area_px": 120,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "face",
+          "topwear"
+        ],
+        "front": "face",
+        "back": "topwear",
+        "boundary_length_px": 0,
+        "box": [
+          40,
+          40,
+          48,
+          4
+        ],
+        "overlap_area_px": 192,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "mouth",
+          "topwear"
+        ],
+        "front": "mouth",
+        "back": "topwear",
+        "boundary_length_px": 0,
+        "box": [
+          60,
+          40,
+          8,
+          2
+        ],
+        "overlap_area_px": 16,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "sleeve",
+          "topwear"
+        ],
+        "front": "sleeve",
+        "back": "topwear",
+        "boundary_length_px": 36,
+        "box": [
+          88,
+          48,
+          1,
+          37
+        ],
+        "overlap_area_px": 1,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "face",
+          "neck"
+        ],
+        "front": "face",
+        "back": "neck",
+        "boundary_length_px": 0,
+        "box": [
+          58,
+          38,
+          12,
+          6
+        ],
+        "overlap_area_px": 72,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "mouth",
+          "neck"
+        ],
+        "front": "mouth",
+        "back": "neck",
+        "boundary_length_px": 0,
+        "box": [
+          60,
+          38,
+          8,
+          4
+        ],
+        "overlap_area_px": 32,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_r",
+          "face"
+        ],
+        "front": "eyewhite_r",
+        "back": "face",
+        "boundary_length_px": 0,
+        "box": [
+          44,
+          22,
+          16,
+          10
+        ],
+        "overlap_area_px": 160,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "eyewhite_l",
+          "face"
+        ],
+        "front": "eyewhite_l",
+        "back": "face",
+        "boundary_length_px": 0,
+        "box": [
+          68,
+          22,
+          16,
+          10
+        ],
+        "overlap_area_px": 160,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_r",
+          "face"
+        ],
+        "front": "brow_r",
+        "back": "face",
+        "boundary_length_px": 0,
+        "box": [
+          44,
+          17,
+          16,
+          3
+        ],
+        "overlap_area_px": 48,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "brow_l",
+          "face"
+        ],
+        "front": "brow_l",
+        "back": "face",
+        "boundary_length_px": 0,
+        "box": [
+          68,
+          17,
+          16,
+          3
+        ],
+        "overlap_area_px": 48,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "mouth",
+          "face"
+        ],
+        "front": "mouth",
+        "back": "face",
+        "boundary_length_px": 0,
+        "box": [
+          60,
+          36,
+          8,
+          6
+        ],
+        "overlap_area_px": 48,
+        "classification": "ownership unknown, unclassified"
+      },
+      {
+        "row_scope": "pair",
+        "row_kind": "evidence",
+        "row_subjects": [
+          "hair_front",
+          "face"
+        ],
+        "front": "hair_front",
+        "back": "face",
+        "boundary_length_px": 0,
+        "box": [
+          40,
+          12,
+          48,
+          4
+        ],
+        "overlap_area_px": 192,
+        "classification": "ownership unknown, unclassified"
+      }
+    ],
+    "coverage": {
+      "measured": 0,
+      "total": 120
+    },
+    "unowned": {
+      "status": "measured",
+      "area_px": 0,
+      "regions": []
+    }
+  },
+  "config": {
+    "path": "fixtures/validation-inputs/config.travel.json",
+    "sha256": "821db17dd4d7d949745fdf7fd8cd69b7cb696fc29cbef10b44f6b1c182ed5987"
+  },
+  "BOUNDARY_COLOUR_STEP": {
+    "status": "PASS",
+    "instrument": "rigc renderer, setup and every idle frame",
+    "reference": "setup: parts.json flat pieces; idle: each piece re-seated on its own parts PNG through its art UVs",
+    "max_step_excess": 12,
+    "frames": 50,
+    "boundary_pairs": 26883,
+    "worst": {
+      "parts": [
+        "hair_back",
+        "hairpin"
+      ],
+      "frame": "setup",
+      "at": [
+        13,
+        4
+      ],
+      "excess": 0,
+      "rendered_step": 110,
+      "reference_step": 110
+    },
+    "over": [],
+    "unmeasured": [],
+    "alternates": "not measured"
+  },
+  "requirements": {
+    "file": {
+      "path": "requirements.json",
+      "sha256": "3531ea227403afca22b5423e4937c2f37972ed52a989e20b7f0a13c7371b8c47",
+      "keys": [
+        "spec",
+        "fps",
+        "requirements",
+        "pinholes",
+        "boundary_colour",
+        "seam_over_motion"
+      ]
+    },
+    "fps": 12,
+    "summary": {
+      "declared": 0,
+      "measured": 0,
+      "pass": 0,
+      "fail": 0,
+      "not_measurable": 0,
+      "not_declared": [
+        "contact",
+        "follow",
+        "aim",
+        "range",
+        "stretch",
+        "seam"
+      ]
+    },
+    "lines": {}
+  },
+  "PASS": true
+}

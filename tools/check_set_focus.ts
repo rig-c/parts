@@ -28,12 +28,12 @@ export function writeSetFocusFixture(dir: string): CharacterConfig {
 
 export function runSetFocusChecks(dir: string, say: Say): void {
   const cfg = writeSetFocusFixture(dir);
-  const readRaw = (raw: unknown) => { const path = join(dir, 'reader.json'); writeFileSync(path, JSON.stringify(raw)); return readParts(path); };
   const persist = (c: unknown): void => writeFileSync(join(dir, 'config.json'), JSON.stringify(c, null, 2) + '\n');
   const assemble = (out: string): void => { assembleStage(
     { config: join(dir, 'config.json'), source: join(dir, 'painting.png'), full: join(dir, 'full'), head: join(dir, 'head'), seam: 'near-white', project: 'core' },
     { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, 'recomposite_error_rig.png') }, () => {}); };
   const out = join(dir, 'out'); assemble(out);
+  const readRaw = (raw: unknown) => { const path = join(out, 'reader.json'); writeFileSync(path, JSON.stringify(raw)); return readParts(path); };
   const input = readRigInputs(join(dir, 'config.json'), out);
   const result = buildRig(input.cfg, input.parts, input.images);
   const focus = result.sets!.sets.authored.focus!;

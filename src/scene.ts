@@ -99,6 +99,7 @@ import { ACCEPTABLE_BARS, barsNotMet, type CheckReport, DEFAULT_PACK_SHAPE, DEFA
 import { CONSTRAINT_BONE_FIELDS, editorReceiptProblems, ROOT_BONE } from './config.ts';
 import { cropToSpineY } from './coords.ts';
 import { failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
+import { readParts } from './parts.ts';
 import { missingReceipts, readEditorReceipts, type EditorReceipts } from './editreceipt.ts';
 import type { MotionSpec } from './motion.ts';
 import { readPng } from './raster/png.ts';
@@ -473,6 +474,15 @@ export function readCharacterBuild(c: SceneCharacter, problems: Problem[], accep
     }
   }
   const parts = readJson(join(dir, 'parts.json'), "assemble's parts.json, which holds the rig_scale and the art's place", problems);
+  // Legacy scene records keep their existing checks; a declared package raster
+  // goes through the same file binding reader as rig, check, sheet and propose.
+  if (isRecord(parts) && 'painting_in_rig' in parts) {
+    try { readParts(join(dir, 'parts.json')); }
+    catch (err) {
+      if (!(err instanceof PartsError)) throw err;
+      problems.push(...err.problems);
+    }
+  }
   const rigRaw = readJson(join(dir, 'rig', 'rig.json'), "the rig stage's rig.json", problems);
   const motionRaw = readJson(join(dir, 'rig', 'motion.json'), "the rig stage's motion.json", problems);
   const unknown = (where: string, obj: unknown, keys: readonly string[]): void => {

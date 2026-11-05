@@ -102,7 +102,7 @@ import { CONTROL_SUFFIX, withAnimations } from './motion.ts';
 import type { PaletteError } from './palette.ts';
 import { type LayerSet, readLayers } from './layers.ts';
 import { placeBoneEntriesForSkeleton, poseBoneEntriesForDrawn, REGISTER_OFFSET_BAR, REGISTER_SCALE_BAR, registeredWithinBar, registerSkeleton, SKELETON_LIMB_BONES, skeletonDrawnLength, skeletonLimbJoints } from './limbs.ts';
-import { type AlternatePartsRecord, FRONT_SUFFIX, type PartRecord, readParts, type RecompositeRecord, type SingleRunPad, tagOf, writeParts } from './parts.ts';
+import { type AlternatePartsRecord, PAINTING_IN_RIG_FILE, FRONT_SUFFIX, type PartRecord, readParts, type RecompositeRecord, type SingleRunPad, tagOf, writeParts } from './parts.ts';
 import { encodePngBytes, readPng, writePng } from './raster/png.ts';
 import type { Raster } from './raster/types.ts';
 import { type Mask, newMask } from './raster/types.ts';
@@ -818,6 +818,10 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   mkdirSync(dirname(outs.partsJson), { recursive: true });
   mkdirSync(dirname(outs.recomposite), { recursive: true });
   mkdirSync(dirname(outs.errorMap), { recursive: true });
+  const paintingBytes = encodePngBytes(result.paintingInRig);
+  result.parts.painting_in_rig = { path: PAINTING_IN_RIG_FILE,
+    sha256: createHash('sha256').update(paintingBytes).digest('hex'), resample: 'lanczos3-rgb-opaque' };
+  writeFileSync(join(dirname(outs.partsJson), PAINTING_IN_RIG_FILE), paintingBytes);
   writeParts(outs.partsJson, result.parts);
   const residualPath = join(dirname(outs.partsJson), EDGE_RESIDUAL_FILE);
   if (result.edgeResiduals === undefined) rmSync(residualPath, { force: true });
@@ -2428,7 +2432,7 @@ export interface BuildRunners {
 }
 
 /** Every path `build` writes under `--out`, relative — and so every path it clears first. */
-export const BUILD_OWNS: readonly string[] = ['parts', 'parts.json', 'recomposite_rig.png', ERROR_MAP_FILE, 'rig', 'check', 'idle.gif', 'idle.png', 'idle-indexed.png'];
+export const BUILD_OWNS: readonly string[] = ['parts', 'parts.json', PAINTING_IN_RIG_FILE, 'recomposite_rig.png', ERROR_MAP_FILE, 'rig', 'check', 'idle.gif', 'idle.png', 'idle-indexed.png'];
 
 export type BuildStage = 'assemble' | 'rig' | 'check' | 'loop' | 'artifact';
 

@@ -138,6 +138,7 @@ import {
   resize,
   warpAffine,
 } from './raster/index.ts';
+import { warpSupport } from './raster/warp.ts';
 import { pyRound } from './round.ts';
 import { ARM_MERGED_SPLIT_TAGS, AUTHOR_NO_ROLE, type LayerTagReading, readAuthorTag, readLayerTag } from './tags.ts';
 
@@ -3067,6 +3068,12 @@ export function pushBackFringe(
  * under a subset set's actual cover instead of recolouring it to the painting.
  * (`assemble_parts.py` `main`, "5. seam override".)
  */
+interface RegionSeamDecisions {
+  record?: Map<string, Uint8Array>;
+  baseline?: ReadonlyMap<string, Uint8Array>;
+  support?: ReadonlyMap<string, Mask>;
+}
+
 export function seamOverride(
   parts: PlacedPart[],
   srcr: Raster,
@@ -3075,6 +3082,7 @@ export function seamOverride(
   keep: ReadonlyArray<Mask | null> | null = null,
   turnMovingPair: ((a: string, b: string) => boolean) | null = null,
   written?: (part: number, rigPixel: number) => void,
+  decisions?: RegionSeamDecisions,
 ): void {
   const { width: W } = srcr;
   const { top, cand } = seamCandidates(parts, srcr, rule, silhouette);
@@ -3084,6 +3092,9 @@ export function seamOverride(
       turnMovingPair === null
         ? []
         : parts.map((_, j) => j).filter((j) => j !== i && turnMovingPair(p.name, parts[j].record.name));
+    const decided = decisions?.record === undefined ? undefined : new Uint8Array(srcr.width * srcr.height);
+    if (decided !== undefined) decisions!.record!.set(p.name, decided);
+    const baseline = decisions?.baseline?.get(p.name), support = decisions?.support?.get(p.from);
     let n = 0;
     for (let y = 0; y < p.h; y++) {
       for (let x = 0; x < p.w; x++) {
@@ -3091,8 +3102,8 @@ export function seamOverride(
         const ry = p.y + y;
         const d = ry * W + rx;
         const s = (y * p.w + x) * 4;
-        if (keep?.[i]?.data[d] === 1 || cand[d] === 0 || top[d] !== i || image.data[s + 3] < CORE_ALPHA) continue;
-        if (
+        let admitted = !(keep?.[i]?.data[d] === 1 || cand[d] === 0 || top[d] !== i || image.data[s + 3] < CORE_ALPHA);
+        if (admitted &&
           movingPeers.some((j) => {
             const pj = parts[j].record;
             const imgJ = parts[j].image.data;
@@ -3107,9 +3118,10 @@ export function seamOverride(
             }
             return false;
           })
-        ) {
-          continue;
-        }
+        ) admitted = false;
+        if (baseline !== undefined && support !== undefined && support.data[d] === 0) admitted = baseline[d] === 1;
+        if (!admitted) continue;
+        if (decided !== undefined) decided[d] = 1;
         const different = image.data[s] !== srcr.data[d * 4] || image.data[s + 1] !== srcr.data[d * 4 + 1] || image.data[s + 2] !== srcr.data[d * 4 + 2];
         image.data[s] = srcr.data[d * 4];
         image.data[s + 1] = srcr.data[d * 4 + 1];
@@ -4704,6 +4716,8 @@ export function softOcclusionLine(r: SoftOcclusionReading): string {
 }
 
 export interface AssembleResult {
+  /** The already-resampled opaque painting used by this assembly. */
+  paintingInRig: Raster;
   /** Report-only residual candidates, present after the visible edge pass. */
   edgeResiduals?: EdgeResidualReport;
   /** Report-only source re-take under actual soft front support (#825). */
@@ -4949,13 +4963,14 @@ export function retainRegionNeighbours(placed: PlacedPart[], before: readonly Pl
 export function assemble(input: AssembleInput): AssembleResult {
   if (input.regionTake === undefined) return assembleParts(input);
   const targets = regionTakeTargets(input.regionTake.targets, input.cuts, input.limbs);
-  const before = assembleParts({ ...input, full: input.regionTake.full, head: input.regionTake.head, regionTake: undefined }, targets);
-  return assembleParts(input, targets, before);
+  const counterfactual = input.projectRule === 'core' ? { cleanup: new Map<string, RunLayer[]>(), seam: new Map<string, Uint8Array>() } : undefined;
+  const before = assembleParts({ ...input, full: input.regionTake.full, head: input.regionTake.head, regionTake: undefined }, targets, null, counterfactual);
+  return assembleParts(input, targets, before, counterfactual);
 }
 
 /** The counterfactual is internal and is never emitted. Empty taken targets
  * may be recovered by a take, so only that counterfactual permits them. */
-function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, beforeTake: AssembleResult | null = null): AssembleResult {
+function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, beforeTake: AssembleResult | null = null, counterfactual?: { cleanup: Map<string, RunLayer[]>; seam: Map<string, Uint8Array> }): AssembleResult {
   const emptyTargets = beforeTake === null ? targets : undefined;
   const { source, extend, patches, seamRule, projectRule } = input;
   const authoredDepths = input.depth === undefined ? new Map<string, AuthoredUnitDepth>() : authoredUnitDepths(input);
@@ -5058,6 +5073,23 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   // A single run (issue #359) is read once: there is no head run to place, project or count ghosts for.
   for (const [run, set] of single ? ([['full', full]] as const) : ([['full', full], ['head', head]] as const)) {
     const layers = runLayers(set, input.resolution);
+    if (beforeTake === null) counterfactual?.cleanup.set(run, layers);
+    else if (counterfactual !== undefined) for (const layer of layers) {
+      const sourceLayer = set.layers.find(q => q.name === layer.tag);
+      const selection = sourceLayer?.regionSelection;
+      const baseline = counterfactual.cleanup.get(run)?.find(q => q.tag === layer.tag);
+      if (selection === undefined || baseline === undefined) continue;
+      const raw = placeLayer(sourceLayer!, input.resolution);
+      layer.opaqueRunPx = 0;
+      layer.ghostPx = 0;
+      const dx = single ? frame.fullPad : 0, dy = single ? frame.fullPadTop : 0;
+      for (let y = 0; y < input.resolution; y++) for (let x = 0; x < input.resolution; x++) {
+        const sx = x - dx, sy = y - dy, p = y * input.resolution + x;
+        if (sx < 0 || sy < 0 || sx >= selection.width || sy >= selection.height || selection.data[sy * selection.width + sx] === 0) layer.canvas.data[p * 4 + 3] = baseline.canvas.data[p * 4 + 3];
+        if (layer.canvas.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) layer.opaqueRunPx++;
+        else if (raw.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) layer.ghostPx++;
+      }
+    }
     if (run === 'full') fullTags.push(...layers.filter((l) => l.opaqueRunPx > 0).map((l) => l.tag));
     const rigLayers = layers.map((l) => layerToRig(l.canvas, frame, run));
     const rank = planRanks(layers.map((l) => l.tag), run, sourcePlan);
@@ -5961,7 +5993,13 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   for (const p of placed) if (p.record.depth !== undefined && artFiles.has(p.record.depth.image)) refuseIfAny([{ code: 'DEPTH_SHEET_UNAMBIGUOUS', object: p.record.depth.image, detail: 'collides with a part artwork filename; choose noncolliding part names before sheet emission' }]);
 
 
-  seamOverride(placed, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, keepInOrder, input.turnMovingPair ?? null, (i, p) => { writersInOrder[i][p] = AW.seamOverride; });
+  const regionSupport = new Map<string, Mask>();
+  if (beforeTake !== null && counterfactual !== undefined) for (const [run, set] of [['full', input.full], ['head', input.head]] as const) {
+    if (single && run === 'head') continue;
+    const map = runMap(frame, run), dx = single ? frame.fullPad : 0, dy = single ? frame.fullPadTop : 0;
+    for (const layer of set.layers) if (layer.regionSelection !== undefined) regionSupport.set(`${run}:${layer.name}`, warpSupport(layer.regionSelection, { sx: map.sx, sy: map.sx, tx: map.tx + dx * map.sx, ty: map.ty + dy * map.sx }, W, H, map.k < 1 ? 'bilinear' : 'bicubic'));
+  }
+  seamOverride(placed, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, keepInOrder, input.turnMovingPair ?? null, (i, p) => { writersInOrder[i][p] = AW.seamOverride; }, counterfactual === undefined ? undefined : beforeTake === null ? { record: counterfactual.seam } : { baseline: counterfactual.seam, support: regionSupport });
   placed.forEach((p, i) => {
     p.record.provenance = pixelProvenance(p.image, p.record.x, p.record.y, W, writersInOrder[i], editNames, 0, valueBaselines.get(p.record.from) ?? null);
     const depth = authoredDepths.get(p.record.name);
@@ -6007,6 +6045,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   return {
     ...(softOcclusion.length === 0 ? {} : { softOcclusion }),
     ...(!single ? { cropClipped: cropClippedLines(plan, extend, (run, tag) => rig.get(`${run}:${tag}`) ?? null, frame) } : {}),
+    paintingInRig: srcr,
     parts: {
       rig_size: [W, H],
       scale_rig_per_source: frame.S,

@@ -1,0 +1,14 @@
+{
+  "spec": "spine-parts-requirements/1",
+  "fps": 12,
+  "requirements": [],
+  "pinholes": {
+    "required": true
+  },
+  "boundary_colour": {
+    "max_step_excess": 12
+  },
+  "seam_over_motion": {
+    "required": true
+  }
+}
