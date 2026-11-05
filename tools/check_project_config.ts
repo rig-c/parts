@@ -47,7 +47,7 @@ export function runProjectConfigChecks(dir: string, say: Say): void {
   }
   const absent = join(dir, 'assemble-absent', 'rig');
   const override = join(dir, 'assemble-override', 'rig');
-  const files = existsSync(join(absent, 'parts')) ? ['parts.json', ...readdirSync(join(absent, 'parts')).map(f => `parts/${f}`)] : []; 
+  const files = existsSync(join(absent, 'parts')) ? ['parts.json', 'painting_in_rig.png', ...readdirSync(join(absent, 'parts')).map(f => `parts/${f}`)] : [];
   say('CF9535_EXPLICIT_OVERRIDE_PRESERVES_DEFAULT_PART_BYTES', files.length > 0 && files.every(f => existsSync(join(override, f)) && readFileSync(join(absent, f)).equals(readFileSync(join(override, f)))), `${files.length} part records/PNGs compare byte-identically`);
   const bad = run('assemble', 'invalid', cfg('bad'), 'visible');
   say('CF9536_INVALID_CONFIG_IS_NOT_HIDDEN_BY_A_CLI_OVERRIDE', bad.status === 1 && bad.text.includes('CONFIG_FIELD_TYPE: config.assemble.project'), bad.text);

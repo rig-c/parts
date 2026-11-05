@@ -219,7 +219,7 @@ function runCropTakeChecks(dir: string, say: Say): void {
     'the optional whole-layer declaration is accepted by early layers, assemble and full config readers');
   const records = readParts(join(dir, '..', 'positive', 'out', 'parts.json'));
   records.parts[0].taken_layers = exact.takenLayers;
-  const recordsPath = join(dir, 'parts.json');
+  const recordsPath = join(dir, '..', 'positive', 'out', 'crop-reader.json');
   writeFileSync(recordsPath, serializeParts(records));
   say('CROP_TRANSPORT_SURVIVES_ORDERED_PARTS_WRITER_AND_READER',
     JSON.stringify(readParts(recordsPath).parts[0].taken_layers) === JSON.stringify(exact.takenLayers),

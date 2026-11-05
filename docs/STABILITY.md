@@ -258,6 +258,18 @@ every number) are AUTHORING §3's tables, and the loader refuses any other by na
 
 ## Files this package writes
 
+`assemble` and `build` declare `painting_in_rig` in parts.json as
+`{ path: "painting_in_rig.png", sha256, resample: "lanczos3-rgb-opaque" }`.
+The sibling PNG is the exact rig-resolution raster assemble used: source RGB
+forced opaque before PIL-exact Lanczos3 resizing to `rig_size`. Package readers
+verify its file hash, dimensions and opaque alpha. Legacy manifests may omit it.
+Readers released through 2.17.0 refuse this new top-level key as
+`PARTS_KEY_KNOWN`; use a reader that supports the declaration.
+Adding the declaration makes earlier revision and depth receipts stale under
+their existing whole-file parts.json identity contract; regenerate them.
+Check's setup-painting comparison still flattens over its backdrop at source
+resolution before resizing; it can differ for non-opaque paintings.
+
 | file | written by | what is stable |
 | --- | --- | --- |
 | `parts.json`, `parts/<name>.png` | `assemble`, `build` | one record per part: `from` (`<run>:<tag>` with a See-through v3 tag, `<run>:author:<label>` for a layer the author made — issue #256, read by no role rule — or `painting:<name>` for a patch), `cut_from` on a cut's piece only (the plan part it was cut from, issue #230), `limb` on a limb segment's part only (issue #349: `name`, `segment`, `of`, `bone`, and below a joint `joint`, `range` when the config segment declares one (issue #360), and `cap` — `at`, `width`, `radius`, `box`, `layer_px`, `image_px` with a cap image, `image_layer` after it when that image was a hidden-art layer — issue #359, `<run>:<layer>:hidden` — `missing_px`, `short_px` (`left`, `right`) after it only when `missing_px` is above 0 (issue #557, additive), `excluded_px` after them only on a subset set's limb part whose cap the set exclusion took a pixel of (issue #603, additive: each pixel taken out of the count it was in, so the cap's counts are the written PNG's), then `shape` and `upper_px` under the segment's `cap_shape` — `upper_px` without the shape only when the upper segment gave a pixel (issue #557, additive) — and after them `lower_px`, `lower_kept_px` and `lower_missing_px` under `cap_shape: "ball"` (issue #579, additive), and `edge`, `feather_radius` and `feathered_px` under its `edge`, and `cut_band`, `cut_offset`, `cut_at`, `cut_crossed`, `joint_crossed`, `band_px` and `stroke_luma_max` (when the band has a split) under its `cut_band`, issue #360), the box `x`, `y`, `w`, `h` (rig px), the pixel counts `src/parts.ts` documents (`opaque_px`, `visible_px`, `occluded_px`, `projected_core_px`, `source_px_taken`, `visible_not_projected_px`, `refused_drift_px`, `merged_px` — on a subset set's limb part counted after the set exclusion, issue #603 — `seam_override_px`, and `fringe_pushed_back` when not empty); per-part `provenance` (`unchanged_layer_px`, `hand_px`, `automatic_px`, `edits`, `automatic`, additive, issue #823); optional top-level `motion_seams`, `alternates` and `cut_ownership` (one row per cut, independent of RGBA equality, issue #823); `rig_size`, `scale_rig_per_source`, `ghost_px`, `recomposite`, and `scene` (`figure_alpha_above`, `figure_px`, `figure_mask`) under `config.scene` only, with the figure's mask `figure_rig.png` beside the recomposite (issue #242); `single_run_pad` (`file_size`, `side`, `left`, `top`) last, only for one run whose file is not the `seethrough.resolution` square (issue #366) |

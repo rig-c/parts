@@ -141,7 +141,7 @@ export function runPaintingExtensionChecks(dir: string, say: (name: string, ok: 
   const record=parsed.parts.find(p=>p.name==='upper')!, image=readPng(join(diskA,'parts/upper.png'));
   say('PE14_REAL_STAGE_WRITES_READER_VALID_PARTS_AND_REPEATS_EXACTLY', record.provenance?.automatic.find(e=>e.stage==='paintingExtension')?.px===24 &&
     record.opaque_px===88 && image.width===8 && image.height===11 &&
-    ['parts.json','parts/upper.png','parts/lower.png','recomposite_rig.png','recomposite_error_rig.png'].every(p=>readFileSync(join(diskA,p)).equals(readFileSync(join(diskB,p)))),
+    ['parts.json', 'painting_in_rig.png','parts/upper.png','parts/lower.png','recomposite_rig.png','recomposite_error_rig.png'].every(p=>readFileSync(join(diskA,p)).equals(readFileSync(join(diskB,p)))),
     `disk upper ${record.opaque_px} px, ${image.width}x${image.height}, provenance ${JSON.stringify(record.provenance)}; repeated outputs identical`);
 
   const limbCfg = paintingExtensionConfig([{...PAINTING_EXTENSION,part:'sleeve_end'}]);
