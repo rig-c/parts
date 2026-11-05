@@ -10,13 +10,15 @@ import { readPng } from './raster/png.ts';
 import { resize } from './raster/resize.ts';
 import { newMask, newRaster, type Raster } from './raster/types.ts';
 import type { SetupPainting } from './setuppainting.ts';
-import type { TakeLayers } from './takelayers.ts';
+import { cropGeometry, transportLayer, type TakeLayers } from './takelayers.ts';
 
 export interface TakeRegion {
   run: Run;
   run_dir: string;
   st_input: string;
   part: string;
+  /** Same painting-space crop and transport as a whole-layer take. */
+  crop?: TakeLayers['crop'];
   /** One integer pixel on the target run canvas, x right and y down. */
   seed: [number, number];
   /** PNG bytes, explicitly bound to the stage source or a separate painting. */
@@ -153,8 +155,13 @@ export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleCon
     let supplied: Raster;
     try { supplied = readPng(resolve(dirname(resolve(configPath)), declaration.st_input)); }
     catch { return refuse('ASSEMBLE_REGION_TAKE_GEOMETRY', at, `st_input "${declaration.st_input}" must name the original readable donor input PNG so its geometry can be checked`); }
-    if ((declaration.run === 'head' && runs.single) || target === null || donor.canvas.w !== set.canvas.w || donor.canvas.h !== set.canvas.h || supplied.width !== target.width || supplied.height !== target.height || supplied.data.some((byte, i) => byte !== target.data[i])) {
+    if (declaration.crop === undefined && ((declaration.run === 'head' && runs.single) || target === null || donor.canvas.w !== set.canvas.w || donor.canvas.h !== set.canvas.h || supplied.width !== target.width || supplied.height !== target.height || supplied.data.some((byte, i) => byte !== target.data[i]))) {
       return refuse('ASSEMBLE_REGION_TAKE_GEOMETRY', at, `donor canvas ${donor.canvas.w}x${donor.canvas.h}, target canvas ${set.canvas.w}x${set.canvas.h}, donor input ${supplied.width}x${supplied.height}; equal canvases and exact target input RGBA are required to establish one crop; cropped donors await #973`);
+    }
+    if (target === null || (declaration.run === 'head' && runs.single)) return refuse('ASSEMBLE_REGION_TAKE_GEOMETRY', at, 'a target run input is required for a declared crop');
+    const geometry = declaration.crop === undefined ? undefined : cropGeometry(declaration, painting, target, donor, set, inputs, at);
+    if (geometry !== undefined && (supplied.width !== geometry.expected.width || supplied.height !== geometry.expected.height || supplied.data.some((byte, i) => byte !== geometry.expected.data[i]))) {
+      return refuse('ASSEMBLE_REGION_TAKE_GEOMETRY', at, `donor input ${supplied.width}x${supplied.height}; exact declared square-padded crop RGBA ${geometry.expected.width}x${geometry.expected.height} is required`);
     }
     const base = lists[declaration.run].find(layer => layer.name === plan[2]);
     const material = donor.layers.find(layer => layer.name === plan[2]);
@@ -165,7 +172,8 @@ export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleCon
     const colourInputs = reference === undefined ? inputs : makeInputs(referencePainting, cfg, 'region take reference');
     const colourTarget = declaration.run === 'head' ? colourInputs.head! : target === painting ? referencePainting : colourInputs.full;
     const source = resize(colourTarget, set.canvas.w, set.canvas.h, 'lanczos3');
-    const derived = deriveTakenRegion(base, material, source, declaration.seed, tolerance, at);
+    const transported = geometry === undefined ? material : transportLayer(material, donor, set, supplied, declaration, geometry.map, geometry.exact, at).layer;
+    const derived = deriveTakenRegion(base, transported, source, declaration.seed, tolerance, at);
     lists[declaration.run] = lists[declaration.run].map(layer => layer === base ? derived.layer : layer);
     const reading: RegionReading = { part: declaration.part, run: declaration.run, run_dir: declaration.run_dir, ...derived.reading };
     const pad = target === painting ? [0, 0] : declaration.run === 'head' ? inputs.headBox! : [-inputs.padLeft, -inputs.padTop];

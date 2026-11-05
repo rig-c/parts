@@ -2510,11 +2510,19 @@ function checkTakeLayers(c: Check, value: Json, plan: string[] | null = null): v
     const p = `${at}[${i}]`;
     const region = isPlainObject(v) && ('part' in v || 'seed' in v);
     const o = region
-      ? c.object(p, v, ['run', 'run_dir', 'st_input', 'part', 'seed'], ['reference'])
+      ? c.object(p, v, ['run', 'run_dir', 'st_input', 'part', 'seed'], ['reference', 'crop'])
       : c.object(p, v, ['run', 'run_dir', 'st_input', 'tags'], ['crop']);
     if (o === null) return;
     if (o.run !== 'full' && o.run !== 'head') c.fail('CONFIG_FIELD_TYPE', p + '.run', '"full" or "head" is required');
     for (const k of ['run_dir', 'st_input']) c.string(`${p}.${k}`, o[k]);
+    if ('crop' in o) {
+      const crop = c.object(`${p}.crop`, o.crop, ['box', 'resample'], []);
+      if (crop !== null) {
+        const box = crop.box;
+        if (!(Array.isArray(box) && box.length === 4 && box.every(n => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0) && box[2] > box[0] && box[3] > box[1])) c.fail('CONFIG_FIELD_TYPE', `${p}.crop.box`, 'requires [left, top, right, bottom], nonnegative safe integers with positive width/height in source-painting pixels');
+        if (crop.resample !== 'bilinear') c.fail('CONFIG_FIELD_TYPE', `${p}.crop.resample`, '"bilinear" is required explicitly');
+      }
+    }
     if (region) {
       if (o.reference !== undefined) {
         const r = c.object(`${p}.reference`, o.reference, ['sha256'], ['source', 'painting']);
@@ -2535,14 +2543,6 @@ function checkTakeLayers(c: Check, value: Json, plan: string[] | null = null): v
         c.fail('CONFIG_FIELD_TYPE', `${p}.seed`, 'requires [x, y], nonnegative safe integers in target-run canvas pixels');
       }
       return;
-    }
-    if ('crop' in o) {
-      const crop = c.object(`${p}.crop`, o.crop, ['box', 'resample'], []);
-      if (crop !== null) {
-        const box = crop.box;
-        if (!(Array.isArray(box) && box.length === 4 && box.every(n => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0) && box[2] > box[0] && box[3] > box[1])) c.fail('CONFIG_FIELD_TYPE', `${p}.crop.box`, 'requires [left, top, right, bottom], nonnegative safe integers with positive width/height in source-painting pixels');
-        if (crop.resample !== 'bilinear') c.fail('CONFIG_FIELD_TYPE', `${p}.crop.resample`, '"bilinear" is required explicitly');
-      }
     }
     if (!c.array(p + '.tags', o.tags, true)) return;
     (o.tags as Json[]).forEach((tag, j) => {
