@@ -1858,10 +1858,10 @@ export function seamDrawingSignature(input: {
   return JSON.stringify(seamSourceValue({ slot: input.slot, attachment: input.attachment, source, image: input.image, vertices: input.vertices, color: input.color }));
 }
 
-/** File-only boundary-colour size checks; unavailable references remain the late measurement's responsibility. */
+/** File-only rig-image padding checks after the parts loader has validated each PNG against its record. */
 export function boundaryColourSizeProblems(inp: CheckInputs): Problem[] {
   if (inp.parts === null) return [];
-  const records = new Map(inp.parts.parts.map(p => [p.name, p]));
+  const records = new Set(inp.parts.parts.map(p => p.name));
   const imagesDir = typeof inp.rig.images === 'string' ? resolve(inp.rigDir, inp.rig.images) : join(inp.rigDir, 'images');
   const problems: Problem[] = [];
   const seen = new Set<string>();
@@ -1874,16 +1874,14 @@ export function boundaryColourSizeProblems(inp: CheckInputs): Problem[] {
         if (!isRecord(source) || typeof source.image !== 'string' || seen.has(source.image)) continue;
         const image = source.image;
         seen.add(image);
-        const name = image.replace(/\.png$/, ''), rec = records.get(name);
+        const name = image.replace(/\.png$/, '');
         const partPng = join(inp.partsDir, `${name}.png`), rigPng = join(imagesDir, image);
-        if (rec === undefined || !existsSync(partPng) || !existsSync(rigPng)) continue;
+        if (!records.has(name) || !existsSync(partPng) || !existsSync(rigPng)) continue;
         const src = readPng(partPng), rigImg = readPng(rigPng);
         const dx = rigImg.width - src.width, dy = rigImg.height - src.height;
-        const reason = src.width !== rec.w || src.height !== rec.h
-          ? `parts/${name}.png is ${src.width}x${src.height}, its record ${rec.w}x${rec.h}`
-          : dx !== dy || dx < 0 || dx % 2 !== 0
-            ? `the rig image "${image}" is ${rigImg.width}x${rigImg.height}, not parts/${name}.png's ${src.width}x${src.height} with one even pad on every side`
-            : null;
+        const reason = dx !== dy || dx < 0 || dx % 2 !== 0
+          ? `the rig image "${image}" is ${rigImg.width}x${rigImg.height}, not parts/${name}.png's ${src.width}x${src.height} with one even pad on every side`
+          : null;
         if (reason !== null) problems.push({ code: BOUNDARY_COLOUR_UNMEASURED_CODE, object: `slot "${slot}" (image "${image}")`, detail: reason });
       }
     }

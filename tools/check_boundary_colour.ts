@@ -96,7 +96,7 @@ export function runBoundaryColourChecks(dir: string, say: Say, rigc: RigcRunner)
   const recordMismatch = rigFor('record-mismatch');
   writePng(join(recordMismatch, 'parts', 'front.png'), newRaster(CHECK_PARTS[1].w + 1, CHECK_PARTS[1].h));
   const badRecord = probe('record-mismatch', recordMismatch, sizeReq);
-  say('BK16_PART_RECORD_SIZE_REFUSED_WITHOUT_BUILD_OR_RENDER', badRecord.builds === 0 && badRecord.renders === 0 && badRecord.problems.length === 1 && badRecord.problems[0].code === BOUNDARY_COLOUR_UNMEASURED_CODE && badRecord.problems[0].detail === `parts/front.png is ${CHECK_PARTS[1].w + 1}x${CHECK_PARTS[1].h}, its record ${CHECK_PARTS[1].w}x${CHECK_PARTS[1].h}`, JSON.stringify(badRecord));
+  say('BK16_PART_RECORD_SIZE_REFUSED_WITHOUT_BUILD_OR_RENDER', badRecord.builds === 0 && badRecord.renders === 0 && badRecord.problems.length === 1 && badRecord.problems[0].code === 'CHECK_PART_PNG_MATCHES_BOX' && badRecord.problems[0].object === 'part "front"' && badRecord.problems[0].detail === `${join(recordMismatch, 'parts', 'front.png')} is ${CHECK_PARTS[1].w + 1}x${CHECK_PARTS[1].h}; parts.json's box is ${CHECK_PARTS[1].w}x${CHECK_PARTS[1].h}`, JSON.stringify(badRecord));
   const logs = new Map<string, string[]>();
   const run = (name: string, input: string, requirement?: string) => {
     const lines: string[] = [];
