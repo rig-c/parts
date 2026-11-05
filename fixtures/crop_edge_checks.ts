@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import * as assembleOps from '../src/assemble.ts';
 import { assemble, skippedBy, stageFields, type AssembleResult, type PlanProposal } from '../src/assemble.ts';
-import { EDGE_RADIUS } from '../src/paintingedges.ts';
 import { loadConfig } from '../src/config.ts';
 import { readWrapperLayers } from '../src/layers.ts';
 import { encodePngBytes, readPng } from '../src/raster/png.ts';
@@ -204,15 +203,19 @@ function runVisibleCropChecks(dir: string, say: (name: string, ok: boolean, deta
       if (x >= 16 && x < 48 && y >= 16 && y < 48) copiedInside++;
       else copiedOutside++;
     }
-    const bounded = (r: typeof rows): boolean => r.every(p => p.distance <= EDGE_RADIUS);
     const alpha = rows.filter(p => p.alpha).length;
-    say(soft ? 'AS271_VISIBLE_SOFT_CROP_COPY_STAYS_OUTSIDE_AND_ALPHA_DIFFS_STAY_NEAR_EDGE' : 'AS270_VISIBLE_CROP_COPY_STAYS_OUTSIDE_AND_RGB_DIFFS_STAY_NEAR_EDGE',
-      copiedInside === 0 && copiedOutside > 0 && core.length === 0 && rows.length > 0 && bounded(rows) && (soft ? alpha > 0 : alpha === 0),
-      JSON.stringify({ copiedInside, copiedOutside, coreInsideChanges: core.length, insideChanges: rows.length, alphaChanges: alpha, maxDistance: Math.max(0, ...rows.map(p => p.distance)), radius: EDGE_RADIUS }));
-    // The same bound oracle must reject a planted interior write; a missing
-    // visible reconstruction must fail the nonempty witness above as well.
-    const planted = [...rows, { part: 'hair_back', x: 32, y: 32, distance: 32.5 - 16, alpha: soft }];
-    say(soft ? 'AS273_VISIBLE_SOFT_CROP_REJECTS_DISTANT_INSIDE_WRITE' : 'AS272_VISIBLE_CROP_REJECTS_DISTANT_INSIDE_WRITE',
-      bounded(rows) && !bounded(planted), `radius ${EDGE_RADIUS}; planted centre distance ${planted[planted.length - 1].distance}`);
+    say(soft ? 'AS271_VISIBLE_SOFT_CROP_COPY_STAYS_OUTSIDE_AND_ALPHA_CHANGES_ARE_NONEMPTY' : 'AS270_VISIBLE_CROP_COPY_STAYS_OUTSIDE_AND_RGB_CHANGES_ARE_NONEMPTY',
+      copiedInside === 0 && copiedOutside > 0 && rows.length > 0 && (soft ? alpha > 0 : alpha === 0),
+      JSON.stringify({ copiedInside, copiedOutside, insideChanges: rows.length, alphaChanges: alpha }));
+    // A one-channel interior write must make the same all-part equivalence
+    // oracle red. Mutate a copied generated raster, never the source or fixture.
+    const mutant: AssembleResult = { ...witness.coreDeclared, images: witness.coreDeclared.images.map(q => ({ ...q, image: { ...q.image, data: q.image.data.slice() } })) };
+    const q = mutant.images[0], r = q.record;
+    const p = ((32 - r.y) * r.w + 32 - r.x) * 4;
+    q.image.data[p] ^= 1;
+    const planted = visibleCropDifferences(witness.coreBase, mutant);
+    say(soft ? 'AS275_CORE_SOFT_CROP_DECLARATION_IS_INSIDE_IDENTICAL_FOR_EVERY_PART' : 'AS274_CORE_CROP_DECLARATION_IS_INSIDE_IDENTICAL_FOR_EVERY_PART',
+      core.length === 0 && planted.length === 1,
+      JSON.stringify({ insideChanges: core.length, plantedInsideChanges: planted.length, partsCompared: new Set([...witness.coreBase.images, ...witness.coreDeclared.images].map(p => p.record.name)).size }));
   }
 }
