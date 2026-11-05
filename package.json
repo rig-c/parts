@@ -64,7 +64,7 @@
     "smoke": "bun scripts/install_smoke.ts",
     "typecheck": "bunx tsc --noEmit",
     "lint": "bunx eslint .",
-    "prepublishOnly": "bun run typecheck && bun run lint && bun run selftest"
+    "prepublishOnly": "node scripts/prepublish.cjs"
   },
   "dependencies": {
     "ag-psd": "^31.0.2",
