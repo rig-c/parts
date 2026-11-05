@@ -4966,7 +4966,6 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   const patchIds = patches.map((_, i) => editId(`patches[${i}]`));
   const layerWriters = new Map<string, Int32Array>();
   const valueBaselines = new Map<string, ValueBaseline | null>();
-  const cleanedSoftCover = new Map<string, Mask>();
   // Extend-only rasters are still projected/merged, but are never emitted as own sources.
   const readKeys = new Set(sourcePlan.map(([, run, tag]) => `${run}:${tag}`));
   const rig = new Map<string, Raster>();
@@ -5040,17 +5039,6 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       }
       // Keep only samples that could equal a final opaque pixel; full raw and
       // prepared normalization temporaries end with this layer's callback.
-      // A low-alpha source fringe removed by cleanGhosts still contributed to
-      // the painting. Retain its source footprint only for explicit opt-in;
-      // final piece regions below still decide which side of a cut owns it.
-      if ((input.keepUnderOccluders?.length ?? 0) > 0 && raw !== null && preparedWriter === 0) {
-        let footprint: Mask | null = null;
-        for (let p = 0; p < W * H; p++) if (raw.data[p * 4 + 3] > 0 && raw.data[p * 4 + 3] <= OPAQUE_ALPHA_ABOVE && rigLayers[i].data[p * 4 + 3] === 0) {
-          footprint ??= newMask(W, H);
-          footprint.data[p] = 1;
-        }
-        if (footprint !== null) cleanedSoftCover.set(key, footprint);
-      }
       valueBaselines.set(key, raw === null ? null : compactValueBaseline(raw));
       return ids;
     });
@@ -5529,12 +5517,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       if (!enabled && (writer !== AW.sourceProjection || rgbaEqual(b.r.data, p * 4, raw, q))) continue;
       if (writer !== AW.sourceProjection && !rgbaEqual(b.r.data, p * 4, raw, q)) continue;
       for (let j = stack.length - 1; j > i; j--) {
-        let alpha = stack[j].image.data[p * 4 + 3];
-        const frontSlot = order[j];
-        if (alpha === 0 && enabled && !('patch' in frontSlot)) {
-          const cover = pieceAt(frontSlot).b;
-          if ((cover.region === null || cover.region.data[p] === 1) && cover.trace.from[p] < 0 && cover.trace.ring.data[p] === 0 && cleanedSoftCover.get(cover.key)?.data[p] === 1) alpha = OPAQUE_ALPHA_ABOVE;
-        }
+        const alpha = stack[j].image.data[p * 4 + 3];
         if (alpha === 0) continue;
         if (alpha < CORE_ALPHA) {
           const different = !rgbaEqual(b.r.data, p * 4, raw, q);
