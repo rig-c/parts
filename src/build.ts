@@ -335,17 +335,18 @@ export function frontOrdered<T extends { record: { name: string } }>(items: read
 
 /** Read, assemble, and write only after every refusal has had its chance. Throws a PartsError on a refusal, having written nothing. */
 export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, log: Log): AssembleResult {
-  const cfg = loadEarlyConfig(input.config, 'assemble');
-  const requirements = buildRequirements(input.requirements, cfg.requirements, input.config);
   const requirementsFile = input.requirements === undefined ? null : readRequirements(input.requirements);
   const materialAsked = requirementsFile?.cut_material !== undefined;
   // Issue #944: the pinhole bar is measured only when the requirements file declares it required.
   const pinholesAsked = requirementsFile !== null && pinholesRequired(requirementsFile);
   // The early door: assemble runs before propose has drafted bones, meshes,
   // regions and motion, so it requires only what it reads (issue #20).
+  const cfg = loadEarlyConfig(input.config, 'assemble', input.project);
   const supportDeclarations = JSON.stringify(cfg.assemble.cuts ?? []);
   const seam = input.seam ?? cfg.assemble.seam ?? DEFAULT_SEAM_RULE;
   const project = input.project ?? cfg.assemble.project ?? DEFAULT_PROJECT_RULE;
+  const requirements = cfg.assemble.ground === 'busy' && project === 'visible'
+    ? buildRequirements(input.requirements, cfg.requirements, input.config) : null;
   const src = readSource(input.source);
   const read = readRuns(input.full, input.head);
   // Issue #946: every declared receipt is held to its file, and under `required` every edited image needs one, before anything is assembled.
@@ -429,6 +430,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   // Issue #664: each limb segment part with a declared front slot -> the part its front slot follows.
   const frontAfter = new Map<string, string>();
   for (const limb of Object.values(fields.limbs ?? {})) for (const p of limb.front?.parts ?? []) frontAfter.set(p, (limb.front as { after: string }).after);
+  const primaryPaintingHash = declaredFigure === undefined ? null : createHash('sha256').update(readFileSync(input.source)).digest('hex');
   for (const alt of mergedAlts) {
     if (alt.source === undefined || alt.full === undefined) {
       altProblems.push({
@@ -677,6 +679,16 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         : altFront.size === 0
           ? setExclusions(result.images, exW, exH, altSegParts, replacedSet)
           : altSegParts.flatMap((sp) => setExclusions(altFront.has(sp) ? frontOrdered(result.images, new Set([sp]), frontAfter) : result.images, exW, exH, [sp], replacedSet));
+    const alternateFigure = declaredFigure !== undefined &&
+      createHash('sha256').update(readFileSync(alt.source)).digest('hex') === primaryPaintingHash ? declaredFigure : undefined;
+    if (declaredFigure !== undefined && alternateFigure === undefined) {
+      const notice = {
+        code: 'ASSEMBLE_ALT_FIGURE_MASK_OMITTED',
+        object: `alternate "${alt.name}"`,
+        detail: 'has different painting bytes; the primary figure mask is omitted',
+      };
+      log(`${notice.code}: ${notice.object} ${notice.detail}`);
+    }
     let altRes: ReturnType<typeof assemble>;
     try {
       altRes = assemble({
@@ -704,7 +716,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         ...(fields.headFaceUnderfill === undefined ? {} : { headFaceUnderfill: fields.headFaceUnderfill }),
         ...(fields.yieldRefused === undefined ? {} : { yieldRefused: fields.yieldRefused }),
         ...(fields.ground === undefined ? {} : { ground: fields.ground }),
-        ...(declaredFigure === undefined ? {} : { declaredFigure }),
+        ...(alternateFigure === undefined ? {} : { declaredFigure: alternateFigure }),
         ...(fields.turnMovingPair === undefined ? {} : { turnMovingPair: fields.turnMovingPair }),
         ...(fields.turn === undefined ? {} : { turn: fields.turn, regions: fields.regions, meshes: fields.meshes, motion: fields.motion }),
         seamRule: seam,

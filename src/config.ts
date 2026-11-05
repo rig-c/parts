@@ -1,5 +1,5 @@
 import { SEAM_RULES, type SeamRule } from './seamrule.ts';
-import { GROUNDS, type Ground, PROJECT_RULES, type ProjectRule } from './projectrule.ts';
+import { DEFAULT_PROJECT_RULE, GROUNDS, type Ground, PROJECT_RULES, type ProjectRule } from './projectrule.ts';
 import type { TakeDeclaration } from './takeregion.ts';
 import { paintingExtensionProblems, type PaintingExtension } from './paintingextension.ts';
 import { baseAnchorProblems, type BaseAnchor } from './baseanchor.ts';
@@ -1721,7 +1721,7 @@ export function parseEarlyConfig(raw: Json, door: EarlyDoor): PaintConfig | Earl
 }
 
 /** The early loader with, when `base` is the config's directory, the pose file `generation.control.skeleton` names read beside it. */
-function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): { config: PaintConfig | EarlyConfig | AssembleConfig; pose: ControlPose | null } {
+function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null, project?: ProjectRule): { config: PaintConfig | EarlyConfig | AssembleConfig; pose: ControlPose | null } {
   const c = new Check();
   // `generation` is taken out of the generic presence check so its absence can
   // say what the block has to hold, rather than only that it is missing.
@@ -1762,7 +1762,9 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
     }
   }
   if (door === 'assemble') {
-    if ('requirements' in t && c.string('config.requirements', t.requirements) && base !== null) checkRequirementsFile(c, configFilePath('requirements', base, t.requirements) as string);
+    const busyVisible = isPlainObject(t.assemble) && t.assemble.ground === 'busy' &&
+      (project ?? t.assemble.project ?? DEFAULT_PROJECT_RULE) === 'visible';
+    if (busyVisible && 'requirements' in t && c.string('config.requirements', t.requirements) && base !== null) checkRequirementsFile(c, configFilePath('requirements', base, t.requirements) as string);
     if ('seethrough' in t) checkSeeThrough(c, t.seethrough);
     const made = 'assemble' in t ? checkAssemble(c, t.assemble, door) : { parts: [], patches: [], cuts: [] };
     checkProposedRigScale(c, t);
@@ -1813,9 +1815,9 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
 
 export function loadEarlyConfig(path: string, door: 'paint'): PaintConfig;
 export function loadEarlyConfig(path: string, door: 'layers'): EarlyConfig;
-export function loadEarlyConfig(path: string, door: 'assemble'): AssembleConfig;
-export function loadEarlyConfig(path: string, door: EarlyDoor): PaintConfig | EarlyConfig | AssembleConfig {
-  return parseEarlyConfigFrom(readConfigFile(path), door, dirname(resolve(path))).config;
+export function loadEarlyConfig(path: string, door: 'assemble', project?: ProjectRule): AssembleConfig;
+export function loadEarlyConfig(path: string, door: EarlyDoor, project?: ProjectRule): PaintConfig | EarlyConfig | AssembleConfig {
+  return parseEarlyConfigFrom(readConfigFile(path), door, dirname(resolve(path)), project).config;
 }
 
 /**

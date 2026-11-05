@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { assembleConfig, writeAssembleFixture } from '../fixtures/assemble_fixture.ts';
 import { assembleStage } from '../src/build.ts';
+import { PartsError } from '../src/errors.ts';
 import { readPng, writePng } from '../src/raster/png.ts';
 import { runEdgeResidualChecks } from './check_edge_residual.ts';
 /**
@@ -134,6 +135,95 @@ export function runPaintingEdgeChecks(say: Say): void {
     say('ED9579_CONFIG_ONLY_MASK_RESTORES_WITHOUT_CUT_MATERIAL_OUTPUT',
       configMaskReading?.base === 255 && configMaskReading.alternate === 255 && !configMaskReading.materialOutput,
       JSON.stringify(configMaskReading));
+
+    const paintingCopy = join(directory, 'same-bytes.png');
+    writeFileSync(paintingCopy, readFileSync(input.source));
+    const differentPainting = readPng(input.source);
+    for (let y = 48; y < 80; y++) for (let x = 32; x < 64; x++) {
+      differentPainting.data.set([0, 0, 200, 255], (y * differentPainting.width + x) * 4);
+    }
+    const differentSource = join(directory, 'different.png');
+    writePng(differentSource, differentPainting);
+    const alternateReadings = ['omitted', 'different', 'same-bytes'].map(name => {
+      const out = join(directory, 'alternate-' + name), logs: string[] = [];
+      const result = assembleStage({ ...input, ...(name === 'omitted' ? {} : { requirements }),
+        alts: [{ name: 'variant', source: name === 'same-bytes' ? paintingCopy : differentSource,
+          full: input.full, head: input.head }] },
+      { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),
+        recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, line => logs.push(line));
+      const alternate = result.parts.alternates?.[0];
+      if (alternate === undefined) throw new Error('alternate fixture has no assembled record');
+      const record = alternate.records.find(part => part.name === 'topwear');
+      if (record === undefined) throw new Error('alternate fixture has no topwear');
+      const image = readPng(join(out, 'parts', alternate.slots.topwear + '.png'));
+      const images = Object.values(alternate.slots).sort().map(name =>
+        createHash('sha256').update(readFileSync(join(out, 'parts', name + '.png'))).digest('hex'));
+      return { name, record: JSON.stringify(alternate), images,
+        alpha: image.data[((30 - record.y) * image.width + 20 - record.x) * 4 + 3],
+        notices: logs.filter(line => line.startsWith('ASSEMBLE_ALT_FIGURE_MASK_OMITTED:')) };
+    });
+    say('ED9582_DIFFERENT_PAINTING_ALTERNATE_MATCHES_MASK_OMISSION_AND_NAMES_THE_SET',
+      alternateReadings[0].record === alternateReadings[1].record &&
+      JSON.stringify(alternateReadings[0].images) === JSON.stringify(alternateReadings[1].images) &&
+      alternateReadings[1].notices.length === 1 && alternateReadings[1].notices[0].includes('alternate "variant"'),
+      JSON.stringify(alternateReadings.map(row => ({ name: row.name, alpha: row.alpha, notices: row.notices }))));
+    say('ED9583_IDENTICAL_PAINTING_BYTES_AT_A_DIFFERENT_PATH_SHARE_THE_MASK',
+      alternateReadings[2].alpha === 255 && alternateReadings[2].notices.length === 0,
+      `same bytes at copied path restore alpha ${alternateReadings[2].alpha}; notices ${alternateReadings[2].notices.length}`);
+
+    const compatibilityModes = [
+      { ground: 'plain', project: 'visible' },
+      { ground: 'busy', project: 'core' },
+      { ground: 'busy', project: 'visible', override: 'core' },
+    ] as const;
+    const legacyReadings = compatibilityModes.map((mode, index) => {
+      const manifests = [false, true].map(declared => {
+        const configFile = join(directory, `legacy-${index}-${declared}.json`);
+        writeFileSync(configFile, JSON.stringify({ ...config,
+          assemble: { ...declaration, ground: mode.ground, project: mode.project },
+          ...(declared ? { requirements: 'absent-legacy-requirements.json' } : {}) }));
+        const out = join(directory, `legacy-output-${index}-${declared}`);
+        assembleStage({ ...input, config: configFile, ...('override' in mode ? { project: mode.override } : {}) },
+          { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),
+            recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, () => {});
+        return readdirSync(out, { recursive: true, withFileTypes: true }).filter(entry => entry.isFile())
+          .map(entry => join(entry.parentPath, entry.name)).sort()
+          .map(file => [relative(out, file), createHash('sha256').update(readFileSync(file)).digest('hex')]);
+      });
+      return { mode, identical: JSON.stringify(manifests[0]) === JSON.stringify(manifests[1]) };
+    });
+    say('ED9584_OUTSIDE_BUSY_VISIBLE_MISSING_CONFIG_REQUIREMENTS_PRESERVE_EVERY_OUTPUT_BYTE',
+      legacyReadings.every(row => row.identical), JSON.stringify(legacyReadings));
+    const precedenceConfig = join(directory, 'legacy-precedence.json');
+    writeFileSync(precedenceConfig, JSON.stringify({ ...config,
+      assemble: { ...declaration, ground: 'plain', seam: 'invalid' }, requirements: 'absent-legacy-requirements.json' }));
+    let precedence: string | null = null;
+    try {
+      const out = join(directory, 'precedence-output');
+      assembleStage({ ...input, config: precedenceConfig, requirements: join(directory, 'absent-explicit-requirements.json') },
+        { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),
+          recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, () => {});
+    } catch (error) {
+      if (!(error instanceof PartsError)) throw error;
+      precedence = error.problems[0]?.code ?? null;
+    }
+    say('ED9585_LEGACY_EXPLICIT_REQUIREMENTS_REFUSAL_PRECEDES_BROKEN_CONFIG',
+      precedence === 'REQUIREMENTS_FILE', `first refusal ${precedence}`);
+    const overrideConfig = join(directory, 'visible-override.json');
+    writeFileSync(overrideConfig, JSON.stringify({ ...config,
+      assemble: { ...declaration, project: 'core' }, requirements: 'absent-legacy-requirements.json' }));
+    let overrideRefusal: string | null = null;
+    try {
+      const out = join(directory, 'override-output');
+      assembleStage({ ...input, config: overrideConfig, project: 'visible' },
+        { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),
+          recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, () => {});
+    } catch (error) {
+      if (!(error instanceof PartsError)) throw error;
+      overrideRefusal = error.problems[0]?.code ?? null;
+    }
+    say('ED9586_VISIBLE_OVERRIDE_ACTIVATES_BUSY_REQUIREMENTS_VALIDATION',
+      overrideRefusal === 'CONFIG_FILE_PRESENT', `first refusal ${overrideRefusal}`);
 
     const materialRequirements = join(directory, 'material-requirements.json');
     writeFileSync(materialRequirements, JSON.stringify({

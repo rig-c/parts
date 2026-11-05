@@ -4989,6 +4989,7 @@ row in this page's `rule` and `line` tables; the selftest holds that (`TY16`).
 | <a id="PARTS_HYBRID_PAIR"></a>`PARTS_HYBRID_PAIR` | a rigid joint references a missing or inconsistent generated band | re-run assemble; keep source, joint, carriers and measured geometry together |
 | <a id="RIG_HYBRID_SOURCE"></a>`RIG_HYBRID_SOURCE` | an assembled band no longer matches its config declaration | re-run assemble with the current config |
 | <a id="RIG_HYBRID_RIGID"></a>`RIG_HYBRID_RIGID` | a band neighbour is not a rigid region | attach the upper and lower pieces as regions on their own carriers |
+| <a id="ASSEMBLE_ALT_FIGURE_MASK_OMITTED"></a>`ASSEMBLE_ALT_FIGURE_MASK_OMITTED` | informational line naming an alternate whose painting file has different bytes from the primary painting, so its assembly omits the primary figure mask | supply the same painting bytes to share the verified declaration; different-painting alternates keep their omitted-mask assembly path |
 | <a id="ASSEMBLE_ALT_TIP_NAME"></a>`ASSEMBLE_ALT_TIP_NAME` | an explicit endpoint names no supplied bone | declare the single bone or expanded link |
 | <a id="ASSEMBLE_ALT_TIP_POINT"></a>`ASSEMBLE_ALT_TIP_POINT` | an explicit endpoint is not finite after normalization onto the accepted rig canvas | correct the source-crop pair and scale |
 | <a id="PARTS_ALT_TIPS"></a>`PARTS_ALT_TIPS` | alternate endpoints are not a non-empty bone-name map of finite rig-crop pairs | re-run assemble with valid source-crop tips |

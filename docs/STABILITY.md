@@ -571,6 +571,7 @@ restoration requires pre-step and assembled four-neighbour support, prefers the
 frontmost pre-step holder, then nearest pre-step owner with frontmost ties.
 Keep, feather, locked and moving-pair boundaries remain excluded. Plain-ground
 assembly keeps its existing path.
+Busy-ground visible assembly validates config.requirements and its flag correspondence, refusing malformed requirements or unverifiable figure masks before writing.
 
 The optional `setup_painting` key in `spine-parts-requirements/1` adds a
 `SETUP_MATCHES_PAINTING` measurement when declared. It requires authored
