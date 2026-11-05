@@ -599,6 +599,7 @@ import { GUIDE_DOC, guideRule, guideSection, guideSections, ledgerRows, nearestN
 import { encodeGif } from './src/gif.ts';
 import { buildPrompts, checkGraph, fillSeeThrough, FRAMING, NEGATIVE_HEAD, paintingGraph, POSITIVE_HEAD, stripWords, UPSCALE_MODEL, UPSCALE_THEN } from './src/graphs.ts';
 import { proposeHeadBox } from './src/headbox.ts';
+import { runHeadCropPreflightChecks } from './fixtures/head_crop_preflight_checks.ts';
 import { makeInputs, squarePad } from './src/inputs.ts';
 import { OPAQUE_ALPHA_ABOVE, exportLayers, implausibleRules, type Layer, layerFigures, type LayerSet, layerSetDiff, PLAUSIBLE_AREA_RATIO_MAX, PLAUSIBLE_JUDGED_AREA_RATIO, PLAUSIBLE_TRANSLUCENT_MAX, PLAUSIBLE_BACKGROUND_MAX, PLAUSIBLE_BACKGROUND_TRANSLUCENT_MIN, readLayers, readPsdLayers, readWrapperLayers, ruleSummary, templateLayerNames, templatePsdBytes } from './src/layers.ts';
 import { PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, readFrom as originalReadFrom, readParts, serializeParts, tagOf, writeParts } from './src/parts.ts';
@@ -10919,6 +10920,7 @@ function runProposeSuite(): number {
   const { say, bad } = counter();
   const dir = temp('propose');
   try {
+    runHeadCropPreflightChecks(join(dir, 'head-crop-preflight'), say);
     writeProposeFixture(dir);
     const P = readPartSet(dir);
     const prop = propose(P);
