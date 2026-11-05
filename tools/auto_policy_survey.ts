@@ -380,6 +380,7 @@ function staged(ex: Example, arm: Arm, specs: ReadonlyMap<string, AutoSpec>, wor
   const rigIn = join(work, 'rig-in');
   mkdirSync(join(rigIn, 'parts'), { recursive: true });
   copyFileSync(join(out, 'parts.json'), join(rigIn, 'parts.json'));
+  copyFileSync(join(out, 'painting_in_rig.png'), join(rigIn, 'painting_in_rig.png'));
   for (const n of readdirSync(join(out, 'parts'))) copyFileSync(join(out, 'parts', n), join(rigIn, 'parts', n));
   const withStray = new Map<string, AutoSpec>();
   for (const [part, spec] of specs) {
@@ -659,6 +660,7 @@ export function runTracked(ex: Example, keep: string | null): ExampleRun & { par
       mkdirSync(join(keep, 'parts'), { recursive: true });
       for (const n of readdirSync(join(b.out, 'parts'))) copyFileSync(join(b.out, 'parts', n), join(keep, 'parts', n));
       copyFileSync(join(b.out, 'parts.json'), join(keep, 'parts.json'));
+      copyFileSync(join(b.out, 'painting_in_rig.png'), join(keep, 'painting_in_rig.png'));
       const dir = join(b.out, 'check', 'build');
       if (existsSync(dir)) for (const n of readdirSync(dir)) if (n.endsWith('.json') || n.endsWith('.atlas') || n.endsWith('.png')) copyFileSync(join(dir, n), join(keep, n));
       // the lattice build's own check figures, beside its skeleton, as runExample keeps its arm's (density_survey --auto-table reads them)

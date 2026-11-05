@@ -219,7 +219,7 @@ function runCropTakeChecks(dir: string, say: Say): void {
     'the optional whole-layer declaration is accepted by early layers, assemble and full config readers');
   const records = readParts(join(dir, '..', 'positive', 'out', 'parts.json'));
   records.parts[0].taken_layers = exact.takenLayers;
-  const recordsPath = join(dir, 'parts.json');
+  const recordsPath = join(dir, '..', 'positive', 'out', 'crop-reader.json');
   writeFileSync(recordsPath, serializeParts(records));
   say('CROP_TRANSPORT_SURVIVES_ORDERED_PARTS_WRITER_AND_READER',
     JSON.stringify(readParts(recordsPath).parts[0].taken_layers) === JSON.stringify(exact.takenLayers),
@@ -280,9 +280,10 @@ function runCropTakeChecks(dir: string, say: Say): void {
   shortManifest.layers[0].top = 4; shortManifest.layers[0].bottom = 12;
   writeFileSync(manifestPath, JSON.stringify(shortManifest));
   writeFileSync(inputPath, encodePngBytes(supplied));
-  const region = structuredClone(cfg) as unknown as { seethrough: unknown; assemble: { take: Array<Record<string, unknown>> } };
+  const region = structuredClone(schema) as unknown as { seethrough: unknown; assemble: { take: Array<Record<string, unknown>> } };
   delete region.assemble.take[0].tags; region.assemble.take[0].part = 'hair'; region.assemble.take[0].seed = [1, 1];
-  say('CROP_REGION_DECLARATION_REMAINS_REFUSED', error(() => parseEarlyConfig(region, 'layers')).includes('CONFIG_KEY_KNOWN'), 'crop is only a whole-layer take optional field');
+  const regionError = error(() => parseEarlyConfig(region, 'layers'));
+  say('CROP_REGION_DECLARATION_ACCEPTED', regionError === '', regionError || 'crop is shared by whole-layer and region take declarations');
   const smallHeadCfg = { ...headCfg, seethrough: { ...headCfg.seethrough, head_box: [16, 0, 32, 16] as [number, number, number, number] } };
   const offTarget = error(() => applyTakenLayers({ full: target, head: { ...target, canvas: { w: 16, h: 16 } }, single: false }, source, smallHeadCfg, join(dir, 'config.json')));
   say('CROP_SUPPORT_OFF_TARGET_HEAD_CANVAS_IS_REFUSED', offTarget.includes('ASSEMBLE_TAKE_CROP') && offTarget.includes('outside the declared painting crop or target canvas'),

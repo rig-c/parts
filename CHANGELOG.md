@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.19.0](https://github.com/rig-c/parts/compare/v2.18.0...v2.19.0) (2026-11-05)
+
+
+### Features
+
+* **assemble:** accept crop donors for region takes ([#1098](https://github.com/rig-c/parts/issues/1098)) ([#1108](https://github.com/rig-c/parts/issues/1108)) ([021c4f2](https://github.com/rig-c/parts/commit/021c4f29a27f0ba4205575b17f83b9b885d04c59))
+* **assemble:** declare the rig-resolution painting ([#1097](https://github.com/rig-c/parts/issues/1097)) ([#1101](https://github.com/rig-c/parts/issues/1101)) ([2f8daa3](https://github.com/rig-c/parts/commit/2f8daa330f2c59f5bc3081e6bb7bb8d488d6415c))
+
+
+### Bug Fixes
+
+* **assemble:** contain core region cleanup and seam decisions ([#1102](https://github.com/rig-c/parts/issues/1102)) ([#1104](https://github.com/rig-c/parts/issues/1104)) ([7412714](https://github.com/rig-c/parts/commit/741271477607505986d7a91db7d30c75dcad8dc2))
+
 ## [2.18.0](https://github.com/rig-c/parts/compare/v2.17.0...v2.18.0) (2026-11-05)
 
 

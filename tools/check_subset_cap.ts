@@ -45,7 +45,7 @@ export function runSubsetCapChecks(dir: string, say: Say): void {
   const pf=readParts(join(green,'parts.json'));
   const ledger=(pf.alternates??[]).flatMap(a=>a.records).every(p=>(p.visible_px??0)+(p.occluded_px??0)===p.opaque_px&&(p.source_px_taken??0)<=p.opaque_px);
   say('UC17_VISIBILITY_AND_SOURCE_LEDGERS_STILL_ADD_UP',ledger,`${(pf.alternates??[]).flatMap(a=>a.records).length} generated set records checked`);
-  const files=(o:string):string[]=>['parts.json','recomposite_rig.png','recomposite_error_rig.png',...readdirSync(join(o,'parts')).sort().map(f=>`parts/${f}`)];
+  const files=(o:string):string[]=>['parts.json', 'painting_in_rig.png','recomposite_rig.png','recomposite_error_rig.png',...readdirSync(join(o,'parts')).sort().map(f=>`parts/${f}`)];
   const equal=(a:string,b:string,fs=files(a)):boolean=>fs.every(f=>readFileSync(join(a,f)).equals(readFileSync(join(b,f))));
   const baseFiles=files(green).filter(f=>!f.includes('step_')&&f!=='parts.json');
   say('UC18_BASE_PARTS_AND_RECORDS_ARE_UNCHANGED',equal(green,mutant,baseFiles)&&JSON.stringify(pf.parts)===JSON.stringify(readParts(join(mutant,'parts.json')).parts),`${baseFiles.length} base files and base records compared`);

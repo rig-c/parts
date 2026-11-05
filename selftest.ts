@@ -4703,6 +4703,60 @@ function runPartsSuite(): number {
       'the record is the measurement; if it cannot be read back byte for byte it cannot be compared between runs',
     );
 
+    // The legacy omission above remains valid; declared packages bind the file itself.
+    const imagePath = join(dir, 'painting_in_rig.png');
+    const paint = newRaster(32, 24);
+    for (let i = 3; i < paint.data.length; i += 4) paint.data[i] = 255;
+    const paintBytes = encodePngBytes(paint);
+    mkdirSync(join(dir, 'parts'));
+    writeFileSync(join(dir, 'parts', 'face.png'), encodePngBytes(newRaster(12, 10)));
+    const legacyReaders = readPartSet(dir).recs.length === 1 && tilesFrom(path).length === 1;
+    const bind = (bytes: Uint8Array): PartsFile => ({ ...file, painting_in_rig: {
+      path: 'painting_in_rig.png', sha256: createHash('sha256').update(bytes).digest('hex'), resample: 'lanczos3-rgb-opaque',
+    } });
+    writeFileSync(imagePath, paintBytes);
+    writeParts(path, bind(paintBytes));
+    say('PT818_DECLARED_PAINTING_ROUNDTRIPS_AND_LEGACY_OMISSION_READS',
+      serializeParts(readParts(path)) === serializeParts(bind(paintBytes)) && back.painting_in_rig === undefined &&
+      legacyReaders && readPartSet(dir).recs.length === 1 && tilesFrom(path).length === 1,
+      'declared opaque 32x24 PNG reads; the omitted declaration reads through PT01', 'new packages bind their raster without breaking legacy manifests');
+    const probePainting = (id: string, bytes: Uint8Array | null, manifest: PartsFile, code: string): void => {
+      if (bytes === null) rmSync(imagePath, { force: true }); else writeFileSync(imagePath, bytes);
+      writeFileSync(path, serializeParts(manifest));
+      const readers = [() => readParts(path), () => readPartSet(dir), () => tilesFrom(path)];
+      const errors = readers.map(read => refusals(read));
+      say(id, errors.every(e => e?.problems.length === 1 && e.problems[0].code === code && e.problems[0].object === imagePath),
+        errors.map(codes).join(', '), 'the common package reader refuses the named broken declaration before downstream stages');
+    };
+    probePainting('PT819_PAINTING_HASH_MISMATCH_IS_NAMED', paintBytes,
+      { ...bind(paintBytes), painting_in_rig: { ...bind(paintBytes).painting_in_rig!, sha256: '0'.repeat(64) } }, 'PARTS_PAINTING_SHA256');
+    const wrongSize = newRaster(1, 1); wrongSize.data[3] = 255;
+    const smallBytes = encodePngBytes(wrongSize);
+    probePainting('PT820_PAINTING_SIZE_MISMATCH_IS_NAMED', smallBytes, bind(smallBytes), 'PARTS_PAINTING_SIZE');
+    probePainting('PT821_MISSING_PAINTING_IS_NAMED', null, bind(paintBytes), 'PARTS_PAINTING_PRESENT');
+    const junk = new Uint8Array([0, 1, 2]);
+    probePainting('PT822_INVALID_PAINTING_PNG_IS_NAMED', junk, bind(junk), 'PARTS_PAINTING_PNG');
+    paint.data[3] = 254;
+    const alphaBytes = encodePngBytes(paint);
+    probePainting('PT823_TRANSLUCENT_PAINTING_IS_NAMED', alphaBytes, bind(alphaBytes), 'PARTS_PAINTING_OPAQUE');
+    for (const [key, value] of [['path', '../painting_in_rig.png'], ['resample', 'nearest'], ['sha256', 'no'], ['extra', 1]] as const) {
+      const invalid = bind(paintBytes);
+      Object.assign(invalid.painting_in_rig!, { [key]: value });
+      writeFileSync(path, JSON.stringify(invalid));
+      const e = refusals(() => readParts(path));
+      say(`PT824_MALFORMED_PAINTING_DECLARATION_IS_NAMED[${key}]`,
+        e?.problems.length === 1 && e.problems[0].code === 'PARTS_FIELD_TYPE', codes(e), 'unknown operators and paths cannot silently select another raster');
+    }
+    const hidden = rgba(1, 1, [[17, 29, 41, 0]]);
+    const opaqueRGB = sourceInRig(hidden, 2, 2);
+    const flattened = sourceInRig(rgba(1, 1, [[255, 255, 255, 255]]), 2, 2);
+    say('PT825_OPAQUE_RGB_AND_SOURCE_OVER_WHITE_KEEP_THEIR_DISTINCT_OPERANDS',
+      [...opaqueRGB.data].every((v, i) => v === [17, 29, 41, 255][i % 4]) &&
+      [...flattened.data].every(v => v === 255) && hidden.data[3] === 0,
+      'hidden RGB 17,29,41 survives the opaque RGB path; source-over-white is 255,255,255; source alpha remains 0',
+      'assemble and check intentionally use different operands for non-opaque paintings');
+    writeFileSync(path, first);
+
     const planted = JSON.parse(first) as { parts: Array<Record<string, unknown>> } & Record<string, unknown>;
     delete planted.parts[0].seam_override_px;
     planted.parts[0].from = 'head:hair';
@@ -26023,7 +26077,11 @@ function runBuildSuite(): number {
     const artifacts = tail.slice(1).map((l) => l.trim());
     const expectedArtifacts = ['skeleton.json', 'skeleton.atlas', 'skeleton.png'].map((name) => join(out, 'check', 'build', name));
     const stageOrder = ['[assemble]', '[rig]', '[check]', '[loop]'].map((p) => green.out.indexOf(`\n${p} `));
-    const partsSame = existsSync(join(out, 'parts.json')) && serializeParts(readParts(join(out, 'parts.json'))) === serializeParts(EXPECTED_PARTS);
+    const buildPainting = encodePngBytes(sourceInRig(readPng(join(dir, 'painting.png')), ...EXPECTED_PARTS.rig_size));
+    const buildExpectedParts: PartsFile = { ...EXPECTED_PARTS, painting_in_rig: {
+      path: 'painting_in_rig.png', sha256: createHash('sha256').update(buildPainting).digest('hex'), resample: 'lanczos3-rgb-opaque',
+    } };
+    const partsSame = existsSync(join(out, 'parts.json')) && serializeParts(readParts(join(out, 'parts.json'))) === serializeParts(buildExpectedParts);
     say(
       'BU01_A_GREEN_BUILD_WRITES_ITS_TREE_AND_ENDS_WITH_THE_PACK_LINE_AND_THE_THREE_ARTIFACT_PATHS',
       green.status === 0 &&
@@ -26164,13 +26222,17 @@ function runBuildSuite(): number {
     writeAssembleFixture(wideDir, moving, landscapePainting(), { full: LANDSCAPE_FULL_LAYERS, head: HEAD_LAYERS });
     const wideOut = join(wideDir, 'out');
     const wide = runBuildCli(buildArgs(wideDir, wideOut));
+    const widePainting = encodePngBytes(sourceInRig(readPng(join(wideDir, 'painting.png')), ...LANDSCAPE_EXPECTED_PARTS.rig_size));
+    const wideExpectedParts: PartsFile = { ...LANDSCAPE_EXPECTED_PARTS, painting_in_rig: {
+      path: 'painting_in_rig.png', sha256: createHash('sha256').update(widePainting).digest('hex'), resample: 'lanczos3-rgb-opaque',
+    } };
     const wideParts = existsSync(join(wideOut, 'parts.json')) ? serializeParts(readParts(join(wideOut, 'parts.json'))) : 'absent';
     const pngs = entries(join(out, 'parts'));
     const pngSame = pngs.filter((f) => existsSync(join(wideOut, 'parts', f)) && Buffer.compare(readFileSync(join(out, 'parts', f)), readFileSync(join(wideOut, 'parts', f))) === 0);
     say(
       'BU11_A_LANDSCAPE_PAINTING_BUILDS_GREEN_TO_THE_PORTRAIT_S_PARTS_IN_PAINTING_PIXELS',
-      wide.status === 0 && wideParts === serializeParts(LANDSCAPE_EXPECTED_PARTS) && pngs.length === EXPECTED_PARTS.parts.length && pngSame.length === pngs.length && entries(wideOut).join(',') === expectedTree.filter((f) => !f.startsWith('idle')).join(','),
-      `exit ${wide.status}; parts.json equals the hand-derived landscape one: ${wideParts === serializeParts(LANDSCAPE_EXPECTED_PARTS)}; ${pngSame.length} of ${pngs.length} part PNGs byte-identical to the portrait build's; --out holds [${entries(wideOut).join(', ')}]`,
+      wide.status === 0 && wideParts === serializeParts(wideExpectedParts) && pngs.length === EXPECTED_PARTS.parts.length && pngSame.length === pngs.length && entries(wideOut).join(',') === expectedTree.filter((f) => !f.startsWith('idle')).join(','),
+      `exit ${wide.status}; parts.json equals the hand-derived landscape one: ${wideParts === serializeParts(wideExpectedParts)}; ${pngSame.length} of ${pngs.length} part PNGs byte-identical to the portrait build's; --out holds [${entries(wideOut).join(', ')}]`,
       'the reporter padded the painting itself to a square, which puts the padding in the rig; here the pad is See-through\'s input only, so assemble, rig and check see the painting and the same figure gives the same parts',
     );
 
@@ -26241,7 +26303,7 @@ function runBuildSuite(): number {
         rigFail.includes('declares duration 1s but its last key is at 0s') &&
         still.out.includes('build: stopped at rig; no later stage ran') &&
         !still.out.includes('[check]') &&
-        stillTree.join(',') === 'keep.txt,part_support_domains.json,parts,parts.json,recomposite_error_rig.png,recomposite_rig.png',
+        stillTree.join(',') === 'keep.txt,painting_in_rig.png,part_support_domains.json,parts,parts.json,recomposite_error_rig.png,recomposite_rig.png',
       `exit ${still.status}; ${rigFail ?? 'no [rig] FAIL line'}; --out afterwards [${stillTree.join(', ')}] (a planted check/check.json and idle.gif were there before, and keep.txt, which build does not own)`,
       'emit only after green, across stages: a red stage stops everything after it, its own refusal is what is printed, and a file an earlier run left where build writes is cleared rather than left beside the refusal looking current',
     );
@@ -28420,7 +28482,7 @@ function runBuildSuite(): number {
     const carryDir = shortsFixture('carry', shortsConfig(true), true);
     const carryBase = shortsStage(carryDir, join(carryDir, 'out-base'), 'base');
     const carryNone = shortsStage(carryDir, join(carryDir, 'out-none'), 'none');
-    const carryFiles = ['parts.json', ...baseNames.map((n) => join('parts', `${n}.png`)), ...shortsSets.flatMap((q) => [...q.parts, 'bottomwear'].map((n) => join('parts', `${q.name}_${n}.png`)))];
+    const carryFiles = ['parts.json', 'painting_in_rig.png', ...baseNames.map((n) => join('parts', `${n}.png`)), ...shortsSets.flatMap((q) => [...q.parts, 'bottomwear'].map((n) => join('parts', `${q.name}_${n}.png`)))];
     const carryDiffer = carryFiles.filter((f) => !existsSync(join(carryDir, 'out-base', f)) || !existsSync(join(carryDir, 'out-none', f)) || digest(join(carryDir, 'out-base', f)) !== digest(join(carryDir, 'out-none', f)));
     const carryHeld = inShorts(join(carryDir, 'out-base'));
     say(
@@ -28599,7 +28661,7 @@ function runBuildSuite(): number {
     const bothDir = islandFixture('both', [{ name: 'both', parts: ['thigh_r', 'shin_r', 'thigh_l', 'shin_l'], rects: [[22, 10, 30, 50], [34, 10, 42, 50]] }]);
     const both = islandStage(bothDir, join(bothDir, 'out-joints'), 'joints');
     const bothAll = islandStage(bothDir, join(bothDir, 'out-all'), 'all');
-    const bothFiles = ['parts.json', ...['thigh_r', 'shin_r', 'thigh_l', 'shin_l'].map((n) => join('parts', `both_${n}.png`))];
+    const bothFiles = ['parts.json', 'painting_in_rig.png', ...['thigh_r', 'shin_r', 'thigh_l', 'shin_l'].map((n) => join('parts', `both_${n}.png`))];
     const bothDiffer = bothFiles.filter((f) => !existsSync(join(bothDir, 'out-joints', f)) || !existsSync(join(bothDir, 'out-all', f)) || digest(join(bothDir, 'out-joints', f)) !== digest(join(bothDir, 'out-all', f)));
     say(
       'BU203_A_SET_THAT_CARRIES_BOTH_LEGS_OF_THE_LAYER_KEEPS_EVERY_ISLAND_AND_WRITES_THE_BYTES_IT_WROTE_BEFORE',
@@ -28731,7 +28793,7 @@ function runBuildSuite(): number {
       spLine('foot_r', 'shoes', false, 'foot_r [26, 52]', 64, 'dropped 1 (64 px)'),
     ];
     const spGreenLint = spLint(spGreen.lines);
-    const spBaseFiles = ['parts.json', ...['thigh_r', 'shin_r', 'foot_r', 'thigh_l', 'shin_l', 'foot_l'].map((n) => join('parts', `${n}.png`))];
+    const spBaseFiles = ['parts.json', 'painting_in_rig.png', ...['thigh_r', 'shin_r', 'foot_r', 'thigh_l', 'shin_l', 'foot_l'].map((n) => join('parts', `${n}.png`))];
     const spBaseParts = (out: string): string => (existsSync(join(out, 'parts.json')) ? JSON.stringify(readParts(join(out, 'parts.json')).parts) : 'absent');
     const spBaseDiffer = spBaseFiles.slice(1).filter((f) => digest(join(spGreenDir, 'out', f)) !== digest(join(spBaseDir, 'out', f)));
     const spBaseSame = spBaseDiffer.length === 0 && spBaseParts(join(spGreenDir, 'out')) === spBaseParts(join(spBaseDir, 'out'));
@@ -28995,7 +29057,7 @@ function runBuildSuite(): number {
     const kneeNoSetsDir = kneeFixture('no-sets', false, false);
     const kneeNoSets = kneeStage(kneeNoSetsDir, join(kneeNoSetsDir, 'out'), 'base');
     const kneeBaseNames = ['thigh_r', 'shin_r', 'thigh_l', 'shin_l', 'bottomwear', 'kneepad'];
-    const kneeCarryFiles = ['parts.json', ...kneeBaseNames.map((n) => join('parts', `${n}.png`)), ...['thigh_l', 'shin_l', 'bottomwear', 'kneepad'].map((n) => join('parts', `straight_l_${n}.png`))];
+    const kneeCarryFiles = ['parts.json', 'painting_in_rig.png', ...kneeBaseNames.map((n) => join('parts', `${n}.png`)), ...['thigh_l', 'shin_l', 'bottomwear', 'kneepad'].map((n) => join('parts', `straight_l_${n}.png`))];
     const kneeCarryDiffer = kneeCarryFiles.filter((f) => !existsSync(join(kneeCarryDir, 'out-base', f)) || !existsSync(join(kneeCarryDir, 'out-none', f)) || digest(join(kneeCarryDir, 'out-base', f)) !== digest(join(kneeCarryDir, 'out-none', f)));
     const kneeCarryJson = existsSync(join(kneeCarryDir, 'out-base', 'parts.json')) ? readFileSync(join(kneeCarryDir, 'out-base', 'parts.json'), 'utf8') : '';
     const kneeBaseDiffer = kneeBaseNames.filter((n) => digest(join(kneeGreenOut, 'parts', `${n}.png`)) === 'absent' || digest(join(kneeGreenOut, 'parts', `${n}.png`)) !== digest(join(kneeNoSetsDir, 'out', 'parts', `${n}.png`)));
@@ -29015,7 +29077,7 @@ function runBuildSuite(): number {
     // shin_l's cap carrying the key.
     const kneeJson = existsSync(join(kneeGreenOut, 'parts.json')) ? readFileSync(join(kneeGreenOut, 'parts.json'), 'utf8') : '';
     const plantExcluded = (label: string, value: number): string => {
-      const f = join(kneeDir, `planted-${label}.json`);
+      const f = join(kneeGreenOut, `planted-${label}.json`);
       const doc = JSON.parse(kneeJson) as { parts: Array<{ name: string; limb?: { cap?: Record<string, unknown> } }> };
       const cap = doc.parts.find((q) => q.name === 'shin_l')?.limb?.cap;
       if (cap === undefined) return 'no base shin_l cap';
@@ -29151,7 +29213,7 @@ function runBuildSuite(): number {
     const crossLint = splitLint(crossGreen.out);
     const bandOf = (set: string, part: string): string => /; (\d+) px in the overlap band \(nearer one line than the other by 0\.5 px or less\) went to the limb drawn in front, (\d+) kept and (\d+) given$/.exec(crossLint.find((l) => l.startsWith(`LINT set "${set}" ${part}: `)) ?? '')?.slice(1).join('/') ?? 'none';
     const crossCheck = existsSync(join(crossGreenOut, 'check', 'check.json')) ? (readJsonFile(join(crossGreenOut, 'check', 'check.json')) as { PASS?: boolean; sets?: Record<string, { PASS?: boolean }> }) : null;
-    const crossBaseFiles = ['parts.json', ...baseNames.map((n) => join('parts', `${n}.png`))];
+    const crossBaseFiles = ['parts.json', 'painting_in_rig.png', ...baseNames.map((n) => join('parts', `${n}.png`))];
     const crossBaseDiffer = crossBaseFiles.slice(1).filter((f) => !existsSync(join(crossGreenOut, f)) || !existsSync(join(crossNoSetsDir, 'out', f)) || digest(join(crossGreenOut, f)) !== digest(join(crossNoSetsDir, 'out', f)));
     const crossBaseRecords = existsSync(join(crossGreenOut, 'parts.json')) && existsSync(join(crossNoSetsDir, 'out', 'parts.json')) && JSON.stringify(readParts(join(crossGreenOut, 'parts.json')).parts) === JSON.stringify(readParts(join(crossNoSetsDir, 'out', 'parts.json')).parts);
     const crossShares = crossSets.flatMap((q) => q.parts.map((p) => secondLimbShare(crossGreenOut, q, p)));
@@ -29679,10 +29741,18 @@ const SILHOUETTE_EXAMPLE_BYTES: Readonly<Record<string, string>> = {
 /** Hash a completed build against its named recipe: a restored whitespace plant proves byte sensitivity. */
 function autoTurnExampleBytes(asm: string, rig: string, key: string, baseline: Readonly<Record<string, string>> = AUTO_TURN_EXAMPLE_BYTES, origin = '1.79.1'): { ok: boolean; detail: string } {
   const digest = (): string => {
+    // The historical digest protects old bytes; the common reader separately
+    // verifies the new file against its declared hash and rig dimensions.
+    if (readParts(join(asm, 'parts.json')).painting_in_rig === undefined) throw new Error('assembled painting declaration is absent');
     const rows: string[] = [];
     for (const file of ['parts', 'parts.json', 'recomposite_error_rig.png', 'recomposite_rig.png']) {
       if (file === 'parts') rows.push(...treeDigest(join(asm, file)).split('\n').map(line => `assemble/parts/${line}`));
-      else rows.push(`assemble/${file} ${createHash('sha256').update(readFileSync(join(asm, file))).digest('hex')}`);
+      else {
+        const protectedBytes = file === 'parts.json'
+          ? readFileSync(join(asm, file), 'utf8').replace(/  "painting_in_rig": \{\n    "path": "painting_in_rig\.png",\n    "sha256": "[a-f0-9]{64}",\n    "resample": "lanczos3-rgb-opaque"\n  \},\n/, '')
+          : readFileSync(join(asm, file));
+        rows.push(`assemble/${file} ${createHash('sha256').update(protectedBytes).digest('hex')}`);
+      }
     }
     rows.push(...treeDigest(rig).split('\n').map(line => `rig/${line}`));
     return createHash('sha256').update(rows.join('\n')).digest('hex');
@@ -29868,12 +29938,13 @@ function runChainSuite(_corpus: string | null = null, pre = false): number | nul
           'the public example of a drawn gesture set (issue #670): a published claim that the pipeline takes it to a green rig',
         );
         if (wb.status === 0) {
+          const wavePaintingBound = readParts(join(waveExp, 'parts.json')).painting_in_rig !== undefined && readParts(join(waveOut, 'parts.json')).painting_in_rig !== undefined;
           const waveFiles = (['parts.json', 'rig.json', 'motion.json', 'mesh_report.json', 'sets.json'] as const).map(
             (f) => [f, jsonDiffs(readJsonAt(join(waveExp, f)), readJsonAt(f === 'parts.json' ? join(waveOut, f) : join(waveOut, 'rig', f)), chainTolerance(f))] as const,
           );
           say(
             `CH31_THE_GESTURE_BUILD_IS_ITS_EXPECTED_AS_PARSED_VALUES[${key}]`,
-            waveFiles.every(([, d]) => d.over.length === 0),
+            wavePaintingBound && waveFiles.every(([, d]) => d.over.length === 0),
             waveFiles.map(([f, d]) => `${f}: ${summarise(d)}`).join(' | '),
             "this port's own build at the commit that added it (issue #670), as for scarf; rig.json as built, not flattened",
           );
@@ -31595,7 +31666,7 @@ function runLimbLayerCutCases(say: (name: string, ok: boolean, detail: string, w
       const planted = (what: string, edit: (q: Record<string, unknown>) => void): string => {
         const f = structuredClone(file);
         edit(f.parts.find((q) => q.name === 'shoe_top') as Record<string, unknown>);
-        const path = join(root, `limbcut-reader-${what}.json`);
+        const path = join(cut.out, `limbcut-reader-${what}.json`);
         writeFileSync(path, JSON.stringify(f));
         const err = refusals(() => readParts(path));
         return err === null ? 'read' : err.problems.map((q) => `${q.code} ${q.object}: ${q.detail}`).join(' | ');
@@ -33143,13 +33214,13 @@ function runAssembleSuite(): number {
           );
 
           // The record reads back, and a malformed field is refused by name.
-          const pj = join(stage, 'parts.json');
+          const pj = join(stage, 'sleeve', 'out', 'roundtrip.json');
           writeParts(pj, withSleeve.parts);
           const back = serializeParts(readParts(pj)) === text;
           const plant = (edit: (p: Record<string, unknown>) => void): string => {
             const raw = JSON.parse(text) as { parts: Array<Record<string, unknown>> };
             edit(raw.parts.find((p) => p.name === 'topwear') as Record<string, unknown>);
-            const f = join(stage, 'planted.json');
+            const f = join(stage, 'sleeve', 'out', 'planted.json');
             writeFileSync(f, JSON.stringify(raw));
             const err = refusals(() => readParts(f));
             return err === null ? 'read' : err.problems.map((q) => q.code).join(',');
@@ -33978,10 +34049,15 @@ function runAssembleSuite(): number {
     const files = filesUnder(out1);
     const same = files.length > 0 && files.join(',') === filesUnder(out2).join(',') && files.every((f) => Buffer.compare(readFileSync(join(out1, f)), readFileSync(join(out2, f))) === 0);
     const readBack = r1.status === 0 ? serializeParts(readParts(join(out1, 'rig', 'parts.json'))) : '';
+    const paintingBytes = encodePngBytes(result.paintingInRig);
+    const cliWant = serializeParts({ ...EXPECTED_PARTS, painting_in_rig: {
+      path: 'painting_in_rig.png', sha256: createHash('sha256').update(paintingBytes).digest('hex'), resample: 'lanczos3-rgb-opaque',
+    } });
+    const paintingSame = r1.status === 0 && Buffer.compare(readFileSync(join(out1, 'rig', 'painting_in_rig.png')), paintingBytes) === 0;
     say(
       'AS07_THE_CLI_WRITES_THE_SAME_BYTES_TWICE_AND_THE_RECORD_READS_BACK',
-      r1.status === 0 && r2.status === 0 && same && readBack === want && files.length === EXPECTED_PARTS.parts.length + 4 && files.includes('rig/part_support_domains.json') && files.includes('render/recomposite_error_rig.png') && r1.out.includes('recomposite vs source: mean |d|=') && r1.out.includes('  uncovered hole 1: 2611 px at 0,0 64x64 (between "topwear" 86 px, "hair_back" 84 px, "bottomwear" 72 px, "shoes" 48 px, "face" 34 px)'),
-      `exit ${r1.status}/${r2.status}; ${files.length} file(s) (${files.join(', ')}), byte-identical across two runs: ${same}; parts.json reads back equal: ${readBack === want}`,
+      r1.status === 0 && r2.status === 0 && same && paintingSame && readBack === cliWant && files.length === EXPECTED_PARTS.parts.length + 5 && files.includes('rig/part_support_domains.json') && files.includes('render/recomposite_error_rig.png') && r1.out.includes('recomposite vs source: mean |d|=') && r1.out.includes('  uncovered hole 1: 2611 px at 0,0 64x64 (between "topwear" 86 px, "hair_back" 84 px, "bottomwear" 72 px, "shoes" 48 px, "face" 34 px)'),
+      `exit ${r1.status}/${r2.status}; ${files.length} file(s) (${files.join(', ')}), byte-identical across two runs: ${same}; parts.json including painting_in_rig reads back equal: ${readBack === cliWant}; painting PNG equals in-memory raster: ${paintingSame}`,
       'determinism is a contract — the error map included — and the parts.json the CLI writes is the one the in-memory control checked; its one hole is printed with the box and the borders the fixture derives',
     );
 
