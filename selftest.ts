@@ -5312,8 +5312,12 @@ function runCli(args: string[], capture?: (child: FixtureChildDiagnostic) => voi
   const argv = [join(ROOT, 'cli.ts'), ...selftestCliArgs(args, keepDefaultExtremes)];
   const configAt = args.indexOf('--config');
   const rigAt = args.indexOf('--rig');
+  const configValue = configAt < 0 ? undefined : args[configAt + 1];
+  const rigValue = rigAt < 0 ? undefined : args[rigAt + 1];
+  const configFile = configValue === undefined || configValue.startsWith('--') ? null : configValue;
+  const rigFile = rigValue === undefined || rigValue.startsWith('--') ? null : join(rigValue, 'rig.json');
   let sample = sampleProducerContext > 0;
-  for (const file of [configAt < 0 ? null : args[configAt + 1], rigAt < 0 ? null : join(args[rigAt + 1], 'rig.json')]) {
+  for (const file of [configFile, rigFile]) {
     if (file === null || file === undefined || !existsSync(file)) continue;
     try {
       const raw = JSON.parse(readFileSync(file, 'utf8')) as { key?: string; name?: string };
@@ -29955,7 +29959,9 @@ export function runValidationScenePlants(build: ValidationBuild, dir: string, sa
 
 const VALIDATION_FEATURE_FLAG = '--validation-feature';
 const VALIDATION_FEATURES = ['contracts', 'authoring', 'readme-plain', 'readme-posed', 'readme-cloth'] as const;
-type ValidationFeature = typeof VALIDATION_FEATURES[number];
+// Retired README units retain their frozen positions, with assertions owned by readme-loop.
+const ACTIVE_VALIDATION_FEATURES = ['contracts', 'authoring'] as const;
+type ValidationFeature = typeof ACTIVE_VALIDATION_FEATURES[number];
 
 /** Internal child: original reporters are retained in its immutable result, not mixed into another suite's prefix. */
 async function validationFeatureMain(group: ValidationFeature, result: string): Promise<void> {
@@ -29971,25 +29977,17 @@ async function validationFeatureMain(group: ValidationFeature, result: string): 
       for (const row of validationContractControls(input, join(dir, 'contracts'))) say(row.name, row.ok, row.detail, 'actual sample positive and its named defect');
       const built = sampleBuild();
       if (built === null) throw new Error('sample disappeared');
-      runValidationReaderProbe(input, built.out, join(dir, 'readers'), say);
-      runValidationStatsProbe(input, built.out, join(dir, 'stats'), say);
+      // Reader and statistics controls belong to corpus and mesh-stats respectively.
       runValidationBoundaryProbe(input, built.out, join(dir, 'boundary'), say);
       runValidationScenePlants(built, join(dir, 'scene-plants'), say);
     } else if (group === 'authoring') {
       runWindWriteConfigFromCases(say);
-      runWindRiderCases(say, join(dir, 'rider'));
-      runAutoMeshExamplesSuite();
-      unitPart = 'standard'; runAssembleExamplesSuite(); unitPart = null;
-      runGroundExamplesSuite();
+      // Rider, mesh, assemble and ground controls retain their standalone owners.
       const damaged = validationPinholeView(input, join(dir, 'declared-pinhole'));
       const out = join(dir, 'refused');
-      const refused = refusals(() => assembleStage({ source: join(damaged, 'inputs', 'painting.png'), full: join(damaged, 'inputs', 'layers', 'full'), head: join(damaged, 'inputs', 'layers', 'head'), config: join(damaged, 'config.json'), requirements: join(input, 'requirements.json') },
-        { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, () => {}));
+      const refused = sampleProduction('assemble:declared-pinhole', () => refusals(() => assembleStage({ source: join(damaged, 'inputs', 'painting.png'), full: join(damaged, 'inputs', 'layers', 'full'), head: join(damaged, 'inputs', 'layers', 'head'), config: join(damaged, 'config.json'), requirements: join(input, 'requirements.json') },
+        { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, () => {})));
       say('AE04_DECLARED_PINHOLE_DEFECT', refused?.problems.some(problem => problem.code === 'ASSEMBLE_PINHOLES') === true && !existsSync(out), codes(refused), "Declared zero pinholes pass. A private missing-texel derivative SKIPs only with exact documented boxes; declaring that same defect is refused in CH945.");
-    } else {
-      unitPart = 'loop-' + group.slice('readme-'.length);
-      runReadmeLoopSuite(); unitPart = null;
-      if (group === 'readme-plain') { unitPart = END_UNIT; runReadmeLoopSuite(); unitPart = null; }
     }
     writeFileSync(result, JSON.stringify({ group, lines }));
   } finally {
@@ -30009,16 +30007,30 @@ function runValidationFeatureUnit(group: ValidationFeature, dir: string, say: (n
   const evidence = process.env.RIG_PARTS_VALIDATION_EVIDENCE;
   if (evidence !== undefined) { const target = join(evidence, 'feature-records', group + '.json'); mkdirSync(dirname(target), { recursive: true }); cpSync(result, target); }
   if (record.group !== group || !Array.isArray(record.lines)) throw new Error('sample feature record has the wrong identity');
-  let cases = 0;
-  for (let i = 0; i < record.lines.length; i++) {
-    const match = /^  (PASS|FAIL)  (\S+?)(?:: (.*))?$/.exec(record.lines[i]);
-    if (match === null) continue;
-    cases++;
-    const detail: string[] = match[3] === undefined ? [] : [match[3]];
-    for (let j = i + 1; j < record.lines.length && /^          /.test(record.lines[j]); j++) detail.push(record.lines[j].trim());
-    say(`CH945_SAMPLE_FEATURE[${group}:${match[2]}]`, match[1] === 'PASS', detail.join('; '), 'original feature reporter executed in its child; positive and named defect are both required');
+  let observations = 0;
+  for (const line of record.lines) {
+    const match = /^  (PASS|FAIL)  (\S+?)(?:: (.*))?$/.exec(line);
+    if (match !== null) {
+      observations++;
+      say(`CH945_SAMPLE_FEATURE[${group}:${match[2]}]`, match[1] === 'PASS', match[3] ?? '', 'original feature reporter executed in its child; positive and named defect are both required');
+    } else if (/^\n?── .* ──$/.test(line)) {
+      // The child is part of chain, which already owns its one section header.
+      continue;
+    } else if (/^  WARN  /.test(line)) {
+      observations++;
+      console.log('  INFO  ' + line.trim());
+    } else if (/^  HOLE  /.test(line)) {
+      observations++;
+      console.log('  SKIP  ' + line.trim());
+      console.log('          ⚠️  This is a HOLE in this run.');
+    } else {
+      if (/^  (SKIP|INFO)  /.test(line)) observations++;
+      // Preserve quiet statuses, their HOLE markers and every diagnostic line.
+      // Unknown gutters also survive so RunTally can refuse them.
+      console.log(line);
+    }
   }
-  if (cases === 0) throw new Error('sample feature child emitted no assertion');
+  if (observations === 0) throw new Error('sample feature child emitted no assertion or quiet status');
 }
 
 /** Single-profile feature probe; never registers a second suite. */
@@ -30041,10 +30053,11 @@ export function runChainSuite(_corpus: string | null = null, pre = false): numbe
   // The green builds by example key: the public scenes of issue #74 compose these, rather than building twice.
   const greenBuilds = new Map<string, string>();
   try {
-    for (const group of (pre ? [] : VALIDATION_FEATURES)) if (part.has('feature-' + group)) runValidationFeatureUnit(group, join(dir, 'feature-' + group), say);
+    for (const group of (pre ? [] : ACTIVE_VALIDATION_FEATURES)) if (part.has('feature-' + group)) runValidationFeatureUnit(group, join(dir, 'feature-' + group), say);
     for (const key of found) {
-      // Issue #395: a unit runs its own example. The closing unit builds, saying nothing, what the scenes and the
-      // planted comparators below read — the first green build and the scenes' two — since no unit reads another's.
+      // Issue #1113 narrows #395 isolation: units in this shard may reuse a frozen,
+      // digest-verified build. The closing unit requests its scene/comparator inputs
+      // through that same cache. Other shards and invocations remain independent.
       const mine = part.has(key);
       if (!mine && !(part.tail && (planted === null || Object.values(PUBLIC_SCENE_FOLDERS).includes(key)))) continue;
       const build = sampleBuild(key);
@@ -55760,7 +55773,7 @@ export { preSuiteSelection, preRunFaults, preRunExit, summaryAgreementFaults, ru
 const finishSelftestPeak = !import.meta.main || process.argv.includes(WORKER_FLAG) || process.argv.includes(PRE_WORKER_FLAG) || process.argv.includes(ASSEMBLE_STAGE_FLAG) || process.argv.includes(VALIDATION_FEATURE_FLAG) ? null : startSelftestPeak(observerPids);
 if (import.meta.main && process.argv[2] === VALIDATION_FEATURE_FLAG) {
   const group = process.argv[3];
-  if (!VALIDATION_FEATURES.includes(group as ValidationFeature) || process.argv[4] !== '--result' || process.argv.length !== 6) throw new Error('invalid validation feature selector');
+  if (!ACTIVE_VALIDATION_FEATURES.includes(group as ValidationFeature) || process.argv[4] !== '--result' || process.argv.length !== 6) throw new Error('invalid validation feature selector');
   await validationFeatureMain(group as ValidationFeature, process.argv[5]);
 } else if (import.meta.main) {
   if (finishSelftestPeak !== null) process.on('exit', finishSelftestPeak);

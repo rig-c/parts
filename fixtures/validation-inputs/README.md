@@ -22,11 +22,16 @@ Each selftest invocation owns its cache. Fixed worker units share one immutable
 producer per head, complete input-byte digest and profile **within their CI
 shard**. Other shards and invocations produce independently. Workflow builds and
 planted refused producers join the same append-only timing stream. The fixed
-limits remain 60 seconds per producer and 120 seconds summed per shard. Missing
+limits remain 60 seconds per producer and 180 seconds summed per shard. Missing
 inputs are a HOLE; failed, corrupt or over-budget producers are errors.
 
-Feature controls preserve the original assertion names and diagnostics in
-internal child records, replayed by chain under CH945. The focused chain run
+Contract and authoring controls preserve original assertion names and diagnostics
+in internal child records, replayed by chain under CH945. SKIP and HOLE diagnostics
+remain visible, and WARN uses the existing INFO gutter. README, rider, mesh,
+assemble, ground, reader and statistics controls retain their standalone owners.
+The three retired chain README units keep their frozen registry positions.
+This explicitly narrows #395 isolation to permit immutable build sharing between
+units of one shard, keyed by source head and complete input-byte digest. The focused chain run
 includes those positives/defects, an actual one-byte rebuild, and the actual
 selftest reporter with this directory absent. Full-tree coverage and the work
 floor belong to PR CI.

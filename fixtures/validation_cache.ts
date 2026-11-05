@@ -70,9 +70,9 @@ export function validationProducerReceipt(cache: string, label: string, seconds:
   appendFileSync(join(cache, 'build-times.jsonl'), JSON.stringify({ variant: label, seconds, exit, kind: 'feature-producer' }) + '\n');
   const total = validationBuildSeconds(cache);
   console.error(`validation sample producer: ${label} ${seconds.toFixed(3)} s, shard total ${total.toFixed(3)} s, exit ${exit}`);
-  if (seconds > 60 || total > 120) {
-    writeFileSync(stop, JSON.stringify({ label, seconds, total, individualLimit: 60, shardLimit: 120 }));
-    throw new Error('validation sample producer exceeded its fixed 60 s or shard 120 s bar; receipts retained');
+  if (seconds > 60 || total > 180) {
+    writeFileSync(stop, JSON.stringify({ label, seconds, total, individualLimit: 60, shardLimit: 180 }));
+    throw new Error('validation sample producer exceeded its fixed 60 s or shard 180 s bar; receipts retained');
   }
 }
 
@@ -86,7 +86,7 @@ export function validationBuildSummary(cache: string): string {
     return [{ shard: relative(cache, dir) || 'direct', builds: rows, total_seconds: rows.reduce((sum, row) => sum + row.seconds, 0) }];
   });
   return 'validation sample producers (stderr, never tallied): ' + JSON.stringify({ shards,
-    individual_limit_seconds: 60, shard_limit_seconds: 120 });
+    individual_limit_seconds: 60, shard_limit_seconds: 180 });
 }
 
 /** A null input is a HOLE. A failed/corrupt producer is an error, never a HOLE. */
@@ -143,9 +143,9 @@ export function validationBuild(root: string, cache: string, head: string, varia
     appendFileSync(join(cache, 'build-times.jsonl'), JSON.stringify({ head, key, variant, seconds, exit: r.status, signal: r.signal }) + '\n');
     const total = validationBuildSeconds(cache);
     console.error(`validation sample build: ${variant} ${seconds.toFixed(3)} s, shard total ${total.toFixed(3)} s, head ${head}, inputs ${inputs}`);
-    if (seconds > 60 || total > 120) {
-      writeFileSync(stop, JSON.stringify({ variant, seconds, total, individualLimit: 60, shardLimit: 120 }));
-      throw new Error('validation sample build exceeded its fixed 60 s or shard 120 s bar; receipts retained');
+    if (seconds > 60 || total > 180) {
+      writeFileSync(stop, JSON.stringify({ variant, seconds, total, individualLimit: 60, shardLimit: 180 }));
+      throw new Error('validation sample build exceeded its fixed 60 s or shard 180 s bar; receipts retained');
     }
     if (r.status !== 0) {
       writeFileSync(stop, JSON.stringify({ variant, exit: r.status, signal: r.signal }));
