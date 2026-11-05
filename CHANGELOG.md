@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.13.0](https://github.com/rig-c/parts/compare/v2.12.0...v2.13.0) (2026-11-05)
+
+
+### Features
+
+* **check:** declare figure-mask domain for setup painting ([#974](https://github.com/rig-c/parts/issues/974)) ([#1061](https://github.com/rig-c/parts/issues/1061)) ([b402f43](https://github.com/rig-c/parts/commit/b402f43848573a521554c0bb663b66e4229d230b))
+
+
+### Bug Fixes
+
+* **assemble:** complete owned interior translucency in the visible figure ([#1051](https://github.com/rig-c/parts/issues/1051)) ([#1062](https://github.com/rig-c/parts/issues/1062)) ([4fdc93c](https://github.com/rig-c/parts/commit/4fdc93c551ec8b1de0240e29fdbb2e44d2273c96))
+
 ## [2.12.0](https://github.com/rig-c/parts/compare/v2.11.0...v2.12.0) (2026-11-05)
 
 
