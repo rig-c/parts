@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.14.0](https://github.com/rig-c/parts/compare/v2.13.1...v2.14.0) (2026-11-05)
+
+
+### Features
+
+* **assemble:** restore owned figure gaps on busy ground inside a declared mask ([#1060](https://github.com/rig-c/parts/issues/1060)) ([#1065](https://github.com/rig-c/parts/issues/1065)) ([12d1b2d](https://github.com/rig-c/parts/commit/12d1b2da2be81772d8f1916c8810b8c6dbc31033))
+
 ## [2.13.1](https://github.com/rig-c/parts/compare/v2.13.0...v2.13.1) (2026-11-05)
 
 
