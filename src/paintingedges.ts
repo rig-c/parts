@@ -156,7 +156,17 @@ export interface PaintingEdgeSkips {
   support: number;
 }
 
+/** One existing counter increment, with its rig coordinate and stack part. */
+export interface PaintingEdgeDecision {
+  pixel: number;
+  part: number;
+  kind: 'resolved-changed' | 'resolved-unchanged' | 'unseparated' | 'skipped';
+  reason?: keyof PaintingEdgeSkips;
+}
+
 export interface PaintingEdgeResult {
+  /** Per-pixel decision evidence for callers selecting results from multiple passes. */
+  ledger: PaintingEdgeDecision[];
   /** Per part (stack index), the pixels whose RGBA the step changed. */
   changed: Mask[];
   /** Edge pixels resolved (whether or not a value changed), and the ones left. */
@@ -251,6 +261,7 @@ interface Decision {
 
 /** See the invariant above {@link EDGE_RADIUS}. Modifies `parts` (full rig canvases, draw order) in place. */
 export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEdgeOptions): PaintingEdgeResult {
+  const ledger: PaintingEdgeDecision[] = [];
   const W = srcr.width;
   const H = srcr.height;
   const n = parts.length;
@@ -348,6 +359,7 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
       for (let j = behind + 1; j < n && !covered; j++) if (j !== front && parts[j].data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) covered = true;
       if (covered) {
         skipped.cover++;
+        ledger.push({pixel:p,part:front,kind:'skipped',reason:'cover'});
         continue;
       }
       if (
@@ -361,6 +373,7 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
       ) {
         locked[p] = 1;
         skipped.locked++;
+        ledger.push({pixel:p,part:front,kind:'skipped',reason:'locked'});
         continue;
       }
       const df = distOf(front);
@@ -390,6 +403,7 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
       }
       if (sideB.length === 0) {
         skipped.noBehind++;
+        ledger.push({pixel:p,part:front,kind:'skipped',reason:'noBehind'});
         continue;
       }
       const channel = (c: number): number[] => sideB.map((q) => srcr.data[q * 4 + c]);
@@ -413,6 +427,7 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
       const along = (q: number): number => (srcr.data[q * 4] - cb[0]) * axis[0] + (srcr.data[q * 4 + 1] - cb[1]) * axis[1] + (srcr.data[q * 4 + 2] - cb[2]) * axis[2];
       if (ref < 0 || contrast < EDGE_CONTRAST) {
         skipped.contrast++;
+        ledger.push({pixel:p,part:front,kind:'skipped',reason:'contrast'});
         continue;
       }
       // The trimap: BEHIND's far side reads 0 up to its highest position, FRONT's far side 1 from its lowest.
@@ -420,7 +435,10 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
       const sideLo = Math.max(...sideB.map(along));
       const sideHi = sideF.length === 0 ? -Infinity : Math.min(...sideF.map(along));
       const separate = sideHi > sideLo;
-      if (!separate) unseparated++;
+      if (!separate) {
+        unseparated++;
+        ledger.push({pixel:p,part:front,kind:'unseparated'});
+      }
       // Busy ground: a pixel on BEHIND's side is read only where it is a mix of Cb and Cf (its distance, max channel, from
       // the nearest point of the segment Cb..Cf within half the contrast floor); a ground of many colours is not Cb.
       if (busy && a !== front) {
@@ -429,12 +447,14 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
         const off = Math.max(...[0, 1, 2].map((c) => Math.abs(srcr.data[p * 4 + c] - (cb[c] + t * axis[c]))));
         if (2 * off > EDGE_CONTRAST) {
           skipped.mix++;
+        ledger.push({pixel:p,part:front,kind:'skipped',reason:'mix'});
           continue;
         }
       }
       const lo = separate ? sideLo : 0;
       const hi = separate ? sideHi : along(ref);
       resolved++;
+      ledger.push({pixel:p,part:front,kind:'resolved-unchanged'});
       let matte = Math.round((255 * Math.min(hi - lo, Math.max(0, along(p) - lo))) / (hi - lo));
       // On FRONT's side of the line, a colour FRONT itself holds deeper in (within half the contrast floor, and nearer FRONT than
       // BEHIND) is FRONT's interior — a light lining, a highlight — not a mix with BEHIND, however it falls along the axis.
@@ -500,6 +520,7 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
     if (d[s] === r && d[s + 1] === g && d[s + 2] === bl && d[s + 3] === al) return;
     if (busy && al > d[s + 3] && !supports(i, p)) {
       skipped.support++;
+      ledger.push({pixel:p,part:i,kind:'skipped',reason:'support'});
       return;
     }
     planned[i].set(p, [r, g, bl, al]);
@@ -597,7 +618,10 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
         let best = -1;
         for (let p = 0; p < W * H; p++) if (now.labels[p] === l && cost[p] >= 0 && (best < 0 || cost[p] < cost[best])) best = p;
         for (let p = best; p >= 0 && cost[p] > 0; p = from[p]) {
-          if (nowOver.data[p] === 0 && writes.delete(p)) skipped.pieces++;
+          if (nowOver.data[p] === 0 && writes.delete(p)) {
+            skipped.pieces++;
+            ledger.push({pixel:p,part:i,kind:'skipped',reason:'pieces'});
+          }
         }
       }
     }
@@ -609,11 +633,15 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
       if (l !== 0 && holdsArt[l] === 0) {
         writes.delete(p);
         skipped.pieces++;
+        ledger.push({pixel:p,part:i,kind:'skipped',reason:'pieces'});
         // A fill BEHIND cannot take: FRONT takes the painting's pixel whole, so the composite there is still the painting
         // (FRONT is later in draw order, so its own pieces are held after this).
         const front = fills[i].get(p);
         if (front !== undefined) {
-          if (busy && !supports(front, p)) skipped.support++;
+          if (busy && !supports(front, p)) {
+            skipped.support++;
+            ledger.push({pixel:p,part:front,kind:'skipped',reason:'support'});
+          }
           else planned[front].set(p, [srcr.data[p * 4], srcr.data[p * 4 + 1], srcr.data[p * 4 + 2], 255]);
         }
       }
@@ -727,5 +755,8 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
     for (const p of writes.keys()) options.written?.(i, p);
   });
   for (const [p, front] of restore) if (!planned[front].has(p)) options.written?.(front, p);
-  return { changed, resolved, unseparated, skipped };
+  for (const event of ledger) {
+    if (event.kind === 'resolved-unchanged' && changed.some(mask => mask.data[event.pixel] === 1)) event.kind = 'resolved-changed';
+  }
+  return { changed, resolved, unseparated, skipped, ledger };
 }

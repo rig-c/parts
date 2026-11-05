@@ -2364,6 +2364,67 @@ export function projectSource(rigLayers: Raster[], srcr: Raster, frame: Frame, r
   });
 }
 
+/** Frozen original-source eligibility for the alpha-only coverage reveal. */
+export interface ProjectionRevealSource {
+  key: string;
+  image: Raster;
+  original: ValueBaseline | null;
+  projection: ProjectionStats;
+  keep: Mask | null;
+  protected: boolean;
+}
+
+/** Issue #1069: freeze the nearest opaque lower original-source witness after
+ * RGB projection. The original two-sided margins bound eligibility. The final
+ * composite union guard reads a cropped and seamed main counterfactual. Only accepted alpha
+ * cuts reach a separate edge pass, selected per pixel after common fringe.
+ */
+export function sourceCoverageWitnesses(
+  sources: readonly ProjectionRevealSource[],
+  painting: Raster,
+): Map<string, Mask> {
+  const { width: W, height: H } = painting;
+  const masks = new Map<string, Mask>();
+  const originalOffset = (source: ProjectionRevealSource, p: number): number => {
+    const original = source.original;
+    if (original === null) return -1;
+    const x = p % W - original.x;
+    const y = Math.floor(p / W) - original.y;
+    if (x < 0 || y < 0 || x >= original.image.width || y >= original.image.height) return -1;
+    return (y * original.image.width + x) * 4;
+  };
+  sources.forEach((front, index) => {
+    if (front.protected || front.original === null || front.projection.refusedMask === null) return;
+    for (let p = 0; p < W * H; p++) {
+      if (front.projection.refusedMask.data[p] !== 1 || front.keep?.data[p] === 1 ||
+        front.image.data[p * 4 + 3] < CORE_ALPHA) continue;
+      const offset = originalOffset(front, p);
+      if (offset < 0 || front.original.image.data[offset + 3] < CORE_ALPHA ||
+        maxDiff(front.original.image.data, offset, painting.data, p * 4) <= DRIFT_LIMIT) continue;
+      if (sources.slice(index + 1).some(source => source.image.data[p * 4 + 3] >= CORE_ALPHA)) continue;
+      // An opaque intervening part excludes a more distant witness.
+      let lower: ProjectionRevealSource | undefined;
+      for (let i = index - 1; i >= 0; i--) {
+        if (sources[i].image.data[p * 4 + 3] >= CORE_ALPHA) {
+          lower = sources[i];
+          break;
+        }
+      }
+      if (lower === undefined || lower.original === null) continue;
+      const lowerOffset = originalOffset(lower, p);
+      if (lowerOffset < 0 || lower.original.image.data[lowerOffset + 3] < CORE_ALPHA ||
+        maxDiff(lower.original.image.data, lowerOffset, painting.data, p * 4) > ERROR_LIMIT) continue;
+      let mask = masks.get(front.key);
+      if (mask === undefined) {
+        mask = newMask(W, H);
+        masks.set(front.key, mask);
+      }
+      mask.data[p] = 1;
+    }
+  });
+  return masks;
+}
+
 // ---------------------------------------------------------------------------
 // step 4 — merge below the head crop
 // ---------------------------------------------------------------------------
@@ -3719,6 +3780,8 @@ export function cutBand(polygonMask: Mask, overlap: number): Mask {
 interface Built {
   /** Report-only last writer at each rig coordinate; never read by raster arithmetic. */
   writers?: Int32Array;
+  /** Frozen reveal eligibility, carried with copied material through derivation. */
+  revealMask?: Mask;
   key: string;
   r: Raster;
   st: ProjectionStats;
@@ -4234,7 +4297,8 @@ function cutLimbs(
     }
     for (const { q, i } of shares) {
       const writers = b.writers?.slice();
-      pieces[i] = { ...b, writers, r: rasters[i], region: regions[i], merged: mergedIn(b, regions[i]) };
+      const revealMask = b.revealMask === undefined ? undefined : { ...b.revealMask, data: b.revealMask.data.slice() };
+      pieces[i] = { ...b, writers, revealMask, r: rasters[i], region: regions[i], merged: mergedIn(b, regions[i]) };
       if (count(regions[i], regions[i]) === 0 && opaqueOf(rasters[i]) === 0 && !emptyTargets?.has(q.part)) {
         problems.push({
           code: 'ASSEMBLE_LIMB_PIXELS',
@@ -4329,7 +4393,10 @@ function cutLimbs(
         return;
       }
       const lower = rasters[at];
-      const capWrite = (p: number, data: Uint8ClampedArray, offset: number): void => {
+      const capWrite = (p: number, data: Uint8ClampedArray, offset: number, coverage = 0): void => {
+        const piece = pieces[at] as Built;
+        if (coverage === 1 && piece.revealMask === undefined) piece.revealMask = newMask(W, H);
+        if (piece.revealMask !== undefined) piece.revealMask.data[p] = coverage;
         const ids = (pieces[at] as Built).writers;
         if (ids !== undefined && !rgbaEqual(lower.data, p * 4, data, offset)) ids[p] = AW.limbCap;
       };
@@ -4388,7 +4455,7 @@ function cutLimbs(
             imagePx++;
             mark(x, y, CAP_FROM_IMAGE);
           } else if (ownLower[p] === li && lowerSrc.r.data[p * 4 + 3] > 0) {
-            capWrite(p, lowerSrc.r.data, p * 4);
+            capWrite(p, lowerSrc.r.data, p * 4, lowerSrc.revealMask?.data[p] ?? 0);
             lower.data.set(lowerSrc.r.data.subarray(p * 4, p * 4 + 4), p * 4);
             layerPx++;
             mark(x, y, CAP_FROM_LAYER);
@@ -4396,7 +4463,7 @@ function cutLimbs(
             // Issue #360: the disc is filled from the art — the upper segment's, where the lower's layer has none.
             // Issue #557: under either shape — the half-disc too takes the neighbouring segment's pixels, so a cap is
             // short only where no layer of the limb gives a pixel.
-            capWrite(p, upper.data, p * 4);
+            capWrite(p, upper.data, p * 4, (pieces[upAt] as Built).revealMask?.data[p] ?? 0);
             lower.data.set(upper.data.subarray(p * 4, p * 4 + 4), p * 4);
             upperPx++;
             mark(x, y, CAP_FROM_UPPER);
@@ -4550,7 +4617,8 @@ function cutLimbs(
       capFrom[loAt] = null;
       parts.push({ limb: l, segment: k, part: sg.hybrid.part, of: sg.from, record: { name: l, segment: k, of: base.of, bone: sg.bone, joint: sg.joint, band: geometry } });
       const writers = source.writers?.slice();
-      pieces.push({ ...source, writers, r, region, merged: mergedIn(source, region) });
+      const revealMask = source.revealMask === undefined ? undefined : { ...source.revealMask, data: source.revealMask.data.slice() };
+      pieces.push({ ...source, writers, revealMask, r, region, merged: mergedIn(source, region) });
       capFrom.push(null);
       // Existing piece objects refer to the same raster and mask.
       for (const i of [upAt, loAt]) (pieces[i] as Built).merged = mergedIn(pieces[i] as Built, regions[i]);
@@ -5064,6 +5132,21 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     });
   }
 
+  let revealMask = new Map<string, Mask>();
+  if (projectRule === 'visible') {
+    revealMask = sourceCoverageWitnesses(sourcePlan.map(([name, run, tag]) => {
+      const key = `${run}:${tag}`;
+      return {
+        key,
+        image: rig.get(key) as Raster,
+        original: valueBaselines.get(key) ?? null,
+        projection: stats.get(key) as ProjectionStats,
+        keep: underCover.get(key) ?? null,
+        protected: input.keepUnderOccluders?.includes(name) === true,
+      };
+    }), srcr);
+  }
+
   // Patches are checked against the rig before any pixel work, like the plan.
   const patchProblems: Problem[] = [];
   patches.forEach((q, i) => {
@@ -5190,6 +5273,8 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     const extras = extendKeys.map((k) => rig.get(k) as Raster);
     let merged = 0;
     const writers = (layerWriters.get(key) as Int32Array).slice();
+    const coverage = revealMask.get(key);
+    const touched = coverage === undefined ? undefined : { ...coverage, data: coverage.data.slice() };
     const trace: MergeTrace = { from: new Int32Array(W * H).fill(-1), ring: newMask(W, H) };
     if (extras.length > 0) {
       const front = newMask(W, H);
@@ -5197,7 +5282,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
         const f = rig.get(`${run2}:${tag2}`) as Raster;
         for (let p = 0; p < W * H; p++) if (f.data[p * 4 + 3] >= FRONT_ALPHA) front.data[p] = 1;
       }
-      merged = mergeBelowCrop(r, extras, front, srcr, frame.headBottom, trace, (p, stage) => { writers[p] = AW[stage]; });
+      merged = mergeBelowCrop(r, extras, front, srcr, frame.headBottom, trace, (p, stage) => { writers[p] = AW[stage]; if (touched !== undefined) touched.data[p] = 0; });
     }
     const { x1, opaque } = measureBox(r);
     if (opaque === 0 && !emptyTargets?.has(name)) {
@@ -5208,7 +5293,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       });
       return null;
     }
-    return { key, r, st, extendKeys, trace, merged, region: null, writers };
+    return { key, r, st, extendKeys, trace, merged, region: null, writers, revealMask: touched };
   };
   plan.forEach(([name, run, tag], pi) => { built[pi] = buildSource(name, run, tag, pi); });
   // Snapshot independent piece pixels before any parent's subtraction or under fill.
@@ -5285,8 +5370,9 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
         }
       }
       const writers = (b.writers as Int32Array).slice();
+      const revealMask = b.revealMask === undefined ? undefined : { ...b.revealMask, data: b.revealMask.data.slice() };
       // A retained base band is not written: it keeps its earlier writer.
-      pieces[i] = { ...b, r, writers, region: m, merged: mergedIn(b, m) };
+      pieces[i] = { ...b, r, writers, revealMask, region: m, merged: mergedIn(b, m) };
       bands.push(nb);
       return n;
     });
@@ -5338,7 +5424,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       const band = cutBand(cutMasks[i], cuts[i].overlap);
       let opaqueFilled = 0;
       // The under operation wrote only removed pixels it actually filled.
-      for (let p = 0; p < W * H; p++) if (cutMasks[i].data[p] === 1 && band.data[p] === 0 && (pieces[i] as Built).r.data[p * 4 + 3] > 0 && b.r.data[p * 4 + 3] > 0) { (b.writers as Int32Array)[p] = cutIds[i]; if (b.r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) opaqueFilled++; }
+      for (let p = 0; p < W * H; p++) if (cutMasks[i].data[p] === 1 && band.data[p] === 0 && (pieces[i] as Built).r.data[p * 4 + 3] > 0 && b.r.data[p * 4 + 3] > 0) { (b.writers as Int32Array)[p] = cutIds[i]; if (b.revealMask !== undefined) b.revealMask.data[p] = 0; if (b.r.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE) opaqueFilled++; }
       // A hidden-art layer (issue #359) is the whole layer's covered art, read by every cut of its part: a cut it holds nothing
       // under fills 0, which the cut line counts, and is not refused as a file made for this one cut would be.
       if (f.filled === 0 && input.cuts[i].under !== undefined && !emptyTargets?.has(cuts[i].into)) {
@@ -5372,7 +5458,8 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     for (let p = 0; p < W * H; p++) if (m.data[p] === 1) r.data.set(source.r.data.subarray(p * 4, p * 4 + 4), p * 4);
     if (opaqueOf(r) === 0 && !emptyTargets?.has(cuts[i].into)) empty.push({ code: 'ASSEMBLE_CUT_PIXELS', object: `config.assemble.cuts[${i}] (part "${cuts[i].into}")`, detail: `takes 0 opaque pixels from selected ${source.key}; draw its polygon over that layer's art` });
     const writers = (source.writers as Int32Array).slice();
-    pieces[i] = { ...source, r, writers, region: m, merged: mergedIn(source, m) };
+      const revealMask = source.revealMask === undefined ? undefined : { ...source.revealMask, data: source.revealMask.data.slice() };
+    pieces[i] = { ...source, r, writers, revealMask, region: m, merged: mergedIn(source, m) };
     for (let j = materialSources.length - 1; j >= 0; j--) if (materialSources[j].part === cuts[i].into) materialSources.splice(j, 1);
     materialSources.push(materialSource(cuts[i].into, [source.key], polygonMaterialEdges(cuts[i].polygon), [{ x: 0, y: 0, image: source.r }]));
     for (let j = cutMaterial.length - 1; j >= 0; j--) if (cutMaterial[j].part === cuts[i].into) cutMaterial.splice(j, 1);
@@ -5713,6 +5800,14 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   });
   // Issue #953: under `visible`, the parts' visible edges are the painting's (`paintingEdges`); See-through keeps the hidden surface.
   const visibleFigure = projectRule === 'visible' ? sourceSupportFigure(source, W, H, srcr) : undefined;
+  const revealInOrder = order.map(d => 'patch' in d ? null : pieceAt(d).b.revealMask ?? null);
+  const eligibleCoverage = newMask(W, H);
+  for (const mask of revealInOrder) {
+    if (mask === null) continue;
+    for (let p = 0; p < W * H; p++) if (mask.data[p] === 1) eligibleCoverage.data[p] = 1;
+  }
+  const acceptedCoverage = newMask(W, H);
+  const selectedCoverage = newMask(W, H);
   const edged = new Map<string, Mask>();
   let edgeReading: PaintingEdgeReading | null = null;
   if (projectRule === 'visible') {
@@ -5734,7 +5829,12 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       }
       return whole;
     };
-    const e = paintingEdges(stack.map(onRig), srcr, {
+    const edgeInput = stack.map(onRig);
+    const hasEligibility = eligibleCoverage.data.some(value => value === 1);
+    const cutInput = hasEligibility ? edgeInput.map(image => ({ ...image, data: image.data.slice() })) : null;
+    const commonWriters = hasEligibility ? writersInOrder.map(writers => writers.slice()) : [];
+    const commonRegions = hasEligibility ? order.map(d => 'patch' in d ? null : pieceAt(d).b.region?.data.slice() ?? null) : [];
+    const edgeOptions: Parameters<typeof paintingEdges>[2] = {
       painted: supportPainted,
       figure: visibleFigure,
       ...(input.declaredFigure === undefined ? {} : { declaredFigure: input.declaredFigure }),
@@ -5751,7 +5851,103 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
           if (region !== null && stack[i].image.data[p * 4 + 3] > 0) region.data[p] = 1;
         }
       },
-    });
+    };
+    const e = paintingEdges(edgeInput, srcr, edgeOptions);
+    const finalReference = (images: readonly Raster[]): PlacedPart[] => {
+      const reference = stack.map((part, i): PlacedPart => {
+        if ('patch' in order[i]) return { record: { ...part.record }, image: { ...part.image, data: part.image.data.slice() } };
+        const image = images[i];
+        const { x0, y0, x1, y1, opaque } = measureBox(image);
+        if (opaque === 0) return { record: { ...part.record, x: 0, y: 0, w: 1, h: 1 }, image: newRaster(1, 1) };
+        const w = x1 - x0 + 1;
+        const h = y1 - y0 + 1;
+        return { record: { ...part.record, x: x0, y: y0, w, h }, image: crop(image, x0, y0, w, h) };
+      });
+      seamOverride(reference, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, keepInOrder, input.turnMovingPair ?? null);
+      return reference;
+    };
+    const guardReference = hasEligibility ? finalReference(edgeInput) : [];
+    const compositeAt = (parts: readonly PlacedPart[], pixel: number, cut: boolean): Raster => {
+      let composite = newRaster(1, 1);
+      composite.data.fill(255);
+      parts.forEach((part, i) => {
+        if (cut && revealInOrder[i]?.data[pixel] === 1) return;
+        const x = pixel % W - part.record.x;
+        const y = Math.floor(pixel / W) - part.record.y;
+        if (x < 0 || y < 0 || x >= part.image.width || y >= part.image.height) return;
+        const offset = (y * part.image.width + x) * 4;
+        if (part.image.data[offset + 3] === 0) return;
+        composite = alphaComposite(composite, { width: 1, height: 1, data: part.image.data.subarray(offset, offset + 4) });
+      });
+      return composite;
+    };
+    if (cutInput !== null) {
+      for (let p = 0; p < W * H; p++) {
+        if (eligibleCoverage.data[p] !== 1) continue;
+        const uncutError = maxDiff(compositeAt(guardReference, p, false).data, 0, srcr.data, p * 4);
+        const cutError = maxDiff(compositeAt(guardReference, p, true).data, 0, srcr.data, p * 4);
+        if (cutError <= ERROR_LIMIT || cutError < uncutError) acceptedCoverage.data[p] = 1;
+      }
+    }
+    if (cutInput !== null && acceptedCoverage.data.some(value => value === 1)) {
+      cutInput.forEach((image, i) => {
+        const mask = revealInOrder[i];
+        if (mask === null) return;
+        for (let p = 0; p < W * H; p++) if (acceptedCoverage.data[p] === 1 && mask.data[p] === 1) image.data[p * 4 + 3] = 0;
+      });
+      const cutResult = paintingEdges(cutInput, srcr, { ...edgeOptions, written: undefined });
+      cutInput.forEach((image, i) => {
+        const mask = revealInOrder[i];
+        if (mask === null) return;
+        for (let p = 0; p < W * H; p++) if (acceptedCoverage.data[p] === 1 && mask.data[p] === 1) image.data[p * 4 + 3] = 0;
+      });
+      selectedCoverage.data.set(acceptedCoverage.data);
+      const prospectiveInput = edgeInput.map((image, i) => {
+        const prospective = { ...image, data: image.data.slice() };
+        for (let p = 0; p < W * H; p++) if (acceptedCoverage.data[p] === 1) prospective.data.set(cutInput[i].data.subarray(p * 4, p * 4 + 4), p * 4);
+        return prospective;
+      });
+      const prospectiveFinal = finalReference(prospectiveInput);
+      for (let p = 0; p < W * H; p++) {
+        if (acceptedCoverage.data[p] !== 1) continue;
+        const uncutError = maxDiff(compositeAt(guardReference, p, false).data, 0, srcr.data, p * 4);
+        const prospectiveError = maxDiff(compositeAt(prospectiveFinal, p, false).data, 0, srcr.data, p * 4);
+        if (prospectiveError > ERROR_LIMIT && prospectiveError >= uncutError) selectedCoverage.data[p] = 0;
+      }
+      const selectedLedger = [
+        ...e.ledger.filter(event => selectedCoverage.data[event.pixel] !== 1),
+        ...cutResult.ledger.filter(event => selectedCoverage.data[event.pixel] === 1),
+      ];
+      edgeInput.forEach((image, i) => {
+        const slot = order[i];
+        const b = 'patch' in slot ? null : pieceAt(slot).b;
+        const mask = revealInOrder[i];
+        for (let p = 0; p < W * H; p++) {
+          if (selectedCoverage.data[p] !== 1) continue;
+          const cut = mask?.data[p] === 1 && image.data[p * 4 + 3] > 0;
+          image.data.set(cutInput[i].data.subarray(p * 4, p * 4 + 4), p * 4);
+          writersInOrder[i][p] = cutResult.changed[i].data[p] === 1 ? AW.paintingEdge : commonWriters[i][p];
+          e.changed[i].data[p] = cutResult.changed[i].data[p];
+          if (b?.region !== null && b?.region !== undefined) b.region.data[p] = cutResult.changed[i].data[p] === 1 && image.data[p * 4 + 3] > 0 ? 1 : commonRegions[i]?.[p] ?? 0;
+          if (cut && b !== null) {
+            if (b.st.takenMask.data[p] === 1) {
+              b.st.takenMask.data[p] = 0;
+              b.st.taken--;
+            }
+            writersInOrder[i][p] = AW.sourceProjection;
+          }
+        }
+      });
+      e.ledger = selectedLedger;
+      e.resolved = 0;
+      e.unseparated = 0;
+      e.skipped = { cover: 0, contrast: 0, locked: 0, noBehind: 0, pieces: 0, mix: 0, support: 0 };
+      for (const event of selectedLedger) {
+        if (event.kind === 'resolved-changed' || event.kind === 'resolved-unchanged') e.resolved++;
+        else if (event.kind === 'unseparated') e.unseparated++;
+        else if (event.reason !== undefined) e.skipped[event.reason]++;
+      }
+    }
     order.forEach((d, i) => {
       if (!('patch' in d) && e.changed[i].data.some((v) => v === 1)) edged.set(pieceAt(d).name, e.changed[i]);
     });
