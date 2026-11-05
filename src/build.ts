@@ -1,3 +1,4 @@
+import { readSetupFigureMask } from './setupfiguremask.ts';
 import { EDGE_RESIDUAL_FILE, edgeResidualLines } from './edgeresidual.ts';
 import { SUPPORT_DOMAINS_FILE, writeSupportDomains } from './supportdomains.ts';
 import { COINCIDE_LINE, supportLines } from './coincide.ts';
@@ -334,13 +335,14 @@ export function frontOrdered<T extends { record: { name: string } }>(items: read
 
 /** Read, assemble, and write only after every refusal has had its chance. Throws a PartsError on a refusal, having written nothing. */
 export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, log: Log): AssembleResult {
-  const requirementsFile = input.requirements === undefined ? null : readRequirements(input.requirements);
+  const cfg = loadEarlyConfig(input.config, 'assemble');
+  const requirements = buildRequirements(input.requirements, cfg.requirements, input.config);
+  const requirementsFile = requirements === null ? null : readRequirements(requirements.read);
   const materialAsked = requirementsFile?.cut_material !== undefined;
   // Issue #944: the pinhole bar is measured only when the requirements file declares it required.
   const pinholesAsked = requirementsFile !== null && pinholesRequired(requirementsFile);
   // The early door: assemble runs before propose has drafted bones, meshes,
   // regions and motion, so it requires only what it reads (issue #20).
-  const cfg = loadEarlyConfig(input.config, 'assemble');
   const supportDeclarations = JSON.stringify(cfg.assemble.cuts ?? []);
   const seam = input.seam ?? cfg.assemble.seam ?? DEFAULT_SEAM_RULE;
   const project = input.project ?? cfg.assemble.project ?? DEFAULT_PROJECT_RULE;
@@ -354,9 +356,12 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const runs = applyTakenRegions(takenRuns, src, cfg, input.config, requirementsFile?.setup_painting, receipts, input.source);
   for (const note of runs.notes) log(note.startsWith('WARN  ') ? note : `note: ${note}`);
   const fields = stageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
+  const figureSupport = requirementsFile?.setup_painting === undefined || fields.ground !== 'busy' || project !== 'visible' ? undefined
+    : readSetupFigureMask(requirementsFile.setup_painting, requirements!.read, src, Math.trunc(src.width * fields.rigScale), Math.trunc(src.height * fields.rigScale));
+  const declaredFigure = figureSupport === undefined ? undefined : { width: Math.trunc(src.width * fields.rigScale), height: Math.trunc(src.height * fields.rigScale), data: figureSupport };
   const under = readUnders(input.config, fields.cuts);
   const caps = fields.limbs === undefined ? undefined : readCaps(input.config, fields.limbs);
-  const result = assemble({ source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under,
+  const result = assemble({ source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under, ...(declaredFigure === undefined ? {} : { declaredFigure }),
     ...((cfg.assemble.take ?? []).some(t => 'part' in t) ? { regionTake: { full: takenRuns.full, head: takenRuns.head, targets: (cfg.assemble.take ?? []).flatMap(t => 'part' in t ? [t.part] : []) } } : {}), ...(caps === undefined ? {} : { caps }), seamRule: seam, projectRule: project });
 
   // Issue #454: alternate painting sets, assembled before any file is written.
@@ -786,7 +791,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   // Issue #944: under pinholes.required, every pinhole of the base set's flat parts stack is refused by name, with the
   // alternate sets' refusals, before anything is written.
   const pinholes = pinholesAsked ? measurePinholes(sourceInRig(src, result.parts.rig_size[0], result.parts.rig_size[1]), result.images) : null;
-  if (pinholes !== null) altProblems.push(...pinholeProblems(pinholes, input.requirements as string));
+  if (pinholes !== null) altProblems.push(...pinholeProblems(pinholes, requirements!.read));
   refuseIfAny(altProblems);
   if (altBuilt.length > 0) {
     result.parts.alternates = altBuilt.map((b) => b.record);

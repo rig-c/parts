@@ -1671,6 +1671,8 @@ export interface EarlyConfig {
 
 /** What plain `assemble` reads: the early config plus the plan `--propose-plan` printed. */
 export interface AssembleConfig {
+  /** Existing requirements declaration, shared by standalone assemble and build. */
+  requirements?: string;
   depth?: DepthConfig;
   key: string;
   seethrough: SeeThrough;
@@ -1760,6 +1762,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null): 
     }
   }
   if (door === 'assemble') {
+    if ('requirements' in t && c.string('config.requirements', t.requirements) && base !== null) checkRequirementsFile(c, configFilePath('requirements', base, t.requirements) as string);
     if ('seethrough' in t) checkSeeThrough(c, t.seethrough);
     const made = 'assemble' in t ? checkAssemble(c, t.assemble, door) : { parts: [], patches: [], cuts: [] };
     checkProposedRigScale(c, t);

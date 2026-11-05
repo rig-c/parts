@@ -416,6 +416,64 @@ export function runPaintingEdgeChecks(say: Say): void {
       `witnessed back and front alphas ${surface.map(q => q.data[offset + 3]).join(',')}; composite ${[...compositePixel].join(',')}`);
   }
 
+  // Declared busy-ground restoration keeps both support snapshots immutable.
+  {
+    const p = 4 * W + 16, offset = p * 4;
+    const painting = columns(() => RED, () => 255);
+    const figure = newMask(W, H); figure.data.fill(1);
+    const run = (layers: Raster[], extra: Partial<PaintingEdgeOptions> = {}) => {
+      const stack = layers.map(copy);
+      paintingEdges(stack, painting, options({ ground: 'busy', figure, declaredFigure: figure,
+        editable: layers.map(() => true), ...extra }));
+      return stack;
+    };
+    const layer = columns(() => RED, x => x < 18 ? (x === 16 ? 64 : 255) : 0);
+    const gap = copy(layer); gap.data[offset + 3] = 0;
+    const filled = [run([gap])[0], run([layer])[0]];
+    say('ED9570_DECLARED_BUSY_HOLE_AND_SINGLE_HOLDER_TRANSLUCENCY_COMPLETE',
+      filled.every(part => [...part.data.slice(offset, offset + 4)].join(',') === '200,0,0,255'),
+      `hole and single-holder alpha ${filled.map(part => part.data[offset + 3]).join(',')}`);
+    const omitted = run([layer], { declaredFigure: undefined });
+    const empty = run([layer], { declaredFigure: newMask(W, H) });
+    const plainDeclared = run([layer], { ground: 'plain' });
+    const plainOmitted = run([layer], { ground: 'plain', declaredFigure: undefined });
+    say('ED9571_BUSY_OMISSION_AND_PLAIN_DECLARATION_KEEP_EXISTING_BYTES',
+      same(omitted[0], layer) && same(empty[0], omitted[0]) && same(plainDeclared[0], plainOmitted[0]),
+      `busy omission ${same(omitted[0], layer)}; empty domain ${same(empty[0], omitted[0])}; plain ${same(plainDeclared[0], plainOmitted[0])}`);
+    const keep = newMask(W, H); keep.data[p] = 1;
+    const guarded = [{ editable: [false] }, { keep: [keep] }, { feathered: [keep] }];
+    say('ED9572_BUSY_RESTORATION_RESPECTS_EDITABLE_KEEP_AND_FEATHER',
+      guarded.every(extra => run([layer], extra)[0].data[offset + 3] === 64),
+      'locked receiver, keep and feather each retain alpha 64');
+    const rim = newMask(W, H); rim.data.set(figure.data); rim.data[p - W] = 0;
+    const detached = newRaster(W, H); detached.data.set([...RED, 64], offset);
+    say('ED9573_BUSY_RIM_AND_UNOWNED_TRANSLUCENCY_STAY_UNCHANGED',
+      run([layer], { declaredFigure: rim })[0].data[offset + 3] === 64 && run([detached])[0].data[offset + 3] === 64,
+      'rim and no four-neighbour art retain alpha 64');
+    const back = newRaster(W, H), front = newRaster(W, H);
+    back.data.set([...RED, 255], (p - 1) * 4);
+    front.data.set([...RED, 255], (p + 1) * 4);
+    const tie = run([back, front]);
+    say('ED9574_BUSY_NO_HOLDER_DISTANCE_TIE_GOES_TO_FRONT',
+      tie[0].data[offset + 3] === 0 && tie[1].data[offset + 3] === 255,
+      `equal-distance receiver alphas ${tie.map(part => part.data[offset + 3]).join(',')}`);
+    const held = copy(back); held.data.set([...RED, 40], offset);
+    const holder = run([held, front]);
+    say('ED9575_BUSY_PRE_STEP_HOLDER_PRECEDES_NEAREST_NONHOLDER',
+      holder[0].data[offset + 3] === 255 && holder[1].data[offset + 3] === 0,
+      `holder behind neighbour-only front alphas ${holder.map(part => part.data[offset + 3]).join(',')}`);
+    const veil = copy(front); veil.data.set([...RED, 20], offset);
+    const moving = run([held, veil], { movingPair: () => true });
+    say('ED9576_BUSY_MOVING_HOLDERS_REMAIN_LOCKED',
+      moving[0].data[offset + 3] === 40 && moving[1].data[offset + 3] === 20,
+      `moving holders ${moving.map(part => part.data[offset + 3]).join(',')}`);
+    const seed = newRaster(W, H); seed.data.set([...RED, 255], (p - 2) * 4);
+    const frozen = run([seed]);
+    say('ED9577_BUSY_RESTORATION_CANNOT_GROW_ITS_OWN_SUPPORT',
+      frozen[0].data[(p - 1) * 4 + 3] === 255 && frozen[0].data[offset + 3] === 0,
+      `adjacent gap ${frozen[0].data[(p - 1) * 4 + 3]}; second gap ${frozen[0].data[offset + 3]}`);
+  }
+
   // Planted: FRONT may not be edited (a painting patch): nothing is written.
   {
     const { painting, stack } = strip(RED, BLUE, RAMP);
