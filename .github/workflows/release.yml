@@ -191,11 +191,12 @@ jobs:
     needs: target
     if: ${{ needs.target.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
-    # The confirmation waits up to 15 minutes for `@rig-c/parts` and up to 15
-    # minutes per alias (packument and tarball), on top of the gates
-    # `prepublishOnly` runs and the publish itself; a ceiling under the wait
-    # would report a late registry as a cancelled job.
-    timeout-minutes: 60
+    # Release run 42111504664 measured Publish to npm at 1629 s, smoke at
+    # 30 s, publication setup/post at 9 s and alias publication at 15 s.
+    # Two fallback chains plus three 15-minute confirmation waits require
+    # 2 * 1629 + 30 + 9 + 15 + 3 * 900 = 6012 s (100 min 12 s).
+    # Round up to the next 30-minute boundary for a 120-minute ceiling.
+    timeout-minutes: 120
     permissions:
       contents: read
       actions: read
