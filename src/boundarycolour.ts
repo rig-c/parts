@@ -33,6 +33,7 @@ import { readPng } from './raster/png.ts';
 export const BOUNDARY_COLOUR_LINE = 'BOUNDARY_COLOUR_STEP';
 export const BOUNDARY_COLOUR_CODE = 'CHECK_BOUNDARY_COLOUR_STEP';
 export const BOUNDARY_COLOUR_UNMEASURED_CODE = 'CHECK_BOUNDARY_COLOUR_UNMEASURED';
+export const BOUNDARY_COLOUR_UNMEASURED_SUFFIX = "; the step against the rig's own pieces cannot be taken, and an untaken reading is never a pass — make the slot draw a parts.json piece, or drop boundary_colour from the requirements file and the bar reports SKIP";
 export const UNDECLARED_BOUNDARY_COLOUR_REASON = 'not measured, not a pass: no requirements file declares boundary_colour; declare {"boundary_colour": {"max_step_excess": <0-255>}} in the --requirements file (config.requirements under build) to hold every part boundary of the setup and every idle frame to the rig\'s own pieces';
 
 /** The one declaration: the largest step excess (0-255) the rig allows over its own pieces. No default exists. */
@@ -206,7 +207,7 @@ export function measureBoundaryColour(api: Api, input: BoundaryColourInput, decl
   readFrame(setup, 'setup', true);
   for (const frame of idle) readFrame(frame, `idle frame ${frame.index} (t ${+frame.time.toFixed(4)} s)`, false);
   const over = [...pairsWorst.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).map(([, v]) => v).filter((v) => v.excess > declared.max_step_excess);
-  for (const u of unmeasured) problems.push({ code: BOUNDARY_COLOUR_UNMEASURED_CODE, object: `slot "${u.slot}" (${u.frame})`, detail: `${u.reason}; the step against the rig's own pieces cannot be taken, and an untaken reading is never a pass — make the slot draw a parts.json piece, or drop boundary_colour from the requirements file and the bar reports SKIP` });
+  for (const u of unmeasured) problems.push({ code: BOUNDARY_COLOUR_UNMEASURED_CODE, object: `slot "${u.slot}" (${u.frame})`, detail: `${u.reason}${BOUNDARY_COLOUR_UNMEASURED_SUFFIX}` });
   for (const o of over) problems.push({ code: BOUNDARY_COLOUR_CODE, object: `part pair "${o.parts[0]}|${o.parts[1]}"`, detail: `${o.frame}, stage pixel (${o.at[0]}, ${o.at[1]}): step excess ${o.excess} > declared max_step_excess ${declared.max_step_excess} (rendered step ${o.rendered_step}, the rig's own pieces ${o.reference_step}); a texture stretched into its padded UVs or a notch cut out of a piece shows here — fix the rig image or mesh of that pair (AUTHORING, failure map)` });
   return {
     status: over.length === 0 && unmeasured.length === 0 ? 'PASS' : 'FAIL',

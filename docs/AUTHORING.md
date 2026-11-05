@@ -5592,7 +5592,7 @@ documents do not ship). Each is an input this package built; none is an author's
 | <a id="CHECK_SETUP_PAINTING_SOURCE"></a>`CHECK_SETUP_PAINTING_SOURCE` | a declaration without a source painting | supply `--source`; the assembled composite is not an independent reference |
 | <a id="CHECK_SETUP_PAINTING_MEASURED"></a>`CHECK_SETUP_PAINTING_MEASURED` | missing native setup/ownership or unsupported clipping | supply observable textured setup geometry; an unavailable instrument never passes |
 | <a id="CHECK_BOUNDARY_COLOUR_STEP"></a>`CHECK_BOUNDARY_COLOUR_STEP` | the requirements file declares `boundary_colour.max_step_excess` and a part boundary's colour step in the rig's render exceeds the same boundary's step in the rig's own pieces by more than it; the part pair, the frame (`setup` or `idle frame <n> (t <s> s)`), the stage pixel, the excess, the declared allowance and both steps are quoted. Unlike [`CHECK_SETUP_MATCHES_PAINTING`](#CHECK_SETUP_MATCHES_PAINTING), which compares the painting per declared region at the setup pose, this compares against the rig's own flat pieces (`parts.json` placement at setup, each piece's rest colour through its art UVs on every idle frame), so a part drawn over its neighbour's line art is not a failure | the pair's rig image or mesh: `rig/images/<part>.png` (a texture stretched into its padded UVs, or a notch cut out of it), or that part's mesh in `config.json` `meshes` when the mesh cuts a corner off the art; see [Boundary colour step](#boundary-colour-step-issue-942) |
-| <a id="CHECK_BOUNDARY_COLOUR_UNMEASURED"></a>`CHECK_BOUNDARY_COLOUR_UNMEASURED` | `boundary_colour` is declared and the step cannot be taken: no `parts.json` or no `idle` (refused before anything is built), or a drawn slot has no `parts.json` piece, is clipped, or its rig image is not its parts PNG with one even pad on every side (the slot and frame are named). Never a pass | make every drawn slot a `parts.json` piece, or drop `boundary_colour` from the requirements file (the bar then reports SKIP) |
+| <a id="CHECK_BOUNDARY_COLOUR_UNMEASURED"></a>`CHECK_BOUNDARY_COLOUR_UNMEASURED` | `boundary_colour` is declared and the step cannot be taken: no `parts.json`, no `idle`, or a default-skin region or mesh image without a sequence, with a parts record, whose rig image is not its parts PNG with one even pad on every side (refused before anything is built); otherwise a drawn slot has no `parts.json` piece, is clipped, or its rig image is not its parts PNG with one even pad on every side (the slot and frame are named). Never a pass | make every drawn slot a `parts.json` piece, or drop `boundary_colour` from the requirements file (the bar then reports SKIP) |
 | <a id="SETUP_PAINTING_REQUIRED_LIMIT"></a>`SETUP_PAINTING_REQUIRED_LIMIT` | `setup_painting.required` is `true` and a limit the check needs is absent: `rgb_tolerance`, `regions`, or a region's `max_pixels` (the object names the region). Refused when the requirements file is read, before anything is built (issue #943) | author the named limit; none is derived from the art. Without `required` the same region reports SKIP |
 | <a id="CHECK_SOURCE_GRID"></a>`CHECK_SOURCE_GRID` | the setup-pose still and its black-tinted twin (the coverage `SETUP_POSE_VS_SOURCE` reads) did not come back on one grid over one opaque background | a rigc problem; report it |
 | <a id="CHECK_RIGC_VERSION"></a>`CHECK_RIGC_VERSION` | `rigc --version` is below 1.4.0, or prints no version: its `render` has no `--geometry`, which `TEXTURE_STRETCH` reads. Refused before anything is built | `bun install` (this package depends on rig-c ^2.20.4), or put a newer `rigc` first on `PATH` |
@@ -8012,50 +8012,50 @@ Internal `SeamSupport.drawings` never enters check JSON. Named requirement
 <!-- check-row-table:begin -->
 | Row family | row_scope | row_kind | row_subjects (producer expression) | Producer |
 | --- | --- | --- | --- | --- |
-| `ANIMATIONS_DO_NOT_FOLD.declared_not_folding` | 'part' | finding | [e.slot] | [check.ts:3479](../src/check.ts#L3479) |
-| `ANIMATIONS_DO_NOT_FOLD.folding` | 'part' | finding when entry === undefined; otherwise evidence | [slot] | [check.ts:3441](../src/check.ts#L3441) |
+| `ANIMATIONS_DO_NOT_FOLD.declared_not_folding` | 'part' | finding | [e.slot] | [check.ts:3516](../src/check.ts#L3516) |
+| `ANIMATIONS_DO_NOT_FOLD.folding` | 'part' | finding when entry === undefined; otherwise evidence | [slot] | [check.ts:3478](../src/check.ts#L3478) |
 | `ART_JOINT_DISTANCE.joints` | 'rig' | finding when status === 'FAIL'; otherwise evidence | [] | [artjoints.ts:86](../src/artjoints.ts#L86) |
-| `BOUNDARY_COLOUR_STEP.over` | 'pair' | finding | r.parts | [boundarycolour.ts:219](../src/boundarycolour.ts#L219) |
-| `BOUNDARY_COLOUR_STEP.unmeasured` | 'part' | evidence | [r.slot] | [boundarycolour.ts:220](../src/boundarycolour.ts#L220) |
-| `CLOTH_SETTLES.rows` | 'rig' | finding when speeds.length > 0 && s < speeds.length; otherwise evidence | [] | [check.ts:5764](../src/check.ts#L5764) |
+| `BOUNDARY_COLOUR_STEP.over` | 'pair' | finding | r.parts | [boundarycolour.ts:220](../src/boundarycolour.ts#L220) |
+| `BOUNDARY_COLOUR_STEP.unmeasured` | 'part' | evidence | [r.slot] | [boundarycolour.ts:221](../src/boundarycolour.ts#L221) |
+| `CLOTH_SETTLES.rows` | 'rig' | finding when speeds.length > 0 && s < speeds.length; otherwise evidence | [] | [check.ts:5801](../src/check.ts#L5801) |
 | `CUT_JOINT_MATERIAL.rows` | 'part' | finding when r.status === 'FAIL'; otherwise evidence | [r.part] | [cutmaterial.ts:280](../src/cutmaterial.ts#L280) |
-| `FEET_STAY_LEVEL.feet` | 'part' | finding when row.status === 'FAIL'; otherwise evidence | [row.part] | [check.ts:3680](../src/check.ts#L3680) |
-| `FEET_STAY_LEVEL.feet[].worst.through` | 'rig' | evidence | [] | [check.ts:3655](../src/check.ts#L3655) |
-| `LIMB_ONE_BONE.parts` | 'part' | finding when fail; otherwise evidence | [p.name] | [check.ts:3972](../src/check.ts#L3972) |
+| `FEET_STAY_LEVEL.feet` | 'part' | finding when row.status === 'FAIL'; otherwise evidence | [row.part] | [check.ts:3717](../src/check.ts#L3717) |
+| `FEET_STAY_LEVEL.feet[].worst.through` | 'rig' | evidence | [] | [check.ts:3692](../src/check.ts#L3692) |
+| `LIMB_ONE_BONE.parts` | 'part' | finding when fail; otherwise evidence | [p.name] | [check.ts:4009](../src/check.ts#L4009) |
 | `PART_SUPPORT_REPORT.pairs` | 'pair' | evidence; finding when length > 0; otherwise evidence | [F.name, B.name] | [coincide.ts:114](../src/coincide.ts#L114), [coincide.ts:130](../src/coincide.ts#L130) |
 | `PART_SUPPORT_REPORT.raw_pairs` | 'pair' | evidence | [F.name, B.name] | [coincide.ts:110](../src/coincide.ts#L110) |
 | `PART_SUPPORT_REPORT.unowned.regions` | 'rig' | finding | [] | [coincide.ts:145](../src/coincide.ts#L145) |
-| `SEAM_OVER_MOTION.pairs` | 'pair' | evidence | [p.a, p.b] | [check.ts:5165](../src/check.ts#L5165) |
-| `SEAM_OVER_MOTION.required.pairs` | 'pair' | finding when open > 0; otherwise evidence | [p.a, p.b] | [check.ts:4573](../src/check.ts#L4573) |
-| `SEAM_OVER_MOTION.roots.unmeasured` | 'part' | evidence | [root.part] | [check.ts:5142](../src/check.ts#L5142) |
-| `SEAM_OVER_MOTION.rows` | 'pair' | finding when p.status === 'read' && opens.length > 0; otherwise evidence; finding when r.status === 'read' && r.opens.length > 0; otherwise evidence | [want.a, want.b]; pairs.filter(p => p.pair === r.pair).flatMap(p => [p.a, p.b]) | [check.ts:5104](../src/check.ts#L5104), [check.ts:5168](../src/check.ts#L5168) |
-| `SEAM_OVER_MOTION.rows[].cells` | 'pair' | evidence | [want.a, want.b] | [check.ts:5117](../src/check.ts#L5117) |
-| `SEAM_OVER_MOTION.rows[].joint_contact.reasons` | 'pair' | evidence | [want.a, want.b] | [check.ts:5107](../src/check.ts#L5107) |
+| `SEAM_OVER_MOTION.pairs` | 'pair' | evidence | [p.a, p.b] | [check.ts:5202](../src/check.ts#L5202) |
+| `SEAM_OVER_MOTION.required.pairs` | 'pair' | finding when open > 0; otherwise evidence | [p.a, p.b] | [check.ts:4610](../src/check.ts#L4610) |
+| `SEAM_OVER_MOTION.roots.unmeasured` | 'part' | evidence | [root.part] | [check.ts:5179](../src/check.ts#L5179) |
+| `SEAM_OVER_MOTION.rows` | 'pair' | finding when p.status === 'read' && opens.length > 0; otherwise evidence; finding when r.status === 'read' && r.opens.length > 0; otherwise evidence | [want.a, want.b]; pairs.filter(p => p.pair === r.pair).flatMap(p => [p.a, p.b]) | [check.ts:5141](../src/check.ts#L5141), [check.ts:5205](../src/check.ts#L5205) |
+| `SEAM_OVER_MOTION.rows[].cells` | 'pair' | evidence | [want.a, want.b] | [check.ts:5154](../src/check.ts#L5154) |
+| `SEAM_OVER_MOTION.rows[].joint_contact.reasons` | 'pair' | evidence | [want.a, want.b] | [check.ts:5144](../src/check.ts#L5144) |
 | `SEAM_OVER_MOTION.rows[].pose_at_worst.joints` | 'rig' | evidence | [] | [motionseampose.ts:53](../src/motionseampose.ts#L53) |
-| `SEAM_OVER_MOTION.worlds.*.rows` | 'pair' | evidence | [want.a, want.b] | [check.ts:5101](../src/check.ts#L5101) |
-| `SEAM_OVER_RANGE.joints` | 'part' | evidence; finding when poses.some(p => p.status === 'FAIL'); otherwise evidence | [j.part] | [check.ts:4296](../src/check.ts#L4296), [check.ts:4342](../src/check.ts#L4342) |
-| `SEAM_OVER_RANGE.joints[].poses` | 'part' | finding when fail; otherwise evidence | [j.part] | [check.ts:4340](../src/check.ts#L4340) |
+| `SEAM_OVER_MOTION.worlds.*.rows` | 'pair' | evidence | [want.a, want.b] | [check.ts:5138](../src/check.ts#L5138) |
+| `SEAM_OVER_RANGE.joints` | 'part' | evidence; finding when poses.some(p => p.status === 'FAIL'); otherwise evidence | [j.part] | [check.ts:4333](../src/check.ts#L4333), [check.ts:4379](../src/check.ts#L4379) |
+| `SEAM_OVER_RANGE.joints[].poses` | 'part' | finding when fail; otherwise evidence | [j.part] | [check.ts:4377](../src/check.ts#L4377) |
 | `SETUP_MATCHES_PAINTING.regions` | 'rig' | finding when status === 'FAIL'; otherwise evidence | [] | [setuppainting.ts:174](../src/setuppainting.ts#L174) |
 | `SETUP_MATCHES_PAINTING.regions[].slots` | slot === '(uncovered)' ? 'rig' : 'part' | evidence | slot === '(uncovered)' ? [] : [slot] | [setuppainting.ts:175](../src/setuppainting.ts#L175) |
-| `STILL_REGIONS_DARK.*.crossing` | 'part' | finding | [sl.name] | [check.ts:8704](../src/check.ts#L8704) |
-| `STILL_REGIONS_DARK.*.still_slots` | 'part' | evidence; finding when r.max > tolerance; otherwise evidence | [slot] | [check.ts:8690](../src/check.ts#L8690), [check.ts:8695](../src/check.ts#L8695) |
-| `STRESS_OFF_CHAIN.not_read` | 'part' | evidence | [r.part] | [check.ts:3900](../src/check.ts#L3900) |
-| `STRESS_OFF_CHAIN.per_part` | 'part' | finding when poses.some(p => typeof p.reading === 'number' && p.reading > STRESS_RIGID); otherwise evidence | [r.part] | [check.ts:3888](../src/check.ts#L3888) |
-| `STRESS_OFF_CHAIN.per_part[].off_chain` | 'part' | evidence | [r.part] | [check.ts:3888](../src/check.ts#L3888) |
-| `STRESS_OFF_CHAIN.per_part[].poses` | 'part' | evidence; finding when shown > STRESS_RIGID; otherwise evidence | [r.part] | [check.ts:3856](../src/check.ts#L3856), [check.ts:3874](../src/check.ts#L3874) |
-| `TEXTURE_STRETCH.per_mesh` | 'part' | evidence; finding when severity > TEXTURE_STRETCH_CEILING; otherwise evidence | [m.slot] | [check.ts:9338](../src/check.ts#L9338), [check.ts:9348](../src/check.ts#L9348) |
-| `TIP_OVER_ROOT.parts` | 'part' | evidence; finding when !ok && !(!rigid && hanging.onLink && Math.max(c.root, c.tip) < TIP_TRAVEL_FLOOR); otherwise evidence | [p.name] | [check.ts:8120](../src/check.ts#L8120), [check.ts:8125](../src/check.ts#L8125), [check.ts:8146](../src/check.ts#L8146), [check.ts:8157](../src/check.ts#L8157) |
-| `WIND_BAND.pairs` | 'pair' | finding when !holdsAll; otherwise evidence | [p.a, p.b] | [check.ts:6268](../src/check.ts#L6268) |
-| `WIND_BAND.pairs[].steps` | 'pair' | finding when !s.holds; otherwise evidence | [p.a, p.b] | [check.ts:6279](../src/check.ts#L6279) |
-| `figure_openings.openings` | 'pair' | finding | [ps.under, ps.above] | [check.ts:5585](../src/check.ts#L5585) |
-| `loop_physics` | 'rig' | evidence | [] | [check.ts:7243](../src/check.ts#L7243) |
-| `requirements.lines.* (bone)` | 'rig' | finding when line.status === 'FAIL'; otherwise evidence | [] | [check.ts:7539](../src/check.ts#L7539) |
-| `requirements.lines.* (seam)` | 'pair' | finding when line.status === 'FAIL'; otherwise evidence | [r.part, r.neighbour] | [check.ts:7539](../src/check.ts#L7539) |
-| `requirements.lines.* (stretch)` | 'part' | finding when line.status === 'FAIL'; otherwise evidence | [r.slot] | [check.ts:7539](../src/check.ts#L7539) |
-| `seam_pairs` | pair[0] === SEAM_NO_ART ? 'rig' : pair[1] === SEAM_NO_ART ? 'part' : 'pair' | evidence | pair.filter(p => p !== SEAM_NO_ART) | [check.ts:2442](../src/check.ts#L2442) |
-| `seam_scope.changes` | 'rig' | evidence | [] | [check.ts:1921](../src/check.ts#L1921) |
-| `seam_scope.domain.states` | 'rig' | evidence | [] | [check.ts:2006](../src/check.ts#L2006) |
-| `seam_scope.pairs` | row.parts[0] === SEAM_NO_ART ? 'rig' : row.parts[1] === SEAM_NO_ART ? 'part' : 'pair' | evidence | row.parts.filter(p => p !== SEAM_NO_ART) | [check.ts:7153](../src/check.ts#L7153) |
-| `seam_scope.population.pairs` | 'pair' | evidence | row.parts | [check.ts:2377](../src/check.ts#L2377) |
-| `seam_scope.population.single_art` | 'part' | evidence | [row.part] | [check.ts:2378](../src/check.ts#L2378) |
+| `STILL_REGIONS_DARK.*.crossing` | 'part' | finding | [sl.name] | [check.ts:8744](../src/check.ts#L8744) |
+| `STILL_REGIONS_DARK.*.still_slots` | 'part' | evidence; finding when r.max > tolerance; otherwise evidence | [slot] | [check.ts:8730](../src/check.ts#L8730), [check.ts:8735](../src/check.ts#L8735) |
+| `STRESS_OFF_CHAIN.not_read` | 'part' | evidence | [r.part] | [check.ts:3937](../src/check.ts#L3937) |
+| `STRESS_OFF_CHAIN.per_part` | 'part' | finding when poses.some(p => typeof p.reading === 'number' && p.reading > STRESS_RIGID); otherwise evidence | [r.part] | [check.ts:3925](../src/check.ts#L3925) |
+| `STRESS_OFF_CHAIN.per_part[].off_chain` | 'part' | evidence | [r.part] | [check.ts:3925](../src/check.ts#L3925) |
+| `STRESS_OFF_CHAIN.per_part[].poses` | 'part' | evidence; finding when shown > STRESS_RIGID; otherwise evidence | [r.part] | [check.ts:3893](../src/check.ts#L3893), [check.ts:3911](../src/check.ts#L3911) |
+| `TEXTURE_STRETCH.per_mesh` | 'part' | evidence; finding when severity > TEXTURE_STRETCH_CEILING; otherwise evidence | [m.slot] | [check.ts:9378](../src/check.ts#L9378), [check.ts:9388](../src/check.ts#L9388) |
+| `TIP_OVER_ROOT.parts` | 'part' | evidence; finding when !ok && !(!rigid && hanging.onLink && Math.max(c.root, c.tip) < TIP_TRAVEL_FLOOR); otherwise evidence | [p.name] | [check.ts:8160](../src/check.ts#L8160), [check.ts:8165](../src/check.ts#L8165), [check.ts:8186](../src/check.ts#L8186), [check.ts:8197](../src/check.ts#L8197) |
+| `WIND_BAND.pairs` | 'pair' | finding when !holdsAll; otherwise evidence | [p.a, p.b] | [check.ts:6305](../src/check.ts#L6305) |
+| `WIND_BAND.pairs[].steps` | 'pair' | finding when !s.holds; otherwise evidence | [p.a, p.b] | [check.ts:6316](../src/check.ts#L6316) |
+| `figure_openings.openings` | 'pair' | finding | [ps.under, ps.above] | [check.ts:5622](../src/check.ts#L5622) |
+| `loop_physics` | 'rig' | evidence | [] | [check.ts:7283](../src/check.ts#L7283) |
+| `requirements.lines.* (bone)` | 'rig' | finding when line.status === 'FAIL'; otherwise evidence | [] | [check.ts:7579](../src/check.ts#L7579) |
+| `requirements.lines.* (seam)` | 'pair' | finding when line.status === 'FAIL'; otherwise evidence | [r.part, r.neighbour] | [check.ts:7579](../src/check.ts#L7579) |
+| `requirements.lines.* (stretch)` | 'part' | finding when line.status === 'FAIL'; otherwise evidence | [r.slot] | [check.ts:7579](../src/check.ts#L7579) |
+| `seam_pairs` | pair[0] === SEAM_NO_ART ? 'rig' : pair[1] === SEAM_NO_ART ? 'part' : 'pair' | evidence | pair.filter(p => p !== SEAM_NO_ART) | [check.ts:2479](../src/check.ts#L2479) |
+| `seam_scope.changes` | 'rig' | evidence | [] | [check.ts:1958](../src/check.ts#L1958) |
+| `seam_scope.domain.states` | 'rig' | evidence | [] | [check.ts:2043](../src/check.ts#L2043) |
+| `seam_scope.pairs` | row.parts[0] === SEAM_NO_ART ? 'rig' : row.parts[1] === SEAM_NO_ART ? 'part' : 'pair' | evidence | row.parts.filter(p => p !== SEAM_NO_ART) | [check.ts:7193](../src/check.ts#L7193) |
+| `seam_scope.population.pairs` | 'pair' | evidence | row.parts | [check.ts:2414](../src/check.ts#L2414) |
+| `seam_scope.population.single_art` | 'part' | evidence | [row.part] | [check.ts:2415](../src/check.ts#L2415) |
 <!-- check-row-table:end -->

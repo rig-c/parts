@@ -72,6 +72,57 @@ export function runBoundaryColourChecks(dir: string, say: Say, rigc: RigcRunner)
     writePng(join(input, 'images', 'front.png'), image ?? inkedFront());
     return input;
   };
+  // File-only plants stop at the first build in the controls, counting every build/render invocation.
+  const probe = (name: string, input: string, requirement?: string) => {
+    let builds = 0, renders = 0;
+    const reachedBuild = new Error('size preflight reached build');
+    let problems: readonly Problem[] = [];
+    try {
+      checkStage({ rig: input, out: join(dir, name, 'probe'), ...(requirement === undefined ? {} : { requirements: requirement }), noExtremes: true }, args => {
+        if (args[0] === 'build') { builds++; throw reachedBuild; }
+        if (args[0] === 'render') renders++;
+        return rigc(args);
+      }, 'fixture-rigc', () => {});
+    } catch (e) { if (e instanceof PartsError) problems = e.problems; else if (e !== reachedBuild) throw e; }
+    return { builds, renders, problems };
+  };
+  const unmeasuredSuffix = "; the step against the rig's own pieces cannot be taken, and an untaken reading is never a pass — make the slot draw a parts.json piece, or drop boundary_colour from the requirements file and the bar reports SKIP";
+  const sizeReq = req('size-declared', { max_step_excess: 8 });
+  const mismatch = rigFor('size-mismatch', newRaster(CHECK_PARTS[1].w + 1, CHECK_PARTS[1].h + 1));
+  const badSize = probe('size-mismatch', mismatch, sizeReq);
+  say('BK14_SIZE_MISMATCH_REFUSED_WITHOUT_BUILD_OR_RENDER', badSize.builds === 0 && badSize.renders === 0 && badSize.problems.length === 1 && badSize.problems[0].code === BOUNDARY_COLOUR_UNMEASURED_CODE && badSize.problems[0].detail === `the rig image "front.png" is ${CHECK_PARTS[1].w + 1}x${CHECK_PARTS[1].h + 1}, not parts/front.png's ${CHECK_PARTS[1].w}x${CHECK_PARTS[1].h} with one even pad on every side${unmeasuredSuffix}`, JSON.stringify(badSize));
+  const absentSize = probe('size-undeclared', mismatch);
+  const cleanSize = probe('size-clean', rigFor('size-clean'), sizeReq);
+  say('BK15_SIZE_PREFLIGHT_ONLY_WHEN_DECLARED', absentSize.builds === 1 && absentSize.renders === 0 && absentSize.problems.length === 0 && cleanSize.builds === 1 && cleanSize.problems.length === 0, JSON.stringify({ undeclared: absentSize, clean: cleanSize }));
+  const recordMismatch = rigFor('record-mismatch');
+  writePng(join(recordMismatch, 'parts', 'front.png'), newRaster(CHECK_PARTS[1].w + 1, CHECK_PARTS[1].h));
+  const badRecord = probe('record-mismatch', recordMismatch, sizeReq);
+  say('BK16_PART_RECORD_SIZE_REFUSED_WITHOUT_BUILD_OR_RENDER', badRecord.builds === 0 && badRecord.renders === 0 && badRecord.problems.length === 1 && badRecord.problems[0].code === 'CHECK_PART_PNG_MATCHES_BOX' && badRecord.problems[0].object === 'part "front"' && badRecord.problems[0].detail === `${join(recordMismatch, 'parts', 'front.png')} is ${CHECK_PARTS[1].w + 1}x${CHECK_PARTS[1].h}; parts.json's box is ${CHECK_PARTS[1].w}x${CHECK_PARTS[1].h}`, JSON.stringify(badRecord));
+  const otherSkin = rigFor('other-skin');
+  const otherPath = join(otherSkin, 'rig.json');
+  const otherRig = JSON.parse(readFileSync(otherPath, 'utf8')) as { skins: Record<string, Record<string, Record<string, { image: string }>>> };
+  otherRig.skins.default.back.back.image = 'front.png';
+  otherRig.skins.unselected = { back: { back: { image: 'back.png' } } };
+  writeFileSync(otherPath, JSON.stringify(otherRig));
+  writePng(join(otherSkin, 'images', 'back.png'), newRaster(CHECK_PARTS[0].w + 1, CHECK_PARTS[0].h + 1));
+  const otherProbe = probe('other-skin', otherSkin, sizeReq);
+  say('BK19_NON_DEFAULT_SKIN_IMAGE_IS_NOT_PREFLIGHTED', otherProbe.builds === 1 && otherProbe.renders === 0 && otherProbe.problems.length === 0, JSON.stringify(otherProbe));
+  const unreadable = rigFor('unreadable-image');
+  writeFileSync(join(unreadable, 'images', 'front.png'), 'not a PNG');
+  const unreadableProbe = probe('unreadable-image', unreadable, sizeReq);
+  say('BK20_UNREADABLE_IMAGE_REACHES_BUILD', unreadableProbe.builds === 1 && unreadableProbe.renders === 0 && unreadableProbe.problems.length === 0, JSON.stringify(unreadableProbe));
+  const unsupportedProbes = [
+    { type: 'clipping' },
+    { type: 'region', sequence: {} },
+  ].map((fields, i) => {
+    const input = rigFor(`unsupported-image-${i}`, newRaster(CHECK_PARTS[1].w + 1, CHECK_PARTS[1].h + 1));
+    const path = join(input, 'rig.json');
+    const rig = JSON.parse(readFileSync(path, 'utf8')) as { skins: { default: { front: { front: Record<string, unknown> } } } };
+    Object.assign(rig.skins.default.front.front, fields);
+    writeFileSync(path, JSON.stringify(rig));
+    return probe(`unsupported-image-${i}`, input, sizeReq);
+  });
+  say('BK21_UNSUPPORTED_IMAGE_MAPPINGS_REACH_BUILD', unsupportedProbes.every(p => p.builds === 1 && p.renders === 0 && p.problems.length === 0), JSON.stringify(unsupportedProbes));
   const logs = new Map<string, string[]>();
   const run = (name: string, input: string, requirement?: string) => {
     const lines: string[] = [];
@@ -136,9 +187,9 @@ export function runBoundaryColourChecks(dir: string, say: Say, rigc: RigcRunner)
   const ink = inkedFront();
   for (let y = 0; y < ink.height; y++) for (let x = 0; x < ink.width; x++) odd.data.set(ink.data.subarray((y * ink.width + x) * 4, (y * ink.width + x) * 4 + 4), (y * odd.width + x) * 4);
   writePng(join(oddRig, 'images', 'front.png'), odd);
-  let oddCodes: Problem[] = [];
-  try { oddCodes = run('odd-pad', oddRig, declared).problems.filter((p) => p.code === BOUNDARY_COLOUR_UNMEASURED_CODE); } catch (e) { if (e instanceof PartsError) oddCodes = e.problems.filter((p) => p.code === BOUNDARY_COLOUR_UNMEASURED_CODE); else throw e; }
-  say('BK11_AN_UNREADABLE_PIECE_IS_NEVER_A_PASS', oddCodes.length === 1 && oddCodes[0].object.startsWith('slot "front"') && oddCodes[0].detail.includes('one even pad'), JSON.stringify(oddCodes));
+  const oddProbe = probe('odd-pad', oddRig, declared);
+  const oddReason = `the rig image "front.png" is ${odd.width}x${odd.height}, not parts/front.png's ${ink.width}x${ink.height} with one even pad on every side`;
+  say('BK11_AN_UNREADABLE_PIECE_IS_NEVER_A_PASS', oddProbe.builds === 0 && oddProbe.renders === 0 && oddProbe.problems.length === 1 && oddProbe.problems[0].code === BOUNDARY_COLOUR_UNMEASURED_CODE && oddProbe.problems[0].object === 'slot "front" (image "front.png")' && oddProbe.problems[0].detail === `${oddReason}${unmeasuredSuffix}`, JSON.stringify(oddProbe));
 
   // A skin entry whose explicit `name` differs from its key: the renderer reports the drawn attachment by that name, so
   // the source is found by name (seamSourceAttachment, as the seam's mapping is) — measured, and read as the un-renamed rig.
@@ -163,6 +214,10 @@ export function runBoundaryColourChecks(dir: string, say: Say, rigc: RigcRunner)
   writeFileSync(atlasPath, readFileSync(atlasPath, 'utf8').replace(/^front$/m, 'ink'));
   const cleanRigJson = JSON.parse(readFileSync(join(cleanRig, 'rig.json'), 'utf8')) as Skinned & { skeleton: { x: number; y: number; width: number; height: number }; skins: { default: Record<string, Record<string, unknown>> } };
   const measureOn = (build: string, rig: Record<string, unknown>) => measureBoundaryColour(officialRenderer(), { build, stage: cleanRigJson.skeleton, parts: readParts(join(cleanRig, 'parts.json')), partsDir: join(cleanRig, 'parts'), imagesDir: join(cleanRig, 'images'), rig, fps: 12 }, { max_step_excess: ALLOW }, []);
+  const lateProblems: Problem[] = [];
+  const oddRigJson = JSON.parse(readFileSync(join(oddRig, 'rig.json'), 'utf8')) as Record<string, unknown>;
+  const lateOdd = measureBoundaryColour(officialRenderer(), { build: join(dir, 'declared-clean', 'out', 'build'), stage: cleanRigJson.skeleton, parts: readParts(join(oddRig, 'parts.json')), partsDir: join(oddRig, 'parts'), imagesDir: join(oddRig, 'images'), rig: oddRigJson, fps: 12 }, { max_step_excess: ALLOW }, lateProblems);
+  say('BK18_LATE_PADDING_REFUSAL_BYTES_UNCHANGED', lateOdd.status === 'FAIL' && lateProblems.length === 1 && lateProblems[0].code === BOUNDARY_COLOUR_UNMEASURED_CODE && lateProblems[0].object === 'slot "front" (setup)' && lateProblems[0].detail === `${oddReason}${unmeasuredSuffix}`, JSON.stringify(lateProblems));
   const asBuilt = measureOn(join(dir, 'declared-clean', 'out', 'build'), cleanRigJson);
   const renamed = measureOn(renamedBuild, rename(structuredClone(cleanRigJson), (d) => d.skins.default.front));
   say('BK13_A_SKIN_ENTRY_NAMED_APART_FROM_ITS_KEY_IS_MEASURED_AND_READS_AS_THE_UNRENAMED_RIG', renamed.unmeasured.length === 0 && renamed.boundary_pairs > 0 && JSON.stringify(renamed) === JSON.stringify(asBuilt),
@@ -172,6 +227,8 @@ export function runBoundaryColourChecks(dir: string, say: Say, rigc: RigcRunner)
   const cli = (name: string, input: string, requirement?: string) => spawnSync(process.execPath, [resolve(import.meta.dir, '../cli.ts'), 'check', '--rig', input, '--out', join(dir, name, 'cli'), '--no-extremes', ...(requirement === undefined ? [] : ['--requirements', requirement])], { encoding: 'utf8' });
   const cliClean = cli('cli-undeclared', cleanRig);
   const cliNotch = cli('cli-notch', notchRig, declared);
+  const cliMismatch = cli('cli-size-mismatch', mismatch, declared);
+  say('BK17_CLI_SIZE_MISMATCH_EXIT_ONE', cliMismatch.status === 1 && `${cliMismatch.stdout}${cliMismatch.stderr}`.includes(BOUNDARY_COLOUR_UNMEASURED_CODE) && `${cliMismatch.stdout}${cliMismatch.stderr}`.includes('front.png'), JSON.stringify({ exit: cliMismatch.status }));
   say('BK12_CLI_UNDECLARED_EXIT_0_WITH_SKIP_AND_PLANT_EXIT_1_BY_NAME', cliClean.status === 0 && cliClean.stdout.includes(`${BOUNDARY_COLOUR_LINE}: SKIP`) && cliNotch.status === 1 && cliNotch.stdout.split('\n').some((l) => l.includes(`FAIL  ${BOUNDARY_COLOUR_CODE}: part pair "back|front"`)),
     JSON.stringify({ undeclared: cliClean.status, notch: cliNotch.status, lines: cliNotch.stdout.split('\n').filter((l) => l.includes(BOUNDARY_COLOUR_CODE)).map((l) => l.slice(0, 100)) }));
 }
