@@ -1,4 +1,8 @@
 #!/usr/bin/env bun
+import './tools/check_row_guard.ts';
+import { motionSeamFinding } from './src/check.ts';
+import { checkRowFaults, checkRowSchemaFaults, checkRowCombinations, runCheckRowSchemaChecks, runCheckRowGuardChecks } from './tools/check_row_scope.ts';
+import { rowTableFaults, checkRowTypeInventory } from './tools/check_row_reference.ts';
 import { validationRebuildProbe } from './fixtures/validation_rebuild.ts';
 import { validationHoleProbe } from './fixtures/validation_hole.ts';
 import { validationContractControls } from './fixtures/validation_contract.ts';
@@ -6,8 +10,6 @@ import { validationPinholeView } from './fixtures/validation_pinholes.ts';
 import { validationMetadataReadings } from './fixtures/validation_metadata.ts';
 import { validationInputReadings } from './fixtures/validation_readers.ts';
 import { validationGroundView } from './fixtures/validation_ground.ts';
-import { checkRowFaults, checkRowCombinations } from './tools/check_row_scope.ts';
-import { rowTableFaults } from './tools/check_row_reference.ts';
 import { withoutCheckRows } from './src/checkrow.ts';
 import { runCropEdgeChecks } from './fixtures/crop_edge_checks.ts';
 import { validationBuild, validationBuildSummary, validationStreams, validationStreamSummary, validValidationStreams, type ValidationStream, validationProducerReceipt, validationFiles, validationDigest, validationHead, validationInput, validationScope, VALIDATION_VARIANTS, type ValidationBuild } from './fixtures/validation_cache.ts';
@@ -21726,6 +21728,14 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       { row_scope: 'pair', row_kind: 'evidence', row_subjects: ['p', 'o'], parts: ['p', 'o'], px_over_40: 2, px_over_80: 0, frame_box: [4, 0, 5, 1], rig_box: [4, 0, 5, 1], picture: `${SEAM_DIR}/02_p_o.png` },
       { row_scope: 'part', row_kind: 'evidence', row_subjects: ['b'], parts: ['b', SEAM_NO_ART], px_over_40: 1, px_over_80: 0, frame_box: [0, 0, 0, 0], rig_box: [0, 0, 1, 1], picture: `${SEAM_DIR}/03_b_no-art.png` },
     ];
+    const noArtRows = seamPairRows(fixtureSeam, [], [6, 2], vp6).map(x => x.row);
+    const noArtExpected = [{ row_scope: 'rig', row_kind: 'evidence', row_subjects: [], parts: [SEAM_NO_ART, SEAM_NO_ART], px_over_40: 5, px_over_80: 1, frame_box: [0, 0, 5, 1], rig_box: [0, 0, 5, 1], picture: `${SEAM_DIR}/01_no-art_no-art.png` }];
+    const noArtDocument = { seam_pairs: noArtRows, seam_scope: { whole_pairs: noArtRows } };
+    const noArtMutant = { seam_pairs: noArtRows.map(row => ({ ...row, row_scope: 'part' })) };
+    say('CK1064_NO_REFERENCE_ART_SEAM_ROWS_HAVE_RIG_SCOPE_AND_THE_PART_SCOPE_MUTANT_IS_REFUSED',
+      JSON.stringify(noArtRows) === JSON.stringify(noArtExpected) && checkRowSchemaFaults(noArtDocument).length === 0 && checkRowSchemaFaults(noArtMutant).some(f => f.includes('invalid row_subjects')),
+      'five counted samples, zero reference contributors: rig/evidence/[]; pair and singleton controls remain beside it; part/[] mutant refused',
+      'the no-art branch is reachable on drift and posed residuals; a counted seam pixel need not have any reference part to name');
     const text = got.length > 0 ? seamPairText(got[0]) : '';
 
     const guidePath = join(dir, 'generated-guide.md');
@@ -41673,6 +41683,18 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
   finishUnavailable();
   finishUnavailable();
   say('TY26_THE_UNAVAILABLE_FAMILY_PEAK_FINISHES_ONCE_AND_KEEPS_THE_OWN_PROCESS_PEAK', peakLines.length === 1 && peakLines[0].includes('self_max_rss_kib=') && peakLines[0].includes('family RSS unavailable'), `explicit finish plus exit finish writes ${peakLines.length} line(s); own-process field present: ${peakLines[0]?.includes('self_max_rss_kib=')}`, 'the fallback must be idempotent too; a platform without proc still keeps the own-process kernel maximum when its runtime supports it');
+  runCheckRowSchemaChecks(say);
+  runCheckRowGuardChecks(import.meta.dir, say);
+  const motionPredicates1092 = [false, true].flatMap(root => ['read', 'skip'].flatMap(status => [0, 1].flatMap(banded => [0, 1].map(opens => ({ root, status, banded, opens })))));
+  say('TY830_MOTION_ROW_FINDINGS_SHARE_THE_EXISTING_WARNING_AND_ROOT_FAILURE_PREDICATES',
+    motionPredicates1092.every(r => motionSeamFinding(r.root, r.status, r.banded, r.opens) === (r.root ? r.status === 'read' && r.banded > 0 && r.opens > 0 : r.opens > 0)),
+    `${motionPredicates1092.length} combinations; non-root skip/open warns, root read/unbanded/open is not a finding`,
+    'only the row labels change; the existing warning count and root failure logic stay in place');
+  const rowType1092 = checkRowTypeInventory(import.meta.dir);
+  const rowTypePlant1092 = checkRowTypeInventory(import.meta.dir, '\nexport interface CheckFigures { planted_rows: Array<{ measured: number }>; planted_objects: object[]; planted_unknown: unknown }\n');
+  say('TY831_SERIALIZED_OBJECT_ARRAY_TYPES_REQUIRE_REGISTERED_PATHS', rowType1092.arrays.length > 0 && rowType1092.faults.length === 0 && rowTypePlant1092.faults.some(f => f === 'planted_rows: object-array type has no registered family') && rowTypePlant1092.faults.some(f => f === 'planted_objects: object-array type has no registered family') && rowTypePlant1092.faults.some(f => f === 'planted_unknown: unknown output type has no documented schema exclusion'),
+    `${rowType1092.arrays.length} declared object-array paths; ${rowType1092.unknown.length} explicit open-type exclusions; ${rowType1092.faults.join('; ') || 'record-array, object-array and unknown-type plants refused'}`,
+    'type coverage is independent of whether a fixture emits a row, and open legacy figure dictionaries remain guarded recursively at serialization');
   const rowDoc1089 = readFileSync(join(import.meta.dir, 'docs/AUTHORING.md'), 'utf8');
   const rowDocFaults1089 = rowTableFaults(import.meta.dir, rowDoc1089);
   const rowDocPlant1089 = rowDoc1089.replace('<!-- check-row-table:begin -->', '<!-- removed row table -->');

@@ -1,4 +1,4 @@
-import { checkRow } from './checkrow.ts';
+import { checkRow, checkSlotRow, checkSlotParts } from './checkrow.ts';
 /**
  * Issue #942: the colour step across part boundaries, against the rig's own pieces.
  *
@@ -116,6 +116,7 @@ export function measureBoundaryColour(api: Api, input: BoundaryColourInput, decl
   const W = input.stage.width, H = input.stage.height;
   const vp = { minX: input.stage.x, minY: input.stage.y, maxX: input.stage.x + W, maxY: input.stage.y + H, scale: 1, width: W, height: H };
   const project = api.projector(vp);
+  const slotParts = checkSlotParts(input.rig, input.parts.parts.map(p => p.name), input.parts.alternates?.map(set => set.name) ?? []);
   const records = new Map(input.parts.parts.map((p) => [p.name, p]));
   const sources = new Map<string, Source | string>();
   const unmeasured: BoundaryColourUnmeasured[] = [];
@@ -218,7 +219,7 @@ export function measureBoundaryColour(api: Api, input: BoundaryColourInput, decl
     boundary_pairs: boundaryPairs,
     worst,
     over: over.map(r => ({ ...r, ...checkRow('BOUNDARY_COLOUR_STEP.over', 'pair', true, r.parts) })),
-    unmeasured: unmeasured.map(r => ({ ...r, ...checkRow('BOUNDARY_COLOUR_STEP.unmeasured', 'part', false, [r.slot]) })),
+    unmeasured: unmeasured.map(r => ({ ...r, ...checkSlotRow('BOUNDARY_COLOUR_STEP.unmeasured', false, r.slot, slotParts) })),
     alternates: 'not measured',
   };
 }
