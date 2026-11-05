@@ -32,7 +32,7 @@ import { holeBox as pinholeBox944, measurePinholes, PINHOLES_RULE, sourceInRig a
 import { readSource as readSource944 } from './src/build.ts';
 import { pinholesRequired } from './src/requirements.ts';
 import { SETUP_PAINTING_LINE as SETUP_PAINTING_LINE978 } from './src/setuppainting.ts';
-import { softOccluderFixture, softTrailDiff, yieldLimbCoverFixture, SOFT_SKIN } from './fixtures/soft_occluder.ts';
+import { softTrailBounds, cleanedOccluderFixture, softOccluderFixture, softTrailDiff, yieldLimbCoverFixture, SOFT_SKIN } from './fixtures/soft_occluder.ts';
 import { runYieldContourChecks } from './tools/check_yield_contour.ts';
 import { yieldRimFixture, rimCount, rimPixel } from './fixtures/yield_rim.ts';
 import { writeHybridFixture } from './fixtures/hybrid_limb.ts';
@@ -34141,11 +34141,55 @@ function runAssembleSuite(): number {
     const softOff825 = assemble(softOccluderFixture());
     const softOn825 = assemble({ ...softOccluderFixture(), keepUnderOccluders: ['under'] });
     const under825 = (r: ReturnType<typeof assemble>) => r.images.find(p => p.record.name === 'under')!;
-    const offDiff825 = softTrailDiff(under825(softOff825)), onDiff825 = softTrailDiff(under825(softOn825));
+    const offDiff825 = softTrailDiff(under825(softOff825));
+    // HQ #1073 ruling: #828's alpha 8..128 range overlaps ghost cleanup at 8.
+    // Preserve the zero oracle on the first drawn value, alpha 9, separately.
+    const drawnFixture833 = softOccluderFixture('soft', 9);
+    const drawnOn833 = assemble({ ...drawnFixture833, keepUnderOccluders: ['under'] });
+    const drawnOff833 = assemble(softOccluderFixture('soft', 9));
+    const drawnDiff833 = softTrailDiff(under825(drawnOn833));
+    const bounded833 = softTrailBounds(under825(softOn825), softOccluderFixture().full.layers[1].pixels);
     say('AS825_SOFT_HEM_RED_FIRST_AND_OWN_AMODAL_PIXELS_REMOVE_THE_MAX_MIN_TRAIL_WITHOUT_HOLES',
-      offDiff825.count > 0 && onDiff825.count === 0 && onDiff825.population > 0 && onDiff825.alphaHoles === 0 && under825(softOn825).image.data.every((v, i) => v === SOFT_SKIN[i % 4]),
-      `off abs(max-min) ROI=${JSON.stringify(offDiff825)}; on=${JSON.stringify(onDiff825)}; off provenance=${JSON.stringify(under825(softOff825).record.provenance)}`,
-      'the nearest-centre inverse-rotation oracle reads actual output pixels; the ROI is outside the fixed hem and inside both poses, so uniform skin has exactly zero residual and transparent holes are a failure');
+      offDiff825.count > 0 && bounded833.valid && bounded833.ghosts.length > 0 && bounded833.drawn > 0 &&
+        drawnDiff833.count === 0 && drawnDiff833.population > 0 && drawnDiff833.alphaHoles === 0 && under825(drawnOn833).image.data.every((v, i) => v === SOFT_SKIN[i % 4]),
+      `off=${JSON.stringify(offDiff825)}; ghost=${JSON.stringify(bounded833)}; alpha9=${JSON.stringify(drawnDiff833)}`,
+      'HQ #1073 ruling on #828 alpha 8..128: each ghost residual is bounded by its own raw cover alpha with zero holes; first-drawn alpha 9 retains the original zero-ink oracle');
+    say('AS833_LOST_DRAWN_SOFT_RESTORATION_FAILS_THE_ZERO_CONJUNCT',
+      softTrailDiff(under825(drawnOff833)).count > 0 && !softTrailBounds(under825(drawnOff833), drawnFixture833.full.layers[1].pixels).valid && drawnDiff833.count === 0,
+      `restoration disabled=${JSON.stringify(softTrailDiff(under825(drawnOff833)))}; enabled=${JSON.stringify(drawnDiff833)}`,
+      'HQ #1073 ruling on #828 alpha 8..128: a planted loss of restoration under drawn alpha 9 must fail the unchanged zero-ink conjunct');
+    const ghostProbe833 = bounded833.ghosts[0];
+    const boundMutant833 = { ...under825(softOn825), image: newRaster(under825(softOn825).image.width, under825(softOn825).image.height) };
+    boundMutant833.image.data.set(under825(softOn825).image.data);
+    const ghostIndex833 = ((ghostProbe833.sourceY - boundMutant833.record.y) * boundMutant833.image.width + ghostProbe833.sourceX - boundMutant833.record.x) * 4;
+    boundMutant833.image.data[ghostIndex833] = SOFT_SKIN[0] - ghostProbe833.bound - 1;
+    const overBound833 = softTrailBounds(boundMutant833, softOccluderFixture().full.layers[1].pixels);
+    boundMutant833.image.data[ghostIndex833 + 3] = 0;
+    const holeBound833 = softTrailBounds(boundMutant833, softOccluderFixture().full.layers[1].pixels);
+    say('AS833_GHOST_BOUND_AND_ALPHA_HOLE_NEGATIVES_ARE_REFUSED',
+      bounded833.valid && !overBound833.valid && overBound833.ghosts.some(p => p.observed > p.bound) && !holeBound833.valid && holeBound833.alphaHoles > 0,
+      `positive=${bounded833.valid}; excess=${overBound833.ghosts.filter(p => p.observed > p.bound).length}; holes=${holeBound833.alphaHoles}`,
+      'HQ #1073 ruling on #828 alpha 8..128: a residual exceeding its mapped raw alpha and a transparent sample both fail the ghost conjunct');
+    const ghostOff833 = assemble(cleanedOccluderFixture());
+    const ghostOn833 = assemble({ ...cleanedOccluderFixture(), keepUnderOccluders: ['surface'] });
+    const ghostSurface833 = ghostOn833.images.find(p => p.record.name === 'surface')!;
+    let layerKept833 = 0, paintingMismatch833 = 0;
+    for (let y = 9; y < 55; y++) for (let x = 9; x < 55; x++) {
+      const p = ((y - ghostSurface833.record.y) * ghostSurface833.image.width + x - ghostSurface833.record.x) * 4;
+      const d = 1 + Math.floor(39 * ((x - 8) + 2 * (y - 8)) / 141);
+      if ([210 + d, 160 + d, 140 + d].every((v, c) => ghostSurface833.image.data[p + c] === v)) layerKept833++;
+      if ([210, 160, 140, 255].some((v, c) => ghostSurface833.image.data[p + c] !== v)) paintingMismatch833++;
+    }
+    say('AS833_REMOVED_GHOST_IS_NOT_A_FINAL_FRONT_COVER',
+      layerKept833 === 0 && paintingMismatch833 === 0 && JSON.stringify(ghostOff833.parts) === JSON.stringify(ghostOn833.parts) &&
+        ghostOff833.images.every((p, i) => Buffer.compare(Buffer.from(encodePngBytes(p.image)), Buffer.from(encodePngBytes(ghostOn833.images[i].image))) === 0) && (ghostOn833.softOcclusion?.length ?? 0) === 0,
+      `layer-kept=${layerKept833}; painting mismatch=${paintingMismatch833}; readings=${ghostOn833.softOcclusion?.length ?? 0}`,
+      'the generated alpha-8 diagonal is absent in the final stack; the opt-in must match the omitted option and cannot report kept pixels under removed cover');
+    const softKept833 = drawnOn833.softOcclusion?.find(q => q.part === 'under');
+    say('AS833_REAL_SOFT_COVER_COUNTS_ONLY_RESTORED_FINAL_SUPPORT',
+      softKept833 !== undefined && softKept833.kept > 0 && softKept833.kept === softKept833.front.reduce((n, q) => n + q.px, 0) &&
+        softOcclusionLine(softKept833).includes(`kept ${softKept833.kept} original own-layer px`) && drawnDiff833.count === 0,
+      JSON.stringify(softKept833), 'HQ #1073 ruling on #828 alpha 8..128: the alpha-9 drawn-cover oracle stays zero and its informational count equals restored final support');
     const edge825 = (['opaque', 'none'] as const).map(edge => {
       const off = assemble(softOccluderFixture(edge)), on = assemble({ ...softOccluderFixture(edge), keepUnderOccluders: ['under'] });
       return { edge, equal: JSON.stringify(off.parts) === JSON.stringify(on.parts) && off.images.every((p, i) => Buffer.compare(Buffer.from(encodePngBytes(p.image)), Buffer.from(encodePngBytes(on.images[i].image))) === 0) };
@@ -34160,18 +34204,18 @@ function runAssembleSuite(): number {
     const pieceReading825 = cutRemedy825.softOcclusion?.find(q => q.part === 'piece');
     say('AS825_DERIVED_CUT_REMEDY_NAMES_THE_CONFIGURABLE_ORIGINAL_PLAN_PART', pieceReading825?.sourcePart === 'under' && softOcclusionLine(pieceReading825).includes('assemble.keep_under_occluders: ["under"]') && !softOcclusionLine(pieceReading825).includes('assemble.keep_under_occluders: ["piece"]'),
       JSON.stringify(pieceReading825), 'a cut name identifies the output, while the remedy names the original source part accepted by the loader; no guessed or unresolvable config name is suggested');
-    const cross825 = softOccluderFixture();
+    const cross825 = softOccluderFixture('soft', 9);
     cross825.head = { ...cross825.head, layers: [cross825.full.layers[1]] };
     cross825.full = { ...cross825.full, layers: [cross825.full.layers[0]] };
     cross825.plan = [['under', 'full', 'neck'], ['cover', 'head', 'topwear']];
     const crossOn825 = assemble({ ...cross825, keepUnderOccluders: ['under'] });
-    say('AS825_SOFT_FRONT_IN_THE_OTHER_RUN_RETAINS_THE_SAME_OWN_PIXELS', softTrailDiff(under825(crossOn825)).count === 0 && Array.from({ length: 8 * 24 }, (_, i) => [32 + i % 24, 34 + Math.floor(i / 24)]).every(([x, y]) => { const p = under825(crossOn825); const q = ((y - p.record.y) * p.record.w + x - p.record.x) * 4; return SOFT_SKIN.every((v, c) => p.image.data[q + c] === v); }), JSON.stringify(crossOn825.softOcclusion), 'the final stack is shared by both runs; projection-run-local ownership cannot make the head cover invisible to the full-run under-part');
+    say('AS825_SOFT_FRONT_IN_THE_OTHER_RUN_RETAINS_THE_SAME_OWN_PIXELS', softTrailDiff(under825(crossOn825)).count === 0 && Array.from({ length: 8 * 24 }, (_, i) => [32 + i % 24, 34 + Math.floor(i / 24)]).every(([x, y]) => { const p = under825(crossOn825); const q = ((y - p.record.y) * p.record.w + x - p.record.x) * 4; return SOFT_SKIN.every((v, c) => p.image.data[q + c] === v); }), JSON.stringify(crossOn825.softOcclusion), 'HQ #1073 ruling on #828 alpha 8..128: first-drawn alpha 9 stays zero across runs; the final stack, not run-local ownership, determines cover');
     say('AS825_DERIVED_RETAKE_READING_NAMES_THE_REMEDY_WITHOUT_CLAIMING_A_DRIFT_REFUSAL',
       softOff825.softOcclusion?.find(q => q.part === 'under')?.changed === 100 && softOff825.softOcclusion.some(q => softOcclusionLine(q).includes('assemble.keep_under_occluders: ["under"]')) && softOn825.softOcclusion?.some(q => q.kept > 0 && softOcclusionLine(q).includes('kept')) === true,
       JSON.stringify({ off: softOff825.softOcclusion, on: softOn825.softOcclusion }), 'source-projection writer plus changed original RGBA plus actual soft front support derives the informational report; no observation of motion or defect is invented');
     try {
       const alt825 = (enabled: boolean) => {
-        const d = join(dir, 'soft-alternate825-' + enabled), f = softOccluderFixture();
+        const d = join(dir, 'soft-alternate825-' + enabled), f = softOccluderFixture('soft', 9);
         mkdirSync(d, { recursive: true });
         writeFileSync(join(d, 'painting.png'), encodePngBytes(f.source));
         exportLayers(f.full, join(d, 'full')); writeRun(join(d, 'head'), FRAMED_HEAD, 96);
@@ -34186,7 +34230,7 @@ function runAssembleSuite(): number {
       };
       const off = alt825(false), on = alt825(true);
       say('AS825_REAL_STAGE_AND_FULL_ALTERNATE_FORWARD_THE_HANDLE', off.base.count > 0 && off.alternate.count > 0 && on.base.count === 0 && on.alternate.count === 0 && off.same && on.same && off.remedy && on.remedy,
-        JSON.stringify({ off, on }), 'both actual build.ts branches receive the authored handle; the logged remedy and emitted PNGs are read back');
+        JSON.stringify({ off, on }), 'HQ #1073 ruling on #828 alpha 8..128: first-drawn alpha 9 stays zero through both actual build.ts branches; the logged remedy and emitted PNGs are read back');
     } catch (error) { say('AS825_REAL_STAGE_AND_FULL_ALTERNATE_FORWARD_THE_HANDLE', false, String(error), 'fixture/reader refusal is not a completed pixel test'); }
     const pixel825 = (r: ReturnType<typeof assemble>, name: string, x: number, y: number): number[] => {
       const p = r.images.find(q => q.record.name === name)!;
@@ -34213,12 +34257,12 @@ function runAssembleSuite(): number {
     say('AS825_DEFAULT_OFF_COMBINED_YIELD_AND_LIMB_COVER_KEEP_THE_HISTORICAL_PATH',
       combinedYields825.some(q => q.yielded > 0) && combinedYields825.every(q => q.preserved === undefined) && JSON.stringify(combinedAbsent825.parts) === JSON.stringify(combinedEmpty825.parts) && combinedAbsent825.images.every((p, i) => Buffer.compare(Buffer.from(encodePngBytes(p.image)), Buffer.from(encodePngBytes(combinedEmpty825.images[i].image))) === 0),
       JSON.stringify(combinedYields825), 'with the new handle absent/empty no new keptRetake pixel may skip a historical yield; the lower cap exercises the existing limb-cover protection independently');
-    const rawProv825 = under825(softOn825).record.provenance;
+    const rawProv825 = under825(drawnOn833).record.provenance;
     const forcedProjectionWriters825 = new Int32Array(96 * 96).fill(AW817.sourceProjection);
-    const independentlyClassified825 = pixelProvenance(under825(softOn825).image, under825(softOn825).record.x, under825(softOn825).record.y, 96, forcedProjectionWriters825, [], 0, softOccluderFixture().full.layers[0].pixels);
+    const independentlyClassified825 = pixelProvenance(under825(drawnOn833).image, under825(drawnOn833).record.x, under825(drawnOn833).record.y, 96, forcedProjectionWriters825, [], 0, drawnFixture833.full.layers[0].pixels);
     say('AS825_RESTORED_VALUES_ARE_CLASSIFIED_AS_OWN_LAYER_DESPITE_RETAINED_PROJECTION_WRITERS',
       rawProv825?.unchanged_layer_px === 24 * 72 && rawProv825.automatic_px === 0 && rawProv825.hand_px === 0 && independentlyClassified825.unchanged_layer_px === 24 * 72 && independentlyClassified825.automatic_px === 0,
-      JSON.stringify({ actual: rawProv825, forcedProjectionWriters: independentlyClassified825 }), 'RGBA equality with immutable raw baseline has precedence over writer IDs; the real restored output and an independently forced AW.sourceProjection population must both classify as own layer');
+      JSON.stringify({ actual: rawProv825, forcedProjectionWriters: independentlyClassified825 }), 'HQ #1073 ruling on #828 alpha 8..128: first-drawn alpha 9 retains all own RGBA; immutable raw equality takes precedence over retained or independently forced projection writer IDs');
     const softConfig825 = (value: unknown) => {
       const cfg = assembleConfig({ plan: [['under', 'full', 'neck'], ['cover', 'full', 'topwear']], extend: [] });
       (cfg.assemble as Record<string, unknown>).keep_under_occluders = value;

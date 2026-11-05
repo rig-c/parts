@@ -2420,14 +2420,15 @@ export function cropBounds(frame: Pick<Frame, 'headBox' | 'S'>): [number, number
   return frame.headBox.map(v => v * frame.S) as [number, number, number, number];
 }
 
-/** Explicit-edge continuation copies only full-run alpha >= 128 outside the crop. */
+/** Copy full-run alpha >= 128 only where pixel centres lie outside the half-open crop. */
 export function beyondCrop(extra: Raster, box: readonly number[], edges: readonly CropEdge[]): Mask {
   const sel = newMask(extra.width, extra.height);
   const [left, top, right, bottom] = box;
   for (let y = 0; y < extra.height; y++) for (let x = 0; x < extra.width; x++) {
     const p = y * extra.width + x;
     if (extra.data[p * 4 + 3] < 128) continue;
-    if (edges.some(edge => edge === 'left' ? x < left : edge === 'right' ? x >= right : edge === 'top' ? y < top : y >= bottom)) sel.data[p] = 1;
+    const cx = x + 0.5, cy = y + 0.5;
+    if (edges.some(edge => edge === 'left' ? cx < left : edge === 'right' ? cx >= right : edge === 'top' ? cy < top : cy >= bottom)) sel.data[p] = 1;
   }
   return sel;
 }
@@ -2480,10 +2481,10 @@ export function cropClippedLines(plan: readonly PlanEntry[], extend: readonly Ex
       const p = y * extra.width + x;
       if (extra.data[p * 4 + 3] < 128 || covered[p] === 1) continue;
       const edges: CropEdge[] = [];
-      if (x < box[0]) edges.push('left');
-      if (x >= box[2]) edges.push('right');
-      if (y < box[1]) edges.push('top');
-      if (y >= box[3]) edges.push('bottom');
+      if (x + 0.5 < box[0]) edges.push('left');
+      if (x + 0.5 >= box[2]) edges.push('right');
+      if (y + 0.5 < box[1]) edges.push('top');
+      if (y + 0.5 >= box[3]) edges.push('bottom');
       if (edges.length === 0) continue;
       total++;
       for (const edge of edges) counts[edge]++;
@@ -5047,7 +5048,6 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   const patchIds = patches.map((_, i) => editId(`patches[${i}]`));
   const layerWriters = new Map<string, Int32Array>();
   const valueBaselines = new Map<string, ValueBaseline | null>();
-  const cleanedSoftCover = new Map<string, Mask>();
   // Extend-only rasters are still projected/merged, but are never emitted as own sources.
   const readKeys = new Set(sourcePlan.map(([, run, tag]) => `${run}:${tag}`));
   const rig = new Map<string, Raster>();
@@ -5121,17 +5121,6 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       }
       // Keep only samples that could equal a final opaque pixel; full raw and
       // prepared normalization temporaries end with this layer's callback.
-      // A low-alpha source fringe removed by cleanGhosts still contributed to
-      // the painting. Retain its source footprint only for explicit opt-in;
-      // final piece regions below still decide which side of a cut owns it.
-      if ((input.keepUnderOccluders?.length ?? 0) > 0 && raw !== null && preparedWriter === 0) {
-        let footprint: Mask | null = null;
-        for (let p = 0; p < W * H; p++) if (raw.data[p * 4 + 3] > 0 && raw.data[p * 4 + 3] <= OPAQUE_ALPHA_ABOVE && rigLayers[i].data[p * 4 + 3] === 0) {
-          footprint ??= newMask(W, H);
-          footprint.data[p] = 1;
-        }
-        if (footprint !== null) cleanedSoftCover.set(key, footprint);
-      }
       valueBaselines.set(key, raw === null ? null : compactValueBaseline(raw));
       return ids;
     });
@@ -5610,12 +5599,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       if (!enabled && (writer !== AW.sourceProjection || rgbaEqual(b.r.data, p * 4, raw, q))) continue;
       if (writer !== AW.sourceProjection && !rgbaEqual(b.r.data, p * 4, raw, q)) continue;
       for (let j = stack.length - 1; j > i; j--) {
-        let alpha = stack[j].image.data[p * 4 + 3];
-        const frontSlot = order[j];
-        if (alpha === 0 && enabled && !('patch' in frontSlot)) {
-          const cover = pieceAt(frontSlot).b;
-          if ((cover.region === null || cover.region.data[p] === 1) && cover.trace.from[p] < 0 && cover.trace.ring.data[p] === 0 && cleanedSoftCover.get(cover.key)?.data[p] === 1) alpha = OPAQUE_ALPHA_ABOVE;
-        }
+        const alpha = stack[j].image.data[p * 4 + 3];
         if (alpha === 0) continue;
         if (alpha < CORE_ALPHA) {
           const different = !rgbaEqual(b.r.data, p * 4, raw, q);
@@ -6783,24 +6767,22 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
     const reach: Record<CropEdge, number> = { left: 0, right: 0, top: 0, bottom: 0 };
     for (let y = 0; y < extra.height; y++) for (let x = 0; x < extra.width; x++) {
       if (extra.data[(y * extra.width + x) * 4 + 3] < 128) continue;
-      reach.left = Math.max(reach.left, box[0] - x);
-      reach.right = Math.max(reach.right, x + 1 - box[2]);
-      reach.top = Math.max(reach.top, box[1] - y);
-      reach.bottom = Math.max(reach.bottom, y + 1 - box[3]);
+      reach.left = Math.max(reach.left, box[0] - (x + 0.5));
+      reach.right = Math.max(reach.right, x + 0.5 - box[2]);
+      reach.top = Math.max(reach.top, box[1] - (y + 0.5));
+      reach.bottom = Math.max(reach.bottom, y + 0.5 - box[3]);
     }
     edgeReaches.set(tag, reach);
-    const edges = (['left', 'right', 'top', 'bottom'] as const).filter(edge => reach[edge] > 8);
-    // Preserve the established bottom-only proposal and its component semantics.
-    const old = extend.findIndex(e => e.part === name);
-    if (edges.length === 0 || (old >= 0 && edges.every(edge => edge === 'bottom'))) continue;
-    if (old >= 0) extend.splice(old, 1);
-    extend.push({ part: name, run: 'full', tag, edges });
+    const edges = (['left', 'right', 'top'] as const).filter(edge => reach[edge] > 8);
+    // Legacy bottom entries retain their inset line, seeding, rim and order.
+    // Side/top continuation is additive; it never replaces that entry.
+    if (edges.length > 0) extend.push({ part: name, run: 'full', tag, edges });
   }
   const covered = planCoverage(plan, extend, rigOf, frame.headBottom, box);
   const minBody = bodyMinPx(frame, minPx);
   const why = (tag: string): string => {
     const edge = edgeReaches.get(tag);
-    if (edge !== undefined && (edge.left > 0 || edge.right > 0 || edge.top > 0)) return `the proposer continues ${tag} beyond each crop edge only when its full-run alpha >= 128 reaches more than 8 rig px beyond it; reaches ${Object.entries(edge).map(([name, px]) => `${name} ${px} rig px`).join(', ')}`;
+    if (edge !== undefined && (edge.left > 8 || edge.right > 8 || edge.top > 8)) return `the proposer continues ${tag} beyond each crop edge only when its full-run alpha >= 128 reaches more than 8 rig px beyond it; reaches ${Object.entries(edge).map(([name, px]) => `${name} ${px} rig px`).join(', ')}`;
     if (!reaches.has(tag)) return 'the proposer continues only front hair and back hair below the head crop';
     const r = reaches.get(tag);
     return `the proposer continues ${tag} only when its full-run layer reaches more than 8 rig px below the crop line, rig row ${frame.headBottom}; it reaches ${r === null || r === undefined ? 'no row' : `rig row ${fmt0(r)}`}`;
