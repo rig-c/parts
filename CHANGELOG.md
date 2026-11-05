@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.17.0](https://github.com/rig-c/parts/compare/v2.16.1...v2.17.0) (2026-11-05)
+
+
+### Features
+
+* **check:** label consumer rows by scope and kind ([#1089](https://github.com/rig-c/parts/issues/1089)) ([#1091](https://github.com/rig-c/parts/issues/1091)) ([1d51701](https://github.com/rig-c/parts/commit/1d51701a4b53b4270ce7a28fac436387b732b231))
+
 ## [2.16.1](https://github.com/rig-c/parts/compare/v2.16.0...v2.16.1) (2026-11-05)
 
 
