@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.13.1](https://github.com/rig-c/parts/compare/v2.13.0...v2.13.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **take:** guard writer-specific region footprints ([#1055](https://github.com/rig-c/parts/issues/1055)) ([#1063](https://github.com/rig-c/parts/issues/1063)) ([817b750](https://github.com/rig-c/parts/commit/817b750c2dd72b45fa0b861592f2b2811940cff9))
+
 ## [2.13.0](https://github.com/rig-c/parts/compare/v2.12.0...v2.13.0) (2026-11-05)
 
 
