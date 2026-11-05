@@ -6265,7 +6265,7 @@ export function measureWindBand(
     const worstGhost = perStep.reduce((best, s) => (s.ghostPx > best.ghostPx ? s : best), perStep[0]);
 
     return {
-      ...checkRow('WIND_BAND.pairs', 'pair', false, [p.a, p.b]),
+      ...checkRow('WIND_BAND.pairs', 'pair', !holdsAll, [p.a, p.b]),
       pair: p.pair,
       a: p.a,
       b: p.b,
@@ -6276,7 +6276,7 @@ export function measureWindBand(
       first_break_above: span === null ? breakAt(0) : span.end < wb.steps.length - 1 ? breakAt(span.end + 1) : null,
       worst_gap: { x: worstGap.x, px: worstGap.gapPx, animation: worstGap.gapAnim, frame: worstGap.gapFrame },
       worst_ghost: { x: worstGhost.x, px: worstGhost.ghostPx, animation: worstGhost.ghostAnim, frame: worstGhost.ghostFrame },
-      steps: perStep.map((s) => ({ ...checkRow('WIND_BAND.pairs[].steps', 'pair', false, [p.a, p.b]), x: s.x, holds: s.holds, gap_max_px: s.gapPx, ghost_max_px: s.ghostPx })),
+      steps: perStep.map((s) => ({ ...checkRow('WIND_BAND.pairs[].steps', 'pair', !s.holds, [p.a, p.b]), x: s.x, holds: s.holds, gap_max_px: s.gapPx, ghost_max_px: s.ghostPx })),
     };
   });
 

@@ -7976,9 +7976,14 @@ order; empty for rig scope). A pair is not a per-part flag. A bone, chain or
 authored observation region has rig scope: its name does not identify a part.
 The producer applies its existing bar or warning predicate; a block FAIL does
 not turn every row into a finding. Unavailable/unmeasured readings and raw
-reference readings are evidence; their existing reason, unread or unmeasured
-field (or enclosing SKIP reason) explains what was not measured. A measured
+reference readings are evidence. Most unavailable readings explain the gap in
+an existing reason, unread or unmeasured field, or an enclosing SKIP reason.
+The exception is `SEAM_OVER_MOTION.required.pairs`: unread or unbanded rows
+carry no row-level reason; their reason is reported in problems/stdout, with
+no new JSON key. A measured
 SKIP such as an art distance without a declared limit remains evidence.
+`WIND_BAND` pairs that do not hold throughout and steps that do not hold are
+findings past the declared gap/ghost bars; holding pairs and steps are evidence.
 
 All six scope/kind combinations occur in the generated CLI fixture. Existing
 `scope` and `kind` fields keep their meanings and bytes. The document has no
@@ -8040,8 +8045,8 @@ Internal `SeamSupport.drawings` never enters check JSON. Named requirement
 | `STRESS_OFF_CHAIN.per_part[].poses` | 'part' | evidence; finding when shown > STRESS_RIGID; otherwise evidence | [r.part] | [check.ts:3856](../src/check.ts#L3856), [check.ts:3874](../src/check.ts#L3874) |
 | `TEXTURE_STRETCH.per_mesh` | 'part' | evidence; finding when severity > TEXTURE_STRETCH_CEILING; otherwise evidence | [m.slot] | [check.ts:9338](../src/check.ts#L9338), [check.ts:9348](../src/check.ts#L9348) |
 | `TIP_OVER_ROOT.parts` | 'part' | evidence; finding when !ok && !(!rigid && hanging.onLink && Math.max(c.root, c.tip) < TIP_TRAVEL_FLOOR); otherwise evidence | [p.name] | [check.ts:8120](../src/check.ts#L8120), [check.ts:8125](../src/check.ts#L8125), [check.ts:8146](../src/check.ts#L8146), [check.ts:8157](../src/check.ts#L8157) |
-| `WIND_BAND.pairs` | 'pair' | evidence | [p.a, p.b] | [check.ts:6268](../src/check.ts#L6268) |
-| `WIND_BAND.pairs[].steps` | 'pair' | evidence | [p.a, p.b] | [check.ts:6279](../src/check.ts#L6279) |
+| `WIND_BAND.pairs` | 'pair' | finding when !holdsAll; otherwise evidence | [p.a, p.b] | [check.ts:6268](../src/check.ts#L6268) |
+| `WIND_BAND.pairs[].steps` | 'pair' | finding when !s.holds; otherwise evidence | [p.a, p.b] | [check.ts:6279](../src/check.ts#L6279) |
 | `figure_openings.openings` | 'pair' | finding | [ps.under, ps.above] | [check.ts:5585](../src/check.ts#L5585) |
 | `loop_physics` | 'rig' | evidence | [] | [check.ts:7243](../src/check.ts#L7243) |
 | `requirements.lines.* (bone)` | 'rig' | finding when line.status === 'FAIL'; otherwise evidence | [] | [check.ts:7539](../src/check.ts#L7539) |

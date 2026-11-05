@@ -19627,6 +19627,40 @@ export function runRowScopeFixture1089(dir: string): { status: number; figures: 
     omissionCaught: planted && checkRowFaults(omitted).some(f => f.includes('row_kind')) };
 }
 
+/** Review controls: declared wind bars and a changed alternate's console. */
+export function runRowReviewFixture1089(dir: string) {
+  mkdirSync(dir, { recursive: true });
+  const clothRoot = join(dir, 'cloth');
+  mkdirSync(clothRoot);
+  const cloth = clothBuild(clothRoot, 'rows');
+  if (cloth.rig.status !== 0 || cloth.check?.status !== 0) throw new Error('wind-row fixture baseline did not pass');
+  const spec = join(dir, 'wind-band.json');
+  writeFileSync(spec, JSON.stringify({ spec: WIND_BAND_SPEC, min: 0, max: 8, step: 4, fps: 12, max_gap: 50, max_ghost: 20,
+    pairs: ['hair_back:face', 'hair_back:skirt'] }));
+  const windOut = join(dir, 'wind-check');
+  const wind = runCli(['check', '--rig', cloth.out, '--parts', cloth.parts, '--out', windOut, '--wind-band', spec, '--no-extremes']);
+  const windFigures = readJsonFile(join(windOut, 'check.json'));
+  const band = windFigures?.[WIND_BAND_LINE] as WindBandLine | undefined;
+  const kind = (row: unknown): unknown => (row as Record<string, unknown>).row_kind;
+  const pairKinds = band?.pairs.map(row => ({ pair: row.pair, holds: row.holds_all, kind: kind(row), steps: row.steps.map(step => ({ holds: step.holds, kind: kind(step) })) })) ?? [];
+  const windPass = wind.status === 0 && pairKinds.some(row => row.holds) && pairKinds.some(row => !row.holds) &&
+    pairKinds.every(row => row.kind === (row.holds ? 'evidence' : 'finding') && row.steps.every(step => step.kind === (step.holds ? 'evidence' : 'finding'))) &&
+    pairKinds.flatMap(row => row.steps).some(step => !step.holds);
+  const scopeRoot = join(dir, 'scope');
+  mkdirSync(scopeRoot);
+  const { scopeHome705 } = writeSeamScope705Fixtures(scopeRoot);
+  const scopeOut = join(dir, 'scope-check');
+  const scope = runCli(['check', '--rig', scopeHome705, '--out', scopeOut, '--all-sets', '--no-extremes']);
+  const figures = readJsonFile(join(scopeOut, 'check.json'));
+  const sets = figures?.sets as Record<string, { seam_scope?: { changes?: unknown[] } }> | undefined;
+  const changes = Object.values(sets ?? {}).flatMap(set => set.seam_scope?.changes ?? []);
+  const consoleRows = scope.out.split('\n').filter(line => line.startsWith('  seam scope ('));
+  const consolePass = scope.status === 0 && changes.length > 0 && consoleRows.length > 0 &&
+    changes.some(row => kind(row) === 'evidence') && consoleRows.every(line => !/row_scope|row_kind|row_subjects/.test(line));
+  return { windPass, consolePass, pairKinds, consoleRows, changes: changes.length, windStatus: wind.status, scopeStatus: scope.status,
+    windOut, scopeOut, scopeHome: scopeHome705, clothRig: cloth.out, clothParts: cloth.parts, spec };
+}
+
 function runRowScopeCases1089(dir: string, say: ReturnType<typeof counter>['say']): void {
   const result = runRowScopeFixture1089(dir);
   const wanted = ['pair/evidence', 'pair/finding', 'part/evidence', 'part/finding', 'rig/evidence', 'rig/finding'];
@@ -19634,6 +19668,11 @@ function runRowScopeCases1089(dir: string, say: ReturnType<typeof counter>['say'
     JSON.stringify({ exit: result.status, combinations: result.combinations, faults: result.faults }), 'generated limb seam warning, false binding and displaced art observation cover all six combinations through check --json');
   say('CK1061_A_PLANTED_ROW_METADATA_OMISSION_IS_REFUSED', result.omissionCaught,
     `missing row_kind ${result.omissionCaught ? 'caught' : 'MISSED'}`, 'every emitted object-array row and named requirement row is checked, including nested raw evidence');
+  const review = runRowReviewFixture1089(join(dir, 'review'));
+  say('CK1062_WIND_BAND_BREAKS_ARE_FINDINGS_AND_HOLDING_ROWS_ARE_EVIDENCE', review.windPass,
+    JSON.stringify(review.pairKinds), 'pair and step kinds follow their declared gap/ghost holding predicates, including positive and negative controls');
+  say('CK1063_ALTERNATE_SEAM_SCOPE_CONSOLE_KEEPS_LEGACY_CHANGES', review.consolePass,
+    JSON.stringify({ status: review.scopeStatus, changes: review.changes, lines: review.consoleRows }), 'actual changed alternate rows keep JSON metadata while the per-set human-readable line excludes it');
 }
 
 function runCheckFixtureCases(inputScope: CheckReadScope): number {

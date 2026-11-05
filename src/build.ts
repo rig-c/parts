@@ -1996,7 +1996,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
         );
         if (setFig.seam_scope !== undefined) {
           const scope = setFig.seam_scope;
-          log(`  seam scope (${setName}): ${scope.mode}, denominator ${scope.denominator_px} base source cells; union ${scope.domain?.viewport.pixelWidth}x${scope.domain?.viewport.pixelHeight}, numerator ${scope.domain?.numerator}; whole canonical ${scope.whole.px_over_40} px over ${SEAM_PX_LEVEL}, mean ${scope.whole.mean}; auto-frame raw ${scope.auto_frame_raw.px_over_40} at scale ${scope.auto_frame_raw.frame_scale} (diagnostic only); effects ${JSON.stringify(scope.effects)}, changes ${JSON.stringify(scope.changes)}${scope.unavailable === undefined ? '' : `; ${JSON.stringify(scope.unavailable)}`}`);
+          log(`  seam scope (${setName}): ${scope.mode}, denominator ${scope.denominator_px} base source cells; union ${scope.domain?.viewport.pixelWidth}x${scope.domain?.viewport.pixelHeight}, numerator ${scope.domain?.numerator}; whole canonical ${scope.whole.px_over_40} px over ${SEAM_PX_LEVEL}, mean ${scope.whole.mean}; auto-frame raw ${scope.auto_frame_raw.px_over_40} at scale ${scope.auto_frame_raw.frame_scale} (diagnostic only); effects ${JSON.stringify(scope.effects)}, changes ${JSON.stringify(withoutCheckRows(scope.changes))}${scope.unavailable === undefined ? '' : `; ${JSON.stringify(scope.unavailable)}`}`);
           for (const pair of scope.pairs ?? []) log(`  seam inheritance (${setName}): ${JSON.stringify(pair.parts)}, whole ${pair.whole_px_over_40}, affected ${pair.affected_px_over_40}, inherited from base ${pair.inherited_px_over_40} px over ${SEAM_PX_LEVEL}`);
         }
         const setPairs = setFig.seam_pairs ?? [];
