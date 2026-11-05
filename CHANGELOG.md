@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.15.0](https://github.com/rig-c/parts/compare/v2.14.2...v2.15.0) (2026-11-05)
+
+
+### Features
+
+* **assemble:** continue parts beyond every head crop edge ([#1075](https://github.com/rig-c/parts/issues/1075)) ([#1079](https://github.com/rig-c/parts/issues/1079)) ([82edcce](https://github.com/rig-c/parts/commit/82edcce8774e5de198b0a40ff5bf5893cc6593c6))
+
 ## [2.14.2](https://github.com/rig-c/parts/compare/v2.14.1...v2.14.2) (2026-11-05)
 
 
