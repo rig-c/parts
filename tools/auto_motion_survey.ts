@@ -197,9 +197,9 @@ export function trackedSpacing(key: string, part: string): number {
  * config keeps the relative name it tracks, so no machine's path enters what the config reads or what a refusal prints.
  * `text` is the config's bytes when a caller writes them its own way (`tools/auto_matrix.ts` writes two-space JSON).
  */
-export function writeSwitchedConfig(key: string, raw: unknown, dir: string, text: string = JSON.stringify(raw, null, 1)): string {
+export function writeSwitchedConfig(key: string, raw: unknown, dir: string, text: string = JSON.stringify(raw, null, 1), sourceDirectory?: string): string {
   mkdirSync(dir, { recursive: true });
-  const from = join(ROOT, 'examples', key);
+  const from = sourceDirectory ?? join(ROOT, 'examples', key);
   for (const f of readdirSync(from)) {
     const p = join(from, f);
     if (f.endsWith('.json') && f !== 'config.json' && statSync(p).isFile()) copyFileSync(p, join(dir, f));

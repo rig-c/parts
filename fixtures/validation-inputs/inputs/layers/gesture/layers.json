@@ -1,0 +1,16 @@
+{
+  "prefix": "validation",
+  "width": 128,
+  "height": 128,
+  "layers": [
+    {
+      "name": "handwear-r",
+      "filename": "handwear-r.png",
+      "left": 28,
+      "top": 48,
+      "right": 70,
+      "bottom": 80,
+      "depth_median": 1
+    }
+  ]
+}

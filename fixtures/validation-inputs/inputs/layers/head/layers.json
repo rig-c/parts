@@ -1,0 +1,115 @@
+{
+  "prefix": "validation",
+  "width": 128,
+  "height": 128,
+  "layers": [
+    {
+      "name": "wings",
+      "filename": "wings.png",
+      "left": 0,
+      "top": 0,
+      "right": 128,
+      "bottom": 128,
+      "depth_median": 1
+    },
+    {
+      "name": "back hair",
+      "filename": "back hair.png",
+      "left": 7,
+      "top": 4,
+      "right": 122,
+      "bottom": 80,
+      "depth_median": 0.875
+    },
+    {
+      "name": "neck",
+      "filename": "neck.png",
+      "left": 58,
+      "top": 38,
+      "right": 70,
+      "bottom": 50,
+      "depth_median": 0.625
+    },
+    {
+      "name": "face",
+      "filename": "face.png",
+      "left": 40,
+      "top": 12,
+      "right": 88,
+      "bottom": 44,
+      "depth_median": 0.5625
+    },
+    {
+      "name": "eyewhite-r",
+      "filename": "eyewhite-r.png",
+      "left": 44,
+      "top": 22,
+      "right": 60,
+      "bottom": 32,
+      "depth_median": 0.5
+    },
+    {
+      "name": "eyewhite-l",
+      "filename": "eyewhite-l.png",
+      "left": 68,
+      "top": 22,
+      "right": 84,
+      "bottom": 32,
+      "depth_median": 0.4375
+    },
+    {
+      "name": "eyebrow-r",
+      "filename": "eyebrow-r.png",
+      "left": 44,
+      "top": 17,
+      "right": 60,
+      "bottom": 20,
+      "depth_median": 0.375
+    },
+    {
+      "name": "eyebrow-l",
+      "filename": "eyebrow-l.png",
+      "left": 68,
+      "top": 17,
+      "right": 84,
+      "bottom": 20,
+      "depth_median": 0.3125
+    },
+    {
+      "name": "nose",
+      "filename": "nose.png",
+      "left": 60,
+      "top": 28,
+      "right": 68,
+      "bottom": 36,
+      "depth_median": 0.25
+    },
+    {
+      "name": "mouth",
+      "filename": "mouth.png",
+      "left": 60,
+      "top": 36,
+      "right": 68,
+      "bottom": 42,
+      "depth_median": 0.1875
+    },
+    {
+      "name": "headwear",
+      "filename": "headwear.png",
+      "left": 14,
+      "top": 4,
+      "right": 30,
+      "bottom": 16,
+      "depth_median": 0.8125
+    },
+    {
+      "name": "front hair",
+      "filename": "front hair.png",
+      "left": 36,
+      "top": 8,
+      "right": 92,
+      "bottom": 16,
+      "depth_median": 0.0625
+    }
+  ]
+}
