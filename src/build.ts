@@ -1,3 +1,4 @@
+import { withoutCheckRows } from './checkrow.ts';
 import { readSetupFigureMask } from './setupfiguremask.ts';
 import { EDGE_RESIDUAL_FILE, edgeResidualLines } from './edgeresidual.ts';
 import { SUPPORT_DOMAINS_FILE, writeSupportDomains } from './supportdomains.ts';
@@ -1756,7 +1757,7 @@ export function packLines(r: CheckReport): string[] {
 
 function showFigure(v: unknown): string {
   if (Array.isArray(v)) return v.length === 0 ? 'none' : v.map(showFigure).join(' | ');
-  if (typeof v === 'object' && v !== null) return Object.entries(v).map(([k, x]) => `${k} ${showFigure(x)}`).join(', ');
+  if (typeof v === 'object' && v !== null) return Object.entries(v).filter(([key]) => !['row_scope', 'row_kind', 'row_subjects'].includes(key)).map(([k, x]) => `${k} ${showFigure(x)}`).join(', ');
   return String(v);
 }
 
@@ -1950,7 +1951,7 @@ export function clothLines(line: ClothLine, plant: { silent?: boolean } = {}): s
 
 /** A requirement's line as the console prints it: its name and status, the reason first when NOT MEASURABLE, then its figures as check.json holds them. */
 export function requirementText(name: string, line: RequirementLine): string {
-  const rest = Object.entries(line).filter(([k]) => k !== 'status' && k !== 'reason');
+  const rest = Object.entries(withoutCheckRows(line) as Record<string, unknown>).filter(([k]) => k !== 'status' && k !== 'reason');
   return `${name}: ${line.status} — ${[...(line.status === 'NOT MEASURABLE' ? [String(line.reason)] : []), ...rest.map(([k, v]) => `${k} ${showFigure(v)}`)].join('; ')}`;
 }
 
@@ -1995,7 +1996,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
         );
         if (setFig.seam_scope !== undefined) {
           const scope = setFig.seam_scope;
-          log(`  seam scope (${setName}): ${scope.mode}, denominator ${scope.denominator_px} base source cells; union ${scope.domain?.viewport.pixelWidth}x${scope.domain?.viewport.pixelHeight}, numerator ${scope.domain?.numerator}; whole canonical ${scope.whole.px_over_40} px over ${SEAM_PX_LEVEL}, mean ${scope.whole.mean}; auto-frame raw ${scope.auto_frame_raw.px_over_40} at scale ${scope.auto_frame_raw.frame_scale} (diagnostic only); effects ${JSON.stringify(scope.effects)}, changes ${JSON.stringify(scope.changes)}${scope.unavailable === undefined ? '' : `; ${JSON.stringify(scope.unavailable)}`}`);
+          log(`  seam scope (${setName}): ${scope.mode}, denominator ${scope.denominator_px} base source cells; union ${scope.domain?.viewport.pixelWidth}x${scope.domain?.viewport.pixelHeight}, numerator ${scope.domain?.numerator}; whole canonical ${scope.whole.px_over_40} px over ${SEAM_PX_LEVEL}, mean ${scope.whole.mean}; auto-frame raw ${scope.auto_frame_raw.px_over_40} at scale ${scope.auto_frame_raw.frame_scale} (diagnostic only); effects ${JSON.stringify(scope.effects)}, changes ${JSON.stringify(withoutCheckRows(scope.changes))}${scope.unavailable === undefined ? '' : `; ${JSON.stringify(scope.unavailable)}`}`);
           for (const pair of scope.pairs ?? []) log(`  seam inheritance (${setName}): ${JSON.stringify(pair.parts)}, whole ${pair.whole_px_over_40}, affected ${pair.affected_px_over_40}, inherited from base ${pair.inherited_px_over_40} px over ${SEAM_PX_LEVEL}`);
         }
         const setPairs = setFig.seam_pairs ?? [];

@@ -1,3 +1,4 @@
+import { checkRow } from './checkrow.ts';
 /** Authored source-painting limits over actual renderer setup pixels (#887). */
 import { refuseIfAny, type Problem } from './errors.ts';
 import type { Raster } from './raster/types.ts';
@@ -170,8 +171,8 @@ export function setupPaintingLine(
       else { row.pixels++; row.x0 = Math.min(row.x0, x); row.y0 = Math.min(row.y0, y); row.x1 = Math.max(row.x1, x + 1); row.y1 = Math.max(row.y1, y + 1); }
     }
     const status = r.max_pixels === undefined ? 'SKIP' : count > r.max_pixels ? 'FAIL' : 'PASS';
-    const result: SetupPaintingReading = { ...r, status, pixel_count: count, limit: r.max_pixels ?? null,
-      slots: [...rows].map(([slot, row]) => ({ slot, box: [row.x0, row.y0, row.x1 - row.x0, row.y1 - row.y0], pixel_count: row.pixels })) };
+    const result: SetupPaintingReading = { ...r, ...checkRow('SETUP_MATCHES_PAINTING.regions', 'rig', status === 'FAIL', []), status, pixel_count: count, limit: r.max_pixels ?? null,
+      slots: [...rows].map(([slot, row]) => ({ ...checkRow('SETUP_MATCHES_PAINTING.regions[].slots', slot === '(uncovered)' ? 'rig' : 'part', false, slot === '(uncovered)' ? [] : [slot]), slot, box: [row.x0, row.y0, row.x1 - row.x0, row.y1 - row.y0], pixel_count: row.pixels })) };
     if (status === 'FAIL') {
       for (const row of result.slots) problems.push({ code: 'CHECK_SETUP_MATCHES_PAINTING', object: `region "${r.name}" slot "${row.slot}"`, detail: `box [${row.box.join(', ')}], pixelcount ${row.pixel_count}; region pixelcount ${count} > declared limit ${r.max_pixels}, RGB tolerance ${declared.rgb_tolerance}; compare the actual setup to the source painting on the declared stage grid` });
     }

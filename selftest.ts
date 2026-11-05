@@ -1,4 +1,7 @@
 #!/usr/bin/env bun
+import { checkRowFaults, checkRowCombinations } from './tools/check_row_scope.ts';
+import { rowTableFaults } from './tools/check_row_reference.ts';
+import { withoutCheckRows } from './src/checkrow.ts';
 import { runCropEdgeChecks } from './fixtures/crop_edge_checks.ts';
 import { runSupportDomainChecks } from './tools/check_support_domains.ts';
 import { runCoincideChecks, runCoincideSetupChecks, runCoincideMutants } from './tools/check_coincide.ts';
@@ -18111,7 +18114,7 @@ function runSeamRequiredCases(dir: string, built: SoBuilt, say: (name: string, o
       plain.status === 0 && plain.fig?.PASS === true && lineOf(plain.fig)?.required === undefined &&
         hits.length === 1 && worst !== undefined && worst.px > 0 && !sampled(hits.map((h) => h.index)) &&
         planted.status === 1 && planted.fig?.PASS === false && f.length === 1 && f[0].startsWith(want) && f[0].includes('declares seam_over_motion.required: true') &&
-        req?.status === 'FAIL' && req.failed === 1 && JSON.stringify(req.pairs) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', class: cls, frames: 26, background_frames: 1, max_px: worst.px }]) &&
+        req?.status === 'FAIL' && req.failed === 1 && JSON.stringify(withoutCheckRows(req.pairs)) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', class: cls, frames: 26, background_frames: 1, max_px: worst.px }]) &&
         barsNotMet(planted.fig ?? {}).includes(MOTION_SEAM_LINE) && planted.out.includes('build: stopped at check'),
       `undeclared: exit ${plain.status}, PASS ${String(plain.fig?.PASS)}, required ${lineOf(plain.fig)?.required === undefined ? 'absent' : 'PRESENT'}; stock gapOpen frames ${JSON.stringify(hits)}; declared: exit ${planted.status}, ${f[0] ?? 'no refusal'}; block ${JSON.stringify(req)}`,
       `issue #941: the defect the card names, background inside the band in motion, on frame ${SO_TEAR_FRAME} of 13 alone — a frame no every-2nd, 3rd or 4th sampler reads. Undeclared it is accepted (today's warning, exit 0); under seam_over_motion.required the ${cls} pair is refused by name with the frame and the cells a fresh stock render finds there, and build emits no artifact`,
@@ -18133,7 +18136,7 @@ function runSeamRequiredCases(dir: string, built: SoBuilt, say: (name: string, o
           Object.keys(cleanRequirements?.lines ?? {}).length === 0 && cleanLine?.animations.length === 2 &&
           rows.length === 2 && rows.every(row => row.pair === 'upperarm_r|forearm_r' && row.status === 'read' && row.drawn === 13 && row.banded === 13) &&
           cleanRequired?.status === 'PASS' && cleanRequired.failed === 0 &&
-          JSON.stringify(cleanRequired.pairs) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', class: 'explicit', frames: 26, background_frames: 0, max_px: 0 }]) &&
+          JSON.stringify(withoutCheckRows(cleanRequired.pairs)) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', class: 'explicit', frames: 26, background_frames: 0, max_px: 0 }]) &&
           planted.status === 1 && req?.status === 'FAIL' && req.failed === 1 && req.pairs[0]?.frames === 26 && req.pairs[0]?.background_frames === 1,
         `clean exit ${clean.status}, requirements ${JSON.stringify(summary)}, required ${JSON.stringify(cleanRequired)}, rows ${JSON.stringify(rows.map(row => ({ animation: row.animation, drawn: row.drawn, banded: row.banded })))}; planted tear exit ${planted.status}, required ${JSON.stringify(req)}`,
         'issue #982: config.motion_seams carries an explicit pair with requirements: [] through assemble and build into the required background reading. Both animations are read on every frame with 0 declared requirements and 0 PASS. The existing frame-7 tear is refused through the same carrier.',
@@ -18157,7 +18160,7 @@ function runSeamRequiredCases(dir: string, built: SoBuilt, say: (name: string, o
   say(
     'SO28_REQUIRED_PASSES_A_SEAM_THAT_HOLDS_ON_EVERY_FRAME_AND_MOVES_NOTHING_ELSE',
     hold.status === 0 && hold.fig?.PASS === true && fails(hold.out).length === 0 &&
-      holdReq?.status === 'PASS' && holdReq.failed === 0 && JSON.stringify(holdReq.pairs) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', class: 'internal-joint', frames: 26, background_frames: 0, max_px: 0 }]) &&
+      holdReq?.status === 'PASS' && holdReq.failed === 0 && JSON.stringify(withoutCheckRows(holdReq.pairs)) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', class: 'internal-joint', frames: 26, background_frames: 0, max_px: 0 }]) &&
       hold.out.includes(`${MOTION_SEAM_LINE} required: PASS — 1 declared pair(s) (0 body-root, 1 internal-joint, 0 explicit), 26 pair-frame(s) read`) &&
       holdPlain.status === 0 && strip(hold.fig) === strip(holdPlain.fig) && !holdPlain.out.includes(`${MOTION_SEAM_LINE} required`),
     `declared: exit ${hold.status}, ${JSON.stringify(holdReq)}; undeclared twin: exit ${holdPlain.status}; check.json less the declared blocks ${strip(hold.fig) === strip(holdPlain.fig) ? 'identical' : 'DIFFERENT'}`,
@@ -18326,7 +18329,7 @@ function runMotionSeamCases(report: FixtureCaseReporter): void {
         ln !== null &&
         ln.status === 'WARN' &&
         ln.warnings === 1 &&
-        JSON.stringify(ln.pairs) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', a: 'upperarm_r', b: 'forearm_r', declared: ['config.limbs.arm_r segment 1, joint "elbow"'], joints: ['elbow'] }]) &&
+        JSON.stringify(withoutCheckRows(ln.pairs)) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', a: 'upperarm_r', b: 'forearm_r', declared: ['config.limbs.arm_r segment 1, joint "elbow"'], joints: ['elbow'] }]) &&
         JSON.stringify(ln.animations) === '["idle","bend"]' &&
         idleRow !== undefined &&
         idleRow.status === 'read' &&
@@ -19581,12 +19584,104 @@ function writeSeamScope705Fixtures(dir: string) {
 }
 // CK705_TINY_FIXTURE_CONSTRUCTOR_END
 
+/** One generated CLI check exposes every scope/kind, without changing art. */
+export function runRowScopeFixture1089(dir: string): { status: number; figures: Record<string, unknown> | null; combinations: string[]; faults: string[]; omissionCaught: boolean } {
+  mkdirSync(dir, { recursive: true });
+  writeRun(join(dir, 'full'), SO_FULL);
+  writeRun(join(dir, 'head'), FRAMED_HEAD);
+  writeFileSync(join(dir, 'painting.png'), encodePngBytes(flatPainting()));
+  writeFileSync(join(dir, 'animations.json'), JSON.stringify(SO_BEND));
+  const config = join(dir, 'config.json');
+  writeFileSync(config, JSON.stringify(soConfig(true)));
+  const stage = join(dir, 'built');
+  const built = runCli(['build', '--config', config, '--source', join(dir, 'painting.png'), '--full', join(dir, 'full'), '--head', join(dir, 'head'), '--out', stage]);
+  if (built.status !== 0) throw new Error(`row fixture baseline refused: ${built.out}`);
+  // A false binding declaration is the part finding; pixels and rig stay fixed.
+  const partsPath = join(stage, 'parts.json');
+  const parts = JSON.parse(readFileSync(partsPath, 'utf8')) as PartsFile;
+  const lower = parts.parts.find(p => p.name === 'forearm_r');
+  if (lower?.limb === undefined) throw new Error('row fixture has no lower limb');
+  lower.limb.bone = 'root';
+  writeFileSync(partsPath, JSON.stringify(parts));
+  // The old support digest belongs to the unplanted manifest, not this fixture.
+  rmSync(join(stage, 'part_support_domains.json'), { force: true });
+  const rig = JSON.parse(readFileSync(join(stage, 'rig', 'rig.json'), 'utf8')) as { skeleton: { x: number; y: number; height: number }; bones: Array<{ name: string; x?: number; y?: number }> };
+  const root = rig.bones[0], at = [(root.x ?? 0) - rig.skeleton.x, rig.skeleton.height - ((root.y ?? 0) - rig.skeleton.y)];
+  const req = join(dir, 'requirements.json');
+  writeRequirements(req, { requirements: [], fixed_skeleton: { source: 'generated root origin and a planted displaced observation', within_px: 0,
+    joints: [{ name: 'aligned', bone: root.name, at }, { name: 'displaced', bone: root.name, at: [at[0] + 10, at[1]] }] } });
+  const checked = runCli(['check', '--rig', join(stage, 'rig'), '--parts', stage, '--requirements', req, '--out', join(dir, 'check'), '--no-extremes', '--json']);
+  const figures = readJsonFile(join(dir, 'check', 'check.json'));
+  const faults = checkRowFaults(figures);
+  const omitted = structuredClone(figures);
+  let planted = false;
+  const omit = (v: unknown): void => {
+    if (Array.isArray(v)) v.forEach(omit);
+    else if (isDriveRecord(v)) {
+      if (!planted && v.row_scope !== undefined) { delete v.row_kind; planted = true; }
+      Object.values(v).forEach(omit);
+    }
+  };
+  omit(omitted);
+  return { status: checked.status, figures, combinations: checkRowCombinations(figures), faults,
+    omissionCaught: planted && checkRowFaults(omitted).some(f => f.includes('row_kind')) };
+}
+
+/** Review controls: declared wind bars and a changed alternate's console. */
+export function runRowReviewFixture1089(dir: string) {
+  mkdirSync(dir, { recursive: true });
+  const clothRoot = join(dir, 'cloth');
+  mkdirSync(clothRoot);
+  const cloth = clothBuild(clothRoot, 'rows');
+  if (cloth.rig.status !== 0 || cloth.check?.status !== 0) throw new Error('wind-row fixture baseline did not pass');
+  const spec = join(dir, 'wind-band.json');
+  writeFileSync(spec, JSON.stringify({ spec: WIND_BAND_SPEC, min: 0, max: 8, step: 4, fps: 12, max_gap: 50, max_ghost: 20,
+    pairs: ['hair_back:face', 'hair_back:skirt'] }));
+  const windOut = join(dir, 'wind-check');
+  const wind = runCli(['check', '--rig', cloth.out, '--parts', cloth.parts, '--out', windOut, '--wind-band', spec, '--no-extremes']);
+  const windFigures = readJsonFile(join(windOut, 'check.json'));
+  const band = windFigures?.[WIND_BAND_LINE] as WindBandLine | undefined;
+  const kind = (row: unknown): unknown => (row as Record<string, unknown>).row_kind;
+  const pairKinds = band?.pairs.map(row => ({ pair: row.pair, holds: row.holds_all, kind: kind(row), steps: row.steps.map(step => ({ holds: step.holds, kind: kind(step) })) })) ?? [];
+  const windPass = wind.status === 0 && pairKinds.some(row => row.holds) && pairKinds.some(row => !row.holds) &&
+    pairKinds.every(row => row.kind === (row.holds ? 'evidence' : 'finding') && row.steps.every(step => step.kind === (step.holds ? 'evidence' : 'finding'))) &&
+    pairKinds.flatMap(row => row.steps).some(step => !step.holds);
+  const scopeRoot = join(dir, 'scope');
+  mkdirSync(scopeRoot);
+  const { scopeHome705 } = writeSeamScope705Fixtures(scopeRoot);
+  const scopeOut = join(dir, 'scope-check');
+  const scope = runCli(['check', '--rig', scopeHome705, '--out', scopeOut, '--all-sets', '--no-extremes']);
+  const figures = readJsonFile(join(scopeOut, 'check.json'));
+  const sets = figures?.sets as Record<string, { seam_scope?: { changes?: unknown[] } }> | undefined;
+  const changes = Object.values(sets ?? {}).flatMap(set => set.seam_scope?.changes ?? []);
+  const consoleRows = scope.out.split('\n').filter(line => line.startsWith('  seam scope ('));
+  const consolePass = scope.status === 0 && changes.length > 0 && consoleRows.length > 0 &&
+    changes.some(row => kind(row) === 'evidence') && consoleRows.every(line => !/row_scope|row_kind|row_subjects/.test(line));
+  return { windPass, consolePass, pairKinds, consoleRows, changes: changes.length, windStatus: wind.status, scopeStatus: scope.status,
+    windOut, scopeOut, scopeHome: scopeHome705, clothRig: cloth.out, clothParts: cloth.parts, spec };
+}
+
+function runRowScopeCases1089(dir: string, say: ReturnType<typeof counter>['say']): void {
+  const result = runRowScopeFixture1089(dir);
+  const wanted = ['pair/evidence', 'pair/finding', 'part/evidence', 'part/finding', 'rig/evidence', 'rig/finding'];
+  say('CK1060_CHECK_JSON_ROWS_CARRY_EVERY_SCOPE_AND_KIND', result.status === 1 && result.figures?.PASS === false && JSON.stringify(result.combinations) === JSON.stringify(wanted) && result.faults.length === 0,
+    JSON.stringify({ exit: result.status, combinations: result.combinations, faults: result.faults }), 'generated limb seam warning, false binding and displaced art observation cover all six combinations through check --json');
+  say('CK1061_A_PLANTED_ROW_METADATA_OMISSION_IS_REFUSED', result.omissionCaught,
+    `missing row_kind ${result.omissionCaught ? 'caught' : 'MISSED'}`, 'every emitted object-array row and named requirement row is checked, including nested raw evidence');
+  const review = runRowReviewFixture1089(join(dir, 'review'));
+  say('CK1062_WIND_BAND_BREAKS_ARE_FINDINGS_AND_HOLDING_ROWS_ARE_EVIDENCE', review.windPass,
+    JSON.stringify(review.pairKinds), 'pair and step kinds follow their declared gap/ghost holding predicates, including positive and negative controls');
+  say('CK1063_ALTERNATE_SEAM_SCOPE_CONSOLE_KEEPS_LEGACY_CHANGES', review.consolePass,
+    JSON.stringify({ status: review.scopeStatus, changes: review.changes, lines: review.consoleRows }), 'actual changed alternate rows keep JSON metadata while the per-set human-readable line excludes it');
+}
+
 function runCheckFixtureCases(inputScope: CheckReadScope): number {
   section('check: build, gates, seam and loop through the installed rig-c');
   const { say, bad } = counter();
   let finishInputContract = (): void => { throw new Error('CHECK_TEMP_INPUTS: the generated input contract was not reached'); };
   const dir = temp('check');
   try {
+    runRowScopeCases1089(join(dir, 'row-scope'), say);
     runWeightStepChecks991(join(dir, 'weight-step-991'), say);
     runExtremesChecks(join(dir, 'extremes-controls'), (name, pass, detail) => say(name, pass, detail, 'issue #829: observations and opt-out preserve the gated check'), rigcRunnerAt(suiteRigc(), spawnRigc));
     const rig = join(dir, 'rig');
@@ -19750,7 +19845,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         failLine(cp.out, 'CHECK_LOOP_CLOSES') === null &&
         cpf !== null &&
         cpf.loop_max_diff === 0 &&
-        JSON.stringify(cpf.loop_physics) === '[{"name":"bob_phys","bone":"bob","in":"rig.json"}]' &&
+        JSON.stringify(cpf.loop_physics) === '[{"name":"bob_phys","bone":"bob","in":"rig.json","row_scope":"rig","row_kind":"evidence","row_subjects":[]}]' &&
         Object.keys(cpf).join(',') === [...CHECK_KEYS.slice(0, 4), 'loop_physics', ...CHECK_KEYS.slice(4, CHECK_KEYS.indexOf('RECOMPOSITE_HOLES')), CLOTH_LINE, ...CHECK_KEYS.slice(CHECK_KEYS.indexOf('RECOMPOSITE_HOLES'))].join(',') &&
         cp.out.split('\n').filter((l) => l.startsWith('  loop physics: ')).length === 1 &&
         cp.out.includes(physLine) &&
@@ -19937,9 +20032,9 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const got = seamPairRows(fixtureSeam, cutParts(200), [6, 2], vp6).map((x) => x.row);
     const agreeing = seamPairRows(fixtureSeam, cutParts(100), [6, 2], vp6).map((x) => x.row);
     const wantRows = [
-      { parts: ['b', 'p'], px_over_40: 2, px_over_80: 1, frame_box: [1, 0, 2, 1], rig_box: [1, 0, 3, 1], cut: { from: 'full:x', differing_copies_px: 1 }, picture: `${SEAM_DIR}/01_b_p.png` },
-      { parts: ['p', 'o'], px_over_40: 2, px_over_80: 0, frame_box: [4, 0, 5, 1], rig_box: [4, 0, 5, 1], picture: `${SEAM_DIR}/02_p_o.png` },
-      { parts: ['b', SEAM_NO_ART], px_over_40: 1, px_over_80: 0, frame_box: [0, 0, 0, 0], rig_box: [0, 0, 1, 1], picture: `${SEAM_DIR}/03_b_no-art.png` },
+      { row_scope: 'pair', row_kind: 'evidence', row_subjects: ['b', 'p'], parts: ['b', 'p'], px_over_40: 2, px_over_80: 1, frame_box: [1, 0, 2, 1], rig_box: [1, 0, 3, 1], cut: { from: 'full:x', differing_copies_px: 1 }, picture: `${SEAM_DIR}/01_b_p.png` },
+      { row_scope: 'pair', row_kind: 'evidence', row_subjects: ['p', 'o'], parts: ['p', 'o'], px_over_40: 2, px_over_80: 0, frame_box: [4, 0, 5, 1], rig_box: [4, 0, 5, 1], picture: `${SEAM_DIR}/02_p_o.png` },
+      { row_scope: 'part', row_kind: 'evidence', row_subjects: ['b'], parts: ['b', SEAM_NO_ART], px_over_40: 1, px_over_80: 0, frame_box: [0, 0, 0, 0], rig_box: [0, 0, 1, 1], picture: `${SEAM_DIR}/03_b_no-art.png` },
     ];
     const text = got.length > 0 ? seamPairText(got[0]) : '';
 
@@ -20153,7 +20248,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     say('CK716_ZERO_ERROR_RETAINS_THE_ACTUALLY_MEASURED_REFERENCE_PAIR',
       zeroFigures716.over40 === 0 && zeroPopulation716.rows(zeroFigures716).length === 0 &&
       measuredZero716.measured_sample_px === 12 && measuredZero716.pair_count === 1 &&
-      JSON.stringify(measuredZero716.pairs) === JSON.stringify([{ parts: ['back', 'front'], whole_sample_px: 12, scope_sample_px: 12, inherited_sample_px: 0 }]) &&
+      JSON.stringify(withoutCheckRows(measuredZero716.pairs)) === JSON.stringify([{ parts: ['back', 'front'], whole_sample_px: 12, scope_sample_px: 12, inherited_sample_px: 0 }]) &&
       measuredZero716.single_art.length === 0 && measuredZero716.no_reference_art.whole_sample_px === 0,
       JSON.stringify({ residual: zeroFigures716.over40, population: measuredZero716 }),
       'two opaque full-canvas 4x3 source drawings give one reference contributor pair on all 12 included samples even when no RGB error exceeds40; residual rows stay empty, with no zero-hit picture or box');
@@ -20492,7 +20587,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       const r = runCli(args);
       return { ...r, fig: readJsonFile(join(dir, `seated-${label}`, 'check.json')) };
     };
-    type TipRow = { part: string; tip_half?: string; hang_from?: string | null; root_rig_px?: number; tip_rig_px?: number; ratio?: number | null; world_ratio?: number | null; unmeasured?: string };
+    type TipRow = { row_scope: string; row_kind: string; row_subjects: string[]; part: string; tip_half?: string; hang_from?: string | null; root_rig_px?: number; tip_rig_px?: number; ratio?: number | null; world_ratio?: number | null; unmeasured?: string };
     const tipOf = (fig: Record<string, unknown> | null): Record<string, unknown> => (fig?.TIP_OVER_ROOT ?? {}) as Record<string, unknown>;
     const tipRowOf = (fig: Record<string, unknown> | null, part: string): TipRow | undefined => ((tipOf(fig).parts ?? []) as TipRow[]).find((r) => r.part === part);
     const consoleOf = (o: string, name: string): string => o.split('\n').find((l) => l.startsWith(`  ${name}: `)) ?? '';
@@ -20513,7 +20608,8 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         typeof bArm?.ratio === 'number' &&
         bArm.ratio < 1 &&
         JSON.stringify(Object.keys(tipOf(bare.fig))) === JSON.stringify(['status', 'instrument', 'parts', 'ratio_floor']) &&
-        JSON.stringify(Object.keys(bArm)) === JSON.stringify(['part', 'hang_from', 'root_rig_px', 'tip_rig_px', 'ratio', 'world_root_rig_px', 'world_tip_rig_px', 'world_ratio']) &&
+        JSON.stringify(Object.keys(bArm)) === JSON.stringify(['row_scope', 'row_kind', 'row_subjects', 'part', 'hang_from', 'root_rig_px', 'tip_rig_px', 'ratio', 'world_root_rig_px', 'world_tip_rig_px', 'world_ratio']) &&
+        bArm.row_scope === 'part' && bArm.row_kind === 'finding' && JSON.stringify(bArm.row_subjects) === '["arm"]' &&
         bUnder?.ratio === null &&
         bUnder?.world_ratio === 1 &&
         !bare.out.includes('declared_'),
@@ -20615,7 +20711,8 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         !foldUp.out.includes('REQUIREMENTS_TIP_EXCEPTION') &&
         JSON.stringify(tipOf(foldUp.fig).declared_rises) === '["arm"]' &&
         fuArm !== undefined &&
-        JSON.stringify(Object.keys(fuArm)) === JSON.stringify(['part', 'tip_half', 'tip_read', 'hang_from', 'root_rig_px', 'tip_rig_px', 'ratio', 'world_root_rig_px', 'world_tip_rig_px', 'world_ratio']) &&
+        JSON.stringify(Object.keys(fuArm)) === JSON.stringify(['row_scope', 'row_kind', 'row_subjects', 'part', 'tip_half', 'tip_read', 'hang_from', 'root_rig_px', 'tip_rig_px', 'ratio', 'world_root_rig_px', 'world_tip_rig_px', 'world_ratio']) &&
+        fuArm.row_scope === 'part' && fuArm.row_kind === 'evidence' && JSON.stringify(fuArm.row_subjects) === '["arm"]' &&
         fuArm.tip_half === 'upper' &&
         fuArm.tip_read === foldRead &&
         fuArm.root_rig_px === fbArm.tip_rig_px &&
@@ -21113,7 +21210,8 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         JSON.stringify(Object.keys(restLine(restAt.fig))) === JSON.stringify(['status', 'declared_rests', 'instrument', 'parts', 'ratio_floor', 'rest_ratio_ceiling']) &&
         JSON.stringify(restLine(restAt.fig).declared_rests) === '["back"]' &&
         restLine(restAt.fig).rest_ratio_ceiling === TIP_REST_RATIO_CEILING &&
-        JSON.stringify(Object.keys(restAtRow ?? {})) === JSON.stringify(['part', 'declared', 'hang_from', 'root_rig_px', 'tip_rig_px', 'ratio', 'world_root_rig_px', 'world_tip_rig_px', 'world_ratio']) &&
+        JSON.stringify(Object.keys(restAtRow ?? {})) === JSON.stringify(['row_scope', 'row_kind', 'row_subjects', 'part', 'declared', 'hang_from', 'root_rig_px', 'tip_rig_px', 'ratio', 'world_root_rig_px', 'world_tip_rig_px', 'world_ratio']) &&
+        restAtRow?.row_scope === 'part' && restAtRow.row_kind === 'evidence' && JSON.stringify(restAtRow.row_subjects) === '["back"]' &&
         restAtRow?.declared === 'rests' &&
         typeof restAtRow.ratio === 'number' &&
         restAtRow.ratio <= TIP_REST_RATIO_CEILING &&
@@ -23444,7 +23542,7 @@ function runFeetLevelCases(say: (name: string, ok: boolean, detail: string, why:
         lineOf(level.fig)?.status === 'PASS' &&
         footOf(level.fig).frames_posed === 11 &&
         near(worstOf(level.fig).degrees, 0) &&
-        JSON.stringify(worstOf(level.fig).through) === '[{"bone":"foot","inherit":"noRotationOrReflection"}]' &&
+        JSON.stringify(withoutCheckRows(worstOf(level.fig).through)) === '[{"bone":"foot","inherit":"noRotationOrReflection"}]' &&
         keys.indexOf(LEVEL_LINE) === keys.indexOf(FOLD_LINE) + 1 &&
         summary(level.out).startsWith('check: PASS; 7 of 11 bar(s) measured'),
       `tilted: ${show(tilted)}; ${tiltFail?.trim().slice(0, 400) ?? 'no FAIL line'}… | level: ${show(level)}; key after ${keys[keys.indexOf(LEVEL_LINE) - 1] ?? 'nothing'}`,
@@ -23622,7 +23720,7 @@ function runAnimationFoldCases(say: (name: string, ok: boolean, detail: string, 
         foldPrinted(declared.out).some((l) => l.startsWith('    folds  "bend": mesh "cloth"') && l.endsWith(` — declared in may_fold: ${why}`)) &&
         stale.status === 1 &&
         foldOf(stale.fig)?.status === 'FAIL' &&
-        JSON.stringify(foldOf(stale.fig)?.declared_not_folding) === '[{"slot":"cloth","animation":"nod"}]' &&
+        JSON.stringify(withoutCheckRows(foldOf(stale.fig)?.declared_not_folding)) === '[{"slot":"cloth","animation":"nod"}]' &&
         staleFail !== null &&
         staleFail.includes('may_fold (slot "cloth", animation "nod")') &&
         staleFail.includes('reads no folded triangle on slot "cloth" in animation "nod"'),
@@ -24044,7 +24142,7 @@ function runAnimationFoldCases(say: (name: string, ok: boolean, detail: string, 
         foldPrinted(idleDeclared.out).some((l) => l.startsWith('    folds  "idle": mesh "cloth"') && l.endsWith(` — declared in may_fold: ${idleWhy}`)) &&
         idleStale.status === 1 &&
         foldOf(idleStale.fig)?.status === 'FAIL' &&
-        JSON.stringify(foldOf(idleStale.fig)?.declared_not_folding) === '[{"slot":"cloth","animation":"idle"}]' &&
+        JSON.stringify(withoutCheckRows(foldOf(idleStale.fig)?.declared_not_folding)) === '[{"slot":"cloth","animation":"idle"}]' &&
         idleStaleFail !== null &&
         idleStaleFail.includes('may_fold (slot "cloth", animation "idle")') &&
         idleStaleFail.includes('reads no folded triangle on slot "cloth" in animation "idle"'),
@@ -29611,7 +29709,8 @@ function chainCheckGoldenCase(ex: string, out: string, key: string, say: ReturnT
       // Historical field-by-field oracle stays intact. The additive report has
       // its own controls and coverage assertion, with no new acceptance bar.
       const { [COINCIDE_LINE]: report, ...legacy } = current;
-      const check = jsonDiffs(expectedCheck, legacy, chainTolerance('check.json', expectedCheck));
+      const rowFaults1089 = checkRowFaults(current);
+      const check = jsonDiffs(expectedCheck, withoutCheckRows(legacy), chainTolerance('check.json', expectedCheck));
       const support = report as SupportReport | undefined;
       const names = new Set(support?.pairs.flatMap(p => [p.back, p.front]) ?? []);
       say(`CH943_SUPPORT_COVERAGE_IS_EXPLICIT[${key}]`,
@@ -29622,8 +29721,8 @@ function chainCheckGoldenCase(ex: string, out: string, key: string, say: ReturnT
         JSON.stringify({ coverage: support?.coverage, length_px: support?.pairs.reduce((sum, p) => sum + (p.boundary_length_px ?? 0), 0), unowned: support?.unowned.status, area_px: support?.unowned.area_px }), 'legacy producer has no independent domains; every pair is listed unavailable, never clean');
       say(
         `CH04_CHECK_JSON_IS_THE_EXPECTED_FIELD_BY_FIELD[${key}]`,
-        check.over.length === 0,
-        summarise(check),
+        check.over.length === 0 && rowFaults1089.length === 0,
+        `${summarise(check)}; row metadata: ${rowFaults1089.join('; ') || 'complete'}`,
         'gates, loop, both seam pixel counts and every judgement figure exact; seam_mean ±0.005, the measured size of the parts difference against the reference (see chainTolerance)',
       );
 
@@ -41651,6 +41750,11 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
   finishUnavailable();
   finishUnavailable();
   say('TY26_THE_UNAVAILABLE_FAMILY_PEAK_FINISHES_ONCE_AND_KEEPS_THE_OWN_PROCESS_PEAK', peakLines.length === 1 && peakLines[0].includes('self_max_rss_kib=') && peakLines[0].includes('family RSS unavailable'), `explicit finish plus exit finish writes ${peakLines.length} line(s); own-process field present: ${peakLines[0]?.includes('self_max_rss_kib=')}`, 'the fallback must be idempotent too; a platform without proc still keeps the own-process kernel maximum when its runtime supports it');
+  const rowDoc1089 = readFileSync(join(import.meta.dir, 'docs/AUTHORING.md'), 'utf8');
+  const rowDocFaults1089 = rowTableFaults(import.meta.dir, rowDoc1089);
+  const rowDocPlant1089 = rowDoc1089.replace('<!-- check-row-table:begin -->', '<!-- removed row table -->');
+  say('TY823_CHECK_ROW_TABLE_IS_DERIVED_FROM_PRODUCERS', rowDocFaults1089.length === 0 && rowTableFaults(import.meta.dir, rowDocPlant1089).length > 0,
+    rowDocFaults1089.join('; ') || 'producer calls match; planted missing table caught', 'the table records the scope, finding predicate, subjects and source locations of every producing call');
 
   return bad();
 }

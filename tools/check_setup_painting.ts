@@ -1,3 +1,4 @@
+import { withoutCheckRows } from '../src/checkrow.ts';
 import { writeSetupFigureFixture } from '../fixtures/setupfigure.ts';
 import { readSetupFigureMask } from '../src/setupfiguremask.ts';
 import { createHash } from 'node:crypto';
@@ -285,7 +286,9 @@ export function runSetupFigureChecks(dir: string, say: Say, rigc: RigcRunner): v
   const wrongGrid = failure(declared, newRaster(24, 40));
   say('ZO44_MASK_HASH_AND_GRID_EXACT_REFUSALS', wrongHash.length === 1 && wrongHash[0].code === 'CHECK_SETUP_PAINTING_MASK' && wrongHash[0].object === 'setup_painting.figure_mask' && wrongHash[0].detail === `PNG "figure.png" has sha256 ${expected}; requires declared ${'0'.repeat(64)}` && wrongGrid.length === 1 && wrongGrid[0].code === 'CHECK_SETUP_PAINTING_MASK' && wrongGrid[0].detail === 'PNG "figure.png" is 48x80; requires the original source painting grid 24x40, without fitting', JSON.stringify({ wrongHash, wrongGrid }));
   const invalid = [null, {}, { path: '', sha256: 'x' }, { ...mask, extra: true }];
-  say('ZO45_MASK_SHAPE_AND_OMISSION', invalid.every(figure_mask => setupPaintingProblems({ ...declared, figure_mask }, 'setup_painting').length > 0) && readSetupFigureMask(omitted, requirements, null, 48, 80) === undefined && createHash('sha256').update(JSON.stringify(legacy)).digest('hex') === '00c62ce943b556413aead282eeecb573ead785f9eb7e838d6cc6583aac66b9ae', 'malformed declarations refused; omitted output matches the ef0f698 actual-renderer synthetic scene golden, SHA-256 00c62ce943b556413aead282eeecb573ead785f9eb7e838d6cc6583aac66b9ae');
+  const rawLegacyHash1089 = createHash('sha256').update(JSON.stringify(legacy)).digest('hex');
+  const projectedLegacyHash1089 = createHash('sha256').update(JSON.stringify(withoutCheckRows(legacy))).digest('hex');
+  say('ZO45_MASK_SHAPE_AND_OMISSION', invalid.every(figure_mask => setupPaintingProblems({ ...declared, figure_mask }, 'setup_painting').length > 0) && readSetupFigureMask(omitted, requirements, null, 48, 80) === undefined && projectedLegacyHash1089 === '00c62ce943b556413aead282eeecb573ead785f9eb7e838d6cc6583aac66b9ae', `malformed declarations refused; omitted output raw SHA-256 ${rawLegacyHash1089}, legacy projection ${projectedLegacyHash1089}; frozen ef0f698 scene golden 00c62ce943b556413aead282eeecb573ead785f9eb7e838d6cc6583aac66b9ae`);
   writePng(maskPath, newRaster(48, 80));
   const empty = failure({ ...declared, figure_mask: { path: 'figure.png', sha256: createHash('sha256').update(readFileSync(maskPath)).digest('hex') } });
   say('ZO46_EMPTY_MASK_REFUSED', empty[0]?.detail === 'PNG "figure.png" has empty alpha support; requires at least one figure pixel', JSON.stringify(empty));

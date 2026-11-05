@@ -1,3 +1,4 @@
+import { withoutCheckRows } from '../src/checkrow.ts';
 /** Material-contact controls: synthetic rectangles with a hand-derived quarter-turn. */
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -39,7 +40,7 @@ export function runJointContactChecks(home: string, say: Reporter): void {
   say('JCT02_INTACT_SWUNG_MATERIAL_IS_JOINED',contact(whole).joined===2 && contact(whole).separated===0 && contact(whole).unavailable===0,JSON.stringify(contact(whole)));
   say('JCT03_NO_NAMED_JOINT_IS_UNAVAILABLE',contact(unnamed).joined===0 && contact(unnamed).unavailable===2 && JSON.stringify(contact(unnamed).reasons).includes('no declared named joint'),JSON.stringify(contact(unnamed)));
   const mixed = read({...intact,jointContact:{frames:[{index:0,time:0,status:'joined',reason:null},{index:1,time:1/12,status:'unavailable',reason:'no setup band'}]}});
-  say('JCT04_UNAVAILABLE_REASON_AND_FRAME_ARE_RETAINED',contact(mixed).joined===1 && contact(mixed).unavailable===1 && JSON.stringify(contact(mixed).reasons)===JSON.stringify([{reason:'no setup band',frames:[1]}]),JSON.stringify(contact(mixed)));
+  say('JCT04_UNAVAILABLE_REASON_AND_FRAME_ARE_RETAINED',contact(mixed).joined===1 && contact(mixed).unavailable===1 && JSON.stringify(withoutCheckRows(contact(mixed).reasons))===JSON.stringify([{reason:'no setup band',frames:[1]}]),JSON.stringify(contact(mixed)));
   const missing = {...intact} as Record<string,unknown>; delete missing.jointContact;
   const absent = read(missing);
   say('JCT05_MISSING_CORE_OBSERVATION_IS_UNAVAILABLE',contact(absent).unavailable===2 && JSON.stringify(contact(absent).reasons).includes('no jointContact.frames'),JSON.stringify(contact(absent)));

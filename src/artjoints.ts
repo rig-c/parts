@@ -1,3 +1,4 @@
+import { checkRow } from './checkrow.ts';
 /** Explicit art-joint measurements on a fixed skeleton (issue #880). */
 import { refuseIfAny, type Problem } from './errors.ts';
 import { cropToSpineY } from './coords.ts';
@@ -82,7 +83,7 @@ export function artJointLine(
     if (!Number.isFinite(distance)) refuseIfAny([{ code: 'CHECK_ART_JOINT_MEASURED', object: `joint "${j.name}" (bone "${j.bone}")`, detail: 'has no finite art-to-setup distance; finite stage-pixel coordinates are required' }]);
     const status = limit === undefined ? 'SKIP' : distance > limit ? 'FAIL' : 'PASS';
     if (status === 'FAIL') problems.push({ code: 'CHECK_ART_JOINT_DISTANCE', object: `joint "${j.name}" (bone "${j.bone}")`, detail: `art at [${j.at.join(', ')}] is ${distance} stage px from setup origin [${boneAt.join(', ')}]; distance <= declared fixed_skeleton.within_px ${limit} px is required — correct the art measurement/correspondence if wrong, or supply art aligned to the fixed skeleton; bones are not moved` });
-    return { name: j.name, bone: j.bone, at: [...j.at] as [number, number], bone_at: boneAt, distance_px: distance, status };
+    return { ...checkRow('ART_JOINT_DISTANCE.joints', 'rig', status === 'FAIL', []), name: j.name, bone: j.bone, at: [...j.at] as [number, number], bone_at: boneAt, distance_px: distance, status };
   });
   return { status: limit === undefined ? 'SKIP' : joints.some(j => j.status === 'FAIL') ? 'FAIL' : 'PASS', instrument: 'rigc-geometry/1 setup.bones', source: fixed.source, within_px: limit ?? null, joints,
     ...(limit === undefined ? { reason: 'fixed_skeleton.within_px is absent; distances are measured, no limit is invented and no joint passes' } : {}) };

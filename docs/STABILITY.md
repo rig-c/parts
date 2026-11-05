@@ -719,3 +719,11 @@ A see-through `--source` with an opaque explicit painting reference was accepted
 when donor geometry followed the reference and is now refused with
 `INPUTS_PAINTING_OPAQUE` before the donor is read. The reference remains a colour
 binding. The donor continues to be bound to the opaque PNG accepted by `inputs`.
+
+
+The check document's row objects additionally carry `row_scope` (`part`,
+`pair`, `rig`), `row_kind` (`finding`, `evidence`), and `row_subjects` (one part,
+two parts, or an empty list respectively). These are additive; legacy `scope`,
+`kind`, measurements, statuses and exit decisions are unchanged. There is no
+top-level check spec/version tag to bump. See [Consumer check rows](AUTHORING.md#consumer-check-rows-issue-1089)
+for the producer-derived family table and the boundary between rows and summaries.

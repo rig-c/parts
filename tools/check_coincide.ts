@@ -1,3 +1,4 @@
+import { withoutCheckRows } from '../src/checkrow.ts';
 /** Hand-counted support controls and isolated source mutants (#998). */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -29,7 +30,7 @@ export function runCoincideChecks(dir: string, say: Say): void {
     ['CK998_SUPPORT_DEFECT', defect.pairs[0].boundary_length_px === 4 && JSON.stringify(defect.pairs[0].box) === '[3,0,0,4]' && defect.pairs[0].continuation_candidate_area_px === 12 && defect.pairs[0].front === 'front' && defect.pairs[0].back === 'back'],
     ['CK999_SUPPORT_SIDE_TOUCH', side.pairs[0].boundary_length_px === 0 && side.pairs[0].continuation_candidate_area_px === 0],
     ['CK1000_SUPPORT_UNAVAILABLE', unavailable.pairs[0].status === 'unavailable' && unavailable.pairs[0].boundary_length_px === null && unavailable.coverage.measured === 0 && unavailable.coverage.total === 1 && supportLines(unavailable)[0].includes('0 of 1 pairs measured')],
-    ['CK1001_SUPPORT_UNOWNED_OPEN_EDGE', unowned.unowned.status === 'measured' && unowned.unowned.area_px === 12 && JSON.stringify(unowned.unowned.regions) === '[{"box":[3,0,3,4],"area_px":12}]' && unowned.pairs.length === 0],
+    ['CK1001_SUPPORT_UNOWNED_OPEN_EDGE', unowned.unowned.status === 'measured' && unowned.unowned.area_px === 12 && JSON.stringify(withoutCheckRows(unowned.unowned.regions)) === '[{"box":[3,0,3,4],"area_px":12}]' && unowned.pairs.length === 0],
   ] as const;
   for (const [name, ok] of checks) say(name, ok, JSON.stringify({ normal, defect, side, unavailable, unowned }));
 
@@ -89,7 +90,7 @@ export function runCoincideSetupChecks(dir: string, say: Say, rigc: RigcRunner):
   const input = readCheckInputs(dir, dir, join(dir, 'source.png'));
   const reading = observeSupport(join(dir, 'build'), input);
   say('CK1009_SUPPORT_ACTUAL_SETUP_OPEN_EDGE', reading.unowned.area_px === 960 &&
-    JSON.stringify(reading.unowned.regions) === '[{"box":[19,8,15,64],"area_px":960}]', JSON.stringify(reading));
+    JSON.stringify(withoutCheckRows(reading.unowned.regions)) === '[{"box":[19,8,15,64],"area_px":960}]', JSON.stringify(reading));
   const native = supportFigure(input.source!.painting, input.stage.width, input.stage.height);
   const reused = observeSupport(join(dir, 'build'), input, undefined, native);
   say('CK1022_SUPPORT_TRANSIENT_EQUALS_SOURCE', JSON.stringify(reused) === JSON.stringify(reading), 'transient assembly observation and fresh source path report identical bytes');

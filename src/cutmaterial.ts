@@ -1,3 +1,4 @@
+import { checkRow } from './checkrow.ts';
 import { edgeLength } from './length.ts';
 import { createHash } from 'node:crypto';
 /** Source support at declared joints (#888). Geometry is in stage pixels, y down.
@@ -276,7 +277,7 @@ export function checkJointMaterial(declarations: readonly JointMaterial[] | unde
     const read=materialRows(req.part,req,(original as MaterialSource).edges,[],piece);
     if(read.every(r=>r.rays===0))refuseIfAny([{code:'CHECK_CUT_MATERIAL_MEASURED',object,detail:'no opaque cut interface within declared reach; correct the explicit joint correspondence/reach or supply source material; no PASS is invented'}]);
     for(const r of read.filter(r=>r.rays>0)){
-      rows.push(r);
+      rows.push({ ...r, ...checkRow('CUT_JOINT_MATERIAL.rows', 'part', r.status === 'FAIL', [r.part]) });
       if(r.status==='FAIL')problems.push({code:'CHECK_CUT_JOINT_MATERIAL',object,detail:`edge [${r.edge.map(p=>p.join(',')).join(' -> ')}], opaque edge length ${r.edge_length_px} px (${r.within_reach_px} px within reach): material found ${r.found_px} px, required ${r.required_px} px by bend [${req.bend_degrees.join(', ')}] degrees within reach ${req.reach_px} px; source art past the joint is required — follow AUTHORING Source before scissors; no crop or under-piece repair`});
     }
   }

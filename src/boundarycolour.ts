@@ -1,3 +1,4 @@
+import { checkRow } from './checkrow.ts';
 /**
  * Issue #942: the colour step across part boundaries, against the rig's own pieces.
  *
@@ -215,8 +216,8 @@ export function measureBoundaryColour(api: Api, input: BoundaryColourInput, decl
     frames: 1 + idle.length,
     boundary_pairs: boundaryPairs,
     worst,
-    over,
-    unmeasured,
+    over: over.map(r => ({ ...r, ...checkRow('BOUNDARY_COLOUR_STEP.over', 'pair', true, r.parts) })),
+    unmeasured: unmeasured.map(r => ({ ...r, ...checkRow('BOUNDARY_COLOUR_STEP.unmeasured', 'part', false, [r.slot]) })),
     alternates: 'not measured',
   };
 }
