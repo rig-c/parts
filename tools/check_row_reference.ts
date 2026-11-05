@@ -83,7 +83,7 @@ export function checkRowTypeInventory(root: string, plant = ''): { arrays: strin
   const declaration = source?.statements.find(s => ts.isInterfaceDeclaration(s) && s.name.text === 'CheckFigures');
   if (declaration === undefined) return { arrays: [], unknown: [], faults: ['serialized CheckFigures type is absent'] };
   const arrays = new Set<string>(), unknown = new Set<string>();
-  const objectType = (type: ts.Type): boolean => type.isUnionOrIntersection() ? type.types.some(objectType) : Boolean(type.flags & ts.TypeFlags.Object) && !checker.isArrayType(type) && !checker.isTupleType(type);
+  const objectType = (type: ts.Type): boolean => type.isUnionOrIntersection() ? type.types.some(objectType) : Boolean(type.flags & (ts.TypeFlags.Object | ts.TypeFlags.NonPrimitive)) && !checker.isArrayType(type) && !checker.isTupleType(type);
   const walk = (type: ts.Type, at: string, ancestors: readonly ts.Type[]): void => {
     if (ancestors.includes(type)) return;
     const parents = [...ancestors, type];

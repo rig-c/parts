@@ -111,9 +111,15 @@ export function runCheckRowSchemaChecks(say: (name: string, ok: boolean, detail:
   const unknown = checkRowSchemaFaults({ future: [{ ...checkRow('loop_physics', 'rig', false, []) }] });
   say('TY827_A_LABELLED_UNREGISTERED_OBJECT_ARRAY_IS_REFUSED', unknown.some(p => p.includes('unregistered object-row path')),
     unknown.join('; '), 'labels alone cannot extend the schema');
-  const bytes = fixtures.every(f => JSON.stringify(f.value, null, 1) + '\n' === serializeCheckRows(f.value) && !serializeCheckRows(f.value).includes('check row family'));
+  const withoutSymbols = (value: unknown): unknown => Array.isArray(value) ? value.map(withoutSymbols) : object(value) ? Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, withoutSymbols(entry)])) : value;
+  const bytes = fixtures.every(f => {
+    const expected = JSON.stringify(withoutSymbols(f.value), null, 1) + '\n';
+    const leaked = JSON.stringify(f.value, (_key, value: unknown) => object(value) && Object.hasOwn(value, CHECK_ROW_FAMILY)
+      ? { ...value, [String(CHECK_ROW_FAMILY)]: Reflect.get(value, CHECK_ROW_FAMILY) } : value, 1) + '\n';
+    return serializeCheckRows(f.value) === expected && leaked !== expected;
+  });
   say('TY828_FAMILY_PROVENANCE_ADDS_NO_SERIALIZED_BYTES', bytes,
-    `${fixtures.length} complete-output serialization comparisons`, 'enumerable symbols survive spreads but JSON ignores their keys');
+    `${fixtures.length} independent symbol-free outputs; every planted family-symbol leak differs`, 'expected bytes are built without symbol properties, and a serializer leaking the family symbol must fail the same comparison');
   const rig = { skins: { default: { generated: { draw: { image: 'piece.png' } }, unrelated: { draw: { image: 'unknown.png' } }, mixed: { one: { image: 'piece.png' }, two: { image: 'other.png' } } } } };
   const mapping = checkSlotParts(rig, ['piece', 'other']);
   const known = checkSlotRow('TEXTURE_STRETCH.per_mesh', true, 'generated', mapping);
@@ -122,6 +128,11 @@ export function runCheckRowSchemaChecks(say: (name: string, ok: boolean, detail:
   const omitted = checkSlotRow('TEXTURE_STRETCH.per_mesh', true, 'piece');
   say('TY829_GENERATED_SLOTS_REQUIRE_A_REAL_UNAMBIGUOUS_PIECE_MAPPING', known.row_scope === 'part' && known.row_subjects.join() === 'piece' && [absent, ambiguous, omitted].every(r => r.row_scope === 'rig' && r.row_subjects.length === 0) && [known, absent, ambiguous, omitted].every(r => r.row_kind === 'finding'),
     'renamed slot resolves its image; absent, mixed and omitted mappings have rig scope; findings unchanged', 'slot spelling never supplies a part name');
+  const alternateRig = { skins: { default: { piece: { base: { image: 'piece.png' }, gesture: { image: 'wave_piece.png' } }, mixed: { base: { image: 'piece.png' }, unrelated: { image: 'other.png' } } } } };
+  const declared = checkSlotParts(alternateRig, ['piece', 'other'], ['wave']);
+  const undeclared = checkSlotParts(alternateRig, ['piece', 'other']);
+  say('TY833_DECLARED_ALTERNATE_IMAGES_KEEP_THE_BASE_PIECE_SUBJECT', declared.get('piece') === 'piece' && !declared.has('mixed') && !undeclared.has('piece'),
+    'base + declared wave image resolves piece; unrelated mixed images and undeclared prefixes stay rig', 'alternate image ownership is declared by the manifest, never inferred from an arbitrary filename prefix');
 }
 
 /** Isolated negatives use Bun's native spawn so their expected denial cannot poison the parent. */

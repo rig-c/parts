@@ -41760,9 +41760,9 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
     `${motionPredicates1092.length} combinations; non-root skip/open warns, root read/unbanded/open is not a finding`,
     'only the row labels change; the existing warning count and root failure logic stay in place');
   const rowType1092 = checkRowTypeInventory(import.meta.dir);
-  const rowTypePlant1092 = checkRowTypeInventory(import.meta.dir, '\nexport interface CheckFigures { planted_rows: Array<{ measured: number }>; planted_unknown: unknown }\n');
-  say('TY831_SERIALIZED_OBJECT_ARRAY_TYPES_REQUIRE_REGISTERED_PATHS', rowType1092.arrays.length > 0 && rowType1092.faults.length === 0 && rowTypePlant1092.faults.some(f => f === 'planted_rows: object-array type has no registered family') && rowTypePlant1092.faults.some(f => f === 'planted_unknown: unknown output type has no documented schema exclusion'),
-    `${rowType1092.arrays.length} declared object-array paths; ${rowType1092.unknown.length} explicit open-type exclusions; ${rowType1092.faults.join('; ') || 'unlabelled type and unknown-type plants refused'}`,
+  const rowTypePlant1092 = checkRowTypeInventory(import.meta.dir, '\nexport interface CheckFigures { planted_rows: Array<{ measured: number }>; planted_objects: object[]; planted_unknown: unknown }\n');
+  say('TY831_SERIALIZED_OBJECT_ARRAY_TYPES_REQUIRE_REGISTERED_PATHS', rowType1092.arrays.length > 0 && rowType1092.faults.length === 0 && rowTypePlant1092.faults.some(f => f === 'planted_rows: object-array type has no registered family') && rowTypePlant1092.faults.some(f => f === 'planted_objects: object-array type has no registered family') && rowTypePlant1092.faults.some(f => f === 'planted_unknown: unknown output type has no documented schema exclusion'),
+    `${rowType1092.arrays.length} declared object-array paths; ${rowType1092.unknown.length} explicit open-type exclusions; ${rowType1092.faults.join('; ') || 'record-array, object-array and unknown-type plants refused'}`,
     'type coverage is independent of whether a fixture emits a row, and open legacy figure dictionaries remain guarded recursively at serialization');
   const rowDoc1089 = readFileSync(join(import.meta.dir, 'docs/AUTHORING.md'), 'utf8');
   const rowDocFaults1089 = rowTableFaults(import.meta.dir, rowDoc1089);

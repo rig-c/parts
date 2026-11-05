@@ -6736,7 +6736,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           const fr = measured(['render', '--candidate', buildDir, '--folds', ...geometry, '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--out', foldDir]);
           if (fr.status !== 0) refuseIfAny(rigcFailed(`render --folds${geometry.map((g) => ` ${g}`).join('')} --fps ${fps}`, fr, fr.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
           const readings = filterFolds(readFoldSets(foldDir, animationNames, fps, fr.out));
-          folds = foldsLine(animationNames, fps, 0, readings, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readings, inp.rig, [], inp.motion, { config, stage: inp.stage }, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? []));
+          folds = foldsLine(animationNames, fps, 0, readings, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readings, inp.rig, [], inp.motion, { config, stage: inp.stage }, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? [], inp.parts?.alternates?.map(set => set.name) ?? []));
           if (feet.length > 0) {
             const sets = readJson(join(foldDir, 'frames.json'), []);
             const listed = sets !== null && Array.isArray(sets.sets) ? sets.sets.filter(isRecord) : [];
@@ -6757,7 +6757,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
           if (frOff.status !== 0) refuseIfAny(rigcFailed(`render --folds${geometry.map((g) => ` ${g}`).join('')} --fps ${fps} (physics constraint(s) left out)`, frOff, frOff.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
           const readingsOn = filterFolds(readFoldSets(onDir, animationNames, fps, frOn.out));
           const readingsOff = filterFolds(readFoldSets(offDir, animationNames, fps, frOff.out));
-          folds = foldsLine(animationNames, fps, stripped.physics.length, readingsOn, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readingsOff, inp.rig, stripped.physics, inp.motion, { config, stage: inp.stage }, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? []));
+          folds = foldsLine(animationNames, fps, stripped.physics.length, readingsOn, mayFoldForRun, reqFile === null ? null : reqFile.path, foldProblems, readingsOff, inp.rig, stripped.physics, inp.motion, { config, stage: inp.stage }, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? [], inp.parts?.alternates?.map(set => set.name) ?? []));
           if (feet.length > 0) {
             const sets = readJson(join(offDir, 'frames.json'), []);
             const listed = sets !== null && Array.isArray(sets.sets) ? sets.sets.filter(isRecord) : [];
@@ -6833,7 +6833,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     const geometryPath = join(idle.dir, GEOMETRY_FILE);
     const geometry = readGeometry(geometryPath, idle.written);
     idleGeometry = geometry;
-    stretch = stretchLine(geometry, geometryPath, problems, { ...inp, config }, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? []));
+    stretch = stretchLine(geometry, geometryPath, problems, { ...inp, config }, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? [], inp.parts?.alternates?.map(set => set.name) ?? []));
     if (full !== null) still = stillLine(full, idle, geometry, geometryPath, problems, notPlanted);
   }
 
@@ -7110,7 +7110,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       if (sr.status !== 0) refuseIfAny(rigcFailed('render (the setup-pose still)', sr, sr.out.split('\n').filter((l) => l.includes('FAIL'))));
       const stillSet = readFrameSet(join(stillDir, 'render'));
       partSupport = observeSupport(join(stillDir, 'build'), inp, supportSource, supportFigure);
-      if (reqFile?.setup_painting !== undefined && inp.source !== null) setupPainting = measureSetupPainting(join(stillDir, 'build'), inp.stage, inp.source.painting, reqFile.setup_painting, problems, setupBackdrop, setupFigureMask, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? []));
+      if (reqFile?.setup_painting !== undefined && inp.source !== null) setupPainting = measureSetupPainting(join(stillDir, 'build'), inp.stage, inp.source.painting, reqFile.setup_painting, problems, setupBackdrop, setupFigureMask, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? [], inp.parts?.alternates?.map(set => set.name) ?? []));
       if (fixedSkeleton !== undefined) {
         const geometryPath = join(stillSet.dir, GEOMETRY_FILE);
         const geometry = readGeometry(geometryPath, stillSet.written);
@@ -7586,7 +7586,7 @@ export function measureRequirements(inp: CheckInputs, file: RequirementsFile, bu
         }
         line = { ...followLine(r, d.poses, released.poses, full.poses), released_copy: door ?? 'built as forced: rig-c\'s gate passed it with no further declaration' };
       }
-      lines[r.name] = { ...line, ...(r.kind === 'seam' ? checkRow('requirements.lines.* (seam)', 'pair', line.status === 'FAIL', [r.part, r.neighbour]) : r.kind === 'stretch' ? checkSlotRow('requirements.lines.* (stretch)', line.status === 'FAIL', r.slot, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? [])) : checkRow('requirements.lines.* (bone)', 'rig', line.status === 'FAIL', [])) };
+      lines[r.name] = { ...line, ...(r.kind === 'seam' ? checkRow('requirements.lines.* (seam)', 'pair', line.status === 'FAIL', [r.part, r.neighbour]) : r.kind === 'stretch' ? checkSlotRow('requirements.lines.* (stretch)', line.status === 'FAIL', r.slot, checkSlotParts(inp.rig, inp.parts?.parts.map(p => p.name) ?? [], inp.parts?.alternates?.map(set => set.name) ?? [])) : checkRow('requirements.lines.* (bone)', 'rig', line.status === 'FAIL', [])) };
       const p = requirementProblem(r, line);
       if (p !== null) problems.push(p);
     }
@@ -8699,7 +8699,7 @@ interface StillHalf {
  * bar ({@link crossingOf}). No render grid enters either half.
  */
 export function stillLine(inp: FullInputs, idle: FrameSet, geo: IdleGeometry | null, geometryPath: string, problems: Problem[], notPlanted: readonly string[] = []): JudgementLine {
-  const slotParts = checkSlotParts(inp.rig, inp.parts.parts.map(p => p.name));
+  const slotParts = checkSlotParts(inp.rig, inp.parts.parts.map(p => p.name), inp.parts.alternates?.map(set => set.name) ?? []);
   const face = partsTagged(inp.parts, FACE_TAGS);
   const { all: allFeet, held: feet, declared } = plantedFeet(inp.parts, notPlanted);
   if (face.length === 0 && allFeet.length === 0) return skip(`no part comes from a See-through ${tagWords([...FACE_TAGS, ...FEET_TAGS])} layer, so there is no still region to read`);

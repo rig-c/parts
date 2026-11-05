@@ -90,16 +90,16 @@ export function serializeCheckRows(value: unknown): string {
   return `${JSON.stringify(document, null, 1)}\n`;
 }
 
-/** Resolve only slots whose default-skin image drawings all name one manifest piece. */
-export function checkSlotParts(rig: Readonly<Record<string, unknown>>, partNames: readonly string[]): ReadonlyMap<string, string> {
+/** Resolve default-skin drawings only to one manifest piece, including declared set images. */
+export function checkSlotParts(rig: Readonly<Record<string, unknown>>, partNames: readonly string[], alternateSets: readonly string[] = []): ReadonlyMap<string, string> {
   const record = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
   const skin = record(rig.skins) && record(rig.skins.default) ? rig.skins.default : {};
   const named = new Set(partNames), mapping = new Map<string, string>();
   for (const [slot, drawings] of Object.entries(skin)) {
     if (!record(drawings)) continue;
     const names = Object.values(drawings).map(d => record(d) && typeof d.image === 'string' && d.sequence === undefined && ['region', 'mesh'].includes(typeof d.type === 'string' ? d.type : 'region') ? d.image.replace(/\.png$/, '') : undefined);
-    const name = names[0];
-    if (name !== undefined && named.has(name) && names.every(n => n === name)) mapping.set(slot, name);
+    const candidates = names.length === 0 ? [] : [...named].filter(part => names.every(name => name !== undefined && (name === part || alternateSets.some(set => name === `${set}_${part}`))));
+    if (candidates.length === 1) mapping.set(slot, candidates[0]);
   }
   return mapping;
 }

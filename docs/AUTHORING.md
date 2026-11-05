@@ -7992,8 +7992,8 @@ existing contract. Removing only the three `row_` fields recovers legacy JSON.
 
 The registered families declare their permitted JSON paths in `src/checkrow.ts`.
 A TypeScript type walk independently inventories object-array paths in
-`CheckFigures`, including intersections and alternate sets. New paths require a
-registered family even when no fixture emits them. Open legacy figure dictionaries
+`CheckFigures`, including intersections, the object keyword and alternate sets.
+New paths require a registered family even when no fixture emits them. Open legacy figure dictionaries
 have explicit exclusions below and are checked by the recursive output schema; a
 new unknown-typed field also fails the type inventory.
 The recursive row schema rejects an unregistered object-array path, missing
@@ -8017,8 +8017,9 @@ in `row_subjects`; existing part/slot, front/back, a/b and parts fields remain
 unchanged. `seam_scope.whole_pairs` copies the `seam_pairs` producer rows without
 the picture, and `sets.*` reuses the same seam producers. A slot receives part
 scope only when its default-skin image mapping resolves one actual parts.json
-piece; missing, mixed or omitted mappings receive rig scope. No slot-name fallback
-is used. Motion seam findings use the existing warning predicate on non-roots
+piece. A declared set image `<set>_<piece>.png` maps to that same piece;
+Unrelated mixed images, undeclared prefixes and omitted mappings receive rig scope.
+No slot-name fallback is used. Motion seam findings use the existing warning predicate on non-roots
 and the active-reading, banded failure predicate on roots.
 
 Scalar/string arrays (animations, frame indices, bones, constraint names and

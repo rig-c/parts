@@ -116,7 +116,7 @@ export function measureBoundaryColour(api: Api, input: BoundaryColourInput, decl
   const W = input.stage.width, H = input.stage.height;
   const vp = { minX: input.stage.x, minY: input.stage.y, maxX: input.stage.x + W, maxY: input.stage.y + H, scale: 1, width: W, height: H };
   const project = api.projector(vp);
-  const slotParts = checkSlotParts(input.rig, input.parts.parts.map(p => p.name));
+  const slotParts = checkSlotParts(input.rig, input.parts.parts.map(p => p.name), input.parts.alternates?.map(set => set.name) ?? []);
   const records = new Map(input.parts.parts.map((p) => [p.name, p]));
   const sources = new Map<string, Source | string>();
   const unmeasured: BoundaryColourUnmeasured[] = [];
