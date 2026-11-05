@@ -19845,7 +19845,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         failLine(cp.out, 'CHECK_LOOP_CLOSES') === null &&
         cpf !== null &&
         cpf.loop_max_diff === 0 &&
-        JSON.stringify(cpf.loop_physics) === '[{"name":"bob_phys","bone":"bob","in":"rig.json"}]' &&
+        JSON.stringify(cpf.loop_physics) === '[{"name":"bob_phys","bone":"bob","in":"rig.json","row_scope":"rig","row_kind":"evidence","row_subjects":[]}]' &&
         Object.keys(cpf).join(',') === [...CHECK_KEYS.slice(0, 4), 'loop_physics', ...CHECK_KEYS.slice(4, CHECK_KEYS.indexOf('RECOMPOSITE_HOLES')), CLOTH_LINE, ...CHECK_KEYS.slice(CHECK_KEYS.indexOf('RECOMPOSITE_HOLES'))].join(',') &&
         cp.out.split('\n').filter((l) => l.startsWith('  loop physics: ')).length === 1 &&
         cp.out.includes(physLine) &&
@@ -20032,9 +20032,9 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
     const got = seamPairRows(fixtureSeam, cutParts(200), [6, 2], vp6).map((x) => x.row);
     const agreeing = seamPairRows(fixtureSeam, cutParts(100), [6, 2], vp6).map((x) => x.row);
     const wantRows = [
-      { parts: ['b', 'p'], px_over_40: 2, px_over_80: 1, frame_box: [1, 0, 2, 1], rig_box: [1, 0, 3, 1], cut: { from: 'full:x', differing_copies_px: 1 }, picture: `${SEAM_DIR}/01_b_p.png` },
-      { parts: ['p', 'o'], px_over_40: 2, px_over_80: 0, frame_box: [4, 0, 5, 1], rig_box: [4, 0, 5, 1], picture: `${SEAM_DIR}/02_p_o.png` },
-      { parts: ['b', SEAM_NO_ART], px_over_40: 1, px_over_80: 0, frame_box: [0, 0, 0, 0], rig_box: [0, 0, 1, 1], picture: `${SEAM_DIR}/03_b_no-art.png` },
+      { row_scope: 'pair', row_kind: 'evidence', row_subjects: ['b', 'p'], parts: ['b', 'p'], px_over_40: 2, px_over_80: 1, frame_box: [1, 0, 2, 1], rig_box: [1, 0, 3, 1], cut: { from: 'full:x', differing_copies_px: 1 }, picture: `${SEAM_DIR}/01_b_p.png` },
+      { row_scope: 'pair', row_kind: 'evidence', row_subjects: ['p', 'o'], parts: ['p', 'o'], px_over_40: 2, px_over_80: 0, frame_box: [4, 0, 5, 1], rig_box: [4, 0, 5, 1], picture: `${SEAM_DIR}/02_p_o.png` },
+      { row_scope: 'part', row_kind: 'evidence', row_subjects: ['b'], parts: ['b', SEAM_NO_ART], px_over_40: 1, px_over_80: 0, frame_box: [0, 0, 0, 0], rig_box: [0, 0, 1, 1], picture: `${SEAM_DIR}/03_b_no-art.png` },
     ];
     const text = got.length > 0 ? seamPairText(got[0]) : '';
 
@@ -20587,7 +20587,7 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       const r = runCli(args);
       return { ...r, fig: readJsonFile(join(dir, `seated-${label}`, 'check.json')) };
     };
-    type TipRow = { part: string; tip_half?: string; hang_from?: string | null; root_rig_px?: number; tip_rig_px?: number; ratio?: number | null; world_ratio?: number | null; unmeasured?: string };
+    type TipRow = { row_scope: string; row_kind: string; row_subjects: string[]; part: string; tip_half?: string; hang_from?: string | null; root_rig_px?: number; tip_rig_px?: number; ratio?: number | null; world_ratio?: number | null; unmeasured?: string };
     const tipOf = (fig: Record<string, unknown> | null): Record<string, unknown> => (fig?.TIP_OVER_ROOT ?? {}) as Record<string, unknown>;
     const tipRowOf = (fig: Record<string, unknown> | null, part: string): TipRow | undefined => ((tipOf(fig).parts ?? []) as TipRow[]).find((r) => r.part === part);
     const consoleOf = (o: string, name: string): string => o.split('\n').find((l) => l.startsWith(`  ${name}: `)) ?? '';
@@ -20608,7 +20608,8 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         typeof bArm?.ratio === 'number' &&
         bArm.ratio < 1 &&
         JSON.stringify(Object.keys(tipOf(bare.fig))) === JSON.stringify(['status', 'instrument', 'parts', 'ratio_floor']) &&
-        JSON.stringify(Object.keys(bArm)) === JSON.stringify(['part', 'hang_from', 'root_rig_px', 'tip_rig_px', 'ratio', 'world_root_rig_px', 'world_tip_rig_px', 'world_ratio']) &&
+        JSON.stringify(Object.keys(bArm)) === JSON.stringify(['row_scope', 'row_kind', 'row_subjects', 'part', 'hang_from', 'root_rig_px', 'tip_rig_px', 'ratio', 'world_root_rig_px', 'world_tip_rig_px', 'world_ratio']) &&
+        bArm.row_scope === 'part' && bArm.row_kind === 'finding' && JSON.stringify(bArm.row_subjects) === '["arm"]' &&
         bUnder?.ratio === null &&
         bUnder?.world_ratio === 1 &&
         !bare.out.includes('declared_'),
@@ -20710,7 +20711,8 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         !foldUp.out.includes('REQUIREMENTS_TIP_EXCEPTION') &&
         JSON.stringify(tipOf(foldUp.fig).declared_rises) === '["arm"]' &&
         fuArm !== undefined &&
-        JSON.stringify(Object.keys(fuArm)) === JSON.stringify(['part', 'tip_half', 'tip_read', 'hang_from', 'root_rig_px', 'tip_rig_px', 'ratio', 'world_root_rig_px', 'world_tip_rig_px', 'world_ratio']) &&
+        JSON.stringify(Object.keys(fuArm)) === JSON.stringify(['row_scope', 'row_kind', 'row_subjects', 'part', 'tip_half', 'tip_read', 'hang_from', 'root_rig_px', 'tip_rig_px', 'ratio', 'world_root_rig_px', 'world_tip_rig_px', 'world_ratio']) &&
+        fuArm.row_scope === 'part' && fuArm.row_kind === 'evidence' && JSON.stringify(fuArm.row_subjects) === '["arm"]' &&
         fuArm.tip_half === 'upper' &&
         fuArm.tip_read === foldRead &&
         fuArm.root_rig_px === fbArm.tip_rig_px &&
@@ -21208,7 +21210,8 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
         JSON.stringify(Object.keys(restLine(restAt.fig))) === JSON.stringify(['status', 'declared_rests', 'instrument', 'parts', 'ratio_floor', 'rest_ratio_ceiling']) &&
         JSON.stringify(restLine(restAt.fig).declared_rests) === '["back"]' &&
         restLine(restAt.fig).rest_ratio_ceiling === TIP_REST_RATIO_CEILING &&
-        JSON.stringify(Object.keys(restAtRow ?? {})) === JSON.stringify(['part', 'declared', 'hang_from', 'root_rig_px', 'tip_rig_px', 'ratio', 'world_root_rig_px', 'world_tip_rig_px', 'world_ratio']) &&
+        JSON.stringify(Object.keys(restAtRow ?? {})) === JSON.stringify(['row_scope', 'row_kind', 'row_subjects', 'part', 'declared', 'hang_from', 'root_rig_px', 'tip_rig_px', 'ratio', 'world_root_rig_px', 'world_tip_rig_px', 'world_ratio']) &&
+        restAtRow?.row_scope === 'part' && restAtRow.row_kind === 'evidence' && JSON.stringify(restAtRow.row_subjects) === '["back"]' &&
         restAtRow?.declared === 'rests' &&
         typeof restAtRow.ratio === 'number' &&
         restAtRow.ratio <= TIP_REST_RATIO_CEILING &&
