@@ -895,6 +895,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   log(pinholesLine(pinholes, altBuilt.map((b) => b.record.name)));
   for (const d of result.drift) log(driftLine(d));
   for (const d of result.softOcclusion ?? []) log(softOcclusionLine(d));
+  for (const line of result.cropClipped ?? []) log(line);
   // Issue #588: per subset set, one line per limb part cut from a layer of more than one island, then (issue #587) one
   // per limb part and base part over it that took a pixel. None otherwise.
   // Issue #609: then one per limb part cut from a layer of one island that also holds a limb the set does not carry.

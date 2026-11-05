@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runCropEdgeChecks } from './fixtures/crop_edge_checks.ts';
 import { runSupportDomainChecks } from './tools/check_support_domains.ts';
 import { runCoincideChecks, runCoincideSetupChecks, runCoincideMutants } from './tools/check_coincide.ts';
 import { COINCIDE_LINE, type SupportReport } from './src/coincide.ts';
@@ -32510,6 +32511,7 @@ function runAssembleSuite(): number {
     runPaintingExtensionChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #848: public generated controls; explicit ownership, bounds and exact painting samples'));
     runPaintingEdgeChecks((name, ok, detail) => say(name, ok, detail, 'issue #953: under visible, a part edge takes the painting\'s line and coverage; every skip reason planted next to a positive strip'));
     runGroundUnitChecks((name, ok, detail) => say(name, ok, detail, 'issue #996: the ring share and its cut-off, and the busy-ground rules on a strip next to the plain mutant that takes the ground'));
+    runCropEdgeChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1075: generated two-run crop, exact integer samples, independent outside counts'));
     writeAssembleFixture(dir);
     const base = fixtureInput(dir);
     const result = assemble({ ...base, seamRule: 'near-white' });

@@ -198,10 +198,15 @@ export type Run = 'full' | 'head';
 /** One part: its name, which run it comes from, and the See-through tag it is. Order = draw order, back to front. */
 export type PlanEntry = [string, Run, string];
 
+export const CROP_EDGES = ['left', 'right', 'top', 'bottom'] as const;
+export type CropEdge = typeof CROP_EDGES[number];
+
 export interface Extend {
   part: string;
   run: Run;
   tag: string;
+  /** Explicit crop edges; absent, retain the original below-crop component and rim rule. */
+  edges?: CropEdge[];
 }
 
 /** Which pixels of a patch's box it takes: the painting's figure silhouette inside the box, or the whole box. */
@@ -2645,9 +2650,18 @@ function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: s
   if ('extend_below_crop' in a && c.array(`${p}.extend_below_crop`, a.extend_below_crop, false)) {
     (a.extend_below_crop as Json[]).forEach((entry, i) => {
       const at = `${p}.extend_below_crop[${i}]`;
-      const e = c.object(at, entry, ['part', 'run', 'tag'], []);
+      const e = c.object(at, entry, ['part', 'run', 'tag'], ['edges']);
       if (e === null) return;
       checkRunTag(c, at, e.run, e.tag);
+      if ('edges' in e && c.array(`${at}.edges`, e.edges, true)) {
+        const edges = e.edges as Json[];
+        edges.forEach((edge, j) => {
+          if (typeof edge !== 'string' || !CROP_EDGES.includes(edge as CropEdge)) c.fail('CONFIG_FIELD_TYPE', `${at}.edges[${j}]`, `is ${show(edge)}; left, right, top or bottom is required`);
+          else if (edges.indexOf(edge) !== j) c.fail('CONFIG_FIELD_TYPE', `${at}.edges[${j}]`, `repeats ${show(edge)}; each crop edge is declared once`);
+        });
+        const row = Array.isArray(a.plan) ? a.plan.find(row => Array.isArray(row) && row[0] === e.part) as Json[] | undefined : undefined;
+        if (e.run !== 'full' || row?.[1] !== 'head' || row?.[2] !== e.tag) c.fail('CONFIG_NAME_RESOLVES', at, 'explicit crop edges require a head-run plan part and the full-run layer of the same tag');
+      }
       if (typeof e.part !== 'string' || !parts.includes(e.part)) {
         c.fail('CONFIG_NAME_RESOLVES', `${at}.part`, `is ${show(e.part)}; a part named in assemble.plan is required`);
       }
