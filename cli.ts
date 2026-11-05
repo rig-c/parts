@@ -29,7 +29,8 @@ import { type CharacterConfig, loadClothConfig, loadConfig, loadEarlyConfig, loa
 import { configWriteLines, readConfigWriteTarget, separateConfigWriteTarget, stageConfigWrite, type StagedConfigWrite } from './tools/configwrite.ts';
 import { failLine, guidePointer, PartsError } from './src/errors.ts';
 import { GUIDE_DOC, type GuideAnswer, guideRule, guideSection } from './src/guide.ts';
-import { proposeHeadBox } from './src/headbox.ts';
+import { proposeHeadBox, type Box } from './src/headbox.ts';
+import { headCropPreflight, headCropPreflightLines } from './src/headcroppreflight.ts';
 import { makeInputs } from './src/inputs.ts';
 import { idleKeysOf, isIdleKeys } from './src/rig.ts';
 import { bodyCoreBox, bodyOpaqueBox, CORE_ALPHA, depthSkipLine, exportLayers, figuresPhrase, hiddenLayerLine, implausibleRules, layerCoreBox, layerFigures, layerOpaqueBox, type LayerSet, layerSetDiff, type OpaqueBox, OPAQUE_ALPHA_ABOVE, pct, readLayers, readWrapperLayers, ruleSummary, templateLayerNames, templatePsdBytes, times } from './src/layers.ts';
@@ -349,6 +350,9 @@ usage:
       the box without it and how much of the side and area it took;
       --no-back-hair leaves "back hair" out of the box. --write-config updates
       only seethrough.head_box in an existing config through the layers loader.
+
+  rig-parts head-crop-preflight --full <run> --canvas <W>x<H> --head-box '[left,top,right,bottom]'
+      Report full-run drawn pixels beyond the crop: JSON stdout, advice stderr; no head run needed.
 
   rig-parts compare --left <file> --right <file> [--map <bonemap.json>]
       Compare two skeletons bone by bone. Each file is a config, a proposal.json
@@ -1142,6 +1146,7 @@ const TAKES = {
   'mesh-stats': { valued: ['--config', '--parts'], switches: [] },
   remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--delta', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--input-check'], switches: ['--record-input-check'] },
   retune: { valued: ['--rig', '--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--input-check'], switches: ['--record-input-check'] },
+  'head-crop-preflight': { valued: ['--full', '--canvas', '--head-box'], switches: [] },
   painting: { valued: ['--keypoints', '--person', '--form'], switches: [] },
 } as const satisfies Record<string, { valued: readonly string[]; switches: readonly string[] }>;
 
@@ -1436,6 +1441,31 @@ function printLint(P: PartSet, spec: { bones: CharacterConfig['bones']; meshes: 
   // Issue #86: after every line above, which check read each bone, or why none did.
   for (const l of coverageLines(res.coverage, legChainChoice(P, spec, joints))) console.log(l);
   return res.findings.length;
+}
+
+/** A separate command preserves all existing command parsers and their output bytes. */
+function cmdHeadCropPreflight(args: string[]): number {
+  const flags = new Map<string, string>();
+  for (let i = 0; i < args.length; i += 2) {
+    const flag = args[i];
+    if (!takesValued('head-crop-preflight', flag)) return usage(notTaken('head-crop-preflight', flag));
+    if (flags.has(flag)) return usage(`${flag} is given twice`);
+    if (args[i + 1] === undefined || args[i + 1].startsWith('--')) return usage(`${flag} needs a value`);
+    flags.set(flag, args[i + 1]);
+  }
+  const full = flags.get('--full'), canvasArg = flags.get('--canvas'), boxArg = flags.get('--head-box');
+  if (full === undefined || canvasArg === undefined || boxArg === undefined) return usage("head-crop-preflight needs --full <run>, --canvas <W>x<H> and --head-box '[left,top,right,bottom]'");
+  const canvas = parseCanvas(canvasArg);
+  if (canvas === null) return usage(`--canvas ${canvasArg} is not <W>x<H> in integer px`);
+  let box: unknown;
+  try { box = JSON.parse(boxArg); } catch { return usage('--head-box needs a JSON array of four finite coordinates'); }
+  if (!Array.isArray(box) || box.length !== 4 || !box.every(n => typeof n === 'number' && Number.isFinite(n))) return usage('--head-box needs a JSON array of four finite coordinates');
+  try {
+    const report = headCropPreflight(readLayers(full), canvas, box as Box);
+    console.log(JSON.stringify(report));
+    for (const line of headCropPreflightLines(report)) console.error(line);
+    return EXIT_OK;
+  } catch (err) { return printRefusal(err); }
 }
 
 function cmdPropose(args: string[]): number {
@@ -2300,6 +2330,7 @@ function main(argv: string[]): number | Promise<number> {
   if (command === 'sheet') return cmdSheet(rest);
   if (command === 'rig') return cmdRig(rest);
   if (command === 'propose') return cmdPropose(rest);
+  if (command === 'head-crop-preflight') return cmdHeadCropPreflight(rest);
   if (command === 'compare') return cmdCompare(rest);
   if (command === 'check') return cmdCheck(rest);
   if (command === 'loop') return cmdLoop(rest);
