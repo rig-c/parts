@@ -10,7 +10,7 @@ import { materialSource, type MaterialSource, materialRows, polygonMaterialEdges
 import { unionTakenSources } from './takesource.ts';
 import { authoredUnitDepths, type AuthoredUnitDepth } from './authoredunit.ts';
 import { paintingExtensionMasks, paintingExtensionProblems, type PaintingExtension } from './paintingextension.ts';
-import { AUTOMATIC_WRITERS as AW, compactValueBaseline, pixelProvenance, rgbaEqual, type ValueBaseline } from './provenance.ts';
+import { AUTOMATIC_WRITERS as AW, compactValueBaseline, pixelProvenance, rgbaEqual, type ValueBaseline, type StageMap } from './provenance.ts';
 import { bindDepthRun, copyDepthMaterial, registerDepthRun, transportPartDepth, type DepthConfig, type RegisteredDepth } from './depthsheets.ts';
 /**
  * The assemble stage: two See-through runs over one painting — a FULL-body run
@@ -364,6 +364,8 @@ export interface AssembleInput {
   headFaceUnderfill?: boolean;
   /** `assemble.yield_refused`, default false; transfer of refused cores/rims, finishing nearby accepted projection RGB. */
   yieldRefused?: boolean;
+  /** Report-only last-writer sidecar, default off. */
+  stageMap?: boolean;
   /** Plan parts whose own samples survive source re-take beneath soft front cover. */
   keepUnderOccluders?: readonly string[];
   /** Original selected material must cover its enclosed holes beneath this source pair. */
@@ -4720,6 +4722,8 @@ export function softOcclusionLine(r: SoftOcclusionReading): string {
 }
 
 export interface AssembleResult {
+  /** Compressed per-pixel classification, present only when requested. */
+  stageMap?: StageMap;
   /** The already-resampled opaque painting used by this assembly. */
   paintingInRig: Raster;
   /** Report-only residual candidates, present after the visible edge pass. */
@@ -6023,16 +6027,48 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     const map = runMap(frame, run), dx = single ? frame.fullPad : 0, dy = single ? frame.fullPadTop : 0;
     for (const layer of set.layers) if (layer.regionSelection !== undefined) regionSupport.set(`${run}:${layer.name}`, warpSupport(layer.regionSelection, { sx: map.sx, sy: map.sx, tx: map.tx + dx * map.sx, ty: map.ty + dy * map.sx }, W, H, map.k < 1 ? 'bilinear' : 'bicubic'));
   }
-  seamOverride(placed, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, keepInOrder, input.turnMovingPair ?? null, (i, p) => { writersInOrder[i][p] = AW.seamOverride; }, counterfactual === undefined ? undefined : beforeTake === null ? { record: counterfactual.seam } : { baseline: counterfactual.seam, support: regionSupport });
+  const preSeamWriters = input.stageMap === true ? new Map<number, Map<number, number>>() : undefined;
+  seamOverride(placed, srcr, seamRule, seamRule === 'silhouette' ? silhouette : null, keepInOrder, input.turnMovingPair ?? null, (i, p) => {
+    if (preSeamWriters !== undefined) {
+      const changed = preSeamWriters.get(i) ?? new Map<number, number>();
+      changed.set(p, writersInOrder[i][p]);
+      preSeamWriters.set(i, changed);
+    }
+    writersInOrder[i][p] = AW.seamOverride;
+  }, counterfactual === undefined ? undefined : beforeTake === null ? { record: counterfactual.seam } : { baseline: counterfactual.seam, support: regionSupport });
+  const stageMap: StageMap | undefined = input.stageMap !== true ? undefined : {
+    schema: 'rig-parts-stage-map/1', rig_size: [W, H], automatic: AW, edits: [...editNames], parts: [],
+  };
   placed.forEach((p, i) => {
-    p.record.provenance = pixelProvenance(p.image, p.record.x, p.record.y, W, writersInOrder[i], editNames, 0, valueBaselines.get(p.record.from) ?? null);
+    const map = stageMap === undefined ? undefined : {
+      name: p.record.name, x: p.record.x, y: p.record.y, w: p.record.w, h: p.record.h,
+      excluded_px: 0, runs: [] as Array<[number, number]>, pre_seam_writer_runs: [] as Array<[number, number]>,
+    };
+    p.record.provenance = pixelProvenance(p.image, p.record.x, p.record.y, W, writersInOrder[i], editNames, 0, valueBaselines.get(p.record.from) ?? null, map, preSeamWriters?.get(i));
+    if (map !== undefined) stageMap!.parts.push(map);
     const depth = authoredDepths.get(p.record.name);
     if (depth !== undefined) p.record.provenance.depth = depth;
   });
-  if (beforeTake !== null) retainRegionNeighbours(placed, beforeTake.images, targets!);
+  if (beforeTake !== null) {
+    retainRegionNeighbours(placed, beforeTake.images, targets!);
+    if (stageMap !== undefined) stageMap.parts = stageMap.parts.map(p => {
+      if (targets!.has(p.name)) return p;
+      const previous = beforeTake.stageMap!;
+      const original = previous.parts.find(q => q.name === p.name)!;
+      const remap = ([id, length]: [number, number]): [number, number] => {
+        if (id <= 0) return [id, length];
+        const edit = previous.edits[id - 1];
+        let index = stageMap.edits.indexOf(edit);
+        if (index < 0) { index = stageMap.edits.length; stageMap.edits.push(edit); }
+        return [index + 1, length];
+      };
+      return { ...original, runs: original.runs.map(remap), pre_seam_writer_runs: original.pre_seam_writer_runs.map(remap) };
+    });
+  }
   // Provenance is now numbers/labels only. No later raster/figure operation
   // reads report buffers; release all aliases before recomposite/error work.
   valueBaselines.clear();
+  preSeamWriters?.clear();
   writersInOrder.length = 0;
   patchWriters.length = 0;
   for (const group of [built, pieces, cutSources, limbPieces]) for (const b of group) if (b !== null) b.writers = undefined;
@@ -6070,6 +6106,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     ...(softOcclusion.length === 0 ? {} : { softOcclusion }),
     ...(!single ? { cropClipped: cropClippedLines(plan, extend, (run, tag) => rig.get(`${run}:${tag}`) ?? null, frame) } : {}),
     paintingInRig: srcr,
+    ...(stageMap === undefined ? {} : { stageMap }),
     parts: {
       rig_size: [W, H],
       scale_rig_per_source: frame.S,
@@ -7008,6 +7045,8 @@ export function stageFields(
   headFaceUnderfill?: boolean;
   /** `assemble.yield_refused`, default false; transfer of refused cores/rims, finishing nearby accepted projection RGB. */
   yieldRefused?: boolean;
+  /** Report-only last-writer sidecar, default off. */
+  stageMap?: boolean;
   /** Plan parts whose own samples survive source re-take beneath soft front cover. */
   keepUnderOccluders?: readonly string[];
   /** Original selected material must cover its enclosed holes beneath this source pair. */
@@ -7041,6 +7080,7 @@ export function stageFields(
     ...(keySkeleton === undefined ? {} : { keySkeleton }),
     ...(cfg.assemble.head_face_underfill === undefined ? {} : { headFaceUnderfill: cfg.assemble.head_face_underfill }),
     ...(cfg.assemble.yield_refused === undefined ? {} : { yieldRefused: cfg.assemble.yield_refused }),
+    ...(cfg.assemble.stage_map === undefined ? {} : { stageMap: cfg.assemble.stage_map }),
     ...(cfg.assemble.keep_under_occluders === undefined ? {} : { keepUnderOccluders: cfg.assemble.keep_under_occluders }),
     ...(cfg.assemble.require_hidden_extent === undefined ? {} : { requireHiddenExtent: cfg.assemble.require_hidden_extent }),
     ...(cfg.assemble.ground === undefined ? {} : { ground: cfg.assemble.ground }),

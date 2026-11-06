@@ -4596,6 +4596,46 @@ path. Declarations apply to the **base painting only** and are not inherited
 into alternate paintings. Native setup and animation boundary checks remain
 consumer acceptance work; assembly provenance does not establish motion quality.
 
+### Per-pixel stage map
+
+Declare `assemble.stage_map: true` to emit `stage-map.json` beside `parts.json`
+(`assemble --out work` writes `work/rig/stage-map.json`). Omitted or `false`
+disables it. Reusing an output directory with the option off removes its old map.
+The observer shares the aggregate classifier and leaves the other output bytes
+unchanged.
+
+The JSON schema is `rig-parts-stage-map/1`. `rig_size` gives the rig width and
+height. `automatic` maps stage names to negative writer IDs. Positive ID `n`
+resolves to `edits[n - 1]`. Zero means final RGBA equals the part's original
+normalized source at the same rig-grid coordinate. `-2147483648` means excluded,
+final alpha at most 8. Other negative IDs name the last value-changing writer,
+including the explicit `unattributed` stage when lineage is unavailable.
+
+`parts` follows the output draw order. Each row has `name`, `x`, `y`, `w`, `h`,
+`excluded_px` and `runs`. Each run is `[writer ID, length]`, with positive integer
+length. Expand runs consecutively in row-major order across row boundaries into
+exactly `w * h` cells. Cell index `k` is at rig coordinate
+`(x + k % w, y + floor(k / w))`, top-left origin, y down. Excluded cells have
+an independent count. The remaining histogram equals `unchanged_layer_px`,
+`hand_px`, `automatic_px` and every edit/stage subtotal in the part's provenance.
+`alternates`, when present, contains `{name, map}` rows with the same schema and
+only the records emitted for that set. Their part names match the alternate's
+`records`, and its `slots` resolve the emitted PNG names.
+
+`pre_seam_writer_runs` uses the same RLE layout. Where the last-writer channel
+is `seamOverride`, it records the buffer's writer immediately before that seam
+change. Elsewhere `-2147483647` means no surviving override, and excluded cells
+use `-2147483648`. In this companion channel, zero means the prior buffer had
+no recorded writer. The writer before the seam override is a sparse boundary
+observation of that boundary alone. Only `runs`
+reconciles with aggregate provenance. A seam change that restores the raw
+source is classified unchanged and has no surviving override in this report.
+
+Only final alpha above 8 is attributed. Cleared pixels and transient writes are
+outside this report. A final value restored to its original source is unchanged.
+A pixel changed by `seamOverride` after `paintingEdge` is attributed to
+`seamOverride`. The map records attribution and cannot determine intent.
+
 ### Source before scissors
 
 <a id="source-before-scissors-issue-819"></a>

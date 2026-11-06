@@ -332,6 +332,8 @@ export interface Assemble {
   head_face_underfill?: boolean;
   /** Opt-in: yield original drift-refused front cores and connected non-core rims to an opaque behind holder matching the painting. */
   yield_refused?: boolean;
+  /** Emit the report-only last-writer sidecar; absent or false is off. */
+  stage_map?: boolean;
   /** Named plan parts retain their own pixels beneath a drawn-in-front soft occluder. */
   keep_under_occluders?: string[];
   /** Require original material in enclosed source holes beneath a named moving cover. */
@@ -1674,7 +1676,7 @@ export interface EarlyConfig {
   depth?: DepthConfig;
   key: string;
   seethrough: SeeThrough;
-  assemble: { rig_scale: number; seam?: SeamRule; project?: ProjectRule; ground?: Ground; take?: TakeDeclaration[]; editor_receipts?: EditorReceipts; head_face_underfill?: boolean; yield_refused?: boolean; keep_under_occluders?: string[]; require_hidden_extent?: HiddenExtentDeclaration[]; extend_painting?: PaintingExtension[] };
+  assemble: { rig_scale: number; seam?: SeamRule; project?: ProjectRule; ground?: Ground; take?: TakeDeclaration[]; editor_receipts?: EditorReceipts; head_face_underfill?: boolean; yield_refused?: boolean; stage_map?: boolean; keep_under_occluders?: string[]; require_hidden_extent?: HiddenExtentDeclaration[]; extend_painting?: PaintingExtension[] };
 }
 
 /** What plain `assemble` reads: the early config plus the plan `--propose-plan` printed. */
@@ -1752,12 +1754,15 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null, p
   if (door === 'layers') {
     if ('seethrough' in t) checkSeeThrough(c, t.seethrough);
     if ('assemble' in t) {
-      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'require_hidden_extent', 'extend_painting', 'take', 'seam', 'project', 'ground', 'editor_receipts']);
+      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'stage_map', 'keep_under_occluders', 'require_hidden_extent', 'extend_painting', 'take', 'seam', 'project', 'ground', 'editor_receipts']);
       if (a !== null) {
         checkAssembleRules(c, a);
         if ('rig_scale' in a) c.number('config.assemble.rig_scale', a.rig_scale, 'positive');
         if ('head_face_underfill' in a && typeof a.head_face_underfill !== 'boolean') {
           c.fail('CONFIG_FIELD_TYPE', 'config.assemble.head_face_underfill', `is ${show(a.head_face_underfill)}; true or false is required`);
+        }
+        if ('stage_map' in a && typeof a.stage_map !== 'boolean') {
+          c.fail('CONFIG_FIELD_TYPE', 'config.assemble.stage_map', `is ${show(a.stage_map)}; true or false is required`);
         }
         checkKeepUnderOccluders(c, a, null);
         checkRequiredHiddenExtent(c, a, null);
@@ -2627,7 +2632,7 @@ function checkAssembleRules(c: Check, a: Record<string, Json>): void {
 
 function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: string[]; patches: string[]; cuts: string[] } {
   const required = sectionRequired(door, 'assemble');
-  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'keep_under_occluders', 'require_hidden_extent', 'extend_painting', 'take', 'seam', 'project', 'ground', 'editor_receipts']);
+  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'stage_map', 'keep_under_occluders', 'require_hidden_extent', 'extend_painting', 'take', 'seam', 'project', 'ground', 'editor_receipts']);
   if (a === null) return { parts: [], patches: [], cuts: [] };
   checkAssembleRules(c, a);
   if (required.includes('plan') && !('plan' in a)) {
@@ -2640,6 +2645,9 @@ function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: s
   }
   if ('yield_refused' in a && typeof a.yield_refused !== 'boolean') {
     c.fail('CONFIG_FIELD_TYPE', `${p}.yield_refused`, `is ${show(a.yield_refused)}; true or false is required`);
+  }
+  if ('stage_map' in a && typeof a.stage_map !== 'boolean') {
+    c.fail('CONFIG_FIELD_TYPE', `${p}.stage_map`, `is ${show(a.stage_map)}; true or false is required`);
   }
   const parts: string[] = [];
   if ('plan' in a && c.array(`${p}.plan`, a.plan, true)) {
