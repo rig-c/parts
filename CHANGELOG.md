@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.23.0](https://github.com/rig-c/parts/compare/v2.22.0...v2.23.0) (2026-11-06)
+
+
+### Features
+
+* stabilize config file reference enumeration API ([#1135](https://github.com/rig-c/parts/issues/1135)) ([f1d22e8](https://github.com/rig-c/parts/commit/f1d22e8302edac15c5ed56925bd80139636938ea))
+
 ## [2.22.0](https://github.com/rig-c/parts/compare/v2.21.0...v2.22.0) (2026-11-06)
 
 
