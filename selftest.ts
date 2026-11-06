@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runHiddenExtentChecks, runHiddenExtentConfigChecks } from './fixtures/hidden_extent.ts';
 import './tools/check_row_guard.ts';
 import { runSeamCellChecks } from './tools/check_seam_cells.ts';
 import { motionSeamFinding } from './src/check.ts';
@@ -2169,6 +2170,7 @@ function runPsdSuite(): number {
 function runConfigSuite(): number {
   section('config: the character config loader');
   const { say, bad } = counter();
+  runHiddenExtentConfigChecks((name, ok, detail) => say(name, ok, detail, 'issue #1047: declared original-source enclosed material'));
   const seamDir = temp('seam-config-905');
   try { runSeamConfigChecks(seamDir, (name, ok, detail) => say(name, ok, detail, 'issue #905: CLI > config > unchanged default, with real readers and CLI controls')); }
   finally { rmSync(seamDir, { recursive: true, force: true }); }
@@ -32749,6 +32751,7 @@ function runAssembleSuite(): number {
   const { say, bad } = counter();
   const dir = temp('assemble');
   try {
+    runHiddenExtentChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1047: production assembly refuses declared enclosed source holes'));
     runDiffComponentChecks((name, ok, detail) => say(name, ok, detail, 'issue #1005: hand-counted whole-error components and planted report mutations'));
     runPaintingExtensionChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #848: public generated controls; explicit ownership, bounds and exact painting samples'));
     runPaintingEdgeChecks((name, ok, detail) => say(name, ok, detail, 'issue #953: under visible, a part edge takes the painting\'s line and coverage; every skip reason planted next to a positive strip'));
