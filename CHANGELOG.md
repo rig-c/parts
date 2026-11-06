@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.22.0](https://github.com/rig-c/parts/compare/v2.21.0...v2.22.0) (2026-11-06)
+
+
+### Features
+
+* **assemble:** add opt-in per-pixel writer stage maps ([#1132](https://github.com/rig-c/parts/issues/1132)) ([b74ee96](https://github.com/rig-c/parts/commit/b74ee9619580a3f5dc0bf6399cc1d64e038a2a9c)), closes [#1131](https://github.com/rig-c/parts/issues/1131)
+
 ## [2.21.0](https://github.com/rig-c/parts/compare/v2.20.2...v2.21.0) (2026-11-06)
 
 
