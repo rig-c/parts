@@ -42,6 +42,13 @@ export const HEAD_LAYER_MIN_PX = 150;
 
 export type Box = [number, number, number, number];
 
+/** Non-empty painting-space crop containment, shared with assemble and preflight. */
+export function headBoxInside(box: Box, w: number, h: number): boolean {
+  const [x0, y0, x1, y1] = box;
+  return x0 >= 0 && y0 >= 0 && x1 <= w && y1 <= h && x1 > x0 && y1 > y0;
+}
+
+
 export interface HeadBoxOptions {
   /** Whether `"back hair"` is included in the union (issue #351); default `true`. */
   backHair?: boolean;

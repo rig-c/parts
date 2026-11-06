@@ -258,6 +258,32 @@ every number) are AUTHORING §3's tables, and the loader refuses any other by na
 
 ## Files this package writes
 
+### Head-crop preflight stdout
+
+`head-crop-preflight` writes one JSON object followed by a newline on success,
+with `spec: "rig-parts/head-crop-preflight/1"`. Its fields are
+
+| field | meaning |
+| --- | --- |
+| `head_box` | supplied `[left, top, right, bottom]` in painting coordinates |
+| `source_canvas` | supplied painting `{ w, h }` |
+| `run_canvas` | full-run `{ w, h }` |
+| `drawn_alpha_above` | exclusive alpha threshold, `8` |
+| `pixel_grid` | `"full-run"`, the native sample grid |
+| `registration` | `{ scale_source_per_run, pad_left, pad_top }`, mapping run sample centres into painting coordinates |
+| `layers` | rows in full-run layer order, including zero-hit tags |
+| `layers[].tag` | full-run layer name |
+| `layers[].drawn_px` | native samples above the alpha threshold |
+| `layers[].sides` | `{ top_px, left_px, right_px }`, samples beyond those crop edges |
+| `layers[].bottom_px` | samples beyond the bottom, separate for `extend_below_crop` |
+
+Corner samples count on both edges. Counts remain native samples before ghost
+cleanup. A positive count reports clipping and unknown input is not a negative.
+Each hit tag gets one `HEAD_CROP_PREFLIGHT` advice line on stderr. Valid clipping
+exits zero. Malformed geometry or a box outside the painting is refused before
+JSON is emitted. This command writes no files.
+
+
 `assemble` and `build` declare `painting_in_rig` in parts.json as
 `{ path: "painting_in_rig.png", sha256, resample: "lanczos3-rgb-opaque" }`.
 The sibling PNG is the exact rig-resolution raster assemble used: source RGB
