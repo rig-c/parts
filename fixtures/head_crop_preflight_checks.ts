@@ -37,17 +37,17 @@ export function runHeadCropPreflightChecks(dir: string, say: (name: string, ok: 
     spec: 'rig-parts/head-crop-preflight/1', head_box: [2, 2, 6, 6], source_canvas: { w: 8, h: 8 }, run_canvas: { w: 8, h: 8 },
     drawn_alpha_above: 8, pixel_grid: 'full-run', registration: { scale_source_per_run: 1, pad_left: 0, pad_top: 0 },
     layers: [
-      { tag: 'back hair', drawn_px: 64, sides: { top_px: 16, left_px: 16, right_px: 16 }, bottom_px: 16 },
-      { tag: 'front hair', drawn_px: 4, sides: { top_px: 0, left_px: 0, right_px: 0 }, bottom_px: 4 },
       { tag: 'face', drawn_px: 4, sides: { top_px: 0, left_px: 0, right_px: 0 }, bottom_px: 0 },
+      { tag: 'front hair', drawn_px: 4, sides: { top_px: 0, left_px: 0, right_px: 0 }, bottom_px: 4 },
+      { tag: 'back hair', drawn_px: 64, sides: { top_px: 16, left_px: 16, right_px: 16 }, bottom_px: 16 },
     ],
   };
   const expectedLines = [
-    'HEAD_CROP_PREFLIGHT: tag "back hair" — top 16, left 16, right 16 drawn px; bottom 16 drawn px (extend_below_crop); report only',
     'HEAD_CROP_PREFLIGHT: tag "front hair" — top 0, left 0, right 0 drawn px; bottom 4 drawn px (extend_below_crop); report only',
+    'HEAD_CROP_PREFLIGHT: tag "back hair" — top 16, left 16, right 16 drawn px; bottom 16 drawn px (extend_below_crop); report only',
   ];
   say('PR1085_MULTI_TAG_JSON_AND_LINES', multi.status === 0 && multi.stdout === JSON.stringify(expectedMulti) + '\n' && multi.stderr === expectedLines.join('\n') + '\n',
-    `exit ${multi.status}; stdout ${multi.stdout.trim()}; stderr ${multi.stderr.trim()}`, 'hand-counted production CLI bytes include three JSON rows and exactly two hit-tag lines');
+    `exit ${multi.status}; stdout ${multi.stdout.trim()}; stderr ${multi.stderr.trim()}`, 'hand-counted production CLI bytes include three JSON rows in descending depth order and exactly two hit-tag lines');
   for (const [box, code] of [
     ['[-1,0,8,8]', 'ASSEMBLE_HEAD_BOX_INSIDE'],
     ['[0,-1,8,8]', 'ASSEMBLE_HEAD_BOX_INSIDE'],
