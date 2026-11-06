@@ -690,6 +690,16 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       };
       log(`${notice.code}: ${notice.object} ${notice.detail}`);
     }
+    const hiddenExtent = fields.requireHiddenExtent?.filter(({ part, occluder }) => altPlanNames.has(part) || altPlanNames.has(occluder));
+    const incompleteExtent = hiddenExtent?.filter(({ part, occluder }) => !altPlanNames.has(part) || !altPlanNames.has(occluder)) ?? [];
+    if (incompleteExtent.length > 0) {
+      for (const { part, occluder } of incompleteExtent) altProblems.push({
+        code: 'ASSEMBLE_HIDDEN_EXTENT_UNMEASURED',
+        object: `alternate set "${alt.name}", part "${part}" under "${occluder}"`,
+        detail: 'replaces only one declared source family; original selected material for both families is required to measure their enclosed overlap',
+      });
+      continue;
+    }
     let altRes: ReturnType<typeof assemble>;
     try {
       altRes = assemble({
@@ -700,6 +710,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         capOwnership: input.setCapOwnership ?? 'target',
         full: altRuns.full,
         head: altRuns.head,
+        ...(hiddenExtent === undefined ? {} : { requireHiddenExtent: hiddenExtent }),
         ...(fields.keepUnderOccluders === undefined ? {} : { keepUnderOccluders: fields.keepUnderOccluders.filter(name => altPlanNames.has(name)) }),
         resolution: fields.resolution,
         headBox: altHeadBox,

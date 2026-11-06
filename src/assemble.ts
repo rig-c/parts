@@ -1,3 +1,4 @@
+import { hiddenExtentProblems, type HiddenExtentDeclaration, type HiddenExtentSource } from './hiddenextent.ts';
 import { headBoxInside } from './headbox.ts';
 import { edgePairResiduals, type EdgeResidualReport } from './edgeresidual.ts';
 import type { SupportDomain } from './coincide.ts';
@@ -365,6 +366,8 @@ export interface AssembleInput {
   yieldRefused?: boolean;
   /** Plan parts whose own samples survive source re-take beneath soft front cover. */
   keepUnderOccluders?: readonly string[];
+  /** Original selected material must cover its enclosed holes beneath this source pair. */
+  requireHiddenExtent?: readonly HiddenExtentDeclaration[];
   /** Base painting only; named final parts, explicit band and path bound (#848). */
   paintingExtension?: readonly PaintingExtension[];
   /**
@@ -4965,7 +4968,7 @@ export function assemble(input: AssembleInput): AssembleResult {
   if (input.regionTake === undefined) return assembleParts(input);
   const targets = regionTakeTargets(input.regionTake.targets, input.cuts, input.limbs);
   const counterfactual = input.projectRule === 'core' ? { cleanup: new Map<string, RunLayer[]>(), seam: new Map<string, Uint8Array>() } : undefined;
-  const before = assembleParts({ ...input, full: input.regionTake.full, head: input.regionTake.head, regionTake: undefined }, targets, null, counterfactual);
+  const before = assembleParts({ ...input, full: input.regionTake.full, head: input.regionTake.head, regionTake: undefined, requireHiddenExtent: undefined }, targets, null, counterfactual);
   return assembleParts(input, targets, before, counterfactual);
 }
 
@@ -4992,6 +4995,26 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   refuseIfAny(depthInputProblems);
   // Issue #366: one run's file, padded to the resolution square; read as both runs, as before.
   const fullPadded = single ? padSingleRun(depthFullInput, frame, input.resolution) : depthFullInput;
+  if ((input.requireHiddenExtent?.length ?? 0) > 0) {
+    // Read the selected original layers, before split/underfill/cleanup can replace their material.
+    const originals = input.plan.map(([name, run, tag]): HiddenExtentSource => {
+      const set = run === 'full' ? fullPadded : depthHeadInput;
+      const layer = set.layers.find(candidate => candidate.name === tag);
+      return { name, from: `${run}:${tag}`, image: layer === undefined ? null : layerToRig(placeLayer(layer, input.resolution), frame, run) };
+    });
+    const painting = patches.length === 0 ? null : sourceInRig(source, frame.W, frame.H);
+    const silhouette = painting === null ? null : figureSilhouette(painting);
+    const sources: HiddenExtentSource[] = [];
+    for (const slot of drawOrder(input.plan.map(([name]) => name), patches)) {
+      if ('plan' in slot) sources.push(originals[slot.plan]);
+      if ('patch' in slot) {
+        const patch = patches[slot.patch];
+        const placed = cutPatch(patch, painting as Raster, silhouette);
+        sources.push({ name: patch.name, from: 'painting:patch', image: placed?.image ?? newRaster(1, 1), x: placed?.record.x ?? 0, y: placed?.record.y ?? 0 });
+      }
+    }
+    refuseIfAny(hiddenExtentProblems(input.requireHiddenExtent!, sources, frame.W, frame.H));
+  }
   // Issue #439: when seethrough.arm_split is declared, split the full run's overlapping handwear into handwear-r and handwear-l.
   const fullArmSplit = input.armSplit === undefined ? fullPadded : applyArmSplit(fullPadded, input.resolution, input.armSplit);
   // Issue #490: when generation.control.skeleton is present, split merged arm layers (or refuse when sleeve and drape share one colour).
@@ -6987,6 +7010,8 @@ export function stageFields(
   yieldRefused?: boolean;
   /** Plan parts whose own samples survive source re-take beneath soft front cover. */
   keepUnderOccluders?: readonly string[];
+  /** Original selected material must cover its enclosed holes beneath this source pair. */
+  requireHiddenExtent?: readonly HiddenExtentDeclaration[];
   /** Base painting only; named final parts, explicit band and path bound (#848). */
   paintingExtension?: readonly PaintingExtension[];
   turnMovingPair?: (a: string, b: string) => boolean;
@@ -7017,6 +7042,7 @@ export function stageFields(
     ...(cfg.assemble.head_face_underfill === undefined ? {} : { headFaceUnderfill: cfg.assemble.head_face_underfill }),
     ...(cfg.assemble.yield_refused === undefined ? {} : { yieldRefused: cfg.assemble.yield_refused }),
     ...(cfg.assemble.keep_under_occluders === undefined ? {} : { keepUnderOccluders: cfg.assemble.keep_under_occluders }),
+    ...(cfg.assemble.require_hidden_extent === undefined ? {} : { requireHiddenExtent: cfg.assemble.require_hidden_extent }),
     ...(cfg.assemble.ground === undefined ? {} : { ground: cfg.assemble.ground }),
     ...(cfg.assemble.extend_painting === undefined ? {} : { paintingExtension: cfg.assemble.extend_painting }),
     ...(turnMovingPair === null ? {} : { turnMovingPair }),
