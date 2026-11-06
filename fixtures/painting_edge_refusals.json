@@ -1,0 +1,832 @@
+{
+  "demo": [
+    {
+      "x": 346,
+      "y": 83,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 431,
+      "y": 143,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 395,
+      "y": 144,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 369,
+      "y": 153,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 460,
+      "y": 168,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 461,
+      "y": 170,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 369,
+      "y": 174,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 512,
+      "y": 636,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 321,
+      "y": 637,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 450,
+      "y": 641,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 492,
+      "y": 641,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 380,
+      "y": 642,
+      "baselineDefectFlags": 6
+    }
+  ],
+  "reference-demo": [
+    {
+      "x": 402,
+      "y": 70,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 393,
+      "y": 72,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 394,
+      "y": 72,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 388,
+      "y": 74,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 482,
+      "y": 131,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 463,
+      "y": 159,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 370,
+      "y": 160,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 472,
+      "y": 161,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 429,
+      "y": 167,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 463,
+      "y": 180,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 456,
+      "y": 183,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 459,
+      "y": 184,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 459,
+      "y": 186,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 459,
+      "y": 187,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 448,
+      "y": 188,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 456,
+      "y": 193,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 452,
+      "y": 196,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 440,
+      "y": 198,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 373,
+      "y": 202,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 373,
+      "y": 203,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 392,
+      "y": 205,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 398,
+      "y": 205,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 399,
+      "y": 205,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 431,
+      "y": 205,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 425,
+      "y": 208,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 423,
+      "y": 209,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 383,
+      "y": 217,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 452,
+      "y": 256,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 462,
+      "y": 256,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 453,
+      "y": 257,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 456,
+      "y": 257,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 458,
+      "y": 257,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 350,
+      "y": 258,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 361,
+      "y": 258,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 453,
+      "y": 258,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 468,
+      "y": 258,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 360,
+      "y": 259,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 343,
+      "y": 260,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 329,
+      "y": 278,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 461,
+      "y": 284,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 392,
+      "y": 285,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 461,
+      "y": 285,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 460,
+      "y": 288,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 459,
+      "y": 291,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 456,
+      "y": 302,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 457,
+      "y": 303,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 370,
+      "y": 305,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 371,
+      "y": 312,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 371,
+      "y": 315,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 321,
+      "y": 317,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 314,
+      "y": 334,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 307,
+      "y": 342,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 307,
+      "y": 343,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 322,
+      "y": 343,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 425,
+      "y": 444,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 360,
+      "y": 455,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 475,
+      "y": 551,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 361,
+      "y": 553,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 476,
+      "y": 553,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 478,
+      "y": 556,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 479,
+      "y": 559,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 344,
+      "y": 560,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 477,
+      "y": 561,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 483,
+      "y": 566,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 379,
+      "y": 568,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 379,
+      "y": 569,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 384,
+      "y": 571,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 385,
+      "y": 571,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 383,
+      "y": 572,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 457,
+      "y": 574,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 458,
+      "y": 575,
+      "baselineDefectFlags": 6
+    }
+  ],
+  "reference-sample": [
+    {
+      "x": 401,
+      "y": 157,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 401,
+      "y": 158,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 380,
+      "y": 159,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 397,
+      "y": 160,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 424,
+      "y": 161,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 415,
+      "y": 162,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 414,
+      "y": 163,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 442,
+      "y": 163,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 443,
+      "y": 163,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 444,
+      "y": 164,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 442,
+      "y": 166,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 447,
+      "y": 168,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 452,
+      "y": 564,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 388,
+      "y": 638,
+      "baselineDefectFlags": 6
+    }
+  ],
+  "scarf": [
+    {
+      "x": 438,
+      "y": 154,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 383,
+      "y": 159,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 426,
+      "y": 159,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 388,
+      "y": 206,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 381,
+      "y": 677,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 382,
+      "y": 677,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 460,
+      "y": 677,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 391,
+      "y": 678,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 392,
+      "y": 678,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 393,
+      "y": 678,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 394,
+      "y": 678,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 400,
+      "y": 678,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 451,
+      "y": 678,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 421,
+      "y": 679,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 422,
+      "y": 679,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 423,
+      "y": 679,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 424,
+      "y": 679,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 425,
+      "y": 679,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 447,
+      "y": 679,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 448,
+      "y": 679,
+      "baselineDefectFlags": 6
+    }
+  ],
+  "wind": [
+    {
+      "x": 479,
+      "y": 71,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 345,
+      "y": 83,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 345,
+      "y": 84,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 471,
+      "y": 85,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 472,
+      "y": 87,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 343,
+      "y": 88,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 473,
+      "y": 89,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 474,
+      "y": 90,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 475,
+      "y": 92,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 475,
+      "y": 93,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 476,
+      "y": 94,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 339,
+      "y": 95,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 476,
+      "y": 95,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 335,
+      "y": 108,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 334,
+      "y": 113,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 448,
+      "y": 131,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 419,
+      "y": 138,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 388,
+      "y": 156,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 363,
+      "y": 167,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 367,
+      "y": 195,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 406,
+      "y": 259,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 588,
+      "y": 394,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 240,
+      "y": 398,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 236,
+      "y": 403,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 232,
+      "y": 408,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 227,
+      "y": 414,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 226,
+      "y": 415,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 223,
+      "y": 418,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 220,
+      "y": 422,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 235,
+      "y": 659,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 294,
+      "y": 678,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 295,
+      "y": 678,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 544,
+      "y": 778,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 489,
+      "y": 1068,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 341,
+      "y": 1073,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 314,
+      "y": 1075,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 314,
+      "y": 1076,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 517,
+      "y": 1076,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 314,
+      "y": 1077,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 314,
+      "y": 1078,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 489,
+      "y": 1078,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 517,
+      "y": 1078,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 517,
+      "y": 1081,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 341,
+      "y": 1082,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 524,
+      "y": 1123,
+      "baselineDefectFlags": 1
+    },
+    {
+      "x": 310,
+      "y": 1133,
+      "baselineDefectFlags": 6
+    },
+    {
+      "x": 522,
+      "y": 1133,
+      "baselineDefectFlags": 6
+    }
+  ]
+}

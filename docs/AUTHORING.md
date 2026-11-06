@@ -4442,6 +4442,29 @@ and 13,872 to 1,110 (`wind`), and the holes from 1,020 to 62, 453 to 40, 259 to 
 291 to 34 and 1,118 to 62; `check` passes the same bars as before on all five. A
 painting patch is read placed on the rig canvas, and is never written. `core` is unchanged.
 
+**Painting ownership at a seam (#1038).** The edge estimator receives a named
+owner input. Its current supplier, `owner-a/raw-plan-alpha>=128`, selects the
+topmost original plan layer whose alpha is at least 128 after placement on the
+rig canvas. Receivers follow explicit cut `from` to `into`, limb `from` to
+`part`, and hybrid descendant edges. A receiver needs exactly one raw-plan
+ancestor, positive pre-edge support and membership in its production region.
+Missing lineage, cycles, multiple ancestors, overlapping receivers and absent
+support are named in the assembly result's `paintingEdges.allocation` reading.
+
+A FRONT-owned positive-coverage pixel keeps the estimator's unmix. BEHIND-owned
+paint goes to BEHIND and FRONT is cleared. If piece preservation holds only the
+clear, BEHIND keeps its own paint and FRONT keeps its pre-edge coverage.
+FRONT-owned pixels at resolved alpha zero take their own painting pixel at
+alpha 255. A refused allocation retains the existing edge write unless it is a
+foreign-owner FRONT write or a contract-foreign BEHIND copy. That predicate is
+computed on scratch rasters through the existing edge path, reading survival at
+the edge pass's post-restoration output. Later assembly writers are outside its
+scope. The applied allocation and clean-refusal fallbacks form one plan, guarded
+once for piece preservation. A held fallback returns to pre-edge bytes and is
+counted by `fallbackHeld`. Scratch evaluation leaves the real input untouched.
+The counted public-example rest exceptions are tracked separately in #1038
+and #1141. The remaining silhouette cause in #1141 is unclosed.
+
 **A busy ground (`assemble.ground`, issue #996).** The step above reads the painting
 as a figure on a ground of one colour: a painted pixel no part covers is the figure's
 when it differs from the border ring's colour, and the colour behind a part's edge is

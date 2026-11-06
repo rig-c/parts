@@ -33004,6 +33004,11 @@ function runAssembleSuite(): number {
     }
     edgePainting1131.data.set([100, 0, 100, 255], (31 * 64 + 31) * 4);
     edgePainting1131.data.set([100, 0, 100, 255], (32 * 64 + 30) * 4);
+    // Neither witness has a raw owner at the >=128 floor. This plants the
+    // clean legacy fallback whose surviving edge write the seam replaces.
+    // An owned BEHIND now receives its own P directly (#1038).
+    edgeBehind1131.data[(31 * 64 + 31) * 4 + 3] = 127;
+    edgeBehind1131.data[(32 * 64 + 30) * 4 + 3] = 127;
     const edgeLayers1131: Layer[] = [
       { ...base.full.layers.find(p => p.name === 'topwear')!, pixels: edgeBehind1131, left: 0, top: 0, right: 64, bottom: 64, opaquePx: 56 * 56 },
       { ...base.full.layers.find(p => p.name === 'bottomwear')!, pixels: edgeFront1131, left: 0, top: 0, right: 64, bottom: 64, opaquePx: 28 * 56 },

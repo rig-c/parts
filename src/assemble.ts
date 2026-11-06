@@ -1,10 +1,11 @@
+import { paintingReceivers, rawPaintingOwner } from './paintingowner.ts';
 import { hiddenExtentProblems, type HiddenExtentDeclaration, type HiddenExtentSource } from './hiddenextent.ts';
 import { headBoxInside } from './headbox.ts';
 import { edgePairResiduals, type EdgeResidualReport } from './edgeresidual.ts';
 import type { SupportDomain } from './coincide.ts';
 import { type SeamRule } from './seamrule.ts';
 import { DEFAULT_GROUND, DEFAULT_PROJECT_RULE, type Ground, type ProjectRule } from './projectrule.ts';
-import { paintingEdges, type PaintingEdgeSkips } from './paintingedges.ts';
+import { paintingEdges, type PaintingAllocationReading, type PaintingEdgeSkips } from './paintingedges.ts';
 import { edgeLength } from './length.ts';
 import { materialSource, type MaterialSource, materialRows, polygonMaterialEdges, type MaterialRow, type MaterialEdge, type PlacedArt } from './cutmaterial.ts';
 import { unionTakenSources } from './takesource.ts';
@@ -4785,6 +4786,7 @@ export interface AssembleResult {
 
 /** Issue #953: the edge pixels `paintingEdges` resolved, the part pixels it changed, and the edge pixels it left, by reason. */
 export interface PaintingEdgeReading {
+  allocation?: PaintingAllocationReading;
   resolved: number;
   unseparated: number;
   changed: number;
@@ -5859,7 +5861,23 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       }
       return whole;
     };
-    const e = paintingEdges(stack.map(onRig), srcr, {
+    const canvases = stack.map(onRig);
+    const owner = rawPaintingOwner(input.plan.map(([name, run, tag]) => {
+      const layer = input[run].layers.find(l => l.name === tag)!;
+      return { name, raster: layerToRig(placeLayer(layer, input.resolution), frame, run) };
+    }), W * H);
+    const lineage: Array<[string, string]> = [
+      ...input.cuts.map(c => [c.from, c.into] as [string, string]),
+      ...Object.values(input.limbs ?? {}).flatMap(l => l.segments.flatMap(segment => [
+        [segment.from, segment.part] as [string, string],
+        ...(segment.hybrid === undefined ? [] : [[segment.from, segment.hybrid.part] as [string, string]]),
+      ])),
+    ];
+    const receivers = paintingReceivers(owner, order.map((d, i) => ({
+      name: stack[i].record.name, image: canvases[i], region: 'patch' in d ? null : pieceAt(d).b.region,
+    })), lineage);
+    const e = paintingEdges(canvases, srcr, {
+      owner: receivers,
       painted: supportPainted,
       figure: visibleFigure,
       ...(input.declaredFigure === undefined ? {} : { declaredFigure: input.declaredFigure }),
@@ -5880,7 +5898,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     order.forEach((d, i) => {
       if (!('patch' in d) && e.changed[i].data.some((v) => v === 1)) edged.set(pieceAt(d).name, e.changed[i]);
     });
-    edgeReading = { resolved: e.resolved, unseparated: e.unseparated, changed: e.changed.reduce((a, m) => a + m.data.reduce((x, v) => x + v, 0), 0), skipped: e.skipped };
+    edgeReading = { resolved: e.resolved, unseparated: e.unseparated, changed: e.changed.reduce((a, m) => a + m.data.reduce((x, v) => x + v, 0), 0), skipped: e.skipped, allocation: e.allocation };
   }
   const pushedOf: FringePushed[][] = plan.map(() => []);
   const pushedOfCut: FringePushed[][] = cuts.map(() => []);
