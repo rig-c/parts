@@ -8201,3 +8201,27 @@ Internal `SeamSupport.drawings` never enters check JSON. Named requirement
 | `requirements.lines.*.*` | Open requirement figures; the dictionary rows and nested object arrays are schema checked. |
 | `sets.*.RECOMPOSITE_HOLES.*` | Open alternate reported figures; every emitted nested object row is schema checked. |
 <!-- check-row-table:end -->
+
+## Relocating config file references
+
+Import `configFileReferences` and, for annotations, `ConfigFileReference` from
+`@rig-c/parts/src/config.ts` (issue #1134). Pass the JSON-parsed config object before
+loading it. Each result exposes `at`, the dotted field path, `value`, the path
+as declared, and `set(next)`, which writes back to that field. Enumeration
+leaves the object unchanged, skips absent, empty and non-string fields, and
+excludes built-in skeleton names. It performs no validation or file reads;
+use the normal loader for diagnostics.
+
+```ts
+import { configFileReferences } from '@rig-c/parts/src/config.ts';
+import { dirname, resolve } from 'node:path';
+
+for (const reference of configFileReferences(raw)) {
+  reference.set(resolve(dirname(sourceConfig), reference.value));
+}
+```
+
+Here `sourceConfig` is the absolute original config filename and `raw` is its
+JSON-parsed object. Serialize that object at the destination after copying any
+referenced files; callers that copy files can instead set their new relative
+paths. The enumerator derives membership from the loader's own declarations.

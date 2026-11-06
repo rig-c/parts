@@ -29,6 +29,19 @@ below). A build's bytes are not promised across versions. A later version may mo
 them, and when it does, the change that moves them declares which bytes and why (the
 winding change of #133 is the example: [MIGRATION.md](MIGRATION.md)).
 
+## Programmatic config file references
+
+`@rig-c/parts/src/config.ts` exports `configFileReferences(raw: unknown):
+ConfigFileReference[]` and the `ConfigFileReference` type (issue #1134).
+Each reference has `at: string` (a dotted config field), `value: string`
+(the declared path), and `set(value: string): void`, which changes that field
+on the supplied object. Enumeration itself does not mutate, validate, read files,
+or resolve paths. Empty and non-string values are omitted; invalid fields remain
+for the loader to diagnose. Built-in control skeleton names are excluded.
+The loader's file-field declarations determine membership; no separate list is
+maintained. Resolve `value` against the source config directory when relocating.
+Existing deep package paths remain available.
+
 ## Commands and flags
 
 Exit codes are part of the interface: **0** the command did what it says, **1** it
