@@ -228,10 +228,17 @@ jobs:
 
       - name: Read the tested-tree verdict
         id: reuse
-        uses: rig-c/core/.github/actions/tree-verdict@b2e5cfb5f24b8743ee2a05298a34984ee47485a3
+        uses: rig-c/core/.github/actions/tree-verdict@08b45c6fbd3664a0dc77050c04b7359d2346f7a6
         with:
           declaration: scripts/tree-verdict.json
           purpose: publish
+
+      # Cross-package release gate (#741): pack this checkout, install it into an
+      # empty directory, build a character with `rig-parts build --all-sets`
+      # (`skeleton.model.json` + `sets.json` with `focus`), and load the result
+      # through a fresh install of `@rig-c/play@latest` before `npm publish` runs.
+      - name: Gate parts output through @rig-c/play
+        run: bun run smoke -- --case clean
 
       - name: Gate every publication through the lifecycle reader
         id: publication-reader
@@ -240,13 +247,6 @@ jobs:
           TREE_VERDICT_PATH: ${{ steps.reuse.outputs.verdict-path }}
           GITHUB_TOKEN: ${{ github.token }}
         run: node "$TREE_VERDICT_TOOLS/lifecycle.mjs" --declaration scripts/tree-verdict.json --verdict-path "$TREE_VERDICT_PATH"
-
-      # Cross-package release gate (#741): pack this checkout, install it into an
-      # empty directory, build a character with `rig-parts build --all-sets`
-      # (`skeleton.model.json` + `sets.json` with `focus`), and load the result
-      # through a fresh install of `@rig-c/play@latest` before `npm publish` runs.
-      - name: Gate parts output through @rig-c/play
-        run: bun run smoke -- --case clean
 
       # The publication reader gates this checkout before packing. Canonical
       # and alias publications use tarballs, preserving that single gate.
