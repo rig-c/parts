@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.23.3](https://github.com/rig-c/parts/compare/v2.23.2...v2.23.3) (2026-11-06)
+
+
+### Bug Fixes
+
+* **assemble:** test held allocation exclusion on its relabel path and report alternates' transfers ([#1151](https://github.com/rig-c/parts/issues/1151)) ([ca272cc](https://github.com/rig-c/parts/commit/ca272cc1b63183d12504466a79a338b45e8a2e89))
+
 ## [2.23.2](https://github.com/rig-c/parts/compare/v2.23.1...v2.23.2) (2026-11-06)
 
 
