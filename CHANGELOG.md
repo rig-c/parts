@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.23.2](https://github.com/rig-c/parts/compare/v2.23.1...v2.23.2) (2026-11-06)
+
+
+### Bug Fixes
+
+* **assemble:** report owner coverage transfers ([#1148](https://github.com/rig-c/parts/issues/1148)) ([184e1bb](https://github.com/rig-c/parts/commit/184e1bbd9bc4dfefb39215494c46cb7d91a2c503))
+
 ## [2.23.1](https://github.com/rig-c/parts/compare/v2.23.0...v2.23.1) (2026-11-06)
 
 
