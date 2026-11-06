@@ -1,3 +1,4 @@
+import { STAGE_MAP_FILE } from './provenance.ts';
 import { withoutCheckRows } from './checkrow.ts';
 import { readSetupFigureMask } from './setupfiguremask.ts';
 import { EDGE_RESIDUAL_FILE, edgeResidualLines } from './edgeresidual.ts';
@@ -727,6 +728,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         ...(fields.armSplit !== undefined && altPlan.some((e) => e[1] === 'full' && (e[2] === 'handwear-r' || e[2] === 'handwear-l')) ? { armSplit: fields.armSplit } : {}),
         ...(fields.headFaceUnderfill === undefined ? {} : { headFaceUnderfill: fields.headFaceUnderfill }),
         ...(fields.yieldRefused === undefined ? {} : { yieldRefused: fields.yieldRefused }),
+        ...(fields.stageMap === undefined ? {} : { stageMap: fields.stageMap }),
         ...(fields.ground === undefined ? {} : { ground: fields.ground }),
         ...(alternateFigure === undefined ? {} : { declaredFigure: alternateFigure }),
         ...(fields.turnMovingPair === undefined ? {} : { turnMovingPair: fields.turnMovingPair }),
@@ -753,6 +755,10 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       .filter(({ record }) => coveredSet.has(record.name))
       .flatMap(({ record, image, depthImage }) => [{ name: `${alt.name}_${record.name}`, image }, ...(depthImage === undefined || record.depth === undefined ? [] : [{ name: `${alt.name}_${record.depth.image.slice(0, -4)}`, image: depthImage }])]);
     const keptRecords = altRes.parts.parts.filter((p) => coveredSet.has(p.name)).map(p => p.depth === undefined ? p : { ...p, depth: { ...p.depth, image: `${alt.name}_${p.depth.image}` } });
+    if (result.stageMap !== undefined && altRes.stageMap !== undefined) {
+      altRes.stageMap.parts = altRes.stageMap.parts.filter(p => coveredSet.has(p.name));
+      (result.stageMap.alternates ??= []).push({ name: alt.name, map: altRes.stageMap });
+    }
     const slots: Record<string, string> = {};
     for (const r of keptRecords) slots[altFront.has(r.name) ? `${r.name}${FRONT_SUFFIX}` : r.name] = `${alt.name}_${r.name}`;
     let altRecomposite = altRes.parts.recomposite as RecompositeRecord;
@@ -834,6 +840,9 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     sha256: createHash('sha256').update(paintingBytes).digest('hex'), resample: 'lanczos3-rgb-opaque' };
   writeFileSync(join(dirname(outs.partsJson), PAINTING_IN_RIG_FILE), paintingBytes);
   writeParts(outs.partsJson, result.parts);
+  const stageMapPath = join(dirname(outs.partsJson), STAGE_MAP_FILE);
+  if (result.stageMap === undefined) rmSync(stageMapPath, { force: true });
+  else writeFileSync(stageMapPath, JSON.stringify(result.stageMap) + '\n');
   const residualPath = join(dirname(outs.partsJson), EDGE_RESIDUAL_FILE);
   if (result.edgeResiduals === undefined) rmSync(residualPath, { force: true });
   else writeFileSync(residualPath, JSON.stringify(result.edgeResiduals, null, 2) + '\n');

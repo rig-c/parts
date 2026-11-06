@@ -11,6 +11,32 @@ export const AUTOMATIC_WRITERS = {
   seamOverride: -9, armSplit: -10, headFaceUnderfill: -11, ghostCleanup: -12, unattributed: -13, paintingExtension: -14, paintingEdge: -15,
 } as const;
 export type AutomaticWriter = keyof typeof AUTOMATIC_WRITERS;
+/** Sidecar codes share provenance's writer IDs. Excluded has a separate code. */
+export const EXCLUDED_PIXEL = -2147483648;
+export const NOT_OVERRIDDEN_PIXEL = -2147483647;
+export const STAGE_MAP_FILE = 'stage-map.json';
+export interface PartStageMap {
+  name: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  excluded_px: number;
+  /** [writer ID, run length], row-major in the cropped part, across row boundaries. */
+  runs: Array<[number, number]>;
+  /** Prior buffer writer only where a final seamOverride classification survives. */
+  pre_seam_writer_runs: Array<[number, number]>;
+}
+export interface StageMap {
+  schema: 'rig-parts-stage-map/1';
+  rig_size: [number, number];
+  automatic: typeof AUTOMATIC_WRITERS;
+  /** Positive ID n resolves to edits[n - 1]. */
+  edits: string[];
+  parts: PartStageMap[];
+  alternates?: Array<{ name: string; map: StageMap }>;
+}
+
 export interface PixelProvenance {
   /** Scalar transport omitted only for fully explicit unit consumers (#877). */
   depth?: AuthoredUnitDepth;
@@ -43,14 +69,21 @@ export function compactValueBaseline(raw: Raster): ValueBaseline {
 /** Value equality with the raw normalized See-through baseline wins first.
  * Otherwise the last stage that CHANGED RGBA wins; buffer copies inherit IDs.
  * A null baseline is explicit for authored layers/painting patches. */
-export function pixelProvenance(image: Raster, x: number, y: number, width: number, writers: Int32Array | null, edits: readonly string[], patchId = 0, baseline: Raster | ValueBaseline | null = null): PixelProvenance {
+export function pixelProvenance(image: Raster, x: number, y: number, width: number, writers: Int32Array | null, edits: readonly string[], patchId = 0, baseline: Raster | ValueBaseline | null = null, map?: PartStageMap, beforeSeam?: ReadonlyMap<number, number>): PixelProvenance {
   const out: PixelProvenance = { unchanged_layer_px: 0, hand_px: 0, automatic_px: 0, edits: [], automatic: [] };
   const counts = new Map<number, number>();
   const reference = baseline === null ? null : 'image' in baseline ? baseline.image : baseline;
   const bx = baseline !== null && 'image' in baseline ? baseline.x : 0;
   const by = baseline !== null && 'image' in baseline ? baseline.y : 0;
   for (let j = 0; j < image.height; j++) for (let i = 0; i < image.width; i++) {
-    if (image.data[(j * image.width + i) * 4 + 3] <= OPAQUE_ALPHA_ABOVE) continue;
+    if (image.data[(j * image.width + i) * 4 + 3] <= OPAQUE_ALPHA_ABOVE) {
+      if (map !== undefined) {
+        appendStageRun(map.runs, EXCLUDED_PIXEL);
+        appendStageRun(map.pre_seam_writer_runs, EXCLUDED_PIXEL);
+        map.excluded_px++;
+      }
+      continue;
+    }
     const q = (y + j) * width + x + i;
     const u = x + i - bx, v = y + j - by;
     const same = reference !== null && u >= 0 && v >= 0 && u < reference.width && v < reference.height &&
@@ -58,6 +91,11 @@ export function pixelProvenance(image: Raster, x: number, y: number, width: numb
     const previous = writers?.[q] ?? patchId;
     // Unknown lineage is reported explicitly, never invented as unchanged.
     const id = same ? 0 : previous === 0 ? AUTOMATIC_WRITERS.unattributed : previous;
+    if (map !== undefined) {
+      appendStageRun(map.runs, id);
+      appendStageRun(map.pre_seam_writer_runs, id === AUTOMATIC_WRITERS.seamOverride
+        ? beforeSeam?.get(q) ?? NOT_OVERRIDDEN_PIXEL : NOT_OVERRIDDEN_PIXEL);
+    }
     if (id > 0) out.hand_px++;
     else if (id < 0) out.automatic_px++;
     else out.unchanged_layer_px++;
@@ -66,6 +104,13 @@ export function pixelProvenance(image: Raster, x: number, y: number, width: numb
   out.edits = edits.flatMap((edit, i) => counts.has(i + 1) ? [{ edit, px: counts.get(i + 1) as number }] : []);
   out.automatic = (Object.keys(AUTOMATIC_WRITERS) as AutomaticWriter[]).flatMap(stage => counts.has(AUTOMATIC_WRITERS[stage]) ? [{ stage, px: counts.get(AUTOMATIC_WRITERS[stage]) as number }] : []);
   return out;
+}
+
+/** Append directly to compressed output without a second rig-grid buffer. */
+function appendStageRun(runs: Array<[number, number]>, id: number): void {
+  const last = runs[runs.length - 1];
+  if (last !== undefined && last[0] === id) last[1]++;
+  else runs.push([id, 1]);
 }
 
 /** The reader and selftests share this arithmetic check; no hand-edit gate. */

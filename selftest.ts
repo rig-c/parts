@@ -52,7 +52,7 @@ import { softTrailBounds, cleanedOccluderFixture, softOccluderFixture, softTrail
 import { runYieldContourChecks } from './tools/check_yield_contour.ts';
 import { yieldRimFixture, rimCount, rimPixel } from './fixtures/yield_rim.ts';
 import { writeHybridFixture } from './fixtures/hybrid_limb.ts';
-import { AUTOMATIC_WRITERS as AW817, compactValueBaseline, pixelProvenance, provenanceAddsUp, provenanceLines } from './src/provenance.ts';
+import { AUTOMATIC_WRITERS as AW817, EXCLUDED_PIXEL, NOT_OVERRIDDEN_PIXEL, STAGE_MAP_FILE, type PartStageMap, type StageMap, compactValueBaseline, pixelProvenance, provenanceAddsUp, provenanceLines } from './src/provenance.ts';
 import { runTurnBlendChecks } from './tools/check_turn_blend.ts';
 import { runTurnOverlapChecks } from './tools/check_turn_overlap.ts';
 import { runTurnRollChecks } from './tools/check_turn_roll.ts';
@@ -32864,6 +32864,170 @@ function runAssembleSuite(): number {
       projectedCut817.parts.cut_ownership?.[0].moved_in_opaque_px === 300,
       `piece value ${JSON.stringify(projectedPiece817?.provenance)}; ownership ${JSON.stringify(projectedCut817.parts.cut_ownership)}`,
       'the original generated rectangle is shifted +10 red, within projection drift. Its half contains 8*26=208 genuinely recoloured core pixels and 92 unchanged edge pixels. Cutting copies their existing lineage; it moves 300 pixels on the independent ownership axis');
+
+    // #1131: derive coordinate attribution through production assembly, then
+    // reconcile an independent RLE histogram with every aggregate population.
+    const mapped1131 = assemble({ ...base, seamRule: 'near-white', stageMap: true });
+    const mapAgrees1131 = (map: PartStageMap, record: PartRecord, edits: readonly string[]): boolean => {
+      const counts = new Map<number, number>();
+      for (const [id, length] of map.runs) {
+        if (!Number.isInteger(length) || length <= 0) return false;
+        counts.set(id, (counts.get(id) ?? 0) + length);
+      }
+      const value = record.provenance;
+      const automatic = Object.values(AW817);
+      return value !== undefined && map.x === record.x && map.y === record.y && map.w === record.w && map.h === record.h &&
+        map.runs.reduce((n, r) => n + r[1], 0) === record.w * record.h &&
+        (counts.get(EXCLUDED_PIXEL) ?? 0) === map.excluded_px && record.w * record.h - map.excluded_px === record.opaque_px &&
+        (counts.get(0) ?? 0) === value.unchanged_layer_px &&
+        [...counts].filter(([id]) => id > 0).reduce((n, [, px]) => n + px, 0) === value.hand_px &&
+        [...counts].filter(([id]) => id < 0 && id !== EXCLUDED_PIXEL).reduce((n, [, px]) => n + px, 0) === value.automatic_px &&
+        edits.every((edit, i) => (counts.get(i + 1) ?? 0) === (value.edits.find(e => e.edit === edit)?.px ?? 0)) &&
+        Object.entries(AW817).every(([stage, id]) => (counts.get(id) ?? 0) === (value.automatic.find(e => e.stage === stage)?.px ?? 0)) &&
+        [...counts.keys()].every(id => id === 0 || id === EXCLUDED_PIXEL || (id > 0 ? id <= edits.length : automatic.includes(id as typeof automatic[number])));
+    };
+    const hairMap1131 = mapped1131.stageMap!.parts.find(p => p.name === 'hair_back')!;
+    const decode1131 = (map: PartStageMap): number[] => map.runs.flatMap(([id, length]) => Array<number>(length).fill(id));
+    const at1131 = (map: PartStageMap, x: number, y: number): number => decode1131(map)[(y - map.y) * map.w + x - map.x];
+    const wrongWriter1131 = structuredClone(hairMap1131);
+    wrongWriter1131.runs = wrongWriter1131.runs.map(([id, n]) => [id === AW817.extend ? AW817.growRim : id, n]);
+    const wrongDomain1131 = { ...hairMap1131, excluded_px: hairMap1131.excluded_px + 1 };
+    say('AS1131_PRODUCTION_COORDINATES_RECONCILE_EVERY_POPULATION',
+      mapped1131.stageMap!.parts.every(map => mapAgrees1131(map, mapped1131.parts.parts.find(p => p.name === map.name)!, mapped1131.stageMap!.edits)) &&
+      at1131(hairMap1131, 38, 33) === AW817.extend && at1131(hairMap1131, 37, 33) === AW817.growRim &&
+      at1131(hairMap1131, 38, 10) === 0 && at1131(hairMap1131, 37, 10) === EXCLUDED_PIXEL &&
+      !mapAgrees1131(wrongWriter1131, mapped1131.parts.parts[0], mapped1131.stageMap!.edits) &&
+      !mapAgrees1131(wrongDomain1131, mapped1131.parts.parts[0], mapped1131.stageMap!.edits) &&
+      result.stageMap === undefined && assemble({ ...base, seamRule: 'near-white', stageMap: false }).stageMap === undefined &&
+      serializeParts(mapped1131.parts) === got && mapped1131.images.every((p, i) => Buffer.compare(Buffer.from(p.image.data), Buffer.from(result.images[i].image.data)) === 0),
+      'hair (38,33)=extend, (37,33)=growRim, (38,10)=unchanged, (37,10)=excluded. Wrong stage and excluded-count plants rejected',
+      'production runs write the IDs; independent decoding and all histogram bins catch label swaps hidden by automatic totals, while the observer leaves records and artwork identical');
+    const mappedPatch1131 = assemble({ ...base, seamRule: 'near-white', stageMap: true,
+      patches: [{ name: 'map_patch', box: [0, 40, 8, 48], alpha: 'box', draw: 'front' }] });
+    const sequential1131 = assemble({ ...base, seamRule: 'near-white', stageMap: true,
+      full: withLayer({ ...base.full, layers: base.full.layers.filter(l => l.name !== 'bottomwear') }, {
+        ...base.full.layers.find(l => l.name === 'bottomwear')!, name: 'author:surface',
+        tag: readLayerTag('author:surface') as NonNullable<ReturnType<typeof readLayerTag>>,
+      }), plan: base.plan.map(([name, run, tag]) => [name, run, name === 'bottomwear' ? 'author:surface' : tag]) });
+    const sequentialMap1131 = sequential1131.stageMap!.parts.find(p => p.name === 'bottomwear')!;
+    say('AS1131_HAND_EDITS_AND_LAST_VALUE_CHANGING_WRITER',
+      mappedPatch1131.stageMap!.parts.every(map => mapAgrees1131(map, mappedPatch1131.parts.parts.find(p => p.name === map.name)!, mappedPatch1131.stageMap!.edits)) &&
+      mappedPatch1131.stageMap!.parts.find(p => p.name === 'map_patch')!.runs.some(([id]) => id > 0) &&
+      at1131(sequentialMap1131, 50, 32) === AW817.seamOverride && sequential1131.stageMap!.edits.includes('full:author:surface') &&
+      mapAgrees1131(sequentialMap1131, sequential1131.parts.parts.find(p => p.name === 'bottomwear')!, sequential1131.stageMap!.edits),
+      'patch pixels resolve through the positive edit dictionary. author:surface writes Z then seamOverride writes C at (50,32)',
+      'the last RGBA-changing production stage supersedes authored input at the same coordinate; unchanged raw equality still wins over assignment-only writes');
+    const regionOriginal1131: AssembleInput = { ...base, seamRule: 'near-white', stageMap: true,
+      full: { ...base.full, layers: base.full.layers.map(layer => {
+        const label = layer.name === 'topwear' ? 'author:upper' : layer.name === 'bottomwear' ? 'author:lower' : layer.name;
+        return { ...layer, name: label, tag: readLayerTag(label) as NonNullable<ReturnType<typeof readLayerTag>> };
+      }) }, plan: base.plan.map(([name, run, tag]) => [name, run, name === 'topwear' ? 'author:upper' : name === 'bottomwear' ? 'author:lower' : tag]) };
+    const regionBefore1131 = assemble(regionOriginal1131);
+    const regionAfter1131 = assemble({ ...regionOriginal1131,
+      full: { ...regionOriginal1131.full, layers: [...regionOriginal1131.full.layers].reverse() },
+      regionTake: { full: regionOriginal1131.full, head: regionOriginal1131.head, targets: ['bottomwear'] } });
+    const restoredMap1131 = regionAfter1131.stageMap!.parts.find(p => p.name === 'topwear')!;
+    const restoredRecord1131 = regionAfter1131.parts.parts.find(p => p.name === 'topwear')!;
+    say('AS1131_REGION_TAKE_RESTORES_NEIGHBOUR_MAP_AND_EDIT_DICTIONARY',
+      regionBefore1131.stageMap!.edits.join() !== regionAfter1131.stageMap!.edits.join() &&
+      regionAfter1131.stageMap!.parts.every(map => mapAgrees1131(map, regionAfter1131.parts.parts.find(p => p.name === map.name)!, regionAfter1131.stageMap!.edits)) &&
+      regionAfter1131.stageMap!.edits[at1131(restoredMap1131, 10, 20) - 1] === 'full:author:upper' &&
+      !mapAgrees1131(regionBefore1131.stageMap!.parts.find(p => p.name === 'topwear')!, restoredRecord1131, regionAfter1131.stageMap!.edits),
+      'reversed source enumeration changes positive IDs. Restored non-target map resolves author:upper by name. Unremapped plant fails',
+      'region-take restores neighbour artwork and records from its counterfactual, so the observer restores that same map and translates the counterfactual edit namespace');
+    const priorSeam1131 = (map: PartStageMap): number[] => decode1131({ ...map, runs: map.pre_seam_writer_runs });
+    const seamMap1131 = mapped1131.stageMap!.parts.find(p => p.name === 'bottomwear')!;
+    const sequentialPrior1131 = priorSeam1131(sequentialMap1131);
+    const priorAgrees1131 = (map: PartStageMap): boolean => {
+      const last = decode1131(map), prior = priorSeam1131(map);
+      return last.length === prior.length && prior.every((id, i) => last[i] === EXCLUDED_PIXEL ? id === EXCLUDED_PIXEL
+        : id === NOT_OVERRIDDEN_PIXEL || last[i] === AW817.seamOverride);
+    };
+    const badPrior1131 = structuredClone(hairMap1131);
+    badPrior1131.pre_seam_writer_runs = [[AW817.paintingEdge, badPrior1131.w * badPrior1131.h]];
+    say('AS1131_PRE_SEAM_WRITER_IS_SPARSE_AND_DISTINCT_FROM_ALPHA_HISTORY',
+      mapped1131.stageMap!.parts.every(priorAgrees1131) && sequential1131.stageMap!.parts.every(priorAgrees1131) &&
+      priorSeam1131(seamMap1131).every(id => id === 0) &&
+      sequentialPrior1131.every(id => sequential1131.stageMap!.edits[id - 1] === 'full:author:surface') &&
+      !priorAgrees1131(badPrior1131) && priorSeam1131(hairMap1131).includes(NOT_OVERRIDDEN_PIXEL),
+      'final seam pixels retain the previous buffer ID, including an authored ID, and other pixels carry a dedicated code',
+      'the production seam callback records its prior ID in sparse overrides, while a planted prior writer outside a final seam classification is rejected');
+    // The eight-neighbour ring rule reaches a diagonal purple sample,
+    // while four-connected piece preservation refuses its new FRONT island.
+    // BEHIND's soft blue is made opaque, then the final seam writes purple.
+    const edgePainting1131 = newRaster(64, 64), edgeBehind1131 = newRaster(64, 64), edgeFront1131 = newRaster(64, 64);
+    for (let q = 0; q < 64 * 64; q++) edgePainting1131.data.set([255, 255, 255, 255], q * 4);
+    for (let y = 4; y < 60; y++) for (let x = 4; x < 60; x++) {
+      const q = (y * 64 + x) * 4;
+      edgeBehind1131.data.set([0, 0, 200, 200], q);
+      edgePainting1131.data.set(x < 32 ? [0, 0, 200, 255] : [200, 0, 0, 255], q);
+      if (x >= 32) edgeFront1131.data.set([200, 0, 0, 255], q);
+    }
+    edgePainting1131.data.set([100, 0, 100, 255], (31 * 64 + 31) * 4);
+    edgePainting1131.data.set([100, 0, 100, 255], (32 * 64 + 30) * 4);
+    const edgeLayers1131: Layer[] = [
+      { ...base.full.layers.find(p => p.name === 'topwear')!, pixels: edgeBehind1131, left: 0, top: 0, right: 64, bottom: 64, opaquePx: 56 * 56 },
+      { ...base.full.layers.find(p => p.name === 'bottomwear')!, pixels: edgeFront1131, left: 0, top: 0, right: 64, bottom: 64, opaquePx: 28 * 56 },
+    ];
+    const edgeOverlap1131 = assemble({ ...base, source: edgePainting1131, full: { ...base.full, layers: edgeLayers1131 },
+      head: { ...base.head, layers: [] }, resolution: 64, headBox: [0, 0, 64, 64], rigScale: 1,
+      plan: [['behind', 'full', 'topwear'], ['front', 'full', 'bottomwear']], extend: [],
+      seamRule: 'near-white', projectRule: 'visible', stageMap: true });
+    const edgeMap1131 = edgeOverlap1131.stageMap!.parts.find(p => p.name === 'behind')!;
+    const edgeAt1131 = (32 - edgeMap1131.y) * edgeMap1131.w + 30 - edgeMap1131.x;
+    say('AS1131_GENERATED_PAINTING_EDGE_THEN_SEAM_NAMES_BOTH_PRODUCTION_WRITERS',
+      decode1131(edgeMap1131)[edgeAt1131] === AW817.seamOverride && priorSeam1131(edgeMap1131)[edgeAt1131] === AW817.paintingEdge &&
+      mapAgrees1131(edgeMap1131, edgeOverlap1131.parts.parts.find(p => p.name === 'behind')!, edgeOverlap1131.stageMap!.edits),
+      `generated purple at (30,32): last ${decode1131(edgeMap1131)[edgeAt1131]}, prior ${priorSeam1131(edgeMap1131)[edgeAt1131]}`,
+      'the production edge pass raises a soft BEHIND sample while piece preservation refuses a disconnected FRONT island, then the RGB-only seam corrects the surviving blue to the purple painting');
+    const cfg1131 = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')) as Record<string, unknown>;
+    const assembly1131 = cfg1131.assemble as Record<string, unknown>;
+    assembly1131.stage_map = true;
+    const valid1131 = [refusals(() => parseConfig(cfg1131)), refusals(() => parseEarlyConfig(cfg1131, 'assemble')), refusals(() => parseEarlyConfig(cfg1131, 'layers'))];
+    assembly1131.stage_map = 'true';
+    const invalid1131 = [refusals(() => parseConfig(cfg1131)), refusals(() => parseEarlyConfig(cfg1131, 'assemble')), refusals(() => parseEarlyConfig(cfg1131, 'layers'))];
+    say('AS1131_CONFIG_BOOLEAN_AT_EVERY_LOADER_DOOR', valid1131.every(e => e === null) &&
+      invalid1131.every(e => e?.problems.some(p => p.code === 'CONFIG_FIELD_TYPE' && p.object === 'config.assemble.stage_map')),
+      'true accepted by full/assemble/layers. String true refused at config.assemble.stage_map',
+      'the production full and early config readers must accept the declared observer and refuse a mistyped switch by name');
+    const stageDir1131 = join(dir, 'map-stage');
+    const stageOut1131 = { partsJson: join(stageDir1131, 'parts.json'), partsDir: join(stageDir1131, 'parts'), recomposite: join(stageDir1131, 'recomposite.png'), errorMap: join(stageDir1131, 'error.png') };
+    const stageInput1131 = { source: join(dir, 'painting.png'), full: join(dir, 'full'), head: join(dir, 'head'), config: join(dir, 'config.json') };
+    const snapshot1131 = (): string => JSON.stringify(filesUnder(stageDir1131).filter(p => p !== STAGE_MAP_FILE).map(p => [p, readFileSync(join(stageDir1131, p)).toString('base64')]));
+    const beforeFiles1131 = assembleStage(stageInput1131, stageOut1131, () => {});
+    const offFiles1131 = snapshot1131();
+    assembly1131.stage_map = true;
+    writeFileSync(stageInput1131.config, JSON.stringify(cfg1131));
+    const onStage1131 = assembleStage(stageInput1131, stageOut1131, () => {});
+    const sidecar1131 = readFileSync(join(stageDir1131, STAGE_MAP_FILE), 'utf8');
+    const emitted1131 = JSON.parse(sidecar1131) as StageMap;
+    const onFiles1131 = snapshot1131();
+    assembleStage(stageInput1131, stageOut1131, () => {});
+    const deterministic1131 = sidecar1131 === readFileSync(join(stageDir1131, STAGE_MAP_FILE), 'utf8');
+    assembly1131.stage_map = false;
+    writeFileSync(stageInput1131.config, JSON.stringify(cfg1131));
+    assembleStage(stageInput1131, stageOut1131, () => {});
+    say('AS1131_SIDECAR_EMISSION_NEUTRALITY_DETERMINISM_AND_STALE_REMOVAL',
+      beforeFiles1131.stageMap === undefined && emitted1131.schema === 'rig-parts-stage-map/1' &&
+      JSON.stringify(emitted1131) === JSON.stringify(onStage1131.stageMap) &&
+      offFiles1131 === onFiles1131 && offFiles1131 === snapshot1131() && deterministic1131 && !existsSync(join(stageDir1131, STAGE_MAP_FILE)),
+      'complete generated output tree unchanged off/on/off. Deterministic sidecar only when enabled. Reuse removes stale sidecar',
+      'the production stage loads config, emits the compressed map beside parts.json only after green, and clears the observer artifact when the next build disables it');
+    assembly1131.stage_map = true;
+    assembly1131.alternates = [{ name: 'map_alt', source: 'painting.png', full: 'full', head: 'head', parts: ['topwear'] }];
+    writeFileSync(stageInput1131.config, JSON.stringify(cfg1131));
+    const alternate1131 = assembleStage(stageInput1131, stageOut1131, () => {});
+    const alternateMap1131 = alternate1131.stageMap?.alternates?.[0];
+    const alternateRecords1131 = alternate1131.parts.alternates?.[0];
+    say('AS1131_ALTERNATE_MAPS_COVER_ONLY_EMITTED_RECORDS',
+      alternateMap1131?.name === 'map_alt' && alternateRecords1131 !== undefined && alternateMap1131.map.parts.length === alternateRecords1131.records.length &&
+      alternateMap1131.map.parts.every(map => mapAgrees1131(map, alternateRecords1131.records.find(p => p.name === map.name)!, alternateMap1131.map.edits)) &&
+      alternateMap1131.map.parts.length === 1 && alternateMap1131.map.parts[0].name === 'topwear',
+      'one alternate topwear record with one reconciled map. Non-emitted parts omitted',
+      'alternate assembly uses its own writer dictionary and crops, while the sidecar retains only records the production stage emits');
+    delete assembly1131.alternates;
+    delete assembly1131.stage_map;
+    writeFileSync(stageInput1131.config, JSON.stringify(cfg1131));
 
     runGhostProvenanceCases(say);
     const covered = EXPECTED_PARTS.parts.reduce((s, p) => s + p.opaque_px, 0);
