@@ -193,7 +193,20 @@ export interface PaintingAllocationReading {
   }>;
 }
 
+/** Allocation status after piece guarding, before transfer membership is collected. */
+export interface PaintingAllocationEvent {
+  readonly p: number;
+  readonly front: number;
+  readonly behind: number;
+  readonly target: number;
+  readonly affected: readonly number[];
+  readonly status: string;
+  readonly reason: string;
+}
+
 export interface PaintingEdgeOptions {
+  /** Observes detached event values after restoration, without changing allocation. */
+  allocationEvent?: (event: PaintingAllocationEvent) => void;
   /** Named supplier and explicit receiver contract, frozen before the edge pass. */
   owner?: PaintingReceivers;
   /**
@@ -842,6 +855,7 @@ function applyPaintingEdges(
     for (const p of writes.keys()) options.written?.(i, p);
   });
   for (const [p, front] of restore) if (!planned[front].has(p)) options.written?.(front, p);
+  for (const event of events) options.allocationEvent?.({ ...event, affected: [...event.affected] });
   // The legacy FRONT surface was moved to an accepted BEHIND owner. Read the
   // applied output, including restoration: a held clear is never a transfer.
   if (reading !== undefined && allocation !== undefined && existing !== undefined) {

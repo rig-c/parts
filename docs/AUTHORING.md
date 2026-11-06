@@ -820,6 +820,26 @@ strand order nor motion-space gaps.
 `PAINTING_EDGE_COVERAGE_TRANSFER` prints the pixel count and report filename.
 The report observes the existing allocation and leaves its raster writes intact.
 
+Each evaluated alternate writes `painting_allocation.<encoded-set-name>.json`,
+including an empty reading. `set`, `grid`, the source painting's SHA-256 and
+`stage` qualify its native coordinates. `membership` is
+`pre-filter-alternate-assembly`, the alternate evaluation before export
+filtering. It excludes inherited base parts from that evaluation. Partial sets
+list `inherited_parts` and `hidden_parts`; `output_assets` maps evaluated and
+base part names to exported image filenames relative to the parts directory,
+with inherited parts mapped to base images and hidden or filtered parts to null.
+The CLI names each set and its report. An empty primary transfer membership does
+not suppress an alternate reading. This is the meaning of primary absent with
+alternate present here; the primary reading itself remains present under visible
+projection.
+
+On reuse, the primary report's `written_reports` list identifies owned alternate
+reports for cleanup. Only those recorded paths are removed, and current
+configured output paths are preserved. An older report without this list owns
+no alternate report paths. A report path colliding with another output is
+refused before emission with `PAINTING_ALLOCATION_UNAMBIGUOUS`.
+
+
 ### Residual front/back edges (`edge_residuals.json`, issue #999)
 
 Under `assemble.project: "visible"`, assemble writes `edge_residuals.json` beside
@@ -5289,6 +5309,7 @@ those settings. Changing a config seed alone cannot change a no-config run.
 | <a id="ASSEMBLE_TAKE_PLAN_ORDER"></a>`ASSEMBLE_TAKE_PLAN_ORDER` | supplied plan reverses an overlapping mixed-run pair: two-run full-layer head roles first, scalar depth within a role band (head-run and single-run rows use scalar depth); names the parts and support intersection | use the order drafted by `assemble --propose-plan`; fallback headwear follows the body and precedes the face, front hair follows the face; disjoint supports impose no plan-order constraint |
 | <a id="EDGE_PAIR_RESIDUAL"></a>`EDGE_PAIR_RESIDUAL` | report-only front/back residual candidates after visible edge composition, with pixel spans, boxes and coverage | read measured candidates and explicit skipped/unavailable reasons in `edge_residuals.json`. No pass/fail threshold is applied |
 | <a id="PAINTING_EDGE_COVERAGE_TRANSFER"></a>`PAINTING_EDGE_COVERAGE_TRANSFER` | accepted allocation clears legacy FRONT coverage into a BEHIND owner | read native rig membership in `painting_allocation.json`. Painted order and motion gaps require separate evidence |
+| <a id="PAINTING_ALLOCATION_UNAMBIGUOUS"></a>`PAINTING_ALLOCATION_UNAMBIGUOUS` | an alternate allocation report shares an output path | choose distinct output paths and set names |
 | <a id="ASSEMBLE_REGION_TAKE_REFERENCE_IMPLICIT"></a>`ASSEMBLE_REGION_TAKE_REFERENCE_IMPLICIT` | warning, `reference` is absent and the predicate uses `--source` | declare a painting reference and its PNG hash to keep the mask independent of projection-source changes |
 | <a id="ASSEMBLE_REGION_TAKE_REFERENCE"></a>`ASSEMBLE_REGION_TAKE_REFERENCE` | a declared region reference is unreadable | supply the declared PNG, with `source: true` or `painting` and its byte hash |
 | <a id="ASSEMBLE_REGION_TAKE_REFERENCE_MATCH"></a>`ASSEMBLE_REGION_TAKE_REFERENCE_MATCH` | a reference hash or painting dimensions differ | supply the declared PNG and preserve the source geometry |

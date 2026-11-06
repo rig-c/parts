@@ -5,7 +5,7 @@ import { edgePairResiduals, type EdgeResidualReport } from './edgeresidual.ts';
 import type { SupportDomain } from './coincide.ts';
 import { type SeamRule } from './seamrule.ts';
 import { DEFAULT_GROUND, DEFAULT_PROJECT_RULE, type Ground, type ProjectRule } from './projectrule.ts';
-import { paintingEdges, type PaintingAllocationReading, type PaintingEdgeSkips } from './paintingedges.ts';
+import { paintingEdges, type PaintingAllocationReading, type PaintingAllocationEvent, type PaintingEdgeSkips } from './paintingedges.ts';
 import { edgeLength } from './length.ts';
 import { materialSource, type MaterialSource, materialRows, polygonMaterialEdges, type MaterialRow, type MaterialEdge, type PlacedArt } from './cutmaterial.ts';
 import { unionTakenSources } from './takesource.ts';
@@ -304,6 +304,8 @@ export function singleRunPadRecord(single: boolean, sourceW: number, sourceH: nu
 }
 
 export interface AssembleInput {
+  /** Observe allocation decisions after guarding and restoration. */
+  allocationEvent?: (event: PaintingAllocationEvent) => void;
   /** Counterfactual before seeded takes, with whole-layer takes already applied. */
   regionTake?: { full: LayerSet; head: LayerSet; targets: string[] };
   /** Turn context for the exact part/carrier declarations, never an exemption flag. */
@@ -5878,6 +5880,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     })), lineage);
     const e = paintingEdges(canvases, srcr, {
       owner: receivers,
+      allocationEvent: input.allocationEvent,
       painted: supportPainted,
       figure: visibleFigure,
       ...(input.declaredFigure === undefined ? {} : { declaredFigure: input.declaredFigure }),
