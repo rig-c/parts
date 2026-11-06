@@ -6,7 +6,7 @@ import { SUPPORT_DOMAINS_FILE, writeSupportDomains } from './supportdomains.ts';
 import { COINCIDE_LINE, supportLines } from './coincide.ts';
 import { DEFAULT_SEAM_RULE } from './seamrule.ts';
 import { DEFAULT_PROJECT_RULE } from './projectrule.ts';
-import { EDGE_CONTRAST, PAINTING_ALLOCATION_FILE, PAINTING_EDGE_COVERAGE_TRANSFER } from './paintingedges.ts';
+import { type PaintingAllocationReading, type PaintingAllocationEvent, EDGE_CONTRAST, PAINTING_ALLOCATION_FILE, PAINTING_EDGE_COVERAGE_TRANSFER } from './paintingedges.ts';
 import { SETUP_PAINTING_LINE, setupPaintingLines } from './setuppainting.ts';
 import { boundaryColourLines } from './boundarycolour.ts';
 import { writeMaterialSources } from './cutmaterialio.ts';
@@ -63,7 +63,7 @@ import { setFocusProblems } from './setfocus.ts';
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { type AnimFrame, EncodeError, encodeApng, encodeIndexedApng, INDEXED_DEFAULTS } from './apng.ts';
 import { assemble, type AssembleResult, cutLines, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, groundWarning, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine } from './assemble.ts';
 import { allocationClause, type Reducer, stageBClause, unboundedClause } from './automesh.ts';
@@ -170,6 +170,8 @@ export interface AlternateCliInput {
 }
 
 export interface AssembleStageInput {
+  /** A null set identifies the primary assembly evaluation. */
+  allocationEvent?: (event: PaintingAllocationEvent, set: string | null) => void;
   /** Write source-edge evidence only when cut_material is explicitly declared. */
   requirements?: string;
   source: string;
@@ -366,7 +368,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const declaredFigure = figureSupport === undefined ? undefined : { width: Math.trunc(src.width * fields.rigScale), height: Math.trunc(src.height * fields.rigScale), data: figureSupport };
   const under = readUnders(input.config, fields.cuts);
   const caps = fields.limbs === undefined ? undefined : readCaps(input.config, fields.limbs);
-  const result = assemble({ source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under, ...(declaredFigure === undefined ? {} : { declaredFigure }),
+  const result = assemble({ allocationEvent: input.allocationEvent === undefined ? undefined : event => input.allocationEvent!(event, null), source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under, ...(declaredFigure === undefined ? {} : { declaredFigure }),
     ...((cfg.assemble.take ?? []).some(t => 'part' in t) ? { regionTake: { full: takenRuns.full, head: takenRuns.head, targets: (cfg.assemble.take ?? []).flatMap(t => 'part' in t ? [t.part] : []) } } : {}), ...(caps === undefined ? {} : { caps }), seamRule: seam, projectRule: project });
 
   // Issue #454: alternate painting sets, assembled before any file is written.
@@ -427,6 +429,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   }
 
   const altProblems: Problem[] = [];
+  const allocationReports: Array<{ file: string; report: { set: string; coverageTransfers: PaintingAllocationReading['coverageTransfers'] } & Record<string, unknown> }> = [];
   const altBuilt: Array<{ record: AlternatePartsRecord; images: Array<{ name: string; image: Raster }>; excluded: ExcludedCount[]; islands: IslandCount[]; splits: SplitCount[]; capSplits: SplitCount[]; depthClamps: AssembleResult['depthClamps'] }> = [];
   const baseSlots = result.parts.parts.map((p) => p.name);
   // Issue #664: each limb segment part with a declared front slot -> the part its front slot follows.
@@ -704,6 +707,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     let altRes: ReturnType<typeof assemble>;
     try {
       altRes = assemble({
+        allocationEvent: input.allocationEvent === undefined ? undefined : event => input.allocationEvent!(event, alt.name),
         source: altSrc,
         depth: cfg.depth, depthBase: configDir,
         limbUnderCover: alt.parts !== undefined && input.setCover !== 'painting',
@@ -772,6 +776,25 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       const altCan = recomposite(fullSetPlaced, rW, rH);
       altRecomposite = recompositeRecord(measureRecomposite(altCan, altSrcRig, fullSetPlaced));
     }
+    const alternateAllocation = altRes.paintingEdges?.allocation;
+    if (alternateAllocation !== undefined) {
+      allocationReports.push({
+        file: `painting_allocation.${encodeURIComponent(alt.name)}.json`,
+        report: {
+          spec: 'rig-parts-painting-allocation/1', code: PAINTING_EDGE_COVERAGE_TRANSFER,
+          set: alt.name, grid: altRes.parts.rig_size,
+          source: { painting_sha256: createHash('sha256').update(readFileSync(alt.source)).digest('hex') },
+          stage: 'paintingEdges after piece guarding and restoration',
+          membership: 'pre-filter-alternate-assembly',
+          output_assets: [...new Set([...altRes.parts.parts.map(part => part.name), ...baseSlots])].map(name => ({ part: name,
+            image: hidesSet.has(name) ? null : keptRecords.some(record => record.name === name)
+              ? `${alt.name}_${name}.png` : !coveredSet.has(name) ? `${name}.png` : null })),
+          inherited_parts: baseSlots.filter(name => !coveredSet.has(name) && !hidesSet.has(name)),
+          hidden_parts: [...hidesSet],
+          ...alternateAllocation,
+        },
+      });
+    }
     altBuilt.push({
       record: {
         name: alt.name,
@@ -821,6 +844,23 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       assetIndices.set(file, index);
     }
   });
+  const outputFiles = new Set([
+    outs.partsJson, outs.recomposite, outs.errorMap,
+    join(dirname(outs.partsJson), PAINTING_ALLOCATION_FILE),
+    join(dirname(outs.partsJson), PAINTING_IN_RIG_FILE),
+    join(dirname(outs.partsJson), SUPPORT_DOMAINS_FILE),
+    join(dirname(outs.partsJson), CUT_MATERIAL_SOURCES),
+    join(dirname(outs.partsJson), STAGE_MAP_FILE),
+    join(dirname(outs.partsJson), EDGE_RESIDUAL_FILE),
+    ...emittedAssets.map(file => join(outs.partsDir, file)),
+  ].map(file => resolve(file)));
+  for (const { file, report } of allocationReports) {
+    const path = resolve(dirname(outs.partsJson), file);
+    if (outputFiles.has(path)) altProblems.push({ code: 'PAINTING_ALLOCATION_UNAMBIGUOUS',
+      object: `alternate set "${report.set}" report "${file}"`,
+      detail: 'shares an output path with another artifact; choose distinct output paths and set names' });
+    outputFiles.add(path);
+  }
   // Issue #944: under pinholes.required, every pinhole of the base set's flat parts stack is refused by name, with the
   // alternate sets' refusals, before anything is written.
   const pinholes = pinholesAsked ? measurePinholes(sourceInRig(src, result.parts.rig_size[0], result.parts.rig_size[1]), result.images) : null;
@@ -828,6 +868,23 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   refuseIfAny(altProblems);
   if (altBuilt.length > 0) {
     result.parts.alternates = altBuilt.map((b) => b.record);
+  }
+
+  const allocationPath = join(dirname(outs.partsJson), PAINTING_ALLOCATION_FILE);
+  let previousAllocationFiles: string[] = [];
+  if (existsSync(allocationPath)) {
+    try {
+      const previous: unknown = JSON.parse(readFileSync(allocationPath, 'utf8'));
+      if (previous !== null && typeof previous === 'object' && 'spec' in previous &&
+          previous.spec === 'rig-parts-painting-allocation/1' && 'written_reports' in previous &&
+          Array.isArray(previous.written_reports)) {
+        previousAllocationFiles = previous.written_reports.filter((file): file is string =>
+          typeof file === 'string' && file.startsWith('painting_allocation.') &&
+          file.endsWith('.json') && basename(file) === file);
+      }
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+    }
   }
 
   // Emit only after green: every refusal above has already thrown.
@@ -846,13 +903,23 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const residualPath = join(dirname(outs.partsJson), EDGE_RESIDUAL_FILE);
   if (result.edgeResiduals === undefined) rmSync(residualPath, { force: true });
   else writeFileSync(residualPath, JSON.stringify(result.edgeResiduals, null, 2) + '\n');
-  const allocationPath = join(dirname(outs.partsJson), PAINTING_ALLOCATION_FILE);
   const allocation = result.paintingEdges?.allocation;
   if (allocation === undefined) rmSync(allocationPath, { force: true });
   else writeFileSync(allocationPath, JSON.stringify({ spec: 'rig-parts-painting-allocation/1',
     code: PAINTING_EDGE_COVERAGE_TRANSFER,
     stage: 'paintingEdges after piece guarding and restoration', grid: result.parts.rig_size,
-    ...allocation }, null, 2) + '\n');
+    ...allocation, written_reports: allocationReports.map(report => report.file) }, null, 2) + '\n');
+  const currentAllocationFiles = new Set(allocationReports.map(report => report.file));
+  for (const file of previousAllocationFiles) {
+    if (!currentAllocationFiles.has(file) && !outputFiles.has(resolve(dirname(outs.partsJson), file))) {
+      rmSync(join(dirname(outs.partsJson), file), { force: true });
+    }
+  }
+  for (const { file, report } of allocationReports) {
+    writeFileSync(join(dirname(outs.partsJson), file), JSON.stringify(report, null, 2) + '\n');
+    const count = report.coverageTransfers.reduce((n, row) => n + row.pixels.count, 0);
+    log(`${PAINTING_EDGE_COVERAGE_TRANSFER}: set "${report.set}" ${count} native rig px; membership in ${file}`);
+  }
   for (const { record, image, depthImage } of result.images) {
     writePng(join(outs.partsDir, `${record.name}.png`), image);
     if (depthImage !== undefined && record.depth !== undefined) writePng(join(outs.partsDir, record.depth.image), depthImage);

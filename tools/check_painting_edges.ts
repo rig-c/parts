@@ -1,3 +1,4 @@
+import { runPaintingAllocationChecks } from './check_painting_allocation.ts';
 import { runPaintingOwnerChecks } from './check_painting_owner.ts';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -159,6 +160,7 @@ function runKnownCoverageChecks(say: Say): void {
 
 export function runPaintingEdgeChecks(say: Say): void {
   runPaintingOwnerChecks(say);
+  runPaintingAllocationChecks(say);
   runKnownCoverageChecks(say);
   const directory = mkdtempSync(join(tmpdir(), 'painting-edge-alternate-'));
   try {
