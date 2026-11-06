@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.23.4](https://github.com/rig-c/parts/compare/v2.23.3...v2.23.4) (2026-11-06)
+
+
+### Bug Fixes
+
+* **assemble:** retain busy silhouette inner-ring alpha ([#1154](https://github.com/rig-c/parts/issues/1154)) ([ccc767b](https://github.com/rig-c/parts/commit/ccc767b7ccaf742b1666053cc9afe0aa9abb80ed))
+
 ## [2.23.3](https://github.com/rig-c/parts/compare/v2.23.2...v2.23.3) (2026-11-06)
 
 
