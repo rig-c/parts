@@ -1,3 +1,4 @@
+import { foreignPaintingReceiver, paintingReceiverAt, type PaintingReceivers } from './paintingowner.ts';
 import { OPAQUE_ALPHA_ABOVE } from './layers.ts';
 import { connectedComponents } from './raster/components.ts';
 import { type Ground } from './projectrule.ts';
@@ -131,6 +132,12 @@ import { type Mask, newMask, type Raster, RasterError } from './raster/types.ts'
  * Under a plain ground (the default) none of the three applies, and the step is
  * the one described above, byte for byte.
  *
+ * With a named `owner` input, allocation follows that supplier's explicit
+ * receiver relation after coverage estimation. FRONT-owned positive coverage
+ * keeps this unmix; zero coverage receives P at alpha 255. BEHIND receives its
+ * own P with FRONT cleared, retaining BEHIND if only the clear is held. Clean
+ * refusal fallbacks join the allocation before the applied piece guard.
+ *
  * Every decision is read off the stack as it stood before the step, then
  * applied, so the result does not depend on the order pixels are visited.
  * Deterministic: integer rig arithmetic, medians by sort, no float reduction
@@ -159,6 +166,8 @@ export interface PaintingEdgeSkips {
 export interface PaintingEdgeResult {
   /** Per part (stack index), the pixels whose RGBA the step changed. */
   changed: Mask[];
+  /** Named owner/receiver refusals and held clean-fallback writes. */
+  allocation?: PaintingAllocationReading;
   /** Edge pixels resolved (whether or not a value changed), and the ones left. */
   resolved: number;
   /** Of `resolved`, the pixels whose two far sides did not separate along the axis, read against `Cb` and `Cf` themselves. */
@@ -166,7 +175,16 @@ export interface PaintingEdgeResult {
   skipped: PaintingEdgeSkips;
 }
 
+export interface PaintingAllocationReading {
+  supplier: string;
+  refused: Record<string, number>;
+  lineage: PaintingReceivers['faults'];
+  fallbackHeld: number;
+}
+
 export interface PaintingEdgeOptions {
+  /** Named supplier and explicit receiver contract, frozen before the edge pass. */
+  owner?: PaintingReceivers;
   /**
    * Per rig pixel, 1 where the painting shows figure (`paintedFigure` in
    * `src/assemble.ts`). A figure pixel no part covers above
@@ -250,7 +268,15 @@ interface Decision {
 }
 
 /** See the invariant above {@link EDGE_RADIUS}. Modifies `parts` (full rig canvases, draw order) in place. */
-export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEdgeOptions): PaintingEdgeResult {
+function applyPaintingEdges(
+  parts: Raster[], srcr: Raster, options: PaintingEdgeOptions,
+  existing?: { parts: Raster[]; defects: Uint8Array },
+  readDecision?: (q: Decision, alpha: number) => void,
+): PaintingEdgeResult {
+  const allocation = options.owner;
+  const events: Array<{ p: number; front: number; behind: number; target: number; affected: number[]; status: string; reason: string }> = [];
+  const reading: PaintingAllocationReading | undefined = allocation === undefined ? undefined
+    : { supplier: allocation.supplier, refused: {}, lineage: allocation.faults, fallbackHeld: 0 };
   const W = srcr.width;
   const H = srcr.height;
   const n = parts.length;
@@ -523,6 +549,32 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
     if (alpha > 0 && alpha < 255) while (alpha < 255 && 2 * miss(alpha) > EDGE_CONTRAST) alpha++;
     if (alpha >= 255 - OPAQUE_ALPHA_ABOVE) alpha = 255;
     const unmix = (c: number): number => unmixAt(c, alpha);
+    readDecision?.(q, alpha);
+    if (allocation !== undefined && q.behind >= 0) {
+      const { target, reason } = paintingReceiverAt(allocation, q.p);
+      const affected = target < 0 ? [] : [...new Set([target, q.front, q.behind].filter(i => i >= target))];
+      const event = { p: q.p, front: q.front, behind: q.behind, target, affected, status: 'refused', reason };
+      events.push(event);
+      if (target < 0) return;
+      if (affected.some(i => !options.editable[i] || options.keep?.[i]?.data[q.p] === 1 || options.feathered?.[i]?.data[q.p] === 1) ||
+        affected.some(i => i !== target && options.movingPair?.(i, target) === true)) {
+        event.reason = 'protected-receiver';
+        return;
+      }
+      if (target === q.front) {
+        if (alpha === 0) {
+          plan(q.front, q.p, P[0], P[1], P[2], 255);
+          event.status = 'front-zero';
+          return;
+        }
+        event.status = 'front-unmix';
+      } else {
+        plan(target, q.p, P[0], P[1], P[2], 255);
+        for (const i of affected) if (i !== target) plan(i, q.p, 0, 0, 0, 0);
+        event.status = 'assigned';
+        return;
+      }
+    }
     // Busy ground: a BEHIND raise outside BEHIND's own support is refused in `plan`, so FRONT is not lowered there either —
     // FRONT keeps the coverage it had, and a seam whose two supports do not overlap is never left transparent.
     // The refused BEHIND raise below is the one counted in `skipped.support`.
@@ -539,6 +591,21 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
       fills[q.behind].set(q.p, q.front);
     }
   });
+  // Clean refusals belong to the same plan as allocations, before its one
+  // applied piece guard. A scratch legacy evaluation supplies the predicate.
+  const fallback: Array<{ p: number; part: number; desired: readonly number[] }> = [];
+  for (const event of events) {
+    if (event.status !== 'refused' || existing === undefined || existing.defects[event.p] === 1) continue;
+    for (let i = 0; i < n; i++) {
+      const rgba = existing.parts[i].data.subarray(event.p * 4, event.p * 4 + 4);
+      const pre = parts[i].data.subarray(event.p * 4, event.p * 4 + 4);
+      if (pre.every((v, c) => v === rgba[c])) planned[i].delete(event.p);
+      else {
+        planned[i].set(event.p, [rgba[0], rgba[1], rgba[2], rgba[3]]);
+        fallback.push({ p: event.p, part: i, desired: Array.from(rgba) });
+      }
+    }
+  }
   // A part's art (alpha above the floor) keeps its pieces: rigc takes one closed outline per mesh, read 4-connected
   // (`CONTOUR_ONE_ISLAND`). A new piece holding none of the part's art is not written.
   planned.forEach((writes, i) => {
@@ -619,6 +686,43 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
       }
     }
   });
+  const effective = (part: number, p: number): ArrayLike<number> => planned[part].get(p) ?? parts[part].data.subarray(p * 4, p * 4 + 4);
+  if (reading !== undefined) {
+    for (const row of fallback) {
+      const rgba = effective(row.part, row.p);
+      if (row.desired.some((v, c) => v !== rgba[c])) reading.fallbackHeld++;
+    }
+  }
+  for (const event of events) {
+    const offset = event.p * 4;
+    const desired = [srcr.data[offset], srcr.data[offset + 1], srcr.data[offset + 2], 255];
+    if (event.status === 'assigned') {
+      const held = event.affected.filter(i => {
+        const expected = i === event.target ? desired : [0, 0, 0, 0];
+        const rgba = effective(i, event.p);
+        return expected.some((v, c) => v !== rgba[c]);
+      });
+      if (held.length > 0) {
+        if (!held.includes(event.target) && event.target === event.behind && held.every(i => i === event.front)) {
+          // A held clear retains FRONT; BEHIND keeps its accepted own paint.
+          planned[event.front].delete(event.p);
+          event.status = 'retained-front';
+        } else {
+          for (const i of event.affected) planned[i].delete(event.p);
+          event.status = 'refused';
+          event.reason = 'piece-guard-allocation-held';
+        }
+      }
+    } else if (event.status === 'front-zero') {
+      const rgba = effective(event.front, event.p);
+      if (desired.some((v, c) => v !== rgba[c])) {
+        planned[event.front].delete(event.p);
+        event.status = 'refused';
+        event.reason = 'front-owner-zero-coverage-held';
+      }
+    }
+    if (event.status === 'refused' && reading !== undefined) reading.refused[event.reason] = (reading.refused[event.reason] ?? 0) + 1;
+  }
   const changed = parts.map(() => newMask(W, H));
   planned.forEach((writes, i) => {
     const d = parts[i].data;
@@ -727,5 +831,31 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
     for (const p of writes.keys()) options.written?.(i, p);
   });
   for (const [p, front] of restore) if (!planned[front].has(p)) options.written?.(front, p);
-  return { changed, resolved, unseparated, skipped };
+  return { changed, resolved, unseparated, skipped, ...(reading === undefined ? {} : { allocation: reading }) };
+}
+
+/** Apply the owner-aware plan after evaluating clean fallback on scratch art. */
+export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEdgeOptions): PaintingEdgeResult {
+  const allocation = options.owner;
+  if (allocation === undefined) return applyPaintingEdges(parts, srcr, options);
+  const scratch = parts.map(r => ({ ...r, data: new Uint8ClampedArray(r.data) }));
+  const decisions: Array<{ p: number; front: number; behind: number; alpha: number }> = [];
+  const old = applyPaintingEdges(scratch, srcr, { ...options, owner: undefined, written: undefined }, undefined,
+    (q, alpha) => decisions.push({ p: q.p, front: q.front, behind: q.behind, alpha }));
+  const defects = new Uint8Array(srcr.width * srcr.height);
+  // Survival is read at this edge pass's post-restoration output. Later
+  // assembly stages may replace a writer; they are outside this predicate.
+  for (const { p, front, behind, alpha } of decisions) {
+    const owner = allocation.pixels[p];
+    if (owner < 0) continue;
+    const offset = p * 4;
+    if (old.changed[front].data[p] === 1 && scratch[front].data[offset + 3] > 0 &&
+      allocation.roots[front] !== owner) defects[p] = 1;
+    if (behind < 0 || alpha !== 0 || !foreignPaintingReceiver(allocation, p, behind)) continue;
+    const pre = parts[behind].data;
+    const post = scratch[behind].data;
+    if ([0, 1, 2].some(c => pre[offset + c] !== post[offset + c]) &&
+      [0, 1, 2].every(c => post[offset + c] === srcr.data[offset + c]) && post[offset + 3] === 255) defects[p] = 1;
+  }
+  return applyPaintingEdges(parts, srcr, options, { parts: scratch, defects });
 }
