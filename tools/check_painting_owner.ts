@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import refusalList from '../fixtures/painting_edge_refusals.json';
 import followupList from '../fixtures/painting_edge_followup1141.json';
+import clampList from '../fixtures/painting_edge_clamp1038.json';
 import { paintingOwnerFixture } from '../fixtures/painting_owner.ts';
 import { assemble, type AssembleResult } from '../src/assemble.ts';
 import { paintingEdges } from '../src/paintingedges.ts';
@@ -64,10 +65,52 @@ export function runPaintingOwnerChecks(say: Say): void {
     return hits.a === a.length && hits.b === b.length && hits.other === 0 &&
       [...a, ...b].every(q => Number.isInteger(q.x) && Number.isInteger(q.y) && q.x >= 0 && q.x < 832 && q.y >= 0 && q.y < 1216);
   });
-  say('ED1038_SEPARATE_FROZEN_COORDINATE_LISTS', sizeA === 164 && sizeB === 34 && valid &&
+  say('ED1038_SEPARATE_FROZEN_COORDINATE_LISTS', sizeA === 151 && sizeB === 34 && valid &&
     followupList.wind.filter(q => q.cause === 'cause unclosed').length === 1, `A ${sizeA}, B ${sizeB}, separate coordinate budgets and cause-unclosed tag`);
   say('ED1038_PLANTED_UNLISTED_COORDINATE', paintingEdgeExceptionHits('demo', [0]).other === 1 &&
     paintingEdgeExceptionHits('unknown', [0]).other === 1, 'a new coordinate or unknown example has no exception');
+
+  // The added raw-name clamps are frozen main writes on owned descendants.
+  const validClampList = (rows: ReadonlyArray<{ x: number; y: number }>): boolean => rows.length === 34 &&
+    new Set(rows.map(q => q.y * 832 + q.x)).size === rows.length &&
+    rows.every(q => Number.isInteger(q.x) && Number.isInteger(q.y) && q.x >= 0 && q.x < 832 && q.y >= 0 && q.y < 1216);
+  say('ED1038_FROZEN_LEGACY_DESCENDANT_CLAMP_LIST', validClampList(clampList.wind) &&
+    !validClampList(clampList.wind.slice(1)) &&
+    !validClampList([...clampList.wind.slice(0, -1), clampList.wind[0]]) &&
+    !validClampList([...clampList.wind.slice(0, -1), { x: -1, y: 0 }]),
+    `wind legacy descendant clamps ${clampList.wind.length}; planted count, duplicate and bounds failures`);
+
+  // A declared cut keeps its raw ancestor even where its region refuses a
+  // receiver. Its surviving legacy FRONT write remains clean by lineage.
+  {
+    const width = 24, height = 9;
+    const painting = newRaster(width, height), back = newRaster(width, height), front = newRaster(width, height);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const offset = (y * width + x) * 4;
+      painting.data.set(x < 10 ? [200, 0, 0, 255] : [0, 0, 200, 255], offset);
+      back.data.set([0, 0, 200, 255], offset);
+      const alpha = x <= 7 ? 255 : x === 8 ? 200 : x === 9 ? 140 : x === 10 ? 100 : x === 11 ? 50 : 0;
+      front.data.set([200, 0, 0, alpha], offset);
+    }
+    const pixel = 4 * width + 9;
+    const region = newMask(width, height); region.data.fill(1); region.data[pixel] = 0;
+    const clone = () => [back, front].map(r => ({ ...r, data: new Uint8ClampedArray(r.data) }));
+    const legacy = clone(), fixed = clone();
+    const supplied = rawPaintingOwner([{ name: 'back', raster: back }, { name: 'source-front', raster: front }], width * height);
+    const contract = paintingReceivers(supplied,
+      [{ name: 'back', image: back, region: null }, { name: 'cut-front', image: front, region }], [['source-front', 'cut-front']]);
+    const settings = { painted: new Uint8Array(width * height).fill(1), editable: [true, true] };
+    paintingEdges(legacy, painting, settings);
+    const result = paintingEdges(fixed, painting, { ...settings, owner: contract });
+    const offset = pixel * 4;
+    const expected = legacy[1].data.subarray(offset, offset + 4);
+    const oldPredicate = contract.names[contract.pixels[pixel]] !== contract.receiverNames[1];
+    say('ED1038_CUT_DESCENDANT_CLEAN_REFUSAL_FRONT_SURVIVES',
+      paintingReceiverAt(contract, pixel).reason === 'no-supported-receiver' && contract.roots[1] === contract.pixels[pixel] &&
+      oldPredicate && expected[3] === 255 && front.data[offset + 3] === 140 &&
+      expected.every((v, c) => v === fixed[1].data[offset + c]) && (result.allocation?.refused['no-supported-receiver'] ?? 0) > 0,
+      `legacy/fixed/pre alpha ${expected[3]}/${fixed[1].data[offset + 3]}/${front.data[offset + 3]}, old name predicate ${oldPredicate}`);
+  }
 
   const directory = mkdtempSync(join(tmpdir(), 'painting-owner-'));
   try {

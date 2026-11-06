@@ -850,7 +850,7 @@ export function paintingEdges(parts: Raster[], srcr: Raster, options: PaintingEd
     if (owner < 0) continue;
     const offset = p * 4;
     if (old.changed[front].data[p] === 1 && scratch[front].data[offset + 3] > 0 &&
-      allocation.names[owner] !== allocation.receiverNames[front]) defects[p] = 1;
+      allocation.roots[front] !== owner) defects[p] = 1;
     if (behind < 0 || alpha !== 0 || !foreignPaintingReceiver(allocation, p, behind)) continue;
     const pre = parts[behind].data;
     const post = scratch[behind].data;
