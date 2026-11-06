@@ -1,3 +1,4 @@
+import { runPaintingOutlineChecks } from './check_painting_outline.ts';
 import { runPaintingAllocationChecks } from './check_painting_allocation.ts';
 import { runPaintingOwnerChecks } from './check_painting_owner.ts';
 import { createHash } from 'node:crypto';
@@ -162,6 +163,7 @@ export function runPaintingEdgeChecks(say: Say): void {
   runPaintingOwnerChecks(say);
   runPaintingAllocationChecks(say);
   runKnownCoverageChecks(say);
+  runPaintingOutlineChecks(say);
   const directory = mkdtempSync(join(tmpdir(), 'painting-edge-alternate-'));
   try {
     const config = assembleConfig();
