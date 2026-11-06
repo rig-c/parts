@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import './tools/check_row_guard.ts';
+import { runSeamCellChecks } from './tools/check_seam_cells.ts';
 import { motionSeamFinding } from './src/check.ts';
 import { checkRowFaults, checkRowSchemaFaults, checkRowCombinations, runCheckRowSchemaChecks, runCheckRowGuardChecks } from './tools/check_row_scope.ts';
 import { rowTableFaults, checkRowTypeInventory } from './tools/check_row_reference.ts';
@@ -415,6 +416,7 @@ import {
   readGeometry,
   readMotionSeams,
   readMotionSeamBackground,
+  readMotionSeamCellSidecar,
   motionSeamRequired,
   MOTION_SEAM_REQUIRED_CODE,
   type MotionSeamRequired,
@@ -18166,6 +18168,7 @@ type SoBuilt = (label: string, limbs: boolean, patch?: Record<string, unknown>, 
 
 /** Issue #941: `seam_over_motion.required` — every declared pair, every frame, 0 background cells; planted, clean, undeclared and malformed. */
 function runSeamRequiredCases(dir: string, built: SoBuilt, say: (name: string, ok: boolean, detail: string, why: string) => void): void {
+  runSeamCellChecks(join(dir, 'cell-evidence'), say);
   writeFileSync(join(dir, 'anim-tear.json'), JSON.stringify(soTearMotion(20)));
   writeFileSync(join(dir, 'anim-hold.json'), JSON.stringify(soTearMotion(0)));
   const reqAt = (name: string, block: unknown): string => {
@@ -18206,7 +18209,7 @@ function runSeamRequiredCases(dir: string, built: SoBuilt, say: (name: string, o
       plain.status === 0 && plain.fig?.PASS === true && lineOf(plain.fig)?.required === undefined &&
         hits.length === 1 && worst !== undefined && worst.px > 0 && !sampled(hits.map((h) => h.index)) &&
         planted.status === 1 && planted.fig?.PASS === false && f.length === 1 && f[0].startsWith(want) && f[0].includes('declares seam_over_motion.required: true') &&
-        req?.status === 'FAIL' && req.failed === 1 && JSON.stringify(withoutCheckRows(req.pairs)) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', class: cls, frames: 26, background_frames: 1, max_px: worst.px }]) &&
+        req?.status === 'FAIL' && req.failed === 1 && readMotionSeamCellSidecar(join(planted.stage, 'check'), req)?.frames.length === 1 && JSON.stringify(withoutCheckRows(req.pairs.map(({ open_frames: _evidence, ...pair }) => pair))) === JSON.stringify([{ pair: 'upperarm_r|forearm_r', class: cls, frames: 26, background_frames: 1, max_px: worst.px }]) &&
         barsNotMet(planted.fig ?? {}).includes(MOTION_SEAM_LINE) && planted.out.includes('build: stopped at check'),
       `undeclared: exit ${plain.status}, PASS ${String(plain.fig?.PASS)}, required ${lineOf(plain.fig)?.required === undefined ? 'absent' : 'PRESENT'}; stock gapOpen frames ${JSON.stringify(hits)}; declared: exit ${planted.status}, ${f[0] ?? 'no refusal'}; block ${JSON.stringify(req)}`,
       `issue #941: the defect the card names, background inside the band in motion, on frame ${SO_TEAR_FRAME} of 13 alone — a frame no every-2nd, 3rd or 4th sampler reads. Undeclared it is accepted (today's warning, exit 0); under seam_over_motion.required the ${cls} pair is refused by name with the frame and the cells a fresh stock render finds there, and build emits no artifact`,
