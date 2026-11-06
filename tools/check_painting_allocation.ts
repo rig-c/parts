@@ -9,6 +9,7 @@ import { assembleStage } from '../src/build.ts';
 import { readLayers } from '../src/layers.ts';
 import { PartsError } from '../src/errors.ts';
 import { paintingEdges } from '../src/paintingedges.ts';
+import { serializeParts } from '../src/parts.ts';
 import { newMask, newRaster } from '../src/raster/types.ts';
 import { readPng, writePng } from '../src/raster/png.ts';
 
@@ -158,15 +159,21 @@ export function runPaintingAllocationChecks(say: Say): void {
     say('ED1150_NO_ALTERNATES_REMOVES_LAST_REPORT', !existsSync(file('partial')) && !existsSync(file('inherited')), 'reuse without alternates removes their last report');
     say('ED1150_PATTERN_MATCHING_NON_REPORT_SURVIVES', readFileSync(unrelated, 'utf8') === 'user-owned output',
       'reuse removes only paths recorded by the previous primary report');
-    const configured = { ...outs, errorMap: file('inherited') };
+    const configured = { ...outs, partsJson: file('inherited') };
     config.assemble.alternates = [{ name: 'inherited', ...alt, parts: ['front'] }];
     writeFileSync(input.config, JSON.stringify(config));
     assembleStage(input, outs, () => {});
     delete config.assemble.alternates; writeFileSync(input.config, JSON.stringify(config));
-    assembleStage(input, configured, () => {});
-    say('ED1150_PREVIOUS_REPORT_REUSED_AS_OUTPUT_SURVIVES', existsSync(configured.errorMap) &&
-      readFileSync(configured.errorMap).subarray(0, 8).toString('hex') === '89504e470d0a1a0a',
-      'a current configured output supersedes prior report ownership');
+    let reusedParts: string | undefined;
+    try { reusedParts = serializeParts(assembleStage(input, configured, () => {}).parts); }
+    catch (err) {
+      // A removed parts file can also fail its later support-domain reader.
+      if (!(err instanceof Error) || !('code' in err) || err.code !== 'ENOENT' ||
+          !('path' in err) || err.path !== configured.partsJson) throw err;
+    }
+    say('ED1150_PREVIOUS_REPORT_REUSED_AS_OUTPUT_SURVIVES', reusedParts !== undefined && existsSync(configured.partsJson) &&
+      readFileSync(configured.partsJson, 'utf8') === reusedParts,
+      'parts metadata written before cleanup survives with its exact serialized content');
     const heldDirectory = join(directory, 'held');
     writeStageFixture(heldDirectory, false, true);
     const heldInput = { source: join(heldDirectory, 'painting.png'), full: join(heldDirectory, 'full'), head: join(heldDirectory, 'head') };
