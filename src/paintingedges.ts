@@ -66,6 +66,7 @@ import { type Mask, newMask, type Raster, RasterError } from './raster/types.ts'
  * into it: on the inner ring (FRONT-owned, next to the line) it is at least
  * that of its resolved outer-ring neighbours (a painted line just outside
  * See-through's line is FRONT's outline, so what lies between is FRONT's too);
+ * on a busy-ground silhouette it also keeps the first inner ring's own alpha;
  * deeper inside it is the greater of See-through's own alpha and the
  * painting's (the ramp past the half line is filled; a light interior is never
  * holed); farther out it is no more than its neighbour one ring nearer.
@@ -536,7 +537,10 @@ function applyPaintingEdges(
     const q = decisions[k];
     let alpha = q.matte;
     if (q.inside && q.ring > 1) alpha = Math.max(q.own, q.matte);
-    else if (q.inside) alpha = Math.max(alpha, neighbours(q, false, 1));
+    else if (q.inside) {
+      alpha = Math.max(alpha, neighbours(q, false, 1));
+      if (busy && q.behind === -1) alpha = Math.max(alpha, q.own);
+    }
     else if (q.ring > 1) alpha = Math.min(alpha, neighbours(q, false, q.ring - 1));
     if (alpha <= OPAQUE_ALPHA_ABOVE) alpha = 0;
     else if (alpha >= 255 - OPAQUE_ALPHA_ABOVE) alpha = 255;
