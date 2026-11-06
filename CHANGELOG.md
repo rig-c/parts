@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.19.4](https://github.com/rig-c/parts/compare/v2.19.3...v2.19.4) (2026-11-05)
+
+
+### Bug Fixes
+
+* **check:** enforce structural row metadata coverage ([#1092](https://github.com/rig-c/parts/issues/1092)) ([#1103](https://github.com/rig-c/parts/issues/1103)) ([f10260f](https://github.com/rig-c/parts/commit/f10260f9f56185c088e55f14dc8d9033022aae78))
+
 ## [2.19.3](https://github.com/rig-c/parts/compare/v2.19.2...v2.19.3) (2026-11-05)
 
 
