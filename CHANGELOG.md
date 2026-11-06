@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.20.0](https://github.com/rig-c/parts/compare/v2.19.4...v2.20.0) (2026-11-06)
+
+
+### Features
+
+* **check:** carry core seam cells into seam_over_motion ([#1105](https://github.com/rig-c/parts/issues/1105)) ([#1122](https://github.com/rig-c/parts/issues/1122)) ([b881ae5](https://github.com/rig-c/parts/commit/b881ae5904a809ab48065c36b4b581eb699b7724))
+
 ## [2.19.4](https://github.com/rig-c/parts/compare/v2.19.3...v2.19.4) (2026-11-05)
 
 
