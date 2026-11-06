@@ -196,7 +196,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         bun: [latest]
-    timeout-minutes: 10
+    # Recent 40 Windows jobs: 35 green, p95 510s, max 546s (job time).
+    # Run 42282469376, job 128114964904 is that maximum; 15m leaves 354s.
+    # The smoke step alone had p95 482s and max 525s; setup shares this cap.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 15 || 10 }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
