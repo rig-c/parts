@@ -45,8 +45,9 @@ its remedy is a visible type or a `Release-As:` footer in a commit message.
 
 ## Tree verdicts
 
-CI uses the shared action at core commit
-`b2e5cfb5f24b8743ee2a05298a34984ee47485a3`. On a default-branch push, a successful
+CI uses the shared core action at the commit pinned in the `uses:` lines of
+`.github/workflows/ci.yml` and `release.yml` (`rig-c/core/.github/actions/tree-verdict@<sha>`);
+those lines are the source of truth and this file does not repeat the SHA. On a default-branch push, a successful
 source run over an identical full Git tree can supply its verdict. The log names
 the source PR, API head, actual tested SHA and run ID. A PR's API head alone does
 not identify its synthetic merge checkout. Any missing receipt, tree difference,
