@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { packageRigc, readMotionSeamBackground, motionSeamRequired, type MotionSeamLine, type MotionSeamPair, type MotionCellSidecar, MOTION_CELLS_FILE, readMotionSeamCellSidecar, publishMotionSeamCells } from '../src/check.ts';
-import { checkRow, serializeCheckRows } from '../src/checkrow.ts';
+import { checkRow, checkSlotParts, serializeCheckRows } from '../src/checkrow.ts';
 import { checkRowSchemaFaults } from './check_row_scope.ts';
 import { newRaster } from '../src/raster/types.ts';
 import { encodePngBytes } from '../src/raster/png.ts';
@@ -12,18 +12,17 @@ import { PartsError } from '../src/errors.ts';
 type Say = (name: string, ok: boolean, detail: string, why: string) => void;
 const animations = ['figure', 'background'];
 const pairs: MotionSeamPair[] = [{ pair: 'left|right', a: 'left', b: 'right', declared: ['synthetic split'] }];
-const slots = new Map([['left', 'left'], ['right', 'right']]);
 const line: MotionSeamLine = { status: 'CLEAR', fps: 12, floor: '', pairs, animations, warnings: 0, rows: [] };
 
 export function renderSeamCellFixture(home: string, cells: boolean): string {
   mkdirSync(join(home, 'images'), { recursive: true });
   const image = newRaster(10, 6);
   for (let y = 1; y <= 4; y++) for (let x = 1; x <= 8; x++) image.data.set([80, 140, 200, 255], (y * 10 + x) * 4);
-  writeFileSync(join(home, 'images', 'block.png'), encodePngBytes(image));
+  for (const part of ['left', 'right']) writeFileSync(join(home, 'images', part + '.png'), encodePngBytes(image));
   const rig = { spec: 'rigc-rig/1', name: 'seam_cells', images: 'images', skeleton: { x: -16, y: -8, width: 48, height: 40 },
     bones: [{ name: 'root' }, { name: 'a', parent: 'root' }, { name: 'b', parent: 'root' }],
     slots: [{ name: 'left', bone: 'a', attachment: 'left' }, { name: 'right', bone: 'b', attachment: 'right' }],
-    skins: { default: { left: { left: { image: 'block.png', x: 4, y: 2 } }, right: { right: { image: 'block.png', x: 8, y: 2 } } } } };
+    skins: { default: { left: { left: { image: 'left.png', x: 4, y: 2 } }, right: { right: { image: 'right.png', x: 8, y: 2 } } } } };
   writeFileSync(join(home, 'rig.json'), JSON.stringify(rig));
   writeFileSync(join(home, 'motion.json'), JSON.stringify({ spec: 'rigc-motion/1', archetype: 'seam_cells', cut: 'seam_cells', easings: {}, groups: {}, animations: Object.fromEntries(animations.map((name, index) => [name,
     { duration: 1 / 12, loop: false, tracks: ['a', 'b'].map((bone, i) => ({ bone, property: 'translate', keys: [0, 1 / 12].map(t => ({ t, v: [i === 0 ? -8 : 8, index * 20] })) })) }])) }));
@@ -49,6 +48,8 @@ function withoutCells(value: unknown): unknown {
 
 export function runSeamCellChecks(home: string, say: Say, base: Record<string, unknown> = {}): void {
   const plain = renderSeamCellFixture(home, false), flagged = renderSeamCellFixture(home, true);
+  const rig = JSON.parse(readFileSync(join(home, 'rig.json'), 'utf8')) as Record<string, unknown>;
+  const slots = checkSlotParts(rig, ['left', 'right']);
   const rows = readMotionSeamBackground(flagged, animations, 12, pairs, slots);
   const oldRows = readMotionSeamBackground(plain, animations, 12, pairs);
   const evidence: MotionCellSidecar = { spec: 'rig-parts-seam-cells/1', frames: [] };
@@ -64,7 +65,7 @@ export function runSeamCellChecks(home: string, say: Say, base: Record<string, u
   const classes = animations.map(animation => [...new Set(frames.filter(f => f.animation === animation).flatMap(f => f.cells.map(c => c.class)))]);
   const otherRows = readMotionSeamBackground(flagged, animations, 12, pairs, new Map());
   const rawNames = frames.filter(f => f.animation === 'figure').flatMap(f => f.cells.map(c => c.setupTop));
-  say('SO32_OPEN_CELLS_KEEP_COUNTS_AND_CLASSIFY_SETUP_ART_AND_BACKGROUND', countsHold && required.status === 'FAIL' &&
+  say('SO32_OPEN_CELLS_KEEP_COUNTS_AND_CLASSIFY_SETUP_ART_AND_BACKGROUND', countsHold && required.status === 'FAIL' && slots.get('left') === 'left' && slots.get('right') === 'right' &&
     JSON.stringify(classes) === '[["figure"],["background"]]' && rawNames.includes('left') && rawNames.includes('right') &&
     otherRows.find(row => row.animation === 'figure')?.hits.every(hit => hit.cells?.every(cell => cell.class === 'other')) === true &&
     JSON.stringify(errors) === JSON.stringify(oldErrors) &&
