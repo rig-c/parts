@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.21.0](https://github.com/rig-c/parts/compare/v2.20.2...v2.21.0) (2026-11-06)
+
+
+### Features
+
+* **assemble:** refuse declared missing hidden extent ([#1129](https://github.com/rig-c/parts/issues/1129)) ([9675229](https://github.com/rig-c/parts/commit/9675229b632fdc548fca57a5133edc484ceaf84f))
+
 ## [2.20.2](https://github.com/rig-c/parts/compare/v2.20.1...v2.20.2) (2026-11-06)
 
 
