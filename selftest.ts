@@ -2188,6 +2188,45 @@ function runConfigSuite(): number {
   const lineageDir = temp('revision-chain-698');
   try { runRevisionChainChecks(lineageDir, (name, ok, detail) => say(name, ok, detail, 'issue #531: recoverable deterministic parent metadata and truthful output rows; full command acceptance is separate')); }
   finally { rmSync(lineageDir, { recursive: true, force: true }); }
+  const files1134 = temp('config-files-1134');
+  try {
+    const generation = { ...fixtureGeneration(), control: { skeleton: 'missing-pose.json', strength: 0.8, end_percent: 0.7 } };
+    const raw: Record<string, unknown> = { ...minimalConfig(), requirements: 'missing-req.json', generation };
+    (raw.motion as Record<string, unknown>).animations_from = 'missing-motion.json';
+    const file = join(files1134, 'config.json');
+    writeFileSync(file, JSON.stringify(raw));
+    const before = JSON.stringify(raw);
+    const refs = configFileReferences(raw);
+    const problems = refusals(() => loadConfig(file))?.problems.filter((p) => p.code === 'CONFIG_FILE_PRESENT') ?? [];
+    const observed = problems.map((p) => p.object.replace(/^config\./, '')).sort();
+    const enumerated = refs.map((r) => r.at).sort();
+    const matches = JSON.stringify(observed) === JSON.stringify(enumerated) && refs.length > 0 && refs.every((r) => problems.some((p) => p.object === `config.${r.at}` && p.detail.includes(resolve(files1134, r.value))));
+    const untouched = before === JSON.stringify(raw);
+    refs.forEach((r) => r.set(resolve(files1134, r.value)));
+    const rewritten = configFileReferences(raw).every((r) => r.value === resolve(files1134, r.value));
+    generation.control.skeleton = 'stand_sides';
+    const builtIn = configFileReferences(raw).every((r) => r.at !== 'generation.control.skeleton');
+    writeFileSync(file, JSON.stringify(raw));
+    const builtInProblems = refusals(() => loadConfig(file))?.problems ?? [];
+    const builtInUnread = !builtInProblems.some((p) => p.object === 'config.generation.control.skeleton');
+    say('CF1134_PUBLIC_REFERENCES_EQUAL_REAL_LOADER_FILE_READS', matches && untouched && rewritten && builtIn && builtInUnread,
+      `loader ${observed.join(', ')}; export ${enumerated.join(', ')}; unchanged ${untouched}; setters ${rewritten}; built-in excluded ${builtIn && builtInUnread}`,
+      'issue #1134: missing-file diagnostics from the production loader independently identify reads; enumeration does not validate or read files');
+    const isolated = join(files1134, 'package');
+    mkdirSync(isolated);
+    cpSync(join(ROOT, 'src'), join(isolated, 'src'), { recursive: true });
+    copyFileSync(join(ROOT, 'package.json'), join(isolated, 'package.json'));
+    symlinkSync(join(ROOT, 'node_modules'), join(isolated, 'node_modules'), 'dir');
+    const source = join(isolated, 'src', 'config.ts');
+    const original = readFileSync(source, 'utf8');
+    const planted = original.replace('const CONFIG_FILE_FIELDS = {', "const CONFIG_FILE_FIELDS = {\n  planted: { path: ['x-file'], isFile: (_value: string) => true },");
+    writeFileSync(source, planted);
+    const probe = spawnSync('bun', ['-e', "import { configFileReferences } from './src/config.ts'; console.log(JSON.stringify(configFileReferences({'x-file':'plant.json', note:'ignore.json'}).map(({at,value})=>({at,value}))));"], { cwd: isolated, encoding: 'utf8', timeout: 30000 });
+    say('CF1134_TABLE_PLANT_REACHES_PUBLIC_ENTRY_WITHOUT_ANOTHER_EDIT', planted !== original && probe.status === 0 && probe.stdout.trim() === '[{"at":"x-file","value":"plant.json"}]',
+      `isolated table-only plant exit ${probe.status}; ${probe.stdout.trim()}; ${probe.stderr.trim()}`,
+      'issue #1134: the public entry follows a new loader declaration; unrelated strings remain excluded, and the working source is never mutated');
+  } finally { rmSync(files1134, { recursive: true, force: true }); }
+
   const good = refusals(() => parseConfig(minimalConfig()));
   say(
     'CF01_A_MINIMAL_CONFIG_WITH_ANNOTATIONS_LOADS_GREEN',
