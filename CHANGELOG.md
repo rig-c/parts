@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.20.2](https://github.com/rig-c/parts/compare/v2.20.1...v2.20.2) (2026-11-06)
+
+
+### Bug Fixes
+
+* **ci:** adopt guarded tree verdict receipt rollout ([#1127](https://github.com/rig-c/parts/issues/1127)) ([29df7e7](https://github.com/rig-c/parts/commit/29df7e70556104084cadabb08f163979f602de89))
+
 ## [2.20.1](https://github.com/rig-c/parts/compare/v2.20.0...v2.20.1) (2026-11-06)
 
 
