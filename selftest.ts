@@ -42187,7 +42187,7 @@ function releaseGraphFaults(wf: ReleaseWorkflow): string[] {
   if (reader === undefined || reader.run !== readerCommand || reader.if !== undefined || reader['continue-on-error'] !== undefined || readerAt <= proofAt || reader.env?.TREE_VERDICT_TOOLS !== '${{ steps.reuse.outputs.tooling-path }}' || reader.env?.TREE_VERDICT_PATH !== '${{ steps.reuse.outputs.verdict-path }}') faults.push('release.yml: publication reader must run unconditionally after its proof with the exact lifecycle command and evidence');
   const beforeGate = steps.findIndex((step) => (step.run ?? '').trim() === 'bun run smoke -- --case clean');
   const publications = steps.flatMap((step, at) => /\bnpm (?:publish|pack)\b|scripts\/alias_tarball\.ts pack/.test(step.run ?? '') ? [at] : []);
-  if (readerAt === -1 || beforeGate === -1 || readerAt >= beforeGate || publications.some((at) => readerAt >= at)) faults.push('release.yml: publication reader must precede smoke and every pack or publish');
+  if (readerAt === -1 || beforeGate === -1 || beforeGate >= readerAt || publications.some((at) => readerAt >= at)) faults.push('release.yml: smoke must precede the publication reader, which must precede every pack or publish');
   return faults;
 }
 
@@ -42278,7 +42278,7 @@ function runRepublishControls(say: (name: string, ok: boolean, detail: string, w
     { what: 'the publication reader ignores failure', yml: edit(yml, '        id: publication-reader\n', '        id: publication-reader\n        continue-on-error: true\n'), want: 'publication reader must run unconditionally' },
     { what: 'the pinned publication proof is dropped', yml: edit(yml, '        id: reuse\n', '        id: other-proof\n'), want: 'publication reader has no unconditional pinned publish proof' },
     { what: 'the publication reader is dropped', yml: readerStep === '' ? null : edit(yml, readerStep, ''), want: 'publication reader must run unconditionally' },
-    { what: 'the publication reader runs after smoke', yml: readerStep === '' || smokeStep === '' ? null : edit(yml.replace(readerStep, ''), smokeStep, `${smokeStep}${readerStep}`), want: 'publication reader must precede smoke' },
+    { what: 'smoke runs after the publication reader', yml: readerStep === '' || smokeStep === '' ? null : edit(yml.replace(smokeStep, ''), readerStep, `${readerStep}${smokeStep}`), want: 'smoke must precede the publication reader' },
     { what: 'the form refusal dropped', yml: edit(yml, '::error::RELEASE_TAG_FORM:', '::error::'), want: 'RELEASE_TAG_FORM' },
     { what: 'the below-latest refusal dropped', yml: edit(yml, '::error::RELEASE_TAG_BELOW_LATEST:', '::error::'), want: 'RELEASE_TAG_BELOW_LATEST' },
     { what: "the latest read dropped", yml: edit(yml, `registry_version "${packageName}"`, `registry_version "${packageName}-other"`), want: "below the registry's latest is not refused" },
