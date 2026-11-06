@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.20.1](https://github.com/rig-c/parts/compare/v2.20.0...v2.20.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* **head-crop-preflight:** document the JSON and counting basis, refuse an out-of-canvas box ([#1085](https://github.com/rig-c/parts/issues/1085)) ([#1124](https://github.com/rig-c/parts/issues/1124)) ([5e55128](https://github.com/rig-c/parts/commit/5e55128df04b65336b0229eb33146d145ebc5feb))
+
 ## [2.20.0](https://github.com/rig-c/parts/compare/v2.19.4...v2.20.0) (2026-11-06)
 
 
