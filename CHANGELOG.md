@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.23.1](https://github.com/rig-c/parts/compare/v2.23.0...v2.23.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* **assemble:** allocate painting edges to declared owners ([#1142](https://github.com/rig-c/parts/issues/1142)) ([12cb6f1](https://github.com/rig-c/parts/commit/12cb6f1b1d70157c8515919018a82b4d96987ade))
+
 ## [2.23.0](https://github.com/rig-c/parts/compare/v2.22.0...v2.23.0) (2026-11-06)
 
 
