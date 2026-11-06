@@ -1,3 +1,4 @@
+import { headBoxInside } from './headbox.ts';
 import { edgePairResiduals, type EdgeResidualReport } from './edgeresidual.ts';
 import type { SupportDomain } from './coincide.ts';
 import { type SeamRule } from './seamrule.ts';
@@ -1179,7 +1180,7 @@ export function checkGeometry(g: Geometry, runs?: { full: LayerSet; head: LayerS
   if (W < 1 || H < 1) fail('ASSEMBLE_RIG_SIZE', 'config.assemble.rig_scale', `${S} makes a ${W}x${H} rig from a ${w}x${h} painting; at least 1x1 is required`);
   const [x0, y0, x1, y1] = headBox;
   // A single run (issue #359) has no crop: its box is the full run's frame, derived, and may reach past the painting.
-  if (g.single !== true && !(x0 >= 0 && y0 >= 0 && x1 <= w && y1 <= h && x1 > x0 && y1 > y0)) {
+  if (g.single !== true && !headBoxInside(headBox, w, h)) {
     fail('ASSEMBLE_HEAD_BOX_INSIDE', 'config.seethrough.head_box', `is [${headBox.join(', ')}]; a non-empty box inside the ${w}x${h} painting is required`);
   }
   const headBottom = Math.trunc(y1 * S) - HEAD_BOTTOM_INSET;

@@ -26,6 +26,43 @@ export function runHeadCropPreflightChecks(dir: string, say: (name: string, ok: 
   say('PR1082_NO_HIT_AND_BOTTOM_ONLY', counts(inside) === '64,0,0,0,0' && headCropPreflightLines(inside).length === 0 && counts(bottom) === '64,0,0,0,16' && headCropPreflightLines(bottom).length === 1, counts(bottom), 'zero rows retained in JSON; bottom advice remains separate');
   const child = spawnSync(process.execPath, ['cli.ts', 'head-crop-preflight', '--full', fullDir, '--canvas', '8x8', '--head-box', '[2.5,2.5,5.5,5.5]'], { encoding: 'utf8' });
   say('PR1082_CLI_REPORT_ONLY', child.status === 0 && child.stdout === JSON.stringify(fractional) + '\n' && child.stderr === headCropPreflightLines(fractional).join('\n') + '\n', `exit ${child.status}; stdout ${child.stdout.trim()}; stderr ${child.stderr.trim()}`, 'clipping exits zero with parseable JSON and exactly one hit-tag line; no head run/config required');
+  const multiDir = join(dir, 'multi');
+  writeRun(multiDir, [
+    { name: 'back hair', depth: 0.5, rects: [{ x0: 0, y0: 0, x1: 8, y1: 8, colour: C }] },
+    { name: 'front hair', depth: 0.6, rects: [{ x0: 3, y0: 6, x1: 5, y1: 8, colour: C }] },
+    { name: 'face', depth: 0.7, rects: [{ x0: 3, y0: 3, x1: 5, y1: 5, colour: C }] },
+  ], 8);
+  const multi = spawnSync(process.execPath, ['cli.ts', 'head-crop-preflight', '--full', multiDir, '--canvas', '8x8', '--head-box', '[2,2,6,6]'], { encoding: 'utf8' });
+  const expectedMulti = {
+    spec: 'rig-parts/head-crop-preflight/1', head_box: [2, 2, 6, 6], source_canvas: { w: 8, h: 8 }, run_canvas: { w: 8, h: 8 },
+    drawn_alpha_above: 8, pixel_grid: 'full-run', registration: { scale_source_per_run: 1, pad_left: 0, pad_top: 0 },
+    layers: [
+      { tag: 'back hair', drawn_px: 64, sides: { top_px: 16, left_px: 16, right_px: 16 }, bottom_px: 16 },
+      { tag: 'front hair', drawn_px: 4, sides: { top_px: 0, left_px: 0, right_px: 0 }, bottom_px: 4 },
+      { tag: 'face', drawn_px: 4, sides: { top_px: 0, left_px: 0, right_px: 0 }, bottom_px: 0 },
+    ],
+  };
+  const expectedLines = [
+    'HEAD_CROP_PREFLIGHT: tag "back hair" — top 16, left 16, right 16 drawn px; bottom 16 drawn px (extend_below_crop); report only',
+    'HEAD_CROP_PREFLIGHT: tag "front hair" — top 0, left 0, right 0 drawn px; bottom 4 drawn px (extend_below_crop); report only',
+  ];
+  say('PR1085_MULTI_TAG_JSON_AND_LINES', multi.status === 0 && multi.stdout === JSON.stringify(expectedMulti) + '\n' && multi.stderr === expectedLines.join('\n') + '\n',
+    `exit ${multi.status}; stdout ${multi.stdout.trim()}; stderr ${multi.stderr.trim()}`, 'hand-counted production CLI bytes include three JSON rows and exactly two hit-tag lines');
+  for (const [box, code] of [
+    ['[-1,0,8,8]', 'ASSEMBLE_HEAD_BOX_INSIDE'],
+    ['[0,-1,8,8]', 'ASSEMBLE_HEAD_BOX_INSIDE'],
+    ['[0,0,9,8]', 'ASSEMBLE_HEAD_BOX_INSIDE'],
+    ['[0,0,8,9]', 'ASSEMBLE_HEAD_BOX_INSIDE'],
+    ['[2,2,1,1]', 'HEAD_CROP_PREFLIGHT_BOX'],
+    ['[0,0,8]', 'USAGE'],
+    ['[0,0,8,"8"]', 'USAGE'],
+    ['null', 'USAGE'],
+    ['[', 'USAGE'],
+  ] as const) {
+    const refused = spawnSync(process.execPath, ['cli.ts', 'head-crop-preflight', '--full', fullDir, '--canvas', '8x8', '--head-box', box], { encoding: 'utf8' });
+    say(`PR1085_CLI_BOX_${box}`, refused.status === (code === 'USAGE' ? 2 : 1) && refused.stdout.includes(code) && refused.stderr === '' && !refused.stdout.includes('\"spec\":'),
+      `exit ${refused.status}; ${refused.stdout.trim()} ${refused.stderr.trim()}`, 'all four outside edges refuse before JSON; malformed CLI inputs retain their documented routes');
+  }
   for (const [label, invoke, code] of [
     ['BOX', () => report([2, 2, 1, 1]), 'HEAD_CROP_PREFLIGHT_BOX'],
     ['CANVAS', () => report([0, 0, 8, 8], 0, 8), 'HEADBOX_CANVAS_SIZE'],

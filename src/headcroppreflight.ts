@@ -1,7 +1,7 @@
 /** Read-only crop advice on the original full-run drawn-pixel grid (issue #1082). */
 import { squarePad } from './inputs.ts';
 import { OPAQUE_ALPHA_ABOVE, type LayerSet } from './layers.ts';
-import type { Box } from './headbox.ts';
+import { headBoxInside, type Box } from './headbox.ts';
 import { refuseIfAny, type Problem } from './errors.ts';
 
 export const HEAD_CROP_PREFLIGHT_LINE = 'HEAD_CROP_PREFLIGHT';
@@ -12,6 +12,8 @@ export function headCropPreflight(full: LayerSet, source: { w: number; h: number
   if (![source.w, source.h].every(n => Number.isInteger(n) && n > 0)) problems.push({ code: 'HEADBOX_CANVAS_SIZE', object: '--canvas', detail: `painting is ${source.w}x${source.h}; positive integer dimensions required` });
   if (full.canvas.w !== full.canvas.h || !Number.isInteger(full.canvas.w) || full.canvas.w <= 0) problems.push({ code: 'HEADBOX_RUN_SQUARE', object: full.source, detail: `full run is ${full.canvas.w}x${full.canvas.h}; a positive square canvas is required` });
   if (box.length !== 4 || !box.every(Number.isFinite) || !(box[0] < box[2] && box[1] < box[3])) problems.push({ code: 'HEAD_CROP_PREFLIGHT_BOX', object: '--head-box', detail: `head_box ${JSON.stringify(box)}; four finite coordinates with left < right and top < bottom required` });
+  refuseIfAny(problems);
+  if (!headBoxInside(box, source.w, source.h)) problems.push({ code: 'ASSEMBLE_HEAD_BOX_INSIDE', object: '--head-box', detail: `is [${box.join(', ')}]; a non-empty box inside the ${source.w}x${source.h} painting is required` });
   refuseIfAny(problems);
   const pad = squarePad(source.w, source.h);
   const scale = pad.side / full.canvas.w;
