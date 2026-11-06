@@ -148,6 +148,8 @@ export const EDGE_RADIUS = 3;
 export const EDGE_OWNER_ALPHA = 128;
 /** The least front contrast resolved, max channel. Equal to `ERROR_LIMIT` in `src/assemble.ts` (held by the selftest). */
 export const EDGE_CONTRAST = 40;
+export const PAINTING_ALLOCATION_FILE = 'painting_allocation.json';
+export const PAINTING_EDGE_COVERAGE_TRANSFER = 'PAINTING_EDGE_COVERAGE_TRANSFER';
 
 /** Why an edge pixel was left as it was; see {@link paintingEdges}. */
 export interface PaintingEdgeSkips {
@@ -180,6 +182,15 @@ export interface PaintingAllocationReading {
   refused: Record<string, number>;
   lineage: PaintingReceivers['faults'];
   fallbackHeld: number;
+  /** Accepted transfers after piece guarding and restoration. These observe
+   * allocation, without inferring painted order or motion-space coverage. */
+  coverageTransfers: Array<{
+    front: string;
+    receiver: string;
+    owner: string;
+    /** Native rig pixels, sorted [y, left, right-exclusive] spans. */
+    pixels: { count: number; spans: Array<[number, number, number]> };
+  }>;
 }
 
 export interface PaintingEdgeOptions {
@@ -276,7 +287,7 @@ function applyPaintingEdges(
   const allocation = options.owner;
   const events: Array<{ p: number; front: number; behind: number; target: number; affected: number[]; status: string; reason: string }> = [];
   const reading: PaintingAllocationReading | undefined = allocation === undefined ? undefined
-    : { supplier: allocation.supplier, refused: {}, lineage: allocation.faults, fallbackHeld: 0 };
+    : { supplier: allocation.supplier, refused: {}, lineage: allocation.faults, fallbackHeld: 0, coverageTransfers: [] };
   const W = srcr.width;
   const H = srcr.height;
   const n = parts.length;
@@ -831,6 +842,29 @@ function applyPaintingEdges(
     for (const p of writes.keys()) options.written?.(i, p);
   });
   for (const [p, front] of restore) if (!planned[front].has(p)) options.written?.(front, p);
+  // The legacy FRONT surface was moved to an accepted BEHIND owner. Read the
+  // applied output, including restoration: a held clear is never a transfer.
+  if (reading !== undefined && allocation !== undefined && existing !== undefined) {
+    const groups = new Map<string, PaintingAllocationReading['coverageTransfers'][number]>();
+    for (const event of events) {
+      const { p, front, target } = event;
+      if (event.status !== 'assigned' || target >= front ||
+        existing.parts[front].data[p * 4 + 3] === 0 || parts[front].data[p * 4 + 3] !== 0 ||
+        parts[target].data[p * 4 + 3] === 0) continue;
+      const key = `${front}/${target}`;
+      let row = groups.get(key);
+      if (row === undefined) {
+        row = { front: allocation.receiverNames[front], receiver: allocation.receiverNames[target],
+          owner: allocation.names[allocation.pixels[p]], pixels: { count: 0, spans: [] } };
+        groups.set(key, row);
+      }
+      const x = p % W, y = Math.floor(p / W), previous = row.pixels.spans.at(-1);
+      if (previous !== undefined && previous[0] === y && previous[2] === x) previous[2]++;
+      else row.pixels.spans.push([y, x, x + 1]);
+      row.pixels.count++;
+    }
+    reading.coverageTransfers = [...groups.values()];
+  }
   return { changed, resolved, unseparated, skipped, ...(reading === undefined ? {} : { allocation: reading }) };
 }
 

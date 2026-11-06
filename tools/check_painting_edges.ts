@@ -17,7 +17,7 @@ import { runEdgeResidualChecks } from './check_edge_residual.ts';
 import { paintedFigure, COVERED_ALPHA, ERROR_LIMIT } from '../src/assemble.ts';
 import { OPAQUE_ALPHA_ABOVE } from '../src/layers.ts';
 import { connectedComponents } from '../src/raster/components.ts';
-import { EDGE_CONTRAST, EDGE_OWNER_ALPHA, EDGE_RADIUS, paintingEdges, type PaintingEdgeOptions } from '../src/paintingedges.ts';
+import { EDGE_CONTRAST, EDGE_OWNER_ALPHA, EDGE_RADIUS, PAINTING_ALLOCATION_FILE, PAINTING_EDGE_COVERAGE_TRANSFER, paintingEdges, type PaintingEdgeOptions } from '../src/paintingedges.ts';
 import { newMask, newRaster, type Raster } from '../src/raster/types.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
@@ -189,11 +189,20 @@ export function runPaintingEdgeChecks(say: Say): void {
     const readings = ['omitted', 'declared', 'config-mask'].map(name => {
       const declared = name !== 'omitted';
       const out = join(directory, name);
+      const logs: string[] = [];
       const result = assembleStage({ ...input, config: name === 'config-mask' ? configMask : input.config,
         ...(name === 'declared' ? { requirements } : {}),
         alts: [{ name: 'same', source: input.source, full: input.full, head: input.head }] },
       { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),
-        recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, () => {});
+        recomposite: join(out, 'recomposite.png'), errorMap: join(out, 'error.png') }, line => logs.push(line));
+      const report = JSON.parse(readFileSync(join(out, PAINTING_ALLOCATION_FILE), 'utf8')) as {
+        spec: string; code: string; coverageTransfers: unknown[];
+      };
+      say('ED1146_ASSEMBLE_PERSISTS_TRANSFER_REPORT_' + name.toUpperCase().replaceAll('-', '_'),
+        report.spec === 'rig-parts-painting-allocation/1' && report.code === PAINTING_EDGE_COVERAGE_TRANSFER &&
+        JSON.stringify(report.coverageTransfers) === JSON.stringify(result.paintingEdges?.allocation?.coverageTransfers) &&
+        logs.some(line => line.startsWith(PAINTING_EDGE_COVERAGE_TRANSFER + ':')),
+        'normal assemble persists exact transfer rows and names the report in its diagnostic');
       const base = result.parts.parts.find(part => part.name === 'topwear');
       const alternate = result.parts.alternates?.[0];
       const alternatePart = alternate?.records.find(part => part.name === 'topwear');
@@ -211,6 +220,13 @@ export function runPaintingEdgeChecks(say: Say): void {
     say('ED9579_CONFIG_ONLY_MASK_RESTORES_WITHOUT_CUT_MATERIAL_OUTPUT',
       configMaskReading?.base === 255 && configMaskReading.alternate === 255 && !configMaskReading.materialOutput,
       JSON.stringify(configMaskReading));
+    const coreConfig = join(directory, 'core.json');
+    writeFileSync(coreConfig, JSON.stringify({ ...config, assemble: { ...declaration, project: 'core' } }));
+    const stale = join(directory, 'omitted');
+    assembleStage({ ...input, config: coreConfig }, { partsJson: join(stale, 'parts.json'), partsDir: join(stale, 'parts'),
+      recomposite: join(stale, 'recomposite.png'), errorMap: join(stale, 'error.png') }, () => {});
+    say('ED1146_NON_VISIBLE_ASSEMBLE_REMOVES_STALE_REPORT', !existsSync(join(stale, PAINTING_ALLOCATION_FILE)),
+      'reusing a visible output for core assembly removes the previous allocation reading');
 
     const paintingCopy = join(directory, 'same-bytes.png');
     writeFileSync(paintingCopy, readFileSync(input.source));

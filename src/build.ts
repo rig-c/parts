@@ -6,7 +6,7 @@ import { SUPPORT_DOMAINS_FILE, writeSupportDomains } from './supportdomains.ts';
 import { COINCIDE_LINE, supportLines } from './coincide.ts';
 import { DEFAULT_SEAM_RULE } from './seamrule.ts';
 import { DEFAULT_PROJECT_RULE } from './projectrule.ts';
-import { EDGE_CONTRAST } from './paintingedges.ts';
+import { EDGE_CONTRAST, PAINTING_ALLOCATION_FILE, PAINTING_EDGE_COVERAGE_TRANSFER } from './paintingedges.ts';
 import { SETUP_PAINTING_LINE, setupPaintingLines } from './setuppainting.ts';
 import { boundaryColourLines } from './boundarycolour.ts';
 import { writeMaterialSources } from './cutmaterialio.ts';
@@ -846,6 +846,13 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const residualPath = join(dirname(outs.partsJson), EDGE_RESIDUAL_FILE);
   if (result.edgeResiduals === undefined) rmSync(residualPath, { force: true });
   else writeFileSync(residualPath, JSON.stringify(result.edgeResiduals, null, 2) + '\n');
+  const allocationPath = join(dirname(outs.partsJson), PAINTING_ALLOCATION_FILE);
+  const allocation = result.paintingEdges?.allocation;
+  if (allocation === undefined) rmSync(allocationPath, { force: true });
+  else writeFileSync(allocationPath, JSON.stringify({ spec: 'rig-parts-painting-allocation/1',
+    code: PAINTING_EDGE_COVERAGE_TRANSFER,
+    stage: 'paintingEdges after piece guarding and restoration', grid: result.parts.rig_size,
+    ...allocation }, null, 2) + '\n');
   for (const { record, image, depthImage } of result.images) {
     writePng(join(outs.partsDir, `${record.name}.png`), image);
     if (depthImage !== undefined && record.depth !== undefined) writePng(join(outs.partsDir, record.depth.image), depthImage);
@@ -876,6 +883,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     if (e.allocation !== undefined) {
       const a = e.allocation;
       log(`painting owner: ${a.supplier}; ${a.fallbackHeld} clean-fallback part px held by piece preservation`);
+      log(`${PAINTING_EDGE_COVERAGE_TRANSFER}: ${a.coverageTransfers.reduce((n, row) => n + row.pixels.count, 0)} native rig px; membership in ${PAINTING_ALLOCATION_FILE}`);
       for (const [reason, px] of Object.entries(a.refused)) log(`  painting owner refused: ${reason}, ${px} edge px`);
       for (const fault of a.lineage) log(`  painting receiver refused: "${fault.receiver}", ${fault.reason}; one declared raw-plan ancestor is required`);
     }
