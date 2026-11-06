@@ -798,6 +798,28 @@ existing geometry refusal and its message.
 Region take entries accept the same optional `crop` and use this transport before
 selecting the seeded component on the target run canvas.
 
+### Owner coverage transfers (`painting_allocation.json`, issue #1146)
+
+Under `assemble.project: "visible"`, assemble writes `painting_allocation.json`
+beside `parts.json`. Other projection modes remove a stale report on output
+reuse. Its `spec` is `rig-parts-painting-allocation/1`, `grid` is the native rig
+size, `code` is `PAINTING_EDGE_COVERAGE_TRANSFER`, and `stage` names paintingEdges
+after piece guarding and restoration.
+The report includes the owner `supplier`, `refused` reason counts, `lineage`
+faults, `fallbackHeld` count and `coverageTransfers` rows.
+
+Each transfer names `front`, `receiver` and raw-plan `owner`, with
+`pixels.count` and `pixels.spans`. Spans are sorted native rig
+`[y, left, right-exclusive]` coordinates. A row requires an accepted allocation
+to a receiver drawn behind FRONT, positive FRONT alpha in the legacy scratch
+evaluation, zero applied FRONT alpha and positive applied receiver alpha.
+Held clears and restored FRONT coverage are excluded. This is an edge-pass
+observation, before later assembly stages. It establishes neither painted
+strand order nor motion-space gaps.
+
+`PAINTING_EDGE_COVERAGE_TRANSFER` prints the pixel count and report filename.
+The report observes the existing allocation and leaves its raster writes intact.
+
 ### Residual front/back edges (`edge_residuals.json`, issue #999)
 
 Under `assemble.project: "visible"`, assemble writes `edge_residuals.json` beside
@@ -5266,6 +5288,7 @@ those settings. Changing a config seed alone cannot change a no-config run.
 | <a id="ASSEMBLE_TAKE_DEPTH_AMBIGUOUS"></a>`ASSEMBLE_TAKE_DEPTH_AMBIGUOUS` | different original runs have equal or null depths | use a run with distinct numeric depths; do not invent an inter-run tie order |
 | <a id="ASSEMBLE_TAKE_PLAN_ORDER"></a>`ASSEMBLE_TAKE_PLAN_ORDER` | supplied plan reverses an overlapping mixed-run pair: two-run full-layer head roles first, scalar depth within a role band (head-run and single-run rows use scalar depth); names the parts and support intersection | use the order drafted by `assemble --propose-plan`; fallback headwear follows the body and precedes the face, front hair follows the face; disjoint supports impose no plan-order constraint |
 | <a id="EDGE_PAIR_RESIDUAL"></a>`EDGE_PAIR_RESIDUAL` | report-only front/back residual candidates after visible edge composition, with pixel spans, boxes and coverage | read measured candidates and explicit skipped/unavailable reasons in `edge_residuals.json`. No pass/fail threshold is applied |
+| <a id="PAINTING_EDGE_COVERAGE_TRANSFER"></a>`PAINTING_EDGE_COVERAGE_TRANSFER` | accepted allocation clears legacy FRONT coverage into a BEHIND owner | read native rig membership in `painting_allocation.json`. Painted order and motion gaps require separate evidence |
 | <a id="ASSEMBLE_REGION_TAKE_REFERENCE_IMPLICIT"></a>`ASSEMBLE_REGION_TAKE_REFERENCE_IMPLICIT` | warning, `reference` is absent and the predicate uses `--source` | declare a painting reference and its PNG hash to keep the mask independent of projection-source changes |
 | <a id="ASSEMBLE_REGION_TAKE_REFERENCE"></a>`ASSEMBLE_REGION_TAKE_REFERENCE` | a declared region reference is unreadable | supply the declared PNG, with `source: true` or `painting` and its byte hash |
 | <a id="ASSEMBLE_REGION_TAKE_REFERENCE_MATCH"></a>`ASSEMBLE_REGION_TAKE_REFERENCE_MATCH` | a reference hash or painting dimensions differ | supply the declared PNG and preserve the source geometry |

@@ -133,10 +133,23 @@ export function runPaintingOwnerChecks(say: Say): void {
       owned.map((image, i) => ({ name: i === 0 ? 'behind' : 'front', image, region: null })), []);
     const options = { painted: new Uint8Array(4096).fill(1), editable: [true, true] };
     paintingEdges(old, input.source, options);
-    paintingEdges(owned, input.source, { ...options, owner: contract });
+    const ownedResult = paintingEdges(owned, input.source, { ...options, owner: contract });
     const p = 8 * 64 + 32;
     say('ED1038_PLANTED_FOREIGN_FRONT_AND_OWNER_ALLOCATION', old[1].data[p * 4 + 3] > 0 && owned[1].data[p * 4 + 3] === 0 &&
       [0, 1, 2].every(c => owned[0].data[p * 4 + c] === input.source.data[p * 4 + c]), 'legacy foreign FRONT write fires, owner-aware BEHIND keeps its own painting pixel');
+    const transfers = ownedResult.allocation?.coverageTransfers ?? [];
+    const transferred = transfers.flatMap(row => row.pixels.spans.flatMap(([y, left, right]) =>
+      Array.from({ length: right - left }, (_, x) => y * 64 + left + x)));
+    const expected = Array.from({ length: 4096 }, (_, pixel) => pixel).filter(pixel =>
+      old[1].data[pixel * 4 + 3] > 0 && owned[1].data[pixel * 4 + 3] === 0 && owned[0].data[pixel * 4 + 3] > 0);
+    say('ED1146_ACCEPTED_BEHIND_TRANSFER_NAMES_EXACT_MEMBERSHIP',
+      transferred.includes(p) && transfers.every(row => row.front === 'front' && row.receiver === 'behind' && row.owner === 'behind') &&
+      JSON.stringify([...transferred].sort((a, b) => a - b)) === JSON.stringify(expected) &&
+      transfers.reduce((n, row) => n + row.pixels.count, 0) === transferred.length,
+      `legacy FRONT positive -> applied clear, BEHIND covered: ${transferred.length} pixels; witness ${p}`);
+    const legacyResult = paintingEdges(old.map(r => ({ ...r, data: new Uint8ClampedArray(r.data) })), input.source, options);
+    say('ED1146_OMITTED_OWNER_HAS_NO_TRANSFER_REPORT', legacyResult.allocation === undefined,
+      'a legacy call supplies no owner transfer reading');
     // The raw owner can cover a pixel whose assembled receiver has only soft
     // support. An opaque receive there must still pass piece preservation.
     const heldParts = input.full.layers.map(q => ({ ...q.pixels, data: new Uint8ClampedArray(q.pixels.data) }));
@@ -149,6 +162,18 @@ export function runPaintingOwnerChecks(say: Say): void {
     say('ED1038_PLANTED_OWNER_ZERO_RECEIVE_ISLAND_IS_HELD', heldParts[1].data[heldPixel * 4 + 3] === 5 &&
       (heldResult.allocation?.refused['front-owner-zero-coverage-held'] ?? 0) > 0,
       `held alpha ${heldParts[1].data[heldPixel * 4 + 3]}, refusal ${heldResult.allocation?.refused['front-owner-zero-coverage-held'] ?? 0}`);
+    say('ED1146_HELD_ALLOCATION_IS_ABSENT_FROM_TRANSFERS',
+      (heldResult.allocation?.coverageTransfers ?? []).every(row => row.pixels.spans.every(([y, left, right]) =>
+        y !== 8 || heldPixel % 64 < left || heldPixel % 64 >= right)),
+      'the held owner-zero receive is absent from accepted transfer membership');
+    const kept = input.full.layers.map(q => ({ ...q.pixels, data: new Uint8ClampedArray(q.pixels.data) }));
+    const keep = newMask(64, 64); keep.data[p] = 1;
+    const keptResult = paintingEdges(kept, input.source, { ...options, owner: contract, keep: [null, keep] });
+    say('ED1146_PROTECTED_FRONT_CLEAR_IS_ABSENT_FROM_TRANSFERS',
+      kept[1].data[p * 4 + 3] === 5 &&
+      (keptResult.allocation?.coverageTransfers ?? []).every(row => row.pixels.spans.every(([y, left, right]) =>
+        y !== 8 || p % 64 < left || p % 64 >= right)),
+      'a protected FRONT keeps its original coverage and has no accepted transfer row');
     const zero = assemble(paintingOwnerFixture(join(directory, 'zero'), true));
     let received = 0;
     for (let y = 4; y < 60; y++) if (rgba(zero, 'front', 31, y).join() === '120,130,140,255') received++;
