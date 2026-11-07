@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.26.0](https://github.com/rig-c/parts/compare/v2.25.1...v2.26.0) (2026-11-07)
+
+
+### Features
+
+* **parts:** check-parts, a hash-bound parts-stage integrity report ([#1178](https://github.com/rig-c/parts/issues/1178)) ([78eade7](https://github.com/rig-c/parts/commit/78eade708232d1ccdb1d11ea8de84de58ff9aadb))
+
 ## [2.25.1](https://github.com/rig-c/parts/compare/v2.25.0...v2.25.1) (2026-11-07)
 
 
