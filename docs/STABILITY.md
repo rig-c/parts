@@ -42,6 +42,20 @@ The loader's file-field declarations determine membership; no separate list is
 maintained. Resolve `value` against the source config directory when relocating.
 Existing deep package paths remain available.
 
+The same subpath exports `checkFileReferences(raw: unknown, configFile: string,
+requirements?: RequirementsFile): CheckFileReference[]` and the
+`CheckFileReference` type (issue #1138). `requirements` is the value returned by
+`readRequirements` from `@rig-c/parts/src/requirements.ts`. The result lists every
+file `check` reads from a config and its requirements. Each row has `at: string`
+(the dotted field) and `value: string` (the path relative to the config's
+directory). Rows come in this order: the `configFileReferences` rows, then
+`requirements.setup_painting.figure_mask.path` and
+`requirements.setup_painting.backdrop.path` when they are declared. Setup images
+resolve through the same code the check's readers use. Enumeration neither reads
+files nor changes its inputs. Inputs that resolve from the rig or parts directory
+(seam and `cut_material` part images, `cut_material_sources.json`) are not listed,
+because the caller already carries that directory with the check.
+
 ## Commands and flags
 
 Exit codes are part of the interface: **0** the command did what it says, **1** it

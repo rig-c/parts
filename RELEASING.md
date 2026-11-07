@@ -399,10 +399,3 @@ reporting which package it is waiting for and for how long. Its exits:
 A dispatch with `version` runs the `confirm` job only, so a re-run cannot
 publish or re-cut anything; release-please, which makes the tag and the
 release, runs only on a push (`gh workflow run release.yml -f version=X.Y.Z`).
-
-## Check input import surface
-
-`@rig-c/parts/src/config.ts` exports `checkFileReferences` and the
-`CheckFileReference` type beside `configFileReferences`. Its requirements input
-is the `RequirementsFile` returned by `@rig-c/parts/src/requirements.ts`'s
-`readRequirements`. The shipped `src` directory carries both subpaths.
