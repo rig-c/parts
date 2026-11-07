@@ -140,7 +140,7 @@ import { PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { GRID } from './contour.ts';
 import { eyeLineDegrees, type FrameFeature, headAxes, type HeadAxes, headFrame, type HeadFrame } from './headframe.ts';
 import { type LayerSet, OPAQUE_ALPHA_ABOVE } from './layers.ts';
-import { PAINTING_RUN, type PartRecord, type PartsFile, readParts } from './parts.ts';
+import { PAINTING_RUN, type PartRecord, type PartsFile, partImageReference, readParts } from './parts.ts';
 import { connectedComponents } from './raster/components.ts';
 import { dilate, morphGradient } from './raster/morph.ts';
 import { readPng } from './raster/png.ts';
@@ -922,7 +922,7 @@ export function readPartSet(dir: string): PartSet {
   const problems: Problem[] = [];
   const images = new Map<string, Raster>();
   for (const p of file.parts) {
-    const png = join(dir, 'parts', `${p.name}.png`);
+    const png = join(dir, partImageReference(p).path);
     if (!existsSync(png)) {
       problems.push({ code: 'PROPOSE_PNG_PRESENT', object: `part "${p.name}"`, detail: `${png} does not exist; parts.json names it` });
       continue;

@@ -369,6 +369,7 @@ export interface AlternatePartsRecord {
   registration?: { offset: [number, number]; scale: number };
 }
 
+export const FIGURE_MASK_FILE = 'figure_rig.png';
 export const PAINTING_IN_RIG_FILE = 'painting_in_rig.png';
 export interface PaintingInRig {
   path: typeof PAINTING_IN_RIG_FILE;
@@ -600,7 +601,48 @@ export function writeParts(path: string, file: PartsFile): void {
   writeFileSync(path, text);
 }
 
-export function readParts(path: string): PartsFile {
+/** A declared PNG path relative to the directory holding parts.json. */
+export interface PartsFileReference {
+  path: string;
+  role: 'part' | 'alternate' | 'depth' | 'painting' | 'figure_mask';
+}
+
+/** Shared with the PNG readers, including their alternate attachment names. */
+export function partImageReference(part: PartRecord, set?: string): PartsFileReference {
+  return { path: `parts/${set === undefined ? part.name : `${set}_${part.name}`}.png`, role: set === undefined ? 'part' : 'alternate' };
+}
+
+export function depthImageReference(depth: PartDepthReference): PartsFileReference {
+  return { path: `parts/${depth.image}`, role: 'depth' };
+}
+
+function paintingImageReference(painting: PaintingInRig): PartsFileReference {
+  return { path: painting.path, role: 'painting' };
+}
+
+/** Read the manifest without opening, hashing or decoding its PNG references. */
+export function partsFileReferences(dir: string): PartsFileReference[] {
+  const file = readPartsManifest(join(dir, 'parts.json'));
+  const references: PartsFileReference[] = [];
+  const addScene = (scene: SceneRecord | undefined): void => {
+    if (scene !== undefined) references.push({ path: scene.figure_mask, role: 'figure_mask' });
+  };
+  addScene(file.scene);
+  if (file.painting_in_rig !== undefined) references.push(paintingImageReference(file.painting_in_rig));
+  const add = (part: PartRecord, set?: string): void => {
+    references.push(partImageReference(part, set));
+    if (part.depth !== undefined) references.push(depthImageReference(part.depth));
+  };
+  for (const part of file.parts) add(part);
+  for (const alternate of file.alternates ?? []) {
+    addScene(alternate.scene);
+    for (const part of alternate.records) add(part, alternate.name);
+  }
+  const unique = new Map(references.map(reference => [`${reference.path}\0${reference.role}`, reference]));
+  return [...unique.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : a.role < b.role ? -1 : a.role > b.role ? 1 : 0);
+}
+
+function readPartsManifest(path: string): PartsFile {
   if (!existsSync(path)) refuseIfAny([{ code: 'PARTS_FILE_PRESENT', object: path, detail: 'no such file; --parts names the directory holding parts.json and parts/ (work/rig from assemble --out work, or out from build --out out)' }]);
   let raw: unknown;
   try {
@@ -608,10 +650,14 @@ export function readParts(path: string): PartsFile {
   } catch (err) {
     refuseIfAny([{ code: 'PARTS_IS_JSON', object: path, detail: `does not parse as JSON: ${(err as Error).message}` }]);
   }
-  const file = checkParts(raw, path);
+  return checkParts(raw, path);
+}
+
+export function readParts(path: string): PartsFile {
+  const file = readPartsManifest(path);
   const declared = file.painting_in_rig;
   if (declared !== undefined) {
-    const imagePath = join(dirname(path), declared.path);
+    const imagePath = join(dirname(path), paintingImageReference(declared).path);
     const problems: Problem[] = [];
     const fail = (code: string, detail: string): void => { problems.push({ code, object: imagePath, detail }); };
     let bytes: Uint8Array | undefined;
@@ -639,6 +685,14 @@ function checkPaintingExtensionCount(r: Record<string, unknown>, label: string, 
   const n = r.painting_extension_px;
   if (!Number.isSafeInteger(n) || (n as number) < 0) fail('PARTS_FIELD_TYPE', label + ' painting_extension_px', `is ${show(n)}; a nonnegative safe integer is required`);
   else if (!Number.isSafeInteger(r.opaque_px) || (n as number) > (r.opaque_px as number)) fail('PARTS_COUNTS_ADD_UP', label + ' painting_extension_px', `is ${show(n)}; at most opaque_px ${show(r.opaque_px)} is required`);
+}
+
+function checkFigureMask(value: unknown, object: string, fail: (code: string, object: string, detail: string) => void): void {
+  if (value !== FIGURE_MASK_FILE) fail('PARTS_FIELD_TYPE', object, `is ${show(value)}; exactly "${FIGURE_MASK_FILE}" is required`);
+}
+
+function isPartName(value: unknown): value is string {
+  return typeof value === 'string' && value !== '' && !/[\\/]/.test(value) && !value.startsWith('.');
 }
 
 function show(v: unknown): string {
@@ -740,7 +794,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
       if (held.length > 0 && held.length < VISIBILITY_KEYS.length) {
         fail('PARTS_FIELD_PRESENT', `${label} fields ${VISIBILITY_KEYS.map((k) => `"${k}"`).join(', ')}`, `only ${held.join(', ')} present; all three (assemble writes them) or none (the reference's record) is required`);
       }
-      if (typeof r.name !== 'string' || r.name === '' || /[\\/]/.test(r.name) || r.name.startsWith('.')) {
+      if (!isPartName(r.name)) {
         fail('PARTS_FIELD_TYPE', `${label} field "name"`, `is ${show(r.name)}; a file-name-safe part name is required`);
       } else if (seen.has(r.name)) fail('PARTS_NAME_UNIQUE', label, `appears at parts[${seen.get(r.name)}] and parts[${i}]`);
       else seen.set(r.name, i);
@@ -842,7 +896,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
       for (const k of Object.keys(r)) if (!(SCENE_KEYS as readonly string[]).includes(k)) fail('PARTS_KEY_KNOWN', `${path} scene key "${k}"`, `is not a scene field; known: ${SCENE_KEYS.join(', ')}`);
       for (const k of SCENE_KEYS) if (!(k in r)) fail('PARTS_FIELD_PRESENT', `${path} scene field "${k}"`, 'is absent and required');
       for (const k of ['figure_alpha_above', 'figure_px'] as const) if (k in r && !(Number.isInteger(r[k]) && (r[k] as number) >= 0)) fail('PARTS_FIELD_TYPE', `${path} scene field "${k}"`, `is ${show(r[k])}; a non-negative integer is required`);
-      if ('figure_mask' in r && !(typeof r.figure_mask === 'string' && r.figure_mask !== '')) fail('PARTS_FIELD_TYPE', `${path} scene field "figure_mask"`, `is ${show(r.figure_mask)}; the mask's file name is required`);
+      if ('figure_mask' in r) checkFigureMask(r.figure_mask, `${path} scene field "figure_mask"`, fail);
       if (!('recomposite' in o)) fail('PARTS_FIELD_PRESENT', `${path} field "recomposite"`, 'is absent; a scene block says how the recomposite block beside it was measured, so it is required with one');
     }
   }
@@ -858,9 +912,19 @@ function checkParts(raw: unknown, path: string): PartsFile {
   if (Array.isArray(o.alternates)) {
     // Issue #620: a set record's cap is a cap, so it is held to the base records' rule; the object names the set and the part.
     o.alternates.forEach((a, i) => {
-      if (typeof a !== 'object' || a === null || Array.isArray(a)) return;
+      if (typeof a !== 'object' || a === null || Array.isArray(a)) {
+        fail('PARTS_FIELD_TYPE', `${path} alternates[${i}]`, `is ${show(a)}; an alternate set object is required`);
+        return;
+      }
       const set = a as Record<string, unknown>;
       const at = `${path} alternates[${i}]${typeof set.name === 'string' ? ` (set "${set.name}")` : ''}`;
+      if (!isPartName(set.name)) fail('PARTS_FIELD_TYPE', `${at} field "name"`, `is ${show(set.name)}; a file-name-safe set name is required`);
+      if (!Array.isArray(set.records)) fail('PARTS_FIELD_TYPE', `${at} field "records"`, `is ${show(set.records)}; an array of alternate part records is required`);
+      if ('scene' in set) {
+        const scene = set.scene;
+        if (typeof scene !== 'object' || scene === null || Array.isArray(scene)) fail('PARTS_FIELD_TYPE', `${at} field "scene"`, `is ${show(scene)}; an object is required`);
+        else checkFigureMask((scene as Record<string, unknown>).figure_mask, `${at} scene field "figure_mask"`, fail);
+      }
       if ('cut_ownership' in set) checkOwnership(set.cut_ownership, `${at} cut_ownership`, fail);
       if ('base_anchor' in set) {
         const names = new Set(Array.isArray(set.records) ? set.records.flatMap(v => typeof v === 'object' && v !== null && typeof v.name === 'string' ? [v.name] : []) : []);
@@ -903,8 +967,14 @@ function checkParts(raw: unknown, path: string): PartsFile {
       if (!Array.isArray(set.records)) return;
       if (set.records.some((p) => typeof p === 'object' && p !== null && !Array.isArray(p) && typeof p.limb === 'object' && p.limb !== null && ('hybrid' in p.limb || 'band' in p.limb))) checkLimbRecords(set.records, `${at} `, fail, false);
       set.records.forEach((p, j) => {
-        if (typeof p !== 'object' || p === null || Array.isArray(p)) return;
+        if (typeof p !== 'object' || p === null || Array.isArray(p)) {
+          fail('PARTS_FIELD_TYPE', `${at} records[${j}]`, `is ${show(p)}; a part object is required`);
+          return;
+        }
         const r = p as Record<string, unknown>;
+        const recordAt = `${at} records[${j}]`;
+        if (!isPartName(r.name)) fail('PARTS_FIELD_TYPE', `${recordAt} field "name"`, `is ${show(r.name)}; a file-name-safe part name is required`);
+        if ('depth' in r) problems.push(...partDepthProblems(r.depth, `${recordAt} depth`));
         const part817 = typeof r.name === 'string' ? `part "${r.name}"` : `records[${j}]`;
         if ('provenance' in r) checkProvenance(r.provenance, r.opaque_px, `${at} ${part817} provenance`, fail, 'depth' in r);
         checkPaintingExtensionCount(r, `${at} ${part817}`, fail);

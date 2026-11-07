@@ -21,7 +21,7 @@ import { basename, dirname, join } from 'node:path';
 import { drawText, GLYPH_H } from '@rig-c/core/font5x7';
 import { type Problem, refuseIfAny } from './errors.ts';
 import { type LayerSet, OPAQUE_ALPHA_ABOVE, readLayers } from './layers.ts';
-import { readParts } from './parts.ts';
+import { partImageReference, readParts } from './parts.ts';
 import { alphaComposite } from './raster/composite.ts';
 import { readPng } from './raster/png.ts';
 import { resize } from './raster/resize.ts';
@@ -109,11 +109,11 @@ export function buildSheet(tiles: Tile[], cols: number, cell: number): Raster {
 export function tilesFrom(path: string): Tile[] {
   if (basename(path) === 'parts.json') {
     const parts = readParts(path);
-    const dir = join(dirname(path), 'parts');
+    const dir = dirname(path);
     const problems: Problem[] = [];
     const tiles: Tile[] = [];
     for (const p of parts.parts) {
-      const png = join(dir, `${p.name}.png`);
+      const png = join(dir, partImageReference(p).path);
       if (!existsSync(png)) {
         problems.push({ code: 'SHEET_PNG_PRESENT', object: `part "${p.name}"`, detail: `${png} does not exist; parts.json names it` });
         continue;

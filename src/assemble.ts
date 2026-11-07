@@ -120,7 +120,7 @@ import { PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { CORE_ALPHA, figuresPhrase, implausibleRules, type Layer, type LayerFigures, layerFigures, type LayerSet, NEAR_WHITE_MIN, OPAQUE_ALPHA_ABOVE, ruleSummary } from './layers.ts';
 import { padToSquare, squarePad } from './inputs.ts';
 import type { MotionSeamDeclaration } from './motionseams.ts';
-import { type CapRecord, type LimbRecord, PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, type SceneRecord, type SingleRunPad } from './parts.ts';
+import { type CapRecord, type LimbRecord, FIGURE_MASK_FILE, PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, type SceneRecord, type SingleRunPad } from './parts.ts';
 import { assignCrossedLimbs, assignOverlappingHands, type BonePlace, bonePlaces, capBox, coveredRadius, type CutPlacement, featherWeight, halfWidthAbout, inDisc, jointLine, type JointLine, jointOffsets, limbPolyline, limbRun, luma601, nearestLimb, nearestOnLine, offLineFigure, pastJoint, placeCut, polylineDist2, segmentOf } from './limbs.ts';
 import {
   alphaComposite,
@@ -3355,7 +3355,7 @@ export function measureRecomposite(can: Raster, srcr: Raster, parts: PlacedPart[
 }
 
 /** The figure mask's file name, beside the recomposite (issue #242): `recomposite_rig.png` -> `figure_rig.png`. */
-export const FIGURE_MASK_FILE = 'figure_rig.png';
+export { FIGURE_MASK_FILE } from './parts.ts';
 
 /**
  * The figure of a scene painting (issue #242): per rig pixel, 1 where any
