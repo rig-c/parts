@@ -26,6 +26,7 @@
  * of every file it names; `verifyPlateReceipt` reads it back against the bytes
  * on disk. Every path in it is relative to the receipt's own directory.
  */
+import { isSeeThroughTransform, inverseSeeThroughMask } from './seethrough-transform.ts';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
@@ -122,7 +123,7 @@ function maskRecord(path: string, code: string, remedy = 're-run assemble'): { r
  * readWrapperLayers read must match its recorded entry in meta.json, and the
  * supplied --painting bytes must match image_sha256.
  */
-function bindSeeThroughSource(dir: string, set: LayerSet, paintingBytes: Uint8Array | undefined): void {
+function bindSeeThroughSource(dir: string, set: LayerSet, paintingBytes: Uint8Array | undefined): Record<string, unknown> {
   const root = resolve(dir);
   const metaPath = join(root, 'meta.json');
   const { record: meta } = maskRecord(metaPath, 'PLATE_MASK_RUN', 're-run comfy seethrough');
@@ -160,6 +161,7 @@ function bindSeeThroughSource(dir: string, set: LayerSet, paintingBytes: Uint8Ar
   if (actualPainting !== meta.image_sha256) {
     fail('PLATE_MASK_PAINTING', metaPath, `records image_sha256 ${meta.image_sha256}; the supplied painting has sha256 ${actualPainting} — use the painting this comfy seethrough run read`);
   }
+  return meta;
 }
 
 /**
@@ -224,26 +226,32 @@ export function readSourceMask(source: MaskSource, dir: string, width: number, h
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
     fail('PLATE_MASK_SOURCE', `${source}:${dir}`, `is not a directory; ${source === 'seethrough' ? 'a See-through run directory (from `rig-parts comfy seethrough`)' : 'an assemble output directory with parts.json and figure_rig.png'} is required`);
   }
-  const inside = new Uint8Array(width * height);
+  let inside: Uint8Array = new Uint8Array(width * height);
   if (source === 'seethrough') {
     if (!existsSync(join(dir, 'layers.json'))) fail('PLATE_MASK_SOURCE', `${source}:${dir}`, 'holds no layers.json; the figure layers of a See-through run are required — run `rig-parts comfy seethrough` on the painting first');
     const set = readWrapperLayers(dir);
-    bindSeeThroughSource(dir, set, paintingBytes);
-    if (set.canvas.w !== width || set.canvas.h !== height) {
-      fail('PLATE_MASK_GRID', `${source}:${dir}`, `is a ${set.canvas.w}x${set.canvas.h} canvas; the painting's ${width}x${height} is required — the mask is never fitted, so run See-through on the painting at its own size`);
+    const meta = bindSeeThroughSource(dir, set, paintingBytes);
+    const transform = meta.input_transform;
+    const mapped = transform !== undefined && isSeeThroughTransform(transform, width, height, set.canvas.w, set.canvas.h);
+    if ((transform !== undefined && !mapped) || (!mapped && (set.canvas.w !== width || set.canvas.h !== height))) {
+      fail('PLATE_MASK_GRID', `${source}:${dir}`, `is a ${set.canvas.w}x${set.canvas.h} canvas; the painting's ${width}x${height} is required — a valid recorded input_transform is required for another grid; re-run comfy seethrough on the painting`);
     }
+    const maskWidth = set.canvas.w;
+    const maskHeight = set.canvas.h;
+    inside = new Uint8Array(maskWidth * maskHeight);
     for (const l of set.layers) {
       const w = l.right - l.left;
       for (let y = 0; y < l.bottom - l.top; y++) {
         const cy = l.top + y;
-        if (cy < 0 || cy >= height) continue;
+        if (cy < 0 || cy >= maskHeight) continue;
         for (let x = 0; x < w; x++) {
           const cx = l.left + x;
-          if (cx < 0 || cx >= width) continue;
-          if (l.pixels.data[(y * w + x) * 4 + 3] > OPAQUE_ALPHA_ABOVE) inside[cy * width + cx] = 1;
+          if (cx < 0 || cx >= maskWidth) continue;
+          if (l.pixels.data[(y * w + x) * 4 + 3] > OPAQUE_ALPHA_ABOVE) inside[cy * maskWidth + cx] = 1;
         }
       }
     }
+    if (mapped) inside = inverseSeeThroughMask(inside, transform);
   } else {
     const partsPath = join(dir, 'parts.json');
     if (!existsSync(partsPath)) fail('PLATE_MASK_SOURCE', `${source}:${dir}`, 'holds no parts.json; an assemble output with config.scene is required — run `assemble` on the painting first');
