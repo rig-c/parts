@@ -5424,9 +5424,10 @@ function usageDrift(run: (args: string[]) => { status: number; out: string }, su
       commands.push([c]);
       continue;
     }
-    const subs = /comfy takes ([a-z]+) or ([a-z]+);/.exec(run(['comfy']).out);
+    // The refusal names every subcommand: "comfy takes a, b or c;" (issue #1183 added plate).
+    const subs = /comfy takes ((?:[a-z]+, )*[a-z]+) or ([a-z]+);/.exec(run(['comfy']).out);
     if (subs === null) faults.push('comfy with no subcommand does not name its subcommands');
-    else commands.push(['comfy', subs[1]], ['comfy', subs[2]]);
+    else for (const sub of [...subs[1].split(', '), subs[2]]) commands.push(['comfy', sub]);
   }
   const rows = commands.map((cmd) => {
     const command = cmd.join(' ');

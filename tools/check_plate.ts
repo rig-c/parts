@@ -59,7 +59,7 @@ export function runPlateChecks(dir: string, painting: string, R: Record<string, 
   const nodeLine = noPack === undefined ? null : failLine(noPack.out, 'COMFY_NODE_PRESENT');
   const modelLine = noModel === undefined ? null : failLine(noModel.out, 'COMFY_CHOICE_PRESENT');
   say(
-    'PL01_A_MISSING_NODE_OR_MODEL_IS_REFUSED_BY_NAME_BEFORE_UPLOAD_AND_CORE_STILL_RUNS_WITHOUT_THE_PACK',
+    'PB01_A_MISSING_NODE_OR_MODEL_IS_REFUSED_BY_NAME_BEFORE_UPLOAD_AND_CORE_STILL_RUNS_WITHOUT_THE_PACK',
     noPack?.status === 1 && nodeLine !== null && nodeLine.includes('INPAINT_') && noUpload(noPack) && noPack.paths.includes('GET /object_info') && nothingWritten('plate-no-inpaint-lama') &&
       noModel?.status === 1 && modelLine !== null && modelLine.includes('not_on_the_box.pt') && noUpload(noModel) && nothingWritten('plate-missing-model') &&
       coreOnBare?.status === 0 && existsSync(join(dir, 'plate-no-inpaint-core', 'receipt.json')),
@@ -70,7 +70,7 @@ export function runPlateChecks(dir: string, painting: string, R: Record<string, 
   // 2. no source mask: refused by name, nothing written, no job (no request at all)
   const noMask = ['plate-no-mask', 'plate-no-source', 'plate-no-scene', 'plate-fg-no-mask'].map((n) => [n, R[n]] as const);
   say(
-    'PL02_WITH_NO_SOURCE_MASK_THE_PLATE_IS_REFUSED_BY_NAME_WRITES_NOTHING_AND_RUNS_NO_JOB',
+    'PB02_WITH_NO_SOURCE_MASK_THE_PLATE_IS_REFUSED_BY_NAME_WRITES_NOTHING_AND_RUNS_NO_JOB',
     noMask.every(([n, r]) => r?.status === 1 && failLine(r.out, 'PLATE_MASK_SOURCE') !== null && nothingAsked(r) && nothingWritten(n)),
     noMask.map(([n, r]) => `${n}: exit ${r?.status}, "${r === undefined ? 'not run' : failLine(r.out, 'PLATE_MASK_SOURCE') ?? 'no PLATE_MASK_SOURCE line'}", requests ${r?.paths.length}, out ${nothingWritten(n) ? 'absent' : 'WRITTEN'}`).join('; '),
     'issue #1183 bar 2: the mask comes from a source (See-through figure layers or the declared figure mask), never a hand polygon; with none the command names what is missing and touches nothing',
@@ -103,7 +103,7 @@ export function runPlateChecks(dir: string, painting: string, R: Record<string, 
   const fg = existsSync(receipts[2][1]) ? (JSON.parse(readFileSync(receipts[2][1], 'utf8')) as Record<string, unknown>) : {};
   const model = lama.model as { checkpoint_sha256_from?: unknown } | null | undefined;
   say(
-    'PL03_THE_RECEIPT_HASHES_MATCH_THE_BYTES_ON_DISK_AND_A_PLANTED_MISMATCH_IS_CAUGHT',
+    'PB03_THE_RECEIPT_HASHES_MATCH_THE_BYTES_ON_DISK_AND_A_PLANTED_MISMATCH_IS_CAUGHT',
     clean.every(([, p]) => p.length === 0) && keyOrder && plants.every(([, c]) => c === 'PLATE_RECEIPT_HASH') &&
       lama.spec === PLATE_RECEIPT_SPEC && lama.gpu === 'cuda:0 Fake GPU' && model?.checkpoint_sha256_from === 'declared' &&
       fg.model === null && fg.gpu === null && fg.graph === 'rig-parts/plate-foreground/1',
@@ -141,7 +141,7 @@ export function runPlateChecks(dir: string, painting: string, R: Record<string, 
     }
   })();
   say(
-    'PL04_OUTSIDE_THE_MASK_THE_BACKGROUND_PLATE_IS_THE_PAINTING_BYTE_FOR_BYTE_AND_THE_FOREGROUND_IS_THE_PAINTING_INSIDE_IT',
+    'PB04_OUTSIDE_THE_MASK_THE_BACKGROUND_PLATE_IS_THE_PAINTING_BYTE_FOR_BYTE_AND_THE_FOREGROUND_IS_THE_PAINTING_INSIDE_IT',
     pb.every(([, x]) => x !== null && x.outsideDiff === 0 && x.insideWrong === 0 && x.inside > 0) && fgPaste === 0 && witness === 1,
     `${pb.map(([n, x]) => `${n}: ${x === null ? 'unreadable' : `${x.outsideDiff} outside px differ, ${x.insideWrong} of ${x.inside} inside px not the box's`}`).join('; ')} (the fake added +1 to every red byte outside the mask); foreground: ${fgPaste} byte(s) not painting-inside/zero-outside; planted, one outside red byte moved by 1 -> ${witness} px seen`,
     'ruling 1 for #1183: the paste-back is inside the mask only, so a float round trip on the box cannot move a pixel the figure did not cover',
@@ -152,11 +152,24 @@ export function runPlateChecks(dir: string, painting: string, R: Record<string, 
   const behindLine = behind === undefined ? null : failLine(behind.out, 'COMFY_QUEUE_BEHIND');
   const fronts = Object.entries(R).filter(([n]) => n.startsWith('plate-')).reduce((a, [, r]) => a + (r.fronts ?? 0), 0);
   say(
-    'PL05_THE_PLATE_JOB_IS_APPENDED_BEHIND_OTHERS_AND_A_LONG_WAIT_IS_REFUSED_WITH_ITS_QUEUE_PLACE',
+    'PB05_THE_PLATE_JOB_IS_APPENDED_BEHIND_OTHERS_AND_A_LONG_WAIT_IS_REFUSED_WITH_ITS_QUEUE_PLACE',
     busy?.status === 0 && behind?.status === 1 && behindLine !== null && /place 2 of 2 pending with 2 job\(s\) ahead/.test(behindLine) && behind.prompts === 1 && fronts === 0 && nothingWritten('plate-behind') &&
       !(busy?.paths ?? []).some((p) => p.startsWith('POST /queue') || p.startsWith('POST /interrupt')) && !(behind?.paths ?? []).some((p) => p.startsWith('POST /queue') || p.startsWith('POST /interrupt')),
     `someone else running: exit ${busy?.status} (queued behind it); stuck behind two: exit ${behind?.status}, "${behindLine ?? 'no COMFY_QUEUE_BEHIND line'}"; /prompt bodies asking for the front: ${fronts}; no POST /queue or /interrupt sent`,
     'ruling 4 for #1183: the plate appends behind other jobs, never cuts in, never reorders or cancels; on a long wait it stops and says where it stands',
+  );
+
+  // 6. --checkpoint-sha256: malformed or absent is refused by name before any request; the valid one is recorded
+  const badSha = R['plate-bad-sha'], noSha = R['plate-no-sha'], goodSha = R['plate-lama-ok'];
+  const shaLine = (r: PlateHarnessResult | undefined): string | null => (r === undefined ? null : failLine(r.out, 'PLATE_CHECKPOINT_SHA256'));
+  const declared = (model as { checkpoint_sha256?: unknown } | null | undefined)?.checkpoint_sha256;
+  say(
+    'PB06_A_MALFORMED_OR_ABSENT_CHECKPOINT_SHA256_IS_REFUSED_BY_NAME_WITH_NO_REQUEST_AND_NOTHING_WRITTEN',
+    badSha?.status === 1 && shaLine(badSha)?.includes('"not-a-hash"') === true && nothingAsked(badSha) && nothingWritten('plate-bad-sha') &&
+      noSha?.status === 1 && shaLine(noSha)?.includes('is absent') === true && nothingAsked(noSha) && nothingWritten('plate-no-sha') &&
+      goodSha?.status === 0 && declared === 'ab'.repeat(32) && model?.checkpoint_sha256_from === 'declared',
+    `malformed: exit ${badSha?.status}, "${shaLine(badSha) ?? 'no PLATE_CHECKPOINT_SHA256 line'}", requests ${badSha?.paths.length}, out ${nothingWritten('plate-bad-sha') ? 'absent' : 'WRITTEN'}; absent: exit ${noSha?.status}, "${shaLine(noSha) ?? 'no PLATE_CHECKPOINT_SHA256 line'}", requests ${noSha?.paths.length}, out ${nothingWritten('plate-no-sha') ? 'absent' : 'WRITTEN'}; valid (the harness's 64 hex characters): exit ${goodSha?.status}, recorded ${JSON.stringify(declared)} from ${JSON.stringify(model?.checkpoint_sha256_from)}`,
+    'ruling 3 for #1183: the box reports no hash, so the receipt carries a declared one; a missing or malformed declaration is refused before the box is reached, never recorded',
   );
 }
 
