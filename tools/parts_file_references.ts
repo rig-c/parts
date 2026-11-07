@@ -1,3 +1,4 @@
+import { writePartsReaderFixture } from './parts_reader_fixture.ts';
 import { partsStringFieldFaults } from './parts_file_field_inventory.ts';
 /** Observe the production readers on generated manifests, including a reader-only plant. */
 import { createHash } from 'node:crypto';
@@ -11,53 +12,114 @@ import { PartsError } from '../src/errors.ts';
 import { newRaster } from '../src/raster/types.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
-interface Observation { reads: string[]; uncovered: string[] }
+interface Observation {
+  reads: string[];
+  uncovered: string[];
+  readers: Record<string, string[]>;
+  missing: Record<string, string[]>;
+  errors: string[];
+  unaccounted: string[];
+}
+interface ReaderSite { name: string; file: string; line: number; paths: string[]; via?: string }
+
 const observer = `
 import { mock } from 'bun:test';
 import * as fs from 'node:fs';
-import { join, resolve, sep } from 'node:path';
-const [source, fixture, rigDir, stageFixture, scratch, rootsJson, expected] = process.argv.slice(2);
+import { dirname, join, resolve, sep } from 'node:path';
+const [source, fixture, rigDir, stageFixture, scratch, rootsJson, expected, readerJson, sitesJson, checkFixture] = process.argv.slice(2);
 const roots = JSON.parse(rootsJson).map(r => resolve(r));
 const reads = new Set();
+const readers = new Map();
+const errors = [];
+const sites = JSON.parse(sitesJson);
+let active = '';
+const record = (name, path) => {
+  if (!readers.has(name)) readers.set(name, new Set());
+  readers.get(name).add(path);
+};
+const observe = (name, run) => {
+  active = name;
+  try { run(); } catch (error) { errors.push(name + ': ' + String(error)); }
+  finally { active = ''; }
+};
 const read = fs.readFileSync;
 mock.module('node:fs', () => ({ ...fs, readFileSync(path, ...options) {
   if (typeof path === 'string' && path.endsWith('.png') && !(new Error().stack ?? '').includes('at collect (')) {
     const full = resolve(path);
-    if (roots.some(root => full === root || full.startsWith(root + sep))) reads.add(full);
+    if (roots.some(root => full.startsWith(root + sep + 'parts' + sep) || full.startsWith(root + sep + 'assets' + sep) || dirname(full) === root)) {
+      reads.add(full);
+      record(active, full);
+      const stack = new Error().stack ?? '';
+      const caller = stack.split('\\n').find(frame => frame.includes(source + '/src/') && !frame.includes(source + '/src/raster/')) ?? '';
+      for (const site of sites) if (caller.includes(source + '/' + (site.via ?? site.file) + ':') && stack.includes(source + '/' + site.file + ':' + site.line + ':')) record(site.name, full);
+      const module = caller.match(/src\\/([^:]+):/);
+      if (module) record('module:' + module[1], full);
+    }
   }
   return Reflect.apply(read, fs, [path, ...options]);
 } }));
 const { readPartSet } = await import(source + '/src/propose.ts');
 const { tilesFrom } = await import(source + '/src/sheet.ts');
 const { readRigInputs } = await import(source + '/src/build.ts');
-const { boundaryColourSizeProblems, flatComposite, flatCompositeForSet, readCheckInputs } = await import(source + '/src/check.ts');
+const { boundaryColourSizeProblems, flatComposite, flatCompositeForSet, readCheckInputs, runCheck, officialRenderer } = await import(source + '/src/check.ts');
 const { diffComponentsCommand } = await import(source + '/src/diffcomponents.ts');
 const { meshDraftStage } = await import(source + '/src/meshdraft.ts');
 const { applyDepth, prepareDepth } = await import(source + '/src/depthworkflow.ts');
 const { readMaterialSources, writeMaterialSources } = await import(source + '/src/cutmaterialio.ts');
 const { readParts } = await import(source + '/src/parts.ts');
-readPartSet(fixture);
-tilesFrom(fixture + '/parts.json');
-readRigInputs(fixture + '/config.json', fixture);
-const checked = readCheckInputs(rigDir, fixture);
-flatComposite(checked.parts, checked.partsDir, [0, 0, 0, 255]);
-flatCompositeForSet(checked.parts, checked.parts.alternates[0], checked.partsDir, [0, 0, 0, 255]);
-boundaryColourSizeProblems(checked);
-diffComponentsCommand(['--stack', fixture + '/painting_in_rig.png', '--painting', fixture + '/painting_in_rig.png', '--parts', fixture + '/parts.json', '--figure', fixture + '/figure_rig.png', '--floor', '1', '--out', join(scratch, 'diff.json')]);
-try { meshDraftStage({ config: stageFixture + '/config.json', parts: stageFixture, out: join(scratch, 'draft') }, () => ({ status: 1, out: 'FAIL' }), 'rigc', join(scratch, 'draft-scratch'), () => {}); } catch {}
+const { measureBoundaryColour } = await import(source + '/src/boundarycolour.ts');
+const { observeSupport } = await import(source + '/src/coincideio.ts');
+const { writeSupportDomains, readSupportDomains } = await import(source + '/src/supportdomains.ts');
+observe('propose', () => readPartSet(fixture));
+observe('sheet', () => tilesFrom(fixture + '/parts.json'));
+observe('build', () => readRigInputs(fixture + '/config.json', fixture));
+let checked;
+observe('readCheckInputs', () => { checked = readCheckInputs(rigDir, fixture); });
+observe('flatComposite', () => flatComposite(checked.parts, checked.partsDir, [0, 0, 0, 255]));
+observe('flatCompositeForSet', () => flatCompositeForSet(checked.parts, checked.parts.alternates[0], checked.partsDir, [0, 0, 0, 255]));
+observe('boundaryColourSizeProblems', () => boundaryColourSizeProblems(checked));
+observe('diffcomponents', () => diffComponentsCommand(['--stack', fixture + '/painting_in_rig.png', '--painting', fixture + '/painting_in_rig.png', '--parts', fixture + '/parts.json', '--figure', fixture + '/figure_rig.png', '--floor', '1', '--out', join(scratch, 'diff.json')]));
+// The deliberately failing runner stops meshdraft after its image reads.
+observe('meshdraft', () => {
+  try { meshDraftStage({ config: stageFixture + '/config.json', parts: stageFixture, out: join(scratch, 'draft') }, () => ({ status: 1, out: 'FAIL' }), 'rigc', join(scratch, 'draft-scratch'), () => {}); } catch {}
+});
 fs.rmSync(join(scratch, 'depth-prep'), { recursive: true, force: true });
 fs.rmSync(join(scratch, 'depth-out'), { recursive: true, force: true });
-prepareDepth({ parts: stageFixture, config: join(scratch, 'depth-recipe.json'), out: join(scratch, 'depth-prep') });
-applyDepth({ parts: stageFixture, manifest: join(scratch, 'depth-prep', 'manifest.json'), config: join(scratch, 'depth-recipe.json'), rigConfig: stageFixture + '/config.json', out: join(scratch, 'depth-out') });
+observe('prepareDepth', () => prepareDepth({ parts: stageFixture, config: join(scratch, 'depth-recipe.json'), out: join(scratch, 'depth-prep') }));
+observe('applyDepth', () => applyDepth({ parts: stageFixture, manifest: join(scratch, 'depth-prep', 'manifest.json'), config: join(scratch, 'depth-recipe.json'), rigConfig: stageFixture + '/config.json', out: join(scratch, 'depth-out') }));
 const parts = readParts(fixture + '/parts.json');
-writeMaterialSources(fixture + '/parts.json', fixture + '/parts', parts, []);
-readMaterialSources(fixture, parts);
+observe('writeMaterialSources', () => writeMaterialSources(fixture + '/parts.json', fixture + '/parts', parts, []));
+observe('readMaterialSources', () => readMaterialSources(fixture, parts));
 fs.rmSync(fixture + '/cut_material_sources.json', { force: true });
+if (checkFixture) {
+  const checkedParts = readParts(checkFixture + '/parts.json');
+  observe('writeSupportDomains', () => writeSupportDomains(checkFixture + '/parts.json', checkFixture + '/parts', checkedParts, [], '{}'));
+  observe('readSupportDomains', () => readSupportDomains(checkFixture + '/parts.json', checkFixture + '/parts', checkedParts));
+  const { spawnSync } = await import('node:child_process');
+  const runner = args => {
+    const result = spawnSync(source + '/node_modules/.bin/rigc', args, { encoding: 'utf8', timeout: 15000, maxBuffer: 1 << 24 });
+    return { status: result.status ?? 1, out: (result.stdout ?? '') + (result.stderr ?? '') };
+  };
+  observe('runCheck', () => runCheck(checkFixture + '/rig', checkFixture + '/out', runner, checkFixture, undefined, undefined, checkFixture + '/requirements.json', true, true, undefined, undefined, undefined, undefined, undefined, undefined, true));
+  // The partsDir APIs also accept a caller-supplied directory name.
+  const customPartsDir = checkFixture + '/assets';
+  observe('custom.writeSupportDomains', () => writeSupportDomains(checkFixture + '/parts.json', customPartsDir, checkedParts, [], '{}'));
+  observe('custom.readSupportDomains', () => readSupportDomains(checkFixture + '/parts.json', customPartsDir, checkedParts));
+  const customInput = { ...readCheckInputs(checkFixture + '/rig', checkFixture), partsDir: customPartsDir };
+  observe('custom.observeSupport', () => observeSupport(checkFixture + '/out/build', customInput));
+  observe('custom.measureBoundaryColour', () => measureBoundaryColour(officialRenderer(), {
+    build: checkFixture + '/out/build', stage: customInput.stage, parts: checkedParts,
+    partsDir: customPartsDir, imagesDir: checkFixture + '/rig/images', rig: customInput.rig, fps: 1,
+  }, { max_step_excess: 255 }, []));
+}
 const enumerated = new Set(JSON.parse(expected));
-console.log(JSON.stringify({ reads: [...reads].sort(), uncovered: [...reads].filter(path => !enumerated.has(path)).sort() }));
+const required = { ...JSON.parse(readerJson), ...Object.fromEntries(sites.map(site => [site.name, site.paths])) };
+const unaccounted = [...readers.keys()].filter(name => name.startsWith('module:') && !(name in required)).sort();
+const missing = Object.fromEntries(Object.entries(required).map(([name, paths]) => [name, paths.filter(path => !readers.get(name)?.has(path))]).filter(([, paths]) => paths.length > 0));
+console.log(JSON.stringify({ reads: [...reads].sort(), uncovered: [...reads].filter(path => !enumerated.has(path)).sort(), readers: Object.fromEntries([...readers].map(([name, paths]) => [name, [...paths].sort()])), missing, errors, unaccounted }));
 `;
 
-export function runPartsFileReferenceChecks(dir: string, base: PartsFile, config: Record<string, unknown>, say: Say): void {
+export function runPartsReaderReferenceChecks(dir: string, base: PartsFile, config: Record<string, unknown>, say: Say, frozenRoot?: string): { root: string; isolated: string } {
   const root = resolve(import.meta.dir, '..');
   const fixture = join(dir, 'fixture');
   const rigDir = join(dir, 'rig');
@@ -155,10 +217,10 @@ export function runPartsFileReferenceChecks(dir: string, base: PartsFile, config
   try {
     writeFileSync(partsSource, censusPlant);
     const red = partsStringFieldFaults(isolated);
-    say('PT1163_NEW_PNG_FIELD_BREAKS_COMPLETENESS', censusPlant !== partsOriginal && red.includes('unclassified string/file field completeness_png'), JSON.stringify({ plant: 'completeness_png?: string;', faults: red }));
+    say('PT1163_NEW_PNG_FIELD_BREAKS_COMPLETENESS', censusPlant !== partsOriginal && red.includes('unclassified string/file field completeness_png'), JSON.stringify({ plant: 'completeness_png?: string;', beforeMd5: partsMd5, plantedMd5: createHash('md5').update(readFileSync(partsSource)).digest('hex'), faults: red }));
   } finally { writeFileSync(partsSource, partsOriginal); }
   const censusRestoredMd5 = createHash('md5').update(readFileSync(partsSource)).digest('hex');
-  say('PT1163_COMPLETENESS_PLANT_REMOVED', censusRestoredMd5 === partsMd5 && partsStringFieldFaults(isolated).length === 0, `plant removed, tree restored, src/parts.ts md5 ${censusRestoredMd5}; pre-plant md5 ${partsMd5}`);
+  say('PT1163_COMPLETENESS_PLANT_REMOVED', censusRestoredMd5 === partsMd5 && partsStringFieldFaults(isolated).length === 0, `sweep done, tree restored, src/parts.ts md5 ${censusRestoredMd5}; pre-plant md5 ${partsMd5}`);
 
   const refusalScript = join(dir, 'refusal.ts');
   writeFileSync(refusalScript, `
@@ -196,7 +258,7 @@ console.log(JSON.stringify(outcomes));
       writeFileSync(partsSource, partsOriginal);
       const restored = observeRefusal(isolated);
       const afterMd5 = createHash('md5').update(readFileSync(partsSource)).digest('hex');
-      say(`${name}_RULE_RESTORED`, afterMd5 === partsMd5 && restored.every(outcome => outcome.matched), `plant removed, tree restored, src/parts.ts md5 ${afterMd5}; pre-plant md5 ${partsMd5}; named refusal restored ${restored.every(outcome => outcome.matched)}`);
+      say(`${name}_RULE_RESTORED`, afterMd5 === partsMd5 && restored.every(outcome => outcome.matched), `sweep done, tree restored, src/parts.ts md5 ${afterMd5}; pre-plant md5 ${partsMd5}; named refusal restored ${restored.every(outcome => outcome.matched)}`);
     } finally {
       writeFileSync(partsSource, partsOriginal);
       writeFileSync(path, JSON.stringify(file));
@@ -264,18 +326,86 @@ console.log(JSON.stringify(outcomes));
     } finally { writeFileSync(path, JSON.stringify(file)); }
   }
   say('PT1163_MISSING_AND_INVALID_MANIFEST_ARE_NAMED', JSON.stringify(manifestErrors) === JSON.stringify(['PARTS_FILE_PRESENT', 'PARTS_IS_JSON']), JSON.stringify(manifestErrors));
+  const checkFixture = join(dir, 'check-fixture');
+  writePartsReaderFixture(checkFixture);
+  cpSync(join(checkFixture, 'parts'), join(checkFixture, 'assets'), { recursive: true });
+  writeFileSync(join(checkFixture, 'parts', 'stale.png'), bytes);
+  writeFileSync(join(checkFixture, 'assets', 'stale.png'), bytes);
   const script = join(dir, 'observer.ts');
   writeFileSync(script, observer);
   const paths = references.map(reference => resolve(fixture, reference.path));
   const stagePaths = partsFileReferences(stageFixture).map(reference => resolve(stageFixture, reference.path));
-  const allPaths = [...paths, ...stagePaths];
-  const observe = (source: string, roots = [fixture], expectedPaths = paths): Observation => {
-    const result = spawnSync(process.execPath, [script, source, fixture, rigDir, stageFixture, scratch, JSON.stringify(roots), JSON.stringify(expectedPaths)], { encoding: 'utf8', timeout: 30000 });
+  const checkPaths = partsFileReferences(checkFixture).map(reference => resolve(checkFixture, reference.path));
+  const customPaths = checkPaths.map(path => path.replace(join(checkFixture, 'parts'), join(checkFixture, 'assets')));
+  const allPaths = [...paths, ...stagePaths, ...checkPaths, ...customPaths];
+  const own = (home: string, names: string[]) => names.map(name => join(home, 'parts', name + '.png'));
+  const basePart = own(fixture, ['face']);
+  const baseParts = own(fixture, ['face', 'side_face']);
+  const stageParts = own(stageFixture, ['face', 'robe']);
+  const expectedReaders = {
+    propose: [...basePart, join(fixture, 'painting_in_rig.png')],
+    readCheckInputs: [...baseParts, join(fixture, 'painting_in_rig.png')],
+    sheet: basePart,
+    build: own(fixture, ['face', 'face-depth', 'side_face', 'side-depth']),
+    flatComposite: basePart,
+    flatCompositeForSet: own(fixture, ['side_face']),
+    boundaryColourSizeProblems: basePart,
+    diffcomponents: basePart,
+    meshdraft: stageParts,
+    prepareDepth: stageParts,
+    applyDepth: own(stageFixture, ['face', 'robe', 'robe-depth']),
+    writeMaterialSources: basePart,
+    readMaterialSources: basePart,
+    writeSupportDomains: checkPaths,
+    readSupportDomains: checkPaths,
+    'module:parts.ts': [join(fixture, 'painting_in_rig.png'), join(stageFixture, 'painting_in_rig.png')],
+    'module:propose.ts': [...basePart, ...stageParts],
+    'module:sheet.ts': basePart,
+    'module:build.ts': [...baseParts, ...stageParts],
+    'module:depthsheets.ts': [...own(fixture, ['face-depth', 'side-depth']), ...own(stageFixture, ['face-depth', 'robe-depth'])],
+    'module:check.ts': [...baseParts, ...checkPaths],
+    'module:diffcomponents.ts': [...basePart, join(fixture, 'painting_in_rig.png'), join(fixture, 'figure_rig.png')],
+    'module:meshdraft.ts': stageParts,
+    'module:depthworkflow.ts': own(stageFixture, ['face', 'robe', 'robe-depth']),
+    'module:cutmaterialio.ts': [...basePart, ...checkPaths],
+    'module:cutmaterial.ts': own(checkFixture, ['lower']),
+    'module:instruments.ts': checkPaths,
+    'module:boundarycolour.ts': [...checkPaths, ...customPaths],
+    'module:coincideio.ts': [...checkPaths, ...customPaths],
+    'module:supportdomains.ts': [...checkPaths, ...customPaths],
+    'custom.writeSupportDomains': customPaths,
+    'custom.readSupportDomains': customPaths,
+    'custom.observeSupport': customPaths,
+    'custom.measureBoundaryColour': customPaths,
+  };
+  const sites: ReaderSite[] = [];
+  const site = (name: string, file: string, needle: string, names: string[], via?: string): void => {
+    const lines = readFileSync(join(root, file), 'utf8').split('\n');
+    const matched = lines.flatMap((line, i) => line.includes(needle) ? [i + 1] : []);
+    if (matched.length !== 1) throw new Error(`reader site ${name} matched ${matched.length} lines`);
+    sites.push({ name, file, line: matched[0], paths: own(checkFixture, names), via });
+  };
+  site('check.seams', 'src/check.ts', 'return placedArt(rec.x, rec.y, readPng(', ['upper', 'lower']);
+  site('check.cutMaterial', 'src/check.ts', 'const cutMaterial = reqFile?', ['lower'], 'src/cutmaterial.ts');
+  site('check.sweep', 'src/check.ts', 'const r = readPng(join(dirname(inp.partsDir)', ['upper', 'lower']);
+  site('check.tips', 'src/check.ts', 'const art = placedArt(p.x, p.y, readPng(', ['skirt']);
+  site('check.stills.topmost', 'src/check.ts', 'const top = topmostIndex(', ['upper', 'lower', 'face', 'skirt'], 'src/instruments.ts');
+  site('check.stills.art', 'src/check.ts', 'a = placedArt(p.x, p.y, readPng(', ['face']);
+  const isGreen = (observation: Observation): boolean => observation.uncovered.length === 0 && Object.keys(observation.missing).length === 0 && observation.errors.length === 0 && observation.unaccounted.length === 0;
+
+  const observe = (source: string, roots = [fixture, stageFixture, checkFixture], expectedPaths = allPaths): Observation => {
+    const result = spawnSync(process.execPath, [script, source, fixture, rigDir, stageFixture, scratch, JSON.stringify(roots), JSON.stringify(expectedPaths), JSON.stringify(expectedReaders), JSON.stringify(sites), checkFixture], { encoding: 'utf8', timeout: 30000 });
     if (result.status !== 0) throw new Error(`parts observer exit ${result.status}: ${result.stderr}`);
     return JSON.parse(result.stdout.trim()) as Observation;
   };
-  const green = observe(root, [fixture, stageFixture], allPaths);
-  say('PT1163_REAL_READER_PNGS_ARE_ENUMERATED', green.uncovered.length === 0 && allPaths.every(path => green.reads.includes(path)), JSON.stringify(green));
+  const green = observe(root, [fixture, stageFixture, checkFixture], allPaths);
+  if (frozenRoot !== undefined) {
+    const before = observe(frozenRoot);
+    say('PT1176_TOUCHED_MODULE_READ_SETS_ARE_BYTE_IDENTICAL',
+      JSON.stringify(before.readers) === JSON.stringify(green.readers) && before.uncovered.length === 0 && before.errors.length === 0,
+      JSON.stringify({ before: before.readers, after: green.readers, missing: before.missing, errors: before.errors }));
+  }
+  say('PT1163_REAL_READER_PNGS_ARE_ENUMERATED', isGreen(green) && allPaths.every(path => green.reads.includes(path)), JSON.stringify(green));
   for (const reference of references) rmSync(join(fixture, reference.path));
   say('PT1163_MISSING_PNGS_KEEP_DECLARED_MEMBERSHIP', JSON.stringify(partsFileReferences(fixture)) === JSON.stringify(expected), 'all declared PNGs removed; manifest membership unchanged');
   for (const reference of references) writeFileSync(join(fixture, reference.path), reference.role === 'painting' ? paintingBytes : reference.role === 'figure_mask' ? figureBytes : bytes);
@@ -286,16 +416,34 @@ console.log(JSON.stringify(outcomes));
   const planted = original.replace(marker, `${marker}\n  readPng(join(dir, 'parts', 'stale.png'));`);
   try {
     writeFileSync(source, planted);
-    say('PT1163_SOURCE_PLANT_CHANGES_FROZEN_MD5', createHash('md5').update(readFileSync(source)).digest('hex') !== beforeMd5, 'reader-only plant differs from pre-plant source hash');
+    const plantedMd5 = createHash('md5').update(readFileSync(source)).digest('hex');
+    say('PT1163_SOURCE_PLANT_CHANGES_FROZEN_MD5', plantedMd5 !== beforeMd5, `src/propose.ts pre-plant md5 ${beforeMd5}; planted md5 ${plantedMd5}`);
     const red = observe(isolated);
-    say('PT1163_READER_ONLY_PLANT_BREAKS_READ_SUBSET', planted !== original && red.uncovered.length === 1 && red.uncovered[0] === join(fixture, 'parts/stale.png'), JSON.stringify(red));
+    say('PT1163_READER_ONLY_PLANT_BREAKS_READ_SUBSET', planted !== original && red.errors.length === 0 && Object.keys(red.missing).length === 0 && JSON.stringify(red.uncovered) === JSON.stringify([join(fixture, 'parts/stale.png'), join(stageFixture, 'parts/stale.png')].sort()), JSON.stringify(red));
   } finally { writeFileSync(source, original); }
   const restored = observe(isolated);
-  say('PT1163_RESTORED_READER_SUBSET_IS_GREEN', restored.uncovered.length === 0 && paths.every(path => restored.reads.includes(path)), JSON.stringify(restored));
+  say('PT1163_RESTORED_READER_SUBSET_IS_GREEN', isGreen(restored) && paths.every(path => restored.reads.includes(path)), JSON.stringify(restored));
   const afterMd5 = createHash('md5').update(readFileSync(source)).digest('hex');
-  say('PT1163_PLANT_REMOVED_SOURCE_RESTORED', afterMd5 === beforeMd5, `plant removed, tree restored, src/propose.ts md5 ${afterMd5}; pre-plant md5 ${beforeMd5}`);
+  say('PT1163_PLANT_REMOVED_SOURCE_RESTORED', afterMd5 === beforeMd5, `sweep done, tree restored, src/propose.ts md5 ${afterMd5}; pre-plant md5 ${beforeMd5}`);
 
-  const plantReader = (label: string, relPath: string, target: string, replacement: string, staleDir = fixture, note?: string): void => {
+  // A new module reading an already enumerated file still needs its own membership contract.
+  const extraModule = join(isolated, 'src/parts_reader_plant.ts');
+  const extraPlant = "import { readReferencePlant } from './parts_reader_plant.ts';\n" + original.replace(marker, `${marker}\n  readReferencePlant(join(dir, 'parts', 'face.png'));`);
+  try {
+    writeFileSync(extraModule, "import { readPng } from './raster/png.ts';\nexport function readReferencePlant(path: string): number { const image = readPng(path); return image.width; }\n");
+    writeFileSync(source, extraPlant);
+    const red = observe(isolated);
+    say('PT1176_UNACCOUNTED_MODULE_IS_RED', !isGreen(red) && red.uncovered.length === 0 && Object.keys(red.missing).length === 0 && red.errors.length === 0 && JSON.stringify(red.unaccounted) === JSON.stringify(['module:parts_reader_plant.ts']),
+      JSON.stringify({ beforeMd5, plantedMd5: createHash('md5').update(readFileSync(source)).digest('hex'), moduleMd5: createHash('md5').update(readFileSync(extraModule)).digest('hex'), red }));
+  } finally {
+    writeFileSync(source, original);
+    rmSync(extraModule, { force: true });
+  }
+  const extraRestored = observe(isolated);
+  const extraAfterMd5 = createHash('md5').update(readFileSync(source)).digest('hex');
+  say('PT1176_UNACCOUNTED_MODULE_RESTORED', !existsSync(extraModule) && extraAfterMd5 === beforeMd5 && isGreen(extraRestored), `sweep done, tree restored, src/propose.ts md5 ${extraAfterMd5}; temporary reader module removed`);
+
+  const plantReader = (label: string, relPath: string, target: string, replacement: string, staleDir = fixture, note?: string, extraStaleDirs: string[] = []): void => {
     const modSource = join(isolated, relPath);
     const modOriginal = readFileSync(modSource, 'utf8');
     const modBeforeMd5 = createHash('md5').update(readFileSync(modSource)).digest('hex');
@@ -304,12 +452,12 @@ console.log(JSON.stringify(outcomes));
       writeFileSync(modSource, modPlanted);
       const modPlantedMd5 = createHash('md5').update(readFileSync(modSource)).digest('hex');
       say(`PT1168_${label}_NAMING_PLANT_CHANGES_MD5`, modPlantedMd5 !== modBeforeMd5, `${relPath} pre-plant md5 ${modBeforeMd5}; planted md5 ${modPlantedMd5}`);
-      const red = observe(isolated, [fixture, stageFixture], allPaths);
-      say(`PT1168_${label}_NAMING_PLANT_IS_RED`, modPlanted !== modOriginal && red.uncovered.length === 1 && red.uncovered[0] === join(staleDir, 'parts/stale.png'), JSON.stringify({ file: relPath, plant: replacement, ...(note === undefined ? {} : { note }), red }));
+      const red = observe(isolated, [fixture, stageFixture, checkFixture], allPaths);
+      say(`PT1168_${label}_NAMING_PLANT_IS_RED`, modPlanted !== modOriginal && JSON.stringify(red.uncovered) === JSON.stringify([staleDir, ...extraStaleDirs].map(home => join(home, 'parts/stale.png')).sort()), JSON.stringify({ file: relPath, plant: replacement, ...(note === undefined ? {} : { note }), red }));
     } finally { writeFileSync(modSource, modOriginal); }
-    const modRestored = observe(isolated, [fixture, stageFixture], allPaths);
+    const modRestored = observe(isolated, [fixture, stageFixture, checkFixture], allPaths);
     const modAfterMd5 = createHash('md5').update(readFileSync(modSource)).digest('hex');
-    say(`PT1168_${label}_NAMING_PLANT_RESTORED`, modAfterMd5 === modBeforeMd5 && modRestored.uncovered.length === 0 && allPaths.every(path => modRestored.reads.includes(path)), `plant removed, tree restored, ${relPath} md5 ${modAfterMd5}; pre-plant md5 ${modBeforeMd5}`);
+    say(`PT1168_${label}_NAMING_PLANT_RESTORED`, modAfterMd5 === modBeforeMd5 && isGreen(modRestored) && allPaths.every(path => modRestored.reads.includes(path)), `sweep done, tree restored, ${relPath} md5 ${modAfterMd5}; pre-plant md5 ${modBeforeMd5}`);
   };
   const collectExclusionNote = "applyDepth's whole-directory collect() read excluded by call-site stack tag (!(new Error().stack ?? '').includes('at collect ('))";
   plantReader('CHECK', 'src/check.ts', 'const png = join(home, partImageReference(r, alt.name).path);', "const png = join(home, 'parts', 'stale.png');");
@@ -319,8 +467,46 @@ console.log(JSON.stringify(outcomes));
   plantReader('DEPTHWORKFLOW_APPLY_PART', 'src/depthworkflow.ts', 'join(input.parts, partImageReference(p).path)', "join(input.parts, 'parts', 'stale.png')", stageFixture, collectExclusionNote);
   plantReader('DEPTHWORKFLOW_APPLY_DEPTH', 'src/depthworkflow.ts', 'join(input.parts, depthImageReference(p.depth).path)', "join(input.parts, 'parts', 'stale.png')", stageFixture, `${collectExclusionNote}; robe has depth robe-depth.png and is absent from recipe.parts and recipe.clear`);
   plantReader('CUTMATERIALIO_WRITE', 'src/cutmaterialio.ts', 'hash(join(dirname(partsDir),partImageReference(p).path))', "hash(join(dirname(partsDir),'parts','stale.png'))");
-  plantReader('CUTMATERIALIO_READ', 'src/cutmaterialio.ts', 'const file=join(home,partImageReference(part).path);', "const file=join(home,'parts','stale.png');");
+  plantReader('CUTMATERIALIO_READ', 'src/cutmaterialio.ts', 'const file=join(home,partImageReference(part).path);', "const file=join(home,'parts','stale.png');", fixture, undefined, [checkFixture]);
 
+  const plantSite = (label: string, relPath: string, target: string, replacement: string, reader: string, absent = false): void => {
+    const modSource = join(isolated, relPath);
+    const original = readFileSync(modSource, 'utf8');
+    const before = createHash('md5').update(original).digest('hex');
+    const planted = original.replace(target, replacement);
+    if (planted === original) throw new Error(`missing mutation target for ${label}`);
+    try {
+      writeFileSync(modSource, planted);
+      const plantedMd5 = createHash('md5').update(planted).digest('hex');
+      const red = observe(isolated);
+      say(`PT1176_${label}_PLANT_IS_RED`, !isGreen(red) && (absent ? (red.missing[reader]?.length ?? 0) > 0 : red.uncovered.length > 0),
+        JSON.stringify({ file: relPath, beforeMd5: before, plantedMd5, red }));
+    } finally { writeFileSync(modSource, original); }
+    const restored = observe(isolated);
+    const after = createHash('md5').update(readFileSync(modSource)).digest('hex');
+    say(`PT1176_${label}_RESTORED`, before === after && isGreen(restored), `sweep done, tree restored, ${relPath} md5 ${after}; pre-plant md5 ${before}`);
+  };
+  plantSite('MESHDRAFT_ABSENT', 'src/meshdraft.ts', 'const png = join(input.parts, partImageReference(p).path);', "const png = join(input.parts, 'parts', 'absent.png');", 'module:meshdraft.ts', true);
+  plantSite('BOUNDARY_SIZE_ABSENT', 'src/check.ts', 'join(dirname(inp.partsDir), partImageReference(record).path)', "join(dirname(inp.partsDir), 'parts', 'absent.png')", 'boundaryColourSizeProblems', true);
+  // Same-line substitutions preserve the call-site coordinates recorded above.
+  const checkPlants: Array<[string, string, string]> = [
+    ['SEAMS', 'return placedArt(rec.x, rec.y, readPng(join(dirname(ready.partsDir), partImageReference(rec).path)));', "return placedArt(rec.x, rec.y, readPng(join(dirname(ready.partsDir), 'parts', 'stale.png')));"],
+    ['CUT_MATERIAL', 'name => readPng(join(dirname(inp.partsDir), partImageReference((inp.parts as PartsFile).parts.find(p => p.name === name) as PartRecord).path))', "name => readPng(join(dirname(inp.partsDir), 'parts', 'stale.png'))"],
+    ['SWEEP', 'const r = readPng(join(dirname(inp.partsDir), partImageReference(parts.parts.find((p) => p.name === name) as PartRecord).path));', "const r = readPng(join(dirname(inp.partsDir), 'parts', 'stale.png'));"],
+    ['TIPS', 'const art = placedArt(p.x, p.y, readPng(join(dirname(inp.partsDir), partImageReference(p).path)));', "const art = placedArt(p.x, p.y, readPng(join(dirname(inp.partsDir), 'parts', 'stale.png')));"],
+    ['STILLS_TOPMOST', 'const top = topmostIndex(inp.parts, (i) => readPng(join(dirname(inp.partsDir), partImageReference(inp.parts.parts[i]).path)));', "const top = topmostIndex(inp.parts, (i) => readPng(join(dirname(inp.partsDir), 'parts', 'stale.png')));"],
+    ['STILLS_ART', 'a = placedArt(p.x, p.y, readPng(join(dirname(inp.partsDir), partImageReference(p).path)));', "a = placedArt(p.x, p.y, readPng(join(dirname(inp.partsDir), 'parts', 'stale.png')));"],
+  ];
+  for (const [label, target, replacement] of checkPlants) plantSite(label, 'src/check.ts', target, replacement, '');
+  plantSite('BOUNDARY_COLOUR', 'src/boundarycolour.ts', 'join(input.partsDir, basename(partImageReference(rec).path))', "join(input.partsDir, 'stale.png')", 'module:boundarycolour.ts');
+  plantSite('COINCIDE', 'src/coincideio.ts', 'join(input.partsDir, basename(partImageReference(part).path))', "join(input.partsDir, 'stale.png')", 'module:coincideio.ts');
+  plantSite('SUPPORT_WRITE', 'src/supportdomains.ts', 'join(partsDir, basename(partImageReference(p).path))', "join(partsDir, 'stale.png')", 'writeSupportDomains');
+  plantSite('SUPPORT_READ', 'src/supportdomains.ts', 'join(partsDir, basename(partImageReference(part).path))', "join(partsDir, 'stale.png')", 'readSupportDomains');
+  return { root, isolated };
+}
+
+export function runPartsFileReferenceChecks(dir: string, base: PartsFile, config: Record<string, unknown>, say: Say): void {
+  const { root, isolated } = runPartsReaderReferenceChecks(dir, base, config, say);
   cpSync(join(root, 'cli.ts'), join(isolated, 'cli.ts'));
   cpSync(join(root, 'tools'), join(isolated, 'tools'), { recursive: true });
   const sceneFixture = join(dir, 'scene-fixture');
@@ -448,7 +634,7 @@ console.log(JSON.stringify(outcomes));
       sceneRestored.rigFigureSha256 !== null &&
       sceneRestored.rigFigureSha256 === sceneRestored.renderFigureSha256 &&
       sceneRestored.rigFigureSha256 === sceneRestored.buildFigureSha256,
-    `plant removed, tree restored, src/build.ts md5 ${buildAfterMd5}; pre-plant md5 ${buildBeforeMd5}; rig/render/build figure_rig.png sha256 ${sceneRestored.rigFigureSha256}`,
+    `sweep done, tree restored, src/build.ts md5 ${buildAfterMd5}; pre-plant md5 ${buildBeforeMd5}; rig/render/build figure_rig.png sha256 ${sceneRestored.rigFigureSha256}`,
   );
   const plainCfgPath = join(dir, 'plain-config.json');
   writeFileSync(plainCfgPath, JSON.stringify(assembleConfig(), null, 2) + '\n');
