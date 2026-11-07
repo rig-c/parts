@@ -5312,7 +5312,7 @@ says why each requirement exists and what breaks without it.
 | <a id="PAINTING_HANDS_APART"></a>`PAINTING_HANDS_APART` | under `--form standee`, the line between the two wrists crosses no background: hands clasped or touching (`SKIP` under `--form illustration`) | a painting with the hands apart and open (PAINTING.md, *Hands*) |
 | <a id="PAINTING_LEGS_APART"></a>`PAINTING_LEGS_APART` | under `--form standee`, the line between the knees, or between the ankles, crosses no background: the legs are one column there (a long skirt over the knees is refused here too; `SKIP` under `--form illustration`) | a painting with the legs apart and a visible gap at the knees and the ankles (PAINTING.md, *Legs*) |
 
-### The optional ComfyUI adapter (`comfy paint`, `comfy seethrough`)
+### The optional ComfyUI adapter (`comfy paint`, `comfy seethrough`, `comfy plate`)
 
 `rig-parts comfy seethrough --image <png> --out <dir> --host <url> --config <config.json>`
 reads `seethrough.resolution`, `.steps`, `.seed` and `.offload` through the early
@@ -5335,6 +5335,52 @@ those settings. Changing a config seed alone cannot change a no-config run.
 | <a id="COMFY_IMAGE_PRESENT"></a><a id="COMFY_OUT_EMPTY"></a><a id="COMFY_OUT_FREE"></a>`COMFY_IMAGE_PRESENT`, `COMFY_OUT_EMPTY`, `COMFY_OUT_FREE` | no `--image`, an `--out` that already holds files, or a seed whose painting is already on disk | `--image`, `--out`, `--seed0` |
 | <a id="COMFY_PAINTING_SIZE"></a>`COMFY_PAINTING_SIZE` | the painting `comfy paint` got back is not twice the latent (a config with no `generation` block is `CONFIG_FIELD_PRESENT`, §6 *The config*) | `config.generation` |
 | <a id="CONFIG_POSE_CANVAS"></a><a id="CONFIG_POSE_KEYPOINTS"></a><a id="CONFIG_POSE_IN_CANVAS"></a>`CONFIG_POSE_CANVAS`, `CONFIG_POSE_KEYPOINTS`, `CONFIG_POSE_IN_CANVAS` | the pose file `generation.control.skeleton` names states another canvas than `generation.latent`, holds other than the 18 body-18 keypoints, or puts one off its canvas | the pose file (§3, the `generation.control.skeleton` row) |
+
+
+#### Step-4 plates (`comfy plate`, issue #1183)
+
+`rig-parts comfy plate --mode background|foreground --painting <png>
+--mask-from seethrough:<dir>|figure-mask:<dir> --out <dir>` makes the two plates
+a full-screen scene needs: the background with the figure removed, and a
+foreground matte with alpha. Only these two. It never makes a character part
+or a joint.
+
+- **The mask comes from a source.** `seethrough:<dir>` is a See-through run in
+  the wrapper form, and the figure is every drawn layer's alpha above 8 on the
+  run's canvas. `figure-mask:<dir>` is an assemble output whose `parts.json`
+  declares a `scene`, and the figure is its `figure_rig.png`. The mask is never
+  fitted: a source grid that is not the painting's size is refused. With no
+  source the command refuses by name, writes nothing and reaches no box.
+- **background** grows the mask by `--grow` px (a square, default 8) and
+  inpaints it on a ComfyUI box. `--graph lama` (the default) uses the
+  comfyui-inpaint-nodes pack and its LaMa model (`--model`, default
+  `big-lama.pt`). `--graph core` uses ComfyUI's own nodes and the checkpoint
+  `--model` names, with `--steps`, `--prompt` and `--negative`; it needs a
+  painting whose sides are multiples of 8. Every node, input and model of the
+  graph is checked against the box's `/object_info` before anything is
+  uploaded, so a box without the pack refuses `lama` and still runs `core`. The
+  job is appended behind any other job: never put in front, nothing reordered,
+  nothing cancelled. A job still pending after `--wait` seconds is refused with
+  its place in the queue and left there. The box's image is pasted into the
+  painting inside the mask only, so every pixel outside it is the painting's,
+  byte for byte. `--checkpoint-sha256` (64 hex characters) is required: the box
+  does not report a hash, so the receipt records the value **as declared, not
+  measured**.
+- **foreground** runs no box and no model. The plate is the painting's pixels
+  inside the mask, transparent zero outside.
+
+`<out>` holds `plate.png`, `mask.png` (the mask actually used: opaque white
+inside, opaque black outside) and `receipt.json`, spec
+`rig-parts-plate-receipt/1` ([STABILITY](STABILITY.md#plate-receipt)). A receipted
+plate pass from this command is a recorded source step, not a repair.
+
+| rule | means | change |
+| --- | --- | --- |
+| <a id="PLATE_MASK_SOURCE"></a><a id="PLATE_MASK_GRID"></a><a id="PLATE_MASK_VALUES"></a><a id="PLATE_MASK_EMPTY"></a>`PLATE_MASK_SOURCE`, `PLATE_MASK_GRID`, `PLATE_MASK_VALUES`, `PLATE_MASK_EMPTY` | no `--mask-from`, or a source directory holding no See-through run or no scene figure mask; a source on another grid than the painting; a `figure_rig.png` holding other than opaque white and black; a mask with no figure pixel | run `comfy seethrough` on the painting, or `assemble` with `config.scene`, at the painting's own size |
+| <a id="PLATE_CHECKPOINT_SHA256"></a><a id="PLATE_MODEL_GIVEN"></a><a id="PLATE_CORE_GRID"></a>`PLATE_CHECKPOINT_SHA256`, `PLATE_MODEL_GIVEN`, `PLATE_CORE_GRID` | `--checkpoint-sha256` absent or not 64 hex characters; `--graph core` without `--model`; a painting off the multiple-of-8 grid under `--graph core` | the flag, or `--graph lama` |
+| <a id="PLATE_PAINTING_PRESENT"></a><a id="PLATE_OUT_EMPTY"></a>`PLATE_PAINTING_PRESENT`, `PLATE_OUT_EMPTY` | no `--painting` file, or an `--out` that already holds entries | `--painting`, `--out` |
+| <a id="COMFY_QUEUE_BEHIND"></a><a id="COMFY_GPU_NAMED"></a><a id="COMFY_PLATE_SIZE"></a>`COMFY_QUEUE_BEHIND`, `COMFY_GPU_NAMED`, `COMFY_PLATE_SIZE` | the job was still pending after `--wait` (its queue place is named; it is left on the box); `/system_stats` does not name exactly one device; the box's image is not the painting's size | `--wait`, or the box |
+| <a id="PLATE_RECEIPT_READ"></a><a id="PLATE_RECEIPT_SPEC"></a><a id="PLATE_RECEIPT_KEYS"></a><a id="PLATE_RECEIPT_FILE"></a><a id="PLATE_RECEIPT_HASH"></a>`PLATE_RECEIPT_READ`, `PLATE_RECEIPT_SPEC`, `PLATE_RECEIPT_KEYS`, `PLATE_RECEIPT_FILE`, `PLATE_RECEIPT_HASH` | the receipt read back before it is published is not JSON, not this spec, not in its key order, names a file that is gone, or records a sha256 that is not the file's | nothing to change by hand: the run is refused and `<out>` is not written |
 
 ### assemble
 
@@ -6770,7 +6816,8 @@ What is composed:
   the px its own `build` measured.
 - **`scene.json`** (`spine-parts-scene-report/1`): the scene file's path as given,
   the canvas, the rig's name (the ids joined by `+`), the pack flags, the plate (its
-  image, provenance, note, bone, slot, size, `judged_by: "nothing"`), per character
+  image, provenance, note, bone, slot, size, `sha256` of the PNG's bytes as compose read them — issue #1183, additive —
+  and `judged_by: "nothing"`), per character
   its build, offset, `scale` (only when it is not 1), `rig_size`, `rig_scale`, placed bounds (the union of its part
   boxes, canvas px), shift and what it moved (`shifted`: the first-level bones, the
   regions on `root`, the count of weights bound to `root`), its counts and `accepted`

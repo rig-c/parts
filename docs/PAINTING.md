@@ -407,6 +407,8 @@ To paint one without the character drifting, repaint only the limb:
    hand); the rest of that run is discarded. The base rig's other parts stay the
    base painting's.
 
-`comfy paint` does not run an inpainting graph; the demo's hand-detailer pass is
-the same idea at hand scale (a masked repaint on the same checkpoint, recorded
-beside its painting in rig-c/examples).
+`comfy paint` does not run an inpainting graph, and neither does `comfy plate`
+for this step: `comfy plate` inpaints only a step-4 background plate (the figure
+removed) over a source mask, never a limb or a part. The demo's hand-detailer
+pass is the same idea at hand scale (a masked repaint on the same checkpoint,
+recorded beside its painting in rig-c/examples).

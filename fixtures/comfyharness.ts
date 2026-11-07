@@ -17,7 +17,8 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { encodePngBytes } from '../src/raster/png.ts';
 import { FAKE_CHECKPOINT, FAKE_LORA, type FakeMode, startFakeComfy } from './fakecomfy.ts';
-import { layerRaster, minimalConfig, WRAPPER_LAYERS } from './synthetic.ts';
+import { newRaster } from '../src/raster/types.ts';
+import { CANVAS, layerRaster, minimalConfig, WRAPPER_LAYERS } from './synthetic.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const work = process.argv[2];
@@ -112,6 +113,32 @@ for (const [name, seethrough] of Object.entries({
 
 writeFileSync(join(work, 'config.json'), readFileSync(join(work, 'st-high.json')));
 
+// Issue #1183: the plate's inputs. A painting on the See-through fixture's canvas whose every pixel differs from
+// its neighbours, an assemble-shaped figure-mask source, and a directory holding no source at all.
+const platePainting = join(work, 'plate_painting.png');
+{
+  const r = newRaster(CANVAS.w, CANVAS.h);
+  for (let y = 0; y < CANVAS.h; y++) for (let x = 0; x < CANVAS.w; x++) r.data.set([(x * 3 + y) % 250, (y * 5) % 250, (x + y * 2) % 250, 255], (y * CANVAS.w + x) * 4);
+  writeFileSync(platePainting, encodePngBytes(r));
+}
+const figureMaskDir = join(work, 'plate_figure_source');
+mkdirSync(figureMaskDir, { recursive: true });
+{
+  const r = newRaster(CANVAS.w, CANVAS.h);
+  let px = 0;
+  for (let y = 0; y < CANVAS.h; y++) for (let x = 0; x < CANVAS.w; x++) {
+    const v = x >= 20 && x < 40 && y >= 10 && y < 40 ? 255 : 0;
+    if (v === 255) px++;
+    r.data.set([v, v, v, 255], (y * CANVAS.w + x) * 4);
+  }
+  writeFileSync(join(figureMaskDir, 'figure_rig.png'), encodePngBytes(r));
+  writeFileSync(join(figureMaskDir, 'parts.json'), JSON.stringify({ scene: { figure_alpha_above: 8, figure_px: px, figure_mask: 'figure_rig.png' } }));
+}
+const noSourceDir = join(work, 'plate_no_source');
+mkdirSync(noSourceDir, { recursive: true });
+/** A declared checksum: any 64 hex characters, since the box is never asked. */
+const PLATE_SHA = 'ab'.repeat(32);
+
 const env: Record<string, string> = {};
 for (const [k, v] of Object.entries(process.env)) if (k !== 'COMFY_HOST' && v !== undefined) env[k] = v;
 
@@ -130,6 +157,11 @@ interface Scenario {
 const fast = ['--timeout', '5', '--poll', '0.05'];
 const st = (url: string, out: string, wait = '2'): string[] => [
   'comfy', 'seethrough', '--image', image, '--out', out, '--host', url, '--resolution', '512', '--steps', '3', '--seed', '7', '--offload', '--wait', wait, ...fast,
+];
+/** A background plate run; `mask` null leaves --mask-from out, `sha` null leaves --checkpoint-sha256 out. */
+const plate = (url: string, out: string, graph: 'lama' | 'core', mask: string | null = `seethrough:${join(work, 'st-ok')}`, extra: string[] = [], wait = '2', sha: string | null = PLATE_SHA): string[] => [
+  'comfy', 'plate', '--mode', 'background', '--painting', platePainting, ...(mask === null ? [] : ['--mask-from', mask]), '--out', out, '--graph', graph,
+  ...(sha === null ? [] : ['--checkpoint-sha256', sha]), '--seed', '9', '--grow', '1', '--host', url, '--wait', wait, ...fast, ...extra,
 ];
 const scenarios: Scenario[] = [
   { name: 'st-ok', mode: 'ok', args: (u, o) => st(u, o) },
@@ -158,6 +190,21 @@ const scenarios: Scenario[] = [
   { name: 'paint-reordered', mode: 'ok', args: (u, o) => ['comfy', 'paint', '--config', join(work, 'paint_reordered.json'), '--out', o, '--host', u, '--wait', '2', ...fast] },
   { name: 'paint-no-generation', mode: 'ok', args: (u, o) => ['comfy', 'paint', '--config', join(work, 'paint_no_generation.json'), '--out', o, '--host', u, '--wait', '2', ...fast] },
   { name: 'paint-missing-ckpt', mode: 'ok', args: (u, o) => ['comfy', 'paint', '--config', join(work, 'paint_missing_ckpt.json'), '--out', o, '--host', u, '--wait', '2', ...fast] },
+  // Issue #1183. st-ok runs first, so its wrapper output is the See-through source mask.
+  { name: 'plate-lama-ok', mode: 'ok', args: (u, o) => plate(u, o, 'lama') },
+  { name: 'plate-core-ok', mode: 'ok', args: (u, o) => plate(u, o, 'core', `figure-mask:${figureMaskDir}`, ['--model', FAKE_CHECKPOINT]) },
+  { name: 'plate-busy', mode: 'busy', args: (u, o) => plate(u, o, 'lama') },
+  { name: 'plate-behind', mode: 'behind', args: (u, o) => plate(u, o, 'lama', undefined, [], '0.3') },
+  { name: 'plate-no-inpaint-lama', mode: 'no-inpaint', args: (u, o) => plate(u, o, 'lama') },
+  { name: 'plate-no-inpaint-core', mode: 'no-inpaint', args: (u, o) => plate(u, o, 'core', undefined, ['--model', FAKE_CHECKPOINT]) },
+  { name: 'plate-missing-model', mode: 'ok', args: (u, o) => plate(u, o, 'lama', undefined, ['--model', 'not_on_the_box.pt']) },
+  { name: 'plate-no-mask', mode: 'ok', args: (u, o) => plate(u, o, 'lama', null) },
+  { name: 'plate-no-source', mode: 'ok', args: (u, o) => plate(u, o, 'lama', `seethrough:${noSourceDir}`) },
+  { name: 'plate-no-scene', mode: 'ok', args: (u, o) => plate(u, o, 'lama', `figure-mask:${noSourceDir}`) },
+  { name: 'plate-bad-sha', mode: 'ok', args: (u, o) => plate(u, o, 'lama', undefined, [], '2', 'not-a-hash') },
+  { name: 'plate-no-sha', mode: 'ok', args: (u, o) => plate(u, o, 'lama', undefined, [], '2', null) },
+  { name: 'plate-fg', mode: 'ok', args: (u, o) => ['comfy', 'plate', '--mode', 'foreground', '--painting', platePainting, '--mask-from', `figure-mask:${figureMaskDir}`, '--out', o] },
+  { name: 'plate-fg-no-mask', mode: 'ok', args: (u, o) => ['comfy', 'plate', '--mode', 'foreground', '--painting', platePainting, '--out', o] },
 ];
 
 const results: Record<string, unknown> = {};
@@ -170,7 +217,7 @@ for (const s of scenarios) {
     mkdirSync(uploads, { recursive: true });
     for (const [name, bytes] of fake.uploads) writeFileSync(join(uploads, name), bytes);
     writeFileSync(join(work, `${s.name}.prompts.json`), JSON.stringify(fake.prompts, null, 1));
-    results[s.name] = { status: r.status, out: r.out, paths: fake.requests.map((q) => `${q.method} ${q.path}`), uploads: [...fake.uploads.keys()], prompts: fake.prompts.length };
+    results[s.name] = { status: r.status, out: r.out, paths: fake.requests.map((q) => `${q.method} ${q.path}`), uploads: [...fake.uploads.keys()], prompts: fake.prompts.length, fronts: fake.fronts };
   } finally {
     fake.stop();
   }
@@ -183,4 +230,4 @@ gone.stop();
 const r = await cli(st(goneUrl, join(work, 'st-unreachable')));
 results['st-unreachable'] = { status: r.status, out: r.out, paths: [], uploads: [], prompts: 0 };
 
-console.log(JSON.stringify({ image, results }));
+console.log(JSON.stringify({ image, platePainting, results }));

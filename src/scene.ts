@@ -91,6 +91,7 @@
  * clock, no randomness, no network, no child process. The rigc gate and the
  * check are run by {@link composeStage} through an injected `RigcRunner`.
  */
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { RigStop } from '@rig-c/core/rig';
@@ -849,7 +850,8 @@ export interface SceneReport {
   canvas: { width: number; height: number };
   rig_name: string;
   pack_mode: { page_edges: string; pack_shape: string };
-  plate: { image: string; provenance: Provenance; note: string | null; bone: string; slot: string; size: [number, number]; judged_by: 'nothing' } | null;
+  /** `sha256` (issue #1183) is of the plate PNG's bytes as compose read them, so a verdict can bind to them. */
+  plate: { image: string; provenance: Provenance; note: string | null; bone: string; slot: string; size: [number, number]; sha256: string; judged_by: 'nothing' } | null;
   characters: SceneCharacterReport[];
   order: { declared: string[]; slots: string[]; judged_by: 'nothing' };
   idle_duration: number;
@@ -1239,7 +1241,7 @@ export function composeScene(
     canvas: { ...canvas },
     rig_name: name,
     pack_mode: { page_edges: mode.pageEdges, pack_shape: mode.packShape },
-    plate: scene.plate === null || plate === null ? null : { image: scene.plate.image, provenance: scene.plate.provenance, note: scene.plate.note, bone: PLATE, slot: PLATE, size: [plate.width, plate.height], judged_by: 'nothing' },
+    plate: scene.plate === null || plate === null ? null : { image: scene.plate.image, provenance: scene.plate.provenance, note: scene.plate.note, bone: PLATE, slot: PLATE, size: [plate.width, plate.height], sha256: createHash('sha256').update(plate.bytes).digest('hex'), judged_by: 'nothing' },
     characters: rows,
     order: { declared: [...scene.order], slots: slots.map((s) => s.name), judged_by: 'nothing' },
     idle_duration: durations[0],

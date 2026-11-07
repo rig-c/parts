@@ -19,13 +19,26 @@
  *
  * A `mode` plants one fault: a queue that never empties, a history entry with
  * no outputs, a box without the See-through node classes, or a stale
- * `seethrough_psd_info.log` naming another run's manifest.
+ * `seethrough_psd_info.log` naming another run's manifest; for the plate
+ * (issue #1183), a box without the inpaint pack (`no-inpaint`), or a job that
+ * stays pending behind someone else's (`behind`).
+ *
+ * A plate graph (one holding `INPAINT_InpaintWithModel` or
+ * `InpaintModelConditioning`) saves the uploaded painting with `FAKE_FILL`
+ * inside the uploaded mask and `FAKE_DRIFT` added to every red byte outside
+ * it, so a control can show the paste-back keeps the outside byte-exact.
  */
-import { encodePngBytes } from '../src/raster/png.ts';
+import { decodePngBytes, encodePngBytes } from '../src/raster/png.ts';
 import { newRaster, type Raster } from '../src/raster/types.ts';
 import { CANVAS, layerRaster, WRAPPER_LAYERS } from './synthetic.ts';
 
-export type FakeMode = 'ok' | 'busy' | 'no-outputs' | 'no-seethrough' | 'stale-manifest' | 'missing-depth';
+export type FakeMode = 'ok' | 'busy' | 'no-outputs' | 'no-seethrough' | 'stale-manifest' | 'missing-depth' | 'no-inpaint' | 'behind';
+
+/** The LaMa model file the fake inpaint pack lists. */
+export const FAKE_LAMA = 'big-lama.pt';
+/** What the fake's inpaint writes inside the mask, and the drift it adds to every red byte outside it (a float round trip that is not exact). */
+export const FAKE_FILL: [number, number, number] = [10, 200, 30];
+export const FAKE_DRIFT = 1;
 
 /** The checkpoint and LoRA names the fake box lists. */
 export const FAKE_CHECKPOINT = 'fixture_base.safetensors';
@@ -43,6 +56,8 @@ export interface FakeComfy {
   requests: FakeRequest[];
   uploads: Map<string, Uint8Array>;
   prompts: unknown[];
+  /** How many /prompt bodies asked to be put in front of the queue. */
+  fronts: number;
   /** Files the fake "wrote" to its output directory, by name. */
   files: Map<string, Uint8Array>;
   stop(): void;
@@ -67,8 +82,15 @@ const SEETHROUGH_INFO: Record<string, unknown> = {
   SeeThrough_SavePSD: spec({ parts: T('SEETHROUGH_PARTS'), filename_prefix: T('STRING') }),
 };
 
+const INPAINT_INFO: Record<string, unknown> = {
+  INPAINT_LoadInpaintModel: spec({ model_name: E([FAKE_LAMA]) }),
+  INPAINT_InpaintWithModel: spec({ inpaint_model: T('INPAINT_MODEL'), image: T('IMAGE'), mask: T('MASK'), seed: T('INT') }, { optional_upscale_model: T('UPSCALE_MODEL') }),
+};
+
 const CORE_INFO: Record<string, unknown> = {
   LoadImage: spec({ image: E(['already_on_the_box.png']) }),
+  LoadImageMask: spec({ image: E(['already_on_the_box.png']), channel: E(['alpha', 'red', 'green', 'blue']) }),
+  InpaintModelConditioning: spec({ positive: T('CONDITIONING'), negative: T('CONDITIONING'), vae: T('VAE'), pixels: T('IMAGE'), mask: T('MASK'), noise_mask: T('BOOLEAN') }),
   SaveImage: { input: { required: { images: T('IMAGE'), filename_prefix: T('STRING') }, hidden: { prompt: 'PROMPT', extra_pnginfo: 'EXTRA_PNGINFO' } } },
   CheckpointLoaderSimple: spec({ ckpt_name: E([FAKE_CHECKPOINT]) }),
   EmptyLatentImage: spec({ width: T('INT'), height: T('INT'), batch_size: T('INT') }),
@@ -106,6 +128,8 @@ export function startFakeComfy(mode: FakeMode): FakeComfy {
   const prompts: unknown[] = [];
   const files = new Map<string, Uint8Array>();
   const history = new Map<string, unknown>();
+  const pendingIds: string[] = [];
+  let fronts = 0;
   let serial = 0;
   const json = (v: unknown, status = 200): Response => new Response(JSON.stringify(v), { status, headers: { 'Content-Type': 'application/json' } });
 
@@ -134,6 +158,24 @@ export function startFakeComfy(mode: FakeMode): FakeComfy {
         files.set('seethrough_psd_info.log', new TextEncoder().encode('an_earlier_run_layers.json\n'));
       } else files.set('seethrough_psd_info.log', new TextEncoder().encode(`${manifestName}\n`));
     }
+    const inpaint = nodes.some(([, n]) => n.class_type === 'INPAINT_InpaintWithModel' || n.class_type === 'InpaintModelConditioning');
+    if (inpaint) {
+      const upload = (cls: string): Uint8Array | undefined => uploads.get(String(nodes.find(([, n]) => n.class_type === cls)?.[1].inputs.image));
+      const painting = upload('LoadImage'), mask = upload('LoadImageMask');
+      for (const [id, n] of nodes) {
+        if (n.class_type !== 'SaveImage' || painting === undefined || mask === undefined) continue;
+        const p = decodePngBytes(painting, 'painting'), m = decodePngBytes(mask, 'mask');
+        const img = newRaster(p.width, p.height);
+        for (let i = 0; i < p.width * p.height; i++) {
+          if (m.data[i * 4] > 127) img.data.set([...FAKE_FILL, 255], i * 4);
+          else img.data.set([Math.min(255, p.data[i * 4] + FAKE_DRIFT), p.data[i * 4 + 1], p.data[i * 4 + 2], 255], i * 4);
+        }
+        const name = `${String(n.inputs.filename_prefix)}_00001_.png`;
+        files.set(name, encodePngBytes(img));
+        outputs[id] = { images: [{ filename: name, subfolder: '', type: 'output' }] };
+      }
+      return outputs;
+    }
     for (const [id, n] of nodes) {
       if (n.class_type !== 'SaveImage') continue;
       const name = `${String(n.inputs.filename_prefix)}_00001_.png`;
@@ -153,9 +195,10 @@ export function startFakeComfy(mode: FakeMode): FakeComfy {
       requests.push({ method: req.method, path: u.pathname });
       if (u.pathname === '/system_stats') return json({ system: { comfyui_version: 'fake' }, devices: [{ name: 'cuda:0 Fake GPU', vram_free: 8 * 1024 ** 3 }] });
       if (u.pathname === '/queue') {
+        if (mode === 'behind') return json({ queue_running: [[0, 'someone-else']], queue_pending: [[1, 'another-one'], ...pendingIds.map((id, i) => [i + 2, id])] });
         return json(mode === 'busy' ? { queue_running: [[0, 'someone-else']], queue_pending: [] } : { queue_running: [], queue_pending: [] });
       }
-      if (u.pathname === '/object_info') return json(mode === 'no-seethrough' ? CORE_INFO : { ...CORE_INFO, ...SEETHROUGH_INFO });
+      if (u.pathname === '/object_info') return json(mode === 'no-seethrough' ? { ...CORE_INFO, ...INPAINT_INFO } : mode === 'no-inpaint' ? { ...CORE_INFO, ...SEETHROUGH_INFO } : { ...CORE_INFO, ...SEETHROUGH_INFO, ...INPAINT_INFO });
       if (u.pathname === '/upload/image' && req.method === 'POST') {
         const form = await req.formData();
         const file = form.get('image');
@@ -164,9 +207,14 @@ export function startFakeComfy(mode: FakeMode): FakeComfy {
         return json({ name: file.name, subfolder: '', type: 'input' });
       }
       if (u.pathname === '/prompt' && req.method === 'POST') {
-        const body = (await req.json()) as { prompt: Record<string, Node> };
+        const body = (await req.json()) as { prompt: Record<string, Node>; front?: unknown };
         prompts.push(body.prompt);
+        if (body.front !== undefined && body.front !== false) fronts++;
         const id = `fake-${++serial}`;
+        if (mode === 'behind') {
+          pendingIds.push(id);
+          return json({ prompt_id: id, number: serial, node_errors: {} });
+        }
         const outputs = run(body.prompt);
         history.set(id, { outputs: mode === 'no-outputs' ? {} : outputs, status: { status_str: 'success', completed: true, messages: [] } });
         return json({ prompt_id: id, number: serial, node_errors: {} });
@@ -184,5 +232,5 @@ export function startFakeComfy(mode: FakeMode): FakeComfy {
       return new Response('not found', { status: 404 });
     },
   });
-  return { url: `http://127.0.0.1:${server.port}`, views, requests, uploads, prompts, files, stop: () => server.stop(true) };
+  return { url: `http://127.0.0.1:${server.port}`, views, requests, uploads, prompts, get fronts() { return fronts; }, files, stop: () => server.stop(true) };
 }
