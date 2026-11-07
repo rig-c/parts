@@ -48,6 +48,7 @@ import { REQUIREMENTS_SENTENCE } from './src/requirements.ts';
 import { composeStage, IMAGE_SEP, PLATE, PROVENANCES, SCENE_REPORT_FILE, SCENE_REPORT_SPEC, SCENE_SPEC } from './src/scene.ts';
 import { buildSheet, defaultCaption, type Tile, tilesFrom } from './src/sheet.ts';
 import { loadComparison, requiredProblems, structureLines } from './src/structure.ts';
+import { assembleOutputFiles, clearRunStamp, readPackageIdentity, rigOutputFiles, RUN_STAMP_FILE, RUN_STAMP_SPEC, writeRunStamp } from './src/runstamp.ts';
 import { authorLayerLine } from './src/tags.ts';
 
 const EXIT_OK = 0;
@@ -410,7 +411,7 @@ usage:
       through rig-c (profile rig-play, packed with --page-edges and
       --pack-shape as for check; rigc's build gates the compile and the packed pages on disk) in a
       scratch directory first, and --out receives images/*.png, rig.json,
-      motion.json and mesh_report.json only when it is green. Prints one line
+      motion.json, mesh_report.json and ${RUN_STAMP_FILE} (spec "${RUN_STAMP_SPEC}") only when it is green. Prints one line
       per mesh and the rigc gate lines.
       --idle-keys says where the idle's keys on a bone a mesh is weighted to go:
       ctl (the default) keys a same-origin <bone>_ctl parent instead, which
@@ -755,9 +756,9 @@ usage:
       stack by name, ASSEMBLE_PINHOLES, before writing; otherwise prints its SKIP line.
       Merge the full-body and head-crop See-through runs into rig-space parts:
       <out>/rig/parts/<name>.png (each cropped to its alpha box), <out>/rig/parts.json,
-      <out>/render/recomposite_rig.png and <out>/render/${ERROR_MAP_FILE} (the error
+      <out>/render/recomposite_rig.png, <out>/render/${ERROR_MAP_FILE} (the error
       map: uncovered error px red, covered error px blue, the rest the painting in
-      light grey). Reads config.seethrough.head_box and
+      light grey) and <out>/${RUN_STAMP_FILE} (spec "${RUN_STAMP_SPEC}"). Reads config.seethrough.head_box and
       .resolution and config.assemble.rig_scale, .plan, .extend_below_crop,
       .patches — extra parts cut from the painting itself over a rig-pixel box
       (alpha "silhouette": the painting's figure inside it; "box": all of it),
@@ -1334,6 +1335,7 @@ function cmdRig(args: string[]): number {
   if (!isPageEdges(edges)) return usage(edges);
   const shape = packShapeOf(packShape ?? undefined);
   if (!isPackShape(shape)) return usage(shape);
+  clearRunStamp(out);
   let bin: string;
   try {
     bin = findRigc(import.meta.dir, process.env.PATH ?? '');
@@ -1341,8 +1343,12 @@ function cmdRig(args: string[]): number {
     return printRefusal(err);
   }
   const scratch = mkdtempSync(join(tmpdir(), 'rig-parts-rig-'));
+  const startedAt = new Date().toISOString();
   try {
-    rigStage({ config, parts: partsDir, out, idleKeys: keys, pageEdges: edges, packShape: shape }, rigcRunner(bin), scratch, console.log);
+    const pkg = readPackageIdentity(join(import.meta.dir, 'package.json'));
+    const rig = rigStage({ config, parts: partsDir, out, idleKeys: keys, pageEdges: edges, packShape: shape }, rigcRunner(bin), scratch, console.log);
+    const finishedAt = new Date().toISOString();
+    writeRunStamp({ pkg, command: 'rig', startedAt, finishedAt, outDir: out, configPath: config, outputPaths: rigOutputFiles(rig) });
     return EXIT_OK;
   } catch (err) {
     return printRefusal(err);
@@ -1845,11 +1851,16 @@ function cmdAssemble(args: string[]): number {
       return EXIT_OK;
     }
     const out = flags.get('--out') as string;
-    assembleStage(
+    clearRunStamp(out);
+    const pkg = readPackageIdentity(join(import.meta.dir, 'package.json'));
+    const startedAt = new Date().toISOString();
+    const result = assembleStage(
       { source, full, head, config, ...(flags.has('--requirements') ? { requirements: flags.get('--requirements') as string } : {}), ...(seam === undefined ? {} : { seam: seam as SeamRule }), ...(project === undefined ? {} : { project: project as ProjectRule }), ...(alts.length === 0 ? {} : { alts }) },
       { partsJson: join(out, 'rig', 'parts.json'), partsDir: join(out, 'rig', 'parts'), recomposite: join(out, 'render', 'recomposite_rig.png'), errorMap: join(out, 'render', ERROR_MAP_FILE) },
       console.log,
     );
+    const finishedAt = new Date().toISOString();
+    writeRunStamp({ pkg, command: 'assemble', startedAt, finishedAt, outDir: out, configPath: config, outputPaths: assembleOutputFiles(out, result) });
     return EXIT_OK;
   } catch (err) {
     if (staged !== null) {
