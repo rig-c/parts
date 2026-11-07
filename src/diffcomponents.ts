@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { COVERED_ALPHA, ERROR_LIMIT, coveredMask, errorMask, holeBorders, type PlacedPart } from './assemble.ts';
 import { PartsError, type Problem } from './errors.ts';
-import { readParts } from './parts.ts';
+import { partImageReference, readParts } from './parts.ts';
 import { connectedComponents } from './raster/components.ts';
 import { decodePngBytes } from './raster/png.ts';
 import { newMask, type Raster } from './raster/types.ts';
@@ -184,7 +184,7 @@ export function diffComponentsCommand(args: string[]): void {
   };
   const partsPath = flags.get('--parts')!;
   const parts = readParts(partsPath);
-  const placed = parts.parts.map(record => ({ record, image: diffPng(bytes(join(dirname(partsPath), 'parts', `${record.name}.png`)).bytes, record.name) }));
+  const placed = parts.parts.map(record => ({ record, image: diffPng(bytes(join(dirname(partsPath), partImageReference(record).path)).bytes, record.name) }));
   const stack = bytes(flags.get('--stack')!), painting = bytes(flags.get('--painting')!);
   const reference = diffPng(painting.bytes, painting.path);
   if (parts.rig_size[0] !== reference.width || parts.rig_size[1] !== reference.height) inputFailure('parts.rig_size', `is ${parts.rig_size[0]}x${parts.rig_size[1]}; painting ${reference.width}x${reference.height} is required, with no resampling`);

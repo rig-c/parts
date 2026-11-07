@@ -8,7 +8,7 @@ import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { loadConfigAndAnimations, parseConfig } from './config.ts';
 import { depthReading, readSourceDepth } from './depthsheets.ts';
 import { alphaSupport, depthMapFail as fail, floatBox, integrateNormals, mapToSheet, readNumericMap, type NumericMap } from './depthmaps.ts';
-import { readParts } from './parts.ts';
+import { depthImageReference, partImageReference, readParts } from './parts.ts';
 import { readPartSet } from './propose.ts';
 import { decodePngBytes, encodePngBytes } from './raster/png.ts';
 import { resize } from './raster/resize.ts';
@@ -98,7 +98,7 @@ function preparedParts(partsDir: string, recipe: DepthRecipe): { manifest: Prepa
     }
     if (!alphaSupport(art).some(Boolean)) fail('DEPTH_MAP_SUPPORT', part.name, 'has no alpha>=128 pixels; a supported part is required');
     const bytes = encodePngBytes(input), file = `${part.name}.png`; images.set(file, bytes);
-    parts.push({ part: part.name, crop: [part.x, part.y, part.w, part.h], sourceSha256: hash(readFileSync(join(partsDir, 'parts', file))), input: file, inputSha256: hash(bytes), size: [art.width, art.height], upscaled: [w, h], upscale, padding: pad, inputSize: [input.width, input.height] });
+    parts.push({ part: part.name, crop: [part.x, part.y, part.w, part.h], sourceSha256: hash(readFileSync(join(partsDir, partImageReference(part).path))), input: file, inputSha256: hash(bytes), size: [art.width, art.height], upscaled: [w, h], upscale, padding: pad, inputSize: [input.width, input.height] });
   }
   return { manifest: { spec: 'rig-parts-depth-inputs/1', partsSha256: hash(readFileSync(join(partsDir, 'parts.json'))), recipeSha256: hash(text(recipe)), background: 128, alpha: 128, parts }, images };
 }
@@ -185,12 +185,12 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
   };
   collect(input.parts, '');
   for (const p of file.parts) {
-    const name = p.name, bytes = readFileSync(join(input.parts, 'parts', `${name}.png`)), art = decodePngBytes(bytes, name), rec = recs.find(r => r.name === name) as Obj;
+    const name = p.name, bytes = readFileSync(join(input.parts, partImageReference(p).path)), art = decodePngBytes(bytes, name), rec = recs.find(r => r.name === name) as Obj;
     writes.set(`${name}.png`, bytes);
     const declaration = Object.hasOwn(recipe.parts, name) ? recipe.parts[name] : undefined;
     if (declaration === undefined) {
-      if (recipe.clear.includes(name)) { if (p.depth !== undefined) retained.delete(`parts/${p.depth.image}`); delete rec.depth; }
-      else if (p.depth !== undefined) { readSourceDepth(join(input.parts, 'parts', p.depth.image), art, null); writes.set(p.depth.image, readFileSync(join(input.parts, 'parts', p.depth.image))); }
+      if (recipe.clear.includes(name)) { if (p.depth !== undefined) retained.delete(depthImageReference(p.depth).path); delete rec.depth; }
+      else if (p.depth !== undefined) { const depthPath = join(input.parts, depthImageReference(p.depth).path); readSourceDepth(depthPath, art, null); writes.set(p.depth.image, readFileSync(depthPath)); }
       continue;
     }
     const g = recipe.groups[declaration.group], target = declaration.group === 'head' ? turn : object(turn.body, 'config.turn.body');
@@ -213,7 +213,7 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
     const { sheet, reading } = mapToSheet(values, art, declaration.median, declaration.relief, g.near, g.zScale, name), image = `${name}_depth.png`, sheetBytes = encodePngBytes(sheet);
     if (file.parts.some(p => `${p.name}.png` === image)) fail('DEPTH_GROUP_BINDING', name, `sheet filename ${image} collides with artwork; use noncolliding part names`);
     writes.set(image, sheetBytes);
-    if (p.depth !== undefined) retained.delete(`parts/${p.depth.image}`);
+    if (p.depth !== undefined) retained.delete(depthImageReference(p.depth).path);
     rec.depth = { image, near: g.near, zScale: g.zScale, sources: [{ from: p.from, image: basename(declaration.map), sha256: hash(mapBytes), crop: [0, 0, art.width, art.height], reading: depthReading(sheet, art, null) }] };
     rows.push({ part: name, group: declaration.group, source: declaration.source, frame: declaration.frame, sourceSha256: prepared.sourceSha256, mapSha256: hash(mapBytes), inputSha256: prepared.inputSha256, sheetSha256: hash(sheetBytes), median: declaration.median, relief: declaration.relief, near: g.near, zScale: g.zScale, pivot: g.pivot, ...reading, sign: normal?.sign ?? 1, ...(normal === undefined ? {} : { integration: { stride: 2, iterations: normal.iterations, residual: normal.residual, coreMinusRim: normal.coreMinusRim, maxIterations: 3000, atol: 1e-6, btol: 1e-6 } }) });
   }

@@ -4,7 +4,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { edgeLength } from './length.ts';
 import { canonicalInward, CUT_MATERIAL_SOURCES, CUT_MATERIAL_SPEC, type MaterialSource, type Point } from './cutmaterial.ts';
-import type { PartsFile } from './parts.ts';
+import { partImageReference, type PartsFile } from './parts.ts';
 import { refuseIfAny } from './errors.ts';
 const sha=(data:Uint8Array|string):string=>createHash('sha256').update(data).digest('hex');
 const hash=(path:string):string=>sha(readFileSync(path));
@@ -15,7 +15,7 @@ export function writeMaterialSources(partsPath:string,partsDir:string,parts:Part
   const emitted=sources.filter(s=>parts.parts.some(p=>p.name===s.part));
   writeFileSync(join(dirname(partsPath),CUT_MATERIAL_SOURCES),JSON.stringify({
     spec:CUT_MATERIAL_SPEC,parts_sha256:hash(partsPath),
-    images:parts.parts.map(p=>({part:p.name,sha256:hash(join(partsDir,`${p.name}.png`))})),
+    images:parts.parts.map(p=>({part:p.name,sha256:hash(join(dirname(partsDir),partImageReference(p).path))})),
     sources_sha256:sha(JSON.stringify(emitted)),sources:emitted,
   },null,2)+'\n');
 }
@@ -32,10 +32,11 @@ export function readMaterialSources(home:string,parts:PartsFile):MaterialSource[
   if(raw.images.length!==parts.parts.length)return fail('image bindings do not cover every emitted base part');
   const seen=new Set<string>();
   for(const binding of raw.images){
-    if(!record(binding)||typeof binding.part!=='string'||!digest(binding.sha256)||seen.has(binding.part)||!parts.parts.some(p=>p.name===binding.part))return fail('image bindings require each named base part exactly once and its SHA-256');
+    const part=record(binding)&&typeof binding.part==='string'?parts.parts.find(p=>p.name===binding.part):undefined;
+    if(!record(binding)||typeof binding.part!=='string'||!digest(binding.sha256)||seen.has(binding.part)||part===undefined)return fail('image bindings require each named base part exactly once and its SHA-256');
     if(Object.keys(binding).some(k=>!['part','sha256'].includes(k)))return fail('image binding has an unknown field');
     seen.add(binding.part);
-    const file=join(home,'parts',`${binding.part}.png`);
+    const file=join(home,partImageReference(part).path);
     if(!existsSync(file)||hash(file)!==binding.sha256)return fail(`source-edge binding for part "${binding.part}" differs from its emitted PNG`);
   }
   const sources=new Set<string>();

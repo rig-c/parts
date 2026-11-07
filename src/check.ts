@@ -145,7 +145,7 @@ import {
   type ChainEdge,
   type WorldBox,
 } from './instruments.ts';
-import { type AlternatePartsRecord, FRONT_SUFFIX, type LimbRecord, type PartRecord, type PartsFile, readParts } from './parts.ts';
+import { type AlternatePartsRecord, FRONT_SUFFIX, type LimbRecord, partImageReference, type PartRecord, type PartsFile, readParts } from './parts.ts';
 import { ARM_SPLIT_MIGRATION, poseRigBonesForDrawn, type RigBone, SETS_FILE, writtenShares } from './rig.ts';
 import { TURN_BONE, turnConstraintName, turnTwin } from './turn.ts';
 import { ROOT_BONE, loadConfigWithBytes, type Point } from './config.ts';
@@ -706,7 +706,7 @@ export function readCheckInputs(rigDir: string, partsHome?: string, sourcePath?:
   }
   if (parts !== null) {
     for (const p of parts.parts) {
-      const png = join(partsDir, `${p.name}.png`);
+      const png = join(home, partImageReference(p).path);
       if (!existsSync(png)) {
         problems.push({ code: 'CHECK_PART_PNG_PRESENT', object: `part "${p.name}"`, detail: `${png} does not exist; parts.json lists it` });
         continue;
@@ -718,7 +718,7 @@ export function readCheckInputs(rigDir: string, partsHome?: string, sourcePath?:
     }
     for (const alt of parts.alternates ?? []) {
       for (const r of alt.records) {
-        const png = join(partsDir, `${alt.name}_${r.name}.png`);
+        const png = join(home, partImageReference(r, alt.name).path);
         if (!existsSync(png)) {
           problems.push({ code: 'CHECK_PART_PNG_PRESENT', object: `set "${alt.name}" part "${r.name}"`, detail: `${png} does not exist; parts.json lists it` });
           continue;
@@ -1382,7 +1382,7 @@ export function resolvePlacedAlpha(placements: readonly ReferencePlacement[], pa
   const readRaw = (png: string): Raster => {
     const hit = rawCache.get(png);
     if (hit !== undefined) return hit;
-    const img = readPng(join(partsDir, `${png}.png`));
+    const img = readPng(join(dirname(partsDir), png));
     rawCache.set(png, img);
     return img;
   };
@@ -1512,7 +1512,7 @@ export function setPlacements(parts: PartsFile, alt: AlternatePartsRecord, slotO
             }
           }
         }
-        const entry: PlacedIslandEntry = { name: islSlot, png: p.name, box: p, islandIndex: k, islandCount: islandSlots.length, at };
+        const entry: PlacedIslandEntry = { name: islSlot, png: partImageReference(p).path, box: p, islandIndex: k, islandCount: islandSlots.length, at };
         if (!reordered) {
           const list = inlineIslands.get(p.name) ?? [];
           list.push(entry);
@@ -1543,11 +1543,11 @@ export function setPlacements(parts: PartsFile, alt: AlternatePartsRecord, slotO
     const rec = byName.get(name);
     const islandSlots = rec === undefined ? partIslandSlots(name, slotOrder) : [name];
     if (islandSlots.length > 1) {
-      out.push({ name, png: name, box: base, islandIndex: 0, islandCount: islandSlots.length });
+      out.push({ name, png: partImageReference(base).path, box: base, islandIndex: 0, islandCount: islandSlots.length });
       for (const isl of inlineIslands.get(name) ?? []) pushIsland(isl);
       return;
     }
-    out.push({ name, png: rec === undefined ? name : `${alt.name}_${rec.name}`, box: rec ?? base });
+    out.push({ name, png: rec === undefined ? partImageReference(base).path : partImageReference(rec, alt.name).path, box: rec ?? base });
   };
   const baseOf = new Map(parts.parts.map((p) => [p.name, p]));
   for (const p of parts.parts) {
@@ -1861,7 +1861,7 @@ export function seamDrawingSignature(input: {
 /** File-only rig-image padding checks after the parts loader has validated each PNG against its record. */
 export function boundaryColourSizeProblems(inp: CheckInputs): Problem[] {
   if (inp.parts === null) return [];
-  const records = new Set(inp.parts.parts.map(p => p.name));
+  const records = new Map(inp.parts.parts.map(p => [p.name, p]));
   const imagesDir = typeof inp.rig.images === 'string' ? resolve(inp.rigDir, inp.rig.images) : join(inp.rigDir, 'images');
   const problems: Problem[] = [];
   const seen = new Set<string>();
@@ -1874,9 +1874,9 @@ export function boundaryColourSizeProblems(inp: CheckInputs): Problem[] {
       if (!seamImageSource(source) || seen.has(source.image)) continue;
       const image = source.image;
       seen.add(image);
-      const name = image.replace(/\.png$/, '');
-      const partPng = join(inp.partsDir, `${name}.png`), rigPng = join(imagesDir, image);
-      if (!records.has(name) || !existsSync(partPng) || !existsSync(rigPng)) continue;
+      const name = image.replace(/\.png$/, ''), record = records.get(name);
+      const partPng = record === undefined ? '' : join(dirname(inp.partsDir), partImageReference(record).path), rigPng = join(imagesDir, image);
+      if (record === undefined || !existsSync(partPng) || !existsSync(rigPng)) continue;
       let src: Raster, rigImg: Raster;
       try { src = readPng(partPng); rigImg = readPng(rigPng); }
       catch { continue; }
@@ -6664,7 +6664,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       const parts = ready.parts;
       seams = take(() => resolveSeams(file, parts === null ? null : parts.parts.map((p) => p.name), ready.noParts, (n) => {
         const rec = (parts as PartsFile).parts.find((p) => p.name === n) as PartRecord;
-        return placedArt(rec.x, rec.y, readPng(join(ready.partsDir, `${n}.png`)));
+        return placedArt(rec.x, rec.y, readPng(join(dirname(ready.partsDir), partImageReference(rec).path)));
       }));
     }
     if (wb !== null) take(() => resolveWindBand(wb, ready));
@@ -6678,7 +6678,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   // Read source support before rendering; no output/sidecar for undeclared builds.
   if (reqFile?.cut_material !== undefined && (set !== undefined || allSets)) refuseIfAny([{code: 'CHECK_CUT_MATERIAL_MEASURED', object: 'cut_material', detail: 'source evidence binds base assembly only; run check on its base parts without --set/--all-sets; alternate-set coverage requires its own original source instrument'}]);
   const cutMaterialProblems: Problem[] = [];
-  const cutMaterial = reqFile?.cut_material === undefined ? null : checkJointMaterial(reqFile.cut_material, inp.parts, name => readPng(join(inp.partsDir, `${name}.png`)), cutMaterialProblems, inp.parts === null ? undefined : readMaterialSources(dirname(inp.partsDir), inp.parts));
+  const cutMaterial = reqFile?.cut_material === undefined ? null : checkJointMaterial(reqFile.cut_material, inp.parts, name => readPng(join(dirname(inp.partsDir), partImageReference((inp.parts as PartsFile).parts.find(p => p.name === name) as PartRecord).path)), cutMaterialProblems, inp.parts === null ? undefined : readMaterialSources(dirname(inp.partsDir), inp.parts));
   // A measured material failure is a check bar; unavailable data is a refusal.
   const rigcEntry = readRigcEntry(requireRigcVersion(rigc));
   /**
@@ -7035,7 +7035,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       const png = (name: string): Raster => {
         const hit = pngs.get(name);
         if (hit !== undefined) return hit;
-        const r = readPng(join(inp.partsDir, `${name}.png`));
+        const r = readPng(join(dirname(inp.partsDir), partImageReference(parts.parts.find((p) => p.name === name) as PartRecord).path));
         pngs.set(name, r);
         return r;
       };
@@ -8333,7 +8333,7 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
     const rises = excepted.rises.includes(p.name);
     const rests = excepted.rests.includes(p.name);
     const [rootHalf, tipHalf] = rises ? ['lower', 'upper'] : ['upper', 'lower'];
-    const art = placedArt(p.x, p.y, readPng(join(inp.partsDir, `${p.name}.png`)));
+    const art = placedArt(p.x, p.y, readPng(join(dirname(inp.partsDir), partImageReference(p).path)));
     const shown = poses.map((f) => f.get(p.name) ?? null);
     const w = halfTravels(art, p, inp.stage, shown, rises ? 'up' : 'down');
     // Issue #987: the halves are read in the frame of the bone the part hangs from; the world reading rides beside them.
@@ -8862,7 +8862,7 @@ export function stillLine(inp: FullInputs, idle: FrameSet, geo: IdleGeometry | n
   const H = inp.parts.rig_size[1];
   const W = inp.parts.rig_size[0];
   const poses = attachmentPoses(geometryPath, idle.written);
-  const top = topmostIndex(inp.parts, (i) => readPng(join(inp.partsDir, `${inp.parts.parts[i].name}.png`)));
+  const top = topmostIndex(inp.parts, (i) => readPng(join(dirname(inp.partsDir), partImageReference(inp.parts.parts[i]).path)));
   const index = new Map(inp.parts.parts.map((p, i) => [p.name, i]));
   const record = new Map(inp.parts.parts.map((p) => [p.name, p]));
   const slots = (Array.isArray(inp.rig.slots) ? inp.rig.slots : []).filter(isRecord).map((sl) => ({ name: String(sl.name), bone: typeof sl.bone === 'string' ? sl.bone : undefined }));
@@ -8872,7 +8872,7 @@ export function stillLine(inp: FullInputs, idle: FrameSet, geo: IdleGeometry | n
     let a = arts.get(name);
     if (a === undefined) {
       const p = record.get(name) as PartRecord;
-      a = placedArt(p.x, p.y, readPng(join(inp.partsDir, `${name}.png`)));
+      a = placedArt(p.x, p.y, readPng(join(dirname(inp.partsDir), partImageReference(p).path)));
       arts.set(name, a);
     }
     return a;
