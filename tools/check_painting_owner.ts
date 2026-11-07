@@ -1,3 +1,4 @@
+import { publicPaintingFaults, publicPaintingListFaults, type PublicPaintingReading } from './check_painting_public.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,6 +33,15 @@ function rgba(output: AssembleResult, name: string, x: number, y: number): numbe
 }
 
 export function runPaintingOwnerChecks(say: Say): void {
+  const census: PublicPaintingReading = { grid: [2, 2], errors: [1] };
+  const added = publicPaintingFaults('sample', { ...census, errors: [1, 2] }, census);
+  const lost = publicPaintingFaults('sample', { ...census, errors: [] }, census);
+  const onlyB = publicPaintingListFaults({ sample: census }, {}, { missing: [{ x: 0, y: 0 }] });
+  say('ED1141_PUBLIC_CENSUS_BOTH_SIDES_AND_PLANTS', publicPaintingFaults('sample', census, census).length === 0 &&
+    publicPaintingListFaults({ sample: census }, { sample: [{ x: 1, y: 0 }] }, { sample: [] }).length === 0 &&
+    added.some(q => q.includes('ERROR_ADDED: sample (0,1)')) && lost.some(q => q.includes('ERROR_LOST: sample (1,0)')) &&
+    onlyB.some(q => q.includes('LIST_KEY: followup/missing')), 'same reading passes; added/lost coordinate and B-only example refuse by name');
+
   const art = newRaster(1, 1); art.data.set([1, 2, 3, 255]);
   const empty = newRaster(1, 1);
   const owner = rawPaintingOwner([{ name: 'a', raster: art }, { name: 'b', raster: empty }], 1);
@@ -65,8 +75,8 @@ export function runPaintingOwnerChecks(say: Say): void {
     return hits.a === a.length && hits.b === b.length && hits.other === 0 &&
       [...a, ...b].every(q => Number.isInteger(q.x) && Number.isInteger(q.y) && q.x >= 0 && q.x < 832 && q.y >= 0 && q.y < 1216);
   });
-  say('ED1038_SEPARATE_FROZEN_COORDINATE_LISTS', sizeA === 151 && sizeB === 34 && valid &&
-    followupList.wind.filter(q => q.cause === 'cause unclosed').length === 1, `A ${sizeA}, B ${sizeB}, separate coordinate budgets and cause-unclosed tag`);
+  say('ED1038_SEPARATE_FROZEN_COORDINATE_LISTS', sizeA === 151 && sizeB === 4 && valid &&
+    followupList.wind.filter(q => q.cause === 'silhouette-clear-reconnected').length === 1, `A ${sizeA}, B ${sizeB}, separate coordinate budgets and named silhouette reconnection`);
   say('ED1038_PLANTED_UNLISTED_COORDINATE', paintingEdgeExceptionHits('demo', [0]).other === 1 &&
     paintingEdgeExceptionHits('unknown', [0]).other === 1, 'a new coordinate or unknown example has no exception');
 
@@ -118,7 +128,7 @@ export function runPaintingOwnerChecks(say: Say): void {
     const output = assemble(input);
     const again = assemble(input);
     const composite = Array.from(output.recomposite.data.subarray(3808 * 4, 3808 * 4 + 4));
-    say('ED1038_PRODUCTION_STRIP_RECONSTRUCTS_WITH_HELD_CLEAR', composite.join() === '26,46,66,255' &&
+    say('ED1038_PRODUCTION_STRIP_RECONSTRUCTS_WITH_HELD_CLEAR', composite.join() === '30,50,70,255' &&
       output.parts.recomposite!.error_px === 0 && output.paintingEdges?.allocation?.supplier === owner.supplier,
       `composite ${composite}, >40 errors ${output.parts.recomposite!.error_px}`);
     say('ED1038_PRODUCTION_IS_DETERMINISTIC_AND_INPUT_READ_ONLY', JSON.stringify(output.parts) === JSON.stringify(again.parts) &&

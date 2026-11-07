@@ -85,6 +85,18 @@ jobs:
       # record is uploaded either way, so the merge can name what went wrong.
       - name: Run this shard's units
         run: bun selftest.ts --shard ${{ matrix.shard }} --record shards/shard-${{ matrix.shard }}.json
+      # The ordinary sample suite uses generated fixtures. These five pinned
+      # public assemblies separately hold owner-allocation error membership.
+      - name: Fetch pinned painting allocation examples
+        if: matrix.shard == '3'
+        run: bun run fetch-examples
+      - name: Check public painting allocation membership
+        if: matrix.shard == '3'
+        timeout-minutes: 12
+        run: |
+          for example in demo reference-demo reference-sample scarf wind; do
+            bun tools/check_painting_public.ts "$example" || exit "$?"
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
