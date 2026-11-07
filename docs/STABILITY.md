@@ -61,15 +61,26 @@ because the caller already carries that directory with the check.
 `@rig-c/parts/src/parts.ts` exports `partsFileReferences(dir: string):
 PartsFileReference[]` and the `PartsFileReference` type. `dir` holds the assemble
 output's `parts.json`. Each row has `path: string`, relative to that directory,
-and `role: 'part' | 'alternate' | 'depth' | 'painting'`. The paths use `/`.
-Base records resolve to `parts/<name>.png`, alternate records to
-`parts/<set>_<name>.png`, and either record's `depth.image` to
-`parts/<depth.image>`. `painting_in_rig.path`, when declared, is exactly
-`painting_in_rig.png`, beside the manifest. Depth source provenance filenames
-are historical inputs and are omitted. There is no separate attachment field.
-Rows are sorted lexically by path, then role, with duplicate path/role pairs
-collapsed. A path with several roles retains each role. Missing PNGs remain in
-the list and unreferenced files are ignored. The function reads and validates
+and `role: 'part' | 'alternate' | 'depth' | 'painting' | 'figure_mask'`. The paths use `/`.
+The complete output-reference fields and their roles are below.
+
+| Field | Relative path | Role |
+| --- | --- | --- |
+| `parts[].name` | `parts/<name>.png` | `part` |
+| `alternates[].name` with `records[].name` | `parts/<set>_<name>.png` | `alternate` |
+| Base or alternate record `depth.image` | `parts/<depth.image>` | `depth` |
+| `painting_in_rig.path` | Exactly `painting_in_rig.png` | `painting` |
+| Base or alternate `scene.figure_mask` | Exactly `figure_rig.png` | `figure_mask` |
+
+Painting and figure masks sit beside the manifest. Shared base/alternate scene
+references collapse to one row. Depth source provenance filenames and
+`taken_layers` donor directories/input names are historical identity receipts
+and are omitted. There is no separate attachment field.
+Rows are sorted by path, then role, in UTF-16 code-unit order, with duplicate path/role pairs
+collapsed. A path with several roles retains each role. Every PNG that
+parts.json references is listed. A listed file missing on disk is the consumer's
+refusal. Unreferenced extras are outside the identity. Historical source
+provenance is retained in the manifest and is outside the output-file identity. The function reads and validates
 only the manifest, using the production readers' path resolvers. A missing manifest
 refuses with `PARTS_FILE_PRESENT`, malformed JSON with `PARTS_IS_JSON`, and
 invalid fields with the same named rules as `readParts`. It never opens,
