@@ -143,7 +143,7 @@ export function assembleOutputFiles(outDir: string, result: AssembleResult): str
     ),
     'render/recomposite_rig.png',
     `render/${ERROR_MAP_FILE}`,
-    ...(result.figure === null ? [] : [`render/${FIGURE_MASK_FILE}`]),
+    ...(result.figure === null ? [] : [`render/${FIGURE_MASK_FILE}`, `rig/${FIGURE_MASK_FILE}`]),
   ]);
 }
 
