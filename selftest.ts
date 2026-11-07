@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { runSourceCoverChecks } from './fixtures/source_cover_checks.ts';
 import { runPartsFileReferenceChecks } from './tools/parts_file_references.ts';
 import { runCheckFileReferenceChecks } from './tools/check_file_references.ts';
 import { runHiddenExtentChecks, runHiddenExtentConfigChecks } from './fixtures/hidden_extent.ts';
@@ -26428,12 +26429,14 @@ function runBuildSuite(): number {
         rigFail.includes('declares duration 1s but its last key is at 0s') &&
         still.out.includes('build: stopped at rig; no later stage ran') &&
         !still.out.includes('[check]') &&
-        stillTree.join(',') === 'keep.txt,painting_in_rig.png,part_support_domains.json,parts,parts.json,recomposite_error_rig.png,recomposite_rig.png',
+        stillTree.join(',') === 'keep.txt,painting_in_rig.png,part_support_domains.json,parts,parts.json,recomposite_error_rig.png,recomposite_rig.png,source_cover.json',
       `exit ${still.status}; ${rigFail ?? 'no [rig] FAIL line'}; --out afterwards [${stillTree.join(', ')}] (a planted check/check.json and idle.gif were there before, and keep.txt, which build does not own)`,
       'emit only after green, across stages: a red stage stops everything after it, its own refusal is what is printed, and a file an earlier run left where build writes is cleared rather than left beside the refusal looking current',
     );
 
     const early = join(dir, 'early');
+    mkdirSync(early, { recursive: true });
+    writeFileSync(join(early, 'source_cover.json'), 'stale source cover');
     const wrong = runBuildCli(buildArgs(dir, early, 'wrongtag.json'));
     const planFail = wrong.out.split('\n').find((l) => l.startsWith('[assemble]   FAIL  ASSEMBLE_PLAN_TAG_IN_RUN: ')) ?? null;
     const noOut = runBuildCli(buildArgs(dir, early).slice(0, -2));
@@ -32805,6 +32808,7 @@ function runAssembleSuite(): number {
     runPaintingEdgeChecks((name, ok, detail) => say(name, ok, detail, 'issue #953: under visible, a part edge takes the painting\'s line and coverage; every skip reason planted next to a positive strip'));
     runGroundUnitChecks((name, ok, detail) => say(name, ok, detail, 'issue #996: the ring share and its cut-off, and the busy-ground rules on a strip next to the plain mutant that takes the ground'));
     runCropEdgeChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1075: generated two-run crop, exact integer samples, independent outside counts'));
+    runSourceCoverChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1158: direct projection-input cover, planted memberships, empty output and alternate inheritance'));
     writeAssembleFixture(dir);
     const base = fixtureInput(dir);
     const result = assemble({ ...base, seamRule: 'near-white' });
@@ -34346,7 +34350,7 @@ function runAssembleSuite(): number {
     const paintingSame = r1.status === 0 && Buffer.compare(readFileSync(join(out1, 'rig', 'painting_in_rig.png')), paintingBytes) === 0;
     say(
       'AS07_THE_CLI_WRITES_THE_SAME_BYTES_TWICE_AND_THE_RECORD_READS_BACK',
-      r1.status === 0 && r2.status === 0 && same && paintingSame && readBack === cliWant && files.length === EXPECTED_PARTS.parts.length + 5 && files.includes('rig/part_support_domains.json') && files.includes('render/recomposite_error_rig.png') && r1.out.includes('recomposite vs source: mean |d|=') && r1.out.includes('  uncovered hole 1: 2611 px at 0,0 64x64 (between "topwear" 86 px, "hair_back" 84 px, "bottomwear" 72 px, "shoes" 48 px, "face" 34 px)'),
+      r1.status === 0 && r2.status === 0 && same && paintingSame && readBack === cliWant && files.length === EXPECTED_PARTS.parts.length + 6 && files.includes('rig/source_cover.json') && files.includes('rig/part_support_domains.json') && files.includes('render/recomposite_error_rig.png') && r1.out.includes('recomposite vs source: mean |d|=') && r1.out.includes('  uncovered hole 1: 2611 px at 0,0 64x64 (between "topwear" 86 px, "hair_back" 84 px, "bottomwear" 72 px, "shoes" 48 px, "face" 34 px)'),
       `exit ${r1.status}/${r2.status}; ${files.length} file(s) (${files.join(', ')}), byte-identical across two runs: ${same}; parts.json including painting_in_rig reads back equal: ${readBack === cliWant}; painting PNG equals in-memory raster: ${paintingSame}`,
       'determinism is a contract — the error map included — and the parts.json the CLI writes is the one the in-memory control checked; its one hole is printed with the box and the borders the fixture derives',
     );
