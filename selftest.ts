@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { runSourceCoverChecks } from './fixtures/source_cover_checks.ts';
+import { runCheckFileReferenceChecks } from './tools/check_file_references.ts';
 import { runHiddenExtentChecks, runHiddenExtentConfigChecks } from './fixtures/hidden_extent.ts';
 import './tools/check_row_guard.ts';
 import { runSeamCellChecks } from './tools/check_seam_cells.ts';
@@ -2227,6 +2228,10 @@ function runConfigSuite(): number {
       `isolated table-only plant exit ${probe.status}; ${probe.stdout.trim()}; ${probe.stderr.trim()}`,
       'issue #1134: the public entry follows a new loader declaration; unrelated strings remain excluded, and the working source is never mutated');
   } finally { rmSync(files1134, { recursive: true, force: true }); }
+
+  const checkFilesDir = temp('check-files-1138');
+  try { runCheckFileReferenceChecks(checkFilesDir, minimalConfig(), (name, pass, detail) => say(name, pass, detail, 'issue #1138: declared check inputs against real preflight reads')); }
+  finally { rmSync(checkFilesDir, { recursive: true, force: true }); }
 
   const good = refusals(() => parseConfig(minimalConfig()));
   say(

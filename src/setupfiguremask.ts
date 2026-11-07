@@ -1,11 +1,10 @@
 /** Independent declared alpha support, verified before any candidate build. */
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
 import { refuseIfAny } from './errors.ts';
 import { decodePngBytes } from './raster/png.ts';
 import type { Raster } from './raster/types.ts';
-import type { SetupPainting } from './setuppainting.ts';
+import { setupPaintingFilePath, type SetupPainting } from './setuppainting.ts';
 
 export function readSetupFigureMask(declared: SetupPainting, requirements: string, source: Raster | null, width: number, height: number): Uint8Array | undefined {
   const mask = declared.figure_mask;
@@ -15,7 +14,7 @@ export function readSetupFigureMask(declared: SetupPainting, requirements: strin
     throw new Error('unreachable');
   };
   let bytes: Uint8Array;
-  try { bytes = new Uint8Array(readFileSync(resolve(dirname(requirements), mask.path))); }
+  try { bytes = new Uint8Array(readFileSync(setupPaintingFilePath(requirements, mask.path))); }
   catch { return fail(`cannot read declared PNG "${mask.path}"; requires independent figure alpha support`); }
   const hash = createHash('sha256').update(bytes).digest('hex');
   if (hash !== mask.sha256) return fail(`PNG "${mask.path}" has sha256 ${hash}; requires declared ${mask.sha256}`);

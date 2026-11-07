@@ -1,3 +1,4 @@
+import { dirname, resolve } from 'node:path';
 import { checkRow, checkSlotRow } from './checkrow.ts';
 /** Authored source-painting limits over actual renderer setup pixels (#887). */
 import { refuseIfAny, type Problem } from './errors.ts';
@@ -190,4 +191,9 @@ export function setupPaintingLines(line: SetupPaintingObservation): string[] {
     ...(line.outside_figure_owned === undefined ? [] : [`${SETUP_PAINTING_LINE}: owned pixels outside figure mask — pixelcount ${line.outside_figure_owned.pixel_count}; UNBARRED, outside every region limit`]),
     ...line.regions.flatMap(r => [`${SETUP_PAINTING_LINE}: region "${r.name}" ${r.status} — box [${r.box.join(', ')}], pixelcount ${r.pixel_count}, limit ${r.limit ?? 'undeclared (SKIP)'}, RGB tolerance ${line.rgb_tolerance}`,
       ...r.slots.map(s => `${SETUP_PAINTING_LINE}: slot "${s.slot}" region "${r.name}" — box [${s.box.join(', ')}], pixelcount ${s.pixel_count}; region total ${r.pixel_count}, limit ${r.limit ?? 'undeclared (SKIP)'}`)])];
+}
+
+/** Resolve an authored setup image against the requirements file that names it. */
+export function setupPaintingFilePath(requirements: string, path: string): string {
+  return resolve(dirname(requirements), path);
 }

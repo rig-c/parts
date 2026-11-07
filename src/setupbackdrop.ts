@@ -1,11 +1,10 @@
 /** Declared setup plate: hash the same bytes that are decoded, before builds. */
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
 import { refuseIfAny } from './errors.ts';
 import { decodePngBytes } from './raster/png.ts';
 import type { Raster } from './raster/types.ts';
-import type { SetupPainting } from './setuppainting.ts';
+import { setupPaintingFilePath, type SetupPainting } from './setuppainting.ts';
 
 export function readSetupBackdrop(declared: SetupPainting, requirements: string, source: Raster | null): Raster | undefined {
   const plate = declared.backdrop;
@@ -15,7 +14,7 @@ export function readSetupBackdrop(declared: SetupPainting, requirements: string,
     throw new Error('unreachable');
   };
   let bytes: Uint8Array;
-  try { bytes = new Uint8Array(readFileSync(resolve(dirname(requirements), plate.path))); }
+  try { bytes = new Uint8Array(readFileSync(setupPaintingFilePath(requirements, plate.path))); }
   catch { return fail(`cannot read declared PNG "${plate.path}"; requires the authored opaque backdrop, not a guessed colour`); }
   const hash = createHash('sha256').update(bytes).digest('hex');
   if (hash !== plate.sha256) return fail(`PNG "${plate.path}" has sha256 ${hash}; requires declared ${plate.sha256}`);
