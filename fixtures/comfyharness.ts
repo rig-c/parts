@@ -13,11 +13,13 @@
  * `COMFY_HOST` is removed from the child's environment, so no scenario can
  * reach a real box.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { encodePngBytes } from '../src/raster/png.ts';
 import { FAKE_CHECKPOINT, FAKE_LORA, type FakeMode, startFakeComfy } from './fakecomfy.ts';
 import { newRaster } from '../src/raster/types.ts';
+import { writeRunStamp } from '../src/runstamp.ts';
+import { sha256 } from '../src/plate.ts';
 import { CANVAS, layerRaster, minimalConfig, WRAPPER_LAYERS } from './synthetic.ts';
 
 const ROOT = join(import.meta.dir, '..');
@@ -121,7 +123,8 @@ const platePainting = join(work, 'plate_painting.png');
   for (let y = 0; y < CANVAS.h; y++) for (let x = 0; x < CANVAS.w; x++) r.data.set([(x * 3 + y) % 250, (y * 5) % 250, (x + y * 2) % 250, 255], (y * CANVAS.w + x) * 4);
   writeFileSync(platePainting, encodePngBytes(r));
 }
-const figureMaskDir = join(work, 'plate_figure_source');
+const figureMaskRoot = join(work, 'plate_figure_source');
+const figureMaskDir = join(figureMaskRoot, 'rig');
 mkdirSync(figureMaskDir, { recursive: true });
 {
   const r = newRaster(CANVAS.w, CANVAS.h);
@@ -132,10 +135,31 @@ mkdirSync(figureMaskDir, { recursive: true });
     r.data.set([v, v, v, 255], (y * CANVAS.w + x) * 4);
   }
   writeFileSync(join(figureMaskDir, 'figure_rig.png'), encodePngBytes(r));
-  writeFileSync(join(figureMaskDir, 'parts.json'), JSON.stringify({ scene: { figure_alpha_above: 8, figure_px: px, figure_mask: 'figure_rig.png' } }));
+  const painting = readFileSync(platePainting);
+  writeFileSync(join(figureMaskDir, 'painting_in_rig.png'), painting);
+  writeFileSync(join(figureMaskDir, 'parts.json'), JSON.stringify({
+    painting_in_rig: { path: 'painting_in_rig.png', sha256: sha256(painting), resample: 'lanczos3-rgb-opaque' },
+    scene: { figure_alpha_above: 8, figure_px: px, figure_mask: 'figure_rig.png' },
+  }));
+  writeRunStamp({ pkg: { name: '@rig-c/parts', version: '0.0.0' }, command: 'assemble',
+    startedAt: '2026-01-01T00:00:00.000Z', finishedAt: '2026-01-01T00:00:00.000Z',
+    outDir: figureMaskRoot, configPath: join(work, 'config.json'),
+    outputPaths: ['rig/parts.json', 'rig/figure_rig.png', 'rig/painting_in_rig.png'] });
 }
 const noSourceDir = join(work, 'plate_no_source');
 mkdirSync(noSourceDir, { recursive: true });
+const unstampedRoot = join(work, 'plate_unstamped_source');
+const staleRoot = join(work, 'plate_stale_source');
+cpSync(figureMaskRoot, unstampedRoot, { recursive: true });
+rmSync(join(unstampedRoot, 'run.json'));
+cpSync(figureMaskRoot, staleRoot, { recursive: true });
+writeFileSync(join(staleRoot, 'rig', 'figure_rig.png'), readFileSync(platePainting));
+const otherPainting = join(work, 'plate_other_painting.png');
+{
+  const r = newRaster(CANVAS.w, CANVAS.h);
+  r.data.fill(255);
+  writeFileSync(otherPainting, encodePngBytes(r));
+}
 /** A declared checksum: any 64 hex characters, since the box is never asked. */
 const PLATE_SHA = 'ab'.repeat(32);
 
@@ -205,6 +229,13 @@ const scenarios: Scenario[] = [
   { name: 'plate-no-sha', mode: 'ok', args: (u, o) => plate(u, o, 'lama', undefined, [], '2', null) },
   { name: 'plate-fg', mode: 'ok', args: (u, o) => ['comfy', 'plate', '--mode', 'foreground', '--painting', platePainting, '--mask-from', `figure-mask:${figureMaskDir}`, '--out', o] },
   { name: 'plate-fg-no-mask', mode: 'ok', args: (u, o) => ['comfy', 'plate', '--mode', 'foreground', '--painting', platePainting, '--out', o] },
+  { name: 'plate-unstamped', mode: 'ok', args: (u, o) => plate(u, o, 'lama', `figure-mask:${join(unstampedRoot, 'rig')}`) },
+  { name: 'plate-stale-mask', mode: 'ok', args: (u, o) => plate(u, o, 'lama', `figure-mask:${join(staleRoot, 'rig')}`) },
+  { name: 'plate-other-painting', mode: 'ok', args: (u, o) => {
+    const args = plate(u, o, 'lama', `figure-mask:${figureMaskDir}`);
+    args[args.indexOf('--painting') + 1] = otherPainting;
+    return args;
+  } },
 ];
 
 const results: Record<string, unknown> = {};
