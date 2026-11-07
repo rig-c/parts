@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.27.2](https://github.com/rig-c/parts/compare/v2.27.1...v2.27.2) (2026-11-07)
+
+
+### Bug Fixes
+
+* bind comfy plate's seethrough: source to its run hashes and painting ([#1188](https://github.com/rig-c/parts/issues/1188)) ([#1198](https://github.com/rig-c/parts/issues/1198)) ([4562cf0](https://github.com/rig-c/parts/commit/4562cf07cca572b564ce97706d219dd05d2db4ac))
+* **deps:** pin @rig-c/core 3.5.0 ([#1200](https://github.com/rig-c/parts/issues/1200)) ([#1201](https://github.com/rig-c/parts/issues/1201)) ([830de90](https://github.com/rig-c/parts/commit/830de9052d63caf6d0f817482a12ac6a3efaf6cd))
+* record See-through input transforms for painting-grid masks ([#1202](https://github.com/rig-c/parts/issues/1202)) ([a259f57](https://github.com/rig-c/parts/commit/a259f57cf6ba0d2016e19804389708cc5be82eee))
+
 ## [2.27.1](https://github.com/rig-c/parts/compare/v2.27.0...v2.27.1) (2026-11-07)
 
 
