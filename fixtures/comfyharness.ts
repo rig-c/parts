@@ -15,12 +15,12 @@
  */
 import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { encodePngBytes } from '../src/raster/png.ts';
+import { decodePngBytes, encodePngBytes } from '../src/raster/png.ts';
 import { FAKE_CHECKPOINT, FAKE_LORA, type FakeMode, startFakeComfy } from './fakecomfy.ts';
 import { newRaster } from '../src/raster/types.ts';
 import { writeRunStamp } from '../src/runstamp.ts';
 import { sha256 } from '../src/plate.ts';
-import { CANVAS, layerRaster, minimalConfig, WRAPPER_LAYERS } from './synthetic.ts';
+import { CANVAS, minimalConfig } from './synthetic.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const work = process.argv[2];
@@ -86,8 +86,16 @@ function paintRecordsConfig(edit: (g: Record<string, unknown>) => void = () => {
   return { ...base, generation, 'x-status': { gate: 'green', build: '0.9.0' }, 'x-count': 3, 'x-empty': null, 'x-list': ['a', 1, null] };
 }
 
+// Issue #1183: the plate's inputs. A painting on the See-through fixture's canvas whose every pixel differs from
+// its neighbours, an assemble-shaped figure-mask source, and a directory holding no source at all.
+const platePainting = join(work, 'plate_painting.png');
+{
+  const r = newRaster(CANVAS.w, CANVAS.h);
+  for (let y = 0; y < CANVAS.h; y++) for (let x = 0; x < CANVAS.w; x++) r.data.set([(x * 3 + y) % 250, (y * 5) % 250, (x + y * 2) % 250, 255], (y * CANVAS.w + x) * 4);
+  writeFileSync(platePainting, encodePngBytes(r));
+}
 const image = join(work, 'input.png');
-writeFileSync(image, encodePngBytes(layerRaster(WRAPPER_LAYERS[0])));
+writeFileSync(image, readFileSync(platePainting));
 writeFileSync(join(work, 'paint.json'), JSON.stringify(paintConfig(FAKE_CHECKPOINT)));
 writeFileSync(join(work, 'paint_missing_ckpt.json'), JSON.stringify(paintConfig('not_on_the_box.safetensors')));
 writeFileSync(join(work, 'paint_only.json'), JSON.stringify(paintOnlyConfig()));
@@ -115,14 +123,6 @@ for (const [name, seethrough] of Object.entries({
 
 writeFileSync(join(work, 'config.json'), readFileSync(join(work, 'st-high.json')));
 
-// Issue #1183: the plate's inputs. A painting on the See-through fixture's canvas whose every pixel differs from
-// its neighbours, an assemble-shaped figure-mask source, and a directory holding no source at all.
-const platePainting = join(work, 'plate_painting.png');
-{
-  const r = newRaster(CANVAS.w, CANVAS.h);
-  for (let y = 0; y < CANVAS.h; y++) for (let x = 0; x < CANVAS.w; x++) r.data.set([(x * 3 + y) % 250, (y * 5) % 250, (x + y * 2) % 250, 255], (y * CANVAS.w + x) * 4);
-  writeFileSync(platePainting, encodePngBytes(r));
-}
 const figureMaskRoot = join(work, 'plate_figure_source');
 const figureMaskDir = join(figureMaskRoot, 'rig');
 mkdirSync(figureMaskDir, { recursive: true });
@@ -176,6 +176,7 @@ interface Scenario {
   name: string;
   mode: FakeMode;
   args: (url: string, out: string) => string[];
+  fillOutMidWait?: boolean;
 }
 
 const fast = ['--timeout', '5', '--poll', '0.05'];
@@ -239,12 +240,43 @@ const scenarios: Scenario[] = [
     args[args.indexOf('--painting') + 1] = otherPainting;
     return args;
   } },
+  { name: 'st-other-painting', mode: 'ok', args: (u, o) => [
+    'comfy', 'seethrough', '--image', otherPainting, '--out', o, '--host', u, '--resolution', '512', '--steps', '3', '--seed', '7', '--offload', '--wait', '2', ...fast,
+  ] },
+  { name: 'plate-st-other-painting', mode: 'ok', args: (u, o) => plate(u, o, 'lama', `seethrough:${join(work, 'st-other-painting')}`) },
+  { name: 'plate-st-tampered-layer', mode: 'ok', args: (u, o) => {
+    const tampered = join(work, 'st-tampered-source');
+    cpSync(join(work, 'st-ok'), tampered, { recursive: true });
+    const facePath = join(tampered, 'parts', 'face.png');
+    const face = decodePngBytes(readFileSync(facePath), facePath);
+    face.data[0] ^= 1;
+    writeFileSync(facePath, encodePngBytes(face));
+    return plate(u, o, 'lama', `seethrough:${tampered}`);
+  } },
+  { name: 'plate-st-legacy-meta', mode: 'ok', args: (u, o) => {
+    const legacy = join(work, 'st-legacy-source');
+    cpSync(join(work, 'st-ok'), legacy, { recursive: true });
+    const metaPath = join(legacy, 'meta.json');
+    const meta = JSON.parse(readFileSync(metaPath, 'utf8')) as Record<string, unknown>;
+    delete meta.image_sha256;
+    delete meta.layers;
+    writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+    return plate(u, o, 'lama', `seethrough:${legacy}`);
+  } },
+  { name: 'plate-out-filled-mid-wait', mode: 'ok', fillOutMidWait: true, args: (u, o) => plate(u, o, 'lama') },
 ];
 
 const results: Record<string, unknown> = {};
 for (const s of scenarios) {
   const fake = startFakeComfy(s.mode);
   const out = join(work, s.name);
+  if (s.fillOutMidWait) {
+    fake.prompts.push = (...items: unknown[]): number => {
+      mkdirSync(out, { recursive: true });
+      writeFileSync(join(out, 'occupied.txt'), 'filled mid-wait\n');
+      return Array.prototype.push.apply(fake.prompts, items);
+    };
+  }
   try {
     const r = await cli(s.args(fake.url, out));
     const uploads = join(work, `${s.name}.uploads`);
@@ -254,6 +286,26 @@ for (const s of scenarios) {
     results[s.name] = { status: r.status, out: r.out, paths: fake.requests.map((q) => `${q.method} ${q.path}`), uploads: [...fake.uploads.keys()], prompts: fake.prompts.length, fronts: fake.fronts };
   } finally {
     fake.stop();
+  }
+}
+
+// Issue #1188: two concurrent foreground runs to the same --out and to sibling directories do not collide on staging.
+{
+  const sameOut = join(work, 'plate-fg-concurrent-same');
+  const fgArgs = (out: string): string[] => ['comfy', 'plate', '--mode', 'foreground', '--painting', platePainting, '--mask-from', `seethrough:${join(work, 'st-ok')}`, '--out', out];
+  const [same1, same2, diff1, diff2] = await Promise.all([
+    cli(fgArgs(sameOut)),
+    cli(fgArgs(sameOut)),
+    cli(fgArgs(join(work, 'plate-fg-concurrent-a'))),
+    cli(fgArgs(join(work, 'plate-fg-concurrent-b'))),
+  ]);
+  for (const [name, r] of [
+    ['plate-fg-concurrent-same-1', same1],
+    ['plate-fg-concurrent-same-2', same2],
+    ['plate-fg-concurrent-a', diff1],
+    ['plate-fg-concurrent-b', diff2],
+  ] as const) {
+    results[name] = { status: r.status, out: r.out, paths: [], uploads: [], prompts: 0 };
   }
 }
 

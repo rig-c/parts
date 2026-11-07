@@ -10,7 +10,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FAKE_FILL } from '../fixtures/fakecomfy.ts';
 import { PLATE_RECEIPT_KEYS, PLATE_RECEIPT_SPEC, runForeground, sha256, verifyPlateReceipt } from '../src/plate.ts';
@@ -132,6 +132,71 @@ function figureBindingChecks(dir: string, painting: string, say: Say): void {
   writeFileSync(join(dir, 'figure-binding-evidence.json'), JSON.stringify(evidence, null, 2));
 }
 
+/** Each seethrough: source plant is restored byte for byte, then accepted through the CLI's foreground entry point. */
+function seethroughBindingChecks(dir: string, painting: string, say: Say): void {
+  const root = join(dir, 'st-ok');
+  const metaPath = join(root, 'meta.json');
+  const layersPath = join(root, 'layers.json');
+  const facePath = join(root, 'parts', 'face.png');
+  const meta = JSON.parse(readFileSync(metaPath, 'utf8')) as {
+    image_sha256: string;
+    layers: Array<{ path: string; sha256: string }>;
+    [k: string]: unknown;
+  };
+  const files = [metaPath, layersPath, ...meta.layers.map((e) => join(root, e.path))];
+  const original = files.map((file) => readFileSync(file));
+  const md5 = (): string[] => files.map((file) => existsSync(file) ? createHash('md5').update(readFileSync(file)).digest('hex') : 'absent');
+  const before = md5();
+  const writeMeta = (change: (m: typeof meta) => void): void => {
+    const m = structuredClone(meta);
+    change(m);
+    writeFileSync(metaPath, JSON.stringify(m));
+  };
+  const plants: Array<{ name: string; code: string; plant: () => void }> = [
+    { name: 'missing-meta', code: 'PLATE_MASK_RUN', plant: () => rmSync(metaPath) },
+    { name: 'malformed-meta', code: 'PLATE_MASK_RUN', plant: () => writeFileSync(metaPath, '{') },
+    { name: 'null-meta', code: 'PLATE_MASK_RUN', plant: () => writeFileSync(metaPath, 'null') },
+    { name: 'legacy-meta', code: 'PLATE_MASK_RUN', plant: () => {
+      const m = structuredClone(meta) as Record<string, unknown>;
+      delete m.image_sha256;
+      delete m.layers;
+      writeFileSync(metaPath, JSON.stringify(m));
+    } },
+    { name: 'bad-layer-entry', code: 'PLATE_MASK_RUN', plant: () => writeMeta((m) => { m.layers[0] = { path: '', sha256: 'bad' }; }) },
+    { name: 'missing-layer-hash', code: 'PLATE_MASK_RUN', plant: () => writeMeta((m) => { m.layers = m.layers.filter((e) => e.path !== 'parts/face.png'); }) },
+    { name: 'duplicate-layer-hash', code: 'PLATE_MASK_RUN', plant: () => writeMeta((m) => { m.layers.push(m.layers.find((e) => e.path === 'parts/face.png')!); }) },
+    { name: 'extra-layer-hash', code: 'PLATE_MASK_RUN', plant: () => writeMeta((m) => { m.layers.push({ path: 'parts/extra.png', sha256: '0'.repeat(64) }); }) },
+    { name: 'tampered-layer', code: 'PLATE_MASK_RUN', plant: () => {
+      const r = decodePngBytes(original[files.indexOf(facePath)], facePath);
+      r.data[0] ^= 1;
+      writeFileSync(facePath, encodePngBytes(r));
+    } },
+    { name: 'other-painting', code: 'PLATE_MASK_PAINTING', plant: () => writeMeta((m) => { m.image_sha256 = '0'.repeat(64); }) },
+  ];
+  const evidence: unknown[] = [];
+  const run = (name: string): void => { runForeground({ painting, maskFrom: `seethrough:${root}`, out: join(dir, `st-binding-${name}`) }); };
+  for (const p of plants) {
+    let message = '', restoredGreen = false;
+    let planted: string[] = [];
+    try {
+      p.plant();
+      planted = md5();
+      try { run(p.name); } catch (err) { message = (err as Error).message.replaceAll('\n', ' '); }
+    } finally {
+      files.forEach((file, i) => writeFileSync(file, original[i]));
+    }
+    const restored = md5();
+    try { run(`${p.name}-restored`); restoredGreen = true; } catch (err) { message += ` restored: ${(err as Error).message.replaceAll('\n', ' ')}`; }
+    const detail = `${p.code}: ${message}; restored accepted ${restoredGreen}; md5 before ${before.join(',')} planted ${planted.join(',')} restored ${restored.join(',')}`;
+    const pass = message.includes(p.code) && !existsSync(join(dir, `st-binding-${p.name}`)) && restoredGreen && restored.join(',') === before.join(',') && !detail.includes('\n');
+    evidence.push({ name: p.name, files, before, planted, restored, message, restoredGreen, pass });
+    say(`PB11_SEETHROUGH_SOURCE_${p.name.toUpperCase().replaceAll('-', '_')}_IS_REFUSED_AND_RESTORED`, pass,
+      detail,
+      'issue #1188: an unstamped, legacy, tampered or mismatched seethrough: source is refused before a plate is written; the restored source is accepted');
+  }
+  writeFileSync(join(dir, 'seethrough-binding-evidence.json'), JSON.stringify(evidence, null, 2));
+}
+
 /** Pixels outside the receipt's mask that differ from the painting, and pixels inside it that are not the fake's fill. */
 function pasteBack(dir: string, painting: string): { outsideDiff: number; insideWrong: number; inside: number } | null {
   try {
@@ -153,6 +218,7 @@ function pasteBack(dir: string, painting: string): { outsideDiff: number; inside
 
 export function runPlateChecks(dir: string, painting: string, R: Record<string, PlateHarnessResult>, say: Say): void {
   figureBindingChecks(dir, painting, say);
+  seethroughBindingChecks(dir, painting, say);
   const nothingAsked = (r: PlateHarnessResult | undefined): boolean => r !== undefined && r.paths.length === 0 && r.uploads.length === 0 && r.prompts === 0;
   const nothingWritten = (name: string): boolean => !existsSync(join(dir, name));
   const noUpload = (r: PlateHarnessResult | undefined): boolean => r !== undefined && r.uploads.length === 0 && r.prompts === 0 && !r.paths.includes('POST /upload/image');
@@ -163,6 +229,49 @@ export function runPlateChecks(dir: string, painting: string, R: Record<string, 
     bound.every(([n, r]) => r?.status === 1 && failLine(r.out, n === 'plate-other-painting' ? 'PLATE_MASK_PAINTING' : 'PLATE_MASK_RUN') !== null && nothingAsked(r) && nothingWritten(n)) && !boundDetail.includes('\n'),
     boundDetail,
     'issue #1188: background checks source provenance before connecting to the fake ComfyUI');
+
+  const stBound = ['plate-st-legacy-meta', 'plate-st-tampered-layer', 'plate-st-other-painting'].map((n) => [n, R[n]] as const);
+  const stBoundDetail = stBound.map(([n, r]) => `${n}: exit ${r?.status}, requests ${r?.paths.length}, uploads ${r?.uploads.length}, prompts ${r?.prompts}; "${r === undefined ? 'not run' : failLine(r.out, n === 'plate-st-other-painting' ? 'PLATE_MASK_PAINTING' : 'PLATE_MASK_RUN') ?? 'no refusal line'}"`).join('; ');
+  say('PB12_BACKGROUND_REFUSES_UNBOUND_SEETHROUGH_SOURCES_BEFORE_ANY_REQUEST',
+    stBound.every(([n, r]) => r?.status === 1 && failLine(r.out, n === 'plate-st-other-painting' ? 'PLATE_MASK_PAINTING' : 'PLATE_MASK_RUN') !== null && nothingAsked(r) && nothingWritten(n)) && !stBoundDetail.includes('\n'),
+    stBoundDetail,
+    'issue #1188: background checks seethrough: meta.json and layer hashes before connecting to the fake ComfyUI');
+
+  // Concurrent foreground runs and pre-existing fixed staging collision check
+  const fixedStageDecoy = join(dir, '.binding-fg-stage.partial-foreground');
+  mkdirSync(fixedStageDecoy, { recursive: true });
+  writeFileSync(join(fixedStageDecoy, 'plate.png'), 'corrupt-decoy');
+  let decoyClean = false;
+  try {
+    runForeground({ painting, maskFrom: `seethrough:${join(dir, 'st-ok')}`, out: join(dir, 'binding-fg-stage') });
+    decoyClean = verifyPlateReceipt(join(dir, 'binding-fg-stage', 'receipt.json')).length === 0 && existsSync(join(fixedStageDecoy, 'plate.png'));
+  } finally {
+    rmSync(fixedStageDecoy, { recursive: true, force: true });
+  }
+  const same1 = R['plate-fg-concurrent-same-1'], same2 = R['plate-fg-concurrent-same-2'];
+  const diffA = R['plate-fg-concurrent-a'], diffB = R['plate-fg-concurrent-b'];
+  const sameStatuses = [same1?.status, same2?.status].sort();
+  const sameLoser = same1?.status === 1 ? same1 : same2;
+  const sameLoserLine = sameLoser === undefined ? null : failLine(sameLoser.out, 'PLATE_OUT_EMPTY');
+  const sameWinnerValid = existsSync(join(dir, 'plate-fg-concurrent-same', 'receipt.json')) && verifyPlateReceipt(join(dir, 'plate-fg-concurrent-same', 'receipt.json')).length === 0;
+  const diffValid = diffA?.status === 0 && diffB?.status === 0 &&
+    verifyPlateReceipt(join(dir, 'plate-fg-concurrent-a', 'receipt.json')).length === 0 &&
+    verifyPlateReceipt(join(dir, 'plate-fg-concurrent-b', 'receipt.json')).length === 0;
+  const leftoverPartials = readdirSync(dir).filter((f) => f.includes('.partial-'));
+  const concurrentDetail = `decoy fixed staging untouched & output valid: ${decoyClean}; sibling runs: exit ${diffA?.status},${diffB?.status} valid ${diffValid}; same --out runs: exits ${sameStatuses.join(',')} winner valid ${sameWinnerValid} loser "${sameLoserLine ?? 'none'}"; leftover .partial-* dirs: ${leftoverPartials.length}`;
+  say('PB13_CONCURRENT_FOREGROUND_RUNS_USE_UNIQUE_STAGING_AND_DO_NOT_COLLIDE',
+    decoyClean && diffValid && sameStatuses[0] === 0 && sameStatuses[1] === 1 && sameLoserLine !== null && sameWinnerValid && leftoverPartials.length === 0 && !concurrentDetail.includes('\n'),
+    concurrentDetail,
+    'issue #1188 P2: foreground staging uses mkdtempSync per run so concurrent runs do not share a staging directory');
+
+  const midWait = R['plate-out-filled-mid-wait'];
+  const midWaitLine = midWait === undefined ? null : failLine(midWait.out, 'PLATE_OUT_EMPTY');
+  const midWaitPreserved = existsSync(join(dir, 'plate-out-filled-mid-wait', 'occupied.txt')) && !existsSync(join(dir, 'plate-out-filled-mid-wait', 'receipt.json'));
+  const midWaitDetail = `exit ${midWait?.status}, prompts ${midWait?.prompts}, preserved occupied.txt without receipt.json: ${midWaitPreserved}, leftover .partial-* dirs: ${leftoverPartials.length}; "${midWaitLine ?? 'no PLATE_OUT_EMPTY line'}"`;
+  say('PB14_AN_OUT_FILLED_MID_WAIT_IS_REFUSED_AS_PLATE_OUT_EMPTY',
+    midWait?.status === 1 && midWait.prompts === 1 && midWaitLine !== null && midWaitPreserved && leftoverPartials.length === 0 && !midWaitDetail.includes('\n'),
+    midWaitDetail,
+    'issue #1188 P2: publishPlate re-checks --out and refuses an output directory filled during a queue wait as PLATE_OUT_EMPTY instead of raw ENOTEMPTY');
 
   // 1. a missing node or model is refused by name before anything is uploaded; core still runs on that box
   const noPack = R['plate-no-inpaint-lama'], noModel = R['plate-missing-model'], coreOnBare = R['plate-no-inpaint-core'];
