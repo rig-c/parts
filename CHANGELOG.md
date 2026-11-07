@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.27.0](https://github.com/rig-c/parts/compare/v2.26.1...v2.27.0) (2026-11-07)
+
+
+### Features
+
+* **parts:** a rig-run/1 run stamp beside rig and assemble outputs ([#1182](https://github.com/rig-c/parts/issues/1182)) ([6680073](https://github.com/rig-c/parts/commit/6680073a0dd6dfe59991bc2e0afc78fab1b127e4))
+* receipted step-4 plate producer (comfy plate) and plate sha256 in the scene report ([#1183](https://github.com/rig-c/parts/issues/1183)) ([#1185](https://github.com/rig-c/parts/issues/1185)) ([9ff8bd8](https://github.com/rig-c/parts/commit/9ff8bd840e075b8293763c15709df2ec99e31298))
+
+
+### Bug Fixes
+
+* attribute parts file drift controls to their readers ([#1184](https://github.com/rig-c/parts/issues/1184)) ([922fcb4](https://github.com/rig-c/parts/commit/922fcb488d10973dee8c029ff7c619b68149685e))
+* refuse names that differ only in case or Unicode normalization at every stage ([#1172](https://github.com/rig-c/parts/issues/1172)) ([#1187](https://github.com/rig-c/parts/issues/1187)) ([e408317](https://github.com/rig-c/parts/commit/e4083179e63ccf3611bc56f682dd52fc1a9a7a9e))
+
 ## [2.26.1](https://github.com/rig-c/parts/compare/v2.26.0...v2.26.1) (2026-11-07)
 
 
