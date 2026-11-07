@@ -72,7 +72,7 @@ import { PartsError, type Problem, problemLine } from './errors.ts';
 import { IDLE_FPS } from './motion.ts';
 import { type ContourBridges, FAINT_ALPHA } from './contour.ts';
 import { ART_ALPHA, DUST_MAX_PX, DUST_MAX_SHARE, isDust, dustOf, type DustReading } from './mesh.ts';
-import { type PartsFile, readParts } from './parts.ts';
+import { partImageReference, type PartsFile, readParts } from './parts.ts';
 import { readPng } from './raster/png.ts';
 import type { Raster } from './raster/types.ts';
 import { buildRig, type IdleKeys, type MeshAttachment, rigJsonText, type RigSpec } from './rig.ts';
@@ -852,7 +852,7 @@ export function meshDraftStage(input: MeshDraftInput, rigc: RigcRunner, checkBin
   if ('code' in rules) throw new PartsError([rules]);
   const images = new Map<string, Raster>();
   for (const p of parts.parts) {
-    const png = join(input.parts, 'parts', `${p.name}.png`);
+    const png = join(input.parts, partImageReference(p).path);
     if (existsSync(png)) images.set(p.name, readPng(png));
   }
   log(`rig-parts mesh-draft: ${cfg.key}, figure ${rules.height} px (rows ${rules.top}..${rules.bottom}): tolerance and margin T = max(1, round(${rules.height} / ${TOLERANCE_FIGURE_DIVISOR})) = ${rules.tolerance}, spacing and longest outline edge S = round(${rules.height} / ${FIGURE_GRID_DIVISOR}) = ${rules.spacing}`);
