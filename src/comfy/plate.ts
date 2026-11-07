@@ -84,7 +84,7 @@ export async function runBackground(connect: () => ComfyClient, run: BackgroundR
   const from = parseMaskFrom(run.maskFrom);
   const painting = readPlatePainting(run.painting);
   const { width: W, height: H } = painting.raster;
-  const source: FigureMask = readSourceMask(from.source, from.dir, W, H);
+  const source: FigureMask = readSourceMask(from.source, from.dir, W, H, painting.raster);
   const checkpoint = declaredChecksum(run.checkpointSha256);
   if (run.graph === 'core') {
     if (run.model === undefined) refuse('PLATE_MODEL_GIVEN', '--model', 'is absent; the core graph needs the checkpoint the box loads, by its name on the box — there is no default checkpoint');
