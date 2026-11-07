@@ -21,13 +21,13 @@ import { checkRow, checkSlotRow, checkSlotParts } from './checkrow.ts';
  * derived from the art: no declaration, no measurement (SKIP, never a pass).
  */
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { Plate } from '@rig-c/core/plate';
 import type { Frame, Piece } from '@rig-c/core/render-shared';
 import { seamSourceAttachment } from './check.ts';
 import { cropToSpineY } from './coords.ts';
 import type { Problem } from './errors.ts';
-import type { PartsFile } from './parts.ts';
+import { partImageReference, type PartsFile } from './parts.ts';
 import { readPng } from './raster/png.ts';
 
 export const BOUNDARY_COLOUR_LINE = 'BOUNDARY_COLOUR_STEP';
@@ -140,7 +140,7 @@ export function measureBoundaryColour(api: Api, input: BoundaryColourInput, decl
     if (got === undefined) {
       const name = image.replace(/\.png$/, '');
       const rec = records.get(name);
-      const partPng = join(input.partsDir, `${name}.png`), rigPng = join(input.imagesDir, image);
+      const partPng = rec === undefined ? '' : join(input.partsDir, basename(partImageReference(rec).path)), rigPng = join(input.imagesDir, image);
       if (rec === undefined) got = `parts.json holds no record "${name}" for the image "${image}"`;
       else if (!existsSync(partPng) || !existsSync(rigPng)) got = `${existsSync(partPng) ? `the rig image "${image}"` : `the parts image "${name}.png"`} is absent`;
       else {
