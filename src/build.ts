@@ -2595,13 +2595,20 @@ export interface BuildResult {
  */
 export const RIGC_MODEL_DOCUMENT = 'skeleton.model.json';
 
+/**
+ * rigc's run stamp (`rigc-run/1`), which `build` writes beside the artifact
+ * since rig-c 3.5.0: a record of the run, not a Spine file, so it is not
+ * counted as a second skeleton JSON either.
+ */
+export const RIGC_RUN_STAMP = 'run.json';
+
 /** The three artifact files of a packed build, each refused by name when absent. */
 export function artifactPaths(buildDir: string, pack: readonly PackLine[]): string[] {
   const problems: Problem[] = [];
   const names = existsSync(buildDir) ? readdirSync(buildDir).sort() : [];
-  const json = names.filter((n) => n.endsWith('.json') && n !== RIGC_MODEL_DOCUMENT);
+  const json = names.filter((n) => n.endsWith('.json') && n !== RIGC_MODEL_DOCUMENT && n !== RIGC_RUN_STAMP);
   const atlas = names.filter((n) => n.endsWith('.atlas'));
-  if (json.length !== 1) problems.push({ code: 'BUILD_ARTIFACT_PRESENT', object: `${buildDir} skeleton JSON`, detail: `holds ${json.length} .json file(s) [${json.join(', ')}]; the packed build writes exactly one besides rigc's ${RIGC_MODEL_DOCUMENT}` });
+  if (json.length !== 1) problems.push({ code: 'BUILD_ARTIFACT_PRESENT', object: `${buildDir} skeleton JSON`, detail: `holds ${json.length} .json file(s) [${json.join(', ')}]; the packed build writes exactly one besides rigc's ${RIGC_MODEL_DOCUMENT} and ${RIGC_RUN_STAMP}` });
   if (atlas.length !== 1) problems.push({ code: 'BUILD_ARTIFACT_PRESENT', object: `${buildDir} atlas`, detail: `holds ${atlas.length} .atlas file(s) [${atlas.join(', ')}]; the packed build writes exactly one` });
   if (pack.length === 0) problems.push({ code: 'BUILD_ARTIFACT_PRESENT', object: `${buildDir} packed page`, detail: 'rigc printed no pack line, so no packed page is named; the build runs with --pack and must print one' });
   for (const p of pack) {
