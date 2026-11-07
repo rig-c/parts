@@ -798,6 +798,40 @@ existing geometry refusal and its message.
 Region take entries accept the same optional `crop` and use this transport before
 selecting the seeded component on the target run canvas.
 
+### Source projection cover (`source_cover.json`, issue #1158)
+
+Every assemble writes `source_cover.json` beside `parts.json`, under spec
+`rig-parts-source-cover/1`. Its `sets` array contains the primary (`set: null`)
+and every evaluated alternate, including empty readings. Reusing an output
+replaces this single file, including its previous alternate inventory.
+
+The stage is `source-projection-input`, after run preparation, ghost cleanup
+and placement on the rig grid, before projection changes RGB. The predicate
+counts a part's own alpha above 8 where another source owns the pixel at alpha
+at least 250 and is in front. When both sources are planned, their plan ranks
+settle front order. Otherwise the run's draw order does. Each `covered_by` row
+names the owning source, whether it is planned, and `pixels.count` with sorted
+native rig `[y, left, right-exclusive]` spans. A part's
+`held_under_cover_px` counts own support protected by the keep mask separately,
+so that support is excluded from scalar-owner rows.
+
+Each set binds its painting and input manifests or PSDs by SHA-256, lists source
+layers with depth, draw order, plan rank and planned/extend consumers, and names
+input-layer identity, preparation and verified taken-layer provenance.
+Generated layers without a same-name input entry have `input_layer: null`.
+Unplanned sources remain listed even when they supply zero cover. An
+extend-only source can be consumed while its plan rank remains -1.
+`parts` describes the evaluated source plan before export filtering.
+`output_assets` maps evaluated and inherited parts to exported image filenames,
+with hidden or filtered assets mapped to null. `inherited_parts` references the
+primary with `set: null`; inherited assets have no independently evaluated
+alternate row. `hidden_parts` lists hidden assets.
+
+Direct projection-input cover does not predict downstream changes. In
+particular, an owner can suppress projection core eligibility while leaving a
+part clear, and later merges, fringes and painting edges can change other
+parts. This report observes the existing owner without changing assembly.
+
 ### Owner coverage transfers (`painting_allocation.json`, issue #1146)
 
 Under `assemble.project: "visible"`, assemble writes `painting_allocation.json`

@@ -272,6 +272,18 @@ every number) are AUTHORING §3's tables, and the loader refuses any other by na
 
 ## Files this package writes
 
+### Source cover report
+
+`assemble` and the assemble stage of `build` always write `source_cover.json`
+beside `parts.json`, with spec `rig-parts-source-cover/1`. `stage`, `predicate`
+and `sets` declare projection-input cover. Each set includes its painting hash,
+rig grid, hash-bound inputs, effective source inventory, evaluated part rows,
+inherited primary references, hidden parts and output asset mappings. Cover
+rows carry owning source identity, planned membership and native pixel counts
+and spans. Held-under-cover support is separate. Empty readings remain explicit.
+The report measures direct cover before projection and downstream processing.
+The field semantics are documented in AUTHORING's source projection cover entry.
+
 ### Head-crop preflight stdout
 
 `head-crop-preflight` writes one JSON object followed by a newline on success,
