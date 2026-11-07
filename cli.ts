@@ -843,9 +843,11 @@ usage:
       wrapper installed, and write the wrapper form \`layers\` reads into <out>
       (absent or empty): layers.json, parts/<tag>.png, meta.json, previews/.
       The host is --host or COMFY_HOST and has no default. Checks every node and
-      input against the box's /object_info before uploading, waits for an empty
-      queue (at most --wait s), polls /history (at most --timeout s), and
-      writes <out> only after the layer reader accepts what came back.
+      input against the box's /object_info before uploading, appends the job
+      behind any other (never in front, nothing cancelled; a job still pending
+      after --wait s is refused with its queue place), polls /history (at most
+      --timeout s), and writes <out> only after the layer reader accepts what
+      came back.
       --lama turns the wrapper's LaMa inpainting on and --nf4 its nf4
       quantisation; both are off unless given. Resolution, steps, seed and offload
       use explicit flags first, then --config's seethrough block, then defaults

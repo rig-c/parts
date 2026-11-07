@@ -37404,6 +37404,7 @@ interface HarnessResult {
   paths: string[];
   uploads: string[];
   prompts: number;
+  fronts?: number;
 }
 
 /**
@@ -37578,12 +37579,17 @@ function runComfySuite(): number {
       );
     }
 
-    const busy = R['st-busy'];
+    const busy = R['st-busy'], stBehind = R['st-behind'];
+    const stBehindLine = fail(stBehind, 'COMFY_QUEUE_BEHIND');
+    const stFronts = Object.entries(R).filter(([n]) => n.startsWith('st-')).reduce((a, [, r]) => a + (r.fronts ?? 0), 0);
+    const noQueueControl = (r: HarnessResult | undefined): boolean => r !== undefined && !r.paths.some((p) => p.includes('/interrupt') || p.startsWith('POST /queue'));
     say(
-      'CY02_A_QUEUE_THAT_NEVER_EMPTIES_IS_REFUSED_BY_NAME_BEFORE_ANYTHING_IS_SENT',
-      busy.status === 1 && fail(busy, 'COMFY_QUEUE_EMPTY') !== null && nothingSent(busy) && leftovers('st-busy').length === 0,
-      `exit ${busy.status}; "${fail(busy, 'COMFY_QUEUE_EMPTY') ?? 'no COMFY_QUEUE_EMPTY line'}"; uploads ${busy.uploads.length}, prompts ${busy.prompts}`,
-      "the adapter never queues behind someone else's job, and a wait that runs out says how long it waited for what",
+      'CY02_SEETHROUGH_APPENDS_BEHIND_OTHER_JOBS_AND_REFUSES_A_LONG_WAIT_WITH_ITS_QUEUE_PLACE',
+      busy?.status === 0 && existsSync(join(dir, 'st-busy', 'layers.json')) &&
+        stBehind?.status === 1 && stBehindLine !== null && /place 2 of 2 pending with 2 job\(s\) ahead/.test(stBehindLine) && stBehind.prompts === 1 && leftovers('st-behind').length === 0 &&
+        stFronts === 0 && noQueueControl(busy) && noQueueControl(stBehind),
+      `someone else running: exit ${busy?.status} (queued behind it); stuck behind two: exit ${stBehind?.status}, "${stBehindLine ?? 'no COMFY_QUEUE_BEHIND line'}"; /prompt bodies asking for the front: ${stFronts}; no POST /queue or /interrupt sent`,
+      'issue #1189: comfy seethrough appends behind other jobs, never cuts in, never reorders or cancels; on a long wait it stops and names its place in the queue',
     );
 
     const empty = R['st-no-outputs'];
@@ -37742,6 +37748,18 @@ function runComfySuite(): number {
       R['paint-reordered']?.status === 0 && po.length === 0,
       `generation.sampler written scheduler, sampler, cfg, steps -> exit ${R['paint-reordered']?.status}, against paint-only (steps, cfg, sampler, scheduler): ${po.length === 0 ? 'every file and the graph sent byte-identical (elapsed_s set aside)' : po.join(' | ')}`,
       'determinism is a contract: the meta names the sampler\'s fields in one order (resolvedSampler), not in the order its author happened to type them',
+    );
+
+    const pBusy = R['paint-busy'], pBehind = R['paint-behind'];
+    const pBehindLine = fail(pBehind, 'COMFY_QUEUE_BEHIND');
+    const paintFronts = Object.entries(R).filter(([n]) => n.startsWith('paint-')).reduce((a, [, r]) => a + (r.fronts ?? 0), 0);
+    say(
+      'CY18_PAINT_APPENDS_BEHIND_OTHER_JOBS_AND_REFUSES_A_LONG_WAIT_WITH_ITS_QUEUE_PLACE',
+      pBusy?.status === 0 && existsSync(join(dir, 'paint-busy', 'painting_11.png')) &&
+        pBehind?.status === 1 && pBehindLine !== null && /place 2 of 2 pending with 2 job\(s\) ahead/.test(pBehindLine) && pBehind.prompts === 1 && leftovers('paint-behind').length === 0 &&
+        paintFronts === 0 && noQueueControl(pBusy) && noQueueControl(pBehind),
+      `someone else running: exit ${pBusy?.status} (queued behind it); stuck behind two: exit ${pBehind?.status}, "${pBehindLine ?? 'no COMFY_QUEUE_BEHIND line'}"; /prompt bodies asking for the front: ${paintFronts}; no POST /queue or /interrupt sent`,
+      'issue #1189: comfy paint appends behind other jobs, never cuts in, never reorders or cancels; on a long wait it stops and names its place in the queue',
     );
 
     // Issue #1183: the step-4 plate producer, on the same harness run.
