@@ -589,7 +589,8 @@ relative `--config` layout, two `run.json` files differ only in `started_at` and
 `outputs` lists exactly the files the stage wrote in this run, derived from what the
 stage returns, not from a walk of `--out`: a stray or earlier file under `--out` is
 neither hashed nor listed. Before the stage starts, the command removes an earlier
-`<out>/run.json`, so a refused run into a reused `--out` leaves no stamp. A
+`<out>/run.json`, so a run the stage refuses, into a reused `--out`, leaves no stamp
+(a usage error, exit 2, stops before that and touches nothing under `--out`). A
 `package.json` without a non-empty `name` and `version` refuses `RUN_STAMP_PACKAGE`
 and writes no stamp. `build` and the in-process stages write no `run.json`.
 
