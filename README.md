@@ -229,8 +229,8 @@ control skeleton it draws itself — and records the prompts verbatim beside it.
 wrapper on one image and writes the wrapper form `layers` reads. The host comes
 from `--host` or `COMFY_HOST` and has no default; before anything is uploaded
 the graph is checked against the box's `/object_info`, so a missing node class
-or model is refused by name, and the adapter waits for an empty queue rather
-than queueing behind someone else's job.
+or model is refused by name, and the adapter appends the job behind any other in
+the queue.
 
 The painting graph uses `4x-AnimeSharp.pth`, then Lanczos resizing. The
 [creator's card](https://huggingface.co/Kim2091/AnimeSharp/blob/7696d95ced82b0c1f2a41f6ac73336133f0a90e1/README.md)

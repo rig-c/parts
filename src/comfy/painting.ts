@@ -13,11 +13,13 @@
  * or upscale model the box does not list is refused by name, not discovered
  * as a failed job.
  *
- * Every seed waits for an empty queue, and each painting is written only after
- * its job is in `/history`, not in error, and the image it saved decodes at
- * twice the latent size (4x-AnimeSharp then 0.5). A seed whose file already
- * exists in `--out` is refused before the first job, so no painting is
- * overwritten.
+ * Every seed is appended to the queue behind any other job — never in front,
+ * nothing reordered and nothing cancelled; a wait past `--wait` while pending
+ * is refused naming the job's place (`COMFY_QUEUE_BEHIND`) — and each painting
+ * is written only after its job is in `/history`, not in error, and the image
+ * it saved decodes at twice the latent size (4x-AnimeSharp then 0.5). A seed
+ * whose file already exists in `--out` is refused before the first job, so no
+ * painting is overwritten.
  *
  * The meta file holds the positive and negative prompts verbatim, what was
  * dropped as `DUP_WORDS`, where the pose words came from, the checkpoint, the
@@ -75,23 +77,19 @@ export async function runPainting(client: ComfyClient, run: PaintRun, say: (line
   refuseIfAny(checkGraph(probe, await client.objectInfo(), client.host, new Set(['30.image'])));
   say('  box: every node, input and model of the painting graph is on its /object_info');
 
-  mkdirSync(run.out, { recursive: true });
   let skeletonRef: string | null = null;
   if (control !== null && drawn !== null && skeletonName !== null) {
     const local = join(run.out, `control_${drawn.label}.png`);
-    writeFileSync(local, drawn.png);
     skeletonRef = await client.uploadImage(drawn.png, skeletonName);
     say(`  control: ${drawn.from} at ${w}x${h} -> ${local}, uploaded as input/${skeletonRef}; ${control.model} strength ${control.strength} end ${control.end_percent}`);
   }
 
   const done: Painted[] = [];
   for (const seed of seeds) {
-    const waited = await client.waitQueueEmpty(run.wait, say);
-    if (waited > 0.05) say(`  queue empty after ${waited.toFixed(1)} s`);
     const graph = paintingGraph(g, seed, prompts, `spine_parts_${run.config.key}_${seed}`, skeletonRef);
     const id = await client.submit(graph, 'rig-parts');
-    say(`  seed ${seed}: queued prompt ${id}; GPU job started`);
-    const { entry, elapsed } = await client.waitHistory(id, run.timeout);
+    say(`  seed ${seed}: appended prompt ${id} to the queue (behind any other job; nothing reordered or cancelled)`);
+    const { entry, elapsed } = await client.waitBehind(id, run.wait, run.timeout, say);
     const image = historyImages(entry).find((im) => im.type === 'output');
     if (image === undefined) {
       refuse('COMFY_HISTORY_OUTPUTS', `prompt ${id}`, `lists outputs from node(s) ${Object.keys(entry.outputs).join(', ')} and no image of type "output"; SaveImage (node 9) is required to have saved one`);
@@ -100,6 +98,10 @@ export async function runPainting(client: ComfyClient, run: PaintRun, say: (line
     const img = decodePngBytes(bytes, `output/${image.filename}`);
     if (img.width !== 2 * w || img.height !== 2 * h) {
       refuse('COMFY_PAINTING_SIZE', `output/${image.filename}`, `is ${img.width}x${img.height}; ${2 * w}x${2 * h} is required (latent ${w}x${h}, 4x-AnimeSharp then 0.5)`);
+    }
+    if (done.length === 0) {
+      mkdirSync(run.out, { recursive: true });
+      if (control !== null && drawn !== null) writeFileSync(join(run.out, `control_${drawn.label}.png`), drawn.png);
     }
     const file = join(run.out, `painting_${seed}.png`);
     writeFileSync(file, bytes);

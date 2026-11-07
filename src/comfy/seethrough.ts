@@ -10,18 +10,19 @@
  * 2. every node and input of `workflows/seethrough.json` is on the box's
  *    `/object_info` (`checkGraph`) — the wrapper not installed is refused
  *    here, before anything is uploaded;
- * 3. the queue is empty within `--wait` (this never queues behind someone
- *    else's job);
- * 4. the image is uploaded to the box's input directory and the graph queued;
- * 5. `/history/<id>` holds the job within `--timeout`, not in error, with
- *    outputs;
- * 6. the manifest is found the way the wrapper leaves it: SavePSD writes the
+ * 3. the image is uploaded to the box's input directory and the graph is
+ *    appended to the queue: behind every other job, never in front, nothing
+ *    reordered and nothing cancelled; a wait past `--wait` while pending is
+ *    refused naming the job's place (`COMFY_QUEUE_BEHIND`);
+ * 4. `/history/<id>` holds the job within `--timeout` once running, not in
+ *    error, with outputs;
+ * 5. the manifest is found the way the wrapper leaves it: SavePSD writes the
  *    layer PNGs and the manifest into the output directory but reports only
  *    the previews to `/history`, and records the manifest's file name in
  *    `output/seethrough_psd_info.log`. That log is overwritten by every run, so
  *    the manifest it names must carry THIS run's prefix — a prefix with a
  *    random suffix per run — or it is refused as another run's;
- * 7. everything is written into a staging directory beside `--out`, read back
+ * 6. everything is written into a staging directory beside `--out`, read back
  *    through `readWrapperLayers`, and only then moved to `--out`. Emit only
  *    after green: a directory the layer reader would refuse is never left at
  *    the path the next stage reads.
@@ -91,16 +92,14 @@ export async function runSeeThrough(client: ComfyClient, run: SeeThroughRun, say
   refuseIfAny(checkGraph(fillSeeThrough(template, params), info, client.host, new Set(['1.image'])));
   say(`  box: every node and input of workflows/seethrough.json is on its /object_info`);
 
-  const waited = await client.waitQueueEmpty(run.wait, say);
-  say(`  queue empty${waited > 0.05 ? ` after ${waited.toFixed(1)} s` : ''}`);
   const ref = await client.uploadImage(bytes, uploadName);
   say(`  uploaded ${run.image} (${img.width}x${img.height}) as input/${ref}`);
   const graph = fillSeeThrough(template, { ...params, image: ref });
   const vramBefore = await client.vramFree();
   const id = await client.submit(graph, 'rig-parts');
-  say(`  queued prompt ${id} (prefix ${prefix}); GPU job started`);
-  const { entry, vramLow, elapsed } = await client.waitHistory(id, run.timeout);
-  say(`  GPU job finished in ${elapsed.toFixed(1)} s`);
+  say(`  appended prompt ${id} (prefix ${prefix}) to the queue (behind any other job; nothing reordered or cancelled)`);
+  const { entry, vramLow, elapsed } = await client.waitBehind(id, run.wait, run.timeout, say);
+  say(`  GPU job finished ${elapsed.toFixed(1)} s after it was queued`);
   const previews = historyImages(entry);
   if (previews.length === 0) {
     refuse('COMFY_HISTORY_OUTPUTS', `prompt ${id}`, `lists outputs from node(s) ${Object.keys(entry.outputs).join(', ')} and no image; the graph's two preview SaveImage nodes are required to have saved`);
