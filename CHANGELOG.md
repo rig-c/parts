@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.27.1](https://github.com/rig-c/parts/compare/v2.27.0...v2.27.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **assemble:** keep held FRONT bridges at minimum coverage under project visible ([#1141](https://github.com/rig-c/parts/issues/1141)) ([#1195](https://github.com/rig-c/parts/issues/1195)) ([33aa6e7](https://github.com/rig-c/parts/commit/33aa6e7789a041992baf75e511eba9ef288c2cb8))
+* bind comfy plate's figure-mask source to its run stamp and painting ([#1188](https://github.com/rig-c/parts/issues/1188)) ([#1193](https://github.com/rig-c/parts/issues/1193)) ([3759558](https://github.com/rig-c/parts/commit/37595589603536a4b459661964888bfc68136b45))
+* comfy paint and seethrough append behind other jobs, like plate ([#1189](https://github.com/rig-c/parts/issues/1189)) ([#1194](https://github.com/rig-c/parts/issues/1194)) ([d96a020](https://github.com/rig-c/parts/commit/d96a0205c00957cb34897c15bb4c96739959c8a3))
+* write alternate allocation reports only beside the primary report ([#1156](https://github.com/rig-c/parts/issues/1156)) ([#1190](https://github.com/rig-c/parts/issues/1190)) ([15f4993](https://github.com/rig-c/parts/commit/15f4993e09d49b82e380ecedc772f02e4afe4032))
+
 ## [2.27.0](https://github.com/rig-c/parts/compare/v2.26.1...v2.27.0) (2026-11-07)
 
 
