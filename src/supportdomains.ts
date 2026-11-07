@@ -1,10 +1,10 @@
 /** Optional source-bound independent assembly domains (#998). */
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { SUPPORT_GRID_CODE, type SupportDomain, type SupportDomainReading } from './coincide.ts';
 import { refuseIfAny } from './errors.ts';
-import type { PartsFile } from './parts.ts';
+import { partImageReference, type PartsFile } from './parts.ts';
 
 export const SUPPORT_DOMAINS_FILE = 'part_support_domains.json';
 const SPEC = 'rig-parts-support-domains/1';
@@ -37,7 +37,7 @@ export function writeSupportDomains(partsPath: string, partsDir: string, parts: 
   });
   writeFileSync(join(dirname(partsPath), SUPPORT_DOMAINS_FILE), JSON.stringify({
     spec: SPEC, grid: parts.rig_size, declarations_sha256: sha(declarations), parts_sha256: sha(readFileSync(partsPath)),
-    images: parts.parts.map(p => ({ part: p.name, sha256: sha(readFileSync(join(partsDir, `${p.name}.png`))) })),
+    images: parts.parts.map(p => ({ part: p.name, sha256: sha(readFileSync(join(partsDir, basename(partImageReference(p).path)))) })),
     domains_sha256: sha(JSON.stringify(entries)), domains: entries,
   }, null, 2) + '\n');
 }
@@ -56,7 +56,7 @@ export function readSupportDomains(partsPath: string, partsDir: string, parts: P
   if (!digest(raw.declarations_sha256) || raw.parts_sha256 !== sha(readFileSync(partsPath)) || !Array.isArray(raw.images) || raw.images.length !== parts.parts.length || !Array.isArray(raw.domains) || raw.domains.length !== parts.parts.length || raw.domains_sha256 !== sha(JSON.stringify(raw.domains))) return unavailable('independent support sidecar does not bind these parts or its domain payload');
   for (let i = 0; i < parts.parts.length; i++) {
     const binding: unknown = raw.images[i], part = parts.parts[i];
-    if (!object(binding) || binding.part !== part.name || binding.sha256 !== sha(readFileSync(join(partsDir, `${part.name}.png`)))) return unavailable(`independent support sidecar PNG binding differs for "${part.name}"`);
+    if (!object(binding) || binding.part !== part.name || binding.sha256 !== sha(readFileSync(join(partsDir, basename(partImageReference(part).path))))) return unavailable(`independent support sidecar PNG binding differs for "${part.name}"`);
   }
   const domains: SupportDomainReading[] = [];
   for (let i = 0; i < parts.parts.length; i++) {
