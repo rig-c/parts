@@ -8228,8 +8228,8 @@ Internal `SeamSupport.drawings` never enters check JSON. Named requirement
 | `SEAM_OVER_MOTION.worlds.*.rows` | `SEAM_OVER_MOTION.worlds.*.rows` | 'pair' | evidence | [want.a, want.b] | [check.ts:5288](../src/check.ts#L5288) |
 | `SEAM_OVER_RANGE.joints` | `SEAM_OVER_RANGE.joints` | 'part' | evidence; finding when poses.some(p => p.status === 'FAIL'); otherwise evidence | [j.part] | [check.ts:4335](../src/check.ts#L4335), [check.ts:4381](../src/check.ts#L4381) |
 | `SEAM_OVER_RANGE.joints[].poses` | `SEAM_OVER_RANGE.joints[].poses` | 'part' | finding when fail; otherwise evidence | [j.part] | [check.ts:4379](../src/check.ts#L4379) |
-| `SETUP_MATCHES_PAINTING.regions` | `SETUP_MATCHES_PAINTING.regions` | 'rig' | finding when status === 'FAIL'; otherwise evidence | [] | [setuppainting.ts:174](../src/setuppainting.ts#L174) |
-| `SETUP_MATCHES_PAINTING.regions[].slots` | `SETUP_MATCHES_PAINTING.regions[].slots` | part when the supplied mapping resolves a piece; otherwise rig | evidence | resolved piece for slot; otherwise [] | [setuppainting.ts:175](../src/setuppainting.ts#L175) |
+| `SETUP_MATCHES_PAINTING.regions` | `SETUP_MATCHES_PAINTING.regions` | 'rig' | finding when status === 'FAIL'; otherwise evidence | [] | [setuppainting.ts:175](../src/setuppainting.ts#L175) |
+| `SETUP_MATCHES_PAINTING.regions[].slots` | `SETUP_MATCHES_PAINTING.regions[].slots` | part when the supplied mapping resolves a piece; otherwise rig | evidence | resolved piece for slot; otherwise [] | [setuppainting.ts:176](../src/setuppainting.ts#L176) |
 | `STILL_REGIONS_DARK.*.crossing` | `STILL_REGIONS_DARK.*.crossing` | part when the supplied mapping resolves a piece; otherwise rig | finding | resolved piece for sl.name; otherwise [] | [check.ts:8910](../src/check.ts#L8910) |
 | `STILL_REGIONS_DARK.*.still_slots` | `STILL_REGIONS_DARK.*.still_slots` | part when the supplied mapping resolves a piece; otherwise rig | evidence; finding when r.max > tolerance; otherwise evidence | resolved piece for slot; otherwise [] | [check.ts:8896](../src/check.ts#L8896), [check.ts:8901](../src/check.ts#L8901) |
 | `STRESS_OFF_CHAIN.not_read` | `STRESS_OFF_CHAIN.not_read` | 'part' | evidence | [r.part] | [check.ts:3939](../src/check.ts#L3939) |
@@ -8292,3 +8292,14 @@ Here `sourceConfig` is the absolute original config filename and `raw` is its
 JSON-parsed object. Serialize that object at the destination after copying any
 referenced files; callers that copy files can instead set their new relative
 paths. The enumerator derives membership from the loader's own declarations.
+
+`checkFileReferences(raw, configFile, requirements?)` and `CheckFileReference`
+are exported from the same `@rig-c/parts/src/config.ts` subpath (issue #1138).
+Pass the original config filename and the result of `readRequirements` from
+`@rig-c/parts/src/requirements.ts`. Rows contain `at` and `value`, with config
+references first and then `requirements.setup_painting.figure_mask.path` and
+`requirements.setup_painting.backdrop.path` when declared. Every value is
+resolved relative to the config directory, including images declared relative
+to the requirements file. Enumeration leaves both parsed inputs unchanged.
+Rig/parts-directory inputs (including seam PNGs) and separately supplied CLI
+inputs remain the caller's responsibility when relocating a check.
