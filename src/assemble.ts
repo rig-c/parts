@@ -4792,7 +4792,7 @@ export interface AssembleResult {
 
 /** Issue #953: the edge pixels `paintingEdges` resolved, the part pixels it changed, and the edge pixels it left, by reason. */
 export interface PaintingEdgeReading {
-  allocation?: PaintingAllocationReading;
+  allocation: PaintingAllocationReading;
   resolved: number;
   unseparated: number;
   changed: number;
@@ -5912,7 +5912,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     order.forEach((d, i) => {
       if (!('patch' in d) && e.changed[i].data.some((v) => v === 1)) edged.set(pieceAt(d).name, e.changed[i]);
     });
-    edgeReading = { resolved: e.resolved, unseparated: e.unseparated, changed: e.changed.reduce((a, m) => a + m.data.reduce((x, v) => x + v, 0), 0), skipped: e.skipped, allocation: e.allocation };
+    edgeReading = { resolved: e.resolved, unseparated: e.unseparated, changed: e.changed.reduce((a, m) => a + m.data.reduce((x, v) => x + v, 0), 0), skipped: e.skipped, allocation: e.allocation as PaintingAllocationReading };
   }
   const pushedOf: FringePushed[][] = plan.map(() => []);
   const pushedOfCut: FringePushed[][] = cuts.map(() => []);

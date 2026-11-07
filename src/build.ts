@@ -939,21 +939,24 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   if (result.edgeResiduals === undefined) rmSync(residualPath, { force: true });
   else writeFileSync(residualPath, JSON.stringify(result.edgeResiduals, null, 2) + '\n');
   const allocation = result.paintingEdges?.allocation;
-  if (allocation === undefined) rmSync(allocationPath, { force: true });
-  else writeFileSync(allocationPath, JSON.stringify({ spec: 'rig-parts-painting-allocation/1',
-    code: PAINTING_EDGE_COVERAGE_TRANSFER,
-    stage: 'paintingEdges after piece guarding and restoration', grid: result.parts.rig_size,
-    ...allocation, written_reports: allocationReports.map(report => report.file) }, null, 2) + '\n');
-  const currentAllocationFiles = new Set(allocationReports.map(report => foldName(report.file)));
+  const currentAllocationFiles = new Set(allocation === undefined ? [] : allocationReports.map(report => foldName(report.file)));
   for (const file of previousAllocationFiles) {
     if (!currentAllocationFiles.has(foldName(file)) && !outputFiles.has(foldName(resolve(dirname(outs.partsJson), file)))) {
       rmSync(join(dirname(outs.partsJson), file), { force: true });
     }
   }
-  for (const { file, report } of allocationReports) {
-    writeFileSync(join(dirname(outs.partsJson), file), JSON.stringify(report, null, 2) + '\n');
-    const count = report.coverageTransfers.reduce((n, row) => n + row.pixels.count, 0);
-    log(`${PAINTING_EDGE_COVERAGE_TRANSFER}: set "${report.set}" ${count} native rig px; membership in ${file}`);
+  if (allocation === undefined) {
+    rmSync(allocationPath, { force: true });
+  } else {
+    writeFileSync(allocationPath, JSON.stringify({ spec: 'rig-parts-painting-allocation/1',
+      code: PAINTING_EDGE_COVERAGE_TRANSFER,
+      stage: 'paintingEdges after piece guarding and restoration', grid: result.parts.rig_size,
+      ...allocation, written_reports: allocationReports.map(report => report.file) }, null, 2) + '\n');
+    for (const { file, report } of allocationReports) {
+      writeFileSync(join(dirname(outs.partsJson), file), JSON.stringify(report, null, 2) + '\n');
+      const count = report.coverageTransfers.reduce((n, row) => n + row.pixels.count, 0);
+      log(`${PAINTING_EDGE_COVERAGE_TRANSFER}: set "${report.set}" ${count} native rig px; membership in ${file}`);
+    }
   }
   for (const { record, image, depthImage } of result.images) {
     writePng(join(outs.partsDir, `${record.name}.png`), image);
@@ -988,13 +991,11 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   if (result.paintingEdges !== undefined) {
     const e = result.paintingEdges;
     log(`painting edges: ${e.resolved} edge px resolved from the painting (${e.unseparated} against the two reference colours where the window's far sides overlap), ${e.changed} part px changed; left as they were: ${e.skipped.cover} under a part the two-layer model does not carry, ${e.skipped.contrast} where the painting draws no edge (contrast below ${EDGE_CONTRAST}), ${e.skipped.locked} kept, feathered, a patch or a turn's moving pair, ${e.skipped.noBehind} with no behind pixel in the window; ${e.skipped.pieces} part px not written so a part's art keeps its pieces`);
-    if (e.allocation !== undefined) {
-      const a = e.allocation;
-      log(`painting owner: ${a.supplier}; ${a.fallbackHeld} clean-fallback part px held by piece preservation`);
-      log(`${PAINTING_EDGE_COVERAGE_TRANSFER}: ${a.coverageTransfers.reduce((n, row) => n + row.pixels.count, 0)} native rig px; membership in ${PAINTING_ALLOCATION_FILE}`);
-      for (const [reason, px] of Object.entries(a.refused)) log(`  painting owner refused: ${reason}, ${px} edge px`);
-      for (const fault of a.lineage) log(`  painting receiver refused: "${fault.receiver}", ${fault.reason}; one declared raw-plan ancestor is required`);
-    }
+    const a = e.allocation;
+    log(`painting owner: ${a.supplier}; ${a.fallbackHeld} clean-fallback part px held by piece preservation`);
+    log(`${PAINTING_EDGE_COVERAGE_TRANSFER}: ${a.coverageTransfers.reduce((n, row) => n + row.pixels.count, 0)} native rig px; membership in ${PAINTING_ALLOCATION_FILE}`);
+    for (const [reason, px] of Object.entries(a.refused)) log(`  painting owner refused: ${reason}, ${px} edge px`);
+    for (const fault of a.lineage) log(`  painting receiver refused: "${fault.receiver}", ${fault.reason}; one declared raw-plan ancestor is required`);
     // Issue #996: under a declared busy ground, what the two ground rules left.
     if (fields.ground === 'busy') log(`  busy ground (assemble.ground): ${e.skipped.mix} behind-side px left that are not a mix of the two reference colours, ${e.skipped.support} part px not raised outside the part's own support`);
   }
