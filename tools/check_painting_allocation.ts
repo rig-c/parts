@@ -6,7 +6,7 @@ import { assembleConfig, writeRun } from '../fixtures/assemble_fixture.ts';
 import { paintingGuardFixture } from '../fixtures/painting_guard.ts';
 import { paintingOwnerFixture } from '../fixtures/painting_owner.ts';
 import { assembleStage } from '../src/build.ts';
-import { readLayers } from '../src/layers.ts';
+import { OPAQUE_ALPHA_ABOVE, readLayers } from '../src/layers.ts';
 import { PartsError } from '../src/errors.ts';
 import { paintingEdges } from '../src/paintingedges.ts';
 import { serializeParts } from '../src/parts.ts';
@@ -46,7 +46,7 @@ export function runPaintingGuardChecks(say: Say): void {
       event?.reason === (mode === 'bridge' ? 'unique' : 'piece-guard-allocation-held'), JSON.stringify(event ?? null));
     const expectedBehind = mode === 'bridge' ? [30, 0, 170, 255] : [0, 0, 200, 5];
     say(prefix + '_RGBA', JSON.stringify(original) === JSON.stringify([[0, 0, 200, mode === 'bridge' ? 255 : 5], [200, 0, 0, 20]]) &&
-      JSON.stringify(applied) === JSON.stringify([expectedBehind, [200, 0, 0, 20]]), JSON.stringify({ original, applied }));
+      JSON.stringify(applied) === JSON.stringify([expectedBehind, [200, 0, 0, mode === 'bridge' ? OPAQUE_ALPHA_ABOVE + 1 : 20]]), JSON.stringify({ original, applied }));
     const rows = result.allocation?.coverageTransfers ?? [];
     const actual = rows.flatMap(row => row.pixels.spans.flatMap(([y, left, right]) =>
       Array.from({ length: right - left }, (_, i) => y * source.width + left + i))).sort((a, b) => a - b);

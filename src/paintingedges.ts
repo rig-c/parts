@@ -732,8 +732,10 @@ function applyPaintingEdges(
       });
       if (held.length > 0) {
         if (!held.includes(event.target) && event.target === event.behind && held.every(i => i === event.front)) {
-          // A held clear retains FRONT; BEHIND keeps its accepted own paint.
-          planned[event.front].delete(event.p);
+          // Keep the original FRONT colour at the least coverage that preserves
+          // the guarded art bridge. BEHIND already carries its accepted own P.
+          const front = parts[event.front].data;
+          planned[event.front].set(event.p, [front[offset], front[offset + 1], front[offset + 2], OPAQUE_ALPHA_ABOVE + 1]);
           event.status = 'retained-front';
         } else {
           for (const i of event.affected) planned[i].delete(event.p);
