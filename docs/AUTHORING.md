@@ -5735,6 +5735,31 @@ documents do not ship). Each is an input this package built; none is an author's
 | <a id="COMPARE_WARMUP_UNSUPPORTED"></a>`COMPARE_WARMUP_UNSUPPORTED` | a physics warm-up other than 0 was asked of the comparison; physics resets at time 0 and steps from there | an input this package built, not an author's: report it with the line |
 | <a id="SKINNING_RANGE_UNSUPPORTED"></a>`SKINNING_RANGE_UNSUPPORTED` | `skinningEnvelopeBone` was handed a bone range not declared by the bone's own keys (a physics swing, a range read off a posed schedule), or a bone whose setup scale is not uniform; the bound is not proven, so it is refused | nothing to change for the build: inside the residual clause it means the residual veto was not applied to that bone, and the motion comparison decides |
 
+### check-parts
+
+Run `rig-parts check-parts --parts <assembled-dir> --out <disjoint-report-dir>`
+before parts review. Add `--json` for the completed report alone. The command
+writes `parts-check.json` and reads no rig, motion or plate. Exit 0 records input
+integrity while the six #945/#884 quality classes remain named HOLEs.
+[STABILITY](STABILITY.md#parts-stage-integrity-report) defines the binding and
+closed diagnostic vocabulary. Base and alternate `scene.figure_mask` remain
+outside the consumed inputs pending [#1177](https://github.com/rig-c/parts/issues/1177).
+
+| rule | means | change |
+| --- | --- | --- |
+| <a id="PARTS_CHECK_INPUT_READ"></a>`PARTS_CHECK_INPUT_READ` | an input cannot be inventoried, is a link/special file, or references an asset outside the input root | supply a readable regular-file assemble output |
+| <a id="PARTS_CHECK_PNG_READ"></a>`PARTS_CHECK_PNG_READ` | the named part or auxiliary depth PNG is missing or undecodable | restore the declared PNG or re-run assemble |
+| <a id="PARTS_CHECK_REPORT"></a>`PARTS_CHECK_REPORT` | a present source-cover/allocation report has invalid JSON, spec, grid, membership or counted spans | regenerate the named producer report with the assemble output |
+| <a id="PARTS_CHECK_OUTPUT"></a>`PARTS_CHECK_OUTPUT` | output and input roots overlap | choose a disjoint report directory |
+| <a id="PARTS_CHECK_INPUT_CHANGED"></a>`PARTS_CHECK_INPUT_CHANGED` | bytes or inventory membership changed while reading | freeze the input and run again |
+| <a id="PARTS_CHECK_PUBLISH"></a>`PARTS_CHECK_PUBLISH` | the report could not be atomically published | supply a writable output root and resolve any existing temporary file |
+| <a id="PARTS_CHECK_INTERNAL"></a>`PARTS_CHECK_INTERNAL` | an unexpected exception or undeclared diagnostic occurred | report the tool failure |
+| <a id="PARTS_UNPLANNED_SOURCE_COVER"></a>`PARTS_UNPLANNED_SOURCE_COVER` | REPORTED direct input support under an unplanned front owner, with part/source/count/spans | review its provenance; no quality threshold is applied |
+| <a id="PARTS_SOURCE_COVER"></a>`PARTS_SOURCE_COVER` | HOLE when source_cover.json is absent | re-run assemble when a cover inventory is required |
+| <a id="PARTS_PAINTING_ALLOCATION"></a>`PARTS_PAINTING_ALLOCATION` | HOLE when painting_allocation.json is absent | retain the missing transfer observation in review |
+| <a id="PARTS_PLATE_GHOST"></a><a id="PARTS_PLATE_STRUCTURE"></a><a id="PARTS_PLATE_SMEAR"></a><a id="PARTS_PLATE_STEPS"></a>`PARTS_PLATE_GHOST`, `PARTS_PLATE_STRUCTURE`, `PARTS_PLATE_SMEAR`, `PARTS_PLATE_STEPS` | HOLE; no adopted plate discriminator is available | carry these unmeasured classes to parts review |
+| <a id="PARTS_INVENTED_MATERIAL"></a><a id="PARTS_INVENTED_EXPOSURE"></a>`PARTS_INVENTED_MATERIAL`, `PARTS_INVENTED_EXPOSURE` | HOLE; validated producer material truth and posed exposure are unavailable | retain the producer-provenance and frame-measurement gaps in review |
+
 ### check and build
 
 | rule | means | change |
