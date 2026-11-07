@@ -7,7 +7,7 @@ import { CompileError } from '@rig-c/core/errors';
 import { parseRigSpec, type RigSpec } from '@rig-c/core/rig';
 import { buildRig } from '../src/rig.ts';
 import { assembleStage, readRigInputs, rigOutputTexts } from '../src/build.ts';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PartsError } from '../src/errors.ts';
@@ -200,6 +200,80 @@ export function runDepthSheetChecks(dir: string, say: Say): void {
   try { runAltStage('alt-collision', 'warm'); } catch (error) { if (!(error instanceof PartsError)) throw error; stageCollision = error; }
   runAltStage('alt-distinct', 'cool');
   say('DS41_ASSEMBLE_STAGE_BASE_SHEET_VS_ALTERNATE_ART_COLLISION_RED', stageCollision?.problems.some(p => p.code === 'DEPTH_SHEET_UNAMBIGUOUS' && p.object === 'warm_lash_depth.png' && p.detail.includes('output assets[')) === true && !existsSync(join(altStageDir, 'alt-collision')) && Buffer.from(readPng(join(altStageDir, 'alt-distinct/parts/warm_lash_depth.png')).data).equals(Buffer.from(expectedAltSheet.data)) && readPng(join(altStageDir, 'alt-distinct/parts/cool_lash_depth.png')).width === 8, JSON.stringify(stageCollision?.problems));
+  const captureStage = (tag: string, cfgBody: Record<string, unknown>): PartsError | null => {
+    const cfgPath = join(altStageDir, `${tag}.config.json`), outDir = join(altStageDir, tag);
+    writeFileSync(cfgPath, JSON.stringify(cfgBody));
+    try {
+      assembleStage({ source: join(altStageDir, 'painting.png'), full: altStageFull, head: null, config: cfgPath, seam: 'near-white', project: 'core' }, { partsJson: join(outDir, 'parts.json'), partsDir: join(outDir, 'parts'), recomposite: join(outDir, 'recomposite_rig.png'), errorMap: join(outDir, 'recomposite_error_rig.png') }, () => {});
+      return null;
+    } catch (error) { if (error instanceof PartsError) return error; throw error; }
+  };
+  const partCaseErr = captureStage('case-parts', { key: 'case_parts', seethrough: { resolution: 8, steps: 1, seed: 0, offload: false }, assemble: { rig_scale: 1, plan: [['Face', 'full', 'face'], ['face', 'full', 'eyelash-r']] } });
+  const sheetCaseErr = captureStage('case-sheet', { key: 'case_sheet', seethrough: { resolution: 8, steps: 1, seed: 0, offload: false }, depth: { full: { layers: { face: { image: 'sheet.png', near: 'black', zScale: 12 } } } }, assemble: { rig_scale: 1, plan: [['face', 'full', 'face'], ['Face_depth', 'full', 'eyewhite-r']] } });
+  let altCaseErr: PartsError | null = null;
+  try { runAltStage('alt-case-collision', 'Warm'); } catch (error) { if (!(error instanceof PartsError)) throw error; altCaseErr = error; }
+  const distinctErr = captureStage('case-distinct', { key: 'case_distinct', seethrough: { resolution: 8, steps: 1, seed: 0, offload: false }, depth: { full: { layers: { face: { image: 'sheet.png', near: 'black', zScale: 12 } } } }, assemble: { rig_scale: 1, plan: [['Face', 'full', 'face'], ['lash', 'full', 'eyelash-r']] } });
+  say('DS48_ASSEMBLE_CASE_COLLIDING_PART_AND_SHEET_NAMES_ARE_REFUSED',
+    partCaseErr?.problems.some(p => p.code === 'DEPTH_SHEET_UNAMBIGUOUS' && p.detail.includes('"Face"') && p.detail.includes('"face"')) === true && !existsSync(join(altStageDir, 'case-parts')) &&
+    sheetCaseErr?.problems.some(p => p.code === 'DEPTH_SHEET_UNAMBIGUOUS' && p.detail.includes('"face_depth.png"') && p.detail.includes('"Face_depth"')) === true && !existsSync(join(altStageDir, 'case-sheet')) &&
+    altCaseErr?.problems.some(p => p.code === 'DEPTH_SHEET_UNAMBIGUOUS' && p.detail.includes('"warm_lash_depth.png"') && p.detail.includes('"Warm_lash_depth.png"')) === true && !existsSync(join(altStageDir, 'alt-case-collision')) &&
+    distinctErr === null && existsSync(join(altStageDir, 'case-distinct/parts/Face.png')) && existsSync(join(altStageDir, 'case-distinct/parts/Face_depth.png')) && existsSync(join(altStageDir, 'case-distinct/parts/lash.png')),
+    JSON.stringify({ partCase: partCaseErr?.problems, sheetCase: sheetCaseErr?.problems, altCase: altCaseErr?.problems, distinctErr }));
+  const root = resolve(import.meta.dir, '..'), isolated = join(dir, 'isolated-1169');
+  mkdirSync(isolated, { recursive: true });
+  cpSync(join(root, 'src'), join(isolated, 'src'), { recursive: true });
+  cpSync(join(root, 'package.json'), join(isolated, 'package.json'));
+  symlinkSync(join(root, 'node_modules'), join(isolated, 'node_modules'), 'dir');
+  const asmSource = join(isolated, 'src/assemble.ts'), bldSource = join(isolated, 'src/build.ts');
+  const asmOriginal = readFileSync(asmSource, 'utf8'), bldOriginal = readFileSync(bldSource, 'utf8');
+  const asmBeforeMd5 = createHash('md5').update(readFileSync(asmSource)).digest('hex'), bldBeforeMd5 = createHash('md5').update(readFileSync(bldSource)).digest('hex');
+  const probeScript = join(dir, 'probe-1169.ts');
+  writeFileSync(probeScript, `
+const [source, stageDir] = process.argv.slice(2);
+const { assembleStage } = await import(source + '/src/build.ts');
+const { join } = await import('node:path');
+const cases = [['case-parts', 'Face', 'face'], ['case-sheet', 'face_depth.png', 'Face_depth'], ['alt-case-collision', 'warm_lash_depth.png', 'Warm_lash_depth.png']];
+const out = cases.map(([tag, a, b], idx) => {
+  try {
+    assembleStage({ source: join(stageDir, 'painting.png'), full: join(stageDir, 'full'), head: null, config: join(stageDir, tag + '.config.json'), seam: 'near-white', project: 'core' }, { partsJson: join(stageDir, 'probe-' + idx, 'parts.json'), partsDir: join(stageDir, 'probe-' + idx, 'parts'), recomposite: join(stageDir, 'probe-' + idx, 'recomposite_rig.png'), errorMap: join(stageDir, 'probe-' + idx, 'recomposite_error_rig.png') }, () => {});
+    return { tag, matched: false };
+  } catch (e) {
+    const problems = e.problems ?? [];
+    return { tag, matched: problems.some(p => p.code === 'DEPTH_SHEET_UNAMBIGUOUS' && p.detail.includes('"' + a + '"') && p.detail.includes('"' + b + '"')), problems };
+  }
+});
+console.log(JSON.stringify(out));
+`);
+  const runProbe = (srcRoot: string): Array<{ tag: string; matched: boolean }> => {
+    const res = spawnSync(process.execPath, [probeScript, srcRoot, altStageDir], { encoding: 'utf8', timeout: 30000 });
+    if (res.status !== 0) throw new Error(`probe-1169 exit ${res.status}: ${res.stderr}`);
+    return JSON.parse(res.stdout.trim()) as Array<{ tag: string; matched: boolean }>;
+  };
+  const asmRule1 = 'const k = `${p.record.name}.png`.toLowerCase()', asmPlant1 = 'const k = `${p.record.name}.png`';
+  const asmRule2 = 'artFiles.has(p.record.depth.image.toLowerCase())', asmPlant2 = 'artFiles.has(p.record.depth.image)';
+  const bldRule1 = 'assetIndices.get(file.toLowerCase())', bldPlant1 = 'assetIndices.get(file)';
+  const bldRule2 = 'assetIndices.set(file.toLowerCase(), index)', bldPlant2 = 'assetIndices.set(file, index)';
+  let plantedRed: Array<{ tag: string; matched: boolean }> = [], restoredGreen: Array<{ tag: string; matched: boolean }> = [];
+  let asmPlantedMd5 = '', bldPlantedMd5 = '', asmAfterMd5 = '', bldAfterMd5 = '';
+  try {
+    writeFileSync(asmSource, asmOriginal.replace(asmRule1, asmPlant1).replace(asmRule2, asmPlant2));
+    writeFileSync(bldSource, bldOriginal.replace(bldRule1, bldPlant1).replace(bldRule2, bldPlant2));
+    asmPlantedMd5 = createHash('md5').update(readFileSync(asmSource)).digest('hex');
+    bldPlantedMd5 = createHash('md5').update(readFileSync(bldSource)).digest('hex');
+    plantedRed = runProbe(isolated);
+  } finally {
+    writeFileSync(asmSource, asmOriginal);
+    writeFileSync(bldSource, bldOriginal);
+  }
+  asmAfterMd5 = createHash('md5').update(readFileSync(asmSource)).digest('hex');
+  bldAfterMd5 = createHash('md5').update(readFileSync(bldSource)).digest('hex');
+  restoredGreen = runProbe(isolated);
+  say('DS49_ASSEMBLE_CASE_COLLISION_PLANT_IS_RED_AND_RESTORED',
+    asmPlantedMd5 !== asmBeforeMd5 && bldPlantedMd5 !== bldBeforeMd5 &&
+    plantedRed.every(r => !r.matched) &&
+    asmAfterMd5 === asmBeforeMd5 && bldAfterMd5 === bldBeforeMd5 &&
+    restoredGreen.every(r => r.matched),
+    JSON.stringify({ asmBeforeMd5, asmPlantedMd5, asmAfterMd5, bldBeforeMd5, bldPlantedMd5, bldAfterMd5, plantedRed, restoredGreen }));
 
 }
 
