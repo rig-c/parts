@@ -24,7 +24,8 @@ import { proposeNeck } from './tools/neck-propose.ts';
 import { parseAltArg } from './tools/alternate-cli.ts';
 import { type AlternateCliInput, assembleStage, build, checkStage, ERROR_MAP_FILE, loopStage, readRuns, readSource, rigStage, suppliedCheckFlag } from './src/build.ts';
 import { ACCEPTABLE_BARS, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, findRigc, PACK_SHAPES, rigcRunnerAt, type PackShape, PAGE_EDGES, type PageEdges, PARTS_HOME_SENTENCE, RIGC_GEOMETRY_VERSION, rigcRanClause, type RigcRunner, NO_PARTS_SENTENCE, SEAM_MEAN_BAR, SOURCE_SENTENCE, SEAM_PX_BAR, SEAM_PX_LEVEL, SPINEBOY_YARDSTICK, TEXTURE_STRETCH_CEILING } from './src/check.ts';
-import { ComfyClient, resolveHost, runPainting, runSeeThrough } from './src/comfy/index.ts';
+import { ComfyClient, resolveHost, runBackground, runPainting, runSeeThrough } from './src/comfy/index.ts';
+import { DEFAULT_GROW_PX, runForeground } from './src/plate.ts';
 import { type CharacterConfig, loadClothConfig, loadConfig, loadEarlyConfig, loadPaintConfig } from './src/config.ts';
 import { configWriteLines, readConfigWriteTarget, separateConfigWriteTarget, stageConfigWrite, type StagedConfigWrite } from './tools/configwrite.ts';
 import { failLine, guidePointer, PartsError } from './src/errors.ts';
@@ -864,6 +865,26 @@ usage:
       is set. The pose words are generation.pose, or the control skeleton's own.
       The config needs only key and generation here; the rest comes later.
 
+  rig-parts comfy plate --mode background|foreground --painting <png>
+                    --mask-from seethrough:<dir>|figure-mask:<dir> --out <dir>
+                    [--graph lama|core] [--model <name>] [--checkpoint-sha256 <hex>]
+                    [--seed 0] [--grow 8] [--steps 30] [--prompt <text>] [--negative <text>]
+                    [--host <url>] [--wait 1800] [--timeout 3600] [--poll 3]
+      A step-4 plate with a receipt: <out>/plate.png, mask.png and receipt.json
+      (spec rig-parts-plate-receipt/1). The mask comes from a source only — the
+      figure layers of a See-through run, or the figure_rig.png an assemble with
+      config.scene wrote — on the painting's own grid; with none, the command is
+      refused and writes nothing. background inpaints the grown mask on a ComfyUI
+      box (--graph lama, the default: the inpaint pack's LaMa model, --model
+      big-lama.pt unless named; --graph core: the checkpoint --model names, core
+      nodes only), checks every node and model against /object_info before
+      uploading, appends the job behind any other (never in front, nothing
+      cancelled; a job still pending after --wait s is refused with its queue
+      place), and pastes the result into the painting inside the mask only.
+      --checkpoint-sha256 is required for background and is recorded as declared.
+      foreground runs no box: the painting's pixels inside the mask, transparent
+      outside.
+
   rig-parts build --config <config.json> --source <painting.png> --full <dir|psd>
                     [--head <dir|psd>] --out <dir> [--seam near-white|silhouette]
                     [--project core|visible] [--page-edges pot|free]
@@ -1147,6 +1168,7 @@ const TAKES = {
   assemble: { valued: ['--source', '--full', '--head', '--config', '--out', '--seam', '--project', '--alt', '--write-config', '--requirements'], switches: ['--propose-plan'] },
   'comfy seethrough': { valued: ['--image', '--out', '--resolution', '--steps', '--seed', '--prefix', '--host', '--wait', '--timeout', '--poll', '--config', '--depth-run'], switches: ['--offload', '--no-offload', '--lama', '--nf4'] },
   'comfy paint': { valued: ['--config', '--out', '--seeds', '--seed0', '--host', '--wait', '--timeout', '--poll'], switches: [] },
+  'comfy plate': { valued: ['--mode', '--painting', '--mask-from', '--out', '--graph', '--model', '--checkpoint-sha256', '--seed', '--grow', '--steps', '--prompt', '--negative', '--host', '--wait', '--timeout', '--poll'], switches: [] },
   inputs: { valued: ['--source', '--config', '--out'], switches: [] },
   build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set', '--environment', '--wind-band'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes'] },
   compose: { valued: ['--scene', '--out', '--requirements', '--accept'], switches: [] },
@@ -1887,7 +1909,7 @@ function cmdAssemble(args: string[]): number {
 }
 
 /** Parse `--flag value` pairs and bare `--switch`es, as the command's {@link TAKES} row names them; a string is a usage error. */
-function comfyFlags(args: string[], command: 'comfy seethrough' | 'comfy paint'): { v: Map<string, string>; on: Set<string> } | string {
+function comfyFlags(args: string[], command: 'comfy seethrough' | 'comfy paint' | 'comfy plate'): { v: Map<string, string>; on: Set<string> } | string {
   const switches: readonly string[] = TAKES[command].switches;
   const v = new Map<string, string>();
   const on = new Set<string>();
@@ -1923,11 +1945,57 @@ function secondsFlag(v: Map<string, string>, flag: string, fallback: number): nu
   return Number.isFinite(n) && n > 0 ? n : `${flag} ${raw} is not a number of seconds above 0`;
 }
 
+/** Flags `comfy plate --mode foreground` does not take: it runs no box and no model. */
+const PLATE_BOX_FLAGS = ['--graph', '--model', '--checkpoint-sha256', '--seed', '--grow', '--steps', '--prompt', '--negative', '--host', '--wait', '--timeout', '--poll'];
+
+async function cmdComfyPlate(v: Map<string, string>): Promise<number> {
+  const mode = v.get('--mode');
+  if (mode !== 'background' && mode !== 'foreground') return usage(`comfy plate needs --mode background or --mode foreground${mode === undefined ? '' : `; got "${mode}"`}`);
+  const painting = v.get('--painting');
+  if (painting === undefined) return usage('comfy plate needs --painting <png>');
+  const out = v.get('--out');
+  if (out === undefined) return usage('comfy plate needs --out <dir>');
+  try {
+    if (mode === 'foreground') {
+      const extra = PLATE_BOX_FLAGS.filter((x) => v.has(x));
+      if (extra.length > 0) return usage(`comfy plate --mode foreground runs no box and no model; ${extra.join(', ')} ${extra.length === 1 ? 'is' : 'are'} for --mode background`);
+      console.log(`rig-parts comfy plate: foreground ${painting} -> ${out}`);
+      const r = runForeground({ painting, maskFrom: v.get('--mask-from'), out });
+      console.log(`  mask from ${r.mask.source} ${r.mask.from}; no box, no model (graph ${r.graph})`);
+      console.log(`  wrote ${join(out, r.output.path)} (sha256 ${r.output.sha256}), ${r.mask.path} and receipt.json`);
+      return EXIT_OK;
+    }
+    const graph = v.get('--graph') ?? 'lama';
+    if (graph !== 'lama' && graph !== 'core') return usage(`--graph ${graph} is not lama or core`);
+    const wait = secondsFlag(v, '--wait', 1800);
+    const timeout = secondsFlag(v, '--timeout', 3600);
+    const poll = secondsFlag(v, '--poll', 3);
+    for (const x of [wait, timeout, poll]) if (typeof x === 'string') return usage(x);
+    const seed = intFlag(v, '--seed', 0, 0);
+    const grow = intFlag(v, '--grow', DEFAULT_GROW_PX, 0);
+    const steps = intFlag(v, '--steps', 30, 1);
+    for (const x of [seed, grow, steps]) if (typeof x === 'string') return usage(x);
+    if (graph === 'lama') for (const x of ['--steps', '--prompt', '--negative']) if (v.has(x)) return usage(`${x} is for --graph core; the lama graph takes no prompt and no steps`);
+    console.log(`rig-parts comfy plate: background (${graph}) ${painting} -> ${out}`);
+    // Every local refusal (no source mask, the checksum, the grid) comes before the host is resolved.
+    const r = await runBackground(
+      () => new ComfyClient(resolveHost(v.get('--host'), process.env.COMFY_HOST), { poll: poll as number, request: 30 }),
+      { painting, maskFrom: v.get('--mask-from'), out, graph, model: v.get('--model'), checkpointSha256: v.get('--checkpoint-sha256'), seed: seed as number, growPx: grow as number, steps: steps as number, prompt: v.get('--prompt'), negative: v.get('--negative'), wait: wait as number, timeout: timeout as number },
+      (l) => console.log(l),
+    );
+    console.log(`  wrote ${join(out, r.output.path)} (sha256 ${r.output.sha256}), ${r.mask.path} and receipt.json; model ${r.model?.name} (checkpoint sha256 declared), GPU ${r.gpu}`);
+    return EXIT_OK;
+  } catch (err) {
+    return printRefusal(err);
+  }
+}
+
 async function cmdComfy(args: string[]): Promise<number> {
   const [sub, ...rest] = args;
-  if (sub !== 'seethrough' && sub !== 'paint') return usage(`comfy takes seethrough or paint; got ${sub === undefined ? 'nothing' : `"${sub}"`}`);
+  if (sub !== 'seethrough' && sub !== 'paint' && sub !== 'plate') return usage(`comfy takes seethrough, paint or plate; got ${sub === undefined ? 'nothing' : `"${sub}"`}`);
   const f = comfyFlags(rest, `comfy ${sub}`);
   if (typeof f === 'string') return usage(f);
+  if (sub === 'plate') return cmdComfyPlate(f.v);
   const { v, on } = f;
   if (on.has('--offload') && on.has('--no-offload')) return usage('--offload and --no-offload cannot be combined');
   const wait = secondsFlag(v, '--wait', 1800);

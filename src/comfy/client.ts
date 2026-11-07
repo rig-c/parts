@@ -148,6 +148,69 @@ export class ComfyClient {
     return (Date.now() - t0) / 1000;
   }
 
+  /**
+   * Where a queued prompt stands: `running` when the box is running it,
+   * `pending` with its 1-based place among the pending jobs (and how many are
+   * ahead of it, running included), or `absent` when the queue no longer lists
+   * it (finished, or never queued).
+   */
+  async queuePlace(id: string): Promise<{ state: 'running' } | { state: 'pending'; place: number; pending: number; ahead: number } | { state: 'absent' }> {
+    const q = asObject(await this.json('GET', '/queue'));
+    if (q === null || !Array.isArray(q.queue_running) || !Array.isArray(q.queue_pending)) {
+      refuse('COMFY_REQUEST_OK', `GET ${this.host}/queue`, 'answered without queue_running and queue_pending arrays');
+    }
+    const idOf = (e: unknown): unknown => (Array.isArray(e) ? e[1] : undefined);
+    const running = q.queue_running as unknown[];
+    if (running.some((e) => idOf(e) === id)) return { state: 'running' };
+    // ComfyUI orders pending jobs by their queue number (the entry's first element), not by list position.
+    const pending = [...(q.queue_pending as unknown[])].sort((a, b) => Number(Array.isArray(a) ? a[0] : 0) - Number(Array.isArray(b) ? b[0] : 0));
+    const at = pending.findIndex((e) => idOf(e) === id);
+    if (at < 0) return { state: 'absent' };
+    return { state: 'pending', place: at + 1, pending: pending.length, ahead: running.length + at };
+  }
+
+  /**
+   * Wait for a prompt queued behind other jobs (it was appended, never put in
+   * front, and nothing here reorders or cancels anyone's job): at most `wait`
+   * seconds while it is still pending, then at most `timeout` seconds once the
+   * box is running it. A wait past either bound is refused naming the job's
+   * place in the queue; the job is left on the box.
+   */
+  async waitBehind(id: string, wait: number, timeout: number, say: (line: string) => void): Promise<{ entry: HistoryEntry; vramLow: Record<string, number>; elapsed: number }> {
+    const t0 = Date.now();
+    let started: number | null = null;
+    let lastPlace = -1;
+    for (;;) {
+      const place = await this.queuePlace(id);
+      if (place.state === 'absent') {
+        const done = await this.waitHistory(id, Math.max(this.timing.request, this.timing.poll * 2));
+        return { ...done, elapsed: (Date.now() - t0) / 1000 };
+      }
+      const now = Date.now();
+      if (place.state === 'running') {
+        if (started === null) {
+          started = now;
+          say(`  prompt ${id} is running`);
+        }
+        if ((now - started) / 1000 >= timeout) {
+          refuse('COMFY_HISTORY_WITHIN', `prompt ${id}`, `was still running ${((now - started) / 1000).toFixed(1)} s after it started; it is required within --timeout ${timeout} s (the job was left on the box, not cancelled)`);
+        }
+      } else {
+        if (place.place !== lastPlace) say(`  prompt ${id} queued behind ${place.ahead} job(s) (pending place ${place.place} of ${place.pending})`);
+        lastPlace = place.place;
+        const waited = (now - t0) / 1000;
+        if (waited >= wait) {
+          refuse(
+            'COMFY_QUEUE_BEHIND',
+            `prompt ${id}`,
+            `was still pending after ${waited.toFixed(1)} s, at place ${place.place} of ${place.pending} pending with ${place.ahead} job(s) ahead of it; it is required to start within --wait ${wait} s — the job was left in its place on the box, not moved and not cancelled, and no one else's job was touched`,
+          );
+        }
+      }
+      await sleep(this.timing.poll);
+    }
+  }
+
   /** `GET /object_info`: every node class the box has, with its inputs. */
   async objectInfo(): Promise<Record<string, unknown>> {
     const o = asObject(await this.json('GET', '/object_info'));

@@ -39,6 +39,7 @@ import { runTurnUnitPrecedenceChecks } from './tools/check_turn_unit_precedence.
 import { runAuthoredUnitDepthChecks } from './tools/check_authored_unit_depth.ts';
 import { runDepthMapChecks } from './tools/check_depthmaps.ts';
 import { runTakeLayerChecks } from './tools/check_take_layers.ts';
+import { runPlateChecks } from './tools/check_plate.ts';
 import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
 import { runPartSourceChecks } from './tools/check_part_sources.ts';
 import { runReadmePolicyChecks } from './scripts/readme_policy.ts';
@@ -37082,7 +37083,7 @@ function runComfySuite(): number {
     say('CY_DEPTH_FETCH_AND_MISSING_FILE_PLANT', depthProbe.status === 0, `exit ${depthProbe.status}; ${depthProbe.stdout} ${depthProbe.stderr}`, 'API and CLI: inactive hints never fetch or activate; explicit config/run captures5 valid sheets and preserves the actual404 missing-file refusal');
 
     const h = spawnSync('bun', [join(ROOT, 'fixtures', 'comfyharness.ts'), dir], { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 26 });
-    let parsed: { image: string; results: Record<string, HarnessResult> } | null = null;
+    let parsed: { image: string; platePainting: string; results: Record<string, HarnessResult> } | null = null;
     try {
       parsed = JSON.parse((h.stdout ?? '').trim().split('\n').pop() ?? '');
     } catch {
@@ -37353,6 +37354,9 @@ function runComfySuite(): number {
       `generation.sampler written scheduler, sampler, cfg, steps -> exit ${R['paint-reordered']?.status}, against paint-only (steps, cfg, sampler, scheduler): ${po.length === 0 ? 'every file and the graph sent byte-identical (elapsed_s set aside)' : po.join(' | ')}`,
       'determinism is a contract: the meta names the sampler\'s fields in one order (resolvedSampler), not in the order its author happened to type them',
     );
+
+    // Issue #1183: the step-4 plate producer, on the same harness run.
+    runPlateChecks(dir, parsed.platePainting, R, say);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -44579,6 +44583,14 @@ function runSceneSuite(): number {
         C.report.plate.judged_by === 'nothing',
       `slot 0 ${C?.rig.slots[0]?.name} on bone ${plateBone?.name} (parent ${plateBone?.parent}, ${plateBone?.x}, ${plateBone?.y}); region ${JSON.stringify(plateSkin)}; image bytes the file's: ${plateBytes !== undefined && Buffer.from(plateBytes).equals(readFileSync(join(dir, 'plate.png')))}; scene.json plate ${JSON.stringify(C?.report.plate)}`,
       'issue #74 §1: a 100x60 image centred at canvas (50, 30) is at canvas (0, 0); in Spine axes that centre is (0, 30), by hand — and the provenance is copied, never judged',
+    );
+    const reportSha = createHash('sha256').update(readFileSync(join(dir, 'plate.png'))).digest('hex');
+    const plantedSha = createHash('sha256').update(Buffer.concat([readFileSync(join(dir, 'plate.png')), Buffer.from([0])])).digest('hex');
+    say(
+      'SC18B_THE_SCENE_REPORT_CARRIES_THE_PLATE_SHA256_OF_THE_BYTES_COMPOSE_READ',
+      C !== null && reportSha !== '' && C.report.plate?.sha256 === reportSha && C.report.plate.sha256 !== plantedSha && Object.keys(C.report.plate).join(',') === 'image,provenance,note,bone,slot,size,sha256,judged_by',
+      `scene.json plate.sha256 ${C?.report.plate?.sha256}; the file's ${reportSha}; one byte appended gives ${plantedSha}, which it is not; keys ${C === null || C.report.plate === null ? 'none' : Object.keys(C.report.plate).join(',')}`,
+      'issue #1183 item 6: a verdict binds to the plate\'s bytes, so the report names them by hash; the plate stays judged by nothing',
     );
     // Root's own frame (issue #74 as built: both public examples' shoes ride root). The plain build with its eye region
     // moved onto root at its own place — the eye's centre, rig (18, 27), is Spine (-2, 13) on the 40x40 stage — and the
