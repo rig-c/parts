@@ -1,3 +1,4 @@
+import { SOURCE_COVER_FILE, sourceCoverReport, type SourceCoverSet } from './sourcecover.ts';
 import { STAGE_MAP_FILE } from './provenance.ts';
 import { withoutCheckRows } from './checkrow.ts';
 import { readSetupFigureMask } from './setupfiguremask.ts';
@@ -63,7 +64,7 @@ import { setFocusProblems } from './setfocus.ts';
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { type AnimFrame, EncodeError, encodeApng, encodeIndexedApng, INDEXED_DEFAULTS } from './apng.ts';
 import { assemble, type AssembleResult, cutLines, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, groundWarning, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine } from './assemble.ts';
 import { allocationClause, type Reducer, stageBClause, unboundedClause } from './automesh.ts';
@@ -337,6 +338,23 @@ export function frontOrdered<T extends { record: { name: string } }>(items: read
   return out;
 }
 
+/** Bind the pure owner reading to the exact stage inputs. */
+function sourceCoverSet(result: AssembleResult, set: string | null, painting: string,
+  runs: ReturnType<typeof readRuns>): SourceCoverSet {
+  const inputs: SourceCoverSet['inputs'] = [];
+  for (const run of (runs.single ? ['full'] : ['full', 'head']) as Array<'full' | 'head'>) {
+    const layers = runs[run];
+    inputs.push({ run, file: basename(layers.source),
+      sha256: createHash('sha256').update(readFileSync(layers.source)).digest('hex'),
+      layers: layers.layers.map(layer => ({ layer: layer.name,
+        image: layer.file === null ? null : relative(dirname(layers.source), layer.file).split(sep).join('/') })) });
+  }
+  return { set, painting_sha256: createHash('sha256').update(readFileSync(painting)).digest('hex'),
+    grid: result.parts.rig_size, inputs, ...result.sourceCover,
+    inherited_parts: [], hidden_parts: [],
+    output_assets: result.parts.parts.map(part => ({ part: part.name, image: `${part.name}.png` })) };
+}
+
 /** Read, assemble, and write only after every refusal has had its chance. Throws a PartsError on a refusal, having written nothing. */
 export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, log: Log): AssembleResult {
   const requirementsFile = input.requirements === undefined ? null : readRequirements(input.requirements);
@@ -370,6 +388,8 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const caps = fields.limbs === undefined ? undefined : readCaps(input.config, fields.limbs);
   const result = assemble({ allocationEvent: input.allocationEvent === undefined ? undefined : event => input.allocationEvent!(event, null), source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under, ...(declaredFigure === undefined ? {} : { declaredFigure }),
     ...((cfg.assemble.take ?? []).some(t => 'part' in t) ? { regionTake: { full: takenRuns.full, head: takenRuns.head, targets: (cfg.assemble.take ?? []).flatMap(t => 'part' in t ? [t.part] : []) } } : {}), ...(caps === undefined ? {} : { caps }), seamRule: seam, projectRule: project });
+
+  const sourceCoverSets = [sourceCoverSet(result, null, input.source, read)];
 
   // Issue #454: alternate painting sets, assembled before any file is written.
   const configDir = dirname(resolve(input.config));
@@ -776,6 +796,21 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       const altCan = recomposite(fullSetPlaced, rW, rH);
       altRecomposite = recompositeRecord(measureRecomposite(altCan, altSrcRig, fullSetPlaced));
     }
+    const coverSet = sourceCoverSet(altRes, alt.name, alt.source, altRuns);
+    const sourceRows = altRes.sourceCover.parts;
+    coverSet.parts = keptRecords.flatMap(record => {
+      const direct = sourceRows.find(row => row.part === record.name);
+      if (direct !== undefined) return [direct];
+      const parent = record.cut_from ?? record.limb?.of;
+      const reading = sourceRows.find(row => row.part === parent);
+      return reading === undefined ? [] : [{ ...reading, part: record.name, source_of: reading.part }];
+    });
+    coverSet.inherited_parts = baseSlots.filter(name => !coveredSet.has(name) && !hidesSet.has(name)).map(part => ({ part, set: null }));
+    coverSet.hidden_parts = [...hidesSet];
+    coverSet.output_assets = [...new Set([...altRes.parts.parts.map(part => part.name), ...baseSlots])].map(name => ({ part: name,
+      image: hidesSet.has(name) ? null : keptRecords.some(record => record.name === name)
+        ? `${alt.name}_${name}.png` : !coveredSet.has(name) && baseSlots.includes(name) ? `${name}.png` : null }));
+    sourceCoverSets.push(coverSet);
     const alternateAllocation = altRes.paintingEdges?.allocation;
     if (alternateAllocation !== undefined) {
       allocationReports.push({
@@ -786,9 +821,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
           source: { painting_sha256: createHash('sha256').update(readFileSync(alt.source)).digest('hex') },
           stage: 'paintingEdges after piece guarding and restoration',
           membership: 'pre-filter-alternate-assembly',
-          output_assets: [...new Set([...altRes.parts.parts.map(part => part.name), ...baseSlots])].map(name => ({ part: name,
-            image: hidesSet.has(name) ? null : keptRecords.some(record => record.name === name)
-              ? `${alt.name}_${name}.png` : !coveredSet.has(name) ? `${name}.png` : null })),
+          output_assets: coverSet.output_assets,
           inherited_parts: baseSlots.filter(name => !coveredSet.has(name) && !hidesSet.has(name)),
           hidden_parts: [...hidesSet],
           ...alternateAllocation,
@@ -847,6 +880,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const outputFiles = new Set([
     outs.partsJson, outs.recomposite, outs.errorMap,
     join(dirname(outs.partsJson), PAINTING_ALLOCATION_FILE),
+    join(dirname(outs.partsJson), SOURCE_COVER_FILE),
     join(dirname(outs.partsJson), PAINTING_IN_RIG_FILE),
     join(dirname(outs.partsJson), SUPPORT_DOMAINS_FILE),
     join(dirname(outs.partsJson), CUT_MATERIAL_SOURCES),
@@ -897,6 +931,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     sha256: createHash('sha256').update(paintingBytes).digest('hex'), resample: 'lanczos3-rgb-opaque' };
   writeFileSync(join(dirname(outs.partsJson), PAINTING_IN_RIG_FILE), paintingBytes);
   writeParts(outs.partsJson, result.parts);
+  writeFileSync(join(dirname(outs.partsJson), SOURCE_COVER_FILE), JSON.stringify(sourceCoverReport(sourceCoverSets), null, 2) + '\n');
   const stageMapPath = join(dirname(outs.partsJson), STAGE_MAP_FILE);
   if (result.stageMap === undefined) rmSync(stageMapPath, { force: true });
   else writeFileSync(stageMapPath, JSON.stringify(result.stageMap) + '\n');
@@ -2533,7 +2568,7 @@ export interface BuildRunners {
 }
 
 /** Every path `build` writes under `--out`, relative — and so every path it clears first. */
-export const BUILD_OWNS: readonly string[] = ['parts', 'parts.json', PAINTING_IN_RIG_FILE, 'recomposite_rig.png', ERROR_MAP_FILE, 'rig', 'check', 'idle.gif', 'idle.png', 'idle-indexed.png'];
+export const BUILD_OWNS: readonly string[] = ['parts', 'parts.json', SOURCE_COVER_FILE, PAINTING_IN_RIG_FILE, 'recomposite_rig.png', ERROR_MAP_FILE, 'rig', 'check', 'idle.gif', 'idle.png', 'idle-indexed.png'];
 
 export type BuildStage = 'assemble' | 'rig' | 'check' | 'loop' | 'artifact';
 
