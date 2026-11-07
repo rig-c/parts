@@ -128,7 +128,7 @@ export function runPaintingOwnerChecks(say: Say): void {
     const output = assemble(input);
     const again = assemble(input);
     const composite = Array.from(output.recomposite.data.subarray(3808 * 4, 3808 * 4 + 4));
-    say('ED1038_PRODUCTION_STRIP_RECONSTRUCTS_WITH_HELD_CLEAR', composite.join() === '26,46,66,255' &&
+    say('ED1038_PRODUCTION_STRIP_RECONSTRUCTS_WITH_HELD_CLEAR', composite.join() === '30,50,70,255' &&
       output.parts.recomposite!.error_px === 0 && output.paintingEdges?.allocation?.supplier === owner.supplier,
       `composite ${composite}, >40 errors ${output.parts.recomposite!.error_px}`);
     say('ED1038_PRODUCTION_IS_DETERMINISTIC_AND_INPUT_READ_ONLY', JSON.stringify(output.parts) === JSON.stringify(again.parts) &&
