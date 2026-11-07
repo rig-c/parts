@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.25.0](https://github.com/rig-c/parts/compare/v2.24.0...v2.25.0) (2026-11-07)
+
+
+### Features
+
+* **assemble:** report cover by source layer per planned part ([#1158](https://github.com/rig-c/parts/issues/1158)) ([#1162](https://github.com/rig-c/parts/issues/1162)) ([51bb19c](https://github.com/rig-c/parts/commit/51bb19c7422bcfacd3f501ebe84d4d9daa725694))
+* **parts:** enumerate the files parts.json references, with their role ([#1163](https://github.com/rig-c/parts/issues/1163)) ([#1167](https://github.com/rig-c/parts/issues/1167)) ([62208d6](https://github.com/rig-c/parts/commit/62208d6e6db094e6e1ee213c23d495ed98b04a7b))
+
 ## [2.24.0](https://github.com/rig-c/parts/compare/v2.23.4...v2.24.0) (2026-11-07)
 
 

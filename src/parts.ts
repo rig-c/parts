@@ -777,7 +777,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
   }
   if ('parts' in o && !(Array.isArray(o.parts) && o.parts.length > 0)) fail('PARTS_FIELD_TYPE', `${path} field "parts"`, `is ${show(o.parts)}; a non-empty array is required`);
   if (Array.isArray(o.parts)) {
-    const seen = new Map<string, number>();
+    const seen = new Map<string, { index: number; name: string }>();
     o.parts.forEach((p, i) => {
       const at = `${path} parts[${i}]`;
       if (typeof p !== 'object' || p === null || Array.isArray(p)) {
@@ -796,8 +796,8 @@ function checkParts(raw: unknown, path: string): PartsFile {
       }
       if (!isPartName(r.name)) {
         fail('PARTS_FIELD_TYPE', `${label} field "name"`, `is ${show(r.name)}; a file-name-safe part name is required`);
-      } else if (seen.has(r.name)) fail('PARTS_NAME_UNIQUE', label, `appears at parts[${seen.get(r.name)}] and parts[${i}]`);
-      else seen.set(r.name, i);
+      } else if (seen.has(r.name.toLowerCase())) fail('PARTS_NAME_UNIQUE', label, `appears at parts[${seen.get(r.name.toLowerCase())!.index}] ("${seen.get(r.name.toLowerCase())!.name}") and parts[${i}] ("${r.name}")`);
+      else seen.set(r.name.toLowerCase(), { index: i, name: r.name });
       const from = typeof r.from === 'string' ? readFrom(r.from) : null;
       if (from === null) fail('PARTS_FROM_KNOWN', `${label} field "from"`, `is ${show(r.from)}; "<full|head>:<v3 tag>", "<full|head>:author:<label>" for a layer the author made, or "painting:<the part's own name>" for a patch, is required`);
       else if (from.run === 'painting' && from.patch !== r.name) {

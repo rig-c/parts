@@ -1,3 +1,4 @@
+import { sourceCoverRun, type SourceCoverReading } from './sourcecover.ts';
 import { paintingReceivers, rawPaintingOwner } from './paintingowner.ts';
 import { hiddenExtentProblems, type HiddenExtentDeclaration, type HiddenExtentSource } from './hiddenextent.ts';
 import { headBoxInside } from './headbox.ts';
@@ -2298,9 +2299,10 @@ export function pixelOwners(rigLayers: readonly Raster[], rank: readonly number[
  * masks mark own-layer art under a subset set's actual cover (alpha above 8);
  * those pixels are occluded, outside every projection core, and never recoloured.
  */
-export function projectSource(rigLayers: Raster[], srcr: Raster, frame: Frame, run: Run, rule: ProjectRule = DEFAULT_PROJECT_RULE, rank: readonly number[] | null = null, keep: ReadonlyArray<Mask | null> | null = null, changed?: (layer: number, rigPixel: number) => void): ProjectionStats[] {
+export function projectSource(rigLayers: Raster[], srcr: Raster, frame: Frame, run: Run, rule: ProjectRule = DEFAULT_PROJECT_RULE, rank: readonly number[] | null = null, keep: ReadonlyArray<Mask | null> | null = null, changed?: (layer: number, rigPixel: number) => void, observeOwners?: (owner: ArrayLike<number>) => void): ProjectionStats[] {
   const { W, H } = frame;
   const owner = pixelOwners(rigLayers, rank);
+  observeOwners?.(owner);
   const inFront = (o: number, i: number): boolean => frontOf(o, i, rank);
   let win: Mask | null = null;
   if (run === 'head') {
@@ -4725,6 +4727,8 @@ export function softOcclusionLine(r: SoftOcclusionReading): string {
 }
 
 export interface AssembleResult {
+  /** Direct projection-input cover; separate from final output visibility. */
+  sourceCover: SourceCoverReading;
   /** Compressed per-pixel classification, present only when requested. */
   stageMap?: StageMap;
   /** The already-resampled opaque painting used by this assembly. */
@@ -5097,6 +5101,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   const valueBaselines = new Map<string, ValueBaseline | null>();
   // Extend-only rasters are still projected/merged, but are never emitted as own sources.
   const readKeys = new Set(sourcePlan.map(([, run, tag]) => `${run}:${tag}`));
+  const sourceCover: SourceCoverReading = { sources: [], parts: [] };
   const rig = new Map<string, Raster>();
   const stats = new Map<string, ProjectionStats>();
   const ghost: Record<string, number> = {};
@@ -5188,7 +5193,13 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       valueBaselines.set(key, raw === null ? null : compactValueBaseline(raw));
       return ids;
     });
-    const st = projectSource(rigLayers, srcr, frame, run, projectRule, rank, keep, (i, p) => { if (writes[i] !== null) (writes[i] as Int32Array)[p] = AW.sourceProjection; });
+    const st = projectSource(rigLayers, srcr, frame, run, projectRule, rank, keep, (i, p) => { if (writes[i] !== null) (writes[i] as Int32Array)[p] = AW.sourceProjection; }, owners => {
+      if (targets !== undefined && beforeTake === null) return;
+      const reading = sourceCoverRun(run, set, run === 'full' ? fullPadded : depthHeadInput,
+        rigLayers, rank, sourcePlan, extend, owners, (o, i) => frontOf(o, i, rank), keep);
+      sourceCover.sources.push(...reading.sources);
+      sourceCover.parts.push(...reading.parts);
+    });
     writes.forEach((ids, i) => { if (ids !== null) layerWriters.set(`${run}:${layers[i].tag}`, ids); });
     writes.length = 0;
     layers.forEach((l, i) => {
@@ -6038,8 +6049,8 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   });
   refuseIfAny(empty);
   const placed: PlacedPart[] = order.map((d) => ('plan' in d ? planned[d.plan] : 'cut' in d ? cutPlaced[d.cut] : 'limb' in d ? limbPlaced[d.limb] : cut[d.patch]) as PlacedPart);
-  const artFiles = new Set(placed.map(p => `${p.record.name}.png`));
-  for (const p of placed) if (p.record.depth !== undefined && artFiles.has(p.record.depth.image)) refuseIfAny([{ code: 'DEPTH_SHEET_UNAMBIGUOUS', object: p.record.depth.image, detail: 'collides with a part artwork filename; choose noncolliding part names before sheet emission' }]);
+  const artFiles = new Map<string, string>(); for (const p of placed) { const k = `${p.record.name}.png`.toLowerCase(), prev = artFiles.get(k); if (prev !== undefined) refuseIfAny([{ code: 'DEPTH_SHEET_UNAMBIGUOUS', object: `${p.record.name}.png`, detail: `part "${prev}" ("${prev}.png") and part "${p.record.name}" ("${p.record.name}.png") collides with a part artwork filename; choose noncolliding part names before sheet emission` }]); artFiles.set(k, p.record.name); }
+  for (const p of placed) if (p.record.depth !== undefined && artFiles.has(p.record.depth.image.toLowerCase())) refuseIfAny([{ code: 'DEPTH_SHEET_UNAMBIGUOUS', object: p.record.depth.image, detail: `part "${p.record.name}" sheet "${p.record.depth.image}" and part "${artFiles.get(p.record.depth.image.toLowerCase())}" ("${artFiles.get(p.record.depth.image.toLowerCase())}.png") collides with a part artwork filename; choose noncolliding part names before sheet emission` }]);
 
 
   const regionSupport = new Map<string, Mask>();
@@ -6123,7 +6134,9 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   const supportSilhouette = opaqueSource && visibleFigure === undefined ? silhouette ?? figureSilhouette(srcr, supportPainted) : null;
   const supportFigure = visibleFigure ?? (supportSilhouette === null ? undefined : newMask(W, H));
   if (supportFigure !== undefined && supportSilhouette !== null) for (let p = 0; p < supportPainted.length; p++) supportFigure.data[p] = supportSilhouette.data[p] & supportPainted[p];
+  sourceCover.parts.sort((a, b) => sourcePlan.findIndex(([name]) => name === a.part) - sourcePlan.findIndex(([name]) => name === b.part));
   return {
+    sourceCover,
     ...(softOcclusion.length === 0 ? {} : { softOcclusion }),
     ...(!single ? { cropClipped: cropClippedLines(plan, extend, (run, tag) => rig.get(`${run}:${tag}`) ?? null, frame) } : {}),
     paintingInRig: srcr,
