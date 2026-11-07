@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeCheckRig, writeMergedCheckRig } from '../fixtures/checkrig.ts';
+import { blankRigcRunClock } from '../fixtures/rigc_run_clock.ts';
 import { checkStage } from '../src/build.ts';
 import type { RigcRunner } from '../src/check.ts';
 import { PartsError } from '../src/errors.ts';
@@ -10,12 +11,12 @@ import { PartsError } from '../src/errors.ts';
 type Say = (name: string, pass: boolean, detail: string) => void;
 const isExtremes = (args: readonly string[]): boolean => args.includes('--extremes') || args.includes('--extremes-only');
 const json = (path: string): Record<string, unknown> => JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
-const bytes = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex');
+const bytes = (path: string, name = ''): string => createHash('sha256').update(blankRigcRunClock(readFileSync(path), name)).digest('hex');
 function tree(dir: string, prefix = ''): string[] {
   return readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0).flatMap(e => {
     if (prefix === '' && e.name === 'extremes') return [];
     const name = prefix + e.name;
-    return e.isDirectory() ? tree(join(dir, e.name), name + '/') : [name + ':' + bytes(join(dir, e.name))];
+    return e.isDirectory() ? tree(join(dir, e.name), name + '/') : [name + ':' + bytes(join(dir, e.name), name)];
   });
 }
 
