@@ -970,9 +970,15 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   writeSupportDomains(outs.partsJson, outs.partsDir, result.parts, result.supportDomains, supportDeclarations);
   writePng(outs.recomposite, result.recomposite);
   writePng(outs.errorMap, result.errorMap);
-  // Issue #242: under config.scene, the figure the recomposite was read inside, beside the recomposite.
+  // Issue #242: under config.scene, the figure the recomposite was read inside, beside the recomposite (and beside parts.json when separate, #1177).
   const figurePath = result.figure === null ? null : join(dirname(outs.recomposite), FIGURE_MASK_FILE);
-  if (figurePath !== null) writePng(figurePath, result.figure as Raster);
+  if (figurePath !== null) {
+    const figureBytes = encodePngBytes(result.figure as Raster);
+    writeFileSync(figurePath, figureBytes);
+    if (resolve(dirname(outs.partsJson)) !== resolve(dirname(outs.recomposite))) writeFileSync(join(dirname(outs.partsJson), FIGURE_MASK_FILE), figureBytes);
+  } else if (resolve(dirname(outs.partsJson)) !== resolve(dirname(outs.recomposite))) {
+    rmSync(join(dirname(outs.partsJson), FIGURE_MASK_FILE), { force: true });
+  }
   const [W, H] = result.parts.rig_size;
   log(`rig-parts assemble: ${result.images.length} part(s) on a ${W}x${H} rig (${result.parts.scale_rig_per_source} rig px per source px), seam rule ${result.seamRule}, projection rule ${result.projectRule}`);
   // Issue #996: a ground declared or defaulted plain whose border ring is not one colour, under project: visible only.

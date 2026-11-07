@@ -1,10 +1,11 @@
 import { partsStringFieldFaults } from './parts_file_field_inventory.ts';
 /** Observe the production readers on generated manifests, including a reader-only plant. */
 import { createHash } from 'node:crypto';
-import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
-import { partsFileReferences, readParts, type PartsFile } from '../src/parts.ts';
+import { assembleConfig, EXPECTED_PARTS, writeAssembleFixture } from '../fixtures/assemble_fixture.ts';
+import { FIGURE_MASK_FILE, partsFileReferences, readParts, type PartsFile } from '../src/parts.ts';
 import { encodePngBytes } from '../src/raster/png.ts';
 import { PartsError } from '../src/errors.ts';
 import { newRaster } from '../src/raster/types.ts';
@@ -319,4 +320,180 @@ console.log(JSON.stringify(outcomes));
   plantReader('DEPTHWORKFLOW_APPLY_DEPTH', 'src/depthworkflow.ts', 'join(input.parts, depthImageReference(p.depth).path)', "join(input.parts, 'parts', 'stale.png')", stageFixture, `${collectExclusionNote}; robe has depth robe-depth.png and is absent from recipe.parts and recipe.clear`);
   plantReader('CUTMATERIALIO_WRITE', 'src/cutmaterialio.ts', 'hash(join(dirname(partsDir),partImageReference(p).path))', "hash(join(dirname(partsDir),'parts','stale.png'))");
   plantReader('CUTMATERIALIO_READ', 'src/cutmaterialio.ts', 'const file=join(home,partImageReference(part).path);', "const file=join(home,'parts','stale.png');");
+
+  cpSync(join(root, 'cli.ts'), join(isolated, 'cli.ts'));
+  cpSync(join(root, 'tools'), join(isolated, 'tools'), { recursive: true });
+  const sceneFixture = join(dir, 'scene-fixture');
+  const skirtTop = EXPECTED_PARTS.parts.find(p => p.name === 'bottomwear') as { x: number; y: number; w: number };
+  const torsoTop = EXPECTED_PARTS.parts.find(p => p.name === 'topwear') as { x: number; y: number; w: number };
+  const sceneCfg = {
+    ...assembleConfig(),
+    scene: {},
+    bones: [
+      { name: 'anchor', parent: 'root', at: [0, 0] },
+      { name: 'chest', parent: 'root', at: [torsoTop.x + torsoTop.w / 2, torsoTop.y] },
+      { name: 'skirt', parent: 'root', at: [skirtTop.x + skirtTop.w / 2, skirtTop.y] },
+    ],
+    regions: { ...(assembleConfig().regions as Record<string, string>), topwear: 'chest', bottomwear: 'skirt' },
+    motion: {
+      duration: 1,
+      tracks: [
+        { bone: 'chest', prop: 'translatey', amp: 1, period: 1, phase: 0 },
+        { bone: 'skirt', prop: 'rotate', amp: 2, period: 1, phase: 0 },
+      ],
+    },
+  };
+  writeAssembleFixture(sceneFixture, sceneCfg);
+  interface LayoutRowOutcome { path: string; role: string; ok: boolean; sha256?: string; code?: string; message?: string }
+  interface LayoutOutcome { layout: 'build' | 'assemble'; status: number; rows: LayoutRowOutcome[]; missing: LayoutRowOutcome[] }
+  interface SceneLayoutsObservation {
+    layouts: LayoutOutcome[];
+    renderFigureSha256: string | null;
+    rigFigureSha256: string | null;
+    buildFigureSha256: string | null;
+  }
+  const sha256Of = (filePath: string): string => createHash('sha256').update(readFileSync(filePath)).digest('hex');
+  const observeSceneLayouts = (sourceRoot: string, label: string): SceneLayoutsObservation => {
+    const outRoot = join(dir, `scene-layouts-${label}`);
+    rmSync(outRoot, { recursive: true, force: true });
+    const buildOut = join(outRoot, 'build');
+    const assembleOut = join(outRoot, 'assemble');
+    const cliPath = join(sourceRoot, 'cli.ts');
+    const commonArgs = [
+      '--config', join(sceneFixture, 'config.json'),
+      '--source', join(sceneFixture, 'painting.png'),
+      '--full', join(sceneFixture, 'full'),
+      '--head', join(sceneFixture, 'head'),
+    ];
+    const buildRun = spawnSync(process.execPath, [cliPath, 'build', '--no-extremes', ...commonArgs, '--out', buildOut], { cwd: sourceRoot, encoding: 'utf8', timeout: 60000 });
+    const assembleRun = spawnSync(process.execPath, [cliPath, 'assemble', ...commonArgs, '--out', assembleOut], { cwd: sourceRoot, encoding: 'utf8', timeout: 60000 });
+    const layouts: LayoutOutcome[] = [];
+    for (const [layout, status, partsDir] of [
+      ['build', buildRun.status ?? 1, buildOut],
+      ['assemble', assembleRun.status ?? 1, join(assembleOut, 'rig')],
+    ] as const) {
+      const rows = partsFileReferences(partsDir).map((row): LayoutRowOutcome => {
+        try {
+          return { path: row.path, role: row.role, ok: true, sha256: sha256Of(join(partsDir, row.path)) };
+        } catch (error) {
+          const err = error as NodeJS.ErrnoException;
+          return { path: row.path, role: row.role, ok: false, code: err.code, message: err.message };
+        }
+      });
+      layouts.push({ layout, status, rows, missing: rows.filter(r => !r.ok) });
+    }
+    const safeSha = (p: string): string | null => {
+      try { return sha256Of(p); } catch { return null; }
+    };
+    return {
+      layouts,
+      renderFigureSha256: safeSha(join(assembleOut, 'render', FIGURE_MASK_FILE)),
+      rigFigureSha256: safeSha(join(assembleOut, 'rig', FIGURE_MASK_FILE)),
+      buildFigureSha256: safeSha(join(buildOut, FIGURE_MASK_FILE)),
+    };
+  };
+  const sceneGreen = observeSceneLayouts(root, 'green');
+  const stripSha = (rows: LayoutRowOutcome[]) => rows.map(({ path: p, role }) => ({ path: p, role }));
+  say(
+    'PT1177_SCENE_BUILD_AND_STANDALONE_ASSEMBLE_RESOLVE_ALL_REFERENCES',
+    sceneGreen.layouts.length === 2 &&
+      sceneGreen.layouts.every(l =>
+        l.status === 0 &&
+        l.missing.length === 0 &&
+        l.rows.some(r => r.path === 'figure_rig.png' && r.role === 'figure_mask' && r.ok) &&
+        l.rows.some(r => r.path === 'painting_in_rig.png' && r.role === 'painting' && r.ok)) &&
+      JSON.stringify(stripSha(sceneGreen.layouts[0].rows)) === JSON.stringify(stripSha(sceneGreen.layouts[1].rows)) &&
+      sceneGreen.rigFigureSha256 !== null &&
+      sceneGreen.rigFigureSha256 === sceneGreen.renderFigureSha256 &&
+      sceneGreen.rigFigureSha256 === sceneGreen.buildFigureSha256,
+    JSON.stringify(sceneGreen),
+  );
+  const buildSource = join(isolated, 'src/build.ts');
+  const buildOriginal = readFileSync(buildSource, 'utf8');
+  const buildBeforeMd5 = createHash('md5').update(readFileSync(buildSource)).digest('hex');
+  const buildPlantTarget = '    if (resolve(dirname(outs.partsJson)) !== resolve(dirname(outs.recomposite))) writeFileSync(join(dirname(outs.partsJson), FIGURE_MASK_FILE), figureBytes);';
+  const buildPlanted = buildOriginal.replace(buildPlantTarget, '');
+  if (buildPlanted === buildOriginal) throw new Error('missing mutation target for PT1177 in src/build.ts');
+  try {
+    writeFileSync(buildSource, buildPlanted);
+    const buildPlantedMd5 = createHash('md5').update(readFileSync(buildSource)).digest('hex');
+    const sceneRed = observeSceneLayouts(isolated, 'mutant');
+    const buildLayout = sceneRed.layouts.find(l => l.layout === 'build');
+    const assembleLayout = sceneRed.layouts.find(l => l.layout === 'assemble');
+    say(
+      'PT1177_SKIPPING_PARTS_DIR_FIGURE_MASK_COPY_FAILS_WITH_ENOENT',
+      buildPlantedMd5 !== buildBeforeMd5 &&
+        buildLayout?.status === 0 &&
+        buildLayout.missing.length === 0 &&
+        assembleLayout?.status === 0 &&
+        assembleLayout.missing.length === 1 &&
+        assembleLayout.missing[0].path === 'figure_rig.png' &&
+        assembleLayout.missing[0].role === 'figure_mask' &&
+        assembleLayout.missing[0].code === 'ENOENT' &&
+        (assembleLayout.missing[0].message ?? '').includes('figure_rig.png') &&
+        sceneRed.renderFigureSha256 !== null &&
+        sceneRed.rigFigureSha256 === null,
+      JSON.stringify({ file: 'src/build.ts', removed: buildPlantTarget.trim(), beforeMd5: buildBeforeMd5, plantedMd5: buildPlantedMd5, red: sceneRed }),
+    );
+  } finally {
+    writeFileSync(buildSource, buildOriginal);
+  }
+  const sceneRestored = observeSceneLayouts(isolated, 'restored');
+  const buildAfterMd5 = createHash('md5').update(readFileSync(buildSource)).digest('hex');
+  say(
+    'PT1177_FIGURE_MASK_COPY_PLANT_REMOVED_AND_RESTORED',
+    buildAfterMd5 === buildBeforeMd5 &&
+      sceneRestored.layouts.every(l => l.status === 0 && l.missing.length === 0) &&
+      sceneRestored.rigFigureSha256 !== null &&
+      sceneRestored.rigFigureSha256 === sceneRestored.renderFigureSha256 &&
+      sceneRestored.rigFigureSha256 === sceneRestored.buildFigureSha256,
+    `plant removed, tree restored, src/build.ts md5 ${buildAfterMd5}; pre-plant md5 ${buildBeforeMd5}; rig/render/build figure_rig.png sha256 ${sceneRestored.rigFigureSha256}`,
+  );
+  const plainCfgPath = join(dir, 'plain-config.json');
+  writeFileSync(plainCfgPath, JSON.stringify(assembleConfig(), null, 2) + '\n');
+  const reuseW = join(dir, 'scene-then-plain-assemble');
+  const firstSceneAssemble = spawnSync(
+    process.execPath,
+    [
+      join(root, 'cli.ts'),
+      'assemble',
+      '--config', join(sceneFixture, 'config.json'),
+      '--source', join(sceneFixture, 'painting.png'),
+      '--full', join(sceneFixture, 'full'),
+      '--head', join(sceneFixture, 'head'),
+      '--out', reuseW,
+    ],
+    { cwd: root, encoding: 'utf8', timeout: 60000 },
+  );
+  const rigFigureAfterScene = existsSync(join(reuseW, 'rig', FIGURE_MASK_FILE));
+  const secondPlainAssemble = spawnSync(
+    process.execPath,
+    [
+      join(root, 'cli.ts'),
+      'assemble',
+      '--config', plainCfgPath,
+      '--source', join(sceneFixture, 'painting.png'),
+      '--full', join(sceneFixture, 'full'),
+      '--head', join(sceneFixture, 'head'),
+      '--out', reuseW,
+    ],
+    { cwd: root, encoding: 'utf8', timeout: 60000 },
+  );
+  const rigFigureAfterPlain = existsSync(join(reuseW, 'rig', FIGURE_MASK_FILE));
+  const plainRefsAfterReuse = partsFileReferences(join(reuseW, 'rig'));
+  say(
+    'PT1177_NON_SCENE_ASSEMBLE_CLEARS_STALE_PARTS_DIR_FIGURE_MASK',
+    firstSceneAssemble.status === 0 &&
+      rigFigureAfterScene &&
+      secondPlainAssemble.status === 0 &&
+      !rigFigureAfterPlain &&
+      !plainRefsAfterReuse.some(r => r.role === 'figure_mask' || r.path === FIGURE_MASK_FILE),
+    JSON.stringify({
+      sceneStatus: firstSceneAssemble.status,
+      rigFigureAfterScene,
+      plainStatus: secondPlainAssemble.status,
+      rigFigureAfterPlain,
+      plainRefs: plainRefsAfterReuse,
+    }),
+  );
 }
