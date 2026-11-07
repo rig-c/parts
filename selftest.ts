@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { blankRigcRunClock } from './fixtures/rigc_run_clock.ts';
 import { runPartsCheckChecks } from './fixtures/parts_check_checks.ts';
 import { runSourceCoverChecks } from './fixtures/source_cover_checks.ts';
 import { runPartsFileReferenceChecks } from './tools/parts_file_references.ts';
@@ -37411,7 +37412,8 @@ interface HarnessResult {
 
 /**
  * Where two output trees differ: every file under either, byte for byte, after
- * `normalise` (identity unless a caller names a value the clock writes). Each
+ * `normalise` (identity unless a caller names a value the clock writes; rigc's
+ * own run stamp always has its two clock values blanked first). Each
  * line names the file relative to its tree. Empty means byte-identical; an
  * empty first tree is a difference, so two trees of nothing never agree.
  */
@@ -37425,8 +37427,8 @@ function treeDiff(a: string, b: string, normalise: (bytes: Buffer, file: string)
       out.push(`${f}: only under ${fa.includes(f) ? a : b}`);
       continue;
     }
-    const x = normalise(readFileSync(join(a, f)), f);
-    const y = normalise(readFileSync(join(b, f)), f);
+    const x = normalise(blankRigcRunClock(readFileSync(join(a, f)), f), f);
+    const y = normalise(blankRigcRunClock(readFileSync(join(b, f)), f), f);
     if (x.equals(y)) continue;
     let at = 0;
     while (at < x.length && at < y.length && x[at] === y[at]) at++;
