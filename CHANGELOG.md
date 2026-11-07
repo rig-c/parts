@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.24.0](https://github.com/rig-c/parts/compare/v2.23.4...v2.24.0) (2026-11-07)
+
+
+### Features
+
+* **config:** enumerate requirements-resolved check inputs ([#1138](https://github.com/rig-c/parts/issues/1138)) ([#1160](https://github.com/rig-c/parts/issues/1160)) ([270fb32](https://github.com/rig-c/parts/commit/270fb3283f80e61f6bdb20ed6342c4791a1d4082))
+
 ## [2.23.4](https://github.com/rig-c/parts/compare/v2.23.3...v2.23.4) (2026-11-06)
 
 
