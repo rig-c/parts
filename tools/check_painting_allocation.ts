@@ -228,6 +228,17 @@ export function runPaintingAllocationChecks(say: Say): void {
       existsSync(join(nearMissOut, 'painting_allocation.Warm.json')) &&
       existsSync(join(nearMissOut, 'painting_allocation.cool.json')),
       JSON.stringify({ caseProblems: caseAllocErr?.problems.filter(p => p.code === 'PAINTING_ALLOCATION_UNAMBIGUOUS'), nfdProblems: nfdAllocErr?.problems.filter(p => p.code === 'PAINTING_ALLOCATION_UNAMBIGUOUS') }));
+    const coreReuseOut = join(directory, 'core-reuse');
+    const coreReuseOuts = { partsJson: join(coreReuseOut, 'parts.json'), partsDir: join(coreReuseOut, 'parts'),
+      recomposite: join(coreReuseOut, 'recomposite.png'), errorMap: join(coreReuseOut, 'error.png') };
+    const reportNames = ['painting_allocation.json', 'painting_allocation.one.json', 'painting_allocation.two.json'];
+    assembleStage({ ...input, project: 'visible', alts: [{ name: 'one', ...alt }, { name: 'two', ...alt }] }, coreReuseOuts, () => {});
+    const visibleWritten = reportNames.filter(name => existsSync(join(coreReuseOut, name)));
+    assembleStage({ ...input, project: 'core', alts: [{ name: 'one', ...alt }, { name: 'two', ...alt }] }, coreReuseOuts, () => {});
+    const coreRemaining = reportNames.filter(name => existsSync(join(coreReuseOut, name)));
+    say('ED1156_CORE_REUSE_WITH_ALTERNATES_REMOVES_PRIMARY_AND_ALTERNATE_REPORTS',
+      JSON.stringify(visibleWritten) === JSON.stringify(reportNames) && coreRemaining.length === 0,
+      JSON.stringify({ visibleWritten, coreRemaining }));
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }
 
