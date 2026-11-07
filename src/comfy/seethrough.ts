@@ -34,7 +34,8 @@ import { checkGraph, fillSeeThrough, type SeeThroughParams } from '../graphs.ts'
 import { readWrapperLayers } from '../layers.ts';
 import type { DepthBinding } from '../depthsheets.ts';
 import { sha256 } from '../plate.ts';
-import { decodePngBytes } from '../raster/png.ts';
+import { prepareSeeThroughInput } from '../seethrough-transform.ts';
+import { decodePngBytes, encodePngBytes } from '../raster/png.ts';
 import { ComfyClient, historyImages, refuse } from './client.ts';
 
 export const SEETHROUGH_WORKFLOW = new URL('../../workflows/seethrough.json', import.meta.url);
@@ -83,6 +84,8 @@ export async function runSeeThrough(client: ComfyClient, run: SeeThroughRun, say
   const bytes = new Uint8Array(readFileSync(run.image));
   const img = decodePngBytes(bytes, run.image);
   assertOutFree(run.out);
+  const prepared = prepareSeeThroughInput(img, run.resolution);
+  const uploadBytes = prepared.transform === undefined ? bytes : encodePngBytes(prepared.image);
 
   await client.systemStats();
   const prefix = `${run.prefix}_${crypto.randomUUID().slice(0, 8)}`;
@@ -93,8 +96,8 @@ export async function runSeeThrough(client: ComfyClient, run: SeeThroughRun, say
   refuseIfAny(checkGraph(fillSeeThrough(template, params), info, client.host, new Set(['1.image'])));
   say(`  box: every node and input of workflows/seethrough.json is on its /object_info`);
 
-  const ref = await client.uploadImage(bytes, uploadName);
-  say(`  uploaded ${run.image} (${img.width}x${img.height}) as input/${ref}`);
+  const ref = await client.uploadImage(uploadBytes, uploadName);
+  say(`  uploaded ${run.image} (${prepared.image.width}x${prepared.image.height}) as input/${ref}`);
   const graph = fillSeeThrough(template, { ...params, image: ref });
   const vramBefore = await client.vramFree();
   const id = await client.submit(graph, 'rig-parts');
@@ -148,6 +151,9 @@ export async function runSeeThrough(client: ComfyClient, run: SeeThroughRun, say
     if (depth !== undefined) for (const l of layers) if ('depth_filename' in l) writeFileSync(join(stage, 'parts', `${l.name as string}_depth.png`), await client.view(l.depth_filename as string));
     writeFileSync(join(stage, 'layers.json'), manifestBytes);
     const set = readWrapperLayers(stage, depth);
+    if (prepared.transform !== undefined && (set.canvas.w !== run.resolution || set.canvas.h !== run.resolution)) {
+      refuse('COMFY_MANIFEST_NAMED', `output/${infoLog}`, `canvas is ${set.canvas.w}x${set.canvas.h}; the prepared ${run.resolution}x${run.resolution} input grid is required`);
+    }
     const meta = {
       prompt_id: id,
       image: run.image,
@@ -166,6 +172,7 @@ export async function runSeeThrough(client: ComfyClient, run: SeeThroughRun, say
       layer_names: layers.map((l) => l.name as string),
       layers: layerHashes,
       canvas: [set.canvas.w, set.canvas.h],
+      ...(prepared.transform === undefined ? {} : { input_transform: prepared.transform }),
     };
     writeFileSync(join(stage, 'meta.json'), `${JSON.stringify(meta, null, 2)}\n`);
     if (existsSync(run.out)) rmdirSync(run.out);

@@ -5376,9 +5376,25 @@ inside, opaque black outside) and `receipt.json`, spec
 `rig-parts-plate-receipt/1` ([STABILITY](STABILITY.md#plate-receipt)). A receipted
 plate pass from this command is a recorded source step, not a repair.
 
+### See-through mask grid mapping
+
+For non-square paintings, `comfy seethrough` prepares the configured square
+before upload and records `input_transform` in `meta.json`, bound to the
+original PNG by `image_sha256`. `seethrough:` samples the union of layer
+alpha masks at transformed painting pixel centres with nearest sampling,
+using the recorded offsets and scale. Exactness holds for representable
+masks, and detail below the See-through grid's resolution is not recovered.
+The model receives the padded area as opaque black RGB because LoadImage
+separates alpha and GenerateLayers adds opaque alpha. The old wrapper-internal
+pad was transparent, so non-square model inputs differ from before.
+Square uploads omit the transform and retain the existing path. A legacy
+run on another grid still refuses `PLATE_MASK_GRID`; regenerate it through
+`comfy seethrough` to obtain a recorded transform. The record fields and
+sampling formula are specified in [STABILITY](STABILITY.md).
+
 | rule | means | change |
 | --- | --- | --- |
-| <a id="PLATE_MASK_SOURCE"></a><a id="PLATE_MASK_GRID"></a><a id="PLATE_MASK_VALUES"></a><a id="PLATE_MASK_EMPTY"></a>`PLATE_MASK_SOURCE`, `PLATE_MASK_GRID`, `PLATE_MASK_VALUES`, `PLATE_MASK_EMPTY` | no `--mask-from`, or a source directory holding no See-through run or no scene figure mask; a source on another grid than the painting; a `figure_rig.png` holding other than opaque white and black; a mask with no figure pixel | run `comfy seethrough` on the painting, or `assemble` with `config.scene`, at the painting's own size |
+| <a id="PLATE_MASK_SOURCE"></a><a id="PLATE_MASK_GRID"></a><a id="PLATE_MASK_VALUES"></a><a id="PLATE_MASK_EMPTY"></a>`PLATE_MASK_SOURCE`, `PLATE_MASK_GRID`, `PLATE_MASK_VALUES`, `PLATE_MASK_EMPTY` | no `--mask-from`, or a source directory holding no See-through run or no scene figure mask; a source on another grid without a valid recorded `input_transform`; a `figure_rig.png` holding other than opaque white and black; a mask with no figure pixel | run `comfy seethrough` on the original painting to record its input transform, or `assemble` with `config.scene` at the painting grid |
 | <a id="PLATE_MASK_RUN"></a>`PLATE_MASK_RUN` | the figure source has no readable `rig-run/1` assemble `run.json`, or its `figure_rig.png`, `parts.json` or declared `painting_in_rig.png` lacks exactly one matching output hash; or the See-through source has no readable `meta.json` with `image_sha256` and `layers` hashes, or a layer PNG on disk lacks a matching `layers` entry | re-run `assemble` with the source config to regenerate `run.json` and its `rig/` files together, or re-run `comfy seethrough` on the painting to regenerate `meta.json` and `parts/` together |
 | <a id="PLATE_MASK_PAINTING"></a>`PLATE_MASK_PAINTING` | `parts.json` has an invalid `painting_in_rig` declaration, its recorded painting is missing, undecodable or differs from its declared hash, or the supplied painting differs from the recorded opaque RGB; or the supplied painting's SHA-256 differs from a See-through source's `meta.json` `image_sha256` | use the original `--painting` file for this source, or re-run `assemble` or `comfy seethrough` on this painting |
 | <a id="PLATE_CHECKPOINT_SHA256"></a><a id="PLATE_MODEL_GIVEN"></a><a id="PLATE_CORE_GRID"></a>`PLATE_CHECKPOINT_SHA256`, `PLATE_MODEL_GIVEN`, `PLATE_CORE_GRID` | `--checkpoint-sha256` absent or not 64 hex characters; `--graph core` without `--model`; a painting off the multiple-of-8 grid under `--graph core` | the flag, or `--graph lama` |

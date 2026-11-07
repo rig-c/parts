@@ -563,12 +563,32 @@ read from the same `UPSCALE_MODEL` and `UPSCALE_THEN` constants as the graph.
 This adds provenance; it does not change model selection.
 
 See-through run metadata (`meta.json`, written by `comfy seethrough`) includes
-`image_sha256` (the SHA-256 of the `--image` PNG bytes uploaded) and `layers`
+`image_sha256` (the SHA-256 of the original `--image` PNG bytes) and `layers`
 (each written layer PNG's `{path, sha256}`, `path` relative to the run
 directory) (issue #1188, additive under *What "stable" means here*). `comfy
 plate` with `--mask-from seethrough:<dir>` binds every layer file read and
 `--painting` against those hashes and refuses a legacy `meta.json` that lacks
 them.
+
+Non-square inputs are prepared by parts before upload (issue #1197).
+Their additive `input_transform` records `source: [width,height]`,
+`padded: [side,side]`, `pad: [left,top]` in padded pixels, `scale` (target
+side divided by padded side), `resample: "parts-lanczos3-rgba"`,
+`pad_fill: "rgb-black-opaque"`, `target: [resolution,resolution]` and `inverse: "nearest-pixel-centres"`.
+The enclosing `image_sha256` is the single source-image hash. Preparation
+zero-fills the square, places the source at floor-centred offsets, and runs
+parts' RGBA Lanczos3 resampler. The wrapper receives the configured square.
+LoadImage separates the PNG's alpha from RGB, and GenerateLayers adds opaque
+alpha to that RGB. The model therefore receives the padded area as opaque
+black RGB. The old wrapper-internal pad was transparent, so non-square model
+inputs differ from before.
+Square inputs keep the existing upload bytes and omit `input_transform`.
+For each source pixel `(x,y)`, the inverse samples the layer union at
+`floor((x+left+0.5)*scale), floor((y+top+0.5)*scale)`.
+Exactness holds for representable masks, and detail below the See-through
+grid's resolution is not recovered. Missing records on another grid and
+invalid records refuse `PLATE_MASK_GRID`, while mismatched source bytes
+refuse `PLATE_MASK_PAINTING`. Existing runs are never backfilled.
 
 Revision ancestry is additive (issue #531): a previous root `remesh.json` or
 `retune.json` is preserved at `provenance/<command>-<sha256>.json`, and optional

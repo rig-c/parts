@@ -140,9 +140,28 @@ export function startFakeComfy(mode: FakeMode): FakeComfy {
     if (save !== undefined) {
       const prefix = String(save[1].inputs.filename_prefix);
       const stamp = `00000000_000000_${String(serial).padStart(8, '0')}`;
-      const layers = WRAPPER_LAYERS.map((l) => {
+      const inputName = String(nodes.find(([, n]) => n.class_type === 'LoadImage')?.[1].inputs.image);
+      const uploaded = uploads.get(inputName);
+      const input = uploaded === undefined ? undefined : decodePngBytes(uploaded, 'fake input');
+      const resolution = Number(nodes.find(([, n]) => n.class_type === 'SeeThrough_GenerateLayers')?.[1].inputs.resolution);
+      // Prepared square uploads use the fixture's known source grid. Square
+      // legacy probes retain their original small synthetic output.
+      const prepared = input?.width === resolution && input.height === resolution;
+      const scale = prepared ? resolution / CANVAS.w : 1;
+      const top = prepared ? (CANVAS.w - CANVAS.h) / 2 : 0;
+      const canvas = prepared ? { w: resolution, h: resolution } : CANVAS;
+      const layers = WRAPPER_LAYERS.map((original) => {
+        const l = { ...original, left: original.left * scale, top: (original.top + top) * scale, width: original.width * scale, height: original.height * scale };
+        const source = layerRaster(original);
+        const raster = newRaster(l.width, l.height);
+        for (let y = 0; y < raster.height; y++) {
+          for (let x = 0; x < raster.width; x++) {
+            const offset = (Math.floor(y / scale) * source.width + Math.floor(x / scale)) * 4;
+            raster.data.set(source.data.subarray(offset, offset + 4), (y * raster.width + x) * 4);
+          }
+        }
         const filename = `${prefix}_${stamp}_${l.name}.png`;
-        files.set(filename, encodePngBytes(layerRaster(l)));
+        files.set(filename, encodePngBytes(raster));
         // Hand-analytic mock writer: opaque scalar data, independently encoded
         // from the fixture's declared median. No image estimation is involved.
         const depth = newRaster(l.width, l.height), level = Math.floor(l.depth * 255 + 0.5);
@@ -152,9 +171,9 @@ export function startFakeComfy(mode: FakeMode): FakeComfy {
         return { name: l.name, filename, left: l.left, top: l.top, right: l.left + l.width, bottom: l.top + l.height, depth_median: l.depth, depth_filename: `${prefix}_${stamp}_${l.name}_depth.png` };
       });
       const manifestName = `${prefix}_${stamp}_layers.json`;
-      files.set(manifestName, new TextEncoder().encode(JSON.stringify({ prefix, timestamp: stamp, layers, width: CANVAS.w, height: CANVAS.h }, null, 2)));
+      files.set(manifestName, new TextEncoder().encode(JSON.stringify({ prefix, timestamp: stamp, layers, width: canvas.w, height: canvas.h }, null, 2)));
       if (mode === 'stale-manifest') {
-        files.set('an_earlier_run_layers.json', new TextEncoder().encode(JSON.stringify({ prefix: 'an_earlier_run', timestamp: stamp, layers, width: CANVAS.w, height: CANVAS.h })));
+        files.set('an_earlier_run_layers.json', new TextEncoder().encode(JSON.stringify({ prefix: 'an_earlier_run', timestamp: stamp, layers, width: canvas.w, height: canvas.h })));
         files.set('seethrough_psd_info.log', new TextEncoder().encode('an_earlier_run_layers.json\n'));
       } else files.set('seethrough_psd_info.log', new TextEncoder().encode(`${manifestName}\n`));
     }

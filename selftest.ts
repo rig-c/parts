@@ -39,6 +39,8 @@ import { runTurnUnitPrecedenceChecks } from './tools/check_turn_unit_precedence.
 import { runAuthoredUnitDepthChecks } from './tools/check_authored_unit_depth.ts';
 import { runDepthMapChecks } from './tools/check_depthmaps.ts';
 import { runTakeLayerChecks } from './tools/check_take_layers.ts';
+import { prepareSeeThroughInput } from './src/seethrough-transform.ts';
+import { runSeeThroughTransformChecks } from './tools/check_seethrough_transform.ts';
 import { runPlateChecks } from './tools/check_plate.ts';
 import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
 import { runPartSourceChecks } from './tools/check_part_sources.ts';
@@ -37501,10 +37503,11 @@ function runComfySuite(): number {
     const g = prompts[0];
     const uploaded = ok.uploads.length === 1 ? readFileSync(join(dir, 'st-ok.uploads', ok.uploads[0])) : null;
     const input = readFileSync(parsed.image);
+    const preparedInput = encodePngBytes(prepareSeeThroughInput(decodePngBytes(input, 'fixture'), 512).image);
     const layersRight =
       set !== null &&
       set.layers.map((l) => l.name).sort().join('|') === WRAPPER_LAYERS.map((l) => l.name).sort().join('|') &&
-      set.layers.every((l) => l.opaquePx === (WRAPPER_LAYERS.find((w) => w.name === l.name)?.painted ?? -1));
+      set.layers.every((l) => l.opaquePx === (WRAPPER_LAYERS.find((w) => w.name === l.name)?.painted ?? -1) * (512 / CANVAS.w) ** 2);
     const graphRight =
       g !== undefined &&
       g['3'].inputs.seed === 7 &&
@@ -37519,9 +37522,9 @@ function runComfySuite(): number {
     const previews = existsSync(join(out, 'previews')) ? readdirSync(join(out, 'previews')).length : 0;
     say(
       'CY01_A_GREEN_RUN_WRITES_THE_WRAPPER_FORM_THE_LAYER_READER_ACCEPTS',
-      ok.status === 0 && layersRight && graphRight && uploaded !== null && uploaded.equals(input) && hostFree && previews === 2 && meta?.seed === 7 && leftovers('st-ok').length === 1,
+      ok.status === 0 && layersRight && graphRight && uploaded !== null && uploaded.equals(preparedInput) && hostFree && previews === 2 && meta?.seed === 7 && leftovers('st-ok').length === 1,
       `exit ${ok.status}; ${set === null ? 'the layer reader refused the output' : `${set.layers.length} layers read back, opaque counts ${layersRight ? 'equal to the fixture' : 'DIFFER'}`}; ` +
-        `graph seed/resolution/steps/offload/lama/prefix ${graphRight ? 'as passed' : 'WRONG'}; upload ${uploaded === null ? 'absent' : uploaded.equals(input) ? 'byte-identical to the input' : 'differs'}; ${previews} preview(s); host in written files: ${hostFree ? 'no' : 'YES'}; routes ${[...new Set(ok.paths)].join(', ')}`,
+        `graph seed/resolution/steps/offload/lama/prefix ${graphRight ? 'as passed' : 'WRONG'}; upload ${uploaded === null ? 'absent' : uploaded.equals(preparedInput) ? 'byte-identical to the prepared input' : 'differs'}; ${previews} preview(s); host in written files: ${hostFree ? 'no' : 'YES'}; routes ${[...new Set(ok.paths)].join(', ')}`,
       'the positive control: the refusals below are only worth something if a box that answers correctly yields a layer set the next stage reads',
     );
 
@@ -37764,6 +37767,7 @@ function runComfySuite(): number {
 
     // Issue #1183: the step-4 plate producer, on the same harness run.
     runPlateChecks(dir, parsed.platePainting, R, say);
+    runSeeThroughTransformChecks(dir, say);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -56602,3 +56606,5 @@ if (import.meta.main && process.argv[2] === VALIDATION_FEATURE_FLAG) {
   await main();
   finishSelftestPeak?.();
 }
+
+export { RunTally, reportMeasuredCase, treeGuideCase, treeFiles, TEXT_FILE, tallyFaults };
