@@ -490,6 +490,7 @@ resolution before resizing; it can differ for non-opaque paintings.
 | `input-check.json` | `remesh --record-input-check`, `retune --record-input-check` | spec `rig-parts-input-check/1` (issue #617, additive): `versions` (`parts`, `rigc` — `rigc --version`'s whole output), `options` (`page_edges`, `pack_shape`, `requirements` — null, or `path` as resolved and `sha256`), `rig` and `parts` (`dir` as resolved, `files` — `path`, `bytes`, `sha256` per file: every file under `--rig`; `parts.json` and every file under `parts/`), `check` (the input's check side as `remesh.json` carries it); `--input-check` reads it back, and either command's serves the other |
 | the scene report | `compose` | spec `spine-parts-scene-report/1` |
 | `idle.png`, `idle-indexed.png`, `idle.gif` | `loop`, `build --loop` | APNG and GIF encodings of the rendered idle |
+| `run.json` | `rig`, `assemble` | spec `rig-run/1` (issue #1165, additive): `spec`, `package` (`name`, `version`), `command` (`"rig"` or `"assemble"`), `started_at` and `finished_at` (UTC ISO-8601 millisecond timestamps ending in `Z`, read in the CLI layer), `config` (`path` relative to `--out`, `sha256` of the config file on disk), and `outputs` (`path` relative to `--out`, `sha256` of each written output file on disk, sorted by `path` in code-unit order and excluding `run.json` itself); written only after the command's gate is green |
 
 Issue #705 pins setup-seam acceptance to one source-relative scale1 union U of the authored stage and all actual drawn base/checked-set still vertices. U is snapped relative to the source origin, including odd-width half phase.
 The existing seam fields and pair pictures use that grid; source/blink and
@@ -552,6 +553,49 @@ Files authors write for this package, each with a spec id the reader holds:
 `spine-parts-bonemap/1` (`compare --map`), `rig-parts-wind-band/1` (`check --wind-band`, `build --wind-band`, issue #590, additive); and one another tool writes, read as that tool defines it: rig-c/review's `rig-review-mesh-edit/1` (`remesh --delta`). The spec ids of files that existed before the rename keep the package's former
 name on purpose: they name a file format, not the tool, and a file written before
 the rename still reads. They do not change at 1.0.
+
+### Run stamp (`run.json`, spec `rig-run/1`)
+
+The CLI commands `rig` and `assemble` (when writing `--out`) write `<out>/run.json`
+after all stage gates pass and all other output files are on disk:
+
+```json
+{
+  "spec": "rig-run/1",
+  "package": { "name": "@rig-c/parts", "version": "<package.json version>" },
+  "command": "rig",
+  "started_at": "2026-11-07T00:00:00.000Z",
+  "finished_at": "2026-11-07T00:00:01.000Z",
+  "config": { "path": "../config.json", "sha256": "<hex>" },
+  "outputs": [
+    { "path": "images/cloth.png", "sha256": "<hex>" },
+    { "path": "mesh_report.json", "sha256": "<hex>" },
+    { "path": "motion.json", "sha256": "<hex>" },
+    { "path": "rig.json", "sha256": "<hex>" }
+  ]
+}
+```
+
+Key order is fixed as shown; `outputs` is sorted by `/`-separated `path` in UTF-16
+code-unit order. Every `path` in `config` and `outputs` is relative to the `--out`
+directory (`../`-prefixed when `--config` sits outside `--out`; never an absolute or
+home path). Every `sha256` is computed from the bytes on disk after writing. A refused
+run writes no `run.json`. Because `started_at` and `finished_at` record wall-clock
+time read in `cli.ts` (`src/` remains pure), `run.json` is outside the byte-for-byte
+determinism comparisons (`RG03`, `RG19`, `AS07`); for the same input at the same
+relative `--config` layout, two `run.json` files differ only in `started_at` and
+`finished_at`.
+
+`outputs` lists exactly the files the stage wrote in this run, derived from what the
+stage returns, not from a walk of `--out`: a stray or earlier file under `--out` is
+neither hashed nor listed. Before the stage starts, the command removes an earlier
+`<out>/run.json`, so a run the stage refuses, into a reused `--out`, leaves no stamp
+(a usage error, exit 2, stops before that and touches nothing under `--out`). A
+`package.json` without a non-empty `name` and `version` refuses `RUN_STAMP_PACKAGE`
+and writes no stamp. `build` and the in-process stages write no `run.json`.
+
+`rig-run/1` is stable: its keys, their order and their meaning do not change within
+the spec. A key added, removed or redefined is a new spec version.
 
 ## Environment
 
