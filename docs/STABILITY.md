@@ -562,6 +562,14 @@ Painting generation metadata includes `upscale: {model, then}` (issue #698),
 read from the same `UPSCALE_MODEL` and `UPSCALE_THEN` constants as the graph.
 This adds provenance; it does not change model selection.
 
+See-through run metadata (`meta.json`, written by `comfy seethrough`) includes
+`image_sha256` (the SHA-256 of the `--image` PNG bytes uploaded) and `layers`
+(each written layer PNG's `{path, sha256}`, `path` relative to the run
+directory) (issue #1188, additive under *What "stable" means here*). `comfy
+plate` with `--mask-from seethrough:<dir>` binds every layer file read and
+`--painting` against those hashes and refuses a legacy `meta.json` that lacks
+them.
+
 Revision ancestry is additive (issue #531): a previous root `remesh.json` or
 `retune.json` is preserved at `provenance/<command>-<sha256>.json`, and optional
 `input.provenance` rows name its source, path, bytes and SHA-256. The chain survives

@@ -27,12 +27,12 @@
  * on disk. Every path in it is relative to the receipt's own directory.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { sourceInRig } from './assemble.ts';
 import { PartsError, type Problem } from './errors.ts';
 import type { Graph } from './graphs.ts';
-import { OPAQUE_ALPHA_ABOVE, readWrapperLayers } from './layers.ts';
+import { type LayerSet, OPAQUE_ALPHA_ABOVE, readWrapperLayers } from './layers.ts';
 import { FIGURE_MASK_FILE, PAINTING_IN_RIG_FILE } from './parts.ts';
 import { decodePngBytes, encodePngBytes } from './raster/png.ts';
 import { newRaster, type Raster } from './raster/types.ts';
@@ -105,15 +105,61 @@ export interface FigureMask {
   inside: Uint8Array;
 }
 
-function maskRecord(path: string, code: string): { record: Record<string, unknown>; bytes: Uint8Array } {
+function maskRecord(path: string, code: string, remedy = 're-run assemble'): { record: Record<string, unknown>; bytes: Uint8Array } {
   try {
     const bytes = new Uint8Array(readFileSync(path));
     const value: unknown = JSON.parse(new TextDecoder().decode(bytes));
     if (typeof value === 'object' && value !== null && !Array.isArray(value)) return { record: value as Record<string, unknown>, bytes };
   } catch (err) {
-    fail(code, path, `cannot read a JSON object (${(err as Error).message}); re-run assemble`);
+    fail(code, path, `cannot read a JSON object (${(err as Error).message}); ${remedy}`);
   }
-  return fail(code, path, 'requires a JSON object; re-run assemble');
+  return fail(code, path, `requires a JSON object; ${remedy}`);
+}
+
+/**
+ * comfy seethrough writes meta.json with image_sha256 and per-layer {path, sha256}.
+ * A missing or legacy meta without hashes is refused by name, every layer file
+ * readWrapperLayers read must match its recorded entry in meta.json, and the
+ * supplied --painting bytes must match image_sha256.
+ */
+function bindSeeThroughSource(dir: string, set: LayerSet, paintingBytes: Uint8Array | undefined): void {
+  const root = resolve(dir);
+  const metaPath = join(root, 'meta.json');
+  const { record: meta } = maskRecord(metaPath, 'PLATE_MASK_RUN', 're-run comfy seethrough');
+  if (typeof meta.image_sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(meta.image_sha256) || !Array.isArray(meta.layers) || meta.layers.length === 0) {
+    fail('PLATE_MASK_RUN', metaPath, 'requires lowercase 64-hex image_sha256 and non-empty layers [{path, sha256}] from comfy seethrough; legacy or unstamped runs are refused — re-run comfy seethrough');
+  }
+  const entries = meta.layers as unknown[];
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (typeof e !== 'object' || e === null || !('path' in e) || typeof e.path !== 'string' || e.path === '' ||
+        !('sha256' in e) || typeof e.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(e.sha256)) {
+      fail('PLATE_MASK_RUN', metaPath, `layers[${i}] requires a relative path and lowercase 64-hex sha256; re-run comfy seethrough`);
+    }
+  }
+  const typedEntries = entries as Array<{ path: string; sha256: string }>;
+  const readFiles = [...set.layers, ...set.hidden];
+  for (const layer of readFiles) {
+    if (layer.file === null) {
+      fail('PLATE_MASK_RUN', metaPath, `layer "${layer.name}" has no file on disk; re-run comfy seethrough`);
+    }
+    const key = relative(root, resolve(layer.file)).split('\\').join('/');
+    const matches = typedEntries.filter((e) => e.path === key);
+    const actual = sha256(new Uint8Array(readFileSync(layer.file)));
+    if (matches.length !== 1 || matches[0].sha256 !== actual) {
+      fail('PLATE_MASK_RUN', layer.file, `sha256 is ${actual}; ${metaPath} must record exactly one layers entry for ${JSON.stringify(key)} with that hash (found ${matches.length}, hashes ${JSON.stringify(matches.map((e) => e.sha256))}); re-run comfy seethrough`);
+    }
+  }
+  if (typedEntries.length !== readFiles.length) {
+    fail('PLATE_MASK_RUN', metaPath, `records ${typedEntries.length} layer hash(es), while layers.json has ${readFiles.length}; re-run comfy seethrough`);
+  }
+  if (paintingBytes === undefined) {
+    fail('PLATE_MASK_PAINTING', metaPath, 'the supplied painting bytes are required to compare with meta.json image_sha256');
+  }
+  const actualPainting = sha256(paintingBytes);
+  if (actualPainting !== meta.image_sha256) {
+    fail('PLATE_MASK_PAINTING', metaPath, `records image_sha256 ${meta.image_sha256}; the supplied painting has sha256 ${actualPainting} — use the painting this comfy seethrough run read`);
+  }
 }
 
 /**
@@ -174,7 +220,7 @@ function bindFigureSource(dir: string, parts: Record<string, unknown>, partsByte
  * `width`x`height`, a `figure_rig.png` that is not the two values assemble
  * writes, and a mask with no figure pixel.
  */
-export function readSourceMask(source: MaskSource, dir: string, width: number, height: number, painting?: Raster): FigureMask {
+export function readSourceMask(source: MaskSource, dir: string, width: number, height: number, painting?: Raster, paintingBytes?: Uint8Array): FigureMask {
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
     fail('PLATE_MASK_SOURCE', `${source}:${dir}`, `is not a directory; ${source === 'seethrough' ? 'a See-through run directory (from `rig-parts comfy seethrough`)' : 'an assemble output directory with parts.json and figure_rig.png'} is required`);
   }
@@ -182,6 +228,7 @@ export function readSourceMask(source: MaskSource, dir: string, width: number, h
   if (source === 'seethrough') {
     if (!existsSync(join(dir, 'layers.json'))) fail('PLATE_MASK_SOURCE', `${source}:${dir}`, 'holds no layers.json; the figure layers of a See-through run are required — run `rig-parts comfy seethrough` on the painting first');
     const set = readWrapperLayers(dir);
+    bindSeeThroughSource(dir, set, paintingBytes);
     if (set.canvas.w !== width || set.canvas.h !== height) {
       fail('PLATE_MASK_GRID', `${source}:${dir}`, `is a ${set.canvas.w}x${set.canvas.h} canvas; the painting's ${width}x${height} is required — the mask is never fitted, so run See-through on the painting at its own size`);
     }
@@ -440,6 +487,8 @@ export interface PlateWrite {
   gpu: string | null;
 }
 
+let foregroundStageSeq = 0;
+
 /**
  * Write `mask.png`, `plate.png` and `receipt.json` into a staging directory
  * beside `out`, read the receipt back against the bytes on disk, and only
@@ -449,8 +498,7 @@ export interface PlateWrite {
 export function publishPlate(w: PlateWrite): PlateReceipt {
   const parent = dirname(resolve(w.out));
   mkdirSync(parent, { recursive: true });
-  const stage = join(parent, `.${basename(resolve(w.out))}.partial-${w.stageTag}`);
-  mkdirSync(stage, { recursive: true });
+  const stage = mkdtempSync(join(parent, `.${basename(resolve(w.out))}.partial-${w.stageTag}-`));
   try {
     const mask = pngWithHash(maskImage(w.mask));
     const plate = pngWithHash(w.plate);
@@ -470,8 +518,17 @@ export function publishPlate(w: PlateWrite): PlateReceipt {
     writeFileSync(join(stage, PLATE_RECEIPT_FILE), receiptText(receipt));
     const problems = verifyPlateReceipt(join(stage, PLATE_RECEIPT_FILE));
     if (problems.length > 0) throw new PartsError(problems);
-    if (existsSync(w.out)) rmdirSync(w.out);
-    renameSync(stage, w.out);
+    assertPlateOutFree(w.out);
+    try {
+      if (existsSync(w.out)) rmdirSync(w.out);
+      renameSync(stage, w.out);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOTEMPTY' || code === 'EEXIST' || code === 'ENOTDIR' || code === 'EISDIR') {
+        fail('PLATE_OUT_EMPTY', w.out, 'is a file or a directory that holds entries; an absent or empty directory is required');
+      }
+      throw err;
+    }
     return receipt;
   } finally {
     if (existsSync(stage)) rmSync(stage, { recursive: true, force: true });
@@ -501,11 +558,11 @@ export interface ForegroundRun {
 export function runForeground(run: ForegroundRun): PlateReceipt {
   const from = parseMaskFrom(run.maskFrom);
   const painting = readPlatePainting(run.painting);
-  const mask = readSourceMask(from.source, from.dir, painting.raster.width, painting.raster.height, painting.raster);
+  const mask = readSourceMask(from.source, from.dir, painting.raster.width, painting.raster.height, painting.raster, painting.bytes);
   assertPlateOutFree(run.out);
   return publishPlate({
     out: run.out,
-    stageTag: 'foreground',
+    stageTag: `foreground-${process.pid}-${++foregroundStageSeq}`,
     mode: 'foreground',
     paintingPath: run.painting,
     paintingBytes: painting.bytes,

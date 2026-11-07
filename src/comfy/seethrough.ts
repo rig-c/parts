@@ -33,6 +33,7 @@ import { refuseIfAny } from '../errors.ts';
 import { checkGraph, fillSeeThrough, type SeeThroughParams } from '../graphs.ts';
 import { readWrapperLayers } from '../layers.ts';
 import type { DepthBinding } from '../depthsheets.ts';
+import { sha256 } from '../plate.ts';
 import { decodePngBytes } from '../raster/png.ts';
 import { ComfyClient, historyImages, refuse } from './client.ts';
 
@@ -137,13 +138,20 @@ export async function runSeeThrough(client: ComfyClient, run: SeeThroughRun, say
   mkdirSync(join(stage, 'previews'), { recursive: true });
   try {
     for (const p of previews) writeFileSync(join(stage, 'previews', basename(p.filename)), await client.view(p.filename, p.subfolder, p.type));
-    for (const l of layers) writeFileSync(join(stage, 'parts', `${l.name as string}.png`), await client.view(l.filename as string));
+    const layerHashes: Array<{ path: string; sha256: string }> = [];
+    for (const l of layers) {
+      const rel = `parts/${l.name as string}.png`;
+      const layerBytes = await client.view(l.filename as string);
+      writeFileSync(join(stage, rel), layerBytes);
+      layerHashes.push({ path: rel, sha256: sha256(layerBytes) });
+    }
     if (depth !== undefined) for (const l of layers) if ('depth_filename' in l) writeFileSync(join(stage, 'parts', `${l.name as string}_depth.png`), await client.view(l.depth_filename as string));
     writeFileSync(join(stage, 'layers.json'), manifestBytes);
     const set = readWrapperLayers(stage, depth);
     const meta = {
       prompt_id: id,
       image: run.image,
+      image_sha256: sha256(bytes),
       elapsed_s: Math.round(elapsed * 10) / 10,
       vram_free_before_gb: vramBefore,
       vram_free_low_gb: vramLow,
@@ -156,6 +164,7 @@ export async function runSeeThrough(client: ComfyClient, run: SeeThroughRun, say
       lama: run.lama,
       layer_count: layers.length,
       layer_names: layers.map((l) => l.name as string),
+      layers: layerHashes,
       canvas: [set.canvas.w, set.canvas.h],
     };
     writeFileSync(join(stage, 'meta.json'), `${JSON.stringify(meta, null, 2)}\n`);
