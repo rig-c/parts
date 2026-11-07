@@ -8292,3 +8292,14 @@ Here `sourceConfig` is the absolute original config filename and `raw` is its
 JSON-parsed object. Serialize that object at the destination after copying any
 referenced files; callers that copy files can instead set their new relative
 paths. The enumerator derives membership from the loader's own declarations.
+
+`checkFileReferences(raw, configFile, requirements?)` and `CheckFileReference`
+are exported from the same `@rig-c/parts/src/config.ts` subpath (issue #1138).
+Pass the original config filename and the result of `readRequirements` from
+`@rig-c/parts/src/requirements.ts`. Rows contain `at` and `value`, with config
+references first and then `requirements.setup_painting.figure_mask.path` and
+`requirements.setup_painting.backdrop.path` when declared. Every value is
+resolved relative to the config directory, including images declared relative
+to the requirements file. Enumeration leaves both parsed inputs unchanged.
+Rig/parts-directory inputs (including seam PNGs) and separately supplied CLI
+inputs remain the caller's responsibility when relocating a check.

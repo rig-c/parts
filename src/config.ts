@@ -92,11 +92,12 @@ import type { DepthConfig } from './depthsheets.ts';
  * the field is a non-empty string.
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { RIG_BONE_INHERIT, RIG_SKIN_CONSTRAINT_KEYS, type RigBoneInherit, type RigConstraint, type RigSkinConstraintKey, type RigStop } from '@rig-c/core/rig';
 import { pyRound } from './round.ts';
 import { motionSeamProblems, type MotionSeamDeclaration } from './motionseams.ts';
-import { REQUIREMENTS_SPEC } from './requirements.ts';
+import { REQUIREMENTS_SPEC, type RequirementsFile } from './requirements.ts';
+import { setupPaintingFilePath } from './setuppainting.ts';
 import { CLOTH_TARGETS, type ClothRecipes, RECIPE_STRENGTH, RIGC_DEFAULT_DAMPING, springStable } from './cloth.ts';
 import { GRID, MAX_SIDE } from './contour.ts';
 import { type Problem, refuseIfAny } from './errors.ts';
@@ -1474,6 +1475,31 @@ export function configFileReferences(raw: unknown): ConfigFileReference[] {
     if (typeof value !== 'string' || value === '' || !field.isFile(value)) continue;
     const target = parent;
     out.push({ at: field.path.join('.'), value, set: (next) => { target[key] = next; } });
+  }
+  return out;
+}
+
+/** A declared check input, with its field and path relative to the config directory. */
+export interface CheckFileReference {
+  at: string;
+  value: string;
+}
+
+/**
+ * Config references followed by requirements-relative setup images. Pass the
+ * real reader's RequirementsFile so its path identifies the declaration's base.
+ * Rig/parts-directory inputs and separately supplied CLI inputs are not config
+ * references. This function neither reads files nor changes the parsed inputs.
+ */
+export function checkFileReferences(raw: unknown, configFile: string, requirements?: RequirementsFile): CheckFileReference[] {
+  const base = dirname(resolve(configFile));
+  const out = configFileReferences(raw).map(({ at, value }) => ({ at, value: relative(base, resolve(base, value)) }));
+  const setup = requirements?.setup_painting;
+  for (const key of ['figure_mask', 'backdrop'] as const) {
+    const declared = setup?.[key];
+    if (declared !== undefined && requirements !== undefined) {
+      out.push({ at: `requirements.setup_painting.${key}.path`, value: relative(base, setupPaintingFilePath(requirements.path, declared.path)) });
+    }
   }
   return out;
 }
