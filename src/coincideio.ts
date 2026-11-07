@@ -1,10 +1,11 @@
 /** Pre-rig pair domains and actual textured setup observations (#998). */
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { sourceSupportFigure as supportFigure } from './assemble.ts';
 import { officialRenderer, sourceSizeProblem, type CheckInputs } from './check.ts';
 import { supportReport, unownedSupport, SUPPORT_GRID_CODE, type SupportPart, type SupportReport } from './coincide.ts';
 import { refuseIfAny } from './errors.ts';
+import { partImageReference } from './parts.ts';
 import { readPng } from './raster/png.ts';
 import { assertBinary, type Mask } from './raster/types.ts';
 import { readSupportDomains } from './supportdomains.ts';
@@ -21,7 +22,7 @@ export function observeSupport(build: string, input: CheckInputs, supportSource?
   for (const part of ordered) if (!slots.has(part.name)) refuseIfAny([{ code: 'CHECK_PART_SLOT_PRESENT', object: `part "${part.name}"`, detail: 'support report requires the named setup slot; no draw order is guessed' }]);
   ordered.sort((a, b) => slots.get(a.name)! - slots.get(b.name)!);
   const art = ordered.map<SupportPart>(part => {
-    const image = readPng(join(input.partsDir, `${part.name}.png`));
+    const image = readPng(join(input.partsDir, basename(partImageReference(part).path)));
     if (image.width !== part.w || image.height !== part.h) refuseIfAny([{ code: SUPPORT_GRID_CODE, object: `part "${part.name}"`, detail: `PNG is ${image.width}x${image.height}; parts.json requires ${part.w}x${part.h}` }]);
     const mask: Mask = { width, height, data: new Uint8Array(width * height) };
     for (let y = 0; y < image.height; y++) for (let x = 0; x < image.width; x++) {
