@@ -64,10 +64,15 @@ a report and exit 1. `reported` rows have `code`, `set`, `part`, `source`, `coun
 own HOLE; malformed present reports are refused. A HOLE carries no measured zero.
 
 Bad arguments (exit 2), overlapping output, changing inputs, internal exceptions
-and publication failures (exit 1) produce no new report. Earlier reports do not
-attest to a later invocation. Consumers bind the report and current input hashes
-and read its `exit_code`. A sibling temporary file is exclusively created, then
-renamed into place. Identical inputs produce identical report bytes on repeat
+and publication failures (exit 1) produce no new report. After parsing `--out`
+and checking overlap, the command removes exactly `parts-check.json` and
+`parts-check.json.tmp` there before reading inputs. Failed input reads cannot
+leave an earlier success report. Bad arguments that prevent resolving `--out`
+cannot remove a prior report. The CLI resolves an existing `--parts` root to its
+real path before reading, including a symlinked root. Consumers bind the report
+and current input hashes and read its `exit_code`. A sibling temporary file is
+exclusively created, cleaned up after a failed write, then renamed into place.
+Identical inputs produce identical report bytes on repeat
 runs and under output roots with different parents.
 
 The diagnostic code vocabulary below is closed for `rig-parts-parts-check/1`,

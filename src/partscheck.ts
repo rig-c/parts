@@ -147,6 +147,14 @@ export function checkPartsStage(input: string, output: string, log: (line: strin
   if (within(realHome, realOut) || within(realOut, realHome)) {
     fatal('PARTS_CHECK_OUTPUT', '--out', 'overlaps --parts; a disjoint report directory is required');
   }
+  const destination = join(out, PARTS_CHECK_FILE);
+  const temporary = `${destination}.tmp`;
+  try {
+    rmSync(destination, { force: true });
+    rmSync(temporary, { force: true });
+  } catch {
+    fatal('PARTS_CHECK_PUBLISH', '--out', 'could not remove the previous report or its temporary file before reading inputs');
+  }
   const clean = (value: string): string => value.replaceAll(home, '.').replaceAll(realHome, '.');
   const refusals: Refusal[] = [];
   const refuse = (code: string, at: string, found: unknown, required: unknown, detail: string): void => {
@@ -392,13 +400,11 @@ export function checkPartsStage(input: string, output: string, log: (line: strin
   if (JSON.stringify(before) !== JSON.stringify(inventory(false))) {
     fatal('PARTS_CHECK_INPUT_CHANGED', '--parts', 'input inventory changed during the read; no report was published');
   }
-  const destination = join(out, PARTS_CHECK_FILE);
-  const temporary = `${destination}.tmp`;
   let created = false;
   try {
     mkdirSync(out, { recursive: true });
-    writeFileSync(temporary, JSON.stringify(report, null, 2) + '\n', { flag: 'wx' });
     created = true;
+    writeFileSync(temporary, JSON.stringify(report, null, 2) + '\n', { flag: 'wx' });
     if (JSON.stringify(before) !== JSON.stringify(inventory(false))) {
       fatal('PARTS_CHECK_INPUT_CHANGED', '--parts', 'input inventory changed before publication; no report was published');
     }

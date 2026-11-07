@@ -142,6 +142,19 @@ export function runPartsCheckChecks(parent: string, say: Say): void {
   say('PCK1161_PUBLISH', publish.exit === 1 && publish.text.includes('PARTS_CHECK_PUBLISH') && !publish.report && readFileSync(join(publishDir, 'blocked'), 'utf8') === 'keep', publish.text.trim());
   const usage = run(fresh(), 'usage', ['--unknown', 'value']);
   say('PCK1161_USAGE', usage.exit === 2 && usage.text.includes('USAGE') && !usage.report, usage.text.trim());
+  const leftover = fresh();
+  mkdirSync(join(leftover, 'out'));
+  writeFileSync(join(leftover, 'out', `${PARTS_CHECK_FILE}.tmp`), 'interrupted write');
+  writeFileSync(join(leftover, 'out', 'unrelated.tmp'), 'keep');
+  const recovered = run(leftover);
+  say('PCK1161_STALE_TEMP_RECOVERY', recovered.exit === 0 && recovered.report?.exit_code === 0 &&
+    !existsSync(join(leftover, 'out', `${PARTS_CHECK_FILE}.tmp`)) && readFileSync(join(leftover, 'out', 'unrelated.tmp'), 'utf8') === 'keep',
+    JSON.stringify({ exit: recovered.exit, temporary: existsSync(join(leftover, 'out', `${PARTS_CHECK_FILE}.tmp`)) }));
+  const linked = fresh();
+  symlinkSync(join(linked, 'input'), join(linked, 'linked-input'));
+  const linkedResult = cli(join(linked, 'linked-input'), join(linked, 'out'), ['--json']);
+  say('PCK1161_SYMLINKED_INPUT_ROOT', linkedResult.exit === 0 && linkedResult.report?.exit_code === 0,
+    JSON.stringify({ exit: linkedResult.exit, refusals: linkedResult.report?.refusals }));
 
   const sourcePath = join(ROOT, 'src/partscheck.ts');
   const originalMd5 = hash(sourcePath, 'md5');
@@ -156,13 +169,29 @@ export function runPartsCheckChecks(parent: string, say: Say): void {
   const fixedEqual = readFileSync(join(fixedA, PARTS_CHECK_FILE)).equals(readFileSync(join(fixedB, PARTS_CHECK_FILE)));
   say('PCK1161_DETERMINISM_MUTANT_RED_THEN_GREEN', !mutantEqual && fixedEqual && hash(sourcePath, 'md5') === originalMd5,
     `mutant equal ${mutantEqual}, restored equal ${fixedEqual}; source md5 before ${originalMd5} after ${hash(sourcePath, 'md5')}; mutant reports ${hash(join(redA, PARTS_CHECK_FILE), 'md5')} ${hash(join(redB, PARTS_CHECK_FILE), 'md5')}; restored reports ${hash(join(fixedA, PARTS_CHECK_FILE), 'md5')} ${hash(join(fixedB, PARTS_CHECK_FILE), 'md5')}`);
-  const changed = implementation(parent, 'changed-input-mutant', text => text.replace(
+  implementation(parent, 'changed-input-mutant', text => text.replace(
     '  if (JSON.stringify(before) !== JSON.stringify(inventory(false))) {',
     '  writeFileSync(join(home, "parts.json"), readFileSync(join(home, "parts.json"), "utf8") + " ");\n  if (JSON.stringify(before) !== JSON.stringify(inventory(false))) {'));
   const changeDir = fresh(); let changeCode = '';
-  try { changed(join(changeDir, 'input'), join(changeDir, 'out'), () => {}); }
-  catch (error) { if (!(error instanceof PartsError)) throw error; changeCode = error.problems[0].code; }
+  const earlier = run(changeDir);
+  const failedRun = Bun.spawnSync([process.execPath, '-e', `
+    import { checkPartsStage } from ${JSON.stringify(join(parent, 'changed-input-mutant.ts'))};
+    try { process.exitCode = checkPartsStage(process.argv[1], process.argv[2], () => {}).exit_code; }
+    catch (error) { console.log(String(error)); process.exitCode = 1; }
+  `, join(changeDir, 'input'), join(changeDir, 'out')]);
+  if (failedRun.stdout.toString().includes('PARTS_CHECK_INPUT_CHANGED')) changeCode = 'PARTS_CHECK_INPUT_CHANGED';
   say('PCK1161_INPUT_CHANGED', changeCode === 'PARTS_CHECK_INPUT_CHANGED' && !existsSync(join(changeDir, 'out', PARTS_CHECK_FILE)), changeCode);
+  say('PCK1161_STALE_SUCCESS_REMOVED_ON_FAILURE', earlier.exit === 0 && earlier.report?.exit_code === 0 &&
+    failedRun.exitCode === 1 && changeCode === 'PARTS_CHECK_INPUT_CHANGED' && !existsSync(join(changeDir, 'out', PARTS_CHECK_FILE)),
+    `green exit ${earlier.exit}, failed exit ${failedRun.exitCode}, failed code ${changeCode}, report exists ${existsSync(join(changeDir, 'out', PARTS_CHECK_FILE))}`);
+  const partial = implementation(parent, 'partial-write-mutant', text => text.replace('    created = true;',
+    '    created = true;\n    writeFileSync(temporary, "partial");\n    throw new Error("planted write failure");'));
+  const partialDir = fresh(); let partialCode = '';
+  try { partial(join(partialDir, 'input'), join(partialDir, 'out'), () => {}); }
+  catch (error) { if (!(error instanceof PartsError)) throw error; partialCode = error.problems[0].code; }
+  say('PCK1161_PARTIAL_WRITE_CLEANUP', partialCode === 'PARTS_CHECK_PUBLISH' &&
+    !existsSync(join(partialDir, 'out', `${PARTS_CHECK_FILE}.tmp`)) && !existsSync(join(partialDir, 'out', PARTS_CHECK_FILE)),
+    `code ${partialCode}, temporary exists ${existsSync(join(partialDir, 'out', `${PARTS_CHECK_FILE}.tmp`))}`);
   const unknown = implementation(parent, 'unknown-code-mutant', text => text.replaceAll("refuse('PARTS_CHECK_REPORT', name,", "refuse('UNDECLARED_CODE', name,"));
   const unknownDir = fresh(); writeFileSync(join(unknownDir, 'input/source_cover.json'), '{}'); let unknownCode = '';
   try { unknown(join(unknownDir, 'input'), join(unknownDir, 'out'), () => {}); }

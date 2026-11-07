@@ -16,7 +16,7 @@ import { applyDepth, prepareDepth } from './src/depthworkflow.ts';
  */
 import { spawnSync } from 'node:child_process';
 import { runBuildProcess, processRigcRunner as rigcRunner } from './tools/build-process.ts';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE, headGarmentOverlaps, headGarmentWarning, HOLES_LISTED, PROJECT_RULES, type ProjectRule, proposeFields, proposePlan, proposeSinglePlan, SEAM_RULES, type SeamRule } from './src/assemble.ts';
@@ -1390,7 +1390,9 @@ function cmdCheckParts(args: string[]): number {
   const values = flags(args.filter(arg => arg !== '--json'), 'check-parts', ['--parts', '--out']);
   if (typeof values === 'string') return usage(values);
   try {
-    const report = checkPartsStage(values.get('--parts') as string, values.get('--out') as string, json === 1 ? () => {} : console.log);
+    const input = values.get('--parts') as string;
+    const parts = existsSync(input) ? realpathSync(input) : input;
+    const report = checkPartsStage(parts, values.get('--out') as string, json === 1 ? () => {} : console.log);
     if (json === 1) process.stdout.write(JSON.stringify(report, null, 2) + '\n');
     return report.exit_code;
   } catch (error) {
