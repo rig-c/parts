@@ -140,7 +140,7 @@ import { explicitAttachment, type ExplicitMeshReport } from './explicitmesh.ts';
 import { type AutoSpec, type BoneEntry, type InfluenceMeshSpec, type WeightRule, type CharacterConfig, type ConfigConstraint, type ConfigStop, CONSTRAINT_FOLLOWS, constraintForRig, contourRegionsOf, type ContourSpec, DEFAULT_BUST_BONE_L, DEFAULT_BUST_BONE_R, type Point, type RibsSpec, ROOT_BONE, stopForRig, turnRidersByBone, weightsABone } from './config.ts';
 import { RUNTIME_PI } from '@rig-c/core/core';
 import { type BoneTransform, computeExactFrameTransforms, computeWorldTransforms, cropToSpineY, normaliseDegrees, paintingToSetupPoint, setupToPaintingPoint, toBoneLocal, toWorld } from './coords.ts';
-import { type Problem, refuseIfAny, PartsError } from './errors.ts';
+import { foldName, type Problem, refuseIfAny, PartsError } from './errors.ts';
 import { recordedFocusProblems } from './setfocus.ts';
 import { eyeLineDegrees } from './headframe.ts';
 import type { RigBoneInherit, RigStop } from '@rig-c/core/rig';
@@ -1612,7 +1612,7 @@ export function buildWaistPairSource(
   if (bl !== undefined) problems.push(...blinkHoldProblems(BLINK.shut, BLINK.hold, IDLE_FPS));
   // ---- blink.still: a blinking region cut at a row ----------------------
   const stills = bl?.still ?? {};
-  const partNames = new Set(parts.parts.map((p) => p.name));
+  const partNames = new Map(parts.parts.map((p) => [foldName(p.name), p.name]));
   for (const [part, st] of Object.entries(stills)) {
     const at = `config.motion.blink.still.${part}`;
     const p = byPart.get(part);
@@ -1620,7 +1620,7 @@ export function buildWaistPairSource(
     if (!B.has(st.bone)) fail('RIG_NAME_RESOLVES', `${at}.bone`, `names the bone "${st.bone}", which config.bones does not declare`);
     if (p === undefined) continue;
     const still = `${part}${STILL_SUFFIX}`;
-    if (partNames.has(still)) fail('RIG_STILL_NAME_FREE', at, `the still piece is drawn by the slot "${still}", and parts.json already holds a part of that name; rename that part`);
+    if (partNames.has(foldName(still))) fail('RIG_STILL_NAME_FREE', at, `the still piece is drawn by the slot "${still}" ("${still}.png"), and parts.json already holds part "${partNames.get(foldName(still))}" ("${partNames.get(foldName(still))}.png"); rename that part`);
     if (!(st.row > p.y && st.row < p.y + p.h)) {
       fail('RIG_STILL_ROW_INSIDE_PART', `${at}.row`, `is ${st.row}; "${part}" spans rows ${p.y}..${p.y + p.h - 1}, so a row with part rows on both sides, ${p.y + 1}..${p.y + p.h - 1}, is required`);
       continue;
@@ -1925,8 +1925,8 @@ export function buildWaistPairSource(
   const outImages: Array<[string, Raster]> = [];
   const depthReferences: NonNullable<RigOutput['depthReferences']> = [];
   const emitDepth = (part: string, reference: PartDepthReference, scalar: Raster): void => {
-    if (outImages.some(([file]) => file === reference.image)) {
-      fail('DEPTH_SHEET_UNAMBIGUOUS', reference.image, 'collides with an emitted asset; choose noncolliding part/sheet names');
+    const prev = outImages.find(([file]) => foldName(file) === foldName(reference.image)); if (prev !== undefined) {
+      fail('DEPTH_SHEET_UNAMBIGUOUS', reference.image, `part "${part}" sheet "${reference.image}" and "${prev[0]}" collides with an emitted asset; choose noncolliding part/sheet names`);
       return;
     }
     const art = images.get(part);
@@ -2461,7 +2461,7 @@ export function buildWaistPairSource(
       if (scalar === undefined) fail('DEPTH_SHEET_PRESENT', p.depth.image, `part "${p.name}" declares a sheet; the unpadded source sheet must be handed to buildRig`);
       else {
         problems.push(...depthSheetProblems(scalar, [p.w, p.h], p.depth.image));
-        if (parts.parts.some(q => `${q.name}.png` === p.depth?.image)) fail('DEPTH_SHEET_UNAMBIGUOUS', p.depth.image, 'collides with artwork; use noncolliding part names');
+        const hit = parts.parts.find(q => foldName(`${q.name}.png`) === foldName(p.depth!.image)); if (hit !== undefined) fail('DEPTH_SHEET_UNAMBIGUOUS', p.depth.image, `part "${p.name}" sheet "${p.depth.image}" and part "${hit.name}" ("${hit.name}.png") collides with artwork; use noncolliding part names`);
         else if (cfg.meshes[p.name] !== undefined || stills[p.name] === undefined) emitDepth(p.name, p.depth, scalar);
       }
     }
@@ -3648,9 +3648,9 @@ export function buildWaistPairSource(
   // decide which drawing or measurement survives on disk.
   const assetIndices = new Map<string, number>();
   outImages.forEach(([file], index) => {
-    const previous = assetIndices.get(file);
-    if (previous !== undefined) fail('DEPTH_SHEET_UNAMBIGUOUS', file, `output assets[${previous}] and [${index}] require the same filename; choose distinct base, still, alternate and sheet names`);
-    else assetIndices.set(file, index);
+    const previous = assetIndices.get(foldName(file));
+    if (previous !== undefined) fail('DEPTH_SHEET_UNAMBIGUOUS', file, `output assets[${previous}] ("${outImages[previous][0]}") and [${index}] ("${file}") require the same filename; choose distinct base, still, alternate and sheet names`);
+    else assetIndices.set(foldName(file), index);
   });
   refuseIfAny(problems);
   const name = `${cfg.key}_painting`;

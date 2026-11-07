@@ -100,7 +100,7 @@ import { REQUIREMENTS_SPEC, type RequirementsFile } from './requirements.ts';
 import { setupPaintingFilePath } from './setuppainting.ts';
 import { CLOTH_TARGETS, type ClothRecipes, RECIPE_STRENGTH, RIGC_DEFAULT_DAMPING, springStable } from './cloth.ts';
 import { GRID, MAX_SIDE } from './contour.ts';
-import { type Problem, refuseIfAny } from './errors.ts';
+import { foldName, type Problem, refuseIfAny } from './errors.ts';
 import { edgeLength } from './length.ts';
 import { setFocusProblems } from './setfocus.ts';
 import { type EditorReceipts, SHA256_PATTERN, SHA256_RULE } from './editreceipt.ts';
@@ -2824,15 +2824,15 @@ function checkAlternates(
     ...baseSlots,
     ...explicitIslandSlotNames(baseSlots, meshes),
   ]);
-  const seenNames = new Map<string, number>();
+  const seenNames = new Map<string, { index: number; name: string }>();
   (v as Json[]).forEach((entry, i) => {
     const at = `${p}[${i}]`;
     const e = c.object(at, entry, ['name'], ['source', 'full', 'head', 'parts', 'hides', 'head_box', 'cuts', 'skeleton', 'anchor', 'drawn', 'tips', 'front', 'layers', 'focus', 'base_anchor']);
     if (e === null) return;
     if ('name' in e && c.string(`${at}.name`, e.name)) {
       if (!partNameOk(e.name)) c.fail('CONFIG_PART_NAME', `${at}.name`, `names the set ${show(e.name)}; a set name is a file prefix, so it may not be empty, start with "." or hold a slash`);
-      if (seenNames.has(e.name)) c.fail('CONFIG_PART_UNIQUE', `${at}.name`, `names the set "${e.name}" again (first at alternates[${seenNames.get(e.name)}])`);
-      else seenNames.set(e.name, i);
+      if (seenNames.has(foldName(e.name))) c.fail('CONFIG_PART_UNIQUE', `${at}.name`, `names the set "${e.name}" again (first at alternates[${seenNames.get(foldName(e.name))!.index}] ("${seenNames.get(foldName(e.name))!.name}"))`);
+      else seenNames.set(foldName(e.name), { index: i, name: e.name });
     }
     for (const k of ['source', 'full', 'head', 'skeleton'] as const) {
       if (k in e) c.string(`${at}.${k}`, e[k]);

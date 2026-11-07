@@ -207,6 +207,27 @@ export function runPaintingAllocationChecks(say: Say): void {
     catch (err) { if (!(err instanceof PartsError)) throw err; collision = err.problems.some(row => row.code === 'PAINTING_ALLOCATION_UNAMBIGUOUS'); }
     say('ED1150_REPORT_COLLISION_REFUSED_BEFORE_WRITE', collision && !existsSync(file('one')),
       'report and parts metadata cannot share an output path');
+    const allocCollision = (a: string, b: string): PartsError | null => {
+      const colOut = join(directory, `col-${a}`);
+      try {
+        assembleStage({ ...input, alts: [{ name: a, ...alt }, { name: b, ...alt }] },
+          { partsJson: join(colOut, 'parts.json'), partsDir: join(colOut, 'parts'), recomposite: join(colOut, 'recomposite.png'), errorMap: join(colOut, 'error.png') }, () => {});
+        return null;
+      } catch (err) { if (err instanceof PartsError) return err; throw err; }
+    };
+    const caseAllocErr = allocCollision('Warm', 'warm');
+    const nfdAllocErr = allocCollision('\u00e9', 'e\u0301');
+    const nearMissOut = join(directory, 'col-near-miss');
+    assembleStage({ ...input, alts: [{ name: 'Warm', ...alt }, { name: 'cool', ...alt }] },
+      { partsJson: join(nearMissOut, 'parts.json'), partsDir: join(nearMissOut, 'parts'), recomposite: join(nearMissOut, 'recomposite.png'), errorMap: join(nearMissOut, 'error.png') }, () => {});
+    say('ED1172_CASE_AND_UNICODE_COLLIDING_ALLOCATION_SETS_REFUSED_BEFORE_WRITE',
+      caseAllocErr?.problems.some(row => row.code === 'PAINTING_ALLOCATION_UNAMBIGUOUS' && row.detail.includes('"Warm"') && row.detail.includes('"warm"')) === true &&
+      !existsSync(join(directory, 'col-Warm')) &&
+      nfdAllocErr?.problems.some(row => row.code === 'PAINTING_ALLOCATION_UNAMBIGUOUS' && row.detail.includes('"\u00e9"') && row.detail.includes('"e\u0301"')) === true &&
+      !existsSync(join(directory, 'col-\u00e9')) &&
+      existsSync(join(nearMissOut, 'painting_allocation.Warm.json')) &&
+      existsSync(join(nearMissOut, 'painting_allocation.cool.json')),
+      JSON.stringify({ caseProblems: caseAllocErr?.problems.filter(p => p.code === 'PAINTING_ALLOCATION_UNAMBIGUOUS'), nfdProblems: nfdAllocErr?.problems.filter(p => p.code === 'PAINTING_ALLOCATION_UNAMBIGUOUS') }));
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }
 
