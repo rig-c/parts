@@ -7477,7 +7477,7 @@ function runRigSuite(): number {
     const stampA = stampARaw !== '' ? (JSON.parse(stampARaw) as RunStamp) : null;
     const stampB = stampBRaw !== '' ? (JSON.parse(stampBRaw) as RunStamp) : null;
     const stripStampTimes = (s: RunStamp): RunStamp => ({ ...s, started_at: 'T0', finished_at: 'T1' });
-    const expectedOutputs1 = files1.map((p) => ({ path: p, sha256: sha256Hex(join(dir, 'one', 'out', p)) }));
+    const expectedOutputs1 = [...files1].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((p) => ({ path: p, sha256: sha256Hex(join(dir, 'one', 'out', p)) }));
     const rigEqFaults = [
       ...rigStampFileSetFaults('plain', join(dir, 'one', 'out'), stamp1),
       ...rigStampFileSetFaults('alt', altRigOut, altRigStamp),
@@ -7543,7 +7543,7 @@ function runRigSuite(): number {
       reusedRigHadStamp &&
       reusedRigRed.status === 1 &&
       !existsSync(join(reusedRigOut, RUN_STAMP_FILE)) &&
-      codes(badPkgErr) === 'RUN_STAMP_PACKAGE';
+      codes(badPkgErr) === `RUN_STAMP_PACKAGE ${badPkgPath}`;
     const plantedBadSha = stamp1 !== null && JSON.stringify({ ...stamp1, outputs: stamp1.outputs.map((o, i) => (i === 0 ? { ...o, sha256: '0'.repeat(64) } : o)).map((o) => o) }) !== JSON.stringify({ ...stamp1, outputs: expectedOutputs1 });
     say(
       'RG1165_RIG_WRITES_RUN_STAMP_AFTER_GREEN_GATE_WITH_RELATIVE_PATHS_AND_DISK_HASHES',
@@ -34557,7 +34557,7 @@ function runAssembleSuite(): number {
     const asStampA = asStampARaw !== '' ? (JSON.parse(asStampARaw) as RunStamp) : null;
     const asStampB = asStampBRaw !== '' ? (JSON.parse(asStampBRaw) as RunStamp) : null;
     const stripAsTimes = (s: RunStamp): RunStamp => ({ ...s, started_at: 'T0', finished_at: 'T1' });
-    const expectedAsOutputs = files.map((p) => ({ path: p, sha256: asSha256(join(out1, p)) }));
+    const expectedAsOutputs = [...files].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((p) => ({ path: p, sha256: asSha256(join(out1, p)) }));
     const asEqFaults = [
       ...asStampFileSetFaults('plain', out1, asStamp1),
       ...asStampFileSetFaults('scene', asSceneOut, asSceneStamp),
