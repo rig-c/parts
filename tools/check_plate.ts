@@ -158,9 +158,10 @@ export function runPlateChecks(dir: string, painting: string, R: Record<string, 
   const noUpload = (r: PlateHarnessResult | undefined): boolean => r !== undefined && r.uploads.length === 0 && r.prompts === 0 && !r.paths.includes('POST /upload/image');
 
   const bound = ['plate-unstamped', 'plate-stale-mask', 'plate-other-painting'].map(n => [n, R[n]] as const);
+  const boundDetail = bound.map(([n, r]) => `${n}: exit ${r?.status}, requests ${r?.paths.length}, uploads ${r?.uploads.length}, prompts ${r?.prompts}; "${r === undefined ? 'not run' : failLine(r.out, n === 'plate-other-painting' ? 'PLATE_MASK_PAINTING' : 'PLATE_MASK_RUN') ?? 'no refusal line'}"`).join('; ');
   say('PB09_BACKGROUND_REFUSES_UNBOUND_FIGURE_SOURCES_BEFORE_ANY_REQUEST',
-    bound.every(([n, r]) => r?.status === 1 && failLine(r.out, n === 'plate-other-painting' ? 'PLATE_MASK_PAINTING' : 'PLATE_MASK_RUN') !== null && nothingAsked(r) && nothingWritten(n)),
-    bound.map(([n, r]) => `${n}: exit ${r?.status}, requests ${r?.paths.length}, uploads ${r?.uploads.length}, prompts ${r?.prompts}; ${r?.out}`).join('; '),
+    bound.every(([n, r]) => r?.status === 1 && failLine(r.out, n === 'plate-other-painting' ? 'PLATE_MASK_PAINTING' : 'PLATE_MASK_RUN') !== null && nothingAsked(r) && nothingWritten(n)) && !boundDetail.includes('\n'),
+    boundDetail,
     'issue #1188: background checks source provenance before connecting to the fake ComfyUI');
 
   // 1. a missing node or model is refused by name before anything is uploaded; core still runs on that box
