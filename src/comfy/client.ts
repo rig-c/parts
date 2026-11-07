@@ -145,14 +145,19 @@ export class ComfyClient {
     const t0 = Date.now();
     let started: number | null = null;
     let lastPlace = -1;
+    // The minimum free VRAM while this job runs: sampled on every running poll,
+    // then merged with what `waitHistory` reads, so it is not a post-run reading.
+    const vramLow: Record<string, number> = {};
     for (;;) {
       const place = await this.queuePlace(id);
       if (place.state === 'absent') {
         const done = await this.waitHistory(id, Math.max(this.timing.request, this.timing.poll * 2));
-        return { ...done, elapsed: (Date.now() - t0) / 1000 };
+        for (const [k, v] of Object.entries(done.vramLow)) if (!(k in vramLow) || v < vramLow[k]) vramLow[k] = v;
+        return { entry: done.entry, vramLow, elapsed: (Date.now() - t0) / 1000 };
       }
       const now = Date.now();
       if (place.state === 'running') {
+        for (const [k, v] of Object.entries(await this.vramFree())) if (!(k in vramLow) || v < vramLow[k]) vramLow[k] = v;
         if (started === null) {
           started = now;
           say(`  prompt ${id} is running`);
