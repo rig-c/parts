@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { runSourceCoverChecks } from './fixtures/source_cover_checks.ts';
+import { runPartsFileReferenceChecks } from './tools/parts_file_references.ts';
 import { runCheckFileReferenceChecks } from './tools/check_file_references.ts';
 import { runHiddenExtentChecks, runHiddenExtentConfigChecks } from './fixtures/hidden_extent.ts';
 import './tools/check_row_guard.ts';
@@ -4809,6 +4810,9 @@ function runPartsSuite(): number {
       ],
       ghost_px: { 'head:face': 2, 'full:topwear': 0 },
     };
+    const referenceDir = join(dir, 'references');
+    mkdirSync(referenceDir);
+    runPartsFileReferenceChecks(referenceDir, file, minimalConfig(), (name, pass, detail) => say(name, pass, detail, 'issue #1163: manifest references against real PNG reads'));
     const path = join(dir, 'parts.json');
     writeParts(path, file);
     const first = readFileSync(path, 'utf8');
