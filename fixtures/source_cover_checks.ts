@@ -2,6 +2,8 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { writeAlternateCutLayerFixture } from './alternate_cut_layers.ts';
+import { writeArtistFixture } from './artist.ts';
 import { assembleConfig, writeRun, type RunLayerSpec } from './assemble_fixture.ts';
 import { assembleStage } from '../src/build.ts';
 import { readLayers } from '../src/layers.ts';
@@ -106,4 +108,36 @@ export function runSourceCoverChecks(parent: string, say: Say): void {
     reading.sources[1].input_layer === null && reading.sources[1].prepared && kept.data[0] === 1 && owners[0] === 1 &&
     plannedReading.parts[0].covered_by[0]?.planned === true && plannedReading.parts[1].covered_by.length === 0,
     'held own support has a separate count; extend-only stays unplanned; a planned front owner is identified as planned');
+
+  const cutDir = join(dir, 'source-only');
+  writeAlternateCutLayerFixture(cutDir);
+  const cutConfigPath = join(cutDir, 'config.json');
+  const cutConfig = JSON.parse(readFileSync(cutConfigPath, 'utf8')) as { assemble: { cuts: unknown[]; alternates: unknown[] } };
+  cutConfig.assemble.alternates = [{ name: 'source-only', source: 'raised.png', full: 'step', head: 'head',
+    parts: ['sleeve'], cuts: cutConfig.assemble.cuts }];
+  writeFileSync(cutConfigPath, JSON.stringify(cutConfig));
+  const cutOut = join(cutDir, 'out');
+  assembleStage({ config: cutConfigPath, source: join(cutDir, 'painting.png'), full: join(cutDir, 'full'), head: join(cutDir, 'head') },
+    { partsJson: join(cutOut, 'parts.json'), partsDir: join(cutOut, 'parts'), recomposite: join(cutOut, 'recomposite.png'), errorMap: join(cutOut, 'error.png') }, () => {});
+  const cutReport = JSON.parse(readFileSync(join(cutOut, SOURCE_COVER_FILE), 'utf8')) as Report;
+  const cutSet = cutReport.sets.find(set => set.set === 'source-only');
+  say('AS1158_SOURCE_ONLY_CUT_PARENT_IS_NOT_AN_ALTERNATE_PART',
+    cutSet !== undefined && cutSet.parts.every(part => part.part === 'sleeve') &&
+    cutSet.inherited_parts.some(part => part.part === 'body' && part.set === null) &&
+    cutSet.sources.some(layer => layer.source === 'full:topwear' && layer.planned_parts.includes('body')) &&
+    cutSet.output_assets.some(asset => asset.part === 'sleeve' && asset.image === 'source-only_sleeve.png') &&
+    cutSet.parts.every(part => !cutSet.inherited_parts.some(inherited => inherited.part === part.part)),
+    'cut-from body remains an inherited asset and an evaluated source; only covered parts receive alternate part rows');
+
+  const singleDir = join(dir, 'padded-single');
+  writeArtistFixture(singleDir, { portrait: true });
+  const singleOut = join(singleDir, 'out');
+  const singleResult = assembleStage({ config: join(singleDir, 'config.json'), source: join(singleDir, 'painting.png'), full: join(singleDir, 'art.psd'), head: null },
+    { partsJson: join(singleOut, 'parts.json'), partsDir: join(singleOut, 'parts'), recomposite: join(singleOut, 'recomposite.png'), errorMap: join(singleOut, 'error.png') }, () => {});
+  const singleReport = JSON.parse(readFileSync(join(singleOut, SOURCE_COVER_FILE), 'utf8')) as Report;
+  const singleSources = singleReport.sets[0].sources;
+  say('AS1158_SINGLE_RUN_PADDING_IS_NOT_SOURCE_PREPARATION',
+    (singleResult.parts.single_run_pad?.left ?? 0) > 0 && singleSources.length > 0 &&
+    singleSources.every(layer => layer.run === 'full' && layer.input_layer === layer.layer && !layer.prepared),
+    'portrait PSD requires centering pad; every unprepared source retains prepared false against the padded baseline');
 }

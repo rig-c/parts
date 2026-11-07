@@ -797,6 +797,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       altRecomposite = recompositeRecord(measureRecomposite(altCan, altSrcRig, fullSetPlaced));
     }
     const coverSet = sourceCoverSet(altRes, alt.name, alt.source, altRuns);
+    coverSet.parts = coverSet.parts.filter(part => coveredSet.has(part.part));
     coverSet.inherited_parts = baseSlots.filter(name => !coveredSet.has(name) && !hidesSet.has(name)).map(part => ({ part, set: null }));
     coverSet.hidden_parts = [...hidesSet];
     coverSet.output_assets = [...new Set([...altRes.parts.parts.map(part => part.name), ...baseSlots])].map(name => ({ part: name,

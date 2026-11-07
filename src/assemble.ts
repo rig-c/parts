@@ -5194,7 +5194,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       return ids;
     });
     const st = projectSource(rigLayers, srcr, frame, run, projectRule, rank, keep, (i, p) => { if (writes[i] !== null) (writes[i] as Int32Array)[p] = AW.sourceProjection; }, owners => {
-      const reading = sourceCoverRun(run, set, run === 'full' ? depthFullInput : depthHeadInput,
+      const reading = sourceCoverRun(run, set, run === 'full' ? fullPadded : depthHeadInput,
         rigLayers, rank, sourcePlan, extend, owners, (o, i) => frontOf(o, i, rank), keep);
       sourceCover.sources.push(...reading.sources);
       sourceCover.parts.push(...reading.parts);
