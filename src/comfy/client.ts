@@ -14,8 +14,8 @@
  * into an output file.
  *
  * Every failure is a `PartsError` whose problem names the call, the value found
- * and the value required: a box that does not answer, a queue that does not
- * empty within the wait, a `/prompt` the box rejected (with its own
+ * and the value required: a box that does not answer, a job still pending in the
+ * queue past the wait, a `/prompt` the box rejected (with its own
  * `node_errors`), a job that does not reach `/history` within the timeout, a
  * job that ended in error, a history entry with no outputs.
  */
@@ -42,11 +42,6 @@ export interface ClientTiming {
   poll: number;
   /** Seconds one plain request may take. */
   request: number;
-}
-
-export interface QueueState {
-  running: number;
-  pending: number;
 }
 
 export interface OutputImage {
@@ -118,36 +113,6 @@ export class ComfyClient {
     return out;
   }
 
-  async queue(): Promise<QueueState> {
-    const q = asObject(await this.json('GET', '/queue'));
-    if (q === null || !Array.isArray(q.queue_running) || !Array.isArray(q.queue_pending)) {
-      refuse('COMFY_REQUEST_OK', `GET ${this.host}/queue`, 'answered without queue_running and queue_pending arrays');
-    }
-    return { running: (q.queue_running as unknown[]).length, pending: (q.queue_pending as unknown[]).length };
-  }
-
-  /** Wait until nothing is running or pending, for at most `wait` seconds. Returns the seconds waited. */
-  async waitQueueEmpty(wait: number, say: (line: string) => void): Promise<number> {
-    const t0 = Date.now();
-    let last: QueueState = await this.queue();
-    let reported = false;
-    while (last.running > 0 || last.pending > 0) {
-      const waited = (Date.now() - t0) / 1000;
-      if (waited >= wait) {
-        refuse(
-          'COMFY_QUEUE_EMPTY',
-          `${this.host}/queue`,
-          `still held ${last.running} running and ${last.pending} pending after ${waited.toFixed(1)} s; an empty queue within --wait ${wait} s is required, and this adapter never queues behind someone else's job`,
-        );
-      }
-      if (!reported) say(`  queue busy (running ${last.running}, pending ${last.pending}) — waiting up to ${wait} s`);
-      reported = true;
-      await sleep(Math.min(this.timing.poll, Math.max(0, wait - waited)));
-      last = await this.queue();
-    }
-    return (Date.now() - t0) / 1000;
-  }
-
   /**
    * Where a queued prompt stands: `running` when the box is running it,
    * `pending` with its 1-based place among the pending jobs (and how many are
@@ -180,14 +145,19 @@ export class ComfyClient {
     const t0 = Date.now();
     let started: number | null = null;
     let lastPlace = -1;
+    // The minimum free VRAM while this job runs: sampled on every running poll,
+    // then merged with what `waitHistory` reads, so it is not a post-run reading.
+    const vramLow: Record<string, number> = {};
     for (;;) {
       const place = await this.queuePlace(id);
       if (place.state === 'absent') {
         const done = await this.waitHistory(id, Math.max(this.timing.request, this.timing.poll * 2));
-        return { ...done, elapsed: (Date.now() - t0) / 1000 };
+        for (const [k, v] of Object.entries(done.vramLow)) if (!(k in vramLow) || v < vramLow[k]) vramLow[k] = v;
+        return { entry: done.entry, vramLow, elapsed: (Date.now() - t0) / 1000 };
       }
       const now = Date.now();
       if (place.state === 'running') {
+        for (const [k, v] of Object.entries(await this.vramFree())) if (!(k in vramLow) || v < vramLow[k]) vramLow[k] = v;
         if (started === null) {
           started = now;
           say(`  prompt ${id} is running`);

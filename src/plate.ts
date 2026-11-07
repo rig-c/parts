@@ -29,10 +29,11 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
+import { sourceInRig } from './assemble.ts';
 import { PartsError, type Problem } from './errors.ts';
 import type { Graph } from './graphs.ts';
 import { OPAQUE_ALPHA_ABOVE, readWrapperLayers } from './layers.ts';
-import { FIGURE_MASK_FILE } from './parts.ts';
+import { FIGURE_MASK_FILE, PAINTING_IN_RIG_FILE } from './parts.ts';
 import { decodePngBytes, encodePngBytes } from './raster/png.ts';
 import { newRaster, type Raster } from './raster/types.ts';
 
@@ -104,13 +105,76 @@ export interface FigureMask {
   inside: Uint8Array;
 }
 
+function maskRecord(path: string, code: string): { record: Record<string, unknown>; bytes: Uint8Array } {
+  try {
+    const bytes = new Uint8Array(readFileSync(path));
+    const value: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (typeof value === 'object' && value !== null && !Array.isArray(value)) return { record: value as Record<string, unknown>, bytes };
+  } catch (err) {
+    fail(code, path, `cannot read a JSON object (${(err as Error).message}); re-run assemble`);
+  }
+  return fail(code, path, 'requires a JSON object; re-run assemble');
+}
+
+/**
+ * Assemble writes run.json above rig/. A missing stamp is refused, including
+ * legacy outputs: their current mask bytes cannot be tied to a completed run.
+ * Bind parts.json too, so an old manifest cannot substitute another painting.
+ * The config hash identifies config bytes, not painting bytes. The existing
+ * painting_in_rig declaration binds those through assemble's RGB conversion.
+ */
+function bindFigureSource(dir: string, parts: Record<string, unknown>, partsBytes: Uint8Array, maskBytes: Uint8Array, painting: Raster | undefined): void {
+  const root = dirname(resolve(dir));
+  const stampPath = join(root, 'run.json');
+  const { record: stamp } = maskRecord(stampPath, 'PLATE_MASK_RUN');
+  if (stamp.spec !== 'rig-run/1' || stamp.command !== 'assemble' || !Array.isArray(stamp.outputs)) {
+    fail('PLATE_MASK_RUN', stampPath, 'requires spec "rig-run/1", command "assemble" and outputs; re-run assemble');
+  }
+  const outputs = stamp.outputs as unknown[];
+  const checkOutput = (path: string, bytes: Uint8Array): void => {
+    const key = relative(root, path).split('\\').join('/');
+    const entries = outputs.filter((entry): entry is Record<string, unknown> =>
+      typeof entry === 'object' && entry !== null && 'path' in entry && entry.path === key);
+    const actual = sha256(bytes);
+    if (entries.length !== 1 || entries[0].sha256 !== actual) {
+      fail('PLATE_MASK_RUN', path, `sha256 is ${actual}; ${stampPath} must record exactly one outputs entry for ${JSON.stringify(key)} with that hash (found ${entries.length}, hashes ${JSON.stringify(entries.map(e => e.sha256))}); re-run assemble`);
+    }
+  };
+  checkOutput(join(dir, FIGURE_MASK_FILE), maskBytes);
+  checkOutput(join(dir, 'parts.json'), partsBytes);
+  // Legacy manifests may omit this additive declaration. When recorded, it
+  // must bind the supplied painting before either plate mode writes or connects.
+  if (parts.painting_in_rig === undefined) return;
+  const declared = parts.painting_in_rig;
+  if (typeof declared !== 'object' || declared === null || !('path' in declared) || declared.path !== PAINTING_IN_RIG_FILE ||
+      !('sha256' in declared) || typeof declared.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(declared.sha256) ||
+      !('resample' in declared) || declared.resample !== 'lanczos3-rgb-opaque') {
+    fail('PLATE_MASK_PAINTING', join(dir, 'parts.json'), 'painting_in_rig requires path "painting_in_rig.png", lowercase 64-hex sha256 and resample "lanczos3-rgb-opaque"; re-run assemble');
+  }
+  const path = join(dir, PAINTING_IN_RIG_FILE);
+  let bytes: Uint8Array;
+  try { bytes = new Uint8Array(readFileSync(path)); }
+  catch (err) { return fail('PLATE_MASK_PAINTING', path, `cannot read declared painting (${(err as Error).message}); re-run assemble`); }
+  checkOutput(path, bytes);
+  const found = sha256(bytes);
+  if (found !== declared.sha256) fail('PLATE_MASK_PAINTING', path, `sha256 is ${found}; parts.json records ${declared.sha256}; re-run assemble`);
+  if (painting === undefined) fail('PLATE_MASK_PAINTING', path, 'the supplied painting raster is required to compare with painting_in_rig');
+  let recorded: Raster;
+  try { recorded = decodePngBytes(bytes, path); }
+  catch (err) { return fail('PLATE_MASK_PAINTING', path, `cannot decode declared painting (${(err as Error).message}); re-run assemble`); }
+  const actual = sourceInRig(painting, painting.width, painting.height);
+  if (recorded.width !== actual.width || recorded.height !== actual.height || !recorded.data.every((v, i) => v === actual.data[i])) {
+    fail('PLATE_MASK_PAINTING', path, `records ${recorded.width}x${recorded.height} opaque RGB (file sha256 ${declared.sha256}); the supplied painting is ${actual.width}x${actual.height} with different decoded RGB; use the painting this assemble run read`);
+  }
+}
+
 /**
  * The figure mask from its source, on its own grid. Refused by name: a source
  * directory that holds no mask (the missing tool named), a grid that is not
  * `width`x`height`, a `figure_rig.png` that is not the two values assemble
  * writes, and a mask with no figure pixel.
  */
-export function readSourceMask(source: MaskSource, dir: string, width: number, height: number): FigureMask {
+export function readSourceMask(source: MaskSource, dir: string, width: number, height: number, painting?: Raster): FigureMask {
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
     fail('PLATE_MASK_SOURCE', `${source}:${dir}`, `is not a directory; ${source === 'seethrough' ? 'a See-through run directory (from `rig-parts comfy seethrough`)' : 'an assemble output directory with parts.json and figure_rig.png'} is required`);
   }
@@ -136,18 +200,16 @@ export function readSourceMask(source: MaskSource, dir: string, width: number, h
   } else {
     const partsPath = join(dir, 'parts.json');
     if (!existsSync(partsPath)) fail('PLATE_MASK_SOURCE', `${source}:${dir}`, 'holds no parts.json; an assemble output with config.scene is required — run `assemble` on the painting first');
-    let scene: unknown;
-    try {
-      scene = (JSON.parse(readFileSync(partsPath, 'utf8')) as Record<string, unknown>).scene;
-    } catch (err) {
-      return fail('PLATE_MASK_SOURCE', partsPath, `does not parse as JSON (${(err as Error).message})`);
-    }
+    const { record: parts, bytes: partsBytes } = maskRecord(partsPath, 'PLATE_MASK_SOURCE');
+    const scene = parts.scene;
     if (typeof scene !== 'object' || scene === null || (scene as Record<string, unknown>).figure_mask !== FIGURE_MASK_FILE) {
       fail('PLATE_MASK_SOURCE', partsPath, `declares no scene figure mask; a parts.json whose scene.figure_mask is "${FIGURE_MASK_FILE}" is required — assemble writes it under config.scene`);
     }
     const maskPath = join(dir, FIGURE_MASK_FILE);
     if (!existsSync(maskPath)) fail('PLATE_MASK_SOURCE', maskPath, 'no such file; parts.json declares it, and assemble writes it beside parts.json');
-    const r = decodePngBytes(new Uint8Array(readFileSync(maskPath)), maskPath);
+    const maskBytes = new Uint8Array(readFileSync(maskPath));
+    bindFigureSource(dir, parts, partsBytes, maskBytes, painting);
+    const r = decodePngBytes(maskBytes, maskPath);
     if (r.width !== width || r.height !== height) {
       fail('PLATE_MASK_GRID', maskPath, `is ${r.width}x${r.height}; the painting's ${width}x${height} is required — the rig grid is not the painting's when the rig is scaled, and the mask is never fitted`);
     }
@@ -439,7 +501,7 @@ export interface ForegroundRun {
 export function runForeground(run: ForegroundRun): PlateReceipt {
   const from = parseMaskFrom(run.maskFrom);
   const painting = readPlatePainting(run.painting);
-  const mask = readSourceMask(from.source, from.dir, painting.raster.width, painting.raster.height);
+  const mask = readSourceMask(from.source, from.dir, painting.raster.width, painting.raster.height, painting.raster);
   assertPlateOutFree(run.out);
   return publishPlate({
     out: run.out,

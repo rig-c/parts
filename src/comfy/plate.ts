@@ -19,9 +19,6 @@
  * 6. the box's image is read back, required at the painting's size, pasted
  *    into the painting inside the mask only, and written with its receipt
  *    through `publishPlate` (staged, read back, then moved).
- *
- * ⚠️ This is a different queue policy from `comfy paint` and `comfy
- * seethrough`, which wait for an empty queue and never queue behind anyone.
  */
 import { refuseIfAny } from '../errors.ts';
 import { checkGraph, type Graph } from '../graphs.ts';
@@ -84,7 +81,7 @@ export async function runBackground(connect: () => ComfyClient, run: BackgroundR
   const from = parseMaskFrom(run.maskFrom);
   const painting = readPlatePainting(run.painting);
   const { width: W, height: H } = painting.raster;
-  const source: FigureMask = readSourceMask(from.source, from.dir, W, H);
+  const source: FigureMask = readSourceMask(from.source, from.dir, W, H, painting.raster);
   const checkpoint = declaredChecksum(run.checkpointSha256);
   if (run.graph === 'core') {
     if (run.model === undefined) refuse('PLATE_MODEL_GIVEN', '--model', 'is absent; the core graph needs the checkpoint the box loads, by its name on the box — there is no default checkpoint');

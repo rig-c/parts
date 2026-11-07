@@ -9,10 +9,11 @@
  *   bun tools/check_plate.ts <work dir>
  */
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FAKE_FILL } from '../fixtures/fakecomfy.ts';
-import { PLATE_RECEIPT_KEYS, PLATE_RECEIPT_SPEC, verifyPlateReceipt } from '../src/plate.ts';
+import { PLATE_RECEIPT_KEYS, PLATE_RECEIPT_SPEC, runForeground, sha256, verifyPlateReceipt } from '../src/plate.ts';
 import { decodePngBytes, encodePngBytes } from '../src/raster/png.ts';
 
 export interface PlateHarnessResult {
@@ -28,6 +29,107 @@ type Say = (name: string, pass: boolean, detail: string, why: string) => void;
 
 function failLine(out: string, code: string): string | null {
   return out.split('\n').find((l) => l.includes(`FAIL  ${code}`))?.trim() ?? null;
+}
+
+/** Each source plant is restored byte for byte, then accepted through the CLI's foreground entry point. */
+function figureBindingChecks(dir: string, painting: string, say: Say): void {
+  const root = join(dir, 'plate_figure_source');
+  const rig = join(root, 'rig');
+  const stampPath = join(root, 'run.json');
+  const partsPath = join(rig, 'parts.json');
+  const maskPath = join(rig, 'figure_rig.png');
+  const paintingPath = join(rig, 'painting_in_rig.png');
+  const files = [stampPath, partsPath, maskPath, paintingPath];
+  const original = files.map(file => readFileSync(file));
+  const md5 = (): string[] => files.map(file => existsSync(file) ? createHash('md5').update(readFileSync(file)).digest('hex') : 'absent');
+  const before = md5();
+  const stamp = JSON.parse(original[0].toString()) as { spec: string; command: string; outputs: Array<{ path: string; sha256: string }> };
+  const parts = JSON.parse(original[1].toString()) as { painting_in_rig: { path: string; sha256: string; resample: string } };
+  const writeStamp = (change: (s: typeof stamp) => void): void => {
+    const s = structuredClone(stamp);
+    change(s);
+    writeFileSync(stampPath, JSON.stringify(s));
+  };
+  const restamp = (path: string): void => writeStamp(s => {
+    const entry = s.outputs.find(e => e.path === `rig/${path}`)!;
+    entry.sha256 = sha256(readFileSync(join(rig, path)));
+  });
+  const plants: Array<{ name: string; code: string; plant: () => void }> = [
+    { name: 'missing-run', code: 'PLATE_MASK_RUN', plant: () => rmSync(stampPath) },
+    { name: 'malformed-run', code: 'PLATE_MASK_RUN', plant: () => writeFileSync(stampPath, '{') },
+    { name: 'null-run', code: 'PLATE_MASK_RUN', plant: () => writeFileSync(stampPath, 'null') },
+    { name: 'wrong-spec', code: 'PLATE_MASK_RUN', plant: () => writeStamp(s => { s.spec = 'rig-run/0'; }) },
+    { name: 'wrong-command', code: 'PLATE_MASK_RUN', plant: () => writeStamp(s => { s.command = 'rig'; }) },
+    { name: 'missing-outputs', code: 'PLATE_MASK_RUN', plant: () => writeFileSync(stampPath, JSON.stringify({ ...stamp, outputs: null })) },
+    { name: 'missing-entry', code: 'PLATE_MASK_RUN', plant: () => writeStamp(s => { s.outputs = s.outputs.filter(e => e.path !== 'rig/figure_rig.png'); }) },
+    { name: 'duplicate-entry', code: 'PLATE_MASK_RUN', plant: () => writeStamp(s => { s.outputs.push(s.outputs.find(e => e.path === 'rig/figure_rig.png')!); }) },
+    { name: 'stale-mask', code: 'PLATE_MASK_RUN', plant: () => {
+      const r = decodePngBytes(original[2], maskPath);
+      r.data.set([255, 255, 255, 255], 0);
+      writeFileSync(maskPath, encodePngBytes(r));
+    } },
+    { name: 'stale-parts', code: 'PLATE_MASK_RUN', plant: () => writeFileSync(partsPath, JSON.stringify({ ...parts, painting_in_rig: undefined })) },
+    { name: 'bad-painting-declaration', code: 'PLATE_MASK_PAINTING', plant: () => {
+      writeFileSync(partsPath, JSON.stringify({ ...parts, painting_in_rig: { ...parts.painting_in_rig, path: '../other.png' } }));
+      restamp('parts.json');
+    } },
+    { name: 'missing-recorded-painting', code: 'PLATE_MASK_PAINTING', plant: () => rmSync(paintingPath) },
+    { name: 'stale-recorded-painting', code: 'PLATE_MASK_RUN', plant: () => writeFileSync(paintingPath, 'stale') },
+    { name: 'unstamped-recorded-painting', code: 'PLATE_MASK_RUN', plant: () => writeStamp(s => { s.outputs = s.outputs.filter(e => e.path !== 'rig/painting_in_rig.png'); }) },
+    { name: 'undecodable-recorded-painting', code: 'PLATE_MASK_PAINTING', plant: () => {
+      writeFileSync(paintingPath, 'not a PNG');
+      writeFileSync(partsPath, JSON.stringify({ ...parts, painting_in_rig: { ...parts.painting_in_rig, sha256: sha256(readFileSync(paintingPath)) } }));
+      writeStamp(s => {
+        for (const file of ['parts.json', 'painting_in_rig.png']) s.outputs.find(e => e.path === `rig/${file}`)!.sha256 = sha256(readFileSync(join(rig, file)));
+      });
+    } },
+    { name: 'declaration-hash-mismatch', code: 'PLATE_MASK_PAINTING', plant: () => {
+      writeFileSync(partsPath, JSON.stringify({ ...parts, painting_in_rig: { ...parts.painting_in_rig, sha256: '0'.repeat(64) } }));
+      restamp('parts.json');
+    } },
+  ];
+  const evidence: unknown[] = [];
+  const run = (name: string): void => { runForeground({ painting, maskFrom: `figure-mask:${rig}`, out: join(dir, `binding-${name}`) }); };
+  for (const p of plants) {
+    let message = '', restoredGreen = false;
+    let planted: string[] = [];
+    try {
+      p.plant();
+      planted = md5();
+      try { run(p.name); } catch (err) { message = (err as Error).message; }
+    } finally {
+      files.forEach((file, i) => writeFileSync(file, original[i]));
+    }
+    const restored = md5();
+    try { run(`${p.name}-restored`); restoredGreen = true; } catch (err) { message += ` restored: ${(err as Error).message}`; }
+    const pass = message.includes(p.code) && !existsSync(join(dir, `binding-${p.name}`)) && restoredGreen && restored.join(',') === before.join(',');
+    evidence.push({ name: p.name, files, before, planted, restored, message, restoredGreen, pass });
+    say(`PB07_FIGURE_SOURCE_${p.name.toUpperCase().replaceAll('-', '_')}_IS_REFUSED_AND_RESTORED`, pass,
+      `${p.code}: ${message}; restored accepted ${restoredGreen}; md5 before ${before.join(',')} planted ${planted.join(',')} restored ${restored.join(',')}`,
+      'issue #1188: an unstamped or stale source is refused before a plate is written; the restored source is accepted');
+  }
+  const other = join(dir, 'binding-other-painting.png');
+  const r = decodePngBytes(readFileSync(painting), painting);
+  r.data[0] ^= 1;
+  writeFileSync(other, encodePngBytes(r));
+  let message = '';
+  try { runForeground({ painting: other, maskFrom: `figure-mask:${rig}`, out: join(dir, 'binding-other-painting') }); }
+  catch (err) { message = (err as Error).message; }
+  say('PB08_A_DIFFERENT_PAINTING_ON_THE_SAME_GRID_IS_REFUSED', message.includes('PLATE_MASK_PAINTING') && !existsSync(join(dir, 'binding-other-painting')),
+    message, 'issue #1188: the stamped painting_in_rig binds decoded opaque RGB, using assemble\'s own conversion');
+  const equivalent = join(dir, 'binding-equivalent-painting.png');
+  const rgba = decodePngBytes(readFileSync(painting), painting);
+  for (let i = 3; i < rgba.data.length; i += 4) rgba.data[i] = 0;
+  writeFileSync(equivalent, encodePngBytes(rgba));
+  let equivalentGreen = false;
+  try {
+    runForeground({ painting: equivalent, maskFrom: `figure-mask:${rig}`, out: join(dir, 'binding-equivalent-painting') });
+    equivalentGreen = true;
+  } catch (err) { message = (err as Error).message; }
+  say('PB10_THE_PAINTING_BINDING_USES_ASSEMBLES_OPAQUE_RGB', equivalentGreen,
+    equivalentGreen ? 'identical RGB with alpha 0 accepted against the recorded opaque RGB; another RGB value was refused by PB08' : message,
+    'painting_in_rig records assemble\'s opaque RGB, so source PNG bytes and source alpha are not its identity');
+  writeFileSync(join(dir, 'figure-binding-evidence.json'), JSON.stringify(evidence, null, 2));
 }
 
 /** Pixels outside the receipt's mask that differ from the painting, and pixels inside it that are not the fake's fill. */
@@ -50,9 +152,17 @@ function pasteBack(dir: string, painting: string): { outsideDiff: number; inside
 }
 
 export function runPlateChecks(dir: string, painting: string, R: Record<string, PlateHarnessResult>, say: Say): void {
+  figureBindingChecks(dir, painting, say);
   const nothingAsked = (r: PlateHarnessResult | undefined): boolean => r !== undefined && r.paths.length === 0 && r.uploads.length === 0 && r.prompts === 0;
   const nothingWritten = (name: string): boolean => !existsSync(join(dir, name));
   const noUpload = (r: PlateHarnessResult | undefined): boolean => r !== undefined && r.uploads.length === 0 && r.prompts === 0 && !r.paths.includes('POST /upload/image');
+
+  const bound = ['plate-unstamped', 'plate-stale-mask', 'plate-other-painting'].map(n => [n, R[n]] as const);
+  const boundDetail = bound.map(([n, r]) => `${n}: exit ${r?.status}, requests ${r?.paths.length}, uploads ${r?.uploads.length}, prompts ${r?.prompts}; "${r === undefined ? 'not run' : failLine(r.out, n === 'plate-other-painting' ? 'PLATE_MASK_PAINTING' : 'PLATE_MASK_RUN') ?? 'no refusal line'}"`).join('; ');
+  say('PB09_BACKGROUND_REFUSES_UNBOUND_FIGURE_SOURCES_BEFORE_ANY_REQUEST',
+    bound.every(([n, r]) => r?.status === 1 && failLine(r.out, n === 'plate-other-painting' ? 'PLATE_MASK_PAINTING' : 'PLATE_MASK_RUN') !== null && nothingAsked(r) && nothingWritten(n)) && !boundDetail.includes('\n'),
+    boundDetail,
+    'issue #1188: background checks source provenance before connecting to the fake ComfyUI');
 
   // 1. a missing node or model is refused by name before anything is uploaded; core still runs on that box
   const noPack = R['plate-no-inpaint-lama'], noModel = R['plate-missing-model'], coreOnBare = R['plate-no-inpaint-core'];

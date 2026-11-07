@@ -17,11 +17,11 @@
  * from the adapter's own graphs would agree with them by construction, and
  * the check it serves would be checking itself.
  *
- * A `mode` plants one fault: a queue that never empties, a history entry with
- * no outputs, a box without the See-through node classes, or a stale
- * `seethrough_psd_info.log` naming another run's manifest; for the plate
- * (issue #1183), a box without the inpaint pack (`no-inpaint`), or a job that
- * stays pending behind someone else's (`behind`).
+ * A `mode` plants one fault: someone else's job running on `/queue` (`busy`),
+ * a job that stays pending behind two others (`behind`), a history entry with
+ * no outputs, a box without the See-through node classes, a stale
+ * `seethrough_psd_info.log` naming another run's manifest, or a box without
+ * the inpaint pack (`no-inpaint`, issue #1183).
  *
  * A plate graph (one holding `INPAINT_InpaintWithModel` or
  * `InpaintModelConditioning`) saves the uploaded painting with `FAKE_FILL`
