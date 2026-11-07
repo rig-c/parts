@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { partsFileReferences, readParts, type PartsFile } from '../src/parts.ts';
 import { encodePngBytes } from '../src/raster/png.ts';
+import { PartsError } from '../src/errors.ts';
 import { newRaster } from '../src/raster/types.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
@@ -65,6 +66,41 @@ export function runPartsFileReferenceChecks(dir: string, base: PartsFile, config
   ];
   const references = partsFileReferences(fixture);
   say('PT1163_DECLARED_MEMBERSHIP_AND_ROLES', JSON.stringify(references) === JSON.stringify(expected), JSON.stringify(references));
+  const invalid = (name: string, edit: (raw: Record<string, unknown>) => void, code: string): void => {
+    const raw = structuredClone(file) as unknown as Record<string, unknown>;
+    edit(raw);
+    writeFileSync(path, JSON.stringify(raw));
+    const refused: string[][] = [];
+    try {
+      for (const read of [() => partsFileReferences(fixture), () => readParts(path)]) {
+        try { read(); refused.push([]); }
+        catch (error) {
+          if (!(error instanceof PartsError)) throw error;
+          refused.push(error.problems.map(problem => problem.code));
+        }
+      }
+    } finally { writeFileSync(path, JSON.stringify(file)); }
+    say(name, refused.every(codes => codes.includes(code)), JSON.stringify(refused));
+  };
+  invalid('PT1163_ALTERNATE_DEPTH_ESCAPE_IS_REFUSED', raw => {
+    const sets = raw.alternates as PartsFile['alternates'];
+    sets![0].records[0].depth!.image = '../../x.png';
+  }, 'PARTS_DEPTH_REFERENCE');
+  invalid('PT1163_ALTERNATE_MISSING_RECORDS_IS_NAMED', raw => { raw.alternates = [{}]; }, 'PARTS_FIELD_TYPE');
+  invalid('PT1163_ALTERNATE_MISSING_SET_NAME_IS_REFUSED', raw => {
+    delete (raw.alternates as Array<Record<string, unknown>>)[0].name;
+  }, 'PARTS_FIELD_TYPE');
+  invalid('PT1163_ALTERNATE_UNSAFE_SET_NAME_IS_REFUSED', raw => {
+    (raw.alternates as Array<Record<string, unknown>>)[0].name = '../side';
+  }, 'PARTS_FIELD_TYPE');
+  invalid('PT1163_ALTERNATE_UNSAFE_PART_NAME_IS_REFUSED', raw => {
+    const sets = raw.alternates as PartsFile['alternates'];
+    sets![0].records[0].name = '../face';
+  }, 'PARTS_FIELD_TYPE');
+  invalid('PT1163_ALTERNATE_NONOBJECT_IS_NAMED', raw => { raw.alternates = [null]; }, 'PARTS_FIELD_TYPE');
+  invalid('PT1163_ALTERNATE_NONOBJECT_RECORD_IS_NAMED', raw => {
+    (raw.alternates as Array<Record<string, unknown>>)[0].records = [null];
+  }, 'PARTS_FIELD_TYPE');
   const script = join(dir, 'observer.ts');
   writeFileSync(script, observer);
   const paths = references.map(reference => resolve(fixture, reference.path));
@@ -85,14 +121,17 @@ export function runPartsFileReferenceChecks(dir: string, base: PartsFile, config
   symlinkSync(join(root, 'node_modules'), join(isolated, 'node_modules'), 'dir');
   const source = join(isolated, 'src/propose.ts');
   const original = readFileSync(source, 'utf8');
+  const beforeMd5 = createHash('md5').update(readFileSync(source)).digest('hex');
   const marker = "const file = readParts(join(dir, 'parts.json'));";
   const planted = original.replace(marker, `${marker}\n  readPng(join(dir, 'parts', 'stale.png'));`);
   try {
     writeFileSync(source, planted);
+    say('PT1163_SOURCE_PLANT_CHANGES_FROZEN_MD5', createHash('md5').update(readFileSync(source)).digest('hex') !== beforeMd5, 'reader-only plant differs from pre-plant source hash');
     const red = observe(isolated);
     say('PT1163_READER_ONLY_PLANT_BREAKS_READ_SUBSET', planted !== original && red.uncovered.length === 1 && red.uncovered[0] === join(fixture, 'parts/stale.png'), JSON.stringify(red));
   } finally { writeFileSync(source, original); }
   const restored = observe(isolated);
   say('PT1163_RESTORED_READER_SUBSET_IS_GREEN', restored.uncovered.length === 0 && paths.every(path => restored.reads.includes(path)), JSON.stringify(restored));
-  say('PT1163_PLANT_REMOVED_SOURCE_RESTORED', readFileSync(source, 'utf8') === original, `plant removed, tree restored, src/propose.ts md5 ${createHash('md5').update(original).digest('hex')}`);
+  const afterMd5 = createHash('md5').update(readFileSync(source)).digest('hex');
+  say('PT1163_PLANT_REMOVED_SOURCE_RESTORED', afterMd5 === beforeMd5, `plant removed, tree restored, src/propose.ts md5 ${afterMd5}; pre-plant md5 ${beforeMd5}`);
 }

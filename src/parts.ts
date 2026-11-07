@@ -679,6 +679,10 @@ function checkPaintingExtensionCount(r: Record<string, unknown>, label: string, 
   else if (!Number.isSafeInteger(r.opaque_px) || (n as number) > (r.opaque_px as number)) fail('PARTS_COUNTS_ADD_UP', label + ' painting_extension_px', `is ${show(n)}; at most opaque_px ${show(r.opaque_px)} is required`);
 }
 
+function isPartName(value: unknown): value is string {
+  return typeof value === 'string' && value !== '' && !/[\\/]/.test(value) && !value.startsWith('.');
+}
+
 function show(v: unknown): string {
   return v === undefined ? 'absent' : JSON.stringify(v);
 }
@@ -778,7 +782,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
       if (held.length > 0 && held.length < VISIBILITY_KEYS.length) {
         fail('PARTS_FIELD_PRESENT', `${label} fields ${VISIBILITY_KEYS.map((k) => `"${k}"`).join(', ')}`, `only ${held.join(', ')} present; all three (assemble writes them) or none (the reference's record) is required`);
       }
-      if (typeof r.name !== 'string' || r.name === '' || /[\\/]/.test(r.name) || r.name.startsWith('.')) {
+      if (!isPartName(r.name)) {
         fail('PARTS_FIELD_TYPE', `${label} field "name"`, `is ${show(r.name)}; a file-name-safe part name is required`);
       } else if (seen.has(r.name)) fail('PARTS_NAME_UNIQUE', label, `appears at parts[${seen.get(r.name)}] and parts[${i}]`);
       else seen.set(r.name, i);
@@ -896,9 +900,14 @@ function checkParts(raw: unknown, path: string): PartsFile {
   if (Array.isArray(o.alternates)) {
     // Issue #620: a set record's cap is a cap, so it is held to the base records' rule; the object names the set and the part.
     o.alternates.forEach((a, i) => {
-      if (typeof a !== 'object' || a === null || Array.isArray(a)) return;
+      if (typeof a !== 'object' || a === null || Array.isArray(a)) {
+        fail('PARTS_FIELD_TYPE', `${path} alternates[${i}]`, `is ${show(a)}; an alternate set object is required`);
+        return;
+      }
       const set = a as Record<string, unknown>;
       const at = `${path} alternates[${i}]${typeof set.name === 'string' ? ` (set "${set.name}")` : ''}`;
+      if (!isPartName(set.name)) fail('PARTS_FIELD_TYPE', `${at} field "name"`, `is ${show(set.name)}; a file-name-safe set name is required`);
+      if (!Array.isArray(set.records)) fail('PARTS_FIELD_TYPE', `${at} field "records"`, `is ${show(set.records)}; an array of alternate part records is required`);
       if ('cut_ownership' in set) checkOwnership(set.cut_ownership, `${at} cut_ownership`, fail);
       if ('base_anchor' in set) {
         const names = new Set(Array.isArray(set.records) ? set.records.flatMap(v => typeof v === 'object' && v !== null && typeof v.name === 'string' ? [v.name] : []) : []);
@@ -941,8 +950,14 @@ function checkParts(raw: unknown, path: string): PartsFile {
       if (!Array.isArray(set.records)) return;
       if (set.records.some((p) => typeof p === 'object' && p !== null && !Array.isArray(p) && typeof p.limb === 'object' && p.limb !== null && ('hybrid' in p.limb || 'band' in p.limb))) checkLimbRecords(set.records, `${at} `, fail, false);
       set.records.forEach((p, j) => {
-        if (typeof p !== 'object' || p === null || Array.isArray(p)) return;
+        if (typeof p !== 'object' || p === null || Array.isArray(p)) {
+          fail('PARTS_FIELD_TYPE', `${at} records[${j}]`, `is ${show(p)}; a part object is required`);
+          return;
+        }
         const r = p as Record<string, unknown>;
+        const recordAt = `${at} records[${j}]`;
+        if (!isPartName(r.name)) fail('PARTS_FIELD_TYPE', `${recordAt} field "name"`, `is ${show(r.name)}; a file-name-safe part name is required`);
+        if ('depth' in r) problems.push(...partDepthProblems(r.depth, `${recordAt} depth`));
         const part817 = typeof r.name === 'string' ? `part "${r.name}"` : `records[${j}]`;
         if ('provenance' in r) checkProvenance(r.provenance, r.opaque_px, `${at} ${part817} provenance`, fail, 'depth' in r);
         checkPaintingExtensionCount(r, `${at} ${part817}`, fail);
