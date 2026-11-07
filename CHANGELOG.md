@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.26.1](https://github.com/rig-c/parts/compare/v2.26.0...v2.26.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **assemble:** write figure_rig.png beside parts.json in standalone assemble ([#1179](https://github.com/rig-c/parts/issues/1179)) ([3ed84cf](https://github.com/rig-c/parts/commit/3ed84cf56e1e53d2a0edaa9d6dbb6bfad90b1fbb))
+
 ## [2.26.0](https://github.com/rig-c/parts/compare/v2.25.1...v2.26.0) (2026-11-07)
 
 
