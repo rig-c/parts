@@ -35,6 +35,7 @@ import { makeInputs } from './src/inputs.ts';
 import { idleKeysOf, isIdleKeys } from './src/rig.ts';
 import { bodyCoreBox, bodyOpaqueBox, CORE_ALPHA, depthSkipLine, exportLayers, figuresPhrase, hiddenLayerLine, implausibleRules, layerCoreBox, layerFigures, layerOpaqueBox, type LayerSet, layerSetDiff, type OpaqueBox, OPAQUE_ALPHA_ABOVE, pct, readLayers, readWrapperLayers, ruleSummary, templateLayerNames, templatePsdBytes, times } from './src/layers.ts';
 import { checkImageSize, choosePerson, KEYPOINTS_SPEC, loadKeypoints, type RigJoints, toRigJoints } from './src/keypoints.ts';
+import { checkPartsStage } from './src/partscheck.ts';
 import { basisLines, branchSqueezeLine, checkProposal, compare, compareLines, DEFAULT_GRID_RULE, draftTurn, drawLandmarks, FIGURE_GRID_DIVISOR, FRINGE_STEP_PX, GRID_RULES, type GridRule, type BustDraft, HIP_MIN_FRACTION, type DraftLintFinding, lint, lintLine, type PartSet, PROPOSAL_CONFIG_SECTIONS, proposalAsConfig, proposeWithBasis, readBustLandmarks, readPartSet, serializeProposal, withTurn, WRIST_ON_PART_PX } from './src/propose.ts';
 import { BASIS_FILE, BASIS_SPEC, basisFile, basisLine, coverageLines, legChainChoice, serializeBasis } from './src/diagnostics.ts';
 import { BEND_DEGREES, BEND_WORST_SHARE, DUST_MAX_PX, DUST_MAX_SHARE, IDLE_BOUND_PX, MESH_DRAFT_REPORT, MESH_DRAFT_SPEC, meshDraftStage, MORE_TRIANGLES_FLAG, relativeConfigPaths, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
@@ -564,6 +565,12 @@ usage:
       one binding; a record either command wrote serves the other over the
       same input), refused as RETUNE_INPUT_CHECK_BOUND,
       RETUNE_INPUT_CHECK_FILE and RETUNE_INPUT_CHECK_MOVED.
+
+  rig-parts check-parts --parts <dir> --out <dir> [--json]
+      Read assemble outputs, bind their bytes and write parts-check.json.
+      --out is disjoint from --parts. No rig or renderer is required.
+      Exit 0 records input integrity; all six unmeasured quality classes print HOLE.
+      --json prints the completed report only, with the recorded exit code.
 
   rig-parts check --rig <dir> --out <dir> [--parts <dir>] [--source <painting.png>] [--no-extremes]
                     [--page-edges pot|free] [--pack-shape rect|polygon]
@@ -1126,6 +1133,7 @@ function printLayerTable(set: LayerSet): void {
  * no row; `layers` takes one positional path beside its flags (issue #359).
  */
 const TAKES = {
+  'check-parts': { valued: ['--parts', '--out'], switches: ['--json'] },
   'diff-components': { valued: ['--stack', '--painting', '--parts', '--figure', '--floor', '--threshold', '--out', '--verify'], switches: [] },
   'depth-prepare': { valued: ['--parts', '--config', '--out'], switches: [] },
   'depth-apply': { valued: ['--parts', '--manifest', '--config', '--rig-config', '--out'], switches: [] },
@@ -1374,6 +1382,21 @@ function flags(args: string[], command: Command, required: readonly string[]): M
   }
   for (const k of required) if (!got.has(k)) return `${command} needs ${k} <value>`;
   return got;
+}
+
+function cmdCheckParts(args: string[]): number {
+  const json = args.filter(arg => arg === '--json').length;
+  if (json > 1) return usage('--json is given twice');
+  const values = flags(args.filter(arg => arg !== '--json'), 'check-parts', ['--parts', '--out']);
+  if (typeof values === 'string') return usage(values);
+  try {
+    const report = checkPartsStage(values.get('--parts') as string, values.get('--out') as string, json === 1 ? () => {} : console.log);
+    if (json === 1) process.stdout.write(JSON.stringify(report, null, 2) + '\n');
+    return report.exit_code;
+  } catch (error) {
+    if (error instanceof PartsError) return printRefusal(error);
+    return printRefusal(new PartsError([{ code: 'PARTS_CHECK_INTERNAL', object: 'check-parts', detail: 'unexpected internal exception; no report was published' }]));
+  }
 }
 
 function cmdCheck(args: string[]): number {
@@ -2333,6 +2356,7 @@ function main(argv: string[]): number | Promise<number> {
   if (command === 'head-crop-preflight') return cmdHeadCropPreflight(rest);
   if (command === 'compare') return cmdCompare(rest);
   if (command === 'check') return cmdCheck(rest);
+  if (command === 'check-parts') return cmdCheckParts(rest);
   if (command === 'loop') return cmdLoop(rest);
   if (command === 'assemble') return cmdAssemble(rest);
   if (command === 'inputs') return cmdInputs(rest);

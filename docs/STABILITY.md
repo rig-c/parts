@@ -29,6 +29,100 @@ below). A build's bytes are not promised across versions. A later version may mo
 them, and when it does, the change that moves them declares which bytes and why (the
 winding change of #133 is the example: [MIGRATION.md](MIGRATION.md)).
 
+## Parts-stage integrity report
+
+`rig-parts check-parts --parts <assembled-dir> --out <disjoint-report-dir>
+[--json]` writes `parts-check.json`, spec `rig-parts-parts-check/1`.
+Exit 0 is not a quality pass. No #945/#884 defect class is measured yet.
+The six quality HOLEs are always present. They name plate ghost, plate structure,
+plate smear, stepped fill, invented material and invented-material exposure.
+
+The top-level key order is `spec`, `stage`, `inputs`, `parts`, `refusals`,
+`reported`, `holes`, `exit_code`. `stage` is `parts`. `inputs` is sorted by
+relative POSIX path. Each row has `path`, `status`, `sha256`, in that order.
+Status is `read`, `missing`, `unreadable` or optional `absent`; SHA-256 is null
+unless the file was read. The inventory binds regular files under `--parts`,
+including primary and alternate PNGs, declared depth images, `parts.json`,
+`painting_in_rig.png` and present source-cover/allocation reports. Missing
+required references are explicit inventory rows. Symlinks and special files
+are refused. Inputs are hashed again before atomic publication.
+
+Base and alternate `scene.figure_mask` are declared but not consumed, read,
+hashed or bound by this command. Their standalone-assemble location is tracked
+in [#1177](https://github.com/rig-c/parts/issues/1177). The plate is outside this
+command's inputs. `painting_in_rig` is written beside `parts.json` in both
+standalone assemble and build layouts and is consumed and hash-checked.
+
+`parts` preserves primary names, alternate records, the source-cover inventory
+and allocation reports. Embedded object keys are sorted, and producer array
+order is retained. `refusals` rows have `code`, `object`, `found`, `required`,
+`detail`; reused metadata-reader diagnostics retain their code and detail with
+null structured values when the reader supplies none. A refused input produces
+a report and exit 1. `reported` rows have `code`, `set`, `part`, `source`, `count`,
+`spans`; unplanned direct cover is reported without a refusal. `holes` rows have
+`code`, `object`, `reason`, `line`. Absent source cover or allocation adds its
+own HOLE; malformed present reports are refused. A HOLE carries no measured zero.
+
+Bad arguments (exit 2), overlapping output, changing inputs, internal exceptions
+and publication failures (exit 1) produce no new report. Earlier reports do not
+attest to a later invocation. Consumers bind the report and current input hashes
+and read its `exit_code`. A sibling temporary file is exclusively created, then
+renamed into place. Identical inputs produce identical report bytes on repeat
+runs and under output roots with different parents.
+
+The diagnostic code vocabulary below is closed for `rig-parts-parts-check/1`,
+including reused reader and invocation codes. Adding a code requires a new spec
+version. The generated controls derive literals from `src/parts.ts`,
+`src/takesource.ts`, `src/depthsheets.ts`, `src/setfocus.ts` and `src/partscheck.ts`,
+compare this list with the command's allowlist, and plant an undeclared code.
+
+<!-- parts-check:codes -->
+- `CONFIG_SET_FOCUS`
+- `PARTS_ALT_BASE_ANCHOR`
+- `PARTS_ALT_TIPS`
+- `PARTS_ALT_TIPS_SOURCE`
+- `PARTS_BOX_INSIDE_RIG`
+- `PARTS_CHECK_INPUT_CHANGED`
+- `PARTS_CHECK_INPUT_READ`
+- `PARTS_CHECK_INTERNAL`
+- `PARTS_CHECK_OUTPUT`
+- `PARTS_CHECK_PNG_READ`
+- `PARTS_CHECK_PUBLISH`
+- `PARTS_CHECK_REPORT`
+- `PARTS_COUNTS_ADD_UP`
+- `PARTS_CUT_FROM_KNOWN`
+- `PARTS_DEPTH_REFERENCE`
+- `PARTS_FIELD_PRESENT`
+- `PARTS_FIELD_TYPE`
+- `PARTS_FILE_PRESENT`
+- `PARTS_FROM_KNOWN`
+- `PARTS_HOLES_LARGEST_FIRST`
+- `PARTS_HOLE_PART_KNOWN`
+- `PARTS_HYBRID_PAIR`
+- `PARTS_INVENTED_EXPOSURE`
+- `PARTS_INVENTED_MATERIAL`
+- `PARTS_IS_JSON`
+- `PARTS_KEY_KNOWN`
+- `PARTS_MOTION_SEAM`
+- `PARTS_NAME_UNIQUE`
+- `PARTS_PAINTING_ALLOCATION`
+- `PARTS_PAINTING_OPAQUE`
+- `PARTS_PAINTING_PNG`
+- `PARTS_PAINTING_PRESENT`
+- `PARTS_PAINTING_SHA256`
+- `PARTS_PAINTING_SIZE`
+- `PARTS_PLATE_GHOST`
+- `PARTS_PLATE_SMEAR`
+- `PARTS_PLATE_STEPS`
+- `PARTS_PLATE_STRUCTURE`
+- `PARTS_SINGLE_RUN_PAD`
+- `PARTS_SOURCE_COVER`
+- `PARTS_TAKEN_LAYERS`
+- `PARTS_UNPLANNED_SOURCE_COVER`
+- `PROPOSE_PNG_MATCHES_BOX`
+- `USAGE`
+<!-- /parts-check:codes -->
+
 ## Programmatic config file references
 
 `@rig-c/parts/src/config.ts` exports `configFileReferences(raw: unknown):
@@ -122,6 +216,7 @@ defaults are the help's too, and none is guessed from the art.
 | `propose` | `--parts`, `--source`, `--out`, `--full`, `--head`, `--write-config` together: the [neck draft](AUTHORING.md#a-neck-that-moves-on-its-own) for an existing config with `turn.body` and one neck plan row; reassembles under `<out>/rig`, preserves the sampled turn and drafts a rigid neck unit (issue #826) |
 | `compare` | `--left`, `--right`; optional `--map` |
 | `rig` | `--config`, `--parts`, `--out`; optional `--idle-keys` (ctl, direct), `--page-edges` (pot, free), `--pack-shape` (rect, polygon) |
+| `check-parts` | `--parts`, `--out`; optional `--json` |
 | `check` | `--rig`, `--out`; optional `--parts`, `--source`, `--page-edges`, `--pack-shape`, `--requirements`, `--seam-pairs`, `--keep-stills`, `--no-extremes` (issue #829), `--set` or `--all-sets` (issue #454), `--environment` (issue #538, additive), `--wind-band` (issue #590, additive), `--json` (issue #904) |
 | `loop` | `--frames`, `--out`; optional `--palette` |
 | `build` | `--config`, `--source`, `--full`, `--out`; optional `--head` (as for `assemble`), `--seam`, `--project`, `--page-edges`, `--pack-shape`, `--loop`, `--lead-in`, `--requirements`, `--idle-keys`, `--seam-pairs`, `--keep-stills`, `--no-extremes` (issue #829), `--alt` (as for `assemble`, issue #454), `--set` or `--all-sets` (as for `check`, issue #454), `--environment` (as for `check`, issue #538, additive), `--wind-band` (as for `check`, issue #590, additive) |
