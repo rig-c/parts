@@ -213,6 +213,7 @@ defaults are the help's too, and none is guessed from the art.
 | `sheet` | `--source`, `--layers` (repeatable), `--out`; optional `--cell`, `--cols` |
 | `inputs` | `--source`, `--config`, `--out` |
 | `comfy` | `paint`: `--config`, `--out`; optional `--seeds`, `--seed0`, `--host`, `--wait`, `--timeout`, `--poll` |
+| `comfy` | `plate`: `--mode` (`background` or `foreground`), `--painting`, `--mask-from` (`seethrough:<dir>` or `figure-mask:<dir>`), `--out`; with `--mode background` also `--checkpoint-sha256` (required) and optional `--graph` (`lama` or `core`), `--model` (required with `core`), `--seed`, `--grow`, `--steps`, `--prompt`, `--negative` (the last three with `core` only), `--host`, `--wait`, `--timeout`, `--poll` (issue #1183, additive) |
 | `comfy` | `seethrough`: `--image`, `--out`; optional `--resolution`, `--steps`, `--seed`, `--prefix`, `--offload`, `--no-offload`, `--lama`, `--nf4`, `--host`, `--wait`, `--timeout`, `--poll`, `--config` (See-through settings and optional depth block), `--depth-run` (`full` or `head`, required with the block) |
 | `assemble` | `--propose-plan` with `--source`, `--full`, `--config`, optional `--head`, `--write-config` (must name `--config` itself, issue #356); or `--source`, `--full`, `--config`, `--out`, optional `--head` (without it, one run: issue #359), `--seam` (near-white, silhouette), `--project` (core, visible), `--alt` (repeatable `<name>=<source>:<full>[:<head>]`, issue #454), `--requirements` (source-bound cut-material evidence only when the file declares `cut_material`, issue #888) |
 | `head-crop-preflight` | `--full`, `--canvas`, `--head-box` (JSON coordinate array); read-only advice before the head run, original alpha > 8 samples (issue #1082) |
@@ -432,6 +433,28 @@ Empty readings remain explicit.
 The report measures direct cover before projection and downstream processing.
 The field semantics are documented in AUTHORING's source projection cover entry.
 
+### Plate receipt
+
+`comfy plate` (issue #1183) writes `receipt.json` beside `plate.png` and
+`mask.png`, spec `rig-parts-plate-receipt/1`. Its keys, their order and their
+meaning do not change within the spec; a key added, removed or redefined is a
+new spec version. Every path in it is relative to the receipt's directory.
+
+| key | meaning |
+| --- | --- |
+| `spec` | `"rig-parts-plate-receipt/1"` |
+| `mode` | `"background"` or `"foreground"` |
+| `painting` | `{ path, sha256 }` of the painting read |
+| `mask` | `{ source, from, path, sha256 }`: `source` is `"seethrough"` or `"figure-mask"`, `from` the source directory, `path` the mask actually used (`mask.png`, opaque white inside) |
+| `model` | `{ name, checkpoint_sha256, checkpoint_sha256_from }`, or null for `foreground`. `checkpoint_sha256` is the `--checkpoint-sha256` value, lower-cased; `checkpoint_sha256_from` is `"declared"`: the box reports no hash, so this field is **declared, not measured** |
+| `params` | every parameter of the run, the seed included, in a fixed order per graph: `lama` — `seed`, `grow_px`, `mask_alpha_above`; `core` — `seed`, `grow_px`, `steps`, `cfg`, `sampler`, `scheduler`, `denoise`, `prompt`, `negative`, `mask_alpha_above`; `foreground` — `mask_alpha_above` |
+| `graph` | `"rig-parts/plate-background-lama/1"`, `"rig-parts/plate-background-core/1"`, or the fixed local id `"rig-parts/plate-foreground/1"` |
+| `gpu` | the device `/system_stats` names (the same seed gives other pixels on another GPU), or null for `foreground` |
+| `output` | `{ path, sha256 }` of `plate.png` |
+
+The receipt is read back against the bytes on disk before `<out>` is published;
+a hash that is not its file's refuses the run.
+
 ### Head-crop preflight stdout
 
 `head-crop-preflight` writes one JSON object followed by a newline on success,
@@ -488,7 +511,7 @@ resolution before resizing; it can differ for non-opaque paintings.
 | `rig.json`, `motion.json`, `mesh_report.json`, `images/`, `remesh.json` | `remesh` | the input revision's files, `rig.json` and `mesh_report.json` with the part's attachment and row replaced (under `--delta` the row is the input's with its counts, `bones` and influences recomputed and `mode` "delta"), every other file byte for byte; `remesh.json` is spec `rig-parts-remesh/1`: `request` (`part`, `mesh`, `mesh_sha256`, `idle_keys`, `page_edges`, `pack_shape`; under `--delta`, issue #526: `part`, `delta` — the mesh edit as read — `delta_sha256`, `ops`, `applied` — `moved`, `added`, `removed`, `constrained` — `idle_keys`, `page_edges`, `pack_shape`), `versions` (`parts`, `rigc`), `input` (`rig` — `path`, `bytes`, `sha256` per file — `config_sha256`, `parts_json_sha256`), `baseline` (`reproduced`, `not_compared`; under `--delta` `reproduced` holds one sentence: no config is built, the input is the baseline), `target` (`before`, `after`: `vertices`, `triangles`, `hull`), `preserved` (`identical`, `spliced`), `revision` (per file as `input.rig`), `check` (`input`, `revision`: `pass`, `measured`, `not_met`, `skipped`, `physics`, then `line` and `status` — issue #541, additive, the spec stays `rig-parts-remesh/1`: `line` is the last line `check` prints on that tree, byte for byte, and `status` every block's status as that tree's `check.json` records it, by name in the file's order — `gate`, `loop` and `seam` read from their figures, every other block its own `status`, a block the file does not write absent; `scope`) |
 | `rig.json`, `motion.json`, `mesh_report.json`, `images/`, `retune.json` | `retune` | the input revision's files, `rig.json` with `constraints` and `invariants.detached` replaced and `motion.json` with `animations.idle` replaced by the config's build, every other file byte for byte; `retune.json` is spec `rig-parts-retune/1`: `request` (`idle_keys`, `page_edges`, `pack_shape`), `versions` (`parts`, `rigc`), `input` (`rig` — `path`, `bytes`, `sha256` per file — `config_sha256`, `parts_json_sha256`), `held` (`compared`, `not_compared`), `changed` (`constraints` — each `name`, `type`, `fields` — `added`, `removed`, `idle`: `tracks_changed`, `duration` as before and after), `preserved` (`identical`, `spliced`), `revision` (per file as `input.rig`), `check` (`input`, `revision`: `pass`, `measured`, `not_met`, `skipped`, `physics`, then `line` and `status` — issue #541, additive, the spec stays `rig-parts-retune/1`: `line` is the last line `check` prints on that tree, byte for byte, and `status` every block's status as that tree's `check.json` records it, by name in the file's order — `gate`, `loop` and `seam` read from their figures, every other block its own `status`, a block the file does not write absent; `scope`) |
 | `input-check.json` | `remesh --record-input-check`, `retune --record-input-check` | spec `rig-parts-input-check/1` (issue #617, additive): `versions` (`parts`, `rigc` — `rigc --version`'s whole output), `options` (`page_edges`, `pack_shape`, `requirements` — null, or `path` as resolved and `sha256`), `rig` and `parts` (`dir` as resolved, `files` — `path`, `bytes`, `sha256` per file: every file under `--rig`; `parts.json` and every file under `parts/`), `check` (the input's check side as `remesh.json` carries it); `--input-check` reads it back, and either command's serves the other |
-| the scene report | `compose` | spec `spine-parts-scene-report/1` |
+| the scene report | `compose` | spec `spine-parts-scene-report/1`; the plate block carries `sha256` of the plate PNG's bytes after `size` (issue #1183, additive under *What "stable" means here*: a new report key in a minor version, so the spec stays `/1`) |
 | `idle.png`, `idle-indexed.png`, `idle.gif` | `loop`, `build --loop` | APNG and GIF encodings of the rendered idle |
 | `run.json` | `rig`, `assemble` | spec `rig-run/1` (issue #1165, additive): `spec`, `package` (`name`, `version`), `command` (`"rig"` or `"assemble"`), `started_at` and `finished_at` (UTC ISO-8601 millisecond timestamps ending in `Z`, read in the CLI layer), `config` (`path` relative to `--out`, `sha256` of the config file on disk), and `outputs` (`path` relative to `--out`, `sha256` of each written output file on disk, sorted by `path` in code-unit order and excluding `run.json` itself); written only after the command's gate is green |
 
