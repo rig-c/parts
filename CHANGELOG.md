@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.25.1](https://github.com/rig-c/parts/compare/v2.25.0...v2.25.1) (2026-11-07)
+
+
+### Bug Fixes
+
+* **parts:** read parts-dir paths through the shared resolvers in five more modules ([#1168](https://github.com/rig-c/parts/issues/1168)) ([#1175](https://github.com/rig-c/parts/issues/1175)) ([42aba8e](https://github.com/rig-c/parts/commit/42aba8e50c19c1414b2461cbb763405411069696))
+* **parts:** refuse part and depth-sheet names that differ only in case ([#1169](https://github.com/rig-c/parts/issues/1169)) ([#1171](https://github.com/rig-c/parts/issues/1171)) ([23a3ddd](https://github.com/rig-c/parts/commit/23a3dddf547395c93946a83534c3eb5153fe43c0))
+
 ## [2.25.0](https://github.com/rig-c/parts/compare/v2.24.0...v2.25.0) (2026-11-07)
 
 
