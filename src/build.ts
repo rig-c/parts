@@ -797,12 +797,19 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       altRecomposite = recompositeRecord(measureRecomposite(altCan, altSrcRig, fullSetPlaced));
     }
     const coverSet = sourceCoverSet(altRes, alt.name, alt.source, altRuns);
-    coverSet.parts = coverSet.parts.filter(part => coveredSet.has(part.part));
+    const sourceRows = altRes.sourceCover.parts;
+    coverSet.parts = keptRecords.flatMap(record => {
+      const direct = sourceRows.find(row => row.part === record.name);
+      if (direct !== undefined) return [direct];
+      const parent = record.cut_from ?? record.limb?.of;
+      const reading = sourceRows.find(row => row.part === parent);
+      return reading === undefined ? [] : [{ ...reading, part: record.name, source_of: reading.part }];
+    });
     coverSet.inherited_parts = baseSlots.filter(name => !coveredSet.has(name) && !hidesSet.has(name)).map(part => ({ part, set: null }));
     coverSet.hidden_parts = [...hidesSet];
     coverSet.output_assets = [...new Set([...altRes.parts.parts.map(part => part.name), ...baseSlots])].map(name => ({ part: name,
       image: hidesSet.has(name) ? null : keptRecords.some(record => record.name === name)
-        ? `${alt.name}_${name}.png` : !coveredSet.has(name) ? `${name}.png` : null }));
+        ? `${alt.name}_${name}.png` : !coveredSet.has(name) && baseSlots.includes(name) ? `${name}.png` : null }));
     sourceCoverSets.push(coverSet);
     const alternateAllocation = altRes.paintingEdges?.allocation;
     if (alternateAllocation !== undefined) {
@@ -814,9 +821,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
           source: { painting_sha256: createHash('sha256').update(readFileSync(alt.source)).digest('hex') },
           stage: 'paintingEdges after piece guarding and restoration',
           membership: 'pre-filter-alternate-assembly',
-          output_assets: [...new Set([...altRes.parts.parts.map(part => part.name), ...baseSlots])].map(name => ({ part: name,
-            image: hidesSet.has(name) ? null : keptRecords.some(record => record.name === name)
-              ? `${alt.name}_${name}.png` : !coveredSet.has(name) ? `${name}.png` : null })),
+          output_assets: coverSet.output_assets,
           inherited_parts: baseSlots.filter(name => !coveredSet.has(name) && !hidesSet.has(name)),
           hidden_parts: [...hidesSet],
           ...alternateAllocation,

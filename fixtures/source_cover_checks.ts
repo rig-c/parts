@@ -1,10 +1,10 @@
 /** Public flat blocks with hand-counted projection-input cover. */
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeAlternateCutLayerFixture } from './alternate_cut_layers.ts';
 import { writeArtistFixture } from './artist.ts';
-import { assembleConfig, writeRun, type RunLayerSpec } from './assemble_fixture.ts';
+import { assembleConfig, writeRun, writeAssembleFixture, limbConfig, LIMB_FULL, HEAD_LAYERS, flatPainting, type RunLayerSpec } from './assemble_fixture.ts';
 import { assembleStage } from '../src/build.ts';
 import { readLayers } from '../src/layers.ts';
 import { newRaster } from '../src/raster/types.ts';
@@ -109,10 +109,22 @@ export function runSourceCoverChecks(parent: string, say: Say): void {
     plannedReading.parts[0].covered_by[0]?.planned === true && plannedReading.parts[1].covered_by.length === 0,
     'held own support has a separate count; extend-only stays unplanned; a planned front owner is identified as planned');
 
+  const cloned = { ...loaded, layers: loaded.layers.map(layer => ({ ...layer,
+    pixels: { ...layer.pixels, data: new Uint8ClampedArray(layer.pixels.data) } })) };
+  const clonePlan: PlanEntry[] = [['neck', 'full', 'neck']];
+  const cloneReading = () => sourceCoverRun('full', cloned, loaded, [raster], [0], clonePlan, [], new Int32Array([0]), () => false, null);
+  const identical = cloneReading();
+  cloned.layers[0].pixels.data[0]++;
+  const changed = cloneReading();
+  say('AS1158_PREPARED_COMPARES_MATERIAL_CONTENT',
+    !identical.sources[0].prepared && changed.sources[0].prepared,
+    'a distinct byte-identical buffer is unprepared; changing one RGBA channel marks preparation');
+
+
   const cutDir = join(dir, 'source-only');
   writeAlternateCutLayerFixture(cutDir);
   const cutConfigPath = join(cutDir, 'config.json');
-  const cutConfig = JSON.parse(readFileSync(cutConfigPath, 'utf8')) as { assemble: { cuts: unknown[]; alternates: unknown[] } };
+  const cutConfig = JSON.parse(readFileSync(cutConfigPath, 'utf8')) as { assemble: { cuts: Array<Record<string, unknown>>; alternates: unknown[]; project?: string } };
   cutConfig.assemble.alternates = [{ name: 'source-only', source: 'raised.png', full: 'step', head: 'head',
     parts: ['sleeve'], cuts: cutConfig.assemble.cuts }];
   writeFileSync(cutConfigPath, JSON.stringify(cutConfig));
@@ -122,12 +134,44 @@ export function runSourceCoverChecks(parent: string, say: Say): void {
   const cutReport = JSON.parse(readFileSync(join(cutOut, SOURCE_COVER_FILE), 'utf8')) as Report;
   const cutSet = cutReport.sets.find(set => set.set === 'source-only');
   say('AS1158_SOURCE_ONLY_CUT_PARENT_IS_NOT_AN_ALTERNATE_PART',
-    cutSet !== undefined && cutSet.parts.every(part => part.part === 'sleeve') &&
+    cutSet !== undefined && cutSet.parts.some(part => part.part === 'sleeve' && part.source_of === 'body' &&
+      part.support_px === 1280 && part.covered_by.some(owner => owner.source === 'full:author:raised' && owner.pixels.count === 832)) &&
     cutSet.inherited_parts.some(part => part.part === 'body' && part.set === null) &&
     cutSet.sources.some(layer => layer.source === 'full:topwear' && layer.planned_parts.includes('body')) &&
     cutSet.output_assets.some(asset => asset.part === 'sleeve' && asset.image === 'source-only_sleeve.png') &&
     cutSet.parts.every(part => !cutSet.inherited_parts.some(inherited => inherited.part === part.part)),
     'cut-from body remains an inherited asset and an evaluated source; only covered parts receive alternate part rows');
+
+  cutConfig.assemble.project = 'visible';
+  cutConfig.assemble.alternates = [{ name: 'uncovered', source: 'raised.png', full: 'step', head: 'head',
+    parts: ['body'], cuts: cutConfig.assemble.cuts.map(cut => ({ ...cut, into: 'alternate-only' })) }];
+  writeFileSync(cutConfigPath, JSON.stringify(cutConfig));
+  assembleStage({ config: cutConfigPath, source: join(cutDir, 'painting.png'), full: join(cutDir, 'full'), head: join(cutDir, 'head') },
+    { partsJson: join(cutOut, 'parts.json'), partsDir: join(cutOut, 'parts'), recomposite: join(cutOut, 'recomposite.png'), errorMap: join(cutOut, 'error.png') }, () => {});
+  const assetReport = JSON.parse(readFileSync(join(cutOut, SOURCE_COVER_FILE), 'utf8')) as Report;
+  const assetSet = assetReport.sets.find(set => set.set === 'uncovered');
+  const allocation = JSON.parse(readFileSync(join(cutOut, 'painting_allocation.uncovered.json'), 'utf8')) as { output_assets: Report['sets'][number]['output_assets'] };
+  say('AS1158_UNCOVERED_ALTERNATE_ONLY_ASSET_IS_NULL',
+    assetSet?.output_assets.some(asset => asset.part === 'alternate-only' && asset.image === null) === true &&
+    !existsSync(join(cutOut, 'parts', 'alternate-only.png')) &&
+    JSON.stringify(allocation.output_assets) === JSON.stringify(assetSet.output_assets),
+    'both reports map a filtered alternate-only cut to null; the primary emits no such image');
+
+  const limbDir = join(dir, 'segments');
+  const limbCfg = limbConfig();
+  Object.assign(limbCfg.assemble as object, { alternates: [{ name: 'segments', source: 'painting.png', full: 'full', head: 'head', parts: ['upperarm_r', 'forearm_r'] }] });
+  writeAssembleFixture(limbDir, limbCfg, flatPainting(), { full: LIMB_FULL, head: HEAD_LAYERS });
+  const limbOut = join(limbDir, 'out');
+  assembleStage({ config: join(limbDir, 'config.json'), source: join(limbDir, 'painting.png'), full: join(limbDir, 'full'), head: join(limbDir, 'head') },
+    { partsJson: join(limbOut, 'parts.json'), partsDir: join(limbOut, 'parts'), recomposite: join(limbOut, 'recomposite.png'), errorMap: join(limbOut, 'error.png') }, () => {});
+  const limbReport = JSON.parse(readFileSync(join(limbOut, SOURCE_COVER_FILE), 'utf8')) as Report;
+  const limbSet = limbReport.sets.find(set => set.set === 'segments');
+  say('AS1158_COVERED_SEGMENTS_RETAIN_THEIR_SOURCE_ROW',
+    limbSet?.parts.length === 2 && ['upperarm_r', 'forearm_r'].every(name => limbSet.parts.some(part =>
+      part.part === name && part.source_of === 'arm' && part.source === 'full:handwear-r' && part.support_px === 320)) &&
+    limbSet.parts.every(part => !limbSet.inherited_parts.some(inherited => inherited.part === part.part)),
+    'both arm segments carry the complete arm input reading and remain disjoint from inherited assets');
+
 
   const singleDir = join(dir, 'padded-single');
   writeArtistFixture(singleDir, { portrait: true });

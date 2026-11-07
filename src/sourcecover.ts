@@ -26,6 +26,8 @@ export interface SourceCoverLayer {
 
 export interface SourceCoverPart {
   part: string;
+  /** Parent source-plan reading attributed to a derived alternate part. */
+  source_of?: string;
   source: string;
   support_px: number;
   /** Original own support held by keep, excluded from scalar-owner rows. */
@@ -87,7 +89,10 @@ export function sourceCoverRun(
       planned_parts: plan.filter(([, r, tag]) => r === run && tag === layer.name).map(([part]) => part),
       extend_parts: extend.filter(entry => entry.run === run && entry.tag === layer.name).map(entry => entry.part),
       input_layer: input?.name ?? null,
-      prepared: input === undefined || input.pixels !== layer.pixels || input.left !== layer.left || input.top !== layer.top,
+      prepared: input === undefined || input.left !== layer.left || input.top !== layer.top ||
+        input.pixels.width !== layer.pixels.width || input.pixels.height !== layer.pixels.height ||
+        input.pixels.data.length !== layer.pixels.data.length ||
+        (input.pixels.data !== layer.pixels.data && !input.pixels.data.every((value, pixel) => value === layer.pixels.data[pixel])),
       taken_layers: layer.takenLayers ?? [],
     };
   });

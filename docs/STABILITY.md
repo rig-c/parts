@@ -280,7 +280,9 @@ and `sets` declare projection-input cover. Each set includes its painting hash,
 rig grid, hash-bound inputs, effective source inventory, evaluated part rows,
 inherited primary references, hidden parts and output asset mappings. Cover
 rows carry owning source identity, planned membership and native pixel counts
-and spans. Held-under-cover support is separate. Empty readings remain explicit.
+and spans. A derived alternate row's optional `source_of` names its parent
+source-plan reading before partitioning. Held-under-cover support is separate.
+Empty readings remain explicit.
 The report measures direct cover before projection and downstream processing.
 The field semantics are documented in AUTHORING's source projection cover entry.
 

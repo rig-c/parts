@@ -823,6 +823,9 @@ Unplanned sources remain listed even when they supply zero cover. An
 extend-only source can be consumed while its plan rank remains -1.
 `parts` describes the evaluated source plan, restricted to covered parts for
 alternate sets. Source-only cut and limb dependencies remain in `sources`.
+A covered derived cut or segment without its own layer row uses `source_of` to
+name its parent's complete projection-input reading, before partitioning.
+On the primary, a cut piece without its own layer is reported under its parent's row.
 `output_assets` maps evaluated and inherited parts to exported image filenames,
 with hidden or filtered assets mapped to null. `inherited_parts` references the
 primary with `set: null`; inherited assets have no independently evaluated
