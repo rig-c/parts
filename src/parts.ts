@@ -94,7 +94,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { decodePngBytes } from './raster/png.ts';
-import { type Problem, refuseIfAny } from './errors.ts';
+import { foldName, type Problem, refuseIfAny } from './errors.ts';
 import { KEYPOINT_NAMES, type PosePoints } from './skeleton.ts';
 import { readLayerTag } from './tags.ts';
 import { edgeLength } from './length.ts';
@@ -796,8 +796,8 @@ function checkParts(raw: unknown, path: string): PartsFile {
       }
       if (!isPartName(r.name)) {
         fail('PARTS_FIELD_TYPE', `${label} field "name"`, `is ${show(r.name)}; a file-name-safe part name is required`);
-      } else if (seen.has(r.name.toLowerCase())) fail('PARTS_NAME_UNIQUE', label, `appears at parts[${seen.get(r.name.toLowerCase())!.index}] ("${seen.get(r.name.toLowerCase())!.name}") and parts[${i}] ("${r.name}")`);
-      else seen.set(r.name.toLowerCase(), { index: i, name: r.name });
+      } else if (seen.has(foldName(r.name))) fail('PARTS_NAME_UNIQUE', label, `appears at parts[${seen.get(foldName(r.name))!.index}] ("${seen.get(foldName(r.name))!.name}") and parts[${i}] ("${r.name}")`);
+      else seen.set(foldName(r.name), { index: i, name: r.name });
       const from = typeof r.from === 'string' ? readFrom(r.from) : null;
       if (from === null) fail('PARTS_FROM_KNOWN', `${label} field "from"`, `is ${show(r.from)}; "<full|head>:<v3 tag>", "<full|head>:author:<label>" for a layer the author made, or "painting:<the part's own name>" for a patch, is required`);
       else if (from.run === 'painting' && from.patch !== r.name) {

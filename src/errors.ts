@@ -65,3 +65,8 @@ export class PartsError extends Error {
 export function refuseIfAny(problems: readonly Problem[]): void {
   if (problems.length > 0) throw new PartsError(problems);
 }
+
+/** Fold a file, part or set name for host-independent collision checks (NFC + ASCII lower case). */
+export function foldName(name: string): string {
+  return name.normalize('NFC').toLowerCase();
+}

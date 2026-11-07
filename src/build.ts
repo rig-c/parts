@@ -95,7 +95,7 @@ import {
 } from './autoreplay.ts';
 import { besideIdleLine, checkSummaryLine, inputFileRecord, type InputFileRecord, CLOTH_LINE, type ClothLine, clothWarnText, figureOpeningLines, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamRequiredLine, motionSeamWarnText, motionJointContactLines, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, environmentLine, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, readCheckEnvironment, readWindBand, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR, WIND_BAND_LINE, windBandLines } from './check.ts';
 import { type Cut, type Extend, type Limb, loadConfigAndAnimations, loadConfigWithBytes, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
-import { coreCompileGuideLine, failLine, PartsError, type Problem, refuseIfAny } from './errors.ts';
+import { coreCompileGuideLine, failLine, foldName, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { editedConfigImages, editedRunImages, missingReceipts, readEditorReceipts } from './editreceipt.ts';
 import { untracedPartSources } from './partsource.ts';
 import type { MeshQualityReport, MotionSchedule } from '@rig-c/core/mesh';
@@ -866,7 +866,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   ];
   const assetIndices = new Map<string, number>();
   emittedAssets.forEach((file, index) => {
-    const previous = assetIndices.get(file.toLowerCase());
+    const previous = assetIndices.get(foldName(file));
     if (previous !== undefined) {
       altProblems.push({
         code: 'DEPTH_SHEET_UNAMBIGUOUS',
@@ -874,10 +874,10 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         detail: `output assets[${previous}] ("${emittedAssets[previous]}") and [${index}] ("${file}") require the same filename; choose distinct base, alternate and sheet names`,
       });
     } else {
-      assetIndices.set(file.toLowerCase(), index);
+      assetIndices.set(foldName(file), index);
     }
   });
-  const outputFiles = new Set([
+  const outputFiles = new Map([
     outs.partsJson, outs.recomposite, outs.errorMap,
     join(dirname(outs.partsJson), PAINTING_ALLOCATION_FILE),
     join(dirname(outs.partsJson), SOURCE_COVER_FILE),
@@ -887,13 +887,13 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     join(dirname(outs.partsJson), STAGE_MAP_FILE),
     join(dirname(outs.partsJson), EDGE_RESIDUAL_FILE),
     ...emittedAssets.map(file => join(outs.partsDir, file)),
-  ].map(file => resolve(file)));
+  ].map((file): [string, string] => [foldName(resolve(file)), `"${basename(file)}"`]));
   for (const { file, report } of allocationReports) {
-    const path = resolve(dirname(outs.partsJson), file);
-    if (outputFiles.has(path)) altProblems.push({ code: 'PAINTING_ALLOCATION_UNAMBIGUOUS',
+    const k = foldName(resolve(dirname(outs.partsJson), `painting_allocation.${encodeURIComponent(foldName(report.set))}.json`));
+    if (outputFiles.has(k) || outputFiles.has(foldName(resolve(dirname(outs.partsJson), file)))) altProblems.push({ code: 'PAINTING_ALLOCATION_UNAMBIGUOUS',
       object: `alternate set "${report.set}" report "${file}"`,
-      detail: 'shares an output path with another artifact; choose distinct output paths and set names' });
-    outputFiles.add(path);
+      detail: `${outputFiles.get(k) ?? outputFiles.get(foldName(resolve(dirname(outs.partsJson), file)))} and alternate set "${report.set}" report "${file}" share an output path with another artifact; choose distinct output paths and set names` });
+    else outputFiles.set(k, `alternate set "${report.set}" report "${file}"`);
   }
   // Issue #944: under pinholes.required, every pinhole of the base set's flat parts stack is refused by name, with the
   // alternate sets' refusals, before anything is written.
@@ -944,9 +944,9 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     code: PAINTING_EDGE_COVERAGE_TRANSFER,
     stage: 'paintingEdges after piece guarding and restoration', grid: result.parts.rig_size,
     ...allocation, written_reports: allocationReports.map(report => report.file) }, null, 2) + '\n');
-  const currentAllocationFiles = new Set(allocationReports.map(report => report.file));
+  const currentAllocationFiles = new Set(allocationReports.map(report => foldName(report.file)));
   for (const file of previousAllocationFiles) {
-    if (!currentAllocationFiles.has(file) && !outputFiles.has(resolve(dirname(outs.partsJson), file))) {
+    if (!currentAllocationFiles.has(foldName(file)) && !outputFiles.has(foldName(resolve(dirname(outs.partsJson), file)))) {
       rmSync(join(dirname(outs.partsJson), file), { force: true });
     }
   }

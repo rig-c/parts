@@ -209,16 +209,18 @@ export function runDepthSheetChecks(dir: string, say: Say): void {
     } catch (error) { if (error instanceof PartsError) return error; throw error; }
   };
   const partCaseErr = captureStage('case-parts', { key: 'case_parts', seethrough: { resolution: 8, steps: 1, seed: 0, offload: false }, assemble: { rig_scale: 1, plan: [['Face', 'full', 'face'], ['face', 'full', 'eyelash-r']] } });
+  const partNfdErr = captureStage('nfd-parts', { key: 'nfd_parts', seethrough: { resolution: 8, steps: 1, seed: 0, offload: false }, assemble: { rig_scale: 1, plan: [['\u00e9', 'full', 'face'], ['e\u0301', 'full', 'eyelash-r']] } });
   const sheetCaseErr = captureStage('case-sheet', { key: 'case_sheet', seethrough: { resolution: 8, steps: 1, seed: 0, offload: false }, depth: { full: { layers: { face: { image: 'sheet.png', near: 'black', zScale: 12 } } } }, assemble: { rig_scale: 1, plan: [['face', 'full', 'face'], ['Face_depth', 'full', 'eyewhite-r']] } });
   let altCaseErr: PartsError | null = null;
   try { runAltStage('alt-case-collision', 'Warm'); } catch (error) { if (!(error instanceof PartsError)) throw error; altCaseErr = error; }
   const distinctErr = captureStage('case-distinct', { key: 'case_distinct', seethrough: { resolution: 8, steps: 1, seed: 0, offload: false }, depth: { full: { layers: { face: { image: 'sheet.png', near: 'black', zScale: 12 } } } }, assemble: { rig_scale: 1, plan: [['Face', 'full', 'face'], ['lash', 'full', 'eyelash-r']] } });
   say('DS48_ASSEMBLE_CASE_COLLIDING_PART_AND_SHEET_NAMES_ARE_REFUSED',
     partCaseErr?.problems.some(p => p.code === 'DEPTH_SHEET_UNAMBIGUOUS' && p.detail.includes('"Face"') && p.detail.includes('"face"')) === true && !existsSync(join(altStageDir, 'case-parts')) &&
+    partNfdErr?.problems.some(p => p.code === 'DEPTH_SHEET_UNAMBIGUOUS' && p.detail.includes('"\u00e9"') && p.detail.includes('"e\u0301"')) === true && !existsSync(join(altStageDir, 'nfd-parts')) &&
     sheetCaseErr?.problems.some(p => p.code === 'DEPTH_SHEET_UNAMBIGUOUS' && p.detail.includes('"face_depth.png"') && p.detail.includes('"Face_depth"')) === true && !existsSync(join(altStageDir, 'case-sheet')) &&
     altCaseErr?.problems.some(p => p.code === 'DEPTH_SHEET_UNAMBIGUOUS' && p.detail.includes('"warm_lash_depth.png"') && p.detail.includes('"Warm_lash_depth.png"')) === true && !existsSync(join(altStageDir, 'alt-case-collision')) &&
     distinctErr === null && existsSync(join(altStageDir, 'case-distinct/parts/Face.png')) && existsSync(join(altStageDir, 'case-distinct/parts/Face_depth.png')) && existsSync(join(altStageDir, 'case-distinct/parts/lash.png')),
-    JSON.stringify({ partCase: partCaseErr?.problems, sheetCase: sheetCaseErr?.problems, altCase: altCaseErr?.problems, distinctErr }));
+    JSON.stringify({ partCase: partCaseErr?.problems, partNfd: partNfdErr?.problems, sheetCase: sheetCaseErr?.problems, altCase: altCaseErr?.problems, distinctErr }));
   const root = resolve(import.meta.dir, '..'), isolated = join(dir, 'isolated-1169');
   mkdirSync(isolated, { recursive: true });
   cpSync(join(root, 'src'), join(isolated, 'src'), { recursive: true });
@@ -232,7 +234,7 @@ export function runDepthSheetChecks(dir: string, say: Say): void {
 const [source, stageDir] = process.argv.slice(2);
 const { assembleStage } = await import(source + '/src/build.ts');
 const { join } = await import('node:path');
-const cases = [['case-parts', 'Face', 'face'], ['case-sheet', 'face_depth.png', 'Face_depth'], ['alt-case-collision', 'warm_lash_depth.png', 'Warm_lash_depth.png']];
+const cases = [['case-parts', 'Face', 'face'], ['nfd-parts', '\\u00e9', 'e\\u0301'], ['case-sheet', 'face_depth.png', 'Face_depth'], ['alt-case-collision', 'warm_lash_depth.png', 'Warm_lash_depth.png']];
 const out = cases.map(([tag, a, b], idx) => {
   try {
     assembleStage({ source: join(stageDir, 'painting.png'), full: join(stageDir, 'full'), head: null, config: join(stageDir, tag + '.config.json'), seam: 'near-white', project: 'core' }, { partsJson: join(stageDir, 'probe-' + idx, 'parts.json'), partsDir: join(stageDir, 'probe-' + idx, 'parts'), recomposite: join(stageDir, 'probe-' + idx, 'recomposite_rig.png'), errorMap: join(stageDir, 'probe-' + idx, 'recomposite_error_rig.png') }, () => {});
@@ -249,10 +251,10 @@ console.log(JSON.stringify(out));
     if (res.status !== 0) throw new Error(`probe-1169 exit ${res.status}: ${res.stderr}`);
     return JSON.parse(res.stdout.trim()) as Array<{ tag: string; matched: boolean }>;
   };
-  const asmRule1 = 'const k = `${p.record.name}.png`.toLowerCase()', asmPlant1 = 'const k = `${p.record.name}.png`';
-  const asmRule2 = 'artFiles.has(p.record.depth.image.toLowerCase())', asmPlant2 = 'artFiles.has(p.record.depth.image)';
-  const bldRule1 = 'assetIndices.get(file.toLowerCase())', bldPlant1 = 'assetIndices.get(file)';
-  const bldRule2 = 'assetIndices.set(file.toLowerCase(), index)', bldPlant2 = 'assetIndices.set(file, index)';
+  const asmRule1 = 'const k = foldName(`${p.record.name}.png`)', asmPlant1 = 'const k = `${p.record.name}.png`';
+  const asmRule2 = 'artFiles.has(foldName(p.record.depth.image))', asmPlant2 = 'artFiles.has(p.record.depth.image)';
+  const bldRule1 = 'assetIndices.get(foldName(file))', bldPlant1 = 'assetIndices.get(file)';
+  const bldRule2 = 'assetIndices.set(foldName(file), index)', bldPlant2 = 'assetIndices.set(file, index)';
   let plantedRed: Array<{ tag: string; matched: boolean }> = [], restoredGreen: Array<{ tag: string; matched: boolean }> = [];
   let asmPlantedMd5 = '', bldPlantedMd5 = '', asmAfterMd5 = '', bldAfterMd5 = '';
   try {
@@ -1051,6 +1053,29 @@ export function runDepthSheetStillChecks(say: Say): void {
     'DZ50_SILHOUETTE_SIZE_MISMATCH_REFUSED',
     errors(() => extendDepthSilhouette(silSource, newRaster(3, 3))).includes('DEPTH_SILHOUETTE_SIZE_MISMATCH'),
     'extendDepthSilhouette refuses mismatched source/art dimensions with DEPTH_SILHOUETTE_SIZE_MISMATCH',
+  );
+  const runAltPartCollision = (basePartName: string, setName: string): PartsError | null => {
+    const p = rigParts(), imgs = rigImages(), baseEye = p.parts.find(r => r.name === 'eye')!;
+    const baseLash = { ...baseEye, name: basePartName, from: 'head:eyelash-r' };
+    const altLash = { ...baseEye, name: 'lash', from: 'head:eyewhite-r' };
+    p.parts.push(baseLash, altLash);
+    imgs.set(basePartName, art); imgs.set('lash', art); imgs.set(`${setName}_lash`, art);
+    p.alternates = [{ name: setName, parts: ['lash'], slots: { lash: `${setName}_lash` }, records: [{ ...altLash }], ghost_px: {}, recomposite: { mean_abs: 0, within_limit: 0, within_share: 1, error_limit: 0, error_px: 0, covered_alpha: 8, uncovered_error_px: 0, hole_count: 0, holes_listed: 0, holes: [] } }];
+    const rawCfg = rigConfig();
+    rawCfg.assemble = { rig_scale: 0.5, plan: [['cloth', 'full', 'topwear'], ['eye', 'head', 'face'], [basePartName, 'head', 'eyelash-r'], ['lash', 'head', 'eyewhite-r']] };
+    rawCfg.regions = { eye: 'eye', [basePartName]: 'eye', lash: 'eye' };
+    try { buildRig(parseConfig(rawCfg), p, imgs); return null; }
+    catch (error) { if (error instanceof PartsError) return error; throw error; }
+  };
+  const altCaseCollision = runAltPartCollision('Warm_lash', 'warm');
+  const altNfdCollision = runAltPartCollision('\u00e9_lash', 'e\u0301');
+  const altNearMiss = runAltPartCollision('Warm_lash', 'cool');
+  say(
+    'DZ51_RIG_CASE_AND_UNICODE_COLLIDING_ALTERNATE_IMAGES_REFUSED',
+    altCaseCollision?.problems.some(p => p.code === 'DEPTH_SHEET_UNAMBIGUOUS' && p.detail.includes('"Warm_lash.png"') && p.detail.includes('"warm_lash.png"')) === true &&
+      altNfdCollision?.problems.some(p => p.code === 'DEPTH_SHEET_UNAMBIGUOUS' && p.detail.includes('"\u00e9_lash.png"') && p.detail.includes('"e\u0301_lash.png"')) === true &&
+      altNearMiss === null,
+    JSON.stringify({ caseProblems: altCaseCollision?.problems, nfdProblems: altNfdCollision?.problems, nearMiss: altNearMiss }),
   );
 }
 

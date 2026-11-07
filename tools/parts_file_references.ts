@@ -206,7 +206,7 @@ console.log(JSON.stringify(outcomes));
     const first = (raw.parts as Array<Record<string, unknown>>)[0];
     raw.parts = [{ ...first, name: 'Face' }, { ...first, name: 'face' }];
   }, 'PARTS_NAME_UNIQUE', 'part "face"',
-  ' else if (seen.has(r.name.toLowerCase())) fail(\'PARTS_NAME_UNIQUE\', label, `appears at parts[${seen.get(r.name.toLowerCase())!.index}] ("${seen.get(r.name.toLowerCase())!.name}") and parts[${i}] ("${r.name}")`);',
+  ' else if (seen.has(foldName(r.name))) fail(\'PARTS_NAME_UNIQUE\', label, `appears at parts[${seen.get(foldName(r.name))!.index}] ("${seen.get(foldName(r.name))!.name}") and parts[${i}] ("${r.name}")`);',
   '"Face","face"');
   const distinctParts = structuredClone(file);
   distinctParts.parts = [{ ...file.parts[0], name: 'Face' }, { ...file.parts[0], name: 'neck', from: 'full:topwear' }];

@@ -4796,6 +4796,32 @@ function runBlinkConfigCases(say: (name: string, ok: boolean, detail: string, wh
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+
+  const altSetConfig = (firstName: string, secondName: string): Record<string, unknown> => {
+    const c = minimalConfig();
+    (c.assemble as Record<string, unknown>).alternates = [
+      { name: firstName, parts: ['face'] },
+      { name: secondName, parts: ['face'] },
+    ];
+    return c;
+  };
+  const altSetCase = one(refusals(() => parseConfig(altSetConfig('Warm', 'warm'))));
+  const altSetNfd = one(refusals(() => parseConfig(altSetConfig('\u00e9', 'e\u0301'))));
+  const altSetNearMiss = refusals(() => parseConfig(altSetConfig('Warm', 'cool')));
+  say(
+    'CF44_CASE_AND_UNICODE_COLLIDING_ALTERNATE_SETS_ARE_REFUSED_WITH_BOTH_NAMES',
+    altSetCase?.code === 'CONFIG_PART_UNIQUE' &&
+      altSetCase.object === 'config.assemble.alternates[1].name' &&
+      altSetCase.detail.includes('"warm"') &&
+      altSetCase.detail.includes('"Warm"') &&
+      altSetNfd?.code === 'CONFIG_PART_UNIQUE' &&
+      altSetNfd.object === 'config.assemble.alternates[1].name' &&
+      altSetNfd.detail.includes('"e\u0301"') &&
+      altSetNfd.detail.includes('"\u00e9"') &&
+      altSetNearMiss === null,
+    `Warm + warm -> ${altSetCase === null ? 'not one refusal' : `${altSetCase.code}: ${altSetCase.object} — ${altSetCase.detail}`}; NFC é + NFD e\\u0301 -> ${altSetNfd === null ? 'not one refusal' : `${altSetNfd.code}: ${altSetNfd.object} — ${altSetNfd.detail}`}; Warm + cool -> ${codes(altSetNearMiss)}`,
+    'issue #1172: two alternate sets that fold equal under NFC + lower-case would collide on painting_allocation.<set>.json on a case-insensitive or Unicode-normalizing filesystem; the loader refuses them in memory with both set names',
+  );
 }
 
 function runPartsSuite(): number {
@@ -5294,6 +5320,21 @@ function runPartsSuite(): number {
       setSeen.every((o) => o.ok) && twoOk,
       `the positive control is PT131's set (${altOk === null ? 'reads' : codes(altOk)}); ${setSeen.map((o) => `${o.what} -> ${o.got}`).join('; ')}; two faulted sets -> ${twoErr === null ? 'reads clean' : `${twoErr.problems.length} refusal(s), ${twoObjects.map((q) => (q.startsWith(path) ? q.slice(path.length + 1) : q)).join(' | ')}`}`,
       'issue #620: a set record is cut and packed like a base part, and its cap is read by check as the base\'s is; a set cap read as written would let a malformed record through the one reader every stage trusts',
+    );
+
+    writeFileSync(path, JSON.stringify({ ...file, parts: [{ ...file.parts[0], name: 'Face' }, { ...file.parts[0], name: 'face' }] }));
+    const ptCaseErr = refusals(() => readParts(path));
+    writeFileSync(path, JSON.stringify({ ...file, parts: [{ ...file.parts[0], name: '\u00e9' }, { ...file.parts[0], name: 'e\u0301' }] }));
+    const ptNfdErr = refusals(() => readParts(path));
+    writeFileSync(path, JSON.stringify({ ...file, parts: [{ ...file.parts[0], name: '\u00e9' }, { ...file.parts[0], name: '\u00e9_side', from: 'full:topwear' }] }));
+    const ptNearMissErr = refusals(() => readParts(path));
+    say(
+      'PT133_CASE_AND_UNICODE_COLLIDING_PART_NAMES_ARE_REFUSED_WITH_BOTH_NAMES',
+      ptCaseErr?.problems.some((q) => q.code === 'PARTS_NAME_UNIQUE' && q.detail.includes('"Face"') && q.detail.includes('"face"')) === true &&
+        ptNfdErr?.problems.some((q) => q.code === 'PARTS_NAME_UNIQUE' && q.detail.includes('"\u00e9"') && q.detail.includes('"e\u0301"')) === true &&
+        ptNearMissErr === null,
+      `Face + face -> ${codes(ptCaseErr)} (${ptCaseErr?.problems[0]?.detail ?? ''}); NFC é + NFD e\\u0301 -> ${codes(ptNfdErr)} (${ptNfdErr?.problems[0]?.detail ?? ''}); é + é_side -> ${codes(ptNearMissErr)}`,
+      'issue #1172: readParts folds part names with NFC + lower-case in memory so both case and NFC/NFD part collisions are refused with both names',
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -9296,6 +9337,86 @@ function runBlinkStillCases(say: (name: string, ok: boolean, detail: string, why
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+
+  const runStillCollision = (baseName: string, collidingName: string): PartsError | null => {
+    const raw = lashConfig();
+    (raw.assemble as Record<string, unknown>).plan = [
+      [baseName, 'head', 'eyelash-r'],
+      [collidingName, 'head', 'eyewhite-r'],
+    ];
+    raw.regions = { [baseName]: 'eye', [collidingName]: 'head' };
+    ((raw.motion as Record<string, unknown>).blink as Record<string, unknown>).still = {
+      [baseName]: { row: 20, bone: 'head' },
+    };
+    const baseParts = lashParts();
+    const p: PartsFile = {
+      ...baseParts,
+      parts: [
+        { ...baseParts.parts[2], name: baseName },
+        { ...baseParts.parts[1], name: collidingName },
+      ],
+    };
+    const baseImgs = lashImages();
+    const imgs = new Map<string, Raster>([
+      [baseName, baseImgs.get('lash') as Raster],
+      [collidingName, baseImgs.get('eyewhite') as Raster],
+    ]);
+    return refusals(() => buildRig(parseConfig(raw), p, imgs));
+  };
+  const runAltCollision = (basePartName: string, setName: string): PartsError | null => {
+    const raw = lashConfig(false);
+    (raw.assemble as Record<string, unknown>).plan = [
+      ['face', 'head', 'face'],
+      [basePartName, 'head', 'eyelash-r'],
+      ['lash', 'head', 'eyewhite-r'],
+    ];
+    raw.regions = { face: 'head', [basePartName]: 'eye', lash: 'eye' };
+    const baseParts = lashParts();
+    const altRecord = { ...baseParts.parts[1], name: 'lash' };
+    const p: PartsFile = {
+      ...baseParts,
+      parts: [
+        baseParts.parts[0],
+        { ...baseParts.parts[2], name: basePartName },
+        altRecord,
+      ],
+      alternates: [
+        {
+          name: setName,
+          parts: ['lash'],
+          slots: { lash: `${setName}_lash` },
+          records: [altRecord],
+          ghost_px: {},
+          recomposite: { mean_abs: 0, within_limit: 0, within_share: 1, error_limit: 0, error_px: 0, covered_alpha: 8, uncovered_error_px: 0, hole_count: 0, holes_listed: 0, holes: [] },
+        },
+      ],
+    };
+    const baseImgs = lashImages();
+    const imgs = new Map<string, Raster>([
+      ['face', baseImgs.get('face') as Raster],
+      [basePartName, baseImgs.get('lash') as Raster],
+      ['lash', baseImgs.get('eyewhite') as Raster],
+      [`${setName}_lash`, baseImgs.get('eyewhite') as Raster],
+    ]);
+    return refusals(() => buildRig(parseConfig(raw), p, imgs));
+  };
+  const stillCase = runStillCollision('face', 'Face_still');
+  const stillNfd = runStillCollision('\u00e9', 'e\u0301_still');
+  const stillNearMiss = runStillCollision('face', 'face_upper_still');
+  const altCase = runAltCollision('Warm_lash', 'warm');
+  const altNfd = runAltCollision('\u00e9_lash', 'e\u0301');
+  const altNearMiss = runAltCollision('Warm_lash', 'cool');
+  say(
+    'RG17_CASE_AND_UNICODE_COLLIDING_STILL_AND_ALTERNATE_IMAGES_ARE_REFUSED_WITH_BOTH_NAMES',
+    stillCase?.problems.some((q) => q.code === 'RIG_STILL_NAME_FREE' && q.detail.includes('"face_still"') && q.detail.includes('"Face_still"')) === true &&
+      stillNfd?.problems.some((q) => q.code === 'RIG_STILL_NAME_FREE' && q.detail.includes('"\u00e9_still"') && q.detail.includes('"e\u0301_still"')) === true &&
+      stillNearMiss === null &&
+      altCase?.problems.some((q) => q.code === 'DEPTH_SHEET_UNAMBIGUOUS' && q.detail.includes('"Warm_lash.png"') && q.detail.includes('"warm_lash.png"')) === true &&
+      altNfd?.problems.some((q) => q.code === 'DEPTH_SHEET_UNAMBIGUOUS' && q.detail.includes('"\u00e9_lash.png"') && q.detail.includes('"e\u0301_lash.png"')) === true &&
+      altNearMiss === null,
+    `face + Face_still -> ${codes(stillCase)} (${stillCase?.problems[0]?.detail ?? ''}); NFC é + NFD e\\u0301_still -> ${codes(stillNfd)} (${stillNfd?.problems[0]?.detail ?? ''}); face + face_upper_still -> ${codes(stillNearMiss)}; Warm_lash + warm:lash -> ${codes(altCase)} (${altCase?.problems[0]?.detail ?? ''}); NFC é_lash + NFD e\\u0301:lash -> ${codes(altNfd)} (${altNfd?.problems[0]?.detail ?? ''}); Warm_lash + cool:lash -> ${codes(altNearMiss)}`,
+    'issue #1172: buildRig folds still and output image names with NFC + lower-case in memory so both case and NFC/NFD collisions are refused with both names before any file is written',
+  );
 }
 
 /** One bone's world transform in a `rigc-geometry/1` frame. */
