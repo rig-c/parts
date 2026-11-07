@@ -93,24 +93,25 @@ export function runPartsFileReferenceChecks(dir: string, base: PartsFile, config
 
   const refusalScript = join(dir, 'refusal.ts');
   writeFileSync(refusalScript, `
-const [source, fixture, code, suffix] = process.argv.slice(2);
+const [source, fixture, code, suffix, requiredDetail] = process.argv.slice(2);
 const { partsFileReferences, readParts } = await import(source + '/src/parts.ts');
 const outcomes = [() => partsFileReferences(fixture), () => readParts(fixture + '/parts.json')].map(read => {
   try { read(); return { matched: false, problems: [] }; }
   catch (error) {
     const problems = error.problems ?? [];
-    return { matched: problems.some(p => p.code === code && p.object.endsWith(suffix)), problems, error: error.name };
+    const tokens = requiredDetail ? requiredDetail.split(',') : [];
+    return { matched: problems.some(p => p.code === code && p.object.endsWith(suffix) && tokens.every(t => p.detail.includes(t))), problems, error: error.name };
   }
 });
 console.log(JSON.stringify(outcomes));
 `);
-  interface RefusalOutcome { matched: boolean; problems: Array<{ code: string; object: string }> }
-  const invalid = (name: string, edit: (raw: Record<string, unknown>) => void, code: string, suffix: string, rule: string): void => {
+  interface RefusalOutcome { matched: boolean; problems: Array<{ code: string; object: string; detail: string }> }
+  const invalid = (name: string, edit: (raw: Record<string, unknown>) => void, code: string, suffix: string, rule: string, requiredDetail = ''): void => {
     const raw = structuredClone(file) as unknown as Record<string, unknown>;
     edit(raw);
     writeFileSync(path, JSON.stringify(raw));
     const observeRefusal = (source: string): RefusalOutcome[] => {
-      const result = spawnSync(process.execPath, [refusalScript, source, fixture, code, suffix], { encoding: 'utf8', timeout: 30000 });
+      const result = spawnSync(process.execPath, [refusalScript, source, fixture, code, suffix, requiredDetail], { encoding: 'utf8', timeout: 30000 });
       if (result.status !== 0) throw new Error(`refusal observer exit ${result.status}: ${result.stderr}`);
       return JSON.parse(result.stdout.trim()) as RefusalOutcome[];
     };
@@ -120,8 +121,9 @@ console.log(JSON.stringify(outcomes));
       const mutant = partsOriginal.replace(rule, '');
       if (mutant === partsOriginal) throw new Error(`missing mutation target for ${name}`);
       writeFileSync(partsSource, mutant);
+      const plantedMd5 = createHash('md5').update(readFileSync(partsSource)).digest('hex');
       const red = observeRefusal(isolated);
-      say(`${name}_RULE_REMOVAL_IS_RED`, red.every(outcome => !outcome.matched), JSON.stringify({ removed: rule, outcomes: red }));
+      say(`${name}_RULE_REMOVAL_IS_RED`, plantedMd5 !== partsMd5 && red.every(outcome => !outcome.matched), JSON.stringify({ removed: rule, beforeMd5: partsMd5, plantedMd5, outcomes: red }));
       writeFileSync(partsSource, partsOriginal);
       const restored = observeRefusal(isolated);
       const afterMd5 = createHash('md5').update(readFileSync(partsSource)).digest('hex');
@@ -131,6 +133,17 @@ console.log(JSON.stringify(outcomes));
       writeFileSync(path, JSON.stringify(file));
     }
   };
+  invalid('PT1169_CASE_COLLIDING_PART_NAMES_ARE_REFUSED', raw => {
+    const first = (raw.parts as Array<Record<string, unknown>>)[0];
+    raw.parts = [{ ...first, name: 'Face' }, { ...first, name: 'face' }];
+  }, 'PARTS_NAME_UNIQUE', 'part "face"',
+  ' else if (seen.has(r.name.toLowerCase())) fail(\'PARTS_NAME_UNIQUE\', label, `appears at parts[${seen.get(r.name.toLowerCase())!.index}] ("${seen.get(r.name.toLowerCase())!.name}") and parts[${i}] ("${r.name}")`);',
+  '"Face","face"');
+  const distinctParts = structuredClone(file);
+  distinctParts.parts = [{ ...file.parts[0], name: 'Face' }, { ...file.parts[0], name: 'neck', from: 'full:topwear' }];
+  writeFileSync(path, JSON.stringify(distinctParts));
+  say('PT1169_DISTINCT_PART_NAMES_PASS', readParts(path).parts.map(p => p.name).join(',') === 'Face,neck' && partsFileReferences(fixture).some(r => r.path === 'parts/Face.png') && partsFileReferences(fixture).some(r => r.path === 'parts/neck.png'), 'Face + neck read and enumerate without collision');
+  writeFileSync(path, JSON.stringify(file));
   invalid('PT1163_ALTERNATE_DEPTH_ESCAPE_IS_REFUSED', raw => {
     (raw.alternates as NonNullable<PartsFile['alternates']>)[0].records[0].depth!.image = '../../x.png';
   }, 'PARTS_DEPTH_REFERENCE', 'records[0] depth.image',

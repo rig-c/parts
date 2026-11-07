@@ -833,15 +833,15 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   ];
   const assetIndices = new Map<string, number>();
   emittedAssets.forEach((file, index) => {
-    const previous = assetIndices.get(file);
+    const previous = assetIndices.get(file.toLowerCase());
     if (previous !== undefined) {
       altProblems.push({
         code: 'DEPTH_SHEET_UNAMBIGUOUS',
         object: file,
-        detail: `output assets[${previous}] and [${index}] require the same filename; choose distinct base, alternate and sheet names`,
+        detail: `output assets[${previous}] ("${emittedAssets[previous]}") and [${index}] ("${file}") require the same filename; choose distinct base, alternate and sheet names`,
       });
     } else {
-      assetIndices.set(file, index);
+      assetIndices.set(file.toLowerCase(), index);
     }
   });
   const outputFiles = new Set([

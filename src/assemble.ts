@@ -6038,8 +6038,8 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   });
   refuseIfAny(empty);
   const placed: PlacedPart[] = order.map((d) => ('plan' in d ? planned[d.plan] : 'cut' in d ? cutPlaced[d.cut] : 'limb' in d ? limbPlaced[d.limb] : cut[d.patch]) as PlacedPart);
-  const artFiles = new Set(placed.map(p => `${p.record.name}.png`));
-  for (const p of placed) if (p.record.depth !== undefined && artFiles.has(p.record.depth.image)) refuseIfAny([{ code: 'DEPTH_SHEET_UNAMBIGUOUS', object: p.record.depth.image, detail: 'collides with a part artwork filename; choose noncolliding part names before sheet emission' }]);
+  const artFiles = new Map<string, string>(); for (const p of placed) { const k = `${p.record.name}.png`.toLowerCase(), prev = artFiles.get(k); if (prev !== undefined) refuseIfAny([{ code: 'DEPTH_SHEET_UNAMBIGUOUS', object: `${p.record.name}.png`, detail: `part "${prev}" ("${prev}.png") and part "${p.record.name}" ("${p.record.name}.png") collides with a part artwork filename; choose noncolliding part names before sheet emission` }]); artFiles.set(k, p.record.name); }
+  for (const p of placed) if (p.record.depth !== undefined && artFiles.has(p.record.depth.image.toLowerCase())) refuseIfAny([{ code: 'DEPTH_SHEET_UNAMBIGUOUS', object: p.record.depth.image, detail: `part "${p.record.name}" sheet "${p.record.depth.image}" and part "${artFiles.get(p.record.depth.image.toLowerCase())}" ("${artFiles.get(p.record.depth.image.toLowerCase())}.png") collides with a part artwork filename; choose noncolliding part names before sheet emission` }]);
 
 
   const regionSupport = new Map<string, Mask>();
