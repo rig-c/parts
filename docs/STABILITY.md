@@ -56,6 +56,26 @@ files nor changes its inputs. Inputs that resolve from the rig or parts director
 (seam and `cut_material` part images, `cut_material_sources.json`) are not listed,
 because the caller already carries that directory with the check.
 
+## Programmatic parts file references
+
+`@rig-c/parts/src/parts.ts` exports `partsFileReferences(dir: string):
+PartsFileReference[]` and the `PartsFileReference` type. `dir` holds the assemble
+output's `parts.json`. Each row has `path: string`, relative to that directory,
+and `role: 'part' | 'alternate' | 'depth' | 'painting'`. The paths use `/`.
+Base records resolve to `parts/<name>.png`, alternate records to
+`parts/<set>_<name>.png`, and either record's `depth.image` to
+`parts/<depth.image>`. `painting_in_rig.path`, when declared, is exactly
+`painting_in_rig.png`, beside the manifest. Depth source provenance filenames
+are historical inputs and are omitted. There is no separate attachment field.
+Rows are sorted lexically by path, then role, with duplicate path/role pairs
+collapsed. A path with several roles retains each role. Missing PNGs remain in
+the list and unreferenced files are ignored. The function reads and validates
+only the manifest, using the production readers' path resolvers. A missing manifest
+refuses with `PARTS_FILE_PRESENT`, malformed JSON with `PARTS_IS_JSON`, and
+invalid fields with the same named rules as `readParts`. It never opens,
+hashes or decodes PNGs and preserves the manifest reader's named refusals.
+Legacy manifests may omit alternates, depth and painting declarations.
+
 ## Commands and flags
 
 Exit codes are part of the interface: **0** the command did what it says, **1** it

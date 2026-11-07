@@ -600,7 +600,41 @@ export function writeParts(path: string, file: PartsFile): void {
   writeFileSync(path, text);
 }
 
-export function readParts(path: string): PartsFile {
+/** A declared PNG path relative to the directory holding parts.json. */
+export interface PartsFileReference {
+  path: string;
+  role: 'part' | 'alternate' | 'depth' | 'painting';
+}
+
+/** Shared with the PNG readers, including their alternate attachment names. */
+export function partImageReference(part: PartRecord, set?: string): PartsFileReference {
+  return { path: `parts/${set === undefined ? part.name : `${set}_${part.name}`}.png`, role: set === undefined ? 'part' : 'alternate' };
+}
+
+export function depthImageReference(depth: PartDepthReference): PartsFileReference {
+  return { path: `parts/${depth.image}`, role: 'depth' };
+}
+
+function paintingImageReference(painting: PaintingInRig): PartsFileReference {
+  return { path: painting.path, role: 'painting' };
+}
+
+/** Read the manifest without opening, hashing or decoding its PNG references. */
+export function partsFileReferences(dir: string): PartsFileReference[] {
+  const file = readPartsManifest(join(dir, 'parts.json'));
+  const references: PartsFileReference[] = [];
+  if (file.painting_in_rig !== undefined) references.push(paintingImageReference(file.painting_in_rig));
+  const add = (part: PartRecord, set?: string): void => {
+    references.push(partImageReference(part, set));
+    if (part.depth !== undefined) references.push(depthImageReference(part.depth));
+  };
+  for (const part of file.parts) add(part);
+  for (const alternate of file.alternates ?? []) for (const part of alternate.records) add(part, alternate.name);
+  const unique = new Map(references.map(reference => [`${reference.path}\0${reference.role}`, reference]));
+  return [...unique.values()].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : a.role < b.role ? -1 : a.role > b.role ? 1 : 0);
+}
+
+function readPartsManifest(path: string): PartsFile {
   if (!existsSync(path)) refuseIfAny([{ code: 'PARTS_FILE_PRESENT', object: path, detail: 'no such file; --parts names the directory holding parts.json and parts/ (work/rig from assemble --out work, or out from build --out out)' }]);
   let raw: unknown;
   try {
@@ -608,10 +642,14 @@ export function readParts(path: string): PartsFile {
   } catch (err) {
     refuseIfAny([{ code: 'PARTS_IS_JSON', object: path, detail: `does not parse as JSON: ${(err as Error).message}` }]);
   }
-  const file = checkParts(raw, path);
+  return checkParts(raw, path);
+}
+
+export function readParts(path: string): PartsFile {
+  const file = readPartsManifest(path);
   const declared = file.painting_in_rig;
   if (declared !== undefined) {
-    const imagePath = join(dirname(path), declared.path);
+    const imagePath = join(dirname(path), paintingImageReference(declared).path);
     const problems: Problem[] = [];
     const fail = (code: string, detail: string): void => { problems.push({ code, object: imagePath, detail }); };
     let bytes: Uint8Array | undefined;

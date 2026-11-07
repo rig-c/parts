@@ -103,7 +103,7 @@ import { CONTROL_SUFFIX, withAnimations } from './motion.ts';
 import type { PaletteError } from './palette.ts';
 import { type LayerSet, readLayers } from './layers.ts';
 import { placeBoneEntriesForSkeleton, poseBoneEntriesForDrawn, REGISTER_OFFSET_BAR, REGISTER_SCALE_BAR, registeredWithinBar, registerSkeleton, SKELETON_LIMB_BONES, skeletonDrawnLength, skeletonLimbJoints } from './limbs.ts';
-import { type AlternatePartsRecord, PAINTING_IN_RIG_FILE, FRONT_SUFFIX, type PartRecord, readParts, type RecompositeRecord, type SingleRunPad, tagOf, writeParts } from './parts.ts';
+import { type AlternatePartsRecord, PAINTING_IN_RIG_FILE, FRONT_SUFFIX, type PartRecord, partImageReference, depthImageReference, readParts, type RecompositeRecord, type SingleRunPad, tagOf, writeParts } from './parts.ts';
 import { encodePngBytes, readPng, writePng } from './raster/png.ts';
 import type { Raster } from './raster/types.ts';
 import { type Mask, newMask } from './raster/types.ts';
@@ -1591,16 +1591,16 @@ export function readRigInputs(config: string, partsDir: string): RigInputs {
   const images = new Map<string, Raster>();
   const depthProblems: Problem[] = [];
   for (const p of parts.parts) {
-    const png = join(partsDir, 'parts', `${p.name}.png`);
+    const png = join(partsDir, partImageReference(p).path);
     if (existsSync(png)) images.set(p.name, readPng(png));
-    if (p.depth !== undefined && images.has(p.name)) { try { images.set(p.depth.image, readSourceDepth(join(partsDir, 'parts', p.depth.image), images.get(p.name) as Raster, null).pixels); } catch (error) { if (error instanceof PartsError) depthProblems.push(...error.problems); else throw error; } }
+    if (p.depth !== undefined && images.has(p.name)) { try { images.set(p.depth.image, readSourceDepth(join(partsDir, depthImageReference(p.depth).path), images.get(p.name) as Raster, null).pixels); } catch (error) { if (error instanceof PartsError) depthProblems.push(...error.problems); else throw error; } }
   }
   for (const alt of parts.alternates ?? []) {
     for (const p of alt.records) {
       const attName = `${alt.name}_${p.name}`;
-      const png = join(partsDir, 'parts', `${attName}.png`);
+      const png = join(partsDir, partImageReference(p, alt.name).path);
       if (existsSync(png)) images.set(attName, readPng(png));
-      if (p.depth !== undefined && images.has(attName)) { try { images.set(p.depth.image, readSourceDepth(join(partsDir, 'parts', p.depth.image), images.get(attName) as Raster, null).pixels); } catch (error) { if (error instanceof PartsError) depthProblems.push(...error.problems); else throw error; } }
+      if (p.depth !== undefined && images.has(attName)) { try { images.set(p.depth.image, readSourceDepth(join(partsDir, depthImageReference(p.depth).path), images.get(attName) as Raster, null).pixels); } catch (error) { if (error instanceof PartsError) depthProblems.push(...error.problems); else throw error; } }
     }
   }
   refuseIfAny(depthProblems);

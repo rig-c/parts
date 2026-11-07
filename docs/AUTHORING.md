@@ -8303,3 +8303,5 @@ resolved relative to the config directory, including images declared relative
 to the requirements file. Enumeration leaves both parsed inputs unchanged.
 Rig/parts-directory inputs (including seam PNGs) and separately supplied CLI
 inputs remain the caller's responsibility when relocating a check.
+
+Programmatic consumers can enumerate declared assemble PNGs with `partsFileReferences` from `@rig-c/parts/src/parts.ts`, as specified in [STABILITY](STABILITY.md#programmatic-parts-file-references).
