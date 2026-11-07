@@ -425,7 +425,8 @@ console.log(JSON.stringify(outcomes));
       buildPlantedMd5 !== buildBeforeMd5 &&
         buildLayout?.status === 0 &&
         buildLayout.missing.length === 0 &&
-        assembleLayout?.status === 0 &&
+        assembleLayout?.status === 1 &&
+        !existsSync(join(dir, 'scene-layouts-mutant', 'assemble', 'run.json')) &&
         assembleLayout.missing.length === 1 &&
         assembleLayout.missing[0].path === 'figure_rig.png' &&
         assembleLayout.missing[0].role === 'figure_mask' &&

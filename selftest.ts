@@ -80,6 +80,7 @@ import { runRevisionChainChecks } from './tools/check_revision_chain.ts';
 import { runConfigWriteChecks } from './tools/check_configwrite.ts';
 import { runCorePointerChecks } from './tools/check_corepointer.ts';
 import { runLayerBoundsChecks } from './tools/check_layer_bounds.ts';
+import { readPackageIdentity, RUN_STAMP_FILE, RUN_STAMP_SPEC, type RunStamp } from './src/runstamp.ts';
 /**
  * rig-parts selftest — proof that every gate here can go RED.
  *
@@ -7335,8 +7336,8 @@ function runRigSuite(): number {
     const two = writeRigFixture(join(dir, 'two'));
     const run1 = runCli(['rig', '--config', one.config, '--parts', one.parts, '--out', join(dir, 'one', 'out')]);
     const run2 = runCli(['rig', '--config', two.config, '--parts', two.parts, '--out', join(dir, 'two', 'out')]);
-    const files1 = filesUnder(join(dir, 'one', 'out'));
-    const files2 = filesUnder(join(dir, 'two', 'out'));
+    const files1 = filesUnder(join(dir, 'one', 'out')).filter((f) => f !== RUN_STAMP_FILE);
+    const files2 = filesUnder(join(dir, 'two', 'out')).filter((f) => f !== RUN_STAMP_FILE);
     const sameBytes = files1.length > 0 && files1.join() === files2.join() && files1.every((f) => readFileSync(join(dir, 'one', 'out', f)).equals(readFileSync(join(dir, 'two', 'out', f))));
     say(
       'RG03_TWO_BUILDS_WRITE_THE_SAME_BYTES',
@@ -7418,6 +7419,137 @@ function runRigSuite(): number {
         !existsSync(join(dir, 'red', 'out')),
       `the fixture config (the loader: ${codes(redLoads)}) with parts.json placing cloth at 0,0 ${RIG_CANVAS[0]}x${RIG_CANVAS[1]} -> exit ${redRun.status}, ${redFail.length} FAIL line(s): ${(redFail[0] ?? '').trim().slice(0, 70)}… ${redFail[0]?.includes(fullFrame) === true ? fullFrame : 'no rigc line naming the full-frame mesh'}; --out exists: ${existsSync(join(dir, 'red', 'out'))}`,
       "the round trip is only a gate if a red one stops the write; rigc's own refusal is carried into the FAIL line so the reader sees what rigc said, and the mutant is one the loader and the rig stage let through, or the line would be theirs — a mesh's extent comes from parts.json, which the config loader never reads",
+    );
+
+    const rigPkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string; version: string };
+    const sha256Hex = (p: string): string => createHash('sha256').update(readFileSync(p)).digest('hex');
+    const isoUtcMs = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+    const rigStampFileSetFaults = (label: string, outDir: string, stamp: RunStamp | null): string[] => {
+      if (stamp === null) return [`${label}: missing ${RUN_STAMP_FILE}`];
+      const disk = filesUnder(outDir).filter((f) => f !== RUN_STAMP_FILE);
+      const listed = stamp.outputs.map((o) => o.path);
+      const missing = disk.filter((f) => !listed.includes(f));
+      const extra = listed.filter((f) => !disk.includes(f));
+      const faults: string[] = [];
+      if (missing.length > 0) faults.push(`${label}: on disk but missing from outputs[].path: ${missing.join(', ')}`);
+      if (extra.length > 0) faults.push(`${label}: in outputs[].path but not on disk: ${extra.join(', ')}`);
+      return faults;
+    };
+    const outParentA = join(dir, 'parent-a', 'out');
+    const outParentB = join(dir, 'parent-b', 'out');
+    mkdirSync(join(outParentA, 'images'), { recursive: true });
+    writeFileSync(join(outParentA, 'stray.txt'), 'stray');
+    writeFileSync(join(outParentA, 'images', 'old.png'), 'old');
+    const runParentA = runCli(['rig', '--config', one.config, '--parts', one.parts, '--out', outParentA]);
+    const runParentB = runCli(['rig', '--config', one.config, '--parts', one.parts, '--out', outParentB]);
+    const altRigImages = new Map(rigImages());
+    altRigImages.set('alt1_eye', block(4, 2));
+    const altRigParts: PartsFile = {
+      ...rigParts(),
+      alternates: [
+        {
+          name: 'alt1',
+          slots: { eye: 'alt1_eye' },
+          records: [rigParts().parts[1]],
+          ghost_px: {},
+          recomposite: { mean_abs: 0, within_limit: 0, within_share: 1, error_limit: 0, error_px: 0, covered_alpha: 0, uncovered_error_px: 0, hole_count: 0, holes_listed: 0, holes: [] },
+        },
+      ],
+    };
+    const altRigFx = writeRigFixture(join(dir, 'alt-rig'), rigConfig(), altRigImages, altRigParts);
+    const altRigOut = join(dir, 'alt-rig', 'out');
+    const altRigRun = runCli(['rig', '--config', altRigFx.config, '--parts', altRigFx.parts, '--out', altRigOut]);
+    const altRigStampRaw = existsSync(join(altRigOut, RUN_STAMP_FILE)) ? readFileSync(join(altRigOut, RUN_STAMP_FILE), 'utf8') : '';
+    const altRigStamp = altRigStampRaw !== '' ? (JSON.parse(altRigStampRaw) as RunStamp) : null;
+    const reusedRigOut = join(dir, 'reused', 'out');
+    const reusedRigGreen = runCli(['rig', '--config', one.config, '--parts', one.parts, '--out', reusedRigOut]);
+    const reusedRigHadStamp = reusedRigGreen.status === 0 && existsSync(join(reusedRigOut, RUN_STAMP_FILE));
+    const reusedRigRed = runCli(['rig', '--config', red.config, '--parts', red.parts, '--out', reusedRigOut]);
+    const badPkgPath = join(dir, 'bad-package.json');
+    writeFileSync(badPkgPath, JSON.stringify({ name: '@rig-c/parts' }));
+    const badPkgErr = refusals(() => readPackageIdentity(badPkgPath));
+    const stamp1Raw = existsSync(join(dir, 'one', 'out', RUN_STAMP_FILE)) ? readFileSync(join(dir, 'one', 'out', RUN_STAMP_FILE), 'utf8') : '';
+    const stamp2Raw = existsSync(join(dir, 'two', 'out', RUN_STAMP_FILE)) ? readFileSync(join(dir, 'two', 'out', RUN_STAMP_FILE), 'utf8') : '';
+    const stampARaw = existsSync(join(outParentA, RUN_STAMP_FILE)) ? readFileSync(join(outParentA, RUN_STAMP_FILE), 'utf8') : '';
+    const stampBRaw = existsSync(join(outParentB, RUN_STAMP_FILE)) ? readFileSync(join(outParentB, RUN_STAMP_FILE), 'utf8') : '';
+    const stamp1 = stamp1Raw !== '' ? (JSON.parse(stamp1Raw) as RunStamp) : null;
+    const stamp2 = stamp2Raw !== '' ? (JSON.parse(stamp2Raw) as RunStamp) : null;
+    const stampA = stampARaw !== '' ? (JSON.parse(stampARaw) as RunStamp) : null;
+    const stampB = stampBRaw !== '' ? (JSON.parse(stampBRaw) as RunStamp) : null;
+    const stripStampTimes = (s: RunStamp): RunStamp => ({ ...s, started_at: 'T0', finished_at: 'T1' });
+    const expectedOutputs1 = [...files1].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((p) => ({ path: p, sha256: sha256Hex(join(dir, 'one', 'out', p)) }));
+    const rigEqFaults = [
+      ...rigStampFileSetFaults('plain', join(dir, 'one', 'out'), stamp1),
+      ...rigStampFileSetFaults('alt', altRigOut, altRigStamp),
+    ];
+    const rigPlantedMissing =
+      stamp1 === null
+        ? []
+        : rigStampFileSetFaults('planted-missing', join(dir, 'one', 'out'), {
+            ...stamp1,
+            outputs: stamp1.outputs.filter((o) => o.path !== 'mesh_report.json'),
+          });
+    const rigPlantedExtra =
+      stamp1 === null
+        ? []
+        : rigStampFileSetFaults('planted-extra', join(dir, 'one', 'out'), {
+            ...stamp1,
+            outputs: [...stamp1.outputs, { path: 'ghost.json', sha256: '0'.repeat(64) }],
+          });
+    const rigEqualityOk =
+      altRigRun.status === 0 &&
+      altRigStamp !== null &&
+      altRigStamp.outputs.some((o) => o.path === 'sets.json') &&
+      altRigStamp.outputs.some((o) => o.path === 'images/alt1_eye.png') &&
+      rigEqFaults.length === 0 &&
+      rigPlantedMissing.join(';') === 'planted-missing: on disk but missing from outputs[].path: mesh_report.json' &&
+      rigPlantedExtra.join(';') === 'planted-extra: in outputs[].path but not on disk: ghost.json';
+    const stamp1Valid =
+      stamp1 !== null &&
+      Object.keys(stamp1).join(',') === 'spec,package,command,started_at,finished_at,config,outputs' &&
+      Object.keys(stamp1.package).join(',') === 'name,version' &&
+      Object.keys(stamp1.config).join(',') === 'path,sha256' &&
+      stamp1.spec === RUN_STAMP_SPEC &&
+      stamp1.package.name === rigPkg.name &&
+      stamp1.package.version === rigPkg.version &&
+      stamp1.command === 'rig' &&
+      isoUtcMs.test(stamp1.started_at) &&
+      isoUtcMs.test(stamp1.finished_at) &&
+      Date.parse(stamp1.started_at) <= Date.parse(stamp1.finished_at) &&
+      stamp1.config.path === '../config.json' &&
+      stamp1.config.sha256 === sha256Hex(one.config) &&
+      JSON.stringify(stamp1.outputs) === JSON.stringify(expectedOutputs1) &&
+      stamp1.outputs.every((o) => Object.keys(o).join(',') === 'path,sha256' && !o.path.startsWith('/') && !o.path.startsWith('~') && o.path !== RUN_STAMP_FILE);
+    const strayExcluded =
+      stampA !== null &&
+      existsSync(join(outParentA, 'stray.txt')) &&
+      existsSync(join(outParentA, 'images', 'old.png')) &&
+      JSON.stringify(stampA.outputs) === JSON.stringify(expectedOutputs1);
+    const twoParentsMatch =
+      runParentA.status === 0 &&
+      runParentB.status === 0 &&
+      stampA !== null &&
+      stampB !== null &&
+      stampA.config.path === '../../one/config.json' &&
+      stampB.config.path === '../../one/config.json' &&
+      stampARaw !== stampBRaw &&
+      rigJsonText(stripStampTimes(stampA)) === rigJsonText(stripStampTimes(stampB)) &&
+      stamp1 !== null &&
+      stamp2 !== null &&
+      stamp1Raw !== stamp2Raw &&
+      rigJsonText(stripStampTimes(stamp1)) === rigJsonText(stripStampTimes(stamp2));
+    const redNoStamp =
+      !existsSync(join(dir, 'red', 'out', RUN_STAMP_FILE)) &&
+      reusedRigHadStamp &&
+      reusedRigRed.status === 1 &&
+      !existsSync(join(reusedRigOut, RUN_STAMP_FILE)) &&
+      codes(badPkgErr) === `RUN_STAMP_PACKAGE ${badPkgPath}`;
+    const plantedBadSha = stamp1 !== null && JSON.stringify({ ...stamp1, outputs: stamp1.outputs.map((o, i) => (i === 0 ? { ...o, sha256: '0'.repeat(64) } : o)).map((o) => o) }) !== JSON.stringify({ ...stamp1, outputs: expectedOutputs1 });
+    say(
+      'RG1165_RIG_WRITES_RUN_STAMP_AFTER_GREEN_GATE_WITH_RELATIVE_PATHS_AND_DISK_HASHES',
+      stamp1Valid && sameBytes && strayExcluded && twoParentsMatch && redNoStamp && plantedBadSha && rigEqualityOk,
+      `spec ${stamp1?.spec ?? 'none'}, package ${stamp1?.package.name ?? 'none'}@${stamp1?.package.version ?? 'none'}, command ${stamp1?.command ?? 'none'}, config.path ${stamp1?.config.path ?? 'none'} (under parent-a/parent-b: ${stampA?.config.path ?? 'none'}/${stampB?.config.path ?? 'none'}), ${stamp1?.outputs.length ?? 0} output hash(es) match disk (stray.txt & images/old.png excluded: ${strayExcluded}): ${stamp1Valid}; fresh-dir file-set equality (plain ${stamp1?.outputs.length ?? 0} files, alt ${altRigStamp?.outputs.length ?? 0} files incl. sets.json & images/alt1_eye.png): ${rigEqFaults.length === 0 ? 'exact' : rigEqFaults.join(' | ')} (planted drop -> "${rigPlantedMissing.join(';')}"); two runs differ only in started_at/finished_at: ${twoParentsMatch}; green->refused clears ${RUN_STAMP_FILE} and bad package.json -> ${codes(badPkgErr)}: ${redNoStamp}`,
+      'issue #1165: rig writes run.json (spec rig-run/1) beside its outputs only after rig-c is green, clears any prior run.json before starting, lists the exact stage outputs on disk, and reads timestamps in cli.ts',
     );
 
     // A rigc that dies before any gate line: the line it did print is the refusal's cause. The three stub
@@ -9091,8 +9223,8 @@ function runIdleKeysCases(say: (name: string, ok: boolean, detail: string, why: 
     const ctl = run('ctl', 'ctl');
     const direct = run('direct', 'direct');
     const bogus = run('bones', 'bogus');
-    const files = filesUnder(join(dir, 'none'));
-    const ctlSame = files.length > 0 && files.join() === filesUnder(join(dir, 'ctl')).join() && files.every((f) => readFileSync(join(dir, 'none', f)).equals(readFileSync(join(dir, 'ctl', f))));
+    const files = filesUnder(join(dir, 'none')).filter((f) => f !== RUN_STAMP_FILE);
+    const ctlSame = files.length > 0 && files.join() === filesUnder(join(dir, 'ctl')).filter((f) => f !== RUN_STAMP_FILE).join() && files.every((f) => readFileSync(join(dir, 'none', f)).equals(readFileSync(join(dir, 'ctl', f))));
     const green = (r: { out: string }): boolean => /rigc build --profile rig-play --pack --page-edges free --pack-shape polygon: exit 0/.test(r.out) && !r.out.includes('rigc validate');
     const skipLine = direct.out.split('\n').find((l) => l.includes('SKIP  A15_IDLE_NO_MESH_BONE_KEYS')) ?? '';
     const directRig = existsSync(join(dir, 'direct', 'rig.json')) ? (JSON.parse(readFileSync(join(dir, 'direct', 'rig.json'), 'utf8')) as { bones: Array<{ name: string }>; invariants?: unknown }) : null;
@@ -34342,8 +34474,8 @@ function runAssembleSuite(): number {
     const args = (out: string): string[] => ['assemble', '--source', join(dir, 'painting.png'), '--full', join(dir, 'full'), '--head', join(dir, 'head'), '--config', join(dir, 'config.json'), '--out', out];
     const r1 = runCli(args(out1));
     const r2 = runCli(args(out2));
-    const files = filesUnder(out1);
-    const same = files.length > 0 && files.join(',') === filesUnder(out2).join(',') && files.every((f) => Buffer.compare(readFileSync(join(out1, f)), readFileSync(join(out2, f))) === 0);
+    const files = filesUnder(out1).filter((f) => f !== RUN_STAMP_FILE);
+    const same = files.length > 0 && files.join(',') === filesUnder(out2).filter((f) => f !== RUN_STAMP_FILE).join(',') && files.every((f) => Buffer.compare(readFileSync(join(out1, f)), readFileSync(join(out2, f))) === 0);
     const readBack = r1.status === 0 ? serializeParts(readParts(join(out1, 'rig', 'parts.json'))) : '';
     const paintingBytes = encodePngBytes(result.paintingInRig);
     const cliWant = serializeParts({ ...EXPECTED_PARTS, painting_in_rig: {
@@ -34365,6 +34497,141 @@ function runAssembleSuite(): number {
       rr.status === 1 && /^ {2}FAIL {2}ASSEMBLE_PART_OPAQUE: part "neck"/m.test(rr.out) && !existsSync(refusedOut),
       `exit ${rr.status}, "${rr.out.split('\n')[0].trim()}"; ${existsSync(refusedOut) ? `wrote ${filesUnder(refusedOut).join(', ')}` : 'the out directory was never created'}`,
       'emit only after green: a wrong file on disk outlives the console that warned about it',
+    );
+
+    const asPkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string; version: string };
+    const asSha256 = (p: string): string => createHash('sha256').update(readFileSync(p)).digest('hex');
+    const asIsoUtcMs = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+    const asStampFileSetFaults = (label: string, outDir: string, stamp: RunStamp | null): string[] => {
+      if (stamp === null) return [`${label}: missing ${RUN_STAMP_FILE}`];
+      const disk = filesUnder(outDir).filter((f) => f !== RUN_STAMP_FILE);
+      const listed = stamp.outputs.map((o) => o.path);
+      const missing = disk.filter((f) => !listed.includes(f));
+      const extra = listed.filter((f) => !disk.includes(f));
+      const faults: string[] = [];
+      if (missing.length > 0) faults.push(`${label}: on disk but missing from outputs[].path: ${missing.join(', ')}`);
+      if (extra.length > 0) faults.push(`${label}: in outputs[].path but not on disk: ${extra.join(', ')}`);
+      return faults;
+    };
+    const asParentA = join(dir, 'parent-a', 'out');
+    const asParentB = join(dir, 'parent-b', 'out');
+    mkdirSync(join(asParentA, 'rig', 'parts'), { recursive: true });
+    writeFileSync(join(asParentA, 'stray.txt'), 'stray');
+    writeFileSync(join(asParentA, 'rig', 'parts', 'old.png'), 'old');
+    const rParentA = runCli(args(asParentA));
+    const rParentB = runCli(args(asParentB));
+    const asSceneCfgPath = join(dir, 'scene-stamp.json');
+    writeFileSync(asSceneCfgPath, JSON.stringify({ ...assembleConfig(), scene: {} }));
+    const asSceneOut = join(dir, 'scene-stamp', 'out');
+    const rSceneStamp = runCli(['assemble', '--source', join(dir, 'painting.png'), '--full', join(dir, 'full'), '--head', join(dir, 'head'), '--config', asSceneCfgPath, '--out', asSceneOut]);
+    const asSceneStampRaw = existsSync(join(asSceneOut, RUN_STAMP_FILE)) ? readFileSync(join(asSceneOut, RUN_STAMP_FILE), 'utf8') : '';
+    const asSceneStamp = asSceneStampRaw !== '' ? (JSON.parse(asSceneStampRaw) as RunStamp) : null;
+    const asAltOut = join(dir, 'alt-stamp', 'out');
+    const rAltStamp = runCli([
+      'assemble',
+      '--source',
+      join(dir, 'painting.png'),
+      '--full',
+      join(dir, 'full'),
+      '--head',
+      join(dir, 'head'),
+      '--config',
+      asSceneCfgPath,
+      '--out',
+      asAltOut,
+      '--alt',
+      `alt1=${join(dir, 'painting.png')}:${join(dir, 'full')}:${join(dir, 'head')}`,
+    ]);
+    const asAltStampRaw = existsSync(join(asAltOut, RUN_STAMP_FILE)) ? readFileSync(join(asAltOut, RUN_STAMP_FILE), 'utf8') : '';
+    const asAltStamp = asAltStampRaw !== '' ? (JSON.parse(asAltStampRaw) as RunStamp) : null;
+    const asReusedOut = join(dir, 'reused-assemble', 'out');
+    const rReusedGreen = runCli(args(asReusedOut));
+    const asReusedHadStamp = rReusedGreen.status === 0 && existsSync(join(asReusedOut, RUN_STAMP_FILE));
+    const rReusedRed = runCli(['assemble', '--source', join(dir, 'painting.png'), '--full', join(dir, 'full'), '--head', join(dir, 'head'), '--config', join(dir, 'bad.json'), '--out', asReusedOut]);
+    const asStamp1Raw = existsSync(join(out1, RUN_STAMP_FILE)) ? readFileSync(join(out1, RUN_STAMP_FILE), 'utf8') : '';
+    const asStamp2Raw = existsSync(join(out2, RUN_STAMP_FILE)) ? readFileSync(join(out2, RUN_STAMP_FILE), 'utf8') : '';
+    const asStampARaw = existsSync(join(asParentA, RUN_STAMP_FILE)) ? readFileSync(join(asParentA, RUN_STAMP_FILE), 'utf8') : '';
+    const asStampBRaw = existsSync(join(asParentB, RUN_STAMP_FILE)) ? readFileSync(join(asParentB, RUN_STAMP_FILE), 'utf8') : '';
+    const asStamp1 = asStamp1Raw !== '' ? (JSON.parse(asStamp1Raw) as RunStamp) : null;
+    const asStamp2 = asStamp2Raw !== '' ? (JSON.parse(asStamp2Raw) as RunStamp) : null;
+    const asStampA = asStampARaw !== '' ? (JSON.parse(asStampARaw) as RunStamp) : null;
+    const asStampB = asStampBRaw !== '' ? (JSON.parse(asStampBRaw) as RunStamp) : null;
+    const stripAsTimes = (s: RunStamp): RunStamp => ({ ...s, started_at: 'T0', finished_at: 'T1' });
+    const expectedAsOutputs = [...files].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).map((p) => ({ path: p, sha256: asSha256(join(out1, p)) }));
+    const asEqFaults = [
+      ...asStampFileSetFaults('plain', out1, asStamp1),
+      ...asStampFileSetFaults('scene', asSceneOut, asSceneStamp),
+      ...asStampFileSetFaults('scene+alt', asAltOut, asAltStamp),
+    ];
+    const asPlantedMissing =
+      asSceneStamp === null
+        ? []
+        : asStampFileSetFaults('planted-missing', asSceneOut, {
+            ...asSceneStamp,
+            outputs: asSceneStamp.outputs.filter((o) => o.path !== `render/${FIGURE_MASK_FILE}`),
+          });
+    const asPlantedExtra =
+      asSceneStamp === null
+        ? []
+        : asStampFileSetFaults('planted-extra', asSceneOut, {
+            ...asSceneStamp,
+            outputs: [...asSceneStamp.outputs, { path: 'rig/ghost.json', sha256: '0'.repeat(64) }],
+          });
+    const asEqualityOk =
+      rSceneStamp.status === 0 &&
+      rAltStamp.status === 0 &&
+      asSceneStamp !== null &&
+      asAltStamp !== null &&
+      asSceneStamp.outputs.some((o) => o.path === `render/${FIGURE_MASK_FILE}`) &&
+      asAltStamp.outputs.some((o) => o.path === 'rig/parts/alt1_face.png') &&
+      asEqFaults.length === 0 &&
+      asPlantedMissing.join(';') === `planted-missing: on disk but missing from outputs[].path: render/${FIGURE_MASK_FILE}` &&
+      asPlantedExtra.join(';') === 'planted-extra: in outputs[].path but not on disk: rig/ghost.json';
+    const asStamp1Valid =
+      asStamp1 !== null &&
+      Object.keys(asStamp1).join(',') === 'spec,package,command,started_at,finished_at,config,outputs' &&
+      Object.keys(asStamp1.package).join(',') === 'name,version' &&
+      Object.keys(asStamp1.config).join(',') === 'path,sha256' &&
+      asStamp1.spec === RUN_STAMP_SPEC &&
+      asStamp1.package.name === asPkg.name &&
+      asStamp1.package.version === asPkg.version &&
+      asStamp1.command === 'assemble' &&
+      asIsoUtcMs.test(asStamp1.started_at) &&
+      asIsoUtcMs.test(asStamp1.finished_at) &&
+      Date.parse(asStamp1.started_at) <= Date.parse(asStamp1.finished_at) &&
+      asStamp1.config.path === '../config.json' &&
+      asStamp1.config.sha256 === asSha256(join(dir, 'config.json')) &&
+      JSON.stringify(asStamp1.outputs) === JSON.stringify(expectedAsOutputs) &&
+      asStamp1.outputs.every((o) => Object.keys(o).join(',') === 'path,sha256' && !o.path.startsWith('/') && !o.path.startsWith('~') && o.path !== RUN_STAMP_FILE);
+    const asStrayExcluded =
+      asStampA !== null &&
+      existsSync(join(asParentA, 'stray.txt')) &&
+      existsSync(join(asParentA, 'rig', 'parts', 'old.png')) &&
+      JSON.stringify(asStampA.outputs) === JSON.stringify(expectedAsOutputs);
+    const asParentsMatch =
+      rParentA.status === 0 &&
+      rParentB.status === 0 &&
+      asStampA !== null &&
+      asStampB !== null &&
+      asStampA.config.path === '../../config.json' &&
+      asStampB.config.path === '../../config.json' &&
+      asStampARaw !== asStampBRaw &&
+      rigJsonText(stripAsTimes(asStampA)) === rigJsonText(stripAsTimes(asStampB)) &&
+      asStamp1 !== null &&
+      asStamp2 !== null &&
+      asStamp1Raw !== asStamp2Raw &&
+      rigJsonText(stripAsTimes(asStamp1)) === rigJsonText(stripAsTimes(asStamp2));
+    const asRefusedNoStamp =
+      !existsSync(join(refusedOut, RUN_STAMP_FILE)) &&
+      asReusedHadStamp &&
+      rReusedRed.status === 1 &&
+      !existsSync(join(asReusedOut, RUN_STAMP_FILE));
+    const asPlantedBadSha = asStamp1 !== null && JSON.stringify({ ...asStamp1, config: { ...asStamp1.config, sha256: 'f'.repeat(64) } }) !== JSON.stringify(asStamp1);
+    say(
+      'AS1165_ASSEMBLE_WRITES_RUN_STAMP_WITH_RELATIVE_PATHS_AND_DISK_HASHES_AND_NONE_WHEN_REFUSED',
+      asStamp1Valid && same && asStrayExcluded && asParentsMatch && asRefusedNoStamp && asPlantedBadSha && asEqualityOk,
+      `spec ${asStamp1?.spec ?? 'none'}, package ${asStamp1?.package.name ?? 'none'}@${asStamp1?.package.version ?? 'none'}, command ${asStamp1?.command ?? 'none'}, config.path ${asStamp1?.config.path ?? 'none'} (under parent-a/parent-b: ${asStampA?.config.path ?? 'none'}/${asStampB?.config.path ?? 'none'}), ${asStamp1?.outputs.length ?? 0} output hash(es) match disk (stray.txt & rig/parts/old.png excluded: ${asStrayExcluded}): ${asStamp1Valid}; fresh-dir file-set equality (plain ${asStamp1?.outputs.length ?? 0}, scene ${asSceneStamp?.outputs.length ?? 0}, scene+alt ${asAltStamp?.outputs.length ?? 0} files): ${asEqFaults.length === 0 ? 'exact' : asEqFaults.join(' | ')} (planted drop -> "${asPlantedMissing.join(';')}"); two runs differ only in started_at/finished_at: ${asParentsMatch}; green->refused clears ${RUN_STAMP_FILE}: ${asRefusedNoStamp}`,
+      'issue #1165: assemble writes run.json (spec rig-run/1) beside its outputs only after green, clears any prior run.json before starting, lists the exact stage outputs on disk, and reads timestamps in cli.ts',
     );
 
     // Issue #233: a full-run body no planned part covers is named, by the proposer and by the assemble summary
