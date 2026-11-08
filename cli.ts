@@ -1342,7 +1342,23 @@ function isPackShape(v: PackShape | string): v is PackShape {
   return (PACK_SHAPES as readonly string[]).includes(v);
 }
 
+/** Resolve the optional stamp clock before either command touches output. */
+function runStampClock(): string | undefined {
+  const value = process.env.SOURCE_DATE_EPOCH;
+  if (value === undefined) return undefined;
+  const millis = Number(value) * 1000;
+  if (!/^(0|[1-9][0-9]*)$/.test(value) || !Number.isSafeInteger(millis) || Number(value) > 253402300799) {
+    throw new PartsError([{
+      code: 'RUN_STAMP_EPOCH', object: 'environment variable SOURCE_DATE_EPOCH',
+      detail: `${JSON.stringify(value)} found; canonical non-negative integer seconds <= 253402300799 (9999-12-31T23:59:59Z) are required`,
+    }]);
+  }
+  return new Date(millis).toISOString();
+}
+
 function cmdRig(args: string[]): number {
+  let fixedClock: string | undefined;
+  try { fixedClock = runStampClock(); } catch (err) { return printRefusal(err); }
   let config: string | null = null;
   let partsDir: string | null = null;
   let out: string | null = null;
@@ -1385,11 +1401,11 @@ function cmdRig(args: string[]): number {
     return printRefusal(err);
   }
   const scratch = mkdtempSync(join(tmpdir(), 'rig-parts-rig-'));
-  const startedAt = new Date().toISOString();
+  const startedAt = fixedClock ?? new Date().toISOString();
   try {
     const pkg = readPackageIdentity(join(import.meta.dir, 'package.json'));
     const rig = rigStage({ config, parts: partsDir, out, idleKeys: keys, pageEdges: edges, packShape: shape }, rigcRunner(bin), scratch, console.log);
-    const finishedAt = new Date().toISOString();
+    const finishedAt = fixedClock ?? new Date().toISOString();
     writeRunStamp({ pkg, command: 'rig', startedAt, finishedAt, outDir: out, configPath: config, outputPaths: rigOutputFiles(rig) });
     return EXIT_OK;
   } catch (err) {
@@ -1846,6 +1862,8 @@ function cmdLoop(args: string[]): number {
 }
 
 function cmdAssemble(args: string[]): number {
+  let fixedClock: string | undefined;
+  try { fixedClock = runStampClock(); } catch (err) { return printRefusal(err); }
   const flags = new Map<string, string>();
   const alts: AlternateCliInput[] = [];
   let propose = false;
@@ -1912,13 +1930,13 @@ function cmdAssemble(args: string[]): number {
     const out = flags.get('--out') as string;
     clearRunStamp(out);
     const pkg = readPackageIdentity(join(import.meta.dir, 'package.json'));
-    const startedAt = new Date().toISOString();
+    const startedAt = fixedClock ?? new Date().toISOString();
     const result = assembleStage(
       { source, full, head, config, ...(flags.has('--requirements') ? { requirements: flags.get('--requirements') as string } : {}), ...(seam === undefined ? {} : { seam: seam as SeamRule }), ...(project === undefined ? {} : { project: project as ProjectRule }), ...(alts.length === 0 ? {} : { alts }) },
       { partsJson: join(out, 'rig', 'parts.json'), partsDir: join(out, 'rig', 'parts'), recomposite: join(out, 'render', 'recomposite_rig.png'), errorMap: join(out, 'render', ERROR_MAP_FILE) },
       console.log,
     );
-    const finishedAt = new Date().toISOString();
+    const finishedAt = fixedClock ?? new Date().toISOString();
     writeRunStamp({ pkg, command: 'assemble', startedAt, finishedAt, outDir: out, configPath: config, outputPaths: assembleOutputFiles(out, result) });
     return EXIT_OK;
   } catch (err) {
