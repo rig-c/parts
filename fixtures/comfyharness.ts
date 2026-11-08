@@ -21,6 +21,7 @@ import { newRaster } from '../src/raster/types.ts';
 import { writeRunStamp } from '../src/runstamp.ts';
 import { sha256 } from '../src/plate.ts';
 import { CANVAS, minimalConfig } from './synthetic.ts';
+import { writeChainInputs } from './occluder_chain.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const work = process.argv[2];
@@ -94,6 +95,17 @@ const platePainting = join(work, 'plate_painting.png');
   for (let y = 0; y < CANVAS.h; y++) for (let x = 0; x < CANVAS.w; x++) r.data.set([(x * 3 + y) % 250, (y * 5) % 250, (x + y * 2) % 250, 255], (y * CANVAS.w + x) * 4);
   writeFileSync(platePainting, encodePngBytes(r));
 }
+// Issue #1230: an RGBA occluder on the painting's grid — a 2 px ring around a 4x4 pocket that `--holes` fills — and
+// the same ring on a canvas one pixel narrower, which is refused before anything is uploaded.
+const plateOccluder = join(work, 'plate_occluder.png');
+const plateOccluderNarrow = join(work, 'plate_occluder_narrow.png');
+for (const [path, w] of [[plateOccluder, CANVAS.w], [plateOccluderNarrow, CANVAS.w - 1]] as const) {
+  const r = newRaster(w, CANVAS.h);
+  for (let y = 10; y < 18; y++) for (let x = 20; x < 28; x++) if (x < 22 || x >= 26 || y < 12 || y >= 16) r.data.set([200, 40, 40, y === 10 ? 1 : 255], (y * w + x) * 4);
+  writeFileSync(path, encodePngBytes(r));
+}
+// Issue #1230: the occluder chain's painting and occluder (fixtures/occluder_chain.ts), plated here and assembled by the check.
+const chain = writeChainInputs(join(work, 'occ-chain'));
 const image = join(work, 'input.png');
 writeFileSync(image, readFileSync(platePainting));
 writeFileSync(join(work, 'paint.json'), JSON.stringify(paintConfig(FAKE_CHECKPOINT)));
@@ -188,6 +200,9 @@ const plate = (url: string, out: string, graph: 'lama' | 'core', mask: string | 
   'comfy', 'plate', '--mode', 'background', '--painting', platePainting, ...(mask === null ? [] : ['--mask-from', mask]), '--out', out, '--graph', graph,
   ...(sha === null ? [] : ['--checkpoint-sha256', sha]), '--seed', '9', '--grow', '1', '--host', url, '--wait', wait, ...fast, ...extra,
 ];
+/** Issue #1230: the background plate's flags with `--mode occluder`, no --mask-from, and the occluder named. */
+const occluderPlate = (url: string, out: string, occluder: string, extra: string[] = []): string[] =>
+  [...plate(url, out, 'lama', null).map((x, i, all) => (x === 'background' && all[i - 1] === '--mode' ? 'occluder' : x)), '--occluder', occluder, ...extra];
 const scenarios: Scenario[] = [
   { name: 'st-ok', mode: 'ok', args: (u, o) => st(u, o) },
   // The guide supplies image/out/host only: a config beside the command is not discovered.
@@ -264,6 +279,11 @@ const scenarios: Scenario[] = [
     return plate(u, o, 'lama', `seethrough:${legacy}`);
   } },
   { name: 'plate-out-filled-mid-wait', mode: 'ok', fillOutMidWait: true, args: (u, o) => plate(u, o, 'lama') },
+  // Issue #1230: the occluder mode, with and without the pocket filled, and an occluder off the painting's grid.
+  { name: 'plate-occ-holes', mode: 'ok', args: (u, o) => occluderPlate(u, o, plateOccluder, ['--holes']) },
+  { name: 'plate-occ-ring', mode: 'ok', args: (u, o) => occluderPlate(u, o, plateOccluder) },
+  { name: 'plate-occ-narrow', mode: 'ok', args: (u, o) => occluderPlate(u, o, plateOccluderNarrow) },
+  { name: 'plate-occ-chain', mode: 'ok', args: (u, o) => occluderPlate(u, o, chain.occluder).map((x, i, all) => (all[i - 1] === '--painting' ? chain.painting : all[i - 1] === '--grow' ? '2' : x)) },
 ];
 
 const results: Record<string, unknown> = {};

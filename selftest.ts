@@ -5,6 +5,7 @@ import { runSourceCoverChecks } from './fixtures/source_cover_checks.ts';
 import { runPartsFileReferenceChecks } from './tools/parts_file_references.ts';
 import { runCheckFileReferenceChecks } from './tools/check_file_references.ts';
 import { runHiddenExtentChecks, runHiddenExtentConfigChecks } from './fixtures/hidden_extent.ts';
+import { runOccluderConfigChecks, runOccluderCopyChecks } from './tools/check_occluders.ts';
 import './tools/check_row_guard.ts';
 import { runSeamCellChecks } from './tools/check_seam_cells.ts';
 import { motionSeamFinding } from './src/check.ts';
@@ -33062,6 +33063,8 @@ function runAssembleSuite(): number {
   const dir = temp('assemble');
   try {
     runHiddenExtentChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1047: production assembly refuses declared enclosed source holes'));
+    runOccluderConfigChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1230: config.assemble.occluders at every config door, each plant refused by its code'));
+    runOccluderCopyChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1230: copied occluder colour is named with its count, silent without it, and moves no byte'));
     runDiffComponentChecks((name, ok, detail) => say(name, ok, detail, 'issue #1005: hand-counted whole-error components and planted report mutations'));
     runPaintingExtensionChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #848: public generated controls; explicit ownership, bounds and exact painting samples'));
     runPaintingEdgeChecks((name, ok, detail) => say(name, ok, detail, 'issue #953: under visible, a part edge takes the painting\'s line and coverage; every skip reason planted next to a positive strip'));

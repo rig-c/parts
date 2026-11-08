@@ -13,7 +13,8 @@ import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FAKE_FILL } from '../fixtures/fakecomfy.ts';
-import { PLATE_RECEIPT_KEYS, PLATE_RECEIPT_SPEC, runForeground, sha256, verifyPlateReceipt } from '../src/plate.ts';
+import { runOccluderChainChecks } from './check_occluders.ts';
+import { PLATE_RECEIPT_KEYS, PLATE_RECEIPT_OCCLUDER_KEYS, PLATE_RECEIPT_SPEC, runForeground, sha256, verifyPlateReceipt } from '../src/plate.ts';
 import { decodePngBytes, encodePngBytes } from '../src/raster/png.ts';
 
 export interface PlateHarnessResult {
@@ -216,9 +217,84 @@ function pasteBack(dir: string, painting: string): { outsideDiff: number; inside
   }
 }
 
+/** The receipt fields the occluder controls read. */
+interface OccluderReceipt {
+  mode?: string;
+  painting?: { sha256?: string };
+  occluder?: { path?: string; sha256?: string };
+  mask?: { source?: string; sha256?: string };
+  output?: { sha256?: string };
+  params?: { grow_px?: number; holes?: boolean; mask_alpha_above?: number };
+  model?: { name?: string; checkpoint_sha256?: string };
+}
+
+/**
+ * Issue #1230: `--mode occluder`. The receipt binds the painting, the occluder, the mask bytes, grow, holes and the
+ * model; the mask is the occluder's alpha above 0 grown 1 px (the ring's pocket filled only under --holes); the plate
+ * is the painting outside the mask and the box's fill inside it; an occluder off the painting's grid is refused by
+ * name before any request.
+ */
+function occluderChecks(dir: string, painting: string, R: Record<string, PlateHarnessResult>, say: Say): void {
+  const hash = (path: string): string => createHash('sha256').update(readFileSync(path)).digest('hex');
+  const occluderPath = join(dir, 'plate_occluder.png');
+  const paintingPx = decodePngBytes(new Uint8Array(readFileSync(painting)), painting);
+  // The ring is 8x8 at [20, 10] with a 4x4 pocket: grown 1 px it is the 10x10 square (100 px) with the pocket filled,
+  // and the square less the pocket eroded 1 px (2x2) without.
+  const expected = { 'plate-occ-holes': { px: 100, holes: true }, 'plate-occ-ring': { px: 96, holes: false } } as const;
+  const lines: string[] = [];
+  let ok = true;
+  for (const [name, want] of Object.entries(expected)) {
+    const r = R[name];
+    const out = join(dir, name);
+    const receiptFile = join(out, 'receipt.json');
+    if (r?.status !== 0 || !existsSync(receiptFile)) { ok = false; lines.push(`${name}: exit ${r?.status}, ${r?.out.trim().split('\n').pop()}`); continue; }
+    const rec = JSON.parse(readFileSync(receiptFile, 'utf8')) as OccluderReceipt;
+    const mask = decodePngBytes(new Uint8Array(readFileSync(join(out, 'mask.png'))), 'mask.png');
+    const plate = decodePngBytes(new Uint8Array(readFileSync(join(out, 'plate.png'))), 'plate.png');
+    let inside = 0, outsideDiffer = 0, insideNotFill = 0;
+    for (let p = 0; p < mask.width * mask.height; p++) {
+      const m = mask.data[p * 4] === 255;
+      if (m) inside++;
+      if (!m && [0, 1, 2, 3].some((c) => plate.data[p * 4 + c] !== paintingPx.data[p * 4 + c])) outsideDiffer++;
+      if (m && (plate.data[p * 4] !== FAKE_FILL[0] || plate.data[p * 4 + 1] !== FAKE_FILL[1] || plate.data[p * 4 + 2] !== FAKE_FILL[2])) insideNotFill++;
+    }
+    const bound = rec.mode === 'occluder' && Object.keys(rec).join(',') === PLATE_RECEIPT_OCCLUDER_KEYS.join(',') &&
+      rec.painting?.sha256 === hash(painting) && rec.occluder?.sha256 === hash(occluderPath) && rec.occluder?.path === '../plate_occluder.png' &&
+      rec.mask?.source === 'occluder' && rec.mask?.sha256 === hash(join(out, 'mask.png')) && rec.output?.sha256 === hash(join(out, 'plate.png')) &&
+      rec.params?.grow_px === 1 && rec.params?.holes === want.holes && rec.params?.mask_alpha_above === 0 &&
+      rec.model?.name === 'big-lama.pt' && rec.model?.checkpoint_sha256 === 'ab'.repeat(32) && verifyPlateReceipt(receiptFile).length === 0;
+    if (!bound || inside !== want.px || outsideDiffer !== 0 || insideNotFill !== 0) ok = false;
+    lines.push(`${name}: receipt keys ${Object.keys(rec).join(',')}, occluder ${rec.occluder?.path} ${rec.occluder?.sha256 === hash(occluderPath) ? 'sha matches' : 'sha DIFFERS'}, mask ${inside} px (want ${want.px}), holes ${rec.params?.holes}, grow ${rec.params?.grow_px}, model ${rec.model?.name}; outside differing ${outsideDiffer}, inside not fill ${insideNotFill}; bound ${bound}`);
+  }
+  say('PB15_OCCLUDER_MODE_RECEIPT_BINDS_PAINTING_OCCLUDER_MASK_GROW_HOLES_AND_MODEL', ok, lines.join('; '),
+    'issue #1230: the occluder plate is the source of hidden surface behind a declared occluder, so its receipt names every input that made it');
+
+  // A planted occluder sha in the receipt is caught by the reader.
+  const copy = join(dir, 'plate-occ-holes-planted');
+  rmSync(copy, { recursive: true, force: true });
+  cpSync(join(dir, 'plate-occ-holes'), copy, { recursive: true });
+  const planted = JSON.parse(readFileSync(join(copy, 'receipt.json'), 'utf8')) as OccluderReceipt;
+  if (planted.occluder !== undefined) planted.occluder.sha256 = '0'.repeat(64);
+  writeFileSync(join(copy, 'receipt.json'), `${JSON.stringify(planted, null, 2)}\n`);
+  const caught = verifyPlateReceipt(join(copy, 'receipt.json'));
+  say('PB16_A_PLANTED_OCCLUDER_SHA_IN_THE_RECEIPT_IS_CAUGHT', caught.some((q) => q.code === 'PLATE_RECEIPT_HASH' && q.object.endsWith(' occluder')), JSON.stringify(caught),
+    'issue #1230: the occluder is read back against its bytes like the painting, the mask and the output');
+
+  const narrow = R['plate-occ-narrow'];
+  const line = narrow === undefined ? null : failLine(narrow.out, 'PLATE_OCCLUDER_GRID');
+  say('PB17_AN_OCCLUDER_OFF_THE_PAINTINGS_GRID_IS_REFUSED_BY_NAME_BEFORE_ANY_REQUEST',
+    narrow?.status === 1 && line !== null && line.includes('63x48') && line.includes('64x48') && narrow.paths.length === 0 && narrow.uploads.length === 0 && narrow.prompts === 0 && !existsSync(join(dir, 'plate-occ-narrow')),
+    `exit ${narrow?.status}, "${line ?? 'no PLATE_OCCLUDER_GRID line'}", requests ${narrow?.paths.length}, uploads ${narrow?.uploads.length}, prompts ${narrow?.prompts}`,
+    'issue #1230: the occluder is read on the painting\'s grid and never fitted; a mismatch is refused before the box is reached');
+
+  runOccluderChainChecks(dir, join(dir, 'plate-occ-chain'), (name, pass, detail) => say(name, pass, detail,
+    'issue #1230: the occluder plate is a source of hidden surface the painting\'s own decomposition never paints, reached through the existing take route'));
+}
+
 export function runPlateChecks(dir: string, painting: string, R: Record<string, PlateHarnessResult>, say: Say): void {
   figureBindingChecks(dir, painting, say);
   seethroughBindingChecks(dir, painting, say);
+  occluderChecks(dir, painting, R, say);
   const nothingAsked = (r: PlateHarnessResult | undefined): boolean => r !== undefined && r.paths.length === 0 && r.uploads.length === 0 && r.prompts === 0;
   const nothingWritten = (name: string): boolean => !existsSync(join(dir, name));
   const noUpload = (r: PlateHarnessResult | undefined): boolean => r !== undefined && r.uploads.length === 0 && r.prompts === 0 && !r.paths.includes('POST /upload/image');

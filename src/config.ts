@@ -1,4 +1,5 @@
 import { hiddenExtentNameProblems, type HiddenExtentDeclaration } from './hiddenextent.ts';
+import { occluderFileProblems, occluderNameProblems, type OccluderDeclaration } from './occluders.ts';
 import { SEAM_RULES, type SeamRule } from './seamrule.ts';
 import { DEFAULT_PROJECT_RULE, GROUNDS, type Ground, PROJECT_RULES, type ProjectRule } from './projectrule.ts';
 import type { TakeDeclaration } from './takeregion.ts';
@@ -339,6 +340,8 @@ export interface Assemble {
   keep_under_occluders?: string[];
   /** Require original material in enclosed source holes beneath a named moving cover. */
   require_hidden_extent?: HiddenExtentDeclaration[];
+  /** Issue #1230: declared RGBA occluders on the painting's grid and the plan parts they stand over. */
+  occluders?: OccluderDeclaration[];
 }
 
 export interface SingleBone {
@@ -1476,6 +1479,13 @@ export function configFileReferences(raw: unknown): ConfigFileReference[] {
     const target = parent;
     out.push({ at: field.path.join('.'), value, set: (next) => { target[key] = next; } });
   }
+  // Issue #1230: each declared occluder's image, an array field the single-path table above cannot name.
+  const assemble = isPlainObject(raw) ? raw.assemble : undefined;
+  const occluders = isPlainObject(assemble) && Array.isArray(assemble.occluders) ? assemble.occluders : [];
+  occluders.forEach((entry: unknown, i: number) => {
+    if (!isPlainObject(entry) || typeof entry.image !== 'string' || entry.image === '') return;
+    out.push({ at: `assemble.occluders[${i}].image`, value: entry.image, set: (next) => { entry.image = next; } });
+  });
   return out;
 }
 
@@ -1702,7 +1712,7 @@ export interface EarlyConfig {
   depth?: DepthConfig;
   key: string;
   seethrough: SeeThrough;
-  assemble: { rig_scale: number; seam?: SeamRule; project?: ProjectRule; ground?: Ground; take?: TakeDeclaration[]; editor_receipts?: EditorReceipts; head_face_underfill?: boolean; yield_refused?: boolean; stage_map?: boolean; keep_under_occluders?: string[]; require_hidden_extent?: HiddenExtentDeclaration[]; extend_painting?: PaintingExtension[] };
+  assemble: { rig_scale: number; seam?: SeamRule; project?: ProjectRule; ground?: Ground; take?: TakeDeclaration[]; editor_receipts?: EditorReceipts; head_face_underfill?: boolean; yield_refused?: boolean; stage_map?: boolean; keep_under_occluders?: string[]; require_hidden_extent?: HiddenExtentDeclaration[]; extend_painting?: PaintingExtension[]; occluders?: OccluderDeclaration[] };
 }
 
 /** What plain `assemble` reads: the early config plus the plan `--propose-plan` printed. */
@@ -1780,7 +1790,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null, p
   if (door === 'layers') {
     if ('seethrough' in t) checkSeeThrough(c, t.seethrough);
     if ('assemble' in t) {
-      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'stage_map', 'keep_under_occluders', 'require_hidden_extent', 'extend_painting', 'take', 'seam', 'project', 'ground', 'editor_receipts']);
+      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'stage_map', 'keep_under_occluders', 'require_hidden_extent', 'extend_painting', 'take', 'seam', 'project', 'ground', 'editor_receipts', 'occluders']);
       if (a !== null) {
         checkAssembleRules(c, a);
         if ('rig_scale' in a) c.number('config.assemble.rig_scale', a.rig_scale, 'positive');
@@ -1792,6 +1802,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null, p
         }
         checkKeepUnderOccluders(c, a, null);
         checkRequiredHiddenExtent(c, a, null);
+        checkOccluders(c, a, null, base);
         if ('extend_painting' in a) checkPaintingExtensions(c, a.extend_painting);
         if ('take' in a) checkTakeLayers(c, a.take);
         if ('editor_receipts' in a) checkEditorReceipts(c, a.editor_receipts);
@@ -1807,6 +1818,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null, p
     if (busyVisible && 'requirements' in t && c.string('config.requirements', t.requirements) && base !== null) checkRequirementsFile(c, configFilePath('requirements', base, t.requirements) as string);
     if ('seethrough' in t) checkSeeThrough(c, t.seethrough);
     const made = 'assemble' in t ? checkAssemble(c, t.assemble, door) : { parts: [], patches: [], cuts: [] };
+    if ('assemble' in t) checkOccluderFiles(c, t.assemble, base);
     checkProposedRigScale(c, t);
     if ('scene' in t) checkScene(c, t.scene);
     // Issue #349: the limbs' joints are their bones' origins, so the bones are read with them, and only then.
@@ -2038,6 +2050,7 @@ function parseConfigFrom(raw: Json, base: string | null): { config: CharacterCon
   if ('generation' in t) checkGeneration(c, t.generation);
   if ('seethrough' in t) checkSeeThrough(c, t.seethrough);
   const { parts, patches, cuts } = 'assemble' in t ? checkAssemble(c, t.assemble, 'full') : { parts: [], patches: [], cuts: [] };
+  if ('assemble' in t) checkOccluderFiles(c, t.assemble, base);
   checkProposedRigScale(c, t);
   const names = 'bones' in t ? checkBones(c, t.bones) : { bones: new Set<string>([ROOT_BONE]), chains: new Map<string, number>(), parents: new Map<string, string>() };
   const limbs = 'limbs' in t ? checkLimbs(c, t.limbs, { parts, patches, cuts }, 'bones' in t ? names : null) : null;
@@ -2539,6 +2552,40 @@ function checkRequiredHiddenExtent(c: Check, a: Record<string, Json>, names: rea
   c.problems.push(...hiddenExtentNameProblems(declarations, names));
 }
 
+/**
+ * Issue #1230: `config.assemble.occluders`, `[{image, sha256, under, rgb_within}]`. Shape at every door; `under`
+ * resolved against the plan where the door reads it; the file and its sha256 where the door knows the config's
+ * directory (`checkOccluderFiles`).
+ */
+function checkOccluders(c: Check, a: Record<string, Json>, names: readonly string[] | null, base: string | null): void {
+  if (!('occluders' in a)) return;
+  const at = 'config.assemble.occluders';
+  if (!c.array(at, a.occluders, false)) return;
+  const declarations: OccluderDeclaration[] = [];
+  (a.occluders as Json[]).forEach((value, i) => {
+    const p = `${at}[${i}]`;
+    const row = c.object(p, value, ['image', 'sha256', 'under', 'rgb_within'], []);
+    if (row === null) return;
+    const imageOk = c.string(`${p}.image`, row.image);
+    const shaOk = typeof row.sha256 === 'string' && SHA256_PATTERN.test(row.sha256);
+    if (!shaOk) c.fail('CONFIG_FIELD_TYPE', `${p}.sha256`, `is ${show(row.sha256)}; ${SHA256_RULE} is required`);
+    let underOk = c.array(`${p}.under`, row.under, true);
+    if (underOk) (row.under as Json[]).forEach((name, j) => { if (!c.string(`${p}.under[${j}]`, name)) underOk = false; });
+    const rgbOk = typeof row.rgb_within === 'number' && Number.isInteger(row.rgb_within) && row.rgb_within >= 0 && row.rgb_within <= 255;
+    if (!rgbOk) c.fail('CONFIG_FIELD_TYPE', `${p}.rgb_within`, `is ${show(row.rgb_within)}; an integer from 0 to 255 is required`);
+    if (imageOk && shaOk && underOk && rgbOk) declarations.push({ image: row.image as string, sha256: row.sha256 as string, under: row.under as string[], rgb_within: row.rgb_within as number });
+  });
+  c.problems.push(...occluderNameProblems(declarations, names));
+  if (base !== null) c.problems.push(...occluderFileProblems(declarations, base));
+}
+
+/** The occluder files, at the doors that know the config's directory but read the plan elsewhere. */
+function checkOccluderFiles(c: Check, assemble: Json, base: string | null): void {
+  if (base === null || !isPlainObject(assemble) || !Array.isArray(assemble.occluders)) return;
+  const declarations = (assemble.occluders as Json[]).filter((d): d is OccluderDeclaration => isPlainObject(d) && typeof d.image === 'string' && d.image !== '' && typeof d.sha256 === 'string' && SHA256_PATTERN.test(d.sha256));
+  c.problems.push(...occluderFileProblems(declarations, base));
+}
+
 function checkKeepUnderOccluders(c: Check, a: Record<string, Json>, plan: readonly string[] | null): void {
   if (!('keep_under_occluders' in a)) return;
   const at = 'config.assemble.keep_under_occluders';
@@ -2658,7 +2705,7 @@ function checkAssembleRules(c: Check, a: Record<string, Json>): void {
 
 function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: string[]; patches: string[]; cuts: string[] } {
   const required = sectionRequired(door, 'assemble');
-  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'stage_map', 'keep_under_occluders', 'require_hidden_extent', 'extend_painting', 'take', 'seam', 'project', 'ground', 'editor_receipts']);
+  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'stage_map', 'keep_under_occluders', 'require_hidden_extent', 'extend_painting', 'take', 'seam', 'project', 'ground', 'editor_receipts', 'occluders']);
   if (a === null) return { parts: [], patches: [], cuts: [] };
   checkAssembleRules(c, a);
   if (required.includes('plan') && !('plan' in a)) {
@@ -2698,6 +2745,7 @@ function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: s
   }
   checkKeepUnderOccluders(c, a, parts);
   checkRequiredHiddenExtent(c, a, parts);
+  checkOccluders(c, a, parts, null);
   if ('extend_painting' in a) checkPaintingExtensions(c, a.extend_painting);
   if ('take' in a) checkTakeLayers(c, a.take, parts);
   if ('editor_receipts' in a) checkEditorReceipts(c, a.editor_receipts);
