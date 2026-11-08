@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.34.0](https://github.com/rig-c/parts/compare/v2.33.0...v2.34.0) (2026-11-08)
+
+
+### Features
+
+* **assemble:** hold under parts' surface beneath a declared occluder and add an opt-in occluder part ([#1246](https://github.com/rig-c/parts/issues/1246)) ([#1250](https://github.com/rig-c/parts/issues/1250)) ([ad55f7f](https://github.com/rig-c/parts/commit/ad55f7f39ae380e5289ada98e9729f10133d9cbe))
+* **assemble:** take one part from two sources, split by a declared occluder's mask ([#1242](https://github.com/rig-c/parts/issues/1242)) ([#1245](https://github.com/rig-c/parts/issues/1245)) ([7cea17d](https://github.com/rig-c/parts/commit/7cea17d57298c7e29745d12da73f160b379f3693))
+
+
+### Bug Fixes
+
+* **assemble:** let --propose-plan draft occluders[].over after its under parts ([#1247](https://github.com/rig-c/parts/issues/1247)) ([#1249](https://github.com/rig-c/parts/issues/1249)) ([3ab1329](https://github.com/rig-c/parts/commit/3ab1329913f5ca12060d451e00e54d416ef65565))
+
 ## [2.33.0](https://github.com/rig-c/parts/compare/v2.32.0...v2.33.0) (2026-11-08)
 
 
