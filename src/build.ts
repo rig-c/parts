@@ -15,7 +15,7 @@ import { CUT_MATERIAL_LINE, CUT_MATERIAL_SOURCES, materialLines } from './cutmat
 import { ART_JOINT_LINE, artJointLines } from './artjoints.ts';
 import { applyTakenLayers } from './takelayers.ts';
 import { applyTakenRegions } from './takeregion.ts';
-import { bindOccluderPlates, occluderStageWarnings } from './occluderstage.ts';
+import { bindOccluderPlates, occluderStageWarnings, readOccluderInputs } from './occluderstage.ts';
 import { ownershipLines, provenanceLines } from './provenance.ts';
 import { readSourceDepth } from './depthsheets.ts';
 import { orderedBaseAnchor } from './baseanchor.ts';
@@ -387,13 +387,15 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const declaredFigure = figureSupport === undefined ? undefined : { width: Math.trunc(src.width * fields.rigScale), height: Math.trunc(src.height * fields.rigScale), data: figureSupport };
   const under = readUnders(input.config, fields.cuts);
   const caps = fields.limbs === undefined ? undefined : readCaps(input.config, fields.limbs);
+  const occluders = cfg.assemble.occluders === undefined ? undefined : readOccluderInputs(cfg.assemble.occluders, input.config, src);
   const result = assemble({ allocationEvent: input.allocationEvent === undefined ? undefined : event => input.allocationEvent!(event, null), source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under, ...(declaredFigure === undefined ? {} : { declaredFigure }),
-    ...((cfg.assemble.take ?? []).some(t => 'seed' in t) ? { regionTake: { full: takenRuns.full, head: takenRuns.head, targets: (cfg.assemble.take ?? []).flatMap(t => 'seed' in t ? [t.part] : []) } } : {}), ...(caps === undefined ? {} : { caps }), seamRule: seam, projectRule: project });
+    ...((cfg.assemble.take ?? []).some(t => 'seed' in t) ? { regionTake: { full: takenRuns.full, head: takenRuns.head, targets: (cfg.assemble.take ?? []).flatMap(t => 'seed' in t ? [t.part] : []) } } : {}), ...(caps === undefined ? {} : { caps }), ...(occluders === undefined ? {} : { occluders }), seamRule: seam, projectRule: project });
 
-  // Issue #1230 / #1237: copied occluder colour in a declared occluder's under parts is named, never kept silent;
+  // Issue #1230 / #1237 / #1246: copied occluder colour in a declared occluder's under parts and unheld occluder px are named, never kept silent;
   // when `plate` is declared on an occluder entry, its receipt is verified and bound to occluder, painting and base run.
   if (cfg.assemble.occluders !== undefined) {
     for (const line of occluderStageWarnings({ occluders: cfg.assemble.occluders, configPath: input.config, source: src, runs, plan: fields.plan, resolution: fields.resolution, headBox: fields.headBox, rigScale: fields.rigScale })) log(line);
+    for (const line of result.occluderUnheldWarnings ?? []) log(line);
     const boundPlates = bindOccluderPlates({ occluders: cfg.assemble.occluders, configPath: input.config, sourcePath: input.source, fullPath: input.full });
     if (boundPlates.length > 0) result.parts.occluder_plates = boundPlates;
   }

@@ -2572,18 +2572,19 @@ function checkRequiredHiddenExtent(c: Check, a: Record<string, Json>, names: rea
 }
 
 /**
- * Issue #1230 / #1241: `config.assemble.occluders`, `[{image, sha256, under, over?, rgb_within}]`. Shape at every door; `under`
- * and `over` resolved against the plan where the door reads it; the file and its sha256 where the door knows the config's
- * directory (`checkOccluderFiles`).
+ * Issue #1230 / #1241 / #1246: `config.assemble.occluders`, `[{image, sha256, under, over?, rgb_within, plate?, part?}]`.
+ * Shape at every door; `under`, `over` and `part` resolved against the plan where the door reads it; the file and its
+ * sha256 where the door knows the config's directory (`checkOccluderFiles`). Returns the declared `part` names, in order.
  */
-function checkOccluders(c: Check, a: Record<string, Json>, names: readonly string[] | null, base: string | null): void {
-  if (!('occluders' in a)) return;
+function checkOccluders(c: Check, a: Record<string, Json>, names: readonly string[] | null, base: string | null): string[] {
+  if (!('occluders' in a)) return [];
   const at = 'config.assemble.occluders';
-  if (!c.array(at, a.occluders, false)) return;
+  if (!c.array(at, a.occluders, false)) return [];
   const declarations: OccluderDeclaration[] = [];
+  const partNames: string[] = [];
   (a.occluders as Json[]).forEach((value, i) => {
     const p = `${at}[${i}]`;
-    const row = c.object(p, value, ['image', 'sha256', 'under', 'rgb_within'], ['over', 'plate']);
+    const row = c.object(p, value, ['image', 'sha256', 'under', 'rgb_within'], ['over', 'plate', 'part']);
     if (row === null) return;
     const imageOk = c.string(`${p}.image`, row.image);
     const shaOk = typeof row.sha256 === 'string' && SHA256_PATTERN.test(row.sha256);
@@ -2598,12 +2599,27 @@ function checkOccluders(c: Check, a: Record<string, Json>, names: readonly strin
     const rgbOk = typeof row.rgb_within === 'number' && Number.isInteger(row.rgb_within) && row.rgb_within >= 0 && row.rgb_within <= 255;
     if (!rgbOk) c.fail('CONFIG_FIELD_TYPE', `${p}.rgb_within`, `is ${show(row.rgb_within)}; an integer from 0 to 255 is required`);
     const plateOk = !('plate' in row) || c.string(`${p}.plate`, row.plate);
-    if (imageOk && shaOk && underOk && overOk && rgbOk && plateOk) {
-      declarations.push({ image: row.image as string, sha256: row.sha256 as string, under: row.under as string[], ...('over' in row ? { over: row.over as string[] } : {}), rgb_within: row.rgb_within as number, ...('plate' in row ? { plate: row.plate as string } : {}) });
+    let partOk = true;
+    let partName: string | undefined;
+    if ('part' in row) {
+      partOk = c.string(`${p}.part`, row.part);
+      if (partOk) {
+        partName = row.part as string;
+        if (!partNameOk(partName)) {
+          c.fail('CONFIG_PART_NAME', `${p}.part`, `names the part ${show(partName)}; a part name is a file name, so it may not be empty, start with "." or hold a slash`);
+          partOk = false;
+        } else {
+          partNames.push(partName);
+        }
+      }
+    }
+    if (imageOk && shaOk && underOk && overOk && rgbOk && plateOk && partOk) {
+      declarations.push({ image: row.image as string, sha256: row.sha256 as string, under: row.under as string[], ...('over' in row ? { over: row.over as string[] } : {}), rgb_within: row.rgb_within as number, ...('plate' in row ? { plate: row.plate as string } : {}), ...(partName !== undefined ? { part: partName } : {}) });
     }
   });
   c.problems.push(...occluderNameProblems(declarations, names));
   if (base !== null) c.problems.push(...occluderFileProblems(declarations, base));
+  return partNames;
 }
 
 /** The occluder files, at the doors that know the config's directory but read the plan elsewhere. */
@@ -2817,7 +2833,7 @@ function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: s
   }
   checkKeepUnderOccluders(c, a, parts);
   checkRequiredHiddenExtent(c, a, parts);
-  checkOccluders(c, a, parts, null);
+  const occluderParts = checkOccluders(c, a, parts, null);
   if ('extend_painting' in a) checkPaintingExtensions(c, a.extend_painting);
   if ('edge_splits' in a) checkEdgeSplits(c, a.edge_splits, new Set(parts));
   if ('take' in a) checkTakeLayers(c, a.take, parts, a);
@@ -2842,7 +2858,7 @@ function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: s
       }
     });
   }
-  const patches = 'patches' in a ? checkPatches(c, a.patches, parts) : [];
+  const patches = [...('patches' in a ? checkPatches(c, a.patches, parts, occluderParts) : []), ...occluderParts];
   const cuts = 'cuts' in a ? checkCuts(c, a.cuts, parts, patches) : [];
   return { parts, patches, cuts };
 }
@@ -3170,7 +3186,7 @@ function checkAlternates(
  * (`ASSEMBLE_PATCH_BOX_INSIDE`, `ASSEMBLE_PATCH_OPAQUE`). Returns the patch
  * names, in order.
  */
-function checkPatches(c: Check, v: Json, plan: string[]): string[] {
+function checkPatches(c: Check, v: Json, plan: string[], occluderParts: readonly string[] = []): string[] {
   const p = 'config.assemble.patches';
   const names: string[] = [];
   if (!c.array(p, v, false)) return names;
@@ -3191,6 +3207,7 @@ function checkPatches(c: Check, v: Json, plan: string[]): string[] {
       const name = e.name;
       if (!partNameOk(name)) c.fail('CONFIG_PART_NAME', `${at}.name`, `names the part ${show(name)}; a part name is a file name, so it may not be empty, start with "." or hold a slash`);
       if (plan.includes(name)) c.fail('CONFIG_PART_UNIQUE', `${at}.name`, `names the part "${name}", which assemble.plan[${plan.indexOf(name)}] already makes; a patch is a part of its own`);
+      else if (occluderParts.includes(name)) c.fail('CONFIG_PART_UNIQUE', `${at}.name`, `names the part "${name}", which assemble.occluders already makes; a patch is a part of its own`);
       else if (seen.has(name)) c.fail('CONFIG_PART_UNIQUE', `${at}.name`, `names the part "${name}" again (first at patches[${seen.get(name)}])`);
       else seen.set(name, i);
       names.push(name);

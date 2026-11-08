@@ -27,10 +27,12 @@ import {
   OCCLUDER_COLOUR_COPIED,
   OCCLUDER_DRAW_CYCLE,
   OCCLUDER_DRAW_ORDER,
+  OCCLUDER_EMPTY,
   OCCLUDER_OVER_TAKEN,
   OCCLUDER_PLATE_BASE_RUN,
   OCCLUDER_PLATE_OCCLUDER,
   OCCLUDER_PLATE_PAINTING,
+  OCCLUDER_UNHELD,
 } from '../src/occluders.ts';
 import { type OccluderPlateRecord, readParts } from '../src/parts.ts';
 import {
@@ -48,7 +50,26 @@ import { scratchConfig } from '../src/meshdraft.ts';
 import { encodePngBytes, readPng } from '../src/raster/png.ts';
 import { newRaster, type Raster } from '../src/raster/types.ts';
 import { applyTakenLayers, TAKE_SPLIT_EMPTY, TAKE_SPLIT_OCCLUDER } from '../src/takelayers.ts';
-import { chainConfig, chainPlate, DEEPER_OCCLUDER_DEPTH, LIMB, LIMB_RGB, OCCLUDER, OCCLUDER_PX, OCCLUDER_RGB, PLANT, plateRun as buildPlateRun, SIDE, writeChainInputs, writePlateRun } from '../fixtures/occluder_chain.ts';
+import {
+  chainConfig,
+  chainPlate,
+  DEEPER_OCCLUDER_DEPTH,
+  LIMB,
+  LIMB_RGB,
+  OCCLUDER,
+  OCCLUDER_PX,
+  OCCLUDER_RGB,
+  PARTIAL_HALF_PX,
+  PARTIAL_LOWER_BOX,
+  PARTIAL_OCCLUDER_RGB,
+  PARTIAL_OVER_BOX,
+  PLANT,
+  plateRun as buildPlateRun,
+  SIDE,
+  writeChainInputs,
+  writePartialOverInputs,
+  writePlateRun,
+} from '../fixtures/occluder_chain.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
 
@@ -769,6 +790,370 @@ export function runOccluderCopyChecks(dir: string, say: Say): void {
   say('OC28_OCCLUDER_EDGE_SEAM_COUNT_IS_0_ON_MATCHED_LIMB_AND_96_ON_NARROW_PLATE',
     fullSplitRun.error === null && narrowSplitRun.error === null && fullSeams === 0 && narrowSeams === 96,
     `matched limb [16,16,112,112]: seam_pairs=${fullSeams} (want 0); narrower plate limb [16,16,64,112]: seam_pairs=${narrowSeams} (want 96)`);
+
+  // Issue #1246 controls (OC32–OC37): partial-`over` twin, automatic `under` visible-projection guard,
+  // opt-in `painting:<part>` occluder part, `ASSEMBLE_OCCLUDER_EMPTY`, and `ASSEMBLE_OCCLUDER_UNHELD`.
+  const partHome = join(dir, 'occluder-part-twin');
+  rmSync(partHome, { recursive: true, force: true });
+  const pInputs = writePartialOverInputs(partHome);
+  const partialTake = [{ run: 'full', run_dir: 'orig', st_input: 'painting.png', tags: ['objects'] }];
+
+  const partialCfgWithPart = (): Record<string, unknown> => {
+    const cfg = chainConfig({
+      occluders: [declaration(pInputs.occluderSha, { over: ['front'], part: 'occ_fg' })],
+      take: partialTake,
+    });
+    (cfg.regions as Record<string, unknown>).occ_fg = 'root';
+    return cfg;
+  };
+
+  const placePartOnCanvas = (outDir: string, partName: string, dx = 0, dy = 0): Raster | null => {
+    const pJsonPath = join(partHome, outDir, 'parts.json');
+    const pPngPath = join(partHome, outDir, 'parts', `${partName}.png`);
+    if (!existsSync(pJsonPath) || !existsSync(pPngPath)) return null;
+    const pf = readParts(pJsonPath);
+    const meta = pf.parts.find((pt) => pt.name === partName);
+    if (!meta) return null;
+    const crop = readPng(pPngPath);
+    const canvas = newRaster(SIDE, SIDE);
+    for (let cy = 0; cy < crop.height; cy++) {
+      for (let cx = 0; cx < crop.width; cx++) {
+        const tx = meta.x + cx + dx;
+        const ty = meta.y + cy + dy;
+        if (tx < 0 || tx >= SIDE || ty < 0 || ty >= SIDE) continue;
+        const si = (cy * crop.width + cx) * 4;
+        const di = (ty * SIDE + tx) * 4;
+        canvas.data.set(crop.data.subarray(si, si + 4), di);
+      }
+    }
+    return canvas;
+  };
+
+  const compositeStack = (layersInDrawOrder: ReadonlyArray<{ name: string; raster: Raster }>): Raster => {
+    const out = newRaster(SIDE, SIDE);
+    out.data.fill(255);
+    for (const { raster } of layersInDrawOrder) {
+      for (let p = 0; p < SIDE * SIDE; p++) {
+        const sa = raster.data[p * 4 + 3] / 255;
+        if (sa <= 0) continue;
+        const da = 1 - sa;
+        out.data[p * 4] = Math.round(raster.data[p * 4] * sa + out.data[p * 4] * da);
+        out.data[p * 4 + 1] = Math.round(raster.data[p * 4 + 1] * sa + out.data[p * 4 + 1] * da);
+        out.data[p * 4 + 2] = Math.round(raster.data[p * 4 + 2] * sa + out.data[p * 4 + 2] * da);
+        out.data[p * 4 + 3] = 255;
+      }
+    }
+    return out;
+  };
+
+  // Bar 1 (OC32): (i) Rest — of the 2,048 occluder px, top-most holder at alpha >= 250 is `front` (`over`) on 1,024
+  // and `occ_fg` (`part`) on 1,024 (`0` for `behind`, `0` empty); draw order is `behind < occ_fg < front`.
+  const twinWithPartRun = stage(partHome, pInputs.plateRunDir, partialCfgWithPart(), 'out-with-part');
+  const twinPartsFile = twinWithPartRun.error === null ? readParts(join(partHome, 'out-with-part', 'parts.json')) : null;
+  const twinPartNames = twinPartsFile?.parts.map((pt) => pt.name) ?? [];
+  const behindIdx = twinPartNames.indexOf('behind');
+  const occFgIdx = twinPartNames.indexOf('occ_fg');
+  const frontIdx = twinPartNames.indexOf('front');
+  const stackCanvases = twinPartNames
+    .map((name) => ({ name, raster: placePartOnCanvas('out-with-part', name) }))
+    .filter((entry): entry is { name: string; raster: Raster } => entry.raster !== null);
+
+  let topOverPx = 0;
+  let topOccPartPx = 0;
+  let topUnderPx = 0;
+  let topEmptyPx = 0;
+  for (let y = OCCLUDER[1]; y < OCCLUDER[3]; y++) {
+    for (let x = OCCLUDER[0]; x < OCCLUDER[2]; x++) {
+      const p = (y * SIDE + x) * 4;
+      let holder: string | null = null;
+      for (let i = stackCanvases.length - 1; i >= 0; i--) {
+        if (stackCanvases[i].raster.data[p + 3] >= 250) {
+          holder = stackCanvases[i].name;
+          break;
+        }
+      }
+      if (holder === 'front') topOverPx++;
+      else if (holder === 'occ_fg') topOccPartPx++;
+      else if (holder === 'behind') topUnderPx++;
+      else topEmptyPx++;
+    }
+  }
+  say('OC32_PARTIAL_OVER_REST_HOLDERS_SPLIT_1024_OVER_AND_1024_OCCLUDER_PART',
+    twinWithPartRun.error === null &&
+      behindIdx >= 0 &&
+      occFgIdx === behindIdx + 1 &&
+      occFgIdx < frontIdx &&
+      topOverPx === PARTIAL_HALF_PX &&
+      topOccPartPx === PARTIAL_HALF_PX &&
+      topUnderPx === 0 &&
+      topEmptyPx === 0 &&
+      twinPartsFile?.recomposite?.error_px === 0,
+    `${twinWithPartRun.error?.message ?? 'assembled'}; order=${twinPartNames.join('->')}; top holders at alpha>=250 over ${OCCLUDER_PX} occluder px: front=${topOverPx}, occ_fg=${topOccPartPx}, behind=${topUnderPx}, empty=${topEmptyPx}; recomposite.error_px=${twinPartsFile?.recomposite?.error_px}`);
+
+  // Bar 2 (OC33): (i') No ghost — occluder part's px intersect `over` part's rest support (alpha > 128) = 0;
+  // `occ_fg` holds only the lower 1,024 px [48, 64, 80, 96) with exact counts (`PARTS_COUNTS_ADD_UP` and `ASSEMBLE_COUNTS_ADD_UP`).
+  const occFgMeta = twinPartsFile?.parts.find((pt) => pt.name === 'occ_fg');
+  const occFgCanvas = placePartOnCanvas('out-with-part', 'occ_fg');
+  const frontCanvas = placePartOnCanvas('out-with-part', 'front');
+  let ghostOverlapPx = 0;
+  let lowerExactPx = 0;
+  let outsideLowerOpaquePx = 0;
+  if (occFgCanvas !== null && frontCanvas !== null) {
+    for (let y = 0; y < SIDE; y++) {
+      for (let x = 0; x < SIDE; x++) {
+        const p = (y * SIDE + x) * 4;
+        const occAlpha = occFgCanvas.data[p + 3];
+        const frontAlpha = frontCanvas.data[p + 3];
+        if (occAlpha > 0 && frontAlpha > COPIED_ALPHA_ABOVE) ghostOverlapPx++;
+        if (isInside(PARTIAL_LOWER_BOX, x, y)) {
+          if (
+            occFgCanvas.data[p] === PARTIAL_OCCLUDER_RGB[0] &&
+            occFgCanvas.data[p + 1] === PARTIAL_OCCLUDER_RGB[1] &&
+            occFgCanvas.data[p + 2] === PARTIAL_OCCLUDER_RGB[2] &&
+            occAlpha === 255
+          ) {
+            lowerExactPx++;
+          }
+        } else if (occAlpha > 0) {
+          outsideLowerOpaquePx++;
+        }
+      }
+    }
+  }
+  say('OC33_OCCLUDER_PART_EXCLUDES_OVER_SUPPORT_WITH_ZERO_GHOST_OVERLAP',
+    occFgMeta !== undefined &&
+      occFgMeta.from === 'painting:occ_fg' &&
+      occFgMeta.x === PARTIAL_LOWER_BOX[0] &&
+      occFgMeta.y === PARTIAL_LOWER_BOX[1] &&
+      occFgMeta.w === PARTIAL_LOWER_BOX[2] - PARTIAL_LOWER_BOX[0] &&
+      occFgMeta.h === PARTIAL_LOWER_BOX[3] - PARTIAL_LOWER_BOX[1] &&
+      occFgMeta.opaque_px === PARTIAL_HALF_PX &&
+      occFgMeta.visible_px === PARTIAL_HALF_PX &&
+      occFgMeta.occluded_px === 0 &&
+      occFgMeta.projected_core_px === PARTIAL_HALF_PX &&
+      occFgMeta.source_px_taken === PARTIAL_HALF_PX &&
+      ghostOverlapPx === 0 &&
+      lowerExactPx === PARTIAL_HALF_PX &&
+      outsideLowerOpaquePx === 0,
+    `occ_fg: from=${occFgMeta?.from}, box=[${occFgMeta?.x},${occFgMeta?.y},${occFgMeta?.w},${occFgMeta?.h}], opaque=${occFgMeta?.opaque_px}, visible=${occFgMeta?.visible_px}, occluded=${occFgMeta?.occluded_px}, overlap_with_over=${ghostOverlapPx}, lower_exact=${lowerExactPx}/${PARTIAL_HALF_PX}, outside_lower=${outsideLowerOpaquePx}`);
+
+  // Bar 3 (OC34): (ii) Motion, `under` — in assembled `parts/behind.png`, 0 of the 2,048 occluder px carry projected
+  // painting (`PARTIAL_OCCLUDER_RGB`) and all 2,048 equal `LIMB_RGB`; translating `behind` by dx = -32 out from
+  // behind the occluder and re-reading those 2,048 px on the posed frame gives 2,048 `LIMB_RGB` and 0 projected;
+  // cut pieces and limb segments derived from `behind` inherit the guard (whereas undeclared `--project visible`
+  // projects 1,024 painting occluder px onto `behind`).
+  const behindCanvas = placePartOnCanvas('out-with-part', 'behind');
+  let behindBaseAtOccluder = 0;
+  let behindProjectedAtOccluder = 0;
+  if (behindCanvas !== null) {
+    for (let y = OCCLUDER[1]; y < OCCLUDER[3]; y++) {
+      for (let x = OCCLUDER[0]; x < OCCLUDER[2]; x++) {
+        const p = (y * SIDE + x) * 4;
+        if (
+          behindCanvas.data[p] === LIMB_RGB[0] &&
+          behindCanvas.data[p + 1] === LIMB_RGB[1] &&
+          behindCanvas.data[p + 2] === LIMB_RGB[2] &&
+          behindCanvas.data[p + 3] === 255
+        ) {
+          behindBaseAtOccluder++;
+        } else if (
+          behindCanvas.data[p] === PARTIAL_OCCLUDER_RGB[0] &&
+          behindCanvas.data[p + 1] === PARTIAL_OCCLUDER_RGB[1] &&
+          behindCanvas.data[p + 2] === PARTIAL_OCCLUDER_RGB[2]
+        ) {
+          behindProjectedAtOccluder++;
+        }
+      }
+    }
+  }
+  const underDx = -32;
+  const posedUnderStack = compositeStack(
+    twinPartNames
+      .map((name) => ({ name, raster: placePartOnCanvas('out-with-part', name, name === 'behind' ? underDx : 0, 0) }))
+      .filter((entry): entry is { name: string; raster: Raster } => entry.raster !== null),
+  );
+  let posedUnderBasePx = 0;
+  let posedUnderProjectedPx = 0;
+  for (let y = OCCLUDER[1]; y < OCCLUDER[3]; y++) {
+    for (let x = OCCLUDER[0] + underDx; x < OCCLUDER[2] + underDx; x++) {
+      const p = (y * SIDE + x) * 4;
+      if (
+        posedUnderStack.data[p] === LIMB_RGB[0] &&
+        posedUnderStack.data[p + 1] === LIMB_RGB[1] &&
+        posedUnderStack.data[p + 2] === LIMB_RGB[2]
+      ) {
+        posedUnderBasePx++;
+      } else if (
+        posedUnderStack.data[p] === PARTIAL_OCCLUDER_RGB[0] &&
+        posedUnderStack.data[p + 1] === PARTIAL_OCCLUDER_RGB[1] &&
+        posedUnderStack.data[p + 2] === PARTIAL_OCCLUDER_RGB[2]
+      ) {
+        posedUnderProjectedPx++;
+      }
+    }
+  }
+
+  // Control without occluders declaration: `--project visible` projects the lower 1,024 occluder px onto `behind`
+  // because max-channel diff 60 <= DRIFT_LIMIT (90).
+  const undeclaredRun = stage(partHome, pInputs.plateRunDir, chainConfig({ take: partialTake }), 'out-undeclared');
+  const undeclaredBehind = placePartOnCanvas('out-undeclared', 'behind');
+  let undeclaredProjectedPx = 0;
+  if (undeclaredBehind !== null) {
+    for (let y = OCCLUDER[1]; y < OCCLUDER[3]; y++) {
+      for (let x = OCCLUDER[0]; x < OCCLUDER[2]; x++) {
+        const p = (y * SIDE + x) * 4;
+        if (
+          undeclaredBehind.data[p] === PARTIAL_OCCLUDER_RGB[0] &&
+          undeclaredBehind.data[p + 1] === PARTIAL_OCCLUDER_RGB[1] &&
+          undeclaredBehind.data[p + 2] === PARTIAL_OCCLUDER_RGB[2]
+        ) {
+          undeclaredProjectedPx++;
+        }
+      }
+    }
+  }
+
+  // Also verify cut piece derived from `behind` inherits the `under` keep guard.
+  const cutCfg = partialCfgWithPart();
+  (cutCfg.assemble as Record<string, unknown>).cuts = [
+    {
+      from: 'behind',
+      into: 'behind_lower',
+      polygon: [[16, 64], [112, 64], [112, 112], [16, 112]],
+      draw: { before: 'front' },
+      overlap: 0,
+    },
+  ];
+  (cutCfg.regions as Record<string, unknown>).behind_lower = 'root';
+  const cutRun = stage(partHome, pInputs.plateRunDir, cutCfg, 'out-with-cut');
+  const cutLowerCanvas = placePartOnCanvas('out-with-cut', 'behind_lower');
+  let cutLowerBasePx = 0;
+  if (cutLowerCanvas !== null) {
+    for (let y = PARTIAL_LOWER_BOX[1]; y < PARTIAL_LOWER_BOX[3]; y++) {
+      for (let x = PARTIAL_LOWER_BOX[0]; x < PARTIAL_LOWER_BOX[2]; x++) {
+        const p = (y * SIDE + x) * 4;
+        if (
+          cutLowerCanvas.data[p] === LIMB_RGB[0] &&
+          cutLowerCanvas.data[p + 1] === LIMB_RGB[1] &&
+          cutLowerCanvas.data[p + 2] === LIMB_RGB[2] &&
+          cutLowerCanvas.data[p + 3] === 255
+        ) {
+          cutLowerBasePx++;
+        }
+      }
+    }
+  }
+  say('OC34_UNDER_KEEPS_BASE_SURFACE_UNDER_OCCLUDER_AT_REST_AND_IN_MOTION',
+    behindBaseAtOccluder === OCCLUDER_PX &&
+      behindProjectedAtOccluder === 0 &&
+      posedUnderBasePx === OCCLUDER_PX &&
+      posedUnderProjectedPx === 0 &&
+      undeclaredRun.error === null &&
+      undeclaredProjectedPx > 0 &&
+      cutRun.error === null &&
+      cutLowerBasePx === PARTIAL_HALF_PX,
+    `behind occluder px: base=${behindBaseAtOccluder}/${OCCLUDER_PX}, projected=${behindProjectedAtOccluder}; posed dx=${underDx}: base=${posedUnderBasePx}/${OCCLUDER_PX}, projected=${posedUnderProjectedPx}; undeclared control projected=${undeclaredProjectedPx}; cut piece behind_lower base=${cutLowerBasePx}/${PARTIAL_HALF_PX}`);
+
+  // Bar 4 (OC35): (ii') Motion, `over` — translating `front` (`over`) away by dx = +36 vacates the upper 1,024 px
+  // [48, 32, 80, 64), which read `LIMB_RGB` on all 1,024 px and `PARTIAL_OCCLUDER_RGB` on 0 px.
+  const overDx = 36;
+  const posedOverStack = compositeStack(
+    twinPartNames
+      .map((name) => ({ name, raster: placePartOnCanvas('out-with-part', name, name === 'front' ? overDx : 0, 0) }))
+      .filter((entry): entry is { name: string; raster: Raster } => entry.raster !== null),
+  );
+  let vacatedUpperBasePx = 0;
+  let vacatedUpperOccluderPx = 0;
+  let lowerStillOccluderPx = 0;
+  for (let y = PARTIAL_OVER_BOX[1]; y < PARTIAL_OVER_BOX[3]; y++) {
+    for (let x = PARTIAL_OVER_BOX[0]; x < PARTIAL_OVER_BOX[2]; x++) {
+      const p = (y * SIDE + x) * 4;
+      if (
+        posedOverStack.data[p] === LIMB_RGB[0] &&
+        posedOverStack.data[p + 1] === LIMB_RGB[1] &&
+        posedOverStack.data[p + 2] === LIMB_RGB[2]
+      ) {
+        vacatedUpperBasePx++;
+      } else if (
+        posedOverStack.data[p] === PARTIAL_OCCLUDER_RGB[0] &&
+        posedOverStack.data[p + 1] === PARTIAL_OCCLUDER_RGB[1] &&
+        posedOverStack.data[p + 2] === PARTIAL_OCCLUDER_RGB[2]
+      ) {
+        vacatedUpperOccluderPx++;
+      }
+    }
+  }
+  for (let y = PARTIAL_LOWER_BOX[1]; y < PARTIAL_LOWER_BOX[3]; y++) {
+    for (let x = PARTIAL_LOWER_BOX[0]; x < PARTIAL_LOWER_BOX[2]; x++) {
+      const p = (y * SIDE + x) * 4;
+      if (
+        posedOverStack.data[p] === PARTIAL_OCCLUDER_RGB[0] &&
+        posedOverStack.data[p + 1] === PARTIAL_OCCLUDER_RGB[1] &&
+        posedOverStack.data[p + 2] === PARTIAL_OCCLUDER_RGB[2]
+      ) {
+        lowerStillOccluderPx++;
+      }
+    }
+  }
+  say('OC35_POSED_OVER_TRANSLATION_VACATES_UPPER_1024_TO_UNDER_BASE_SURFACE',
+    vacatedUpperBasePx === PARTIAL_HALF_PX &&
+      vacatedUpperOccluderPx === 0 &&
+      lowerStillOccluderPx === PARTIAL_HALF_PX,
+    `posed front dx=+${overDx}: vacated upper [48,32,80,64) base=${vacatedUpperBasePx}/${PARTIAL_HALF_PX}, occluder_ghost=${vacatedUpperOccluderPx}; lower [48,64,80,96) held by occ_fg=${lowerStillOccluderPx}/${PARTIAL_HALF_PX}`);
+
+  // Bar 5a (OC36): `ASSEMBLE_OCCLUDER_EMPTY` when `over` holds all 2,048 px, plus the four config name/attach doors
+  // (`CONFIG_FIELD_TYPE`, `CONFIG_PART_NAME`, `CONFIG_PART_UNIQUE`, `CONFIG_PART_ATTACHED`).
+  const fullOverWithPartCfg = chainConfig({
+    occluders: [declaration(sInputs.occluderSha, { over: ['front'], part: 'occ_fg' })],
+    take: [{ run: 'full', run_dir: 'orig', st_input: 'painting.png', tags: ['objects'] }],
+  });
+  (fullOverWithPartCfg.regions as Record<string, unknown>).occ_fg = 'root';
+  const emptyOccPartRun = stage(splitHome, fullPlateDir, fullOverWithPartCfg, 'out-empty-occ-part');
+  const emptyOccProb = emptyOccPartRun.error?.problems.find((pr) => pr.code === OCCLUDER_EMPTY);
+
+  const partFieldTypeProb = refusal(() =>
+    parseConfig(chainConfig({ occluders: [declaration(pInputs.occluderSha, { part: '' })] })),
+  )?.problems.find((pr) => pr.code === 'CONFIG_FIELD_TYPE' && pr.object === 'config.assemble.occluders[0].part');
+  const partNameProb = refusal(() =>
+    parseConfig(chainConfig({ occluders: [declaration(pInputs.occluderSha, { part: 'bad/name' })] })),
+  )?.problems.find((pr) => pr.code === 'CONFIG_PART_NAME' && pr.object === 'config.assemble.occluders[0].part');
+  const partUniquePlanProb = refusal(() =>
+    parseConfig(chainConfig({ occluders: [declaration(pInputs.occluderSha, { part: 'behind' })] })),
+  )?.problems.find((pr) => pr.code === 'CONFIG_PART_UNIQUE' && pr.object === 'config.assemble.occluders[0].part');
+  const partUnattachedProb = refusal(() =>
+    parseConfig(chainConfig({ occluders: [declaration(pInputs.occluderSha, { part: 'occ_fg' })] })),
+  )?.problems.find((pr) => pr.code === 'CONFIG_PART_ATTACHED' && pr.object === 'part "occ_fg"');
+  say('OC36_OCCLUDER_PART_PLANTS_REFUSE_EMPTY_AND_CONFIG_NAME_ATTACH_DOORS',
+    emptyOccProb !== undefined &&
+      emptyOccProb.object === 'config.assemble.occluders[0].part (part "occ_fg")' &&
+      !existsSync(join(splitHome, 'out-empty-occ-part')) &&
+      partFieldTypeProb !== undefined &&
+      partNameProb !== undefined &&
+      partUniquePlanProb !== undefined &&
+      partUnattachedProb !== undefined,
+    `EMPTY: ${emptyOccProb?.detail ?? 'accepted'}; TYPE: ${partFieldTypeProb?.code ?? 'accepted'}; NAME: ${partNameProb?.code ?? 'accepted'}; UNIQUE: ${partUniquePlanProb?.code ?? 'accepted'}; ATTACHED: ${partUnattachedProb?.code ?? 'accepted'}`);
+
+  // Bar 5b (OC37): `ASSEMBLE_OCCLUDER_UNHELD` 3-case control:
+  // (1) partial-`over` twin without `part` fires with 1,024 (`first at 48,64`);
+  // (2) same twin with `part` is silent;
+  // (3) full-`over` chain without `part` is silent.
+  const twinWithoutPartRun = stage(
+    partHome,
+    pInputs.plateRunDir,
+    chainConfig({ occluders: [declaration(pInputs.occluderSha, { over: ['front'] })], take: partialTake }),
+    'out-without-part',
+  );
+  const unheldLinesWithoutPart = twinWithoutPartRun.lines.filter((l) => l.includes(OCCLUDER_UNHELD));
+  const unheldLinesWithPart = twinWithPartRun.lines.filter((l) => l.includes(OCCLUDER_UNHELD));
+  const fullOverUnheldLines = fullSplitRun.lines.filter((l) => l.includes(OCCLUDER_UNHELD));
+  say('OC37_OCCLUDER_UNHELD_WARN_FIRES_WITHOUT_PART_AND_IS_SILENT_WHEN_HELD',
+    twinWithoutPartRun.error === null &&
+      unheldLinesWithoutPart.length === 1 &&
+      unheldLinesWithoutPart[0].includes(`${PARTIAL_HALF_PX} rig px`) &&
+      unheldLinesWithoutPart[0].includes(`first at ${PARTIAL_LOWER_BOX[0]},${PARTIAL_LOWER_BOX[1]}`) &&
+      unheldLinesWithPart.length === 0 &&
+      fullOverUnheldLines.length === 0,
+    `partial without part: ${unheldLinesWithoutPart[0] ?? 'silent'}; partial with part: ${unheldLinesWithPart.length} WARNs; full-over without part: ${fullOverUnheldLines.length} WARNs`);
 }
 
 /** `plateDir` is the harness's `comfy plate --mode occluder` output on the chain's painting and occluder (`<work>/occ-chain`). */

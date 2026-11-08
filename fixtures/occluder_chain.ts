@@ -152,3 +152,53 @@ export function writePlateRun(dir: string, plateBytes: Uint8Array): string {
   writeFileSync(join(out, 'meta.json'), JSON.stringify({ prompt_id: 'generated-plate', seed: 7, image_sha256: sha256(plateBytes) }));
   return out;
 }
+
+/**
+ * Partial-`over` twin (issue #1246):
+ * - The occluder rectangle is `OCCLUDER` (`[48, 32, 80, 96]`, `2,048` px).
+ * - The `over` part (`front`, `full:objects`) covers only the upper half
+ *   `PARTIAL_OVER_BOX` (`[48, 32, 80, 64]`, `1,024` px), leaving the lower half
+ *   `PARTIAL_LOWER_BOX` (`[48, 64, 80, 96]`, `1,024` px) uncovered by `over`.
+ * - `PARTIAL_OCCLUDER_RGB` (`[120, 70, 110]`) differs from `LIMB_RGB` (`[60, 100, 160]`)
+ *   by max-channel `60`, which is within `DRIFT_LIMIT` (`90`) so `--project visible`
+ *   would project it onto `behind` without the `under` keep guard, and above
+ *   `rgb_within` (`20`) so it does not trigger `ASSEMBLE_OCCLUDER_COLOUR_COPIED`.
+ */
+export const PARTIAL_OVER_BOX: [number, number, number, number] = [48, 32, 80, 64];
+export const PARTIAL_LOWER_BOX: [number, number, number, number] = [48, 64, 80, 96];
+export const PARTIAL_HALF_PX = (PARTIAL_OVER_BOX[2] - PARTIAL_OVER_BOX[0]) * (PARTIAL_OVER_BOX[3] - PARTIAL_OVER_BOX[1]);
+export const PARTIAL_OCCLUDER_RGB: [number, number, number] = [120, 70, 110];
+
+export function partialOverPainting(): Raster {
+  const r = newRaster(SIDE, SIDE);
+  r.data.fill(255);
+  for (const { pixels } of faceGroup()) for (let p = 0; p < SIDE * SIDE; p++) if (pixels.data[p * 4 + 3] > 0) r.data.set(pixels.data.subarray(p * 4, p * 4 + 4), p * 4);
+  fill(r, LIMB, [...LIMB_RGB, 255]);
+  fill(r, OCCLUDER, [...PARTIAL_OCCLUDER_RGB, 255]);
+  return r;
+}
+
+export function partialOverOccluder(): Raster {
+  const r = newRaster(SIDE, SIDE);
+  fill(r, OCCLUDER, [...PARTIAL_OCCLUDER_RGB, 255]);
+  return r;
+}
+
+export function partialOverOriginalRun(occluderDepth = 0.2): LayerSet {
+  const limb = newRaster(SIDE, SIDE), front = newRaster(SIDE, SIDE);
+  for (let y = LIMB[1]; y < LIMB[3]; y++) for (let x = LIMB[0]; x < LIMB[2]; x++) if (!inside(OCCLUDER, x, y)) limb.data.set([...LIMB_RGB, 255], (y * SIDE + x) * 4);
+  fill(front, PARTIAL_OVER_BOX, [...PARTIAL_OCCLUDER_RGB, 255]);
+  return layerSet([...faceGroup(), { name: 'legwear', pixels: limb, depth: 0.7 }, { name: 'objects', pixels: front, depth: occluderDepth }], 'generated-partial-original');
+}
+
+export function writePartialOverInputs(dir: string, occluderDepth = 0.2): { painting: string; occluder: string; occluderSha: string; plateRunDir: string } {
+  mkdirSync(dir, { recursive: true });
+  const painting = join(dir, 'painting.png'), occluder = join(dir, 'occluder.png');
+  writeFileSync(painting, encodePngBytes(partialOverPainting()));
+  const occluderBytes = encodePngBytes(partialOverOccluder());
+  writeFileSync(occluder, occluderBytes);
+  exportLayers(partialOverOriginalRun(occluderDepth), join(dir, 'orig'));
+  writeFileSync(join(dir, 'orig', 'meta.json'), JSON.stringify({ prompt_id: 'generated-partial-original', seed: 42 }));
+  const plateRunDir = writePlateRun(dir, encodePngBytes(chainPlate()));
+  return { painting, occluder, occluderSha: sha256(occluderBytes), plateRunDir };
+}

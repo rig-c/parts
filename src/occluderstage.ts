@@ -50,15 +50,15 @@ export interface OccluderPlateBindInput {
   fullPath: string;
 }
 
-export function occluderStageWarnings(input: OccluderStageInput): string[] {
-  const { source, runs } = input;
-  const frame = checkGeometry({ sourceW: source.width, sourceH: source.height, resolution: input.resolution, headBox: input.headBox, rigScale: input.rigScale, ...(runs.single ? { single: true } : {}) }, { full: runs.full, head: runs.head });
-  const full = runs.single ? padSingleRun(runs.full, frame, input.resolution) : runs.full;
-  const painting = sourceInRig(source, frame.W, frame.H);
-  const lines: string[] = [];
-  input.occluders.forEach((d, i) => {
+export interface OccluderInput {
+  declaration: OccluderDeclaration;
+  image: Raster;
+}
+
+export function readOccluderInputs(occluders: readonly OccluderDeclaration[], configPath: string, source: Raster): OccluderInput[] {
+  return occluders.map((d, i) => {
     const at = `config.assemble.occluders[${i}]`;
-    const path = resolve(dirname(resolve(input.configPath)), d.image);
+    const path = resolve(dirname(resolve(configPath)), d.image);
     const bytes = new Uint8Array(readFileSync(path));
     const found = createHash('sha256').update(bytes).digest('hex');
     if (found !== d.sha256) refuse('CONFIG_OCCLUDER_SHA256', `${at}.sha256`, `is ${d.sha256}; ${d.image} has sha256 ${found} — declare the bytes the occluder image holds`);
@@ -66,6 +66,17 @@ export function occluderStageWarnings(input: OccluderStageInput): string[] {
     if (image.width !== source.width || image.height !== source.height) {
       refuse('ASSEMBLE_OCCLUDER_GRID', `${at}.image`, `is ${image.width}x${image.height}; the painting's ${source.width}x${source.height} is required — the occluder is read on the painting's grid and never fitted`);
     }
+    return { declaration: d, image };
+  });
+}
+
+export function occluderStageWarnings(input: OccluderStageInput): string[] {
+  const { source, runs } = input;
+  const frame = checkGeometry({ sourceW: source.width, sourceH: source.height, resolution: input.resolution, headBox: input.headBox, rigScale: input.rigScale, ...(runs.single ? { single: true } : {}) }, { full: runs.full, head: runs.head });
+  const full = runs.single ? padSingleRun(runs.full, frame, input.resolution) : runs.full;
+  const painting = sourceInRig(source, frame.W, frame.H);
+  const lines: string[] = [];
+  readOccluderInputs(input.occluders, input.configPath, source).forEach(({ declaration: d, image }, i) => {
     // A rig pixel reads the occluder at the source pixel its centre falls in.
     const sx = (x: number): number => Math.min(source.width - 1, Math.floor((x + 0.5) * source.width / frame.W));
     const sy = (y: number): number => Math.min(source.height - 1, Math.floor((y + 0.5) * source.height / frame.H));

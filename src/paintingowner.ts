@@ -15,11 +15,14 @@ export interface PaintingReceivers extends PaintingOwner {
   faults: Array<{ receiver: string; reason: string }>;
 }
 
-/** Owner (a), the last raw plan layer at alpha >=128 on the rig canvas. */
-export function rawPaintingOwner(raw: ReadonlyArray<{ name: string; raster: Raster }>, pixels: number): PaintingOwner {
+/** Owner (a), the last raw plan layer at alpha >=128 on the rig canvas (cleared where an occluder keep mask holds). */
+export function rawPaintingOwner(raw: ReadonlyArray<{ name: string; raster: Raster; keep?: Mask | null }>, pixels: number): PaintingOwner {
   const owner = new Int32Array(pixels).fill(-1);
-  raw.forEach(({ raster }, i) => {
-    for (let p = 0; p < pixels; p++) if (raster.data[p * 4 + 3] >= 128) owner[p] = i;
+  raw.forEach(({ raster, keep }, i) => {
+    for (let p = 0; p < pixels; p++) {
+      if (raster.data[p * 4 + 3] < 128) continue;
+      owner[p] = keep?.data[p] === 1 ? -1 : i;
+    }
   });
   return { supplier: 'owner-a/raw-plan-alpha>=128', names: raw.map(q => q.name), pixels: owner };
 }
