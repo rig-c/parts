@@ -3773,20 +3773,23 @@ export function underBox(polygon: ReadonlyArray<readonly [number, number]>): { x
 /**
  * Issue #1230: the fill mask on the painting's grid (`sourceW x sourceH`) for a
  * cut piece `piece` (in rig space, `polygon ∩ from alpha > 0`, including the
- * overlap band): opaque white `[255, 255, 255, 255]` where a rig pixel with
- * `alpha > 0` maps via `occSx` / `occSy` (identity at `rig_scale: 1`), and
+ * overlap band): opaque white `[255, 255, 255, 255]` where a painting pixel
+ * whose sampled rig pixel has `alpha > 0` (identity at `rig_scale: 1`), and
  * transparent `[0, 0, 0, 0]` everywhere else.
  */
 export function cutFillMask(piece: Raster, sourceW: number, sourceH: number): Raster {
   const { width: W, height: H } = piece;
-  const occSx = (x: number): number => Math.min(sourceW - 1, Math.floor((x + 0.5) * sourceW / W));
-  const occSy = (y: number): number => Math.min(sourceH - 1, Math.floor((y + 0.5) * sourceH / H));
+  // Issue #1230: each painting pixel reads the rig pixel it samples, so the mask covers the
+  // piece's whole footprint on the painting grid at any rig_scale (a forward rig -> painting
+  // mapping leaves gaps whenever the rig is smaller than the painting).
+  const rigX = (sx: number): number => Math.min(W - 1, Math.floor((sx + 0.5) * W / sourceW));
+  const rigY = (sy: number): number => Math.min(H - 1, Math.floor((sy + 0.5) * H / sourceH));
   const mask = newRaster(sourceW, sourceH);
-  for (let y = 0; y < H; y++) {
-    const sy = occSy(y);
-    for (let x = 0; x < W; x++) {
-      if (piece.data[(y * W + x) * 4 + 3] === 0) continue;
-      const q = (sy * sourceW + occSx(x)) * 4;
+  for (let sy = 0; sy < sourceH; sy++) {
+    const ry = rigY(sy);
+    for (let sx = 0; sx < sourceW; sx++) {
+      if (piece.data[(ry * W + rigX(sx)) * 4 + 3] === 0) continue;
+      const q = (sy * sourceW + sx) * 4;
       mask.data[q] = 255;
       mask.data[q + 1] = 255;
       mask.data[q + 2] = 255;

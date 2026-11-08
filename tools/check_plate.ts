@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { FAKE_FILL } from '../fixtures/fakecomfy.ts';
 import { assembleConfig } from '../fixtures/assemble_fixture.ts';
 import { runOccluderChainChecks } from './check_occluders.ts';
+import { cutFillMask } from '../src/assemble.ts';
 import { assembleStage } from '../src/build.ts';
 import { parseEarlyConfig } from '../src/config.ts';
 import { PartsError } from '../src/errors.ts';
@@ -298,6 +299,7 @@ function occluderChecks(dir: string, painting: string, R: Record<string, PlateHa
   runOccluderChainChecks(dir, join(dir, 'plate-occ-chain'), (name, pass, detail) => say(name, pass, detail,
     'issue #1230: the occluder plate is a source of hidden surface the painting\'s own decomposition never paints, reached through the existing take route'));
   cutUnderPlateChecks(dir, say);
+  cutFillMaskScaleChecks(say);
 }
 
 /**
@@ -594,6 +596,28 @@ function cutUnderPlateChecks(dir: string, say: Say): void {
     plantsPass,
     `under:{} -> ${cfgEmptyObj}; under:{plate:""} -> ${cfgEmptyStr}; under:{plate:"x",extra:1} -> ${cfgExtraKey}; missing receipt -> ${missingReceiptCode}; tampered plate.png -> ${tamperedPlateCode}; mode:"background" -> ${bgModeCode}; changed --source -> ${paintingMismatchCode}; polygon+1px -> ${maskMismatchCode}; string under without editor receipt -> ${stringNoReceiptCode}`,
     'issue #1230 bar 4: every config and receipt/stage plant on cuts[i].under fails with its exact refusal code',
+  );
+}
+
+/** Issue #1230 (Codex review): the fill mask covers a cut piece's whole footprint on the painting grid when the rig is smaller or larger than the painting. */
+function cutFillMaskScaleChecks(say: Say): void {
+  const count = (r: Raster): number => { let n = 0; for (let p = 0; p < r.width * r.height; p++) if (r.data[p * 4 + 3] === 255) n++; return n; };
+  const piece = (side: number, box: readonly [number, number, number, number]): Raster => {
+    const r = newRaster(side, side);
+    for (let y = box[1]; y < box[3]; y++) for (let x = box[0]; x < box[2]; x++) r.data[(y * side + x) * 4 + 3] = 255;
+    return r;
+  };
+  // rig 16x16 with an 8x8 piece at [4,12) -> painting 64x64: footprint [16,48)^2 = 1,024 px (a forward map gives 64).
+  const down = count(cutFillMask(piece(16, [4, 4, 12, 12]), 64, 64));
+  // rig 64x64 with a 32x32 piece at [16,48) -> painting 32x32: footprint [8,24)^2 = 256 px.
+  const up = count(cutFillMask(piece(64, [16, 16, 48, 48]), 32, 32));
+  // rig_scale 1: identity, 384 px.
+  const same = count(cutFillMask(piece(64, [24, 20, 40, 44]), 64, 64));
+  say(
+    'PB22_THE_CUT_FILL_MASK_COVERS_THE_PIECES_WHOLE_FOOTPRINT_ON_THE_PAINTING_GRID_AT_ANY_RIG_SCALE',
+    down === 1024 && up === 256 && same === 384,
+    `rig 16 -> painting 64: ${down} (want 1024); rig 64 -> painting 32: ${up} (want 256); rig = painting: ${same} (want 384)`,
+    'issue #1230: a forward rig -> painting mapping leaves the mask sparse when the rig is smaller than the painting, and comfy plate would keep the piece\'s colour in the gaps',
   );
 }
 
