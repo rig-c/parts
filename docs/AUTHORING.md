@@ -5343,7 +5343,8 @@ those settings. Changing a config seed alone cannot change a no-config run.
 `rig-parts comfy plate --mode background|foreground --painting <png>
 --mask-from seethrough:<dir>|figure-mask:<dir> --out <dir>` makes the two plates
 a full-screen scene needs: the background with the figure removed, and a
-foreground matte with alpha. Only these two. It never makes a character part
+foreground matte with alpha. `--mode occluder` (below) makes a third: the
+painting with a declared occluder removed. It never makes a character part
 or a joint.
 
 - **The mask comes from a source.** `seethrough:<dir>` is a See-through run in
@@ -5375,6 +5376,19 @@ or a joint.
   measured**.
 - **foreground** runs no box and no model. The plate is the painting's pixels
   inside the mask, transparent zero outside.
+- **occluder** (issue #1230) takes `--occluder <png>` in place of
+  `--mask-from`: an RGBA image of what stands in front of the character, on
+  the painting's own grid (another size is refused, `PLATE_OCCLUDER_GRID`,
+  before anything is uploaded). The mask is the occluder's alpha above 0; with
+  `--holes`, every pocket the occluder encloses (4-connected) is filled; then it
+  is grown by `--grow` and inpainted exactly as **background** is. The plate is
+  the painting with the occluder removed, and `receipt.json` binds the
+  occluder's path and sha256 beside the painting's. A See-through run on that
+  plate paints the surface behind the occluder that no run on the painting
+  paints. To assemble from it, give that run as `--full` with the real painting
+  as `--source`, and take the occluder's own layers from the run on the painting
+  through `config.assemble.take` (their `st_input` is the painting, so the take's
+  input identity holds).
 
 `<out>` holds `plate.png`, `mask.png` (the mask actually used: opaque white
 inside, opaque black outside) and `receipt.json`, spec
@@ -5405,6 +5419,7 @@ recorded transform. The record fields and sampling formula are specified in
 | <a id="PLATE_MASK_SOURCE"></a><a id="PLATE_MASK_GRID"></a><a id="PLATE_MASK_VALUES"></a><a id="PLATE_MASK_EMPTY"></a>`PLATE_MASK_SOURCE`, `PLATE_MASK_GRID`, `PLATE_MASK_VALUES`, `PLATE_MASK_EMPTY` | no `--mask-from`, or a source directory holding no See-through run or no scene figure mask; a source on another grid without a valid recorded `input_transform`; a `figure_rig.png` holding other than opaque white and black; a mask with no figure pixel | run `comfy seethrough` on the original painting to record its input transform, or `assemble` with `config.scene` at the painting grid |
 | <a id="PLATE_MASK_RUN"></a>`PLATE_MASK_RUN` | the figure source has no readable `rig-run/1` assemble `run.json`, or its `figure_rig.png`, `parts.json` or declared `painting_in_rig.png` lacks exactly one matching output hash; or the See-through source has no readable `meta.json` with `image_sha256` and `layers` hashes, or a layer PNG on disk lacks a matching `layers` entry | re-run `assemble` with the source config to regenerate `run.json` and its `rig/` files together, or re-run `comfy seethrough` on the painting to regenerate `meta.json` and `parts/` together |
 | <a id="PLATE_MASK_PAINTING"></a>`PLATE_MASK_PAINTING` | `parts.json` has an invalid `painting_in_rig` declaration, its recorded painting is missing, undecodable or differs from its declared hash, or the supplied painting differs from the recorded opaque RGB; or the supplied painting's SHA-256 differs from a See-through source's `meta.json` `image_sha256` | use the original `--painting` file for this source, or re-run `assemble` or `comfy seethrough` on this painting |
+| <a id="PLATE_OCCLUDER_PRESENT"></a><a id="PLATE_OCCLUDER_GRID"></a><a id="PLATE_OCCLUDER_ALPHA"></a>`PLATE_OCCLUDER_PRESENT`, `PLATE_OCCLUDER_GRID`, `PLATE_OCCLUDER_ALPHA` | `--mode occluder` with no readable `--occluder` file; an occluder whose size is not the painting's; an occluder with no transparent pixel (it would mask the whole painting) | export the occluder as an RGBA PNG on the painting's grid, transparent outside it |
 | <a id="PLATE_CHECKPOINT_SHA256"></a><a id="PLATE_MODEL_GIVEN"></a>`PLATE_CHECKPOINT_SHA256`, `PLATE_MODEL_GIVEN` | `--checkpoint-sha256` absent or not 64 hex characters; `--graph core` without `--model` | the flag |
 | <a id="PLATE_CORE_CFG"></a>`PLATE_CORE_CFG` | `--cfg` given with `--graph lama`, or not a finite number above 0 | `--cfg`, `--graph` |
 | <a id="PLATE_CORE_GRID"></a>PLATE_CORE_GRID *(retired)* | retired in 2.x: off-grid `core` now pads to the next multiple of 8 and records `grid_transform`; see [STABILITY](STABILITY.md#plate-receipt) | none |

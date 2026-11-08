@@ -1,6 +1,10 @@
 /**
  * `comfy plate --mode background`: the figure-removed background plate of a
  * painting, inpainted on a ComfyUI box over a source mask (issue #1183).
+ * `--mode occluder` (issue #1230) runs the same route over the mask a declared
+ * occluder image gives (`occluderMask`): the painting with what stands in
+ * front of the character inpainted away, for a See-through run to read the
+ * surface behind it from. Its receipt binds the occluder too.
  *
  * The route, in order, each step refusing by name:
  *
@@ -39,6 +43,9 @@ import {
   LAMA_MODEL,
   lamaPlateGraph,
   maskImage,
+  type MaskSource,
+  OCCLUDER_ALPHA_ABOVE,
+  occluderMask,
   parseMaskFrom,
   pasteInside,
   PLATE_GRAPH_IDS,
@@ -46,6 +53,7 @@ import {
   type PlateReceipt,
   prepareCoreGrid,
   publishPlate,
+  readOccluder,
   readPlatePainting,
   readSourceMask,
 } from '../plate.ts';
@@ -54,8 +62,14 @@ import { decodePngBytes, encodePngBytes } from '../raster/png.ts';
 import { ComfyClient, historyImages, refuse } from './client.ts';
 
 export interface BackgroundRun {
+  /** Absent: `background`. */
+  mode?: 'background' | 'occluder';
   painting: string;
   maskFrom: string | undefined;
+  /** `--mode occluder`: the RGBA occluder image on the painting's grid. */
+  occluder?: string;
+  /** `--mode occluder --holes`: fill the pockets the occluder encloses before growing. */
+  holes?: boolean;
   out: string;
   graph: PlateGraph;
   /** The model file the graph loads: the LaMa model for `lama`, the checkpoint for `core`. */
@@ -85,10 +99,13 @@ export function gpuName(stats: Record<string, unknown>, host: string): string {
 export async function runBackground(connect: () => ComfyClient, run: BackgroundRun, say: (line: string) => void): Promise<PlateReceipt> {
   // Local first: no source mask, a bad checksum or a missing checkpoint is refused before the box is reached.
   const cfg = coreCfg(run.cfg, run.graph);
-  const from = parseMaskFrom(run.maskFrom);
+  const occluderMode = run.mode === 'occluder';
+  if (occluderMode && run.occluder === undefined) refuse('PLATE_OCCLUDER_PRESENT', '--occluder', 'is absent; --mode occluder reads its mask from an RGBA occluder image on the painting\'s grid');
+  const from: { source: MaskSource; dir: string } = occluderMode ? { source: 'occluder', dir: run.occluder! } : parseMaskFrom(run.maskFrom);
   const painting = readPlatePainting(run.painting);
   const { width: W, height: H } = painting.raster;
-  const source: FigureMask = readSourceMask(from.source, from.dir, W, H, painting.raster, painting.bytes);
+  const occluder = occluderMode ? readOccluder(run.occluder!) : undefined;
+  const source: FigureMask = occluder !== undefined ? occluderMask(occluder.raster, run.occluder!, W, H, run.holes === true) : readSourceMask(from.source, from.dir, W, H, painting.raster, painting.bytes);
   const checkpoint = declaredChecksum(run.checkpointSha256);
   if (run.graph === 'core' && run.model === undefined) {
     refuse('PLATE_MODEL_GIVEN', '--model', 'is absent; the core graph needs the checkpoint the box loads, by its name on the box — there is no default checkpoint');
@@ -133,7 +150,7 @@ export async function runBackground(connect: () => ComfyClient, run: BackgroundR
   return publishPlate({
     out: run.out,
     stageTag: prefix,
-    mode: 'background',
+    mode: occluderMode ? 'occluder' : 'background',
     paintingPath: run.painting,
     paintingBytes: painting.bytes,
     source: from.source,
@@ -141,9 +158,10 @@ export async function runBackground(connect: () => ComfyClient, run: BackgroundR
     mask,
     plate: pasteInside(painting.raster, inpainted, mask),
     model: { name: model, checkpoint_sha256: checkpoint, checkpoint_sha256_from: 'declared' },
-    params: run.graph === 'lama' ? { ...lama, mask_alpha_above: OPAQUE_ALPHA_ABOVE } : { ...core, mask_alpha_above: OPAQUE_ALPHA_ABOVE },
+    params: { ...(run.graph === 'lama' ? lama : core), ...(occluderMode ? { holes: run.holes === true, mask_alpha_above: OCCLUDER_ALPHA_ABOVE } : { mask_alpha_above: OPAQUE_ALPHA_ABOVE }) },
     graph: PLATE_GRAPH_IDS[run.graph],
     gpu,
     gridTransform: prepared.transform,
+    ...(occluder === undefined ? {} : { occluder: { path: run.occluder!, bytes: occluder.bytes } }),
   });
 }

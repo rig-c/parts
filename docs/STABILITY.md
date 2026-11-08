@@ -444,14 +444,15 @@ new spec version. Every path in it is relative to the receipt's directory.
 | key | meaning |
 | --- | --- |
 | `spec` | `"rig-parts-plate-receipt/1"` |
-| `mode` | `"background"` or `"foreground"` |
+| `mode` | `"background"`, `"foreground"` or `"occluder"` (issue #1230, additive) |
 | `painting` | `{ path, sha256 }` of the painting read |
-| `mask` | `{ source, from, path, sha256 }`: `source` is `"seethrough"`, `"figure-mask"` or `"matte"`, `from` the source directory, `path` the mask actually used (`mask.png`, opaque white inside) |
+| `occluder` | present only when `mode` is `"occluder"` (issue #1230, additive), right after `painting`: `{ path, sha256 }` of the `--occluder` RGBA image the mask was read from |
+| `mask` | `{ source, from, path, sha256 }`: `source` is `"seethrough"`, `"figure-mask"`, `"matte"` or `"occluder"`, `from` the source directory (the occluder image for `"occluder"`), `path` the mask actually used (`mask.png`, opaque white inside) |
 | `model` | `{ name, checkpoint_sha256, checkpoint_sha256_from }`, or null for `foreground`. `checkpoint_sha256` is the `--checkpoint-sha256` value, lower-cased; `checkpoint_sha256_from` is `"declared"`: the box reports no hash, so this field is **declared, not measured** |
-| `params` | every parameter of the run, the seed included, in a fixed order per graph: `lama` — `seed`, `grow_px`, `mask_alpha_above`; `core` — `seed`, `grow_px`, `steps`, `cfg` (`--cfg`, default `6`), `sampler`, `scheduler`, `denoise`, `prompt`, `negative`, `mask_alpha_above`; `foreground` — `mask_alpha_above` |
+| `params` | every parameter of the run, the seed included, in a fixed order per graph: `lama` — `seed`, `grow_px`, `mask_alpha_above`; `core` — `seed`, `grow_px`, `steps`, `cfg` (`--cfg`, default `6`), `sampler`, `scheduler`, `denoise`, `prompt`, `negative`, `mask_alpha_above`; `foreground` — `mask_alpha_above`; `occluder` — the `lama` or `core` list with `holes` (`--holes`) before `mask_alpha_above`, which is `0` |
 | `graph` | `"rig-parts/plate-background-lama/1"`, `"rig-parts/plate-background-core/1"`, or the fixed local id `"rig-parts/plate-foreground/1"` |
 | `gpu` | the device `/system_stats` names (the same seed gives other pixels on another GPU), or null for `foreground` |
-| `grid_transform` | present only when `mode` is `"background"`, `graph` is `"rig-parts/plate-background-core/1"`, and the painting's width or height is not a multiple of 8 (issue #1209, additive): `{ source: [width, height], padded: [ceil(width/8)*8, ceil(height/8)*8], pad: [0, 0], pad_fill: "edge-replicate", mask_pad_fill: "zero", inverse: "crop" }` in that key order. Omitted for on-grid `core`, `lama`, and `foreground` |
+| `grid_transform` | present only when `mode` is `"background"` or `"occluder"`, `graph` is `"rig-parts/plate-background-core/1"`, and the painting's width or height is not a multiple of 8 (issue #1209, additive): `{ source: [width, height], padded: [ceil(width/8)*8, ceil(height/8)*8], pad: [0, 0], pad_fill: "edge-replicate", mask_pad_fill: "zero", inverse: "crop" }` in that key order. Omitted for on-grid `core`, `lama`, and `foreground` |
 | `output` | `{ path, sha256 }` of `plate.png` |
 
 The receipt is read back against the bytes on disk before `<out>` is published;

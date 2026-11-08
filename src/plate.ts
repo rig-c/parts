@@ -17,7 +17,10 @@
  *   `scene`, the figure being the `figure_rig.png` assemble wrote beside it
  *   (opaque white inside the figure, opaque black outside);
  * - `matte:<dir>`: a model mask whose receipt binds both raw and final masks
- *   to the exact painting bytes and the recorded threshold/transform.
+ *   to the exact painting bytes and the recorded threshold/transform;
+ * - `--occluder <png>` (`--mode occluder`, issue #1230): a declared RGBA
+ *   image of what stands in front of the character, on the painting's grid,
+ *   the mask being its alpha above 0 (enclosed holes filled under `--holes`).
  *
  * The mask is taken on its own grid and never fitted: a source whose grid is
  * not the painting's size is refused by name. With no source the command
@@ -39,7 +42,8 @@ import type { Graph } from './graphs.ts';
 import { type LayerSet, OPAQUE_ALPHA_ABOVE, readWrapperLayers } from './layers.ts';
 import { FIGURE_MASK_FILE, PAINTING_IN_RIG_FILE } from './parts.ts';
 import { decodePngBytes, encodePngBytes } from './raster/png.ts';
-import { newRaster, type Raster } from './raster/types.ts';
+import { fillHoles } from './raster/morph.ts';
+import { newMask, newRaster, type Raster } from './raster/types.ts';
 
 export const PLATE_RECEIPT_SPEC = 'rig-parts-plate-receipt/1';
 export const PLATE_RECEIPT_FILE = 'receipt.json';
@@ -50,12 +54,16 @@ export const PLATE_OUTPUT_FILE = 'plate.png';
 export const PLATE_RECEIPT_KEYS = ['spec', 'mode', 'painting', 'mask', 'model', 'params', 'graph', 'gpu', 'output'] as const;
 /** The receipt's top-level keys when `grid_transform` is present (off-grid `core`), in the order they are written. */
 export const PLATE_RECEIPT_GRID_TRANSFORM_KEYS = ['spec', 'mode', 'painting', 'mask', 'model', 'params', 'graph', 'gpu', 'grid_transform', 'output'] as const;
+/** `--mode occluder` (issue #1230): the keys above with the declared occluder image bound after the painting. */
+export const PLATE_RECEIPT_OCCLUDER_KEYS = ['spec', 'mode', 'painting', 'occluder', 'mask', 'model', 'params', 'graph', 'gpu', 'output'] as const;
+/** `--mode occluder` with `grid_transform` (off-grid `core`). */
+export const PLATE_RECEIPT_OCCLUDER_GRID_TRANSFORM_KEYS = ['spec', 'mode', 'painting', 'occluder', 'mask', 'model', 'params', 'graph', 'gpu', 'grid_transform', 'output'] as const;
 /** The `grid_transform` object's keys, in the order they are written. */
 export const CORE_GRID_TRANSFORM_KEYS = ['source', 'padded', 'pad', 'pad_fill', 'mask_pad_fill', 'inverse'] as const;
 
-export type PlateMode = 'background' | 'foreground';
+export type PlateMode = 'background' | 'foreground' | 'occluder';
 export type PlateGraph = 'lama' | 'core';
-export type MaskSource = 'seethrough' | 'figure-mask' | 'matte';
+export type MaskSource = 'seethrough' | 'figure-mask' | 'matte' | 'occluder';
 
 export interface CoreGridTransform {
   source: [number, number];
@@ -82,6 +90,8 @@ export interface PlateReceipt {
   spec: typeof PLATE_RECEIPT_SPEC;
   mode: PlateMode;
   painting: { path: string; sha256: string };
+  /** `--mode occluder` only: the declared occluder image the mask is read from. */
+  occluder?: { path: string; sha256: string };
   mask: { source: MaskSource; from: string; path: string; sha256: string };
   model: { name: string; checkpoint_sha256: string; checkpoint_sha256_from: 'declared' } | null;
   params: Record<string, string | number | boolean>;
@@ -315,6 +325,40 @@ export function readSourceMask(source: MaskSource, dir: string, width: number, h
   return { width, height, inside };
 }
 
+/** `--occluder <png>`: its bytes as on disk (hashed into the receipt) and its pixels; a missing file is refused by name. */
+export function readOccluder(path: string): { bytes: Uint8Array; raster: Raster } {
+  if (!existsSync(path) || !statSync(path).isFile()) fail('PLATE_OCCLUDER_PRESENT', path, 'no such file; an RGBA PNG of what stands in front of the character, on the painting\'s grid, is required');
+  const bytes = new Uint8Array(readFileSync(path));
+  return { bytes, raster: decodePngBytes(bytes, path) };
+}
+
+/** The occluder's alpha above this is inside the mask: every pixel the occluder touches, soft edge included. */
+export const OCCLUDER_ALPHA_ABOVE = 0;
+
+/**
+ * The `--mode occluder` mask (issue #1230): the occluder's alpha above
+ * {@link OCCLUDER_ALPHA_ABOVE}, on the painting's own grid, never fitted; with
+ * `holes`, every pocket the occluder encloses (4-connected, as `fillHoles`
+ * reads it) is filled. Refused by name: an occluder whose size is not the
+ * painting's, one with no pixel above the floor, and one with no pixel at or
+ * below it (an image with no transparency would mask the whole painting).
+ */
+export function occluderMask(occluder: Raster, path: string, width: number, height: number, holes: boolean): FigureMask {
+  if (occluder.width !== width || occluder.height !== height) {
+    fail('PLATE_OCCLUDER_GRID', path, `is ${occluder.width}x${occluder.height}; the painting's ${width}x${height} is required — the occluder is read on the painting's own grid and never fitted`);
+  }
+  const support = newMask(width, height);
+  let clear = 0;
+  for (let p = 0; p < width * height; p++) {
+    if (occluder.data[p * 4 + 3] > OCCLUDER_ALPHA_ABOVE) support.data[p] = 1;
+    else clear++;
+  }
+  if (clear === width * height) fail('PLATE_MASK_EMPTY', path, `holds no pixel with alpha above ${OCCLUDER_ALPHA_ABOVE}; an occluder to remove is required`);
+  if (clear === 0) fail('PLATE_OCCLUDER_ALPHA', path, `holds no pixel with alpha ${OCCLUDER_ALPHA_ABOVE}; an RGBA image transparent outside the occluder is required — an opaque one would mask the whole painting`);
+  const inside = holes ? fillHoles(support).data : support.data;
+  return { width, height, inside: Uint8Array.from(inside) };
+}
+
 /** The mask grown by a square of side `2r+1` (two separable passes): a halo of the figure's outline is inpainted too. */
 export function growMask(mask: FigureMask, r: number): FigureMask {
   if (r === 0) return { ...mask, inside: mask.inside.slice() };
@@ -521,11 +565,16 @@ export function cropCoreGrid(padded: Raster, transform: CoreGridTransform): Rast
 // the receipt
 // ---------------------------------------------------------------------------
 
+/** The receipt's key order: occluder mode binds the occluder, an off-grid `core` run its `grid_transform`. */
+export function receiptKeys(occluder: boolean, gridTransform: boolean): readonly string[] {
+  if (occluder) return gridTransform ? PLATE_RECEIPT_OCCLUDER_GRID_TRANSFORM_KEYS : PLATE_RECEIPT_OCCLUDER_KEYS;
+  return gridTransform ? PLATE_RECEIPT_GRID_TRANSFORM_KEYS : PLATE_RECEIPT_KEYS;
+}
+
 /** The receipt's JSON text, its keys in `PLATE_RECEIPT_KEYS` (or `PLATE_RECEIPT_GRID_TRANSFORM_KEYS` when `grid_transform` is present) order. */
 export function receiptText(r: PlateReceipt): string {
   const ordered: Record<string, unknown> = {};
-  const keys = r.grid_transform === undefined ? PLATE_RECEIPT_KEYS : PLATE_RECEIPT_GRID_TRANSFORM_KEYS;
-  for (const k of keys) ordered[k] = r[k];
+  for (const k of receiptKeys(r.mode === 'occluder', r.grid_transform !== undefined)) ordered[k] = (r as unknown as Record<string, unknown>)[k];
   return `${JSON.stringify(ordered, null, 2)}\n`;
 }
 
@@ -554,11 +603,11 @@ export function verifyPlateReceipt(receiptFile: string): Problem[] {
   }
   if (r.spec !== PLATE_RECEIPT_SPEC) problems.push({ code: 'PLATE_RECEIPT_SPEC', object: receiptFile, detail: `has spec ${JSON.stringify(r.spec)}; "${PLATE_RECEIPT_SPEC}" is required` });
   const keys = Object.keys(r).join(',');
-  const expectedKeys = 'grid_transform' in r ? PLATE_RECEIPT_GRID_TRANSFORM_KEYS : PLATE_RECEIPT_KEYS;
+  const expectedKeys = receiptKeys(r.mode === 'occluder', 'grid_transform' in r);
   if (keys !== expectedKeys.join(',')) problems.push({ code: 'PLATE_RECEIPT_KEYS', object: receiptFile, detail: `has keys ${keys}; ${expectedKeys.join(',')} in that order is required` });
   const base = dirname(receiptFile);
   let paintingRaster: Raster | undefined;
-  for (const field of ['painting', 'mask', 'output'] as const) {
+  for (const field of r.mode === 'occluder' ? ['painting', 'occluder', 'mask', 'output'] as const : ['painting', 'mask', 'output'] as const) {
     const f = r[field] as { path?: unknown; sha256?: unknown } | undefined;
     if (typeof f?.path !== 'string' || typeof f.sha256 !== 'string') {
       problems.push({ code: 'PLATE_RECEIPT_KEYS', object: `${receiptFile} ${field}`, detail: 'lacks a path and a sha256' });
@@ -577,7 +626,8 @@ export function verifyPlateReceipt(receiptFile: string): Problem[] {
     }
   }
   if (paintingRaster !== undefined) {
-    const expectedTransform = r.mode === 'background' && r.graph === PLATE_GRAPH_IDS.core ? coreGridTransform(paintingRaster.width, paintingRaster.height) : undefined;
+    const inpainted = r.mode === 'background' || r.mode === 'occluder';
+    const expectedTransform = inpainted && r.graph === PLATE_GRAPH_IDS.core ? coreGridTransform(paintingRaster.width, paintingRaster.height) : undefined;
     if (expectedTransform !== undefined) {
       if (!('grid_transform' in r) || r.grid_transform === undefined) {
         problems.push({
@@ -596,7 +646,7 @@ export function verifyPlateReceipt(receiptFile: string): Problem[] {
       problems.push({
         code: 'PLATE_RECEIPT_GRID_TRANSFORM',
         object: `${receiptFile} grid_transform`,
-        detail: `is ${JSON.stringify(r.grid_transform)}; no grid_transform is permitted for ${r.mode === 'background' && r.graph === PLATE_GRAPH_IDS.core ? `on-grid painting ${paintingRaster.width}x${paintingRaster.height}` : `mode ${JSON.stringify(r.mode)} graph ${JSON.stringify(r.graph)}`}`,
+        detail: `is ${JSON.stringify(r.grid_transform)}; no grid_transform is permitted for ${inpainted && r.graph === PLATE_GRAPH_IDS.core ? `on-grid painting ${paintingRaster.width}x${paintingRaster.height}` : `mode ${JSON.stringify(r.mode)} graph ${JSON.stringify(r.graph)}`}`,
       });
     }
   } else if ('grid_transform' in r && (typeof r.grid_transform !== 'object' || r.grid_transform === null || Array.isArray(r.grid_transform) || Object.keys(r.grid_transform as object).join(',') !== CORE_GRID_TRANSFORM_KEYS.join(','))) {
@@ -643,6 +693,8 @@ export interface PlateWrite {
   graph: string;
   gpu: string | null;
   gridTransform?: CoreGridTransform;
+  /** `--mode occluder` only: the occluder file, bound into the receipt by path and sha256. */
+  occluder?: { path: string; bytes: Uint8Array };
 }
 
 let foregroundStageSeq = 0;
@@ -666,6 +718,7 @@ export function publishPlate(w: PlateWrite): PlateReceipt {
       spec: PLATE_RECEIPT_SPEC,
       mode: w.mode,
       painting: { path: receiptPath(w.out, w.paintingPath), sha256: sha256(w.paintingBytes) },
+      ...(w.occluder === undefined ? {} : { occluder: { path: receiptPath(w.out, w.occluder.path), sha256: sha256(w.occluder.bytes) } }),
       mask: { source: w.source, from: receiptPath(w.out, w.sourceDir), path: PLATE_MASK_FILE, sha256: mask.sha256 },
       model: w.model,
       params: w.params,
