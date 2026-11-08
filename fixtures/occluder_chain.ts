@@ -24,6 +24,7 @@ export const OCCLUDER: [number, number, number, number] = [48, 32, 80, 96];
 export const LIMB_RGB: [number, number, number] = [60, 100, 160];
 export const OCCLUDER_RGB: [number, number, number] = [180, 60, 40];
 export const OCCLUDER_PX = (OCCLUDER[2] - OCCLUDER[0]) * (OCCLUDER[3] - OCCLUDER[1]);
+export const DEEPER_OCCLUDER_DEPTH = 0.9;
 
 const inside = (box: readonly number[], x: number, y: number): boolean => x >= box[0] && x < box[2] && y >= box[1] && y < box[3];
 
@@ -67,6 +68,15 @@ export function chainOccluder(): Raster {
   return r;
 }
 
+/** The occluder-removed plate: the painting with the limb whole where the occluder stood. */
+export function chainPlate(): Raster {
+  const r = newRaster(SIDE, SIDE);
+  r.data.fill(255);
+  for (const { pixels } of faceGroup()) for (let p = 0; p < SIDE * SIDE; p++) if (pixels.data[p * 4 + 3] > 0) r.data.set(pixels.data.subarray(p * 4, p * 4 + 4), p * 4);
+  fill(r, LIMB, [...LIMB_RGB, 255]);
+  return r;
+}
+
 /**
  * A plant in the limb layer of the painting's own decomposition, inside the
  * occluder's rectangle, against the painting's occluder colour there: `exact`
@@ -81,7 +91,7 @@ export const PLANT: Plant = { exact: 120, within: 30, beyond: 30 };
  * occluder (See-through never paints what it cannot see), unless `plant`
  * paints some of the occluder's colour into it; the occluder as `objects`.
  */
-export function originalRun(plant: Plant | null = null): LayerSet {
+export function originalRun(plant: Plant | null = null, occluderDepth = 0.2, extraLayers: ReadonlyArray<{ name: string; pixels: Raster; depth: number }> = []): LayerSet {
   const limb = newRaster(SIDE, SIDE), front = newRaster(SIDE, SIDE);
   for (let y = LIMB[1]; y < LIMB[3]; y++) for (let x = LIMB[0]; x < LIMB[2]; x++) if (!inside(OCCLUDER, x, y)) limb.data.set([...LIMB_RGB, 255], (y * SIDE + x) * 4);
   if (plant !== null) {
@@ -91,7 +101,12 @@ export function originalRun(plant: Plant | null = null): LayerSet {
     colours.forEach((off, i) => limb.data.set([OCCLUDER_RGB[0] - off, OCCLUDER_RGB[1], OCCLUDER_RGB[2], 255], ((OCCLUDER[1] + Math.floor(i / w)) * SIDE + OCCLUDER[0] + (i % w)) * 4));
   }
   fill(front, OCCLUDER, [...OCCLUDER_RGB, 255]);
-  return layerSet([...faceGroup(), { name: 'legwear', pixels: limb, depth: 0.7 }, { name: 'objects', pixels: front, depth: 0.2 }], 'generated-original');
+  return layerSet([...faceGroup(), { name: 'legwear', pixels: limb, depth: 0.7 }, { name: 'objects', pixels: front, depth: occluderDepth }, ...extraLayers], 'generated-original');
+}
+
+/** The painting's decomposition when See-through ranks the occluder deeper (`0.9`) than the limb (`0.7`, #1241). */
+export function deeperOriginalRun(plant: Plant | null = null, extraLayers: ReadonlyArray<{ name: string; pixels: Raster; depth: number }> = []): LayerSet {
+  return originalRun(plant, DEEPER_OCCLUDER_DEPTH, extraLayers);
 }
 
 /**
@@ -119,13 +134,13 @@ export function chainConfig(extra: Record<string, unknown>): Record<string, unkn
 }
 
 /** `painting.png`, `occluder.png` and the painting's decomposition (`orig/`, with the meta a take reads) in `dir`. */
-export function writeChainInputs(dir: string, plant: Plant | null = null): { painting: string; occluder: string; occluderSha: string } {
+export function writeChainInputs(dir: string, plant: Plant | null = null, occluderDepth = 0.2, extraLayers: ReadonlyArray<{ name: string; pixels: Raster; depth: number }> = []): { painting: string; occluder: string; occluderSha: string } {
   mkdirSync(dir, { recursive: true });
   const painting = join(dir, 'painting.png'), occluder = join(dir, 'occluder.png');
   writeFileSync(painting, encodePngBytes(chainPainting()));
   const occluderBytes = encodePngBytes(chainOccluder());
   writeFileSync(occluder, occluderBytes);
-  exportLayers(originalRun(plant), join(dir, 'orig'));
+  exportLayers(originalRun(plant, occluderDepth, extraLayers), join(dir, 'orig'));
   writeFileSync(join(dir, 'orig', 'meta.json'), JSON.stringify({ prompt_id: 'generated-original', seed: 42 }));
   return { painting, occluder, occluderSha: sha256(occluderBytes) };
 }

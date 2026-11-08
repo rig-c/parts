@@ -2572,8 +2572,8 @@ function checkRequiredHiddenExtent(c: Check, a: Record<string, Json>, names: rea
 }
 
 /**
- * Issue #1230: `config.assemble.occluders`, `[{image, sha256, under, rgb_within}]`. Shape at every door; `under`
- * resolved against the plan where the door reads it; the file and its sha256 where the door knows the config's
+ * Issue #1230 / #1241: `config.assemble.occluders`, `[{image, sha256, under, over?, rgb_within}]`. Shape at every door; `under`
+ * and `over` resolved against the plan where the door reads it; the file and its sha256 where the door knows the config's
  * directory (`checkOccluderFiles`).
  */
 function checkOccluders(c: Check, a: Record<string, Json>, names: readonly string[] | null, base: string | null): void {
@@ -2583,18 +2583,23 @@ function checkOccluders(c: Check, a: Record<string, Json>, names: readonly strin
   const declarations: OccluderDeclaration[] = [];
   (a.occluders as Json[]).forEach((value, i) => {
     const p = `${at}[${i}]`;
-    const row = c.object(p, value, ['image', 'sha256', 'under', 'rgb_within'], ['plate']);
+    const row = c.object(p, value, ['image', 'sha256', 'under', 'rgb_within'], ['over', 'plate']);
     if (row === null) return;
     const imageOk = c.string(`${p}.image`, row.image);
     const shaOk = typeof row.sha256 === 'string' && SHA256_PATTERN.test(row.sha256);
     if (!shaOk) c.fail('CONFIG_FIELD_TYPE', `${p}.sha256`, `is ${show(row.sha256)}; ${SHA256_RULE} is required`);
     let underOk = c.array(`${p}.under`, row.under, true);
     if (underOk) (row.under as Json[]).forEach((name, j) => { if (!c.string(`${p}.under[${j}]`, name)) underOk = false; });
+    let overOk = true;
+    if ('over' in row) {
+      overOk = c.array(`${p}.over`, row.over, true);
+      if (overOk) (row.over as Json[]).forEach((name, j) => { if (!c.string(`${p}.over[${j}]`, name)) overOk = false; });
+    }
     const rgbOk = typeof row.rgb_within === 'number' && Number.isInteger(row.rgb_within) && row.rgb_within >= 0 && row.rgb_within <= 255;
     if (!rgbOk) c.fail('CONFIG_FIELD_TYPE', `${p}.rgb_within`, `is ${show(row.rgb_within)}; an integer from 0 to 255 is required`);
     const plateOk = !('plate' in row) || c.string(`${p}.plate`, row.plate);
-    if (imageOk && shaOk && underOk && rgbOk && plateOk) {
-      declarations.push({ image: row.image as string, sha256: row.sha256 as string, under: row.under as string[], rgb_within: row.rgb_within as number, ...('plate' in row ? { plate: row.plate as string } : {}) });
+    if (imageOk && shaOk && underOk && overOk && rgbOk && plateOk) {
+      declarations.push({ image: row.image as string, sha256: row.sha256 as string, under: row.under as string[], ...('over' in row ? { over: row.over as string[] } : {}), rgb_within: row.rgb_within as number, ...('plate' in row ? { plate: row.plate as string } : {}) });
     }
   });
   c.problems.push(...occluderNameProblems(declarations, names));

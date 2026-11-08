@@ -17,12 +17,15 @@
  *   bun tools/check_occluders.ts <work dir>     the first two (no box needed)
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { assembleStage } from '../src/build.ts';
 import { loadConfig, loadEarlyConfig, parseConfig, parseEarlyConfig } from '../src/config.ts';
 import { PartsError } from '../src/errors.ts';
 import {
   OCCLUDER_COLOUR_COPIED,
+  OCCLUDER_DRAW_CYCLE,
+  OCCLUDER_DRAW_ORDER,
+  OCCLUDER_OVER_TAKEN,
   OCCLUDER_PLATE_BASE_RUN,
   OCCLUDER_PLATE_OCCLUDER,
   OCCLUDER_PLATE_PAINTING,
@@ -39,9 +42,10 @@ import {
   receiptText,
   sha256,
 } from '../src/plate.ts';
-import { encodePngBytes } from '../src/raster/png.ts';
 import { scratchConfig } from '../src/meshdraft.ts';
-import { chainConfig, OCCLUDER, OCCLUDER_PX, PLANT, writeChainInputs, writePlateRun } from '../fixtures/occluder_chain.ts';
+import { encodePngBytes, readPng } from '../src/raster/png.ts';
+import { newRaster } from '../src/raster/types.ts';
+import { chainConfig, chainPlate, DEEPER_OCCLUDER_DEPTH, OCCLUDER, OCCLUDER_PX, OCCLUDER_RGB, PLANT, SIDE, writeChainInputs, writePlateRun } from '../fixtures/occluder_chain.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
 
@@ -139,12 +143,21 @@ export function runOccluderConfigChecks(dir: string, say: Say): void {
   say('OC08_A_RELATIVE_OCCLUDER_IMAGE_SURVIVES_THE_SCRATCH_CONFIG_REBASE',
     rebasedEntry.image === join(home, 'occluder.png') && rebasedEntry.plate === join(home, 'plate-out') && scratchLoads === null && copiedLoads !== undefined,
     `rebased image ${rebasedEntry.image === join(home, 'occluder.png') ? 'resolves to the config directory\'s occluder.png' : JSON.stringify(rebasedEntry.image)} and plate ${rebasedEntry.plate === join(home, 'plate-out') ? 'resolves to plate-out' : JSON.stringify(rebasedEntry.plate)}; scratch config ${scratchLoads?.message ?? 'loads'}; un-rebased copy ${copiedLoads?.code ?? 'accepted'}`);
+  const goodWithOver = chainConfig({ occluders: [declaration(occluderSha, { over: ['front'] })] });
+  const overReadOk = doors.every((read) => JSON.stringify(read(goodWithOver).assemble.occluders) === JSON.stringify([declaration(occluderSha, { over: ['front'] })]));
+  const overEmpty = doors.map((read) => refusal(() => read(chainConfig({ occluders: [declaration(occluderSha, { over: [] })] })))?.problems.some((p) => p.code === 'CONFIG_FIELD_TYPE' && p.object === 'config.assemble.occluders[0].over') === true);
+  const overType = doors.map((read) => refusal(() => read(chainConfig({ occluders: [declaration(occluderSha, { over: [1] })] })))?.problems.some((p) => p.code === 'CONFIG_FIELD_TYPE' && p.object === 'config.assemble.occluders[0].over[0]') === true);
+  const overDup = doors.map((read) => refusal(() => read(chainConfig({ occluders: [declaration(occluderSha, { over: ['front', 'front'] })] })))?.problems.some((p) => p.code === 'CONFIG_PART_UNIQUE' && p.object === 'config.assemble.occluders[0].over[1]') === true);
+  const overUnknown = doors.slice(0, 2).map((read) => refusal(() => read(chainConfig({ occluders: [declaration(occluderSha, { over: ['absent'] })] })))?.problems.find((p) => p.code === 'CONFIG_NAME_RESOLVES' && p.object === 'config.assemble.occluders[0].over[0]'));
+  say('OC13_OVER_READS_AND_REFUSES_SHAPE_DUPLICATES_AND_UNKNOWN_NAMES',
+    overReadOk && overEmpty.every(Boolean) && overType.every(Boolean) && overDup.every(Boolean) && overUnknown.every((p) => p !== undefined),
+    `over read ${overReadOk}; empty ${overEmpty.join('/')}; non-string ${overType.join('/')}; duplicate ${overDup.join('/')}; unknown: ${overUnknown.map((p) => p?.detail ?? 'accepted').join(' | ')}`);
 }
 
-function stage(home: string, full: string, cfg: Record<string, unknown>, out: string): { lines: string[]; error: PartsError | null } {
+function stage(home: string, full: string, cfg: Record<string, unknown>, out: string, head: string | null = null): { lines: string[]; error: PartsError | null } {
   writeFileSync(join(home, 'config.json'), JSON.stringify(cfg));
   const lines: string[] = [];
-  const error = refusal(() => assembleStage({ config: join(home, 'config.json'), source: join(home, 'painting.png'), full, head: null, project: 'visible' },
+  const error = refusal(() => assembleStage({ config: join(home, 'config.json'), source: join(home, 'painting.png'), full, head, project: 'visible' },
     { partsJson: join(home, out, 'parts.json'), partsDir: join(home, out, 'parts'), recomposite: join(home, out, 'recomposite.png'), errorMap: join(home, out, 'error.png') }, (line) => lines.push(line)));
   return { lines, error };
 }
@@ -238,6 +251,137 @@ export function runOccluderCopyChecks(dir: string, say: Say): void {
   say('OC12_MISMATCHED_OCCLUDER_PLATE_BASE_RUN_SHA_IS_REFUSED',
     badBaseProb !== undefined && badBaseProb.detail.includes(goodPlate.plateSha) && badBaseProb.detail.includes(goodPlate.paintingSha) && !existsSync(join(plateHome, 'out-bad-base', 'parts.json')),
     badBaseProb !== undefined ? `${badBaseProb.code}: ${badBaseProb.detail}` : `unexpected: ${badBaseRun.error?.message ?? 'assembled'}`);
+
+  // Issue #1241 controls (a)-(g): deeper-ranked taken occluder layer (depth 0.9 > limb depth 0.7).
+  const deep = join(dir, 'occluder-deeper');
+  rmSync(deep, { recursive: true, force: true });
+  const extraLayer = newRaster(SIDE, SIDE);
+  for (let y = OCCLUDER[1]; y < OCCLUDER[3]; y++) for (let x = OCCLUDER[0]; x < OCCLUDER[2]; x++) extraLayer.data.set([120, 140, 60, 255], (y * SIDE + x) * 4);
+  const d = writeChainInputs(deep, null, DEEPER_OCCLUDER_DEPTH, [{ name: 'topwear', pixels: extraLayer, depth: 0.95 }]);
+  const plateRunDir = writePlateRun(deep, encodePngBytes(chainPlate()));
+  const reqHidden = [{ part: 'behind', occluder: 'front' }];
+
+  // (a) Without `over`, the deeper-ranked case refuses ASSEMBLE_TAKE_PLAN_ORDER.
+  const withoutOver = stage(deep, plateRunDir, chainConfig({ require_hidden_extent: reqHidden, occluders: [declaration(d.occluderSha)], take }), 'out-without-over');
+  const planOrderProblem = withoutOver.error?.problems.find((q) => q.code === 'ASSEMBLE_TAKE_PLAN_ORDER');
+  say('OC14_DEEPER_TAKEN_OCCLUDER_WITHOUT_OVER_REFUSES_TAKE_PLAN_ORDER',
+    planOrderProblem !== undefined && planOrderProblem.object === 'full plan parts "behind" / "front"' && planOrderProblem.detail.includes('mixed-run depths 0.7 / 0.9') && planOrderProblem.detail.includes(`supports overlap at ${OCCLUDER_PX} run px`) && !existsSync(join(deep, 'out-without-over')),
+    withoutOver.error?.message ?? 'accepted');
+
+  // (b) With `over`, the same case builds (exit 0) and draws the occluder in front: every pixel of OCCLUDER carries OCCLUDER_RGB.
+  const withOver = stage(deep, plateRunDir, chainConfig({ require_hidden_extent: reqHidden, occluders: [declaration(d.occluderSha, { over: ['front'] })], take }), 'out-with-over');
+  let occluderRgbPx = 0;
+  if (withOver.error === null && existsSync(join(deep, 'out-with-over', 'recomposite.png'))) {
+    const recomp = readPng(join(deep, 'out-with-over', 'recomposite.png'));
+    for (let y = OCCLUDER[1]; y < OCCLUDER[3]; y++) for (let x = OCCLUDER[0]; x < OCCLUDER[2]; x++) {
+      const idx = (y * SIDE + x) * 4;
+      if (recomp.data[idx] === OCCLUDER_RGB[0] && recomp.data[idx + 1] === OCCLUDER_RGB[1] && recomp.data[idx + 2] === OCCLUDER_RGB[2] && recomp.data[idx + 3] === 255) occluderRgbPx++;
+    }
+  }
+  say('OC15_DEEPER_TAKEN_OCCLUDER_WITH_OVER_BUILDS_AND_DRAWS_IN_FRONT',
+    withOver.error === null && copied(withOver.lines).length === 0 && occluderRgbPx === OCCLUDER_PX,
+    `${withOver.error?.message ?? 'assembled'}; recomposite occluder rectangle holds OCCLUDER_RGB on ${occluderRgbPx}/${OCCLUDER_PX} px; copied WARN ${copied(withOver.lines).length}`);
+
+  // (c) A planted undeclared mixed-run pair in the same build still refuses ASSEMBLE_TAKE_PLAN_ORDER.
+  const cfgWithUndeclared = chainConfig({
+    require_hidden_extent: reqHidden,
+    occluders: [declaration(d.occluderSha, { over: ['front'] })],
+    take: [{ run: 'full', run_dir: 'orig', st_input: 'painting.png', tags: ['objects', 'topwear'] }],
+  });
+  (cfgWithUndeclared.assemble as Record<string, unknown>).plan = [
+    ['face', 'full', 'face'], ['eye_r', 'full', 'eyewhite-r'], ['eye_l', 'full', 'eyewhite-l'],
+    ['behind', 'full', 'legwear'], ['front', 'full', 'objects'], ['undeclared', 'full', 'topwear'],
+  ];
+  const undeclaredPair = stage(deep, plateRunDir, cfgWithUndeclared, 'out-undeclared-pair');
+  const undeclaredProblem = undeclaredPair.error?.problems.find((q) => q.code === 'ASSEMBLE_TAKE_PLAN_ORDER');
+  say('OC16_UNDECLARED_MIXED_RUN_PAIR_IN_SAME_BUILD_STILL_REFUSES_PLAN_ORDER',
+    undeclaredPair.error?.problems.length === 1 && undeclaredProblem?.object === 'full plan parts "behind" / "undeclared"' && undeclaredProblem.detail.includes('mixed-run depths 0.7 / 0.95') && !existsSync(join(deep, 'out-undeclared-pair')),
+    undeclaredPair.error?.message ?? 'accepted');
+
+  // (d) A plan that draws a declared `over` part behind its `under` refuses ASSEMBLE_OCCLUDER_DRAW_ORDER.
+  const cfgReversedOver = chainConfig({
+    occluders: [declaration(d.occluderSha, { over: ['front'] })],
+    take,
+  });
+  (cfgReversedOver.assemble as Record<string, unknown>).plan = [
+    ['face', 'full', 'face'], ['eye_r', 'full', 'eyewhite-r'], ['eye_l', 'full', 'eyewhite-l'],
+    ['front', 'full', 'objects'], ['behind', 'full', 'legwear'],
+  ];
+  const reversedOver = stage(deep, plateRunDir, cfgReversedOver, 'out-reversed-over');
+  const drawOrderProblem = reversedOver.error?.problems.find((q) => q.code === OCCLUDER_DRAW_ORDER);
+  say('OC17_DECLARED_OVER_DRAWN_BEHIND_UNDER_REFUSES_OCCLUDER_DRAW_ORDER',
+    reversedOver.error?.problems.length === 1 && drawOrderProblem?.object === 'full plan parts "front" / "behind"' && drawOrderProblem.detail.includes('config.assemble.occluders[0]') && !existsSync(join(deep, 'out-reversed-over')),
+    reversedOver.error?.message ?? 'accepted');
+
+  // (e) Three contradiction plants, each refusing ASSEMBLE_OCCLUDER_DRAW_CYCLE with no build output written.
+  const cyclePlants = [
+    {
+      label: 'same-part',
+      occluders: [declaration(d.occluderSha, { under: ['front'], over: ['front'] })],
+      expectCycle: 'cycle front -> front',
+    },
+    {
+      label: 'two-entry-swap',
+      occluders: [
+        declaration(d.occluderSha, { under: ['behind'], over: ['front'] }),
+        declaration(d.occluderSha, { under: ['front'], over: ['behind'] }),
+      ],
+      expectCycle: 'cycle front -> behind -> front',
+    },
+    {
+      label: 'three-entry-cycle',
+      occluders: [
+        declaration(d.occluderSha, { under: ['behind'], over: ['front'] }),
+        declaration(d.occluderSha, { under: ['face'], over: ['behind'] }),
+        declaration(d.occluderSha, { under: ['front'], over: ['face'] }),
+      ],
+      expectCycle: 'cycle front -> behind -> face -> front',
+    },
+  ];
+  const cycleResults = cyclePlants.map(({ label, occluders: occs, expectCycle }) => {
+    const outDir = `out-cycle-${label}`;
+    const res = stage(deep, plateRunDir, chainConfig({ occluders: occs, take }), outDir);
+    const prob = res.error?.problems.find((q) => q.code === OCCLUDER_DRAW_CYCLE);
+    const ok = prob !== undefined && prob.detail.includes(expectCycle) && !existsSync(join(deep, outDir));
+    return { label, ok, msg: prob ? `${prob.code}: ${prob.object} — ${prob.detail}` : (res.error?.message ?? 'accepted') };
+  });
+  say('OC18_CONTRADICTORY_OVER_UNDER_DECLARATIONS_REFUSE_DRAW_CYCLE',
+    cycleResults.every((r) => r.ok),
+    cycleResults.map((r) => `${r.label}: ${r.msg}`).join(' | '));
+
+  // (f) An `over` part that isn't taken refuses ASSEMBLE_OCCLUDER_OVER_TAKEN.
+  const untakenOver = stage(deep, plateRunDir, chainConfig({ occluders: [declaration(d.occluderSha, { over: ['front'] })] }), 'out-untaken-over');
+  const untakenProblem = untakenOver.error?.problems.find((q) => q.code === OCCLUDER_OVER_TAKEN);
+  say('OC19_UNTAKEN_OVER_PART_REFUSES_OCCLUDER_OVER_TAKEN',
+    untakenOver.error?.problems.length === 1 && untakenProblem?.object === 'config.assemble.occluders[0].over[0]' && untakenProblem.detail.includes('part "front" (full:objects) is not taken by config.assemble.take') && !existsSync(join(deep, 'out-untaken-over')),
+    untakenOver.error?.message ?? 'accepted');
+
+  // Cross-run declared pair: `over` is a `full` row and `under` is a `head` row, with `over` drawn behind `under` in `assemble.plan`.
+  const cfgCrossRun = chainConfig({
+    occluders: [declaration(d.occluderSha, { over: ['front'] })],
+    take,
+  });
+  (cfgCrossRun.seethrough as Record<string, unknown>).head_box = [0, 0, SIDE, SIDE];
+  (cfgCrossRun.assemble as Record<string, unknown>).plan = [
+    ['face', 'head', 'face'], ['eye_r', 'head', 'eyewhite-r'], ['eye_l', 'head', 'eyewhite-l'],
+    ['front', 'full', 'objects'], ['behind', 'head', 'legwear'],
+  ];
+  const crossRunOver = stage(deep, plateRunDir, cfgCrossRun, 'out-cross-run-over', plateRunDir);
+  const crossRunProblem = crossRunOver.error?.problems.find((q) => q.code === OCCLUDER_DRAW_ORDER);
+  say('OC20_CROSS_RUN_DECLARED_OVER_DRAWN_BEHIND_UNDER_REFUSES_OCCLUDER_DRAW_ORDER',
+    crossRunOver.error?.problems.length === 1 && crossRunProblem?.object === 'plan parts "front" (full) / "behind" (head)' && crossRunProblem.detail.includes('config.assemble.occluders[0]') && !existsSync(join(deep, 'out-cross-run-over')),
+    crossRunOver.error?.message ?? 'accepted');
+
+  // (g) None of the 5 public example configs declares `assemble.occluders` (byte stability of their assembled outputs is checked by CI's "Fetch pinned painting allocation examples" step via `tools/check_painting_public.ts`).
+  const root = resolve(import.meta.dir, '..');
+  const exampleKeys = ['demo', 'reference-demo', 'reference-sample', 'scarf', 'wind'] as const;
+  const exampleRows = exampleKeys.map((key) => {
+    const cfg = loadConfig(join(root, 'examples', key, 'config.json'));
+    return { key, noOccluders: cfg.assemble.occluders === undefined };
+  });
+  say('OC21_PUBLIC_EXAMPLES_DECLARE_NO_OCCLUDERS',
+    exampleRows.every((r) => r.noOccluders),
+    exampleRows.map((r) => `${r.key}: occluders=${String(r.noOccluders ? 'absent' : 'present')}`).join(', '));
 }
 
 /** `plateDir` is the harness's `comfy plate --mode occluder` output on the chain's painting and occluder (`<work>/occ-chain`). */
