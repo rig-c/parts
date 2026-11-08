@@ -28,23 +28,150 @@ export interface OccluderDeclaration {
   sha256: string;
   /** Plan parts the occluder stands in front of. */
   under: string[];
+  /** Plan parts that draw this occluder, in front of `under` (#1241). */
+  over?: string[];
   /** Max absolute channel difference from the painting at which an `under` pixel reads as the occluder's colour. */
   rgb_within: number;
 }
 
 export const OCCLUDER_COLOUR_COPIED = 'ASSEMBLE_OCCLUDER_COLOUR_COPIED';
+export const OCCLUDER_DRAW_ORDER = 'ASSEMBLE_OCCLUDER_DRAW_ORDER';
+export const OCCLUDER_DRAW_CYCLE = 'ASSEMBLE_OCCLUDER_DRAW_CYCLE';
+export const OCCLUDER_OVER_TAKEN = 'ASSEMBLE_OCCLUDER_OVER_TAKEN';
 /** An `under` layer pixel counts at alpha above this: the half-opaque floor `deriveTakenRegion` reads. */
 export const COPIED_ALPHA_ABOVE = 128;
 
 const AT = 'config.assemble.occluders';
 
-/** Every `under` entry names a plan part (`CONFIG_NAME_RESOLVES`); `names` null skips the check (a door without the plan). */
-export function occluderNameProblems(declarations: readonly OccluderDeclaration[], names: readonly string[] | null): Problem[] {
-  if (names === null) return [];
+/** Contradictory `over` / `under` draw order across occluder entries (`ASSEMBLE_OCCLUDER_DRAW_CYCLE`). */
+export function occluderDrawCycleProblems(declarations: readonly OccluderDeclaration[]): Problem[] {
   const problems: Problem[] = [];
-  declarations.forEach((d, i) => d.under.forEach((name, j) => {
-    if (!names.includes(name)) problems.push({ code: 'CONFIG_NAME_RESOLVES', object: `${AT}[${i}].under[${j}]`, detail: `names "${name}"; a part in config.assemble.plan is required` });
-  }));
+  const edges = new Map<string, Map<string, number>>();
+  const vertices: string[] = [];
+  const addVertex = (name: string): void => {
+    if (!vertices.includes(name)) vertices.push(name);
+  };
+  declarations.forEach((d, i) => {
+    if (d.over === undefined) return;
+    for (const u of d.over) {
+      for (const v of d.under) {
+        if (u === v) {
+          problems.push({
+            code: OCCLUDER_DRAW_CYCLE,
+            object: `${AT}[${i}]`,
+            detail: `cycle ${u} -> ${u}: "${u}" is in both over and under of occluders[${i}]; a part cannot draw in front of itself`,
+          });
+          continue;
+        }
+        addVertex(u);
+        addVertex(v);
+        let row = edges.get(u);
+        if (row === undefined) {
+          row = new Map<string, number>();
+          edges.set(u, row);
+        }
+        if (!row.has(v)) row.set(v, i);
+      }
+    }
+  });
+  vertices.forEach((start, startIndex) => {
+    const startEdges = edges.get(start);
+    if (startEdges === undefined) return;
+    const visited = new Set<string>();
+    const queue: Array<{ node: string; path: string[]; steps: Array<[string, string, number]> }> = [];
+    for (const [next, ei] of startEdges) {
+      if (vertices.indexOf(next) > startIndex) {
+        visited.add(next);
+        queue.push({ node: next, path: [start, next], steps: [[start, next, ei]] });
+      }
+    }
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const nextEdges = edges.get(current.node);
+      if (nextEdges === undefined) continue;
+      const back = nextEdges.get(start);
+      if (back !== undefined) {
+        const cycle = [...current.path, start];
+        const steps = [...current.steps, [current.node, start, back] as [string, string, number]];
+        problems.push({
+          code: OCCLUDER_DRAW_CYCLE,
+          object: AT,
+          detail: `cycle ${cycle.join(' -> ')} (${steps.map(([from, to, idx]) => `"${from}" over "${to}" in occluders[${idx}]`).join(', ')}); declared over/under draw order must be acyclic`,
+        });
+        break;
+      }
+      for (const [next, ei] of nextEdges) {
+        if (vertices.indexOf(next) > startIndex && !visited.has(next)) {
+          visited.add(next);
+          queue.push({ node: next, path: [...current.path, next], steps: [...current.steps, [current.node, next, ei]] });
+        }
+      }
+    }
+  });
+  return problems;
+}
+
+export interface DeclaredOccluderPair {
+  index: number;
+  over: string;
+  under: string;
+}
+
+/** First occluder entry declaring `(a, b)` or `(b, a)` as an `(over, under)` pair, or null when undeclared. */
+export function declaredOccluderPair(declarations: readonly OccluderDeclaration[], a: string, b: string): DeclaredOccluderPair | null {
+  for (let i = 0; i < declarations.length; i++) {
+    const d = declarations[i];
+    if (d.over === undefined) continue;
+    if (d.over.includes(a) && d.under.includes(b)) return { index: i, over: a, under: b };
+    if (d.over.includes(b) && d.under.includes(a)) return { index: i, over: b, under: a };
+  }
+  return null;
+}
+
+/** Every `over` part's plan layer (`run:tag`) must be taken by a whole-layer `assemble.take` declaration (`ASSEMBLE_OCCLUDER_OVER_TAKEN`). */
+export function occluderOverTakenProblems(
+  declarations: readonly OccluderDeclaration[],
+  plan: ReadonlyArray<readonly [string, string, string]>,
+  taken: ReadonlyArray<{ run: string; tags: readonly string[] }>,
+): Problem[] {
+  const problems: Problem[] = [];
+  declarations.forEach((d, i) => {
+    d.over?.forEach((name, j) => {
+      const row = plan.find(([part]) => part === name);
+      if (row === undefined) return;
+      const [, run, tag] = row;
+      if (!taken.some((t) => t.run === run && t.tags.includes(tag))) {
+        problems.push({
+          code: OCCLUDER_OVER_TAKEN,
+          object: `${AT}[${i}].over[${j}]`,
+          detail: `part "${name}" (${run}:${tag}) is not taken by config.assemble.take; declare a whole-layer take for ${run}:${tag} or omit "${name}" from over`,
+        });
+      }
+    });
+  });
+  return problems;
+}
+
+/** Every `under` and `over` entry names a plan part (`CONFIG_NAME_RESOLVES`, with `over` entries distinct per occluder, `CONFIG_PART_UNIQUE`); `names` null skips the plan-membership check (a door without the plan). */
+export function occluderNameProblems(declarations: readonly OccluderDeclaration[], names: readonly string[] | null): Problem[] {
+  const problems: Problem[] = [];
+  declarations.forEach((d, i) => {
+    if (d.over !== undefined) {
+      const seen = new Set<string>();
+      d.over.forEach((name, j) => {
+        if (seen.has(name)) problems.push({ code: 'CONFIG_PART_UNIQUE', object: `${AT}[${i}].over[${j}]`, detail: `names "${name}" again; each part is named once` });
+        seen.add(name);
+      });
+    }
+    if (names === null) return;
+    d.under.forEach((name, j) => {
+      if (!names.includes(name)) problems.push({ code: 'CONFIG_NAME_RESOLVES', object: `${AT}[${i}].under[${j}]`, detail: `names "${name}"; a part in config.assemble.plan is required` });
+    });
+    d.over?.forEach((name, j) => {
+      if (!names.includes(name)) problems.push({ code: 'CONFIG_NAME_RESOLVES', object: `${AT}[${i}].over[${j}]`, detail: `names "${name}"; a part in config.assemble.plan is required` });
+    });
+  });
+  problems.push(...occluderDrawCycleProblems(declarations));
   return problems;
 }
 

@@ -7,6 +7,7 @@ import { CORE_KERNEL, fullPlanBand } from './assemble.ts';
 import { makeInputs, squarePad } from './inputs.ts';
 import { OPAQUE_ALPHA_ABOVE, readLayers, type Layer, type LayerSet } from './layers.ts';
 import { PartsError, refuseIfAny, type Problem } from './errors.ts';
+import { declaredOccluderPair, OCCLUDER_DRAW_ORDER, occluderDrawCycleProblems, occluderOverTakenProblems, type OccluderDeclaration } from './occluders.ts';
 import { dilate } from './raster/morph.ts';
 import { newMask, newRaster, newFloatImage, type Raster } from './raster/types.ts';
 import { readPng } from './raster/png.ts';
@@ -154,8 +155,15 @@ function supportOverlap(a: Layer, b: Layer): number {
   return px;
 }
 /** Apply every declaration together, so replacing all tied layers from one run can retain its known order. */
-export function applyTakenLayers(runs: { full: LayerSet; head: LayerSet; single: boolean }, painting: Raster, cfg: Pick<EarlyConfig, 'seethrough' | 'depth'> & { assemble: { take?: TakeDeclaration[]; plan?: PlanEntry[] } }, configPath: string): { full: LayerSet; head: LayerSet; single: boolean; notes: string[] } {
+export function applyTakenLayers(runs: { full: LayerSet; head: LayerSet; single: boolean }, painting: Raster, cfg: Pick<EarlyConfig, 'seethrough' | 'depth'> & { assemble: { take?: TakeDeclaration[]; plan?: PlanEntry[]; occluders?: OccluderDeclaration[] } }, configPath: string): { full: LayerSet; head: LayerSet; single: boolean; notes: string[] } {
   const declarations = (cfg.assemble.take ?? []).filter((item): item is TakeLayers => 'tags' in item);
+  const occluders = cfg.assemble.occluders ?? [];
+  if (occluders.length > 0) {
+    refuseIfAny([
+      ...occluderDrawCycleProblems(occluders),
+      ...(cfg.assemble.plan === undefined ? [] : occluderOverTakenProblems(occluders, cfg.assemble.plan, declarations)),
+    ]);
+  }
   if (declarations.length === 0) return { ...runs, notes: [] };
   if (cfg.depth !== undefined || [...runs.full.layers, ...runs.head.layers].some(l => l.depthSheet !== undefined)) return refuse('ASSEMBLE_TAKE_DEPTH_SHEET', 'config.assemble.take', 'active scalar depth sheets have no mixed-run binding; disable the depth opt-in or assemble a separately bound run before taking layers (numeric depth_median ordering is retained)');
   const inputs = makeInputs(painting, cfg, 'take target painting');
@@ -206,7 +214,13 @@ export function applyTakenLayers(runs: { full: LayerSet; head: LayerSet; single:
     const selected = (cfg.assemble.plan ?? []).filter(p => p[1] === run).map(p => ({ part: p[0], layer: list.find(l => l.name === p[2]) }));
     for (let i = 0; i < selected.length; i++) for (let j = i + 1; j < selected.length; j++) {
       const a = selected[i], b = selected[j];
-      if (a.layer === undefined || b.layer === undefined || origin(a.layer) === origin(b.layer)) continue;
+      if (a.layer === undefined || b.layer === undefined) continue;
+      const declared = declaredOccluderPair(occluders, a.part, b.part);
+      if (declared !== null) {
+        if (declared.over === a.part) problems.push({ code: OCCLUDER_DRAW_ORDER, object: `${run} plan parts "${a.part}" / "${b.part}"`, detail: `config.assemble.occluders[${declared.index}] declares "${a.part}" in over and "${b.part}" in under, but config.assemble.plan draws "${a.part}" behind "${b.part}"; put "${a.part}" after "${b.part}" in config.assemble.plan (back to front)` });
+        continue;
+      }
+      if (origin(a.layer) === origin(b.layer)) continue;
       const overlap = supportOverlap(a.layer, b.layer);
       if (overlap === 0) continue;
       // Only full rows in a two-run plan have the proposer's fallback roles.
