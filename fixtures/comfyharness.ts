@@ -21,6 +21,7 @@ import { newRaster } from '../src/raster/types.ts';
 import { writeRunStamp } from '../src/runstamp.ts';
 import { sha256 } from '../src/plate.ts';
 import { CANVAS, minimalConfig } from './synthetic.ts';
+import { writeChainInputs } from './occluder_chain.ts';
 
 const ROOT = join(import.meta.dir, '..');
 const work = process.argv[2];
@@ -103,6 +104,8 @@ for (const [path, w] of [[plateOccluder, CANVAS.w], [plateOccluderNarrow, CANVAS
   for (let y = 10; y < 18; y++) for (let x = 20; x < 28; x++) if (x < 22 || x >= 26 || y < 12 || y >= 16) r.data.set([200, 40, 40, y === 10 ? 1 : 255], (y * w + x) * 4);
   writeFileSync(path, encodePngBytes(r));
 }
+// Issue #1230: the occluder chain's painting and occluder (fixtures/occluder_chain.ts), plated here and assembled by the check.
+const chain = writeChainInputs(join(work, 'occ-chain'));
 const image = join(work, 'input.png');
 writeFileSync(image, readFileSync(platePainting));
 writeFileSync(join(work, 'paint.json'), JSON.stringify(paintConfig(FAKE_CHECKPOINT)));
@@ -280,6 +283,7 @@ const scenarios: Scenario[] = [
   { name: 'plate-occ-holes', mode: 'ok', args: (u, o) => occluderPlate(u, o, plateOccluder, ['--holes']) },
   { name: 'plate-occ-ring', mode: 'ok', args: (u, o) => occluderPlate(u, o, plateOccluder) },
   { name: 'plate-occ-narrow', mode: 'ok', args: (u, o) => occluderPlate(u, o, plateOccluderNarrow) },
+  { name: 'plate-occ-chain', mode: 'ok', args: (u, o) => occluderPlate(u, o, chain.occluder).map((x, i, all) => (all[i - 1] === '--painting' ? chain.painting : all[i - 1] === '--grow' ? '2' : x)) },
 ];
 
 const results: Record<string, unknown> = {};

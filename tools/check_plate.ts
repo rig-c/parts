@@ -13,6 +13,7 @@ import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FAKE_FILL } from '../fixtures/fakecomfy.ts';
+import { runOccluderChainChecks } from './check_occluders.ts';
 import { PLATE_RECEIPT_KEYS, PLATE_RECEIPT_OCCLUDER_KEYS, PLATE_RECEIPT_SPEC, runForeground, sha256, verifyPlateReceipt } from '../src/plate.ts';
 import { decodePngBytes, encodePngBytes } from '../src/raster/png.ts';
 
@@ -285,6 +286,9 @@ function occluderChecks(dir: string, painting: string, R: Record<string, PlateHa
     narrow?.status === 1 && line !== null && line.includes('63x48') && line.includes('64x48') && narrow.paths.length === 0 && narrow.uploads.length === 0 && narrow.prompts === 0 && !existsSync(join(dir, 'plate-occ-narrow')),
     `exit ${narrow?.status}, "${line ?? 'no PLATE_OCCLUDER_GRID line'}", requests ${narrow?.paths.length}, uploads ${narrow?.uploads.length}, prompts ${narrow?.prompts}`,
     'issue #1230: the occluder is read on the painting\'s grid and never fitted; a mismatch is refused before the box is reached');
+
+  runOccluderChainChecks(dir, join(dir, 'plate-occ-chain'), (name, pass, detail) => say(name, pass, detail,
+    'issue #1230: the occluder plate is a source of hidden surface the painting\'s own decomposition never paints, reached through the existing take route'));
 }
 
 export function runPlateChecks(dir: string, painting: string, R: Record<string, PlateHarnessResult>, say: Say): void {
