@@ -15,7 +15,7 @@ import { CUT_MATERIAL_LINE, CUT_MATERIAL_SOURCES, materialLines } from './cutmat
 import { ART_JOINT_LINE, artJointLines } from './artjoints.ts';
 import { applyTakenLayers } from './takelayers.ts';
 import { applyTakenRegions } from './takeregion.ts';
-import { occluderStageWarnings } from './occluderstage.ts';
+import { bindOccluderPlates, occluderStageWarnings } from './occluderstage.ts';
 import { ownershipLines, provenanceLines } from './provenance.ts';
 import { readSourceDepth } from './depthsheets.ts';
 import { orderedBaseAnchor } from './baseanchor.ts';
@@ -390,9 +390,12 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const result = assemble({ allocationEvent: input.allocationEvent === undefined ? undefined : event => input.allocationEvent!(event, null), source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under, ...(declaredFigure === undefined ? {} : { declaredFigure }),
     ...((cfg.assemble.take ?? []).some(t => 'part' in t) ? { regionTake: { full: takenRuns.full, head: takenRuns.head, targets: (cfg.assemble.take ?? []).flatMap(t => 'part' in t ? [t.part] : []) } } : {}), ...(caps === undefined ? {} : { caps }), seamRule: seam, projectRule: project });
 
-  // Issue #1230: copied occluder colour in a declared occluder's under parts is named, never kept silent; no byte moves.
+  // Issue #1230 / #1237: copied occluder colour in a declared occluder's under parts is named, never kept silent;
+  // when `plate` is declared on an occluder entry, its receipt is verified and bound to occluder, painting and base run.
   if (cfg.assemble.occluders !== undefined) {
     for (const line of occluderStageWarnings({ occluders: cfg.assemble.occluders, configPath: input.config, source: src, runs, plan: fields.plan, resolution: fields.resolution, headBox: fields.headBox, rigScale: fields.rigScale })) log(line);
+    const boundPlates = bindOccluderPlates({ occluders: cfg.assemble.occluders, configPath: input.config, sourcePath: input.source, fullPath: input.full });
+    if (boundPlates.length > 0) result.parts.occluder_plates = boundPlates;
   }
 
   const sourceCoverSets = [sourceCoverSet(result, null, input.source, read)];

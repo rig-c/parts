@@ -32,12 +32,17 @@ export interface OccluderDeclaration {
   over?: string[];
   /** Max absolute channel difference from the painting at which an `under` pixel reads as the occluder's colour. */
   rgb_within: number;
+  /** An optional comfy plate --mode occluder output directory, relative to the config's directory (issue #1237). */
+  plate?: string;
 }
 
 export const OCCLUDER_COLOUR_COPIED = 'ASSEMBLE_OCCLUDER_COLOUR_COPIED';
 export const OCCLUDER_DRAW_ORDER = 'ASSEMBLE_OCCLUDER_DRAW_ORDER';
 export const OCCLUDER_DRAW_CYCLE = 'ASSEMBLE_OCCLUDER_DRAW_CYCLE';
 export const OCCLUDER_OVER_TAKEN = 'ASSEMBLE_OCCLUDER_OVER_TAKEN';
+export const OCCLUDER_PLATE_OCCLUDER = 'ASSEMBLE_OCCLUDER_PLATE_OCCLUDER';
+export const OCCLUDER_PLATE_PAINTING = 'ASSEMBLE_OCCLUDER_PLATE_PAINTING';
+export const OCCLUDER_PLATE_BASE_RUN = 'ASSEMBLE_OCCLUDER_PLATE_BASE_RUN';
 /** An `under` layer pixel counts at alpha above this: the half-opaque floor `deriveTakenRegion` reads. */
 export const COPIED_ALPHA_ABOVE = 128;
 
@@ -175,18 +180,25 @@ export function occluderNameProblems(declarations: readonly OccluderDeclaration[
   return problems;
 }
 
-/** The image is a file beside the config (`CONFIG_FILE_PRESENT`) whose bytes hash to `sha256` (`CONFIG_OCCLUDER_SHA256`). */
+/** The image is a file beside the config (`CONFIG_FILE_PRESENT`) whose bytes hash to `sha256` (`CONFIG_OCCLUDER_SHA256`), and an optional `plate` names a plate output directory holding `receipt.json`. */
 export function occluderFileProblems(declarations: readonly OccluderDeclaration[], base: string): Problem[] {
   const problems: Problem[] = [];
   declarations.forEach((d, i) => {
     const path = resolve(base, d.image);
     if (!existsSync(path) || !statSync(path).isFile()) {
       problems.push({ code: 'CONFIG_FILE_PRESENT', object: `${AT}[${i}].image`, detail: `names ${d.image}, which is no such file; an RGBA PNG of the occluder on the painting's grid, relative to the config's directory, is required` });
-      return;
+    } else {
+      const found = fileSha256(path);
+      if (SHA256_PATTERN.test(d.sha256) && found !== d.sha256) {
+        problems.push({ code: 'CONFIG_OCCLUDER_SHA256', object: `${AT}[${i}].sha256`, detail: `is ${d.sha256}; ${d.image} has sha256 ${found} — declare the bytes the occluder image holds` });
+      }
     }
-    const found = fileSha256(path);
-    if (SHA256_PATTERN.test(d.sha256) && found !== d.sha256) {
-      problems.push({ code: 'CONFIG_OCCLUDER_SHA256', object: `${AT}[${i}].sha256`, detail: `is ${d.sha256}; ${d.image} has sha256 ${found} — declare the bytes the occluder image holds` });
+    if (d.plate !== undefined) {
+      const plateDir = resolve(base, d.plate);
+      const receiptPath = resolve(plateDir, 'receipt.json');
+      if (!existsSync(plateDir) || !statSync(plateDir).isDirectory() || !existsSync(receiptPath) || !statSync(receiptPath).isFile()) {
+        problems.push({ code: 'CONFIG_FILE_PRESENT', object: `${AT}[${i}].plate`, detail: `names ${d.plate} (${plateDir}), which holds no receipt.json; a comfy plate --mode occluder output directory relative to the config's directory is required` });
+      }
     }
   });
   return problems;

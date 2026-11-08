@@ -377,6 +377,21 @@ export interface PaintingInRig {
   resample: 'lanczos3-rgb-opaque';
 }
 
+export interface OccluderPlateRecord {
+  /** The plate receipt's path as declared (`<plate>/receipt.json`, POSIX separators). */
+  receipt: string;
+  /** SHA-256 of `receipt.json` bytes on disk. */
+  receipt_sha256: string;
+  /** `receipt.occluder.sha256` (bound to `config.assemble.occluders[i].sha256`). */
+  occluder_sha256: string;
+  /** `receipt.painting.sha256` (bound to `--source` painting bytes). */
+  painting_sha256: string;
+  /** `receipt.output.sha256` (bound to the base `--full` See-through run's `meta.json` `image_sha256`). */
+  output_sha256: string;
+  /** `receipt.mask.sha256` (from the verified plate receipt). */
+  mask_sha256: string;
+}
+
 export interface PartsFile {
   /** Optional on legacy packages; binds the opaque RGB raster assemble actually read. */
   painting_in_rig?: PaintingInRig;
@@ -394,6 +409,8 @@ export interface PartsFile {
   scene?: SceneRecord;
   /** Written only for one run whose file is not the resolution square (issue #366): where the file sat on the run's square; absent otherwise. */
   single_run_pad?: SingleRunPad;
+  /** Written only when an `assemble.occluders` entry declares `plate` (issue #1237); absent otherwise. */
+  occluder_plates?: OccluderPlateRecord[];
   /** Written only when alternate painting sets were assembled (issue #454); absent otherwise. */
   alternates?: AlternatePartsRecord[];
 }
@@ -430,8 +447,9 @@ export interface SceneRecord {
   figure_mask: string;
 }
 
-const TOP_KEYS = ['painting_in_rig', 'rig_size', 'scale_rig_per_source', 'parts', 'ghost_px', 'recomposite', 'scene', 'single_run_pad', 'alternates', 'motion_seams', 'cut_ownership'] as const;
-const REQUIRED_TOP_KEYS = TOP_KEYS.filter((k) => k !== 'painting_in_rig' && k !== 'recomposite' && k !== 'scene' && k !== 'single_run_pad' && k !== 'alternates' && k !== 'motion_seams' && k !== 'cut_ownership');
+const TOP_KEYS = ['painting_in_rig', 'rig_size', 'scale_rig_per_source', 'parts', 'ghost_px', 'recomposite', 'scene', 'occluder_plates', 'single_run_pad', 'alternates', 'motion_seams', 'cut_ownership'] as const;
+const REQUIRED_TOP_KEYS = TOP_KEYS.filter((k) => k !== 'painting_in_rig' && k !== 'recomposite' && k !== 'scene' && k !== 'single_run_pad' && k !== 'occluder_plates' && k !== 'alternates' && k !== 'motion_seams' && k !== 'cut_ownership');
+export const OCCLUDER_PLATE_KEYS = ['receipt', 'receipt_sha256', 'occluder_sha256', 'painting_sha256', 'output_sha256', 'mask_sha256'] as const;
 export const SINGLE_RUN_PAD_KEYS = ['file_size', 'side', 'left', 'top'] as const;
 export const SCENE_KEYS = ['figure_alpha_above', 'figure_px', 'figure_mask'] as const;
 export const RECOMPOSITE_KEYS = ['mean_abs', 'within_limit', 'within_share', 'error_limit', 'error_px', 'covered_alpha', 'uncovered_error_px', 'hole_count', 'holes_listed', 'holes'] as const;
@@ -563,6 +581,7 @@ export function serializeParts(file: PartsFile): string {
     ghost_px: Object.fromEntries(Object.keys(file.ghost_px).sort().map((k) => [k, file.ghost_px[k]])),
     ...(file.recomposite === undefined ? {} : { recomposite: serializeRecomposite(file.recomposite) }),
     ...(file.scene === undefined ? {} : { scene: Object.fromEntries(SCENE_KEYS.map((k) => [k, (file.scene as SceneRecord)[k]])) }),
+    ...(file.occluder_plates === undefined ? {} : { occluder_plates: file.occluder_plates.map((p) => Object.fromEntries(OCCLUDER_PLATE_KEYS.map((k) => [k, p[k]]))) }),
     ...(file.single_run_pad === undefined ? {} : { single_run_pad: Object.fromEntries(SINGLE_RUN_PAD_KEYS.map((k) => [k, (file.single_run_pad as SingleRunPad)[k]])) }),
     ...(file.alternates === undefined
       ? {}
@@ -902,6 +921,28 @@ function checkParts(raw: unknown, path: string): PartsFile {
   }
   if ('cut_ownership' in o) checkOwnership(o.cut_ownership, `${path} cut_ownership`, fail);
   if ('single_run_pad' in o) checkSingleRunPad(o.single_run_pad, path, sizeOk ? (size as [number, number]) : null, typeof scale === 'number' ? scale : null, fail);
+  if ('occluder_plates' in o) {
+    if (!Array.isArray(o.occluder_plates) || o.occluder_plates.length === 0) {
+      fail('PARTS_FIELD_TYPE', `${path} field "occluder_plates"`, `is ${show(o.occluder_plates)}; a non-empty array of occluder plate records is required`);
+    } else {
+      o.occluder_plates.forEach((entry, i) => {
+        const at = `${path} occluder_plates[${i}]`;
+        if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+          fail('PARTS_FIELD_TYPE', at, `is ${show(entry)}; an object is required`);
+          return;
+        }
+        const r = entry as Record<string, unknown>;
+        for (const k of Object.keys(r)) if (!(OCCLUDER_PLATE_KEYS as readonly string[]).includes(k)) fail('PARTS_KEY_KNOWN', `${at} key "${k}"`, `is not an occluder_plates field; known: ${OCCLUDER_PLATE_KEYS.join(', ')}`);
+        for (const k of OCCLUDER_PLATE_KEYS) if (!(k in r)) fail('PARTS_FIELD_PRESENT', `${at} field "${k}"`, 'is absent and required');
+        if ('receipt' in r && (typeof r.receipt !== 'string' || r.receipt.length === 0)) fail('PARTS_FIELD_TYPE', `${at} field "receipt"`, `is ${show(r.receipt)}; a non-empty string path is required`);
+        for (const k of ['receipt_sha256', 'occluder_sha256', 'painting_sha256', 'output_sha256', 'mask_sha256'] as const) {
+          if (k in r && (typeof r[k] !== 'string' || !/^[a-f0-9]{64}$/.test(r[k] as string))) {
+            fail('PARTS_FIELD_TYPE', `${at} field "${k}"`, `is ${show(r[k])}; 64 lowercase hex characters are required`);
+          }
+        }
+      });
+    }
+  }
   if ('recomposite' in o && sizeOk) {
     const names = Array.isArray(o.parts) ? new Set(o.parts.map((p) => (typeof p === 'object' && p !== null ? (p as Record<string, unknown>).name : undefined)).filter((n): n is string => typeof n === 'string')) : new Set<string>();
     checkRecomposite(o.recomposite, path, size as [number, number], names, fail);

@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.32.0](https://github.com/rig-c/parts/compare/v2.31.0...v2.32.0) (2026-11-08)
+
+
+### Features
+
+* **assemble:** split two plan parts along a painted edge with assemble.edge_splits ([#1231](https://github.com/rig-c/parts/issues/1231)) ([#1235](https://github.com/rig-c/parts/issues/1235)) ([e56fa4c](https://github.com/rig-c/parts/commit/e56fa4cf666d00a8d376fda6de6d2555b495a2e0))
+
 ## [2.31.0](https://github.com/rig-c/parts/compare/v2.30.3...v2.31.0) (2026-11-08)
 
 
