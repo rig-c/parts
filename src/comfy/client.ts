@@ -100,6 +100,15 @@ export class ComfyClient {
     return s;
   }
 
+  /** Listed model files, not the node selector's advertised vocabulary. */
+  async modelFiles(folder: string): Promise<string[]> {
+    const files = await this.json('GET', `/models/${encodeURIComponent(folder)}`);
+    if (!Array.isArray(files) || !files.every((f): f is string => typeof f === 'string')) {
+      refuse('MATTE_MODEL_INSTALLED', folder, 'the model listing is not an array of file names; installed weights must be established before upload');
+    }
+    return files;
+  }
+
   /** Free VRAM per device in GB (two decimals), keyed by the device name's first word; empty when the box does not say. */
   async vramFree(): Promise<Record<string, number>> {
     const s = await this.systemStats();
