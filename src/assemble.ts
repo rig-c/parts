@@ -123,7 +123,8 @@ import { foldName, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { CORE_ALPHA, figuresPhrase, implausibleRules, type Layer, type LayerFigures, layerFigures, type LayerSet, NEAR_WHITE_MIN, OPAQUE_ALPHA_ABOVE, ruleSummary } from './layers.ts';
 import { padToSquare, squarePad } from './inputs.ts';
 import type { MotionSeamDeclaration } from './motionseams.ts';
-import { type CapRecord, type LimbRecord, FIGURE_MASK_FILE, PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, type SceneRecord, type SingleRunPad } from './parts.ts';
+import { type CapRecord, type LimbRecord, FIGURE_MASK_FILE, type OccluderGrowRecord, PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, type SceneRecord, type SingleRunPad } from './parts.ts';
+import { growMask } from './plate.ts';
 import { assignCrossedLimbs, assignOverlappingHands, type BonePlace, bonePlaces, capBox, coveredRadius, type CutPlacement, featherWeight, halfWidthAbout, inDisc, jointLine, type JointLine, jointOffsets, limbPolyline, limbRun, luma601, nearestLimb, nearestOnLine, offLineFigure, pastJoint, placeCut, polylineDist2, segmentOf } from './limbs.ts';
 import {
   alphaComposite,
@@ -5075,19 +5076,38 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   const groundShare = groundRingShare(srcr, supportPainted);
   const occSx = (x: number): number => Math.min(source.width - 1, Math.floor((x + 0.5) * source.width / W));
   const occSy = (y: number): number => Math.min(source.height - 1, Math.floor((y + 0.5) * source.height / H));
+  const occluderGrowRecords: OccluderGrowRecord[] = [];
   const occluderEntries = (input.occluders ?? []).map(({ declaration, image }, index) => {
-    const opaqueMask = newMask(W, H);
-    const copiedMask = newMask(W, H);
+    const coreBefore = newMask(W, H);
+    let coveredBefore = 0;
     for (let y = 0; y < H; y++) {
       const srcY = occSy(y);
       for (let x = 0; x < W; x++) {
         const a = image.data[(srcY * source.width + occSx(x)) * 4 + 3];
         const p = y * W + x;
-        if (a > OPAQUE_ALPHA_ABOVE) opaqueMask.data[p] = 1;
-        if (a > COPIED_ALPHA_ABOVE) copiedMask.data[p] = 1;
+        if (a > COPIED_ALPHA_ABOVE) {
+          coreBefore.data[p] = 1;
+          coveredBefore++;
+        }
       }
     }
-    return { index, declaration, opaqueMask, copiedMask };
+    const grow = declaration.grow ?? 0;
+    let copiedMask = coreBefore;
+    if (grow > 0) {
+      const grown = growMask({ width: W, height: H, inside: coreBefore.data }, grow);
+      copiedMask = newMask(W, H);
+      copiedMask.data.set(grown.inside);
+      let coveredAfter = 0;
+      for (let p = 0; p < W * H; p++) if (copiedMask.data[p] === 1) coveredAfter++;
+      occluderGrowRecords.push({
+        occluder: index,
+        image: declaration.image,
+        grow,
+        covered_px_before: coveredBefore,
+        covered_px_after: coveredAfter,
+      });
+    }
+    return { index, declaration, copiedMask };
   });
   const occluderUnderKeepByPlanPart = new Map<string, Mask>();
   if (projectRule === 'visible') {
@@ -6072,30 +6092,34 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   const stackCanvases = occluderEntries.length === 0 ? [] : stack.map(onRig);
   const occluderWithSlot = occluderEntries.map((entry) => {
     let lastUnderIdx = -1;
+    let firstOverIdx = -1;
     order.forEach((d, idx) => {
       const root = rootPlanPartOfSlot(d);
-      if (root !== null && entry.declaration.under.includes(root)) lastUnderIdx = idx;
+      if (root === null) return;
+      if (entry.declaration.under.includes(root)) lastUnderIdx = idx;
+      if (firstOverIdx < 0 && (entry.declaration.over?.includes(root) ?? false)) firstOverIdx = idx;
     });
-    return { ...entry, lastUnderIdx };
+    const insertBeforeIdx = firstOverIdx >= 0 ? firstOverIdx : lastUnderIdx + 1;
+    return { ...entry, lastUnderIdx, firstOverIdx, insertBeforeIdx };
   });
-  const builtOccluderParts: Array<{ index: number; lastUnderIdx: number; canvas: Raster; placed: PlacedPart }> = [];
-  for (const entry of [...occluderWithSlot].filter((e) => e.declaration.part !== undefined).sort((a, b) => b.lastUnderIdx - a.lastUnderIdx || b.index - a.index)) {
+  const builtOccluderParts: Array<{ index: number; insertBeforeIdx: number; canvas: Raster; placed: PlacedPart }> = [];
+  for (const entry of [...occluderWithSlot].filter((e) => e.declaration.part !== undefined).sort((a, b) => b.insertBeforeIdx - a.insertBeforeIdx || b.index - a.index)) {
     const partName = entry.declaration.part!;
     const occCanvas = newRaster(W, H);
     const occVisible = newMask(W, H);
     const occProjected = newMask(W, H);
     for (let p = 0; p < W * H; p++) {
-      if (entry.opaqueMask.data[p] !== 1) continue;
+      if (entry.copiedMask.data[p] !== 1) continue;
       let heldInFront = false;
-      for (let j = entry.lastUnderIdx + 1; j < stackCanvases.length; j++) {
-        if (stackCanvases[j].data[p * 4 + 3] > COPIED_ALPHA_ABOVE) {
+      for (let j = entry.insertBeforeIdx; j < stackCanvases.length; j++) {
+        if (stackCanvases[j].data[p * 4 + 3] >= CORE_ALPHA) {
           heldInFront = true;
           break;
         }
       }
       if (!heldInFront) {
         for (const frontOcc of builtOccluderParts) {
-          if ((frontOcc.lastUnderIdx > entry.lastUnderIdx || (frontOcc.lastUnderIdx === entry.lastUnderIdx && frontOcc.index > entry.index)) && frontOcc.canvas.data[p * 4 + 3] > COPIED_ALPHA_ABOVE) {
+          if ((frontOcc.insertBeforeIdx > entry.insertBeforeIdx || (frontOcc.insertBeforeIdx === entry.insertBeforeIdx && frontOcc.index > entry.index)) && frontOcc.canvas.data[p * 4 + 3] >= CORE_ALPHA) {
             heldInFront = true;
             break;
           }
@@ -6111,7 +6135,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     if (opaque === 0 && emptyTargets?.has(partName)) {
       builtOccluderParts.push({
         index: entry.index,
-        lastUnderIdx: entry.lastUnderIdx,
+        insertBeforeIdx: entry.insertBeforeIdx,
         canvas: occCanvas,
         placed: {
           record: {
@@ -6129,7 +6153,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       empty.push({
         code: OCCLUDER_EMPTY,
         object: `config.assemble.occluders[${entry.index}].part (part "${partName}")`,
-        detail: `has 0 rig pixels of occluder "${entry.declaration.image}" (alpha > ${OPAQUE_ALPHA_ABOVE}) after excluding the rest support (alpha > ${COPIED_ALPHA_ABOVE}) of parts drawn in front of it; omit config.assemble.occluders[${entry.index}].part when front parts already hold the entire occluder at rest`,
+        detail: `has 0 rig pixels of occluder "${entry.declaration.image}" (alpha > ${COPIED_ALPHA_ABOVE}) after excluding the held pixels (alpha >= ${CORE_ALPHA}) of parts drawn in front of it; omit config.assemble.occluders[${entry.index}].part when front parts already hold the entire occluder at rest`,
       });
       continue;
     }
@@ -6153,12 +6177,12 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     };
     builtOccluderParts.push({
       index: entry.index,
-      lastUnderIdx: entry.lastUnderIdx,
+      insertBeforeIdx: entry.insertBeforeIdx,
       canvas: occCanvas,
       placed: { record, image: crop(occCanvas, x0, y0, record.w, record.h) },
     });
   }
-  builtOccluderParts.sort((a, b) => a.lastUnderIdx - b.lastUnderIdx || a.index - b.index);
+  builtOccluderParts.sort((a, b) => a.insertBeforeIdx - b.insertBeforeIdx || a.index - b.index);
   pieceList.forEach(({ name, b, pushed: pushedHere, at, cutFrom, limb, set }) => {
     const { key, r, st, extendKeys, trace, merged, region } = b;
     // A pixel the merge wrote is judged in the extend layer's run, every other
@@ -6178,7 +6202,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       if (edged.get(name)?.data[p] !== 1 && paintingGains.get(name)?.data[p] !== 1 && retakeByName.get(name)?.data[p] !== 1 && yields.get(name)?.mask.data[p] !== 1 && trace.ring.data[p] === 0 && own.takenMask.data[p] === 1 && (region === null || region.data[p] === 1)) projected.data[p] = 1;
       if (slotIdx >= 0) {
         for (const occPart of builtOccluderParts) {
-          if (occPart.lastUnderIdx >= slotIdx && occPart.canvas.data[p * 4 + 3] >= CORE_ALPHA) {
+          if (occPart.insertBeforeIdx > slotIdx && occPart.canvas.data[p * 4 + 3] >= CORE_ALPHA) {
             visible.data[p] = 0;
             projected.data[p] = 0;
             break;
@@ -6272,7 +6296,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   const placed: PlacedPart[] = order.map((d) => ('plan' in d ? planned[d.plan] : 'cut' in d ? cutPlaced[d.cut] : 'limb' in d ? limbPlaced[d.limb] : cut[d.patch]) as PlacedPart);
   let spliceOffset = 0;
   for (const occPart of builtOccluderParts) {
-    const insertAt = occPart.lastUnderIdx + 1 + spliceOffset;
+    const insertAt = occPart.insertBeforeIdx + spliceOffset;
     placed.splice(insertAt, 0, occPart.placed);
     keepInOrder.splice(insertAt, 0, null);
     writersInOrder.splice(insertAt, 0, new Int32Array(W * H).fill(AW.sourceProjection));
@@ -6283,11 +6307,11 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     const placedCanvases = placed.map(onRig);
     for (const entry of occluderWithSlot) {
       if (entry.declaration.part !== undefined) continue;
-      const frontStart = entry.lastUnderIdx + 1 + builtOccluderParts.filter((o) => o.lastUnderIdx < entry.lastUnderIdx || (o.lastUnderIdx === entry.lastUnderIdx && o.index < entry.index)).length;
+      const frontStart = entry.insertBeforeIdx + builtOccluderParts.filter((o) => o.insertBeforeIdx < entry.insertBeforeIdx || (o.insertBeforeIdx === entry.insertBeforeIdx && o.index < entry.index)).length;
       let unheldPx = 0;
       let firstP = -1;
       for (let p = 0; p < W * H; p++) {
-        if (entry.opaqueMask.data[p] !== 1) continue;
+        if (entry.copiedMask.data[p] !== 1) continue;
         let held = false;
         for (let j = frontStart; j < placedCanvases.length; j++) {
           if (placedCanvases[j].data[p * 4 + 3] >= CORE_ALPHA) {
@@ -6301,7 +6325,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
         }
       }
       if (unheldPx > 0) {
-        occluderUnheldWarnings.push(occluderUnheldWarning(entry.index, entry.declaration.image, entry.declaration.under, unheldPx, [firstP % W, Math.floor(firstP / W)]));
+        occluderUnheldWarnings.push(occluderUnheldWarning(entry.index, entry.declaration.image, entry.declaration.under, unheldPx, [firstP % W, Math.floor(firstP / W)], CORE_ALPHA));
       }
     }
   }
@@ -6408,6 +6432,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       ghost_px: ghost,
       recomposite: recompositeRecord(figures),
       ...(sceneRecord === null ? {} : { scene: sceneRecord }),
+      ...(occluderGrowRecords.length === 0 ? {} : { occluder_grow: occluderGrowRecords }),
       ...(padRecord === null ? {} : { single_run_pad: padRecord }),
     },
     images: placed,

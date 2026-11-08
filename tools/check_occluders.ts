@@ -23,7 +23,7 @@ import { type PlanProposal, proposeFields, proposePlan, proposeSinglePlan } from
 import { assembleStage, readRuns } from '../src/build.ts';
 import { loadConfig, loadEarlyConfig, parseConfig, parseEarlyConfig } from '../src/config.ts';
 import { PartsError } from '../src/errors.ts';
-import { exportLayers, OPAQUE_ALPHA_ABOVE, readLayers, type Layer, type LayerSet } from '../src/layers.ts';
+import { CORE_ALPHA, exportLayers, OPAQUE_ALPHA_ABOVE, readLayers, type Layer, type LayerSet } from '../src/layers.ts';
 import { readLayerTag } from '../src/tags.ts';
 import {
   COPIED_ALPHA_ABOVE,
@@ -62,6 +62,9 @@ import {
   OCCLUDER,
   OCCLUDER_PX,
   OCCLUDER_RGB,
+  OCCLUDER_SPECK_ALPHA,
+  OCCLUDER_SPECK_BOX,
+  OCCLUDER_SPECK_PX,
   PARTIAL_HALF_PX,
   PARTIAL_LOWER_BOX,
   PARTIAL_OCCLUDER_RGB,
@@ -69,9 +72,15 @@ import {
   PLANT,
   plateRun as buildPlateRun,
   SIDE,
+  SOFT_OVER_INNER_BOX,
+  SOFT_OVER_INNER_PX,
+  SOFT_OVER_RING_ALPHA,
+  SOFT_OVER_RING_PX,
+  SOFT_OVER_RING_WIDTH,
   writeChainInputs,
   writePartialOverInputs,
   writePlateRun,
+  writeSoftOverInputs,
 } from '../fixtures/occluder_chain.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
@@ -1130,7 +1139,7 @@ export function runOccluderCopyChecks(dir: string, say: Say): void {
       twinPartsFile?.recomposite?.error_px === 0,
     `${twinWithPartRun.error?.message ?? 'assembled'}; order=${twinPartNames.join('->')}; top holders at alpha>=250 over ${OCCLUDER_PX} occluder px: front=${topOverPx}, occ_fg=${topOccPartPx}, behind=${topUnderPx}, empty=${topEmptyPx}; recomposite.error_px=${twinPartsFile?.recomposite?.error_px}`);
 
-  // Bar 2 (OC33): (i') No ghost — occluder part's px intersect `over` part's rest support (alpha > 128) = 0;
+  // Bar 2 (OC33): (i') No ghost — occluder part's px intersect `over` part's held core (alpha >= 250) = 0;
   // `occ_fg` holds only the lower 1,024 px [48, 64, 80, 96) with exact counts (`PARTS_COUNTS_ADD_UP` and `ASSEMBLE_COUNTS_ADD_UP`).
   const occFgMeta = twinPartsFile?.parts.find((pt) => pt.name === 'occ_fg');
   const occFgCanvas = placePartOnCanvas('out-with-part', 'occ_fg');
@@ -1144,7 +1153,7 @@ export function runOccluderCopyChecks(dir: string, say: Say): void {
         const p = (y * SIDE + x) * 4;
         const occAlpha = occFgCanvas.data[p + 3];
         const frontAlpha = frontCanvas.data[p + 3];
-        if (occAlpha > 0 && frontAlpha > COPIED_ALPHA_ABOVE) ghostOverlapPx++;
+        if (occAlpha > 0 && frontAlpha >= CORE_ALPHA) ghostOverlapPx++;
         if (isInside(PARTIAL_LOWER_BOX, x, y)) {
           if (
             occFgCanvas.data[p] === PARTIAL_OCCLUDER_RGB[0] &&
@@ -1160,7 +1169,7 @@ export function runOccluderCopyChecks(dir: string, say: Say): void {
       }
     }
   }
-  say('OC33_OCCLUDER_PART_EXCLUDES_OVER_SUPPORT_WITH_ZERO_GHOST_OVERLAP',
+  say('OC33_OCCLUDER_PART_EXCLUDES_OVER_HELD_CORE_WITH_ZERO_GHOST_OVERLAP',
     occFgMeta !== undefined &&
       occFgMeta.from === 'painting:occ_fg' &&
       occFgMeta.x === PARTIAL_LOWER_BOX[0] &&
@@ -1175,7 +1184,7 @@ export function runOccluderCopyChecks(dir: string, say: Say): void {
       ghostOverlapPx === 0 &&
       lowerExactPx === PARTIAL_HALF_PX &&
       outsideLowerOpaquePx === 0,
-    `occ_fg: from=${occFgMeta?.from}, box=[${occFgMeta?.x},${occFgMeta?.y},${occFgMeta?.w},${occFgMeta?.h}], opaque=${occFgMeta?.opaque_px}, visible=${occFgMeta?.visible_px}, occluded=${occFgMeta?.occluded_px}, overlap_with_over=${ghostOverlapPx}, lower_exact=${lowerExactPx}/${PARTIAL_HALF_PX}, outside_lower=${outsideLowerOpaquePx}`);
+    `occ_fg: from=${occFgMeta?.from}, box=[${occFgMeta?.x},${occFgMeta?.y},${occFgMeta?.w},${occFgMeta?.h}], opaque=${occFgMeta?.opaque_px}, visible=${occFgMeta?.visible_px}, occluded=${occFgMeta?.occluded_px}, overlap_with_over_core=${ghostOverlapPx}, lower_exact=${lowerExactPx}/${PARTIAL_HALF_PX}, outside_lower=${outsideLowerOpaquePx}`);
 
   // Bar 3 (OC34): (ii) Motion, `under` — in assembled `parts/behind.png`, 0 of the 2,048 occluder px carry projected
   // painting (`PARTIAL_OCCLUDER_RGB`) and all 2,048 equal `LIMB_RGB`; translating `behind` by dx = -32 out from
@@ -1394,6 +1403,273 @@ export function runOccluderCopyChecks(dir: string, say: Say): void {
       unheldLinesWithPart.length === 0 &&
       fullOverUnheldLines.length === 0,
     `partial without part: ${unheldLinesWithoutPart[0] ?? 'silent'}; partial with part: ${unheldLinesWithPart.length} WARNs; full-over without part: ${fullOverUnheldLines.length} WARNs`);
+
+  // Issue #1251 controls (OC38–OC41):
+  // OC38: Soft-edge `over` twin (ring width 4 px at alpha 200 = 704 px, inner [52,36,76,92) = 1,344 px at alpha 255).
+  const softHome = join(dir, 'occluder-soft-twin');
+  rmSync(softHome, { recursive: true, force: true });
+  const softInputs = writeSoftOverInputs(softHome);
+  const softTake = [{ run: 'full', run_dir: 'orig', st_input: 'painting.png', tags: ['objects'] }];
+  const softCfgWithPart = (): Record<string, unknown> => {
+    const cfg = chainConfig({
+      occluders: [declaration(softInputs.occluderSha, { over: ['front'], part: 'occ_fg' })],
+      take: softTake,
+    });
+    (cfg.regions as Record<string, unknown>).occ_fg = 'root';
+    return cfg;
+  };
+  const placeSoftPartOnCanvas = (outDir: string, partName: string, dx = 0, dy = 0): Raster | null => {
+    const pJsonPath = join(softHome, outDir, 'parts.json');
+    const pPngPath = join(softHome, outDir, 'parts', `${partName}.png`);
+    if (!existsSync(pJsonPath) || !existsSync(pPngPath)) return null;
+    const pf = readParts(pJsonPath);
+    const meta = pf.parts.find((pt) => pt.name === partName);
+    if (!meta) return null;
+    const cropImg = readPng(pPngPath);
+    const canvas = newRaster(SIDE, SIDE);
+    for (let cy = 0; cy < cropImg.height; cy++) {
+      for (let cx = 0; cx < cropImg.width; cx++) {
+        const tx = meta.x + cx + dx;
+        const ty = meta.y + cy + dy;
+        if (tx < 0 || tx >= SIDE || ty < 0 || ty >= SIDE) continue;
+        const si = (cy * cropImg.width + cx) * 4;
+        const di = (ty * SIDE + tx) * 4;
+        canvas.data.set(cropImg.data.subarray(si, si + 4), di);
+      }
+    }
+    return canvas;
+  };
+  const softWithPartRun = stage(softHome, softInputs.plateRunDir, softCfgWithPart(), 'out-soft-with-part');
+  const softPartsFile = softWithPartRun.error === null ? readParts(join(softHome, 'out-soft-with-part', 'parts.json')) : null;
+  const softPartNames = softPartsFile?.parts.map((pt) => pt.name) ?? [];
+  const softStackCanvases = softPartNames
+    .map((name) => ({ name, raster: placeSoftPartOnCanvas('out-soft-with-part', name) }))
+    .filter((entry): entry is { name: string; raster: Raster } => entry.raster !== null);
+  const softOccFgMeta = softPartsFile?.parts.find((pt) => pt.name === 'occ_fg');
+  const softOccFgCanvas = placeSoftPartOnCanvas('out-soft-with-part', 'occ_fg');
+  const softFrontCanvas = placeSoftPartOnCanvas('out-soft-with-part', 'front');
+  const softBehindCanvas = placeSoftPartOnCanvas('out-soft-with-part', 'behind');
+  let softRestOverPx = 0;
+  let softRestOccPartPx = 0;
+  let softRestUnderPx = 0;
+  let softPartRingExactPx = 0;
+  let softPartOutsideRingPx = 0;
+  let softPlantedOldRestUnderPx = 0;
+  for (let y = 0; y < SIDE; y++) {
+    for (let x = 0; x < SIDE; x++) {
+      const p = (y * SIDE + x) * 4;
+      const inOcc = isInside(OCCLUDER, x, y);
+      const inInner = isInside(SOFT_OVER_INNER_BOX, x, y);
+      const occAlpha = softOccFgCanvas?.data[p + 3] ?? 0;
+      if (inOcc && !inInner) {
+        if (occAlpha === 255) softPartRingExactPx++;
+      } else if (occAlpha > 0) {
+        softPartOutsideRingPx++;
+      }
+      if (!inOcc) continue;
+      let holder: string | null = null;
+      for (let i = softStackCanvases.length - 1; i >= 0; i--) {
+        if (softStackCanvases[i].raster.data[p + 3] >= CORE_ALPHA) {
+          holder = softStackCanvases[i].name;
+          break;
+        }
+      }
+      if (holder === 'front') softRestOverPx++;
+      else if (holder === 'occ_fg') softRestOccPartPx++;
+      else if (holder === 'behind') softRestUnderPx++;
+      // Planted old rule: part subtracts front support at alpha > 128 (`COPIED_ALPHA_ABOVE`), so alpha 200 on the ring excludes `occ_fg`.
+      const frontA = softFrontCanvas?.data[p + 3] ?? 0;
+      const oldOccPartA = frontA > COPIED_ALPHA_ABOVE ? 0 : 255;
+      const behindA = softBehindCanvas?.data[p + 3] ?? 0;
+      const oldTopHolder = frontA >= CORE_ALPHA ? 'front' : oldOccPartA >= CORE_ALPHA ? 'occ_fg' : behindA >= CORE_ALPHA ? 'behind' : null;
+      if (oldTopHolder === 'behind') softPlantedOldRestUnderPx++;
+    }
+  }
+  const softUnheldWarnings = softWithPartRun.lines.filter((l) => l.includes(OCCLUDER_UNHELD));
+  // Bar 6 measurement (report only): moving `front` off the occluder by dx = +36 vacates the 704 ring px, which read `occ_fg` (`PARTIAL_OCCLUDER_RGB`).
+  const softPosedOverStack = compositeStack(
+    softPartNames
+      .map((name) => ({ name, raster: placeSoftPartOnCanvas('out-soft-with-part', name, name === 'front' ? overDx : 0, 0) }))
+      .filter((entry): entry is { name: string; raster: Raster } => entry.raster !== null),
+  );
+  let vacatedSoftRingOccColourPx = 0;
+  let vacatedSoftInnerBasePx = 0;
+  for (let y = OCCLUDER[1]; y < OCCLUDER[3]; y++) {
+    for (let x = OCCLUDER[0]; x < OCCLUDER[2]; x++) {
+      const p = (y * SIDE + x) * 4;
+      const inInner = isInside(SOFT_OVER_INNER_BOX, x, y);
+      if (
+        !inInner &&
+        softPosedOverStack.data[p] === PARTIAL_OCCLUDER_RGB[0] &&
+        softPosedOverStack.data[p + 1] === PARTIAL_OCCLUDER_RGB[1] &&
+        softPosedOverStack.data[p + 2] === PARTIAL_OCCLUDER_RGB[2]
+      ) {
+        vacatedSoftRingOccColourPx++;
+      } else if (
+        inInner &&
+        softPosedOverStack.data[p] === LIMB_RGB[0] &&
+        softPosedOverStack.data[p + 1] === LIMB_RGB[1] &&
+        softPosedOverStack.data[p + 2] === LIMB_RGB[2]
+      ) {
+        vacatedSoftInnerBasePx++;
+      }
+    }
+  }
+  say('OC38_SOFT_EDGE_OVER_RING_IS_COVERED_BY_OCCLUDER_PART_WITH_ZERO_UNDER_REST_HOLDERS',
+     SOFT_OVER_RING_WIDTH === 4 &&
+      SOFT_OVER_RING_ALPHA === 200 &&
+      SOFT_OVER_INNER_PX === 1344 &&
+      SOFT_OVER_RING_PX === 704 &&
+      softWithPartRun.error === null &&
+      softRestUnderPx === 0 &&
+      softRestOverPx === 1344 &&
+      softRestOccPartPx === 704 &&
+      softUnheldWarnings.length === 0 &&
+      softOccFgMeta?.opaque_px === 704 &&
+      softPartRingExactPx === 704 &&
+      softPartOutsideRingPx === 0 &&
+      softPlantedOldRestUnderPx === 704,
+    `ring=${SOFT_OVER_RING_PX} (2048-1344); rest holders: behind=${softRestUnderPx} (want 0), front=${softRestOverPx}, occ_fg=${softRestOccPartPx}; UNHELD=${softUnheldWarnings.length}; part_ring_px=${softPartRingExactPx}/${SOFT_OVER_RING_PX} (outside=${softPartOutsideRingPx}); planted old (>128) rest under=${softPlantedOldRestUnderPx}; posed dx=+${overDx} vacated ring occ_colour=${vacatedSoftRingOccColourPx}, inner base=${vacatedSoftInnerBasePx}`);
+
+  // OC39: Speck plants — isolated speck [41,48,44,56) (24 px at alpha 20 in 9..32, 5 px off the x=48 core) produces 0 part px
+  // both without grow and under grow 3; under the planted old > 8 footprint it produces 24 part px.
+  const speckNoGrowCfg = chainConfig({
+    occluders: [declaration(softInputs.speckOccluderSha, { image: 'occluder_speck.png', over: ['front'], part: 'occ_fg' })],
+    take: partialTake,
+  });
+  (speckNoGrowCfg.regions as Record<string, unknown>).occ_fg = 'root';
+  writeFileSync(join(partHome, 'occluder_speck.png'), readFileSync(softInputs.speckOccluder));
+  const speckNoGrowRun = stage(partHome, pInputs.plateRunDir, speckNoGrowCfg, 'out-speck-no-grow');
+  const speckNoGrowCanvas = placePartOnCanvas('out-speck-no-grow', 'occ_fg');
+  const speckGrow3Cfg = chainConfig({
+    occluders: [declaration(softInputs.speckOccluderSha, { image: 'occluder_speck.png', over: ['front'], part: 'occ_fg', grow: 3 })],
+    take: partialTake,
+  });
+  (speckGrow3Cfg.regions as Record<string, unknown>).occ_fg = 'root';
+  const speckGrow3Run = stage(partHome, pInputs.plateRunDir, speckGrow3Cfg, 'out-speck-grow-3');
+  const speckGrow3Canvas = placePartOnCanvas('out-speck-grow-3', 'occ_fg');
+  const speckRaster = readPng(softInputs.speckOccluder);
+  let speckNoGrowPartPx = 0;
+  let speckGrow3PartPx = 0;
+  let plantedOldGt8SpeckPartPx = 0;
+  for (let y = OCCLUDER_SPECK_BOX[1]; y < OCCLUDER_SPECK_BOX[3]; y++) {
+    for (let x = OCCLUDER_SPECK_BOX[0]; x < OCCLUDER_SPECK_BOX[2]; x++) {
+      const p = (y * SIDE + x) * 4;
+      if ((speckNoGrowCanvas?.data[p + 3] ?? 0) > 0) speckNoGrowPartPx++;
+      if ((speckGrow3Canvas?.data[p + 3] ?? 0) > 0) speckGrow3PartPx++;
+      const occA = speckRaster.data[p + 3];
+      const frontA = frontCanvas?.data[p + 3] ?? 0;
+      if (occA > OPAQUE_ALPHA_ABOVE && frontA < CORE_ALPHA) plantedOldGt8SpeckPartPx++;
+    }
+  }
+  say('OC39_OCCLUDER_SPECK_BELOW_128_IS_EXCLUDED_FROM_PART_AND_GROW',
+    OCCLUDER_SPECK_PX === 24 &&
+      OCCLUDER_SPECK_ALPHA === 20 &&
+      OCCLUDER[0] - OCCLUDER_SPECK_BOX[2] + 1 === 5 &&
+      speckNoGrowRun.error === null &&
+      speckGrow3Run.error === null &&
+      speckNoGrowPartPx === 0 &&
+      speckGrow3PartPx === 0 &&
+      plantedOldGt8SpeckPartPx === 24,
+    `speck [41,48,44,56) (24 px at alpha 20, 5 px off core x=48): no-grow part_px=${speckNoGrowPartPx} (want 0), grow-3 part_px=${speckGrow3PartPx} (want 0), planted old (>8) part_px=${plantedOldGt8SpeckPartPx} (want 24)`);
+
+  // OC40: Placement (item 3) — when a piece cut from `under` (`behind_cuff`) sits after `front` (`over`) in the plan,
+  // `occ_fg` is placed immediately before the first `over` slot (`occ_fg` index 4 < `front` index 5 < `behind_cuff` index 6),
+  // with 0 px of `behind_cuff` inside the occluder; planted old placement (after last `under`-derived slot) puts `occ_fg` at index 6 > `front` index 4.
+  const placeAfterOverCfg = partialCfgWithPart();
+  (placeAfterOverCfg.assemble as Record<string, unknown>).cuts = [
+    {
+      from: 'behind',
+      into: 'behind_cuff',
+      polygon: [[84, 64], [112, 64], [112, 112], [84, 112]],
+      draw: 'front',
+      overlap: 0,
+    },
+  ];
+  (placeAfterOverCfg.regions as Record<string, unknown>).behind_cuff = 'root';
+  const placeAfterOverRun = stage(partHome, pInputs.plateRunDir, placeAfterOverCfg, 'out-place-before-over');
+  const placeAfterOverParts = placeAfterOverRun.error === null ? readParts(join(partHome, 'out-place-before-over', 'parts.json')) : null;
+  const placeOrderNames = placeAfterOverParts?.parts.map((pt) => pt.name) ?? [];
+  const placeOccFgIdx = placeOrderNames.indexOf('occ_fg');
+  const placeFrontIdx = placeOrderNames.indexOf('front');
+  const placeCuffIdx = placeOrderNames.indexOf('behind_cuff');
+  const cuffCanvas = placePartOnCanvas('out-place-before-over', 'behind_cuff');
+  const pOccRaster = readPng(pInputs.occluder);
+  let cuffInsideOccluderPx = 0;
+  if (cuffCanvas !== null) {
+    for (let p = 0; p < SIDE * SIDE; p++) {
+      if (cuffCanvas.data[p * 4 + 3] > OPAQUE_ALPHA_ABOVE && pOccRaster.data[p * 4 + 3] > COPIED_ALPHA_ABOVE) {
+        cuffInsideOccluderPx++;
+      }
+    }
+  }
+  const baseOrderWithoutOccPart = placeOrderNames.filter((n) => n !== 'occ_fg');
+  const plantedOldLastUnderIdx = Math.max(baseOrderWithoutOccPart.indexOf('behind'), baseOrderWithoutOccPart.indexOf('behind_cuff'));
+  const plantedOldOrder = [...baseOrderWithoutOccPart];
+  plantedOldOrder.splice(plantedOldLastUnderIdx + 1, 0, 'occ_fg');
+  const plantedOldOccFgIdx = plantedOldOrder.indexOf('occ_fg');
+  const plantedOldFrontIdx = plantedOldOrder.indexOf('front');
+  say('OC40_OCCLUDER_PART_PLACED_BEFORE_FIRST_OVER_SLOT_WHEN_UNDER_PIECE_SITS_AFTER',
+    placeAfterOverRun.error === null &&
+      placeOccFgIdx === 4 &&
+      placeFrontIdx === 5 &&
+      placeCuffIdx === 6 &&
+      placeOccFgIdx < placeFrontIdx &&
+      cuffInsideOccluderPx === 0 &&
+      plantedOldOccFgIdx === 6 &&
+      plantedOldFrontIdx === 4 &&
+      plantedOldOccFgIdx > plantedOldFrontIdx,
+    `order=${placeOrderNames.join('->')} (occ_fg=${placeOccFgIdx} < front=${placeFrontIdx} < behind_cuff=${placeCuffIdx}); cuff_inside_occluder=${cuffInsideOccluderPx}; planted old order=${plantedOldOrder.join('->')} (occ_fg=${plantedOldOccFgIdx} > front=${plantedOldFrontIdx})`);
+
+  // OC41: Grow (item 5) — on OCCLUDER [48,32,80,96) (w=32, h=64, 2,048 px):
+  // grow 0 -> 2,048 px and no `occluder_grow`; grow 2 -> (32+4)(64+4) = 2,448 px; grow 3 -> (32+6)(64+6) = 2,660 px;
+  // `occluder_grow` round-trips through `readParts`; plants `grow: 1.5`, `grow: -1`, `grow: "2"` refuse `CONFIG_FIELD_TYPE`.
+  const growCfg = (grow?: number): Record<string, unknown> => {
+    const cfg = chainConfig({
+      plan: [['face', 'full', 'face'], ['eye_r', 'full', 'eyewhite-r'], ['eye_l', 'full', 'eyewhite-l'], ['behind', 'full', 'legwear']],
+      occluders: [declaration(pInputs.occluderSha, { part: 'occ_fg', ...(grow === undefined ? {} : { grow }) })],
+    });
+    delete (cfg.regions as Record<string, unknown>).front;
+    (cfg.regions as Record<string, unknown>).occ_fg = 'root';
+    return cfg;
+  };
+  const grow0Run = stage(partHome, pInputs.plateRunDir, growCfg(0), 'out-grow-0');
+  const grow2Run = stage(partHome, pInputs.plateRunDir, growCfg(2), 'out-grow-2');
+  const grow3Run = stage(partHome, pInputs.plateRunDir, growCfg(3), 'out-grow-3');
+  const grow0Raw = grow0Run.error === null ? (JSON.parse(readFileSync(join(partHome, 'out-grow-0', 'parts.json'), 'utf8')) as Record<string, unknown>) : null;
+  const grow0Parts = grow0Run.error === null ? readParts(join(partHome, 'out-grow-0', 'parts.json')) : null;
+  const grow2Parts = grow2Run.error === null ? readParts(join(partHome, 'out-grow-2', 'parts.json')) : null;
+  const grow3Parts = grow3Run.error === null ? readParts(join(partHome, 'out-grow-3', 'parts.json')) : null;
+  const grow0Occ = grow0Parts?.parts.find((pt) => pt.name === 'occ_fg');
+  const grow2Occ = grow2Parts?.parts.find((pt) => pt.name === 'occ_fg');
+  const grow3Occ = grow3Parts?.parts.find((pt) => pt.name === 'occ_fg');
+  const badGrowPartsPath = join(partHome, 'bad-occluder-grow-parts.json');
+  if (grow2Parts !== null) {
+    const rawBadGrow = JSON.parse(readFileSync(join(partHome, 'out-grow-2', 'parts.json'), 'utf8')) as { occluder_grow: Array<Record<string, unknown>> };
+    rawBadGrow.occluder_grow[0].grow = 0;
+    writeFileSync(badGrowPartsPath, JSON.stringify(rawBadGrow));
+  }
+  const growPartsReaderRefusal = grow2Parts !== null ? refusal(() => readParts(badGrowPartsPath))?.problems.find((pr) => pr.code === 'PARTS_FIELD_TYPE' && pr.object.includes('occluder_grow[0] field "grow"')) : undefined;
+  const growFloatProb = refusal(() => parseConfig(chainConfig({ occluders: [declaration(pInputs.occluderSha, { grow: 1.5 })] })))?.problems.find((pr) => pr.code === 'CONFIG_FIELD_TYPE' && pr.object === 'config.assemble.occluders[0].grow');
+  const growNegProb = refusal(() => parseConfig(chainConfig({ occluders: [declaration(pInputs.occluderSha, { grow: -1 })] })))?.problems.find((pr) => pr.code === 'CONFIG_FIELD_TYPE' && pr.object === 'config.assemble.occluders[0].grow');
+  const growStrProb = refusal(() => parseConfig(chainConfig({ occluders: [declaration(pInputs.occluderSha, { grow: '2' })] })))?.problems.find((pr) => pr.code === 'CONFIG_FIELD_TYPE' && pr.object === 'config.assemble.occluders[0].grow');
+  say('OC41_OCCLUDER_GROW_DILATES_CORE_RECORDS_PARTS_JSON_AND_REFUSES_BAD_TYPES',
+    grow0Run.error === null &&
+      grow2Run.error === null &&
+      grow3Run.error === null &&
+      grow0Raw !== null &&
+      !('occluder_grow' in grow0Raw) &&
+      grow0Parts?.occluder_grow === undefined &&
+      grow0Occ?.opaque_px === 2048 &&
+      grow2Occ?.opaque_px === 2448 &&
+      grow3Occ?.opaque_px === 2660 &&
+      JSON.stringify(grow2Parts?.occluder_grow) === JSON.stringify([{ occluder: 0, image: 'occluder.png', grow: 2, covered_px_before: 2048, covered_px_after: 2448 }]) &&
+      JSON.stringify(grow3Parts?.occluder_grow) === JSON.stringify([{ occluder: 0, image: 'occluder.png', grow: 3, covered_px_before: 2048, covered_px_after: 2660 }]) &&
+      growPartsReaderRefusal !== undefined &&
+      growFloatProb !== undefined &&
+      growNegProb !== undefined &&
+      growStrProb !== undefined,
+    `w=32,h=64: grow0=${grow0Occ?.opaque_px} (occluder_grow=${grow0Parts?.occluder_grow}), grow2=${grow2Occ?.opaque_px} (${JSON.stringify(grow2Parts?.occluder_grow)}), grow3=${grow3Occ?.opaque_px} (${JSON.stringify(grow3Parts?.occluder_grow)}); plants: float=${growFloatProb?.code}, neg=${growNegProb?.code}, str=${growStrProb?.code}, parts=${growPartsReaderRefusal?.code}`);
 }
 
 /** `plateDir` is the harness's `comfy plate --mode occluder` output on the chain's painting and occluder (`<work>/occ-chain`). */

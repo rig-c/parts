@@ -36,6 +36,8 @@ export interface OccluderDeclaration {
   plate?: string;
   /** An optional part name (`painting:<part>`) emitted from the painting for occluder pixels not held at rest by front parts (issue #1246). */
   part?: string;
+  /** An optional non-negative integer rig-px radius by which the occluder's > 128 core is dilated on the rig grid before the under guard, the occluder part and UNHELD read it (issue #1251). */
+  grow?: number;
 }
 
 export const OCCLUDER_COLOUR_COPIED = 'ASSEMBLE_OCCLUDER_COLOUR_COPIED';
@@ -351,6 +353,6 @@ export function occluderColourWarning(index: number, copy: OccluderCopy, rgbWith
   return `WARN  ${OCCLUDER_COLOUR_COPIED}: ${AT}[${index}] part "${copy.part}" — ${copy.px} rig px of its selected layer at alpha > ${COPIED_ALPHA_ABOVE} under the occluder (alpha > 0) lie within ${rgbWithin} of the painting (max channel); first at ${copy.first[0]},${copy.first[1]}; the layer holds the occluder's own colour — take this part from a See-through run on the painting with the occluder removed (comfy plate --mode occluder)`;
 }
 
-export function occluderUnheldWarning(index: number, image: string, under: readonly string[], px: number, first: readonly [number, number]): string {
-  return `WARN  ${OCCLUDER_UNHELD}: ${AT}[${index}] — ${px} rig px of occluder "${image}" (alpha > 8, first at ${first[0]},${first[1]}) are not held at alpha >= 250 by any part drawn in front of under [${under.map((u) => `"${u}"`).join(', ')}]; declare ${AT}[${index}].part to fill the unheld occluder pixels`;
+export function occluderUnheldWarning(index: number, image: string, under: readonly string[], px: number, first: readonly [number, number], coreAlpha: number): string {
+  return `WARN  ${OCCLUDER_UNHELD}: ${AT}[${index}] — ${px} rig px of occluder "${image}" (alpha > ${COPIED_ALPHA_ABOVE}, first at ${first[0]},${first[1]}) are not held at alpha >= ${coreAlpha} by any part drawn in front of under [${under.map((u) => `"${u}"`).join(', ')}]; declare ${AT}[${index}].part to fill the unheld occluder pixels`;
 }
