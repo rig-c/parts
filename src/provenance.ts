@@ -137,6 +137,15 @@ export function provenanceLines(parts: readonly PartRecord[]): string[] {
   return lines;
 }
 
+export interface CutUnderPlateRecord {
+  receipt: string;
+  receipt_sha256: string;
+  occluder_sha256: string;
+  painting_sha256: string;
+  output_sha256: string;
+  mask_sha256: string;
+}
+
 /** Structural cut census, independent of the value partition. Counts are from
  * the original parent partition before limb/fringe/seam processing. */
 export interface CutOwnership {
@@ -149,6 +158,7 @@ export interface CutOwnership {
   under_filled_px: number;
   under_filled_opaque_px: number;
   net_cleared_opaque_px: number;
+  under_plate?: CutUnderPlateRecord;
 }
 export function ownershipLines(rows: readonly CutOwnership[]): string[] {
   return rows.map(r => `  ownership: ${r.edit} "${r.from}" -> "${r.into}" moved in ${r.moved_in_opaque_px} opaque px; retained band ${r.retained_band_opaque_px}; gross cleared ${r.cleared_opaque_px} before refill; under filled ${r.under_filled_px} px (${r.under_filled_opaque_px} opaque); net cleared ${r.net_cleared_opaque_px}; independent of RGBA equality`);

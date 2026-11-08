@@ -151,12 +151,12 @@ export function editedRunImages(runs: { full: LayerSet; head: LayerSet; single: 
   return out;
 }
 
-/** The images a config names by path that the author painted: every cut's `under` and every limb segment's `cap`. */
-export function editedConfigImages(configPath: string, cuts: ReadonlyArray<{ into: string; under?: string }>, limbs: Readonly<Record<string, { segments: ReadonlyArray<{ part: string; cap?: string }> }>> | undefined, cutsAt = 'config.assemble.cuts'): EditedImage[] {
+/** The images a config names by path that the author painted: every string-form cut's `under` and every limb segment's `cap` (a `{plate}` under carries its own machine receipt). */
+export function editedConfigImages(configPath: string, cuts: ReadonlyArray<{ into: string; under?: string | { plate: string } }>, limbs: Readonly<Record<string, { segments: ReadonlyArray<{ part: string; cap?: string }> }>> | undefined, cutsAt = 'config.assemble.cuts'): EditedImage[] {
   const base = dirname(resolve(configPath));
   const out: EditedImage[] = [];
   cuts.forEach((q, i) => {
-    if (q.under !== undefined) out.push({ object: `${cutsAt}[${i}].under (part "${q.into}")`, path: resolve(base, q.under) });
+    if (typeof q.under === 'string') out.push({ object: `${cutsAt}[${i}].under (part "${q.into}")`, path: resolve(base, q.under) });
   });
   for (const [l, limb] of Object.entries(limbs ?? {})) {
     limb.segments.forEach((sg, k) => {

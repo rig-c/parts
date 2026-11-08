@@ -22,7 +22,7 @@ import { basename, dirname, extname, join, resolve } from 'node:path';
 import { DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE, headGarmentOverlaps, headGarmentWarning, HOLES_LISTED, PROJECT_RULES, type ProjectRule, proposeFields, proposePlan, proposeSinglePlan, SEAM_RULES, type SeamRule } from './src/assemble.ts';
 import { proposeNeck } from './tools/neck-propose.ts';
 import { parseAltArg } from './tools/alternate-cli.ts';
-import { type AlternateCliInput, assembleStage, build, checkStage, ERROR_MAP_FILE, loopStage, readRuns, readSource, rigStage, suppliedCheckFlag } from './src/build.ts';
+import { type AlternateCliInput, assembleStage, build, checkStage, emitFillMasksStage, ERROR_MAP_FILE, loopStage, readRuns, readSource, rigStage, suppliedCheckFlag } from './src/build.ts';
 import { ACCEPTABLE_BARS, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, findRigc, PACK_SHAPES, rigcRunnerAt, type PackShape, PAGE_EDGES, type PageEdges, PARTS_HOME_SENTENCE, RIGC_GEOMETRY_VERSION, rigcRanClause, type RigcRunner, NO_PARTS_SENTENCE, SEAM_MEAN_BAR, SOURCE_SENTENCE, SEAM_PX_BAR, SEAM_PX_LEVEL, SPINEBOY_YARDSTICK, TEXTURE_STRETCH_CEILING } from './src/check.ts';
 import { ComfyClient, resolveHost, runBackground, runMatte, runPainting, runSeeThrough } from './src/comfy/index.ts';
 import { coreCfg, DEFAULT_GROW_PX, runForeground } from './src/plate.ts';
@@ -756,7 +756,8 @@ usage:
       encoder, out of scope.
 
   rig-parts assemble --source <painting.png> --full <dir|psd> [--head <dir|psd>]
-                       --config <config.json> --out <dir> [--seam near-white|silhouette]
+                       --config <config.json> (--out <dir> | --emit-fill-masks <dir>)
+                       [--seam near-white|silhouette]
                        [--project core|visible] [--alt <name>=<source>:<full>[:<head>]]
                        [--requirements <file.json>]
       With cut_material declared, records original source edges bound to emitted parts for check.
@@ -1180,7 +1181,7 @@ const TAKES = {
   compare: { valued: ['--left', '--right', '--map'], switches: [] },
   check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--requirements', '--set', '--environment', '--wind-band'], switches: ['--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes', '--json'] },
   loop: { valued: ['--frames', '--out'], switches: ['--palette'] },
-  assemble: { valued: ['--source', '--full', '--head', '--config', '--out', '--seam', '--project', '--alt', '--write-config', '--requirements'], switches: ['--propose-plan'] },
+  assemble: { valued: ['--source', '--full', '--head', '--config', '--out', '--emit-fill-masks', '--seam', '--project', '--alt', '--write-config', '--requirements'], switches: ['--propose-plan'] },
   'comfy seethrough': { valued: ['--image', '--out', '--resolution', '--steps', '--seed', '--prefix', '--host', '--wait', '--timeout', '--poll', '--config', '--depth-run'], switches: ['--offload', '--no-offload', '--lama', '--nf4'] },
   'comfy paint': { valued: ['--config', '--out', '--seeds', '--seed0', '--host', '--wait', '--timeout', '--poll'], switches: [] },
   'comfy matte': { valued: ['--painting', '--out', '--node', '--model', '--checkpoint-sha256', '--resolution', '--threshold', '--host', '--wait', '--timeout', '--poll'], switches: [] },
@@ -1894,9 +1895,10 @@ function cmdAssemble(args: string[]): number {
   // --head is optional (issue #359): without it the full run is the one run, and it must hold the face.
   for (const f of ['--source', '--full', '--config']) if (!flags.has(f)) return usage(`assemble needs ${f}`);
   if (propose && flags.has('--requirements')) return usage('--requirements belongs to assemble output, not --propose-plan');
-  if (propose && (flags.has('--out') || flags.has('--seam') || flags.has('--project') || alts.length > 0)) return usage('--propose-plan prints to the console; it takes none of --out, --seam, --project, --alt');
+  if (propose && (flags.has('--out') || flags.has('--emit-fill-masks') || flags.has('--seam') || flags.has('--project') || alts.length > 0)) return usage('--propose-plan prints to the console; it takes none of --out, --emit-fill-masks, --seam, --project, --alt');
   if (!propose && flags.has('--write-config')) return usage('--write-config belongs to assemble --propose-plan');
-  if (!propose && !flags.has('--out')) return usage('assemble needs --out <dir>');
+  if (!propose && flags.has('--out') && flags.has('--emit-fill-masks')) return usage('--out and --emit-fill-masks are two modes; give one');
+  if (!propose && !flags.has('--out') && !flags.has('--emit-fill-masks')) return usage('assemble needs --out <dir>');
   const seam = flags.get('--seam');
   if (seam !== undefined && !(SEAM_RULES as readonly string[]).includes(seam)) return usage(`--seam ${seam}; one of ${SEAM_RULES.join(', ')} is required`);
   const project = flags.get('--project');
@@ -1928,6 +1930,15 @@ function cmdAssemble(args: string[]): number {
         for (const line of configWriteLines(target, staged.changes)) console.error(line);
       }
       console.log(JSON.stringify(proposal, null, 2));
+      return EXIT_OK;
+    }
+    if (flags.has('--emit-fill-masks')) {
+      const cfg = loadEarlyConfig(config, 'assemble', project as ProjectRule | undefined);
+      if ((cfg.assemble.cuts ?? []).length === 0) return usage('assemble --emit-fill-masks requires at least one entry in config.assemble.cuts');
+      emitFillMasksStage(
+        { source, full, head, config, outDir: flags.get('--emit-fill-masks') as string, ...(seam === undefined ? {} : { seam: seam as SeamRule }), ...(project === undefined ? {} : { project: project as ProjectRule }) },
+        console.log,
+      );
       return EXIT_OK;
     }
     const out = flags.get('--out') as string;

@@ -249,6 +249,12 @@ export interface Patch {
  * for a `from` a limb takes (issue #564), whether the polygon takes a pixel a
  * segment of the limb holds (`ASSEMBLE_CUT_CROSSES_LIMB`).
  */
+export interface CutUnderPlate {
+  plate: string;
+}
+
+export type CutUnder = string | CutUnderPlate;
+
 export interface Cut {
   from: string;
   into: string;
@@ -262,13 +268,16 @@ export interface Cut {
    */
   overlap: number;
   /**
-   * Issue #193, optional: a PNG, its path relative to the config's directory,
-   * of what lies under the piece — in rig pixels over the polygon's bounding
-   * box (`underBox` in `src/assemble.ts`). Where the cut removed pixels from
-   * the base (the piece's pixels less the band), the base takes this image's
-   * pixels; it is read nowhere else. Absent: the base keeps only its band.
+   * Issue #193 / #1230, optional: a PNG, its path relative to the config's
+   * directory, of what lies under the piece — in rig pixels over the polygon's
+   * bounding box (`underBox` in `src/assemble.ts`) — or `{"plate": "<dir>"}`
+   * naming a `comfy plate --mode occluder` output directory whose `plate.png`
+   * is resampled to rig pixels and cropped to `underBox`. Where the cut
+   * removed pixels from the base (the piece's pixels less the band), the base
+   * takes this image's pixels; it is read nowhere else. Absent: the base keeps
+   * only its band.
    */
-  under?: string;
+  under?: CutUnder;
   /**
    * Issue #360 (item 11), optional, one value: `"colour"` — where the under
    * fills a removed pixel, the base takes the under's colour and keeps the
@@ -2881,8 +2890,13 @@ function checkCuts(c: Check, v: Json, plan: string[], patches: string[], p = 'co
     const at = `${p}[${i}]`;
     const e = c.object(at, entry, ['from', 'into', 'polygon', 'draw', 'overlap'], ['under', 'under_fill']);
     if (e === null) return;
-    if ('under' in e && !(typeof e.under === 'string' && e.under !== '')) {
-      c.fail('CONFIG_FIELD_TYPE', `${at}.under`, `is ${show(e.under)}; a non-empty path to a PNG is required, relative to the config's directory — the image of what lies under the piece, in rig pixels over the polygon's bounding box`);
+    if ('under' in e) {
+      if (typeof e.under === 'object' && e.under !== null && !Array.isArray(e.under)) {
+        const u = c.object(`${at}.under`, e.under, ['plate'], []);
+        if (u !== null && 'plate' in u) c.string(`${at}.under.plate`, u.plate);
+      } else if (!(typeof e.under === 'string' && e.under !== '')) {
+        c.fail('CONFIG_FIELD_TYPE', `${at}.under`, `is ${show(e.under)}; a non-empty path to a PNG or {"plate": "<dir>"} is required, relative to the config's directory — the image of what lies under the piece, in rig pixels over the polygon's bounding box, or a comfy plate --mode occluder output directory`);
+      }
     }
     if ('under_fill' in e && e.under_fill !== 'colour') {
       c.fail('CONFIG_FIELD_TYPE', `${at}.under_fill`, `is ${show(e.under_fill)}; "colour" is required — the base takes the under's colour and keeps the alpha the cut removed, so its silhouette does not grow; leave under_fill out for the under's colour and alpha`);

@@ -512,20 +512,45 @@ export function tagOf(from: string): string | null {
   return f === null || f.run === 'painting' ? null : f.tag;
 }
 
-const OWNERSHIP_KEYS = ['edit', 'from', 'into', 'moved_in_opaque_px', 'retained_band_opaque_px', 'cleared_opaque_px', 'under_filled_px', 'under_filled_opaque_px', 'net_cleared_opaque_px'] as const;
+const OWNERSHIP_KEYS = ['edit', 'from', 'into', 'moved_in_opaque_px', 'retained_band_opaque_px', 'cleared_opaque_px', 'under_filled_px', 'under_filled_opaque_px', 'net_cleared_opaque_px', 'under_plate'] as const;
+const REQUIRED_OWNERSHIP_KEYS = OWNERSHIP_KEYS.filter((k) => k !== 'under_plate');
 function orderedOwnership(rows: readonly CutOwnership[]): Array<Record<string, unknown>> {
-  return rows.map(r => Object.fromEntries(OWNERSHIP_KEYS.map(k => [k, r[k]])));
+  return rows.map((r) => ({
+    ...Object.fromEntries(REQUIRED_OWNERSHIP_KEYS.map((k) => [k, r[k]])),
+    ...(r.under_plate === undefined
+      ? {}
+      : {
+          under_plate: Object.fromEntries(OCCLUDER_PLATE_KEYS.map((k) => [k, r.under_plate![k]])),
+        }),
+  }));
+}
+function checkOccluderPlateEntry(entry: unknown, at: string, fail: (code: string, object: string, detail: string) => void): void {
+  if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+    fail('PARTS_FIELD_TYPE', at, `is ${show(entry)}; an object is required`);
+    return;
+  }
+  const r = entry as Record<string, unknown>;
+  for (const k of Object.keys(r)) if (!(OCCLUDER_PLATE_KEYS as readonly string[]).includes(k)) fail('PARTS_KEY_KNOWN', `${at} key "${k}"`, `is not an occluder_plates field; known: ${OCCLUDER_PLATE_KEYS.join(', ')}`);
+  for (const k of OCCLUDER_PLATE_KEYS) if (!(k in r)) fail('PARTS_FIELD_PRESENT', `${at} field "${k}"`, 'is absent and required');
+  if ('receipt' in r && (typeof r.receipt !== 'string' || r.receipt.length === 0)) fail('PARTS_FIELD_TYPE', `${at} field "receipt"`, `is ${show(r.receipt)}; a non-empty string path is required`);
+  for (const k of ['receipt_sha256', 'occluder_sha256', 'painting_sha256', 'output_sha256', 'mask_sha256'] as const) {
+    if (k in r && (typeof r[k] !== 'string' || !/^[a-f0-9]{64}$/.test(r[k] as string))) {
+      fail('PARTS_FIELD_TYPE', `${at} field "${k}"`, `is ${show(r[k])}; 64 lowercase hex characters are required`);
+    }
+  }
 }
 function checkOwnership(raw: unknown, object: string, fail: (code: string, object: string, detail: string) => void): void {
   if (!Array.isArray(raw)) { fail('PARTS_FIELD_TYPE', object, `is ${show(raw)}; an array of indexed cut ownership records is required`); return; }
   const seen = new Set<string>();
   raw.forEach((row, i) => {
     const r = row as CutOwnership | null;
-    const shape = r !== null && typeof r === 'object' && !Array.isArray(r) && Object.keys(r).sort().join(',') === [...OWNERSHIP_KEYS].sort().join(',') &&
+    const keys = r !== null && typeof r === 'object' && !Array.isArray(r) ? Object.keys(r).filter((k) => k !== 'under_plate').sort().join(',') : '';
+    const shape = r !== null && typeof r === 'object' && !Array.isArray(r) && keys === [...REQUIRED_OWNERSHIP_KEYS].sort().join(',') &&
       typeof r.edit === 'string' && /^cuts\[\d+\]$/.test(r.edit) && !seen.has(r.edit) && typeof r.from === 'string' && r.from !== '' && typeof r.into === 'string' && r.into !== '' &&
-      OWNERSHIP_KEYS.slice(3).every(k => Number.isSafeInteger(r[k]) && (k === 'net_cleared_opaque_px' || (r[k] as number) >= 0));
+      REQUIRED_OWNERSHIP_KEYS.slice(3).every(k => Number.isSafeInteger(r[k]) && (k === 'net_cleared_opaque_px' || (r[k] as number) >= 0));
     if (!shape) { fail('PARTS_FIELD_TYPE', `${object}[${i}]`, `is ${show(row)}; a distinct cuts[i] with from/into names, nonnegative move/clear/fill counts and signed net_cleared_opaque_px is required`); return; }
     const q = r as CutOwnership; seen.add(q.edit);
+    if ('under_plate' in q && q.under_plate !== undefined) checkOccluderPlateEntry(q.under_plate, `${object}[${i}].under_plate`, fail);
     if (q.moved_in_opaque_px - q.retained_band_opaque_px !== q.cleared_opaque_px || q.cleared_opaque_px - q.under_filled_opaque_px !== q.net_cleared_opaque_px || q.under_filled_opaque_px > q.under_filled_px) {
       fail('PARTS_COUNTS_ADD_UP', `${object}[${i}]`, `moved ${q.moved_in_opaque_px} - retained ${q.retained_band_opaque_px} = ${q.moved_in_opaque_px - q.retained_band_opaque_px} (gross cleared ${q.cleared_opaque_px} required); cleared - opaque fill ${q.under_filled_opaque_px} = ${q.cleared_opaque_px - q.under_filled_opaque_px} (net ${q.net_cleared_opaque_px} required); opaque fill must be at most total fill ${q.under_filled_px}`);
     }
@@ -930,22 +955,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
     if (!Array.isArray(o.occluder_plates) || o.occluder_plates.length === 0) {
       fail('PARTS_FIELD_TYPE', `${path} field "occluder_plates"`, `is ${show(o.occluder_plates)}; a non-empty array of occluder plate records is required`);
     } else {
-      o.occluder_plates.forEach((entry, i) => {
-        const at = `${path} occluder_plates[${i}]`;
-        if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
-          fail('PARTS_FIELD_TYPE', at, `is ${show(entry)}; an object is required`);
-          return;
-        }
-        const r = entry as Record<string, unknown>;
-        for (const k of Object.keys(r)) if (!(OCCLUDER_PLATE_KEYS as readonly string[]).includes(k)) fail('PARTS_KEY_KNOWN', `${at} key "${k}"`, `is not an occluder_plates field; known: ${OCCLUDER_PLATE_KEYS.join(', ')}`);
-        for (const k of OCCLUDER_PLATE_KEYS) if (!(k in r)) fail('PARTS_FIELD_PRESENT', `${at} field "${k}"`, 'is absent and required');
-        if ('receipt' in r && (typeof r.receipt !== 'string' || r.receipt.length === 0)) fail('PARTS_FIELD_TYPE', `${at} field "receipt"`, `is ${show(r.receipt)}; a non-empty string path is required`);
-        for (const k of ['receipt_sha256', 'occluder_sha256', 'painting_sha256', 'output_sha256', 'mask_sha256'] as const) {
-          if (k in r && (typeof r[k] !== 'string' || !/^[a-f0-9]{64}$/.test(r[k] as string))) {
-            fail('PARTS_FIELD_TYPE', `${at} field "${k}"`, `is ${show(r[k])}; 64 lowercase hex characters are required`);
-          }
-        }
-      });
+      o.occluder_plates.forEach((entry, i) => checkOccluderPlateEntry(entry, `${path} occluder_plates[${i}]`, fail));
     }
   }
   if ('recomposite' in o && sizeOk) {
