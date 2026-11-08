@@ -18,3 +18,5 @@ export { ComfyClient, type ClientTiming, resolveHost } from './client.ts';
 export { runPainting, type PaintRun, type Painted } from './painting.ts';
 export { runBackground, type BackgroundRun } from './plate.ts';
 export { runSeeThrough, type SeeThroughResult, type SeeThroughRun } from './seethrough.ts';
+
+export { runMatte, type MatteRun } from './matte.ts';

@@ -7,7 +7,7 @@
  * inpainting run, lives in `src/comfy/plate.ts` and carries the graphs this
  * file builds.
  *
- * 🔒 **The mask comes from a source, never a hand polygon.** Two sources are
+ * 🔒 **The mask comes from a source, never a hand polygon.** Three sources are
  * read, and nothing else:
  *
  * - `seethrough:<dir>`: a See-through run in the wrapper form (`layers.json`
@@ -15,7 +15,9 @@
  *   `OPAQUE_ALPHA_ABOVE`, on the run's own canvas;
  * - `figure-mask:<dir>`: an assemble output whose `parts.json` declares a
  *   `scene`, the figure being the `figure_rig.png` assemble wrote beside it
- *   (opaque white inside the figure, opaque black outside).
+ *   (opaque white inside the figure, opaque black outside);
+ * - `matte:<dir>`: a model mask whose receipt binds both raw and final masks
+ *   to the exact painting bytes and the recorded threshold/transform.
  *
  * The mask is taken on its own grid and never fitted: a source whose grid is
  * not the painting's size is refused by name. With no source the command
@@ -26,6 +28,7 @@
  * of every file it names; `verifyPlateReceipt` reads it back against the bytes
  * on disk. Every path in it is relative to the receipt's own directory.
  */
+import { readMatteSource } from './matte.ts';
 import { isSeeThroughTransform, inverseSeeThroughMask } from './seethrough-transform.ts';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -48,7 +51,7 @@ export const PLATE_RECEIPT_KEYS = ['spec', 'mode', 'painting', 'mask', 'model', 
 
 export type PlateMode = 'background' | 'foreground';
 export type PlateGraph = 'lama' | 'core';
-export type MaskSource = 'seethrough' | 'figure-mask';
+export type MaskSource = 'seethrough' | 'figure-mask' | 'matte';
 
 /** The graph ids a receipt names: one per background graph, and the fixed local id of the foreground derivation. */
 export const PLATE_GRAPH_IDS = {
@@ -92,10 +95,10 @@ export function declaredChecksum(value: string | undefined): string {
 /** `--mask-from <source>:<dir>`, parsed; an absent or unknown source is refused by name. */
 export function parseMaskFrom(value: string | undefined): { source: MaskSource; dir: string } {
   if (value === undefined) {
-    fail('PLATE_MASK_SOURCE', '--mask-from', 'is absent; a source mask is required — seethrough:<run dir> (run `rig-parts comfy seethrough` on the painting) or figure-mask:<assemble out dir> (run `assemble` with config.scene); a hand-drawn mask is not taken');
+    fail('PLATE_MASK_SOURCE', '--mask-from', 'is absent; a source mask is required — seethrough:<run dir> (run `rig-parts comfy seethrough` on the painting) or figure-mask:<assemble out dir> (run `assemble` with config.scene), or matte:<matte out dir> (run `rig-parts comfy matte`); a hand-drawn mask is not taken');
   }
-  const m = /^(seethrough|figure-mask):(.+)$/.exec(value);
-  if (m === null) fail('PLATE_MASK_SOURCE', '--mask-from', `is ${JSON.stringify(value)}; seethrough:<dir> or figure-mask:<dir> is required`);
+  const m = /^(seethrough|figure-mask|matte):(.+)$/.exec(value);
+  if (m === null) fail('PLATE_MASK_SOURCE', '--mask-from', `is ${JSON.stringify(value)}; seethrough:<dir>, figure-mask:<dir> or matte:<dir> is required`);
   return { source: m[1] as MaskSource, dir: m[2] };
 }
 
@@ -224,7 +227,11 @@ function bindFigureSource(dir: string, parts: Record<string, unknown>, partsByte
  */
 export function readSourceMask(source: MaskSource, dir: string, width: number, height: number, painting?: Raster, paintingBytes?: Uint8Array): FigureMask {
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
-    fail('PLATE_MASK_SOURCE', `${source}:${dir}`, `is not a directory; ${source === 'seethrough' ? 'a See-through run directory (from `rig-parts comfy seethrough`)' : 'an assemble output directory with parts.json and figure_rig.png'} is required`);
+    fail('PLATE_MASK_SOURCE', `${source}:${dir}`, `is not a directory; ${source === 'seethrough' ? 'a See-through run directory (from `rig-parts comfy seethrough`)' : source === 'matte' ? 'a comfy matte directory with receipt.json, model-mask.png and mask.png' : 'an assemble output directory with parts.json and figure_rig.png'} is required`);
+  }
+  if (source === 'matte') {
+    const mask = readMatteSource(dir, paintingBytes, width, height);
+    return { width, height, inside: Uint8Array.from({ length: width * height }, (_, p) => mask.data[p * 4] === 255 ? 1 : 0) };
   }
   let inside: Uint8Array = new Uint8Array(width * height);
   if (source === 'seethrough') {

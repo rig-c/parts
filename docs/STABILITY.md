@@ -213,7 +213,8 @@ defaults are the help's too, and none is guessed from the art.
 | `sheet` | `--source`, `--layers` (repeatable), `--out`; optional `--cell`, `--cols` |
 | `inputs` | `--source`, `--config`, `--out` |
 | `comfy` | `paint`: `--config`, `--out`; optional `--seeds`, `--seed0`, `--host`, `--wait`, `--timeout`, `--poll` |
-| `comfy` | `plate`: `--mode` (`background` or `foreground`), `--painting`, `--mask-from` (`seethrough:<dir>` or `figure-mask:<dir>`), `--out`; with `--mode background` also `--checkpoint-sha256` (required) and optional `--graph` (`lama` or `core`), `--model` (required with `core`), `--seed`, `--grow`, `--steps`, `--prompt`, `--negative` (the last three with `core` only), `--host`, `--wait`, `--timeout`, `--poll` (issue #1183, additive) |
+| `comfy` | `matte`: `--painting`, `--out`, `--node` (`BiRefNetRMBG`), `--model` (`BiRefNet-HR-matting`), `--checkpoint-sha256` (declared, required); optional `--resolution`, `--threshold`, `--host`, `--wait`, `--timeout`, `--poll` (issue #1204) |
+| `comfy` | `plate`: `--mode` (`background` or `foreground`), `--painting`, `--mask-from` (`seethrough:<dir>`, `figure-mask:<dir>` or `matte:<dir>`), `--out`; with `--mode background` also `--checkpoint-sha256` (required) and optional `--graph` (`lama` or `core`), `--model` (required with `core`), `--seed`, `--grow`, `--steps`, `--prompt`, `--negative` (the last three with `core` only), `--host`, `--wait`, `--timeout`, `--poll` (issue #1183, additive) |
 | `comfy` | `seethrough`: `--image`, `--out`; optional `--resolution`, `--steps`, `--seed`, `--prefix`, `--offload`, `--no-offload`, `--lama`, `--nf4`, `--host`, `--wait`, `--timeout`, `--poll`, `--config` (See-through settings and optional depth block), `--depth-run` (`full` or `head`, required with the block) |
 | `assemble` | `--propose-plan` with `--source`, `--full`, `--config`, optional `--head`, `--write-config` (must name `--config` itself, issue #356); or `--source`, `--full`, `--config`, `--out`, optional `--head` (without it, one run: issue #359), `--seam` (near-white, silhouette), `--project` (core, visible), `--alt` (repeatable `<name>=<source>:<full>[:<head>]`, issue #454), `--requirements` (source-bound cut-material evidence only when the file declares `cut_material`, issue #888) |
 | `head-crop-preflight` | `--full`, `--canvas`, `--head-box` (JSON coordinate array); read-only advice before the head run, original alpha > 8 samples (issue #1082) |
@@ -445,7 +446,7 @@ new spec version. Every path in it is relative to the receipt's directory.
 | `spec` | `"rig-parts-plate-receipt/1"` |
 | `mode` | `"background"` or `"foreground"` |
 | `painting` | `{ path, sha256 }` of the painting read |
-| `mask` | `{ source, from, path, sha256 }`: `source` is `"seethrough"` or `"figure-mask"`, `from` the source directory, `path` the mask actually used (`mask.png`, opaque white inside) |
+| `mask` | `{ source, from, path, sha256 }`: `source` is `"seethrough"`, `"figure-mask"` or `"matte"`, `from` the source directory, `path` the mask actually used (`mask.png`, opaque white inside) |
 | `model` | `{ name, checkpoint_sha256, checkpoint_sha256_from }`, or null for `foreground`. `checkpoint_sha256` is the `--checkpoint-sha256` value, lower-cased; `checkpoint_sha256_from` is `"declared"`: the box reports no hash, so this field is **declared, not measured** |
 | `params` | every parameter of the run, the seed included, in a fixed order per graph: `lama` — `seed`, `grow_px`, `mask_alpha_above`; `core` — `seed`, `grow_px`, `steps`, `cfg`, `sampler`, `scheduler`, `denoise`, `prompt`, `negative`, `mask_alpha_above`; `foreground` — `mask_alpha_above` |
 | `graph` | `"rig-parts/plate-background-lama/1"`, `"rig-parts/plate-background-core/1"`, or the fixed local id `"rig-parts/plate-foreground/1"` |
@@ -454,6 +455,43 @@ new spec version. Every path in it is relative to the receipt's directory.
 
 The receipt is read back against the bytes on disk before `<out>` is published;
 a hash that is not its file's refuses the run.
+
+### Matte source receipt
+
+`comfy matte` writes `model-mask.png` (the exact downloaded grayscale model
+output), `mask.png` (opaque binary mask on the painting grid) and `receipt.json`,
+spec `rig-parts-matte-receipt/1`. Node and model are explicit flags. The supported
+pair is `BiRefNetRMBG` / `BiRefNet-HR-matting`. The model file must also appear in
+`/models/RMBG` before any upload. Queue submission appends behind existing jobs.
+The node has blur and offset zero, inversion and foreground refinement disabled.
+
+The ordered receipt keys are `spec`, `painting`, `model`, `params`, `graph`,
+`gpu`, `input_transform`, `input_sha256`, `raw_output`, `output`. `painting`
+records its relative path and the SHA-256 of the source file bytes. `model`
+records node, name, `checkpoint_sha256` and `checkpoint_sha256_from: "declared"`.
+`params` records every node option, resolution, threshold and
+`mask_rule: "red-above-threshold"`. `graph` records
+`id: "rig-parts/matte-BiRefNetRMBG/1"`, the submitted API graph and its SHA-256
+(over UTF-8 `JSON.stringify(api)`). `gpu` is the device the server names.
+`raw_output` and `output` each record a fixed relative path, SHA-256, width and
+height. Paths to output masks cannot redirect the reader to another file.
+
+For a non-square painting, `input_transform` uses the #1197 shape documented
+below. Its `pad_fill` describes the model's input after `LoadImage` IMAGE
+separates alpha from RGB. The matte graph feeds that IMAGE output to the model.
+`input_sha256` binds the prepared PNG upload. Square paintings retain their
+original upload bytes and record a null transform. Resolution defaults to 1024
+and applies to the non-square prepared square. It must be a multiple of 8 in
+[64,2048]. The threshold defaults to 10 and must be an integer in [0,254].
+Each grayscale byte strictly above the threshold becomes foreground. The recorded
+nearest-pixel-centre inverse maps that classification to the painting grid.
+
+`--mask-from matte:<dir>` binds the supplied painting's exact bytes, both mask
+file hashes, the prepared input, the complete graph, and the final mask's exact
+reproduction from the raw mask and recorded parameters. Missing or legacy
+receipts, another painting, tampering, inconsistent geometry and empty masks
+are named refusals before any plate output or network request. A matte source is
+available to both plate modes. Staged output is read back before publication.
 
 ### Head-crop preflight stdout
 
