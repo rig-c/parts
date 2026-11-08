@@ -23,6 +23,13 @@ export function takenTransportProblems(transport: TakenLayerTransport, image: Ra
   }
   return [];
 }
+export interface TakenLayerSplit {
+  occluder: number;
+  image: string;
+  sha256: string;
+  covered_px: number;
+  visible_px: number;
+}
 export interface TakenLayerSource {
   run: 'full' | 'head';
   tag: string;
@@ -34,6 +41,7 @@ export interface TakenLayerSource {
   checked_px: number;
   differing_px: 0;
   transport?: TakenLayerTransport;
+  split?: TakenLayerSplit;
 }
 export function unionTakenSources(lists: readonly (readonly TakenLayerSource[] | undefined)[]): TakenLayerSource[] {
   const out: TakenLayerSource[] = [];
@@ -51,7 +59,7 @@ export function takenSourceProblems(value: unknown, at: string): Problem[] {
     if (typeof item !== 'object' || item === null || Array.isArray(item)) { fail('each source must be a complete identity receipt'); continue; }
     const o = item as Record<string, unknown>;
     const tag = typeof o.tag === 'string' ? readLayerTag(o.tag) : null;
-    if (Object.keys(o).some(k => !keys.includes(k) && k !== 'transport') || keys.some(k => !(k in o)) ||
+    if (Object.keys(o).some(k => !keys.includes(k) && k !== 'transport' && k !== 'split') || keys.some(k => !(k in o)) ||
         (o.run !== 'full' && o.run !== 'head') || tag === null || tag.group === 'author' ||
         ['run_dir', 'st_input', 'prompt_id'].some(k => typeof o[k] !== 'string' || !(o[k] as string).trim()) ||
         !Number.isSafeInteger(o.seed) || (o.seed as number) < 0 ||
@@ -70,6 +78,17 @@ export function takenSourceProblems(value: unknown, at: string): Problem[] {
         fail('transport requires exactly crop, donor_canvas, target_canvas, scale, translate, filter and three lowercase RGBA SHA-256 hashes');
       } else if ((t.filter === 'exact') !== (t.scale[0] === 1 && t.scale[1] === 1 && t.translate.every(Number.isSafeInteger))) {
         fail('transport filter exact requires unit scale and integer translation; every other map requires bilinear');
+      }
+    }
+    if (o.split !== undefined) {
+      const s = o.split as Record<string, unknown> | null;
+      const splitFields = ['occluder', 'image', 'sha256', 'covered_px', 'visible_px'];
+      if (typeof s !== 'object' || s === null || Array.isArray(s) || Object.keys(s).length !== splitFields.length || splitFields.some(k => !(k in s)) ||
+          !Number.isSafeInteger(s.occluder) || (s.occluder as number) < 0 ||
+          typeof s.image !== 'string' || !s.image.trim() ||
+          typeof s.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(s.sha256) ||
+          ['covered_px', 'visible_px'].some(k => !Number.isSafeInteger(s[k]) || (s[k] as number) <= 0)) {
+        fail('split requires exactly nonnegative safe integer occluder, nonempty image, lowercase SHA-256 sha256, and positive safe integers covered_px and visible_px');
       }
     }
     const key = JSON.stringify([o.run, o.tag, o.run_dir]);
