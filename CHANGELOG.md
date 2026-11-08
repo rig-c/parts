@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.28.0](https://github.com/rig-c/parts/compare/v2.27.2...v2.28.0) (2026-11-08)
+
+
+### Features
+
+* **comfy:** receipted figure-plus-prop matte as a plate mask source ([#1204](https://github.com/rig-c/parts/issues/1204)) ([#1206](https://github.com/rig-c/parts/issues/1206)) ([4c9217f](https://github.com/rig-c/parts/commit/4c9217f7073adef3885b7117a3a5d9db27709d77))
+
+
+### Bug Fixes
+
+* **seethrough:** carry painting alpha so a non-square pad reaches the model transparent ([#1205](https://github.com/rig-c/parts/issues/1205)) ([#1207](https://github.com/rig-c/parts/issues/1207)) ([367a33d](https://github.com/rig-c/parts/commit/367a33d98c7f8bbc9c23686af4a4571c96b5d198))
+
 ## [2.27.2](https://github.com/rig-c/parts/compare/v2.27.1...v2.27.2) (2026-11-07)
 
 
