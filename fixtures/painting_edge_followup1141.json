@@ -8,21 +8,6 @@
       "x": 428,
       "y": 49,
       "cause": "combined-guard-revert"
-    },
-    {
-      "x": 248,
-      "y": 385,
-      "cause": "silhouette-clear-reconnected"
-    },
-    {
-      "x": 237,
-      "y": 764,
-      "cause": "partial-fallback-held-clear"
-    },
-    {
-      "x": 238,
-      "y": 764,
-      "cause": "partial-fallback-held-clear"
     }
   ]
 }
