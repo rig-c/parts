@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.29.0](https://github.com/rig-c/parts/compare/v2.28.0...v2.29.0) (2026-11-08)
+
+
+### Features
+
+* **plate:** run the core graph on off-grid paintings through a recorded pad-to-8 transform ([#1209](https://github.com/rig-c/parts/issues/1209)) ([#1212](https://github.com/rig-c/parts/issues/1212)) ([a791021](https://github.com/rig-c/parts/commit/a79102116c742ebfff2faaf3cf9bf17b22c6cc64))
+
 ## [2.28.0](https://github.com/rig-c/parts/compare/v2.27.2...v2.28.0) (2026-11-08)
 
 
