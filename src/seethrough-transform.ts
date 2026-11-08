@@ -1,6 +1,8 @@
 import { newRaster, type Raster } from './raster/types.ts';
 import { resize } from './raster/resize.ts';
 
+export type SeeThroughPadFill = 'rgba-zero' | 'rgb-black-opaque';
+
 /** image_sha256 in the enclosing run record binds the source PNG bytes. */
 export interface SeeThroughTransform {
   source: [number, number];
@@ -8,13 +10,17 @@ export interface SeeThroughTransform {
   pad: [number, number];
   scale: number;
   resample: 'parts-lanczos3-rgba';
-  pad_fill: 'rgb-black-opaque';
+  pad_fill: SeeThroughPadFill;
   target: [number, number];
   inverse: 'nearest-pixel-centres';
 }
 
 /** Prepare only non-square images. Square inputs keep their original upload bytes. */
-export function prepareSeeThroughInput(source: Raster, resolution: number): { image: Raster; transform?: SeeThroughTransform } {
+export function prepareSeeThroughInput(
+  source: Raster,
+  resolution: number,
+  padFill: SeeThroughPadFill,
+): { image: Raster; transform?: SeeThroughTransform } {
   if (source.width === source.height) return { image: source };
   const side = Math.max(source.width, source.height);
   const left = Math.floor((side - source.width) / 2);
@@ -27,7 +33,7 @@ export function prepareSeeThroughInput(source: Raster, resolution: number): { im
     image: resize(padded, resolution, resolution, 'lanczos3'),
     transform: {
       source: [source.width, source.height], padded: [side, side], pad: [left, top],
-      scale: resolution / side, resample: 'parts-lanczos3-rgba', pad_fill: 'rgb-black-opaque', target: [resolution, resolution], inverse: 'nearest-pixel-centres',
+      scale: resolution / side, resample: 'parts-lanczos3-rgba', pad_fill: padFill, target: [resolution, resolution], inverse: 'nearest-pixel-centres',
     },
   };
 }
@@ -43,7 +49,9 @@ export function isSeeThroughTransform(value: unknown, width: number, height: num
     side === Math.max(width, height) && v.padded[1] === side &&
     v.pad[0] >= 0 && v.pad[1] >= 0 && v.pad[0] + width <= side && v.pad[1] + height <= side &&
     v.target[0] === targetWidth && v.target[1] === targetHeight && targetWidth > 0 && targetWidth === targetHeight &&
-    v.scale === targetWidth / side && v.resample === 'parts-lanczos3-rgba' && v.pad_fill === 'rgb-black-opaque' && v.inverse === 'nearest-pixel-centres';
+    v.scale === targetWidth / side && v.resample === 'parts-lanczos3-rgba' &&
+    (v.pad_fill === 'rgba-zero' || v.pad_fill === 'rgb-black-opaque') &&
+    v.inverse === 'nearest-pixel-centres';
 }
 
 /** Sample the union at transformed source pixel centres. Sub-grid detail cannot be recovered. */

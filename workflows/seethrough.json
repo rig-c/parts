@@ -1,8 +1,12 @@
 {
-  "_comment": "API-format graph for jtydhr88/ComfyUI-See-through (its node classes and inputs as a box running the wrapper lists them on /object_info; the adapter checks every node and input against the box's own /object_info before it submits). Every %NAME% string is filled by src/graphs.ts fillSeeThrough, and a placeholder nothing fills is refused before submission. The LoadImage 'upload' widget of the UI format is left out: it is not an input /object_info lists. Top-level keys starting with _ are annotations and are dropped before /prompt. SeeThrough_SavePSD writes one PNG per layer and a <prefix>_<timestamp>_layers.json manifest into the box's output directory, and records that manifest's file name in output/seethrough_psd_info.log; the two SaveImage nodes are previews and are what /history lists.",
+  "_comment": "API-format graph for jtydhr88/ComfyUI-See-through (its node classes and inputs as a box running the wrapper lists them on /object_info; the adapter checks every node and input against the box's own /object_info before it submits). Every %NAME% string is filled by src/graphs.ts fillSeeThrough, and a placeholder nothing fills is refused before submission. The LoadImage 'upload' widget of the UI format is left out: it is not an input /object_info lists. LoadImage's IMAGE (output 0) and MASK (output 1) rejoin through JoinImageWithAlpha so a 4-channel RGBA image reaches SeeThrough_GenerateLayers. Top-level keys starting with _ are annotations and are dropped before /prompt. SeeThrough_SavePSD writes one PNG per layer and a <prefix>_<timestamp>_layers.json manifest into the box's output directory, and records that manifest's file name in output/seethrough_psd_info.log; the two SaveImage nodes are previews and are what /history lists.",
   "1": {
     "class_type": "LoadImage",
     "inputs": { "image": "%IMAGE%" }
+  },
+  "10": {
+    "class_type": "JoinImageWithAlpha",
+    "inputs": { "image": ["1", 0], "alpha": ["1", 1] }
   },
   "2": {
     "class_type": "SeeThrough_LoadLayerDiffModel",
@@ -19,7 +23,7 @@
   "3": {
     "class_type": "SeeThrough_GenerateLayers",
     "inputs": {
-      "image": ["1", 0],
+      "image": ["10", 0],
       "layerdiff_model": ["2", 0],
       "seed": "%SEED%",
       "resolution": "%RESOLUTION%",
