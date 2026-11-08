@@ -106,6 +106,21 @@ export function declaredChecksum(value: string | undefined): string {
   return value.toLowerCase();
 }
 
+/** `--cfg <number>` for `--graph core`: a finite number above 0, or `CORE_DEFAULTS.cfg` when absent; refused on `lama`. */
+export function coreCfg(value: number | string | undefined, graph: PlateGraph): number {
+  if (graph !== 'core') {
+    if (value !== undefined) fail('PLATE_CORE_CFG', '--cfg', 'is for --graph core; the lama graph takes no CFG parameter');
+    return CORE_DEFAULTS.cfg;
+  }
+  if (value === undefined) return CORE_DEFAULTS.cfg;
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  const n = typeof value === 'number' ? value : /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed) ? Number(trimmed) : NaN;
+  if (!Number.isFinite(n) || n <= 0) {
+    fail('PLATE_CORE_CFG', '--cfg', `is ${typeof value === 'number' ? String(value) : JSON.stringify(value)}; a finite number above 0 is required`);
+  }
+  return n;
+}
+
 /** `--mask-from <source>:<dir>`, parsed; an absent or unknown source is refused by name. */
 export function parseMaskFrom(value: string | undefined): { source: MaskSource; dir: string } {
   if (value === undefined) {
