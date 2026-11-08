@@ -74,7 +74,7 @@ export async function runPainting(client: ComfyClient, run: PaintRun, say: (line
   const drawn = control === null ? null : controlImage(control.skeleton, run.pose, w, h);
   const skeletonName = drawn === null ? null : `spine_parts_${drawn.label}_${w}x${h}.png`;
   const probe = paintingGraph(g, seeds[0], prompts, `spine_parts_${run.config.key}_${seeds[0]}`, skeletonName);
-  refuseIfAny(checkGraph(probe, await client.objectInfo(), client.host, new Set(['30.image'])));
+  refuseIfAny(checkGraph(probe, await client.objectInfo(run.wait), client.host, new Set(['30.image'])));
   say('  box: every node, input and model of the painting graph is on its /object_info');
 
   let skeletonRef: string | null = null;

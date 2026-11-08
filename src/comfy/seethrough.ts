@@ -92,7 +92,7 @@ export async function runSeeThrough(client: ComfyClient, run: SeeThroughRun, say
   const uploadName = `${prefix}_input.png`;
   const template: unknown = JSON.parse(readFileSync(SEETHROUGH_WORKFLOW, 'utf8'));
   const params: SeeThroughParams = { image: uploadName, seed: run.seed, resolution: run.resolution, steps: run.steps, quant: run.quant, offload: run.offload, lama: run.lama, prefix };
-  const info = await client.objectInfo();
+  const info = await client.objectInfo(run.wait);
   refuseIfAny(checkGraph(fillSeeThrough(template, params), info, client.host, new Set(['1.image'])));
   say(`  box: every node and input of workflows/seethrough.json is on its /object_info`);
 

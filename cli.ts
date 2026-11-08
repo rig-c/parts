@@ -2028,7 +2028,7 @@ async function cmdComfyPlate(v: Map<string, string>, on: Set<string> = new Set()
     console.log(`rig-parts comfy plate: ${mode} (${graph}) ${painting} -> ${out}`);
     // Every local refusal (no source mask, the checksum, the grid) comes before the host is resolved.
     const r = await runBackground(
-      () => new ComfyClient(resolveHost(v.get('--host'), process.env.COMFY_HOST), { poll: poll as number, request: 30 }),
+      () => new ComfyClient(resolveHost(v.get('--host'), process.env.COMFY_HOST), { poll: poll as number, request: 30, wait: wait as number }),
       { mode, painting, maskFrom: v.get('--mask-from'), ...(mode === 'occluder' ? { occluder: v.get('--occluder'), holes: on.has('--holes') } : {}), out, graph, model: v.get('--model'), checkpointSha256: v.get('--checkpoint-sha256'), seed: seed as number, growPx: grow as number, steps: steps as number, ...(v.has('--cfg') ? { cfg } : {}), prompt: v.get('--prompt'), negative: v.get('--negative'), wait: wait as number, timeout: timeout as number },
       (l) => console.log(l),
     );
@@ -2051,7 +2051,7 @@ async function cmdComfyMatte(v: Map<string, string>): Promise<number> {
   for (const n of [resolution, threshold, wait, timeout, poll]) if (typeof n === 'string') return usage(n);
   try {
     const receipt = await runMatte(
-      () => new ComfyClient(resolveHost(v.get('--host'), process.env.COMFY_HOST), { poll: poll as number, request: 30 }),
+      () => new ComfyClient(resolveHost(v.get('--host'), process.env.COMFY_HOST), { poll: poll as number, request: 30, wait: wait as number }),
       { painting, out, node: v.get('--node'), model: v.get('--model'), checkpointSha256: v.get('--checkpoint-sha256'), resolution: resolution as number, threshold: threshold as number, wait: wait as number, timeout: timeout as number },
       line => console.log(line),
     );
@@ -2088,7 +2088,7 @@ async function cmdComfy(args: string[]): Promise<number> {
     if (sub === 'seethrough' && depthConfig !== undefined && depthRun !== 'full' && depthRun !== 'head') return usage('active config.depth requires --depth-run <full|head>; the source run is not inferred');
     if (sub === 'seethrough' && depthConfig === undefined && depthRun !== undefined) return usage('--depth-run requires --config with an explicit depth block');
     const host = resolveHost(v.get('--host'), process.env.COMFY_HOST);
-    const client = new ComfyClient(host, { poll: poll as number, request: 30 });
+    const client = new ComfyClient(host, { poll: poll as number, request: 30, wait: wait as number });
     if (sub === 'seethrough') {
       const image = v.get('--image');
       if (image === undefined) return usage('comfy seethrough needs --image <png>');
