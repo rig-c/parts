@@ -4,6 +4,7 @@ import { SEAM_RULES, type SeamRule } from './seamrule.ts';
 import { DEFAULT_PROJECT_RULE, GROUNDS, type Ground, PROJECT_RULES, type ProjectRule } from './projectrule.ts';
 import type { TakeDeclaration } from './takeregion.ts';
 import { paintingExtensionProblems, type PaintingExtension } from './paintingextension.ts';
+import { edgeSplitProblems, type EdgeSplit } from './edgesplit.ts';
 import { baseAnchorProblems, type BaseAnchor } from './baseanchor.ts';
 import type { DepthConfig } from './depthsheets.ts';
 /**
@@ -327,6 +328,8 @@ export interface Assemble {
   extend_below_crop?: Extend[];
   /** Bounded base-painting samples assigned to named final output parts (#848). */
   extend_painting?: PaintingExtension[];
+  /** Painting-edge splits between plan parts before projection (#1231). */
+  edge_splits?: EdgeSplit[];
   patches?: Patch[];
   cuts?: Cut[];
   alternates?: AlternateSetConfig[];
@@ -1712,7 +1715,7 @@ export interface EarlyConfig {
   depth?: DepthConfig;
   key: string;
   seethrough: SeeThrough;
-  assemble: { rig_scale: number; seam?: SeamRule; project?: ProjectRule; ground?: Ground; take?: TakeDeclaration[]; editor_receipts?: EditorReceipts; head_face_underfill?: boolean; yield_refused?: boolean; stage_map?: boolean; keep_under_occluders?: string[]; require_hidden_extent?: HiddenExtentDeclaration[]; extend_painting?: PaintingExtension[]; occluders?: OccluderDeclaration[] };
+  assemble: { rig_scale: number; seam?: SeamRule; project?: ProjectRule; ground?: Ground; take?: TakeDeclaration[]; editor_receipts?: EditorReceipts; head_face_underfill?: boolean; yield_refused?: boolean; stage_map?: boolean; keep_under_occluders?: string[]; require_hidden_extent?: HiddenExtentDeclaration[]; extend_painting?: PaintingExtension[]; occluders?: OccluderDeclaration[]; edge_splits?: EdgeSplit[] };
 }
 
 /** What plain `assemble` reads: the early config plus the plan `--propose-plan` printed. */
@@ -1790,7 +1793,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null, p
   if (door === 'layers') {
     if ('seethrough' in t) checkSeeThrough(c, t.seethrough);
     if ('assemble' in t) {
-      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'stage_map', 'keep_under_occluders', 'require_hidden_extent', 'extend_painting', 'take', 'seam', 'project', 'ground', 'editor_receipts', 'occluders']);
+      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'stage_map', 'keep_under_occluders', 'require_hidden_extent', 'extend_painting', 'edge_splits', 'take', 'seam', 'project', 'ground', 'editor_receipts', 'occluders']);
       if (a !== null) {
         checkAssembleRules(c, a);
         if ('rig_scale' in a) c.number('config.assemble.rig_scale', a.rig_scale, 'positive');
@@ -1804,6 +1807,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null, p
         checkRequiredHiddenExtent(c, a, null);
         checkOccluders(c, a, null, base);
         if ('extend_painting' in a) checkPaintingExtensions(c, a.extend_painting);
+        if ('edge_splits' in a) checkEdgeSplits(c, a.edge_splits, Array.isArray(a.plan) ? new Set(a.plan.filter((r): r is Json[] => Array.isArray(r) && typeof r[0] === 'string').map(r => r[0] as string)) : null);
         if ('take' in a) checkTakeLayers(c, a.take);
         if ('editor_receipts' in a) checkEditorReceipts(c, a.editor_receipts);
         if ('yield_refused' in a && typeof a.yield_refused !== 'boolean') {
@@ -2537,6 +2541,16 @@ function checkPaintingExtensions(c: Check, value: Json, names: ReadonlySet<strin
   }
 }
 
+function checkEdgeSplits(c: Check, value: Json, names: ReadonlySet<string> | null = null): void {
+  const at = 'config.assemble.edge_splits';
+  if (c.array(at, value, false)) (value as Json[]).forEach((entry, i) => {
+    c.object(`${at}[${i}]`, entry, ['over', 'under', 'band'], []);
+  });
+  for (const p of edgeSplitProblems(value, names)) {
+    if (!c.problems.some(old => old.code === p.code && old.object === p.object)) c.problems.push(p);
+  }
+}
+
 function checkRequiredHiddenExtent(c: Check, a: Record<string, Json>, names: readonly string[] | null): void {
   if (!('require_hidden_extent' in a)) return;
   const at = 'config.assemble.require_hidden_extent';
@@ -2705,7 +2719,7 @@ function checkAssembleRules(c: Check, a: Record<string, Json>): void {
 
 function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: string[]; patches: string[]; cuts: string[] } {
   const required = sectionRequired(door, 'assemble');
-  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'stage_map', 'keep_under_occluders', 'require_hidden_extent', 'extend_painting', 'take', 'seam', 'project', 'ground', 'editor_receipts', 'occluders']);
+  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'stage_map', 'keep_under_occluders', 'require_hidden_extent', 'extend_painting', 'edge_splits', 'take', 'seam', 'project', 'ground', 'editor_receipts', 'occluders']);
   if (a === null) return { parts: [], patches: [], cuts: [] };
   checkAssembleRules(c, a);
   if (required.includes('plan') && !('plan' in a)) {
@@ -2747,6 +2761,7 @@ function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: s
   checkRequiredHiddenExtent(c, a, parts);
   checkOccluders(c, a, parts, null);
   if ('extend_painting' in a) checkPaintingExtensions(c, a.extend_painting);
+  if ('edge_splits' in a) checkEdgeSplits(c, a.edge_splits, new Set(parts));
   if ('take' in a) checkTakeLayers(c, a.take, parts);
   if ('editor_receipts' in a) checkEditorReceipts(c, a.editor_receipts);
   if ('extend_below_crop' in a && c.array(`${p}.extend_below_crop`, a.extend_below_crop, false)) {

@@ -132,6 +132,8 @@ jobs:
         run: bun tools/check_run_clock.ts
       - name: Check ComfyUI client timeouts and poll retries against local stubs
         run: bun test tools/comfy_client.test.ts
+      - name: Check assemble edge splits on a synthetic hem fixture
+        run: bun test ./fixtures/edge_split.ts
       - uses: actions/download-artifact@v4
         with:
           pattern: selftest-shard-*

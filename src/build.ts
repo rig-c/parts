@@ -67,7 +67,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { type AnimFrame, EncodeError, encodeApng, encodeIndexedApng, INDEXED_DEFAULTS } from './apng.ts';
-import { assemble, type AssembleResult, cutLines, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, groundWarning, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine } from './assemble.ts';
+import { assemble, type AssembleResult, cutLines, edgeSplitLines, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, groundWarning, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine } from './assemble.ts';
 import { allocationClause, type Reducer, stageBClause, unboundedClause } from './automesh.ts';
 import { residualClause } from './autoenvelope.ts';
 import { type AutoMotionCase, failingRows, idleSchedule, localRow, motionClause, motionDeformation, motionDocument, motionInput, motionRowText, motionStimulus, motionVerdict, noStimulusProblem, prepareComparison, type ReplayCandidate, runComparison, runPreparedComparison, sourceSelfFailure, stimulusMotion, withStimulus } from './automotion.ts';
@@ -1024,6 +1024,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   for (const alt of altBuilt) for (const line of [...provenanceLines(alt.record.records), ...ownershipLines(alt.record.cut_ownership ?? [])]) log(`  set "${alt.record.name}" ${line.trimStart()}`);
   // Issue #256: one line per part from an author-made layer, so it never reads as See-through's. None without one.
   for (const l of authorPartLines(result.parts.parts)) log(l);
+  for (const l of edgeSplitLines(result.edgeSplits)) log(l);
   // One line per plan part an assemble.cuts entry cut, before the fringe lines: the cut is made first. None without cuts.
   for (const l of cutLines(result.cuts)) log(l);
   if (materialAsked) for (const line of materialLines({ status: 'SKIP', rows: result.cutMaterial, reason: 'assemble source readings only; check --requirements judges declared joint material' })) log(`  ${line}`);
