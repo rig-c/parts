@@ -12,6 +12,7 @@ import { materialSource, type MaterialSource, materialRows, polygonMaterialEdges
 import { unionTakenSources } from './takesource.ts';
 import { authoredUnitDepths, type AuthoredUnitDepth } from './authoredunit.ts';
 import { paintingExtensionMasks, paintingExtensionProblems, type PaintingExtension } from './paintingextension.ts';
+import { applyEdgeSplits, edgeSplitLines, edgeSplitProblems, type EdgeSplit, type EdgeSplitReading } from './edgesplit.ts';
 import { AUTOMATIC_WRITERS as AW, compactValueBaseline, pixelProvenance, rgbaEqual, type ValueBaseline, type StageMap } from './provenance.ts';
 import { bindDepthRun, copyDepthMaterial, registerDepthRun, transportPartDepth, type DepthConfig, type RegisteredDepth } from './depthsheets.ts';
 /**
@@ -376,6 +377,8 @@ export interface AssembleInput {
   requireHiddenExtent?: readonly HiddenExtentDeclaration[];
   /** Base painting only; named final parts, explicit band and path bound (#848). */
   paintingExtension?: readonly PaintingExtension[];
+  /** Painting-edge splits between plan parts before projection (#1231). */
+  edgeSplits?: readonly EdgeSplit[];
   /**
    * Issue #587: rig pixels taken out of named parts once the cuts and the limbs are made, before the fringe pass and
    * every figure a part's record holds — each entry clears `part`'s pixels (alpha, colour and region) where `mask` is
@@ -4788,6 +4791,8 @@ export interface AssembleResult {
   splits: SplitCount[];
   /** Issue #637: source-transparent cap pixels assigned before preservation, in either source-art door. */
   capSplits: SplitCount[];
+  /** Issue #1231: what each `edge_splits` entry moved before projection; empty without one. */
+  edgeSplits: EdgeSplitReading[];
 }
 
 /** Issue #953: the edge pixels `paintingEdges` resolved, the part pixels it changed, and the edge pixels it left, by reason. */
@@ -4991,6 +4996,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   const { source, extend, patches, seamRule, projectRule } = input;
   const authoredDepths = input.depth === undefined ? new Map<string, AuthoredUnitDepth>() : authoredUnitDepths(input);
   if (input.paintingExtension !== undefined) refuseIfAny(paintingExtensionProblems(input.paintingExtension));
+  if (input.edgeSplits !== undefined) refuseIfAny(edgeSplitProblems(input.edgeSplits, new Set(input.plan.map(([name]) => name))));
   const single = input.single === true;
   const frame = checkGeometry(
     { sourceW: source.width, sourceH: source.height, resolution: input.resolution, headBox: input.headBox, rigScale: input.rigScale, ...(single ? { single: true } : {}) },
@@ -5107,6 +5113,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   const ghost: Record<string, number> = {};
   /** The full run's layers with an opaque pixel, in draw order: the candidates `uncoveredErrorLayers` reads. */
   const fullTags: string[] = [];
+  const preparedRuns: Array<{ run: Run; set: LayerSet; layers: ReturnType<typeof runLayers>; rigLayers: Raster[]; rank: number[]; keep: Array<Mask | null>; writes: Array<Int32Array | null> }> = [];
   // A single run (issue #359) is read once: there is no head run to place, project or count ghosts for.
   for (const [run, set] of single ? ([['full', full]] as const) : ([['full', full], ['head', head]] as const)) {
     const layers = runLayers(set, input.resolution);
@@ -5193,6 +5200,42 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       valueBaselines.set(key, raw === null ? null : compactValueBaseline(raw));
       return ids;
     });
+    preparedRuns.push({ run, set, layers, rigLayers, rank, keep, writes });
+  }
+  const edgeSplitNewSampleParts = new Set<string>();
+  const edgeSplits = (input.edgeSplits?.length ?? 0) === 0 ? [] : applyEdgeSplits(
+    input.edgeSplits!,
+    new Map(sourcePlan.flatMap(([name, r, tag]) => {
+      const prep = preparedRuns.find(p => p.run === r);
+      const idx = prep?.layers.findIndex(l => l.tag === tag) ?? -1;
+      return prep !== undefined && idx >= 0 ? [[name, prep.rigLayers[idx]] as [string, Raster]] : [];
+    })),
+    srcr,
+    (part, pixel, cleared, priorAlpha) => {
+      if (!cleared && priorAlpha <= OPAQUE_ALPHA_ABOVE) edgeSplitNewSampleParts.add(part);
+      const row = sourcePlan.find(([name]) => name === part);
+      if (row === undefined) return;
+      const prep = preparedRuns.find(p => p.run === row[1]);
+      const idx = prep?.layers.findIndex(l => l.tag === row[2]) ?? -1;
+      const w = prep !== undefined && idx >= 0 ? prep.writes[idx] : null;
+      if (w !== null && w !== undefined) w[pixel] = cleared ? 0 : AW.sourceProjection;
+    },
+  );
+  const edgeSplitDepthProblems: Problem[] = [];
+  for (const part of edgeSplitNewSampleParts) {
+    const row = sourcePlan.find(([name]) => name === part);
+    if (row === undefined) continue;
+    const keys = [`${row[1]}:${row[2]}`, ...extend.filter(e => e.part === part).map(e => `${e.run}:${e.tag}`)];
+    if (keys.some(k => registeredDepth.has(k))) {
+      edgeSplitDepthProblems.push({
+        code: 'DEPTH_PART_SUPPORT',
+        object: `part "${part}"`,
+        detail: 'edge split (config.assemble.edge_splits) gives new painting samples to a part with a layer depth sheet; remove the split or the target layer depth, never extrapolate a layer sheet onto new painting samples',
+      });
+    }
+  }
+  refuseIfAny(edgeSplitDepthProblems);
+  for (const { run, set, layers, rigLayers, rank, keep, writes } of preparedRuns) {
     const st = projectSource(rigLayers, srcr, frame, run, projectRule, rank, keep, (i, p) => { if (writes[i] !== null) (writes[i] as Int32Array)[p] = AW.sourceProjection; }, owners => {
       if (targets !== undefined && beforeTake === null) return;
       const reading = sourceCoverRun(run, set, run === 'full' ? fullPadded : depthHeadInput,
@@ -5875,10 +5918,12 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       return whole;
     };
     const canvases = stack.map(onRig);
-    const owner = rawPaintingOwner(input.plan.map(([name, run, tag]) => {
+    const rawPlan = input.plan.map(([name, run, tag]) => {
       const layer = input[run].layers.find(l => l.name === tag)!;
       return { name, raster: layerToRig(placeLayer(layer, input.resolution), frame, run) };
-    }), W * H);
+    });
+    if ((input.edgeSplits?.length ?? 0) > 0) applyEdgeSplits(input.edgeSplits!, new Map(rawPlan.map(p => [p.name, p.raster])), srcr);
+    const owner = rawPaintingOwner(rawPlan, W * H);
     const lineage: Array<[string, string]> = [
       ...input.cuts.map(c => [c.from, c.into] as [string, string]),
       ...Object.values(input.limbs ?? {}).flatMap(l => l.segments.flatMap(segment => [
@@ -6182,8 +6227,11 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     islands: islandKept.counts,
     splits: islandKept.splits,
     capSplits: capAssigned.counts,
+    edgeSplits,
   };
 }
+
+export { edgeSplitLines };
 
 // ---------------------------------------------------------------------------
 // refused bodies: a part whose layer is not what the painting shows (issue #255)
@@ -7087,6 +7135,8 @@ export function stageFields(
   requireHiddenExtent?: readonly HiddenExtentDeclaration[];
   /** Base painting only; named final parts, explicit band and path bound (#848). */
   paintingExtension?: readonly PaintingExtension[];
+  /** Painting-edge splits between plan parts before projection (#1231). */
+  edgeSplits?: readonly EdgeSplit[];
   turnMovingPair?: (a: string, b: string) => boolean;
   turn?: TurnSpec;
   regions?: Record<string, RegionSpec>;
@@ -7119,6 +7169,7 @@ export function stageFields(
     ...(cfg.assemble.require_hidden_extent === undefined ? {} : { requireHiddenExtent: cfg.assemble.require_hidden_extent }),
     ...(cfg.assemble.ground === undefined ? {} : { ground: cfg.assemble.ground }),
     ...(cfg.assemble.extend_painting === undefined ? {} : { paintingExtension: cfg.assemble.extend_painting }),
+    ...(cfg.assemble.edge_splits === undefined ? {} : { edgeSplits: cfg.assemble.edge_splits }),
     ...(turnMovingPair === null ? {} : { turnMovingPair }),
     ...(cfg.turn === undefined ? {} : { turn: cfg.turn, regions: cfg.regions, meshes: cfg.meshes, motion: cfg.motion }),
     rigScale: cfg.assemble.rig_scale,
