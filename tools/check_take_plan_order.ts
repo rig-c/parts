@@ -211,11 +211,11 @@ export function runTakePlanOrderChecks(dir: string, report: (name: string, pass:
   const plantedNameOnlyOrder = plantedNameOnlyPlan.map((r) => `${r[0]}:${r[1]}`);
   say(
     'OCCLUDER_OVER_MATCHES_TAKEN_LAYER_TAG_AND_REORDERS',
-    tagMatchedOrder.join(',') === 'legwear:full,shoes:full,objects:full,face:head,eyewhite_r:head,eyewhite_l:head' &&
+    tagMatchedOrder.join(',') === 'behind:full,shoes:full,objects:full,face:head,eyewhite_r:head,eyewhite_l:head' &&
       tagMatchedProposal.notes.every((n) => !n.includes('matched no proposed row')) &&
-      plantedNameOnlyOrder.join(',') === 'shoes:full,objects:full,legwear:full,face:head,eyewhite_r:head,eyewhite_l:head' &&
-      plantedNameOnlyOrder.indexOf('legwear:full') > plantedNameOnlyOrder.indexOf('objects:full') &&
-      plantedNameOnlyOrder.indexOf('legwear:full') > plantedNameOnlyOrder.indexOf('shoes:full'),
+      plantedNameOnlyOrder.join(',') === 'shoes:full,objects:full,behind:full,face:head,eyewhite_r:head,eyewhite_l:head' &&
+      plantedNameOnlyOrder.indexOf('behind:full') > plantedNameOnlyOrder.indexOf('objects:full') &&
+      plantedNameOnlyOrder.indexOf('behind:full') > plantedNameOnlyOrder.indexOf('shoes:full'),
     `tag-matched=[${tagMatchedOrder.join(', ')}]; planted name-only=[${plantedNameOnlyOrder.join(', ')}]`,
   );
 

@@ -243,6 +243,8 @@ export interface Geometry {
   occluderDeclarations?: readonly OccluderDeclaration[];
   /** Declared part/tag name -> taken layer See-through tag for `orderPlanForOccluders` (issue #1251). */
   occluderTakenTags?: Readonly<Record<string, string>>;
+  /** Occluder-split takes (issue #1251, Codex review): the proposed row for `tag` on `run` keeps the take's declared `part` name, so the proposal assembles. */
+  occluderSplitParts?: ReadonlyArray<{ run: Run; part: string; tag: string }>;
 }
 
 /**
@@ -7141,6 +7143,19 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
     }
   }
   for (const t of heads) plan.push([aliasOf(t), headRun(t), t]);
+  for (const split of g.occluderSplitParts ?? []) {
+    const row = plan.find(([, run, tag]) => run === split.run && tag === split.tag);
+    if (row === undefined) {
+      notes.push(`assemble.take occluder split "${split.part}" (${split.run}:${split.tag}) matched no proposed row`);
+    } else if (row[0] !== split.part) {
+      if (plan.some((r) => r !== row && r[0] === split.part)) {
+        notes.push(`assemble.take occluder split "${split.part}" (${split.run}:${split.tag}): the name is already a proposed row, so the row stays "${row[0]}"`);
+      } else {
+        notes.push(`${split.tag}: proposed as "${split.part}", the part its occluder-split take declares`);
+        row[0] = split.part;
+      }
+    }
+  }
   const occluderTakenTags: Record<string, string> = { ...g.occluderTakenTags };
   for (const l of [...full0.layers, ...head0.layers]) {
     if (l.takenLayers !== undefined && l.takenLayers.length > 0) occluderTakenTags[l.name] = l.name;
@@ -7466,7 +7481,7 @@ function occluderTakenTagsOf(cfg: EarlyConfig): Readonly<Record<string, string>>
 export function proposeFields(
   cfg: EarlyConfig,
   single: { w: number; h: number } | null = null,
-): { resolution: number; headBox: [number, number, number, number]; rigScale: number; single?: boolean; armSplit?: ArmSplit; keySkeleton?: ControlSkeleton; headFaceUnderfill?: boolean; occluderDeclarations?: readonly OccluderDeclaration[]; occluderTakenTags?: Readonly<Record<string, string>> } {
+): { resolution: number; headBox: [number, number, number, number]; rigScale: number; single?: boolean; armSplit?: ArmSplit; keySkeleton?: ControlSkeleton; headFaceUnderfill?: boolean; occluderDeclarations?: readonly OccluderDeclaration[]; occluderTakenTags?: Readonly<Record<string, string>>; occluderSplitParts?: ReadonlyArray<{ run: Run; part: string; tag: string }> } {
   const armSplit = cfg.seethrough.arm_split === undefined ? {} : { armSplit: cfg.seethrough.arm_split };
   const keySkeleton = controlSkeletonOf(cfg);
   const skelField = keySkeleton === undefined ? {} : { keySkeleton };
@@ -7474,14 +7489,16 @@ export function proposeFields(
   const occludersField = cfg.assemble.occluders === undefined ? {} : { occluderDeclarations: cfg.assemble.occluders };
   const takenTags = occluderTakenTagsOf(cfg);
   const takenTagsField = takenTags === undefined ? {} : { occluderTakenTags: takenTags };
+  const splitParts = (cfg.assemble.take ?? []).flatMap((item) => ('occluder' in item ? [{ run: item.run, part: item.part, tag: item.tag }] : []));
+  const splitField = splitParts.length === 0 ? {} : { occluderSplitParts: splitParts };
   if (single !== null) {
     refuseIfAny(singleRunHeadBoxProblems(cfg.seethrough));
-    return { resolution: cfg.seethrough.resolution, headBox: singleRunHeadBox(single.w, single.h, cfg.seethrough.resolution), rigScale: cfg.assemble.rig_scale, single: true, ...armSplit, ...skelField, ...underfillField, ...occludersField, ...takenTagsField };
+    return { resolution: cfg.seethrough.resolution, headBox: singleRunHeadBox(single.w, single.h, cfg.seethrough.resolution), rigScale: cfg.assemble.rig_scale, single: true, ...armSplit, ...skelField, ...underfillField, ...occludersField, ...takenTagsField, ...splitField };
   }
   if (cfg.seethrough.head_box === undefined) {
     refuseIfAny([{ code: 'ASSEMBLE_FIELD_PRESENT', object: 'config.seethrough.head_box', detail: 'is absent; the plan is proposed from both runs, and the head run cannot be placed on the painting without the box it was cropped from — run `propose --head-box` first' }]);
   }
-  return { resolution: cfg.seethrough.resolution, headBox: cfg.seethrough.head_box as [number, number, number, number], rigScale: cfg.assemble.rig_scale, ...armSplit, ...skelField, ...underfillField, ...occludersField, ...takenTagsField };
+  return { resolution: cfg.seethrough.resolution, headBox: cfg.seethrough.head_box as [number, number, number, number], rigScale: cfg.assemble.rig_scale, ...armSplit, ...skelField, ...underfillField, ...occludersField, ...takenTagsField, ...splitField };
 }
 
 /**
