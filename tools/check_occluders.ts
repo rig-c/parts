@@ -566,7 +566,7 @@ export function runOccluderCopyChecks(dir: string, say: Say): void {
       resolution: SIDE,
       headBox: [0, 0, SIDE, SIDE],
       rigScale: 1,
-      occluders: [
+      occluderDeclarations: [
         { image: 'occluder.png', sha256: propOccSha, under: ['legwear'], over: ['objects'], rgb_within: 20 },
         { image: 'occluder.png', sha256: propOccSha, under: ['objects'], over: ['legwear'], rgb_within: 20 },
       ],
