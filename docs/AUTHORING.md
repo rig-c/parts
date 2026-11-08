@@ -5379,18 +5379,21 @@ plate pass from this command is a recorded source step, not a repair.
 ### See-through mask grid mapping
 
 For non-square paintings, `comfy seethrough` prepares the configured square
-before upload and records `input_transform` in `meta.json`, bound to the
-original PNG by `image_sha256`. `seethrough:` samples the union of layer
-alpha masks at transformed painting pixel centres with nearest sampling,
-using the recorded offsets and scale. Exactness holds for representable
-masks, and detail below the See-through grid's resolution is not recovered.
-The model receives the padded area as opaque black RGB because LoadImage
-separates alpha and GenerateLayers adds opaque alpha. The old wrapper-internal
-pad was transparent, so non-square model inputs differ from before.
-Square uploads omit the transform and retain the existing path. A legacy
-run on another grid still refuses `PLATE_MASK_GRID`; regenerate it through
-`comfy seethrough` to obtain a recorded transform. The record fields and
-sampling formula are specified in [STABILITY](STABILITY.md).
+before upload and records `input_transform` (`pad_fill: "rgba-zero"`) in
+`meta.json`, bound to the original PNG by `image_sha256` (readers also accept
+`pad_fill: "rgb-black-opaque"` from 2.27.2 records). `seethrough:` samples the
+union of layer alpha masks at transformed painting pixel centres with nearest
+sampling, using the recorded offsets and scale. Exactness holds for
+representable masks, and detail below the See-through grid's resolution is not
+recovered. `workflows/seethrough.json` rejoins `LoadImage`'s `IMAGE` and `MASK`
+through `JoinImageWithAlpha` before `SeeThrough_GenerateLayers`, so the padded
+area reaches the model with transparent alpha (`alpha = 0`). Square uploads
+omit the transform and retain the existing upload bytes (an opaque square
+reaches the model unchanged; a square carrying transparent pixels now forwards
+its alpha through `JoinImageWithAlpha`). A legacy run on another grid still
+refuses `PLATE_MASK_GRID`; regenerate it through `comfy seethrough` to obtain a
+recorded transform. The record fields and sampling formula are specified in
+[STABILITY](STABILITY.md).
 
 | rule | means | change |
 | --- | --- | --- |

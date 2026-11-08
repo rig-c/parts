@@ -60,6 +60,8 @@ export interface FakeComfy {
   fronts: number;
   /** Files the fake "wrote" to its output directory, by name. */
   files: Map<string, Uint8Array>;
+  /** 4-channel RGBA tensors delivered to SeeThrough_GenerateLayers in each prompt run. */
+  layerInputs: Raster[];
   stop(): void;
 }
 
@@ -90,6 +92,7 @@ const INPAINT_INFO: Record<string, unknown> = {
 const CORE_INFO: Record<string, unknown> = {
   LoadImage: spec({ image: E(['already_on_the_box.png']) }),
   LoadImageMask: spec({ image: E(['already_on_the_box.png']), channel: E(['alpha', 'red', 'green', 'blue']) }),
+  JoinImageWithAlpha: spec({ image: T('IMAGE'), alpha: T('MASK') }),
   InpaintModelConditioning: spec({ positive: T('CONDITIONING'), negative: T('CONDITIONING'), vae: T('VAE'), pixels: T('IMAGE'), mask: T('MASK'), noise_mask: T('BOOLEAN') }),
   SaveImage: { input: { required: { images: T('IMAGE'), filename_prefix: T('STRING') }, hidden: { prompt: 'PROMPT', extra_pnginfo: 'EXTRA_PNGINFO' } } },
   CheckpointLoaderSimple: spec({ ckpt_name: E([FAKE_CHECKPOINT]) }),
@@ -127,6 +130,7 @@ export function startFakeComfy(mode: FakeMode): FakeComfy {
   const uploads = new Map<string, Uint8Array>();
   const prompts: unknown[] = [];
   const files = new Map<string, Uint8Array>();
+  const layerInputs: Raster[] = [];
   const history = new Map<string, unknown>();
   const pendingIds: string[] = [];
   let fronts = 0;
@@ -140,10 +144,29 @@ export function startFakeComfy(mode: FakeMode): FakeComfy {
     if (save !== undefined) {
       const prefix = String(save[1].inputs.filename_prefix);
       const stamp = `00000000_000000_${String(serial).padStart(8, '0')}`;
-      const inputName = String(nodes.find(([, n]) => n.class_type === 'LoadImage')?.[1].inputs.image);
+      const loadEntry = nodes.find(([, n]) => n.class_type === 'LoadImage');
+      const loadId = loadEntry?.[0];
+      const inputName = String(loadEntry?.[1].inputs.image);
       const uploaded = uploads.get(inputName);
       const input = uploaded === undefined ? undefined : decodePngBytes(uploaded, 'fake input');
-      const resolution = Number(nodes.find(([, n]) => n.class_type === 'SeeThrough_GenerateLayers')?.[1].inputs.resolution);
+      const genNode = nodes.find(([, n]) => n.class_type === 'SeeThrough_GenerateLayers')?.[1];
+      const resolution = Number(genNode?.inputs.resolution);
+      if (input !== undefined) {
+        const imageLink = Array.isArray(genNode?.inputs.image) ? genNode.inputs.image : undefined;
+        const sourceNode = typeof imageLink?.[0] === 'string' ? graph[imageLink[0]] : undefined;
+        const carriesAlpha =
+          sourceNode?.class_type === 'JoinImageWithAlpha' &&
+          imageLink?.[1] === 0 &&
+          JSON.stringify(sourceNode.inputs.image) === JSON.stringify([loadId, 0]) &&
+          JSON.stringify(sourceNode.inputs.alpha) === JSON.stringify([loadId, 1]);
+        const hasAlphaChannel = uploaded !== undefined && (uploaded[25] === 6 || uploaded[25] === 4);
+        const modelInput = newRaster(input.width, input.height);
+        modelInput.data.set(input.data);
+        if (!carriesAlpha || !hasAlphaChannel) {
+          for (let i = 0; i < modelInput.width * modelInput.height; i++) modelInput.data[i * 4 + 3] = 255;
+        }
+        layerInputs.push(modelInput);
+      }
       // Prepared square uploads use the fixture's known source grid. Square
       // legacy probes retain their original small synthetic output.
       const prepared = input?.width === resolution && input.height === resolution;
@@ -251,5 +274,5 @@ export function startFakeComfy(mode: FakeMode): FakeComfy {
       return new Response('not found', { status: 404 });
     },
   });
-  return { url: `http://127.0.0.1:${server.port}`, views, requests, uploads, prompts, get fronts() { return fronts; }, files, stop: () => server.stop(true) };
+  return { url: `http://127.0.0.1:${server.port}`, views, requests, uploads, prompts, get fronts() { return fronts; }, files, layerInputs, stop: () => server.stop(true) };
 }

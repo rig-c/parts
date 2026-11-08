@@ -37361,7 +37361,16 @@ function runPromptSuite(): number {
   const params = { image: 'in.png', seed: 7, resolution: 512, steps: 3, quant: 'none' as const, offload: true, lama: false, prefix: 'run1' };
   const st = fillSeeThrough(template, params);
   const stray = threw(() => fillSeeThrough({ '1': { class_type: 'X', inputs: { a: '%NOBODY%' } } }, params));
-  const filled = !JSON.stringify(st).includes('%') && !('_comment' in st) && st['3'].inputs.seed === 7 && st['3'].inputs.resolution === 512 && st['2'].inputs.group_offload === true && st['9'].inputs.filename_prefix === 'run1_preview_parts';
+  const filled =
+    !JSON.stringify(st).includes('%') &&
+    !('_comment' in st) &&
+    st['10']?.class_type === 'JoinImageWithAlpha' &&
+    JSON.stringify(st['10'].inputs) === '{"image":["1",0],"alpha":["1",1]}' &&
+    JSON.stringify(st['3'].inputs.image) === '["10",0]' &&
+    st['3'].inputs.seed === 7 &&
+    st['3'].inputs.resolution === 512 &&
+    st['2'].inputs.group_offload === true &&
+    st['9'].inputs.filename_prefix === 'run1_preview_parts';
   say(
     'PW06_THE_SEETHROUGH_TEMPLATE_IS_FILLED_TYPED_AND_A_STRAY_PLACEHOLDER_IS_REFUSED',
     filled && stray !== null && stray.includes('%NOBODY%'),
@@ -37505,19 +37514,22 @@ function runComfySuite(): number {
     const g = prompts[0];
     const uploaded = ok.uploads.length === 1 ? readFileSync(join(dir, 'st-ok.uploads', ok.uploads[0])) : null;
     const input = readFileSync(parsed.image);
-    const preparedInput = encodePngBytes(prepareSeeThroughInput(decodePngBytes(input, 'fixture'), 512).image);
+    const preparedInput = encodePngBytes(prepareSeeThroughInput(decodePngBytes(input, 'fixture'), 512, 'rgba-zero').image);
     const layersRight =
       set !== null &&
       set.layers.map((l) => l.name).sort().join('|') === WRAPPER_LAYERS.map((l) => l.name).sort().join('|') &&
       set.layers.every((l) => l.opaquePx === (WRAPPER_LAYERS.find((w) => w.name === l.name)?.painted ?? -1) * (512 / CANVAS.w) ** 2);
     const graphRight =
       g !== undefined &&
+      JSON.stringify(g['10']?.inputs) === '{"image":["1",0],"alpha":["1",1]}' &&
+      JSON.stringify(g['3'].inputs.image) === '["10",0]' &&
       g['3'].inputs.seed === 7 &&
       g['3'].inputs.resolution === 512 &&
       g['3'].inputs.num_inference_steps === 3 &&
       g['2'].inputs.group_offload === true &&
       g['6'].inputs.use_lama === false &&
       g['7'].inputs.filename_prefix === meta?.prefix &&
+      (meta?.input_transform as Record<string, unknown> | undefined)?.pad_fill === 'rgba-zero' &&
       !JSON.stringify(g).includes('%');
     const written = ['layers.json', 'meta.json'].map((f) => readFileSync(join(out, f), 'utf8'));
     const hostFree = written.every((t) => !t.includes('127.0.0.1'));

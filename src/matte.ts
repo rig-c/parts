@@ -125,7 +125,7 @@ export function readMatteSource(dir: string, paintingBytes: Uint8Array | undefin
     artifacts.push(raster);
   }
   // Recreate preparation, including its square fast path, using the recorded resolution.
-  const prepared = prepareMatteInput(source, r.params.resolution);
+  const prepared = prepareMatteInput(source, r.params.resolution, 'rgb-black-opaque');
   const inputBytes = prepared.transform === undefined ? paintingBytes : encodePngBytes(prepared.image);
   if (hash(inputBytes) !== r.input_sha256 || JSON.stringify(prepared.transform ?? null) !== JSON.stringify(r.input_transform)) fail('MATTE_GRID', file, 'recorded input hash or transform differs from preparation of the bound painting; re-run comfy matte');
   if (artifacts[0].width !== prepared.image.width || artifacts[0].height !== prepared.image.height) fail('MATTE_GRID', 'model-mask.png', `requires prepared input grid ${prepared.image.width}x${prepared.image.height}; got ${artifacts[0].width}x${artifacts[0].height}`);

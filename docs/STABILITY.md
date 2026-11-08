@@ -608,19 +608,26 @@ plate` with `--mask-from seethrough:<dir>` binds every layer file read and
 `--painting` against those hashes and refuses a legacy `meta.json` that lacks
 them.
 
-Non-square inputs are prepared by parts before upload (issue #1197).
+Non-square inputs are prepared by parts before upload (issues #1197, #1205).
 Their additive `input_transform` records `source: [width,height]`,
 `padded: [side,side]`, `pad: [left,top]` in padded pixels, `scale` (target
 side divided by padded side), `resample: "parts-lanczos3-rgba"`,
-`pad_fill: "rgb-black-opaque"`, `target: [resolution,resolution]` and `inverse: "nearest-pixel-centres"`.
+`pad_fill: "rgba-zero"` (`"rgb-black-opaque"` for a graph that reads `LoadImage`
+IMAGE only, and on 2.27.2 `seethrough` records, which readers continue to accept),
+`target: [resolution,resolution]` and `inverse: "nearest-pixel-centres"`.
 The enclosing `image_sha256` is the single source-image hash. Preparation
 zero-fills the square, places the source at floor-centred offsets, and runs
 parts' RGBA Lanczos3 resampler. The wrapper receives the configured square.
-LoadImage separates the PNG's alpha from RGB, and GenerateLayers adds opaque
-alpha to that RGB. The model therefore receives the padded area as opaque
-black RGB. The old wrapper-internal pad was transparent, so non-square model
-inputs differ from before.
-Square inputs keep the existing upload bytes and omit `input_transform`.
+In `workflows/seethrough.json`, `LoadImage`'s `IMAGE` (output 0) and `MASK`
+(output 1) rejoin through ComfyUI's core `JoinImageWithAlpha` node before
+`SeeThrough_GenerateLayers`, so the 4-channel RGBA image reaches the model
+with `alpha = 0` on the padded area and `page_alpha` masks layer alpha to zero
+outside the source rectangle, matching the wrapper's internal pad semantics.
+Square inputs keep the existing upload bytes, omit `input_transform`, and for
+opaque square inputs (whether RGBA or RGB-only PNG) reach the model with the
+same `alpha = 255` tensor as before; a square input that itself carries
+transparent pixels now has that transparency forwarded to the model instead of
+dropped at `LoadImage`.
 For each source pixel `(x,y)`, the inverse samples the layer union at
 `floor((x+left+0.5)*scale), floor((y+top+0.5)*scale)`.
 Exactness holds for representable masks, and detail below the See-through

@@ -84,7 +84,7 @@ export async function runSeeThrough(client: ComfyClient, run: SeeThroughRun, say
   const bytes = new Uint8Array(readFileSync(run.image));
   const img = decodePngBytes(bytes, run.image);
   assertOutFree(run.out);
-  const prepared = prepareSeeThroughInput(img, run.resolution);
+  const prepared = prepareSeeThroughInput(img, run.resolution, 'rgba-zero');
   const uploadBytes = prepared.transform === undefined ? bytes : encodePngBytes(prepared.image);
 
   await client.systemStats();
