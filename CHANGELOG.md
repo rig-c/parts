@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.30.0](https://github.com/rig-c/parts/compare/v2.29.0...v2.30.0) (2026-11-08)
+
+
+### Features
+
+* **plate:** expose --cfg for comfy plate --graph core ([#1216](https://github.com/rig-c/parts/issues/1216)) ([#1219](https://github.com/rig-c/parts/issues/1219)) ([4c376c8](https://github.com/rig-c/parts/commit/4c376c8536b761e4bd28b8a61cf74e4589471e81))
+* **run-stamp:** opt-in fixed clock through SOURCE_DATE_EPOCH for rig and assemble ([#1217](https://github.com/rig-c/parts/issues/1217)) ([#1218](https://github.com/rig-c/parts/issues/1218)) ([1e5eb83](https://github.com/rig-c/parts/commit/1e5eb8362964b98170d3c5d9a246dd79af1966e5))
+
 ## [2.29.0](https://github.com/rig-c/parts/compare/v2.28.0...v2.29.0) (2026-11-08)
 
 
