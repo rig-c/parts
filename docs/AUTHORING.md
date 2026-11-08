@@ -5133,6 +5133,7 @@ row in this page's `rule` and `line` tables; the selftest holds that (`TY16`).
 
 | rule | means | change |
 | --- | --- | --- |
+| <a id="RUN_STAMP_EPOCH"></a>`RUN_STAMP_EPOCH` | SOURCE_DATE_EPOCH is not canonical non-negative integer seconds at most 253402300799 (9999-12-31T23:59:59Z) | unset the variable for wall-clock stamps or supply integer seconds at most 253402300799 for four-digit-year ISO stamps; 253402300800 and above, empty, signs, fractions, whitespace and leading zeroes are refused before any output is touched |
 | <a id="CONFIG_HYBRID_SOURCE"></a>`CONFIG_HYBRID_SOURCE` | the two hybrid neighbours name different source parts | use a single continuous source layer for the joint band |
 | <a id="CONFIG_HYBRID_CUT"></a>`CONFIG_HYBRID_CUT` | a hybrid joint also declares a cut-cap option | remove cap, cap_shape, edge and cut_band at that joint |
 | <a id="ASSEMBLE_HYBRID_SOURCE"></a>`ASSEMBLE_HYBRID_SOURCE` | effective alternate layer selection gives a band different upper and lower source layers | select the same continuous layer for both rigid neighbours |

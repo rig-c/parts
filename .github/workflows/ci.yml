@@ -128,6 +128,8 @@ jobs:
         run: bun tools/check_core_grid.ts
       - name: Check core plate --cfg against a fake ComfyUI
         run: bun tools/check_core_cfg.ts
+      - name: Check opt-in run stamp clock with local stage doubles
+        run: bun tools/check_run_clock.ts
       - uses: actions/download-artifact@v4
         with:
           pattern: selftest-shard-*
