@@ -34,6 +34,8 @@ export interface OccluderDeclaration {
   rgb_within: number;
   /** An optional comfy plate --mode occluder output directory, relative to the config's directory (issue #1237). */
   plate?: string;
+  /** An optional part name (`painting:<part>`) emitted from the painting for occluder pixels not held at rest by front parts (issue #1246). */
+  part?: string;
 }
 
 export const OCCLUDER_COLOUR_COPIED = 'ASSEMBLE_OCCLUDER_COLOUR_COPIED';
@@ -43,6 +45,8 @@ export const OCCLUDER_OVER_TAKEN = 'ASSEMBLE_OCCLUDER_OVER_TAKEN';
 export const OCCLUDER_PLATE_OCCLUDER = 'ASSEMBLE_OCCLUDER_PLATE_OCCLUDER';
 export const OCCLUDER_PLATE_PAINTING = 'ASSEMBLE_OCCLUDER_PLATE_PAINTING';
 export const OCCLUDER_PLATE_BASE_RUN = 'ASSEMBLE_OCCLUDER_PLATE_BASE_RUN';
+export const OCCLUDER_EMPTY = 'ASSEMBLE_OCCLUDER_EMPTY';
+export const OCCLUDER_UNHELD = 'ASSEMBLE_OCCLUDER_UNHELD';
 /** An `under` layer pixel counts at alpha above this: the half-opaque floor `deriveTakenRegion` reads. */
 export const COPIED_ALPHA_ABOVE = 128;
 
@@ -183,9 +187,10 @@ export function occluderOverTakenProblems(
   return problems;
 }
 
-/** Every `under` and `over` entry names a plan part (`CONFIG_NAME_RESOLVES`, with `over` entries distinct per occluder, `CONFIG_PART_UNIQUE`); `names` null skips the plan-membership check (a door without the plan). */
+/** Every `under` and `over` entry names a plan part (`CONFIG_NAME_RESOLVES`, with `over` entries distinct per occluder, `CONFIG_PART_UNIQUE`), and any declared `part` is distinct from plan parts and other occluder parts (`CONFIG_PART_UNIQUE`); `names` null skips the plan-membership check (a door without the plan). */
 export function occluderNameProblems(declarations: readonly OccluderDeclaration[], names: readonly string[] | null): Problem[] {
   const problems: Problem[] = [];
+  const seenParts = new Map<string, number>();
   declarations.forEach((d, i) => {
     if (d.over !== undefined) {
       const seen = new Set<string>();
@@ -193,6 +198,17 @@ export function occluderNameProblems(declarations: readonly OccluderDeclaration[
         if (seen.has(name)) problems.push({ code: 'CONFIG_PART_UNIQUE', object: `${AT}[${i}].over[${j}]`, detail: `names "${name}" again; each part is named once` });
         seen.add(name);
       });
+    }
+    if (d.part !== undefined && d.part !== '') {
+      if (names !== null && names.includes(d.part)) {
+        problems.push({ code: 'CONFIG_PART_UNIQUE', object: `${AT}[${i}].part`, detail: `names the part "${d.part}", which assemble.plan[${names.indexOf(d.part)}] already makes; an occluder part is a part of its own` });
+      } else if (names === null && (d.under.includes(d.part) || (d.over?.includes(d.part) ?? false))) {
+        problems.push({ code: 'CONFIG_PART_UNIQUE', object: `${AT}[${i}].part`, detail: `names the part "${d.part}", which occluders[${i}] also names in under/over; an occluder part is a part of its own` });
+      } else if (seenParts.has(d.part)) {
+        problems.push({ code: 'CONFIG_PART_UNIQUE', object: `${AT}[${i}].part`, detail: `names the part "${d.part}" again (first at occluders[${seenParts.get(d.part)}].part)` });
+      } else {
+        seenParts.set(d.part, i);
+      }
     }
     if (names === null) return;
     d.under.forEach((name, j) => {
@@ -300,4 +316,8 @@ export function occluderColourCopies(parts: ReadonlyArray<{ name: string; image:
 
 export function occluderColourWarning(index: number, copy: OccluderCopy, rgbWithin: number): string {
   return `WARN  ${OCCLUDER_COLOUR_COPIED}: ${AT}[${index}] part "${copy.part}" — ${copy.px} rig px of its selected layer at alpha > ${COPIED_ALPHA_ABOVE} under the occluder (alpha > 0) lie within ${rgbWithin} of the painting (max channel); first at ${copy.first[0]},${copy.first[1]}; the layer holds the occluder's own colour — take this part from a See-through run on the painting with the occluder removed (comfy plate --mode occluder)`;
+}
+
+export function occluderUnheldWarning(index: number, image: string, under: readonly string[], px: number, first: readonly [number, number]): string {
+  return `WARN  ${OCCLUDER_UNHELD}: ${AT}[${index}] — ${px} rig px of occluder "${image}" (alpha > 8, first at ${first[0]},${first[1]}) are not held at alpha >= 250 by any part drawn in front of under [${under.map((u) => `"${u}"`).join(', ')}]; declare ${AT}[${index}].part to fill the unheld occluder pixels`;
 }
