@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.31.0](https://github.com/rig-c/parts/compare/v2.30.3...v2.31.0) (2026-11-08)
+
+
+### Features
+
+* comfy plate --mode occluder and the copied occluder colour WARN ([#1230](https://github.com/rig-c/parts/issues/1230)) ([#1234](https://github.com/rig-c/parts/issues/1234)) ([4d873de](https://github.com/rig-c/parts/commit/4d873de57c1499084e741ce4528ee619654c98c5))
+
 ## [2.30.3](https://github.com/rig-c/parts/compare/v2.30.2...v2.30.3) (2026-11-08)
 
 
