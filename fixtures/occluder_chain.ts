@@ -202,3 +202,77 @@ export function writePartialOverInputs(dir: string, occluderDepth = 0.2): { pain
   const plateRunDir = writePlateRun(dir, encodePngBytes(chainPlate()));
   return { painting, occluder, occluderSha: sha256(occluderBytes), plateRunDir };
 }
+
+/**
+ * Propose-sized twin of the occluder chain fixture (issues #1247, #1251):
+ * face/eye layers at >= 150 px (`PROPOSE_MIN_PX`), `legwear` on `[32, 24, 80, 104]`
+ * (`3,840` px total: `2,048` inside `OCCLUDER` and `1,792` outside), `objects` on
+ * `OCCLUDER` (`2,048` px at `DEEPER_OCCLUDER_DEPTH = 0.9`), and `footwear` on
+ * `[48, 32, 64, 64]` (`512` px inside `OCCLUDER` at depth `0.95`, drafted as
+ * `"shoes"` via `PROPOSE_ALIAS`).
+ */
+export function writeOccluderProposeFixture(dir: string): { painting: string; occluder: string; occluderSha: string; origDir: string; plateRunDir: string } {
+  mkdirSync(dir, { recursive: true });
+  const box = (b: readonly [number, number, number, number], rgba: readonly [number, number, number, number]): Raster => {
+    const r = newRaster(SIDE, SIDE);
+    fill(r, b, rgba);
+    return r;
+  };
+  const paint = box([0, 0, SIDE, SIDE], [250, 250, 250, 255]);
+  fill(paint, [16, 4, 48, 20], [235, 200, 185, 255]);
+  fill(paint, [16, 4, 32, 14], [250, 250, 250, 255]);
+  fill(paint, [32, 4, 48, 14], [250, 250, 250, 255]);
+  fill(paint, [32, 24, 80, 104], [60, 90, 170, 255]);
+  const occRgba: readonly [number, number, number, number] = [OCCLUDER_RGB[0], OCCLUDER_RGB[1], OCCLUDER_RGB[2], 255];
+  fill(paint, OCCLUDER, occRgba);
+  const paintBytes = encodePngBytes(paint);
+  const painting = join(dir, 'painting.png');
+  writeFileSync(painting, paintBytes);
+
+  const plate = box([0, 0, SIDE, SIDE], [250, 250, 250, 255]);
+  fill(plate, [16, 4, 48, 20], [235, 200, 185, 255]);
+  fill(plate, [16, 4, 32, 14], [250, 250, 250, 255]);
+  fill(plate, [32, 4, 48, 14], [250, 250, 250, 255]);
+  fill(plate, [32, 24, 80, 104], [60, 90, 170, 255]);
+  const plateBytes = encodePngBytes(plate);
+
+  const occ = box(OCCLUDER, occRgba);
+  const occBytes = encodePngBytes(occ);
+  const occluder = join(dir, 'occluder.png');
+  writeFileSync(occluder, occBytes);
+  const occluderSha = sha256(occBytes);
+
+  const faceLayers = [
+    { name: 'face', pixels: box([16, 4, 48, 20], [235, 200, 185, 255]), depth: 0.5 },
+    { name: 'eyewhite-r', pixels: box([16, 4, 32, 14], [250, 250, 250, 255]), depth: 0.4 },
+    { name: 'eyewhite-l', pixels: box([32, 4, 48, 14], [250, 250, 250, 255]), depth: 0.4 },
+  ];
+  const origLimb = newRaster(SIDE, SIDE);
+  for (let y = 24; y < 104; y++) {
+    for (let x = 32; x < 80; x++) {
+      if (!inside(OCCLUDER, x, y)) origLimb.data.set([60, 90, 170, 255], (y * SIDE + x) * 4);
+    }
+  }
+  const origDir = join(dir, 'orig');
+  exportLayers(
+    layerSet(
+      [
+        ...faceLayers,
+        { name: 'legwear', pixels: origLimb, depth: 0.7 },
+        { name: 'objects', pixels: occ, depth: DEEPER_OCCLUDER_DEPTH },
+        { name: 'footwear', pixels: box([48, 32, 64, 64], occRgba), depth: 0.95 },
+      ],
+      'prop-orig',
+    ),
+    origDir,
+  );
+  writeFileSync(join(origDir, 'meta.json'), JSON.stringify({ prompt_id: 'prop-orig', seed: 42, image_sha256: sha256(paintBytes) }));
+
+  const plateRunDir = join(dir, 'plate-run');
+  exportLayers(
+    layerSet([...faceLayers, { name: 'legwear', pixels: box([32, 24, 80, 104], [60, 90, 170, 255]), depth: 0.7 }], 'prop-plate'),
+    plateRunDir,
+  );
+  writeFileSync(join(plateRunDir, 'meta.json'), JSON.stringify({ prompt_id: 'prop-plate', seed: 42, image_sha256: sha256(plateBytes) }));
+  return { painting, occluder, occluderSha, origDir, plateRunDir };
+}

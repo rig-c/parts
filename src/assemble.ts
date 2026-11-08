@@ -240,6 +240,8 @@ export interface Geometry {
   keepUnderOccluders?: readonly string[];
   /** `assemble.occluders` as declared (issue #1247; `AssembleInput.occluders` carries the decoded images): declared occluder entries whose `over` parts sit after their `under` parts in a proposed plan. */
   occluderDeclarations?: readonly OccluderDeclaration[];
+  /** Declared part/tag name -> taken layer See-through tag for `orderPlanForOccluders` (issue #1251). */
+  occluderTakenTags?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -7114,7 +7116,11 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
     }
   }
   for (const t of heads) plan.push([aliasOf(t), headRun(t), t]);
-  orderPlanForOccluders(plan, g.occluderDeclarations);
+  const occluderTakenTags: Record<string, string> = { ...g.occluderTakenTags };
+  for (const l of [...full0.layers, ...head0.layers]) {
+    if (l.takenLayers !== undefined && l.takenLayers.length > 0) occluderTakenTags[l.name] = l.name;
+  }
+  notes.push(...orderPlanForOccluders(plan, g.occluderDeclarations, Object.keys(occluderTakenTags).length > 0 ? occluderTakenTags : undefined));
   for (const [part, run, tag] of plan) {
     if (readAuthorTag(tag) !== null) notes.push(`${tag}: ${AUTHOR_NO_ROLE}; proposed as "${part}" from the ${run} run, at its place in that run's draw order`);
   }
@@ -7404,23 +7410,53 @@ export function stageFields(
  * loader's rules; what is left here is that this stage needs the head box,
  * which that loader leaves optional.
  */
+function occluderTakenTagsOf(cfg: EarlyConfig): Readonly<Record<string, string>> | undefined {
+  const take = cfg.assemble.take;
+  if (take === undefined || take.length === 0) return undefined;
+  const out: Record<string, string> = {};
+  for (const item of take) {
+    if ('tags' in item) {
+      for (const tag of item.tags) out[tag] = tag;
+    } else if ('occluder' in item) {
+      out[item.part] = item.tag;
+      out[item.tag] = item.tag;
+    }
+  }
+  const rawPlan = (cfg.assemble as { plan?: unknown }).plan;
+  if (Array.isArray(rawPlan)) {
+    for (const row of rawPlan) {
+      if (!Array.isArray(row) || typeof row[0] !== 'string' || typeof row[1] !== 'string' || typeof row[2] !== 'string') continue;
+      const [part, run, tag] = row;
+      const taken = take.some(
+        (item) =>
+          ('tags' in item && item.run === run && item.tags.includes(tag)) ||
+          ('occluder' in item && item.run === run && item.tag === tag),
+      );
+      if (taken) out[part] = tag;
+    }
+  }
+  return Object.keys(out).length === 0 ? undefined : out;
+}
+
 export function proposeFields(
   cfg: EarlyConfig,
   single: { w: number; h: number } | null = null,
-): { resolution: number; headBox: [number, number, number, number]; rigScale: number; single?: boolean; armSplit?: ArmSplit; keySkeleton?: ControlSkeleton; headFaceUnderfill?: boolean; occluderDeclarations?: readonly OccluderDeclaration[] } {
+): { resolution: number; headBox: [number, number, number, number]; rigScale: number; single?: boolean; armSplit?: ArmSplit; keySkeleton?: ControlSkeleton; headFaceUnderfill?: boolean; occluderDeclarations?: readonly OccluderDeclaration[]; occluderTakenTags?: Readonly<Record<string, string>> } {
   const armSplit = cfg.seethrough.arm_split === undefined ? {} : { armSplit: cfg.seethrough.arm_split };
   const keySkeleton = controlSkeletonOf(cfg);
   const skelField = keySkeleton === undefined ? {} : { keySkeleton };
   const underfillField = cfg.assemble.head_face_underfill === undefined ? {} : { headFaceUnderfill: cfg.assemble.head_face_underfill };
   const occludersField = cfg.assemble.occluders === undefined ? {} : { occluderDeclarations: cfg.assemble.occluders };
+  const takenTags = occluderTakenTagsOf(cfg);
+  const takenTagsField = takenTags === undefined ? {} : { occluderTakenTags: takenTags };
   if (single !== null) {
     refuseIfAny(singleRunHeadBoxProblems(cfg.seethrough));
-    return { resolution: cfg.seethrough.resolution, headBox: singleRunHeadBox(single.w, single.h, cfg.seethrough.resolution), rigScale: cfg.assemble.rig_scale, single: true, ...armSplit, ...skelField, ...underfillField, ...occludersField };
+    return { resolution: cfg.seethrough.resolution, headBox: singleRunHeadBox(single.w, single.h, cfg.seethrough.resolution), rigScale: cfg.assemble.rig_scale, single: true, ...armSplit, ...skelField, ...underfillField, ...occludersField, ...takenTagsField };
   }
   if (cfg.seethrough.head_box === undefined) {
     refuseIfAny([{ code: 'ASSEMBLE_FIELD_PRESENT', object: 'config.seethrough.head_box', detail: 'is absent; the plan is proposed from both runs, and the head run cannot be placed on the painting without the box it was cropped from — run `propose --head-box` first' }]);
   }
-  return { resolution: cfg.seethrough.resolution, headBox: cfg.seethrough.head_box as [number, number, number, number], rigScale: cfg.assemble.rig_scale, ...armSplit, ...skelField, ...underfillField, ...occludersField };
+  return { resolution: cfg.seethrough.resolution, headBox: cfg.seethrough.head_box as [number, number, number, number], rigScale: cfg.assemble.rig_scale, ...armSplit, ...skelField, ...underfillField, ...occludersField, ...takenTagsField };
 }
 
 /**

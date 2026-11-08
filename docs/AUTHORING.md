@@ -5417,7 +5417,11 @@ or a joint.
   `(over, under)` declarations refuse `ASSEMBLE_OCCLUDER_DRAW_CYCLE`).
   `assemble --propose-plan` drafts that order by moving each declared `over`
   part after every `under` part of the same entry while keeping every other
-  row's relative order unchanged (issue #1247).
+  row's relative order unchanged (issue #1247). A declared `over` or `under`
+  name matches a proposed row whose part name equals it or whose tag equals the
+  tag of the config's taken layer for that name, and a name that matches no
+  proposed row adds `occluders[i].over "<name>" matched no proposed row` (or
+  `under`) to `proposal.notes` (issue #1251).
 
   When the plate run's own decomposition of an `under` part is needed only under
   the occluder and its visible region should come from the painting's run
@@ -5432,7 +5436,9 @@ or a joint.
   checked on the donor's visible support only (`ASSEMBLE_TAKE_SPLIT_EMPTY` if
   either `covered_px` or `visible_px` at `alpha > 8` is `0`). `parts.json` records
   `split: {occluder, image, sha256, covered_px, visible_px}` on that part's
-  `taken_layers` entry.
+  `taken_layers` entry. `assemble --propose-plan` accepts occluder-split takes,
+  drafting the row from the split's `tag` on the merged layer while still
+  refusing seeded region takes with `ASSEMBLE_REGION_TAKE_PLAN` (issue #1251).
 
   Under `--project visible` (issue #1246), every `under` part (and any cut piece or
   limb segment derived from it) keeps its base-run surface wherever the declared
