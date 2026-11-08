@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.30.3](https://github.com/rig-c/parts/compare/v2.30.2...v2.30.3) (2026-11-08)
+
+
+### Bug Fixes
+
+* **comfy:** give /object_info its own cap and keep queued jobs through poll timeouts ([#1232](https://github.com/rig-c/parts/issues/1232)) ([#1233](https://github.com/rig-c/parts/issues/1233)) ([3bae268](https://github.com/rig-c/parts/commit/3bae26860ebe380ae8d783ee658b2753d3616e6a))
+
 ## [2.30.2](https://github.com/rig-c/parts/compare/v2.30.1...v2.30.2) (2026-11-08)
 
 
