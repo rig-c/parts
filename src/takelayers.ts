@@ -7,14 +7,17 @@ import { CORE_KERNEL, fullPlanBand } from './assemble.ts';
 import { makeInputs, squarePad } from './inputs.ts';
 import { OPAQUE_ALPHA_ABOVE, readLayers, type Layer, type LayerSet } from './layers.ts';
 import { PartsError, refuseIfAny, type Problem } from './errors.ts';
-import { declaredOccluderPair, occluderDrawCycleProblems, occluderDrawOrderProblems, occluderOverTakenProblems, type OccluderDeclaration } from './occluders.ts';
+import { COPIED_ALPHA_ABOVE, declaredOccluderPair, occluderDrawCycleProblems, occluderDrawOrderProblems, occluderOverTakenProblems, type OccluderDeclaration } from './occluders.ts';
 import { dilate } from './raster/morph.ts';
 import { newMask, newRaster, newFloatImage, type Raster } from './raster/types.ts';
 import { readPng } from './raster/png.ts';
-import type { TakeDeclaration } from './takeregion.ts';
+import type { TakeDeclaration, TakeOccluderSplit } from './takeregion.ts';
 import { crop, pad } from './raster/composite.ts';
 import { warpAffine, type ScaleTranslate } from './raster/warp.ts';
 import { takenTransportProblems, type TakenLayerSource, type TakenLayerTransport } from './takesource.ts';
+
+export const TAKE_SPLIT_OCCLUDER = 'ASSEMBLE_TAKE_SPLIT_OCCLUDER';
+export const TAKE_SPLIT_EMPTY = 'ASSEMBLE_TAKE_SPLIT_EMPTY';
 
 export interface TakeLayers {
   run: Run;
@@ -142,7 +145,10 @@ export function transportLayer(layer: Layer, donor: LayerSet, set: LayerSet, ima
 }
 
 export function takeLayerNote(source: TakenLayerSource): string {
-  return `take ${source.run}:${source.tag} from ${source.run_dir}; prompt_id ${source.prompt_id}; seed ${source.seed}; st_input ${source.st_input}; support ${source.support_px} run px; checked ${source.checked_px} input px; differing ${source.differing_px}; alpha > ${OPAQUE_ALPHA_ABOVE}, ${CORE_KERNEL}x${CORE_KERNEL} margin`;
+  const splitClause = source.split === undefined
+    ? ''
+    : `; split occluder[${source.split.occluder}] ${source.split.image} (${source.split.sha256.slice(0, 12)}) covered ${source.split.covered_px} run px, visible ${source.split.visible_px} run px`;
+  return `take ${source.run}:${source.tag} from ${source.run_dir}; prompt_id ${source.prompt_id}; seed ${source.seed}; st_input ${source.st_input}; support ${source.support_px} run px; checked ${source.checked_px} input px; differing ${source.differing_px}; alpha > ${OPAQUE_ALPHA_ABOVE}, ${CORE_KERNEL}x${CORE_KERNEL} margin${splitClause}`;
 }
 /** Intersection of original alpha supports in the common target-run canvas; no bbox or dilation proxy. */
 function supportOverlap(a: Layer, b: Layer): number {
@@ -156,8 +162,29 @@ function supportOverlap(a: Layer, b: Layer): number {
 }
 /** Apply every declaration together, so replacing all tied layers from one run can retain its known order. */
 export function applyTakenLayers(runs: { full: LayerSet; head: LayerSet; single: boolean }, painting: Raster, cfg: Pick<EarlyConfig, 'seethrough' | 'depth'> & { assemble: { take?: TakeDeclaration[]; plan?: PlanEntry[]; occluders?: OccluderDeclaration[] } }, configPath: string): { full: LayerSet; head: LayerSet; single: boolean; notes: string[] } {
-  const declarations = (cfg.assemble.take ?? []).filter((item): item is TakeLayers => 'tags' in item);
+  const wholeDeclarations = (cfg.assemble.take ?? []).filter((item): item is TakeLayers => 'tags' in item);
+  const declarations = (cfg.assemble.take ?? []).filter((item): item is TakeLayers | TakeOccluderSplit => 'tags' in item || 'occluder' in item);
   const occluders = cfg.assemble.occluders ?? [];
+  for (const d of declarations) {
+    if ('occluder' in d) {
+      const partAt = `config.assemble.take run "${d.run_dir}" (${d.run}) part "${d.part}"`;
+      const occEntry = Number.isSafeInteger(d.occluder) && d.occluder >= 0 ? occluders[d.occluder] : undefined;
+      if (occEntry === undefined) {
+        return refuse(TAKE_SPLIT_OCCLUDER, partAt, `occluder index ${d.occluder} does not exist in config.assemble.occluders (${occluders.length} declared); a valid occluder index is required`);
+      }
+      if ((occEntry.over ?? []).includes(d.part)) {
+        return refuse(TAKE_SPLIT_OCCLUDER, partAt, `part "${d.part}" is in config.assemble.occluders[${d.occluder}].over; a split take is for a part under the occluder, not in its over`);
+      }
+      if (!occEntry.under.includes(d.part)) {
+        return refuse(TAKE_SPLIT_OCCLUDER, partAt, `part "${d.part}" is not in config.assemble.occluders[${d.occluder}].under; a part declared under that occluder is required`);
+      }
+      if (cfg.assemble.plan !== undefined) {
+        const row = cfg.assemble.plan.find(([part]) => part === d.part);
+        if (row === undefined) return refuse('CONFIG_NAME_RESOLVES', partAt, `names "${d.part}"; a part named in assemble.plan is required`);
+        if (row[1] !== d.run || row[2] !== d.tag) return refuse('CONFIG_NAME_RESOLVES', partAt, `declares ${d.run}:${d.tag} for part "${d.part}"; assemble.plan declares ["${row[0]}", "${row[1]}", "${row[2]}"]`);
+      }
+    }
+  }
   if (occluders.length > 0) {
     const cycles = occluderDrawCycleProblems(occluders);
     refuseIfAny([
@@ -165,7 +192,7 @@ export function applyTakenLayers(runs: { full: LayerSet; head: LayerSet; single:
       ...(cfg.assemble.plan === undefined
         ? []
         : [
-            ...occluderOverTakenProblems(occluders, cfg.assemble.plan, declarations),
+            ...occluderOverTakenProblems(occluders, cfg.assemble.plan, wholeDeclarations),
             ...(cycles.length > 0 ? [] : occluderDrawOrderProblems(occluders, cfg.assemble.plan)),
           ]),
     ]);
@@ -190,6 +217,85 @@ export function applyTakenLayers(runs: { full: LayerSet; head: LayerSet; single:
     if (target === null) return refuse('ASSEMBLE_TAKE_CROP', at, 'a target input is required for a declared crop');
     const geometry = d.crop === undefined ? undefined : cropGeometry(d, painting, target, donor, set, inputs, at);
     if (geometry !== undefined && (image.width !== geometry.expected.width || image.height !== geometry.expected.height)) return refuse('ASSEMBLE_TAKE_CROP', at, `donor st_input ${image.width}x${image.height}; declared square-padded crop requires ${geometry.expected.width}x${geometry.expected.height}`);
+    if ('occluder' in d) {
+      const partAt = `${at} part "${d.part}"`;
+      const tagAt = `${at} tag "${d.tag}"`;
+      const key = `${d.run}:${d.tag}`;
+      if (seen.has(key)) return refuse('ASSEMBLE_TAKE_UNIQUE', at, `tag "${d.tag}" replaces ${key} twice; declare one donor per target tag`);
+      seen.add(key);
+      const baseLayer = lists[d.run].find(l => l.name === d.tag);
+      if (baseLayer === undefined) return refuse('ASSEMBLE_TAKE_TAG_IN_RUN', at, `tag "${d.tag}" is absent from the base ${d.run} run; both base and donor must hold the split tag`);
+      const donorLayer = donor.layers.find(l => l.name === d.tag);
+      if (donorLayer === undefined) return refuse('ASSEMBLE_TAKE_TAG_IN_RUN', at, `tag "${d.tag}" is absent; a named See-through tag held by that donor is required`);
+      const occEntry = occluders[d.occluder]!;
+      let occPng: Raster;
+      try { occPng = readPng(resolve(base, occEntry.image)); } catch { return refuse('CONFIG_FILE_PRESENT', `config.assemble.occluders[${d.occluder}].image`, `names "${occEntry.image}", which is not a readable PNG`); }
+      if (occPng.width !== painting.width || occPng.height !== painting.height) {
+        return refuse('ASSEMBLE_OCCLUDER_GRID', `config.assemble.occluders[${d.occluder}].image`, `is ${occPng.width}x${occPng.height}; the painting's dimensions ${painting.width}x${painting.height} are required`);
+      }
+      const occTarget = d.run === 'head'
+        ? crop(occPng, inputs.headBox![0], inputs.headBox![1], inputs.headBox![2] - inputs.headBox![0], inputs.headBox![3] - inputs.headBox![1])
+        : target === painting
+          ? occPng
+          : pad(occPng, inputs.padLeft, inputs.padTop, target.width - painting.width - inputs.padLeft, target.height - painting.height - inputs.padTop, [0, 0, 0, 0]);
+      const isCovered = (x: number, y: number): boolean => {
+        const ox = Math.min(occTarget.width - 1, Math.max(0, Math.floor((x + 0.5) * occTarget.width / set.canvas.w)));
+        const oy = Math.min(occTarget.height - 1, Math.max(0, Math.floor((y + 0.5) * occTarget.height / set.canvas.h)));
+        return occTarget.data[(oy * occTarget.width + ox) * 4 + 3] > COPIED_ALPHA_ABOVE;
+      };
+      const transported = geometry === undefined ? undefined : transportLayer(donorLayer, donor, set, image, d, geometry.map, geometry.exact, tagAt);
+      const donorOnSet = transported?.layer ?? donorLayer;
+      const merged = newRaster(set.canvas.w, set.canvas.h);
+      let coveredPx = 0, visiblePx = 0, opaquePx = 0;
+      for (let y = 0; y < set.canvas.h; y++) for (let x = 0; x < set.canvas.w; x++) {
+        const p = (y * set.canvas.w + x) * 4;
+        if (isCovered(x, y)) {
+          if (x >= baseLayer.left && x < baseLayer.right && y >= baseLayer.top && y < baseLayer.bottom) {
+            const bp = ((y - baseLayer.top) * baseLayer.pixels.width + (x - baseLayer.left)) * 4;
+            merged.data.set(baseLayer.pixels.data.subarray(bp, bp + 4), p);
+            if (baseLayer.pixels.data[bp + 3] > OPAQUE_ALPHA_ABOVE) { coveredPx++; opaquePx++; }
+          }
+        } else {
+          if (x >= donorOnSet.left && x < donorOnSet.right && y >= donorOnSet.top && y < donorOnSet.bottom) {
+            const dp = ((y - donorOnSet.top) * donorOnSet.pixels.width + (x - donorOnSet.left)) * 4;
+            merged.data.set(donorOnSet.pixels.data.subarray(dp, dp + 4), p);
+            if (donorOnSet.pixels.data[dp + 3] > OPAQUE_ALPHA_ABOVE) { visiblePx++; opaquePx++; }
+          }
+        }
+      }
+      if (coveredPx === 0 || visiblePx === 0) {
+        return refuse('ASSEMBLE_TAKE_SPLIT_EMPTY', partAt, `covered_px is ${coveredPx} (base ${d.run}:${d.tag} under occluder[${d.occluder}] alpha > ${COPIED_ALPHA_ABOVE}) and visible_px is ${visiblePx} (donor ${d.run}:${d.tag} outside occluder[${d.occluder}]); both regions require at least 1 pixel of alpha > ${OPAQUE_ALPHA_ABOVE}`);
+      }
+      const donorVisiblePixels = newRaster(donorLayer.pixels.width, donorLayer.pixels.height);
+      let donorVisibleOpaque = 0;
+      for (let y = 0; y < donorLayer.pixels.height; y++) for (let x = 0; x < donorLayer.pixels.width; x++) {
+        const dx = donorLayer.left + x, dy = donorLayer.top + y;
+        const tx = geometry === undefined ? dx : Math.floor(geometry.map.sx * dx + geometry.map.tx);
+        const ty = geometry === undefined ? dy : Math.floor(geometry.map.sy * dy + geometry.map.ty);
+        if (tx >= 0 && tx < set.canvas.w && ty >= 0 && ty < set.canvas.h && !isCovered(tx, ty)) {
+          const dp = (y * donorLayer.pixels.width + x) * 4;
+          donorVisiblePixels.data.set(donorLayer.pixels.data.subarray(dp, dp + 4), dp);
+          if (donorLayer.pixels.data[dp + 3] > OPAQUE_ALPHA_ABOVE) donorVisibleOpaque++;
+        }
+      }
+      const donorVisible: Layer = { ...donorLayer, pixels: donorVisiblePixels, opaquePx: donorVisibleOpaque };
+      const checked = identity(donorVisible, donor.canvas, image, geometry?.expected ?? target, tagAt);
+      const source: TakenLayerSource = {
+        run: d.run, tag: d.tag, run_dir: d.run_dir, st_input: d.st_input,
+        prompt_id: meta.prompt_id, seed: meta.seed,
+        support_px: checked.support,
+        checked_px: checked.checked.reduce((a, b) => a + b, 0),
+        differing_px: 0,
+        ...(transported === undefined ? {} : { transport: transported.transport }),
+        split: { occluder: d.occluder, image: occEntry.image, sha256: occEntry.sha256, covered_px: coveredPx, visible_px: visiblePx },
+      };
+      const replacement: Layer = { ...baseLayer, left: 0, top: 0, right: set.canvas.w, bottom: set.canvas.h, pixels: merged, opaquePx, takenLayers: [source] };
+      lists[d.run] = [...lists[d.run].filter(l => l.name !== d.tag), replacement];
+      origins.set(replacement, resolve(base, d.run_dir));
+      notes.push(takeLayerNote(source));
+      notes.push(`take union ${d.run} from ${d.run_dir}: checked ${checked.checked.reduce((a, b) => a + b, 0)} input px; differing 0`);
+      continue;
+    }
     const union = new Uint8Array(image.width * image.height);
     for (const tag of d.tags) {
       const key = `${d.run}:${tag}`;
@@ -232,8 +338,9 @@ export function applyTakenLayers(runs: { full: LayerSet; head: LayerSet; single:
       if (reversed) problems.push({ code: 'ASSEMBLE_TAKE_PLAN_ORDER', object: `${run} plan parts "${a.part}" / "${b.part}"`, detail: `plan order reverses ${band === 0 ? `mixed-run depths ${a.layer.depth} / ${b.layer.depth}; put the larger depth behind` : `two-run full-layer roles "${a.layer.name}" / "${b.layer.name}"; order back hair, body, headwear/earwear, face, head details, front hair`}; supports overlap at ${overlap} run px (alpha > ${OPAQUE_ALPHA_ABOVE}); use assemble --propose-plan` });
     }
     refuseIfAny(problems);
-    const replaced = new Set(declarations.filter(d => d.run === run).flatMap(d => d.tags));
-    if (runs[run].hidden.some(l => replaced.has(l.of)) || declarations.some(d => d.run === run && readLayers(resolve(base, d.run_dir)).hidden.some(l => d.tags.includes(l.of)))) return refuse('ASSEMBLE_TAKE_HIDDEN', run, 'a replaced layer has hidden companion art; separate hidden provenance is not declared, so the combination is refused');
+    const tagsOf = (d: TakeLayers | TakeOccluderSplit): readonly string[] => 'tags' in d ? d.tags : [d.tag];
+    const replaced = new Set(declarations.filter(d => d.run === run).flatMap(tagsOf));
+    if (runs[run].hidden.some(l => replaced.has(l.of)) || declarations.some(d => d.run === run && readLayers(resolve(base, d.run_dir)).hidden.some(l => tagsOf(d).includes(l.of)))) return refuse('ASSEMBLE_TAKE_HIDDEN', run, 'a replaced layer has hidden companion art; separate hidden provenance is not declared, so the combination is refused');
   }
   const full = { ...runs.full, layers: lists.full }, head = runs.single ? full : { ...runs.head, layers: lists.head };
   return { full, head, single: runs.single, notes };

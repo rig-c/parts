@@ -1813,7 +1813,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null, p
         checkOccluders(c, a, null, base);
         if ('extend_painting' in a) checkPaintingExtensions(c, a.extend_painting);
         if ('edge_splits' in a) checkEdgeSplits(c, a.edge_splits, Array.isArray(a.plan) ? new Set(a.plan.filter((r): r is Json[] => Array.isArray(r) && typeof r[0] === 'string').map(r => r[0] as string)) : null);
-        if ('take' in a) checkTakeLayers(c, a.take);
+        if ('take' in a) checkTakeLayers(c, a.take, null, a);
         if ('editor_receipts' in a) checkEditorReceipts(c, a.editor_receipts);
         if ('yield_refused' in a && typeof a.yield_refused !== 'boolean') {
           c.fail('CONFIG_FIELD_TYPE', 'config.assemble.yield_refused', `is ${show(a.yield_refused)}; true or false is required`);
@@ -2630,16 +2630,19 @@ function checkKeepUnderOccluders(c: Check, a: Record<string, Json>, plan: readon
   });
 }
 
-function checkTakeLayers(c: Check, value: Json, plan: string[] | null = null): void {
+function checkTakeLayers(c: Check, value: Json, plan: string[] | null = null, assemble?: Record<string, Json>): void {
   const at = 'config.assemble.take';
   if (!c.array(at, value, false)) return;
   const seen = new Set<string>();
   (value as Json[]).forEach((v, i) => {
     const p = `${at}[${i}]`;
-    const region = isPlainObject(v) && ('part' in v || 'seed' in v);
-    const o = region
-      ? c.object(p, v, ['run', 'run_dir', 'st_input', 'part', 'seed'], ['reference', 'crop'])
-      : c.object(p, v, ['run', 'run_dir', 'st_input', 'tags'], ['crop']);
+    const split = isPlainObject(v) && ('occluder' in v || ('tag' in v && !('tags' in v)));
+    const region = !split && isPlainObject(v) && ('part' in v || 'seed' in v);
+    const o = split
+      ? c.object(p, v, ['run', 'run_dir', 'st_input', 'part', 'tag', 'occluder'], ['crop'])
+      : region
+        ? c.object(p, v, ['run', 'run_dir', 'st_input', 'part', 'seed'], ['reference', 'crop'])
+        : c.object(p, v, ['run', 'run_dir', 'st_input', 'tags'], ['crop']);
     if (o === null) return;
     if (o.run !== 'full' && o.run !== 'head') c.fail('CONFIG_FIELD_TYPE', p + '.run', '"full" or "head" is required');
     for (const k of ['run_dir', 'st_input']) c.string(`${p}.${k}`, o[k]);
@@ -2650,6 +2653,44 @@ function checkTakeLayers(c: Check, value: Json, plan: string[] | null = null): v
         if (!(Array.isArray(box) && box.length === 4 && box.every(n => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0) && box[2] > box[0] && box[3] > box[1])) c.fail('CONFIG_FIELD_TYPE', `${p}.crop.box`, 'requires [left, top, right, bottom], nonnegative safe integers with positive width/height in source-painting pixels');
         if (crop.resample !== 'bilinear') c.fail('CONFIG_FIELD_TYPE', `${p}.crop.resample`, '"bilinear" is required explicitly');
       }
+    }
+    if (split) {
+      const partName = c.string(`${p}.part`, o.part) ? o.part : null;
+      if (partName !== null && plan !== null && !plan.includes(partName)) {
+        c.fail('CONFIG_NAME_RESOLVES', `${p}.part`, `names "${partName}"; a part named in assemble.plan is required`);
+      }
+      const reading = typeof o.tag === 'string' ? readLayerTag(o.tag) : null;
+      if (reading === null || reading.group === 'author') {
+        c.fail('CONFIG_TAG_KNOWN', `${p}.tag`, 'a See-through tag is required; author layers do not carry a See-through role');
+      } else if (partName !== null && plan !== null && plan.includes(partName) && Array.isArray(assemble?.plan)) {
+        const row = assemble.plan.find((r): r is Json[] => Array.isArray(r) && r[0] === partName);
+        if (row !== undefined && (row[1] !== o.run || row[2] !== o.tag)) {
+          c.fail('CONFIG_NAME_RESOLVES', `${p}.tag`, `is "${String(o.run)}:${String(o.tag)}" for part "${partName}"; assemble.plan declares ["${partName}", "${String(row[1])}", "${String(row[2])}"]`);
+        }
+      }
+      const tagKey = `${String(o.run)}:${String(o.tag)}`;
+      const partKey = `${String(o.run)}:part:${String(o.part)}`;
+      if (seen.has(tagKey) || seen.has(partKey)) {
+        c.fail('CONFIG_TAKE_UNIQUE', `${p}.tag`, `names ${tagKey} again; one donor per target tag is required`);
+      }
+      seen.add(tagKey);
+      seen.add(partKey);
+      const occOk = c.int(`${p}.occluder`, o.occluder, 0);
+      if (occOk && partName !== null && assemble !== undefined) {
+        const occluders = Array.isArray(assemble.occluders) ? assemble.occluders : [];
+        const idx = o.occluder as number;
+        const entry = occluders[idx];
+        const under = isPlainObject(entry) && Array.isArray(entry.under) ? entry.under : null;
+        const over = isPlainObject(entry) && Array.isArray(entry.over) ? entry.over : [];
+        if (!isPlainObject(entry) || under === null) {
+          c.fail('ASSEMBLE_TAKE_SPLIT_OCCLUDER', `${p}.occluder`, `index ${idx} does not exist in config.assemble.occluders (${occluders.length} declared); a valid occluder index is required`);
+        } else if (over.includes(partName)) {
+          c.fail('ASSEMBLE_TAKE_SPLIT_OCCLUDER', `${p}.part`, `names "${partName}", which is in config.assemble.occluders[${idx}].over; a split take is for a part under the occluder, not in its over`);
+        } else if (!under.includes(partName)) {
+          c.fail('ASSEMBLE_TAKE_SPLIT_OCCLUDER', `${p}.part`, `names "${partName}", which is not in config.assemble.occluders[${idx}].under; a part declared under that occluder is required`);
+        }
+      }
+      return;
     }
     if (region) {
       if (o.reference !== undefined) {
@@ -2779,7 +2820,7 @@ function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: s
   checkOccluders(c, a, parts, null);
   if ('extend_painting' in a) checkPaintingExtensions(c, a.extend_painting);
   if ('edge_splits' in a) checkEdgeSplits(c, a.edge_splits, new Set(parts));
-  if ('take' in a) checkTakeLayers(c, a.take, parts);
+  if ('take' in a) checkTakeLayers(c, a.take, parts, a);
   if ('editor_receipts' in a) checkEditorReceipts(c, a.editor_receipts);
   if ('extend_below_crop' in a && c.array(`${p}.extend_below_crop`, a.extend_below_crop, false)) {
     (a.extend_below_crop as Json[]).forEach((entry, i) => {

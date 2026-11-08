@@ -5419,6 +5419,21 @@ or a joint.
   part after every `under` part of the same entry while keeping every other
   row's relative order unchanged (issue #1247).
 
+  When the plate run's own decomposition of an `under` part is needed only under
+  the occluder and its visible region should come from the painting's run
+  (issue #1242), declare an occluder-split entry in `config.assemble.take`:
+  `{run, run_dir, st_input, part, tag, occluder, crop?}`, where `occluder` is the
+  zero-based index into `config.assemble.occluders` (`ASSEMBLE_TAKE_SPLIT_OCCLUDER`
+  if out of range, if `part` is not in that entry's `under`, or if `part` is in its
+  `over`). Pixels where the occluder's alpha is strictly above `128`
+  (`COPIED_ALPHA_ABOVE`) keep the base (`--full` / `--head`) run's pixel for `tag`;
+  pixels at or below `128` take the donor run's pixel (transparent included,
+  overwriting base pixels outside the occluder), and donor `st_input` identity is
+  checked on the donor's visible support only (`ASSEMBLE_TAKE_SPLIT_EMPTY` if
+  either `covered_px` or `visible_px` at `alpha > 8` is `0`). `parts.json` records
+  `split: {occluder, image, sha256, covered_px, visible_px}` on that part's
+  `taken_layers` entry.
+
 `<out>` holds `plate.png`, `mask.png` (the mask actually used: opaque white
 inside, opaque black outside) and `receipt.json`, spec
 `rig-parts-plate-receipt/1` ([STABILITY](STABILITY.md#plate-receipt)). A receipted
@@ -5522,6 +5537,7 @@ recorded transform. The record fields and sampling formula are specified in
 | <a id="CONFIG_OCCLUDER_SHA256"></a><a id="ASSEMBLE_OCCLUDER_GRID"></a>`CONFIG_OCCLUDER_SHA256`, `ASSEMBLE_OCCLUDER_GRID` | an `assemble.occluders` image whose bytes do not hash to its declared `sha256`; an occluder image whose size is not the painting's | declare the bytes the image holds; export the occluder on the painting's grid |
 | <a id="ASSEMBLE_OCCLUDER_DRAW_ORDER"></a><a id="ASSEMBLE_OCCLUDER_DRAW_CYCLE"></a><a id="ASSEMBLE_OCCLUDER_OVER_TAKEN"></a>`ASSEMBLE_OCCLUDER_DRAW_ORDER`, `ASSEMBLE_OCCLUDER_DRAW_CYCLE`, `ASSEMBLE_OCCLUDER_OVER_TAKEN` | `assemble.plan` draws an `assemble.occluders[i].over` part behind one of its `under` parts; `over`/`under` declarations form a draw-order cycle within one entry or across entries; an `over` part's plan layer is not taken by `assemble.take` | place every `over` part after its `under` parts in `assemble.plan` (back to front); remove contradictory `over`/`under` cycles; take the `over` part's layer through a whole-layer `assemble.take` entry or omit it from `over` |
 | <a id="ASSEMBLE_OCCLUDER_PLATE_OCCLUDER"></a><a id="ASSEMBLE_OCCLUDER_PLATE_PAINTING"></a><a id="ASSEMBLE_OCCLUDER_PLATE_BASE_RUN"></a>`ASSEMBLE_OCCLUDER_PLATE_OCCLUDER`, `ASSEMBLE_OCCLUDER_PLATE_PAINTING`, `ASSEMBLE_OCCLUDER_PLATE_BASE_RUN` | an `assemble.occluders[i].plate` receipt whose `occluder.sha256` differs from the declared occluder `sha256`, whose `painting.sha256` differs from `--source`, or whose `output.sha256` differs from the base (`--full`) See-through run's `meta.json` `image_sha256` | re-run `comfy plate --mode occluder` and `comfy seethrough` against the current occluder and `--source` painting so the plate receipt binds all three |
+| <a id="ASSEMBLE_TAKE_SPLIT_OCCLUDER"></a><a id="ASSEMBLE_TAKE_SPLIT_EMPTY"></a>`ASSEMBLE_TAKE_SPLIT_OCCLUDER`, `ASSEMBLE_TAKE_SPLIT_EMPTY` | an occluder-split `assemble.take` entry whose `occluder` index does not exist in `config.assemble.occluders`, whose `part` is not in that entry's `under`, or whose `part` is in its `over`; a split take whose `covered_px` (base layer at `alpha > 8` where occluder `alpha > 128`) or `visible_px` (donor layer at `alpha > 8` where occluder `alpha <= 128`) is `0` | point `occluder` at the `config.assemble.occluders` entry that lists `part` in `under` (and not in `over`); use a base run with opaque material under the occluder and a donor run with opaque material outside it |
 | <a id="CONFIG_HIDDEN_EXTENT_ORDER"></a>`CONFIG_HIDDEN_EXTENT_ORDER` | `assemble.require_hidden_extent` names the same source as part and occluder, or names an occluder drawn before the part | declare distinct source parts with the occluder after the part in `assemble.plan` |
 | <a id="DIFF_COMPONENTS_INPUT"></a>`DIFF_COMPONENTS_INPUT` | `diff-components` needs readable PNG stack/painting/part images, a writable `--out` target when writing, explicit parts, positive integer floor, a finite threshold in [0,255], matching native dimensions and valid coverage/domain inputs; flags must be unique and known, with nonempty values | Supply the named missing or invalid input; no resampling or inferred figure is performed |
 | <a id="DIFF_COMPONENTS_BINDING"></a>`DIFF_COMPONENTS_BINDING` | The shipped report reader found a stack or painting SHA-256 different from the supplied bytes; found and required digests are printed | Regenerate against the bytes being reviewed |
