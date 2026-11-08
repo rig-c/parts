@@ -30,7 +30,7 @@ export async function runMatte(connect: () => ComfyClient, run: MatteRun, say: (
   const client = connect();
   const gpu = gpuName(await client.systemStats(), client.host);
   const prefix = `rig_parts_matte_${crypto.randomUUID().slice(0, 8)}`;
-  const info = await client.objectInfo();
+  const info = await client.objectInfo(run.wait);
   refuseIfAny(checkGraph(matteGraph(`${prefix}.png`, prefix), info, client.host, new Set(['1.image'])));
   const files = await client.modelFiles('RMBG');
   if (!files.some(f => f.replaceAll('\\', '/') === MATTE_MODEL_FILE)) refuse('MATTE_MODEL_INSTALLED', MATTE_MODEL_FILE, 'is absent from /models/RMBG; a selector entry alone does not establish installed weights, and automatic download is not permitted');
