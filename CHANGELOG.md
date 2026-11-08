@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.30.2](https://github.com/rig-c/parts/compare/v2.30.1...v2.30.2) (2026-11-08)
+
+
+### Bug Fixes
+
+* **assemble:** retain minimum coverage on guarded art bridges ([#1229](https://github.com/rig-c/parts/issues/1229)) ([55c3715](https://github.com/rig-c/parts/commit/55c3715127f1f97ac8bb25c34f4bef28380524c9))
+* **smoke:** retry the temp-dir cleanup through a short Windows file lock ([#1223](https://github.com/rig-c/parts/issues/1223)) ([#1226](https://github.com/rig-c/parts/issues/1226)) ([98a9aba](https://github.com/rig-c/parts/commit/98a9aba9571662f1d4383c6dcdaefcb864df1200))
+
 ## [2.30.1](https://github.com/rig-c/parts/compare/v2.30.0...v2.30.1) (2026-11-08)
 
 
