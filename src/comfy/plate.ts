@@ -106,7 +106,7 @@ export async function runBackground(connect: () => ComfyClient, run: BackgroundR
 
   const client = connect();
   const gpu = gpuName(await client.systemStats(), client.host);
-  const info = await client.objectInfo();
+  const info = await client.objectInfo(run.wait);
   refuseIfAny(checkGraph(build(`${prefix}_painting.png`, `${prefix}_mask.png`), info, client.host, new Set(['1.image', '2.image'])));
   say(`  box: every node, input and model of the ${run.graph} graph is on its /object_info; GPU ${gpu}`);
 
