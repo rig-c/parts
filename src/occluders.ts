@@ -230,6 +230,42 @@ export function occluderFileProblems(declarations: readonly OccluderDeclaration[
   return problems;
 }
 
+/**
+ * Reorder a draft `assemble.plan` in place so each declared `occluders[i].over`
+ * part sits after every `under` part of the same entry across `full` and `head`
+ * rows, keeping every other row's relative order unchanged (issue #1247).
+ */
+export function orderPlanForOccluders<T extends readonly [string, ...unknown[]]>(
+  plan: T[],
+  declarations: readonly OccluderDeclaration[] | undefined,
+): void {
+  if (declarations === undefined || declarations.length === 0) return;
+  for (let pass = 0; pass <= plan.length; pass++) {
+    let moved = false;
+    for (const d of declarations) {
+      if (d.over === undefined || d.over.length === 0) continue;
+      const underSet = new Set(d.under);
+      let lastUnder = -1;
+      for (let i = 0; i < plan.length; i++) {
+        if (underSet.has(plan[i][0])) lastUnder = i;
+      }
+      if (lastUnder < 0) continue;
+      const overSet = new Set(d.over);
+      const beforeOver: T[] = [];
+      const keptBefore: T[] = [];
+      for (let i = 0; i < lastUnder; i++) {
+        if (overSet.has(plan[i][0])) beforeOver.push(plan[i]);
+        else keptBefore.push(plan[i]);
+      }
+      if (beforeOver.length === 0) continue;
+      const after = plan.slice(lastUnder + 1);
+      plan.splice(0, plan.length, ...keptBefore, plan[lastUnder], ...beforeOver, ...after);
+      moved = true;
+    }
+    if (!moved) break;
+  }
+}
+
 export interface OccluderCopy {
   part: string;
   px: number;

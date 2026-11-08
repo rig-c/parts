@@ -5004,6 +5004,8 @@ outline lies right of every removed pixel, and an image of only that silhouette 
 none of the 15,070 — `ASSEMBLE_UNDER_EMPTY` [observed]. Producing the image is the
 author's.
 
+**Splitting a horizontal hem between two plan layers (`assemble.edge_splits`, issue #1231).** `assemble.edge_splits` (`[{ "over": "<part>", "under": "<part>", "band": [x0, y0, x1, y1] }, ...]`) takes `assemble.plan` part names only (`over !== under`), so a part made by `assemble.cuts` is refused with `CONFIG_NAME_RESOLVES`. Its effect is a horizontal hem split between two plan layers on the rig grid inside `band` (`x0 < x1`, `y0 < y1`, upper bounds exclusive; `ASSEMBLE_PAINTING_BAND_INSIDE` when the box reaches outside the rig canvas), applied after ghost clean-up and rig-space resampling and before projection: per column `x` in `x0 .. x1 - 1`, `y*` is the first row in `y0 .. y1 - 1` (with `y + 1 < H`) with the largest vertical painting RGB step `max(|R(x,y) - R(x,y+1)|, |G(x,y) - G(x,y+1)|, |B(x,y) - B(x,y+1)|)` among rows where `over` has `alpha >= 128` (`EDGE_SPLIT_OVER_ALPHA`; columns with no such row are skipped), and for every row strictly below `y*` inside `band` (`y* + 1 .. y1 - 1`), where `over` has `alpha >= 128`, `over` is cleared to `[0, 0, 0, 0]` and `under` takes the painting's RGB there with `alpha = 255`, and where `over` has `0 < alpha < 128`, `over` is cleared to `[0, 0, 0, 0]`. It transfers static plan-layer ownership along a painted horizontal hem; it does not close a `cuts` seam that opens in motion.
+
 **A layer the author made** (issue #256). A cut covers a piece one polygon over a
 planned part can take. When the piece is a layer you made by hand outside the tool — a
 hand laid over a hip, taken out of `handwear`; a loop of hair over a shoulder, taken
@@ -5406,6 +5408,16 @@ or a joint.
   `over` part draws in front of `under` in `assemble.plan` without being
   reordered by `ASSEMBLE_TAKE_PLAN_ORDER`, while undeclared mixed-run pairs keep
   scalar depth order.
+
+  `over` does not reorder `assemble.plan` at assemble time: it exempts declared
+  `(over, under)` pairs from the mixed-run depth and two-run role-band
+  comparisons (`ASSEMBLE_TAKE_PLAN_ORDER`), and `assemble.plan` must already list
+  each `over` part after its `under` parts across `full` and `head` rows or
+  `assemble` refuses `ASSEMBLE_OCCLUDER_DRAW_ORDER` (and contradictory
+  `(over, under)` declarations refuse `ASSEMBLE_OCCLUDER_DRAW_CYCLE`).
+  `assemble --propose-plan` drafts that order by moving each declared `over`
+  part after every `under` part of the same entry while keeping every other
+  row's relative order unchanged (issue #1247).
 
   When the plate run's own decomposition of an `under` part is needed only under
   the occluder and its visible region should come from the painting's run
