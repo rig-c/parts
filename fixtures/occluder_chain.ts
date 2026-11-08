@@ -202,3 +202,56 @@ export function writePartialOverInputs(dir: string, occluderDepth = 0.2): { pain
   const plateRunDir = writePlateRun(dir, encodePngBytes(chainPlate()));
   return { painting, occluder, occluderSha: sha256(occluderBytes), plateRunDir };
 }
+
+/**
+ * Soft-edge `over` twin (issue #1251):
+ * - The occluder rectangle is `OCCLUDER` (`[48, 32, 80, 96]`, `32 x 64 = 2,048` px, opaque `PARTIAL_OCCLUDER_RGB`).
+ * - The taken `over` layer (`front`, `full:objects`) covers `OCCLUDER`, with an outer ring of width `SOFT_OVER_RING_WIDTH` (`4` px)
+ *   at alpha `SOFT_OVER_RING_ALPHA` (`200`, in `129..249`) and an inner opaque region `SOFT_OVER_INNER_BOX`
+ *   (`[52, 36, 76, 92]`, `24 x 56 = 1,344` px at alpha `255`), so the ring holds `2,048 - 1,344 = 704` px.
+ * - `OCCLUDER_SPECK_BOX` (`[41, 48, 44, 56]`, `3 x 8 = 24` px at alpha `OCCLUDER_SPECK_ALPHA = 20` in `9..32`,
+ *   whose closest column `x = 43` is `5` px off the occluder core edge `x = 48`) is an isolated low-alpha speck.
+ */
+export const SOFT_OVER_RING_WIDTH = 4;
+export const SOFT_OVER_RING_ALPHA = 200;
+export const SOFT_OVER_INNER_BOX: [number, number, number, number] = [
+  OCCLUDER[0] + SOFT_OVER_RING_WIDTH,
+  OCCLUDER[1] + SOFT_OVER_RING_WIDTH,
+  OCCLUDER[2] - SOFT_OVER_RING_WIDTH,
+  OCCLUDER[3] - SOFT_OVER_RING_WIDTH,
+];
+export const SOFT_OVER_INNER_PX = (SOFT_OVER_INNER_BOX[2] - SOFT_OVER_INNER_BOX[0]) * (SOFT_OVER_INNER_BOX[3] - SOFT_OVER_INNER_BOX[1]);
+export const SOFT_OVER_RING_PX = OCCLUDER_PX - SOFT_OVER_INNER_PX;
+export const OCCLUDER_SPECK_BOX: [number, number, number, number] = [41, 48, 44, 56];
+export const OCCLUDER_SPECK_ALPHA = 20;
+export const OCCLUDER_SPECK_PX = (OCCLUDER_SPECK_BOX[2] - OCCLUDER_SPECK_BOX[0]) * (OCCLUDER_SPECK_BOX[3] - OCCLUDER_SPECK_BOX[1]);
+
+export function softOverOriginalRun(occluderDepth = 0.2): LayerSet {
+  const limb = newRaster(SIDE, SIDE), front = newRaster(SIDE, SIDE);
+  for (let y = LIMB[1]; y < LIMB[3]; y++) for (let x = LIMB[0]; x < LIMB[2]; x++) if (!inside(OCCLUDER, x, y)) limb.data.set([...LIMB_RGB, 255], (y * SIDE + x) * 4);
+  fill(front, OCCLUDER, [...PARTIAL_OCCLUDER_RGB, SOFT_OVER_RING_ALPHA]);
+  fill(front, SOFT_OVER_INNER_BOX, [...PARTIAL_OCCLUDER_RGB, 255]);
+  return layerSet([...faceGroup(), { name: 'legwear', pixels: limb, depth: 0.7 }, { name: 'objects', pixels: front, depth: occluderDepth }], 'generated-soft-original');
+}
+
+export function partialOverOccluderWithSpeck(): Raster {
+  const r = partialOverOccluder();
+  fill(r, OCCLUDER_SPECK_BOX, [...PARTIAL_OCCLUDER_RGB, OCCLUDER_SPECK_ALPHA]);
+  return r;
+}
+
+export function writeSoftOverInputs(dir: string, occluderDepth = 0.2): { painting: string; occluder: string; occluderSha: string; speckOccluder: string; speckOccluderSha: string; plateRunDir: string } {
+  mkdirSync(dir, { recursive: true });
+  const painting = join(dir, 'painting.png');
+  const occluder = join(dir, 'occluder.png');
+  const speckOccluder = join(dir, 'occluder_speck.png');
+  writeFileSync(painting, encodePngBytes(partialOverPainting()));
+  const occluderBytes = encodePngBytes(partialOverOccluder());
+  writeFileSync(occluder, occluderBytes);
+  const speckOccluderBytes = encodePngBytes(partialOverOccluderWithSpeck());
+  writeFileSync(speckOccluder, speckOccluderBytes);
+  exportLayers(softOverOriginalRun(occluderDepth), join(dir, 'orig'));
+  writeFileSync(join(dir, 'orig', 'meta.json'), JSON.stringify({ prompt_id: 'generated-soft-original', seed: 42 }));
+  const plateRunDir = writePlateRun(dir, encodePngBytes(chainPlate()));
+  return { painting, occluder, occluderSha: sha256(occluderBytes), speckOccluder, speckOccluderSha: sha256(speckOccluderBytes), plateRunDir };
+}

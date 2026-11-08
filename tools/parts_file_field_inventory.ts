@@ -60,6 +60,7 @@ const OTHER_STRING_FIELDS = [
   'cut_ownership[].into',
   'motion_seams[].neighbour',
   'motion_seams[].part',
+  'occluder_grow[].image',
   'occluder_plates[].mask_sha256',
   'occluder_plates[].occluder_sha256',
   'occluder_plates[].output_sha256',
