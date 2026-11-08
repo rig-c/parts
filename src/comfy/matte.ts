@@ -25,7 +25,7 @@ export async function runMatte(connect: () => ComfyClient, run: MatteRun, say: (
   const checkpoint = declaredChecksum(run.checkpointSha256);
   const painting = readPlatePainting(run.painting);
   assertMatteOutFree(run.out);
-  const prepared = prepareSeeThroughInput(painting.raster, run.resolution);
+  const prepared = prepareSeeThroughInput(painting.raster, run.resolution, 'rgb-black-opaque');
   const input = prepared.transform === undefined ? painting.bytes : encodePngBytes(prepared.image);
   const client = connect();
   const gpu = gpuName(await client.systemStats(), client.host);
