@@ -658,7 +658,7 @@ function applyPaintingEdges(
       pieces.set(o, set);
     }
     // A piece of art the step would split: each cut-off part of it is joined back to its largest part along the path that
-    // restores the fewest lowered pixels (a 0-1 search inside the piece as it was), and only those are not written.
+    // restores the fewest lowered pixels (a 0-1 search inside the piece as it was) and retains their support.
     for (const [o, set] of pieces) {
       if (set.size < 2) continue;
       const labels = [...set].sort((u, v) => now.stats[v].area - now.stats[u].area || u - v);
@@ -692,7 +692,18 @@ function applyPaintingEdges(
         let best = -1;
         for (let p = 0; p < W * H; p++) if (now.labels[p] === l && cost[p] >= 0 && (best < 0 || cost[p] < cost[best])) best = p;
         for (let p = best; p >= 0 && cost[p] > 0; p = from[p]) {
-          if (nowOver.data[p] === 0 && writes.delete(p)) skipped.pieces++;
+          if (nowOver.data[p] === 0 && writes.has(p)) {
+            if (allocation === undefined) writes.delete(p);
+            else {
+              // Keep the original colour at the least alpha that retains this
+              // art bridge. Its guarded support is identical to restoring the
+              // original pixel, including clean fallbacks and silhouettes.
+              const offset = p * 4;
+              const original = parts[i].data;
+              writes.set(p, [original[offset], original[offset + 1], original[offset + 2], OPAQUE_ALPHA_ABOVE + 1]);
+            }
+            skipped.pieces++;
+          }
         }
       }
     }

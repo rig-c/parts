@@ -75,8 +75,8 @@ export function runPaintingOwnerChecks(say: Say): void {
     return hits.a === a.length && hits.b === b.length && hits.other === 0 &&
       [...a, ...b].every(q => Number.isInteger(q.x) && Number.isInteger(q.y) && q.x >= 0 && q.x < 832 && q.y >= 0 && q.y < 1216);
   });
-  say('ED1038_SEPARATE_FROZEN_COORDINATE_LISTS', sizeA === 151 && sizeB === 4 && valid &&
-    followupList.wind.filter(q => q.cause === 'silhouette-clear-reconnected').length === 1, `A ${sizeA}, B ${sizeB}, separate coordinate budgets and named silhouette reconnection`);
+  say('ED1038_SEPARATE_FROZEN_COORDINATE_LISTS', sizeA === 151 && sizeB === 1 && valid &&
+    followupList.wind.length === 1 && followupList.wind[0].cause === 'combined-guard-revert', `A ${sizeA}, B ${sizeB}, separate coordinate budgets and remaining unanchored fallback`);
   say('ED1038_PLANTED_UNLISTED_COORDINATE', paintingEdgeExceptionHits('demo', [0]).other === 1 &&
     paintingEdgeExceptionHits('unknown', [0]).other === 1, 'a new coordinate or unknown example has no exception');
 
