@@ -1482,12 +1482,17 @@ export function configFileReferences(raw: unknown): ConfigFileReference[] {
     const target = parent;
     out.push({ at: field.path.join('.'), value, set: (next) => { target[key] = next; } });
   }
-  // Issue #1230: each declared occluder's image, an array field the single-path table above cannot name.
+  // Issue #1230 / #1237: each declared occluder's image and optional plate directory, array fields the single-path table above cannot name.
   const assemble = isPlainObject(raw) ? raw.assemble : undefined;
   const occluders = isPlainObject(assemble) && Array.isArray(assemble.occluders) ? assemble.occluders : [];
   occluders.forEach((entry: unknown, i: number) => {
-    if (!isPlainObject(entry) || typeof entry.image !== 'string' || entry.image === '') return;
-    out.push({ at: `assemble.occluders[${i}].image`, value: entry.image, set: (next) => { entry.image = next; } });
+    if (!isPlainObject(entry)) return;
+    if (typeof entry.image === 'string' && entry.image !== '') {
+      out.push({ at: `assemble.occluders[${i}].image`, value: entry.image, set: (next) => { entry.image = next; } });
+    }
+    if (typeof entry.plate === 'string' && entry.plate !== '') {
+      out.push({ at: `assemble.occluders[${i}].plate`, value: entry.plate, set: (next) => { entry.plate = next; } });
+    }
   });
   return out;
 }
@@ -2578,7 +2583,7 @@ function checkOccluders(c: Check, a: Record<string, Json>, names: readonly strin
   const declarations: OccluderDeclaration[] = [];
   (a.occluders as Json[]).forEach((value, i) => {
     const p = `${at}[${i}]`;
-    const row = c.object(p, value, ['image', 'sha256', 'under', 'rgb_within'], []);
+    const row = c.object(p, value, ['image', 'sha256', 'under', 'rgb_within'], ['plate']);
     if (row === null) return;
     const imageOk = c.string(`${p}.image`, row.image);
     const shaOk = typeof row.sha256 === 'string' && SHA256_PATTERN.test(row.sha256);
@@ -2587,7 +2592,10 @@ function checkOccluders(c: Check, a: Record<string, Json>, names: readonly strin
     if (underOk) (row.under as Json[]).forEach((name, j) => { if (!c.string(`${p}.under[${j}]`, name)) underOk = false; });
     const rgbOk = typeof row.rgb_within === 'number' && Number.isInteger(row.rgb_within) && row.rgb_within >= 0 && row.rgb_within <= 255;
     if (!rgbOk) c.fail('CONFIG_FIELD_TYPE', `${p}.rgb_within`, `is ${show(row.rgb_within)}; an integer from 0 to 255 is required`);
-    if (imageOk && shaOk && underOk && rgbOk) declarations.push({ image: row.image as string, sha256: row.sha256 as string, under: row.under as string[], rgb_within: row.rgb_within as number });
+    const plateOk = !('plate' in row) || c.string(`${p}.plate`, row.plate);
+    if (imageOk && shaOk && underOk && rgbOk && plateOk) {
+      declarations.push({ image: row.image as string, sha256: row.sha256 as string, under: row.under as string[], rgb_within: row.rgb_within as number, ...('plate' in row ? { plate: row.plate as string } : {}) });
+    }
   });
   c.problems.push(...occluderNameProblems(declarations, names));
   if (base !== null) c.problems.push(...occluderFileProblems(declarations, base));
@@ -2596,7 +2604,11 @@ function checkOccluders(c: Check, a: Record<string, Json>, names: readonly strin
 /** The occluder files, at the doors that know the config's directory but read the plan elsewhere. */
 function checkOccluderFiles(c: Check, assemble: Json, base: string | null): void {
   if (base === null || !isPlainObject(assemble) || !Array.isArray(assemble.occluders)) return;
-  const declarations = (assemble.occluders as Json[]).filter((d): d is OccluderDeclaration => isPlainObject(d) && typeof d.image === 'string' && d.image !== '' && typeof d.sha256 === 'string' && SHA256_PATTERN.test(d.sha256));
+  const declarations = (assemble.occluders as Json[]).flatMap((d): OccluderDeclaration[] => {
+    if (!isPlainObject(d) || typeof d.image !== 'string' || d.image === '' || typeof d.sha256 !== 'string' || !SHA256_PATTERN.test(d.sha256)) return [];
+    const plate = 'plate' in d && typeof d.plate === 'string' && d.plate !== '' ? { plate: d.plate } : {};
+    return [{ image: d.image, sha256: d.sha256, under: [], rgb_within: 0, ...plate }];
+  });
   c.problems.push(...occluderFileProblems(declarations, base));
 }
 
