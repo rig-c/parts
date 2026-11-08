@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.30.1](https://github.com/rig-c/parts/compare/v2.30.0...v2.30.1) (2026-11-08)
+
+
+### Bug Fixes
+
+* **deps:** pin @rig-c/core 3.6.0 ([#1221](https://github.com/rig-c/parts/issues/1221)) ([#1222](https://github.com/rig-c/parts/issues/1222)) ([a3fb49c](https://github.com/rig-c/parts/commit/a3fb49c60cedaec99d40aeab4b5c5679643812b9))
+
 ## [2.30.0](https://github.com/rig-c/parts/compare/v2.29.0...v2.30.0) (2026-11-08)
 
 
