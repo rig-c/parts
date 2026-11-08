@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.33.0](https://github.com/rig-c/parts/compare/v2.32.0...v2.33.0) (2026-11-08)
+
+
+### Features
+
+* **assemble:** bind a receipted occluder plate with assemble.occluders[].plate ([#1237](https://github.com/rig-c/parts/issues/1237)) ([#1240](https://github.com/rig-c/parts/issues/1240)) ([288e135](https://github.com/rig-c/parts/commit/288e13546afefb2ba82cf284eb44c0e2d52b69a8))
+* **assemble:** let a declared occluder draw in front of its under parts with assemble.occluders[].over ([#1241](https://github.com/rig-c/parts/issues/1241)) ([#1244](https://github.com/rig-c/parts/issues/1244)) ([81f394e](https://github.com/rig-c/parts/commit/81f394e50129c851d8307e739bbb1a1dc3bd0f17))
+
 ## [2.32.0](https://github.com/rig-c/parts/compare/v2.31.0...v2.32.0) (2026-11-08)
 
 
