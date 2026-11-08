@@ -79,12 +79,12 @@ try {
       Date.parse(unset.stamp.started_at) >= before && Date.parse(unset.stamp.finished_at) <= after &&
       Date.parse(unset.stamp.started_at) <= Date.parse(unset.stamp.finished_at),
     `exit=${wall.code}; production writer bytes=${unset.raw === rigJsonText(expected)}; keys=${Object.keys(unset.stamp).join(',')}`);
-    for (const epoch of ['0', '8640000000000']) {
+    for (const [epoch, instant] of [['0', '1970-01-01T00:00:00.000Z'], ['253402300799', '9999-12-31T23:59:59.000Z']]) {
       const result = await run(command, out, epoch);
       const stamp = readStamp(out).stamp;
-      check(`${command}_BOUNDARY_${epoch}`, result.code === 0 && stamp.started_at === new Date(Number(epoch) * 1000).toISOString() && stamp.finished_at === stamp.started_at, `epoch=${epoch}; exit=${result.code}`);
+      check(`${command}_BOUNDARY_${epoch}`, result.code === 0 && stamp.started_at === instant && stamp.finished_at === stamp.started_at, `epoch=${epoch}; exit=${result.code}`);
     }
-    const bad = ['', '-1', '1.5', 'abc', '8640000000001', '9007199254740992', '01', '+1', ' 1', '1e3', '1\n'];
+    const bad = ['', '-1', '1.5', 'abc', '253402300800', '8640000000001', '9007199254740992', '01', '+1', ' 1', '1e3', '1\n'];
     for (const [i, epoch] of bad.entries()) {
       const fresh = join(work, `${command}-bad-${i}`);
       const result = await run(command, fresh, epoch);

@@ -1347,10 +1347,10 @@ function runStampClock(): string | undefined {
   const value = process.env.SOURCE_DATE_EPOCH;
   if (value === undefined) return undefined;
   const millis = Number(value) * 1000;
-  if (!/^(0|[1-9][0-9]*)$/.test(value) || !Number.isSafeInteger(millis) || millis > 8.64e15) {
+  if (!/^(0|[1-9][0-9]*)$/.test(value) || !Number.isSafeInteger(millis) || Number(value) > 253402300799) {
     throw new PartsError([{
       code: 'RUN_STAMP_EPOCH', object: 'environment variable SOURCE_DATE_EPOCH',
-      detail: `${JSON.stringify(value)} found; a canonical non-negative integer in seconds with safe milliseconds <= 8640000000000000 is required`,
+      detail: `${JSON.stringify(value)} found; canonical non-negative integer seconds <= 253402300799 (9999-12-31T23:59:59Z) are required`,
     }]);
   }
   return new Date(millis).toISOString();

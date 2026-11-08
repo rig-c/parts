@@ -697,8 +697,9 @@ relative `--config` layout, two `run.json` files differ only in `started_at` and
 
 Set `SOURCE_DATE_EPOCH` to opt into a fixed clock: both timestamps equal that
 instant in UTC ISO format, without adding a stamp field. The value must match
-`^(0|[1-9][0-9]*)$`: non-negative integer seconds, with a safe integer millisecond
-product no greater than 8640000000000000 (Date's inclusive limit). Empty, negative,
+`^(0|[1-9][0-9]*)$` and be at most 253402300799 seconds
+(9999-12-31T23:59:59Z), preserving the four-digit-year ISO form.
+253402300800 and above are refused. Empty, negative,
 fractional, non-numeric, noncanonical and out-of-range values refuse
 `RUN_STAMP_EPOCH`, naming the variable, found value and requirement before any
 output is written or an existing stamp is removed. Unset preserves the existing
