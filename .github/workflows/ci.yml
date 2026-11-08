@@ -124,6 +124,8 @@ jobs:
       - run: bun run lint
       - name: Check receipted matte against a fake ComfyUI
         run: bun tools/check_matte.ts
+      - name: Check core plate pad-to-8 transform against a fake ComfyUI
+        run: bun tools/check_core_grid.ts
       - uses: actions/download-artifact@v4
         with:
           pattern: selftest-shard-*

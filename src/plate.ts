@@ -46,12 +46,25 @@ export const PLATE_RECEIPT_FILE = 'receipt.json';
 export const PLATE_MASK_FILE = 'mask.png';
 export const PLATE_OUTPUT_FILE = 'plate.png';
 
-/** The receipt's top-level keys, in the order they are written. */
+/** The receipt's top-level keys when `grid_transform` is absent, in the order they are written. */
 export const PLATE_RECEIPT_KEYS = ['spec', 'mode', 'painting', 'mask', 'model', 'params', 'graph', 'gpu', 'output'] as const;
+/** The receipt's top-level keys when `grid_transform` is present (off-grid `core`), in the order they are written. */
+export const PLATE_RECEIPT_GRID_TRANSFORM_KEYS = ['spec', 'mode', 'painting', 'mask', 'model', 'params', 'graph', 'gpu', 'grid_transform', 'output'] as const;
+/** The `grid_transform` object's keys, in the order they are written. */
+export const CORE_GRID_TRANSFORM_KEYS = ['source', 'padded', 'pad', 'pad_fill', 'mask_pad_fill', 'inverse'] as const;
 
 export type PlateMode = 'background' | 'foreground';
 export type PlateGraph = 'lama' | 'core';
 export type MaskSource = 'seethrough' | 'figure-mask' | 'matte';
+
+export interface CoreGridTransform {
+  source: [number, number];
+  padded: [number, number];
+  pad: [0, 0];
+  pad_fill: 'edge-replicate';
+  mask_pad_fill: 'zero';
+  inverse: 'crop';
+}
 
 /** The graph ids a receipt names: one per background graph, and the fixed local id of the foreground derivation. */
 export const PLATE_GRAPH_IDS = {
@@ -74,6 +87,7 @@ export interface PlateReceipt {
   params: Record<string, string | number | boolean>;
   graph: string;
   gpu: string | null;
+  grid_transform?: CoreGridTransform;
   output: { path: string; sha256: string };
 }
 
@@ -412,19 +426,91 @@ export function corePlateGraph(painting: string, mask: string, checkpoint: strin
   };
 }
 
-/** The `core` graph encodes through the VAE, which crops to multiples of 8; a painting off that grid is refused before anything is uploaded. */
-export function coreGridProblem(width: number, height: number, painting: string): Problem | null {
-  return width % 8 === 0 && height % 8 === 0 ? null : { code: 'PLATE_CORE_GRID', object: painting, detail: `is ${width}x${height}; the core graph needs both sides a multiple of 8 (the VAE crops otherwise) — use --graph lama, or a painting on that grid` };
+/** The pad-to-8 transform for an off-grid painting on the `core` background graph; `undefined` when already a multiple of 8. */
+export function coreGridTransform(width: number, height: number): CoreGridTransform | undefined {
+  if (width % 8 === 0 && height % 8 === 0) return undefined;
+  return {
+    source: [width, height],
+    padded: [Math.ceil(width / 8) * 8, Math.ceil(height / 8) * 8],
+    pad: [0, 0],
+    pad_fill: 'edge-replicate',
+    mask_pad_fill: 'zero',
+    inverse: 'crop',
+  };
+}
+
+/** Validate a recorded `grid_transform` against the bound painting's `width`x`height` and key order. */
+export function isCoreGridTransform(value: unknown, width: number, height: number): value is CoreGridTransform {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const v = value as Record<string, unknown>;
+  if (Object.keys(v).join(',') !== CORE_GRID_TRANSFORM_KEYS.join(',')) return false;
+  const pair = (p: unknown): p is [number, number] => Array.isArray(p) && p.length === 2 && p.every((n) => Number.isSafeInteger(n));
+  if (!pair(v.source) || !pair(v.padded) || !pair(v.pad)) return false;
+  const expected = coreGridTransform(width, height);
+  if (expected === undefined) return false;
+  return (
+    v.source[0] === expected.source[0] &&
+    v.source[1] === expected.source[1] &&
+    v.padded[0] === expected.padded[0] &&
+    v.padded[1] === expected.padded[1] &&
+    v.pad[0] === 0 &&
+    v.pad[1] === 0 &&
+    v.pad_fill === 'edge-replicate' &&
+    v.mask_pad_fill === 'zero' &&
+    v.inverse === 'crop'
+  );
+}
+
+/**
+ * Pad an off-grid painting and its grown mask to the next multiple of 8 on
+ * the right and bottom (`pad: [0, 0]`): the painting replicates its right and
+ * bottom edges (`edge-replicate`), and the mask pads with `0` (kept as
+ * context, never inside the hole). On-grid paintings return unchanged with no
+ * transform.
+ */
+export function prepareCoreGrid(painting: Raster, mask: FigureMask): { painting: Raster; mask: FigureMask; transform?: CoreGridTransform } {
+  const transform = coreGridTransform(painting.width, painting.height);
+  if (transform === undefined) return { painting, mask };
+  const [W, H] = transform.source;
+  const [paddedW, paddedH] = transform.padded;
+  const paddedPainting = newRaster(paddedW, paddedH);
+  for (let y = 0; y < paddedH; y++) {
+    const sy = Math.min(y, H - 1);
+    for (let x = 0; x < paddedW; x++) {
+      const sx = Math.min(x, W - 1);
+      const src = (sy * W + sx) * 4;
+      const dst = (y * paddedW + x) * 4;
+      paddedPainting.data.set(painting.data.subarray(src, src + 4), dst);
+    }
+  }
+  const paddedMask: FigureMask = { width: paddedW, height: paddedH, inside: new Uint8Array(paddedW * paddedH) };
+  for (let y = 0; y < H; y++) {
+    paddedMask.inside.set(mask.inside.subarray(y * W, (y + 1) * W), y * paddedW);
+  }
+  return { painting: paddedPainting, mask: paddedMask, transform };
+}
+
+/** Crop a padded `core` output back to the painting's exact `source` grid at `transform.pad` (`[0, 0]`). */
+export function cropCoreGrid(padded: Raster, transform: CoreGridTransform): Raster {
+  const [W, H] = transform.source;
+  const [padX, padY] = transform.pad;
+  const out = newRaster(W, H);
+  for (let y = 0; y < H; y++) {
+    const src = ((y + padY) * padded.width + padX) * 4;
+    out.data.set(padded.data.subarray(src, src + W * 4), y * W * 4);
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
 // the receipt
 // ---------------------------------------------------------------------------
 
-/** The receipt's JSON text, its keys in `PLATE_RECEIPT_KEYS` order. */
+/** The receipt's JSON text, its keys in `PLATE_RECEIPT_KEYS` (or `PLATE_RECEIPT_GRID_TRANSFORM_KEYS` when `grid_transform` is present) order. */
 export function receiptText(r: PlateReceipt): string {
   const ordered: Record<string, unknown> = {};
-  for (const k of PLATE_RECEIPT_KEYS) ordered[k] = r[k];
+  const keys = r.grid_transform === undefined ? PLATE_RECEIPT_KEYS : PLATE_RECEIPT_GRID_TRANSFORM_KEYS;
+  for (const k of keys) ordered[k] = r[k];
   return `${JSON.stringify(ordered, null, 2)}\n`;
 }
 
@@ -435,21 +521,28 @@ export function receiptPath(receiptDir: string, path: string): string {
 
 /**
  * Every problem between a receipt and the bytes on disk: its spec and key
- * order, and each of the painting, mask and output whose sha256 is not that of
- * the file it names (or whose file is gone).
+ * order, each of the painting, mask and output whose sha256 is not that of
+ * the file it names (or whose file is gone), and `grid_transform` re-derived
+ * from the decoded painting, mode and graph.
  */
 export function verifyPlateReceipt(receiptFile: string): Problem[] {
   const problems: Problem[] = [];
   let r: Record<string, unknown>;
   try {
-    r = JSON.parse(readFileSync(receiptFile, 'utf8')) as Record<string, unknown>;
+    const parsed: unknown = JSON.parse(readFileSync(receiptFile, 'utf8'));
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return [{ code: 'PLATE_RECEIPT_READ', object: receiptFile, detail: 'does not parse as a JSON object' }];
+    }
+    r = parsed as Record<string, unknown>;
   } catch (err) {
     return [{ code: 'PLATE_RECEIPT_READ', object: receiptFile, detail: `does not parse as JSON (${(err as Error).message})` }];
   }
   if (r.spec !== PLATE_RECEIPT_SPEC) problems.push({ code: 'PLATE_RECEIPT_SPEC', object: receiptFile, detail: `has spec ${JSON.stringify(r.spec)}; "${PLATE_RECEIPT_SPEC}" is required` });
   const keys = Object.keys(r).join(',');
-  if (keys !== PLATE_RECEIPT_KEYS.join(',')) problems.push({ code: 'PLATE_RECEIPT_KEYS', object: receiptFile, detail: `has keys ${keys}; ${PLATE_RECEIPT_KEYS.join(',')} in that order is required` });
+  const expectedKeys = 'grid_transform' in r ? PLATE_RECEIPT_GRID_TRANSFORM_KEYS : PLATE_RECEIPT_KEYS;
+  if (keys !== expectedKeys.join(',')) problems.push({ code: 'PLATE_RECEIPT_KEYS', object: receiptFile, detail: `has keys ${keys}; ${expectedKeys.join(',')} in that order is required` });
   const base = dirname(receiptFile);
+  let paintingRaster: Raster | undefined;
   for (const field of ['painting', 'mask', 'output'] as const) {
     const f = r[field] as { path?: unknown; sha256?: unknown } | undefined;
     if (typeof f?.path !== 'string' || typeof f.sha256 !== 'string') {
@@ -461,8 +554,42 @@ export function verifyPlateReceipt(receiptFile: string): Problem[] {
       problems.push({ code: 'PLATE_RECEIPT_FILE', object: `${receiptFile} ${field}`, detail: `names ${f.path}, which does not exist` });
       continue;
     }
-    const found = sha256(new Uint8Array(readFileSync(file)));
+    const bytes = new Uint8Array(readFileSync(file));
+    const found = sha256(bytes);
     if (found !== f.sha256) problems.push({ code: 'PLATE_RECEIPT_HASH', object: `${receiptFile} ${field}`, detail: `records sha256 ${f.sha256} for ${f.path}; the file on disk has ${found}` });
+    if (field === 'painting') {
+      try { paintingRaster = decodePngBytes(bytes, file); } catch { /* hash/read already covers invalid bytes */ }
+    }
+  }
+  if (paintingRaster !== undefined) {
+    const expectedTransform = r.mode === 'background' && r.graph === PLATE_GRAPH_IDS.core ? coreGridTransform(paintingRaster.width, paintingRaster.height) : undefined;
+    if (expectedTransform !== undefined) {
+      if (!('grid_transform' in r) || r.grid_transform === undefined) {
+        problems.push({
+          code: 'PLATE_RECEIPT_GRID_TRANSFORM',
+          object: `${receiptFile} grid_transform`,
+          detail: `is absent; off-grid core painting (${paintingRaster.width}x${paintingRaster.height}) requires ${JSON.stringify(expectedTransform)}`,
+        });
+      } else if (!isCoreGridTransform(r.grid_transform, paintingRaster.width, paintingRaster.height)) {
+        problems.push({
+          code: 'PLATE_RECEIPT_GRID_TRANSFORM',
+          object: `${receiptFile} grid_transform`,
+          detail: `is ${JSON.stringify(r.grid_transform)}; off-grid core painting (${paintingRaster.width}x${paintingRaster.height}) requires ${JSON.stringify(expectedTransform)} in ${CORE_GRID_TRANSFORM_KEYS.join(',')} order`,
+        });
+      }
+    } else if ('grid_transform' in r) {
+      problems.push({
+        code: 'PLATE_RECEIPT_GRID_TRANSFORM',
+        object: `${receiptFile} grid_transform`,
+        detail: `is ${JSON.stringify(r.grid_transform)}; no grid_transform is permitted for ${r.mode === 'background' && r.graph === PLATE_GRAPH_IDS.core ? `on-grid painting ${paintingRaster.width}x${paintingRaster.height}` : `mode ${JSON.stringify(r.mode)} graph ${JSON.stringify(r.graph)}`}`,
+      });
+    }
+  } else if ('grid_transform' in r && (typeof r.grid_transform !== 'object' || r.grid_transform === null || Array.isArray(r.grid_transform) || Object.keys(r.grid_transform as object).join(',') !== CORE_GRID_TRANSFORM_KEYS.join(','))) {
+    problems.push({
+      code: 'PLATE_RECEIPT_GRID_TRANSFORM',
+      object: `${receiptFile} grid_transform`,
+      detail: `is ${JSON.stringify(r.grid_transform)}; a valid grid_transform in ${CORE_GRID_TRANSFORM_KEYS.join(',')} order is required`,
+    });
   }
   return problems;
 }
@@ -500,6 +627,7 @@ export interface PlateWrite {
   params: PlateReceipt['params'];
   graph: string;
   gpu: string | null;
+  gridTransform?: CoreGridTransform;
 }
 
 let foregroundStageSeq = 0;
@@ -528,6 +656,7 @@ export function publishPlate(w: PlateWrite): PlateReceipt {
       params: w.params,
       graph: w.graph,
       gpu: w.gpu,
+      ...(w.gridTransform === undefined ? {} : { grid_transform: w.gridTransform }),
       output: { path: PLATE_OUTPUT_FILE, sha256: plate.sha256 },
     };
     writeFileSync(join(stage, PLATE_RECEIPT_FILE), receiptText(receipt));

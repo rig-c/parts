@@ -6,17 +6,20 @@
  *
  * 1. the source mask is read (`src/plate.ts`); with none, the run is refused
  *    before anything is written and before the host is reached;
- * 2. the declared checkpoint sha256 and, for `core`, the painting's grid are
+ * 2. the declared checkpoint sha256 and, for `core`, the checkpoint name are
  *    checked;
  * 3. the box answers `/system_stats` and names its GPU;
  * 4. every node, input and model of the chosen graph is on the box's
  *    `/object_info` (`checkGraph`) — a box without the inpaint pack is refused
  *    here for `lama`, before anything is uploaded;
- * 5. the painting and the grown mask are uploaded and the graph is appended
+ * 5. the painting and the grown mask (for off-grid `core`, padded to the next
+ *    multiple of 8 on the right and bottom with `grid_transform` recorded) are
+ *    uploaded and the graph is appended
  *    to the queue: behind every other job, never in front, nothing reordered
  *    and nothing cancelled; a wait past `--wait` while pending is refused
  *    naming the job's place (`COMFY_QUEUE_BEHIND`);
- * 6. the box's image is read back, required at the painting's size, pasted
+ * 6. the box's image is read back, required at the uploaded size (then cropped
+ *    at `[0, 0]` back to the painting's size for off-grid `core`), pasted
  *    into the painting inside the mask only, and written with its receipt
  *    through `publishPlate` (staged, read back, then moved).
  */
@@ -26,8 +29,8 @@ import {
   assertPlateOutFree,
   CORE_DEFAULTS,
   type CoreParams,
-  coreGridProblem,
   corePlateGraph,
+  cropCoreGrid,
   declaredChecksum,
   type FigureMask,
   growMask,
@@ -40,6 +43,7 @@ import {
   PLATE_GRAPH_IDS,
   type PlateGraph,
   type PlateReceipt,
+  prepareCoreGrid,
   publishPlate,
   readPlatePainting,
   readSourceMask,
@@ -77,19 +81,20 @@ export function gpuName(stats: Record<string, unknown>, host: string): string {
 
 /** `connect` is called only after every local check has passed, so a refused run never resolves a host or reaches a box. */
 export async function runBackground(connect: () => ComfyClient, run: BackgroundRun, say: (line: string) => void): Promise<PlateReceipt> {
-  // Local first: no source mask, a bad checksum or an off-grid painting is refused before the box is reached.
+  // Local first: no source mask, a bad checksum or a missing checkpoint is refused before the box is reached.
   const from = parseMaskFrom(run.maskFrom);
   const painting = readPlatePainting(run.painting);
   const { width: W, height: H } = painting.raster;
   const source: FigureMask = readSourceMask(from.source, from.dir, W, H, painting.raster, painting.bytes);
   const checkpoint = declaredChecksum(run.checkpointSha256);
-  if (run.graph === 'core') {
-    if (run.model === undefined) refuse('PLATE_MODEL_GIVEN', '--model', 'is absent; the core graph needs the checkpoint the box loads, by its name on the box — there is no default checkpoint');
-    const grid = coreGridProblem(W, H, run.painting);
-    if (grid !== null) refuseIfAny([grid]);
+  if (run.graph === 'core' && run.model === undefined) {
+    refuse('PLATE_MODEL_GIVEN', '--model', 'is absent; the core graph needs the checkpoint the box loads, by its name on the box — there is no default checkpoint');
   }
   assertPlateOutFree(run.out);
   const mask = growMask(source, run.growPx);
+  const prepared = run.graph === 'core' ? prepareCoreGrid(painting.raster, mask) : { painting: painting.raster, mask };
+  const uploadPaintingBytes = prepared.transform === undefined ? painting.bytes : encodePngBytes(prepared.painting);
+  const uploadMaskBytes = encodePngBytes(maskImage(prepared.mask));
   const model = run.model ?? LAMA_MODEL;
   const lama: LamaParams = { seed: run.seed, grow_px: run.growPx };
   const core: CoreParams = { seed: run.seed, grow_px: run.growPx, steps: run.steps, cfg: CORE_DEFAULTS.cfg, sampler: CORE_DEFAULTS.sampler, scheduler: CORE_DEFAULTS.scheduler, denoise: CORE_DEFAULTS.denoise, prompt: run.prompt ?? CORE_DEFAULTS.prompt, negative: run.negative ?? CORE_DEFAULTS.negative };
@@ -102,9 +107,9 @@ export async function runBackground(connect: () => ComfyClient, run: BackgroundR
   refuseIfAny(checkGraph(build(`${prefix}_painting.png`, `${prefix}_mask.png`), info, client.host, new Set(['1.image', '2.image'])));
   say(`  box: every node, input and model of the ${run.graph} graph is on its /object_info; GPU ${gpu}`);
 
-  const paintingRef = await client.uploadImage(painting.bytes, `${prefix}_painting.png`);
-  const maskRef = await client.uploadImage(encodePngBytes(maskImage(mask)), `${prefix}_mask.png`);
-  say(`  uploaded ${run.painting} (${W}x${H}) and its mask (${mask.inside.reduce((a, b) => a + b, 0)} px, grown ${run.growPx} px)`);
+  const paintingRef = await client.uploadImage(uploadPaintingBytes, `${prefix}_painting.png`);
+  const maskRef = await client.uploadImage(uploadMaskBytes, `${prefix}_mask.png`);
+  say(`  uploaded ${run.painting} (${prepared.painting.width}x${prepared.painting.height}) and its mask (${mask.inside.reduce((a, b) => a + b, 0)} px, grown ${run.growPx} px)`);
   const id = await client.submit(build(paintingRef, maskRef), 'rig-parts');
   say(`  appended prompt ${id} to the queue (behind any other job; nothing reordered or cancelled)`);
   const { entry, elapsed } = await client.waitBehind(id, run.wait, run.timeout, say);
@@ -112,7 +117,15 @@ export async function runBackground(connect: () => ComfyClient, run: BackgroundR
   const images = historyImages(entry);
   if (images.length !== 1) refuse('COMFY_HISTORY_OUTPUTS', `prompt ${id}`, `lists ${images.length} image(s); the graph's one SaveImage is required to have saved exactly one`);
   const got = decodePngBytes(await client.view(images[0].filename, images[0].subfolder, images[0].type), images[0].filename);
-  if (got.width !== W || got.height !== H) refuse('COMFY_PLATE_SIZE', `prompt ${id} ${images[0].filename}`, `is ${got.width}x${got.height}; the painting's ${W}x${H} is required — the plate is pasted into the painting pixel for pixel, never resized`);
+  const [expectedW, expectedH] = prepared.transform === undefined ? [W, H] : prepared.transform.padded;
+  if (got.width !== expectedW || got.height !== expectedH) {
+    refuse(
+      'COMFY_PLATE_SIZE',
+      `prompt ${id} ${images[0].filename}`,
+      `is ${got.width}x${got.height}; ${prepared.transform === undefined ? `the painting's ${W}x${H}` : `the padded core grid ${expectedW}x${expectedH} (for painting ${W}x${H})`} is required — the plate is pasted into the painting pixel for pixel, never resized`,
+    );
+  }
+  const inpainted = prepared.transform === undefined ? got : cropCoreGrid(got, prepared.transform);
 
   return publishPlate({
     out: run.out,
@@ -123,10 +136,11 @@ export async function runBackground(connect: () => ComfyClient, run: BackgroundR
     source: from.source,
     sourceDir: from.dir,
     mask,
-    plate: pasteInside(painting.raster, got, mask),
+    plate: pasteInside(painting.raster, inpainted, mask),
     model: { name: model, checkpoint_sha256: checkpoint, checkpoint_sha256_from: 'declared' },
     params: run.graph === 'lama' ? { ...lama, mask_alpha_above: OPAQUE_ALPHA_ABOVE } : { ...core, mask_alpha_above: OPAQUE_ALPHA_ABOVE },
     graph: PLATE_GRAPH_IDS[run.graph],
     gpu,
+    gridTransform: prepared.transform,
   });
 }

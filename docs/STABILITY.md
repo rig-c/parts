@@ -451,10 +451,22 @@ new spec version. Every path in it is relative to the receipt's directory.
 | `params` | every parameter of the run, the seed included, in a fixed order per graph: `lama` — `seed`, `grow_px`, `mask_alpha_above`; `core` — `seed`, `grow_px`, `steps`, `cfg`, `sampler`, `scheduler`, `denoise`, `prompt`, `negative`, `mask_alpha_above`; `foreground` — `mask_alpha_above` |
 | `graph` | `"rig-parts/plate-background-lama/1"`, `"rig-parts/plate-background-core/1"`, or the fixed local id `"rig-parts/plate-foreground/1"` |
 | `gpu` | the device `/system_stats` names (the same seed gives other pixels on another GPU), or null for `foreground` |
+| `grid_transform` | present only when `mode` is `"background"`, `graph` is `"rig-parts/plate-background-core/1"`, and the painting's width or height is not a multiple of 8 (issue #1209, additive): `{ source: [width, height], padded: [ceil(width/8)*8, ceil(height/8)*8], pad: [0, 0], pad_fill: "edge-replicate", mask_pad_fill: "zero", inverse: "crop" }` in that key order. Omitted for on-grid `core`, `lama`, and `foreground` |
 | `output` | `{ path, sha256 }` of `plate.png` |
 
 The receipt is read back against the bytes on disk before `<out>` is published;
-a hash that is not its file's refuses the run.
+a hash that is not its file's refuses the run. `verifyPlateReceipt` also
+re-derives `grid_transform` from the decoded painting, `mode` and `graph`, and
+refuses a missing, unexpected, malformed or mismatched transform as
+`PLATE_RECEIPT_GRID_TRANSFORM`. For off-grid `--graph core` paintings, the
+uploaded painting is padded on the right and bottom by replicating its edge
+pixels (`pad_fill: "edge-replicate"`), the uploaded grown mask is padded with
+zero (`mask_pad_fill: "zero"`, kept as context outside the hole), the box's
+output is required at `padded` dimensions (`COMFY_PLATE_SIZE` otherwise) and
+cropped at `[0, 0]` back to `source` before pasting inside the native mask, so
+pixels outside the hole equal the painting byte for byte. On-grid `core`
+paintings retain their original upload bytes, graph and 9-key receipt. Because
+every painting grid is covered by this transform, `PLATE_CORE_GRID` is retired.
 
 ### Matte source receipt
 
