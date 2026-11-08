@@ -14,7 +14,10 @@ import { RunTally, reportMeasuredCase, tallyFaults, treeGuideCase, treeFiles, TE
 
 interface Case { name: string; ok: boolean; detail: string }
 const cases: Case[] = [];
-const check = (name: string, ok: boolean, detail: string): void => { cases.push({ name: `MT1204_${name}`, ok, detail }); };
+// Preserve child diagnostics as a single detail line so their gutter words cannot enter RunTally.
+const check = (name: string, ok: boolean, detail: string): void => {
+  cases.push({ name: `MT1204_${name}`, ok, detail: JSON.stringify(detail) });
+};
 const root = join(import.meta.dir, '..');
 const work = mkdtempSync(join(tmpdir(), 'parts-matte-'));
 const painting = join(work, 'painting.png');
@@ -74,7 +77,8 @@ async function controls(): Promise<void> {
   const fgRaster = decodePngBytes(readFileSync(join(foreground, 'plate.png')), 'foreground');
   check('FOREGROUND_PIXELS_MATCH', fgRaster.data.every((value, i) => value === (bound.inside[Math.floor(i / 4)] ? square.data[i] : 0)), 'every RGBA foreground/output pixel matches the source mask');
 
-  // The same hand mask represented by each existing source must write identical PNGs.
+  // The same hand-computable mask represented by each existing source writes identical PNGs.
+  // Synthetic stripe layers use the supported author:<label> namespace and flat filenames.
   const legacyRoot = join(work, 'figure-source');
   const rig = join(legacyRoot, 'rig');
   mkdirSync(rig, { recursive: true });
@@ -86,14 +90,14 @@ async function controls(): Promise<void> {
     { path: 'rig/figure_rig.png', sha256: sha256(finalMask) }, { path: 'rig/parts.json', sha256: sha256(partsBytes) },
   ] }));
   const seethrough = join(work, 'layer-source');
-  mkdirSync(join(seethrough, 'parts'), { recursive: true });
+  mkdirSync(seethrough, { recursive: true });
   const stripe = newRaster(1, 8);
   stripe.data.fill(255);
   const stripeBytes = encodePngBytes(stripe);
-  const stripes = [1, 3, 5, 7].map(x => ({ name: `stripe_${x}`, filename: `stripe_${x}.png`, left: x, top: 0, right: x + 1, bottom: 8, depth_median: 0.5 }));
-  for (const layer of stripes) writeFileSync(join(seethrough, 'parts', layer.filename), stripeBytes);
+  const stripes = [1, 3, 5, 7].map(x => ({ name: `author:stripe_${x}`, filename: `stripe_${x}.png`, left: x, top: 0, right: x + 1, bottom: 8, depth_median: 0.5 }));
+  for (const layer of stripes) writeFileSync(join(seethrough, layer.filename), stripeBytes);
   writeFileSync(join(seethrough, 'layers.json'), JSON.stringify({ prefix: 'fixture', timestamp: 'fixture', width: 8, height: 8, layers: stripes }));
-  writeFileSync(join(seethrough, 'meta.json'), JSON.stringify({ image_sha256: sha256(readFileSync(painting)), layers: stripes.map(layer => ({ path: `parts/${layer.filename}`, sha256: sha256(stripeBytes) })) }));
+  writeFileSync(join(seethrough, 'meta.json'), JSON.stringify({ image_sha256: sha256(readFileSync(painting)), layers: stripes.map(layer => ({ path: layer.filename, sha256: sha256(stripeBytes) })) }));
   for (const [kind, dir] of [['figure-mask', rig], ['seethrough', seethrough]] as const) {
     const out = join(work, `${kind}-foreground`);
     runForeground({ painting, maskFrom: `${kind}:${dir}`, out });
