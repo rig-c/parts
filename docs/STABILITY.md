@@ -688,11 +688,22 @@ Key order is fixed as shown; `outputs` is sorted by `/`-separated `path` in UTF-
 code-unit order. Every `path` in `config` and `outputs` is relative to the `--out`
 directory (`../`-prefixed when `--config` sits outside `--out`; never an absolute or
 home path). Every `sha256` is computed from the bytes on disk after writing. A refused
-run writes no `run.json`. Because `started_at` and `finished_at` record wall-clock
-time read in `cli.ts` (`src/` remains pure), `run.json` is outside the byte-for-byte
+run writes no `run.json`. By default, `started_at` and `finished_at` record wall-clock
+time read in `cli.ts` (`src/` remains pure). With that default, `run.json` is outside
+the byte-for-byte
 determinism comparisons (`RG03`, `RG19`, `AS07`); for the same input at the same
 relative `--config` layout, two `run.json` files differ only in `started_at` and
 `finished_at`.
+
+Set `SOURCE_DATE_EPOCH` to opt into a fixed clock: both timestamps equal that
+instant in UTC ISO format, without adding a stamp field. The value must match
+`^(0|[1-9][0-9]*)$`: non-negative integer seconds, with a safe integer millisecond
+product no greater than 8640000000000000 (Date's inclusive limit). Empty, negative,
+fractional, non-numeric, noncanonical and out-of-range values refuse
+`RUN_STAMP_EPOCH`, naming the variable, found value and requirement before any
+output is written or an existing stamp is removed. Unset preserves the existing
+wall-clock path and stamp format. Fixed clocks make stamps byte-identical for
+identical inputs and the same relative config layout.
 
 `outputs` lists exactly the files the stage wrote in this run, derived from what the
 stage returns, not from a walk of `--out`: a stray or earlier file under `--out` is
