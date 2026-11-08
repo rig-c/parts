@@ -37,11 +37,19 @@ export function resolveHost(flag: string | undefined, env: string | undefined): 
   return host.replace(/\/+$/, '');
 }
 
+export const OBJECT_INFO_REQUEST_FACTOR = 4;
+
 export interface ClientTiming {
   /** Seconds between two polls of /queue or /history. */
   poll: number;
   /** Seconds one plain request may take. */
   request: number;
+  /** Seconds GET /object_info may take (default: 4x `request`, bounded by `wait` when given). */
+  objectInfo?: number;
+  /** Seconds the run allows before a queued job starts (`--wait`), used to bound `/object_info`. */
+  wait?: number;
+  /** Milliseconds per nominal second (default: 1000); tests may inject a smaller unit to scale waits down. */
+  unitMs?: number;
 }
 
 export interface OutputImage {
@@ -55,7 +63,18 @@ export interface HistoryEntry {
   status: { status_str?: string; completed?: boolean; messages?: unknown[] } | null;
 }
 
-const sleep = (s: number): Promise<void> => new Promise((r) => setTimeout(r, s * 1000));
+function isTimeoutError(err: unknown): boolean {
+  return err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+}
+
+function isTimeoutRefusal(err: unknown): boolean {
+  return (
+    err instanceof PartsError &&
+    err.problems.length === 1 &&
+    err.problems[0].code === 'COMFY_REACHABLE' &&
+    err.problems[0].detail.startsWith('did not answer within ')
+  );
+}
 
 function asObject(v: unknown): Record<string, unknown> | null {
   return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
@@ -72,19 +91,54 @@ export class ComfyClient {
     readonly timing: ClientTiming,
   ) {}
 
+  private get unitMs(): number {
+    return this.timing.unitMs ?? 1000;
+  }
+
+  private nowSeconds(): number {
+    return Date.now() / this.unitMs;
+  }
+
+  private sleepSeconds(s: number): Promise<void> {
+    return s <= 0 ? Promise.resolve() : new Promise((r) => setTimeout(r, s * this.unitMs));
+  }
+
+  /**
+   * Seconds `GET /object_info` may take: `timing.objectInfo` when set, else
+   * four times `timing.request` (120 s at the 30 s default, since a real box's
+   * multi-megabyte `/object_info` takes 24.5–36.5 s), bounded by `--wait`.
+   */
+  objectInfoSeconds(wait?: number): number {
+    const cap = this.timing.objectInfo ?? this.timing.request * OBJECT_INFO_REQUEST_FACTOR;
+    const bound = wait ?? this.timing.wait;
+    return bound === undefined ? cap : Math.min(cap, bound);
+  }
+
   private async call(method: 'GET' | 'POST', path: string, body?: string | FormData, headers?: Record<string, string>, seconds = this.timing.request): Promise<Response> {
+    const label = Number(seconds.toFixed(1));
     try {
-      return await fetch(`${this.host}${path}`, { method, body, headers, signal: AbortSignal.timeout(seconds * 1000) });
+      return await fetch(`${this.host}${path}`, { method, body, headers, signal: AbortSignal.timeout(Math.max(1, seconds * this.unitMs)) });
     } catch (err) {
       const e = err as Error;
-      const what = e.name === 'TimeoutError' ? `did not answer within ${seconds} s` : `could not be reached (${e.message})`;
+      const what = isTimeoutError(e) ? `did not answer within ${label} s` : `could not be reached (${e.message})`;
       return refuse('COMFY_REACHABLE', `${method} ${this.host}${path}`, `${what}; a running ComfyUI at this host is required`);
     }
   }
 
-  private async json(method: 'GET' | 'POST', path: string, body?: string | FormData, headers?: Record<string, string>): Promise<unknown> {
-    const res = await this.call(method, path, body, headers);
-    const text = await res.text();
+  private async readText(res: Response, method: 'GET' | 'POST', path: string, seconds: number): Promise<string> {
+    try {
+      return await res.text();
+    } catch (err) {
+      const e = err as Error;
+      const label = Number(seconds.toFixed(1));
+      const what = isTimeoutError(e) ? `did not answer within ${label} s` : `could not be reached (${e.message})`;
+      return refuse('COMFY_REACHABLE', `${method} ${this.host}${path}`, `${what}; a running ComfyUI at this host is required`);
+    }
+  }
+
+  private async json(method: 'GET' | 'POST', path: string, body?: string | FormData, headers?: Record<string, string>, seconds = this.timing.request): Promise<unknown> {
+    const res = await this.call(method, path, body, headers, seconds);
+    const text = await this.readText(res, method, path, seconds);
     if (!res.ok) refuse('COMFY_REQUEST_OK', `${method} ${this.host}${path}`, `answered HTTP ${res.status}: ${brief(text)}; HTTP 200 is required`);
     try {
       return JSON.parse(text);
@@ -94,8 +148,8 @@ export class ComfyClient {
   }
 
   /** `GET /system_stats`, or a refusal naming the host. */
-  async systemStats(): Promise<Record<string, unknown>> {
-    const s = asObject(await this.json('GET', '/system_stats'));
+  async systemStats(seconds = this.timing.request): Promise<Record<string, unknown>> {
+    const s = asObject(await this.json('GET', '/system_stats', undefined, undefined, seconds));
     if (s === null) refuse('COMFY_REQUEST_OK', `GET ${this.host}/system_stats`, 'answered with something that is not an object');
     return s;
   }
@@ -110,8 +164,8 @@ export class ComfyClient {
   }
 
   /** Free VRAM per device in GB (two decimals), keyed by the device name's first word; empty when the box does not say. */
-  async vramFree(): Promise<Record<string, number>> {
-    const s = await this.systemStats();
+  async vramFree(seconds = this.timing.request): Promise<Record<string, number>> {
+    const s = await this.systemStats(seconds);
     const out: Record<string, number> = {};
     const devices = Array.isArray(s.devices) ? s.devices : [];
     for (const d of devices) {
@@ -122,14 +176,23 @@ export class ComfyClient {
     return out;
   }
 
+  private async vramFreeBestEffort(seconds = this.timing.request): Promise<Record<string, number>> {
+    try {
+      return await this.vramFree(seconds);
+    } catch (err) {
+      if (isTimeoutRefusal(err)) return {};
+      throw err;
+    }
+  }
+
   /**
    * Where a queued prompt stands: `running` when the box is running it,
    * `pending` with its 1-based place among the pending jobs (and how many are
    * ahead of it, running included), or `absent` when the queue no longer lists
    * it (finished, or never queued).
    */
-  async queuePlace(id: string): Promise<{ state: 'running' } | { state: 'pending'; place: number; pending: number; ahead: number } | { state: 'absent' }> {
-    const q = asObject(await this.json('GET', '/queue'));
+  async queuePlace(id: string, seconds = this.timing.request): Promise<{ state: 'running' } | { state: 'pending'; place: number; pending: number; ahead: number } | { state: 'absent' }> {
+    const q = asObject(await this.json('GET', '/queue', undefined, undefined, seconds));
     if (q === null || !Array.isArray(q.queue_running) || !Array.isArray(q.queue_pending)) {
       refuse('COMFY_REQUEST_OK', `GET ${this.host}/queue`, 'answered without queue_running and queue_pending arrays');
     }
@@ -147,37 +210,79 @@ export class ComfyClient {
    * Wait for a prompt queued behind other jobs (it was appended, never put in
    * front, and nothing here reorders or cancels anyone's job): at most `wait`
    * seconds while it is still pending, then at most `timeout` seconds once the
-   * box is running it. A wait past either bound is refused naming the job's
-   * place in the queue; the job is left on the box.
+   * box is running it. A timed-out `/queue` poll is retried while time remains
+   * in the active bound. A wait past either bound is refused naming `prompt <id>`
+   * and its place in the queue; the job is left on the box.
    */
   async waitBehind(id: string, wait: number, timeout: number, say: (line: string) => void): Promise<{ entry: HistoryEntry; vramLow: Record<string, number>; elapsed: number }> {
-    const t0 = Date.now();
+    const t0 = this.nowSeconds();
     let started: number | null = null;
     let lastPlace = -1;
+    let lastPending: { place: number; pending: number; ahead: number } | null = null;
+    let pollTimeouts = 0;
     // The minimum free VRAM while this job runs: sampled on every running poll,
     // then merged with what `waitHistory` reads, so it is not a post-run reading.
     const vramLow: Record<string, number> = {};
     for (;;) {
-      const place = await this.queuePlace(id);
-      if (place.state === 'absent') {
-        const done = await this.waitHistory(id, Math.max(this.timing.request, this.timing.poll * 2));
-        for (const [k, v] of Object.entries(done.vramLow)) if (!(k in vramLow) || v < vramLow[k]) vramLow[k] = v;
-        return { entry: done.entry, vramLow, elapsed: (Date.now() - t0) / 1000 };
+      const phaseStart = started ?? t0;
+      const phaseBound = started === null ? wait : timeout;
+      const remaining = phaseBound - (this.nowSeconds() - phaseStart);
+      const pollCap = this.timing.request * 2 ** pollTimeouts;
+      const reqSeconds = remaining > 0 ? Math.min(pollCap, remaining) : Math.min(this.timing.request, Math.max(0.001, phaseBound));
+      let place: Awaited<ReturnType<ComfyClient['queuePlace']>>;
+      try {
+        place = await this.queuePlace(id, reqSeconds);
+        pollTimeouts = 0;
+      } catch (err) {
+        if (!isTimeoutRefusal(err)) throw err;
+        pollTimeouts++;
+        const now = this.nowSeconds();
+        if (started !== null) {
+          const runningFor = now - started;
+          if (runningFor >= timeout) {
+            refuse('COMFY_HISTORY_WITHIN', `prompt ${id}`, `was still running ${runningFor.toFixed(1)} s after it started; it is required within --timeout ${timeout} s (the job was left on the box, not cancelled)`);
+          }
+          await this.sleepSeconds(Math.min(this.timing.poll, Math.max(0, timeout - runningFor)));
+          continue;
+        }
+        const waited = now - t0;
+        if (waited >= wait) {
+          const where =
+            lastPending !== null
+              ? `, at place ${lastPending.place} of ${lastPending.pending} pending with ${lastPending.ahead} job(s) ahead of it`
+              : ` (GET ${this.host}/queue timed out while waiting)`;
+          refuse(
+            'COMFY_QUEUE_BEHIND',
+            `prompt ${id}`,
+            `was still pending after ${waited.toFixed(1)} s${where}; it is required to start within --wait ${wait} s — the job was left in its place on the box, not moved and not cancelled, and no one else's job was touched`,
+          );
+        }
+        await this.sleepSeconds(Math.min(this.timing.poll, Math.max(0, wait - waited)));
+        continue;
       }
-      const now = Date.now();
+      if (place.state === 'absent') {
+        const spentRunning = started === null ? 0 : this.nowSeconds() - started;
+        const historyBudget = Math.max(timeout - spentRunning, Math.min(this.timing.request, timeout), this.timing.poll * 2);
+        const done = await this.waitHistory(id, historyBudget, timeout);
+        for (const [k, v] of Object.entries(done.vramLow)) if (!(k in vramLow) || v < vramLow[k]) vramLow[k] = v;
+        return { entry: done.entry, vramLow, elapsed: this.nowSeconds() - t0 };
+      }
+      const now = this.nowSeconds();
       if (place.state === 'running') {
-        for (const [k, v] of Object.entries(await this.vramFree())) if (!(k in vramLow) || v < vramLow[k]) vramLow[k] = v;
+        for (const [k, v] of Object.entries(await this.vramFreeBestEffort())) if (!(k in vramLow) || v < vramLow[k]) vramLow[k] = v;
         if (started === null) {
           started = now;
           say(`  prompt ${id} is running`);
         }
-        if ((now - started) / 1000 >= timeout) {
-          refuse('COMFY_HISTORY_WITHIN', `prompt ${id}`, `was still running ${((now - started) / 1000).toFixed(1)} s after it started; it is required within --timeout ${timeout} s (the job was left on the box, not cancelled)`);
+        if (now - started >= timeout) {
+          refuse('COMFY_HISTORY_WITHIN', `prompt ${id}`, `was still running ${(now - started).toFixed(1)} s after it started; it is required within --timeout ${timeout} s (the job was left on the box, not cancelled)`);
         }
+        await this.sleepSeconds(Math.min(this.timing.poll, Math.max(0, timeout - (this.nowSeconds() - started))));
       } else {
+        lastPending = place;
         if (place.place !== lastPlace) say(`  prompt ${id} queued behind ${place.ahead} job(s) (pending place ${place.place} of ${place.pending})`);
         lastPlace = place.place;
-        const waited = (now - t0) / 1000;
+        const waited = now - t0;
         if (waited >= wait) {
           refuse(
             'COMFY_QUEUE_BEHIND',
@@ -185,14 +290,14 @@ export class ComfyClient {
             `was still pending after ${waited.toFixed(1)} s, at place ${place.place} of ${place.pending} pending with ${place.ahead} job(s) ahead of it; it is required to start within --wait ${wait} s — the job was left in its place on the box, not moved and not cancelled, and no one else's job was touched`,
           );
         }
+        await this.sleepSeconds(Math.min(this.timing.poll, Math.max(0, wait - (this.nowSeconds() - t0))));
       }
-      await sleep(this.timing.poll);
     }
   }
 
   /** `GET /object_info`: every node class the box has, with its inputs. */
-  async objectInfo(): Promise<Record<string, unknown>> {
-    const o = asObject(await this.json('GET', '/object_info'));
+  async objectInfo(wait?: number): Promise<Record<string, unknown>> {
+    const o = asObject(await this.json('GET', '/object_info', undefined, undefined, this.objectInfoSeconds(wait)));
     if (o === null) refuse('COMFY_REQUEST_OK', `GET ${this.host}/object_info`, 'answered with something that is not an object of node classes');
     return o;
   }
@@ -212,7 +317,7 @@ export class ComfyClient {
   /** `POST /prompt`; returns the prompt id. A rejection is refused with the box's own error text. */
   async submit(graph: unknown, clientId: string): Promise<string> {
     const res = await this.call('POST', '/prompt', JSON.stringify({ prompt: graph, client_id: clientId }), { 'Content-Type': 'application/json' });
-    const text = await res.text();
+    const text = await this.readText(res, 'POST', '/prompt', this.timing.request);
     if (!res.ok) refuse('COMFY_PROMPT_ACCEPTED', `POST ${this.host}/prompt`, `rejected the graph with HTTP ${res.status}: ${brief(text, 1500)}`);
     let id: unknown;
     try {
@@ -226,24 +331,42 @@ export class ComfyClient {
 
   /**
    * Poll `/history/<id>` until the job is there, for at most `timeout`
-   * seconds, and check the box is still answering between polls. Returns the
-   * entry and the lowest free VRAM seen per device. An entry whose status is
-   * an error is refused with the box's messages; so is an entry with no
-   * outputs at all, because a finished job that saved nothing is not a result.
+   * seconds, and check the box is still answering between polls. A timed-out
+   * poll is retried while time remains in `timeout`. Returns the entry and the
+   * lowest free VRAM seen per device. An entry whose status is an error is
+   * refused with the box's messages; so is an entry with no outputs at all,
+   * because a finished job that saved nothing is not a result.
    */
-  async waitHistory(id: string, timeout: number): Promise<{ entry: HistoryEntry; vramLow: Record<string, number>; elapsed: number }> {
-    const t0 = Date.now();
+  async waitHistory(id: string, timeout: number, reportedTimeout = timeout): Promise<{ entry: HistoryEntry; vramLow: Record<string, number>; elapsed: number }> {
+    const t0 = this.nowSeconds();
     const vramLow: Record<string, number> = {};
+    let pollTimeouts = 0;
     for (;;) {
-      for (const [k, v] of Object.entries(await this.vramFree())) if (!(k in vramLow) || v < vramLow[k]) vramLow[k] = v;
-      const h = asObject(await this.json('GET', `/history/${encodeURIComponent(id)}`));
+      const remaining = timeout - (this.nowSeconds() - t0);
+      const pollCap = this.timing.request * 2 ** pollTimeouts;
+      const reqSeconds = remaining > 0 ? Math.min(pollCap, remaining) : Math.min(this.timing.request, Math.max(0.001, timeout));
+      for (const [k, v] of Object.entries(await this.vramFreeBestEffort(reqSeconds))) if (!(k in vramLow) || v < vramLow[k]) vramLow[k] = v;
+      let h: Record<string, unknown> | null;
+      try {
+        h = asObject(await this.json('GET', `/history/${encodeURIComponent(id)}`, undefined, undefined, reqSeconds));
+        pollTimeouts = 0;
+      } catch (err) {
+        if (!isTimeoutRefusal(err)) throw err;
+        pollTimeouts++;
+        const waited = this.nowSeconds() - t0;
+        if (waited >= timeout) {
+          refuse('COMFY_HISTORY_WITHIN', `prompt ${id}`, `was not in /history after ${waited.toFixed(1)} s; it is required within --timeout ${reportedTimeout} s (the job was left on the box, not cancelled)`);
+        }
+        await this.sleepSeconds(Math.min(this.timing.poll, Math.max(0, timeout - waited)));
+        continue;
+      }
       const raw = h === null ? null : asObject(h[id]);
       if (raw !== null) {
         const entry: HistoryEntry = {
           outputs: (asObject(raw.outputs) ?? {}) as HistoryEntry['outputs'],
           status: asObject(raw.status) as HistoryEntry['status'],
         };
-        const elapsed = (Date.now() - t0) / 1000;
+        const elapsed = this.nowSeconds() - t0;
         if (entry.status?.status_str === 'error') {
           refuse('COMFY_RUN_OK', `prompt ${id}`, `ended with status "error": ${brief(JSON.stringify(entry.status.messages ?? []), 2000)}`);
         }
@@ -256,11 +379,11 @@ export class ComfyClient {
         }
         return { entry, vramLow, elapsed };
       }
-      const waited = (Date.now() - t0) / 1000;
+      const waited = this.nowSeconds() - t0;
       if (waited >= timeout) {
-        refuse('COMFY_HISTORY_WITHIN', `prompt ${id}`, `was not in /history after ${waited.toFixed(1)} s; it is required within --timeout ${timeout} s (the job was left on the box, not cancelled)`);
+        refuse('COMFY_HISTORY_WITHIN', `prompt ${id}`, `was not in /history after ${waited.toFixed(1)} s; it is required within --timeout ${reportedTimeout} s (the job was left on the box, not cancelled)`);
       }
-      await sleep(Math.min(this.timing.poll, Math.max(0, timeout - waited)));
+      await this.sleepSeconds(Math.min(this.timing.poll, Math.max(0, timeout - waited)));
     }
   }
 
