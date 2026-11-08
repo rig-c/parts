@@ -90,6 +90,6 @@ export function checkSmokeProcess(): void {
       expect(findSmokeExecutable('not-executable', { PATH: bin }) === null && findSmokeExecutable('node', { PATH: dirname(node) }) !== null,
         'SMOKE_PROCESS_POSIX_EXECUTABILITY');
     }
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); }
 }
 if (import.meta.main) checkSmokeProcess();
