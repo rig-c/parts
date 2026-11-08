@@ -25,7 +25,7 @@ import { parseAltArg } from './tools/alternate-cli.ts';
 import { type AlternateCliInput, assembleStage, build, checkStage, ERROR_MAP_FILE, loopStage, readRuns, readSource, rigStage, suppliedCheckFlag } from './src/build.ts';
 import { ACCEPTABLE_BARS, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, findRigc, PACK_SHAPES, rigcRunnerAt, type PackShape, PAGE_EDGES, type PageEdges, PARTS_HOME_SENTENCE, RIGC_GEOMETRY_VERSION, rigcRanClause, type RigcRunner, NO_PARTS_SENTENCE, SEAM_MEAN_BAR, SOURCE_SENTENCE, SEAM_PX_BAR, SEAM_PX_LEVEL, SPINEBOY_YARDSTICK, TEXTURE_STRETCH_CEILING } from './src/check.ts';
 import { ComfyClient, resolveHost, runBackground, runMatte, runPainting, runSeeThrough } from './src/comfy/index.ts';
-import { DEFAULT_GROW_PX, runForeground } from './src/plate.ts';
+import { coreCfg, DEFAULT_GROW_PX, runForeground } from './src/plate.ts';
 import { type CharacterConfig, loadClothConfig, loadConfig, loadEarlyConfig, loadPaintConfig } from './src/config.ts';
 import { configWriteLines, readConfigWriteTarget, separateConfigWriteTarget, stageConfigWrite, type StagedConfigWrite } from './tools/configwrite.ts';
 import { failLine, guidePointer, PartsError } from './src/errors.ts';
@@ -880,7 +880,7 @@ usage:
   rig-parts comfy plate --mode background|foreground --painting <png>
                     --mask-from seethrough:<dir>|figure-mask:<dir>|matte:<dir> --out <dir>
                     [--graph lama|core] [--model <name>] [--checkpoint-sha256 <hex>]
-                    [--seed 0] [--grow 8] [--steps 30] [--prompt <text>] [--negative <text>]
+                    [--seed 0] [--grow 8] [--steps 30] [--cfg 6] [--prompt <text>] [--negative <text>]
                     [--host <url>] [--wait 1800] [--timeout 3600] [--poll 3]
       A step-4 plate with a receipt: <out>/plate.png, mask.png and receipt.json
       (spec rig-parts-plate-receipt/1). The mask comes from a source only — the
@@ -1181,7 +1181,7 @@ const TAKES = {
   'comfy seethrough': { valued: ['--image', '--out', '--resolution', '--steps', '--seed', '--prefix', '--host', '--wait', '--timeout', '--poll', '--config', '--depth-run'], switches: ['--offload', '--no-offload', '--lama', '--nf4'] },
   'comfy paint': { valued: ['--config', '--out', '--seeds', '--seed0', '--host', '--wait', '--timeout', '--poll'], switches: [] },
   'comfy matte': { valued: ['--painting', '--out', '--node', '--model', '--checkpoint-sha256', '--resolution', '--threshold', '--host', '--wait', '--timeout', '--poll'], switches: [] },
-  'comfy plate': { valued: ['--mode', '--painting', '--mask-from', '--out', '--graph', '--model', '--checkpoint-sha256', '--seed', '--grow', '--steps', '--prompt', '--negative', '--host', '--wait', '--timeout', '--poll'], switches: [] },
+  'comfy plate': { valued: ['--mode', '--painting', '--mask-from', '--out', '--graph', '--model', '--checkpoint-sha256', '--seed', '--grow', '--steps', '--cfg', '--prompt', '--negative', '--host', '--wait', '--timeout', '--poll'], switches: [] },
   inputs: { valued: ['--source', '--config', '--out'], switches: [] },
   build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set', '--environment', '--wind-band'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes'] },
   compose: { valued: ['--scene', '--out', '--requirements', '--accept'], switches: [] },
@@ -1987,7 +1987,7 @@ function secondsFlag(v: Map<string, string>, flag: string, fallback: number): nu
 }
 
 /** Flags `comfy plate --mode foreground` does not take: it runs no box and no model. */
-const PLATE_BOX_FLAGS = ['--graph', '--model', '--checkpoint-sha256', '--seed', '--grow', '--steps', '--prompt', '--negative', '--host', '--wait', '--timeout', '--poll'];
+const PLATE_BOX_FLAGS = ['--graph', '--model', '--checkpoint-sha256', '--seed', '--grow', '--steps', '--cfg', '--prompt', '--negative', '--host', '--wait', '--timeout', '--poll'];
 
 async function cmdComfyPlate(v: Map<string, string>): Promise<number> {
   const mode = v.get('--mode');
@@ -2017,11 +2017,12 @@ async function cmdComfyPlate(v: Map<string, string>): Promise<number> {
     const steps = intFlag(v, '--steps', 30, 1);
     for (const x of [seed, grow, steps]) if (typeof x === 'string') return usage(x);
     if (graph === 'lama') for (const x of ['--steps', '--prompt', '--negative']) if (v.has(x)) return usage(`${x} is for --graph core; the lama graph takes no prompt and no steps`);
+    const cfg = coreCfg(v.get('--cfg'), graph);
     console.log(`rig-parts comfy plate: background (${graph}) ${painting} -> ${out}`);
     // Every local refusal (no source mask, the checksum, the grid) comes before the host is resolved.
     const r = await runBackground(
       () => new ComfyClient(resolveHost(v.get('--host'), process.env.COMFY_HOST), { poll: poll as number, request: 30 }),
-      { painting, maskFrom: v.get('--mask-from'), out, graph, model: v.get('--model'), checkpointSha256: v.get('--checkpoint-sha256'), seed: seed as number, growPx: grow as number, steps: steps as number, prompt: v.get('--prompt'), negative: v.get('--negative'), wait: wait as number, timeout: timeout as number },
+      { painting, maskFrom: v.get('--mask-from'), out, graph, model: v.get('--model'), checkpointSha256: v.get('--checkpoint-sha256'), seed: seed as number, growPx: grow as number, steps: steps as number, ...(v.has('--cfg') ? { cfg } : {}), prompt: v.get('--prompt'), negative: v.get('--negative'), wait: wait as number, timeout: timeout as number },
       (l) => console.log(l),
     );
     console.log(`  wrote ${join(out, r.output.path)} (sha256 ${r.output.sha256}), ${r.mask.path} and receipt.json; model ${r.model?.name} (checkpoint sha256 declared), GPU ${r.gpu}`);

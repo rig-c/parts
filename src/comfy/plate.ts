@@ -28,6 +28,7 @@ import { checkGraph, type Graph } from '../graphs.ts';
 import {
   assertPlateOutFree,
   CORE_DEFAULTS,
+  coreCfg,
   type CoreParams,
   corePlateGraph,
   cropCoreGrid,
@@ -63,6 +64,7 @@ export interface BackgroundRun {
   seed: number;
   growPx: number;
   steps: number;
+  cfg?: number | string | undefined;
   prompt: string | undefined;
   negative: string | undefined;
   wait: number;
@@ -82,6 +84,7 @@ export function gpuName(stats: Record<string, unknown>, host: string): string {
 /** `connect` is called only after every local check has passed, so a refused run never resolves a host or reaches a box. */
 export async function runBackground(connect: () => ComfyClient, run: BackgroundRun, say: (line: string) => void): Promise<PlateReceipt> {
   // Local first: no source mask, a bad checksum or a missing checkpoint is refused before the box is reached.
+  const cfg = coreCfg(run.cfg, run.graph);
   const from = parseMaskFrom(run.maskFrom);
   const painting = readPlatePainting(run.painting);
   const { width: W, height: H } = painting.raster;
@@ -97,7 +100,7 @@ export async function runBackground(connect: () => ComfyClient, run: BackgroundR
   const uploadMaskBytes = encodePngBytes(maskImage(prepared.mask));
   const model = run.model ?? LAMA_MODEL;
   const lama: LamaParams = { seed: run.seed, grow_px: run.growPx };
-  const core: CoreParams = { seed: run.seed, grow_px: run.growPx, steps: run.steps, cfg: CORE_DEFAULTS.cfg, sampler: CORE_DEFAULTS.sampler, scheduler: CORE_DEFAULTS.scheduler, denoise: CORE_DEFAULTS.denoise, prompt: run.prompt ?? CORE_DEFAULTS.prompt, negative: run.negative ?? CORE_DEFAULTS.negative };
+  const core: CoreParams = { seed: run.seed, grow_px: run.growPx, steps: run.steps, cfg, sampler: CORE_DEFAULTS.sampler, scheduler: CORE_DEFAULTS.scheduler, denoise: CORE_DEFAULTS.denoise, prompt: run.prompt ?? CORE_DEFAULTS.prompt, negative: run.negative ?? CORE_DEFAULTS.negative };
   const prefix = `rig_parts_plate_${crypto.randomUUID().slice(0, 8)}`;
   const build = (p: string, m: string): Graph => (run.graph === 'lama' ? lamaPlateGraph(p, m, model, lama, prefix) : corePlateGraph(p, m, model, core, prefix));
 

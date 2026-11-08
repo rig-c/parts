@@ -5356,7 +5356,7 @@ or a joint.
   inpaints it on a ComfyUI box. `--graph lama` (the default) uses the
   comfyui-inpaint-nodes pack and its LaMa model (`--model`, default
   `big-lama.pt`). `--graph core` uses ComfyUI's own nodes and the checkpoint
-  `--model` names, with `--steps`, `--prompt` and `--negative`; when a painting's
+  `--model` names, with `--steps`, `--cfg` (default 6), `--prompt` and `--negative`; when a painting's
   width or height is not a multiple of 8, it pads the uploaded painting (`edge-replicate`)
   and grown mask (`zero`, kept as context) on the right and bottom (`pad: [0, 0]`)
   to the next multiple of 8, crops the box's output back at `[0, 0]` before
@@ -5406,6 +5406,7 @@ recorded transform. The record fields and sampling formula are specified in
 | <a id="PLATE_MASK_RUN"></a>`PLATE_MASK_RUN` | the figure source has no readable `rig-run/1` assemble `run.json`, or its `figure_rig.png`, `parts.json` or declared `painting_in_rig.png` lacks exactly one matching output hash; or the See-through source has no readable `meta.json` with `image_sha256` and `layers` hashes, or a layer PNG on disk lacks a matching `layers` entry | re-run `assemble` with the source config to regenerate `run.json` and its `rig/` files together, or re-run `comfy seethrough` on the painting to regenerate `meta.json` and `parts/` together |
 | <a id="PLATE_MASK_PAINTING"></a>`PLATE_MASK_PAINTING` | `parts.json` has an invalid `painting_in_rig` declaration, its recorded painting is missing, undecodable or differs from its declared hash, or the supplied painting differs from the recorded opaque RGB; or the supplied painting's SHA-256 differs from a See-through source's `meta.json` `image_sha256` | use the original `--painting` file for this source, or re-run `assemble` or `comfy seethrough` on this painting |
 | <a id="PLATE_CHECKPOINT_SHA256"></a><a id="PLATE_MODEL_GIVEN"></a>`PLATE_CHECKPOINT_SHA256`, `PLATE_MODEL_GIVEN` | `--checkpoint-sha256` absent or not 64 hex characters; `--graph core` without `--model` | the flag |
+| <a id="PLATE_CORE_CFG"></a>`PLATE_CORE_CFG` | `--cfg` given with `--graph lama`, or not a finite number above 0 | `--cfg`, `--graph` |
 | <a id="PLATE_CORE_GRID"></a>PLATE_CORE_GRID *(retired)* | retired in 2.x: off-grid `core` now pads to the next multiple of 8 and records `grid_transform`; see [STABILITY](STABILITY.md#plate-receipt) | none |
 | <a id="PLATE_PAINTING_PRESENT"></a><a id="PLATE_OUT_EMPTY"></a>`PLATE_PAINTING_PRESENT`, `PLATE_OUT_EMPTY` | no `--painting` file, or an `--out` that already holds entries | `--painting`, `--out` |
 | <a id="COMFY_GPU_NAMED"></a><a id="COMFY_PLATE_SIZE"></a>`COMFY_GPU_NAMED`, `COMFY_PLATE_SIZE` | `/system_stats` does not name exactly one device; the box's image is not the painting's size (or, for off-grid `core`, the padded size) | the box |
