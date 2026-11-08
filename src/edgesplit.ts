@@ -78,7 +78,7 @@ export function applyEdgeSplits(
   declarations: readonly EdgeSplit[],
   parts: ReadonlyMap<string, Raster>,
   painting: Raster,
-  written?: (part: string, pixel: number, cleared: boolean) => void,
+  written?: (part: string, pixel: number, cleared: boolean, priorAlpha: number) => void,
 ): EdgeSplitReading[] {
   refuseIfAny(edgeSplitProblems(declarations, new Set(parts.keys())));
   const { width: W, height: H } = painting;
@@ -94,10 +94,21 @@ export function applyEdgeSplits(
   });
   refuseIfAny(problems);
 
+  const initialAlpha = new Map<string, Uint8Array>();
+  for (const e of declarations) {
+    if (!initialAlpha.has(e.under)) {
+      const r = parts.get(e.under)!;
+      const a = new Uint8Array(W * H);
+      for (let i = 0; i < W * H; i++) a[i] = r.data[i * 4 + 3];
+      initialAlpha.set(e.under, a);
+    }
+  }
+
   const readings: EdgeSplitReading[] = [];
   for (const e of declarations) {
     const overRaster = parts.get(e.over)!;
     const underRaster = parts.get(e.under)!;
+    const underInitialAlpha = initialAlpha.get(e.under)!;
     const [x0, y0, x1, y1] = e.band;
     let columns = 0;
     let strongEdgeColumns = 0;
@@ -134,17 +145,18 @@ export function applyEdgeSplits(
         const p = idx * 4;
         const oa = overRaster.data[p + 3];
         if (oa >= EDGE_SPLIT_ALPHA) {
+          const priorUnderAlpha = underInitialAlpha[idx];
           overRaster.data.fill(0, p, p + 4);
-          written?.(e.over, idx, true);
+          written?.(e.over, idx, true, oa);
           underRaster.data[p] = painting.data[p];
           underRaster.data[p + 1] = painting.data[p + 1];
           underRaster.data[p + 2] = painting.data[p + 2];
           underRaster.data[p + 3] = 255;
-          written?.(e.under, idx, false);
+          written?.(e.under, idx, false, priorUnderAlpha);
           movedPx++;
         } else if (oa > 0) {
           overRaster.data.fill(0, p, p + 4);
-          written?.(e.over, idx, true);
+          written?.(e.over, idx, true, oa);
         }
         if (overRaster.data[p + 3] >= EDGE_SPLIT_ALPHA) overBelowEdgePx++;
       }

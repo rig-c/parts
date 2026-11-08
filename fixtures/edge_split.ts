@@ -276,6 +276,56 @@ export function runEdgeSplitChecks(dir: string, say: Say): void {
       readFileSync(join(stageDir, 'parts.json'), 'utf8').length > 0,
     expectedLine ?? 'missing console line',
   );
+
+  const depthSheet = newRaster(64, 64);
+  for (let i = 0; i < 64 * 64; i++) depthSheet.data.set([120, 120, 120, 255], i * 4);
+  writePng(join(stageDir, 'thigh_depth.png'), depthSheet);
+  const depthCfg = { full: { layers: { legwear: { image: 'thigh_depth.png', near: 'black' as const, zScale: 10 } } } };
+
+  const withoutDepth = assemble({ ...edgeSplitFixture('core'), edgeSplits: EDGE_SPLIT_DECLARATION });
+  const withDepthOnTransparent = problemsOf(() =>
+    assemble({
+      ...edgeSplitFixture('core'),
+      edgeSplits: EDGE_SPLIT_DECLARATION,
+      depth: depthCfg,
+      depthBase: stageDir,
+    }),
+  );
+  say(
+    'ES08_DEPTH_SHEET_ON_TRANSPARENT_UNDER_REFUSED',
+    withoutDepth.edgeSplits[0]?.moved_px === PLANTED_OVERRUN_PX &&
+      withDepthOnTransparent?.problems.some(
+        p =>
+          p.code === 'DEPTH_PART_SUPPORT' &&
+          p.object === 'part "thigh"' &&
+          p.detail.includes('edge_splits') &&
+          p.detail.includes('never extrapolate a layer sheet onto new painting samples'),
+      ) === true,
+    `without depth moved_px=${withoutDepth.edgeSplits[0]?.moved_px}; with depth refused: ${withDepthOnTransparent?.message ?? 'none'}`,
+  );
+
+  const opaqueUnderInput = edgeSplitFixture('core');
+  const legwearLayer = opaqueUnderInput.full.layers.find(l => l.name === 'legwear')!;
+  for (let y = HEM_ROW + 1; y <= HEM_ROW + OVERRUN_ROWS; y++) {
+    for (let x = BAND_X0; x < BAND_X1; x++) {
+      legwearLayer.pixels.data.set([...SKIN_RGB, 255], (y * 64 + x) * 4);
+    }
+  }
+  const withDepthOnOpaque = assemble({
+    ...opaqueUnderInput,
+    edgeSplits: EDGE_SPLIT_DECLARATION,
+    depth: depthCfg,
+    depthBase: stageDir,
+  });
+  const thighWithDepth = withDepthOnOpaque.images.find(p => p.record.name === 'thigh');
+  say(
+    'ES09_DEPTH_SHEET_ON_OPAQUE_UNDER_PASSES',
+    withDepthOnOpaque.edgeSplits[0]?.moved_px === PLANTED_OVERRUN_PX &&
+      withDepthOnOpaque.edgeSplits[0]?.over_below_edge_px === 0 &&
+      thighWithDepth?.record.depth?.image === 'thigh_depth.png' &&
+      thighWithDepth.depthImage !== undefined,
+    `opaque under with depth sheet passed: moved_px=${withDepthOnOpaque.edgeSplits[0]?.moved_px}, depth=${thighWithDepth?.record.depth?.image}`,
+  );
 }
 
 try {

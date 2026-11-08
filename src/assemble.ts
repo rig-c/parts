@@ -5202,6 +5202,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     });
     preparedRuns.push({ run, set, layers, rigLayers, rank, keep, writes });
   }
+  const edgeSplitNewSampleParts = new Set<string>();
   const edgeSplits = (input.edgeSplits?.length ?? 0) === 0 ? [] : applyEdgeSplits(
     input.edgeSplits!,
     new Map(sourcePlan.flatMap(([name, r, tag]) => {
@@ -5210,7 +5211,8 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       return prep !== undefined && idx >= 0 ? [[name, prep.rigLayers[idx]] as [string, Raster]] : [];
     })),
     srcr,
-    (part, pixel, cleared) => {
+    (part, pixel, cleared, priorAlpha) => {
+      if (!cleared && priorAlpha <= OPAQUE_ALPHA_ABOVE) edgeSplitNewSampleParts.add(part);
       const row = sourcePlan.find(([name]) => name === part);
       if (row === undefined) return;
       const prep = preparedRuns.find(p => p.run === row[1]);
@@ -5219,6 +5221,20 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       if (w !== null && w !== undefined) w[pixel] = cleared ? 0 : AW.sourceProjection;
     },
   );
+  const edgeSplitDepthProblems: Problem[] = [];
+  for (const part of edgeSplitNewSampleParts) {
+    const row = sourcePlan.find(([name]) => name === part);
+    if (row === undefined) continue;
+    const keys = [`${row[1]}:${row[2]}`, ...extend.filter(e => e.part === part).map(e => `${e.run}:${e.tag}`)];
+    if (keys.some(k => registeredDepth.has(k))) {
+      edgeSplitDepthProblems.push({
+        code: 'DEPTH_PART_SUPPORT',
+        object: `part "${part}"`,
+        detail: 'edge split (config.assemble.edge_splits) gives new painting samples to a part with a layer depth sheet; remove the split or the target layer depth, never extrapolate a layer sheet onto new painting samples',
+      });
+    }
+  }
+  refuseIfAny(edgeSplitDepthProblems);
   for (const { run, set, layers, rigLayers, rank, keep, writes } of preparedRuns) {
     const st = projectSource(rigLayers, srcr, frame, run, projectRule, rank, keep, (i, p) => { if (writes[i] !== null) (writes[i] as Int32Array)[p] = AW.sourceProjection; }, owners => {
       if (targets !== undefined && beforeTake === null) return;
