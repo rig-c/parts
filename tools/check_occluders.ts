@@ -16,12 +16,15 @@
  *
  *   bun tools/check_occluders.ts <work dir>     the first two (no box needed)
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
-import { assembleStage } from '../src/build.ts';
+import { type PlanProposal, proposeFields, proposePlan, proposeSinglePlan } from '../src/assemble.ts';
+import { assembleStage, readRuns } from '../src/build.ts';
 import { loadConfig, loadEarlyConfig, parseConfig, parseEarlyConfig } from '../src/config.ts';
 import { PartsError } from '../src/errors.ts';
-import { exportLayers, OPAQUE_ALPHA_ABOVE, readLayers } from '../src/layers.ts';
+import { exportLayers, OPAQUE_ALPHA_ABOVE, readLayers, type Layer, type LayerSet } from '../src/layers.ts';
+import { readLayerTag } from '../src/tags.ts';
 import {
   COPIED_ALPHA_ABOVE,
   OCCLUDER_COLOUR_COPIED,
@@ -407,6 +410,243 @@ export function runOccluderCopyChecks(dir: string, say: Say): void {
     exampleRows.every((r) => r.noOccluders),
     exampleRows.map((r) => `${r.key}: occluders=${String(r.noOccluders ? 'absent' : 'present')}`).join(', '));
 
+  // Issue #1247 controls (OC29-OC31): `assemble --propose-plan` honours `occluders[i].over`, refuses cycles at propose time with no write, and leaves proposals without `over` byte-identical.
+  const propDir = join(dir, 'occluder-propose-over');
+  rmSync(propDir, { recursive: true, force: true });
+  mkdirSync(propDir, { recursive: true });
+  const fillBox = (box: readonly [number, number, number, number], rgba: readonly [number, number, number, number]) => {
+    const r = newRaster(SIDE, SIDE);
+    for (let y = box[1]; y < box[3]; y++) for (let x = box[0]; x < box[2]; x++) r.data.set(rgba, (y * SIDE + x) * 4);
+    return r;
+  };
+  const propPaint = fillBox([0, 0, SIDE, SIDE], [250, 250, 250, 255]);
+  for (let y = 24; y < 104; y++) for (let x = 32; x < 80; x++) propPaint.data.set([60, 90, 170, 255], (y * SIDE + x) * 4);
+  const occRgba: readonly [number, number, number, number] = [OCCLUDER_RGB[0], OCCLUDER_RGB[1], OCCLUDER_RGB[2], 255];
+  for (let y = OCCLUDER[1]; y < OCCLUDER[3]; y++) for (let x = OCCLUDER[0]; x < OCCLUDER[2]; x++) propPaint.data.set(occRgba, (y * SIDE + x) * 4);
+  const propPaintBytes = encodePngBytes(propPaint);
+  const propPaintPath = join(propDir, 'painting.png');
+  writeFileSync(propPaintPath, propPaintBytes);
+  const propPlate = fillBox([0, 0, SIDE, SIDE], [250, 250, 250, 255]);
+  for (let y = 24; y < 104; y++) for (let x = 32; x < 80; x++) propPlate.data.set([60, 90, 170, 255], (y * SIDE + x) * 4);
+  const propPlateBytes = encodePngBytes(propPlate);
+  const propOcc = fillBox(OCCLUDER, occRgba);
+  const propOccBytes = encodePngBytes(propOcc);
+  writeFileSync(join(propDir, 'occluder.png'), propOccBytes);
+  const propOccSha = sha256(propOccBytes);
+  const propFaceLayers = [
+    { name: 'face', pixels: fillBox([16, 4, 48, 20], [235, 200, 185, 255]), depth: 0.5 },
+    { name: 'eyewhite-r', pixels: fillBox([16, 4, 32, 14], [250, 250, 250, 255]), depth: 0.4 },
+    { name: 'eyewhite-l', pixels: fillBox([32, 4, 48, 14], [250, 250, 250, 255]), depth: 0.4 },
+  ];
+  const makeSet = (entries: ReadonlyArray<{ name: string; pixels: ReturnType<typeof fillBox>; depth: number }>, source: string): LayerSet => {
+    const layers: Layer[] = entries.map(({ name, pixels, depth }, drawOrder) => {
+      const tag = readLayerTag(name);
+      if (tag === null) throw new Error(`generated tag ${name} does not resolve`);
+      let opaquePx = 0;
+      for (let p = 3; p < pixels.data.length; p += 4) if (pixels.data[p] > 8) opaquePx++;
+      return { name, tag, pixels, file: null, left: 0, top: 0, right: SIDE, bottom: SIDE, depth, drawOrder, opaquePx };
+    });
+    return { form: 'wrapper', source, canvas: { w: SIDE, h: SIDE }, layers, hidden: [] };
+  };
+  const propOrigDir = join(propDir, 'orig');
+  exportLayers(makeSet([...propFaceLayers, { name: 'legwear', pixels: fillBox([32, 24, 80, 104], [60, 90, 170, 255]), depth: 0.7 }, { name: 'objects', pixels: propOcc, depth: DEEPER_OCCLUDER_DEPTH }], 'prop-orig'), propOrigDir);
+  writeFileSync(join(propOrigDir, 'meta.json'), JSON.stringify({ prompt_id: 'prop-orig', seed: 42, image_sha256: sha256(propPaintBytes) }));
+  const propPlateRunDir = join(propDir, 'plate-run');
+  exportLayers(makeSet([...propFaceLayers, { name: 'legwear', pixels: fillBox([32, 24, 80, 104], [60, 90, 170, 255]), depth: 0.7 }], 'prop-plate'), propPlateRunDir);
+  writeFileSync(join(propPlateRunDir, 'meta.json'), JSON.stringify({ prompt_id: 'prop-plate', seed: 42, image_sha256: sha256(propPlateBytes) }));
+
+  const makeEarlyCfg = (occluders?: unknown[], single = false): Record<string, unknown> => ({
+    key: 'occluder_propose',
+    seethrough: { resolution: SIDE, steps: 30, seed: 42, offload: false, ...(single ? {} : { head_box: [0, 0, SIDE, SIDE] }) },
+    assemble: {
+      rig_scale: 1,
+      take: [{ run: 'full', run_dir: 'orig', st_input: 'painting.png', tags: ['objects'] }],
+      ...(occluders === undefined ? {} : { occluders }),
+    },
+  });
+  const runProposeInProcess = (cfgRaw: Record<string, unknown>, cfgName: string, single = false): PlanProposal => {
+    const cfgPath = join(propDir, cfgName);
+    writeFileSync(cfgPath, `${JSON.stringify(cfgRaw, null, 2)}\n`);
+    const early = loadEarlyConfig(cfgPath, 'layers');
+    const src = readPng(propPaintPath);
+    const runs = applyTakenLayers(readRuns(propPlateRunDir, single ? null : propPlateRunDir), src, { ...early, assemble: { ...early.assemble, plan: undefined } }, cfgPath);
+    const fields = proposeFields(early, single ? { w: src.width, h: src.height } : null);
+    const g = { sourceW: src.width, sourceH: src.height, ...fields };
+    return single ? proposeSinglePlan(runs.full, g) : proposePlan(runs.full, runs.head, g);
+  };
+
+  // Without `over`: `objects` (depth 0.9) is drafted BEFORE `legwear` (depth 0.7).
+  const propWithoutOver = runProposeInProcess(
+    makeEarlyCfg([{ image: 'occluder.png', sha256: propOccSha, under: ['legwear'], rgb_within: 20 }]),
+    'cfg-without-over.json',
+  );
+  const namesWithoutOver = propWithoutOver.plan.map((r) => `${r[0]}:${r[1]}`);
+  // Declaring `over: ['objects']` against that un-reordered draft refuses `ASSEMBLE_OCCLUDER_DRAW_ORDER`.
+  const contradictCfg = chainConfig({
+    occluders: [{ image: 'occluder.png', sha256: propOccSha, under: ['legwear'], over: ['objects'], rgb_within: 20 }],
+    take,
+  });
+  (contradictCfg.seethrough as Record<string, unknown>).head_box = [0, 0, SIDE, SIDE];
+  (contradictCfg.assemble as Record<string, unknown>).plan = propWithoutOver.plan;
+  const contradictRes = stage(propDir, propPlateRunDir, contradictCfg, 'out-contradict', propPlateRunDir);
+  const contradictRefusal = contradictRes.error?.problems.find((q) => q.code === OCCLUDER_DRAW_ORDER);
+
+  // With `over: ['objects']` (via CLI `--propose-plan --write-config`): `objects` moves after `legwear`, keeping every other row's relative order unchanged, and `assembleStage` accepts that draft.
+  const cliWriteCfgPath = join(propDir, 'cfg-with-over.json');
+  writeFileSync(cliWriteCfgPath, `${JSON.stringify(makeEarlyCfg([{ image: 'occluder.png', sha256: propOccSha, under: ['legwear'], over: ['objects'], rgb_within: 20 }]), null, 2)}\n`);
+  const cliPropose = spawnSync(
+    process.execPath,
+    [join(root, 'cli.ts'), 'assemble', '--source', propPaintPath, '--full', propPlateRunDir, '--head', propPlateRunDir, '--config', cliWriteCfgPath, '--propose-plan', '--write-config', cliWriteCfgPath],
+    { encoding: 'utf8' },
+  );
+  const propWithOver = cliPropose.status === 0 ? (JSON.parse(cliPropose.stdout) as PlanProposal) : null;
+  const namesWithOver = propWithOver?.plan.map((r) => `${r[0]}:${r[1]}`) ?? [];
+  const acceptCfg = chainConfig({
+    occluders: [{ image: 'occluder.png', sha256: propOccSha, under: ['legwear'], over: ['objects'], rgb_within: 20 }],
+    take,
+  });
+  (acceptCfg.seethrough as Record<string, unknown>).head_box = [0, 0, SIDE, SIDE];
+  (acceptCfg.assemble as Record<string, unknown>).plan = propWithOver?.plan ?? [];
+  const acceptRes = stage(propDir, propPlateRunDir, acceptCfg, 'out-accept-over', propPlateRunDir);
+
+  // Cross-run `full` `over` (`objects`) / `head` `under` (`legwear`, `face`) and single-run `over` (`objects` over `legwear`):
+  const propCrossRun = runProposeInProcess(
+    makeEarlyCfg([{ image: 'occluder.png', sha256: propOccSha, under: ['legwear', 'face'], over: ['objects'], rgb_within: 20 }]),
+    'cfg-cross-over.json',
+  );
+  const namesCrossRun = propCrossRun.plan.map((r) => `${r[0]}:${r[1]}`);
+  const acceptCrossCfg = chainConfig({
+    occluders: [{ image: 'occluder.png', sha256: propOccSha, under: ['legwear', 'face'], over: ['objects'], rgb_within: 20 }],
+    take,
+  });
+  (acceptCrossCfg.seethrough as Record<string, unknown>).head_box = [0, 0, SIDE, SIDE];
+  (acceptCrossCfg.assemble as Record<string, unknown>).plan = propCrossRun.plan;
+  const acceptCrossRes = stage(propDir, propPlateRunDir, acceptCrossCfg, 'out-accept-cross', propPlateRunDir);
+  const propSingleWithout = runProposeInProcess(
+    makeEarlyCfg([{ image: 'occluder.png', sha256: propOccSha, under: ['legwear'], rgb_within: 20 }], true),
+    'cfg-single-without.json',
+    true,
+  );
+  const propSingleWith = runProposeInProcess(
+    makeEarlyCfg([{ image: 'occluder.png', sha256: propOccSha, under: ['legwear'], over: ['objects'], rgb_within: 20 }], true),
+    'cfg-single-with.json',
+    true,
+  );
+  say(
+    'OC29_PROPOSE_PLAN_HONOURS_OCCLUDER_OVER_AND_ASSEMBLES',
+    namesWithoutOver.join(',') === 'objects:full,legwear:full,face:head,eyewhite_r:head,eyewhite_l:head' &&
+      contradictRefusal !== undefined &&
+      cliPropose.status === 0 &&
+      namesWithOver.join(',') === 'legwear:full,objects:full,face:head,eyewhite_r:head,eyewhite_l:head' &&
+      acceptRes.error === null &&
+      namesCrossRun.join(',') === 'legwear:full,face:head,objects:full,eyewhite_r:head,eyewhite_l:head' &&
+      acceptCrossRes.error === null &&
+      propSingleWithout.plan.map((r) => r[0]).join(',') === 'objects,legwear,face,eyewhite_r,eyewhite_l' &&
+      propSingleWith.plan.map((r) => r[0]).join(',') === 'legwear,objects,face,eyewhite_r,eyewhite_l',
+    `without over: [${namesWithoutOver.join(', ')}] (contradicts over -> ${contradictRefusal?.code ?? 'accepted'}); with over: [${namesWithOver.join(', ')}] (assemble: ${acceptRes.error?.message ?? 'accepted'}); cross-run over (under legwear+face): [${namesCrossRun.join(', ')}] (assemble: ${acceptCrossRes.error?.message ?? 'accepted'}); single-run: [${propSingleWithout.plan.map((r) => r[0]).join(', ')}] -> [${propSingleWith.plan.map((r) => r[0]).join(', ')}]`,
+  );
+
+  // OC23: A declared cycle refuses at propose time with no write (both in-process proposePlan/proposeSinglePlan and CLI `--propose-plan --write-config`).
+  const cycleCfgPath = join(propDir, 'cfg-cycle.json');
+  const cycleCfgText = `${JSON.stringify(
+    makeEarlyCfg([
+      { image: 'occluder.png', sha256: propOccSha, under: ['legwear'], over: ['objects'], rgb_within: 20 },
+      { image: 'occluder.png', sha256: propOccSha, under: ['objects'], over: ['legwear'], rgb_within: 20 },
+    ]),
+    null,
+    2,
+  )}\n`;
+  writeFileSync(cycleCfgPath, cycleCfgText);
+  const cycleBeforeSha = sha256(new Uint8Array(readFileSync(cycleCfgPath)));
+  const directCycleRuns = readRuns(propPlateRunDir, propPlateRunDir);
+  const directCycleRefusal = refusal(() =>
+    proposePlan(directCycleRuns.full, directCycleRuns.head, {
+      sourceW: SIDE,
+      sourceH: SIDE,
+      resolution: SIDE,
+      headBox: [0, 0, SIDE, SIDE],
+      rigScale: 1,
+      occluders: [
+        { image: 'occluder.png', sha256: propOccSha, under: ['legwear'], over: ['objects'], rgb_within: 20 },
+        { image: 'occluder.png', sha256: propOccSha, under: ['objects'], over: ['legwear'], rgb_within: 20 },
+      ],
+    }),
+  );
+  const cliCycle = spawnSync(
+    process.execPath,
+    [join(root, 'cli.ts'), 'assemble', '--source', propPaintPath, '--full', propPlateRunDir, '--head', propPlateRunDir, '--config', cycleCfgPath, '--propose-plan', '--write-config', cycleCfgPath],
+    { encoding: 'utf8' },
+  );
+  const cycleAfterSha = sha256(new Uint8Array(readFileSync(cycleCfgPath)));
+  const leftoverTemps = readdirSync(propDir).filter((f) => f.includes('.config-write-'));
+  const cliCycleOut = `${cliCycle.stdout}${cliCycle.stderr}`;
+  say(
+    'OC30_PROPOSE_PLAN_REFUSES_DECLARED_OCCLUDER_CYCLE_WITH_NO_WRITE',
+    directCycleRefusal?.problems.length === 1 &&
+      directCycleRefusal.problems[0].code === OCCLUDER_DRAW_CYCLE &&
+      cliCycle.status === 1 &&
+      cliCycleOut.includes(OCCLUDER_DRAW_CYCLE) &&
+      cliCycleOut.includes('cycle objects -> legwear -> objects') &&
+      cycleBeforeSha === cycleAfterSha &&
+      leftoverTemps.length === 0,
+    `proposePlan refusal: ${directCycleRefusal?.problems[0]?.code ?? 'accepted'}; CLI exit ${cliCycle.status} (${cliCycleOut.trim().split('\n')[0] ?? ''}); config sha256 unchanged: ${cycleBeforeSha === cycleAfterSha}; temp residue: ${leftoverTemps.length}`,
+  );
+
+  // OC24: Proposal and `--write-config` without `over` are byte-identical to having no `occluders` on both the occluder chain fixture and the propose fixture.
+  const chainAbsentCfgPath = join(deep, 'propose-absent.json');
+  const chainNoOverCfgPath = join(deep, 'propose-no-over.json');
+  const baseChainEarly = (occs?: unknown[]): string =>
+    `${JSON.stringify(
+      {
+        key: 'occluder_chain',
+        seethrough: { resolution: SIDE, steps: 30, seed: 42, offload: false },
+        assemble: {
+          rig_scale: 1,
+          take,
+          ...(occs === undefined ? {} : { occluders: occs }),
+        },
+      },
+      null,
+      2,
+    )}\n`;
+  writeFileSync(chainAbsentCfgPath, baseChainEarly());
+  writeFileSync(chainNoOverCfgPath, baseChainEarly([declaration(d.occluderSha)]));
+  const chainAbsentEarly = loadEarlyConfig(chainAbsentCfgPath, 'layers');
+  const chainNoOverEarly = loadEarlyConfig(chainNoOverCfgPath, 'layers');
+  const deepSrc = readPng(join(deep, 'painting.png'));
+  const deepRunsAbsent = applyTakenLayers(readRuns(plateRunDir, null), deepSrc, { ...chainAbsentEarly, assemble: { ...chainAbsentEarly.assemble, plan: undefined } }, chainAbsentCfgPath);
+  const deepRunsNoOver = applyTakenLayers(readRuns(plateRunDir, null), deepSrc, { ...chainNoOverEarly, assemble: { ...chainNoOverEarly.assemble, plan: undefined } }, chainNoOverCfgPath);
+  const chainPropAbsent = JSON.stringify(proposeSinglePlan(deepRunsAbsent.full, { sourceW: SIDE, sourceH: SIDE, ...proposeFields(chainAbsentEarly, { w: SIDE, h: SIDE }) }), null, 2);
+  const chainPropNoOver = JSON.stringify(proposeSinglePlan(deepRunsNoOver.full, { sourceW: SIDE, sourceH: SIDE, ...proposeFields(chainNoOverEarly, { w: SIDE, h: SIDE }) }), null, 2);
+  const propAbsent = runProposeInProcess(makeEarlyCfg(undefined), 'cfg-absent.json');
+  const writeAbsentPath = join(propDir, 'write-absent.json');
+  const writeNoOverPath = join(propDir, 'write-no-over.json');
+  const sharedWriteBase = `${JSON.stringify(makeEarlyCfg(undefined), null, 2)}\n`;
+  writeFileSync(writeAbsentPath, sharedWriteBase);
+  writeFileSync(writeNoOverPath, `${JSON.stringify(makeEarlyCfg([{ image: 'occluder.png', sha256: propOccSha, under: ['legwear'], rgb_within: 20 }]), null, 2)}\n`);
+  const cliWriteAbsent = spawnSync(
+    process.execPath,
+    [join(root, 'cli.ts'), 'assemble', '--source', propPaintPath, '--full', propPlateRunDir, '--head', propPlateRunDir, '--config', writeAbsentPath, '--propose-plan', '--write-config', writeAbsentPath],
+    { encoding: 'utf8' },
+  );
+  const cliWriteNoOver = spawnSync(
+    process.execPath,
+    [join(root, 'cli.ts'), 'assemble', '--source', propPaintPath, '--full', propPlateRunDir, '--head', propPlateRunDir, '--config', writeNoOverPath, '--propose-plan', '--write-config', writeNoOverPath],
+    { encoding: 'utf8' },
+  );
+  const writtenNoOver = JSON.parse(readFileSync(writeNoOverPath, 'utf8')) as { assemble: Record<string, unknown> };
+  delete writtenNoOver.assemble.occluders;
+  const writtenAbsent = JSON.parse(readFileSync(writeAbsentPath, 'utf8')) as { assemble: Record<string, unknown> };
+  say(
+    'OC31_PROPOSE_PLAN_WITHOUT_OVER_IS_BYTE_IDENTICAL',
+    chainPropAbsent === chainPropNoOver &&
+      JSON.stringify(propAbsent) === JSON.stringify(propWithoutOver) &&
+      cliWriteAbsent.status === 0 &&
+      cliWriteNoOver.status === 0 &&
+      cliWriteAbsent.stdout === cliWriteNoOver.stdout &&
+      JSON.stringify(writtenAbsent) === JSON.stringify(writtenNoOver),
+    `occluder_chain proposal bytes equal: ${chainPropAbsent === chainPropNoOver}; two-run proposal bytes equal: ${JSON.stringify(propAbsent) === JSON.stringify(propWithoutOver)}; --write-config stdout equal: ${cliWriteAbsent.stdout === cliWriteNoOver.stdout}`,
+  );
   // Issue #1242 controls (OC22–OC28): TakeOccluderSplit (`assemble.take` variant with `part`, `tag`, `occluder`).
   const splitHome = join(dir, 'occluder-split');
   rmSync(splitHome, { recursive: true, force: true });

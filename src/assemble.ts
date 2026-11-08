@@ -123,6 +123,7 @@ import { foldName, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { CORE_ALPHA, figuresPhrase, implausibleRules, type Layer, type LayerFigures, layerFigures, type LayerSet, NEAR_WHITE_MIN, OPAQUE_ALPHA_ABOVE, ruleSummary } from './layers.ts';
 import { padToSquare, squarePad } from './inputs.ts';
 import type { MotionSeamDeclaration } from './motionseams.ts';
+import { occluderDrawCycleProblems, orderPlanForOccluders, type OccluderDeclaration } from './occluders.ts';
 import { type CapRecord, type LimbRecord, FIGURE_MASK_FILE, PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, type SceneRecord, type SingleRunPad } from './parts.ts';
 import { assignCrossedLimbs, assignOverlappingHands, type BonePlace, bonePlaces, capBox, coveredRadius, type CutPlacement, featherWeight, halfWidthAbout, inDisc, jointLine, type JointLine, jointOffsets, limbPolyline, limbRun, luma601, nearestLimb, nearestOnLine, offLineFigure, pastJoint, placeCut, polylineDist2, segmentOf } from './limbs.ts';
 import {
@@ -238,6 +239,8 @@ export interface Geometry {
   yieldRefused?: boolean;
   /** Plan parts whose own samples survive source re-take beneath soft front cover. */
   keepUnderOccluders?: readonly string[];
+  /** `assemble.occluders` (issue #1247): declared occluder entries whose `over` parts sit after their `under` parts in a proposed plan. */
+  occluders?: readonly OccluderDeclaration[];
 }
 
 /**
@@ -7002,6 +7005,9 @@ export function headGarmentWarning(w: HeadGarmentOverlap): string {
 
 export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx = PROPOSE_MIN_PX): PlanProposal {
   const frame = checkGeometry(g, { full: full0, head: head0 });
+  if (g.occluders !== undefined && g.occluders.length > 0) {
+    refuseIfAny(occluderDrawCycleProblems(g.occluders));
+  }
   // Issue #366: one run's file, padded to the resolution square as the stage pads it.
   const fullPadded = g.single === true ? padSingleRun(full0, frame, g.resolution) : full0;
   // Issue #439: when seethrough.arm_split is declared, split the full run's overlapping handwear into handwear-r and handwear-l.
@@ -7109,6 +7115,7 @@ export function proposePlan(full0: LayerSet, head0: LayerSet, g: Geometry, minPx
     }
   }
   for (const t of heads) plan.push([aliasOf(t), headRun(t), t]);
+  orderPlanForOccluders(plan, g.occluders);
   for (const [part, run, tag] of plan) {
     if (readAuthorTag(tag) !== null) notes.push(`${tag}: ${AUTHOR_NO_ROLE}; proposed as "${part}" from the ${run} run, at its place in that run's draw order`);
   }
@@ -7401,19 +7408,20 @@ export function stageFields(
 export function proposeFields(
   cfg: EarlyConfig,
   single: { w: number; h: number } | null = null,
-): { resolution: number; headBox: [number, number, number, number]; rigScale: number; single?: boolean; armSplit?: ArmSplit; keySkeleton?: ControlSkeleton; headFaceUnderfill?: boolean } {
+): { resolution: number; headBox: [number, number, number, number]; rigScale: number; single?: boolean; armSplit?: ArmSplit; keySkeleton?: ControlSkeleton; headFaceUnderfill?: boolean; occluders?: readonly OccluderDeclaration[] } {
   const armSplit = cfg.seethrough.arm_split === undefined ? {} : { armSplit: cfg.seethrough.arm_split };
   const keySkeleton = controlSkeletonOf(cfg);
   const skelField = keySkeleton === undefined ? {} : { keySkeleton };
   const underfillField = cfg.assemble.head_face_underfill === undefined ? {} : { headFaceUnderfill: cfg.assemble.head_face_underfill };
+  const occludersField = cfg.assemble.occluders === undefined ? {} : { occluders: cfg.assemble.occluders };
   if (single !== null) {
     refuseIfAny(singleRunHeadBoxProblems(cfg.seethrough));
-    return { resolution: cfg.seethrough.resolution, headBox: singleRunHeadBox(single.w, single.h, cfg.seethrough.resolution), rigScale: cfg.assemble.rig_scale, single: true, ...armSplit, ...skelField, ...underfillField };
+    return { resolution: cfg.seethrough.resolution, headBox: singleRunHeadBox(single.w, single.h, cfg.seethrough.resolution), rigScale: cfg.assemble.rig_scale, single: true, ...armSplit, ...skelField, ...underfillField, ...occludersField };
   }
   if (cfg.seethrough.head_box === undefined) {
     refuseIfAny([{ code: 'ASSEMBLE_FIELD_PRESENT', object: 'config.seethrough.head_box', detail: 'is absent; the plan is proposed from both runs, and the head run cannot be placed on the painting without the box it was cropped from — run `propose --head-box` first' }]);
   }
-  return { resolution: cfg.seethrough.resolution, headBox: cfg.seethrough.head_box as [number, number, number, number], rigScale: cfg.assemble.rig_scale, ...armSplit, ...skelField, ...underfillField };
+  return { resolution: cfg.seethrough.resolution, headBox: cfg.seethrough.head_box as [number, number, number, number], rigScale: cfg.assemble.rig_scale, ...armSplit, ...skelField, ...underfillField, ...occludersField };
 }
 
 /**
