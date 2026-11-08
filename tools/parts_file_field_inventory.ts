@@ -33,6 +33,8 @@ const PART_STRING_FIELDS = [
   'taken_layers[].prompt_id',
   'taken_layers[].run',
   'taken_layers[].run_dir',
+  'taken_layers[].split.image',
+  'taken_layers[].split.sha256',
   'taken_layers[].st_input',
   'taken_layers[].tag',
   'taken_layers[].transport.after_rgba_sha256',

@@ -21,7 +21,9 @@ import { join, relative, resolve } from 'node:path';
 import { assembleStage } from '../src/build.ts';
 import { loadConfig, loadEarlyConfig, parseConfig, parseEarlyConfig } from '../src/config.ts';
 import { PartsError } from '../src/errors.ts';
+import { exportLayers, OPAQUE_ALPHA_ABOVE, readLayers } from '../src/layers.ts';
 import {
+  COPIED_ALPHA_ABOVE,
   OCCLUDER_COLOUR_COPIED,
   OCCLUDER_DRAW_CYCLE,
   OCCLUDER_DRAW_ORDER,
@@ -44,8 +46,9 @@ import {
 } from '../src/plate.ts';
 import { scratchConfig } from '../src/meshdraft.ts';
 import { encodePngBytes, readPng } from '../src/raster/png.ts';
-import { newRaster } from '../src/raster/types.ts';
-import { chainConfig, chainPlate, DEEPER_OCCLUDER_DEPTH, OCCLUDER, OCCLUDER_PX, OCCLUDER_RGB, PLANT, SIDE, writeChainInputs, writePlateRun } from '../fixtures/occluder_chain.ts';
+import { newRaster, type Raster } from '../src/raster/types.ts';
+import { applyTakenLayers, TAKE_SPLIT_EMPTY, TAKE_SPLIT_OCCLUDER } from '../src/takelayers.ts';
+import { chainConfig, chainPlate, DEEPER_OCCLUDER_DEPTH, LIMB, LIMB_RGB, OCCLUDER, OCCLUDER_PX, OCCLUDER_RGB, PLANT, plateRun as buildPlateRun, SIDE, writeChainInputs, writePlateRun } from '../fixtures/occluder_chain.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
 
@@ -382,6 +385,390 @@ export function runOccluderCopyChecks(dir: string, say: Say): void {
   say('OC21_PUBLIC_EXAMPLES_DECLARE_NO_OCCLUDERS',
     exampleRows.every((r) => r.noOccluders),
     exampleRows.map((r) => `${r.key}: occluders=${String(r.noOccluders ? 'absent' : 'present')}`).join(', '));
+
+  // Issue #1242 controls (OC22–OC28): TakeOccluderSplit (`assemble.take` variant with `part`, `tag`, `occluder`).
+  const splitHome = join(dir, 'occluder-split');
+  rmSync(splitHome, { recursive: true, force: true });
+  const sInputs = writeChainInputs(splitHome);
+  const limbTotalPx = (LIMB[2] - LIMB[0]) * (LIMB[3] - LIMB[1]); // 9,216
+  const visibleLimbPx = limbTotalPx - OCCLUDER_PX; // 7,168
+  const visibleDefectBox: [number, number, number, number] = [20, 20, 36, 36]; // 16x16 = 256 px in visible limb
+  const visibleDefectRgba: [number, number, number, number] = [220, 40, 200, 200];
+  const visibleDefectTargetPx = (visibleDefectBox[2] - visibleDefectBox[0]) * (visibleDefectBox[3] - visibleDefectBox[1]); // 256
+  const isInside = (box: readonly number[], x: number, y: number): boolean => x >= box[0] && x < box[2] && y >= box[1] && y < box[3];
+
+  // Build planted plate run: covered 2,048 px is right; a 256 px [20, 20, 36, 36] plant in the visible limb.
+  const plantedPlateSet = buildPlateRun(chainPlate());
+  const plantedPlateLimb = plantedPlateSet.layers.find((l) => l.name === 'legwear')!;
+  for (let y = visibleDefectBox[1]; y < visibleDefectBox[3]; y++) {
+    for (let x = visibleDefectBox[0]; x < visibleDefectBox[2]; x++) {
+      plantedPlateLimb.pixels.data.set(visibleDefectRgba, (y * SIDE + x) * 4);
+    }
+  }
+  const plantedPlateDir = join(splitHome, 'plate-planted');
+  exportLayers(plantedPlateSet, plantedPlateDir);
+  writeFileSync(join(plantedPlateDir, 'meta.json'), JSON.stringify({ prompt_id: 'generated-plate-planted', seed: 7 }));
+
+  const readPartCanvas = (outSubdir: string, partName: string): { canvas: Raster; coveredRight: number; visibleRight: number; visibleDefect: number } | null => {
+    const pJsonPath = join(splitHome, outSubdir, 'parts.json');
+    const pPngPath = join(splitHome, outSubdir, 'parts', `${partName}.png`);
+    if (!existsSync(pJsonPath) || !existsSync(pPngPath)) return null;
+    const pf = readParts(pJsonPath);
+    const meta = pf.parts.find((pt) => pt.name === partName);
+    if (!meta) return null;
+    const crop = readPng(pPngPath);
+    const canvas = newRaster(SIDE, SIDE);
+    const bx0 = meta.x, by0 = meta.y;
+    for (let cy = 0; cy < crop.height; cy++) {
+      for (let cx = 0; cx < crop.width; cx++) {
+        const si = (cy * crop.width + cx) * 4;
+        const di = ((by0 + cy) * SIDE + (bx0 + cx)) * 4;
+        canvas.data.set(crop.data.subarray(si, si + 4), di);
+      }
+    }
+    let coveredRight = 0;
+    let visibleRight = 0;
+    let visibleDefect = 0;
+    for (let y = LIMB[1]; y < LIMB[3]; y++) {
+      for (let x = LIMB[0]; x < LIMB[2]; x++) {
+        const idx = (y * SIDE + x) * 4;
+        const isLimbPixel =
+          canvas.data[idx] === LIMB_RGB[0] &&
+          canvas.data[idx + 1] === LIMB_RGB[1] &&
+          canvas.data[idx + 2] === LIMB_RGB[2] &&
+          canvas.data[idx + 3] === 255;
+        if (isInside(OCCLUDER, x, y)) {
+          if (isLimbPixel) coveredRight++;
+        } else {
+          if (isLimbPixel) visibleRight++;
+          else visibleDefect++;
+        }
+      }
+    }
+    return { canvas, coveredRight, visibleRight, visibleDefect };
+  };
+
+  // Bar 1 (OC22): Plate only — base is the planted plate run, no split on `behind` -> covered 2,048 is right;
+  // the 256 px plant in the visible region shows as the visible defect, counted on the part.
+  const bar1Run = stage(
+    splitHome,
+    plantedPlateDir,
+    chainConfig({ require_hidden_extent: reqHidden, occluders: [declaration(sInputs.occluderSha)], take }),
+    'out-bar1-plate-only',
+  );
+  const bar1Parts = bar1Run.error === null ? readParts(join(splitHome, 'out-bar1-plate-only', 'parts.json')) : null;
+  const bar1Behind = bar1Parts?.parts.find((pt) => pt.name === 'behind');
+  const bar1Canvas = readPartCanvas('out-bar1-plate-only', 'behind');
+  say('OC22_PLATE_ONLY_KEEPS_COVERED_2048_AND_SHOWS_256_PX_VISIBLE_DEFECT',
+    bar1Run.error === null &&
+      bar1Canvas?.coveredRight === OCCLUDER_PX &&
+      bar1Canvas?.visibleRight === visibleLimbPx - visibleDefectTargetPx &&
+      bar1Canvas?.visibleDefect === visibleDefectTargetPx &&
+      bar1Behind?.opaque_px === limbTotalPx &&
+      bar1Parts?.recomposite?.error_px === visibleDefectTargetPx,
+    `${bar1Run.error?.message ?? 'assembled'}; covered=${bar1Canvas?.coveredRight}/${OCCLUDER_PX}, visible_right=${bar1Canvas?.visibleRight}/${visibleLimbPx}, visible_defect=${bar1Canvas?.visibleDefect} (want ${visibleDefectTargetPx}), behind.opaque_px=${bar1Behind?.opaque_px}, recomposite.error_px=${bar1Parts?.recomposite?.error_px}`);
+
+  // Bar 2 (OC23): Painting-run whole-layer take of `legwear` -> visible 7,168 is right, and the hidden extent is missing on 2,048 px.
+  const wholeTake = [{ run: 'full', run_dir: 'orig', st_input: 'painting.png', tags: ['legwear', 'objects'] }];
+  const bar2Refused = stage(
+    splitHome,
+    plantedPlateDir,
+    chainConfig({ require_hidden_extent: reqHidden, occluders: [declaration(sInputs.occluderSha)], take: wholeTake }),
+    'out-bar2-whole-refused',
+  );
+  const bar2Absent = bar2Refused.error?.problems.find((pr) => pr.code === 'ASSEMBLE_HIDDEN_EXTENT_ABSENT');
+  const bar2Unchecked = stage(
+    splitHome,
+    plantedPlateDir,
+    chainConfig({ occluders: [declaration(sInputs.occluderSha)], take: wholeTake }),
+    'out-bar2-whole-unchecked',
+  );
+  const bar2Canvas = readPartCanvas('out-bar2-whole-unchecked', 'behind');
+  const bar2MissingHidden = bar2Canvas !== null ? OCCLUDER_PX - bar2Canvas.coveredRight : -1;
+  say('OC23_WHOLE_LAYER_PAINTING_TAKE_HAS_VISIBLE_7168_AND_MISSES_2048_HIDDEN_EXTENT',
+    bar2Absent?.detail.includes(`${OCCLUDER_PX} enclosed-hole rig cells of ${OCCLUDER_PX}`) === true &&
+      bar2Unchecked.error === null &&
+      bar2Canvas?.visibleRight === visibleLimbPx &&
+      bar2Canvas?.visibleDefect === 0 &&
+      bar2Canvas?.coveredRight === 0 &&
+      bar2MissingHidden === OCCLUDER_PX,
+    `with require_hidden_extent: ${bar2Absent?.detail.split(';')[0] ?? 'accepted'}; without: visible_right=${bar2Canvas?.visibleRight}/${visibleLimbPx}, covered_right=${bar2Canvas?.coveredRight}, missing_hidden=${bar2MissingHidden}`);
+
+  // Bar 3 (OC24): Split take -> covered_px = 2,048 from base and visible_px = 7,168 from donor;
+  // 9,216 opaque px, 0 hidden-extent holes, 0 copied occluder px, and parts.json round-trips `split`.
+  const splitTake = [
+    { run: 'full', run_dir: 'orig', st_input: 'painting.png', part: 'behind', tag: 'legwear', occluder: 0 },
+    { run: 'full', run_dir: 'orig', st_input: 'painting.png', tags: ['objects'] },
+  ];
+  const bar3Run = stage(
+    splitHome,
+    plantedPlateDir,
+    chainConfig({ require_hidden_extent: reqHidden, occluders: [declaration(sInputs.occluderSha)], take: splitTake }),
+    'out-bar3-split',
+  );
+  const bar3PartsPath = join(splitHome, 'out-bar3-split', 'parts.json');
+  const bar3Parts = bar3Run.error === null && existsSync(bar3PartsPath) ? readParts(bar3PartsPath) : null;
+  const bar3Behind = bar3Parts?.parts.find((pt) => pt.name === 'behind');
+  const bar3Split = bar3Behind?.taken_layers?.[0]?.split;
+  const bar3Canvas = readPartCanvas('out-bar3-split', 'behind');
+  const wantSplit = {
+    occluder: 0,
+    image: 'occluder.png',
+    sha256: sInputs.occluderSha,
+    covered_px: OCCLUDER_PX,
+    visible_px: visibleLimbPx,
+  };
+  const badSplitPath = join(splitHome, 'out-bar3-split', 'parts-bad-split.json');
+  if (bar3Parts !== null) {
+    const rawSplit = JSON.parse(readFileSync(bar3PartsPath, 'utf8')) as { parts: Array<{ name: string; taken_layers?: Array<{ split?: Record<string, unknown> }> }> };
+    const bEntry = rawSplit.parts.find((pt) => pt.name === 'behind');
+    if (bEntry?.taken_layers?.[0]?.split) bEntry.taken_layers[0].split.covered_px = 0;
+    writeFileSync(badSplitPath, JSON.stringify(rawSplit));
+  }
+  const badSplitRefusal = bar3Parts !== null ? refusal(() => readParts(badSplitPath))?.problems.find((pr) => pr.code === 'PARTS_TAKEN_LAYERS' && pr.detail.includes('covered_px and visible_px')) : undefined;
+  say('OC24_SPLIT_TAKE_MERGES_COVERED_2048_AND_VISIBLE_7168_AND_ROUND_TRIPS_PARTS_JSON',
+    bar3Run.error === null &&
+      copied(bar3Run.lines).length === 0 &&
+      bar3Behind?.opaque_px === limbTotalPx &&
+      bar3Canvas?.coveredRight === OCCLUDER_PX &&
+      bar3Canvas?.visibleRight === visibleLimbPx &&
+      bar3Canvas?.visibleDefect === 0 &&
+      bar3Parts?.recomposite?.error_px === 0 &&
+      JSON.stringify(bar3Split) === JSON.stringify(wantSplit) &&
+      badSplitRefusal !== undefined,
+    `${bar3Run.error?.message ?? 'assembled'}; opaque_px=${bar3Behind?.opaque_px}/${limbTotalPx}, covered=${bar3Canvas?.coveredRight}, visible=${bar3Canvas?.visibleRight}, visible_defect=${bar3Canvas?.visibleDefect}, copied_warn=${copied(bar3Run.lines).length}, split=${JSON.stringify(bar3Split)}, reader_plant=${badSplitRefusal?.code ?? 'accepted'}`);
+
+  // Bar 4 (OC25): Identity on visible only — taint at (64,64) deep inside occluder (beyond 5x5 collar) passes with differing = 0;
+  // taint at (20,20) on visible limb refuses ASSEMBLE_TAKE_INPUT_IDENTITY.
+  const taintedCoveredInput = chainPlate();
+  for (let y = OCCLUDER[1]; y < OCCLUDER[3]; y++) for (let x = OCCLUDER[0]; x < OCCLUDER[2]; x++) taintedCoveredInput.data.set([...OCCLUDER_RGB, 255], (y * SIDE + x) * 4);
+  taintedCoveredInput.data.set([0, 255, 0, 255], (64 * SIDE + 64) * 4);
+  writeFileSync(join(splitHome, 'st-input-covered-taint.png'), encodePngBytes(taintedCoveredInput));
+
+  const taintedVisibleInput = chainPlate();
+  for (let y = OCCLUDER[1]; y < OCCLUDER[3]; y++) for (let x = OCCLUDER[0]; x < OCCLUDER[2]; x++) taintedVisibleInput.data.set([...OCCLUDER_RGB, 255], (y * SIDE + x) * 4);
+  taintedVisibleInput.data.set([0, 255, 0, 255], (20 * SIDE + 20) * 4);
+  writeFileSync(join(splitHome, 'st-input-visible-taint.png'), encodePngBytes(taintedVisibleInput));
+
+  const bar4CoveredOk = stage(
+    splitHome,
+    plantedPlateDir,
+    chainConfig({
+      require_hidden_extent: reqHidden,
+      occluders: [declaration(sInputs.occluderSha)],
+      take: [
+        { run: 'full', run_dir: 'orig', st_input: 'st-input-covered-taint.png', part: 'behind', tag: 'legwear', occluder: 0 },
+        { run: 'full', run_dir: 'orig', st_input: 'painting.png', tags: ['objects'] },
+      ],
+    }),
+    'out-bar4-covered-taint',
+  );
+  const bar4CoveredParts = bar4CoveredOk.error === null ? readParts(join(splitHome, 'out-bar4-covered-taint', 'parts.json')) : null;
+  const bar4CoveredDiff = bar4CoveredParts?.parts.find((pt) => pt.name === 'behind')?.taken_layers?.[0]?.differing_px;
+
+  const bar4VisibleRefused = stage(
+    splitHome,
+    plantedPlateDir,
+    chainConfig({
+      require_hidden_extent: reqHidden,
+      occluders: [declaration(sInputs.occluderSha)],
+      take: [
+        { run: 'full', run_dir: 'orig', st_input: 'st-input-visible-taint.png', part: 'behind', tag: 'legwear', occluder: 0 },
+        { run: 'full', run_dir: 'orig', st_input: 'painting.png', tags: ['objects'] },
+      ],
+    }),
+    'out-bar4-visible-taint',
+  );
+  const bar4IdProb = bar4VisibleRefused.error?.problems.find((pr) => pr.code === 'ASSEMBLE_TAKE_INPUT_IDENTITY');
+  say('OC25_SPLIT_IDENTITY_CHECKS_VISIBLE_SUPPORT_ONLY',
+    bar4CoveredOk.error === null &&
+      bar4CoveredDiff === 0 &&
+      bar4IdProb !== undefined &&
+      bar4IdProb.detail.includes('1 differing pixel(s), bbox [20, 20, 21, 21]') &&
+      !existsSync(join(splitHome, 'out-bar4-visible-taint')),
+    `covered taint (64,64): ${bar4CoveredOk.error?.message ?? `differing_px=${bar4CoveredDiff}`}; visible taint (20,20): ${bar4IdProb ? `${bar4IdProb.code}: ${bar4IdProb.detail}` : (bar4VisibleRefused.error?.message ?? 'accepted')}`);
+
+  // Bar 5a (OC26): ASSEMBLE_TAKE_SPLIT_OCCLUDER ×3 (bad index, not in `under`, in `over`).
+  const splitOccPlants = [
+    {
+      label: 'bad-index',
+      occluders: [declaration(sInputs.occluderSha)],
+      takeItem: { run: 'full' as const, run_dir: 'orig', st_input: 'painting.png', part: 'behind', tag: 'legwear', occluder: 1 },
+      expectSubstr: 'does not exist in config.assemble.occluders',
+    },
+    {
+      label: 'not-in-under',
+      occluders: [declaration(sInputs.occluderSha)],
+      takeItem: { run: 'full' as const, run_dir: 'orig', st_input: 'painting.png', part: 'face', tag: 'face', occluder: 0 },
+      expectSubstr: 'not in config.assemble.occluders[0].under',
+    },
+    {
+      label: 'in-over',
+      occluders: [declaration(sInputs.occluderSha, { under: ['behind'], over: ['front'] })],
+      takeItem: { run: 'full' as const, run_dir: 'orig', st_input: 'painting.png', part: 'front', tag: 'objects', occluder: 0 },
+      expectSubstr: 'in config.assemble.occluders[0].over',
+    },
+  ];
+  const basePlateLayerSet = readLayers(plantedPlateDir);
+  const splitOccResults = splitOccPlants.map(({ label, occluders: occs, takeItem, expectSubstr }) => {
+    const takeList =
+      takeItem.tag === 'objects'
+        ? [takeItem]
+        : [takeItem, { run: 'full' as const, run_dir: 'orig', st_input: 'painting.png', tags: ['objects'] }];
+    const cfg = chainConfig({ occluders: occs, take: takeList });
+    const cfgProb = refusal(() => parseConfig(cfg))?.problems.find((pr) => pr.code === TAKE_SPLIT_OCCLUDER);
+    const earlyProb = refusal(() => parseEarlyConfig(cfg, 'assemble'))?.problems.find((pr) => pr.code === TAKE_SPLIT_OCCLUDER);
+    const stageOut = `out-bar5-occ-${label}`;
+    const stageRes = stage(splitHome, plantedPlateDir, cfg, stageOut);
+    const stageProb = stageRes.error?.problems.find((pr) => pr.code === TAKE_SPLIT_OCCLUDER);
+    const directProb = refusal(() =>
+      applyTakenLayers(
+        { full: basePlateLayerSet, head: basePlateLayerSet, single: true },
+        readPng(sInputs.painting),
+        {
+          seethrough: { resolution: SIDE, steps: 20, seed: 42, offload: false },
+          assemble: {
+            take: takeList,
+            plan: [
+              ['face', 'full', 'face'],
+              ['eye_r', 'full', 'eyewhite-r'],
+              ['eye_l', 'full', 'eyewhite-l'],
+              ['behind', 'full', 'legwear'],
+              ['front', 'full', 'objects'],
+            ],
+            occluders: occs.map((o) => ({
+              image: String(o.image),
+              sha256: String(o.sha256),
+              under: o.under as string[],
+              ...(o.over !== undefined ? { over: o.over as string[] } : {}),
+              rgb_within: Number(o.rgb_within),
+            })),
+          },
+        },
+        join(splitHome, 'config.json'),
+      ),
+    )?.problems.find((pr) => pr.code === TAKE_SPLIT_OCCLUDER);
+    const ok =
+      cfgProb?.detail.includes(expectSubstr) === true &&
+      earlyProb?.detail.includes(expectSubstr) === true &&
+      stageProb?.detail.includes(expectSubstr) === true &&
+      directProb?.detail.includes(expectSubstr) === true &&
+      !existsSync(join(splitHome, stageOut));
+    return { label, ok, detail: directProb?.detail ?? 'accepted' };
+  });
+  say('OC26_SPLIT_OCCLUDER_REFUSES_BAD_INDEX_NOT_IN_UNDER_AND_IN_OVER',
+    splitOccResults.every((r) => r.ok),
+    splitOccResults.map((r) => `${r.label}: ${r.detail}`).join(' | '));
+
+  // Bar 5b (OC27): ASSEMBLE_TAKE_SPLIT_EMPTY ×2 (empty covered, empty visible).
+  const emptyCoveredPlateSet = buildPlateRun(chainPlate());
+  const emptyCoveredLimb = emptyCoveredPlateSet.layers.find((l) => l.name === 'legwear')!;
+  for (let y = OCCLUDER[1]; y < OCCLUDER[3]; y++) {
+    for (let x = OCCLUDER[0]; x < OCCLUDER[2]; x++) {
+      emptyCoveredLimb.pixels.data.set([0, 0, 0, 0], (y * SIDE + x) * 4);
+    }
+  }
+  const emptyCoveredPlateDir = join(splitHome, 'plate-empty-covered');
+  exportLayers(emptyCoveredPlateSet, emptyCoveredPlateDir);
+  writeFileSync(join(emptyCoveredPlateDir, 'meta.json'), JSON.stringify({ prompt_id: 'generated-plate-empty-covered', seed: 7 }));
+
+  const emptyVisibleDonorSet = readLayers(join(splitHome, 'orig'));
+  const emptyVisibleLimb = emptyVisibleDonorSet.layers.find((l) => l.name === 'legwear')!;
+  for (let y = 0; y < SIDE; y++) {
+    for (let x = 0; x < SIDE; x++) {
+      if (isInside(OCCLUDER, x, y)) emptyVisibleLimb.pixels.data.set([...LIMB_RGB, 255], (y * SIDE + x) * 4);
+      else emptyVisibleLimb.pixels.data.set([0, 0, 0, 0], (y * SIDE + x) * 4);
+    }
+  }
+  const emptyVisibleDonorDir = join(splitHome, 'orig-empty-visible');
+  exportLayers(emptyVisibleDonorSet, emptyVisibleDonorDir);
+  writeFileSync(join(emptyVisibleDonorDir, 'meta.json'), JSON.stringify({ prompt_id: 'generated-orig-empty-visible', seed: 42 }));
+
+  const emptyCoveredRun = stage(
+    splitHome,
+    emptyCoveredPlateDir,
+    chainConfig({ occluders: [declaration(sInputs.occluderSha)], take: splitTake }),
+    'out-bar5-empty-covered',
+  );
+  const emptyCoveredProb = emptyCoveredRun.error?.problems.find((pr) => pr.code === TAKE_SPLIT_EMPTY);
+
+  const emptyVisibleRun = stage(
+    splitHome,
+    plantedPlateDir,
+    chainConfig({
+      occluders: [declaration(sInputs.occluderSha)],
+      take: [
+        { run: 'full', run_dir: 'orig-empty-visible', st_input: 'painting.png', part: 'behind', tag: 'legwear', occluder: 0 },
+        { run: 'full', run_dir: 'orig', st_input: 'painting.png', tags: ['objects'] },
+      ],
+    }),
+    'out-bar5-empty-visible',
+  );
+  const emptyVisibleProb = emptyVisibleRun.error?.problems.find((pr) => pr.code === TAKE_SPLIT_EMPTY);
+  say('OC27_SPLIT_EMPTY_REFUSES_ZERO_COVERED_AND_ZERO_VISIBLE_SUPPORT',
+    emptyCoveredProb?.detail.includes('covered_px is 0') === true &&
+      emptyCoveredProb?.detail.includes(`visible_px is ${visibleLimbPx}`) === true &&
+      !existsSync(join(splitHome, 'out-bar5-empty-covered')) &&
+      emptyVisibleProb?.detail.includes(`covered_px is ${OCCLUDER_PX}`) === true &&
+      emptyVisibleProb?.detail.includes('visible_px is 0') === true &&
+      !existsSync(join(splitHome, 'out-bar5-empty-visible')),
+    `empty covered: ${emptyCoveredProb?.detail ?? 'accepted'}; empty visible: ${emptyVisibleProb?.detail ?? 'accepted'}`);
+
+  // Bar 7 (OC28): Seam at the occluder edge — number of (covered px, visible 4-neighbour) pairs
+  // where the split part's alpha is > COPIED_ALPHA_ABOVE (128) on one side and <= 128 on the other.
+  // Fixture as is (plate limb = painting limb = LIMB): 0.
+  // Planted narrower-limb plate [16, 16, 64, 112] (right edge inside OCCLUDER [48, 32, 80, 96]): 96.
+  const countOccluderEdgeSeams = (partCanvas: Raster, occMask: Raster): number => {
+    let seams = 0;
+    const dirs: ReadonlyArray<readonly [number, number]> = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (let y = 0; y < SIDE; y++) {
+      for (let x = 0; x < SIDE; x++) {
+        if (occMask.data[(y * SIDE + x) * 4 + 3] <= COPIED_ALPHA_ABOVE) continue;
+        const covOpaque = partCanvas.data[(y * SIDE + x) * 4 + 3] > COPIED_ALPHA_ABOVE;
+        for (const [dx, dy] of dirs) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || nx >= SIDE || ny < 0 || ny >= SIDE) continue;
+          if (occMask.data[(ny * SIDE + nx) * 4 + 3] > COPIED_ALPHA_ABOVE) continue;
+          const visOpaque = partCanvas.data[(ny * SIDE + nx) * 4 + 3] > COPIED_ALPHA_ABOVE;
+          if (covOpaque !== visOpaque) seams++;
+        }
+      }
+    }
+    return seams;
+  };
+  const occMaskRaster = readPng(sInputs.occluder);
+  const fullPlateDir = writePlateRun(splitHome, encodePngBytes(chainPlate()));
+  const fullSplitRun = stage(
+    splitHome,
+    fullPlateDir,
+    chainConfig({ occluders: [declaration(sInputs.occluderSha)], take: splitTake }),
+    'out-bar7-full-limb',
+  );
+  const fullSplitCanvas = readPartCanvas('out-bar7-full-limb', 'behind');
+  const fullSeams = fullSplitCanvas !== null ? countOccluderEdgeSeams(fullSplitCanvas.canvas, occMaskRaster) : -1;
+
+  const narrowPlateSet = buildPlateRun(chainPlate());
+  const narrowLimb = narrowPlateSet.layers.find((l) => l.name === 'legwear')!;
+  for (let y = LIMB[1]; y < LIMB[3]; y++) {
+    for (let x = 64; x < LIMB[2]; x++) {
+      narrowLimb.pixels.data.set([0, 0, 0, 0], (y * SIDE + x) * 4);
+    }
+  }
+  const narrowPlateDir = join(splitHome, 'plate-narrow');
+  exportLayers(narrowPlateSet, narrowPlateDir);
+  writeFileSync(join(narrowPlateDir, 'meta.json'), JSON.stringify({ prompt_id: 'generated-plate-narrow', seed: 7 }));
+  const narrowSplitRun = stage(
+    splitHome,
+    narrowPlateDir,
+    chainConfig({ occluders: [declaration(sInputs.occluderSha)], take: splitTake }),
+    'out-bar7-narrow-limb',
+  );
+  const narrowSplitCanvas = readPartCanvas('out-bar7-narrow-limb', 'behind');
+  const narrowSeams = narrowSplitCanvas !== null ? countOccluderEdgeSeams(narrowSplitCanvas.canvas, occMaskRaster) : -1;
+  say('OC28_OCCLUDER_EDGE_SEAM_COUNT_IS_0_ON_MATCHED_LIMB_AND_96_ON_NARROW_PLATE',
+    fullSplitRun.error === null && narrowSplitRun.error === null && fullSeams === 0 && narrowSeams === 96,
+    `matched limb [16,16,112,112]: seam_pairs=${fullSeams} (want 0); narrower plate limb [16,16,64,112]: seam_pairs=${narrowSeams} (want 96)`);
 }
 
 /** `plateDir` is the harness's `comfy plate --mode occluder` output on the chain's painting and occluder (`<work>/occ-chain`). */

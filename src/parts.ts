@@ -540,6 +540,7 @@ function orderedProvenance(p: PixelProvenance): PixelProvenance {
 
 function orderedTakenSource(source: TakenLayerSource): TakenLayerSource {
   const transport = source.transport;
+  const split = source.split;
   return {
     run: source.run, tag: source.tag, run_dir: source.run_dir, st_input: source.st_input,
     prompt_id: source.prompt_id, seed: source.seed, support_px: source.support_px,
@@ -551,6 +552,10 @@ function orderedTakenSource(source: TakenLayerSource): TakenLayerSource {
       input_rgba_sha256: transport.input_rgba_sha256,
       before_rgba_sha256: transport.before_rgba_sha256,
       after_rgba_sha256: transport.after_rgba_sha256,
+    } }),
+    ...(split === undefined ? {} : { split: {
+      occluder: split.occluder, image: split.image, sha256: split.sha256,
+      covered_px: split.covered_px, visible_px: split.visible_px,
     } }),
   };
 }

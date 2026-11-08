@@ -24,7 +24,20 @@ export interface TakeRegion {
   /** PNG bytes, explicitly bound to the stage source or a separate painting. */
   reference?: { source: true; sha256: string } | { painting: string; sha256: string };
 }
-export type TakeDeclaration = TakeLayers | TakeRegion;
+export interface TakeOccluderSplit {
+  run: Run;
+  run_dir: string;
+  st_input: string;
+  /** Same painting-space crop and transport as a whole-layer take. */
+  crop?: TakeLayers['crop'];
+  /** Plan part on `run`; must be in `occluders[occluder].under`, not in `over`. */
+  part: string;
+  /** The plan row's See-through tag for `part` on `run`. */
+  tag: string;
+  /** Zero-based index into `config.assemble.occluders`; its image is the split mask. */
+  occluder: number;
+}
+export type TakeDeclaration = TakeLayers | TakeRegion | TakeOccluderSplit;
 export interface RegionReading {
   part: string;
   run: Run;
@@ -106,7 +119,7 @@ export function deriveTakenRegion(base: Layer, donor: Layer, painting: Raster, s
 
 /** Called beside whole-layer take, before assembly or any output emission. */
 export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleConfig, configPath: string, setup: SetupPainting | undefined, receipts: ReceiptLedger, sourcePath?: string): Runs {
-  const declarations = (cfg.assemble.take ?? []).filter((item): item is TakeRegion => 'part' in item);
+  const declarations = (cfg.assemble.take ?? []).filter((item): item is TakeRegion => 'seed' in item);
   if (declarations.length === 0) return runs;
   const tolerance = setup?.rgb_tolerance;
   if (typeof tolerance !== 'number' || !Number.isSafeInteger(tolerance) || tolerance < 0 || tolerance > 255) {
@@ -126,7 +139,7 @@ export function applyTakenRegions(runs: Runs, painting: Raster, cfg: AssembleCon
     const plan = cfg.assemble.plan.find(entry => entry[0] === declaration.part && entry[1] === declaration.run);
     if (plan === undefined) return refuse('ASSEMBLE_REGION_TAKE_PART', at, `requires a plan part named "${declaration.part}" in target run "${declaration.run}"`);
     const key = `${plan[1]}:${plan[2]}`;
-    if (seen.has(key) || (cfg.assemble.take ?? []).some(item => 'tags' in item && item.run === plan[1] && item.tags.includes(plan[2]))) {
+    if (seen.has(key) || (cfg.assemble.take ?? []).some(item => ('tags' in item && item.run === plan[1] && item.tags.includes(plan[2])) || ('occluder' in item && item.run === plan[1] && (item.tag === plan[2] || item.part === declaration.part)))) {
       return refuse('ASSEMBLE_REGION_TAKE_PART', at, `target ${key} is taken more than once; one region donor or whole-layer donor per target is required`);
     }
     seen.add(key);
