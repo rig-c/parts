@@ -7,7 +7,7 @@ import { CORE_KERNEL, fullPlanBand } from './assemble.ts';
 import { makeInputs, squarePad } from './inputs.ts';
 import { OPAQUE_ALPHA_ABOVE, readLayers, type Layer, type LayerSet } from './layers.ts';
 import { PartsError, refuseIfAny, type Problem } from './errors.ts';
-import { declaredOccluderPair, OCCLUDER_DRAW_ORDER, occluderDrawCycleProblems, occluderOverTakenProblems, type OccluderDeclaration } from './occluders.ts';
+import { declaredOccluderPair, occluderDrawCycleProblems, occluderDrawOrderProblems, occluderOverTakenProblems, type OccluderDeclaration } from './occluders.ts';
 import { dilate } from './raster/morph.ts';
 import { newMask, newRaster, newFloatImage, type Raster } from './raster/types.ts';
 import { readPng } from './raster/png.ts';
@@ -159,9 +159,15 @@ export function applyTakenLayers(runs: { full: LayerSet; head: LayerSet; single:
   const declarations = (cfg.assemble.take ?? []).filter((item): item is TakeLayers => 'tags' in item);
   const occluders = cfg.assemble.occluders ?? [];
   if (occluders.length > 0) {
+    const cycles = occluderDrawCycleProblems(occluders);
     refuseIfAny([
-      ...occluderDrawCycleProblems(occluders),
-      ...(cfg.assemble.plan === undefined ? [] : occluderOverTakenProblems(occluders, cfg.assemble.plan, declarations)),
+      ...cycles,
+      ...(cfg.assemble.plan === undefined
+        ? []
+        : [
+            ...occluderOverTakenProblems(occluders, cfg.assemble.plan, declarations),
+            ...(cycles.length > 0 ? [] : occluderDrawOrderProblems(occluders, cfg.assemble.plan)),
+          ]),
     ]);
   }
   if (declarations.length === 0) return { ...runs, notes: [] };
@@ -215,11 +221,7 @@ export function applyTakenLayers(runs: { full: LayerSet; head: LayerSet; single:
     for (let i = 0; i < selected.length; i++) for (let j = i + 1; j < selected.length; j++) {
       const a = selected[i], b = selected[j];
       if (a.layer === undefined || b.layer === undefined) continue;
-      const declared = declaredOccluderPair(occluders, a.part, b.part);
-      if (declared !== null) {
-        if (declared.over === a.part) problems.push({ code: OCCLUDER_DRAW_ORDER, object: `${run} plan parts "${a.part}" / "${b.part}"`, detail: `config.assemble.occluders[${declared.index}] declares "${a.part}" in over and "${b.part}" in under, but config.assemble.plan draws "${a.part}" behind "${b.part}"; put "${a.part}" after "${b.part}" in config.assemble.plan (back to front)` });
-        continue;
-      }
+      if (declaredOccluderPair(occluders, a.part, b.part) !== null) continue;
       if (origin(a.layer) === origin(b.layer)) continue;
       const overlap = supportOverlap(a.layer, b.layer);
       if (overlap === 0) continue;

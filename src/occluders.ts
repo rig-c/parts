@@ -133,6 +133,32 @@ export function declaredOccluderPair(declarations: readonly OccluderDeclaration[
   return null;
 }
 
+/**
+ * Every declared `(over, under)` pair in `config.assemble.occluders` must draw `over` after `under`
+ * in the combined `config.assemble.plan` (back to front, `ASSEMBLE_OCCLUDER_DRAW_ORDER`).
+ */
+export function occluderDrawOrderProblems(
+  declarations: readonly OccluderDeclaration[],
+  plan: ReadonlyArray<readonly [string, string, string]>,
+): Problem[] {
+  const problems: Problem[] = [];
+  for (let i = 0; i < plan.length; i++) {
+    for (let j = i + 1; j < plan.length; j++) {
+      const [partA, runA] = plan[i];
+      const [partB, runB] = plan[j];
+      const declared = declaredOccluderPair(declarations, partA, partB);
+      if (declared !== null && declared.over === partA) {
+        problems.push({
+          code: OCCLUDER_DRAW_ORDER,
+          object: runA === runB ? `${runA} plan parts "${partA}" / "${partB}"` : `plan parts "${partA}" (${runA}) / "${partB}" (${runB})`,
+          detail: `${AT}[${declared.index}] declares "${partA}" in over and "${partB}" in under, but config.assemble.plan draws "${partA}" behind "${partB}"; put "${partA}" after "${partB}" in config.assemble.plan (back to front)`,
+        });
+      }
+    }
+  }
+  return problems;
+}
+
 /** Every `over` part's plan layer (`run:tag`) must be taken by a whole-layer `assemble.take` declaration (`ASSEMBLE_OCCLUDER_OVER_TAKEN`). */
 export function occluderOverTakenProblems(
   declarations: readonly OccluderDeclaration[],

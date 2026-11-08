@@ -154,10 +154,10 @@ export function runOccluderConfigChecks(dir: string, say: Say): void {
     `over read ${overReadOk}; empty ${overEmpty.join('/')}; non-string ${overType.join('/')}; duplicate ${overDup.join('/')}; unknown: ${overUnknown.map((p) => p?.detail ?? 'accepted').join(' | ')}`);
 }
 
-function stage(home: string, full: string, cfg: Record<string, unknown>, out: string): { lines: string[]; error: PartsError | null } {
+function stage(home: string, full: string, cfg: Record<string, unknown>, out: string, head: string | null = null): { lines: string[]; error: PartsError | null } {
   writeFileSync(join(home, 'config.json'), JSON.stringify(cfg));
   const lines: string[] = [];
-  const error = refusal(() => assembleStage({ config: join(home, 'config.json'), source: join(home, 'painting.png'), full, head: null, project: 'visible' },
+  const error = refusal(() => assembleStage({ config: join(home, 'config.json'), source: join(home, 'painting.png'), full, head, project: 'visible' },
     { partsJson: join(home, out, 'parts.json'), partsDir: join(home, out, 'parts'), recomposite: join(home, out, 'recomposite.png'), errorMap: join(home, out, 'error.png') }, (line) => lines.push(line)));
   return { lines, error };
 }
@@ -356,17 +356,32 @@ export function runOccluderCopyChecks(dir: string, say: Say): void {
     untakenOver.error?.problems.length === 1 && untakenProblem?.object === 'config.assemble.occluders[0].over[0]' && untakenProblem.detail.includes('part "front" (full:objects) is not taken by config.assemble.take') && !existsSync(join(deep, 'out-untaken-over')),
     untakenOver.error?.message ?? 'accepted');
 
-  // (g) Default output bytes of the 5 public examples (expected/parts.json) are unchanged and none declares occluders.
+  // Cross-run declared pair: `over` is a `full` row and `under` is a `head` row, with `over` drawn behind `under` in `assemble.plan`.
+  const cfgCrossRun = chainConfig({
+    occluders: [declaration(d.occluderSha, { over: ['front'] })],
+    take,
+  });
+  (cfgCrossRun.seethrough as Record<string, unknown>).head_box = [0, 0, SIDE, SIDE];
+  (cfgCrossRun.assemble as Record<string, unknown>).plan = [
+    ['face', 'head', 'face'], ['eye_r', 'head', 'eyewhite-r'], ['eye_l', 'head', 'eyewhite-l'],
+    ['front', 'full', 'objects'], ['behind', 'head', 'legwear'],
+  ];
+  const crossRunOver = stage(deep, plateRunDir, cfgCrossRun, 'out-cross-run-over', plateRunDir);
+  const crossRunProblem = crossRunOver.error?.problems.find((q) => q.code === OCCLUDER_DRAW_ORDER);
+  say('OC20_CROSS_RUN_DECLARED_OVER_DRAWN_BEHIND_UNDER_REFUSES_OCCLUDER_DRAW_ORDER',
+    crossRunOver.error?.problems.length === 1 && crossRunProblem?.object === 'plan parts "front" (full) / "behind" (head)' && crossRunProblem.detail.includes('config.assemble.occluders[0]') && !existsSync(join(deep, 'out-cross-run-over')),
+    crossRunOver.error?.message ?? 'accepted');
+
+  // (g) None of the 5 public example configs declares `assemble.occluders` (byte stability of their assembled outputs is checked by CI's "Fetch pinned painting allocation examples" step via `tools/check_painting_public.ts`).
   const root = resolve(import.meta.dir, '..');
   const exampleKeys = ['demo', 'reference-demo', 'reference-sample', 'scarf', 'wind'] as const;
   const exampleRows = exampleKeys.map((key) => {
     const cfg = loadConfig(join(root, 'examples', key, 'config.json'));
-    const partsBytes = new Uint8Array(readFileSync(join(root, 'examples', key, 'expected', 'parts.json')));
-    return { key, noOccluders: cfg.assemble.occluders === undefined, bytes: partsBytes.length, sha: sha256(partsBytes).slice(0, 12) };
+    return { key, noOccluders: cfg.assemble.occluders === undefined };
   });
-  say('OC20_PUBLIC_EXAMPLE_DEFAULT_OUTPUT_BYTES_ARE_UNCHANGED',
-    exampleRows.every((r) => r.noOccluders && r.bytes > 0),
-    exampleRows.map((r) => `${r.key}: parts.json ${r.bytes} B sha256:${r.sha}`).join(', '));
+  say('OC21_PUBLIC_EXAMPLES_DECLARE_NO_OCCLUDERS',
+    exampleRows.every((r) => r.noOccluders),
+    exampleRows.map((r) => `${r.key}: occluders=${String(r.noOccluders ? 'absent' : 'present')}`).join(', '));
 }
 
 /** `plateDir` is the harness's `comfy plate --mode occluder` output on the chain's painting and occluder (`<work>/occ-chain`). */
