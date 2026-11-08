@@ -23,6 +23,7 @@ import { loadConfig, loadEarlyConfig, parseConfig, parseEarlyConfig } from '../s
 import { PartsError } from '../src/errors.ts';
 import { OCCLUDER_COLOUR_COPIED } from '../src/occluders.ts';
 import { sha256 } from '../src/plate.ts';
+import { scratchConfig } from '../src/meshdraft.ts';
 import { chainConfig, OCCLUDER, OCCLUDER_PX, PLANT, writeChainInputs, writePlateRun } from '../fixtures/occluder_chain.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
@@ -68,6 +69,18 @@ export function runOccluderConfigChecks(dir: string, say: Say): void {
   say('OC04_A_BAD_SHA_AND_A_MISSING_FILE_ARE_REFUSED_BY_NAME_AT_EVERY_LOADER',
     accepted.every(Boolean) && shaCodes.every((p) => p?.detail.includes(occluderSha) === true) && missingCodes.every((p) => p !== undefined),
     `declared bytes accepted ${accepted.join('/')}; bad sha: ${shaCodes.map((p) => p?.code ?? 'accepted').join('/')}; missing file: ${missingCodes.map((p) => p?.code ?? 'accepted').join('/')}`);
+  // The scratch config mesh-draft and remesh write elsewhere rebases every config-relative file through
+  // configFileReferences; a relative occluder image must survive it. Control: the same text copied without the rebase.
+  const scratch = scratchConfig(okPath, readFileSync(okPath, 'utf8'), join(home, 'scratch'), new Map());
+  const rebased = (JSON.parse(readFileSync(scratch, 'utf8')) as { assemble: { occluders: Array<{ image: string }> } }).assemble.occluders[0].image;
+  const copiedPath = join(home, 'scratch-copy', 'config.json');
+  mkdirSync(join(home, 'scratch-copy'), { recursive: true });
+  writeFileSync(copiedPath, readFileSync(okPath));
+  const scratchLoads = refusal(() => loadEarlyConfig(scratch, 'assemble'));
+  const copiedLoads = refusal(() => loadEarlyConfig(copiedPath, 'assemble'))?.problems.find((p) => p.code === 'CONFIG_FILE_PRESENT' && p.object === 'config.assemble.occluders[0].image');
+  say('OC08_A_RELATIVE_OCCLUDER_IMAGE_SURVIVES_THE_SCRATCH_CONFIG_REBASE',
+    rebased === join(home, 'occluder.png') && scratchLoads === null && copiedLoads !== undefined,
+    `rebased image ${rebased === join(home, 'occluder.png') ? 'resolves to the config directory\'s occluder.png' : JSON.stringify(rebased)}; scratch config ${scratchLoads?.message ?? 'loads'}; un-rebased copy ${copiedLoads?.code ?? 'accepted'}`);
 }
 
 function stage(home: string, full: string, cfg: Record<string, unknown>, out: string): { lines: string[]; error: PartsError | null } {

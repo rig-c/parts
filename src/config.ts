@@ -1479,6 +1479,13 @@ export function configFileReferences(raw: unknown): ConfigFileReference[] {
     const target = parent;
     out.push({ at: field.path.join('.'), value, set: (next) => { target[key] = next; } });
   }
+  // Issue #1230: each declared occluder's image, an array field the single-path table above cannot name.
+  const assemble = isPlainObject(raw) ? raw.assemble : undefined;
+  const occluders = isPlainObject(assemble) && Array.isArray(assemble.occluders) ? assemble.occluders : [];
+  occluders.forEach((entry: unknown, i: number) => {
+    if (!isPlainObject(entry) || typeof entry.image !== 'string' || entry.image === '') return;
+    out.push({ at: `assemble.occluders[${i}].image`, value: entry.image, set: (next) => { entry.image = next; } });
+  });
   return out;
 }
 
