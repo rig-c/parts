@@ -43252,9 +43252,10 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
       else {
         const found = inspect(plant.text);
         if (found.faults.length === 0) probes.push(`${plant.what}: no fault fired`);
-        // Issue #977: the scenarios each mutant turned red, by name; their faults carry whole shell outputs.
+        // Issue #977: the scenarios each mutant turned red, bounded so the detail line stays under PRINTED_LINE_LIMIT (32768 B).
         const reds = [...new Set(found.faults.map((f) => scenarios.map((sc) => sc.name).filter((n) => f.startsWith(`${n}: `)).sort((a, b) => b.length - a.length)[0] ?? f.split(': ')[0]))];
-        rows.push(`${plant.what}: ${found.faults.length} fault(s) in ${reds.join(', ')}; first=${found.faults[0]?.slice(0, 160) ?? 'no fault'}`);
+        const redSummary = reds.length <= 4 ? reds.join(', ') : `${reds.slice(0, 4).join(', ')} (+${reds.length - 4} more)`;
+        rows.push(`${plant.what}: ${found.faults.length} fault(s) in ${reds.length} scenario(s) (${redSummary}); first=${found.faults[0]?.slice(0, 160) ?? 'no fault'}`);
       }
     }
     say('AL09_PUSH_PROVENANCE_MATCHES_THE_CUT_TAG_COMMIT_BEFORE_ANY_NAME_IS_PUBLISHED', standing.faults.length === 0 && probes.length === 0,
