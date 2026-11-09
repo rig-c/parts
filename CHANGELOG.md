@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.36.0](https://github.com/rig-c/parts/compare/v2.35.0...v2.36.0) (2026-11-09)
+
+
+### Features
+
+* **assemble:** occluders[i].guard widens the no-projection ring without painting it ([#1259](https://github.com/rig-c/parts/issues/1259)) ([#1261](https://github.com/rig-c/parts/issues/1261)) ([39e9ad6](https://github.com/rig-c/parts/commit/39e9ad6e34d941568a365f9dce93dbd4a4356324))
+
+
+### Bug Fixes
+
+* **assemble:** choose an occluder-split take on the rig grid after placement ([#1251](https://github.com/rig-c/parts/issues/1251)) ([#1258](https://github.com/rig-c/parts/issues/1258)) ([380c675](https://github.com/rig-c/parts/commit/380c67561d88321252ce069bf756d298205110ca))
+
 ## [2.35.0](https://github.com/rig-c/parts/compare/v2.34.0...v2.35.0) (2026-11-09)
 
 
