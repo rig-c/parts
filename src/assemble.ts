@@ -294,10 +294,20 @@ export function padSingleRun(set: LayerSet, frame: Pick<Frame, 'fullPad' | 'full
   const dx = frame.fullPad;
   const dy = frame.fullPadTop;
   if (dx === 0 && dy === 0 && set.canvas.w === resolution && set.canvas.h === resolution) return set;
+  const shiftLayer = (l: Layer): Layer => ({
+    ...l,
+    left: l.left + dx,
+    top: l.top + dy,
+    right: l.right + dx,
+    bottom: l.bottom + dy,
+    ...(l.occluderSplit === undefined
+      ? {}
+      : { occluderSplit: { occluder: l.occluderSplit.occluder, base: shiftLayer(l.occluderSplit.base), donor: shiftLayer(l.occluderSplit.donor), merged: l.occluderSplit.merged } }),
+  });
   return {
     ...set,
     canvas: { w: resolution, h: resolution },
-    layers: set.layers.map((l) => ({ ...l, left: l.left + dx, top: l.top + dy, right: l.right + dx, bottom: l.bottom + dy })),
+    layers: set.layers.map(shiftLayer),
     hidden: set.hidden.map((l) => ({ ...l, left: l.left + dx, top: l.top + dy, right: l.right + dx, bottom: l.bottom + dy })),
   };
 }
@@ -1950,6 +1960,68 @@ export function layerToRig(canvas: Raster, frame: Frame, run: Run): Raster {
       out.data[i * 4 + c] = a > 0 ? Math.trunc(clip(f32(f32(v * 255) / Math.max(a, eps)))) : 0;
     }
     out.data[i * 4 + 3] = Math.trunc(a);
+  }
+  return out;
+}
+
+/**
+ * Resample an occluder image (on the painting's grid) onto the `W x H` rig grid
+ * by nearest centre (`alpha > COPIED_ALPHA_ABOVE`), before any `grow`.
+ */
+export function occluderCoreMask(image: Raster, W: number, H: number): { coreBefore: Mask; coveredBefore: number } {
+  const occSx = (x: number): number => Math.min(image.width - 1, Math.floor((x + 0.5) * image.width / W));
+  const occSy = (y: number): number => Math.min(image.height - 1, Math.floor((y + 0.5) * image.height / H));
+  const coreBefore = newMask(W, H);
+  let coveredBefore = 0;
+  for (let y = 0; y < H; y++) {
+    const srcY = occSy(y);
+    for (let x = 0; x < W; x++) {
+      const a = image.data[(srcY * image.width + occSx(x)) * 4 + 3];
+      const p = y * W + x;
+      if (a > COPIED_ALPHA_ABOVE) {
+        coreBefore.data[p] = 1;
+        coveredBefore++;
+      }
+    }
+  }
+  return { coreBefore, coveredBefore };
+}
+
+/**
+ * Issue #1251: place a layer on the rig grid, warping an occluder-split layer's
+ * base and donor runs through {@link layerToRig} separately and picking between
+ * them on the rig grid using the occluder's boolean core (`alpha > 128`, before
+ * any `grow`) so resampling never blends base and donor across the occluder edge.
+ */
+export function layerToRigSplit(
+  layer: Layer,
+  resolution: number,
+  frame: Frame,
+  run: Run,
+  occluderCoreMasks: readonly Mask[],
+  cleaned = false,
+): Raster {
+  const toRig = (l: Layer): Raster => {
+    const placed = placeLayer(l, resolution);
+    return layerToRig(cleaned ? cleanGhosts(placed).canvas : placed, frame, run);
+  };
+  const split = layer.occluderSplit;
+  const mask = split === undefined ? undefined : occluderCoreMasks[split.occluder];
+  if (split === undefined || layer.pixels !== split.merged || mask === undefined) return toRig(layer);
+  // Ghost clean-up reads the merged layer, as before the split moved to the rig grid: a donor fragment joined to the
+  // base across the occluder edge is one component there. What the merged clean-up drops is dropped from both sides.
+  const kept = cleaned ? cleanGhosts(placeLayer(layer, resolution)).canvas : null;
+  const sideToRig = (l: Layer): Raster => {
+    const placed = placeLayer(l, resolution);
+    if (kept !== null) for (let p = 0; p < resolution * resolution; p++) if (kept.data[p * 4 + 3] === 0) placed.data[p * 4 + 3] = 0;
+    return layerToRig(placed, frame, run);
+  };
+  const baseRig = sideToRig(split.base);
+  const donorRig = sideToRig(split.donor);
+  const out = newRaster(frame.W, frame.H);
+  for (let p = 0; p < frame.W * frame.H; p++) {
+    const src = mask.data[p] === 1 ? baseRig.data : donorRig.data;
+    out.data.set(src.subarray(p * 4, p * 4 + 4), p * 4);
   }
   return out;
 }
@@ -5056,12 +5128,35 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   refuseIfAny(depthInputProblems);
   // Issue #366: one run's file, padded to the resolution square; read as both runs, as before.
   const fullPadded = single ? padSingleRun(depthFullInput, frame, input.resolution) : depthFullInput;
+  const { W, H } = frame;
+  const occluderGrowRecords: OccluderGrowRecord[] = [];
+  const occluderEntries = (input.occluders ?? []).map(({ declaration, image }, index) => {
+    const { coreBefore, coveredBefore } = occluderCoreMask(image, W, H);
+    const grow = declaration.grow ?? 0;
+    let copiedMask = coreBefore;
+    if (grow > 0) {
+      const grown = growMask({ width: W, height: H, inside: coreBefore.data }, grow);
+      copiedMask = newMask(W, H);
+      copiedMask.data.set(grown.inside);
+      let coveredAfter = 0;
+      for (let p = 0; p < W * H; p++) if (copiedMask.data[p] === 1) coveredAfter++;
+      occluderGrowRecords.push({
+        occluder: index,
+        image: declaration.image,
+        grow,
+        covered_px_before: coveredBefore,
+        covered_px_after: coveredAfter,
+      });
+    }
+    return { index, declaration, coreBefore, copiedMask };
+  });
+  const occluderCoreMasks = occluderEntries.map((e) => e.coreBefore);
   if ((input.requireHiddenExtent?.length ?? 0) > 0) {
     // Read the selected original layers, before split/underfill/cleanup can replace their material.
     const originals = input.plan.map(([name, run, tag]): HiddenExtentSource => {
       const set = run === 'full' ? fullPadded : depthHeadInput;
       const layer = set.layers.find(candidate => candidate.name === tag);
-      return { name, from: `${run}:${tag}`, image: layer === undefined ? null : layerToRig(placeLayer(layer, input.resolution), frame, run) };
+      return { name, from: `${run}:${tag}`, image: layer === undefined ? null : layerToRigSplit(layer, input.resolution, frame, run, occluderCoreMasks) };
     });
     const painting = patches.length === 0 ? null : sourceInRig(source, frame.W, frame.H);
     const silhouette = painting === null ? null : figureSilhouette(painting);
@@ -5103,45 +5198,9 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   const registeredDepth = new Map([...depthFull, ...depthHead]);
   if (single) checkSingleRun(full, plan, extend);
   checkPlanAgainstRuns(sourcePlan, extend, full, head);
-  const { W, H } = frame;
   const srcr = sourceInRig(source, W, H);
   const supportPainted = paintedFigure(srcr);
   const groundShare = groundRingShare(srcr, supportPainted);
-  const occSx = (x: number): number => Math.min(source.width - 1, Math.floor((x + 0.5) * source.width / W));
-  const occSy = (y: number): number => Math.min(source.height - 1, Math.floor((y + 0.5) * source.height / H));
-  const occluderGrowRecords: OccluderGrowRecord[] = [];
-  const occluderEntries = (input.occluders ?? []).map(({ declaration, image }, index) => {
-    const coreBefore = newMask(W, H);
-    let coveredBefore = 0;
-    for (let y = 0; y < H; y++) {
-      const srcY = occSy(y);
-      for (let x = 0; x < W; x++) {
-        const a = image.data[(srcY * source.width + occSx(x)) * 4 + 3];
-        const p = y * W + x;
-        if (a > COPIED_ALPHA_ABOVE) {
-          coreBefore.data[p] = 1;
-          coveredBefore++;
-        }
-      }
-    }
-    const grow = declaration.grow ?? 0;
-    let copiedMask = coreBefore;
-    if (grow > 0) {
-      const grown = growMask({ width: W, height: H, inside: coreBefore.data }, grow);
-      copiedMask = newMask(W, H);
-      copiedMask.data.set(grown.inside);
-      let coveredAfter = 0;
-      for (let p = 0; p < W * H; p++) if (copiedMask.data[p] === 1) coveredAfter++;
-      occluderGrowRecords.push({
-        occluder: index,
-        image: declaration.image,
-        grow,
-        covered_px_before: coveredBefore,
-        covered_px_after: coveredAfter,
-      });
-    }
-    return { index, declaration, copiedMask };
-  });
   const occluderUnderKeepByPlanPart = new Map<string, Mask>();
   if (projectRule === 'visible') {
     for (const { declaration, copiedMask } of occluderEntries) {
@@ -5227,7 +5286,14 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       }
     }
     if (run === 'full') fullTags.push(...layers.filter((l) => l.opaqueRunPx > 0).map((l) => l.tag));
-    const rigLayers = layers.map((l) => layerToRig(l.canvas, frame, run));
+    const rigLayers = layers.map((l) => {
+      const srcLayer = set.layers.find((q) => q.name === l.tag);
+      return srcLayer?.occluderSplit !== undefined &&
+        srcLayer.pixels === srcLayer.occluderSplit.merged &&
+        srcLayer.regionSelection === undefined
+        ? layerToRigSplit(srcLayer, input.resolution, frame, run, occluderCoreMasks, true)
+        : layerToRig(l.canvas, frame, run);
+    });
     const rank = planRanks(layers.map((l) => l.tag), run, sourcePlan);
     const keep = layers.map((l, i): Mask | null => {
       let mask: Mask | null = null;
@@ -5283,19 +5349,28 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
         : original === undefined ? [] : [original];
       let raw: Raster | null = null;
       if (author === 0 && sourceLayers.length > 0) {
-        // A sole layer needs no composite copy: layerToRig premultiplies,
-        // so discarded RGB at alpha 0 has exactly the same float32 input.
-        const canvas = sourceLayers.length === 1 ? placeLayer(sourceLayers[0], input.resolution) : newRaster(input.resolution, input.resolution);
-        if (sourceLayers.length > 1) for (const originalLayer of sourceLayers) {
-          const sourceCanvas = placeLayer(originalLayer, input.resolution);
-          for (let p = 0; p < input.resolution * input.resolution; p++) if (sourceCanvas.data[p * 4 + 3] > 0) canvas.data.set(sourceCanvas.data.subarray(p * 4, p * 4 + 4), p * 4);
+        if (
+          sourceLayers.length === 1 &&
+          sourceLayers[0].occluderSplit !== undefined &&
+          sourceLayers[0].pixels === sourceLayers[0].occluderSplit.merged
+        ) {
+          raw = layerToRigSplit(sourceLayers[0], input.resolution, frame, run, occluderCoreMasks);
+        } else {
+          // A sole layer needs no composite copy: layerToRig premultiplies,
+          // so discarded RGB at alpha 0 has exactly the same float32 input.
+          const canvas = sourceLayers.length === 1 ? placeLayer(sourceLayers[0], input.resolution) : newRaster(input.resolution, input.resolution);
+          if (sourceLayers.length > 1) for (const originalLayer of sourceLayers) {
+            const sourceCanvas = placeLayer(originalLayer, input.resolution);
+            for (let p = 0; p < input.resolution * input.resolution; p++) if (sourceCanvas.data[p * 4 + 3] > 0) canvas.data.set(sourceCanvas.data.subarray(p * 4, p * 4 + 4), p * 4);
+          }
+          raw = layerToRig(canvas, frame, run);
         }
-        raw = layerToRig(canvas, frame, run);
       }
       // Reuse only a proved identical placed input, never wrapper identity.
       const samePlacedSource = raw !== null && sourceLayers.length === 1 && prepared !== undefined &&
-        sourceLayers[0].pixels === prepared.pixels && sourceLayers[0].left === prepared.left && sourceLayers[0].top === prepared.top;
-      const preparedRig = samePlacedSource ? raw : prepared === undefined ? null : layerToRig(placeLayer(prepared, input.resolution), frame, run);
+        sourceLayers[0].pixels === prepared.pixels && sourceLayers[0].left === prepared.left && sourceLayers[0].top === prepared.top &&
+        sourceLayers[0].occluderSplit === prepared.occluderSplit;
+      const preparedRig = samePlacedSource ? raw : prepared === undefined ? null : layerToRigSplit(prepared, input.resolution, frame, run, occluderCoreMasks);
       for (let p = 0; p < W * H; p++) {
         if (rigLayers[i].data[p * 4 + 3] === 0) continue;
         ids[p] = author;
@@ -6055,7 +6130,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     const canvases = stack.map(onRig);
     const rawPlan = input.plan.map(([name, run, tag]) => {
       const layer = input[run].layers.find(l => l.name === tag)!;
-      return { name, raster: layerToRig(placeLayer(layer, input.resolution), frame, run), keep: occluderUnderKeepByPlanPart.get(name) ?? null };
+      return { name, raster: layerToRigSplit(layer, input.resolution, frame, run, occluderCoreMasks), keep: occluderUnderKeepByPlanPart.get(name) ?? null };
     });
     if ((input.edgeSplits?.length ?? 0) > 0) applyEdgeSplits(input.edgeSplits!, new Map(rawPlan.map(p => [p.name, p.raster])), srcr);
     const owner = rawPaintingOwner(rawPlan, W * H);

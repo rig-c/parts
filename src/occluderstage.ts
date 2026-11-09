@@ -10,7 +10,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { checkGeometry, layerToRig, padSingleRun, placeLayer, sourceInRig } from './assemble.ts';
+import { checkGeometry, layerToRigSplit, occluderCoreMask, padSingleRun, sourceInRig } from './assemble.ts';
 import type { PlanEntry } from './config.ts';
 import { SHA256_PATTERN } from './editreceipt.ts';
 import { PartsError } from './errors.ts';
@@ -76,7 +76,9 @@ export function occluderStageWarnings(input: OccluderStageInput): string[] {
   const full = runs.single ? padSingleRun(runs.full, frame, input.resolution) : runs.full;
   const painting = sourceInRig(source, frame.W, frame.H);
   const lines: string[] = [];
-  readOccluderInputs(input.occluders, input.configPath, source).forEach(({ declaration: d, image }, i) => {
+  const occluderInputs = readOccluderInputs(input.occluders, input.configPath, source);
+  const occluderCoreMasks = occluderInputs.map(({ image }) => occluderCoreMask(image, frame.W, frame.H).coreBefore);
+  occluderInputs.forEach(({ declaration: d, image }, i) => {
     // A rig pixel reads the occluder at the source pixel its centre falls in.
     const sx = (x: number): number => Math.min(source.width - 1, Math.floor((x + 0.5) * source.width / frame.W));
     const sy = (y: number): number => Math.min(source.height - 1, Math.floor((y + 0.5) * source.height / frame.H));
@@ -85,7 +87,7 @@ export function occluderStageWarnings(input: OccluderStageInput): string[] {
       const row = input.plan.find(([part]) => part === name);
       if (row === undefined) return [];
       const layer = (row[1] === 'full' ? full : runs.head).layers.find((l) => l.name === row[2]);
-      return layer === undefined ? [] : [{ name, image: layerToRig(placeLayer(layer, input.resolution), frame, row[1]) }];
+      return layer === undefined ? [] : [{ name, image: layerToRigSplit(layer, input.resolution, frame, row[1], occluderCoreMasks) }];
     });
     for (const copy of occluderColourCopies(parts, painting, alpha, d.rgb_within)) lines.push(occluderColourWarning(i, copy, d.rgb_within));
   });

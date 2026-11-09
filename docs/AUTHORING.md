@@ -5434,7 +5434,11 @@ or a joint.
   pixels at or below `128` take the donor run's pixel (transparent included,
   overwriting base pixels outside the occluder), and donor `st_input` identity is
   checked on the donor's visible support only (`ASSEMBLE_TAKE_SPLIT_EMPTY` if
-  either `covered_px` or `visible_px` at `alpha > 8` is `0`). `parts.json` records
+  either `covered_px` or `visible_px` at `alpha > 8` is `0`). During assembly,
+  the base and donor layers are warped to the rig grid separately and the split
+  is chosen on the rig grid from the un-grown occluder mask (`alpha > 128`)
+  before projection, so resampling never blends across the occluder edge (issue
+  #1251). `parts.json` records
   `split: {occluder, image, sha256, covered_px, visible_px}` on that part's
   `taken_layers` entry. `assemble --propose-plan` accepts occluder-split takes,
   drafting the row from the split's `tag` on the merged layer while still

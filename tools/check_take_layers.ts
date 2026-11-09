@@ -2,7 +2,9 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeAlternateLayerFixture } from '../fixtures/alternate_layers.ts';
+import { chainConfig, chainPlate, LIMB, SIDE, writeChainInputs, writePlateRun } from '../fixtures/occluder_chain.ts';
 import { writeTakeFixture } from '../fixtures/take_layers.ts';
+import { checkGeometry, cleanGhosts, GHOST_MIN_AREA, layerToRig, layerToRigSplit, occluderCoreMask, placeLayer } from '../src/assemble.ts';
 import { assembleStage, readRuns } from '../src/build.ts';
 import { createHash } from 'node:crypto';
 import { crop } from '../src/raster/composite.ts';
@@ -168,6 +170,7 @@ export function runTakeLayerChecks(dir: string, say: Say): void {
   runTakeSourceOpacityChecks(join(dir, 'source-opacity'), say);
   runTakeFootprintChecks(join(dir, 'footprint'), say);
   runTakeCleanupChecks(join(dir, 'cleanup'), say);
+  runOccluderSplitRigGridChecks(join(dir, 'occluder-split-rig'), say);
 }
 
 /** Suite-local planted controls for the optional source-painting crop declaration. */
@@ -310,4 +313,250 @@ function runCropTakeChecks(dir: string, say: Say): void {
       Buffer.from(unit.pixels.data).equals(Buffer.from(unitExpected.data)),
       `side ${side}, canvas ${canvas}; integer products equal; chained float ${side / canvas * canvas / side}; filter ${unitReceipt.filter}; output agrees with independent translucent RGBA copy`);
   }
+}
+
+/** Issue #1251 item 4: rig-grid occluder-split controls across rig_scale 1, 0.5 and 1.5, plus planted run-grid split. */
+function runOccluderSplitRigGridChecks(dir: string, say: Say): void {
+  mkdirSync(dir, { recursive: true });
+  const { occluderSha } = writeChainInputs(dir);
+  // Distinct base RGB on the plate run's legwear so bicubic taps across the occluder edge are exposed.
+  const basePlate = chainPlate();
+  for (let y = LIMB[1]; y < LIMB[3]; y++) {
+    for (let x = LIMB[0]; x < LIMB[2]; x++) {
+      basePlate.data.set([40, 80, 140, 255], (y * SIDE + x) * 4);
+    }
+  }
+  const fullDir = writePlateRun(dir, encodePngBytes(basePlate));
+
+  const painting = readPng(join(dir, 'painting.png'));
+  const occImg = readPng(join(dir, 'occluder.png'));
+  const rawCfg = chainConfig({
+    occluders: [{ image: 'occluder.png', sha256: occluderSha, under: ['behind'], over: ['front'], rgb_within: 20 }],
+    take: [
+      { run: 'full', run_dir: 'orig', st_input: 'painting.png', tags: ['objects'] },
+      { run: 'full', run_dir: 'orig', st_input: 'painting.png', part: 'behind', tag: 'legwear', occluder: 0 },
+    ],
+  });
+  const cfgPath = join(dir, 'config.json');
+  writeFileSync(cfgPath, JSON.stringify(rawCfg));
+
+  const baseSet = readLayers(fullDir);
+  const donorSet = readLayers(join(dir, 'orig'));
+  const baseLayer = baseSet.layers.find((l) => l.name === 'legwear')!;
+  const donorLayer = donorSet.layers.find((l) => l.name === 'legwear')!;
+  const taken = applyTakenLayers(
+    { full: baseSet, head: baseSet, single: true },
+    painting,
+    loadEarlyConfig(cfgPath, 'assemble'),
+    cfgPath,
+  );
+  const splitLayer = taken.full.layers.find((l) => l.name === 'legwear')!;
+
+  const scales = [1, 0.5, 1.5] as const;
+  const insideResidueByScale: number[] = [];
+  const stageInsideResidueByScale: number[] = [];
+  const outsideDiffByScale: number[] = [];
+  const insideInteriorDiffByScale: number[] = [];
+  const outsideInteriorDiffByScale: number[] = [];
+  let plantedInside15 = -1;
+  let plantedInsideInterior15 = -1;
+  let plantedOutside15 = -1;
+  let plantedOutsideInterior15 = -1;
+
+  for (const scale of scales) {
+    (rawCfg.assemble as Record<string, unknown>).rig_scale = scale;
+    writeFileSync(cfgPath, JSON.stringify(rawCfg));
+    const outDir = join(dir, `out-${scale}`);
+    const stageRes = assembleStage(
+      { source: join(dir, 'painting.png'), full: fullDir, head: null, config: cfgPath, seam: 'near-white', project: 'visible' },
+      { partsJson: join(outDir, 'parts.json'), partsDir: join(outDir, 'parts'), recomposite: join(outDir, 'recomposite.png'), errorMap: join(outDir, 'error.png') },
+      () => {},
+    );
+    const behindPlaced = stageRes.images.find((p) => p.record.name === 'behind')!;
+    const frame = checkGeometry(
+      { sourceW: SIDE, sourceH: SIDE, resolution: SIDE, headBox: [0, 0, SIDE, SIDE], rigScale: scale, single: true },
+      { full: taken.full, head: taken.head },
+    );
+    const { W, H } = frame;
+    const behindCanvas = newRaster(W, H);
+    for (let y = 0; y < behindPlaced.image.height; y++) {
+      for (let x = 0; x < behindPlaced.image.width; x++) {
+        const s = (y * behindPlaced.image.width + x) * 4;
+        const d = ((behindPlaced.record.y + y) * W + (behindPlaced.record.x + x)) * 4;
+        behindCanvas.data.set(behindPlaced.image.data.subarray(s, s + 4), d);
+      }
+    }
+
+    const { coreBefore } = occluderCoreMask(occImg, W, H);
+    const baseRig = layerToRig(placeLayer(baseLayer, SIDE), frame, 'full');
+    const donorRig = layerToRig(placeLayer(donorLayer, SIDE), frame, 'full');
+    const splitRig = layerToRigSplit(splitLayer, SIDE, frame, 'full', [coreBefore]);
+    // Planted old order: split on the run grid (splitLayer.pixels is the run-grid merge), then warp once.
+    const plantedOldRig = layerToRigSplit({ ...splitLayer, occluderSplit: undefined }, SIDE, frame, 'full', [coreBefore]);
+
+    const awayFromEdge = (x: number, y: number, target: number): boolean => {
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+          if (coreBefore.data[ny * W + nx] !== target) return false;
+        }
+      }
+      return true;
+    };
+    const pxDiff = (a: Uint8ClampedArray, b: Uint8ClampedArray, p: number): boolean =>
+      a[p * 4] !== b[p * 4] || a[p * 4 + 1] !== b[p * 4 + 1] || a[p * 4 + 2] !== b[p * 4 + 2] || a[p * 4 + 3] !== b[p * 4 + 3];
+
+    let insideResidue = 0;
+    let stageInsideResidue = 0;
+    let outsideDiff = 0;
+    let insideInteriorDiff = 0;
+    let outsideInteriorDiff = 0;
+    let oldInside = 0;
+    let oldInsideInterior = 0;
+    let oldOutside = 0;
+    let oldOutsideInterior = 0;
+
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const p = y * W + x;
+        if (coreBefore.data[p] === 1) {
+          const interior = awayFromEdge(x, y, 1);
+          if (pxDiff(splitRig.data, baseRig.data, p)) {
+            insideResidue++;
+            if (interior) insideInteriorDiff++;
+          }
+          if (pxDiff(behindCanvas.data, baseRig.data, p)) stageInsideResidue++;
+          if (pxDiff(plantedOldRig.data, baseRig.data, p)) {
+            oldInside++;
+            if (interior) oldInsideInterior++;
+          }
+        } else {
+          const interior = awayFromEdge(x, y, 0);
+          if (pxDiff(splitRig.data, donorRig.data, p)) {
+            outsideDiff++;
+            if (interior) outsideInteriorDiff++;
+          }
+          if (pxDiff(plantedOldRig.data, donorRig.data, p)) {
+            oldOutside++;
+            if (interior) oldOutsideInterior++;
+          }
+        }
+      }
+    }
+    insideResidueByScale.push(insideResidue);
+    stageInsideResidueByScale.push(stageInsideResidue);
+    outsideDiffByScale.push(outsideDiff);
+    insideInteriorDiffByScale.push(insideInteriorDiff);
+    outsideInteriorDiffByScale.push(outsideInteriorDiff);
+    if (scale === 1.5) {
+      plantedInside15 = oldInside;
+      plantedInsideInterior15 = oldInsideInterior;
+      plantedOutside15 = oldOutside;
+      plantedOutsideInterior15 = oldOutsideInterior;
+    }
+  }
+
+  say(
+    'OCCLUDER_SPLIT_RIG_GRID_RESIDUE_ZERO_ACROSS_SCALES',
+    insideResidueByScale[0] === 0 &&
+      insideResidueByScale[1] === 0 &&
+      insideResidueByScale[2] === 0 &&
+      stageInsideResidueByScale[0] === 0 &&
+      stageInsideResidueByScale[1] === 0 &&
+      stageInsideResidueByScale[2] === 0,
+    `inside-occluder residue at rig_scale [1, 0.5, 1.5] = [${insideResidueByScale.join(', ')}] (assembled behind.png = [${stageInsideResidueByScale.join(', ')}])`,
+  );
+  say(
+    'OCCLUDER_SPLIT_PLANTED_RUN_GRID_ORDER_FIRES_423_AT_1_5X',
+    plantedInside15 === 423 && plantedOutside15 === 441,
+    `planted run-grid split + single warp at rig_scale 1.5 leaves ${plantedInside15} inside residue px and ${plantedOutside15} outside bleed px`,
+  );
+  say(
+    'OCCLUDER_SPLIT_OUTSIDE_EQUALS_PLACED_RUN_ACROSS_SCALES',
+    outsideDiffByScale[0] === 0 && outsideDiffByScale[1] === 0 && outsideDiffByScale[2] === 0,
+    `outside-occluder differing px vs placed donor run at rig_scale [1, 0.5, 1.5] = [${outsideDiffByScale.join(', ')}]`,
+  );
+  say(
+    'OCCLUDER_SPLIT_INTERIOR_BEYOND_CHEBYSHEV_2_EQUALS_PLACED_RUN',
+    insideInteriorDiffByScale[0] === 0 &&
+      insideInteriorDiffByScale[1] === 0 &&
+      insideInteriorDiffByScale[2] === 0 &&
+      outsideInteriorDiffByScale[0] === 0 &&
+      outsideInteriorDiffByScale[1] === 0 &&
+      outsideInteriorDiffByScale[2] === 0 &&
+      plantedInsideInterior15 === 0 &&
+      plantedOutsideInterior15 === 0,
+    `Chebyshev distance > 2 differing px inside=[${insideInteriorDiffByScale.join(', ')}], outside=[${outsideInteriorDiffByScale.join(', ')}], planted@1.5=[${plantedInsideInterior15}, ${plantedOutsideInterior15}]`,
+  );
+
+  // Item 1 guard control: replacing a split layer's pixels with a new Raster copy and changing 1 opaque px
+  // falls back to plain layerToRig(placeLayer(layer)), whereas a plant without the identity guard drops the change.
+  const frame1 = checkGeometry(
+    { sourceW: SIDE, sourceH: SIDE, resolution: SIDE, headBox: [0, 0, SIDE, SIDE], rigScale: 1, single: true },
+    { full: taken.full, head: taken.head },
+  );
+  const { coreBefore: core1 } = occluderCoreMask(occImg, frame1.W, frame1.H);
+  const copiedPixels: typeof splitLayer.pixels = {
+    width: splitLayer.pixels.width,
+    height: splitLayer.pixels.height,
+    data: new Uint8ClampedArray(splitLayer.pixels.data),
+  };
+  const witnessIdx = (64 * SIDE + 64) * 4;
+  copiedPixels.data.set([250, 10, 200, 255], witnessIdx);
+  const replacedLayer = { ...splitLayer, pixels: copiedPixels };
+  const guardedRig = layerToRigSplit(replacedLayer, SIDE, frame1, 'full', [core1]);
+  const plainRig = layerToRig(placeLayer(replacedLayer, SIDE), frame1, 'full');
+  const unguardedPlantLayer = {
+    ...replacedLayer,
+    occluderSplit: { ...splitLayer.occluderSplit!, merged: copiedPixels },
+  };
+  const unguardedRig = layerToRigSplit(unguardedPlantLayer, SIDE, frame1, 'full', [core1]);
+  const guardedMatchesPlain = Buffer.from(guardedRig.data).equals(Buffer.from(plainRig.data));
+  const witnessShown =
+    guardedRig.data[witnessIdx] === 250 &&
+    guardedRig.data[witnessIdx + 1] === 10 &&
+    guardedRig.data[witnessIdx + 2] === 200 &&
+    guardedRig.data[witnessIdx + 3] === 255;
+  const plantDropsWitness =
+    unguardedRig.data[witnessIdx] === 40 &&
+    unguardedRig.data[witnessIdx + 1] === 80 &&
+    unguardedRig.data[witnessIdx + 2] === 140 &&
+    !Buffer.from(unguardedRig.data).equals(Buffer.from(plainRig.data));
+  say(
+    'OCCLUDER_SPLIT_PIXELS_IDENTITY_GUARD_FALLS_BACK_ON_REPLACED_PIXELS',
+    guardedMatchesPlain && witnessShown && plantDropsWitness,
+    `guarded matches plain layerToRig=${guardedMatchesPlain}, witness=[${guardedRig.data.subarray(witnessIdx, witnessIdx + 4).join(',')}], unguarded plant witness=[${unguardedRig.data.subarray(witnessIdx, witnessIdx + 4).join(',')}]`,
+  );
+  // Codex review on #1251 item 4: ghost clean-up reads the merged layer. A 20-px donor fragment joined to a 100-px
+  // base component across the occluder edge is one 120-px component when merged (kept), but alone it is under
+  // GHOST_MIN_AREA (40) and a per-side clean-up would drop it.
+  const core = { ...core1, data: new Uint8Array(core1.data.length) };
+  const baseR = newRaster(SIDE, SIDE), donorR = newRaster(SIDE, SIDE), mergedR = newRaster(SIDE, SIDE);
+  for (let y = 20; y < 30; y++) for (let x = 20; x < 30; x++) {
+    core.data[y * SIDE + x] = 1;
+    baseR.data.set([40, 80, 140, 255], (y * SIDE + x) * 4);
+    mergedR.data.set([40, 80, 140, 255], (y * SIDE + x) * 4);
+  }
+  for (let y = 22; y < 27; y++) for (let x = 30; x < 34; x++) {
+    donorR.data.set([200, 60, 30, 255], (y * SIDE + x) * 4);
+    mergedR.data.set([200, 60, 30, 255], (y * SIDE + x) * 4);
+  }
+  const whole = { left: 0, top: 0, right: SIDE, bottom: SIDE };
+  const fragmentSplit = {
+    ...splitLayer,
+    ...whole,
+    pixels: mergedR,
+    regionSelection: undefined,
+    occluderSplit: { occluder: 0, base: { ...splitLayer, ...whole, pixels: baseR, occluderSplit: undefined }, donor: { ...splitLayer, ...whole, pixels: donorR, occluderSplit: undefined }, merged: mergedR },
+  };
+  const fragIdx = (24 * SIDE + 31) * 4;
+  const cleanedSplit = layerToRigSplit(fragmentSplit, SIDE, frame1, 'full', [core], true);
+  const perSidePlant = layerToRig(cleanGhosts(placeLayer(fragmentSplit.occluderSplit.donor, SIDE)).canvas, frame1, 'full');
+  say(
+    'OCCLUDER_SPLIT_GHOST_CLEANUP_READS_THE_MERGED_LAYER',
+    cleanedSplit.data[fragIdx + 3] === 255 && cleanedSplit.data[fragIdx] === 200 && perSidePlant.data[fragIdx + 3] === 0,
+    `donor fragment px (31,24) after the cleaned split: [${cleanedSplit.data.subarray(fragIdx, fragIdx + 4).join(',')}] (kept, 120-px merged component); per-side clean-up plant: alpha ${perSidePlant.data[fragIdx + 3]} (20 px < GHOST_MIN_AREA ${GHOST_MIN_AREA})`,
+  );
 }
