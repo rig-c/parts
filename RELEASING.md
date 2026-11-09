@@ -1,7 +1,8 @@
 # Releasing
 
-After the first publish, the cut is one click: merge the release pull request.
-Everything either side of that click is
+After the first publish, cutting a release is pushing a version tag `vX.Y.Z` on
+a commit on protected `main` whose `package.json` matches `X.Y.Z`. Everything
+after that push is
 [`.github/workflows/release.yml`](.github/workflows/release.yml), and no npm
 credential exists on any machine — the publish authenticates over OIDC (npm
 trusted publishing). The first publish is the exception, and it is done by hand;
@@ -9,38 +10,21 @@ see *The first publish*.
 
 ## The loop
 
-Every push to `main` runs `release.yml`, which hands the new commits to
-[release-please](https://github.com/googleapis/release-please-action):
+Every push of a `v*` tag runs `release.yml`:
 
-- **Nothing releasable since the last tag** → nothing happens. Types
-  release-please hides (`docs`, `test`, `ci`, `build`, `chore`, `refactor`,
-  `style`) do not open a release pull request on their own. **Visibility is what
-  makes a type releasable**, which is why `release-please-config.json` writes
-  the whole `changelog-sections` list out: the default node list plus `check` →
-  *Instrument*, so instrument work on shipped sources gets its own changelog
-  line. Overriding the array replaces the default, so dropping a row hides that
-  type.
-- **Something releasable** → it opens or updates a pull request titled
-  `release: vX.Y.Z` with three generated changes: the `package.json` version,
-  `CHANGELOG.md`, and `.release-please-manifest.json`. `feat` bumps the minor;
-  `fix`, `perf` and `check` bump the patch; a breaking marker bumps the minor
-  while the package is pre-1.0 (`bump-minor-pre-major`). To force a version,
-  put `Release-As: X.Y.Z` in a commit footer.
-- **That pull request is merged** → the merge is a push to `main`, so the
-  workflow runs again: release-please tags `vX.Y.Z`, cuts the GitHub release,
-  and the same run publishes.
+- **Target resolution and validation** → the `target` job checks that the tag is
+  of the form `vX.Y.Z` (or `vX.Y.Z-<prerelease>`), resolves the explicit tag ref
+  to a full 40-character commit SHA, verifies that both `GITHUB_SHA` and the
+  checked-out `HEAD` equal that commit, confirms that the commit is on protected
+  `main` (`identical` or `behind`), confirms that `package.json`'s `version`
+  matches the tag without the leading `v`, and queries npm to verify which of
+  the three package names still need this version and that the version is not
+  below `@rig-c/parts`'s `latest`.
+- **Publication** → the `publish` job checks out the verified commit SHA, gates
+  the tree through the tested-tree verdict and `bun run smoke -- --case clean`,
+  and publishes the canonical tarball and both alias tarballs.
   A version with a hyphen (`1.0.0-rc.1`) is a prerelease: prereleases go out under the `rc` dist-tag; promotion to `latest` is the owner's, by `npm dist-tag add`, never automatic (every publish step in `release.yml` reads the version and passes `--tag rc` only then, `AL07`).
 
-Squash-merge the release pull request, so the commit on `main` keeps its
-`release: vX.Y.Z` subject.
-
-⚠️ **A shipped file can change under a hidden type.** The package is an
-allowlist (`files`) plus what npm always adds — `package.json`, `README.md`,
-`LICENSE` — so a `docs:` edit to the README changes what `npm install` hands
-somebody while release-please is told to ignore it. The `ships` job in
-[`ci.yml`](.github/workflows/ci.yml) compares what a pull request changed
-against what `npm pack --dry-run` packs at both ends and refuses that landing;
-its remedy is a visible type or a `Release-As:` footer in a commit message.
 **The list of packed files is not written here**: ask `npm pack --dry-run`.
 
 ## Tree verdicts
@@ -77,20 +61,6 @@ A miss runs the chain once, and a verified hit skips it. Manual folder publicati
 keeps its `prepublishOnly` gate. Dispatch republishing retains the full chain.
 Registry confirmation runs
 after publication because registry state is external to the tested tree.
-
-## One-time setup (owner, GitHub)
-
-**Settings → Actions → General → Workflow permissions → tick "Allow GitHub
-Actions to create and approve pull requests."** While it is off release-please
-cannot open the release pull request at all. The repository lives in the `rig-c`
-organisation, whose own Actions settings can hold the box unticked for every
-repository in it; a transfer into the organisation is where it went off last.
-
-`release-please-config.json` needs a `bootstrap-sha` — the commit release-please
-stops reading history at on its first run — set once, to the commit that
-introduces these files. It is deliberately absent from the file as first
-written, because that commit does not exist until the file is committed; the
-owner adds it in the commit after.
 
 ## The first publish, by hand
 
@@ -241,51 +211,40 @@ publish. The workflow passes `--provenance` on the command line instead.
 
 ## Cutting a release
 
-1. Land the work on `main` with conventional-commit subjects.
-2. Wait for the `release` run to open or update the `release: vX.Y.Z` pull
-   request, and read its diff — the version and the changelog are the review.
-3. **Approve its `ci` run.** A `pull_request` run started by `GITHUB_TOKEN`
-   lands in `action_required`, so the required check reads as blocked until a
-   human approves it (**Approve and run** in the Actions tab, or `gh api -X POST
-   repos/rig-c/parts/actions/runs/<id>/approve`). A `workflow_dispatch`
-   run on the same commit does not satisfy a required check: it is matched by
-   the run that reported it, not by the SHA.
-4. **Merge it.** That is the cut.
-5. Watch the second `release` run: it tags, releases, publishes under all three
-   names, and then confirms the published package installs and runs and that each
-   alias carries its files, waiting up to 15 minutes for `@rig-c/parts` and up
-   to 15 minutes per alias for both packument and tarball (on `1.60.2`, workflow
-   run `40021159671`, `@rig-c/parts@1.60.2` was served after `3m 09s` at
-   `21:07:48Z` and `rig-parts@1.60.2`'s packument answered `2m 26s` later at
-   `21:10:14Z` — `2m 08s` into the alias poll, registry `time` `21:09:40.809Z` vs
+1. Land the version bump (`package.json` and `CHANGELOG.md`) on `main` through a
+   pull request with green `ci`.
+2. Tag that `main` commit `vX.Y.Z` and push the tag (`git tag vX.Y.Z <main-sha> && git push origin vX.Y.Z`).
+3. Watch the `release` run: it validates the tag, commit, `main` ancestry and
+   `package.json` version, publishes under all three names, and then confirms
+   the published package installs and runs and that each alias carries its files,
+   waiting up to 15 minutes for `@rig-c/parts` and up to 15 minutes per alias
+   for both packument and tarball (on `1.60.2`, workflow run `40021159671`,
+   `@rig-c/parts@1.60.2` was served after `3m 09s` at `21:07:48Z` and
+   `rig-parts@1.60.2`'s packument answered `2m 26s` later at `21:10:14Z` —
+   `2m 08s` into the alias poll, registry `time` `21:09:40.809Z` vs
    `21:07:33.120Z` — while its tarball was still propagating behind the
    packument).
 
 ## Republishing a cut whose publish failed
 
-a release-please failure after the tag leaves a version unpublished; the next cut carries it, or the tag is republished by dispatch.
+a failure after the tag is pushed leaves a version unpublished; the next cut carries it, or the tag is republished by dispatch.
 
-It happens when the run that merged the release pull request gets as far as
-the tag and the GitHub release and then stops before the publish lands: once
-when release-please itself failed on a transient GitHub API error while
-updating the next pull request, after cutting the release; once, on another
-package of the toolchain, when `npm publish --provenance` failed on a transient
-signing-service error. Re-running that run cannot recover either: release-please
-no longer reports `release_created` for a tag it has already cut, so every step
-after it is skipped and the registry keeps serving the previous version. A
+It happens when a tag push gets as far as resolving the tag or publishing part
+of the release and then stops before every publish lands (for example, when
+`npm publish --provenance` fails on a transient signing-service error). A
 publish by hand would lose provenance, and the trusted publisher names
-`release.yml`.
+`release.yml`. No pre-existing GitHub release is required to publish or recover
+a tag, so recovery works before release notes are created.
 
-A push re-run can cut a tag at a newer commit than its `GITHUB_SHA`. Before
-publishing, the workflow resolves the full tag ref through the commits API,
-requires a full commit SHA, and compares it with `GITHUB_SHA`. A mismatch
-refuses `PROVENANCE_SHA_MISMATCH`, names both SHAs, and leaves the tag cut.
-A normal matching push checks out the verified SHA. A dispatch likewise
-requires `GITHUB_REF` to equal `refs/tags/<tag>` (`RELEASE_DISPATCH_REF`),
-resolves that explicit tag ref to a full commit SHA, and requires the run SHA
-to match before any registry plan or publish. Both paths check out the verified
-SHA; a run/tag mismatch is refused, and checkout does not resolve the mutable
-tag again.
+Both a tag push and a tag dispatch run the same unified validation before
+publishing: the workflow checks the tag form (`RELEASE_TAG_FORM`) and workflow
+ref (`RELEASE_DISPATCH_REF`), resolves the explicit tag ref through the commits
+API to a full 40-character commit SHA (`RELEASE_TAG_UNRESOLVED`), requires both
+`GITHUB_SHA` and the checked-out `HEAD` to match that commit
+(`PROVENANCE_SHA_MISMATCH`), verifies that the commit is on protected `main`
+(`RELEASE_TAG_NOT_ON_MAIN`), and verifies that `package.json`'s `version`
+matches the tag (`RELEASE_PACKAGE_VERSION`). Both paths then check out the
+verified SHA in `publish`, never resolving the mutable tag again.
 
 The tag is published by a dispatch of the same workflow at the tag ref, so
 provenance names the tag commit:
@@ -294,21 +253,21 @@ provenance names the tag commit:
 gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z
 ```
 
-The `release` job then skips release-please — a dispatch never cuts a tag or a
-release — and its *Resolve the tag to publish* step checks the tag; every step
-after it is the push path's own (checkout of the tag, the gate in
-`prepublishOnly`, publishing only registry-missing names, the registry
+The `target` job's *Resolve the tag to publish* step validates the tag and
+registry plan; every step after it is shared with the push path (checkout of the
+verified SHA, the gate, publishing only registry-missing names, the registry
 confirmation), run under the same condition, from the same file. The resolve
 step refuses, each as one `::error::` line naming its rule:
 
 | refusal | when |
 | --- | --- |
 | `RELEASE_DISPATCH_INPUT` | the dispatch gave both `tag` and `version`, or neither |
-| `RELEASE_DISPATCH_REF` | the workflow run ref is not exactly `refs/tags/<tag>`; `main`, another tag and a same-named branch cannot publish the input tag |
-| `RELEASE_TAG_UNRESOLVED` | the explicit tag ref cannot be resolved to a full commit SHA |
-| `PROVENANCE_SHA_MISMATCH` | the run SHA differs from the resolved tag commit; the tag remains cut |
+| `RELEASE_DISPATCH_REF` | the workflow run ref is not `refs/tags/<tag>`; `main`, another tag and a same-named branch cannot publish the tag |
 | `RELEASE_TAG_FORM` | the tag is not `vX.Y.Z` (or `vX.Y.Z-<prerelease>`) |
-| `RELEASE_TAG_UNRELEASED` | the tag has no GitHub release: only a tag release-please cut is published |
+| `RELEASE_TAG_UNRESOLVED` | the explicit tag ref cannot be resolved to a full commit SHA |
+| `PROVENANCE_SHA_MISMATCH` | the run SHA or checked-out `HEAD` differs from the resolved tag commit; the tag remains cut |
+| `RELEASE_TAG_NOT_ON_MAIN` | the resolved tag commit is not on protected `main` (`identical` or `behind`) |
+| `RELEASE_PACKAGE_VERSION` | `package.json`'s `version` does not match the tag version |
 | `RELEASE_ALREADY_PUBLISHED` | the registry already serves that version under all three names; nothing is missing |
 | `RELEASE_REGISTRY_QUERY` | a registry lookup fails without a structured npm `E404`, returns malformed data, or serves a different version than requested |
 | `RELEASE_TAG_BELOW_LATEST` | the version is below the registry's `latest` for `@rig-c/parts` (a prerelease is below its release) |
@@ -317,7 +276,7 @@ step refuses, each as one `::error::` line naming its rule:
 a confirmation (*Whether the tarball runs*). Both are optional, because GitHub
 refuses a dispatch that omits a required input; an omitted string input reads
 as empty. The `confirm` job runs only on a dispatch with `version` and no `tag`;
-any other dispatch runs the `release` job, where the resolve step publishes a
+any other dispatch runs the `target` job, where the resolve step publishes a
 `tag` alone and refuses the rest.
 
 **Half-published.** A failure between publish steps can leave a version up
@@ -397,5 +356,4 @@ reporting which package it is waiting for and for how long. Its exits:
 | `4` | `@rig-c/parts` installed and passed, and an alias was still not served inside its own `--wait` (`WAIT`, naming the alias and its wait) | re-run it once the registry serves the alias: Actions → release → Run workflow, with the version |
 
 A dispatch with `version` runs the `confirm` job only, so a re-run cannot
-publish or re-cut anything; release-please, which makes the tag and the
-release, runs only on a push (`gh workflow run release.yml -f version=X.Y.Z`).
+publish or re-cut anything (`gh workflow run release.yml -f version=X.Y.Z`).
