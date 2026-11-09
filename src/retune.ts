@@ -40,7 +40,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { checkStage, gateThroughRigc, type Log, rigStage } from './build.ts';
 import { type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackShape, type PageEdges, rigcRanClause, type RigcRunner } from './check.ts';
 import { PartsError, type Problem, problemLine, refuseIfAny } from './errors.ts';
-import { type CheckSide, carryProvenance, type ParentProvenance, checkHeldProblems, checkSide, checkScope, type FileTree, firstDifference, type HashRow, hashRows, INPUT_CHECK_FILE, type InputCheckBinding, inputCheckHashes, inputCheckMovedProblems, inputCheckOf, inputCheckReusedLine, inputCheckText, inputTreeProblems, perturbed, readTree, sha256 } from './remesh.ts';
+import { type CheckSide, carryProvenance, type ParentProvenance, checkHeldProblems, checkSide, checkScope, type FileTree, firstDifference, type HashRow, hashRows, INPUT_CHECK_FILE, type InputCheckBinding, inputCheckHashes, inputCheckMovedProblems, inputCheckOf, inputCheckReusedLine, inputCheckText, inputTreeProblems, perturbed, pngsOf, readTree, sha256, textsOf } from './remesh.ts';
 import { DEFAULT_IDLE_KEYS, type IdleKeys, rigJsonText } from './rig.ts';
 
 /** The provenance file's spec. */
@@ -89,6 +89,8 @@ export interface RetunePlant {
   skipHold?: boolean;
   /** Issue #617's mutant: run just before check-input reads the input, after the first snapshot, to change a file under it. */
   beforeInputCheck?: () => void;
+  /** Issue #1256's mutant: hand every non-`images/` entry of the tree to `gateThroughRigc` as text, as before. */
+  unfilteredGateTexts?: boolean;
 }
 
 /** One constraint the request changed: its name and type, and each field whose value moved, in the rebuild's order. */
@@ -377,9 +379,7 @@ export function retuneStage(input: RetuneInput, rigc: RigcRunner, checkBin: stri
   log(`  idle: ${changed.idle.tracks_changed} track(s) changed, duration ${changed.idle.duration[0]} -> ${changed.idle.duration[1]}`);
   log(`  preserved: ${identical.filter((p) => p !== RETUNE_FILE && !(input.recordInputCheck === true && p === INPUT_CHECK_FILE)).length} file(s) byte-identical to the input; rig.json identical outside constraints and invariants.detached; motion.json identical outside animations.idle`);
   // 6. The gate and check.
-  const pngs = [...revision].filter(([k]) => k.startsWith('images/')).map(([k, b]) => [k.slice('images/'.length), b] as const);
-  const texts = [...revision].filter(([k]) => !k.startsWith('images/')).map(([k, b]) => [k, text(b)] as const);
-  const gate = gateThroughRigc(pngs, texts, rigc, join(scratch, 'gate'), { pageEdges, packShape });
+  const gate = gateThroughRigc(pngsOf(revision), textsOf(revision, plant.unfilteredGateTexts === true), rigc, join(scratch, 'gate'), { pageEdges, packShape });
   for (const g of gate) {
     log(`  rigc ${g.label}, the revision: exit ${g.status}`);
     for (const l of g.lines) log(`    ${l.trim()}`);
