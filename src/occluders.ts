@@ -38,6 +38,8 @@ export interface OccluderDeclaration {
   part?: string;
   /** An optional non-negative integer rig-px radius by which the occluder's > 128 core is dilated on the rig grid before the under guard, the occluder part and UNHELD read it (issue #1251). */
   grow?: number;
+  /** An optional non-negative integer rig-px radius by which the occluder's > 128 core is dilated on the rig grid for the under guard only, without painting a part or changing UNHELD (issue #1259). */
+  guard?: number;
 }
 
 export const OCCLUDER_COLOUR_COPIED = 'ASSEMBLE_OCCLUDER_COLOUR_COPIED';

@@ -2581,7 +2581,7 @@ function checkRequiredHiddenExtent(c: Check, a: Record<string, Json>, names: rea
 }
 
 /**
- * Issue #1230 / #1241 / #1246 / #1251: `config.assemble.occluders`, `[{image, sha256, under, over?, rgb_within, plate?, part?, grow?}]`.
+ * Issue #1230 / #1241 / #1246 / #1251 / #1259: `config.assemble.occluders`, `[{image, sha256, under, over?, rgb_within, plate?, part?, grow?, guard?}]`.
  * Shape at every door; `under`, `over` and `part` resolved against the plan where the door reads it; the file and its
  * sha256 where the door knows the config's directory (`checkOccluderFiles`). Returns the declared `part` names, in order.
  */
@@ -2593,7 +2593,7 @@ function checkOccluders(c: Check, a: Record<string, Json>, names: readonly strin
   const partNames: string[] = [];
   (a.occluders as Json[]).forEach((value, i) => {
     const p = `${at}[${i}]`;
-    const row = c.object(p, value, ['image', 'sha256', 'under', 'rgb_within'], ['over', 'plate', 'part', 'grow']);
+    const row = c.object(p, value, ['image', 'sha256', 'under', 'rgb_within'], ['over', 'plate', 'part', 'grow', 'guard']);
     if (row === null) return;
     const imageOk = c.string(`${p}.image`, row.image);
     const shaOk = typeof row.sha256 === 'string' && SHA256_PATTERN.test(row.sha256);
@@ -2629,8 +2629,15 @@ function checkOccluders(c: Check, a: Record<string, Json>, names: readonly strin
       if (!growOk) c.fail('CONFIG_FIELD_TYPE', `${p}.grow`, `is ${show(row.grow)}; a non-negative integer is required`);
       else growVal = row.grow as number;
     }
-    if (imageOk && shaOk && underOk && overOk && rgbOk && plateOk && partOk && growOk) {
-      declarations.push({ image: row.image as string, sha256: row.sha256 as string, under: row.under as string[], ...('over' in row ? { over: row.over as string[] } : {}), rgb_within: row.rgb_within as number, ...('plate' in row ? { plate: row.plate as string } : {}), ...(partName !== undefined ? { part: partName } : {}), ...(growVal !== undefined ? { grow: growVal } : {}) });
+    let guardOk = true;
+    let guardVal: number | undefined;
+    if ('guard' in row) {
+      guardOk = typeof row.guard === 'number' && Number.isInteger(row.guard) && row.guard >= 0;
+      if (!guardOk) c.fail('CONFIG_FIELD_TYPE', `${p}.guard`, `is ${show(row.guard)}; a non-negative integer is required`);
+      else guardVal = row.guard as number;
+    }
+    if (imageOk && shaOk && underOk && overOk && rgbOk && plateOk && partOk && growOk && guardOk) {
+      declarations.push({ image: row.image as string, sha256: row.sha256 as string, under: row.under as string[], ...('over' in row ? { over: row.over as string[] } : {}), rgb_within: row.rgb_within as number, ...('plate' in row ? { plate: row.plate as string } : {}), ...(partName !== undefined ? { part: partName } : {}), ...(growVal !== undefined ? { grow: growVal } : {}), ...(guardVal !== undefined ? { guard: guardVal } : {}) });
     }
   });
   c.problems.push(...occluderNameProblems(declarations, names));

@@ -329,3 +329,55 @@ export function writeSoftOverInputs(dir: string, occluderDepth = 0.2): { paintin
   const plateRunDir = writePlateRun(dir, encodePngBytes(chainPlate()));
   return { painting, occluder, occluderSha: sha256(occluderBytes), speckOccluder, speckOccluderSha: sha256(speckOccluderBytes), plateRunDir };
 }
+
+/**
+ * Soft outer-ring occluder twin (issue #1259):
+ * - The occluder core (`alpha > 128`) is `OCCLUDER` (`[48, 32, 80, 96]`, `32 x 64 = 2,048` px at alpha `255`).
+ * - Around `OCCLUDER` sits a soft outer ring of width `GUARD_RING_WIDTH` (`R = 2` px),
+ *   so the outer rectangle is `GUARD_RING_OUTER_BOX` (`[46, 30, 82, 98]`, `36 x 68 = 2,448` px)
+ *   and the ring (`GUARD_RING_OUTER_BOX \ OCCLUDER`) holds `GUARD_RING_PX` (`N = 2,448 - 2,048 = 400` px)
+ *   at alpha `GUARD_RING_ALPHA` (`64 <= 128`) on `occluder.png`.
+ * - On `painting.png`, `GUARD_RING_OUTER_BOX` (`[46, 30, 82, 98]`, core and ring) carries `PARTIAL_OCCLUDER_RGB`
+ *   (`[120, 70, 110]`), while the `under` part's plate-run layer (`behind`, `full:legwear`) carries `LIMB_RGB`
+ *   (`[60, 100, 160]`) over all of `LIMB` (`[16, 16, 112, 112]`).
+ */
+export const GUARD_RING_WIDTH = 2;
+export const GUARD_RING_ALPHA = 64;
+export const GUARD_RING_OUTER_BOX: [number, number, number, number] = [
+  OCCLUDER[0] - GUARD_RING_WIDTH,
+  OCCLUDER[1] - GUARD_RING_WIDTH,
+  OCCLUDER[2] + GUARD_RING_WIDTH,
+  OCCLUDER[3] + GUARD_RING_WIDTH,
+];
+export const GUARD_RING_OUTER_PX = (GUARD_RING_OUTER_BOX[2] - GUARD_RING_OUTER_BOX[0]) * (GUARD_RING_OUTER_BOX[3] - GUARD_RING_OUTER_BOX[1]);
+export const GUARD_RING_PX = GUARD_RING_OUTER_PX - OCCLUDER_PX;
+
+export function softRingPainting(): Raster {
+  const r = newRaster(SIDE, SIDE);
+  r.data.fill(255);
+  for (const { pixels } of faceGroup()) for (let p = 0; p < SIDE * SIDE; p++) if (pixels.data[p * 4 + 3] > 0) r.data.set(pixels.data.subarray(p * 4, p * 4 + 4), p * 4);
+  fill(r, LIMB, [...LIMB_RGB, 255]);
+  fill(r, GUARD_RING_OUTER_BOX, [...PARTIAL_OCCLUDER_RGB, 255]);
+  return r;
+}
+
+export function softRingOccluder(): Raster {
+  const r = newRaster(SIDE, SIDE);
+  fill(r, GUARD_RING_OUTER_BOX, [...PARTIAL_OCCLUDER_RGB, GUARD_RING_ALPHA]);
+  fill(r, OCCLUDER, [...PARTIAL_OCCLUDER_RGB, 255]);
+  return r;
+}
+
+export function writeSoftRingInputs(dir: string, occluderDepth = 0.2): { painting: string; occluder: string; occluderSha: string; plateRunDir: string } {
+  mkdirSync(dir, { recursive: true });
+  const painting = join(dir, 'painting.png');
+  const occluder = join(dir, 'occluder.png');
+  writeFileSync(painting, encodePngBytes(softRingPainting()));
+  const occluderBytes = encodePngBytes(softRingOccluder());
+  writeFileSync(occluder, occluderBytes);
+  exportLayers(partialOverOriginalRun(occluderDepth), join(dir, 'orig'));
+  writeFileSync(join(dir, 'orig', 'meta.json'), JSON.stringify({ prompt_id: 'generated-soft-ring-original', seed: 42 }));
+  const plateRunDir = writePlateRun(dir, encodePngBytes(chainPlate()));
+  return { painting, occluder, occluderSha: sha256(occluderBytes), plateRunDir };
+}
+

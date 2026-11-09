@@ -57,6 +57,11 @@ import {
   chainConfig,
   chainPlate,
   DEEPER_OCCLUDER_DEPTH,
+  GUARD_RING_ALPHA,
+  GUARD_RING_OUTER_BOX,
+  GUARD_RING_OUTER_PX,
+  GUARD_RING_PX,
+  GUARD_RING_WIDTH,
   LIMB,
   LIMB_RGB,
   OCCLUDER,
@@ -81,6 +86,7 @@ import {
   writePartialOverInputs,
   writePlateRun,
   writeSoftOverInputs,
+  writeSoftRingInputs,
 } from '../fixtures/occluder_chain.ts';
 
 type Say = (name: string, pass: boolean, detail: string) => void;
@@ -1670,6 +1676,225 @@ export function runOccluderCopyChecks(dir: string, say: Say): void {
       growNegProb !== undefined &&
       growStrProb !== undefined,
     `w=32,h=64: grow0=${grow0Occ?.opaque_px} (occluder_grow=${grow0Parts?.occluder_grow}), grow2=${grow2Occ?.opaque_px} (${JSON.stringify(grow2Parts?.occluder_grow)}), grow3=${grow3Occ?.opaque_px} (${JSON.stringify(grow3Parts?.occluder_grow)}); plants: float=${growFloatProb?.code}, neg=${growNegProb?.code}, str=${growStrProb?.code}, parts=${growPartsReaderRefusal?.code}`);
+
+  // Issue #1259 controls (OC42–OC45):
+  // OC42: Soft outer-ring plant (`writeSoftRingInputs`: core OCCLUDER [48,32,80,96) = 2,048 px at alpha 255;
+  // outer ring width R = 2 px -> GUARD_RING_OUTER_BOX [46,30,82,98) = 2,448 px, ring N = 400 px at alpha 64 <= 128).
+  // At guard 0 (and absent), the ring on `behind` carries the painting on all N = 400 px; at guard >= R (2 and 3),
+  // the ring carries 0 px from the painting (all 400 px keep `LIMB_RGB`). Across every pixel of every part on the
+  // 128x128 rig canvas, alpha with guard <= alpha without guard.
+  const ringHome = join(dir, 'occluder-soft-ring');
+  rmSync(ringHome, { recursive: true, force: true });
+  const ringInputs = writeSoftRingInputs(ringHome);
+  const ringCfg = (opts: { grow?: number; guard?: number; withPart?: boolean } = {}): Record<string, unknown> => {
+    const cfg = chainConfig({
+      plan: [['face', 'full', 'face'], ['eye_r', 'full', 'eyewhite-r'], ['eye_l', 'full', 'eyewhite-l'], ['behind', 'full', 'legwear']],
+      occluders: [
+        declaration(ringInputs.occluderSha, {
+          ...(opts.withPart === false ? {} : { part: 'occ_fg' }),
+          ...(opts.grow === undefined ? {} : { grow: opts.grow }),
+          ...(opts.guard === undefined ? {} : { guard: opts.guard }),
+        }),
+      ],
+    });
+    delete (cfg.regions as Record<string, unknown>).front;
+    if (opts.withPart !== false) (cfg.regions as Record<string, unknown>).occ_fg = 'root';
+    return cfg;
+  };
+  const placeRingPartOnCanvas = (outDir: string, partName: string): Raster | null => {
+    const pJsonPath = join(ringHome, outDir, 'parts.json');
+    const pPngPath = join(ringHome, outDir, 'parts', `${partName}.png`);
+    if (!existsSync(pJsonPath) || !existsSync(pPngPath)) return null;
+    const pf = readParts(pJsonPath);
+    const meta = pf.parts.find((pt) => pt.name === partName);
+    if (!meta) return null;
+    const cropImg = readPng(pPngPath);
+    const canvas = newRaster(SIDE, SIDE);
+    for (let cy = 0; cy < cropImg.height; cy++) {
+      for (let cx = 0; cx < cropImg.width; cx++) {
+        const tx = meta.x + cx;
+        const ty = meta.y + cy;
+        if (tx < 0 || tx >= SIDE || ty < 0 || ty >= SIDE) continue;
+        const si = (cy * cropImg.width + cx) * 4;
+        const di = (ty * SIDE + tx) * 4;
+        canvas.data.set(cropImg.data.subarray(si, si + 4), di);
+      }
+    }
+    return canvas;
+  };
+  const guardAbsentRun = stage(ringHome, ringInputs.plateRunDir, ringCfg(), 'out-guard-absent');
+  const guard0Run = stage(ringHome, ringInputs.plateRunDir, ringCfg({ guard: 0 }), 'out-guard-0');
+  const guard2Run = stage(ringHome, ringInputs.plateRunDir, ringCfg({ guard: 2 }), 'out-guard-2');
+  const guard3Run = stage(ringHome, ringInputs.plateRunDir, ringCfg({ guard: 3 }), 'out-guard-3');
+  const countRingPaintingPx = (outDir: string): { paintingPx: number; limbPx: number } => {
+    const behind = placeRingPartOnCanvas(outDir, 'behind');
+    if (behind === null) return { paintingPx: -1, limbPx: -1 };
+    let paintingPx = 0;
+    let limbPx = 0;
+    for (let y = GUARD_RING_OUTER_BOX[1]; y < GUARD_RING_OUTER_BOX[3]; y++) {
+      for (let x = GUARD_RING_OUTER_BOX[0]; x < GUARD_RING_OUTER_BOX[2]; x++) {
+        if (isInside(OCCLUDER, x, y)) continue;
+        const p = (y * SIDE + x) * 4;
+        const r = behind.data[p];
+        const g = behind.data[p + 1];
+        const b = behind.data[p + 2];
+        if (r === LIMB_RGB[0] && g === LIMB_RGB[1] && b === LIMB_RGB[2]) limbPx++;
+        else paintingPx++;
+      }
+    }
+    return { paintingPx, limbPx };
+  };
+  const guard0Ring = countRingPaintingPx('out-guard-0');
+  const guard2Ring = countRingPaintingPx('out-guard-2');
+  const guard3Ring = countRingPaintingPx('out-guard-3');
+  const checkWholeRigAlphaNonIncreasing = (baseDir: string, guardedDir: string): { ok: boolean; maxDiff: number; increasedPx: number } => {
+    const basePf = readParts(join(ringHome, baseDir, 'parts.json'));
+    const guardedPf = readParts(join(ringHome, guardedDir, 'parts.json'));
+    const allNames = new Set([...basePf.parts.map((p) => p.name), ...guardedPf.parts.map((p) => p.name)]);
+    let maxDiff = 0;
+    let increasedPx = 0;
+    for (const name of allNames) {
+      const bCan = placeRingPartOnCanvas(baseDir, name) ?? newRaster(SIDE, SIDE);
+      const gCan = placeRingPartOnCanvas(guardedDir, name) ?? newRaster(SIDE, SIDE);
+      for (let p = 0; p < SIDE * SIDE; p++) {
+        const diff = gCan.data[p * 4 + 3] - bCan.data[p * 4 + 3];
+        if (diff > maxDiff) maxDiff = diff;
+        if (diff > 0) increasedPx++;
+      }
+    }
+    return { ok: increasedPx === 0 && maxDiff <= 0, maxDiff, increasedPx };
+  };
+  const alphaGuard2 = guard0Run.error === null && guard2Run.error === null ? checkWholeRigAlphaNonIncreasing('out-guard-0', 'out-guard-2') : { ok: false, maxDiff: 999, increasedPx: 999 };
+  const alphaGuard3 = guard0Run.error === null && guard3Run.error === null ? checkWholeRigAlphaNonIncreasing('out-guard-0', 'out-guard-3') : { ok: false, maxDiff: 999, increasedPx: 999 };
+  const guardAbsentPartsText = guardAbsentRun.error === null ? readFileSync(join(ringHome, 'out-guard-absent', 'parts.json'), 'utf8') : '';
+  const guard0PartsText = guard0Run.error === null ? readFileSync(join(ringHome, 'out-guard-0', 'parts.json'), 'utf8') : 'x';
+  say('OC42_OCCLUDER_GUARD_SOFT_RING_BLOCKS_PROJECTION_WITHOUT_INCREASING_ALPHA',
+    GUARD_RING_WIDTH === 2 &&
+      GUARD_RING_ALPHA === 64 &&
+      GUARD_RING_OUTER_PX === 2448 &&
+      GUARD_RING_PX === 400 &&
+      guardAbsentRun.error === null &&
+      guard0Run.error === null &&
+      guard2Run.error === null &&
+      guard3Run.error === null &&
+      guardAbsentPartsText === guard0PartsText &&
+      guard0Ring.paintingPx === 400 &&
+      guard0Ring.limbPx === 0 &&
+      guard2Ring.paintingPx === 0 &&
+      guard2Ring.limbPx === 400 &&
+      guard3Ring.paintingPx === 0 &&
+      guard3Ring.limbPx === 400 &&
+      alphaGuard2.ok &&
+      alphaGuard3.ok,
+    `R=${GUARD_RING_WIDTH}, ring=${GUARD_RING_PX} px (alpha=${GUARD_RING_ALPHA}): guard0 painting_px=${guard0Ring.paintingPx} limb_px=${guard0Ring.limbPx}; guard2 painting_px=${guard2Ring.paintingPx} limb_px=${guard2Ring.limbPx} (alpha_inc=${alphaGuard2.increasedPx}, max_diff=${alphaGuard2.maxDiff}); guard3 painting_px=${guard3Ring.paintingPx} limb_px=${guard3Ring.limbPx} (alpha_inc=${alphaGuard3.increasedPx}, max_diff=${alphaGuard3.maxDiff})`);
+
+  // OC43: guard + grow together on the soft-ring fixture with grow g = 1 < guard G = 2:
+  // - under keep = core dilated by G = 2 (2,448 px, 0 painting px on the 400-px ring, vs 204 outer-ring painting px on grow-only g = 1);
+  // - occluder part (`occ_fg`) coverage = core dilated by g = 1 ((32+2)*(64+2) = 2,244 px), pixel-for-pixel equal to grow-only g = 1;
+  // - UNHELD (when `part` is omitted) is unchanged vs grow-only g = 1 (2,244 rig px, first at 47,31), and guard-only G = 2 is unchanged vs guard 0 (2,048 rig px, first at 48,32).
+  const grow1OnlyRun = stage(ringHome, ringInputs.plateRunDir, ringCfg({ grow: 1 }), 'out-grow1-only');
+  const grow1Guard2Run = stage(ringHome, ringInputs.plateRunDir, ringCfg({ grow: 1, guard: 2 }), 'out-grow1-guard2');
+  const grow1OnlyRing = countRingPaintingPx('out-grow1-only');
+  const grow1Guard2Ring = countRingPaintingPx('out-grow1-guard2');
+  const grow1OnlyParts = grow1OnlyRun.error === null ? readParts(join(ringHome, 'out-grow1-only', 'parts.json')) : null;
+  const grow1Guard2Parts = grow1Guard2Run.error === null ? readParts(join(ringHome, 'out-grow1-guard2', 'parts.json')) : null;
+  const grow1OnlyOccMeta = grow1OnlyParts?.parts.find((pt) => pt.name === 'occ_fg');
+  const grow1Guard2OccMeta = grow1Guard2Parts?.parts.find((pt) => pt.name === 'occ_fg');
+  const grow1OnlyOccCanvas = placeRingPartOnCanvas('out-grow1-only', 'occ_fg');
+  const grow1Guard2OccCanvas = placeRingPartOnCanvas('out-grow1-guard2', 'occ_fg');
+  let occPartDiffPx = 0;
+  if (grow1OnlyOccCanvas !== null && grow1Guard2OccCanvas !== null) {
+    for (let i = 0; i < grow1OnlyOccCanvas.data.length; i++) {
+      if (grow1OnlyOccCanvas.data[i] !== grow1Guard2OccCanvas.data[i]) occPartDiffPx++;
+    }
+  } else {
+    occPartDiffPx = -1;
+  }
+  const unheldBaseRun = stage(ringHome, ringInputs.plateRunDir, ringCfg({ withPart: false }), 'out-unheld-base');
+  const unheldGuard2Run = stage(ringHome, ringInputs.plateRunDir, ringCfg({ guard: 2, withPart: false }), 'out-unheld-guard2');
+  const unheldGrow1Run = stage(ringHome, ringInputs.plateRunDir, ringCfg({ grow: 1, withPart: false }), 'out-unheld-grow1');
+  const unheldGrow1Guard2Run = stage(ringHome, ringInputs.plateRunDir, ringCfg({ grow: 1, guard: 2, withPart: false }), 'out-unheld-grow1-guard2');
+  const unheldBaseLines = unheldBaseRun.lines.filter((l) => l.includes(OCCLUDER_UNHELD));
+  const unheldGuard2Lines = unheldGuard2Run.lines.filter((l) => l.includes(OCCLUDER_UNHELD));
+  const unheldGrow1Lines = unheldGrow1Run.lines.filter((l) => l.includes(OCCLUDER_UNHELD));
+  const unheldGrow1Guard2Lines = unheldGrow1Guard2Run.lines.filter((l) => l.includes(OCCLUDER_UNHELD));
+  say('OC43_OCCLUDER_GUARD_AND_GROW_TOGETHER_KEEP_DILATED_BY_MAX_WHILE_PART_AND_UNHELD_FOLLOW_GROW',
+    grow1OnlyRun.error === null &&
+      grow1Guard2Run.error === null &&
+      unheldBaseRun.error === null &&
+      unheldGuard2Run.error === null &&
+      unheldGrow1Run.error === null &&
+      unheldGrow1Guard2Run.error === null &&
+      grow1OnlyRing.paintingPx === 204 &&
+      grow1Guard2Ring.paintingPx === 0 &&
+      grow1Guard2Ring.limbPx === 400 &&
+      grow1OnlyOccMeta?.opaque_px === 2244 &&
+      grow1Guard2OccMeta?.opaque_px === 2244 &&
+      occPartDiffPx === 0 &&
+      JSON.stringify(grow1Guard2Parts?.occluder_grow) === JSON.stringify([{ occluder: 0, image: 'occluder.png', grow: 1, covered_px_before: 2048, covered_px_after: 2244 }]) &&
+      JSON.stringify(grow1Guard2Parts?.occluder_guard) === JSON.stringify([{ occluder: 0, image: 'occluder.png', guard: 2, guarded_px_before: 2048, guarded_px_after: 2448 }]) &&
+      unheldBaseLines.length === 1 &&
+      unheldBaseLines[0].includes('2048 rig px') &&
+      JSON.stringify(unheldGuard2Lines) === JSON.stringify(unheldBaseLines) &&
+      unheldGrow1Lines.length === 1 &&
+      unheldGrow1Lines[0].includes('2244 rig px') &&
+      unheldGrow1Lines[0].includes('first at 47,31') &&
+      JSON.stringify(unheldGrow1Guard2Lines) === JSON.stringify(unheldGrow1Lines),
+    `g=1,G=2: grow1_only ring_painting_px=${grow1OnlyRing.paintingPx} (outer 1-px ring), grow1+guard2 ring_painting_px=${grow1Guard2Ring.paintingPx}; occ_fg opaque=${grow1Guard2OccMeta?.opaque_px} (diff_bytes=${occPartDiffPx}); unheld(g=1)=${unheldGrow1Lines[0] ?? 'none'}, unheld(g=1,G=2)=${unheldGrow1Guard2Lines[0] ?? 'none'}`);
+
+  // OC44: Refusal plants — `guard: 1.5`, `guard: -1`, `guard: "2"` each refuse `CONFIG_FIELD_TYPE` naming `config.assemble.occluders[0].guard`
+  // at every config door; a `parts.json` `occluder_guard` with `guard: 0` refuses `PARTS_FIELD_TYPE`.
+  const guardDoors = [parseConfig, (raw: Record<string, unknown>) => parseEarlyConfig(raw, 'assemble'), (raw: Record<string, unknown>) => parseEarlyConfig(raw, 'layers')];
+  const guardFloatProbs = guardDoors.map((read) => refusal(() => read(chainConfig({ occluders: [declaration(ringInputs.occluderSha, { guard: 1.5 })] })))?.problems.find((pr) => pr.code === 'CONFIG_FIELD_TYPE' && pr.object === 'config.assemble.occluders[0].guard'));
+  const guardNegProbs = guardDoors.map((read) => refusal(() => read(chainConfig({ occluders: [declaration(ringInputs.occluderSha, { guard: -1 })] })))?.problems.find((pr) => pr.code === 'CONFIG_FIELD_TYPE' && pr.object === 'config.assemble.occluders[0].guard'));
+  const guardStrProbs = guardDoors.map((read) => refusal(() => read(chainConfig({ occluders: [declaration(ringInputs.occluderSha, { guard: '2' })] })))?.problems.find((pr) => pr.code === 'CONFIG_FIELD_TYPE' && pr.object === 'config.assemble.occluders[0].guard'));
+  const badGuardPartsPath = join(ringHome, 'bad-occluder-guard-parts.json');
+  const guard2Parts = guard2Run.error === null ? readParts(join(ringHome, 'out-guard-2', 'parts.json')) : null;
+  if (guard2Parts !== null) {
+    const rawBadGuard = JSON.parse(readFileSync(join(ringHome, 'out-guard-2', 'parts.json'), 'utf8')) as { occluder_guard: Array<Record<string, unknown>> };
+    rawBadGuard.occluder_guard[0].guard = 0;
+    writeFileSync(badGuardPartsPath, JSON.stringify(rawBadGuard));
+  }
+  const guardPartsReaderRefusal = guard2Parts !== null ? refusal(() => readParts(badGuardPartsPath))?.problems.find((pr) => pr.code === 'PARTS_FIELD_TYPE' && pr.object.includes('occluder_guard[0] field "guard"')) : undefined;
+  say('OC44_OCCLUDER_GUARD_REFUSES_BAD_CONFIG_AND_PARTS_TYPES',
+    guardFloatProbs.every((p) => p !== undefined) &&
+      guardNegProbs.every((p) => p !== undefined) &&
+      guardStrProbs.every((p) => p !== undefined) &&
+      guardPartsReaderRefusal !== undefined,
+    `float=${guardFloatProbs[0]?.code}@${guardFloatProbs[0]?.object}, neg=${guardNegProbs[0]?.code}@${guardNegProbs[0]?.object}, str=${guardStrProbs[0]?.code}@${guardStrProbs[0]?.object}, parts=${guardPartsReaderRefusal?.code}@${guardPartsReaderRefusal?.object}`);
+
+  // OC45: `occluder_guard` round-trips through `readParts`; absent when `guard` is 0 or omitted;
+  // when `guard <= grow` (`grow: 3, guard: 2`), the record is still written and `guarded_px_after` (2,660) equals the grow-only under keep's count.
+  const grow3OnlyRingRun = stage(ringHome, ringInputs.plateRunDir, ringCfg({ grow: 3 }), 'out-grow3-only');
+  const grow3Guard2RingRun = stage(ringHome, ringInputs.plateRunDir, ringCfg({ grow: 3, guard: 2 }), 'out-grow3-guard2');
+  const guard0Raw = guard0Run.error === null ? (JSON.parse(readFileSync(join(ringHome, 'out-guard-0', 'parts.json'), 'utf8')) as Record<string, unknown>) : null;
+  const guard0Parts = guard0Run.error === null ? readParts(join(ringHome, 'out-guard-0', 'parts.json')) : null;
+  const guard3Parts = guard3Run.error === null ? readParts(join(ringHome, 'out-guard-3', 'parts.json')) : null;
+  const grow3OnlyRingParts = grow3OnlyRingRun.error === null ? readParts(join(ringHome, 'out-grow3-only', 'parts.json')) : null;
+  const grow3Guard2RingParts = grow3Guard2RingRun.error === null ? readParts(join(ringHome, 'out-grow3-guard2', 'parts.json')) : null;
+  const grow3OnlyBehindBytes = grow3OnlyRingRun.error === null ? readFileSync(join(ringHome, 'out-grow3-only', 'parts', 'behind.png')) : null;
+  const grow3Guard2BehindBytes = grow3Guard2RingRun.error === null ? readFileSync(join(ringHome, 'out-grow3-guard2', 'parts', 'behind.png')) : null;
+  const grow3OnlyOccBytes = grow3OnlyRingRun.error === null ? readFileSync(join(ringHome, 'out-grow3-only', 'parts', 'occ_fg.png')) : null;
+  const grow3Guard2OccBytes = grow3Guard2RingRun.error === null ? readFileSync(join(ringHome, 'out-grow3-guard2', 'parts', 'occ_fg.png')) : null;
+  say('OC45_OCCLUDER_GUARD_ROUND_TRIPS_OMITS_WHEN_ZERO_AND_RECORDS_NO_OP_UNDER_GROW',
+    grow3OnlyRingRun.error === null &&
+      grow3Guard2RingRun.error === null &&
+      guard0Raw !== null &&
+      !('occluder_guard' in guard0Raw) &&
+      guard0Parts?.occluder_guard === undefined &&
+      JSON.stringify(guard2Parts?.occluder_guard) === JSON.stringify([{ occluder: 0, image: 'occluder.png', guard: 2, guarded_px_before: 2048, guarded_px_after: 2448 }]) &&
+      JSON.stringify(guard3Parts?.occluder_guard) === JSON.stringify([{ occluder: 0, image: 'occluder.png', guard: 3, guarded_px_before: 2048, guarded_px_after: 2660 }]) &&
+      JSON.stringify(grow3OnlyRingParts?.occluder_grow) === JSON.stringify([{ occluder: 0, image: 'occluder.png', grow: 3, covered_px_before: 2048, covered_px_after: 2660 }]) &&
+      grow3OnlyRingParts?.occluder_guard === undefined &&
+      JSON.stringify(grow3Guard2RingParts?.occluder_grow) === JSON.stringify([{ occluder: 0, image: 'occluder.png', grow: 3, covered_px_before: 2048, covered_px_after: 2660 }]) &&
+      JSON.stringify(grow3Guard2RingParts?.occluder_guard) === JSON.stringify([{ occluder: 0, image: 'occluder.png', guard: 2, guarded_px_before: 2048, guarded_px_after: 2660 }]) &&
+      grow3OnlyBehindBytes !== null &&
+      grow3Guard2BehindBytes !== null &&
+      Buffer.compare(grow3OnlyBehindBytes, grow3Guard2BehindBytes) === 0 &&
+      grow3OnlyOccBytes !== null &&
+      grow3Guard2OccBytes !== null &&
+      Buffer.compare(grow3OnlyOccBytes, grow3Guard2OccBytes) === 0,
+    `guard0=${guard0Parts?.occluder_guard}, guard2=${JSON.stringify(guard2Parts?.occluder_guard)}, guard3=${JSON.stringify(guard3Parts?.occluder_guard)}, grow3+guard2=${JSON.stringify(grow3Guard2RingParts?.occluder_guard)} (grow3 covered_after=${grow3OnlyRingParts?.occluder_grow?.[0]?.covered_px_after})`);
 }
 
 /** `plateDir` is the harness's `comfy plate --mode occluder` output on the chain's painting and occluder (`<work>/occ-chain`). */

@@ -73,6 +73,7 @@ const OTHER_STRING_FIELDS = [
   'motion_seams[].neighbour',
   'motion_seams[].part',
   'occluder_grow[].image',
+  'occluder_guard[].image',
   'occluder_plates[].mask_sha256',
   'occluder_plates[].occluder_sha256',
   'occluder_plates[].output_sha256',

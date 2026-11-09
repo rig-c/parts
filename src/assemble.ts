@@ -123,7 +123,7 @@ import { foldName, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { CORE_ALPHA, figuresPhrase, implausibleRules, type Layer, type LayerFigures, layerFigures, type LayerSet, NEAR_WHITE_MIN, OPAQUE_ALPHA_ABOVE, ruleSummary } from './layers.ts';
 import { padToSquare, squarePad } from './inputs.ts';
 import type { MotionSeamDeclaration } from './motionseams.ts';
-import { type CapRecord, type LimbRecord, FIGURE_MASK_FILE, type OccluderGrowRecord, PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, type SceneRecord, type SingleRunPad } from './parts.ts';
+import { type CapRecord, type LimbRecord, FIGURE_MASK_FILE, type OccluderGrowRecord, type OccluderGuardRecord, PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, type SceneRecord, type SingleRunPad } from './parts.ts';
 import { growMask } from './plate.ts';
 import { assignCrossedLimbs, assignOverlappingHands, type BonePlace, bonePlaces, capBox, coveredRadius, type CutPlacement, featherWeight, halfWidthAbout, inDisc, jointLine, type JointLine, jointOffsets, limbPolyline, limbRun, luma601, nearestLimb, nearestOnLine, offLineFigure, pastJoint, placeCut, polylineDist2, segmentOf } from './limbs.ts';
 import {
@@ -5130,9 +5130,11 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   const fullPadded = single ? padSingleRun(depthFullInput, frame, input.resolution) : depthFullInput;
   const { W, H } = frame;
   const occluderGrowRecords: OccluderGrowRecord[] = [];
+  const occluderGuardRecords: OccluderGuardRecord[] = [];
   const occluderEntries = (input.occluders ?? []).map(({ declaration, image }, index) => {
     const { coreBefore, coveredBefore } = occluderCoreMask(image, W, H);
     const grow = declaration.grow ?? 0;
+    const guard = declaration.guard ?? 0;
     let copiedMask = coreBefore;
     if (grow > 0) {
       const grown = growMask({ width: W, height: H, inside: coreBefore.data }, grow);
@@ -5148,7 +5150,24 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
         covered_px_after: coveredAfter,
       });
     }
-    return { index, declaration, coreBefore, copiedMask };
+    let guardMask = copiedMask;
+    if (guard > 0) {
+      if (guard > grow) {
+        const guarded = growMask({ width: W, height: H, inside: coreBefore.data }, guard);
+        guardMask = newMask(W, H);
+        guardMask.data.set(guarded.inside);
+      }
+      let guardedAfter = 0;
+      for (let p = 0; p < W * H; p++) if (guardMask.data[p] === 1) guardedAfter++;
+      occluderGuardRecords.push({
+        occluder: index,
+        image: declaration.image,
+        guard,
+        guarded_px_before: coveredBefore,
+        guarded_px_after: guardedAfter,
+      });
+    }
+    return { index, declaration, coreBefore, copiedMask, guardMask };
   });
   const occluderCoreMasks = occluderEntries.map((e) => e.coreBefore);
   if ((input.requireHiddenExtent?.length ?? 0) > 0) {
@@ -5203,14 +5222,14 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   const groundShare = groundRingShare(srcr, supportPainted);
   const occluderUnderKeepByPlanPart = new Map<string, Mask>();
   if (projectRule === 'visible') {
-    for (const { declaration, copiedMask } of occluderEntries) {
+    for (const { declaration, guardMask } of occluderEntries) {
       for (const u of declaration.under) {
         let m = occluderUnderKeepByPlanPart.get(u);
         if (m === undefined) {
           m = newMask(W, H);
           occluderUnderKeepByPlanPart.set(u, m);
         }
-        for (let p = 0; p < W * H; p++) if (copiedMask.data[p] === 1) m.data[p] = 1;
+        for (let p = 0; p < W * H; p++) if (guardMask.data[p] === 1) m.data[p] = 1;
       }
     }
   }
@@ -6547,6 +6566,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       recomposite: recompositeRecord(figures),
       ...(sceneRecord === null ? {} : { scene: sceneRecord }),
       ...(occluderGrowRecords.length === 0 ? {} : { occluder_grow: occluderGrowRecords }),
+      ...(occluderGuardRecords.length === 0 ? {} : { occluder_guard: occluderGuardRecords }),
       ...(padRecord === null ? {} : { single_run_pad: padRecord }),
     },
     images: placed,
