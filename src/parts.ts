@@ -405,6 +405,19 @@ export interface OccluderGrowRecord {
   covered_px_after: number;
 }
 
+export interface OccluderGuardRecord {
+  /** Zero-based index into `config.assemble.occluders`. */
+  occluder: number;
+  /** The declared `config.assemble.occluders[occluder].image` path. */
+  image: string;
+  /** The declared positive integer `config.assemble.occluders[occluder].guard` radius in rig px. */
+  guard: number;
+  /** Rig pixels of the occluder core (`alpha > 128`) before the dilation. */
+  guarded_px_before: number;
+  /** Rig pixels of the under keep mask (`alpha > 128` dilated by `max(grow, guard)`) for this entry. */
+  guarded_px_after: number;
+}
+
 export interface PartsFile {
   /** Optional on legacy packages; binds the opaque RGB raster assemble actually read. */
   painting_in_rig?: PaintingInRig;
@@ -426,6 +439,8 @@ export interface PartsFile {
   occluder_plates?: OccluderPlateRecord[];
   /** Written only when an `assemble.occluders` entry declares `grow > 0` (issue #1251); absent otherwise. */
   occluder_grow?: OccluderGrowRecord[];
+  /** Written only when an `assemble.occluders` entry declares `guard > 0` (issue #1259); absent otherwise. */
+  occluder_guard?: OccluderGuardRecord[];
   /** Written only when alternate painting sets were assembled (issue #454); absent otherwise. */
   alternates?: AlternatePartsRecord[];
 }
@@ -462,10 +477,11 @@ export interface SceneRecord {
   figure_mask: string;
 }
 
-const TOP_KEYS = ['painting_in_rig', 'rig_size', 'scale_rig_per_source', 'parts', 'ghost_px', 'recomposite', 'scene', 'occluder_plates', 'occluder_grow', 'single_run_pad', 'alternates', 'motion_seams', 'cut_ownership'] as const;
-const REQUIRED_TOP_KEYS = TOP_KEYS.filter((k) => k !== 'painting_in_rig' && k !== 'recomposite' && k !== 'scene' && k !== 'single_run_pad' && k !== 'occluder_plates' && k !== 'occluder_grow' && k !== 'alternates' && k !== 'motion_seams' && k !== 'cut_ownership');
+const TOP_KEYS = ['painting_in_rig', 'rig_size', 'scale_rig_per_source', 'parts', 'ghost_px', 'recomposite', 'scene', 'occluder_plates', 'occluder_grow', 'occluder_guard', 'single_run_pad', 'alternates', 'motion_seams', 'cut_ownership'] as const;
+const REQUIRED_TOP_KEYS = TOP_KEYS.filter((k) => k !== 'painting_in_rig' && k !== 'recomposite' && k !== 'scene' && k !== 'single_run_pad' && k !== 'occluder_plates' && k !== 'occluder_grow' && k !== 'occluder_guard' && k !== 'alternates' && k !== 'motion_seams' && k !== 'cut_ownership');
 export const OCCLUDER_PLATE_KEYS = ['receipt', 'receipt_sha256', 'occluder_sha256', 'painting_sha256', 'output_sha256', 'mask_sha256'] as const;
 export const OCCLUDER_GROW_KEYS = ['occluder', 'image', 'grow', 'covered_px_before', 'covered_px_after'] as const;
+export const OCCLUDER_GUARD_KEYS = ['occluder', 'image', 'guard', 'guarded_px_before', 'guarded_px_after'] as const;
 export const SINGLE_RUN_PAD_KEYS = ['file_size', 'side', 'left', 'top'] as const;
 export const SCENE_KEYS = ['figure_alpha_above', 'figure_px', 'figure_mask'] as const;
 export const RECOMPOSITE_KEYS = ['mean_abs', 'within_limit', 'within_share', 'error_limit', 'error_px', 'covered_alpha', 'uncovered_error_px', 'hole_count', 'holes_listed', 'holes'] as const;
@@ -629,6 +645,7 @@ export function serializeParts(file: PartsFile): string {
     ...(file.scene === undefined ? {} : { scene: Object.fromEntries(SCENE_KEYS.map((k) => [k, (file.scene as SceneRecord)[k]])) }),
     ...(file.occluder_plates === undefined ? {} : { occluder_plates: file.occluder_plates.map((p) => Object.fromEntries(OCCLUDER_PLATE_KEYS.map((k) => [k, p[k]]))) }),
     ...(file.occluder_grow === undefined ? {} : { occluder_grow: file.occluder_grow.map((g) => Object.fromEntries(OCCLUDER_GROW_KEYS.map((k) => [k, g[k]]))) }),
+    ...(file.occluder_guard === undefined ? {} : { occluder_guard: file.occluder_guard.map((g) => Object.fromEntries(OCCLUDER_GUARD_KEYS.map((k) => [k, g[k]]))) }),
     ...(file.single_run_pad === undefined ? {} : { single_run_pad: Object.fromEntries(SINGLE_RUN_PAD_KEYS.map((k) => [k, (file.single_run_pad as SingleRunPad)[k]])) }),
     ...(file.alternates === undefined
       ? {}
@@ -998,6 +1015,36 @@ function checkParts(raw: unknown, path: string): PartsFile {
           fail('PARTS_FIELD_TYPE', `${at} field "grow"`, `is ${show(r.grow)}; a positive integer is required`);
         }
         for (const k of ['covered_px_before', 'covered_px_after'] as const) {
+          if (k in r && !(typeof r[k] === 'number' && Number.isInteger(r[k]) && (r[k] as number) >= 0)) {
+            fail('PARTS_FIELD_TYPE', `${at} field "${k}"`, `is ${show(r[k])}; a non-negative integer is required`);
+          }
+        }
+      });
+    }
+  }
+  if ('occluder_guard' in o) {
+    if (!Array.isArray(o.occluder_guard) || o.occluder_guard.length === 0) {
+      fail('PARTS_FIELD_TYPE', `${path} field "occluder_guard"`, `is ${show(o.occluder_guard)}; a non-empty array of occluder guard records is required`);
+    } else {
+      o.occluder_guard.forEach((entry, i) => {
+        const at = `${path} occluder_guard[${i}]`;
+        if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+          fail('PARTS_FIELD_TYPE', at, `is ${show(entry)}; an object is required`);
+          return;
+        }
+        const r = entry as Record<string, unknown>;
+        for (const k of Object.keys(r)) if (!(OCCLUDER_GUARD_KEYS as readonly string[]).includes(k)) fail('PARTS_KEY_KNOWN', `${at} key "${k}"`, `is not an occluder_guard field; known: ${OCCLUDER_GUARD_KEYS.join(', ')}`);
+        for (const k of OCCLUDER_GUARD_KEYS) if (!(k in r)) fail('PARTS_FIELD_PRESENT', `${at} field "${k}"`, 'is absent and required');
+        if ('occluder' in r && !(typeof r.occluder === 'number' && Number.isInteger(r.occluder) && r.occluder >= 0)) {
+          fail('PARTS_FIELD_TYPE', `${at} field "occluder"`, `is ${show(r.occluder)}; a non-negative integer index is required`);
+        }
+        if ('image' in r && (typeof r.image !== 'string' || r.image.length === 0)) {
+          fail('PARTS_FIELD_TYPE', `${at} field "image"`, `is ${show(r.image)}; a non-empty string path is required`);
+        }
+        if ('guard' in r && !(typeof r.guard === 'number' && Number.isInteger(r.guard) && r.guard > 0)) {
+          fail('PARTS_FIELD_TYPE', `${at} field "guard"`, `is ${show(r.guard)}; a positive integer is required`);
+        }
+        for (const k of ['guarded_px_before', 'guarded_px_after'] as const) {
           if (k in r && !(typeof r[k] === 'number' && Number.isInteger(r[k]) && (r[k] as number) >= 0)) {
             fail('PARTS_FIELD_TYPE', `${at} field "${k}"`, `is ${show(r[k])}; a non-negative integer is required`);
           }
