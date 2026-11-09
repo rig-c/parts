@@ -81,7 +81,7 @@ import { parseAltArg } from './tools/alternate-cli.ts';
 import { encodeCheckReceipt, readBuildReceipt, readBuildChild, selectedRigcCommand } from './tools/build-process.ts';
 import { runSetAnchorChecks } from './tools/check_set_anchor.ts';
 import { runSetFocusChecks } from './tools/check_set_focus.ts';
-import { runRevisionChainChecks } from './tools/check_revision_chain.ts';
+import { runRemeshGateCopyChecks, runRetuneGateCopyChecks, runRevisionChainChecks } from './tools/check_revision_chain.ts';
 import { runConfigWriteChecks } from './tools/check_configwrite.ts';
 import { runCorePointerChecks } from './tools/check_corepointer.ts';
 import { runLayerBoundsChecks } from './tools/check_layer_bounds.ts';
@@ -47952,6 +47952,9 @@ function runRemeshSuite(): number {
       `${got33.map((l) => l.slice(0, 260)).join(' | ') || 'written'}; ${existsSync(out33) ? 'WRITTEN' : 'nothing written'}`,
       'issue #617 (review P2): a record pairs its rows with the check measured from them only when the input is the same before and after the check read it; otherwise a later reuse would skip a check on bytes the check never saw',
     );
+    runRemeshGateCopyChecks(join(root, 'gate-1256'), (name, ok, detail) =>
+      say(name, ok, detail, 'issue #1256: gateThroughRigc receives only rig.json, motion.json and images/; nested files in --rig are preserved byte-for-byte without ENOENT'),
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -48412,6 +48415,9 @@ function runRetuneSuite(): number {
       got13.length === 1 && got13[0].startsWith(want13) && !existsSync(out13) && treeDigest(input) === inputDigest,
       `${got13.map((l) => l.slice(0, 260)).join(' | ') || 'written'}; ${existsSync(out13) ? 'WRITTEN' : 'nothing written'}`,
       'issue #617 (review P2): retune brackets the check with the same two snapshots',
+    );
+    runRetuneGateCopyChecks(join(root, 'gate-1256'), (name, ok, detail) =>
+      say(name, ok, detail, 'issue #1256: retune shares textsOf/pngsOf with remesh; nested files in --rig are preserved byte-for-byte without ENOENT'),
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

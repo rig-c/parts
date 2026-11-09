@@ -5779,7 +5779,7 @@ and hold rules are unchanged; a first revision has no parent rows.
 A remesh changes one part's mesh and nothing else: every file of the input but
 `rig.json` and `mesh_report.json` is copied as bytes, `rig.json` keeps every byte
 outside the part's attachment, and the parts the config does not reproduce — repairs
-accepted after the config was written — are carried over as they are. `remesh.json`
+accepted after the config was written — are carried over as they are. The gate's `rigc build` reads only `rig.json`, `motion.json` and `images/` from `--rig` (as `retune`'s gate does from its revision), while every other file in the tree, nested files included, is preserved in `--out` as raw bytes without being staged into the gate. `remesh.json`
 names the input's SHA-256 per file, the request, both versions, the part's counts
 before and after and both checks, and quotes `check`'s own physics line as the scope
 of the revision's check. Each check side carries what the hold reads (`pass`,

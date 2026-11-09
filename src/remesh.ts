@@ -134,6 +134,8 @@ export interface RemeshPlant {
   unexpandedStops?: boolean;
   /** Issue #617's mutant: run just before check-input reads the input, after the first snapshot, to change a file under it. */
   beforeInputCheck?: () => void;
+  /** Issue #1256's mutant: hand every non-`images/` entry of the tree to `gateThroughRigc` as text, as before. */
+  unfilteredGateTexts?: boolean;
 }
 
 /** The versions the provenance names: this package's and the rigc that gated the revision (its `--version` line). */
@@ -866,10 +868,13 @@ export function inputTreeProblems(tree: FileTree, root: string, op: 'remesh' | '
   return out;
 }
 
+/** The two text files `gateThroughRigc`'s `rigc build` reads (`src/build.ts`), in `readTree` sort order. */
+export const GATE_TEXT_FILES = ['motion.json', 'rig.json'] as const;
 /** A tree's images as the gate takes them (name under `images/`, bytes). */
-const pngsOf = (tree: FileTree): Array<readonly [string, Uint8Array]> => [...tree].filter(([k]) => k.startsWith('images/')).map(([k, b]) => [k.slice('images/'.length), b] as const);
-/** A tree's other files as text. */
-const textsOf = (tree: FileTree): Array<readonly [string, string]> => [...tree].filter(([k]) => !k.startsWith('images/')).map(([k, b]) => [k, text(b)] as const);
+export const pngsOf = (tree: FileTree): Array<readonly [string, Uint8Array]> => [...tree].filter(([k]) => k.startsWith('images/')).map(([k, b]) => [k.slice('images/'.length), b] as const);
+/** A tree's text inputs for the gate (`rig.json` and `motion.json`; `unfiltered` is the pre-#1256 plant). */
+export const textsOf = (tree: FileTree, unfiltered = false): Array<readonly [string, string]> =>
+  [...tree].filter(([k]) => (unfiltered ? !k.startsWith('images/') : (GATE_TEXT_FILES as readonly string[]).includes(k))).map(([k, b]) => [k, text(b)] as const);
 
 /**
  * The delta's `mesh_report.json` row (issue #526): the input's row, key for key, with `vertices`, `triangles`, `hull`,
@@ -973,7 +978,7 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
     refuseIfAny(deltaSourceProblems(doc, part, inAtt, deltaPath));
     log(`rig-parts remesh: ${part} of ${input.rig}, ${tree.size} file(s); the request is a mesh edit of ${doc.ops.length} op(s), the baseline is the input itself`);
     let model = null as string | null;
-    const inGate = gateThroughRigc(pngsOf(tree), textsOf(tree), rigc, join(scratch, 'gate-input'), { pageEdges, packShape }, (dir) => {
+    const inGate = gateThroughRigc(pngsOf(tree), textsOf(tree, plant.unfilteredGateTexts === true), rigc, join(scratch, 'gate-input'), { pageEdges, packShape }, (dir) => {
       const p = join(dir, RIGC_MODEL_DOCUMENT);
       model = existsSync(p) ? readFileSync(p, 'utf8') : null;
     });
@@ -1010,7 +1015,7 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
   log(`  ${part}: v=${before.vertices} t=${before.triangles} hull=${before.hull} -> v=${after.vertices} t=${after.triangles} hull=${after.hull}`);
   log(`  preserved: ${identical.filter((p) => p !== PROVENANCE_FILE && !(input.recordInputCheck === true && p === INPUT_CHECK_FILE)).length} file(s) byte-identical to the input; rig.json identical outside skins.default.${part}.${part}; mesh_report.json identical but the "${part}" row`);
   // 7. The gate and check.
-  const gate = gateThroughRigc(pngsOf(revision), textsOf(revision), rigc, join(scratch, 'gate'), { pageEdges, packShape });
+  const gate = gateThroughRigc(pngsOf(revision), textsOf(revision, plant.unfilteredGateTexts === true), rigc, join(scratch, 'gate'), { pageEdges, packShape });
   for (const g of gate) {
     log(`  rigc ${g.label}, the revision: exit ${g.status}`);
     for (const l of g.lines) log(`    ${l.trim()}`);
