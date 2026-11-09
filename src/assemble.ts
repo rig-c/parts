@@ -3776,6 +3776,35 @@ export function underBox(polygon: ReadonlyArray<readonly [number, number]>): { x
 }
 
 /**
+ * Issue #1230: the fill mask on the painting's grid (`sourceW x sourceH`) for a
+ * cut piece `piece` (in rig space, `polygon ∩ from alpha > 0`, including the
+ * overlap band): opaque white `[255, 255, 255, 255]` where a painting pixel
+ * whose sampled rig pixel has `alpha > 0` (identity at `rig_scale: 1`), and
+ * transparent `[0, 0, 0, 0]` everywhere else.
+ */
+export function cutFillMask(piece: Raster, sourceW: number, sourceH: number): Raster {
+  const { width: W, height: H } = piece;
+  // Issue #1230: each painting pixel reads the rig pixel it samples, so the mask covers the
+  // piece's whole footprint on the painting grid at any rig_scale (a forward rig -> painting
+  // mapping leaves gaps whenever the rig is smaller than the painting).
+  const rigX = (sx: number): number => Math.min(W - 1, Math.floor((sx + 0.5) * W / sourceW));
+  const rigY = (sy: number): number => Math.min(H - 1, Math.floor((sy + 0.5) * H / sourceH));
+  const mask = newRaster(sourceW, sourceH);
+  for (let sy = 0; sy < sourceH; sy++) {
+    const ry = rigY(sy);
+    for (let sx = 0; sx < sourceW; sx++) {
+      if (piece.data[(ry * W + rigX(sx)) * 4 + 3] === 0) continue;
+      const q = (sy * sourceW + sx) * 4;
+      mask.data[q] = 255;
+      mask.data[q + 1] = 255;
+      mask.data[q + 2] = 255;
+      mask.data[q + 3] = 255;
+    }
+  }
+  return mask;
+}
+
+/**
  * Fill the base where a cut removed its pixels (issue #193). The removed
  * pixels are those the piece holds (alpha above 0) and the band does not —
  * the pixels the cut cleared in the base. At each, when the under image's
@@ -4805,6 +4834,8 @@ export interface AssembleResult {
   edgeSplits: EdgeSplitReading[];
   /** Issue #1246: `ASSEMBLE_OCCLUDER_UNHELD` WARN lines when `part` is omitted and occluder px are unheld at rest. */
   occluderUnheldWarnings?: string[];
+  /** Issue #1230: each cut's derived fill mask on the painting's grid (`source.width x source.height`), in cut order; present when `cuts` is non-empty. */
+  cutFillMasks?: Array<{ into: string; from: string; mask: Raster }>;
 }
 
 /** Issue #953: the edge pixels `paintingEdges` resolved, the part pixels it changed, and the edge pixels it left, by reason. */
@@ -4859,7 +4890,7 @@ export function hiddenArtByPart(plan: readonly PlanEntry[], cuts: readonly Cut[]
 }
 
 /** `r`'s pixels over the box `[x0, y0, w, h]`, transparent where the box reaches past `r`. */
-function boxOf(r: Raster, x0: number, y0: number, w: number, h: number): Raster {
+export function boxOf(r: Raster, x0: number, y0: number, w: number, h: number): Raster {
   const out = newRaster(w, h);
   for (let y = 0; y < h; y++) {
     const sy = y0 + y;
@@ -5130,11 +5161,12 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   const hiddenUses = new Map<string, string[]>();
   for (const [run, set] of single ? ([['full', full]] as const) : ([['full', full], ['head', head]] as const)) for (const h of set.hidden) hiddenUses.set(`${run}:${h.name}`, []);
   const hiddenProblems: Problem[] = [];
+  const showCutUnder = (u: Cut['under']): string => typeof u === 'object' && u !== null ? `{"plate": ${JSON.stringify(u.plate)}}` : String(u);
   const unders = input.cuts.map((q, i) => {
     const art = hiddenArt.get(q.from);
     if (art === undefined) return input.under?.[i] ?? null;
     if (q.under !== undefined) {
-      hiddenProblems.push({ code: 'ASSEMBLE_HIDDEN_ONE_SOURCE', object: `config.assemble.cuts[${i}].under (part "${q.into}")`, detail: `names ${q.under}, and "${q.from}" also has the hidden-art layer ${art.layer}; one source of what lies under the piece is required — remove under, or the hidden-art layer` });
+      hiddenProblems.push({ code: 'ASSEMBLE_HIDDEN_ONE_SOURCE', object: `config.assemble.cuts[${i}].under (part "${q.into}")`, detail: `names ${showCutUnder(q.under)}, and "${q.from}" also has the hidden-art layer ${art.layer}; one source of what lies under the piece is required — remove under, or the hidden-art layer` });
       return null;
     }
     const box = underBox(q.polygon);
@@ -5398,7 +5430,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     const object = `config.assemble.cuts[${i}].under (part "${q.into}")`;
     const u = unders[i];
     if (u === null) {
-      patchProblems.push({ code: 'ASSEMBLE_UNDER_PRESENT', object, detail: `names ${q.under}, and no image was handed to the stage for it; the decoded PNG is required (a caller of assemble() reads the file)` });
+      patchProblems.push({ code: 'ASSEMBLE_UNDER_PRESENT', object, detail: `names ${showCutUnder(q.under)}, and no image was handed to the stage for it; the decoded PNG is required (a caller of assemble() reads the file)` });
       return;
     }
     const box = underBox(q.polygon);
@@ -5406,7 +5438,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       patchProblems.push({
         code: 'ASSEMBLE_UNDER_SIZE',
         object,
-        detail: `${q.under} is ${u.width}x${u.height}; the polygon's bounding box is ${box.w}x${box.h} at ${box.x0},${box.y0} (least and greatest polygon x and y, in rig pixels), and an image of exactly that size is required — its pixel (i, j) is rig pixel (${box.x0} + i, ${box.y0} + j)`,
+        detail: `${showCutUnder(q.under)} is ${u.width}x${u.height}; the polygon's bounding box is ${box.w}x${box.h} at ${box.x0},${box.y0} (least and greatest polygon x and y, in rig pixels), and an image of exactly that size is required — its pixel (i, j) is rig pixel (${box.x0} + i, ${box.y0} + j)`,
       });
     }
     const at = order0.findIndex((d) => 'cut' in d && d.cut === i);
@@ -5612,7 +5644,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
         empty.push({
           code: 'ASSEMBLE_UNDER_EMPTY',
           object: `config.assemble.cuts[${i}].under (part "${cuts[i].into}")`,
-          detail: `${cuts[i].under} fills 0 of the ${f.empty} pixel(s) the cut removed from "${name}": at every one its alpha is below the alpha removed (an all-transparent image, or another file); an image that fills at least one is required — to leave the whole hole, drop under`,
+          detail: `${showCutUnder(cuts[i].under)} fills 0 of the ${f.empty} pixel(s) the cut removed from "${name}": at every one its alpha is below the alpha removed (an all-transparent image, or another file); an image that fills at least one is required — to leave the whole hole, drop under`,
         });
       }
       return { ...f, opaqueFilled };
@@ -5631,6 +5663,11 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       if (piece !== null) { materialSources.push(materialSource(cuts[i].into, [b.key], polygonMaterialEdges(cuts[i].polygon), [sourceBeforeCuts])); cutMaterial.push(...materialRows(cuts[i].into, undefined, polygonMaterialEdges(cuts[i].polygon), [sourceBeforeCuts], [{ x: 0, y: 0, image: piece.r }])); }
     });
   });
+  const cutFillMasks = cuts.map((q, i) => ({
+    into: q.into,
+    from: q.from,
+    mask: pieces[i] === null ? newRaster(source.width, source.height) : cutFillMask((pieces[i] as Built).r, source.width, source.height),
+  }));
   // Parent partition counts and under use the removed parent art above. Only
   // the emitted piece (and any limb cut from it) reads this independent source.
   cutSources.forEach((source, i) => {
@@ -6467,6 +6504,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     splits: islandKept.splits,
     capSplits: capAssigned.counts,
     edgeSplits,
+    ...(cutFillMasks.length === 0 ? {} : { cutFillMasks }),
   };
 }
 

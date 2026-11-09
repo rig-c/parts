@@ -13,9 +13,18 @@ import { createHash } from 'node:crypto';
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FAKE_FILL } from '../fixtures/fakecomfy.ts';
+import { assembleConfig } from '../fixtures/assemble_fixture.ts';
 import { runOccluderChainChecks } from './check_occluders.ts';
+import { cutFillMask } from '../src/assemble.ts';
+import { assembleStage } from '../src/build.ts';
+import { parseEarlyConfig } from '../src/config.ts';
+import { PartsError } from '../src/errors.ts';
+import { exportLayers } from '../src/layers.ts';
+import { readParts } from '../src/parts.ts';
 import { PLATE_RECEIPT_KEYS, PLATE_RECEIPT_OCCLUDER_KEYS, PLATE_RECEIPT_SPEC, runForeground, sha256, verifyPlateReceipt } from '../src/plate.ts';
 import { decodePngBytes, encodePngBytes } from '../src/raster/png.ts';
+import { newRaster, type Raster } from '../src/raster/types.ts';
+import { readLayerTag } from '../src/tags.ts';
 
 export interface PlateHarnessResult {
   status: number;
@@ -289,6 +298,327 @@ function occluderChecks(dir: string, painting: string, R: Record<string, PlateHa
 
   runOccluderChainChecks(dir, join(dir, 'plate-occ-chain'), (name, pass, detail) => say(name, pass, detail,
     'issue #1230: the occluder plate is a source of hidden surface the painting\'s own decomposition never paints, reached through the existing take route'));
+  cutUnderPlateChecks(dir, say);
+  cutFillMaskScaleChecks(say);
+}
+
+/**
+ * Issue #1230: `assemble --emit-fill-masks <dir>` and `assemble.cuts[i].under: { plate: "<dir>" }`.
+ * - Synthetic 64x64 (`rig_scale: 1`) cut fixture: `skirt` (`from`, `[16, 48) x [12, 52)` = `1,280` opaque px)
+ *   cut by `sash` (`into`, polygon `[[24, 20], [40, 20], [40, 44], [24, 44]]` = `16 x 24 = 384` px, `draw: "front"`,
+ *   `overlap: 2` -> `144` band px, `240` cleared interior px at `[26, 38) x [22, 42)`).
+ */
+function cutUnderPlateChecks(dir: string, say: Say): void {
+  const root = join(dir, 'cut-under-plate');
+  rmSync(root, { recursive: true, force: true });
+  mkdirSync(root, { recursive: true });
+  const cliPath = join(import.meta.dir, '..', 'cli.ts');
+  const fakeComfyPath = join(import.meta.dir, '..', 'fixtures', 'fakecomfy.ts');
+
+  const W = 64, H = 64;
+  const sourceRaster = newRaster(W, H);
+  const layerRaster = newRaster(W, H);
+  const faceLayers = (['face', 'eyewhite-r', 'eyewhite-l'] as const).map((name, k) => {
+    const px = newRaster(W, H);
+    for (let y = 2; y < 10; y++) {
+      for (let x = 2 + k * 10; x < 10 + k * 10; x++) {
+        px.data.set([90, 90, 90, 255], (y * W + x) * 4);
+      }
+    }
+    return { name, tag: readLayerTag(name)!, pixels: px, file: null, left: 0, top: 0, right: W, bottom: H, depth: 0.4 - k * 0.01, drawOrder: k, opaquePx: 64 };
+  });
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const idx = (y * W + x) * 4;
+      const inSkirt = x >= 16 && x < 48 && y >= 12 && y < 52;
+      const inSash = x >= 24 && x < 40 && y >= 20 && y < 44;
+      if (inSash) {
+        sourceRaster.data.set([210, 60, 70, 255], idx);
+        layerRaster.data.set([210, 60, 70, 255], idx);
+      } else if (inSkirt) {
+        sourceRaster.data.set([70, 90, 160, 255], idx);
+        layerRaster.data.set([70, 90, 160, 255], idx);
+      } else {
+        sourceRaster.data.set([245, 245, 245, 255], idx);
+      }
+    }
+  }
+  for (const fl of faceLayers) {
+    for (let i = 0; i < W * H; i++) {
+      if (fl.pixels.data[i * 4 + 3] > 0) sourceRaster.data.set([90, 90, 90, 255], i * 4);
+    }
+  }
+  const sourcePath = join(root, 'source.png');
+  writeFileSync(sourcePath, encodePngBytes(sourceRaster));
+  const fullDir = join(root, 'full');
+  exportLayers({
+    form: 'wrapper',
+    source: 'synthetic-cut',
+    canvas: { w: W, h: H },
+    layers: [...faceLayers, { name: 'bottomwear', tag: readLayerTag('bottomwear')!, pixels: layerRaster, file: null, left: 0, top: 0, right: W, bottom: H, depth: 0.5, drawOrder: 3, opaquePx: 1280 }],
+    hidden: [],
+  }, fullDir);
+
+  const polygon: Array<[number, number]> = [[24, 20], [40, 20], [40, 44], [24, 44]];
+  const makeConfig = (cuts: unknown[], extraAssemble: Record<string, unknown> = {}): Record<string, unknown> => {
+    const cfg = assembleConfig({
+      plan: [['face', 'full', 'face'], ['eye_r', 'full', 'eyewhite-r'], ['eye_l', 'full', 'eyewhite-l'], ['skirt', 'full', 'bottomwear']],
+      extend: [],
+      resolution: W,
+      rigScale: 1,
+    });
+    delete (cfg.seethrough as Record<string, unknown>).head_box;
+    return {
+      ...cfg,
+      assemble: { ...(cfg.assemble as Record<string, unknown>), ...(cuts.length > 0 ? { cuts } : {}), ...extraAssemble },
+      regions: cuts.length > 0 ? { face: 'root', eye_r: 'root', eye_l: 'root', skirt: 'root', sash: 'root' } : { face: 'root', eye_r: 'root', eye_l: 'root', skirt: 'root' },
+      meshes: {},
+    };
+  };
+
+  const beforeCfgPath = join(root, 'config-before.json');
+  writeFileSync(beforeCfgPath, JSON.stringify(makeConfig([{ from: 'skirt', into: 'sash', polygon, draw: 'front', overlap: 2 }]), null, 2));
+  const noCutsCfgPath = join(root, 'config-no-cuts.json');
+  writeFileSync(noCutsCfgPath, JSON.stringify(makeConfig([]), null, 2));
+
+  // PB19: --emit-fill-masks writes <dir>/<into>.png on the painting grid and refuses a config with no cuts (exit 2).
+  const masksDir = join(root, 'masks');
+  const emitRun = spawnSync('bun', [cliPath, 'assemble', '--source', sourcePath, '--full', fullDir, '--config', beforeCfgPath, '--emit-fill-masks', masksDir], { encoding: 'utf8' });
+  const maskFile = join(masksDir, 'sash.png');
+  const maskDecoded = existsSync(maskFile) ? decodePngBytes(readFileSync(maskFile), maskFile) : null;
+  let maskWhitePx = 0, maskZeroPx = 0, maskInsideMatch = true;
+  if (maskDecoded !== null) {
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        const r = maskDecoded.data[i], g = maskDecoded.data[i + 1], b = maskDecoded.data[i + 2], a = maskDecoded.data[i + 3];
+        const want = x >= 24 && x < 40 && y >= 20 && y < 44;
+        if (r === 255 && g === 255 && b === 255 && a === 255) {
+          maskWhitePx++;
+          if (!want) maskInsideMatch = false;
+        } else if (r === 0 && g === 0 && b === 0 && a === 0) {
+          maskZeroPx++;
+          if (want) maskInsideMatch = false;
+        } else {
+          maskInsideMatch = false;
+        }
+      }
+    }
+  }
+  const emptyMasksDir = join(root, 'masks-empty');
+  const emptyEmitRun = spawnSync('bun', [cliPath, 'assemble', '--source', sourcePath, '--full', fullDir, '--config', noCutsCfgPath, '--emit-fill-masks', emptyMasksDir], { encoding: 'utf8' });
+  say(
+    'PB19_EMIT_FILL_MASKS_WRITES_POLYGON_INTERSECT_FROM_ON_THE_PAINTING_GRID_AND_REFUSES_EMPTY_CUTS',
+    emitRun.status === 0 && maskDecoded?.width === W && maskDecoded?.height === H && maskWhitePx === 384 && maskZeroPx === 3712 && maskInsideMatch &&
+      emptyEmitRun.status === 2 && (emptyEmitRun.stdout ?? '').includes('--emit-fill-masks requires at least one entry in config.assemble.cuts') && !existsSync(emptyMasksDir),
+    `emit exit ${emitRun.status}, sash.png ${maskDecoded?.width}x${maskDecoded?.height} white=${maskWhitePx} (want 384, overlap band included) zero=${maskZeroPx} (want 3712) exactBox=${maskInsideMatch}; empty-cuts exit ${emptyEmitRun.status}, out absent=${!existsSync(emptyMasksDir)}`,
+    'issue #1230 bar 1: --emit-fill-masks emits opaque white over (polygon ∩ from alpha > 0), including the overlap band, on the painting grid, and exits 2 when cuts is empty',
+  );
+
+  // Run `comfy plate --mode occluder` against the fake ComfyUI server to produce `<plate>/plate.png` and `<plate>/receipt.json`.
+  const plateDir = join(root, 'plate-sash');
+  const plateRunner = `
+    import { startFakeComfy } from ${JSON.stringify(fakeComfyPath)};
+    const fake = startFakeComfy('ok');
+    try {
+      const env = { ...process.env };
+      delete env.COMFY_HOST;
+      const proc = Bun.spawn([
+        'bun', ${JSON.stringify(cliPath)}, 'comfy', 'plate', '--mode', 'occluder',
+        '--painting', ${JSON.stringify(sourcePath)},
+        '--occluder', ${JSON.stringify(maskFile)},
+        '--out', ${JSON.stringify(plateDir)},
+        '--host', fake.url,
+        '--checkpoint-sha256', ${JSON.stringify('ab'.repeat(32))},
+        '--grow', '1', '--wait', '2',
+      ], { env, stdout: 'pipe', stderr: 'pipe' });
+      const status = await proc.exited;
+      if (status !== 0) {
+        console.error(await new Response(proc.stderr).text() || await new Response(proc.stdout).text());
+        process.exit(status);
+      }
+    } finally {
+      fake.stop();
+    }
+  `;
+  const plateRun = spawnSync('bun', ['-e', plateRunner], { encoding: 'utf8' });
+
+  const runAssemble = (cfgPath: string, outSub: string, srcOverride = sourcePath) => {
+    const outDir = join(root, outSub);
+    const rigDir = join(outDir, 'rig');
+    const res = assembleStage(
+      { source: srcOverride, full: fullDir, head: null, config: cfgPath, seam: 'near-white', project: 'core' },
+      { partsJson: join(rigDir, 'parts.json'), partsDir: join(rigDir, 'parts'), recomposite: join(outDir, 'recomposite.png'), errorMap: join(outDir, 'error.png') },
+      () => {},
+    );
+    return { res, outDir, rigDir, partsJson: join(rigDir, 'parts.json') };
+  };
+
+  // Count transparent pixels inside `skirt`'s pre-cut footprint [16, 48) x [12, 52) when `sash` is drawn over `skirt` with offset `dx`.
+  const countFootprintHoles = (rigDir: string, partsFile: ReturnType<typeof readParts>, dx: number): number => {
+    const canvas = newRaster(W, H);
+    for (const name of ['skirt', 'sash'] as const) {
+      const rec = partsFile.parts.find((p) => p.name === name)!;
+      const img = decodePngBytes(readFileSync(join(rigDir, 'parts', `${name}.png`)), name);
+      const offX = name === 'sash' ? dx : 0;
+      for (let py = 0; py < rec.h; py++) {
+        for (let px = 0; px < rec.w; px++) {
+          const tx = rec.x + px + offX, ty = rec.y + py;
+          if (tx < 0 || tx >= W || ty < 0 || ty >= H) continue;
+          const si = (py * rec.w + px) * 4;
+          const sa = img.data[si + 3];
+          if (sa === 0) continue;
+          const di = (ty * W + tx) * 4;
+          canvas.data.set([img.data[si], img.data[si + 1], img.data[si + 2], sa], di);
+        }
+      }
+    }
+    let holes = 0;
+    for (let y = 12; y < 52; y++) {
+      for (let x = 16; x < 48; x++) {
+        if (canvas.data[(y * W + x) * 4 + 3] === 0) holes++;
+      }
+    }
+    return holes;
+  };
+
+  const afterCfgPath = join(root, 'config-after.json');
+  writeFileSync(
+    afterCfgPath,
+    JSON.stringify(
+      makeConfig(
+        [{ from: 'skirt', into: 'sash', polygon, draw: 'front', overlap: 2, under: { plate: 'plate-sash' } }],
+        { editor_receipts: { receipts: [], required: true, trace_parts: false } },
+      ),
+      null,
+      2,
+    ),
+  );
+  const beforeAsm = runAssemble(beforeCfgPath, 'out-before');
+  const afterAsm = plateRun.status === 0 ? runAssemble(afterCfgPath, 'out-after') : null;
+  const beforeRead = readParts(beforeAsm.partsJson);
+  const afterRead = afterAsm === null ? null : readParts(afterAsm.partsJson);
+  const beforeOwn = beforeRead.cut_ownership?.[0];
+  const afterOwn = afterRead?.cut_ownership?.[0];
+  const up = afterOwn?.under_plate;
+  const restBeforeHoles = countFootprintHoles(beforeAsm.rigDir, beforeRead, 0);
+  const dispBeforeHoles = countFootprintHoles(beforeAsm.rigDir, beforeRead, 16);
+  const restAfterHoles = afterAsm === null || afterRead === null ? -1 : countFootprintHoles(afterAsm.rigDir, afterRead, 0);
+  const dispAfterHoles = afterAsm === null || afterRead === null ? -1 : countFootprintHoles(afterAsm.rigDir, afterRead, 16);
+  const hashFile = (p: string): string => sha256(readFileSync(p));
+  const hashesMatch = up !== undefined &&
+    up.receipt === 'plate-sash/receipt.json' &&
+    up.receipt_sha256 === hashFile(join(plateDir, 'receipt.json')) &&
+    up.occluder_sha256 === hashFile(maskFile) &&
+    up.painting_sha256 === hashFile(sourcePath) &&
+    up.output_sha256 === hashFile(join(plateDir, 'plate.png')) &&
+    up.mask_sha256 === hashFile(join(plateDir, 'mask.png'));
+  say(
+    'PB20_CUT_UNDER_PLATE_FILLS_REMOVED_NON_BAND_PIXELS_CLOSES_DISPLACED_SEAM_AND_RECORDS_UNDER_PLATE',
+    plateRun.status === 0 &&
+      beforeOwn?.moved_in_opaque_px === 384 && beforeOwn?.retained_band_opaque_px === 144 && beforeOwn?.cleared_opaque_px === 240 && beforeOwn?.under_filled_px === 0 && beforeOwn?.net_cleared_opaque_px === 240 && beforeOwn?.under_plate === undefined &&
+      afterOwn?.moved_in_opaque_px === 384 && afterOwn?.retained_band_opaque_px === 144 && afterOwn?.cleared_opaque_px === 240 && afterOwn?.under_filled_px === 240 && afterOwn?.net_cleared_opaque_px === 0 &&
+      restBeforeHoles === 0 && dispBeforeHoles === 240 && restAfterHoles === 0 && dispAfterHoles === 0 && hashesMatch,
+    `plate exit ${plateRun.status}; before filled=${beforeOwn?.under_filled_px} netCleared=${beforeOwn?.net_cleared_opaque_px} holes(rest=${restBeforeHoles}, dx+16=${dispBeforeHoles}); after filled=${afterOwn?.under_filled_px} netCleared=${afterOwn?.net_cleared_opaque_px} holes(rest=${restAfterHoles}, dx+16=${dispAfterHoles}); under_plate hashesMatch=${hashesMatch}`,
+    'issue #1230 bars 1-3: under: { plate } fills all 240 non-band cut pixels, closes the 240-px displaced seam to 0, round-trips cut_ownership[0].under_plate through readParts, and is exempt from editor_receipts.required',
+  );
+
+  // PB21: planted config and receipt/stage faults fail with their exact codes.
+  const catchCode = (fn: () => unknown): string => {
+    try {
+      fn();
+      return 'NO_ERROR';
+    } catch (err) {
+      if (err instanceof PartsError) return err.problems.map((p) => p.code).join(',');
+      throw err;
+    }
+  };
+  const cfgEmptyObj = catchCode(() => parseEarlyConfig(makeConfig([{ from: 'skirt', into: 'sash', polygon, draw: 'front', overlap: 2, under: {} }]) as never, 'assemble'));
+  const cfgEmptyStr = catchCode(() => parseEarlyConfig(makeConfig([{ from: 'skirt', into: 'sash', polygon, draw: 'front', overlap: 2, under: { plate: '' } }]) as never, 'assemble'));
+  const cfgExtraKey = catchCode(() => parseEarlyConfig(makeConfig([{ from: 'skirt', into: 'sash', polygon, draw: 'front', overlap: 2, under: { plate: 'x', extra: 1 } }]) as never, 'assemble'));
+
+  const writePlantCfg = (name: string, cutOverride: Record<string, unknown>, extraAsm: Record<string, unknown> = {}): string => {
+    const p = join(root, `config-${name}.json`);
+    writeFileSync(p, JSON.stringify(makeConfig([{ from: 'skirt', into: 'sash', polygon, draw: 'front', overlap: 2, under: { plate: 'plate-sash' }, ...cutOverride }], extraAsm), null, 2));
+    return p;
+  };
+
+  const missingReceiptCode = catchCode(() => runAssemble(writePlantCfg('missing-receipt', { under: { plate: 'no-such-plate' } }), 'out-missing'));
+
+  const tamperedPlateDir = join(root, 'plate-tampered');
+  cpSync(plateDir, tamperedPlateDir, { recursive: true });
+  const tpBytes = readFileSync(join(tamperedPlateDir, 'plate.png'));
+  tpBytes[tpBytes.length - 16] ^= 0xff;
+  writeFileSync(join(tamperedPlateDir, 'plate.png'), tpBytes);
+  const tamperedPlateCode = catchCode(() => runAssemble(writePlantCfg('tampered-plate', { under: { plate: 'plate-tampered' } }), 'out-tampered'));
+
+  const bgModeDir = join(root, 'plate-bg-mode');
+  cpSync(plateDir, bgModeDir, { recursive: true });
+  const bgRec = JSON.parse(readFileSync(join(bgModeDir, 'receipt.json'), 'utf8')) as Record<string, unknown>;
+  bgRec.mode = 'background';
+  delete bgRec.occluder;
+  writeFileSync(join(bgModeDir, 'receipt.json'), `${JSON.stringify(bgRec, null, 2)}\n`);
+  const bgModeCode = catchCode(() => runAssemble(writePlantCfg('bg-mode', { under: { plate: 'plate-bg-mode' } }), 'out-bg-mode'));
+
+  const otherSourcePath = join(root, 'other-source.png');
+  const otherSourceRaster = newRaster(W, H);
+  otherSourceRaster.data.set(sourceRaster.data);
+  otherSourceRaster.data[0] ^= 1;
+  writeFileSync(otherSourcePath, encodePngBytes(otherSourceRaster));
+  const paintingMismatchCode = catchCode(() => runAssemble(afterCfgPath, 'out-painting-mismatch', otherSourcePath));
+
+  const movedPolygon: Array<[number, number]> = [[25, 20], [41, 20], [41, 44], [25, 44]];
+  const maskMismatchCode = catchCode(() => runAssemble(writePlantCfg('moved-poly', { polygon: movedPolygon }), 'out-mask-mismatch'));
+
+  const stringUnderPng = join(root, 'string-under.png');
+  const stringUnderRaster = newRaster(16, 24);
+  for (let i = 0; i < 16 * 24; i++) stringUnderRaster.data.set([70, 90, 160, 255], i * 4);
+  writeFileSync(stringUnderPng, encodePngBytes(stringUnderRaster));
+  const stringNoReceiptCode = catchCode(() =>
+    runAssemble(
+      writePlantCfg('string-no-receipt', { under: 'string-under.png' }, { editor_receipts: { receipts: [], required: true } }),
+      'out-string-no-receipt',
+    ),
+  );
+
+  const plantsPass =
+    cfgEmptyObj === 'CONFIG_FIELD_PRESENT' &&
+    cfgEmptyStr === 'CONFIG_FIELD_TYPE' &&
+    cfgExtraKey === 'CONFIG_KEY_KNOWN' &&
+    missingReceiptCode === 'CONFIG_FILE_PRESENT' &&
+    tamperedPlateCode === 'PLATE_RECEIPT_HASH' &&
+    bgModeCode === 'PLATE_RECEIPT_KEYS' &&
+    paintingMismatchCode === 'ASSEMBLE_UNDER_PLATE_PAINTING' &&
+    maskMismatchCode === 'ASSEMBLE_UNDER_PLATE_MASK' &&
+    stringNoReceiptCode === 'ASSEMBLE_EDITOR_RECEIPT_MISSING';
+  say(
+    'PB21_CUT_UNDER_PLATE_REFUSES_PLANTED_CONFIG_AND_RECEIPT_FAULTS_BY_CODE',
+    plantsPass,
+    `under:{} -> ${cfgEmptyObj}; under:{plate:""} -> ${cfgEmptyStr}; under:{plate:"x",extra:1} -> ${cfgExtraKey}; missing receipt -> ${missingReceiptCode}; tampered plate.png -> ${tamperedPlateCode}; mode:"background" -> ${bgModeCode}; changed --source -> ${paintingMismatchCode}; polygon+1px -> ${maskMismatchCode}; string under without editor receipt -> ${stringNoReceiptCode}`,
+    'issue #1230 bar 4: every config and receipt/stage plant on cuts[i].under fails with its exact refusal code',
+  );
+}
+
+/** Issue #1230 (Codex review): the fill mask covers a cut piece's whole footprint on the painting grid when the rig is smaller or larger than the painting. */
+function cutFillMaskScaleChecks(say: Say): void {
+  const count = (r: Raster): number => { let n = 0; for (let p = 0; p < r.width * r.height; p++) if (r.data[p * 4 + 3] === 255) n++; return n; };
+  const piece = (side: number, box: readonly [number, number, number, number]): Raster => {
+    const r = newRaster(side, side);
+    for (let y = box[1]; y < box[3]; y++) for (let x = box[0]; x < box[2]; x++) r.data[(y * side + x) * 4 + 3] = 255;
+    return r;
+  };
+  // rig 16x16 with an 8x8 piece at [4,12) -> painting 64x64: footprint [16,48)^2 = 1,024 px (a forward map gives 64).
+  const down = count(cutFillMask(piece(16, [4, 4, 12, 12]), 64, 64));
+  // rig 64x64 with a 32x32 piece at [16,48) -> painting 32x32: footprint [8,24)^2 = 256 px.
+  const up = count(cutFillMask(piece(64, [16, 16, 48, 48]), 32, 32));
+  // rig_scale 1: identity, 384 px.
+  const same = count(cutFillMask(piece(64, [24, 20, 40, 44]), 64, 64));
+  say(
+    'PB22_THE_CUT_FILL_MASK_COVERS_THE_PIECES_WHOLE_FOOTPRINT_ON_THE_PAINTING_GRID_AT_ANY_RIG_SCALE',
+    down === 1024 && up === 256 && same === 384,
+    `rig 16 -> painting 64: ${down} (want 1024); rig 64 -> painting 32: ${up} (want 256); rig = painting: ${same} (want 384)`,
+    'issue #1230: a forward rig -> painting mapping leaves the mask sparse when the rig is smaller than the painting, and comfy plate would keep the piece\'s colour in the gaps',
+  );
 }
 
 export function runPlateChecks(dir: string, painting: string, R: Record<string, PlateHarnessResult>, say: Say): void {

@@ -16,6 +16,7 @@ import { ART_JOINT_LINE, artJointLines } from './artjoints.ts';
 import { applyTakenLayers } from './takelayers.ts';
 import { applyTakenRegions } from './takeregion.ts';
 import { bindOccluderPlates, occluderStageWarnings, readOccluderInputs } from './occluderstage.ts';
+import { PLATE_RECEIPT_FILE, type PlateReceipt, verifyPlateReceipt } from './plate.ts';
 import { ownershipLines, provenanceLines } from './provenance.ts';
 import { readSourceDepth } from './depthsheets.ts';
 import { orderedBaseAnchor } from './baseanchor.ts';
@@ -67,7 +68,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { type AnimFrame, EncodeError, encodeApng, encodeIndexedApng, INDEXED_DEFAULTS } from './apng.ts';
-import { assemble, type AssembleResult, cutLines, edgeSplitLines, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, groundWarning, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine } from './assemble.ts';
+import { assemble, type AssembleResult, boxOf, cutLines, edgeSplitLines, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, groundWarning, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine, underBox } from './assemble.ts';
 import { allocationClause, type Reducer, stageBClause, unboundedClause } from './automesh.ts';
 import { residualClause } from './autoenvelope.ts';
 import { type AutoMotionCase, failingRows, idleSchedule, localRow, motionClause, motionDeformation, motionDocument, motionInput, motionRowText, motionStimulus, motionVerdict, noStimulusProblem, prepareComparison, type ReplayCandidate, runComparison, runPreparedComparison, sourceSelfFailure, stimulusMotion, withStimulus } from './automotion.ts';
@@ -105,7 +106,7 @@ import { CONTROL_SUFFIX, withAnimations } from './motion.ts';
 import type { PaletteError } from './palette.ts';
 import { type LayerSet, readLayers } from './layers.ts';
 import { placeBoneEntriesForSkeleton, poseBoneEntriesForDrawn, REGISTER_OFFSET_BAR, REGISTER_SCALE_BAR, registeredWithinBar, registerSkeleton, SKELETON_LIMB_BONES, skeletonDrawnLength, skeletonLimbJoints } from './limbs.ts';
-import { type AlternatePartsRecord, PAINTING_IN_RIG_FILE, FRONT_SUFFIX, type PartRecord, partImageReference, depthImageReference, readParts, type RecompositeRecord, type SingleRunPad, tagOf, writeParts } from './parts.ts';
+import { type AlternatePartsRecord, PAINTING_IN_RIG_FILE, FRONT_SUFFIX, type OccluderPlateRecord, type PartRecord, partImageReference, depthImageReference, readParts, type RecompositeRecord, type SingleRunPad, tagOf, writeParts } from './parts.ts';
 import { encodePngBytes, readPng, writePng } from './raster/png.ts';
 import type { Raster } from './raster/types.ts';
 import { type Mask, newMask } from './raster/types.ts';
@@ -266,12 +267,72 @@ export function authorPartLines(parts: readonly PartRecord[]): string[] {
  * file that does not decode as a PNG (`ASSEMBLE_UNDER_DECODES`). The stage
  * itself holds the image to the polygon's box and the removed pixels.
  */
-export function readUnders(configPath: string, cuts: readonly Cut[]): Array<Raster | null> {
+export function readUnders(
+  configPath: string,
+  cuts: readonly Cut[],
+  options?: { sourcePath?: string; rigSize?: readonly [number, number]; cutsAt?: string; platesOut?: Array<OccluderPlateRecord | null> },
+): Array<Raster | null> {
   const problems: Problem[] = [];
+  const base = dirname(resolve(configPath));
+  const cutsAt = options?.cutsAt ?? 'config.assemble.cuts';
+  const sourceSha = options?.sourcePath !== undefined && existsSync(options.sourcePath) && statSync(options.sourcePath).isFile()
+    ? createHash('sha256').update(readFileSync(options.sourcePath)).digest('hex')
+    : null;
   const out = cuts.map((q, i): Raster | null => {
+    options?.platesOut?.push(null);
     if (q.under === undefined) return null;
-    const file = resolve(dirname(resolve(configPath)), q.under);
-    const object = `config.assemble.cuts[${i}].under (part "${q.into}")`;
+    const object = `${cutsAt}[${i}].under (part "${q.into}")`;
+    if (typeof q.under === 'object') {
+      const plateRel = q.under.plate;
+      const plateDir = resolve(base, plateRel);
+      const receiptFile = join(plateDir, PLATE_RECEIPT_FILE);
+      if (!existsSync(receiptFile) || !statSync(receiptFile).isFile()) {
+        problems.push({
+          code: 'CONFIG_FILE_PRESENT',
+          object,
+          detail: `names ${plateRel} (${plateDir}), which holds no ${PLATE_RECEIPT_FILE}; a comfy plate --mode occluder output directory relative to the config's directory is required`,
+        });
+        return null;
+      }
+      const receiptProblems = verifyPlateReceipt(receiptFile);
+      if (receiptProblems.length > 0) {
+        problems.push(...receiptProblems);
+        return null;
+      }
+      const receiptBytes = readFileSync(receiptFile);
+      const receipt = JSON.parse(receiptBytes.toString('utf8')) as PlateReceipt;
+      if (receipt.mode !== 'occluder' || receipt.occluder === undefined) {
+        problems.push({
+          code: 'PLATE_RECEIPT_KEYS',
+          object: `${cutsAt}[${i}].under.plate`,
+          detail: `names ${receiptFile} with mode ${JSON.stringify(receipt.mode)}; an occluder plate receipt (mode "occluder") is required for ${object}`,
+        });
+        return null;
+      }
+      if (sourceSha !== null && receipt.painting.sha256 !== sourceSha) {
+        problems.push({
+          code: 'ASSEMBLE_UNDER_PLATE_PAINTING',
+          object,
+          detail: `cut ${i} ("${q.into}") receipt ${receiptFile} records painting.sha256 ${receipt.painting.sha256}, while --source (${options?.sourcePath}) is ${sourceSha}; re-run rig-parts assemble --emit-fill-masks then rig-parts comfy plate --mode occluder`,
+        });
+        return null;
+      }
+      const platePng = readPng(resolve(plateDir, receipt.output.path));
+      const [W, H] = options?.rigSize ?? [platePng.width, platePng.height];
+      const rigPlate = sourceInRig(platePng, W, H);
+      const box = underBox(q.polygon);
+      const record: OccluderPlateRecord = {
+        receipt: `${plateRel.replace(/\\/g, '/').replace(/\/+$/, '')}/${PLATE_RECEIPT_FILE}`,
+        receipt_sha256: createHash('sha256').update(receiptBytes).digest('hex'),
+        occluder_sha256: receipt.occluder.sha256,
+        painting_sha256: receipt.painting.sha256,
+        output_sha256: receipt.output.sha256,
+        mask_sha256: receipt.mask.sha256,
+      };
+      if (options?.platesOut !== undefined) options.platesOut[i] = record;
+      return boxOf(rigPlate, box.x0, box.y0, box.w, box.h);
+    }
+    const file = resolve(base, q.under);
     if (!existsSync(file) || !statSync(file).isFile()) {
       problems.push({ code: 'ASSEMBLE_UNDER_PRESENT', object, detail: `names ${file}, which is no such file; a PNG of what lies under the piece, its path relative to the config's directory, is required` });
       return null;
@@ -284,6 +345,85 @@ export function readUnders(configPath: string, cuts: readonly Cut[]): Array<Rast
     }
   });
   refuseIfAny(problems);
+  return out;
+}
+
+function verifyUnderPlateMasks(
+  result: AssembleResult,
+  cuts: readonly Cut[],
+  plates: ReadonlyArray<OccluderPlateRecord | null>,
+  cutsAt = 'config.assemble.cuts',
+): Problem[] {
+  const problems: Problem[] = [];
+  const masks = result.cutFillMasks ?? [];
+  cuts.forEach((q, i) => {
+    const plate = plates[i] ?? null;
+    if (plate === null) return;
+    const entry = masks[i];
+    const maskBytes = encodePngBytes(entry.mask);
+    const maskSha = createHash('sha256').update(maskBytes).digest('hex');
+    if (plate.occluder_sha256 !== maskSha) {
+      problems.push({
+        code: 'ASSEMBLE_UNDER_PLATE_MASK',
+        object: `${cutsAt}[${i}].under (part "${q.into}")`,
+        detail: `cut ${i} ("${q.into}") receipt ${plate.receipt} records occluder.sha256 ${plate.occluder_sha256}, while the fill mask derived from the current cut is ${maskSha}; re-run rig-parts assemble --emit-fill-masks then rig-parts comfy plate --mode occluder`,
+      });
+      return;
+    }
+    const row = result.parts.cut_ownership?.find((r) => r.into === q.into);
+    if (row !== undefined) row.under_plate = plate;
+  });
+  return problems;
+}
+
+export interface EmitFillMasksInput {
+  source: string;
+  full: string;
+  head: string | null;
+  config: string;
+  outDir: string;
+  seam?: SeamRule;
+  project?: ProjectRule;
+}
+
+export function emitFillMasksStage(input: EmitFillMasksInput, log: Log): Array<{ into: string; path: string; sha256: string; opaquePx: number }> {
+  const cfg = loadEarlyConfig(input.config, 'assemble', input.project);
+  const seam = input.seam ?? cfg.assemble.seam ?? DEFAULT_SEAM_RULE;
+  const project = input.project ?? cfg.assemble.project ?? DEFAULT_PROJECT_RULE;
+  const src = readSource(input.source);
+  const read = readRuns(input.full, input.head);
+  const takenRuns = applyTakenLayers(read, src, cfg, input.config);
+  const receipts = readEditorReceipts(cfg.assemble.editor_receipts, input.config);
+  const runs = applyTakenRegions(takenRuns, src, cfg, input.config, undefined, receipts, input.source);
+  const fields = stageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
+  const strippedCuts = fields.cuts.map((q) => ({ from: q.from, into: q.into, polygon: q.polygon, draw: q.draw, overlap: q.overlap }));
+  const caps = fields.limbs === undefined ? undefined : readCaps(input.config, fields.limbs);
+  const occluders = cfg.assemble.occluders === undefined ? undefined : readOccluderInputs(cfg.assemble.occluders, input.config, src);
+  const result = assemble({
+    source: src,
+    full: runs.full,
+    head: runs.head,
+    depth: cfg.depth,
+    depthBase: dirname(resolve(input.config)),
+    ...fields,
+    cuts: strippedCuts,
+    ...(caps === undefined ? {} : { caps }),
+    ...(occluders === undefined ? {} : { occluders }),
+    seamRule: seam,
+    projectRule: project,
+  });
+  mkdirSync(input.outDir, { recursive: true });
+  const out: Array<{ into: string; path: string; sha256: string; opaquePx: number }> = [];
+  for (const entry of result.cutFillMasks ?? []) {
+    const bytes = encodePngBytes(entry.mask);
+    const sha = createHash('sha256').update(bytes).digest('hex');
+    const file = join(input.outDir, `${entry.into}.png`);
+    writeFileSync(file, bytes);
+    let opaquePx = 0;
+    for (let i = 3; i < entry.mask.data.length; i += 4) if (entry.mask.data[i] > 0) opaquePx++;
+    log(`  fill mask: "${entry.from}" -> "${entry.into}" ${entry.mask.width}x${entry.mask.height}, ${opaquePx} opaque px -> ${file} (sha256 ${sha})`);
+    out.push({ into: entry.into, path: file, sha256: sha, opaquePx });
+  }
   return out;
 }
 
@@ -384,12 +524,15 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     : readRequirements(requirements.read).setup_painting;
   const figureSupport = setupPainting === undefined ? undefined
     : readSetupFigureMask(setupPainting, requirements!.read, src, Math.trunc(src.width * fields.rigScale), Math.trunc(src.height * fields.rigScale));
-  const declaredFigure = figureSupport === undefined ? undefined : { width: Math.trunc(src.width * fields.rigScale), height: Math.trunc(src.height * fields.rigScale), data: figureSupport };
-  const under = readUnders(input.config, fields.cuts);
+  const rigSize: [number, number] = [Math.trunc(src.width * fields.rigScale), Math.trunc(src.height * fields.rigScale)];
+  const declaredFigure = figureSupport === undefined ? undefined : { width: rigSize[0], height: rigSize[1], data: figureSupport };
+  const underPlates: Array<OccluderPlateRecord | null> = [];
+  const under = readUnders(input.config, fields.cuts, { sourcePath: input.source, rigSize, platesOut: underPlates });
   const caps = fields.limbs === undefined ? undefined : readCaps(input.config, fields.limbs);
   const occluders = cfg.assemble.occluders === undefined ? undefined : readOccluderInputs(cfg.assemble.occluders, input.config, src);
   const result = assemble({ allocationEvent: input.allocationEvent === undefined ? undefined : event => input.allocationEvent!(event, null), source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under, ...(declaredFigure === undefined ? {} : { declaredFigure }),
     ...((cfg.assemble.take ?? []).some(t => 'seed' in t) ? { regionTake: { full: takenRuns.full, head: takenRuns.head, targets: (cfg.assemble.take ?? []).flatMap(t => 'seed' in t ? [t.part] : []) } } : {}), ...(caps === undefined ? {} : { caps }), ...(occluders === undefined ? {} : { occluders }), seamRule: seam, projectRule: project });
+  refuseIfAny(verifyUnderPlateMasks(result, fields.cuts, underPlates));
 
   // Issue #1230 / #1237 / #1246: copied occluder colour in a declared occluder's under parts and unheld occluder px are named, never kept silent;
   // when `plate` is declared on an occluder entry, its receipt is verified and bound to occluder, painting and base run.
@@ -622,7 +765,8 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     const altExtend: Extend[] = altRuns.single ? [] : fields.extend.filter((e) => altPlanNames.has(e.part));
     const altPatches: Patch[] = fields.patches.filter((p) => coveredSet.has(p.name)).map((p) => ({ ...p, draw: remapDraw(p.draw) }));
     const altCuts: Cut[] = rawCuts.map((c) => ({ ...c, draw: remapDraw(c.draw) }));
-    const altUnder = alt.cuts !== undefined ? readUnders(input.config, altCuts) : altCuts.map(() => null);
+    const altUnderPlates: Array<OccluderPlateRecord | null> = [];
+    const altUnder = alt.cuts !== undefined ? readUnders(input.config, altCuts, { sourcePath: alt.source, rigSize: result.parts.rig_size, cutsAt: `${alt.at}.cuts`, platesOut: altUnderPlates }) : altCuts.map(() => null);
     const altHeadBox = alt.head_box ?? (altRuns.single ? singleRunHeadBox(altSrc.width, altSrc.height, fields.resolution) : fields.headBox);
     let altBones = fields.bones;
     let altDrawnLength: Record<string, number> | undefined;
@@ -785,6 +929,11 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
         continue;
       }
       throw err;
+    }
+    const altMaskProblems = verifyUnderPlateMasks(altRes, altCuts, altUnderPlates, `${alt.at}.cuts`);
+    if (altMaskProblems.length > 0) {
+      altProblems.push(...altMaskProblems);
+      continue;
     }
     const keptImages = altRes.images
       .filter(({ record }) => coveredSet.has(record.name))

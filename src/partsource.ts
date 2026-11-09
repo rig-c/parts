@@ -62,10 +62,12 @@ export function untracedPartSources(cfg: Pick<AssembleConfig, 'assemble' | 'seet
   };
   const a = cfg.assemble;
   (a.cuts ?? []).forEach((q, i) => {
+    if (typeof q.under === 'object' && q.under !== null) return;
     refuse(`part "${q.into}" (config.assemble.cuts[${i}])`, `its pixels are carved out of part "${q.from}" by a hand-drawn ${q.polygon.length}-point polygon`);
   });
   (a.alternates ?? []).forEach((set, j) => {
     (set.cuts ?? []).forEach((q, i) => {
+      if (typeof q.under === 'object' && q.under !== null) return;
       refuse(`part "${q.into}" (config.assemble.alternates[${j}].cuts[${i}], alternate set "${set.name}")`, `its pixels are carved out of part "${q.from}" by a hand-drawn ${q.polygon.length}-point polygon`);
     });
   });
