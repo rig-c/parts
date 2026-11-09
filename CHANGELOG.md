@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.35.0](https://github.com/rig-c/parts/compare/v2.34.0...v2.35.0) (2026-11-09)
+
+
+### Features
+
+* **assemble:** fill a cut's hidden band from a receipted occluder plate ([#1230](https://github.com/rig-c/parts/issues/1230)) ([#1254](https://github.com/rig-c/parts/issues/1254)) ([766527e](https://github.com/rig-c/parts/commit/766527e9062e9a1f13a2e441b711057934a02420))
+
+
+### Bug Fixes
+
+* **assemble:** --propose-plan accepts occluder-split takes and matches occluders by taken tag ([#1251](https://github.com/rig-c/parts/issues/1251)) ([#1253](https://github.com/rig-c/parts/issues/1253)) ([1ca09c2](https://github.com/rig-c/parts/commit/1ca09c26d112b9f480bcb7482dc3f06c39b55118))
+* **assemble:** occluder part holds what nothing in front holds, sits before over, and takes a declared grow ([#1251](https://github.com/rig-c/parts/issues/1251)) ([#1252](https://github.com/rig-c/parts/issues/1252)) ([240cd5a](https://github.com/rig-c/parts/commit/240cd5ad30d4c5b4e055112f0b78c14861a7ce5b))
+* **remesh:** stage only rig.json, motion.json and images/ into the gate ([#1256](https://github.com/rig-c/parts/issues/1256)) ([#1257](https://github.com/rig-c/parts/issues/1257)) ([c6c482b](https://github.com/rig-c/parts/commit/c6c482ba6bf721842367321abac47f232579182f))
+
 ## [2.34.0](https://github.com/rig-c/parts/compare/v2.33.0...v2.34.0) (2026-11-08)
 
 
