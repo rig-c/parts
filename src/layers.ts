@@ -56,6 +56,8 @@ export const NEAR_WHITE_MIN = 235;
 export interface Layer {
   /** Exact seeded component in the original run canvas; internal, never serialized. */
   regionSelection?: Mask;
+  /** Unmerged base and donor layers for an occluder-split take, placed separately on the rig grid; internal, never serialized. */
+  occluderSplit?: { occluder: number; base: Layer; donor: Layer; merged: Raster };
   /** Verified donor identities retained through generated splits. */
   takenLayers?: TakenLayerSource[];
   /** As the input names it: a v3 tag, possibly with a `-r`/`-l` side, or an author-made layer's `author:<label>`. */

@@ -289,7 +289,17 @@ export function applyTakenLayers(runs: { full: LayerSet; head: LayerSet; single:
         ...(transported === undefined ? {} : { transport: transported.transport }),
         split: { occluder: d.occluder, image: occEntry.image, sha256: occEntry.sha256, covered_px: coveredPx, visible_px: visiblePx },
       };
-      const replacement: Layer = { ...baseLayer, left: 0, top: 0, right: set.canvas.w, bottom: set.canvas.h, pixels: merged, opaquePx, takenLayers: [source] };
+      const replacement: Layer = {
+        ...baseLayer,
+        left: 0,
+        top: 0,
+        right: set.canvas.w,
+        bottom: set.canvas.h,
+        pixels: merged,
+        opaquePx,
+        takenLayers: [source],
+        occluderSplit: { occluder: d.occluder, base: baseLayer, donor: donorOnSet, merged },
+      };
       lists[d.run] = [...lists[d.run].filter(l => l.name !== d.tag), replacement];
       origins.set(replacement, resolve(base, d.run_dir));
       notes.push(takeLayerNote(source));
