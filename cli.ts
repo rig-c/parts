@@ -1911,11 +1911,13 @@ function cmdAssemble(args: string[]): number {
       const target = writePath === undefined ? null : readConfigWriteTarget(writePath);
       const src = readSource(source);
       const cfg = loadEarlyConfig(config, 'layers');
-      if (cfg.assemble.take?.some(item => 'part' in item)) {
-        throw new PartsError([{
-          code: 'ASSEMBLE_REGION_TAKE_PLAN', object: 'config.assemble.take',
-          detail: 'region takes require a declared plan and setup_painting requirements at assemble/build; draft the plan before declaring a region take',
-        }]);
+      const regionTakes = (cfg.assemble.take ?? []).filter((item) => 'seed' in item);
+      if (regionTakes.length > 0) {
+        throw new PartsError(regionTakes.map((item) => ({
+          code: 'ASSEMBLE_REGION_TAKE_PLAN',
+          object: `config.assemble.take part "${item.part}" from "${item.run_dir}"`,
+          detail: `seeded region take (${item.run}, seed [${item.seed.join(', ')}]): region takes require a declared plan and setup_painting requirements at assemble/build; draft the plan before declaring a region take`,
+        })));
       }
       const runs = applyTakenLayers(readRuns(full, head), src, { ...cfg, assemble: { ...cfg.assemble, plan: undefined } }, config);
       const g = proposeFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
