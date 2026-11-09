@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { writeAlternateLayerFixture } from '../fixtures/alternate_layers.ts';
 import { chainConfig, chainPlate, LIMB, SIDE, writeChainInputs, writePlateRun } from '../fixtures/occluder_chain.ts';
 import { writeTakeFixture } from '../fixtures/take_layers.ts';
-import { checkGeometry, layerToRig, layerToRigSplit, occluderCoreMask, placeLayer } from '../src/assemble.ts';
+import { checkGeometry, cleanGhosts, GHOST_MIN_AREA, layerToRig, layerToRigSplit, occluderCoreMask, placeLayer } from '../src/assemble.ts';
 import { assembleStage, readRuns } from '../src/build.ts';
 import { createHash } from 'node:crypto';
 import { crop } from '../src/raster/composite.ts';
@@ -528,5 +528,35 @@ function runOccluderSplitRigGridChecks(dir: string, say: Say): void {
     'OCCLUDER_SPLIT_PIXELS_IDENTITY_GUARD_FALLS_BACK_ON_REPLACED_PIXELS',
     guardedMatchesPlain && witnessShown && plantDropsWitness,
     `guarded matches plain layerToRig=${guardedMatchesPlain}, witness=[${guardedRig.data.subarray(witnessIdx, witnessIdx + 4).join(',')}], unguarded plant witness=[${unguardedRig.data.subarray(witnessIdx, witnessIdx + 4).join(',')}]`,
+  );
+  // Codex review on #1251 item 4: ghost clean-up reads the merged layer. A 20-px donor fragment joined to a 100-px
+  // base component across the occluder edge is one 120-px component when merged (kept), but alone it is under
+  // GHOST_MIN_AREA (40) and a per-side clean-up would drop it.
+  const core = { ...core1, data: new Uint8Array(core1.data.length) };
+  const baseR = newRaster(SIDE, SIDE), donorR = newRaster(SIDE, SIDE), mergedR = newRaster(SIDE, SIDE);
+  for (let y = 20; y < 30; y++) for (let x = 20; x < 30; x++) {
+    core.data[y * SIDE + x] = 1;
+    baseR.data.set([40, 80, 140, 255], (y * SIDE + x) * 4);
+    mergedR.data.set([40, 80, 140, 255], (y * SIDE + x) * 4);
+  }
+  for (let y = 22; y < 27; y++) for (let x = 30; x < 34; x++) {
+    donorR.data.set([200, 60, 30, 255], (y * SIDE + x) * 4);
+    mergedR.data.set([200, 60, 30, 255], (y * SIDE + x) * 4);
+  }
+  const whole = { left: 0, top: 0, right: SIDE, bottom: SIDE };
+  const fragmentSplit = {
+    ...splitLayer,
+    ...whole,
+    pixels: mergedR,
+    regionSelection: undefined,
+    occluderSplit: { occluder: 0, base: { ...splitLayer, ...whole, pixels: baseR, occluderSplit: undefined }, donor: { ...splitLayer, ...whole, pixels: donorR, occluderSplit: undefined }, merged: mergedR },
+  };
+  const fragIdx = (24 * SIDE + 31) * 4;
+  const cleanedSplit = layerToRigSplit(fragmentSplit, SIDE, frame1, 'full', [core], true);
+  const perSidePlant = layerToRig(cleanGhosts(placeLayer(fragmentSplit.occluderSplit.donor, SIDE)).canvas, frame1, 'full');
+  say(
+    'OCCLUDER_SPLIT_GHOST_CLEANUP_READS_THE_MERGED_LAYER',
+    cleanedSplit.data[fragIdx + 3] === 255 && cleanedSplit.data[fragIdx] === 200 && perSidePlant.data[fragIdx + 3] === 0,
+    `donor fragment px (31,24) after the cleaned split: [${cleanedSplit.data.subarray(fragIdx, fragIdx + 4).join(',')}] (kept, 120-px merged component); per-side clean-up plant: alpha ${perSidePlant.data[fragIdx + 3]} (20 px < GHOST_MIN_AREA ${GHOST_MIN_AREA})`,
   );
 }

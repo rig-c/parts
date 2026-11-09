@@ -2008,8 +2008,16 @@ export function layerToRigSplit(
   const split = layer.occluderSplit;
   const mask = split === undefined ? undefined : occluderCoreMasks[split.occluder];
   if (split === undefined || layer.pixels !== split.merged || mask === undefined) return toRig(layer);
-  const baseRig = toRig(split.base);
-  const donorRig = toRig(split.donor);
+  // Ghost clean-up reads the merged layer, as before the split moved to the rig grid: a donor fragment joined to the
+  // base across the occluder edge is one component there. What the merged clean-up drops is dropped from both sides.
+  const kept = cleaned ? cleanGhosts(placeLayer(layer, resolution)).canvas : null;
+  const sideToRig = (l: Layer): Raster => {
+    const placed = placeLayer(l, resolution);
+    if (kept !== null) for (let p = 0; p < resolution * resolution; p++) if (kept.data[p * 4 + 3] === 0) placed.data[p * 4 + 3] = 0;
+    return layerToRig(placed, frame, run);
+  };
+  const baseRig = sideToRig(split.base);
+  const donorRig = sideToRig(split.donor);
   const out = newRaster(frame.W, frame.H);
   for (let p = 0; p < frame.W * frame.H; p++) {
     const src = mask.data[p] === 1 ? baseRig.data : donorRig.data;
