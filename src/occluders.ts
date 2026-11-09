@@ -251,13 +251,45 @@ export function occluderFileProblems(declarations: readonly OccluderDeclaration[
 /**
  * Reorder a draft `assemble.plan` in place so each declared `occluders[i].over`
  * part sits after every `under` part of the same entry across `full` and `head`
- * rows, keeping every other row's relative order unchanged (issue #1247).
+ * rows, keeping every other row's relative order unchanged (issues #1247, #1251).
+ *
+ * A declared `over` or `under` name matches a proposed row whose name (`row[0]`)
+ * equals it, or whose See-through tag (`row[2]`) equals `takenTags[name]` (the
+ * tag of the config's taken layer for that name). Any `over` or `under` name on
+ * an entry with `over` that matches no proposed row is returned as a note for
+ * `proposal.notes`.
  */
 export function orderPlanForOccluders<T extends readonly [string, ...unknown[]]>(
   plan: T[],
   declarations: readonly OccluderDeclaration[] | undefined,
-): void {
-  if (declarations === undefined || declarations.length === 0) return;
+  takenTags?: Readonly<Record<string, string>>,
+): string[] {
+  if (declarations === undefined || declarations.length === 0) return [];
+  const matchesRow = (row: T, name: string): boolean => {
+    if (row[0] === name) return true;
+    const tag = takenTags?.[name];
+    return tag !== undefined && typeof row[2] === 'string' && row[2] === tag;
+  };
+  const matchesSet = (row: T, names: ReadonlySet<string>): boolean => {
+    for (const name of names) {
+      if (matchesRow(row, name)) return true;
+    }
+    return false;
+  };
+  const notes: string[] = [];
+  declarations.forEach((d, i) => {
+    if (d.over === undefined || d.over.length === 0) return;
+    for (const name of d.under) {
+      if (!plan.some((row) => matchesRow(row, name))) {
+        notes.push(`occluders[${i}].under "${name}" matched no proposed row`);
+      }
+    }
+    for (const name of d.over) {
+      if (!plan.some((row) => matchesRow(row, name))) {
+        notes.push(`occluders[${i}].over "${name}" matched no proposed row`);
+      }
+    }
+  });
   for (let pass = 0; pass <= plan.length; pass++) {
     let moved = false;
     for (const d of declarations) {
@@ -265,14 +297,14 @@ export function orderPlanForOccluders<T extends readonly [string, ...unknown[]]>
       const underSet = new Set(d.under);
       let lastUnder = -1;
       for (let i = 0; i < plan.length; i++) {
-        if (underSet.has(plan[i][0])) lastUnder = i;
+        if (matchesSet(plan[i], underSet)) lastUnder = i;
       }
       if (lastUnder < 0) continue;
       const overSet = new Set(d.over);
       const beforeOver: T[] = [];
       const keptBefore: T[] = [];
       for (let i = 0; i < lastUnder; i++) {
-        if (overSet.has(plan[i][0])) beforeOver.push(plan[i]);
+        if (matchesSet(plan[i], overSet)) beforeOver.push(plan[i]);
         else keptBefore.push(plan[i]);
       }
       if (beforeOver.length === 0) continue;
@@ -282,6 +314,7 @@ export function orderPlanForOccluders<T extends readonly [string, ...unknown[]]>
     }
     if (!moved) break;
   }
+  return notes;
 }
 
 export interface OccluderCopy {
