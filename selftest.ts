@@ -42454,8 +42454,8 @@ const PRERELEASE_TAG_CASE = `case "$(node -p "require('./package.json').version"
 
 /**
  * What is wrong with how `release.yml` keeps a prerelease off `latest`, one sentence per fault; empty when there are
- * the canonical publish sets `tag=""`, alias tarball publishes set `tag="--tag latest"`, and each one then runs
- * `PRERELEASE_TAG_CASE` before publishing with `$tag` as its last word and no other `--tag` (rig-hq#22).
+ * two `npm publish` steps or more and each one sets `tag=""`, then runs `PRERELEASE_TAG_CASE`, then publishes with
+ * `$tag` as its last word and no other `--tag`. A stable version then passes no tag, as before the clause existed.
  */
 function prereleaseTagFaults(yml: string): string[] {
   let wf: { jobs?: Record<string, { steps?: AliasStep[] }> };
@@ -42473,13 +42473,10 @@ function prereleaseTagFaults(yml: string): string[] {
       if (at === -1) continue;
       publishes++;
       const name = step.name ?? '(unnamed step)';
-      const aliasPublish = lines[at].startsWith('npm publish "$alias_tgz" ') && ALIASES.some(alias =>
-        lines.some(line => line.startsWith(`alias_tgz="$(bun scripts/alias_tarball.ts pack --name ${alias} `)));
-      const stableTag = aliasPublish ? 'tag="--tag latest"' : 'tag=""';
-      const reset = lines.indexOf(stableTag);
+      const reset = lines.indexOf('tag=""');
       const clause = lines.indexOf(PRERELEASE_TAG_CASE);
       if (clause === -1 || clause > at) faults.push(`release.yml "${name}": no \`${PRERELEASE_TAG_CASE}\` before its \`npm publish\`, so a prerelease would go out on latest`);
-      else if (reset === -1 || reset > clause) faults.push(`release.yml "${name}": \`${stableTag}\` is not set before the clause, so the stable ${aliasPublish ? 'alias' : 'canonical'} tag is incorrect`);
+      else if (reset === -1 || reset > clause) faults.push(`release.yml "${name}": \`tag=""\` is not set before the clause, so a stable version's tag is not empty`);
       const words = lines[at].split(/\s+/);
       if (words[words.length - 1] !== '$tag') faults.push(`release.yml "${name}": \`${lines[at]}\` does not end with $tag, so the clause's tag never reaches npm`);
       if (words.includes('--tag')) faults.push(`release.yml "${name}": \`${lines[at]}\` names a --tag of its own, so the tag does not follow the version`);
@@ -42765,7 +42762,7 @@ function runAliasControls(say: (name: string, ok: boolean, detail: string, why: 
     'the former name stays published as the alias, which is permanent rather than a transition; TY12 admits it introduced as the alias, in the pack and confirmation flags and in the registry confirmation, so an install line or a command naming it still goes red',
   );
 
-  // AL07 — every prerelease takes rc; stable aliases explicitly take latest and the canonical publish stays implicit.
+  // AL07 — a prerelease goes out under the `rc` dist-tag on both publishes, and a stable version under none.
   const tagFaults = prereleaseTagFaults(yml);
   const gatedLine = 'npm publish "$x" --provenance --access public $tag';
   const aliasLine = 'npm publish "$alias_tgz" --provenance --access public $tag';
@@ -42779,11 +42776,6 @@ function runAliasControls(say: (name: string, ok: boolean, detail: string, why: 
     { what: 'the clause matches rc instead of a hyphen', yml: edit(yml, 'in *-*) tag="--tag rc"', 'in *rc*) tag="--tag rc"'), want: 'a prerelease would go out on latest' },
     { what: 'the gated publish always tags rc', yml: yml.includes(`          tag=""\n${clauseLine}`) ? yml.replace(`          tag=""\n${clauseLine}`, '          tag="--tag rc"\n') : null, want: '"Publish to npm": no `case' },
     { what: 'a hard --tag next beside $tag', yml: edit(yml, gatedLine, 'npm publish "$x" --provenance --access public --tag next $tag'), want: 'names a --tag of its own' },
-    { what: 'the canonical reset explicitly tags latest', yml: edit(yml, `          tag=""\n${clauseLine}`, `          tag="--tag latest"\n${clauseLine}`), want: 'stable canonical tag is incorrect' },
-    { what: 'an alias stable reset becomes implicit', yml: edit(yml, '          tag="--tag latest"\n', '          tag=""\n'), want: 'stable alias tag is incorrect' },
-    { what: 'an alias stable reset tags next', yml: edit(yml, '          tag="--tag latest"\n', '          tag="--tag next"\n'), want: 'stable alias tag is incorrect' },
-    { what: 'a hard --tag latest on the canonical publish', yml: edit(yml, gatedLine, 'npm publish "$x" --provenance --access public --tag latest $tag'), want: 'names a --tag of its own' },
-    { what: 'a hard --tag latest beside the alias clause', yml: edit(yml, aliasLine, 'npm publish "$alias_tgz" --provenance --access public --tag latest $tag'), want: 'names a --tag of its own' },
   ];
   const tagCases = tagPlants.map((p) => {
     if (p.yml === null) return { what: p.what, ok: false, said: 'the edit found nothing to change, so this plant was never made' };
@@ -42792,11 +42784,11 @@ function runAliasControls(say: (name: string, ok: boolean, detail: string, why: 
   });
   const releasingSays = doc.includes('prereleases go out under the `rc` dist-tag');
   say(
-    'AL07_ALIASES_TAG_STABLE_LATEST_AND_EVERY_PRERELEASE_RC',
+    'AL07_BOTH_PUBLISHES_TAG_A_HYPHENATED_VERSION_RC_AND_A_STABLE_ONE_NOT_AT_ALL',
     tagFaults.length === 0 && tagCases.every((c) => c.ok) && releasingSays,
-    `${tagFaults.length === 0 ? `the canonical publish sets tag="", alias tarball publishes set tag="--tag latest", and every publish runs \`${PRERELEASE_TAG_CASE}\` before publishing with $tag last` : tagFaults.join('; ')}; RELEASING.md ${releasingSays ? 'says' : 'does NOT say'} prereleases go out under rc` +
+    `${tagFaults.length === 0 ? `every \`npm publish\` in release.yml sets tag="" and runs \`${PRERELEASE_TAG_CASE}\` before publishing with $tag last` : tagFaults.join('; ')}; RELEASING.md ${releasingSays ? 'says' : 'does NOT say'} prereleases go out under rc` +
       ` — planted: ${tagCases.map((c) => `${c.what} -> ${c.ok ? 'named' : 'NOT named'} (${c.said.slice(0, 160)})`).join('; ')}`,
-    'rig-hq#22: every name takes rc exactly when the version holds a hyphen; stable aliases explicitly select latest while the canonical stable publish keeps its implicit tag',
+    'a 0.16.0 user\'s plain install must not receive a release candidate: npm puts an untagged publish on latest (npm 12 refuses a prerelease without --tag; npm 10 publishes it there), so both names take rc exactly when the version holds a hyphen, and a stable cut passes no tag and publishes as it always did',
   );
 }
 
@@ -43042,7 +43034,6 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
   const plans = ['canonical', 'rig_parts', 'spine_parts'];
   const scenarios: Scenario[] = [
     { name: 'matching lightweight push' },
-    { name: 'independent parts version publishes stable aliases explicitly', cutTag: 'v2.37.0', latest: '2.36.0' },
     { name: 'matching behind-main push', mainStatus: 'behind' },
     { name: 'matching annotated push', kind: 'tag' },
     { name: 'prerelease push keeps rc', cutTag: 'v1.2.3-rc.1' },
@@ -43189,14 +43180,6 @@ function runPushProvenanceControls(say: (name: string, ok: boolean, detail: stri
         return tarball === 'primary' ? names[0] : tarball ?? '(folder or unknown publish)';
       });
       if (JSON.stringify(publishedNames) !== JSON.stringify(wantNames)) faults.push(`${scenario.name}: published names ${JSON.stringify(publishedNames)}; required ${JSON.stringify(wantNames)}`);
-      for (const [at, line] of published.entries()) {
-        const canonical = publishedNames[at] === names[0];
-        const tarball = canonical ? 'primary' : publishedNames[at];
-        let tagArguments = canonical ? '' : ' --tag latest';
-        if (effectiveTag.includes('-')) tagArguments = ' --tag rc';
-        const expected = `npm publish mock-${tarball}.tgz --provenance --access public${tagArguments}`;
-        if (line !== expected) faults.push(`${scenario.name}: publish arguments ${JSON.stringify(line)}; required ${JSON.stringify(expected)}`);
-      }
       const packedNames = calls.filter(line => line.startsWith('bun scripts/alias_tarball.ts pack ')).map(line => /--name (\S+)/.exec(line)?.[1]);
       if (JSON.stringify(packedNames) !== JSON.stringify(wantNames.filter(name => name !== names[0]))) faults.push(`${scenario.name}: packed existing or wrong alias ${JSON.stringify(packedNames)}`);
       const canonicalPacks = calls.filter((line) => line === 'npm pack . --pack-destination .');

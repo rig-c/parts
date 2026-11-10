@@ -306,16 +306,15 @@ repair that old tag. Do not move a tag or dispatch `main` to backfill it; an
 older workflow needs a separate authorized recovery route, or the next cut.
 
 **Below latest.** `npm publish` refuses to put `latest` on a version lower than
-the highest nondeprecated stable version published unless a `--tag` is given
-(read in the publish command of npm 12.2.0). The canonical stable publish keeps
-its implicit tag. Stable alias publishes explicitly pass `--tag latest`, and
-prerelease publishes under every name pass `--tag rc` (`rig-hq#22`).
-Independently, the dispatch refuses a tag below the registry's canonical
-`latest` by name, `RELEASE_TAG_BELOW_LATEST`, naming the tag and the `latest`
-served, before anything is checked out or published. Such a version goes out,
-if at all, under a dist-tag, with a `--tag` variant of this dispatch, which is
-a follow-up and not in this workflow. The comparison is semver order computed
-in `node` (a prerelease below its release), not `sort -V`, which sorts
+the highest one published unless a `--tag` is given (read in the publish
+command of npm 12.2.0, the version `npm@latest` installs at this writing), and
+the publish steps pass `--tag` only for a prerelease. So once a later version
+is cut, the dispatch refuses the older tag by name, `RELEASE_TAG_BELOW_LATEST`,
+naming the tag and the `latest` served, before anything is checked out or
+published; it is never attempted silently. Such a version goes out, if at all,
+under a dist-tag, with a `--tag` variant of this dispatch, which is a
+follow-up and not in this workflow. The comparison is semver order computed in
+`node` (a prerelease below its release), not `sort -V`, which sorts
 `1.0.0-rc.1` after `1.0.0`.
 
 ## Whether the tarball runs
