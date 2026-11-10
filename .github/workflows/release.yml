@@ -238,10 +238,12 @@ jobs:
       #
       # 🏷️ A prerelease never lands on `latest`: a version with a hyphen
       # (1.0.0-rc.1) goes out under the `rc` dist-tag, so a plain install keeps
-      # receiving the last stable version; any other version passes no tag and
-      # publishes exactly as before. Promotion to `latest` is the owner's, by
-      # `npm dist-tag add`, never this workflow's. Each alias step reads the
-      # same clause.
+      # receiving the last stable version. Stable canonical publication keeps
+      # its implicit tag. Promotion of a prerelease to `latest` is the owner's,
+      # by `npm dist-tag add`. Each alias reads the same prerelease clause.
+      # Stable aliases explicitly select latest so a
+      # withdrawn higher version does not block the next independent release
+      # line (rig-hq#22).
       - name: Publish to npm
         env:
           PUBLISH_NAME: ${{ needs.target.outputs.canonical }}
@@ -286,7 +288,7 @@ jobs:
             echo "Skipping rig-parts: the resolver snapshot already serves this version"
             exit 0
           fi
-          tag=""
+          tag="--tag latest"
           case "$(node -p "require('./package.json').version")" in *-*) tag="--tag rc";; esac
           alias_tgz="$(bun scripts/alias_tarball.ts pack --name rig-parts --out "$RUNNER_TEMP/alias")"
           npm publish "$alias_tgz" --provenance --access public $tag
@@ -301,7 +303,7 @@ jobs:
             echo "Skipping the alias spine-parts: the resolver snapshot already serves this version"
             exit 0
           fi
-          tag=""
+          tag="--tag latest"
           case "$(node -p "require('./package.json').version")" in *-*) tag="--tag rc";; esac
           alias_tgz="$(bun scripts/alias_tarball.ts pack --name spine-parts --out "$RUNNER_TEMP/alias")"
           npm publish "$alias_tgz" --provenance --access public $tag
