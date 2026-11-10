@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.37.0 (2026-11-10)
+
+### Bug Fixes
+
+* **release:** restore the independent 2.x package version line for `@rig-c/parts` (`rig-hq#22`). The core dependency remains pinned to `@rig-c/core` 3.7.0. This release carries the validated manual version-tag release support recorded under 3.7.0 below.
+
 ## 3.7.0
 
 **Validated manual version-tag releases** (#1263). Cutting a release now pushes a deliberate `vX.Y.Z` tag on a `main` commit whose `package.json` carries `X.Y.Z`, and `.github/workflows/release.yml` validates both `v*` tag pushes and `workflow_dispatch` tag retries at `refs/tags/vX.Y.Z` without requiring a pre-existing GitHub Release. The `target` job enforces tag form and workflow ref (`RELEASE_TAG_FORM`, `RELEASE_DISPATCH_REF`), resolves `refs/tags/vX.Y.Z` through the GitHub commits API to a full 40-character commit SHA (`RELEASE_TAG_UNRESOLVED`), requires `GITHUB_SHA` and checked-out `HEAD` to match that commit (`PROVENANCE_SHA_MISMATCH`), verifies protected `main` reachability (`RELEASE_TAG_NOT_ON_MAIN`) and `package.json` version alignment (`RELEASE_PACKAGE_VERSION`), and checks npm across `@rig-c/parts`, `rig-parts`, and `spine-parts` (`RELEASE_ALREADY_PUBLISHED`, `RELEASE_REGISTRY_QUERY`, `RELEASE_TAG_BELOW_LATEST`). When recovering a partial publish where `@rig-c/parts` is already served, the workflow skips the canonical publish, runs `bun run typecheck && bun run lint && bun run selftest` on the tagged checkout, publishes only the missing alias tarballs, and confirms all three names.
