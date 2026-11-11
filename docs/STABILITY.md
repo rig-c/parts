@@ -600,6 +600,15 @@ older installed package that lacks the module requires that source consumption
 or a release carrying the module. The API does not register a project record.
 
 The writer validates all input seals and destination collisions before staging.
+Run mode comes from the manifest's `ghost_px` census: assemble records every
+full/head layer, including zero ghost counts, and only single-run assembly omits
+the head census. A full census is required. A resolution-square single run has
+no `single_run_pad`; that absence does not imply two runs. A non-square single
+run requires its recorded pad, whose `file_size` and `side` must match the sealed
+source/config. Head-run census still requires a head box, even with an all-full
+plan. Contradictory run, part, plan or padding evidence refuses under
+`PARTS_PAINTING_REFERENCE_FRAME` before writing. The writer derives no missing
+run-mode field from an image guess.
 It publishes complete files with no-replace links, PNG first and sidecar last.
 The sidecar is the declaration commit point. A partial I/O failure can leave a
 complete unreferenced PNG. An exact retry verifies it and finishes the declaration.

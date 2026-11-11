@@ -54,6 +54,7 @@ import { runExtremesChecks } from './tools/check_extremes.ts';
 import { selftestCliArgs } from './fixtures/check_options.ts';
 import { softOcclusionLine } from './src/assemble.ts';
 import { holeBox as pinholeBox944, measurePinholes, PINHOLES_RULE, sourceInRig as sourceInRig944 } from './src/assemble.ts';
+import { singleRunPadRecord } from './src/assemble.ts';
 import { readSource as readSource944 } from './src/build.ts';
 import { pinholesRequired } from './src/requirements.ts';
 import { SETUP_PAINTING_LINE as SETUP_PAINTING_LINE978 } from './src/setuppainting.ts';
@@ -5066,6 +5067,78 @@ console.log(JSON.stringify(receipt));
       parsePaintingReference(JSON.parse(readFileSync(publicReceipt.outputs.declaration.path, 'utf8'))).manifest_sha256 === publicReference.manifest.sha256,
       `normal package import exit ${publicRun.status}; stderr ${publicRun.stderr.trim()}`,
       'an isolated consumer resolves the shipped src subpath and calls the producer writer without a project-record edit');
+    const runReferenceFixture = (name: string, single: boolean, padded: boolean): PaintingReferenceInput => {
+      const input = referenceFixture(name);
+      const height = padded ? 48 : 64;
+      const source = newRaster(64, height);
+      for (let i = 0; i < source.data.length; i += 4) source.data.set([17, 29, 41, 255], i);
+      writeFileSync(input.source.path, encodePngBytes(source));
+      const pad = singleRunPadRecord(single, 64, height, 64, { fullPad: 0, fullPadTop: 8 });
+      writeParts(input.manifest.path, { ...file, rig_size: [32, height / 2],
+        parts: [{ ...file.parts[0], from: 'full:face' }],
+        ghost_px: { 'full:face': 0, 'full:eyewhite-r': 0, 'full:eyewhite-l': 0, ...(single ? {} : { 'head:face': 0 }) },
+        ...(pad === null ? {} : { single_run_pad: pad }) });
+      writeFileSync(input.config.path, JSON.stringify({ key: 'run-mode-fixture',
+        seethrough: { resolution: 64, steps: 1, seed: 0, offload: false },
+        assemble: { rig_scale: 0.5, plan: [['face', 'full', 'face']] } }));
+      for (const seal of Object.values(input)) seal.sha256 = createHash('sha256').update(readFileSync(seal.path)).digest('hex');
+      return input;
+    };
+    const squareSingle = runReferenceFixture('square-single', true, false);
+    const squareBefore = snapshotReference(squareSingle);
+    const squareError = refusals(() => writePaintingReference(squareSingle));
+    const squareSidecar = join(dirname(squareSingle.manifest.path), PAINTING_REFERENCE_FILE);
+    const squareDeclaration = existsSync(squareSidecar) ? parsePaintingReference(JSON.parse(readFileSync(squareSidecar, 'utf8'))) : null;
+    say('PT1286_REFERENCE_SQUARE_SINGLE_RUN_NEEDS_NO_PAD_RECORD_OR_HEAD_BOX',
+      squareError === null && JSON.stringify(squareDeclaration?.rig_size) === '[32,32]' &&
+      readParts(squareSingle.manifest.path).single_run_pad === undefined && snapshotReference(squareSingle) === squareBefore,
+      `resolution-square source, full-only census, omitted pad/head_box -> ${codes(squareError)}`,
+      'singleRunPadRecord intentionally omits the pad on the resolution square; the recorded full-only run census still proves the mode');
+    const twoMissingBox = runReferenceFixture('two-missing-box', false, false);
+    const twoBefore = snapshotReference(twoMissingBox);
+    const twoError = refusals(() => writePaintingReference(twoMissingBox));
+    say('PT1287_REFERENCE_TWO_RUN_CENSUS_STILL_REQUIRES_ITS_HEAD_BOX',
+      twoError?.problems[0]?.code === 'ASSEMBLE_FIELD_PRESENT' && twoError.problems[0].object === 'config.seethrough.head_box' &&
+      !existsSync(join(dirname(twoMissingBox.manifest.path), PAINTING_REFERENCE_FILE)) && snapshotReference(twoMissingBox) === twoBefore,
+      codes(twoError), 'even an all-full plan and all-full emitted parts do not erase the recorded head-run census');
+    const paddedSingle = runReferenceFixture('padded-single', true, true);
+    const paddedBefore = snapshotReference(paddedSingle);
+    const paddedError = refusals(() => writePaintingReference(paddedSingle));
+    const paddedSidecar = join(dirname(paddedSingle.manifest.path), PAINTING_REFERENCE_FILE);
+    const paddedDeclaration = existsSync(paddedSidecar) ? parsePaintingReference(JSON.parse(readFileSync(paddedSidecar, 'utf8'))) : null;
+    say('PT1288_REFERENCE_NON_SQUARE_SINGLE_RUN_PRESERVES_ITS_RECORDED_PADDING',
+      paddedError === null && JSON.stringify(paddedDeclaration?.rig_size) === '[32,24]' &&
+      JSON.stringify(readParts(paddedSingle.manifest.path).single_run_pad) === '{"file_size":[64,48],"side":64,"left":0,"top":8}' &&
+      snapshotReference(paddedSingle) === paddedBefore,
+      codes(paddedError), 'the existing padded single-run frame and all sealed input bytes remain valid');
+    const unboundMode = runReferenceFixture('unbound-mode', true, false);
+    const unboundManifest = readParts(unboundMode.manifest.path);
+    writeParts(unboundMode.manifest.path, { ...unboundManifest, ghost_px: {} });
+    unboundMode.manifest.sha256 = createHash('sha256').update(readFileSync(unboundMode.manifest.path)).digest('hex');
+    const unboundError = refusals(() => writePaintingReference(unboundMode));
+    say('PT1289_REFERENCE_ABSENT_RUN_CENSUS_REFUSES_WITHOUT_GUESSING_A_MODE',
+      unboundError?.problems[0]?.code === 'PARTS_PAINTING_REFERENCE_FRAME' &&
+      !existsSync(join(dirname(unboundMode.manifest.path), PAINTING_REFERENCE_FILE)),
+      codes(unboundError), 'a source frame without recorded run-mode authority does not acquire a guessed default');
+    const conflictMode = runReferenceFixture('conflicting-mode', true, true);
+    const conflictManifest = readParts(conflictMode.manifest.path);
+    writeParts(conflictMode.manifest.path, { ...conflictManifest, ghost_px: { ...conflictManifest.ghost_px, 'head:face': 0 } });
+    conflictMode.manifest.sha256 = createHash('sha256').update(readFileSync(conflictMode.manifest.path)).digest('hex');
+    const conflictError = refusals(() => writePaintingReference(conflictMode));
+    say('PT1290_REFERENCE_HEAD_CENSUS_AND_SINGLE_PAD_CONFLICT_REFUSES',
+      conflictError?.problems[0]?.code === 'PARTS_PAINTING_REFERENCE_FRAME' &&
+      !existsSync(join(dirname(conflictMode.manifest.path), PAINTING_REFERENCE_FILE)),
+      codes(conflictError), 'recorded positive evidence of two different run modes is inconsistent');
+    const mismatchedPad = runReferenceFixture('mismatched-pad', true, true);
+    const mismatchConfig = JSON.parse(readFileSync(mismatchedPad.config.path, 'utf8'));
+    mismatchConfig.seethrough.resolution = 80;
+    writeFileSync(mismatchedPad.config.path, JSON.stringify(mismatchConfig));
+    mismatchedPad.config.sha256 = createHash('sha256').update(readFileSync(mismatchedPad.config.path)).digest('hex');
+    const mismatchError = refusals(() => writePaintingReference(mismatchedPad));
+    say('PT1291_REFERENCE_SINGLE_PAD_SIDE_MUST_MATCH_THE_SEALED_CONFIG',
+      mismatchError?.problems[0]?.code === 'PARTS_PAINTING_REFERENCE_FRAME' &&
+      !existsSync(join(dirname(mismatchedPad.manifest.path), PAINTING_REFERENCE_FILE)),
+      codes(mismatchError), 'equal output rig_size alone cannot replace the recorded source padding contract');
 
     // The legacy omission above remains valid; declared packages bind the file itself.
     const imagePath = join(dir, 'painting_in_rig.png');
