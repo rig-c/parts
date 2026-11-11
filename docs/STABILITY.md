@@ -547,6 +547,82 @@ their existing whole-file parts.json identity contract; regenerate them.
 Check's setup-painting comparison still flattens over its backdrop at source
 resolution before resizing; it can differ for non-opaque paintings.
 
+
+### Painting reference writer
+
+`@rig-c/parts/src/painting-reference.ts` exports
+`writePaintingReference({ manifest, source, config })`. Each input is a
+`{ path, sha256 }` seal with an explicit expected lowercase SHA-256. The manifest
+is the existing `parts.json`. The writer checks the recorded positive safe-integer
+`rig_size` and scale against the sealed source/config through the existing frame
+helpers, then calls `sourceInRig` and the existing PNG codec. It writes no parts,
+meshes, measurements or manifest changes.
+
+The two added files are `painting_in_rig.png` and `painting_in_rig.json` beside
+that manifest. The JSON has exactly these keys in order:
+
+```json
+{
+  "schema": "rig-parts-painting-reference/1",
+  "manifest_sha256": "<sha256 of exact parts.json bytes>",
+  "path": "painting_in_rig.png",
+  "sha256": "<sha256 of exact PNG bytes>",
+  "resample": "lanczos3-rgb-opaque",
+  "rig_size": [1920, 1080]
+}
+```
+
+`rig_size` is the recorded `[W,H]` tuple, with positive safe integers. `path` is a
+literal portable relative path from the sidecar directory, which is the loaded
+manifest directory. `parsePaintingReference(value)` validates the six-key grammar.
+Consumer admission validates manifest SHA, package containment, PNG hash, RGBA8,
+opaque alpha and exact dimensions. The consumer selects an inline
+`parts.json.painting_in_rig` declaration first and uses this adjacent fallback
+only when the inline key is absent. Existing manifest image roles are unchanged.
+
+This is a public Bun/TypeScript API subpath. The package ships `src` and has no
+`exports` map restricting it. A consumer with a package containing this module
+can invoke the normal producer writer directly:
+
+```ts
+import { writePaintingReference } from '@rig-c/parts/src/painting-reference.ts';
+
+const receipt = writePaintingReference({
+  manifest: { path: 'accepted/parts.json', sha256: expectedManifestHash },
+  source: { path: 'inputs/painting.png', sha256: expectedSourceHash },
+  config: { path: 'accepted/config.json', sha256: expectedConfigHash },
+});
+```
+
+Run the consumer with Bun and retain `receipt` outside the inspected package.
+An approved source consumption must resolve this updated source package. An
+older installed package that lacks the module requires that source consumption
+or a release carrying the module. The API does not register a project record.
+
+The writer validates all input seals and destination collisions before staging.
+It publishes complete files with no-replace links, PNG first and sidecar last.
+The sidecar is the declaration commit point. A partial I/O failure can leave a
+complete unreferenced PNG. An exact retry verifies it and finishes the declaration.
+Concurrent exact writers return the same seals. Conflicting destination bytes,
+symlinks and moved inputs refuse. The caller keeps independent input writers
+frozen during the operation. Only this invocation's staging directory is removed.
+
+The returned `rig-parts-painting-reference-write/1` receipt carries the three
+input seals and both output seals. Retain it with the execution/source receipt
+outside the inspected package. It describes this derivation from sealed inputs.
+All original manifest, texture, depth and revision bytes retain their identities.
+The accepted-file inventory gains the two declared additions. No producer
+execution in historical evidence is inferred from a current export.
+
+| Refusal | Meaning and remedy |
+| --- | --- |
+| `PARTS_PAINTING_REFERENCE_INPUT` | A named input is unreadable, unsealed, a symlink or invalid JSON/PNG; restore the explicit frozen regular input. |
+| `PARTS_PAINTING_REFERENCE_HASH` | A named input differs from its expected SHA-256; restore its sealed bytes. |
+| `PARTS_PAINTING_REFERENCE_FRAME` | The manifest frame differs from sealed source/config geometry; supply the original source/config and recorded frame. |
+| `PARTS_PAINTING_REFERENCE_SCHEMA` | The named declaration breaks its six-key grammar; restore the producer sidecar. |
+| `PARTS_PAINTING_REFERENCE_OUTPUT` | A named output conflicts or is unreadable; preserve its bytes and resolve the collision. |
+| `PARTS_PAINTING_REFERENCE_WRITE` | Publication failed; preserve existing files and retry with the same sealed inputs. |
+
 | file | written by | what is stable |
 | --- | --- | --- |
 | `stage-map.json` | `assemble`, `build`, under `assemble.stage_map: true` | `rig-parts-stage-map/1`, cropped last-writer and pre-seam RLE maps with writer dictionaries and excluded counts. See [Per-pixel stage map](AUTHORING.md#per-pixel-stage-map). |

@@ -628,6 +628,7 @@ import { proposeHeadBox } from './src/headbox.ts';
 import { runHeadCropPreflightChecks } from './fixtures/head_crop_preflight_checks.ts';
 import { makeInputs, squarePad } from './src/inputs.ts';
 import { OPAQUE_ALPHA_ABOVE, exportLayers, implausibleRules, type Layer, layerFigures, type LayerSet, layerSetDiff, PLAUSIBLE_AREA_RATIO_MAX, PLAUSIBLE_JUDGED_AREA_RATIO, PLAUSIBLE_TRANSLUCENT_MAX, PLAUSIBLE_BACKGROUND_MAX, PLAUSIBLE_BACKGROUND_TRANSLUCENT_MIN, readLayers, readPsdLayers, readWrapperLayers, ruleSummary, templateLayerNames, templatePsdBytes } from './src/layers.ts';
+import { PAINTING_REFERENCE_FILE, PAINTING_REFERENCE_SCHEMA, parsePaintingReference, writePaintingReference, type PaintingReferenceInput } from './src/painting-reference.ts';
 import { PAINTING_RUN, type PartRecord, type PartsFile, type RecompositeRecord, readFrom as originalReadFrom, readParts, serializeParts, tagOf, writeParts } from './src/parts.ts';
 import {
   alphaComposite,
@@ -4858,6 +4859,213 @@ function runPartsSuite(): number {
       `write, read, write gives ${first === second ? 'identical' : 'DIFFERENT'} files of ${first.length} bytes; ghost_px keys are written sorted`,
       'the record is the measurement; if it cannot be read back byte for byte it cannot be compared between runs',
     );
+
+    // Issue #1270: a source-bound additive declaration keeps the legacy bytes.
+    const referenceFixture = (name: string): PaintingReferenceInput => {
+      const home = join(dir, `reference-${name}`);
+      mkdirSync(join(home, 'parts'), { recursive: true });
+      writeParts(join(home, 'parts.json'), file);
+      writeFileSync(join(home, 'parts', 'face.png'), encodePngBytes(newRaster(12, 10)));
+      const source = newRaster(64, 48);
+      for (let i = 0; i < source.data.length; i += 4) source.data.set([17, 29, 41, 0], i);
+      writeFileSync(join(home, 'source.png'), encodePngBytes(source));
+      writeFileSync(join(home, 'config.json'), JSON.stringify({ ...minimalConfig(),
+        seethrough: { resolution: 64, steps: 1, seed: 0, offload: false, head_box: [16, 0, 48, 32] } }));
+      const seal = (name: string) => ({ path: join(home, name), sha256: createHash('sha256').update(readFileSync(join(home, name))).digest('hex') });
+      return { manifest: seal('parts.json'), source: seal('source.png'), config: seal('config.json') };
+    };
+    const snapshotReference = (input: PaintingReferenceInput): string => {
+      const home = dirname(input.manifest.path);
+      return JSON.stringify([input.manifest.path, input.source.path, input.config.path, join(home, 'parts', 'face.png')]
+        .map(path => [path, createHash('sha256').update(readFileSync(path)).digest('hex')]));
+    };
+    const reference = referenceFixture('positive');
+    const originalReferenceFiles = snapshotReference(reference);
+    const referenceReceipt = writePaintingReference(reference);
+    const referenceAgain = writePaintingReference(reference);
+    const referenceImage = decodePngBytes(readFileSync(referenceReceipt.outputs.image.path), 'reference');
+    const referenceDoc = JSON.parse(readFileSync(referenceReceipt.outputs.declaration.path, 'utf8'));
+    say('PT1270_REFERENCE_WRITER_USES_ORIGINAL_RGB_AND_EXACT_SIX_KEYS',
+      referenceDoc.schema === PAINTING_REFERENCE_SCHEMA &&
+      Object.keys(referenceDoc).join(',') === 'schema,manifest_sha256,path,sha256,resample,rig_size' &&
+      referenceDoc.manifest_sha256 === reference.manifest.sha256 && referenceDoc.path === 'painting_in_rig.png' &&
+      referenceDoc.sha256 === referenceReceipt.outputs.image.sha256 && referenceDoc.resample === 'lanczos3-rgb-opaque' &&
+      JSON.stringify(referenceDoc.rig_size) === '[32,24]' && referenceImage.width === 32 && referenceImage.height === 24 &&
+      referenceImage.data.every((n, i) => n === [17, 29, 41, 255][i % 4]) && snapshotReference(reference) === originalReferenceFiles,
+      '64x48 transparent RGB becomes opaque 32x24 RGB; six keys bind the original manifest; original input/part files keep their hashes',
+      'the declaration-only writer cannot flatten the original RGB over white or regenerate accepted parts');
+    say('PT1271_REFERENCE_EXACT_RETRY_RETURNS_THE_SAME_EXTERNAL_RECEIPT',
+      JSON.stringify(referenceReceipt) === JSON.stringify(referenceAgain) &&
+      JSON.stringify(referenceReceipt.inputs) === JSON.stringify(reference) &&
+      referenceReceipt.outputs.declaration.sha256 === createHash('sha256').update(readFileSync(referenceReceipt.outputs.declaration.path)).digest('hex') &&
+      readdirSync(dirname(reference.manifest.path)).every(name => !name.startsWith('.painting-reference-')),
+      'exact retry returns the same input/output seals and removes its own staging directory',
+      'the execution trace is returned separately from the six-key consumer declaration');
+    for (const [i, field] of (['manifest', 'source', 'config'] as const).entries()) {
+      const input = referenceFixture(`hash-${field}`), before = snapshotReference(input);
+      const badSeal = { ...input, [field]: { ...input[field], sha256: '0'.repeat(64) } };
+      const error = refusals(() => writePaintingReference(badSeal));
+      say(`PT${1272 + i}_REFERENCE_${field.toUpperCase()}_HASH_REFUSES_BEFORE_WRITING`,
+        error?.problems[0]?.code === 'PARTS_PAINTING_REFERENCE_HASH' && snapshotReference(input) === before &&
+        !existsSync(join(dirname(input.manifest.path), PAINTING_REFERENCE_FILE)) &&
+        !existsSync(join(dirname(input.manifest.path), 'painting_in_rig.png')),
+        codes(error), 'each expected input hash is authoritative before the first output');
+    }
+    const missingSeal = referenceFixture('missing-seal');
+    const missingSealError = refusals(() => writePaintingReference({ ...missingSeal, source: { path: missingSeal.source.path, sha256: '' } }));
+    const brokenPng = referenceFixture('broken-png');
+    writeFileSync(brokenPng.source.path, 'not a PNG');
+    brokenPng.source.sha256 = createHash('sha256').update(readFileSync(brokenPng.source.path)).digest('hex');
+    const brokenPngError = refusals(() => writePaintingReference(brokenPng));
+    say('PT1275_REFERENCE_REQUIRES_EXPECTED_SEALS_AND_DECODABLE_SOURCE',
+      missingSealError?.problems[0]?.code === 'PARTS_PAINTING_REFERENCE_INPUT' &&
+      brokenPngError?.problems[0]?.code === 'PARTS_PAINTING_REFERENCE_INPUT' &&
+      [missingSeal, brokenPng].every(input => !existsSync(join(dirname(input.manifest.path), 'painting_in_rig.png'))),
+      `${codes(missingSealError)}; ${codes(brokenPngError)}`, 'an absent expected hash or unusable painting cannot create a declaration');
+    const wrongFrame = referenceFixture('wrong-frame');
+    const wrongFrameManifest = JSON.parse(readFileSync(wrongFrame.manifest.path, 'utf8'));
+    wrongFrameManifest.rig_size[0] = 31;
+    writeFileSync(wrongFrame.manifest.path, JSON.stringify(wrongFrameManifest));
+    wrongFrame.manifest.sha256 = createHash('sha256').update(readFileSync(wrongFrame.manifest.path)).digest('hex');
+    const frameError = refusals(() => writePaintingReference(wrongFrame));
+    const wrongScale = referenceFixture('wrong-scale');
+    const wrongScaleManifest = JSON.parse(readFileSync(wrongScale.manifest.path, 'utf8'));
+    wrongScaleManifest.scale_rig_per_source = 0.6;
+    writeFileSync(wrongScale.manifest.path, JSON.stringify(wrongScaleManifest));
+    wrongScale.manifest.sha256 = createHash('sha256').update(readFileSync(wrongScale.manifest.path)).digest('hex');
+    const scaleError = refusals(() => writePaintingReference(wrongScale));
+    say('PT1276_REFERENCE_RECORDED_FRAME_AND_SCALE_MUST_MATCH_SOURCE_CONFIG',
+      frameError?.problems[0]?.code === 'PARTS_PAINTING_REFERENCE_FRAME' &&
+      scaleError?.problems[0]?.code === 'PARTS_PAINTING_REFERENCE_FRAME' &&
+      [wrongFrame, wrongScale].every(input => !existsSync(join(dirname(input.manifest.path), PAINTING_REFERENCE_FILE))),
+      `${codes(frameError)}; ${codes(scaleError)}`, 'recorded integer dimensions and scale are checked using the producer frame helper');
+    const grammarPlants: unknown[] = [
+      { ...referenceDoc, spec: referenceDoc.schema }, { ...referenceDoc, schema: 'rig-parts-painting-reference/2' },
+      { ...referenceDoc, manifest_sha256: 'A'.repeat(64) }, { ...referenceDoc, sha256: 'no' },
+      { ...referenceDoc, resample: 'nearest' },
+      ...['../painting.png', '/painting.png', 'a/../painting.png', 'a\\painting.png', '%2e.png', 'a?b.png', 'a#b.png']
+        .map(path => ({ ...referenceDoc, path })),
+      ...[[0, 24], [32, -1], [32.5, 24], [32, Number.MAX_SAFE_INTEGER + 1], [32], [32, 24, 1], null]
+        .map(rig_size => ({ ...referenceDoc, rig_size })),
+    ];
+    const grammarErrors = grammarPlants.map(value => refusals(() => parsePaintingReference(value)));
+    say('PT1277_REFERENCE_SCHEMA_REJECTS_EXTRA_KEYS_PATHS_HASHES_AND_UNSAFE_TUPLES',
+      JSON.stringify(parsePaintingReference(referenceDoc)) === JSON.stringify(referenceDoc) &&
+      grammarErrors.every(error => error?.problems[0]?.code === 'PARTS_PAINTING_REFERENCE_SCHEMA'),
+      `${grammarErrors.length} planted schema faults each refuse by code`, 'the public declaration stays closed at its six agreed keys');
+    const absentWidth = new Array<number>(2), absentHeight = new Array<number>(2), absentBoth = new Array<number>(2);
+    absentWidth[1] = 24;
+    absentHeight[0] = 32;
+    const sparseErrors = [absentWidth, absentHeight, absentBoth]
+      .map(rig_size => refusals(() => parsePaintingReference({ ...referenceDoc, rig_size })));
+    say('PT1284_REFERENCE_SCHEMA_REJECTS_EACH_SPARSE_JAVASCRIPT_TUPLE_SLOT',
+      sparseErrors.every(error => error?.problems[0]?.code === 'PARTS_PAINTING_REFERENCE_SCHEMA') &&
+      JSON.stringify(parsePaintingReference(referenceDoc).rig_size) === '[32,24]',
+      sparseErrors.map(codes).join('; '), 'each slot must contain a positive safe integer even for direct JavaScript API calls');
+    for (const [i, name] of ['painting_in_rig.png', PAINTING_REFERENCE_FILE].entries()) {
+      const input = referenceFixture(`collision-${i}`), home = dirname(input.manifest.path);
+      writeFileSync(join(home, name), 'existing owner bytes');
+      const before = snapshotReference(input), error = refusals(() => writePaintingReference(input));
+      say(`PT${1278 + i}_REFERENCE_${i === 0 ? 'PNG' : 'SIDECAR'}_COLLISION_PRESERVES_OLD_BYTES`,
+        error?.problems[0]?.code === 'PARTS_PAINTING_REFERENCE_OUTPUT' && snapshotReference(input) === before &&
+        readFileSync(join(home, name), 'utf8') === 'existing owner bytes' &&
+        !existsSync(join(home, i === 0 ? PAINTING_REFERENCE_FILE : 'painting_in_rig.png')),
+        codes(error), 'a conflicting destination is refused before any counterpart output is written');
+    }
+    const symlinkInput = referenceFixture('symlink-input');
+    const sourceLink = join(dirname(symlinkInput.source.path), 'alias.png');
+    symlinkSync(symlinkInput.source.path, sourceLink);
+    const linkedInputError = refusals(() => writePaintingReference({ ...symlinkInput, source: { ...symlinkInput.source, path: sourceLink } }));
+    const symlinkOutput = referenceFixture('symlink-output');
+    const outputLink = join(dirname(symlinkOutput.manifest.path), 'painting_in_rig.png');
+    symlinkSync(symlinkOutput.source.path, outputLink);
+    const linkedOutputError = refusals(() => writePaintingReference(symlinkOutput));
+    say('PT1280_REFERENCE_SYMLINK_INPUT_AND_OUTPUT_ARE_NAMED_REFUSALS',
+      linkedInputError?.problems[0]?.code === 'PARTS_PAINTING_REFERENCE_INPUT' &&
+      linkedOutputError?.problems[0]?.code === 'PARTS_PAINTING_REFERENCE_OUTPUT' &&
+      !existsSync(join(dirname(symlinkOutput.manifest.path), PAINTING_REFERENCE_FILE)),
+      `${codes(linkedInputError)}; ${codes(linkedOutputError)}`, 'source seals and output publication operate on regular files');
+    const interrupted = referenceFixture('interrupted');
+    const oldLink = fs.linkSync;
+    let interruptedError: PartsError | null;
+    fs.linkSync = (source, target) => {
+      if (basename(String(target)) === PAINTING_REFERENCE_FILE) throw Object.assign(new Error('planted declaration publication failure'), { code: 'EIO' });
+      oldLink(source, target);
+    };
+    try { interruptedError = refusals(() => writePaintingReference(interrupted)); }
+    finally { fs.linkSync = oldLink; }
+    const interruptedHome = dirname(interrupted.manifest.path);
+    const partialPng = existsSync(join(interruptedHome, 'painting_in_rig.png'));
+    const partialSidecarAbsent = !existsSync(join(interruptedHome, PAINTING_REFERENCE_FILE));
+    const recovered = writePaintingReference(interrupted);
+    say('PT1281_REFERENCE_PARTIAL_PUBLICATION_RETRIES_WITH_THE_SAME_COMPLETE_PNG',
+      interruptedError?.problems[0]?.code === 'PARTS_PAINTING_REFERENCE_WRITE' && partialPng && partialSidecarAbsent &&
+      existsSync(recovered.outputs.declaration.path) && readdirSync(interruptedHome).every(name => !name.startsWith('.painting-reference-')),
+      `${codes(interruptedError)}; complete PNG retained, sidecar absent until exact retry`,
+      'a failed declaration installation exposes no successful declaration and recovery never rewrites accepted inputs');
+    const concurrent = referenceFixture('concurrent');
+    const concurrentScript = join(dirname(concurrent.manifest.path), 'concurrent.ts');
+    writeFileSync(concurrentScript, `
+const input = JSON.parse(process.argv[2]);
+const modulePath = process.argv[3];
+const { writePaintingReference } = await import(modulePath);
+if (process.argv[4] === 'child') {
+  writePaintingReference(input);
+} else {
+  const children = input.map(value => Bun.spawn(
+    [process.execPath, process.argv[1], JSON.stringify(value), modulePath, 'child'],
+    { stdout: 'pipe', stderr: 'pipe' },
+  ));
+  const statuses = await Promise.all(children.map(async child => {
+    const code = await child.exited;
+    process.stderr.write(await new Response(child.stderr).text());
+    return code;
+  }));
+  console.log(JSON.stringify(statuses));
+}
+`);
+    const concurrentRun = spawnSync(process.execPath, [concurrentScript, JSON.stringify([concurrent, concurrent]), join(ROOT, 'src', 'painting-reference.ts')], { encoding: 'utf8', timeout: 60000 });
+    const concurrentRead = writePaintingReference(concurrent);
+    say('PT1282_REFERENCE_CONCURRENT_EXACT_WRITERS_KEEP_ONE_VERIFIED_PAIR',
+      concurrentRun.status === 0 && concurrentRun.stdout.trim() === '[0,0]' &&
+      parsePaintingReference(JSON.parse(readFileSync(concurrentRead.outputs.declaration.path, 'utf8'))).sha256 === concurrentRead.outputs.image.sha256,
+      `concurrent child exit ${concurrentRun.status}, statuses ${concurrentRun.stdout.trim()}, stderr ${concurrentRun.stderr.trim()}`,
+      'no-replace publication admits concurrent exact retries without truncating or replacing a destination');
+    const competing = referenceFixture('competing');
+    const competingSource = join(dirname(competing.source.path), 'other-source.png');
+    const differentSource = newRaster(64, 48);
+    for (let i = 0; i < differentSource.data.length; i += 4) differentSource.data.set([71, 83, 97, 255], i);
+    writeFileSync(competingSource, encodePngBytes(differentSource));
+    const competitor: PaintingReferenceInput = { ...competing,
+      source: { path: competingSource, sha256: createHash('sha256').update(readFileSync(competingSource)).digest('hex') } };
+    const competingRun = spawnSync(process.execPath, [concurrentScript, JSON.stringify([competing, competitor]), join(ROOT, 'src', 'painting-reference.ts')], { encoding: 'utf8', timeout: 60000 });
+    const competingStatuses = JSON.parse(competingRun.stdout.trim() || '[]') as number[];
+    const winner = parsePaintingReference(JSON.parse(readFileSync(join(dirname(competing.manifest.path), PAINTING_REFERENCE_FILE), 'utf8')));
+    say('PT1283_REFERENCE_CONCURRENT_CONFLICTING_WRITERS_PRESERVE_THE_WINNING_PAIR',
+      competingRun.status === 0 && competingStatuses.sort().join(',') === '0,1' &&
+      winner.sha256 === createHash('sha256').update(readFileSync(join(dirname(competing.manifest.path), winner.path))).digest('hex'),
+      `statuses ${competingStatuses.join(',')}; sidecar/PNG seals agree`,
+      'a losing writer cannot replace the winning reference image or publish a declaration for different bytes');
+    const publicReference = referenceFixture('public-package-entry');
+    const publicConsumer = join(dirname(publicReference.manifest.path), 'consumer');
+    mkdirSync(join(publicConsumer, 'node_modules', '@rig-c'), { recursive: true });
+    symlinkSync(ROOT, join(publicConsumer, 'node_modules', '@rig-c', 'parts'), 'dir');
+    const publicEntry = join(publicConsumer, 'write-reference.ts');
+    writeFileSync(publicEntry, `
+import { writePaintingReference } from '@rig-c/parts/src/painting-reference.ts';
+const receipt = writePaintingReference(JSON.parse(process.argv[2]));
+console.log(JSON.stringify(receipt));
+`);
+    const publicRun = spawnSync(process.execPath, [publicEntry, JSON.stringify(publicReference)],
+      { cwd: publicConsumer, encoding: 'utf8', timeout: 60000 });
+    const publicReceipt = publicRun.status === 0 ? JSON.parse(publicRun.stdout.trim()) : null;
+    say('PT1285_REFERENCE_WRITER_IS_CALLABLE_THROUGH_THE_PUBLIC_PACKAGE_SUBPATH',
+      publicRun.status === 0 && publicReceipt?.schema === 'rig-parts-painting-reference-write/1' &&
+      publicReceipt.inputs.manifest.sha256 === publicReference.manifest.sha256 &&
+      existsSync(publicReceipt.outputs.declaration.path) &&
+      parsePaintingReference(JSON.parse(readFileSync(publicReceipt.outputs.declaration.path, 'utf8'))).manifest_sha256 === publicReference.manifest.sha256,
+      `normal package import exit ${publicRun.status}; stderr ${publicRun.stderr.trim()}`,
+      'an isolated consumer resolves the shipped src subpath and calls the producer writer without a project-record edit');
 
     // The legacy omission above remains valid; declared packages bind the file itself.
     const imagePath = join(dir, 'painting_in_rig.png');
