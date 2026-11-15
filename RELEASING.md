@@ -20,7 +20,9 @@ Every push of a `v*` tag runs `release.yml`:
   matches the tag without the leading `v`, and queries npm to verify which of
   the three package names still need this version and that the version is not
   below `@rig-c/parts`'s `latest`.
-- **Publication** → the `publish` job checks out the verified commit SHA, gates
+- **Publication** → the `publish` job checks out the verified commit SHA,
+  installs the pinned `npm@12.2.2` (CI's `install-platforms` `release` entry
+  installs the same version), gates
   the tree through the tested-tree verdict and `bun run smoke -- --case clean`,
   and publishes the canonical tarball and both alias tarballs.
   A version with a hyphen (`1.0.0-rc.1`) is a prerelease: prereleases go out under the `rc` dist-tag; promotion to `latest` is the owner's, by `npm dist-tag add`, never automatic (every publish step in `release.yml` reads the version and passes `--tag rc` only then, `AL07`).
@@ -307,7 +309,8 @@ older workflow needs a separate authorized recovery route, or the next cut.
 
 **Below latest.** `npm publish` refuses to put `latest` on a version lower than
 the highest one published unless a `--tag` is given (read in the publish
-command of npm 12.2.0, the version `npm@latest` installs at this writing), and
+command of npm 12.2.0; `release.yml` pins `npm@12.2.2` and CI's
+`install-platforms` `release` entry runs the same version), and
 the publish steps pass `--tag` only for a prerelease. So once a later version
 is cut, the dispatch refuses the older tag by name, `RELEASE_TAG_BELOW_LATEST`,
 naming the tag and the `latest` served, before anything is checked out or
