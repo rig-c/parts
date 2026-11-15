@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.38.0 (2026-11-16)
+
+### Features
+
+* **assemble:** accept whole-file rig-space part replacements through `assemble.edited_parts` (`{dir, receipts: [{part, file, sha256, from_sha256, editor}]}`), verified against the normal assembled part PNG and applied after all automatic raster passes and region-neighbour restoration while emitting the edited PNG bytes verbatim (`#1278`, `#1279`, `c31c709`). `provenance.hand_px` keeps its opaque-pixel partition meaning (`unchanged_layer_px + hand_px + automatic_px = opaque_px`), while `provenance.edited_part` adds four whole-file RGBA change counts (`changed_px`, `changed_counted_px`, `changed_excluded_px`, `removed_opaque_px`), and `assemble`/`build` refuse before output writes under seven codes (`ASSEMBLE_EDITED_PART_UNKNOWN`, `ASSEMBLE_EDITED_PART_FILE`, `ASSEMBLE_EDITED_PART_SHA256`, `ASSEMBLE_EDITED_PART_BASELINE`, `ASSEMBLE_EDITED_PART_SIZE`, `ASSEMBLE_EDITED_PART_DUPLICATE`, `ASSEMBLE_EDITED_PART_DECODES`).
+* **painting-reference:** add `writePaintingReference` and `parsePaintingReference` in `src/painting-reference.ts` to validate sealed `{path, sha256}` `parts.json`, source painting and config inputs against the recorded `ghost_px` run-mode census and `single_run_pad` frame geometry, publish `painting_in_rig.png` and its six-key `painting_in_rig.json` sidecar (`rig-parts-painting-reference/1`) with retry-safe no-replace links, and refuse under six `PARTS_PAINTING_REFERENCE_*` codes (`#1270`, `#1271`, `17f292a`).
+
+### CI
+
+* **release:** pin the `publish` job in `.github/workflows/release.yml` to `npm@12.2.2` and add an `ubuntu-latest` (`npm: release`) `install-platforms` matrix leg in `.github/workflows/ci.yml` that runs `bun run smoke` under `setup-node` with `registry-url` and `npm@12.2.2` (`#1274`, `d4d1a42`).
+
 ## 2.37.0 (2026-11-10)
 
 ### Bug Fixes
