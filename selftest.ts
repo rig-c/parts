@@ -45,7 +45,7 @@ import { prepareSeeThroughInput } from './src/seethrough-transform.ts';
 import { runSeeThroughTransformChecks } from './tools/check_seethrough_transform.ts';
 import { runPlateChecks } from './tools/check_plate.ts';
 import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
-import { runEditedPartChecks } from './tools/check_edited_parts.ts';
+import { runEditedPartChecks, runEditedReferenceCwdChecks } from './tools/check_edited_parts.ts';
 import { runPartSourceChecks } from './tools/check_part_sources.ts';
 import { runReadmePolicyChecks } from './scripts/readme_policy.ts';
 import { beginPhases, finishPhases, measurePhase, phaseRecord, measurementPayloadValid, familyRows, observerPids, observeFamily, unmeasuredFamily, type PhaseRecord, type FamilyPeak } from './scripts/selftest_measure.ts';
@@ -1335,9 +1335,12 @@ export function sampleView(holder: string, variant: ValidationVariant | 'authori
   return dir;
 }
 
-function sampleScratchConfig(file: string): Record<string, unknown> {
+function sampleScratchConfig(file: string, destinationDir = dirname(file)): Record<string, unknown> {
   const raw = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
-  for (const reference of configFileReferences(raw)) reference.set(resolve(dirname(file), reference.value));
+  for (const reference of configFileReferences(raw)) {
+    const target = resolve(dirname(file), reference.value);
+    reference.set(reference.at.startsWith('assemble.edited_parts.receipts[') ? relative(resolve(destinationDir), target).replaceAll('\\', '/') : target);
+  }
   return raw;
 }
 
@@ -1347,7 +1350,7 @@ export function sampleAutoDepthBytes(build: ValidationBuild, holder: string): { 
   const out = join(holder, 'auto-depth-output');
   cpSync(build.out, out, { recursive: true });
   const before = validationDigest(out);
-  const raw = sampleScratchConfig(build.config);
+  const raw = sampleScratchConfig(build.config, holder);
   const mesh = (raw.meshes as Record<string, Record<string, unknown>>).bottomwear;
   delete mesh.grid;
   mesh.auto = withPolicyMotion(syntheticPolicy(4));
@@ -2239,6 +2242,136 @@ function runConfigSuite(): number {
       `isolated table-only plant exit ${probe.status}; ${probe.stdout.trim()}; ${probe.stderr.trim()}`,
       'issue #1134: the public entry follows a new loader declaration; unrelated strings remain excluded, and the working source is never mutated');
   } finally { rmSync(files1134, { recursive: true, force: true }); }
+
+  // Issue #1281: enumeration is observational; edited receipt setters keep the relative-only config contract.
+  const edited1281 = minimalConfig();
+  const assemble1281 = edited1281.assemble as Record<string, unknown>;
+  const plan1281 = assemble1281.plan as Array<[string, string, string]>;
+  const block1281 = { dir: 'edits', receipts: plan1281.slice(0, 2).map(([part], i) => ({
+    part, file: i === 0 ? 'first/deep/one.png' : 'second/two.png', sha256: 'a'.repeat(64), from_sha256: 'b'.repeat(64), editor: 'technical fixture',
+  })) };
+  assemble1281.edited_parts = block1281;
+  const before1281 = JSON.stringify(edited1281);
+  const refs1281 = configFileReferences(edited1281);
+  const expected1281 = block1281.receipts.map((r, i) => ({ at: `assemble.edited_parts.receipts[${i}].file`, value: `edits/${r.file}` }));
+  say('CF1281_TWO_NESTED_RECEIPTS_DECLARE_ONLY_CONFIG_RELATIVE_FILES',
+    refs1281.length === 2 && JSON.stringify(refs1281.map(({ at, value }) => ({ at, value }))) === JSON.stringify(expected1281) &&
+    JSON.stringify(edited1281) === before1281 && refusals(() => parseConfig(edited1281)) === null,
+    JSON.stringify(refs1281.map(({ at, value }) => ({ at, value }))),
+    'issue #1281: both receipt paths include the shared dir; enumeration neither declares the directory nor mutates or validates');
+  const next1281 = ['elsewhere/deep/one.png', 'another/two.png'];
+  refs1281.forEach((ref, i) => ref.set(next1281[i]));
+  say('CF1281_RELATIVE_SETTERS_PRESERVE_SHARED_DIR_AND_ROUNDTRIP', block1281.dir === 'edits' &&
+    JSON.stringify(configFileReferences(edited1281).map(r => r.value)) === JSON.stringify(next1281) &&
+    refusals(() => parseConfig(edited1281)) === null,
+    JSON.stringify(block1281), 'issue #1281: independent target folders remain consistent through every setter in one enumeration');
+  const absolute1281 = ['/absolute/one.png', String.raw`C:\absolute\one.png`, 'C:/absolute/one.png', String.raw`\rooted\one.png`, String.raw`\\server\share\one.png`];
+  const lexical1282: Array<[string, string, string, string]> = [
+    ['edits', 'edits/./one.png', 'one.png', 'edits/one.png'],
+    ['edits/a', 'edits/b/one.png', '../b/one.png', 'edits/b/one.png'],
+    ['edits//nested/./', '.././receipts//unused/../one.png', '../../../receipts/one.png', '../receipts/one.png'],
+    ['.', '../one.png', '../one.png', '../one.png'],
+    ['../edits', '../one.png', '../one.png', '../one.png'],
+    ['../../edits/nested', '../../../one.png', '../../../one.png', '../../../one.png'],
+    ['../edits/..', '../../two.png', '../two.png', '../../two.png'],
+  ];
+  const lexicalResults1282 = lexical1282.map(([dir, target, file, value]) => {
+    const raw = JSON.parse(before1281) as Record<string, unknown>;
+    const b = (raw.assemble as { edited_parts: typeof block1281 }).edited_parts;
+    b.dir = dir;
+    configFileReferences(raw)[0].set(target);
+    return b.dir === dir && b.receipts[0].file === file && b.receipts[1].file === 'second/two.png' &&
+      configFileReferences(raw)[0].value === value && refusals(() => parseConfig(raw)) === null;
+  });
+  say('CF1282_REPRESENTABLE_POSIX_SEGMENTS_NORMALIZE_WITHOUT_CWD', lexicalResults1282.every(Boolean),
+    JSON.stringify({ cases: lexical1282, accepted: lexicalResults1282 }),
+    'issue #1282: dots, repeated separators, shared prefixes and leading-parent bases keep dir and the other receipt; expected segments are explicit');
+  const prefixRaw1282 = JSON.parse(before1281) as Record<string, unknown>;
+  const prefixBlock1282 = (prefixRaw1282.assemble as { edited_parts: typeof block1281 }).edited_parts;
+  prefixBlock1282.dir = '../../edits';
+  const prefixRefs1282 = configFileReferences(prefixRaw1282);
+  const prefixSibling1282 = prefixRefs1282[1].value;
+  prefixRefs1282[0].set('../one.png');
+  say('CF1282_NONEMPTY_COMMON_PREFIX_PRESERVES_SIBLING_TARGET', prefixBlock1282.dir === '..' &&
+    configFileReferences(prefixRaw1282)[0].value === '../one.png' && configFileReferences(prefixRaw1282)[1].value === prefixSibling1282 &&
+    refusals(() => parseConfig(prefixRaw1282)) === null, JSON.stringify(prefixBlock1282),
+    'issue #1282: rebasing to a nonempty parent prefix preserves the other config-relative target');
+  const invalidSiblings1282: unknown[] = [null, 7, '', ' ', ...absolute1281];
+  const invalidSiblingResults1282 = invalidSiblings1282.map(file => {
+    const raw = JSON.parse(before1281) as Record<string, unknown>;
+    const b = (raw.assemble as { edited_parts: typeof block1281 }).edited_parts;
+    b.dir = '../edits';
+    const sibling = b.receipts[1] as unknown as Record<string, unknown>;
+    sibling.file = file;
+    const before = JSON.stringify(sibling);
+    const field = 'config.assemble.edited_parts.receipts[1].file';
+    const problems = () => refusals(() => parseConfig(raw))?.problems.filter(p => p.object === field);
+    const refusedBefore = problems();
+    configFileReferences(raw)[0].set('foo.png');
+    return b.dir === '.' && before === JSON.stringify(sibling) && (refusedBefore?.length ?? 0) > 0 &&
+      JSON.stringify(problems()) === JSON.stringify(refusedBefore);
+  });
+  say('CF1282_REBASE_PRESERVES_INVALID_SIBLING_BYTES_AND_REFUSALS', invalidSiblingResults1282.every(Boolean),
+    JSON.stringify({ files: invalidSiblings1282, preserved: invalidSiblingResults1282 }),
+    'issue #1282: a sibling rebase never repairs absolute, blank, empty or non-string fields');
+  const invalidDirs1282 = ['', ' ', ...absolute1281];
+  const invalidDirResults1282 = invalidDirs1282.map(dir => {
+    const raw = JSON.parse(before1281) as Record<string, unknown>;
+    const b = (raw.assemble as { edited_parts: typeof block1281 }).edited_parts;
+    const refs = configFileReferences(raw);
+    b.dir = dir; // Read live even when the object changes after enumeration.
+    const before = JSON.stringify(b.receipts[1]);
+    const field = 'config.assemble.edited_parts.dir';
+    const problems = () => refusals(() => parseConfig(raw))?.problems.filter(p => p.object === field);
+    const refusedBefore = problems();
+    refs[0].set('foo.png');
+    return b.dir === dir && before === JSON.stringify(b.receipts[1]) && (refusedBefore?.length ?? 0) > 0 &&
+      JSON.stringify(problems()) === JSON.stringify(refusedBefore);
+  });
+  say('CF1282_SETTER_PRESERVES_INVALID_LIVE_DIR_AND_REFUSALS', invalidDirResults1282.every(Boolean),
+    JSON.stringify({ dirs: invalidDirs1282, preserved: invalidDirResults1282 }),
+    'issue #1282: a stale enumeration cannot silently repair an absolute, blank or empty directory');
+  const cwdDir1282 = temp('edited-reference-cwd');
+  try { runEditedReferenceCwdChecks(cwdDir1282, (name, pass, detail) => say('CF1282_' + name, pass, detail,
+    'issue #1282: parent count exceeds the setter child cwd depth; the same actual PNG read and byte oracle rejects an isolated old-line plant')); }
+  finally { rmSync(cwdDir1282, { recursive: true, force: true }); }
+  const rejected1281 = absolute1281.map(next => {
+    const raw = JSON.parse(before1281) as Record<string, unknown>;
+    configFileReferences(raw)[0].set(next);
+    const b = (raw.assemble as { edited_parts: typeof block1281 }).edited_parts;
+    const error = refusals(() => parseConfig(raw));
+    return b.dir === 'edits' && b.receipts[0].file === next && b.receipts[1].file === 'second/two.png' &&
+      error?.problems.some(p => p.code === 'CONFIG_FIELD_TYPE' && p.object === 'config.assemble.edited_parts.receipts[0].file') === true;
+  });
+  say('CF1281_ABSOLUTE_SET_TARGETS_KEEP_EXISTING_LOADER_REFUSAL', rejected1281.every(Boolean),
+    JSON.stringify({ targets: absolute1281, rejected: rejected1281 }),
+    'issue #1281: POSIX, drive, root-relative and UNC forms remain invalid absolute files instead of being silently relativized');
+  const helperDir1281 = temp('edited-reference-helper');
+  try {
+    const source = join(helperDir1281, 'source'); mkdirSync(source);
+    const file = join(source, 'config.json'); writeFileSync(file, before1281);
+    const destination = join(helperDir1281, 'destination', 'nested');
+    const relocated = sampleScratchConfig(file, destination);
+    const relocatedRefs = configFileReferences(relocated);
+    say('CF1281_SAMPLE_SCRATCH_HELPER_REBASES_TO_DESTINATION',
+      (relocated.assemble as { edited_parts: typeof block1281 }).edited_parts.dir === 'edits' &&
+      JSON.stringify(relocatedRefs.map(r => resolve(destination, r.value))) === JSON.stringify(expected1281.map(r => resolve(source, r.value))) &&
+      refusals(() => parseConfig(relocated)) === null,
+      JSON.stringify(relocatedRefs.map(({ at, value }) => ({ at, value }))),
+      'issue #1281: the shared sample helper keeps both original edited file targets through a nested config relocation');
+  } finally { rmSync(helperDir1281, { recursive: true, force: true }); }
+  const legacy1281 = { requirements: 'spec.json', motion: { animations_from: 'motion.json' }, generation: { control: { skeleton: 'pose.json' } },
+    assemble: { occluders: [{ image: 'front.png', plate: 'plate' }] } };
+  const legacyRows1281 = [
+    { at: 'requirements', value: 'spec.json' }, { at: 'motion.animations_from', value: 'motion.json' },
+    { at: 'generation.control.skeleton', value: 'pose.json' }, { at: 'assemble.occluders[0].image', value: 'front.png' },
+    { at: 'assemble.occluders[0].plate', value: 'plate' },
+  ];
+  say('CF1281_WITHOUT_BLOCK_REFERENCE_ROWS_AND_ORDER_UNCHANGED',
+    JSON.stringify(configFileReferences(legacy1281).map(({ at, value }) => ({ at, value }))) === JSON.stringify(legacyRows1281) &&
+    configFileReferences(minimalConfig()).length === 0,
+    JSON.stringify(configFileReferences(legacy1281).map(({ at, value }) => ({ at, value }))),
+    'issue #1281: explicit pre-change single fields and occluder rows keep their values and order; the default fixture declares no files');
 
   const checkFilesDir = temp('check-files-1138');
   try { runCheckFileReferenceChecks(checkFilesDir, minimalConfig(), (name, pass, detail) => say(name, pass, detail, 'issue #1138: declared check inputs against real preflight reads')); }
@@ -11584,7 +11717,7 @@ export function runWindRiderCases(say: (name: string, ok: boolean, detail: strin
   const wind = input;
   const inputs = join(input, 'inputs');
   const pdir = cached.out;
-  const raw = sampleScratchConfig(cached.config);
+  const raw = sampleScratchConfig(cached.config, dir);
   (raw.regions as Record<string, unknown>).hairpin = 'hair_fall0';
   const cfg = parseConfig(raw);
   const P = readPartSet(pdir);
@@ -30274,7 +30407,7 @@ function runFacelessExample(key: string, ex: string, out: string, dir: string, s
     "The original sample proposal retains ordered bytes and has no fallback note. A key-order-only defect differs while preserving parsed values.",
   );
 
-  const cfg = sampleScratchConfig(join(ex, 'config.json')) as Record<string, unknown> & {
+  const cfg = sampleScratchConfig(join(ex, 'config.json'), join(dir, `${key}-faceless`)) as Record<string, unknown> & {
     assemble: { plan: Array<[string, string, string]>; extend_below_crop?: Array<{ part: string }> };
     meshes: Record<string, unknown>;
     regions: Record<string, unknown>;
@@ -38216,7 +38349,7 @@ export function runValidationStatsProbe(input: string, out: string, dir: string,
   const started = performance.now();
   const stats = runCli(['mesh-stats', '--config', join(input, 'config.json'), '--parts', out]);
   const ms = performance.now() - started;
-  const raw = sampleScratchConfig(join(input, 'config.json'));
+  const raw = sampleScratchConfig(join(input, 'config.json'), dir);
   const torso = (raw.meshes as Record<string, Record<string, unknown>>).topwear;
   const contour = torso.contour as { spacing: number }; delete torso.contour; torso.grid = contour.spacing / 2;
   const config = join(dir, 'lattice.json'); writeFileSync(config, JSON.stringify(raw));
@@ -51868,7 +52001,7 @@ export function runAutoMeshExamplesSuite(): number | null {
   const dir = temp('auto-demo');
   try {
     const out = cached.out;
-    const raw = sampleScratchConfig(cached.config);
+    const raw = sampleScratchConfig(cached.config, dir);
     const regions = raw.regions as Record<string, unknown>;
     const carrier = regions.neck;
     if (typeof carrier !== 'string') throw new Error('validation neck has no declared region carrier');

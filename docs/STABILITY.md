@@ -137,9 +137,26 @@ Each reference has `at: string` (a dotted config field), `value: string`
 on the supplied object. Enumeration itself does not mutate, validate, read files,
 or resolve paths. Empty and non-string values are omitted; invalid fields remain
 for the loader to diagnose. Built-in control skeleton names are excluded.
-The loader's file-field declarations determine membership; no separate list is
-maintained. Resolve `value` against the source config directory when relocating.
-Existing deep package paths remain available.
+Declared references are `requirements`, `motion.animations_from`, non-built-in
+`generation.control.skeleton`, each `assemble.occluders[i].image` and optional
+`plate`, then each `assemble.edited_parts.receipts[i].file` (issue #1281).
+An edited receipt's `value` is `posix.join(dir, file)`, relative to the config;
+there is no `edited_parts.dir` reference. Its `set(next)` takes a config-relative
+path and derives `file` from normalized POSIX segments without resolving either
+operand against the process cwd. If the target is representable under the current
+`dir`, that directory and every sibling receipt remain byte-for-byte unchanged.
+Otherwise, `dir` becomes its normalized lexical common prefix with the target
+(`.` for an empty prefix), and sibling files are rewritten to preserve their
+original config-relative targets. Setters read the live directory, including
+after another setter from the same enumeration rebases it. Invalid directories
+and invalid sibling fields remain for the existing loader diagnostics.
+Absolute targets, including Windows absolute forms, remain absolute in `file`
+and are refused by the existing `CONFIG_FIELD_TYPE` check at the next load.
+When relocating a config, resolve each source value, then pass its path relative
+to the destination config directory for edited receipts. Other setters retain
+their existing path contract. Enumeration follows the loader and assemble reader
+declarations; it adds no file reads or validation. Existing deep package paths
+remain available.
 
 The same subpath exports `checkFileReferences(raw: unknown, configFile: string,
 requirements?: RequirementsFile): CheckFileReference[]` and the

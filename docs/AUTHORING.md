@@ -8654,25 +8654,43 @@ Internal `SeamSupport.drawings` never enters check JSON. Named requirement
 
 Import `configFileReferences` and, for annotations, `ConfigFileReference` from
 `@rig-c/parts/src/config.ts` (issue #1134). Pass the JSON-parsed config object before
-loading it. Each result exposes `at`, the dotted field path, `value`, the path
-as declared, and `set(next)`, which writes back to that field. Enumeration
+loading it. Each result exposes `at`, the dotted field path, `value`, the file
+path, and `set(next)`, which writes back to that field. Enumeration
 leaves the object unchanged, skips absent, empty and non-string fields, and
 excludes built-in skeleton names. It performs no validation or file reads;
 use the normal loader for diagnostics.
 
 ```ts
 import { configFileReferences } from '@rig-c/parts/src/config.ts';
-import { dirname, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 
 for (const reference of configFileReferences(raw)) {
-  reference.set(resolve(dirname(sourceConfig), reference.value));
+  const target = resolve(dirname(sourceConfig), reference.value);
+  reference.set(relative(dirname(destinationConfig), target).replaceAll('\\', '/'));
 }
 ```
 
-Here `sourceConfig` is the absolute original config filename and `raw` is its
-JSON-parsed object. Serialize that object at the destination after copying any
-referenced files; callers that copy files can instead set their new relative
-paths. The enumerator derives membership from the loader's own declarations.
+Here `sourceConfig` and `destinationConfig` are absolute config filenames and
+`raw` is the source's JSON-parsed object. Serialize it at `destinationConfig`;
+the relative paths keep pointing to the original files. Callers that copy files
+can instead set paths to the copies, relative to the destination config.
+
+The declared fields are `requirements`, `motion.animations_from`, non-built-in
+`generation.control.skeleton`, each `assemble.occluders[i].image` and optional
+`plate`, and `assemble.edited_parts.receipts[i].file`. Each edited receipt's
+value joins its shared `dir` and its `file` with POSIX path semantics; the
+directory itself is not a reference. Its setter uses normalized POSIX segments,
+independent of the cwd, and reads the live `dir` on each call. When the target is
+representable under that directory, `dir` and every sibling receipt remain
+byte-for-byte unchanged. Otherwise it rebases `dir` to the normalized lexical
+common prefix with the target (`.` for an empty prefix), rewriting sibling files
+to preserve their original config-relative targets. This also applies to setters
+from the same enumeration after a rebase; enumerate again to read updated values.
+Invalid directories and invalid sibling fields remain for the loader to diagnose.
+Keep edited targets config-relative: an absolute
+target, including Windows absolute forms, is preserved as an absolute `file`
+and refused by the loader's existing `CONFIG_FIELD_TYPE`. This does not change
+the edited-parts reader or its refusals.
 
 `checkFileReferences(raw, configFile, requirements?)` and `CheckFileReference`
 are exported from the same `@rig-c/parts/src/config.ts` subpath (issue #1138).

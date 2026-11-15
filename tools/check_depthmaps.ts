@@ -1,15 +1,21 @@
 /** Independent analytic controls for #897; no private art or measured expectations. */
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { writeEditorReceiptFixture } from '../fixtures/editor_receipts.ts';
 import { rigParts } from '../fixtures/rig.ts';
 import { PartsError } from '../src/errors.ts';
 import { alphaSupport, floatBox, integrateNormals, mapToSheet, readNumericMap, type NumericMap } from '../src/depthmaps.ts';
 import { applyDepth, parseDepthRecipe, prepareDepth } from '../src/depthworkflow.ts';
-import { readParts, writeParts } from '../src/parts.ts';
-import { readRigInputs } from '../src/build.ts';
-import { readPng, writePng } from '../src/raster/png.ts';
+import { depthImageReference, readParts, writeParts } from '../src/parts.ts';
+import { assembleStage, readRigInputs } from '../src/build.ts';
+import { depthReading } from '../src/depthsheets.ts';
+import { type EditedPartReceipt } from '../src/editedparts.ts';
+import { isSkeletonName, KEYPOINT_NAMES } from '../src/skeleton.ts';
+import { encodePngBytes, readPng, writePng } from '../src/raster/png.ts';
 import { newRaster } from '../src/raster/types.ts';
+import { editedPartPngBytes } from './check_edited_parts.ts';
 type Say = (name: string, ok: boolean, detail: string) => void;
 const json = (p: string, v: unknown): void => writeFileSync(p, JSON.stringify(v) + '\n');
 const codes = (fn: () => unknown): string[] => { try { fn(); return []; } catch (e) { if (!(e instanceof PartsError)) throw e; return e.problems.map(p => `${p.code}: ${p.object}`); } };
@@ -20,6 +26,140 @@ function files(dir: string, prefix = ''): Record<string, string> {
     if (ent.isDirectory()) Object.assign(out, files(path, key + '/')); else out[key] = readFileSync(path).toString('hex');
   }
   return out;
+}
+const sha256 = (bytes: Uint8Array | string): string => createHash('sha256').update(bytes).digest('hex');
+const pretty = (raw: unknown): string => JSON.stringify(raw, null, 2) + '\n';
+type Obj = Record<string, unknown>;
+
+/** The pre-#1283 private list, retained as an independent output oracle and bug plant. */
+function legacyDepthConfig(raw: Obj, rigConfig: string, out: string, pivot: number): Obj {
+  const result = structuredClone(raw);
+  (result.turn as Obj).pivot = pivot;
+  const motion = result.motion as Obj | undefined;
+  if (typeof motion?.animations_from === 'string') motion.animations_from = relative(resolve(out), resolve(dirname(rigConfig), motion.animations_from));
+  const control = (result.generation as Obj | undefined)?.control as Obj | undefined;
+  if (typeof control?.skeleton === 'string' && !isSkeletonName(control.skeleton)) control.skeleton = relative(resolve(out), resolve(dirname(rigConfig), control.skeleton));
+  if (typeof result.requirements === 'string') result.requirements = relative(resolve(out), resolve(dirname(rigConfig), result.requirements));
+  return result;
+}
+
+/** Narrow #1283 proof: real core-gated build, two receipts, and default/legacy output bytes. */
+export function runDepthRelocationChecks(dir: string, say: Say): void {
+  const input = join(dir, 'input'), config = writeEditorReceiptFixture(input, { author: false });
+  config.bones = [...(config.bones as Obj[]), { name: 'head', parent: 'anchor', at: [32, 32] }];
+  config.regions = { ...(config.regions as Obj), face: 'head' };
+  config.turn = { pivot: 30, roles: { face: 'surface' } };
+  // Match the flat-block breath track in fixtures/alternate_cut_layers.ts.
+  config.motion = { duration: 1, tracks: [{ bone: 'anchor', prop: 'translatey', amp: 2, period: 1, phase: 0 }] };
+  // Supply the surface's authored scalar input so the initial full build can run its real gate.
+  const initialDepth = newRaster(48, 24);
+  for (let i = 0; i < 48 * 24; i++) initialDepth.data.set([128, 128, 128, 255], i * 4);
+  const initialDepthPath = resolve(input, 'face-depth.png'); writePng(initialDepthPath, initialDepth);
+  config.depth = { full: { layers: { face: { image: initialDepthPath, near: 'white', zScale: 100 } } } };
+  const configPath = join(input, 'config.json'); json(configPath, config);
+  const assemble = (cfg: string, out: string): void => {
+    assembleStage({ source: join(input, 'painting.png'), full: join(input, 'full'), head: null, config: cfg }, {
+      partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),
+      recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, 'recomposite_error_rig.png'),
+    }, () => {});
+  };
+  const baseline = join(dir, 'baseline'); assemble(configPath, baseline);
+  const baselineParts = readParts(join(baseline, 'parts.json'));
+  const face = baselineParts.parts.find(p => p.name === 'face')!;
+  const art = readPng(join(baseline, 'parts/face.png'));
+  const data = Array.from({ length: face.w * face.h }, (_, i) => i % face.w + 2 * Math.floor(i / face.w));
+  const recipe = parseDepthRecipe({ spec: 'rig-parts-depth/1', prepare: { longSide: 48, paddingFraction: 0, padding: 0 },
+    groups: { head: { near: 'white', zScale: 100, pivot: 31 } },
+    parts: { face: { map: 'map.json', source: 'depth', frame: 'part', group: 'head', median: 50, relief: 10 } }, clear: [] });
+  const recipePath = join(dir, 'depth.json'), mapPath = join(dir, 'map.json'); json(recipePath, recipe);
+  json(mapPath, { spec: 'rig-parts-map/1', width: face.w, height: face.h, channels: 1, data });
+  const prepared = join(dir, 'prepared');
+  const manifest = prepareDepth({ parts: baseline, config: recipePath, out: prepared });
+  const manifestPath = join(prepared, 'manifest.json'), preparedFace = manifest.parts[0];
+  const { sheet, reading } = mapToSheet(data, art, 50, 10, 'white', 100, 'face');
+  const sheetBytes = encodePngBytes(sheet), mapSha256 = sha256(readFileSync(mapPath));
+  const expectedParts = JSON.parse(readFileSync(join(baseline, 'parts.json'), 'utf8')) as { parts: Obj[] };
+  expectedParts.parts.find(p => p.name === 'face')!.depth = { image: 'face_depth.png', near: 'white', zScale: 100,
+    sources: [{ from: face.from, image: 'map.json', sha256: mapSha256, crop: [0, 0, face.w, face.h], reading: depthReading(sheet, art, null) }] };
+  const expectedReport = (cfg: string): unknown => ({ spec: 'rig-parts-depth-report/1', partsSha256: sha256(readFileSync(join(baseline, 'parts.json'))),
+    recipeSha256: sha256(pretty(recipe)), manifestSha256: sha256(readFileSync(manifestPath)), rigConfigSha256: sha256(readFileSync(cfg)),
+    alpha: 128, normalization: 'median, linear p5..p95', extension: 'nearest alpha>=128, row-major ties', cleared: [],
+    parts: [{ part: 'face', group: 'head', source: 'depth', frame: 'part', sourceSha256: preparedFace.sourceSha256,
+      mapSha256, inputSha256: preparedFace.inputSha256, sheetSha256: sha256(sheetBytes), median: 50, relief: 10,
+      near: 'white', zScale: 100, pivot: 31, ...reading, sign: 1 }] });
+  const generation = { checkpoint: 'fixture', loras: [], trigger: '', identity: 'fixture',
+    sampler: { steps: 1, cfg: 1, sampler: 'fixture', scheduler: 'fixture' }, costume: 'fixture', negative_extra: '',
+    style: 'fixture', negative_pose: 'fixture', latent: [64, 64], seed: 0, pose: 'standing',
+    control: { skeleton: 'pose.json', strength: 1, end_percent: 1 } };
+  json(join(input, 'pose.json'), { width: 64, height: 64, points: Object.fromEntries(KEYPOINT_NAMES.map(name => [name, [32, 32]])) });
+  json(join(input, 'animations.json'), { spec: 'rigc-motion/1', animations: { extra: { duration: 1, tracks: [] } } });
+  json(join(input, 'requirements.json'), { spec: 'spine-parts-requirements/1', fps: 12, requirements: [] });
+  const legacy = { ...config, requirements: 'requirements.json', motion: { ...(config.motion as Obj), animations_from: 'animations.json' }, generation };
+  const absolute = { ...legacy, requirements: resolve(input, 'requirements.json'),
+    motion: { ...legacy.motion, animations_from: resolve(input, 'animations.json') },
+    generation: { ...generation, control: { ...generation.control, skeleton: resolve(input, 'pose.json') } } };
+  const builtin = { ...legacy, generation: { ...generation, control: { ...generation.control, skeleton: 'stand_clasp' } } };
+  for (const [name, raw] of [['DEFAULT', config], ['RELATIVE', legacy], ['ABSOLUTE', absolute], ['BUILTIN', builtin]] as const) {
+    const cfg = join(input, name.toLowerCase() + '.json'), out = join(dir, 'legacy-' + name.toLowerCase()); json(cfg, raw);
+    applyDepth({ parts: baseline, manifest: manifestPath, config: recipePath, rigConfig: cfg, out });
+    // No expected byte is read from applyDepth's output. The old function owns config text;
+    // analytic map/manifest inputs own the new sheet, manifest and report; source bytes own retained files.
+    const expected: Record<string, string> = { ...files(baseline), 'parts/face_depth.png': Buffer.from(sheetBytes).toString('hex'),
+      'parts.json': Buffer.from(pretty(expectedParts)).toString('hex'),
+      'config.json': Buffer.from(pretty(legacyDepthConfig(raw, cfg, out, 31))).toString('hex'),
+      'depth-report.json': Buffer.from(pretty(expectedReport(cfg))).toString('hex') };
+    if (face.depth !== undefined && depthImageReference(face.depth).path !== 'parts/face_depth.png') delete expected[depthImageReference(face.depth).path];
+    const actual = files(out), names = Object.keys(expected).sort();
+    const mismatches = [...new Set([...names, ...Object.keys(actual)])].filter(key => actual[key] !== expected[key]);
+    say('DMP1283_' + name + '_LEGACY_OUTPUT_BYTES', mismatches.length === 0,
+      JSON.stringify({ expectedFiles: names, actualFiles: Object.keys(actual).sort(), mismatches }));
+    const read = readRigInputs(join(out, 'config.json'), out);
+    say('DMP1283_' + name + '_OUTPUT_READER', read.cfg.turn?.pivot === 31 && read.images.has('face_depth.png') &&
+      (name === 'DEFAULT' || (read.cfg.requirements !== undefined && read.from !== null)),
+      'actual output reader resolves the legacy inputs and generated depth sheet');
+  }
+
+  const edits = join(input, 'edits'), receipts: EditedPartReceipt[] = [];
+  for (const [i, part] of ['face', 'body'].entries()) {
+    const before = readFileSync(join(baseline, 'parts', part + '.png')), image = readPng(join(baseline, 'parts', part + '.png'));
+    image.data[(Math.floor(image.height / 2) * image.width + Math.floor(image.width / 2)) * 4] += i + 1;
+    const bytes = editedPartPngBytes(image), file = part + '/paint.png';
+    mkdirSync(join(edits, part), { recursive: true }); writeFileSync(join(edits, file), bytes);
+    receipts.push({ part, file, sha256: sha256(bytes), from_sha256: sha256(before), editor: 'synthetic depth relocation fixture' });
+  }
+  const edited = { ...config, assemble: { ...(config.assemble as Obj), edited_parts: { dir: 'edits', receipts } } };
+  const editedPath = join(input, 'edited.json'); json(editedPath, edited);
+  const built = join(dir, 'build'), cli = join(import.meta.dir, '../cli.ts');
+  const run = spawnSync(process.execPath, [cli, 'build', '--source', join(input, 'painting.png'), '--full', join(input, 'full'),
+    '--config', editedPath, '--out', built, '--no-extremes'], { encoding: 'utf8', timeout: 120000, maxBuffer: 1 << 23 });
+  writeFileSync(join(dir, 'build.stdout.txt'), run.stdout ?? ''); writeFileSync(join(dir, 'build.stderr.txt'), run.stderr ?? '');
+  const checkPath = join(built, 'check/check.json');
+  const check = existsSync(checkPath) ? JSON.parse(readFileSync(checkPath, 'utf8')) as { PASS: boolean; gate_spine_html_green: boolean; rigc_entry: { entry: string; spine_core: string | null } } : null;
+  const builtGreen = run.status === 0 && check?.PASS === true && check.gate_spine_html_green === true;
+  say('DMP1283_EDITED_FULL_BUILD_REAL_CORE_GATE', builtGreen,
+    JSON.stringify({ exit: run.status, signal: run.signal, error: run.error?.message, gate: check?.gate_spine_html_green,
+      entry: check?.rigc_entry, logs: ['build.stdout.txt', 'build.stderr.txt'],
+      ...(builtGreen ? {} : { outputTail: ((run.stdout ?? '') + (run.stderr ?? '')).slice(-4000) }) }));
+  if (!builtGreen) return;
+  const editedPrepared = join(dir, 'edited-prepared'); prepareDepth({ parts: built, config: recipePath, out: editedPrepared });
+  const depthOut = join(dir, 'edited-depth');
+  applyDepth({ parts: built, manifest: join(editedPrepared, 'manifest.json'), config: recipePath, rigConfig: editedPath, out: depthOut });
+  const emitted = JSON.parse(readFileSync(join(depthOut, 'config.json'), 'utf8')) as typeof edited;
+  const relocated = emitted.assemble.edited_parts;
+  say('DMP1283_TWO_RECEIPTS_RELATIVE_POSIX_AND_SAME_FILES', relocated.dir === 'edits' && relocated.receipts.length === 2 &&
+    relocated.receipts.every((r, i) => !isAbsolute(r.file) && !r.file.includes('\\') &&
+      readFileSync(resolve(depthOut, relocated.dir, r.file)).equals(readFileSync(join(edits, receipts[i].file)))),
+    JSON.stringify(relocated));
+  const reassembled = join(dir, 'reassembled'); assemble(join(depthOut, 'config.json'), reassembled);
+  const exact = (out: string): boolean => receipts.every(r => readFileSync(join(out, 'parts', r.part + '.png')).equals(readFileSync(join(edits, r.file))));
+  say('DMP1283_EDITED_BUILD_DEPTH_REASSEMBLE_RECEIPT_BYTES', exact(built) && exact(depthOut) && exact(reassembled),
+    'two distinct edited PNGs, including ancillary encoding, survive full build, depth-prepare, depth-apply and real reassembly');
+  const plantedConfig = join(depthOut, 'legacy-config.json');
+  json(plantedConfig, legacyDepthConfig(edited, editedPath, depthOut, 31));
+  const refusedOut = join(dir, 'legacy-refused'), refused = codes(() => assemble(plantedConfig, refusedOut));
+  say('DMP1283_OLD_PRIVATE_LIST_REFUSES_BOTH_RECEIPTS', refused.length === 2 &&
+    receipts.every((r, i) => refused.includes(`ASSEMBLE_EDITED_PART_FILE: config.assemble.edited_parts.receipts[${i}] (part "${r.part}")`)) &&
+    !existsSync(refusedOut), JSON.stringify({ refusals: refused, outputExists: existsSync(refusedOut) }));
 }
 export function runDepthMapChecks(dir: string, say: Say): void {
   mkdirSync(join(dir, 'source/parts'), { recursive: true });
@@ -192,4 +332,19 @@ export function runDepthMapChecks(dir: string, say: Say): void {
   const absoluteConfig = join(dir, 'absolute-requirements-config.json'); json(absoluteConfig, { ...config, requirements: requirementsPath });
   const absoluteOut = join(dir, 'absolute-requirements-out'); applyDepth({ ...args, rigConfig: absoluteConfig, out: absoluteOut });
   say('DMP37_ABSOLUTE_REQUIREMENTS_REBASE_TO_THE_SAME_FILE', readRigInputs(join(absoluteOut, 'config.json'), absoluteOut).cfg.requirements !== undefined && readFileSync(join(absoluteOut, (JSON.parse(readFileSync(join(absoluteOut, 'config.json'), 'utf8')) as { requirements: string }).requirements)).equals(readFileSync(requirementsPath)), 'positive absolute input reuses the same real requirements reader and bytes');
+  runDepthRelocationChecks(join(dir, 'relocation'), say);
+}
+
+if (import.meta.main) {
+  const [out, ...extra] = process.argv.slice(2);
+  if (!out || extra.length || (existsSync(out) && readdirSync(out).length !== 0)) {
+    console.error('Usage: bun tools/check_depthmaps.ts <fresh-output-directory>'); process.exit(64);
+  }
+  mkdirSync(out, { recursive: true });
+  let failures = 0;
+  runDepthRelocationChecks(resolve(out), (name, ok, detail) => {
+    if (!ok) failures++;
+    console.log(`  ${ok ? 'PASS' : 'FAIL'} ${name} — ${detail}`);
+  });
+  process.exitCode = failures ? 1 : 0;
 }

@@ -95,7 +95,7 @@ import type { DepthConfig } from './depthsheets.ts';
  * the field is a non-empty string.
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, posix, relative, resolve } from 'node:path';
 import { RIG_BONE_INHERIT, RIG_SKIN_CONSTRAINT_KEYS, type RigBoneInherit, type RigConstraint, type RigSkinConstraintKey, type RigStop } from '@rig-c/core/rig';
 import { pyRound } from './round.ts';
 import { motionSeamProblems, type MotionSeamDeclaration } from './motionseams.ts';
@@ -1481,7 +1481,30 @@ export interface ConfigFileReference {
   set: (value: string) => void;
 }
 
-/** Enumerate the same file fields that the loader resolves, preserving invalid fields for its diagnostics. */
+/** Normalized POSIX segments; neither operand is resolved against the cwd. */
+function editedPathSegments(path: string): string[] {
+  return posix.normalize(path).split('/').filter(p => p !== '' && p !== '.');
+}
+
+function editedPathPrefix(from: readonly string[], to: readonly string[]): number {
+  let common = 0;
+  while (common < from.length && common < to.length && from[common] === to[common]) common++;
+  return common;
+}
+
+/** Same absolute forms the relative-only loader refuses, including Windows forms. */
+function editedPathAbsolute(path: string): boolean {
+  return isAbsolute(path) || /^(?:[\\/]|[A-Za-z]:[\\/])/.test(path);
+}
+
+/** Relative segments for a target representable under dir, including rebased siblings. */
+function relativeEditedFile(dir: string, next: string): string {
+  const from = editedPathSegments(dir), to = editedPathSegments(next);
+  const common = editedPathPrefix(from, to);
+  return [...from.slice(common).map(() => '..'), ...to.slice(common)].join('/');
+}
+
+/** Enumerate loader and assemble file references, preserving invalid fields for their diagnostics. */
 export function configFileReferences(raw: unknown): ConfigFileReference[] {
   const out: ConfigFileReference[] = [];
   for (const field of Object.values(CONFIG_FILE_FIELDS)) {
@@ -1506,6 +1529,36 @@ export function configFileReferences(raw: unknown): ConfigFileReference[] {
       out.push({ at: `assemble.occluders[${i}].plate`, value: entry.plate, set: (next) => { entry.plate = next; } });
     }
   });
+  // Issue #1281: receipt files cover this directory without declaring a directory input.
+  const edited = isPlainObject(assemble) ? assemble.edited_parts : undefined;
+  if (isPlainObject(edited) && typeof edited.dir === 'string' && edited.dir !== '' && Array.isArray(edited.receipts)) {
+    const enumerationDir = edited.dir, receipts = edited.receipts;
+    receipts.forEach((entry: unknown, i: number) => {
+      if (!isPlainObject(entry) || typeof entry.file !== 'string' || entry.file === '') return;
+      out.push({ at: `assemble.edited_parts.receipts[${i}].file`, value: posix.join(enumerationDir, entry.file), set: (next) => {
+        // Preserve invalid absolute targets for the existing relative-only loader refusal.
+        if (editedPathAbsolute(next)) { entry.file = next; return; }
+        // A previous setter from this enumeration may have rebased the shared dir.
+        const liveDir = edited.dir;
+        if (typeof liveDir !== 'string' || liveDir.trim() === '' || editedPathAbsolute(liveDir)) {
+          entry.file = next;
+          return; // Do not repair invalid dirs or hide their existing loader diagnostics.
+        }
+        let dir: string = liveDir;
+        const from = editedPathSegments(dir), to = editedPathSegments(next);
+        if (from.filter(p => p === '..').length > to.filter(p => p === '..').length) {
+          const rebased = from.slice(0, editedPathPrefix(from, to)).join('/') || '.';
+          for (const sibling of receipts) {
+            if (!isPlainObject(sibling) || typeof sibling.file !== 'string' || sibling.file.trim() === '' || editedPathAbsolute(sibling.file)) continue;
+            sibling.file = relativeEditedFile(rebased, posix.join(dir, sibling.file));
+          }
+          edited.dir = rebased;
+          dir = rebased;
+        }
+        entry.file = relativeEditedFile(dir, next);
+      } });
+    });
+  }
   return out;
 }
 
