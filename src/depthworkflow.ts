@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
-import { loadConfigAndAnimations, parseConfig } from './config.ts';
+import { configFileReferences, loadConfigAndAnimations, parseConfig } from './config.ts';
 import { depthReading, readSourceDepth } from './depthsheets.ts';
 import { alphaSupport, depthMapFail as fail, floatBox, integrateNormals, mapToSheet, readNumericMap, type NumericMap } from './depthmaps.ts';
 import { depthImageReference, partImageReference, readParts } from './parts.ts';
@@ -13,7 +13,6 @@ import { readPartSet } from './propose.ts';
 import { decodePngBytes, encodePngBytes } from './raster/png.ts';
 import { resize } from './raster/resize.ts';
 import { connectedComponents } from './raster/components.ts';
-import { isSkeletonName } from './skeleton.ts';
 import { newRaster, type Raster } from './raster/types.ts';
 
 type Obj = Record<string, unknown>;
@@ -165,11 +164,9 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
     if (group.unitDepths !== undefined) target.unitDepths = group.unitDepths;
   }
   // Keep relative paths portable when relocating the output directory with its inputs.
-  const motion = raw.motion as Obj | undefined;
-  if (typeof motion?.animations_from === 'string') motion.animations_from = relative(resolve(input.out), resolve(dirname(input.rigConfig), motion.animations_from));
-  const control = (raw.generation as Obj | undefined)?.control as Obj | undefined;
-  if (typeof control?.skeleton === 'string' && !isSkeletonName(control.skeleton)) control.skeleton = relative(resolve(input.out), resolve(dirname(input.rigConfig), control.skeleton));
-  if (typeof raw.requirements === 'string') raw.requirements = relative(resolve(input.out), resolve(dirname(input.rigConfig), raw.requirements));
+  for (const ref of configFileReferences(raw)) {
+    ref.set(relative(resolve(input.out), resolve(dirname(input.rigConfig), ref.value)));
+  }
   parseConfig(raw);
   const writes = new Map<string, Uint8Array>(), rows: Obj[] = [], recs = rawParts.parts as Obj[];
   // Retain auxiliary art (including alternate sets) and diagnostics byte-for-byte.
