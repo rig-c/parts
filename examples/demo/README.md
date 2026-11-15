@@ -63,7 +63,11 @@ here (gitignored).
   <dir>`, the call the selftest's chain suite makes. The reference implementation
   never saw this character, so there is no reference output to compare with: the
   chain suite holds the tree to its own output at the commit that added it — a
-  determinism check, not a port check. `parts.json` (`assemble`), `motion.json` and
+  determinism check, not a port check. Issue #1275 refreshes `parts.json` from
+  assembly with supported core-band blending: provenance, seam/fringe counts
+  and recomposite figures move; the painting metadata is preserved. This is
+  an assembly refresh, not a newly measured rig/check golden.
+  `parts.json` (`assemble`), `motion.json` and
   `mesh_report.json` (`rig`), and `check.json` and `gate_spine-html.txt` (`check`)
   are the build's files as written; `rig.json` is the build's `rig/rig.json`
   carried to its flat form by `flattenRig` (`src/rig.ts`), the form every example's

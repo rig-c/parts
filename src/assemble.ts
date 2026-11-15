@@ -48,6 +48,12 @@ import { COPIED_ALPHA_ABOVE, OCCLUDER_EMPTY, occluderDrawCycleProblems, type Occ
  * the change that added this file). The places it deliberately is NOT are
  * named here, so none is found by accident:
  *
+ * - **Supported core projection bands** (issue #1275): the reference leaves
+ *   every pixel outside its eroded core untouched. Here, the same Gaussian
+ *   weight may reach an opaque, top-owned band pixel within the drift limit
+ *   and the head window. Core, acceptance and refusal counts remain the
+ *   reference's seed populations; no new colour, alpha or weight is invented.
+ *
  * - **Refusals where the reference guessed or skipped.** A plan or extend
  *   entry naming a tag its run does not hold (the reference raised a KeyError),
  *   a part left with no opaque pixel (the reference printed `EMPTY` and wrote a
@@ -2364,10 +2370,12 @@ export function pixelOwners(rigLayers: readonly Raster[], rank: readonly number[
  * closed by 5x5 and cut back to the core — and, for the head run, kept
  * `HEAD_WINDOW_INSET` pixels inside the head crop — are the ACCEPTED set. The
  * colour becomes `w * painting + (1 - w) * layer`, truncated, with `w` the
- * accepted set blurred by a Gaussian of sigma 1 and zeroed outside the core;
- * outside the core nothing changes, alpha never changes, and occluded pixels
- * keep See-through's synthesis. `core`, `taken` (accepted) and `refused` (core
- * pixels over the drift limit, before closing) are counted.
+ * accepted set blurred by a Gaussian of sigma 1. Under `core`, that same
+ * weight also reaches top-owned alpha >= 250 band
+ * pixels within `DRIFT_LIMIT` and the head window (issue #1275). No accepted
+ * core means no Gaussian support and no band write. Alpha never changes, and
+ * occluded pixels keep See-through's synthesis. `core`, `taken` (accepted)
+ * and `refused` (core pixels over the drift limit, before closing) are counted.
  * (`assemble_parts.py` `main`, the per-run loop.)
  *
  * With `rule: 'visible'` (NOT in the reference) the core is the top-most
@@ -2445,8 +2453,10 @@ export function projectSource(rigLayers: Raster[], srcr: Raster, frame: Frame, r
     }
     const blurred = gaussianBlur(okf, FEATHER_SIGMA);
     for (let p = 0; p < W * H; p++) {
-      if (core.data[p] === 0) continue;
+      if (core.data[p] === 0 && !(rule === 'core' && top.data[p] === 1 &&
+        (win === null || win.data[p] === 1) && maxDiff(r.data, p * 4, srcr.data, p * 4) <= DRIFT_LIMIT)) continue;
       const w = blurred.data[p];
+      if (w === 0) continue;
       const rest = f32(1 - w);
       let different = false;
       for (let c = 0; c < 3; c++) {

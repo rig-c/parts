@@ -52,6 +52,7 @@ import { sourceCaseNames } from './scripts/selftest_prefixes.ts';
 import { runPaintingExtensionChecks } from './tools/check_painting_extension.ts';
 import { runExtremesChecks } from './tools/check_extremes.ts';
 import { selftestCliArgs } from './fixtures/check_options.ts';
+import { runProjectBandControls } from './fixtures/project_band_controls.ts';
 import { softOcclusionLine } from './src/assemble.ts';
 import { holeBox as pinholeBox944, measurePinholes, PINHOLES_RULE, sourceInRig as sourceInRig944 } from './src/assemble.ts';
 import { singleRunPadRecord } from './src/assemble.ts';
@@ -33338,9 +33339,46 @@ function runCrossedLimbFeatherCases(say: (name: string, ok: boolean, detail: str
   );
 }
 
+/** Narrow, in-memory projection controls; importing this module never launches a suite. */
+export function runProjectionBand1275Controls(): number {
+  const { say, bad } = counter();
+  runProjectBandControls(say);
+  return bad();
+}
+
+/** The original AS817 fixture/assertion, also callable without the assemble suite. */
+export function runProjectionLineage817Controls(base?: Omit<AssembleInput, 'seamRule'>, report?: ReturnType<typeof counter>['say']): number {
+  const { say: ownSay, bad } = counter();
+  const say = report ?? ownSay;
+  const root = base === undefined ? temp('projection-lineage-817') : null;
+  try {
+    if (root !== null) writeAssembleFixture(root);
+    const input = base ?? fixtureInput(root!);
+    const cut817 = { from: 'topwear', into: 'piece817', polygon: [[10, 20], [20, 20], [20, 50], [10, 50]] as Array<[number, number]>, overlap: 1, draw: 'front' as const };
+    const projectedFull817 = { ...input.full, layers: input.full.layers.map(l => {
+      if (l.name !== 'topwear') return l;
+      const pixels = { ...l.pixels, data: new Uint8ClampedArray(l.pixels.data) };
+      for (let p = 0; p < pixels.width * pixels.height; p++) if (pixels.data[p * 4 + 3] > 0) pixels.data[p * 4] += 10;
+      return { ...l, pixels };
+    }) };
+    const projectedCut817 = assemble({ ...input, full: projectedFull817, cuts: [cut817], seamRule: 'near-white' });
+    const projectedPiece817 = projectedCut817.parts.parts.find(p => p.name === 'piece817');
+    say('AS817_PROJECTED_SOURCE_TO_CUT_INHERITS_VALUE_LINEAGE_AND_REPORTS_MOVE',
+      projectedPiece817?.provenance?.automatic.find(e => e.stage === 'sourceProjection')?.px === 300 && projectedPiece817.provenance.unchanged_layer_px === 0 && projectedPiece817.provenance.hand_px === 0 &&
+      projectedPiece817.source_px_taken === 208 &&
+      projectedCut817.parts.cut_ownership?.[0].moved_in_opaque_px === 300,
+      `piece value ${JSON.stringify(projectedPiece817?.provenance)}; ownership ${JSON.stringify(projectedCut817.parts.cut_ownership)}`,
+      'the original generated rectangle is shifted +10 red, within projection drift. Its half retains 8*26=208 accepted core seeds; issue #1275 also blends its 92 supported band pixels, so all 300 inherit sourceProjection lineage. Cutting still moves 300 pixels on the independent ownership axis');
+  } finally {
+    if (root !== null) rmSync(root, { recursive: true, force: true });
+  }
+  return bad();
+}
+
 function runAssembleSuite(): number {
   section('assemble: the stage, on generated runs');
   const { say, bad } = counter();
+  runProjectBandControls(say);
   const dir = temp('assemble');
   try {
     runHiddenExtentChecks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #1047: production assembly refuses declared enclosed source holes'));
@@ -33447,19 +33485,7 @@ function runAssembleSuite(): number {
       seamPiece817?.provenance?.hand_px === 0 && seamPiece817.provenance.automatic.find(e => e.stage === 'seamOverride')?.px === 168,
       JSON.stringify(seamPiece817?.provenance),
       'the bottomwear half is 7*24=168 Z pixels copied by cuts[0], then all recoloured C by seamOverride: the last automatic stage owns them, not the earlier edit');
-    const projectedFull817 = { ...base.full, layers: base.full.layers.map(l => {
-      if (l.name !== 'topwear') return l;
-      const pixels = { ...l.pixels, data: new Uint8ClampedArray(l.pixels.data) };
-      for (let p = 0; p < pixels.width * pixels.height; p++) if (pixels.data[p * 4 + 3] > 0) pixels.data[p * 4] += 10;
-      return { ...l, pixels };
-    }) };
-    const projectedCut817 = assemble({ ...base, full: projectedFull817, cuts: [cut817], seamRule: 'near-white' });
-    const projectedPiece817 = projectedCut817.parts.parts.find(p => p.name === 'piece817');
-    say('AS817_PROJECTED_SOURCE_TO_CUT_INHERITS_VALUE_LINEAGE_AND_REPORTS_MOVE',
-      projectedPiece817?.provenance?.automatic.find(e => e.stage === 'sourceProjection')?.px === 208 && projectedPiece817.provenance.unchanged_layer_px === 92 && projectedPiece817.provenance.hand_px === 0 &&
-      projectedCut817.parts.cut_ownership?.[0].moved_in_opaque_px === 300,
-      `piece value ${JSON.stringify(projectedPiece817?.provenance)}; ownership ${JSON.stringify(projectedCut817.parts.cut_ownership)}`,
-      'the original generated rectangle is shifted +10 red, within projection drift. Its half contains 8*26=208 genuinely recoloured core pixels and 92 unchanged edge pixels. Cutting copies their existing lineage; it moves 300 pixels on the independent ownership axis');
+    runProjectionLineage817Controls(base, say);
 
     // #1131: derive coordinate attribution through production assembly, then
     // reconcile an independent RLE histogram with every aggregate population.

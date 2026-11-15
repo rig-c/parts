@@ -4486,16 +4486,23 @@ The proposer writes each run's parts in depth order, so on a proposed plan the t
 agree; they differ only where an author reorders the plan, and on the five public
 paintings no pixel changes owner.
 
-`--project core` (the default) is the reference's projection rule: a layer takes the
-painting's pixel only inside its top-most `alpha >= 250` area eroded by a 5x5 square,
-so a part a few pixels wide (a lash, a brow, an iris) takes none. `--project visible`
+`--project core` (the default) seeds projection inside its top-most `alpha >= 250`
+area eroded by a 5x5 square. The accepted seeds' existing Gaussian weight also
+reaches opaque, top-owned band pixels within the drift limit and head window
+(issue #1275): RGB is the same float32 `w * painting + (1 - w) * layer`, truncated
+to bytes; alpha is unchanged. No new seeds or weights are added. A part without
+accepted core seeds (for example a thin lash) has no band projection. This is a
+deliberate deviation from the reference's untouched band; core, accepted and
+refused seed counts retain their definitions. `--project visible`
 keeps the erosion only along a rim where a layer of the run in front owns the pixel, and
 takes every other top-most `alpha >= 250` pixel; neither rule takes a fringe pixel
-(alpha below 250). On the examples it lowered the pixels that are visible but not
+(alpha below 250). Before supported core-band blending, the comparison on the
+examples lowered the pixels that are visible but not
 projected from 36,227 to 22,476 (`reference-sample`) and 76,801 to 49,672 (`reference-demo`), recomposite
 error pixels from 4,512 to 4,116 and 11,050 to 9,820, and the check seam from 0.207 to
-0.206 and 0.326 to 0.325, with no other check figure changed. The default stays the
-reference's so the examples stay comparable with it. `build` takes both flags, and
+0.206 and 0.326 to 0.325, with no other check figure changed. These figures are
+the earlier comparison, not a measurement of the current core-band rule.
+`build` takes both flags, and
 `config.assemble.project` sets the rule per character (an explicit `--project` wins).
 
 Under `visible` the parts' edges are also resolved from the painting (issue #953,
@@ -5045,8 +5052,8 @@ global final-slot front when that closure moves a rider. Its counts:
 | `visible_px` | of those, the ones no later layer of their See-through run is opaque (alpha >= 250) in front of — a pixel copied in below the head crop is judged in its extend layer's run |
 | `occluded_px` | the rest of `opaque_px`: art the painting does not show, See-through's synthesis by necessity |
 | `projected_core_px` | the projection rule's candidates: top-most `alpha >= 250`, eroded (`core`) or kept off a front rim (`visible`) |
-| `source_px_taken` | of those, the ones that took the painting's pixel (the reference's count, before any merge) |
-| `visible_not_projected_px` | visible pixels whose colour did not come from projection — too thin for the core, a fringe, a rim, refused for drift, or a merge ring |
+| `source_px_taken` | accepted seeds inside those candidates, before Gaussian blending or merge (the reference's count); not the number of RGB writes |
+| `visible_not_projected_px` | visible pixels outside the accepted seed mask; includes fringes, rims, refusals and merge rings, and can include Gaussian band writes; use provenance or the stage map for actual value attribution |
 | `refused_drift_px` | candidates refused because See-through's pixel and the painting's differ by more than 90. On top-most pixels the seam override repaints refused pixels afterwards, so the field is not a count of pixels left unlike the painting: measured on scarf's `topwear`, 24,944 of 26,472 (issue #255) |
 | `merged_px` | pixels brought in below the head crop, and the ring that closes their seam |
 | `seam_override_px` | pixels the seam pass recoloured to the painting |

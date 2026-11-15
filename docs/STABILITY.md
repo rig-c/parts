@@ -401,7 +401,9 @@ an absent field preserves existing output bytes.
 `assemble.project` accepts `core` or `visible` (issue #953). CLI
 `--project` overrides config, then the existing `core` default applies.
 Invalid values refuse as `CONFIG_FIELD_TYPE` at `config.assemble.project`;
-an absent field preserves existing output bytes. The bytes `visible` writes
+an absent field selects `core`. Supported core-band blending (issue #1275)
+changes default RGB output while retaining seed-count definitions; see
+AUTHORING's projection rules. The bytes `visible` writes
 are not promised across versions (issue #953 resolves its edges from the
 painting).
 
