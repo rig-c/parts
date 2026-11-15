@@ -1,4 +1,5 @@
 import { sourceCoverRun, type SourceCoverReading } from './sourcecover.ts';
+import { replaceEditedParts, type EditedPartContext, type VerifiedEditedPart } from './editedparts.ts';
 import { paintingReceivers, rawPaintingOwner } from './paintingowner.ts';
 import { hiddenExtentProblems, type HiddenExtentDeclaration, type HiddenExtentSource } from './hiddenextent.ts';
 import { headBoxInside } from './headbox.ts';
@@ -324,6 +325,8 @@ export function singleRunPadRecord(single: boolean, sourceW: number, sourceH: nu
 }
 
 export interface AssembleInput {
+  /** Verified whole-file base-part edits, placed after all normal raster passes. */
+  editedParts?: readonly VerifiedEditedPart[];
   /** Observe allocation decisions after guarding and restoration. */
   allocationEvent?: (event: PaintingAllocationEvent) => void;
   /** Counterfactual before seeded takes, with whole-layer takes already applied. */
@@ -2864,6 +2867,8 @@ export function groundWarning(share: number, ground: Ground | undefined, rule: P
 }
 
 export interface PlacedPart {
+  /** Verified edited PNG bytes; emit verbatim rather than encoding image again. */
+  encodedBytes?: Uint8Array;
   depthImage?: Raster;
   record: PartRecord;
   image: Raster;
@@ -5097,16 +5102,26 @@ export function retainRegionNeighbours(placed: PlacedPart[], before: readonly Pl
  * after this returned writes only after green.
  */
 export function assemble(input: AssembleInput): AssembleResult {
-  if (input.regionTake === undefined) return assembleParts(input);
+  const contexts = (input.editedParts?.length ?? 0) === 0 ? undefined : new Map<PlacedPart, EditedPartContext>();
+  // The internal map preserves classifications across region restoration even
+  // when the caller does not request the report-only sidecar.
+  const working = contexts === undefined ? input : { ...input, stageMap: true };
+  if (input.regionTake === undefined) {
+    const result = assembleParts(working, undefined, null, undefined, contexts);
+    if (contexts !== undefined && input.stageMap !== true) delete result.stageMap;
+    return result;
+  }
   const targets = regionTakeTargets(input.regionTake.targets, input.cuts, input.limbs);
   const counterfactual = input.projectRule === 'core' ? { cleanup: new Map<string, RunLayer[]>(), seam: new Map<string, Uint8Array>() } : undefined;
-  const before = assembleParts({ ...input, full: input.regionTake.full, head: input.regionTake.head, regionTake: undefined, requireHiddenExtent: undefined }, targets, null, counterfactual);
-  return assembleParts(input, targets, before, counterfactual);
+  const before = assembleParts({ ...working, editedParts: undefined, full: input.regionTake.full, head: input.regionTake.head, regionTake: undefined, requireHiddenExtent: undefined }, targets, null, counterfactual, contexts);
+  const result = assembleParts(working, targets, before, counterfactual, contexts);
+  if (contexts !== undefined && input.stageMap !== true) delete result.stageMap;
+  return result;
 }
 
 /** The counterfactual is internal and is never emitted. Empty taken targets
  * may be recovered by a take, so only that counterfactual permits them. */
-function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, beforeTake: AssembleResult | null = null, counterfactual?: { cleanup: Map<string, RunLayer[]>; seam: Map<string, Uint8Array> }): AssembleResult {
+function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, beforeTake: AssembleResult | null = null, counterfactual?: { cleanup: Map<string, RunLayer[]>; seam: Map<string, Uint8Array> }, editContexts?: Map<PlacedPart, EditedPartContext>): AssembleResult {
   const emptyTargets = beforeTake === null ? targets : undefined;
   const { source, extend, patches, seamRule, projectRule } = input;
   const authoredDepths = input.depth === undefined ? new Map<string, AuthoredUnitDepth>() : authoredUnitDepths(input);
@@ -6400,7 +6415,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     const upperIndex = limb === undefined ? -1 : lim.parts.findIndex(q => q.record.name === limb.name && q.record.segment === limb.segment - 1);
     const capSource = limbIndex < 0 ? null : lim.capFrom[limbIndex];
     const authoredDepth = authoredDepths.get(name);
-    const scalar = authoredDepth === undefined ? transportPartDepth(record, image, registeredDepth, {
+    const scalarFor = (art: Raster) => authoredDepth === undefined ? transportPartDepth(record, art, registeredDepth, {
       map: run => runMap(frame, run), width: W, extend: extendKeys, owner: trace.from,
       ring: trace.ring.data, region: region?.data ?? null,
       copiedSource: (x, y) => {
@@ -6412,6 +6427,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       },
       ...((limb?.cap?.image_px ?? 0) > 0 || (limb?.cap?.lower_px ?? 0) > 0 ? { unsupported: `cap copies ${(limb?.cap?.image_px ?? 0) + (limb?.cap?.lower_px ?? 0)} pixels from a separate cap image whose scalar grid is undeclared` } : {}),
     }) : undefined;
+    const scalar = scalarFor(image);
     if (capSource !== null && upperIndex >= 0 && capSource.codes.some(code => code === CAP_FROM_UPPER)) {
       const upper = limbPieces[upperIndex];
       const keys = [upper.key, ...upper.extendKeys.filter((_, i) => upper.trace.from.some(v => v === i))];
@@ -6423,7 +6439,9 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     }
     if (scalar !== undefined) record.depth = scalar.reference;
     if (scalar !== undefined && scalar.clampedSamples > 0) depthClamps.push({ part: name, samples: scalar.clampedSamples });
-    set({ record, image, ...(scalar === undefined ? {} : { depthImage: scalar.image }) });
+    const placedPart = { record, image, ...(scalar === undefined ? {} : { depthImage: scalar.image }) };
+    if (editContexts !== undefined) editContexts.set(placedPart, { baseline: null, visible, projected, paintingGain, ...(scalar === undefined ? {} : { depthForEdit: scalarFor }) });
+    set(placedPart);
   });
   refuseIfAny(empty);
   const placed: PlacedPart[] = order.map((d) => ('plan' in d ? planned[d.plan] : 'cut' in d ? cutPlaced[d.cut] : 'limb' in d ? limbPlaced[d.limb] : cut[d.patch]) as PlacedPart);
@@ -6490,6 +6508,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       excluded_px: 0, runs: [] as Array<[number, number]>, pre_seam_writer_runs: [] as Array<[number, number]>,
     };
     p.record.provenance = pixelProvenance(p.image, p.record.x, p.record.y, W, writersInOrder[i], editNames, 0, valueBaselines.get(p.record.from) ?? null, map, preSeamWriters?.get(i));
+    if (editContexts?.has(p)) editContexts.get(p)!.baseline = valueBaselines.get(p.record.from) ?? null;
     if (map !== undefined) stageMap!.parts.push(map);
     const depth = authoredDepths.get(p.record.name);
     if (depth !== undefined) p.record.provenance.depth = depth;
@@ -6509,6 +6528,14 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       };
       return { ...original, runs: original.runs.map(remap), pre_seam_writer_runs: original.pre_seam_writer_runs.map(remap) };
     });
+  }
+  if ((input.editedParts?.length ?? 0) > 0) replaceEditedParts(placed, input.editedParts!, new Set(input.plan.map(([name]) => name)), stageMap!, editContexts!);
+  if (editContexts !== undefined) for (const p of placed) {
+    const samples = editContexts.get(p)?.depthClampedSamples;
+    if (samples === undefined) continue;
+    const previous = depthClamps.findIndex(row => row.part === p.record.name);
+    if (previous >= 0) depthClamps.splice(previous, 1);
+    if (samples > 0) depthClamps.push({ part: p.record.name, samples });
   }
   // Provenance is now numbers/labels only. No later raster/figure operation
   // reads report buffers; release all aliases before recomposite/error work.

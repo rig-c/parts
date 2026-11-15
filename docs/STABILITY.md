@@ -1141,6 +1141,37 @@ painting extension's `band`) is refused (`ASSEMBLE_PART_SOURCE`) before
 anything is assembled. Absent or `false`, nothing more is demanded and no byte
 moves.
 
+### Edited rig-space parts
+
+The optional `assemble.edited_parts` block (issue #1278, additive) replaces
+existing base-plan parts with verified rig-pixel PNG files after all automatic
+passes and final restoration. It preserves boxes, names, draw order and
+original `from` identities. The encoded edited file bytes are emitted intact;
+recomposite and final accounting consume its decoded pixels. Both the edited
+file hash and the current normal assembled part's `from_sha256` are verified.
+The block does not change author-layer projection or editor receipt semantics.
+Alternate sets retain their own declared art; inherited base assets use the
+edited base image. No new flag bypasses rig-c or existing check bars.
+
+Receipt association is additive `provenance.edited_part` metadata: the complete
+receipt and `dir`, `edit: "edited_parts[i]"`, `changed_px`,
+`changed_counted_px`, `changed_excluded_px` and `removed_opaque_px`.
+The four counts describe exact baseline-to-edited RGBA differences;
+`hand_px` keeps its existing final-alpha-above-8 partition meaning.
+The receipt covers the whole file, including unchanged and transparent
+positions; stage-map entries retain that association separately from writer
+runs. The strict parts reader rejects malformed associations and inconsistent
+counts. [AUTHORING](AUTHORING.md#edited-rig-space-parts-assembleedited_parts-issue-1278)
+defines paths, counts and the base-only scope.
+
+An unknown part, missing file, edited hash mismatch, stale baseline hash,
+dimension mismatch or duplicate part is refused by its dedicated
+`ASSEMBLE_EDITED_PART_*` code before any output write. A non-decodable PNG is
+also refused before writes. A preexisting successful output remains unchanged.
+The [refusal table](https://github.com/rig-c/parts/blob/main/docs/CHECKS.md#edited-rig-space-parts)
+names each code. Without the block, existing outputs and metadata stay
+byte-identical; an empty receipt list applies no replacement.
+
 ## Provider-map depth stages (#897)
 
 The opt-in `depth-prepare` and `depth-apply` commands accept the separate

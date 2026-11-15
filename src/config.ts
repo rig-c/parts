@@ -1,3 +1,4 @@
+import type { EditedParts } from './editedparts.ts';
 import { hiddenExtentNameProblems, type HiddenExtentDeclaration } from './hiddenextent.ts';
 import { occluderFileProblems, occluderNameProblems, type OccluderDeclaration } from './occluders.ts';
 import { SEAM_RULES, type SeamRule } from './seamrule.ts';
@@ -94,7 +95,7 @@ import type { DepthConfig } from './depthsheets.ts';
  * the field is a non-empty string.
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { dirname, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { RIG_BONE_INHERIT, RIG_SKIN_CONSTRAINT_KEYS, type RigBoneInherit, type RigConstraint, type RigSkinConstraintKey, type RigStop } from '@rig-c/core/rig';
 import { pyRound } from './round.ts';
 import { motionSeamProblems, type MotionSeamDeclaration } from './motionseams.ts';
@@ -331,6 +332,8 @@ export interface Assemble {
   take?: TakeDeclaration[];
   /** Issue #946: receipts for images edited in an image editor; absent, no file is read and no byte moves. */
   editor_receipts?: EditorReceipts;
+  /** Whole-file rig-space edits; config-relative directory, directory-relative files. */
+  edited_parts?: EditedParts;
   /** Rig pixels per source pixel. */
   rig_scale: number;
   plan: PlanEntry[];
@@ -1729,7 +1732,7 @@ export interface EarlyConfig {
   depth?: DepthConfig;
   key: string;
   seethrough: SeeThrough;
-  assemble: { rig_scale: number; seam?: SeamRule; project?: ProjectRule; ground?: Ground; take?: TakeDeclaration[]; editor_receipts?: EditorReceipts; head_face_underfill?: boolean; yield_refused?: boolean; stage_map?: boolean; keep_under_occluders?: string[]; require_hidden_extent?: HiddenExtentDeclaration[]; extend_painting?: PaintingExtension[]; occluders?: OccluderDeclaration[]; edge_splits?: EdgeSplit[] };
+  assemble: { rig_scale: number; seam?: SeamRule; project?: ProjectRule; ground?: Ground; take?: TakeDeclaration[]; editor_receipts?: EditorReceipts; edited_parts?: EditedParts; head_face_underfill?: boolean; yield_refused?: boolean; stage_map?: boolean; keep_under_occluders?: string[]; require_hidden_extent?: HiddenExtentDeclaration[]; extend_painting?: PaintingExtension[]; occluders?: OccluderDeclaration[]; edge_splits?: EdgeSplit[] };
 }
 
 /** What plain `assemble` reads: the early config plus the plan `--propose-plan` printed. */
@@ -1807,7 +1810,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null, p
   if (door === 'layers') {
     if ('seethrough' in t) checkSeeThrough(c, t.seethrough);
     if ('assemble' in t) {
-      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'stage_map', 'keep_under_occluders', 'require_hidden_extent', 'extend_painting', 'edge_splits', 'take', 'seam', 'project', 'ground', 'editor_receipts', 'occluders']);
+      const a = c.object('config.assemble', t.assemble, sectionRequired(door, 'assemble'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'stage_map', 'keep_under_occluders', 'require_hidden_extent', 'extend_painting', 'edge_splits', 'take', 'seam', 'project', 'ground', 'editor_receipts', 'edited_parts', 'occluders']);
       if (a !== null) {
         checkAssembleRules(c, a);
         if ('rig_scale' in a) c.number('config.assemble.rig_scale', a.rig_scale, 'positive');
@@ -1824,6 +1827,7 @@ function parseEarlyConfigFrom(raw: Json, door: EarlyDoor, base: string | null, p
         if ('edge_splits' in a) checkEdgeSplits(c, a.edge_splits, Array.isArray(a.plan) ? new Set(a.plan.filter((r): r is Json[] => Array.isArray(r) && typeof r[0] === 'string').map(r => r[0] as string)) : null);
         if ('take' in a) checkTakeLayers(c, a.take, null, a);
         if ('editor_receipts' in a) checkEditorReceipts(c, a.editor_receipts);
+        if ('edited_parts' in a) checkEditedParts(c, a.edited_parts, a.plan);
         if ('yield_refused' in a && typeof a.yield_refused !== 'boolean') {
           c.fail('CONFIG_FIELD_TYPE', 'config.assemble.yield_refused', `is ${show(a.yield_refused)}; true or false is required`);
         }
@@ -2770,13 +2774,35 @@ export function editorReceiptProblems(value: unknown, at: string): Problem[] {
   return c.problems;
 }
 
-/**
- * `config.assemble.editor_receipts` (issue #946): `{receipts, required?, trace_parts?}` (`trace_parts`, issue #947).
- * Shape refusals are the loader's own; a receipt whose `from_sha256` equals
- * its `sha256` (no edit), or a `file` receipted twice, is `CONFIG_EDITOR_RECEIPT`.
- * Whether the file exists and hashes to `sha256` is read at assemble
- * (`src/editreceipt.ts`), where the file is.
- */
+/** Whole-file rig-space receipts; file/baseline verification is at assemble. */
+function checkEditedParts(c: Check, value: Json, plan: Json | undefined): void {
+  const at = 'config.assemble.edited_parts';
+  const absolute = (path: string): boolean => isAbsolute(path) || /^(?:[\\/]|[A-Za-z]:[\\/])/.test(path);
+  const o = c.object(at, value, ['dir', 'receipts'], []);
+  if (o === null) return;
+  if (typeof o.dir === 'string' && o.dir.trim().length === 0 && o.dir !== '') c.fail('CONFIG_FIELD_TYPE', at + '.dir', 'is blank; a non-empty directory is required');
+  if ('dir' in o && c.string(at + '.dir', o.dir) && absolute(o.dir as string)) c.fail('CONFIG_FIELD_TYPE', at + '.dir', 'is absolute; a directory relative to the config is required');
+  if (!('receipts' in o) || !c.array(at + '.receipts', o.receipts, false)) return;
+  const names = Array.isArray(plan) ? new Set(plan.filter((r): r is Json[] => Array.isArray(r) && typeof r[0] === 'string').map(r => r[0] as string)) : null;
+  const seen = new Map<string, number>();
+  (o.receipts as Json[]).forEach((value, i) => {
+    const p = at + '.receipts[' + i + ']';
+    const r = c.object(p, value, ['part', 'file', 'sha256', 'from_sha256', 'editor'], []);
+    if (r === null) return;
+    if ('part' in r && c.string(p + '.part', r.part)) {
+      const part = r.part as string;
+      if (seen.has(part)) c.fail('ASSEMBLE_EDITED_PART_DUPLICATE', p + '.part', `names "${part}" again (first at receipts[${seen.get(part)}]); one receipt per part is required`);
+      else seen.set(part, i);
+      if (names !== null && !names.has(part)) c.fail('ASSEMBLE_EDITED_PART_UNKNOWN', p + '.part', `names "${part}"; an existing assemble.plan part is required`);
+    }
+    if ('file' in r && c.string(p + '.file', r.file) && absolute(r.file as string)) c.fail('CONFIG_FIELD_TYPE', p + '.file', 'is absolute; a PNG path relative to edited_parts.dir is required');
+    if ('editor' in r) c.string(p + '.editor', r.editor);
+    for (const key of ['part', 'file', 'editor'] as const) if (typeof r[key] === 'string' && (r[key] as string).trim().length === 0 && r[key] !== '') c.fail('CONFIG_FIELD_TYPE', p + '.' + key, 'is blank; a non-empty value is required');
+    for (const key of ['sha256', 'from_sha256'] as const) if (key in r && (typeof r[key] !== 'string' || !SHA256_PATTERN.test(r[key] as string))) c.fail('CONFIG_FIELD_TYPE', p + '.' + key, `is ${show(r[key])}; ${SHA256_RULE} is required`);
+  });
+}
+
+/** Existing source-image receipts keep their own config-relative file contract. */
 function checkEditorReceipts(c: Check, value: Json, at = 'config.assemble.editor_receipts'): void {
   const o = c.object(at, value, ['receipts'], ['required', 'trace_parts']);
   if (o === null) return;
@@ -2816,7 +2842,7 @@ function checkAssembleRules(c: Check, a: Record<string, Json>): void {
 
 function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: string[]; patches: string[]; cuts: string[] } {
   const required = sectionRequired(door, 'assemble');
-  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'stage_map', 'keep_under_occluders', 'require_hidden_extent', 'extend_painting', 'edge_splits', 'take', 'seam', 'project', 'ground', 'editor_receipts', 'occluders']);
+  const a = c.object('config.assemble', v, required.filter((k) => k !== 'plan'), ['plan', 'extend_below_crop', 'patches', 'cuts', 'alternates', 'head_face_underfill', 'yield_refused', 'stage_map', 'keep_under_occluders', 'require_hidden_extent', 'extend_painting', 'edge_splits', 'take', 'seam', 'project', 'ground', 'editor_receipts', 'edited_parts', 'occluders']);
   if (a === null) return { parts: [], patches: [], cuts: [] };
   checkAssembleRules(c, a);
   if (required.includes('plan') && !('plan' in a)) {
@@ -2861,6 +2887,7 @@ function checkAssemble(c: Check, v: Json, door: 'assemble' | 'full'): { parts: s
   if ('edge_splits' in a) checkEdgeSplits(c, a.edge_splits, new Set(parts));
   if ('take' in a) checkTakeLayers(c, a.take, parts, a);
   if ('editor_receipts' in a) checkEditorReceipts(c, a.editor_receipts);
+  if ('edited_parts' in a) checkEditedParts(c, a.edited_parts, a.plan);
   if ('extend_below_crop' in a && c.array(`${p}.extend_below_crop`, a.extend_below_crop, false)) {
     (a.extend_below_crop as Json[]).forEach((entry, i) => {
       const at = `${p}.extend_below_crop[${i}]`;

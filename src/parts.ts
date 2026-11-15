@@ -592,7 +592,14 @@ function checkOwnership(raw: unknown, object: string, fail: (code: string, objec
 function orderedProvenance(p: PixelProvenance): PixelProvenance {
   return { unchanged_layer_px: p.unchanged_layer_px, hand_px: p.hand_px, automatic_px: p.automatic_px,
     edits: p.edits.map(e => ({ edit: e.edit, px: e.px })), automatic: p.automatic.map(e => ({ stage: e.stage, px: e.px })),
-    ...(p.depth === undefined ? {} : { depth: { kind: p.depth.kind, values: p.depth.values.map(v => ({ group: v.group, ...(v.bone === undefined ? {} : { bone: v.bone }), value: v.value })) } }) };
+    ...(p.depth === undefined ? {} : { depth: { kind: p.depth.kind, values: p.depth.values.map(v => ({ group: v.group, ...(v.bone === undefined ? {} : { bone: v.bone }), value: v.value })) } }),
+    ...(p.edited_part === undefined ? {} : { edited_part: {
+      edit: p.edited_part.edit, dir: p.edited_part.dir,
+      receipt: { part: p.edited_part.receipt.part, file: p.edited_part.receipt.file,
+        sha256: p.edited_part.receipt.sha256, from_sha256: p.edited_part.receipt.from_sha256, editor: p.edited_part.receipt.editor },
+      changed_px: p.edited_part.changed_px, changed_counted_px: p.edited_part.changed_counted_px,
+      changed_excluded_px: p.edited_part.changed_excluded_px, removed_opaque_px: p.edited_part.removed_opaque_px,
+    } }) };
 }
 
 function orderedTakenSource(source: TakenLayerSource): TakenLayerSource {
@@ -783,13 +790,14 @@ function show(v: unknown): string {
 }
 
 /** The same optional measurement contract for base and alternate records. */
-function checkProvenance(raw: unknown, opaque: unknown, object: string, fail: (code: string, object: string, detail: string) => void, hasScalar = false): void {
+function checkProvenance(raw: unknown, opaque: unknown, object: string, fail: (code: string, object: string, detail: string) => void, hasScalar = false, identity?: { name: unknown; w: unknown; h: unknown }): void {
   const v = raw as PixelProvenance | null;
   const count = (n: unknown): boolean => Number.isSafeInteger(n) && (n as number) >= 0;
   const edit = (name: string): boolean => /^(cuts\[\d+\]|patches\[\d+\])$/.test(name) ||
+    (/^edited_parts\[\d+\]$/.test(name) && name === v?.edited_part?.edit) ||
     (/^(full|head):author:/.test(name) && readFrom(name) !== null);
   const shape = v !== null && typeof v === 'object' && !Array.isArray(v) &&
-    Object.keys(v).filter(k => k !== 'depth').sort().join(',') === 'automatic,automatic_px,edits,hand_px,unchanged_layer_px' &&
+    Object.keys(v).filter(k => k !== 'depth' && k !== 'edited_part').sort().join(',') === 'automatic,automatic_px,edits,hand_px,unchanged_layer_px' &&
     [v.unchanged_layer_px, v.hand_px, v.automatic_px].every(count) && Array.isArray(v.edits) && Array.isArray(v.automatic) &&
     v.edits.every(e => e !== null && typeof e === 'object' && Object.keys(e).sort().join(',') === 'edit,px' && typeof e.edit === 'string' && edit(e.edit) && count(e.px) && e.px > 0) &&
     v.automatic.every(e => e !== null && typeof e === 'object' && Object.keys(e).sort().join(',') === 'px,stage' && typeof e.stage === 'string' && Object.hasOwn(AUTOMATIC_WRITERS, e.stage) && count(e.px) && e.px > 0) &&
@@ -803,6 +811,28 @@ function checkProvenance(raw: unknown, opaque: unknown, object: string, fail: (c
     const total = p.unchanged_layer_px + p.hand_px + p.automatic_px;
     const hand = p.edits.reduce((n, e) => n + e.px, 0), automatic = p.automatic.reduce((n, e) => n + e.px, 0);
     fail('PARTS_COUNTS_ADD_UP', object, `unchanged_layer_px ${p.unchanged_layer_px} + hand_px ${p.hand_px} + automatic_px ${p.automatic_px} = ${total}; opaque_px ${opaque} is required; edit subtotal ${hand} (hand_px ${p.hand_px} required), stage subtotal ${automatic} (automatic_px ${p.automatic_px} required)`);
+  }
+  if (v !== null && typeof v === 'object' && 'edited_part' in v) {
+    const e = v.edited_part;
+    const keys = 'changed_counted_px,changed_excluded_px,changed_px,dir,edit,receipt,removed_opaque_px';
+    const nonempty = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
+    const relativePath = (value: unknown): boolean => nonempty(value) && !/^(?:[\\/]|[A-Za-z]:[\\/])/.test(value);
+    const valid = e !== null && e !== undefined && typeof e === 'object' && !Array.isArray(e) && Object.keys(e).sort().join(',') === keys &&
+      typeof e.edit === 'string' && /^edited_parts\[\d+\]$/.test(e.edit) && relativePath(e.dir) &&
+      [e.changed_px, e.changed_counted_px, e.changed_excluded_px, e.removed_opaque_px].every(count) &&
+      e.receipt !== null && typeof e.receipt === 'object' && !Array.isArray(e.receipt) &&
+      Object.keys(e.receipt).sort().join(',') === 'editor,file,from_sha256,part,sha256' &&
+      nonempty(e.receipt.part) && e.receipt.part === identity?.name && relativePath(e.receipt.file) && nonempty(e.receipt.editor) &&
+      [e.receipt.sha256, e.receipt.from_sha256].every(s => typeof s === 'string' && /^[a-f0-9]{64}$/.test(s));
+    if (!valid) fail('PARTS_FIELD_TYPE', object + ' edited_part', 'requires edited_parts[i], a config-relative dir, a receipt with the enclosing part name, dir-relative file, two lowercase sha256 hashes and editor, and four nonnegative safe integer change counts');
+    else {
+      const area = typeof identity?.w === 'number' && typeof identity.h === 'number' ? identity.w * identity.h : NaN;
+      if (!Number.isSafeInteger(area) || !count(opaque) || e.changed_px !== e.changed_counted_px + e.changed_excluded_px ||
+          e.changed_px > area || e.changed_counted_px > (opaque as number) || e.changed_excluded_px > area - (opaque as number) ||
+          e.removed_opaque_px > e.changed_excluded_px) {
+        fail('PARTS_COUNTS_ADD_UP', object + ' edited_part', `changed_px ${e.changed_px} must equal counted ${e.changed_counted_px} + excluded ${e.changed_excluded_px}; counted must fit opaque_px ${show(opaque)}, excluded must fit the remaining box pixels (area ${area}), and removed_opaque_px ${e.removed_opaque_px} must be at most changed_excluded_px`);
+      }
+    }
   }
   if (v !== null && typeof v === 'object' && 'depth' in v) {
     const d = v.depth;
@@ -890,7 +920,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
         if (k in r && !(Number.isInteger(r[k]) && (r[k] as number) >= 0)) fail('PARTS_FIELD_TYPE', `${label} field "${k}"`, `is ${show(r[k])}; a non-negative integer is required`);
       }
       const count = (k: string): number | null => (Number.isInteger(r[k]) && (r[k] as number) >= 0 ? (r[k] as number) : null);
-      if ('provenance' in r) checkProvenance(r.provenance, r.opaque_px, label + ' provenance', fail, 'depth' in r);
+      if ('provenance' in r) checkProvenance(r.provenance, r.opaque_px, label + ' provenance', fail, 'depth' in r, { name: r.name, w: r.w, h: r.h });
       checkPaintingExtensionCount(r, label, fail);
       const [op, vis, occ, vnp] = ['opaque_px', 'visible_px', 'occluded_px', 'visible_not_projected_px'].map(count);
       if (held.length === VISIBILITY_KEYS.length && op !== null && vis !== null && occ !== null && vnp !== null) {
@@ -1126,7 +1156,7 @@ function checkParts(raw: unknown, path: string): PartsFile {
         if (!isPartName(r.name)) fail('PARTS_FIELD_TYPE', `${recordAt} field "name"`, `is ${show(r.name)}; a file-name-safe part name is required`);
         if ('depth' in r) problems.push(...partDepthProblems(r.depth, `${recordAt} depth`));
         const part817 = typeof r.name === 'string' ? `part "${r.name}"` : `records[${j}]`;
-        if ('provenance' in r) checkProvenance(r.provenance, r.opaque_px, `${at} ${part817} provenance`, fail, 'depth' in r);
+        if ('provenance' in r) checkProvenance(r.provenance, r.opaque_px, `${at} ${part817} provenance`, fail, 'depth' in r, { name: r.name, w: r.w, h: r.h });
         checkPaintingExtensionCount(r, `${at} ${part817}`, fail);
         const l = r[LIMB_KEY];
         if (typeof l !== 'object' || l === null || Array.isArray(l) || !('cap' in l)) return;

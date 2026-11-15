@@ -3,6 +3,7 @@ import { OPAQUE_ALPHA_ABOVE } from './layers.ts';
 import type { PartRecord } from './parts.ts';
 import type { AuthoredUnitDepth } from './authoredunit.ts';
 import { crop, type Raster } from './raster/index.ts';
+import type { EditedPartProvenance } from './editedparts.ts';
 
 /** Negative IDs distinguish automatic writes from positive, config-indexed hand edits. */
 export const AUTOMATIC_WRITERS = {
@@ -16,6 +17,8 @@ export const EXCLUDED_PIXEL = -2147483648;
 export const NOT_OVERRIDDEN_PIXEL = -2147483647;
 export const STAGE_MAP_FILE = 'stage-map.json';
 export interface PartStageMap {
+  /** Whole-file receipt, independent of the final-opaque writer partition. */
+  edited_part?: EditedPartProvenance;
   name: string;
   x: number;
   y: number;
@@ -38,6 +41,8 @@ export interface StageMap {
 }
 
 export interface PixelProvenance {
+  /** Receipt covers unchanged and transparent pixels as well as changed ones. */
+  edited_part?: EditedPartProvenance;
   /** Scalar transport omitted only for fully explicit unit consumers (#877). */
   depth?: AuthoredUnitDepth;
   unchanged_layer_px: number;
