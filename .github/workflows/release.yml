@@ -201,9 +201,10 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       # Node 22 ships npm 10; the OIDC exchange landed in npm 11.5.1.
+      # CI installs the same version in install-platforms; the two must stay equal.
       - name: Use an npm that speaks OIDC
         run: |
-          npm install -g npm@latest
+          npm install -g npm@12.2.2
           npm --version
 
       # The lockfile is bun.lock — there is no package-lock.json for `npm ci`.
