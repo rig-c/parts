@@ -46,7 +46,11 @@ function legacyDepthConfig(raw: Obj, rigConfig: string, out: string, pivot: numb
 /** Narrow #1283 proof: real core-gated build, two receipts, and default/legacy output bytes. */
 export function runDepthRelocationChecks(dir: string, say: Say): void {
   const input = join(dir, 'input'), config = writeEditorReceiptFixture(input, { author: false });
+  config.bones = [...(config.bones as Obj[]), { name: 'head', parent: 'anchor', at: [32, 32] }];
+  config.regions = { ...(config.regions as Obj), face: 'head' };
   config.turn = { pivot: 30, roles: { face: 'surface' } };
+  // Match the flat-block breath track in fixtures/alternate_cut_layers.ts.
+  config.motion = { duration: 1, tracks: [{ bone: 'anchor', prop: 'translatey', amp: 2, period: 1, phase: 0 }] };
   // Supply the surface's authored scalar input so the initial full build can run its real gate.
   const initialDepth = newRaster(48, 24);
   for (let i = 0; i < 48 * 24; i++) initialDepth.data.set([128, 128, 128, 255], i * 4);
