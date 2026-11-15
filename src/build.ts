@@ -1,3 +1,4 @@
+import { readEditedParts } from './editedparts.ts';
 import { SOURCE_COVER_FILE, sourceCoverReport, type SourceCoverSet } from './sourcecover.ts';
 import { STAGE_MAP_FILE } from './provenance.ts';
 import { withoutCheckRows } from './checkrow.ts';
@@ -173,6 +174,8 @@ export interface AlternateCliInput {
 }
 
 export interface AssembleStageInput {
+  /** Internal build protocol: reset owned outputs only after assembly is green. */
+  resetBuildOutput?: boolean;
   /** A null set identifies the primary assembly evaluation. */
   allocationEvent?: (event: PaintingAllocationEvent, set: string | null) => void;
   /** Write source-edge evidence only when cut_material is explicitly declared. */
@@ -394,12 +397,14 @@ export function emitFillMasksStage(input: EmitFillMasksInput, log: Log): Array<{
   const read = readRuns(input.full, input.head);
   const takenRuns = applyTakenLayers(read, src, cfg, input.config);
   const receipts = readEditorReceipts(cfg.assemble.editor_receipts, input.config);
+  const editedParts = readEditedParts(cfg.assemble.edited_parts, input.config, cfg.assemble.plan ?? []);
   const runs = applyTakenRegions(takenRuns, src, cfg, input.config, undefined, receipts, input.source);
   const fields = stageFields(cfg, runs.single ? { w: src.width, h: src.height } : null);
   const strippedCuts = fields.cuts.map((q) => ({ from: q.from, into: q.into, polygon: q.polygon, draw: q.draw, overlap: q.overlap }));
   const caps = fields.limbs === undefined ? undefined : readCaps(input.config, fields.limbs);
   const occluders = cfg.assemble.occluders === undefined ? undefined : readOccluderInputs(cfg.assemble.occluders, input.config, src);
   const result = assemble({
+    editedParts,
     source: src,
     full: runs.full,
     head: runs.head,
@@ -514,6 +519,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const read = readRuns(input.full, input.head);
   // Issue #946: every declared receipt is held to its file, and under `required` every edited image needs one, before anything is assembled.
   const receipts = readEditorReceipts(cfg.assemble.editor_receipts, input.config);
+  const editedParts = readEditedParts(cfg.assemble.edited_parts, input.config, cfg.assemble.plan ?? []);
   // Issue #947: under `trace_parts`, a shape drawn in the config through a part's pixels is refused with them.
   refuseIfAny([...receipts.problems, ...missingReceipts(receipts, [...editedRunImages(read), ...editedConfigImages(input.config, cfg.assemble.cuts ?? [], cfg.limbs)]), ...untracedPartSources(cfg)]);
   const takenRuns = applyTakenLayers(read, src, cfg, input.config);
@@ -530,7 +536,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   const under = readUnders(input.config, fields.cuts, { sourcePath: input.source, rigSize, platesOut: underPlates });
   const caps = fields.limbs === undefined ? undefined : readCaps(input.config, fields.limbs);
   const occluders = cfg.assemble.occluders === undefined ? undefined : readOccluderInputs(cfg.assemble.occluders, input.config, src);
-  const result = assemble({ allocationEvent: input.allocationEvent === undefined ? undefined : event => input.allocationEvent!(event, null), source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under, ...(declaredFigure === undefined ? {} : { declaredFigure }),
+  const result = assemble({ editedParts, allocationEvent: input.allocationEvent === undefined ? undefined : event => input.allocationEvent!(event, null), source: src, full: runs.full, head: runs.head, depth: cfg.depth, depthBase: dirname(resolve(input.config)), ...fields, under, ...(declaredFigure === undefined ? {} : { declaredFigure }),
     ...((cfg.assemble.take ?? []).some(t => 'seed' in t) ? { regionTake: { full: takenRuns.full, head: takenRuns.head, targets: (cfg.assemble.take ?? []).flatMap(t => 'seed' in t ? [t.part] : []) } } : {}), ...(caps === undefined ? {} : { caps }), ...(occluders === undefined ? {} : { occluders }), seamRule: seam, projectRule: project });
   refuseIfAny(verifyUnderPlateMasks(result, fields.cuts, underPlates));
 
@@ -1082,6 +1088,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   }
 
   // Emit only after green: every refusal above has already thrown.
+  if (input.resetBuildOutput === true) resetBuildOutput(dirname(outs.partsJson));
   mkdirSync(outs.partsDir, { recursive: true });
   mkdirSync(dirname(outs.partsJson), { recursive: true });
   mkdirSync(dirname(outs.recomposite), { recursive: true });
@@ -1118,8 +1125,9 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
       log(`${PAINTING_EDGE_COVERAGE_TRANSFER}: set "${report.set}" ${count} native rig px; membership in ${file}`);
     }
   }
-  for (const { record, image, depthImage } of result.images) {
-    writePng(join(outs.partsDir, `${record.name}.png`), image);
+  for (const { record, image, depthImage, encodedBytes } of result.images) {
+    if (encodedBytes === undefined) writePng(join(outs.partsDir, `${record.name}.png`), image);
+    else writeFileSync(join(outs.partsDir, `${record.name}.png`), encodedBytes);
     if (depthImage !== undefined && record.depth !== undefined) writePng(join(outs.partsDir, record.depth.image), depthImage);
   }
   for (const row of result.depthReadings ?? []) log(`  depth reading ${row.from}: ${row.reading.relation}; ordering median ${row.reading.orderingMedian}, source-sheet median ${row.reading.sheetMedian} (half-level quantization; reading only, polarity declared)`);
@@ -2738,6 +2746,21 @@ export interface BuildRunners {
 /** Every path `build` writes under `--out`, relative — and so every path it clears first. */
 export const BUILD_OWNS: readonly string[] = ['parts', 'parts.json', SOURCE_COVER_FILE, PAINTING_IN_RIG_FILE, 'recomposite_rig.png', ERROR_MAP_FILE, 'rig', 'check', 'idle.gif', 'idle.png', 'idle-indexed.png'];
 
+function resetBuildOutput(out: string): void {
+  mkdirSync(out, { recursive: true });
+  for (const p of BUILD_OWNS) rmSync(join(out, p), { recursive: true, force: true });
+  for (const p of [CUT_MATERIAL_SOURCES, EDGE_RESIDUAL_FILE, SUPPORT_DOMAINS_FILE, FIGURE_MASK_FILE]) rmSync(join(out, p), { force: true });
+}
+
+/** Only selects when cleanup occurs; the real config loader still decides validity. */
+function declaresEditedParts(path: string): boolean {
+  try {
+    const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    return raw !== null && typeof raw === 'object' && 'assemble' in raw &&
+      raw.assemble !== null && typeof raw.assemble === 'object' && 'edited_parts' in raw.assemble;
+  } catch { return false; }
+}
+
 export type BuildStage = 'assemble' | 'rig' | 'check' | 'loop' | 'artifact';
 
 export interface BuildResult {
@@ -2797,14 +2820,8 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
     return { stoppedAt: stage, check, artifact: [] };
   };
   const out = input.out;
-  mkdirSync(out, { recursive: true });
-  for (const p of BUILD_OWNS) rmSync(join(out, p), { recursive: true, force: true });
-  // Optional source evidence is cleared separately; BUILD_OWNS is the legacy complete output tree.
-  rmSync(join(out, CUT_MATERIAL_SOURCES), { force: true });
-  rmSync(join(out, EDGE_RESIDUAL_FILE), { force: true });
-  rmSync(join(out, SUPPORT_DOMAINS_FILE), { force: true });
-  // Issue #242: the figure mask is written only under config.scene; one left by an earlier scene build is not this build's.
-  rmSync(join(out, FIGURE_MASK_FILE), { force: true });
+  const deferReset = declaresEditedParts(input.config);
+  if (!deferReset) resetBuildOutput(out);
   // The idle-keys value is named only when it is not the default, so a build without the flag, or with the default, prints the line it printed before issue #95.
   const idleKeys = input.idleKeys ?? DEFAULT_IDLE_KEYS;
 
@@ -2834,7 +2851,7 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
     // And the steady-wind band spec (issue #590), as check reads it.
     if (input.windBand !== undefined) readWindBand(input.windBand);
     const assembled = stages.assemble(
-      { source: input.source, full: input.full, head: input.head, config: input.config, seam, project, ...(req === null ? {} : { requirements: req.read }), ...(input.alts === undefined ? {} : { alts: input.alts }) },
+      { source: input.source, full: input.full, head: input.head, config: input.config, seam, project, ...(deferReset ? { resetBuildOutput: true } : {}), ...(req === null ? {} : { requirements: req.read }), ...(input.alts === undefined ? {} : { alts: input.alts }) },
       { partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'), recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, ERROR_MAP_FILE) },
       prefixed('assemble'),
     );

@@ -204,6 +204,39 @@ export function runPartsReaderReferenceChecks(dir: string, base: PartsFile, conf
   ];
   const references = partsFileReferences(fixture);
   say('PT1163_DECLARED_MEMBERSHIP_AND_ROLES', JSON.stringify(references) === JSON.stringify(expected), JSON.stringify(references));
+  // Keep receipt-bearing records separate from the existing part-name plants.
+  const receiptFile = structuredClone(file);
+  const receiptRecords = [...receiptFile.parts, ...receiptFile.alternates![0].records];
+  for (const record of receiptRecords) {
+    record.provenance = { unchanged_layer_px: record.opaque_px, hand_px: 0, automatic_px: 0, edits: [], automatic: [],
+      edited_part: { edit: 'edited_parts[0]', dir: 'historical-edits',
+        receipt: { part: record.name, file: 'receipt-only.png', sha256: '0'.repeat(64), from_sha256: '1'.repeat(64), editor: 'synthetic-editor' },
+        changed_px: 0, changed_counted_px: 0, changed_excluded_px: 0, removed_opaque_px: 0 } };
+  }
+  try {
+    // Author inputs are deliberately absent; only emitted PNGs are current.
+    writeFileSync(path, JSON.stringify(receiptFile));
+    const reread = readParts(path);
+    say('PT1163_EDIT_RECEIPT_PATHS_ARE_HISTORICAL',
+      !existsSync(join(fixture, 'historical-edits')) && !existsSync(join(fixture, 'parts', 'receipt-only.png')) &&
+      [...reread.parts, ...reread.alternates![0].records].every((record, i) => JSON.stringify(record.provenance?.edited_part) === JSON.stringify(receiptRecords[i].provenance?.edited_part)) &&
+      JSON.stringify(partsFileReferences(fixture)) === JSON.stringify(expected),
+      'base and alternate receipts retained without author inputs; receipt dir/file are not current PNG references');
+    const receiptAsDepth = structuredClone(receiptFile);
+    receiptAsDepth.parts[0].depth!.image = 'receipt-only.png';
+    try {
+      writeFileSync(path, JSON.stringify(receiptAsDepth));
+      const planted = partsFileReferences(fixture);
+      say('PT1163_RECEIPT_FILENAME_AS_CURRENT_DEPTH_IS_ENUMERATED',
+        planted.some(row => row.path === 'parts/receipt-only.png' && row.role === 'depth') &&
+        JSON.stringify(planted) !== JSON.stringify(expected),
+        'same filename planted as depth.image changes current membership despite absent PNG; receipt alone does not');
+    } finally { writeFileSync(path, JSON.stringify(receiptFile)); }
+    say('PT1163_RECEIPT_CONTEXT_PLANT_REMOVED',
+      JSON.stringify(partsFileReferences(fixture)) === JSON.stringify(expected) &&
+      JSON.stringify(readParts(path).parts[0].provenance?.edited_part) === JSON.stringify(receiptRecords[0].provenance?.edited_part),
+      'receipt fixture restored; historical receipt retained and original current PNG membership restored');
+  } finally { writeFileSync(path, JSON.stringify(file)); }
   const isolated = join(dir, 'isolated');
   mkdirSync(isolated);
   cpSync(join(root, 'src'), join(isolated, 'src'), { recursive: true });

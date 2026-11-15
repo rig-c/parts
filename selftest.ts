@@ -45,6 +45,7 @@ import { prepareSeeThroughInput } from './src/seethrough-transform.ts';
 import { runSeeThroughTransformChecks } from './tools/check_seethrough_transform.ts';
 import { runPlateChecks } from './tools/check_plate.ts';
 import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
+import { runEditedPartChecks } from './tools/check_edited_parts.ts';
 import { runPartSourceChecks } from './tools/check_part_sources.ts';
 import { runReadmePolicyChecks } from './scripts/readme_policy.ts';
 import { beginPhases, finishPhases, measurePhase, phaseRecord, measurementPayloadValid, familyRows, observerPids, observeFamily, unmeasuredFamily, type PhaseRecord, type FamilyPeak } from './scripts/selftest_measure.ts';
@@ -55093,7 +55094,12 @@ function runEditorReceiptsSuite(): number {
   const { say, bad } = counter();
   const dir = temp('editor-receipts');
   let index = 0;
-  try { runEditorReceiptChecks(dir, (name, pass, detail) => say(`ER${String(++index).padStart(2, '0')}_${name}`, pass, detail, 'issue #946: generated rectangles; receipts verified by sha256, demanded only under required')); }
+  try {
+    runEditorReceiptChecks(dir, (name, pass, detail) => say(`ER${String(++index).padStart(2, '0')}_${name}`, pass, detail, 'issue #946: generated rectangles; receipts verified by sha256, demanded only under required'));
+    let editedIndex = 0;
+    runEditedPartChecks(join(dir, 'edited-parts'), (name, pass, detail) => say(`EP1278${String(++editedIndex).padStart(2, '0')}_${name}`, pass, detail,
+      'issue #1278: final rig-space file bytes, receipt census, whole-file trace, strict metadata and refusal atomicity over successful outputs'));
+  }
   finally { rmSync(dir, { recursive: true, force: true }); }
   return bad();
 }

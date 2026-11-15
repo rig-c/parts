@@ -314,7 +314,7 @@ part name, `[i]` an entry of a list):
 - **generation.control.skeleton**, the pose file it names when it is no built-in — required: `width`, `height`, `points`
 - **seethrough** — required: `resolution`, `steps`, `seed`, `offload`; optional: `head_box`, `arm_split`
 - **seethrough.arm_split** — required: `order`, and one of `x` or `line` (issue #439)
-- **assemble** — required: `rig_scale`, `plan` (from plain `assemble` on); optional: `seam`, `project`, `ground`, `extend_below_crop`, `patches`, `cuts`, `alternates`, `head_face_underfill`, `yield_refused`, `stage_map`, `keep_under_occluders`, `require_hidden_extent`, `extend_painting`, `edge_splits`, `take`, `editor_receipts`, `occluders`
+- **assemble** — required: `rig_scale`, `plan` (from plain `assemble` on); optional: `seam`, `project`, `ground`, `extend_below_crop`, `patches`, `cuts`, `alternates`, `head_face_underfill`, `yield_refused`, `stage_map`, `keep_under_occluders`, `require_hidden_extent`, `extend_painting`, `edge_splits`, `take`, `editor_receipts`, `edited_parts`, `occluders`
 - **assemble.edge_splits[i]** — required: `over`, `under`, `band`
 - **assemble.require_hidden_extent[i]** — required: `part`, `occluder`
 - **assemble.occluders[i]** — required: `image`, `sha256`, `under`, `rgb_within`; optional: `over`, `plate`, `part`, `grow`, `guard` (issues #1230, #1237, #1241, #1246, #1251, #1259)
@@ -326,6 +326,8 @@ part name, `[i]` an entry of a list):
 - **assemble.take[i].reference** — required: `sha256`; optional: `source`, `painting` (issue #1031). Exactly one of `source: true` or a config-relative `painting` PNG is required. The reference governs colour only and geometry follows `--source`. A region take requires an opaque `--source` because its donor must match the run input and the inputs command refuses see-through paintings, so flatten the plate first.
 - **assemble.editor_receipts** — required: `receipts`; optional: `required` (issue #946, additive), `trace_parts` (issue #947, additive)
 - **assemble.editor_receipts.receipts[i]** — required: `file`, `sha256`, `from_sha256`, `editor` (issue #946)
+- **assemble.edited_parts** — required: `dir`, `receipts` (issue #1278; directory relative to the config)
+- **assemble.edited_parts.receipts[i]** — required: `part`, `file`, `sha256`, `from_sha256`, `editor` (issue #1278; file relative to the edited-parts directory)
 - **assemble.patches[i]** — required: `name`, `box`, `alpha`, `draw`
 - **assemble.patches[i].draw**, when an object — required: `before`
 - **assemble.cuts[i]** — required: `from`, `into`, `polygon`, `draw`, `overlap`; optional: `under`, `under_fill` (issue #1230: `under` is a path string or an object)
@@ -1140,6 +1142,37 @@ split or to a receipted image: with `true`, receipts are demanded as under
 painting extension's `band`) is refused (`ASSEMBLE_PART_SOURCE`) before
 anything is assembled. Absent or `false`, nothing more is demanded and no byte
 moves.
+
+### Edited rig-space parts
+
+The optional `assemble.edited_parts` block (issue #1278, additive) replaces
+existing base-plan parts with verified rig-pixel PNG files after all automatic
+passes and final restoration. It preserves boxes, names, draw order and
+original `from` identities. The encoded edited file bytes are emitted intact;
+recomposite and final accounting consume its decoded pixels. Both the edited
+file hash and the current normal assembled part's `from_sha256` are verified.
+The block does not change author-layer projection or editor receipt semantics.
+Alternate sets retain their own declared art; inherited base assets use the
+edited base image. No new flag bypasses rig-c or existing check bars.
+
+Receipt association is additive `provenance.edited_part` metadata: the complete
+receipt and `dir`, `edit: "edited_parts[i]"`, `changed_px`,
+`changed_counted_px`, `changed_excluded_px` and `removed_opaque_px`.
+The four counts describe exact baseline-to-edited RGBA differences;
+`hand_px` keeps its existing final-alpha-above-8 partition meaning.
+The receipt covers the whole file, including unchanged and transparent
+positions; stage-map entries retain that association separately from writer
+runs. The strict parts reader rejects malformed associations and inconsistent
+counts. [AUTHORING](AUTHORING.md#edited-rig-space-parts-assembleedited_parts-issue-1278)
+defines paths, counts and the base-only scope.
+
+An unknown part, missing file, edited hash mismatch, stale baseline hash,
+dimension mismatch or duplicate part is refused by its dedicated
+`ASSEMBLE_EDITED_PART_*` code before any output write. A non-decodable PNG is
+also refused before writes. A preexisting successful output remains unchanged.
+The [refusal table](https://github.com/rig-c/parts/blob/main/docs/CHECKS.md#edited-rig-space-parts)
+names each code. Without the block, existing outputs and metadata stay
+byte-identical; an empty receipt list applies no replacement.
 
 ## Provider-map depth stages (#897)
 

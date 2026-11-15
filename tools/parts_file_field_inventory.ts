@@ -29,6 +29,12 @@ const PART_STRING_FIELDS = [
   'provenance.depth.kind',
   'provenance.depth.values[].bone',
   'provenance.depth.values[].group',
+  // Historical edit identity, author label and hashes; not current asset paths.
+  'provenance.edited_part.edit',
+  'provenance.edited_part.receipt.editor',
+  'provenance.edited_part.receipt.from_sha256',
+  'provenance.edited_part.receipt.part',
+  'provenance.edited_part.receipt.sha256',
   'provenance.edits[].edit',
   'taken_layers[].prompt_id',
   'taken_layers[].run',
@@ -41,6 +47,12 @@ const PART_STRING_FIELDS = [
   'taken_layers[].transport.before_rgba_sha256',
   'taken_layers[].transport.filter',
   'taken_layers[].transport.input_rgba_sha256',
+];
+// These paths describe the original config's author inputs. PartsFile consumers
+// retain the receipt without reopening those inputs or relocating them into parts/.
+const PART_HISTORICAL_EDIT_PATH_FIELDS = [
+  'provenance.edited_part.dir',
+  'provenance.edited_part.receipt.file',
 ];
 const OTHER_STRING_FIELDS = [
   'alternates[].base_anchor.*.axes[]',
@@ -117,7 +129,7 @@ export function partsStringFieldFaults(root: string): string[] {
   walk(checker.getTypeAtLocation(declaration), '', new Set());
   const classified = new Set([
     ...OTHER_STRING_FIELDS,
-    ...PART_STRING_FIELDS.flatMap(field => [`parts[].${field}`, `alternates[].records[].${field}`]),
+    ...[...PART_STRING_FIELDS, ...PART_HISTORICAL_EDIT_PATH_FIELDS].flatMap(field => [`parts[].${field}`, `alternates[].records[].${field}`]),
   ]);
   return [...[...leaves].filter(field => !classified.has(field)).map(field => `unclassified string/file field ${field}`),
     ...[...classified].filter(field => !leaves.has(field)).map(field => `classified field disappeared ${field}`)].sort();
