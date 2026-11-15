@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.38.1 (2026-11-16)
+
+### Bug Fixes
+
+* **config:** declare each `assemble.edited_parts.receipts[i].file` in `configFileReferences()` with `value` set to `posix.join(dir, file)` relative to the config without declaring `assemble.edited_parts.dir`, and keep edited-part receipt paths relative to the scratch config destination in `scratchConfig()` (`src/meshdraft.ts`) while leaving other references absolute (`#1281`, `#1282`, `87b0fe3`).
+* **depth:** relocate every reference declared by `configFileReferences()` in `applyDepth()` (`src/depthworkflow.ts`) instead of only `motion.animations_from`, non-built-in `generation.control.skeleton`, and `requirements`, so `assemble.edited_parts` receipt files and other declared references remain valid when `depth apply` outputs are reassembled (`#1283`, `#1282`, `87b0fe3`).
+* **config:** compute `assemble.edited_parts.receipts[i].file` setter paths from normalized POSIX segments without resolving against the process working directory, and when a target cannot be represented under the live `edited_parts.dir`, rebase `dir` to the normalized lexical common prefix (`.` when empty) and rewrite valid sibling `file` entries to preserve their config-relative targets (`#1281`, `#1283`, `#1282`, `87b0fe3`).
+
 ## 2.38.0 (2026-11-16)
 
 ### Features
