@@ -8679,8 +8679,15 @@ The declared fields are `requirements`, `motion.animations_from`, non-built-in
 `generation.control.skeleton`, each `assemble.occluders[i].image` and optional
 `plate`, and `assemble.edited_parts.receipts[i].file`. Each edited receipt's
 value joins its shared `dir` and its `file` with POSIX path semantics; the
-directory itself is not a reference. Its setter keeps `dir` and writes the
-receipt's `file` relative to it. Keep edited targets config-relative: an absolute
+directory itself is not a reference. Its setter uses normalized POSIX segments,
+independent of the cwd, and reads the live `dir` on each call. When the target is
+representable under that directory, `dir` and every sibling receipt remain
+byte-for-byte unchanged. Otherwise it rebases `dir` to the normalized lexical
+common prefix with the target (`.` for an empty prefix), rewriting sibling files
+to preserve their original config-relative targets. This also applies to setters
+from the same enumeration after a rebase; enumerate again to read updated values.
+Invalid directories and invalid sibling fields remain for the loader to diagnose.
+Keep edited targets config-relative: an absolute
 target, including Windows absolute forms, is preserved as an absolute `file`
 and refused by the loader's existing `CONFIG_FIELD_TYPE`. This does not change
 the edited-parts reader or its refusals.

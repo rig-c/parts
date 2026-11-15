@@ -45,7 +45,7 @@ import { prepareSeeThroughInput } from './src/seethrough-transform.ts';
 import { runSeeThroughTransformChecks } from './tools/check_seethrough_transform.ts';
 import { runPlateChecks } from './tools/check_plate.ts';
 import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
-import { runEditedPartChecks } from './tools/check_edited_parts.ts';
+import { runEditedPartChecks, runEditedReferenceCwdChecks } from './tools/check_edited_parts.ts';
 import { runPartSourceChecks } from './tools/check_part_sources.ts';
 import { runReadmePolicyChecks } from './scripts/readme_policy.ts';
 import { beginPhases, finishPhases, measurePhase, phaseRecord, measurementPayloadValid, familyRows, observerPids, observeFamily, unmeasuredFamily, type PhaseRecord, type FamilyPeak } from './scripts/selftest_measure.ts';
@@ -2266,6 +2266,75 @@ function runConfigSuite(): number {
     refusals(() => parseConfig(edited1281)) === null,
     JSON.stringify(block1281), 'issue #1281: independent target folders remain consistent through every setter in one enumeration');
   const absolute1281 = ['/absolute/one.png', String.raw`C:\absolute\one.png`, 'C:/absolute/one.png', String.raw`\rooted\one.png`, String.raw`\\server\share\one.png`];
+  const lexical1282: Array<[string, string, string, string]> = [
+    ['edits', 'edits/./one.png', 'one.png', 'edits/one.png'],
+    ['edits/a', 'edits/b/one.png', '../b/one.png', 'edits/b/one.png'],
+    ['edits//nested/./', '.././receipts//unused/../one.png', '../../../receipts/one.png', '../receipts/one.png'],
+    ['.', '../one.png', '../one.png', '../one.png'],
+    ['../edits', '../one.png', '../one.png', '../one.png'],
+    ['../../edits/nested', '../../../one.png', '../../../one.png', '../../../one.png'],
+    ['../edits/..', '../../two.png', '../two.png', '../../two.png'],
+  ];
+  const lexicalResults1282 = lexical1282.map(([dir, target, file, value]) => {
+    const raw = JSON.parse(before1281) as Record<string, unknown>;
+    const b = (raw.assemble as { edited_parts: typeof block1281 }).edited_parts;
+    b.dir = dir;
+    configFileReferences(raw)[0].set(target);
+    return b.dir === dir && b.receipts[0].file === file && b.receipts[1].file === 'second/two.png' &&
+      configFileReferences(raw)[0].value === value && refusals(() => parseConfig(raw)) === null;
+  });
+  say('CF1282_REPRESENTABLE_POSIX_SEGMENTS_NORMALIZE_WITHOUT_CWD', lexicalResults1282.every(Boolean),
+    JSON.stringify({ cases: lexical1282, accepted: lexicalResults1282 }),
+    'issue #1282: dots, repeated separators, shared prefixes and leading-parent bases keep dir and the other receipt; expected segments are explicit');
+  const prefixRaw1282 = JSON.parse(before1281) as Record<string, unknown>;
+  const prefixBlock1282 = (prefixRaw1282.assemble as { edited_parts: typeof block1281 }).edited_parts;
+  prefixBlock1282.dir = '../../edits';
+  const prefixRefs1282 = configFileReferences(prefixRaw1282);
+  const prefixSibling1282 = prefixRefs1282[1].value;
+  prefixRefs1282[0].set('../one.png');
+  say('CF1282_NONEMPTY_COMMON_PREFIX_PRESERVES_SIBLING_TARGET', prefixBlock1282.dir === '..' &&
+    configFileReferences(prefixRaw1282)[0].value === '../one.png' && configFileReferences(prefixRaw1282)[1].value === prefixSibling1282 &&
+    refusals(() => parseConfig(prefixRaw1282)) === null, JSON.stringify(prefixBlock1282),
+    'issue #1282: rebasing to a nonempty parent prefix preserves the other config-relative target');
+  const invalidSiblings1282: unknown[] = [null, 7, '', ' ', ...absolute1281];
+  const invalidSiblingResults1282 = invalidSiblings1282.map(file => {
+    const raw = JSON.parse(before1281) as Record<string, unknown>;
+    const b = (raw.assemble as { edited_parts: typeof block1281 }).edited_parts;
+    b.dir = '../edits';
+    const sibling = b.receipts[1] as unknown as Record<string, unknown>;
+    sibling.file = file;
+    const before = JSON.stringify(sibling);
+    const field = 'config.assemble.edited_parts.receipts[1].file';
+    const problems = () => refusals(() => parseConfig(raw))?.problems.filter(p => p.object === field);
+    const refusedBefore = problems();
+    configFileReferences(raw)[0].set('foo.png');
+    return b.dir === '.' && before === JSON.stringify(sibling) && (refusedBefore?.length ?? 0) > 0 &&
+      JSON.stringify(problems()) === JSON.stringify(refusedBefore);
+  });
+  say('CF1282_REBASE_PRESERVES_INVALID_SIBLING_BYTES_AND_REFUSALS', invalidSiblingResults1282.every(Boolean),
+    JSON.stringify({ files: invalidSiblings1282, preserved: invalidSiblingResults1282 }),
+    'issue #1282: a sibling rebase never repairs absolute, blank, empty or non-string fields');
+  const invalidDirs1282 = ['', ' ', ...absolute1281];
+  const invalidDirResults1282 = invalidDirs1282.map(dir => {
+    const raw = JSON.parse(before1281) as Record<string, unknown>;
+    const b = (raw.assemble as { edited_parts: typeof block1281 }).edited_parts;
+    const refs = configFileReferences(raw);
+    b.dir = dir; // Read live even when the object changes after enumeration.
+    const before = JSON.stringify(b.receipts[1]);
+    const field = 'config.assemble.edited_parts.dir';
+    const problems = () => refusals(() => parseConfig(raw))?.problems.filter(p => p.object === field);
+    const refusedBefore = problems();
+    refs[0].set('foo.png');
+    return b.dir === dir && before === JSON.stringify(b.receipts[1]) && (refusedBefore?.length ?? 0) > 0 &&
+      JSON.stringify(problems()) === JSON.stringify(refusedBefore);
+  });
+  say('CF1282_SETTER_PRESERVES_INVALID_LIVE_DIR_AND_REFUSALS', invalidDirResults1282.every(Boolean),
+    JSON.stringify({ dirs: invalidDirs1282, preserved: invalidDirResults1282 }),
+    'issue #1282: a stale enumeration cannot silently repair an absolute, blank or empty directory');
+  const cwdDir1282 = temp('edited-reference-cwd');
+  try { runEditedReferenceCwdChecks(cwdDir1282, (name, pass, detail) => say('CF1282_' + name, pass, detail,
+    'issue #1282: parent count exceeds the setter child cwd depth; the same actual PNG read and byte oracle rejects an isolated old-line plant')); }
+  finally { rmSync(cwdDir1282, { recursive: true, force: true }); }
   const rejected1281 = absolute1281.map(next => {
     const raw = JSON.parse(before1281) as Record<string, unknown>;
     configFileReferences(raw)[0].set(next);

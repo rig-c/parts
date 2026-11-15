@@ -1,8 +1,8 @@
 /** Issue #1278: final rig-space file replacement, with independent byte and census controls. */
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, posix, relative, resolve } from 'node:path';
 import { writeEditorReceiptFixture } from '../fixtures/editor_receipts.ts';
 import { C, WHITE, paint } from '../fixtures/assemble_fixture.ts';
 import { assembleStage, build } from '../src/build.ts';
@@ -163,6 +163,176 @@ const parts = readEditedParts(cfg.assemble.edited_parts, config, cfg.assemble.pl
 active = false;
 console.log(JSON.stringify({ reads, count: parts.length }));
 `;
+
+// The same child oracle reads the real and isolated planted modules. Its cwd is
+// pinned by the caller; depth is also measured here, where the setter runs.
+const editedCwdProbe = `
+import { mock } from 'bun:test';
+import * as fs from 'node:fs';
+import { join, posix, resolve } from 'node:path';
+const [root, inputFile, destination, targetsJson, expectedJson, out, mode] = process.argv.slice(2);
+const input = JSON.parse(fs.readFileSync(inputFile, 'utf8'));
+const targets = JSON.parse(targetsJson), expected = JSON.parse(expectedJson);
+const reads = [];
+let active = false;
+const read = fs.readFileSync;
+mock.module('node:fs', () => ({ ...fs, readFileSync(path, ...options) {
+  if (active && typeof path === 'string') reads.push(resolve(path));
+  return Reflect.apply(read, fs, [path, ...options]);
+} }));
+const { configFileReferences, parseEarlyConfig } = await import(root + '/src/config.ts');
+const { assembleStage } = await import(root + '/src/build.ts');
+const { PartsError } = await import(root + '/src/errors.ts');
+const raw = JSON.parse(read(input.config, 'utf8'));
+const block = raw.assemble.edited_parts;
+const dirBefore = block.dir;
+const cwdDepth = process.cwd().split(/[\\\\/]+/).filter(Boolean).length;
+const parentCounts = targets.map(t => posix.normalize(t).split('/').findIndex(s => s !== '..'));
+const refs = configFileReferences(raw);
+const config = join(destination, 'config.json');
+const observe = (wanted, output) => {
+  const values = configFileReferences(raw).map(r => r.value);
+  fs.writeFileSync(config, JSON.stringify(raw));
+  parseEarlyConfig(raw, 'assemble');
+  let codes = [];
+  reads.length = 0; active = true;
+  try {
+    assembleStage({ source: input.source, full: input.full, head: input.head, config }, {
+      partsJson: join(output, 'parts.json'), partsDir: join(output, 'parts'),
+      recomposite: join(output, 'recomposite_rig.png'), errorMap: join(output, 'recomposite_error_rig.png'),
+    }, () => {});
+  } catch (error) {
+    if (!(error instanceof PartsError)) throw error;
+    codes = error.problems.map(p => p.code);
+  } finally { active = false; }
+  const expectedFiles = wanted.map(t => resolve(destination, t));
+  const exact = block.receipts.every((r, i) => {
+    const file = join(output, 'parts', r.part + '.png');
+    return fs.existsSync(file) && read(file).equals(read(expected[i]));
+  });
+  return { cwdDepth, parentCounts, values, expectedValues: wanted.map(t => posix.normalize(t)), dir: block.dir,
+    dirKept: block.dir === dirBefore, codes, exact, readsExpected: expectedFiles.every(f => reads.includes(f)),
+    receiptReads: reads.filter(f => f.endsWith('body.png') || f.endsWith('face.png')) };
+};
+if (mode === 'rebase') {
+  const originalValues = refs.map(r => r.value);
+  refs[0].set(targets[0]);
+  const first = observe([targets[0], originalValues[1]], out + '-first');
+  const firstFile = block.receipts[0].file;
+  refs[1].set(targets[1]); // This closure predates the first setter's rebase.
+  const live = observe(targets, out);
+  const siblingBefore = JSON.stringify(block.receipts[1]), dirBeforeFresh = block.dir;
+  configFileReferences(raw)[0].set(targets[0]);
+  console.log(JSON.stringify({ ...live, first, liveSiblingKept: block.receipts[0].file === firstFile,
+    freshValues: configFileReferences(raw).map(r => r.value),
+    freshSiblingKept: JSON.stringify(block.receipts[1]) === siblingBefore && block.dir === dirBeforeFresh }));
+} else {
+  refs.forEach((ref, i) => ref.set(targets[i]));
+  console.log(JSON.stringify(observe(targets, out)));
+}
+`;
+
+/** Issue #1282: narrow cwd regression, including actual PNG reads and an isolated old-line plant. */
+export function runEditedReferenceCwdChecks(dir: string, say: Say): void {
+  mkdirSync(dir, { recursive: true });
+  const input = synthetic(join(dir, 'input'));
+  const baseline = join(dir, 'baseline'); run(input, baseline);
+  const source = join(dir, 'source');
+  const expected: string[] = [];
+  const block: Block = { dir: 'edits', receipts: ['body', 'face'].map(part => {
+    const original = readFileSync(join(baseline, 'parts', part + '.png'));
+    const bytes = editedPartPngBytes(readPng(join(baseline, 'parts', part + '.png')));
+    const file = part + '.png', target = join(source, 'edits', file);
+    mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, bytes); expected.push(target);
+    return { part, file, sha256: hash(bytes), from_sha256: hash(original), editor: 'technical cwd fixture' };
+  }) };
+  const file = join(source, 'config.json');
+  const raw = editedConfig(input, block, file);
+  const probeCwd = process.cwd();
+  const cwdDepth = probeCwd.split(/[\\/]+/).filter(Boolean).length;
+  const parents = cwdDepth + 3;
+  const destination = join(dir, 'destination', ...Array<string>(parents).fill('nested'));
+  mkdirSync(destination, { recursive: true });
+  const targets = block.receipts.map(r => '../'.repeat(parents) + 'receipts/./unused/../' + r.file);
+  targets.forEach((target, i) => {
+    const path = resolve(destination, target); mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, readFileSync(expected[i]));
+  });
+  const script = join(dir, 'cwd-probe.ts'); writeFileSync(script, editedCwdProbe);
+  const inputFile = join(dir, 'probe-input.json'); save(inputFile, { ...input, config: file });
+  type Observation = { cwdDepth: number; parentCounts: number[]; values: string[]; expectedValues: string[]; dir: string;
+    dirKept: boolean; codes: string[]; exact: boolean; readsExpected: boolean; receiptReads: string[];
+    first?: Observation; liveSiblingKept?: boolean; freshValues?: string[]; freshSiblingKept?: boolean };
+  const probe = (root: string, name: string, configInput = inputFile, dest = destination, next = targets, mode = 'parents'): Observation => {
+    const result = spawnSync(process.execPath, [script, root, configInput, dest, JSON.stringify(next), JSON.stringify(expected), join(dir, name), mode],
+      { cwd: probeCwd, encoding: 'utf8', timeout: 30000 });
+    writeFileSync(join(dir, name + '.stdout'), result.stdout); writeFileSync(join(dir, name + '.stderr'), result.stderr);
+    if (result.status !== 0) throw new Error(`cwd reference probe ${name} exit ${result.status}: ${result.stderr}`);
+    return JSON.parse(result.stdout.trim()) as Observation;
+  };
+  const exceedsCwd = (o: Observation): boolean => o.cwdDepth === cwdDepth && o.parentCounts.length === 2 && o.parentCounts.every(n => n > o.cwdDepth);
+  const roundtrips = (o: Observation): boolean => JSON.stringify(o.values) === JSON.stringify(o.expectedValues);
+  const pngOracle = (o: Observation): boolean => roundtrips(o) && o.codes.length === 0 && o.exact && o.readsExpected;
+  const root = resolve(import.meta.dir, '..');
+  const good = probe(root, 'current-output');
+  say('CWD_PARENT_TARGET_ROUNDTRIPS_AND_ASSEMBLES_EXACT_PNG_BYTES', exceedsCwd(good) && good.dirKept && pngOracle(good), JSON.stringify(good));
+
+  const isolate = (name: string): string => {
+    const isolated = join(dir, name); mkdirSync(isolated);
+    cpSync(join(root, 'src'), join(isolated, 'src'), { recursive: true });
+    cpSync(join(root, 'package.json'), join(isolated, 'package.json'));
+    symlinkSync(join(root, 'node_modules'), join(isolated, 'node_modules'), 'dir');
+    return isolated;
+  };
+  const isolated = isolate('old-setter');
+  const configSource = join(isolated, 'src', 'config.ts');
+  const original = readFileSync(configSource, 'utf8');
+  const fixed = 'entry.file = relativeEditedFile(dir, next);';
+  if (original.split(fixed).length !== 2) throw new Error('cwd plant requires exactly one edited receipt setter');
+  writeFileSync(configSource, original.replace(fixed, 'entry.file = posix.relative(dir, next);'));
+  const planted = probe(isolated, 'old-output');
+  say('CWD_OLD_RELATIVE_SETTER_FAILS_THE_SAME_READ_AND_BYTE_ORACLE', exceedsCwd(planted) && planted.dirKept && !roundtrips(planted) &&
+    !planted.exact && !planted.readsExpected && planted.codes.length > 0 && planted.codes.every(c => c === 'ASSEMBLE_EDITED_PART_FILE'),
+    JSON.stringify(planted));
+
+  const rebaseDir = join(dir, 'rebase'); mkdirSync(rebaseDir);
+  const rebaseRaw = structuredClone(raw), rebaseBlock = assembly(rebaseRaw).edited_parts as Block;
+  rebaseBlock.dir = '../edits';
+  const rebaseTargets = ['foo.png', 'moved/face.png'];
+  for (const [i, receipt] of rebaseBlock.receipts.entries()) {
+    for (const target of [resolve(rebaseDir, '../edits', receipt.file), resolve(rebaseDir, rebaseTargets[i])]) {
+      mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, readFileSync(expected[i]));
+    }
+  }
+  const rebaseFile = join(rebaseDir, 'source.json'); save(rebaseFile, rebaseRaw);
+  const rebaseInput = join(dir, 'rebase-input.json'); save(rebaseInput, { ...input, config: rebaseFile });
+  const rebased = probe(root, 'rebase-output', rebaseInput, rebaseDir, rebaseTargets, 'rebase');
+  say('CWD_REBASE_PRESERVES_TWO_PNG_TARGETS_AND_LIVE_SETTERS', rebased.first !== undefined && rebased.first.dir === '.' &&
+    pngOracle(rebased.first) && rebased.dir === '.' && pngOracle(rebased) && rebased.liveSiblingKept === true &&
+    rebased.freshSiblingKept === true && JSON.stringify(rebased.freshValues) === JSON.stringify(rebaseTargets), JSON.stringify(rebased));
+
+  const siblingRewrite = 'sibling.file = relativeEditedFile(rebased, posix.join(dir, sibling.file));';
+  if (original.split(siblingRewrite).length !== 2) throw new Error('sibling plant requires exactly one rewrite');
+  const siblingIsolated = isolate('missing-sibling');
+  writeFileSync(join(siblingIsolated, 'src', 'config.ts'), original.replace(siblingRewrite, 'sibling.file = sibling.file;'));
+  const dropped = probe(siblingIsolated, 'missing-sibling-output', rebaseInput, rebaseDir, rebaseTargets, 'rebase');
+  const lost = dropped.first;
+  say('CWD_DROPPED_SIBLING_REWRITE_FAILS_THE_SAME_PNG_ORACLE', lost !== undefined && lost.dir === '.' &&
+    !roundtrips(lost) && !lost.exact && !lost.readsExpected && lost.codes.length > 0 && lost.codes.every(c => c === 'ASSEMBLE_EDITED_PART_FILE'),
+    JSON.stringify(dropped));
+
+  const scratchDir = join(dir, 'scratch', ...Array<string>(parents).fill('nested'));
+  const scratchFile = scratchConfig(file, JSON.stringify(raw), scratchDir, new Map());
+  const scratchRaw = json(scratchFile), scratchRefs = configFileReferences(scratchRaw);
+  const scratchTargets = expected.map(f => relative(resolve(scratchDir), f).replaceAll('\\', '/'));
+  const scratchOut = join(dir, 'scratch-output'); run(input, scratchOut, scratchFile);
+  say('CWD_DEEP_SCRATCH_CONFIG_ROUNDTRIPS_AND_ASSEMBLES_EXACT_PNG_BYTES',
+    scratchTargets.every(t => posix.normalize(t).split('/').findIndex(s => s !== '..') > cwdDepth) &&
+    (assembly(scratchRaw).edited_parts as Block).dir === block.dir &&
+    JSON.stringify(scratchRefs.map(r => r.value)) === JSON.stringify(scratchTargets) &&
+    block.receipts.every((r, i) => readFileSync(join(scratchOut, 'parts', r.part + '.png')).equals(readFileSync(expected[i]))),
+    JSON.stringify({ cwdDepth, targets: scratchTargets, values: scratchRefs.map(r => r.value) }));
+}
 
 /** Issue #1281: declarations are checked against actual reader I/O and exact emitted PNG files. */
 function checkFileReferences(dir: string, input: Input, baseline: string, bodyBytes: Uint8Array, say: Say): void {
@@ -444,14 +614,15 @@ function namePrefix(say: Say): Say { return (name, pass, detail) => say('PUBLIC_
 
 /** Narrow issue-bar control entrypoint; a fresh explicit output directory retains its evidence. */
 if (import.meta.main) {
-  const out = process.argv[2];
-  if (process.argv.length !== 3 || !out || existsSync(out)) {
-    console.error('Usage: bun tools/check_edited_parts.ts <fresh-output-directory>');
+  const cwdOnly = process.argv[2] === '--cwd-references';
+  const out = process.argv[cwdOnly ? 3 : 2];
+  if (process.argv.length !== (cwdOnly ? 4 : 3) || !out || existsSync(out)) {
+    console.error('Usage: bun tools/check_edited_parts.ts [--cwd-references] <fresh-output-directory>');
     process.exitCode = 64;
   } else {
     let count = 0, failed = 0;
     try {
-      runEditedPartChecks(resolve(out), (name, pass, detail) => {
+      (cwdOnly ? runEditedReferenceCwdChecks : runEditedPartChecks)(resolve(out), (name, pass, detail) => {
         count++; if (!pass) failed++;
         console.log(`${pass ? 'PASS' : 'FAIL'} EP1278${String(count).padStart(2, '0')}_${name}: ${detail}`);
       });
