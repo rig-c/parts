@@ -1,13 +1,15 @@
 /** Issue #1278: final rig-space file replacement, with independent byte and census controls. */
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname, join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { dirname, join, relative, resolve } from 'node:path';
 import { writeEditorReceiptFixture } from '../fixtures/editor_receipts.ts';
 import { C, WHITE, paint } from '../fixtures/assemble_fixture.ts';
 import { assembleStage, build } from '../src/build.ts';
 import { DEFAULT_PAGE_EDGES } from '../src/check.ts';
 import { configFileReferences, parseConfig, parseEarlyConfig } from '../src/config.ts';
 import { PartsError } from '../src/errors.ts';
+import { scratchConfig } from '../src/meshdraft.ts';
 import { readParts, serializeParts, type PartsFile } from '../src/parts.ts';
 import { encodePngBytes, readPng } from '../src/raster/png.ts';
 import { type Raster } from '../src/raster/types.ts';
@@ -130,10 +132,130 @@ function synthetic(dir: string): Input {
 }
 function editedConfig(input: Input, block: Block, file: string): Record<string, unknown> {
   const cfg = json(input.config);
-  for (const ref of configFileReferences(cfg)) ref.set(resolve(dirname(input.config), ref.value));
+  for (const ref of configFileReferences(cfg)) {
+    const target = resolve(dirname(input.config), ref.value);
+    ref.set(ref.at.startsWith('assemble.edited_parts.receipts[') ? relative(dirname(resolve(file)), target).replaceAll('\\', '/') : target);
+  }
   assembly(cfg).edited_parts = block;
   save(file, cfg);
   return cfg;
+}
+
+// Filesystem interception stays in a child process, never in the suite's shared module registry.
+const editedReadObserver = `
+import { mock } from 'bun:test';
+import * as fs from 'node:fs';
+import { resolve } from 'node:path';
+const [root, config] = process.argv.slice(2);
+const raw = JSON.parse(fs.readFileSync(config, 'utf8'));
+const reads = [];
+let active = false;
+const read = fs.readFileSync;
+mock.module('node:fs', () => ({ ...fs, readFileSync(path, ...options) {
+  if (active && typeof path === 'string') reads.push(resolve(path));
+  return Reflect.apply(read, fs, [path, ...options]);
+} }));
+const { parseEarlyConfig } = await import(root + '/src/config.ts');
+const { readEditedParts } = await import(root + '/src/editedparts.ts');
+const cfg = parseEarlyConfig(raw, 'assemble');
+active = true;
+const parts = readEditedParts(cfg.assemble.edited_parts, config, cfg.assemble.plan);
+active = false;
+console.log(JSON.stringify({ reads, count: parts.length }));
+`;
+
+/** Issue #1281: declarations are checked against actual reader I/O and exact emitted PNG files. */
+function checkFileReferences(dir: string, input: Input, baseline: string, bodyBytes: Uint8Array, say: Say): void {
+  const source = join(dir, 'reference-source');
+  const block: Block = { dir: 'pair-edits', receipts: ['body', 'face'].map((part, i) => {
+    const original = readFileSync(join(baseline, 'parts', part + '.png'));
+    const bytes = i === 0 ? bodyBytes : editedPartPngBytes(readPng(join(baseline, 'parts', part + '.png')));
+    const file = i === 0 ? 'first/deep/body.png' : 'second/face.png';
+    const path = join(source, 'pair-edits', file);
+    mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, bytes);
+    return { part, file, sha256: hash(bytes), from_sha256: hash(original), editor: 'technical reference fixture' };
+  }) };
+  const file = join(source, 'config.json');
+  const raw = editedConfig(input, block, file);
+  const before = JSON.stringify(raw);
+  const refs = configFileReferences(raw);
+  const names = block.receipts.map((_, i) => `assemble.edited_parts.receipts[${i}].file`);
+  const script = join(dir, 'observe-edited-reads.ts'); writeFileSync(script, editedReadObserver);
+  const observation = spawnSync(process.execPath, [script, resolve(import.meta.dir, '..'), file], { encoding: 'utf8', timeout: 30000 });
+  if (observation.status !== 0) throw new Error(`edited read observer exit ${observation.status}: ${observation.stderr}`);
+  const observed = JSON.parse(observation.stdout.trim()) as { reads: string[]; count: number };
+  const declared = refs.map(r => resolve(source, r.value));
+  const sameFiles = (paths: string[]): boolean => observed.count === 2 && paths.length === 2 &&
+    new Set(paths).size === 2 && JSON.stringify([...paths].sort()) === JSON.stringify([...observed.reads].sort());
+  say('REFERENCES_EQUAL_ACTUAL_READER_FILES', sameFiles(declared) && before === JSON.stringify(raw) &&
+    JSON.stringify(refs.map(r => r.at)) === JSON.stringify(names) &&
+    JSON.stringify(refs.map(r => r.value)) === '["pair-edits/first/deep/body.png","pair-edits/second/face.png"]',
+    JSON.stringify({ declared, observed, unchanged: before === JSON.stringify(raw) }));
+  say('REFERENCE_CENSUS_REJECTS_MISSING_EXTRA_DUPLICATE_AND_BARE_FILES',
+    !sameFiles(declared.slice(0, 1)) && !sameFiles([...declared, join(source, block.dir)]) &&
+    !sameFiles([declared[0], declared[0]]) && !sameFiles(block.receipts.map(r => resolve(source, r.file))),
+    'same actual-read oracle rejects a missing receipt, a directory row, a duplicated row and dir-relative values');
+
+  const destination = join(dir, 'relative-destination'); mkdirSync(destination);
+  const repointed = structuredClone(raw), repointedBlock = assembly(repointed).edited_parts as Block;
+  const expected: Uint8Array[] = [];
+  const targets = ['copied/nested/one.png', 'elsewhere/two.png'];
+  const originalFiles = block.receipts.map(r => r.file);
+  configFileReferences(repointed).forEach((ref, i) => {
+    const bytes = readFileSync(resolve(source, ref.value)); expected.push(bytes);
+    const target = resolve(destination, targets[i]); mkdirSync(dirname(target), { recursive: true }); writeFileSync(target, bytes);
+    ref.set(targets[i]);
+  });
+  const relocated = join(destination, 'config.json'); save(relocated, repointed);
+  const roundtrip = configFileReferences(json(relocated));
+  say('RELATIVE_REPOINT_ROUNDTRIPS_TWO_NESTED_RECEIPTS', repointedBlock.dir === block.dir &&
+    JSON.stringify(roundtrip.map(r => r.value)) === JSON.stringify(targets) &&
+    JSON.stringify(roundtrip.map(r => r.at)) === JSON.stringify(names) &&
+    roundtrip.every((ref, i) => hash(readFileSync(resolve(destination, ref.value))) === block.receipts[i].sha256) &&
+    JSON.stringify(block.receipts.map(r => r.file)) === JSON.stringify(originalFiles),
+    JSON.stringify({ dir: repointedBlock.dir, values: roundtrip.map(r => r.value), files: repointedBlock.receipts.map(r => r.file) }));
+  const output = join(dir, 'relative-output'); run(input, output, relocated);
+  const exact = (out: string): boolean => block.receipts.every((r, i) => Buffer.from(expected[i]).equals(readFileSync(join(out, 'parts', r.part + '.png'))));
+  say('RELATIVE_CONFIG_ASSEMBLES_EXACT_EDITED_PNG_BYTES', exact(output) &&
+    block.receipts.every((r, i) => !Buffer.from(encodePngBytes(readPng(join(output, 'parts', r.part + '.png')))).equals(Buffer.from(expected[i]))),
+    'both repointed PNGs retain their distinct ancillary chunk bytes through the real assemble stage');
+  const wrong = structuredClone(repointed);
+  (assembly(wrong).edited_parts as Block).receipts[1].file = 'absent.png';
+  const wrongFile = join(destination, 'wrong.json'); save(wrongFile, wrong);
+  const wrongOut = join(dir, 'wrong-reference-output');
+  say('RELATIVE_REPOINT_MISSING_SECOND_FILE_REFUSES', problems(() => run(input, wrongOut, wrongFile)).includes('ASSEMBLE_EDITED_PART_FILE') && !existsSync(wrongOut),
+    'a planted wrong second reference is refused before output emission by the production reader');
+
+  const scratchDir = join(dir, 'scratch', 'nested');
+  const scratchFile = scratchConfig(file, JSON.stringify(raw), scratchDir, new Map());
+  const scratch = json(scratchFile), scratchRefs = configFileReferences(scratch);
+  const scratchOut = join(dir, 'scratch-output'); run(input, scratchOut, scratchFile);
+  say('SCRATCH_CONFIG_RESOLVES_ORIGINAL_FILES_AND_ASSEMBLES_EXACT_BYTES',
+    (assembly(scratch).edited_parts as Block).dir === block.dir &&
+    JSON.stringify(scratchRefs.map(r => resolve(dirname(scratchFile), r.value))) === JSON.stringify(declared) && exact(scratchOut),
+    'production scratchConfig shared by mesh-draft and remesh keeps the shared dir and exact original file targets');
+  const broken = structuredClone(raw);
+  for (const ref of configFileReferences(broken)) ref.set(resolve(source, ref.value));
+  say('OLD_ABSOLUTE_SCRATCH_RELOCATION_IS_REFUSED', problems(() => parseEarlyConfig(broken, 'assemble')).includes('CONFIG_FIELD_TYPE'),
+    'the former absolute relocation is a planted regression; the relative-only loader still refuses it');
+
+  const ordinary = { requirements: 'spec.json', motion: { animations_from: 'motion/extra.json' },
+    generation: { control: { skeleton: 'pose.json' } }, assemble: { occluders: [{ image: 'front.png', plate: 'plate' }] } };
+  const ordinaryFile = scratchConfig(file, JSON.stringify(ordinary), join(dir, 'scratch-ordinary'), new Map());
+  const ordinaryExpected = { requirements: resolve(source, 'spec.json'), motion: { animations_from: resolve(source, 'motion/extra.json') },
+    generation: { control: { skeleton: resolve(source, 'pose.json') } },
+    assemble: { occluders: [{ image: resolve(source, 'front.png'), plate: resolve(source, 'plate') }] }, meshes: {} };
+  say('NO_BLOCK_SCRATCH_ORDINARY_REFERENCES_KEEP_ABSOLUTE_BYTES',
+    readFileSync(ordinaryFile, 'utf8') === JSON.stringify(ordinaryExpected, null, 2) + '\n',
+    'without edited_parts all five ordinary references retain the former absolute relocation and serialized bytes');
+
+  const plain = json(input.config), plainText = JSON.stringify(plain);
+  const plainFile = scratchConfig(input.config, plainText, join(dir, 'scratch-plain'), new Map());
+  const plainOut = join(dir, 'scratch-plain-output'); run(input, plainOut, plainFile);
+  say('NO_BLOCK_SCRATCH_CONFIG_AND_ALL_OUTPUT_BYTES_UNCHANGED',
+    readFileSync(plainFile, 'utf8') === JSON.stringify({ ...plain, meshes: { ...(plain.meshes as Record<string, unknown>) } }, null, 2) + '\n' &&
+    snapshot(plainOut) === snapshot(baseline) && snapshot(output) !== snapshot(baseline),
+    'no-block scratch text follows the unchanged serializer and all emitted bytes match baseline; edited output differs');
 }
 
 export function runEditedPartChecks(dir: string, say: Say): void {
@@ -175,6 +297,8 @@ export function runEditedPartChecks(dir: string, say: Say): void {
   const emptyCfg = json(input.config); assembly(emptyCfg).edited_parts = { dir: 'unread-absent', receipts: [] };
   save(join(dir, 'empty.json'), emptyCfg); const empty = join(dir, 'empty'); run(input, empty, join(dir, 'empty.json'));
   say('EMPTY_BLOCK_COMPLETE_OUTPUT_BYTES_UNCHANGED', snapshot(empty) === snapshot(baseline), 'empty receipts do not read a missing directory or move any output byte');
+
+  checkFileReferences(dir, input, baseline, bytes, say);
 
   // Every dedicated refusal is checked against both a missing output and a successful output with unknown nested files.
   const tooWide: Raster = { width: image.width + 1, height: image.height, data: new Uint8ClampedArray((image.width + 1) * image.height * 4) };

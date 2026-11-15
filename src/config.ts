@@ -95,7 +95,7 @@ import type { DepthConfig } from './depthsheets.ts';
  * the field is a non-empty string.
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, posix, relative, resolve } from 'node:path';
 import { RIG_BONE_INHERIT, RIG_SKIN_CONSTRAINT_KEYS, type RigBoneInherit, type RigConstraint, type RigSkinConstraintKey, type RigStop } from '@rig-c/core/rig';
 import { pyRound } from './round.ts';
 import { motionSeamProblems, type MotionSeamDeclaration } from './motionseams.ts';
@@ -1481,7 +1481,7 @@ export interface ConfigFileReference {
   set: (value: string) => void;
 }
 
-/** Enumerate the same file fields that the loader resolves, preserving invalid fields for its diagnostics. */
+/** Enumerate loader and assemble file references, preserving invalid fields for their diagnostics. */
 export function configFileReferences(raw: unknown): ConfigFileReference[] {
   const out: ConfigFileReference[] = [];
   for (const field of Object.values(CONFIG_FILE_FIELDS)) {
@@ -1506,6 +1506,18 @@ export function configFileReferences(raw: unknown): ConfigFileReference[] {
       out.push({ at: `assemble.occluders[${i}].plate`, value: entry.plate, set: (next) => { entry.plate = next; } });
     }
   });
+  // Issue #1281: receipt files cover this directory without declaring a directory input.
+  const edited = isPlainObject(assemble) ? assemble.edited_parts : undefined;
+  if (isPlainObject(edited) && typeof edited.dir === 'string' && edited.dir !== '' && Array.isArray(edited.receipts)) {
+    const dir = edited.dir;
+    edited.receipts.forEach((entry: unknown, i: number) => {
+      if (!isPlainObject(entry) || typeof entry.file !== 'string' || entry.file === '') return;
+      out.push({ at: `assemble.edited_parts.receipts[${i}].file`, value: posix.join(dir, entry.file), set: (next) => {
+        // Preserve invalid absolute targets for the existing relative-only loader refusal.
+        entry.file = isAbsolute(next) || /^(?:[\\/]|[A-Za-z]:[\\/])/.test(next) ? next : posix.relative(dir, next);
+      } });
+    });
+  }
   return out;
 }
 

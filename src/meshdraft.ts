@@ -60,7 +60,7 @@
  * but the process is injected, exactly as `src/check.ts` and `src/build.ts` take it.
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import type { AlphaMask, MeasureRow, MeshQualityReport, MotionSchedule } from '@rig-c/core/mesh';
 import { compareMeshesInMotion, type MotionComparisonInput } from '@rig-c/core/meshcompare';
 import { MeshReductionError } from '@rig-c/core/mesh';
@@ -728,13 +728,17 @@ export function relativeConfigPaths(_configDir: string, o: Json): RelativeConfig
 
 /**
  * A config the stage builds, written as `<dir>/config.json`: `text` (the author's config at `configPath`) with
- * `meshes.<part>` replaced for every part in `meshes`, and each of its {@link relativeConfigPaths} made absolute, so
- * it resolves to the file the author's config names. `remesh` (issue #495) builds through the same door.
+ * `meshes.<part>` replaced for every part in `meshes`, and each of its {@link relativeConfigPaths} rebased to
+ * the file the author's config names. Edited receipt files stay relative to the destination config directory;
+ * other references become absolute. `remesh` (issue #495) builds through the same door.
  */
 export function scratchConfig(configPath: string, text: string, dir: string, meshes: ReadonlyMap<string, unknown>): string {
   const configDir = dirname(resolve(configPath));
   const o = JSON.parse(text) as Json;
-  for (const r of relativeConfigPaths(configDir, o)) r.set(resolve(configDir, r.value));
+  for (const r of relativeConfigPaths(configDir, o)) {
+    const target = resolve(configDir, r.value);
+    r.set(r.at.startsWith('assemble.edited_parts.receipts[') ? relative(resolve(dir), target).replaceAll('\\', '/') : target);
+  }
   o.meshes = { ...(o.meshes as Json), ...Object.fromEntries(meshes) };
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'config.json'), `${JSON.stringify(o, null, 2)}\n`);
