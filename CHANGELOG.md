@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.40.0 (2026-11-17)
+
+### Features
+
+* **diff-components:** add `--owners`, which writes the report as `rig-parts-diff-components/2` with `owners: [{part, px}]` on every component: the topmost part above `COVERED_ALPHA`, in `parts.json` draw order, so `sum(owners[].px) + uncovered_px === px`. The default report stays `rig-parts-diff-components/1`, byte-identical; `--verify` reads both, and a `/1`-only reader refuses a `/2` report with `DIFF_COMPONENTS_REPORT` (`#1291`, `#1300`, `7ff21a6`).
+* **assemble:** when `config.scene` writes `figure_rig.png`, print a `figure mask (figure_rig.png):` line and one `figure rim full:<tag>` row per full-run layer with a nonzero rim: the soft rim (alpha 9..127) outside the alpha >= 250 core, its far subset more than `ERROR_LIMIT` off the painting, and mask pixels no emitted part carries. The lines are a measurement only; no output file changes, and a build without `scene` prints nothing new (`#1297`, `#1302`, `a2f32dd`).
+
+### Bug Fixes
+
+* **propose:** draft the torso from the largest island when every non-dust secondary island is smaller than one drafted cell (`fig.grid²`). Each island left out is named by a `PROPOSE_TORSO_ISLAND_LEFT_OUT` warning with its art px and rig-px box, and `contour.stray` records the largest one. Ties for the largest island, or any non-dust island of one cell or more, still refuse with `PROPOSE_TORSO_ISLANDS`, whose detail now names the cell area (`#1299`, `#1301`, `7218185`).
+
 ## 2.39.0 (2026-11-17)
 
 ### Features
