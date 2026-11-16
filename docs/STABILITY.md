@@ -29,6 +29,28 @@ below). A build's bytes are not promised across versions. A later version may mo
 them, and when it does, the change that moves them declares which bytes and why (the
 winding change of #133 is the example: [MIGRATION.md](MIGRATION.md)).
 
+## Provider-map input identity
+
+Issue #1284 adds optional parts-owned `<map>.binding.json` receipts, spec
+`rig-parts-depth-map-binding/1`, with exactly `spec`, `part`, `mapSha256` and
+`inputSha256`. The SHA-256 values are lowercase 64-digit hexadecimal hashes of
+the numeric map file and its consumed prepared inference PNG. A present receipt
+must match the selected part, current map bytes and manifest `inputSha256`;
+otherwise `DEPTH_MAP_BINDING` refuses before any output write. A malformed present
+receipt also refuses; symlinked receipts (including dangling links) are refused.
+The depth recipe and prepare manifest are unchanged.
+
+Compatibility policy dated **2026-11-16**: an absent receipt retains the shipped
+map behavior, output bytes and success exit, adding one stderr WARN named
+`DEPTH_MAP_BINDING_ABSENT` per selected map. Absence does not establish provenance.
+This follows the stable-item meaning promise above: existing maps remain accepted
+inside the major version. A matching receipt changes no output bytes or report
+keys. Preparing fresh inputs does not create or update a map receipt. Call `depth-bind` when inference produces the map: it computes both hashes and
+exclusively writes the receipt beside the map, refusing to overwrite evidence.
+It binds the files at invocation and cannot prove that inference used that input.
+See
+[Per-part provider maps](AUTHORING.md#per-part-provider-maps-897).
+
 ## Parts-stage integrity report
 
 `rig-parts check-parts --parts <assembled-dir> --out <disjoint-report-dir>
@@ -225,6 +247,7 @@ defaults are the help's too, and none is guessed from the art.
 | --- | --- |
 | `diff-components` | `--stack`, `--painting`, `--parts`, `--floor`; optional `--threshold`, `--figure`; exactly one of `--out`, `--verify` (issue #1005; exhaustive native error inventory, with byte-bound reader) |
 | `depth-prepare` | `--parts`, `--config`, `--out` (issue #897; separate numeric-depth recipe) |
+| `depth-bind` | `--map`, `--input`, `--part` (issue #1284; exclusive receipt creation from current file bytes) |
 | `depth-apply` | `--parts`, `--manifest`, `--config`, `--rig-config`, `--out` (issue #897; original character config is read-only) |
 | `layers` | one positional path: a wrapper directory, a `layers.json` or a `.psd`; with it, optional `--export` (a directory to write the wrapper form into, issue #359); or `--template` with `--canvas` and no path; or a positional head run with `--full`, `--source`, `--config` together for `PLAN_HEAD_GARMENT_OVERLAP` (issue #826) |
 | `sheet` | `--source`, `--layers` (repeatable), `--out`; optional `--cell`, `--cols` |
@@ -441,6 +464,12 @@ The values a field takes (`retriangulate` is "delaunay", `removalOrder`
 every number) are AUTHORING §3's tables, and the loader refuses any other by name.
 
 ## Files this package writes
+
+`depth-bind` writes `<map>.binding.json` beside the numeric map, spec
+`rig-parts-depth-map-binding/1`, with `spec`, `part`, `mapSha256`, `inputSha256`
+in that order. Hashes are computed from current map and input PNG bytes.
+Exclusive creation refuses an existing receipt and preserves it unchanged.
+
 
 ### Source cover report
 

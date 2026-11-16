@@ -3,7 +3,7 @@
  * the first output is emitted; output directories must be absent or empty.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { configFileReferences, loadConfigAndAnimations, parseConfig } from './config.ts';
 import { depthReading, readSourceDepth } from './depthsheets.ts';
@@ -146,7 +146,72 @@ function extendIntegratedHeight(data: Float64Array, art: Raster): Float64Array {
   }
   return filled;
 }
-export function applyDepth(input: { parts: string; manifest: string; config: string; rigConfig: string; out: string }): Obj {
+const MAP_BINDING_ABSENT = 'DEPTH_MAP_BINDING_ABSENT';
+const BINDING_REMEDY = 're-run depth for these inputs, then rig-parts depth-bind --map <numeric-map.json> --input <prepared.png> --part <name>';
+/** Bound diagnostic values; never echo a receipt payload. */
+function bindingFound(value: unknown): string {
+  if (value === undefined) return 'absent';
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  if (typeof value === 'object') return 'object';
+  return JSON.stringify(value)?.slice(0, 96) ?? String(value);
+}
+
+/** Attest the two files available now, not the unobserved inference execution. */
+export function bindDepthMap(input: { map: string; input: string; part: string }): Obj {
+  if (!input.part || input.part.startsWith('.') || /[\\/]/.test(input.part) || input.part.includes('\0')) {
+    fail('DEPTH_MAP_BINDING', 'depth-bind --part', `found ${bindingFound(input.part)}; required a nonempty plain part filename; ${BINDING_REMEDY}`);
+  }
+  const read = (file: string): Uint8Array => {
+    if (!existsSync(file) || !statSync(file).isFile()) return fail('DEPTH_INPUT_PRESENT', file, 'is missing or not a file; restore the declared input');
+    return readFileSync(file);
+  };
+  const mapBytes = read(input.map), inputBytes = read(input.input);
+  readNumericMap(readJson(input.map), input.part);
+  decodePngBytes(inputBytes, input.part);
+  const receipt = { spec: 'rig-parts-depth-map-binding/1', part: input.part, mapSha256: hash(mapBytes), inputSha256: hash(inputBytes) };
+  const target = input.map + '.binding.json';
+  // Exclusive creation preserves a previous attestation; all readers run first.
+  try { writeFileSync(target, text(receipt), { flag: 'wx' }); }
+  catch (error) {
+    const code = error !== null && typeof error === 'object' && 'code' in error ? String(error.code) : 'UNKNOWN';
+    const reason = code === 'EEXIST' ? 'already exists (EEXIST)' : `write failed (${code})`;
+    return fail('DEPTH_MAP_BINDING', `part "${input.part}"`, `receipt ${JSON.stringify(target)} ${reason}; required an absent receipt in a writable directory; keep existing evidence and use a new map filename; ${BINDING_REMEDY}`);
+  }
+  return receipt;
+}
+
+// existsSync follows symlinks; a dangling receipt is present malformed evidence.
+function isReceiptLink(path: string): boolean {
+  try { return lstatSync(path).isSymbolicLink(); } catch { return false; }
+}
+
+/** Parts-owned provenance beside the numeric map; never inferred from a new prepare. */
+function mapBinding(mapPath: string, bytes: Uint8Array, part: PreparedPart): string | undefined {
+  const receiptPath = mapPath + '.binding.json';
+  if (!existsSync(receiptPath) && !isReceiptLink(receiptPath)) return `WARN  ${MAP_BINDING_ABSENT}: part "${part.part}" — no map binding receipt (compatibility policy dated 2026-11-16); applying legacy map without inference-input identity; ${BINDING_REMEDY}`;
+  const remedy = BINDING_REMEDY;
+  const refuse = (detail: string): never => fail('DEPTH_MAP_BINDING', `part "${part.part}"`, `${detail}; ${remedy}`);
+  if (!lstatSync(receiptPath).isFile()) return refuse('receipt found a symlink or nonregular file; required a regular file');
+  let raw: unknown;
+  try { raw = JSON.parse(readFileSync(receiptPath, 'utf8')) as unknown; }
+  catch { return refuse('receipt found unreadable or invalid JSON; required a readable JSON object'); }
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return refuse(`receipt found ${bindingFound(raw)}; required an object`);
+  const r = raw as Obj;
+  const sha = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v);
+  const unknown = Object.keys(r).filter(k => !['spec', 'part', 'mapSha256', 'inputSha256'].includes(k));
+  if (unknown.length) return refuse(`receipt found unknown key ${bindingFound(unknown[0])}; required only spec, part, mapSha256, inputSha256`);
+  if (r.spec !== 'rig-parts-depth-map-binding/1') return refuse(`receipt spec found ${bindingFound(r.spec)}; required "rig-parts-depth-map-binding/1"`);
+  if (r.part !== part.part) return refuse(`receipt part found ${bindingFound(r.part)}; required ${JSON.stringify(part.part)}`);
+  for (const key of ['mapSha256', 'inputSha256'] as const) {
+    if (!sha(r[key])) return refuse(`receipt ${key} found ${bindingFound(r[key])}; required 64 lowercase hexadecimal digits`);
+  }
+  const mapSha = hash(bytes);
+  if (r.mapSha256 !== mapSha) return refuse(`map sha found ${r.mapSha256}; required ${mapSha}`);
+  if (r.inputSha256 !== part.inputSha256) return refuse(`inference input sha found ${r.inputSha256}; required ${part.inputSha256}`);
+  return undefined;
+}
+export function applyDepth(input: { parts: string; manifest: string; config: string; rigConfig: string; out: string }, log: (line: string) => void = console.warn): Obj {
   const recipe = parseDepthRecipe(readJson(input.config)), expected = preparedParts(input.parts, recipe);
   const supplied = readJson(input.manifest);
   if (text(supplied) !== text(expected.manifest)) fail('DEPTH_INPUT_BINDING', input.manifest, 'does not match the recipe, parts.json, art hashes, crop or padding; run depth-prepare again for these exact inputs');
@@ -154,7 +219,7 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
     const file = join(dirname(input.manifest), p.input);
     if (!existsSync(file) || hash(readFileSync(file)) !== p.inputSha256) fail('DEPTH_INPUT_BINDING', p.part, 'prepared inference PNG is missing or changed; restore its exact bytes or prepare again');
   }
-  emptyOutput(input.out, [input.parts, input.config, input.manifest, input.rigConfig, ...Object.values(recipe.parts).map(p => resolve(dirname(input.config), p.map))]);
+  emptyOutput(input.out, [input.parts, input.config, input.manifest, input.rigConfig, ...Object.values(recipe.parts).flatMap(p => { const map = resolve(dirname(input.config), p.map); return [map, map + '.binding.json']; })]);
   const rawParts = object(readJson(join(input.parts, 'parts.json')), 'parts.json'), file = readParts(join(input.parts, 'parts.json'));
   for (const p of file.parts) if (Object.hasOwn(recipe.parts, p.name) && p.provenance?.depth?.kind === 'authored-unit') fail('DEPTH_AUTHORED_UNIT_CONFLICT', `part "${p.name}"`, 'has provenance.depth.kind "authored-unit"; a transported scalar reference cannot coexist with authored unit depth — retain the unit declaration or supply an explicitly reassembled scalar-compatible input; no automatic transition is made');
   loadConfigAndAnimations(input.rigConfig);
@@ -168,6 +233,7 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
     ref.set(relative(resolve(input.out), resolve(dirname(input.rigConfig), ref.value)));
   }
   parseConfig(raw);
+  const warnings: string[] = [];
   const writes = new Map<string, Uint8Array>(), rows: Obj[] = [], recs = rawParts.parts as Obj[];
   // Retain auxiliary art (including alternate sets) and diagnostics byte-for-byte.
   // Symlink inputs would obscure ownership and can escape this assembled directory.
@@ -194,6 +260,8 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
     if (!Object.hasOwn(object(target.roles, `config.turn.${declaration.group}.roles`), name)) fail('DEPTH_GROUP_BINDING', name, `declared group ${declaration.group} does not name this part in its roles; register it explicitly`);
     const prepared = expected.manifest.parts.find(row => row.part === name) as PreparedPart;
     const mapPath = resolve(dirname(input.config), declaration.map), numeric = readNumericMap(readJson(mapPath), name), mapBytes = readFileSync(mapPath);
+    const warning = mapBinding(mapPath, mapBytes, prepared);
+    if (warning !== undefined) warnings.push(warning);
     const map = registeredMap(numeric, prepared, declaration.frame, name);
     let values: ArrayLike<number>, normal: ReturnType<typeof integrateNormals> | undefined;
     if (declaration.source === 'normals') {
@@ -232,5 +300,6 @@ export function applyDepth(input: { parts: string; manifest: string; config: str
   writeFileSync(join(input.out, 'parts.json'), text(rawParts));
   writeFileSync(join(input.out, 'config.json'), text(raw));
   writeFileSync(join(input.out, 'depth-report.json'), text(report));
+  for (const warning of warnings) log(warning);
   return report;
 }
