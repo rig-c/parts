@@ -280,9 +280,30 @@ jobs:
           RIG_PARTS_SELFTEST_JOBS: '1'
         run: |
           set +e
-          bun selftest.ts --only build
+          summary="$RUNNER_TEMP/build-controls-summary.json"
+          rm -f "$summary"
+          bun selftest.ts --only build --summary-json "$summary"
           status=$?
-          test "$status" -eq 2
+          # Exit 2 also means broken accounting (including overlong log lines).
+          # Require the measured green partial verdict, not just its exit code.
+          test "$status" -eq 2 || exit 1
+          node --input-type=module - "$summary" <<'JS'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const summary = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+          assert.equal(summary.spec, 'rig-selftest-summary/1');
+          assert.equal(summary.exit, 2);
+          assert.equal(summary.partial, true);
+          assert.deepEqual(summary.only, ['build']);
+          assert.deepEqual(summary.faults, []);
+          assert.equal(summary.totals.failed, 0);
+          assert.equal(summary.totals.holes, 0);
+          const build = summary.suites.find(suite => suite.suite === 'build');
+          assert.equal(build?.status, 'pass');
+          assert.equal(build?.ran, true);
+          assert.ok(build.controls > 0);
+          assert.equal(build.failed, 0);
+          JS
 
   # Preserve the required check name; BOTH matrices must finish green.
   installs:
