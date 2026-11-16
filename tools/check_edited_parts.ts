@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { dirname, join, posix, relative, resolve } from 'node:path';
 import { writeEditorReceiptFixture } from '../fixtures/editor_receipts.ts';
-import { C, WHITE, paint } from '../fixtures/assemble_fixture.ts';
+import { assembleConfig, C, WHITE, paint, writeRun } from '../fixtures/assemble_fixture.ts';
 import { assembleStage, build } from '../src/build.ts';
 import { DEFAULT_PAGE_EDGES } from '../src/check.ts';
 import { configFileReferences, parseConfig, parseEarlyConfig } from '../src/config.ts';
@@ -29,12 +29,11 @@ const problems = (action: () => unknown): string[] => {
     throw error;
   }
 };
-const run = (input: Input, out: string, config = input.config): void => {
+const run = (input: Input, out: string, config = input.config, lines?: string[]): ReturnType<typeof assembleStage> =>
   assembleStage({ source: input.source, full: input.full, head: input.head, config }, {
     partsJson: join(out, 'parts.json'), partsDir: join(out, 'parts'),
     recomposite: join(out, 'recomposite_rig.png'), errorMap: join(out, 'recomposite_error_rig.png'),
-  }, () => {});
-};
+  }, line => { lines?.push(line); });
 /** Includes file names, directory entries and exact bytes, including unknown sentinels. */
 function snapshot(dir: string): string {
   if (!existsSync(dir)) return 'ABSENT';
@@ -574,6 +573,167 @@ export function runEditedPartChecks(dir: string, say: Say): void {
     const codes = problems(() => readParts(join(home, 'parts.json')));
     say('METADATA_' + name + '_REFUSED', codes.some(c => c === 'PARTS_FIELD_TYPE' || c === 'PARTS_COUNTS_ADD_UP'), codes.join(',') || 'accepted malformed receipt association');
   }
+
+  checkFrontColourUnderFrontPart(join(dir, 'front-colour'), say);
+}
+
+/**
+ * Issue #1290: synthetic two-part fixture on a 64x64 rig (rig_scale 1, resolution 64):
+ * - back part "body" (full:topwear) covers rig [8, 56) x [20, 56) (48x36 at x=8, y=20) in C=[100,60,40,255],
+ *   with a transparent hidden pocket at local [20, 28) x [2, 8) = rig [28, 36) x [22, 28) (8 * 6 = 48 px);
+ * - front part "face" (full:face) covers rig [16, 48) x [8, 32) (32x24 at x=16, y=8) in F=[20,140,220,255]
+ *   (max-channel distance |220 - 40| = 180 > ERROR_LIMIT 40), overlapping "body" on rig [16, 48) x [20, 32).
+ */
+function checkFrontColourUnderFrontPart(dir: string, say: Say): void {
+  mkdirSync(dir, { recursive: true });
+  const F: [number, number, number] = [20, 140, 220];
+  const C_NEAR: [number, number, number] = [108, 65, 44];
+  const inputDir = join(dir, 'input'); mkdirSync(inputDir, { recursive: true });
+  writeRun(join(inputDir, 'full'), [
+    { name: 'topwear', depth: 0.7, rects: [
+      { x0: 8, y0: 20, x1: 56, y1: 22, colour: C },
+      { x0: 8, y0: 22, x1: 28, y1: 28, colour: C },
+      { x0: 36, y0: 22, x1: 56, y1: 28, colour: C },
+      { x0: 8, y0: 28, x1: 56, y1: 56, colour: C },
+    ] },
+    { name: 'face', depth: 0.5, rects: [{ x0: 16, y0: 8, x1: 48, y1: 32, colour: F }] },
+    { name: 'eyewhite-r', depth: 0.1, rects: [{ x0: 20, y0: 12, x1: 28, y1: 20, colour: F }] },
+    { name: 'eyewhite-l', depth: 0.05, rects: [{ x0: 36, y0: 12, x1: 44, y1: 20, colour: F }] },
+  ]);
+  writeFileSync(join(inputDir, 'painting.png'), encodePngBytes(paint(64, 64, WHITE, [
+    { x0: 8, y0: 20, x1: 56, y1: 56, colour: C },
+    { x0: 16, y0: 8, x1: 48, y1: 32, colour: F },
+  ])));
+  const cfg = assembleConfig({ plan: [['body', 'full', 'topwear'], ['face', 'full', 'face']], extend: [], rigScale: 1, resolution: 64 });
+  delete (cfg.seethrough as Record<string, unknown>).head_box;
+  const input: Input = { source: join(inputDir, 'painting.png'), full: join(inputDir, 'full'), head: null, config: join(inputDir, 'config.json'), part: 'body' };
+  save(input.config, cfg);
+  const baseline = join(dir, 'baseline'), baselineLines: string[] = [];
+  run(input, baseline, input.config, baselineLines);
+  const originalBytes = readFileSync(join(baseline, 'parts', 'body.png'));
+  const original = readPng(join(baseline, 'parts', 'body.png'));
+  const paintRect = (base: Raster, x0: number, y0: number, x1: number, y1: number, rgb: readonly [number, number, number]): Raster => {
+    const out = structuredClone(base);
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) out.data.set([...rgb, 255], (y * out.width + x) * 4);
+    return out;
+  };
+  const runCase = (label: string, editedRaster: Raster): { lines: string[]; readings: NonNullable<ReturnType<typeof assembleStage>['editedPartFrontColours']>; recompositeSame: boolean; changedCountedPx: number } => {
+    const caseDir = join(dir, label), editsDir = join(caseDir, 'edits'), outDir = join(caseDir, 'out');
+    mkdirSync(editsDir, { recursive: true });
+    const bytes = editedPartPngBytes(editedRaster);
+    writeFileSync(join(editsDir, 'body.png'), bytes);
+    const receipt: Receipt = { part: 'body', file: 'body.png', sha256: hash(bytes), from_sha256: hash(originalBytes), editor: 'technical fixture #1290' };
+    const cfgFile = join(caseDir, 'config.json');
+    editedConfig(input, { dir: 'edits', receipts: [receipt] }, cfgFile);
+    const allLines: string[] = [];
+    const result = run(input, outDir, cfgFile, allLines);
+    const lines = allLines.filter(l => l.startsWith('  edited part front colour:'));
+    const recompositeSame = readFileSync(join(outDir, 'recomposite_rig.png')).equals(readFileSync(join(baseline, 'recomposite_rig.png')));
+    const changedCountedPx = readParts(join(outDir, 'parts.json')).parts.find(p => p.name === 'body')!.provenance!.edited_part!.changed_counted_px;
+    return { lines, readings: result.editedPartFrontColours ?? [], recompositeSame, changedCountedPx };
+  };
+
+  // Control 1: local [8, 14) x [20, 26) = rig [16, 22) x [40, 46), 6 * 6 = 36 pixels owned by "body" itself,
+  // edited to C_NEAR (max-channel distance 8 <= 40 from painting C). Expected front-colour count = 0.
+  const ownOwned = runCase('own-owned', paintRect(original, 8, 20, 14, 26, C_NEAR));
+  const zeroLine = '  edited part front colour: part "body" (edited_parts[0]) 0 px, front owner none, box none (within 40 of painting; measurement, no declared limit)';
+  say('FRONT_COLOUR_OWN_OWNED_EDIT_READS_ZERO',
+    ownOwned.changedCountedPx === 36 && ownOwned.lines.length === 1 && ownOwned.lines[0] === zeroLine &&
+    ownOwned.readings.length === 1 && ownOwned.readings[0].part === 'body' && ownOwned.readings[0].px === 0 &&
+    ownOwned.readings[0].box === null && ownOwned.readings[0].owners.length === 0 && !ownOwned.lines[0].includes('PASS'),
+    `changed_counted_px=${ownOwned.changedCountedPx}; readings=${JSON.stringify(ownOwned.readings)}; lines=${JSON.stringify(ownOwned.lines)}`);
+
+  // Control 2: local [20, 28) x [2, 8) = rig [28, 36) x [22, 28), 8 * 6 = 48 transparent pixels under front owner "face",
+  // filled with "body"'s own colour C (max-channel distance |40 - 220| = 180 > 40 from painting F). Expected front-colour count = 0.
+  const hiddenOwnColour = runCase('hidden-own-colour', paintRect(original, 20, 2, 28, 8, C));
+  say('FRONT_COLOUR_HIDDEN_OWN_COLOUR_FILL_READS_ZERO',
+    hiddenOwnColour.changedCountedPx === 48 && hiddenOwnColour.lines.length === 1 && hiddenOwnColour.lines[0] === zeroLine &&
+    hiddenOwnColour.readings.length === 1 && hiddenOwnColour.readings[0].part === 'body' && hiddenOwnColour.readings[0].px === 0 &&
+    hiddenOwnColour.readings[0].box === null && hiddenOwnColour.readings[0].owners.length === 0 &&
+    hiddenOwnColour.recompositeSame && !hiddenOwnColour.lines[0].includes('PASS'),
+    `changed_counted_px=${hiddenOwnColour.changedCountedPx}; recompositeSame=${hiddenOwnColour.recompositeSame}; readings=${JSON.stringify(hiddenOwnColour.readings)}; lines=${JSON.stringify(hiddenOwnColour.lines)}`);
+
+  // Control 3 (planted edit): local [12, 18) x [2, 6) = rig [20, 26) x [22, 26), 6 * 4 = 24 pixels under front owner "face",
+  // painted in front colour F (distance 0 <= 40 from painting F), box [20, 22, 6, 4]. Rest recomposite is unchanged.
+  const planted = runCase('planted-front-colour', paintRect(original, 12, 2, 18, 6, F));
+  const plantedLine = '  edited part front colour: part "body" (edited_parts[0]) front owner "face" 24 px, box [20, 22, 6, 4] (within 40 of painting; measurement, no declared limit)';
+  const authoring = readFileSync(resolve(import.meta.dir, '..', 'docs', 'AUTHORING.md'), 'utf8');
+  const editedSection = authoring.split('### Edited rig-space parts (`assemble.edited_parts`, issue #1278)')[1]?.split('\n### ')[0] ?? '';
+  const docHolds = editedSection.includes('edited part front colour:') && editedSection.includes('rawPaintingOwner') &&
+    editedSection.includes('ERROR_LIMIT') && editedSection.includes('remove\nthe front part\'s colour from the hidden overlap');
+  say('FRONT_COLOUR_PLANTED_EDIT_NAMES_PART_OWNER_COUNT_AND_BOX',
+    planted.changedCountedPx === 24 && planted.recompositeSame && planted.lines.length === 1 && planted.lines[0] === plantedLine &&
+    planted.readings.length === 1 && planted.readings[0].part === 'body' && planted.readings[0].px === 24 &&
+    JSON.stringify(planted.readings[0].box) === '[20,22,6,4]' &&
+    JSON.stringify(planted.readings[0].owners) === '[{"owner":"face","px":24,"box":[20,22,6,4]}]' &&
+    !planted.lines[0].includes('PASS') && baselineLines.every(l => !l.startsWith('  edited part front colour:')) && docHolds,
+    `changed_counted_px=${planted.changedCountedPx}; recompositeSame=${planted.recompositeSame}; baselineLines=${baselineLines.filter(l => l.startsWith('  edited part front colour:')).length}; docHolds=${docHolds}; readings=${JSON.stringify(planted.readings)}; lines=${JSON.stringify(planted.lines)}`);
+
+  // Control 4 (non-visible project "core" with one declared occluder on "body" and one edited part "face"):
+  // "body" (full:topwear, [8, 56) x [20, 56), 48x36) is painted C_SLIGHT=[110, 60, 40] (10 off painting C=[100, 60, 40], <= DRIFT_LIMIT 90);
+  // its 5x5 eroded core is [10, 54) x [22, 54) = 44 * 32 = 1408 px. The occluder covers [16, 32) x [28, 44) = 16 * 16 = 256 px inside that core.
+  // Under project "core", occluderUnderKeepByPlanPart must stay empty even when edited_parts is present, so "body" projects all 1408 core px
+  // (a widened gate populates occluderUnderKeepByPlanPart and excludes the 5x5 dilation [14, 34) x [26, 46) = 20 * 20 = 400 px, dropping taken to 1408 - 400 = 1008 and altering parts/body.png, recomposite_rig.png, source_cover.json and parts.json).
+  const coreDir = join(dir, 'core-occluder'), coreInputDir = join(coreDir, 'input');
+  mkdirSync(coreInputDir, { recursive: true });
+  const C_SLIGHT: [number, number, number] = [110, 60, 40];
+  writeRun(join(coreInputDir, 'full'), [
+    { name: 'topwear', depth: 0.7, rects: [{ x0: 8, y0: 20, x1: 56, y1: 56, colour: C_SLIGHT }] },
+    { name: 'face', depth: 0.5, rects: [{ x0: 16, y0: 8, x1: 48, y1: 20, colour: F }] },
+    { name: 'eyewhite-r', depth: 0.1, rects: [{ x0: 20, y0: 10, x1: 28, y1: 18, colour: F }] },
+    { name: 'eyewhite-l', depth: 0.05, rects: [{ x0: 36, y0: 10, x1: 44, y1: 18, colour: F }] },
+  ]);
+  writeFileSync(join(coreInputDir, 'painting.png'), encodePngBytes(paint(64, 64, WHITE, [
+    { x0: 8, y0: 20, x1: 56, y1: 56, colour: C },
+    { x0: 16, y0: 8, x1: 48, y1: 20, colour: F },
+  ])));
+  const occBytes = encodePngBytes(paint(64, 64, null, [{ x0: 16, y0: 28, x1: 32, y1: 44, colour: C }]));
+  writeFileSync(join(coreInputDir, 'occ.png'), occBytes);
+  const coreCfg = assembleConfig({ plan: [['body', 'full', 'topwear'], ['face', 'full', 'face']], extend: [], rigScale: 1, resolution: 64 });
+  delete (coreCfg.seethrough as Record<string, unknown>).head_box;
+  assembly(coreCfg).project = 'core';
+  assembly(coreCfg).occluders = [{ image: 'occ.png', sha256: hash(occBytes), under: ['body'], rgb_within: 40 }];
+  const coreInput: Input = { source: join(coreInputDir, 'painting.png'), full: join(coreInputDir, 'full'), head: null, config: join(coreInputDir, 'config.json'), part: 'face' };
+  save(coreInput.config, coreCfg);
+  const coreBase = join(coreDir, 'baseline');
+  run(coreInput, coreBase);
+  const faceOriginalBytes = readFileSync(join(coreBase, 'parts', 'face.png'));
+  const faceEditedBytes = editedPartPngBytes(readPng(join(coreBase, 'parts', 'face.png')));
+  const coreEditsDir = join(coreDir, 'edits'); mkdirSync(coreEditsDir, { recursive: true });
+  writeFileSync(join(coreEditsDir, 'face.png'), faceEditedBytes);
+  const faceReceipt: Receipt = { part: 'face', file: 'face.png', sha256: hash(faceEditedBytes), from_sha256: hash(faceOriginalBytes), editor: 'technical core occluder fixture' };
+  const coreEditedCfg = structuredClone(coreCfg);
+  assembly(coreEditedCfg).edited_parts = { dir: '../edits', receipts: [faceReceipt] };
+  const coreEditedCfgFile = join(coreInputDir, 'config-edited.json');
+  save(coreEditedCfgFile, coreEditedCfg);
+  const coreEdited = join(coreDir, 'edited');
+  run(coreInput, coreEdited, coreEditedCfgFile);
+  checkReplacement(coreInput, coreBase, coreEdited, faceEditedBytes, { changed_px: 0, changed_counted_px: 0, changed_excluded_px: 0, removed_opaque_px: 0 }, faceReceipt, name => `${name}_CORE_OCCLUDER` === 'NEVER' ? undefined : undefined as never);
+  const stripEditedPart = (partsFile: string): string => {
+    const parsed = json(partsFile);
+    for (const p of parsed.parts as Array<Record<string, unknown>>) {
+      const prov = p.provenance as Record<string, unknown> | undefined;
+      if (prov !== undefined) delete prov.edited_part;
+    }
+    return JSON.stringify(parsed);
+  };
+  const nonEditedSnapshot = (outDir: string): string =>
+    snapshot(outDir).split('\n').filter(line => !line.startsWith('F parts.json ') && !line.startsWith('F parts/face.png ') && !line.startsWith('F part_support_domains.json ')).join('\n');
+  const stripSupportDomains = (outDir: string): string => {
+    const d = json(join(outDir, 'part_support_domains.json'));
+    delete d.parts_sha256;
+    d.images = (d.images as Array<Record<string, unknown>>).filter(img => img.part !== 'face');
+    return JSON.stringify(d);
+  };
+  const sameFilesExceptEdited = nonEditedSnapshot(coreBase) === nonEditedSnapshot(coreEdited) &&
+    stripSupportDomains(coreBase) === stripSupportDomains(coreEdited);
+  const bodyBaseTaken = readParts(join(coreBase, 'parts.json')).parts.find(p => p.name === 'body')!.source_px_taken;
+  const bodyEditedTaken = readParts(join(coreEdited, 'parts.json')).parts.find(p => p.name === 'body')!.source_px_taken;
+  say('CORE_OCCLUDER_EDITED_PART_PRESERVES_NON_EDITED_OUTPUT_BYTES',
+    bodyBaseTaken === 1408 && bodyEditedTaken === 1408 && sameFilesExceptEdited &&
+    stripEditedPart(join(coreBase, 'parts.json')) === stripEditedPart(join(coreEdited, 'parts.json')) &&
+    readFileSync(join(coreEdited, 'parts', 'face.png')).equals(Buffer.from(faceEditedBytes)),
+    `bodyBaseTaken=${bodyBaseTaken}; bodyEditedTaken=${bodyEditedTaken}; sameFilesExceptEdited=${sameFilesExceptEdited}; strippedPartsJsonEqual=${stripEditedPart(join(coreBase, 'parts.json')) === stripEditedPart(join(coreEdited, 'parts.json'))}`);
 }
 
 /** Callable by the issue's separately coordinated public-example measurement; no art is embedded here. */

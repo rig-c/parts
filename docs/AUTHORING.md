@@ -1122,6 +1122,23 @@ final-alpha partition and resolve replacement writer IDs through the sidecar's
 receipt-associated; this does not exempt other config shapes or baseline
 inputs from their existing source/receipt checks.
 
+At admission, `assemble` also prints an `edited part front colour:` measurement
+line for each receipted part (issue #1290): surviving pixels (`alpha > 8`) that
+the edit changed or added against the base part (`from_sha256`), where the
+painting pixel's raw-plan owner (`rawPaintingOwner`, the last `assemble.plan`
+layer with `alpha >= 128`) is a different part drawn in front and the edited
+RGB lies within `ERROR_LIMIT` (`40`, max channel) of the painting. A positive
+count means the edited back part carries the front part's painting colour under
+that front part (hidden at rest while the front part covers it, exposed as a
+stain when the front part moves); the line reports the edited part, each front
+owner, the pixel count and the rig-pixel bounding box `[x, y, w, h]`, or `0 px,
+front owner none, box none` when none. With no declared limit it is a
+measurement only, never a pass or a refusal. To clear a positive count, remove
+the front part's colour from the hidden overlap of the edited PNG in the image
+editor — keep the base part's pixels there or fill the hidden area with the
+back part's own surface colour rather than sampling the composite painting —
+and update the receipt's `sha256`.
+
 All replacement refusals happen before output emission, including when an
 output directory already contains a successful build. The folder and every
 existing file remain unchanged. Each code and its remedy is listed in

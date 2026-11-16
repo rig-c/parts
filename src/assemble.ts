@@ -1,6 +1,6 @@
 import { sourceCoverRun, type SourceCoverReading } from './sourcecover.ts';
-import { replaceEditedParts, type EditedPartContext, type VerifiedEditedPart } from './editedparts.ts';
-import { paintingReceivers, rawPaintingOwner } from './paintingowner.ts';
+import { replaceEditedParts, type EditedPartContext, type EditedPartFrontColourReading, type VerifiedEditedPart } from './editedparts.ts';
+import { paintingReceivers, rawPaintingOwner, type PaintingOwner } from './paintingowner.ts';
 import { hiddenExtentProblems, type HiddenExtentDeclaration, type HiddenExtentSource } from './hiddenextent.ts';
 import { headBoxInside } from './headbox.ts';
 import { edgePairResiduals, type EdgeResidualReport } from './edgeresidual.ts';
@@ -4858,6 +4858,8 @@ export interface AssembleResult {
   softOcclusion?: SoftOcclusionReading[];
   /** Informational only; never serialized into parts.json. */
   cropClipped?: string[];
+  /** Report-only front-part painting colour carried by an edited part (#1290). */
+  editedPartFrontColours?: EditedPartFrontColourReading[];
   parts: PartsFile;
   /** In plan order, each cropped to its record's box. */
   images: PlacedPart[];
@@ -6158,16 +6160,35 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     }
     return whole;
   };
+  const rawPaintingOwnerForPlan = (): PaintingOwner => {
+    let keepByPlanPart: ReadonlyMap<string, Mask> = occluderUnderKeepByPlanPart;
+    if (projectRule !== 'visible' && occluderEntries.length > 0) {
+      const localKeep = new Map<string, Mask>();
+      for (const { declaration, guardMask } of occluderEntries) {
+        for (const u of declaration.under) {
+          let m = localKeep.get(u);
+          if (m === undefined) {
+            m = newMask(W, H);
+            localKeep.set(u, m);
+          }
+          for (let p = 0; p < W * H; p++) if (guardMask.data[p] === 1) m.data[p] = 1;
+        }
+      }
+      keepByPlanPart = localKeep;
+    }
+    const rawPlan = input.plan.map(([name, run, tag]) => {
+      const layer = input[run].layers.find(l => l.name === tag)!;
+      return { name, raster: layerToRigSplit(layer, input.resolution, frame, run, occluderCoreMasks), keep: keepByPlanPart.get(name) ?? null };
+    });
+    if ((input.edgeSplits?.length ?? 0) > 0) applyEdgeSplits(input.edgeSplits!, new Map(rawPlan.map(p => [p.name, p.raster])), srcr);
+    return rawPaintingOwner(rawPlan, W * H);
+  };
+  let paintingOwner: PaintingOwner | undefined;
   if (projectRule === 'visible') {
     // paintingEdges reads every image as the whole rig canvas. A plan part's image already is one; a patch is its cut,
     // placed at record.x / record.y, so it is placed on a canvas here. The step never writes a patch, so a copy is enough.
     const canvases = stack.map(onRig);
-    const rawPlan = input.plan.map(([name, run, tag]) => {
-      const layer = input[run].layers.find(l => l.name === tag)!;
-      return { name, raster: layerToRigSplit(layer, input.resolution, frame, run, occluderCoreMasks), keep: occluderUnderKeepByPlanPart.get(name) ?? null };
-    });
-    if ((input.edgeSplits?.length ?? 0) > 0) applyEdgeSplits(input.edgeSplits!, new Map(rawPlan.map(p => [p.name, p.raster])), srcr);
-    const owner = rawPaintingOwner(rawPlan, W * H);
+    const owner = (paintingOwner = rawPaintingOwnerForPlan());
     const lineage: Array<[string, string]> = [
       ...input.cuts.map(c => [c.from, c.into] as [string, string]),
       ...Object.values(input.limbs ?? {}).flatMap(l => l.segments.flatMap(segment => [
@@ -6529,7 +6550,9 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       return { ...original, runs: original.runs.map(remap), pre_seam_writer_runs: original.pre_seam_writer_runs.map(remap) };
     });
   }
-  if ((input.editedParts?.length ?? 0) > 0) replaceEditedParts(placed, input.editedParts!, new Set(input.plan.map(([name]) => name)), stageMap!, editContexts!);
+  const editedPartFrontColours = (input.editedParts?.length ?? 0) > 0
+    ? replaceEditedParts(placed, input.editedParts!, new Set(input.plan.map(([name]) => name)), stageMap!, editContexts!, srcr, paintingOwner ?? rawPaintingOwnerForPlan(), ERROR_LIMIT)
+    : [];
   if (editContexts !== undefined) for (const p of placed) {
     const samples = editContexts.get(p)?.depthClampedSamples;
     if (samples === undefined) continue;
@@ -6579,6 +6602,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     sourceCover,
     ...(softOcclusion.length === 0 ? {} : { softOcclusion }),
     ...(!single ? { cropClipped: cropClippedLines(plan, extend, (run, tag) => rig.get(`${run}:${tag}`) ?? null, frame) } : {}),
+    ...(editedPartFrontColours.length === 0 ? {} : { editedPartFrontColours }),
     paintingInRig: srcr,
     ...(stageMap === undefined ? {} : { stageMap }),
     parts: {

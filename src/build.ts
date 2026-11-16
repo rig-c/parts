@@ -1,4 +1,4 @@
-import { readEditedParts } from './editedparts.ts';
+import { editedPartFrontColourLines, readEditedParts } from './editedparts.ts';
 import { SOURCE_COVER_FILE, sourceCoverReport, type SourceCoverSet } from './sourcecover.ts';
 import { STAGE_MAP_FILE } from './provenance.ts';
 import { withoutCheckRows } from './checkrow.ts';
@@ -69,7 +69,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { type AnimFrame, EncodeError, encodeApng, encodeIndexedApng, INDEXED_DEFAULTS } from './apng.ts';
-import { assemble, type AssembleResult, boxOf, cutLines, edgeSplitLines, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, groundWarning, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine, underBox } from './assemble.ts';
+import { assemble, type AssembleResult, boxOf, cutLines, edgeSplitLines, ERROR_LIMIT, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, groundWarning, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine, underBox } from './assemble.ts';
 import { allocationClause, type Reducer, stageBClause, unboundedClause } from './automesh.ts';
 import { residualClause } from './autoenvelope.ts';
 import { type AutoMotionCase, failingRows, idleSchedule, localRow, motionClause, motionDeformation, motionDocument, motionInput, motionRowText, motionStimulus, motionVerdict, noStimulusProblem, prepareComparison, type ReplayCandidate, runComparison, runPreparedComparison, sourceSelfFailure, stimulusMotion, withStimulus } from './automotion.ts';
@@ -1182,6 +1182,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
     );
   }
   for (const line of provenanceLines(result.parts.parts)) log(line);
+  for (const line of editedPartFrontColourLines(result.editedPartFrontColours ?? [], ERROR_LIMIT)) log(line);
   for (const line of ownershipLines(result.parts.cut_ownership ?? [])) log(line);
   for (const alt of altBuilt) for (const line of [...provenanceLines(alt.record.records), ...ownershipLines(alt.record.cut_ownership ?? [])]) log(`  set "${alt.record.name}" ${line.trimStart()}`);
   // Issue #256: one line per part from an author-made layer, so it never reads as See-through's. None without one.
