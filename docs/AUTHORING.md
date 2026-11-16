@@ -8130,6 +8130,7 @@ is declared, never inferred from a filename or guessed from art.
 ```sh
 rig-parts depth-prepare --parts assembled --config depth.json --out inference
 # A provider reads inference/*.png and writes the declared floating-point maps.
+rig-parts depth-bind --map face.json --input inference/face.png --part face
 rig-parts depth-apply --parts assembled --manifest inference/manifest.json --config depth.json --rig-config config.json --out mapped
 rig-parts rig --parts mapped --config mapped/config.json --out compiled
 ```
@@ -8173,6 +8174,31 @@ the prepared art's enlarged dimensions without padding; `"input"` requires the
 whole prepared image and crops its declared padding before reduction. Scalar
 maps use float32 BOX reduction. Normal sources require signed image-axis XYZ
 (x right, y down), not an RGB normal preview.
+
+Each map may carry a parts-owned receipt at `<map filename>.binding.json`
+(for `face.json`, `face.json.binding.json`). Call `depth-bind --map face.json --input inference/face.png --part face` when
+the provider produces that map. The writer validates the numeric map and PNG,
+computes both SHA-256 values itself, and exclusively creates the receipt beside
+the map; it refuses to overwrite existing evidence. Never bind an old map to
+a freshly prepared input. The resulting receipt has this shape:
+
+```json
+{"spec":"rig-parts-depth-map-binding/1","part":"face","mapSha256":"<64 lowercase hex digits>","inputSha256":"<64 lowercase hex digits>"}
+```
+
+These are the only receipt fields. `part` must match the selected part;
+`mapSha256` hashes the numeric JSON file's bytes; `inputSha256` hashes the exact
+prepared inference PNG, matching the manifest row. Apply validates present
+receipts before writing anything. A changed map or inference input refuses with
+`DEPTH_MAP_BINDING`, naming the part, found and required hashes, and the remedy:
+run depth for these inputs and record the resulting map's receipt. Malformed
+present receipts also refuse. Preparing again never rebinds a map.
+Under the compatibility policy dated **2026-11-16**, a missing receipt preserves
+legacy output bytes and exits, with one `DEPTH_MAP_BINDING_ABSENT` WARN per
+selected map on stderr. This is unverified inference-input identity, not a
+binding pass. The provider flow calls the writer when producing a map. The writer binds these
+files at invocation; it cannot prove the map was inferred from that input.
+Parts does not run inference or invent provenance.
 
 Apply computes `u=(raw-median(raw))/(p95-p5)` inside original alpha >=128,
 using linear percentiles, then `Z=median+relief*u`. A flat map requires explicit
@@ -8251,6 +8277,8 @@ by `rig`, so their output requires no alternate compiler or dependency pin.
 | <a id="DEPTH_INPUT_JSON"></a>`DEPTH_INPUT_JSON` | malformed numeric or configuration JSON | write valid finite JSON |
 | <a id="DEPTH_PART_RESOLVES"></a>`DEPTH_PART_RESOLVES` | selected or cleared name absent from parts.json | use the assembled part name |
 | <a id="DEPTH_OUTPUT_EMPTY"></a>`DEPTH_OUTPUT_EMPTY` | nonempty output or output containing an input | choose a separate absent or empty directory |
+| <a id="DEPTH_MAP_BINDING"></a>`DEPTH_MAP_BINDING` | malformed present map receipt, wrong part, map hash or inference-input hash | run depth for these inputs and record the exact map and input hashes in the map's `.binding.json` receipt |
+| <a id="DEPTH_MAP_BINDING_ABSENT"></a>`DEPTH_MAP_BINDING_ABSENT` | WARN only: no receipt, compatibility policy dated 2026-11-16 | legacy behavior is retained; run depth for these inputs and record a receipt to establish identity |
 | <a id="DEPTH_INPUT_BINDING"></a>`DEPTH_INPUT_BINDING` | changed recipe, art, part record, crop, padding or inference PNG | prepare again for these exact inputs |
 | <a id="DEPTH_MAP_FORMAT"></a>`DEPTH_MAP_FORMAT` | wrong numeric schema, channels, shape, count, unknown field or nonfinite element | provide the declared float JSON map, not a preview |
 | <a id="DEPTH_MAP_SIZE"></a>`DEPTH_MAP_SIZE` | map dimensions differ from its explicit frame | use the registered part, enlarged art or padded input grid |

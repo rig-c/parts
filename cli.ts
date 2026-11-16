@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { diffComponentsCommand } from './src/diffcomponents.ts';
 import { applyTakenLayers } from './src/takelayers.ts';
-import { applyDepth, prepareDepth } from './src/depthworkflow.ts';
+import { applyDepth, bindDepthMap, prepareDepth } from './src/depthworkflow.ts';
 /**
  * rig-parts — one painting and its See-through layers in, Spine-ready parts
  * and rig specs out, verified through rig-c.
@@ -81,6 +81,10 @@ usage:
   rig-parts depth-prepare --parts <assembled-dir> --config <depth-recipe.json> --out <empty-dir>
       Write per-part inference PNGs on neutral gray, upscaled and padded as
       declared, plus a source-hashed manifest. No model is bundled or called.
+
+  rig-parts depth-bind --map <numeric-map.json> --input <prepared.png> --part <name>
+      Write <map>.binding.json with both file hashes; never overwrite a receipt.
+      Attests the current files, not that inference used this input.
 
   rig-parts depth-apply --parts <assembled-dir> --manifest <manifest.json> --config <depth-recipe.json> --rig-config <config.json> --out <empty-dir>
       Register floating-point JSON depth or signed normals, normalize inside
@@ -1172,6 +1176,7 @@ function printLayerTable(set: LayerSet): void {
 const TAKES = {
   'check-parts': { valued: ['--parts', '--out'], switches: ['--json'] },
   'diff-components': { valued: ['--stack', '--painting', '--parts', '--figure', '--floor', '--threshold', '--out', '--verify'], switches: [] },
+  'depth-bind': { valued: ['--map', '--input', '--part'], switches: [] },
   'depth-prepare': { valued: ['--parts', '--config', '--out'], switches: [] },
   'depth-apply': { valued: ['--parts', '--manifest', '--config', '--rig-config', '--out'], switches: [] },
   layers: { valued: ['--export', '--template', '--canvas', '--full', '--source', '--config'], switches: [] },
@@ -2479,6 +2484,17 @@ function cmdDepthPrepare(args: string[]): number {
   } catch (error) { return printRefusal(error); }
 }
 
+function cmdDepthBind(args: string[]): number {
+  const f = flags(args, 'depth-bind', ['--map', '--input', '--part']);
+  if (typeof f === 'string') return usage(f);
+  try {
+    const result = bindDepthMap({ map: f.get('--map')!, input: f.get('--input')!, part: f.get('--part')! });
+    console.log(`depth-bind: part "${result.part}" mapSha256=${result.mapSha256} inputSha256=${result.inputSha256}; wrote map binding receipt`);
+    console.log('depth-bind: binds these files at invocation; does not prove the map was inferred from this input');
+    return EXIT_OK;
+  } catch (error) { return printRefusal(error); }
+}
+
 function cmdDepthApply(args: string[]): number {
   const f = flags(args, 'depth-apply', ['--parts', '--manifest', '--config', '--rig-config', '--out']);
   if (typeof f === 'string') return usage(f);
@@ -2503,6 +2519,7 @@ function main(argv: string[]): number | Promise<number> {
   if (command === 'diff-components') return cmdDiffComponents(rest);
   if (command === 'layers') return cmdLayers(rest);
   if (command === 'depth-prepare') return cmdDepthPrepare(rest);
+  if (command === 'depth-bind') return cmdDepthBind(rest);
   if (command === 'depth-apply') return cmdDepthApply(rest);
   if (command === 'sheet') return cmdSheet(rest);
   if (command === 'rig') return cmdRig(rest);
