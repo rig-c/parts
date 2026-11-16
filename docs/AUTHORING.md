@@ -8156,11 +8156,14 @@ declares `near`, positive `zScale` and `pivot`; optional `unitDepths` explicitly
 replaces that group's rigid depths. `clear` explicitly lists part references to
 remove, including any small units intended to sample the surface. Unselected
 parts retain their artwork and depth references. The output config copies the
-original, sets the declared group pivots/unit depths, and relocates animation,
-requirements and control-skeleton file paths. Built-in skeleton names remain
-names. A selected part whose provenance records `depth.kind: "authored-unit"`
-is refused before output (`DEPTH_AUTHORED_UNIT_CONFLICT`); apply does not invent
-a transition to a transported scalar reference. Unselected authored units keep
+original, sets the declared group pivots/unit depths, and relocates every file
+reference `configFileReferences` declares, including `assemble.edited_parts`
+receipt files, through that reference's `set`
+([STABILITY](STABILITY.md#programmatic-config-file-references)). Built-in
+skeleton names remain names. A selected part whose provenance records
+`depth.kind: "authored-unit"` is refused before output
+(`DEPTH_AUTHORED_UNIT_CONFLICT`); apply does not invent a transition
+to a transported scalar reference. Unselected authored units keep
 their original representation. Roles and draw order stay the author's.
 
 Maps are UTF-8 JSON `{"spec":"rig-parts-map/1","width":2,"height":2,
