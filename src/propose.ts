@@ -1,4 +1,4 @@
-import { dustOf } from './mesh.ts';
+import { ART_ALPHA, dustOf, isDust } from './mesh.ts';
 import { explicitWeightRows, regionBone, type RegionSpec } from './config.ts';
 /**
  * The propose stage: bone origins, mesh candidate lists, regions and a default
@@ -145,7 +145,7 @@ import { connectedComponents } from './raster/components.ts';
 import { dilate, morphGradient } from './raster/morph.ts';
 import { readPng } from './raster/png.ts';
 import { resize } from './raster/resize.ts';
-import { type Mask, newMask, newRaster, type Raster } from './raster/types.ts';
+import { alphaAbove, type Mask, newMask, newRaster, type Raster } from './raster/types.ts';
 import { npMean, npMedian, npPercentile, pyFixed, pyInt, pyIntList, pyRepr, pyRound, pyStrList } from './pyfmt.ts';
 import type { JointState, RigJoint, RigJoints } from './keypoints.ts';
 import { IDLE_FPS } from './motion.ts';
@@ -3489,10 +3489,31 @@ export function proposeWithBasis(
       torsoImage = { ...torsoImage, data };
     }
     const dust = dustOf(torsoImage);
+    let torsoStray: number | undefined;
     if ('keep' in dust) {
-      throw new PartsError([{ code: 'PROPOSE_TORSO_ISLANDS', object: `chest carrier "${torsoName}"`, detail: `${dust.keep}. Separate the real pieces before drafting a contour torso` }]);
+      const cellArea = fig.grid * fig.grid;
+      const components = connectedComponents(alphaAbove(torsoImage, ART_ALPHA), 4);
+      const islands = components.stats.slice(1).sort((a, b) => b.area - a.area || a.label - b.label);
+      const art = islands.reduce((sum, island) => sum + island.area, 0);
+      const extra = islands.slice(1);
+      // One drafted sampling cell supplies the area policy, not a geometric claim that a smaller island
+      // cannot contain a sample point. Dust retains its independent, existing limits.
+      if (islands.length === 0 || islands[0].area === islands[1]?.area ||
+          extra.some(island => !isDust(island.area, art) && island.area >= cellArea)) {
+        throw new PartsError([{ code: 'PROPOSE_TORSO_ISLANDS', object: `chest carrier "${torsoName}"`, detail: `${dust.keep}. Non-dust islands must hold fewer than spacing squared = ${fig.grid} * ${fig.grid} = ${cellArea} art px. Separate the real pieces before drafting a contour torso` }]);
+      }
+      torsoStray = extra[0]?.area;
+      for (const island of extra) {
+        if (isDust(island.area, art)) continue;
+        const code = 'PROPOSE_TORSO_ISLAND_LEFT_OUT';
+        notes.push(`WARN  ${code}: chest carrier "${torsoName}" — ${island.area} art px at box [${source.x + island.left}, ${source.y + island.top}, ${island.width}, ${island.height}] rig px left out of the contour; below spacing squared ${fig.grid} * ${fig.grid} = ${cellArea} art px; contour.stray=${torsoStray}`);
+      }
+      const small = extra.filter(island => isDust(island.area, art));
+      if (small.length > 0) notes.push(`${torsoName}: contour dust rule leaves out ${small.length} island(s), ${small.reduce((sum, island) => sum + island.area, 0)} px; contour.stray=${torsoStray}`);
+    } else {
+      torsoStray = dust.stray;
+      if (dust.stray !== undefined) notes.push(`${torsoName}: contour dust rule leaves out ${dust.dust.length} island(s), ${dust.dust.reduce((sum, pixels) => sum + pixels, 0)} px; contour.stray=${dust.stray}`);
     }
-    if (dust.stray !== undefined) notes.push(`${torsoName}: contour dust rule leaves out ${dust.dust.length} island(s), ${dust.dust.reduce((sum, pixels) => sum + pixels, 0)} px; contour.stray=${dust.stray}`);
     const [, radius] = gridR(source);
     const segments: Segment[] = lattice !== undefined && 'grid' in lattice ? lattice.segments : [['chest', rnd(neckAt), rnd(hip)]];
     // Same figure formulas as mesh-draft's figureRules (issue #265). Importing meshdraft here would cycle through propose.
@@ -3502,7 +3523,7 @@ export function proposeWithBasis(
       margin: tolerance,
       spacing: fig.grid,
       maxEdge: fig.grid,
-      ...(dust.stray === undefined ? {} : { stray: dust.stray }),
+      ...(torsoStray === undefined ? {} : { stray: torsoStray }),
     };
     if (bust.noBust !== undefined) {
       notes.push(`${torsoName}: contour bust omitted for the declared reason: ${bust.noBust}`);

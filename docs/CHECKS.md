@@ -4,6 +4,22 @@ Refusals identify the object, the observed value and the required value.
 See [AUTHORING](AUTHORING.md#6-refusals-the-rule-and-what-has-to-change) for the full
 command reference.
 
+## Chest contour drafting warnings
+
+`propose` drafts the uniquely largest chest-carrier art island. The existing dust
+rule and proposal note remain unchanged. Non-dust extra islands may be omitted
+only when each art-pixel count is strictly below the drafted `contour.spacing`
+squared (`spacing²`). This threshold is a derived sampling-cell area policy;
+an area below it does not prove that no vertex can lie inside a small island.
+
+| Code | Warns | Action |
+| --- | --- | --- |
+| `PROPOSE_TORSO_ISLAND_LEFT_OUT` | A non-dust extra island is omitted because its art-pixel count is strictly below `spacing²`; the warning names its pixel count and bounding box in rig pixels. | Inspect the omitted art; `contour.stray` records the largest omitted island's art-pixel count, including dust. Separate the piece if it must be meshed. |
+
+Equal-largest island ties and any non-dust extra island at or above `spacing²`
+refuse with `PROPOSE_TORSO_ISLANDS`, whose detail includes the threshold. No art
+also refuses with that code. See [Drafting the chest carrier](AUTHORING.md#drafting-the-chest-carrier).
+
 ## Edited rig-space parts
 
 The following checks apply only when `assemble.edited_parts` is declared.

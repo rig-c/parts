@@ -1800,7 +1800,7 @@ function cmdPropose(args: string[]): number {
       if (target !== null) for (const line of configWriteLines(target, staged.changes)) console.error(line);
     }
     console.log(`wrote proposal.json (${prop.bones.length} bone entries, ${Object.keys(prop.meshes).length} meshes) and render/landmarks.png (+_head) under ${out}`);
-    for (const n of prop.notes) console.log(`note: ${n}`);
+    for (const n of prop.notes) console.log(n.startsWith('WARN  PROPOSE_TORSO_ISLAND_LEFT_OUT:') ? n : `note: ${n}`);
     if (leftBehind.unread !== null) console.log(`note: the keyed chains were not read after the recipe (issue #572): ${leftBehind.unread}`);
     printLint(P, prop, joints, [...draftLint, ...leftBehind.findings]);
     console.log(basisLine(bfile, out));

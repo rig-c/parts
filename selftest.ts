@@ -11862,10 +11862,49 @@ function runProposeSuite(): number {
       'contour' in dustMesh && dustMesh.contour.stray === 1 &&
       dustTorso.notes.some(note => note.includes('1 island(s), 1 px; contour.stray=1')),
       JSON.stringify(dustMesh), 'one isolated pixel beside 4410 art pixels meets both existing dust limits');
-    const realTorso = refusals(() => propose(torsoIslands(5), undefined, undefined, undefined, undefined, true, { noBust: 'historical fixture: no bust landmarks recorded' }));
-    say('PR764_A_REAL_EXTRA_TORSO_ISLAND_IS_REFUSED_BY_NAME_WITHOUT_A_LATTICE_FALLBACK',
-      realTorso?.problems.some(problem => problem.code === 'PROPOSE_TORSO_ISLANDS' && problem.object.includes('bodice') && problem.detail.includes('4410, 5 px') && problem.detail.includes('real piece')) === true,
-      codes(realTorso), 'a five-pixel island exceeds the existing four-pixel dust limit');
+    // By hand: the fixture's union runs from y=40 to y=250, H=210; round(210/37)=6,
+    // so one drafted cell is 36 px. The main rectangle is 98*45=4410 px. PR764's 5 px
+    // now moves from refusal to WARN: it is non-dust (>4), but strictly below 36.
+    const smallTorso = propose(torsoIslands(5), undefined, undefined, undefined, undefined, true, { noBust: 'rigid plate' });
+    say('PR764_A_FIVE_PIXEL_TORSO_ISLAND_NOW_WARNS_BELOW_ONE_DRAFTED_CELL',
+      'contour' in smallTorso.meshes.bodice && smallTorso.meshes.bodice.contour.stray === 5 &&
+      smallTorso.notes.some(note => note.includes('WARN  PROPOSE_TORSO_ISLAND_LEFT_OUT:') && note.includes('5 art px at box [50, 100, 1, 5] rig px')),
+      JSON.stringify(smallTorso.meshes.bodice), '5 > 4 dust px but 5 < 6*6 cell px; explicitly moved verdict');
+    const sliver = propose(torsoIslands(26), undefined, undefined, undefined, undefined, true, { noBust: 'rigid plate' });
+    const sliverMesh = sliver.meshes.bodice;
+    say('PR1299_A_NON_DUST_SLIVER_DRAFTS_THE_LARGEST_ISLAND_WITH_A_NAMED_WARNING',
+      'contour' in sliverMesh && sliverMesh.contour.stray === 26 && sliverMesh.contour.spacing === 6 &&
+      sliver.notes.some(note => note.includes('WARN  PROPOSE_TORSO_ISLAND_LEFT_OUT:') &&
+        note.includes('26 art px at box [50, 100, 1, 26] rig px') && note.includes('6 * 6 = 36 art px')),
+      JSON.stringify(sliverMesh), '26 < 36; source pixels remain untouched');
+    for (const pixels of [36, 37]) {
+      const split = refusals(() => propose(torsoIslands(pixels), undefined, undefined, undefined, undefined, true, { noBust: 'rigid plate' }));
+      say(`PR1299_SPLIT_TORSO_${pixels}_PX_REFUSES_AT_OR_ABOVE_ONE_CELL`,
+        split?.problems.some(problem => problem.code === 'PROPOSE_TORSO_ISLANDS' && problem.detail.includes('6 * 6 = 36 art px')) === true,
+        codes(split), `${pixels} >= 36; strict boundary is refused`);
+    }
+    const tieImage = bustSet.images.get('bodice') as Raster;
+    const tieData = new Uint8ClampedArray(tieImage.data);
+    // Two 100*21=2100 px rectangles: rows 0..20 and 23..43; rows 21,22,44 are empty.
+    // Chest at rig [100,126.5] remains on the lower island, so the chest-carrier rule runs.
+    for (const y of [21, 22, 44]) for (let x = 0; x < 100; x++) tieData[(y * 100 + x) * 4 + 3] = 0;
+    const tieImages = new Map(bustSet.images);
+    tieImages.set('bodice', { ...tieImage, data: tieData });
+    const tiedTorso = new PartSet(JSON.parse(readFileSync(join(bustDir, 'parts.json'), 'utf8')) as PartsFile, tieImages);
+    const tieRefusal = refusals(() => propose(tiedTorso, undefined, undefined, undefined, undefined, true, { noBust: 'rigid plate' }));
+    say('PR1299_TIED_LARGEST_ISLANDS_STILL_REFUSE',
+      tieRefusal?.problems.some(problem => problem.code === 'PROPOSE_TORSO_ISLANDS' && problem.detail.includes('two share the largest count')) === true,
+      codes(tieRefusal), 'equal 2100 px islands have no uniquely largest island');
+    const sliverDir = join(dir, 'torso-sliver');
+    // Opaque rectangles: 98*45 main pixels plus 1*26 sliver pixels, with column 51 empty.
+    writeProposeFixture(sliverDir, [...PROPOSE_PARTS, { name: 'bodice', from: 'full:topwear', x: 50, y: 100, w: 100, h: 45, colour: [60,80,100], rects: [[52,100,98,45], [50,100,1,26]] }]);
+    const sliverOut = join(sliverDir, 'draft');
+    const sliverCli = runCli(['propose', '--parts', sliverDir, '--source', join(sliverDir, 'painting.png'), '--out', sliverOut, '--no-bust', 'rigid plate']);
+    say('PR1299_CLI_WRITES_THE_PROPOSAL_AND_PRINTS_THE_LEFT_OUT_WARNING',
+      sliverCli.status === 0 && existsSync(join(sliverOut, 'proposal.json')) &&
+      sliverCli.out.split('\n').some(line => line.startsWith('WARN  PROPOSE_TORSO_ISLAND_LEFT_OUT:') && line.includes('26 art px at box [50, 100, 1, 26] rig px')) &&
+      JSON.parse(readFileSync(join(sliverOut, 'proposal.json'), 'utf8')).meshes.bodice.contour.stray === 26,
+      `CLI ${sliverCli.status}; 26 art px; box [50, 100, 1, 26]; stray 26`, 'WARN is emitted and the proposal is written');
 
     const chainBustDir = join(dir, 'chain-bust');
     writeProposeFixture(chainBustDir, [...PROPOSE_PARTS, { name: 'coat', from: 'full:topwear', x: 50, y: 100, w: 100, h: 160, colour: [60, 80, 100] }]);
