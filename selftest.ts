@@ -55996,7 +55996,7 @@ function runConfigWriteSuite(): number {
     const staged1304 = stageConfigWrite(readConfigWriteTarget(morePath1304), { kind: 'proposal', proposal: proposal1304, sections: PROPOSAL_CONFIG_SECTIONS });
     try { staged1304.commit(); } finally { staged1304.cancel(); }
     const written1304 = loadConfig(morePath1304).motion.blink;
-    say('CW1304_WRITEBACK_PRESERVES_SCALAR_T_AND_EVERY_MORE_ENTRY',
+    say('CWP1304_WRITEBACK_PRESERVES_SCALAR_T_AND_EVERY_MORE_ENTRY',
       written1304?.t === 1.3 && JSON.stringify(written1304.more) === '[2.3,3.3]' &&
         JSON.stringify(written1304) === JSON.stringify(proposal1304.motion.blink),
       JSON.stringify(written1304),
@@ -56006,7 +56006,7 @@ function runConfigWriteSuite(): number {
     const invalidBlink1304: Blink = { ...authoredBlink1304, more: [3.3, 2.3] };
     badProposal1304.motion.blink = invalidBlink1304;
     const badWrite1304 = refusals(() => stageConfigWrite(readConfigWriteTarget(morePath1304), { kind: 'proposal', proposal: badProposal1304, sections: PROPOSAL_CONFIG_SECTIONS }));
-    say('CW1304_INVALID_MORE_WRITEBACK_REFUSES_WITHOUT_REPLACING_CONFIG',
+    say('CWP1304_INVALID_MORE_WRITEBACK_REFUSES_WITHOUT_REPLACING_CONFIG',
       badWrite1304?.problems.length === 1 && badWrite1304.problems[0].code === 'CONFIG_BLINK_MORE_TIMES' &&
         badWrite1304.problems[0].object === 'config.motion.blink.more[1]' && readFileSync(morePath1304, 'utf8') === beforeBad1304,
       JSON.stringify(badWrite1304?.problems ?? null),
