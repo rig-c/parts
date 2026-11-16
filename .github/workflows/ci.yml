@@ -44,7 +44,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - id: reuse
-        uses: rig-c/core/.github/actions/tree-verdict@08b45c6fbd3664a0dc77050c04b7359d2346f7a6
+        uses: rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f
         with:
           declaration: scripts/tree-verdict.json
       - name: Check workflow coverage and verdict wiring
@@ -151,7 +151,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - id: tools
-        uses: rig-c/core/.github/actions/tree-verdict@08b45c6fbd3664a0dc77050c04b7359d2346f7a6
+        uses: rig-c/core/.github/actions/tree-verdict@149bca5fc828c60416283de0a1aa570ed33f385f
       - id: receipt
         env:
           TREE_VERDICT_TOOLS: ${{ steps.tools.outputs.tooling-path }}
