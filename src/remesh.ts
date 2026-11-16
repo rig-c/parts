@@ -65,7 +65,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { checkStage, gateThroughRigc, type Log, RIGC_MODEL_DOCUMENT, rigStage } from './build.ts';
-import { barsNotMet, type CheckReport, checkStatuses, type CheckStatus, checkSummaryLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackShape, type PageEdges, rigcRanClause, type RigcRunner } from './check.ts';
+import { barsNotMet, type CheckReport, checkStatuses, type CheckStatus, checkSummaryLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackMode, type PackShape, type PageEdges, parsePageSize, rigcRanClause, type RigcRunner } from './check.ts';
 import { loadConfigAndAnimations } from './config.ts';
 import { PartsError, type Problem, problemLine, refuseIfAny } from './errors.ts';
 import { jsonValueSpan, scratchConfig } from './meshdraft.ts';
@@ -113,6 +113,7 @@ export interface RemeshInput {
   idleKeys?: IdleKeys;
   pageEdges?: PageEdges;
   packShape?: PackShape;
+  pageSize?: number;
   requirements?: string;
   /** Issue #617: a {@link INPUT_CHECK_FILE} an earlier run wrote over this input; its check is reused when it is bound to this run's input. */
   inputCheck?: string;
@@ -909,6 +910,8 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
   const idleKeys = input.idleKeys ?? DEFAULT_IDLE_KEYS;
   const pageEdges = input.pageEdges ?? DEFAULT_PAGE_EDGES;
   const packShape = input.packShape ?? DEFAULT_PACK_SHAPE;
+  const pageSize = parsePageSize(input.pageSize);
+  const mode: PackMode = { pageEdges, packShape, ...(pageSize === undefined ? {} : { pageSize }) };
   // 1. The input, the out and the request.
   const outAt = resolve(input.out);
   const rigAt = resolve(input.rig);
@@ -941,7 +944,7 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
     const auto = 'auto' in meshReq.entry;
     const build = (name: string, config: string): Built => {
       const out = join(scratch, name, 'rig');
-      rigStage({ config, parts: input.parts, out, idleKeys, pageEdges, packShape }, rigc, join(scratch, name, 'gate'), (l) => log(`[${name}:rig] ${l}`));
+      rigStage({ config, parts: input.parts, out, idleKeys, pageEdges, packShape, ...(pageSize === undefined ? {} : { pageSize }) }, rigc, join(scratch, name, 'gate'), (l) => log(`[${name}:rig] ${l}`));
       return readBuilt(out, part);
     };
     // 3. The baseline.
@@ -978,7 +981,7 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
     refuseIfAny(deltaSourceProblems(doc, part, inAtt, deltaPath));
     log(`rig-parts remesh: ${part} of ${input.rig}, ${tree.size} file(s); the request is a mesh edit of ${doc.ops.length} op(s), the baseline is the input itself`);
     let model = null as string | null;
-    const inGate = gateThroughRigc(pngsOf(tree), textsOf(tree, plant.unfilteredGateTexts === true), rigc, join(scratch, 'gate-input'), { pageEdges, packShape }, (dir) => {
+    const inGate = gateThroughRigc(pngsOf(tree), textsOf(tree, plant.unfilteredGateTexts === true), rigc, join(scratch, 'gate-input'), mode, (dir) => {
       const p = join(dir, RIGC_MODEL_DOCUMENT);
       model = existsSync(p) ? readFileSync(p, 'utf8') : null;
     });
@@ -1015,7 +1018,7 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
   log(`  ${part}: v=${before.vertices} t=${before.triangles} hull=${before.hull} -> v=${after.vertices} t=${after.triangles} hull=${after.hull}`);
   log(`  preserved: ${identical.filter((p) => p !== PROVENANCE_FILE && !(input.recordInputCheck === true && p === INPUT_CHECK_FILE)).length} file(s) byte-identical to the input; rig.json identical outside skins.default.${part}.${part}; mesh_report.json identical but the "${part}" row`);
   // 7. The gate and check.
-  const gate = gateThroughRigc(pngsOf(revision), textsOf(revision, plant.unfilteredGateTexts === true), rigc, join(scratch, 'gate'), { pageEdges, packShape });
+  const gate = gateThroughRigc(pngsOf(revision), textsOf(revision, plant.unfilteredGateTexts === true), rigc, join(scratch, 'gate'), mode);
   for (const g of gate) {
     log(`  rigc ${g.label}, the revision: exit ${g.status}`);
     for (const l of g.lines) log(`    ${l.trim()}`);
@@ -1027,7 +1030,7 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
     writeFileSync(join(staged, k), b);
   }
   const checkOf = (rig: string, name: string): CheckReport =>
-    checkStage({ rig, parts: input.parts, out: join(scratch, name), pageEdges, packShape, ...(input.requirements === undefined ? {} : { requirements: input.requirements }) }, rigc, checkBin, (l) => log(`[${name}] ${l}`));
+    checkStage({ rig, parts: input.parts, out: join(scratch, name), pageEdges, packShape, ...(pageSize === undefined ? {} : { pageSize }), ...(input.requirements === undefined ? {} : { requirements: input.requirements }) }, rigc, checkBin, (l) => log(`[${name}] ${l}`));
   if (recorded.reused !== null) log(inputCheckReusedLine(input.inputCheck as string, recorded.binding as InputCheckBinding));
   let inSide: CheckSide;
   if (recorded.reused !== null) inSide = recorded.reused;

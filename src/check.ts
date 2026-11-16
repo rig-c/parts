@@ -329,10 +329,27 @@ export const PACK_SHAPES = ['rect', 'polygon'] as const;
 export type PackShape = (typeof PACK_SHAPES)[number];
 export const DEFAULT_PACK_SHAPE: PackShape = 'polygon';
 
-/** How a packed build packs: its `--page-edges` and its `--pack-shape`, each handed to rigc verbatim. */
+/** The refusal of a `--page-size` that is not a positive integer (issue #1273). */
+export const PACK_PAGE_SIZE = 'PACK_PAGE_SIZE';
+
+/** Parse `--page-size <px>`: a positive integer, handed to rigc verbatim; anything else is refused under {@link PACK_PAGE_SIZE}. */
+export function parsePageSize(value: string | number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const shown = typeof value === 'string' ? JSON.stringify(value) : String(value);
+  if (typeof value === 'number') {
+    if (Number.isSafeInteger(value) && value >= 1) return value;
+    throw new PartsError([{ code: PACK_PAGE_SIZE, object: '--page-size', detail: `${shown} found; a positive integer is required` }]);
+  }
+  const n = Number(value);
+  if (/^[1-9][0-9]*$/.test(value) && Number.isSafeInteger(n) && n >= 1) return n;
+  throw new PartsError([{ code: PACK_PAGE_SIZE, object: '--page-size', detail: `${shown} found; a positive integer is required` }]);
+}
+
+/** How a packed build packs: its `--page-edges`, its `--pack-shape`, and its optional `--page-size`, each handed to rigc verbatim. */
 export interface PackMode {
   pageEdges: PageEdges;
   packShape: PackShape;
+  pageSize?: number;
 }
 
 /** Both defaults, {@link DEFAULT_PAGE_EDGES} and {@link DEFAULT_PACK_SHAPE}. */
@@ -348,7 +365,17 @@ export const GATE_PROFILE = 'rig-play';
 
 /** The packed build's rigc arguments after `--out <dir>`, as every stage that packs passes them. */
 export function packedBuildArgs(mode: PackMode): string[] {
-  return ['--profile', GATE_PROFILE, '--pack', '--page-edges', mode.pageEdges, '--pack-shape', mode.packShape];
+  const pageSize = parsePageSize(mode.pageSize);
+  return [
+    '--profile',
+    GATE_PROFILE,
+    '--pack',
+    '--page-edges',
+    mode.pageEdges,
+    '--pack-shape',
+    mode.packShape,
+    ...(pageSize === undefined ? [] : ['--page-size', String(pageSize)]),
+  ];
 }
 
 /** The packed build as a label: the rigc command line that was run, after `rigc`. */
@@ -2693,8 +2720,8 @@ export interface CheckFigures {
   gate_spine_html_green: boolean;
   /** Which rigc entry gated the build ({@link readRigcEntry}): provenance, not a bar. */
   rigc_entry: RigcEntryRecord;
-  /** How the artifact's page was packed: the `--page-edges` and `--pack-shape` rigc was handed, which its pack line was read to agree with ({@link packEdgeProblems}). Provenance, not a bar. */
-  pack_mode: { page_edges: PageEdges; pack_shape: PackShape };
+  /** How the artifact's page was packed: the `--page-edges` and `--pack-shape` rigc was handed, which its pack line was read to agree with ({@link packEdgeProblems}), and `--page-size` when given (issue #1273). Provenance, not a bar. */
+  pack_mode: { page_edges: PageEdges; pack_shape: PackShape; page_size?: number };
   /**
    * Written only under `--environment` (issue #538): the `rigc-environment/1` schedule every measured render was posed
    * under — the path as the command line gave it, the sha256 of the bytes read, and how many steps rigc's reader read
@@ -6606,6 +6633,7 @@ function renderExtremes(build: string, out: string, animations: readonly string[
  * anything it did not before.
  */
 export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, partsHome?: string, mode: PackMode = DEFAULT_PACK_MODE, source?: string, requirements?: string, seamPairsAsked = false, keepStills = false, set?: string, allSets = false, environment?: string, requirementsAs: string | undefined = requirements, config?: InputFileRecord, windBand?: string, noExtremes = false, supportSource?: string, supportFigure?: Mask): CheckReport {
+  const pageSize = parsePageSize(mode.pageSize);
   let inp: CheckInputs;
   let reqFile: RequirementsFile | null = null;
   let reqRecord: RequirementsFileRecord | null = null;
@@ -7439,7 +7467,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const figures: CheckFigures = {
     gate_spine_html_green: htmlGreen,
     rigc_entry: rigcEntry,
-    pack_mode: { page_edges: mode.pageEdges, pack_shape: mode.packShape },
+    pack_mode: { page_edges: mode.pageEdges, pack_shape: mode.packShape, ...(pageSize === undefined ? {} : { page_size: pageSize }) },
     ...(env === null ? {} : { environment: env }),
     loop_max_diff: loop === null ? null : loop.max,
     ...(loopPhysics === null ? {} : { loop_physics: loopPhysics.map(row => ({ ...row, ...checkRow('loop_physics', 'rig', false, []) })) }),

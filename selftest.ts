@@ -423,9 +423,11 @@ import {
   packageRigc,
   packedBuildArgs,
   packEdgeProblems,
+  PACK_PAGE_SIZE,
   type PackMode,
   type PageEdges,
   parsePackLines,
+  parsePageSize,
   PARTS_HOME_SENTENCE,
   readBoneTrack,
   readCheckEnvironment,
@@ -23702,6 +23704,94 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       hull.every((b) => b.r.status === 2 && b.r.out.split('\n').includes(shapeUsage) && !existsSync(b.out)),
       hull.map((b) => `${b.command} --pack-shape hull -> exit ${b.r.status}, ${(b.r.out.split('\n').find((l) => l.includes('FAIL')) ?? 'no FAIL line').trim()}; --out written: ${existsSync(b.out)}`).join(' | '),
       'as for --page-edges: rig, check and build all pack, so all three take --pack-shape, and a value rigc does not take is refused before any stage runs, naming the flag, the value and the two accepted',
+    );
+
+    // Issue #1273: --page-size passes through to every packed rigc build argv when given, omits when absent, and records check.json pack_mode.page_size only when given.
+    const recordPacked = (pageSize?: number): { rigArgv: string[][]; checkArgv: string[][]; report: ReturnType<typeof checkStage> } => {
+      const bin = suiteRigc();
+      const rigArgv: string[][] = [];
+      const checkArgv: string[][] = [];
+      const recRunner = (sink: string[][]): RigcRunner =>
+        rigcRunnerAt(bin, (b, a) => {
+          if (a[0] === 'build' && a.includes('--pack')) sink.push([...a]);
+          return spawnRigc(b, a);
+        });
+      const rfx = writeRigFixture(join(dir, `ps-rig-fx-${pageSize ?? 'default'}`));
+      rigStage(
+        { config: rfx.config, parts: rfx.parts, out: join(dir, `ps-rig-out-${pageSize ?? 'default'}`), ...(pageSize === undefined ? {} : { pageSize }) },
+        recRunner(rigArgv),
+        join(dir, `ps-rig-scratch-${pageSize ?? 'default'}`),
+        () => {},
+      );
+      const report = checkStage(
+        { rig, out: join(dir, `ps-check-out-${pageSize ?? 'default'}`), noExtremes: true, ...(pageSize === undefined ? {} : { pageSize }) },
+        recRunner(checkArgv),
+        bin,
+        () => {},
+      );
+      return { rigArgv, checkArgv, report };
+    };
+    const withoutSize = recordPacked(undefined);
+    const withSize1024 = recordPacked(1024);
+    const tailWithout = ['--profile', GATE_PROFILE, '--pack', '--page-edges', 'free', '--pack-shape', 'polygon'];
+    const tailWith = [...tailWithout, '--page-size', '1024'];
+    const stripOut = (a: readonly string[]): string[] => a.map((x, i) => (a[i - 1] === '--out' || a[i - 1] === '--rig' || a[i - 1] === '--motion' ? '<path>' : x));
+    const sizeCliOut = join(dir, 'out-page-size-1024');
+    const sizeCliRun = runCli(['check', '--rig', rig, '--out', sizeCliOut, '--page-size', '1024']);
+    const sizeCliFig = readJsonFile(join(sizeCliOut, 'check.json'));
+    const sizeDirect = direct('direct-size-1024', ['--page-edges', 'free', '--pack-shape', 'polygon', '--page-size', '1024']);
+    const withoutCheckJsonBytes = readFileSync(join(dir, 'ps-check-out-default', 'check.json'));
+    const okCheckJsonBytes = readFileSync(join(out, 'check.json'));
+    say(
+      'CK1273_PAGE_SIZE_PASSES_THROUGH_TO_EVERY_PACKED_RIGC_BUILD_ARGV_AND_OMITS_WHEN_ABSENT_LEAVING_OUTPUTS_BYTE_IDENTICAL',
+      withoutSize.rigArgv.length === 1 &&
+        withoutSize.checkArgv.length === 2 &&
+        [...withoutSize.rigArgv, ...withoutSize.checkArgv].every((a) => !a.includes('--page-size') && JSON.stringify(a.slice(-tailWithout.length)) === JSON.stringify(tailWithout)) &&
+        withSize1024.rigArgv.length === 1 &&
+        withSize1024.checkArgv.length === 2 &&
+        [...withSize1024.rigArgv, ...withSize1024.checkArgv].every((a) => JSON.stringify(a.slice(-tailWith.length)) === JSON.stringify(tailWith)) &&
+        withoutSize.checkArgv.every((a, i) => JSON.stringify([...stripOut(a), '--page-size', '1024']) === JSON.stringify(stripOut(withSize1024.checkArgv[i]))) &&
+        JSON.stringify(withoutSize.report.figures.pack_mode) === '{"page_edges":"free","pack_shape":"polygon"}' &&
+        !('page_size' in withoutSize.report.figures.pack_mode) &&
+        JSON.stringify(withSize1024.report.figures.pack_mode) === '{"page_edges":"free","pack_shape":"polygon","page_size":1024}' &&
+        sizeCliRun.status === 0 &&
+        JSON.stringify(sizeCliFig?.pack_mode) === '{"page_edges":"free","pack_shape":"polygon","page_size":1024}' &&
+        sameArtifact(join(sizeCliOut, 'build'), sizeDirect) &&
+        withoutCheckJsonBytes.equals(okCheckJsonBytes) &&
+        sameArtifact(join(dir, 'ps-check-out-default', 'build'), join(out, 'build')),
+      `recorded packed argv without flag (rig ${withoutSize.rigArgv.length}, check ${withoutSize.checkArgv.length}): tail ${JSON.stringify(withoutSize.checkArgv[0]?.slice(-tailWithout.length))}; with --page-size 1024 (rig ${withSize1024.rigArgv.length}, check ${withSize1024.checkArgv.length}): tail ${JSON.stringify(withSize1024.checkArgv[0]?.slice(-tailWith.length))}; check.json pack_mode without=${JSON.stringify(withoutSize.report.figures.pack_mode)}, with=${JSON.stringify(withSize1024.report.figures.pack_mode)}; check.json and build/ without flag byte-identical to baseline: ${withoutCheckJsonBytes.equals(okCheckJsonBytes) && sameArtifact(join(dir, 'ps-check-out-default', 'build'), join(out, 'build'))}`,
+      'issue #1273: packedBuildArgs appends --page-size <n> only when pageSize is set, so every packed rigc invocation carries it when given and equals the existing argv when omitted, and check.json records pack_mode.page_size only when given',
+    );
+
+    const badSizes = ['0', '-1', '1.5', 'abc', ''] as const;
+    const badSizeCommands = (val: string, idx: number): Array<{ label: string; r: { status: number; out: string }; out: string }> => [
+      { label: `check(${JSON.stringify(val)})`, out: join(dir, `bad-ps-check-${idx}`), r: runCli(['check', '--rig', rig, '--out', join(dir, `bad-ps-check-${idx}`), '--page-size', val]) },
+      { label: `rig(${JSON.stringify(val)})`, out: join(dir, `bad-ps-rig-${idx}`), r: runCli(['rig', '--config', join(dir, 'absent.json'), '--parts', dir, '--out', join(dir, `bad-ps-rig-${idx}`), '--page-size', val]) },
+      { label: `build(${JSON.stringify(val)})`, out: join(dir, `bad-ps-build-${idx}`), r: runCli(['build', '--config', join(dir, 'absent.json'), '--source', join(dir, 'absent.png'), '--full', dir, '--head', dir, '--out', join(dir, `bad-ps-build-${idx}`), '--page-size', val]) },
+      { label: `mesh-draft(${JSON.stringify(val)})`, out: join(dir, `bad-ps-md-${idx}`), r: runCli(['mesh-draft', '--config', join(dir, 'absent.json'), '--parts', dir, '--out', join(dir, `bad-ps-md-${idx}`), '--page-size', val]) },
+      { label: `remesh(${JSON.stringify(val)})`, out: join(dir, `bad-ps-rm-${idx}`), r: runCli(['remesh', '--rig', rig, '--config', join(dir, 'absent.json'), '--parts', dir, '--part', 'back', '--mesh', join(dir, 'absent-mesh.json'), '--out', join(dir, `bad-ps-rm-${idx}`), '--page-size', val]) },
+      { label: `retune(${JSON.stringify(val)})`, out: join(dir, `bad-ps-rn-${idx}`), r: runCli(['retune', '--rig', rig, '--config', join(dir, 'absent.json'), '--parts', dir, '--out', join(dir, `bad-ps-rn-${idx}`), '--page-size', val]) },
+    ];
+    const badSizeRuns = badSizes.map((val, idx) => {
+      const wantLine = `  FAIL  ${PACK_PAGE_SIZE}: --page-size — ${JSON.stringify(val)} found; a positive integer is required (see rig-parts guide ${PACK_PAGE_SIZE})`;
+      const runs = badSizeCommands(val, idx);
+      const directErr = refusals(() => parsePageSize(val));
+      return {
+        val,
+        wantLine,
+        ok:
+          runs.every((c) => c.r.status === 1 && c.r.out.split('\n').includes(wantLine) && !existsSync(c.out)) &&
+          directErr !== null &&
+          directErr.problems.length === 1 &&
+          directErr.problems[0].code === PACK_PAGE_SIZE,
+        summary: `${JSON.stringify(val)} -> ${runs.map((c) => `${c.label.split('(')[0]}:${c.r.status}`).join(',')}`,
+      };
+    });
+    say(
+      'CK1273_NON_POSITIVE_OR_NON_INTEGER_PAGE_SIZE_IS_REFUSED_AS_PACK_PAGE_SIZE_ON_EVERY_PACKING_COMMAND',
+      badSizeRuns.every((b) => b.ok) && parsePageSize('1024') === 1024 && parsePageSize(1024) === 1024 && parsePageSize(undefined) === undefined,
+      badSizeRuns.map((b) => `${b.summary} (${b.wantLine.trim()})`).join(' | '),
+      'issue #1273: 0, -1, 1.5, "abc" and "" are each refused by name under PACK_PAGE_SIZE with the value found and the value required before any stage runs or writes',
     );
 
     runSourceCases(dir, say, ok);
@@ -47470,7 +47560,7 @@ function runMeshDraftSuite(): number {
     const unknown = runCli(['mesh-draft', '--config', 'c.json', '--parts', 'p', '--out', join(root, 'usage'), '--grid', '9']);
     say(
       'MD11_MESH_DRAFT_WITHOUT_PARTS_OR_WITH_A_FLAG_IT_DOES_NOT_TAKE_IS_A_USAGE_ERROR',
-      noParts.status === 2 && noParts.out.includes('USAGE: mesh-draft needs --parts <value>') && unknown.status === 2 && unknown.out.includes('mesh-draft does not take "--grid"; it takes --config, --parts, --out, --requirements, --idle-keys, --page-edges, --pack-shape, --more-triangles') && !existsSync(join(root, 'usage')),
+      noParts.status === 2 && noParts.out.includes('USAGE: mesh-draft needs --parts <value>') && unknown.status === 2 && unknown.out.includes('mesh-draft does not take "--grid"; it takes --config, --parts, --out, --requirements, --idle-keys, --page-edges, --pack-shape, --page-size, --more-triangles') && !existsSync(join(root, 'usage')),
       `${noParts.out.split('\n')[0].trim()} | ${unknown.out.split('\n')[0].trim()}`,
       'the command takes the flags its TAKES row names and no other: no spacing, tolerance or grid is an input, because every number is the figure\'s',
     );
@@ -48410,7 +48500,7 @@ function runRemeshSuite(): number {
     const unknown = runCli(['remesh', '--rig', input, '--config', fx.config, '--parts', fx.parts, '--part', 'strip', '--mesh', gridReq, '--out', join(root, 'usage'), '--grid', '9']);
     say(
       'RM10_REMESH_WITHOUT_MESH_OR_WITH_A_FLAG_IT_DOES_NOT_TAKE_IS_A_USAGE_ERROR',
-      noMesh.status === 2 && noMesh.out.includes('USAGE: remesh needs exactly one of --mesh, --delta') && unknown.status === 2 && unknown.out.includes('remesh does not take "--grid"; it takes --rig, --config, --parts, --part, --mesh, --delta, --out, --requirements, --idle-keys, --page-edges, --pack-shape') && !existsSync(join(root, 'usage')),
+      noMesh.status === 2 && noMesh.out.includes('USAGE: remesh needs exactly one of --mesh, --delta') && unknown.status === 2 && unknown.out.includes('remesh does not take "--grid"; it takes --rig, --config, --parts, --part, --mesh, --delta, --out, --requirements, --idle-keys, --page-edges, --pack-shape, --page-size') && !existsSync(join(root, 'usage')),
       `${noMesh.out.split('\n')[0].trim()} | ${unknown.out.split('\n')[0].trim()}`,
       'the bounds are the entry\'s own fields, so the command takes no bound as a flag: a grid, a tolerance or a target is written in the --mesh file',
     );
@@ -49307,7 +49397,7 @@ function runRetuneSuite(): number {
     const noOut7 = runCli(['retune', '--rig', input, '--config', damping, '--parts', fx.parts]);
     say(
       'RN08_RETUNE_WITHOUT_OUT_OR_WITH_A_FLAG_IT_DOES_NOT_TAKE_IS_A_USAGE_ERROR',
-      noOut7.status === 2 && noOut7.out.includes('USAGE: retune needs --out <value>') && unknown7.status === 2 && unknown7.out.includes('retune does not take "--part"; it takes --rig, --config, --parts, --out, --requirements, --idle-keys, --page-edges, --pack-shape') && !existsSync(join(root, 'usage')),
+      noOut7.status === 2 && noOut7.out.includes('USAGE: retune needs --out <value>') && unknown7.status === 2 && unknown7.out.includes('retune does not take "--part"; it takes --rig, --config, --parts, --out, --requirements, --idle-keys, --page-edges, --pack-shape, --page-size') && !existsSync(join(root, 'usage')),
       `${noOut7.out.split('\n')[0].trim()} | ${unknown7.out.split('\n')[0].trim()}`,
       'a retune names no part: what it replaces is the config\'s constraints and idle, so --part (remesh\'s) is not a flag it takes',
     );

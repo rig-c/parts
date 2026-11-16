@@ -23,7 +23,7 @@ import { DEFAULT_PROJECT_RULE, DEFAULT_SEAM_RULE, headGarmentOverlaps, headGarme
 import { proposeNeck } from './tools/neck-propose.ts';
 import { parseAltArg } from './tools/alternate-cli.ts';
 import { type AlternateCliInput, assembleStage, build, checkStage, emitFillMasksStage, ERROR_MAP_FILE, loopStage, readRuns, readSource, rigStage, suppliedCheckFlag } from './src/build.ts';
-import { ACCEPTABLE_BARS, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, findRigc, PACK_SHAPES, rigcRunnerAt, type PackShape, PAGE_EDGES, type PageEdges, PARTS_HOME_SENTENCE, RIGC_GEOMETRY_VERSION, rigcRanClause, type RigcRunner, NO_PARTS_SENTENCE, SEAM_MEAN_BAR, SOURCE_SENTENCE, SEAM_PX_BAR, SEAM_PX_LEVEL, SPINEBOY_YARDSTICK, TEXTURE_STRETCH_CEILING } from './src/check.ts';
+import { ACCEPTABLE_BARS, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, findRigc, PACK_PAGE_SIZE, PACK_SHAPES, rigcRunnerAt, type PackShape, PAGE_EDGES, type PageEdges, parsePageSize, PARTS_HOME_SENTENCE, RIGC_GEOMETRY_VERSION, rigcRanClause, type RigcRunner, NO_PARTS_SENTENCE, SEAM_MEAN_BAR, SOURCE_SENTENCE, SEAM_PX_BAR, SEAM_PX_LEVEL, SPINEBOY_YARDSTICK, TEXTURE_STRETCH_CEILING } from './src/check.ts';
 import { ComfyClient, resolveHost, runBackground, runMatte, runPainting, runSeeThrough } from './src/comfy/index.ts';
 import { coreCfg, DEFAULT_GROW_PX, runForeground } from './src/plate.ts';
 import { type CharacterConfig, loadClothConfig, loadConfig, loadEarlyConfig, loadPaintConfig } from './src/config.ts';
@@ -391,7 +391,7 @@ usage:
       a figure and exits 0.
 
   rig-parts rig --config <config.json> --parts <dir> --out <dir> [--idle-keys ctl|direct]
-                  [--page-edges pot|free] [--pack-shape rect|polygon]
+                  [--page-edges pot|free] [--pack-shape rect|polygon] [--page-size <px>]
       Author the rig: bones at the config's landmarks (a chain makes
       <chain>0..n, each link turned along its chain with its length, so a
       physics constraint added later has a lever; every offset under a turned
@@ -427,7 +427,7 @@ usage:
       stage prints that SKIP line). The pose is the same to one level of float
       rounding, and so is the per-frame mesh work (AUTHORING §5).
   rig-parts mesh-draft --config <config.json> --parts <dir> --out <dir> [--requirements <file.json>]
-                  [--idle-keys ctl|direct] [--page-edges pot|free] [--pack-shape rect|polygon]
+                  [--idle-keys ctl|direct] [--page-edges pot|free] [--pack-shape rect|polygon] [--page-size <px>]
                   [--more-triangles]
       Draft a traced outline around a coarse grid for every lattice mesh the
       config states, and keep it only where it holds against that part's
@@ -484,7 +484,7 @@ usage:
   rig-parts remesh --rig <dir> --config <config.json> --parts <dir> --part <name>
                    --mesh <entry.json> --out <dir> [--requirements <file.json>]
                    (or --delta <mesh-edit.json> in place of --mesh)
-                   [--idle-keys ctl|direct] [--page-edges pot|free] [--pack-shape rect|polygon]
+                   [--idle-keys ctl|direct] [--page-edges pot|free] [--pack-shape rect|polygon] [--page-size <px>]
                    [--record-input-check] [--input-check <input-check.json>]
       Re-fit one part's mesh of a gated rig (the directory rig writes) under
       the mesh entry --mesh holds — what config.json would hold at
@@ -545,7 +545,7 @@ usage:
 
   rig-parts retune --rig <dir> --config <config.json> --parts <dir> --out <dir>
                    [--requirements <file.json>] [--idle-keys ctl|direct]
-                   [--page-edges pot|free] [--pack-shape rect|polygon]
+                   [--page-edges pot|free] [--pack-shape rect|polygon] [--page-size <px>]
                    [--record-input-check] [--input-check <input-check.json>]
       Splice the constraints and the idle a config states onto a gated rig
       (the directory rig writes) and write a new revision into --out, which
@@ -579,7 +579,7 @@ usage:
       --json prints the completed report only, with the recorded exit code.
 
   rig-parts check --rig <dir> --out <dir> [--parts <dir>] [--source <painting.png>] [--no-extremes]
-                    [--page-edges pot|free] [--pack-shape rect|polygon]
+                    [--page-edges pot|free] [--pack-shape rect|polygon] [--page-size <px>]
                     [--requirements <file.json>] [--seam-pairs] [--keep-stills]
                     [--set <name> | --all-sets] [--environment <schedule.json>]
                     [--wind-band <spec.json>] [--json]
@@ -685,6 +685,9 @@ usage:
       writes the page earlier releases wrote. rigc's pack line ends
       ", shape rect" or ", shape polygon"; a line that disagrees with the
       value passed is refused, CHECK_PACK_SHAPE.
+      --page-size <px> is handed to rigc verbatim when given (a positive
+      integer, refused as ${PACK_PAGE_SIZE} otherwise; rigc's default when
+      absent) and recorded as check.json's pack_mode.page_size.
       ${REQUIREMENTS_SENTENCE} (AUTHORING §7, Declared requirements). It is
       read and every name in it resolved against rig.json and motion.json
       before anything is built: a bone, constraint, slot, mesh attachment or
@@ -908,7 +911,7 @@ usage:
   rig-parts build --config <config.json> --source <painting.png> --full <dir|psd>
                     [--head <dir|psd>] --out <dir> [--seam near-white|silhouette]
                     [--project core|visible] [--page-edges pot|free]
-                    [--pack-shape rect|polygon] [--loop] [--requirements <file.json>]
+                    [--pack-shape rect|polygon] [--page-size <px>] [--loop] [--requirements <file.json>]
                     [--idle-keys ctl|direct] [--lead-in <periods>] [--seam-pairs] [--keep-stills] [--no-extremes]
                     [--alt <name>=<source>:<full>[:<head>]] [--set <name> | --all-sets]
                     [--environment <schedule.json>] [--wind-band <spec.json>]
@@ -1189,10 +1192,10 @@ const TAKES = {
   'depth-apply': { valued: ['--parts', '--manifest', '--config', '--rig-config', '--out'], switches: [] },
   layers: { valued: ['--export', '--template', '--canvas', '--full', '--source', '--config'], switches: [] },
   sheet: { valued: ['--source', '--layers', '--out', '--cell', '--cols'], switches: [] },
-  rig: { valued: ['--config', '--parts', '--out', '--idle-keys', '--page-edges', '--pack-shape'], switches: [] },
+  rig: { valued: ['--config', '--parts', '--out', '--idle-keys', '--page-edges', '--pack-shape', '--page-size'], switches: [] },
   propose: { valued: ['--parts', '--source', '--out', '--from-config', '--compare', '--full', '--head', '--canvas', '--keypoints', '--person', '--wrist-snap', '--grid-rule', '--cloth', '--write-config', '--from', '--bust-landmarks', '--no-bust'], switches: ['--head-box', '--no-back-hair', '--only-missing'] },
   compare: { valued: ['--left', '--right', '--map'], switches: [] },
-  check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--requirements', '--set', '--environment', '--wind-band'], switches: ['--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes', '--json'] },
+  check: { valued: ['--rig', '--out', '--parts', '--source', '--page-edges', '--pack-shape', '--page-size', '--requirements', '--set', '--environment', '--wind-band'], switches: ['--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes', '--json'] },
   loop: { valued: ['--frames', '--out'], switches: ['--palette'] },
   assemble: { valued: ['--source', '--full', '--head', '--config', '--out', '--emit-fill-masks', '--seam', '--project', '--alt', '--write-config', '--requirements'], switches: ['--propose-plan'] },
   'comfy seethrough': { valued: ['--image', '--out', '--resolution', '--steps', '--seed', '--prefix', '--host', '--wait', '--timeout', '--poll', '--config', '--depth-run'], switches: ['--offload', '--no-offload', '--lama', '--nf4'] },
@@ -1200,12 +1203,12 @@ const TAKES = {
   'comfy matte': { valued: ['--painting', '--out', '--node', '--model', '--checkpoint-sha256', '--resolution', '--threshold', '--host', '--wait', '--timeout', '--poll'], switches: [] },
   'comfy plate': { valued: ['--mode', '--painting', '--mask-from', '--occluder', '--out', '--graph', '--model', '--checkpoint-sha256', '--seed', '--grow', '--steps', '--cfg', '--prompt', '--negative', '--host', '--wait', '--timeout', '--poll'], switches: ['--holes'] },
   inputs: { valued: ['--source', '--config', '--out'], switches: [] },
-  build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set', '--environment', '--wind-band'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes'] },
+  build: { valued: ['--config', '--source', '--full', '--head', '--out', '--seam', '--project', '--page-edges', '--pack-shape', '--page-size', '--requirements', '--idle-keys', '--lead-in', '--alt', '--set', '--environment', '--wind-band'], switches: ['--loop', '--seam-pairs', '--keep-stills', '--all-sets', '--no-extremes'] },
   compose: { valued: ['--scene', '--out', '--requirements', '--accept'], switches: [] },
-  'mesh-draft': { valued: ['--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape'], switches: ['--more-triangles'] },
+  'mesh-draft': { valued: ['--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--page-size'], switches: ['--more-triangles'] },
   'mesh-stats': { valued: ['--config', '--parts'], switches: [] },
-  remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--delta', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--input-check'], switches: ['--record-input-check'] },
-  retune: { valued: ['--rig', '--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--input-check'], switches: ['--record-input-check'] },
+  remesh: { valued: ['--rig', '--config', '--parts', '--part', '--mesh', '--delta', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--page-size', '--input-check'], switches: ['--record-input-check'] },
+  retune: { valued: ['--rig', '--config', '--parts', '--out', '--requirements', '--idle-keys', '--page-edges', '--pack-shape', '--page-size', '--input-check'], switches: ['--record-input-check'] },
   'head-crop-preflight': { valued: ['--full', '--canvas', '--head-box'], switches: [] },
   painting: { valued: ['--keypoints', '--person', '--form'], switches: [] },
 } as const satisfies Record<string, { valued: readonly string[]; switches: readonly string[] }>;
@@ -1382,6 +1385,7 @@ function cmdRig(args: string[]): number {
   let idleKeys: string | null = null;
   let pageEdges: string | null = null;
   let packShape: string | null = null;
+  let pageSize: string | null = null;
   for (let i = 0; i < args.length; i++) {
     const flag = args[i];
     const value = args[i + 1];
@@ -1399,6 +1403,9 @@ function cmdRig(args: string[]): number {
     } else if (flag === '--pack-shape') {
       if (packShape !== null) return usage('--pack-shape is given twice');
       packShape = value;
+    } else if (flag === '--page-size') {
+      if (pageSize !== null) return usage('--page-size is given twice');
+      pageSize = value;
     } else out = value;
   }
   if (config === null) return usage('rig needs --config <config.json>');
@@ -1410,6 +1417,12 @@ function cmdRig(args: string[]): number {
   if (!isPageEdges(edges)) return usage(edges);
   const shape = packShapeOf(packShape ?? undefined);
   if (!isPackShape(shape)) return usage(shape);
+  let size: number | undefined;
+  try {
+    size = parsePageSize(pageSize ?? undefined);
+  } catch (err) {
+    return printRefusal(err);
+  }
   clearRunStamp(out);
   let bin: string;
   try {
@@ -1421,7 +1434,7 @@ function cmdRig(args: string[]): number {
   const startedAt = fixedClock ?? new Date().toISOString();
   try {
     const pkg = readPackageIdentity(join(import.meta.dir, 'package.json'));
-    const rig = rigStage({ config, parts: partsDir, out, idleKeys: keys, pageEdges: edges, packShape: shape }, rigcRunner(bin), scratch, console.log);
+    const rig = rigStage({ config, parts: partsDir, out, idleKeys: keys, pageEdges: edges, packShape: shape, ...(size === undefined ? {} : { pageSize: size }) }, rigcRunner(bin), scratch, console.log);
     const finishedAt = fixedClock ?? new Date().toISOString();
     writeRunStamp({ pkg, command: 'rig', startedAt, finishedAt, outDir: out, configPath: config, outputPaths: rigOutputFiles(rig) });
     return EXIT_OK;
@@ -1500,9 +1513,10 @@ function cmdCheck(args: string[]): number {
   const shape = packShapeOf(f.get('--pack-shape'));
   if (!isPackShape(shape)) return usage(shape);
   try {
+    const size = parsePageSize(f.get('--page-size'));
     const bin = findRigc(import.meta.dir, process.env.PATH ?? '');
     const r = checkStage(
-      { rig, parts: f.get('--parts'), source: f.get('--source'), out, pageEdges: edges, packShape: shape, requirements: f.get('--requirements'), seamPairs: seamPairs === 1, keepStills: keepStills === 1, noExtremes: noExtremes === 1, ...(f.has('--set') ? { set: f.get('--set') as string } : {}), allSets: allSets === 1, ...(f.has('--environment') ? { environment: f.get('--environment') as string } : {}), ...(f.has('--wind-band') ? { windBand: f.get('--wind-band') as string } : {}) },
+      { rig, parts: f.get('--parts'), source: f.get('--source'), out, pageEdges: edges, packShape: shape, ...(size === undefined ? {} : { pageSize: size }), requirements: f.get('--requirements'), seamPairs: seamPairs === 1, keepStills: keepStills === 1, noExtremes: noExtremes === 1, ...(f.has('--set') ? { set: f.get('--set') as string } : {}), allSets: allSets === 1, ...(f.has('--environment') ? { environment: f.get('--environment') as string } : {}), ...(f.has('--wind-band') ? { windBand: f.get('--wind-band') as string } : {}) },
       rigcRunner(bin),
       bin,
       json === 1 ? () => {} : console.log,
@@ -2241,6 +2255,12 @@ function cmdBuild(args: string[]): number {
   const leadText = flags.get('--lead-in');
   if (leadText !== undefined && !/^[1-9][0-9]*$/.test(leadText)) return usage(`--lead-in ${leadText}; a whole number of idle periods, 1 or more, is required`);
   if (leadText !== undefined && !loop) return usage('--lead-in needs --loop; it says which frames the loop is encoded from');
+  let size: number | undefined;
+  try {
+    size = parsePageSize(flags.get('--page-size'));
+  } catch (err) {
+    return printRefusal(err);
+  }
   const [config, source, full, out] = ['--config', '--source', '--full', '--out'].map((f) => flags.get(f) as string);
   const head = flags.get('--head') ?? null;
   let bin: string;
@@ -2252,7 +2272,7 @@ function cmdBuild(args: string[]): number {
   const scratch = mkdtempSync(join(tmpdir(), 'rig-parts-build-'));
   try {
     const r = build(
-      { config, source, full, head, out, ...(seam === undefined ? {} : { seam: seam as SeamRule }), ...(project === undefined ? {} : { project: project as ProjectRule }), loop, pageEdges: edges, packShape: shape, ...(flags.has('--requirements') ? { requirements: flags.get('--requirements') as string } : {}), idleKeys: keys, ...(leadText === undefined ? {} : { leadIn: Number(leadText) }), seamPairs: on.has('--seam-pairs'), keepStills: on.has('--keep-stills'), noExtremes: on.has('--no-extremes'), ...(alts.length === 0 ? {} : { alts }), ...(flags.has('--set') ? { set: flags.get('--set') as string } : {}), allSets: on.has('--all-sets'), ...(flags.has('--environment') ? { environment: flags.get('--environment') as string } : {}), ...(flags.has('--wind-band') ? { windBand: flags.get('--wind-band') as string } : {}) },
+      { config, source, full, head, out, ...(seam === undefined ? {} : { seam: seam as SeamRule }), ...(project === undefined ? {} : { project: project as ProjectRule }), loop, pageEdges: edges, packShape: shape, ...(size === undefined ? {} : { pageSize: size }), ...(flags.has('--requirements') ? { requirements: flags.get('--requirements') as string } : {}), idleKeys: keys, ...(leadText === undefined ? {} : { leadIn: Number(leadText) }), seamPairs: on.has('--seam-pairs'), keepStills: on.has('--keep-stills'), noExtremes: on.has('--no-extremes'), ...(alts.length === 0 ? {} : { alts }), ...(flags.has('--set') ? { set: flags.get('--set') as string } : {}), allSets: on.has('--all-sets'), ...(flags.has('--environment') ? { environment: flags.get('--environment') as string } : {}), ...(flags.has('--wind-band') ? { windBand: flags.get('--wind-band') as string } : {}) },
       { rig: rigcRunner(bin), check: rigcRunner(bin), checkBin: bin, scratch: join(scratch, 'rig-gate'), stages: {
         assemble: (input, outputs) => runBuildProcess({ stage: 'assemble', bin, input, outputs }, join(scratch, 'workers')),
         rig: (input, _rigc, gateScratch) => runBuildProcess({ stage: 'rig', bin, input, scratch: gateScratch }, join(scratch, 'workers')),
@@ -2306,6 +2326,12 @@ function cmdMeshDraft(args: string[]): number {
   if (!isPageEdges(edges)) return usage(edges);
   const shape = packShapeOf(f.get('--pack-shape'));
   if (!isPackShape(shape)) return usage(shape);
+  let size: number | undefined;
+  try {
+    size = parsePageSize(f.get('--page-size'));
+  } catch (err) {
+    return printRefusal(err);
+  }
   let bin: string;
   try {
     bin = findRigc(import.meta.dir, process.env.PATH ?? '');
@@ -2316,7 +2342,7 @@ function cmdMeshDraft(args: string[]): number {
   try {
     const req = f.get('--requirements');
     meshDraftStage(
-      { config: f.get('--config') as string, parts: f.get('--parts') as string, out: f.get('--out') as string, idleKeys: keys, pageEdges: edges, packShape: shape, ...(req === undefined ? {} : { requirements: req }), ...(more === 1 ? { moreTriangles: true } : {}) },
+      { config: f.get('--config') as string, parts: f.get('--parts') as string, out: f.get('--out') as string, idleKeys: keys, pageEdges: edges, packShape: shape, ...(size === undefined ? {} : { pageSize: size }), ...(req === undefined ? {} : { requirements: req }), ...(more === 1 ? { moreTriangles: true } : {}) },
       rigcRunner(bin),
       bin,
       scratch,
@@ -2356,6 +2382,12 @@ function cmdRemesh(args: string[]): number {
   if (!isPageEdges(edges)) return usage(edges);
   const shape = packShapeOf(f.get('--pack-shape'));
   if (!isPackShape(shape)) return usage(shape);
+  let size: number | undefined;
+  try {
+    size = parsePageSize(f.get('--page-size'));
+  } catch (err) {
+    return printRefusal(err);
+  }
   let bin: string;
   try {
     bin = findRigc(import.meta.dir, process.env.PATH ?? '');
@@ -2371,7 +2403,7 @@ function cmdRemesh(args: string[]): number {
     const req = f.get('--requirements');
     const ic = f.get('--input-check');
     remeshStage(
-      { rig: f.get('--rig') as string, config: f.get('--config') as string, parts: f.get('--parts') as string, part: f.get('--part') as string, ...(f.has('--mesh') ? { mesh: f.get('--mesh') as string } : { delta: f.get('--delta') as string }), out: f.get('--out') as string, idleKeys: keys, pageEdges: edges, packShape: shape, ...(req === undefined ? {} : { requirements: req }), ...(ic === undefined ? {} : { inputCheck: ic }), ...(record === 1 ? { recordInputCheck: true } : {}) },
+      { rig: f.get('--rig') as string, config: f.get('--config') as string, parts: f.get('--parts') as string, part: f.get('--part') as string, ...(f.has('--mesh') ? { mesh: f.get('--mesh') as string } : { delta: f.get('--delta') as string }), out: f.get('--out') as string, idleKeys: keys, pageEdges: edges, packShape: shape, ...(size === undefined ? {} : { pageSize: size }), ...(req === undefined ? {} : { requirements: req }), ...(ic === undefined ? {} : { inputCheck: ic }), ...(record === 1 ? { recordInputCheck: true } : {}) },
       runner,
       bin,
       { parts: version(), rigc: rigcVersion },
@@ -2399,6 +2431,12 @@ function cmdRetune(args: string[]): number {
   if (!isPageEdges(edges)) return usage(edges);
   const shape = packShapeOf(f.get('--pack-shape'));
   if (!isPackShape(shape)) return usage(shape);
+  let size: number | undefined;
+  try {
+    size = parsePageSize(f.get('--page-size'));
+  } catch (err) {
+    return printRefusal(err);
+  }
   let bin: string;
   try {
     bin = findRigc(import.meta.dir, process.env.PATH ?? '');
@@ -2414,7 +2452,7 @@ function cmdRetune(args: string[]): number {
     const req = f.get('--requirements');
     const ic = f.get('--input-check');
     retuneStage(
-      { rig: f.get('--rig') as string, config: f.get('--config') as string, parts: f.get('--parts') as string, out: f.get('--out') as string, idleKeys: keys, pageEdges: edges, packShape: shape, ...(req === undefined ? {} : { requirements: req }), ...(ic === undefined ? {} : { inputCheck: ic }), ...(record === 1 ? { recordInputCheck: true } : {}) },
+      { rig: f.get('--rig') as string, config: f.get('--config') as string, parts: f.get('--parts') as string, out: f.get('--out') as string, idleKeys: keys, pageEdges: edges, packShape: shape, ...(size === undefined ? {} : { pageSize: size }), ...(req === undefined ? {} : { requirements: req }), ...(ic === undefined ? {} : { inputCheck: ic }), ...(record === 1 ? { recordInputCheck: true } : {}) },
       runner,
       bin,
       { parts: version(), rigc: rigcVersion },
