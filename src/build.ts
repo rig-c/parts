@@ -96,7 +96,7 @@ import {
   splitSchedule,
   untestedIntervals,
 } from './autoreplay.ts';
-import { besideIdleLine, checkSummaryLine, inputFileRecord, type InputFileRecord, CLOTH_LINE, type ClothLine, clothWarnText, figureOpeningLines, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamRequiredLine, motionSeamWarnText, motionJointContactLines, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, environmentLine, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, readCheckEnvironment, readWindBand, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR, WIND_BAND_LINE, windBandLines } from './check.ts';
+import { besideIdleLine, checkSummaryLine, inputFileRecord, type InputFileRecord, CLOTH_LINE, type ClothLine, clothWarnText, figureOpeningLines, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamRequiredLine, motionSeamWarnText, motionJointContactLines, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, environmentLine, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, parsePageSize, readCheckEnvironment, readWindBand, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR, WIND_BAND_LINE, windBandLines } from './check.ts';
 import { type CharacterConfig, type Cut, type Extend, type Limb, loadConfigAndAnimations, loadConfigWithBytes, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
 import { coreCompileGuideLine, failLine, foldName, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { editedConfigImages, editedRunImages, missingReceipts, readEditorReceipts } from './editreceipt.ts';
@@ -1475,6 +1475,8 @@ export interface RigStageInput {
   pageEdges?: PageEdges;
   /** The gate build's `--pack-shape`; {@link DEFAULT_PACK_SHAPE} when absent. */
   packShape?: PackShape;
+  /** The gate build's `--page-size`; rigc's default when absent (issue #1273). */
+  pageSize?: number;
   /** The command running the stage, which {@link ctlRemedies} names beside the flag; `rig` when absent. It moves no byte written. */
   command?: RigCommand;
   /**
@@ -1888,6 +1890,7 @@ export function rigOutputTexts(r: RigOutput, animations: Parameters<typeof withA
 }
 
 export function rigStage(input: RigStageInput, rigc: RigcRunner, scratch: string, log: Log): RigOutput {
+  const pageSize = parsePageSize(input.pageSize);
   const { cfg, from, parts, images } = readRigInputs(input.config, input.parts);
   const first = buildRig(cfg, parts, images, undefined, input.idleKeys ?? DEFAULT_IDLE_KEYS, input.reduce);
   const textsOf = (r: RigOutput): Array<[string, string]> => rigOutputTexts(r, from === null ? null : from.table);
@@ -1896,7 +1899,7 @@ export function rigStage(input: RigStageInput, rigc: RigcRunner, scratch: string
   // gate compares the model document of this very build, the one written (issue #126 item 3). mesh_report.json is staged
   // as buildRig wrote it; rigc reads only rig.json, motion.json and images/.
   const pngs = first.images.map(([file, img]) => [file, encodePngBytes(img)] as const);
-  const mode: PackMode = { pageEdges: input.pageEdges ?? DEFAULT_PAGE_EDGES, packShape: input.packShape ?? DEFAULT_PACK_SHAPE };
+  const mode: PackMode = { pageEdges: input.pageEdges ?? DEFAULT_PAGE_EDGES, packShape: input.packShape ?? DEFAULT_PACK_SHAPE, ...(pageSize === undefined ? {} : { pageSize }) };
   let firstModel: string | null = null;
   const firstGate = gateThroughRigc(pngs, firstTexts, rigc, scratch, mode, first.autoMotion.length === 0 ? undefined : (dir) => (firstModel = modelAt(dir)));
   const firstRed = firstGate.filter((g) => g.status !== 0);
@@ -2077,6 +2080,8 @@ export interface CheckStageInput {
   pageEdges?: PageEdges;
   /** The packed build's `--pack-shape`; {@link DEFAULT_PACK_SHAPE} when absent. */
   packShape?: PackShape;
+  /** The packed build's `--page-size`; rigc's default when absent (issue #1273). */
+  pageSize?: number;
   /** The scene's declared requirements (`--requirements`, issue #93); absent, nothing is read, written or printed for them. */
   requirements?: string;
   /** The path `check.json`'s `requirements.file` records (issue #556): `config.requirements` as declared when build read it from the config; absent, `requirements` as given. */
@@ -2333,12 +2338,13 @@ export function requirementText(name: string, line: RequirementLine): string {
  * line here. Throws a PartsError when the check could not measure at all.
  */
 export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string, log: Log): CheckReport {
+  const pageSize = parsePageSize(input.pageSize);
   const v = rigc(['--version']);
   log(`rig-parts check: ${input.rig} -> ${input.out}`);
   const versionLines = v.out.trim().split('\n');
   const entryLine = versionLines.find((l) => l.startsWith('entry:'));
   log(`  ${rigcIdentity(bin, v)}${entryLine === undefined ? '' : `; ${entryLine}`}`);
-  const mode: PackMode = { pageEdges: input.pageEdges ?? DEFAULT_PAGE_EDGES, packShape: input.packShape ?? DEFAULT_PACK_SHAPE };
+  const mode: PackMode = { pageEdges: input.pageEdges ?? DEFAULT_PAGE_EDGES, packShape: input.packShape ?? DEFAULT_PACK_SHAPE, ...(pageSize === undefined ? {} : { pageSize }) };
   const r = runCheck(input.rig, input.out, rigc, input.parts, mode, input.source, input.requirements, input.seamPairs === true, input.keepStills === true, input.set, input.allSets === true, input.environment, input.requirementsAs, input.config, input.windBand, input.noExtremes === true, input.supportSource, input.supportFigure);
   if (r.figures.environment !== undefined) log(`  ${environmentLine(r.figures.environment)}`);
   log(`  gate rig-play (rigc ${packedBuildLabel(mode)}), verbatim:`);
@@ -2678,6 +2684,8 @@ export interface BuildInput {
   pageEdges: PageEdges;
   /** `--pack-shape` for both packed builds, as `pageEdges`; {@link DEFAULT_PACK_SHAPE} when absent. */
   packShape?: PackShape;
+  /** `--page-size` for both packed builds, as `pageEdges`; rigc's default when absent (issue #1273). */
+  pageSize?: number;
   /** `--requirements`, forwarded to the check (issue #93): read before assemble runs, so a file check would refuse is refused first; absent, `config.requirements` is read in its place (issue #556, {@link buildRequirements}), and with neither nothing moves. */
   requirements?: string;
   /** `--idle-keys`, forwarded to the rig stage as `rig` takes it (issue #95); {@link DEFAULT_IDLE_KEYS} when absent. */
@@ -2725,6 +2733,7 @@ export const CHECK_FLAGS_IN_BUILD: Readonly<Record<string, CheckFlagInBuild>> = 
   '--source': { as: 'own', why: 'the painting assemble reads; it is handed to the check only when the requirements file declares setup_painting (issue #978), so check.json otherwise carries no SETUP_POSE_VS_SOURCE — run check --rig <out>/rig --parts <out> --source <painting> for that line' },
   '--page-edges': { as: 'forwarded' },
   '--pack-shape': { as: 'forwarded' },
+  '--page-size': { as: 'forwarded' },
   '--requirements': { as: 'forwarded' },
   '--set': { as: 'forwarded' },
   '--all-sets': { as: 'forwarded' },
@@ -2883,11 +2892,13 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
 
   let req: BuildRequirements | null = null;
   let configRecord: InputFileRecord | null = null;
+  let pageSize: number | undefined;
   // Issue #978: the painting is handed to the check only when the requirements file declares setup_painting, which
   // cannot be measured without it; a build without that declaration hands it nothing, as before, and writes the same bytes.
   let paintingForCheck: string | null = null;
   let supportFigure: Mask | undefined;
   try {
+    pageSize = parsePageSize(input.pageSize);
     // build runs rig next, which needs the whole config, so the full loader is
     // asked first: a config rig would refuse is refused before assemble writes
     // anything, and under [assemble], as it was before the stage had its own
@@ -2917,14 +2928,14 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
   }
 
   try {
-    stages.rig({ config: input.config, parts: out, out: join(out, 'rig'), idleKeys, pageEdges: input.pageEdges, packShape: input.packShape, command: 'build' }, run.rig, run.scratch, prefixed('rig'));
+    stages.rig({ config: input.config, parts: out, out: join(out, 'rig'), idleKeys, pageEdges: input.pageEdges, packShape: input.packShape, ...(pageSize === undefined ? {} : { pageSize }), command: 'build' }, run.rig, run.scratch, prefixed('rig'));
   } catch (err) {
     return refused('rig', err);
   }
 
   let report: CheckReport;
   try {
-    report = stages.check({ rig: join(out, 'rig'), parts: out, supportSource: input.source, ...(supportFigure === undefined ? {} : { supportFigure }), out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(req === null ? {} : { requirements: req.read, requirementsAs: req.recorded }), ...(paintingForCheck === null ? {} : { source: paintingForCheck }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, noExtremes: input.noExtremes === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }), ...(input.windBand === undefined ? {} : { windBand: input.windBand }), ...(configRecord === null ? {} : { config: configRecord }) }, run.check, run.checkBin, prefixed('check'));
+    report = stages.check({ rig: join(out, 'rig'), parts: out, supportSource: input.source, ...(supportFigure === undefined ? {} : { supportFigure }), out: join(out, 'check'), pageEdges: input.pageEdges, packShape: input.packShape, ...(pageSize === undefined ? {} : { pageSize }), ...(req === null ? {} : { requirements: req.read, requirementsAs: req.recorded }), ...(paintingForCheck === null ? {} : { source: paintingForCheck }), seamPairs: input.seamPairs === true, keepStills: input.keepStills === true, noExtremes: input.noExtremes === true, ...(input.set === undefined ? {} : { set: input.set }), allSets: input.allSets === true, ...(input.environment === undefined ? {} : { environment: input.environment }), ...(input.windBand === undefined ? {} : { windBand: input.windBand }), ...(configRecord === null ? {} : { config: configRecord }) }, run.check, run.checkBin, prefixed('check'));
   } catch (err) {
     return refused('check', err);
   }
@@ -2938,7 +2949,7 @@ export function build(input: BuildInput, run: BuildRunners, log: Log): BuildResu
       const say = prefixed('loop');
       const window = input.leadIn === undefined ? undefined : { periods: input.leadIn };
       if (window !== undefined) rmSync(run.scratch, { recursive: true, force: true });
-      const frames = window === undefined ? join(out, 'check', 'idle_frames') : leadInFrames(join(out, 'rig'), run.scratch, window.periods, run.check, { pageEdges: input.pageEdges, packShape: input.packShape ?? DEFAULT_PACK_SHAPE });
+      const frames = window === undefined ? join(out, 'check', 'idle_frames') : leadInFrames(join(out, 'rig'), run.scratch, window.periods, run.check, { pageEdges: input.pageEdges, packShape: input.packShape ?? DEFAULT_PACK_SHAPE, ...(pageSize === undefined ? {} : { pageSize }) });
       const physics = report.figures.loop_physics?.length ?? 0;
       const lossless = loopStage(frames, join(out, 'idle.png'), 'apng', say, window, physics);
       const indexed = loopStage(frames, join(out, 'idle-indexed.png'), 'indexed', say, window, physics);

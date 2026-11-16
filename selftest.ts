@@ -423,9 +423,11 @@ import {
   packageRigc,
   packedBuildArgs,
   packEdgeProblems,
+  PACK_PAGE_SIZE,
   type PackMode,
   type PageEdges,
   parsePackLines,
+  parsePageSize,
   PARTS_HOME_SENTENCE,
   readBoneTrack,
   readCheckEnvironment,
@@ -756,7 +758,7 @@ import { BASE_SPACINGS, CONTROL, describeWorst, displacement, frameOpenings, kin
 import { BEND_DEGREES, BEND_WORST_SHARE, bendAnimationNames, bendAnimations, type BendFigure, bendLinks, CALIBRATED_SENTENCE, candidateMesh, carriedBy, islandsJoin, MORE_TRIANGLES_FLAG, RELATIVE_SENTENCE, DUST_MAX_PX, DUST_MAX_SHARE, dustOf, figureRules, type GateLine, gateVerdict, IDLE_BOUND_PX, jsonValueSpan, MEASURED_SENTENCE, MESH_DRAFT_REPORT, meshDraftStage, NOT_COMPARED_SENTENCE, notCompared, partsNamed, type PartReadings, type Reading, READINGS, scratchConfig, splicedConfig, TOLERANCE_FIGURE_DIVISOR } from './src/meshdraft.ts';
 import { type Built, type CheckSide, checkHeldProblems, deltaRow, PROVENANCE_FILE, type RemeshInput, type RemeshPlant, type RemeshProvenance, type RemeshResult, remeshStage, requestHeldProblems, targetProblems } from './src/remesh.ts';
 import { deltaFrames } from './src/remesh.ts';
-import { INPUT_CHECK_FILE, INPUT_CHECK_SPEC } from './src/remesh.ts';
+import { INPUT_CHECK_FILE, INPUT_CHECK_SPEC, inputCheckBinding, inputCheckBoundProblems, inputCheckOf, inputCheckText, readInputCheck } from './src/remesh.ts';
 import { RETUNE_FILE, RETUNE_SPEC, type RetuneInput, type RetunePlant, type RetuneProvenance, type RetuneResult, retuneStage } from './src/retune.ts';
 import { DRAFT_COARSE_GRID, DRAFT_CONTOUR_MARK, DRAFT_COSTLY_GRID, DRAFT_FIGURE, DRAFT_FINE_GRID, DRAFT_LINKS, DRAFT_SPECK_ALPHA, draftConfig, draftImages, draftParts, writeDraftFixture, writeDraftFixtureWithContour, writeDraftIslandsFixture } from './fixtures/meshdraft.ts';
 import { pyRound } from './src/round.ts';
@@ -23702,6 +23704,94 @@ function runCheckFixtureCases(inputScope: CheckReadScope): number {
       hull.every((b) => b.r.status === 2 && b.r.out.split('\n').includes(shapeUsage) && !existsSync(b.out)),
       hull.map((b) => `${b.command} --pack-shape hull -> exit ${b.r.status}, ${(b.r.out.split('\n').find((l) => l.includes('FAIL')) ?? 'no FAIL line').trim()}; --out written: ${existsSync(b.out)}`).join(' | '),
       'as for --page-edges: rig, check and build all pack, so all three take --pack-shape, and a value rigc does not take is refused before any stage runs, naming the flag, the value and the two accepted',
+    );
+
+    // Issue #1273: --page-size passes through to every packed rigc build argv when given, omits when absent, and records check.json pack_mode.page_size only when given.
+    const recordPacked = (pageSize?: number): { rigArgv: string[][]; checkArgv: string[][]; report: ReturnType<typeof checkStage> } => {
+      const bin = suiteRigc();
+      const rigArgv: string[][] = [];
+      const checkArgv: string[][] = [];
+      const recRunner = (sink: string[][]): RigcRunner =>
+        rigcRunnerAt(bin, (b, a) => {
+          if (a[0] === 'build' && a.includes('--pack')) sink.push([...a]);
+          return spawnRigc(b, a);
+        });
+      const rfx = writeRigFixture(join(dir, `ps-rig-fx-${pageSize ?? 'default'}`));
+      rigStage(
+        { config: rfx.config, parts: rfx.parts, out: join(dir, `ps-rig-out-${pageSize ?? 'default'}`), ...(pageSize === undefined ? {} : { pageSize }) },
+        recRunner(rigArgv),
+        join(dir, `ps-rig-scratch-${pageSize ?? 'default'}`),
+        () => {},
+      );
+      const report = checkStage(
+        { rig, out: join(dir, `ps-check-out-${pageSize ?? 'default'}`), noExtremes: true, ...(pageSize === undefined ? {} : { pageSize }) },
+        recRunner(checkArgv),
+        bin,
+        () => {},
+      );
+      return { rigArgv, checkArgv, report };
+    };
+    const withoutSize = recordPacked(undefined);
+    const withSize1024 = recordPacked(1024);
+    const tailWithout = ['--profile', GATE_PROFILE, '--pack', '--page-edges', 'free', '--pack-shape', 'polygon'];
+    const tailWith = [...tailWithout, '--page-size', '1024'];
+    const stripOut = (a: readonly string[]): string[] => a.map((x, i) => (a[i - 1] === '--out' || a[i - 1] === '--rig' || a[i - 1] === '--motion' ? '<path>' : x));
+    const sizeCliOut = join(dir, 'out-page-size-1024');
+    const sizeCliRun = runCli(['check', '--rig', rig, '--out', sizeCliOut, '--page-size', '1024']);
+    const sizeCliFig = readJsonFile(join(sizeCliOut, 'check.json'));
+    const sizeDirect = direct('direct-size-1024', ['--page-edges', 'free', '--pack-shape', 'polygon', '--page-size', '1024']);
+    const withoutCheckJsonBytes = readFileSync(join(dir, 'ps-check-out-default', 'check.json'));
+    const okCheckJsonBytes = readFileSync(join(out, 'check.json'));
+    say(
+      'CK1273_PAGE_SIZE_PASSES_THROUGH_TO_EVERY_PACKED_RIGC_BUILD_ARGV_AND_OMITS_WHEN_ABSENT_LEAVING_OUTPUTS_BYTE_IDENTICAL',
+      withoutSize.rigArgv.length === 1 &&
+        withoutSize.checkArgv.length === 2 &&
+        [...withoutSize.rigArgv, ...withoutSize.checkArgv].every((a) => !a.includes('--page-size') && JSON.stringify(a.slice(-tailWithout.length)) === JSON.stringify(tailWithout)) &&
+        withSize1024.rigArgv.length === 1 &&
+        withSize1024.checkArgv.length === 2 &&
+        [...withSize1024.rigArgv, ...withSize1024.checkArgv].every((a) => JSON.stringify(a.slice(-tailWith.length)) === JSON.stringify(tailWith)) &&
+        withoutSize.checkArgv.every((a, i) => JSON.stringify([...stripOut(a), '--page-size', '1024']) === JSON.stringify(stripOut(withSize1024.checkArgv[i]))) &&
+        JSON.stringify(withoutSize.report.figures.pack_mode) === '{"page_edges":"free","pack_shape":"polygon"}' &&
+        !('page_size' in withoutSize.report.figures.pack_mode) &&
+        JSON.stringify(withSize1024.report.figures.pack_mode) === '{"page_edges":"free","pack_shape":"polygon","page_size":1024}' &&
+        sizeCliRun.status === 0 &&
+        JSON.stringify(sizeCliFig?.pack_mode) === '{"page_edges":"free","pack_shape":"polygon","page_size":1024}' &&
+        sameArtifact(join(sizeCliOut, 'build'), sizeDirect) &&
+        withoutCheckJsonBytes.equals(okCheckJsonBytes) &&
+        sameArtifact(join(dir, 'ps-check-out-default', 'build'), join(out, 'build')),
+      `recorded packed argv without flag (rig ${withoutSize.rigArgv.length}, check ${withoutSize.checkArgv.length}): tail ${JSON.stringify(withoutSize.checkArgv[0]?.slice(-tailWithout.length))}; with --page-size 1024 (rig ${withSize1024.rigArgv.length}, check ${withSize1024.checkArgv.length}): tail ${JSON.stringify(withSize1024.checkArgv[0]?.slice(-tailWith.length))}; check.json pack_mode without=${JSON.stringify(withoutSize.report.figures.pack_mode)}, with=${JSON.stringify(withSize1024.report.figures.pack_mode)}; check.json and build/ without flag byte-identical to baseline: ${withoutCheckJsonBytes.equals(okCheckJsonBytes) && sameArtifact(join(dir, 'ps-check-out-default', 'build'), join(out, 'build'))}`,
+      'issue #1273: packedBuildArgs appends --page-size <n> only when pageSize is set, so every packed rigc invocation carries it when given and equals the existing argv when omitted, and check.json records pack_mode.page_size only when given',
+    );
+
+    const badSizes = ['0', '-1', '1.5', 'abc', ''] as const;
+    const badSizeCommands = (val: string, idx: number): Array<{ label: string; r: { status: number; out: string }; out: string }> => [
+      { label: `check(${JSON.stringify(val)})`, out: join(dir, `bad-ps-check-${idx}`), r: runCli(['check', '--rig', rig, '--out', join(dir, `bad-ps-check-${idx}`), '--page-size', val]) },
+      { label: `rig(${JSON.stringify(val)})`, out: join(dir, `bad-ps-rig-${idx}`), r: runCli(['rig', '--config', join(dir, 'absent.json'), '--parts', dir, '--out', join(dir, `bad-ps-rig-${idx}`), '--page-size', val]) },
+      { label: `build(${JSON.stringify(val)})`, out: join(dir, `bad-ps-build-${idx}`), r: runCli(['build', '--config', join(dir, 'absent.json'), '--source', join(dir, 'absent.png'), '--full', dir, '--head', dir, '--out', join(dir, `bad-ps-build-${idx}`), '--page-size', val]) },
+      { label: `mesh-draft(${JSON.stringify(val)})`, out: join(dir, `bad-ps-md-${idx}`), r: runCli(['mesh-draft', '--config', join(dir, 'absent.json'), '--parts', dir, '--out', join(dir, `bad-ps-md-${idx}`), '--page-size', val]) },
+      { label: `remesh(${JSON.stringify(val)})`, out: join(dir, `bad-ps-rm-${idx}`), r: runCli(['remesh', '--rig', rig, '--config', join(dir, 'absent.json'), '--parts', dir, '--part', 'back', '--mesh', join(dir, 'absent-mesh.json'), '--out', join(dir, `bad-ps-rm-${idx}`), '--page-size', val]) },
+      { label: `retune(${JSON.stringify(val)})`, out: join(dir, `bad-ps-rn-${idx}`), r: runCli(['retune', '--rig', rig, '--config', join(dir, 'absent.json'), '--parts', dir, '--out', join(dir, `bad-ps-rn-${idx}`), '--page-size', val]) },
+    ];
+    const badSizeRuns = badSizes.map((val, idx) => {
+      const wantLine = `  FAIL  ${PACK_PAGE_SIZE}: --page-size — ${JSON.stringify(val)} found; a positive integer is required (see rig-parts guide ${PACK_PAGE_SIZE})`;
+      const runs = badSizeCommands(val, idx);
+      const directErr = refusals(() => parsePageSize(val));
+      return {
+        val,
+        wantLine,
+        ok:
+          runs.every((c) => c.r.status === 1 && c.r.out.split('\n').includes(wantLine) && !existsSync(c.out)) &&
+          directErr !== null &&
+          directErr.problems.length === 1 &&
+          directErr.problems[0].code === PACK_PAGE_SIZE,
+        summary: `${JSON.stringify(val)} -> ${runs.map((c) => `${c.label.split('(')[0]}:${c.r.status}`).join(',')}`,
+      };
+    });
+    say(
+      'CK1273_NON_POSITIVE_OR_NON_INTEGER_PAGE_SIZE_IS_REFUSED_AS_PACK_PAGE_SIZE_ON_EVERY_PACKING_COMMAND',
+      badSizeRuns.every((b) => b.ok) && parsePageSize('1024') === 1024 && parsePageSize(1024) === 1024 && parsePageSize(undefined) === undefined,
+      badSizeRuns.map((b) => `${b.summary} (${b.wantLine.trim()})`).join(' | '),
+      'issue #1273: 0, -1, 1.5, "abc" and "" are each refused by name under PACK_PAGE_SIZE with the value found and the value required before any stage runs or writes',
     );
 
     runSourceCases(dir, say, ok);
@@ -47470,7 +47560,7 @@ function runMeshDraftSuite(): number {
     const unknown = runCli(['mesh-draft', '--config', 'c.json', '--parts', 'p', '--out', join(root, 'usage'), '--grid', '9']);
     say(
       'MD11_MESH_DRAFT_WITHOUT_PARTS_OR_WITH_A_FLAG_IT_DOES_NOT_TAKE_IS_A_USAGE_ERROR',
-      noParts.status === 2 && noParts.out.includes('USAGE: mesh-draft needs --parts <value>') && unknown.status === 2 && unknown.out.includes('mesh-draft does not take "--grid"; it takes --config, --parts, --out, --requirements, --idle-keys, --page-edges, --pack-shape, --more-triangles') && !existsSync(join(root, 'usage')),
+      noParts.status === 2 && noParts.out.includes('USAGE: mesh-draft needs --parts <value>') && unknown.status === 2 && unknown.out.includes('mesh-draft does not take "--grid"; it takes --config, --parts, --out, --requirements, --idle-keys, --page-edges, --pack-shape, --page-size, --more-triangles') && !existsSync(join(root, 'usage')),
       `${noParts.out.split('\n')[0].trim()} | ${unknown.out.split('\n')[0].trim()}`,
       'the command takes the flags its TAKES row names and no other: no spacing, tolerance or grid is an input, because every number is the figure\'s',
     );
@@ -48410,7 +48500,7 @@ function runRemeshSuite(): number {
     const unknown = runCli(['remesh', '--rig', input, '--config', fx.config, '--parts', fx.parts, '--part', 'strip', '--mesh', gridReq, '--out', join(root, 'usage'), '--grid', '9']);
     say(
       'RM10_REMESH_WITHOUT_MESH_OR_WITH_A_FLAG_IT_DOES_NOT_TAKE_IS_A_USAGE_ERROR',
-      noMesh.status === 2 && noMesh.out.includes('USAGE: remesh needs exactly one of --mesh, --delta') && unknown.status === 2 && unknown.out.includes('remesh does not take "--grid"; it takes --rig, --config, --parts, --part, --mesh, --delta, --out, --requirements, --idle-keys, --page-edges, --pack-shape') && !existsSync(join(root, 'usage')),
+      noMesh.status === 2 && noMesh.out.includes('USAGE: remesh needs exactly one of --mesh, --delta') && unknown.status === 2 && unknown.out.includes('remesh does not take "--grid"; it takes --rig, --config, --parts, --part, --mesh, --delta, --out, --requirements, --idle-keys, --page-edges, --pack-shape, --page-size') && !existsSync(join(root, 'usage')),
       `${noMesh.out.split('\n')[0].trim()} | ${unknown.out.split('\n')[0].trim()}`,
       'the bounds are the entry\'s own fields, so the command takes no bound as a flag: a grid, a tolerance or a target is written in the --mesh file',
     );
@@ -48930,11 +49020,18 @@ function runRemeshSuite(): number {
       const e = refusals(() => remeshStage({ rig: input, config: fx.config, parts: fx.parts, part: 'strip', mesh: gridReq, out, ...over }, run, rigc, { parts: partsVersion, rigc: 'selftest' }, join(root, `scratch31-${name}`), (l) => log.push(l)));
       return { e, out, log };
     };
+    const recordPs1024 = plantRecord('record31-ps1024', (r) => {
+      const o = r.options as Record<string, unknown>;
+      r.options = { page_edges: o.page_edges, pack_shape: o.pack_shape, page_size: 1024, requirements: o.requirements };
+    });
     const cases31: Array<[string, { e: PartsError | null; out: string; log: string[] }, string]> = [
       ['another rig-parts', direct31('version', { inputCheck: record30 }, runner, 'selftest'), `REMESH_INPUT_CHECK_BOUND ${record30} versions.parts`],
       ['another rigc', direct31('rigc', { inputCheck: record30 }, added, recordedParts), `REMESH_INPUT_CHECK_BOUND ${record30} versions.rigc`],
       ['a row missing', direct31('row', { inputCheck: noRow }, runner, recordedParts), `REMESH_INPUT_CHECK_BOUND ${noRow} rig.files "motion.json"`],
       ['a requirements file', direct31('reqs', { inputCheck: record30, requirements: reqs31 }, runner, recordedParts), `REMESH_INPUT_CHECK_BOUND ${record30} options.requirements`],
+      ['page_size 1024 vs 2048', direct31('ps-1024-2048', { inputCheck: recordPs1024, pageSize: 2048 }, runner, recordedParts), `REMESH_INPUT_CHECK_BOUND ${recordPs1024} options.page_size`],
+      ['page_size absent vs 1024', direct31('ps-absent-1024', { inputCheck: record30, pageSize: 1024 }, runner, recordedParts), `REMESH_INPUT_CHECK_BOUND ${record30} options.page_size`],
+      ['page_size 1024 vs absent', direct31('ps-1024-absent', { inputCheck: recordPs1024 }, runner, recordedParts), `REMESH_INPUT_CHECK_BOUND ${recordPs1024} options.page_size`],
     ];
     const named31 = (c: { e: PartsError | null }): string => c.e?.problems.map((p) => `${p.code} ${p.object}`).join(' | ') ?? 'written';
     say(
@@ -48949,6 +49046,9 @@ function runRemeshSuite(): number {
         (cases31[1][1].e?.problems[0].detail.includes('planted: a second rigc') ?? false) &&
         (cases31[2][1].e?.problems[0].detail.startsWith('is "absent"; this run\'s input requires "') ?? false) &&
         (cases31[3][1].e?.problems[0].detail.startsWith(`is null; this run's input requires {"path":${JSON.stringify(resolve(reqs31))},"sha256":"`) ?? false) &&
+        (cases31[4][1].e?.problems[0].detail.startsWith('is 1024; this run\'s input requires 2048 — the check packed its pages another way') ?? false) &&
+        (cases31[5][1].e?.problems[0].detail.startsWith('is "absent"; this run\'s input requires 1024 — the check packed its pages another way') ?? false) &&
+        (cases31[6][1].e?.problems[0].detail.startsWith('is 1024; this run\'s input requires "absent" — the check packed its pages another way') ?? false) &&
         treeDigest(input) === inputDigest,
       `one byte: exit ${runByte31.status}, ${failLines(runByte31.out).map((l) => l.trim().slice(0, 220)).join(' | ')}; ${cases31.map(([what, c]) => `${what}: ${named31(c)} (${c.log.length} line(s) logged, ${existsSync(c.out) ? 'WRITTEN' : 'nothing written'})`).join('; ')}`,
       'issue #617 bar 2: a record is reused only when every file the input check reads, the requirements it was given and both versions are this run\'s — anything else is a check of another input, named by its row with the value recorded and the value required',
@@ -48966,6 +49066,10 @@ function runRemeshSuite(): number {
     writeFileSync(nojson32, 'not a record\n');
     const spec32 = plantRecord('record32-spec', (r) => (r.spec = 'rig-parts-remesh/1'));
     const side32 = plantRecord('record32-side', (r) => delete (r.check as Record<string, unknown>).line);
+    const psZero32 = plantRecord('record32-ps0', (r) => ((r.options as Record<string, unknown>).page_size = 0));
+    const psStr32 = plantRecord('record32-ps-str', (r) => ((r.options as Record<string, unknown>).page_size = '1024'));
+    const readPsZero = refusals(() => readInputCheck(psZero32, 'remesh'));
+    const readPsStr = refusals(() => readInputCheck(psStr32, 'remesh'));
     const files32: Array<[string, string, string]> = [
       ['no file', missing32, `  FAIL  REMESH_INPUT_CHECK_FILE: ${missing32} — no such file; `],
       ['no JSON', nojson32, `  FAIL  REMESH_INPUT_CHECK_FILE: ${nojson32} — does not parse as JSON: `],
@@ -48982,8 +49086,14 @@ function runRemeshSuite(): number {
         switch32.status === 2 &&
         switch32.out.includes('USAGE: --record-input-check is given twice') &&
         fileRuns32.every(([, r, want]) => r.status === 1 && failLines(r.out).length === 1 && failLines(r.out)[0].startsWith(want) && !r.out.includes('baseline')) &&
+        readPsZero?.problems.length === 1 &&
+        readPsZero.problems[0].code === 'REMESH_INPUT_CHECK_FILE' &&
+        readPsZero.problems[0].object === `${psZero32} field "options"` &&
+        readPsStr?.problems.length === 1 &&
+        readPsStr.problems[0].code === 'REMESH_INPUT_CHECK_FILE' &&
+        readPsStr.problems[0].object === `${psStr32} field "options"` &&
         !existsSync(u32),
-      `${[twice32, bare32, switch32].map((r) => `exit ${r.status} ${r.out.split('\n')[0].trim()}`).join(' | ')}; ${fileRuns32.map(([what, r]) => `${what}: exit ${r.status} ${failLines(r.out).map((l) => l.trim().slice(0, 160)).join(' / ')}`).join('; ')}`,
+      `${[twice32, bare32, switch32].map((r) => `exit ${r.status} ${r.out.split('\n')[0].trim()}`).join(' | ')}; ${fileRuns32.map(([what, r]) => `${what}: exit ${r.status} ${failLines(r.out).map((l) => l.trim().slice(0, 160)).join(' / ')}`).join('; ')}; page_size 0: ${readPsZero?.problems.map(problemLine).join(' | ')}; page_size "1024": ${readPsStr?.problems.map(problemLine).join(' | ')}`,
       'issue #617 bar 5: the flag is held as every other file flag of the command is — a usage error for the line, a named refusal for the file — and a record that is not of its spec\'s shape is never read as a check',
     );
 
@@ -49005,6 +49115,63 @@ function runRemeshSuite(): number {
       got33.length === 1 && got33[0].startsWith(want33) && !existsSync(out33) && treeDigest(input) === inputDigest,
       `${got33.map((l) => l.slice(0, 260)).join(' | ') || 'written'}; ${existsSync(out33) ? 'WRITTEN' : 'nothing written'}`,
       'issue #617 (review P2): a record pairs its rows with the check measured from them only when the input is the same before and after the check read it; otherwise a later reuse would skip a check on bytes the check never saw',
+    );
+    // RM35 — issue #1273: inputCheckBinding / inputCheckText / inputCheckBoundProblems / readInputCheck / inputCheckOf bind
+    // options.page_size when --page-size is given, omit it when not (so inputCheckText bytes are unchanged against a record
+    // without the flag), and refuse mismatches and invalid page_size shapes by name.
+    const parsed30 = readInputCheck(record30, 'remesh');
+    const text30 = readFileSync(record30, 'utf8');
+    const legacyText30 = rigJsonText({
+      spec: INPUT_CHECK_SPEC,
+      versions: parsed30.versions,
+      options: { page_edges: parsed30.options.page_edges, pack_shape: parsed30.options.pack_shape, requirements: parsed30.options.requirements },
+      rig: parsed30.rig,
+      parts: parsed30.parts,
+      check: parsed30.check,
+    });
+    const bindAbsent35 = inputCheckOf({ inputCheck: record30, parts: fx.parts }, resolve(input), new Map(parsed30.rig.files.map((f) => [f.path, new Uint8Array(readFileSync(join(input, f.path)))])), parsed30.options.page_edges, parsed30.options.pack_shape, recordedParts, runner, 'remesh');
+    const bindPs1024 = inputCheckBinding(resolve(input), new Map(parsed30.rig.files.map((f) => [f.path, new Uint8Array(readFileSync(join(input, f.path)))])), fx.parts, undefined, parsed30.options.page_edges, parsed30.options.pack_shape, parsed30.versions, 1024);
+    const recPs1024At = join(root, 'record35-ps1024.json');
+    writeFileSync(recPs1024At, inputCheckText(bindPs1024, parsed30.check));
+    const parsedPs1024 = readInputCheck(recPs1024At, 'remesh');
+    const boundSamePs35 = inputCheckOf({ inputCheck: recPs1024At, parts: fx.parts }, resolve(input), new Map(parsed30.rig.files.map((f) => [f.path, new Uint8Array(readFileSync(join(input, f.path)))])), parsed30.options.page_edges, parsed30.options.pack_shape, recordedParts, runner, 'remesh', 1024);
+    const reusePsStage35 = direct31('ps-reuse-1024', { inputCheck: recPs1024At, pageSize: 1024 }, runner, recordedParts);
+    const boundProbSame35 = inputCheckBoundProblems(parsedPs1024, bindPs1024, recPs1024At, 'remesh');
+    const boundProbAbsent35 = inputCheckBoundProblems(parsed30, bindAbsent35.binding!, record30, 'remesh');
+    const boundProb1024v2048 = inputCheckBoundProblems(parsedPs1024, { ...bindPs1024, options: { ...bindPs1024.options, page_size: 2048 } }, recPs1024At, 'remesh');
+    const boundProbAbsentv1024 = inputCheckBoundProblems(parsed30, bindPs1024, record30, 'remesh');
+    const boundProb1024vAbsent = inputCheckBoundProblems(parsedPs1024, bindAbsent35.binding!, recPs1024At, 'remesh');
+    const retunePsErr35 = refusals(() => retuneStage({ rig: input, config: fx.config, parts: fx.parts, out: join(root, 'out35-retune-ps'), inputCheck: recPs1024At, pageSize: 2048 }, runner, rigc, { parts: recordedParts, rigc: 'selftest' }, join(root, 'scratch35-retune'), () => {}));
+    say(
+      'RM35_INPUT_CHECK_BINDS_PAGE_SIZE_WHEN_GIVEN_AND_PRESERVES_EXACT_BYTES_WHEN_OMITTED',
+      !Object.hasOwn(parsed30.options, 'page_size') &&
+        Object.keys(parsed30.options).join(',') === 'page_edges,pack_shape,requirements' &&
+        inputCheckText(bindAbsent35.binding!, parsed30.check) === text30 &&
+        text30 === legacyText30 &&
+        boundProbAbsent35.length === 0 &&
+        Object.keys(parsedPs1024.options).join(',') === 'page_edges,pack_shape,page_size,requirements' &&
+        parsedPs1024.options.page_size === 1024 &&
+        boundProbSame35.length === 0 &&
+        boundSamePs35.reused !== null &&
+        reusePsStage35.e === null &&
+        reusePsStage35.log.some((l) => l.startsWith(`  check-input: not run — ${recPs1024At} (${INPUT_CHECK_SPEC}) is bound to this input`)) &&
+        !reusePsStage35.log.some((l) => l.startsWith('[check-input]')) &&
+        boundProb1024v2048.length === 1 &&
+        boundProb1024v2048[0].object === `${recPs1024At} options.page_size` &&
+        boundProb1024v2048[0].detail.startsWith('is 1024; this run\'s input requires 2048 — the check packed its pages another way') &&
+        boundProbAbsentv1024.length === 1 &&
+        boundProbAbsentv1024[0].object === `${record30} options.page_size` &&
+        boundProbAbsentv1024[0].detail.startsWith('is "absent"; this run\'s input requires 1024 — the check packed its pages another way') &&
+        boundProb1024vAbsent.length === 1 &&
+        boundProb1024vAbsent[0].object === `${recPs1024At} options.page_size` &&
+        boundProb1024vAbsent[0].detail.startsWith('is 1024; this run\'s input requires "absent" — the check packed its pages another way') &&
+        retunePsErr35?.problems.length === 1 &&
+        retunePsErr35.problems[0].code === 'RETUNE_INPUT_CHECK_BOUND' &&
+        retunePsErr35.problems[0].object === `${recPs1024At} options.page_size` &&
+        readPsZero?.problems[0].object === `${psZero32} field "options"` &&
+        readPsStr?.problems[0].object === `${psStr32} field "options"`,
+      `absent keys=${Object.keys(parsed30.options).join(',')} bytes=${inputCheckText(bindAbsent35.binding!, parsed30.check) === legacyText30 ? 'unchanged' : 'MOVED'}; with 1024 keys=${Object.keys(parsedPs1024.options).join(',')} reuse=${reusePsStage35.e === null ? 'green' : reusePsStage35.e.problems.map(problemLine).join(' | ')}; negatives=${[boundProb1024v2048[0], boundProbAbsentv1024[0], boundProb1024vAbsent[0], retunePsErr35?.problems[0]].map((p) => (p ? `${p.code} ${p.object}` : 'MISS')).join(' / ')}`,
+      'issue #1273: input-check.json records options.page_size only when --page-size was given and binds it across remesh and retune',
     );
     runRemeshGateCopyChecks(join(root, 'gate-1256'), (name, ok, detail) =>
       say(name, ok, detail, 'issue #1256: gateThroughRigc receives only rig.json, motion.json and images/; nested files in --rig are preserved byte-for-byte without ENOENT'),
@@ -49307,7 +49474,7 @@ function runRetuneSuite(): number {
     const noOut7 = runCli(['retune', '--rig', input, '--config', damping, '--parts', fx.parts]);
     say(
       'RN08_RETUNE_WITHOUT_OUT_OR_WITH_A_FLAG_IT_DOES_NOT_TAKE_IS_A_USAGE_ERROR',
-      noOut7.status === 2 && noOut7.out.includes('USAGE: retune needs --out <value>') && unknown7.status === 2 && unknown7.out.includes('retune does not take "--part"; it takes --rig, --config, --parts, --out, --requirements, --idle-keys, --page-edges, --pack-shape') && !existsSync(join(root, 'usage')),
+      noOut7.status === 2 && noOut7.out.includes('USAGE: retune needs --out <value>') && unknown7.status === 2 && unknown7.out.includes('retune does not take "--part"; it takes --rig, --config, --parts, --out, --requirements, --idle-keys, --page-edges, --pack-shape, --page-size') && !existsSync(join(root, 'usage')),
       `${noOut7.out.split('\n')[0].trim()} | ${unknown7.out.split('\n')[0].trim()}`,
       'a retune names no part: what it replaces is the config\'s constraints and idle, so --part (remesh\'s) is not a flag it takes',
     );

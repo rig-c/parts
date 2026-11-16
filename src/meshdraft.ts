@@ -66,7 +66,7 @@ import { compareMeshesInMotion, type MotionComparisonInput } from '@rig-c/core/m
 import { MeshReductionError } from '@rig-c/core/mesh';
 import { explicitFrameId, idleSchedule } from './automotion.ts';
 import { checkStage, gateThroughRigc, type Log, RIGC_MODEL_DOCUMENT, rigStage } from './build.ts';
-import { BARS, type CheckReport, type PackShape, type PageEdges, type RigcRunner } from './check.ts';
+import { BARS, type CheckReport, type PackShape, type PageEdges, parsePageSize, type RigcRunner } from './check.ts';
 import { type CharacterConfig, configFileReferences, type ConfigFileReference, type ContourMeshSpec, type LatticeMeshSpec, loadConfigAndAnimations, type Segment } from './config.ts';
 import { PartsError, type Problem, problemLine } from './errors.ts';
 import { IDLE_FPS } from './motion.ts';
@@ -758,6 +758,7 @@ export interface MeshDraftInput {
   idleKeys?: IdleKeys;
   pageEdges?: PageEdges;
   packShape?: PackShape;
+  pageSize?: number;
   /** `--more-triangles` ({@link MORE_TRIANGLES_FLAG}): reading 5 is reported, not a line. Absent or false: it is a line. */
   moreTriangles?: boolean;
 }
@@ -848,6 +849,7 @@ function attachmentOf(rig: RigSpec, part: string): MeshAttachment {
  * PASS, and returns the rows.
  */
 export function meshDraftStage(input: MeshDraftInput, rigc: RigcRunner, checkBin: string, scratch: string, log: Log): MeshDraftResult {
+  const pageSize = parsePageSize(input.pageSize);
   const text = readFileSync(input.config, 'utf8');
   const { config: cfg, animations } = loadConfigAndAnimations(input.config);
   const raw = JSON.parse(text) as Json;
@@ -868,9 +870,9 @@ export function meshDraftStage(input: MeshDraftInput, rigc: RigcRunner, checkBin
     const rigDir = join(scratch, name, 'rig');
     const at = configWith(name, meshes);
     try {
-      rigStage({ config: at, parts: input.parts, out: rigDir, ...(input.idleKeys === undefined ? {} : { idleKeys: input.idleKeys }), ...(input.pageEdges === undefined ? {} : { pageEdges: input.pageEdges }), ...(input.packShape === undefined ? {} : { packShape: input.packShape }) }, rigc, join(scratch, name, 'gate'), (l) => log(`[${name}:rig] ${l}`));
+      rigStage({ config: at, parts: input.parts, out: rigDir, ...(input.idleKeys === undefined ? {} : { idleKeys: input.idleKeys }), ...(input.pageEdges === undefined ? {} : { pageEdges: input.pageEdges }), ...(input.packShape === undefined ? {} : { packShape: input.packShape }), ...(pageSize === undefined ? {} : { pageSize }) }, rigc, join(scratch, name, 'gate'), (l) => log(`[${name}:rig] ${l}`));
       if (!check) return { rigDir };
-      const report = checkStage({ rig: rigDir, parts: input.parts, out: join(scratch, name, 'check'), seamPairs: true, ...(input.requirements === undefined ? {} : { requirements: input.requirements }), ...(input.pageEdges === undefined ? {} : { pageEdges: input.pageEdges }), ...(input.packShape === undefined ? {} : { packShape: input.packShape }) }, rigc, checkBin, (l) => log(`[${name}:check] ${l}`));
+      const report = checkStage({ rig: rigDir, parts: input.parts, out: join(scratch, name, 'check'), seamPairs: true, ...(input.requirements === undefined ? {} : { requirements: input.requirements }), ...(input.pageEdges === undefined ? {} : { pageEdges: input.pageEdges }), ...(input.packShape === undefined ? {} : { packShape: input.packShape }), ...(pageSize === undefined ? {} : { pageSize }) }, rigc, checkBin, (l) => log(`[${name}:check] ${l}`));
       return { rigDir, report };
     } catch (err) {
       if (!(err instanceof PartsError)) throw err;

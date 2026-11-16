@@ -38,7 +38,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { checkStage, gateThroughRigc, type Log, rigStage } from './build.ts';
-import { type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackShape, type PageEdges, rigcRanClause, type RigcRunner } from './check.ts';
+import { type CheckReport, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, type PackMode, type PackShape, type PageEdges, parsePageSize, rigcRanClause, type RigcRunner } from './check.ts';
 import { PartsError, type Problem, problemLine, refuseIfAny } from './errors.ts';
 import { type CheckSide, carryProvenance, type ParentProvenance, checkHeldProblems, checkSide, checkScope, type FileTree, firstDifference, type HashRow, hashRows, INPUT_CHECK_FILE, type InputCheckBinding, inputCheckHashes, inputCheckMovedProblems, inputCheckOf, inputCheckReusedLine, inputCheckText, inputTreeProblems, perturbed, pngsOf, readTree, sha256, textsOf } from './remesh.ts';
 import { DEFAULT_IDLE_KEYS, type IdleKeys, rigJsonText } from './rig.ts';
@@ -71,6 +71,7 @@ export interface RetuneInput {
   idleKeys?: IdleKeys;
   pageEdges?: PageEdges;
   packShape?: PackShape;
+  pageSize?: number;
   requirements?: string;
   /** Issue #617: a recorded input check (`input-check.json`, as `remesh` writes it) reused when it is bound to this run's input. */
   inputCheck?: string;
@@ -343,6 +344,8 @@ export function retuneStage(input: RetuneInput, rigc: RigcRunner, checkBin: stri
   const idleKeys = input.idleKeys ?? DEFAULT_IDLE_KEYS;
   const pageEdges = input.pageEdges ?? DEFAULT_PAGE_EDGES;
   const packShape = input.packShape ?? DEFAULT_PACK_SHAPE;
+  const pageSize = parsePageSize(input.pageSize);
+  const mode: PackMode = { pageEdges, packShape, ...(pageSize === undefined ? {} : { pageSize }) };
   // 1. The input and the out.
   const outAt = resolve(input.out);
   const rigAt = resolve(input.rig);
@@ -351,13 +354,13 @@ export function retuneStage(input: RetuneInput, rigc: RigcRunner, checkBin: stri
   if (outAt.startsWith(`${rigAt}${sep}`)) throw new PartsError([{ code: 'RETUNE_OUT_FRESH', object: input.out, detail: `is inside the input ${input.rig}; a revision is written beside the input, never into it` }]);
   const tree = readTree(rigAt);
   refuseIfAny(inputTreeProblems(tree, input.rig, 'retune', RETUNE_SPLICED));
-  const recorded = inputCheckOf(input, rigAt, tree, pageEdges, packShape, versions.parts, rigc, 'retune');
+  const recorded = inputCheckOf(input, rigAt, tree, pageEdges, packShape, versions.parts, rigc, 'retune', pageSize);
   const inFiles = rigFiles(tree);
   // 2. The rebuild.
   log(`rig-parts retune: ${input.rig}, ${tree.size} file(s); the rebuild is the config as written`);
   const rebuiltAt = join(scratch, 'rebuild', 'rig');
   try {
-    rigStage({ config: input.config, parts: input.parts, out: rebuiltAt, idleKeys, pageEdges, packShape }, rigc, join(scratch, 'rebuild', 'gate'), (l) => log(`[rebuild:rig] ${l}`));
+    rigStage({ config: input.config, parts: input.parts, out: rebuiltAt, idleKeys, pageEdges, packShape, ...(pageSize === undefined ? {} : { pageSize }) }, rigc, join(scratch, 'rebuild', 'gate'), (l) => log(`[rebuild:rig] ${l}`));
   } catch (err) {
     if (!(err instanceof PartsError)) throw err;
     throw new PartsError(err.problems.map((p) => ({ code: 'RETUNE_CONFIG_REFUSED', object: `${input.config} as written`, detail: `the rig stage refuses it, nothing is written: ${problemLine(p)}` })));
@@ -379,7 +382,7 @@ export function retuneStage(input: RetuneInput, rigc: RigcRunner, checkBin: stri
   log(`  idle: ${changed.idle.tracks_changed} track(s) changed, duration ${changed.idle.duration[0]} -> ${changed.idle.duration[1]}`);
   log(`  preserved: ${identical.filter((p) => p !== RETUNE_FILE && !(input.recordInputCheck === true && p === INPUT_CHECK_FILE)).length} file(s) byte-identical to the input; rig.json identical outside constraints and invariants.detached; motion.json identical outside animations.idle`);
   // 6. The gate and check.
-  const gate = gateThroughRigc(pngsOf(revision), textsOf(revision, plant.unfilteredGateTexts === true), rigc, join(scratch, 'gate'), { pageEdges, packShape });
+  const gate = gateThroughRigc(pngsOf(revision), textsOf(revision, plant.unfilteredGateTexts === true), rigc, join(scratch, 'gate'), mode);
   for (const g of gate) {
     log(`  rigc ${g.label}, the revision: exit ${g.status}`);
     for (const l of g.lines) log(`    ${l.trim()}`);
@@ -391,7 +394,7 @@ export function retuneStage(input: RetuneInput, rigc: RigcRunner, checkBin: stri
     writeFileSync(join(staged, k), b);
   }
   const checkOf = (rig: string, name: string): CheckReport =>
-    checkStage({ rig, parts: input.parts, out: join(scratch, name), pageEdges, packShape, ...(input.requirements === undefined ? {} : { requirements: input.requirements }) }, rigc, checkBin, (l) => log(`[${name}] ${l}`));
+    checkStage({ rig, parts: input.parts, out: join(scratch, name), pageEdges, packShape, ...(pageSize === undefined ? {} : { pageSize }), ...(input.requirements === undefined ? {} : { requirements: input.requirements }) }, rigc, checkBin, (l) => log(`[${name}] ${l}`));
   if (recorded.reused !== null) log(inputCheckReusedLine(input.inputCheck as string, recorded.binding as InputCheckBinding));
   let inSide: CheckSide;
   if (recorded.reused !== null) inSide = recorded.reused;
