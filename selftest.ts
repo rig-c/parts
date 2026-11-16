@@ -11883,15 +11883,16 @@ function runProposeSuite(): number {
     }
     const tieImage = bustSet.images.get('bodice') as Raster;
     const tieData = new Uint8ClampedArray(tieImage.data);
-    // Two 49*45=2205 px rectangles separated by two empty columns: a largest-island tie.
-    for (let y = 0; y < 45; y++) for (const x of [49, 50]) tieData[(y * 100 + x) * 4 + 3] = 0;
+    // Two 100*21=2100 px rectangles: rows 0..20 and 23..43; rows 21,22,44 are empty.
+    // Chest at rig [100,126.5] remains on the lower island, so the chest-carrier rule runs.
+    for (const y of [21, 22, 44]) for (let x = 0; x < 100; x++) tieData[(y * 100 + x) * 4 + 3] = 0;
     const tieImages = new Map(bustSet.images);
     tieImages.set('bodice', { ...tieImage, data: tieData });
     const tiedTorso = new PartSet(JSON.parse(readFileSync(join(bustDir, 'parts.json'), 'utf8')) as PartsFile, tieImages);
     const tieRefusal = refusals(() => propose(tiedTorso, undefined, undefined, undefined, undefined, true, { noBust: 'rigid plate' }));
     say('PR1299_TIED_LARGEST_ISLANDS_STILL_REFUSE',
       tieRefusal?.problems.some(problem => problem.code === 'PROPOSE_TORSO_ISLANDS' && problem.detail.includes('two share the largest count')) === true,
-      codes(tieRefusal), 'equal 2205 px islands have no uniquely largest island');
+      codes(tieRefusal), 'equal 2100 px islands have no uniquely largest island');
     const sliverDir = join(dir, 'torso-sliver');
     // Opaque rectangles: 98*45 main pixels plus 1*26 sliver pixels, with column 51 empty.
     writeProposeFixture(sliverDir, [...PROPOSE_PARTS, { name: 'bodice', from: 'full:topwear', x: 50, y: 100, w: 100, h: 45, colour: [60,80,100], rects: [[52,100,98,45], [50,100,1,26]] }]);

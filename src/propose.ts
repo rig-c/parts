@@ -3505,7 +3505,8 @@ export function proposeWithBasis(
       torsoStray = extra[0]?.area;
       for (const island of extra) {
         if (isDust(island.area, art)) continue;
-        notes.push(`WARN  PROPOSE_TORSO_ISLAND_LEFT_OUT: chest carrier "${torsoName}" — ${island.area} art px at box [${source.x + island.left}, ${source.y + island.top}, ${island.width}, ${island.height}] rig px left out of the contour; below spacing squared ${fig.grid} * ${fig.grid} = ${cellArea} art px; contour.stray=${torsoStray}`);
+        const code = 'PROPOSE_TORSO_ISLAND_LEFT_OUT';
+        notes.push(`WARN  ${code}: chest carrier "${torsoName}" — ${island.area} art px at box [${source.x + island.left}, ${source.y + island.top}, ${island.width}, ${island.height}] rig px left out of the contour; below spacing squared ${fig.grid} * ${fig.grid} = ${cellArea} art px; contour.stray=${torsoStray}`);
       }
       const small = extra.filter(island => isDust(island.area, art));
       if (small.length > 0) notes.push(`${torsoName}: contour dust rule leaves out ${small.length} island(s), ${small.reduce((sum, island) => sum + island.area, 0)} px; contour.stray=${torsoStray}`);
