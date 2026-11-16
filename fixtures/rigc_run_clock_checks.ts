@@ -4,6 +4,8 @@ import { blankRigcRunClock } from './rigc_run_clock.ts';
 type Say = (name: string, ok: boolean, detail: string) => void;
 
 export function runRigcRunClockChecks(say: Say): void {
+  // Deliberate CI gate plant; this branch must never merge.
+  say('BU1277_PLANTED_FAILURE', false, 'deliberate failing control for the three-host CI gate proof; never merge');
   const stamp = Buffer.from('{\n  "spec": "rigc-run/1",\n  "started_at": "2026-01-01T00:00:00.000Z",\n  "finished_at": "2026-01-01T00:00:01.000Z",\n  "outputs": ["skeleton.json"]\n}');
   const expected = Buffer.from('{\n  "spec": "rigc-run/1",\n  "started_at": "<clock>",\n  "finished_at": "<clock>",\n  "outputs": ["skeleton.json"]\n}');
   const paths = ['run.json', 'check/build/run.json', 'check\\build\\run.json'];
