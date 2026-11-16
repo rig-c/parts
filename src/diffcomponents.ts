@@ -10,6 +10,8 @@ import { decodePngBytes } from './raster/png.ts';
 import { newMask, type Raster } from './raster/types.ts';
 
 export const DIFF_COMPONENTS_SPEC = 'rig-parts-diff-components/1';
+export const DIFF_COMPONENTS_OWNERS_SPEC = 'rig-parts-diff-components/2';
+export type DiffComponentsSpec = typeof DIFF_COMPONENTS_SPEC | typeof DIFF_COMPONENTS_OWNERS_SPEC;
 export interface DiffBytes { path: string; bytes: Uint8Array }
 export interface DiffInputs {
   stack: DiffBytes;
@@ -24,10 +26,11 @@ export interface DiffComponent {
   box: { x: number; y: number; w: number; h: number };
   coverage: 'covered' | 'uncovered' | 'mixed';
   uncovered_px: number;
+  owners?: { part: string; px: number }[];
   borders: { part: string; px: number }[];
 }
 export interface DiffComponentsReport {
-  spec: typeof DIFF_COMPONENTS_SPEC;
+  spec: DiffComponentsSpec;
   stack: { path: string; sha256: string };
   painting: { path: string; sha256: string };
   definition: {
@@ -63,7 +66,7 @@ function diffPng(bytes: Uint8Array, label: string): Raster {
 }
 
 /** Hash and decode each source from the same buffer. No alignment or resampling. */
-export function measureDiffComponents(input: DiffInputs, floor: number, threshold = ERROR_LIMIT): DiffComponentsReport {
+export function measureDiffComponents(input: DiffInputs, floor: number, threshold = ERROR_LIMIT, withOwners = false): DiffComponentsReport {
   diffDefinition(floor, threshold);
   const stack = diffPng(input.stack.bytes, input.stack.path);
   const painting = diffPng(input.painting.bytes, input.painting.path);
@@ -74,9 +77,12 @@ export function measureDiffComponents(input: DiffInputs, floor: number, threshol
     if (input.inside.length !== W * H || bad >= 0) inputFailure('inside', `has ${input.inside.length} pixels, first nonbinary value ${bad < 0 ? 'none' : `${input.inside[bad]} at index ${bad}`}; ${W * H} binary 0/1 pixels in the painting's native frame are required`);
   }
   const names = new Set<string>();
-  for (const { record: p, image } of input.parts) {
+  const topmost = new Int32Array(W * H).fill(-1);
+  for (let i = 0; i < input.parts.length; i++) {
+    const { record: p, image } = input.parts[i];
     if (!p.name || names.has(p.name) || ![p.x, p.y, p.w, p.h].every(Number.isSafeInteger) || p.x < 0 || p.y < 0 || p.w < 1 || p.h < 1 || p.x + p.w > W || p.y + p.h > H || image.width !== p.w || image.height !== p.h || image.data.length < p.w * p.h * 4) inputFailure(`part "${p.name}"`, `box ${p.x},${p.y} ${p.w}x${p.h}, image ${image.width}x${image.height} with ${image.data.length} RGBA bytes, duplicate name ${names.has(p.name)}; a unique nonempty name and an integer in-canvas matching box with four RGBA bytes per pixel are required on ${W}x${H}`);
     names.add(p.name);
+    for (let y = 0; y < p.h; y++) for (let x = 0; x < p.w; x++) if (image.data[(y * p.w + x) * 4 + 3] > COVERED_ALPHA) topmost[(p.y + y) * W + p.x + x] = i;
   }
   const covered = coveredMask(input.parts, W, H);
   const err = errorMask(stack, painting, input.inside, threshold);
@@ -96,12 +102,22 @@ export function measureDiffComponents(input: DiffInputs, floor: number, threshol
   for (const s of cc.stats.slice(1).filter(s => s.area > 0).sort((a,b) => first[a.label] - first[b.label])) {
     const u = uncovered[s.label];
     if (s.area < floor) { below.count++; below.px += s.area; below.uncovered_px += u; continue; }
+    let owners: { part: string; px: number }[] | undefined;
+    if (withOwners) {
+      const counts = new Int32Array(input.parts.length);
+      for (let y = s.top; y < s.top + s.height; y++) for (let x = s.left; x < s.left + s.width; x++) {
+        const p = y * W + x;
+        if (cc.labels[p] === s.label && topmost[p] >= 0) counts[topmost[p]]++;
+      }
+      owners = [];
+      for (let i = 0; i < input.parts.length; i++) if (counts[i] > 0) owners.push({ part: input.parts[i].record.name, px: counts[i] });
+    }
     components.push({ id: `p${first[s.label]}-n${s.area}`, px: s.area,
       box: { x: s.left, y: s.top, w: s.width, h: s.height },
       coverage: u === 0 ? 'covered' : u === s.area ? 'uncovered' : 'mixed', uncovered_px: u,
-      borders: holeBorders(input.parts, cc, s, W, H, COVERED_ALPHA) });
+      ...(owners === undefined ? {} : { owners }), borders: holeBorders(input.parts, cc, s, W, H, COVERED_ALPHA) });
   }
-  return { spec: DIFF_COMPONENTS_SPEC,
+  return { spec: withOwners ? DIFF_COMPONENTS_OWNERS_SPEC : DIFF_COMPONENTS_SPEC,
     stack: { path: input.stack.path, sha256: sha(input.stack.bytes) },
     painting: { path: input.painting.path, sha256: sha(input.painting.bytes) },
     definition: { metric: 'max-absolute-rgb-channel', threshold, comparison: '>', connectivity: 8, floor_px: floor,
@@ -110,8 +126,8 @@ export function measureDiffComponents(input: DiffInputs, floor: number, threshol
     error_px: errorPx, uncovered_error_px: uncoveredPx, components, below_floor: below };
 }
 export function serializeDiffComponents(report: DiffComponentsReport): string { return JSON.stringify(report, null, 2) + '\n'; }
-export function writeDiffComponents(path: string, input: DiffInputs, floor: number, threshold = ERROR_LIMIT): DiffComponentsReport {
-  const report = measureDiffComponents(input, floor, threshold);
+export function writeDiffComponents(path: string, input: DiffInputs, floor: number, threshold = ERROR_LIMIT, withOwners = false): DiffComponentsReport {
+  const report = measureDiffComponents(input, floor, threshold, withOwners);
   try { writeFileSync(path, serializeDiffComponents(report)); }
   catch (err) { inputFailure(path, `cannot write report: ${JSON.stringify(err instanceof Error ? err.message : err)}; a writable output file path is required`); }
   return report;
@@ -119,11 +135,11 @@ export function writeDiffComponents(path: string, input: DiffInputs, floor: numb
 const object = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const shown = (v: unknown): string => v === undefined ? 'missing' : Array.isArray(v) ? `array with ${v.length} entries` : typeof v === 'number' && !Number.isFinite(v) ? String(v) : JSON.stringify(v);
 /** Recompute the inventory against the supplied bytes and coverage/domain. A capped or edited report is refused. */
-export function readDiffComponents(text: string, input: DiffInputs): DiffComponentsReport {
+export function readDiffComponents(text: string, input: DiffInputs, allowedSpecs: readonly DiffComponentsSpec[] = [DIFF_COMPONENTS_SPEC, DIFF_COMPONENTS_OWNERS_SPEC]): DiffComponentsReport {
   let raw: unknown;
   try { raw = JSON.parse(text); } catch (err) { return reportFailure(`cannot parse JSON: ${JSON.stringify(err instanceof Error ? err.message : err)}; valid JSON is required`); }
   if (!object(raw)) return reportFailure(`found ${shown(raw)}; a ${DIFF_COMPONENTS_SPEC} report object is required`);
-  if (raw.spec !== DIFF_COMPONENTS_SPEC) return reportFailure(`spec is ${shown(raw.spec)}; ${DIFF_COMPONENTS_SPEC} is required`);
+  if (!allowedSpecs.includes(raw.spec as DiffComponentsSpec)) return reportFailure(`spec is ${shown(raw.spec)}; ${allowedSpecs.join(' or ')} is required`);
   if (!object(raw.stack) || !object(raw.painting) || !object(raw.definition)) return reportFailure(`stack=${shown(raw.stack)}, painting=${shown(raw.painting)}, definition=${shown(raw.definition)}; all three objects are required`);
   const bindings: Problem[] = [];
   for (const key of ['stack', 'painting'] as const) {
@@ -135,7 +151,7 @@ export function readDiffComponents(text: string, input: DiffInputs): DiffCompone
   if (bindings.length > 0) throw new PartsError(bindings);
   const floor = raw.definition.floor_px, threshold = raw.definition.threshold;
   if (typeof floor !== 'number' || typeof threshold !== 'number') return reportFailure(`definition floor_px=${shown(floor)}, threshold=${shown(threshold)}; both must be numbers`);
-  const expected = measureDiffComponents(input, floor, threshold);
+  const expected = measureDiffComponents(input, floor, threshold, raw.spec === DIFF_COMPONENTS_OWNERS_SPEC);
   const differences: Problem[] = [];
   const fail = (path: string, found: unknown, required: unknown): void => {
     differences.push({ code: 'DIFF_COMPONENTS_REPORT', object: path,
@@ -164,9 +180,11 @@ export function readDiffComponents(text: string, input: DiffInputs): DiffCompone
 export function diffComponentsCommand(args: string[]): void {
   const allowed = ['--stack', '--painting', '--parts', '--figure', '--floor', '--threshold', '--out', '--verify'];
   const flags = new Map<string,string>();
+  let withOwners = false;
   for (let i = 0; i < args.length; i += 2) {
     const key = args[i], value = args[i + 1];
-    if (!allowed.includes(key) || flags.has(key) || value === undefined || value.startsWith('--')) inputFailure('arguments', `requires unique ${allowed.join(', ')} flags with values; found ${key}`);
+    if (key === '--owners' && !withOwners) { withOwners = true; i--; continue; }
+    if (!allowed.includes(key) || flags.has(key) || value === undefined || value.startsWith('--')) inputFailure('arguments', `requires unique ${allowed.join(', ')} flags with values (and optional --owners); found ${key}`);
     if (value.length === 0) inputFailure(key, 'is ""; a nonempty value is required');
     flags.set(key, value);
   }
@@ -202,7 +220,7 @@ export function diffComponentsCommand(args: string[]): void {
   const input = { stack, painting, parts: placed, inside };
   if (flags.has('--verify')) {
     const path = flags.get('--verify')!;
-    const report = readDiffComponents(new TextDecoder().decode(bytes(path).bytes), input);
+    const report = readDiffComponents(new TextDecoder().decode(bytes(path).bytes), input, withOwners ? [DIFF_COMPONENTS_OWNERS_SPEC] : [DIFF_COMPONENTS_SPEC, DIFF_COMPONENTS_OWNERS_SPEC]);
     if (report.definition.floor_px !== floor || report.definition.threshold !== threshold) inputFailure('definition', `report floor_px=${report.definition.floor_px}, threshold=${report.definition.threshold}; caller floor_px=${floor}, threshold=${threshold} are required`);
-  } else writeDiffComponents(flags.get('--out')!, input, floor, threshold);
+  } else writeDiffComponents(flags.get('--out')!, input, floor, threshold, withOwners);
 }

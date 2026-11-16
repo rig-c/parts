@@ -5727,7 +5727,7 @@ recorded transform. The record fields and sampling formula are specified in
 | <a id="PARTS_PAINTING_REFERENCE_WRITE"></a>`PARTS_PAINTING_REFERENCE_WRITE` | Reference publication failed | Preserve existing files and retry with the same sealed inputs |
 | <a id="DIFF_COMPONENTS_INPUT"></a>`DIFF_COMPONENTS_INPUT` | `diff-components` needs readable PNG stack/painting/part images, a writable `--out` target when writing, explicit parts, positive integer floor, a finite threshold in [0,255], matching native dimensions and valid coverage/domain inputs; flags must be unique and known, with nonempty values | Supply the named missing or invalid input; no resampling or inferred figure is performed |
 | <a id="DIFF_COMPONENTS_BINDING"></a>`DIFF_COMPONENTS_BINDING` | The shipped report reader found a stack or painting SHA-256 different from the supplied bytes; found and required digests are printed | Regenerate against the bytes being reviewed |
-| <a id="DIFF_COMPONENTS_REPORT"></a>`DIFF_COMPONENTS_REPORT` | Invalid report JSON/spec, or its exhaustive inventory, definition, paths, domain or coverage differs from remeasurement; capped inventories are refused | Regenerate the complete versioned report against the same input paths, bytes, parts and figure domain |
+| <a id="DIFF_COMPONENTS_REPORT"></a>`DIFF_COMPONENTS_REPORT` | Invalid report JSON/spec (`rig-parts-diff-components/1` or `rig-parts-diff-components/2` is required, or the spec requested by a narrow reader), or its exhaustive inventory, definition, paths, domain, coverage or topmost `owners` (on `/2`) differs from remeasurement; capped inventories are refused | Regenerate the complete versioned report against the same input paths, bytes, parts and figure domain |
 | <a id="ASSEMBLE_PINHOLES"></a>`ASSEMBLE_PINHOLES` | the requirements file declares `pinholes.required: true` and the flat parts stack holds a pinhole: an 8-connected opening (alpha 0 on every part, enclosed by the parts' alpha above 0) whose every pixel the painting shows as figure. One refusal per pinhole, largest first, naming its box, its px and the parts bordering it; nothing is written (issue #944, [Pinholes at rest](#pinholes-at-rest-issue-944)) | `assemble.plan` / `assemble.take` / the head pass: take the pinhole's pixels from a layer that holds them ([Source before scissors](#source-before-scissors)); where no layer holds them, the defect is the input's. Without the declaration the bar reports SKIP |
 | <a id="ASSEMBLE_PATCH_BOX_INSIDE"></a>`ASSEMBLE_PATCH_BOX_INSIDE` | a patch's box reaches past the rig (the painting times `rig_scale`; the detail gives the size) | that patch's `box` — it is in rig pixels, not painting pixels |
 | <a id="ASSEMBLE_PATCH_OPAQUE"></a>`ASSEMBLE_PATCH_OPAQUE` | a patch takes no pixel: a `"silhouette"` patch whose box holds none of the figure | move the box onto the figure, or `"alpha": "box"` |
@@ -8519,7 +8519,7 @@ references remain active declarations. See [the input contract and refusals](AUT
 ### Whole-figure difference inventory
 
 `rig-parts diff-components --stack stack.png --painting painting.png --parts parts.json --floor 2 --out diff-components.json`
-writes `rig-parts-diff-components/1`. Supply the assembled stack and the painting
+writes `rig-parts-diff-components/1` by default. Pass `--owners` during retouch rounds that need the topmost owning part for each differing component (replacing hand-written scripts that recomputed per-pixel draw-order ownership): with `--owners`, the command writes `rig-parts-diff-components/2` and adds `owners` to every component. Without `--owners`, output bytes stay `rig-parts-diff-components/1` with no `owners` field. Supply the assembled stack and the painting
 **already in the same native canvas** (for a scaled assembly, use its rig-sized
 painting). Parts are read in manifest order from the `parts/` sibling directory.
 No registration or resampling occurs. For scene assemblies pass
@@ -8539,8 +8539,12 @@ SHA-256 of the binary figure domain (`null` for the whole canvas).
 PNG buffer decoded for measurement. `components` is uncapped and ordered by
 first pixel in row-major scan order. Each entry records `id` (`p<first pixel
 index>-n<pixel count>`), `px`, `box: {x,y,w,h}`, `coverage`, `uncovered_px` and
-`borders`. Coverage is `covered`, `uncovered` or `mixed`: a whole-error component
-can cross a part's edge, so a boolean would lose pixels. Borders use the existing
+`borders` (plus `owners` before `borders` in `rig-parts-diff-components/2` under `--owners`). Coverage is `covered`, `uncovered` or `mixed`: a whole-error component
+can cross a part's edge, so a boolean would lose pixels. Under `--owners`, `owners` lists each topmost part
+(in `parts.json` draw order, back to front) with alpha above the coverage cut (`COVERED_ALPHA`, >128)
+drawing the component's covered pixels, as `{part, px}`; an uncovered pixel names no owner, so an
+uncovered component has `owners: []` and the sum of `owners[].px` plus `uncovered_px` equals `px`.
+Borders use the existing
 hole convention: part pixels above the coverage cut touching a component in
 their 3x3 neighbourhood, counted once per part pixel, sorted by count then
 manifest order. A covered component may therefore name its own covering part.
@@ -8551,7 +8555,7 @@ Listed `px` plus `below_floor.px` equals `error_px`; listed `uncovered_px` plus
 `parts.json.recomposite` block, including `holes_listed: 5`, is unchanged.
 
 Replace `--out` with `--verify diff-components.json` to use the shipped reader.
-Use the same paths and floor/threshold flags. It collects both source-binding mismatches before refusing. With matching bindings,
+Use the same paths and floor/threshold flags. `--verify` accepts both `rig-parts-diff-components/1` and `rig-parts-diff-components/2` reports (pass `--owners` with `--verify` or `readDiffComponents(text, input, [DIFF_COMPONENTS_SPEC])` when a caller requires a single spec version; a `/1`-only reader refuses a `/2` report by name with `DIFF_COMPONENTS_REPORT`). It collects both source-binding mismatches before refusing. With matching bindings,
 it recomputes every field against the supplied parts and domain, refusing
 missing, capped or altered components, stale coverage and definition drift. Every
 changed, missing or extra inventory field names its path, the value found and the
