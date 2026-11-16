@@ -146,6 +146,7 @@ function extendIntegratedHeight(data: Float64Array, art: Raster): Float64Array {
   }
   return filled;
 }
+const MAP_BINDING_ABSENT = 'DEPTH_MAP_BINDING_ABSENT';
 const BINDING_REMEDY = 're-run depth for these inputs, then rig-parts depth-bind --map <numeric-map.json> --input <prepared.png> --part <name>';
 /** Bound diagnostic values; never echo a receipt payload. */
 function bindingFound(value: unknown): string {
@@ -188,7 +189,7 @@ function isReceiptLink(path: string): boolean {
 /** Parts-owned provenance beside the numeric map; never inferred from a new prepare. */
 function mapBinding(mapPath: string, bytes: Uint8Array, part: PreparedPart): string | undefined {
   const receiptPath = mapPath + '.binding.json';
-  if (!existsSync(receiptPath) && !isReceiptLink(receiptPath)) return `WARN  DEPTH_MAP_BINDING_ABSENT: part "${part.part}" — no map binding receipt (compatibility policy dated 2026-11-16); applying legacy map without inference-input identity; ${BINDING_REMEDY}`;
+  if (!existsSync(receiptPath) && !isReceiptLink(receiptPath)) return `WARN  ${MAP_BINDING_ABSENT}: part "${part.part}" — no map binding receipt (compatibility policy dated 2026-11-16); applying legacy map without inference-input identity; ${BINDING_REMEDY}`;
   const remedy = BINDING_REMEDY;
   const refuse = (detail: string): never => fail('DEPTH_MAP_BINDING', `part "${part.part}"`, `${detail}; ${remedy}`);
   if (!lstatSync(receiptPath).isFile()) return refuse('receipt found a symlink or nonregular file; required a regular file');
