@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.41.0 (2026-11-17)
+
+### Features
+
+* **motion:** add optional `motion.blink.more`, a list of further authored blink times strictly after `motion.blink.t` in the same idle, validated by `CONFIG_BLINK_MORE_TIMES`. `t` stays a scalar, and a config without `more` writes the same bytes as before. STABILITY lists the field and AUTHORING has its row (`#1304`, `#1307`, `00dde9c`).
+
 ## 2.40.0 (2026-11-17)
 
 ### Features
