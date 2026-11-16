@@ -255,6 +255,7 @@ import {
   TAIL_UNCOVERED_ERROR_PX,
   writeAssembleFixture,
   writeRun,
+  Z,
   LIMB_FULL,
   LIMB_PLAN,
   LIMB_BONES,
@@ -301,6 +302,7 @@ import {
   limbOrder,
   ERROR_LIMIT as ASSEMBLE_ERROR_LIMIT,
   FIGURE_MASK_FILE,
+  figureMaskLines,
   figureSilhouette,
   figuresLine,
   growRim,
@@ -35847,11 +35849,15 @@ function runAssembleSuite(): number {
       'AS103_A_SCENE_READS_THE_RECOMPOSITE_HOLES_AND_THE_REPORTED_LINE_INSIDE_THE_FIGURE_AND_SAYS_SO_FIRST',
       serializeParts(plain.parts) === serializeParts(EXPECTED_PARTS) &&
         plain.figure === null &&
+        plain.figureMask === undefined &&
         !('declared_scene' in plainHoles) &&
         figuresLine(plain.figures) === 'recomposite vs source: mean |d|=120.05, within 8: 36.3%, error px > 40: 2611, uncovered error px: 2611' &&
         sp === phrase &&
         JSON.stringify(sceneRun.parts.scene) === '{"figure_alpha_above":8,"figure_px":1380,"figure_mask":"figure_rig.png"}' &&
         figureWhite === 1380 &&
+        sceneRun.figureMask !== undefined &&
+        figureMaskLines(sceneRun.figureMask, sp).join(' | ') ===
+          `${phrase}: figure mask (figure_rig.png): core (alpha >= 250) 1380 px; soft rim (alpha 9..127 in the 4-connected exterior of the union alpha >= 250 core): union 0 px, far (max channel > 40 from the painting in the rig) 0 px; outside all parts (no part at alpha > 8): 168 px in 1 component(s) (8-connected, largest 168 px at 4,2 16x12) (0 px also in rim, rim or outside 168 px); measurement, no declared limit` &&
         figuresLine(sceneRun.figures, sp) === `${phrase}: recomposite vs source: mean |d|=22.93, within 8: 87.8%, error px > 40: 168, uncovered error px: 168` &&
         holeLines(sceneRun.figures, sp).join(' | ') === `${phrase}: uncovered holes (8-connected): 1 |   uncovered hole 1: 168 px at 4,2 16x12 (between "face" 11 px)` &&
         JSON.stringify(sceneHoles) === JSON.stringify({ status: 'REPORTED', declared_scene: phrase, error_px: 168, uncovered_error_px: 168, hole_count: 1, largest: { px: 168, box: '4,2 16x12', borders: ['face 11 px'] } }),
@@ -35892,12 +35898,94 @@ function runAssembleSuite(): number {
         filePx === 1380 &&
         sceneParts?.scene?.figure_px === 1380 &&
         sceneCli.out.includes(`${phrase}: recomposite vs source:`) &&
+        sceneCli.out.includes(`${phrase}: figure mask (figure_rig.png): core (alpha >= 250) 1380 px;`) &&
         plainCli.status === 0 &&
         !existsSync(join(plainOut, 'render', FIGURE_MASK_FILE)) &&
         !plainCli.out.includes('inside the figure') &&
+        !plainCli.out.includes('figure mask (') &&
+        !plainCli.out.includes('figure rim ') &&
         readParts(join(plainOut, 'rig', 'parts.json')).scene === undefined,
       `with scene: exit ${sceneCli.status}, ${figurePng === null ? 'no figure file' : `${FIGURE_MASK_FILE} ${figurePng.width}x${figurePng.height}, ${filePx} white px`}, parts.json scene ${JSON.stringify(sceneParts?.scene ?? null)}; without: exit ${plainCli.status}, figure file ${existsSync(join(plainOut, 'render', FIGURE_MASK_FILE)) ? 'WRITTEN' : 'absent'}`,
       "issue #242: the figure the declaration reads against is inspectable, and the consumer repaints the scene with it as its mask; a painting that is not a scene writes what it wrote",
+    );
+
+    // Issue #1297: synthetic figure-mask soft-rim and outside-all-parts fixture, every figure computed by hand:
+    // - Painting: 128x128 flat C = [100, 60, 40]; full run 64x64 at rig_scale 0.5 maps 1:1 to the 64x64 rig.
+    // - full:bottomwear (taken directly by plan part "bottomwear"): box [47, 63) x [29, 55) = 16 x 26 = 416 px.
+    //   Inner core [48, 62) x [30, 54) = 14 x 24 = 336 px at alpha 255, colour Z = [250, 250, 250], less an enclosed
+    //   2x2 pocket [50, 52) x [32, 34) = 4 px at alpha 64, colour Z -> 332 core px (alpha >= 250), and fillHoles(core)
+    //   fills the 4 enclosed pocket pixels so they are not in the 4-connected exterior.
+    //   Outer 1-px soft rim [47, 63) x [29, 55) \ [48, 62) x [30, 54) = 416 - 336 = 80 px at alpha 64 (in 9..127):
+    //   top and bottom rows (y = 29 and y = 54, x in [47, 63)) = 2 x 16 = 32 px in colour C (max channel diff 0 <= 40);
+    //   left and right columns (x = 47 and x = 62, y in [30, 54)) = 2 x 24 = 48 px in colour Z (max channel diff
+    //   |250 - 40| = 210 > 40 from C). So bottomwear (part "bottomwear") has rim 80 px, far 48 px, of 416 layer mask px,
+    //   and the emitted "bottomwear" part carries all 416 px at alpha >= 64 > 8 (0 px outside all parts).
+    // - full:headwear (in no plan row, so no full-run plan part): box [4, 14) x [2, 12) = 10 x 10 = 100 px, disjoint
+    //   from head:face [16, 28) x [8, 20) and every other part. Inner core [5, 13) x [3, 11) = 8 x 8 = 64 px at alpha
+    //   255, colour Z; outer 1-px soft rim [4, 14) x [2, 12) \ [5, 13) x [3, 11) = 100 - 64 = 36 px at alpha 64, colour
+    //   Z (max channel diff 210 > 40). So headwear (no full-run plan part) has rim 36 px, far 36 px, of 100 layer mask
+    //   px, and all 100 px lie outside every emitted part (1 component, 100 px at 4,2 10x10), 36 of them also in the rim.
+    // - Other full-run layers (back hair 132 px, topwear 600 px, footwear 120 px after its 4-px ghost): all alpha 255
+    //   (rim 0, far 0), all covered by their emitted parts.
+    // - Totals by hand: figurePx = 100 + 132 + 416 + 600 + 120 = 1,368; corePx = 64 + 132 + 332 + 600 + 120 = 1,248;
+    //   union rimPx = 80 + 36 = 116; union farPx = 48 + 36 = 84; outsideParts = 100 px in 1 component at 4,2 10x10;
+    //   alsoInRimPx = 36; rimOrOutsidePx = 116 + 100 - 36 = 180 (overlap counted once).
+    const rimBottomwear = (baseLayer: Layer): Layer => {
+      const bw = newRaster(16, 26);
+      for (let y = 0; y < 26; y++) {
+        for (let x = 0; x < 16; x++) {
+          const gx = 47 + x;
+          const gy = 29 + y;
+          const inCoreBox = gx >= 48 && gx < 62 && gy >= 30 && gy < 54;
+          const inPocket = gx >= 50 && gx < 52 && gy >= 32 && gy < 34;
+          const rgb = !inCoreBox && (gy === 29 || gy === 54) ? C : Z;
+          const alpha = inCoreBox && !inPocket ? 255 : 64;
+          bw.data.set([...rgb, alpha], (y * 16 + x) * 4);
+        }
+      }
+      return { ...baseLayer, left: 47, top: 29, right: 63, bottom: 55, opaquePx: 416, pixels: bw };
+    };
+    const rimHeadwear = (baseLayer: Layer): Layer => {
+      const hw = newRaster(10, 10);
+      for (let y = 0; y < 10; y++) {
+        for (let x = 0; x < 10; x++) {
+          const inCore = x >= 1 && x < 9 && y >= 1 && y < 9;
+          hw.data.set([...Z, inCore ? 255 : 64], (y * 10 + x) * 4);
+        }
+      }
+      return { ...baseLayer, left: 4, top: 2, right: 14, bottom: 12, opaquePx: 100, pixels: hw };
+    };
+    const rimFull: LayerSet = {
+      ...sceneIn.full,
+      layers: sceneIn.full.layers.map((l) => (l.name === 'bottomwear' ? rimBottomwear(l) : l.name === 'headwear' ? rimHeadwear(l) : l)),
+    };
+    const rimRun = assemble({ ...sceneIn, full: rimFull, seamRule: 'near-white', scene: true });
+    const rimPhrase = "inside the figure (config.scene: the union of the full run's layers at alpha above 8, 1368 of 4096 rig px)";
+    const rimSp = rimRun.parts.scene === undefined ? null : scenePhrase(rimRun.parts.scene, 64 * 64);
+    const rimLines = rimRun.figureMask === undefined ? [] : figureMaskLines(rimRun.figureMask, rimSp);
+    const expectedRimLines = [
+      `${rimPhrase}: figure mask (figure_rig.png): core (alpha >= 250) 1248 px; soft rim (alpha 9..127 in the 4-connected exterior of the union alpha >= 250 core): union 116 px, far (max channel > 40 from the painting in the rig) 84 px; outside all parts (no part at alpha > 8): 100 px in 1 component(s) (8-connected, largest 100 px at 4,2 10x10) (36 px also in rim, rim or outside 180 px); measurement, no declared limit`,
+      '  figure rim full:bottomwear (part "bottomwear"): rim 80 px, far 48 px (of 416 layer mask px)',
+      '  figure rim full:headwear (no full-run plan part): rim 36 px, far 36 px (of 100 layer mask px)',
+    ];
+    say(
+      'AS106_FIGURE_MASK_REPORT_NAMES_EXTERIOR_SOFT_RIM_FAR_RIM_AND_OUTSIDE_ALL_PARTS_COMPONENTS',
+      rimLines.join('\n') === expectedRimLines.join('\n'),
+      rimLines.join(' | '),
+      'issue #1297: when assemble writes figure_rig.png it reports the union core, the 4-connected exterior alpha 9..127 soft rim and its > ERROR_LIMIT subset per layer (with its direct full-run plan part) and in the union, and the mask pixels outside every emitted part at alpha > 8 with overlap counted once',
+    );
+    const plantedPocketIncluded = rimRun.figureMask === undefined ? [] : figureMaskLines({ ...rimRun.figureMask, rimPx: 120, farPx: 88 }, rimSp);
+    const plantedDoubleOverlap = rimRun.figureMask === undefined ? [] : figureMaskLines({ ...rimRun.figureMask, rimOrOutsidePx: 116 + 100 }, rimSp);
+    const guideSceneRow = readFileSync(join(ROOT, 'docs', 'AUTHORING.md'), 'utf8').split('\n').find((l) => l.startsWith('| `scene` |')) ?? '';
+    say(
+      'AS107_PLANTED_ENCLOSED_POCKET_OR_DOUBLE_COUNTED_OVERLAP_FAILS_THE_FIGURE_MASK_BAR_AND_AUTHORING_NAMES_THE_REMEDIES',
+      plantedPocketIncluded.join('\n') !== expectedRimLines.join('\n') &&
+        plantedDoubleOverlap.join('\n') !== expectedRimLines.join('\n') &&
+        guideSceneRow.includes('figure mask (figure_rig.png):') &&
+        guideSceneRow.includes('setup_painting.figure_mask') &&
+        guideSceneRow.includes('only inside the `alpha >= 250` core'),
+      `planted enclosed-pocket rim 120 != 116; planted double-counted overlap 216 != 180; AUTHORING scene row names figure mask line, setup_painting.figure_mask and alpha >= 250 core`,
+      'issue #1297: enclosed non-core pockets inside the 4-connected core are not exterior rim, rim/outside overlap is counted once, and AUTHORING states what the line means and the two remedies',
     );
 
     const pp = runCli(['assemble', '--propose-plan', '--source', join(dir, 'painting.png'), '--full', join(dir, 'full'), '--head', join(dir, 'head'), '--config', join(dir, 'config.json')]);
@@ -37587,17 +37675,18 @@ export function runAssembleExampleStage(ex: string, stage: AssembleStage): numbe
         (l) => lines.push(l),
       );
       const rule = lines.filter((l) => l.startsWith(`${PINHOLES_RULE}: `));
+      const noFigureMaskLine = r.figure === null && r.figureMask === undefined && !lines.some((l) => l.includes('figure mask (') || l.includes('figure rim '));
       if (declared) {
-        ok = rule.length === 1 && rule[0].startsWith(`${PINHOLES_RULE}: PASS — 0 pinholes`);
-        detail = `declared in requirements.json: ${rule.map((l) => l.slice(0, 100)).join(' | ') || 'no pinhole line'}`;
+        ok = noFigureMaskLine && rule.length === 1 && rule[0].startsWith(`${PINHOLES_RULE}: PASS — 0 pinholes`);
+        detail = `declared in requirements.json: ${rule.map((l) => l.slice(0, 100)).join(' | ') || 'no pinhole line'}; figure mask line absent without scene: ${noFigureMaskLine}`;
       } else {
         const [W, H] = r.parts.rig_size;
         const measured = measurePinholes(sourceInRig944(readSource944(join(ex, 'inputs', 'painting.png')), W, H), r.images).map(pinholeBox944).sort();
         const readmeLines = readFileSync(join(ex, 'README.md'), 'utf8').split('\n').filter((l) => l.includes(`\`${PINHOLES_RULE}: SKIP\``));
         const named = readmeLines.flatMap((l) => [...l.matchAll(/`(\d+,\d+ \d+x\d+)`/g)].map((m) => m[1])).sort();
         const linked = readmeLines.some((l) => l.includes('https://github.com/rig-c/parts/issues/953'));
-        ok = rule.length === 1 && rule[0].startsWith(`${PINHOLES_RULE}: SKIP — not measured, not a pass`) && measured.length > 0 && named.join('|') === measured.join('|') && linked;
-        detail = `undeclared: ${rule.map((l) => l.slice(0, 60)).join(' | ') || 'no pinhole line'}; measured ${measured.length} pinhole(s) ${measured.join(', ') || '(none: declare the bar in requirements.json)'}; README names ${named.join(', ') || 'none'}${linked ? ', links #953' : ', does NOT link #953'}`;
+        ok = noFigureMaskLine && rule.length === 1 && rule[0].startsWith(`${PINHOLES_RULE}: SKIP — not measured, not a pass`) && measured.length > 0 && named.join('|') === measured.join('|') && linked;
+        detail = `undeclared: ${rule.map((l) => l.slice(0, 60)).join(' | ') || 'no pinhole line'}; measured ${measured.length} pinhole(s) ${measured.join(', ') || '(none: declare the bar in requirements.json)'}; README names ${named.join(', ') || 'none'}${linked ? ', links #953' : ', does NOT link #953'}; figure mask line absent without scene: ${noFigureMaskLine}`;
       }
     } catch (err) {
       detail = `refused or crashed: ${(err as Error).message.split('\n')[0]}`;

@@ -3640,6 +3640,163 @@ export function holeKindsLine(k: HoleKinds, scene: string | null = null): string
   );
 }
 
+/** One full-run layer's outer soft rim in `figure_rig.png` (issue #1297). */
+export interface FigureRimLayer {
+  /** The full-run layer tag. */
+  tag: string;
+  /** The plan part that takes `full:<tag>` directly, or null when no plan row does. */
+  part: string | null;
+  /** Layer pixels at alpha `OPAQUE_ALPHA_ABOVE + 1 .. COVERED_ALPHA - 1` (9..127) in the 4-connected exterior of the union `alpha >= CORE_ALPHA` core. */
+  rimPx: number;
+  /** Those rim pixels whose max absolute RGB channel difference from the painting in the rig is above `ERROR_LIMIT`. */
+  farPx: number;
+  /** Total pixels of this full-run layer on the rig grid with alpha above `OPAQUE_ALPHA_ABOVE`. */
+  maskPx: number;
+}
+
+/**
+ * What `figure_rig.png` holds beyond the union `alpha >= CORE_ALPHA` core and
+ * beyond the emitted parts' support (issue #1297).
+ */
+export interface FigureMaskReading {
+  /** Total pixels in `figure_rig.png` (`inside[p] === 1`, union of full-run layers at alpha above `OPAQUE_ALPHA_ABOVE`). */
+  figurePx: number;
+  /** Total pixels in the union of full-run layers at alpha >= `CORE_ALPHA` (250). */
+  corePx: number;
+  /** Union of full-run layer rim pixels (alpha 9..127 in the 4-connected exterior of the union alpha >= 250 core). */
+  rimPx: number;
+  /** Union of full-run layer far-rim pixels (rim pixels with max-channel RGB difference from the painting in the rig > `ERROR_LIMIT`). */
+  farPx: number;
+  /** Full-run layers with `rimPx > 0`, largest `rimPx` first (then `farPx`, then `tag`). */
+  layers: FigureRimLayer[];
+  /** Figure-mask pixels that no emitted part carries at alpha above `OPAQUE_ALPHA_ABOVE` (8), 8-connected. */
+  outsideParts: HoleKindSummary;
+  /** Pixels in both the union rim and `outsideParts`. */
+  alsoInRimPx: number;
+  /** Pixels in the union rim or `outsideParts` (overlap counted once). */
+  rimOrOutsidePx: number;
+}
+
+/**
+ * Measure the figure mask's outer soft rim (`alpha 9..127` in the 4-connected
+ * exterior of the union `alpha >= CORE_ALPHA` core), its far-rim subset (`max`
+ * RGB channel difference from `srcr` > `ERROR_LIMIT`), and the mask pixels
+ * outside every emitted part at `alpha > OPAQUE_ALPHA_ABOVE` (issue #1297).
+ */
+export function measureFigureMask(
+  inside: Uint8Array,
+  fullRig: ReadonlyArray<{ tag: string; rig: Raster }>,
+  srcr: Raster,
+  parts: readonly PlacedPart[],
+  plan: readonly PlanEntry[],
+): FigureMaskReading {
+  const { width: W, height: H } = srcr;
+  const n = W * H;
+  let figurePx = 0;
+  for (let p = 0; p < n; p++) figurePx += inside[p];
+  const core = newMask(W, H);
+  for (const { rig } of fullRig) {
+    for (let p = 0; p < n; p++) {
+      if (rig.data[p * 4 + 3] >= CORE_ALPHA) core.data[p] = 1;
+    }
+  }
+  let corePx = 0;
+  for (let p = 0; p < n; p++) corePx += core.data[p];
+  const filledCore = fillHoles(core);
+  const unionRim = new Uint8Array(n);
+  const unionFar = new Uint8Array(n);
+  const layers: FigureRimLayer[] = [];
+  for (const { tag, rig } of fullRig) {
+    let rimPx = 0;
+    let farPx = 0;
+    let maskPx = 0;
+    for (let p = 0; p < n; p++) {
+      const a = rig.data[p * 4 + 3];
+      if (a > OPAQUE_ALPHA_ABOVE) maskPx++;
+      if (filledCore.data[p] === 0 && a > OPAQUE_ALPHA_ABOVE && a < COVERED_ALPHA) {
+        rimPx++;
+        unionRim[p] = 1;
+        if (maxDiff(rig.data, p * 4, srcr.data, p * 4) > ERROR_LIMIT) {
+          farPx++;
+          unionFar[p] = 1;
+        }
+      }
+    }
+    if (rimPx > 0) {
+      const part = plan.find(([, run, t]) => run === 'full' && t === tag)?.[0] ?? null;
+      layers.push({ tag, part, rimPx, farPx, maskPx });
+    }
+  }
+  layers.sort((a, b) => b.rimPx - a.rimPx || b.farPx - a.farPx || (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0));
+  let rimPx = 0;
+  let farPx = 0;
+  for (let p = 0; p < n; p++) {
+    rimPx += unionRim[p];
+    farPx += unionFar[p];
+  }
+  const partSupport = new Uint8Array(n);
+  for (const { image, record } of parts) {
+    for (let y = 0; y < record.h; y++) {
+      const ry = record.y + y;
+      if (ry < 0 || ry >= H) continue;
+      for (let x = 0; x < record.w; x++) {
+        const rx = record.x + x;
+        if (rx < 0 || rx >= W) continue;
+        if (image.data[(y * record.w + x) * 4 + 3] > OPAQUE_ALPHA_ABOVE) partSupport[ry * W + rx] = 1;
+      }
+    }
+  }
+  const outsideMask = newMask(W, H);
+  let alsoInRimPx = 0;
+  let rimOrOutsidePx = 0;
+  for (let p = 0; p < n; p++) {
+    const out = inside[p] === 1 && partSupport[p] === 0;
+    if (out) {
+      outsideMask.data[p] = 1;
+      if (unionRim[p] === 1) alsoInRimPx++;
+    }
+    if (unionRim[p] === 1 || out) rimOrOutsidePx++;
+  }
+  return {
+    figurePx,
+    corePx,
+    rimPx,
+    farPx,
+    layers,
+    outsideParts: summarizeKindMask(outsideMask),
+    alsoInRimPx,
+    rimOrOutsidePx,
+  };
+}
+
+/**
+ * The measurement line and per-layer rows when `assemble` writes
+ * `figure_rig.png` (issue #1297): the union `alpha >= CORE_ALPHA` core, the
+ * outer `alpha 9..127` soft rim and its pixels more than `ERROR_LIMIT` off the
+ * painting in the rig, the mask pixels outside every emitted part at
+ * `alpha > OPAQUE_ALPHA_ABOVE`, and one row per full-run layer with a nonzero
+ * rim count.
+ */
+export function figureMaskLines(m: FigureMaskReading, scene: string | null = null): string[] {
+  const outside =
+    m.outsideParts.px === 0 || m.outsideParts.largest === null
+      ? '0 px'
+      : `${m.outsideParts.px} px in ${m.outsideParts.count} component(s) (8-connected, largest ${m.outsideParts.largest.px} px at ${m.outsideParts.largest.x},${m.outsideParts.largest.y} ${m.outsideParts.largest.w}x${m.outsideParts.largest.h})`;
+  const head =
+    `${scene === null ? '' : `${scene}: `}figure mask (${FIGURE_MASK_FILE}): ` +
+    `core (alpha >= ${CORE_ALPHA}) ${m.corePx} px; ` +
+    `soft rim (alpha ${OPAQUE_ALPHA_ABOVE + 1}..${COVERED_ALPHA - 1} in the 4-connected exterior of the union alpha >= ${CORE_ALPHA} core): union ${m.rimPx} px, far (max channel > ${ERROR_LIMIT} from the painting in the rig) ${m.farPx} px; ` +
+    `outside all parts (no part at alpha > ${OPAQUE_ALPHA_ABOVE}): ${outside} (${m.alsoInRimPx} px also in rim, rim or outside ${m.rimOrOutsidePx} px); ` +
+    `measurement, no declared limit`;
+  return [
+    head,
+    ...m.layers.map(
+      (l) =>
+        `  figure rim full:${l.tag} (${l.part === null ? 'no full-run plan part' : `part "${l.part}"`}): rim ${l.rimPx} px, far ${l.farPx} px (of ${l.maskPx} layer mask px)`,
+    ),
+  ];
+}
+
 /** The `parts.json` `recomposite` block: the four figures, the limits they were measured at, and the listed holes. */
 export function recompositeRecord(f: RecompositeFigures): RecompositeRecord {
   return {
@@ -4868,6 +5025,8 @@ export interface AssembleResult {
   errorMap: Raster;
   /** Under `config.scene` (issue #242), the figure the recomposite was read inside ({@link figureImage}); null otherwise. */
   figure: Raster | null;
+  /** Under `config.scene` (issue #1297), the figure mask's soft rim and outside-all-parts counts; absent otherwise. */
+  figureMask?: FigureMaskReading;
   figures: RecompositeFigures;
   /** What each `assemble.cuts` entry took, counted when it was made (`cutLines`); empty without cuts. */
   cuts: CutCount[];
@@ -6569,8 +6728,10 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
   for (const group of [built, pieces, cutSources, limbPieces]) for (const b of group) if (b !== null) b.writers = undefined;
   const can = recomposite(placed, W, H);
   // Issue #242: on a scene painting the figure is read off the full run, and every recomposite figure inside it.
-  const inside = input.scene === true ? sceneFigure([...rig.entries()].filter(([k]) => k.startsWith('full:')).map(([, r]) => r), W, H) : null;
+  const fullRigAll = [...rig.entries()].filter(([k]) => k.startsWith('full:')).map(([k, r]) => ({ tag: k.slice('full:'.length), rig: r }));
+  const inside = input.scene === true ? sceneFigure(fullRigAll.map((l) => l.rig), W, H) : null;
   const sceneRecord: SceneRecord | null = inside === null ? null : { figure_alpha_above: OPAQUE_ALPHA_ABOVE, figure_px: inside.reduce((a, b) => a + b, 0), figure_mask: FIGURE_MASK_FILE };
+  const figureMask = inside === null ? undefined : measureFigureMask(inside, fullRigAll, srcr, placed, plan);
   const figures = measureRecomposite(can, srcr, placed, inside);
   const covered = coveredMask(placed, W, H);
   const err = errorMask(can, srcr, inside);
@@ -6627,6 +6788,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
     recomposite: can,
     errorMap: recompositeErrorMap(can, srcr, placed, inside),
     figure: inside === null ? null : figureImage(inside, W, H),
+    ...(figureMask === undefined ? {} : { figureMask }),
     figures,
     cuts: cutCounts,
     cutMaterial: [...cutMaterial, ...lim.material],

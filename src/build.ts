@@ -69,7 +69,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { type AnimFrame, EncodeError, encodeApng, encodeIndexedApng, INDEXED_DEFAULTS } from './apng.ts';
-import { assemble, type AssembleResult, boxOf, cutLines, edgeSplitLines, ERROR_LIMIT, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figuresLine, groundWarning, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine, underBox } from './assemble.ts';
+import { assemble, type AssembleResult, boxOf, cutLines, edgeSplitLines, ERROR_LIMIT, type ExcludedCount, excludedLines, setExclusions, islandLines, setIslandSources, type IslandCount, hiddenLines, SINGLE_RUN_FACE_TAGS, singleRunHeadBox, softOcclusionLine, driftLine, limbLines, FIGURE_MASK_FILE, figureMaskLines, figuresLine, groundWarning, holeKindsLine, holeLines, measurePinholes, measureRecomposite, pinholeProblems, pinholesLine, type ProjectRule, recomposite, recompositeRecord, scenePhrase, type SeamRule, sourceInRig, stageFields, uncoveredLine, underBox } from './assemble.ts';
 import { allocationClause, type Reducer, stageBClause, unboundedClause } from './automesh.ts';
 import { residualClause } from './autoenvelope.ts';
 import { type AutoMotionCase, failingRows, idleSchedule, localRow, motionClause, motionDeformation, motionDocument, motionInput, motionRowText, motionStimulus, motionVerdict, noStimulusProblem, prepareComparison, type ReplayCandidate, runComparison, runPreparedComparison, sourceSelfFailure, stimulusMotion, withStimulus } from './automotion.ts';
@@ -1210,6 +1210,7 @@ export function assembleStage(input: AssembleStageInput, outs: AssembleOutputs, 
   for (const l of holeLines(result.figures, scene)) log(l);
   if (result.figures.uncoveredErrorPx > 0) log(holeKindsLine(result.holeKinds, scene));
   for (const u of result.uncovered) log(uncoveredLine(u, scene));
+  if (result.figureMask !== undefined) for (const l of figureMaskLines(result.figureMask, scene)) log(l);
   log(pinholesLine(pinholes, altBuilt.map((b) => b.record.name)));
   for (const d of result.drift) log(driftLine(d));
   for (const d of result.softOcclusion ?? []) log(softOcclusionLine(d));
