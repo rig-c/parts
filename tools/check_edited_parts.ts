@@ -734,6 +734,57 @@ function checkFrontColourUnderFrontPart(dir: string, say: Say): void {
     stripEditedPart(join(coreBase, 'parts.json')) === stripEditedPart(join(coreEdited, 'parts.json')) &&
     readFileSync(join(coreEdited, 'parts', 'face.png')).equals(Buffer.from(faceEditedBytes)),
     `bodyBaseTaken=${bodyBaseTaken}; bodyEditedTaken=${bodyEditedTaken}; sameFilesExceptEdited=${sameFilesExceptEdited}; strippedPartsJsonEqual=${stripEditedPart(join(coreBase, 'parts.json')) === stripEditedPart(join(coreEdited, 'parts.json'))}`);
+
+  // Control 5 (single-run non-square 48x64 canvas on resolution 64, rig_scale 1 -> fullPad = (64 - 48) / 2 = 8, fullPadTop = 0):
+  // "body" (full:topwear) covers file/rig [4, 44) x [20, 56) (40x36 at x=4, y=20) in C=[100, 60, 40];
+  // "face" (full:face) covers file/rig [16, 36) x [8, 32) (20x24 at x=16, y=8) in F=[20, 140, 220].
+  // Planted edit on "body": local [24, 30) x [2, 6) = rig [4 + 24, 4 + 30) x [20 + 2, 20 + 6) = [28, 34) x [22, 26),
+  // 6 * 4 = 24 pixels painted in F under "face", expected count = 24 and box = [28, 22, 6, 4].
+  // Reading unpadded input[run].layers shifts "face" in the owner map by -fullPad (-8) to x in [8, 28),
+  // leaving [28, 34) x [22, 26) misattributed to "body" and reading 0 px.
+  const padDir = join(dir, 'padded-single-run'), padInputDir = join(padDir, 'input');
+  mkdirSync(padInputDir, { recursive: true });
+  writeRun(join(padInputDir, 'full'), [
+    { name: 'topwear', depth: 0.7, rects: [{ x0: 4, y0: 20, x1: 44, y1: 56, colour: C }] },
+    { name: 'face', depth: 0.5, rects: [{ x0: 16, y0: 8, x1: 36, y1: 32, colour: F }] },
+    { name: 'eyewhite-r', depth: 0.1, rects: [{ x0: 18, y0: 12, x1: 26, y1: 20, colour: F }] },
+    { name: 'eyewhite-l', depth: 0.05, rects: [{ x0: 26, y0: 12, x1: 34, y1: 20, colour: F }] },
+  ], 48);
+  const padLayersJson = json(join(padInputDir, 'full', 'layers.json'));
+  padLayersJson.width = 48; padLayersJson.height = 64;
+  save(join(padInputDir, 'full', 'layers.json'), padLayersJson);
+  writeFileSync(join(padInputDir, 'painting.png'), encodePngBytes(paint(48, 64, WHITE, [
+    { x0: 4, y0: 20, x1: 44, y1: 56, colour: C },
+    { x0: 16, y0: 8, x1: 36, y1: 32, colour: F },
+  ])));
+  const padCfg = assembleConfig({ plan: [['body', 'full', 'topwear'], ['face', 'full', 'face']], extend: [], rigScale: 1, resolution: 64 });
+  delete (padCfg.seethrough as Record<string, unknown>).head_box;
+  const padInput: Input = { source: join(padInputDir, 'painting.png'), full: join(padInputDir, 'full'), head: null, config: join(padInputDir, 'config.json'), part: 'body' };
+  save(padInput.config, padCfg);
+  const padBase = join(padDir, 'baseline');
+  run(padInput, padBase);
+  const padBodyOriginalBytes = readFileSync(join(padBase, 'parts', 'body.png'));
+  const padBodyOriginal = readPng(join(padBase, 'parts', 'body.png'));
+  const padBodyEdited = paintRect(padBodyOriginal, 24, 2, 30, 6, F);
+  const padBodyEditedBytes = editedPartPngBytes(padBodyEdited);
+  const padEditsDir = join(padDir, 'edits'); mkdirSync(padEditsDir, { recursive: true });
+  writeFileSync(join(padEditsDir, 'body.png'), padBodyEditedBytes);
+  const padReceipt: Receipt = { part: 'body', file: 'body.png', sha256: hash(padBodyEditedBytes), from_sha256: hash(padBodyOriginalBytes), editor: 'technical padded single-run fixture' };
+  const padEditedCfgFile = join(padDir, 'config-edited.json');
+  editedConfig(padInput, { dir: 'edits', receipts: [padReceipt] }, padEditedCfgFile);
+  const padAllLines: string[] = [];
+  const padResult = run(padInput, join(padDir, 'edited'), padEditedCfgFile, padAllLines);
+  const padFrontLines = padAllLines.filter(l => l.startsWith('  edited part front colour:'));
+  const expectedPadLine = '  edited part front colour: part "body" (edited_parts[0]) front owner "face" 24 px, box [28, 22, 6, 4] (within 40 of painting; measurement, no declared limit)';
+  const padReadings = padResult.editedPartFrontColours ?? [];
+  say('SINGLE_RUN_PADDED_CANVAS_FRONT_COLOUR_NAMES_PART_OWNER_COUNT_AND_BOX',
+    JSON.stringify(padResult.parts.single_run_pad) === '{"file_size":[48,64],"side":64,"left":8,"top":0}' &&
+    padFrontLines.length === 1 && padFrontLines[0] === expectedPadLine &&
+    padReadings.length === 1 && padReadings[0].part === 'body' && padReadings[0].px === 24 &&
+    JSON.stringify(padReadings[0].box) === '[28,22,6,4]' &&
+    JSON.stringify(padReadings[0].owners) === '[{"owner":"face","px":24,"box":[28,22,6,4]}]' &&
+    readFileSync(join(padDir, 'edited', 'recomposite_rig.png')).equals(readFileSync(join(padBase, 'recomposite_rig.png'))),
+    `single_run_pad=${JSON.stringify(padResult.parts.single_run_pad)}; readings=${JSON.stringify(padReadings)}; lines=${JSON.stringify(padFrontLines)}`);
 }
 
 /** Callable by the issue's separately coordinated public-example measurement; no art is embedded here. */

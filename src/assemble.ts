@@ -6177,7 +6177,7 @@ function assembleParts(input: AssembleInput, targets?: ReadonlySet<string>, befo
       keepByPlanPart = localKeep;
     }
     const rawPlan = input.plan.map(([name, run, tag]) => {
-      const layer = input[run].layers.find(l => l.name === tag)!;
+      const layer = (run === 'full' ? fullPadded : depthHeadInput).layers.find(l => l.name === tag)!;
       return { name, raster: layerToRigSplit(layer, input.resolution, frame, run, occluderCoreMasks), keep: keepByPlanPart.get(name) ?? null };
     });
     if ((input.edgeSplits?.length ?? 0) > 0) applyEdgeSplits(input.edgeSplits!, new Map(rawPlan.map(p => [p.name, p.raster])), srcr);
