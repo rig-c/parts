@@ -33,12 +33,18 @@ Every push of a `v*` tag runs `release.yml`:
 
 CI uses the shared core action at the commit pinned in the `uses:` lines of
 `.github/workflows/ci.yml` and `release.yml` (`rig-c/core/.github/actions/tree-verdict@<sha>`);
-those lines are the source of truth and this file does not repeat the SHA. On a default-branch push, a successful
-source run over an identical full Git tree can supply its verdict. The log names
+those lines are the source of truth and this file does not repeat the SHA. Lookup
+admits a consumer `push` on `refs/heads/main`, or a consumer `push` or
+`workflow_dispatch` on a single-segment `refs/tags/<name>` whose commit is on
+`main` (GitHub compare of `refs/heads/main...<consumer SHA>` returns `identical`
+or `behind`); a tag commit not on `main` reports the named miss
+`tag commit is not on the default branch` and runs the full fallback, and any
+other consumer ref or event runs the full gate. On an admitted run, a successful
+source run over an identical full Git tree can supply its verdict; a source
+`workflow_dispatch` run is never accepted as reusable evidence. The log names
 the source PR, API head, actual tested SHA and run ID. A PR's API head alone does
 not identify its synthetic merge checkout. Any missing receipt, tree difference,
-failed lookup or API error falls back to the full gate. Dispatches run the full
-gate.
+failed lookup or API error falls back to the full gate.
 
 `scripts/tree-verdict.json` is the sole lifecycle/2 declaration. It preserves the
 original typecheck, lint and selftest chain, with coverage aliases for the four
@@ -60,8 +66,9 @@ job. Its unconditional lifecycle reader precedes every pack or publish. Each
 tarball publication is declared in the workflow inventory, including its exact
 producer command. The canonical package and aliases are packed after the reader.
 A miss runs the chain once, and a verified hit skips it. Manual folder publication
-keeps its `prepublishOnly` gate. Dispatch republishing retains the full chain.
-Registry confirmation runs
+keeps its `prepublishOnly` gate. Both a tag push and a tag-ref dispatch republish
+on a commit on `main` can reuse a verified verdict for the same tree, falling back
+to the full chain on any miss. Registry confirmation runs
 after publication because registry state is external to the tested tree.
 
 ## The first publish, by hand
