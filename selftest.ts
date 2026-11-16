@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { blankRigcRunClock } from './fixtures/rigc_run_clock.ts';
+import { runRigcRunClockChecks } from './fixtures/rigc_run_clock_checks.ts';
 import { runPartsCheckChecks } from './fixtures/parts_check_checks.ts';
 import { runSourceCoverChecks } from './fixtures/source_cover_checks.ts';
 import { runPartsFileReferenceChecks } from './tools/parts_file_references.ts';
@@ -26663,6 +26664,8 @@ function sameOutputFiles(actual: readonly string[], expected: readonly string[])
 function runBuildSuite(): number {
   section('build: assemble, rig and check in one process, on generated runs');
   const { say: caseSay, bad } = counter();
+  runRigcRunClockChecks((name, ok, detail) => caseSay(name, ok, detail,
+    'issue #1277: host separators must not bypass clock normalisation; all non-clock bytes remain compared'));
   const captured: Array<{ args: string[]; status: number | null; stdout: string | null; stderr: string | null; error?: string }> = [];
   const runBuildCli = (args: string[]): { status: number; out: string } => {
     const forwarded = selftestCliArgs(args);
