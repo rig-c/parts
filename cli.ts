@@ -74,7 +74,7 @@ const HELP = `rig-parts ${version()} — Spine-ready parts from one painting and
 
 usage:
   rig-parts diff-components --stack <png> --painting <png> --parts <parts.json> --floor <px>
-      [--threshold <channel>] [--figure <binary-png>] (--out <json> | --verify <json>)
+      [--threshold <channel>] [--figure <binary-png>] [--owners] (--out <json> | --verify <json>)
       Exhaustive native difference inventory; default max RGB channel > 40.
 
 
@@ -1079,7 +1079,15 @@ function usage(message: string): number {
 }
 
 function cmdDiffComponents(args: string[]): number {
+  const switches: readonly string[] = TAKES['diff-components'].switches;
+  const seen = new Set<string>();
   for (let i = 0; i < args.length; i += 2) {
+    if (switches.includes(args[i])) {
+      if (seen.has(args[i])) return usage(`${args[i]} is given twice`);
+      seen.add(args[i]);
+      i--;
+      continue;
+    }
     if (!takesValued('diff-components', args[i])) return usage(notTaken('diff-components', args[i]));
     if (args[i + 1] === undefined || args[i + 1].startsWith('--')) return usage(`diff-components ${args[i]} requires a value`);
   }
@@ -1175,7 +1183,7 @@ function printLayerTable(set: LayerSet): void {
  */
 const TAKES = {
   'check-parts': { valued: ['--parts', '--out'], switches: ['--json'] },
-  'diff-components': { valued: ['--stack', '--painting', '--parts', '--figure', '--floor', '--threshold', '--out', '--verify'], switches: [] },
+  'diff-components': { valued: ['--stack', '--painting', '--parts', '--figure', '--floor', '--threshold', '--out', '--verify'], switches: ['--owners'] },
   'depth-bind': { valued: ['--map', '--input', '--part'], switches: [] },
   'depth-prepare': { valued: ['--parts', '--config', '--out'], switches: [] },
   'depth-apply': { valued: ['--parts', '--manifest', '--config', '--rig-config', '--out'], switches: [] },

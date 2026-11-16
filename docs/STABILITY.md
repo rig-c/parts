@@ -245,7 +245,7 @@ defaults are the help's too, and none is guessed from the art.
 <!-- stable:commands -->
 | command | flags |
 | --- | --- |
-| `diff-components` | `--stack`, `--painting`, `--parts`, `--floor`; optional `--threshold`, `--figure`; exactly one of `--out`, `--verify` (issue #1005; exhaustive native error inventory, with byte-bound reader) |
+| `diff-components` | `--stack`, `--painting`, `--parts`, `--floor`; optional `--threshold`, `--figure`, `--owners`; exactly one of `--out`, `--verify` (issues #1005, #1291; exhaustive native error inventory, `rig-parts-diff-components/1` by default and `rig-parts-diff-components/2` with `--owners`, and byte-bound reader for both) |
 | `depth-prepare` | `--parts`, `--config`, `--out` (issue #897; separate numeric-depth recipe) |
 | `depth-bind` | `--map`, `--input`, `--part` (issue #1284; exclusive receipt creation from current file bytes) |
 | `depth-apply` | `--parts`, `--manifest`, `--config`, `--rig-config`, `--out` (issue #897; original character config is read-only) |
@@ -701,6 +701,7 @@ execution in historical evidence is inferred from a current export.
 | the scene report | `compose` | spec `spine-parts-scene-report/1`; the plate block carries `sha256` of the plate PNG's bytes after `size` (issue #1183, additive under *What "stable" means here*: a new report key in a minor version, so the spec stays `/1`) |
 | `idle.png`, `idle-indexed.png`, `idle.gif` | `loop`, `build --loop` | APNG and GIF encodings of the rendered idle |
 | `run.json` | `rig`, `assemble` | spec `rig-run/1` (issue #1165, additive): `spec`, `package` (`name`, `version`), `command` (`"rig"` or `"assemble"`), `started_at` and `finished_at` (UTC ISO-8601 millisecond timestamps ending in `Z`, read in the CLI layer), `config` (`path` relative to `--out`, `sha256` of the config file on disk), and `outputs` (`path` relative to `--out`, `sha256` of each written output file on disk, sorted by `path` in code-unit order and excluding `run.json` itself); written only after the command's gate is green |
+| the difference inventory (`--out`) | `diff-components` | spec `rig-parts-diff-components/1` by default (issue #1005: `stack`, `painting`, `definition`, `error_px`, `uncovered_error_px`, `components` — each `id`, `px`, `box`, `coverage`, `uncovered_px`, `borders` — and `below_floor`, byte-identical to 2.38.1), and spec `rig-parts-diff-components/2` under `--owners` (issue #1291: adds `owners` — each `{part, px}`, the topmost `parts.json` part above `COVERED_ALPHA` per covered pixel, back to front — before `borders` on every component); `--verify` verifies both `/1` and `/2` reports (with `--owners`, `/2` is required), while a `/1`-only reader (`readDiffComponents(text, input, [DIFF_COMPONENTS_SPEC])`) refuses `/2` by name |
 
 Issue #705 pins setup-seam acceptance to one source-relative scale1 union U of the authored stage and all actual drawn base/checked-set still vertices. U is snapped relative to the source origin, including odd-width half phase.
 The existing seam fields and pair pictures use that grid; source/blink and

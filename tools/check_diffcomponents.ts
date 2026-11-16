@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { assemble, recomposite, stageFields, sourceInRig, measureRecomposite, errorMask, type PlacedPart } from '../src/assemble.ts';
-import { measureDiffComponents, readDiffComponents, serializeDiffComponents, type DiffInputs, type DiffComponentsReport } from '../src/diffcomponents.ts';
+import { assemble, recomposite, stageFields, sourceInRig, measureRecomposite, errorMask, ERROR_LIMIT, type PlacedPart } from '../src/assemble.ts';
+import { DIFF_COMPONENTS_SPEC, DIFF_COMPONENTS_OWNERS_SPEC, measureDiffComponents, readDiffComponents, serializeDiffComponents, type DiffInputs, type DiffComponentsReport } from '../src/diffcomponents.ts';
 import { PartsError } from '../src/errors.ts';
 import { encodePngBytes, readPng } from '../src/raster/png.ts';
 import { newRaster } from '../src/raster/types.ts';
@@ -59,6 +59,40 @@ export function runDiffComponentChecks(say: Say): void {
   say('AS851_DIFF_READER_NAMES_ALL_CHANGED_MISSING_AND_EXTRA_FIELDS',overflowNamed && escaped?.problems.length===1 && escaped.problems[0].object==='report['+JSON.stringify(escapedKey)+']' && !escaped.problems[0].object.includes('\n') && !escaped.problems[0].detail.includes('\n') && fields?.problems.length===2 && fields.problems.map(p=>p.object).join(',')==='report.components[0].px,report.below_floor.px' && fields.problems[0].detail.includes('found 3; required 2') && fields.problems[1].detail.includes('found 2; required 1') && missingFields?.problems.length===2 && missingFields.problems.some(p=>p.object==='report.components[0].box' && p.detail.includes('found missing; required {')) && missingFields.problems.some(p=>p.object==='report.components[0].unexpected' && p.detail.includes('found 7; required missing')), JSON.stringify({changed:fields?.problems,missingExtra:missingFields?.problems,escaped:escaped?.problems,overflow:overflow?.problems}));
   const empty = measureDiffComponents({...input,painting:input.stack},1);
   say('AS849_DIFF_EMPTY_INVENTORY_AND_STRICT_THRESHOLD_HAVE_POSITIVE_CONTROLS', empty.error_px===0 && empty.components.length===0 && empty.below_floor.px===0 && readDiffComponents(serializeDiffComponents(empty),{...input,painting:input.stack}).error_px===0 && measureDiffComponents(input,1,254).error_px===15, 'equal bytes: zero inventory; max difference 255 is strictly above 254');
+  const overlapPaint = newRaster(20, 5); overlapPaint.data.fill(255);
+  for (const [x, y] of [[1, 1], [1, 2], [5, 1], [6, 1], [5, 2], [16, 1], [17, 1], [8, 3], [9, 3], [10, 3]]) overlapPaint.data.set([0, 0, 0, 255], (y * 20 + x) * 4);
+  const backImg = newRaster(10, 5); backImg.data.fill(255);
+  const frontImg = newRaster(10, 5); frontImg.data.fill(255); frontImg.data[(3 * 10 + 4) * 4 + 3] = 128;
+  const backPart: PlacedPart = { record: { ...EXPECTED_PARTS.parts[0], name: 'back', x: 0, y: 0, w: 10, h: 5 }, image: backImg };
+  const frontPart: PlacedPart = { record: { ...EXPECTED_PARTS.parts[0], name: 'front', x: 4, y: 0, w: 10, h: 5 }, image: frontImg };
+  const overlapStack = recomposite([backPart, frontPart], 20, 5);
+  const overlapOut = measureDiffComponents({ stack: { path: 's.png', bytes: encodePngBytes(overlapStack) }, painting: { path: 'p.png', bytes: encodePngBytes(overlapPaint) }, parts: [backPart, frontPart], inside: null }, 1, ERROR_LIMIT, true);
+  const rOwners = measureDiffComponents(input, 2, ERROR_LIMIT, true), v2Text = serializeDiffComponents(rOwners);
+  say('AS852_DIFF_OWNERS_NAME_TOPMOST_PARTS_BACK_TO_FRONT_AND_UNCOVERED_NAMES_NONE',
+    overlapOut.spec === DIFF_COMPONENTS_OWNERS_SPEC &&
+    overlapOut.components.length === 4 &&
+    overlapOut.components[0].id === 'p21-n2' && JSON.stringify(overlapOut.components[0].owners) === JSON.stringify([{ part: 'back', px: 2 }]) &&
+    overlapOut.components[1].id === 'p25-n3' && JSON.stringify(overlapOut.components[1].owners) === JSON.stringify([{ part: 'front', px: 3 }]) &&
+    overlapOut.components[2].id === 'p36-n2' && overlapOut.components[2].coverage === 'uncovered' && JSON.stringify(overlapOut.components[2].owners) === '[]' &&
+    overlapOut.components[3].id === 'p68-n3' && JSON.stringify(overlapOut.components[3].owners) === JSON.stringify([{ part: 'back', px: 1 }, { part: 'front', px: 2 }]) &&
+    JSON.stringify(rOwners.components[0].owners) === JSON.stringify([{ part: 'marker', px: 1 }]) &&
+    rOwners.components.slice(1).every(c => c.owners?.length === 0),
+    JSON.stringify(overlapOut.components.map(c => ({ id: c.id, coverage: c.coverage, owners: c.owners }))));
+  const strippedV2 = serializeDiffComponents({ ...rOwners, spec: DIFF_COMPONENTS_SPEC, components: rOwners.components.map(({ owners: _, ...rest }) => rest) });
+  const v1OnlyCaught = caught(() => readDiffComponents(v2Text, input, [DIFF_COMPONENTS_SPEC]));
+  const mainLine2381 = (rawSpec: unknown): string | null => rawSpec !== DIFF_COMPONENTS_SPEC ? `spec is ${JSON.stringify(rawSpec)}; ${DIFF_COMPONENTS_SPEC} is required` : null;
+  const ownerMutant = caught(() => readDiffComponents(JSON.stringify({ ...rOwners, components: rOwners.components.map((c, i) => i === 0 ? { ...c, owners: [{ part: 'marker', px: 2 }] } : c) }), input));
+  say('AS853_DIFF_DEFAULT_V1_BYTES_HOLD_BOTH_VERSIONS_VERIFY_AND_V1_ONLY_READER_REFUSES_V2',
+    r.spec === DIFF_COMPONENTS_SPEC &&
+    r.components.every(c => !('owners' in c)) &&
+    text === strippedV2 &&
+    readDiffComponents(text, input).spec === DIFF_COMPONENTS_SPEC &&
+    readDiffComponents(v2Text, input).spec === DIFF_COMPONENTS_OWNERS_SPEC &&
+    v1OnlyCaught?.problems.length === 1 && v1OnlyCaught.problems[0].code === 'DIFF_COMPONENTS_REPORT' &&
+    v1OnlyCaught.problems[0].detail === 'spec is "rig-parts-diff-components/2"; rig-parts-diff-components/1 is required' &&
+    mainLine2381((JSON.parse(v2Text) as { spec: unknown }).spec) === v1OnlyCaught.problems[0].detail &&
+    ownerMutant?.problems.some(p => p.code === 'DIFF_COMPONENTS_REPORT' && p.object === 'report.components[0].owners[0].px') === true,
+    JSON.stringify({ defaultSpec: r.spec, v2Spec: rOwners.spec, v1Only: v1OnlyCaught?.problems, ownerMutant: ownerMutant?.problems }));
 }
 export function runDiffComponentCliChecks(dir: string, say: Say, cli: string): void {
   const fixture = join(dir,'diff-fixture');
@@ -124,12 +158,24 @@ export function runDiffComponentCliChecks(dir: string, say: Say, cli: string): v
   const retained = good.status===0 && readFileSync(out,'utf8')===emitted;
   const missing = run(['diff-components','--floor','1']);
   const unknown = run([...base,'--unknown','value','--out',out]);
-  say('CL830_DIFF_COMMAND_WRITES_VERIFIES_AND_REFUSES_MISSING_UNKNOWN_OR_EMPTY_FLAGS',figureOk && wrongDomain?.status===1 && wrongDomain.stdout.includes('DIFF_COMPONENTS_REPORT') && wrongSize.status===1 && wrongSize.stdout.includes('is 1x1') && wrongSize.stdout.includes(`painting ${EXPECTED_PARTS.rig_size[0]}x${EXPECTED_PARTS.rig_size[1]} is required`) && badPixels.every(r=>r.status===1 && r.stdout.includes('DIFF_COMPONENTS_INPUT') && r.stdout.includes('pixel 0,0')) && good.status===0 && verified?.status===0 && report?.error_px===assembled.figures.errorPx && report?.error_px===EXPECTED_PARTS.recomposite.error_px && missing.status===1 && missing.stdout.includes('DIFF_COMPONENTS_INPUT') && unknown.status===2 && blank.status===1 && blank.stdout.includes('DIFF_COMPONENTS_INPUT') && whitespace.status===1 && whitespace.stdout.includes('DIFF_COMPONENTS_INPUT') && emptyOut.status===1 && emptyOut.stdout.includes('DIFF_COMPONENTS_INPUT') && missingParent.status===1 && missingParent.stdout.includes('DIFF_COMPONENTS_INPUT') && badPolicy.status===1 && badPolicy.stdout.includes('a finite channel threshold') && retained, `write=${good.status}, verify=${verified?.status}, errors=${report?.error_px}, missing=${missing.status}, unknown=${unknown.status}, blank=${blank.status}, whitespace=${whitespace.status}, native figure=${figureOk}, wrong domain=${wrongDomain?.status}, wrong size=${wrongSize.status}, bad pixels=${badPixels.map(r=>r.status).join(",")}, empty output=${emptyOut.status}, missing parent=${missingParent.status}, invalid verify policy=${badPolicy.status}, emitted bytes retained=${retained}; ${[good.stdout,good.stderr].join(' ').replace(/\s+/g,' ').trim()}`);
+  const ownersOut = join(dir, 'owners-diff.json');
+  const ownersWrite = run([...base, '--owners', '--out', ownersOut]);
+  const ownersVerify = ownersWrite.status === 0 ? run([...base, '--verify', ownersOut]) : null;
+  const ownersFlagVerify = ownersWrite.status === 0 ? run([...base, '--owners', '--verify', ownersOut]) : null;
+  const v1WithOwnersFlag = good.status === 0 ? run([...base, '--owners', '--verify', out]) : null;
+  const dupOwners = run([...base, '--owners', '--owners', '--out', ownersOut]);
+  const expectedOwnersBytes = serializeDiffComponents(measureDiffComponents({
+    stack:{path:join(dir,'diff-stack.png'),bytes:readFileSync(join(dir,'diff-stack.png'))},
+    painting:{path:join(dir,'diff-painting.png'),bytes:readFileSync(join(dir,'diff-painting.png'))},
+    parts:assembled.images,inside:null,
+  }, 1, ERROR_LIMIT, true));
+  const ownersOk = ownersWrite.status === 0 && readFileSync(ownersOut, 'utf8') === expectedOwnersBytes && ownersVerify?.status === 0 && ownersFlagVerify?.status === 0 && v1WithOwnersFlag?.status === 1 && v1WithOwnersFlag.stdout.includes('DIFF_COMPONENTS_REPORT') && v1WithOwnersFlag.stdout.includes('spec is "rig-parts-diff-components/1"; rig-parts-diff-components/2 is required') && dupOwners.status === 2;
+  say('CL830_DIFF_COMMAND_WRITES_VERIFIES_AND_REFUSES_MISSING_UNKNOWN_OR_EMPTY_FLAGS',figureOk && ownersOk && wrongDomain?.status===1 && wrongDomain.stdout.includes('DIFF_COMPONENTS_REPORT') && wrongSize.status===1 && wrongSize.stdout.includes('is 1x1') && wrongSize.stdout.includes(`painting ${EXPECTED_PARTS.rig_size[0]}x${EXPECTED_PARTS.rig_size[1]} is required`) && badPixels.every(r=>r.status===1 && r.stdout.includes('DIFF_COMPONENTS_INPUT') && r.stdout.includes('pixel 0,0')) && good.status===0 && verified?.status===0 && report?.error_px===assembled.figures.errorPx && report?.error_px===EXPECTED_PARTS.recomposite.error_px && missing.status===1 && missing.stdout.includes('DIFF_COMPONENTS_INPUT') && unknown.status===2 && blank.status===1 && blank.stdout.includes('DIFF_COMPONENTS_INPUT') && whitespace.status===1 && whitespace.stdout.includes('DIFF_COMPONENTS_INPUT') && emptyOut.status===1 && emptyOut.stdout.includes('DIFF_COMPONENTS_INPUT') && missingParent.status===1 && missingParent.stdout.includes('DIFF_COMPONENTS_INPUT') && badPolicy.status===1 && badPolicy.stdout.includes('a finite channel threshold') && retained, `write=${good.status}, verify=${verified?.status}, ownersOk=${ownersOk}, errors=${report?.error_px}, missing=${missing.status}, unknown=${unknown.status}, blank=${blank.status}, whitespace=${whitespace.status}, native figure=${figureOk}, wrong domain=${wrongDomain?.status}, wrong size=${wrongSize.status}, bad pixels=${badPixels.map(r=>r.status).join(",")}, empty output=${emptyOut.status}, missing parent=${missingParent.status}, invalid verify policy=${badPolicy.status}, emitted bytes retained=${retained}; ${[good.stdout,good.stderr].join(' ').replace(/\s+/g,' ').trim()}`);
 }
 /** Public recipe control: every mask pixel agrees with the count's own RGB predicate and domain. */
 export function publicDiffControl(stack: Parameters<typeof errorMask>[0], painting: Parameters<typeof errorMask>[1], parts: PlacedPart[], inside: Uint8Array | null): { ok: boolean; detail: string } {
   const input: DiffInputs = { stack:{path:'stack.png',bytes:encodePngBytes(stack)},painting:{path:'painting.png',bytes:encodePngBytes(painting)},parts,inside };
-  const r = measureDiffComponents(input,1), f = measureRecomposite(stack,painting,parts,inside), mask = errorMask(stack,painting,inside);
+  const r = measureDiffComponents(input,1), r2 = measureDiffComponents(input,1,ERROR_LIMIT,true), f = measureRecomposite(stack,painting,parts,inside), mask = errorMask(stack,painting,inside);
   let same = true, count = 0;
   for (let p=0;p<mask.length;p++) {
     const want = (inside===null || inside[p]!==0) && Math.max(...[0,1,2].map(c=>Math.abs(stack.data[p*4+c]-painting.data[p*4+c])))>40 ? 1 : 0;
@@ -137,5 +183,6 @@ export function publicDiffControl(stack: Parameters<typeof errorMask>[0], painti
     count+=mask[p];
   }
   const total = r.components.reduce((n,c)=>n+c.px,0)+r.below_floor.px, uncovered=r.components.reduce((n,c)=>n+c.uncovered_px,0)+r.below_floor.uncovered_px;
-  return {ok:same && count===f.errorPx && total===f.errorPx && uncovered===f.uncoveredErrorPx && serializeDiffComponents(r)===serializeDiffComponents(measureDiffComponents(input,1)),detail:`diff components=${r.components.length}, px=${total}/${f.errorPx}, uncovered=${uncovered}/${f.uncoveredErrorPx}, predicate pixel agreement=${same}, domain=${inside===null?'whole':'figure'}`};
+  const ownersAddUp = r.spec === DIFF_COMPONENTS_SPEC && r.components.every(c => !('owners' in c)) && r2.spec === DIFF_COMPONENTS_OWNERS_SPEC && r2.components.every(c => (c.owners?.reduce((n, o) => n + o.px, 0) ?? -1) === c.px - c.uncovered_px);
+  return {ok:same && ownersAddUp && count===f.errorPx && total===f.errorPx && uncovered===f.uncoveredErrorPx && serializeDiffComponents(r)===serializeDiffComponents(measureDiffComponents(input,1)),detail:`diff components=${r.components.length}, px=${total}/${f.errorPx}, uncovered=${uncovered}/${f.uncoveredErrorPx}, ownersAddUp=${ownersAddUp}, predicate pixel agreement=${same}, domain=${inside===null?'whole':'figure'}`};
 }
