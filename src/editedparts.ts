@@ -10,6 +10,7 @@ import { decodePngBytes, encodePngBytes } from './raster/png.ts';
 import type { Mask, Raster } from './raster/types.ts';
 import type { PlacedPart } from './assemble.ts';
 import type { PartDepthReference } from './depthsheets.ts';
+import type { PaintingOwner } from './paintingowner.ts';
 
 export interface EditedPartReceipt extends EditorReceipt { part: string }
 export interface EditedParts { dir: string; receipts: EditedPartReceipt[] }
@@ -28,6 +29,20 @@ export interface EditedPartProvenance {
   changed_counted_px: number;
   changed_excluded_px: number;
   removed_opaque_px: number;
+}
+export interface EditedPartFrontColourOwner {
+  owner: string;
+  px: number;
+  /** Rig-pixel bounding box [x, y, w, h] of changed/added pixels under this front owner within ERROR_LIMIT of the painting. */
+  box: [number, number, number, number];
+}
+export interface EditedPartFrontColourReading {
+  edit: string;
+  part: string;
+  px: number;
+  /** Rig-pixel bounding box [x, y, w, h] across all front owners, or null when px === 0. */
+  box: [number, number, number, number] | null;
+  owners: EditedPartFrontColourOwner[];
 }
 /** Only held for an edited build, including its region-take counterfactual. */
 export interface EditedPartContext {
@@ -83,7 +98,16 @@ function reader(runs: ReadonlyArray<readonly [number, number]>): () => number {
 }
 
 /** Validate every baseline before replacing any image. No output writes here. */
-export function replaceEditedParts(placed: PlacedPart[], edits: readonly VerifiedEditedPart[], plan: ReadonlySet<string>, map: StageMap, contexts: ReadonlyMap<PlacedPart, EditedPartContext>): void {
+export function replaceEditedParts(
+  placed: PlacedPart[],
+  edits: readonly VerifiedEditedPart[],
+  plan: ReadonlySet<string>,
+  map: StageMap,
+  contexts: ReadonlyMap<PlacedPart, EditedPartContext>,
+  painting: Raster,
+  owner: PaintingOwner,
+  errorLimit: number,
+): EditedPartFrontColourReading[] {
   const problems: Problem[] = [], seen = new Set<string>();
   for (const edit of edits) {
     const { receipt, image } = edit, part = placed.find(p => p.record.name === receipt.part);
@@ -101,6 +125,7 @@ export function replaceEditedParts(placed: PlacedPart[], edits: readonly Verifie
     if (actual !== receipt.sha256) problems.push({ code: 'ASSEMBLE_EDITED_PART_SHA256', object, detail: `edited bytes sha256 is ${actual}; receipt sha256 ${receipt.sha256} is required` });
   }
   refuseIfAny(problems);
+  const readings: EditedPartFrontColourReading[] = [];
   for (const edit of edits) {
     const part = placed.find(p => p.record.name === edit.receipt.part)!;
     const old = part.image, record = part.record, context = contexts.get(part)!;
@@ -118,6 +143,9 @@ export function replaceEditedParts(placed: PlacedPart[], edits: readonly Verifie
       ...(record.provenance?.depth === undefined ? {} : { depth: record.provenance.depth }), edited_part: metadata };
     const counts = new Map<number, number>();
     let opaque = 0, visible = 0, projected = 0, paintingGain = 0;
+    const partOwnerIndex = owner.names.indexOf(record.name);
+    const byOwner = new Map<number, { px: number; left: number; top: number; right: number; bottom: number }>();
+    let frontColourPx = 0, fcLeft = map.rig_size[0], fcTop = map.rig_size[1], fcRight = 0, fcBottom = 0;
     const baseline = context.baseline;
     for (let p = 0; p < old.width * old.height; p++) {
       const offset = p * 4, prior = previous(), priorSeam = preSeam();
@@ -132,6 +160,34 @@ export function replaceEditedParts(placed: PlacedPart[], edits: readonly Verifie
       opaque++;
       const x = record.x + p % record.w, y = record.y + Math.floor(p / record.w);
       const q = y * map.rig_size[0] + x;
+      if (changed && partOwnerIndex >= 0) {
+        const ownerIndex = owner.pixels[q];
+        if (ownerIndex > partOwnerIndex) {
+          const qOffset = q * 4;
+          const dMax = Math.max(
+            Math.abs(edit.image.data[offset] - painting.data[qOffset]),
+            Math.abs(edit.image.data[offset + 1] - painting.data[qOffset + 1]),
+            Math.abs(edit.image.data[offset + 2] - painting.data[qOffset + 2]),
+          );
+          if (dMax <= errorLimit) {
+            frontColourPx++;
+            if (x < fcLeft) fcLeft = x;
+            if (y < fcTop) fcTop = y;
+            if (x + 1 > fcRight) fcRight = x + 1;
+            if (y + 1 > fcBottom) fcBottom = y + 1;
+            const prev = byOwner.get(ownerIndex);
+            if (prev === undefined) {
+              byOwner.set(ownerIndex, { px: 1, left: x, top: y, right: x + 1, bottom: y + 1 });
+            } else {
+              prev.px++;
+              if (x < prev.left) prev.left = x;
+              if (y < prev.top) prev.top = y;
+              if (x + 1 > prev.right) prev.right = x + 1;
+              if (y + 1 > prev.bottom) prev.bottom = y + 1;
+            }
+          }
+        }
+      }
       if (context.visible?.data[q] === 1) visible++;
       if (context.visible?.data[q] === 1 && context.projected?.data[q] === 1) projected++;
       if (context.paintingGain?.data[q] === 1) paintingGain++;
@@ -164,5 +220,29 @@ export function replaceEditedParts(placed: PlacedPart[], edits: readonly Verifie
     part.image = edit.image;
     part.encodedBytes = edit.bytes;
     map.parts[map.parts.indexOf(stage)] = next;
+    const owners: EditedPartFrontColourOwner[] = [...byOwner.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([ownerIndex, b]) => ({
+        owner: owner.names[ownerIndex],
+        px: b.px,
+        box: [b.left, b.top, b.right - b.left, b.bottom - b.top],
+      }));
+    readings.push({
+      edit: name,
+      part: record.name,
+      px: frontColourPx,
+      box: frontColourPx === 0 ? null : [fcLeft, fcTop, fcRight - fcLeft, fcBottom - fcTop],
+      owners,
+    });
   }
+  return readings;
+}
+
+/** Measurement-only lines for front-part painting colour carried by an edited part (#1290). */
+export function editedPartFrontColourLines(readings: readonly EditedPartFrontColourReading[], errorLimit: number): string[] {
+  return readings.flatMap(r =>
+    r.owners.length === 0
+      ? [`  edited part front colour: part "${r.part}" (${r.edit}) 0 px, front owner none, box none (within ${errorLimit} of painting; measurement, no declared limit)`]
+      : r.owners.map(o => `  edited part front colour: part "${r.part}" (${r.edit}) front owner "${o.owner}" ${o.px} px, box [${o.box.join(', ')}] (within ${errorLimit} of painting; measurement, no declared limit)`),
+  );
 }
