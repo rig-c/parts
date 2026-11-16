@@ -7247,7 +7247,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         animations[BLINK_ANIMATION] = {
           duration: STILL_DURATION,
           loop: false,
-          tracks: shut.map((b) => ({ ...b.target, property: 'scaley', keys: [{ t: 0, v: [b.closed] }, { t: STILL_DURATION, v: [b.closed] }] })),
+          tracks: shut.filter((b, i) => shut.findIndex(a => JSON.stringify(a.target) === JSON.stringify(b.target)) === i).map((b) => ({ ...b.target, property: 'scaley', keys: [{ t: 0, v: [b.closed] }, { t: STILL_DURATION, v: [b.closed] }] })),
         };
       }
       const stillRig = { ...withoutSliders(inp.rig, animations), images };
@@ -9159,21 +9159,37 @@ function blinkLine(
   const box = frameBox(eyes, H, inp.stage, open.viewport);
   if (box === null) return skip('the eye box falls outside the setup-pose frame');
   const b = blinkFigures(open.frames[0].image, closed.frames[0].image, open.background, box, BLINK_PATCH_LEVEL);
-  const from = Math.max(...shut.map((s) => s.window[0]));
-  const to = Math.min(...shut.map((s) => s.window[1]));
-  const frames = framesInside(from, to, idle.fps, idle.sampled);
+  // Separate closed runs on each eye target before intersecting targets.
+  // An open interval between authored blinks must never count as closed.
+  const byTarget = new Map<string, typeof shut>();
+  for (const track of shut) {
+    const key = JSON.stringify(track.target);
+    const list = byTarget.get(key) ?? [];
+    list.push(track);
+    byTarget.set(key, list);
+  }
+  const targets = [...byTarget.values()];
+  let windows = (targets[0] ?? []).map(t => ({ from: t.window[0], to: t.window[1] }));
+  for (const target of targets.slice(1)) {
+    windows = windows.flatMap(w => target.map(t => ({ from: Math.max(w.from, t.window[0]), to: Math.min(w.to, t.window[1]) })).filter(w => w.from <= w.to));
+  }
+  windows.sort((a, b) => a.from - b.from || a.to - b.to);
+  const perBlink = windows.map(w => framesInside(w.from, w.to, idle.fps, idle.sampled));
+  const frames = [...new Set(perBlink.flat())].sort((a, b) => a - b);
   if (b.holePx > BLINK_HOLE_BAR) {
-    problems.push({
+    // A missing common interval must not suppress a measured hole refusal.
+    (targets[0] ?? [null]).forEach((_, i) => problems.push({
       code: 'CHECK_BLINK_NO_HOLE',
-      object: `the eye box ${boxLabel(box)} (${quoteParts(eyes)}) with the eyes shut`,
+      object: `the eye box ${boxLabel(box)} (${quoteParts(eyes)}) with the eyes shut${(targets[0]?.length ?? 0) > 1 ? ` at ${i === 0 ? 'blink.t' : `blink.more[${i - 1}]`}` : ''}`,
       detail: `${b.holePx} px show the background where the open eye had art; ${BLINK_HOLE_BAR} is required — the layer under the eye has no art there (See-through left it empty), so a closed eye opens a hole`,
-    });
+    }));
   }
   return {
     status: b.holePx > BLINK_HOLE_BAR ? 'FAIL' : 'PASS',
     eye_parts: eyes.map((p) => p.name),
     closed: shut.map((s) => `${'bone' in s.target ? `bone ${s.target.bone}` : `group ${s.target.group}`} scaley ${s.closed} from ${s.window[0]}s to ${s.window[1]}s`),
     idle_frames_closed: frames,
+    ...(windows.length > 1 ? { idle_frames_closed_per_blink: perBlink } : {}),
     box_px: b.px,
     hole_px: b.holePx,
     hole_bar: BLINK_HOLE_BAR,

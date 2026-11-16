@@ -672,7 +672,7 @@ export interface BlinkTrack {
   target: { bone: string } | { group: string };
   /** The smallest `scaley` it keys — the closed eye. */
   closed: number;
-  /** The first and last key time at that value. */
+  /** One contiguous run of keys at that value, never spanning an open interval. */
   window: [number, number];
 }
 
@@ -712,8 +712,12 @@ export function blinkTracks(motion: Record<string, unknown>, eyes: ReadonlySet<s
     if (target === null || keys === null || keys.length === 0) continue;
     const closed = Math.min(...keys.map((k) => k.v[0]));
     if (!(closed < keys[0].v[0])) continue;
-    const at = keys.filter((k) => k.v[0] === closed).map((k) => k.t);
-    out.push({ target, closed, window: [at[0], at[at.length - 1]] });
+    for (let i = 0; i < keys.length; i++) {
+      if (keys[i].v[0] !== closed) continue;
+      const from = keys[i].t;
+      while (i + 1 < keys.length && keys[i + 1].v[0] === closed) i++;
+      out.push({ target, closed, window: [from, keys[i].t] });
+    }
   }
   return out;
 }
