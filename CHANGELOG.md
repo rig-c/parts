@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.39.0 (2026-11-17)
+
+### Features
+
+* **depth:** add `rig-parts depth-bind --map <json> --input <prepared.png> --part <name>`, which writes a `<map>.binding.json` receipt (`rig-parts-depth-map-binding/1`: `spec`, `part`, `mapSha256`, `inputSha256`) beside a provider depth map and never overwrites one. `depth-apply` checks a present receipt before any output and refuses with `DEPTH_MAP_BINDING` when the map or prepared input differs, writing nothing; a map with no receipt keeps its output bytes and exit and adds one dated `DEPTH_MAP_BINDING_ABSENT` warning (`#1284`, `#1293`, `4a0edd2`).
+* **assemble:** print one `edited part front colour:` line per receipted edited part, counting changed or added pixels that carry the painting colour of a part drawn in front, with each front owner, its pixel count and rig-pixel box. The line is a measurement and never passes or refuses; `parts.json` and configs without `edited_parts` are unchanged (`#1290`, `#1296`, `84ad031`).
+
+### Documentation
+
+* **authoring:** state that `depth-apply` relocates every reference `configFileReferences()` declares, `assemble.edited_parts` receipt files included, and link the contract in `docs/STABILITY.md` (`#1286`, `#1294`, `7f3294c`).
+
+### CI
+
+* **ci:** the build-controls step reads `--summary-json` and requires a partial run of exactly `build` with no faults, failures or holes, instead of accepting any exit 2 (`#1277`, `#1292`, `8c03a6a`).
+* **ci:** move the tree-verdict action pins to core `149bca5`, so a tag release on a main commit can reuse the main verdict for the same tree (`#1288`, `1c6e689`).
+
 ## 2.38.1 (2026-11-16)
 
 ### Bug Fixes
