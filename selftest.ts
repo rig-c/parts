@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { blankRigcRunClock } from './fixtures/rigc_run_clock.ts';
+import { CONTOUR_TURN_STAGE_A_HASHES, writeContourTurnFixture } from './fixtures/contour-turn.ts';
 import { runRigcRunClockChecks } from './fixtures/rigc_run_clock_checks.ts';
 import { runPartsCheckChecks } from './fixtures/parts_check_checks.ts';
 import { runSourceCoverChecks } from './fixtures/source_cover_checks.ts';
@@ -274,7 +275,7 @@ import {
 } from './fixtures/assemble_fixture.ts';
 import { type AnimFrame, chunkTypes, encodeApng, encodeIndexedApng } from './src/apng.ts';
 import { assignOverlappingHands, capBox, featherWeight, type JointLine, jointLine, limbWidth, nearestLimb, pastJoint, segmentOf } from './src/limbs.ts';
-import { artifactPaths, assembleStage, build as originalBuild, BUILD_OWNS, CHECK_FLAGS_IN_BUILD, type CheckFlagInBuild, checkStage, ctlRemedies, driftShare, faceAxisLine, fringeLines, turnLine, LEAD_IN_ANIMATION, REFERENCE_BUILD_ARGS, repeatIdle, REFERENCE_BUILD_LABEL, RIGC_MODEL_DOCUMENT, readRuns, rigStage } from './src/build.ts';
+import { artifactPaths, assembleStage, build as originalBuild, BUILD_OWNS, CHECK_FLAGS_IN_BUILD, type CheckFlagInBuild, checkStage, contourBodyTurnRemedies, ctlRemedies, driftShare, faceAxisLine, fringeLines, turnLine, LEAD_IN_ANIMATION, REFERENCE_BUILD_ARGS, repeatIdle, REFERENCE_BUILD_LABEL, RIG_CONTOUR_BODY_TURN_WINDING, RIGC_MODEL_DOCUMENT, readRigInputs, readRuns, rigStage } from './src/build.ts';
 import { CHECK_PARTS, CHECK_RIG, checkPartRaster, IDLE_PEAK, MERGED_STAGE, mergedCores, type MergedRigOptions, mergedStack, SEATED_CHECK_PARTS, shiftRight, writeCheckRig as originalWriteCheckRig, writeMergedCheckRig, writeSeatedCheckRig } from './fixtures/checkrig.ts';
 import { fakePainting } from './fixtures/fakecomfy.ts';
 import { BLOUSE, CLOTH_PARTS, CLOTH_RIG, clothRecipe, DRESS, DRESS_RIG, dressHipJoints, dressParts, FLOOR_SKIRT_EMPTY_COL_PARTS, FLOOR_SKIRT_PARTS, HEM, HEM_BELOW, SHIFT, SPLIT_TAIL_PARTS, SPLIT_TAIL_UNCROSSED, splitTailRecipe } from './fixtures/cloth.ts';
@@ -7726,9 +7727,160 @@ function flatFormLine(r: FlatFormRender | string): string {
   return `${r.frames} frame(s) (${r.anims.map((a) => (a === 'still' ? 'setup pose' : a)).join(' + ')}), max |d| ${r.max} level(s), ${r.at1} px at 1, ${r.over1} px above 1${r.overFrames.length > 0 ? ` (${r.overFrames.join(', ')})` : ''}`;
 }
 
+/** Actual rig-stage caller and byte controls for the synthetic contour/body turn. */
+function runContourBodyTurnRigCases(say: FixtureCaseReporter): void {
+  const dir = temp('contour-body-turn');
+  const fixture = fixtureChildDiagnostics(say);
+  try {
+    const f = writeContourTurnFixture(dir);
+    const out = join(dir, 'refused-rig');
+    const red = fixture.runCli(['rig', '--parts', f.parts, '--config', f.config, '--out', out]);
+    const remedy = red.out.split('\n').filter(line => /^ {2}FAIL {2}RIG_RIGC_GREEN:/.test(line) && line.includes('RIG_CONTOUR_BODY_TURN_WINDING:'));
+    fixture.say(
+      'RG1306_CONTOUR_BODY_TURN_A39_GETS_A_NAMED_RIG_REMEDY_WITHOUT_EMISSION',
+      red.status === 1 && red.out.includes('A39_DEFORM_KEEPS_TRIANGLE_WINDING') &&
+        red.out.includes('RIG_RIGC_GREEN') && remedy.length === 1 &&
+        !/^ {2}FAIL {2}RIG_CONTOUR_BODY_TURN_WINDING:/m.test(red.out) &&
+        remedy[0].includes('bodice') && remedy[0].includes('body_turn') &&
+        remedy[0].includes('key 4') && remedy[0].includes('1.875') &&
+        remedy[0].includes('69') && remedy[0].includes('81.467') && remedy[0].includes('-4.649') &&
+        remedy[0].includes('maxEdge') && remedy[0].includes('margin') && remedy[0].includes('tolerance') &&
+        remedy[0].includes('bodice_depth.png') && !existsSync(out),
+      `canonical rig exit ${red.status}; output exists ${existsSync(out)}; ${remedy[0]?.trim() ?? 'no contour/body-turn remedy'}`,
+      'The actual default-propose contour and applied scalar sheet reach rigc; the original A39 still refuses, the diagnostic identifies its measured key and triangle, and --out receives nothing.',
+    );
+
+    const digest = (bytes: Uint8Array | string): string => createHash('sha256').update(bytes).digest('hex');
+    const control = (config: string, name: string) => {
+      const input = readRigInputs(config, f.parts);
+      const built = buildRig(input.cfg, input.parts, input.images);
+      const home = join(dir, name);
+      mkdirSync(join(home, 'images'), { recursive: true });
+      const rig = rigJsonText(built.rig), motion = rigJsonText(built.motion);
+      writeFileSync(join(home, 'rig.json'), rig);
+      writeFileSync(join(home, 'motion.json'), motion);
+      const images = built.images.map(([file, image]) => {
+        const bytes = encodePngBytes(image);
+        writeFileSync(join(home, 'images', file), bytes);
+        return { file, sha256: digest(bytes) };
+      });
+      const gate = spawnRigc(suiteRigc(), ['build', '--rig', join(home, 'rig.json'), '--motion', join(home, 'motion.json'), '--profile', 'rig-play', '--out', join(home, 'build')]);
+      return { gate, rig: digest(rig), motion: digest(motion), images: digest(JSON.stringify(images)), count: images.length, input, built };
+    };
+    const noTurn = control(f.noTurn, 'no-turn');
+    say(
+      'RG1307_NO_TURN_CONTOUR_BUILDS_GREEN_AND_PRESERVES_THE_STAGE_A_BYTES',
+      noTurn.gate.status === 0 && noTurn.gate.out.includes('SKIP  A39_DEFORM_KEEPS_TRIANGLE_WINDING: no animation carries a deform timeline') &&
+        !noTurn.gate.out.includes('RIG_CONTOUR_BODY_TURN_WINDING') &&
+        noTurn.rig === CONTOUR_TURN_STAGE_A_HASHES.noTurn.rig && noTurn.motion === CONTOUR_TURN_STAGE_A_HASHES.noTurn.motion &&
+        noTurn.images === CONTOUR_TURN_STAGE_A_HASHES.images && noTurn.count === 6,
+      `actual rigc exit ${noTurn.gate.status}; no-turn rig ${noTurn.rig}; motion ${noTurn.motion}; ${noTurn.count} PNG manifest ${noTurn.images}`,
+      'The no-turn drawing is a positive build control with A39 correctly SKIP, and its synthetic Stage A rig/motion/image bytes remain exact; no rendered-appearance claim is made.',
+    );
+    const lattice = control(f.lattice, 'lattice');
+    say(
+      'RG1308_LATTICE_BODY_TURN_BUILDS_GREEN_AND_PRESERVES_THE_STAGE_A_BYTES',
+      lattice.gate.status === 0 && lattice.gate.out.includes('PASS  A39_DEFORM_KEEPS_TRIANGLE_WINDING') &&
+        !lattice.gate.out.includes('RIG_CONTOUR_BODY_TURN_WINDING') &&
+        lattice.rig === CONTOUR_TURN_STAGE_A_HASHES.lattice.rig && lattice.motion === CONTOUR_TURN_STAGE_A_HASHES.lattice.motion &&
+        lattice.images === CONTOUR_TURN_STAGE_A_HASHES.images && lattice.count === 6,
+      `actual rigc exit ${lattice.gate.status}; lattice rig ${lattice.rig}; motion ${lattice.motion}; ${lattice.count} PNG manifest ${lattice.images}`,
+      'The same synthetic source and depth recipe on its existing lattice path stays green at the actual gate and retains the Stage A byte baseline.',
+    );
+
+    const input = readRigInputs(f.config, f.parts);
+    const built = buildRig(input.cfg, input.parts, input.images);
+    const a39 = red.out.split('\n').filter(line => /^\s*FAIL\s+A39_DEFORM_KEEPS_TRIANGLE_WINDING:/.test(line));
+    const words = contourBodyTurnRemedies(a39, input.cfg, built);
+    const message = words[0] ?? '';
+    say(
+      'RG1309_THE_PURE_REMEDY_READS_THE_REAL_A39_KEY_AND_RECIPE_NOT_A_LOCAL_ANGLE_ORACLE',
+      RIG_CONTOUR_BODY_TURN_WINDING === 'RIG_CONTOUR_BODY_TURN_WINDING' && a39.length === 1 && words.length === 1 &&
+        message.includes(RIG_CONTOUR_BODY_TURN_WINDING) && message.includes('bodice') && message.includes('body_turn') &&
+        message.includes('key 4') && message.includes('1.875') && message.includes('69') &&
+        message.includes('81.467') && message.includes('-4.649') && /1 of 148|1\/148/.test(message) &&
+        message.includes('meshes.bodice.contour.maxEdge') && message.includes('meshes.bodice.contour.margin') && message.includes('meshes.bodice.contour.tolerance') &&
+        message.includes('bodice_depth.png') && /non.?monoton|not monotone|no single/i.test(message) && !message.includes('\n'),
+      `actual core failure ${a39.length} line(s); helper ${words.length} line(s): ${message || 'absent'}`,
+      'The helper annotates an actual core refusal and preserves its measured count, key, time, triangle and signed areas, with the authored recipe and sheet; no geometry or safety verdict is reimplemented.',
+    );
+    const measured = a39[0] ?? '';
+    const unrelated = [
+      [],
+      [measured.replace('FAIL', 'PASS')],
+      [measured.replace('A39_DEFORM_KEEPS_TRIANGLE_WINDING', 'A14_NO_FULL_FRAME_MESH')],
+      [measured.replace('"body_turn"', '"turn"')],
+      [measured.replace('"body_turn"', '"body_turn_extra"')],
+      ['FAIL  A39_DEFORM_KEEPS_TRIANGLE_WINDING: no measured key or triangle'],
+      [measured.replaceAll('bodice', 'missing_part')],
+      [measured.replace('deform bodice/bodice', 'deform bodice/missing_attachment')],
+      [measured.replace('"body_yaw_dial"', '"missing_slider"')],
+      [measured.replace('key 4 (t=1.875s)', 'key 9 (t=1.875s)')],
+      [measured.replace('key 4 (t=1.875s)', 'key 4 (t=1.5s)')],
+    ];
+    const other = unrelated.map(lines => contourBodyTurnRemedies(lines, input.cfg, built));
+    say(
+      'RG1310_OTHER_RULES_ANIMATIONS_PASSES_AND_UNRESOLVED_PARTS_GET_NO_CONTOUR_BODY_REMEDY',
+      a39.length === 1 && other.every(lines => lines.length === 0),
+      `empty/pass/other-rule/head-turn/other-animation/malformed/unknown-part/unknown-attachment/unknown-slider/key-index/key-time diagnostic counts ${other.map(lines => lines.length).join(',')}`,
+      'The gate wording alone is not permission to diagnose an unrelated animation, part, rule or unmeasured failure.',
+    );
+    const noField = [
+      contourBodyTurnRemedies(a39, noTurn.input.cfg, noTurn.built),
+      contourBodyTurnRemedies(a39, lattice.input.cfg, lattice.built),
+      contourBodyTurnRemedies(a39, input.cfg, { ...built, meshReport: built.meshReport.filter(row => row.part !== 'bodice') }),
+    ];
+    say(
+      'RG1311_NO_TURN_LATTICE_AND_ABSENT_CONTOUR_REPORT_ARE_NOT_THIS_REMEDY',
+      a39.length === 1 && noField.every(lines => lines.length === 0),
+      `no body turn / lattice / no emitted contour report diagnostic counts ${noField.map(lines => lines.length).join(',')}`,
+      'Even an authentic A39 line must resolve to this rig stage\'s actual contour body surface before this recipe-specific annotation is appropriate.',
+    );
+    const span = measured.replace('key 4 (t=1.875s): ', 'BETWEEN key 3 (t=1.40625s) and key 4 (t=1.875s), at t=1.640625s — 50.0% of the way from one to the other: ');
+    const spanWords = contourBodyTurnRemedies([span, span], input.cfg, built);
+    const repeated = contourBodyTurnRemedies([...a39, ...a39], input.cfg, built);
+    const badSpan = contourBodyTurnRemedies([span.replace('key 3 (t=1.40625s)', 'key 3 (t=1.4s)')], input.cfg, built);
+    say(
+      'RG1312_KEY_AND_SPAN_FRAME_CONTEXT_IS_RETAINED_ONCE_AND_BAD_BOUNDING_TIME_IS_IGNORED',
+      a39.length === 1 && repeated.length === 1 && repeated[0] === message && spanWords.length === 1 &&
+        spanWords[0].includes('BETWEEN key 3 (t=1.40625s) and key 4 (t=1.875s), at t=1.640625s') &&
+        spanWords[0].includes('triangle 69 [37,40,39] 81.467 -> -4.649px²') && badSpan.length === 0,
+      `repeated key ${repeated.length}; planted syntax-only span ${spanWords.length}; wrong bounding key time ${badSpan.length}`,
+      'The span is a parser control carrying the planted witness, not a measured interpolated-pose claim; both bounding key times must exist in the actual generated timeline.',
+    );
+    const unnamedSheet = contourBodyTurnRemedies(a39, input.cfg, { ...built, depthReferences: [] });
+    say(
+      'RG1313_AN_ABSENT_OPTIONAL_DEPTH_REFERENCE_NAMES_NO_INVENTED_SHEET',
+      a39.length === 1 && unnamedSheet.length === 1 && unnamedSheet[0].includes('depth sheet') && !unnamedSheet[0].includes('bodice_depth.png'),
+      `optional reference absent: ${unnamedSheet.length} annotation(s), declared sheet filename ${unnamedSheet[0]?.includes('bodice_depth.png') === true ? 'invented' : 'not invented'}`,
+      'The measured contour refusal remains actionable without an optional depth filename; absence never invents a source name.',
+    );
+    const imported = JSON.parse(readFileSync(f.config, 'utf8')) as Record<string, unknown>;
+    (imported.motion as Record<string, unknown>).animations_from = 'imported-body-turn.json';
+    writeFileSync(join(dir, 'imported-body-turn.json'), JSON.stringify({ spec: 'rigc-motion/1', animations: { body_turn: built.motion.animations.body_turn } }));
+    const importedConfig = join(dir, 'imported-config.json');
+    writeFileSync(importedConfig, JSON.stringify(imported));
+    const importedScratch = join(dir, 'imported-scratch');
+    mkdirSync(importedScratch, { recursive: true });
+    let importedGateCalls = 0;
+    const plantedGate: RigcRunner = () => { importedGateCalls++; return { status: 1, out: measured }; };
+    const importedOut = join(dir, 'imported-out');
+    const importedError = refusals(() => rigStage({ config: importedConfig, parts: f.parts, out: importedOut }, plantedGate, importedScratch, () => {}));
+    say(
+      'RG1314_IMPORTED_BODY_TURN_KEEPS_THE_GATE_REFUSAL_WITHOUT_A_GENERATED_FIELD_REMEDY',
+      a39.length === 1 && importedGateCalls === 1 && importedError?.problems.length === 1 &&
+        importedError.problems[0].code === 'RIG_RIGC_GREEN' && importedError.problems[0].detail.includes('A39_DEFORM_KEEPS_TRIANGLE_WINDING') &&
+        !importedError.problems[0].detail.includes(RIG_CONTOUR_BODY_TURN_WINDING) && !existsSync(importedOut),
+      `injected refusal calls ${importedGateCalls}; ${codes(importedError)}; generated-field annotation ${importedError?.problems.some(problem => problem.detail.includes(RIG_CONTOUR_BODY_TURN_WINDING)) === true}; output exists ${existsSync(importedOut)}`,
+      'This is a caller-ownership control using an injected real refusal string, not another core measurement: an imported body_turn is not the generated field the recipe annotation describes.',
+    );
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+
 function runRigSuite(): number {
   section('rig: bones, lattice meshes, weights, regions and the idle');
   const { say, bad } = counter();
+  runContourBodyTurnRigCases(say);
   runTurnRollChecks((name, ok, detail) => say(name, ok, detail, 'report-only head roll; fixed public separation limit and analytic planted angles'));
   { const dir = temp('neck-draft-render'); try { runNeckDraftRenderChecks(dir, (name, ok, detail) => say(name, ok, detail, 'public source-first neck, mandatory Core gate and rendered extreme ROI')); } finally { rmSync(dir, { recursive: true, force: true }); } }
   runTurnUnitPrecedenceChecks((name, ok, detail) => say(name, ok, detail, 'public unit-depth precedence controls; no forced own-sheet fallback'));

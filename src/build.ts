@@ -97,7 +97,7 @@ import {
   untestedIntervals,
 } from './autoreplay.ts';
 import { besideIdleLine, checkSummaryLine, inputFileRecord, type InputFileRecord, CLOTH_LINE, type ClothLine, clothWarnText, figureOpeningLines, frameRuns, MOTION_SEAM_LINE, type MotionSeamLine, type MotionSeamPlant, motionSeamRequiredLine, motionSeamWarnText, motionJointContactLines, FOLD_LINE, type FoldsLine, LEVEL_LINE, type LevelLine, LIMB_LINE, type LimbLine, STRESS_LINE, SWEEP_LINE, type SweepLine, buildGateLines, causeLines, environmentLine, IDLE_FPS, IDLE_MAX_PX, maxRgbDiff, REQUIREMENTS_DIR, type CheckReport, type PackLine, DEFAULT_PACK_SHAPE, DEFAULT_PAGE_EDGES, GATE_PROFILE, JUDGEMENT_LINES, type JudgementLine, packedBuildArgs, packedBuildLabel, type PackMode, readCheckEnvironment, readWindBand, type PackShape, type PageEdges, readFrameSet, rigcFailed, rigcIdentity, rigcRanClause, REPORTED_LINES, type ReportedLine, type RigcRunner, runCheck, SEAM_DIR, SEAM_MEAN_BAR, seamPairText, seamRigPxText, SOURCE_LINE, SEAM_PX_BAR, SEAM_PX_LEVEL, SEAM_PX_LEVEL_HIGH, SPINEBOY_YARDSTICK, STILL_DIR, WIND_BAND_LINE, windBandLines } from './check.ts';
-import { type Cut, type Extend, type Limb, loadConfigAndAnimations, loadConfigWithBytes, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
+import { type CharacterConfig, type Cut, type Extend, type Limb, loadConfigAndAnimations, loadConfigWithBytes, loadEarlyConfig, type Patch, type PlanEntry } from './config.ts';
 import { coreCompileGuideLine, failLine, foldName, PartsError, type Problem, refuseIfAny } from './errors.ts';
 import { editedConfigImages, editedRunImages, missingReceipts, readEditorReceipts } from './editreceipt.ts';
 import { untracedPartSources } from './partsource.ts';
@@ -118,7 +118,7 @@ import { pinholesRequired, readRequirements, type RequirementLine, summaryText }
 import { type AutoMeshReport, buildRig, DEFAULT_IDLE_KEYS, type FaceAxis, type IdleKeys, type MeshReport, type RigCommand, rigJsonText, type RigOutput, type RigSpec, SETS_FILE, type StrayCleared, type TurnRow } from './rig.ts';
 import { KEYPOINT_NAMES, type KeypointName, type PosePoints } from './skeleton.ts';
 import { AUTHOR_NO_ROLE, isAuthorTag } from './tags.ts';
-import { TURN_BONE } from './turn.ts';
+import { BODY_TURN_ANIM, TURN_BONE } from './turn.ts';
 import { pyRound } from './round.ts';
 import { LAYOUT_FILE, layoutCompanion, refreshLimbLayout } from './limblayout.ts';
 
@@ -1410,6 +1410,60 @@ export function ctlRemedies(lines: readonly string[], controls: readonly string[
   return out;
 }
 
+export const RIG_CONTOUR_BODY_TURN_WINDING = 'RIG_CONTOUR_BODY_TURN_WINDING';
+
+/**
+ * Add config context to A39's measured failure, never another winding check.
+ * Match the installed core's key/span sentence and the generated body-turn's
+ * actual deform address. Blended bindings can acquire a body surface role in
+ * the producer, so a role absent from the authored body block is not a miss.
+ * Each failure frame gets one sentence even when core repeats its gate line.
+ * If core changes its wording, its original refusal still reaches the author.
+ */
+export function contourBodyTurnRemedies(lines: readonly string[], cfg: CharacterConfig, rig: RigOutput): string[] {
+  const record = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+  const animation = rig.motion.animations[BODY_TURN_ANIM];
+  if (cfg.turn?.body === undefined || !record(animation) || !Array.isArray(animation.deform)) return [];
+  const number = '-?\\d+(?:\\.\\d+)?(?:e[+-]?\\d+)?';
+  const triangle = `\\d+ \\[\\d+,\\d+,\\d+\\] ${number} -> ${number}px²`;
+  const measured = new RegExp(`^([1-9]\\d* of [1-9]\\d* triangle\\(s\\) reverse winding — triangle ${triangle}(?:; triangle ${triangle}){0,3}(?:, and [1-9]\\d* more)?)\\. (?:The mesh has turned inside out there and draws its texture backwards|NO KEY LANDS THERE: )`);
+  const keyAt = new RegExp(`^key (\\d+) \\(t=(${number})s\\): `);
+  const spanAt = new RegExp(`^BETWEEN key (\\d+) \\(t=(${number})s\\) and key (\\d+) \\(t=(${number})s\\), at t=(${number})s(?: \\(a stepped segment\\)| — \\d+\\.\\d% of the way from one to the other): `);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of lines) {
+    const head = /^FAIL {2}A39_DEFORM_KEEPS_TRIANGLE_WINDING: animation "body_turn"(?<frame> \(applied by slider "(?<slider>[^"\r\n]+)", not played on a track\))? deform (?<slot>[^/\s]+)\/(?<attachment>[^/\s]+) (?<detail>.+)$/.exec(line.trim())?.groups;
+    if (head === undefined) continue;
+    const { slot, attachment, detail } = head;
+    const owners = Object.keys(cfg.meshes).filter(p => slot === p || slot.startsWith(`${p}__island`));
+    const part = owners.includes(slot) ? slot : owners.length === 1 ? owners[0] : undefined;
+    if (part === undefined || !('contour' in cfg.meshes[part]) || !rig.meshReport.some(row => row.part === part && 'mode' in row && row.mode === 'contour')) continue;
+    const att = rig.rig.skins.default[slot]?.[attachment];
+    if (!rig.rig.slots.some(s => s.name === slot) || att === undefined || !('type' in att) || att.type !== 'mesh' || att.generator !== undefined) continue;
+    const timeline = animation.deform.find((d: unknown) => record(d) && (d.skin === undefined || d.skin === 'default') && d.slot === slot && d.attachment === attachment);
+    if (!record(timeline) || !Array.isArray(timeline.keys)) continue;
+    const keys: unknown[] = timeline.keys;
+    if (head.slider !== undefined && !rig.rig.constraints?.some(c => c.type === 'slider' && c.name === head.slider && c.animation === BODY_TURN_ANIM)) continue;
+    const key = keyAt.exec(detail);
+    const span = key === null ? spanAt.exec(detail) : null;
+    const at = key ?? span;
+    if (at === null) continue;
+    const hasKey = (index: string, time: string): boolean => {
+      const k = keys[Number(index)];
+      return record(k) && k.t === Number(time);
+    };
+    if (!hasKey(at[1], at[2]) || (span !== null && !hasKey(span[3], span[4]))) continue;
+    const witness = measured.exec(detail.slice(at[0].length));
+    if (witness === null) continue;
+    const frame = `animation "${BODY_TURN_ANIM}"${head.frame ?? ''} deform ${slot}/${attachment} ${at[0].slice(0, -2)}`;
+    if (seen.has(frame)) continue;
+    seen.add(frame);
+    const depth = rig.depthReferences?.find(d => d.part === part)?.depth.image;
+    out.push(`${RIG_CONTOUR_BODY_TURN_WINDING}: part "${part}", ${frame}: ${witness[1]}; inspect meshes.${part}.contour.maxEdge, meshes.${part}.contour.margin, meshes.${part}.contour.tolerance and part "${part}" depth sheet${depth === undefined ? '' : ` "${depth}"`}; the outcome is not monotone in any field; only rerunning rigc's gate decides whether the candidate passes (see rig-parts guide ${RIG_CONTOUR_BODY_TURN_WINDING})`);
+  }
+  return out;
+}
+
 export interface RigStageInput {
   config: string;
   /** The directory holding parts.json and parts/<name>.png. */
@@ -1977,7 +2031,7 @@ export function rigStage(input: RigStageInput, rigc: RigcRunner, scratch: string
     const problems: Problem[] = red.map((g) => ({
       code: 'RIG_RIGC_GREEN',
       object: `rigc ${g.label}`,
-      detail: `exited ${g.status}${g.lines.length > 0 ? `: ${g.lines.map((l) => l.trim()).join(' | ')}` : ', and it printed nothing'}${rigcRanClause(g)}; ${ctlRemedies(g.lines, rig.controls, input.command ?? 'rig').map((s) => `${s}; `).join('')}exit 0 is required before anything is written, and nothing was`,
+      detail: `exited ${g.status}${g.lines.length > 0 ? `: ${g.lines.map((l) => l.trim()).join(' | ')}` : ', and it printed nothing'}${rigcRanClause(g)}; ${[...ctlRemedies(g.lines, rig.controls, input.command ?? 'rig'), ...(from?.table[BODY_TURN_ANIM] === undefined ? contourBodyTurnRemedies(g.lines, cfg, rig) : [])].map((s) => `${s}; `).join('')}exit 0 is required before anything is written, and nothing was`,
     }));
     throw new PartsError(problems);
   }
