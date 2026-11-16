@@ -354,7 +354,7 @@ export function retuneStage(input: RetuneInput, rigc: RigcRunner, checkBin: stri
   if (outAt.startsWith(`${rigAt}${sep}`)) throw new PartsError([{ code: 'RETUNE_OUT_FRESH', object: input.out, detail: `is inside the input ${input.rig}; a revision is written beside the input, never into it` }]);
   const tree = readTree(rigAt);
   refuseIfAny(inputTreeProblems(tree, input.rig, 'retune', RETUNE_SPLICED));
-  const recorded = inputCheckOf(input, rigAt, tree, pageEdges, packShape, versions.parts, rigc, 'retune');
+  const recorded = inputCheckOf(input, rigAt, tree, pageEdges, packShape, versions.parts, rigc, 'retune', pageSize);
   const inFiles = rigFiles(tree);
   // 2. The rebuild.
   log(`rig-parts retune: ${input.rig}, ${tree.size} file(s); the rebuild is the config as written`);

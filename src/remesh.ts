@@ -521,7 +521,7 @@ export const INPUT_CHECK_FILE = 'input-check.json';
  */
 export interface InputCheckBinding {
   versions: { parts: string; rigc: string };
-  options: { page_edges: PageEdges; pack_shape: PackShape; requirements: { path: string; sha256: string } | null };
+  options: { page_edges: PageEdges; pack_shape: PackShape; page_size?: number; requirements: { path: string; sha256: string } | null };
   rig: { dir: string; files: HashRow[] };
   parts: { dir: string; files: HashRow[] };
 }
@@ -541,7 +541,7 @@ export function rigcVersionText(rigc: RigcRunner, op: 'remesh' | 'retune'): stri
 }
 
 /** The binding of this run's input: what the input's `check` would read now ({@link InputCheckBinding}). */
-export function inputCheckBinding(rigAt: string, tree: FileTree, partsDir: string, requirements: string | undefined, pageEdges: PageEdges, packShape: PackShape, versions: { parts: string; rigc: string }): InputCheckBinding {
+export function inputCheckBinding(rigAt: string, tree: FileTree, partsDir: string, requirements: string | undefined, pageEdges: PageEdges, packShape: PackShape, versions: { parts: string; rigc: string }, pageSize?: number): InputCheckBinding {
   const partsAt = resolve(partsDir);
   const partsTree: FileTree = new Map();
   const json = join(partsAt, 'parts.json');
@@ -556,7 +556,7 @@ export function inputCheckBinding(rigAt: string, tree: FileTree, partsDir: strin
   }
   return {
     versions: { parts: versions.parts, rigc: versions.rigc },
-    options: { page_edges: pageEdges, pack_shape: packShape, requirements: req },
+    options: { page_edges: pageEdges, pack_shape: packShape, ...(pageSize === undefined ? {} : { page_size: pageSize }), requirements: req },
     rig: { dir: resolve(rigAt), files: hashRows(tree) },
     parts: { dir: partsAt, files: hashRows(new Map([...partsTree].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))) },
   };
@@ -605,7 +605,8 @@ export function readInputCheck(path: string, op: 'remesh' | 'retune'): InputChec
   field('versions', isRecord(v) && typeof v.parts === 'string' && typeof v.rigc === 'string', '{ parts, rigc } as strings');
   const o = raw.options;
   const req = isRecord(o) ? o.requirements : undefined;
-  field('options', isRecord(o) && typeof o.page_edges === 'string' && typeof o.pack_shape === 'string' && (req === null || (isRecord(req) && typeof req.path === 'string' && typeof req.sha256 === 'string')), '{ page_edges, pack_shape, requirements: null or { path, sha256 } }');
+  const psOk = isRecord(o) && (!Object.hasOwn(o, 'page_size') || o.page_size === undefined || (typeof o.page_size === 'number' && Number.isSafeInteger(o.page_size) && o.page_size >= 1));
+  field('options', isRecord(o) && typeof o.page_edges === 'string' && typeof o.pack_shape === 'string' && psOk && (req === null || (isRecord(req) && typeof req.path === 'string' && typeof req.sha256 === 'string')), '{ page_edges, pack_shape, page_size?: integer >= 1, requirements: null or { path, sha256 } }');
   for (const k of ['rig', 'parts'] as const) {
     const t = raw[k];
     field(k, isRecord(t) && typeof t.dir === 'string' && isRows(t.files), '{ dir, files: [{ path, bytes, sha256 }] }');
@@ -643,6 +644,7 @@ export function inputCheckBoundProblems(recorded: InputCheckBinding, now: InputC
   if (recorded.versions.rigc !== now.versions.rigc) moved('versions.rigc', recorded.versions.rigc, now.versions.rigc, 'the check was measured under another rigc');
   if (recorded.options.page_edges !== now.options.page_edges) moved('options.page_edges', recorded.options.page_edges, now.options.page_edges, 'the check packed its pages another way');
   if (recorded.options.pack_shape !== now.options.pack_shape) moved('options.pack_shape', recorded.options.pack_shape, now.options.pack_shape, 'the check packed its pages another way');
+  if (recorded.options.page_size !== now.options.page_size) moved('options.page_size', recorded.options.page_size ?? 'absent', now.options.page_size ?? 'absent', 'the check packed its pages another way');
   const ra = recorded.options.requirements;
   const rb = now.options.requirements;
   if (ra === null || rb === null) {
@@ -687,10 +689,11 @@ export function inputCheckOf(
   partsVersion: string,
   rigc: RigcRunner,
   op: 'remesh' | 'retune',
+  pageSize?: number,
 ): { binding: InputCheckBinding | null; reused: CheckSide | null } {
   if (req.inputCheck === undefined && req.recordInputCheck !== true) return { binding: null, reused: null };
   const recorded = req.inputCheck === undefined ? null : readInputCheck(req.inputCheck, op);
-  const binding = inputCheckBinding(rigAt, tree, req.parts, req.requirements, pageEdges, packShape, { parts: partsVersion, rigc: rigcVersionText(rigc, op) });
+  const binding = inputCheckBinding(rigAt, tree, req.parts, req.requirements, pageEdges, packShape, { parts: partsVersion, rigc: rigcVersionText(rigc, op) }, pageSize);
   if (recorded === null) return { binding, reused: null };
   refuseIfAny(inputCheckBoundProblems(recorded, binding, req.inputCheck as string, op));
   return { binding, reused: canonicalSide(recorded.check) };
@@ -704,7 +707,7 @@ export function inputCheckOf(
  */
 export function inputCheckMovedProblems(first: InputCheckBinding, req: { requirements?: string; parts: string }, rigAt: string, op: 'remesh' | 'retune'): Problem[] {
   const code = REVISION_CODES[op].inputCheckMoved;
-  const second = inputCheckBinding(rigAt, readTree(rigAt), req.parts, req.requirements, first.options.page_edges, first.options.pack_shape, first.versions);
+  const second = inputCheckBinding(rigAt, readTree(rigAt), req.parts, req.requirements, first.options.page_edges, first.options.pack_shape, first.versions, first.options.page_size);
   const out: Problem[] = [];
   const row = (r: HashRow | undefined): string => (r === undefined ? 'absent' : `${r.bytes} bytes sha256 ${r.sha256}`);
   const moved = (object: string, before: string, after: string): void => {
@@ -921,7 +924,7 @@ export function remeshStage(input: RemeshInput, rigc: RigcRunner, checkBin: stri
   const tree = readTree(rigAt);
   refuseIfAny(inputTreeProblems(tree, input.rig));
   if ((input.mesh === undefined) === (input.delta === undefined)) throw new Error('remeshStage: exactly one of mesh, delta is required');
-  const recorded = inputCheckOf(input, rigAt, tree, pageEdges, packShape, versions.parts, rigc, 'remesh');
+  const recorded = inputCheckOf(input, rigAt, tree, pageEdges, packShape, versions.parts, rigc, 'remesh', pageSize);
   const meshReq = input.mesh === undefined ? null : readMeshRequest(input.mesh);
   const deltaReq = input.delta === undefined ? null : readDeltaRequest(input.delta);
   const configText = readFileSync(input.config, 'utf8');
