@@ -146,9 +146,21 @@ function extendIntegratedHeight(data: Float64Array, art: Raster): Float64Array {
   }
   return filled;
 }
+const BINDING_REMEDY = 're-run depth for these inputs, then rig-parts depth-bind --map <numeric-map.json> --input <prepared.png> --part <name>';
+/** Bound diagnostic values; never echo a receipt payload. */
+function bindingFound(value: unknown): string {
+  if (value === undefined) return 'absent';
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  if (typeof value === 'object') return 'object';
+  return JSON.stringify(value)?.slice(0, 96) ?? String(value);
+}
+
 /** Attest the two files available now, not the unobserved inference execution. */
 export function bindDepthMap(input: { map: string; input: string; part: string }): Obj {
-  plain(input.part, 'depth-bind.part');
+  if (!input.part || input.part.startsWith('.') || /[\\/]/.test(input.part) || input.part.includes('\0')) {
+    fail('DEPTH_MAP_BINDING', 'depth-bind --part', `found ${bindingFound(input.part)}; required a nonempty plain part filename; ${BINDING_REMEDY}`);
+  }
   const read = (file: string): Uint8Array => {
     if (!existsSync(file) || !statSync(file).isFile()) return fail('DEPTH_INPUT_PRESENT', file, 'is missing or not a file; restore the declared input');
     return readFileSync(file);
@@ -160,7 +172,11 @@ export function bindDepthMap(input: { map: string; input: string; part: string }
   const target = input.map + '.binding.json';
   // Exclusive creation preserves a previous attestation; all readers run first.
   try { writeFileSync(target, text(receipt), { flag: 'wx' }); }
-  catch { return fail('DEPTH_MAP_BINDING', `part "${input.part}"`, 'cannot create map binding receipt; keep existing evidence and use a new map filename in a writable directory'); }
+  catch (error) {
+    const code = error !== null && typeof error === 'object' && 'code' in error ? String(error.code) : 'UNKNOWN';
+    const reason = code === 'EEXIST' ? 'already exists (EEXIST)' : `write failed (${code})`;
+    return fail('DEPTH_MAP_BINDING', `part "${input.part}"`, `receipt ${JSON.stringify(target)} ${reason}; required an absent receipt in a writable directory; keep existing evidence and use a new map filename; ${BINDING_REMEDY}`);
+  }
   return receipt;
 }
 
@@ -172,19 +188,22 @@ function isReceiptLink(path: string): boolean {
 /** Parts-owned provenance beside the numeric map; never inferred from a new prepare. */
 function mapBinding(mapPath: string, bytes: Uint8Array, part: PreparedPart): string | undefined {
   const receiptPath = mapPath + '.binding.json';
-  if (!existsSync(receiptPath) && !isReceiptLink(receiptPath)) return `WARN  DEPTH_MAP_BINDING_ABSENT: part "${part.part}" — no map binding receipt (compatibility policy dated 2026-11-16); applying legacy map without inference-input identity; run depth for these inputs and record ${basename(receiptPath)}`;
-  const remedy = 'run depth for these inputs and record the map and inference-input SHA-256 in its .binding.json receipt';
+  if (!existsSync(receiptPath) && !isReceiptLink(receiptPath)) return `WARN  DEPTH_MAP_BINDING_ABSENT: part "${part.part}" — no map binding receipt (compatibility policy dated 2026-11-16); applying legacy map without inference-input identity; ${BINDING_REMEDY}`;
+  const remedy = BINDING_REMEDY;
   const refuse = (detail: string): never => fail('DEPTH_MAP_BINDING', `part "${part.part}"`, `${detail}; ${remedy}`);
-  if (!lstatSync(receiptPath).isFile()) return refuse('binding receipt is not a regular file');
+  if (!lstatSync(receiptPath).isFile()) return refuse('receipt found a symlink or nonregular file; required a regular file');
   let raw: unknown;
   try { raw = JSON.parse(readFileSync(receiptPath, 'utf8')) as unknown; }
-  catch { return refuse('binding receipt is unreadable or not valid JSON'); }
-  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return refuse('binding receipt requires an object');
+  catch { return refuse('receipt found unreadable or invalid JSON; required a readable JSON object'); }
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return refuse(`receipt found ${bindingFound(raw)}; required an object`);
   const r = raw as Obj;
   const sha = (v: unknown): v is string => typeof v === 'string' && /^[0-9a-f]{64}$/.test(v);
-  if (Object.keys(r).some(k => !['spec', 'part', 'mapSha256', 'inputSha256'].includes(k)) ||
-      r.spec !== 'rig-parts-depth-map-binding/1' || r.part !== part.part || !sha(r.mapSha256) || !sha(r.inputSha256)) {
-    return refuse('binding receipt requires spec rig-parts-depth-map-binding/1, the selected part, and lowercase 64-digit mapSha256/inputSha256');
+  const unknown = Object.keys(r).filter(k => !['spec', 'part', 'mapSha256', 'inputSha256'].includes(k));
+  if (unknown.length) return refuse(`receipt found unknown key ${bindingFound(unknown[0])}; required only spec, part, mapSha256, inputSha256`);
+  if (r.spec !== 'rig-parts-depth-map-binding/1') return refuse(`receipt spec found ${bindingFound(r.spec)}; required "rig-parts-depth-map-binding/1"`);
+  if (r.part !== part.part) return refuse(`receipt part found ${bindingFound(r.part)}; required ${JSON.stringify(part.part)}`);
+  for (const key of ['mapSha256', 'inputSha256'] as const) {
+    if (!sha(r[key])) return refuse(`receipt ${key} found ${bindingFound(r[key])}; required 64 lowercase hexadecimal digits`);
   }
   const mapSha = hash(bytes);
   if (r.mapSha256 !== mapSha) return refuse(`map sha found ${r.mapSha256}; required ${mapSha}`);

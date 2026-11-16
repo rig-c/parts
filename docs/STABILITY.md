@@ -37,7 +37,8 @@ Issue #1284 adds optional parts-owned `<map>.binding.json` receipts, spec
 the numeric map file and its consumed prepared inference PNG. A present receipt
 must match the selected part, current map bytes and manifest `inputSha256`;
 otherwise `DEPTH_MAP_BINDING` refuses before any output write. A malformed present
-receipt also refuses. The depth recipe and prepare manifest are unchanged.
+receipt also refuses; symlinked receipts (including dangling links) are refused.
+The depth recipe and prepare manifest are unchanged.
 
 Compatibility policy dated **2026-11-16**: an absent receipt retains the shipped
 map behavior, output bytes and success exit, adding one stderr WARN named
@@ -463,6 +464,12 @@ The values a field takes (`retriangulate` is "delaunay", `removalOrder`
 every number) are AUTHORING §3's tables, and the loader refuses any other by name.
 
 ## Files this package writes
+
+`depth-bind` writes `<map>.binding.json` beside the numeric map, spec
+`rig-parts-depth-map-binding/1`, with `spec`, `part`, `mapSha256`, `inputSha256`
+in that order. Hashes are computed from current map and input PNG bytes.
+Exclusive creation refuses an existing receipt and preserves it unchanged.
+
 
 ### Source cover report
 

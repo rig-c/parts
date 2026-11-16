@@ -8191,8 +8191,10 @@ These are the only receipt fields. `part` must match the selected part;
 prepared inference PNG, matching the manifest row. Apply validates present
 receipts before writing anything. A changed map or inference input refuses with
 `DEPTH_MAP_BINDING`, naming the part, found and required hashes, and the remedy:
-run depth for these inputs and record the resulting map's receipt. Malformed
-present receipts also refuse. Preparing again never rebinds a map.
+re-run depth for these inputs, then call
+`rig-parts depth-bind --map <numeric-map.json> --input <prepared.png> --part <name>`. Malformed
+present receipts also refuse. Symlinked receipts, including dangling links, are
+refused; a regular file is required. Preparing again never rebinds a map.
 Under the compatibility policy dated **2026-11-16**, a missing receipt preserves
 legacy output bytes and exits, with one `DEPTH_MAP_BINDING_ABSENT` WARN per
 selected map on stderr. This is unverified inference-input identity, not a
@@ -8277,8 +8279,8 @@ by `rig`, so their output requires no alternate compiler or dependency pin.
 | <a id="DEPTH_INPUT_JSON"></a>`DEPTH_INPUT_JSON` | malformed numeric or configuration JSON | write valid finite JSON |
 | <a id="DEPTH_PART_RESOLVES"></a>`DEPTH_PART_RESOLVES` | selected or cleared name absent from parts.json | use the assembled part name |
 | <a id="DEPTH_OUTPUT_EMPTY"></a>`DEPTH_OUTPUT_EMPTY` | nonempty output or output containing an input | choose a separate absent or empty directory |
-| <a id="DEPTH_MAP_BINDING"></a>`DEPTH_MAP_BINDING` | malformed present map receipt, wrong part, map hash or inference-input hash | run depth for these inputs and record the exact map and input hashes in the map's `.binding.json` receipt |
-| <a id="DEPTH_MAP_BINDING_ABSENT"></a>`DEPTH_MAP_BINDING_ABSENT` | WARN only: no receipt, compatibility policy dated 2026-11-16 | legacy behavior is retained; run depth for these inputs and record a receipt to establish identity |
+| <a id="DEPTH_MAP_BINDING"></a>`DEPTH_MAP_BINDING` | malformed present map receipt, wrong part, map hash or inference-input hash | re-run depth for these inputs, then `rig-parts depth-bind --map <numeric-map.json> --input <prepared.png> --part <name>` |
+| <a id="DEPTH_MAP_BINDING_ABSENT"></a>`DEPTH_MAP_BINDING_ABSENT` | WARN only: no receipt, compatibility policy dated 2026-11-16 | legacy behavior is retained; re-run depth for these inputs, then `rig-parts depth-bind --map <numeric-map.json> --input <prepared.png> --part <name>` |
 | <a id="DEPTH_INPUT_BINDING"></a>`DEPTH_INPUT_BINDING` | changed recipe, art, part record, crop, padding or inference PNG | prepare again for these exact inputs |
 | <a id="DEPTH_MAP_FORMAT"></a>`DEPTH_MAP_FORMAT` | wrong numeric schema, channels, shape, count, unknown field or nonfinite element | provide the declared float JSON map, not a preview |
 | <a id="DEPTH_MAP_SIZE"></a>`DEPTH_MAP_SIZE` | map dimensions differ from its explicit frame | use the registered part, enlarged art or padded input grid |

@@ -189,14 +189,29 @@ export function runDepthBindingChecks(dir: string, say: Say): void {
   applyDepth({ ...args, out: legacy1284 }, line => legacyWarnings1284.push(line));
   say('DMP1284_ABSENT_BINDING_DATED_WARN_AND_LEGACY_BYTES', legacyWarnings1284.length === 1 &&
     legacyWarnings1284[0].startsWith('WARN  DEPTH_MAP_BINDING_ABSENT: part "face"') &&
-    legacyWarnings1284[0].includes('2026-11-16') && JSON.stringify(files(legacy1284)) === JSON.stringify(files(out)), legacyWarnings1284.join(' | '));
+    legacyWarnings1284[0].includes('2026-11-16') && legacyWarnings1284[0].includes('rig-parts depth-bind --map <numeric-map.json> --input <prepared.png> --part <name>') && JSON.stringify(files(legacy1284)) === JSON.stringify(files(out)), legacyWarnings1284.join(' | '));
   const writer1284 = spawnSync(process.execPath, [join(import.meta.dir, '../cli.ts'), 'depth-bind', '--map', mapPath1284,
     '--input', join(prepared, 'face.png'), '--part', 'face'], { encoding: 'utf8' });
   const written1284 = JSON.parse(readFileSync(receipt1284, 'utf8')) as unknown;
   say('DMP1284_WRITER_CLI_COMPUTES_BOTH_HASHES_AND_NAMES_LIMIT', writer1284.status === 0 &&
     JSON.stringify(written1284) === JSON.stringify(binding1284) && writer1284.stdout.includes('does not prove the map was inferred from this input'), writer1284.stdout.trim());
+  const bindingDetails1284 = (fn: () => unknown): string => {
+    try { fn(); return ''; } catch (e) {
+      if (!(e instanceof PartsError)) throw e;
+      return e.problems.map(p => `${p.code}: ${p.object} — ${p.detail}`).join(' | ');
+    }
+  };
   const savedReceipt1284 = readFileSync(receipt1284);
-  say('DMP1284_WRITER_PRESERVES_EXISTING_RECEIPT', codes(() => bindDepthMap({ map: mapPath1284, input: join(prepared, 'face.png'), part: 'face' })).some(c => c.startsWith('DEPTH_MAP_BINDING:')) && readFileSync(receipt1284).equals(savedReceipt1284), 'exclusive creation refuses without altering existing evidence');
+  const overwriteMessage1284 = bindingDetails1284(() => bindDepthMap({ map: mapPath1284, input: join(prepared, 'face.png'), part: 'face' }));
+  say('DMP1284_WRITER_PRESERVES_EXISTING_RECEIPT', overwriteMessage1284.includes(`receipt ${JSON.stringify(receipt1284)} already exists (EEXIST)`) &&
+    overwriteMessage1284.includes('required an absent receipt in a writable directory') && overwriteMessage1284.includes('rig-parts depth-bind --map') && readFileSync(receipt1284).equals(savedReceipt1284), overwriteMessage1284);
+  const longMap1284 = join(dir, 'm'.repeat(240) + '.json'); writeFileSync(longMap1284, readFileSync(mapPath1284));
+  const writeError1284 = bindingDetails1284(() => bindDepthMap({ map: longMap1284, input: join(prepared, 'face.png'), part: 'face' }));
+  say('DMP1284_WRITER_OTHER_ERROR_NAMES_PATH_AND_CODE', writeError1284.includes(JSON.stringify(longMap1284 + '.binding.json')) &&
+    writeError1284.includes('write failed (ENAMETOOLONG)') && writeError1284.includes('required an absent receipt'), writeError1284);
+  const badPart1284 = bindingDetails1284(() => bindDepthMap({ map: mapPath1284, input: join(prepared, 'face.png'), part: '../bad' }));
+  say('DMP1284_WRITER_BAD_PART_IS_BINDING_INPUT_REFUSAL', badPart1284.includes('DEPTH_MAP_BINDING: depth-bind --part') &&
+    badPart1284.includes('found "../bad"; required a nonempty plain part filename') && badPart1284.includes('rig-parts depth-bind --map'), badPart1284);
   const invalidWriterMap1284 = join(dir, 'binding-invalid-map.json'); json(invalidWriterMap1284, {});
   say('DMP1284_WRITER_INVALID_MAP_EMITS_NOTHING', codes(() => bindDepthMap({ map: invalidWriterMap1284, input: join(prepared, 'face.png'), part: 'face' })).some(c => c.startsWith('DEPTH_MAP_FORMAT:')) && !existsSync(invalidWriterMap1284 + '.binding.json'), 'numeric map validation precedes receipt publication');
   const badPng1284 = join(dir, 'binding-invalid.png'); writeFileSync(badPng1284, 'not png');
@@ -220,14 +235,22 @@ export function runDepthBindingChecks(dir: string, say: Say): void {
   };
   const wrongMap1284 = { ...binding1284, mapSha256: '0'.repeat(64) }, wrongMapMessage1284 = refusal1284(wrongMap1284);
   say('DMP1284_WRONG_MAP_HASH_REFUSES_WITHOUT_OUTPUT', wrongMapMessage1284.includes('DEPTH_MAP_BINDING: part "face"') && wrongMapMessage1284.includes(`found ${wrongMap1284.mapSha256}; required ${binding1284.mapSha256}`) && !existsSync(failed1284), wrongMapMessage1284);
-  const malformed1284 = [null, [], { ...binding1284, extra: true }, { ...binding1284, part: 'badge' }, { ...binding1284, inputSha256: 'bad' }, { ...binding1284, spec: 'wrong' }];
-  say('DMP1284_MALFORMED_RECEIPTS_REFUSE_WITHOUT_OUTPUT', malformed1284.every(value => refusal1284(value).startsWith('DEPTH_MAP_BINDING:')) && !existsSync(failed1284), 'six planted invalid receipts, no output');
+  const malformed1284: Array<[unknown, string]> = [
+    [null, 'receipt found null; required an object'], [[], 'receipt found array; required an object'],
+    [{ ...binding1284, extra: true }, 'receipt found unknown key "extra"; required only'],
+    [{ ...binding1284, part: 'badge' }, 'receipt part found "badge"; required "face"'],
+    [{ ...binding1284, inputSha256: 'bad' }, 'receipt inputSha256 found "bad"; required 64 lowercase hexadecimal digits'],
+    [{ ...binding1284, mapSha256: null }, 'receipt mapSha256 found null; required 64 lowercase hexadecimal digits'],
+    [{ ...binding1284, spec: 'wrong' }, 'receipt spec found "wrong"; required "rig-parts-depth-map-binding/1"'],
+  ];
+  const malformedMessages1284 = malformed1284.map(([value, expected]) => ({ message: refusal1284(value), expected }));
+  say('DMP1284_MALFORMED_RECEIPTS_REFUSE_WITHOUT_OUTPUT', malformedMessages1284.every(({ message, expected }) => message.startsWith('DEPTH_MAP_BINDING:') && message.includes(expected) && message.includes('rig-parts depth-bind --map')) && !existsSync(failed1284), JSON.stringify(malformedMessages1284));
   writeFileSync(receipt1284, '{');
-  say('DMP1284_INVALID_RECEIPT_JSON_REFUSES', codes(() => applyDepth({ ...args, out: failed1284 })).some(c => c.startsWith('DEPTH_MAP_BINDING:')) && !existsSync(failed1284), 'present invalid JSON never falls back to legacy');
+  say('DMP1284_INVALID_RECEIPT_JSON_REFUSES', bindingDetails1284(() => applyDepth({ ...args, out: failed1284 })).includes('receipt found unreadable or invalid JSON; required a readable JSON object') && !existsSync(failed1284), 'present invalid JSON never falls back to legacy');
   rmSync(receipt1284); symlinkSync(join(dir, 'missing-binding.json'), receipt1284);
-  say('DMP1284_DANGLING_RECEIPT_REFUSES_NOT_LEGACY', codes(() => applyDepth({ ...args, out: failed1284 })).some(c => c.startsWith('DEPTH_MAP_BINDING:')) && !existsSync(failed1284), 'dangling receipt symlink is present malformed evidence');
+  say('DMP1284_DANGLING_RECEIPT_REFUSES_NOT_LEGACY', bindingDetails1284(() => applyDepth({ ...args, out: failed1284 })).includes('receipt found a symlink or nonregular file; required a regular file') && !existsSync(failed1284), 'dangling receipt symlink is present malformed evidence');
   rmSync(receipt1284); mkdirSync(receipt1284);
-  say('DMP1284_DIRECTORY_RECEIPT_REFUSES', codes(() => applyDepth({ ...args, out: failed1284 })).some(c => c.startsWith('DEPTH_MAP_BINDING:')) && !existsSync(failed1284), 'receipt must be a regular file');
+  say('DMP1284_DIRECTORY_RECEIPT_REFUSES', bindingDetails1284(() => applyDepth({ ...args, out: failed1284 })).includes('receipt found a symlink or nonregular file; required a regular file') && !existsSync(failed1284), 'receipt must be a regular file');
   rmSync(receipt1284, { recursive: true });
   json(receipt1284, binding1284);
   const originalArt1284 = readFileSync(join(source, 'parts/face.png'));
@@ -243,7 +266,7 @@ export function runDepthBindingChecks(dir: string, say: Say): void {
     JSON.stringify(changedManifest1284.parts[0].inputSize) === JSON.stringify(manifest.parts[0].inputSize) &&
     changedManifest1284.parts[0].inputSha256 !== binding1284.inputSha256 && mismatch1284.includes('DEPTH_MAP_BINDING: part "face"') &&
     mismatch1284.includes(`found ${binding1284.inputSha256}; required ${changedManifest1284.parts[0].inputSha256}`) &&
-    mismatch1284.includes('run depth for these inputs') && !existsSync(failed1284), mismatch1284);
+    mismatch1284.includes('re-run depth for these inputs, then rig-parts depth-bind --map <numeric-map.json> --input <prepared.png> --part <name>') && !existsSync(failed1284), mismatch1284);
   writeFileSync(join(source, 'parts/face.png'), originalArt1284);
   // Restore both fixture inputs before existing planted map/manifest controls run.
   rmSync(receipt1284);
