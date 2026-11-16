@@ -1,5 +1,5 @@
 /**
- * The idle: every channel a sine, one blink, and the control bones that move
+ * The idle: every channel a sine, authored blinks, and the control bones that move
  * idle keys off the bones a mesh is weighted to.
  *
  * ## Sines
@@ -211,38 +211,35 @@ export function idleMotion(cfg: CharacterConfig, chains: ReadonlyMap<string, str
   const groups: Record<string, string[]> = {};
   const bl = mc.blink;
   if (bl !== undefined) {
-    const tb = bl.t;
     groups.eyes = [...bl.eyes];
-    // A blink without brows (no eyebrow part) writes no brows group: rigc
-    // refuses a group with no members, and the loader refuses an empty one.
     if (bl.brows !== undefined) groups.brows = [...bl.brows];
-    const at = (dt: number): number => pyRound(tb + dt, 6);
-    tracks.push({
-      group: 'eyes',
-      property: 'scaley',
-      keys: [
-        { t: 0, v: [1] },
+    const eyeKeys: MotionKey[] = [{ t: 0, v: [1] }];
+    const browKeys: MotionKey[] = [{ t: 0, v: [0] }];
+    // Config order is time order. Each key is computed from its authored
+    // start, never from a preceding blink or an accumulated time delta.
+    for (const tb of blinkTimes(bl)) {
+      const at = (dt: number): number => pyRound(tb + dt, 6);
+      eyeKeys.push(
         { t: tb, v: [1], ease: 'shut' },
         { t: at(BLINK.shut), v: [bl.squash] },
         { t: at(BLINK.shut + BLINK.hold), v: [bl.squash], ease: 'open' },
         { t: at(BLINK.shut + BLINK.hold + BLINK.open), v: [1] },
-        { t: T, v: [1] },
-      ],
-    });
-    const drop = bl.brow_drop;
-    if (bl.brows !== undefined && drop !== undefined) {
-      tracks.push({
-        group: 'brows',
-        property: 'translatey',
-        keys: [
-          { t: 0, v: [0] },
+      );
+      const drop = bl.brow_drop;
+      if (bl.brows !== undefined && drop !== undefined) {
+        browKeys.push(
           { t: tb, v: [0], ease: 'shut' },
           { t: at(BLINK.browShut), v: [-drop] },
           { t: at(BLINK.browShut + BLINK.browHold), v: [-drop], ease: 'open' },
           { t: at(BLINK.browShut + BLINK.browHold + BLINK.browOpen), v: [0] },
-          { t: T, v: [0] },
-        ],
-      });
+        );
+      }
+    }
+    eyeKeys.push({ t: T, v: [1] });
+    tracks.push({ group: 'eyes', property: 'scaley', keys: eyeKeys });
+    if (bl.brows !== undefined && bl.brow_drop !== undefined) {
+      browKeys.push({ t: T, v: [0] });
+      tracks.push({ group: 'brows', property: 'translatey', keys: browKeys });
     }
   }
   const name = `${cfg.key}_painting`;
@@ -252,7 +249,7 @@ export function idleMotion(cfg: CharacterConfig, chains: ReadonlyMap<string, str
     cut: name,
     easings: { shut: [...EASINGS.shut], open: [...EASINGS.open] },
     groups,
-    animations: { idle: { duration: T, loop: true, note: IDLE_NOTE, tracks } },
+    animations: { idle: { duration: T, loop: true, note: bl?.more === undefined ? IDLE_NOTE : IDLE_NOTE.replace('one blink', 'authored blinks'), tracks } },
   };
 }
 
@@ -316,6 +313,11 @@ const HOLD_MISSES = new Map<string, Readonly<HoldMisses>>();
 
 /** The last time any blink key sits at before the closing key, in seconds after `blink.t`, for a blink with brows. */
 export const BLINK_SPAN = Math.max(BLINK.shut + BLINK.hold + BLINK.open, BLINK.browShut + BLINK.browHold + BLINK.browOpen);
+
+/** Authored order, validated by the config reader; the scalar stays scalar on disk. */
+export function blinkTimes(bl: { t: number; more?: readonly number[] }): number[] {
+  return [bl.t, ...(bl.more ?? [])];
+}
 
 /** {@link BLINK_SPAN} for this blink: without brows, only the eyes' keys have to fit inside the idle. */
 export function blinkSpan(bl: { brows?: readonly string[] }): number {

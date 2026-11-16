@@ -1161,7 +1161,7 @@ export interface BlinkStill {
 }
 
 /**
- * The idle's one blink. `eyes` names at least one bone; `brows` and
+ * The idle's authored blinks. `eyes` names at least one bone; `brows` and
  * `brow_drop` are stated together or not at all, and a stated `brows` names
  * at least one bone — rigc refuses a group with no members, and a
  * `brow_drop` with no brows is a value nothing reads. A figure with no eye
@@ -1169,6 +1169,8 @@ export interface BlinkStill {
  */
 export interface Blink {
   t: number;
+  /** Further authored times, strictly increasing after t; omitted for one blink. */
+  more?: number[];
   eyes: string[];
   brows?: string[];
   squash: number;
@@ -4483,9 +4485,21 @@ function checkMotion(c: Check, v: Json, bones: Set<string>, chains: Map<string, 
     });
   }
   if ('blink' in m) {
-    const b = c.object(`${p}.blink`, m.blink, ['t', 'eyes', 'squash'], ['brows', 'brow_drop', 'still']);
+    const b = c.object(`${p}.blink`, m.blink, ['t', 'eyes', 'squash'], ['brows', 'brow_drop', 'still', 'more']);
     if (b === null) return refuseSharedTargets(c, claims);
     if ('t' in b) c.number(`${p}.blink.t`, b.t, 'non-negative');
+    if ('more' in b) {
+      if (!Array.isArray(b.more) || b.more.length === 0) {
+        c.fail('CONFIG_BLINK_MORE_TIMES', `${p}.blink.more`, `is ${show(b.more)}; a non-empty list of finite times strictly increasing after t is required`);
+      } else {
+        Array.from(b.more).forEach((time, i) => {
+          const previous = i === 0 ? b.t : (b.more as Json[])[i - 1];
+          if (typeof time !== 'number' || !Number.isFinite(time) || typeof b.t !== 'number' || !(time > b.t) || typeof previous !== 'number' || !(time > previous)) {
+            c.fail('CONFIG_BLINK_MORE_TIMES', `${p}.blink.more[${i}]`, `is ${show(time)}; a finite time greater than t (${show(b.t)}) and the preceding time (${show(previous)}) is required`);
+          }
+        });
+      }
+    }
     if ('squash' in b) c.number(`${p}.blink.squash`, b.squash, 'positive');
     if ('brow_drop' in b) c.number(`${p}.blink.brow_drop`, b.brow_drop);
     if ('brows' in b && !('brow_drop' in b)) {
@@ -4529,7 +4543,19 @@ function checkMotion(c: Check, v: Json, bones: Set<string>, chains: Map<string, 
         }
       }
     }
-    if ('still' in b) checkBlinkStill(c, b.still, b.eyes, bones, regions);
+    if ('still' in b) {
+      const start = c.problems.length;
+      checkBlinkStill(c, b.still, b.eyes, bones, regions);
+      // All blinks use the same groups and cut-offs. Keep scalar diagnostics
+      // unchanged; for multiple blinks name each entry owning a failed cut.
+      if (Array.isArray(b.more) && b.more.length > 0) {
+        const stillProblems = c.problems.splice(start);
+        for (const problem of stillProblems) {
+          if (problem.code !== 'CONFIG_STILL_OFF_THE_BLINK') { c.problems.push(problem); continue; }
+          for (let i = 0; i <= b.more.length; i++) c.problems.push({ ...problem, object: `${problem.object} (${i === 0 ? `${p}.blink.t` : `${p}.blink.more[${i - 1}]`})` });
+        }
+      }
+    }
   }
   refuseSharedTargets(c, claims);
 }

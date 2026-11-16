@@ -86,6 +86,8 @@ import { runSetAnchorChecks } from './tools/check_set_anchor.ts';
 import { runSetFocusChecks } from './tools/check_set_focus.ts';
 import { runRemeshGateCopyChecks, runRetuneGateCopyChecks, runRevisionChainChecks } from './tools/check_revision_chain.ts';
 import { runConfigWriteChecks } from './tools/check_configwrite.ts';
+import { readConfigWriteTarget, stageConfigWrite } from './tools/configwrite.ts';
+import { BLINK_ANIMATION } from './src/check.ts';
 import { runCorePointerChecks } from './tools/check_corepointer.ts';
 import { runLayerBoundsChecks } from './tools/check_layer_bounds.ts';
 import { readPackageIdentity, RUN_STAMP_FILE, RUN_STAMP_SPEC, type RunStamp } from './src/runstamp.ts';
@@ -513,7 +515,7 @@ import {
 } from './src/check.ts';
 import { chainsLeftBehind, clothConfigEdits, writtenClothConfig } from './src/clothconfig.ts';
 import { EnvironmentError, readEnvironmentSchedule } from '@rig-c/core/environment';
-import { baseTagOf, blinkFigures, breathHeat, heatField, type BoneTrack, type BoneWorld, chainToward, edgeLength, frameBox, type GeometryPose, halfTravels, type MeshRest, stretchFigures, stretchSeverity, lagStep, readSine, setupToFrame, stillReading, stillTolerance, STILL_ROUNDINGS, SWING_TAGS, ulpOf } from './src/instruments.ts';
+import { baseTagOf, blinkFigures, blinkTracks, breathHeat, heatField, type BoneTrack, type BoneWorld, chainToward, edgeLength, frameBox, type GeometryPose, halfTravels, type MeshRest, stretchFigures, stretchSeverity, lagStep, readSine, setupToFrame, stillReading, stillTolerance, STILL_ROUNDINGS, SWING_TAGS, ulpOf } from './src/instruments.ts';
 import {
   aimLine,
   contactLine,
@@ -553,7 +555,7 @@ import { ALIASES, AliasTarballError, compareTarballs, MANIFEST as ALIAS_MANIFEST
 import { confirmAlias, DEFAULT_ALIAS_WAIT_MINUTES, EXIT_ALIAS_WAIT, EXIT_NOT_SERVED } from './scripts/install_smoke.ts';
 import { blobId, checkExampleInputs, type Copier, FETCH_RECORD, recordText, runSync } from './scripts/example_inputs.ts';
 import { BLINK, blinkHoldMisses, CONTROL_SUFFIX, framesInside, IDLE_FPS, type MotionKey, type MotionSpec, sineTrack, TIME_SLACK } from './src/motion.ts';
-import { ANIMATIONS_FROM_SPEC, type BoneEntry, type CharacterConfig, configFileReferences, CONFIG_REQUIRES, CONFIG_SECTIONS, type ConfigDoor, type ConfigSection, CONSTRAINT_BONE_FIELDS, type ContourRegionSpec, contourRegionsOf, type Cut, DEFAULT_BUST_ALPHA, DEFAULT_BUST_CLEARANCE, deriveBustRegions, type Extend, type Generation, isDoorKey, type Limb, loadClothConfig, loadConfig, loadConfigAndAnimations, loadEarlyConfig, loadPaintConfig, type Patch, type PlanEntry, type Point, parseConfig, parseEarlyConfig, parseProposalSections, type SkeletonSections, turnMovingPartPair } from './src/config.ts';
+import { ANIMATIONS_FROM_SPEC, type Blink, type BoneEntry, type CharacterConfig, configFileReferences, CONFIG_REQUIRES, CONFIG_SECTIONS, type ConfigDoor, type ConfigSection, CONSTRAINT_BONE_FIELDS, type ContourRegionSpec, contourRegionsOf, type Cut, DEFAULT_BUST_ALPHA, DEFAULT_BUST_CLEARANCE, deriveBustRegions, type Extend, type Generation, isDoorKey, type Limb, loadClothConfig, loadConfig, loadConfigAndAnimations, loadEarlyConfig, loadPaintConfig, type Patch, type PlanEntry, type Point, parseConfig, parseEarlyConfig, parseProposalSections, type SkeletonSections, turnMovingPartPair } from './src/config.ts';
 import { BUST_FIT_ALPHA, BUST_FIT_CLEARANCE, BUST_RESIDUAL_BOUND_PX, CALIBRATED_BUST_FIXTURES, midlineFallbackCleavage } from './fixtures/bust.ts';
 import { RIG_BONE_INHERIT, RIG_KEYS, RIG_SKIN_CONSTRAINT_KEYS } from '@rig-c/core/rig';
 import { expandStops } from '@rig-c/core/stop';
@@ -4746,6 +4748,58 @@ function runBlinkConfigCases(say: (name: string, ok: boolean, detail: string, wh
     return c;
   };
   const one = (err: PartsError | null): Problem | null => (err !== null && err.problems.length === 1 ? err.problems[0] : null);
+  // Issue #1304: t remains the first scalar time; more is explicitly optional.
+  const scalar1304 = parseConfig(blinkCfg(() => {})).motion.blink;
+  const more1304 = parseConfig(blinkCfg((b) => { b.more = [2, 3]; })).motion.blink;
+  say(
+    'CF1304_MORE_TIMES_LOAD_WITHOUT_REPLACING_SCALAR_T_OR_INVENTING_A_LIST',
+    scalar1304?.t === 1.5 && !Object.hasOwn(scalar1304, 'more') &&
+      more1304?.t === 1.5 && JSON.stringify(more1304.more) === '[2,3]',
+    `absent ${JSON.stringify(scalar1304)}; declared ${JSON.stringify(more1304)}`,
+    'issue #1304: omission preserves the scalar-only shape; a nonempty increasing list loads in its declared order',
+  );
+  const morePlants1304: Array<[string, unknown, string]> = [
+    ['CF1304_MORE_NONARRAY', 2, 'more'],
+    ['CF1304_MORE_NULL', null, 'more'],
+    ['CF1304_MORE_OBJECT', { t: 2 }, 'more'],
+    ['CF1304_MORE_EMPTY', [], 'more'],
+    ['CF1304_MORE_NONNUMBER', ['2'], 'more[0]'],
+    ['CF1304_MORE_NAN', [2, NaN], 'more[1]'],
+    ['CF1304_MORE_INFINITY', [2, Infinity], 'more[1]'],
+    ['CF1304_MORE_NEGATIVE_INFINITY', [-Infinity], 'more[0]'],
+    ['CF1304_MORE_DUPLICATE', [2, 2], 'more[1]'],
+    ['CF1304_MORE_DECREASING', [3, 2], 'more[1]'],
+    ['CF1304_MORE_EQUALS_T', [1.5], 'more[0]'],
+    ['CF1304_MORE_BEFORE_T', [1.4], 'more[0]'],
+    ['CF1304_MORE_SPARSE_ENTRY', Array(1), 'more[0]'],
+  ];
+  for (const [name, value, field] of morePlants1304) {
+    // Parse the object directly: JSON.stringify would turn nonfinite values into null.
+    const err = refusals(() => parseConfig(blinkCfg((b) => { b.more = value; })));
+    const problem = one(err);
+    say(name,
+      problem?.code === 'CONFIG_BLINK_MORE_TIMES' && problem.object === `config.motion.blink.${field}`,
+      `${String(value)} -> ${problem === null ? codes(err) : `${problem.code}: ${problem.object} — ${problem.detail}`}`,
+      'issue #1304: each independently planted invalid list names more or its offending entry; sorting, deduplication and fallback would hide the input error',
+    );
+  }
+  const arrayT1304 = one(refusals(() => parseConfig(blinkCfg((b) => { b.t = [1.5, 2]; }))));
+  say('CF1304_T_STAYS_SCALAR',
+    arrayT1304?.code === 'CONFIG_FIELD_TYPE' && arrayT1304.object === 'config.motion.blink.t',
+    JSON.stringify(arrayT1304), 'issue #1304: more does not widen or replace the existing scalar t contract');
+  const stillMore1304 = refusals(() => parseConfig(blinkCfg((b) => {
+    b.more = [2]; b.still = { face: { row: 3, bone: 'head' } };
+  })));
+  const stillMoreGood1304 = refusals(() => parseConfig(blinkCfg((b) => {
+    b.more = [2]; b.still = { face: { row: 3, bone: 'chest' } };
+  })));
+  say('CF1304_STILL_CUTOFF_NAMES_EVERY_BLINK_ENTRY',
+    stillMoreGood1304 === null && stillMore1304?.problems.length === 2 &&
+      stillMore1304.problems.every(p => p.code === 'CONFIG_STILL_OFF_THE_BLINK') &&
+      stillMore1304.problems[0].object.endsWith('(config.motion.blink.t)') &&
+      stillMore1304.problems[1].object.endsWith('(config.motion.blink.more[0])'),
+    JSON.stringify(stillMore1304?.problems),
+    'issue #1304: one shared still group failure names both owning blinks; the same cut on a non-eye bone loads');
   const noEyes = refusals(() => parseConfig(blinkCfg((b) => (b.eyes = []))));
   const noBrows = refusals(() => parseConfig(blinkCfg((b) => (b.brows = []))));
   const eyesOnly = refusals(() => parseConfig(blinkCfg((b) => {
@@ -8207,6 +8261,119 @@ function runRigSuite(): number {
     'a blink running past the last key writes keys out of order; a control whose name is taken would silently replace a declared bone',
   );
 
+  // Issue #1304, by hand from BLINK: eyes close at t + .07, hold to
+  // t + .154, reopen at t + .314; brows drop at t + .08, hold to
+  // t + .164, return at t + .364. At t=1.3 and 5.6 the closed eye
+  // intervals are [1.37,1.454] and [5.67,5.754]: frame 17 and frame 69
+  // at 12 fps, respectively. The old .04 hold misses both sampled frames.
+  {
+    const twoConfig = (more: number[] | null = [5.6], t = 1.3, brows = true): CharacterConfig => rigCfg((c) => {
+      const motion = c.motion as Record<string, unknown>;
+      motion.duration = 8;
+      const blink = motion.blink as Record<string, unknown>;
+      blink.t = t;
+      if (more !== null) blink.more = more;
+      if (!brows) { delete blink.brows; delete blink.brow_drop; }
+    });
+    const two = buildRig(twoConfig(), rigParts(), rigImages());
+    const eyeKeys = two.motion.animations.idle.tracks.find((t) => t.group === 'eyes' && t.property === 'scaley')?.keys ?? [];
+    const browKeys = two.motion.animations.idle.tracks.find((t) => t.group === 'brows' && t.property === 'translatey')?.keys ?? [];
+    const keyText = (keys: readonly MotionKey[]): string => keys.map((k) => `${k.t}:${k.v[0]}${k.ease === undefined ? '' : `:${k.ease}`}`).join(' ');
+    say('RG1304_TWO_BLINKS_HAVE_HAND_COMPUTED_EYE_AND_BROW_KEYS',
+      two.motion.animations.idle.duration === 8 &&
+        keyText(eyeKeys) === '0:1 1.3:1:shut 1.37:0.12 1.454:0.12:open 1.614:1 5.6:1:shut 5.67:0.12 5.754:0.12:open 5.914:1 8:1' &&
+        keyText(browKeys) === '0:0 1.3:0:shut 1.38:-1 1.464:-1:open 1.664:0 5.6:0:shut 5.68:-1 5.764:-1:open 5.964:0 8:0' &&
+        JSON.stringify(two.motion.groups) === '{"eyes":["eye"],"brows":["eye"]}' &&
+        two.motion.animations.idle.tracks.filter((t) => t.group === 'eyes').length === 1 &&
+        two.motion.animations.idle.tracks.filter((t) => t.group === 'brows').length === 1,
+      `eyes ${keyText(eyeKeys)}; brows ${keyText(browKeys)}`,
+      'issue #1304: one track per target, two authored windows, one opening and closing idle key; no interpolation across the open interval');
+    const windows = eyeKeys.flatMap((k, i) => k.v[0] === 0.12 && eyeKeys[i + 1]?.v[0] === 0.12 ? [[k.t, eyeKeys[i + 1].t]] : []);
+    const sampled = windows.map(([from, to]) => framesInside(from, to, IDLE_FPS, 8 * IDLE_FPS + 1));
+    const oldHold = [1.37, 5.67].map((from) => framesInside(from, from + 0.04, IDLE_FPS, 8 * IDLE_FPS + 1));
+    say('RG1304_EACH_BLINK_HOLDS_A_SAMPLED_FRAME_AND_THE_OLD_HOLD_MISSES_BOTH',
+      JSON.stringify(windows) === '[[1.37,1.454],[5.67,5.754]]' && JSON.stringify(sampled) === '[[17],[69]]' &&
+        JSON.stringify(oldHold) === '[[],[]]',
+      `windows ${JSON.stringify(windows)}; frames ${JSON.stringify(sampled)}; old .04 s hold ${JSON.stringify(oldHold)}`,
+      'issue #32 applies to every blink, including more[0], rather than just the first closed-key pair');
+
+    for (const [name, more, t, field] of [
+      ['RG1304_MORE_AT_IDLE_SEAM', [7.636], 1.3, 'more[0]'],
+      ['RG1304_MORE_PAST_IDLE_SEAM', [7.7], 1.3, 'more[0]'],
+      ['RG1304_LATER_MORE_AT_IDLE_SEAM', [5.6, 7.636], 1.3, 'more[1]'],
+      ['RG1304_FIRST_BLINK_AT_ZERO', [5.6], 0, 't'],
+    ] as const) {
+      const err = refusals(() => buildRig(twoConfig([...more], t), rigParts(), rigImages()));
+      say(name, err?.problems.length === 1 && err.problems[0].code === 'RIG_BLINK_INSIDE_IDLE' && err.problems[0].object === `config.motion.blink.${field}`,
+        JSON.stringify(err?.problems ?? null), 'issue #1304: every complete blink window lies strictly inside the idle, and its own entry is named');
+    }
+    for (const [name, more, field] of [
+      ['RG1304_MORE_OVERLAPS_BROW_WINDOW', [1.62], 'more[0]'],
+      ['RG1304_LATER_MORE_OVERLAPS_PRECEDING_MORE', [3, 3.32], 'more[1]'],
+    ] as const) {
+      const err = refusals(() => buildRig(twoConfig([...more]), rigParts(), rigImages()));
+      say(name, err?.problems.length === 1 && err.problems[0].code === 'RIG_BLINK_WINDOWS_DISJOINT' && err.problems[0].object === `config.motion.blink.${field}`,
+        JSON.stringify(err?.problems ?? null), 'issue #1304: the eye has reopened but the brows still move; the complete windows, including adjacent more entries, must be disjoint');
+    }
+    const beforeSeam = refusals(() => buildRig(twoConfig([7.635]), rigParts(), rigImages()));
+    const afterBrow = refusals(() => buildRig(twoConfig([1.665]), rigParts(), rigImages()));
+    const eyesOnly = refusals(() => buildRig(twoConfig([1.615], 1.3, false), rigParts(), rigImages()));
+    say('RG1304_DISJOINT_WINDOWS_AND_STRICTLY_INTERIOR_END_LOAD_GREEN',
+      beforeSeam === null && afterBrow === null && eyesOnly === null,
+      `before seam ${codes(beforeSeam)}; after brows ${codes(afterBrow)}; eyes only ${codes(eyesOnly)}`,
+      'issue #1304: the seam and overlap refusals have nearby positive controls, and absent brows do not invent a longer window');
+    const roundedOverlap = refusals(() => buildRig(twoConfig([1.3140007], 1.0000006, false), rigParts(), rigImages()));
+    const roundedApart = refusals(() => buildRig(twoConfig([1.314002], 1.0000006, false), rigParts(), rigImages()));
+    say('RG1304_ROUNDED_END_CANNOT_REVERSE_THE_NEXT_START_KEY',
+      roundedOverlap?.problems.length === 1 && roundedOverlap.problems[0].code === 'RIG_BLINK_WINDOWS_DISJOINT' &&
+        roundedOverlap.problems[0].object === 'config.motion.blink.more[0]' && roundedApart === null,
+      `raw-separated but rounded-overlapping ${JSON.stringify(roundedOverlap?.problems ?? null)}; later start ${codes(roundedApart)}`,
+      'issue #1304: with no brows, 1.0000006 + .314 = 1.3140006 rounds to 1.314001, after the next raw start 1.3140007; 1.314002 is later than both');
+    const seamConfig = twoConfig([2.6860007], 1, false);
+    seamConfig.motion.duration = 3.0000008;
+    seamConfig.motion.tracks = [];
+    const roundedSeam = refusals(() => buildRig(seamConfig, rigParts(), rigImages()));
+    say('RG1304_ROUNDED_END_MUST_REMAIN_STRICTLY_INSIDE_IDLE',
+      roundedSeam?.problems.length === 1 && roundedSeam.problems[0].code === 'RIG_BLINK_INSIDE_IDLE' &&
+        roundedSeam.problems[0].object === 'config.motion.blink.more[0]',
+      JSON.stringify(roundedSeam?.problems ?? null),
+      'issue #1304: raw end 3.0000007 is inside duration 3.0000008, but the emitted 3.000001 key is outside');
+
+    const renderDir = temp('rig-two-blinks-1304');
+    try {
+      const bin = suiteRigc();
+      const render = (name: string, built: RigOutput): BoneTrack | string => {
+        const home = join(renderDir, name);
+        const images = join(home, 'images');
+        mkdirSync(images, { recursive: true });
+        for (const [file, image] of built.images) writeFileSync(join(images, file), encodePngBytes(image));
+        writeFileSync(join(home, 'rig.json'), rigJsonText({ ...built.rig, images }));
+        writeFileSync(join(home, 'motion.json'), rigJsonText(built.motion));
+        const build = spawnRigc(bin, ['build', '--rig', join(home, 'rig.json'), '--motion', join(home, 'motion.json'), '--out', join(home, 'build'), ...packedBuildArgs(DEFAULT_PACK_MODE)]);
+        if (build.status !== 0) return `build exit ${build.status}: ${build.out}`;
+        const drawn = spawnRigc(bin, ['render', '--candidate', join(home, 'build'), '--animation', 'idle', '--fps', String(IDLE_FPS), '--max', '32', '--geometry', '--out', join(home, 'render')]);
+        if (drawn.status !== 0) return `render exit ${drawn.status}: ${drawn.out}`;
+        return readBoneTrack(readFrameSet(join(home, 'render')), 'eye');
+      };
+      const drawn = render('two', two);
+      const omitted = render('omit-second', buildRig(twoConfig(null), rigParts(), rigImages()));
+      const scaleAt = (track: BoneTrack | string, frame: number): number | null => {
+        if (typeof track === 'string') return null;
+        const i = track.times.findIndex((t) => Math.abs(t - frame / IDLE_FPS) <= TIME_SLACK);
+        const world = track.frames[i];
+        return world === undefined ? null : Math.hypot(world.b, world.d) / Math.hypot(track.setup.b, track.setup.d);
+      };
+      const scales = [17, 36, 69].map((frame) => scaleAt(drawn, frame));
+      const plant = [17, 36, 69].map((frame) => scaleAt(omitted, frame));
+      const near = (value: number | null, want: number): boolean => value !== null && Math.abs(value - want) <= POSE_BAR;
+      say('RG1304_RENDERED_FRAMES_CLOSE_BOTH_BLINKS_AND_OMITTING_SECOND_IS_DETECTED',
+        near(scales[0], 0.12) && near(scales[1], 1) && near(scales[2], 0.12) &&
+          near(plant[0], 0.12) && near(plant[1], 1) && near(plant[2], 1),
+        `rendered eye y-scale at frames 17,36,69: ${JSON.stringify(scales)}; omit second ${JSON.stringify(plant)}; ${typeof drawn === 'string' ? drawn : 'two-blink render read'}; ${typeof omitted === 'string' ? omitted : 'planted render read'}`,
+        'issue #1304: actual rigc sampling at 12 fps, --max 32, through the mandatory build gate; both held frames squash to .12, the gap stays open, and the dropped blink is visibly absent in its posed geometry');
+    } finally { rmSync(renderDir, { recursive: true, force: true }); }
+  }
+
   // Issue #49's note: could the control rename make two distinct targets one?
   // Only if a moved key lands on a name a user track or group member already
   // holds — a declared "<bone>_ctl" (chain links end in a digit, so no link
@@ -9814,6 +9981,20 @@ function runBlinkStillCases(say: (name: string, ok: boolean, detail: string, why
     `slots ${r.rig.slots.map((sl) => `${sl.name}@${sl.bone}`).join(', ')}; lash at ${low?.x},${low?.y} (${lowImg?.width}x${lowImg?.height}), lash_still at ${up?.x},${up?.y} (${upImg?.width}x${upImg?.height}); motion and bones ${JSON.stringify(r.motion) === JSON.stringify(whole.motion) && JSON.stringify(r.rig.bones) === JSON.stringify(whole.rig.bones) ? 'identical to' : 'DIFFERENT from'} the uncut rig's`,
     'the positive control, every figure derived in fixtures/rig.ts: the rows above the cut are drawn right after the part by <part>_still on the named bone, which no blink group names; the lower piece keeps the part\'s slot, so the blink keys nothing new',
   );
+
+  const multiStill1304 = (badRow: boolean): CharacterConfig => lashCfg(c => {
+    ((c.motion as Record<string, unknown>).blink as Record<string, unknown>).more = [2];
+    if (badRow) stillOf(c).lash.row = 22;
+  });
+  const multiStillGood1304 = buildRig(multiStill1304(false), lashParts(), lashImages());
+  const multiStillBad1304 = refusals(() => buildRig(multiStill1304(true), lashParts(), lashImages()));
+  say('RG1304_STILL_SPLIT_IS_SHARED_AND_FAILURE_NAMES_EVERY_BLINK',
+    isDeepStrictEqual(multiStillGood1304.images, r.images) &&
+      multiStillBad1304?.problems.length === 2 && multiStillBad1304.problems.every(p => p.code === 'RIG_STILL_ROW_CLEAR') &&
+      multiStillBad1304.problems[0].object.endsWith('(config.motion.blink.t)') &&
+      multiStillBad1304.problems[1].object.endsWith('(config.motion.blink.more[0])'),
+    JSON.stringify(multiStillBad1304?.problems),
+    'issue #1304: repeated blinks retain the same split images; a cut through art names each owning blink');
 
   const through = refusals(() => buildRig(lashCfg((c) => (stillOf(c).lash.row = 22)), lashParts(), lashImages()));
   const edge = refusals(() => buildRig(lashCfg((c) => (stillOf(c).lash.row = 17)), lashParts(), lashImages()));
@@ -20792,6 +20973,37 @@ function runCheckSeatedCases(dir: string, say: ReturnType<typeof counter>['say']
 }
 
 function runCheckJudgementCases(dir: string, say: ReturnType<typeof counter>['say']): void {
+  // Issue #1304: a closed-key run ends when the target opens, even if a
+  // later run reaches the same minimum. These keys are independent of rig's writer.
+  const twoKeys1304: MotionKey[] = [
+    { t: 0, v: [1] }, { t: 1.3, v: [1] }, { t: 1.37, v: [0.12] }, { t: 1.454, v: [0.12] }, { t: 1.614, v: [1] },
+    { t: 5.6, v: [1] }, { t: 5.67, v: [0.12] }, { t: 5.754, v: [0.12] }, { t: 5.914, v: [1] }, { t: 8, v: [1] },
+  ];
+  const probe1304 = (target: { bone: string } | { group: string }, keys = twoKeys1304, property = 'scaley') => ({
+    groups: { eyes: ['eye'], other: ['other'] },
+    animations: { idle: { duration: 8, tracks: [{ ...target, property, keys }] } },
+  });
+  const groupRuns1304 = blinkTracks(probe1304({ group: 'eyes' }), new Set(['eye']));
+  const boneRuns1304 = blinkTracks(probe1304({ bone: 'eye' }), new Set(['eye']));
+  const expectedRuns1304 = (target: { bone: string } | { group: string }) => [
+    { target, closed: 0.12, window: [1.37, 1.454] }, { target, closed: 0.12, window: [5.67, 5.754] },
+  ];
+  const spansOpenGap1304 = groupRuns1304.some((r) => r.window[0] <= 3 && r.window[1] >= 3);
+  say('CK1304_BLINK_TRACKS_SPLITS_CLOSED_RUNS_FOR_GROUP_AND_BONE_TARGETS',
+    isDeepStrictEqual(groupRuns1304, expectedRuns1304({ group: 'eyes' })) &&
+      isDeepStrictEqual(boneRuns1304, expectedRuns1304({ bone: 'eye' })) && !spansOpenGap1304,
+    `group ${JSON.stringify(groupRuns1304)}; bone ${JSON.stringify(boneRuns1304)}; spans open gap ${spansOpenGap1304}`,
+    'issue #1304: same BlinkTrack shape for each contiguous run; the old first-to-last minimum would incorrectly cover the open interval');
+  const single1304 = blinkTracks(probe1304({ bone: 'eye' }, [...twoKeys1304.slice(0, 5), { t: 8, v: [1] }]), new Set(['eye']));
+  const open1304 = blinkTracks(probe1304({ bone: 'eye' }, twoKeys1304.map((k) => ({ ...k, v: [1] }))), new Set(['eye']));
+  const foreign1304 = blinkTracks(probe1304({ group: 'other' }), new Set(['eye']));
+  const wrongProperty1304 = blinkTracks(probe1304({ bone: 'eye' }, twoKeys1304, 'translatey'), new Set(['eye']));
+  say('CK1304_BLINK_TRACKS_KEEPS_SCALAR_SHAPE_AND_REJECTS_NONBLINK_TRACKS',
+    isDeepStrictEqual(single1304, expectedRuns1304({ bone: 'eye' }).slice(0, 1)) &&
+      open1304.length === 0 && foreign1304.length === 0 && wrongProperty1304.length === 0,
+    `single ${JSON.stringify(single1304)}; flat ${JSON.stringify(open1304)}; foreign ${JSON.stringify(foreign1304)}; other property ${JSON.stringify(wrongProperty1304)}`,
+    'issue #1304: dropping the second blink drops only its record; flat tracks, non-eye groups and non-scale properties cannot create a closed window');
+
   // The judgement lines (issue #11): each one's bar made to fire on the fixture, by name.
   const judged = (label: string, opts: Parameters<typeof writeCheckRig>[1]): { status: number; out: string; fig: Record<string, unknown> | null } => {
     const r = join(dir, label);
@@ -21452,6 +21664,83 @@ function runCheckJudgementCases(dir: string, say: ReturnType<typeof counter>['sa
     `exit ${shut.status}; ${holeFail?.trim() ?? 'no CHECK_BLINK_NO_HOLE line'}; idle frames closed ${JSON.stringify(holeFig?.idle_frames_closed)}`,
     'the eye part reaches past the face on one side, so squashing it shows the page there; the blink holds 0.5 s to 0.6 s, which at 12 fps is frames 6 and 7 (0.5 and 0.583 s)',
   );
+  {
+    const home = join(dir, 'blink-two-1304');
+    writeCheckRig(home, { from: ['head:face', 'head:eyewhite-r'], peak: 0, blinkSquash: 0.1 });
+    const motion = JSON.parse(readFileSync(join(home, 'motion.json'), 'utf8')) as MotionSpec;
+    const eyeTrack = motion.animations.idle.tracks.find((t) => t.group === 'eyes' && t.property === 'scaley');
+    if (eyeTrack === undefined) throw new Error('CK1304_FIXTURE_HAS_NO_EYE_TRACK');
+    // Closed [.25,.35] and [.75,.85]: frames [3,4] and [9,10] by hand.
+    eyeTrack.keys = [
+      { t: 0, v: [1] }, { t: 0.2, v: [1] }, { t: 0.25, v: [0.1] }, { t: 0.35, v: [0.1] }, { t: 0.4, v: [1] },
+      { t: 0.7, v: [1] }, { t: 0.75, v: [0.1] }, { t: 0.85, v: [0.1] }, { t: 0.9, v: [1] }, { t: 1, v: [1] },
+    ];
+    writeFileSync(join(home, 'motion.json'), rigJsonText(motion));
+    const out = join(dir, 'blink-two-1304-out');
+    const heldTracks: unknown[][] = [];
+    const bin = suiteRigc();
+    const runner: RigcRunner = (args) => {
+      if (args[0] === 'build' && args.includes('--motion')) {
+        const path = args[args.indexOf('--motion') + 1];
+        const held = readJsonFile(path) as { animations?: Record<string, { tracks?: unknown[] }> } | null;
+        const tracks = held?.animations?.[BLINK_ANIMATION]?.tracks;
+        if (tracks !== undefined) heldTracks.push(tracks);
+      }
+      return spawnRigc(bin, args);
+    };
+    const report = checkStage({ rig: home, out, noExtremes: true }, runner, bin, () => {});
+    const checked = { status: report.figures.PASS ? 0 : 1 };
+    const row = readJsonFile(join(out, 'check.json'))?.BLINK_NO_HOLE as {
+      status?: string; closed?: string[]; idle_frames_closed?: number[]; idle_frames_closed_per_blink?: number[][];
+    } | undefined;
+    const holeLines = report.problems.filter((p) => p.code === 'CHECK_BLINK_NO_HOLE').map((p) => p.object);
+    say('CK1304_CHECK_UNIONS_CLOSED_FRAMES_PER_BLINK_WITHOUT_THE_OPEN_GAP',
+      checked.status === 1 && row?.status === 'FAIL' && row.closed?.length === 2 &&
+        JSON.stringify(row.idle_frames_closed) === '[3,4,9,10]' && JSON.stringify(row.idle_frames_closed_per_blink) === '[[3,4],[9,10]]' &&
+        holeLines.length === 2 && holeLines.some((l) => l.includes('blink.t')) && holeLines.some((l) => l.includes('blink.more[0]')) &&
+        !Object.hasOwn(holeFig ?? {}, 'idle_frames_closed_per_blink'),
+      `verdict ${checked.status}; row ${JSON.stringify(row)}; hole objects ${holeLines.join(' | ')}`,
+      'issue #1304: the actual check keeps both windows and reports their sorted union, omits the multi-only field for CK12, and fires the planted hole once for each blink');
+    say('CK1304_HELD_RENDER_DEDUPLICATES_REPEATED_EYE_TARGETS',
+      heldTracks.length === 1 && heldTracks[0].length === 1,
+      JSON.stringify(heldTracks),
+      'issue #1304: two closed runs on the eyes group need one held render track; duplicate property tracks would make the mandatory still build fail');
+
+    // A second eye target has an unmatched early blink; ordinal pairing would
+    // miss both true intersections [.30,.35] and [.80,.85], frames 4 and 10.
+    const parts = readParts(join(home, 'parts.json'));
+    parts.parts[0].from = 'head:eyewhite-l';
+    writeFileSync(join(home, 'parts.json'), serializeParts(parts));
+    motion.animations.idle.tracks.push({ bone: 'root', property: 'scaley', keys: [
+      { t: 0, v: [1] }, { t: 0.05, v: [0.1] }, { t: 0.1, v: [0.1] }, { t: 0.12, v: [1] },
+      { t: 0.25, v: [1] }, { t: 0.3, v: [0.1] }, { t: 0.4, v: [0.1] }, { t: 0.45, v: [1] },
+      { t: 0.75, v: [1] }, { t: 0.8, v: [0.1] }, { t: 0.9, v: [0.1] }, { t: 0.95, v: [1] }, { t: 1, v: [1] },
+    ] });
+    writeFileSync(join(home, 'motion.json'), rigJsonText(motion));
+    const intersectOut = join(dir, 'blink-target-intersections-1304-out');
+    const intersect = runCli(['check', '--rig', home, '--out', intersectOut, '--no-extremes']);
+    const intersectRow = readJsonFile(join(intersectOut, 'check.json'))?.BLINK_NO_HOLE as typeof row;
+    say('CK1304_CHECK_INTERSECTS_EYE_TARGETS_BY_TIME_INSTEAD_OF_ORDINAL',
+      intersect.status === 1 && intersectRow?.status === 'FAIL' &&
+        JSON.stringify(intersectRow.idle_frames_closed) === '[4,10]' &&
+        JSON.stringify(intersectRow.idle_frames_closed_per_blink) === '[[4],[10]]',
+      `exit ${intersect.status}; ${JSON.stringify(intersectRow)}`,
+      'issue #1304: a different eye target has an extra early run; corresponding windows are their actual time intersections, never equally numbered records');
+    const rootTrack1304 = motion.animations.idle.tracks.find(t => t.bone === 'root' && t.property === 'scaley');
+    if (rootTrack1304 === undefined) throw new Error('CK1304_FIXTURE_HAS_NO_ROOT_SCALE_TRACK');
+    rootTrack1304.keys = [
+      { t: 0, v: [1] }, { t: 0.05, v: [0.1] }, { t: 0.1, v: [0.1] }, { t: 0.12, v: [1] }, { t: 1, v: [1] },
+    ];
+    writeFileSync(join(home, 'motion.json'), rigJsonText(motion));
+    const noCommonOut1304 = join(dir, 'blink-no-common-1304-out');
+    const noCommon1304 = runCli(['check', '--rig', home, '--out', noCommonOut1304, '--no-extremes']);
+    const noCommonRow1304 = readJsonFile(join(noCommonOut1304, 'check.json'))?.BLINK_NO_HOLE as typeof row;
+    say('CK1304_EMPTY_CLOSED_INTERSECTION_CANNOT_SUPPRESS_A_MEASURED_HOLE',
+      noCommon1304.status === 1 && noCommonRow1304?.status === 'FAIL' &&
+        JSON.stringify(noCommonRow1304.idle_frames_closed) === '[]' && failLine(noCommon1304.out, 'CHECK_BLINK_NO_HOLE') !== null,
+      `exit ${noCommon1304.status}; ${JSON.stringify(noCommonRow1304)}; ${failLine(noCommon1304.out, 'CHECK_BLINK_NO_HOLE')}`,
+      'issue #1304: no simultaneous closed frame removes the reported frames, never the measured background-hole refusal');
+  }
   // The same blink, read by STILL_REGIONS_DARK: the eye the blink squashes moves, the face does not.
   const eyePart = CHECK_PARTS[1];
   const eyeArt = checkPartRaster(eyePart);
@@ -55698,6 +55987,30 @@ function runConfigWriteSuite(): number {
   const { say, bad } = counter();
   const dir = temp('config-write');
   try {
+    const morePath1304 = join(dir, 'blink-more-1304.json');
+    const initial1304 = configWriteFixture();
+    writeFileSync(morePath1304, `${JSON.stringify(initial1304, null, 2)}\n`);
+    const proposal1304 = configWriteProposal();
+    const authoredBlink1304: Blink = { t: 1.3, more: [2.3, 3.3], eyes: ['eye'], brows: ['eye'], squash: 0.12, brow_drop: 1 };
+    proposal1304.motion.blink = authoredBlink1304;
+    const staged1304 = stageConfigWrite(readConfigWriteTarget(morePath1304), { kind: 'proposal', proposal: proposal1304, sections: PROPOSAL_CONFIG_SECTIONS });
+    try { staged1304.commit(); } finally { staged1304.cancel(); }
+    const written1304 = loadConfig(morePath1304).motion.blink;
+    say('CW1304_WRITEBACK_PRESERVES_SCALAR_T_AND_EVERY_MORE_ENTRY',
+      written1304?.t === 1.3 && JSON.stringify(written1304.more) === '[2.3,3.3]' &&
+        JSON.stringify(written1304) === JSON.stringify(proposal1304.motion.blink),
+      JSON.stringify(written1304),
+      'issue #1304: actual staged proposal replacement and the full loader retain the scalar and ordered extra times');
+    const beforeBad1304 = readFileSync(morePath1304, 'utf8');
+    const badProposal1304 = structuredClone(proposal1304);
+    const invalidBlink1304: Blink = { ...authoredBlink1304, more: [3.3, 2.3] };
+    badProposal1304.motion.blink = invalidBlink1304;
+    const badWrite1304 = refusals(() => stageConfigWrite(readConfigWriteTarget(morePath1304), { kind: 'proposal', proposal: badProposal1304, sections: PROPOSAL_CONFIG_SECTIONS }));
+    say('CW1304_INVALID_MORE_WRITEBACK_REFUSES_WITHOUT_REPLACING_CONFIG',
+      badWrite1304?.problems.length === 1 && badWrite1304.problems[0].code === 'CONFIG_BLINK_MORE_TIMES' &&
+        badWrite1304.problems[0].object === 'config.motion.blink.more[1]' && readFileSync(morePath1304, 'utf8') === beforeBad1304,
+      JSON.stringify(badWrite1304?.problems ?? null),
+      'issue #1304: a nonincreasing proposed list is rejected by the writer validation before the existing config can be replaced');
     runConfigWriteChecks(dir, (name, ok, detail) => say(name, ok, detail, 'the same pure merge, filesystem and CLI controls as tools/check_configwrite.ts'));
     runOnlyMissing679Checks(dir, (name, ok, detail) => say(name, ok, detail, 'issue #679: destination attachment coverage, resolvable entries only, and unchanged limb config bytes and rig gate'));
     const guide = readFileSync(join(ROOT, GUIDE_DOC), 'utf8');

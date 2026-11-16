@@ -177,7 +177,7 @@ import { skeletonLimbJoints } from './limbs.ts';
 import { coalesceLimbSlots } from './limbslots.ts';
 import { layoutAlias, placeLimbLayouts, type LayoutPlan } from './limblayout.ts';
 import { artCoverage, ART_ALPHA, latticeCells, latticeMesh, latticeStray, ONE_LOOP_PASSES, type LatticeMesh } from './mesh.ts';
-import { bindFaceSurfaceDeform, BLINK, blinkHoldMisses, blinkSpan, CONTROL_SUFFIX, controlledBones, IDLE_FPS, idleMotion, type MotionSpec, moveKeysToControls } from './motion.ts';
+import { bindFaceSurfaceDeform, BLINK, blinkHoldMisses, blinkSpan, blinkTimes, CONTROL_SUFFIX, controlledBones, IDLE_FPS, idleMotion, type MotionSpec, moveKeysToControls } from './motion.ts';
 import { type PartRecord, type AlternateSetMap, FRONT_SUFFIX, PAINTING_RUN, type PartsFile, readFrom, tagOf } from './parts.ts';
 import { waistPairs, waistBand, waistInfluences } from './waist.ts';
 import { preserveWaistRest, refineWaistMesh, remapWaistDeforms, storedWorld, waistBottomMesh, waistBottomLayoutOf, type WaistMapping } from './waistmesh.ts';
@@ -1602,27 +1602,38 @@ export function buildWaistPairSource(
   // ---- motion ------------------------------------------------------------
   const bl = cfg.motion.blink;
   const span = bl === undefined ? 0 : blinkSpan(bl);
-  if (bl !== undefined && !(bl.t > 0 && bl.t + span < cfg.motion.duration)) {
-    fail(
-      'RIG_BLINK_INSIDE_IDLE',
-      'config.motion.blink.t',
-      `is ${bl.t} s; the blink's keys run from t to t + ${pyRound(span, 6)} s between the idle's first key at 0 and its last at ${cfg.motion.duration} s, so 0 < t < ${pyRound(cfg.motion.duration - span, 6)} is required`,
-    );
+  if (bl !== undefined) {
+    const times = blinkTimes(bl);
+    times.forEach((time, i) => {
+      const at = i === 0 ? 'config.motion.blink.t' : `config.motion.blink.more[${i - 1}]`;
+      if (!(time > 0 && Math.max(time + span, pyRound(time + span, 6)) < cfg.motion.duration)) {
+        fail('RIG_BLINK_INSIDE_IDLE', at,
+          `is ${time} s; the blink's keys run from t to t + ${pyRound(span, 6)} s between the idle's first key at 0 and its last at ${cfg.motion.duration} s, so 0 < t < ${pyRound(cfg.motion.duration - span, 6)} is required`);
+      }
+      if (i > 0 && time <= Math.max(times[i - 1] + span, pyRound(times[i - 1] + span, 6))) {
+        fail('RIG_BLINK_WINDOWS_DISJOINT', at,
+          `starts at ${time} s; the preceding blink ends at ${pyRound(times[i - 1] + span, 6)} s, so a later start is required to keep the blink windows disjoint`);
+      }
+      problems.push(...blinkHoldProblems(BLINK.shut, BLINK.hold, IDLE_FPS).map(p => bl.more === undefined ? p : { ...p, object: `${at}: ${p.object}` }));
+    });
   }
-  if (bl !== undefined) problems.push(...blinkHoldProblems(BLINK.shut, BLINK.hold, IDLE_FPS));
   // ---- blink.still: a blinking region cut at a row ----------------------
   const stills = bl?.still ?? {};
   const partNames = new Map(parts.parts.map((p) => [foldName(p.name), p.name]));
+  const stillFail = (code: string, object: string, detail: string): void => {
+    if (bl?.more === undefined) { fail(code, object, detail); return; }
+    blinkTimes(bl).forEach((_, i) => fail(code, `${object} (${i === 0 ? 'config.motion.blink.t' : `config.motion.blink.more[${i - 1}]`})`, detail));
+  };
   for (const [part, st] of Object.entries(stills)) {
     const at = `config.motion.blink.still.${part}`;
     const p = byPart.get(part);
-    if (!(part in cfg.regions)) fail('RIG_NAME_RESOLVES', at, `names "${part}", which config.regions does not attach; a region part is required`);
-    if (!B.has(st.bone)) fail('RIG_NAME_RESOLVES', `${at}.bone`, `names the bone "${st.bone}", which config.bones does not declare`);
+    if (!(part in cfg.regions)) stillFail('RIG_NAME_RESOLVES', at, `names "${part}", which config.regions does not attach; a region part is required`);
+    if (!B.has(st.bone)) stillFail('RIG_NAME_RESOLVES', `${at}.bone`, `names the bone "${st.bone}", which config.bones does not declare`);
     if (p === undefined) continue;
     const still = `${part}${STILL_SUFFIX}`;
-    if (partNames.has(foldName(still))) fail('RIG_STILL_NAME_FREE', at, `the still piece is drawn by the slot "${still}" ("${still}.png"), and parts.json already holds part "${partNames.get(foldName(still))}" ("${partNames.get(foldName(still))}.png"); rename that part`);
+    if (partNames.has(foldName(still))) stillFail('RIG_STILL_NAME_FREE', at, `the still piece is drawn by the slot "${still}" ("${still}.png"), and parts.json already holds part "${partNames.get(foldName(still))}" ("${partNames.get(foldName(still))}.png"); rename that part`);
     if (!(st.row > p.y && st.row < p.y + p.h)) {
-      fail('RIG_STILL_ROW_INSIDE_PART', `${at}.row`, `is ${st.row}; "${part}" spans rows ${p.y}..${p.y + p.h - 1}, so a row with part rows on both sides, ${p.y + 1}..${p.y + p.h - 1}, is required`);
+      stillFail('RIG_STILL_ROW_INSIDE_PART', `${at}.row`, `is ${st.row}; "${part}" spans rows ${p.y}..${p.y + p.h - 1}, so a row with part rows on both sides, ${p.y + 1}..${p.y + p.h - 1}, is required`);
       continue;
     }
     const img = images.get(part);
@@ -1631,7 +1642,7 @@ export function buildWaistPairSource(
     const crossing: number[] = [];
     for (let x = 0; x < img.width; x++) if (img.data[(r * img.width + x) * 4 + 3] > 0) crossing.push(x);
     if (crossing.length > 0) {
-      fail(
+      stillFail(
         'RIG_STILL_ROW_CLEAR',
         `${at}.row`,
         `is ${st.row}, and "${part}" has ${crossing.length} pixel(s) with alpha above 0 on that row (the first at x = ${p.x + crossing[0]}); a row with no art across the part's whole width is required — two pieces cut through art are each resampled against their own transparent edge, so the render changes at rest, not only while the eye moves`,
@@ -1641,7 +1652,7 @@ export function buildWaistPairSource(
     const artAbove = alphaCount(img, 0, r);
     const artBelow = alphaCount(img, r, img.height);
     if (artAbove === 0 || artBelow === 0) {
-      fail('RIG_STILL_PIECES_HAVE_ART', `${at}.row`, `is ${st.row}; "${part}" has ${artAbove} art pixel(s) above it and ${artBelow} below; both pieces need art, or the cut holds nothing still (or nothing blinks)`);
+      stillFail('RIG_STILL_PIECES_HAVE_ART', `${at}.row`, `is ${st.row}; "${part}" has ${artAbove} art pixel(s) above it and ${artBelow} below; both pieces need art, or the cut holds nothing still (or nothing blinks)`);
     }
   }
   refuseIfAny(problems);

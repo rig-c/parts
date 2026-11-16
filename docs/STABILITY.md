@@ -413,7 +413,8 @@ part name, `[i]` an entry of a list):
 - **motion** — required: `duration`, `tracks`; optional: `blink`, `animations_from`
 - **motion.tracks[i]**, a single track — required: `bone`, `prop`, `amp`, `period`, `phase`; optional: `base`
 - **motion.tracks[i]**, a chain track — required: `chain`, `amps`, `period`, `phase`, `lag`
-- **motion.blink** — required: `t`, `eyes`, `squash`; optional: `brows`, `brow_drop`, `still`
+- **motion.blink** — required: `t`, `eyes`, `squash`; optional: `brows`, `brow_drop`, `still`, `more`
+- **motion.blink.more** — optional, authored non-empty array of finite additional start times in seconds, strictly increasing and each greater than scalar `motion.blink.t` (`CONFIG_BLINK_MORE_TIMES`). Repeats the same blink shape, timing and groups; every complete window must be strictly inside the idle (`RIG_BLINK_INSIDE_IDLE`) and windows cannot overlap (`RIG_BLINK_WINDOWS_DISJOINT`). Absent, output bytes are unchanged; `propose` drafts scalar `t` only
 - **motion.blink.still.&lt;part&gt;** — required: `row`, `bone`
 - **motion.animations_from**, the file it names — required: `spec`, `animations`
 - **turn** — required: `pivot`, `depths` (or `roles` / `body`, issues #763, #787); optional: `deform`, `band`, `radius`, `surface`, `head`, `roles`, `counter`, `grid`, `unitDepths`, `body`
