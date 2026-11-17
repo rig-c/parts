@@ -35897,7 +35897,7 @@ function runAssembleSuite(): number {
       asPlantedExtra.join(';') === 'planted-extra: in outputs[].path but not on disk: rig/ghost.json';
     const asStamp1Valid =
       asStamp1 !== null &&
-      Object.keys(asStamp1).join(',') === 'spec,package,command,started_at,finished_at,config,outputs' &&
+      Object.keys(asStamp1).join(',') === 'spec,package,command,started_at,finished_at,config,inputs,outputs' &&
       Object.keys(asStamp1.package).join(',') === 'name,version' &&
       Object.keys(asStamp1.config).join(',') === 'path,sha256' &&
       asStamp1.spec === RUN_STAMP_SPEC &&
@@ -35940,6 +35940,138 @@ function runAssembleSuite(): number {
       asStamp1Valid && same && asStrayExcluded && asParentsMatch && asRefusedNoStamp && asPlantedBadSha && asEqualityOk,
       `spec ${asStamp1?.spec ?? 'none'}, package ${asStamp1?.package.name ?? 'none'}@${asStamp1?.package.version ?? 'none'}, command ${asStamp1?.command ?? 'none'}, config.path ${asStamp1?.config.path ?? 'none'} (under parent-a/parent-b: ${asStampA?.config.path ?? 'none'}/${asStampB?.config.path ?? 'none'}), ${asStamp1?.outputs.length ?? 0} output hash(es) match disk (stray.txt & rig/parts/old.png excluded: ${asStrayExcluded}): ${asStamp1Valid}; fresh-dir file-set equality (plain ${asStamp1?.outputs.length ?? 0}, scene ${asSceneStamp?.outputs.length ?? 0}, scene+alt ${asAltStamp?.outputs.length ?? 0} files): ${asEqFaults.length === 0 ? 'exact' : asEqFaults.join(' | ')} (planted drop -> "${asPlantedMissing.join(';')}"); two runs differ only in started_at/finished_at: ${asParentsMatch}; green->refused clears ${RUN_STAMP_FILE}: ${asRefusedNoStamp}`,
       'issue #1165: assemble writes run.json (spec rig-run/1) beside its outputs only after green, clears any prior run.json before starting, lists the exact stage outputs on disk, and reads timestamps in cli.ts',
+    );
+
+    const runCliInCwd = (cwdDir: string, cliArgs: string[]): { status: number; out: string } => {
+      const r = spawnSync('bun', [join(ROOT, 'cli.ts'), ...cliArgs], {
+        cwd: cwdDir,
+        encoding: 'utf8',
+        env: { ...process.env, SOURCE_DATE_EPOCH: '1762560000' },
+      });
+      return { status: r.status ?? 1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
+    };
+    const asStampInputFaults = (cwdDir: string, stamp: RunStamp | null, expectedRoles: readonly string[]): string[] => {
+      if (stamp === null) return ['missing run.json'];
+      if (!Array.isArray(stamp.inputs)) return ['missing inputs array'];
+      const faults: string[] = [];
+      const roles = stamp.inputs.map((e) => (e !== null && typeof e === 'object' && 'role' in e ? String(e.role) : 'null')).join(',');
+      if (roles !== expectedRoles.join(',')) faults.push(`inputs roles are ${roles}; expected ${expectedRoles.join(',')}`);
+      stamp.inputs.forEach((entry, idx) => {
+        if (entry === null || typeof entry !== 'object') {
+          faults.push(`inputs[${idx}] is not an object`);
+          return;
+        }
+        const keys = Object.keys(entry).join(',');
+        if (keys !== 'role,path,sha256') faults.push(`inputs[${idx}] keys are ${keys}; expected role,path,sha256`);
+        if (entry.path.startsWith('/') || entry.path.startsWith('~') || entry.path.includes('\\')) {
+          faults.push(`inputs[${idx}] (${entry.role}): path "${entry.path}" is not a clean cwd-relative path`);
+          return;
+        }
+        const resolved = join(cwdDir, ...entry.path.split('/'));
+        if (!existsSync(resolved)) {
+          faults.push(`inputs[${idx}] (${entry.role}): "${entry.path}" does not exist under cwd`);
+          return;
+        }
+        const hashFile = statSync(resolved).isDirectory() ? join(resolved, 'layers.json') : resolved;
+        if (!existsSync(hashFile)) {
+          faults.push(`inputs[${idx}] (${entry.role}): directory "${entry.path}" holds no layers.json`);
+          return;
+        }
+        const actualSha = asSha256(hashFile);
+        if (entry.sha256 !== actualSha) {
+          faults.push(`inputs[${idx}] (${entry.role}): sha256 is ${entry.sha256}; disk has ${actualSha}`);
+        }
+      });
+      return faults;
+    };
+    const asInputsOut = join(dir, 'stamp-inputs', 'out');
+    const rInputsThree = runCliInCwd(dir, ['assemble', '--source', 'painting.png', '--full', 'full', '--head', 'head', '--config', 'config.json', '--out', 'stamp-inputs/out']);
+    const asInputsStamp = existsSync(join(asInputsOut, RUN_STAMP_FILE))
+      ? (JSON.parse(readFileSync(join(asInputsOut, RUN_STAMP_FILE), 'utf8')) as RunStamp)
+      : null;
+    const expectedThreeInputs = [
+      { role: 'source', path: 'painting.png', sha256: asSha256(join(dir, 'painting.png')) },
+      { role: 'full', path: 'full', sha256: asSha256(join(dir, 'full', 'layers.json')) },
+      { role: 'head', path: 'head', sha256: asSha256(join(dir, 'head', 'layers.json')) },
+    ];
+    const asInputsRebuildOut = join(dir, 'stamp-inputs', 'rebuilt');
+    const rebuildArgs =
+      asInputsStamp?.inputs === undefined
+        ? []
+        : [
+            'assemble',
+            ...asInputsStamp.inputs.flatMap((entry) => [`--${entry.role}`, entry.path]),
+            '--config',
+            join('stamp-inputs/out', ...asInputsStamp.config.path.split('/')),
+            '--out',
+            'stamp-inputs/rebuilt',
+          ];
+    const rInputsRebuild = rebuildArgs.length === 0 ? { status: 1, out: 'no inputs' } : runCliInCwd(dir, rebuildArgs);
+    const asInputsFiles = existsSync(asInputsOut) ? filesUnder(asInputsOut) : [];
+    const asRebuildFiles = existsSync(asInputsRebuildOut) ? filesUnder(asInputsRebuildOut) : [];
+    const asRebuildIdentical =
+      rInputsThree.status === 0 &&
+      rInputsRebuild.status === 0 &&
+      asInputsFiles.length > 0 &&
+      asInputsFiles.join(',') === asRebuildFiles.join(',') &&
+      asInputsFiles.every((f) => Buffer.compare(readFileSync(join(asInputsOut, f)), readFileSync(join(asInputsRebuildOut, f))) === 0);
+    const asSingleDir = join(dir, 'stamp-single');
+    writeArtistFixture(asSingleDir);
+    const rInputsSingle = runCliInCwd(asSingleDir, ['assemble', '--source', 'painting.png', '--full', 'art.psd', '--config', 'config.json', '--out', 'out']);
+    const asSingleStamp = existsSync(join(asSingleDir, 'out', RUN_STAMP_FILE))
+      ? (JSON.parse(readFileSync(join(asSingleDir, 'out', RUN_STAMP_FILE), 'utf8')) as RunStamp)
+      : null;
+    const expectedSingleInputs = [
+      { role: 'source', path: 'painting.png', sha256: asSha256(join(asSingleDir, 'painting.png')) },
+      { role: 'full', path: 'art.psd', sha256: asSha256(join(asSingleDir, 'art.psd')) },
+    ];
+    const threeInputFaults = asStampInputFaults(dir, asInputsStamp, ['source', 'full', 'head']);
+    const singleInputFaults = asStampInputFaults(asSingleDir, asSingleStamp, ['source', 'full']);
+    const plantedWrongInputHash =
+      asInputsStamp?.inputs === undefined
+        ? []
+        : asStampInputFaults(
+            dir,
+            {
+              ...asInputsStamp,
+              inputs: asInputsStamp.inputs.map((e, i) => (i === 1 ? { ...e, sha256: '0'.repeat(64) } : e)),
+            },
+            ['source', 'full', 'head'],
+          );
+    const plantedMissingInput =
+      asInputsStamp?.inputs === undefined
+        ? []
+        : asStampInputFaults(dir, { ...asInputsStamp, inputs: asInputsStamp.inputs.slice(0, 2) }, ['source', 'full', 'head']);
+    const plantedSwappedInputOrder =
+      asInputsStamp?.inputs === undefined
+        ? []
+        : asStampInputFaults(
+            dir,
+            { ...asInputsStamp, inputs: [asInputsStamp.inputs[1], asInputsStamp.inputs[0], asInputsStamp.inputs[2]] },
+            ['source', 'full', 'head'],
+          );
+    const plantedGuessedHead =
+      asSingleStamp?.inputs === undefined
+        ? []
+        : asStampInputFaults(
+            asSingleDir,
+            { ...asSingleStamp, inputs: [...asSingleStamp.inputs, { role: 'head', path: 'art.psd', sha256: expectedSingleInputs[1].sha256 }] },
+            ['source', 'full'],
+          );
+    say(
+      'AS1316_ASSEMBLE_RUN_STAMP_RECORDS_CWD_RELATIVE_INPUTS_OMITS_ABSENT_HEAD_AND_REPRODUCES_OUTPUTS_ON_RERUN',
+      threeInputFaults.length === 0 &&
+        singleInputFaults.length === 0 &&
+        JSON.stringify(asInputsStamp?.inputs) === JSON.stringify(expectedThreeInputs) &&
+        JSON.stringify(asSingleStamp?.inputs) === JSON.stringify(expectedSingleInputs) &&
+        asRebuildIdentical &&
+        plantedWrongInputHash.length === 1 &&
+        plantedWrongInputHash[0].startsWith('inputs[1] (full): sha256 is 0000000000000000000000000000000000000000000000000000000000000000; disk has ') &&
+        plantedMissingInput.join(';') === 'inputs roles are source,full; expected source,full,head' &&
+        plantedSwappedInputOrder.join(';') === 'inputs roles are full,source,head; expected source,full,head' &&
+        plantedGuessedHead.join(';') === 'inputs roles are source,full,head; expected source,full',
+      `3-input stamp inputs=${JSON.stringify(asInputsStamp?.inputs ?? null)} (faults: ${threeInputFaults.join('; ') || 'none'}); 2-input (no --head) inputs=${JSON.stringify(asSingleStamp?.inputs ?? null)} (faults: ${singleInputFaults.join('; ') || 'none'}); rebuild from recorded inputs byte-identical across ${asInputsFiles.length} file(s) (incl. ${RUN_STAMP_FILE}): ${asRebuildIdentical}; planted wrong full hash -> "${plantedWrongInputHash.join(';')}", planted missing head -> "${plantedMissingInput.join(';')}", planted swapped order -> "${plantedSwappedInputOrder.join(';')}", planted guessed head -> "${plantedGuessedHead.join(';')}"`,
+      'issue #1316: assemble run.json records inputs (source, full, and head when given) in fixed order with cwd-relative paths and file or layers.json sha256 hashes, omits an ungiven input, and rerunning assemble from the recorded inputs reproduces every output byte for byte',
     );
 
     // Issue #233: a full-run body no planned part covers is named, by the proposer and by the assemble summary

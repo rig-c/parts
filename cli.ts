@@ -1980,7 +1980,7 @@ function cmdAssemble(args: string[]): number {
       console.log,
     );
     const finishedAt = fixedClock ?? new Date().toISOString();
-    writeRunStamp({ pkg, command: 'assemble', startedAt, finishedAt, outDir: out, configPath: config, outputPaths: assembleOutputFiles(out, result) });
+    writeRunStamp({ pkg, command: 'assemble', startedAt, finishedAt, outDir: out, configPath: config, inputs: { cwd: process.cwd(), source, full, head }, outputPaths: assembleOutputFiles(out, result) });
     return EXIT_OK;
   } catch (err) {
     if (staged !== null) {
