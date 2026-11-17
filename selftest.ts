@@ -52,6 +52,7 @@ import { runEditorReceiptChecks } from './tools/check_editor_receipts.ts';
 import { runEditedPartChecks, runEditedReferenceCwdChecks } from './tools/check_edited_parts.ts';
 import { runPartSourceChecks } from './tools/check_part_sources.ts';
 import { runReadmePolicyChecks } from './scripts/readme_policy.ts';
+import { runVerifyNovaChecks } from './scripts/verify_nova.ts';
 import { beginPhases, finishPhases, measurePhase, phaseRecord, measurementPayloadValid, familyRows, observerPids, observeFamily, unmeasuredFamily, type PhaseRecord, type FamilyPeak } from './scripts/selftest_measure.ts';
 import { sourceCaseNames } from './scripts/selftest_prefixes.ts';
 import { runPaintingExtensionChecks } from './tools/check_painting_extension.ts';
@@ -43964,6 +43965,7 @@ function runTreeSuite(_corpus: string | null = null, pre = false): number {
   const rowDocPlant1089 = rowDoc1089.replace('<!-- check-row-table:begin -->', '<!-- removed row table -->');
   say('TY823_CHECK_ROW_TABLE_IS_DERIVED_FROM_PRODUCERS', rowDocFaults1089.length === 0 && rowTableFaults(import.meta.dir, rowDocPlant1089).length > 0,
     rowDocFaults1089.join('; ') || 'producer calls match; planted missing table caught', 'the table records the scope, finding predicate, subjects and source locations of every producing call');
+  runVerifyNovaChecks(ROOT, (name, ok, detail) => say(name, ok, detail, 'issue #1327: verify:nova sets RIG_PARTS_VALIDATION_HEAD from a clean HEAD, refuses missing/dirty/invalid inputs, and maps inner exit codes'));
 
   return bad();
 }
