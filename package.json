@@ -63,6 +63,7 @@
     "check:readme": "bun scripts/readme_policy.ts",
     "selftest:pre": "bun selftest.ts --pre",
     "smoke": "bun scripts/install_smoke.ts",
+    "verify:nova": "bun scripts/verify_nova.ts",
     "typecheck": "bunx tsc --noEmit",
     "lint": "bunx eslint .",
     "prepublishOnly": "node scripts/prepublish.cjs"
