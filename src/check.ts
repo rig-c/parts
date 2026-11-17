@@ -8283,6 +8283,52 @@ export function carrierFrame(geo: IdleGeometry | null, bone: string | null): ((i
 }
 
 /**
+ * Root-to-carrier excitation measured from the idle's world transforms, never
+ * from keys: inherited and physics motion count too. Origin travel and both
+ * affine basis columns use the travel reading's round3 zeroing. A stationary
+ * origin alone does not prove a stationary carrier. Null means incomplete or
+ * unusable transforms or ancestry, not a static chain. The driver is the
+ * nearest measured moving bone to the carrier, not an attribution to a key.
+ */
+export function carrierExcitation(rig: Record<string, unknown>, geo: IdleGeometry | null, bone: string | null): { chain: string[]; driver: string | null } | null {
+  if (bone === null || geo === null || geo.frames.length < 2 || geo.frameBones.length !== geo.frames.length) return null;
+  const bones = (Array.isArray(rig.bones) ? rig.bones : []).filter(isRecord);
+  const chain: string[] = [];
+  for (let at: string | null = bone; at !== null;) {
+    if (chain.includes(at)) return null;
+    const matches = bones.filter(b => b.name === at);
+    if (matches.length !== 1) return null;
+    const parent: unknown = matches[0].parent;
+    if (parent !== undefined && typeof parent !== 'string') return null;
+    chain.push(at);
+    at = typeof parent === 'string' ? parent : null;
+  }
+  chain.reverse();
+  const fields = ['worldX', 'worldY', 'a', 'c', 'b', 'd'] as const;
+  const world = (rows: unknown, name: string): BoneWorld | null => {
+    const matches = Array.isArray(rows) ? rows.filter(isRecord).filter(b => b.name === name) : [];
+    if (matches.length !== 1) return null;
+    const b = matches[0];
+    if (!fields.every(key => typeof b[key] === 'number' && Number.isFinite(b[key]))) return null;
+    const m = b as unknown as BoneWorld;
+    const det = m.a * m.d - m.b * m.c;
+    return Number.isFinite(det) && det !== 0 ? m : null;
+  };
+  let driver: string | null = null;
+  for (const name of chain) {
+    if (world(geo.setupBones, name) === null) return null;
+    const frames = geo.frameBones.map(rows => world(rows, name));
+    if (frames.some(m => m === null)) return null;
+    const span = (key: typeof fields[number]): number => {
+      const values = frames.map(m => (m as BoneWorld)[key]);
+      return Math.max(...values) - Math.min(...values);
+    };
+    if ([edgeLength(span('worldX'), span('worldY')), edgeLength(span('a'), span('c')), edgeLength(span('b'), span('d'))].some(travel => round3(travel) !== 0)) driver = name;
+  }
+  return { chain, driver };
+}
+
+/**
  * (4) Each swinging part's tip travels further than its root: how far the art
  * in the lower half of the part's box travels against the upper half — the
  * centroid of the art's area inside each fixed half, through the posed mesh
@@ -8312,6 +8358,9 @@ export function carrierFrame(geo: IdleGeometry | null, bone: string | null): ((i
  * at the line's precision is 0, so a part that rides its carrier whole reads
  * 0 / 0 and fails, not a ratio of round-off. Issue #994 applies the fixed
  * 0.5 rig px art-grid policy to max(root, tip) of a link part after this guard.
+ * Issue #1308 distinguishes a rigid 0 / 0 on a measured static carrier chain
+ * with CHECK_CARRIER_NOT_EXCITED; incomplete excitation data keeps the prior
+ * failure. Below-floor rows retain their policy and name the measured driver.
  */
 function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems: Problem[], excepted: TipExceptions = NO_TIP_EXCEPTIONS): JudgementLine {
   const swing = partsTagged(inp.parts, SWING_TAGS);
@@ -8391,7 +8440,9 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
     // Structural 0 / 0 stays a failure before the link-only magnitude policy (issue #994).
     if (!rigid && hanging.onLink && Math.max(c.root, c.tip) < TIP_TRAVEL_FLOOR) {
       belowGrid++;
+      const excitation = carrierExcitation(inp.rig, idleGeo, hangFound);
       rows[rows.length - 1] = { ...rows[rows.length - 1], travel_floor_rig_px: TIP_TRAVEL_FLOOR,
+        measured_driver: excitation === null ? 'unavailable' : excitation.driver ?? 'none',
         unmeasured: "below half a rig pixel: the motion does not show on the art's own grid" };
       continue;
     }
@@ -8399,7 +8450,16 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
     const against = hang === null ? 'in the world' : `against \`${hang}\`, the bone it hangs from`;
     const inWorld = hang === null ? '' : `; in the world ${round3(w.tip)} and ${round3(w.root)}, ratio ${worldRatio ?? 'undefined'}`;
     const travels = `the art in its ${tipHalf} half travels ${round3(t.tip)} rig px and in its ${rootHalf} half ${round3(t.root)} rig px ${against}`;
-    if (!ok && rests && !rigid) {
+    const excitation = rigid && hang !== null ? carrierExcitation(inp.rig, idleGeo, hang) : null;
+    if (rigid && excitation !== null && excitation.driver === null) {
+      failed = true;
+      rows[rows.length - 1] = { ...rows[rows.length - 1], carrier_chain: excitation.chain, measured_driver: 'none' };
+      problems.push({
+        code: 'CHECK_CARRIER_NOT_EXCITED',
+        object: `part "${p.name}", box ${p.x},${p.y} ${p.w}x${p.h} rig px, posed by the idle's geometry${rests ? ', declared rests' : ''}${rises ? ', declared rises' : ''}`,
+        detail: `${travels}; root-to-carrier chain [${excitation.chain.map(name => `\`${name}\``).join(' > ')}] has no measured world translation or affine motion on the sampled idle frames; a moving carrier or ancestor is required to measure trailing motion — excite that chain and measure again`,
+      });
+    } else if (!ok && rests && !rigid) {
       failed = true;
       problems.push({
         code: 'CHECK_TIP_OVER_ROOT',
@@ -8443,7 +8503,7 @@ function tipLine(inp: FullInputs, geometryPath: string, frames: number, problems
     ...(excepted.rests.length === 0 ? {} : { rest_ratio_ceiling: TIP_REST_RATIO_CEILING }) };
   if (measured === 0) {
     const reasons = rows.map((r) => {
-      const travel = r.travel_floor_rig_px === undefined ? '' : `; root ${String(r.root_rig_px)} rig px, tip ${String(r.tip_rig_px)} rig px, floor ${String(r.travel_floor_rig_px)} rig px`;
+      const travel = r.travel_floor_rig_px === undefined ? '' : `; root ${String(r.root_rig_px)} rig px, tip ${String(r.tip_rig_px)} rig px, floor ${String(r.travel_floor_rig_px)} rig px; measured driver ${String(r.measured_driver)}`;
       return `${String(r.part)}: ${String(r.unmeasured)}${travel}`;
     });
     return { status: 'SKIP', reason: `none of ${quoteParts(swing)} could be measured: ${reasons.join('; ')}`,

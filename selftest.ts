@@ -511,6 +511,8 @@ import {
   TIP_RATIO_FLOOR,
   TIP_TRAVEL_FLOOR,
   hangBone,
+  carrierExcitation,
+  type IdleGeometry,
   TIP_INSTRUMENT,
   TIP_REST_RATIO_CEILING,
   type Viewport,
@@ -21346,7 +21348,7 @@ function runCheckJudgementCases(dir: string, say: ReturnType<typeof counter>['sa
   const HUNG_FROM: [string, string] = ['full:handwear-r', 'full:topwear'];
   const hungRun = (label: string, hung: NonNullable<Parameters<typeof writeCheckRig>[1]>['hung']) => {
     const res = judged(label, { from: HUNG_FROM, peak: 0, hung });
-    const line = res.fig?.TIP_OVER_ROOT as { instrument?: string; parts?: Array<Record<string, unknown>> } | undefined;
+    const line = res.fig?.TIP_OVER_ROOT as { status?: string; instrument?: string; parts?: Array<Record<string, unknown>> } | undefined;
     return { ...res, line, row: line?.parts?.find((r) => r.part === 'back'), fail: failLine(res.out, 'CHECK_TIP_OVER_ROOT') };
   };
   const physics = { strength: 200, inertia: 0.3 };
@@ -21407,6 +21409,137 @@ function runCheckJudgementCases(dir: string, say: ReturnType<typeof counter>['sa
     `control layer with physics children -> ${walks.ctl}; the same without physics -> ${walks.ctlNoPhys}; physics-only chain -> ${walks.physOnly}; bound to chest and a link -> ${walks.onBody}; a part bound to nothing -> ${walks.still}`,
     "issue #987's ruling: from the deepest common ancestor-or-self of the bound bones, walk up while the bone is a link — of a chain CHAIN_LAG reads (`chest_ctl` alone is not one: a chain is two keyed links), or a bone a physics constraint drives — to the first that is not; no bone is read by its name. The walk starts from the link when the common bone is the link's control twin (at its origin, unturned, unscaled, keyed by no track — Option A, ruled on #987), so the control layer without physics children lands on `chest` too; the twin step is taken only at the start, so `chest`, `chest_ctl`'s twin, is where the walk stops",
   );
+
+  // Issue #1308 Stage B: a pinned carrier is a different failure from a
+  // moving carrier whose cloth rides it whole. Both remain failed readings.
+  const pinned1308 = hungRun('tip-hung-pinned', { carry: 0, swing: 0, pivot: 'top' });
+  const pinnedFail1308 = failLine(pinned1308.out, 'CHECK_CARRIER_NOT_EXCITED');
+  const pinnedDetail1308 = 'the art in its lower half travels 0 rig px and in its upper half 0 rig px against `s0`, the bone it hangs from; root-to-carrier chain [`root` > `chest_ctl` > `chest` > `s0`] has no measured world translation or affine motion on the sampled idle frames; a moving carrier or ancestor is required to measure trailing motion — excite that chain and measure again';
+  say('CK1308_PINNED_CARRIER_FAILS_NAMING_THE_STATIC_ROOT_TO_CARRIER_CHAIN',
+    pinned1308.status === 1 && pinned1308.line?.status === 'FAIL' && pinned1308.fig?.PASS === false &&
+      pinned1308.row?.root_rig_px === 0 && pinned1308.row.tip_rig_px === 0 &&
+      pinned1308.row.measured_driver === 'none' && pinned1308.row.row_kind === 'finding' &&
+      isDeepStrictEqual(pinned1308.row.carrier_chain, ['root', 'chest_ctl', 'chest', 's0']) &&
+      pinned1308.fail === null && pinnedFail1308?.trim() === `FAIL  CHECK_CARRIER_NOT_EXCITED: part "back", box 4,0 30x80 rig px, posed by the idle's geometry — ${pinnedDetail1308} (see rig-parts guide CHECK_CARRIER_NOT_EXCITED)` &&
+      Buffer.byteLength(pinnedFail1308 ?? '', 'utf8') < PRINTED_LINE_LIMIT,
+    `exit ${pinned1308.status}; ${pinnedFail1308?.trim() ?? 'no CHECK_CARRIER_NOT_EXCITED line'}; row ${JSON.stringify(pinned1308.row)}`,
+    'the existing hung fixture with zero carry and zero swing has a measured static chain; 0 / 0 stays a failure before the unchanged art-grid floor');
+  const skirtRoot1308 = join(dir, 'tip-pinned-skirt');
+  mkdirSync(skirtRoot1308);
+  const pinnedSkirt1308 = clothBuild(skirtRoot1308, 'pinned', constraints =>
+    constraints.map(constraint => constraint.type === 'physics' ? { ...constraint, wind: 0, gravity: 0 } : constraint));
+  const skirtFigures1308 = readJsonFile(join(pinnedSkirt1308.checkOut, 'check.json'));
+  const skirtLine1308 = skirtFigures1308?.TIP_OVER_ROOT as { status?: string; parts?: Array<Record<string, unknown>> } | undefined;
+  const skirtRow1308 = skirtLine1308?.parts?.find(row => row.part === 'skirt');
+  const skirtFail1308 = (pinnedSkirt1308.check?.out ?? '').split('\n').find(line =>
+    line.startsWith('  FAIL  CHECK_CARRIER_NOT_EXCITED: part "skirt",'));
+  say('CK1308_PINNED_WAIST_SKIRT_FAILS_NAMING_THE_STATIC_ROOT_TO_HIP_CHAIN',
+    pinnedSkirt1308.rig.status === 0 && pinnedSkirt1308.check?.status === 1 && skirtFigures1308?.PASS === false &&
+      skirtLine1308?.status === 'FAIL' && skirtRow1308?.row_kind === 'finding' &&
+      skirtRow1308.hang_from === 'hip' && skirtRow1308.root_rig_px === 0 && skirtRow1308.tip_rig_px === 0 &&
+      skirtRow1308.ratio === null && skirtRow1308.measured_driver === 'none' &&
+      isDeepStrictEqual(skirtRow1308.carrier_chain, ['root', 'hip']) && !('unmeasured' in skirtRow1308) &&
+      skirtFail1308 !== undefined && skirtFail1308.includes('root-to-carrier chain [`root` > `hip`] has no measured world translation or affine motion on the sampled idle frames') &&
+      !(pinnedSkirt1308.check.out.split('\n').some(line => line.startsWith('  FAIL  CHECK_TIP_OVER_ROOT: part "skirt",'))),
+    `rig exit ${pinnedSkirt1308.rig.status}; check exit ${pinnedSkirt1308.check?.status ?? 'not run'}; ${skirtFail1308?.trim() ?? 'no CHECK_CARRIER_NOT_EXCITED for skirt'}; row ${JSON.stringify(skirtRow1308)}`,
+    'the existing cloth fixture keeps its pinned waist and generated rig; zero physics wind and gravity leave the hip ancestors and skirt still, so the skirt 0 / 0 remains FAIL under the named static-carrier diagnosis');
+  say('CK1308_MOVING_CARRIERS_KEEP_THE_OLD_RIGID_FAILURE_AND_TRAILING_PASS',
+    rigidS.fail !== null && rigidS.line?.status === 'FAIL' && trailS.line?.status === 'PASS' && heavyS.line?.status === 'PASS' &&
+      [rigidS, pendS, trailS, heavyS].every(result => failLine(result.out, 'CHECK_CARRIER_NOT_EXCITED') === null &&
+        !('carrier_chain' in (result.row ?? {})) && !('measured_driver' in (result.row ?? {}))),
+    [rigidS, pendS, trailS, heavyS].map(result => JSON.stringify(result.row)).join(' | '),
+    'CK987 controls retain their code, figures and row shape, including inherited carry and physics-only chain motion');
+
+  // Hand-computable world poses on CK988's chain, independent of animation
+  // tracks: a keyed-but-pinned rig is static; unkeyed measured motion is not.
+  const chain1308 = ['root', 'chest_ctl', 'chest'];
+  const pose1308 = (changes: Record<string, Partial<BoneWorld>> = {}) =>
+    chain1308.map(name => ({ name, a: 1, b: 0, c: 0, d: 1, worldX: 0, worldY: 0, ...changes[name] }));
+  const geometry1308 = (changes: Record<string, Partial<BoneWorld>> = {}): IdleGeometry => ({
+    meshes: [], frames: [0, 1, 2].map(index => ({ index, attachments: [] })), viewport: null,
+    setupBones: pose1308(), frameBones: [pose1308(), pose1308(changes), pose1308()], times: [0, 0.5, 1],
+  });
+  const static1308 = carrierExcitation(ctlLayer, geometry1308(), 'chest');
+  const ancestor1308 = carrierExcitation(ctlLayer, geometry1308({ chest_ctl: { worldY: 2 } }), 'chest');
+  const inherited1308 = carrierExcitation(ctlLayer, geometry1308({ root: { worldX: 2 }, chest_ctl: { worldX: 2 }, chest: { worldX: 2 } }), 'chest');
+  const physicsRig1308 = { ...ctlLayer, constraints: [{ type: 'physics', name: 'chest_phys', bone: 'chest' }] };
+  const physics1308 = carrierExcitation(physicsRig1308, geometry1308({ chest: { a: 0, b: -1, c: 1, d: 0 } }), 'chest');
+  say('CK1308_MEASURED_INHERITED_AND_PHYSICS_MOTION_COUNTS_WITHOUT_KEYS',
+    isDeepStrictEqual(static1308, { chain: chain1308, driver: null }) && ancestor1308?.driver === 'chest_ctl' &&
+      inherited1308?.driver === 'chest' && physics1308?.driver === 'chest',
+    JSON.stringify({ static: static1308, ancestor: ancestor1308, inherited: inherited1308, physics: physics1308 }),
+    'the measurement takes no motion/key input: a 2-unit inherited translation and a 90-degree physics pose count; the nearest measured moving bone is named');
+  const affine1308 = [
+    { a: 0, b: -1, c: 1, d: 0 }, { a: 2 }, { d: 2 }, { b: 0.25 }, { c: 0.25 },
+  ].map(change => carrierExcitation(ctlLayer, geometry1308({ chest: change }), 'chest'));
+  const low1308 = carrierExcitation(ctlLayer, geometry1308({ chest: { worldX: 0.0004, a: 1.0004 } }), 'chest');
+  const high1308 = [
+    { worldX: 0.0006 }, { a: 1.0006 }, { worldX: 0.0004, worldY: 0.0004 }, { b: 0.0004, d: 1.0004 },
+  ].map(change => carrierExcitation(ctlLayer, geometry1308({ chest: change }), 'chest'));
+  say('CK1308_AFFINE_ONLY_MOTION_COUNTS_AT_STATIONARY_ORIGINS_WITH_TRAVEL_ZEROING',
+    affine1308.every(result => result?.driver === 'chest') && low1308?.driver === null &&
+      high1308.every(result => result?.driver === 'chest'),
+    JSON.stringify({ affine: affine1308, belowPrecision: low1308, abovePrecision: high1308 }),
+    'rotation, either scale column and either shear column move while origins remain fixed; 0.0004 rounds to zero and 0.0006 or hypot(0.0004, 0.0004) does not');
+  const incomplete1308: IdleGeometry[] = [];
+  for (const index of [0, 1, 2]) {
+    const geo = geometry1308();
+    (geo.frameBones as Array<Array<{ name: string }>>)[index] = pose1308().filter(b => b.name !== 'chest_ctl');
+    incomplete1308.push(geo);
+  }
+  const missingCarrier1308 = geometry1308();
+  (missingCarrier1308.frameBones as Array<Array<{ name: string }>>)[1] = pose1308().filter(b => b.name !== 'chest');
+  const badAffine1308 = geometry1308({ chest: { d: NaN } });
+  const missingAffine1308 = geometry1308();
+  (missingAffine1308.frameBones as Array<Array<Record<string, unknown>>>)[1] = pose1308().map(b => {
+    const row: Record<string, unknown> = { ...b };
+    if (b.name === 'chest') delete row.d;
+    return row;
+  });
+  const duplicate1308 = geometry1308();
+  (duplicate1308.frameBones as unknown[][])[1] = [...pose1308(), pose1308()[2]];
+  const unavailable1308 = [
+    ...incomplete1308, missingCarrier1308, badAffine1308, missingAffine1308, duplicate1308,
+    geometry1308({ chest: { d: 0 } }), { ...geometry1308(), setupBones: [] },
+    { ...geometry1308(), frameBones: [] }, { ...geometry1308(), frames: [], frameBones: [] },
+    { ...geometry1308(), frames: [{ index: 0, attachments: [] }], frameBones: [pose1308()] },
+  ].map(geo => carrierExcitation(ctlLayer, geo, 'chest'));
+  const unknownParent1308 = { bones: [{ name: 'chest', parent: 'missing' }] };
+  const cycle1308 = { bones: [{ name: 'root', parent: 'chest' }, { name: 'chest', parent: 'root' }] };
+  say('CK1308_INCOMPLETE_TRANSFORMS_OR_ANCESTRY_ARE_UNAVAILABLE_NEVER_STATIC',
+    unavailable1308.every(result => result === null) && carrierExcitation(ctlLayer, null, 'chest') === null &&
+      carrierExcitation(ctlLayer, geometry1308(), null) === null &&
+      carrierExcitation(unknownParent1308, geometry1308(), 'chest') === null && carrierExcitation(cycle1308, geometry1308(), 'chest') === null,
+    JSON.stringify(unavailable1308),
+    'missing ancestor on any sampled frame, carrier, affine field or setup, invalid or duplicate transforms, short exports and broken ancestry cannot produce driver none');
+
+  // Keep the ordinary geometry and attachments, remove only one ancestor's
+  // transform before check reads the idle export. The old failure must survive.
+  const live1308 = rigcRunnerAt(suiteRigc(), spawnRigc);
+  let planted1308 = false;
+  const incompleteRunner1308: RigcRunner = args => {
+    const result = live1308(args);
+    if (result.status === 0 && args[0] === 'render' && args.includes('--geometry') && args[args.indexOf('--animation') + 1] === 'idle') {
+      const path = join(args[args.indexOf('--out') + 1], 'idle', GEOMETRY_FILE);
+      const geo = JSON.parse(readFileSync(path, 'utf8')) as { frames: Array<{ bones: Array<{ name: string }> }> };
+      geo.frames[0].bones = geo.frames[0].bones.filter(b => b.name !== 'chest_ctl');
+      writeFileSync(path, JSON.stringify(geo));
+      planted1308 = true;
+    }
+    return result;
+  };
+  const incompleteReport1308 = runCheck(join(dir, 'tip-hung-pinned'), join(dir, 'tip-hung-incomplete-out'), incompleteRunner1308,
+    undefined, DEFAULT_PACK_MODE, undefined, undefined, false, false, undefined, false, undefined, undefined, undefined, undefined, true);
+  const incompleteLine1308 = incompleteReport1308.figures.TIP_OVER_ROOT as { status: string; parts?: Array<Record<string, unknown>> };
+  const incompleteRow1308 = incompleteLine1308.parts?.find(row => row.part === 'back');
+  say('CK1308_UNAVAILABLE_ANCESTOR_KEEPS_THE_PRIOR_RIGID_FAILURE',
+    planted1308 && incompleteLine1308.status === 'FAIL' && !incompleteReport1308.figures.PASS &&
+      incompleteReport1308.problems.some(p => p.code === 'CHECK_TIP_OVER_ROOT' && p.object.startsWith('part "back"')) &&
+      !incompleteReport1308.problems.some(p => p.code === 'CHECK_CARRIER_NOT_EXCITED') &&
+      incompleteRow1308?.root_rig_px === 0 && incompleteRow1308.tip_rig_px === 0 &&
+      !('carrier_chain' in incompleteRow1308) && !('measured_driver' in incompleteRow1308),
+    JSON.stringify({ line: incompleteLine1308, problems: incompleteReport1308.problems }),
+    'unavailable excitation cannot replace the old CHECK_TIP_OVER_ROOT failure with a static-chain diagnosis or a pass');
 
   // Issue #995 (ruled on #987): a lone swing is a link too: a rotate-keyed bone with no child bone, or whose only
   // child is its control twin (a one-link chain's control). A rotate-keyed body segment other bones hang under (a
@@ -21499,6 +21632,51 @@ function runCheckJudgementCases(dir: string, say: ReturnType<typeof counter>['sa
     `under ${JSON.stringify(underGrid.line)}; over ${JSON.stringify(overGrid.line)}; stiff ${JSON.stringify(stiffGrid.line)}`,
     'issue #994 fixes the art-grid threshold at 0.5 rig px before measurement; a low-travel link is unmeasured and retains both travels and the floor, including when every row is unmeasured',
   );
+  say('CK1308_BELOW_FLOOR_SKIP_REPORTS_ACTUAL_TRAVEL_AND_MEASURED_DRIVER',
+    underGrid.line?.status === 'SKIP' && underGrid.row?.root_rig_px === 0.49 && underGrid.row.tip_rig_px === 0.49 &&
+      underGrid.row.travel_floor_rig_px === TIP_TRAVEL_FLOOR && underGrid.row.measured_driver === 'none' &&
+      failLine(underGrid.out, 'CHECK_CARRIER_NOT_EXCITED') === null &&
+      underGrid.out.includes('root 0.49 rig px, tip 0.49 rig px, floor 0.5 rig px; measured driver none') &&
+      stiffGrid.row?.measured_driver === 'chest' && !('carrier_chain' in stiffGrid.row) &&
+      !('measured_driver' in (overGrid.row ?? {})) && !('carrier_chain' in (overGrid.row ?? {})),
+    `unexcited ${JSON.stringify(underGrid.row)}; moving ${JSON.stringify(stiffGrid.row)}; above floor ${JSON.stringify(overGrid.row)}`,
+    'only below-floor rows gain driver metadata; their existing UNMEASURED text, root/tip values, floor and SKIP semantics stay unchanged');
+  // The same below-floor fixture with only its carrier's frame-0 transform
+  // missing: retain every attachment and rest vertex, not an empty-art case.
+  let gridPlanted1308 = false;
+  let gridArtPreserved1308 = false;
+  const incompleteGridRunner1308: RigcRunner = args => {
+    const result = live1308(args);
+    if (result.status === 0 && args[0] === 'render' && args.includes('--geometry') && args[args.indexOf('--animation') + 1] === 'idle') {
+      const path = join(args[args.indexOf('--out') + 1], 'idle', GEOMETRY_FILE);
+      const geo = JSON.parse(readFileSync(path, 'utf8')) as { rest: unknown; frames: Array<{ bones: Array<{ name: string }>; attachments: unknown }> };
+      const artBefore = JSON.stringify([geo.rest, geo.frames.map(frame => frame.attachments)]);
+      const bonesBefore = geo.frames[0].bones.length;
+      geo.frames[0].bones = geo.frames[0].bones.filter(bone => bone.name !== 'root');
+      writeFileSync(path, JSON.stringify(geo));
+      gridPlanted1308 = geo.frames[0].bones.length === bonesBefore - 1;
+      const written = JSON.parse(readFileSync(path, 'utf8')) as typeof geo;
+      gridArtPreserved1308 = JSON.stringify([written.rest, written.frames.map(frame => frame.attachments)]) === artBefore;
+    }
+    return result;
+  };
+  const incompleteGridReport1308 = runCheck(join(dir, 'tip-grid-under'), join(dir, 'tip-grid-incomplete-out'), incompleteGridRunner1308,
+    undefined, DEFAULT_PACK_MODE, undefined, undefined, false, false, undefined, false, undefined, undefined, undefined, undefined, true);
+  const incompleteGridLine1308 = incompleteGridReport1308.figures.TIP_OVER_ROOT as { status: string; reason?: string; parts?: Array<Record<string, unknown>> };
+  const incompleteGridRow1308 = incompleteGridLine1308.parts?.find(row => row.part === 'front');
+  say('CK1308_BELOW_FLOOR_MISSING_CARRIER_REPORTS_UNAVAILABLE_WITH_UNCHANGED_TRAVEL_AND_SKIP',
+    gridPlanted1308 && gridArtPreserved1308 && underGrid.line?.status === 'SKIP' && incompleteGridLine1308.status === 'SKIP' &&
+      underGrid.row?.measured_driver === 'none' && incompleteGridRow1308?.measured_driver === 'unavailable' &&
+      incompleteGridRow1308.root_rig_px === 0.49 && incompleteGridRow1308.root_rig_px === underGrid.row.root_rig_px &&
+      incompleteGridRow1308.tip_rig_px === 0.49 && incompleteGridRow1308.tip_rig_px === underGrid.row.tip_rig_px &&
+      incompleteGridRow1308.travel_floor_rig_px === TIP_TRAVEL_FLOOR && incompleteGridRow1308.travel_floor_rig_px === underGrid.row.travel_floor_rig_px &&
+      incompleteGridRow1308.unmeasured === "below half a rig pixel: the motion does not show on the art's own grid" &&
+      incompleteGridRow1308.unmeasured === underGrid.row.unmeasured && incompleteGridRow1308.row_kind === 'evidence' &&
+      !('carrier_chain' in incompleteGridRow1308) &&
+      incompleteGridLine1308.reason?.includes('root 0.49 rig px, tip 0.49 rig px, floor 0.5 rig px; measured driver unavailable') === true &&
+      !incompleteGridReport1308.problems.some(problem => problem.code === 'CHECK_CARRIER_NOT_EXCITED'),
+    JSON.stringify({ planted: gridPlanted1308, artPreserved: gridArtPreserved1308, baseline: underGrid.row, incomplete: incompleteGridLine1308 }),
+    'removing the static root carrier transform from the actual idle export makes excitation unavailable, never none; the same nonzero 0.49-pixel art travel remains below the unchanged floor and SKIP');
   const tinyRigid = gridRun('tip-grid-rigid', 0.01, false);
   const translatedGrid = judged('tip-grid-translate-only', { from: HUNG_FROM, peak: 0, carried: { breath: 0.01, sway: 0.1 } });
   const tinyLine = tinyRigid.line;
