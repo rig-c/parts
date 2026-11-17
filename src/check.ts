@@ -8,6 +8,7 @@ import { readMaterialSources } from './cutmaterialio.ts';
 import { CUT_MATERIAL_LINE, checkJointMaterial, type MaterialLine } from './cutmaterial.ts';
 import { ART_JOINT_LINE, artJointLine, type ArtJointLine } from './artjoints.ts';
 import { BOUNDARY_COLOUR_LINE, BOUNDARY_COLOUR_UNMEASURED_CODE, BOUNDARY_COLOUR_UNMEASURED_SUFFIX, measureBoundaryColour, type BoundaryColourMeasured } from './boundarycolour.ts';
+import { BEHIND_SEAM_LINE, measureBehindSeams, type BehindSeamsMeasured } from './behindseams.ts';
 import { baseAnchorMoves, type AnchorRegion } from './baseanchor.ts';
 /**
  * The check stage: build a rig through rig-c, gate it under both
@@ -2815,6 +2816,8 @@ export interface CheckFigures {
   [CUT_MATERIAL_LINE]?: MaterialLine;
   /** Issue #942: only when requirements declares boundary_colour; undeclared writes no key and prints a SKIP. */
   [BOUNDARY_COLOUR_LINE]?: BoundaryColourMeasured;
+  /** Issue #1314: omitted unless behind_seams is declared; undeclared preserves existing check.json bytes. */
+  [BEHIND_SEAM_LINE]?: BehindSeamsMeasured;
   PASS: boolean;
 }
 
@@ -3061,7 +3064,7 @@ export function barsNotMet(fig: Readonly<Record<string, unknown>>): string[] {
     isRecord(fig.sets) &&
     Object.values(fig.sets).some((s) => isRecord(s) && typeof s.seam_mean === 'number' && typeof s.seam_px_over_40 === 'number' && seamFails(s.seam_mean, s.seam_px_over_40, typeof s.seam_frame_scale === 'number' ? s.seam_frame_scale : 1));
   if ((typeof fig.seam_mean === 'number' && typeof fig.seam_px_over_40 === 'number' && seamFails(fig.seam_mean, fig.seam_px_over_40, scale)) || setFailed) out.push('seam');
-  for (const n of [...JUDGEMENT_LINES, FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, BOUNDARY_COLOUR_LINE]) {
+  for (const n of [...JUDGEMENT_LINES, FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, BOUNDARY_COLOUR_LINE, BEHIND_SEAM_LINE]) {
     const l = fig[n];
     if (typeof l === 'object' && l !== null && (l as { status?: unknown }).status === 'FAIL') out.push(n);
   }
@@ -3114,6 +3117,8 @@ export interface CheckReport {
   figureOpenings: FigureOpeningReading;
   /** Issue #942: the boundary colour-step reading; null when undeclared (the SKIP line is printed, nothing written). */
   boundaryColour: BoundaryColourMeasured | null;
+  /** Issue #1314: null when undeclared; the console still names SKIP and HOLE. */
+  behindSeams: BehindSeamsMeasured | null;
   /** `CLOTH_SETTLES` (issue #501): a warning, never a bar — in `check.json` only when the rig declares a physics constraint and has an idle; its SKIP is printed either way. */
   cloth: ClothLine;
   /** `WIND_BAND` (issue #590): the steady-wind band each declared seam pair holds, written under `--wind-band` only. */
@@ -3174,7 +3179,7 @@ export function checkStatuses(fig: CheckFigures): Record<string, CheckStatus> {
   const bar = (name: string, measured: boolean): CheckStatus => (!measured ? 'SKIP' : notMet.includes(name) ? 'FAIL' : 'PASS');
   const out: Record<string, CheckStatus> = { gate: bar('gate', true), loop: bar('loop', fig.loop_max_diff !== null), seam: bar('seam', fig.seam_mean !== null) };
   for (const n of JUDGEMENT_LINES) out[n] = fig[n].status;
-  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, ...REPORTED_LINES, 'figure_openings', SOURCE_LINE, WIND_BAND_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, SETUP_PAINTING_LINE, BOUNDARY_COLOUR_LINE, COINCIDE_LINE] as const) {
+  for (const n of [FOLD_LINE, LEVEL_LINE, STRESS_LINE, LIMB_LINE, SWEEP_LINE, MOTION_SEAM_LINE, CLOTH_LINE, ...REPORTED_LINES, 'figure_openings', SOURCE_LINE, WIND_BAND_LINE, ART_JOINT_LINE, CUT_MATERIAL_LINE, SETUP_PAINTING_LINE, BOUNDARY_COLOUR_LINE, BEHIND_SEAM_LINE, COINCIDE_LINE] as const) {
     const l = fig[n];
     if (l !== undefined) out[n] = l.status;
   }
@@ -7123,6 +7128,9 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const motionRootProblems: Problem[] = [];
   // Issue #941: under seam_over_motion.required, the same render's gapOpen on every frame of every declared pair.
   const seamRequired = seamOverMotionRequired(reqFile);
+  const behindDeclared = reqFile?.behind_seams;
+  let behindPairs: readonly MotionSeamPair[] = [];
+  let behindStockDir: string | null = null;
   let backgroundRows: MotionBackgroundRow[] = [];
   const motionCellEvidence: MotionCellSidecar = { spec: 'rig-parts-seam-cells/1', frames: [] };
   {
@@ -7165,6 +7173,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
       } finally { rmSync(setupDir, { recursive: true, force: true }); }
     });
     const { pairs, unmeasuredRoots } = selection;
+    behindPairs = pairs;
     const slotNames = new Set((Array.isArray(inp.rig.slots) ? inp.rig.slots : []).filter(isRecord).map((sl) => String(sl.name)));
     for (const p of pairs) {
       const missing = [p.a, p.b].filter((n) => !slotNames.has(n));
@@ -7184,8 +7193,9 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
         const activeDest = stripped === null ? seamMotionDir : join(seamMotionDir, env === null ? 'default' : 'active');
         const renderedWorlds = new Set<'default' | 'still'>();
         const hasRoots = read.some(p => p.root !== undefined);
-        const r = measured(['render', '--candidate', buildDir, '--seam', list, ...(seamRequired ? ['--seam-cells'] : []), '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--geometry', '--out', activeDest]);
+        const r = measured(['render', '--candidate', buildDir, '--seam', list, ...(seamRequired || behindDeclared !== undefined ? ['--seam-cells'] : []), '--fps', String(fps), '--max', String(FOLD_RENDER_MAX), '--geometry', '--out', activeDest]);
         if (r.status !== 0) refuseIfAny(rigcFailed(`render --seam ${list} --fps ${fps}`, r, r.out.split('\n').filter((l) => l.includes('FAIL') || l.includes('rigc:'))));
+        behindStockDir = activeDest;
         const activeWorldRows: MotionSeamWorldRow[] = [];
         motionSeam = motionSeamLine(pairs, animationNames, fps, readMotionSeams(activeDest, animationNames, fps, read, {}, stripped !== null && env === null ? activeWorldRows : undefined, hasRoots ? motionRootDrawOrderReader(activeDest) : undefined), undefined, motionRootProblems, unmeasuredRoots);
         if (seamRequired) backgroundRows = readMotionSeamBackground(activeDest, animationNames, fps, read,
@@ -7456,6 +7466,17 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   const boundaryDeclared = reqFile?.boundary_colour;
   const boundaryColour = boundaryDeclared === undefined || inp.parts === null || inp.idleDuration === null ? null
     : measureBoundaryColour(officialRenderer(), { build: buildDir, stage: inp.stage, parts: inp.parts, partsDir: inp.partsDir, imagesDir: typeof inp.rig.images === 'string' ? resolve(inp.rigDir, inp.rig.images) : join(inp.rigDir, 'images'), rig: inp.rig, fps: IDLE_FPS }, boundaryDeclared, problems);
+  // Read the same accepted build and full seam render. Until active-world and
+  // alternate-skin pose binding is implemented, those modes are named unread.
+  const behindUnsupported = [
+    ...(env === null ? [] : ['--environment active-world pose binding is not measured']),
+    ...(set === undefined ? [] : ['--set skin binding is not measured']),
+    ...(allSets ? ['--all-sets skin binding is not measured'] : []),
+  ];
+  const behindSeams = behindDeclared === undefined ? null : measureBehindSeams(officialRenderer(), {
+    build: buildDir, rig: inp.rig, pairs: behindPairs, stockDir: behindStockDir, fps: IDLE_FPS,
+    ...(behindUnsupported.length === 0 ? {} : { unsupported: behindUnsupported.join('; ') }),
+  }, behindDeclared, problems);
 
   // 5. the scene's declared requirements (issue #93), only under --requirements
   const reqProblems: Problem[] = [];
@@ -7502,6 +7523,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     ...(artJoints === null ? {} : { [ART_JOINT_LINE]: artJoints }),
     ...(setupPainting === null ? {} : { [SETUP_PAINTING_LINE]: setupPainting }),
     ...(boundaryColour === null ? {} : { [BOUNDARY_COLOUR_LINE]: boundaryColour }),
+    ...(behindSeams === null ? {} : { [BEHIND_SEAM_LINE]: behindSeams }),
     ...(cutMaterial === null ? {} : { [CUT_MATERIAL_LINE]: cutMaterial }),
     ...(reqBlock === null ? {} : { requirements: reqBlock }),
     PASS: false,
@@ -7573,6 +7595,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
   if (artJoints !== null) tally(ART_JOINT_LINE, artJoints.status === 'SKIP' ? (artJoints.reason ?? 'no declared limit') : null);
   if (setupPainting !== null) tally(SETUP_PAINTING_LINE, setupPainting.status === 'SKIP' ? (setupPainting.reason ?? 'no declared limit') : null);
   if (boundaryColour !== null) tally(BOUNDARY_COLOUR_LINE, null);
+  if (behindSeams !== null) tally(BEHIND_SEAM_LINE, behindSeams.status === 'SKIP' ? 'HOLE: no complete authored threshold reading; not a pass' : null);
   // Issue #348: the level bar where it is written; a line whose every foot no frame posed says SKIP and is not measured.
   if (level !== null) tally(LEVEL_LINE, level.status === 'SKIP' ? (level.reason ?? '') : null);
   // Issue #347: the stress bar is counted where it is written — on every rig with a handwear part and an idle.
@@ -7602,6 +7625,7 @@ export function runCheck(rigDir: string, outDir: string, rigc: RigcRunner, parts
     figureOpenings,
     cloth,
     boundaryColour,
+    behindSeams,
     ...(sweepSteps.size === 0 ? {} : { sweepSteps }),
     ...(windBandRead === null ? {} : { windBand: windBandRead }),
   };

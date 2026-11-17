@@ -9,6 +9,23 @@ export const CHECK_ROW_PATHS = {
   'ART_JOINT_DISTANCE.joints': ['ART_JOINT_DISTANCE.joints'],
   'BOUNDARY_COLOUR_STEP.over': ['BOUNDARY_COLOUR_STEP.over'],
   'BOUNDARY_COLOUR_STEP.unmeasured': ['BOUNDARY_COLOUR_STEP.unmeasured'],
+  'BEHIND_PART_SEAMS.pairs': ['BEHIND_PART_SEAMS.pairs'],
+  'BEHIND_PART_SEAMS.pairs[].setup': ['BEHIND_PART_SEAMS.pairs[].setup'],
+  'BEHIND_PART_SEAMS.pairs[].frames': ['BEHIND_PART_SEAMS.pairs[].frames'],
+  'BEHIND_PART_SEAMS.samples': [
+    'BEHIND_PART_SEAMS.pairs[].setup.motion_opened.samples', 'BEHIND_PART_SEAMS.pairs[].setup.standing.samples',
+    'BEHIND_PART_SEAMS.pairs[].frames[].motion_opened.samples', 'BEHIND_PART_SEAMS.pairs[].frames[].standing.samples',
+  ],
+  'BEHIND_PART_SEAMS.contributors': [
+    'BEHIND_PART_SEAMS.pairs[].setup.motion_opened.samples[].contributors', 'BEHIND_PART_SEAMS.pairs[].setup.standing.samples[].contributors',
+    'BEHIND_PART_SEAMS.pairs[].frames[].motion_opened.samples[].contributors', 'BEHIND_PART_SEAMS.pairs[].frames[].standing.samples[].contributors',
+  ],
+  'BEHIND_PART_SEAMS.hits': [
+    'BEHIND_PART_SEAMS.pairs[].motion_opened.frames', 'BEHIND_PART_SEAMS.pairs[].standing.frames',
+    'BEHIND_PART_SEAMS.pairs[].motion_opened.worst', 'BEHIND_PART_SEAMS.pairs[].standing.worst',
+  ],
+  'BEHIND_PART_SEAMS.spans': ['BEHIND_PART_SEAMS.pairs[].motion_opened.spans', 'BEHIND_PART_SEAMS.pairs[].standing.spans'],
+  'BEHIND_PART_SEAMS.unmeasured': ['BEHIND_PART_SEAMS.unmeasured'],
   'CLOTH_SETTLES.rows': ['CLOTH_SETTLES.rows'],
   'CUT_JOINT_MATERIAL.rows': ['CUT_JOINT_MATERIAL.rows'],
   'FEET_STAY_LEVEL.feet': ['FEET_STAY_LEVEL.feet'],

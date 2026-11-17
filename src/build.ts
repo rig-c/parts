@@ -11,6 +11,7 @@ import { DEFAULT_PROJECT_RULE } from './projectrule.ts';
 import { type PaintingAllocationReading, type PaintingAllocationEvent, EDGE_CONTRAST, PAINTING_ALLOCATION_FILE, PAINTING_EDGE_COVERAGE_TRANSFER } from './paintingedges.ts';
 import { SETUP_PAINTING_LINE, setupPaintingLines } from './setuppainting.ts';
 import { boundaryColourLines } from './boundarycolour.ts';
+import { behindSeamLines } from './behindseams.ts';
 import { writeMaterialSources } from './cutmaterialio.ts';
 import { CUT_MATERIAL_LINE, CUT_MATERIAL_SOURCES, materialLines } from './cutmaterial.ts';
 import { ART_JOINT_LINE, artJointLines } from './artjoints.ts';
@@ -2416,6 +2417,7 @@ export function checkStage(input: CheckStageInput, rigc: RigcRunner, bin: string
   const setupPainting = fig[SETUP_PAINTING_LINE];
   if (setupPainting !== undefined) for (const line of setupPaintingLines(setupPainting)) log(`  ${line}`);
   for (const line of boundaryColourLines(r.boundaryColour)) log(`  ${line}`);
+  for (const line of behindSeamLines(r.behindSeams)) log(`  ${line}`);
   if (r.requirements !== null) {
     for (const [name, line] of Object.entries(r.requirements.lines)) log(`  ${requirementText(name, line)}`);
     log(`  ${summaryText(r.requirements.summary)}`);
