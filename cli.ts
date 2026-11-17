@@ -2537,9 +2537,6 @@ function cmdDepthPrepare(args: string[]): number {
 }
 
 function cmdEditedPart(args: string[]): number {
-  for (let i = 0; i < args.length; i += 2) {
-    if (args[i + 1] === undefined || args[i + 1].startsWith('--')) return usage(`edited-part ${args[i]} requires a value`);
-  }
   const f = flags(args, 'edited-part', ['--config', '--part', '--file', '--from', '--editor']);
   if (typeof f === 'string') return usage(f);
   try {

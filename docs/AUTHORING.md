@@ -1180,13 +1180,7 @@ restores earlier original configs if a later commit fails; a restoration
 failure names the retained original backup. A backup-cleanup failure can be
 reported after both complete configs are published; inspect its named path.
 
-| Rule | What was found | What is required |
-| --- | --- | --- |
-| <a id="EDITED_PART_ARGUMENT"></a>`EDITED_PART_ARGUMENT` | A writer argument is missing or blank. | Supply a non-empty config, part, file, from and editor; omit rig-config or name a non-empty path. |
-| <a id="EDITED_PART_BLOCK"></a>`EDITED_PART_BLOCK` | A named config has no assemble.edited_parts. | Declare its directory and receipts array before recording. |
-| <a id="EDITED_PART_FILE"></a>`EDITED_PART_FILE` | The file or from path is unreadable. | Supply readable PNG files at both explicit paths. |
-| <a id="EDITED_PART_PNG"></a>`EDITED_PART_PNG` | The file or from bytes are not a decodable PNG. | Supply PNGs supported by the existing codec. |
-| <a id="EDITED_PART_SIZE"></a>`EDITED_PART_SIZE` | Edited and from PNG dimensions differ. | Edit at the original crop and rig-pixel size. |
+Writer refusals are listed in the [refusal ledger](#EDITED_PART_ARGUMENT).
 
 Replacement occurs after projection, drift checks, seam override, ghost
 cleanup, paintingEdge and final region restoration. No automatic pass runs
@@ -5804,6 +5798,11 @@ recorded transform. The record fields and sampling formula are specified in
 | <a id="ASSEMBLE_TAKE_UNIQUE"></a>`ASSEMBLE_TAKE_UNIQUE` | repeated donor for one target tag at runtime | declare each target run/tag once |
 | <a id="CONFIG_TAKE_UNIQUE"></a>`CONFIG_TAKE_UNIQUE` | config selects the same target run/tag more than once | retain one donor per target tag |
 | <a id="ASSEMBLE_PART_SOURCE"></a>`ASSEMBLE_PART_SOURCE` | `assemble.editor_receipts.trace_parts` is `true` and a part's pixels are decided by a shape drawn in the config — an `assemble.cuts` (or an alternate set's `cuts`) `polygon`, `seethrough.arm_split`, a limb's `split.line`, an `assemble.patches` `box`, an `assemble.extend_painting` `band`; the object names the part and where the shape is declared, the detail the shape found (issue #947) | `config.json`: remove that entry and paint the piece as an author layer (`author:<label>`) in an image editor with its receipt in `assemble.editor_receipts.receipts`, or take the part whole from a layer of the split (a limb split may use `"edge": "painting"`) |
+| <a id="EDITED_PART_ARGUMENT"></a>`EDITED_PART_ARGUMENT` | A writer argument is missing or blank. | Supply a non-empty config, part, file, from and editor; omit rig-config or name a non-empty path. |
+| <a id="EDITED_PART_BLOCK"></a>`EDITED_PART_BLOCK` | A named config has no assemble.edited_parts. | Declare its directory and receipts array before recording. |
+| <a id="EDITED_PART_FILE"></a>`EDITED_PART_FILE` | The file or from path is unreadable. | Supply readable PNG files at both explicit paths. |
+| <a id="EDITED_PART_PNG"></a>`EDITED_PART_PNG` | The file or from bytes are not a decodable PNG. | Supply PNGs supported by the existing codec. |
+| <a id="EDITED_PART_SIZE"></a>`EDITED_PART_SIZE` | Edited and from PNG dimensions differ. | Edit at the original crop and rig-pixel size. |
 | <a id="ASSEMBLE_EDITED_PART_UNKNOWN"></a>`ASSEMBLE_EDITED_PART_UNKNOWN` | A receipt names a part outside the base plan. | Use the existing base-plan part name; a new name needs a plan change. |
 | <a id="ASSEMBLE_EDITED_PART_FILE"></a>`ASSEMBLE_EDITED_PART_FILE` | The receipt file does not exist at dir/file. | Correct the config-relative dir or the directory-relative file, or supply that file. |
 | <a id="ASSEMBLE_EDITED_PART_SHA256"></a>`ASSEMBLE_EDITED_PART_SHA256` | The edited file bytes do not match sha256. | Use the intended edited file and record its exact file hash. |
